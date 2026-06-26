@@ -24,7 +24,7 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   }
   if (!content.includes('<<<<<<<')) return true;
 
-  const resolved = await callClaude(
+  const { text: resolved } = await callClaude(
     `以下是有 Git 合併衝突的檔案：${filePath}\n` +
     `請解決所有衝突，只輸出最終正確的檔案內容，不要包含 <<<<<<<、=======、>>>>>>> 等衝突標記，也不要有任何說明文字，直接輸出檔案內容：\n\n${content}`,
     signal, opts

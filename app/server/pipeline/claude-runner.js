@@ -44,6 +44,8 @@ function callClaude(prompt, signal, opts = {}) {
     });
 
     let resultText = '';
+    let usage = null;
+    let durationMs = null;
     let lineBuffer = '';
     let stderr = '';
     let settled = false;
@@ -63,7 +65,11 @@ function callClaude(prompt, signal, opts = {}) {
           const ev = JSON.parse(line);
           const display = formatEvent(ev);
           if (display) emit(display);
-          if (ev.type === 'result') resultText = ev.result || resultText;
+          if (ev.type === 'result') {
+            resultText = ev.result      || resultText;
+            usage      = ev.usage       || null;
+            durationMs = ev.duration_ms || null;
+          }
         } catch {
           emit(line + '\n');
         }
@@ -85,7 +91,7 @@ function callClaude(prompt, signal, opts = {}) {
       if (taskId && userId && notify) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       finish(() => {
         if (code !== 0) reject(new Error(stderr.trim() || `claude exited with code ${code}`));
-        else resolve(resultText.trim());
+        else resolve({ text: resultText.trim(), usage, durationMs });
       });
     });
     child.on('error', err => finish(() => reject(err)));

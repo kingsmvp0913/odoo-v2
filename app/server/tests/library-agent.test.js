@@ -1,6 +1,6 @@
 const { newDb } = require('pg-mem');
 
-const mockCallClaude = jest.fn().mockResolvedValue('{"slug":"test-feature","title":"測試功能","content":"# 測試\\n\\n這是測試功能說明。"}');
+const mockCallClaude = jest.fn().mockResolvedValue({ text: '{"slug":"test-feature","title":"測試功能","content":"# 測試\\n\\n這是測試功能說明。"}', usage: null, durationMs: null });
 
 jest.mock('../pipeline/claude-runner', () => ({ callClaude: mockCallClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));

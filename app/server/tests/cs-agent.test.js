@@ -36,7 +36,7 @@ async function makeTask(overrides = {}) {
 }
 
 test('operation → cs_reply_pending with reply', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"operation","reply":"請到報表 > 匯出","question":null}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"operation","reply":"請到報表 > 匯出","question":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask();
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, cs_reply FROM tasks WHERE id=$1', [taskId]);
@@ -45,7 +45,7 @@ test('operation → cs_reply_pending with reply', async () => {
 });
 
 test('code_change_clear → analysis_running', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"code_change_clear","reply":null,"question":null}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({
     title: 'Bug in report',
     text: 'When clicking export the system crashes. Steps: 1. Go to report 2. Click export. Expected: file downloads. Actual: 500 error.'
@@ -56,7 +56,7 @@ test('code_change_clear → analysis_running', async () => {
 });
 
 test('code_change_vague → cs_data_needed with question', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Something wrong', text: 'It does not work.' });
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, cs_question FROM tasks WHERE id=$1', [taskId]);

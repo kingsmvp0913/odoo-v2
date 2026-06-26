@@ -30,7 +30,7 @@ async function analyzeDeployError(errorText, signal, opts = {}) {
 部署錯誤：
 ${errorText}`;
 
-  const text = await callClaude(prompt, signal, opts);
+  const { text } = await callClaude(prompt, signal, opts);
   const match = text.match(/\{[\s\S]*?\}/);
   if (!match) return { type: 'env_error_needs_auth', fix_bin: null, fix_args: null };
   try {

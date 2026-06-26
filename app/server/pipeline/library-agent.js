@@ -41,7 +41,7 @@ ${task.analysis_yaml || '無'}
 執行日誌（最後 20 筆）：
 ${logText || '無'}`;
 
-    const text = await callClaude(prompt, signal, { taskId, userId, notify });
+    const { text } = await callClaude(prompt, signal, { taskId, userId, notify });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) wikiUpdate = JSON.parse(jsonMatch[0]);
   } catch (err) {

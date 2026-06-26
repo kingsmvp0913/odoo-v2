@@ -35,7 +35,7 @@ async function triageTask(taskId) {
 
   let text;
   try {
-    text = await callClaude(`${TRIAGE_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`);
+    ({ text } = await callClaude(`${TRIAGE_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`));
   } catch (apiErr) {
     // Transient error — reset to new for retry next tick
     await query(

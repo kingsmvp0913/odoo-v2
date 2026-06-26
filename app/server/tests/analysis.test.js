@@ -92,7 +92,7 @@ afterEach(async () => {
 });
 
 test('analyzeTask MODE_A → next_status branch_pending, analysis_yaml saved', async () => {
-  mockCallClaude.mockResolvedValue(VALID_YAML_MODE_A);
+  mockCallClaude.mockResolvedValue({ text: VALID_YAML_MODE_A, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('branch_pending');
@@ -104,7 +104,7 @@ test('analyzeTask MODE_A → next_status branch_pending, analysis_yaml saved', a
 });
 
 test('analyzeTask MODE_B → next_status final_pending', async () => {
-  mockCallClaude.mockResolvedValue(VALID_YAML_MODE_B);
+  mockCallClaude.mockResolvedValue({ text: VALID_YAML_MODE_B, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('final_pending');
@@ -114,7 +114,7 @@ test('analyzeTask MODE_B → next_status final_pending', async () => {
 });
 
 test('analyzeTask with questions → next_status confirm_pending', async () => {
-  mockCallClaude.mockResolvedValue(YAML_WITH_QUESTIONS);
+  mockCallClaude.mockResolvedValue({ text: YAML_WITH_QUESTIONS, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('confirm_pending');
@@ -124,14 +124,14 @@ test('analyzeTask with questions → next_status confirm_pending', async () => {
 });
 
 test('analyzeTask low_confidence → next_status confirm_pending', async () => {
-  mockCallClaude.mockResolvedValue(YAML_LOW_CONFIDENCE);
+  mockCallClaude.mockResolvedValue({ text: YAML_LOW_CONFIDENCE, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('confirm_pending');
 });
 
 test('analyzeTask invalid YAML → stopped with blocker', async () => {
-  mockCallClaude.mockResolvedValue('this is not yaml: [broken');
+  mockCallClaude.mockResolvedValue({ text: 'this is not yaml: [broken', usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('stopped');

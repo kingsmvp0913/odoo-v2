@@ -40,7 +40,7 @@ async function analyzeTask(taskId, signal) {
   // Block 1: API call — transient errors reset status and re-throw
   let rawYaml;
   try {
-    rawYaml = await callClaude(`${ANALYSIS_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`, signal, { taskId, userId: task.user_id, notify });
+    ({ text: rawYaml } = await callClaude(`${ANALYSIS_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`, signal, { taskId, userId: task.user_id, notify }));
   } catch (apiErr) {
     await query(
       "UPDATE tasks SET status = 'analysis_running', updated_at = NOW() WHERE id = $1",

@@ -39,7 +39,7 @@ async function makeTask(overrides = {}) {
 }
 
 test('odoo_error → coding_running', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"odoo_error","fix_bin":null,"fix_args":null}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"odoo_error","fix_bin":null,"fix_args":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask();
   await runDeployFixer(taskId, userId, 'odoo.exceptions.UserError: Field does not exist');
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
@@ -47,7 +47,7 @@ test('odoo_error → coding_running', async () => {
 });
 
 test('env_error_fixable → fix ok → deploy_pending', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"env_error_fixable","fix_bin":"pip","fix_args":["install","requests"]}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"env_error_fixable","fix_bin":"pip","fix_args":["install","requests"]}', usage: null, durationMs: null });
   mockExecFile.mockImplementation((bin, args, opts, cb) => cb(null, 'Installed', ''));
   const { userId, taskId } = await makeTask();
   await runDeployFixer(taskId, userId, 'ModuleNotFoundError: No module named requests');
@@ -57,7 +57,7 @@ test('env_error_fixable → fix ok → deploy_pending', async () => {
 });
 
 test('env_error_fixable → fix fails → stopped', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"env_error_fixable","fix_bin":"pip","fix_args":["install","bad-pkg"]}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"env_error_fixable","fix_bin":"pip","fix_args":["install","bad-pkg"]}', usage: null, durationMs: null });
   mockExecFile.mockImplementation((bin, args, opts, cb) => cb(new Error('fail'), '', 'pkg not found'));
   const { userId, taskId } = await makeTask();
   await runDeployFixer(taskId, userId, 'error');
@@ -66,7 +66,7 @@ test('env_error_fixable → fix fails → stopped', async () => {
 });
 
 test('env_error_needs_auth → stopped', async () => {
-  mockCallClaude.mockResolvedValueOnce('{"type":"env_error_needs_auth","fix_bin":null,"fix_args":null}');
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"env_error_needs_auth","fix_bin":null,"fix_args":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask();
   await runDeployFixer(taskId, userId, 'sudo apt-get install ...');
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);

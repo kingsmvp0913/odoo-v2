@@ -29,7 +29,7 @@ ${wikiContext || '（無 wiki）'}${historyText ? '\n\n[對話歷史]\n' + histo
     [chatId, 'user', userMessage]
   );
 
-  const reply = (await callClaude(prompt)) || '（無回覆）';
+  const { text: reply = '（無回覆）' } = (await callClaude(prompt)) || {};
 
   await query(
     'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',

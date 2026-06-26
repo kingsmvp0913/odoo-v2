@@ -53,7 +53,7 @@ ${wikiContext || '（無 wiki）'}`;
 
   let result = null;
   try {
-    const text = await callClaude(prompt, signal, { taskId, userId, notify });
+    const { text } = await callClaude(prompt, signal, { taskId, userId, notify });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) result = JSON.parse(jsonMatch[0]);
   } catch (err) {
