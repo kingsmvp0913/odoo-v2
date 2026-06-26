@@ -25,6 +25,7 @@ const router = createRouter({
     { path: '/projects/:id/wiki/:slug', component: window.WikiView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat/:chatId', component: window.ProjectChatView, meta: { requiresAuth: true } },
+    { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true } },
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
@@ -86,6 +87,9 @@ const App = defineComponent({
             </router-link>
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">📁 專案</a>
+            </router-link>
+            <router-link to="/token-report" custom v-slot="{ navigate, isActive }">
+              <a :class="{ active: isActive }" @click="navigate">📊 用量報表</a>
             </router-link>
             <router-link to="/settings" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">⚙️ 設定</a>
