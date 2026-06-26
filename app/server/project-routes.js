@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
-const { query, getPool } = require('./db');
+const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
 
@@ -142,41 +142,28 @@ function registerRoutes(app) {
   });
 
   app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
-    const client = await getPool().connect();
     try {
-      await client.query('BEGIN');
-
-      // Get all task DB ids and task_id text keys for this project
-      const { rows: taskRows } = await client.query(
+      await query('BEGIN');
+      const { rows: taskRows } = await query(
         'SELECT id, task_id FROM tasks WHERE project_id = $1', [req.params.id]
       );
       if (taskRows.length) {
-        const taskDbIds = taskRows.map(r => r.id);
+        const taskDbIds   = taskRows.map(r => r.id);
         const taskTextIds = taskRows.map(r => r.task_id);
-        await client.query(
-          'DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [taskDbIds]
-        );
-        await client.query(
-          'DELETE FROM token_usage WHERE task_id = ANY($1::text[])', [taskTextIds]
-        );
-        await client.query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
+        await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])',  [taskDbIds]);
+        await query('DELETE FROM token_usage WHERE task_id = ANY($1::text[])', [taskTextIds]);
+        await query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
       }
-
-      // wiki_pages, project_repos, project_chats, odoo_envs have ON DELETE CASCADE
-      const { rows } = await client.query(
-        'DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]
-      );
+      const { rows } = await query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
       if (!rows.length) {
-        await client.query('ROLLBACK');
+        await query('ROLLBACK');
         return res.status(404).json({ error: 'Not found' });
       }
-      await client.query('COMMIT');
+      await query('COMMIT');
       res.json({ ok: true });
     } catch (err) {
-      await client.query('ROLLBACK');
+      await query('ROLLBACK').catch(() => {});
       res.status(500).json({ error: err.message });
-    } finally {
-      client.release();
     }
   });
 
