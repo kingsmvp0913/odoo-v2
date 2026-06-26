@@ -27,9 +27,11 @@ function registerRoutes(app) {
       }
 
       const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.created_at, t.updated_at,
-                          e.url AS env_url
+                          e.url AS env_url,
+                          p.name AS project_name
                    FROM tasks t
                    LEFT JOIN odoo_envs e ON e.project_id = t.project_id AND e.status = 'running'
+                   LEFT JOIN projects p ON p.id = t.project_id
                    WHERE t.${conditions.join(' AND t.')} ORDER BY t.updated_at DESC`;
       const { rows } = await query(sql, params);
       res.json(rows);

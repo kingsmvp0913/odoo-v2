@@ -126,7 +126,8 @@ window.TaskListView = Vue.defineComponent({
         (t.title || '').toLowerCase().includes(q) ||
         (t.task_id || '').toLowerCase().includes(q) ||
         (t.source || '').toLowerCase().includes(q) ||
-        (t.module || '').toLowerCase().includes(q)
+        (t.module || '').toLowerCase().includes(q) ||
+        (t.project_name || '').toLowerCase().includes(q)
       );
     },
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused).length; },
@@ -226,6 +227,12 @@ window.TaskListView = Vue.defineComponent({
     },
     sourceLabel(source) {
       return source === 'odoo' ? 'Odoo' : source === 'service' ? 'eService' : source;
+    },
+    sourceBadgeStyle(source) {
+      const base = 'font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;text-decoration:none;';
+      if (source === 'odoo')    return base + 'background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe;';
+      if (source === 'service') return base + 'background:#f3e8ff;color:#7c3aed;border:1px solid #e9d5ff;';
+      return base + 'background:var(--surface);color:var(--text-secondary);border:1px solid var(--border);';
     },
     async archiveTask(t, e) {
       e.stopPropagation();
@@ -408,8 +415,13 @@ window.TaskListView = Vue.defineComponent({
           </div>
           <div class="task-source" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <a v-if="sourceUrl(t)" :href="sourceUrl(t)" target="_blank" @click.stop
-               style="color:var(--primary);text-decoration:none;font-weight:500">{{ sourceLabel(t.source) }}</a>
-            <span v-else>{{ sourceLabel(t.source) }}</span>
+               :style="sourceBadgeStyle(t.source)">{{ sourceLabel(t.source) }}</a>
+            <span v-else :style="sourceBadgeStyle(t.source)">{{ sourceLabel(t.source) }}</span>
+            <span v-if="t.project_id && t.project_name"
+                  @click.stop="$router.push('/projects/' + t.project_id)"
+                  style="font-size:11px;padding:2px 8px;border-radius:10px;background:#e0f2fe;color:#0369a1;cursor:pointer;border:1px solid #bae6fd;font-weight:500">
+              {{ t.project_name }}
+            </span>
             <a v-if="t.env_url" :href="t.env_url" target="_blank" @click.stop
                style="font-size:11px;padding:1px 8px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text-secondary);text-decoration:none;background:#fff">
               🖥 測試機
