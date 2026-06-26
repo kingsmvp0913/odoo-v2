@@ -67,3 +67,24 @@ test('tasks table has project_id column after migration', async () => {
   );
   expect(rows.length).toBe(1);
 });
+
+test('token_usage table exists after migrate', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name='token_usage'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('projects has odoo_project_name column', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='projects' AND column_name='odoo_project_name'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('projects has service_respondent_name column', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='projects' AND column_name='service_respondent_name'"
+  );
+  expect(rows.length).toBe(1);
+});

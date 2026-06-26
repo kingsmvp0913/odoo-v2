@@ -186,6 +186,21 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(project_id)
     )`,
+
+    `CREATE TABLE IF NOT EXISTS token_usage (
+      id                   SERIAL PRIMARY KEY,
+      task_id              TEXT,
+      project_id           INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+      user_id              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      agent_type           TEXT NOT NULL,
+      input_tokens         INTEGER NOT NULL DEFAULT 0,
+      output_tokens        INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
+      cache_create_tokens  INTEGER NOT NULL DEFAULT 0,
+      duration_ms          INTEGER,
+      source               TEXT NOT NULL DEFAULT 'server' CHECK (source IN ('server','ps1')),
+      recorded_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -236,7 +251,9 @@ async function migrate() {
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },
     { table: 'project_repos', col: 'clone_error',     sql: 'ALTER TABLE project_repos ADD COLUMN clone_error TEXT' },
     { table: 'project_repos', col: 'graphify_status', sql: "ALTER TABLE project_repos ADD COLUMN graphify_status TEXT DEFAULT 'idle'" },
-    { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' }
+    { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' },
+    { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
+    { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -251,6 +268,12 @@ async function migrate() {
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
+
+  // token_usage indexes
+  await query('CREATE INDEX IF NOT EXISTS idx_tu_recorded_at ON token_usage (recorded_at DESC)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_tu_task_id     ON token_usage (task_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_tu_user_id     ON token_usage (user_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_tu_project_id  ON token_usage (project_id)').catch(() => {});
 
   // One-time data migration: copy URL+DB from first admin user's odoo_settings into teams_settings
   try {
