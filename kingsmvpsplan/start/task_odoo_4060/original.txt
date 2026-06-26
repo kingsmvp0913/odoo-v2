@@ -1,0 +1,296 @@
+---id---
+4060
+---title---
+維修單鎖料及提示功能
+---project---
+2503037鴻久科技_維修管
+---stage---
+已完成
+---description---
+<div style="max-width:900px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:48px 56px;">
+<!-- Header -->
+<div style="border-bottom:3px solid #1a73e8;padding-bottom:20px;margin-bottom:36px;">
+<h1 style="font-size:22px;font-weight:700;color:#1a1a1a;margin:0 0 8px 0;">維修管理系統 — 領料鎖料與優先排序功能說明</h1>
+</div>
+<!-- 一 -->
+<div style="margin-bottom:40px;">
+<div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">一、背景與問題</div>
+<p style="margin:0 0 14px 0;">過去系統在計算「哪張叫修單可以領料、哪張需要請購」時，採用<strong>全域加總</strong>方式：只要同一品號在任何叫修單有需求，就全部加在一起扣庫存，導致以下問題：</p>
+<ul style="list-style:none;padding:0;margin:0;">
+<li style="padding:10px 14px;margin-bottom:8px;background:#fff8f0;border-left:4px solid #f59e0b;border-radius:0 4px 4px 0;"><strong style="color:#b45309;">問題 1：有庫存卻仍產生請購單</strong><br/>系統誤以為庫存不足，對本來可以領料的叫修單送出採購。</li>
+<li style="padding:10px 14px;margin-bottom:8px;background:#fff8f0;border-left:4px solid #f59e0b;border-radius:0 4px 4px 0;"><strong style="color:#b45309;">問題 2：有庫存卻無法領料</strong><br/>倉管找不到依據決定誰先領，造成現場爭搶或無謂等待。</li>
+<li style="padding:10px 14px;margin-bottom:8px;background:#fff8f0;border-left:4px solid #f59e0b;border-radius:0 4px 4px 0;"><strong style="color:#b45309;">問題 3：無法人工調整順序</strong><br/>緊急案件無法優先插隊，需要倉管手動介入處理。</li>
+</ul>
+</div>
+<!-- 二 -->
+<div style="margin-bottom:40px;">
+<div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">二、本次新增功能總覽</div>
+<div style="background:#f5f5f5;border-radius:6px;padding:14px 20px;font-family:'Consolas','Courier New',monospace;font-size:14px;margin-bottom:20px;color:#333;">
+      維修<br/>
+      ├── 叫修單（既有）<br/>
+      ├── 維修單（既有）<br/>
+      └── <strong>領料管理（新增）</strong>　←　集中管理所有待領料叫修單的排隊順序
+    </div>
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:12px;">
+<div style="border:1px solid #e0e7ff;border-radius:6px;padding:12px 16px;background:#f8f9ff;">
+<div style="font-size:12px;font-weight:700;color:#1a73e8;letter-spacing:1px;">功能 1</div>
+<div style="font-weight:700;font-size:15px;margin:2px 0;">領料管理介面</div>
+<div style="font-size:13px;color:#555;">全公司待領料佇列一覽，以品號為單位顯示即時狀態</div>
+</div>
+<div style="border:1px solid #e0e7ff;border-radius:6px;padding:12px 16px;background:#f8f9ff;">
+<div style="font-size:12px;font-weight:700;color:#1a73e8;letter-spacing:1px;">功能 2</div>
+<div style="font-weight:700;font-size:15px;margin:2px 0;">商品優先排序</div>
+<div style="font-size:13px;color:#555;">可對特定品號插隊到第一位，其他品項不受影響</div>
+</div>
+<div style="border:1px solid #e0e7ff;border-radius:6px;padding:12px 16px;background:#f8f9ff;">
+<div style="font-size:12px;font-weight:700;color:#1a73e8;letter-spacing:1px;">功能 3</div>
+<div style="font-weight:700;font-size:15px;margin:2px 0;">整單優先排序</div>
+<div style="font-size:13px;color:#555;">可對整張叫修單的所有品項同步插隊到最高優先</div>
+</div>
+<div style="border:1px solid #e0e7ff;border-radius:6px;padding:12px 16px;background:#f8f9ff;">
+<div style="font-size:12px;font-weight:700;color:#1a73e8;letter-spacing:1px;">功能 4</div>
+<div style="font-weight:700;font-size:15px;margin:2px 0;">庫存不足提示</div>
+<div style="font-size:13px;color:#555;">確認領料前自動偵測庫存狀態，跳出告警讓用戶決策</div>
+</div>
+</div>
+</div>
+<!-- 三 -->
+<div style="margin-bottom:40px;">
+<div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">三、功能詳細說明</div>
+<!-- 3.1 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">3.1　領料管理介面（新選單）</div>
+<span style="font-size:13px;color:#1a73e8;background:#e8f0fe;padding:3px 9px;border-radius:4px;display:inline-block;margin-bottom:10px;">入口：維修選單 → 領料管理</span>
+<p style="margin:0 0 12px 0;">顯示所有進行中、尚有待領量的叫修用料，以品號為單位一列一列呈現，讓倉管人員清楚看見每張叫修單的用料狀況。</p>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr><th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">欄位名稱</th><th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">說明</th></tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">商品優先序</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">數字越小越優先；0 表示未設定（排最末）</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">單別 / 叫修單號</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">識別來自哪張叫修單</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">品號 / 品名 / 規格</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">品項基本資料</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">需求量</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">叫修單身原始需求數量</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">已領量</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">已實際從倉庫領出的數量</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">待領量</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">需求量 − 已領量（尚未完成的數量）</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">已請購量</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">已轉請購單的在途採購量</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">庫別 / 庫存</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">來源庫位與即時庫存數量</td></tr>
+<tr><td style="padding:8px 14px;">庫存狀態</td><td style="padding:8px 14px;">
+<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;background:#d1fae5;color:#065f46;">充足</span>
+<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;background:#fef3c7;color:#92400e;">不足</span>
+<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;">無庫存</span>
+</td></tr>
+</tbody>
+</table>
+<div style="background:#e8f0fe;border-left:4px solid #1a73e8;padding:10px 14px;border-radius:0 4px 4px 0;font-size:13px;margin:12px 0;color:#174ea6;">篩選條件：僅顯示進行中（未結案、未作廢）且仍有待領量的品項。</div>
+</div>
+<!-- 3.2 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">3.2　商品優先（單品插隊）</div>
+<span style="font-size:13px;color:#1a73e8;background:#e8f0fe;padding:3px 9px;border-radius:4px;display:inline-block;margin-bottom:10px;">位置：領料管理介面 → 每一列右側「商品優先」按鈕</span>
+<ol style="padding-left:24px;margin:8px 0;">
+<li style="padding:6px 0;">倉管在領料管理找到需要優先的品項，點擊「商品優先」</li>
+<li style="padding:6px 0;">系統彈出確認視窗，顯示：目前叫修單號 / 品名、目前排第幾位、前方還有哪幾張叫修單</li>
+<li style="padding:6px 0;">確認後，該品項被調整為佇列第 1 位</li>
+<li style="padding:6px 0;">系統自動重算所有相關叫修單的用料與請購明細</li>
+</ol>
+<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;font-size:13px;color:#14532d;margin-top:10px;">
+<strong style="display:block;margin-bottom:4px;">適用情境</strong>
+        某張叫修單的特定零件是緊急件，需要優先供應，但其他品項不需要特別處理。
+      </div>
+</div>
+<!-- 3.3 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">3.3　整單優先（整張叫修單插隊）</div>
+<span style="font-size:13px;color:#1a73e8;background:#e8f0fe;padding:3px 9px;border-radius:4px;display:inline-block;margin-bottom:6px;">位置 1：領料管理介面 → 每一列右側「整單優先」按鈕</span><br/>
+<span style="font-size:13px;color:#1a73e8;background:#e8f0fe;padding:3px 9px;border-radius:4px;display:inline-block;margin-bottom:10px;">位置 2：維修單表單 → header「優先領料」按鈕（僅未確認的領料站維修單顯示）</span>
+<ol style="padding-left:24px;margin:8px 0;">
+<li style="padding:6px 0;">點擊後系統彈出確認視窗</li>
+<li style="padding:6px 0;">視窗顯示前方叫修單列表（最多顯示 4 張，超過則顯示「等 N 張」）</li>
+<li style="padding:6px 0;">確認後，該叫修單所有待領品項的商品優先序全部調整為第 1 位</li>
+<li style="padding:6px 0;">同品號其他叫修單的優先序自動向後遞補重新排列</li>
+<li style="padding:6px 0;">系統觸發滾動重算，所有相關維修單的用料與請購明細一次更新</li>
+</ol>
+<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;font-size:13px;color:#14532d;margin-top:10px;">
+<strong style="display:block;margin-bottom:4px;">適用情境</strong>
+        整台機器都是緊急件，需要全面優先處理。
+      </div>
+</div>
+<!-- 3.4 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">3.4　庫存不足提示（確認領料前警告）</div>
+<p style="margin:0 0 10px 0;"><strong>觸發時機：</strong>倉管在領料站維修單按下「確認」時，若用料清單中有品項庫存不足，系統<strong>自動跳出警告視窗</strong>（不需要另外操作）。</p>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr><th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">警告視窗欄位</th><th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">說明</th></tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">品號</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">庫存不足的品項</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">品名 / 規格</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">品項基本資料</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">需求量</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">本張維修單的需求數量</td></tr>
+<tr><td style="padding:8px 14px;">目前排在第幾位</td><td style="padding:8px 14px;">在全公司同品號佇列中的排隊順序</td></tr>
+</tbody>
+</table>
+<p style="margin:12px 0 6px 0;"><strong>操作選擇：</strong></p>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr><th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">按鈕</th><th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">動作</th></tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">確定繼續</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">強制確認，以現有庫存完成領料（可能導致部分品項不足）</td></tr>
+<tr><td style="padding:8px 14px;">取消</td><td style="padding:8px 14px;">返回維修單，可先至領料管理調整優先序後再確認</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- 四 -->
+<div style="margin-bottom:40px;">
+<div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">四、庫存分配計算邏輯（佇列重算）</div>
+<!-- 4.1 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">4.1　排隊順序規則</div>
+<p style="margin:0 0 10px 0;">每個品號的待領叫修單依以下順序排隊：</p>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">優先層級</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">排序依據</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">說明</th>
+</tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">第一</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">商品優先序</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">數字越小越優先</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">第二</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">叫修單建立時間</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">先到先得</td></tr>
+<tr><td style="padding:8px 14px;">第三</td><td style="padding:8px 14px;">叫修用料明細序號</td><td style="padding:8px 14px;">同叫修單內的排列</td></tr>
+</tbody>
+</table>
+<div style="background:#e8f0fe;border-left:4px solid #1a73e8;padding:10px 14px;border-radius:0 4px 4px 0;font-size:13px;margin:12px 0;color:#174ea6;">未設定優先序（= 0）的叫修單，排在所有有設定優先序的最後面。</div>
+</div>
+<!-- 4.2 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">4.2　庫存分配計算原則</div>
+<div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;font-size:14px;color:#1e3a5f;margin-bottom:16px;">
+<strong>庫存池初始化：</strong>每個庫別的可用庫存 = 該庫位現有庫存數量<br/>
+<span style="color:#555;">同品號在不同庫別時，各庫別各自獨立計算，互不影響。</span>
+</div>
+<p style="margin:0 0 10px 0;">對每張叫修單（依排隊順序逐一處理）：</p>
+<!-- Step 1 -->
+<div style="display:flex;align-items:flex-start;gap:14px;background:#fafafa;border:1px solid #e8e8e8;border-radius:6px;padding:12px 14px;margin-bottom:8px;">
+<div style="min-width:28px;height:28px;background:#1a73e8;color:#fff;border-radius:50%;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">1</div>
+<div style="flex:1;">
+<div style="font-weight:700;font-size:14px;color:#1a1a1a;margin-bottom:5px;">計算在途採購量</div>
+<div style="font-family:'Consolas','Courier New',monospace;font-size:14px;color:#1a3a6c;background:#e8f0fe;border-radius:4px;padding:3px 10px;margin:3px 0;display:inline-block;">在途採購量 = 已請購量 − 已到貨量</div>
+<div style="font-size:12px;color:#777;margin-top:5px;">貨還在運輸中，尚未入庫，不佔用庫存池</div>
+</div>
+</div>
+<!-- Step 2 -->
+<div style="display:flex;align-items:flex-start;gap:14px;background:#fafafa;border:1px solid #e8e8e8;border-radius:6px;padding:12px 14px;margin-bottom:8px;">
+<div style="min-width:28px;height:28px;background:#1a73e8;color:#fff;border-radius:50%;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">2</div>
+<div style="flex:1;">
+<div style="font-weight:700;font-size:14px;color:#1a1a1a;margin-bottom:5px;">計算真正缺口</div>
+<div style="font-family:'Consolas','Courier New',monospace;font-size:14px;color:#1a3a6c;background:#e8f0fe;border-radius:4px;padding:3px 10px;margin:3px 0;display:inline-block;">尚需分配量 = 待領量 − 在途採購量</div>
+<div style="font-size:12px;color:#777;margin-top:5px;">扣除已有採購後，本單還缺多少</div>
+</div>
+</div>
+<!-- Step 3 -->
+<div style="display:flex;align-items:flex-start;gap:14px;background:#fafafa;border:1px solid #e8e8e8;border-radius:6px;padding:12px 14px;margin-bottom:8px;">
+<div style="min-width:28px;height:28px;background:#1a73e8;color:#fff;border-radius:50%;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">3</div>
+<div style="flex:1;">
+<div style="font-weight:700;font-size:14px;color:#1a1a1a;margin-bottom:5px;">從庫存池分配</div>
+<div style="font-family:'Consolas','Courier New',monospace;font-size:14px;color:#1a3a6c;background:#e8f0fe;border-radius:4px;padding:3px 10px;margin:3px 0;display:inline-block;">本單可領量 = min（尚需分配量，庫存池）</div><br/>
+<div style="font-family:'Consolas','Courier New',monospace;font-size:14px;color:#1a3a6c;background:#e8f0fe;border-radius:4px;padding:3px 10px;margin:3px 0;display:inline-block;">庫存池 = 庫存池 − 本單可領量</div>
+<div style="font-size:12px;color:#777;margin-top:5px;">先到先得，庫存池依優先序逐一遞減</div>
+</div>
+</div>
+<!-- Step 4 -->
+<div style="display:flex;align-items:flex-start;gap:14px;background:#fafafa;border:1px solid #e8e8e8;border-radius:6px;padding:12px 14px;margin-bottom:16px;">
+<div style="min-width:28px;height:28px;background:#1a73e8;color:#fff;border-radius:50%;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">4</div>
+<div style="flex:1;">
+<div style="font-weight:700;font-size:14px;color:#1a1a1a;margin-bottom:5px;">庫存不足時產生請購</div>
+<div style="font-family:'Consolas','Courier New',monospace;font-size:14px;color:#1a3a6c;background:#e8f0fe;border-radius:4px;padding:3px 10px;margin:3px 0;display:inline-block;">本單請購量 = 尚需分配量 − 本單可領量</div>
+<div style="font-size:12px;color:#777;margin-top:5px;">庫存夠就不產生請購；庫存不足才補差額</div>
+</div>
+</div>
+<div style="background:#fff8e1;border-left:4px solid #f59e0b;padding:10px 14px;border-radius:0 4px 4px 0;font-size:13px;margin:12px 0;color:#92400e;">
+<strong>關鍵設計原則：</strong>有在途採購的叫修單不從庫存池扣除需求量，庫存只分給「尚無採購單」的叫修單，確保庫存與採購不重複計算，避免多餘請購產生。
+      </div>
+</div>
+<!-- 4.3 -->
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">4.3　計算範例</div>
+<p style="margin:0 0 10px 0;"><strong>情境：</strong>品號 A6-L001P，庫存 = 6，共 11 張叫修單各需 1 個</p>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">排名</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">叫修單</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">在途採購</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">尚需分配</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">庫存池</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">分配結果</th>
+</tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">MTC-001</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">1（已請購）</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">6 → 6</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">等採購到貨</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">2</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">MTC-002</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">6 → 5</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">領料 1 個</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">3</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">MTC-003</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">1（已請購）</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">5 → 5</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">等採購到貨</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">4</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">MTC-004</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">1（已請購）</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">5 → 5</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">等採購到貨</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">5</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">MTC-005</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">1（已請購）</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">5 → 5</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">等採購到貨</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">6</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">MTC-006</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">1（已請購）</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">5 → 5</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">等採購到貨</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">7</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">MTC-007</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">5 → 4</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">領料 1 個</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">8</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">MTC-008</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">4 → 3</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">領料 1 個</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">9</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">MTC-009</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">3 → 2</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">領料 1 個</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">10</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">MTC-010</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">0</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">2 → 1</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">領料 1 個</td></tr>
+<tr><td style="padding:8px 14px;">11</td><td style="padding:8px 14px;">MTC-011</td><td style="padding:8px 14px;">0</td><td style="padding:8px 14px;">1</td><td style="padding:8px 14px;">1 → 0</td><td style="padding:8px 14px;">領料 1 個</td></tr>
+</tbody>
+</table>
+<div style="background:#e8f0fe;border-left:4px solid #1a73e8;padding:10px 14px;border-radius:0 4px 4px 0;font-size:13px;margin:12px 0;color:#174ea6;">結果：庫存 6 + 在途採購 5 = 11 = 總需求，<strong>不需要新增任何請購單</strong>。</div>
+</div>
+</div>
+<!-- 五 -->
+<div style="margin-bottom:40px;">
+<div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">五、稽核追蹤</div>
+<p style="margin:0 0 12px 0;">所有順序調整與重算結果均自動記錄於系統日誌（Chatter），包含：</p>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">事件</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">記錄位置</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">記錄內容</th>
+</tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">優先序調整</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">叫修單日誌</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">操作人、調整前後排序位置</td></tr>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">系統重算後用料變更</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">叫修單日誌</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;background:#f9fafe;">品名、用料量變更前後值</td></tr>
+<tr><td style="padding:8px 14px;">維修單用料手動修改</td><td style="padding:8px 14px;">維修單 + 叫修單日誌</td><td style="padding:8px 14px;">操作人、時間、品名、修改前後數量</td></tr>
+</tbody>
+</table>
+</div>
+<!-- 六 -->
+<div style="margin-bottom:40px;">
+<div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">六、權限設定</div>
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">6.1　領料管理專屬權限</div>
+<span style="font-size:13px;color:#1a73e8;background:#e8f0fe;padding:3px 9px;border-radius:4px;display:inline-block;margin-bottom:12px;">設定位置：使用者設定 → 領料管理（在「維修單」分類下方）</span>
+<div style="border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;margin-bottom:16px;">
+<div style="background:#1a73e8;color:#fff;padding:8px 14px;font-weight:700;font-size:14px;">領料管理</div>
+<div style="display:flex;align-items:flex-start;padding:10px 14px;border-bottom:1px solid #f0f0f0;gap:14px;">
+<span style="min-width:60px;font-weight:700;font-size:13px;padding:2px 8px;border-radius:4px;text-align:center;background:#e8f0fe;color:#174ea6;">查詢</span>
+<span style="font-size:14px;line-height:1.6;color:#333;flex:1;">可進入「領料管理」選單，查看所有待領料佇列（唯讀）。<br/><em>未授權者選單列不顯示「領料管理」入口。</em></span>
+</div>
+<div style="display:flex;align-items:flex-start;padding:10px 14px;gap:14px;">
+<span style="min-width:60px;font-weight:700;font-size:13px;padding:2px 8px;border-radius:4px;text-align:center;background:#fce8ff;color:#6b1f7b;">修改</span>
+<span style="font-size:14px;line-height:1.6;color:#333;flex:1;">可操作「商品優先」與「整單優先」按鈕，調整排隊順序並觸發系統自動重算。</span>
+</div>
+</div>
+</div>
+<div style="margin-bottom:28px;">
+<div style="font-size:15px;font-weight:700;color:#333;background:#f0f4ff;padding:6px 12px;border-radius:4px;margin-bottom:12px;">6.2　其他相關權限</div>
+<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+<thead><tr>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">功能</th>
+<th style="background:#1a73e8;color:#fff;padding:9px 14px;text-align:left;font-weight:600;">所需權限群組</th>
+</tr></thead>
+<tbody>
+<tr><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">維修單「優先領料」按鈕</td><td style="padding:8px 14px;border-bottom:1px solid #e8e8e8;">維修單 → 確認</td></tr>
+<tr><td style="padding:8px 14px;">庫存不足警告強制確認</td><td style="padding:8px 14px;">維修單 → 倉庫管理</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- 七 -->
+<div style="margin-bottom:40px;"><div style="font-size:17px;font-weight:700;color:#1a73e8;border-left:4px solid #1a73e8;padding-left:10px;margin-bottom:16px;">七、注意事項</div><ol style="padding-left:24px;margin:0;"><li style="padding:10px 6px;margin-bottom:8px;background:#fafafa;border-radius:4px;border:1px solid #eee;"><strong>優先序調整後立即生效</strong><br/>重算會即時更新所有相關維修單的用料及請購明細，操作前請確認。</li><li style="padding:10px 6px;margin-bottom:8px;background:#fafafa;border-radius:4px;border:1px solid #eee;"><strong>已確認的維修單不受重算影響</strong><br/>已完成確認的維修單不會被系統自動調整。</li><li style="padding:10px 6px;margin-bottom:8px;background:#fafafa;border-radius:4px;border:1px solid #eee;"><strong>在途採購已計入計算</strong><br/>系統會自動考慮已送出但尚未到貨的採購量，避免重複請購。</li><li style="padding:10px 6px;margin-bottom:8px;background:#fafafa;border-radius:4px;border:1px solid #eee;"><strong>部分到貨情境</strong><br/>若採購已部分到貨，系統按比例扣除在途量，精準反映實際缺口。</li><li style="padding:10px 6px;margin-bottom:8px;background:#fafafa;border-radius:4px;border:1px solid #eee;"><strong>升版後「領料管理」選單需重新授權</strong><br/>系統升版後，現有使用者預設沒有領料管理權限，「領料管理」入口不會出現在選單。<br/>請管理員至「設定 → 使用者」，依需求勾選「領料管理 → 查詢 / 修改」後儲存。</li></ol></div><div style="margin-top:48px;padding-top:16px;border-top:1px solid #e0e0e0;font-size:12px;color:#999;text-align:right;"> </div>
+</div>
+
+---message---
+無訊息內容
+---images---
+無圖片

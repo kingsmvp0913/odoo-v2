@@ -1,0 +1,226 @@
+window.ProjectDetailView = Vue.defineComponent({
+  name: 'ProjectDetailView',
+  data() {
+    return {
+      project: null,
+      repos: [],
+      loading: true,
+      newRepo: { label: '', repo_url: '', is_primary: false },
+      savingRepo: false,
+      env: null,
+      envWorking: false,
+      _pollTimer: null,
+      _reposPollTimer: null
+    };
+  },
+  computed: {
+    hasCloning() { return this.repos.some(r => r.clone_status === 'cloning'); },
+    hasIndexing() { return this.repos.some(r => r.graphify_status === 'running'); }
+  },
+  watch: {
+    'env.status'(val) {
+      if (val === 'setting_up') this._startPoll();
+      else this._stopPoll();
+    },
+    hasCloning(val) {
+      if (val || this.hasIndexing) this._startReposPoll();
+      else this._stopReposPoll();
+    },
+    hasIndexing(val) {
+      if (val || this.hasCloning) this._startReposPoll();
+      else this._stopReposPoll();
+    }
+  },
+  async created() {
+    await this.load();
+    await this.loadEnv();
+  },
+  beforeUnmount() { this._stopPoll(); this._stopReposPoll(); },
+  methods: {
+    _startPoll() {
+      if (this._pollTimer) return;
+      this._pollTimer = setInterval(() => this.loadEnv(), 5000);
+    },
+    _stopPoll() {
+      if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    },
+    _startReposPoll() {
+      if (this._reposPollTimer) return;
+      this._reposPollTimer = setInterval(async () => {
+        const data = await Api.get(`projects/${this.$route.params.id}`).catch(() => null);
+        if (data) this.repos = data.repos || [];
+      }, 3000);
+    },
+    _stopReposPoll() {
+      if (this._reposPollTimer) { clearInterval(this._reposPollTimer); this._reposPollTimer = null; }
+    },
+    async load() {
+      this.loading = true;
+      try {
+        const data = await Api.get(`projects/${this.$route.params.id}`);
+        this.project = data;
+        this.repos = data.repos || [];
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.loading = false; }
+    },
+    async addRepo() {
+      if (!this.newRepo.label || !this.newRepo.repo_url) return showToast('請填寫標籤和 repo URL', 'error');
+      this.savingRepo = true;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo });
+        this.newRepo = { label: '', repo_url: '', is_primary: false };
+        await this.load();
+        showToast('Repo 已新增，正在 clone...', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingRepo = false; }
+    },
+    async removeRepo(repoId) {
+      try {
+        await Api.delete(`projects/${this.$route.params.id}/repos/${repoId}`);
+        await this.load();
+        showToast('已移除 repo', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    async reclone(repoId) {
+      try {
+        await Api.post(`projects/${this.$route.params.id}/repos/${repoId}/reclone`, {});
+        await this.load();
+        showToast('重新 clone 已開始', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    async initWiki() {
+      const doneRepos = this.repos.filter(r => r.clone_status === 'done');
+      if (!doneRepos.length) {
+        return showToast('請先新增 Repo 並等待 clone 完成', 'error');
+      }
+      try {
+        await Api.post(`projects/${this.$route.params.id}/wiki/init`, {});
+        showToast('Wiki 初始化完成', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    goWiki() { this.$router.push(`/projects/${this.$route.params.id}/wiki`); },
+    goChat() { this.$router.push(`/projects/${this.$route.params.id}/chat`); },
+    async loadEnv() {
+      try {
+        this.env = await Api.get(`projects/${this.$route.params.id}/env`);
+      } catch { this.env = { status: 'idle' }; }
+    },
+    async setupEnv() {
+      this.envWorking = true;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/env/setup`, {});
+        showToast('環境建立已開始，系統自動分配 port...', 'success');
+        await this.loadEnv();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.envWorking = false; }
+    },
+    async stopEnv() {
+      this.envWorking = true;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/env/stop`, {});
+        showToast('環境已停止', 'success');
+        await this.loadEnv();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.envWorking = false; }
+    },
+    async deleteEnv() {
+      this.envWorking = true;
+      try {
+        await Api.delete(`projects/${this.$route.params.id}/env`);
+        showToast('環境記錄已重設', 'success');
+        await this.loadEnv();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.envWorking = false; }
+    }
+  },
+  template: `
+    <div v-if="loading" class="loading">載入中...</div>
+    <template v-else-if="project">
+      <div class="topbar">
+        <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:12px">← 返回</button>
+        <h1>{{ project.name }}</h1>
+        <span style="font-size:13px;color:var(--text-muted);margin-left:12px">Odoo {{ project.odoo_version }}</span>
+      </div>
+      <div class="content">
+        <div v-if="project.description" style="color:var(--text-muted);font-size:13px;margin-bottom:16px">{{ project.description }}</div>
+
+        <div class="form-section">Git Repositories</div>
+        <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:13px;margin-bottom:16px">尚未綁定任何 repo</div>
+        <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <span style="font-weight:600">{{ r.label }}</span>
+                <span v-if="r.is_primary" style="font-size:11px;background:var(--primary);color:#fff;border-radius:4px;padding:1px 6px">主要</span>
+                <span v-if="r.clone_status === 'cloning'" style="font-size:11px;background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px">⟳ Clone 中...</span>
+                <span v-else-if="r.clone_status === 'done'" style="font-size:11px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:4px;padding:1px 6px">✓ 已同步</span>
+                <span v-else-if="r.clone_status === 'error'" style="font-size:11px;background:#fff5f5;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px">✕ Clone 失敗</span>
+                <span v-if="r.graphify_status === 'running'" style="font-size:11px;background:#fefce8;color:#ca8a04;border:1px solid #fde68a;border-radius:4px;padding:1px 6px">⟳ 索引中...</span>
+                <span v-else-if="r.graphify_status === 'done'" style="font-size:11px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:4px;padding:1px 6px">✓ 已索引</span>
+                <span v-else-if="r.graphify_status === 'error'" style="font-size:11px;background:#fff5f5;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px" :title="r.graphify_error">✕ 索引失敗</span>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
+              <div v-if="r.local_path" style="font-size:12px;color:var(--text-muted)">路徑：{{ r.local_path }}</div>
+              <div v-if="r.clone_error" style="font-size:11px;color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
+            </div>
+            <div style="display:flex;gap:6px;margin-left:12px;flex-shrink:0">
+              <button v-if="r.clone_status === 'error'" class="btn btn-outline btn-sm" @click="reclone(r.id)" title="重新 clone">↺</button>
+              <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="removeRepo(r.id)">移除</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+          <input v-model="newRepo.label" placeholder="標籤（如 main、plugin-hr）" class="form-control" />
+          <input v-model="newRepo.repo_url" placeholder="Git URL（自動 clone）" class="form-control" />
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+            <input type="checkbox" v-model="newRepo.is_primary" /> 設為主要 repo
+          </label>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
+
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+          <div class="form-section">Wiki 與對話</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
+            <button class="btn btn-outline btn-sm" @click="goWiki">📖 開啟 Wiki</button>
+            <button class="btn btn-outline btn-sm" @click="goChat">💬 開啟 Chat</button>
+          </div>
+        </div>
+
+        <div v-if="env" style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
+          <div class="form-section">Odoo 測試環境</div>
+          <div style="font-size:13px;margin-bottom:10px;display:flex;align-items:center;gap:8px">
+            <span>狀態：</span>
+            <span :style="{ color: env.status === 'running' ? 'var(--success,#48bb78)' : env.status === 'error' ? 'var(--error)' : 'var(--text-muted)' }">
+              {{ { idle:'● 閒置', setting_up:'⟳ 建立中（自動重新整理）', running:'● 運行中', error:'✕ 錯誤' }[env.status] || env.status }}
+            </span>
+            <a v-if="env.url" :href="env.url" target="_blank" style="font-size:12px">{{ env.url }}</a>
+            <span v-if="env.port && env.status === 'running'" style="font-size:12px;color:var(--text-muted)">port {{ env.port }}</span>
+          </div>
+          <div v-if="env.error_msg" style="background:#fff5f5;border:1px solid #fc8181;border-radius:4px;padding:8px;font-size:12px;margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
+          <details v-if="env.setup_log" style="margin-bottom:10px">
+            <summary style="font-size:12px;color:var(--text-muted);cursor:pointer;user-select:none">▶ 查看建立記錄</summary>
+            <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:11px;overflow-x:auto;margin-top:6px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{{ env.setup_log }}</pre>
+          </details>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <template v-if="env.status === 'idle' || env.status === 'error'">
+              <button class="btn btn-primary btn-sm" @click="setupEnv" :disabled="envWorking">
+                {{ envWorking ? '處理中...' : '一鍵建立環境' }}
+              </button>
+            </template>
+            <template v-if="env.status === 'running'">
+              <button class="btn btn-outline btn-sm" @click="stopEnv" :disabled="envWorking">停止</button>
+            </template>
+            <button v-if="env.status !== 'idle'" class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteEnv" :disabled="envWorking">重設記錄</button>
+            <button class="btn btn-outline btn-sm" @click="loadEnv" :disabled="envWorking">↺ 重新整理</button>
+          </div>
+          <div v-if="env.status === 'setting_up'" style="font-size:11px;color:var(--text-muted);margin-top:8px">
+            系統自動分配可用 port，每 5 秒自動更新狀態
+          </div>
+        </div>
+      </div>
+    </template>
+    <div v-else style="padding:24px;color:var(--text-muted)">專案不存在</div>
+  `
+});

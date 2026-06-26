@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Dev — 初始設定</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      display: flex; align-items: center; justify-content: center; min-height: 100vh;
+    }
+    .card {
+      background: #1e293b; border-radius: 12px; padding: 2rem;
+      width: 100%; max-width: 400px; box-shadow: 0 4px 24px rgba(0,0,0,.4);
+    }
+    h1 { font-size: 1.375rem; margin-bottom: .375rem; }
+    .subtitle { color: #94a3b8; font-size: .8125rem; margin-bottom: 1.5rem; line-height: 1.5; }
+    label { display: block; font-size: .8125rem; color: #cbd5e1; margin-bottom: .25rem; }
+    input {
+      width: 100%; padding: .625rem .75rem;
+      background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      color: #e2e8f0; font-size: .875rem; margin-bottom: 1rem;
+      transition: border-color .15s;
+    }
+    input:focus { outline: none; border-color: #3b82f6; }
+    button {
+      width: 100%; padding: .75rem; background: #3b82f6; color: #fff;
+      border: none; border-radius: 6px; font-size: .875rem; cursor: pointer;
+      transition: background .15s;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #334155; cursor: not-allowed; }
+    .error {
+      color: #f87171; font-size: .8125rem; margin-bottom: .75rem;
+      padding: .5rem .75rem; background: rgba(248,113,113,.1);
+      border-radius: 6px; display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>AI Dev 初始設定</h1>
+    <p class="subtitle">建立管理員帳號後即可開始使用。此頁面設定完成後將永久關閉。</p>
+    <div class="error" id="error"></div>
+    <label for="username">帳號</label>
+    <input type="text" id="username" placeholder="admin" autocomplete="username">
+    <label for="password">密碼（至少 8 個字元）</label>
+    <input type="password" id="password" autocomplete="new-password">
+    <label for="display_name">顯示名稱</label>
+    <input type="text" id="display_name" placeholder="系統管理員">
+    <button id="btn" onclick="setup()">完成設定</button>
+  </div>
+  <script>
+    fetch('/api/setup/status').then(r => r.json()).then(d => {
+      if (!d.needsSetup) window.location.replace('/');
+    }).catch(() => {}); // 網路失敗時靜默（頁面仍可正常使用）
+
+    async function setup() {
+      const errorEl = document.getElementById('error');
+      const btn = document.getElementById('btn');
+      errorEl.style.display = 'none';
+
+      const body = {
+        username: document.getElementById('username').value.trim(),
+        password: document.getElementById('password').value,
+        display_name: document.getElementById('display_name').value.trim()
+      };
+      if (!body.username || !body.password || !body.display_name) {
+        errorEl.textContent = '請填寫所有欄位'; errorEl.style.display = 'block'; return;
+      }
+      if (body.password.length < 8) {
+        errorEl.textContent = '密碼至少需要 8 個字元'; errorEl.style.display = 'block'; return;
+      }
+
+      btn.disabled = true; btn.textContent = '設定中...';
+      const res = await fetch('/api/auth/setup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errorEl.textContent = data.error; errorEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = '完成設定'; return;
+      }
+      localStorage.setItem('aidev_token', data.token);
+      window.location.replace('/');
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+---id---
+3732
+---title---
+IDX-2026060100: 品檢QR CODE 掃碼異常
+---project---
+鴻久用戶
+---stage---
+處理中
+---classification---
+維修
+---description---
+品檢QR CODE 掃碼異常 ，影片用MAIL寄
+---message---
+[2026-06-23 08:18:40] 用戶回饋 創建
+---images---
+無圖片

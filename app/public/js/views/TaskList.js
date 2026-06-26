@@ -1,0 +1,448 @@
+const NEEDS_ACTION = ['confirm_pending', 'final_pending', 'stopped', 'triage_blocked', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict'];
+const STATUS_LABELS = {
+  new:              '待分診',
+  analysis_running: '分析中',
+  branch_pending:   '建立分支',
+  confirm_pending:  '等待確認',
+  final_pending:    '等待審核',
+  confirm_answered: '已回覆',
+  coding_running:   '開發中',
+  qa_running:       '測試中',
+  merge_running:    '合併中',
+  merge_conflict:   '合併衝突',
+  deploy_ready:     '可部署',
+  deploy_pending:   '部署中',
+  deploy_fixing:    '修復部署',
+  wiki_updating:    '更新 Wiki',
+  cs_running:       '客服處理',
+  cs_reply_pending: '等待回覆確認',
+  cs_data_needed:   '需補資料',
+  triage_running:   '分診中',
+  done:             '完成',
+  stopped:          '已停止',
+  triage_blocked:   '分診阻塞'
+};
+
+const FLOW_DEV = [
+  { label: '分析',  statuses: ['analysis_running', 'branch_pending'] },
+  { label: '確認',  statuses: ['confirm_pending', 'final_pending', 'confirm_answered'] },
+  { label: '開發',  statuses: ['coding_running'] },
+  { label: '測試',  statuses: ['qa_running', 'merge_running'] },
+  { label: '部署',  statuses: ['deploy_pending', 'deploy_fixing', 'deploy_ready', 'wiki_updating'] },
+  { label: '完成',  statuses: ['done'] },
+];
+const FLOW_CS = [
+  { label: '客服',   statuses: ['cs_running'] },
+  { label: '補資料', statuses: ['cs_data_needed'] },
+  { label: '確認',   statuses: ['cs_reply_pending'] },
+  { label: '完成',   statuses: ['done'] },
+];
+const STOPPED_STATUSES = ['stopped', 'triage_blocked', 'merge_conflict'];
+
+function statusLabel(status) { return STATUS_LABELS[status] || status; }
+function timeAgo(ts) {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return '剛剛';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分鐘前`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小時前`;
+  return `${Math.floor(diff / 86400000)} 天前`;
+}
+
+const CS_ACTIVE_STATUSES = ['cs_running', 'cs_data_needed', 'cs_reply_pending'];
+
+const StatusBar = Vue.defineComponent({
+  name: 'StatusBar',
+  props: { status: String, source: String },
+  computed: {
+    isNew()     { return this.status === 'new'; },
+    isStopped() { return STOPPED_STATUSES.includes(this.status); },
+    flow() {
+      if (CS_ACTIVE_STATUSES.includes(this.status)) return FLOW_CS;
+      if (this.status === 'done' && this.source === 'service') return FLOW_CS;
+      return FLOW_DEV;
+    },
+    activeIdx() {
+      if (this.status === 'done') return this.flow.length;
+      const idx = this.flow.findIndex(s => s.statuses.includes(this.status));
+      return idx === -1 ? 0 : idx;
+    }
+  },
+  template: `
+    <div v-if="!isNew" class="stepper">
+      <template v-for="(step, i) in flow" :key="i">
+        <div class="step-node" :class="{
+          'sn-done':   !isStopped && i < activeIdx,
+          'sn-active': !isStopped && i === activeIdx,
+          'sn-error':  isStopped,
+          'sn-future': !isStopped && i > activeIdx
+        }">
+          <div class="step-circle">
+            <span v-if="isStopped">✕</span>
+            <span v-else-if="i < activeIdx">✓</span>
+            <span v-else>{{ i + 1 }}</span>
+          </div>
+          <div class="step-label">{{ step.label }}</div>
+        </div>
+        <div v-if="i < flow.length - 1" class="step-connector"
+          :class="{ 'sc-done': !isStopped && i < activeIdx, 'sc-error': isStopped }">
+        </div>
+      </template>
+    </div>
+  `
+});
+
+window.TaskListView = Vue.defineComponent({
+  name: 'TaskListView',
+  components: { StatusBar },
+  data() {
+    return {
+      tasks: [],
+      archivedTasks: [],
+      filter: 'needs_action',
+      search: '',
+      loading: true,
+      syncing: false,
+      testMode: false,
+      stepping: false,
+      odooUrl: '',
+      serviceUrl: '',
+      isAdmin: false,
+      batchMode: false,
+      selectedIds: [],
+      batchWorking: false
+    };
+  },
+  computed: {
+    filteredTasks() {
+      let list;
+      if (this.filter === 'archived')          list = this.archivedTasks;
+      else if (this.filter === 'paused')       list = this.tasks.filter(t => t.is_paused);
+      else if (this.filter === 'needs_action') list = this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused);
+      else if (this.filter === 'deploy_ready') list = this.tasks.filter(t => t.status === 'deploy_ready' && !t.is_paused);
+      else                                     list = this.tasks; // 全部 = 含暫停中
+      const q = this.search.toLowerCase().trim();
+      if (!q) return list;
+      return list.filter(t =>
+        (t.title || '').toLowerCase().includes(q) ||
+        (t.task_id || '').toLowerCase().includes(q) ||
+        (t.source || '').toLowerCase().includes(q) ||
+        (t.module || '').toLowerCase().includes(q)
+      );
+    },
+    needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused).length; },
+    deployReadyCount() { return this.tasks.filter(t => t.status === 'deploy_ready' && !t.is_paused).length; },
+    pausedCount() { return this.tasks.filter(t => t.is_paused).length; },
+    allCount()    { return this.tasks.length; },
+    allSelected() {
+      return this.filteredTasks.length > 0 && this.filteredTasks.every(t => this.selectedIds.includes(t.id));
+    }
+  },
+  watch: {
+    needsActionCount(v) { window.needsActionCount.value = v; },
+    filter() { this.selectedIds = []; this.batchMode = false; this.load(); }
+  },
+  async created() {
+    await this.load();
+    Api.get('system/config').then(r => {
+      this.testMode = !!r.test_mode;
+      this.odooUrl = r.odoo_url || '';
+      this.serviceUrl = r.service_url || '';
+    }).catch(() => {});
+    Api.get('auth/me').then(r => { this.isAdmin = r.role === 'admin'; }).catch(() => {});
+  },
+  mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
+  beforeUnmount() { SocketManager.setRefreshCallback(null); },
+  methods: {
+    async load() {
+      this.loading = true;
+      try {
+        if (this.filter === 'archived') {
+          const data = await Api.get('tasks?archived=true');
+          this.archivedTasks = data.tasks || data;
+        } else {
+          const data = await Api.get('tasks');
+          this.tasks = data.tasks || data;
+          window.needsActionCount.value = this.needsActionCount;
+        }
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.loading = false; }
+    },
+    needsAction(t) { return NEEDS_ACTION.includes(t.status); },
+    isProcessing(t) {
+      if (this.testMode) return false;
+      return ['analysis_running','coding_running','qa_running','merge_running','deploy_pending','deploy_fixing','wiki_updating','cs_running','branch_pending','confirm_answered'].includes(t.status);
+    },
+    isStopped(t) { return ['stopped', 'triage_blocked'].includes(t.status); },
+    statusLabel,
+    timeAgo,
+    openTask(t) { this.$router.push(`/task/${t.id}`); },
+    async syncNow() {
+      this.syncing = true;
+      try {
+        const res = await Api.post('sync/now', {});
+        const total = (res.odoo?.added || 0) + (res.service?.added || 0);
+        const errors = [
+          res.odoo?.error    ? `Odoo：${res.odoo.error}`    : null,
+          res.service?.error ? `客服：${res.service.error}` : null
+        ].filter(Boolean);
+        if (errors.length) {
+          showToast(`同步失敗 — ${errors.join('；')}`, 'error');
+        } else {
+          const detail = [
+            res.odoo?.found    != null ? `Odoo 找到 ${res.odoo.found} 筆`    : null,
+            res.service?.found != null ? `客服 找到 ${res.service.found} 筆`  : null
+          ].filter(Boolean).join('，');
+          showToast(`同步完成，新增 ${total} 筆${detail ? `（${detail}）` : ''}`, total > 0 ? 'success' : 'info');
+        }
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.syncing = false; }
+    },
+    async togglePause(t, e) {
+      e.stopPropagation();
+      try {
+        const r = await Api.put(`tasks/${t.id}/pause`, {});
+        t.is_paused = r.is_paused;
+        showToast(r.is_paused ? '任務已暫停，Pipeline 將跳過' : '任務已恢復', r.is_paused ? 'warn' : 'success');
+      } catch (err) { showToast(err.message, 'error'); }
+    },
+    async stepPipeline() {
+      this.stepping = true;
+      try {
+        const r = await Api.post('pipeline/step', {});
+        showToast(`Pipeline 推進完成，處理 ${r.processed} 個任務`, 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.stepping = false; }
+    },
+    sourceUrl(t) {
+      const id = (t.task_id || '').match(/(\d+)$/)?.[1];
+      if (!id) return null;
+      if (t.source === 'odoo' && this.odooUrl)
+        return `${this.odooUrl}/web#id=${id}&action=524&model=project.task&view_type=form`;
+      if (t.source === 'service' && this.serviceUrl)
+        return `${this.serviceUrl}/web?debug=0#action=114&cids=1&id=${id}&menu_id=87&model=service.question.feedback&view_type=form`;
+      return null;
+    },
+    sourceLabel(source) {
+      return source === 'odoo' ? 'Odoo' : source === 'service' ? 'eService' : source;
+    },
+    async archiveTask(t, e) {
+      e.stopPropagation();
+      if (!confirm(`確定要封存任務「${t.title || t.task_id}」？封存後可在「已封存」分頁查看。`)) return;
+      try {
+        await Api.post(`tasks/${t.id}/archive`, {});
+        this.tasks = this.tasks.filter(x => x.id !== t.id);
+        showToast('任務已封存', 'warn');
+      } catch (err) { showToast(err.message, 'error'); }
+    },
+    async unarchiveTask(t, e) {
+      e.stopPropagation();
+      try {
+        await Api.post(`tasks/${t.id}/unarchive`, {});
+        this.archivedTasks = this.archivedTasks.filter(x => x.id !== t.id);
+        showToast('任務已解除封存', 'success');
+      } catch (err) { showToast(err.message, 'error'); }
+    },
+    async deleteTask(t, e) {
+      e.stopPropagation();
+      if (!confirm(`確定要永久刪除任務「${t.title || t.task_id}」？刪除後可重新同步匯入。`)) return;
+      try {
+        await Api.delete(`tasks/${t.id}`);
+        this.tasks = this.tasks.filter(x => x.id !== t.id);
+        showToast('任務已刪除，重新同步可重新匯入', 'warn');
+      } catch (err) { showToast(err.message, 'error'); }
+    },
+    toggleBatchMode() {
+      this.batchMode = !this.batchMode;
+      if (!this.batchMode) this.selectedIds = [];
+    },
+    toggleSelect(id, e) {
+      e.stopPropagation();
+      const idx = this.selectedIds.indexOf(id);
+      if (idx === -1) this.selectedIds.push(id);
+      else this.selectedIds.splice(idx, 1);
+    },
+    toggleSelectAll() {
+      if (this.allSelected) this.selectedIds = [];
+      else this.selectedIds = this.filteredTasks.map(t => t.id);
+    },
+    async batchDelete() {
+      if (!this.selectedIds.length) return;
+      if (!confirm(`確定永久刪除選取的 ${this.selectedIds.length} 筆任務？`)) return;
+      this.batchWorking = true;
+      try {
+        const r = await Api.post('tasks/batch/delete', { ids: this.selectedIds });
+        showToast(`已刪除 ${r.affected} 筆任務`, 'warn');
+        this.selectedIds = [];
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+      finally { this.batchWorking = false; }
+    },
+    async batchPause() {
+      if (!this.selectedIds.length) return;
+      this.batchWorking = true;
+      try {
+        const r = await Api.post('tasks/batch/pause', { ids: this.selectedIds, paused: true });
+        showToast(`已暫停 ${r.affected} 筆任務`, 'warn');
+        this.selectedIds = [];
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+      finally { this.batchWorking = false; }
+    },
+    async batchArchive() {
+      if (!this.selectedIds.length) return;
+      if (!confirm(`確定封存選取的 ${this.selectedIds.length} 筆任務？`)) return;
+      this.batchWorking = true;
+      try {
+        const r = await Api.post('tasks/batch/archive', { ids: this.selectedIds });
+        showToast(`已封存 ${r.affected} 筆任務`, 'warn');
+        this.selectedIds = [];
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+      finally { this.batchWorking = false; }
+    },
+    async batchUnarchive() {
+      if (!this.selectedIds.length) return;
+      this.batchWorking = true;
+      try {
+        const r = await Api.post('tasks/batch/unarchive', { ids: this.selectedIds });
+        showToast(`已解除封存 ${r.affected} 筆任務`, 'success');
+        this.selectedIds = [];
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+      finally { this.batchWorking = false; }
+    },
+    refresh() {
+      Api.get('tasks').then(data => {
+        this.tasks = data.tasks || data;
+        window.needsActionCount.value = this.needsActionCount;
+      }).catch(() => {});
+      if (this.filter === 'archived') {
+        Api.get('tasks?archived=true').then(data => { this.archivedTasks = data.tasks || data; }).catch(() => {});
+      }
+    }
+  },
+  template: `
+    <div class="topbar">
+      <h1>任務列表</h1>
+      <span v-if="testMode" style="font-size:12px;color:var(--warning);background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 8px">🧪 測試模式</span>
+      <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping">
+        {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
+      </button>
+      <button v-if="isAdmin" class="btn btn-sm" :class="batchMode ? 'btn-primary' : 'btn-outline'" @click="toggleBatchMode">
+        {{ batchMode ? '✕ 取消批次' : '☑ 批次' }}
+      </button>
+      <button class="btn btn-outline btn-sm" @click="syncNow" :disabled="syncing">
+        {{ syncing ? '同步中...' : '⟳ 手動同步' }}
+      </button>
+    </div>
+    <div class="content">
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-sm" :class="filter==='needs_action' ? 'btn-primary' : 'btn-outline'" @click="filter='needs_action'">
+          需回覆<span v-if="needsActionCount > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionCount }}</span>
+        </button>
+        <button class="btn btn-sm" :class="filter==='deploy_ready' ? 'btn-primary' : 'btn-outline'" @click="filter='deploy_ready'">
+          待更新<span v-if="deployReadyCount > 0" class="tab-badge" :class="filter==='deploy_ready' ? 'tab-badge-active' : ''">{{ deployReadyCount }}</span>
+        </button>
+        <button class="btn btn-sm" :class="filter==='all' ? 'btn-primary' : 'btn-outline'" @click="filter='all'">
+          全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allCount }}</span>
+        </button>
+        <button class="btn btn-sm" :class="filter==='paused' ? 'btn-primary' : 'btn-outline'" @click="filter='paused'">
+          暫停中<span v-if="pausedCount > 0" class="tab-badge" :class="filter==='paused' ? 'tab-badge-active' : ''">{{ pausedCount }}</span>
+        </button>
+        <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
+        <input v-model="search" placeholder="搜尋任務標題、來源..." class="form-control"
+          style="width:240px;font-size:13px;padding:5px 10px;height:32px" />
+      </div>
+
+      <div v-if="batchMode" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:13px">
+        <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" style="width:16px;height:16px;cursor:pointer">
+        <span style="color:var(--text-muted)">{{ allSelected ? '取消全選' : '全選' }}（已選 {{ selectedIds.length }} / {{ filteredTasks.length }} 筆）</span>
+      </div>
+
+      <div v-if="loading" class="loading">載入中...</div>
+      <div v-else-if="filteredTasks.length === 0" class="empty-state">
+        <div style="font-size:32px">📭</div>
+        <p>{{ search ? '沒有符合搜尋的任務' : filter === 'needs_action' ? '沒有待回覆的任務' : filter === 'deploy_ready' ? '沒有待更新正式的任務' : '沒有任務' }}</p>
+      </div>
+      <div v-else>
+        <div v-for="t in filteredTasks" :key="t.id"
+          class="task-card"
+          :class="{ 'needs-action': needsAction(t) && !isStopped(t) && !t.is_paused && !batchMode, 'stopped': isStopped(t), 'paused': t.is_paused, 'processing': isProcessing(t) && !t.is_paused, 'batch-selected': batchMode && selectedIds.includes(t.id) }"
+          @click="batchMode ? toggleSelect(t.id, $event) : openTask(t)">
+          <div class="task-header">
+            <div class="task-title" style="display:flex;align-items:center;gap:8px">
+              <input v-if="batchMode" type="checkbox" :checked="selectedIds.includes(t.id)"
+                @click.stop="toggleSelect(t.id, $event)"
+                style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
+              <span v-if="!batchMode && isProcessing(t) && !t.is_paused" class="spinner"></span>
+              <span v-else-if="!batchMode && needsAction(t) && !isStopped(t) && !t.is_paused" class="pulse-dot"></span>
+              {{ t.title || t.task_id }}
+            </div>
+            <div v-if="!batchMode" style="display:flex;align-items:center;gap:6px">
+              <button v-if="!isStopped(t)" class="btn btn-ghost btn-sm"
+                :style="{ color: t.is_paused ? 'var(--warning)' : 'var(--text-muted)', fontSize: '12px', padding: '2px 8px' }"
+                @click="togglePause(t, $event)"
+                :title="t.is_paused ? '點擊恢復' : '點擊暫停'">
+                {{ t.is_paused ? '▐▐ 已暫停' : '⏸ 暫停' }}
+              </button>
+              <template v-if="isAdmin && filter !== 'archived'">
+                <button class="btn btn-ghost btn-sm"
+                  style="color:var(--text-muted);font-size:12px;padding:2px 8px"
+                  @click="archiveTask(t, $event)" title="封存任務">⊞ 封存</button>
+                <button class="btn btn-ghost btn-sm"
+                  style="color:var(--danger);font-size:12px;padding:2px 8px"
+                  @click="deleteTask(t, $event)" title="永久刪除（可重新同步匯入）">✕ 刪除</button>
+              </template>
+              <template v-if="isAdmin && filter === 'archived'">
+                <button class="btn btn-ghost btn-sm"
+                  style="color:var(--success);font-size:12px;padding:2px 8px"
+                  @click="unarchiveTask(t, $event)" title="解除封存，回到主列表">↩ 解封存</button>
+                <button class="btn btn-ghost btn-sm"
+                  style="color:var(--danger);font-size:12px;padding:2px 8px"
+                  @click="deleteTask(t, $event)" title="永久刪除（可重新同步匯入）">✕ 刪除</button>
+              </template>
+              <div class="task-meta">{{ timeAgo(t.updated_at || t.created_at) }}</div>
+            </div>
+          </div>
+          <div class="task-source" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <a v-if="sourceUrl(t)" :href="sourceUrl(t)" target="_blank" @click.stop
+               style="color:var(--primary);text-decoration:none;font-weight:500">{{ sourceLabel(t.source) }}</a>
+            <span v-else>{{ sourceLabel(t.source) }}</span>
+            <a v-if="t.env_url" :href="t.env_url" target="_blank" @click.stop
+               style="font-size:11px;padding:1px 8px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text-secondary);text-decoration:none;background:#fff">
+              🖥 測試機
+            </a>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="status-badge" :class="t.status">{{ statusLabel(t.status) }}</span>
+              <span v-if="t.is_paused" style="font-size:11px;background:#fffbeb;color:var(--warning);border:1px solid #fde68a;border-radius:4px;padding:1px 6px">暫停中</span>
+            </div>
+            <span v-if="t.module" style="font-size:11px;color:var(--text-muted)">{{ t.module }}</span>
+          </div>
+          <StatusBar :status="t.status" :source="t.source" />
+        </div>
+      </div>
+
+      <!-- Batch action bar -->
+      <div v-if="batchMode && selectedIds.length > 0"
+        style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:#1e293b;color:#fff;border-radius:12px;padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:200;font-size:13px;white-space:nowrap">
+        <span style="margin-right:4px;font-weight:600">{{ selectedIds.length }} 筆已選</span>
+        <button class="btn btn-sm" style="background:#f59e0b;color:#fff;border:none"
+          @click="batchPause" :disabled="batchWorking">⏸ 暫停</button>
+        <template v-if="filter !== 'archived'">
+          <button class="btn btn-sm" style="background:#64748b;color:#fff;border:none"
+            @click="batchArchive" :disabled="batchWorking">⊞ 封存</button>
+        </template>
+        <template v-else>
+          <button class="btn btn-sm" style="background:#10b981;color:#fff;border:none"
+            @click="batchUnarchive" :disabled="batchWorking">↩ 解封存</button>
+        </template>
+        <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none"
+          @click="batchDelete" :disabled="batchWorking">✕ 刪除</button>
+      </div>
+    </div>
+  `
+});

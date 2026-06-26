@@ -1,0 +1,16 @@
+blocker_type: tech
+task_id: task_<N>
+stage: <current_stage>
+timestamp: <YYYY-MM-DDTHH:mm:ss>
+
+requirement: |
+  <無法實現的需求描述>
+
+reason: |
+  <為何無法以標準 Odoo 擴展實現（具體技術原因）>
+
+attempted: |
+  <已嘗試的方案>
+
+alternatives: |
+  <可能的替代方案（若有）>

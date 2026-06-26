@@ -1,0 +1,19 @@
+blocker_type: loop
+task_id: task_<N>
+timestamp: <YYYY-MM-DDTHH:mm:ss>
+
+loop_count: <N>
+task_reentries: <N>
+limit_exceeded: loop_count | task_reentry
+
+reason: |
+  Pipeline 循環次數超過安全上限（loop_count > 20 或單任務重入 > 2），自動停止以防死循環。
+
+last_pending_tasks:
+  - <task_root>/pending_prompt.txt
+
+action_required: |
+  1. 確認上述任務是否有循環觸發條件（如 analysis 一直輸出新任務）
+  2. 手動解決問題後刪除此 blocker 檔案
+  3. 刪除 _LOOP_COUNTER.json 重置計數器
+  4. 重新執行 pipeline

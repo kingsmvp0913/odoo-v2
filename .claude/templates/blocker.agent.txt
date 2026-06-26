@@ -1,0 +1,13 @@
+blocker_type: agent_error | mcp_failure | budget_exceeded
+task_id: task_<N>
+stage: <analysis | final | coding | qa>
+timestamp: <YYYY-MM-DDTHH:mm:ss>
+tool: serena | context7 | graphify | none
+serena_queries_used: 0
+error_code: tool_use_error | no_response | budget_exceeded | unknown
+error_detail: |
+  <單行摘要>
+recovery_steps: |
+  1. 確認工具設定（Serena port / Graphify wiki 路徑）
+  2. 修復後在任務目錄執行：touch system/.blocker_resolved
+  3. 下次「開工」時 _pipeline_run.ps1 自動清除 blocker 並重試

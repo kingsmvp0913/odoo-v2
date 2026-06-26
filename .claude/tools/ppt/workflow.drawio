@@ -1,0 +1,150 @@
+<mxfile host="app.diagrams.net" agent="claude-code">
+  <diagram name="workflow" id="workflow-1">
+    <mxGraphModel dx="1488" dy="782" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1020" pageHeight="1720" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="human" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFBE6;strokeColor=#CC9900;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;fontSize=14;fontStyle=1;fontColor=#806600;" value="任務負責人（人工區塊）" vertex="1">
+          <mxGeometry height="220" width="900" x="60" y="1480" as="geometry" />
+        </mxCell>
+        <mxCell id="A" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="抓取資料&#xa;Odoo + eService 雙來源同步" vertex="1">
+          <mxGeometry height="80" width="260" x="380" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="B" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#FF0000;strokeWidth=3;fontColor=#B30000;fontStyle=1;fontSize=14;" value="更新狀態為「處理中」" vertex="1">
+          <mxGeometry height="60" width="260" x="380" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="C" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#FF0000;strokeWidth=3;fontColor=#B30000;fontStyle=1;fontSize=14;" value="客服 Agent 初步判斷&#xa;能否不修改程式完成" vertex="1">
+          <mxGeometry height="80" width="260" x="380" y="260" as="geometry" />
+        </mxCell>
+        <mxCell id="D" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="判斷結果" vertex="1">
+          <mxGeometry height="100" width="220" x="400" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="F" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="分析流程&#xa;MODE_A／MODE_B　含信心度判斷" vertex="1">
+          <mxGeometry height="80" width="260" x="380" y="520" as="geometry" />
+        </mxCell>
+        <mxCell id="G" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="分析結果" vertex="1">
+          <mxGeometry height="100" width="220" x="400" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="H" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#FF0000;strokeWidth=3;fontColor=#B30000;fontStyle=1;fontSize=14;" value="更新 Git 並建立 Branch" vertex="1">
+          <mxGeometry height="60" width="260" x="380" y="780" as="geometry" />
+        </mxCell>
+        <mxCell id="J" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="實作流程&#xa;Coding Agent" vertex="1">
+          <mxGeometry height="80" width="260" x="380" y="880" as="geometry" />
+        </mxCell>
+        <mxCell id="K" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="QA 流程" vertex="1">
+          <mxGeometry height="60" width="260" x="380" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="L" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="QA 結果" vertex="1">
+          <mxGeometry height="100" width="220" x="400" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="M" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#FF0000;strokeWidth=3;fontColor=#B30000;fontStyle=1;fontSize=14;" value="自動 Merge Main" vertex="1">
+          <mxGeometry height="60" width="260" x="380" y="1240" as="geometry" />
+        </mxCell>
+        <mxCell id="N" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ECECFF;strokeColor=#9673A6;fontSize=14;" value="Merge 結果" vertex="1">
+          <mxGeometry height="100" width="220" x="400" y="1340" as="geometry" />
+        </mxCell>
+        <mxCell id="O" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF7D6;strokeColor=#CC9900;fontSize=14;" value="人工問答流程&#xa;回覆待確認問題" vertex="1">
+          <mxGeometry height="100" width="340" x="560" y="1540" as="geometry" />
+        </mxCell>
+        <mxCell id="P" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF7D6;strokeColor=#CC9900;fontSize=14;" value="最終人工審核流程&#xa;結案審核" vertex="1">
+          <mxGeometry height="100" width="340" x="120" y="1540" as="geometry" />
+        </mxCell>
+        <mxCell id="e-AB" edge="1" parent="1" source="A" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="B">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-BC" edge="1" parent="1" source="B" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="C">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-CD" edge="1" parent="1" source="C" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="D">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-DF" edge="1" parent="1" source="D" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="F" value="需要修改程式">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-DP" edge="1" parent="1" source="D" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" value="不須修改程式／填寫回覆">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="200" y="430" />
+              <mxPoint x="200" y="1540" />
+            </Array>
+            <mxPoint x="200" y="1540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-FG" edge="1" parent="1" source="F" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="G">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-GH" edge="1" parent="1" source="G" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="H" value="可直接開始">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-GP" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" value="不須修改程式">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="140" y="689" />
+              <mxPoint x="140" y="1509" />
+              <mxPoint x="141" y="1509" />
+            </Array>
+            <mxPoint x="400" y="689" as="sourcePoint" />
+            <mxPoint x="141" y="1540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-GO" edge="1" parent="1" source="G" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" value="有待確認問題／信心度太低">
+          <mxGeometry relative="1" x="-0.422" as="geometry">
+            <mxPoint y="-1" as="offset" />
+            <Array as="points">
+              <mxPoint x="810" y="690" />
+            </Array>
+            <mxPoint x="810" y="1540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-OF" edge="1" parent="1" source="O" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="F" value="答案填寫完畢">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="930" y="1590" />
+              <mxPoint x="930" y="560" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-HJ" edge="1" parent="1" source="H" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="J">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-JK" edge="1" parent="1" source="J" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="K">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-KL" edge="1" parent="1" source="K" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="L">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-LJ" edge="1" parent="1" source="L" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="J" value="有問題：退回修改">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="1150" />
+              <mxPoint x="300" y="920" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-LM" edge="1" parent="1" source="L" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="M" value="沒問題">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-MN" edge="1" parent="1" source="M" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;" target="N">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-NP" edge="1" parent="1" source="N" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="P" value="成功">
+          <mxGeometry relative="1" x="0.4615" as="geometry">
+            <mxPoint y="1" as="offset" />
+            <Array as="points">
+              <mxPoint x="290" y="1390" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-NO" edge="1" parent="1" source="N" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="O" value="有問題">
+          <mxGeometry relative="1" x="0.4615" as="geometry">
+            <mxPoint y="1" as="offset" />
+            <Array as="points">
+              <mxPoint x="730" y="1390" />
+            </Array>
+            <mxPoint x="730" y="1480" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

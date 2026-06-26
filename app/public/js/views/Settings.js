@@ -1,0 +1,268 @@
+window.SettingsView = Vue.defineComponent({
+  name: 'SettingsView',
+  data() {
+    return {
+      me: { username: '', display_name: '' },
+      teamsUserId: '',
+      pipeline: { deploy_cmd: '', coding_cmd: '', qa_cmd: '' },
+      creds: {
+        odoo_username: '', odoo_password: '', odoo_user_id: '',
+        service_username: '', service_password: '', service_user_id: ''
+      },
+      pw: { current: '', next: '', confirm: '' },
+      pwError: '',
+      loading: true,
+      saving: false,
+      savingPw: false,
+      verifyingOdoo: false,
+      verifyingService: false
+    };
+  },
+  computed: {
+    pwValidation() {
+      if (!this.pw.current) return '請輸入目前密碼';
+      if (this.pw.next.length < 8) return '新密碼至少 8 個字元';
+      if (this.pw.next !== this.pw.confirm) return '兩次輸入的新密碼不一致';
+      return '';
+    }
+  },
+  async created() { await this.load(); },
+  methods: {
+    async load() {
+      this.loading = true;
+      try {
+        const [me, settings] = await Promise.all([Api.get('auth/me'), Api.get('settings')]);
+        this.me.username = me.username || '';
+        this.me.display_name = me.display_name || '';
+        const s = settings.odoo_settings || {};
+        this.teamsUserId            = s.teams_user_id   || '';
+        this.creds.odoo_username    = s.odoo_username   || '';
+        this.creds.odoo_password    = s.odoo_password   || '';
+        this.creds.odoo_user_id     = s.odoo_user_id    || '';
+        this.creds.service_username = s.service_username || '';
+        this.creds.service_password = s.service_password || '';
+        this.creds.service_user_id  = s.service_user_id  || '';
+        this.pipeline.deploy_cmd  = settings.deploy_cmd  || '';
+        this.pipeline.coding_cmd  = settings.coding_cmd  || '';
+        this.pipeline.qa_cmd      = settings.qa_cmd      || '';
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.loading = false; }
+    },
+    async save() {
+      this.saving = true;
+      try {
+        const odoo_settings = { teams_user_id: this.teamsUserId, ...this.creds };
+        await Promise.all([
+          Api.put('auth/me', { display_name: this.me.display_name }),
+          Api.put('settings', { odoo_settings, ...this.pipeline })
+        ]);
+        showToast('設定已儲存', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.saving = false; }
+    },
+    async savePw() {
+      this.pwError = this.pwValidation;
+      if (this.pwError) return;
+      this.savingPw = true;
+      try {
+        await Api.put('auth/me', { current_password: this.pw.current, new_password: this.pw.next });
+        this.pw = { current: '', next: '', confirm: '' };
+        showToast('密碼已更新', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingPw = false; }
+    },
+    async verifyOdoo() {
+      if (!this.creds.odoo_username || !this.creds.odoo_password) {
+        return showToast('請先填寫 Odoo 帳號和密碼', 'error');
+      }
+      this.verifyingOdoo = true;
+      try {
+        const { uid } = await Api.post('settings/verify-odoo', {
+          odoo_username: this.creds.odoo_username,
+          odoo_password: this.creds.odoo_password
+        });
+        this.creds.odoo_user_id = String(uid);
+        showToast(`驗證成功，使用者 ID：${uid}`, 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.verifyingOdoo = false; }
+    },
+    async verifyService() {
+      if (!this.creds.service_username || !this.creds.service_password) {
+        return showToast('請先填寫 eService 帳號和密碼', 'error');
+      }
+      this.verifyingService = true;
+      try {
+        const { uid } = await Api.post('settings/verify-service', {
+          service_username: this.creds.service_username,
+          service_password: this.creds.service_password
+        });
+        this.creds.service_user_id = String(uid);
+        showToast(`驗證成功，使用者 ID：${uid}`, 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.verifyingService = false; }
+    }
+  },
+  template: `
+    <div class="page-header">
+      <div class="page-header-inner">
+        <h1 class="page-title">個人設定</h1>
+      </div>
+    </div>
+    <div class="page-body">
+      <div v-if="loading" class="loading">載入中...</div>
+      <div v-else class="settings-layout">
+
+        <!-- 帳號 + 密碼 (同一 block，兩欄) -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">帳號與密碼</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="conn-fields-wrap">
+              <!-- 帳號欄 -->
+              <div>
+                <div class="field-item" style="margin-bottom:12px">
+                  <label class="field-label">帳號</label>
+                  <input :value="me.username" disabled class="field-input" />
+                </div>
+                <div class="field-item">
+                  <label class="field-label">顯示名稱</label>
+                  <input v-model="me.display_name" placeholder="你的名字" class="field-input" />
+                </div>
+              </div>
+              <!-- 密碼欄 -->
+              <div>
+                <div class="field-item" style="margin-bottom:12px">
+                  <label class="field-label">目前密碼</label>
+                  <input v-model="pw.current" type="password" placeholder="••••••••" class="field-input" />
+                </div>
+                <div class="field-item" style="margin-bottom:12px">
+                  <label class="field-label">新密碼 <span class="field-label-hint">至少 8 個字元</span></label>
+                  <input v-model="pw.next" type="password" placeholder="••••••••" class="field-input" :class="{ error: pw.next && pw.next.length < 8 }" />
+                </div>
+                <div class="field-item" style="margin-bottom:10px">
+                  <label class="field-label">確認新密碼</label>
+                  <input v-model="pw.confirm" type="password" placeholder="••••••••" class="field-input" :class="{ error: pw.confirm && pw.next !== pw.confirm }" />
+                </div>
+                <div v-if="pwError" class="form-error">{{ pwError }}</div>
+                <button class="btn btn-ghost btn-sm" @click="savePw" :disabled="savingPw">{{ savingPw ? '更新中...' : '更新密碼' }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存帳號設定' }}</button>
+          </div>
+        </div>
+
+        <!-- Odoo 帳號 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Odoo 帳號</div>
+            <div class="setting-block-desc">Odoo 伺服器位址由管理員統一設定，此處填寫你的個人登入憑證。</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="conn-fields">
+              <div class="field-item">
+                <label class="field-label">登入帳號</label>
+                <input v-model="creds.odoo_username" placeholder="admin" class="field-input" />
+              </div>
+              <div class="field-item">
+                <label class="field-label">密碼</label>
+                <input v-model="creds.odoo_password" type="password" placeholder="••••••" class="field-input" />
+              </div>
+            </div>
+            <div class="field-item" style="margin-top:10px;max-width:320px">
+              <label class="field-label">使用者 ID <span class="field-label-hint">任務負責人篩選</span></label>
+              <div style="display:flex;gap:8px">
+                <input v-model="creds.odoo_user_id" placeholder="點擊驗證自動取得" class="field-input" />
+                <button class="btn btn-outline btn-sm" @click="verifyOdoo" :disabled="verifyingOdoo" style="white-space:nowrap">
+                  {{ verifyingOdoo ? '驗證中...' : '驗證取得' }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存' }}</button>
+          </div>
+        </div>
+
+        <!-- eService 帳號 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">eService 帳號</div>
+            <div class="setting-block-desc">eService 伺服器位址由管理員統一設定，此處填寫你的個人登入憑證。</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="conn-fields">
+              <div class="field-item">
+                <label class="field-label">登入帳號</label>
+                <input v-model="creds.service_username" placeholder="admin" class="field-input" />
+              </div>
+              <div class="field-item">
+                <label class="field-label">密碼</label>
+                <input v-model="creds.service_password" type="password" placeholder="••••••" class="field-input" />
+              </div>
+            </div>
+            <div class="field-item" style="margin-top:10px;max-width:320px">
+              <label class="field-label">使用者 ID <span class="field-label-hint">任務負責人篩選</span></label>
+              <div style="display:flex;gap:8px">
+                <input v-model="creds.service_user_id" placeholder="點擊驗證自動取得" class="field-input" />
+                <button class="btn btn-outline btn-sm" @click="verifyService" :disabled="verifyingService" style="white-space:nowrap">
+                  {{ verifyingService ? '驗證中...' : '驗證取得' }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存' }}</button>
+          </div>
+        </div>
+
+        <!-- Teams 通知 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Teams 通知</div>
+            <div class="setting-block-desc">填寫你的 Azure AD 物件識別碼，任務通知時系統會以你的顯示名稱 @mention。</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="field-item" style="max-width:420px">
+              <label class="field-label">Teams 使用者 ID（AAD Object ID）</label>
+              <input v-model="teamsUserId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="field-input" />
+              <div class="hint-text">Azure AD → 使用者 → 物件識別碼</div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存' }}</button>
+          </div>
+        </div>
+
+        <!-- Pipeline 指令 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Pipeline 指令</div>
+            <div class="setting-block-desc">設定本機執行的 CI/CD 和開發指令。留空表示跳過該步驟。</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="field-item" style="margin-bottom:12px">
+              <label class="field-label">部署指令 <span class="field-label-hint">QA 通過後執行</span></label>
+              <input v-model="pipeline.deploy_cmd" placeholder="例：sudo systemctl restart odoo" class="field-input" />
+            </div>
+            <div class="field-item" style="margin-bottom:4px">
+              <label class="field-label">Coding Agent 命令 <span class="field-label-hint">非專案任務</span></label>
+              <input v-model="pipeline.coding_cmd" placeholder="例：claude --dangerously-skip-permissions" class="field-input" />
+              <div class="hint-text">可用變數：$TASK_ID  $GIT_BRANCH  $REPO_PATH  $ANALYSIS_YAML</div>
+            </div>
+            <div class="field-item" style="margin-top:12px">
+              <label class="field-label">QA 測試命令</label>
+              <input v-model="pipeline.qa_cmd" placeholder="例：npm test" class="field-input" />
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存' }}</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `
+});

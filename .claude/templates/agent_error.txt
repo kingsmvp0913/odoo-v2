@@ -1,0 +1,23 @@
+blocker_type: agent_error
+task_id: task_<N>
+stage: <analysis | final | coding | qa>
+timestamp: <YYYY-MM-DDTHH:mm:ss>
+
+error_summary: |
+  <一行錯誤摘要>
+
+error_detail: |
+  <完整錯誤訊息或 traceback>
+
+last_action: |
+  <Agent 最後執行的動作>
+
+retry_count: 0
+status: pending_retry | escalated_to_blocker
+
+files_affected:
+  - <path>
+
+action_required: |
+  retry_count < 1 → 主調度可自動重試一次
+  retry_count >= 1 → 升級為 blocker.agent.txt，停止並通知使用者
