@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const { query } = require('../db');
 const notify = require('../notify');
+const { logTokenUsage } = require('./token-logger');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -40,8 +41,9 @@ async function getProjectInfo(projectId) {
 
 function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal }) {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', ['--print'], { stdio: ['pipe', 'pipe', 'pipe'], cwd });
-    let stdout = '', stderr = '', done = false;
+    const child = spawn('claude', ['--print', '--output-format', 'stream-json', '--verbose'], { stdio: ['pipe', 'pipe', 'pipe'], cwd });
+    let resultText = '', stderr = '', done = false;
+    let usage = null, durationMs = null, lineBuffer = '';
 
     const timer = setTimeout(() => {
       if (!done) { child.kill(); reject(new Error('claude subprocess timed out')); }
@@ -54,9 +56,30 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal }
     }
 
     child.stdout.on('data', d => {
-      const chunk = d.toString();
-      stdout += chunk;
-      if (taskId && userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: chunk });
+      lineBuffer += d.toString();
+      let nl;
+      while ((nl = lineBuffer.indexOf('\n')) !== -1) {
+        const line = lineBuffer.slice(0, nl).trim();
+        lineBuffer = lineBuffer.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === 'assistant' && ev.message?.content) {
+            let out = '';
+            for (const blk of ev.message.content) {
+              if (blk.type === 'text') out += blk.text;
+            }
+            if (out && taskId && userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: out });
+          }
+          if (ev.type === 'result') {
+            resultText = ev.result || resultText;
+            usage      = ev.usage       || null;
+            durationMs = ev.duration_ms || null;
+          }
+        } catch {
+          if (taskId && userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: line + '\n' });
+        }
+      }
     });
     child.stderr.on('data', d => { stderr += d.toString(); });
     child.stdin.write(prompt);
@@ -67,7 +90,7 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal }
       done = true;
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       if (code !== 0 && code !== null) reject(new Error(stderr.trim() || `claude exited with code ${code}`));
-      else resolve(stdout);
+      else resolve({ text: resultText.trim(), usage, durationMs });
     });
     child.on('error', err => { clearTimeout(timer); done = true; reject(err); });
   });
@@ -210,7 +233,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
 
   let raw;
   try {
-    raw = await spawnClaude(buildAnalysisPrompt(task, info), { cwd: info.local_path, taskId, userId, signal });
+    const analysisResult = await spawnClaude(buildAnalysisPrompt(task, info), { cwd: info.local_path, taskId, userId, signal });
+    raw = analysisResult.text;
+    await logTokenUsage({ taskId: task.task_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
@@ -268,7 +293,9 @@ async function runTaskCoding(taskId, userId, signal) {
 
   let raw;
   try {
-    raw = await spawnClaude(buildCodingPrompt(task, info), { cwd: info.local_path, taskId, userId, signal });
+    const codingResult = await spawnClaude(buildCodingPrompt(task, info), { cwd: info.local_path, taskId, userId, signal });
+    raw = codingResult.text;
+    await logTokenUsage({ taskId: task.task_id }, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
