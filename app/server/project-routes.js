@@ -1,11 +1,23 @@
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
-const { query } = require('./db');
+const { query, getPool } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
+
+async function requireAdmin(req, res, next) {
+  try {
+    const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (!rows.length || rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
 
 function slugify(s) {
   return (s || 'repo').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
@@ -16,13 +28,22 @@ function computeDestPath(projectFolder, label) {
 }
 
 function triggerClone(repoId, repoUrl, destPath) {
+  // Security: validate URL scheme to prevent injection
+  if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
+    query(
+      'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+      [repoId, 'error', '不支援的 Git URL 格式']
+    ).catch(() => {});
+    return;
+  }
+
   const isAlreadyCloned = fs.existsSync(path.join(destPath, '.git'));
   if (!isAlreadyCloned) {
     try { fs.mkdirSync(path.dirname(destPath), { recursive: true }); } catch {}
   }
   const gitArgs = isAlreadyCloned
     ? ['-C', destPath, 'pull', '--ff-only']
-    : ['clone', repoUrl, destPath];
+    : ['clone', '--', repoUrl, destPath];
 
   execFile('git', gitArgs, { timeout: 300000 }, async (err, _stdout, stderr) => {
     if (err) {
@@ -98,12 +119,65 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/projects/:id', verifyToken, async (req, res) => {
+  app.patch('/api/projects/:id', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
+      const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name } = req.body;
+      const { rows } = await query(
+        `UPDATE projects SET
+           name                    = COALESCE($2, name),
+           odoo_version            = COALESCE($3, odoo_version),
+           description             = COALESCE($4, description),
+           folder_name             = COALESCE($5, folder_name),
+           odoo_project_name       = COALESCE($6, odoo_project_name),
+           service_respondent_name = COALESCE($7, service_respondent_name),
+           updated_at              = NOW()
+         WHERE id = $1 RETURNING *`,
+        [req.params.id, name || null, odoo_version || null, description || null,
+         folder_name || null, odoo_project_name !== undefined ? odoo_project_name : null,
+         service_respondent_name !== undefined ? service_respondent_name : null]
+      );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
-      res.json({ ok: true });
+      res.json(rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+
+      // Get all task DB ids and task_id text keys for this project
+      const { rows: taskRows } = await client.query(
+        'SELECT id, task_id FROM tasks WHERE project_id = $1', [req.params.id]
+      );
+      if (taskRows.length) {
+        const taskDbIds = taskRows.map(r => r.id);
+        const taskTextIds = taskRows.map(r => r.task_id);
+        await client.query(
+          'DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [taskDbIds]
+        );
+        await client.query(
+          'DELETE FROM token_usage WHERE task_id = ANY($1::text[])', [taskTextIds]
+        );
+        await client.query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
+      }
+
+      // wiki_pages, project_repos, project_chats, odoo_envs have ON DELETE CASCADE
+      const { rows } = await client.query(
+        'DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]
+      );
+      if (!rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Not found' });
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ error: err.message });
+    } finally {
+      client.release();
+    }
   });
 
   // --- Repos ---

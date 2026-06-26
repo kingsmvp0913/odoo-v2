@@ -1,3 +1,4 @@
+const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 
@@ -38,8 +39,13 @@ function registerRoutes(app) {
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (project) {
         const fs = require('fs');
+        const base = process.env.ODOO_ENV_BASE || '/opt/odoo-envs';
         const dirName = project.folder_name || project.name;
-        const envDir = `${process.env.ODOO_ENV_BASE || '/opt/odoo-envs'}/${dirName}`;
+        const envDir = path.join(base, dirName);
+        const resolved = path.resolve(envDir);
+        if (!resolved.startsWith(path.resolve(base) + path.sep)) {
+          return res.status(400).json({ error: 'Invalid env path' });
+        }
         if (fs.existsSync(envDir)) fs.rmSync(envDir, { recursive: true, force: true });
       }
 

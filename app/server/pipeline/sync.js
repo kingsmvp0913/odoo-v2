@@ -107,6 +107,21 @@ async function syncOdooUser(userId, settings) {
         [userId, taskKey, task.name, original_text]
       );
       added++;
+
+      // 自動綁定專案
+      const odooProjectName = task.project_id ? task.project_id[1] : null;
+      if (odooProjectName) {
+        const { rows: [proj] } = await query(
+          'SELECT id FROM projects WHERE odoo_project_name = $1 LIMIT 1',
+          [odooProjectName]
+        );
+        if (proj) {
+          await query(
+            'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
+            [proj.id, userId, taskKey]
+          );
+        }
+      }
     }
   }
   return { added, found };
@@ -161,6 +176,21 @@ async function syncServiceUser(userId, settings) {
         [userId, taskKey, title, original_text]
       );
       added++;
+
+      // 自動綁定專案
+      const respondentName = task.respondent ? task.respondent[1] : null;
+      if (respondentName) {
+        const { rows: [proj] } = await query(
+          'SELECT id FROM projects WHERE service_respondent_name = $1 LIMIT 1',
+          [respondentName]
+        );
+        if (proj) {
+          await query(
+            'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
+            [proj.id, userId, taskKey]
+          );
+        }
+      }
     }
   }
   return { added, found: tasks.length };
