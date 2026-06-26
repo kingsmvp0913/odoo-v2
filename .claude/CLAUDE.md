@@ -134,6 +134,20 @@ execution_mode: "MODE_A"  # enum: MODE_A（直接實作）或 MODE_B（先確認
 
 Full pipeline spec: **`.claude/pipeline.md`**
 
+## 7a. Token 記錄規則
+
+每次 `[CLAUDE-ACTION-REQUIRED]` 所有 agent 完成後，從每個 agent result 的 `<usage>` 區塊提取資料，append 一行到 `kingsmvpsplan/log/token_usage.jsonl`：
+
+```json
+{"task_id":"task_odoo_4060","agent_type":"coding","tokens":18474,"duration_ms":2898,"ts":"2026-06-26T12:00:00.000Z"}
+```
+
+- `agent_type`：對應 stage（`analysis` / `final` / `coding` / `qa`）
+- `tokens`：對應 `subagent_tokens` 數值
+- `ts`：ISO 8601 UTC 時間戳（`new Date().toISOString()`）
+- 若 agent result 無 `<usage>` 區塊則略過，不寫入
+- `log/` 目錄若不存在需先建立
+
 ## 8. Blocker Types
 （詳細規格與 Resume 流程見 `.claude/pipeline.md`）
 
