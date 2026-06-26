@@ -1,10 +1,11 @@
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
 
 async function runLibraryAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, analysis_yaml, project_id, title FROM tasks WHERE id = $1',
+    'SELECT id, task_id, analysis_yaml, project_id, title FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task) return;
@@ -41,7 +42,8 @@ ${task.analysis_yaml || '無'}
 執行日誌（最後 20 筆）：
 ${logText || '無'}`;
 
-    const { text } = await callClaude(prompt, signal, { taskId, userId, notify });
+    const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify });
+    await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) wikiUpdate = JSON.parse(jsonMatch[0]);
   } catch (err) {

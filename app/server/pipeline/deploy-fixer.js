@@ -1,4 +1,5 @@
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const { execFile } = require('child_process');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -30,19 +31,24 @@ async function analyzeDeployError(errorText, signal, opts = {}) {
 部署錯誤：
 ${errorText}`;
 
-  const { text } = await callClaude(prompt, signal, opts);
-  const match = text.match(/\{[\s\S]*?\}/);
-  if (!match) return { type: 'env_error_needs_auth', fix_bin: null, fix_args: null };
-  try {
-    return JSON.parse(match[0]);
-  } catch {
-    return { type: 'env_error_needs_auth', fix_bin: null, fix_args: null };
+  const callResult = await callClaude(prompt, signal, opts);
+  const match = callResult.text.match(/\{[\s\S]*?\}/);
+  let classification;
+  if (!match) {
+    classification = { type: 'env_error_needs_auth', fix_bin: null, fix_args: null };
+  } else {
+    try {
+      classification = JSON.parse(match[0]);
+    } catch {
+      classification = { type: 'env_error_needs_auth', fix_bin: null, fix_args: null };
+    }
   }
+  return { classification, usage: callResult.usage, durationMs: callResult.durationMs };
 }
 
 async function runDeployFixer(taskId, userId, errorMsg, signal) {
   const { rows: [task] } = await query(
-    'SELECT deploy_retry_count FROM tasks WHERE id = $1', [taskId]
+    'SELECT task_id, deploy_retry_count FROM tasks WHERE id = $1', [taskId]
   );
   if (!task) return;
 
@@ -60,7 +66,9 @@ async function runDeployFixer(taskId, userId, errorMsg, signal) {
 
   let classification;
   try {
-    classification = await analyzeDeployError(errorMsg, signal, { taskId, userId, notify });
+    const analyzeResult = await analyzeDeployError(errorMsg, signal, { taskId, userId, notify });
+    classification = analyzeResult.classification;
+    await logTokenUsage({ taskId: task.task_id }, userId, 'deploy_fix', analyzeResult.usage, analyzeResult.durationMs);
   } catch {
     classification = { type: 'env_error_needs_auth', fix_bin: null, fix_args: null };
   }

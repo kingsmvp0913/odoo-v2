@@ -1,4 +1,5 @@
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 
 const TRIAGE_SYSTEM_PROMPT = `你是 AI 開發工作流程的 Triage Agent，負責分析 Odoo/Service 任務並分類。
@@ -29,13 +30,15 @@ async function triageTask(taskId) {
     [taskId]
   );
 
-  const { rows } = await query('SELECT original_text FROM tasks WHERE id = $1', [taskId]);
+  const { rows } = await query('SELECT original_text, task_id, user_id FROM tasks WHERE id = $1', [taskId]);
   const task = rows[0];
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   let text;
   try {
-    ({ text } = await callClaude(`${TRIAGE_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`));
+    const callResult = await callClaude(`${TRIAGE_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`);
+    text = callResult.text;
+    await logTokenUsage({ taskId: task.task_id }, task.user_id, 'triage', callResult.usage, callResult.durationMs);
   } catch (apiErr) {
     // Transient error — reset to new for retry next tick
     await query(

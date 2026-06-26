@@ -1,4 +1,5 @@
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -40,7 +41,9 @@ async function analyzeTask(taskId, signal) {
   // Block 1: API call — transient errors reset status and re-throw
   let rawYaml;
   try {
-    ({ text: rawYaml } = await callClaude(`${ANALYSIS_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`, signal, { taskId, userId: task.user_id, notify }));
+    const callResult = await callClaude(`${ANALYSIS_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`, signal, { taskId, userId: task.user_id, notify });
+    rawYaml = callResult.text;
+    await logTokenUsage({ taskId: task.task_id }, task.user_id, 'analysis', callResult.usage, callResult.durationMs);
   } catch (apiErr) {
     await query(
       "UPDATE tasks SET status = 'analysis_running', updated_at = NOW() WHERE id = $1",

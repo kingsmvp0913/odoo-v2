@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const { syncWithMain, commitAll } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -24,11 +25,16 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   }
   if (!content.includes('<<<<<<<')) return true;
 
-  const { text: resolved } = await callClaude(
+  const resolveResult = await callClaude(
     `以下是有 Git 合併衝突的檔案：${filePath}\n` +
     `請解決所有衝突，只輸出最終正確的檔案內容，不要包含 <<<<<<<、=======、>>>>>>> 等衝突標記，也不要有任何說明文字，直接輸出檔案內容：\n\n${content}`,
     signal, opts
   );
+  const resolved = resolveResult.text;
+  if (resolveResult.usage && opts.taskId) {
+    const { rows: [t] } = await query('SELECT task_id, user_id FROM tasks WHERE id=$1', [opts.taskId]);
+    if (t) await logTokenUsage({ taskId: t.task_id }, t.user_id, 'merge', resolveResult.usage, resolveResult.durationMs);
+  }
   if (!resolved || resolved.includes('<<<<<<<')) return false;
   fs.writeFileSync(fullPath, resolved);
   return true;

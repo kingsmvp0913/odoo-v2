@@ -48,7 +48,7 @@ function registerRoutes(app) {
       const content = (req.body.content || '').trim();
       if (!content) return res.status(400).json({ error: 'content required' });
       const { chatReply } = require('./pipeline/chat-agent');
-      const reply = await chatReply(req.params.projectId, req.params.id, content);
+      const reply = await chatReply(req.params.projectId, req.params.id, content, req.userId);
       res.json({ reply });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

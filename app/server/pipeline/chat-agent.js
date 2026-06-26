@@ -1,7 +1,8 @@
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 
-async function chatReply(projectId, chatId, userMessage) {
+async function chatReply(projectId, chatId, userMessage, userId) {
   const { rows: pages } = await query(
     'SELECT title, content FROM wiki_pages WHERE project_id = $1 ORDER BY updated_at DESC LIMIT 5',
     [projectId]
@@ -29,7 +30,9 @@ ${wikiContext || '（無 wiki）'}${historyText ? '\n\n[對話歷史]\n' + histo
     [chatId, 'user', userMessage]
   );
 
-  const { text: reply = '（無回覆）' } = (await callClaude(prompt)) || {};
+  const chatResult = await callClaude(prompt);
+  const reply = chatResult.text || '（無回覆）';
+  await logTokenUsage({ projectId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
 
   await query(
     'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',

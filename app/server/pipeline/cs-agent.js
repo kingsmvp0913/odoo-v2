@@ -1,10 +1,11 @@
 const { callClaude } = require('./claude-runner');
+const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
 
 async function runCsAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, title, original_text, project_id FROM tasks WHERE id = $1',
+    'SELECT id, task_id, title, original_text, project_id, user_id FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task) return;
@@ -53,7 +54,8 @@ ${wikiContext || '（無 wiki）'}`;
 
   let result = null;
   try {
-    const { text } = await callClaude(prompt, signal, { taskId, userId, notify });
+    const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify });
+    await logTokenUsage({ taskId: task.task_id }, task.user_id, 'cs', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) result = JSON.parse(jsonMatch[0]);
   } catch (err) {
