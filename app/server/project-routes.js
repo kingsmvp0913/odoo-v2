@@ -119,7 +119,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.patch('/api/projects/:id', verifyToken, async (req, res) => {
+  app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name } = req.body;
       const { rows } = await query(
