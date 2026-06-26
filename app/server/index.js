@@ -12,6 +12,7 @@ const { registerRoutes: registerChatRoutes } = require('./chat-routes');
 const { registerRoutes: registerEnvRoutes } = require('./env-routes');
 const { registerRoutes: registerAdminRoutes } = require('./admin-routes');
 const { registerRoutes: registerTeamsRoutes } = require('./teams-routes');
+const { registerRoutes: registerTokenReportRoutes } = require('./token-report-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -29,6 +30,7 @@ function createApp() {
   registerEnvRoutes(app);
   registerAdminRoutes(app);
   registerTeamsRoutes(app);
+  registerTokenReportRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');
