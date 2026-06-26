@@ -141,24 +141,11 @@ async function processTask(task, settings) {
   }
 
   if (status === 'qa_running') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      const { runTaskQa } = require('./task-agent');
-      if (runTaskQa) {
-        const handled = await runTaskQa(taskId, task.user_id, ctrl.signal);
-        if (!handled) {
-          await query(
-            "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行 QA', updated_at=NOW() WHERE id=$1",
-            [taskId]
-          );
-          notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
-        }
-      }
-    } finally {
-      _inFlight.delete(taskId);
-    }
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_content='QA 功能尚未實作', updated_at=NOW() WHERE id=$1",
+      [taskId]
+    );
+    notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
     return;
   }
 

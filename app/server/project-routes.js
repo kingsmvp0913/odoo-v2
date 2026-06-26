@@ -122,19 +122,29 @@ function registerRoutes(app) {
   app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name } = req.body;
+      // For odoo_project_name and service_respondent_name: use direct assignment (not COALESCE) when
+      // the key is present in the request body, so callers can explicitly clear the field with null/empty.
+      // When the key is absent, fall back to the existing DB value.
+      const odooProjSql = 'odoo_project_name' in req.body
+        ? '$6'
+        : 'odoo_project_name';
+      const respondentSql = 'service_respondent_name' in req.body
+        ? '$7'
+        : 'service_respondent_name';
       const { rows } = await query(
         `UPDATE projects SET
            name                    = COALESCE($2, name),
            odoo_version            = COALESCE($3, odoo_version),
            description             = COALESCE($4, description),
            folder_name             = COALESCE($5, folder_name),
-           odoo_project_name       = COALESCE($6, odoo_project_name),
-           service_respondent_name = COALESCE($7, service_respondent_name),
+           odoo_project_name       = ${odooProjSql},
+           service_respondent_name = ${respondentSql},
            updated_at              = NOW()
          WHERE id = $1 RETURNING *`,
         [req.params.id, name || null, odoo_version || null, description || null,
-         folder_name || null, odoo_project_name !== undefined ? odoo_project_name : null,
-         service_respondent_name !== undefined ? service_respondent_name : null]
+         folder_name || null,
+         'odoo_project_name' in req.body ? (odoo_project_name || null) : null,
+         'service_respondent_name' in req.body ? (service_respondent_name || null) : null]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(rows[0]);
