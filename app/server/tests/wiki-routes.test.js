@@ -5,8 +5,6 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messa
 jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ processed: 0 }), resetLoopCounter: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn() }));
-jest.mock('../pipeline/coding-agent', () => ({ runCodingAgent: jest.fn() }));
-jest.mock('../pipeline/qa-agent', () => ({ runQaAgent: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-wiki';
 let app, dbModule, token, projectId;

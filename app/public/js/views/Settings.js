@@ -4,7 +4,7 @@ window.SettingsView = Vue.defineComponent({
     return {
       me: { username: '', display_name: '' },
       teamsUserId: '',
-      pipeline: { deploy_cmd: '', coding_cmd: '', qa_cmd: '' },
+      pipeline: { deploy_cmd: '' },
       creds: {
         odoo_username: '', odoo_password: '', odoo_user_id: '',
         service_username: '', service_password: '', service_user_id: ''
@@ -42,9 +42,7 @@ window.SettingsView = Vue.defineComponent({
         this.creds.service_username = s.service_username || '';
         this.creds.service_password = s.service_password || '';
         this.creds.service_user_id  = s.service_user_id  || '';
-        this.pipeline.deploy_cmd  = settings.deploy_cmd  || '';
-        this.pipeline.coding_cmd  = settings.coding_cmd  || '';
-        this.pipeline.qa_cmd      = settings.qa_cmd      || '';
+        this.pipeline.deploy_cmd = settings.deploy_cmd || '';
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -246,15 +244,6 @@ window.SettingsView = Vue.defineComponent({
             <div class="field-item" style="margin-bottom:12px">
               <label class="field-label">部署指令 <span class="field-label-hint">QA 通過後執行</span></label>
               <input v-model="pipeline.deploy_cmd" placeholder="例：sudo systemctl restart odoo" class="field-input" />
-            </div>
-            <div class="field-item" style="margin-bottom:4px">
-              <label class="field-label">Coding Agent 命令 <span class="field-label-hint">非專案任務</span></label>
-              <input v-model="pipeline.coding_cmd" placeholder="例：claude --dangerously-skip-permissions" class="field-input" />
-              <div class="hint-text">可用變數：$TASK_ID  $GIT_BRANCH  $REPO_PATH  $ANALYSIS_YAML</div>
-            </div>
-            <div class="field-item" style="margin-top:12px">
-              <label class="field-label">QA 測試命令</label>
-              <input v-model="pipeline.qa_cmd" placeholder="例：npm test" class="field-input" />
             </div>
           </div>
           <div class="setting-block-footer">

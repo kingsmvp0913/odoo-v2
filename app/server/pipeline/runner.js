@@ -112,16 +112,14 @@ async function processTask(task, settings) {
     const ctrl = new AbortController();
     _inFlight.set(taskId, ctrl);
     try {
-      if (task.project_id) {
-        const { runTaskCoding } = require('./task-agent');
-        const handled = await runTaskCoding(taskId, task.user_id, ctrl.signal);
-        if (!handled) {
-          const { runCodingAgent } = require('./coding-agent');
-          await runCodingAgent(taskId, task.user_id, ctrl.signal);
-        }
-      } else {
-        const { runCodingAgent } = require('./coding-agent');
-        await runCodingAgent(taskId, task.user_id, ctrl.signal);
+      const { runTaskCoding } = require('./task-agent');
+      const handled = await runTaskCoding(taskId, task.user_id, ctrl.signal);
+      if (!handled) {
+        await query(
+          "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行開發', updated_at=NOW() WHERE id=$1",
+          [taskId]
+        );
+        notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
       }
     } finally {
       _inFlight.delete(taskId);
@@ -147,8 +145,17 @@ async function processTask(task, settings) {
     const ctrl = new AbortController();
     _inFlight.set(taskId, ctrl);
     try {
-      const { runQaAgent } = require('./qa-agent');
-      await runQaAgent(taskId, task.user_id, ctrl.signal);
+      const { runTaskQa } = require('./task-agent');
+      if (runTaskQa) {
+        const handled = await runTaskQa(taskId, task.user_id, ctrl.signal);
+        if (!handled) {
+          await query(
+            "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行 QA', updated_at=NOW() WHERE id=$1",
+            [taskId]
+          );
+          notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
+        }
+      }
     } finally {
       _inFlight.delete(taskId);
     }

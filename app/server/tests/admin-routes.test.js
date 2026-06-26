@@ -12,8 +12,6 @@ jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn()
 }));
-jest.mock('../pipeline/coding-agent', () => ({ runCodingAgent: jest.fn() }));
-jest.mock('../pipeline/qa-agent', () => ({ runQaAgent: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-admin';
 
