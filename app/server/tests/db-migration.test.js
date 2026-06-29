@@ -102,3 +102,18 @@ test('wiki_pages has node_type column', async () => {
   );
   expect(rows.length).toBe(1);
 });
+
+test('project_chats 具有 user_id 與 last_read_message_id 欄位', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('m1','x','M1') RETURNING id"
+  );
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('P','17.0') RETURNING id"
+  );
+  const { rows: [c] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'t',$2) RETURNING id, user_id, last_read_message_id",
+    [p.id, u.id]
+  );
+  expect(c.user_id).toBe(u.id);
+  expect(c.last_read_message_id).toBe(0);
+});
