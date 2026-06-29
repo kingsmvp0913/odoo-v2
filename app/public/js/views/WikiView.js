@@ -1,5 +1,30 @@
+window.WikiNode = Vue.defineComponent({
+  name: 'wiki-node',
+  props: ['node', 'depth', 'currentSlug', 'refreshing'],
+  emits: ['open', 'refresh'],
+  template: `
+    <div>
+      <div style="display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:13px"
+        :style="{ background: currentSlug === node.slug ? 'var(--border)' : 'transparent', paddingLeft: (8 + depth*14) + 'px' }"
+        @click="$emit('open', node.slug)">
+        <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : '📄' }}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ node.title }}</span>
+        <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px"
+          :disabled="refreshing === node.slug"
+          @click.stop="$emit('refresh', node.slug)" title="重新生成">
+          {{ refreshing === node.slug ? '…' : '⟳' }}
+        </button>
+      </div>
+      <wiki-node v-for="c in node.children" :key="c.id" :node="c" :depth="depth+1"
+        :current-slug="currentSlug" :refreshing="refreshing"
+        @open="$emit('open', $event)" @refresh="$emit('refresh', $event)"></wiki-node>
+    </div>
+  `
+});
+
 window.WikiView = Vue.defineComponent({
   name: 'WikiView',
+  components: { 'wiki-node': window.WikiNode },
   data() {
     return {
       pages: [],
@@ -7,7 +32,8 @@ window.WikiView = Vue.defineComponent({
       loading: true,
       editing: false,
       editContent: '',
-      saving: false
+      saving: false,
+      refreshing: ''
     };
   },
   async created() {
@@ -20,6 +46,17 @@ window.WikiView = Vue.defineComponent({
     renderedContent() {
       if (!this.current) return '';
       return window.marked ? window.marked.parse(this.current.content) : this.current.content;
+    },
+    tree() {
+      const byId = {};
+      this.pages.forEach(p => { byId[p.id] = { ...p, children: [] }; });
+      const roots = [];
+      this.pages.forEach(p => {
+        if (p.parent_id && byId[p.parent_id]) byId[p.parent_id].children.push(byId[p.id]);
+        else roots.push(byId[p.id]);
+      });
+      roots.sort((a, b) => (a.node_type === 'overview' ? -1 : 0) - (b.node_type === 'overview' ? -1 : 0));
+      return roots;
     }
   },
   methods: {
@@ -68,7 +105,17 @@ window.WikiView = Vue.defineComponent({
         this.current = null;
         showToast('已刪除', 'success');
       } catch (e) { showToast(e.message, 'error'); }
-    }
+    },
+    async refreshNode(slug) {
+      this.refreshing = slug;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/wiki/${slug}/refresh`);
+        showToast('已重新生成', 'success');
+        await this.loadPages();
+        if (this.current && this.current.slug === slug) await this.loadPage(slug);
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.refreshing = ''; }
+    },
   },
   template: `
     <div class="topbar">
@@ -79,14 +126,13 @@ window.WikiView = Vue.defineComponent({
     <div style="display:flex;height:calc(100vh - 56px);overflow:hidden">
       <div style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:8px;flex-shrink:0">
         <div v-if="loading" style="color:var(--text-muted);font-size:13px;padding:8px">載入中...</div>
-        <div v-for="p in pages" :key="p.slug"
-          style="padding:8px;border-radius:4px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center"
-          :style="{ background: current && current.slug === p.slug ? 'var(--border)' : 'transparent' }"
-          @click="loadPage(p.slug)">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.title }}</span>
-          <button class="btn btn-outline btn-sm" style="color:var(--error);padding:0 4px;font-size:11px;flex-shrink:0;margin-left:4px" @click.stop="removePage(p.slug)">✕</button>
-        </div>
-        <div v-if="!loading && pages.length === 0" style="color:var(--text-muted);font-size:12px;padding:8px">尚無頁面</div>
+        <template v-else>
+          <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
+            :current-slug="current && current.slug"
+            :refreshing="refreshing"
+            @open="loadPage" @refresh="refreshNode"></wiki-node>
+          <div v-if="pages.length === 0" style="color:var(--text-muted);font-size:12px;padding:8px">尚無頁面</div>
+        </template>
       </div>
       <div style="flex:1;overflow-y:auto;padding:24px">
         <div v-if="!current" style="color:var(--text-muted)">選擇或新增頁面</div>
