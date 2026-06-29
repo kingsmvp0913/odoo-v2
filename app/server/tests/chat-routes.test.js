@@ -73,7 +73,8 @@ test('GET chats → lists created chats', async () => {
 
 test('GET messages → empty for new chat', async () => {
   const { rows: [chat] } = await dbModule.query(
-    "INSERT INTO project_chats (project_id, title) VALUES ($1, '空對話') RETURNING id", [projectId]
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '空對話', $2) RETURNING id",
+    [projectId, userId]
   );
   const res = await request(app)
     .get(`/api/projects/${projectId}/chats/${chat.id}/messages`).set(auth());
@@ -84,7 +85,8 @@ test('GET messages → empty for new chat', async () => {
 test('POST messages → calls chatReply and returns reply', async () => {
   mockChatReply.mockResolvedValueOnce('AI 的回覆');
   const { rows: [chat] } = await dbModule.query(
-    "INSERT INTO project_chats (project_id, title) VALUES ($1, '問答') RETURNING id", [projectId]
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '問答', $2) RETURNING id",
+    [projectId, userId]
   );
   const res = await request(app)
     .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
@@ -96,7 +98,8 @@ test('POST messages → calls chatReply and returns reply', async () => {
 
 test('POST messages → 400 if content empty', async () => {
   const { rows: [chat] } = await dbModule.query(
-    "INSERT INTO project_chats (project_id, title) VALUES ($1, '空') RETURNING id", [projectId]
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '空', $2) RETURNING id",
+    [projectId, userId]
   );
   const res = await request(app)
     .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
@@ -106,7 +109,8 @@ test('POST messages → 400 if content empty', async () => {
 
 test('DELETE chat → removes it', async () => {
   const { rows: [chat] } = await dbModule.query(
-    "INSERT INTO project_chats (project_id, title) VALUES ($1, '要刪') RETURNING id", [projectId]
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '要刪', $2) RETURNING id",
+    [projectId, userId]
   );
   const res = await request(app)
     .delete(`/api/projects/${projectId}/chats/${chat.id}`).set(auth());
@@ -118,4 +122,52 @@ test('DELETE chat → removes it', async () => {
 test('401 without token', async () => {
   const res = await request(app).get(`/api/projects/${projectId}/chats`);
   expect(res.status).toBe(401);
+});
+
+test('GET chats → 只回自己的 chat', async () => {
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('other','x','Other') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'別人的',$2)",
+    [projectId, other.id]
+  );
+  const res = await request(app).get(`/api/projects/${projectId}/chats`).set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.every(c => c.title !== '別人的')).toBe(true);
+});
+
+test('GET messages → 他人 chat 回 404', async () => {
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('other2','x','Other2') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'X',$2) RETURNING id",
+    [projectId, other.id]
+  );
+  const res = await request(app)
+    .get(`/api/projects/${projectId}/chats/${chat.id}/messages`).set(auth());
+  expect(res.status).toBe(404);
+});
+
+test('unread：AI 訊息未讀計入，read 後歸零', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'U',$2) RETURNING id",
+    [projectId, userId]
+  );
+  await dbModule.query(
+    "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'user','hi'),($1,'ai','yo')",
+    [chat.id]
+  );
+  let res = await request(app).get(`/api/projects/${projectId}/chats`).set(auth());
+  const found = res.body.find(c => c.id === chat.id);
+  expect(Number(found.unread)).toBe(1);
+
+  res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/read`).set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.projectUnread).toBe(0);
+
+  res = await request(app).get(`/api/projects/${projectId}/chats`).set(auth());
+  expect(Number(res.body.find(c => c.id === chat.id).unread)).toBe(0);
 });
