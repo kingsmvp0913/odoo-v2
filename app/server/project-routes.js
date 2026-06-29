@@ -23,6 +23,29 @@ function slugify(s) {
   return (s || 'repo').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
 }
 
+// 來源對應欄位以「一行一個名稱」儲存
+function parseSourceNames(text) {
+  return String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+// 找出 text 中的名稱已被「其他專案」用於同一個對應欄位的衝突（防止同一來源名綁到多個專案）
+async function findMappingConflicts(column, text, excludeId) {
+  const names = parseSourceNames(text);
+  if (!names.length) return [];
+  const { rows } = await query(
+    `SELECT name, ${column} AS names FROM projects WHERE ${column} IS NOT NULL AND id <> $1`,
+    [excludeId]
+  );
+  const conflicts = [];
+  for (const r of rows) {
+    const used = new Set(parseSourceNames(r.names));
+    for (const n of names) {
+      if (used.has(n)) conflicts.push({ name: n, project: r.name });
+    }
+  }
+  return conflicts;
+}
+
 function computeDestPath(projectFolder, label) {
   return path.join(REPOS_BASE, slugify(projectFolder), slugify(label));
 }
@@ -122,6 +145,18 @@ function registerRoutes(app) {
   app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name } = req.body;
+      // 防重：來源對應名稱不可同時綁到多個專案
+      const conflicts = [];
+      if ('odoo_project_name' in req.body) {
+        conflicts.push(...await findMappingConflicts('odoo_project_name', odoo_project_name, req.params.id));
+      }
+      if ('service_respondent_name' in req.body) {
+        conflicts.push(...await findMappingConflicts('service_respondent_name', service_respondent_name, req.params.id));
+      }
+      if (conflicts.length) {
+        const msg = conflicts.map(c => `「${c.name}」已被專案「${c.project}」使用`).join('；');
+        return res.status(409).json({ error: `來源對應名稱衝突：${msg}` });
+      }
       // For odoo_project_name and service_respondent_name: use direct assignment (not COALESCE) when
       // the key is present in the request body, so callers can explicitly clear the field with null/empty.
       // When the key is absent, fall back to the existing DB value.

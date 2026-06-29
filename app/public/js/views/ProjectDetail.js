@@ -204,12 +204,13 @@ window.ProjectDetailView = Vue.defineComponent({
 
         <div style="margin-top:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px">
           <h3 style="font-size:14px;font-weight:600;margin-bottom:8px">同步來源對應</h3>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">一行一個名稱，可綁定多個來源。</div>
           <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
             <label>Odoo 專案名稱（同步時自動綁定）
-              <input v-model="editOdooProjectName" class="form-control" placeholder="與 Odoo ERP 的專案名稱完全一致" style="margin-top:4px" />
+              <textarea v-model="editOdooProjectName" class="form-control" rows="3" placeholder="與 Odoo ERP 的專案名稱完全一致，一行一個" style="margin-top:4px"></textarea>
             </label>
             <label>客服來源名稱（Service 同步時自動綁定）
-              <input v-model="editServiceRespondentName" class="form-control" placeholder="與 eService 的 respondent 名稱完全一致" style="margin-top:4px" />
+              <textarea v-model="editServiceRespondentName" class="form-control" rows="3" placeholder="與 eService 的 respondent 名稱完全一致，一行一個" style="margin-top:4px"></textarea>
             </label>
             <button class="btn btn-primary btn-sm" @click="saveProjectMapping" style="align-self:flex-start">儲存對應</button>
           </div>

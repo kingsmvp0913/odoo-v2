@@ -112,3 +112,26 @@ test('GET /api/projects/:id → 404 after delete', async () => {
     .set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(404);
 });
+
+test('PATCH mapping → 409 when a source name is already used by another project', async () => {
+  const a = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'MapA', odoo_version: '17.0' });
+  const b = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'MapB', odoo_version: '17.0' });
+
+  // A 綁定「共用名」（多行）
+  const r1 = await request(app).patch(`/api/projects/${a.body.id}`).set('Authorization', `Bearer ${token}`)
+    .send({ odoo_project_name: '專案甲\n共用名' });
+  expect(r1.status).toBe(200);
+
+  // B 想綁同一個「共用名」→ 應被擋下
+  const r2 = await request(app).patch(`/api/projects/${b.body.id}`).set('Authorization', `Bearer ${token}`)
+    .send({ odoo_project_name: '共用名' });
+  expect(r2.status).toBe(409);
+  expect(r2.body.error).toContain('共用名');
+
+  // B 改綁不重複的名稱 → 成功
+  const r3 = await request(app).patch(`/api/projects/${b.body.id}`).set('Authorization', `Bearer ${token}`)
+    .send({ odoo_project_name: '專案乙' });
+  expect(r3.status).toBe(200);
+});

@@ -1,5 +1,20 @@
 const { query } = require('../db');
 
+// 來源對應欄位（odoo_project_name / service_respondent_name）以「一行一個名稱」儲存，
+// 比對在 JS 端做（pg-mem 不支援 string_to_array），支援一個專案綁多個來源名稱。
+async function findProjectBySourceName(column, name) {
+  const target = (name || '').trim();
+  if (!target) return null;
+  const { rows } = await query(
+    `SELECT id, ${column} AS names FROM projects WHERE ${column} IS NOT NULL ORDER BY id`
+  );
+  for (const r of rows) {
+    const list = String(r.names).split('\n').map(s => s.trim()).filter(Boolean);
+    if (list.includes(target)) return r.id;
+  }
+  return null;
+}
+
 function stripHtml(html) {
   if (!html) return '';
   return html
@@ -107,21 +122,16 @@ async function syncOdooUser(userId, settings) {
         [userId, taskKey, task.name, original_text]
       );
       added++;
+    }
 
-      // 自動綁定專案
-      const odooProjectName = task.project_id ? task.project_id[1] : null;
-      if (odooProjectName) {
-        const { rows: [proj] } = await query(
-          'SELECT id FROM projects WHERE odoo_project_name = $1 LIMIT 1',
-          [odooProjectName]
-        );
-        if (proj) {
-          await query(
-            'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
-            [proj.id, userId, taskKey]
-          );
-        }
-      }
+    // 自動綁定專案（對新任務與既有未綁定任務都生效；project_id IS NULL 保證不動到已綁定者）
+    const odooProjectName = task.project_id ? task.project_id[1] : null;
+    const projId = await findProjectBySourceName('odoo_project_name', odooProjectName);
+    if (projId) {
+      await query(
+        'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
+        [projId, userId, taskKey]
+      );
     }
   }
   return { added, found };
@@ -176,21 +186,16 @@ async function syncServiceUser(userId, settings) {
         [userId, taskKey, title, original_text]
       );
       added++;
+    }
 
-      // 自動綁定專案
-      const respondentName = task.respondent ? task.respondent[1] : null;
-      if (respondentName) {
-        const { rows: [proj] } = await query(
-          'SELECT id FROM projects WHERE service_respondent_name = $1 LIMIT 1',
-          [respondentName]
-        );
-        if (proj) {
-          await query(
-            'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
-            [proj.id, userId, taskKey]
-          );
-        }
-      }
+    // 自動綁定專案（對新任務與既有未綁定任務都生效；project_id IS NULL 保證不動到已綁定者）
+    const respondentName = task.respondent ? task.respondent[1] : null;
+    const projId = await findProjectBySourceName('service_respondent_name', respondentName);
+    if (projId) {
+      await query(
+        'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
+        [projId, userId, taskKey]
+      );
     }
   }
   return { added, found: tasks.length };

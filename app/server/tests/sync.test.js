@@ -180,3 +180,30 @@ test('syncUser skips when odoo_url not configured', async () => {
   expect(result.service.added).toBe(0);
   expect(mockFetch).not.toHaveBeenCalled();
 });
+
+// 一個專案可綁定多個來源名稱（odoo_project_name 一行一個），命中任一即自動綁定
+test('syncUser auto-binds Odoo task when its project name matches one of multiple mapped names', async () => {
+  await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, odoo_project_name) VALUES ('Multi 專案', '17.0', $1)",
+    ['別的專案\nMy Project\n第三個']
+  );
+  setupOdooMocks({
+    tasks: [{
+      id: 9100,
+      name: 'Binding Task',
+      project_id: [7, 'My Project'],
+      stage_id: [2, 'In Progress'],
+      description: '<p>x</p>'
+    }],
+    messages: []
+  });
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows } = await dbModule.query(
+    "SELECT p.name AS pname FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.task_id = 'task_odoo_9100'"
+  );
+  expect(rows.length).toBe(1);
+  expect(rows[0].pname).toBe('Multi 專案');
+});
