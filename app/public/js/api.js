@@ -24,6 +24,7 @@ const Api = {
   get(path) { return this._fetch('GET', path); },
   post(path, body) { return this._fetch('POST', path, body); },
   put(path, body) { return this._fetch('PUT', path, body); },
+  patch(path, body) { return this._fetch('PATCH', path, body); },
   delete(path) { return this._fetch('DELETE', path); },
 
   async checkSetup() {
