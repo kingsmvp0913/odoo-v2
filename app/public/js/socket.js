@@ -31,6 +31,11 @@
       showToast(data.message || '通知', data.level || 'info');
     });
 
+    _socket.on('chat:reply', (data) => {
+      const pid = String(data.projectId);
+      window.UnreadStore.byProject[pid] = (window.UnreadStore.byProject[pid] || 0) + 1;
+    });
+
   }
 
   function setRefreshCallback(fn) { _taskListRefresh = fn; }
