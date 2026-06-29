@@ -1,7 +1,7 @@
 window.WikiNode = Vue.defineComponent({
   name: 'wiki-node',
   props: ['node', 'depth', 'currentSlug', 'refreshing'],
-  emits: ['open', 'refresh'],
+  emits: ['open', 'refresh', 'remove'],
   template: `
     <div>
       <div style="display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:13px"
@@ -14,10 +14,12 @@ window.WikiNode = Vue.defineComponent({
           @click.stop="$emit('refresh', node.slug)" title="重新生成">
           {{ refreshing === node.slug ? '…' : '⟳' }}
         </button>
+        <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px;color:var(--error)"
+          @click.stop="$emit('remove', node.slug)" title="刪除">✕</button>
       </div>
       <wiki-node v-for="c in node.children" :key="c.id" :node="c" :depth="depth+1"
         :current-slug="currentSlug" :refreshing="refreshing"
-        @open="$emit('open', $event)" @refresh="$emit('refresh', $event)"></wiki-node>
+        @open="$emit('open', $event)" @refresh="$emit('refresh', $event)" @remove="$emit('remove', $event)"></wiki-node>
     </div>
   `
 });
@@ -130,7 +132,7 @@ window.WikiView = Vue.defineComponent({
           <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
             :current-slug="current && current.slug"
             :refreshing="refreshing"
-            @open="loadPage" @refresh="refreshNode"></wiki-node>
+            @open="loadPage" @refresh="refreshNode" @remove="removePage"></wiki-node>
           <div v-if="pages.length === 0" style="color:var(--text-muted);font-size:12px;padding:8px">尚無頁面</div>
         </template>
       </div>
