@@ -830,20 +830,7 @@ git commit -m "feat(wiki-ui): tree sidebar with per-node refresh button"
 
 - [ ] **Step 2: 掛載/卸載 socket 監聽**
 
-把 `async created() { … }` 之後加 `mounted` 與 `beforeUnmount`（若已有 created，新增這兩個 hook 並列）：
-
-```js
-  mounted() {
-    const sock = window._socket;
-    if (sock) sock.on('wiki:progress', this._onProgress = this._onProgress || (d => {}));
-  },
-  beforeUnmount() {
-    const sock = window._socket;
-    if (sock && sock.off) sock.off('wiki:progress', this._onProgress);
-  },
-```
-
-> 註：`_onProgress` 已在 methods 定義，`mounted` 直接用 `this._onProgress.bind(this)`。改用下面穩定寫法取代上面 mounted：
+在 component 既有 `async created() { … }` hook 之後，新增 `mounted` 與 `beforeUnmount` 兩個 hook（與 created 並列）：
 
 ```js
   mounted() {
@@ -856,8 +843,6 @@ git commit -m "feat(wiki-ui): tree sidebar with per-node refresh button"
     if (sock && sock.off) sock.off('wiki:progress', this._progressHandler);
   },
 ```
-
-（採用第二段；移除第一段示意。）
 
 - [ ] **Step 3: template 加「建立 wiki」按鈕 + 進度條**
 
