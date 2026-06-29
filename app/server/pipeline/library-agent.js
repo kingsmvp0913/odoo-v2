@@ -25,6 +25,44 @@ function _collectManifests(dir, results, limit) {
   }
 }
 
+async function _upsertNode(projectId, parentId, nodeType, slug, title, content) {
+  const { rows: [row] } = await query(
+    `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,NOW())
+     ON CONFLICT (project_id, slug)
+     DO UPDATE SET parent_id=$2, node_type=$3, title=$5, content=$6, updated_at=NOW()
+     RETURNING id`,
+    [projectId, parentId, nodeType, slug, title, content]
+  );
+  return row.id;
+}
+
+async function _ensureNode(projectId, parentId, nodeType, slug, title, content) {
+  await query(
+    `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content)
+     VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (project_id, slug) DO NOTHING`,
+    [projectId, parentId, nodeType, slug, title, content]
+  );
+  const { rows: [row] } = await query(
+    'SELECT id FROM wiki_pages WHERE project_id=$1 AND slug=$2', [projectId, slug]
+  );
+  return row.id;
+}
+
+function _manifestSummary(mod) {
+  const grab = key => {
+    const m = mod.content.match(new RegExp(`['"]${key}['"]\\s*:\\s*['"]([^'"]*)['"]`));
+    return m ? m[1] : '';
+  };
+  const name = grab('name') || mod.module;
+  const version = grab('version');
+  const summary = grab('summary');
+  return `# ${name}\n\n`
+    + (version ? `**版本：** ${version}\n\n` : '')
+    + (summary ? `${summary}\n\n` : '')
+    + `> 模組目錄：\`${mod.module}\`。功能頁將於相關任務完成時自動補齊，或按「⟳ 更新」手動生成。`;
+}
+
 async function runLibraryAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, analysis_yaml, project_id, title FROM tasks WHERE id = $1',
@@ -94,7 +132,6 @@ ${logText || '無'}`;
   }
 }
 
-// 為專案初始化「專案總覽」wiki：掃 __manifest__.py → 交給 claude CLI 產生（與其他 agent 一致，免 API key）
 async function initProjectWiki(projectId, userId, signal) {
   const { rows: [project] } = await query('SELECT * FROM projects WHERE id=$1', [projectId]);
   if (!project) { const e = new Error('Project not found'); e.status = 404; throw e; }
@@ -107,37 +144,49 @@ async function initProjectWiki(projectId, userId, signal) {
     const e = new Error('尚未有已 clone 完成的 Repo，請先新增並等待 clone 完成'); e.status = 400; throw e;
   }
 
-  // 掃所有 done repo 的 __manifest__.py，最多取 15 個模組
+  const emit = (stage, percent, message) =>
+    notify.emitToUser(userId, 'wiki:progress', { projectId, stage, percent, message: message || '' });
+
+  emit('scanning', 10, '掃描模組');
   const manifests = [];
   for (const repo of readyRepos) _collectManifests(repo.local_path, manifests, 15);
 
-  const prompt = `你是 Library Agent，負責為 Odoo 專案建立 wiki。
-根據以下模組的 __manifest__.py 內容，產生一個「專案總覽」wiki 頁面。
-回傳 JSON（不要其他文字）：{"slug":"overview","title":"專案總覽","content":"<Markdown 內容>"}
+  // 1) 專案概論（CLI 一次）
+  emit('overview', 40, '產生專案概論');
+  const prompt = `你是 Library Agent，負責為 Odoo 專案建立 wiki 的「專案概論」。
+根據以下模組的 __manifest__.py，產生一段精簡的專案概論（200-400 字）。
+回傳 JSON（不要其他文字）：{"slug":"overview","title":"專案概論","content":"<Markdown>"}
 
 要求：
-- content 用繁體中文說明各模組功能與用途
-- 以 Markdown 格式，每個模組一個小節
-- 只描述功能，不要複製原始程式碼
+- content 用繁體中文，說明專案整體用途與包含哪些模組
+- 不要逐一複製 manifest 原文，用敘述方式
 
 專案：${project.name}（Odoo ${project.odoo_version}）
 
 ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
 
-  const { text, usage, durationMs } = await callClaude(prompt, signal, { userId, notify });
-  await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
+  let overviewTitle = '專案概論';
+  let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
+  try {
+    const { text, usage, durationMs } = await callClaude(prompt, signal, { userId, notify });
+    await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { const p = JSON.parse(m[0]); overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }
+  } catch (err) {
+    console.error(`[LIBRARY-AGENT] init overview error project ${projectId}:`, err.message);
+  }
+  const overviewId = await _upsertNode(projectId, null, 'overview', 'overview', overviewTitle, overviewContent);
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) { const e = new Error('Failed to parse Library Agent response'); e.status = 500; throw e; }
-  const page = JSON.parse(jsonMatch[0]);
+  // 2) 模組分類骨架（無 AI）
+  const total = manifests.length || 1;
+  for (let i = 0; i < manifests.length; i++) {
+    const mod = manifests[i];
+    await _upsertNode(projectId, overviewId, 'module', `module-${mod.module}`, mod.module, _manifestSummary(mod));
+    emit('modules', 40 + Math.round(((i + 1) / total) * 55), `建立 ${mod.module}`);
+  }
 
-  await query(
-    `INSERT INTO wiki_pages (project_id, slug, title, content, updated_at)
-     VALUES ($1, $2, $3, $4, NOW())
-     ON CONFLICT (project_id, slug) DO UPDATE SET title=$3, content=$4, updated_at=NOW()`,
-    [projectId, page.slug, page.title, page.content || '']
-  );
-  return { slug: page.slug };
+  emit('done', 100, '完成');
+  return { ok: true, slug: 'overview', modules: manifests.length };
 }
 
-module.exports = { runLibraryAgent, initProjectWiki };
+module.exports = { runLibraryAgent, initProjectWiki, _upsertNode, _ensureNode };
