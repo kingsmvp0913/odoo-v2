@@ -105,8 +105,8 @@ function registerRoutes(app) {
       await query(
         `UPDATE project_chats
          SET last_read_message_id = COALESCE((SELECT MAX(id) FROM project_chat_messages WHERE chat_id = $1), 0)
-         WHERE id = $1`,
-        [req.params.id]
+         WHERE id = $1 AND user_id = $2`,
+        [req.params.id, req.userId]
       );
       res.json({ projectUnread: await projectUnread(req.params.projectId, req.userId) });
     } catch (err) { res.status(500).json({ error: err.message }); }

@@ -7,6 +7,13 @@ process.env.JWT_SECRET = 'test-secret';
 const mockChatReply = jest.fn();
 jest.mock('../pipeline/chat-agent', () => ({ chatReply: mockChatReply }));
 
+const mockEmitToUser = jest.fn();
+jest.mock('../notify', () => ({
+  emitToUser: (...a) => mockEmitToUser(...a),
+  emitAll: jest.fn(),
+  setIo: jest.fn()
+}));
+
 let dbModule, app;
 let userId, projectId, token;
 
@@ -39,7 +46,7 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
-beforeEach(() => { mockChatReply.mockReset(); });
+beforeEach(() => { mockChatReply.mockReset(); mockEmitToUser.mockReset(); });
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
@@ -94,6 +101,21 @@ test('POST messages → calls chatReply and returns reply', async () => {
   expect(res.status).toBe(200);
   expect(res.body.reply).toBe('AI 的回覆');
   expect(mockChatReply).toHaveBeenCalledWith(String(projectId), String(chat.id), '你好', userId);
+});
+
+test('POST messages → emits chat:reply socket event to owner', async () => {
+  mockChatReply.mockResolvedValueOnce('reply');
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '通知測試', $2) RETURNING id",
+    [projectId, userId]
+  );
+  await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
+    .set(auth()).send({ content: '測試通知' });
+  expect(mockEmitToUser).toHaveBeenCalledWith(userId, 'chat:reply', {
+    projectId: Number(projectId),
+    chatId: Number(chat.id)
+  });
 });
 
 test('POST messages → 400 if content empty', async () => {
