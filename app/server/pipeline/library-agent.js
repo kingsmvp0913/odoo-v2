@@ -66,6 +66,8 @@ function _manifestSummary(mod) {
 
 // 蒐集某模組目錄下最多 limit 個 .py 檔的檔名 + 前 300 字，作為 refresh 的上下文
 function _collectModuleSource(readyRepos, moduleName, limit = 8) {
+  // 安全：moduleName 來自 wiki slug，僅允許安全識別字，避免 path traversal
+  if (!/^[A-Za-z0-9_]+$/.test(moduleName || '')) return '';
   const out = [];
   for (const repo of readyRepos) {
     if (!repo.local_path) continue;
@@ -295,4 +297,4 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   return { ok: true, slug: 'overview', modules: manifests.length };
 }
 
-module.exports = { runLibraryAgent, initProjectWiki, refreshWikiNode, _upsertNode, _ensureNode };
+module.exports = { runLibraryAgent, initProjectWiki, refreshWikiNode, _upsertNode, _ensureNode, _collectModuleSource };
