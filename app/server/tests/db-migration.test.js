@@ -88,3 +88,17 @@ test('projects has service_respondent_name column', async () => {
   );
   expect(rows.length).toBe(1);
 });
+
+test('wiki_pages has parent_id column', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='wiki_pages' AND column_name='parent_id'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('wiki_pages has node_type column', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='wiki_pages' AND column_name='node_type'"
+  );
+  expect(rows.length).toBe(1);
+});

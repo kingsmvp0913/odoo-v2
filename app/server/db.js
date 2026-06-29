@@ -253,7 +253,9 @@ async function migrate() {
     { table: 'project_repos', col: 'graphify_status', sql: "ALTER TABLE project_repos ADD COLUMN graphify_status TEXT DEFAULT 'idle'" },
     { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
-    { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' }
+    { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
+    { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
+    { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -274,6 +276,10 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_tu_task_id     ON token_usage (task_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_tu_user_id     ON token_usage (user_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_tu_project_id  ON token_usage (project_id)').catch(() => {});
+
+  // wiki_pages indexes
+  await query('CREATE INDEX IF NOT EXISTS idx_wiki_parent ON wiki_pages (parent_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_wiki_project ON wiki_pages (project_id)').catch(() => {});
 
   // One-time data migration: copy URL+DB from first admin user's odoo_settings into teams_settings
   try {
