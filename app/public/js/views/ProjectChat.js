@@ -12,6 +12,7 @@ window.ProjectChatView = Vue.defineComponent({
     };
   },
   async created() { await this.loadChats(); },
+  beforeUnmount() { this._gone = true; },
   methods: {
     async loadChats() {
       const pid = this.$route.params.id;
@@ -32,8 +33,18 @@ window.ProjectChatView = Vue.defineComponent({
       this.loadingMsgs = true;
       try {
         this.messages = await Api.get(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`);
+        await this.markRead(this.activeChat);
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loadingMsgs = false; }
+    },
+    async markRead(chat) {
+      if (!chat) return;
+      const pid = this.$route.params.id;
+      try {
+        const { projectUnread } = await Api.post(`projects/${pid}/chats/${chat.id}/read`, {});
+        UnreadStore.byProject[String(pid)] = projectUnread;
+        chat.unread = 0;
+      } catch (e) { /* 標記已讀失敗不影響閱讀 */ }
     },
     async createChat() {
       try {
@@ -74,6 +85,7 @@ window.ProjectChatView = Vue.defineComponent({
         );
         this.messages.push({ id: Date.now() + 1, role: 'ai', content: reply, created_at: new Date().toISOString() });
         this.$nextTick(() => this.scrollToBottom());
+        if (!this._gone) await this.markRead(this.activeChat);
       } catch (e) {
         showToast(e.message, 'error');
       } finally { this.sending = false; }
@@ -104,6 +116,7 @@ window.ProjectChatView = Vue.defineComponent({
                :style="{ background: activeChat && activeChat.id === c.id ? 'var(--primary-light,#ebf4ff)' : '' }"
                @click="selectChat(c)">
             <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">{{ c.title }}</span>
+            <span v-if="c.unread" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center;flex-shrink:0">{{ c.unread }}</span>
             <button class="btn btn-outline btn-sm"
                     style="font-size:10px;padding:1px 5px;margin-left:4px;color:var(--error);flex-shrink:0"
                     @click.stop="deleteChat(c)">✕</button>
