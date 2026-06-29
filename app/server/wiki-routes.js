@@ -8,7 +8,9 @@ function registerRoutes(app) {
   app.get(base, verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, slug, title, updated_at FROM wiki_pages WHERE project_id = $1 ORDER BY title ASC',
+        `SELECT id, slug, title, parent_id, node_type, updated_at
+         FROM wiki_pages WHERE project_id = $1
+         ORDER BY (node_type <> 'overview'), node_type, title ASC`,
         [req.params.projectId]
       );
       res.json(rows);

@@ -90,3 +90,15 @@ test('GET /api/projects/:id/wiki/:slug → 404 after delete', async () => {
   const res = await request(app).get(`/api/projects/${projectId}/wiki/home`).set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(404);
 });
+
+test('GET /wiki returns node_type and parent_id fields', async () => {
+  const pr = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'WikiFieldsProj', odoo_version: '17.0' });
+  const pid = pr.body.id;
+  await request(app).post(`/api/projects/${pid}/wiki`).set('Authorization', `Bearer ${token}`)
+    .send({ slug: 'overview', title: '專案概論', content: '# x' });
+  const res = await request(app).get(`/api/projects/${pid}/wiki`).set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(200);
+  expect(res.body[0]).toHaveProperty('node_type');
+  expect(res.body[0]).toHaveProperty('parent_id');
+});
