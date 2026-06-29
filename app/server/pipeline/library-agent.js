@@ -64,6 +64,100 @@ function _manifestSummary(mod) {
     + `> 模組目錄：\`${mod.module}\`。功能頁將於相關任務完成時自動補齊，或按「⟳ 更新」手動生成。`;
 }
 
+// 蒐集某模組目錄下最多 limit 個 .py 檔的檔名 + 前 300 字，作為 refresh 的上下文
+function _collectModuleSource(readyRepos, moduleName, limit = 8) {
+  const out = [];
+  for (const repo of readyRepos) {
+    if (!repo.local_path) continue;
+    const modDir = path.join(repo.local_path, moduleName);
+    if (!fs.existsSync(modDir)) continue;
+    const walk = dir => {
+      if (out.length >= limit) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (out.length >= limit) return;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory() && !e.name.startsWith('.')) walk(full);
+        else if (e.name.endsWith('.py') && e.name !== '__manifest__.py') {
+          try {
+            const rel = path.relative(modDir, full);
+            out.push(`# ${rel}\n${fs.readFileSync(full, 'utf8').slice(0, 300)}`);
+          } catch { /* skip */ }
+        }
+      }
+    };
+    walk(modDir);
+  }
+  return out.join('\n\n');
+}
+
+async function refreshWikiNode(projectId, slug, userId, signal) {
+  const { rows: [node] } = await query(
+    'SELECT id, slug, title, content, node_type, parent_id FROM wiki_pages WHERE project_id=$1 AND slug=$2',
+    [projectId, slug]
+  );
+  if (!node) { const e = new Error('Wiki node not found'); e.status = 404; throw e; }
+
+  const { rows: [project] } = await query('SELECT * FROM projects WHERE id=$1', [projectId]);
+  const { rows: readyRepos } = await query(
+    "SELECT local_path FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL",
+    [projectId]
+  );
+
+  const emit = (percent, message) =>
+    notify.emitToUser(userId, 'wiki:progress', { projectId, slug, stage: 'refresh', percent, message: message || '' });
+  emit(10, '準備重新生成');
+
+  let prompt;
+  if (node.node_type === 'overview') {
+    const manifests = [];
+    for (const r of readyRepos) _collectManifests(r.local_path, manifests, 15);
+    prompt = `你是 Library Agent。重新產生 Odoo 專案「${project.name}」的專案概論（200-400 字繁中）。
+回傳 JSON：{"slug":"overview","title":"專案概論","content":"<Markdown>"}
+
+${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
+  } else if (node.node_type === 'module') {
+    const moduleName = node.slug.replace(/^module-/, '');
+    const src = _collectModuleSource(readyRepos, moduleName);
+    prompt = `你是 Library Agent。為模組「${moduleName}」產生功能描述（繁中 Markdown）。
+回傳 JSON：{"slug":"${node.slug}","title":"${moduleName}","content":"<Markdown>"}
+
+模組原始碼節錄：
+${src || '（無原始碼）'}`;
+  } else {
+    const { rows: [parent] } = await query('SELECT slug FROM wiki_pages WHERE id=$1', [node.parent_id]);
+    const moduleName = (parent?.slug || '').replace(/^module-/, '') || 'unknown';
+    const src = _collectModuleSource(readyRepos, moduleName);
+    prompt = `你是 Library Agent。精修以下功能 wiki（繁中 Markdown），保留正確內容、補充與修正。
+回傳 JSON：{"slug":"${node.slug}","title":"<標題>","content":"<Markdown>"}
+
+現有內容：
+${node.content || '（空）'}
+
+所屬模組「${moduleName}」原始碼節錄：
+${src || '（無原始碼）'}`;
+  }
+
+  let title = node.title, content = node.content;
+  try {
+    const { text, usage, durationMs } = await callClaude(prompt, signal, { userId, notify });
+    await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { const p = JSON.parse(m[0]); title = p.title || title; content = p.content ?? content; }
+  } catch (err) {
+    console.error(`[LIBRARY-AGENT] refresh error ${slug}:`, err.message);
+    const e = new Error('重新生成失敗：' + err.message); e.status = 500; throw e;
+  }
+
+  await query(
+    'UPDATE wiki_pages SET title=$3, content=$4, updated_at=NOW() WHERE project_id=$1 AND slug=$2',
+    [projectId, slug, title, content]
+  );
+  emit(100, '完成');
+  return { ok: true, slug };
+}
+
 async function runLibraryAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, analysis_yaml, project_id, title FROM tasks WHERE id = $1',
@@ -201,4 +295,4 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   return { ok: true, slug: 'overview', modules: manifests.length };
 }
 
-module.exports = { runLibraryAgent, initProjectWiki, _upsertNode, _ensureNode };
+module.exports = { runLibraryAgent, initProjectWiki, refreshWikiNode, _upsertNode, _ensureNode };

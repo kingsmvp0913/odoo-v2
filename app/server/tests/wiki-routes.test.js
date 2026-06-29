@@ -102,3 +102,11 @@ test('GET /wiki returns node_type and parent_id fields', async () => {
   expect(res.body[0]).toHaveProperty('node_type');
   expect(res.body[0]).toHaveProperty('parent_id');
 });
+
+test('POST /wiki/:slug/refresh → 404 for missing slug', async () => {
+  const pr = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'RefreshProj', odoo_version: '17.0' });
+  const res = await request(app).post(`/api/projects/${pr.body.id}/wiki/nope/refresh`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(404);
+});

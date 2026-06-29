@@ -1,6 +1,6 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
-const { initProjectWiki } = require('./pipeline/library-agent');
+const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
 
 function registerRoutes(app) {
   const base = '/api/projects/:projectId/wiki';
@@ -21,6 +21,15 @@ function registerRoutes(app) {
     try {
       const { slug } = await initProjectWiki(req.params.projectId, req.userId);
       res.json({ ok: true, slug });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
+
+  app.post(`${base}/:slug/refresh`, verifyToken, async (req, res) => {
+    try {
+      const result = await refreshWikiNode(req.params.projectId, req.params.slug, req.userId);
+      res.json(result);
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message });
     }
