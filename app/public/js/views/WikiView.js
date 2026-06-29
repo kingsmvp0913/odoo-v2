@@ -35,7 +35,9 @@ window.WikiView = Vue.defineComponent({
       editing: false,
       editContent: '',
       saving: false,
-      refreshing: ''
+      refreshing: '',
+      building: false,
+      progress: { percent: 0, message: '', stage: '' }
     };
   },
   async created() {
@@ -43,6 +45,15 @@ window.WikiView = Vue.defineComponent({
     const slug = this.$route.params.slug;
     if (slug) await this.loadPage(slug);
     else if (this.pages.length > 0) await this.loadPage(this.pages[0].slug);
+  },
+  mounted() {
+    this._progressHandler = (d) => this._onProgress(d);
+    const sock = window._socket;
+    if (sock) sock.on('wiki:progress', this._progressHandler);
+  },
+  beforeUnmount() {
+    const sock = window._socket;
+    if (sock && sock.off) sock.off('wiki:progress', this._progressHandler);
   },
   computed: {
     renderedContent() {
@@ -118,12 +129,38 @@ window.WikiView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.refreshing = ''; }
     },
+    async buildWiki() {
+      this.building = true;
+      this.progress = { percent: 0, message: '開始建立…', stage: 'scanning' };
+      try {
+        await Api.post(`projects/${this.$route.params.id}/wiki/init`, {});
+        await this.loadPages();
+        if (this.pages.length) await this.loadPage('overview');
+        showToast('Wiki 已建立', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.building = false; }
+    },
+    _onProgress(data) {
+      if (String(data.projectId) !== String(this.$route.params.id)) return;
+      this.progress = { percent: data.percent || 0, message: data.message || '', stage: data.stage || '' };
+    },
   },
   template: `
     <div class="topbar">
       <button class="btn btn-outline btn-sm" @click="$router.push('/projects/' + $route.params.id)" style="margin-right:12px">← 返回專案</button>
       <h1>Wiki</h1>
-      <button class="btn btn-outline btn-sm" style="margin-left:auto" @click="addPage">+ 新增頁面</button>
+      <button class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
+        {{ building ? '建立中…' : '建立 wiki' }}
+      </button>
+      <button class="btn btn-outline btn-sm" style="margin-left:8px" @click="addPage">+ 新增頁面</button>
+    </div>
+    <div v-if="building" style="padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:4px">
+        <span>{{ progress.message || '建立中…' }}</span><span>{{ progress.percent }}%</span>
+      </div>
+      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+        <div :style="{ width: progress.percent + '%', height: '100%', background: 'var(--primary)', transition: 'width .3s' }"></div>
+      </div>
     </div>
     <div style="display:flex;height:calc(100vh - 56px);overflow:hidden">
       <div style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:8px;flex-shrink:0">
