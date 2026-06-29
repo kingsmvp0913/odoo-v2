@@ -19,11 +19,13 @@ beforeAll(async () => {
   app = createApp();
   const res = await request(app).post('/api/auth/setup').send({ username: 'user1', password: 'pass1234', display_name: 'User' });
   token = res.body.token;
+  const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username = 'user1'");
+  userId = u.id;
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
-let projectId, repoId;
+let projectId, repoId, userId;
 
 test('GET /api/projects → 401 without token', async () => {
   const res = await request(app).get('/api/projects');
@@ -134,4 +136,23 @@ test('PATCH mapping → 409 when a source name is already used by another projec
   const r3 = await request(app).patch(`/api/projects/${b.body.id}`).set('Authorization', `Bearer ${token}`)
     .send({ odoo_project_name: '專案乙' });
   expect(r3.status).toBe(200);
+});
+
+test('GET /api/projects → 含 unread_count', async () => {
+  const pRes = await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ name: 'UnreadProj', odoo_version: '17.0' });
+  const pid = pRes.body.id;
+
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'C',$2) RETURNING id",
+    [pid, userId]
+  );
+  await dbModule.query(
+    "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'ai','r')",
+    [chat.id]
+  );
+  const res = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
+  const p = res.body.find(x => x.id === pid);
+  expect(p.unread_count).toBe(1);
 });

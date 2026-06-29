@@ -94,7 +94,22 @@ function registerRoutes(app) {
       const { rows: counts } = await query('SELECT project_id, COUNT(*) AS cnt FROM project_repos GROUP BY project_id');
       const countMap = {};
       for (const c of counts) countMap[String(c.project_id)] = Number(c.cnt);
-      res.json(projects.map(p => ({ ...p, repo_count: countMap[String(p.id)] || 0 })));
+      const { rows: unreadRows } = await query(
+        `SELECT c.project_id, COUNT(m.id) AS unread
+         FROM project_chats c
+         LEFT JOIN project_chat_messages m
+           ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
+         WHERE c.user_id = $1
+         GROUP BY c.project_id`,
+        [req.userId]
+      );
+      const unreadMap = {};
+      for (const u of unreadRows) unreadMap[String(u.project_id)] = Number(u.unread);
+      res.json(projects.map(p => ({
+        ...p,
+        repo_count: countMap[String(p.id)] || 0,
+        unread_count: unreadMap[String(p.id)] || 0
+      })));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -121,7 +136,15 @@ function registerRoutes(app) {
         'SELECT * FROM project_repos WHERE project_id = $1 ORDER BY is_primary DESC, label ASC',
         [req.params.id]
       );
-      res.json({ ...project, repos });
+      const { rows: [unreadRow] } = await query(
+        `SELECT COUNT(m.id) AS unread
+         FROM project_chats c
+         LEFT JOIN project_chat_messages m
+           ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
+         WHERE c.project_id = $1 AND c.user_id = $2`,
+        [req.params.id, req.userId]
+      );
+      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0) });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
