@@ -25,7 +25,12 @@ window.ProjectListView = Vue.defineComponent({
   methods: {
     async load() {
       this.loading = true;
-      try { this.projects = await Api.get('projects'); }
+      try {
+        this.projects = await Api.get('projects');
+        for (const p of this.projects) {
+          UnreadStore.byProject[String(p.id)] = p.unread_count || 0;
+        }
+      }
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -49,6 +54,7 @@ window.ProjectListView = Vue.defineComponent({
         showToast('已刪除', 'success');
       } catch (e) { showToast(e.message, 'error'); }
     },
+    unread(id) { return UnreadStore.byProject[String(id)] || 0; },
     go(id) { this.$router.push(`/projects/${id}`); },
     goWiki(id) { this.$router.push(`/projects/${id}/wiki`); },
     goChat(id) { this.$router.push(`/projects/${id}/chat`); }
@@ -104,7 +110,9 @@ window.ProjectListView = Vue.defineComponent({
             <div v-if="p.description" style="font-size:12px;color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
             <div style="margin-top:10px;display:flex;gap:6px" @click.stop>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
-              <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat</button>
+              <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
+                <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unread(p.id) }}</span>
+              </button>
             </div>
           </div>
           <button class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p.id)">刪除</button>

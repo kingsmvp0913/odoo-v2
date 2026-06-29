@@ -61,6 +61,7 @@ window.ProjectDetailView = Vue.defineComponent({
       try {
         const data = await Api.get(`projects/${this.$route.params.id}`);
         this.project = data;
+        UnreadStore.byProject[String(this.project.id)] = this.project.unread_count || 0;
         this.repos = data.repos || [];
         this.editOdooProjectName = data.odoo_project_name || '';
         this.editServiceRespondentName = data.service_respondent_name || '';
@@ -102,6 +103,7 @@ window.ProjectDetailView = Vue.defineComponent({
         showToast('Wiki 初始化完成', 'success');
       } catch (e) { showToast(e.message, 'error'); }
     },
+    unreadCount() { return this.project ? (UnreadStore.byProject[String(this.project.id)] || 0) : 0; },
     goWiki() { this.$router.push(`/projects/${this.$route.params.id}/wiki`); },
     goChat() { this.$router.push(`/projects/${this.$route.params.id}/chat`); },
     async loadEnv() {
@@ -198,7 +200,9 @@ window.ProjectDetailView = Vue.defineComponent({
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
             <button class="btn btn-outline btn-sm" @click="goWiki">📖 開啟 Wiki</button>
-            <button class="btn btn-outline btn-sm" @click="goChat">💬 開啟 Chat</button>
+            <button class="btn btn-outline btn-sm" @click="goChat">💬 開啟 Chat
+              <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unreadCount() }}</span>
+            </button>
           </div>
         </div>
 
