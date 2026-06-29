@@ -55,9 +55,30 @@ test('with project_id → upserts wiki page and sets done', async () => {
   await runLibraryAgent(task.id, userId);
   const { rows: [updated] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(updated.status).toBe('done');
-  const { rows: wikiRows } = await dbModule.query('SELECT * FROM wiki_pages WHERE project_id=$1', [projectId]);
-  expect(wikiRows.length).toBe(1);
-  expect(wikiRows[0].slug).toBe('test-feature');
+  const { rows: fnRows } = await dbModule.query(
+    "SELECT * FROM wiki_pages WHERE project_id=$1 AND node_type='function'", [projectId]
+  );
+  expect(fnRows.length).toBe(1);
+  expect(fnRows[0].slug).toBe('test-feature');
+
+  // 功能頁掛在 module 節點下，module 節點掛在 overview 下
+  const { rows: [modNode] } = await dbModule.query('SELECT * FROM wiki_pages WHERE id=$1', [fnRows[0].parent_id]);
+  expect(modNode.node_type).toBe('module');
+  const { rows: [ovNode] } = await dbModule.query('SELECT * FROM wiki_pages WHERE id=$1', [modNode.parent_id]);
+  expect(ovNode.node_type).toBe('overview');
+});
+
+test('function page is attached under the module from analysis_yaml', async () => {
+  const { userId, projectId } = await createUserAndProject();
+  const { rows: [task] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, analysis_yaml) VALUES ($1, 'T100', 'odoo', 'Feat', 'wiki_updating', $2, $3) RETURNING id",
+    [userId, projectId, "module: sale_ext\nsummary: x"]
+  );
+  await runLibraryAgent(task.id, userId);
+  const { rows: [mod] } = await dbModule.query(
+    "SELECT * FROM wiki_pages WHERE project_id=$1 AND node_type='module'", [projectId]
+  );
+  expect(mod.slug).toBe('module-sale_ext');
 });
 
 test('API error → still sets task done', async () => {

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const yaml = require('js-yaml');
 const { callClaude } = require('./claude-runner');
 const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
@@ -112,12 +113,23 @@ ${logText || '無'}`;
 
   if (wikiUpdate?.slug && wikiUpdate?.title) {
     try {
-      await query(
-        `INSERT INTO wiki_pages (project_id, slug, title, content, updated_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (project_id, slug)
-         DO UPDATE SET title=$3, content=$4, updated_at=NOW()`,
-        [task.project_id, wikiUpdate.slug, wikiUpdate.title, wikiUpdate.content || '']
+      let moduleName = 'uncategorized';
+      try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || 'uncategorized'; }
+      catch { /* keep default */ }
+
+      // 確保 overview + module 節點存在（不覆寫既有內容）
+      const overviewId = await _ensureNode(
+        task.project_id, null, 'overview', 'overview', '專案概論',
+        '# 專案概論\n\n（尚未建立，可至 Wiki 按「建立 wiki」生成骨架）'
+      );
+      const moduleId = await _ensureNode(
+        task.project_id, overviewId, 'module', `module-${moduleName}`, moduleName, `# ${moduleName}`
+      );
+
+      // 功能頁：依主題 slug upsert，掛在模組節點下
+      await _upsertNode(
+        task.project_id, moduleId, 'function',
+        wikiUpdate.slug, wikiUpdate.title, wikiUpdate.content || ''
       );
     } catch (err) {
       console.error(`[LIBRARY-AGENT] wiki upsert error task ${taskId}:`, err.message);
