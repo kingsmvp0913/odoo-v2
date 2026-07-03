@@ -1,26 +1,22 @@
 ---
 name: getSQL
-description: Use when querying remote PostgreSQL databases via SSH-SQLM API at localhost:5000, running SELECT statements, listing available connections, or inspecting table structures.
+description: Use when querying remote PostgreSQL databases via v2 platform AI endpoint at localhost:3939, running SELECT statements, listing project connections, or inspecting table structures.
 ---
 
-# SSH-SQLM 遠端資料庫查詢 Skill
+# 資料庫查詢 Skill（v2）
 
-你可以透過 SSH-SQLM 的 API 查詢遠端 PostgreSQL 資料庫。
-SSH-SQLM 服務運行在 `http://localhost:5000`。
+透過 v2 工作平台查遠端 Odoo PostgreSQL（唯讀 SELECT）。v2 需運行於 `http://localhost:3939`，不需另外啟動桌面服務。
 
-## 限制
+## 流程
 
-- **只允許 SELECT 查詢**，任何 INSERT / UPDATE / DELETE / DROP / ALTER 等修改操作都會被拒絕
-- 支援 `WITH`（CTE）語法
-- 不允許多語句（SQL 中不可包含分號，結尾分號除外）
-- 查詢逾時 120 秒
+### 第一步：判斷當前專案
 
-## 使用流程
+依當前處理中的專案、開啟檔案路徑（如 `online_addons/<專案>/`）、對話主題，推斷對應的 v2 專案名稱（folder_name 或 name）。
 
-### 第一步：列出可用連線
+### 第二步：列出該專案連線
 
 ```bash
-curl http://localhost:5000/ai/connections
+curl "http://localhost:3939/ai/db/connections?project=<專案名>"
 ```
 
 回傳範例：
@@ -28,45 +24,36 @@ curl http://localhost:5000/ai/connections
 ```json
 {
   "ok": true,
-  "connections": ["gcp-openclaw", "hj-鴻伍-正式", "立勝補習班-正式"]
+  "connections": [
+    { "id": 1, "name": "hj-鴻久-正式", "project": "鴻久" }
+  ]
 }
 ```
 
-從清單中選擇要查詢的連線名稱。
+- **回傳 1 筆**：直接使用其 `id`。
+- **回傳多筆**：列給使用者選擇。
+- **回傳 0 筆**：提示使用者到該專案「資料庫查詢」分頁新增連線（`http://localhost:3939/projects/<id>/db`）。
 
-### 第二步：執行 SELECT 查詢
-
-用選定的連線名稱帶入 `connection`，寫好 SQL 即可查詢，不需要指定資料庫等參數（已在連線設定中預設好）。
+### 第三步：執行 SELECT 查詢
 
 ```bash
-curl -X POST http://localhost:5000/ai/select \
+curl -X POST http://localhost:3939/ai/db/query \
   -H "Content-Type: application/json" \
-  -d '{"connection":"立勝補習班-正式","sql":"SELECT id, login, active FROM res_users LIMIT 5"}'
+  -d '{"connection_id": 1, "sql": "SELECT id, login FROM res_users LIMIT 5"}'
 ```
 
-#### 請求參數
-
-| 參數 | 必填 | 說明 |
-|------|------|------|
-| connection | 是 | 連線名稱（從第一步取得） |
-| sql | 是 | SELECT 語句 |
-| db_name | 否 | 資料庫名稱，不填則用連線的預設值 |
-
-#### 成功回傳
+成功回傳：
 
 ```json
 {
   "ok": true,
-  "columns": ["id", "login", "active"],
-  "rows": [
-    ["2", "admin", "t"],
-    ["6", "user1", "t"]
-  ],
+  "columns": ["id", "login"],
+  "rows": [["2", "admin"], ["6", "user1"]],
   "row_count": 2
 }
 ```
 
-#### 錯誤回傳
+錯誤回傳：
 
 ```json
 {
@@ -75,35 +62,28 @@ curl -X POST http://localhost:5000/ai/select \
 }
 ```
 
+## 限制
+
+- 只允許 SELECT / WITH，禁多語句（不可含分號，結尾分號除外）。
+- 大表查詢加 `LIMIT`；先用 `information_schema` 確認欄位。
+
 ## 常用查詢範例
 
-### 查看資料表結構
-
 ```sql
-SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'res_partner' ORDER BY ordinal_position
-```
+-- 查看資料表結構
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'res_partner'
+ORDER BY ordinal_position
 
-### 查看所有資料表
+-- 查看所有資料表
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public' ORDER BY table_name
 
-```sql
-SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name
-```
-
-### 查詢記錄數
-
-```sql
+-- 查詢記錄數
 SELECT COUNT(*) FROM res_partner
+
+-- 使用 CTE
+WITH active_users AS (SELECT id, login FROM res_users WHERE active = true)
+SELECT * FROM active_users LIMIT 10
 ```
-
-### 使用 CTE
-
-```sql
-WITH active_users AS (SELECT id, login FROM res_users WHERE active = true) SELECT * FROM active_users LIMIT 10
-```
-
-## 注意事項
-
-1. 先用 `/ai/connections` 確認可用連線，不要猜測連線名稱
-2. 查詢前可先用 `information_schema` 確認欄位名稱，避免 SQL 錯誤
-3. 大表查詢請加 `LIMIT`，避免回傳過多資料
-4. 如果查詢失敗，檢查 `error` 欄位的錯誤訊息
