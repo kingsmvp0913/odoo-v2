@@ -1,0 +1,43 @@
+# ─── Node ───────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ─── Odoo 執行期工作區(runtime,非原始碼)──────────────
+# 各專案的 clone 與虛擬環境,由 pipeline 動態產生
+/odoo-envs/
+/repos/
+
+# ─── 機密設定(改用 config.example.json 交付)──────────
+/data/config.json
+.env
+.env.*
+!.env.example
+
+# ─── Pipeline 執行紀錄與暫存 ────────────────────────────
+/kingsmvpsplan/log/*
+!/kingsmvpsplan/log/.gitkeep
+
+# ─── 工具快取 ───────────────────────────────────────────
+.serena/cache/
+.serena/project.local.yml
+
+# ─── 編輯器 / 作業系統 ──────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# ─── 日誌 ───────────────────────────────────────────────
+*.log

@@ -1,0 +1,5 @@
+{
+    "DATABASE_URL": "postgres://USER:PASSWORD@localhost:5432/DBNAME",
+    "JWT_SECRET": "<執行 `openssl rand -base64 32` 產生一組>",
+    "PORT": 3939
+}
