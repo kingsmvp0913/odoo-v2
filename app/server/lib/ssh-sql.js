@@ -1,5 +1,4 @@
 const { Client } = require('ssh2');
-const fs = require('fs');
 
 function validateConnField(val, name) {
   if (val && !/^[A-Za-z0-9_.\-]+$/.test(String(val))) {
@@ -116,13 +115,7 @@ function sshExec(conn, command) {
       });
     }).on('error', reject);
     const cfg = { host: conn.ssh_host, port: conn.ssh_port || 22, username: conn.ssh_user, readyTimeout: 15000 };
-    if (conn.auth_type === 'key' && conn.ssh_key_path) {
-      const keyPath = String(conn.ssh_key_path);
-      if (keyPath.includes('..') || (!keyPath.startsWith('/') && !keyPath.match(/^[A-Za-z]:\\/))) {
-        throw new Error('ssh_key_path 必須是絕對路徑且不得含路徑穿越');
-      }
-      cfg.privateKey = fs.readFileSync(keyPath);
-    }
+    if (conn.auth_type === 'key' && conn.ssh_key) cfg.privateKey = Buffer.from(conn.ssh_key, 'utf8');
     else cfg.password = conn.ssh_password;
     c.connect(cfg);
   });

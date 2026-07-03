@@ -3,7 +3,16 @@ const { verifyToken } = require('./auth');
 const { encrypt, decrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
 
-const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, ssh_key_path, connect_mode, docker_container, db_user, sudo_user, db_name, description, created_at';
+const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, description, created_at';
+
+const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+function validateIdentifiers(b) {
+  const checks = { docker_container: b.docker_container, db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name };
+  for (const [k, v] of Object.entries(checks)) {
+    if (v !== undefined && v !== null && v !== '' && !SAFE_ID_RE.test(String(v)))
+      throw Object.assign(new Error(`欄位「${k}」包含不允許的字元（只允許英數、底線、點、連字號）`), { statusCode: 400 });
+  }
+}
 
 function loopbackOnly(req, res, next) {
   const ip = (req.socket && req.socket.remoteAddress) || '';
@@ -23,15 +32,19 @@ function registerRoutes(app) {
     try {
       const b = req.body || {};
       if (!b.name || !b.ssh_host || !b.ssh_user || !b.db_name) return res.status(400).json({ error: 'name/ssh_host/ssh_user/db_name 必填' });
-      const enc = b.auth_type === 'key' ? null : (b.ssh_password ? encrypt(b.ssh_password) : null);
+      validateIdentifiers(b);
+      const authType = b.auth_type || 'password';
+      const pwEnc = authType === 'key' ? null : (b.ssh_password ? encrypt(b.ssh_password) : null);
+      const keyEnc = authType === 'key' ? (b.ssh_key_content ? encrypt(b.ssh_key_content) : null) : null;
       const { rows } = await query(
-        `INSERT INTO db_connections (project_id,name,ssh_host,ssh_port,ssh_user,auth_type,ssh_password_enc,ssh_key_path,connect_mode,docker_container,db_user,sudo_user,db_name,description)
+        `INSERT INTO db_connections (project_id,name,ssh_host,ssh_port,ssh_user,auth_type,ssh_password_enc,ssh_key_enc,connect_mode,docker_container,db_user,sudo_user,db_name,description)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING ${PUBLIC_COLS}`,
-        [req.params.id, b.name, b.ssh_host, b.ssh_port || 22, b.ssh_user, b.auth_type || 'password', enc, b.ssh_key_path || null,
+        [req.params.id, b.name, b.ssh_host, b.ssh_port || 22, b.ssh_user, authType, pwEnc, keyEnc,
          b.connect_mode || 'docker', b.docker_container || null, b.db_user || null, b.sudo_user || null, b.db_name, b.description || null]
       );
       res.status(201).json(rows[0]);
     } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: err.message });
       if (err.code === '23505') return res.status(409).json({ error: '連線名稱已存在' });
       res.status(500).json({ error: err.message });
     }
@@ -40,17 +53,19 @@ function registerRoutes(app) {
   app.put('/api/projects/:id/db-connections/:cid', verifyToken, async (req, res) => {
     try {
       const b = req.body || {};
+      validateIdentifiers(b);
       const set = [];
       const params = [];
       let idx = 1;
       for (const [col, val] of Object.entries({
         name: b.name, ssh_host: b.ssh_host, ssh_port: b.ssh_port, ssh_user: b.ssh_user, auth_type: b.auth_type,
-        ssh_key_path: b.ssh_key_path, connect_mode: b.connect_mode, docker_container: b.docker_container,
+        connect_mode: b.connect_mode, docker_container: b.docker_container,
         db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name, description: b.description
       })) {
         if (val !== undefined) { set.push(`${col}=$${idx++}`); params.push(val); }
       }
       if (b.ssh_password) { set.push(`ssh_password_enc=$${idx++}`); params.push(encrypt(b.ssh_password)); }
+      if (b.ssh_key_content) { set.push(`ssh_key_enc=$${idx++}`); params.push(encrypt(b.ssh_key_content)); }
       if (!set.length) return res.status(400).json({ error: '無可更新欄位' });
       params.push(req.params.cid, req.params.id);
       const { rows } = await query(
@@ -59,6 +74,7 @@ function registerRoutes(app) {
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(rows[0]);
     } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: err.message });
       if (err.code === '23505') return res.status(409).json({ error: '連線名稱已存在' });
       res.status(500).json({ error: err.message });
     }
@@ -112,6 +128,7 @@ async function loadDecryptedConn(cid, projectId) {
   const { rows: [c] } = await query('SELECT * FROM db_connections WHERE id=$1 AND project_id=$2', [cid, projectId]);
   if (!c) return null;
   c.ssh_password = c.ssh_password_enc ? decrypt(c.ssh_password_enc) : '';
+  c.ssh_key = c.ssh_key_enc ? decrypt(c.ssh_key_enc) : '';
   return c;
 }
 

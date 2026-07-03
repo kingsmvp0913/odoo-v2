@@ -3,7 +3,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
   data() {
     return {
       conns: [], loading: true, saving: false, running: false,
-      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_path: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', description: '' },
+      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', description: '' },
       selectedId: '', sql: '', result: null, error: ''
     };
   },
@@ -16,7 +16,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
-    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_path: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', description: '' }; },
+    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', description: '' }; },
     editConn(c) { this.form = { ...c, ssh_password: '' }; },
     async saveConn() {
       if (!this.form.name || !this.form.ssh_host || !this.form.ssh_user || !this.form.db_name) return showToast('名稱/主機/使用者/資料庫 必填', 'error');
@@ -81,7 +81,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
           <div class="form-group" style="margin:0"><label>SSH 使用者</label><input v-model="form.ssh_user" class="form-control" placeholder="root" /></div>
           <div class="form-group" style="margin:0"><label>認證方式</label><select v-model="form.auth_type" class="form-control"><option value="password">密碼</option><option value="key">金鑰</option></select></div>
           <div class="form-group" style="margin:0" v-if="form.auth_type==='password'"><label>SSH 密碼（留空＝不變）</label><input v-model="form.ssh_password" type="password" class="form-control" placeholder="••••••" /></div>
-          <div class="form-group" style="margin:0" v-else><label>金鑰路徑</label><input v-model="form.ssh_key_path" class="form-control" placeholder="C:\\keys\\id_rsa" /></div>
+          <div class="form-group" style="margin:0" v-else><label>SSH 金鑰內容（PEM）</label><textarea v-model="form.ssh_key_content" class="form-control" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----" style="font-family:monospace;font-size:11px"></textarea></div>
           <div class="form-group" style="margin:0"><label>連線模式</label><select v-model="form.connect_mode" class="form-control"><option value="docker">docker</option><option value="local">local</option></select></div>
           <div class="form-group" style="margin:0" v-if="form.connect_mode==='docker'"><label>Docker 容器</label><input v-model="form.docker_container" class="form-control" /></div>
           <div class="form-group" style="margin:0" v-if="form.connect_mode==='docker'"><label>DB 使用者</label><input v-model="form.db_user" class="form-control" /></div>
