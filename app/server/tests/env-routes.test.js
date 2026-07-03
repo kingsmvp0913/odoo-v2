@@ -6,10 +6,13 @@ process.env.JWT_SECRET = 'test-secret';
 
 const mockRunEnvSetup = jest.fn();
 const mockStopEnv = jest.fn();
+const mockSyncUsers = jest.fn();
 jest.mock('../pipeline/env-agent', () => ({
   runEnvSetup: mockRunEnvSetup,
   stopEnv: mockStopEnv,
-  nightlyShutdown: jest.fn()
+  syncUsers: mockSyncUsers,
+  nightlyShutdown: jest.fn(),
+  ENV_BASE: require('path').resolve(__dirname, '..', '..', '..', 'odoo-envs')
 }));
 
 let dbModule, app;
@@ -44,7 +47,7 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
-beforeEach(() => { mockRunEnvSetup.mockReset(); mockStopEnv.mockReset(); });
+beforeEach(() => { mockRunEnvSetup.mockReset(); mockStopEnv.mockReset(); mockSyncUsers.mockReset(); });
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
@@ -83,6 +86,40 @@ test('POST stop → calls stopEnv', async () => {
     .set(auth());
   expect(res.status).toBe(200);
   expect(mockStopEnv).toHaveBeenCalledWith(String(projectId));
+});
+
+test('POST sync-users → 409 建立中（setting_up）', async () => {
+  await dbModule.query(
+    "INSERT INTO odoo_envs (project_id, status) VALUES ($1,'setting_up') ON CONFLICT (project_id) DO UPDATE SET status='setting_up'",
+    [projectId]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/env/sync-users`)
+    .set(auth());
+  expect(res.status).toBe(409);
+  expect(mockSyncUsers).not.toHaveBeenCalled();
+});
+
+test('POST sync-users → calls syncUsers and returns log', async () => {
+  await dbModule.query("UPDATE odoo_envs SET status='running' WHERE project_id=$1", [projectId]);
+  mockSyncUsers.mockResolvedValueOnce('[seed] 1 users → SEED_DONE 1\n');
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/env/sync-users`)
+    .set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);
+  expect(res.body.log).toContain('SEED_DONE');
+  expect(mockSyncUsers).toHaveBeenCalledWith(String(projectId));
+});
+
+test('POST sync-users → 500 when env not built', async () => {
+  await dbModule.query("UPDATE odoo_envs SET status='running' WHERE project_id=$1", [projectId]);
+  mockSyncUsers.mockRejectedValueOnce(new Error('環境尚未建立，請先建立測試環境'));
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/env/sync-users`)
+    .set(auth());
+  expect(res.status).toBe(500);
+  expect(res.body.error).toContain('尚未建立');
 });
 
 test('DELETE env → resets to idle', async () => {

@@ -37,9 +37,11 @@ function formatEvent(ev) {
 }
 
 function callClaude(prompt, signal, opts = {}) {
-  const { taskId, userId, notify } = opts;
+  const { taskId, userId, notify, model } = opts;
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', ['-p', '--output-format', 'stream-json', '--verbose'], {
+    const args = ['-p', '--output-format', 'stream-json', '--verbose'];
+    if (model) args.push('--model', model);
+    const child = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 

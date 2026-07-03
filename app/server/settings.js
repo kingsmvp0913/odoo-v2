@@ -69,6 +69,23 @@ function registerRoutes(app) {
     }
   });
 
+  // 深色模式偏好：合併寫入 odoo_settings.theme（read-modify-write，不動其餘設定）
+  app.put('/api/settings/theme', verifyToken, async (req, res) => {
+    try {
+      const { theme } = req.body || {};
+      if (theme !== 'dark' && theme !== 'light') {
+        return res.status(400).json({ error: 'theme 需為 dark 或 light' });
+      }
+      const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+      const current = rows[0]?.odoo_settings || {};
+      const merged = { ...current, theme };
+      await query('UPDATE users SET odoo_settings = $2 WHERE id = $1', [req.userId, JSON.stringify(merged)]);
+      res.json({ ok: true, theme });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Auto-fetch Odoo user_id — reads system URL+DB from teams_settings
   app.post('/api/settings/verify-odoo', verifyToken, async (req, res) => {
     const { odoo_username, odoo_password } = req.body;

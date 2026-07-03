@@ -1,27 +1,9 @@
 const { callClaude } = require('./claude-runner');
+const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-
-const ANALYSIS_SYSTEM_PROMPT = `你是 Odoo 開發需求分析師。分析任務需求並輸出 analysis.yaml。
-
-輸出必須是嚴格合法的 YAML，只有 YAML 本身，不含任何 markdown code block 或其他文字。
-
-必要欄位：
-case_id（任務 ID）、module（英文底線格式，e.g. purchase）、odoo_version（e.g. "17.0"）、
-project_name（null 或字串）、execution_mode（"MODE_A" 直接實作 / "MODE_B" 先確認再實作）、
-summary（一段中文摘要）、requirements（列表）、
-low_confidence（true/false）、
-clarification_channel:
-  questions: []
-  user_answer: ""
-
-判斷規則：
-- MODE_A：需求明確、影響範圍小、修改集中在單一模組
-- MODE_B：涉及複雜業務流程、多模組影響、高風險資料異動
-- low_confidence=true：對需求有重大不確定性
-- questions 非空：有需要使用者確認的具體問題`;
 
 const REQUIRED_FIELDS = ['case_id', 'module', 'odoo_version', 'execution_mode', 'summary'];
 
@@ -41,7 +23,12 @@ async function analyzeTask(taskId, signal) {
   // Block 1: API call — transient errors reset status and re-throw
   let rawYaml;
   try {
-    const callResult = await callClaude(`${ANALYSIS_SYSTEM_PROMPT}\n\n${task.original_text || '（無內容）'}`, signal, { taskId, userId: task.user_id, notify });
+    const agent = loadAgent('analysis-basic');
+    const callResult = await callClaude(
+      agent.render({ original_text: task.original_text || '（無內容）' }),
+      signal,
+      { taskId, userId: task.user_id, notify, model: agent.model }
+    );
     rawYaml = callResult.text;
     await logTokenUsage({ taskId: task.task_id }, task.user_id, 'analysis', callResult.usage, callResult.durationMs);
   } catch (apiErr) {

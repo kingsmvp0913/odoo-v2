@@ -95,18 +95,44 @@ test('PUT /api/projects/:id → 200 updates description', async () => {
   expect(res.body.description).toBe('Updated desc');
 });
 
-test('DELETE /api/projects/:id/repos/:repoId → 200', async () => {
+test('DELETE repo → 409 正在 clone/更新中', async () => {
+  await dbModule.query("UPDATE project_repos SET clone_status='cloning' WHERE id=$1", [repoId]);
+  const res = await request(app).delete(`/api/projects/${projectId}/repos/${repoId}`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(409);
+});
+
+test('DELETE repo → 409 測試環境使用中', async () => {
+  await dbModule.query("UPDATE project_repos SET clone_status='done' WHERE id=$1", [repoId]);
+  await dbModule.query(
+    "INSERT INTO odoo_envs (project_id, status) VALUES ($1,'running') ON CONFLICT (project_id) DO UPDATE SET status='running'",
+    [projectId]
+  );
+  const res = await request(app).delete(`/api/projects/${projectId}/repos/${repoId}`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(409);
+});
+
+test('DELETE /api/projects/:id/repos/:repoId → 200 (環境閒置、clone 完成)', async () => {
+  await dbModule.query("UPDATE odoo_envs SET status='idle' WHERE project_id=$1", [projectId]);
+  await dbModule.query("UPDATE project_repos SET clone_status='done' WHERE id=$1", [repoId]);
   const res = await request(app).delete(`/api/projects/${projectId}/repos/${repoId}`)
     .set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(200);
 });
 
-test('DELETE /api/projects/:id → 200 and cascades repos', async () => {
+test('DELETE /api/projects/:id → 200 and cascades repos & env', async () => {
+  await dbModule.query(
+    "INSERT INTO odoo_envs (project_id, status) VALUES ($1,'running') ON CONFLICT (project_id) DO UPDATE SET status='running'",
+    [projectId]
+  );
   const res = await request(app).delete(`/api/projects/${projectId}`)
     .set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(200);
   const { rows } = await dbModule.query('SELECT * FROM project_repos WHERE project_id = $1', [projectId]);
   expect(rows.length).toBe(0);
+  const { rows: envs } = await dbModule.query('SELECT * FROM odoo_envs WHERE project_id = $1', [projectId]);
+  expect(envs.length).toBe(0);
 });
 
 test('GET /api/projects/:id → 404 after delete', async () => {

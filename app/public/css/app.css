@@ -7,6 +7,7 @@
   --sidebar-active: #ffffff;
   --sidebar-accent: #6366f1;
   --card-bg: #ffffff;
+  --surface: #ffffff;
   --border: #e4e4e7;
   --border-strong: #d1d5db;
   --text: #111827;
@@ -14,17 +15,108 @@
   --text-muted: #6b7280;
   --text-placeholder: #9ca3af;
   --danger: #ef4444;
+  --error: #ef4444;
   --warning: #f59e0b;
   --success: #10b981;
   --info: #3b82f6;
   --primary: #6366f1;
   --primary-hover: #4f46e5;
+  --primary-light: #eef2ff;
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
   --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
   --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
 }
+
+/* 深色模式：Notion 風溫暖中性灰，非冷藍黑；邊框極細微 */
+[data-theme="dark"] {
+  --bg: #191919;
+  --sidebar-bg: #202020;
+  --sidebar-text: rgba(255,255,255,0.55);
+  --sidebar-active: #ffffff;
+  --card-bg: #202020;
+  --surface: #202020;
+  --border: #2e2e2e;
+  --border-strong: #3d3d3d;
+  --text: rgba(255,255,255,0.82);
+  --text-secondary: rgba(255,255,255,0.62);
+  --text-muted: rgba(255,255,255,0.44);
+  --text-placeholder: rgba(255,255,255,0.30);
+  --primary-hover: #7c7ff5;
+  --primary-light: rgba(99,102,241,0.22);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+
+/* 寫死淺色的中性面板 → 改用變數 */
+[data-theme="dark"] .topbar,
+[data-theme="dark"] .page-header { background: var(--surface); }
+[data-theme="dark"] .field-input,
+[data-theme="dark"] .form-control,
+[data-theme="dark"] .form-group input,
+[data-theme="dark"] .form-group select,
+[data-theme="dark"] .form-group textarea,
+[data-theme="dark"] .btn-outline,
+[data-theme="dark"] .login-box { background: var(--surface); }
+[data-theme="dark"] .btn-outline:hover:not(:disabled) { background: #2a2a2a; border-color: #4a4a4a; }
+[data-theme="dark"] .setting-block-footer { background: #262626; }
+[data-theme="dark"] .tab-badge { background: #333333; color: rgba(255,255,255,0.75); }
+
+/* 任務卡片狀態底色 → 柔和半透明 */
+[data-theme="dark"] .task-card.needs-action { background: rgba(245,158,11,0.10); }
+[data-theme="dark"] .task-card.batch-selected { background: rgba(99,102,241,0.14); }
+
+/* 對話泡泡 */
+[data-theme="dark"] .conv-msg.ai { background: #232733; border-color: #313849; }
+[data-theme="dark"] .conv-msg.user { background: #1b2620; border-color: #294032; }
+[data-theme="dark"] .conv-msg.system { background: #202020; }
+
+/* Stepper */
+[data-theme="dark"] .step-connector { background: #333333; }
+[data-theme="dark"] .step-circle { background: #202020; border-color: #3d3d3d; color: rgba(255,255,255,0.4); }
+
+/* 錯誤訊息 */
+[data-theme="dark"] .error-msg { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.35); }
+
+/* 狀態徽章：柔和半透明底 + 亮色文字，保留語意色 */
+[data-theme="dark"] .status-badge.new,
+[data-theme="dark"] .status-badge.coding_running,
+[data-theme="dark"] .status-badge.wiki_updating { background: rgba(59,130,246,0.16); color: #93c5fd; }
+[data-theme="dark"] .status-badge.analysis_running { background: rgba(139,92,246,0.16); color: #c4b5fd; }
+[data-theme="dark"] .status-badge.confirm_pending,
+[data-theme="dark"] .status-badge.final_pending,
+[data-theme="dark"] .status-badge.cs_data_needed { background: rgba(245,158,11,0.16); color: #fcd34d; }
+[data-theme="dark"] .status-badge.confirm_answered,
+[data-theme="dark"] .status-badge.qa_running { background: rgba(16,185,129,0.16); color: #6ee7b7; }
+[data-theme="dark"] .status-badge.done,
+[data-theme="dark"] .status-badge.deploy_ready { background: rgba(34,197,94,0.16); color: #86efac; }
+[data-theme="dark"] .status-badge.deploy_pending,
+[data-theme="dark"] .status-badge.deploy_fixing { background: rgba(249,115,22,0.16); color: #fdba74; }
+[data-theme="dark"] .status-badge.stopped,
+[data-theme="dark"] .status-badge.triage_blocked,
+[data-theme="dark"] .status-badge.merge_conflict { background: rgba(239,68,68,0.16); color: #fca5a5; }
+[data-theme="dark"] .status-badge.branch_pending { background: rgba(14,165,233,0.16); color: #7dd3fc; }
+[data-theme="dark"] .status-badge.merge_running { background: rgba(168,85,247,0.16); color: #d8b4fe; }
+[data-theme="dark"] .status-badge.cs_running,
+[data-theme="dark"] .status-badge.cs_reply_pending { background: rgba(217,70,239,0.16); color: #f0abfc; }
+
+/* 卷軸 */
+[data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 5px; }
+[data-theme="dark"] ::-webkit-scrollbar-track { background: transparent; }
+
+/* ── 任務卡片 chips（來源 / 專案 / 測試機）── */
+.src-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; text-decoration: none; display: inline-block; }
+.src-odoo    { background: #dbeafe; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.src-service { background: #f3e8ff; color: #7c3aed; border: 1px solid #e9d5ff; }
+.src-default { background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); }
+.proj-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #e0f2fe; color: #0369a1; cursor: pointer; border: 1px solid #bae6fd; font-weight: 500; }
+.env-chip { font-size: 11px; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-secondary); text-decoration: none; background: var(--surface); }
+
+[data-theme="dark"] .src-odoo    { background: rgba(59,130,246,0.16);  color: #93c5fd; border-color: rgba(59,130,246,0.30); }
+[data-theme="dark"] .src-service { background: rgba(168,85,247,0.18);  color: #d8b4fe; border-color: rgba(168,85,247,0.35); }
+[data-theme="dark"] .proj-chip   { background: rgba(14,165,233,0.16);  color: #7dd3fc; border-color: rgba(14,165,233,0.30); }
 
 body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 
@@ -43,6 +135,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .sidebar-footer { padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.06); }
 .sidebar-footer a { font-size: 12px; color: var(--sidebar-text); text-decoration: none; cursor: pointer; }
 .sidebar-footer a:hover { color: #fff; }
+.usage-mini { margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; padding: 6px 8px; margin-left: -8px; margin-right: -8px; border-radius: var(--radius-sm); transition: background 0.12s; }
+.usage-mini:hover { background: rgba(255,255,255,0.05); }
+.usage-mini:hover .usage-title { opacity: 1; color: #e5e7eb; }
+.usage-title { font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--sidebar-text); opacity: 0.7; }
+.usage-row-top { display: flex; justify-content: space-between; font-size: 10px; color: var(--sidebar-text); margin-bottom: 3px; }
+.usage-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.usage-fill { height: 100%; border-radius: 3px; background: var(--sidebar-accent); transition: width 0.3s ease; }
+.usage-fill.warn { background: var(--warning); }
+.usage-fill.crit { background: var(--danger); }
+.usage-reset { font-size: 9px; color: var(--sidebar-text); opacity: 0.55; text-align: right; margin-top: 2px; }
 
 /* ── Main layout ───────────────────────── */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; align-items: stretch; }

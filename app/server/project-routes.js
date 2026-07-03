@@ -4,6 +4,7 @@ const { execFile } = require('child_process');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
+const { ensureTestingBranch } = require('./pipeline/git');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
@@ -76,6 +77,8 @@ function triggerClone(repoId, repoUrl, destPath) {
         [repoId, 'error', msg]
       ).catch(() => {});
     } else {
+      // 主 clone 常駐 testing 分支（GitLab Flow 環境分支，測試環境 addons 來源）
+      try { await ensureTestingBranch(destPath); } catch { /* 不擋 clone 完成 */ }
       await query(
         'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
         [repoId, 'done']
@@ -211,6 +214,9 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
+      // #4 刪專案前連帶清理：kill 環境 process、移除 env 與 clone 目錄（DB row 由 FK cascade 處理）
+      const { cleanupProjectEnv } = require('./pipeline/env-agent');
+      await cleanupProjectEnv(req.params.id);
       await query('BEGIN');
       const { rows: taskRows } = await query(
         'SELECT id, task_id FROM tasks WHERE project_id = $1', [req.params.id]
@@ -318,14 +324,23 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:id/repos/:repoId', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'DELETE FROM project_repos WHERE id = $1 AND project_id = $2 RETURNING id, local_path',
+      const { rows: [repo] } = await query(
+        'SELECT clone_status, local_path FROM project_repos WHERE id=$1 AND project_id=$2',
         [req.params.repoId, req.params.id]
       );
-      if (!rows.length) return res.status(404).json({ error: 'Not found' });
-      const localPath = rows[0].local_path;
-      if (localPath) {
-        fs.rm(localPath, { recursive: true, force: true }, () => {});
+      if (!repo) return res.status(404).json({ error: 'Not found' });
+      // #2 clone/更新進行中不得移除
+      if (repo.clone_status === 'cloning') {
+        return res.status(409).json({ error: '正在 clone/更新中，請稍候再移除' });
+      }
+      // #1 測試環境使用中不得移除其掛載的 repo
+      const { envIsActive } = require('./pipeline/env-agent');
+      if (await envIsActive(req.params.id)) {
+        return res.status(409).json({ error: '測試環境使用中，請先刪除測試環境再移除 repo' });
+      }
+      await query('DELETE FROM project_repos WHERE id = $1 AND project_id = $2', [req.params.repoId, req.params.id]);
+      if (repo.local_path) {
+        fs.rm(repo.local_path, { recursive: true, force: true }, () => {});
       }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }

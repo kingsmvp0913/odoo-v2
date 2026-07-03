@@ -3,7 +3,9 @@ const { execFile, exec } = require('child_process');
 function execFileAsync(cmd, args, opts) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, opts, (err, stdout, stderr) => {
-      if (err) reject(err);
+      // execFile 失敗時 stdout/stderr 只在 callback 參數，需掛回 error 供上層判斷
+      // （git merge 衝突訊息寫在 stdout，非 stderr）
+      if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
       else resolve({ stdout, stderr });
     });
   });
@@ -96,4 +98,45 @@ async function deleteBranchLocal(repoPath, branchName) {
   await execFileAsync('git', ['branch', '-d', branchName], { cwd: repoPath });
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal };
+// 確保主 clone 有 testing 分支並 checkout（常駐測試區分支，供測試環境部署）
+async function ensureTestingBranch(repoPath) {
+  try {
+    await execFileAsync('git', ['checkout', 'testing'], { cwd: repoPath });
+  } catch {
+    await execFileAsync('git', ['checkout', '-b', 'testing'], { cwd: repoPath });
+  }
+}
+
+// 從主 clone 長出任務 worktree（branchName 從 baseBranch 建立）
+async function addWorktree(mainRepoPath, worktreePath, branchName, baseBranch) {
+  await execFileAsync('git', ['worktree', 'add', worktreePath, '-b', branchName, baseBranch], { cwd: mainRepoPath });
+}
+
+// 移除任務 worktree（rollback 或封存清理用）
+async function removeWorktree(mainRepoPath, worktreePath) {
+  await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath });
+}
+
+// 在主 clone 把 sourceBranch 併進 targetBranch（例：task/<id> → testing）。
+// 回傳格式比照 syncWithMain，讓上層沿用衝突處理。
+async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
+  await execFileAsync('git', ['checkout', targetBranch], { cwd: mainRepoPath });
+  try {
+    await execFileAsync('git', ['merge', '--no-ff', '--no-edit', sourceBranch], { cwd: mainRepoPath });
+    return { hasConflicts: false, conflictFiles: [] };
+  } catch (err) {
+    // git merge 衝突訊息寫在 stdout（非 stderr），三者都要看
+    const msg = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`.toLowerCase();
+    if (msg.includes('conflict') || msg.includes('automatic merge failed')) {
+      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: mainRepoPath }).catch(() => ({ stdout: '' }));
+      const conflictFiles = stdout.trim().split('\n').filter(Boolean);
+      return { hasConflicts: true, conflictFiles };
+    }
+    if (msg.includes('already up to date') || msg.includes('already up-to-date')) {
+      return { hasConflicts: false, conflictFiles: [] };
+    }
+    throw err;
+  }
+}
+
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, addWorktree, removeWorktree, mergeInto };

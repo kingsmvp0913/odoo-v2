@@ -31,6 +31,20 @@
       showToast(data.message || '通知', data.level || 'info');
     });
 
+    _socket.on('notify:action', (data) => {
+      const ACTION_LABELS = {
+        confirm_pending: '等待確認', final_pending: '等待審核', stopped: '已停止',
+        triage_blocked: '分診阻塞', cs_data_needed: '需補資料', cs_reply_pending: '等待回覆確認',
+        merge_conflict: '合併衝突', deploy_ready: '可部署'
+      };
+      const label = ACTION_LABELS[data.status] || data.status;
+      const name = data.title || data.task_id || `任務 ${data.taskId}`;
+      window.NotifyManager && window.NotifyManager.show(
+        `需要處理：${label}`, name, data.taskId,
+        () => { if (data.taskId != null) location.hash = `#/task/${data.taskId}`; }
+      );
+    });
+
     _socket.on('chat:reply', (data) => {
       const pid = String(data.projectId);
       window.UnreadStore.byProject[pid] = (window.UnreadStore.byProject[pid] || 0) + 1;

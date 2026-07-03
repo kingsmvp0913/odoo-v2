@@ -110,3 +110,32 @@ test('POST /api/tasks/:id/answer → updates status to confirm_answered', async 
     .set('Authorization', `Bearer ${adminToken}`);
   expect(detail.body.task.status).toBe('confirm_answered');
 });
+
+// 意圖：手動新增的任務要以 'new' 進入 pipeline（由 triage 接手），source 標記為 manual
+test('POST /api/tasks → 建立手動任務，status=new / source=manual', async () => {
+  const res = await request(app).post('/api/tasks')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ title: '手動任務', original_text: '需求描述' });
+  expect(res.status).toBe(201);
+  expect(res.body.status).toBe('new');
+  expect(res.body.source).toBe('manual');
+  expect(res.body.task_id).toMatch(/^manual_/);
+
+  // 確實寫入且可被列出
+  const detail = await request(app).get(`/api/tasks/${res.body.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(detail.body.task.title).toBe('手動任務');
+  expect(detail.body.task.original_text).toBe('需求描述');
+});
+
+test('POST /api/tasks → 缺標題回 400', async () => {
+  const res = await request(app).post('/api/tasks')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ original_text: '沒有標題' });
+  expect(res.status).toBe(400);
+});
+
+test('POST /api/tasks → 401 無 token', async () => {
+  const res = await request(app).post('/api/tasks').send({ title: 'x' });
+  expect(res.status).toBe(401);
+});

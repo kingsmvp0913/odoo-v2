@@ -109,7 +109,11 @@ window.TaskListView = Vue.defineComponent({
       isAdmin: false,
       batchMode: false,
       selectedIds: [],
-      batchWorking: false
+      batchWorking: false,
+      showAdd: false,
+      adding: false,
+      projects: [],
+      newTask: { title: '', original_text: '', project_id: '' }
     };
   },
   computed: {
@@ -150,6 +154,7 @@ window.TaskListView = Vue.defineComponent({
       this.serviceUrl = r.service_url || '';
     }).catch(() => {});
     Api.get('auth/me').then(r => { this.isAdmin = r.role === 'admin'; }).catch(() => {});
+    Api.get('projects').then(r => { this.projects = r || []; }).catch(() => {});
   },
   mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
   beforeUnmount() { SocketManager.setRefreshCallback(null); },
@@ -170,13 +175,34 @@ window.TaskListView = Vue.defineComponent({
     },
     needsAction(t) { return NEEDS_ACTION.includes(t.status); },
     isProcessing(t) {
-      if (this.testMode) return false;
       return ['analysis_running','coding_running','qa_running','merge_running','deploy_pending','deploy_fixing','wiki_updating','cs_running','branch_pending','confirm_answered'].includes(t.status);
     },
     isStopped(t) { return ['stopped', 'triage_blocked'].includes(t.status); },
     statusLabel,
     timeAgo,
     openTask(t) { this.$router.push(`/task/${t.id}`); },
+    openAdd() {
+      this.newTask = { title: '', original_text: '', project_id: '' };
+      this.showAdd = true;
+    },
+    async submitAdd() {
+      if (!this.newTask.project_id) return showToast('請選擇專案', 'error');
+      if (!this.newTask.title.trim()) return showToast('請填寫標題', 'error');
+      if (!this.newTask.original_text.trim()) return showToast('請填寫內容', 'error');
+      this.adding = true;
+      try {
+        await Api.post('tasks', {
+          title: this.newTask.title.trim(),
+          original_text: this.newTask.original_text,
+          project_id: this.newTask.project_id || null
+        });
+        this.showAdd = false;
+        this.filter = 'all';
+        await this.load();
+        showToast('已新增任務，將於下輪 pipeline 自動分診', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.adding = false; }
+    },
     async syncNow() {
       this.syncing = true;
       try {
@@ -228,11 +254,10 @@ window.TaskListView = Vue.defineComponent({
     sourceLabel(source) {
       return source === 'odoo' ? 'Odoo' : source === 'service' ? 'eService' : source;
     },
-    sourceBadgeStyle(source) {
-      const base = 'font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;text-decoration:none;';
-      if (source === 'odoo')    return base + 'background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe;';
-      if (source === 'service') return base + 'background:#f3e8ff;color:#7c3aed;border:1px solid #e9d5ff;';
-      return base + 'background:var(--surface);color:var(--text-secondary);border:1px solid var(--border);';
+    sourceBadgeClass(source) {
+      if (source === 'odoo')    return 'src-badge src-odoo';
+      if (source === 'service') return 'src-badge src-service';
+      return 'src-badge src-default';
     },
     async archiveTask(t, e) {
       e.stopPropagation();
@@ -333,6 +358,7 @@ window.TaskListView = Vue.defineComponent({
   template: `
     <div class="topbar">
       <h1>任務列表</h1>
+      <button class="btn btn-primary btn-sm" @click="openAdd">＋ 新增任務</button>
       <span v-if="testMode" style="font-size:12px;color:var(--warning);background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 8px">🧪 測試模式</span>
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
@@ -415,15 +441,13 @@ window.TaskListView = Vue.defineComponent({
           </div>
           <div class="task-source" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <a v-if="sourceUrl(t)" :href="sourceUrl(t)" target="_blank" @click.stop
-               :style="sourceBadgeStyle(t.source)">{{ sourceLabel(t.source) }}</a>
-            <span v-else :style="sourceBadgeStyle(t.source)">{{ sourceLabel(t.source) }}</span>
-            <span v-if="t.project_id && t.project_name"
-                  @click.stop="$router.push('/projects/' + t.project_id)"
-                  style="font-size:11px;padding:2px 8px;border-radius:10px;background:#e0f2fe;color:#0369a1;cursor:pointer;border:1px solid #bae6fd;font-weight:500">
+               :class="sourceBadgeClass(t.source)">{{ sourceLabel(t.source) }}</a>
+            <span v-else :class="sourceBadgeClass(t.source)">{{ sourceLabel(t.source) }}</span>
+            <span v-if="t.project_id && t.project_name" class="proj-chip"
+                  @click.stop="$router.push('/projects/' + t.project_id)">
               {{ t.project_name }}
             </span>
-            <a v-if="t.env_url" :href="t.env_url" target="_blank" @click.stop
-               style="font-size:11px;padding:1px 8px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text-secondary);text-decoration:none;background:#fff">
+            <a v-if="t.env_url" :href="t.env_url" target="_blank" @click.stop class="env-chip">
               🖥 測試機
             </a>
           </div>
@@ -454,6 +478,35 @@ window.TaskListView = Vue.defineComponent({
         </template>
         <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none"
           @click="batchDelete" :disabled="batchWorking">✕ 刪除</button>
+      </div>
+    </div>
+
+    <!-- 新增任務 modal -->
+    <div v-if="showAdd" @click.self="showAdd=false"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px;width:640px;max-width:94vw;max-height:90vh;overflow:auto;box-shadow:0 12px 48px rgba(0,0,0,0.4)">
+        <h2 style="margin:0 0 20px;font-size:18px">新增任務</h2>
+
+        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">專案 <span style="color:#ef4444">*</span></label>
+        <select v-model="newTask.project_id" class="form-control" style="width:100%;height:36px;font-size:14px;margin-bottom:18px">
+          <option value="" disabled>請選擇專案</option>
+          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
+
+        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">標題 <span style="color:#ef4444">*</span></label>
+        <input v-model="newTask.title" class="form-control" placeholder="任務標題"
+          style="width:100%;height:36px;font-size:14px;margin-bottom:18px" @keyup.enter="submitAdd" />
+
+        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">內容 <span style="color:#ef4444">*</span></label>
+        <textarea v-model="newTask.original_text" class="form-control" placeholder="需求描述（給分診/分析 Agent 參考）"
+          style="width:100%;min-height:180px;font-size:14px;line-height:1.6;resize:vertical;margin-bottom:20px"></textarea>
+
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-outline btn-sm" @click="showAdd=false" :disabled="adding">取消</button>
+          <button class="btn btn-primary btn-sm" @click="submitAdd" :disabled="adding">
+            {{ adding ? '新增中...' : '新增' }}
+          </button>
+        </div>
       </div>
     </div>
   `

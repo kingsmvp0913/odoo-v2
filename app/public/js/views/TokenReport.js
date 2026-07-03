@@ -12,7 +12,8 @@ window.TokenReportView = Vue.defineComponent({
         project_id: '',
         task_id: ''
       },
-      expandedTasks: {}
+      expandedTasks: {},
+      labels: {}
     };
   },
   computed: {
@@ -32,9 +33,11 @@ window.TokenReportView = Vue.defineComponent({
   },
   async created() {
     this.projects = await Api.get('projects').catch(() => []);
+    this.labels = await Api.get('agents/labels').catch(() => ({}));
     await this.load();
   },
   methods: {
+    agentLabel(type) { return this.labels[type] || type; },
     async load() {
       this.loading = true;
       try {
@@ -140,7 +143,7 @@ window.TokenReportView = Vue.defineComponent({
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">Agent 類型</div>
             <svg width="180" height="180" v-if="report.by_agent.length">
-              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.tokens,color:agentColor(r.agent_type),label:r.agent_type})))"
+              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.tokens,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
                 <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
               </path>
@@ -148,7 +151,7 @@ window.TokenReportView = Vue.defineComponent({
             <div v-for="r in report.by_agent" :key="r.agent_type"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:agentColor(r.agent_type),display:'inline-block'}"></span>
-              {{ r.agent_type }}: {{ fmtNum(r.tokens) }}
+              {{ agentLabel(r.agent_type) }}: {{ fmtNum(r.tokens) }}
             </div>
           </div>
 
@@ -220,7 +223,7 @@ window.TokenReportView = Vue.defineComponent({
                     <div v-for="a in t.agents" :key="a.agent_type"
                       style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:var(--text-secondary)">
                       <span :style="{width:'8px',height:'8px',borderRadius:'50%',background:agentColor(a.agent_type),display:'inline-block'}"></span>
-                      {{ a.agent_type }}: {{ fmtNum(a.tokens) }}
+                      {{ agentLabel(a.agent_type) }}: {{ fmtNum(a.tokens) }}
                       <span v-if="a.duration_ms" style="color:var(--text-muted)">({{ (a.duration_ms/1000).toFixed(1) }}s)</span>
                     </div>
                   </td>

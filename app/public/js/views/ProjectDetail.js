@@ -17,7 +17,8 @@ window.ProjectDetailView = Vue.defineComponent({
   },
   computed: {
     hasCloning() { return this.repos.some(r => r.clone_status === 'cloning'); },
-    hasIndexing() { return this.repos.some(r => r.graphify_status === 'running'); }
+    hasIndexing() { return this.repos.some(r => r.graphify_status === 'running'); },
+    envActive() { return !!(this.env && (this.env.status === 'setting_up' || this.env.status === 'running' || this.env.built)); }
   },
   watch: {
     'env.status'(val) {
@@ -93,6 +94,13 @@ window.ProjectDetailView = Vue.defineComponent({
         showToast('重新 clone 已開始', 'success');
       } catch (e) { showToast(e.message, 'error'); }
     },
+    async updateRepo(repoId) {
+      try {
+        await Api.post(`projects/${this.$route.params.id}/repos/${repoId}/reclone`, {});
+        await this.load();
+        showToast('更新中（git pull 最新程式碼）...', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
     async initWiki() {
       const doneRepos = this.repos.filter(r => r.clone_status === 'done');
       if (!doneRepos.length) {
@@ -112,10 +120,13 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch { this.env = { status: 'idle' }; }
     },
     async setupEnv() {
+      const restart = this.env && this.env.built;
       this.envWorking = true;
       try {
         await Api.post(`projects/${this.$route.params.id}/env/setup`, {});
-        showToast('環境建立已開始，系統自動分配 port...', 'success');
+        showToast(restart ? '環境啟動中...' : '環境建立已開始，系統自動分配 port...', 'success');
+        // 樂觀進入「建立中」：立即以 loading 取代按鈕、觸發輪詢，避免空窗期重複點擊
+        this.env = { ...(this.env || {}), status: 'setting_up' };
         await this.loadEnv();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
@@ -129,11 +140,20 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
     },
+    async syncUsers() {
+      this.envWorking = true;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/env/sync-users`, {});
+        showToast('使用者已同步到測試區（全部管理員）', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.envWorking = false; }
+    },
     async deleteEnv() {
+      if (!confirm('確定刪除整個測試環境？將移除 Odoo 原始碼與 venv（數 GB），下次需重新建立。')) return;
       this.envWorking = true;
       try {
         await Api.delete(`projects/${this.$route.params.id}/env`);
-        showToast('環境記錄已重設', 'success');
+        showToast('環境已刪除', 'success');
         await this.loadEnv();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
@@ -181,7 +201,10 @@ window.ProjectDetailView = Vue.defineComponent({
             </div>
             <div style="display:flex;gap:6px;margin-left:12px;flex-shrink:0">
               <button v-if="r.clone_status === 'error'" class="btn btn-outline btn-sm" @click="reclone(r.id)" title="重新 clone">↺</button>
-              <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="removeRepo(r.id)">移除</button>
+              <button v-if="r.clone_status === 'done'" class="btn btn-outline btn-sm" @click="updateRepo(r.id)" title="git pull 拉最新程式碼">↻ 更新</button>
+              <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="removeRepo(r.id)"
+                :disabled="envActive || r.clone_status === 'cloning'"
+                :title="envActive ? '測試環境使用中，請先刪除環境' : (r.clone_status === 'cloning' ? '正在 clone/更新中' : '')">移除</button>
             </div>
           </div>
         </div>
@@ -238,13 +261,18 @@ window.ProjectDetailView = Vue.defineComponent({
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <template v-if="env.status === 'idle' || env.status === 'error'">
               <button class="btn btn-primary btn-sm" @click="setupEnv" :disabled="envWorking">
-                {{ envWorking ? '處理中...' : '一鍵建立環境' }}
+                <span v-if="envWorking" class="spinner"></span>{{ envWorking ? '處理中…' : (env.built ? '重新啟動' : '一鍵建立環境') }}
               </button>
             </template>
+            <button v-if="env.status === 'setting_up'" class="btn btn-primary btn-sm" disabled>
+              <span class="spinner"></span>建立中…
+            </button>
             <template v-if="env.status === 'running'">
+              <a v-if="env.url" class="btn btn-primary btn-sm" :href="env.url" target="_blank">開啟測試區</a>
               <button class="btn btn-outline btn-sm" @click="stopEnv" :disabled="envWorking">停止</button>
             </template>
-            <button v-if="env.status !== 'idle'" class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteEnv" :disabled="envWorking">重設記錄</button>
+            <button v-if="env.built" class="btn btn-outline btn-sm" @click="syncUsers" :disabled="envWorking || env.status === 'setting_up'">👥 同步使用者</button>
+            <button v-if="env.status !== 'idle' || env.built" class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteEnv" :disabled="envWorking">刪除環境</button>
             <button class="btn btn-outline btn-sm" @click="loadEnv" :disabled="envWorking">↺ 重新整理</button>
           </div>
           <div v-if="env.status === 'setting_up'" style="font-size:11px;color:var(--text-muted);margin-top:8px">

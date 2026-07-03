@@ -40,6 +40,26 @@ function registerRoutes(app) {
     }
   });
 
+  // Manually create a task → enters pipeline as 'new'（下輪 triage 自動接手）
+  app.post('/api/tasks', verifyToken, async (req, res) => {
+    try {
+      const { title, original_text, project_id } = req.body || {};
+      if (!title || !String(title).trim()) {
+        return res.status(400).json({ error: '請填寫標題' });
+      }
+      const taskId = `manual_${Date.now()}`;
+      const { rows } = await query(
+        `INSERT INTO tasks (user_id, task_id, source, title, original_text, project_id, status)
+         VALUES ($1, $2, 'manual', $3, $4, $5, 'new')
+         RETURNING id, task_id, source, title, status, project_id, created_at, updated_at`,
+        [req.userId, taskId, String(title).trim(), original_text || '', project_id || null]
+      );
+      res.status(201).json(rows[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Task detail + last 5 logs
   app.get('/api/tasks/:id', verifyToken, async (req, res) => {
     try {

@@ -1,4 +1,5 @@
 const { callClaude } = require('./claude-runner');
+const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 
@@ -18,19 +19,19 @@ async function chatReply(projectId, chatId, userMessage, userId) {
     .map(m => `${m.role === 'ai' ? '助理' : '用戶'}：${m.content}`)
     .join('\n\n');
 
-  const prompt = `你是一個熟悉 Odoo 的技術助理。請根據以下 Wiki 資料回答問題。若 Wiki 未涵蓋，可依你的知識回答。
-
-Wiki 資料：
-${wikiContext || '（無 wiki）'}${historyText ? '\n\n[對話歷史]\n' + historyText : ''}
-
-用戶：${userMessage}`;
+  const agent = loadAgent('chat');
+  const prompt = agent.render({
+    wiki: wikiContext || '（無 wiki）',
+    history: historyText ? '\n\n[對話歷史]\n' + historyText : '',
+    user_message: userMessage
+  });
 
   await query(
     'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
     [chatId, 'user', userMessage]
   );
 
-  const chatResult = await callClaude(prompt);
+  const chatResult = await callClaude(prompt, undefined, { model: agent.model });
   const reply = chatResult.text || '（無回覆）';
   await logTokenUsage({ projectId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
 

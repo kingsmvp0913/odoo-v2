@@ -12,6 +12,13 @@ window.showToast = showToast;
 const needsActionCount = ref(0);
 window.needsActionCount = needsActionCount;
 
+const claudeUsage = ref(null);
+async function loadClaudeUsage() {
+  if (!Api.isLoggedIn()) return;
+  try { claudeUsage.value = await Api.get('claude-usage'); } catch { /* keep stale */ }
+}
+window.loadClaudeUsage = loadClaudeUsage;
+
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
@@ -29,6 +36,7 @@ const router = createRouter({
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/admin/agents', component: window.AdminAgentsView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
 });
@@ -49,25 +57,57 @@ router.afterEach((to) => {
     Api.get('auth/me').then(me => {
       SocketManager.initSocket(me.id);
     }).catch(() => {});
+    loadClaudeUsage();
   }
   if (to.path === '/login') SocketManager.disconnectSocket();
 });
 
+setInterval(loadClaudeUsage, 60000);
+
 const App = defineComponent({
   name: 'App',
-  setup() { return { toasts, needsActionCount }; },
-  data() { return { _role: '' }; },
+  setup() { return { toasts, needsActionCount, claudeUsage }; },
+  data() { return { _role: '', isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
   computed: {
     isLoggedIn() { return Api.isLoggedIn(); },
-    isAdmin() { return this._role === 'admin'; }
+    isAdmin() { return this._role === 'admin'; },
+    usageBars() {
+      const u = this.claudeUsage;
+      if (!u || !u.available) return [];
+      const rows = [];
+      const add = (key, label, w) => {
+        if (!w || w.utilization == null) return;
+        const pct = Math.round(w.utilization);
+        rows.push({
+          key, label, pct,
+          level: pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok',
+          reset: w.resets_at ? this.fmtReset(w.resets_at) : ''
+        });
+      };
+      add('5h', '5 小時', u.five_hour);
+      add('7d', '本週', u.seven_day);
+      add('opus', 'Opus 週', u.seven_day_opus);
+      add('sonnet', 'Sonnet 週', u.seven_day_sonnet);
+      return rows;
+    }
   },
   async mounted() {
+    this._onThemeChange = e => { this.isDark = e.detail === 'dark'; };
+    window.addEventListener('themechange', this._onThemeChange);
     if (Api.isLoggedIn()) {
       const me = await Api.get('auth/me').catch(() => ({}));
       this._role = me.role || '';
+      ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
+      this.isDark = ThemeManager.current() === 'dark';
+      loadClaudeUsage();
     }
   },
+  unmounted() { window.removeEventListener('themechange', this._onThemeChange); },
   methods: {
+    fmtReset(iso) {
+      return new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    },
+    toggleTheme() { ThemeManager.toggle(); },
     logout() { Api.clearToken(); SocketManager.disconnectSocket(); this.$router.push('/login'); }
   },
   template: `
@@ -77,7 +117,13 @@ const App = defineComponent({
     <template v-else>
       <div style="display:flex;height:100vh;flex:1;min-width:0">
         <aside class="sidebar">
-          <div class="sidebar-header">AI Dev<span>工作台</span></div>
+          <div class="sidebar-header" style="display:flex;align-items:center;gap:6px">
+            <div>AI Dev<span>工作台</span></div>
+            <button @click="toggleTheme" :title="isDark ? '切換淺色模式' : '切換深色模式'"
+              style="margin-left:auto;background:transparent;border:none;color:var(--sidebar-text);cursor:pointer;font-size:16px;padding:2px 4px;line-height:1">
+              {{ isDark ? '☀️' : '🌙' }}
+            </button>
+          </div>
           <nav>
             <router-link to="/" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">
@@ -99,6 +145,19 @@ const App = defineComponent({
             </router-link>
           </nav>
           <div class="sidebar-footer">
+            <div v-if="usageBars.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
+              <div class="usage-title">Claude 用量</div>
+              <div v-for="bar in usageBars" :key="bar.key" class="usage-row">
+                <div class="usage-row-top">
+                  <span>{{ bar.label }}</span>
+                  <span>{{ bar.pct }}%</span>
+                </div>
+                <div class="usage-track">
+                  <div class="usage-fill" :class="bar.level" :style="{ width: bar.pct + '%' }"></div>
+                </div>
+                <div v-if="bar.reset" class="usage-reset">重置 {{ bar.reset }}</div>
+              </div>
+            </div>
             <a @click="logout" style="cursor:pointer">登出</a>
           </div>
         </aside>

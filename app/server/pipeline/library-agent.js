@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const { callClaude } = require('./claude-runner');
+const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -111,29 +112,28 @@ async function refreshWikiNode(projectId, slug, userId, signal) {
     notify.emitToUser(userId, 'wiki:progress', { projectId, slug, stage: 'refresh', percent, message: message || '' });
   emit(10, '準備重新生成');
 
-  let prompt;
+  let context;
   if (node.node_type === 'overview') {
     const manifests = [];
     for (const r of readyRepos) _collectManifests(r.local_path, manifests, 15);
-    prompt = `你是 Library Agent。重新產生 Odoo 專案「${project.name}」的專案概論（200-400 字繁中）。
-回傳 JSON：{"slug":"overview","title":"專案概論","content":"<Markdown>"}
+    context = `類型：重建專案概論（overview，200-400 字繁中）
+回傳 {"slug":"overview","title":"專案概論","content":"<Markdown>"}
+專案「${project.name}」
 
 ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   } else if (node.node_type === 'module') {
     const moduleName = node.slug.replace(/^module-/, '');
     const src = _collectModuleSource(readyRepos, moduleName);
-    prompt = `你是 Library Agent。為模組「${moduleName}」產生功能描述（繁中 Markdown）。
-回傳 JSON：{"slug":"${node.slug}","title":"${moduleName}","content":"<Markdown>"}
-
-模組原始碼節錄：
+    context = `類型：重建模組頁（module，繁中 Markdown）
+回傳 {"slug":"${node.slug}","title":"${moduleName}","content":"<Markdown>"}
+模組「${moduleName}」原始碼節錄：
 ${src || '（無原始碼）'}`;
   } else {
     const { rows: [parent] } = await query('SELECT slug FROM wiki_pages WHERE id=$1', [node.parent_id]);
     const moduleName = (parent?.slug || '').replace(/^module-/, '') || 'unknown';
     const src = _collectModuleSource(readyRepos, moduleName);
-    prompt = `你是 Library Agent。精修以下功能 wiki（繁中 Markdown），保留正確內容、補充與修正。
-回傳 JSON：{"slug":"${node.slug}","title":"<標題>","content":"<Markdown>"}
-
+    context = `類型：精修功能頁（function，繁中 Markdown），保留正確內容、補充與修正
+回傳 {"slug":"${node.slug}","title":"<標題>","content":"<Markdown>"}
 現有內容：
 ${node.content || '（空）'}
 
@@ -143,7 +143,8 @@ ${src || '（無原始碼）'}`;
 
   let title = node.title, content = node.content;
   try {
-    const { text, usage, durationMs } = await callClaude(prompt, signal, { userId, notify });
+    const agent = loadAgent('library');
+    const { text, usage, durationMs } = await callClaude(agent.render({ context }), signal, { userId, notify, model: agent.model });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { const p = JSON.parse(m[0]); title = p.title || title; content = p.content ?? content; }
@@ -185,13 +186,9 @@ async function runLibraryAgent(taskId, userId, signal) {
 
   let wikiUpdate = null;
   try {
-    const prompt = `你是 Library Agent，負責維護專案 wiki。
-
-根據以下任務資訊，產生一筆 wiki 更新。回傳 JSON 格式（不要其他文字）：
-{"slug":"<slug>","title":"<標題>","content":"<Markdown 內容>"}
-
+    const agent = loadAgent('library');
+    const context = `類型：任務完成紀錄（新增/更新功能頁）
 slug 規則：英文小寫+連字號，描述功能主題（如 "sales-order-flow"）。
-
 任務標題：${task.title || '未命名'}
 任務分析：
 ${task.analysis_yaml || '無'}
@@ -199,7 +196,7 @@ ${task.analysis_yaml || '無'}
 執行日誌（最後 20 筆）：
 ${logText || '無'}`;
 
-    const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify });
+    const { text, usage, durationMs } = await callClaude(agent.render({ context }), signal, { taskId, userId, notify, model: agent.model });
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) wikiUpdate = JSON.parse(jsonMatch[0]);
@@ -261,14 +258,10 @@ async function initProjectWiki(projectId, userId, signal) {
 
   // 1) 專案概論（CLI 一次）
   emit('overview', 40, '產生專案概論');
-  const prompt = `你是 Library Agent，負責為 Odoo 專案建立 wiki 的「專案概論」。
-根據以下模組的 __manifest__.py，產生一段精簡的專案概論（200-400 字）。
-回傳 JSON（不要其他文字）：{"slug":"overview","title":"專案概論","content":"<Markdown>"}
-
-要求：
-- content 用繁體中文，說明專案整體用途與包含哪些模組
-- 不要逐一複製 manifest 原文，用敘述方式
-
+  const agent = loadAgent('library');
+  const context = `類型：建立專案概論（overview，200-400 字）
+回傳 {"slug":"overview","title":"專案概論","content":"<Markdown>"}
+要求：content 用繁體中文，說明專案整體用途與包含哪些模組；不要逐一複製 manifest 原文，用敘述方式。
 專案：${project.name}（Odoo ${project.odoo_version}）
 
 ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
@@ -276,7 +269,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   let overviewTitle = '專案概論';
   let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
   try {
-    const { text, usage, durationMs } = await callClaude(prompt, signal, { userId, notify });
+    const { text, usage, durationMs } = await callClaude(agent.render({ context }), signal, { userId, notify, model: agent.model });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { const p = JSON.parse(m[0]); overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }

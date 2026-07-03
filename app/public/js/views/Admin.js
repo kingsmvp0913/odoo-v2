@@ -231,6 +231,17 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
+        <!-- Agent 管理 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Agent 管理</div>
+            <div class="setting-block-desc">調整各 agent 的模型與提示詞。</div>
+          </div>
+          <div class="setting-block-footer" style="border-top:none;padding-top:0">
+            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/agents')">前往 Agent 管理 →</button>
+          </div>
+        </div>
+
       </div>
     </div>
   `

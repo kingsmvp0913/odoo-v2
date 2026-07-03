@@ -5,21 +5,13 @@
  *   verifyToken(req, res, next)  — Express middleware
  *   registerRoutes(app)          — mounts all auth routes
  */
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { query } = require('./db');
+const { hashPassword, checkPassword } = require('./password');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 const JWT_EXPIRES = '7d';
-
-async function hashPassword(pw) {
-  return bcrypt.hash(pw, 12);
-}
-
-async function checkPassword(pw, hash) {
-  return bcrypt.compare(pw, hash);
-}
 
 function signToken(userId) {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES });

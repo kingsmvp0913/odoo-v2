@@ -33,35 +33,6 @@
   "theme": "dark",
   "skipDangerousModePermissionPrompt": true,
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "codex開工",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pwsh -NoProfile -File \".claude/scripts/_pipeline_trigger.ps1\""
-          }
-        ]
-      },
-      {
-        "matcher": "開工",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pwsh -NoProfile -File \".claude/scripts/_pipeline_trigger.ps1\""
-          }
-        ]
-      },
-      {
-        "matcher": "同步",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pwsh -NoProfile -File \".claude/scripts/_sync.ps1\""
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [

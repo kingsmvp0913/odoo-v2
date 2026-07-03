@@ -1,10 +1,11 @@
-const bcrypt = require('bcryptjs');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { query } = require('./db');
+const { hashPassword } = require('./password');
 const { verifyToken } = require('./auth');
+const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -94,7 +95,7 @@ function registerRoutes(app) {
       const { username, password, display_name, role } = req.body;
       if (!username || !password) return res.status(400).json({ error: 'username and password required' });
       if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
-      const password_hash = await bcrypt.hash(password, 12);
+      const password_hash = await hashPassword(password);
       const { rows } = await query(
         `INSERT INTO users (username, password_hash, display_name, role)
          VALUES ($1, $2, $3, $4) RETURNING id, username, display_name, role`,
@@ -224,6 +225,57 @@ function registerRoutes(app) {
       }
       res.json({ ok: true });
     });
+  });
+
+  // --- Agent 管理 ---
+
+  // 全域規則 CLAUDE.md：非單一 agent，只有內容可編（無 model）
+  const CLAUDE_MD = path.join(__dirname, '..', '..', '.claude', 'CLAUDE.md');
+  function claudeEntry(withBody) {
+    const e = {
+      name: 'CLAUDE', role: '全域', label: '全域規則 (CLAUDE.md)',
+      description: '所有開發共用的規則，非單一 agent', model: null, stage: null
+    };
+    if (withBody) e.prompt = fs.existsSync(CLAUDE_MD) ? fs.readFileSync(CLAUDE_MD, 'utf8') : '';
+    return e;
+  }
+
+  // 列出所有 agent（不含 prompt body）；置頂全域規則
+  app.get('/api/admin/agents', auth, (_req, res) => {
+    try { res.json([claudeEntry(false), ...listAgents()]); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 單一 agent（含 prompt body）
+  app.get('/api/admin/agents/:name', auth, (req, res) => {
+    try {
+      if (req.params.name === 'CLAUDE') return res.json(claudeEntry(true));
+      const a = loadAgent(req.params.name);
+      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage, prompt: a.body });
+    } catch (err) {
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: err.message });
+    }
+  });
+
+  // 更新 model 與 prompt（僅此兩者可改）；CLAUDE 只寫內容
+  app.put('/api/admin/agents/:name', auth, (req, res) => {
+    try {
+      const { model, prompt } = req.body || {};
+      if (req.params.name === 'CLAUDE') {
+        if (typeof prompt === 'string') fs.writeFileSync(CLAUDE_MD, prompt);
+        return res.json(claudeEntry(true));
+      }
+      const a = updateAgent(req.params.name, { model, prompt });
+      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage, prompt: a.body });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
+
+  // 中文名稱對照表（stage → label），供用量報表等全站顯示；一般登入即可讀
+  app.get('/api/agents/labels', verifyToken, (_req, res) => {
+    try { res.json(getLabels()); }
+    catch (err) { res.status(500).json({ error: err.message }); }
   });
 }
 

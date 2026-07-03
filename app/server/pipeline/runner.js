@@ -9,9 +9,10 @@
  *   resetLoopCounter(userId) → Promise<void>
  */
 
+const path = require('path');
 const { query } = require('../db');
 const { analyzeTask } = require('./analysis');
-const { createBranch, checkoutDefault, runDeploy } = require('./git');
+const { createBranch, checkoutDefault, runDeploy, addWorktree, removeWorktree } = require('./git');
 const notify = require('../notify');
 
 const LOOP_LIMIT = 5;
@@ -86,14 +87,31 @@ async function processTask(task, settings) {
   if (status === 'branch_pending') {
     const branchName = `task/${task_id}`;
     if (task.project_id) {
-      // Project task: create branch in project repo (not user settings repo)
-      const { rows: [repo] } = await query(
-        'SELECT local_path FROM project_repos WHERE project_id = $1 AND is_primary = true',
+      // Project task: 為每個 repo 建立獨立 worktree（並行隔離），branch 從 testing 長出
+      const { rows: repos } = await query(
+        "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
         [task.project_id]
       );
-      if (repo?.local_path) {
-        await checkoutDefault(repo.local_path);
-        await createBranch(repo.local_path, branchName);
+      if (repos.length) {
+        const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task_id);
+        const created = [];
+        try {
+          for (const repo of repos) {
+            const wtPath = path.join(wtParent, path.basename(repo.local_path));
+            // testing 為主 clone 常駐分支（triggerClone 已建）；缺少時 addWorktree 會失敗並進 rollback
+            await addWorktree(repo.local_path, wtPath, branchName, 'testing');
+            created.push({ mainRepo: repo.local_path, wtPath });
+          }
+        } catch (err) {
+          // 回滾已建 worktree，避免半殘狀態
+          for (const c of created) await removeWorktree(c.mainRepo, c.wtPath).catch(() => {});
+          await query(
+            "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+            [taskId, `建立 worktree 失敗：${err.message}`]
+          );
+          notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
+          return;
+        }
       }
     } else if (settings.git_repo_path) {
       await checkoutDefault(settings.git_repo_path);

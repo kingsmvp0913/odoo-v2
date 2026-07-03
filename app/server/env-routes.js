@@ -9,7 +9,16 @@ function registerRoutes(app) {
         'SELECT id, status, pid, port, url, error_msg, setup_log, updated_at FROM odoo_envs WHERE project_id = $1',
         [req.params.id]
       );
-      res.json(rows.length ? rows[0] : { status: 'idle' });
+      const env = rows.length ? rows[0] : { status: 'idle' };
+      // built = 環境目錄已完整建置（.ready 標記存在），前端據此顯示「重新啟動」而非「一鍵建立環境」
+      try {
+        const fs = require('fs');
+        const { ENV_BASE: base } = require('./pipeline/env-agent');
+        const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
+        const dirName = project ? (project.folder_name || project.name) : null;
+        env.built = !!(dirName && fs.existsSync(path.join(base, dirName, '.ready')));
+      } catch { env.built = false; }
+      res.json(env);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -31,6 +40,19 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  app.post('/api/projects/:id/env/sync-users', verifyToken, async (req, res) => {
+    try {
+      // #3 建立中不得同步（DB 正在 init，避免撞在一起）
+      const { rows: [env] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [req.params.id]);
+      if (env?.status === 'setting_up') {
+        return res.status(409).json({ error: '環境建立中，請待建立完成再同步' });
+      }
+      const { syncUsers } = require('./pipeline/env-agent');
+      const log = await syncUsers(req.params.id);
+      res.json({ ok: true, log });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.delete('/api/projects/:id/env', verifyToken, async (req, res) => {
     try {
       const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [req.params.id]);
@@ -39,7 +61,7 @@ function registerRoutes(app) {
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (project) {
         const fs = require('fs');
-        const base = process.env.ODOO_ENV_BASE || '/opt/odoo-envs';
+        const { ENV_BASE: base } = require('./pipeline/env-agent');
         const dirName = project.folder_name || project.name;
         const envDir = path.join(base, dirName);
         const resolved = path.resolve(envDir);

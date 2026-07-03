@@ -1,18 +1,30 @@
 const fs = require('fs');
 const path = require('path');
 const { callClaude } = require('./claude-runner');
+const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
-const { syncWithMain, commitAll } = require('./git');
+const { mergeInto, commitAll } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
 
-async function getProjectRepo(projectId) {
+// 專案層 merge 序列鎖：同一專案的 task 併入 testing 必須一次一個，
+// 避免同時寫壞共用的主 clone（testing working tree）。以 Promise 鏈串接。
+const _projectMergeChains = new Map();
+function withProjectMergeLock(projectId, fn) {
+  const prev = _projectMergeChains.get(projectId) || Promise.resolve();
+  const run = prev.then(fn, fn); // 不論前一個成功或失敗都接續執行
+  _projectMergeChains.set(projectId, run.catch(() => {}));
+  return run;
+}
+
+async function getProjectRepos(projectId) {
   const { rows } = await query(
-    `SELECT pr.local_path FROM project_repos pr
-     WHERE pr.project_id = $1 AND pr.is_primary = true`,
+    `SELECT local_path, label FROM project_repos
+     WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL
+     ORDER BY is_primary DESC, id`,
     [projectId]
   );
-  return rows[0] || null;
+  return rows;
 }
 
 async function resolveConflict(repoPath, filePath, signal, opts = {}) {
@@ -25,10 +37,10 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   }
   if (!content.includes('<<<<<<<')) return true;
 
+  const agent = loadAgent('merge');
   const resolveResult = await callClaude(
-    `以下是有 Git 合併衝突的檔案：${filePath}\n` +
-    `請解決所有衝突，只輸出最終正確的檔案內容，不要包含 <<<<<<<、=======、>>>>>>> 等衝突標記，也不要有任何說明文字，直接輸出檔案內容：\n\n${content}`,
-    signal, opts
+    agent.render({ file_path: filePath, content }),
+    signal, { ...opts, model: agent.model }
   );
   const resolved = resolveResult.text;
   if (resolveResult.usage && opts.taskId) {
@@ -46,76 +58,86 @@ async function runMergeAgent(taskId, userId, signal) {
     [taskId]
   );
   if (!task || !task.project_id) return;
+  // 同專案序列化：一次只放行一個 task 併入 testing
+  return withProjectMergeLock(task.project_id, () => doMerge(task, taskId, userId, signal));
+}
 
-  const repo = await getProjectRepo(task.project_id);
-  if (!repo?.local_path) {
+// 把 task 分支逐 repo 併入 testing（在各主 clone，主 clone 常駐 testing）。
+// 有未解衝突 → merge_conflict（記錄哪個 repo 的哪些檔）；否則 → deploy_ready。
+async function doMerge(task, taskId, userId, signal) {
+  const repos = await getProjectRepos(task.project_id);
+  if (!repos.length) {
     await query("UPDATE tasks SET status='deploy_ready', updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_ready' });
     return;
   }
 
-  notify.emitToUser(userId, 'terminal:output', { taskId, data: '[MERGE] 正在同步主線...\n' });
+  const branch = task.git_branch;
+  const conflictByRepo = [];
 
-  let syncResult;
-  try {
-    syncResult = await syncWithMain(repo.local_path);
-  } catch (err) {
-    await query(
-      `UPDATE tasks SET status='stopped', blocker_type='tech',
-       blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, `同步主線失敗: ${err.message}`]
-    );
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
-    return;
-  }
+  for (const repo of repos) {
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：併入 testing...\n` });
 
-  if (!syncResult.hasConflicts) {
-    notify.emitToUser(userId, 'terminal:output', { taskId, data: '[MERGE] 同步成功，無衝突\n' });
-    await query("UPDATE tasks SET status='deploy_ready', updated_at=NOW() WHERE id=$1", [taskId]);
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_ready' });
-    return;
-  }
-
-  notify.emitToUser(userId, 'terminal:output', {
-    taskId,
-    data: `[MERGE] 發現 ${syncResult.conflictFiles.length} 個衝突檔案，嘗試自動解決...\n`
-  });
-
-  const failedFiles = [];
-  for (const file of syncResult.conflictFiles) {
-    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] 處理: ${file}\n` });
+    let mergeResult;
     try {
-      const ok = await resolveConflict(repo.local_path, file, signal, { taskId, userId, notify });
-      if (!ok) failedFiles.push(file);
-    } catch {
-      failedFiles.push(file);
-    }
-  }
-
-  if (failedFiles.length === 0) {
-    try {
-      await commitAll(repo.local_path, '[merge] resolve conflicts with main');
-      notify.emitToUser(userId, 'terminal:output', { taskId, data: '[MERGE] 衝突已自動解決\n' });
-      await query("UPDATE tasks SET status='deploy_ready', updated_at=NOW() WHERE id=$1", [taskId]);
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_ready' });
+      mergeResult = await mergeInto(repo.local_path, 'testing', branch);
     } catch (err) {
       await query(
-        `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-        [taskId, `提交解決衝突失敗: ${err.message}`]
+        `UPDATE tasks SET status='stopped', blocker_type='tech',
+         blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+        [taskId, `${repo.label} 併入 testing 失敗: ${err.message}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return;
     }
-  } else {
-    notify.emitToUser(userId, 'terminal:output', {
-      taskId,
-      data: `[MERGE] 以下檔案需人工解決：${failedFiles.join(', ')}\n`
-    });
+
+    if (!mergeResult.hasConflicts) {
+      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：無衝突\n` });
+      continue;
+    }
+
+    // 嘗試自動解衝突（逐檔）
+    const failed = [];
+    for (const file of mergeResult.conflictFiles) {
+      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label} 處理: ${file}\n` });
+      try {
+        const ok = await resolveConflict(repo.local_path, file, signal, { taskId, userId, notify });
+        if (!ok) failed.push(file);
+      } catch {
+        failed.push(file);
+      }
+    }
+
+    if (failed.length === 0) {
+      try {
+        await commitAll(repo.local_path, `[merge] ${branch} → testing (resolve conflicts)`);
+        notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：衝突已自動解決\n` });
+      } catch (err) {
+        await query(
+          `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+          [taskId, `${repo.label} 提交解決衝突失敗: ${err.message}`]
+        );
+        notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+        return;
+      }
+    } else {
+      conflictByRepo.push({ repo: repo.label, files: failed });
+    }
+  }
+
+  if (conflictByRepo.length) {
+    const summary = conflictByRepo.map(c => `${c.repo}: ${c.files.join(', ')}`).join('；');
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] 需人工解決：${summary}\n` });
     await query(
       `UPDATE tasks SET status='merge_conflict', merge_conflict_data=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, JSON.stringify({ conflictFiles: failedFiles })]
+      [taskId, JSON.stringify({ repos: conflictByRepo })]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'merge_conflict' });
+    return;
   }
+
+  await query("UPDATE tasks SET status='deploy_ready', updated_at=NOW() WHERE id=$1", [taskId]);
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_ready' });
 }
 
 module.exports = { runMergeAgent };

@@ -1,3 +1,4 @@
+const path = require('path');
 const { newDb } = require('pg-mem');
 
 jest.mock('../pipeline/analysis', () => ({
@@ -6,7 +7,9 @@ jest.mock('../pipeline/analysis', () => ({
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn().mockResolvedValue(undefined),
   checkoutDefault: jest.fn().mockResolvedValue(undefined),
-  runDeploy: jest.fn().mockResolvedValue(undefined)
+  runDeploy: jest.fn().mockResolvedValue(undefined),
+  addWorktree: jest.fn().mockResolvedValue(undefined),
+  removeWorktree: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../notify', () => ({
   emitToUser: jest.fn(),
@@ -42,6 +45,11 @@ beforeEach(async () => {
   require('../pipeline/git').createBranch.mockReset();
   require('../pipeline/git').checkoutDefault.mockReset();
   require('../pipeline/git').runDeploy.mockReset();
+  require('../pipeline/git').addWorktree.mockReset();
+  require('../pipeline/git').removeWorktree.mockReset();
+  // 預設回傳 Promise（mockReset 會清掉 jest.mock 設的 resolved 值）
+  require('../pipeline/git').addWorktree.mockResolvedValue(undefined);
+  require('../pipeline/git').removeWorktree.mockResolvedValue(undefined);
   require('../notify').emitToUser.mockReset();
   await runnerModule.resetLoopCounter(userId);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
@@ -79,6 +87,65 @@ test('runPipeline creates branch for branch_pending task', async () => {
   const { rows } = await dbModule.query('SELECT status, git_branch FROM tasks WHERE id = $1', [taskId]);
   expect(rows[0].status).toBe('coding_running');
   expect(rows[0].git_branch).toContain('task/');
+});
+
+test('branch_pending project task creates one worktree per repo from testing', async () => {
+  const { addWorktree } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P1','17.0','p1') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status)
+     VALUES ($1,'main','u','/repos/p1/main',true,'done'),($1,'hr','u','/repos/p1/hr',false,'done')`,
+    [proj.id]
+  );
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id)
+     VALUES ($1,'task_odoo_wt1','odoo','T','c','branch_pending',$2) RETURNING id`,
+    [userId, proj.id]
+  );
+
+  await runnerModule.runPipeline(userId);
+
+  // 每個 repo 各建一個 worktree；branch=task/<id>，base=testing；路徑相異＝並行隔離的意圖
+  expect(addWorktree).toHaveBeenCalledTimes(2);
+  const calls = addWorktree.mock.calls;
+  expect(new Set(calls.map(c => c[1])).size).toBe(2);
+  for (const c of calls) {
+    expect(c[2]).toBe('task/task_odoo_wt1');
+    expect(c[3]).toBe('testing');
+    expect(c[1]).toContain(path.join('.worktrees', 'task_odoo_wt1'));
+  }
+
+  const { rows } = await dbModule.query('SELECT status, git_branch FROM tasks WHERE id=$1', [t.id]);
+  expect(rows[0].status).toBe('coding_running');
+  expect(rows[0].git_branch).toBe('task/task_odoo_wt1');
+});
+
+test('branch_pending rolls back worktrees and stops task when add fails', async () => {
+  const { addWorktree, removeWorktree } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P2','17.0','p2') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status)
+     VALUES ($1,'main','u','/repos/p2/main',true,'done'),($1,'hr','u','/repos/p2/hr',false,'done')`,
+    [proj.id]
+  );
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id)
+     VALUES ($1,'task_odoo_wt2','odoo','T','c','branch_pending',$2) RETURNING id`,
+    [userId, proj.id]
+  );
+  // 第一個 repo 成功，第二個失敗 → 應回滾第一個並把任務標 stopped
+  addWorktree.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("branch already exists"));
+
+  await runnerModule.runPipeline(userId);
+
+  expect(removeWorktree).toHaveBeenCalledTimes(1);  // 回滾已建的那一個
+  const { rows } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(rows[0].status).toBe('stopped');
+  expect(rows[0].blocker_content).toContain('worktree');
 });
 
 test('runPipeline skips branch creation when git_repo_path not set', async () => {

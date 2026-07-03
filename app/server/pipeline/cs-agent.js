@@ -1,4 +1,5 @@
 const { callClaude } = require('./claude-runner');
+const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -19,42 +20,16 @@ async function runCsAgent(taskId, userId, signal) {
     wikiContext = pages.map(p => `## ${p.title}\n${p.content}`).join('\n\n');
   }
 
-  const prompt = `你是客服分流 Agent。分析以下客戶問題，判斷其性質並決定處理方式。
-
-回傳 JSON（不要其他文字）：
-{
-  "type": "operation",
-  "reply": "給客戶的回覆文字（若 type=operation）",
-  "question": null
-}
-或
-{
-  "type": "code_change_clear",
-  "reply": null,
-  "question": null
-}
-或
-{
-  "type": "code_change_vague",
-  "reply": null,
-  "questions": ["問題1", "問題2", "問題3"]
-}
-
-判斷標準：
-- operation：純操作問題，用現有功能就能解決
-- code_change_clear：需要修改程式，且描述足夠清楚（有明確的預期行為、步驟可重現）
-- code_change_vague：需要修改程式，但描述模糊（缺乏重現步驟、版本資訊等）；questions 陣列每項為一個獨立問題字串，最多 6 題
-
-客戶問題標題：${task.title || '未命名'}
-客戶問題內容：
-${task.original_text || '（無詳細內容）'}
-
-Wiki 參考資料：
-${wikiContext || '（無 wiki）'}`;
+  const agent = loadAgent('cs');
+  const prompt = agent.render({
+    title: task.title || '未命名',
+    original_text: task.original_text || '（無詳細內容）',
+    wiki: wikiContext || '（無 wiki）'
+  });
 
   let result = null;
   try {
-    const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify });
+    const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify, model: agent.model });
     await logTokenUsage({ taskId: task.task_id }, task.user_id, 'cs', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) result = JSON.parse(jsonMatch[0]);

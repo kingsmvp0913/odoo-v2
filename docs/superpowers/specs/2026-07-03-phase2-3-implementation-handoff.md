@@ -1,24 +1,26 @@
 # Phase 2 + 3 實作接手指引（重開 session 用）
 
-> 給下一個乾淨 session：讀完這份就能直接實作。Phase 1 已完成並驗證，本文件銜接 Phase 2、Phase 3。
+> 給下一個乾淨 session：讀完這份就能直接實作。
+> **⚠️ 重要：Phase 1 的程式碼在 2026-07-03 一次 git reset/clean 中被還原、已從 working tree 消失（設計 spec 仍完整）。所以新 session 要「先重做 Phase 1，再做 Phase 2/3」。**
 
 ## 0. 開場提示詞（貼給新 session）
 
 ```
-延續多 repo worktree pipeline 專案。Phase 1（worktree + testing 分支流）已實作並驗證完成、測試全綠。
-現在要實作 Phase 2（AI Playwright E2E 測試）與 Phase 3（人工審核 gate + 封存 backup）。
-設計已定案，spec 在：
+延續多 repo worktree pipeline 專案。設計已定案但 Phase 1 程式碼被 git reset 還原、需重做。
+依序實作 Phase 1 → Phase 2（AI Playwright E2E 測試）→ Phase 3（人工審核 gate + 封存 backup）。
+spec 在：
+- docs/superpowers/specs/2026-07-03-multi-repo-worktree-phase1-design.md（先做，注意 §6 後那段 ⚠️ mergeInto stdout bug）
 - docs/superpowers/specs/2026-07-03-ai-e2e-testing-phase2-design.md
 - docs/superpowers/specs/2026-07-03-review-archive-phase3-design.md
 - 接手指引：docs/superpowers/specs/2026-07-03-phase2-3-implementation-handoff.md
-請先讀這三份，照指引的實作順序做，每段附 jest mock 測試，最後用真實測試環境驗證 Playwright。
+請先讀這四份，照 Phase 1 spec 重做 Phase 1（每步附 jest mock 測試、跑 npx jest 全綠），再照本指引 §4/§5 做 Phase 2/3，最後用現有測試環境驗證 Playwright。
 ```
 
-## 1. 現況（Phase 1 已完成）
+## 1. 現況（⚠️ Phase 1 需重做）
 
-已改並驗證：`git.js`（新增 ensureTestingBranch/addWorktree/removeWorktree/mergeInto + execFileAsync 掛回 stdout/stderr）、`runner.js`（branch_pending 建 worktree + rollback）、`task-agent.js`（getProjectInfo 回專案根+repo清單、cwd 改 worktree 父目錄）、`project-routes.js`（triggerClone 後 ensureTestingBranch）、`merge-agent.js`（多 repo 併 testing + 專案 merge 鎖）、`env-agent.js`（部署前 ensureTestingBranch）、`coding-project.md`（多 repo commit + {{repo_list}}）。測試：`git.test.js`、`runner.test.js`、`merge-agent.test.js`。全套 217 tests 綠。
+**Phase 1 程式碼已不在 working tree**（被 git reset 還原）。設計完整保留在 `2026-07-03-multi-repo-worktree-phase1-design.md`，照它重做即可。要改的檔與重點：`git.js`（新增 ensureTestingBranch/addWorktree/removeWorktree/mergeInto，**且 execFileAsync 要掛回 stdout/stderr — 見 Phase 1 spec §6 後的 ⚠️ 區塊**）、`runner.js`（branch_pending 建 worktree + rollback）、`task-agent.js`（getProjectInfo 回專案根+repo清單、cwd 改 worktree 父目錄、buildCodingPrompt 注入 {{repo_list}}）、`project-routes.js`（triggerClone 後 ensureTestingBranch）、`merge-agent.js`（多 repo 併 testing + 專案 merge 鎖）、`env-agent.js`（部署前 ensureTestingBranch）、`coding-project.md`（多 repo commit + {{repo_list}}）。測試：`git.test.js`、`runner.test.js`、`merge-agent.test.js`（此檔還在，untracked）。目標全套 jest 綠。
 
-**⚠️ 未 commit 且混檔**：`task-agent.js`、`env-agent.js`、`merge-agent.js`、`project-routes.js` 這四個在 Phase 1 前就有使用者既有未提交變更，Phase 1 改動與之混在同檔。commit 時需 `git add -p` 切開，勿整檔 add。
+**⚠️ 這次教訓**：Phase 1 全程未 commit，被一次 reset 清光。**這次重做完 Phase 1 就先 commit**（開 feature 分支），別再累積大量未提交變更。
 
 ## 2. 關鍵事實（實作前必知）
 

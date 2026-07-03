@@ -15,7 +15,9 @@ window.SettingsView = Vue.defineComponent({
       saving: false,
       savingPw: false,
       verifyingOdoo: false,
-      verifyingService: false
+      verifyingService: false,
+      isDark: (window.ThemeManager && ThemeManager.current() === 'dark'),
+      notifyOn: (window.NotifyManager && NotifyManager.isOn())
     };
   },
   computed: {
@@ -27,7 +29,24 @@ window.SettingsView = Vue.defineComponent({
     }
   },
   async created() { await this.load(); },
+  mounted() {
+    this._onThemeChange = e => { this.isDark = e.detail === 'dark'; };
+    window.addEventListener('themechange', this._onThemeChange);
+  },
+  unmounted() { window.removeEventListener('themechange', this._onThemeChange); },
   methods: {
+    toggleTheme() { ThemeManager.toggle(); },
+    async toggleNotify(e) {
+      if (e.target.checked) {
+        const r = await NotifyManager.enable();
+        this.notifyOn = r.ok;
+        if (r.ok) showToast('已開啟桌面通知', 'success');
+        else showToast(r.reason === 'denied' ? '瀏覽器已封鎖通知權限，請至瀏覽器設定開啟' : '此瀏覽器不支援通知', 'error');
+      } else {
+        NotifyManager.disable();
+        this.notifyOn = false;
+      }
+    },
     async load() {
       this.loading = true;
       try {
@@ -109,6 +128,24 @@ window.SettingsView = Vue.defineComponent({
     <div class="page-body">
       <div v-if="loading" class="loading">載入中...</div>
       <div v-else class="settings-layout">
+
+        <!-- 外觀與通知 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">外觀與通知</div>
+          </div>
+          <div class="setting-block-body">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;margin-bottom:12px">
+              <input type="checkbox" :checked="isDark" @change="toggleTheme" style="width:16px;height:16px;cursor:pointer" />
+              <span>深色模式</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px">
+              <input type="checkbox" :checked="notifyOn" @change="toggleNotify" style="width:16px;height:16px;cursor:pointer" />
+              <span>桌面通知（有任務需要你處理時提醒）</span>
+            </label>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:6px">開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</div>
+          </div>
+        </div>
 
         <!-- 帳號 + 密碼 (同一 block，兩欄) -->
         <div class="setting-block">
