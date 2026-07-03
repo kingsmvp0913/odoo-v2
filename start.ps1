@@ -24,6 +24,7 @@ $env:JWT_SECRET    = $config.JWT_SECRET
 $env:PORT          = if ($config.PORT) { $config.PORT } else { 3939 }
 if ($config.DATABASE_URL)     { $env:DATABASE_URL     = $config.DATABASE_URL }
 if ($config.ANTHROPIC_API_KEY) { $env:ANTHROPIC_API_KEY = $config.ANTHROPIC_API_KEY }
+if ($config.APP_SECRET)       { $env:APP_SECRET       = $config.APP_SECRET }
 
 $port = if ($config.PORT) { $config.PORT } else { 3939 }
 Start-Process "http://localhost:$port"
