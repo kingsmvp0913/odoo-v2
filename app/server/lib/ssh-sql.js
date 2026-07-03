@@ -42,10 +42,10 @@ function validateSelectOnly(sql) {
   if (!sql) return 'SQL 不能為空';
   const cleaned = sql.trim().replace(/;+$/, '').trim();
   if (!cleaned) return 'SQL 不能為空';
-  if (cleaned.includes(';')) return '不允許多語句查詢（SQL 中不可包含分號）';
   const firstWord = cleaned.split(/\s+/)[0].toUpperCase();
   if (firstWord !== 'SELECT' && firstWord !== 'WITH') return `只允許 SELECT 查詢，不允許 ${firstWord}`;
   const stripped = stripSqlLiterals(cleaned);
+  if (stripped.includes(';')) return '不允許多語句查詢（SQL 中不可包含分號）';
   const dangerous = [
     ['INSERT', 'INSERT'], ['UPDATE', 'UPDATE'], ['DELETE', 'DELETE'], ['DROP', 'DROP'],
     ['ALTER', 'ALTER'], ['TRUNCATE', 'TRUNCATE'], ['CREATE', 'CREATE'], ['GRANT', 'GRANT'],
