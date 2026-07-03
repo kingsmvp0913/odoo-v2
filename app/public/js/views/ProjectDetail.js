@@ -176,6 +176,14 @@ window.ProjectDetailView = Vue.defineComponent({
         <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:12px">← 返回</button>
         <h1>{{ project.name }}</h1>
         <span style="font-size:13px;color:var(--text-muted);margin-left:12px">Odoo {{ project.odoo_version }}</span>
+        <div style="display:flex;gap:6px;margin-left:16px">
+          <button class="btn btn-outline btn-sm" style="background:var(--primary);color:#fff">設定</button>
+          <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
+          <button class="btn btn-outline btn-sm" @click="goWiki">📖 Wiki</button>
+          <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
+            <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unreadCount() }}</span>
+          </button>
+        </div>
       </div>
       <div class="content">
         <div v-if="project.description" style="color:var(--text-muted);font-size:13px;margin-bottom:16px">{{ project.description }}</div>
@@ -219,14 +227,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <button class="btn btn-primary btn-sm" style="margin-top:8px" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
 
         <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
-          <div class="form-section">Wiki 與對話</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
-            <button class="btn btn-outline btn-sm" @click="goWiki">📖 開啟 Wiki</button>
-            <button class="btn btn-outline btn-sm" @click="goChat">💬 開啟 Chat
-              <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unreadCount() }}</span>
-            </button>
-          </div>
+          <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
         </div>
 
         <div style="margin-top:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px">
