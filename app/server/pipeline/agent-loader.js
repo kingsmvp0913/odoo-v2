@@ -1,0 +1,129 @@
+/**
+ * agent-loader.js — 從 .claude/agents/<name>.md 載入 agent 定義（model + prompt）
+ *
+ * 每個 agent 檔為 Markdown + YAML frontmatter：
+ *   ---
+ *   name / role / label / description / model / stage
+ *   ---
+ *   <system prompt body，動態資料以 {{placeholder}} 標記>
+ *
+ * Exports:
+ *   loadAgent(name)  → { name, role, label, description, model, stage, body, render(vars) }
+ *   listAgents()     → [{ name, role, label, description, model, stage }]（不含 body）
+ *   getLabels()      → { <stage>: <label> }（依 stage 去重）
+ *   agentPath(name)  → 檔案絕對路徑（白名單用）
+ *   invalidate(name?) → 清除快取
+ *   ALLOWED_MODELS
+ */
+
+const fs = require('fs');
+const path = require('path');
+const yaml = require('js-yaml');
+
+const AGENTS_DIR = path.join(__dirname, '..', '..', '..', '.claude', 'agents');
+const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
+
+// name → { mtimeMs, agent }
+const _cache = new Map();
+
+// 只切「裸 --- 行」作為 frontmatter 邊界，避免誤切 body 內的 ---RESULT-JSON--- 等標記
+const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+
+function parse(raw) {
+  const m = raw.match(FM_RE);
+  if (!m) throw new Error('agent 檔缺少 frontmatter');
+  const meta = yaml.load(m[1], { schema: yaml.CORE_SCHEMA }) || {};
+  return { meta, body: m[2] };
+}
+
+function makeRender(body) {
+  return vars => body.replace(/\{\{(\w+)\}\}/g, (_, k) =>
+    (vars && vars[k] != null) ? String(vars[k]) : ''
+  );
+}
+
+function agentPath(name) {
+  return path.join(AGENTS_DIR, `${name}.md`);
+}
+
+function loadAgent(name) {
+  const file = agentPath(name);
+  const stat = fs.statSync(file); // throws if missing → caller handles
+  const cached = _cache.get(name);
+  if (cached && cached.mtimeMs === stat.mtimeMs) return cached.agent;
+
+  const { meta, body } = parse(fs.readFileSync(file, 'utf8'));
+  const agent = {
+    name: meta.name || name,
+    role: meta.role || '',
+    label: meta.label || meta.name || name,
+    description: meta.description || '',
+    model: meta.model || 'sonnet',
+    stage: meta.stage || '',
+    body,
+    render: makeRender(body)
+  };
+  _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
+  return agent;
+}
+
+function listNames() {
+  return fs.readdirSync(AGENTS_DIR)
+    .filter(f => f.endsWith('.md'))
+    .map(f => f.slice(0, -3));
+}
+
+function listAgents() {
+  return listNames().map(name => {
+    const a = loadAgent(name);
+    return { name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage };
+  });
+}
+
+function getLabels() {
+  const out = {};
+  for (const a of listAgents()) {
+    if (a.stage && !out[a.stage]) out[a.stage] = a.label;
+  }
+  return out;
+}
+
+function invalidate(name) {
+  if (name) _cache.delete(name);
+  else _cache.clear();
+}
+
+/**
+ * 更新 agent 的 model 與 prompt body，寫回 .md（保留其餘 frontmatter 原樣）。
+ * 錯誤以 err.status 標記（404 未知 name / 400 非法 model）。
+ */
+function updateAgent(name, { model, prompt } = {}) {
+  if (!listNames().includes(name)) {
+    const e = new Error(`未知的 agent：${name}`); e.status = 404; throw e;
+  }
+  if (model != null && !ALLOWED_MODELS.includes(model)) {
+    const e = new Error(`不支援的 model：${model}（僅允許 ${ALLOWED_MODELS.join(' / ')}）`); e.status = 400; throw e;
+  }
+
+  const raw = fs.readFileSync(agentPath(name), 'utf8');
+  const m = raw.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n?)([\s\S]*)$/);
+  if (!m) { const e = new Error('agent 檔缺少 frontmatter'); e.status = 500; throw e; }
+
+  let fmBlock = m[1];
+  let body = m[2];
+
+  if (model != null) {
+    fmBlock = /^model:.*$/m.test(fmBlock)
+      ? fmBlock.replace(/^model:.*$/m, `model: ${model}`)
+      : fmBlock.replace(/\r?\n---(\r?\n?)$/, `\nmodel: ${model}\n---$1`);
+  }
+  if (prompt != null) {
+    body = prompt.endsWith('\n') ? prompt : prompt + '\n';
+  }
+
+  fs.writeFileSync(agentPath(name), fmBlock + body);
+  invalidate(name);
+  return loadAgent(name);
+}
+
+module.exports = { loadAgent, listAgents, listNames, getLabels, agentPath, invalidate, updateAgent, AGENTS_DIR, ALLOWED_MODELS };

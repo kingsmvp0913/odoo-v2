@@ -1,0 +1,85 @@
+const { newDb } = require('pg-mem');
+
+jest.mock('../pipeline/git', () => ({
+  mergeInto: jest.fn(),
+  commitAll: jest.fn().mockResolvedValue(undefined)
+}));
+jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
+
+let dbModule, mergeMod, gitMock, userId;
+
+beforeAll(async () => {
+  const db = newDb();
+  const { Pool } = db.adapters.createPg();
+  dbModule = require('../db');
+  dbModule._setPoolForTesting(new Pool());
+  await dbModule.migrate();
+  const { rows } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('m','h','M','user') RETURNING id"
+  );
+  userId = rows[0].id;
+  gitMock = require('../pipeline/git');
+  mergeMod = require('../pipeline/merge-agent');
+});
+
+afterAll(() => { dbModule._setPoolForTesting(null); });
+
+beforeEach(async () => {
+  gitMock.mergeInto.mockReset();
+  gitMock.commitAll.mockReset().mockResolvedValue(undefined);
+  require('../notify').emitToUser.mockReset();
+  await dbModule.query('DELETE FROM tasks');
+  await dbModule.query('DELETE FROM project_repos');
+  await dbModule.query('DELETE FROM projects');
+});
+
+async function setupProjectTask(repoLabels) {
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('MP','17.0','mp') RETURNING id"
+  );
+  for (const label of repoLabels) {
+    await dbModule.query(
+      "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,$2,'u',$3,$4,'done')",
+      [proj.id, label, `/repos/mp/${label}`, label === repoLabels[0]]
+    );
+  }
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, git_branch)
+     VALUES ($1,'task_odoo_m1','odoo','T','c','merge_running',$2,'task/task_odoo_m1') RETURNING id`,
+    [userId, proj.id]
+  );
+  return t.id;
+}
+
+// 意圖：task 分支要併進「testing」（非 main），且每個 repo 都要處理
+test('merges task branch into testing for every repo, then deploy_ready', async () => {
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  const taskId = await setupProjectTask(['main', 'hr']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(gitMock.mergeInto).toHaveBeenCalledTimes(2);
+  for (const c of gitMock.mergeInto.mock.calls) {
+    expect(c[1]).toBe('testing');              // target
+    expect(c[2]).toBe('task/task_odoo_m1');    // source（task 分支）
+  }
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('deploy_ready');
+});
+
+// 意圖：某個 repo 有無法自動解決的衝突時，要卡在 merge_conflict 且記錄「是哪個 repo」
+test('unresolved conflict in one repo → merge_conflict records that repo', async () => {
+  gitMock.mergeInto
+    .mockResolvedValueOnce({ hasConflicts: false, conflictFiles: [] })              // main：乾淨
+    .mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['models/x.py'] }); // hr：衝突（檔案不在磁碟 → 無法自動解）
+  const taskId = await setupProjectTask(['main', 'hr']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  const { rows } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('merge_conflict');
+  const data = typeof rows[0].merge_conflict_data === 'string'
+    ? JSON.parse(rows[0].merge_conflict_data) : rows[0].merge_conflict_data;
+  expect(data.repos[0].repo).toBe('hr');
+  expect(data.repos[0].files).toContain('models/x.py');
+});
