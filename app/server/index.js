@@ -14,6 +14,7 @@ const { registerRoutes: registerAdminRoutes } = require('./admin-routes');
 const { registerRoutes: registerTeamsRoutes } = require('./teams-routes');
 const { registerRoutes: registerTokenReportRoutes } = require('./token-report-routes');
 const { registerRoutes: registerClaudeUsageRoutes } = require('./claude-usage-routes');
+const { registerRoutes: registerDbQueryRoutes } = require('./db-query-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -33,6 +34,7 @@ function createApp() {
   registerTeamsRoutes(app);
   registerTokenReportRoutes(app);
   registerClaudeUsageRoutes(app);
+  registerDbQueryRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');
