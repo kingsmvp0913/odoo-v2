@@ -1,6 +1,12 @@
 const { Client } = require('ssh2');
 const fs = require('fs');
 
+function validateConnField(val, name) {
+  if (val && !/^[A-Za-z0-9_.\-]+$/.test(String(val))) {
+    throw new Error(`連線欄位 ${name} 包含不合法字元`);
+  }
+}
+
 function stripSqlLiterals(sql) {
   let result = '';
   let i = 0;
@@ -53,6 +59,10 @@ function validateSelectOnly(sql) {
 }
 
 function buildPsqlCmd(conn, sql) {
+  validateConnField(conn.db_name, 'db_name');
+  validateConnField(conn.docker_container, 'docker_container');
+  validateConnField(conn.db_user, 'db_user');
+  validateConnField(conn.sudo_user, 'sudo_user');
   const password = conn.ssh_password || '';
   const mode = conn.connect_mode || 'docker';
   const dbName = conn.db_name || 'odoo_prd';
@@ -106,7 +116,13 @@ function sshExec(conn, command) {
       });
     }).on('error', reject);
     const cfg = { host: conn.ssh_host, port: conn.ssh_port || 22, username: conn.ssh_user, readyTimeout: 15000 };
-    if (conn.auth_type === 'key' && conn.ssh_key_path) cfg.privateKey = fs.readFileSync(conn.ssh_key_path);
+    if (conn.auth_type === 'key' && conn.ssh_key_path) {
+      const keyPath = String(conn.ssh_key_path);
+      if (keyPath.includes('..') || (!keyPath.startsWith('/') && !keyPath.match(/^[A-Za-z]:\\/))) {
+        throw new Error('ssh_key_path 必須是絕對路徑且不得含路徑穿越');
+      }
+      cfg.privateKey = fs.readFileSync(keyPath);
+    }
     else cfg.password = conn.ssh_password;
     c.connect(cfg);
   });
