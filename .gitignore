@@ -24,9 +24,11 @@ env/
 .env.*
 !.env.example
 
-# ─── Pipeline 執行紀錄與暫存 ────────────────────────────
+# ─── Pipeline 執行紀錄與佇列(從 Odoo 自動產生)────────
 /kingsmvpsplan/log/*
 !/kingsmvpsplan/log/.gitkeep
+/kingsmvpsplan/start/*
+!/kingsmvpsplan/start/.gitkeep
 
 # ─── 工具快取 ───────────────────────────────────────────
 .serena/cache/
