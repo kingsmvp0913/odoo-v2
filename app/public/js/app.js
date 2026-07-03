@@ -32,6 +32,7 @@ const router = createRouter({
     { path: '/projects/:id/wiki/:slug', component: window.WikiView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat/:chatId', component: window.ProjectChatView, meta: { requiresAuth: true } },
+    { path: '/projects/:id/db', component: window.ProjectDbQueryView, meta: { requiresAuth: true } },
     { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true } },
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
