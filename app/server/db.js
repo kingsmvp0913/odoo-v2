@@ -187,6 +187,26 @@ async function migrate() {
       UNIQUE(project_id)
     )`,
 
+    `CREATE TABLE IF NOT EXISTS db_connections (
+      id                SERIAL PRIMARY KEY,
+      project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name              TEXT NOT NULL,
+      ssh_host          TEXT NOT NULL,
+      ssh_port          INTEGER NOT NULL DEFAULT 22,
+      ssh_user          TEXT NOT NULL,
+      auth_type         TEXT NOT NULL DEFAULT 'password',
+      ssh_password_enc  TEXT,
+      ssh_key_path      TEXT,
+      connect_mode      TEXT NOT NULL DEFAULT 'docker',
+      docker_container  TEXT,
+      db_user           TEXT,
+      sudo_user         TEXT,
+      db_name           TEXT NOT NULL,
+      description       TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(project_id, name)
+    )`,
+
     `CREATE TABLE IF NOT EXISTS token_usage (
       id                   SERIAL PRIMARY KEY,
       task_id              TEXT,
