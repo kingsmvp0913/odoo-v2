@@ -14,6 +14,7 @@ jest.mock('../pipeline/git', () => ({
 }));
 
 process.env.JWT_SECRET = 'test-admin';
+process.env.APP_SECRET = 'test-app-secret';
 
 let app, dbModule, adminToken, userToken;
 
@@ -50,6 +51,18 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 
 let createdConfigId;
 let createdMapId;
+
+// --- users：建立時寫入 E2E 憑證 password_enc ---
+
+test('POST /api/admin/users → 建立使用者並寫入可解回原密碼的 password_enc', async () => {
+  const { decrypt } = require('../lib/crypto');
+  const res = await request(app).post('/api/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ username: 'e2euser', password: 'e2epass123', display_name: 'E2E', role: 'user' });
+  expect(res.status).toBe(201);
+  const { rows: [u] } = await dbModule.query("SELECT password_enc FROM users WHERE username='e2euser'");
+  expect(decrypt(u.password_enc)).toBe('e2epass123');
+});
 
 // --- version-configs ---
 

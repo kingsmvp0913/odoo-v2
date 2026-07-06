@@ -4,6 +4,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const { query } = require('./db');
 const { hashPassword } = require('./password');
+const { encryptSafe } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 
@@ -97,9 +98,9 @@ function registerRoutes(app) {
       if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
       const password_hash = await hashPassword(password);
       const { rows } = await query(
-        `INSERT INTO users (username, password_hash, display_name, role)
-         VALUES ($1, $2, $3, $4) RETURNING id, username, display_name, role`,
-        [username, password_hash, display_name || username, role || 'user']
+        `INSERT INTO users (username, password_hash, display_name, role, password_enc)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, username, display_name, role`,
+        [username, password_hash, display_name || username, role || 'user', encryptSafe(password)]
       );
       res.status(201).json(rows[0]);
     } catch (err) {

@@ -8,6 +8,7 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('./db');
 const { hashPassword, checkPassword } = require('./password');
+const { encryptSafe } = require('./lib/crypto');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
@@ -70,8 +71,8 @@ function registerRoutes(app) {
 
       const password_hash = await hashPassword(password);
       const { rows: inserted } = await query(
-        'INSERT INTO users (username, password_hash, display_name, role) VALUES ($1, $2, $3, $4) RETURNING id',
-        [username, password_hash, display_name, 'admin']
+        'INSERT INTO users (username, password_hash, display_name, role, password_enc) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [username, password_hash, display_name, 'admin', encryptSafe(password)]
       );
 
       res.json({ token: signToken(inserted[0].id) });
@@ -94,7 +95,15 @@ function registerRoutes(app) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      const { password_hash, ...safeUser } = user;
+      // E2E 憑證補寫：既有使用者尚無 password_enc 時，用當下明文補上（供 Playwright 登入測試區）
+      if (user.password_enc == null) {
+        const enc = encryptSafe(password);
+        if (enc) {
+          await query('UPDATE users SET password_enc = $2 WHERE id = $1', [user.id, enc]);
+        }
+      }
+
+      const { password_hash, password_enc, ...safeUser } = user;
       res.json({ token: signToken(user.id), user: safeUser });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -133,6 +142,7 @@ function registerRoutes(app) {
         }
         if (new_password.length < 8) return res.status(400).json({ error: '新密碼至少 8 個字元' });
         fields.password_hash = await hashPassword(new_password);
+        fields.password_enc = encryptSafe(new_password);
       }
       if (!Object.keys(fields).length) return res.json({ ok: true });
 

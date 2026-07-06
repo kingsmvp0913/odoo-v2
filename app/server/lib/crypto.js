@@ -21,4 +21,9 @@ function decrypt(blob) {
   return Buffer.concat([decipher.update(Buffer.from(encB, 'base64')), decipher.final()]).toString('utf8');
 }
 
-module.exports = { encrypt, decrypt };
+// 盡力加密：APP_SECRET 未設定或加密失敗時回傳 null（供非關鍵用途，如 E2E 憑證，不阻斷主流程）
+function encryptSafe(text) {
+  try { return encrypt(text); } catch { return null; }
+}
+
+module.exports = { encrypt, decrypt, encryptSafe };
