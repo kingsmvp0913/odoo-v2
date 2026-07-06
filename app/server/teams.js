@@ -10,12 +10,12 @@ const { query } = require('./db');
 
 const STATUS_DISPLAY = {
   new: '⚪ 新任務', analysis_running: '🔵 分析中', confirm_pending: '🟡 等待確認',
-  final_pending: '🟡 等待審核', confirm_answered: '🔵 已回覆', branch_pending: '🔵 準備分支',
-  coding_running: '🔵 開發中', qa_running: '🔵 QA', merge_running: '🔵 同步主線',
-  deploy_ready: '🟢 可更新正式', deploy_pending: '🔵 部署中', deploy_fixing: '🟡 修復部署',
-  wiki_updating: '🔵 更新文件', done: '✅ 完成', stopped: '🔴 已停止',
-  triage_blocked: '🔴 分診阻塞', cs_running: '🔵 客服分析',
-  cs_reply_pending: '🟡 等候送出', cs_data_needed: '🟡 需補充資料'
+  confirm_answered: '🔵 已回覆', branch_pending: '🔵 準備分支',
+  coding_running: '🔵 開發中', qa_running: '🔵 QA', merge_running: '🔵 併入測試',
+  deploy_testing: '🔵 部署測試區', playwright_running: '🔵 E2E 測試',
+  review_pending: '🟢 等待審核', wiki_updating: '🔵 更新文件',
+  done: '✅ 完成', stopped: '🔴 已停止', merge_conflict: '🔴 合併衝突',
+  cs_running: '🔵 客服分析', cs_reply_pending: '🟡 等候送出', cs_data_needed: '🟡 需補充資料'
 };
 
 let _tokenCache = { token: null, expiresAt: 0 };

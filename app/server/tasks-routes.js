@@ -2,8 +2,8 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { abortTask } = require('./pipeline/runner');
 
-const NEEDS_ACTION_STATUSES = ['confirm_pending', 'final_pending', 'stopped', 'triage_blocked', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict'];
-const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'final_pending'];
+const NEEDS_ACTION_STATUSES = ['confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
+const ANSWER_ALLOWED_STATUSES = ['confirm_pending'];
 
 function registerRoutes(app) {
   // List tasks with optional filters
@@ -255,7 +255,7 @@ function registerRoutes(app) {
         [req.params.id, req.userId]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      if (!['stopped', 'triage_blocked'].includes(tasks[0].status)) {
+      if (!['stopped'].includes(tasks[0].status)) {
         return res.status(400).json({ error: '只有阻塞中的任務可以解決阻塞' });
       }
       const { resolution } = req.body;
@@ -263,7 +263,7 @@ function registerRoutes(app) {
 
       await query(
         `UPDATE tasks SET status = 'new', blocker_content = NULL, blocker_type = NULL,
-         reentry_count = 0, updated_at = NOW() WHERE id = $1`,
+         qa_retry_count = 0, deploy_retry_count = 0, pw_retry_count = 0, updated_at = NOW() WHERE id = $1`,
         [req.params.id]
       );
       await query(

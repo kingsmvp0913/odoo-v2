@@ -11,10 +11,11 @@ function fakeIo() {
   return { io: { to: jest.fn(() => ({ emit })), emit: jest.fn() }, emit };
 }
 
-test('ACTION_STATUSES 含關鍵需動作狀態、不含進行中狀態', () => {
+test('ACTION_STATUSES 含關鍵需動作狀態、不含進行中或已移除狀態', () => {
   expect(notify.ACTION_STATUSES.has('confirm_pending')).toBe(true);
-  expect(notify.ACTION_STATUSES.has('deploy_ready')).toBe(true);
+  expect(notify.ACTION_STATUSES.has('review_pending')).toBe(true);
   expect(notify.ACTION_STATUSES.has('coding_running')).toBe(false);
+  expect(notify.ACTION_STATUSES.has('deploy_ready')).toBe(false);
 });
 
 test('notifyAction 經 socket 發 notify:action 並呼叫已註冊 channel', () => {

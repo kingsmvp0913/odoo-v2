@@ -259,6 +259,7 @@ async function migrate() {
     { table: 'tasks', col: 'qa_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN qa_retry_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'pw_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN pw_retry_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'done_at',              sql: 'ALTER TABLE tasks ADD COLUMN done_at TIMESTAMPTZ' },
+    { table: 'tasks', col: 'blocker_type',         sql: 'ALTER TABLE tasks ADD COLUMN blocker_type TEXT' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
     { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },
     { table: 'tasks', col: 'teams_message_id',          sql: 'ALTER TABLE tasks ADD COLUMN teams_message_id TEXT' },
