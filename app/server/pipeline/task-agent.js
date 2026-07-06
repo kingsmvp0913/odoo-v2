@@ -4,6 +4,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
+const { pullBranch, getMainBranch } = require('./git');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -115,14 +116,15 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
   });
 }
 
-function buildAnalysisPrompt(task, info) {
+function buildAnalysisPrompt(task, info, clarification) {
   const agent = loadAgent('analysis-project');
   return {
     prompt: agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
       original_text: task.original_text || '（無內容）',
-      task_id: task.task_id
+      task_id: task.task_id,
+      clarification: clarification || '（無）'
     }).trim(),
     model: agent.model
   };
@@ -161,9 +163,30 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
+  // 分析前 pull main：確保讀到最新生產碼；失敗（origin 不通／本地髒／衝突）→ 停下等人工
+  try {
+    for (const repo of info.repos) {
+      const base = await getMainBranch(repo.local_path);
+      await pullBranch(repo.local_path, base);
+    }
+  } catch (err) {
+    await query(
+      `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+      [taskId, `分析前更新 main 失敗（請確認 origin 可連線且本地無未提交變更）：${err.message}`]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return true;
+  }
+
+  // 回帶先前澄清問答的使用者回覆，供 confirm_answered 重跑時參考
+  const { rows: logs } = await query(
+    "SELECT role, content FROM task_logs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 10", [taskId]
+  );
+  const clarification = logs.reverse().filter(l => l.role === 'user').map(l => l.content).join('\n');
+
   let raw;
   try {
-    const built = buildAnalysisPrompt(task, info);
+    const built = buildAnalysisPrompt(task, info, clarification);
     // analysis 在專案根讀取所有 repo（此時尚未建 worktree）
     const analysisResult = await spawnClaude(built.prompt, { cwd: info.root, taskId, userId, signal, model: built.model });
     raw = analysisResult.text;

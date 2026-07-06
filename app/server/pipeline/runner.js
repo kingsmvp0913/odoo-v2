@@ -12,7 +12,7 @@
 const path = require('path');
 const { query } = require('../db');
 const { analyzeTask } = require('./analysis');
-const { createBranch, checkoutDefault, addWorktree, removeWorktree } = require('./git');
+const { createBranch, checkoutDefault, addWorktree, removeWorktree, getMainBranch } = require('./git');
 const notify = require('../notify');
 
 const LOOP_LIMIT = 5;
@@ -113,8 +113,9 @@ async function handleBranch(task, settings) {
       try {
         for (const repo of repos) {
           const wtPath = path.join(wtParent, path.basename(repo.local_path));
-          // testing 為主 clone 常駐分支（triggerClone 已建）；缺少時 addWorktree 會失敗並進 rollback
-          await addWorktree(repo.local_path, wtPath, branchName, 'testing');
+          // 任務分支從 main/master 長出（乾淨基底，與其他在途任務隔離）
+          const base = await getMainBranch(repo.local_path);
+          await addWorktree(repo.local_path, wtPath, branchName, base);
           created.push({ mainRepo: repo.local_path, wtPath });
         }
       } catch (err) {

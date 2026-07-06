@@ -9,7 +9,8 @@ jest.mock('../pipeline/git', () => ({
   checkoutDefault: jest.fn().mockResolvedValue(undefined),
   runDeploy: jest.fn().mockResolvedValue(undefined),
   addWorktree: jest.fn().mockResolvedValue(undefined),
-  removeWorktree: jest.fn().mockResolvedValue(undefined)
+  removeWorktree: jest.fn().mockResolvedValue(undefined),
+  getMainBranch: jest.fn().mockResolvedValue('main')
 }));
 jest.mock('../notify', () => ({
   emitToUser: jest.fn(),
@@ -109,7 +110,7 @@ test('runPipeline creates branch for branch_pending task', async () => {
   expect(rows[0].git_branch).toContain('task/');
 });
 
-test('branch_pending project task creates one worktree per repo from testing', async () => {
+test('branch_pending project task creates one worktree per repo from main', async () => {
   const { addWorktree } = require('../pipeline/git');
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P1','17.0','p1') RETURNING id"
@@ -127,13 +128,13 @@ test('branch_pending project task creates one worktree per repo from testing', a
 
   await runnerModule.runPipeline(userId);
 
-  // 每個 repo 各建一個 worktree；branch=task/<id>，base=testing；路徑相異＝並行隔離的意圖
+  // 每個 repo 各建一個 worktree；branch=task/<id>，base=main（乾淨基底）；路徑相異＝並行隔離的意圖
   expect(addWorktree).toHaveBeenCalledTimes(2);
   const calls = addWorktree.mock.calls;
   expect(new Set(calls.map(c => c[1])).size).toBe(2);
   for (const c of calls) {
     expect(c[2]).toBe('task/task_odoo_wt1');
-    expect(c[3]).toBe('testing');
+    expect(c[3]).toBe('main');
     expect(c[1]).toContain(path.join('.worktrees', 'task_odoo_wt1'));
   }
 

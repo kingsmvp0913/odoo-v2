@@ -107,6 +107,12 @@ async function ensureTestingBranch(repoPath) {
   }
 }
 
+// checkout 指定分支並從 origin pull 最新（分析前確保讀到最新碼）。失敗會 throw 供上層停止任務。
+async function pullBranch(repoPath, branch) {
+  await execFileAsync('git', ['checkout', branch], { cwd: repoPath });
+  await execFileAsync('git', ['pull', 'origin', branch], { cwd: repoPath });
+}
+
 // 從主 clone 長出任務 worktree（branchName 從 baseBranch 建立）
 async function addWorktree(mainRepoPath, worktreePath, branchName, baseBranch) {
   await execFileAsync('git', ['worktree', 'add', worktreePath, '-b', branchName, baseBranch], { cwd: mainRepoPath });
@@ -139,4 +145,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, addWorktree, removeWorktree, mergeInto };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto };

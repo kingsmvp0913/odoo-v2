@@ -76,6 +76,22 @@ test('runDeploy executes shell command when deployCmd is set', async () => {
   expect(result).toEqual({ stdout: 'deployed', stderr: '' });
 });
 
+test('pullBranch checkout 指定分支並從 origin pull', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    calls.push(args);
+    (typeof opts === 'function' ? opts : cb)(null, 'ok', '');
+  });
+  await gitModule.pullBranch('/repo', 'main');
+  expect(calls).toContainEqual(['checkout', 'main']);
+  expect(calls).toContainEqual(['pull', 'origin', 'main']);
+});
+
+test('pullBranch rejects when pull fails', async () => {
+  mockExecFileFail('could not resolve host github.com');
+  await expect(gitModule.pullBranch('/repo', 'main')).rejects.toThrow('could not resolve host');
+});
+
 test('addWorktree creates worktree on new branch from base', async () => {
   mockExecFileSuccess();
   await gitModule.addWorktree('/repo', '/repo/.worktrees/task_1/main', 'task/task_1', 'testing');
