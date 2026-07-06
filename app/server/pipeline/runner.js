@@ -153,10 +153,12 @@ async function handleCoding(task) {
   });
 }
 
-// qa_running：暫時直接推進 merge_running（Task 5 換成真正的 QA agent）
+// qa_running：QA agent 對照 SD 審查 diff（pass→merge_running；fail→退 coding 計數）
 async function handleQa(task) {
-  await query("UPDATE tasks SET status='merge_running', updated_at=NOW() WHERE id=$1", [task.id]);
-  notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'merge_running' });
+  await withInflight(task.id, (signal) => {
+    const { runQaAgent } = require('./qa-agent');
+    return runQaAgent(task.id, task.user_id, signal);
+  });
 }
 
 // merge_running：把 task 分支併入 testing

@@ -19,6 +19,9 @@ jest.mock('../notify', () => ({
 jest.mock('../pipeline/cs-agent', () => ({
   runCsAgent: jest.fn().mockResolvedValue(undefined)
 }));
+jest.mock('../pipeline/qa-agent', () => ({
+  runQaAgent: jest.fn().mockResolvedValue(undefined)
+}));
 
 let dbModule, runnerModule;
 let userId;
@@ -56,6 +59,8 @@ beforeEach(async () => {
   require('../notify').emitToUser.mockReset();
   require('../pipeline/cs-agent').runCsAgent.mockReset();
   require('../pipeline/cs-agent').runCsAgent.mockResolvedValue(undefined);
+  require('../pipeline/qa-agent').runQaAgent.mockReset();
+  require('../pipeline/qa-agent').runQaAgent.mockResolvedValue(undefined);
   await runnerModule.resetLoopCounter(userId);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
@@ -230,9 +235,9 @@ test('resetLoopCounter allows processing to resume', async () => {
   expect(result.processed).toBeGreaterThanOrEqual(1);
 });
 
-test('runPipeline 把 qa_running 推進到 merge_running', async () => {
+test('runPipeline 用 qa-agent 處理 qa_running 任務', async () => {
+  const { runQaAgent } = require('../pipeline/qa-agent');
   const taskId = await insertTask('qa_running');
   await runnerModule.runPipeline(userId);
-  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
-  expect(rows[0].status).toBe('merge_running');
+  expect(runQaAgent).toHaveBeenCalledWith(taskId, userId, expect.anything());
 });

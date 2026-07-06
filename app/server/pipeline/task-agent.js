@@ -254,4 +254,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding };
+module.exports = { runTaskAnalysis, runTaskCoding, spawnClaude, getProjectInfo, worktreeParent, parseResult };
