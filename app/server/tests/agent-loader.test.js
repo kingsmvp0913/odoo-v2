@@ -7,16 +7,16 @@ const L = require('../pipeline/agent-loader');
 // updateAgent 只改 model/body 並保留其餘 frontmatter、且會擋非法輸入。
 
 test('loadAgent 解析 frontmatter（model / stage / label）', () => {
-  const a = L.loadAgent('triage');
-  expect(a.model).toBe('haiku');
-  expect(a.stage).toBe('triage');
-  expect(a.label).toBe('分診');
+  const a = L.loadAgent('cs');
+  expect(a.model).toBe('sonnet');
+  expect(a.stage).toBe('cs');
+  expect(a.label).toBe('客服');
   expect(typeof a.render).toBe('function');
 });
 
 test('render 代入 placeholder，無殘留', () => {
-  const a = L.loadAgent('triage');
-  const out = a.render({ original_text: 'HELLO-123' });
+  const a = L.loadAgent('cs');
+  const out = a.render({ title: 'HELLO-123', original_text: 'x', wiki: 'y' });
   expect(out).toContain('HELLO-123');
   expect(out.match(/\{\{\w+\}\}/)).toBeNull();
 });
@@ -40,7 +40,7 @@ test('body 內的 ---RESULT-JSON--- 標記不被 frontmatter 解析破壞', () =
 test('listAgents 含所有實際使用的 agent', () => {
   const names = L.listAgents().map(a => a.name);
   for (const n of [
-    'triage', 'analysis-basic', 'analysis-project', 'coding-project',
+    'analysis-basic', 'analysis-project', 'coding-project',
     'cs', 'merge', 'deploy-fix', 'library', 'chat'
   ]) expect(names).toContain(n);
   // PS1「開工」pipeline 已退役，不應再有其 subagent

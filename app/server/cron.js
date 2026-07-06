@@ -1,7 +1,6 @@
 const cron = require('node-cron');
 const { query } = require('./db');
 const { syncUser } = require('./pipeline/sync');
-const { triageNewTasks } = require('./pipeline/triage');
 const { runPipeline, resetLoopCounter } = require('./pipeline/runner');
 const notify = require('./notify');
 
@@ -24,7 +23,6 @@ async function runForUser(userId, { skipPipeline = false } = {}) {
       notify.emitToUser(userId, 'task:synced', { count: total });
       await resetLoopCounter(userId);
     }
-    await triageNewTasks(userId);
     if (!skipPipeline) await runPipeline(userId);
   } catch (err) {
     console.error(`[CRON] user ${userId}:`, err.message);
@@ -54,9 +52,8 @@ function startCron() {
           // 同步 + triage + pipeline
           runForUser(user.id, { skipPipeline: testMode });
         } else if (!testMode) {
-          // 每分鐘仍推進 pipeline（不同步）
-          triageNewTasks(user.id)
-            .then(() => runPipeline(user.id))
+          // 每分鐘仍推進 pipeline（不同步）；cs 分類已由 runPipeline 接手 new 狀態
+          runPipeline(user.id)
             .catch(err => console.error(`[CRON] pipeline user ${user.id}:`, err.message));
         }
       }

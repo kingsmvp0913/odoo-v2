@@ -3,12 +3,9 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({
   messages: { create: jest.fn() }
 })));
 
-// Mock sync and triage to avoid real HTTP/API calls
+// Mock sync to avoid real HTTP/API calls
 jest.mock('../pipeline/sync', () => ({
   syncUser: jest.fn().mockResolvedValue({ odoo: { added: 2 }, service: { added: 0 } })
-}));
-jest.mock('../pipeline/triage', () => ({
-  triageNewTasks: jest.fn().mockResolvedValue(undefined)
 }));
 
 let dbModule, cronModule, notifyModule;

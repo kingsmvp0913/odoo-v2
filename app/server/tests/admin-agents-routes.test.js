@@ -69,18 +69,18 @@ test('GET /api/admin/agents → 管理員取得完整清單', async () => {
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
   const names = res.body.map(a => a.name);
-  expect(names).toContain('triage');
+  expect(names).toContain('cs');
   expect(names).toContain('library');
   // 清單不含 prompt body
   expect(res.body[0].prompt).toBeUndefined();
 });
 
 test('GET /api/admin/agents/:name → 含 prompt', async () => {
-  const res = await request(app).get('/api/admin/agents/triage')
+  const res = await request(app).get('/api/admin/agents/cs')
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(res.body.model).toBe('haiku');
-  expect(res.body.prompt).toContain('Triage Agent');
+  expect(res.body.model).toBe('sonnet');
+  expect(res.body.prompt).toContain('客服');
 });
 
 test('PUT /api/admin/agents/:name → 改 model + prompt', async () => {

@@ -58,6 +58,12 @@ async function runCsAgent(taskId, userId, signal) {
       [taskId, result.question || JSON.stringify(result.questions || [])]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'cs_data_needed' });
+  } else if (!task.project_id) {
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, '需修改程式的任務必須先綁定專案，請至任務設定綁定專案後重試']
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
   } else {
     await query(
       "UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1",

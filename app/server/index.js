@@ -40,7 +40,6 @@ function createApp() {
   const { verifyToken } = require('./auth');
   const { query } = require('./db');
   const { syncUser } = require('./pipeline/sync');
-  const { triageNewTasks } = require('./pipeline/triage');
   const { runPipeline, resetLoopCounter } = require('./pipeline/runner');
   app.post('/api/sync/now', verifyToken, async (req, res) => {
     try {
@@ -50,7 +49,7 @@ function createApp() {
         const notify = require('./notify');
         notify.emitToUser(req.userId, 'task:synced', { count: total });
       }
-      await triageNewTasks(req.userId);
+      // cs 分類已由 runPipeline 接手 new 狀態
       // Only run pipeline if test mode is off
       const { rows: [cfg] } = await query('SELECT test_mode FROM teams_settings WHERE id = 1');
       if (!cfg?.test_mode) {
