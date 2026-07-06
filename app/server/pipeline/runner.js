@@ -177,6 +177,14 @@ async function handleDeployTesting(task) {
   });
 }
 
+// playwright_running：依 SD 產計畫並跑 E2E（pass→review_pending；fail→退 coding 計數）
+async function handlePlaywright(task) {
+  await withInflight(task.id, (signal) => {
+    const { runPlaywrightAgent } = require('./playwright-agent');
+    return runPlaywrightAgent(task.id, task.user_id, signal);
+  });
+}
+
 // wiki_updating：library-agent 更新 wiki → done
 async function handleWiki(task) {
   await withInflight(task.id, (signal) => {
@@ -195,8 +203,8 @@ const HANDLERS = {
   qa_running: handleQa,
   merge_running: handleMerge,
   deploy_testing: handleDeployTesting,
+  playwright_running: handlePlaywright,
   wiki_updating: handleWiki,
-  // playwright_running → Task 8
 };
 
 async function processTask(task, settings) {

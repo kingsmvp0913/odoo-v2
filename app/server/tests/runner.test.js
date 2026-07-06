@@ -25,6 +25,9 @@ jest.mock('../pipeline/qa-agent', () => ({
 jest.mock('../pipeline/deploy-testing', () => ({
   runDeployTesting: jest.fn().mockResolvedValue(undefined)
 }));
+jest.mock('../pipeline/playwright-agent', () => ({
+  runPlaywrightAgent: jest.fn().mockResolvedValue(undefined)
+}));
 
 let dbModule, runnerModule;
 let userId;
@@ -66,6 +69,8 @@ beforeEach(async () => {
   require('../pipeline/qa-agent').runQaAgent.mockResolvedValue(undefined);
   require('../pipeline/deploy-testing').runDeployTesting.mockReset();
   require('../pipeline/deploy-testing').runDeployTesting.mockResolvedValue(undefined);
+  require('../pipeline/playwright-agent').runPlaywrightAgent.mockReset();
+  require('../pipeline/playwright-agent').runPlaywrightAgent.mockResolvedValue(undefined);
   await runnerModule.resetLoopCounter(userId);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
@@ -252,4 +257,11 @@ test('runPipeline 用 deploy-testing 處理 deploy_testing 任務', async () => 
   const taskId = await insertTask('deploy_testing');
   await runnerModule.runPipeline(userId);
   expect(runDeployTesting).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+test('runPipeline 用 playwright-agent 處理 playwright_running 任務', async () => {
+  const { runPlaywrightAgent } = require('../pipeline/playwright-agent');
+  const taskId = await insertTask('playwright_running');
+  await runnerModule.runPipeline(userId);
+  expect(runPlaywrightAgent).toHaveBeenCalledWith(taskId, userId, expect.anything());
 });
