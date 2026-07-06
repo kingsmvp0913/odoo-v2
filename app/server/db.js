@@ -256,7 +256,11 @@ async function migrate() {
     { table: 'tasks', col: 'cs_reply',           sql: 'ALTER TABLE tasks ADD COLUMN cs_reply TEXT' },
     { table: 'tasks', col: 'cs_question',        sql: 'ALTER TABLE tasks ADD COLUMN cs_question TEXT' },
     { table: 'tasks', col: 'deploy_retry_count',   sql: 'ALTER TABLE tasks ADD COLUMN deploy_retry_count INTEGER DEFAULT 0' },
+    { table: 'tasks', col: 'qa_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN qa_retry_count INTEGER DEFAULT 0' },
+    { table: 'tasks', col: 'pw_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN pw_retry_count INTEGER DEFAULT 0' },
+    { table: 'tasks', col: 'done_at',              sql: 'ALTER TABLE tasks ADD COLUMN done_at TIMESTAMPTZ' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
+    { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },
     { table: 'tasks', col: 'teams_message_id',          sql: 'ALTER TABLE tasks ADD COLUMN teams_message_id TEXT' },
     { table: 'teams_settings', col: 'odoo_sync_interval',    sql: 'ALTER TABLE teams_settings ADD COLUMN odoo_sync_interval INTEGER DEFAULT 60' },
     { table: 'teams_settings', col: 'service_sync_interval', sql: 'ALTER TABLE teams_settings ADD COLUMN service_sync_interval INTEGER DEFAULT 60' },
@@ -290,6 +294,13 @@ async function migrate() {
     }
     if (!tableColsCache[table].has(col)) await query(sql);
   }
+
+  // One-time status migration: pipeline 改版移除的狀態 → stopped（冪等，只影響殘留舊任務）
+  await query(
+    `UPDATE tasks SET status='stopped',
+       blocker_content = COALESCE(blocker_content, '流程改版，請人工重新確認')
+     WHERE status IN ('final_pending','deploy_pending','deploy_fixing','deploy_ready')`
+  ).catch(() => {});
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});

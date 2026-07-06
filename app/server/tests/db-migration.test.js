@@ -103,6 +103,37 @@ test('wiki_pages has node_type column', async () => {
   expect(rows.length).toBe(1);
 });
 
+test('tasks 具有 qa_retry_count / pw_retry_count / done_at 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='tasks'"
+  );
+  const cols = rows.map(r => r.column_name);
+  expect(cols).toContain('qa_retry_count');
+  expect(cols).toContain('pw_retry_count');
+  expect(cols).toContain('done_at');
+});
+
+test('users 具有 password_enc 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='password_enc'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('migrate 把已移除狀態的舊任務遷移為 stopped', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('mig1','x','MIG') RETURNING id"
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, status) VALUES ($1,'mig_final','manual','final_pending') RETURNING id",
+    [u.id]
+  );
+  await dbModule.migrate(); // 冪等，重跑會套用一次性遷移
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('stopped');
+  expect(after.blocker_content).toContain('流程改版');
+});
+
 test('project_chats 具有 user_id 與 last_read_message_id 欄位', async () => {
   const { rows: [u] } = await dbModule.query(
     "INSERT INTO users (username, password_hash, display_name) VALUES ('m1','x','M1') RETURNING id"
