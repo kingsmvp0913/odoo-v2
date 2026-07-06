@@ -29,6 +29,15 @@ async function runForUser(userId, { skipPipeline = false } = {}) {
   }
 }
 
+// 完成滿 30 天的任務自動封存（is_hidden），移出主列表
+async function autoArchiveDone() {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  return query(
+    "UPDATE tasks SET is_hidden = true, updated_at = NOW() WHERE status = 'done' AND is_hidden = false AND done_at IS NOT NULL AND done_at < $1",
+    [cutoff]
+  );
+}
+
 function startCron() {
   _job = cron.schedule('* * * * *', async () => {
     try {
@@ -58,6 +67,9 @@ function startCron() {
         }
       }
 
+      // 自動封存：完成滿一個月的任務移出主列表（冪等）
+      await autoArchiveDone().catch(err => console.error('[CRON] auto-archive:', err.message));
+
       // Nightly env shutdown
       const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
       const [sh, sm] = shutdownTime.split(':').map(Number);
@@ -77,4 +89,4 @@ function stopCron() {
   if (_job) { _job.stop(); _job = null; }
 }
 
-module.exports = { startCron, stopCron, runForUser };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone };

@@ -171,7 +171,7 @@ async function runLibraryAgent(taskId, userId, signal) {
 
   if (!task.project_id) {
     try {
-      await query("UPDATE tasks SET status='done', updated_at=NOW() WHERE id=$1", [taskId]);
+      await query("UPDATE tasks SET status='done', done_at=NOW(), updated_at=NOW() WHERE id=$1", [taskId]);
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'done' });
     } catch (err) {
       console.error(`[LIBRARY-AGENT] status update error task ${taskId}:`, err.message);
@@ -231,7 +231,7 @@ ${logText || '無'}`;
   }
 
   try {
-    await query("UPDATE tasks SET status='done', updated_at=NOW() WHERE id=$1", [taskId]);
+    await query("UPDATE tasks SET status='done', done_at=NOW(), updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'done' });
   } catch (err) {
     console.error(`[LIBRARY-AGENT] status update error task ${taskId}:`, err.message);

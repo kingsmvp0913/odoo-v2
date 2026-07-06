@@ -67,3 +67,21 @@ test('startCron returns a task object (cron job started)', () => {
   expect(typeof job.stop).toBe('function');
   cronModule.stopCron();
 });
+
+test('autoArchiveDone 封存完成滿 30 天的任務，保留較新完成的', async () => {
+  const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+  const recent = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+  const { rows: [a] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, done_at) VALUES ($1,'arch_old','odoo','O','done',$2) RETURNING id",
+    [userId, old]
+  );
+  const { rows: [b] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, done_at) VALUES ($1,'arch_recent','odoo','R','done',$2) RETURNING id",
+    [userId, recent]
+  );
+  await cronModule.autoArchiveDone();
+  const { rows: [ra] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id=$1', [a.id]);
+  const { rows: [rb] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id=$1', [b.id]);
+  expect(ra.is_hidden).toBe(true);
+  expect(rb.is_hidden).toBe(false);
+});

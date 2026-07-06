@@ -53,8 +53,9 @@ test('with project_id → upserts wiki page and sets done', async () => {
     [userId, projectId]
   );
   await runLibraryAgent(task.id, userId);
-  const { rows: [updated] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
+  const { rows: [updated] } = await dbModule.query('SELECT status, done_at FROM tasks WHERE id=$1', [task.id]);
   expect(updated.status).toBe('done');
+  expect(updated.done_at).toBeTruthy(); // 進 done 時寫入完成時間，供自動封存
   const { rows: fnRows } = await dbModule.query(
     "SELECT * FROM wiki_pages WHERE project_id=$1 AND node_type='function'", [projectId]
   );

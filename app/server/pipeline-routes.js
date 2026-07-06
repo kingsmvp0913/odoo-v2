@@ -16,27 +16,54 @@ function registerRoutes(app) {
     res.json({ inflight: getInflightTaskIds() });
   });
 
+  // 最終人工審核通過：把 task 分支併回 main、清理 worktree 與分支，轉入 wiki 更新
   app.post('/api/tasks/:id/approve', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, task_id, status, git_branch, project_id FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'final_pending') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' cannot be approved; expected final_pending` });
+      const task = rows[0];
+      if (task.status !== 'review_pending') {
+        return res.status(400).json({ error: `Task status '${task.status}' cannot be approved; expected review_pending` });
       }
+      if (!task.git_branch || !task.project_id) {
+        return res.status(400).json({ error: '任務缺少分支或專案，無法合併' });
+      }
+
+      const { rows: repos } = await query(
+        "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+        [task.project_id]
+      );
+      if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
+
+      const path = require('path');
+      const { mergeToMain, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
+      const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
+
+      // 逐 repo 併入 main（任一失敗即中止，狀態不變）
+      for (const repo of repos) {
+        await mergeToMain(repo.local_path, task.git_branch);
+      }
+      // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
+      for (const repo of repos) {
+        const wtPath = path.join(wtParent, path.basename(repo.local_path));
+        await removeWorktree(repo.local_path, wtPath).catch(() => {});
+        await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
+      }
+
       await query(
-        "UPDATE tasks SET status = 'branch_pending', updated_at = NOW() WHERE id = $1",
+        "UPDATE tasks SET status = 'wiki_updating', updated_at = NOW() WHERE id = $1",
         [req.params.id]
       );
       await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，開始實作')",
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回主線並清理分支，正在更新文件')",
         [req.params.id]
       );
       res.json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: '合併主線失敗：' + err.message });
     }
   });
 
@@ -96,46 +123,6 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/tasks/:id/merge-to-main', verifyToken, async (req, res) => {
-    try {
-      const { rows } = await query(
-        'SELECT id, status, git_branch, project_id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      const task = rows[0];
-      if (task.status !== 'deploy_ready') {
-        return res.status(400).json({ error: `Task status '${task.status}' is not deploy_ready` });
-      }
-      if (!task.git_branch) return res.status(400).json({ error: 'Task has no git branch' });
-      if (!task.project_id) return res.status(400).json({ error: 'Task has no project' });
-
-      const { rows: repoRows } = await query(
-        'SELECT local_path FROM project_repos WHERE project_id = $1 AND is_primary = true',
-        [task.project_id]
-      );
-      if (!repoRows.length || !repoRows[0].local_path) {
-        return res.status(400).json({ error: '專案未設定主要 Repo 路徑' });
-      }
-
-      const { mergeToMain, deleteBranchLocal } = require('./pipeline/git');
-      await mergeToMain(repoRows[0].local_path, task.git_branch);
-      await deleteBranchLocal(repoRows[0].local_path, task.git_branch);
-
-      await query(
-        "UPDATE tasks SET status = 'wiki_updating', updated_at = NOW() WHERE id = $1",
-        [req.params.id]
-      );
-      await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', '分支已合併回主線並刪除，正在更新 Wiki')",
-        [req.params.id]
-      );
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
@@ -147,7 +134,7 @@ function registerRoutes(app) {
         return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
       }
       await query(
-        "UPDATE tasks SET status = 'deploy_ready', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+        "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
         [req.params.id]
       );
       res.json({ ok: true });
