@@ -191,6 +191,25 @@ async function syncUsers(projectId) {
   return seedOdooUsers({ venvPython, odooBin, dbName, addonsPath });
 }
 
+// 對測試區資料庫執行模組升級（odoo-bin -u）。載入/語法錯會以非 0 結束並 throw，供上層判定退回 coding。
+async function upgradeModules(projectId, modules) {
+  const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id = $1', [projectId]);
+  if (!project) throw new Error('project not found');
+  const dirName = project.folder_name || project.name;
+  const envDir = path.join(ENV_BASE, dirName);
+  const srcDir = path.join(envDir, 'src');
+  const odooBin = path.join(srcDir, 'odoo-bin');
+  const dbName = `test_${dirName}`;
+  const extraAddons = await projectAddonsPaths(projectId);
+  const addonsPath = [path.join(srcDir, 'addons'), ...extraAddons].join(',');
+  const isWin = process.platform === 'win32';
+  const venvPython = path.join(envDir, 'venv', isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
+  if (!fs.existsSync(venvPython)) throw new Error('環境尚未建立，請先建立測試環境');
+  const modArg = (modules && modules.length ? modules : ['all']).join(',');
+  const out = await execCmd(venvPython, [odooBin, '-u', modArg, '-d', dbName, '--stop-after-init', '--addons-path', addonsPath, ...odooDbArgs()]);
+  return { ok: true, log: out };
+}
+
 async function stopEnv(projectId) {
   const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
   if (!env) return;
@@ -248,4 +267,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, ENV_BASE };
+module.exports = { runEnvSetup, upgradeModules, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, ENV_BASE };

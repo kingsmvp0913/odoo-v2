@@ -169,6 +169,14 @@ async function handleMerge(task) {
   });
 }
 
+// deploy_testing：純程式部署到測試區 + odoo-bin -u 升級
+async function handleDeployTesting(task) {
+  await withInflight(task.id, (signal) => {
+    const { runDeployTesting } = require('./deploy-testing');
+    return runDeployTesting(task.id, task.user_id, signal);
+  });
+}
+
 // wiki_updating：library-agent 更新 wiki → done
 async function handleWiki(task) {
   await withInflight(task.id, (signal) => {
@@ -186,8 +194,9 @@ const HANDLERS = {
   coding_running: handleCoding,
   qa_running: handleQa,
   merge_running: handleMerge,
+  deploy_testing: handleDeployTesting,
   wiki_updating: handleWiki,
-  // deploy_testing → Task 6；playwright_running → Task 8
+  // playwright_running → Task 8
 };
 
 async function processTask(task, settings) {
