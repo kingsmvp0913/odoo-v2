@@ -101,6 +101,7 @@ async function refreshWikiNode(projectId, slug, userId, signal) {
     [projectId, slug]
   );
   if (!node) { const e = new Error('Wiki node not found'); e.status = 404; throw e; }
+  if (node.node_type === 'notes') { const e = new Error('專案備註為人工維護，不支援重新生成'); e.status = 400; throw e; }
 
   const { rows: [project] } = await query('SELECT * FROM projects WHERE id=$1', [projectId]);
   const { rows: readyRepos } = await query(
@@ -285,6 +286,10 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
     await _upsertNode(projectId, overviewId, 'module', `module-${mod.module}`, mod.module, _manifestSummary(mod));
     emit('modules', 40 + Math.round(((i + 1) / total) * 55), `建立 ${mod.module}`);
   }
+
+  // 專案備註：人工維護區塊，AI 不觸碰
+  await _ensureNode(projectId, null, 'notes', 'project-notes', '專案備註',
+    '# 專案備註\n\n在此記錄專案注意事項、部署環境、聯絡窗口等人工維護的資訊。');
 
   emit('done', 100, '完成');
   return { ok: true, slug: 'overview', modules: manifests.length };

@@ -51,6 +51,7 @@ async function analyzeTask(taskId, signal) {
       `UPDATE tasks SET status = 'stopped', blocker_content = $2, updated_at = NOW() WHERE id = $1`,
       [taskId, `Analysis YAML error: ${parseErr.message}\n\n${rawYaml.slice(0, 500)}`]
     );
+    notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
     return { next_status: 'stopped', analysis_yaml: rawYaml };
   }
 
@@ -65,6 +66,8 @@ async function analyzeTask(taskId, signal) {
     "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
     [taskId, `Analysis: ${parsed.summary || ''}\nMode: ${parsed.execution_mode}\nModule: ${parsed.module}`]
   );
+
+  notify.emitToUser(task.user_id, 'task:updated', { taskId, status: next_status });
 
   return { next_status, analysis_yaml: rawYaml };
 }
