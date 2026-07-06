@@ -14,7 +14,7 @@ const STATUS_DISPLAY = {
   coding_running: '🔵 開發中', qa_running: '🔵 QA', merge_running: '🔵 併入測試',
   deploy_testing: '🔵 部署測試區', playwright_running: '🔵 E2E 測試',
   review_pending: '🟢 等待審核', wiki_updating: '🔵 更新文件',
-  done: '✅ 完成', stopped: '🔴 已停止', merge_conflict: '🔴 合併衝突',
+  done: '✅ 完成', stopped: '🔴 失敗待確認', merge_conflict: '🔴 合併衝突',
   cs_running: '🔵 客服分析', cs_reply_pending: '🟡 等候送出', cs_data_needed: '🟡 需補充資料'
 };
 

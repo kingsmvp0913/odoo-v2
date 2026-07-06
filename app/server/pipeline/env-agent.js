@@ -206,7 +206,10 @@ async function upgradeModules(projectId, modules) {
   const venvPython = path.join(envDir, 'venv', isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
   if (!fs.existsSync(venvPython)) throw new Error('環境尚未建立，請先建立測試環境');
   const modArg = (modules && modules.length ? modules : ['all']).join(',');
-  const out = await execCmd(venvPython, [odooBin, '-u', modArg, '-d', dbName, '--stop-after-init', '--addons-path', addonsPath, ...odooDbArgs()]);
+  // 有指定模組：-i 安裝（新模組只 -u 不會裝，Odoo 只印 warning 卻 exit 0＝假成功）＋ -u 更新（既有模組），兩者同給涵蓋新/舊。
+  // 未指定：-u all 更新全部已安裝。
+  const modFlags = (modules && modules.length) ? ['-i', modArg, '-u', modArg] : ['-u', modArg];
+  const out = await execCmd(venvPython, [odooBin, ...modFlags, '-d', dbName, '--stop-after-init', '--addons-path', addonsPath, ...odooDbArgs()]);
   return { ok: true, log: out };
 }
 

@@ -28,6 +28,10 @@ stage: qa
 - Odoo 版本：{{odoo_version}}
 - 任務分支：{{git_branch}}
 
+【使用者修正指示（解決阻塞時輸入）】
+若下方有內容，請將其納入判定考量（例如使用者明確要求忽略某項或已說明處理方式）。
+{{resolution}}
+
 【分析規格】
 {{analysis_yaml}}
 

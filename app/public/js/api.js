@@ -10,11 +10,16 @@ const Api = {
     const token = this.getToken();
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(`/api/${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined
-    });
+    let res;
+    try {
+      res = await fetch(`/api/${path}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined
+      });
+    } catch (e) {
+      throw new Error('伺服器沒回應');  // 網路層失敗（原生訊息為 Failed to fetch）
+    }
     if (res.status === 401) { this.clearToken(); window.location.hash = '/login'; throw new Error('Unauthorized'); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);

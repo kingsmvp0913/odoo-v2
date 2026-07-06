@@ -54,10 +54,11 @@ async function doDeploy(task, taskId, userId) {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 測試區升級模組 ${moduleName || 'all'}...\n` });
     await upgradeModules(task.project_id, moduleName ? [moduleName] : []);
   } catch (err) {
-    // 升級失敗＝程式載入/語法錯 → 退回 coding 並計數
+    // 升級失敗＝程式載入/語法錯 → 退回 coding 並計數。
+    // 記錄（task_logs）只留短標記；完整錯誤存 retry_feedback，coding retry 時餵給 AI 修正。
     await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-      [taskId, `[部署測試區升級失敗]\n${err.message}`]
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[部署測試區升級失敗]')",
+      [taskId]
     );
     const nextCount = (task.deploy_retry_count || 0) + 1;
     if (nextCount >= DEPLOY_LIMIT) {
@@ -68,8 +69,8 @@ async function doDeploy(task, taskId, userId) {
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
       await query(
-        "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount]
+        "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+        [taskId, nextCount, `[部署測試區升級失敗]\n${err.message}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     }

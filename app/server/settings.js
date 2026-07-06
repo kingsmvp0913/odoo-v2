@@ -32,7 +32,7 @@ function registerRoutes(app) {
   app.get('/api/settings', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT odoo_settings, sync_interval, deploy_cmd, coding_cmd, qa_cmd FROM users WHERE id = $1',
+        'SELECT odoo_settings, sync_interval FROM users WHERE id = $1',
         [req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'User not found' });
@@ -44,24 +44,18 @@ function registerRoutes(app) {
 
   app.put('/api/settings', verifyToken, async (req, res) => {
     try {
-      const { odoo_settings, sync_interval, deploy_cmd, coding_cmd, qa_cmd } = req.body;
+      const { odoo_settings, sync_interval } = req.body;
       if (sync_interval !== undefined && sync_interval < 5) {
         return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
       }
       await query(
         `UPDATE users SET
            odoo_settings = COALESCE($2, odoo_settings),
-           sync_interval = COALESCE($3, sync_interval),
-           deploy_cmd    = COALESCE($4, deploy_cmd),
-           coding_cmd    = COALESCE($5, coding_cmd),
-           qa_cmd        = COALESCE($6, qa_cmd)
+           sync_interval = COALESCE($3, sync_interval)
          WHERE id = $1`,
         [req.userId,
          odoo_settings ? JSON.stringify(odoo_settings) : null,
-         sync_interval ?? null,
-         deploy_cmd ?? null,
-         coding_cmd ?? null,
-         qa_cmd ?? null]
+         sync_interval ?? null]
       );
       res.json({ ok: true });
     } catch (err) {

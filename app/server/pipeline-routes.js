@@ -54,7 +54,7 @@ function registerRoutes(app) {
       }
 
       await query(
-        "UPDATE tasks SET status = 'wiki_updating', updated_at = NOW() WHERE id = $1",
+        "UPDATE tasks SET status = 'wiki_updating', approved_at = NOW(), updated_at = NOW() WHERE id = $1",
         [req.params.id]
       );
       await query(

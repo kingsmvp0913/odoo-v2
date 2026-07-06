@@ -17,7 +17,7 @@ const STATUS_LABELS = {
   cs_reply_pending:   '等待回覆確認',
   cs_data_needed:     '需補資料',
   done:               '完成',
-  stopped:            '已停止'
+  stopped:            '失敗待確認'
 };
 
 const FLOW_DEV = [
@@ -119,7 +119,7 @@ window.TaskListView = Vue.defineComponent({
       let list;
       if (this.filter === 'archived')          list = this.archivedTasks;
       else if (this.filter === 'paused')       list = this.tasks.filter(t => t.is_paused);
-      else if (this.filter === 'needs_action') list = this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused);
+      else if (this.filter === 'needs_action') list = this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused));
       else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
       else                                     list = this.tasks; // 全部 = 含暫停中
       const q = this.search.toLowerCase().trim();
@@ -132,7 +132,7 @@ window.TaskListView = Vue.defineComponent({
         (t.project_name || '').toLowerCase().includes(q)
       );
     },
-    needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused).length; },
+    needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
     pausedCount() { return this.tasks.filter(t => t.is_paused).length; },
     allCount()    { return this.tasks.length; },
@@ -234,8 +234,8 @@ window.TaskListView = Vue.defineComponent({
     async stepPipeline() {
       this.stepping = true;
       try {
-        const r = await Api.post('pipeline/step', {});
-        showToast(`Pipeline 推進完成，處理 ${r.processed} 個任務`, 'success');
+        await Api.post('pipeline/step', {});
+        showToast('已觸發推進，處理中…（進度即時更新）', 'info');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.stepping = false; }
@@ -250,7 +250,7 @@ window.TaskListView = Vue.defineComponent({
       return null;
     },
     sourceLabel(source) {
-      return source === 'odoo' ? 'Odoo' : source === 'service' ? 'eService' : source;
+      return source === 'odoo' ? 'Odoo' : source === 'service' ? 'eService' : source === 'manual' ? '手動增加' : source;
     },
     sourceBadgeClass(source) {
       if (source === 'odoo')    return 'src-badge src-odoo';
@@ -422,7 +422,7 @@ window.TaskListView = Vue.defineComponent({
                 <button class="btn btn-ghost btn-sm"
                   style="color:var(--text-muted);font-size:12px;padding:2px 8px"
                   @click="archiveTask(t, $event)" title="封存任務">⊞ 封存</button>
-                <button class="btn btn-ghost btn-sm"
+                <button v-if="!t.approved_at" class="btn btn-ghost btn-sm"
                   style="color:var(--danger);font-size:12px;padding:2px 8px"
                   @click="deleteTask(t, $event)" title="永久刪除（可重新同步匯入）">✕ 刪除</button>
               </template>
@@ -430,7 +430,7 @@ window.TaskListView = Vue.defineComponent({
                 <button class="btn btn-ghost btn-sm"
                   style="color:var(--success);font-size:12px;padding:2px 8px"
                   @click="unarchiveTask(t, $event)" title="解除封存，回到主列表">↩ 解封存</button>
-                <button class="btn btn-ghost btn-sm"
+                <button v-if="!t.approved_at" class="btn btn-ghost btn-sm"
                   style="color:var(--danger);font-size:12px;padding:2px 8px"
                   @click="deleteTask(t, $event)" title="永久刪除（可重新同步匯入）">✕ 刪除</button>
               </template>

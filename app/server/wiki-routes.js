@@ -28,6 +28,11 @@ function registerRoutes(app) {
 
   app.post(`${base}/:slug/refresh`, verifyToken, async (req, res) => {
     try {
+      const { rows: [node] } = await query(
+        'SELECT node_type FROM wiki_pages WHERE project_id=$1 AND slug=$2',
+        [req.params.projectId, req.params.slug]
+      );
+      if (node?.node_type === 'notes') return res.status(400).json({ error: '專案備註為人工維護，不支援重新生成' });
       const result = await refreshWikiNode(req.params.projectId, req.params.slug, req.userId);
       res.json(result);
     } catch (err) {
@@ -90,6 +95,11 @@ function registerRoutes(app) {
 
   app.delete(`${base}/:slug`, verifyToken, async (req, res) => {
     try {
+      const { rows: [node] } = await query(
+        'SELECT node_type FROM wiki_pages WHERE project_id=$1 AND slug=$2',
+        [req.params.projectId, req.params.slug]
+      );
+      if (node?.node_type === 'notes') return res.status(400).json({ error: '專案備註不可刪除' });
       const { rows } = await query(
         'DELETE FROM wiki_pages WHERE project_id = $1 AND slug = $2 RETURNING id',
         [req.params.projectId, req.params.slug]

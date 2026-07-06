@@ -21,7 +21,7 @@ window.TerminalView = Vue.defineComponent({
       this.error = e.message;
     }
   },
-  mounted() {
+  async mounted() {
     const term = new Terminal({
       theme: { background: '#1a1a1a', foreground: '#f0f0f0' },
       fontSize: 13,
@@ -33,6 +33,17 @@ window.TerminalView = Vue.defineComponent({
     this._term = term;
 
     const taskId = this.taskId;
+
+    // 先載入持久化歷史（事後回放），再掛 socket 續播即時輸出
+    try {
+      const events = await Api.get(`tasks/${taskId}/events`);
+      if (Array.isArray(events) && events.length) {
+        for (const ev of events) term.write(ev.content);
+      } else {
+        term.writeln('\x1b[90m（尚無執行紀錄）\x1b[0m');
+      }
+    } catch (e) { /* best-effort：載入失敗仍可看即時串流 */ }
+
     this._outputHandler = (data) => {
       if (data.taskId === taskId) term.write(data.data);
     };
@@ -64,17 +75,17 @@ window.TerminalView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <h1>終端機 <span style="font-weight:400;font-size:14px">{{ taskTitle }}</span></h1>
+      <h1>執行歷程 <span style="font-weight:400;font-size:14px">{{ taskTitle }}</span></h1>
       <button class="btn btn-outline btn-sm" @click="goBack">← 返回</button>
     </div>
-    <div class="content" style="padding:0">
+    <div class="content" style="padding:0;display:flex;flex-direction:column;overflow:hidden">
       <div v-if="error" style="padding:16px;color:var(--error)">{{ error }}</div>
-      <div v-else>
-        <div style="padding:8px 16px;background:var(--sidebar-bg);font-size:12px;color:var(--text-muted);display:flex;gap:16px">
+      <div v-else style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div style="padding:8px 16px;background:var(--sidebar-bg);font-size:12px;color:var(--text-muted);display:flex;gap:16px;flex:none">
           <span>{{ running ? '⏳ 執行中...' : (exitCode === 0 ? '✅ 成功' : exitCode !== null ? '❌ 失敗 (code ' + exitCode + ')' : '⏸ 待機') }}</span>
           <span v-if="!running && exitCode === null" style="color:var(--text-muted)">等待 pipeline 啟動...</span>
         </div>
-        <div ref="termContainer" style="height:calc(100vh - 120px);padding:8px"></div>
+        <div ref="termContainer" style="flex:1;min-height:0;padding:8px"></div>
       </div>
     </div>
   `

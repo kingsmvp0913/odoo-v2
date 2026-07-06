@@ -4,7 +4,6 @@ window.SettingsView = Vue.defineComponent({
     return {
       me: { username: '', display_name: '' },
       teamsUserId: '',
-      pipeline: { deploy_cmd: '' },
       creds: {
         odoo_username: '', odoo_password: '', odoo_user_id: '',
         service_username: '', service_password: '', service_user_id: ''
@@ -61,7 +60,6 @@ window.SettingsView = Vue.defineComponent({
         this.creds.service_username = s.service_username || '';
         this.creds.service_password = s.service_password || '';
         this.creds.service_user_id  = s.service_user_id  || '';
-        this.pipeline.deploy_cmd = settings.deploy_cmd || '';
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -71,7 +69,7 @@ window.SettingsView = Vue.defineComponent({
         const odoo_settings = { teams_user_id: this.teamsUserId, ...this.creds };
         await Promise.all([
           Api.put('auth/me', { display_name: this.me.display_name }),
-          Api.put('settings', { odoo_settings, ...this.pipeline })
+          Api.put('settings', { odoo_settings })
         ]);
         showToast('設定已儲存', 'success');
       } catch (e) { showToast(e.message, 'error'); }
@@ -102,6 +100,23 @@ window.SettingsView = Vue.defineComponent({
         showToast(`驗證成功，使用者 ID：${uid}`, 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.verifyingOdoo = false; }
+    },
+    testNotify() {
+      const perm = window.Notification ? Notification.permission : 'unsupported';
+      if (perm === 'denied') {
+        showToast('瀏覽器已封鎖此網站的通知，請至瀏覽器設定 → 網站通知 → 解除封鎖後重新整理', 'error', 8000);
+        return;
+      }
+      if (perm === 'default') {
+        showToast('尚未授權通知，請先開啟通知開關', 'error');
+        return;
+      }
+      if (!NotifyManager.enabled()) {
+        showToast('通知未啟用（localStorage 已停用）', 'error');
+        return;
+      }
+      NotifyManager.show('測試通知', '桌面通知運作正常 ✓', 'test');
+      showToast('測試通知已發送', 'success');
     },
     async verifyService() {
       if (!this.creds.service_username || !this.creds.service_password) {
@@ -139,10 +154,13 @@ window.SettingsView = Vue.defineComponent({
               <input type="checkbox" :checked="isDark" @change="toggleTheme" style="width:16px;height:16px;cursor:pointer" />
               <span>深色模式</span>
             </label>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px">
-              <input type="checkbox" :checked="notifyOn" @change="toggleNotify" style="width:16px;height:16px;cursor:pointer" />
-              <span>桌面通知（有任務需要你處理時提醒）</span>
-            </label>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px">
+                <input type="checkbox" :checked="notifyOn" @change="toggleNotify" style="width:16px;height:16px;cursor:pointer" />
+                <span>桌面通知（有任務需要你處理時提醒）</span>
+              </label>
+              <button v-if="notifyOn" class="btn btn-primary btn-sm" @click="testNotify" style="white-space:nowrap">🔔 測試通知</button>
+            </div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:6px">開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</div>
           </div>
         </div>
@@ -264,23 +282,6 @@ window.SettingsView = Vue.defineComponent({
               <label class="field-label">Teams 使用者 ID（AAD Object ID）</label>
               <input v-model="teamsUserId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="field-input" />
               <div class="hint-text">Azure AD → 使用者 → 物件識別碼</div>
-            </div>
-          </div>
-          <div class="setting-block-footer">
-            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存' }}</button>
-          </div>
-        </div>
-
-        <!-- Pipeline 指令 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">Pipeline 指令</div>
-            <div class="setting-block-desc">設定本機執行的 CI/CD 和開發指令。留空表示跳過該步驟。</div>
-          </div>
-          <div class="setting-block-body">
-            <div class="field-item" style="margin-bottom:12px">
-              <label class="field-label">部署指令 <span class="field-label-hint">QA 通過後執行</span></label>
-              <input v-model="pipeline.deploy_cmd" placeholder="例：sudo systemctl restart odoo" class="field-input" />
             </div>
           </div>
           <div class="setting-block-footer">

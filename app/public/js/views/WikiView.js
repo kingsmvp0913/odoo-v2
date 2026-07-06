@@ -7,15 +7,17 @@ window.WikiNode = Vue.defineComponent({
       <div style="display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:13px"
         :style="{ background: currentSlug === node.slug ? 'var(--border)' : 'transparent', paddingLeft: (8 + depth*14) + 'px' }"
         @click="$emit('open', node.slug)">
-        <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : '📄' }}</span>
+        <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : node.node_type === 'notes' ? '📝' : '📄' }}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ node.title }}</span>
-        <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px"
-          :disabled="refreshing === node.slug"
-          @click.stop="$emit('refresh', node.slug)" title="重新生成">
-          {{ refreshing === node.slug ? '…' : '⟳' }}
-        </button>
-        <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px;color:var(--error)"
-          @click.stop="$emit('remove', node.slug)" title="刪除">✕</button>
+        <template v-if="node.node_type !== 'notes'">
+          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px"
+            :disabled="refreshing === node.slug"
+            @click.stop="$emit('refresh', node.slug)" title="重新生成">
+            {{ refreshing === node.slug ? '…' : '⟳' }}
+          </button>
+          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px;color:var(--error)"
+            @click.stop="$emit('remove', node.slug)" title="刪除">✕</button>
+        </template>
       </div>
       <wiki-node v-for="c in node.children" :key="c.id" :node="c" :depth="depth+1"
         :current-slug="currentSlug" :refreshing="refreshing"
@@ -68,7 +70,13 @@ window.WikiView = Vue.defineComponent({
         if (p.parent_id && byId[p.parent_id]) byId[p.parent_id].children.push(byId[p.id]);
         else roots.push(byId[p.id]);
       });
-      roots.sort((a, b) => (a.node_type === 'overview' ? -1 : 0) - (b.node_type === 'overview' ? -1 : 0));
+      roots.sort((a, b) => {
+        if (a.node_type === 'overview') return -1;
+        if (b.node_type === 'overview') return 1;
+        if (a.node_type === 'notes') return 1;
+        if (b.node_type === 'notes') return -1;
+        return 0;
+      });
       return roots;
     }
   },
@@ -178,16 +186,24 @@ window.WikiView = Vue.defineComponent({
         <template v-else>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
             <h2 style="margin:0">{{ current.title }}</h2>
-            <div>
+            <div v-if="current.node_type !== 'notes'">
               <button v-if="!editing" class="btn btn-outline btn-sm" @click="editing=true;editContent=current.content">編輯</button>
               <template v-else>
                 <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">儲存</button>
                 <button class="btn btn-outline btn-sm" style="margin-left:8px" @click="editing=false">取消</button>
               </template>
             </div>
+            <div v-else>
+              <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">儲存</button>
+            </div>
           </div>
-          <div v-if="!editing" v-html="renderedContent" style="line-height:1.7;font-size:14px"></div>
-          <textarea v-else v-model="editContent" style="width:100%;height:60vh;font-family:monospace;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
+          <template v-if="current.node_type === 'notes'">
+            <textarea v-model="editContent" style="width:100%;height:70vh;font-family:monospace;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
+          </template>
+          <template v-else>
+            <div v-if="!editing" v-html="renderedContent" style="line-height:1.7;font-size:14px"></div>
+            <textarea v-else v-model="editContent" style="width:100%;height:60vh;font-family:monospace;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
+          </template>
         </template>
       </div>
     </div>

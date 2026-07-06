@@ -10,6 +10,20 @@ function registerRoutes(app) {
         [req.params.id]
       );
       const env = rows.length ? rows[0] : { status: 'idle' };
+      // 若 DB 顯示 running 但 PID 已死（app 重啟、process crash），自動修正為 idle
+      if (env.status === 'running' && env.pid) {
+        let alive = true;
+        try { process.kill(env.pid, 0); } catch { alive = false; }
+        if (!alive) {
+          await query(
+            "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
+            [req.params.id]
+          );
+          env.status = 'idle';
+          env.pid = null;
+          env.url = null;
+        }
+      }
       // built = 環境目錄已完整建置（.ready 標記存在），前端據此顯示「重新啟動」而非「一鍵建立環境」
       try {
         const fs = require('fs');

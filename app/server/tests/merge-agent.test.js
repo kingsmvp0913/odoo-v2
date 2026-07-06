@@ -52,7 +52,7 @@ async function setupProjectTask(repoLabels) {
 }
 
 // 意圖：task 分支要併進「testing」（非 main），且每個 repo 都要處理
-test('merges task branch into testing for every repo, then deploy_ready', async () => {
+test('merges task branch into testing for every repo, then deploy_testing', async () => {
   gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
   const taskId = await setupProjectTask(['main', 'hr']);
 
@@ -64,7 +64,7 @@ test('merges task branch into testing for every repo, then deploy_ready', async 
     expect(c[2]).toBe('task/task_odoo_m1');    // source（task 分支）
   }
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
-  expect(rows[0].status).toBe('deploy_ready');
+  expect(rows[0].status).toBe('deploy_testing');
 });
 
 // 意圖：某個 repo 有無法自動解決的衝突時，要卡在 merge_conflict 且記錄「是哪個 repo」

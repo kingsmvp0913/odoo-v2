@@ -73,6 +73,7 @@ beforeEach(async () => {
   require('../pipeline/playwright-agent').runPlaywrightAgent.mockReset();
   require('../pipeline/playwright-agent').runPlaywrightAgent.mockResolvedValue(undefined);
   await runnerModule.resetLoopCounter(userId);
+  await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
 });
@@ -244,6 +245,38 @@ test('resetLoopCounter allows processing to resume', async () => {
   await insertTask('analysis_running', Date.now() + 9999);
   const result = await runnerModule.runPipeline(userId);
   expect(result.processed).toBeGreaterThanOrEqual(1);
+});
+
+test('processTask 分派前寫入階段標記 task_event（執行歷程可見「跑到哪」）', async () => {
+  const taskId = await insertTask('qa_running');
+  await runnerModule.runPipeline(userId);
+  const { rows } = await dbModule.query(
+    'SELECT content FROM task_events WHERE task_id = $1 ORDER BY id', [taskId]
+  );
+  expect(rows.length).toBeGreaterThan(0);
+  // 標記以中文顯示（D：不影響 status 值，只影響歷程顯示文字）
+  expect(rows.some(r => r.content.includes('▶') && r.content.includes('QA 審查中'))).toBe(true);
+});
+
+test('任務轉 stopped 時把阻塞原因寫進執行歷程', async () => {
+  const { addWorktree } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('PS','17.0','ps') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status)
+     VALUES ($1,'main','u','/repos/ps/main',true,'done')`, [proj.id]
+  );
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id)
+     VALUES ($1,'task_odoo_stopev','odoo','T','c','branch_pending',$2) RETURNING id`, [userId, proj.id]
+  );
+  addWorktree.mockRejectedValueOnce(new Error('boom worktree'));
+
+  await runnerModule.runPipeline(userId);
+
+  const { rows } = await dbModule.query('SELECT content FROM task_events WHERE task_id=$1 ORDER BY id', [t.id]);
+  expect(rows.some(r => r.content.includes('❌ 失敗') && r.content.includes('worktree'))).toBe(true);
 });
 
 test('runPipeline 用 qa-agent 處理 qa_running 任務', async () => {

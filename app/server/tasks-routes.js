@@ -1,6 +1,24 @@
+const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { abortTask } = require('./pipeline/runner');
+const { removeWorktree, deleteBranchLocal } = require('./pipeline/git');
+
+// 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除。
+async function cleanupTaskGit(task) {
+  if (!task.project_id || !task.git_branch) return;
+  const { rows: repos } = await query(
+    "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+    [task.project_id]
+  );
+  if (!repos.length) return;
+  const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
+  for (const repo of repos) {
+    const wtPath = path.join(wtParent, path.basename(repo.local_path));
+    await removeWorktree(repo.local_path, wtPath).catch(() => {});
+    await deleteBranchLocal(repo.local_path, task.git_branch, true).catch(() => {});
+  }
+}
 
 const NEEDS_ACTION_STATUSES = ['confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
 const ANSWER_ALLOWED_STATUSES = ['confirm_pending'];
@@ -26,7 +44,7 @@ function registerRoutes(app) {
         params.push(source);
       }
 
-      const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.created_at, t.updated_at,
+      const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.approved_at, t.created_at, t.updated_at,
                           e.url AS env_url,
                           p.name AS project_name
                    FROM tasks t
@@ -100,6 +118,34 @@ function registerRoutes(app) {
     }
   });
 
+  // 執行歷程：該任務所有事件（依序回放，供 Terminal 頁載入歷史）
+  app.get('/api/tasks/:id/events', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query(
+        'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+
+      // 無 limit → 全部（Terminal 全頁）；有 limit → 取最新 N 筆，before=<id> 再往前撈舊的（詳情頁即時歷程用）
+      const limit = req.query.limit ? Math.min(parseInt(req.query.limit) || 10, 200) : null;
+      const before = parseInt(req.query.before) || 0;
+      let rows;
+      if (limit === null) {
+        ({ rows } = await query('SELECT id, content, created_at FROM task_events WHERE task_id = $1 ORDER BY id', [req.params.id]));
+      } else if (before > 0) {
+        ({ rows } = await query('SELECT id, content, created_at FROM task_events WHERE task_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3', [req.params.id, before, limit]));
+        rows.reverse();
+      } else {
+        ({ rows } = await query('SELECT id, content, created_at FROM task_events WHERE task_id = $1 ORDER BY id DESC LIMIT $2', [req.params.id, limit]));
+        rows.reverse();
+      }
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Toggle pause on a task
   app.put('/api/tasks/:id/pause', verifyToken, async (req, res) => {
     try {
@@ -153,8 +199,11 @@ function registerRoutes(app) {
     try {
       const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
       if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可刪除任務' });
-      const { rows } = await query('SELECT id FROM tasks WHERE id = $1', [req.params.id]);
+      const { rows } = await query('SELECT id, task_id, project_id, git_branch, approved_at FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      if (rows[0].approved_at) return res.status(403).json({ error: '已人工審核通過的任務不可刪除' });
+      await cleanupTaskGit(rows[0]);
+      await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM tasks WHERE id = $1', [req.params.id]);
       res.json({ ok: true });
@@ -168,11 +217,18 @@ function registerRoutes(app) {
       if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可刪除任務' });
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
-      await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [ids]);
-      const { rowCount } = await query(
-        'DELETE FROM tasks WHERE id = ANY($1::int[]) AND user_id = $2',
+      // 已審核通過的任務跳過不刪；其餘先清 worktree/分支再刪
+      const { rows: ts } = await query(
+        'SELECT id, task_id, project_id, git_branch, approved_at FROM tasks WHERE id = ANY($1::int[]) AND user_id = $2',
         [ids, req.userId]
       );
+      const deletable = ts.filter(t => !t.approved_at);
+      const delIds = deletable.map(t => t.id);
+      if (!delIds.length) return res.json({ ok: true, affected: 0 });
+      for (const t of deletable) await cleanupTaskGit(t);
+      await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
+      await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
+      const { rowCount } = await query('DELETE FROM tasks WHERE id = ANY($1::int[])', [delIds]);
       res.json({ ok: true, affected: rowCount });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -256,19 +312,21 @@ function registerRoutes(app) {
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
       if (!['stopped'].includes(tasks[0].status)) {
-        return res.status(400).json({ error: '只有阻塞中的任務可以解決阻塞' });
+        return res.status(400).json({ error: '只有失敗待確認的任務可以重新處理' });
       }
       const { resolution } = req.body;
       if (!resolution?.trim()) return res.status(400).json({ error: '請填寫解決說明' });
 
+      // 回到中斷的那一關續跑（resume_status）；沒有記錄則退回 new 重新分診
       await query(
-        `UPDATE tasks SET status = 'new', blocker_content = NULL, blocker_type = NULL,
+        `UPDATE tasks SET status = COALESCE(resume_status, 'new'),
+         blocker_content = NULL, blocker_type = NULL, resume_status = NULL,
          qa_retry_count = 0, deploy_retry_count = 0, pw_retry_count = 0, updated_at = NOW() WHERE id = $1`,
         [req.params.id]
       );
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
-        [req.params.id, `[解決阻塞] ${resolution.trim()}`]
+        [req.params.id, `[修正指示] ${resolution.trim()}`]
       );
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }

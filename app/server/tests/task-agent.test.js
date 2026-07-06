@@ -6,7 +6,7 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
-  getMainBranch: jest.fn().mockResolvedValue('main')
+  ensureMainBranch: jest.fn().mockResolvedValue('main')
 }));
 
 let dbModule, runTaskAnalysis, git;

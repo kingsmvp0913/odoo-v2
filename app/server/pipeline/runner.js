@@ -16,6 +16,13 @@ const { createBranch, checkoutDefault, addWorktree, removeWorktree, getMainBranc
 const notify = require('../notify');
 
 const LOOP_LIMIT = 5;
+// 執行歷程階段標記的中文顯示（僅影響顯示文字，status 值與流程判斷不變）
+const STAGE_LABELS = {
+  new: '待分類', cs_running: '客服處理中', analysis_running: '分析中',
+  confirm_answered: '已回覆澄清', branch_pending: '建立分支', coding_running: '開發中',
+  qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
+  playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki'
+};
 const _inFlight = new Map(); // taskId (number) → AbortController
 const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating'];
 
@@ -55,12 +62,11 @@ async function resetLoopCounter(userId) {
 }
 
 async function getUserSettings(userId) {
-  const { rows } = await query('SELECT odoo_settings, deploy_cmd FROM users WHERE id = $1', [userId]);
+  const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [userId]);
   if (!rows.length) return {};
   const settings = rows[0].odoo_settings || {};
   return {
-    git_repo_path: settings.git_repo_path || '',
-    deploy_cmd: rows[0].deploy_cmd || settings.deploy_cmd || ''
+    git_repo_path: settings.git_repo_path || ''
   };
 }
 
@@ -210,7 +216,17 @@ const HANDLERS = {
 
 async function processTask(task, settings) {
   const handler = HANDLERS[task.status];
-  if (handler) await handler(task, settings);
+  if (!handler) return;
+  // 執行歷程階段標記：只在「真正進入」時寫一次。已 inflight（長階段 claude 仍在跑，
+  // 每次 cron tick 都會 re-poll 到同一 *_running 任務）就跳過，避免重複標記洗版。
+  if (!_inFlight.has(task.id)) {
+    const marker = `\n\x1b[96m▶ ${STAGE_LABELS[task.status] || task.status}\x1b[0m\n`;
+    notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: marker });
+    await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, marker]).catch(() => {});
+    // 記錄目前這一關：若此階段失敗轉 stopped，解決阻塞可回到這一關續跑（而非退回 new 重分診）
+    await query('UPDATE tasks SET resume_status = $2 WHERE id = $1', [task.id, task.status]).catch(() => {});
+  }
+  await handler(task, settings);
 }
 
 async function runPipeline(userId) {
@@ -257,14 +273,28 @@ async function runPipeline(userId) {
       console.error(`[RUNNER] task ${task.id} error:`, err.message);
     }
 
-    if (teamsEnabled) {
-      try {
-        const { rows: [updated] } = await query('SELECT status FROM tasks WHERE id = $1', [task.id]);
-        if (updated && updated.status !== prevStatus) {
-          const { enqueue } = require('../teams');
-          enqueue('task', task.id);
-          if (updated.status === 'confirm_pending') enqueue('question', task.id);
+    // 讀取處理後的狀態；若剛轉為 stopped，把阻塞原因寫進執行歷程
+    // （否則使用者在執行歷程只看到停下、看不到為什麼——集中一處涵蓋所有 agent 的 stop）
+    let updatedStatus = null;
+    try {
+      const { rows: [u] } = await query('SELECT status, blocker_content FROM tasks WHERE id = $1', [task.id]);
+      if (u) {
+        updatedStatus = u.status;
+        if (u.status === 'stopped' && prevStatus !== 'stopped') {
+          const reason = `\n\x1b[91m❌ 失敗：${u.blocker_content || '未提供原因'}\x1b[0m\n`;
+          notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: reason });
+          await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, reason]).catch(() => {});
         }
+      }
+    } catch (e) {
+      console.error('[RUNNER] post-status check error:', e.message);
+    }
+
+    if (teamsEnabled && updatedStatus && updatedStatus !== prevStatus) {
+      try {
+        const { enqueue } = require('../teams');
+        enqueue('task', task.id);
+        if (updatedStatus === 'confirm_pending') enqueue('question', task.id);
       } catch (e) {
         console.error('[TEAMS] status check error:', e.message);
       }

@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const { query } = require('../db');
 
 function formatEvent(ev) {
   if (!ev || !ev.type) return null;
@@ -39,7 +40,8 @@ function formatEvent(ev) {
 function callClaude(prompt, signal, opts = {}) {
   const { taskId, userId, notify, model } = opts;
   return new Promise((resolve, reject) => {
-    const args = ['-p', '--output-format', 'stream-json', '--verbose'];
+    // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
     const child = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe']
@@ -53,7 +55,10 @@ function callClaude(prompt, signal, opts = {}) {
     let settled = false;
     const finish = fn => { if (!settled) { settled = true; fn(); } };
     const emit = text => {
-      if (text && taskId && userId && notify) notify.emitToUser(userId, 'terminal:output', { taskId, data: text });
+      if (!text || !taskId) return;
+      if (userId && notify) notify.emitToUser(userId, 'terminal:output', { taskId, data: text });
+      // 落地執行歷程供事後回放（best-effort，寫入失敗不影響 claude 執行）
+      query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [taskId, text]).catch(() => {});
     };
 
     child.stdout.on('data', d => {

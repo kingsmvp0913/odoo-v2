@@ -76,8 +76,10 @@ function createApp() {
   app.post('/api/pipeline/step', verifyToken, async (req, res) => {
     try {
       await resetLoopCounter(req.userId);
-      const r = await runPipeline(req.userId);
-      res.json({ ok: true, processed: r.processed });
+      // fire-and-forget：pipeline 一個 tick 可能跑好幾分鐘（coding 等），不能 hold 住 HTTP 連線，
+      // 否則前端會「Failed to fetch」。立刻回應，進度靠 socket 即時更新。
+      runPipeline(req.userId).catch(err => console.error('[STEP] pipeline error:', err.message));
+      res.json({ ok: true, started: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -87,13 +89,12 @@ function createApp() {
       const { rows: [user] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
       if (user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
       const { rows: users } = await query('SELECT id FROM users');
-      const results = [];
+      // fire-and-forget：同上，不 hold 住 HTTP 連線
       for (const u of users) {
         await resetLoopCounter(u.id);
-        const r = await runPipeline(u.id);
-        results.push({ userId: u.id, processed: r.processed });
+        runPipeline(u.id).catch(err => console.error('[ADMIN-STEP] pipeline error:', err.message));
       }
-      res.json({ ok: true, results });
+      res.json({ ok: true, started: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

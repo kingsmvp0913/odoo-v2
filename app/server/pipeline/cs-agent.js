@@ -20,11 +20,20 @@ async function runCsAgent(taskId, userId, signal) {
     wikiContext = pages.map(p => `## ${p.title}\n${p.content}`).join('\n\n');
   }
 
+  // 使用者先前輪次已補充的答案（cs-data-submit 寫入 task_logs）。cs-agent 重跑時
+  // 必須帶入，否則看不到已回答內容 → 重複詢問 → cs_data_needed ↔ cs_running 鬼打牆。
+  const { rows: priorAnswers } = await query(
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'user' ORDER BY created_at",
+    [taskId]
+  );
+  const answers = priorAnswers.length ? priorAnswers.map(l => l.content).join('\n\n') : '（尚無）';
+
   const agent = loadAgent('cs');
   const prompt = agent.render({
     title: task.title || '未命名',
     original_text: task.original_text || '（無詳細內容）',
-    wiki: wikiContext || '（無 wiki）'
+    wiki: wikiContext || '（無 wiki）',
+    answers
   });
 
   let result = null;

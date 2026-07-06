@@ -84,6 +84,24 @@ test('POST /api/tasks/:id/resolve-blocker 歸零三關卡計數器並回到 new'
   expect(after.pw_retry_count).toBe(0);
 });
 
+test('resolve-blocker 有 resume_status → 回到中斷的那一關（而非 new）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status, blocker_content)
+     VALUES ($1,'task_resume','odoo','R','stopped','coding_running','boom') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/resolve-blocker`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolution: '繼續' });
+  expect(res.status).toBe(200);
+  const { rows: [after] } = await dbModule.query(
+    'SELECT status, resume_status, blocker_content FROM tasks WHERE id=$1', [t.id]
+  );
+  expect(after.status).toBe('coding_running');  // 回到中斷處，非 new
+  expect(after.resume_status).toBeNull();        // 用完清除
+  expect(after.blocker_content).toBeNull();
+});
+
 test('GET /api/tasks/:id → returns task detail with logs array', async () => {
   const listRes = await request(app).get('/api/tasks')
     .set('Authorization', `Bearer ${adminToken}`);

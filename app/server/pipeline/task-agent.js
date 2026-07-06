@@ -4,7 +4,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { pullBranch, getMainBranch } = require('./git');
+const { pullBranch, ensureMainBranch } = require('./git');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -59,7 +59,8 @@ function worktreeParent(root, taskId) {
 
 function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, model }) {
   return new Promise((resolve, reject) => {
-    const args = ['--print', '--output-format', 'stream-json', '--verbose'];
+    // headless pipeline agent：略過權限提示，否則 coding 在 worktree 建檔／mkdir 會卡在無法互動批准
+    const args = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
     let resultText = '', stderr = '', done = false;
@@ -118,10 +119,13 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
 
 function buildAnalysisPrompt(task, info, clarification) {
   const agent = loadAgent('analysis-project');
+  const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
     prompt: agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
+      work_dir: info.root,
+      repo_list: repoList,
       original_text: task.original_text || '（無內容）',
       task_id: task.task_id,
       clarification: clarification || '（無）'
@@ -130,17 +134,30 @@ function buildAnalysisPrompt(task, info, clarification) {
   };
 }
 
-function buildCodingPrompt(task, info) {
+// 取最近一筆「修正指示」（失敗處理時使用者輸入）；供 resume 後的階段帶入 prompt，讓指示真的生效
+async function latestResolution(taskId) {
+  const { rows } = await query(
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'user' AND content LIKE '[修正指示]%' ORDER BY created_at DESC LIMIT 1",
+    [taskId]
+  );
+  if (!rows.length) return '';
+  return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
+}
+
+function buildCodingPrompt(task, info, resolution, retryFeedback) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
     prompt: agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
+      work_dir: worktreeParent(info.root, task.task_id),
       git_branch: task.git_branch || '（未設定）',
       analysis_yaml: task.analysis_yaml || '（無規格）',
       commit_message: buildCommitMessage(task),
-      repo_list: repoList
+      repo_list: repoList,
+      resolution: resolution || '（無）',
+      retry_feedback: retryFeedback || '（無）'
     }).trim(),
     model: agent.model
   };
@@ -163,10 +180,11 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  // 分析前 pull main：確保讀到最新生產碼；失敗（origin 不通／本地髒／衝突）→ 停下等人工
+  // 分析前 pull main：確保讀到最新生產碼；repo 無 main 會自動建立（空 repo 補初始 commit）。
+  // 失敗（origin 不通／本地髒／衝突）→ 停下等人工。
   try {
     for (const repo of info.repos) {
-      const base = await getMainBranch(repo.local_path);
+      const base = await ensureMainBranch(repo.local_path);
       await pullBranch(repo.local_path, base);
     }
   } catch (err) {
@@ -231,7 +249,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
 
 async function runTaskCoding(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id FROM tasks WHERE id = $1',
+    'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -248,7 +266,11 @@ async function runTaskCoding(taskId, userId, signal) {
 
   let raw;
   try {
-    const built = buildCodingPrompt(task, info);
+    const resolution = await latestResolution(taskId);
+    // 消費上一輪失敗訊息（QA/部署）：帶進 prompt 讓 coding 修正，用完即清，避免污染後續無關執行
+    const retryFeedback = task.retry_feedback || '';
+    if (retryFeedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
+    const built = buildCodingPrompt(task, info, resolution, retryFeedback);
     // coding 在任務 worktree 父目錄操作（跨所有 repo 子目錄）
     const codingResult = await spawnClaude(built.prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: built.model });
     raw = codingResult.text;
@@ -277,4 +299,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, spawnClaude, getProjectInfo, worktreeParent, parseResult };
+module.exports = { runTaskAnalysis, runTaskCoding, spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution };

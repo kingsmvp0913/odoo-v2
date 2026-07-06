@@ -17,13 +17,13 @@ const TD_STATUS_LABELS = {
   cs_reply_pending:    '等待確認回覆',
   cs_data_needed:      '需補充資料',
   done:                '完成',
-  stopped:             '已停止'
+  stopped:             '失敗待確認'
 };
 
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -43,23 +43,57 @@ window.TaskDetailView = Vue.defineComponent({
     Api.get('system/config').then(r => {
       this.odooUrl = r.odoo_url || '';
       this.serviceUrl = r.service_url || '';
+      this.testMode = !!r.test_mode;
     }).catch(() => {});
     this.checkInflight();
+    this.loadEvents();
+  },
+  mounted() {
+    // 訂閱狀態更新：pipeline 推 task:updated 時靜默重抓，讓狀態/阻塞原因即時更新（免手動重整）
+    const sock = window._socket;
+    this._onTaskUpdated = (data) => {
+      if (this.task && data && data.taskId === this.task.id) {
+        this.refresh().catch(() => {});
+        this.checkInflight();
+      }
+    };
+    if (sock) sock.on('task:updated', this._onTaskUpdated);
+    // 即時歷程：pipeline 推 terminal:output 時直接 append 到本頁記錄
+    this._onTermOutput = (data) => {
+      if (this.task && data && data.taskId === this.task.id) {
+        const c = this.$refs.eventsBox;
+        const atBottom = c ? (c.scrollHeight - c.scrollTop - c.clientHeight < 30) : true;
+        this.events.push({ id: null, content: data.data, _live: true });
+        if (atBottom) this.$nextTick(() => this.scrollEventsToBottom());
+      }
+    };
+    if (sock) sock.on('terminal:output', this._onTermOutput);
+  },
+  beforeUnmount() {
+    const sock = window._socket;
+    if (sock && sock.off) {
+      if (this._onTaskUpdated) sock.off('task:updated', this._onTaskUpdated);
+      if (this._onTermOutput) sock.off('terminal:output', this._onTermOutput);
+    }
   },
   methods: {
     async load() {
       this.loading = true;
       try {
-        const data = await Api.get(`tasks/${this.$route.params.id}`);
-        this.task = data.task || data;
-        this.logs = data.logs || [];
-        // Init answer fields for each cs question
-        const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
-        const init = {};
-        qs.forEach(q => { if (!(q in this.csAnswers)) init[q] = ''; });
-        this.csAnswers = { ...this.csAnswers, ...init };
+        await this.refresh();
       } catch (e) { this.error = e.message; }
       finally { this.loading = false; }
+    },
+    // 靜默重抓任務＋logs（不切 loading，避免即時更新時整頁閃「載入中」）
+    async refresh() {
+      const data = await Api.get(`tasks/${this.$route.params.id}`);
+      this.task = data.task || data;
+      this.logs = data.logs || [];
+      // Init answer fields for each cs question
+      const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
+      const init = {};
+      qs.forEach(q => { if (!(q in this.csAnswers)) init[q] = ''; });
+      this.csAnswers = { ...this.csAnswers, ...init };
     },
     async submitAnswer() {
       if (!this.answer.trim()) return;
@@ -93,7 +127,7 @@ window.TaskDetailView = Vue.defineComponent({
     },
     sourceLabel() {
       if (!this.task) return '';
-      return this.task.source === 'odoo' ? 'Odoo' : this.task.source === 'service' ? 'eService' : this.task.source;
+      return this.task.source === 'odoo' ? 'Odoo' : this.task.source === 'service' ? 'eService' : this.task.source === 'manual' ? '手動增加' : this.task.source;
     },
     roleClass(role) { return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
     roleLabel(role) { return role === 'ai' ? '🤖 AI' : role === 'user' ? '👤 你' : '⚙️ 系統'; },
@@ -155,7 +189,7 @@ window.TaskDetailView = Vue.defineComponent({
       try {
         await Api.post(`tasks/${this.task.id}/resolve-blocker`, { resolution: this.resolution });
         this.resolution = '';
-        showToast('阻塞已解決，任務重新排入分診', 'success');
+        showToast('已送出，從中斷處重試', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.resolving = false; }
@@ -167,14 +201,54 @@ window.TaskDetailView = Vue.defineComponent({
         this.serverConfirmedRunning = (data.inflight || []).includes(this.task.id);
       } catch { this.serverConfirmedRunning = false; }
     },
-    back() { this.$router.push('/'); }
+    back() { this.$router.push('/'); },
+    async stepPipeline() {
+      this.stepping = true;
+      try {
+        await Api.post('pipeline/step', {});
+        showToast('已觸發推進，處理中…（進度即時更新）', 'info');
+        await this.refresh();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.stepping = false; }
+    },
+    stripAnsi(s) { return String(s == null ? '' : s).replace(/\x1b\[[0-9;]*m/g, ''); },
+    scrollEventsToBottom() { const c = this.$refs.eventsBox; if (c) c.scrollTop = c.scrollHeight; },
+    async loadEvents() {
+      try {
+        const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10`);
+        this.events = Array.isArray(rows) ? rows : [];
+        this.eventsHasMore = this.events.length >= 10;
+        this.$nextTick(() => this.scrollEventsToBottom());
+      } catch { /* best-effort */ }
+    },
+    async loadOlderEvents() {
+      if (this.eventsLoading || !this.eventsHasMore) return;
+      const oldest = this.events.find(e => e.id);
+      if (!oldest) return;
+      this.eventsLoading = true;
+      const c = this.$refs.eventsBox;
+      const prevHeight = c ? c.scrollHeight : 0;
+      try {
+        const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10&before=${oldest.id}`);
+        const older = Array.isArray(rows) ? rows : [];
+        this.eventsHasMore = older.length >= 10;
+        this.events = [...older, ...this.events];
+        this.$nextTick(() => { if (c) c.scrollTop = c.scrollHeight - prevHeight; }); // 維持捲動位置
+      } catch { /* best-effort */ }
+      finally { this.eventsLoading = false; }
+    },
+    onEventsScroll(e) { if (e.target.scrollTop <= 4) this.loadOlderEvents(); }
   },
   template: `
     <div class="topbar">
+      <button class="btn btn-outline btn-sm" @click="back" style="margin-right:12px">← 返回</button>
       <h1>任務詳情</h1>
+      <span v-if="testMode" style="font-size:12px;color:var(--warning);background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 8px">🧪 測試模式</span>
+      <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping" style="margin-left:8px">
+        {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
+      </button>
     </div>
     <div class="content">
-      <div class="back-link" @click="back">← 返回列表</div>
       <div v-if="loading" class="loading">載入中...</div>
       <div v-else-if="error" class="error-msg">{{ error }}</div>
       <div v-else-if="task">
@@ -195,18 +269,18 @@ window.TaskDetailView = Vue.defineComponent({
 
           <div v-if="task.blocker_content || task.status === 'stopped'"
             style="border:1px solid #fc8181;border-radius:8px;overflow:hidden;margin-bottom:16px">
-            <div style="background:#fff5f5;padding:10px 14px;font-size:13px;white-space:pre-wrap">
-              <strong style="color:#c53030">⚠ 阻塞原因：</strong><br>{{ task.blocker_content || '任務分診失敗或執行中斷' }}
+            <div style="background:#fff5f5;padding:10px 14px;font-size:13px;white-space:pre-wrap;color:#742a2a">
+              <strong style="color:#c53030">⚠ 失敗原因：</strong><br>{{ task.blocker_content || '任務分診失敗或執行中斷' }}
             </div>
             <div style="background:#fff;padding:12px 14px;border-top:1px solid #fed7d7">
-              <div style="font-size:12px;font-weight:600;color:#744210;margin-bottom:8px">解決阻塞 — 說明你的指示或修正方向，任務將重新排入分診</div>
+              <div style="font-size:12px;font-weight:600;color:#744210;margin-bottom:8px">處理失敗 — 說明你的修正方向，任務將回到失敗的那一關重試</div>
               <textarea v-model="resolution"
                 placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續..."
                 style="width:100%;height:80px;padding:8px;border:1px solid #fc8181;border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box">
               </textarea>
               <div style="margin-top:8px">
                 <button class="btn btn-primary btn-sm" @click="resolveBlocker" :disabled="resolving || !resolution.trim()">
-                  {{ resolving ? '處理中...' : '↺ 送出並重新分診' }}
+                  {{ resolving ? '處理中...' : '↺ 送出並從中斷處繼續' }}
                 </button>
               </div>
             </div>
@@ -232,10 +306,9 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
 
-          <div v-if="['analysis_running','cs_running','coding_running','qa_running','merge_running','deploy_testing','playwright_running','wiki_updating'].includes(task.status)"
-               style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
             <router-link :to="'/task/' + task.id + '/terminal'" class="btn btn-outline btn-sm">
-              🖥️ 查看 AI 執行歷程
+              🖊️ 執行歷程
             </router-link>
           </div>
 
@@ -296,6 +369,21 @@ window.TaskDetailView = Vue.defineComponent({
             <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
               {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
             </button>
+          </div>
+        </div>
+
+        <div class="detail-card" style="margin-top:16px">
+          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span>即時歷程記錄</span>
+            <span v-if="eventsLoading" style="font-size:11px;color:var(--text-muted)">載入中…</span>
+          </div>
+          <div ref="eventsBox" @scroll="onEventsScroll"
+            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:6px;white-space:pre-wrap;word-break:break-word">
+            <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
+            <template v-else>
+              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:11px;margin-bottom:6px">— 已到最前 —</div>
+              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)">{{ stripAnsi(ev.content) }}</span>
+            </template>
           </div>
         </div>
       </div>

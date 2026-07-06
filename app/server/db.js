@@ -52,7 +52,6 @@ async function migrate() {
       role          TEXT NOT NULL DEFAULT 'user',
       odoo_settings JSONB,
       sync_interval INTEGER DEFAULT 15,
-      deploy_cmd    TEXT,
       created_at    TIMESTAMPTZ DEFAULT NOW()
     )`,
 
@@ -77,6 +76,13 @@ async function migrate() {
       id         SERIAL PRIMARY KEY,
       task_id    INTEGER NOT NULL REFERENCES tasks(id),
       role       TEXT NOT NULL,
+      content    TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS task_events (
+      id         SERIAL PRIMARY KEY,
+      task_id    INTEGER NOT NULL REFERENCES tasks(id),
       content    TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
@@ -249,8 +255,6 @@ async function migrate() {
 
   // Column migrations — check information_schema first to stay idempotent
   const colMigrations = [
-    { table: 'users', col: 'coding_cmd',  sql: 'ALTER TABLE users ADD COLUMN coding_cmd TEXT' },
-    { table: 'users', col: 'qa_cmd',      sql: 'ALTER TABLE users ADD COLUMN qa_cmd TEXT' },
     { table: 'tasks', col: 'project_id',  sql: 'ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id)' },
     { table: 'tasks', col: 'task_type',          sql: "ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT 'odoo'" },
     { table: 'tasks', col: 'cs_reply',           sql: 'ALTER TABLE tasks ADD COLUMN cs_reply TEXT' },
@@ -260,6 +264,9 @@ async function migrate() {
     { table: 'tasks', col: 'pw_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN pw_retry_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'done_at',              sql: 'ALTER TABLE tasks ADD COLUMN done_at TIMESTAMPTZ' },
     { table: 'tasks', col: 'blocker_type',         sql: 'ALTER TABLE tasks ADD COLUMN blocker_type TEXT' },
+    { table: 'tasks', col: 'resume_status',        sql: 'ALTER TABLE tasks ADD COLUMN resume_status TEXT' },
+    { table: 'tasks', col: 'approved_at',          sql: 'ALTER TABLE tasks ADD COLUMN approved_at TIMESTAMPTZ' },
+    { table: 'tasks', col: 'retry_feedback',       sql: 'ALTER TABLE tasks ADD COLUMN retry_feedback TEXT' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
     { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },
     { table: 'tasks', col: 'teams_message_id',          sql: 'ALTER TABLE tasks ADD COLUMN teams_message_id TEXT' },
@@ -305,6 +312,9 @@ async function migrate() {
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
+
+  // 執行歷程：依 task_id 取全部事件、以 id 排序回放
+  await query('CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events (task_id, id)').catch(() => {});
 
   // token_usage indexes
   await query('CREATE INDEX IF NOT EXISTS idx_tu_recorded_at ON token_usage (recorded_at DESC)').catch(() => {});

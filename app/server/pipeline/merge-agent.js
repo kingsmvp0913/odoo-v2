@@ -63,12 +63,12 @@ async function runMergeAgent(taskId, userId, signal) {
 }
 
 // 把 task 分支逐 repo 併入 testing（在各主 clone，主 clone 常駐 testing）。
-// 有未解衝突 → merge_conflict（記錄哪個 repo 的哪些檔）；否則 → deploy_ready。
+// 有未解衝突 → merge_conflict（記錄哪個 repo 的哪些檔）；否則 → deploy_testing。
 async function doMerge(task, taskId, userId, signal) {
   const repos = await getProjectRepos(task.project_id);
   if (!repos.length) {
-    await query("UPDATE tasks SET status='deploy_ready', updated_at=NOW() WHERE id=$1", [taskId]);
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_ready' });
+    await query("UPDATE tasks SET status='deploy_testing', updated_at=NOW() WHERE id=$1", [taskId]);
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
     return;
   }
 
@@ -136,8 +136,8 @@ async function doMerge(task, taskId, userId, signal) {
     return;
   }
 
-  await query("UPDATE tasks SET status='deploy_ready', updated_at=NOW() WHERE id=$1", [taskId]);
-  notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_ready' });
+  await query("UPDATE tasks SET status='deploy_testing', updated_at=NOW() WHERE id=$1", [taskId]);
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
 module.exports = { runMergeAgent };

@@ -8,7 +8,7 @@
 When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` before doing anything else.
 
 ## 0. Hard Rules
-- NEVER modify core Odoo files. Custom code in `$ONLINE_ADDONS_DIR` (`C:\online_addons\` on Windows, `/online_addons` on Linux) only. Never touch `custom_addons/`.
+- NEVER modify core Odoo files or `custom_addons/`. 自訂程式一律寫在「當前任務所在的 repo／addons 目錄」內——實際路徑由執行時的 agent prompt 指定；不得寫死或存取工作目錄以外的絕對路徑（如 `online_addons`）。
 - NEVER guess intent. Surface 2–3 interpretations when ambiguous; state one core assumption before complex tasks. When still uncertain after surfacing interpretations, ask — do not proceed on a guess.
 - Stop when confused. Name what's unclear before continuing.
 - NEVER add fields/models/logic beyond the task's agreed spec.
@@ -23,6 +23,7 @@ When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` befo
 - Commit: `[Module]: Why (not what)`. File edit: `@Path | Anchor | Action`.
 - Views XML 命名：`<model>_views.xml`；同一 Model 只能有一個 view 檔案。
 - View 繼承：同一 addons 若已繼承某原生 view，新增內容直接寫入該繼承 view，禁止另建第二個繼承。
+- 新建 module（addon）命名一律以 `idx_` 開頭（例：`idx_sale_note`）；沿用既有 module 時不改名。
 - Models 命名：一個 Model 一個 `.py` 檔；單頭＋明細單據（如 `sale.order` + `sale.order.line`）合併，以單頭為檔名（`sale_order.py`）。
 - View 放置：依 view 所屬的 Model 放入對應 XML。例：銷售訂單頁的 product tree view → `product_template_views.xml`。
 - 樣板文件（xls/docx）一律放 `<module>/static/<type>/`。例：`hr/static/xls/abc-test.xlsx`。

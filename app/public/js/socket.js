@@ -21,7 +21,7 @@
     });
 
     _socket.on('task:updated', (data) => {
-      const labels = { coding_running: '開發中', qa_running: 'QA 中', done: '已完成', stopped: '已停止', branch_pending: '準備建立分支' };
+      const labels = { coding_running: '開發中', qa_running: 'QA 中', done: '已完成', stopped: '失敗待確認', branch_pending: '準備建立分支' };
       const label = labels[data.status] || data.status;
       showToast(`任務狀態更新：${label}`, 'info');
       if (_taskListRefresh) _taskListRefresh();
@@ -33,7 +33,7 @@
 
     _socket.on('notify:action', (data) => {
       const ACTION_LABELS = {
-        confirm_pending: '等待確認', review_pending: '等待審核', stopped: '已停止',
+        confirm_pending: '等待確認', review_pending: '等待審核', stopped: '失敗待確認',
         cs_data_needed: '需補資料', cs_reply_pending: '等待回覆確認',
         merge_conflict: '合併衝突'
       };

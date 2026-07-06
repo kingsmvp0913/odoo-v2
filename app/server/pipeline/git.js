@@ -1,4 +1,20 @@
 const { execFile, exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// 讓 git 忽略 __pycache__/*.pyc（Odoo/py_compile 產物）。寫進主 clone 的 .git/info/exclude，
+// linked worktree 共用 common git dir 一併生效。效果：git add -A 不會 commit pyc；merge 時
+// 未追蹤的 pyc 變成 ignored → git 直接覆蓋、不再報「untracked working tree files would be overwritten」。
+function ensureGitignorePyc(mainRepoPath) {
+  try {
+    const excludeFile = path.join(mainRepoPath, '.git', 'info', 'exclude');
+    let cur = '';
+    try { cur = fs.readFileSync(excludeFile, 'utf8'); } catch { /* 檔案不存在則新建 */ }
+    const lines = cur.split(/\r?\n/);
+    const need = ['__pycache__/', '*.pyc'].filter(p => !lines.includes(p));
+    if (need.length) fs.appendFileSync(excludeFile, (cur && !cur.endsWith('\n') ? '\n' : '') + need.join('\n') + '\n');
+  } catch { /* best-effort，不阻斷流程 */ }
+}
 
 function execFileAsync(cmd, args, opts) {
   return new Promise((resolve, reject) => {
@@ -42,13 +58,58 @@ function runDeploy(deployCmd) {
   });
 }
 
-async function getMainBranch(repoPath) {
+// ref 是否存在（本地/遠端分支）
+async function refExists(repoPath, ref) {
   try {
-    await execFileAsync('git', ['show-ref', '--verify', 'refs/remotes/origin/main'], { cwd: repoPath });
-    return 'main';
-  } catch {
-    return 'master';
+    await execFileAsync('git', ['show-ref', '--verify', '--quiet', ref], { cwd: repoPath });
+    return true;
+  } catch { return false; }
+}
+
+// repo 是否已有任何 commit（unborn HEAD → false）
+async function hasCommits(repoPath) {
+  try {
+    await execFileAsync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: repoPath });
+    return true;
+  } catch { return false; }
+}
+
+// 偵測 repo 的主分支：依序查本地 main/master、origin/main/master；都沒有則預設 'main'
+// （不再盲目 fallback 'master'，避免對只有 main 或空 repo 的專案 checkout master 失敗）
+async function getMainBranch(repoPath) {
+  const refs = ['refs/heads/main', 'refs/heads/master', 'refs/remotes/origin/main', 'refs/remotes/origin/master'];
+  for (const ref of refs) {
+    if (await refExists(repoPath, ref)) return ref.split('/').pop();
   }
+  return 'main';
+}
+
+// 確保本地有可用的主分支並 checkout；沒有就建立（空 repo 補一個初始 commit）。回傳分支名。
+// 供分析前使用：避免「repo 無 main」時整條流程卡死。
+async function ensureMainBranch(repoPath) {
+  // 1) 本地已有 main/master
+  for (const b of ['main', 'master']) {
+    if (await refExists(repoPath, `refs/heads/${b}`)) {
+      await execFileAsync('git', ['checkout', b], { cwd: repoPath });
+      return b;
+    }
+  }
+  // 2) 僅遠端有 → 建立本地追蹤分支
+  for (const b of ['main', 'master']) {
+    if (await refExists(repoPath, `refs/remotes/origin/${b}`)) {
+      await execFileAsync('git', ['checkout', '-B', b, `origin/${b}`], { cwd: repoPath });
+      return b;
+    }
+  }
+  // 3) 完全沒有（空 repo / 未初始化）→ 本地建立 main；無 commit 則補一個空初始 commit
+  await execFileAsync('git', ['checkout', '-B', 'main'], { cwd: repoPath });
+  if (!(await hasCommits(repoPath))) {
+    await execFileAsync('git', [
+      '-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
+      'commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）'
+    ], { cwd: repoPath });
+  }
+  return 'main';
 }
 
 async function syncWithMain(repoPath) {
@@ -94,8 +155,8 @@ async function mergeToMain(repoPath, branchName) {
   }
 }
 
-async function deleteBranchLocal(repoPath, branchName) {
-  await execFileAsync('git', ['branch', '-d', branchName], { cwd: repoPath });
+async function deleteBranchLocal(repoPath, branchName, force = false) {
+  await execFileAsync('git', ['branch', force ? '-D' : '-d', branchName], { cwd: repoPath });
 }
 
 // 確保主 clone 有 testing 分支並 checkout（常駐測試區分支，供測試環境部署）
@@ -107,14 +168,26 @@ async function ensureTestingBranch(repoPath) {
   }
 }
 
-// checkout 指定分支並從 origin pull 最新（分析前確保讀到最新碼）。失敗會 throw 供上層停止任務。
+// checkout 指定分支並從 origin pull 最新（分析前確保讀到最新碼）。
+// origin 尚無該分支（空 repo / 尚未 push）→ 視為無可 pull、放行；其餘失敗（origin 不通／本地髒）→ throw 停任務。
 async function pullBranch(repoPath, branch) {
   await execFileAsync('git', ['checkout', branch], { cwd: repoPath });
-  await execFileAsync('git', ['pull', 'origin', branch], { cwd: repoPath });
+  try {
+    await execFileAsync('git', ['pull', 'origin', branch], { cwd: repoPath });
+  } catch (err) {
+    const msg = `${err.stderr || ''}${err.message || ''}`.toLowerCase();
+    if (msg.includes("couldn't find remote ref") || msg.includes('no such ref')) return;
+    throw err;
+  }
 }
 
-// 從主 clone 長出任務 worktree（branchName 從 baseBranch 建立）
+// 從主 clone 長出任務 worktree（branchName 從 baseBranch 建立）。
+// 先清掉同名的殘留 worktree／分支，讓重跑可冪等（前一輪 stopped 未清乾淨時，重分診不會再撞「已存在」）。
 async function addWorktree(mainRepoPath, worktreePath, branchName, baseBranch) {
+  ensureGitignorePyc(mainRepoPath);
+  await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath }).catch(() => {});
+  await execFileAsync('git', ['worktree', 'prune'], { cwd: mainRepoPath }).catch(() => {});
+  await execFileAsync('git', ['branch', '-D', branchName], { cwd: mainRepoPath }).catch(() => {});
   await execFileAsync('git', ['worktree', 'add', worktreePath, '-b', branchName, baseBranch], { cwd: mainRepoPath });
 }
 
@@ -126,7 +199,14 @@ async function removeWorktree(mainRepoPath, worktreePath) {
 // 在主 clone 把 sourceBranch 併進 targetBranch（例：task/<id> → testing）。
 // 回傳格式比照 syncWithMain，讓上層沿用衝突處理。
 async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
-  await execFileAsync('git', ['checkout', targetBranch], { cwd: mainRepoPath });
+  // 確保 target 分支存在：沒有（空 repo / 尚未建 testing）就從主分支建出來，避免 checkout 失敗卡住
+  try {
+    await execFileAsync('git', ['checkout', targetBranch], { cwd: mainRepoPath });
+  } catch {
+    const base = await getMainBranch(mainRepoPath);
+    await execFileAsync('git', ['checkout', '-B', targetBranch, base], { cwd: mainRepoPath });
+  }
+  ensureGitignorePyc(mainRepoPath); // 讓 target 工作樹既有的未追蹤 pyc 變 ignored，merge 才不會被擋
   try {
     await execFileAsync('git', ['merge', '--no-ff', '--no-edit', sourceBranch], { cwd: mainRepoPath });
     return { hasConflicts: false, conflictFiles: [] };
@@ -145,4 +225,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto };

@@ -81,6 +81,31 @@ test('code_change_vague → cs_data_needed with question', async () => {
   expect(t.cs_question).toContain('重現步驟');
 });
 
+test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔cs_running 鬼打牆）', async () => {
+  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({
+    withProject: true,
+    title: '報價單客戶下面加備註欄位',
+    text: '在報價單客戶下面增加備註欄位'
+  });
+  // 模擬使用者先前輪次已透過 cs-data-submit 補充答案（寫入 task_logs）
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+    [taskId, 'Q：欄位類型？\nA：多行文字區塊\n\nQ：位置？\nA：客戶名稱下方']
+  );
+
+  await runCsAgent(taskId, userId);
+
+  // 意圖：prompt 必須包含使用者已回答的內容，否則 agent 看不到 → 重複詢問
+  const prompt = mockCallClaude.mock.calls[0][0];
+  expect(prompt).toContain('多行文字區塊');
+  expect(prompt).toContain('客戶名稱下方');
+
+  // 資訊已足夠 → 判 clear → 有專案 → 進分析（不再卡 cs_data_needed）
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('analysis_running');
+});
+
 test('API error → stopped', async () => {
   mockCallClaude.mockRejectedValueOnce(new Error('timeout'));
   const { userId, taskId } = await makeTask();

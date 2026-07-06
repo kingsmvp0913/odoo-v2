@@ -92,6 +92,60 @@ test('pullBranch rejects when pull fails', async () => {
   await expect(gitModule.pullBranch('/repo', 'main')).rejects.toThrow('could not resolve host');
 });
 
+test('pullBranch 容忍空遠端（couldn\'t find remote ref）→ 放行不 throw', async () => {
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    const done = (typeof opts === 'function') ? opts : cb;
+    if (args[0] === 'pull') return done(new Error("fatal: couldn't find remote ref main"));
+    done(null, 'ok', '');
+  });
+  await expect(gitModule.pullBranch('/repo', 'main')).resolves.toBeUndefined();
+});
+
+test('ensureMainBranch：無任何分支且無 commit → 建 main + 初始 empty commit', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    const done = (typeof opts === 'function') ? opts : cb;
+    calls.push(args);
+    if (args[0] === 'show-ref') return done(new Error('not a valid ref'));   // refExists 全 false
+    if (args[0] === 'rev-parse') return done(new Error('unknown revision')); // hasCommits false
+    done(null, 'ok', '');
+  });
+  const branch = await gitModule.ensureMainBranch('/repo');
+  expect(branch).toBe('main');
+  expect(calls).toContainEqual(['checkout', '-B', 'main']);
+  expect(calls.some(a => a[0] === '-c' && a.includes('commit') && a.includes('--allow-empty'))).toBe(true);
+});
+
+test('ensureMainBranch：本地已有 main → 直接 checkout，不建立', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    const done = (typeof opts === 'function') ? opts : cb;
+    calls.push(args);
+    if (args[0] === 'show-ref') {
+      return args[args.length - 1] === 'refs/heads/main' ? done(null, 'ok', '') : done(new Error('no'));
+    }
+    done(null, 'ok', '');
+  });
+  const branch = await gitModule.ensureMainBranch('/repo');
+  expect(branch).toBe('main');
+  expect(calls).toContainEqual(['checkout', 'main']);
+  expect(calls.some(a => a.includes('--allow-empty'))).toBe(false);
+});
+
+test('mergeInto：target 分支不存在時從 main 建立再合併', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    const done = (typeof opts === 'function') ? opts : cb;
+    calls.push(args);
+    if (args[0] === 'checkout' && args[1] === 'testing') return done(new Error("pathspec 'testing' did not match"));
+    if (args[0] === 'show-ref') return args[args.length - 1] === 'refs/heads/main' ? done(null, 'ok', '') : done(new Error('no'));
+    done(null, 'ok', '');
+  });
+  const r = await gitModule.mergeInto('/repo', 'testing', 'task/x');
+  expect(r).toEqual({ hasConflicts: false, conflictFiles: [] });
+  expect(calls).toContainEqual(['checkout', '-B', 'testing', 'main']);
+});
+
 test('addWorktree creates worktree on new branch from base', async () => {
   mockExecFileSuccess();
   await gitModule.addWorktree('/repo', '/repo/.worktrees/task_1/main', 'task/task_1', 'testing');

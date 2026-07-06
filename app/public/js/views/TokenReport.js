@@ -13,10 +13,28 @@ window.TokenReportView = Vue.defineComponent({
         task_id: ''
       },
       expandedTasks: {},
-      labels: {}
+      labels: {},
+      chartW: 800
     };
   },
   computed: {
+    // 折線圖幾何：依量測到的 chartW 自適應填滿整列
+    chartData() {
+      const daily = this.report?.daily;
+      if (!daily || daily.length < 2) return null;
+      const w = this.chartW, top = 16, bottom = 172, n = daily.length;
+      const maxV = Math.max(...daily.map(d => d.tokens), 1);
+      const dots = daily.map((d, i) => ({
+        x: 32 + (i / (n - 1)) * (w - 64),
+        y: bottom - (d.tokens / maxV) * (bottom - top),
+        date: d.date,
+        tokens: d.tokens
+      }));
+      const step = Math.max(1, Math.ceil(n / 10));
+      const labels = dots.filter((_, i) => i % step === 0 || i === n - 1)
+                         .map(p => ({ x: p.x, label: this.fmtMD(p.date) }));
+      return { points: dots.map(p => `${p.x},${p.y}`).join(' '), dots, labels };
+    },
     dateRange() {
       const now = new Date();
       const end = now.toISOString().slice(0, 10);
@@ -48,10 +66,18 @@ window.TokenReportView = Vue.defineComponent({
         if (this.filters.project_id) p.set('project_id', this.filters.project_id);
         if (this.filters.task_id)    p.set('task_id', this.filters.task_id);
         this.report = await Api.get(`token-report?${p.toString()}`);
+        await this.$nextTick();
+        this.measureChart();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
     fmtNum(n) { return Number(n || 0).toLocaleString(); },
+    fmtShort(n) {
+      n = Number(n || 0);
+      if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, '') + 'K';
+      return String(Math.round(n));
+    },
     toggleTask(key) {
       this.expandedTasks[key] = !this.expandedTasks[key];
     },
@@ -78,17 +104,24 @@ window.TokenReportView = Vue.defineComponent({
         return { ...s, frac, d: `M${cx},${cy} L${x0},${y0} A${r},${r},0,${large},1,${x1},${y1}Z` };
       });
     },
-    // SVG line chart
-    linePoints(daily) {
-      if (!daily?.length) return '';
-      const maxV = Math.max(...daily.map(d => d.tokens), 1);
-      const w = 400, h = 120, pad = 20;
-      return daily.map((d, i) => {
-        const x = pad + (i / Math.max(daily.length - 1, 1)) * (w - 2 * pad);
-        const y = h - pad - (d.tokens / maxV) * (h - 2 * pad);
-        return `${x},${y}`;
-      }).join(' ');
+    // date 可能是 Date 物件（pg）或 'YYYY-MM-DD' 字串（pg-mem）→ 統一輸出本地 MM-DD
+    fmtMD(v) {
+      const dt = (v instanceof Date) ? v : new Date(String(v) + 'T00:00:00');
+      if (isNaN(dt.getTime())) return String(v).slice(5, 10);
+      return `${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    },
+    // 量測折線圖容器寬度，讓 SVG 填滿整列
+    measureChart() {
+      const el = this.$refs.trendBox;
+      if (el) this.chartW = Math.max(320, el.clientWidth);
     }
+  },
+  mounted() {
+    this.measureChart();
+    window.addEventListener('resize', this.measureChart);
+  },
+  beforeUnmount() {
+    window.removeEventListener('resize', this.measureChart);
   },
   template: `
     <div class="topbar"><h1>用量報表</h1></div>
@@ -123,7 +156,7 @@ window.TokenReportView = Vue.defineComponent({
         <!-- 摘要卡片 -->
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--primary)">{{ fmtNum(report.summary.total_tokens) }}</div>
+            <div style="font-size:24px;font-weight:700;color:var(--primary)" :title="fmtNum(report.summary.total_tokens)">{{ fmtShort(report.summary.total_tokens) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">總 Token 數</div>
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
@@ -131,7 +164,7 @@ window.TokenReportView = Vue.defineComponent({
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">任務數</div>
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--warning)">{{ fmtNum(report.summary.avg_tokens_per_task) }}</div>
+            <div style="font-size:24px;font-weight:700;color:var(--warning)" :title="fmtNum(report.summary.avg_tokens_per_task)">{{ fmtShort(report.summary.avg_tokens_per_task) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">平均每任務</div>
           </div>
         </div>
@@ -151,7 +184,7 @@ window.TokenReportView = Vue.defineComponent({
             <div v-for="r in report.by_agent" :key="r.agent_type"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:agentColor(r.agent_type),display:'inline-block'}"></span>
-              {{ agentLabel(r.agent_type) }}: {{ fmtNum(r.tokens) }}
+              {{ agentLabel(r.agent_type) }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
 
@@ -167,25 +200,25 @@ window.TokenReportView = Vue.defineComponent({
             <div v-for="(r,i) in report.by_project" :key="r.project_id"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:'hsl('+(i*60)+',60%,50%)',display:'inline-block'}"></span>
-              {{ r.project_name }}: {{ fmtNum(r.tokens) }}
+              {{ r.project_name }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
 
-          <!-- 折線圖 -->
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
+          <!-- 折線圖（填滿第三欄） -->
+          <div ref="trendBox" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">每日趨勢</div>
-            <svg width="400" height="120" v-if="report.daily.length > 1">
-              <polyline :points="linePoints(report.daily)"
+            <svg :width="chartW" height="200" v-if="chartData">
+              <polyline :points="chartData.points"
                 fill="none" stroke="var(--primary)" stroke-width="2" />
-              <circle v-for="(d,i) in report.daily" :key="d.date"
-                :cx="20 + (i/Math.max(report.daily.length-1,1))*360"
-                :cy="120 - 20 - (d.tokens/Math.max(...report.daily.map(x=>x.tokens),1))*80"
-                r="3" fill="var(--primary)">
-                <title>{{ d.date }}: {{ fmtNum(d.tokens) }}</title>
+              <circle v-for="d in chartData.dots" :key="d.date" :cx="d.x" :cy="d.y" r="3" fill="var(--primary)">
+                <title>{{ fmtMD(d.date) }}: {{ fmtNum(d.tokens) }}</title>
               </circle>
+              <text v-for="(l,i) in chartData.labels" :key="i"
+                :x="l.x" y="192" font-size="10" fill="var(--text-muted)" text-anchor="middle">{{ l.label }}</text>
             </svg>
             <div v-else style="font-size:12px;color:var(--text-muted);padding:20px 0;text-align:center">資料不足</div>
           </div>
+
         </div>
 
         <!-- 明細表 -->
@@ -212,7 +245,7 @@ window.TokenReportView = Vue.defineComponent({
                   </td>
                   <td style="padding:8px 12px;color:var(--text-muted)">{{ t.project_name || '—' }}</td>
                   <td style="padding:8px 12px;color:var(--text-muted)">{{ t.username || '—' }}</td>
-                  <td style="padding:8px 12px;text-align:right;font-weight:600">{{ fmtNum(t.total_tokens) }}</td>
+                  <td style="padding:8px 12px;text-align:right;font-weight:600" :title="fmtNum(t.total_tokens)">{{ fmtShort(t.total_tokens) }}</td>
                   <td style="padding:8px 12px;color:var(--text-muted);font-size:11px">
                     {{ new Date(t.last_recorded_at).toLocaleString('zh-TW') }}
                   </td>
@@ -223,7 +256,7 @@ window.TokenReportView = Vue.defineComponent({
                     <div v-for="a in t.agents" :key="a.agent_type"
                       style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:var(--text-secondary)">
                       <span :style="{width:'8px',height:'8px',borderRadius:'50%',background:agentColor(a.agent_type),display:'inline-block'}"></span>
-                      {{ agentLabel(a.agent_type) }}: {{ fmtNum(a.tokens) }}
+                      {{ agentLabel(a.agent_type) }}: <span :title="fmtNum(a.tokens)">{{ fmtShort(a.tokens) }}</span>
                       <span v-if="a.duration_ms" style="color:var(--text-muted)">({{ (a.duration_ms/1000).toFixed(1) }}s)</span>
                     </div>
                   </td>

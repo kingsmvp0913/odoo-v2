@@ -126,8 +126,9 @@ window.ProjectDetailView = Vue.defineComponent({
         await Api.post(`projects/${this.$route.params.id}/env/setup`, {});
         showToast(restart ? '環境啟動中...' : '環境建立已開始，系統自動分配 port...', 'success');
         // 樂觀進入「建立中」：立即以 loading 取代按鈕、觸發輪詢，避免空窗期重複點擊
+        // 注意：不在此立即呼叫 loadEnv()，因 runEnvSetup 為 fire-and-forget，
+        // DB 可能尚未寫入 setting_up，即時查詢會拿到舊狀態並觸發 _stopPoll() 殺死輪詢
         this.env = { ...(this.env || {}), status: 'setting_up' };
-        await this.loadEnv();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
     },

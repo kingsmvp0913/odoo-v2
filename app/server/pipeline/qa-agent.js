@@ -2,7 +2,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { spawnClaude, getProjectInfo, worktreeParent, parseResult } = require('./task-agent');
+const { spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution } = require('./task-agent');
 
 const QA_LIMIT = 3;
 
@@ -31,7 +31,8 @@ async function runQaAgent(taskId, userId, signal) {
       project_name: info.name,
       odoo_version: info.odoo_version,
       git_branch: task.git_branch || '（未設定）',
-      analysis_yaml: task.analysis_yaml || '（無規格）'
+      analysis_yaml: task.analysis_yaml || '（無規格）',
+      resolution: (await latestResolution(taskId)) || '（無）'
     }).trim();
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
     const result = await spawnClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model });
@@ -69,8 +70,8 @@ async function runQaAgent(taskId, userId, signal) {
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
       await query(
-        "UPDATE tasks SET status='coding_running', qa_retry_count=$2, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount]
+        "UPDATE tasks SET status='coding_running', qa_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+        [taskId, nextCount, `[QA 未通過]\n${issues}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     }

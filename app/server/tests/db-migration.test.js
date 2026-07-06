@@ -12,16 +12,23 @@ beforeAll(async () => {
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
-test('migrate adds coding_cmd column to users', async () => {
+test('migrate 建立 task_events 表（執行歷程持久化）', async () => {
   const { rows } = await dbModule.query(
-    "SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='coding_cmd'"
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name='task_events'"
   );
   expect(rows.length).toBe(1);
 });
 
-test('migrate adds qa_cmd column to users', async () => {
+test('migrate 加 tasks.resume_status 欄位（解決阻塞回到中斷階段用）', async () => {
   const { rows } = await dbModule.query(
-    "SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='qa_cmd'"
+    "SELECT column_name FROM information_schema.columns WHERE table_name='tasks' AND column_name='resume_status'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('migrate 加 tasks.approved_at 欄位（人工審核通過標記，用於禁刪/隱藏刪除鈕）', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='tasks' AND column_name='approved_at'"
   );
   expect(rows.length).toBe(1);
 });
