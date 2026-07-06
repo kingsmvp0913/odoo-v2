@@ -1,37 +1,34 @@
-const ANSWER_ALLOWED = ['confirm_pending', 'final_pending'];
+const ANSWER_ALLOWED = ['confirm_pending'];
 const TD_STATUS_LABELS = {
-  new:               '待分診',
-  analysis_running:  '分析中',
-  branch_pending:    '建立分支',
-  confirm_pending:   '等待確認',
-  final_pending:     '等待審核',
-  confirm_answered:  '已回覆',
-  coding_running:    '開發中',
-  qa_running:        '測試中',
-  merge_running:     '合併中',
-  merge_conflict:    '合併衝突',
-  deploy_ready:      '可部署正式',
-  deploy_pending:    '部署中',
-  deploy_fixing:     '修復部署',
-  wiki_updating:     '更新 Wiki',
-  cs_running:        '客服處理',
-  cs_reply_pending:  '等待確認回覆',
-  cs_data_needed:    '需補充資料',
-  triage_running:    '分診中',
-  done:              '完成',
-  stopped:           '已停止',
-  triage_blocked:    '分診阻塞'
+  new:                 '待分類',
+  analysis_running:    '分析中',
+  branch_pending:      '建立分支',
+  confirm_pending:     '等待確認',
+  confirm_answered:    '已回覆',
+  coding_running:      '開發中',
+  qa_running:          'QA 審查中',
+  merge_running:       '併入測試中',
+  merge_conflict:      '合併衝突',
+  deploy_testing:      '部署測試區',
+  playwright_running:  'E2E 測試中',
+  review_pending:      '等待審核',
+  wiki_updating:       '更新 Wiki',
+  cs_running:          '客服處理',
+  cs_reply_pending:    '等待確認回覆',
+  cs_data_needed:      '需補充資料',
+  done:                '完成',
+  stopped:             '已停止'
 };
 
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, merging: false, conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
-    canApprove() { return this.task && this.task.status === 'final_pending'; },
-    canMergeToMain() { return this.task && this.task.status === 'deploy_ready' && this.task.project_id; },
+    canApprove() { return this.task && this.task.status === 'review_pending'; },
+    canArchive() { return this.task && this.task.status === 'done'; },
     statusLabel() { return this.task ? (TD_STATUS_LABELS[this.task.status] || this.task.status) : ''; },
     csQuestions() {
       if (!this.task?.cs_question) return [];
@@ -79,7 +76,7 @@ window.TaskDetailView = Vue.defineComponent({
       this.approving = true;
       try {
         await Api.post(`tasks/${this.task.id}/approve`, {});
-        showToast('已審核通過，加入實作佇列', 'success');
+        showToast('已審核通過，合併回主線並更新文件', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }
@@ -104,15 +101,14 @@ window.TaskDetailView = Vue.defineComponent({
       if (!ts) return '';
       return new Date(ts).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     },
-    async mergeToMain() {
-      if (!confirm('確認將此分支合併回主線並刪除？此動作無法復原。')) return;
-      this.merging = true;
+    async archive() {
+      this.archiving = true;
       try {
-        await Api.post(`tasks/${this.task.id}/merge-to-main`, {});
-        showToast('已合併回主線，開始更新 Wiki', 'success');
-        await this.load();
+        await Api.post(`tasks/${this.task.id}/archive`, {});
+        showToast('任務已封存', 'success');
+        this.$router.push('/');
       } catch (e) { showToast(e.message, 'error'); }
-      finally { this.merging = false; }
+      finally { this.archiving = false; }
     },
     async markConflictResolved() {
       this.conflictResolving = true;
@@ -197,7 +193,7 @@ window.TaskDetailView = Vue.defineComponent({
             <span style="color:var(--text-muted);font-size:11px">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
 
-          <div v-if="task.blocker_content || ['stopped','triage_blocked'].includes(task.status)"
+          <div v-if="task.blocker_content || task.status === 'stopped'"
             style="border:1px solid #fc8181;border-radius:8px;overflow:hidden;margin-bottom:16px">
             <div style="background:#fff5f5;padding:10px 14px;font-size:13px;white-space:pre-wrap">
               <strong style="color:#c53030">⚠ 阻塞原因：</strong><br>{{ task.blocker_content || '任務分診失敗或執行中斷' }}
@@ -236,7 +232,7 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
 
-          <div v-if="['analysis_running','cs_running','coding_running','qa_running','merge_running','deploy_fixing','wiki_updating'].includes(task.status)"
+          <div v-if="['analysis_running','cs_running','coding_running','qa_running','merge_running','deploy_testing','playwright_running','wiki_updating'].includes(task.status)"
                style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
             <router-link :to="'/task/' + task.id + '/terminal'" class="btn btn-outline btn-sm">
               🖥️ 查看 AI 執行歷程
@@ -253,21 +249,21 @@ window.TaskDetailView = Vue.defineComponent({
             </button>
           </div>
 
-          <div v-if="canMergeToMain" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-            <div class="form-section">合併回主線</div>
+          <div v-if="canApprove" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+            <div class="form-section">最終人工審核</div>
             <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
-              QA 已通過，主線已同步。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線並刪除。
+              已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
             </p>
-            <button class="btn btn-primary" @click="mergeToMain" :disabled="merging">
-              {{ merging ? '合併中...' : '✓ 確認合併回主線並刪除分支' }}
+            <button class="btn btn-primary" @click="approve" :disabled="approving">
+              {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
             </button>
           </div>
 
-          <div v-if="canApprove" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-            <div class="form-section">MODE_B 審核</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">AI 已完成需求分析，等待你確認後才開始實作。</p>
-            <button class="btn btn-primary" @click="approve" :disabled="approving">
-              {{ approving ? '處理中...' : '✓ 審核通過，開始實作' }}
+          <div v-if="canArchive" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+            <div class="form-section">任務已完成</div>
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">此任務已完成並更新文件。可手動封存，或滿一個月後自動封存。</p>
+            <button class="btn btn-outline" @click="archive" :disabled="archiving">
+              {{ archiving ? '封存中...' : '🗄 封存任務' }}
             </button>
           </div>
 

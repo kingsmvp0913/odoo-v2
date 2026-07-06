@@ -15,7 +15,7 @@ window.TerminalView = Vue.defineComponent({
       const data = await Api.get(`tasks/${this.taskId}`);
       this.taskTitle = data.task?.title || data.task?.task_id || `Task ${this.taskId}`;
       const status = data.task?.status;
-      const ACTIVE = ['analysis_running','cs_running','coding_running','qa_running','merge_running','deploy_fixing','wiki_updating'];
+      const ACTIVE = ['analysis_running','cs_running','coding_running','qa_running','merge_running','deploy_testing','playwright_running','wiki_updating'];
       this.running = ACTIVE.includes(status);
     } catch (e) {
       this.error = e.message;

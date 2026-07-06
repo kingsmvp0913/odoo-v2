@@ -1,34 +1,32 @@
-const NEEDS_ACTION = ['confirm_pending', 'final_pending', 'stopped', 'triage_blocked', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict'];
+const NEEDS_ACTION = ['confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
 const STATUS_LABELS = {
-  new:              '待分診',
-  analysis_running: '分析中',
-  branch_pending:   '建立分支',
-  confirm_pending:  '等待確認',
-  final_pending:    '等待審核',
-  confirm_answered: '已回覆',
-  coding_running:   '開發中',
-  qa_running:       '測試中',
-  merge_running:    '合併中',
-  merge_conflict:   '合併衝突',
-  deploy_ready:     '可部署',
-  deploy_pending:   '部署中',
-  deploy_fixing:    '修復部署',
-  wiki_updating:    '更新 Wiki',
-  cs_running:       '客服處理',
-  cs_reply_pending: '等待回覆確認',
-  cs_data_needed:   '需補資料',
-  triage_running:   '分診中',
-  done:             '完成',
-  stopped:          '已停止',
-  triage_blocked:   '分診阻塞'
+  new:                '待分類',
+  analysis_running:   '分析中',
+  branch_pending:     '建立分支',
+  confirm_pending:    '等待確認',
+  confirm_answered:   '已回覆',
+  coding_running:     '開發中',
+  qa_running:         'QA 審查中',
+  merge_running:      '併入測試中',
+  merge_conflict:     '合併衝突',
+  deploy_testing:     '部署測試區',
+  playwright_running: 'E2E 測試中',
+  review_pending:     '等待審核',
+  wiki_updating:      '更新 Wiki',
+  cs_running:         '客服處理',
+  cs_reply_pending:   '等待回覆確認',
+  cs_data_needed:     '需補資料',
+  done:               '完成',
+  stopped:            '已停止'
 };
 
 const FLOW_DEV = [
   { label: '分析',  statuses: ['analysis_running', 'branch_pending'] },
-  { label: '確認',  statuses: ['confirm_pending', 'final_pending', 'confirm_answered'] },
+  { label: '確認',  statuses: ['confirm_pending', 'confirm_answered'] },
   { label: '開發',  statuses: ['coding_running'] },
-  { label: '測試',  statuses: ['qa_running', 'merge_running'] },
-  { label: '部署',  statuses: ['deploy_pending', 'deploy_fixing', 'deploy_ready', 'wiki_updating'] },
+  { label: 'QA',    statuses: ['qa_running', 'merge_running'] },
+  { label: '測試',  statuses: ['deploy_testing', 'playwright_running'] },
+  { label: '審核',  statuses: ['review_pending', 'wiki_updating'] },
   { label: '完成',  statuses: ['done'] },
 ];
 const FLOW_CS = [
@@ -37,7 +35,7 @@ const FLOW_CS = [
   { label: '確認',   statuses: ['cs_reply_pending'] },
   { label: '完成',   statuses: ['done'] },
 ];
-const STOPPED_STATUSES = ['stopped', 'triage_blocked', 'merge_conflict'];
+const STOPPED_STATUSES = ['stopped', 'merge_conflict'];
 
 function statusLabel(status) { return STATUS_LABELS[status] || status; }
 function timeAgo(ts) {
@@ -122,7 +120,7 @@ window.TaskListView = Vue.defineComponent({
       if (this.filter === 'archived')          list = this.archivedTasks;
       else if (this.filter === 'paused')       list = this.tasks.filter(t => t.is_paused);
       else if (this.filter === 'needs_action') list = this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused);
-      else if (this.filter === 'deploy_ready') list = this.tasks.filter(t => t.status === 'deploy_ready' && !t.is_paused);
+      else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
       else                                     list = this.tasks; // 全部 = 含暫停中
       const q = this.search.toLowerCase().trim();
       if (!q) return list;
@@ -135,7 +133,7 @@ window.TaskListView = Vue.defineComponent({
       );
     },
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && !t.is_paused).length; },
-    deployReadyCount() { return this.tasks.filter(t => t.status === 'deploy_ready' && !t.is_paused).length; },
+    reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
     pausedCount() { return this.tasks.filter(t => t.is_paused).length; },
     allCount()    { return this.tasks.length; },
     allSelected() {
@@ -175,9 +173,9 @@ window.TaskListView = Vue.defineComponent({
     },
     needsAction(t) { return NEEDS_ACTION.includes(t.status); },
     isProcessing(t) {
-      return ['analysis_running','coding_running','qa_running','merge_running','deploy_pending','deploy_fixing','wiki_updating','cs_running','branch_pending','confirm_answered'].includes(t.status);
+      return ['analysis_running','coding_running','qa_running','merge_running','deploy_testing','playwright_running','wiki_updating','cs_running','branch_pending','confirm_answered'].includes(t.status);
     },
-    isStopped(t) { return ['stopped', 'triage_blocked'].includes(t.status); },
+    isStopped(t) { return ['stopped'].includes(t.status); },
     statusLabel,
     timeAgo,
     openTask(t) { this.$router.push(`/task/${t.id}`); },
@@ -375,8 +373,8 @@ window.TaskListView = Vue.defineComponent({
         <button class="btn btn-sm" :class="filter==='needs_action' ? 'btn-primary' : 'btn-outline'" @click="filter='needs_action'">
           需回覆<span v-if="needsActionCount > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionCount }}</span>
         </button>
-        <button class="btn btn-sm" :class="filter==='deploy_ready' ? 'btn-primary' : 'btn-outline'" @click="filter='deploy_ready'">
-          待更新<span v-if="deployReadyCount > 0" class="tab-badge" :class="filter==='deploy_ready' ? 'tab-badge-active' : ''">{{ deployReadyCount }}</span>
+        <button class="btn btn-sm" :class="filter==='review_pending' ? 'btn-primary' : 'btn-outline'" @click="filter='review_pending'">
+          待審核<span v-if="reviewPendingCount > 0" class="tab-badge" :class="filter==='review_pending' ? 'tab-badge-active' : ''">{{ reviewPendingCount }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='all' ? 'btn-primary' : 'btn-outline'" @click="filter='all'">
           全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allCount }}</span>
@@ -397,7 +395,7 @@ window.TaskListView = Vue.defineComponent({
       <div v-if="loading" class="loading">載入中...</div>
       <div v-else-if="filteredTasks.length === 0" class="empty-state">
         <div style="font-size:32px">📭</div>
-        <p>{{ search ? '沒有符合搜尋的任務' : filter === 'needs_action' ? '沒有待回覆的任務' : filter === 'deploy_ready' ? '沒有待更新正式的任務' : '沒有任務' }}</p>
+        <p>{{ search ? '沒有符合搜尋的任務' : filter === 'needs_action' ? '沒有待回覆的任務' : filter === 'review_pending' ? '沒有待審核的任務' : '沒有任務' }}</p>
       </div>
       <div v-else>
         <div v-for="t in filteredTasks" :key="t.id"
