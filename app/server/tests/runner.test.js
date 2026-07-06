@@ -16,6 +16,9 @@ jest.mock('../notify', () => ({
   emitAll: jest.fn(),
   setIo: jest.fn()
 }));
+jest.mock('../pipeline/cs-agent', () => ({
+  runCsAgent: jest.fn().mockResolvedValue(undefined)
+}));
 
 let dbModule, runnerModule;
 let userId;
@@ -51,6 +54,8 @@ beforeEach(async () => {
   require('../pipeline/git').addWorktree.mockResolvedValue(undefined);
   require('../pipeline/git').removeWorktree.mockResolvedValue(undefined);
   require('../notify').emitToUser.mockReset();
+  require('../pipeline/cs-agent').runCsAgent.mockReset();
+  require('../pipeline/cs-agent').runCsAgent.mockResolvedValue(undefined);
   await runnerModule.resetLoopCounter(userId);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
@@ -170,15 +175,25 @@ test('runPipeline skips branch creation when git_repo_path not set', async () =>
   );
 });
 
-test('runPipeline advances deploy_pending to wiki_updating', async () => {
-  const { runDeploy } = require('../pipeline/git');
-  runDeploy.mockResolvedValue(undefined);
-
-  const taskId = await insertTask('deploy_pending');
+test('runPipeline 用 cs-agent 處理 new 狀態任務', async () => {
+  const { runCsAgent } = require('../pipeline/cs-agent');
+  const taskId = await insertTask('new');
   await runnerModule.runPipeline(userId);
+  expect(runCsAgent).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
 
+test('runPipeline 把 confirm_answered 接回 analysis_running（帶答案重跑）', async () => {
+  const taskId = await insertTask('confirm_answered');
+  await runnerModule.runPipeline(userId);
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
-  expect(rows[0].status).toBe('wiki_updating');
+  expect(rows[0].status).toBe('analysis_running');
+});
+
+test('runPipeline 不推進 review_pending（人工觸點，非 runnable）', async () => {
+  const taskId = await insertTask('review_pending');
+  await runnerModule.runPipeline(userId);
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(rows[0].status).toBe('review_pending');
 });
 
 test('runPipeline emits warn toast after loop limit exceeded', async () => {
@@ -215,13 +230,9 @@ test('resetLoopCounter allows processing to resume', async () => {
   expect(result.processed).toBeGreaterThanOrEqual(1);
 });
 
-test('runPipeline handles deploy error → status deploy_fixing', async () => {
-  const { runDeploy } = require('../pipeline/git');
-  runDeploy.mockRejectedValue(new Error('deploy script failed'));
-
-  const taskId = await insertTask('deploy_pending');
+test('runPipeline 把 qa_running 推進到 merge_running', async () => {
+  const taskId = await insertTask('qa_running');
   await runnerModule.runPipeline(userId);
-
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
-  expect(rows[0].status).toBe('deploy_fixing');
+  expect(rows[0].status).toBe('merge_running');
 });

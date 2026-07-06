@@ -12,12 +12,12 @@
 const path = require('path');
 const { query } = require('../db');
 const { analyzeTask } = require('./analysis');
-const { createBranch, checkoutDefault, runDeploy, addWorktree, removeWorktree } = require('./git');
+const { createBranch, checkoutDefault, addWorktree, removeWorktree } = require('./git');
 const notify = require('../notify');
 
 const LOOP_LIMIT = 5;
 const _inFlight = new Map(); // taskId (number) → AbortController
-const RUNNABLE_STATUSES = ['analysis_running', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_pending', 'deploy_fixing', 'wiki_updating', 'cs_running'];
+const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating'];
 
 function abortTask(taskId) {
   const ctrl = _inFlight.get(Number(taskId));
@@ -64,167 +64,133 @@ async function getUserSettings(userId) {
   };
 }
 
-async function processTask(task, settings) {
-  const { id: taskId, task_id, status } = task;
+// 包住需要中斷控制的長時 handler：同一任務防重入，註冊 AbortController 供暫停中止
+function withInflight(taskId, fn) {
+  if (_inFlight.has(taskId)) return Promise.resolve();
+  const ctrl = new AbortController();
+  _inFlight.set(taskId, ctrl);
+  return Promise.resolve(fn(ctrl.signal)).finally(() => _inFlight.delete(taskId));
+}
 
-  if (status === 'analysis_running') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      if (task.project_id) {
-        const { runTaskAnalysis } = require('./task-agent');
-        await runTaskAnalysis(taskId, task.user_id, ctrl.signal);
-      } else {
-        await analyzeTask(taskId, ctrl.signal);
-      }
-    } finally {
-      _inFlight.delete(taskId);
-    }
-    return;
-  }
+// new / cs_running：cs-agent 分類（唯一入口）
+async function handleCs(task) {
+  await withInflight(task.id, (signal) => {
+    const { runCsAgent } = require('./cs-agent');
+    return runCsAgent(task.id, task.user_id, signal);
+  });
+}
 
-  if (status === 'branch_pending') {
-    const branchName = `task/${task_id}`;
+// analysis_running：專案任務走 task-agent，否則走 analysis.js
+async function handleAnalysis(task) {
+  await withInflight(task.id, async (signal) => {
     if (task.project_id) {
-      // Project task: 為每個 repo 建立獨立 worktree（並行隔離），branch 從 testing 長出
-      const { rows: repos } = await query(
-        "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
-        [task.project_id]
-      );
-      if (repos.length) {
-        const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task_id);
-        const created = [];
-        try {
-          for (const repo of repos) {
-            const wtPath = path.join(wtParent, path.basename(repo.local_path));
-            // testing 為主 clone 常駐分支（triggerClone 已建）；缺少時 addWorktree 會失敗並進 rollback
-            await addWorktree(repo.local_path, wtPath, branchName, 'testing');
-            created.push({ mainRepo: repo.local_path, wtPath });
-          }
-        } catch (err) {
-          // 回滾已建 worktree，避免半殘狀態
-          for (const c of created) await removeWorktree(c.mainRepo, c.wtPath).catch(() => {});
-          await query(
-            "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-            [taskId, `建立 worktree 失敗：${err.message}`]
-          );
-          notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
-          return;
-        }
-      }
-    } else if (settings.git_repo_path) {
-      await checkoutDefault(settings.git_repo_path);
-      await createBranch(settings.git_repo_path, branchName);
+      const { runTaskAnalysis } = require('./task-agent');
+      await runTaskAnalysis(task.id, task.user_id, signal);
+    } else {
+      await analyzeTask(task.id, signal);
     }
-    await query(
-      "UPDATE tasks SET status = 'coding_running', git_branch = $2, updated_at = NOW() WHERE id = $1",
-      [taskId, branchName]
-    );
-    notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'coding_running' });
-    return;
-  }
+  });
+}
 
-  if (status === 'coding_running') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      const { runTaskCoding } = require('./task-agent');
-      const handled = await runTaskCoding(taskId, task.user_id, ctrl.signal);
-      if (!handled) {
+// confirm_answered：使用者答完澄清 → 回分析重跑（帶答案）
+async function handleConfirmAnswered(task) {
+  await query("UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1", [task.id]);
+  notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'analysis_running' });
+}
+
+// branch_pending：專案任務為每個 repo 建 worktree（並行隔離）；否則用 user 的 git_repo_path
+async function handleBranch(task, settings) {
+  const taskId = task.id;
+  const branchName = `task/${task.task_id}`;
+  if (task.project_id) {
+    const { rows: repos } = await query(
+      "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+      [task.project_id]
+    );
+    if (repos.length) {
+      const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
+      const created = [];
+      try {
+        for (const repo of repos) {
+          const wtPath = path.join(wtParent, path.basename(repo.local_path));
+          // testing 為主 clone 常駐分支（triggerClone 已建）；缺少時 addWorktree 會失敗並進 rollback
+          await addWorktree(repo.local_path, wtPath, branchName, 'testing');
+          created.push({ mainRepo: repo.local_path, wtPath });
+        }
+      } catch (err) {
+        for (const c of created) await removeWorktree(c.mainRepo, c.wtPath).catch(() => {});
         await query(
-          "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行開發', updated_at=NOW() WHERE id=$1",
-          [taskId]
+          "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+          [taskId, `建立 worktree 失敗：${err.message}`]
         );
         notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
+        return;
       }
-    } finally {
-      _inFlight.delete(taskId);
     }
-    return;
+  } else if (settings.git_repo_path) {
+    await checkoutDefault(settings.git_repo_path);
+    await createBranch(settings.git_repo_path, branchName);
   }
+  await query(
+    "UPDATE tasks SET status = 'coding_running', git_branch = $2, updated_at = NOW() WHERE id = $1",
+    [taskId, branchName]
+  );
+  notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'coding_running' });
+}
 
-  if (status === 'merge_running') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      const { runMergeAgent } = require('./merge-agent');
-      await runMergeAgent(taskId, task.user_id, ctrl.signal);
-    } finally {
-      _inFlight.delete(taskId);
-    }
-    return;
-  }
-
-  if (status === 'qa_running') {
-    await query(
-      "UPDATE tasks SET status='stopped', blocker_content='QA 功能尚未實作', updated_at=NOW() WHERE id=$1",
-      [taskId]
-    );
-    notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
-    return;
-  }
-
-  if (status === 'deploy_pending') {
-    try {
-      await runDeploy(settings.deploy_cmd);
-    } catch (deployErr) {
-      console.error(`[RUNNER] deploy error task ${taskId}:`, deployErr.message);
+// coding_running：task-agent 實作；未綁專案則停止
+async function handleCoding(task) {
+  await withInflight(task.id, async (signal) => {
+    const { runTaskCoding } = require('./task-agent');
+    const handled = await runTaskCoding(task.id, task.user_id, signal);
+    if (!handled) {
       await query(
-        `UPDATE tasks SET status = 'deploy_fixing', blocker_content = $2, updated_at = NOW() WHERE id = $1`,
-        [taskId, `Deploy failed: ${deployErr.message}`]
+        "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行開發', updated_at=NOW() WHERE id=$1",
+        [task.id]
       );
-      notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'deploy_fixing' });
-      return;
+      notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'stopped' });
     }
-    await query(
-      "UPDATE tasks SET status = 'wiki_updating', updated_at = NOW() WHERE id = $1",
-      [taskId]
-    );
-    notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'wiki_updating' });
-  }
+  });
+}
 
-  if (status === 'deploy_fixing') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      const { runDeployFixer } = require('./deploy-fixer');
-      const blocker = task.blocker_content || '';
-      await runDeployFixer(taskId, task.user_id, blocker, ctrl.signal);
-    } finally {
-      _inFlight.delete(taskId);
-    }
-    return;
-  }
+// qa_running：暫時直接推進 merge_running（Task 5 換成真正的 QA agent）
+async function handleQa(task) {
+  await query("UPDATE tasks SET status='merge_running', updated_at=NOW() WHERE id=$1", [task.id]);
+  notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'merge_running' });
+}
 
-  if (status === 'wiki_updating') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      const { runLibraryAgent } = require('./library-agent');
-      await runLibraryAgent(taskId, task.user_id, ctrl.signal);
-    } finally {
-      _inFlight.delete(taskId);
-    }
-    return;
-  }
+// merge_running：把 task 分支併入 testing
+async function handleMerge(task) {
+  await withInflight(task.id, (signal) => {
+    const { runMergeAgent } = require('./merge-agent');
+    return runMergeAgent(task.id, task.user_id, signal);
+  });
+}
 
-  if (status === 'cs_running') {
-    if (_inFlight.has(taskId)) return;
-    const ctrl = new AbortController();
-    _inFlight.set(taskId, ctrl);
-    try {
-      const { runCsAgent } = require('./cs-agent');
-      await runCsAgent(taskId, task.user_id, ctrl.signal);
-    } finally {
-      _inFlight.delete(taskId);
-    }
-    return;
-  }
+// wiki_updating：library-agent 更新 wiki → done
+async function handleWiki(task) {
+  await withInflight(task.id, (signal) => {
+    const { runLibraryAgent } = require('./library-agent');
+    return runLibraryAgent(task.id, task.user_id, signal);
+  });
+}
+
+const HANDLERS = {
+  new: handleCs,
+  cs_running: handleCs,
+  analysis_running: handleAnalysis,
+  confirm_answered: handleConfirmAnswered,
+  branch_pending: handleBranch,
+  coding_running: handleCoding,
+  qa_running: handleQa,
+  merge_running: handleMerge,
+  wiki_updating: handleWiki,
+  // deploy_testing → Task 6；playwright_running → Task 8
+};
+
+async function processTask(task, settings) {
+  const handler = HANDLERS[task.status];
+  if (handler) await handler(task, settings);
 }
 
 async function runPipeline(userId) {
