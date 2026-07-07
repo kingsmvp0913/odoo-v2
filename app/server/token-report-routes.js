@@ -86,7 +86,10 @@ function registerRoutes(app) {
       const { rows: taskDetail } = await query(
         `SELECT
            tu.task_id,
+           tu.chat_id,
            t.title,
+           t.id    AS task_row_id,
+           c.title AS chat_title,
            p.name  AS project_name,
            p.id    AS project_id,
            COALESCE(u.display_name, u.username) AS username,
@@ -97,6 +100,7 @@ function registerRoutes(app) {
            tu.recorded_at
          FROM token_usage tu
          LEFT JOIN tasks t ON t.task_id = tu.task_id
+         LEFT JOIN project_chats c ON c.id = tu.chat_id
          LEFT JOIN projects p ON p.id = COALESCE(tu.project_id, t.project_id)
          LEFT JOIN users u ON u.id = tu.user_id
          ${where}
@@ -108,11 +112,40 @@ function registerRoutes(app) {
       // Group task detail by task_id
       const taskMap = {};
       for (const row of taskDetail) {
-        const key = row.task_id || `_chat_${row.project_id}`;
+        // kind：task（有 task_id）/ chat（有 chat_id 或 agent=chat）/ 其餘 agent（wiki…）依專案彙總
+        let key, kind, title, deleted, linkable;
+        if (row.task_id) {
+          kind     = 'task';
+          key      = row.task_id;
+          title    = row.title;
+          // task_id 有值但 tasks 已無此列 → 任務被刪除，只剩孤兒 token 記錄
+          deleted  = row.task_row_id == null;
+          linkable = !deleted;
+        } else if (row.chat_id) {
+          kind     = 'chat';
+          key      = `chat_${row.chat_id}`;
+          title    = row.chat_title;
+          // chat_id 有值但 project_chats 已無此列 → 對話被刪除
+          deleted  = row.chat_title == null;
+          linkable = !deleted;
+        } else {
+          // wiki 等專案層級、無對話 id 的記錄（含 chat_id 未回填的舊對話）→ 依 agent 分組避免混淆
+          kind     = row.agent_type;
+          key      = `${row.agent_type}_p${row.project_id}`;
+          title    = null;
+          deleted  = false;
+          linkable = false;
+        }
         if (!taskMap[key]) {
           taskMap[key] = {
+            ref_key:          key,
+            kind,
             task_id:          row.task_id,
-            title:            row.title,
+            task_row_id:      row.task_row_id,
+            chat_id:          row.chat_id,
+            deleted,
+            linkable,
+            title,
             project_id:       row.project_id,
             project_name:     row.project_name,
             user_id:          row.user_id,

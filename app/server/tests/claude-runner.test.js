@@ -36,3 +36,12 @@ test('logTokenUsage inserts a server record', async () => {
 test('logTokenUsage silently skips when usage is null', async () => {
   await expect(logTokenUsage({ taskId: 'x' }, null, 'cs', null, null)).resolves.toBeUndefined();
 });
+
+// 意圖：手動暫停（abort）不是 Agent 失敗；失敗原因須顯示「手動暫停」而非「XXX 執行失敗：aborted」，
+// 讓使用者看得懂那是自己按的暫停，不是程式壞掉。
+test('stopReason：手動暫停顯示「手動暫停」，真正失敗才帶階段前綴', () => {
+  const { abortError, stopReason } = require('../pipeline/claude-runner');
+  expect(abortError().aborted).toBe(true);
+  expect(stopReason('實作 Agent 執行失敗', abortError())).toBe('手動暫停');
+  expect(stopReason('QA Agent 執行失敗', new Error('boom'))).toBe('QA Agent 執行失敗：boom');
+});

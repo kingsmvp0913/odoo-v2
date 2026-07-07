@@ -5,13 +5,14 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs) {
   try {
     await query(
       `INSERT INTO token_usage
-         (task_id, project_id, user_id, agent_type,
+         (task_id, project_id, chat_id, user_id, agent_type,
           input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
           duration_ms, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'server')`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'server')`,
       [
         ref.taskId    || null,
         ref.projectId || null,
+        ref.chatId    || null,
         userId        || null,
         agentType,
         usage.input_tokens                || 0,

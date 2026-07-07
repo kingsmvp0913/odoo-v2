@@ -4,6 +4,7 @@ const { logTokenUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { decrypt } = require('../lib/crypto');
 const { spawnClaude, getProjectInfo, worktreeParent, parseResult } = require('./task-agent');
+const { stopReason } = require('./claude-runner');
 
 const PW_LIMIT = 3;
 
@@ -53,7 +54,7 @@ async function runPlaywrightAgent(taskId, userId, signal) {
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {
-    await stopTask(taskId, userId, `Playwright Agent 執行失敗：${err.message}`);
+    await stopTask(taskId, userId, stopReason('Playwright Agent 執行失敗', err));
     return true;
   }
 

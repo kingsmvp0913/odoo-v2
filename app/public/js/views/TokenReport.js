@@ -14,7 +14,8 @@ window.TokenReportView = Vue.defineComponent({
       },
       expandedTasks: {},
       labels: {},
-      chartW: 800
+      chartW: 800,
+      chartH: 200
     };
   },
   computed: {
@@ -22,7 +23,7 @@ window.TokenReportView = Vue.defineComponent({
     chartData() {
       const daily = this.report?.daily;
       if (!daily || daily.length < 2) return null;
-      const w = this.chartW, top = 16, bottom = 172, n = daily.length;
+      const w = this.chartW, top = 16, bottom = this.chartH - 28, n = daily.length;
       const maxV = Math.max(...daily.map(d => d.tokens), 1);
       const dots = daily.map((d, i) => ({
         x: 32 + (i / (n - 1)) * (w - 64),
@@ -47,6 +48,10 @@ window.TokenReportView = Vue.defineComponent({
         return { start: s.toISOString().slice(0, 10), end };
       }
       return { start: this.filters.start, end: this.filters.end };
+    },
+    // 明細表最多顯示前 100 筆，其餘靠容器垂直捲動不再往下撐高頁面
+    visibleTasks() {
+      return (this.report?.tasks || []).slice(0, 100);
     }
   },
   async created() {
@@ -56,6 +61,27 @@ window.TokenReportView = Vue.defineComponent({
   },
   methods: {
     agentLabel(type) { return this.labels[type] || type; },
+    // 明細列顯示名稱
+    taskLabel(t) {
+      if (t.kind === 'chat') {
+        const name = t.deleted ? '(已刪除)' : (t.title || '(舊對話)');
+        return `${t.project_name || '—'} > chat > ${name}`;
+      }
+      if (t.kind === 'task') {
+        if (t.title) return t.title;
+        if (t.deleted) return '(已刪除任務)';
+        return t.task_id || '（無標題）';
+      }
+      // wiki 等專案層級記錄
+      return `${t.project_name || '—'} > ${t.kind}`;
+    },
+    // 可連結時回傳路由：task → 任務頁、chat → 對話頁；已刪除或無 id 則回 null（不連結）
+    taskLink(t) {
+      if (!t.linkable) return null;
+      if (t.kind === 'task' && t.task_row_id != null) return `/task/${t.task_row_id}`;
+      if (t.kind === 'chat' && t.chat_id != null) return `/projects/${t.project_id}/chat/${t.chat_id}`;
+      return null;
+    },
     async load() {
       this.loading = true;
       try {
@@ -113,7 +139,11 @@ window.TokenReportView = Vue.defineComponent({
     // 量測折線圖容器寬度，讓 SVG 填滿整列
     measureChart() {
       const el = this.$refs.trendBox;
-      if (el) this.chartW = Math.max(320, el.clientWidth);
+      if (el) {
+        this.chartW = Math.max(320, el.clientWidth);
+        // 卡片被左側圖例撐高 → 折線圖填滿整列（扣掉標題與 padding）
+        this.chartH = Math.max(180, el.clientHeight - 50);
+      }
     }
   },
   mounted() {
@@ -175,7 +205,7 @@ window.TokenReportView = Vue.defineComponent({
           <!-- Agent 圓餅圖 -->
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">Agent 類型</div>
-            <svg width="180" height="180" v-if="report.by_agent.length">
+            <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_agent.length">
               <path v-for="s in piePath(report.by_agent.map(r=>({value:r.tokens,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
                 <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
@@ -191,8 +221,8 @@ window.TokenReportView = Vue.defineComponent({
           <!-- 專案圓餅圖 -->
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">專案分布</div>
-            <svg width="180" height="180" v-if="report.by_project.length">
-              <path v-for="(s,i) in piePath(report.by_project.map(r=>({value:r.tokens,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
+            <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_project.length">
+              <path v-for="(s,i) in piePath(report.by_project.map((r,i)=>({value:r.tokens,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
                 <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
               </path>
@@ -207,14 +237,14 @@ window.TokenReportView = Vue.defineComponent({
           <!-- 折線圖（填滿第三欄） -->
           <div ref="trendBox" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">每日趨勢</div>
-            <svg :width="chartW" height="200" v-if="chartData">
+            <svg :width="chartW" :height="chartH" v-if="chartData">
               <polyline :points="chartData.points"
                 fill="none" stroke="var(--primary)" stroke-width="2" />
               <circle v-for="d in chartData.dots" :key="d.date" :cx="d.x" :cy="d.y" r="3" fill="var(--primary)">
                 <title>{{ fmtMD(d.date) }}: {{ fmtNum(d.tokens) }}</title>
               </circle>
               <text v-for="(l,i) in chartData.labels" :key="i"
-                :x="l.x" y="192" font-size="10" fill="var(--text-muted)" text-anchor="middle">{{ l.label }}</text>
+                :x="l.x" :y="chartH - 8" font-size="10" fill="var(--text-muted)" text-anchor="middle">{{ l.label }}</text>
             </svg>
             <div v-else style="font-size:12px;color:var(--text-muted);padding:20px 0;text-align:center">資料不足</div>
           </div>
@@ -223,34 +253,37 @@ window.TokenReportView = Vue.defineComponent({
 
         <!-- 明細表 -->
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <div style="max-height:520px;overflow-y:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed">
             <thead>
-              <tr style="background:var(--border);font-weight:600;font-size:12px">
-                <th style="padding:8px 12px;text-align:left">任務</th>
-                <th style="padding:8px 12px;text-align:left">專案</th>
-                <th style="padding:8px 12px;text-align:left">用戶</th>
-                <th style="padding:8px 12px;text-align:right">Token 數</th>
-                <th style="padding:8px 12px;text-align:left">記錄時間</th>
+              <tr style="background:var(--border);font-weight:600;font-size:12px;position:sticky;top:0;z-index:1">
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:32%">任務</th>
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:20%">專案</th>
+                <th style="padding:8px 12px;text-align:right;background:var(--border);width:12%">Token 數</th>
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:14%">用戶</th>
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:22%">記錄時間</th>
               </tr>
             </thead>
             <tbody>
-              <template v-for="t in report.tasks" :key="t.task_id || t.project_id">
+              <template v-for="t in visibleTasks" :key="t.ref_key">
                 <tr style="border-top:1px solid var(--border);cursor:pointer"
-                  @click="toggleTask(t.task_id || t.project_id)">
-                  <td style="padding:8px 12px">
+                  @click="toggleTask(t.ref_key)">
+                  <td style="padding:8px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="taskLabel(t)">
                     <span style="margin-right:6px;color:var(--text-muted)">
-                      {{ expandedTasks[t.task_id || t.project_id] ? '▾' : '▸' }}
+                      {{ expandedTasks[t.ref_key] ? '▾' : '▸' }}
                     </span>
-                    {{ t.title || t.task_id || '（無標題）' }}
+                    <router-link v-if="taskLink(t)" :to="taskLink(t)" @click.stop
+                      style="color:var(--primary);text-decoration:none">{{ taskLabel(t) }}</router-link>
+                    <span v-else>{{ taskLabel(t) }}</span>
                   </td>
-                  <td style="padding:8px 12px;color:var(--text-muted)">{{ t.project_name || '—' }}</td>
-                  <td style="padding:8px 12px;color:var(--text-muted)">{{ t.username || '—' }}</td>
+                  <td style="padding:8px 12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.project_name || '—'">{{ t.project_name || '—' }}</td>
                   <td style="padding:8px 12px;text-align:right;font-weight:600" :title="fmtNum(t.total_tokens)">{{ fmtShort(t.total_tokens) }}</td>
-                  <td style="padding:8px 12px;color:var(--text-muted);font-size:11px">
+                  <td style="padding:8px 12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.username || '—'">{{ t.username || '—' }}</td>
+                  <td style="padding:8px 12px;color:var(--text-muted);font-size:11px;white-space:nowrap">
                     {{ new Date(t.last_recorded_at).toLocaleString('zh-TW') }}
                   </td>
                 </tr>
-                <tr v-if="expandedTasks[t.task_id || t.project_id]"
+                <tr v-if="expandedTasks[t.ref_key]"
                   style="background:#f8fafc">
                   <td colspan="5" style="padding:4px 12px 8px 32px">
                     <div v-for="a in t.agents" :key="a.agent_type"
@@ -264,8 +297,13 @@ window.TokenReportView = Vue.defineComponent({
               </template>
             </tbody>
           </table>
+          </div>
           <div v-if="!report.tasks.length" style="text-align:center;padding:32px;color:var(--text-muted)">
             本期間無 Token 使用記錄
+          </div>
+          <div v-else-if="report.tasks.length > 100"
+            style="text-align:center;padding:8px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border)">
+            僅顯示前 100 筆(共 {{ report.tasks.length }} 筆)
           </div>
         </div>
 

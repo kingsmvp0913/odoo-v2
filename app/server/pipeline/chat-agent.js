@@ -33,7 +33,7 @@ async function chatReply(projectId, chatId, userMessage, userId) {
 
   const chatResult = await callClaude(prompt, undefined, { model: agent.model });
   const reply = chatResult.text || '（無回覆）';
-  await logTokenUsage({ projectId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
+  await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
 
   await query(
     'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',

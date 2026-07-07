@@ -5,6 +5,7 @@ const notify = require('../notify');
 const { logTokenUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { pullBranch, ensureMainBranch } = require('./git');
+const { abortError, stopReason } = require('./claude-runner');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -72,7 +73,7 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
 
     if (signal) {
       signal.addEventListener('abort', () => {
-        if (!done) { clearTimeout(timer); done = true; child.kill('SIGTERM'); reject(new Error('aborted')); }
+        if (!done) { clearTimeout(timer); done = true; child.kill('SIGTERM'); reject(abortError()); }
       }, { once: true });
     }
 
@@ -212,7 +213,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
   } catch (err) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, `分析 Agent 執行失敗：${err.message}`]
+      [taskId, stopReason('分析 Agent 執行失敗', err)]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
@@ -278,7 +279,7 @@ async function runTaskCoding(taskId, userId, signal) {
   } catch (err) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, `實作 Agent 執行失敗：${err.message}`]
+      [taskId, stopReason('實作 Agent 執行失敗', err)]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;

@@ -151,6 +151,57 @@ test('GET /api/token-report → by_agent has correct shape', async () => {
   }
 });
 
+test('chat token_usage groups per chat_id with chat title; orphan task/chat marked deleted', async () => {
+  // 建一個專案與對話，chat token 記錄帶 chat_id → 應以對話標題呈現、可連結
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('TR 專案', '17.0') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title) VALUES ($1, '報價單問題') RETURNING id",
+    [proj.id]
+  );
+  await dbModule.query(
+    `INSERT INTO token_usage (project_id, chat_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source)
+     VALUES ($1, $2, $3, 'chat', 10, 10, 0, 0, 'server')`,
+    [proj.id, chat.id, adminUserId]
+  );
+  // 孤兒任務：task_id 有值但 tasks 無此列（模擬任務被刪除後殘留的 token 記錄）
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source)
+     VALUES ('manual_deleted_1', $1, 'coding', 5, 5, 0, 0, 'server')`,
+    [adminUserId]
+  );
+  // 孤兒對話：chat_id 指向不存在的 project_chats（模擬對話被刪除）
+  await dbModule.query(
+    `INSERT INTO token_usage (project_id, chat_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source)
+     VALUES ($1, 999999, $2, 'chat', 7, 7, 0, 0, 'server')`,
+    [proj.id, adminUserId]
+  );
+
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+
+  const chatRow = res.body.tasks.find(t => t.kind === 'chat' && t.chat_id === chat.id);
+  expect(chatRow).toBeTruthy();
+  expect(chatRow.title).toBe('報價單問題');
+  expect(chatRow.deleted).toBe(false);
+  expect(chatRow.linkable).toBe(true);
+
+  // 對話被刪除 → 標示 deleted、不可連結
+  const deletedChat = res.body.tasks.find(t => t.kind === 'chat' && t.chat_id === 999999);
+  expect(deletedChat).toBeTruthy();
+  expect(deletedChat.deleted).toBe(true);
+  expect(deletedChat.linkable).toBe(false);
+
+  const orphan = res.body.tasks.find(t => t.task_id === 'manual_deleted_1');
+  expect(orphan).toBeTruthy();
+  expect(orphan.kind).toBe('task');
+  expect(orphan.deleted).toBe(true);
+  expect(orphan.linkable).toBe(false);
+});
+
 test('GET /api/token-report → tasks have agents array', async () => {
   const res = await request(app)
     .get('/api/token-report')

@@ -3,6 +3,7 @@ const notify = require('../notify');
 const { logTokenUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution } = require('./task-agent');
+const { stopReason } = require('./claude-runner');
 
 const QA_LIMIT = 3;
 
@@ -41,7 +42,7 @@ async function runQaAgent(taskId, userId, signal) {
   } catch (err) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-      [taskId, `QA Agent 執行失敗：${err.message}`]
+      [taskId, stopReason('QA Agent 執行失敗', err)]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;

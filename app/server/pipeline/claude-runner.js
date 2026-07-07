@@ -90,7 +90,7 @@ function callClaude(prompt, signal, opts = {}) {
     if (signal) {
       signal.addEventListener('abort', () => {
         child.kill('SIGTERM');
-        finish(() => reject(new Error('aborted')));
+        finish(() => reject(abortError()));
       }, { once: true });
     }
 
@@ -105,4 +105,14 @@ function callClaude(prompt, signal, opts = {}) {
   });
 }
 
-module.exports = { callClaude };
+// 手動暫停會 abort 執行中的 claude；標記 aborted 讓上層區分「使用者暫停」與「真正失敗」
+function abortError() {
+  return Object.assign(new Error('手動暫停'), { aborted: true });
+}
+
+// 組失敗原因：手動暫停顯示「手動暫停」，其餘顯示「<階段> 執行失敗：<訊息>」
+function stopReason(prefix, err) {
+  return err && err.aborted ? '手動暫停' : `${prefix}：${err.message}`;
+}
+
+module.exports = { callClaude, abortError, stopReason };
