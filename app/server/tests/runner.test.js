@@ -299,3 +299,51 @@ test('runPipeline 用 playwright-agent 處理 playwright_running 任務', async 
   await runnerModule.runPipeline(userId);
   expect(runPlaywrightAgent).toHaveBeenCalledWith(taskId, userId, expect.anything());
 });
+
+// --- 健檢 U1 止血：cron fire-and-forget 併發互踩防護 ---
+// 意圖：cron 每分鐘不 await 就觸發 runPipeline，長 coding 會讓多個實例疊加，
+// 舊實例用過期 status 快照重複派工（最壞情況：砍掉進行中 coding 的 worktree）。
+
+test('runPipeline 執行中時同 user 再呼叫直接跳過（cron tick 防重入）', async () => {
+  const { runCsAgent } = require('../pipeline/cs-agent');
+  let release, started;
+  const startedP = new Promise(r => { started = r; });
+  runCsAgent.mockImplementation(() => { started(); return new Promise(res => { release = res; }); });
+
+  await insertTask('cs_running', 'reent1');
+  const first = runnerModule.runPipeline(userId);   // 第一個 tick：cs handler 掛住不放
+  await startedP;
+  const second = await runnerModule.runPipeline(userId); // 下一個 tick 疊上來
+  expect(second.processed).toBe(0);                 // 不得產生第二個並行實例
+
+  release();
+  await first;
+  // 防重入解除後可正常再跑
+  runCsAgent.mockResolvedValue(undefined);
+  await insertTask('cs_running', 'reent2');
+  const third = await runnerModule.runPipeline(userId);
+  expect(third.processed).toBeGreaterThan(0);
+});
+
+test('派工前重查現況：狀態已被推進的任務本輪跳過，不用過期快照重複派工', async () => {
+  const { runCsAgent } = require('../pipeline/cs-agent');
+  const { createBranch, checkoutDefault } = require('../pipeline/git');
+
+  const csId = await insertTask('cs_running', 'stale_cs');
+  const branchId = await insertTask('branch_pending', 'stale_br');
+  // 確保 cs 任務先被處理（ORDER BY updated_at ASC）
+  await dbModule.query('UPDATE tasks SET updated_at = $2 WHERE id = $1', [csId, new Date(Date.now() - 60000)]);
+
+  runCsAgent.mockImplementation(async () => {
+    // 模擬快照過期：branch 任務在本輪等待期間已被推進到 coding_running
+    await dbModule.query("UPDATE tasks SET status='coding_running' WHERE id = $1", [branchId]);
+  });
+
+  await runnerModule.runPipeline(userId);
+
+  // 舊快照 branch_pending 不得再觸發 handleBranch（否則會重砍分支／worktree）
+  expect(createBranch).not.toHaveBeenCalled();
+  expect(checkoutDefault).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [branchId]);
+  expect(rows[0].status).toBe('coding_running');
+});

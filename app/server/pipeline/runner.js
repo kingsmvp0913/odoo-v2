@@ -24,6 +24,7 @@ const STAGE_LABELS = {
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki'
 };
 const _inFlight = new Map(); // taskId (number) → AbortController
+const _pipelineRunning = new Set(); // userId → runPipeline 執行中（cron 每分鐘 fire-and-forget，防疊加並行實例）
 const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating'];
 
 function abortTask(taskId) {
@@ -100,12 +101,18 @@ async function handleAnalysis(task) {
 
 // confirm_answered：使用者答完澄清 → 回分析重跑（帶答案）
 async function handleConfirmAnswered(task) {
-  await query("UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1", [task.id]);
-  notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'analysis_running' });
+  await withInflight(task.id, async () => {
+    await query("UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1", [task.id]);
+    notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'analysis_running' });
+  });
 }
 
 // branch_pending：專案任務為每個 repo 建 worktree（並行隔離）；否則用 user 的 git_repo_path
 async function handleBranch(task, settings) {
+  await withInflight(task.id, () => doBranch(task, settings));
+}
+
+async function doBranch(task, settings) {
   const taskId = task.id;
   const branchName = `task/${task.task_id}`;
   if (task.project_id) {
@@ -215,6 +222,10 @@ const HANDLERS = {
 };
 
 async function processTask(task, settings) {
+  // 快照防護：同輪前面的任務可能 block 數分鐘，這裡的 task.status 是開跑時的舊快照。
+  // 派工前重查現況，狀態已推進或被暫停就留給下一輪——用過期快照派工最壞會砍掉進行中 coding 的 worktree。
+  const { rows: [cur] } = await query('SELECT status, is_paused FROM tasks WHERE id = $1', [task.id]);
+  if (!cur || cur.status !== task.status || cur.is_paused) return;
   const handler = HANDLERS[task.status];
   if (!handler) return;
   // 執行歷程階段標記：只在「真正進入」時寫一次。已 inflight（長階段 claude 仍在跑，
@@ -230,6 +241,17 @@ async function processTask(task, settings) {
 }
 
 async function runPipeline(userId) {
+  // cron 每分鐘 fire-and-forget：同 user 上一輪未結束就跳過本輪，避免並行實例用過期快照互踩
+  if (_pipelineRunning.has(userId)) return { processed: 0 };
+  _pipelineRunning.add(userId);
+  try {
+    return await doRunPipeline(userId);
+  } finally {
+    _pipelineRunning.delete(userId);
+  }
+}
+
+async function doRunPipeline(userId) {
   const loopCount = await getLoopCount(userId);
   if (loopCount > LOOP_LIMIT) {
     notify.emitToUser(userId, 'notify:toast', {
