@@ -39,6 +39,7 @@ B. 本地程式碼（符號定義、call chain、模組結構、業務邏輯）
 對每個「有變更」的 repo 子目錄，分別在該子目錄內 commit：
   git -C <repo子目錄> add -A && git -C <repo子目錄> commit -m "{{commit_message}}"
 （訊息固定，不可修改；沒有變更的 repo 不需 commit）
+嚴禁 commit __pycache__/ 與 *.pyc（build 產物會讓後續 merge 失敗）；add 前先確認 .gitignore 涵蓋，已誤入版控就 git rm --cached 移除。
 
 【專案資訊】
 - 名稱：{{project_name}}
