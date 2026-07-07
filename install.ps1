@@ -61,16 +61,25 @@ if (-not (Test-Path $configPath)) {
 
     $databaseUrl = "postgres://${pgUser}:${pgPassword}@${pgHost}:${pgPort}/${pgDb}"
 
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    $bytes = New-Object byte[] 32
-    $rng.GetBytes($bytes)
-    $secret = [Convert]::ToBase64String($bytes)
+    function New-RandomSecret {
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $bytes = New-Object byte[] 32
+        $rng.GetBytes($bytes)
+        [Convert]::ToBase64String($bytes)
+    }
+
+    # ANTHROPIC_API_KEY 供資料庫查詢 AI 功能使用（可留空稍後補）
+    $apiKey = if ($env:ANTHROPIC_API_KEY) { $env:ANTHROPIC_API_KEY } else {
+        Read-Host "ANTHROPIC_API_KEY (optional, Enter to skip)"
+    }
 
     $config = [ordered]@{
         DATABASE_URL = $databaseUrl
-        JWT_SECRET   = $secret
+        JWT_SECRET   = New-RandomSecret
+        APP_SECRET   = New-RandomSecret
         PORT         = 3939
     }
+    if (-not [string]::IsNullOrWhiteSpace($apiKey)) { $config.ANTHROPIC_API_KEY = $apiKey }
     $config | ConvertTo-Json | Set-Content $configPath -Encoding UTF8
     Write-Host "Config saved: $configPath" -ForegroundColor Green
 } else {
@@ -79,9 +88,22 @@ if (-not (Test-Path $configPath)) {
 
 # 5. Load config and set env vars
 $config = Get-Content $configPath | ConvertFrom-Json
+
+# 既有安裝缺 APP_SECRET 時補產（缺它會讓可逆加密／E2E 憑證功能直接 500）
+if (-not $config.APP_SECRET) {
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = New-Object byte[] 32
+    $rng.GetBytes($bytes)
+    $config | Add-Member -NotePropertyName APP_SECRET -NotePropertyValue ([Convert]::ToBase64String($bytes)) -Force
+    $config | ConvertTo-Json | Set-Content $configPath -Encoding UTF8
+    Write-Host "APP_SECRET generated and saved." -ForegroundColor Green
+}
+
 $env:DATABASE_URL = $config.DATABASE_URL
 $env:JWT_SECRET   = $config.JWT_SECRET
+$env:APP_SECRET   = $config.APP_SECRET
 $env:PORT         = $config.PORT
+if ($config.ANTHROPIC_API_KEY) { $env:ANTHROPIC_API_KEY = $config.ANTHROPIC_API_KEY }
 
 # 6. Start server and open browser
 Write-Host ""
