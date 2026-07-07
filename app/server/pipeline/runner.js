@@ -5,18 +5,18 @@
  * through the pipeline states sequentially.
  *
  * Exports:
- *   runPipeline(userId)    → Promise<{ processed: number }>
- *   resetLoopCounter(userId) → Promise<void>
+ *   runPipeline(userId)     → Promise<{ dispatched: number }>（併發派工，不 await 任務完成）
+ *   whenIdle()              → Promise<void>（等所有在飛任務結束，測試用）
+ *   abortTask / getInflightTaskIds
  */
 
 const path = require('path');
 const { query } = require('../db');
 const { analyzeTask } = require('./analysis');
-const { createBranch, checkoutDefault, addWorktree, removeWorktree, getMainBranch } = require('./git');
+const { createBranch, checkoutDefault, ensureWorktreeAtMain, getMainBranch } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const notify = require('../notify');
 
-const LOOP_LIMIT = 5;
 // 執行歷程階段標記的中文顯示（僅影響顯示文字，status 值與流程判斷不變）
 const STAGE_LABELS = {
   new: '待分類', cs_running: '客服處理中', analysis_running: '分析中',
@@ -24,43 +24,27 @@ const STAGE_LABELS = {
   qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki'
 };
-const _inFlight = new Map(); // taskId (number) → AbortController
-const _pipelineRunning = new Set(); // userId → runPipeline 執行中（cron 每分鐘 fire-and-forget，防疊加並行實例）
+// taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。
+const _inFlight = new Map();
+const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
 const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating'];
 
+// 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
+const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
+const MAX_GLOBAL = parseInt(process.env.PIPELINE_MAX_GLOBAL || '30', 10);
+
 function abortTask(taskId) {
-  const ctrl = _inFlight.get(Number(taskId));
-  if (ctrl) ctrl.abort();
+  const entry = _inFlight.get(Number(taskId));
+  if (entry) entry.ctrl.abort();
 }
 
 function getInflightTaskIds() {
   return [..._inFlight.keys()];
 }
 
-async function getLoopCount(userId) {
-  const { rows } = await query(
-    'SELECT loop_count FROM loop_counter WHERE user_id = $1',
-    [userId]
-  );
-  return rows.length ? rows[0].loop_count : 0;
-}
-
-async function incrementLoopCounter(userId) {
-  await query(
-    `INSERT INTO loop_counter (user_id, loop_count, run_started_at)
-     VALUES ($1, 1, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET loop_count = loop_counter.loop_count + 1, run_started_at = NOW()`,
-    [userId]
-  );
-}
-
-async function resetLoopCounter(userId) {
-  await query(
-    `INSERT INTO loop_counter (user_id, loop_count, run_started_at)
-     VALUES ($1, 0, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET loop_count = 0`,
-    [userId]
-  );
+// 等待目前所有在飛任務結束（供測試斷言 handler 效果；正式運作不需呼叫）
+function whenIdle() {
+  return Promise.all([..._inFlight.values()].map(e => e.promise.catch(() => {})));
 }
 
 async function getUserSettings(userId) {
@@ -72,45 +56,33 @@ async function getUserSettings(userId) {
   };
 }
 
-// 包住需要中斷控制的長時 handler：同一任務防重入，註冊 AbortController 供暫停中止
-function withInflight(taskId, fn) {
-  if (_inFlight.has(taskId)) return Promise.resolve();
-  const ctrl = new AbortController();
-  _inFlight.set(taskId, ctrl);
-  return Promise.resolve(fn(ctrl.signal)).finally(() => _inFlight.delete(taskId));
-}
+// 各 handler 收 dispatchTask 傳入的 signal（_inFlight 佔位／回收由 dispatchTask 統一管理）
 
 // new / cs_running：cs-agent 分類（唯一入口）
-async function handleCs(task) {
-  await withInflight(task.id, (signal) => {
-    const { runCsAgent } = require('./cs-agent');
-    return runCsAgent(task.id, task.user_id, signal);
-  });
+async function handleCs(task, settings, signal) {
+  const { runCsAgent } = require('./cs-agent');
+  await runCsAgent(task.id, task.user_id, signal);
 }
 
 // analysis_running：專案任務走 task-agent，否則走 analysis.js
-async function handleAnalysis(task) {
-  await withInflight(task.id, async (signal) => {
-    if (task.project_id) {
-      const { runTaskAnalysis } = require('./task-agent');
-      await runTaskAnalysis(task.id, task.user_id, signal);
-    } else {
-      await analyzeTask(task.id, signal);
-    }
-  });
+async function handleAnalysis(task, settings, signal) {
+  if (task.project_id) {
+    const { runTaskAnalysis } = require('./task-agent');
+    await runTaskAnalysis(task.id, task.user_id, signal);
+  } else {
+    await analyzeTask(task.id, signal);
+  }
 }
 
 // confirm_answered：使用者答完澄清 → 回分析重跑（帶答案）
 async function handleConfirmAnswered(task) {
-  await withInflight(task.id, async () => {
-    await query("UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1", [task.id]);
-    notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'analysis_running' });
-  });
+  await query("UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1", [task.id]);
+  notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'analysis_running' });
 }
 
 // branch_pending：專案任務為每個 repo 建 worktree（並行隔離）；否則用 user 的 git_repo_path
 async function handleBranch(task, settings) {
-  await withInflight(task.id, () => doBranch(task, settings));
+  await doBranch(task, settings);
 }
 
 async function doBranch(task, settings) {
@@ -123,20 +95,17 @@ async function doBranch(task, settings) {
     );
     if (repos.length) {
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
-      // worktree add/remove 動到共用主 clone 的 refs → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
+      // worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）。
+      // 冪等（reset=false）：analysis 通常已建好此 worktree，這裡沿用不重建、不動已有內容。
       const err = await withProjectLock(task.project_id, async () => {
-        const created = [];
         try {
           for (const repo of repos) {
             const wtPath = path.join(wtParent, path.basename(repo.local_path));
-            // 任務分支從 main/master 長出（乾淨基底，與其他在途任務隔離）
             const base = await getMainBranch(repo.local_path);
-            await addWorktree(repo.local_path, wtPath, branchName, base);
-            created.push({ mainRepo: repo.local_path, wtPath });
+            await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, base, false);
           }
           return null;
         } catch (e) {
-          for (const c of created) await removeWorktree(c.mainRepo, c.wtPath).catch(() => {});
           return e;
         }
       });
@@ -161,58 +130,46 @@ async function doBranch(task, settings) {
 }
 
 // coding_running：task-agent 實作；未綁專案則停止
-async function handleCoding(task) {
-  await withInflight(task.id, async (signal) => {
-    const { runTaskCoding } = require('./task-agent');
-    const handled = await runTaskCoding(task.id, task.user_id, signal);
-    if (!handled) {
-      await query(
-        "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行開發', updated_at=NOW() WHERE id=$1",
-        [task.id]
-      );
-      notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'stopped' });
-    }
-  });
+async function handleCoding(task, settings, signal) {
+  const { runTaskCoding } = require('./task-agent');
+  const handled = await runTaskCoding(task.id, task.user_id, signal);
+  if (!handled) {
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法執行開發', updated_at=NOW() WHERE id=$1",
+      [task.id]
+    );
+    notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'stopped' });
+  }
 }
 
 // qa_running：QA agent 對照 SD 審查 diff（pass→merge_running；fail→退 coding 計數）
-async function handleQa(task) {
-  await withInflight(task.id, (signal) => {
-    const { runQaAgent } = require('./qa-agent');
-    return runQaAgent(task.id, task.user_id, signal);
-  });
+async function handleQa(task, settings, signal) {
+  const { runQaAgent } = require('./qa-agent');
+  await runQaAgent(task.id, task.user_id, signal);
 }
 
 // merge_running：把 task 分支併入 testing
-async function handleMerge(task) {
-  await withInflight(task.id, (signal) => {
-    const { runMergeAgent } = require('./merge-agent');
-    return runMergeAgent(task.id, task.user_id, signal);
-  });
+async function handleMerge(task, settings, signal) {
+  const { runMergeAgent } = require('./merge-agent');
+  await runMergeAgent(task.id, task.user_id, signal);
 }
 
 // deploy_testing：純程式部署到測試區 + odoo-bin -u 升級
-async function handleDeployTesting(task) {
-  await withInflight(task.id, (signal) => {
-    const { runDeployTesting } = require('./deploy-testing');
-    return runDeployTesting(task.id, task.user_id, signal);
-  });
+async function handleDeployTesting(task, settings, signal) {
+  const { runDeployTesting } = require('./deploy-testing');
+  await runDeployTesting(task.id, task.user_id, signal);
 }
 
 // playwright_running：依 SD 產計畫並跑 E2E（pass→review_pending；fail→退 coding 計數）
-async function handlePlaywright(task) {
-  await withInflight(task.id, (signal) => {
-    const { runPlaywrightAgent } = require('./playwright-agent');
-    return runPlaywrightAgent(task.id, task.user_id, signal);
-  });
+async function handlePlaywright(task, settings, signal) {
+  const { runPlaywrightAgent } = require('./playwright-agent');
+  await runPlaywrightAgent(task.id, task.user_id, signal);
 }
 
 // wiki_updating：library-agent 更新 wiki → done
-async function handleWiki(task) {
-  await withInflight(task.id, (signal) => {
-    const { runLibraryAgent } = require('./library-agent');
-    return runLibraryAgent(task.id, task.user_id, signal);
-  });
+async function handleWiki(task, settings, signal) {
+  const { runLibraryAgent } = require('./library-agent');
+  await runLibraryAgent(task.id, task.user_id, signal);
 }
 
 const HANDLERS = {
@@ -229,109 +186,92 @@ const HANDLERS = {
   wiki_updating: handleWiki,
 };
 
-async function processTask(task, settings) {
-  // 快照防護：同輪前面的任務可能 block 數分鐘，這裡的 task.status 是開跑時的舊快照。
-  // 派工前重查現況，狀態已推進或被暫停就留給下一輪——用過期快照派工最壞會砍掉進行中 coding 的 worktree。
-  const { rows: [cur] } = await query('SELECT status, is_paused FROM tasks WHERE id = $1', [task.id]);
-  if (!cur || cur.status !== task.status || cur.is_paused) return;
-  const handler = HANDLERS[task.status];
-  if (!handler) return;
-  // 執行歷程階段標記：只在「真正進入」時寫一次。已 inflight（長階段 claude 仍在跑，
-  // 每次 cron tick 都會 re-poll 到同一 *_running 任務）就跳過，避免重複標記洗版。
-  if (!_inFlight.has(task.id)) {
+// 執行一個任務：狀態重查（防過期快照）→ 寫階段標記 → 跑 handler → 失敗原因落地／Teams。
+// signal 由 dispatchTask 傳入；此函式不管 _inFlight 佔位/回收。
+async function runTask(task, settings, signal) {
+  const prevStatus = task.status;
+  try {
+    // 快照防護：撈出到執行之間，任務可能被暫停或狀態被 API（resolve-blocker 等）改動 → 留給下一輪
+    const { rows: [cur] } = await query('SELECT status, is_paused FROM tasks WHERE id = $1', [task.id]);
+    if (!cur || cur.status !== task.status || cur.is_paused) return;
+    const handler = HANDLERS[task.status];
+    if (!handler) return;
+
+    // 階段標記（每次進入一關寫一次；派工已排除在飛任務，不會重複）
     const marker = `\n\x1b[96m▶ ${STAGE_LABELS[task.status] || task.status}\x1b[0m\n`;
     notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: marker });
     await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, marker]).catch(() => {});
     // 記錄目前這一關：若此階段失敗轉 stopped，解決阻塞可回到這一關續跑（而非退回 new 重分診）
     await query('UPDATE tasks SET resume_status = $2 WHERE id = $1', [task.id, task.status]).catch(() => {});
+
+    await handler(task, settings, signal);
+  } catch (err) {
+    console.error(`[RUNNER] task ${task.id} error:`, err.message);
   }
-  await handler(task, settings);
+
+  // 處理後狀態：剛轉 stopped → 把阻塞原因寫進執行歷程（集中一處涵蓋所有 agent 的 stop）
+  try {
+    const { rows: [u] } = await query('SELECT status, blocker_content FROM tasks WHERE id = $1', [task.id]);
+    if (!u) return;
+    if (u.status === 'stopped' && prevStatus !== 'stopped') {
+      const reason = `\n\x1b[91m❌ 失敗：${u.blocker_content || '未提供原因'}\x1b[0m\n`;
+      notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: reason });
+      await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, reason]).catch(() => {});
+    }
+    if (u.status !== prevStatus) {
+      try {
+        const { rows: [ts] } = await query('SELECT tenant_id, client_id, client_secret, team_id, channel_id FROM teams_settings WHERE id = 1');
+        if (ts?.tenant_id && ts?.client_id && ts?.client_secret && ts?.team_id && ts?.channel_id) {
+          const { enqueue } = require('../teams');
+          enqueue('task', task.id);
+          if (u.status === 'confirm_pending') enqueue('question', task.id);
+        }
+      } catch { /* teams 未設定或不可用 */ }
+    }
+  } catch (e) {
+    console.error('[RUNNER] post-status check error:', e.message);
+  }
 }
 
+// 同步佔位派工：_inFlight.set 在任何 await 之前完成（單執行緒保證不會兩個 tick 搶同一任務），
+// 之後 fire-and-forget 執行，完成時自動移除。回傳是否成功佔位。
+function dispatchTask(task, settings) {
+  if (_inFlight.has(task.id)) return false;
+  const ctrl = new AbortController();
+  const promise = runTask(task, settings, ctrl.signal).finally(() => _inFlight.delete(task.id));
+  _inFlight.set(task.id, { ctrl, userId: task.user_id, promise });
+  return true;
+}
+
+// 掃描該 user 可跑任務，在併發上限內派工（不 await 任務完成 → 下一 tick 隨槽位釋出續派）。
+// 取代舊的循序 for-loop ＋ loop_counter 節流（健檢 U8）。
 async function runPipeline(userId) {
-  // cron 每分鐘 fire-and-forget：同 user 上一輪未結束就跳過本輪，避免並行實例用過期快照互踩
-  if (_pipelineRunning.has(userId)) return { processed: 0 };
+  if (_pipelineRunning.has(userId)) return { dispatched: 0 }; // 掃描鎖：防同 user 重複掃描
   _pipelineRunning.add(userId);
   try {
-    return await doRunPipeline(userId);
+    const perUser = [..._inFlight.values()].filter(e => e.userId === userId).length;
+    const slots = Math.min(MAX_PER_USER - perUser, MAX_GLOBAL - _inFlight.size);
+    if (slots <= 0) return { dispatched: 0 };
+
+    const { rows: tasks } = await query(
+      `SELECT id, task_id, status, user_id, project_id, blocker_content FROM tasks
+       WHERE user_id = $1 AND status = ANY($2::text[]) AND is_paused = false AND is_hidden = false
+       ORDER BY updated_at ASC`,
+      [userId, RUNNABLE_STATUSES]
+    );
+    if (tasks.length === 0) return { dispatched: 0 };
+
+    const settings = await getUserSettings(userId);
+    let dispatched = 0;
+    for (const task of tasks) {
+      if (dispatched >= slots) break;
+      if (_inFlight.has(task.id)) continue; // 已在飛，不重複派
+      if (dispatchTask(task, settings)) dispatched++;
+    }
+    return { dispatched };
   } finally {
     _pipelineRunning.delete(userId);
   }
 }
 
-async function doRunPipeline(userId) {
-  const loopCount = await getLoopCount(userId);
-  if (loopCount > LOOP_LIMIT) {
-    notify.emitToUser(userId, 'notify:toast', {
-      level: 'warn',
-      message: `Pipeline 已達 ${LOOP_LIMIT} 次上限，等待新任務或手動重設`
-    });
-    return { processed: 0 };
-  }
-
-  await incrementLoopCounter(userId);
-
-  const { rows: tasks } = await query(
-    `SELECT id, task_id, status, user_id, project_id, blocker_content FROM tasks
-     WHERE user_id = $1 AND status = ANY($2::text[]) AND is_paused = false AND is_hidden = false
-     ORDER BY updated_at ASC`,
-    [userId, RUNNABLE_STATUSES]
-  );
-
-  if (tasks.length === 0) return { processed: 0 };
-
-  const settings = await getUserSettings(userId);
-
-  // One-time check per pipeline run: skip Teams overhead if not configured
-  let teamsEnabled = false;
-  try {
-    const { rows } = await query(
-      'SELECT tenant_id, client_id, client_secret, team_id, channel_id FROM teams_settings WHERE id = 1'
-    );
-    const s = rows[0];
-    teamsEnabled = !!(s?.tenant_id && s?.client_id && s?.client_secret && s?.team_id && s?.channel_id);
-  } catch { /* teams_settings may not exist yet */ }
-
-  let processed = 0;
-
-  for (const task of tasks) {
-    const prevStatus = task.status;
-    try {
-      await processTask(task, settings);
-      processed++;
-    } catch (err) {
-      console.error(`[RUNNER] task ${task.id} error:`, err.message);
-    }
-
-    // 讀取處理後的狀態；若剛轉為 stopped，把阻塞原因寫進執行歷程
-    // （否則使用者在執行歷程只看到停下、看不到為什麼——集中一處涵蓋所有 agent 的 stop）
-    let updatedStatus = null;
-    try {
-      const { rows: [u] } = await query('SELECT status, blocker_content FROM tasks WHERE id = $1', [task.id]);
-      if (u) {
-        updatedStatus = u.status;
-        if (u.status === 'stopped' && prevStatus !== 'stopped') {
-          const reason = `\n\x1b[91m❌ 失敗：${u.blocker_content || '未提供原因'}\x1b[0m\n`;
-          notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: reason });
-          await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, reason]).catch(() => {});
-        }
-      }
-    } catch (e) {
-      console.error('[RUNNER] post-status check error:', e.message);
-    }
-
-    if (teamsEnabled && updatedStatus && updatedStatus !== prevStatus) {
-      try {
-        const { enqueue } = require('../teams');
-        enqueue('task', task.id);
-        if (updatedStatus === 'confirm_pending') enqueue('question', task.id);
-      } catch (e) {
-        console.error('[TEAMS] status check error:', e.message);
-      }
-    }
-  }
-
-  return { processed };
-}
-
-module.exports = { runPipeline, resetLoopCounter, abortTask, getInflightTaskIds };
+module.exports = { runPipeline, abortTask, getInflightTaskIds, whenIdle };

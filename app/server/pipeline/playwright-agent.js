@@ -92,6 +92,8 @@ async function runPlaywrightAgent(taskId, userId, signal) {
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
+      const { bumpReentryOrStop } = require('./reentry');
+      if (await bumpReentryOrStop(taskId, userId)) return true; // 總循環達上限 → 已標 stopped
       // 失敗報告餵回 coding（與 QA／deploy 一致），否則重跑只能盲改（健檢 U4）
       await query(
         "UPDATE tasks SET status='coding_running', pw_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",

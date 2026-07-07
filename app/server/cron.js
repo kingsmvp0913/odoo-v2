@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { query } = require('./db');
 const { syncUser } = require('./pipeline/sync');
-const { runPipeline, resetLoopCounter } = require('./pipeline/runner');
+const { runPipeline } = require('./pipeline/runner');
 const notify = require('./notify');
 
 const lastOdooSync = new Map();
@@ -21,7 +21,6 @@ async function runForUser(userId, { skipPipeline = false } = {}) {
     const total = result.odoo.added + result.service.added;
     if (total > 0) {
       notify.emitToUser(userId, 'task:synced', { count: total });
-      await resetLoopCounter(userId);
     }
     if (!skipPipeline) await runPipeline(userId);
   } catch (err) {

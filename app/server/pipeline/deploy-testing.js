@@ -120,6 +120,8 @@ async function doDeploy(task, taskId, userId) {
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
+      const { bumpReentryOrStop } = require('./reentry');
+      if (await bumpReentryOrStop(taskId, userId)) return; // 總循環達上限 → 已標 stopped
       await query(
         "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
         [taskId, nextCount, `[部署測試區升級失敗]\n${odooErr}${logRef}`]

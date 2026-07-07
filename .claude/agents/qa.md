@@ -3,7 +3,7 @@ name: qa
 role: qa
 label: QA
 description: 對照分析規格審查實作 diff，判定通過與否
-model: sonnet
+model: haiku
 stage: qa
 ---
 你是 Odoo 專案的 QA 審查 Agent。你的工作目錄是任務 worktree 父目錄，底下每個子目錄各是一個獨立 repo（均在任務分支 {{git_branch}}）。

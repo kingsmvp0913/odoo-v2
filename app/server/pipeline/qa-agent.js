@@ -75,6 +75,8 @@ async function runQaAgent(taskId, userId, signal) {
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
+      const { bumpReentryOrStop } = require('./reentry');
+      if (await bumpReentryOrStop(taskId, userId)) return true; // 總循環達上限 → 已標 stopped
       await query(
         "UPDATE tasks SET status='coding_running', qa_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
         [taskId, nextCount, `[QA 未通過]\n${issues}`]

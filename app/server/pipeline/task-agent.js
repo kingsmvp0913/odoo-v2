@@ -4,7 +4,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { pullBranch, ensureMainBranch, addDetachedWorktree, removeWorktree } = require('./git');
+const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const { abortError, stopReason } = require('./claude-runner');
 
@@ -232,25 +232,20 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  // 隔離 main worktree：持鎖 pull 最新 main 並建立拋棄式 detached worktree（各 repo），
-  // 讓 analysis 讀「乾淨 main」，不受別任務把共用主 clone 切到 testing 的污染影響（健檢 U7）。
+  // 任務 worktree（一個任務一個，analysis 建、coding 沿用、approve 併 main 後才刪）：
+  // 持鎖 pull 最新 main 並確保 task 分支 worktree 於最新 main（reset=true，此階段尚無程式變更）。
+  // analysis 讀它 → 永遠讀「乾淨 main」，不受別任務把共用主 clone 切到 testing 的污染（健檢 U7）。
   // pull 失敗（origin 不通／本地髒）→ 停下等人工。
-  const anaParent = path.join(info.root, '.worktrees', `_analysis_${task.task_id}`);
-  const anaWts = [];
+  const wtParent = worktreeParent(info.root, task.task_id);
   let setupErr = null;
   await withProjectLock(task.project_id, async () => {
     try {
       for (const repo of info.repos) {
         const base = await ensureMainBranch(repo.local_path);
         await pullBranch(repo.local_path, base);
-        const wtPath = path.join(anaParent, repo.subdir);
-        await addDetachedWorktree(repo.local_path, wtPath, base);
-        anaWts.push({ mainRepo: repo.local_path, wtPath });
+        await ensureWorktreeAtMain(repo.local_path, path.join(wtParent, repo.subdir), `task/${task.task_id}`, base, true);
       }
-    } catch (e) {
-      setupErr = e;
-      for (const w of anaWts) await removeWorktree(w.mainRepo, w.wtPath).catch(() => {});
-    }
+    } catch (e) { setupErr = e; }
   });
   if (setupErr) {
     await query(
@@ -269,9 +264,10 @@ async function runTaskAnalysis(taskId, userId, signal) {
 
   let raw;
   try {
-    const built = buildAnalysisPrompt(task, info, clarification, anaParent);
-    // analysis 讀隔離的 main worktree（cwd=anaParent），不持鎖 → 與別任務的 merge/deploy 平行
-    const analysisResult = await spawnClaude(built.prompt, { cwd: anaParent, taskId, userId, signal, model: built.model });
+    const built = buildAnalysisPrompt(task, info, clarification, wtParent);
+    // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
+    // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
+    const analysisResult = await spawnClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model });
     raw = analysisResult.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
@@ -282,11 +278,6 @@ async function runTaskAnalysis(taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
-  } finally {
-    // 移除拋棄式 worktree（持鎖，best-effort）
-    await withProjectLock(task.project_id, async () => {
-      for (const w of anaWts) await removeWorktree(w.mainRepo, w.wtPath).catch(() => {});
-    });
   }
 
   const result = parseResult(raw);

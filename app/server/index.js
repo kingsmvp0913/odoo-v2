@@ -40,7 +40,7 @@ function createApp() {
   const { verifyToken } = require('./auth');
   const { query } = require('./db');
   const { syncUser } = require('./pipeline/sync');
-  const { runPipeline, resetLoopCounter } = require('./pipeline/runner');
+  const { runPipeline } = require('./pipeline/runner');
   app.post('/api/sync/now', verifyToken, async (req, res) => {
     try {
       const result = await syncUser(req.userId);
@@ -53,7 +53,6 @@ function createApp() {
       // Only run pipeline if test mode is off
       const { rows: [cfg] } = await query('SELECT test_mode FROM teams_settings WHERE id = 1');
       if (!cfg?.test_mode) {
-        await resetLoopCounter(req.userId);
         await runPipeline(req.userId);
       }
       res.json(result);
@@ -75,9 +74,7 @@ function createApp() {
   // User-level: advance pipeline one round for current user only
   app.post('/api/pipeline/step', verifyToken, async (req, res) => {
     try {
-      await resetLoopCounter(req.userId);
-      // fire-and-forget：pipeline 一個 tick 可能跑好幾分鐘（coding 等），不能 hold 住 HTTP 連線，
-      // 否則前端會「Failed to fetch」。立刻回應，進度靠 socket 即時更新。
+      // fire-and-forget：runPipeline 只派工（不 await 任務完成），立刻回應；進度靠 socket 即時更新。
       runPipeline(req.userId).catch(err => console.error('[STEP] pipeline error:', err.message));
       res.json({ ok: true, started: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -91,7 +88,6 @@ function createApp() {
       const { rows: users } = await query('SELECT id FROM users');
       // fire-and-forget：同上，不 hold 住 HTTP 連線
       for (const u of users) {
-        await resetLoopCounter(u.id);
         runPipeline(u.id).catch(err => console.error('[ADMIN-STEP] pipeline error:', err.message));
       }
       res.json({ ok: true, started: true });

@@ -232,12 +232,23 @@ async function removeWorktree(mainRepoPath, worktreePath) {
   await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath });
 }
 
-// 拋棄式唯讀 worktree：於指定 ref（如 main）建立 detached HEAD 的隔離工作目錄。
-// 供 analysis 讀乾淨 main，不受共用主 clone 當下 checkout 哪個分支影響（健檢 U7）。
-async function addDetachedWorktree(mainRepoPath, worktreePath, ref) {
-  await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath }).catch(() => {});
-  await execFileAsync('git', ['worktree', 'prune'], { cwd: mainRepoPath }).catch(() => {});
-  await execFileAsync('git', ['worktree', 'add', '--detach', worktreePath, ref], { cwd: mainRepoPath });
+// 任務 worktree（analysis 建、coding 沿用、approve 併 main 後才刪）：
+// 確保在 <base>（最新 main）長出的 task 分支 worktree 存在。冪等——已存在時，
+// reset=true 才重置到最新 main（供 analysis 重跑讀最新碼；此階段尚無程式變更），
+// reset=false 則保留現有內容（branch_pending 沿用 analysis 已建好的，不動已有工作）。
+async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, reset) {
+  ensureGitignorePyc(mainRepoPath);
+  const isWorktree = fs.existsSync(path.join(worktreePath, '.git'));
+  if (!isWorktree) {
+    await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath }).catch(() => {});
+    await execFileAsync('git', ['worktree', 'prune'], { cwd: mainRepoPath }).catch(() => {});
+    await execFileAsync('git', ['worktree', 'add', '-B', branch, worktreePath, base], { cwd: mainRepoPath });
+    return;
+  }
+  if (reset) {
+    await execFileAsync('git', ['reset', '--hard', base], { cwd: worktreePath });
+    await execFileAsync('git', ['clean', '-fd'], { cwd: worktreePath });
+  }
 }
 
 // 在主 clone 把 sourceBranch 併進 targetBranch（例：task/<id> → testing）。
@@ -284,4 +295,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, addDetachedWorktree, mergeInto, discardPyc, untrackPyc };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc };
