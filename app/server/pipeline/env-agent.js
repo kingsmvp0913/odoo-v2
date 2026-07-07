@@ -10,8 +10,14 @@ const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..'
 
 function execCmd(bin, args) {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { timeout: 600000 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(stderr || err.message));
+    // maxBuffer 預設僅 1MB，Odoo 升級 log 超過會以 maxBuffer exceeded 假失敗
+    execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        // 保留完整診斷：只留 stderr 的話，「幾秒就死、stderr 只有 banner」的失敗會無從鑑識（健檢根因 C）
+        const e = new Error(stderr || err.message);
+        e.exitCode = err.code; e.killed = !!err.killed; e.stdout = stdout; e.stderr = stderr;
+        return reject(e);
+      }
       resolve(stdout);
     });
   });

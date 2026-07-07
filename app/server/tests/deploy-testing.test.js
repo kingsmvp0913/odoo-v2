@@ -116,3 +116,37 @@ test('環境起不來 → stopped（不退 coding、不升級）', async () => {
   expect(t.status).toBe('stopped');
   expect(envAgent.upgradeModules).not.toHaveBeenCalled();
 });
+
+// --- 健檢根因 C：診斷資訊不得丟失 ---
+
+test('extractOdooError：無 ERROR/Traceback → 明確標注疑環境層問題（而非默默回傳 banner）', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = 'Odoo version 17.0\naddons paths: [...]';  // 12 秒就死的行程，log 只有 banner
+  const out = extractOdooError(log);
+  expect(out).toContain('無 ERROR/Traceback');
+  expect(out).toContain('環境或啟動層');
+});
+
+test('升級失敗 → 完整 log 落地成檔，retry_feedback 附檔案路徑供事後鑑識', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  process.env.DEPLOY_LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'deploylog-'));
+  try {
+    await setEnvRunning();
+    const err = new Error('short banner only');
+    err.exitCode = 1; err.stdout = 'stdout 裡的線索'; err.stderr = 'short banner only';
+    envAgent.upgradeModules.mockRejectedValue(err);
+    const id = await makeTask(0);
+    await runDeployTesting(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT retry_feedback FROM tasks WHERE id=$1', [id]);
+    expect(t.retry_feedback).toContain('完整 log：');
+    const logPath = t.retry_feedback.match(/完整 log：(.+)$/m)[1].trim();
+    const saved = fs.readFileSync(logPath, 'utf8');
+    expect(saved).toContain('exitCode: 1');
+    expect(saved).toContain('stdout 裡的線索'); // stderr 之外的輸出不得丟棄
+  } finally {
+    delete process.env.DEPLOY_LOG_DIR;
+  }
+});
