@@ -234,6 +234,13 @@ async function stopEnv(projectId) {
 async function nightlyShutdown() {
   const { rows } = await query("SELECT project_id, pid FROM odoo_envs WHERE status='running'");
   for (const env of rows) {
+    // 跳過使用中的 env：該專案有任務正在 deploy_testing／playwright_running，
+    // 砍了會讓 deploy/E2E 中途死掉被誤歸因為程式問題（健檢：夜間 shutdown 誤歸因）
+    const { rows: [busy] } = await query(
+      "SELECT 1 FROM tasks WHERE project_id=$1 AND status IN ('deploy_testing','playwright_running') AND is_paused=false AND is_hidden=false LIMIT 1",
+      [env.project_id]
+    );
+    if (busy) continue;
     if (env.pid) {
       try { process.kill(env.pid, 'SIGTERM'); } catch {}
     }

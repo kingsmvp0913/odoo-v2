@@ -37,20 +37,23 @@ async function runCsAgent(taskId, userId, signal) {
   });
 
   let result = null;
+  let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
     const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify, model: agent.model });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) result = JSON.parse(jsonMatch[0]);
   } catch (err) {
+    // CLI/API 執行失敗與「回應無法解析」是不同問題，分開歸因（健檢流程層 P3）
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);
-    console.error(`[CS-AGENT] API error task ${taskId}:`, err.message);
+    blockerMsg = `CS agent 執行失敗：${err.message}`;
+    console.error(`[CS-AGENT] error task ${taskId}:`, err.message);
   }
 
   if (!result) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-      [taskId, 'CS agent failed to parse response']
+      [taskId, blockerMsg]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return;

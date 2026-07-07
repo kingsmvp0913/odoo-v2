@@ -104,3 +104,29 @@ test('無 E2E 憑證 → stopped（提示重新登入）', async () => {
   expect(t.blocker_content).toContain('重新登入');
   expect(taskAgent.spawnClaude).not.toHaveBeenCalled();
 });
+
+// ===== 主題 A：E2E fail 先檢查 env（夜間 shutdown 誤歸因）=====
+
+test('A-4 verdict fail 但 env 於 E2E 期間被砍 → 判 env、不加 pw 計數、不退 coding', async () => {
+  // 模擬夜間 shutdown 砍在 E2E 執行中間：env 一開始 running（通過前置檢查），跑到一半變 idle
+  taskAgent.spawnClaude.mockImplementation(async () => {
+    await dbModule.query("UPDATE odoo_envs SET status='idle' WHERE project_id=$1", [projectId]);
+    return { text: `---RESULT-JSON---\n${JSON.stringify({ verdict: 'fail', report: '連不上測試站台' })}\n---END-RESULT---`, usage: null, durationMs: null };
+  });
+  const id = await makeTask(userWithCreds, 0);
+  await runPlaywrightAgent(id, userWithCreds);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, pw_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');           // 不退 coding
+  expect(t.blocker_type).toBe('env');
+  expect(t.pw_retry_count).toBe(0);           // 環境問題不佔 pw 計數
+  await dbModule.query("UPDATE odoo_envs SET status='running' WHERE project_id=$1", [projectId]); // 還原
+});
+
+test('A-4 verdict fail 且 env 正常 → 退 coding、pw 計數+1（真 bug，現行不破）', async () => {
+  claudeReturns({ verdict: 'fail', report: '欄位沒出現' });
+  const id = await makeTask(userWithCreds, 0);
+  await runPlaywrightAgent(id, userWithCreds);
+  const { rows: [t] } = await dbModule.query('SELECT status, pw_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.pw_retry_count).toBe(1);
+});

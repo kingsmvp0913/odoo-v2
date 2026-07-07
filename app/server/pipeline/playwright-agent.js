@@ -69,6 +69,17 @@ async function runPlaywrightAgent(taskId, userId, signal) {
 
   if (result?.verdict === 'fail') {
     const report = result.report || result.plan || '未提供細節';
+    // env 若已非 running（多半被夜間 shutdown 砍了／掛了），E2E 失敗是環境問題不是程式 bug——
+    // 不退 coding、不加 pw 計數，停下等環境恢復（健檢：夜間 shutdown 誤歸因）
+    const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
+    if (!env2 || env2.status !== 'running') {
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+        [taskId, `測試環境於 E2E 期間停止運行，屬環境問題（非程式碼），請恢復環境後重試。最後結果：${String(report).slice(0, 300)}`]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
     await query(
       "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
       [taskId, `[E2E 測試未通過]\n${report}`]

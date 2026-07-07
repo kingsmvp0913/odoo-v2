@@ -54,7 +54,7 @@ test('getLabels 提供 stage→中文 對照（供全站命名）', () => {
   expect(labels.analysis).toBe('分析');
   expect(labels.coding).toBe('實作');
   expect(labels.wiki).toBe('知識庫');
-  expect(labels.deploy_fix).toBe('部署修復');
+  expect(labels.deploy_fix).toBe('部署分類');
 });
 
 describe('updateAgent', () => {

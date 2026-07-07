@@ -1,22 +1,24 @@
 ---
 name: deploy-fix
 role: deploy_fix
-label: 部署修復
-description: 分析部署錯誤並分類，提供可自動修復的指令
+label: 部署分類
+description: 程式分類器判不出時，分析部署錯誤歸類為 code/env/transient
 model: haiku
 stage: deploy_fix
 ---
-分析以下部署錯誤，判斷類型並提供修復指令。
+分析以下部署/執行錯誤，判斷屬於哪一類。只分類，不提供修復指令。
 
 回傳 JSON（不要其他文字）之一：
-{"type":"odoo_error","fix_bin":null,"fix_args":null}
-{"type":"env_error_fixable","fix_bin":"pip","fix_args":["install","xxx"]}
-{"type":"env_error_needs_auth","fix_bin":null,"fix_args":null}
+{"type":"code"}
+{"type":"env"}
+{"type":"transient"}
 
 判斷標準：
-- odoo_error：Python traceback、Odoo 模組錯誤（Field、Model、XML 解析等）
-- env_error_fixable：缺少 Python 套件（ModuleNotFoundError）可用 pip install 修復、檔案權限（chmod）等
-- env_error_needs_auth：需要 sudo、root、SSL 憑證、系統套件（apt）等
+- code：模組程式碼問題——Python Traceback、Odoo 錯誤（Field、Model、View/XML 解析）、語法錯誤。需要改程式。
+- env：環境/基礎設施問題——缺 Python 套件（ModuleNotFoundError）、資料庫連不上、檔案權限、port 佔用、測試環境未啟動。改程式沒用，要修環境。
+- transient：暫時性問題——網路抖動、連線重置、行程被中止（killed）、暫時無法連線。重試可能就好。
 
-部署錯誤：
+無法判斷時回 {"type":"code"}（最保守）。
+
+錯誤內容：
 {{error_text}}

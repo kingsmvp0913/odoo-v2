@@ -4,6 +4,7 @@ const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
 const { upgradeModules, runEnvSetup } = require('./env-agent');
+const { classifyFailureWithAgent } = require('./failure-classifier');
 
 const DEPLOY_LIMIT = 3;
 
@@ -82,23 +83,43 @@ async function doDeploy(task, taskId, userId) {
   try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; }
   catch { /* SD 解析失敗則升級全部 */ }
 
+  const mods = moduleName ? [moduleName] : [];
+  let err = null;
   try {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 測試區升級模組 ${moduleName || 'all'}...\n` });
-    await upgradeModules(task.project_id, moduleName ? [moduleName] : []);
-  } catch (err) {
-    // 升級失敗＝程式載入/語法錯 → 退回 coding 並計數。
-    // 記錄（task_logs）只留短標記；完整錯誤存 retry_feedback，coding retry 時餵給 AI 修正。
-    await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[部署測試區升級失敗]')",
-      [taskId]
-    );
+    await upgradeModules(task.project_id, mods);
+  } catch (e) { err = e; }
+
+  // transient（網路抖動/被砍）→ 自動重試一次，不佔計數；再敗重新分類（多半 env）
+  if (err && (await classifyFailureWithAgent(err.message)) === 'transient') {
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 暫時性失敗，自動重試一次...\n` });
+    err = null;
+    try { await upgradeModules(task.project_id, mods); } catch (e) { err = e; }
+  }
+
+  if (err) {
+    // 依失敗類別歸因：env/transient 不是程式問題，不退 coding、不加計數（健檢根因 B）
+    const cls = await classifyFailureWithAgent(err.message);
     const nextCount = (task.deploy_retry_count || 0) + 1;
     const logFile = saveDeployLog(taskId, nextCount, err);
     const odooErr = extractOdooError(err.message);
     const logRef = logFile ? `\n完整 log：${logFile}` : '';
+
+    if (cls !== 'code') {
+      // 環境/仍暫時性問題：停下等人工修環境，不動 coding 計數
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+        [taskId, `環境問題（非程式碼），請檢查測試環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}`]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return;
+    }
+
+    // 程式碼問題：退回 coding 修正並計數（滿上限 stopped）
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[部署測試區升級失敗]')", [taskId]);
     if (nextCount >= DEPLOY_LIMIT) {
       await query(
-        "UPDATE tasks SET status='stopped', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
+        "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
         [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${logRef}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
