@@ -166,6 +166,17 @@ async function commitAll(repoPath, message) {
   await execFileAsync('git', ['commit', '-m', message], { cwd: repoPath });
 }
 
+// merge_conflict 人工解完後的收尾驗證：仍有未解衝突就拋錯擋下；有 MERGE_HEAD 就 commit 了結。
+// 沒有這道防線，半套 merge（衝突標記）會直接進 deploy，Python SyntaxError 被誤歸因為程式問題。
+async function concludeMerge(repoPath) {
+  const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoPath });
+  const unmerged = stdout.trim().split('\n').filter(Boolean);
+  if (unmerged.length) throw new Error(`仍有未解的衝突檔：${unmerged.join(', ')}`);
+  if (fs.existsSync(path.join(repoPath, '.git', 'MERGE_HEAD'))) {
+    await commitAll(repoPath, '[merge] resolve conflicts (manual)');
+  }
+}
+
 async function mergeToMain(repoPath, branchName) {
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath); // 避免 testing 工作樹上 tracked pyc 的改動擋住 checkout main
@@ -265,4 +276,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto, discardPyc, untrackPyc };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto, discardPyc, untrackPyc };

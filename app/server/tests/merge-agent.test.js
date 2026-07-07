@@ -2,7 +2,8 @@ const { newDb } = require('pg-mem');
 
 jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn(),
-  commitAll: jest.fn().mockResolvedValue(undefined)
+  commitAll: jest.fn().mockResolvedValue(undefined),
+  abortMerge: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 
@@ -27,6 +28,7 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(async () => {
   gitMock.mergeInto.mockReset();
   gitMock.commitAll.mockReset().mockResolvedValue(undefined);
+  gitMock.abortMerge.mockReset().mockResolvedValue(undefined);
   require('../notify').emitToUser.mockReset();
   await dbModule.query('DELETE FROM tasks');
   await dbModule.query('DELETE FROM project_repos');
@@ -82,4 +84,31 @@ test('unresolved conflict in one repo → merge_conflict records that repo', asy
     ? JSON.parse(rows[0].merge_conflict_data) : rows[0].merge_conflict_data;
   expect(data.repos[0].repo).toBe('hr');
   expect(data.repos[0].files).toContain('models/x.py');
+});
+
+// --- 健檢 U6：merge 失敗出口要清掉半套 merge ---
+// 意圖：主 clone（testing 常駐樹）殘留 MERGE_HEAD／衝突標記會污染同專案後續任務的
+// merge 與 deploy，且部署錯誤會被誤歸因為本任務的程式問題。
+
+test('mergeInto 拋錯 → 先 abortMerge 清理再 stopped', async () => {
+  gitMock.mergeInto.mockRejectedValue(new Error('You have not concluded your merge'));
+  const taskId = await setupProjectTask(['main']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(gitMock.abortMerge).toHaveBeenCalledWith('/repos/mp/main');
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('stopped');
+});
+
+test('解衝突後 commitAll 失敗 → abortMerge 清理再 stopped', async () => {
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: [] });
+  gitMock.commitAll.mockRejectedValue(new Error('commit failed'));
+  const taskId = await setupProjectTask(['main']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(gitMock.abortMerge).toHaveBeenCalledWith('/repos/mp/main');
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('stopped');
 });

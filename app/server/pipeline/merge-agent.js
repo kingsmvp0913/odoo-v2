@@ -3,7 +3,7 @@ const path = require('path');
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
-const { mergeInto, commitAll } = require('./git');
+const { mergeInto, commitAll, abortMerge } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -82,6 +82,8 @@ async function doMerge(task, taskId, userId, signal) {
     try {
       mergeResult = await mergeInto(repo.local_path, 'testing', branch);
     } catch (err) {
+      // 半套 merge（MERGE_HEAD）留在主 clone 會污染同專案後續任務，先清掉再停
+      await abortMerge(repo.local_path).catch(() => {});
       await query(
         `UPDATE tasks SET status='stopped', blocker_type='tech',
          blocker_content=$2, updated_at=NOW() WHERE id=$1`,
@@ -113,6 +115,7 @@ async function doMerge(task, taskId, userId, signal) {
         await commitAll(repo.local_path, `[merge] ${branch} → testing (resolve conflicts)`);
         notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：衝突已自動解決\n` });
       } catch (err) {
+        await abortMerge(repo.local_path).catch(() => {});
         await query(
           `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
           [taskId, `${repo.label} 提交解決衝突失敗: ${err.message}`]

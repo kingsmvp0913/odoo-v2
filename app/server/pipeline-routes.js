@@ -126,12 +126,28 @@ function registerRoutes(app) {
   app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       if (rows[0].status !== 'merge_conflict') {
         return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
+      }
+      // 轉 deploy 前驗證主 clone 已無未解衝突並了結 merge（commit）——
+      // 否則半套 merge（MERGE_HEAD＋衝突標記）直接進部署，錯誤會被誤歸因為程式問題（健檢 U6）
+      if (rows[0].project_id) {
+        const { concludeMerge } = require('./pipeline/git');
+        const { rows: repos } = await query(
+          "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
+          [rows[0].project_id]
+        );
+        for (const repo of repos) {
+          try {
+            await concludeMerge(repo.local_path);
+          } catch (err) {
+            return res.status(400).json({ error: `${repo.label}：${err.message}` });
+          }
+        }
       }
       await query(
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",

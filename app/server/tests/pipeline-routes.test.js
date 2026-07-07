@@ -14,7 +14,8 @@ jest.mock('../pipeline/git', () => ({
   runDeploy: jest.fn(),
   mergeToMain: jest.fn().mockResolvedValue(undefined),
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
-  removeWorktree: jest.fn().mockResolvedValue(undefined)
+  removeWorktree: jest.fn().mockResolvedValue(undefined),
+  concludeMerge: jest.fn().mockResolvedValue(undefined)
 }));
 
 process.env.JWT_SECRET = 'test-pipeline-secret';
@@ -116,5 +117,52 @@ test('POST /api/tasks/:id/mark-conflict-resolved → deploy_testing', async () =
   expect(res.status).toBe(200);
   const { rows: updated } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
   expect(updated[0].status).toBe('deploy_testing');
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// --- 健檢 U6：merge_conflict 人工解完 → 轉 deploy 前必須驗證並了結 merge ---
+// 意圖：半套 merge（衝突標記）進部署會變 Python SyntaxError，被誤歸因為程式問題退 coding。
+
+async function insertConflictProjectTask(folder) {
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ($1,'17.0',$1) RETURNING id", [folder]
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, `/repos/${folder}/main`]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,$2,'odoo','T','merge_conflict',$3) RETURNING id",
+    [userId, `task_cf_${folder}`, proj.id]
+  );
+  return t.id;
+}
+
+test('mark-conflict-resolved 專案任務：repo 仍有未解衝突 → 400 且狀態不變', async () => {
+  const { concludeMerge } = require('../pipeline/git');
+  concludeMerge.mockRejectedValueOnce(new Error('仍有未解的衝突檔：a.py'));
+  const taskId = await insertConflictProjectTask('cfdirty');
+
+  const res = await request(app).post(`/api/tasks/${taskId}/mark-conflict-resolved`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(400);
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(after[0].status).toBe('merge_conflict'); // 不得放行半套 merge 進部署
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('mark-conflict-resolved 專案任務：驗證通過（concludeMerge 了結）→ deploy_testing', async () => {
+  const { concludeMerge } = require('../pipeline/git');
+  concludeMerge.mockResolvedValue(undefined);
+  const taskId = await insertConflictProjectTask('cfclean');
+
+  const res = await request(app).post(`/api/tasks/${taskId}/mark-conflict-resolved`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(concludeMerge).toHaveBeenCalledWith('/repos/cfclean/main');
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(after[0].status).toBe('deploy_testing');
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
