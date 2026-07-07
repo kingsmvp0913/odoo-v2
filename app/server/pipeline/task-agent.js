@@ -170,11 +170,13 @@ function distillFeedback(raw) {
   let body;
   const tbIdx = rest.indexOf('Traceback (most recent call last)');
   if (tbIdx !== -1) {
-    // Python traceback：只留「模組 frame（idx_ 慣例）」＋最後例外行，砍掉 framework frames
+    // Python traceback：留「使用者模組 frame」＋最後例外行，砍掉 framework frames。
+    // 使用者模組不一定 idx_ 開頭（沿用既有 module 不改名）→ 以「排除框架路徑」判定，而非只認 idx_
+    const FRAMEWORK = /site-packages|[\\/](?:usr[\\/])?lib[\\/]python|[\\/]python3[\\/]|[\\/]odoo[\\/]addons[\\/]|[\\/]src[\\/]odoo[\\/]/i;
     const lines = rest.slice(tbIdx).split(/\r?\n/);
     const kept = [];
     for (let i = 0; i < lines.length; i++) {
-      if (/^\s*File .*idx_\w+/.test(lines[i])) {
+      if (/^\s*File /.test(lines[i]) && (/idx_\w+/.test(lines[i]) || !FRAMEWORK.test(lines[i]))) {
         kept.push(lines[i].trim());
         if (lines[i + 1] && /^\s+\S/.test(lines[i + 1])) kept.push(lines[i + 1].trim());
       }
@@ -347,10 +349,12 @@ async function runTaskCoding(taskId, userId, signal) {
   let raw;
   try {
     const resolution = await latestResolution(taskId);
-    // coding_session_id 只在 fresh 成功後寫入 → 它存在＝前一輪 coding 成功過＝這次是被下游退回的重跑
+    // coding_session_id 只在 fresh 成功後寫入 → 它存在＝前一輪 coding 成功過＝這次是被下游退回的重跑。
+    // 觸發信號只認 retry_feedback：resolution（latestResolution）永不消費，用它當條件會讓過期舊指示誤觸發
+    // resume（feedback 為空時帶著舊指示重跑，可能覆蓋已通過部分）。resolution 仍會在 resume prompt 帶入為輔助。
     const canResume = !!task.coding_session_id
       && (task.coding_resume_count || 0) < RESUME_LIMIT
-      && (!!task.retry_feedback || !!resolution);
+      && !!task.retry_feedback;
 
     let codingResult;
     if (canResume) {
@@ -363,7 +367,8 @@ async function runTaskCoding(taskId, userId, signal) {
         );
       } catch (err) {
         if (!shouldResumeFallback(err)) throw err; // timeout/aborted → 不 fallback，交給外層 stopped
-        // session 遺失／CLI 壞掉 → 記這次失敗帳，清 session 改跑全量 fresh（只 fallback 一次，不遞迴）
+        // session 遺失／CLI 壞掉 → 記這次失敗帳，清 session 改跑全量 fresh（只 fallback 一次，不遞迴）。
+        // 註：resume 失敗＋fresh 也失敗時，coding 會有 2 筆失敗記帳（各對應一次真實呼叫，刻意保留）。
         await logFailedUsage(ref, userId, 'coding', err);
         await query('UPDATE tasks SET coding_session_id=NULL, coding_resume_count=0 WHERE id=$1', [taskId]);
         task.coding_session_id = null;

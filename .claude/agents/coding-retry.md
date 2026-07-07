@@ -24,9 +24,9 @@ stage: coding
 - 每個檔案改完立即驗證：Python `python -m py_compile <file>`、XML `xmllint --noout <file>`。
 - 嚴禁新增規格以外的欄位／Model／邏輯；Odoo 規則同前（_inherit、xpath、禁 round() 等）。
 
-【Commit】對每個「有變更」的 repo 子目錄，在該子目錄內 commit（訊息固定）：
+【Commit】對每個「有變更」的 repo 子目錄，在該子目錄內 commit（訊息固定；沒有變更的 repo 不需 commit）：
   git -C <repo子目錄> add -A && git -C <repo子目錄> commit -m "{{commit_message}}"
-嚴禁 commit __pycache__/ 與 *.pyc。
+嚴禁 commit __pycache__/ 與 *.pyc；已誤入版控就 git rm --cached 移除。
 
 【輸出】完成後輸出：
 ---RESULT-JSON---
