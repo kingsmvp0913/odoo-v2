@@ -1,6 +1,6 @@
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -34,6 +34,7 @@ async function analyzeTask(taskId, signal) {
     rawYaml = callResult.text;
     await logTokenUsage({ taskId: task.task_id }, task.user_id, 'analysis', callResult.usage, callResult.durationMs);
   } catch (apiErr) {
+    await logFailedUsage({ taskId: task.task_id }, task.user_id, 'analysis', apiErr);
     await query(
       "UPDATE tasks SET status = 'analysis_running', updated_at = NOW() WHERE id = $1",
       [taskId]

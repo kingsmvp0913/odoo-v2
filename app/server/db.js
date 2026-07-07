@@ -306,11 +306,17 @@ async function migrate() {
   }
 
   // One-time backfill：token_usage.project_id 由 tasks 回填（任務被刪前先固化歸因，
-  // 否則刪任務／re-sync 會讓專案別 token 報表持續漏計——健檢資料層 P2）
+  // 否則刪任務／re-sync 會讓專案別 token 報表持續漏計——健檢資料層 P2）。
+  // 先用索引探針短路：無 NULL 列就跳過，避免每次啟動都全表 UPDATE（表變大後才有感）
   await query(
-    `UPDATE token_usage tu SET project_id = t.project_id
-     FROM tasks t
-     WHERE tu.project_id IS NULL AND tu.task_id = t.task_id AND t.project_id IS NOT NULL`
+    `DO $$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM token_usage WHERE project_id IS NULL LIMIT 1) THEN
+         UPDATE token_usage tu SET project_id = t.project_id
+         FROM tasks t
+         WHERE tu.project_id IS NULL AND tu.task_id = t.task_id AND t.project_id IS NOT NULL;
+       END IF;
+     END $$;`
   ).catch(() => {});
 
   // One-time status migration: pipeline 改版移除的狀態 → stopped（冪等，只影響殘留舊任務）

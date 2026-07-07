@@ -1,6 +1,6 @@
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
 
 async function chatReply(projectId, chatId, userMessage, userId) {
@@ -31,7 +31,13 @@ async function chatReply(projectId, chatId, userMessage, userId) {
     [chatId, 'user', userMessage]
   );
 
-  const chatResult = await callClaude(prompt, undefined, { model: agent.model });
+  let chatResult;
+  try {
+    chatResult = await callClaude(prompt, undefined, { model: agent.model });
+  } catch (err) {
+    await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
+    throw err;
+  }
   const reply = chatResult.text || '（無回覆）';
   await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
 

@@ -3,7 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -150,6 +150,7 @@ ${src || '（無原始碼）'}`;
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { const p = JSON.parse(m[0]); title = p.title || title; content = p.content ?? content; }
   } catch (err) {
+    await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] refresh error ${slug}:`, err.message);
     const e = new Error('重新生成失敗：' + err.message); e.status = 500; throw e;
   }
@@ -202,6 +203,7 @@ ${logText || '無'}`;
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) wikiUpdate = JSON.parse(jsonMatch[0]);
   } catch (err) {
+    await logFailedUsage({ taskId: task.task_id }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] API error task ${taskId}:`, err.message);
   }
 
@@ -275,6 +277,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { const p = JSON.parse(m[0]); overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }
   } catch (err) {
+    await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] init overview error project ${projectId}:`, err.message);
   }
   const overviewId = await _upsertNode(projectId, null, 'overview', 'overview', overviewTitle, overviewContent);

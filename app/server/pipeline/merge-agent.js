@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { mergeInto, commitAll, abortMerge } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -38,10 +38,19 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   if (!content.includes('<<<<<<<')) return true;
 
   const agent = loadAgent('merge');
-  const resolveResult = await callClaude(
-    agent.render({ file_path: filePath, content }),
-    signal, { ...opts, model: agent.model }
-  );
+  let resolveResult;
+  try {
+    resolveResult = await callClaude(
+      agent.render({ file_path: filePath, content }),
+      signal, { ...opts, model: agent.model }
+    );
+  } catch (err) {
+    if (opts.taskId) {
+      const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
+      if (t) await logFailedUsage({ taskId: t.task_id, projectId: t.project_id }, t.user_id, 'merge', err);
+    }
+    throw err;
+  }
   const resolved = resolveResult.text;
   if (resolveResult.usage && opts.taskId) {
     const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
