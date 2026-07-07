@@ -65,7 +65,9 @@ test('GET /api/tasks?source=service → returns only service task', async () => 
   expect(res.body[0].source).toBe('service');
 });
 
-test('POST /api/tasks/:id/resolve-blocker 歸零三關卡計數器並回到 new', async () => {
+// 健檢 U2：全歸零會讓「繼續」一鍵繳械所有重試上限（任務 52 無限循環的直接機制）。
+// 新意圖：只歸零與續跑關卡對應的那一顆，其餘關卡的累計保留。
+test('POST /api/tasks/:id/resolve-blocker 無 resume_status → 回 new 且計數器全數保留', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, status, qa_retry_count, deploy_retry_count, pw_retry_count, blocker_content)
      VALUES ($1,'task_resolve','odoo','R','stopped',3,2,1,'boom') RETURNING id`,
@@ -79,9 +81,28 @@ test('POST /api/tasks/:id/resolve-blocker 歸零三關卡計數器並回到 new'
     'SELECT status, qa_retry_count, deploy_retry_count, pw_retry_count FROM tasks WHERE id=$1', [t.id]
   );
   expect(after.status).toBe('new');
-  expect(after.qa_retry_count).toBe(0);
-  expect(after.deploy_retry_count).toBe(0);
-  expect(after.pw_retry_count).toBe(0);
+  expect(after.qa_retry_count).toBe(3);
+  expect(after.deploy_retry_count).toBe(2);
+  expect(after.pw_retry_count).toBe(1);
+});
+
+test('resolve-blocker 從 deploy_testing 續跑 → 只歸零 deploy 計數器，qa/pw 累計保留', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status, qa_retry_count, deploy_retry_count, pw_retry_count, blocker_content)
+     VALUES ($1,'task_resolve_dp','odoo','R','stopped','deploy_testing',2,3,1,'boom') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/resolve-blocker`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolution: '已修好測試環境' });
+  expect(res.status).toBe(200);
+  const { rows: [after] } = await dbModule.query(
+    'SELECT status, qa_retry_count, deploy_retry_count, pw_retry_count FROM tasks WHERE id=$1', [t.id]
+  );
+  expect(after.status).toBe('deploy_testing');
+  expect(after.deploy_retry_count).toBe(0); // 使用者聲稱已處理，此關卡重新取得完整重試額度
+  expect(after.qa_retry_count).toBe(2);     // 其他關卡的歷史不因此消失
+  expect(after.pw_retry_count).toBe(1);
 });
 
 test('resolve-blocker 有 resume_status → 回到中斷的那一關（而非 new）', async () => {

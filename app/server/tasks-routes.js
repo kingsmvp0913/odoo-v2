@@ -307,7 +307,7 @@ function registerRoutes(app) {
   app.post('/api/tasks/:id/resolve-blocker', verifyToken, async (req, res) => {
     try {
       const { rows: tasks } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, status, resume_status FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
@@ -317,11 +317,19 @@ function registerRoutes(app) {
       const { resolution } = req.body;
       if (!resolution?.trim()) return res.status(400).json({ error: '請填寫解決說明' });
 
-      // 回到中斷的那一關續跑（resume_status）；沒有記錄則退回 new 重新分診
+      // 回到中斷的那一關續跑（resume_status）；沒有記錄則退回 new 重新分診。
+      // 只歸零與續跑關卡對應的計數器——全歸零會讓「繼續」一鍵繳械所有重試上限，
+      // 同樣的失敗可無上限重演（健檢 U2，任務 52 無限循環的直接機制）
+      const RESUME_COUNTER = {
+        qa_running: 'qa_retry_count',
+        deploy_testing: 'deploy_retry_count',
+        playwright_running: 'pw_retry_count'
+      };
+      const counterCol = RESUME_COUNTER[tasks[0].resume_status];
       await query(
         `UPDATE tasks SET status = COALESCE(resume_status, 'new'),
          blocker_content = NULL, blocker_type = NULL, resume_status = NULL,
-         qa_retry_count = 0, deploy_retry_count = 0, pw_retry_count = 0, updated_at = NOW() WHERE id = $1`,
+         ${counterCol ? counterCol + ' = 0,' : ''} updated_at = NOW() WHERE id = $1`,
         [req.params.id]
       );
       await query(
