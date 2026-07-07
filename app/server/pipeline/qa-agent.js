@@ -28,9 +28,13 @@ async function runQaAgent(taskId, userId, signal) {
   let raw;
   try {
     const agent = loadAgent('qa');
+    // 主分支名依實際 repo 而定（main/master），寫死 main 會讓 diff 基底錯誤、審查失準
+    const { getMainBranch } = require('./git');
+    const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
     const prompt = agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
+      main_branch: mainBranch,
       git_branch: task.git_branch || '（未設定）',
       analysis_yaml: task.analysis_yaml || '（無規格）',
       resolution: (await latestResolution(taskId)) || '（無）'

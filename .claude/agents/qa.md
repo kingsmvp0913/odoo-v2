@@ -12,7 +12,7 @@ stage: qa
 對照【分析規格】逐條檢查本次實作是否正確、完整、符合 Odoo 規範。只審查，不修改任何檔案。
 
 【檢查方式】
-1. 對每個 repo 子目錄執行 `git -C <子目錄> diff main...{{git_branch}}` 取得本任務的變更（若該 repo 無變更則跳過）。
+1. 對每個 repo 子目錄執行 `git -C <子目錄> diff {{main_branch}}...{{git_branch}}` 取得本任務的變更（若該 repo 無變更則跳過）。
 2. 逐條比對【分析規格】的 requirements：是否都有實作、有無漏做或做錯。
 3. 檢查 Odoo 規範違反：
    - 是否誤用原生 `round()`（應改 Decimal + ROUND_HALF_UP）
