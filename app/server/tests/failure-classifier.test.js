@@ -30,6 +30,20 @@ describe('classifyFailure 純函式', () => {
     expect(classifyFailure('SyntaxError: invalid syntax (sale_order.py, line 12)')).toBe('code');
   });
 
+  test('真實 Odoo ParseError traceback（call stack 經過 venv 套件）→ 判 code 不被 env 誤搶', () => {
+    const tb = [
+      'Traceback (most recent call last):',
+      '  File "/odoo-envs/proj/src/odoo/modules/loading.py", line 500, in load_module_graph',
+      '  File "/odoo-envs/proj/venv/lib/python3.10/site-packages/lxml/etree.pyx", line 3',
+      'odoo.tools.convert.ParseError: while parsing idx_module/views/x.xml:28'
+    ].join('\n');
+    expect(classifyFailure(tb)).toBe('code'); // venv 出現在路徑不代表是環境問題
+  });
+
+  test('開發者錯誤 import（ImportError）→ 判 code 不判 env', () => {
+    expect(classifyFailure("ImportError: cannot import name 'Model' from 'odoo.models'")).toBe('code');
+  });
+
   test('unknown：無法明確判定', () => {
     expect(classifyFailure('something totally unexpected happened')).toBe('unknown');
     expect(classifyFailure('')).toBe('unknown');

@@ -8,8 +8,8 @@ const { stopReason } = require('./claude-runner');
 
 const PW_LIMIT = 3;
 
-async function stopTask(taskId, userId, msg) {
-  await query("UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1", [taskId, msg]);
+async function stopTask(taskId, userId, msg, blockerType = null) {
+  await query("UPDATE tasks SET status='stopped', blocker_type=$3, blocker_content=$2, updated_at=NOW() WHERE id=$1", [taskId, msg, blockerType]);
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
 }
 
@@ -25,7 +25,7 @@ async function runPlaywrightAgent(taskId, userId, signal) {
   // 測試區 URL
   const { rows: [env] } = await query('SELECT url, status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
   if (!env || env.status !== 'running' || !env.url) {
-    await stopTask(taskId, userId, '測試環境未運行，無法執行 E2E 測試');
+    await stopTask(taskId, userId, '測試環境未運行，無法執行 E2E 測試', 'env');
     return true;
   }
 

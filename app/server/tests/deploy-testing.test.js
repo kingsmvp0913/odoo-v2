@@ -61,6 +61,7 @@ test('extractOdooError：優先抓 Traceback 段', () => {
 beforeEach(async () => {
   envAgent.upgradeModules.mockReset();
   envAgent.runEnvSetup.mockReset();
+  require('../pipeline/claude-runner').callClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [projectId]);
 });
 

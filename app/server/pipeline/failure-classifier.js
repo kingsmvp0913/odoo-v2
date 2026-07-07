@@ -9,6 +9,7 @@
  */
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
+const { logTokenUsage } = require('./token-logger');
 
 // 快速、可重試的暫時性失敗（網路抖動、行程被砍、連線重置）
 const TRANSIENT = [
@@ -17,14 +18,16 @@ const TRANSIENT = [
   /connection reset/i, /temporarily unavailable/i
 ];
 
-// 環境/基礎設施問題（非模組程式碼）——不該退 coding
+// 環境/基礎設施問題（非模組程式碼）——不該退 coding。
+// 注意：pattern 要精確，避免誤傷 code traceback。故不用 /ImportError/（開發者錯 import 是 code，
+// 缺套件由 ModuleNotFoundError/No module named 覆蓋）、不用 /venv/（Odoo traceback 路徑常含 venv 目錄）。
 const ENV = [
   /could not connect to server/i, /connection refused/i,
-  /ModuleNotFoundError/i, /No module named/i, /ImportError/i,
+  /ModuleNotFoundError/i, /No module named/i,
   /Permission denied/i, /PermissionError/i,
   /Address already in use/i, /port .* in use/i,
   /database .* does not exist/i, /no space left on device/i,
-  /測試環境無法啟動/, /環境尚未建立/, /venv/i
+  /測試環境無法啟動/, /環境尚未建立/
 ];
 
 // 模組程式碼錯誤——退 coding 修
@@ -32,7 +35,8 @@ const CODE = [
   /Traceback \(most recent call last\)/, /ParseError/i, /ValidationError/i,
   /XMLSyntaxError/i, /SyntaxError/i, /IndentationError/i,
   /Invalid field/i, /Invalid view/i, /does not exist on model/i,
-  /Field .* does not exist/i, /odoo\.(exceptions|tools)/i
+  /Field .* does not exist/i, /odoo\.(exceptions|tools)/i,
+  /cannot import name/i // 模組在、名稱不對＝開發者寫錯 import（有別於缺套件的 ModuleNotFoundError）
 ];
 
 function matchAny(patterns, s) {
@@ -59,7 +63,11 @@ async function classifyFailureWithAgent(text, opts = {}) {
   // 判不出來才叫 haiku agent 分類（不自動修）；任何差錯都保守回 code（＝現行行為，安全）
   try {
     const agent = loadAgent('deploy-fix');
-    const { text: out } = await callClaude(agent.render({ error_text: String(text || '').slice(0, 2000) }), undefined, { model: agent.model });
+    const { text: out, usage, durationMs } = await callClaude(agent.render({ error_text: String(text || '').slice(0, 2000) }), undefined, { model: agent.model });
+    // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
+    if (opts.taskId || opts.projectId) {
+      await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);
+    }
     const m = String(out || '').match(/\{[\s\S]*\}/);
     if (m) {
       const type = JSON.parse(m[0]).type;
