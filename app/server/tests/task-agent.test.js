@@ -7,12 +7,12 @@ const { EventEmitter } = require('events');
 function mockClaude({ onCall } = {}) {
   const { spawn } = require('child_process');
   const calls = [];
-  spawn.mockImplementation((bin, args) => {
+  spawn.mockImplementation((bin, args, opts) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     child.kill = () => {};
-    const call = { args, stdin: '' };
+    const call = { args, stdin: '', cwd: opts && opts.cwd };
     calls.push(call);
     child.stdin = {
       write: (d) => { call.stdin += d; },
@@ -34,7 +34,9 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
-  ensureMainBranch: jest.fn().mockResolvedValue('main')
+  ensureMainBranch: jest.fn().mockResolvedValue('main'),
+  addDetachedWorktree: jest.fn().mockResolvedValue(undefined),
+  removeWorktree: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
@@ -300,3 +302,32 @@ test('B-5 resume 遇中止類失敗（aborted，同 timeout 分類）→ stopped
   expect(count).toBe(1); // aborted/timeout 類不得 fallback 再燒一次
 });
 
+
+// ===== 主題 C：analysis 走隔離 main worktree（U7）=====
+
+test('C-3 analysis 讀隔離 worktree（cwd 非共用主 clone），並建/刪拋棄式 worktree', async () => {
+  const git = require('../pipeline/git');
+  git.pullBranch.mockReset().mockResolvedValue(undefined);
+  git.ensureMainBranch.mockReset().mockResolvedValue('main');
+  git.addDetachedWorktree.mockReset().mockResolvedValue(undefined);
+  git.removeWorktree.mockReset().mockResolvedValue(undefined);
+
+  const calls = mockClaude({ onCall: (child) => {
+    child.stdout.emit('data', JSON.stringify({ type: 'result',
+      result: '---RESULT-JSON---\n{"status":"branch_pending","analysis_yaml":"module: idx_x"}\n---END-RESULT---',
+      usage: null, duration_ms: 5 }) + '\n');
+    child.emit('close', 0);
+  }});
+
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ana_iso','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+
+  // 建立了 detached worktree 於 main、讀完移除
+  expect(git.addDetachedWorktree).toHaveBeenCalledWith('/repos/tap/main', expect.stringContaining('_analysis_ana_iso'), 'main');
+  expect(git.removeWorktree).toHaveBeenCalled();
+  // claude 的 cwd 是隔離 worktree 父目錄，不是共用主 clone 的 root
+  expect(calls[0].cwd).toContain('_analysis_ana_iso');
+});

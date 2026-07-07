@@ -232,6 +232,14 @@ async function removeWorktree(mainRepoPath, worktreePath) {
   await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath });
 }
 
+// 拋棄式唯讀 worktree：於指定 ref（如 main）建立 detached HEAD 的隔離工作目錄。
+// 供 analysis 讀乾淨 main，不受共用主 clone 當下 checkout 哪個分支影響（健檢 U7）。
+async function addDetachedWorktree(mainRepoPath, worktreePath, ref) {
+  await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath }).catch(() => {});
+  await execFileAsync('git', ['worktree', 'prune'], { cwd: mainRepoPath }).catch(() => {});
+  await execFileAsync('git', ['worktree', 'add', '--detach', worktreePath, ref], { cwd: mainRepoPath });
+}
+
 // 在主 clone 把 sourceBranch 併進 targetBranch（例：task/<id> → testing）。
 // 回傳格式比照 syncWithMain，讓上層沿用衝突處理。
 async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
@@ -276,4 +284,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto, discardPyc, untrackPyc };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, addDetachedWorktree, mergeInto, discardPyc, untrackPyc };

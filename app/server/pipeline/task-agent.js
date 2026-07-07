@@ -4,7 +4,8 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { pullBranch, ensureMainBranch } = require('./git');
+const { pullBranch, ensureMainBranch, addDetachedWorktree, removeWorktree } = require('./git');
+const { withProjectLock } = require('./project-lock');
 const { abortError, stopReason } = require('./claude-runner');
 
 function buildCommitMessage(task) {
@@ -126,14 +127,14 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
   });
 }
 
-function buildAnalysisPrompt(task, info, clarification) {
+function buildAnalysisPrompt(task, info, clarification, workDir) {
   const agent = loadAgent('analysis-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
     prompt: agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
-      work_dir: info.root,
+      work_dir: workDir || info.root,
       repo_list: repoList,
       original_text: task.original_text || '（無內容）',
       task_id: task.task_id,
@@ -231,17 +232,30 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  // 分析前 pull main：確保讀到最新生產碼；repo 無 main 會自動建立（空 repo 補初始 commit）。
-  // 失敗（origin 不通／本地髒／衝突）→ 停下等人工。
-  try {
-    for (const repo of info.repos) {
-      const base = await ensureMainBranch(repo.local_path);
-      await pullBranch(repo.local_path, base);
+  // 隔離 main worktree：持鎖 pull 最新 main 並建立拋棄式 detached worktree（各 repo），
+  // 讓 analysis 讀「乾淨 main」，不受別任務把共用主 clone 切到 testing 的污染影響（健檢 U7）。
+  // pull 失敗（origin 不通／本地髒）→ 停下等人工。
+  const anaParent = path.join(info.root, '.worktrees', `_analysis_${task.task_id}`);
+  const anaWts = [];
+  let setupErr = null;
+  await withProjectLock(task.project_id, async () => {
+    try {
+      for (const repo of info.repos) {
+        const base = await ensureMainBranch(repo.local_path);
+        await pullBranch(repo.local_path, base);
+        const wtPath = path.join(anaParent, repo.subdir);
+        await addDetachedWorktree(repo.local_path, wtPath, base);
+        anaWts.push({ mainRepo: repo.local_path, wtPath });
+      }
+    } catch (e) {
+      setupErr = e;
+      for (const w of anaWts) await removeWorktree(w.mainRepo, w.wtPath).catch(() => {});
     }
-  } catch (err) {
+  });
+  if (setupErr) {
     await query(
-      `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, `分析前更新 main 失敗（請確認 origin 可連線且本地無未提交變更）：${err.message}`]
+      `UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+      [taskId, `分析前更新 main 失敗（請確認 origin 可連線且本地無未提交變更）：${setupErr.message}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
@@ -255,9 +269,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
 
   let raw;
   try {
-    const built = buildAnalysisPrompt(task, info, clarification);
-    // analysis 在專案根讀取所有 repo（此時尚未建 worktree）
-    const analysisResult = await spawnClaude(built.prompt, { cwd: info.root, taskId, userId, signal, model: built.model });
+    const built = buildAnalysisPrompt(task, info, clarification, anaParent);
+    // analysis 讀隔離的 main worktree（cwd=anaParent），不持鎖 → 與別任務的 merge/deploy 平行
+    const analysisResult = await spawnClaude(built.prompt, { cwd: anaParent, taskId, userId, signal, model: built.model });
     raw = analysisResult.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
@@ -268,6 +282,11 @@ async function runTaskAnalysis(taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
+  } finally {
+    // 移除拋棄式 worktree（持鎖，best-effort）
+    await withProjectLock(task.project_id, async () => {
+      for (const w of anaWts) await removeWorktree(w.mainRepo, w.wtPath).catch(() => {});
+    });
   }
 
   const result = parseResult(raw);
