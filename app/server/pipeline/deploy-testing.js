@@ -5,6 +5,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { upgradeModules, runEnvSetup } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
+const { withProjectLock } = require('./project-lock');
 
 const DEPLOY_LIMIT = 3;
 
@@ -36,15 +37,6 @@ function saveDeployLog(taskId, count, err) {
     ].join('\n'));
     return file;
   } catch { return null; }
-}
-
-// 專案層序列鎖：同一專案的測試區升級一次一個（不能對同一 DB／env 併發升級）
-const _chains = new Map();
-function withProjectLock(projectId, fn) {
-  const prev = _chains.get(projectId) || Promise.resolve();
-  const run = prev.then(fn, fn);
-  _chains.set(projectId, run.catch(() => {}));
-  return run;
 }
 
 // 確保測試環境運行中；未運行則嘗試建立/啟動，仍失敗回傳 false

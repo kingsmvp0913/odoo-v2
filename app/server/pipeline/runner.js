@@ -13,6 +13,7 @@ const path = require('path');
 const { query } = require('../db');
 const { analyzeTask } = require('./analysis');
 const { createBranch, checkoutDefault, addWorktree, removeWorktree, getMainBranch } = require('./git');
+const { withProjectLock } = require('./project-lock');
 const notify = require('../notify');
 
 const LOOP_LIMIT = 5;
@@ -122,17 +123,24 @@ async function doBranch(task, settings) {
     );
     if (repos.length) {
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
-      const created = [];
-      try {
-        for (const repo of repos) {
-          const wtPath = path.join(wtParent, path.basename(repo.local_path));
-          // 任務分支從 main/master 長出（乾淨基底，與其他在途任務隔離）
-          const base = await getMainBranch(repo.local_path);
-          await addWorktree(repo.local_path, wtPath, branchName, base);
-          created.push({ mainRepo: repo.local_path, wtPath });
+      // worktree add/remove 動到共用主 clone 的 refs → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
+      const err = await withProjectLock(task.project_id, async () => {
+        const created = [];
+        try {
+          for (const repo of repos) {
+            const wtPath = path.join(wtParent, path.basename(repo.local_path));
+            // 任務分支從 main/master 長出（乾淨基底，與其他在途任務隔離）
+            const base = await getMainBranch(repo.local_path);
+            await addWorktree(repo.local_path, wtPath, branchName, base);
+            created.push({ mainRepo: repo.local_path, wtPath });
+          }
+          return null;
+        } catch (e) {
+          for (const c of created) await removeWorktree(c.mainRepo, c.wtPath).catch(() => {});
+          return e;
         }
-      } catch (err) {
-        for (const c of created) await removeWorktree(c.mainRepo, c.wtPath).catch(() => {});
+      });
+      if (err) {
         await query(
           "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
           [taskId, `建立 worktree 失敗：${err.message}`]

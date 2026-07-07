@@ -7,15 +7,7 @@ const { mergeInto, commitAll, abortMerge } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
 
-// 專案層 merge 序列鎖：同一專案的 task 併入 testing 必須一次一個，
-// 避免同時寫壞共用的主 clone（testing working tree）。以 Promise 鏈串接。
-const _projectMergeChains = new Map();
-function withProjectMergeLock(projectId, fn) {
-  const prev = _projectMergeChains.get(projectId) || Promise.resolve();
-  const run = prev.then(fn, fn); // 不論前一個成功或失敗都接續執行
-  _projectMergeChains.set(projectId, run.catch(() => {}));
-  return run;
-}
+const { withProjectLock } = require('./project-lock');
 
 async function getProjectRepos(projectId) {
   const { rows } = await query(
@@ -68,7 +60,7 @@ async function runMergeAgent(taskId, userId, signal) {
   );
   if (!task || !task.project_id) return;
   // 同專案序列化：一次只放行一個 task 併入 testing
-  return withProjectMergeLock(task.project_id, () => doMerge(task, taskId, userId, signal));
+  return withProjectLock(task.project_id, () => doMerge(task, taskId, userId, signal));
 }
 
 // 把 task 分支逐 repo 併入 testing（在各主 clone，主 clone 常駐 testing）。

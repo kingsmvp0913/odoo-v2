@@ -40,18 +40,22 @@ function registerRoutes(app) {
 
       const path = require('path');
       const { mergeToMain, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
+      const { withProjectLock } = require('./pipeline/project-lock');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 
-      // 逐 repo 併入 main（任一失敗即中止，狀態不變）
-      for (const repo of repos) {
-        await mergeToMain(repo.local_path, task.git_branch);
-      }
-      // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
-      for (const repo of repos) {
-        const wtPath = path.join(wtParent, path.basename(repo.local_path));
-        await removeWorktree(repo.local_path, wtPath).catch(() => {});
-        await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
-      }
+      // 併主線＋清理 worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
+      await withProjectLock(task.project_id, async () => {
+        // 逐 repo 併入 main（任一失敗即中止，狀態不變）
+        for (const repo of repos) {
+          await mergeToMain(repo.local_path, task.git_branch);
+        }
+        // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
+        for (const repo of repos) {
+          const wtPath = path.join(wtParent, path.basename(repo.local_path));
+          await removeWorktree(repo.local_path, wtPath).catch(() => {});
+          await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
+        }
+      });
 
       await query(
         "UPDATE tasks SET status = 'wiki_updating', approved_at = NOW(), updated_at = NOW() WHERE id = $1",
