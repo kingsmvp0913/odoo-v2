@@ -23,10 +23,11 @@ window.TokenReportView = Vue.defineComponent({
     chartData() {
       const daily = this.report?.daily;
       if (!daily || daily.length < 2) return null;
-      const w = this.chartW, top = 16, bottom = this.chartH - 28, n = daily.length;
+      // 左側留 48px 給 y 軸數量刻度
+      const left = 48, w = this.chartW, top = 16, bottom = this.chartH - 28, n = daily.length;
       const maxV = Math.max(...daily.map(d => d.tokens), 1);
       const dots = daily.map((d, i) => ({
-        x: 32 + (i / (n - 1)) * (w - 64),
+        x: left + (i / (n - 1)) * (w - left - 24),
         y: bottom - (d.tokens / maxV) * (bottom - top),
         date: d.date,
         tokens: d.tokens
@@ -34,7 +35,14 @@ window.TokenReportView = Vue.defineComponent({
       const step = Math.max(1, Math.ceil(n / 10));
       const labels = dots.filter((_, i) => i % step === 0 || i === n - 1)
                          .map(p => ({ x: p.x, label: this.fmtMD(p.date) }));
-      return { points: dots.map(p => `${p.x},${p.y}`).join(' '), dots, labels };
+      // y 軸刻度（0 到 maxV 均分 4 段），含格線位置
+      const TICKS = 4;
+      const yTicks = [];
+      for (let i = 0; i <= TICKS; i++) {
+        const v = (maxV / TICKS) * i;
+        yTicks.push({ y: bottom - (v / maxV) * (bottom - top), label: this.fmtShort(Math.round(v)) });
+      }
+      return { points: dots.map(p => `${p.x},${p.y}`).join(' '), dots, labels, yTicks, left, right: w - 24 };
     },
     dateRange() {
       const now = new Date();
@@ -238,6 +246,12 @@ window.TokenReportView = Vue.defineComponent({
           <div ref="trendBox" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">每日趨勢</div>
             <svg :width="chartW" :height="chartH" v-if="chartData">
+              <!-- y 軸格線與數量刻度 -->
+              <line v-for="(t,i) in chartData.yTicks" :key="'g'+i"
+                :x1="chartData.left" :y1="t.y" :x2="chartData.right" :y2="t.y"
+                stroke="var(--border)" stroke-width="1" stroke-dasharray="2 3" />
+              <text v-for="(t,i) in chartData.yTicks" :key="'y'+i"
+                :x="chartData.left - 6" :y="t.y + 3" font-size="9" fill="var(--text-muted)" text-anchor="end">{{ t.label }}</text>
               <polyline :points="chartData.points"
                 fill="none" stroke="var(--primary)" stroke-width="2" />
               <circle v-for="d in chartData.dots" :key="d.date" :cx="d.x" :cy="d.y" r="3" fill="var(--primary)">
