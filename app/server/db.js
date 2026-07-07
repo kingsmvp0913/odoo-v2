@@ -267,6 +267,8 @@ async function migrate() {
     { table: 'tasks', col: 'resume_status',        sql: 'ALTER TABLE tasks ADD COLUMN resume_status TEXT' },
     { table: 'tasks', col: 'approved_at',          sql: 'ALTER TABLE tasks ADD COLUMN approved_at TIMESTAMPTZ' },
     { table: 'tasks', col: 'retry_feedback',       sql: 'ALTER TABLE tasks ADD COLUMN retry_feedback TEXT' },
+    { table: 'tasks', col: 'coding_session_id',    sql: 'ALTER TABLE tasks ADD COLUMN coding_session_id TEXT' },
+    { table: 'tasks', col: 'coding_resume_count',  sql: 'ALTER TABLE tasks ADD COLUMN coding_resume_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
     { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },
     { table: 'tasks', col: 'teams_message_id',          sql: 'ALTER TABLE tasks ADD COLUMN teams_message_id TEXT' },

@@ -58,14 +58,16 @@ function worktreeParent(root, taskId) {
   return path.join(root, '.worktrees', taskId);
 }
 
-function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, model }) {
+function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, model, resumeSessionId }) {
   return new Promise((resolve, reject) => {
     // headless pipeline agent：略過權限提示，否則 coding 在 worktree 建檔／mkdir 會卡在無法互動批准
     const args = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
+    // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
+    if (resumeSessionId) args.push('--resume', resumeSessionId);
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
     let resultText = '', stderr = '', done = false;
-    let usage = null, durationMs = null, lineBuffer = '';
+    let usage = null, durationMs = null, lineBuffer = '', sessionId = null;
     const startedAt = Date.now();
     // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）
     const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
@@ -89,6 +91,9 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
         if (!line) continue;
         try {
           const ev = JSON.parse(line);
+          if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
+            sessionId = ev.session_id; // 供 coding 重跑 --resume 續用
+          }
           if (ev.type === 'assistant' && ev.message?.content) {
             let out = '';
             for (const blk of ev.message.content) {
@@ -115,7 +120,7 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
       done = true;
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       if (code !== 0 && code !== null) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
-      else resolve({ text: resultText.trim(), usage, durationMs });
+      else resolve({ text: resultText.trim(), usage, durationMs, sessionId });
     });
     child.on('error', err => { clearTimeout(timer); done = true; reject(fail(err, 'error')); });
   });
@@ -146,6 +151,47 @@ async function latestResolution(taskId) {
   );
   if (!rows.length) return '';
   return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
+}
+
+// resume 路徑專用：把 retry_feedback 蒸餾成更精簡的內容，讓已有完整上下文的 session 只收重點（健檢 U3）。
+// 回傳 { gate:關卡, body:蒸餾後內容 }。逃生口：保留「完整 log：<路徑>」，蒸餾不足時 resume agent 可自行 Read。
+function distillFeedback(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return { gate: '', body: '' };
+
+  let gate = '', rest = s;
+  const tag = s.match(/^\[([^\]]+)\]\s*/); // 開頭的 [QA 未通過] / [部署測試區升級失敗] / [E2E 測試未通過]
+  if (tag) { gate = tag[1]; rest = s.slice(tag[0].length); }
+
+  let logRef = '';
+  const logM = rest.match(/完整 log：.+$/m);
+  if (logM) { logRef = logM[0]; rest = rest.replace(logM[0], '').trim(); }
+
+  let body;
+  const tbIdx = rest.indexOf('Traceback (most recent call last)');
+  if (tbIdx !== -1) {
+    // Python traceback：只留「模組 frame（idx_ 慣例）」＋最後例外行，砍掉 framework frames
+    const lines = rest.slice(tbIdx).split(/\r?\n/);
+    const kept = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\s*File .*idx_\w+/.test(lines[i])) {
+        kept.push(lines[i].trim());
+        if (lines[i + 1] && /^\s+\S/.test(lines[i + 1])) kept.push(lines[i + 1].trim());
+      }
+    }
+    const exc = [...lines].reverse().find(l => {
+      const t = l.trim();
+      return /^[\w.]+(Error|Exception|Warning|Failed)\b/.test(t) || /^[\w.]+: \S/.test(t);
+    });
+    if (exc) kept.push(exc.trim());
+    body = kept.join('\n') || lines.slice(-3).map(l => l.trim()).join('\n');
+  } else {
+    body = rest.replace(/\n{3,}/g, '\n\n').trim(); // 自然語言（QA/E2E）：近原樣，只收斂空白
+  }
+
+  if (body.length > 400) body = body.slice(0, 400) + '…';
+  if (logRef) body += '\n' + logRef;
+  return { gate, body };
 }
 
 function buildCodingPrompt(task, info, resolution, retryFeedback) {
@@ -252,9 +298,37 @@ async function runTaskAnalysis(taskId, userId, signal) {
   return true;
 }
 
+const RESUME_LIMIT = 2; // 每個 session 世代最多 resume 幾次，之後強制 fresh（避免在錯誤方向上一直加碼）
+
+// resume 失敗是否值得 fallback 到 fresh：
+// error（session 遺失／CLI 壞掉，快速非零退出）→ 值得重來；
+// timeout（已燒久）／aborted（手動暫停）→ 不值得，照原失敗處理
+function shouldResumeFallback(err) {
+  return err?.claudeStatus === 'error';
+}
+
+// 跑一輪 coding。resume=true 用 coding-retry 短 prompt＋--resume 續用前一輪對話（省 token，健檢 U3）；
+// 否則用 coding-project 全量 prompt。成功回傳 spawnClaude 的結果（含 sessionId），失敗 throw。
+async function runCodingOnce(task, info, userId, signal, resolution, { resume }) {
+  const cwd = worktreeParent(info.root, task.task_id);
+  if (resume) {
+    const { gate, body } = distillFeedback(task.retry_feedback || '');
+    const agent = loadAgent('coding-retry');
+    const prompt = agent.render({
+      gate,
+      retry_feedback: body || '（無細節，請檢視上一輪自己的變更）',
+      resolution: resolution || '（無）',
+      commit_message: buildCommitMessage(task)
+    }).trim();
+    return spawnClaude(prompt, { cwd, taskId: task.id, userId, signal, model: agent.model, resumeSessionId: task.coding_session_id });
+  }
+  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
+  return spawnClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model });
+}
+
 async function runTaskCoding(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback FROM tasks WHERE id = $1',
+    'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback, coding_session_id, coding_resume_count FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -269,20 +343,45 @@ async function runTaskCoding(taskId, userId, signal) {
     return true;
   }
 
+  const ref = { taskId: task.task_id, projectId: task.project_id };
   let raw;
   try {
     const resolution = await latestResolution(taskId);
-    // 消費上一輪失敗訊息（QA/部署/E2E）：帶進 prompt 讓 coding 修正
-    const retryFeedback = task.retry_feedback || '';
-    const built = buildCodingPrompt(task, info, resolution, retryFeedback);
-    // coding 在任務 worktree 父目錄操作（跨所有 repo 子目錄）
-    const codingResult = await spawnClaude(built.prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: built.model });
+    // coding_session_id 只在 fresh 成功後寫入 → 它存在＝前一輪 coding 成功過＝這次是被下游退回的重跑
+    const canResume = !!task.coding_session_id
+      && (task.coding_resume_count || 0) < RESUME_LIMIT
+      && (!!task.retry_feedback || !!resolution);
+
+    let codingResult;
+    if (canResume) {
+      try {
+        codingResult = await runCodingOnce(task, info, userId, signal, resolution, { resume: true });
+        // resume 成功：計數 +1；--resume 沿用同 session id（init 會回同一個）
+        await query(
+          'UPDATE tasks SET coding_resume_count = coding_resume_count + 1, coding_session_id = COALESCE($2, coding_session_id) WHERE id=$1',
+          [taskId, codingResult.sessionId]
+        );
+      } catch (err) {
+        if (!shouldResumeFallback(err)) throw err; // timeout/aborted → 不 fallback，交給外層 stopped
+        // session 遺失／CLI 壞掉 → 記這次失敗帳，清 session 改跑全量 fresh（只 fallback 一次，不遞迴）
+        await logFailedUsage(ref, userId, 'coding', err);
+        await query('UPDATE tasks SET coding_session_id=NULL, coding_resume_count=0 WHERE id=$1', [taskId]);
+        task.coding_session_id = null;
+        codingResult = await runCodingOnce(task, info, userId, signal, resolution, { resume: false });
+        await query('UPDATE tasks SET coding_session_id=$2, coding_resume_count=0 WHERE id=$1', [taskId, codingResult.sessionId]);
+      }
+    } else {
+      // fresh：首次／resume 用完（強制新世代）／無 feedback。全量 prompt 仍帶未蒸餾 retry_feedback。
+      codingResult = await runCodingOnce(task, info, userId, signal, resolution, { resume: false });
+      await query('UPDATE tasks SET coding_session_id=$2, coding_resume_count=0 WHERE id=$1', [taskId, codingResult.sessionId]);
+    }
+
     raw = codingResult.text;
     // 執行成功才算消費、才清空；失敗/逾時/暫停保留給下一次重試，避免盲改（健檢止血 11）
-    if (retryFeedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'coding', codingResult.usage, codingResult.durationMs);
+    if (task.retry_feedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
+    await logTokenUsage(ref, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
-    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'coding', err);
+    await logFailedUsage(ref, userId, 'coding', err);
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
       [taskId, stopReason('實作 Agent 執行失敗', err)]
@@ -306,4 +405,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution };
+module.exports = { runTaskAnalysis, runTaskCoding, spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution, distillFeedback, shouldResumeFallback };
