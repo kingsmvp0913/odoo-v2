@@ -38,7 +38,7 @@ function formatEvent(ev) {
 }
 
 function callClaude(prompt, signal, opts = {}) {
-  const { taskId, userId, notify, model } = opts;
+  const { taskId, userId, notify, model, timeoutMs = 600000 } = opts;
   return new Promise((resolve, reject) => {
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
@@ -53,7 +53,13 @@ function callClaude(prompt, signal, opts = {}) {
     let lineBuffer = '';
     let stderr = '';
     let settled = false;
-    const finish = fn => { if (!settled) { settled = true; fn(); } };
+    let timer = null;
+    const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); fn(); } };
+    // CLI 掛死時若無 timeout，任務會永久卡在 *_running、merge 鎖永不釋放，只能重啟 server（健檢 U9）
+    timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish(() => reject(new Error(`claude 執行逾時（${Math.round(timeoutMs / 1000)}s）`)));
+    }, timeoutMs);
     const emit = text => {
       if (!text || !taskId) return;
       if (userId && notify) notify.emitToUser(userId, 'terminal:output', { taskId, data: text });
