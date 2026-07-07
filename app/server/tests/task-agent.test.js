@@ -300,19 +300,3 @@ test('B-5 resume 遇中止類失敗（aborted，同 timeout 分類）→ stopped
   expect(count).toBe(1); // aborted/timeout 類不得 fallback 再燒一次
 });
 
-test('B-3 distillFeedback：既有 module（非 idx_ 前綴）的 frame 也要留，只砍 framework', () => {
-  const { distillFeedback } = require('../pipeline/task-agent');
-  const raw = [
-    '[部署測試區升級失敗]',
-    'Traceback (most recent call last)',
-    '  File "/odoo/addons/base/models/ir_model.py", line 100, in _check',
-    '    raise ValidationError(msg)',
-    '  File "/repos/tap/main/hr_custom/models/hr_employee.py", line 20, in _compute',
-    '    self.foo = bar',
-    'odoo.exceptions.ValidationError: 欄位 foo 不存在'
-  ].join('\n');
-  const { body } = distillFeedback(raw);
-  expect(body).toContain('hr_custom/models/hr_employee.py'); // 非 idx_ 的使用者模組 frame 要留
-  expect(body).toContain('ValidationError');
-  expect(body).not.toContain('ir_model.py');                 // framework frame 仍砍
-});

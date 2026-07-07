@@ -170,13 +170,12 @@ function distillFeedback(raw) {
   let body;
   const tbIdx = rest.indexOf('Traceback (most recent call last)');
   if (tbIdx !== -1) {
-    // Python traceback：留「使用者模組 frame」＋最後例外行，砍掉 framework frames。
-    // 使用者模組不一定 idx_ 開頭（沿用既有 module 不改名）→ 以「排除框架路徑」判定，而非只認 idx_
-    const FRAMEWORK = /site-packages|[\\/](?:usr[\\/])?lib[\\/]python|[\\/]python3[\\/]|[\\/]odoo[\\/]addons[\\/]|[\\/]src[\\/]odoo[\\/]/i;
+    // Python traceback：只留「使用者模組 frame」＋最後例外行，砍掉 framework frames。
+    // 可編輯模組一律 idx_ 開頭（新建規則；原生模組禁止修改）→ 以 idx_ 判定使用者 frame。
     const lines = rest.slice(tbIdx).split(/\r?\n/);
     const kept = [];
     for (let i = 0; i < lines.length; i++) {
-      if (/^\s*File /.test(lines[i]) && (/idx_\w+/.test(lines[i]) || !FRAMEWORK.test(lines[i]))) {
+      if (/^\s*File .*idx_\w+/.test(lines[i])) {
         kept.push(lines[i].trim());
         if (lines[i + 1] && /^\s+\S/.test(lines[i + 1])) kept.push(lines[i + 1].trim());
       }

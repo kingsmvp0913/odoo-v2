@@ -97,7 +97,7 @@ runTaskCoding 分流：
 
 ## 已知假設 / 取捨
 - **--resume 上下文可能被截斷但仍 exit 0**：若 session 存在但歷史過長被 CLI 剪裁，resume agent 會以降格上下文運作且不觸發 fallback（fallback 只認非零退出）。最多 2 次後強制 fresh 是安全網，中間最多兩輪可能上下文不完整。屬可接受取捨。
-- **distillFeedback frame 判定**：以「排除框架路徑」（odoo/addons、site-packages、python lib）保留使用者模組 frame，涵蓋非 idx_ 前綴的既有 module；仍保留完整 log 路徑逃生口。
+- **distillFeedback frame 判定**：以 idx_ 前綴判定使用者模組 frame（可編輯模組一律 idx_，原生模組禁止修改）；找不到 idx_ frame 時退回保留 traceback 末三行，並一律附完整 log 路徑逃生口。
 
 ## 範圍
 - 只做 coding 重跑。QA 重跑（全時 0.9M）等 coding 數據驗證後再套同機制（不在本次）。
