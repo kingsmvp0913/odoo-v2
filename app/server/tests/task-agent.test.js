@@ -8,8 +8,9 @@ jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
   ensureMainBranch: jest.fn().mockResolvedValue('main')
 }));
+jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
-let dbModule, runTaskAnalysis, git;
+let dbModule, runTaskAnalysis, runTaskCoding, git;
 let userId, projectId;
 
 beforeAll(async () => {
@@ -35,7 +36,7 @@ beforeAll(async () => {
   );
 
   git = require('../pipeline/git');
-  ({ runTaskAnalysis } = require('../pipeline/task-agent'));
+  ({ runTaskAnalysis, runTaskCoding } = require('../pipeline/task-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -51,4 +52,39 @@ test('分析前 pull main 失敗 → 任務 stopped，不繼續分析', async ()
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
   expect(after.blocker_content).toContain('main');
+});
+
+test('coding retry：retry_feedback（上一輪失敗訊息）確實帶進 claude prompt，且用完清空', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  let captured = '';
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = {
+      write: (d) => { captured += d; },
+      end: () => {
+        setImmediate(() => {
+          child.stdout.emit('data', JSON.stringify({ type: 'result', result: '---RESULT-JSON---\n{"status":"qa_running"}\n---END-RESULT---', usage: null, duration_ms: 10 }) + '\n');
+          child.emit('close', 0);
+        });
+      }
+    };
+    return child;
+  });
+
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, analysis_yaml, git_branch, status, project_id, retry_feedback) VALUES ($1,'ta_code','odoo','T','module: idx_x','task/ta_code','coding_running',$2,$3) RETURNING id",
+    [userId, projectId, '[部署測試區升級失敗]\nParseError: bad view line 5']
+  );
+  const handled = await runTaskCoding(t.id, userId);
+  expect(handled).toBe(true);
+  // 意圖：上一輪失敗訊息必須出現在餵給 claude 的 prompt，否則 AI 修不到
+  expect(captured).toContain('ParseError: bad view line 5');
+  // 用完即清 + 進入 QA
+  const { rows: [after] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('qa_running');
+  expect(after.retry_feedback).toBeNull();
 });

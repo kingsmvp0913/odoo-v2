@@ -219,3 +219,62 @@ test('mergeInto reports conflict files when merge fails with conflicts', async (
   expect(result.hasConflicts).toBe(true);
   expect(result.conflictFiles).toEqual(['models/sale_order.py']);
 });
+
+// 意圖：tracked pyc（歷史誤入版控）被 Odoo 重編譯弄髒會擋住 merge，
+// mergeInto 必須「先還原本地 pyc 改動、merge 後移出版控」，否則測試區每次併版都失敗。
+test('mergeInto：merge 前還原 pyc 本地改動、merge 後把 pyc 移出版控', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    calls.push(args);
+    const done = typeof opts === 'function' ? opts : cb;
+    if (args[0] === 'diff' && args.includes('--cached')) return done(new Error('staged')); // 有 staged 變動 → 應 commit
+    done(null, 'ok', '');
+  });
+  const result = await gitModule.mergeInto('/repo', 'testing', 'task/task_1');
+  expect(result).toEqual({ hasConflicts: false, conflictFiles: [] });
+  expect(calls).toContainEqual(['checkout', '--', '*.pyc']);                         // 先還原
+  expect(calls).toContainEqual(['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '*.pyc']); // 後移出版控
+  expect(calls.some(a => a.includes('commit'))).toBe(true);                          // 有 staged → commit 清理
+});
+
+// 意圖：pyc 是 build 產物，衝突無意義；若衝突「只有 pyc」須自動化解完成 merge，不可卡任務。
+test('mergeInto：pyc-only 假衝突自動化解，回傳無衝突', async () => {
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    const done = typeof opts === 'function' ? opts : cb;
+    if (args[0] === 'merge') return done(new Error('x'), 'Automatic merge failed', '');
+    if (args[0] === 'diff' && args.includes('--diff-filter=U')) {
+      return done(null, 'idx_x/models/__pycache__/sale_order.cpython-312.pyc\n', '');
+    }
+    done(null, 'ok', '');
+  });
+  const result = await gitModule.mergeInto('/repo', 'testing', 'task/task_1');
+  expect(result).toEqual({ hasConflicts: false, conflictFiles: [] });
+});
+
+// 意圖：真正的原始碼衝突不得被 pyc 化解邏輯吞掉，仍要回報給人工處理。
+test('mergeInto：pyc 與原始碼混合衝突時，仍回報非 pyc 檔', async () => {
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    const done = typeof opts === 'function' ? opts : cb;
+    if (args[0] === 'merge') return done(new Error('x'), 'Automatic merge failed', '');
+    if (args[0] === 'diff' && args.includes('--diff-filter=U')) {
+      return done(null, 'models/sale_order.py\nidx_x/models/__pycache__/sale_order.cpython-312.pyc\n', '');
+    }
+    done(null, 'ok', '');
+  });
+  const result = await gitModule.mergeInto('/repo', 'testing', 'task/task_1');
+  expect(result.hasConflicts).toBe(true);
+  expect(result.conflictFiles).toEqual(['models/sale_order.py']);
+});
+
+// 意圖：有 staged 變動才 commit 清理，無變動不得產生空 commit（避免污染歷史）。
+test('untrackPyc：無 staged 變動時不 commit', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
+    calls.push(args);
+    const done = typeof opts === 'function' ? opts : cb;
+    done(null, 'ok', ''); // diff --cached --quiet 成功＝無變動
+  });
+  await gitModule.untrackPyc('/repo');
+  expect(calls).toContainEqual(['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '*.pyc']);
+  expect(calls.some(a => a.includes('commit'))).toBe(false);
+});

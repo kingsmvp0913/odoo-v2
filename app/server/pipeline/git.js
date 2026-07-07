@@ -16,6 +16,28 @@ function ensureGitignorePyc(mainRepoPath) {
   } catch { /* best-effort，不阻斷流程 */ }
 }
 
+// 丟掉「已被追蹤（tracked）的 pyc」在工作樹的本地改動：Odoo 重新編譯會弄髒這些歷史誤入版控的
+// build 產物 → 擋住 merge/checkout（git 報「Your local changes to the following files would be
+// overwritten」）。exclude 只對未追蹤檔生效，救不到 tracked pyc，故需此步先還原。
+async function discardPyc(repoPath) {
+  await execFileAsync('git', ['checkout', '--', '*.pyc'], { cwd: repoPath }).catch(() => {});
+}
+
+// 把 tracked pyc 從 index 移除（配合 exclude 永久忽略），有 staged 變動才 commit（避免空 commit）。
+// 一次根治：之後該分支不再追蹤 pyc，從它長出的分支／併入它的 merge 都不再被 build 產物干擾。
+async function untrackPyc(repoPath) {
+  await execFileAsync('git', ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '*.pyc'], { cwd: repoPath }).catch(() => {});
+  try {
+    // diff --cached --quiet：有 staged 變動時以非 0 離開 → 進 catch 才 commit
+    await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: repoPath });
+  } catch {
+    await execFileAsync('git', [
+      '-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
+      'commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）'
+    ], { cwd: repoPath }).catch(() => {});
+  }
+}
+
 function execFileAsync(cmd, args, opts) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, opts, (err, stdout, stderr) => {
@@ -145,10 +167,13 @@ async function commitAll(repoPath, message) {
 }
 
 async function mergeToMain(repoPath, branchName) {
+  ensureGitignorePyc(repoPath);
+  await discardPyc(repoPath); // 避免 testing 工作樹上 tracked pyc 的改動擋住 checkout main
   const main = await getMainBranch(repoPath);
   await execFileAsync('git', ['checkout', main], { cwd: repoPath });
   try {
     await execFileAsync('git', ['merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], { cwd: repoPath });
+    await untrackPyc(repoPath); // 停止 main 追蹤 pyc → 之後從 main 長出的 task 分支不再帶 pyc
   } catch (err) {
     await execFileAsync('git', ['checkout', branchName], { cwd: repoPath }).catch(() => {});
     throw err;
@@ -207,15 +232,30 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
     await execFileAsync('git', ['checkout', '-B', targetBranch, base], { cwd: mainRepoPath });
   }
   ensureGitignorePyc(mainRepoPath); // 讓 target 工作樹既有的未追蹤 pyc 變 ignored，merge 才不會被擋
+  await discardPyc(mainRepoPath);   // 再還原 tracked pyc 的本地改動，解除「local changes would be overwritten」
   try {
     await execFileAsync('git', ['merge', '--no-ff', '--no-edit', sourceBranch], { cwd: mainRepoPath });
+    await untrackPyc(mainRepoPath); // merge 後把 target（testing）上的 pyc 移出版控，之後不再累積
     return { hasConflicts: false, conflictFiles: [] };
   } catch (err) {
     // git merge 衝突訊息寫在 stdout（非 stderr），三者都要看
     const msg = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`.toLowerCase();
     if (msg.includes('conflict') || msg.includes('automatic merge failed')) {
       const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: mainRepoPath }).catch(() => ({ stdout: '' }));
-      const conflictFiles = stdout.trim().split('\n').filter(Boolean);
+      let conflictFiles = stdout.trim().split('\n').filter(Boolean);
+      // pyc 是 build 產物，衝突無意義：移除後若已無真正衝突就完成這次 merge，避免假衝突卡任務
+      const pyc = conflictFiles.filter(f => f.endsWith('.pyc'));
+      if (pyc.length) {
+        await execFileAsync('git', ['rm', '-f', '--quiet', '--ignore-unmatch', ...pyc], { cwd: mainRepoPath }).catch(() => {});
+        conflictFiles = conflictFiles.filter(f => !f.endsWith('.pyc'));
+        if (conflictFiles.length === 0) {
+          await execFileAsync('git', [
+            '-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local', 'commit', '--no-edit'
+          ], { cwd: mainRepoPath }).catch(() => {});
+          await untrackPyc(mainRepoPath);
+          return { hasConflicts: false, conflictFiles: [] };
+        }
+      }
       return { hasConflicts: true, conflictFiles };
     }
     if (msg.includes('already up to date') || msg.includes('already up-to-date')) {
@@ -225,4 +265,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, mergeInto, discardPyc, untrackPyc };

@@ -262,7 +262,7 @@ window.TaskDetailView = Vue.defineComponent({
             </span>
             <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank"
                style="color:var(--primary);text-decoration:none;font-weight:500">{{ sourceLabel() }}</a>
-            <span v-else>{{ task.source }}</span>
+            <span v-else>{{ sourceLabel() }}</span>
             <span v-if="task.module">模組：{{ task.module }}</span>
             <span style="color:var(--text-muted);font-size:11px">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
@@ -304,12 +304,6 @@ window.TaskDetailView = Vue.defineComponent({
                 {{ submitting ? '送出中...' : '送出回覆' }}
               </button>
             </div>
-          </div>
-
-          <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-            <router-link :to="'/task/' + task.id + '/terminal'" class="btn btn-outline btn-sm">
-              🖊️ 執行歷程
-            </router-link>
           </div>
 
           <div v-if="task.status === 'merge_conflict'" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">

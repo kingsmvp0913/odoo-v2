@@ -5,6 +5,19 @@ const { upgradeModules, runEnvSetup } = require('./env-agent');
 
 const DEPLOY_LIMIT = 3;
 
+// 從 Odoo 完整 log 抽出「真正的錯誤」：錯誤/Traceback 在 log 結尾，開頭是版本/addons paths 橫幅。
+// 優先取最後一段 Traceback；否則取最後一個 ERROR/CRITICAL 行起；都沒有則取結尾。
+function extractOdooError(log) {
+  const s = String(log == null ? '' : log).trim();
+  const tb = s.lastIndexOf('Traceback (most recent call last)');
+  if (tb !== -1) return s.slice(tb).trim().slice(0, 1200);
+  const lines = s.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/ERROR|CRITICAL/.test(lines[i])) return lines.slice(i).join('\n').trim().slice(0, 1200);
+  }
+  return s.slice(-600).trim();
+}
+
 // 專案層序列鎖：同一專案的測試區升級一次一個（不能對同一 DB／env 併發升級）
 const _chains = new Map();
 function withProjectLock(projectId, fn) {
@@ -61,16 +74,17 @@ async function doDeploy(task, taskId, userId) {
       [taskId]
     );
     const nextCount = (task.deploy_retry_count || 0) + 1;
+    const odooErr = extractOdooError(err.message);
     if (nextCount >= DEPLOY_LIMIT) {
       await query(
         "UPDATE tasks SET status='stopped', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${String(err.message).slice(0, 300)}`]
+        [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
       await query(
         "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `[部署測試區升級失敗]\n${err.message}`]
+        [taskId, nextCount, `[部署測試區升級失敗]\n${odooErr}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     }
@@ -81,4 +95,4 @@ async function doDeploy(task, taskId, userId) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
 }
 
-module.exports = { runDeployTesting };
+module.exports = { runDeployTesting, extractOdooError };

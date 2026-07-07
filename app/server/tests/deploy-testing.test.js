@@ -35,6 +35,28 @@ beforeAll(async () => {
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
+test('extractOdooError：抽出結尾真正錯誤，而非開頭版本/addons paths 橫幅', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Odoo version 17.0',
+    "addons paths: ['C:\\\\odoo-v2\\\\odoo-envs\\\\cwt\\\\src\\\\odoo\\\\addons']",
+    'loading module base (1/50)',
+    '2026-07-06 09:31:43 ERROR test_cwt odoo.modules.loading: Failed to load module idx_sale_note_t',
+    'ParseError: Invalid view definition in idx_sale_note_t/views/x.xml line 5'
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out).toContain('ParseError');
+  expect(out).not.toContain('Odoo version 17.0');
+});
+
+test('extractOdooError：優先抓 Traceback 段', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = 'banner\naddons paths...\nTraceback (most recent call last)\n  File "x.py", line 3\nKeyError: sale_order';
+  const out = extractOdooError(log);
+  expect(out.startsWith('Traceback')).toBe(true);
+  expect(out).toContain('KeyError');
+});
+
 beforeEach(async () => {
   envAgent.upgradeModules.mockReset();
   envAgent.runEnvSetup.mockReset();
