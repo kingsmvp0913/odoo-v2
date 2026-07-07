@@ -88,3 +88,28 @@ test('coding retry：retry_feedback（上一輪失敗訊息）確實帶進 claud
   expect(after.status).toBe('qa_running');
   expect(after.retry_feedback).toBeNull();
 });
+
+// 健檢 agents 層 P2：feedback 在 spawn 前就清空，失敗/逾時後回饋永久遺失。
+// 意圖：只有「成功執行」才算消費掉回饋；失敗要保留給下一次重試。
+test('coding spawn 失敗 → retry_feedback 保留，下次重試不致盲改', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = { write: () => {}, end: () => { setImmediate(() => child.emit('close', 1)); } };
+    return child;
+  });
+
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, analysis_yaml, git_branch, status, project_id, retry_feedback) VALUES ($1,'ta_code_fail','odoo','T','module: idx_x','task/ta_code_fail','coding_running',$2,$3) RETURNING id",
+    [userId, projectId, '[QA 未通過]\n欄位漏了 tracking']
+  );
+  await runTaskCoding(t.id, userId);
+
+  const { rows: [after] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('stopped');
+  expect(after.retry_feedback).toContain('欄位漏了 tracking'); // 未成功執行＝未消費
+});

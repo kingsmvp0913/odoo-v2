@@ -80,9 +80,10 @@ async function runPlaywrightAgent(taskId, userId, signal) {
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
+      // 失敗報告餵回 coding（與 QA／deploy 一致），否則重跑只能盲改（健檢 U4）
       await query(
-        "UPDATE tasks SET status='coding_running', pw_retry_count=$2, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount]
+        "UPDATE tasks SET status='coding_running', pw_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+        [taskId, nextCount, `[E2E 測試未通過]\n${report}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     }

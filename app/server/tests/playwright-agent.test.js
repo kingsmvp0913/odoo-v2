@@ -75,13 +75,15 @@ test('verdict pass → review_pending', async () => {
   expect(t.status).toBe('review_pending');
 });
 
-test('verdict fail 未達上限 → coding_running、計數+1', async () => {
+test('verdict fail 未達上限 → coding_running、計數+1、失敗報告寫入 retry_feedback', async () => {
   claudeReturns({ verdict: 'fail', report: '登入後找不到選單' });
   const id = await makeTask(userWithCreds, 0);
   await runPlaywrightAgent(id, userWithCreds);
-  const { rows: [t] } = await dbModule.query('SELECT status, pw_retry_count FROM tasks WHERE id=$1', [id]);
+  const { rows: [t] } = await dbModule.query('SELECT status, pw_retry_count, retry_feedback FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(t.pw_retry_count).toBe(1);
+  // 健檢 U4：不寫 feedback 的話 coding 重跑拿到「（無）」只能盲改再燒一輪
+  expect(t.retry_feedback).toContain('登入後找不到選單');
 });
 
 test('verdict fail 第 3 次 → stopped', async () => {

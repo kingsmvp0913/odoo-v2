@@ -268,13 +268,14 @@ async function runTaskCoding(taskId, userId, signal) {
   let raw;
   try {
     const resolution = await latestResolution(taskId);
-    // 消費上一輪失敗訊息（QA/部署）：帶進 prompt 讓 coding 修正，用完即清，避免污染後續無關執行
+    // 消費上一輪失敗訊息（QA/部署/E2E）：帶進 prompt 讓 coding 修正
     const retryFeedback = task.retry_feedback || '';
-    if (retryFeedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
     const built = buildCodingPrompt(task, info, resolution, retryFeedback);
     // coding 在任務 worktree 父目錄操作（跨所有 repo 子目錄）
     const codingResult = await spawnClaude(built.prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: built.model });
     raw = codingResult.text;
+    // 執行成功才算消費、才清空；失敗/逾時/暫停保留給下一次重試，避免盲改（健檢止血 11）
+    if (retryFeedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
     await logTokenUsage({ taskId: task.task_id }, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
     await query(
