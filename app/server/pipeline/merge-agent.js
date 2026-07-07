@@ -44,8 +44,8 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   );
   const resolved = resolveResult.text;
   if (resolveResult.usage && opts.taskId) {
-    const { rows: [t] } = await query('SELECT task_id, user_id FROM tasks WHERE id=$1', [opts.taskId]);
-    if (t) await logTokenUsage({ taskId: t.task_id }, t.user_id, 'merge', resolveResult.usage, resolveResult.durationMs);
+    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
+    if (t) await logTokenUsage({ taskId: t.task_id, projectId: t.project_id }, t.user_id, 'merge', resolveResult.usage, resolveResult.durationMs);
   }
   if (!resolved || resolved.includes('<<<<<<<')) return false;
   fs.writeFileSync(fullPath, resolved);

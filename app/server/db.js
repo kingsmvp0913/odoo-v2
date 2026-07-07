@@ -291,7 +291,8 @@ async function migrate() {
     { table: 'project_chats', col: 'user_id', sql: 'ALTER TABLE project_chats ADD COLUMN user_id INTEGER REFERENCES users(id)' },
     { table: 'project_chats', col: 'last_read_message_id', sql: 'ALTER TABLE project_chats ADD COLUMN last_read_message_id INTEGER NOT NULL DEFAULT 0' },
     { table: 'db_connections', col: 'ssh_key_enc', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_key_enc TEXT' },
-    { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' }
+    { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
+    { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -303,6 +304,14 @@ async function migrate() {
     }
     if (!tableColsCache[table].has(col)) await query(sql);
   }
+
+  // One-time backfill：token_usage.project_id 由 tasks 回填（任務被刪前先固化歸因，
+  // 否則刪任務／re-sync 會讓專案別 token 報表持續漏計——健檢資料層 P2）
+  await query(
+    `UPDATE token_usage tu SET project_id = t.project_id
+     FROM tasks t
+     WHERE tu.project_id IS NULL AND tu.task_id = t.task_id AND t.project_id IS NOT NULL`
+  ).catch(() => {});
 
   // One-time status migration: pipeline 改版移除的狀態 → stopped（冪等，只影響殘留舊任務）
   await query(

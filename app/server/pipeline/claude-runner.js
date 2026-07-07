@@ -54,11 +54,14 @@ function callClaude(prompt, signal, opts = {}) {
     let stderr = '';
     let settled = false;
     let timer = null;
+    const startedAt = Date.now();
     const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); fn(); } };
+    // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）
+    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
     // CLI 掛死時若無 timeout，任務會永久卡在 *_running、merge 鎖永不釋放，只能重啟 server（健檢 U9）
     timer = setTimeout(() => {
       child.kill('SIGTERM');
-      finish(() => reject(new Error(`claude 執行逾時（${Math.round(timeoutMs / 1000)}s）`)));
+      finish(() => reject(fail(new Error(`claude 執行逾時（${Math.round(timeoutMs / 1000)}s）`), 'timeout')));
     }, timeoutMs);
     const emit = text => {
       if (!text || !taskId) return;
@@ -96,18 +99,18 @@ function callClaude(prompt, signal, opts = {}) {
     if (signal) {
       signal.addEventListener('abort', () => {
         child.kill('SIGTERM');
-        finish(() => reject(abortError()));
+        finish(() => reject(fail(abortError(), 'aborted')));
       }, { once: true });
     }
 
     child.on('close', code => {
       if (taskId && userId && notify) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       finish(() => {
-        if (code !== 0) reject(new Error(stderr.trim() || `claude exited with code ${code}`));
+        if (code !== 0) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
         else resolve({ text: resultText.trim(), usage, durationMs });
       });
     });
-    child.on('error', err => finish(() => reject(err)));
+    child.on('error', err => finish(() => reject(fail(err, 'error'))));
   });
 }
 

@@ -1,6 +1,6 @@
 const { callClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -39,10 +39,11 @@ async function runCsAgent(taskId, userId, signal) {
   let result = null;
   try {
     const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify, model: agent.model });
-    await logTokenUsage({ taskId: task.task_id }, task.user_id, 'cs', usage, durationMs);
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) result = JSON.parse(jsonMatch[0]);
   } catch (err) {
+    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);
     console.error(`[CS-AGENT] API error task ${taskId}:`, err.message);
   }
 

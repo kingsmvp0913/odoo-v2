@@ -1,6 +1,6 @@
 const { query } = require('../db');
 const notify = require('../notify');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution } = require('./task-agent');
 const { stopReason } = require('./claude-runner');
@@ -38,8 +38,9 @@ async function runQaAgent(taskId, userId, signal) {
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
     const result = await spawnClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model });
     raw = result.text;
-    await logTokenUsage({ taskId: task.task_id }, userId, 'qa', result.usage, result.durationMs);
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', result.usage, result.durationMs);
   } catch (err) {
+    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
     await query(
       "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
       [taskId, stopReason('QA Agent 執行失敗', err)]

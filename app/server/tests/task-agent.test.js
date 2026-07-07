@@ -3,7 +3,7 @@
 const { newDb } = require('pg-mem');
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
-jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn() }));
+jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
   ensureMainBranch: jest.fn().mockResolvedValue('main')

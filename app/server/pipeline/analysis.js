@@ -11,7 +11,9 @@ function determineNextStatus(parsed) {
   const hasQuestions = Array.isArray(parsed?.clarification_channel?.questions) &&
     parsed.clarification_channel.questions.length > 0;
   if (parsed?.low_confidence === true || hasQuestions) return 'confirm_pending';
-  if (parsed?.execution_mode === 'MODE_B') return 'final_pending';
+  // MODE_B＝先確認再實作 → 等使用者確認（confirm_pending）。
+  // 舊的 final_pending 是死狀態：無 handler、無前端標籤，任務會卡死不可見（健檢 U14）
+  if (parsed?.execution_mode === 'MODE_B') return 'confirm_pending';
   return 'branch_pending';
 }
 

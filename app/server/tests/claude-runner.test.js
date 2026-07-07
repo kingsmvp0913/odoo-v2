@@ -64,3 +64,29 @@ test('callClaude 逾時 → kill 子行程並以逾時錯誤 reject', async () =
   await expect(callClaude('p', undefined, { timeoutMs: 30 })).rejects.toThrow(/逾時/);
   expect(child.kill).toHaveBeenCalled();
 });
+
+// 健檢 U12：失敗/中斷/逾時的執行也要記帳（usage 為零＋status 標記），
+// 否則最貴的情境（失敗重跑）在 token 帳面上隱形，成本控管系統性低估。
+test('logFailedUsage：失敗執行落一筆零用量記錄，status 標注失敗類別', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('x', 4);
+  const { rows: [u] } = await dbModule.query(
+    `INSERT INTO users (username, password_hash, display_name) VALUES ('tlu2', $1, 'TL2') RETURNING id`, [hash]
+  );
+  const { logFailedUsage } = require('../pipeline/token-logger');
+  const err = Object.assign(new Error('claude subprocess timed out'), { claudeStatus: 'timeout', durationMs: 600000 });
+  await logFailedUsage({ taskId: 'task_fail_1', projectId: null }, u.id, 'coding', err);
+
+  const { rows } = await dbModule.query("SELECT * FROM token_usage WHERE task_id='task_fail_1'");
+  expect(rows.length).toBe(1);
+  expect(rows[0].status).toBe('timeout');
+  expect(rows[0].input_tokens).toBe(0);
+  expect(rows[0].duration_ms).toBe(600000);
+});
+
+test('logTokenUsage：成功但 usage 為 null 時維持不落帳（相容既有行為）', async () => {
+  await expect(require('../pipeline/token-logger').logTokenUsage({ taskId: 'x2' }, null, 'cs', null, null))
+    .resolves.toBeUndefined();
+  const { rows } = await dbModule.query("SELECT * FROM token_usage WHERE task_id='x2'");
+  expect(rows.length).toBe(0);
+});

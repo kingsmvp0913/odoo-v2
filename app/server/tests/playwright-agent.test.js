@@ -5,7 +5,7 @@ const { newDb } = require('pg-mem');
 process.env.APP_SECRET = 'test-app-secret';
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
-jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn() }));
+jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/task-agent', () => {
   const actual = jest.requireActual('../pipeline/task-agent');
   return { ...actual, spawnClaude: jest.fn(), getProjectInfo: jest.fn() };

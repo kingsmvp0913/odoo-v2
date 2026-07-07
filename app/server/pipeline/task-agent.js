@@ -2,7 +2,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { query } = require('../db');
 const notify = require('../notify');
-const { logTokenUsage } = require('./token-logger');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { pullBranch, ensureMainBranch } = require('./git');
 const { abortError, stopReason } = require('./claude-runner');
@@ -66,14 +66,17 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
     let resultText = '', stderr = '', done = false;
     let usage = null, durationMs = null, lineBuffer = '';
+    const startedAt = Date.now();
+    // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）
+    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
 
     const timer = setTimeout(() => {
-      if (!done) { child.kill(); reject(new Error('claude subprocess timed out')); }
+      if (!done) { done = true; child.kill(); reject(fail(new Error('claude subprocess timed out'), 'timeout')); }
     }, timeoutMs);
 
     if (signal) {
       signal.addEventListener('abort', () => {
-        if (!done) { clearTimeout(timer); done = true; child.kill('SIGTERM'); reject(abortError()); }
+        if (!done) { clearTimeout(timer); done = true; child.kill('SIGTERM'); reject(fail(abortError(), 'aborted')); }
       }, { once: true });
     }
 
@@ -111,10 +114,10 @@ function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, 
       clearTimeout(timer);
       done = true;
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
-      if (code !== 0 && code !== null) reject(new Error(stderr.trim() || `claude exited with code ${code}`));
+      if (code !== 0 && code !== null) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
       else resolve({ text: resultText.trim(), usage, durationMs });
     });
-    child.on('error', err => { clearTimeout(timer); done = true; reject(err); });
+    child.on('error', err => { clearTimeout(timer); done = true; reject(fail(err, 'error')); });
   });
 }
 
@@ -209,8 +212,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
     // analysis 在專案根讀取所有 repo（此時尚未建 worktree）
     const analysisResult = await spawnClaude(built.prompt, { cwd: info.root, taskId, userId, signal, model: built.model });
     raw = analysisResult.text;
-    await logTokenUsage({ taskId: task.task_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
+    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
       [taskId, stopReason('分析 Agent 執行失敗', err)]
@@ -276,8 +280,9 @@ async function runTaskCoding(taskId, userId, signal) {
     raw = codingResult.text;
     // 執行成功才算消費、才清空；失敗/逾時/暫停保留給下一次重試，避免盲改（健檢止血 11）
     if (retryFeedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
-    await logTokenUsage({ taskId: task.task_id }, userId, 'coding', codingResult.usage, codingResult.durationMs);
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
+    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'coding', err);
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
       [taskId, stopReason('實作 Agent 執行失敗', err)]
