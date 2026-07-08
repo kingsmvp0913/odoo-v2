@@ -6,12 +6,13 @@ process.env.APP_SECRET = 'test-app-secret';
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
+jest.mock('../pipeline/claude-runner', () => ({ ...jest.requireActual('../pipeline/claude-runner'), runClaude: jest.fn() }));
 jest.mock('../pipeline/task-agent', () => {
   const actual = jest.requireActual('../pipeline/task-agent');
-  return { ...actual, spawnClaude: jest.fn(), getProjectInfo: jest.fn() };
+  return { ...actual, getProjectInfo: jest.fn() };
 });
 
-let dbModule, runPlaywrightAgent, taskAgent, crypto;
+let dbModule, runPlaywrightAgent, taskAgent, crypto, runClaude;
 let userWithCreds, userNoCreds, projectId;
 
 beforeAll(async () => {
@@ -40,13 +41,14 @@ beforeAll(async () => {
   await dbModule.query("INSERT INTO odoo_envs (project_id, status, url) VALUES ($1,'running','http://localhost:8069')", [projectId]);
 
   taskAgent = require('../pipeline/task-agent');
+  ({ runClaude } = require('../pipeline/claude-runner'));
   ({ runPlaywrightAgent } = require('../pipeline/playwright-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(() => {
-  taskAgent.spawnClaude.mockReset();
+  runClaude.mockReset();
   taskAgent.getProjectInfo.mockReset();
   taskAgent.getProjectInfo.mockResolvedValue({ name: 'PWP', odoo_version: '17.0', root: '/repos/pwp', repos: [] });
 });
@@ -62,7 +64,7 @@ async function makeTask(ownerId, pwCount = 0) {
   return t.id;
 }
 function claudeReturns(json) {
-  taskAgent.spawnClaude.mockResolvedValue({
+  runClaude.mockResolvedValue({
     text: `---RESULT-JSON---\n${JSON.stringify(json)}\n---END-RESULT---`, usage: null, durationMs: null
   });
 }
@@ -102,14 +104,14 @@ test('無 E2E 憑證 → stopped（提示重新登入）', async () => {
   const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');
   expect(t.blocker_content).toContain('重新登入');
-  expect(taskAgent.spawnClaude).not.toHaveBeenCalled();
+  expect(runClaude).not.toHaveBeenCalled();
 });
 
 // ===== 主題 A：E2E fail 先檢查 env（夜間 shutdown 誤歸因）=====
 
 test('A-4 verdict fail 但 env 於 E2E 期間被砍 → 判 env、不加 pw 計數、不退 coding', async () => {
   // 模擬夜間 shutdown 砍在 E2E 執行中間：env 一開始 running（通過前置檢查），跑到一半變 idle
-  taskAgent.spawnClaude.mockImplementation(async () => {
+  runClaude.mockImplementation(async () => {
     await dbModule.query("UPDATE odoo_envs SET status='idle' WHERE project_id=$1", [projectId]);
     return { text: `---RESULT-JSON---\n${JSON.stringify({ verdict: 'fail', report: '連不上測試站台' })}\n---END-RESULT---`, usage: null, durationMs: null };
   });

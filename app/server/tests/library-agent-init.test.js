@@ -3,10 +3,10 @@ const os = require('os');
 const path = require('path');
 const { newDb } = require('pg-mem');
 
-const mockCallClaude = jest.fn().mockResolvedValue({
+const mockRunClaude = jest.fn().mockResolvedValue({
   text: '{"slug":"overview","title":"專案概論","content":"# 總覽\\n專案說明"}', usage: null, durationMs: null
 });
-jest.mock('../pipeline/claude-runner', () => ({ callClaude: mockCallClaude }));
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 
 let dbModule, initProjectWiki, tmpRepo;

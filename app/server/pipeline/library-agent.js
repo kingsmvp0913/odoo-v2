@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
-const { callClaude } = require('./claude-runner');
+const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
@@ -145,7 +145,7 @@ ${src || '（無原始碼）'}`;
   let title = node.title, content = node.content;
   try {
     const agent = loadAgent('library');
-    const { text, usage, durationMs } = await callClaude(agent.render({ context }), signal, { userId, notify, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { const p = JSON.parse(m[0]); title = p.title || title; content = p.content ?? content; }
@@ -198,7 +198,7 @@ ${task.analysis_yaml || '無'}
 執行日誌（最後 20 筆）：
 ${logText || '無'}`;
 
-    const { text, usage, durationMs } = await callClaude(agent.render({ context }), signal, { taskId, userId, notify, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, taskId, userId, model: agent.model });
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) wikiUpdate = JSON.parse(jsonMatch[0]);
@@ -272,7 +272,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   let overviewTitle = '專案概論';
   let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
   try {
-    const { text, usage, durationMs } = await callClaude(agent.render({ context }), signal, { userId, notify, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { const p = JSON.parse(m[0]); overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }

@@ -146,22 +146,7 @@ test('coding spawn 失敗 → retry_feedback 保留，下次重試不致盲改',
 
 // ===== 主題 B：coding 重跑 session resume =====
 
-test('B-1 spawnClaude：從 init 事件抓到 session_id 並回傳', async () => {
-  mockClaude({ onCall: (child) => { emitInit(child, 'sess-abc-123'); emitResult(child); child.emit('close', 0); } });
-  const { spawnClaude } = require('../pipeline/task-agent');
-  const r = await spawnClaude('p', { cwd: '/tmp' });
-  expect(r.sessionId).toBe('sess-abc-123');
-});
-
-test('B-1 spawnClaude：給 resumeSessionId → args 含 --resume；不給 → 不含', async () => {
-  const calls = mockClaude();
-  const { spawnClaude } = require('../pipeline/task-agent');
-  await spawnClaude('p', { cwd: '/tmp', resumeSessionId: 'sess-xyz' });
-  await spawnClaude('p', { cwd: '/tmp' });
-  expect(calls[0].args).toContain('--resume');
-  expect(calls[0].args).toContain('sess-xyz');
-  expect(calls[1].args).not.toContain('--resume');
-});
+// （B-1 runner 的 session_id 捕捉／--resume 測試已隨 runner 合併移至 claude-runner.test.js）
 
 test('B-3 distillFeedback：Odoo traceback → 只留 idx_ frame＋例外行、附 log 路徑', () => {
   const { distillFeedback } = require('../pipeline/task-agent');
@@ -288,7 +273,7 @@ test('B-5 resume 遇中止類失敗（aborted，同 timeout 分類）→ stopped
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     child.kill = () => {};
-    child.stdin = { write: () => {}, end: () => setImmediate(() => ctrl.abort()) }; // 觸發 abort → spawnClaude 以 aborted reject
+    child.stdin = { write: () => {}, end: () => setImmediate(() => ctrl.abort()) }; // 觸發 abort → runClaude 以 aborted reject
     return child;
   });
   const id = await insertCodingTask('to', {

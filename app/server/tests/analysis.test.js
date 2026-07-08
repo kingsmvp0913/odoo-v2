@@ -1,7 +1,7 @@
 const { newDb } = require('pg-mem');
 
-const mockCallClaude = jest.fn();
-jest.mock('../pipeline/claude-runner', () => ({ callClaude: mockCallClaude }));
+const mockRunClaude = jest.fn();
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 
 let dbModule, analysisModule;
 let userId, taskId;
@@ -83,7 +83,7 @@ beforeEach(async () => {
     [userId, `task_odoo_${Date.now()}`]
   );
   taskId = rows[0].id;
-  mockCallClaude.mockReset();
+  mockRunClaude.mockReset();
 });
 
 afterEach(async () => {
@@ -92,7 +92,7 @@ afterEach(async () => {
 });
 
 test('analyzeTask MODE_A → next_status branch_pending, analysis_yaml saved', async () => {
-  mockCallClaude.mockResolvedValue({ text: VALID_YAML_MODE_A, usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValue({ text: VALID_YAML_MODE_A, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('branch_pending');
@@ -106,7 +106,7 @@ test('analyzeTask MODE_A → next_status branch_pending, analysis_yaml saved', a
 // 健檢 U14：final_pending 是死狀態（無 handler、無前端標籤、卡死不可見）。
 // MODE_B＝「先確認再實作」，語意上就是等使用者確認 → 走活的 confirm_pending。
 test('analyzeTask MODE_B → confirm_pending（先確認再實作，不得產出死狀態）', async () => {
-  mockCallClaude.mockResolvedValue({ text: VALID_YAML_MODE_B, usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValue({ text: VALID_YAML_MODE_B, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('confirm_pending');
@@ -116,7 +116,7 @@ test('analyzeTask MODE_B → confirm_pending（先確認再實作，不得產出
 });
 
 test('analyzeTask with questions → next_status confirm_pending', async () => {
-  mockCallClaude.mockResolvedValue({ text: YAML_WITH_QUESTIONS, usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValue({ text: YAML_WITH_QUESTIONS, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('confirm_pending');
@@ -126,14 +126,14 @@ test('analyzeTask with questions → next_status confirm_pending', async () => {
 });
 
 test('analyzeTask low_confidence → next_status confirm_pending', async () => {
-  mockCallClaude.mockResolvedValue({ text: YAML_LOW_CONFIDENCE, usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValue({ text: YAML_LOW_CONFIDENCE, usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('confirm_pending');
 });
 
 test('analyzeTask invalid YAML → stopped with blocker', async () => {
-  mockCallClaude.mockResolvedValue({ text: 'this is not yaml: [broken', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValue({ text: 'this is not yaml: [broken', usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
   expect(result.next_status).toBe('stopped');
@@ -143,7 +143,7 @@ test('analyzeTask invalid YAML → stopped with blocker', async () => {
 });
 
 test('analyzeTask API error → resets to analysis_running and rethrows', async () => {
-  mockCallClaude.mockRejectedValue(new Error('Rate limit'));
+  mockRunClaude.mockRejectedValue(new Error('Rate limit'));
 
   await expect(analysisModule.analyzeTask(taskId)).rejects.toThrow('Rate limit');
 

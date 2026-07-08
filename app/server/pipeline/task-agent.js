@@ -1,12 +1,11 @@
 const path = require('path');
-const { spawn } = require('child_process');
 const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
 const { withProjectLock } = require('./project-lock');
-const { abortError, stopReason } = require('./claude-runner');
+const { runClaude, abortError, stopReason } = require('./claude-runner');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -57,74 +56,6 @@ async function getProjectInfo(projectId) {
 // 任務 worktree 父目錄：<專案根>/.worktrees/<task_id>/（coding agent 的 cwd）
 function worktreeParent(root, taskId) {
   return path.join(root, '.worktrees', taskId);
-}
-
-function spawnClaude(prompt, { cwd, taskId, userId, timeoutMs = 600000, signal, model, resumeSessionId }) {
-  return new Promise((resolve, reject) => {
-    // headless pipeline agent：略過權限提示，否則 coding 在 worktree 建檔／mkdir 會卡在無法互動批准
-    const args = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
-    if (model) args.push('--model', model);
-    // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
-    if (resumeSessionId) args.push('--resume', resumeSessionId);
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
-    let resultText = '', stderr = '', done = false;
-    let usage = null, durationMs = null, lineBuffer = '', sessionId = null;
-    const startedAt = Date.now();
-    // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）
-    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
-
-    const timer = setTimeout(() => {
-      if (!done) { done = true; child.kill(); reject(fail(new Error('claude subprocess timed out'), 'timeout')); }
-    }, timeoutMs);
-
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        if (!done) { clearTimeout(timer); done = true; child.kill('SIGTERM'); reject(fail(abortError(), 'aborted')); }
-      }, { once: true });
-    }
-
-    child.stdout.on('data', d => {
-      lineBuffer += d.toString();
-      let nl;
-      while ((nl = lineBuffer.indexOf('\n')) !== -1) {
-        const line = lineBuffer.slice(0, nl).trim();
-        lineBuffer = lineBuffer.slice(nl + 1);
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line);
-          if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
-            sessionId = ev.session_id; // 供 coding 重跑 --resume 續用
-          }
-          if (ev.type === 'assistant' && ev.message?.content) {
-            let out = '';
-            for (const blk of ev.message.content) {
-              if (blk.type === 'text') out += blk.text;
-            }
-            if (out && taskId && userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: out });
-          }
-          if (ev.type === 'result') {
-            resultText = ev.result || resultText;
-            usage      = ev.usage       || null;
-            durationMs = ev.duration_ms || null;
-          }
-        } catch {
-          if (taskId && userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: line + '\n' });
-        }
-      }
-    });
-    child.stderr.on('data', d => { stderr += d.toString(); });
-    child.stdin.write(prompt);
-    child.stdin.end();
-
-    child.on('close', code => {
-      clearTimeout(timer);
-      done = true;
-      if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
-      if (code !== 0 && code !== null) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
-      else resolve({ text: resultText.trim(), usage, durationMs, sessionId });
-    });
-    child.on('error', err => { clearTimeout(timer); done = true; reject(fail(err, 'error')); });
-  });
 }
 
 function buildAnalysisPrompt(task, info, clarification, workDir) {
@@ -267,7 +198,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
     const built = buildAnalysisPrompt(task, info, clarification, wtParent);
     // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
-    const analysisResult = await spawnClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model });
+    const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model });
     raw = analysisResult.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
@@ -319,7 +250,7 @@ function shouldResumeFallback(err) {
 }
 
 // 跑一輪 coding。resume=true 用 coding-retry 短 prompt＋--resume 續用前一輪對話（省 token，健檢 U3）；
-// 否則用 coding-project 全量 prompt。成功回傳 spawnClaude 的結果（含 sessionId），失敗 throw。
+// 否則用 coding-project 全量 prompt。成功回傳 runClaude 的結果（含 sessionId），失敗 throw。
 async function runCodingOnce(task, info, userId, signal, resolution, { resume }) {
   const cwd = worktreeParent(info.root, task.task_id);
   if (resume) {
@@ -331,10 +262,10 @@ async function runCodingOnce(task, info, userId, signal, resolution, { resume })
       resolution: resolution || '（無）',
       commit_message: buildCommitMessage(task)
     }).trim();
-    return spawnClaude(prompt, { cwd, taskId: task.id, userId, signal, model: agent.model, resumeSessionId: task.coding_session_id });
+    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: agent.model, resumeSessionId: task.coding_session_id });
   }
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
-  return spawnClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model });
 }
 
 async function runTaskCoding(taskId, userId, signal) {
@@ -419,4 +350,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution, distillFeedback, shouldResumeFallback };
+module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, parseResult, latestResolution, distillFeedback, shouldResumeFallback };

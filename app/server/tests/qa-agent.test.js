@@ -4,12 +4,13 @@ const { newDb } = require('pg-mem');
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
+jest.mock('../pipeline/claude-runner', () => ({ ...jest.requireActual('../pipeline/claude-runner'), runClaude: jest.fn() }));
 jest.mock('../pipeline/task-agent', () => {
   const actual = jest.requireActual('../pipeline/task-agent');
-  return { ...actual, spawnClaude: jest.fn(), getProjectInfo: jest.fn() };
+  return { ...actual, getProjectInfo: jest.fn() };
 });
 
-let dbModule, runQaAgent, taskAgent;
+let dbModule, runQaAgent, taskAgent, runClaude;
 let userId, projectId;
 
 beforeAll(async () => {
@@ -31,13 +32,14 @@ beforeAll(async () => {
   projectId = p.id;
 
   taskAgent = require('../pipeline/task-agent');
+  ({ runClaude } = require('../pipeline/claude-runner'));
   ({ runQaAgent } = require('../pipeline/qa-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(() => {
-  taskAgent.spawnClaude.mockReset();
+  runClaude.mockReset();
   taskAgent.getProjectInfo.mockReset();
   taskAgent.getProjectInfo.mockResolvedValue({
     name: 'QP', odoo_version: '17.0', root: '/repos/qp',
@@ -57,7 +59,7 @@ async function makeTask(qaCount = 0) {
 }
 
 function claudeReturns(json) {
-  taskAgent.spawnClaude.mockResolvedValue({
+  runClaude.mockResolvedValue({
     text: `前置輸出\n---RESULT-JSON---\n${JSON.stringify(json)}\n---END-RESULT---`, usage: null, durationMs: null
   });
 }
@@ -92,7 +94,7 @@ test('verdict fail 第 3 次 → stopped', async () => {
 });
 
 test('無 RESULT-JSON → stopped', async () => {
-  taskAgent.spawnClaude.mockResolvedValue({ text: '亂七八糟沒有標記', usage: null, durationMs: null });
+  runClaude.mockResolvedValue({ text: '亂七八糟沒有標記', usage: null, durationMs: null });
   const id = await makeTask();
   await runQaAgent(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);

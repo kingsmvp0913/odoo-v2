@@ -7,7 +7,7 @@
  *
  * 保守偏向：只有「明確」才改判 env/transient，其餘回 unknown。timeout 由呼叫端先攔（不進此分類）。
  */
-const { callClaude } = require('./claude-runner');
+const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
 
@@ -63,7 +63,7 @@ async function classifyFailureWithAgent(text, opts = {}) {
   // 判不出來才叫 haiku agent 分類（不自動修）；任何差錯都保守回 code（＝現行行為，安全）
   try {
     const agent = loadAgent('deploy-fix');
-    const { text: out, usage, durationMs } = await callClaude(agent.render({ error_text: String(text || '').slice(0, 2000) }), undefined, { model: agent.model });
+    const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: String(text || '').slice(0, 2000) }), { model: agent.model });
     // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
     if (opts.taskId || opts.projectId) {
       await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);

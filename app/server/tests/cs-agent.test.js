@@ -1,7 +1,7 @@
 const { newDb } = require('pg-mem');
 
-const mockCallClaude = jest.fn();
-jest.mock('../pipeline/claude-runner', () => ({ callClaude: mockCallClaude }));
+const mockRunClaude = jest.fn();
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 
 let dbModule, runCsAgent;
@@ -17,7 +17,7 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
-beforeEach(() => { mockCallClaude.mockReset(); });
+beforeEach(() => { mockRunClaude.mockReset(); });
 
 async function makeTask(overrides = {}) {
   userSeq++;
@@ -43,7 +43,7 @@ async function makeTask(overrides = {}) {
 }
 
 test('operation → cs_reply_pending with reply', async () => {
-  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"operation","reply":"請到報表 > 匯出","question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"operation","reply":"請到報表 > 匯出","question":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask();
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, cs_reply FROM tasks WHERE id=$1', [taskId]);
@@ -52,7 +52,7 @@ test('operation → cs_reply_pending with reply', async () => {
 });
 
 test('code_change_clear + 有專案 → analysis_running', async () => {
-  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({
     withProject: true,
     title: 'Bug in report',
@@ -64,7 +64,7 @@ test('code_change_clear + 有專案 → analysis_running', async () => {
 });
 
 test('code_change_clear + 無專案 → stopped（需先綁定專案）', async () => {
-  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Bug', text: 'export crashes' });
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [taskId]);
@@ -73,7 +73,7 @@ test('code_change_clear + 無專案 → stopped（需先綁定專案）', async 
 });
 
 test('code_change_vague → cs_data_needed with question', async () => {
-  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Something wrong', text: 'It does not work.' });
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, cs_question FROM tasks WHERE id=$1', [taskId]);
@@ -82,7 +82,7 @@ test('code_change_vague → cs_data_needed with question', async () => {
 });
 
 test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔cs_running 鬼打牆）', async () => {
-  mockCallClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({
     withProject: true,
     title: '報價單客戶下面加備註欄位',
@@ -97,7 +97,7 @@ test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔c
   await runCsAgent(taskId, userId);
 
   // 意圖：prompt 必須包含使用者已回答的內容，否則 agent 看不到 → 重複詢問
-  const prompt = mockCallClaude.mock.calls[0][0];
+  const prompt = mockRunClaude.mock.calls[0][0];
   expect(prompt).toContain('多行文字區塊');
   expect(prompt).toContain('客戶名稱下方');
 
@@ -107,7 +107,7 @@ test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔c
 });
 
 test('API error → stopped', async () => {
-  mockCallClaude.mockRejectedValueOnce(new Error('timeout'));
+  mockRunClaude.mockRejectedValueOnce(new Error('timeout'));
   const { userId, taskId } = await makeTask();
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
@@ -116,5 +116,5 @@ test('API error → stopped', async () => {
 
 test('missing task → returns silently', async () => {
   await expect(runCsAgent(99999, 1)).resolves.toBeUndefined();
-  expect(mockCallClaude).not.toHaveBeenCalled();
+  expect(mockRunClaude).not.toHaveBeenCalled();
 });

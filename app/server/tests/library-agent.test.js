@@ -1,8 +1,8 @@
 const { newDb } = require('pg-mem');
 
-const mockCallClaude = jest.fn().mockResolvedValue({ text: '{"slug":"test-feature","title":"測試功能","content":"# 測試\\n\\n這是測試功能說明。"}', usage: null, durationMs: null });
+const mockRunClaude = jest.fn().mockResolvedValue({ text: '{"slug":"test-feature","title":"測試功能","content":"# 測試\\n\\n這是測試功能說明。"}', usage: null, durationMs: null });
 
-jest.mock('../pipeline/claude-runner', () => ({ callClaude: mockCallClaude }));
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 
 let dbModule, runLibraryAgent;
@@ -83,7 +83,7 @@ test('function page is attached under the module from analysis_yaml', async () =
 });
 
 test('API error → still sets task done', async () => {
-  mockCallClaude.mockRejectedValueOnce(new Error('API down'));
+  mockRunClaude.mockRejectedValueOnce(new Error('API down'));
   const { userId, projectId } = await createUserAndProject();
   const { rows: [task] } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1, 'T003', 'odoo', 'Feature Y', 'wiki_updating', $2) RETURNING id",

@@ -3,8 +3,8 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { decrypt } = require('../lib/crypto');
-const { spawnClaude, getProjectInfo, worktreeParent, parseResult } = require('./task-agent');
-const { stopReason } = require('./claude-runner');
+const { getProjectInfo, worktreeParent, parseResult } = require('./task-agent');
+const { runClaude, stopReason } = require('./claude-runner');
 
 const PW_LIMIT = 3;
 
@@ -50,7 +50,7 @@ async function runPlaywrightAgent(taskId, userId, signal) {
       login: user.username,
       password
     }).trim();
-    const result = await spawnClaude(prompt, { cwd, taskId, userId, signal, model: agent.model });
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {

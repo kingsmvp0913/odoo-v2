@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { callClaude } = require('./claude-runner');
+const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { mergeInto, commitAll, abortMerge } = require('./git');
@@ -32,9 +32,9 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   const agent = loadAgent('merge');
   let resolveResult;
   try {
-    resolveResult = await callClaude(
+    resolveResult = await runClaude(
       agent.render({ file_path: filePath, content }),
-      signal, { ...opts, model: agent.model }
+      { ...opts, signal, model: agent.model }
     );
   } catch (err) {
     if (opts.taskId) {

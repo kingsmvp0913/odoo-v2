@@ -7,7 +7,7 @@ jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn(),
   runEnvSetup: jest.fn()
 }));
-jest.mock('../pipeline/claude-runner', () => ({ callClaude: jest.fn() })); // 分類器 agent fallback 用
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
 
 let dbModule, runDeployTesting, envAgent;
 let userId, projectId;
@@ -61,7 +61,7 @@ test('extractOdooError：優先抓 Traceback 段', () => {
 beforeEach(async () => {
   envAgent.upgradeModules.mockReset();
   envAgent.runEnvSetup.mockReset();
-  require('../pipeline/claude-runner').callClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
+  require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [projectId]);
 });
 
@@ -190,8 +190,8 @@ test('A-3 transient 失敗 → 自動重試一次；第二次成功 → playwrig
 });
 
 test('A-3 unknown → 叫 deploy-fix agent；回 env → 走 env 路徑', async () => {
-  const { callClaude } = require('../pipeline/claude-runner');
-  callClaude.mockResolvedValue({ text: '{"type":"env"}' });
+  const { runClaude } = require('../pipeline/claude-runner');
+  runClaude.mockResolvedValue({ text: '{"type":"env"}' });
   await setEnvRunning();
   envAgent.upgradeModules.mockRejectedValue(new Error('some novel unrecognized failure zzz'));
   const id = await makeTask(0);

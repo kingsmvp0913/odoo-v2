@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const { query } = require('../db');
+const notify = require('../notify');
 
 function formatEvent(ev) {
   if (!ev || !ev.type) return null;
@@ -37,19 +38,22 @@ function formatEvent(ev) {
   return null;
 }
 
-function callClaude(prompt, signal, opts = {}) {
-  const { taskId, userId, notify, model, timeoutMs = 600000 } = opts;
+// 統一 runner（合併原 callClaude/spawnClaude，健檢 U13）：所有階段共用一份子行程實作，
+// 事件流同時寫 socket 與 task_events；支援 cwd（worktree 隔離）、session 捕捉、--resume（主題 B）。
+function runClaude(prompt, opts = {}) {
+  const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId } = opts;
   return new Promise((resolve, reject) => {
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
-    const child = spawn('claude', args, {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+    // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
+    if (resumeSessionId) args.push('--resume', resumeSessionId);
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
 
     let resultText = '';
     let usage = null;
     let durationMs = null;
+    let sessionId = null;
     let lineBuffer = '';
     let stderr = '';
     let settled = false;
@@ -63,9 +67,10 @@ function callClaude(prompt, signal, opts = {}) {
       child.kill('SIGTERM');
       finish(() => reject(fail(new Error(`claude 執行逾時（${Math.round(timeoutMs / 1000)}s）`), 'timeout')));
     }, timeoutMs);
+    // 有 taskId 才有落地對象；socket 另需 userId 才知道推給誰（前端依 taskId 路由終端輸出）
     const emit = text => {
       if (!text || !taskId) return;
-      if (userId && notify) notify.emitToUser(userId, 'terminal:output', { taskId, data: text });
+      if (userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: text });
       // 落地執行歷程供事後回放（best-effort，寫入失敗不影響 claude 執行）
       query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [taskId, text]).catch(() => {});
     };
@@ -79,6 +84,9 @@ function callClaude(prompt, signal, opts = {}) {
         if (!line) continue;
         try {
           const ev = JSON.parse(line);
+          if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
+            sessionId = ev.session_id; // 供 coding 重跑 --resume 續用
+          }
           const display = formatEvent(ev);
           if (display) emit(display);
           if (ev.type === 'result') {
@@ -104,10 +112,10 @@ function callClaude(prompt, signal, opts = {}) {
     }
 
     child.on('close', code => {
-      if (taskId && userId && notify) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
+      if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       finish(() => {
-        if (code !== 0) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
-        else resolve({ text: resultText.trim(), usage, durationMs });
+        if (code !== 0 && code !== null) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
+        else resolve({ text: resultText.trim(), usage, durationMs, sessionId });
       });
     });
     child.on('error', err => finish(() => reject(fail(err, 'error'))));
@@ -124,4 +132,4 @@ function stopReason(prefix, err) {
   return err && err.aborted ? '手動暫停' : `${prefix}：${err.message}`;
 }
 
-module.exports = { callClaude, abortError, stopReason };
+module.exports = { runClaude, abortError, stopReason };

@@ -32,7 +32,7 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
   }
 }
 
-// 失敗路徑專用（best-effort）：spawnClaude/callClaude 會在 err 標注 claudeStatus 與 durationMs
+// 失敗路徑專用（best-effort）：runClaude 會在 err 標注 claudeStatus 與 durationMs
 function logFailedUsage(ref, userId, agentType, err) {
   return logTokenUsage(ref, userId, agentType, null, err?.durationMs || null, err?.claudeStatus || 'error');
 }

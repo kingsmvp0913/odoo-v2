@@ -1,4 +1,4 @@
-const { callClaude } = require('./claude-runner');
+const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
@@ -39,7 +39,7 @@ async function runCsAgent(taskId, userId, signal) {
   let result = null;
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
-    const { text, usage, durationMs } = await callClaude(prompt, signal, { taskId, userId, notify, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) result = JSON.parse(jsonMatch[0]);

@@ -2,8 +2,8 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { spawnClaude, getProjectInfo, worktreeParent, parseResult, latestResolution } = require('./task-agent');
-const { stopReason } = require('./claude-runner');
+const { getProjectInfo, worktreeParent, parseResult, latestResolution } = require('./task-agent');
+const { runClaude, stopReason } = require('./claude-runner');
 
 const QA_LIMIT = 3;
 
@@ -40,7 +40,7 @@ async function runQaAgent(taskId, userId, signal) {
       resolution: (await latestResolution(taskId)) || '（無）'
     }).trim();
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
-    const result = await spawnClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model });
+    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', result.usage, result.durationMs);
   } catch (err) {

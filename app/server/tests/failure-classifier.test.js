@@ -2,10 +2,10 @@
 // 分類器保守偏向：只有明確才改判，模糊回 unknown 交給 agent；agent 也判不出預設 code（安全＝現況）。
 const { newDb } = require('pg-mem');
 
-jest.mock('../pipeline/claude-runner', () => ({ callClaude: jest.fn() }));
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() }));
 
 const { classifyFailure, classifyFailureWithAgent } = require('../pipeline/failure-classifier');
-const { callClaude } = require('../pipeline/claude-runner');
+const { runClaude } = require('../pipeline/claude-runner');
 
 describe('classifyFailure 純函式', () => {
   test('transient：被 kill / 連線重置 / DNS 失敗', () => {
@@ -56,29 +56,29 @@ describe('classifyFailure 純函式', () => {
 });
 
 describe('classifyFailureWithAgent', () => {
-  beforeEach(() => callClaude.mockReset());
+  beforeEach(() => runClaude.mockReset());
 
   test('程式已能判定（env）→ 不叫 agent', async () => {
     const r = await classifyFailureWithAgent('could not connect to server');
     expect(r).toBe('env');
-    expect(callClaude).not.toHaveBeenCalled();
+    expect(runClaude).not.toHaveBeenCalled();
   });
 
   test('unknown → 叫 agent；agent 回 env → env', async () => {
-    callClaude.mockResolvedValue({ text: '{"type":"env"}' });
+    runClaude.mockResolvedValue({ text: '{"type":"env"}' });
     const r = await classifyFailureWithAgent('weird novel error xyz');
     expect(r).toBe('env');
-    expect(callClaude).toHaveBeenCalled();
+    expect(runClaude).toHaveBeenCalled();
   });
 
   test('unknown → agent 出錯 → 預設 code（安全）', async () => {
-    callClaude.mockRejectedValue(new Error('agent down'));
+    runClaude.mockRejectedValue(new Error('agent down'));
     const r = await classifyFailureWithAgent('weird novel error xyz');
     expect(r).toBe('code');
   });
 
   test('unknown → agent 回不合法內容 → 預設 code', async () => {
-    callClaude.mockResolvedValue({ text: 'not json at all' });
+    runClaude.mockResolvedValue({ text: 'not json at all' });
     const r = await classifyFailureWithAgent('weird novel error xyz');
     expect(r).toBe('code');
   });

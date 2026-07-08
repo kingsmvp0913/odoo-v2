@@ -1,4 +1,4 @@
-const { callClaude } = require('./claude-runner');
+const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const yaml = require('js-yaml');
@@ -26,10 +26,9 @@ async function analyzeTask(taskId, signal) {
   let rawYaml;
   try {
     const agent = loadAgent('analysis-basic');
-    const callResult = await callClaude(
+    const callResult = await runClaude(
       agent.render({ original_text: task.original_text || '（無內容）' }),
-      signal,
-      { taskId, userId: task.user_id, notify, model: agent.model }
+      { signal, taskId, userId: task.user_id, model: agent.model }
     );
     rawYaml = callResult.text;
     await logTokenUsage({ taskId: task.task_id }, task.user_id, 'analysis', callResult.usage, callResult.durationMs);
