@@ -3,6 +3,17 @@ const mockClient = { connect: jest.fn(), query: jest.fn(), end: jest.fn() };
 const mockClientCtor = jest.fn(() => mockClient);
 jest.mock('pg', () => ({ Client: mockClientCtor }));
 
+// mssql：ConnectionPool → request().query()
+const mockMssqlReq = { query: jest.fn() };
+const mockMssqlPool = { connect: jest.fn(), request: jest.fn(() => mockMssqlReq), close: jest.fn() };
+const mockMssqlPoolCtor = jest.fn(() => mockMssqlPool);
+jest.mock('mssql', () => ({ ConnectionPool: mockMssqlPoolCtor }));
+
+// mysql2/promise：createConnection → query()
+const mockMysqlConn = { query: jest.fn(), end: jest.fn() };
+const mockMysqlCreate = jest.fn(async () => mockMysqlConn);
+jest.mock('mysql2/promise', () => ({ createConnection: (...a) => mockMysqlCreate(...a) }));
+
 const { runSelect } = require('../lib/ssh-sql');
 const ClientCtor = mockClientCtor;
 
@@ -17,6 +28,14 @@ beforeEach(() => {
   mockClient.connect.mockReset().mockResolvedValue();
   mockClient.query.mockReset();
   mockClient.end.mockReset().mockResolvedValue();
+  mockMssqlPoolCtor.mockClear();
+  mockMssqlPool.connect.mockReset().mockResolvedValue();
+  mockMssqlPool.request.mockClear().mockReturnValue(mockMssqlReq);
+  mockMssqlPool.close.mockReset().mockResolvedValue();
+  mockMssqlReq.query.mockReset();
+  mockMysqlCreate.mockClear();
+  mockMysqlConn.query.mockReset();
+  mockMysqlConn.end.mockReset().mockResolvedValue();
 });
 
 test('direct 成功：回傳格式與 SSH 路徑一致（columns/rows 為字串陣列）', async () => {
@@ -39,10 +58,11 @@ test('direct 連線參數帶入 host/port/user/password/database', async () => {
   }));
 });
 
-test('db_ssl=true → ssl:{rejectUnauthorized:false}；false → ssl:false', async () => {
+test('db_ssl=true → 驗證伺服器憑證（rejectUnauthorized:true）；false → ssl:false', async () => {
+  // 安全：對正式 PG 直連必須驗憑證，不驗＝接受中間人攻擊
   mockClient.query.mockResolvedValue({ fields: [], rows: [] });
   await runSelect({ ...base, db_ssl: true }, 'SELECT 1');
-  expect(ClientCtor.mock.calls[0][0].ssl).toEqual({ rejectUnauthorized: false });
+  expect(ClientCtor.mock.calls[0][0].ssl).toEqual({ rejectUnauthorized: true });
   ClientCtor.mockClear();
   await runSelect({ ...base, db_ssl: false }, 'SELECT 1');
   expect(ClientCtor.mock.calls[0][0].ssl).toBe(false);
@@ -68,4 +88,63 @@ test('direct 連線失敗 → ok:false，錯誤標記 [DIRECT]，仍呼叫 end',
   expect(res.error).toMatch(/^\[DIRECT\]/);
   expect(res.error).toMatch(/ECONNREFUSED/);
   expect(mockClient.end).toHaveBeenCalled();
+});
+
+// --- mssql 引擎 ---
+const mssqlBase = { connect_mode: 'direct', db_engine: 'mssql', db_host: '192.168.1.240', db_port: 1433, db_user: 'sa', db_password: 'pw', db_name: 'HJTEST', db_ssl: false };
+
+test('mssql 成功：recordset → 字串陣列格式，走 pg 以外的驅動', async () => {
+  mockMssqlReq.query.mockResolvedValue({ recordset: Object.assign([{ id: 1, name: 'A' }, { id: 2, name: 'B' }], { columns: { id: {}, name: {} } }) });
+  const res = await runSelect(mssqlBase, 'SELECT id, name FROM t');
+  expect(res).toEqual({ ok: true, columns: ['id', 'name'], rows: [['1', 'A'], ['2', 'B']], row_count: 2 });
+  expect(mockMssqlPoolCtor).toHaveBeenCalled();
+  expect(ClientCtor).not.toHaveBeenCalled(); // 不走 pg
+  expect(mockMssqlPool.close).toHaveBeenCalled();
+});
+
+test('mssql SSL → options.encrypt 依 db_ssl，加密時仍驗證憑證（trustServerCertificate:false）', async () => {
+  mockMssqlReq.query.mockResolvedValue({ recordset: [] });
+  await runSelect({ ...mssqlBase, db_ssl: true }, 'SELECT 1');
+  const cfg = mockMssqlPoolCtor.mock.calls[0][0];
+  expect(cfg.options.encrypt).toBe(true);
+  expect(cfg.options.trustServerCertificate).toBe(false);
+  expect(cfg.server).toBe('192.168.1.240');
+  expect(cfg.port).toBe(1433);
+});
+
+test('mssql 連線失敗 → [DIRECT]，仍 close', async () => {
+  mockMssqlPool.connect.mockRejectedValue(new Error('Login failed'));
+  const res = await runSelect(mssqlBase, 'SELECT 1');
+  expect(res.ok).toBe(false);
+  expect(res.error).toMatch(/^\[DIRECT\]/);
+  expect(mockMssqlPool.close).toHaveBeenCalled();
+});
+
+// --- mysql 引擎 ---
+const mysqlBase = { connect_mode: 'direct', db_engine: 'mysql', db_host: 'db', db_port: 3306, db_user: 'root', db_password: 'pw', db_name: 'app', db_ssl: false };
+
+test('mysql 成功：rowsAsArray → 字串陣列格式', async () => {
+  mockMysqlConn.query.mockResolvedValue([[[1, 'A']], [{ name: 'id' }, { name: 'v' }]]);
+  const res = await runSelect(mysqlBase, 'SELECT id, v FROM t');
+  expect(res).toEqual({ ok: true, columns: ['id', 'v'], rows: [['1', 'A']], row_count: 1 });
+  expect(mockMysqlConn.query).toHaveBeenCalledWith({ sql: 'SELECT id, v FROM t', rowsAsArray: true });
+  expect(mockMysqlConn.end).toHaveBeenCalled();
+});
+
+test('mysql SSL → 驗證憑證（rejectUnauthorized:true）；否則不帶 ssl', async () => {
+  mockMysqlConn.query.mockResolvedValue([[], []]);
+  await runSelect({ ...mysqlBase, db_ssl: true }, 'SELECT 1');
+  expect(mockMysqlCreate.mock.calls[0][0].ssl).toEqual({ rejectUnauthorized: true });
+  mockMysqlCreate.mockClear();
+  await runSelect({ ...mysqlBase, db_ssl: false }, 'SELECT 1');
+  expect(mockMysqlCreate.mock.calls[0][0].ssl).toBeUndefined();
+});
+
+test('非 SELECT 在 mssql/mysql 一樣被擋（不建立連線）', async () => {
+  const r1 = await runSelect(mssqlBase, 'DROP TABLE t');
+  const r2 = await runSelect(mysqlBase, 'UPDATE t SET a=1');
+  expect(r1.ok).toBe(false);
+  expect(r2.ok).toBe(false);
+  expect(mockMssqlPoolCtor).not.toHaveBeenCalled();
+  expect(mockMysqlCreate).not.toHaveBeenCalled();
 });

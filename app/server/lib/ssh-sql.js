@@ -121,8 +121,20 @@ function sshExec(conn, command) {
   });
 }
 
-// direct 模式：pg 直連 TCP，不經 SSH/docker。以 rowMode:'array' 讓回傳格式對齊 CSV 路徑。
+// 統一把 driver 回傳值正規化成字串（NULL→空字串，對齊 --csv 語意）
+function normCell(c) { return (c === null || c === undefined) ? '' : String(c); }
+
+// direct 模式：不經 SSH/docker，依 db_engine 直連 TCP。
+// SSL 開啟時一律驗證伺服器憑證（不提供「略過驗證」的預設路徑）；自簽憑證需讓系統信任。
 async function runDirect(conn, sql) {
+  const engine = conn.db_engine || 'postgres';
+  if (engine === 'mssql') return runDirectMssql(conn, sql);
+  if (engine === 'mysql') return runDirectMysql(conn, sql);
+  return runDirectPg(conn, sql);
+}
+
+// PostgreSQL：pg，以 rowMode:'array' 讓回傳格式對齊 CSV 路徑。
+async function runDirectPg(conn, sql) {
   const { Client } = require('pg');
   const client = new Client({
     host: conn.db_host,
@@ -130,7 +142,7 @@ async function runDirect(conn, sql) {
     user: conn.db_user,
     password: conn.db_password || '',
     database: conn.db_name,
-    ssl: conn.db_ssl ? { rejectUnauthorized: false } : false,
+    ssl: conn.db_ssl ? { rejectUnauthorized: true } : false,
     connectionTimeoutMillis: 15000,
     statement_timeout: 120000,
   });
@@ -138,12 +150,64 @@ async function runDirect(conn, sql) {
     await client.connect();
     const res = await client.query({ text: sql, rowMode: 'array' });
     const columns = (res.fields || []).map(f => f.name);
-    const rows = (res.rows || []).map(r => r.map(c => (c === null || c === undefined) ? '' : String(c)));
+    const rows = (res.rows || []).map(r => r.map(normCell));
     return { ok: true, columns, rows, row_count: rows.length };
   } catch (e) {
     return { ok: false, error: `[DIRECT] ${e.message}` };
   } finally {
     try { await client.end(); } catch { /* ignore close errors */ }
+  }
+}
+
+// Microsoft SQL Server：mssql（TDS）。encrypt 由 db_ssl 決定，加密時仍驗證憑證。
+async function runDirectMssql(conn, sql) {
+  const mssql = require('mssql');
+  const pool = new mssql.ConnectionPool({
+    server: conn.db_host,
+    port: conn.db_port || 1433,
+    user: conn.db_user,
+    password: conn.db_password || '',
+    database: conn.db_name,
+    options: { encrypt: !!conn.db_ssl, trustServerCertificate: false },
+    connectionTimeout: 15000,
+    requestTimeout: 120000,
+  });
+  try {
+    await pool.connect();
+    const res = await pool.request().query(sql);
+    const rs = res.recordset || [];
+    const columns = rs.columns ? Object.keys(rs.columns) : (rs.length ? Object.keys(rs[0]) : []);
+    const rows = rs.map(o => columns.map(c => normCell(o[c])));
+    return { ok: true, columns, rows, row_count: rows.length };
+  } catch (e) {
+    return { ok: false, error: `[DIRECT] ${e.message}` };
+  } finally {
+    try { await pool.close(); } catch { /* ignore close errors */ }
+  }
+}
+
+// MySQL / MariaDB：mysql2/promise，以 rowsAsArray 取回陣列列。
+async function runDirectMysql(conn, sql) {
+  const mysql = require('mysql2/promise');
+  let client;
+  try {
+    client = await mysql.createConnection({
+      host: conn.db_host,
+      port: conn.db_port || 3306,
+      user: conn.db_user,
+      password: conn.db_password || '',
+      database: conn.db_name,
+      ssl: conn.db_ssl ? { rejectUnauthorized: true } : undefined,
+      connectTimeout: 15000,
+    });
+    const [rows, fields] = await client.query({ sql, rowsAsArray: true });
+    const columns = (fields || []).map(f => f.name);
+    const outRows = (rows || []).map(r => r.map(normCell));
+    return { ok: true, columns, rows: outRows, row_count: outRows.length };
+  } catch (e) {
+    return { ok: false, error: `[DIRECT] ${e.message}` };
+  } finally {
+    try { if (client) await client.end(); } catch { /* ignore close errors */ }
   }
 }
 

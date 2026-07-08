@@ -38,4 +38,17 @@ test('direct 模式欄位存在且有預設（db_port=5432, db_ssl=false）', as
   expect(c.db_port).toBe(5432);
   expect(c.db_ssl).toBe(false);
   expect(c.db_password_enc).toBe('enc');
+  expect(c.db_engine).toBe('postgres'); // 預設引擎
+});
+
+test('db_engine 可存 mssql/mysql', async () => {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('P3','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO db_connections (project_id, name, ssh_host, ssh_user, connect_mode, db_engine, db_host, db_user, db_name)
+     VALUES ($1,'m1','','', 'direct','mssql','192.168.1.240','sa','HJTEST')`, [p.id]
+  );
+  const { rows: [c] } = await dbModule.query('SELECT db_engine FROM db_connections WHERE project_id=$1', [p.id]);
+  expect(c.db_engine).toBe('mssql');
 });

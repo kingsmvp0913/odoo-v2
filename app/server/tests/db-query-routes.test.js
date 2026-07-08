@@ -81,11 +81,12 @@ test('E-3 非 admin：POST 建立連線 → 403，GET 清單仍 200', async () =
 let dcid;
 test('direct POST 建立（不需 ssh 欄位，回傳含 db_host 不含密碼）', async () => {
   const res = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
-    name: 'dconn', connect_mode: 'direct',
+    name: 'dconn', connect_mode: 'direct', db_engine: 'mssql',
     db_host: 'db.example.com', db_port: 5432, db_user: 'reader', db_password: 'dbsecret', db_name: 'odoo_prd', db_ssl: true
   });
   expect(res.status).toBe(201);
   expect(res.body.db_host).toBe('db.example.com');
+  expect(res.body.db_engine).toBe('mssql');
   expect(res.body.db_ssl).toBe(true);
   expect(res.body.db_password_enc).toBeUndefined();
   expect(res.body.ssh_password_enc).toBeUndefined();
@@ -126,6 +127,17 @@ test('/test 端點：編輯時密碼留空 → 回填已存密碼', async () => 
   });
   expect(res.status).toBe(200);
   expect(mockRunSelect.mock.calls.at(-1)[0].db_password).toBe('dbsecret');
+});
+
+// 資安：不得用「已存連線的密碼」去連「表單改過的主機」→ 憑證外洩
+test('/test 端點：改了 db_host 但密碼留空 → 不沿用已存密碼（防外洩）', async () => {
+  mockRunSelect.mockResolvedValueOnce({ ok: false, error: 'auth failed' });
+  const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`).set(auth()).send({
+    id: dcid, connect_mode: 'direct', db_host: 'attacker.example.com', db_user: 'reader', db_name: 'odoo_prd'
+    // db_password 留空，但主機被換成攻擊者主機
+  });
+  expect(res.status).toBe(200);
+  expect(mockRunSelect.mock.calls.at(-1)[0].db_password).toBe('');
 });
 
 test('/test 端點：非 admin → 403', async () => {

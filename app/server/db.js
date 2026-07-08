@@ -227,6 +227,26 @@ async function migrate() {
       source               TEXT NOT NULL DEFAULT 'server' CHECK (source IN ('server','ps1')),
       recorded_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+
+    // 退回原因表（工作流程健檢 agent 子專案 1）：review_pending 退回時記 raw 原因，
+    // cron 慢慢跑分類 agent 拆成 rejection_items。以業務 task_id 為 key（硬刪/重置任務不失真）。
+    `CREATE TABLE IF NOT EXISTS task_rejections (
+      id          SERIAL PRIMARY KEY,
+      task_id     TEXT,
+      project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+      user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reason      TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'new',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS rejection_items (
+      id            SERIAL PRIMARY KEY,
+      rejection_id  INTEGER NOT NULL REFERENCES task_rejections(id) ON DELETE CASCADE,
+      description   TEXT NOT NULL,
+      category      TEXT NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -288,9 +308,6 @@ async function migrate() {
     { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
-    // 主題 E：每專案專用 E2E 測試帳號（取代使用者真實密碼登入測試區）
-    { table: 'projects', col: 'e2e_test_login',        sql: 'ALTER TABLE projects ADD COLUMN e2e_test_login TEXT' },
-    { table: 'projects', col: 'e2e_test_password_enc', sql: 'ALTER TABLE projects ADD COLUMN e2e_test_password_enc TEXT' },
     { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
     { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" },
     { table: 'project_chats', col: 'user_id', sql: 'ALTER TABLE project_chats ADD COLUMN user_id INTEGER REFERENCES users(id)' },
@@ -301,6 +318,7 @@ async function migrate() {
     { table: 'db_connections', col: 'db_port',         sql: 'ALTER TABLE db_connections ADD COLUMN db_port INTEGER DEFAULT 5432' },
     { table: 'db_connections', col: 'db_password_enc', sql: 'ALTER TABLE db_connections ADD COLUMN db_password_enc TEXT' },
     { table: 'db_connections', col: 'db_ssl',          sql: 'ALTER TABLE db_connections ADD COLUMN db_ssl BOOLEAN DEFAULT false' },
+    { table: 'db_connections', col: 'db_engine',       sql: "ALTER TABLE db_connections ADD COLUMN db_engine TEXT DEFAULT 'postgres'" },
     { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
     { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" }
   ];
@@ -313,6 +331,14 @@ async function migrate() {
       tableColsCache[table] = new Set(rows.map(r => r.column_name));
     }
     if (!tableColsCache[table].has(col)) await query(sql);
+  }
+
+  // 退場：E2E 改全域固定帳號（e2e-account.js），移除每專案欄位（存在才 drop，冪等）
+  for (const col of ['e2e_test_login', 'e2e_test_password_enc']) {
+    const { rows } = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name='projects' AND column_name=$1`, [col]
+    );
+    if (rows.length) await query(`ALTER TABLE projects DROP COLUMN ${col}`);
   }
 
   // One-time backfill：token_usage.project_id 由 tasks 回填（任務被刪前先固化歸因，
@@ -358,6 +384,11 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_tu_task_id     ON token_usage (task_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_tu_user_id     ON token_usage (user_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_tu_project_id  ON token_usage (project_id)').catch(() => {});
+
+  // task_rejections / rejection_items（退回原因表）
+  await query('CREATE INDEX IF NOT EXISTS idx_rej_status     ON task_rejections (status)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_rej_project    ON task_rejections (project_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_rej_items_rid  ON rejection_items (rejection_id)').catch(() => {});
 
   // wiki_pages indexes
   await query('CREATE INDEX IF NOT EXISTS idx_wiki_parent ON wiki_pages (parent_id)').catch(() => {});

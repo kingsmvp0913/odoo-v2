@@ -3,7 +3,7 @@ const { verifyToken } = require('./auth');
 const { encrypt, decrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
 
-const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, description, created_at';
+const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at';
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 function validateIdentifiers(b) {
@@ -53,11 +53,12 @@ function registerRoutes(app) {
       const keyEnc = authType === 'key' ? (b.ssh_key_content ? encrypt(b.ssh_key_content) : null) : null;
       const dbPwEnc = b.db_password ? encrypt(b.db_password) : null;
       const { rows } = await query(
-        `INSERT INTO db_connections (project_id,name,ssh_host,ssh_port,ssh_user,auth_type,ssh_password_enc,ssh_key_enc,connect_mode,docker_container,db_user,sudo_user,db_name,db_host,db_port,db_password_enc,db_ssl,description)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING ${PUBLIC_COLS}`,
+        `INSERT INTO db_connections (project_id,name,ssh_host,ssh_port,ssh_user,auth_type,ssh_password_enc,ssh_key_enc,connect_mode,docker_container,db_user,sudo_user,db_name,db_host,db_port,db_password_enc,db_ssl,db_engine,description)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING ${PUBLIC_COLS}`,
         [req.params.id, b.name, isDirect ? '' : b.ssh_host, b.ssh_port || 22, isDirect ? '' : b.ssh_user, authType, pwEnc, keyEnc,
          mode, b.docker_container || null, b.db_user || null, b.sudo_user || null, b.db_name,
-         isDirect ? b.db_host : null, isDirect ? (b.db_port || 5432) : null, dbPwEnc, isDirect ? !!b.db_ssl : false, b.description || null]
+         isDirect ? b.db_host : null, isDirect ? (b.db_port || 5432) : null, dbPwEnc, isDirect ? !!b.db_ssl : false,
+         isDirect ? (b.db_engine || 'postgres') : 'postgres', b.description || null]
       );
       res.status(201).json(rows[0]);
     } catch (err) {
@@ -78,7 +79,7 @@ function registerRoutes(app) {
         name: b.name, ssh_host: b.ssh_host, ssh_port: b.ssh_port, ssh_user: b.ssh_user, auth_type: b.auth_type,
         connect_mode: b.connect_mode, docker_container: b.docker_container,
         db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name,
-        db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, description: b.description
+        db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, db_engine: b.db_engine, description: b.description
       })) {
         if (val !== undefined) { set.push(`${col}=$${idx++}`); params.push(val); }
       }
@@ -117,14 +118,18 @@ function registerRoutes(app) {
         ssh_host: b.ssh_host, ssh_port: b.ssh_port, ssh_user: b.ssh_user, auth_type: b.auth_type || 'password',
         ssh_password: b.ssh_password || '', ssh_key: b.ssh_key_content || '',
         docker_container: b.docker_container, db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name,
-        db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, db_password: b.db_password || '',
+        db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, db_engine: b.db_engine, db_password: b.db_password || '',
       };
-      if (b.id && (!conn.ssh_password || !conn.ssh_key || !conn.db_password)) {
+      if (b.id) {
         const stored = await loadDecryptedConn(b.id, req.params.id);
         if (stored) {
-          if (!conn.ssh_password) conn.ssh_password = stored.ssh_password;
-          if (!conn.ssh_key) conn.ssh_key = stored.ssh_key;
-          if (!conn.db_password) conn.db_password = stored.db_password;
+          // 安全：只有「表單目標主機＝已存連線主機」時才沿用已存密碼，
+          // 否則可拿別的連線的密碼連向被改過的主機 → 憑證外洩
+          const sameSshHost = !!conn.ssh_host && conn.ssh_host === stored.ssh_host;
+          const sameDbHost = !!conn.db_host && conn.db_host === stored.db_host;
+          if (!conn.ssh_password && sameSshHost) conn.ssh_password = stored.ssh_password;
+          if (!conn.ssh_key && sameSshHost) conn.ssh_key = stored.ssh_key;
+          if (!conn.db_password && sameDbHost) conn.db_password = stored.db_password;
         }
       }
       res.json(await runSelect(conn, 'SELECT 1'));

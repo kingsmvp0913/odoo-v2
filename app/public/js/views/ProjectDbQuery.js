@@ -3,7 +3,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
   data() {
     return {
       conns: [], loading: true, saving: false, running: false, testing: false,
-      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, description: '' },
+      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '' },
       selectedId: '', sql: '', result: null, error: ''
     };
   },
@@ -16,7 +16,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
-    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, description: '' }; },
+    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '' }; },
     editConn(c) { this.form = { ...c, ssh_password: '', db_password: '' }; },
     validForm() {
       if (this.form.connect_mode === 'direct')
@@ -102,8 +102,9 @@ window.ProjectDbQueryView = Vue.defineComponent({
             <div class="form-group" style="margin:0" v-if="form.connect_mode==='local'"><label>sudo 使用者</label><input v-model="form.sudo_user" class="form-control" /></div>
           </template>
           <template v-else>
+            <div class="form-group" style="margin:0"><label>引擎</label><select v-model="form.db_engine" class="form-control"><option value="postgres">PostgreSQL</option><option value="mssql">MS SQL Server</option><option value="mysql">MySQL / MariaDB</option></select></div>
             <div class="form-group" style="margin:0"><label>DB 主機</label><input v-model="form.db_host" class="form-control" placeholder="db.example.com" /></div>
-            <div class="form-group" style="margin:0"><label>DB 埠</label><input v-model.number="form.db_port" class="form-control" /></div>
+            <div class="form-group" style="margin:0"><label>DB 埠</label><input v-model.number="form.db_port" class="form-control" :placeholder="form.db_engine==='mssql'?'1433':form.db_engine==='mysql'?'3306':'5432'" /></div>
             <div class="form-group" style="margin:0"><label>DB 使用者</label><input v-model="form.db_user" class="form-control" placeholder="reader" /></div>
             <div class="form-group" style="margin:0"><label>DB 密碼（留空＝不變）</label><input v-model="form.db_password" type="password" class="form-control" placeholder="••••••" /></div>
             <div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px"><label style="margin:0">SSL</label><input v-model="form.db_ssl" type="checkbox" style="width:auto" /></div>
@@ -127,7 +128,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
           <button class="btn btn-primary btn-sm" @click="runQuery" :disabled="running">{{ running ? '查詢中...' : '執行' }}</button>
         </div>
         <textarea v-model="sql" class="form-control" rows="4" placeholder="SELECT id, login FROM res_users LIMIT 20" style="font-family:monospace"></textarea>
-        <div v-if="error" style="margin-top:10px;background:#fff5f5;border:1px solid #fc8181;border-radius:4px;padding:8px;font-size:12px;white-space:pre-wrap">{{ error }}</div>
+        <div v-if="error" class="error-msg" style="margin-top:10px;white-space:pre-wrap">{{ error }}</div>
         <div v-if="result" style="margin-top:10px;overflow-x:auto">
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">{{ result.row_count }} 筆</div>
           <table style="width:100%;border-collapse:collapse;font-size:12px">

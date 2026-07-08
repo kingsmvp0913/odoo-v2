@@ -109,7 +109,18 @@ POST/PUT 的必填依 `connect_mode` 分叉：
 ## 9. 刻意不做（YAGNI）
 
 - 不做連線池共用（每次查詢單次連線、查完即關）。
-- 不做 SSL 憑證驗證（`rejectUnauthorized:false`，比照 DBeaver 常見的「不驗憑證」模式）。
-  - **資安取捨**：`rejectUnauthorized:false` 只加密傳輸、不驗伺服器身分，理論上仍可被 MITM。此連線管理限 admin、且目標是使用者本來就用 DBeaver 明文/自簽連的內部庫，故接受此取捨。若日後要收自簽憑證的雲端庫，再擴充「提供 CA 憑證」選項升級為 `rejectUnauthorized:true`。
 - 不改 `ssh_host`/`ssh_user` 的 NOT NULL 約束（direct 塞空字串）。
 - 不改 skill 檔與 `/ai/db` 路徑。
+- 暫不做「自簽憑證信任 / 貼 CA」選項（見第 10 節 SSL 決策，需要時再加）。
+
+## 10. 實作期演進（相對初版設計的變更）
+
+初版設計假設 direct 只連 PostgreSQL、且 SSL 走 `rejectUnauthorized:false`。實作期依實際需求與資安複查調整如下：
+
+1. **多引擎**：使用者要連的直連庫涵蓋 **MS SQL Server（埠 1433）、PostgreSQL、MySQL/MariaDB**（第一個實測目標 SmartERP 是 SQL Server）。
+   - 新增欄位 `db_connections.db_engine`（`postgres` | `mssql` | `mysql`，預設 `postgres`）。
+   - 新增相依：`mssql`、`mysql2`（已寫入 `app/package.json`）。
+   - `runDirect` 改為依 `db_engine` 分派：`pg` / `mssql`（TDS）/ `mysql2`。三者共用 `validateSelectOnly` 唯讀白名單與正規化輸出 `{ok,columns,rows(字串),row_count}`。
+   - 前端 direct 模式多「引擎」下拉，埠 placeholder 依引擎（5432/1433/3306）。
+2. **SSL 改為驗證憑證**（推翻初版的不驗）：資安複查與使用者決定，SSL 開啟時一律驗證伺服器憑證——pg/mysql `rejectUnauthorized:true`、mssql `encrypt=db_ssl` + `trustServerCertificate:false`。自簽憑證需讓系統信任，不提供「略過驗證」的預設路徑。對純內網、不吃 SSL 的庫（如上述 SQL Server），SSL 不勾即可（不加密、不涉憑證）。
+3. **`/test` 憑證外洩修正**（commit 複查標記）：`/test` 以 `id` 回填已存密碼時，**只有「表單目標主機＝已存連線主機」才回填**（ssh 密碼綁 `ssh_host`、db 密碼綁 `db_host`），避免拿他人連線的密碼連向被改過的主機而外洩。對應測試：`/test 端點：改了 db_host 但密碼留空 → 不沿用已存密碼`。
