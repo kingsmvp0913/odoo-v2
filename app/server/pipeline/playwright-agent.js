@@ -2,10 +2,11 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { decrypt } = require('../lib/crypto');
+const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
 const { getProjectInfo, worktreeParent } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
+const { ensureEnvRunning } = require('./ensure-env');
 
 const PW_LIMIT = 3;
 
@@ -15,7 +16,7 @@ async function stopTask(taskId, userId, msg, blockerType = null) {
 }
 
 // Playwright E2E：依 SD 產測試計畫並打測試區實跑。
-// pass→review_pending；fail→退 coding 計數（滿 PW_LIMIT→stopped）；無 env／無憑證／無有效結果→stopped。
+// pass→review_pending；fail→退 coding 計數（滿 PW_LIMIT→stopped）；無 env／無有效結果→stopped。
 async function runPlaywrightAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, project_id, git_branch, analysis_yaml, pw_retry_count FROM tasks WHERE id = $1',
@@ -23,35 +24,31 @@ async function runPlaywrightAgent(taskId, userId, signal) {
   );
   if (!task || !task.project_id) return false;
 
-  // 測試區 URL
-  const { rows: [env] } = await query('SELECT url, status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
-  if (!env || env.status !== 'running' || !env.url) {
-    await stopTask(taskId, userId, '測試環境未運行，無法執行 E2E 測試', 'env');
+  // 測試環境：未運行則自動啟動（與 deploy 階段一致），避免階段間被砍時 E2E 直接報錯
+  if (!(await ensureEnvRunning(task.project_id))) {
+    await stopTask(taskId, userId, '測試環境未運行且無法自動啟動，請至專案環境頁檢查', 'env');
+    return true;
+  }
+  const { rows: [env] } = await query('SELECT url FROM odoo_envs WHERE project_id=$1', [task.project_id]);
+  if (!env?.url) {
+    await stopTask(taskId, userId, '測試環境未提供 URL，無法執行 E2E 測試', 'env');
     return true;
   }
 
-  // 登入憑證：任務所屬使用者的可逆加密密碼
-  const { rows: [user] } = await query('SELECT username, password_enc FROM users WHERE id=$1', [userId]);
-  let password = null;
-  if (user?.password_enc) { try { password = decrypt(user.password_enc); } catch { password = null; } }
-  if (!password) {
-    await stopTask(taskId, userId, '使用者尚未建立 E2E 憑證，請重新登入一次系統後重試');
-    return true;
-  }
-
+  // 登入憑證：全域固定 E2E 測試帳號（建立環境／同步使用者時已自動寫入測試區）
   const info = await getProjectInfo(task.project_id);
   const cwd = info?.root ? worktreeParent(info.root, task.task_id) : process.cwd();
 
   let raw;
   try {
     const agent = loadAgent('playwright');
+    // 密碼（敏感值）不進 prompt，改以環境變數 E2E_PASSWORD 傳給子行程（健檢 E-1）
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
       test_url: env.url,
-      login: user.username,
-      password
+      login: E2E_LOGIN
     }).trim();
-    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model });
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD } });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {
@@ -77,6 +74,17 @@ async function runPlaywrightAgent(taskId, userId, signal) {
       await query(
         "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
         [taskId, `測試環境於 E2E 期間停止運行，屬環境問題（非程式碼），請恢復環境後重試。最後結果：${String(report).slice(0, 300)}`]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
+    // env 仍 running，但 agent 自報「根本無法完成測試」（連不上、登入進不去、逾時）＝環境/測試帳號問題，
+    // 非本次程式碼 bug——與 deploy 一致：不退 coding、不加 pw 計數，停下等人工修環境。
+    // 僅明確 failure_type==='env' 才走此路；缺值或其他值一律當 code（保守預設＝現行行為）。
+    if (result.failure_type === 'env') {
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+        [taskId, `E2E 無法完成測試，屬環境／測試帳號問題（非程式碼），請檢查測試環境與登入帳號後重試。最後結果：${String(report).slice(0, 300)}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
       return true;

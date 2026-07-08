@@ -4,6 +4,8 @@ const path = require('path');
 const { execFile, spawn } = require('child_process');
 const { query } = require('../db');
 const { ensureTestingBranch } = require('./git');
+const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
+const { allocateProjectPort, loopbackHostForPort } = require('../port-alloc');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
@@ -11,7 +13,7 @@ const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..'
 function execCmd(bin, args) {
   return new Promise((resolve, reject) => {
     // maxBuffer 預設僅 1MB，Odoo 升級 log 超過會以 maxBuffer exceeded 假失敗
-    execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       if (err) {
         // 保留完整診斷：只留 stderr 的話，「幾秒就死、stderr 只有 banner」的失敗會無從鑑識（健檢根因 C）
         const e = new Error(stderr || err.message);
@@ -26,7 +28,7 @@ function execCmd(bin, args) {
 // 與 execCmd 相同，但把 input 餵進 stdin（execFile 非同步版不支援 input）
 function execWithStdin(bin, args, input, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { env });
+    const child = spawn(bin, args, { env, windowsHide: true });
     let out = '', err = '';
     child.stdout.on('data', d => { out += d; });
     child.stderr.on('data', d => { err += d; });
@@ -37,11 +39,25 @@ function execWithStdin(bin, args, input, env) {
   });
 }
 
-function findFreePort(start = 8069) {
+// 探測埠是否真的接受連線（Odoo 已 listen）。逾時內反覆重試，最終回 true/false。
+// 用於啟動後健康檢查：Odoo spawn 後需數秒載入才 listen，唯有實測連得上才算「running」，
+// 否則 process 崩了卻標 running（stale running）→ 死掉的 URL 被餵給 E2E 卻永遠好不了。
+function waitForPort(port, timeoutMs = 90000, intervalMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
-    const server = net.createServer();
-    server.on('error', () => resolve(findFreePort(start + 1)));
-    server.listen(start, () => { server.close(() => resolve(start)); });
+    const attempt = () => {
+      const sock = net.connect({ port, host: '127.0.0.1' });
+      sock.setTimeout(2000);
+      const fail = () => {
+        sock.destroy();
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(attempt, intervalMs);
+      };
+      sock.once('connect', () => { sock.destroy(); resolve(true); });
+      sock.once('error', fail);
+      sock.once('timeout', fail);
+    };
+    attempt();
   });
 }
 
@@ -73,12 +89,19 @@ async function projectAddonsPaths(projectId) {
 
 async function runEnvSetup(projectId) {
   const { rows: [project] } = await query(
-    'SELECT name, folder_name, odoo_version FROM projects WHERE id = $1',
+    'SELECT name, folder_name, odoo_version, port FROM projects WHERE id = $1',
     [projectId]
   );
   if (!project) return;
 
-  const port = await findFreePort(8069);
+  // 埠在建立專案時已固定分配（projects.port）；缺值（極舊資料）才補配一次並持久化。
+  let port = project.port;
+  if (!port) {
+    port = await allocateProjectPort();
+    await query('UPDATE projects SET port=$2 WHERE id=$1', [projectId, port]);
+  }
+  // 每專案專屬 loopback host：讓多開測試區時瀏覽器 cookie 依 host 隔離，不再互蓋 session。
+  const envHost = loopbackHostForPort(port);
   const major = (project.odoo_version || '17.0').split('.')[0];
   const baseDir = ENV_BASE;
   const dirName = project.folder_name || project.name;
@@ -148,17 +171,46 @@ async function runEnvSetup(projectId) {
     }
   }
 
-  const child = spawn(venvPython, [odooBin, '-d', dbName, `--http-port=${port}`, '--addons-path', addonsPath, ...odooDbArgs()], {
+  // --http-interface=0.0.0.0：綁所有介面（與 Odoo 預設同，不新增曝露），使各專案的
+  // 127.0.0.x 專屬 host 都連得到同一個 port 上的服務（cookie 隔離所需）。
+  // 常駐 Odoo 伺服器：Windows 上用 pythonw.exe（GUI 子系統、無主控台視窗）。
+  // windowsHide 對 detached 的 console 程式不生效，故改直譯器本身才是正解。缺檔則退回 python.exe。
+  let serverPython = venvPython;
+  if (isWin) {
+    const pythonw = path.join(venvDir, 'Scripts', 'pythonw.exe');
+    if (fs.existsSync(pythonw)) serverPython = pythonw;
+  }
+  const child = spawn(serverPython, [odooBin, '-d', dbName, `--http-port=${port}`, '--http-interface=0.0.0.0', '--addons-path', addonsPath, ...odooDbArgs()], {
     detached: true,
-    stdio: 'ignore'
+    stdio: 'ignore',
+    windowsHide: true  // 背景運行，不另開 Windows 主控台視窗（pythonw 為主要手段，此為輔）
   });
+  // detached/unref 的子行程，仍會在父程序存活期間送出 exit 事件；用來偵測「啟動即崩」。
+  let earlyExit = null;
+  child.once('exit', (code, sig) => { earlyExit = { code, sig }; });
   child.unref();
   const pid = child.pid || null;
-  log += `[start] PID=${pid} port=${port}\n`;
+
+  // 啟動後健康檢查：探測埠真的 listen（或偵測到 process 提早結束）才標 running。
+  // 逾時／崩潰 → 標 error（非 running），避免 stale running 把死掉的 URL 交給 E2E（本次事故根因）。
+  const healthy = await waitForPort(port);
+  if (earlyExit || !healthy) {
+    const reason = earlyExit
+      ? `Odoo process 啟動後隨即結束（exit=${earlyExit.code}${earlyExit.sig ? `/${earlyExit.sig}` : ''}）`
+      : `Odoo 啟動逾時：90 秒內埠 ${port} 未進入監聽`;
+    log += `[start] PID=${pid} port=${port} → 健康檢查失敗：${reason}\n`;
+    try { if (pid) process.kill(pid, 'SIGTERM'); } catch {}
+    await query(
+      "UPDATE odoo_envs SET status='error', pid=NULL, url=NULL, error_msg=$2, setup_log=$3, updated_at=NOW() WHERE project_id=$1",
+      [projectId, reason, log]
+    );
+    return;
+  }
+  log += `[start] PID=${pid} port=${port} 健康檢查通過\n`;
 
   await query(
     "UPDATE odoo_envs SET status='running', pid=$2, port=$3, url=$4, setup_log=$5, updated_at=NOW() WHERE project_id=$1",
-    [projectId, pid, port, `http://localhost:${port}`, log]
+    [projectId, pid, port, `http://${envHost}:${port}`, log]
   );
 }
 
@@ -168,7 +220,9 @@ async function seedOdooUsers({ venvPython, odooBin, dbName, addonsPath }) {
   const { rows: users } = await query(
     'SELECT username AS login, display_name AS name, password_hash AS password FROM users ORDER BY id'
   );
-  if (!users.length) return '[seed] 無使用者可同步\n';
+  // 固定 E2E 測試帳號一律灌入（即使無 app user 也要建，供 Playwright 登入測試區）。
+  // 無 app hash，帶明文交由 Odoo passlib 自行雜湊（password_plain，見 seed_odoo_users.py）。
+  users.push({ login: E2E_LOGIN, name: 'E2E 自動測試', password_plain: E2E_PASSWORD });
   const script = fs.readFileSync(path.join(__dirname, 'seed_odoo_users.py'), 'utf8');
   const out = await execWithStdin(
     venvPython,
@@ -283,4 +337,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, ENV_BASE };
+module.exports = { runEnvSetup, upgradeModules, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
