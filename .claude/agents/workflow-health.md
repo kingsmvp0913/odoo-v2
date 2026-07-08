@@ -23,10 +23,10 @@ stage: workflow_health
 只回傳一個 JSON 物件，完整包在 <result></result> 內，標籤外不要任何文字：
 - `diagnosis`：一段話，指出根據摘要中哪些訊號判斷出的問題（或「表現正常」）。
 - `severity`：`ok` | `low` | `medium` | `high`（只能四選一）。
-- `suggested_prompt`：改進後的**完整**提示詞 body（可直接取代現行提示詞）；無需改則為 `null`。若提供，必須沿用現行提示詞的 <result> 契約與所有佔位符（agent_label、agent_role、agent_prompt、summary），否則會被編輯器擋下。
+- `suggested_prompt`：改進後的**完整**提示詞 body（可直接取代現行提示詞）；無需改則為 `null`。若提供，必須沿用現行提示詞中所有以雙大括號標記的動態欄位（逐一原樣保留、不得新增或刪除），並維持 <result> 輸出契約，否則會被編輯器擋下。
 - `rationale`：為何這樣改（對照摘要訊號）。
 
 範例：
 <result>
-{"diagnosis":"近 30 天 stopped_rate 0.4、reentry.avg 1.8，且退回多為『規格誤解』，顯示需求理解不足。","severity":"medium","suggested_prompt":"<完整新提示詞，含原有 {{placeholder}} 與 <result> 契約>","rationale":"加強開工前對驗收條件的複述，降低方向性誤解。"}
+{"diagnosis":"近 30 天 stopped_rate 0.4、reentry.avg 1.8，且退回多為『規格誤解』，顯示需求理解不足。","severity":"medium","suggested_prompt":"<改進後的完整提示詞，需含原有的雙大括號動態欄位與 <result> 契約>","rationale":"加強開工前對驗收條件的複述，降低方向性誤解。"}
 </result>
