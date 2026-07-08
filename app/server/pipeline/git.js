@@ -185,6 +185,8 @@ async function mergeToMain(repoPath, branchName) {
   try {
     await execFileAsync('git', ['merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], { cwd: repoPath });
     await untrackPyc(repoPath); // 停止 main 追蹤 pyc → 之後從 main 長出的 task 分支不再帶 pyc
+    // 併入本機 main 後同步推遠端；沒推的話審核通過的程式碼只留在 server 本機 clone，遠端看不到（健檢：approve 缺 push）
+    await execFileAsync('git', ['push', 'origin', main], { cwd: repoPath });
   } catch (err) {
     await execFileAsync('git', ['checkout', branchName], { cwd: repoPath }).catch(() => {});
     throw err;
