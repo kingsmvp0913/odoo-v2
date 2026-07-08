@@ -29,11 +29,11 @@ stage: coding
 嚴禁 commit __pycache__/ 與 *.pyc；已誤入版控就 git rm --cached 移除。
 
 【輸出】完成後輸出：
----RESULT-JSON---
+<result>
 {"status":"qa_running"}
----END-RESULT---
+</result>
 
 若無法繼續（需求無法實作、規格不清楚等）：
----RESULT-JSON---
+<result>
 {"status":"stopped","error":"詳細原因（使用者看得懂）"}
----END-RESULT---
+</result>

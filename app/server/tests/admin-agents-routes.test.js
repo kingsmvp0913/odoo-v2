@@ -79,14 +79,14 @@ test('GET /api/admin/agents/:name → 含 prompt', async () => {
   const res = await request(app).get('/api/admin/agents/cs')
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(res.body.model).toBe('sonnet');
+  expect(res.body.model).toBe('haiku'); // 健檢 F：cs 降 haiku
   expect(res.body.prompt).toContain('客服');
 });
 
 test('PUT /api/admin/agents/:name → 改 model + prompt', async () => {
   const res = await request(app).put('/api/admin/agents/chat')
     .set('Authorization', `Bearer ${adminToken}`)
-    .send({ model: 'haiku', prompt: '測試提示詞 {{user_message}}' });
+    .send({ model: 'haiku', prompt: '測試提示詞 {{wiki}} {{history}} {{user_message}}' });
   expect(res.status).toBe(200);
   expect(res.body.model).toBe('haiku');
   expect(res.body.prompt).toContain('測試提示詞');

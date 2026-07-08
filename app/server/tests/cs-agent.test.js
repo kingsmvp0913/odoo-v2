@@ -43,7 +43,7 @@ async function makeTask(overrides = {}) {
 }
 
 test('operation → cs_reply_pending with reply', async () => {
-  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"operation","reply":"請到報表 > 匯出","question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"operation","reply":"請到報表 > 匯出","question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask();
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, cs_reply FROM tasks WHERE id=$1', [taskId]);
@@ -52,7 +52,7 @@ test('operation → cs_reply_pending with reply', async () => {
 });
 
 test('code_change_clear + 有專案 → analysis_running', async () => {
-  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({
     withProject: true,
     title: 'Bug in report',
@@ -64,7 +64,7 @@ test('code_change_clear + 有專案 → analysis_running', async () => {
 });
 
 test('code_change_clear + 無專案 → stopped（需先綁定專案）', async () => {
-  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Bug', text: 'export crashes' });
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [taskId]);
@@ -73,7 +73,7 @@ test('code_change_clear + 無專案 → stopped（需先綁定專案）', async 
 });
 
 test('code_change_vague → cs_data_needed with question', async () => {
-  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Something wrong', text: 'It does not work.' });
   await runCsAgent(taskId, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, cs_question FROM tasks WHERE id=$1', [taskId]);
@@ -82,7 +82,7 @@ test('code_change_vague → cs_data_needed with question', async () => {
 });
 
 test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔cs_running 鬼打牆）', async () => {
-  mockRunClaude.mockResolvedValueOnce({ text: '{"type":"code_change_clear","reply":null,"question":null}', usage: null, durationMs: null });
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({
     withProject: true,
     title: '報價單客戶下面加備註欄位',
@@ -117,4 +117,19 @@ test('API error → stopped', async () => {
 test('missing task → returns silently', async () => {
   await expect(runCsAgent(99999, 1)).resolves.toBeUndefined();
   expect(mockRunClaude).not.toHaveBeenCalled();
+});
+
+// 意圖：分類任務只需知道專案有哪些主題，不需 wiki 全文 → 避免 wiki 累積讓每個工單分流成本線性膨脹（健檢 F）
+test('F-token：cs prompt 只帶 wiki 頁面標題、不含全文', async () => {
+  const { userId, taskId } = await makeTask({ withProject: true });
+  const { rows: [task] } = await dbModule.query('SELECT project_id FROM tasks WHERE id=$1', [taskId]);
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id, slug, title, content) VALUES ($1,'export','匯出功能說明','很長的內文SECRETBODY不該進分類prompt')",
+    [task.project_id]
+  );
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"operation","reply":"見匯出功能","question":null}</result>', usage: null, durationMs: null });
+  await runCsAgent(taskId, userId);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('匯出功能說明');   // 標題有帶
+  expect(prompt).not.toContain('SECRETBODY');  // 內文沒帶
 });

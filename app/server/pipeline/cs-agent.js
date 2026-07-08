@@ -1,4 +1,5 @@
 const { runClaude } = require('./claude-runner');
+const { parseAgentResult } = require('./agent-result');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
@@ -13,11 +14,12 @@ async function runCsAgent(taskId, userId, signal) {
 
   let wikiContext = '';
   if (task.project_id) {
+    // 分類任務只需知道專案有哪些主題，不需 wiki 全文（避免 wiki 隨任務累積讓每個工單分流成本線性膨脹，健檢 F）
     const { rows: pages } = await query(
-      'SELECT title, content FROM wiki_pages WHERE project_id = $1 ORDER BY updated_at DESC LIMIT 5',
+      'SELECT title FROM wiki_pages WHERE project_id = $1 ORDER BY updated_at DESC LIMIT 20',
       [task.project_id]
     );
-    wikiContext = pages.map(p => `## ${p.title}\n${p.content}`).join('\n\n');
+    wikiContext = pages.map(p => `- ${p.title}`).join('\n');
   }
 
   // 使用者先前輪次已補充的答案（cs-data-submit 寫入 task_logs）。cs-agent 重跑時
@@ -41,8 +43,7 @@ async function runCsAgent(taskId, userId, signal) {
   try {
     const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) result = JSON.parse(jsonMatch[0]);
+    result = await parseAgentResult(text, { parse: JSON.parse, signal });
   } catch (err) {
     // CLI/API 執行失敗與「回應無法解析」是不同問題，分開歸因（健檢流程層 P3）
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);

@@ -61,13 +61,19 @@ clarification_channel:
   questions: []
   user_answer: ""
 
-【輸出】分析完成後輸出：
----RESULT-JSON---
-{"status":"branch_pending","analysis_yaml":"<yaml 字串，換行用 \n>"}
----END-RESULT---
+【輸出】分析完成後，把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。
 
-若需使用者確認（MODE_B 或有問題）則輸出 "confirm_pending"。
-若規格不清楚無法繼續：
----RESULT-JSON---
+規格明確、可直接實作：
+<result>
+{"status":"branch_pending","analysis_yaml":"<yaml 字串，換行用 \n>"}
+</result>
+
+需使用者確認（MODE_B，或規格有需澄清的問題）：**status 為 confirm_pending，但 analysis_yaml 仍必須帶上**（把問題寫進 yaml 的 clarification_channel.questions，勿只回 status）：
+<result>
+{"status":"confirm_pending","analysis_yaml":"case_id: \"...\"\nmodule: ...\nexecution_mode: \"MODE_B\"\nclarification_channel:\n  questions:\n    - 問題1\n    - 問題2\n  user_answer: \"\"\n"}
+</result>
+
+規格不清楚無法繼續：
+<result>
 {"status":"stopped","error":"詳細原因（使用者看得懂的說明）"}
----END-RESULT---
+</result>

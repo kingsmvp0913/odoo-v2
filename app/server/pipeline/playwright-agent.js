@@ -3,8 +3,9 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { decrypt } = require('../lib/crypto');
-const { getProjectInfo, worktreeParent, parseResult } = require('./task-agent');
+const { getProjectInfo, worktreeParent } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
+const { parseAgentResult } = require('./agent-result');
 
 const PW_LIMIT = 3;
 
@@ -59,7 +60,7 @@ async function runPlaywrightAgent(taskId, userId, signal) {
     return true;
   }
 
-  const result = parseResult(raw);
+  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
 
   if (result?.verdict === 'pass') {
     await query("UPDATE tasks SET status='review_pending', updated_at=NOW() WHERE id=$1", [taskId]);

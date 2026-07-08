@@ -1,6 +1,6 @@
 const { newDb } = require('pg-mem');
 
-const mockRunClaude = jest.fn().mockResolvedValue({ text: '{"slug":"test-feature","title":"測試功能","content":"# 測試\\n\\n這是測試功能說明。"}', usage: null, durationMs: null });
+const mockRunClaude = jest.fn().mockResolvedValue({ text: '<result>{"slug":"test-feature","title":"測試功能","content":"# 測試\\n\\n這是測試功能說明。"}</result>', usage: null, durationMs: null });
 
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
@@ -92,4 +92,21 @@ test('API error → still sets task done', async () => {
   await runLibraryAgent(task.id, userId);
   const { rows: [updated] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(updated.status).toBe('done');
+});
+
+// 意圖：parse 失敗不再靜默跳過卻標 done → task_logs 留痕，讓 wiki 缺頁有跡可循（健檢 F fail-loud）
+test('F-failloud：library parse 失敗 → task_logs 留痕，任務仍 done', async () => {
+  mockRunClaude
+    .mockResolvedValueOnce({ text: '不是 JSON 也沒有 result 標記', usage: null, durationMs: null }) // 主呼叫
+    .mockResolvedValueOnce({ text: '補救也還是壞的', usage: null, durationMs: null });               // haiku 補救
+  const { userId, projectId } = await createUserAndProject();
+  const { rows: [task] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'T_badjson','odoo','Feat','wiki_updating',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runLibraryAgent(task.id, userId);
+  const { rows: [updated] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
+  expect(updated.status).toBe('done');
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [task.id]);
+  expect(logs.some(l => l.content.includes('wiki 更新失敗'))).toBe(true);
 });

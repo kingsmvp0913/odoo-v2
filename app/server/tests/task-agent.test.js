@@ -27,7 +27,7 @@ function emitInit(child, sessionId) {
   child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: sessionId }) + '\n');
 }
 function emitResult(child, status = 'qa_running') {
-  child.stdout.emit('data', JSON.stringify({ type: 'result', result: `---RESULT-JSON---\n{"status":"${status}"}\n---END-RESULT---`, usage: null, duration_ms: 10 }) + '\n');
+  child.stdout.emit('data', JSON.stringify({ type: 'result', result: `<result>\n{"status":"${status}"}\n</result>`, usage: null, duration_ms: 10 }) + '\n');
 }
 function defaultScript(child) { emitResult(child); child.emit('close', 0); }
 
@@ -97,7 +97,7 @@ test('coding retry：retry_feedback（上一輪失敗訊息）確實帶進 claud
       write: (d) => { captured += d; },
       end: () => {
         setImmediate(() => {
-          child.stdout.emit('data', JSON.stringify({ type: 'result', result: '---RESULT-JSON---\n{"status":"qa_running"}\n---END-RESULT---', usage: null, duration_ms: 10 }) + '\n');
+          child.stdout.emit('data', JSON.stringify({ type: 'result', result: '<result>\n{"status":"qa_running"}\n</result>', usage: null, duration_ms: 10 }) + '\n');
           child.emit('close', 0);
         });
       }
@@ -298,7 +298,7 @@ test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且�
 
   const calls = mockClaude({ onCall: (child) => {
     child.stdout.emit('data', JSON.stringify({ type: 'result',
-      result: '---RESULT-JSON---\n{"status":"branch_pending","analysis_yaml":"module: idx_x"}\n---END-RESULT---',
+      result: '<result>\n{"status":"branch_pending","analysis_yaml":"module: idx_x"}\n</result>',
       usage: null, duration_ms: 5 }) + '\n');
     child.emit('close', 0);
   }});
@@ -315,4 +315,44 @@ test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且�
   );
   // claude cwd 是任務 worktree 父目錄（coding 之後會沿用同一個）
   expect(calls[0].cwd).toContain(path.join('.worktrees', 'ana_iso'));
+});
+
+// ===== 主題 F：agent 契約強化 =====
+
+// 意圖：被下游退回重跑時「同樣的腦袋再猜一次」收斂率低；升級 opus 比無差別重跑 sonnet 省 token 又提高收斂。
+test('F-escalate：coding 首輪用 sonnet；被退回重跑（resume）升級 opus', async () => {
+  let calls = mockClaude({ onCall: (c) => { emitInit(c, 's1'); emitResult(c); c.emit('close', 0); } });
+  const id1 = await insertCodingTask('esc_fresh');
+  await runTaskCoding(id1, userId);
+  expect(calls[0].args[calls[0].args.indexOf('--model') + 1]).toBe('sonnet'); // 首輪不升級
+
+  calls = mockClaude({ onCall: (c) => { emitInit(c, 's2'); emitResult(c); c.emit('close', 0); } });
+  const id2 = await insertCodingTask('esc_resume', {
+    coding_session_id: 's2', coding_resume_count: 0, retry_feedback: '[QA 未通過]\n欄位型別錯'
+  });
+  await runTaskCoding(id2, userId);
+  expect(calls[0].args).toContain('--resume');
+  expect(calls[0].args[calls[0].args.indexOf('--model') + 1]).toBe('opus'); // 重跑升級
+});
+
+// 意圖：未知 status 不得靜默放行成 branch_pending（會讓「需確認」任務未經確認就開工，違反 Rule 12）
+test('F-failloud：analysis 回傳未知 status → stopped（不靜默放行 branch_pending）', async () => {
+  const g = require('../pipeline/git');
+  g.pullBranch.mockReset().mockResolvedValue(undefined);
+  g.ensureMainBranch.mockReset().mockResolvedValue('main');
+  g.ensureWorktreeAtMain.mockReset().mockResolvedValue(undefined);
+  mockClaude({ onCall: (c) => {
+    c.stdout.emit('data', JSON.stringify({ type: 'result',
+      result: '<result>\n{"status":"typo_status","analysis_yaml":"module: idx_x"}\n</result>',
+      usage: null, duration_ms: 5 }) + '\n');
+    c.emit('close', 0);
+  }});
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_unknown','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('stopped');
+  expect(after.blocker_content).toContain('未預期');
 });

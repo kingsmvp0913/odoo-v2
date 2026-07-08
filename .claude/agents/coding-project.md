@@ -66,11 +66,11 @@ B. 本地程式碼（符號定義、call chain、模組結構、業務邏輯）
 3. 對每個有變更的 repo 子目錄逐一 commit（見【Commit 格式】）
 
 【輸出】完成後輸出：
----RESULT-JSON---
+<result>
 {"status":"qa_running"}
----END-RESULT---
+</result>
 
 若遇到無法繼續的情況（需求無法實作、規格不清楚等）：
----RESULT-JSON---
+<result>
 {"status":"stopped","error":"詳細原因（使用者看得懂的說明，例如：sale.order 尚未繼承，需先建立繼承才能新增欄位）"}
----END-RESULT---
+</result>

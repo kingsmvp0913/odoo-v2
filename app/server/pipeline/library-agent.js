@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const { runClaude } = require('./claude-runner');
+const { parseAgentResult } = require('./agent-result');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
@@ -147,8 +148,9 @@ ${src || '（無原始碼）'}`;
     const agent = loadAgent('library');
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) { const p = JSON.parse(m[0]); title = p.title || title; content = p.content ?? content; }
+    const p = await parseAgentResult(text, { parse: JSON.parse, signal });
+    if (!p) throw new Error('agent 輸出無法解析為有效 JSON');
+    title = p.title || title; content = p.content ?? content;
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] refresh error ${slug}:`, err.message);
@@ -200,8 +202,7 @@ ${logText || '無'}`;
 
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, taskId, userId, model: agent.model });
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) wikiUpdate = JSON.parse(jsonMatch[0]);
+    wikiUpdate = await parseAgentResult(text, { parse: JSON.parse, signal });
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] API error task ${taskId}:`, err.message);
@@ -230,6 +231,12 @@ ${logText || '無'}`;
     } catch (err) {
       console.error(`[LIBRARY-AGENT] wiki upsert error task ${taskId}:`, err.message);
     }
+  } else {
+    // parse 失敗不再靜默跳過卻標 done：留痕 task_logs，讓 wiki 缺頁有跡可循（健檢 F fail-loud）
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai',$2)",
+      [taskId, '[wiki 更新失敗] library agent 輸出無法解析為有效 JSON，本次未更新 wiki']
+    ).catch(() => {});
   }
 
   try {
@@ -274,8 +281,8 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   try {
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) { const p = JSON.parse(m[0]); overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }
+    const p = await parseAgentResult(text, { parse: JSON.parse, signal });
+    if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] init overview error project ${projectId}:`, err.message);

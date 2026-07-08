@@ -29,10 +29,10 @@ stage: playwright
 
 【輸出】測試結束後輸出（不要其他多餘文字）：
 全部通過：
----RESULT-JSON---
+<result>
 {"verdict":"pass","plan":"測試計畫摘要","report":"通過的項目"}
----END-RESULT---
+</result>
 有失敗：
----RESULT-JSON---
+<result>
 {"verdict":"fail","plan":"測試計畫摘要","report":"哪一步失敗、預期 vs 實際"}
----END-RESULT---
+</result>

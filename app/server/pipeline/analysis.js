@@ -1,4 +1,5 @@
 const { runClaude } = require('./claude-runner');
+const { parseAgentResult, extractResult } = require('./agent-result');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const yaml = require('js-yaml');
@@ -45,7 +46,9 @@ async function analyzeTask(taskId, signal) {
   // Block 2: YAML parse + validate — failures → stopped
   let parsed;
   try {
-    parsed = yaml.load(rawYaml, { schema: yaml.CORE_SCHEMA });
+    // 統一契約：<result> 包住的 YAML，剝 fence＋解析失敗先 haiku 補救一次（健檢 F）
+    parsed = await parseAgentResult(rawYaml, { parse: s => yaml.load(s, { schema: yaml.CORE_SCHEMA }), signal });
+    if (!parsed) throw new Error('無法解析為有效 YAML');
     const missing = REQUIRED_FIELDS.filter(f => parsed?.[f] == null || parsed[f] === '');
     if (missing.length > 0) throw new Error(`Missing required YAML fields: ${missing.join(', ')}`);
   } catch (parseErr) {
@@ -58,10 +61,12 @@ async function analyzeTask(taskId, signal) {
   }
 
   const next_status = determineNextStatus(parsed);
+  // 存剝乾淨的 YAML（去掉 <result> 包絡與 fence），別把契約標記雜訊帶進下游 spec
+  const cleanYaml = extractResult(rawYaml) || rawYaml;
 
   await query(
     `UPDATE tasks SET status = $2, analysis_yaml = $3, updated_at = NOW() WHERE id = $1`,
-    [taskId, next_status, rawYaml]
+    [taskId, next_status, cleanYaml]
   );
 
   await query(
@@ -71,7 +76,7 @@ async function analyzeTask(taskId, signal) {
 
   notify.emitToUser(task.user_id, 'task:updated', { taskId, status: next_status });
 
-  return { next_status, analysis_yaml: rawYaml };
+  return { next_status, analysis_yaml: cleanYaml };
 }
 
 module.exports = { analyzeTask };

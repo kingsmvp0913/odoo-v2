@@ -17,8 +17,10 @@ stage: wiki
 - 某個 wiki 節點的原始碼或現有內容（概論 / 模組 / 功能頁）——用於重建該頁
 
 【輸出】（嚴格遵守）
-只回傳合法 JSON，無任何其他文字或 markdown code block：
+把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字或 markdown code block）：
+<result>
 {"slug":"<英文小寫加連字號>","title":"<標題>","content":"<Markdown>"}
+</result>
 
 【撰寫原則】
 - 讀者是「使用這套系統的業務人員或管理者」，不是開發者。

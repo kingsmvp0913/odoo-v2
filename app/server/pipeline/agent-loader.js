@@ -37,9 +37,12 @@ function parse(raw) {
 }
 
 function makeRender(body) {
-  return vars => body.replace(/\{\{(\w+)\}\}/g, (_, k) =>
-    (vars && vars[k] != null) ? String(vars[k]) : ''
-  );
+  return vars => body.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+    if (vars && vars[k] != null) return String(vars[k]);
+    // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+    return '';
+  });
 }
 
 function agentPath(name) {
@@ -118,6 +121,16 @@ function updateAgent(name, { model, prompt } = {}) {
       : fmBlock.replace(/\r?\n---(\r?\n?)$/, `\nmodel: ${model}\n---$1`);
   }
   if (prompt != null) {
+    // 防 UI 編輯改壞輸出契約（健檢 F）：舊 body 有 <result> 則新 prompt 也必須有；舊有的 {{placeholder}} 不得被移除
+    if (body.includes('<result>') && !prompt.includes('<result>')) {
+      const e = new Error('更新遭拒：prompt 移除了輸出契約標記 <result>，會讓下一輪任務無法解析而 stopped'); e.status = 400; throw e;
+    }
+    const oldPh = new Set(body.match(/\{\{\w+\}\}/g) || []);
+    const newPh = new Set(prompt.match(/\{\{\w+\}\}/g) || []);
+    const removed = [...oldPh].filter(p => !newPh.has(p));
+    if (removed.length) {
+      const e = new Error(`更新遭拒：prompt 移除了既有 placeholder ${removed.join('、')}，JS 端仍會傳入對應資料`); e.status = 400; throw e;
+    }
     body = prompt.endsWith('\n') ? prompt : prompt + '\n';
   }
 

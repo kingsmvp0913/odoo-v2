@@ -60,7 +60,7 @@ async function makeTask(qaCount = 0) {
 
 function claudeReturns(json) {
   runClaude.mockResolvedValue({
-    text: `前置輸出\n---RESULT-JSON---\n${JSON.stringify(json)}\n---END-RESULT---`, usage: null, durationMs: null
+    text: `前置輸出\n<result>\n${JSON.stringify(json)}\n</result>`, usage: null, durationMs: null
   });
 }
 

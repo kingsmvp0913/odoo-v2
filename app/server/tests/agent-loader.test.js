@@ -8,7 +8,7 @@ const L = require('../pipeline/agent-loader');
 
 test('loadAgent 解析 frontmatter（model / stage / label）', () => {
   const a = L.loadAgent('cs');
-  expect(a.model).toBe('sonnet');
+  expect(a.model).toBe('haiku'); // 健檢 F：cs 純分類降 haiku
   expect(a.stage).toBe('cs');
   expect(a.label).toBe('客服');
   expect(typeof a.render).toBe('function');
@@ -27,14 +27,21 @@ test('缺值的 placeholder 代空字串', () => {
   expect(out.match(/\{\{\w+\}\}/)).toBeNull();
 });
 
-test('body 內的 ---RESULT-JSON--- 標記不被 frontmatter 解析破壞', () => {
+test('body 內的 <result> 契約標記不被 frontmatter 解析破壞', () => {
   const out = L.loadAgent('analysis-project').render({
     project_name: 'P', odoo_version: '17.0', original_text: 'OT', task_id: 'task_1'
   });
-  expect(out).toContain('---RESULT-JSON---');
-  expect(out).toContain('---END-RESULT---');
+  expect(out).toContain('<result>');
+  expect(out).toContain('</result>');
   expect(out).toContain('task_1');
   expect(out.match(/\{\{\w+\}\}/)).toBeNull();
+});
+
+test('render 漏傳 placeholder → console.warn 告警（不靜默劣化，健檢 F）', () => {
+  const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  L.loadAgent('cs').render({ title: 'T' }); // 漏傳 original_text / wiki / answers
+  expect(spy.mock.calls.some(c => String(c[0]).includes('未匹配 placeholder'))).toBe(true);
+  spy.mockRestore();
 });
 
 test('listAgents 含所有實際使用的 agent', () => {
@@ -72,10 +79,18 @@ describe('updateAgent', () => {
     expect(raw).toContain('label: 對話');
   });
 
-  test('改 prompt 會寫入新 body', () => {
-    const updated = L.updateAgent('chat', { prompt: '新的提示詞 {{user_message}}' });
-    expect(updated.body.trim()).toBe('新的提示詞 {{user_message}}');
-    expect(updated.render({ user_message: 'X' })).toContain('X');
+  test('改 prompt 會寫入新 body（保留既有 placeholder）', () => {
+    const p = '新的提示詞 {{wiki}} {{history}} {{user_message}}';
+    const updated = L.updateAgent('chat', { prompt: p });
+    expect(updated.body.trim()).toBe(p);
+    expect(updated.render({ wiki: 'W', history: 'H', user_message: 'X' })).toContain('X');
+  });
+
+  test('移除既有 placeholder 遭拒（400，防契約漂移）', () => {
+    expect.assertions(1);
+    // chat 有 {{wiki}}/{{history}}/{{user_message}}；只留一個＝移除其餘，JS 端仍會傳入
+    try { L.updateAgent('chat', { prompt: '只剩 {{user_message}}' }); }
+    catch (e) { expect(e.status).toBe(400); }
   });
 
   test('非法 model 擋下（400）', () => {
@@ -94,4 +109,17 @@ describe('updateAgent', () => {
     try { L.updateAgent('does-not-exist', { model: 'sonnet' }); }
     catch (e) { expect(e.status).toBe(404); }
   });
+});
+
+test('updateAgent 移除 <result> 契約標記遭拒（400，防 UI 改壞契約使下輪 stopped）', () => {
+  const orig = fs.readFileSync(L.agentPath('qa'), 'utf8');
+  try {
+    let err;
+    try { L.updateAgent('qa', { prompt: '對 {{main_branch}}...{{git_branch}} 審查，但沒有結果標記' }); }
+    catch (e) { err = e; }
+    expect(err?.status).toBe(400);
+    expect(err?.message).toContain('<result>');
+  } finally {
+    fs.writeFileSync(L.agentPath('qa'), orig); L.invalidate('qa');
+  }
 });

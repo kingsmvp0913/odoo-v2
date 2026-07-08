@@ -6,6 +6,7 @@ const { loadAgent } = require('./agent-loader');
 const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
+const { parseAgentResult } = require('./agent-result');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -20,16 +21,6 @@ function buildCommitMessage(task) {
     return title;
   }
   return title;
-}
-
-function parseResult(text) {
-  const OPEN = '---RESULT-JSON---';
-  const CLOSE = '---END-RESULT---';
-  const start = text.lastIndexOf(OPEN);
-  if (start === -1) return null;
-  const end = text.lastIndexOf(CLOSE);
-  const jsonStr = (end !== -1 ? text.slice(start + OPEN.length, end) : text.slice(start + OPEN.length)).trim();
-  try { return JSON.parse(jsonStr); } catch { return null; }
 }
 
 // 回傳專案根目錄與所有已 clone 完成的 repo 清單（不再只取 primary 單一路徑）。
@@ -211,7 +202,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  const result = parseResult(raw);
+  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
 
   if (result?.status === 'stopped') {
     await query(
@@ -231,12 +222,20 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  const nextStatus = ['branch_pending', 'confirm_pending'].includes(result.status) ? result.status : 'branch_pending';
+  // 未知 status 不再靜默放行成 branch_pending：可能讓「需確認」的任務未經確認就開工（違反 Rule 12）
+  if (!['branch_pending', 'confirm_pending'].includes(result.status)) {
+    await query(
+      `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+      [taskId, `分析 Agent 回傳未預期的 status：${result.status}`]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return true;
+  }
   await query(
     `UPDATE tasks SET status=$2, analysis_yaml=$3, updated_at=NOW() WHERE id=$1`,
-    [taskId, nextStatus, result.analysis_yaml]
+    [taskId, result.status, result.analysis_yaml]
   );
-  notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
+  notify.emitToUser(userId, 'task:updated', { taskId, status: result.status });
   return true;
 }
 
@@ -253,6 +252,9 @@ function shouldResumeFallback(err) {
 // 否則用 coding-project 全量 prompt。成功回傳 runClaude 的結果（含 sessionId），失敗 throw。
 async function runCodingOnce(task, info, userId, signal, resolution, { resume }) {
   const cwd = worktreeParent(info.root, task.task_id);
+  // 被下游退回重跑（resume，或帶著 retry_feedback）→ 升級 opus：同樣的腦袋再猜一次收斂率低，
+  // 換更強的腦袋比無差別重跑 sonnet 更省 token 又提高收斂（健檢 F escalate）。
+  const escalateModel = (resume || task.retry_feedback) ? 'opus' : null;
   if (resume) {
     const { gate, body } = distillFeedback(task.retry_feedback || '');
     const agent = loadAgent('coding-retry');
@@ -262,10 +264,10 @@ async function runCodingOnce(task, info, userId, signal, resolution, { resume })
       resolution: resolution || '（無）',
       commit_message: buildCommitMessage(task)
     }).trim();
-    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: agent.model, resumeSessionId: task.coding_session_id });
+    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id });
   }
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model });
 }
 
 async function runTaskCoding(taskId, userId, signal) {
@@ -335,7 +337,7 @@ async function runTaskCoding(taskId, userId, signal) {
     return true;
   }
 
-  const result = parseResult(raw);
+  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
   if (result?.status === 'qa_running') {
     await query(`UPDATE tasks SET status='qa_running', updated_at=NOW() WHERE id=$1`, [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'qa_running' });
@@ -350,4 +352,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, parseResult, latestResolution, distillFeedback, shouldResumeFallback };
+module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, latestResolution, distillFeedback, shouldResumeFallback };

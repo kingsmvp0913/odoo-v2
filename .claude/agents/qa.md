@@ -37,10 +37,10 @@ stage: qa
 
 【輸出】審查完成後輸出（不要其他多餘文字）：
 通過：
----RESULT-JSON---
+<result>
 {"verdict":"pass"}
----END-RESULT---
+</result>
 未通過：
----RESULT-JSON---
+<result>
 {"verdict":"fail","issues":["具體問題1","具體問題2"],"summary":"給實作 Agent 的修正指引（使用者看得懂）"}
----END-RESULT---
+</result>
