@@ -1,12 +1,15 @@
 const { query } = require('../db');
 const notify = require('../notify');
+const yaml = require('js-yaml');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
 const { getProjectInfo, worktreeParent } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
-const { parseAgentResult } = require('./agent-result');
 const { ensureEnvRunning } = require('./ensure-env');
+const { runTourTests } = require('./env-agent');
+const { classifyFailureWithAgent } = require('./failure-classifier');
+const { extractOdooError } = require('./deploy-testing');
 
 const PW_LIMIT = 3;
 
@@ -15,16 +18,36 @@ async function stopTask(taskId, userId, msg, blockerType = null) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
 }
 
-// Playwright E2E：依 SD 產測試計畫並打測試區實跑。
-// pass→review_pending；fail→退 coding 計數（滿 PW_LIMIT→stopped）；無 env／無有效結果→stopped。
-async function runPlaywrightAgent(taskId, userId, signal) {
+// tour 失敗屬程式問題：把報告餵回 coding 並加計數，滿 PW_LIMIT→stopped（沿用原 E2E 失敗語意）。
+async function bounceToCoding(task, taskId, userId, report) {
+  await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, `[E2E tour 未通過]\n${report}`]);
+  const nextCount = (task.pw_retry_count || 0) + 1;
+  if (nextCount >= PW_LIMIT) {
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_type='code', pw_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
+      [taskId, nextCount, `E2E tour 連續 ${PW_LIMIT} 次未通過，需人工介入。最後結果：${String(report).slice(0, 300)}`]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return;
+  }
+  const { bumpReentryOrStop } = require('./reentry');
+  if (await bumpReentryOrStop(taskId, userId)) return; // 總循環達上限 → 已標 stopped
+  await query(
+    "UPDATE tasks SET status='coding_running', pw_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+    [taskId, nextCount, `[E2E tour 未通過]\n${report}`]
+  );
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+}
+
+// E2E via Odoo 原生 tour（獨立階段）：agent 產 tour+HttpCase 寫入模組並 commit（副作用），
+// 再由 Node 跑 odoo-bin --test-enable 判 exit code；verdict 對映複用 deploy 的分類邏輯。
+async function runTourStage(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, project_id, git_branch, analysis_yaml, pw_retry_count FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
 
-  // 測試環境：未運行則自動啟動（與 deploy 階段一致），避免階段間被砍時 E2E 直接報錯
   if (!(await ensureEnvRunning(task.project_id))) {
     await stopTask(taskId, userId, '測試環境未運行且無法自動啟動，請至專案環境頁檢查', 'env');
     return true;
@@ -35,86 +58,64 @@ async function runPlaywrightAgent(taskId, userId, signal) {
     return true;
   }
 
-  // 登入憑證：全域固定 E2E 測試帳號（建立環境／同步使用者時已自動寫入測試區）
-  const info = await getProjectInfo(task.project_id);
-  const cwd = info?.root ? worktreeParent(info.root, task.task_id) : process.cwd();
-
-  let raw;
-  try {
-    const agent = loadAgent('playwright');
-    // 密碼（敏感值）不進 prompt，改以環境變數 E2E_PASSWORD 傳給子行程（健檢 E-1）
-    const prompt = agent.render({
-      analysis_yaml: task.analysis_yaml || '（無規格）',
-      test_url: env.url,
-      login: E2E_LOGIN
-    }).trim();
-    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD } });
-    raw = result.text;
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
-  } catch (err) {
-    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);
-    await stopTask(taskId, userId, stopReason('Playwright Agent 執行失敗', err));
+  let moduleName = '';
+  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; } catch { /* SD 解析失敗 */ }
+  if (!moduleName) {
+    await stopTask(taskId, userId, '無法從分析規格取得 module 名稱，無法產生 tour 測試', 'code');
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
+  // 1) tour-author agent：把 tour+HttpCase 寫進模組並 commit（結果由下方 exit code 判，不解析其文字）
+  const info = await getProjectInfo(task.project_id);
+  const cwd = info?.root ? worktreeParent(info.root, task.task_id) : process.cwd();
+  try {
+    const agent = loadAgent('playwright');
+    const prompt = agent.render({
+      analysis_yaml: task.analysis_yaml || '（無規格）',
+      test_url: env.url,
+      login: E2E_LOGIN,
+      module: moduleName
+    }).trim();
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD } });
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
+  } catch (err) {
+    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);
+    await stopTask(taskId, userId, stopReason('Tour 產生失敗', err));
+    return true;
+  }
 
-  if (result?.verdict === 'pass') {
+  // 2) Node 跑 tour（odoo-bin --test-enable），依 exit code 判定
+  const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
+  let log = '', err = null;
+  try { ({ log } = await runTourTests(task.project_id, moduleName)); } catch (e) { err = e; }
+
+  // transient（網路抖動/被砍）→ 自動重試一次，不佔計數（比照 deploy）
+  if (err && (await classifyFailureWithAgent(err.message, clsCtx)) === 'transient') {
+    err = null;
+    try { ({ log } = await runTourTests(task.project_id, moduleName)); } catch (e) { err = e; }
+  }
+
+  if (!err) {
+    // 防假綠燈：chrome 消失時 Odoo raise SkipTest（exit 0），log 會有此字樣＝tour 沒真的跑
+    if (/Chrome executable not found|unittest\.SkipTest/i.test(log)) {
+      await stopTask(taskId, userId, 'tour 被跳過（測試機找不到 Chrome），E2E 未實際執行。請確認測試環境已安裝 Google Chrome。', 'env');
+      return true;
+    }
     await query("UPDATE tasks SET status='review_pending', updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
     return true;
   }
 
-  if (result?.verdict === 'fail') {
-    const report = result.report || result.plan || '未提供細節';
-    // env 若已非 running（多半被夜間 shutdown 砍了／掛了），E2E 失敗是環境問題不是程式 bug——
-    // 不退 coding、不加 pw 計數，停下等環境恢復（健檢：夜間 shutdown 誤歸因）
-    const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
-    if (!env2 || env2.status !== 'running') {
-      await query(
-        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-        [taskId, `測試環境於 E2E 期間停止運行，屬環境問題（非程式碼），請恢復環境後重試。最後結果：${String(report).slice(0, 300)}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
-      return true;
-    }
-    // env 仍 running，但 agent 自報「根本無法完成測試」（連不上、登入進不去、逾時）＝環境/測試帳號問題，
-    // 非本次程式碼 bug——與 deploy 一致：不退 coding、不加 pw 計數，停下等人工修環境。
-    // 僅明確 failure_type==='env' 才走此路；缺值或其他值一律當 code（保守預設＝現行行為）。
-    if (result.failure_type === 'env') {
-      await query(
-        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-        [taskId, `E2E 無法完成測試，屬環境／測試帳號問題（非程式碼），請檢查測試環境與登入帳號後重試。最後結果：${String(report).slice(0, 300)}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
-      return true;
-    }
-    await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-      [taskId, `[E2E 測試未通過]\n${report}`]
-    );
-    const nextCount = (task.pw_retry_count || 0) + 1;
-    if (nextCount >= PW_LIMIT) {
-      await query(
-        "UPDATE tasks SET status='stopped', pw_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `E2E 連續 ${PW_LIMIT} 次未通過，需人工介入。最後結果：${String(report).slice(0, 300)}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
-    } else {
-      const { bumpReentryOrStop } = require('./reentry');
-      if (await bumpReentryOrStop(taskId, userId)) return true; // 總循環達上限 → 已標 stopped
-      // 失敗報告餵回 coding（與 QA／deploy 一致），否則重跑只能盲改（健檢 U4）
-      await query(
-        "UPDATE tasks SET status='coding_running', pw_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `[E2E 測試未通過]\n${report}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
-    }
+  // 失敗分類（比照 deploy）：env／env 已非 running → 停等修環境；code → 退 coding 計數
+  const cls = await classifyFailureWithAgent(err.message, clsCtx);
+  const odooErr = extractOdooError(err.message);
+  const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
+  if (cls !== 'code' || !env2 || env2.status !== 'running') {
+    await stopTask(taskId, userId, `E2E tour 期間屬環境問題（非程式碼），請恢復環境後重試。最後錯誤：${odooErr.slice(0, 500)}`, 'env');
     return true;
   }
-
-  await stopTask(taskId, userId, 'Playwright Agent 未回傳有效結果，請檢查 terminal 輸出');
+  await bounceToCoding(task, taskId, userId, odooErr);
   return true;
 }
 
-module.exports = { runPlaywrightAgent };
+module.exports = { runTourStage };
