@@ -104,3 +104,35 @@ test('code 失敗達 PW_LIMIT → stopped', async () => {
   await runTourStage(id, userId);
   expect((await statusOf(id)).status).toBe('stopped');
 });
+
+// --- 健檢：tour 失敗完整輸出不得永久遺失（比照 deploy-testing 的 saveDeployLog）---
+
+test('tour 失敗且分類 code → 完整 log 落地成檔，retry_feedback 附檔案路徑供事後鑑識', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  process.env.E2E_LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2elog-'));
+  try {
+    const err = new Error('AssertionError: 備註T 欄位不存在');
+    err.exitCode = 1; err.stdout = 'tour 執行 stdout 斷言細節'; err.stderr = 'AssertionError: 備註T 欄位不存在';
+    envAgent.runTourTests.mockRejectedValue(err);
+    classifier.classifyFailureWithAgent.mockResolvedValue('code');
+    const id = await makeTask(0);
+    await runTourStage(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT status, blocker_content, retry_feedback FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('coding_running');
+    const feedback = t.blocker_content || t.retry_feedback;
+    expect(feedback).toContain('完整 log：');
+    const logPath = feedback.match(/完整 log：(.+)$/m)[1].trim();
+
+    const files = fs.readdirSync(process.env.E2E_LOG_DIR);
+    expect(files.some(f => /^e2e-task.*\.log$/.test(f))).toBe(true);
+
+    const saved = fs.readFileSync(logPath, 'utf8');
+    expect(saved).toContain('exitCode: 1');
+    expect(saved).toContain('tour 執行 stdout 斷言細節'); // stdout 斷言細節不得丟棄
+  } finally {
+    delete process.env.E2E_LOG_DIR;
+  }
+});

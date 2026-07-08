@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const yaml = require('js-yaml');
@@ -13,19 +15,35 @@ const { extractOdooError } = require('./deploy-testing');
 
 const PW_LIMIT = 3;
 
+// 失敗診斷完整落地（比照 deploy-testing.js 的 saveDeployLog）：blocker/feedback 只留摘要，
+// 完整 stdout/stderr/exitCode 存檔供事後鑑識，避免 tour 斷言細節與 traceback 永久遺失。
+function saveTourLog(taskId, err) {
+  try {
+    const dir = process.env.E2E_LOG_DIR || path.join(__dirname, '..', '..', '..', 'data', 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `e2e-task${taskId}-${Date.now()}.log`);
+    fs.writeFileSync(file, [
+      `exitCode: ${err.exitCode ?? '?'}｜killed: ${err.killed ? 'yes' : 'no'}`,
+      '--- stderr ---', err.stderr || err.message || '(空)',
+      '--- stdout ---', err.stdout || '(空)'
+    ].join('\n'));
+    return file;
+  } catch { return null; }
+}
+
 async function stopTask(taskId, userId, msg, blockerType = null) {
   await query("UPDATE tasks SET status='stopped', blocker_type=$3, blocker_content=$2, updated_at=NOW() WHERE id=$1", [taskId, msg, blockerType]);
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
 }
 
 // tour 失敗屬程式問題：把報告餵回 coding 並加計數，滿 PW_LIMIT→stopped（沿用原 E2E 失敗語意）。
-async function bounceToCoding(task, taskId, userId, report) {
-  await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, `[E2E tour 未通過]\n${report}`]);
+async function bounceToCoding(task, taskId, userId, report, logRef = '') {
+  await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, `[E2E tour 未通過]\n${report}${logRef}`]);
   const nextCount = (task.pw_retry_count || 0) + 1;
   if (nextCount >= PW_LIMIT) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_type='code', pw_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
-      [taskId, nextCount, `E2E tour 連續 ${PW_LIMIT} 次未通過，需人工介入。最後結果：${String(report).slice(0, 300)}`]
+      [taskId, nextCount, `E2E tour 連續 ${PW_LIMIT} 次未通過，需人工介入。最後結果：${String(report).slice(0, 300)}${logRef}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return;
@@ -34,7 +52,7 @@ async function bounceToCoding(task, taskId, userId, report) {
   if (await bumpReentryOrStop(taskId, userId)) return; // 總循環達上限 → 已標 stopped
   await query(
     "UPDATE tasks SET status='coding_running', pw_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
-    [taskId, nextCount, `[E2E tour 未通過]\n${report}`]
+    [taskId, nextCount, `[E2E tour 未通過]\n${report}${logRef}`]
   );
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
 }
@@ -109,12 +127,14 @@ async function runTourStage(taskId, userId, signal) {
   // 失敗分類（比照 deploy）：env／env 已非 running → 停等修環境；code → 退 coding 計數
   const cls = await classifyFailureWithAgent(err.message, clsCtx);
   const odooErr = extractOdooError(err.message);
+  const logFile = saveTourLog(taskId, err);
+  const logRef = logFile ? `\n完整 log：${logFile}` : '';
   const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
   if (cls !== 'code' || !env2 || env2.status !== 'running') {
-    await stopTask(taskId, userId, `E2E tour 期間屬環境問題（非程式碼），請恢復環境後重試。最後錯誤：${odooErr.slice(0, 500)}`, 'env');
+    await stopTask(taskId, userId, `E2E tour 期間屬環境問題（非程式碼），請恢復環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}`, 'env');
     return true;
   }
-  await bounceToCoding(task, taskId, userId, odooErr);
+  await bounceToCoding(task, taskId, userId, odooErr, logRef);
   return true;
 }
 
