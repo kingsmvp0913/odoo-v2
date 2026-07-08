@@ -79,6 +79,12 @@ deploy 成功 (status=playwright_running)
 - 沿用 `execCmd`、`test_<dirName>` DB、`addonsPath`、`odooDbArgs()`、600s timeout。
 - 非 0 結束即 throw（含完整 log）供上層判定，與 `upgradeModules` 一致。
 
+### D｜chrome 前置（併入環境建置：`env-agent.js` `runEnvSetup`）
+- tour 的 `browser_js` 需 chrome/chromium 執行檔。Odoo 於 Windows **只認三個固定路徑**（`common.py` `ChromeBrowser.executable`），不吃 `CHROME_BIN`：
+  `%ProgramFiles%\Google\Chrome\Application\chrome.exe`、`%ProgramFiles(x86)%\...`、`%LocalAppData%\...`。
+- 本測試機已存在 `C:\Program Files\Google\Chrome\Application\chrome.exe`，符合第一路徑 → **零安裝、自動找到**（跨 Odoo 13→18 一致，版本安全）。
+- **關鍵雷（Rule 12）**：Odoo 找不到 chrome 時 `raise unittest.SkipTest`——tour 被**靜默跳過**、`odoo-bin` 仍 exit 0 → 假綠燈。故在 `runEnvSetup` 的 clone/venv/pip/init 之後加一步 `chromeCheck`：三路徑皆不存在 → env 標 `error`＋明確訊息（請安裝 Google Chrome），**不讓環境算就緒**。chrome 這件事在「環境就緒」時一次確定，E2E 階段不再處理。
+
 ### C｜階段串接：改寫 `playwright-agent.js` → `runTourStage()`
 - 開頭仍 `ensureEnvRunning`（沿用）。
 - 呼叫 A（透過 `runClaude` 讓 agent 寫 tour 並 commit）→ 再呼叫 B（`runTourTests`）。
@@ -89,7 +95,8 @@ deploy 成功 (status=playwright_running)
 
 - **pass**：odoo-bin exit 0（模組裝好且 tour 全過）。
 - **code**：log 出現 tour step 失敗／斷言不符／模組載入錯 → 退 coding。
-- **env**：連不上 DB、**odoo 找不到 chromium（browser_js 需要）**、env 起不來 → stopped/env，明確報錯（Rule 12 fail loud），log 落地 `data/logs`（沿用 `saveDeployLog` 模式）。
+- **env**：連不上 DB、env 起不來 → stopped/env，明確報錯（Rule 12 fail loud），log 落地 `data/logs`（沿用 `saveDeployLog` 模式）。chrome 缺失已於環境建置擋下（見 D），不會走到這裡。
+- **防假綠燈（Rule 12）**：exit 0 還要確認 tour **確實執行**——log 需出現該 tour 名稱且非 `skipped`／`0 tests`；只要偵測到 tour 被 skip（chrome 意外消失等）即判 env，不得當 pass。
 
 ## 7. 測試（Rule 9：測意圖）
 
@@ -99,15 +106,16 @@ deploy 成功 (status=playwright_running)
 
 ## 8. 推進步驟（實作計畫再細分）
 
-1. `runTourTests()` ＋ 單元測試（args 含 test-enable/test-tags）。
-2. 改 `playwright-agent.js` → `runTourStage`：串 A→B，複用 deploy 的 verdict 對映＋測試。
-3. 改寫 `playwright.md`：tour-author 規則（含 HttpCase 備資料、manifest 資產、只寫測試檔）。
-4. 一次性人工 smoke（樣本 tour 綠燈）。
-5. 清理殘留 worktree 舊 `e2e_*.spec.js`（可選收尾）。
+1. `runEnvSetup` 加 `chromeCheck` 步驟＋單元測試（三路徑皆缺 → env error）。
+2. `runTourTests()` ＋ 單元測試（args 含 test-enable/test-tags）。
+3. 改 `playwright-agent.js` → `runTourStage`：串 A→B，複用 deploy 的 verdict 對映；含防假綠燈（tour 非 skipped）＋測試。
+4. 改寫 `playwright.md`：tour-author 規則（含 HttpCase 備資料、manifest 資產、只寫測試檔）。
+5. 一次性人工 smoke（樣本 tour 綠燈）。
+6. 清理殘留 worktree 舊 `e2e_*.spec.js`（可選收尾）。
 
 ## 9. 風險
 
-- **chromium 供給**：`browser_js` 需 odoo 能起 headless chrome；缺則歸 env 並 fail loud，實作前先確認測試機已具備。
+- **chromium 供給**：測試機**已有** `C:\Program Files\Google\Chrome\Application\chrome.exe`（符合 Odoo 首選路徑），零安裝。真正風險是「chrome 消失 → tour 靜默 skip → 假綠燈」，已由 D（環境建置檢查）＋ §6 防假綠燈雙重擋下。
 - **tour DSL 撰寫品質**：agent 產 tour 需良好 prompt 範例；比瀏覽器導覽可預期，但仍需人工 smoke 把關。
 - **前置資料**：複雜流程要在 HttpCase `setUp` 用 ORM 備資料，prompt 需明確指引（比 UI 建資料穩）。
 - **與 deploy 重疊**：E2E 會對已升級模組再跑一次 `-u --test-enable`；可接受。若要更省，未來可評估「deploy 直接帶 --test-enable」把兩段併一（本次不做，保留 deploy/e2e 計數分離）。
