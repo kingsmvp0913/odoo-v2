@@ -121,9 +121,36 @@ function sshExec(conn, command) {
   });
 }
 
+// direct 模式：pg 直連 TCP，不經 SSH/docker。以 rowMode:'array' 讓回傳格式對齊 CSV 路徑。
+async function runDirect(conn, sql) {
+  const { Client } = require('pg');
+  const client = new Client({
+    host: conn.db_host,
+    port: conn.db_port || 5432,
+    user: conn.db_user,
+    password: conn.db_password || '',
+    database: conn.db_name,
+    ssl: conn.db_ssl ? { rejectUnauthorized: false } : false,
+    connectionTimeoutMillis: 15000,
+    statement_timeout: 120000,
+  });
+  try {
+    await client.connect();
+    const res = await client.query({ text: sql, rowMode: 'array' });
+    const columns = (res.fields || []).map(f => f.name);
+    const rows = (res.rows || []).map(r => r.map(c => (c === null || c === undefined) ? '' : String(c)));
+    return { ok: true, columns, rows, row_count: rows.length };
+  } catch (e) {
+    return { ok: false, error: `[DIRECT] ${e.message}` };
+  } finally {
+    try { await client.end(); } catch { /* ignore close errors */ }
+  }
+}
+
 async function runSelect(conn, sql) {
   const err = validateSelectOnly(sql);
   if (err) return { ok: false, error: err };
+  if ((conn.connect_mode || 'docker') === 'direct') return runDirect(conn, sql);
   const cmd = buildPsqlCmd(conn, sql);
   let res;
   try { res = await sshExec(conn, cmd); }
@@ -135,4 +162,4 @@ async function runSelect(conn, sql) {
   return { ok: true, columns: parsed[0] || [], rows: parsed.slice(1), row_count: Math.max(0, parsed.length - 1) };
 }
 
-module.exports = { validateSelectOnly, stripSqlLiterals, buildPsqlCmd, parseCsv, runSelect };
+module.exports = { validateSelectOnly, stripSqlLiterals, buildPsqlCmd, parseCsv, runSelect, runDirect };

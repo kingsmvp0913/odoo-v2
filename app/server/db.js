@@ -288,11 +288,19 @@ async function migrate() {
     { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
+    // 主題 E：每專案專用 E2E 測試帳號（取代使用者真實密碼登入測試區）
+    { table: 'projects', col: 'e2e_test_login',        sql: 'ALTER TABLE projects ADD COLUMN e2e_test_login TEXT' },
+    { table: 'projects', col: 'e2e_test_password_enc', sql: 'ALTER TABLE projects ADD COLUMN e2e_test_password_enc TEXT' },
     { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
     { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" },
     { table: 'project_chats', col: 'user_id', sql: 'ALTER TABLE project_chats ADD COLUMN user_id INTEGER REFERENCES users(id)' },
     { table: 'project_chats', col: 'last_read_message_id', sql: 'ALTER TABLE project_chats ADD COLUMN last_read_message_id INTEGER NOT NULL DEFAULT 0' },
     { table: 'db_connections', col: 'ssh_key_enc', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_key_enc TEXT' },
+    // direct 連線模式（DBeaver 直連 TCP）：不經 SSH，pg 直連
+    { table: 'db_connections', col: 'db_host',         sql: 'ALTER TABLE db_connections ADD COLUMN db_host TEXT' },
+    { table: 'db_connections', col: 'db_port',         sql: 'ALTER TABLE db_connections ADD COLUMN db_port INTEGER DEFAULT 5432' },
+    { table: 'db_connections', col: 'db_password_enc', sql: 'ALTER TABLE db_connections ADD COLUMN db_password_enc TEXT' },
+    { table: 'db_connections', col: 'db_ssl',          sql: 'ALTER TABLE db_connections ADD COLUMN db_ssl BOOLEAN DEFAULT false' },
     { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
     { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" }
   ];
@@ -317,6 +325,17 @@ async function migrate() {
          UPDATE token_usage tu SET project_id = t.project_id
          FROM tasks t
          WHERE tu.project_id IS NULL AND tu.task_id = t.task_id AND t.project_id IS NOT NULL;
+       END IF;
+     END $$;`
+  ).catch(() => {});
+
+  // 主題 E：停止持有使用者可還原密碼——清空既有 users.password_enc（E2E 改用每專案專用測試帳號）。
+  // 索引探針短路：無非 NULL 列就跳過，避免每次啟動空跑 UPDATE。
+  await query(
+    `DO $$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM users WHERE password_enc IS NOT NULL LIMIT 1) THEN
+         UPDATE users SET password_enc = NULL WHERE password_enc IS NOT NULL;
        END IF;
      END $$;`
   ).catch(() => {});
