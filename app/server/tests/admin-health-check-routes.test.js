@@ -35,6 +35,13 @@ test('401 未帶 token / 403 非 admin', async () => {
   expect((await request(app).post('/api/admin/health-check').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
 });
 
+test('GET 健檢路由 401 未帶 token / 403 非 admin', async () => {
+  expect((await request(app).get('/api/admin/health-check')).status).toBe(401);
+  expect((await request(app).get('/api/admin/health-check').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
+  expect((await request(app).get('/api/admin/health-check/1')).status).toBe(401);
+  expect((await request(app).get('/api/admin/health-check/1').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
+});
+
 test('POST → 建 run(running)、回 runId、背景觸發 runHealthCheck', async () => {
   const res = await request(app).post('/api/admin/health-check').set('Authorization', `Bearer ${adminToken}`).send({ windowDays: 14 });
   expect(res.status).toBe(200);
