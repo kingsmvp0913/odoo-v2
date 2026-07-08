@@ -51,11 +51,15 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
   if (!finding) {
     finding = { severity: 'error', diagnosis: '健檢失敗：無法取得有效診斷', suggested_prompt: null, rationale: null };
   }
-  await query(
-    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [runId, agent.name, agent.label, finding.diagnosis, finding.severity, finding.suggested_prompt, finding.rationale]
-  );
+  try {
+    await query(
+      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [runId, agent.name, agent.label, finding.diagnosis, finding.severity, finding.suggested_prompt, finding.rationale]
+    );
+  } catch (err) {
+    console.error('[HEALTH-CHECK]', err.message);
+  }
 }
 
 module.exports = { runHealthCheck };

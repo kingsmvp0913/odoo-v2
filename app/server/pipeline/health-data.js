@@ -15,7 +15,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
             COALESCE(SUM(output_tokens),0)::int AS output_tokens,
             COALESCE(SUM(cache_read_tokens),0)::int AS cache_read,
             COALESCE(AVG(duration_ms),0)::int   AS avg_duration_ms,
-            SUM(CASE WHEN status <> 'completed' THEN 1 ELSE 0 END)::int AS failed_calls
+            COALESCE(SUM(CASE WHEN status <> 'completed' THEN 1 ELSE 0 END),0)::int AS failed_calls
        FROM token_usage
       WHERE agent_type = $1 AND recorded_at >= $2`,
     [stage, cutoff]
@@ -49,7 +49,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
       max: re.length ? Math.max(...re) : 0,
       avg: re.length ? Math.round((re.reduce((a, b) => a + b, 0) / re.length) * 100) / 100 : 0
     },
-    blocker_samples: taskRows.map(r => r.blocker_content).filter(Boolean).slice(0, SAMPLE)
+    blocker_samples: taskRows.map(r => r.blocker_content).filter(Boolean).slice(0, SAMPLE).map(s => String(s).slice(0, 500))
   };
 
   let rejections = null;

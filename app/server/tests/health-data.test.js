@@ -65,4 +65,5 @@ test('非 coding/analysis 的 agent → rejections 為 null', async () => {
   const s = await buildAgentSummary({ name: 'qa', stage: 'qa', label: 'QA' }, { windowDays: 30 });
   expect(s.rejections).toBeNull();
   expect(s.token.calls).toBe(0);
+  expect(s.token.failed_calls).toBe(0);
 });
