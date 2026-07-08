@@ -242,6 +242,17 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
+        <!-- 工作流程健檢 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">工作流程健檢</div>
+            <div class="setting-block-desc">分析各 pipeline agent 近期表現，提出提示詞改進建議。</div>
+          </div>
+          <div class="setting-block-footer" style="border-top:none;padding-top:0">
+            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/health')">前往健檢 →</button>
+          </div>
+        </div>
+
       </div>
     </div>
   `
