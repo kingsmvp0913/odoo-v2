@@ -7,6 +7,7 @@ const { hashPassword } = require('./password');
 const { encryptSafe } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
+const { runHealthCheck } = require('./pipeline/health-check-runner');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -271,6 +272,45 @@ function registerRoutes(app) {
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message });
     }
+  });
+
+  // --- 工作流程健檢（子專案 2）：admin 一鍵，背景對每個 pipeline agent 出診斷 ---
+
+  app.post('/api/admin/health-check', auth, async (req, res) => {
+    try {
+      const windowDays = Math.max(1, parseInt(req.body?.windowDays, 10) || 30);
+      const { rows: [r] } = await query(
+        "INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,$2) RETURNING id",
+        [windowDays, req.userId]
+      );
+      // fire-and-forget：不 await，runner 自行落 status='done'/'error'
+      runHealthCheck(r.id, { windowDays, startedBy: req.userId }).catch(() => {});
+      res.json({ runId: r.id });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/admin/health-check', auth, async (_req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
+                COUNT(f.id)::int AS findings_count
+           FROM health_check_runs r
+           LEFT JOIN health_check_findings f ON f.run_id = r.id
+          GROUP BY r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at
+          ORDER BY r.id DESC LIMIT 20`
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/admin/health-check/:runId', auth, async (req, res) => {
+    try {
+      const { rows: [run] } = await query('SELECT * FROM health_check_runs WHERE id=$1', [req.params.runId]);
+      if (!run) return res.status(404).json({ error: 'run 不存在' });
+      const { rows: findings } = await query(
+        'SELECT * FROM health_check_findings WHERE run_id=$1 ORDER BY id', [req.params.runId]);
+      res.json({ run, findings });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // 中文名稱對照表（stage → label），供用量報表等全站顯示；一般登入即可讀
