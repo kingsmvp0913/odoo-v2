@@ -247,6 +247,28 @@ async function migrate() {
       category      TEXT NOT NULL,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+
+    // 工作流程健檢 agent（子專案 2）：admin 一鍵健檢的一次執行＋每 agent 診斷 finding。
+    `CREATE TABLE IF NOT EXISTS health_check_runs (
+      id           SERIAL PRIMARY KEY,
+      status       TEXT NOT NULL DEFAULT 'running',   -- running | done | error
+      window_days  INTEGER NOT NULL DEFAULT 30,
+      started_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at  TIMESTAMPTZ
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS health_check_findings (
+      id                SERIAL PRIMARY KEY,
+      run_id            INTEGER NOT NULL REFERENCES health_check_runs(id) ON DELETE CASCADE,
+      agent_name        TEXT NOT NULL,
+      agent_label       TEXT,
+      diagnosis         TEXT NOT NULL,
+      severity          TEXT NOT NULL,                -- ok | low | medium | high | error
+      suggested_prompt  TEXT,
+      rationale         TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -389,6 +411,9 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_rej_status     ON task_rejections (status)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_project    ON task_rejections (project_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_items_rid  ON rejection_items (rejection_id)').catch(() => {});
+
+  // health_check_runs / health_check_findings（工作流程健檢）
+  await query('CREATE INDEX IF NOT EXISTS idx_hcf_run ON health_check_findings (run_id)').catch(() => {});
 
   // wiki_pages indexes
   await query('CREATE INDEX IF NOT EXISTS idx_wiki_parent ON wiki_pages (parent_id)').catch(() => {});
