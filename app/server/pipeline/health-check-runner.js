@@ -18,6 +18,7 @@ async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {})
     }
     await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
   } catch (err) {
+    console.error('[HEALTH-CHECK]', err.message);
     await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]).catch(() => {});
   }
 }
@@ -36,7 +37,7 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
     const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model });
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
     const parsed = await parseAgentResult(text, { parse: JSON.parse });
-    if (parsed && typeof parsed.diagnosis === 'string' && SEVERITIES.has(parsed.severity)) {
+    if (parsed && typeof parsed.diagnosis === 'string' && parsed.diagnosis.trim() && SEVERITIES.has(parsed.severity)) {
       finding = {
         severity: parsed.severity,
         diagnosis: parsed.diagnosis,
