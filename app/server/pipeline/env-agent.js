@@ -302,6 +302,30 @@ async function upgradeModules(projectId, modules) {
   return { ok: true, log: out };
 }
 
+// E2E via tour：與升級同一條 odoo-bin 指令，加 --test-enable 觸發 tour、--test-tags 只跑本模組測試。
+// exit 非 0（tour/斷言失敗或載入錯）由 execCmd throw，供上層依 deploy 同套邏輯分類。
+async function runTourTests(projectId, moduleName) {
+  if (!moduleName) throw new Error('未指定 module，無法執行 tour 測試');
+  const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id = $1', [projectId]);
+  if (!project) throw new Error('project not found');
+  const dirName = project.folder_name || project.name;
+  const envDir = path.join(ENV_BASE, dirName);
+  const srcDir = path.join(envDir, 'src');
+  const odooBin = path.join(srcDir, 'odoo-bin');
+  const dbName = `test_${dirName}`;
+  const extraAddons = await projectAddonsPaths(projectId);
+  const addonsPath = [path.join(srcDir, 'addons'), ...extraAddons].join(',');
+  const isWin = process.platform === 'win32';
+  const venvPython = path.join(envDir, 'venv', isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
+  if (!fs.existsSync(venvPython)) throw new Error('環境尚未建立，請先建立測試環境');
+  const out = await execCmd(venvPython, [
+    odooBin, '-i', moduleName, '-u', moduleName, '-d', dbName, '--stop-after-init',
+    '--test-enable', '--test-tags', `/${moduleName}`,
+    '--addons-path', addonsPath, ...odooDbArgs()
+  ]);
+  return { ok: true, log: out };
+}
+
 async function stopEnv(projectId) {
   const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
   if (!env) return;
@@ -366,4 +390,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
+module.exports = { runEnvSetup, upgradeModules, runTourTests, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
