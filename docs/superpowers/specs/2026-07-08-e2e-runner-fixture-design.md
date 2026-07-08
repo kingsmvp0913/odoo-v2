@@ -1,11 +1,12 @@
-# E2E 測試改造：固定 runner ＋ 共用 fixture
+# E2E 測試改造：改用 Odoo 原生 tour（HttpCase + --test-enable）
 
 日期：2026-07-08
-狀態：設計已核可（架構＋導覽策略），待複審後進實作計畫
+狀態：架構已核可（原生 tour），待複審後進實作計畫
+沿革：初版設計為「Playwright 固定 runner ＋ fixture」；查證業界成熟做法後改採 Odoo 官方 tour（見 §2 決策）。
 
 ## 1. 問題（來自實測歷程）
 
-以「報價單客戶下增加備註T欄位」單（`manual_1783326354710`）為樣本，追三次 E2E：
+以「報價單客戶下增加備註T欄位」單（`manual_1783326354710`）追三次 E2E：
 
 | 次 | 腳本用的 URL | 結果 | 真因 |
 |---|---|---|---|
@@ -13,98 +14,106 @@
 | run2 05:50 | `localhost:8069` | connection refused | 該埠無服務 |
 | run3 07:22 | `127.0.0.3:8070`（agent 手動改成注入值） | 登入成功但導覽鬼打牆 6.5 分後被手動暫停（記為 aborted / 0 token） |
 
-根因（系統性，非單一單）：
+根因（系統性）：agent 每次用 `require('playwright')` + `chromium.launch()` 手刻瀏覽器腳本、沿用 worktree 寫死 URL 的舊 spec、踩 `networkidle` 永不 idle、失敗就連寫 `diag.js`→`diag11.js` 共 11 支拋棄式探針、又試 `/odoo/sales` 漂亮路由 404。時間與 token 全燒在「重新摸索怎麼驅動這台 Odoo 的 UI」。
 
-1. **沒有固定 harness**：專案無 `playwright.config`、無人用 `@playwright/test`；agent 每次用 `require('playwright')` + `chromium.launch()` 手刻腳本並 `node xxx.spec.js` 跑。
-2. **沿用寫死 URL 的舊 spec**：worktree 殘留上一輪 spec（`localhost:8069` 寫死），多個 worktree 皆有（`manual_1783319749063`、`manual_1783326354710`），每張單重演打錯埠。
-3. **手刻等待必踩雷**：`waitForLoadState('networkidle')` 在 Odoo（longpolling/bus）永不 idle → 30s timeout；找不到元素 → 20s timeout。
-4. **失敗反射是再寫 diag 腳本**：run3 連寫 `diag.js`→`diag11.js` 共 11 支拋棄式探針，每支付 20–30s timeout＝ token 與時間主要黑洞。
-5. **漂亮路由假設錯**：agent 試 `/odoo/sales`、`/odoo/apps` 全 404（該台走 hash 路由）。
-6. **prompt 沒規範怎麼跑**：`playwright.md` 只說「用 Playwright 撰寫測試腳本」，agent 自由發揮成上述反模式。
+## 2. 決策：為何改用原生 tour
 
-## 2. 目標與成功標準
+查證兩條成熟做法後（見 §10 出處）：
 
-- **省 token**：agent 只寫「本次變更的斷言」（數行），不寫 harness、不寫 diag 腳本。
-- **穩定**：以 `@playwright/test` 的 web-first `expect().toBeVisible()` 自動重試取代手動 timeout；不再出現 networkidle 卡死。
-- **準確**：一律打注入的 `test_url`，不可能打錯埠；pass/fail 由 playwright exit code 判定，不靠 LLM 自述。
-- **自動化**：pipeline 依 `npx playwright test` 的 exit code ＋ JSON reporter 取結果。
+- **Odoo 官方 E2E 就是 tour**：tour JS + `HttpCase.browser_js`/`start_tour`，用 `odoo-bin ... --test-enable --test-tags` 跑，**exit code 即 pass/fail**。跑在**交易內**（測完 rollback、不污染資料），用 **Odoo 自己的 tour 引擎等待/選元素**。官方文件明講「路由或跨 App 的變更，優先用 integration tour」。
+- 業界 Playwright 最佳實踐（storageState 登入一次複用、`getByRole`、禁 `networkidle`）雖能穩住外部瀏覽器測試，但**仍要維護登入/導覽/瀏覽器安裝**。
 
-成功判準：對同一「加欄位」型任務重跑，E2E 單次 < 60s、無 diag 腳本、無寫死 URL、verdict 來自 exit code。
+**結論（Rule 7 擇一）**：本 pipeline 的任務全是純 Odoo 模組行為（加欄位、欄位位置、存檔、報表），tour 為此量身打造，且**從根本消除**我們踩到的整類問題——登入、導覽、路由、networkidle、找按鈕、diag 腳本全部不再存在，因為測試跑在 Odoo 內部的已認證 session 與 tour 引擎裡。Playwright 路線**明確擱置**，未來若出現「tour 做不到、需跨系統/外部頁」場景再議。
 
-## 3. 非目標（YAGNI）
+## 3. 目標與成功標準
 
-- **不加 `routing_mode` DB 欄位**：fixture 用 app-switcher UI 點擊導覽，跨 Odoo 版本通用，不碰 `/odoo/<slug>` 也不寫死 action id。
-- 不改 pipeline 的階段流轉（pass→review_pending、fail→退 coding、env→stopped 全部沿用）。
-- 不動 `parseAgentResult` 的 `<result>` JSON 協定（見 §6，agent 仍回同格式，只是來源改為 exit code）。
+- **省 token**：agent 只寫一支 tour（step 陣列）＋一支 `HttpCase`，不寫瀏覽器 harness、不寫 diag 腳本、不做導覽試錯。
+- **穩定**：由 Odoo tour 引擎負責等待與選元素；無 networkidle、無手動 timeout、無寫死 URL/埠。
+- **準確**：pass/fail 由 `odoo-bin --test-enable` 的 exit code 判定，不靠 LLM 自述。
+- **自動化**：Node 端跑 odoo-bin、讀 exit code ＋ log，沿用現行 deploy 的失敗分類與階段流轉。
+
+成功判準：對同型任務重跑，E2E 無瀏覽器手刻腳本、無 diag、verdict 來自 exit code，且測試檔隨模組進 git（版控、可回歸）。
 
 ## 4. 架構
 
+E2E 階段 = 「**tour 撰寫（LLM）**」＋「**測試執行（Node，確定性）**」兩段，接在 deploy 之後、沿用同一台測試區 DB。
+
 ```
-env.url ──┐
-E2E_LOGIN ─┼─ (playwright-agent.js 注入 env + cwd) ──► e2e-runner/（固定，不在 repo/worktree）
-E2E_PASSWORD┘                                          ├─ playwright.config.js  (baseURL=E2E_BASE_URL)
-                                                       ├─ fixtures.js           (login / openApp)
-                                                       └─ tests/<task_id>.spec.js（agent 每次覆寫，只寫斷言）
-                                                            │
-                                              npx playwright test ──► exit code + JSON report ──► verdict
+deploy 成功 (status=playwright_running)
+        │
+        ▼
+ tour-author agent（LLM）───► 寫入模組（worktree）：
+   · <module>/static/tests/tours/<name>.js   （tour steps＋斷言）
+   · <module>/tests/test_<name>.py           （HttpCase：Python 先備資料 → start_tour）
+   · <module>/tests/__init__.py
+   · __manifest__.py 註冊 web.assets_tests   （tour JS 資產）
+   → git commit 到 task 分支
+        │
+        ▼
+ runTourTests()（Node，複用 env-agent execCmd）：
+   venvPython odoo-bin -i/-u <mod> -d test_<dir> --stop-after-init \
+     --test-enable --test-tags /<module> --addons-path … <odooDbArgs>
+   → exit code ＋ log
+        │
+        ▼
+ verdict（複用 deploy 的 extractOdooError / classifyFailureWithAgent）：
+   exit 0                      → review_pending
+   tour/斷言失敗（code）        → 退 coding 計數（滿 PW_LIMIT→stopped）
+   env（chromium 缺/連不上/起不來）→ stopped, blocker_type=env
 ```
 
 ## 5. 元件與介面
 
-### B-1｜固定 E2E runner：`app/server/pipeline/e2e-runner/`
-- 位置刻意在 repo/worktree 之外——E2E 只靠 URL 打已部署測試區，不需原始碼；徹底根除「沿用 worktree 舊 spec」。
-- `package.json` + `playwright.config.js`：
-  - `use.baseURL = process.env.E2E_BASE_URL`
-  - `use.trace = 'on-first-retry'`、`retries: 1`、`use.actionTimeout` 合理值
-  - `reporter: [['json', { outputFile: 'report.json' }]]`、`testDir: 'tests'`
-- `@playwright/test` ＋ chromium 由 `ensureE2eRunner()` 一次性安裝（見 B-3）。
-- 版控：commit `package.json`/config/fixtures；**不 commit** `node_modules`、`tests/*`、`report.json`（列入 `.gitignore`）。
+### A｜tour-author agent：改寫 `.claude/agents/playwright.md`
+- 職責改為：依 analysis_yaml 為**本次新行為**產出 tour，寫入模組並 commit。
+- prompt 硬規則：
+  - tour 放 `<module>/static/tests/tours/<name>.js`，用標準 tour step（`trigger`/`run`/`content`），斷言用 tour 內建等待（不自行 sleep）。
+  - `HttpCase` 放 `<module>/tests/test_<name>.py`，**需要前置資料時在 Python `setUp` 建立**（如先建一張 sale.order），再 `self.start_tour(url, 'tour_name', login=...)`。
+  - 於 `__manifest__.py` 的 `assets['web.assets_tests']` 註冊 tour JS。
+  - 只新增測試檔，**不改動功能程式**；完成後 commit 到 task 分支。
+  - 禁止：`require('playwright')`/`chromium`、寫死 URL/埠、額外 diag 腳本。
+- 已知取捨：tour DSL 有學習成本，但比「驅動瀏覽器」遠為受限、可預期；Odoo 18 除錯模式有 tour 錄製器可輔助人工修。
 
-### B-2｜共用 fixture：`e2e-runner/fixtures.js`
-- `login(page)`：導向 `${baseURL}/web/login`，填 `process.env.E2E_LOGIN` / `process.env.E2E_PASSWORD`；以 `expect(登入後 shell locator).toBeVisible()` 確認；**禁用 `networkidle`**；密碼不印出。
-- `openApp(page, appName)`：點 app-switcher（home menu 按鈕）後點文字 = `appName` 的 App 磚。跨版本通用。
-- 導出 `test`/`expect`（re-export 自 `@playwright/test`）供 spec 直接引用。
-- 已知取捨（使用者已接受）：`openApp` 靠 App 顯示名稱（語系相依）；若日後多語系造成不穩，改由 task spec 自帶導覽目標。
+### B｜測試執行：`runTourTests(projectId, moduleName)`（新，`env-agent.js` 內，`upgradeModules` 的姊妹）
+- 組指令＝現行 `upgradeModules` 指令 ＋ `--test-enable --test-tags /<moduleName>`。
+- 沿用 `execCmd`、`test_<dirName>` DB、`addonsPath`、`odooDbArgs()`、600s timeout。
+- 非 0 結束即 throw（含完整 log）供上層判定，與 `upgradeModules` 一致。
 
-### A｜prompt：`.claude/agents/playwright.md`
-- 縮為硬規則，不再複製 B 的導覽知識（B 為知識本體，避免 drift）：
-  - 測試寫入 `tests/<task_id>.spec.js`，`import { test, expect, login, openApp } from '../fixtures'`（或相對 fixtures 路徑）。
-  - **只寫本次變更帶來的新行為斷言**；用 `expect().toBeVisible()` 等 web-first 斷言。
-  - 禁止：`waitForLoadState('networkidle')`、寫死任何 URL/埠、`chromium.launch()` 手刻、另寫 diag/debug 腳本。
-  - 收尾一律 `npx playwright test tests/<task_id>.spec.js`，依其 exit code ＋ `report.json` 定 verdict。
-
-### C（重新定義）｜URL 紀律：`playwright-agent.js`
-- 原本 `cwd = worktreeParent(...)` → 改為指向 `e2e-runner/`。
-- 注入 env：`{ E2E_BASE_URL: env.url, E2E_LOGIN, E2E_PASSWORD }`。
-- 帳號本無壞；只要永遠打注入 URL，run1/run2「打錯埠」不再發生。
-
-### B-3｜`ensureE2eRunner()`（新，`e2e-runner` 內或旁）
-- 冪等：`node_modules`/chromium 缺才 `npm install` ＋ `npx playwright install chromium`；與 `ensureEnvRunning` 同風格，於 `runPlaywrightAgent` 開頭呼叫。
+### C｜階段串接：改寫 `playwright-agent.js` → `runTourStage()`
+- 開頭仍 `ensureEnvRunning`（沿用）。
+- 呼叫 A（透過 `runClaude` 讓 agent 寫 tour 並 commit）→ 再呼叫 B（`runTourTests`）。
+- verdict 對映**完全複用** deploy 既有邏輯：`extractOdooError` 抽錯、`classifyFailureWithAgent` 分 code/env/transient、transient 自動重試一次。
+- 階段流轉沿用現況：pass→review_pending；code→退 coding（`pw_retry_count`，滿 `PW_LIMIT`→stopped）；env→stopped(blocker_type=env)。**不改** runner/DB schema。
 
 ## 6. 判定與錯誤處理
 
-- `runPlaywrightAgent` 沿用現行分支（pass→review_pending；fail→退 coding／計數；env→stopped），**不改**。
-- agent 仍回：`<result>{"verdict":"pass|fail","failure_type":"code|env","plan":...,"report":...}</result>`，但來源改為確定性訊號：
-  - playwright exit 0 → `pass`。
-  - 斷言失敗（report 有 failed assertions）→ `fail` / `failure_type:code`。
-  - 連不上 baseURL、登入 fixture 失敗 → `fail` / `failure_type:env`。
-- report 摘要（哪個 spec/step、預期 vs 實際）取自 `report.json`，不需 LLM 重述細節。
+- **pass**：odoo-bin exit 0（模組裝好且 tour 全過）。
+- **code**：log 出現 tour step 失敗／斷言不符／模組載入錯 → 退 coding。
+- **env**：連不上 DB、**odoo 找不到 chromium（browser_js 需要）**、env 起不來 → stopped/env，明確報錯（Rule 12 fail loud），log 落地 `data/logs`（沿用 `saveDeployLog` 模式）。
 
 ## 7. 測試（Rule 9：測意圖）
 
-- `playwright-agent.test.js`（擴充）：mock `runClaude`，斷言以 `cwd=e2e-runner`、`env.E2E_BASE_URL=env.url` 呼叫——鎖住「永遠打注入 URL」這個意圖，改壞會紅。
-- `ensure-e2e-runner.test.js`（新）：node_modules 存在時跳過安裝（冪等），缺時觸發安裝指令（mock exec）。
-- fixture 針對真實 Odoo 的行為：無法在 pg-mem/jest 內單元化 → 列為一次性人工 smoke（對 running 測試區跑一支樣本 spec 驗 login+openApp），記錄於 runner README。
+- `env-agent.test.js`（擴充）：mock `execCmd`，斷言 `runTourTests` 送出的 args **含 `--test-enable` 與 `--test-tags /<module>`** 且 DB＝`test_<dir>`——鎖住「用 Odoo 官方 test runner 對正確 DB 跑」的意圖。
+- `playwright-agent.test.js`（改）：mock A/B，驗 exit 0→review_pending、code→coding_running＋計數、env→stopped/env 三路對映不回歸。
+- 真實 tour 對 running 測試區：列一次性人工 smoke（跑一支樣本 tour 驗綠燈），記於實作 PR 說明。
 
 ## 8. 推進步驟（實作計畫再細分）
 
-1. 建 `e2e-runner/`（config + fixtures + package.json + .gitignore + README），本地對 running 測試區 smoke 過。
-2. `ensureE2eRunner()` ＋ 單元測試。
-3. 改 `playwright-agent.js`：cwd/env 注入 ＋ 擴充測試。
-4. 改寫 `playwright.md` prompt。
-5. 清理殘留 worktree 舊 spec（`e2e_*.spec.js`）為可選收尾。
+1. `runTourTests()` ＋ 單元測試（args 含 test-enable/test-tags）。
+2. 改 `playwright-agent.js` → `runTourStage`：串 A→B，複用 deploy 的 verdict 對映＋測試。
+3. 改寫 `playwright.md`：tour-author 規則（含 HttpCase 備資料、manifest 資產、只寫測試檔）。
+4. 一次性人工 smoke（樣本 tour 綠燈）。
+5. 清理殘留 worktree 舊 `e2e_*.spec.js`（可選收尾）。
 
 ## 9. 風險
 
-- App 顯示名稱語系相依（見 B-2 取捨）。
-- runner 首次安裝 chromium 耗時／需網路 → `ensureE2eRunner` 需 log 進度並在失敗時歸為 env、明確報錯（Rule 12 fail loud）。
+- **chromium 供給**：`browser_js` 需 odoo 能起 headless chrome；缺則歸 env 並 fail loud，實作前先確認測試機已具備。
+- **tour DSL 撰寫品質**：agent 產 tour 需良好 prompt 範例；比瀏覽器導覽可預期，但仍需人工 smoke 把關。
+- **前置資料**：複雜流程要在 HttpCase `setUp` 用 ORM 備資料，prompt 需明確指引（比 UI 建資料穩）。
+- **與 deploy 重疊**：E2E 會對已升級模組再跑一次 `-u --test-enable`；可接受。若要更省，未來可評估「deploy 直接帶 --test-enable」把兩段併一（本次不做，保留 deploy/e2e 計數分離）。
+
+## 10. 出處
+
+- Odoo 官方測試文件（tours / HttpCase）：https://www.odoo.com/documentation/18.0/developer/reference/backend/testing.html
+- Playwright 官方（storageState 認證複用、POM、fixtures、web-first 斷言）：https://playwright.dev/docs/auth 、 https://playwright.dev/docs/pom 、 https://playwright.dev/docs/test-fixtures
+- 為何避免 networkidle：https://github.com/mskelton/eslint-plugin-playwright/blob/main/docs/rules/no-networkidle.md
