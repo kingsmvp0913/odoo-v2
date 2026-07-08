@@ -25,3 +25,44 @@ test('migrate 建立 health_check_runs / health_check_findings 兩表', async ()
   const { rows: f } = await dbModule.query('SELECT severity FROM health_check_findings');
   expect(f[0].severity).toBe('ok');
 });
+
+const { buildAgentSummary } = require('../pipeline/health-data');
+
+test('buildAgentSummary 聚合 token / tasks / rejections（僅視窗內）', async () => {
+  // 準備：coding 階段兩筆 token_usage（1 成功 1 失敗）＋窗外 1 筆不計
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hd','h','HD') RETURNING id");
+  await dbModule.query(
+    "INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, duration_ms, status, recorded_at) VALUES ('T1',$1,'coding',100,50,20,1000,'completed',NOW())",
+    [u.id]);
+  await dbModule.query(
+    "INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, duration_ms, status, recorded_at) VALUES ('T1',$1,'coding',0,0,500,'error',NOW())",
+    [u.id]);
+  await dbModule.query(
+    "INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, status, recorded_at) VALUES ('T9',$1,'coding',999,999,'completed',NOW() - INTERVAL '60 days')",
+    [u.id]);
+  // 對應任務（含 blocker 與 reentry）＋一筆退回分類
+  await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, status, reentry_count, blocker_content) VALUES ($1,'T1','manual','stopped',2,'缺套件')",
+    [u.id]);
+  const { rows: [r] } = await dbModule.query(
+    "INSERT INTO task_rejections (task_id, user_id, reason, status) VALUES ('T1',$1,'x','classified') RETURNING id",[u.id]);
+  await dbModule.query(
+    "INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1,'欄位型別錯','實作錯誤')",[r.id]);
+
+  const s = await buildAgentSummary({ name: 'coding-project', stage: 'coding', label: '開發' }, { windowDays: 30 });
+  expect(s.token.calls).toBe(2);              // 窗外那筆不計
+  expect(s.token.failed_calls).toBe(1);
+  expect(s.token.input_tokens).toBe(100);
+  expect(s.tasks.total).toBe(1);
+  expect(s.tasks.stopped_rate).toBe(1);
+  expect(s.tasks.reentry.max).toBe(2);
+  expect(s.tasks.blocker_samples).toContain('缺套件');
+  expect(s.rejections.by_category['實作錯誤']).toBe(1);
+});
+
+test('非 coding/analysis 的 agent → rejections 為 null', async () => {
+  const s = await buildAgentSummary({ name: 'qa', stage: 'qa', label: 'QA' }, { windowDays: 30 });
+  expect(s.rejections).toBeNull();
+  expect(s.token.calls).toBe(0);
+});
