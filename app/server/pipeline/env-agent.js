@@ -78,6 +78,26 @@ function odooDbArgs() {
   }
 }
 
+// tour 的 browser_js 需 chrome 執行檔；Odoo 各平台認固定路徑（odoo/tests/common.py ChromeBrowser.executable）。
+// 找不到時 Odoo raise unittest.SkipTest → 測試靜默跳過但 exit 0 ＝假綠燈，故建環境時先擋。
+function findChrome() {
+  if (process.platform === 'win32') {
+    const pf = process.env.ProgramFiles || 'C:\\Program Files';
+    const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    const lad = process.env.LocalAppData || process.env.LOCALAPPDATA || '';
+    const bins = [
+      path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      path.join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      lad ? path.join(lad, 'Google', 'Chrome', 'Application', 'chrome.exe') : null,
+    ].filter(Boolean);
+    return bins.find(b => fs.existsSync(b)) || null;
+  }
+  for (const b of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    if (fs.existsSync(b)) return b;
+  }
+  return null;
+}
+
 // 專案所有已 clone 完成的 repo 路徑，全部掛進 addons-path（primary 優先，不依賴是否勾選 primary）
 async function projectAddonsPaths(projectId) {
   const { rows } = await query(
@@ -131,6 +151,15 @@ async function runEnvSetup(projectId) {
      ON CONFLICT (project_id) DO UPDATE SET status='setting_up', error_msg=NULL, setup_log=NULL, port=$2, updated_at=NOW()`,
     [projectId, port]
   );
+
+  // 建置測試環境即驗證 chrome 存在：tour 需要它，缺則整個環境不算就緒（避免日後 E2E 假綠燈）。
+  if (!fs.existsSync(readyMarker) && !findChrome()) {
+    await query(
+      "UPDATE odoo_envs SET status='error', error_msg=$2, updated_at=NOW() WHERE project_id=$1",
+      [projectId, '找不到 Google Chrome（tour E2E 需要）。請安裝 Chrome 後重建環境。預期路徑：%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe']
+    );
+    return;
+  }
 
   const steps = [
     ...(!fs.existsSync(srcDir) ? [
@@ -337,4 +366,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
+module.exports = { runEnvSetup, upgradeModules, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
