@@ -237,6 +237,9 @@ async function runTask(task, settings, signal) {
 // 之後 fire-and-forget 執行，完成時自動移除。回傳是否成功佔位。
 function dispatchTask(task, settings) {
   if (_inFlight.has(task.id)) return false;
+  // 全域上限即時核對：slots 是掃描開頭的快照，跨 user 併發掃描（cron 每 user fire-and-forget）
+  // 會各自對同一份 _inFlight.size 算預算而超派；在此同步佔位點即時擋，讓所有掃描共用同一原子檢查。
+  if (_inFlight.size >= MAX_GLOBAL) return false;
   const ctrl = new AbortController();
   const promise = runTask(task, settings, ctrl.signal).finally(() => _inFlight.delete(task.id));
   _inFlight.set(task.id, { ctrl, userId: task.user_id, promise });
@@ -265,7 +268,8 @@ async function runPipeline(userId) {
     let dispatched = 0;
     for (const task of tasks) {
       if (dispatched >= slots) break;
-      if (_inFlight.has(task.id)) continue; // 已在飛，不重複派
+      if (_inFlight.size >= MAX_GLOBAL) break;   // 全機滿載，本輪停止派工（即時，跨 user 併發共用）
+      if (_inFlight.has(task.id)) continue;      // 已在飛，不重複派
       if (dispatchTask(task, settings)) dispatched++;
     }
     return { dispatched };

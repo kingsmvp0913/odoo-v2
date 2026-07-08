@@ -1,6 +1,9 @@
 const path = require('path');
 const { newDb } = require('pg-mem');
 
+// 全機上限壓到 6，讓「跨 user 併發不超派」測試不必塞 30 個任務即可觸發（runner 於載入時讀此 env）
+process.env.PIPELINE_MAX_GLOBAL = '6';
+
 jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn().mockResolvedValue(undefined),
@@ -40,7 +43,7 @@ beforeAll(async () => {
   runnerModule = require('../pipeline/runner');
 });
 
-afterAll(() => { dbModule._setPoolForTesting(null); });
+afterAll(() => { dbModule._setPoolForTesting(null); delete process.env.PIPELINE_MAX_GLOBAL; });
 
 beforeEach(async () => {
   const git = require('../pipeline/git');
@@ -228,4 +231,48 @@ test('C-4 暫停的任務不被掃到、不執行 handler', async () => {
   const r = await run();
   expect(r.dispatched).toBe(0);
   expect(runCsAgent).not.toHaveBeenCalled();
+});
+
+// 設計測試計畫第 5 點：全機上限跨 user enforce。cron 對每個 user fire-and-forget 呼叫
+// runPipeline，同一 tick 內各 user 的 slots 都在自己第一個 await 前算好；若全域上限只用
+// 掃描開頭的 _inFlight.size 快照 enforce，兩個 user 會各派滿、總量超過 MAX_GLOBAL（TOCTOU）。
+test('C-4 全機上限跨 user 併發掃描不超過 MAX_GLOBAL（TOCTOU 防護）', async () => {
+  const { runCsAgent } = require('../pipeline/cs-agent');
+  let openGate;
+  const gate = new Promise(res => { openGate = res; });
+  runCsAgent.mockImplementation(() => gate); // 掛住所有 handler，佔著 _inFlight
+
+  // 第二個 user：避開 _pipelineRunning 的「同 user 掃描鎖」，才能真正併發掃描
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('pass', 4);
+  const { rows: u2 } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, odoo_settings) VALUES ('runner2', $1, 'R2', 'user', $2) RETURNING id",
+    [hash, JSON.stringify({ git_repo_path: '/repo2' })]
+  );
+  const userId2 = u2[0].id;
+
+  // 每 user 4 個可跑任務（各自 < 每人上限 5，限制點落在全機 MAX_GLOBAL=6）
+  for (let i = 0; i < 4; i++) await insertTask('new', `g1_${i}`);
+  for (let i = 0; i < 4; i++) {
+    await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, original_text, status) VALUES ($1,$2,'odoo','T','c','new')",
+      [userId2, `task_odoo_g2_${i}`]
+    );
+  }
+
+  try {
+    // 同一 tick 併發掃描兩個 user
+    const [r1, r2] = await Promise.all([
+      runnerModule.runPipeline(userId),
+      runnerModule.runPipeline(userId2),
+    ]);
+    expect(runnerModule.getInflightTaskIds().length).toBeLessThanOrEqual(6); // 全機硬上限
+    expect(r1.dispatched + r2.dispatched).toBe(6);                           // 恰好填滿、不超派
+  } finally {
+    openGate();
+    await runnerModule.whenIdle();
+    await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId2]);
+    await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId2]);
+    await dbModule.query('DELETE FROM users WHERE id = $1', [userId2]);
+  }
 });

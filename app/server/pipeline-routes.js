@@ -6,7 +6,7 @@ function registerRoutes(app) {
   app.post('/api/pipeline/run', verifyToken, async (req, res) => {
     try {
       const result = await runPipeline(req.userId);
-      res.json({ processed: result?.processed ?? 0 });
+      res.json({ dispatched: result?.dispatched ?? 0 });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

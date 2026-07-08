@@ -5,8 +5,7 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({
   messages: { create: jest.fn() }
 })));
 jest.mock('../pipeline/runner', () => ({
-  runPipeline: jest.fn().mockResolvedValue({ processed: 2 }),
-  resetLoopCounter: jest.fn().mockResolvedValue(undefined)
+  runPipeline: jest.fn().mockResolvedValue({ dispatched: 2 })
 }));
 jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
@@ -49,11 +48,11 @@ test('POST /api/pipeline/run → 401 without token', async () => {
   expect(res.status).toBe(401);
 });
 
-test('POST /api/pipeline/run → calls runPipeline and returns processed count', async () => {
+test('POST /api/pipeline/run → calls runPipeline and returns dispatched count', async () => {
   const res = await request(app).post('/api/pipeline/run')
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(res.body.processed).toBe(2);
+  expect(res.body.dispatched).toBe(2);
   const { runPipeline } = require('../pipeline/runner');
   expect(runPipeline).toHaveBeenCalledWith(userId);
 });
