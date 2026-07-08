@@ -16,7 +16,7 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo
 jest.mock('../pipeline/cs-agent', () => ({ runCsAgent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/qa-agent', () => ({ runQaAgent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/deploy-testing', () => ({ runDeployTesting: jest.fn().mockResolvedValue(undefined) }));
-jest.mock('../pipeline/playwright-agent', () => ({ runPlaywrightAgent: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../pipeline/playwright-agent', () => ({ runTourStage: jest.fn().mockResolvedValue(undefined) }));
 
 let dbModule, runnerModule, userId;
 
@@ -57,7 +57,7 @@ beforeEach(async () => {
   cs.runCsAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/qa-agent').runQaAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/deploy-testing').runDeployTesting.mockReset().mockResolvedValue(undefined);
-  require('../pipeline/playwright-agent').runPlaywrightAgent.mockReset().mockResolvedValue(undefined);
+  require('../pipeline/playwright-agent').runTourStage.mockReset().mockResolvedValue(undefined);
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
@@ -171,10 +171,10 @@ test('deploy_testing → deploy-testing', async () => {
 });
 
 test('playwright_running → playwright-agent', async () => {
-  const { runPlaywrightAgent } = require('../pipeline/playwright-agent');
+  const { runTourStage } = require('../pipeline/playwright-agent');
   const taskId = await insertTask('playwright_running');
   await run();
-  expect(runPlaywrightAgent).toHaveBeenCalledWith(taskId, userId, expect.anything());
+  expect(runTourStage).toHaveBeenCalledWith(taskId, userId, expect.anything());
 });
 
 test('進入一關寫階段標記 task_event（執行歷程可見「跑到哪」）', async () => {

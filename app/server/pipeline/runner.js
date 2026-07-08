@@ -160,10 +160,10 @@ async function handleDeployTesting(task, settings, signal) {
   await runDeployTesting(task.id, task.user_id, signal);
 }
 
-// playwright_running：依 SD 產計畫並跑 E2E（pass→review_pending；fail→退 coding 計數）
+// playwright_running：E2E via Odoo 原生 tour（pass→review_pending；fail→退 coding 計數）
 async function handlePlaywright(task, settings, signal) {
-  const { runPlaywrightAgent } = require('./playwright-agent');
-  await runPlaywrightAgent(task.id, task.user_id, signal);
+  const { runTourStage } = require('./playwright-agent');
+  await runTourStage(task.id, task.user_id, signal);
 }
 
 // wiki_updating：library-agent 更新 wiki → done
