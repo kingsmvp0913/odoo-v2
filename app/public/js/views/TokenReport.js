@@ -117,7 +117,8 @@ window.TokenReportView = Vue.defineComponent({
     },
     agentColor(type) {
       const map = { cs: '#7c3aed', triage: '#6b7280', analysis: '#2563eb', coding: '#059669',
-                    qa: '#d97706', merge: '#db2777', deploy_fix: '#dc2626', wiki: '#0891b2', chat: '#f59e0b' };
+                    qa: '#d97706', merge: '#db2777', deploy_fix: '#dc2626', wiki: '#0891b2', chat: '#f59e0b',
+                    workflow_health: '#7e22ce' };
       return map[type] || '#6b7280';
     },
     // SVG pie chart

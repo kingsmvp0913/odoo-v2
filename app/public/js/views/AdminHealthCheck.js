@@ -5,7 +5,7 @@ const HC_SEV = {
   low:    { label: '輕微', color: 'var(--warning, #d97706)' },
   medium: { label: '中等', color: 'var(--warning, #d97706)' },
   high:   { label: '嚴重', color: 'var(--error)' },
-  error:  { label: '健檢失敗', color: 'var(--text-muted)' }
+  error:  { label: '健檢失敗', color: '#6b7280' }
 };
 
 window.AdminHealthCheckView = Vue.defineComponent({

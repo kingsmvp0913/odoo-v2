@@ -22,7 +22,22 @@ window.AdminAgentsView = Vue.defineComponent({
         (this.form.model !== this.selected.model || this.form.prompt !== this.selected.prompt);
     }
   },
-  async created() { await this.load(); },
+  async created() {
+    await this.load();
+    // 健檢「帶入編輯器」：帶 ?prefill=<name> 進來時自動選該 agent 並填入建議 prompt（人工審後才儲存）
+    const name = this.$route.query.prefill;
+    if (name) {
+      const stash = sessionStorage.getItem('agentPrefill');
+      sessionStorage.removeItem('agentPrefill');
+      await this.select({ name });
+      if (this.selected && stash) {
+        try {
+          const { name: n, prompt } = JSON.parse(stash);
+          if (n === this.selected.name && prompt) this.form.prompt = prompt;  // 留 dirty，提示「尚未儲存」
+        } catch (_) { /* 壞資料忽略 */ }
+      }
+    }
+  },
   methods: {
     async load() {
       this.loading = true;
