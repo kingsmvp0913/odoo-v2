@@ -120,11 +120,22 @@ function registerRoutes(app) {
     try {
       const { name, odoo_version, description, folder_name } = req.body;
       if (!name || !odoo_version) return res.status(400).json({ error: 'name and odoo_version required' });
-      const { rows } = await query(
-        `INSERT INTO projects (name, odoo_version, description, folder_name) VALUES ($1, $2, $3, $4) RETURNING *`,
-        [name, odoo_version, description || null, folder_name || null]
-      );
-      res.status(201).json(rows[0]);
+      const { allocateProjectPort } = require('./port-alloc');
+      // 建立時就固定分配專屬測試埠：不同專案永遠不同埠，消除執行期並行選埠相撞。
+      // 並行建立偶爾撞同埠 → projects.port UNIQUE 擋下、重取再試（建立為低頻，retry 成本可忽略）。
+      for (let attempt = 0; ; attempt++) {
+        const port = await allocateProjectPort();
+        try {
+          const { rows } = await query(
+            `INSERT INTO projects (name, odoo_version, description, folder_name, port) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [name, odoo_version, description || null, folder_name || null, port]
+          );
+          return res.status(201).json(rows[0]);
+        } catch (err) {
+          if (err.code === '23505' && err.constraint === 'projects_port_idx' && attempt < 5) continue; // 撞埠→重取
+          throw err; // 名稱重複等其他違反 → 交由外層處理
+        }
+      }
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'project name already exists' });
       res.status(500).json({ error: err.message });
@@ -192,6 +203,10 @@ function registerRoutes(app) {
       const respondentSql = 'service_respondent_name' in req.body
         ? '$7'
         : 'service_respondent_name';
+      const params = [req.params.id, name || null, odoo_version || null, description || null,
+        folder_name || null,
+        'odoo_project_name' in req.body ? (odoo_project_name || null) : null,
+        'service_respondent_name' in req.body ? (service_respondent_name || null) : null];
       const { rows } = await query(
         `UPDATE projects SET
            name                    = COALESCE($2, name),
@@ -202,10 +217,7 @@ function registerRoutes(app) {
            service_respondent_name = ${respondentSql},
            updated_at              = NOW()
          WHERE id = $1 RETURNING *`,
-        [req.params.id, name || null, odoo_version || null, description || null,
-         folder_name || null,
-         'odoo_project_name' in req.body ? (odoo_project_name || null) : null,
-         'service_respondent_name' in req.body ? (service_respondent_name || null) : null]
+        params
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(rows[0]);

@@ -9,16 +9,18 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
   try {
     await query(
       `INSERT INTO token_usage
-         (task_id, project_id, chat_id, user_id, agent_type,
+         (task_id, project_id, chat_id, user_id, agent_type, model,
           input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
           duration_ms, status, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'server')`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'server')`,
       [
         ref.taskId    || null,
         ref.projectId || null,
         ref.chatId    || null,
         userId        || null,
         agentType,
+        // model：runClaude 折進 usage.model；失敗路徑 usage 為 null 時退回 ref.model / null
+        u.model       || ref.model || null,
         u.input_tokens                || 0,
         u.output_tokens               || 0,
         u.cache_read_input_tokens     || 0,

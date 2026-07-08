@@ -14,7 +14,10 @@ function registerRoutes(app) {
       defaultStart.setDate(defaultStart.getDate() - 30);
 
       const start     = req.query.start     ? new Date(req.query.start) : defaultStart;
-      const end       = req.query.end       ? new Date(req.query.end)   : now;
+      // end 以「當日結束」為界，才含得到當天的記錄；date-only 字串補到 23:59:59.999Z
+      const end       = req.query.end
+        ? new Date(/T/.test(req.query.end) ? req.query.end : req.query.end + 'T23:59:59.999Z')
+        : now;
       const projectId = req.query.project_id ? parseInt(req.query.project_id, 10) : null;
       const taskId    = req.query.task_id    || null;
 
@@ -39,10 +42,25 @@ function registerRoutes(app) {
 
       const where = 'WHERE ' + baseConditions.join(' AND ');
 
-      // Summary
+      // 成本模型（對齊 ccusage）：每列依實際 model 單價算真實 USD。
+      // 各 model 內比例一致（output=5×input、cache_read=0.1×、cache_create=1.25×），
+      // 故成本 = input_1M_單價 × 加權 input 等效顆數 / 1e6。
+      const WEIGHTED = '(tu.input_tokens + tu.output_tokens * 5 + tu.cache_read_tokens * 0.1 + tu.cache_create_tokens * 1.25)';
+      // 每 1M input 的 USD 單價（未知/空 model 一律以 sonnet 計）。LOWER+LIKE 相容 pg-mem。
+      const RATE = `(CASE
+             WHEN LOWER(COALESCE(tu.model,'')) LIKE '%haiku%' THEN 1.0
+             WHEN LOWER(COALESCE(tu.model,'')) LIKE '%opus%'  THEN 5.0
+             WHEN LOWER(COALESCE(tu.model,'')) LIKE '%fable%' THEN 10.0
+             ELSE 3.0
+           END)`;
+      const COST = `(${RATE} * ${WEIGHTED} / 1000000.0)`;
+
+      // Summary：總 Token（原始四項相加）＋ Cache 總數（原始）＋ 實際花費（USD）
       const { rows: [summary] } = await query(
         `SELECT
-           COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) AS total_tokens,
+           COALESCE(SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens), 0) AS total_tokens,
+           COALESCE(SUM(tu.cache_read_tokens + tu.cache_create_tokens), 0) AS cache_tokens,
+           COALESCE(SUM(${COST}), 0) AS cost_usd,
            COUNT(DISTINCT COALESCE(tu.task_id, tu.project_id::TEXT)) AS total_refs,
            COUNT(*) AS total_records
          FROM token_usage tu
@@ -50,32 +68,32 @@ function registerRoutes(app) {
         baseParams
       );
 
-      // By agent
+      // By agent（實際花費 USD）
       const { rows: byAgent } = await query(
         `SELECT agent_type,
-           SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens) AS tokens
+           SUM(${COST}) AS cost
          FROM token_usage tu
          ${where}
-         GROUP BY agent_type ORDER BY tokens DESC`,
+         GROUP BY agent_type ORDER BY cost DESC`,
         baseParams
       );
 
-      // By project
+      // By project（實際花費 USD）
       const { rows: byProject } = await query(
         `SELECT p.id AS project_id, p.name AS project_name,
-           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
+           SUM(${COST}) AS cost
          FROM token_usage tu
          LEFT JOIN tasks t ON t.task_id = tu.task_id
          LEFT JOIN projects p ON p.id = COALESCE(tu.project_id, t.project_id)
          ${where}
-         GROUP BY p.id, p.name ORDER BY tokens DESC`,
+         GROUP BY p.id, p.name ORDER BY cost DESC`,
         baseParams
       );
 
-      // Daily trend (::date cast is compatible with both pg and pg-mem)
+      // Daily trend（實際花費 USD；::date cast is compatible with both pg and pg-mem）
       const { rows: daily } = await query(
         `SELECT recorded_at::date AS date,
-           SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens) AS tokens
+           SUM(${COST}) AS cost
          FROM token_usage tu
          ${where}
          GROUP BY date ORDER BY date ASC`,
@@ -95,7 +113,8 @@ function registerRoutes(app) {
            COALESCE(u.display_name, u.username) AS username,
            tu.user_id,
            tu.agent_type,
-           tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens AS tokens,
+           tu.model,
+           ${COST} AS cost,
            tu.duration_ms,
            tu.recorded_at
          FROM token_usage tu
@@ -150,15 +169,17 @@ function registerRoutes(app) {
             project_name:     row.project_name,
             user_id:          row.user_id,
             username:         row.username,
-            total_tokens:     0,
+            total_cost:       0,
             agents:           [],
             last_recorded_at: row.recorded_at
           };
         }
-        taskMap[key].total_tokens += Number(row.tokens) || 0;
+        const rowCost = Number(row.cost) || 0;
+        taskMap[key].total_cost += rowCost;
         taskMap[key].agents.push({
           agent_type:  row.agent_type,
-          tokens:      Number(row.tokens) || 0,
+          model:       row.model || null,
+          cost:        rowCost,
           duration_ms: row.duration_ms
         });
         if (new Date(row.recorded_at) > new Date(taskMap[key].last_recorded_at)) {
@@ -167,21 +188,26 @@ function registerRoutes(app) {
       }
 
       const totalTokens = Number(summary.total_tokens) || 0;
+      const cacheTokens = Number(summary.cache_tokens) || 0;
+      const costUsd     = Number(summary.cost_usd) || 0;
       const totalTasks  = Object.keys(taskMap).length;
 
       res.json({
         summary: {
-          total_tokens:        totalTokens,
-          total_tasks:         totalTasks,
-          avg_tokens_per_task: totalTasks ? Math.round(totalTokens / totalTasks) : 0
+          total_tokens:       totalTokens,
+          cache_tokens:       cacheTokens,
+          cost_usd:           costUsd,
+          total_tasks:        totalTasks,
+          // 平均每任務以「實際花費」計
+          avg_cost_per_task:  totalTasks ? costUsd / totalTasks : 0
         },
-        by_agent:   byAgent.map(r => ({ agent_type: r.agent_type, tokens: Number(r.tokens) })),
+        by_agent:   byAgent.map(r => ({ agent_type: r.agent_type, cost: Number(r.cost) })),
         by_project: byProject.filter(r => r.project_name).map(r => ({
           project_id:   r.project_id,
           project_name: r.project_name,
-          tokens:       Number(r.tokens)
+          cost:         Number(r.cost)
         })),
-        daily: daily.map(r => ({ date: r.date, tokens: Number(r.tokens) })),
+        daily: daily.map(r => ({ date: r.date, cost: Number(r.cost) })),
         tasks: Object.values(taskMap)
       });
     } catch (err) {

@@ -39,6 +39,18 @@ test('logTokenUsage silently skips when usage is null', async () => {
   await expect(logTokenUsage({ taskId: 'x' }, null, 'cs', null, null)).resolves.toBeUndefined();
 });
 
+// 成本歸屬：runClaude 把 resolved model 折進 usage.model，logTokenUsage 須落 model 欄
+test('logTokenUsage 落 usage.model 到 model 欄（供 USD 成本按 model 單價計）', async () => {
+  await logTokenUsage(
+    { taskId: 'task_model_1' }, null, 'chat',
+    { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-sonnet-5' },
+    100
+  );
+  const { rows } = await dbModule.query("SELECT model FROM token_usage WHERE task_id='task_model_1'");
+  expect(rows.length).toBe(1);
+  expect(rows[0].model).toBe('claude-sonnet-5');
+});
+
 // 意圖：手動暫停（abort）不是 Agent 失敗；失敗原因須顯示「手動暫停」而非「XXX 執行失敗：aborted」，
 // 讓使用者看得懂那是自己按的暫停，不是程式壞掉。
 test('stopReason：手動暫停顯示「手動暫停」，真正失敗才帶階段前綴', () => {

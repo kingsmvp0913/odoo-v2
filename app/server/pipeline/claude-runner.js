@@ -41,19 +41,21 @@ function formatEvent(ev) {
 // 統一 runner（合併原 callClaude/spawnClaude，健檢 U13）：所有階段共用一份子行程實作，
 // 事件流同時寫 socket 與 task_events；支援 cwd（worktree 隔離）、session 捕捉、--resume（主題 B）。
 function runClaude(prompt, opts = {}) {
-  const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId } = opts;
+  const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId, env } = opts;
   return new Promise((resolve, reject) => {
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
     // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
     if (resumeSessionId) args.push('--resume', resumeSessionId);
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
+    // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd, env: env ? { ...process.env, ...env } : process.env });
 
     let resultText = '';
     let usage = null;
     let durationMs = null;
     let sessionId = null;
+    let usedModel = null;
     let lineBuffer = '';
     let stderr = '';
     let settled = false;
@@ -87,6 +89,10 @@ function runClaude(prompt, opts = {}) {
           if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
             sessionId = ev.session_id; // 供 coding 重跑 --resume 續用
           }
+          // 抓實際 model（第一則 assistant 事件帶 resolved model id）供成本歸屬
+          if (!usedModel && ev.type === 'assistant' && ev.message && ev.message.model) {
+            usedModel = ev.message.model;
+          }
           const display = formatEvent(ev);
           if (display) emit(display);
           if (ev.type === 'result') {
@@ -115,7 +121,13 @@ function runClaude(prompt, opts = {}) {
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       finish(() => {
         if (code !== 0 && code !== null) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
-        else resolve({ text: resultText.trim(), usage, durationMs, sessionId });
+        else {
+          // 實際 model：優先用事件回報的 resolved id，退回 opts 的 model alias（sonnet/opus…）
+          const finalModel = usedModel || model || null;
+          // 折進 usage，讓 logTokenUsage 零改動就能落 model 欄
+          if (usage && finalModel) usage.model = finalModel;
+          resolve({ text: resultText.trim(), usage, durationMs, sessionId, model: finalModel });
+        }
       });
     });
     child.on('error', err => finish(() => reject(fail(err, 'error'))));

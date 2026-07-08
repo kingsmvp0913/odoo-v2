@@ -3,7 +3,8 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, runEnvSetup } = require('./env-agent');
+const { upgradeModules } = require('./env-agent');
+const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
 
@@ -37,15 +38,6 @@ function saveDeployLog(taskId, count, err) {
     ].join('\n'));
     return file;
   } catch { return null; }
-}
-
-// 確保測試環境運行中；未運行則嘗試建立/啟動，仍失敗回傳 false
-async function ensureEnvRunning(projectId) {
-  const { rows: [env] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [projectId]);
-  if (env?.status === 'running') return true;
-  await runEnvSetup(projectId);
-  const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [projectId]);
-  return env2?.status === 'running';
 }
 
 // 部署測試區（純程式）：確保 env 運行 → odoo-bin -u 升級。

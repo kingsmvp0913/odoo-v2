@@ -151,11 +151,11 @@ function registerRoutes(app) {
       let rows;
       if (project) {
         ({ rows } = await query(
-          `SELECT c.id, c.name, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id
+          `SELECT c.id, c.name, c.db_engine, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id
            WHERE p.folder_name=$1 OR p.name=$1 ORDER BY c.name`, [project]));
       } else {
         ({ rows } = await query(
-          `SELECT c.id, c.name, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id ORDER BY p.name, c.name`));
+          `SELECT c.id, c.name, c.db_engine, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id ORDER BY p.name, c.name`));
       }
       res.json({ ok: true, connections: rows });
     } catch (err) { res.json({ ok: false, error: err.message }); }

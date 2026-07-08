@@ -28,6 +28,7 @@ test('GET /ai/db/connections 依專案名過濾（loopback）', async () => {
   expect(res.status).toBe(200);
   expect(res.body.ok).toBe(true);
   expect(res.body.connections[0].name).toBe('hj');
+  expect(res.body.connections[0].db_engine).toBe('postgres');
   expect(res.body.connections[0].ssh_password_enc).toBeUndefined();
 });
 

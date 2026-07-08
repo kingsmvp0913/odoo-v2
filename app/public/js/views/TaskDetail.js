@@ -23,7 +23,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -114,6 +114,17 @@ window.TaskDetailView = Vue.defineComponent({
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }
+    },
+    async reject() {
+      if (!this.rejectReason.trim()) return;
+      this.rejecting = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/reject`, { reason: this.rejectReason.trim() });
+        showToast('已退回，任務回到開發依原因修正', 'success');
+        this.rejectReason = ''; this.showReject = false;
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.rejecting = false; }
     },
     sourceUrl() {
       if (!this.task) return null;
@@ -243,7 +254,7 @@ window.TaskDetailView = Vue.defineComponent({
     <div class="topbar">
       <button class="btn btn-outline btn-sm" @click="back" style="margin-right:12px">← 返回</button>
       <h1>任務詳情</h1>
-      <span v-if="testMode" style="font-size:12px;color:var(--warning);background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 8px">🧪 測試模式</span>
+      <span v-if="testMode" class="pill pill-warn" style="font-size:12px;padding:2px 8px">🧪 測試模式</span>
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping" style="margin-left:8px">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
       </button>
@@ -256,9 +267,9 @@ window.TaskDetailView = Vue.defineComponent({
           <div class="detail-title">{{ task.title || task.task_id }}</div>
           <div class="detail-meta">
             <span class="status-badge" :class="task.status">{{ statusLabel }}</span>
-            <span v-if="serverConfirmedRunning"
-              style="display:inline-flex;align-items:center;gap:4px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">
-              <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;animation:pulseDot 1.4s ease-in-out infinite"></span>伺服器確認處理中
+            <span v-if="serverConfirmedRunning" class="pill pill-info"
+              style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;font-weight:600">
+              <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulseDot 1.4s ease-in-out infinite"></span>伺服器確認處理中
             </span>
             <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank"
                style="color:var(--primary);text-decoration:none;font-weight:500">{{ sourceLabel() }}</a>
@@ -321,9 +332,17 @@ window.TaskDetailView = Vue.defineComponent({
             <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
               已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
             </p>
-            <button class="btn btn-primary" @click="approve" :disabled="approving">
+            <button class="btn btn-primary" @click="approve" :disabled="approving || rejecting">
               {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
             </button>
+            <button class="btn btn-outline" style="margin-left:8px" @click="showReject = !showReject" :disabled="approving || rejecting">↩ 退回開發</button>
+            <div v-if="showReject" style="margin-top:12px">
+              <textarea v-model="rejectReason" class="form-control" rows="4"
+                placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
+              <button class="btn btn-primary btn-sm" style="margin-top:8px" @click="reject" :disabled="rejecting || !rejectReason.trim()">
+                {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
+              </button>
+            </div>
           </div>
 
           <div v-if="canArchive" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">

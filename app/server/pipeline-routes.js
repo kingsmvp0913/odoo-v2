@@ -71,6 +71,36 @@ function registerRoutes(app) {
     }
   });
 
+  // 最終人工審核退回：填原因 → 任務回 coding_running（原因當 feedback），原因落 task_rejections（健檢子專案 1）
+  app.post('/api/tasks/:id/reject', verifyToken, async (req, res) => {
+    try {
+      const reason = ((req.body && req.body.reason) || '').trim();
+      if (!reason) return res.status(400).json({ error: '請填寫退回原因' });
+      const { rows } = await query(
+        'SELECT id, task_id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      const task = rows[0];
+      if (task.status !== 'review_pending') {
+        return res.status(400).json({ error: `Task status '${task.status}' cannot be rejected; expected review_pending` });
+      }
+      // 回 coding 依原因修正；reentry_count 只累加做統計、不強制 stopped（人為刻意退回，不套自動 runaway 上限）
+      await query(
+        "UPDATE tasks SET status='coding_running', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1",
+        [req.params.id, `[人工退回]\n${reason}`]
+      );
+      await query(
+        "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,$4,'new')",
+        [task.task_id, task.project_id, req.userId, reason]
+      );
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'coding_running' });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/tasks/:id/cs-confirm', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(

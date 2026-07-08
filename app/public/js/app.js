@@ -32,12 +32,13 @@ const router = createRouter({
     { path: '/projects/:id/wiki/:slug', component: window.WikiView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat/:chatId', component: window.ProjectChatView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/db', component: window.ProjectDbQueryView, meta: { requiresAuth: true } },
+    { path: '/projects/:id/db', component: window.ProjectDbQueryView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true } },
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/agents', component: window.AdminAgentsView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/admin/pipelines', component: window.AdminPipelinesView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/health', component: window.AdminHealthCheckView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
@@ -99,6 +100,7 @@ const App = defineComponent({
     if (Api.isLoggedIn()) {
       const me = await Api.get('auth/me').catch(() => ({}));
       this._role = me.role || '';
+      window.UserStore.role = me.role || '';
       ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
       this.isDark = ThemeManager.current() === 'dark';
       loadClaudeUsage();
@@ -135,6 +137,9 @@ const App = defineComponent({
             </router-link>
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">📁 專案</a>
+            </router-link>
+            <router-link v-if="isAdmin" to="/admin/pipelines" custom v-slot="{ navigate, isActive }">
+              <a :class="{ active: isActive }" @click="navigate">🚦 進行中 Pipeline</a>
             </router-link>
             <router-link to="/token-report" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">📊 用量報表</a>

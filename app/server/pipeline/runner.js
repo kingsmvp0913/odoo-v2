@@ -42,6 +42,12 @@ function getInflightTaskIds() {
   return [..._inFlight.keys()];
 }
 
+// 真正在飛（有活著的 process）的任務資訊，供 admin 監控頁判斷「真正推進中」。
+// startedAt 為 dispatch 當下時間戳，用來算「這一輪已跑多久」（tasks.updated_at 執行中不更新，不可靠）。
+function getInflightInfo() {
+  return [..._inFlight.entries()].map(([taskId, e]) => ({ taskId, userId: e.userId, startedAt: e.startedAt }));
+}
+
 // 等待目前所有在飛任務結束（供測試斷言 handler 效果；正式運作不需呼叫）
 function whenIdle() {
   return Promise.all([..._inFlight.values()].map(e => e.promise.catch(() => {})));
@@ -242,7 +248,7 @@ function dispatchTask(task, settings) {
   if (_inFlight.size >= MAX_GLOBAL) return false;
   const ctrl = new AbortController();
   const promise = runTask(task, settings, ctrl.signal).finally(() => _inFlight.delete(task.id));
-  _inFlight.set(task.id, { ctrl, userId: task.user_id, promise });
+  _inFlight.set(task.id, { ctrl, userId: task.user_id, promise, startedAt: Date.now() });
   return true;
 }
 
@@ -278,4 +284,4 @@ async function runPipeline(userId) {
   }
 }
 
-module.exports = { runPipeline, abortTask, getInflightTaskIds, whenIdle };
+module.exports = { runPipeline, abortTask, getInflightTaskIds, getInflightInfo, whenIdle };

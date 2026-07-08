@@ -37,6 +37,7 @@ When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` befo
 - Before adding code, read exports, immediate callers, and shared utilities. "Looks orthogonal" is dangerous — if unsure why code is structured a certain way, ask.
 - Conformance > personal taste inside the codebase. Follow conventions even when you disagree.
 - If a codebase convention seems harmful, surface it explicitly. Don't fork silently.
+- 前端（`app/public`）配色一律走 `app.css` 的 CSS 變數／dark-aware class（如錯誤框套 `.error-msg`）；禁止在 inline style 寫死淺色 `background`（`#fff`/`#fef2f2`/`#f8fafc` 等）而不同時寫死可讀文字色——否則深色模式文字色吃 `var(--text)` 翻白＝隱形。底色需區隔時用 `var(--bg)`/`var(--surface)` 等變數，勿寫死。
 - `[Step] → [Verify]`：Python `python -m py_compile <file>`；XML `xmllint --noout <file>`；可載入性 `odoo-bin -d test --stop-after-init -i <module>`（若可用）。
 
 ## 3. Output Style

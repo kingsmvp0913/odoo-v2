@@ -219,6 +219,7 @@ async function migrate() {
       project_id           INTEGER REFERENCES projects(id) ON DELETE SET NULL,
       user_id              INTEGER REFERENCES users(id) ON DELETE SET NULL,
       agent_type           TEXT NOT NULL,
+      model                TEXT,
       input_tokens         INTEGER NOT NULL DEFAULT 0,
       output_tokens        INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
@@ -328,6 +329,7 @@ async function migrate() {
     { table: 'project_repos', col: 'clone_error',     sql: 'ALTER TABLE project_repos ADD COLUMN clone_error TEXT' },
     { table: 'project_repos', col: 'graphify_status', sql: "ALTER TABLE project_repos ADD COLUMN graphify_status TEXT DEFAULT 'idle'" },
     { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' },
+    { table: 'projects', col: 'port', sql: 'ALTER TABLE projects ADD COLUMN port INTEGER' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
     { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
@@ -342,7 +344,9 @@ async function migrate() {
     { table: 'db_connections', col: 'db_ssl',          sql: 'ALTER TABLE db_connections ADD COLUMN db_ssl BOOLEAN DEFAULT false' },
     { table: 'db_connections', col: 'db_engine',       sql: "ALTER TABLE db_connections ADD COLUMN db_engine TEXT DEFAULT 'postgres'" },
     { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
-    { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" }
+    { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" },
+    // 每列記錄實際使用的 model（供報表按 model 單價算真實 USD 成本，對齊 ccusage 做法）
+    { table: 'token_usage', col: 'model',   sql: 'ALTER TABLE token_usage ADD COLUMN model TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -353,6 +357,20 @@ async function migrate() {
       tableColsCache[table] = new Set(rows.map(r => r.column_name));
     }
     if (!tableColsCache[table].has(col)) await query(sql);
+  }
+
+  // projects.port 一次性回填：每專案固定分配專屬測試埠（新欄位，既有專案初次皆為 NULL）。
+  // 依 id 順序自既有最大埠之上連續配發（首次即 8069 起）；冪等（無 NULL 即跳過）。
+  {
+    const { rows: nullRows } = await query('SELECT id FROM projects WHERE port IS NULL ORDER BY id');
+    if (nullRows.length) {
+      const { rows: [mx] } = await query('SELECT MAX(port) AS m FROM projects');
+      let next = Math.max(8069, mx && mx.m != null ? mx.m + 1 : 8069);
+      for (const r of nullRows) {
+        await query('UPDATE projects SET port=$1 WHERE id=$2', [next, r.id]);
+        next++;
+      }
+    }
   }
 
   // 退場：E2E 改全域固定帳號（e2e-account.js），移除每專案欄位（存在才 drop，冪等）
@@ -397,6 +415,8 @@ async function migrate() {
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
+  // 專案專屬測試埠不得重複：並行建立撞同埠時由 DB 擋下，呼叫端重取（見 port-alloc.js）
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS projects_port_idx ON projects (port)').catch(() => {});
 
   // 執行歷程：依 task_id 取全部事件、以 id 排序回放
   await query('CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events (task_id, id)').catch(() => {});

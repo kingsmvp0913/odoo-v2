@@ -161,14 +161,16 @@ window.ProjectDetailView = Vue.defineComponent({
     },
     async saveProjectMapping() {
       try {
-        await Api.patch(`projects/${this.project.id}`, {
+        const payload = {
           odoo_project_name:       this.editOdooProjectName      || null,
           service_respondent_name: this.editServiceRespondentName || null
-        });
-        showToast('專案對應已儲存', 'success');
+        };
+        await Api.patch(`projects/${this.project.id}`, payload);
+        showToast('已儲存', 'success');
         await this.load();
       } catch (err) { showToast(err.message, 'error'); }
-    }
+    },
+    isAdmin() { return window.UserStore.role === 'admin'; }
   },
   template: `
     <div v-if="loading" class="loading">載入中...</div>
@@ -179,7 +181,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <span style="font-size:13px;color:var(--text-muted);margin-left:12px">Odoo {{ project.odoo_version }}</span>
         <div style="display:flex;gap:6px;margin-left:16px">
           <button class="btn btn-outline btn-sm" style="background:var(--primary);color:#fff">設定</button>
-          <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
+          <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
           <button class="btn btn-outline btn-sm" @click="goWiki">📖 Wiki</button>
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
             <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unreadCount() }}</span>
@@ -197,12 +199,12 @@ window.ProjectDetailView = Vue.defineComponent({
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                 <span style="font-weight:600">{{ r.label }}</span>
                 <span v-if="r.is_primary" style="font-size:11px;background:var(--primary);color:#fff;border-radius:4px;padding:1px 6px">主要</span>
-                <span v-if="r.clone_status === 'cloning'" style="font-size:11px;background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px">⟳ Clone 中...</span>
-                <span v-else-if="r.clone_status === 'done'" style="font-size:11px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:4px;padding:1px 6px">✓ 已同步</span>
-                <span v-else-if="r.clone_status === 'error'" style="font-size:11px;background:#fff5f5;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px">✕ Clone 失敗</span>
-                <span v-if="r.graphify_status === 'running'" style="font-size:11px;background:#fefce8;color:#ca8a04;border:1px solid #fde68a;border-radius:4px;padding:1px 6px">⟳ 索引中...</span>
-                <span v-else-if="r.graphify_status === 'done'" style="font-size:11px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:4px;padding:1px 6px">✓ 已索引</span>
-                <span v-else-if="r.graphify_status === 'error'" style="font-size:11px;background:#fff5f5;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px" :title="r.graphify_error">✕ 索引失敗</span>
+                <span v-if="r.clone_status === 'cloning'" class="pill pill-info">⟳ Clone 中...</span>
+                <span v-else-if="r.clone_status === 'done'" class="pill pill-success">✓ 已同步</span>
+                <span v-else-if="r.clone_status === 'error'" class="pill pill-danger">✕ Clone 失敗</span>
+                <span v-if="r.graphify_status === 'running'" class="pill pill-warn">⟳ 索引中...</span>
+                <span v-else-if="r.graphify_status === 'done'" class="pill pill-success">✓ 已索引</span>
+                <span v-else-if="r.graphify_status === 'error'" class="pill pill-danger" :title="r.graphify_error">✕ 索引失敗</span>
               </div>
               <div style="font-size:12px;color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
               <div v-if="r.local_path" style="font-size:12px;color:var(--text-muted)">路徑：{{ r.local_path }}</div>
@@ -255,7 +257,7 @@ window.ProjectDetailView = Vue.defineComponent({
             <a v-if="env.url" :href="env.url" target="_blank" style="font-size:12px">{{ env.url }}</a>
             <span v-if="env.port && env.status === 'running'" style="font-size:12px;color:var(--text-muted)">port {{ env.port }}</span>
           </div>
-          <div v-if="env.error_msg" style="background:#fff5f5;border:1px solid #fc8181;border-radius:4px;padding:8px;font-size:12px;margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
+          <div v-if="env.error_msg" class="error-msg" style="margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
           <details v-if="env.setup_log" style="margin-bottom:10px">
             <summary style="font-size:12px;color:var(--text-muted);cursor:pointer;user-select:none">▶ 查看建立記錄</summary>
             <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:11px;overflow-x:auto;margin-top:6px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{{ env.setup_log }}</pre>

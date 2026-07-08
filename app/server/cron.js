@@ -69,6 +69,12 @@ function startCron() {
       // 自動封存：完成滿一個月的任務移出主列表（冪等）
       await autoArchiveDone().catch(err => console.error('[CRON] auto-archive:', err.message));
 
+      // 退回原因慢慢整理：每 tick 撈一小批 status='new' 的退回跑分類 agent（工作流程健檢子專案 1）
+      if (!testMode) {
+        const { classifyPendingRejections } = require('./pipeline/classify-rejections');
+        await classifyPendingRejections().catch(err => console.error('[CRON] reject-classify:', err.message));
+      }
+
       // Nightly env shutdown
       const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
       const [sh, sm] = shutdownTime.split(':').map(Number);

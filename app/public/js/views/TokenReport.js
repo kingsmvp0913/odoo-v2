@@ -25,12 +25,14 @@ window.TokenReportView = Vue.defineComponent({
       if (!daily || daily.length < 2) return null;
       // 左側留 48px 給 y 軸數量刻度
       const left = 48, w = this.chartW, top = 16, bottom = this.chartH - 28, n = daily.length;
-      const maxV = Math.max(...daily.map(d => d.tokens), 1);
+      // 首點離 y 軸再內縮 16px，避免第一個 x 軸標籤壓在 y 軸 0 刻度上
+      const plotLeft = left + 16, plotRight = w - 24;
+      const maxV = Math.max(...daily.map(d => d.cost), 1e-9);
       const dots = daily.map((d, i) => ({
-        x: left + (i / (n - 1)) * (w - left - 24),
-        y: bottom - (d.tokens / maxV) * (bottom - top),
+        x: plotLeft + (i / (n - 1)) * (plotRight - plotLeft),
+        y: bottom - (d.cost / maxV) * (bottom - top),
         date: d.date,
-        tokens: d.tokens
+        cost: d.cost
       }));
       const step = Math.max(1, Math.ceil(n / 10));
       const labels = dots.filter((_, i) => i % step === 0 || i === n - 1)
@@ -40,9 +42,9 @@ window.TokenReportView = Vue.defineComponent({
       const yTicks = [];
       for (let i = 0; i <= TICKS; i++) {
         const v = (maxV / TICKS) * i;
-        yTicks.push({ y: bottom - (v / maxV) * (bottom - top), label: this.fmtShort(Math.round(v)) });
+        yTicks.push({ y: bottom - (v / maxV) * (bottom - top), label: this.fmtUSD(v) });
       }
-      return { points: dots.map(p => `${p.x},${p.y}`).join(' '), dots, labels, yTicks, left, right: w - 24 };
+      return { points: dots.map(p => `${p.x},${p.y}`).join(' '), dots, labels, yTicks, left, right: plotRight };
     },
     dateRange() {
       const now = new Date();
@@ -100,12 +102,23 @@ window.TokenReportView = Vue.defineComponent({
         if (this.filters.project_id) p.set('project_id', this.filters.project_id);
         if (this.filters.task_id)    p.set('task_id', this.filters.task_id);
         this.report = await Api.get(`token-report?${p.toString()}`);
-        await this.$nextTick();
-        this.measureChart();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
+      // loading=false 後 trendBox 才會 render，此時才量得到正確容器尺寸
+      await this.$nextTick();
+      this.measureChart();
+      this.observeChart();
     },
     fmtNum(n) { return Number(n || 0).toLocaleString(); },
+    // USD 金額：大額用 K、$1 以上兩位、小額多留精度（cent 以下對話成本也看得到）
+    fmtUSD(n) {
+      n = Number(n || 0);
+      if (n >= 1000) return '$' + (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+      if (n >= 1)    return '$' + n.toFixed(2);
+      if (n >= 0.01) return '$' + n.toFixed(3);
+      if (n > 0)     return '$' + n.toFixed(5);
+      return '$0';
+    },
     fmtShort(n) {
       n = Number(n || 0);
       if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
@@ -145,14 +158,21 @@ window.TokenReportView = Vue.defineComponent({
       if (isNaN(dt.getTime())) return String(v).slice(5, 10);
       return `${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
     },
-    // 量測折線圖容器寬度，讓 SVG 填滿整列
+    // 量測繪圖區 wrapper 的寬高，讓 SVG（絕對定位）填滿它
+    // wrapper 高度由 grid stretch 決定、不受 SVG 影響，故量測穩定不會回饋循環
     measureChart() {
       const el = this.$refs.trendBox;
       if (el) {
         this.chartW = Math.max(320, el.clientWidth);
-        // 卡片被左側圖例撐高 → 折線圖填滿整列（扣掉標題與 padding）
-        this.chartH = Math.max(180, el.clientHeight - 50);
+        this.chartH = Math.max(180, el.clientHeight);
       }
+    },
+    // 用 ResizeObserver 在容器最終 layout 定型後才量測，避免 nextTick 量到中間態導致寬度不滿版
+    observeChart() {
+      const el = this.$refs.trendBox;
+      if (!el || this._ro) return;
+      this._ro = new ResizeObserver(() => this.measureChart());
+      this._ro.observe(el);
     }
   },
   mounted() {
@@ -161,6 +181,7 @@ window.TokenReportView = Vue.defineComponent({
   },
   beforeUnmount() {
     window.removeEventListener('resize', this.measureChart);
+    if (this._ro) { this._ro.disconnect(); this._ro = null; }
   },
   template: `
     <div class="topbar"><h1>用量報表</h1></div>
@@ -193,17 +214,25 @@ window.TokenReportView = Vue.defineComponent({
       <template v-else-if="report">
 
         <!-- 摘要卡片 -->
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px">
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--primary)" :title="fmtNum(report.summary.total_tokens)">{{ fmtShort(report.summary.total_tokens) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">總 Token 數</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:var(--text-muted)" :title="fmtNum(report.summary.cache_tokens)">{{ fmtShort(report.summary.cache_tokens) }}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Cache 總數</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:var(--info)" :title="'$'+Number(report.summary.cost_usd||0).toFixed(6)">{{ fmtUSD(report.summary.cost_usd) }}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">實際花費</div>
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--success)">{{ fmtNum(report.summary.total_tasks) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">任務數</div>
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--warning)" :title="fmtNum(report.summary.avg_tokens_per_task)">{{ fmtShort(report.summary.avg_tokens_per_task) }}</div>
+            <div style="font-size:24px;font-weight:700;color:var(--warning)" :title="'$'+Number(report.summary.avg_cost_per_task||0).toFixed(6)">{{ fmtUSD(report.summary.avg_cost_per_task) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">平均每任務</div>
           </div>
         </div>
@@ -215,15 +244,15 @@ window.TokenReportView = Vue.defineComponent({
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">Agent 類型</div>
             <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_agent.length">
-              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.tokens,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
+              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.cost,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
+                <title>{{ s.label }}: {{ fmtUSD(s.value) }}</title>
               </path>
             </svg>
             <div v-for="r in report.by_agent" :key="r.agent_type"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:agentColor(r.agent_type),display:'inline-block'}"></span>
-              {{ agentLabel(r.agent_type) }}: {{ fmtShort(r.tokens) }}
+              {{ agentLabel(r.agent_type) }}: {{ fmtUSD(r.cost) }}
             </div>
           </div>
 
@@ -231,22 +260,24 @@ window.TokenReportView = Vue.defineComponent({
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">專案分布</div>
             <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_project.length">
-              <path v-for="(s,i) in piePath(report.by_project.map((r,i)=>({value:r.tokens,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
+              <path v-for="(s,i) in piePath(report.by_project.map((r,i)=>({value:r.cost,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
+                <title>{{ s.label }}: {{ fmtUSD(s.value) }}</title>
               </path>
             </svg>
             <div v-for="(r,i) in report.by_project" :key="r.project_id"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:'hsl('+(i*60)+',60%,50%)',display:'inline-block'}"></span>
-              {{ r.project_name }}: {{ fmtShort(r.tokens) }}
+              {{ r.project_name }}: {{ fmtUSD(r.cost) }}
             </div>
           </div>
 
           <!-- 折線圖（填滿第三欄） -->
-          <div ref="trendBox" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">每日趨勢</div>
-            <svg :width="chartW" :height="chartH" v-if="chartData">
+            <!-- 繪圖區：flex:1 撐滿卡片剩餘高度；SVG 絕對定位填滿它，不反過來撐高容器（避免 ResizeObserver 循環） -->
+            <div ref="trendBox" style="flex:1;min-height:180px;position:relative">
+            <svg :width="chartW" :height="chartH" v-if="chartData" style="position:absolute;top:0;left:0">
               <!-- y 軸格線與數量刻度 -->
               <line v-for="(t,i) in chartData.yTicks" :key="'g'+i"
                 :x1="chartData.left" :y1="t.y" :x2="chartData.right" :y2="t.y"
@@ -256,12 +287,13 @@ window.TokenReportView = Vue.defineComponent({
               <polyline :points="chartData.points"
                 fill="none" stroke="var(--primary)" stroke-width="2" />
               <circle v-for="d in chartData.dots" :key="d.date" :cx="d.x" :cy="d.y" r="3" fill="var(--primary)">
-                <title>{{ fmtMD(d.date) }}: {{ fmtNum(d.tokens) }}</title>
+                <title>{{ fmtMD(d.date) }}: {{ fmtUSD(d.cost) }}</title>
               </circle>
               <text v-for="(l,i) in chartData.labels" :key="i"
                 :x="l.x" :y="chartH - 8" font-size="10" fill="var(--text-muted)" text-anchor="middle">{{ l.label }}</text>
             </svg>
             <div v-else style="font-size:12px;color:var(--text-muted);padding:20px 0;text-align:center">資料不足</div>
+            </div>
           </div>
 
         </div>
@@ -274,7 +306,7 @@ window.TokenReportView = Vue.defineComponent({
               <tr style="background:var(--border);font-weight:600;font-size:12px;position:sticky;top:0;z-index:1">
                 <th style="padding:8px 12px;text-align:left;background:var(--border);width:32%">任務</th>
                 <th style="padding:8px 12px;text-align:left;background:var(--border);width:20%">專案</th>
-                <th style="padding:8px 12px;text-align:right;background:var(--border);width:12%">Token 數</th>
+                <th style="padding:8px 12px;text-align:right;background:var(--border);width:12%">花費</th>
                 <th style="padding:8px 12px;text-align:left;background:var(--border);width:14%">用戶</th>
                 <th style="padding:8px 12px;text-align:left;background:var(--border);width:22%">記錄時間</th>
               </tr>
@@ -292,19 +324,19 @@ window.TokenReportView = Vue.defineComponent({
                     <span v-else>{{ taskLabel(t) }}</span>
                   </td>
                   <td style="padding:8px 12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.project_name || '—'">{{ t.project_name || '—' }}</td>
-                  <td style="padding:8px 12px;text-align:right;font-weight:600" :title="fmtNum(t.total_tokens)">{{ fmtShort(t.total_tokens) }}</td>
+                  <td style="padding:8px 12px;text-align:right;font-weight:600" :title="'$'+Number(t.total_cost||0).toFixed(6)">{{ fmtUSD(t.total_cost) }}</td>
                   <td style="padding:8px 12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.username || '—'">{{ t.username || '—' }}</td>
                   <td style="padding:8px 12px;color:var(--text-muted);font-size:11px;white-space:nowrap">
                     {{ new Date(t.last_recorded_at).toLocaleString('zh-TW') }}
                   </td>
                 </tr>
                 <tr v-if="expandedTasks[t.ref_key]"
-                  style="background:#f8fafc">
+                  style="background:var(--bg)">
                   <td colspan="5" style="padding:4px 12px 8px 32px">
-                    <div v-for="a in t.agents" :key="a.agent_type"
+                    <div v-for="(a,ai) in t.agents" :key="ai"
                       style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:var(--text-secondary)">
                       <span :style="{width:'8px',height:'8px',borderRadius:'50%',background:agentColor(a.agent_type),display:'inline-block'}"></span>
-                      {{ agentLabel(a.agent_type) }}: <span :title="fmtNum(a.tokens)">{{ fmtShort(a.tokens) }}</span>
+                      {{ agentLabel(a.agent_type) }}<span v-if="a.model" style="color:var(--text-muted)">·{{ a.model }}</span>: <span :title="'$'+Number(a.cost||0).toFixed(6)">{{ fmtUSD(a.cost) }}</span>
                       <span v-if="a.duration_ms" style="color:var(--text-muted)">({{ (a.duration_ms/1000).toFixed(1) }}s)</span>
                     </div>
                   </td>

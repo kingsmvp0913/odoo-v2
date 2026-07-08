@@ -7,7 +7,9 @@ const { hashPassword } = require('./password');
 const { encryptSafe } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
+const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runHealthCheck } = require('./pipeline/health-check-runner');
+const { E2E_LOGIN, E2E_PASSWORD } = require('./pipeline/e2e-account');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -32,6 +34,12 @@ async function requireAdmin(req, res, next) {
 
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];
+
+  // --- 固定 E2E 測試帳號（唯讀顯示；建立環境／同步使用者時自動寫入測試區）---
+
+  app.get('/api/admin/e2e-account', auth, (_req, res) => {
+    res.json({ login: E2E_LOGIN, password: E2E_PASSWORD });
+  });
 
   // --- odoo_version_configs ---
 
@@ -317,6 +325,45 @@ function registerRoutes(app) {
   app.get('/api/agents/labels', verifyToken, (_req, res) => {
     try { res.json(getLabels()); }
     catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // --- 進行中 Pipeline 監控（跨使用者，僅 admin）---
+
+  // 真正在飛（有活著的 process）的 task，非撈 status='*_running'（那可能是殘留）。以 _inFlight 為準。
+  app.get('/api/admin/pipeline/active', auth, async (req, res) => {
+    try {
+      const info = getInflightInfo();
+      if (!info.length) return res.json([]);
+      const byId = new Map(info.map(i => [Number(i.taskId), i.startedAt]));
+      const ids = [...byId.keys()];
+      const ph = ids.map((_, i) => '$' + (i + 1)).join(',');
+      const { rows } = await query(
+        `SELECT t.id, t.task_id, t.title, t.status, t.project_id,
+                p.name AS project_name, t.user_id, u.username, u.display_name
+         FROM tasks t
+         LEFT JOIN projects p ON p.id = t.project_id
+         LEFT JOIN users u ON u.id = t.user_id
+         WHERE t.id IN (${ph})`,
+        ids
+      );
+      const now = Date.now();
+      const list = rows.map(r => ({ ...r, elapsed_ms: now - (byId.get(r.id) || now) }));
+      list.sort((a, b) => b.elapsed_ms - a.elapsed_ms); // 執行最久的在最上
+      res.json(list);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 暫停並 kill 指定 task 的行程（不綁 owner，跨使用者）。is_paused=true 使之後不再派工。
+  app.post('/api/admin/pipeline/tasks/:id/pause', auth, async (req, res) => {
+    try {
+      const { rowCount } = await query(
+        'UPDATE tasks SET is_paused = true, updated_at = NOW() WHERE id = $1',
+        [req.params.id]
+      );
+      if (!rowCount) return res.status(404).json({ error: 'Task not found' });
+      abortTask(req.params.id);
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 }
 

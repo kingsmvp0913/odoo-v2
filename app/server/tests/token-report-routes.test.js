@@ -93,6 +93,11 @@ test('GET /api/token-report → 200 for admin (own data only without ?all=true)'
   expect(res.status).toBe(200);
   // Admin without ?all=true sees only own data: task_odoo_1 has 100+50+10+5=165 tokens
   expect(res.body.summary.total_tokens).toBe(165);
+  // Cache 總數 = cache_read + cache_create = 10 + 5 = 15
+  expect(res.body.summary.cache_tokens).toBe(15);
+  // 實際花費：無 model → 以 sonnet($3/1M) 計；加權=100+50*5+10*0.1+5*1.25=357.25
+  // cost = 3 * 357.25 / 1e6 = 0.00107175 USD
+  expect(res.body.summary.cost_usd).toBeCloseTo(0.00107175, 8);
 });
 
 test('GET /api/token-report?all=true → 200 for admin (all users data)', async () => {
@@ -121,8 +126,10 @@ test('GET /api/token-report → summary shape is correct', async () => {
   expect(res.status).toBe(200);
   const { summary, by_agent, by_project, daily, tasks } = res.body;
   expect(typeof summary.total_tokens).toBe('number');
+  expect(typeof summary.cache_tokens).toBe('number');
+  expect(typeof summary.cost_usd).toBe('number');
   expect(typeof summary.total_tasks).toBe('number');
-  expect(typeof summary.avg_tokens_per_task).toBe('number');
+  expect(typeof summary.avg_cost_per_task).toBe('number');
   expect(Array.isArray(by_agent)).toBe(true);
   expect(Array.isArray(by_project)).toBe(true);
   expect(Array.isArray(daily)).toBe(true);
@@ -147,8 +154,24 @@ test('GET /api/token-report → by_agent has correct shape', async () => {
   expect(res.body.by_agent.length).toBeGreaterThan(0);
   for (const entry of res.body.by_agent) {
     expect(typeof entry.agent_type).toBe('string');
-    expect(typeof entry.tokens).toBe('number');
+    expect(typeof entry.cost).toBe('number');
   }
+});
+
+test('依 model 單價計 USD：opus 記錄用 $5/1M、model 一併回傳', async () => {
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source)
+     VALUES ('task_opus_1', $1, 'coding', 'claude-opus-4-8', 1000, 0, 0, 0, 'server')`,
+    [adminUserId]
+  );
+  const res = await request(app)
+    .get('/api/token-report?all=true&task_id=task_opus_1')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  // 加權=1000；opus $5/1M → cost = 5*1000/1e6 = 0.005 USD（若當 sonnet 會是 0.003，區別得出）
+  expect(res.body.summary.cost_usd).toBeCloseTo(0.005, 8);
+  expect(res.body.tasks[0].total_cost).toBeCloseTo(0.005, 8);
+  expect(res.body.tasks[0].agents[0].model).toBe('claude-opus-4-8');
 });
 
 test('chat token_usage groups per chat_id with chat title; orphan task/chat marked deleted', async () => {
@@ -211,5 +234,27 @@ test('GET /api/token-report → tasks have agents array', async () => {
   const task = res.body.tasks[0];
   expect(Array.isArray(task.agents)).toBe(true);
   expect(task.agents[0].agent_type).toBe('qa');
-  expect(task.agents[0].tokens).toBe(300);
+  // 加權=200+80*5+20*0.1=602；無 model→sonnet$3；cost=3*602/1e6=0.001806 USD
+  expect(task.agents[0].cost).toBeCloseTo(0.001806, 8);
+});
+
+test('end=今天（date-only）→ 含當天記錄（邊界補到當日結束）', async () => {
+  // 插入一筆 recorded_at=現在的記錄，模擬「今天」剛產生的用量
+  const { rows: [row] } = await dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source, recorded_at)
+     VALUES ('task_today_1', $1, 'coding', 1000, 0, 0, 0, 'server', NOW()) RETURNING id`,
+    [regularUserId]
+  );
+  expect(row.id).toBeTruthy();
+
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await request(app)
+    .get(`/api/token-report?start=${today}&end=${today}`)
+    .set('Authorization', `Bearer ${userToken}`);
+  expect(res.status).toBe(200);
+  // 若 end 被當成當日 00:00，今天白天產生的這筆會被 recorded_at <= end 濾掉
+  const hit = res.body.tasks.find(t => t.task_id === 'task_today_1');
+  expect(hit).toBeTruthy();
+  // 加權=1000；無 model→sonnet$3；cost=3*1000/1e6=0.003 USD
+  expect(hit.total_cost).toBeCloseTo(0.003, 8);
 });

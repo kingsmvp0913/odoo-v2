@@ -64,6 +64,22 @@ test('POST /api/admin/users → 建立使用者並寫入可解回原密碼的 pa
   expect(decrypt(u.password_enc)).toBe('e2epass123');
 });
 
+// --- 固定 E2E 測試帳號（唯讀）---
+
+test('GET /api/admin/e2e-account → 回固定帳密 auto_test_user', async () => {
+  const res = await request(app).get('/api/admin/e2e-account')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.login).toBe('auto_test_user');
+  expect(res.body.password).toBe('auto_test_user');
+});
+
+test('GET /api/admin/e2e-account → 403 for non-admin', async () => {
+  const res = await request(app).get('/api/admin/e2e-account')
+    .set('Authorization', `Bearer ${userToken}`);
+  expect(res.status).toBe(403);
+});
+
 // --- version-configs ---
 
 test('GET /api/admin/version-configs → 403 for non-admin', async () => {

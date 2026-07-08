@@ -7,6 +7,7 @@ jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-proj';
+process.env.APP_SECRET = 'test-proj-appsecret'; // E-2：PATCH 加密 E2E 測試密碼需 APP_SECRET
 let app, dbModule, token;
 
 beforeAll(async () => {

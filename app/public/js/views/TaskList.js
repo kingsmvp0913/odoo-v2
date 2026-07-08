@@ -357,7 +357,7 @@ window.TaskListView = Vue.defineComponent({
     <div class="topbar">
       <h1>任務列表</h1>
       <button class="btn btn-primary btn-sm" @click="openAdd">＋ 新增任務</button>
-      <span v-if="testMode" style="font-size:12px;color:var(--warning);background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 8px">🧪 測試模式</span>
+      <span v-if="testMode" class="pill pill-warn" style="font-size:12px;padding:2px 8px">🧪 測試模式</span>
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
       </button>
@@ -452,7 +452,7 @@ window.TaskListView = Vue.defineComponent({
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="display:flex;align-items:center;gap:6px">
               <span class="status-badge" :class="t.status">{{ statusLabel(t.status) }}</span>
-              <span v-if="t.is_paused" style="font-size:11px;background:#fffbeb;color:var(--warning);border:1px solid #fde68a;border-radius:4px;padding:1px 6px">暫停中</span>
+              <span v-if="t.is_paused" class="pill pill-warn">暫停中</span>
             </div>
             <span v-if="t.module" style="font-size:11px;color:var(--text-muted)">{{ t.module }}</span>
           </div>

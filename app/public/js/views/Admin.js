@@ -5,6 +5,7 @@ window.AdminView = Vue.defineComponent({
       odoo: { url: '', db: '', sync_interval: 60 },
       service: { url: '', db: '', sync_interval: 60 },
       teams: { tenant_id: '', client_id: '', client_secret: '', team_id: '', channel_id: '', webhook_url: '' },
+      e2e: { login: '', password: '' },
       testMode: false,
       loading: true,
       savingConn: false,
@@ -34,6 +35,7 @@ window.AdminView = Vue.defineComponent({
             channel_id: d.channel_id || '', webhook_url: d.webhook_url || ''
           });
         }
+        try { this.e2e = await Api.get('admin/e2e-account'); } catch (_) { /* 顯示用，取不到不擋頁面 */ }
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -155,6 +157,26 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
+        <!-- E2E 測試帳號（固定，唯讀顯示）-->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">E2E 測試帳號</div>
+            <div class="setting-block-desc">Playwright 自動化測試登入測試區用的固定帳號。建立環境／同步使用者時會自動寫入 Odoo 測試區（管理員權限）。此帳密固定、無法從此處修改。</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="conn-fields">
+              <div class="field-item">
+                <label class="field-label">帳號</label>
+                <input :value="e2e.login" class="field-input" readonly />
+              </div>
+              <div class="field-item">
+                <label class="field-label">密碼</label>
+                <input :value="e2e.password" class="field-input" readonly />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Teams 整合 -->
         <div class="setting-block">
           <div class="setting-block-head">
@@ -215,7 +237,7 @@ window.AdminView = Vue.defineComponent({
               <span style="font-size:14px;color:var(--text)">{{ testMode ? '測試模式已啟用' : '測試模式已關閉' }}</span>
             </label>
           </div>
-          <div v-if="testMode" class="setting-block-footer" style="background:#fffbeb;border-top-color:#fde68a">
+          <div v-if="testMode" class="setting-block-footer warn">
             <span style="font-size:12px;color:var(--warning)">測試模式已啟用 — 請至「任務列表」使用「▶ 推進 Pipeline」按鈕手動推進</span>
           </div>
         </div>

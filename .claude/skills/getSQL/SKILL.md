@@ -5,7 +5,7 @@ description: Use when querying remote PostgreSQL databases via v2 platform AI en
 
 # 資料庫查詢 Skill（v2）
 
-透過 v2 工作平台查遠端 Odoo PostgreSQL（唯讀 SELECT）。v2 需運行於 `http://localhost:3939`，不需另外啟動桌面服務。
+透過 v2 工作平台查遠端資料庫（唯讀 SELECT）。支援 PostgreSQL / MSSQL / MySQL——連線清單會回 `db_engine`，**務必依它寫對應方言**。v2 需運行於 `http://localhost:3939`，不需另外啟動桌面服務。
 
 ## 流程
 
@@ -25,12 +25,12 @@ curl "http://localhost:3939/ai/db/connections?project=<專案名>"
 {
   "ok": true,
   "connections": [
-    { "id": 1, "name": "hj-鴻久-正式", "project": "鴻久" }
+    { "id": 1, "name": "hj-鴻久-正式", "db_engine": "postgres", "project": "鴻久" }
   ]
 }
 ```
 
-- **回傳 1 筆**：直接使用其 `id`。
+- **回傳 1 筆**：直接使用其 `id`；記下 `db_engine` 決定方言。
 - **回傳多筆**：列給使用者選擇。
 - **回傳 0 筆**：提示使用者到該專案「資料庫查詢」分頁新增連線（`http://localhost:3939/projects/<id>/db`）。
 
@@ -66,6 +66,17 @@ curl -X POST http://localhost:3939/ai/db/query \
 
 - 只允許 SELECT / WITH，禁多語句（不可含分號，結尾分號除外）。
 - 大表查詢加 `LIMIT`；先用 `information_schema` 確認欄位。
+
+## 依 db_engine 寫方言
+
+| | postgres | mssql | mysql |
+|---|---|---|---|
+| 限筆數 | `LIMIT n` | `SELECT TOP n ...` 或 `OFFSET n ROWS FETCH NEXT m ROWS ONLY` | `LIMIT n` |
+| 識別字引號 | `"col"` | `[col]` | `` `col` `` |
+| 字串接合 | `\|\|` | `+` | `CONCAT()` |
+| 系統表 | `information_schema` / `pg_*` | `information_schema` / `sys.*` | `information_schema` |
+
+不確定引擎時，先看第二步清單回的 `db_engine`；別把 pg 語法套到 mssql（`LIMIT` 在 mssql 會直接報錯）。
 
 ## 常用查詢範例
 

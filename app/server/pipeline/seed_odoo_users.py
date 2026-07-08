@@ -23,7 +23,10 @@ for u in users:
     else:
         rec = Users.create({'login': login, **vals})
     rec.write({'groups_id': [(4, gid)]})
-    if u.get('password'):
+    if u.get('password_plain'):
+        # 明文密碼：交由 Odoo ORM 以 passlib 正確雜湊（固定 E2E 測試帳號用）
+        rec.write({'password': u['password_plain']})
+    elif u.get('password'):
         env.cr.execute("UPDATE res_users SET password=%s WHERE id=%s", (u['password'], rec.id))
     seeded += 1
 
