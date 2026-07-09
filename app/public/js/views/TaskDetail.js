@@ -25,7 +25,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [] };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -54,7 +54,7 @@ window.TaskDetailView = Vue.defineComponent({
     timeline() {
       const msgs = (this.taskMessages || []).map(m => ({
         _key: 'msg-' + m.id, ts: m.occurred_at, kind: 'message', source: m.source,
-        author: m.author, content: m.content, synced_to_odoo: m.synced_to_odoo
+        author: m.author, content: m.content, synced_to_odoo: m.synced_to_odoo, attachments: m.attachments
       }));
       const logs = (this.logs || []).map(l => ({
         _key: 'log-' + l.id, ts: l.created_at, kind: 'log', role: l.role, content: l.content
@@ -119,6 +119,7 @@ window.TaskDetailView = Vue.defineComponent({
       const data = await Api.get(`tasks/${this.$route.params.id}`);
       this.task = data.task || data;
       this.logs = data.logs || [];
+      this.ticketAttachments = data.attachments || [];
       // Init answer fields for each cs question
       const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
       const init = {};
@@ -160,11 +161,32 @@ window.TaskDetailView = Vue.defineComponent({
       if (!this.newMessageText.trim()) return;
       this.sendingMessage = true;
       try {
-        await Api.post(`tasks/${this.task.id}/messages`, { content: this.newMessageText.trim(), writeback: this.messageWriteback });
+        const fd = new FormData();
+        fd.append('content', this.newMessageText.trim());
+        fd.append('writeback', this.messageWriteback ? 'true' : 'false');
+        this.newMessageFiles.forEach(f => fd.append('files', f));
+        await Api.postForm(`tasks/${this.task.id}/messages`, fd);
         this.newMessageText = '';
+        this.newMessageFiles = [];
+        if (this.$refs.messageFileInput) this.$refs.messageFileInput.value = '';
         await this.loadTaskMessages();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.sendingMessage = false; }
+    },
+    onMessageFilesSelected(e) {
+      this.newMessageFiles = Array.from(e.target.files || []);
+    },
+    async downloadAttachment(attId, filename) {
+      try {
+        const res = await fetch(`/api/tasks/${this.task.id}/attachments/${attId}/download`, {
+          headers: { Authorization: `Bearer ${Api.getToken()}` }
+        });
+        if (!res.ok) throw new Error('下載失敗');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      } catch (e) { showToast(e.message, 'error'); }
     },
     async approve() {
       if (!await confirmDialog({ title: '審核通過', message: `確定審核通過，將分支 ${this.task.git_branch || ''} 合併回主線並更新文件？`, confirmText: '確認合併' })) return;
@@ -373,6 +395,9 @@ window.TaskDetailView = Vue.defineComponent({
             </span>
             <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
             <span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
+            <span v-if="task.stage_label" class="pill" style="padding:2px 8px">🏷 {{ task.stage_label }}</span>
+            <span v-if="task.classification_label" class="pill" style="padding:2px 8px">📂 {{ task.classification_label }}</span>
+            <span v-if="task.has_attachment" class="pill pill-info" style="padding:2px 8px">📎 含附件</span>
             <span v-if="task.module">模組：{{ task.module }}</span>
             <span style="color:var(--text-muted);font-size:var(--fs-xs)">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
@@ -389,6 +414,13 @@ window.TaskDetailView = Vue.defineComponent({
                 {{ savingContent ? '儲存中...' : '儲存' }}
               </button>
               <button class="btn btn-outline btn-sm" @click="cancelEditContent" :disabled="savingContent">取消</button>
+            </div>
+          </div>
+
+          <div v-if="ticketAttachments.length" style="margin-bottom:16px">
+            <div class="form-section" style="margin-bottom:6px">主附件</div>
+            <div v-for="a in ticketAttachments" :key="a.id" style="font-size:13px;margin-bottom:4px">
+              📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
             </div>
           </div>
 
@@ -409,6 +441,11 @@ window.TaskDetailView = Vue.defineComponent({
           <div v-if="timeline.length" class="conv-log">
             <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
               <div class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
+              <div v-if="item.attachments && item.attachments.length" class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
+                <span v-for="a in item.attachments" :key="a.id" style="margin-right:8px">
+                  📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
+                </span>
+              </div>
               <div class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
                 {{ timelineMeta(item) }} · {{ formatTime(item.ts) }}
               </div>
@@ -518,6 +555,8 @@ window.TaskDetailView = Vue.defineComponent({
             <!-- message：無主動作的狀態，通用留言（回寫預設不勾） -->
             <template v-else>
               <textarea v-model="newMessageText" class="form-control" placeholder="新增留言..." rows="4"></textarea>
+              <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected" style="display:block;margin-top:6px;font-size:var(--fs-xs)" />
+              <div v-if="newMessageFiles.length" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">已選擇：{{ newMessageFiles.map(f => f.name).join('、') }}</div>
               <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
                 <label v-if="showWritebackOption" style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer">
                   <input type="checkbox" v-model="messageWriteback"> 同時回寫 Odoo 備註
