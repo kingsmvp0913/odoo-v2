@@ -159,7 +159,9 @@ function registerRoutes(app) {
       );
 
       const { rows: [cfg] } = await query('SELECT writeback_odoo_notes FROM teams_settings WHERE id = 1');
-      if (cfg?.writeback_odoo_notes) {
+      // 沒帶 writeback 欄位時預設 true（維持現況行為）；前端明確傳 false 才跳過這則的回寫
+      const wantsWriteback = req.body?.writeback !== false;
+      if (cfg?.writeback_odoo_notes && wantsWriteback) {
         try {
           const newExternalId = await writebackTaskMessage(req.userId, tasks[0], trimmed);
           if (newExternalId) {

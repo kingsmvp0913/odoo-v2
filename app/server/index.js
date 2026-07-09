@@ -62,13 +62,14 @@ function createApp() {
   // Public (auth-only): get non-sensitive global config
   app.get('/api/system/config', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query('SELECT test_mode, odoo_url, service_url FROM teams_settings WHERE id = 1');
+      const { rows } = await query('SELECT test_mode, odoo_url, service_url, writeback_odoo_notes FROM teams_settings WHERE id = 1');
       res.json({
         test_mode: !!(rows[0]?.test_mode),
         odoo_url: rows[0]?.odoo_url || '',
-        service_url: rows[0]?.service_url || ''
+        service_url: rows[0]?.service_url || '',
+        writeback_odoo_notes: !!(rows[0]?.writeback_odoo_notes)
       });
-    } catch { res.json({ test_mode: false, odoo_url: '', service_url: '' }); }
+    } catch { res.json({ test_mode: false, odoo_url: '', service_url: '', writeback_odoo_notes: false }); }
   });
 
   // User-level: advance pipeline one round for current user only

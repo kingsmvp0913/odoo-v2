@@ -358,6 +358,39 @@ test('POST /api/tasks/:id/messages → writeback_odoo_notes=true 且回寫成功
   }
 });
 
+test('POST /api/tasks/:id/messages → writeback:false 時即使全域開關為真也不觸發回寫', async () => {
+  const mockFetch = jest.fn();
+  const originalFetch = global.fetch;
+  global.fetch = mockFetch;
+  try {
+    await dbModule.query(
+      `INSERT INTO teams_settings (id, odoo_url, odoo_db, writeback_odoo_notes)
+       VALUES (1, 'https://odoo.example.com', 'mydb', true)
+       ON CONFLICT (id) DO UPDATE SET odoo_url = $1, odoo_db = $2, writeback_odoo_notes = $3`,
+      ['https://odoo.example.com', 'mydb', true]
+    );
+    await dbModule.query(
+      'UPDATE users SET odoo_settings = $2 WHERE id = $1',
+      [userId, JSON.stringify({ odoo_username: 'admin', odoo_password: 'pass', odoo_user_id: 1 })]
+    );
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+       VALUES ($1,'task_odoo_5004','odoo','M','base','coding_running') RETURNING id`,
+      [userId]
+    );
+
+    const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ content: '這則不要回寫', writeback: false });
+    expect(res.status).toBe(200);
+    expect(res.body.synced_to_odoo).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
+  } finally {
+    global.fetch = originalFetch;
+    await dbModule.query("UPDATE teams_settings SET writeback_odoo_notes = false WHERE id = 1");
+  }
+});
+
 test('POST /api/tasks/:id/messages → writeback 失敗時本地留言仍成功建立', async () => {
   const mockFetch = jest.fn();
   const originalFetch = global.fetch;
