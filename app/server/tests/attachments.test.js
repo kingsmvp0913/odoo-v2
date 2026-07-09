@@ -33,3 +33,13 @@ test('readAttachmentFile 讀回 saveAttachmentFile 寫入的內容', () => {
   const buf = attachments.readAttachmentFile(relPath);
   expect(buf.toString()).toBe('內容測試');
 });
+
+test('readAttachmentFile 拒絕逃逸 uploadRoot 的路徑', () => {
+  expect(() => attachments.readAttachmentFile('../../../etc/passwd')).toThrow();
+});
+
+test('saveAttachmentFile 對惡意 taskId 也會清掉危險字元，不逃出 uploadRoot', () => {
+  const relPath = attachments.saveAttachmentFile('../../evil', 'x.txt', Buffer.from('x'));
+  expect(relPath).not.toContain('..');
+  expect(fs.existsSync(path.join(tmpRoot, relPath))).toBe(true);
+});
