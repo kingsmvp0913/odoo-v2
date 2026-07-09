@@ -283,7 +283,7 @@ window.AdminView = Vue.defineComponent({
             <div class="setting-block-title">使用者管理</div>
             <div class="setting-block-desc">新增、刪除帳號，調整角色與存取權限。</div>
           </div>
-          <div class="setting-block-footer" style="border-top:none;padding-top:0">
+          <div class="setting-block-body">
             <button class="btn btn-primary btn-sm" @click="$router.push('/admin/users')">前往使用者管理 →</button>
           </div>
         </div>
@@ -294,7 +294,7 @@ window.AdminView = Vue.defineComponent({
             <div class="setting-block-title">Agent 管理</div>
             <div class="setting-block-desc">調整各 agent 的模型與提示詞。</div>
           </div>
-          <div class="setting-block-footer" style="border-top:none;padding-top:0">
+          <div class="setting-block-body">
             <button class="btn btn-primary btn-sm" @click="$router.push('/admin/agents')">前往 Agent 管理 →</button>
           </div>
         </div>
@@ -305,7 +305,7 @@ window.AdminView = Vue.defineComponent({
             <div class="setting-block-title">工作流程健檢</div>
             <div class="setting-block-desc">分析各 pipeline agent 近期表現，提出提示詞改進建議。</div>
           </div>
-          <div class="setting-block-footer" style="border-top:none;padding-top:0">
+          <div class="setting-block-body">
             <button class="btn btn-primary btn-sm" @click="$router.push('/admin/health')">前往健檢 →</button>
           </div>
         </div>
