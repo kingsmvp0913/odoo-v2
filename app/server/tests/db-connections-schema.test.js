@@ -52,3 +52,34 @@ test('db_engine 可存 mssql/mysql', async () => {
   const { rows: [c] } = await dbModule.query('SELECT db_engine FROM db_connections WHERE project_id=$1', [p.id]);
   expect(c.db_engine).toBe('mssql');
 });
+
+test('VPN 欄位存在且有預設值（vpn_enabled=false）', async () => {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('P4','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO db_connections (project_id, name, ssh_host, ssh_user, db_name)
+     VALUES ($1,'v1','1.2.3.4','root','odoo_prd')`, [p.id]
+  );
+  const { rows: [c] } = await dbModule.query('SELECT * FROM db_connections WHERE project_id=$1', [p.id]);
+  expect(c.vpn_enabled).toBe(false);
+  expect(c.vpn_config_enc).toBeNull();
+  expect(c.vpn_username).toBeNull();
+  expect(c.vpn_password_enc).toBeNull();
+  expect(c.vpn_forward_port).toBeNull();
+  expect(c.vpn_container_name).toBeNull();
+});
+
+test('VPN 欄位可寫入完整值', async () => {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('P5','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO db_connections (project_id, name, ssh_host, ssh_user, db_name, vpn_enabled, vpn_config_enc, vpn_username, vpn_password_enc, vpn_forward_port, vpn_container_name)
+     VALUES ($1,'v2','1.2.3.4','root','odoo_prd', true, 'encblob', 'vpnuser', 'encpw', 11000, 'vpn-conn-99')`, [p.id]
+  );
+  const { rows: [c] } = await dbModule.query('SELECT * FROM db_connections WHERE project_id=$1', [p.id]);
+  expect(c.vpn_enabled).toBe(true);
+  expect(c.vpn_forward_port).toBe(11000);
+  expect(c.vpn_container_name).toBe('vpn-conn-99');
+});
