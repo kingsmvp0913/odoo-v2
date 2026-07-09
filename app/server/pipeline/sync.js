@@ -166,13 +166,8 @@ async function syncOdooUser(userId, settings) {
       cookies, 20
     );
 
-    const original_text = [
-      `---id---\n${task.id}`,
-      `---title---\n${task.name}`,
-      `---project---\n${task.project_id ? task.project_id[1] : '未知專案'}`,
-      `---stage---\n${task.stage_id ? task.stage_id[1] : '未知階段'}`,
-      `---description---\n${stripHtml(task.description)}`
-    ].join('\n');
+    const original_text = stripHtml(task.description);
+    const stageLabel = task.stage_id ? task.stage_id[1] : null;
 
     const taskKey = `task_odoo_${task.id}`;
     const existing = await query(
@@ -181,11 +176,11 @@ async function syncOdooUser(userId, settings) {
     );
     if (existing.rows.length === 0) {
       const { rows: [inserted] } = await query(
-        `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
-         VALUES ($1, $2, 'odoo', $3, $4, 'new')
+        `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, status)
+         VALUES ($1, $2, 'odoo', $3, $4, $5, 'new')
          ON CONFLICT (user_id, task_id) DO NOTHING
          RETURNING id`,
-        [userId, taskKey, task.name, original_text]
+        [userId, taskKey, task.name, original_text, stageLabel]
       );
       if (inserted) await insertTaskMessages(inserted.id, messages);
       added++;
@@ -232,14 +227,9 @@ async function syncServiceUser(userId, settings) {
     );
 
     const title = task.name_seq ? `${task.name_seq}: ${task.subject}` : task.subject;
-    const original_text = [
-      `---id---\n${task.id}`,
-      `---title---\n${title}`,
-      `---project---\n${task.respondent ? task.respondent[1] : '未知帳號'}`,
-      `---stage---\n${task.state === 'draft' ? '未處理' : '處理中'}`,
-      `---classification---\n${task.classification ? task.classification[1] : '未分類'}`,
-      `---description---\n${stripHtml(task.question_description)}`
-    ].join('\n');
+    const original_text = stripHtml(task.question_description);
+    const stageLabel = task.state === 'draft' ? '未處理' : '處理中';
+    const classificationLabel = task.classification ? task.classification[1] : null;
 
     const taskKey = `task_service_${task.id}`;
     const existing = await query(
@@ -248,11 +238,11 @@ async function syncServiceUser(userId, settings) {
     );
     if (existing.rows.length === 0) {
       const { rows: [inserted] } = await query(
-        `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, task_type)
-         VALUES ($1, $2, 'service', $3, $4, 'cs_running', 'service')
+        `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, classification_label, status, task_type)
+         VALUES ($1, $2, 'service', $3, $4, $5, $6, 'cs_running', 'service')
          ON CONFLICT (user_id, task_id) DO NOTHING
          RETURNING id`,
-        [userId, taskKey, title, original_text]
+        [userId, taskKey, title, original_text, stageLabel, classificationLabel]
       );
       if (inserted) await insertTaskMessages(inserted.id, messages);
       added++;

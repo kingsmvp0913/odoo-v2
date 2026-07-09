@@ -120,8 +120,8 @@ test('syncUser adds new Odoo task to DB', async () => {
   expect(rows[0].title).toBe('Test Task A');
   expect(rows[0].source).toBe('odoo');
   expect(rows[0].status).toBe('new');
-  expect(rows[0].original_text).toContain('Test Task A');
-  expect(rows[0].original_text).not.toContain('---message---');
+  expect(rows[0].original_text).toBe('Task description');
+  expect(rows[0].stage_label).toBe('In Progress');
 
   const { rows: msgs } = await dbModule.query(
     'SELECT source, external_id, content FROM task_messages WHERE task_id = $1 ORDER BY occurred_at',
@@ -176,6 +176,9 @@ test('syncUser adds new Service task to DB', async () => {
   expect(rows.length).toBe(1);
   expect(rows[0].title).toContain('SQ-3001');
   expect(rows[0].source).toBe('service');
+  expect(rows[0].original_text).toBe('詳細說明');
+  expect(rows[0].stage_label).toBe('處理中');
+  expect(rows[0].classification_label).toBe('技術問題');
 });
 
 test('syncUser skips when odoo_url not configured', async () => {
