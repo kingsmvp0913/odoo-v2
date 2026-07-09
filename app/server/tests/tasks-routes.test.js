@@ -509,7 +509,7 @@ test('POST /api/tasks/:id/messages 超過檔案數量限制 → 400', async () =
   expect(res.status).toBe(400);
 });
 
-test('GET /api/tasks/:id/attachments/:attId/download → 回傳檔案內容與正確 Content-Type', async () => {
+test('GET /api/tasks/:id/attachments/:attId/download → 回傳檔案內容，非白名單 mimetype 強制 application/octet-stream', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
      VALUES ($1,'task_dl','odoo','M','base','new') RETURNING id`,
@@ -526,8 +526,50 @@ test('GET /api/tasks/:id/attachments/:attId/download → 回傳檔案內容與�
   const res = await request(app).get(`/api/tasks/${t.id}/attachments/${att.id}/download`)
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(res.headers['content-type']).toContain('text/plain');
-  expect(res.text).toBe('文件內容');
+  expect(res.headers['content-type']).toContain('application/octet-stream');
+  expect(res.headers['x-content-type-options']).toBe('nosniff');
+  expect(res.body.toString()).toContain('文件內容');
+});
+
+test('GET /api/tasks/:id/attachments/:attId/download 對不在白名單的 mimetype 一律回 application/octet-stream（防 XSS）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_dl_xss','odoo','M','base','new') RETURNING id`,
+    [userId]
+  );
+  const attachments = require('../lib/attachments');
+  const relPath = attachments.saveAttachmentFile(t.id, 'evil.html', Buffer.from('<script>alert(1)</script>'));
+  const { rows: [att] } = await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, 'evil.html', 'text/html', $2, 'manual_reply') RETURNING id`,
+    [t.id, relPath]
+  );
+
+  const res = await request(app).get(`/api/tasks/${t.id}/attachments/${att.id}/download`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.headers['content-type']).toContain('application/octet-stream');
+  expect(res.headers['x-content-type-options']).toBe('nosniff');
+});
+
+test('GET /api/tasks/:id/attachments/:attId/download 對白名單內的圖片 mimetype 維持原樣', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_dl_img','odoo','M','base','new') RETURNING id`,
+    [userId]
+  );
+  const attachments = require('../lib/attachments');
+  const relPath = attachments.saveAttachmentFile(t.id, 'shot.png', Buffer.from('fake-png-bytes'));
+  const { rows: [att] } = await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, 'shot.png', 'image/png', $2, 'manual_reply') RETURNING id`,
+    [t.id, relPath]
+  );
+
+  const res = await request(app).get(`/api/tasks/${t.id}/attachments/${att.id}/download`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.headers['content-type']).toContain('image/png');
 });
 
 test('GET /api/tasks/:id/attachments/:attId/download 附件不存在 → 404', async () => {

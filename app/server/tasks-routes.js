@@ -70,6 +70,7 @@ async function uninstallTaskModule(task, excludeIds) {
 
 const NEEDS_ACTION_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
 const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'reject_confirm_pending'];
+const SAFE_INLINE_MIMETYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
 
 function registerRoutes(app) {
   // List tasks with optional filters
@@ -266,7 +267,9 @@ function registerRoutes(app) {
       if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
       const att = rows[0];
       const buffer = readAttachmentFile(att.file_path);
-      res.setHeader('Content-Type', att.mimetype || 'application/octet-stream');
+      const safeMimetype = SAFE_INLINE_MIMETYPES.has(att.mimetype) ? att.mimetype : 'application/octet-stream';
+      res.setHeader('Content-Type', safeMimetype);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(att.filename)}"`);
       res.send(buffer);
     } catch (err) { res.status(500).json({ error: err.message }); }
