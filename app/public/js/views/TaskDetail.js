@@ -23,7 +23,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '' };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -48,6 +48,7 @@ window.TaskDetailView = Vue.defineComponent({
     }).catch(() => {});
     this.checkInflight();
     this.loadEvents();
+    this.loadTaskMessages();
   },
   mounted() {
     // 訂閱狀態更新：pipeline 推 task:updated 時靜默重抓，讓狀態/阻塞原因即時更新（免手動重整）
@@ -122,6 +123,21 @@ window.TaskDetailView = Vue.defineComponent({
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.savingContent = false; }
+    },
+    async loadTaskMessages() {
+      try {
+        this.taskMessages = await Api.get(`tasks/${this.$route.params.id}/messages`);
+      } catch { /* best-effort */ }
+    },
+    async sendTaskMessage() {
+      if (!this.newMessageText.trim()) return;
+      this.sendingMessage = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/messages`, { content: this.newMessageText.trim() });
+        this.newMessageText = '';
+        await this.loadTaskMessages();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.sendingMessage = false; }
     },
     async approve() {
       if (!confirm('確定審核通過，合併回主線？')) return;
@@ -308,6 +324,25 @@ window.TaskDetailView = Vue.defineComponent({
                 {{ savingContent ? '儲存中...' : '儲存' }}
               </button>
               <button class="btn btn-outline btn-sm" @click="cancelEditContent" :disabled="savingContent">取消</button>
+            </div>
+          </div>
+
+          <div class="form-section" style="margin:16px 0 8px">外部溝通紀錄</div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:16px">
+            <div v-if="!taskMessages.length" style="color:var(--text-muted);font-size:13px">尚無溝通紀錄</div>
+            <div v-for="m in taskMessages" :key="m.id" style="padding:8px 0;border-bottom:1px solid var(--border)">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">
+                {{ m.source === 'manual' ? (m.author || '你') : '（同步）' }} · {{ formatTime(m.occurred_at) }}
+                <span v-if="m.source === 'manual' && m.synced_to_odoo" style="color:var(--success)">已回寫</span>
+              </div>
+              <div style="font-size:13px;white-space:pre-wrap">{{ m.content }}</div>
+            </div>
+            <div style="margin-top:12px">
+              <textarea v-model="newMessageText" placeholder="新增留言..."
+                style="width:100%;height:60px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box"></textarea>
+              <button class="btn btn-primary btn-sm" style="margin-top:6px" @click="sendTaskMessage" :disabled="sendingMessage || !newMessageText.trim()">
+                {{ sendingMessage ? '送出中...' : '送出留言' }}
+              </button>
             </div>
           </div>
 
