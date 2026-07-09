@@ -28,6 +28,14 @@ function stripHtml(html) {
     .trim();
 }
 
+// Odoo 回傳的 datetime 一律是 UTC 的 naive 字串（無時區標記，如 '2026-06-25 10:00:00'）。
+// 若原樣塞進 TIMESTAMPTZ 欄位，PostgreSQL 會用連線 session 的 timezone 解讀這個字串——
+// session 非 UTC（例如 Asia/Taipei）就會把絕對時間點解讀錯、存錯（曾造成同步時間差 8 小時）。
+// 明確補上 'Z' 讓時區無歧義，不依賴連線環境設定。
+function parseOdooUtcDate(dateStr) {
+  return new Date(dateStr.replace(' ', 'T') + 'Z');
+}
+
 // 逐筆寫入外部聊天紀錄，以 external_id 對同一任務做 dedup（sync 增量再同步時只補新的）
 async function insertTaskMessages(taskDbId, messages) {
   if (!messages.length) return;
@@ -44,7 +52,7 @@ async function insertTaskMessages(taskDbId, messages) {
     await query(
       `INSERT INTO task_messages (task_id, source, external_id, content, occurred_at)
        VALUES ($1, 'sync', $2, $3, $4)`,
-      [taskDbId, extId, text, m.date]
+      [taskDbId, extId, text, parseOdooUtcDate(m.date)]
     );
     existingIds.add(extId);
   }

@@ -331,3 +331,29 @@ test('syncUser 既有任務 is_hidden=true → 再次同步不新增任何 task_
   const { rows: msgs } = await dbModule.query('SELECT * FROM task_messages WHERE task_id = $1', [t.id]);
   expect(msgs.length).toBe(0);
 });
+
+// 意圖：Odoo 回傳的 mail.message.date 是 UTC 的 naive 字串（無時區標記）。必須明確標成 UTC
+// 才能存進 occurred_at（TIMESTAMPTZ），否則正式環境的連線 session timezone 非 UTC 時
+// （曾發生：Asia/Taipei，UTC+8）會把絕對時間點解讀錯，存進去的時間差 8 小時。
+// pg-mem 對 naive 字串本身就一律當 UTC 解讀，不會重現「連線 session 非 UTC」這個情境，
+// 所以這裡驗證的是「無論怎麼寫入，讀回來一定是 Odoo 原意的那個 UTC 時間點」這個不變量。
+test('syncUser 訊息的 occurred_at 明確解讀為 UTC（不依賴連線環境 timezone 設定）', async () => {
+  setupOdooMocks({
+    tasks: [{
+      id: 9300,
+      name: 'TZ Task',
+      project_id: [1, 'My Project'],
+      stage_id: [2, 'In Progress'],
+      description: '<p>desc</p>'
+    }],
+    messages: [{ id: 201, date: '2026-06-25 10:00:00', body: '<p>時區測試</p>' }]
+  });
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [msg] } = await dbModule.query(
+    "SELECT occurred_at FROM task_messages WHERE task_id = (SELECT id FROM tasks WHERE task_id = 'task_odoo_9300')"
+  );
+  expect(msg.occurred_at.toISOString()).toBe('2026-06-25T10:00:00.000Z');
+});
