@@ -90,4 +90,16 @@ async function ensureGatewayRunning(conn, deps = {}) {
   return { forwardPort: conn.vpn_forward_port };
 }
 
-module.exports = { allocateForwardPort, containerName, ensureGatewayRunning };
+function stopGateway(conn, deps = {}) {
+  const execFileSync = deps.execFileSync || realExecFileSync;
+  const name = conn.vpn_container_name || containerName(conn.id);
+  try { execFileSync('docker', ['stop', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
+}
+
+function removeGateway(conn, deps = {}) {
+  const execFileSync = deps.execFileSync || realExecFileSync;
+  const name = conn.vpn_container_name || containerName(conn.id);
+  try { execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
+}
+
+module.exports = { allocateForwardPort, containerName, ensureGatewayRunning, stopGateway, removeGateway };
