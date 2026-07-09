@@ -28,6 +28,28 @@ function stripHtml(html) {
     .trim();
 }
 
+// 逐筆寫入外部聊天紀錄，以 external_id 對同一任務做 dedup（sync 增量再同步時只補新的）
+async function insertTaskMessages(taskDbId, messages) {
+  if (!messages.length) return;
+  const { rows: existingRows } = await query(
+    'SELECT external_id FROM task_messages WHERE task_id = $1 AND external_id IS NOT NULL',
+    [taskDbId]
+  );
+  const existingIds = new Set(existingRows.map(r => r.external_id));
+  for (const m of messages) {
+    const extId = String(m.id);
+    if (existingIds.has(extId)) continue;
+    const text = stripHtml(m.body);
+    if (!text) continue;
+    await query(
+      `INSERT INTO task_messages (task_id, source, external_id, content, occurred_at)
+       VALUES ($1, 'sync', $2, $3, $4)`,
+      [taskDbId, extId, text, m.date]
+    );
+    existingIds.add(extId);
+  }
+}
+
 async function odooAuth(baseUrl, db, login, password) {
   const res = await fetch(`${baseUrl}/web/session/authenticate`, {
     method: 'POST',
@@ -92,36 +114,39 @@ async function syncOdooUser(userId, settings) {
     const messages = await odooSearchRead(
       odoo_url, 'mail.message',
       [['model', '=', 'project.task'], ['res_id', '=', task.id]],
-      ['date', 'body'],
+      ['id', 'date', 'body'],
       cookies, 20
     );
-
-    const msgLines = messages
-      .map(m => { const t = stripHtml(m.body); return t ? `[${m.date}] ${t}` : null; })
-      .filter(Boolean).join('\n');
 
     const original_text = [
       `---id---\n${task.id}`,
       `---title---\n${task.name}`,
       `---project---\n${task.project_id ? task.project_id[1] : '未知專案'}`,
       `---stage---\n${task.stage_id ? task.stage_id[1] : '未知階段'}`,
-      `---description---\n${stripHtml(task.description)}`,
-      `---message---\n${msgLines || '無訊息內容'}`
+      `---description---\n${stripHtml(task.description)}`
     ].join('\n');
 
     const taskKey = `task_odoo_${task.id}`;
     const existing = await query(
-      'SELECT id FROM tasks WHERE user_id = $1 AND task_id = $2',
+      'SELECT id, status, is_hidden FROM tasks WHERE user_id = $1 AND task_id = $2',
       [userId, taskKey]
     );
     if (existing.rows.length === 0) {
-      await query(
+      const { rows: [inserted] } = await query(
         `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
          VALUES ($1, $2, 'odoo', $3, $4, 'new')
-         ON CONFLICT (user_id, task_id) DO NOTHING`,
+         ON CONFLICT (user_id, task_id) DO NOTHING
+         RETURNING id`,
         [userId, taskKey, task.name, original_text]
       );
+      if (inserted) await insertTaskMessages(inserted.id, messages);
       added++;
+    } else {
+      const t = existing.rows[0];
+      // 已完成或已封存的任務不再增量拉聊天紀錄，避免無謂 API 呼叫、也避免已完成任務被新訊息重新攪動
+      if (t.status !== 'done' && !t.is_hidden) {
+        await insertTaskMessages(t.id, messages);
+      }
     }
 
     // 自動綁定專案（對新任務與既有未綁定任務都生效；project_id IS NULL 保證不動到已綁定者）
@@ -154,13 +179,9 @@ async function syncServiceUser(userId, settings) {
     const messages = await odooSearchRead(
       service_url, 'mail.message',
       [['model', '=', 'service.question.feedback'], ['res_id', '=', task.id]],
-      ['date', 'body', 'attachment_ids'],
+      ['id', 'date', 'body', 'attachment_ids'],
       cookies, 20
     );
-
-    const msgLines = messages
-      .map(m => { const t = stripHtml(m.body); return t ? `[${m.date}] ${t}` : null; })
-      .filter(Boolean).join('\n');
 
     const title = task.name_seq ? `${task.name_seq}: ${task.subject}` : task.subject;
     const original_text = [
@@ -169,23 +190,29 @@ async function syncServiceUser(userId, settings) {
       `---project---\n${task.respondent ? task.respondent[1] : '未知帳號'}`,
       `---stage---\n${task.state === 'draft' ? '未處理' : '處理中'}`,
       `---classification---\n${task.classification ? task.classification[1] : '未分類'}`,
-      `---description---\n${stripHtml(task.question_description)}`,
-      `---message---\n${msgLines || '無訊息內容'}`
+      `---description---\n${stripHtml(task.question_description)}`
     ].join('\n');
 
     const taskKey = `task_service_${task.id}`;
     const existing = await query(
-      'SELECT id FROM tasks WHERE user_id = $1 AND task_id = $2',
+      'SELECT id, status, is_hidden FROM tasks WHERE user_id = $1 AND task_id = $2',
       [userId, taskKey]
     );
     if (existing.rows.length === 0) {
-      await query(
+      const { rows: [inserted] } = await query(
         `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, task_type)
          VALUES ($1, $2, 'service', $3, $4, 'cs_running', 'service')
-         ON CONFLICT (user_id, task_id) DO NOTHING`,
+         ON CONFLICT (user_id, task_id) DO NOTHING
+         RETURNING id`,
         [userId, taskKey, title, original_text]
       );
+      if (inserted) await insertTaskMessages(inserted.id, messages);
       added++;
+    } else {
+      const t = existing.rows[0];
+      if (t.status !== 'done' && !t.is_hidden) {
+        await insertTaskMessages(t.id, messages);
+      }
     }
 
     // 自動綁定專案（對新任務與既有未綁定任務都生效；project_id IS NULL 保證不動到已綁定者）

@@ -105,7 +105,7 @@ test('syncUser adds new Odoo task to DB', async () => {
       stage_id: [2, 'In Progress'],
       description: '<p>Task description</p>'
     }],
-    messages: [{ date: '2026-06-25 10:00:00', body: '<p>First comment</p>' }]
+    messages: [{ id: 501, date: '2026-06-25 10:00:00', body: '<p>First comment</p>' }]
   });
   setupServiceMocks({ tasks: [] });
 
@@ -121,6 +121,15 @@ test('syncUser adds new Odoo task to DB', async () => {
   expect(rows[0].source).toBe('odoo');
   expect(rows[0].status).toBe('new');
   expect(rows[0].original_text).toContain('Test Task A');
+  expect(rows[0].original_text).not.toContain('---message---');
+
+  const { rows: msgs } = await dbModule.query(
+    'SELECT source, external_id, content FROM task_messages WHERE task_id = $1 ORDER BY occurred_at',
+    [rows[0].id]
+  );
+  expect(msgs.length).toBe(1);
+  expect(msgs[0].source).toBe('sync');
+  expect(msgs[0].content).toBe('First comment');
 });
 
 test('syncUser skips duplicate tasks (ON CONFLICT DO NOTHING)', async () => {
@@ -154,7 +163,7 @@ test('syncUser adds new Service task to DB', async () => {
       classification: [2, '技術問題'],
       file: []
     }],
-    messages: [{ date: '2026-06-25 11:00:00', body: '<p>補充說明</p>', attachment_ids: [] }]
+    messages: [{ id: 701, date: '2026-06-25 11:00:00', body: '<p>補充說明</p>', attachment_ids: [] }]
   });
 
   const result = await syncModule.syncUser(userId);
@@ -236,4 +245,89 @@ test('assembleTaskContext() 依時間正序組回多筆 task_messages', async ()
   const secondIdx = ctx.indexOf('第二則');
   expect(firstIdx).toBeGreaterThan(-1);
   expect(secondIdx).toBeGreaterThan(firstIdx); // 時間正序：舊的在前
+});
+
+test('syncUser 既有任務（非 done/hidden）再次同步 → 只新增來源新增的那一則訊息', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_odoo_9200','odoo','Existing','base','confirm_pending') RETURNING id`,
+    [userId]
+  );
+  await dbModule.query(
+    `INSERT INTO task_messages (task_id, source, external_id, content, occurred_at)
+     VALUES ($1,'sync','1','舊訊息','2026-06-20 09:00:00')`,
+    [t.id]
+  );
+
+  setupOdooMocks({
+    tasks: [{
+      id: 9200,
+      name: 'Existing',
+      project_id: [1, 'My Project'],
+      stage_id: [2, 'In Progress'],
+      description: '<p>desc</p>'
+    }],
+    messages: [
+      { id: 1, date: '2026-06-20 09:00:00', body: '<p>舊訊息</p>' },
+      { id: 2, date: '2026-06-26 09:00:00', body: '<p>新訊息</p>' }
+    ]
+  });
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: msgs } = await dbModule.query(
+    'SELECT external_id FROM task_messages WHERE task_id = $1 ORDER BY occurred_at', [t.id]
+  );
+  expect(msgs.map(m => m.external_id)).toEqual(['1', '2']);
+});
+
+test('syncUser 既有任務 status=done → 再次同步不新增任何 task_messages', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_odoo_9201','odoo','Done Task','base','done') RETURNING id`,
+    [userId]
+  );
+
+  setupOdooMocks({
+    tasks: [{
+      id: 9201,
+      name: 'Done Task',
+      project_id: [1, 'My Project'],
+      stage_id: [2, 'In Progress'],
+      description: '<p>desc</p>'
+    }],
+    messages: [{ id: 99, date: '2026-06-26 09:00:00', body: '<p>不該進來</p>' }]
+  });
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: msgs } = await dbModule.query('SELECT * FROM task_messages WHERE task_id = $1', [t.id]);
+  expect(msgs.length).toBe(0);
+});
+
+test('syncUser 既有任務 is_hidden=true → 再次同步不新增任何 task_messages', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, is_hidden)
+     VALUES ($1,'task_odoo_9202','odoo','Hidden Task','base','confirm_pending', true) RETURNING id`,
+    [userId]
+  );
+
+  setupOdooMocks({
+    tasks: [{
+      id: 9202,
+      name: 'Hidden Task',
+      project_id: [1, 'My Project'],
+      stage_id: [2, 'In Progress'],
+      description: '<p>desc</p>'
+    }],
+    messages: [{ id: 99, date: '2026-06-26 09:00:00', body: '<p>不該進來</p>' }]
+  });
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: msgs } = await dbModule.query('SELECT * FROM task_messages WHERE task_id = $1', [t.id]);
+  expect(msgs.length).toBe(0);
 });
