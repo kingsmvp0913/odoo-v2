@@ -437,3 +437,44 @@ test('syncUser 訊息無 attachment_ids → 不呼叫 ir.attachment、不產生 
   const { rows: atts } = await dbModule.query('SELECT * FROM task_attachments WHERE task_id = $1', [t.id]);
   expect(atts.length).toBe(0);
 });
+
+test('syncUser eService 工單 file 有值 → 存一筆 ticket_main 附件', async () => {
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3100, name_seq: 'SQ-3100', subject: '附件工單',
+      state: 'draft', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'],
+      file: Buffer.from('fake-file-bytes').toString('base64')
+    }],
+    messages: []
+  });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_service_3100'");
+  expect(t.has_attachment).toBe(true);
+  const { rows: atts } = await dbModule.query(
+    "SELECT origin, message_id FROM task_attachments WHERE task_id = $1", [t.id]
+  );
+  expect(atts.length).toBe(1);
+  expect(atts[0].origin).toBe('ticket_main');
+  expect(atts[0].message_id).toBeNull();
+});
+
+test('syncUser eService 工單 file 為 false → 不產生附件', async () => {
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3101, name_seq: 'SQ-3101', subject: '無附件工單',
+      state: 'draft', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'], file: false
+    }],
+    messages: []
+  });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_service_3101'");
+  expect(t.has_attachment).toBe(false);
+});

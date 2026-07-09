@@ -293,6 +293,16 @@ async function syncServiceUser(userId, settings) {
         [userId, taskKey, title, original_text, stageLabel, classificationLabel]
       );
       if (inserted) {
+        if (task.file) {
+          const name = `ticket_${task.id}_attachment`;
+          const relPath = saveAttachmentFile(inserted.id, name, Buffer.from(task.file, 'base64'));
+          await query(
+            `INSERT INTO task_attachments (task_id, filename, file_path, origin, synced_to_odoo)
+             VALUES ($1, $2, $3, 'ticket_main', true)`,
+            [inserted.id, name, relPath]
+          );
+          await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [inserted.id]);
+        }
         const insertedMsgs = await insertTaskMessages(inserted.id, messages);
         await ingestMessageAttachments(service_url, inserted.id, insertedMsgs, cookies);
       }
