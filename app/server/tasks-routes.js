@@ -282,6 +282,7 @@ function registerRoutes(app) {
       await cleanupTaskGit(rows[0]);
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
+      await query('DELETE FROM task_messages WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM tasks WHERE id = $1', [req.params.id]);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -305,6 +306,7 @@ function registerRoutes(app) {
       for (const t of deletable) await cleanupTaskGit(t);
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
+      await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [delIds]);
       const { rowCount } = await query('DELETE FROM tasks WHERE id = ANY($1::int[])', [delIds]);
       res.json({ ok: true, affected: rowCount });
     } catch (err) { res.status(500).json({ error: err.message }); }

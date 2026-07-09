@@ -238,6 +238,7 @@ function registerRoutes(app) {
         const taskTextIds = taskRows.map(r => r.task_id);
         await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [taskDbIds]);
         await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])',  [taskDbIds]);
+        await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [taskDbIds]);
         await query('DELETE FROM token_usage WHERE task_id = ANY($1::text[])', [taskTextIds]);
         await query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
       }
