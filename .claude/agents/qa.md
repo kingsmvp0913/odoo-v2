@@ -23,6 +23,8 @@ stage: qa
 
 【知識查詢】需要理解現有程式時：優先 Serena MCP 查符號與 call chain（最多 3 次），否則用 Glob/Grep/Read。
 
+若判定 fail 的依據與已知的環境/部署限制衝突（例如規格要求的做法在 base Odoo 不合法），summary 要明確指出這是規格與環境的衝突本身，而非只重複規格字面要求。
+
 【專案資訊】
 - 名稱：{{project_name}}
 - Odoo 版本：{{odoo_version}}

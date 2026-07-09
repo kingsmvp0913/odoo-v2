@@ -21,10 +21,17 @@ const path = require('path');
 const yaml = require('js-yaml');
 
 const AGENTS_DIR = path.join(__dirname, '..', '..', '..', '.claude', 'agents');
+const CLAUDE_MD_PATH = path.join(__dirname, '..', '..', '..', '.claude', 'CLAUDE.md');
 const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
+
+// 會實際碰客戶 Odoo repo（讀/寫程式碼、審查 diff）的 agent：CLAUDE.md 的 Odoo 開發規則對它們是唯一真相來源，
+// 呼叫時自動 prepend；其餘 agent（分類器、merge、wiki、chat...）跟 Odoo 開發規範無關，不注入。
+const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'coding-project', 'coding-retry', 'qa', 'playwright']);
 
 // name → { mtimeMs, agent }
 const _cache = new Map();
+// CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
+let _rulesCache = null;
 
 // 只切「裸 --- 行」作為 frontmatter 邊界，避免誤切 body 內的 ---RESULT-JSON--- 等標記
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
@@ -36,13 +43,30 @@ function parse(raw) {
   return { meta, body: m[2] };
 }
 
-function makeRender(body) {
-  return vars => body.replace(/\{\{(\w+)\}\}/g, (_, k) => {
-    if (vars && vars[k] != null) return String(vars[k]);
-    // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
-    console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
-    return '';
-  });
+// CLAUDE.md 中夾在 <!-- platform-only --> ... <!-- /platform-only --> 之間的段落是本平台自己
+// 開發用（Skills、app/public 前端規範），跟客戶 Odoo repo 無關，過濾掉才 prepend 給 pipeline agent。
+function loadPipelineRules() {
+  const stat = fs.statSync(CLAUDE_MD_PATH);
+  if (_rulesCache && _rulesCache.mtimeMs === stat.mtimeMs) return _rulesCache.text;
+  const raw = fs.readFileSync(CLAUDE_MD_PATH, 'utf8');
+  const text = raw
+    .replace(/<!-- platform-only -->[\s\S]*?<!-- \/platform-only -->\n?/g, '')
+    .replace(/(\r?\n){3,}/g, '\n\n')
+    .trim();
+  _rulesCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
+function makeRender(body, includeRules) {
+  return vars => {
+    const rendered = body.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+      if (vars && vars[k] != null) return String(vars[k]);
+      // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+      console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+      return '';
+    });
+    return includeRules ? `${loadPipelineRules()}\n\n${rendered}` : rendered;
+  };
 }
 
 function agentPath(name) {
@@ -64,7 +88,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body)
+    render: makeRender(body, CLAUDE_MD_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;

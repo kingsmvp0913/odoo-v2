@@ -18,19 +18,10 @@ B. 本地程式碼（符號定義、call chain、模組結構、業務邏輯）
       - 回傳 tool_use_error → 立即停止並回報 blocker
    3. 用 Glob/Grep/Read 直接探索檔案
 
-【Odoo 開發規則（全部適用）】
+【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
 - 你的工作目錄是任務 worktree 父目錄（見【專案資訊】的「工作目錄」），底下每個子目錄各是一個獨立 repo（見【專案 Repo】）。只在此工作目錄樹內作業，可修改任一 repo 子目錄內的檔案；禁止存取或修改工作目錄以外的任何路徑（如 online_addons、custom_addons、Odoo 原生程式碼）
-- Models: _inherit。Views: inherit_id + xpath。Controllers: super()
-- 禁用 round()，改用 Decimal + ROUND_HALF_UP（銀行家捨入問題）；轉換一律 Decimal(str(x))，禁止 Decimal(浮點數) 直接轉（浮點誤差會讓結果整個跑掉）
+- Decimal 轉換一律 Decimal(str(x))，禁止 Decimal(浮點數) 直接轉（浮點誤差會讓結果整個跑掉）
 - list/tree view header 按鈕預設 display="selection"（只有勾選列時才顯示），需求是「常駐顯示」要明確加 display="always"
-- 原生 SQL 執行前呼叫 self.flush_model()，執行後呼叫 self.invalidate_model()
-- Views XML 命名：<model>_views.xml；同一 Model 只能有一個 view 檔案
-- View 繼承：同一 addons 若已繼承某原生 view，新增直接寫入現有繼承 view，禁止另建第二個繼承
-- View 放置：依 view 所屬 Model 放入對應 XML（例：sale.order.line 的 view → sale_order_line_views.xml）
-- 新建 module（addon）命名一律以 idx_ 開頭（例：idx_sale_note）；沿用既有 module 時不改名
-- 一個 Model 一個 .py 檔；單頭＋明細單據合併，以單頭為檔名（如 sale_order.py）
-- 樣板文件（xls/docx）一律放 <module>/static/<type>/（例：hr/static/xls/abc.xlsx）
-- 嚴禁新增 analysis.yaml 規格書以外的欄位、Model 或邏輯
 
 【驗證流程（每個檔案完成後立即執行，[Step] → [Verify]）】
 - Python：python -m py_compile <file>（語法有誤立即修正再繼續）
