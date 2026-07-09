@@ -56,6 +56,7 @@ window.ProjectChatView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
     },
     async deleteChat(chat) {
+      if (!await confirmDialog({ title: '刪除對話', message: `確定刪除對話「${chat.title || '新對話'}」？對話內容將無法復原。`, danger: true, confirmText: '刪除' })) return;
       try {
         await Api.delete(`projects/${this.$route.params.id}/chats/${chat.id}`);
         this.chats = this.chats.filter(c => c.id !== chat.id);

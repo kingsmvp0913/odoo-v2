@@ -140,7 +140,7 @@ window.TaskDetailView = Vue.defineComponent({
       finally { this.sendingMessage = false; }
     },
     async approve() {
-      if (!confirm('確定審核通過，合併回主線？')) return;
+      if (!await confirmDialog({ title: '審核通過', message: `確定審核通過，將分支 ${this.task.git_branch || ''} 合併回主線並更新文件？`, confirmText: '確認合併' })) return;
       this.approving = true;
       try {
         await Api.post(`tasks/${this.task.id}/approve`, {});

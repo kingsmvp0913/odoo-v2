@@ -40,13 +40,16 @@ window.AdminUsersView = Vue.defineComponent({
     },
     async toggleRole(user) {
       const newRole = user.role === 'admin' ? 'user' : 'admin';
+      const verb = newRole === 'admin' ? '升為管理員' : '降為一般使用者';
+      if (!await confirmDialog({ title: '變更權限', message: `確定將「${user.display_name || user.username}」${verb}？`, confirmText: '確定' })) return;
       try {
         await Api.put(`admin/users/${user.id}`, { role: newRole });
         await this.loadUsers();
+        showToast(`已${verb}`, 'success');
       } catch (e) { showToast(e.message, 'error'); }
     },
     async deleteUser(user) {
-      if (!confirm(`確定刪除使用者「${user.display_name || user.username}」？`)) return;
+      if (!await confirmDialog({ title: '刪除使用者', message: `確定刪除使用者「${user.display_name || user.username}」？`, danger: true, confirmText: '刪除' })) return;
       try {
         await Api.delete(`admin/users/${user.id}`);
         await this.loadUsers();

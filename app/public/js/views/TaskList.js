@@ -259,7 +259,7 @@ window.TaskListView = Vue.defineComponent({
     },
     async archiveTask(t, e) {
       e.stopPropagation();
-      if (!confirm(`確定要封存任務「${t.title || t.task_id}」？封存後可在「已封存」分頁查看。`)) return;
+      if (!await confirmDialog({ title: '封存任務', message: `確定要封存任務「${t.title || t.task_id}」？封存後可在「已封存」分頁查看。`, confirmText: '封存' })) return;
       try {
         await Api.post(`tasks/${t.id}/archive`, {});
         this.tasks = this.tasks.filter(x => x.id !== t.id);
@@ -276,7 +276,7 @@ window.TaskListView = Vue.defineComponent({
     },
     async deleteTask(t, e) {
       e.stopPropagation();
-      if (!confirm(`確定要永久刪除任務「${t.title || t.task_id}」？刪除後可重新同步匯入。`)) return;
+      if (!await confirmDialog({ title: '永久刪除任務', message: `確定要永久刪除任務「${t.title || t.task_id}」？刪除後可重新同步匯入。`, danger: true, confirmText: '刪除' })) return;
       try {
         await Api.delete(`tasks/${t.id}`);
         this.tasks = this.tasks.filter(x => x.id !== t.id);
@@ -299,7 +299,7 @@ window.TaskListView = Vue.defineComponent({
     },
     async batchDelete() {
       if (!this.selectedIds.length) return;
-      if (!confirm(`確定永久刪除選取的 ${this.selectedIds.length} 筆任務？`)) return;
+      if (!await confirmDialog({ title: '批次刪除', message: `確定永久刪除選取的 ${this.selectedIds.length} 筆任務？`, danger: true, confirmText: '刪除' })) return;
       this.batchWorking = true;
       try {
         const r = await Api.post('tasks/batch/delete', { ids: this.selectedIds });
@@ -322,7 +322,7 @@ window.TaskListView = Vue.defineComponent({
     },
     async batchArchive() {
       if (!this.selectedIds.length) return;
-      if (!confirm(`確定封存選取的 ${this.selectedIds.length} 筆任務？`)) return;
+      if (!await confirmDialog({ title: '批次封存', message: `確定封存選取的 ${this.selectedIds.length} 筆任務？`, confirmText: '封存' })) return;
       this.batchWorking = true;
       try {
         const r = await Api.post('tasks/batch/archive', { ids: this.selectedIds });

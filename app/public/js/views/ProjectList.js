@@ -46,10 +46,17 @@ window.ProjectListView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.saving = false; }
     },
-    async remove(id) {
-      if (!confirm('確定刪除此專案及所有 repo？')) return;
+    async remove(p) {
+      const ok = await confirmDialog({
+        title: '刪除專案',
+        message: `此動作會連帶刪除「${p.name}」下所有 repo 的本機程式碼，且無法復原。`,
+        danger: true,
+        requireText: p.name,
+        confirmText: '刪除專案'
+      });
+      if (!ok) return;
       try {
-        await Api.delete(`projects/${id}`);
+        await Api.delete(`projects/${p.id}`);
         await this.load();
         showToast('已刪除', 'success');
       } catch (e) { showToast(e.message, 'error'); }
@@ -115,7 +122,7 @@ window.ProjectListView = Vue.defineComponent({
               </button>
             </div>
           </div>
-          <button class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p.id)">刪除</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p)">刪除</button>
         </div>
       </div>
     </div>

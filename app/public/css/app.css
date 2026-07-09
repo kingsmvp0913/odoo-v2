@@ -27,6 +27,38 @@
   --radius-lg: 12px;
   --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
   --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,.20);
+  /* 間距 scale（新功能一律引用，勿再目測填 px）*/
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  /* 字級 scale（對齊既有實際用值，body=14=--fs-md）*/
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 20px;
+  --fs-3xl: 22px;
+  /* 字重 scale */
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  /* z-index 階梯（modal 需在內容之上、toast 之下）*/
+  --z-dropdown: 100;
+  --z-modal: 1000;
+  --z-toast: 9999;
+  /* transition 時長 */
+  --transition: 0.12s;
+  --transition-slow: 0.3s;
 }
 
 /* 深色模式：Notion 風溫暖中性灰，非冷藍黑；邊框極細微 */
@@ -47,6 +79,7 @@
   --primary-light: rgba(99,102,241,0.22);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow: 0 2px 8px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.55);
 }
 
 /* 寫死淺色的中性面板 → 改用變數 */
@@ -323,6 +356,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .conv-msg.user { background: #f0fdf4; align-self: flex-end; border: 1px solid #bbf7d0; }
 .conv-msg.system { background: #f9fafb; align-self: center; color: var(--text-muted); font-size: 12px; font-style: italic; max-width: 100%; border: 1px solid var(--border); }
 .conv-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* ── Modal / Dialog（共用；取代原生 confirm/prompt）── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: var(--space-4); z-index: var(--z-modal); }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); width: 440px; max-width: 100%; max-height: 90vh; overflow-y: auto; }
+.modal-title { font-size: var(--fs-lg); font-weight: var(--fw-semibold); color: var(--text); padding: var(--space-5) var(--space-6) var(--space-3); }
+.modal-body { padding: 0 var(--space-6); font-size: var(--fs-md); color: var(--text-secondary); line-height: 1.7; }
+.modal-body code { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1px 6px; font-size: var(--fs-base); color: var(--text); }
+.modal-actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-5) var(--space-6) var(--space-6); }
+.modal-fade-enter-active, .modal-fade-leave-active { transition: opacity var(--transition) ease; }
+.modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .modal-fade-enter-active, .modal-fade-leave-active { transition: none; } }
 
 /* ── Toasts ───────────────────────── */
 .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; }

@@ -39,7 +39,12 @@ window.WikiView = Vue.defineComponent({
       saving: false,
       refreshing: '',
       building: false,
-      progress: { percent: 0, message: '', stage: '' }
+      progress: { percent: 0, message: '', stage: '' },
+      showAddModal: false,
+      newPageTitle: '',
+      newPageSlug: '',
+      slugTouched: false,
+      addingPage: false
     };
   },
   async created() {
@@ -106,20 +111,38 @@ window.WikiView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.saving = false; }
     },
-    async addPage() {
-      const slug = prompt('輸入頁面 slug（英文小寫+連字號）：');
-      if (!slug) return;
-      const title = prompt('輸入頁面標題：');
-      if (!title) return;
+    openAddPage() {
+      this.newPageTitle = '';
+      this.newPageSlug = '';
+      this.slugTouched = false;
+      this.showAddModal = true;
+      this.$nextTick(() => this.$refs.newTitleInput && this.$refs.newTitleInput.focus());
+    },
+    onTitleInput() {
+      if (this.slugTouched) return;
+      this.newPageSlug = this.newPageTitle
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    },
+    onSlugInput() { this.slugTouched = true; },
+    async submitAddPage() {
+      const title = this.newPageTitle.trim();
+      const slug = this.newPageSlug.trim();
+      if (!title || !slug) return showToast('請填寫 slug 與標題', 'error');
+      this.addingPage = true;
       try {
         await Api.post(`projects/${this.$route.params.id}/wiki`, { slug, title, content: `# ${title}\n\n` });
+        this.showAddModal = false;
         await this.loadPages();
         await this.loadPage(slug);
         showToast('已新增頁面', 'success');
       } catch (e) { showToast(e.message, 'error'); }
+      finally { this.addingPage = false; }
     },
     async removePage(slug) {
-      if (!confirm(`刪除「${slug}」？`)) return;
+      if (!await confirmDialog({ title: '刪除頁面', message: `確定刪除頁面「${slug}」？`, danger: true, confirmText: '刪除' })) return;
       try {
         await Api.delete(`projects/${this.$route.params.id}/wiki/${slug}`);
         await this.loadPages();
@@ -160,7 +183,30 @@ window.WikiView = Vue.defineComponent({
       <button class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
         {{ building ? '建立中…' : '建立 wiki' }}
       </button>
-      <button class="btn btn-outline btn-sm" style="margin-left:8px" @click="addPage">+ 新增頁面</button>
+      <button class="btn btn-outline btn-sm" style="margin-left:8px" @click="openAddPage">+ 新增頁面</button>
+    </div>
+    <div v-if="showAddModal" class="modal-overlay" @mousedown.self="showAddModal=false" @keyup.esc="showAddModal=false">
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-title">新增頁面</div>
+        <div class="modal-body">
+          <div class="field-item" style="margin-bottom:var(--space-4)">
+            <label class="field-label">標題</label>
+            <input ref="newTitleInput" class="form-control" v-model="newPageTitle" @input="onTitleInput"
+              placeholder="例如：銷售訂單模組" @keyup.enter="submitAddPage" />
+          </div>
+          <div class="field-item">
+            <label class="field-label">Slug（英文小寫＋連字號）</label>
+            <input class="form-control" v-model="newPageSlug" @input="onSlugInput"
+              placeholder="例如：sale-order" @keyup.enter="submitAddPage" />
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" @click="showAddModal=false">取消</button>
+          <button class="btn btn-primary" :disabled="addingPage || !newPageTitle.trim() || !newPageSlug.trim()" @click="submitAddPage">
+            {{ addingPage ? '新增中...' : '新增' }}
+          </button>
+        </div>
+      </div>
     </div>
     <div v-if="building" style="padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:4px">

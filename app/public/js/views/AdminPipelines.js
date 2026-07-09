@@ -52,7 +52,7 @@ window.AdminPipelinesView = Vue.defineComponent({
     fmtElapsed(ms) { return apFmtElapsed(ms); },
     userName(r) { return r.display_name || r.username || `#${r.user_id}`; },
     async pause(row) {
-      if (!confirm(`確定暫停並中止「${row.title || row.task_id}」正在執行的行程？`)) return;
+      if (!await confirmDialog({ title: '暫停行程', message: `確定暫停並中止「${row.title || row.task_id}」正在執行的行程？`, danger: true, confirmText: '暫停並中止' })) return;
       this.pausingId = row.id;
       try {
         await Api.post(`admin/pipeline/tasks/${row.id}/pause`);

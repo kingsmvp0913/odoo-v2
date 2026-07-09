@@ -176,9 +176,11 @@ const App = defineComponent({
     <div class="toast-container">
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}</div>
     </div>
+    <confirm-dialog-host />
   `
 });
 
 const app = createApp(App);
+app.component('ConfirmDialogHost', window.ConfirmDialogHost);
 app.use(router);
 app.mount('#app');

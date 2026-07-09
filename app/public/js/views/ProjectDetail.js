@@ -81,6 +81,7 @@ window.ProjectDetailView = Vue.defineComponent({
       finally { this.savingRepo = false; }
     },
     async removeRepo(repoId) {
+      if (!await confirmDialog({ title: '移除 Repo', message: '確定移除此 repo？本機 clone 的程式碼將一併刪除，且無法復原。', danger: true, confirmText: '移除' })) return;
       try {
         await Api.delete(`projects/${this.$route.params.id}/repos/${repoId}`);
         await this.load();
@@ -150,7 +151,7 @@ window.ProjectDetailView = Vue.defineComponent({
       finally { this.envWorking = false; }
     },
     async deleteEnv() {
-      if (!confirm('確定刪除整個測試環境？將移除 Odoo 原始碼與 venv（數 GB），下次需重新建立。')) return;
+      if (!await confirmDialog({ title: '刪除測試環境', message: '確定刪除整個測試環境？將移除 Odoo 原始碼與 venv（數 GB），下次需重新建立。', danger: true, confirmText: '刪除' })) return;
       this.envWorking = true;
       try {
         await Api.delete(`projects/${this.$route.params.id}/env`);

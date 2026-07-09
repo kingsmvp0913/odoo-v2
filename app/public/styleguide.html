@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Dev 樣式索引 · Styleguide</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    /* 本頁自身的排版 chrome —— 一律走 app.css 變數，確保深色模式正確 */
+    body { height: auto; overflow: auto; }
+    .sg-wrap { max-width: 960px; margin: 0 auto; padding: var(--space-8) var(--space-6) var(--space-10); }
+    .sg-head { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-2); }
+    .sg-head h1 { font-size: var(--fs-3xl); font-weight: var(--fw-bold); letter-spacing: -0.3px; }
+    .sg-head .sg-sub { font-size: var(--fs-base); color: var(--text-muted); }
+    .sg-toggle { margin-left: auto; }
+    .sg-lead { color: var(--text-secondary); font-size: var(--fs-md); line-height: 1.7; margin-bottom: var(--space-6); max-width: 68ch; }
+    .sg-section { margin-top: var(--space-10); }
+    .sg-section > h2 { font-size: var(--fs-2xl); font-weight: var(--fw-bold); letter-spacing: -0.2px; margin-bottom: var(--space-1); }
+    .sg-section > .sg-note { font-size: var(--fs-sm); color: var(--text-muted); margin-bottom: var(--space-5); line-height: 1.6; }
+    .sg-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-6); box-shadow: var(--shadow-sm); }
+    .sg-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+    .sg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-3); }
+    .sg-swatch { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; font-size: var(--fs-sm); }
+    .sg-swatch .chip { height: 44px; }
+    .sg-swatch .meta { padding: var(--space-2) var(--space-3); }
+    .sg-swatch .meta code { font-size: var(--fs-xs); color: var(--text); }
+    .sg-swatch .meta .val { display: block; color: var(--text-muted); font-size: var(--fs-2xs); margin-top: 2px; }
+    .sg-scale-item { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
+    .sg-scale-item:last-child { border-bottom: none; }
+    .sg-scale-item code { min-width: 120px; font-size: var(--fs-sm); color: var(--text); }
+    .sg-scale-item .val { min-width: 56px; font-size: var(--fs-xs); color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+    .sg-bar { background: var(--primary); height: 14px; border-radius: 3px; }
+    .sg-label { font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin: var(--space-4) 0 var(--space-2); }
+    .sg-label:first-child { margin-top: 0; }
+    .sg-flag { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: var(--fw-semibold); padding: 2px var(--space-2); border-radius: 999px; }
+    .sg-flag.ok { background: rgba(16,185,129,0.14); color: #059669; }
+    .sg-flag.dupe { background: rgba(245,158,11,0.16); color: #b8791b; }
+    .sg-flag.ghost { background: rgba(239,68,68,0.14); color: #dc2626; }
+    [data-theme="dark"] .sg-flag.ok { color: #6ee7b7; }
+    [data-theme="dark"] .sg-flag.dupe { color: #fcd34d; }
+    [data-theme="dark"] .sg-flag.ghost { color: #fca5a5; }
+    .sg-callout { background: var(--primary-light); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-4) var(--space-5); font-size: var(--fs-sm); color: var(--text-secondary); line-height: 1.7; }
+    .sg-callout code { color: var(--primary-hover); font-weight: var(--fw-semibold); }
+    .sg-mini-title { font-size: var(--fs-base); font-weight: var(--fw-semibold); color: var(--text); margin-bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+    .sg-code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: var(--fs-xs); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1px 6px; color: var(--text-secondary); }
+    .sg-btn { padding: 6px 12px; border-radius: var(--radius-sm); font-size: var(--fs-base); font-weight: var(--fw-medium); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="sg-wrap">
+    <div class="sg-head">
+      <h1>樣式索引</h1>
+      <span class="sg-sub">AI Dev 工作台 · design tokens & 共用元件</span>
+      <button class="sg-btn sg-toggle" id="themeToggle">🌓 切換深色</button>
+    </div>
+    <p class="sg-lead">
+      這是前端唯一的樣式取用來源。新功能一律從這裡挑 token 與共用 class，<b>禁止在 view 裡目測填 px 或寫死顏色</b>。
+      標 <span class="sg-flag ok">標準</span> 的是建議使用；<span class="sg-flag dupe">重複</span> 是多套並存待收斂；<span class="sg-flag ghost">幽靈</span> 是根本沒定義、請勿使用。
+    </p>
+
+    <!-- ── 顏色 ── -->
+    <section class="sg-section">
+      <h2>顏色 Tokens</h2>
+      <p class="sg-note">全部 dark-aware。配色一律用變數，底色需區隔用 <code>var(--surface)</code>/<code>var(--bg)</code>，勿寫死淺色。</p>
+      <div class="sg-panel">
+        <div class="sg-label">面板 / 邊框 / 文字</div>
+        <div class="sg-grid" id="grid-neutral"></div>
+        <div class="sg-label">語意色</div>
+        <div class="sg-grid" id="grid-semantic"></div>
+      </div>
+    </section>
+
+    <!-- ── 間距 ── -->
+    <section class="sg-section">
+      <h2>間距 Scale <span class="sg-flag ok">新增</span></h2>
+      <p class="sg-note">取代散落的硬編 padding/gap/margin。<code>--space-4 (16px)</code> 是最常用的區塊間距。</p>
+      <div class="sg-panel" id="scale-space"></div>
+    </section>
+
+    <!-- ── 字級 ── -->
+    <section class="sg-section">
+      <h2>字級 Scale <span class="sg-flag ok">新增</span></h2>
+      <p class="sg-note">對齊既有實際用值。body = 14px = <code>--fs-md</code>；badge/meta = <code>--fs-xs</code>；input/button = <code>--fs-base</code>。</p>
+      <div class="sg-panel" id="scale-font"></div>
+    </section>
+
+    <!-- ── 圓角 / 陰影 ── -->
+    <section class="sg-section">
+      <h2>圓角 · 陰影 · 字重</h2>
+      <div class="sg-panel">
+        <div class="sg-label">圓角</div>
+        <div class="sg-row" id="radius-demo"></div>
+        <div class="sg-label">陰影</div>
+        <div class="sg-row" id="shadow-demo"></div>
+        <div class="sg-label">字重</div>
+        <div class="sg-row" id="weight-demo"></div>
+      </div>
+    </section>
+
+    <!-- ── 按鈕 ── -->
+    <section class="sg-section">
+      <h2>按鈕 <span class="sg-flag ok">標準</span></h2>
+      <p class="sg-note">破壞性操作用 <code>.btn-danger</code>，勿用 <code>.btn-outline</code> 疊 inline 紅字。</p>
+      <div class="sg-panel">
+        <div class="sg-row">
+          <button class="btn btn-primary">btn-primary</button>
+          <button class="btn btn-outline">btn-outline</button>
+          <button class="btn btn-ghost">btn-ghost</button>
+          <button class="btn btn-danger">btn-danger</button>
+          <button class="btn btn-primary btn-sm">btn-sm</button>
+          <button class="btn btn-primary" disabled>disabled</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 徽章 ── -->
+    <section class="sg-section">
+      <h2>徽章 / Pill</h2>
+      <p class="sg-note">目前有多套並存，新功能優先用 <code>.pill-*</code>（通用語意）或 <code>.status-badge.*</code>（任務狀態專用）。</p>
+      <div class="sg-panel">
+        <div class="sg-mini-title">.pill-* <span class="sg-flag ok">標準 · 通用語意</span></div>
+        <div class="sg-row" style="margin-bottom: var(--space-5)">
+          <span class="pill pill-info">pill-info</span>
+          <span class="pill pill-success">pill-success</span>
+          <span class="pill pill-warn">pill-warn</span>
+          <span class="pill pill-danger">pill-danger</span>
+        </div>
+        <div class="sg-mini-title">.status-badge.* <span class="sg-flag ok">標準 · 任務狀態</span></div>
+        <div class="sg-row" style="margin-bottom: var(--space-5)">
+          <span class="status-badge new">待分類</span>
+          <span class="status-badge coding_running">開發中</span>
+          <span class="status-badge qa_running">QA</span>
+          <span class="status-badge done">完成</span>
+          <span class="status-badge stopped">失敗</span>
+          <span class="status-badge merge_conflict">衝突</span>
+        </div>
+        <div class="sg-mini-title">.src-badge / .proj-chip / .env-chip <span class="sg-flag dupe">重複 · 另 3 套 chip</span></div>
+        <div class="sg-row">
+          <span class="src-badge src-odoo">Odoo</span>
+          <span class="src-badge src-service">eService</span>
+          <span class="proj-chip">專案名</span>
+          <span class="env-chip">測試機</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 輸入框 ── -->
+    <section class="sg-section">
+      <h2>輸入框</h2>
+      <p class="sg-note">三套並存（<code>.form-control</code> / <code>.field-input</code> / <code>.form-group input</code>）行為近似。<b>新功能一律用 <code>.form-control</code></b>，錯誤態加 <code>.form-control-error</code>。</p>
+      <div class="sg-panel">
+        <div class="sg-mini-title">.form-control <span class="sg-flag ok">標準</span></div>
+        <div class="sg-row" style="margin-bottom: var(--space-4)">
+          <input class="form-control" placeholder="一般輸入" style="max-width:240px" />
+          <input class="form-control form-control-error" placeholder="錯誤態" style="max-width:240px" />
+        </div>
+        <div class="sg-mini-title">.field-input <span class="sg-flag dupe">重複 · 待收斂</span></div>
+        <div class="sg-row">
+          <input class="field-input" placeholder="field-input" style="max-width:240px" />
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 卡片 ── -->
+    <section class="sg-section">
+      <h2>卡片容器</h2>
+      <p class="sg-note">5 套並存（<code>.setting-block</code> / <code>.settings-section</code> / <code>.detail-card</code> / <code>.project-card</code> / <code>.task-card</code>）。表單設定區用 <code>.setting-block</code>，一般內容區用 <code>.detail-card</code>。</p>
+      <div class="sg-panel">
+        <div class="settings-section" style="margin-bottom: var(--space-4)">
+          <div class="section-title">.settings-section</div>
+          <div class="section-desc">個人設定頁的區塊容器。</div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-title" style="font-size: var(--fs-lg)">.detail-card</div>
+          <div class="detail-meta">一般內容卡片，較輕量。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 狀態元件 ── -->
+    <section class="sg-section">
+      <h2>狀態 / 回饋</h2>
+      <div class="sg-panel">
+        <div class="sg-mini-title">.empty-state</div>
+        <div class="empty-state" style="padding: var(--space-6)">
+          <div style="font-size: var(--fs-2xl)">📭</div>
+          <p>目前沒有資料</p>
+        </div>
+        <div class="sg-mini-title" style="margin-top: var(--space-4)">.loading / .spinner</div>
+        <div class="sg-row"><span class="spinner"></span> <span style="color: var(--text-muted); font-size: var(--fs-md)">載入中…</span></div>
+        <div class="sg-mini-title" style="margin-top: var(--space-4)">.error-msg <span class="sg-flag ok">標準錯誤框</span></div>
+        <div class="error-msg">操作失敗：找不到指定的專案，請重新整理後再試。</div>
+        <div class="sg-mini-title" style="margin-top: var(--space-4)">.toast（示意）</div>
+        <div class="sg-row">
+          <span class="toast info" style="position: static">info toast</span>
+          <span class="toast success" style="position: static">success toast</span>
+          <span class="toast error" style="position: static">error toast</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 共用元件進度 ── -->
+    <section class="sg-section">
+      <h2>共用元件</h2>
+      <div class="sg-panel">
+        <div class="sg-mini-title"><code>confirmDialog()</code> / <code>.modal-*</code> <span class="sg-flag ok">已完成</span></div>
+        <p class="sg-note" style="margin-bottom: var(--space-4)">
+          全域 Promise API，取代原生 <code class="sg-code">confirm()</code>/<code class="sg-code">prompt()</code>。用法：
+          <code class="sg-code">if (!await confirmDialog({ title, message, danger:true })) return;</code>
+          危險刪除可傳 <code class="sg-code">requireText</code> 要求輸入名稱確認。已接上 TaskList 封存/刪除/批次。
+        </p>
+        <div class="sg-callout">
+          <b style="color: var(--text)">Phase 1 剩餘清單：</b><br>
+          • <code>.data-table</code> + <code>.table-wrap</code>（<code>overflow-x:auto</code>）— 收斂 4 份手刻表格，一併解決橫向溢出<br>
+          • <code>&lt;Skeleton&gt;</code> — 取代純文字「載入中」的閃白<br>
+          • 幽靈 class <span class="sg-flag ghost">.admin-section</span> — app.css 未定義，5 個 view 誤用；請改用 <code>.settings-section</code>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    // 顏色 swatch 自動產生
+    const neutral = [
+      ['--bg','背景'],['--surface','面板'],['--card-bg','卡片'],['--sidebar-bg','側欄'],
+      ['--border','邊框'],['--border-strong','強邊框'],
+      ['--text','主文字'],['--text-secondary','次文字'],['--text-muted','弱文字'],['--text-placeholder','佔位']
+    ];
+    const semantic = [
+      ['--primary','主色'],['--primary-hover','主色 hover'],['--primary-light','主色淺'],
+      ['--danger','危險'],['--warning','警告'],['--success','成功'],['--info','資訊']
+    ];
+    function swatches(list, elId) {
+      const root = getComputedStyle(document.documentElement);
+      document.getElementById(elId).innerHTML = list.map(([v,label]) => {
+        const val = root.getPropertyValue(v).trim();
+        return `<div class="sg-swatch"><div class="chip" style="background:${'var('+v+')'}"></div>`
+          + `<div class="meta"><code>${v}</code><span class="val">${label} · ${val}</span></div></div>`;
+      }).join('');
+    }
+    function renderSwatches() { swatches(neutral,'grid-neutral'); swatches(semantic,'grid-semantic'); }
+
+    // 間距 scale
+    const spaces = ['--space-1','--space-2','--space-3','--space-4','--space-5','--space-6','--space-8','--space-10'];
+    document.getElementById('scale-space').innerHTML = spaces.map(v => {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+      return `<div class="sg-scale-item"><code>${v}</code><span class="val">${val}</span>`
+        + `<div class="sg-bar" style="width:${'var('+v+')'}"></div></div>`;
+    }).join('');
+
+    // 字級 scale
+    const fonts = ['--fs-2xs','--fs-xs','--fs-sm','--fs-base','--fs-md','--fs-lg','--fs-xl','--fs-2xl','--fs-3xl'];
+    document.getElementById('scale-font').innerHTML = fonts.map(v => {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+      return `<div class="sg-scale-item"><code>${v}</code><span class="val">${val}</span>`
+        + `<span style="font-size:${'var('+v+')'}; color:var(--text)">工作台 AI Dev</span></div>`;
+    }).join('');
+
+    // 圓角
+    document.getElementById('radius-demo').innerHTML = ['--radius-sm','--radius','--radius-lg'].map(v =>
+      `<div style="text-align:center"><div style="width:64px;height:44px;background:var(--primary-light);border:1px solid var(--primary);border-radius:${'var('+v+')'}"></div>`
+      + `<code class="sg-code" style="margin-top:6px;display:inline-block">${v}</code></div>`).join('');
+    // 陰影
+    document.getElementById('shadow-demo').innerHTML = ['--shadow-sm','--shadow','--shadow-lg'].map(v =>
+      `<div style="text-align:center"><div style="width:80px;height:48px;background:var(--surface);border-radius:var(--radius);box-shadow:${'var('+v+')'}"></div>`
+      + `<code class="sg-code" style="margin-top:8px;display:inline-block">${v}</code></div>`).join('');
+    // 字重
+    document.getElementById('weight-demo').innerHTML = [['--fw-normal','400'],['--fw-medium','500'],['--fw-semibold','600'],['--fw-bold','700']].map(([v,n]) =>
+      `<span style="font-weight:${'var('+v+')'};font-size:var(--fs-lg);color:var(--text)">Aa ${n}</span>`).join('&nbsp;&nbsp;&nbsp;');
+
+    // 深色切換（沿用 app 的 localStorage 'theme' 慣例）
+    const root = document.documentElement;
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark') root.setAttribute('data-theme','dark');
+    renderSwatches();
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      const dark = root.getAttribute('data-theme') === 'dark';
+      if (dark) { root.removeAttribute('data-theme'); localStorage.setItem('theme','light'); }
+      else { root.setAttribute('data-theme','dark'); localStorage.setItem('theme','dark'); }
+      renderSwatches();
+    });
+  </script>
+</body>
+</html>

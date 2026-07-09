@@ -49,7 +49,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       finally { this.saving = false; }
     },
     async deleteConn(c) {
-      if (!confirm(`刪除連線「${c.name}」？`)) return;
+      if (!await confirmDialog({ title: '刪除連線', message: `確定刪除連線「${c.name}」？`, danger: true, confirmText: '刪除' })) return;
       try { await Api.delete(`projects/${this.pid()}/db-connections/${c.id}`); await this.load(); showToast('已刪除', 'success'); }
       catch (e) { showToast(e.message, 'error'); }
     },
