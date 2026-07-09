@@ -23,7 +23,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: true, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '' };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '' };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -155,7 +155,7 @@ window.TaskDetailView = Vue.defineComponent({
       try {
         await Api.post(`tasks/${this.task.id}/reject`, { reason: this.rejectReason.trim() });
         showToast('已退回，任務回到開發依原因修正', 'success');
-        this.rejectReason = ''; this.showReject = false;
+        this.rejectReason = '';
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.rejecting = false; }
@@ -423,8 +423,7 @@ window.TaskDetailView = Vue.defineComponent({
             <button class="btn btn-primary" @click="approve" :disabled="approving || rejecting">
               {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
             </button>
-            <button class="btn btn-outline" style="margin-left:var(--space-2)" @click="showReject = !showReject" :disabled="approving || rejecting">↩ 退回開發</button>
-            <div v-if="showReject" style="margin-top:var(--space-3)">
+            <div style="margin-top:var(--space-3)">
               <textarea v-model="rejectReason" class="form-control" rows="4"
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
               <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="reject" :disabled="rejecting || !rejectReason.trim()">
