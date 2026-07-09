@@ -18,6 +18,10 @@ env/
 /odoo-envs/
 /repos/
 
+# ─── 附件磁碟儲存(runtime,非原始碼)────────────────
+# 使用者上傳/同步下來的附件本體,測試與正式環境都會實際寫入這裡
+/app/uploads/
+
 # ─── 機密設定(改用 config.example.json 交付)──────────
 /data/config.json
 .env
