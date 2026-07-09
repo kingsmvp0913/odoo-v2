@@ -1,4 +1,5 @@
 const { query } = require('../db');
+const { saveAttachmentFile } = require('../lib/attachments');
 
 // 來源對應欄位（odoo_project_name / service_respondent_name）以「一行一個名稱」儲存，
 // 比對在 JS 端做（pg-mem 不支援 string_to_array），支援一個專案綁多個來源名稱。
@@ -36,9 +37,12 @@ function parseOdooUtcDate(dateStr) {
   return new Date(dateStr.replace(' ', 'T') + 'Z');
 }
 
-// 逐筆寫入外部聊天紀錄，以 external_id 對同一任務做 dedup（sync 增量再同步時只補新的）
+// 逐筆寫入外部聊天紀錄，以 external_id 對同一任務做 dedup（sync 增量再同步時只補新的）。
+// 回傳「這次新插入」的訊息（本機 id + 來源 attachment_ids），供呼叫端接著抓附件——
+// 只對新插入的訊息抓附件，已存在的訊息不重複打 API（比照既有 dedup 的省 API 呼叫原則）。
 async function insertTaskMessages(taskDbId, messages) {
-  if (!messages.length) return;
+  const inserted = [];
+  if (!messages.length) return inserted;
   const { rows: existingRows } = await query(
     'SELECT external_id FROM task_messages WHERE task_id = $1 AND external_id IS NOT NULL',
     [taskDbId]
@@ -49,12 +53,52 @@ async function insertTaskMessages(taskDbId, messages) {
     if (existingIds.has(extId)) continue;
     const text = stripHtml(m.body);
     if (!text) continue;
-    await query(
+    const { rows: [row] } = await query(
       `INSERT INTO task_messages (task_id, source, external_id, content, occurred_at)
-       VALUES ($1, 'sync', $2, $3, $4)`,
+       VALUES ($1, 'sync', $2, $3, $4) RETURNING id`,
       [taskDbId, extId, text, parseOdooUtcDate(m.date)]
     );
     existingIds.add(extId);
+    inserted.push({ localId: row.id, attachment_ids: m.attachment_ids || [] });
+  }
+  return inserted;
+}
+
+async function odooReadAttachments(baseUrl, ids, cookies) {
+  if (!ids.length) return [];
+  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookies },
+    body: JSON.stringify({
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'ir.attachment', method: 'read',
+        args: [ids, ['name', 'mimetype', 'datas']],
+        kwargs: {}
+      }
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`ir.attachment read failed: ${JSON.stringify(data.error)}`);
+  return data.result || [];
+}
+
+// 只處理這次新插入的訊息（insertTaskMessages 回傳值），已存在訊息的附件不重複抓
+async function ingestMessageAttachments(baseUrl, taskDbId, insertedMessages, cookies) {
+  for (const { localId, attachment_ids } of insertedMessages) {
+    if (!attachment_ids.length) continue;
+    const files = await odooReadAttachments(baseUrl, attachment_ids, cookies);
+    for (const att of files) {
+      if (!att.datas) continue;
+      const name = att.name || `attachment_${att.id}`;
+      const relPath = saveAttachmentFile(taskDbId, name, Buffer.from(att.datas, 'base64'));
+      await query(
+        `INSERT INTO task_attachments (task_id, message_id, filename, mimetype, file_path, origin, external_attachment_id, synced_to_odoo)
+         VALUES ($1, $2, $3, $4, $5, 'synced_message', $6, true)`,
+        [taskDbId, localId, name, att.mimetype || null, relPath, String(att.id)]
+      );
+      await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [taskDbId]);
+    }
   }
 }
 
@@ -162,7 +206,7 @@ async function syncOdooUser(userId, settings) {
     const messages = await odooSearchRead(
       odoo_url, 'mail.message',
       [['model', '=', 'project.task'], ['res_id', '=', task.id]],
-      ['id', 'date', 'body'],
+      ['id', 'date', 'body', 'attachment_ids'],
       cookies, 20
     );
 
@@ -182,13 +226,17 @@ async function syncOdooUser(userId, settings) {
          RETURNING id`,
         [userId, taskKey, task.name, original_text, stageLabel]
       );
-      if (inserted) await insertTaskMessages(inserted.id, messages);
+      if (inserted) {
+        const insertedMsgs = await insertTaskMessages(inserted.id, messages);
+        await ingestMessageAttachments(odoo_url, inserted.id, insertedMsgs, cookies);
+      }
       added++;
     } else {
       const t = existing.rows[0];
       // 已完成或已封存的任務不再增量拉聊天紀錄，避免無謂 API 呼叫、也避免已完成任務被新訊息重新攪動
       if (t.status !== 'done' && !t.is_hidden) {
-        await insertTaskMessages(t.id, messages);
+        const insertedMsgs = await insertTaskMessages(t.id, messages);
+        await ingestMessageAttachments(odoo_url, t.id, insertedMsgs, cookies);
       }
     }
 
@@ -244,12 +292,16 @@ async function syncServiceUser(userId, settings) {
          RETURNING id`,
         [userId, taskKey, title, original_text, stageLabel, classificationLabel]
       );
-      if (inserted) await insertTaskMessages(inserted.id, messages);
+      if (inserted) {
+        const insertedMsgs = await insertTaskMessages(inserted.id, messages);
+        await ingestMessageAttachments(service_url, inserted.id, insertedMsgs, cookies);
+      }
       added++;
     } else {
       const t = existing.rows[0];
       if (t.status !== 'done' && !t.is_hidden) {
-        await insertTaskMessages(t.id, messages);
+        const insertedMsgs = await insertTaskMessages(t.id, messages);
+        await ingestMessageAttachments(service_url, t.id, insertedMsgs, cookies);
       }
     }
 

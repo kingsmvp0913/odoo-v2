@@ -384,3 +384,56 @@ test('syncUser 訊息的 occurred_at 明確解讀為 UTC（不依賴連線環境
   );
   expect(msg.occurred_at.toISOString()).toBe('2026-06-25T10:00:00.000Z');
 });
+
+test('syncUser 新訊息含 attachment_ids → 抓取 ir.attachment 內容並存為 task_attachments', async () => {
+  mockFetch
+    // auth
+    .mockImplementationOnce(() => makeFetchResponse({ jsonrpc: '2.0', result: { uid: 1 } }, 'session_id=abc'))
+    // task search_read
+    .mockImplementationOnce(() => makeFetchResponse({
+      jsonrpc: '2.0',
+      result: [{
+        id: 9400, name: 'Attach Task', project_id: [1, 'My Project'],
+        stage_id: [2, 'In Progress'], description: '<p>desc</p>'
+      }]
+    }))
+    // mail.message search_read（含 attachment_ids）
+    .mockImplementationOnce(() => makeFetchResponse({
+      jsonrpc: '2.0',
+      result: [{ id: 601, date: '2026-07-01 09:00:00', body: '<p>附件在這</p>', attachment_ids: [9001] }]
+    }))
+    // ir.attachment read
+    .mockImplementationOnce(() => makeFetchResponse({
+      jsonrpc: '2.0',
+      result: [{ id: 9001, name: 'screenshot.png', mimetype: 'image/png', datas: Buffer.from('fake-png').toString('base64') }]
+    }));
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_odoo_9400'");
+  expect(t.has_attachment).toBe(true);
+
+  const { rows: atts } = await dbModule.query(
+    `SELECT filename, mimetype, origin, synced_to_odoo FROM task_attachments WHERE task_id = $1`, [t.id]
+  );
+  expect(atts.length).toBe(1);
+  expect(atts[0].filename).toBe('screenshot.png');
+  expect(atts[0].origin).toBe('synced_message');
+  expect(atts[0].synced_to_odoo).toBe(true);
+});
+
+test('syncUser 訊息無 attachment_ids → 不呼叫 ir.attachment、不產生 task_attachments', async () => {
+  setupOdooMocks({
+    tasks: [{ id: 9401, name: 'No Attach', project_id: [1, 'My Project'], stage_id: [2, 'In Progress'], description: '<p>d</p>' }],
+    messages: [{ id: 602, date: '2026-07-01 09:00:00', body: '<p>沒附件</p>', attachment_ids: [] }]
+  });
+  setupServiceMocks({ tasks: [] });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_odoo_9401'");
+  expect(t.has_attachment).toBe(false);
+  const { rows: atts } = await dbModule.query('SELECT * FROM task_attachments WHERE task_id = $1', [t.id]);
+  expect(atts.length).toBe(0);
+});
