@@ -4,13 +4,15 @@ const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
+const { assembleTaskContext } = require('./sync');
 
 async function runCsAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, title, original_text, project_id, user_id FROM tasks WHERE id = $1',
+    'SELECT id, task_id, title, project_id, user_id FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task) return;
+  task.original_text = await assembleTaskContext(taskId);
 
   let wikiContext = '';
   if (task.project_id) {

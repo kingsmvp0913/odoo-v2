@@ -5,6 +5,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
+const { assembleTaskContext } = require('./sync');
 
 const REQUIRED_FIELDS = ['case_id', 'module', 'odoo_version', 'execution_mode', 'summary'];
 
@@ -19,16 +20,17 @@ function determineNextStatus(parsed) {
 }
 
 async function analyzeTask(taskId, signal) {
-  const { rows } = await query('SELECT original_text, task_id, user_id FROM tasks WHERE id = $1', [taskId]);
+  const { rows } = await query('SELECT task_id, user_id FROM tasks WHERE id = $1', [taskId]);
   const task = rows[0];
   if (!task) throw new Error(`Task ${taskId} not found`);
+  const original_text = await assembleTaskContext(taskId);
 
   // Block 1: API call — transient errors reset status and re-throw
   let rawYaml;
   try {
     const agent = loadAgent('analysis-basic');
     const callResult = await runClaude(
-      agent.render({ original_text: task.original_text || '（無內容）' }),
+      agent.render({ original_text: original_text || '（無內容）' }),
       { signal, taskId, userId: task.user_id, model: agent.model }
     );
     rawYaml = callResult.text;

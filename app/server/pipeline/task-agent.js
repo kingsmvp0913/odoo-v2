@@ -7,6 +7,7 @@ const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
+const { assembleTaskContext } = require('./sync');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -139,10 +140,11 @@ function buildCodingPrompt(task, info, resolution, retryFeedback) {
 
 async function runTaskAnalysis(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, original_text, project_id FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
+  task.original_text = await assembleTaskContext(taskId);
 
   const info = await getProjectInfo(task.project_id);
   if (!info?.root) {
