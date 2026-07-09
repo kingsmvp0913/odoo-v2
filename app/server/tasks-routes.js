@@ -1,5 +1,6 @@
 const path = require('path');
 const yaml = require('js-yaml');
+const multer = require('multer');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { abortTask, runPipeline } = require('./pipeline/runner');
@@ -8,6 +9,18 @@ const { writebackTaskMessage } = require('./pipeline/sync');
 const { uninstallModule } = require('./pipeline/env-agent');
 const { rebuildTesting } = require('./pipeline/rebuild-testing');
 const { withProjectLock } = require('./pipeline/project-lock');
+const { saveAttachmentFile, readAttachmentFile } = require('./lib/attachments');
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 }
+});
+function uploadMessageFiles(req, res, next) {
+  upload.array('files', 5)(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}
 
 // 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除。
 async function cleanupTaskGit(task) {
@@ -114,7 +127,7 @@ function registerRoutes(app) {
     }
   });
 
-  // Task detail + last 5 logs
+  // Task detail + last 5 logs + 工單主附件
   app.get('/api/tasks/:id', verifyToken, async (req, res) => {
     try {
       const { rows: tasks } = await query(
@@ -127,7 +140,11 @@ function registerRoutes(app) {
         'SELECT id, role, content, created_at FROM task_logs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 5',
         [req.params.id]
       );
-      res.json({ task: tasks[0], logs: logs.reverse() });
+      const { rows: attachments } = await query(
+        'SELECT id, filename, mimetype FROM task_attachments WHERE task_id = $1 AND message_id IS NULL',
+        [req.params.id]
+      );
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -168,12 +185,19 @@ function registerRoutes(app) {
         'SELECT id, source, author, content, occurred_at, synced_to_odoo FROM task_messages WHERE task_id = $1 ORDER BY occurred_at DESC',
         [req.params.id]
       );
+      const { rows: attachments } = await query(
+        'SELECT id, message_id, filename, mimetype FROM task_attachments WHERE task_id = $1 AND message_id IS NOT NULL',
+        [req.params.id]
+      );
+      const byMessage = {};
+      attachments.forEach(a => { (byMessage[a.message_id] = byMessage[a.message_id] || []).push(a); });
+      rows.forEach(m => { m.attachments = byMessage[m.id] || []; });
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // 新增留言（不限任務狀態，逐步累積的補充資訊）；管理者開關開啟時 best-effort 回寫來源系統記錄備註
-  app.post('/api/tasks/:id/messages', verifyToken, async (req, res) => {
+  app.post('/api/tasks/:id/messages', verifyToken, uploadMessageFiles, async (req, res) => {
     try {
       const { rows: tasks } = await query(
         'SELECT id, task_id, source FROM tasks WHERE id = $1 AND user_id = $2',
@@ -192,22 +216,59 @@ function registerRoutes(app) {
         [req.params.id, me?.display_name || null, trimmed]
       );
 
+      const attachmentRows = [];
+      for (const file of req.files || []) {
+        const relPath = saveAttachmentFile(req.params.id, file.originalname, file.buffer);
+        const { rows: [att] } = await query(
+          `INSERT INTO task_attachments (task_id, message_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, $5, 'manual_reply')
+           RETURNING id, filename, mimetype, file_path`,
+          [req.params.id, inserted.id, file.originalname, file.mimetype, relPath]
+        );
+        attachmentRows.push(att);
+      }
+
       const { rows: [cfg] } = await query('SELECT writeback_odoo_notes FROM teams_settings WHERE id = 1');
       // 沒帶 writeback 欄位時預設 true（維持現況行為）；前端明確傳 false 才跳過這則的回寫
       const wantsWriteback = req.body?.writeback !== false;
       if (cfg?.writeback_odoo_notes && wantsWriteback) {
         try {
-          const newExternalId = await writebackTaskMessage(req.userId, tasks[0], trimmed);
-          if (newExternalId) {
+          const result = await writebackTaskMessage(req.userId, tasks[0], trimmed, attachmentRows);
+          if (result?.messageExternalId) {
             await query(
               'UPDATE task_messages SET external_id = $2, synced_to_odoo = true WHERE id = $1',
-              [inserted.id, String(newExternalId)]
+              [inserted.id, String(result.messageExternalId)]
             );
             inserted.synced_to_odoo = true;
+            for (let i = 0; i < attachmentRows.length; i++) {
+              await query(
+                'UPDATE task_attachments SET synced_to_odoo = true, external_attachment_id = $2 WHERE id = $1',
+                [attachmentRows[i].id, String(result.attachmentExternalIds[i])]
+              );
+            }
           }
-        } catch (e) { /* best-effort：回寫失敗不影響本地已儲存的留言 */ }
+        } catch (e) { /* best-effort：回寫失敗不影響本地已儲存的留言與附件 */ }
       }
-      res.json(inserted);
+      res.json({ ...inserted, attachments: attachmentRows.map(({ file_path, ...rest }) => rest) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 附件下載：驗證附件屬於該任務且該任務屬於目前使用者，再串流本機檔案回傳
+  app.get('/api/tasks/:id/attachments/:attId/download', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT a.filename, a.mimetype, a.file_path
+         FROM task_attachments a
+         JOIN tasks t ON t.id = a.task_id
+         WHERE a.id = $1 AND a.task_id = $2 AND t.user_id = $3`,
+        [req.params.attId, req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
+      const att = rows[0];
+      const buffer = readAttachmentFile(att.file_path);
+      res.setHeader('Content-Type', att.mimetype || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(att.filename)}"`);
+      res.send(buffer);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -323,6 +384,7 @@ function registerRoutes(app) {
       await cleanupTaskGit(rows[0]);
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
+      await query('DELETE FROM task_attachments WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_messages WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM tasks WHERE id = $1', [req.params.id]);
       // 刪除後重建 testing 分支（清掉被刪任務留在 testing 的 source）；best-effort，警告併回
@@ -358,6 +420,7 @@ function registerRoutes(app) {
       for (const t of deletable) await cleanupTaskGit(t);
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
+      await query('DELETE FROM task_attachments WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [delIds]);
       const { rowCount } = await query('DELETE FROM tasks WHERE id = ANY($1::int[])', [delIds]);
       // 刪除後每個涉及專案重建一次 testing（去重）

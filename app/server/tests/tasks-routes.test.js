@@ -473,6 +473,96 @@ test('DELETE /api/tasks/:id → 任務有 task_messages 時仍可成功刪除，
 // （`WHERE id = ANY($1::int[])` 對已存在的整數 id 永遠查不到列，純測試環境限制，不影響真實 Postgres；
 // 已用最小重現腳本驗證：即使不帶參數的字面量 SQL `ANY(ARRAY[1]::int[])` 也一樣查不到，
 // 換成 `id::text = ANY($1::text[])` 才正常）。這條路徑因此原本就沒有任何測試覆蓋，本次修復沿用
+
+test('POST /api/tasks/:id/messages 夾帶檔案 → 建立 manual_reply 附件', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_msg_file','odoo','M','base','coding_running') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('content', '附檔案的留言')
+    .attach('files', Buffer.from('fake-image-bytes'), 'shot.png');
+  expect(res.status).toBe(200);
+  expect(res.body.attachments.length).toBe(1);
+  expect(res.body.attachments[0].filename).toBe('shot.png');
+
+  const { rows: atts } = await dbModule.query(
+    "SELECT origin, synced_to_odoo FROM task_attachments WHERE task_id = $1", [t.id]
+  );
+  expect(atts.length).toBe(1);
+  expect(atts[0].origin).toBe('manual_reply');
+});
+
+test('POST /api/tasks/:id/messages 超過檔案數量限制 → 400', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_msg_toomany','odoo','M','base','coding_running') RETURNING id`,
+    [userId]
+  );
+  let req = request(app).post(`/api/tasks/${t.id}/messages`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('content', '太多檔案');
+  for (let i = 0; i < 6; i++) req = req.attach('files', Buffer.from('x'), `f${i}.txt`);
+  const res = await req;
+  expect(res.status).toBe(400);
+});
+
+test('GET /api/tasks/:id/attachments/:attId/download → 回傳檔案內容與正確 Content-Type', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_dl','odoo','M','base','new') RETURNING id`,
+    [userId]
+  );
+  const attachments = require('../lib/attachments');
+  const relPath = attachments.saveAttachmentFile(t.id, 'doc.txt', Buffer.from('文件內容'));
+  const { rows: [att] } = await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, 'doc.txt', 'text/plain', $2, 'ticket_main') RETURNING id`,
+    [t.id, relPath]
+  );
+
+  const res = await request(app).get(`/api/tasks/${t.id}/attachments/${att.id}/download`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.headers['content-type']).toContain('text/plain');
+  expect(res.text).toBe('文件內容');
+});
+
+test('GET /api/tasks/:id/attachments/:attId/download 附件不存在 → 404', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_dl_404','odoo','M','base','new') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).get(`/api/tasks/${t.id}/attachments/999999/download`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(404);
+});
+
+// 意圖：task_attachments 對 tasks 有 FK 且無 ON DELETE CASCADE，比照 task_messages
+// 既有修法（見同檔案上方註解），刪任務前沒先清 task_attachments 一樣會撞 FK constraint
+test('DELETE /api/tasks/:id → 任務有 task_attachments 時仍可成功刪除', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_del_with_atts','odoo','D','base','new') RETURNING id`,
+    [userId]
+  );
+  const attachments = require('../lib/attachments');
+  const relPath = attachments.saveAttachmentFile(t.id, 'x.txt', Buffer.from('x'));
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, file_path, origin) VALUES ($1, 'x.txt', $2, 'ticket_main')`,
+    [t.id, relPath]
+  );
+
+  const res = await request(app).delete(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+
+  const { rows } = await dbModule.query('SELECT * FROM task_attachments WHERE task_id = $1', [t.id]);
+  expect(rows.length).toBe(0);
+});
 // 同一個既有、已在正式環境跑過的 ANY(int[]) pattern，不因測試工具限制改寫正式程式碼。
 
 // --- 刪任務時卸載測試區 module（子系統 A）---
