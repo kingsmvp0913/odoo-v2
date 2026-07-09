@@ -17,7 +17,7 @@ function formatEvent(ev) {
       } else if (blk.type === 'tool_use') {
         const input = JSON.stringify(blk.input || {});
         const short = input.length > 120 ? input.slice(0, 120) + '…' : input;
-        out += `\n⚙ ${blk.name}(${short})\n`;
+        out += `\n\x1b[90m⚙ ${blk.name}(${short})\x1b[0m\n`;
       }
     }
     return out || null;
@@ -30,7 +30,7 @@ function formatEvent(ev) {
           ? blk.content.filter(c => c.type === 'text').map(c => c.text).join('')
           : String(blk.content || '');
         const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
-        return preview ? `  → ${preview}\n` : null;
+        return preview ? `\x1b[90m  → ${preview}\x1b[0m\n` : null;
       }
     }
   }

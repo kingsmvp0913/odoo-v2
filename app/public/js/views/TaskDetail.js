@@ -23,7 +23,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '' };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: true, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '' };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -256,7 +256,24 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.stepping = false; }
     },
-    stripAnsi(s) { return String(s == null ? '' : s).replace(/\x1b\[[0-9;]*m/g, ''); },
+    // 把後端標的灰階 ANSI（\x1b[90m…\x1b[0m，工具呼叫/回傳）轉成淡化 span，其餘文字照常顯示；
+    // 其他未知 ANSI code 直接丟棄。內容先 escape 再包 span，避免 tool input/output 帶 HTML 造成 XSS。
+    ansiToHtml(s) {
+      const raw = String(s == null ? '' : s);
+      const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      let out = '', dim = false, last = 0, m;
+      const re = /\x1b\[(\d+)m/g;
+      while ((m = re.exec(raw))) {
+        const chunk = raw.slice(last, m.index);
+        if (chunk) out += dim ? `<span style="opacity:.55">${esc(chunk)}</span>` : esc(chunk);
+        if (m[1] === '90') dim = true;
+        else if (m[1] === '0') dim = false;
+        last = re.lastIndex;
+      }
+      const tail = raw.slice(last);
+      if (tail) out += dim ? `<span style="opacity:.55">${esc(tail)}</span>` : esc(tail);
+      return out;
+    },
     scrollEventsToBottom() { const c = this.$refs.eventsBox; if (c) c.scrollTop = c.scrollHeight; },
     async loadEvents() {
       try {
@@ -352,9 +369,8 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
             <div class="blocker-card-body">
               <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">處理失敗 — 說明你的修正方向，任務將回到失敗的那一關重試</div>
-              <textarea v-model="resolution"
-                placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續..."
-                style="width:100%;height:80px;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:vertical;box-sizing:border-box">
+              <textarea v-model="resolution" class="form-control" rows="4"
+                placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續...">
               </textarea>
               <div style="margin-top:var(--space-2)">
                 <button class="btn btn-primary btn-sm" @click="resolveBlocker" :disabled="resolving || !resolution.trim()">
@@ -376,7 +392,7 @@ window.TaskDetailView = Vue.defineComponent({
 
           <div v-if="canAnswer" class="answer-box">
             <div class="form-section">回覆 AI 問題</div>
-            <textarea v-model="answer" placeholder="輸入你的回覆..." style="width:100%;height:80px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-md);resize:vertical"></textarea>
+            <textarea v-model="answer" class="form-control" rows="4" placeholder="輸入你的回覆..."></textarea>
             <div class="answer-actions">
               <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !answer.trim()">
                 {{ submitting ? '送出中...' : '送出回覆' }}
@@ -440,8 +456,8 @@ window.TaskDetailView = Vue.defineComponent({
               <textarea v-model="csAnswers[q]"
                 :ref="'csInput_' + idx"
                 :placeholder="'請填寫第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === csQuestions.length - 1 ? '／送出' : '') + '）'"
-                style="width:100%;height:72px;padding:var(--space-2);border:1px solid;border-radius:var(--radius-sm);font-size:var(--fs-base);resize:vertical"
-                :style="{ borderColor: csAnswers[q] && csAnswers[q].trim() ? 'var(--border)' : 'var(--danger)' }"
+                class="form-control" :class="{ 'form-control-error': !(csAnswers[q] && csAnswers[q].trim()) }"
+                rows="4"
                 @keydown.enter.prevent="handleCsEnter(idx)">
               </textarea>
             </div>
@@ -462,7 +478,7 @@ window.TaskDetailView = Vue.defineComponent({
             <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
             <template v-else>
               <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:var(--fs-xs);margin-bottom:6px">— 已到最前 —</div>
-              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)">{{ stripAnsi(ev.content) }}</span>
+              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)" v-html="ansiToHtml(ev.content)"></span>
             </template>
           </div>
         </div>

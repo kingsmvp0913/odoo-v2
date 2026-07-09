@@ -263,7 +263,7 @@ test('B-5 shouldResumeFallback：只有 error 值得 fallback，timeout/aborted 
   expect(shouldResumeFallback({ claudeStatus: 'aborted' })).toBe(false);
 });
 
-test('B-5 resume 遇中止類失敗（aborted，同 timeout 分類）→ stopped，不 fallback（只呼叫一次）', async () => {
+test('B-5 resume 遇手動暫停（aborted）→ 狀態原地不動、不列入 blocker，不 fallback（只呼叫一次）', async () => {
   const { spawn } = require('child_process');
   const ctrl = new AbortController();
   let count = 0;
@@ -282,8 +282,9 @@ test('B-5 resume 遇中止類失敗（aborted，同 timeout 分類）→ stopped
   });
   await runTaskCoding(id, userId, ctrl.signal);
 
-  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('stopped');
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running'); // 手動暫停非失敗，留在原關卡，解除暫停後續跑
+  expect(t.blocker_content).toBeNull();
   expect(count).toBe(1); // aborted/timeout 類不得 fallback 再燒一次
 });
 

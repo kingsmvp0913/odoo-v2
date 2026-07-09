@@ -196,6 +196,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
+    if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
       [taskId, stopReason('分析 Agent 執行失敗', err)]
@@ -331,6 +332,7 @@ async function runTaskCoding(taskId, userId, signal) {
     await logTokenUsage(ref, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
     await logFailedUsage(ref, userId, 'coding', err);
+    if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
       [taskId, stopReason('實作 Agent 執行失敗', err)]

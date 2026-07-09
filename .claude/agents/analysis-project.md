@@ -28,6 +28,7 @@ B. 本地程式碼（現有模組結構、欄位定義、業務邏輯）
 - 一個 Model 一個 .py 檔；單頭＋明細單據合併，以單頭為檔名（如 sale_order.py）
 - 樣板文件（xls/docx）一律放 <module>/static/<type>/（例：hr/static/xls/abc.xlsx）
 - 嚴禁新增 analysis.yaml 規格書以外的欄位、Model 或邏輯
+- 涉及檔案匯出格式（xlsx/docx 等）或任何 selection 欄位時，先確認 base Odoo 原生是否支援該值；不支援則在規格中明列所需的額外相依模組（如 OCA report_xlsx），或改用不受此限制的替代做法（如直接產生檔案而非透過 ir.actions.report 的 report_type）
 
 【專案資訊】
 - 名稱：{{project_name}}

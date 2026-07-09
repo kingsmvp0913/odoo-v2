@@ -49,6 +49,7 @@ async function runCsAgent(taskId, userId, signal) {
   } catch (err) {
     // CLI/API 執行失敗與「回應無法解析」是不同問題，分開歸因（健檢流程層 P3）
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);
+    if (err.aborted) return; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
     blockerMsg = `CS agent 執行失敗：${err.message}`;
     console.error(`[CS-AGENT] error task ${taskId}:`, err.message);
   }

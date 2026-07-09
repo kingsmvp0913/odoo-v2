@@ -238,6 +238,7 @@ function registerRoutes(app) {
         [req.params.id, newPaused]
       );
       if (newPaused) abortTask(req.params.id);
+      else runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true, is_paused: newPaused });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -323,6 +324,7 @@ function registerRoutes(app) {
         [ids, paused, req.userId]
       );
       if (paused) ids.forEach(id => abortTask(id));
+      else runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true, affected: rowCount, is_paused: paused });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

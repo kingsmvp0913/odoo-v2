@@ -98,6 +98,7 @@ async function runTourStage(taskId, userId, signal) {
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);
+    if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
     await stopTask(taskId, userId, stopReason('Tour 產生失敗', err));
     return true;
   }
