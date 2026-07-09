@@ -224,6 +224,10 @@ async function runSelect(conn, sql) {
   const err = validateSelectOnly(sql);
   if (err) return { ok: false, error: err };
 
+  if (conn.vpn_enabled && (conn.connect_mode || 'docker') === 'direct' && conn.db_ssl) {
+    return { ok: false, error: '[VPN] 目前不支援「direct 連線 + SSL + VPN」同時啟用（VPN 轉發後主機變為 127.0.0.1，TLS 憑證驗證會失敗）。請關閉 SSL 或改用其他連線模式。' };
+  }
+
   let effectiveConn = conn;
   if (conn.vpn_enabled) {
     let forwardPort;

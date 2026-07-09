@@ -60,4 +60,13 @@ describe('runSelect 的 VPN 分支', () => {
     expect(result.error).toMatch(/^\[VPN\]/);
     expect(mockPgClientCtor).not.toHaveBeenCalled();
   });
+
+  test('direct 模式 + db_ssl + vpn_enabled 同時開啟時，直接回傳明確錯誤，不啟動 Gateway 也不嘗試連線', async () => {
+    const conn = { ...vpnDirectConn, db_ssl: true };
+    const result = await runSelect(conn, 'SELECT 1');
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/\[VPN\]/) });
+    expect(ensureGatewayRunning).not.toHaveBeenCalled();
+    expect(mockPgClientCtor).not.toHaveBeenCalled();
+  });
 });
