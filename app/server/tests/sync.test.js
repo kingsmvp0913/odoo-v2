@@ -220,15 +220,39 @@ test('syncUser auto-binds Odoo task when its project name matches one of multipl
   expect(rows[0].pname).toBe('Multi 專案');
 });
 
-test('assembleTaskContext() 無 task_messages 時，組回 original_text + 無訊息內容 fallback', async () => {
+test('assembleTaskContext() 組出標題／專案／狀態／分類標頭，無 task_messages 時 fallback 無訊息內容', async () => {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('組裝測試專案', '17.0') RETURNING id"
+  );
   const { rows: [t] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
-     VALUES ($1,'task_ctx_empty','odoo','C','---id---\n1\n---title---\nC','new') RETURNING id`,
-    [userId]
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, classification_label, project_id, status)
+     VALUES ($1,'task_ctx_empty','odoo','C 任務','描述內容','處理中','技術問題',$2,'new') RETURNING id`,
+    [userId, p.id]
   );
   const ctx = await syncModule.assembleTaskContext(t.id);
-  expect(ctx).toContain('---id---\n1');
+  expect(ctx).toContain('標題: C 任務');
+  expect(ctx).toContain('專案: 組裝測試專案');
+  expect(ctx).toContain('狀態: 處理中');
+  expect(ctx).toContain('分類: 技術問題');
+  expect(ctx).toContain('描述內容');
   expect(ctx).toContain('---message---\n無訊息內容');
+});
+
+test('assembleTaskContext() has_attachment=true 時附加純文字提醒，false 時不附加', async () => {
+  const { rows: [withAtt] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, has_attachment, status)
+     VALUES ($1,'task_ctx_att','odoo','A','desc',true,'new') RETURNING id`,
+    [userId]
+  );
+  const { rows: [noAtt] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, has_attachment, status)
+     VALUES ($1,'task_ctx_noatt','odoo','B','desc',false,'new') RETURNING id`,
+    [userId]
+  );
+  const ctxWith = await syncModule.assembleTaskContext(withAtt.id);
+  const ctxWithout = await syncModule.assembleTaskContext(noAtt.id);
+  expect(ctxWith).toContain('此任務有附件');
+  expect(ctxWithout).not.toContain('此任務有附件');
 });
 
 test('assembleTaskContext() 依時間正序組回多筆 task_messages', async () => {

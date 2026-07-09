@@ -267,14 +267,28 @@ async function syncServiceUser(userId, settings) {
 }
 
 async function assembleTaskContext(taskId) {
-  const { rows: [task] } = await query('SELECT original_text FROM tasks WHERE id = $1', [taskId]);
+  const { rows: [task] } = await query(
+    `SELECT t.title, t.original_text, t.stage_label, t.classification_label, t.has_attachment, p.name AS project_name
+     FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
+     WHERE t.id = $1`,
+    [taskId]
+  );
   if (!task) return '';
   const { rows: messages } = await query(
     'SELECT content, occurred_at FROM task_messages WHERE task_id = $1 ORDER BY occurred_at ASC',
     [taskId]
   );
   const msgLines = messages.map(m => `[${new Date(m.occurred_at).toISOString()}] ${m.content}`).join('\n');
-  return `${task.original_text || ''}\n---message---\n${msgLines || '無訊息內容'}`;
+  const header = [
+    `標題: ${task.title || ''}`,
+    `專案: ${task.project_name || '（無）'}`,
+    `狀態: ${task.stage_label || '（無）'}`,
+    `分類: ${task.classification_label || '（無）'}`
+  ].join('\n');
+  const attachmentNote = task.has_attachment
+    ? '\n（此任務有附件，AI 無法直接讀取附件內容，請提醒使用者本人查看附件）'
+    : '';
+  return `${header}\n\n${task.original_text || ''}${attachmentNote}\n\n---message---\n${msgLines || '無訊息內容'}`;
 }
 
 async function resolveUserOdooSettings(userId) {
