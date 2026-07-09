@@ -201,19 +201,30 @@ async function syncServiceUser(userId, settings) {
   return { added, found: tasks.length };
 }
 
-async function syncUser(userId) {
+async function assembleTaskContext(taskId) {
+  const { rows: [task] } = await query('SELECT original_text FROM tasks WHERE id = $1', [taskId]);
+  if (!task) return '';
+  const { rows: messages } = await query(
+    'SELECT content, occurred_at FROM task_messages WHERE task_id = $1 ORDER BY occurred_at ASC',
+    [taskId]
+  );
+  const msgLines = messages.map(m => `[${new Date(m.occurred_at).toISOString()}] ${m.content}`).join('\n');
+  return `${task.original_text || ''}\n---message---\n${msgLines || '無訊息內容'}`;
+}
+
+async function resolveUserOdooSettings(userId) {
   const [{ rows: userRows }, { rows: sysRows }] = await Promise.all([
     query('SELECT odoo_settings FROM users WHERE id = $1', [userId]),
     query('SELECT odoo_url, odoo_db, service_url, service_db FROM teams_settings WHERE id = 1')
   ]);
-  if (!userRows.length) return { odoo: { added: 0 }, service: { added: 0 } };
+  if (!userRows.length) return null;
 
   const rawSettings = userRows[0].odoo_settings;
   const userSettings = typeof rawSettings === 'string' ? JSON.parse(rawSettings) : (rawSettings || {});
   const sys = sysRows[0] || {};
 
   // Global URL+DB from Admin; personal credentials from user settings
-  const settings = {
+  return {
     odoo_url:          sys.odoo_url     || userSettings.odoo_url,
     odoo_db:           sys.odoo_db      || userSettings.odoo_db,
     service_url:       sys.service_url  || userSettings.service_url,
@@ -225,7 +236,11 @@ async function syncUser(userId) {
     service_password:  userSettings.service_password,
     service_user_id:   userSettings.service_user_id
   };
+}
 
+async function syncUser(userId) {
+  const settings = await resolveUserOdooSettings(userId);
+  if (!settings) return { odoo: { added: 0 }, service: { added: 0 } };
   if (!settings.odoo_url && !settings.service_url) return { odoo: { added: 0 }, service: { added: 0 } };
 
   const odoo = await syncOdooUser(userId, settings).catch(err => {
@@ -239,4 +254,4 @@ async function syncUser(userId) {
   return { odoo, service };
 }
 
-module.exports = { syncUser, stripHtml };
+module.exports = { syncUser, stripHtml, resolveUserOdooSettings, assembleTaskContext };

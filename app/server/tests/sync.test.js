@@ -207,3 +207,33 @@ test('syncUser auto-binds Odoo task when its project name matches one of multipl
   expect(rows.length).toBe(1);
   expect(rows[0].pname).toBe('Multi 專案');
 });
+
+test('assembleTaskContext() 無 task_messages 時，組回 original_text + 無訊息內容 fallback', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_ctx_empty','odoo','C','---id---\n1\n---title---\nC','new') RETURNING id`,
+    [userId]
+  );
+  const ctx = await syncModule.assembleTaskContext(t.id);
+  expect(ctx).toContain('---id---\n1');
+  expect(ctx).toContain('---message---\n無訊息內容');
+});
+
+test('assembleTaskContext() 依時間正序組回多筆 task_messages', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_ctx_multi','odoo','C','base','new') RETURNING id`,
+    [userId]
+  );
+  await dbModule.query(
+    `INSERT INTO task_messages (task_id, source, external_id, content, occurred_at) VALUES
+     ($1,'sync','2','第二則','2026-07-02 10:00:00'),
+     ($1,'sync','1','第一則','2026-07-01 10:00:00')`,
+    [t.id]
+  );
+  const ctx = await syncModule.assembleTaskContext(t.id);
+  const firstIdx = ctx.indexOf('第一則');
+  const secondIdx = ctx.indexOf('第二則');
+  expect(firstIdx).toBeGreaterThan(-1);
+  expect(secondIdx).toBeGreaterThan(firstIdx); // 時間正序：舊的在前
+});
