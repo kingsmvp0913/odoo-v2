@@ -262,22 +262,27 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.stepping = false; }
     },
-    // 把後端標的灰階 ANSI（\x1b[90m…\x1b[0m，工具呼叫/回傳）轉成淡化 span，其餘文字照常顯示；
-    // 其他未知 ANSI code 直接丟棄。內容先 escape 再包 span，避免 tool input/output 帶 HTML 造成 XSS。
+    // 把後端標的灰階 ANSI（\x1b[90m…\x1b[0m，工具呼叫/回傳）包成預設收合的 <details>，其餘文字照常顯示；
+    // 其他未知 ANSI code 直接丟棄。內容先 escape 再包 HTML，避免 tool input/output 帶 HTML 造成 XSS。
     ansiToHtml(s) {
       const raw = String(s == null ? '' : s);
       const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const wrapDim = chunk => {
+        if (!chunk) return '';
+        const lines = chunk.split('\n').length;
+        return `<details style="display:inline"><summary style="cursor:pointer;user-select:none;color:#888;display:inline">▶ 次要內容（${lines} 行）</summary><span style="opacity:.7">${esc(chunk)}</span></details>`;
+      };
       let out = '', dim = false, last = 0, m;
       const re = /\x1b\[(\d+)m/g;
       while ((m = re.exec(raw))) {
         const chunk = raw.slice(last, m.index);
-        if (chunk) out += dim ? `<span style="opacity:.55">${esc(chunk)}</span>` : esc(chunk);
+        if (chunk) out += dim ? wrapDim(chunk) : esc(chunk);
         if (m[1] === '90') dim = true;
         else if (m[1] === '0') dim = false;
         last = re.lastIndex;
       }
       const tail = raw.slice(last);
-      if (tail) out += dim ? `<span style="opacity:.55">${esc(tail)}</span>` : esc(tail);
+      if (tail) out += dim ? wrapDim(tail) : esc(tail);
       return out;
     },
     scrollEventsToBottom() { const c = this.$refs.eventsBox; if (c) c.scrollTop = c.scrollHeight; },
