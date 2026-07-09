@@ -1,4 +1,5 @@
 const { Client } = require('ssh2');
+const { ensureGatewayRunning } = require('./vpn-gateway');
 
 function validateConnField(val, name) {
   if (val && !/^[A-Za-z0-9_.\-]+$/.test(String(val))) {
@@ -124,6 +125,14 @@ function sshExec(conn, command) {
 // 統一把 driver 回傳值正規化成字串（NULL→空字串，對齊 --csv 語意）
 function normCell(c) { return (c === null || c === undefined) ? '' : String(c); }
 
+// VPN 轉發：把要連的目標位址換成本機轉發 port，其餘欄位不變。
+function applyVpnForward(conn, forwardPort) {
+  if ((conn.connect_mode || 'docker') === 'direct') {
+    return { ...conn, db_host: '127.0.0.1', db_port: forwardPort };
+  }
+  return { ...conn, ssh_host: '127.0.0.1', ssh_port: forwardPort };
+}
+
 // direct 模式：不經 SSH/docker，依 db_engine 直連 TCP。
 // SSL 開啟時一律驗證伺服器憑證（不提供「略過驗證」的預設路徑）；自簽憑證需讓系統信任。
 async function runDirect(conn, sql) {
@@ -214,10 +223,22 @@ async function runDirectMysql(conn, sql) {
 async function runSelect(conn, sql) {
   const err = validateSelectOnly(sql);
   if (err) return { ok: false, error: err };
-  if ((conn.connect_mode || 'docker') === 'direct') return runDirect(conn, sql);
-  const cmd = buildPsqlCmd(conn, sql);
+
+  let effectiveConn = conn;
+  if (conn.vpn_enabled) {
+    let forwardPort;
+    try {
+      ({ forwardPort } = await ensureGatewayRunning(conn));
+    } catch (e) {
+      return { ok: false, error: `[VPN] ${e.message}` };
+    }
+    effectiveConn = applyVpnForward(conn, forwardPort);
+  }
+
+  if ((effectiveConn.connect_mode || 'docker') === 'direct') return runDirect(effectiveConn, sql);
+  const cmd = buildPsqlCmd(effectiveConn, sql);
   let res;
-  try { res = await sshExec(conn, cmd); }
+  try { res = await sshExec(effectiveConn, cmd); }
   catch (e) { return { ok: false, error: `[SSH] ${e.message}` }; }
   const cleanErr = res.stderr.split('\n').filter(l => !l.trim().startsWith('[sudo]')).join('\n');
   if (res.code !== 0) return { ok: false, error: cleanErr.trim() || res.stdout.trim() || `exit ${res.code}` };
@@ -226,4 +247,4 @@ async function runSelect(conn, sql) {
   return { ok: true, columns: parsed[0] || [], rows: parsed.slice(1), row_count: Math.max(0, parsed.length - 1) };
 }
 
-module.exports = { validateSelectOnly, stripSqlLiterals, buildPsqlCmd, parseCsv, runSelect, runDirect };
+module.exports = { validateSelectOnly, stripSqlLiterals, buildPsqlCmd, parseCsv, runSelect, runDirect, applyVpnForward };
