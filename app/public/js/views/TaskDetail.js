@@ -23,7 +23,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '' };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: true };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -37,6 +37,21 @@ window.TaskDetailView = Vue.defineComponent({
     },
     csAllAnswered() {
       return this.csQuestions.length > 0 && this.csQuestions.every(q => (this.csAnswers[q] || '').trim());
+    },
+    // 合併「外部溝通紀錄」與「對話紀錄」成一條依時間排序的時間軸（含人工審核事件，因為 approve/reject 都會寫 task_logs）
+    timeline() {
+      const msgs = (this.taskMessages || []).map(m => ({
+        _key: 'msg-' + m.id, ts: m.occurred_at, kind: 'message', source: m.source,
+        author: m.author, content: m.content, synced_to_odoo: m.synced_to_odoo
+      }));
+      const logs = (this.logs || []).map(l => ({
+        _key: 'log-' + l.id, ts: l.created_at, kind: 'log', role: l.role, content: l.content
+      }));
+      return [...msgs, ...logs].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    },
+    // 留言模式（非回覆 AI 問題）且任務有外部來源、管理者開了回寫開關時，才顯示「回寫 Odoo」勾選框
+    showWritebackOption() {
+      return !this.canAnswer && this.writebackEnabled && !!this.task && (this.task.source === 'odoo' || this.task.source === 'service');
     }
   },
   async created() {
@@ -45,6 +60,7 @@ window.TaskDetailView = Vue.defineComponent({
       this.odooUrl = r.odoo_url || '';
       this.serviceUrl = r.service_url || '';
       this.testMode = !!r.test_mode;
+      this.writebackEnabled = !!r.writeback_odoo_notes;
     }).catch(() => {});
     this.checkInflight();
     this.loadEvents();
@@ -97,12 +113,17 @@ window.TaskDetailView = Vue.defineComponent({
       qs.forEach(q => { if (!(q in this.csAnswers)) init[q] = ''; });
       this.csAnswers = { ...this.csAnswers, ...init };
     },
+    // 對話時間軸下方的單一輸入框：canAnswer 時走回覆 AI 問題，否則走一般留言
+    async submitThreadInput() {
+      if (!this.newMessageText.trim()) return;
+      if (this.canAnswer) return this.submitAnswer();
+      return this.sendTaskMessage();
+    },
     async submitAnswer() {
-      if (!this.answer.trim()) return;
       this.submitting = true;
       try {
-        await Api.post(`tasks/${this.task.id}/answer`, { user_answer: this.answer });
-        this.answer = '';
+        await Api.post(`tasks/${this.task.id}/answer`, { user_answer: this.newMessageText.trim() });
+        this.newMessageText = '';
         showToast('回覆已送出', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
@@ -133,7 +154,7 @@ window.TaskDetailView = Vue.defineComponent({
       if (!this.newMessageText.trim()) return;
       this.sendingMessage = true;
       try {
-        await Api.post(`tasks/${this.task.id}/messages`, { content: this.newMessageText.trim() });
+        await Api.post(`tasks/${this.task.id}/messages`, { content: this.newMessageText.trim(), writeback: this.messageWriteback });
         this.newMessageText = '';
         await this.loadTaskMessages();
       } catch (e) { showToast(e.message, 'error'); }
@@ -182,6 +203,16 @@ window.TaskDetailView = Vue.defineComponent({
     },
     roleClass(role) { return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
     roleLabel(role) { return role === 'ai' ? '🤖 AI' : role === 'user' ? '👤 你' : '⚙️ 系統'; },
+    // 時間軸項目來自 task_logs 沿用 roleClass；來自 task_messages 用 source 對應到既有 ai/user 泡泡樣式
+    // （sync=外部進來的訊息，靠左走 ai 樣式；manual=你自己留言，靠右走 user 樣式，不新增 CSS class）
+    timelineClass(item) {
+      if (item.kind === 'log') return this.roleClass(item.role);
+      return item.source === 'manual' ? 'user' : 'ai';
+    },
+    timelineMeta(item) {
+      if (item.kind === 'log') return this.roleLabel(item.role);
+      return item.source === 'manual' ? (item.author || '你') : '（同步）';
+    },
     formatTime(ts) {
       if (!ts) return '';
       return new Date(ts).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -354,21 +385,40 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
 
-          <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">外部溝通紀錄</div>
-          <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:var(--space-4)">
-            <div v-if="!taskMessages.length" style="color:var(--text-muted);font-size:var(--fs-base)">尚無溝通紀錄</div>
-            <div v-for="m in taskMessages" :key="m.id" style="padding:var(--space-2) 0;border-bottom:1px solid var(--border)">
-              <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-1)">
-                {{ m.source === 'manual' ? (m.author || '你') : '（同步）' }} · {{ formatTime(m.occurred_at) }}
-                <span v-if="m.source === 'manual' && m.synced_to_odoo" style="color:var(--success)">已回寫</span>
+          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2)">
+            <span>即時歷程記錄</span>
+            <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
+          </div>
+          <div ref="eventsBox" @scroll="onEventsScroll"
+            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:var(--fs-sm);line-height:1.5;padding:10px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word">
+            <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
+            <template v-else>
+              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:var(--fs-xs);margin-bottom:6px">— 已到最前 —</div>
+              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)" v-html="ansiToHtml(ev.content)"></span>
+            </template>
+          </div>
+
+          <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">對話時間軸</div>
+          <div v-if="timeline.length" class="conv-log">
+            <div v-for="item in timeline" :key="item._key">
+              <div class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
+              <div class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
+                {{ timelineMeta(item) }} · {{ formatTime(item.ts) }}
               </div>
-              <div style="font-size:var(--fs-base);white-space:pre-wrap">{{ m.content }}</div>
             </div>
-            <div style="margin-top:var(--space-3)">
-              <textarea v-model="newMessageText" placeholder="新增留言..."
-                style="width:100%;height:60px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:vertical;box-sizing:border-box"></textarea>
-              <button class="btn btn-primary btn-sm" style="margin-top:6px" @click="sendTaskMessage" :disabled="sendingMessage || !newMessageText.trim()">
-                {{ sendingMessage ? '送出中...' : '送出留言' }}
+          </div>
+          <div v-else style="color:var(--text-muted);font-size:var(--fs-base);margin:var(--space-4) 0">尚無對話記錄</div>
+          <div style="margin-top:var(--space-3);margin-bottom:var(--space-4)">
+            <textarea v-model="newMessageText" class="form-control"
+              :placeholder="canAnswer ? '輸入你的回覆...' : '新增留言...'" rows="4"></textarea>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+              <label v-if="showWritebackOption" style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer">
+                <input type="checkbox" v-model="messageWriteback"> 回寫 Odoo
+              </label>
+              <span v-else></span>
+              <button class="btn btn-primary btn-sm" @click="submitThreadInput"
+                :disabled="sendingMessage || submitting || !newMessageText.trim()">
+                {{ (canAnswer ? submitting : sendingMessage) ? '送出中...' : (canAnswer ? '送出回覆並繼續' : '送出留言') }}
               </button>
             </div>
           </div>
@@ -387,26 +437,6 @@ window.TaskDetailView = Vue.defineComponent({
                   {{ resolving ? '處理中...' : '↺ 送出並從中斷處繼續' }}
                 </button>
               </div>
-            </div>
-          </div>
-
-          <div v-if="logs.length > 0" class="conv-log">
-            <div v-for="log in logs" :key="log.id">
-              <div class="conv-msg" :class="roleClass(log.role)">{{ log.content }}</div>
-              <div class="conv-msg-meta" :style="{ textAlign: log.role === 'user' ? 'right' : 'left' }">
-                {{ roleLabel(log.role) }} · {{ formatTime(log.created_at) }}
-              </div>
-            </div>
-          </div>
-          <div v-else style="color:var(--text-muted);font-size:var(--fs-base);margin:var(--space-4) 0">尚無對話記錄</div>
-
-          <div v-if="canAnswer" class="answer-box">
-            <div class="form-section">回覆 AI 問題</div>
-            <textarea v-model="answer" class="form-control" rows="4" placeholder="輸入你的回覆..."></textarea>
-            <div class="answer-actions">
-              <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !answer.trim()">
-                {{ submitting ? '送出中...' : '送出回覆' }}
-              </button>
             </div>
           </div>
 
@@ -474,21 +504,6 @@ window.TaskDetailView = Vue.defineComponent({
             <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
               {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
             </button>
-          </div>
-        </div>
-
-        <div class="detail-card" style="margin-top:var(--space-4)">
-          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2)">
-            <span>即時歷程記錄</span>
-            <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
-          </div>
-          <div ref="eventsBox" @scroll="onEventsScroll"
-            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:var(--fs-sm);line-height:1.5;padding:10px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word">
-            <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
-            <template v-else>
-              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:var(--fs-xs);margin-bottom:6px">— 已到最前 —</div>
-              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)" v-html="ansiToHtml(ev.content)"></span>
-            </template>
           </div>
         </div>
       </div>
