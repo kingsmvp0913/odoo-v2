@@ -264,6 +264,22 @@ async function migrate() {
       created_at     TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 附件：工單主附件（origin='ticket_main'，message_id 為 NULL）／同步訊息附件
+    // （origin='synced_message'）／使用者回覆上傳（origin='manual_reply'）三種來源統一存放，
+    // 檔案本體存本機磁碟（見 lib/attachments.js），這裡只存 metadata 與相對路徑。
+    `CREATE TABLE IF NOT EXISTS task_attachments (
+      id                     SERIAL PRIMARY KEY,
+      task_id                INTEGER NOT NULL REFERENCES tasks(id),
+      message_id             INTEGER REFERENCES task_messages(id),
+      filename               TEXT NOT NULL,
+      mimetype               TEXT,
+      file_path              TEXT NOT NULL,
+      origin                 TEXT NOT NULL,
+      external_attachment_id TEXT,
+      synced_to_odoo         BOOLEAN NOT NULL DEFAULT false,
+      created_at             TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     // 工作流程健檢 agent（子專案 2）：admin 一鍵健檢的一次執行＋每 agent 診斷 finding。
     `CREATE TABLE IF NOT EXISTS health_check_runs (
       id           SERIAL PRIMARY KEY,
@@ -370,7 +386,10 @@ async function migrate() {
     { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
     { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" },
     // 每列記錄實際使用的 model（供報表按 model 單價算真實 USD 成本，對齊 ccusage 做法）
-    { table: 'token_usage', col: 'model',   sql: 'ALTER TABLE token_usage ADD COLUMN model TEXT' }
+    { table: 'token_usage', col: 'model',   sql: 'ALTER TABLE token_usage ADD COLUMN model TEXT' },
+    { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
+    { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
+    { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -461,6 +480,10 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages (task_id, occurred_at)').catch(() => {});
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS task_messages_task_external_uq
                ON task_messages (task_id, external_id) WHERE external_id IS NOT NULL`).catch(() => {});
+
+  // task_attachments：依 task_id／message_id 查詢附件清單
+  await query('CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments (task_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_task_attachments_message ON task_attachments (message_id)').catch(() => {});
 
   // health_check_runs / health_check_findings（工作流程健檢）
   await query('CREATE INDEX IF NOT EXISTS idx_hcf_run ON health_check_findings (run_id)').catch(() => {});

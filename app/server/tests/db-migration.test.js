@@ -155,3 +155,31 @@ test('project_chats 具有 user_id 與 last_read_message_id 欄位', async () =>
   expect(c.user_id).toBe(u.id);
   expect(c.last_read_message_id).toBe(0);
 });
+
+test('migrate 建立 task_attachments 表', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name='task_attachments'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('task_attachments 具有 origin / external_attachment_id / synced_to_odoo 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='task_attachments'"
+  );
+  const cols = rows.map(r => r.column_name);
+  expect(cols).toContain('origin');
+  expect(cols).toContain('external_attachment_id');
+  expect(cols).toContain('synced_to_odoo');
+  expect(cols).toContain('message_id');
+});
+
+test('tasks 具有 stage_label / classification_label / has_attachment 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='tasks'"
+  );
+  const cols = rows.map(r => r.column_name);
+  expect(cols).toContain('stage_label');
+  expect(cols).toContain('classification_label');
+  expect(cols).toContain('has_attachment');
+});
