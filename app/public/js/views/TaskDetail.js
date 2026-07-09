@@ -174,6 +174,12 @@ window.TaskDetailView = Vue.defineComponent({
       if (!this.task) return '';
       return this.task.source === 'odoo' ? 'Odoo' : this.task.source === 'service' ? 'eService' : this.task.source === 'manual' ? '手動增加' : this.task.source;
     },
+    sourceBadgeClass() {
+      if (!this.task) return 'src-badge src-default';
+      if (this.task.source === 'odoo') return 'src-badge src-odoo';
+      if (this.task.source === 'service') return 'src-badge src-service';
+      return 'src-badge src-default';
+    },
     roleClass(role) { return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
     roleLabel(role) { return role === 'ai' ? '🤖 AI' : role === 'user' ? '👤 你' : '⚙️ 系統'; },
     formatTime(ts) {
@@ -322,9 +328,8 @@ window.TaskDetailView = Vue.defineComponent({
               style="display:inline-flex;align-items:center;gap:var(--space-1);padding:2px 8px;font-weight:var(--fw-semibold)">
               <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulseDot 1.4s ease-in-out infinite"></span>伺服器確認處理中
             </span>
-            <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank"
-               style="color:var(--primary);text-decoration:none;font-weight:var(--fw-medium)">{{ sourceLabel() }}</a>
-            <span v-else>{{ sourceLabel() }}</span>
+            <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
+            <span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
             <span v-if="task.module">模組：{{ task.module }}</span>
             <span style="color:var(--text-muted);font-size:var(--fs-xs)">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
