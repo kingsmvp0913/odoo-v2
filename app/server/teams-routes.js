@@ -25,10 +25,10 @@ function registerRoutes(app) {
 
   app.put('/api/admin/teams-settings', auth, async (req, res) => {
     try {
-      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode } = req.body;
+      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes } = req.body;
       await query(`
-        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, updated_at)
-        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, updated_at)
+        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
         ON CONFLICT (id) DO UPDATE SET
           tenant_id             = $1,
           client_id             = $2,
@@ -36,7 +36,7 @@ function registerRoutes(app) {
           team_id               = $4,
           channel_id            = $5,
           mention_users         = $6::jsonb,
-          webhook_url           = $7,
+          webhook_url            = $7,
           odoo_sync_interval    = COALESCE($8, teams_settings.odoo_sync_interval),
           service_sync_interval = COALESCE($9, teams_settings.service_sync_interval),
           odoo_url              = COALESCE($10, teams_settings.odoo_url),
@@ -44,6 +44,7 @@ function registerRoutes(app) {
           service_url           = COALESCE($12, teams_settings.service_url),
           service_db            = COALESCE($13, teams_settings.service_db),
           test_mode             = $14,
+          writeback_odoo_notes  = $15,
           updated_at            = NOW()
       `, [
         tenant_id || null, client_id || null, client_secret || null,
@@ -54,7 +55,8 @@ function registerRoutes(app) {
         service_sync_interval != null ? parseInt(service_sync_interval) : null,
         odoo_url || null, odoo_db || null,
         service_url || null, service_db || null,
-        test_mode ? true : false
+        test_mode ? true : false,
+        writeback_odoo_notes ? true : false
       ]);
       resetTokenCache();
       res.json({ ok: true });

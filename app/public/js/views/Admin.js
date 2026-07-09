@@ -7,11 +7,13 @@ window.AdminView = Vue.defineComponent({
       teams: { tenant_id: '', client_id: '', client_secret: '', team_id: '', channel_id: '', webhook_url: '' },
       e2e: { login: '', password: '' },
       testMode: false,
+      writebackOdooNotes: false,
       loading: true,
       savingConn: false,
       savingTeams: false,
       testingTeams: false,
       savingTestMode: false,
+      savingWriteback: false,
       steppingPipeline: false
     };
   },
@@ -29,6 +31,7 @@ window.AdminView = Vue.defineComponent({
           this.service.db          = d.service_db            || '';
           this.service.sync_interval = d.service_sync_interval ?? 60;
           this.testMode            = !!d.test_mode;
+          this.writebackOdooNotes  = !!d.writeback_odoo_notes;
           Object.assign(this.teams, {
             tenant_id: d.tenant_id || '', client_id: d.client_id || '',
             client_secret: d.client_secret || '', team_id: d.team_id || '',
@@ -84,6 +87,20 @@ window.AdminView = Vue.defineComponent({
         showToast(this.testMode ? '測試模式已啟用，Pipeline 停止自動推進' : '測試模式已關閉，Pipeline 恢復自動運行', 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.savingTestMode = false; }
+    },
+    async saveWriteback() {
+      this.savingWriteback = true;
+      try {
+        await Api.put('admin/teams-settings', {
+          ...this.teams,
+          odoo_url: this.odoo.url, odoo_db: this.odoo.db, odoo_sync_interval: this.odoo.sync_interval,
+          service_url: this.service.url, service_db: this.service.db, service_sync_interval: this.service.sync_interval,
+          test_mode: this.testMode,
+          writeback_odoo_notes: this.writebackOdooNotes
+        });
+        showToast(this.writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingWriteback = false; }
     },
     async stepPipeline() {
       this.steppingPipeline = true;
@@ -239,6 +256,24 @@ window.AdminView = Vue.defineComponent({
           </div>
           <div v-if="testMode" class="setting-block-footer warn">
             <span style="font-size:12px;color:var(--warning)">測試模式已啟用 — 請至「任務列表」使用「▶ 推進 Pipeline」按鈕手動推進</span>
+          </div>
+        </div>
+
+        <!-- 留言回寫 Odoo/eService -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">留言回寫 Odoo/eService</div>
+            <div class="setting-block-desc">開啟後，使用者在任務詳情頁新增的留言會以「記錄備註」寫回原單據（不發送給客戶、不建活動）。</div>
+          </div>
+          <div class="setting-block-body">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
+                <input type="checkbox" v-model="writebackOdooNotes" style="opacity:0;width:0;height:0;position:absolute" @change="saveWriteback" :disabled="savingWriteback" />
+                <div :style="{background: writebackOdooNotes ? 'var(--primary)' : 'var(--border)', borderRadius:'12px', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{position:'absolute', top:'3px', left: writebackOdooNotes ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              </div>
+              <span style="font-size:14px;color:var(--text)">{{ writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉' }}</span>
+            </label>
           </div>
         </div>
 
