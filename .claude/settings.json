@@ -16,9 +16,6 @@
     ]
   },
   "spinnerTipsEnabled": false,
-  "enabledMcpjsonServers": [
-    "serena-online"
-  ],
   "enabledPlugins": {
     "caveman@caveman": false,
     "context7@claude-plugins-official": true,
@@ -31,18 +28,5 @@
   "language": "Taiwan",
   "autoUpdatesChannel": "stable",
   "theme": "dark",
-  "skipDangerousModePermissionPrompt": true,
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pwsh -NoProfile -Command \"try { (New-Object System.Media.SoundPlayer 'C:\\odoo\\.claude\\tools\\notice.wav').PlaySync() } catch {}\"",
-            "statusMessage": "Claude waiting for input..."
-          }
-        ]
-      }
-    ]
-  }
+  "skipDangerousModePermissionPrompt": true
 }

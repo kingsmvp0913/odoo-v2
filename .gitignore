@@ -24,12 +24,6 @@ env/
 .env.*
 !.env.example
 
-# ─── Pipeline 執行紀錄與佇列(從 Odoo 自動產生)────────
-/kingsmvpsplan/log/*
-!/kingsmvpsplan/log/.gitkeep
-/kingsmvpsplan/start/*
-!/kingsmvpsplan/start/.gitkeep
-
 # ─── 工具快取 ───────────────────────────────────────────
 .serena/cache/
 .serena/project.local.yml
@@ -43,3 +37,6 @@ Thumbs.db
 
 # ─── 日誌 ───────────────────────────────────────────────
 *.log
+
+# ─── 設計史料(本機保留,不進 git)──────────────────
+/docs/
