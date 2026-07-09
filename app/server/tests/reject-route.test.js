@@ -6,7 +6,7 @@ const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
-jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn(), getInflightTaskIds: () => [] }));
+jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ dispatched: 0 }), getInflightTaskIds: () => [] }));
 
 let dbModule, app, token, userId, taskDbId;
 

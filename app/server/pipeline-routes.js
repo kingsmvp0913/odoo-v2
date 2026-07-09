@@ -65,6 +65,7 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回主線並清理分支，正在更新文件')",
         [req.params.id]
       );
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: '合併主線失敗：' + err.message });
@@ -95,6 +96,7 @@ function registerRoutes(app) {
         [task.task_id, task.project_id, req.userId, reason]
       );
       require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'coding_running' });
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -151,6 +153,7 @@ function registerRoutes(app) {
           [req.params.id, logContent]
         );
       }
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -187,6 +190,7 @@ function registerRoutes(app) {
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
         [req.params.id]
       );
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });

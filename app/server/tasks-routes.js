@@ -1,7 +1,7 @@
 const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
-const { abortTask } = require('./pipeline/runner');
+const { abortTask, runPipeline } = require('./pipeline/runner');
 const { removeWorktree, deleteBranchLocal } = require('./pipeline/git');
 const { writebackTaskMessage } = require('./pipeline/sync');
 
@@ -59,7 +59,7 @@ function registerRoutes(app) {
     }
   });
 
-  // Manually create a task → enters pipeline as 'new'（下輪 triage 自動接手）
+  // Manually create a task → enters pipeline as 'new'（立刻觸發 triage，不等下一輪排程）
   app.post('/api/tasks', verifyToken, async (req, res) => {
     try {
       const { title, original_text, project_id } = req.body || {};
@@ -73,6 +73,7 @@ function registerRoutes(app) {
          RETURNING id, task_id, source, title, status, project_id, created_at, updated_at`,
         [req.userId, taskId, String(title).trim(), original_text || '', project_id || null]
       );
+      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.status(201).json(rows[0]);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -377,6 +378,7 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, user_answer]
       );
+      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -415,6 +417,7 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, `[修正指示] ${resolution.trim()}`]
       );
+      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

@@ -17,6 +17,12 @@ jest.mock('../pipeline/cs-agent', () => ({ runCsAgent: jest.fn().mockResolvedVal
 jest.mock('../pipeline/qa-agent', () => ({ runQaAgent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/deploy-testing', () => ({ runDeployTesting: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/playwright-agent', () => ({ runTourStage: jest.fn().mockResolvedValue(undefined) }));
+// runTask 狀態真的推進時會自動續跑（見 runner.js 的 auto-continue）；branch_pending→coding_running 屬實際變化，
+// 會立刻串連派工到 coding_running，故需 mock task-agent 避免打到真的邏輯（非專案任務原本就會 return false）
+jest.mock('../pipeline/task-agent', () => ({
+  runTaskAnalysis: jest.fn().mockResolvedValue(undefined),
+  runTaskCoding: jest.fn().mockResolvedValue(true)
+}));
 
 let dbModule, runnerModule, userId;
 
@@ -58,6 +64,8 @@ beforeEach(async () => {
   require('../pipeline/qa-agent').runQaAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/deploy-testing').runDeployTesting.mockReset().mockResolvedValue(undefined);
   require('../pipeline/playwright-agent').runTourStage.mockReset().mockResolvedValue(undefined);
+  require('../pipeline/task-agent').runTaskAnalysis.mockReset().mockResolvedValue(undefined);
+  require('../pipeline/task-agent').runTaskCoding.mockReset().mockResolvedValue(true);
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);

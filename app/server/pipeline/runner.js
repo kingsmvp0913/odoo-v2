@@ -48,9 +48,11 @@ function getInflightInfo() {
   return [..._inFlight.entries()].map(([taskId, e]) => ({ taskId, userId: e.userId, startedAt: e.startedAt }));
 }
 
-// 等待目前所有在飛任務結束（供測試斷言 handler 效果；正式運作不需呼叫）
-function whenIdle() {
-  return Promise.all([..._inFlight.values()].map(e => e.promise.catch(() => {})));
+// 等待目前所有在飛任務結束，含 runTask 內自動續跑串連派工的任務（供測試斷言 handler 效果；正式運作不需呼叫）
+async function whenIdle() {
+  while (_inFlight.size > 0) {
+    await Promise.all([..._inFlight.values()].map(e => e.promise.catch(() => {})));
+  }
 }
 
 async function getUserSettings(userId) {
@@ -239,6 +241,20 @@ async function runTask(task, settings, signal) {
   }
 }
 
+// 任務跑完、佔位釋出後：狀態若真的推進到下一個可跑關卡就立刻續跑該 user 的掃描，
+// 不必等下一次 cron tick（最多延遲 1 分鐘）。狀態沒變（含 handler 沒動 DB 的例外）不重掃，
+// 避免卡住不動的狀態被瞬間打成無限迴圈；必須放在 _inFlight.delete 之後，續跑掃描才能重新派到同一個任務。
+async function continuePipelineIfAdvanced(task) {
+  try {
+    const { rows: [cur] } = await query('SELECT status FROM tasks WHERE id = $1', [task.id]);
+    if (cur && cur.status !== task.status && RUNNABLE_STATUSES.includes(cur.status)) {
+      await runPipeline(task.user_id);
+    }
+  } catch (err) {
+    console.error('[RUNNER] auto-continue error:', err.message);
+  }
+}
+
 // 同步佔位派工：_inFlight.set 在任何 await 之前完成（單執行緒保證不會兩個 tick 搶同一任務），
 // 之後 fire-and-forget 執行，完成時自動移除。回傳是否成功佔位。
 function dispatchTask(task, settings) {
@@ -247,7 +263,10 @@ function dispatchTask(task, settings) {
   // 會各自對同一份 _inFlight.size 算預算而超派；在此同步佔位點即時擋，讓所有掃描共用同一原子檢查。
   if (_inFlight.size >= MAX_GLOBAL) return false;
   const ctrl = new AbortController();
-  const promise = runTask(task, settings, ctrl.signal).finally(() => _inFlight.delete(task.id));
+  const promise = runTask(task, settings, ctrl.signal).finally(() => {
+    _inFlight.delete(task.id);
+    return continuePipelineIfAdvanced(task);
+  });
   _inFlight.set(task.id, { ctrl, userId: task.user_id, promise, startedAt: Date.now() });
   return true;
 }
