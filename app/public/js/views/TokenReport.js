@@ -27,12 +27,12 @@ window.TokenReportView = Vue.defineComponent({
       const left = 48, w = this.chartW, top = 16, bottom = this.chartH - 28, n = daily.length;
       // 首點離 y 軸再內縮 16px，避免第一個 x 軸標籤壓在 y 軸 0 刻度上
       const plotLeft = left + 16, plotRight = w - 24;
-      const maxV = Math.max(...daily.map(d => d.cost), 1e-9);
+      const maxV = Math.max(...daily.map(d => d.tokens), 1);
       const dots = daily.map((d, i) => ({
         x: plotLeft + (i / (n - 1)) * (plotRight - plotLeft),
-        y: bottom - (d.cost / maxV) * (bottom - top),
+        y: bottom - (d.tokens / maxV) * (bottom - top),
         date: d.date,
-        cost: d.cost
+        tokens: d.tokens
       }));
       const step = Math.max(1, Math.ceil(n / 10));
       const labels = dots.filter((_, i) => i % step === 0 || i === n - 1)
@@ -42,7 +42,7 @@ window.TokenReportView = Vue.defineComponent({
       const yTicks = [];
       for (let i = 0; i <= TICKS; i++) {
         const v = (maxV / TICKS) * i;
-        yTicks.push({ y: bottom - (v / maxV) * (bottom - top), label: this.fmtUSD(v) });
+        yTicks.push({ y: bottom - (v / maxV) * (bottom - top), label: this.fmtShort(Math.round(v)) });
       }
       return { points: dots.map(p => `${p.x},${p.y}`).join(' '), dots, labels, yTicks, left, right: plotRight };
     },
@@ -214,7 +214,7 @@ window.TokenReportView = Vue.defineComponent({
       <template v-else-if="report">
 
         <!-- 摘要卡片 -->
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px">
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:12px;margin-bottom:20px">
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--primary)" :title="fmtNum(report.summary.total_tokens)">{{ fmtShort(report.summary.total_tokens) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">總 Token 數</div>
@@ -224,12 +224,20 @@ window.TokenReportView = Vue.defineComponent({
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Cache 總數</div>
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--info)" :title="'$'+Number(report.summary.cost_usd||0).toFixed(6)">{{ fmtUSD(report.summary.cost_usd) }}</div>
-            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">實際花費</div>
-          </div>
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--success)">{{ fmtNum(report.summary.total_tasks) }}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px">任務數</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:var(--primary)" :title="fmtNum(report.summary.actual_tokens)">{{ fmtShort(report.summary.actual_tokens) }}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">實際 Token 數</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:var(--warning)" :title="fmtNum(report.summary.avg_tokens_per_task)">{{ fmtShort(report.summary.avg_tokens_per_task) }}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">平均每任務</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:var(--info)" :title="'$'+Number(report.summary.cost_usd||0).toFixed(6)">{{ fmtUSD(report.summary.cost_usd) }}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">實際花費</div>
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--warning)" :title="'$'+Number(report.summary.avg_cost_per_task||0).toFixed(6)">{{ fmtUSD(report.summary.avg_cost_per_task) }}</div>
@@ -244,15 +252,15 @@ window.TokenReportView = Vue.defineComponent({
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">Agent 類型</div>
             <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_agent.length">
-              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.cost,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
+              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.tokens,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtUSD(s.value) }}</title>
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
               </path>
             </svg>
             <div v-for="r in report.by_agent" :key="r.agent_type"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:agentColor(r.agent_type),display:'inline-block'}"></span>
-              {{ agentLabel(r.agent_type) }}: {{ fmtUSD(r.cost) }}
+              {{ agentLabel(r.agent_type) }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
 
@@ -260,15 +268,15 @@ window.TokenReportView = Vue.defineComponent({
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">專案分布</div>
             <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_project.length">
-              <path v-for="(s,i) in piePath(report.by_project.map((r,i)=>({value:r.cost,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
+              <path v-for="(s,i) in piePath(report.by_project.map((r,i)=>({value:r.tokens,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
                 :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtUSD(s.value) }}</title>
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
               </path>
             </svg>
             <div v-for="(r,i) in report.by_project" :key="r.project_id"
               style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:'hsl('+(i*60)+',60%,50%)',display:'inline-block'}"></span>
-              {{ r.project_name }}: {{ fmtUSD(r.cost) }}
+              {{ r.project_name }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
 
@@ -287,7 +295,7 @@ window.TokenReportView = Vue.defineComponent({
               <polyline :points="chartData.points"
                 fill="none" stroke="var(--primary)" stroke-width="2" />
               <circle v-for="d in chartData.dots" :key="d.date" :cx="d.x" :cy="d.y" r="3" fill="var(--primary)">
-                <title>{{ fmtMD(d.date) }}: {{ fmtUSD(d.cost) }}</title>
+                <title>{{ fmtMD(d.date) }}: {{ fmtNum(d.tokens) }}</title>
               </circle>
               <text v-for="(l,i) in chartData.labels" :key="i"
                 :x="l.x" :y="chartH - 8" font-size="10" fill="var(--text-muted)" text-anchor="middle">{{ l.label }}</text>
@@ -304,10 +312,11 @@ window.TokenReportView = Vue.defineComponent({
           <table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed">
             <thead>
               <tr style="background:var(--border);font-weight:600;font-size:12px;position:sticky;top:0;z-index:1">
-                <th style="padding:8px 12px;text-align:left;background:var(--border);width:32%">任務</th>
-                <th style="padding:8px 12px;text-align:left;background:var(--border);width:20%">專案</th>
-                <th style="padding:8px 12px;text-align:right;background:var(--border);width:12%">花費</th>
-                <th style="padding:8px 12px;text-align:left;background:var(--border);width:14%">用戶</th>
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:28%">任務</th>
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:16%">專案</th>
+                <th style="padding:8px 12px;text-align:right;background:var(--border);width:11%">Token 數</th>
+                <th style="padding:8px 12px;text-align:right;background:var(--border);width:11%">花費</th>
+                <th style="padding:8px 12px;text-align:left;background:var(--border);width:12%">用戶</th>
                 <th style="padding:8px 12px;text-align:left;background:var(--border);width:22%">記錄時間</th>
               </tr>
             </thead>
@@ -324,6 +333,7 @@ window.TokenReportView = Vue.defineComponent({
                     <span v-else>{{ taskLabel(t) }}</span>
                   </td>
                   <td style="padding:8px 12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.project_name || '—'">{{ t.project_name || '—' }}</td>
+                  <td style="padding:8px 12px;text-align:right" :title="fmtNum(t.total_tokens)">{{ fmtShort(t.total_tokens) }}</td>
                   <td style="padding:8px 12px;text-align:right;font-weight:600" :title="'$'+Number(t.total_cost||0).toFixed(6)">{{ fmtUSD(t.total_cost) }}</td>
                   <td style="padding:8px 12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.username || '—'">{{ t.username || '—' }}</td>
                   <td style="padding:8px 12px;color:var(--text-muted);font-size:11px;white-space:nowrap">
@@ -332,11 +342,11 @@ window.TokenReportView = Vue.defineComponent({
                 </tr>
                 <tr v-if="expandedTasks[t.ref_key]"
                   style="background:var(--bg)">
-                  <td colspan="5" style="padding:4px 12px 8px 32px">
+                  <td colspan="6" style="padding:4px 12px 8px 32px">
                     <div v-for="(a,ai) in t.agents" :key="ai"
                       style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:var(--text-secondary)">
                       <span :style="{width:'8px',height:'8px',borderRadius:'50%',background:agentColor(a.agent_type),display:'inline-block'}"></span>
-                      {{ agentLabel(a.agent_type) }}<span v-if="a.model" style="color:var(--text-muted)">·{{ a.model }}</span>: <span :title="'$'+Number(a.cost||0).toFixed(6)">{{ fmtUSD(a.cost) }}</span>
+                      {{ agentLabel(a.agent_type) }}<span v-if="a.model" style="color:var(--text-muted)">·{{ a.model }}</span>: <span :title="fmtNum(a.tokens)">{{ fmtShort(a.tokens) }}</span> / <span :title="'$'+Number(a.cost||0).toFixed(6)">{{ fmtUSD(a.cost) }}</span>
                       <span v-if="a.duration_ms" style="color:var(--text-muted)">({{ (a.duration_ms/1000).toFixed(1) }}s)</span>
                     </div>
                   </td>

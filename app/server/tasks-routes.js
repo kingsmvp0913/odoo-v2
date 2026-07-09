@@ -97,6 +97,29 @@ function registerRoutes(app) {
     }
   });
 
+  // Edit task content — only while status='new'（尚未進 pipeline，之後分析/開發已依此內容展開，不再允許改）
+  app.put('/api/tasks/:id', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query(
+        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      if (tasks[0].status !== 'new') {
+        return res.status(400).json({ error: '任務已進入處理流程，無法修改內容' });
+      }
+      const { original_text } = req.body || {};
+      if (!original_text || !String(original_text).trim()) {
+        return res.status(400).json({ error: '請填寫內容' });
+      }
+      await query(
+        'UPDATE tasks SET original_text = $2, updated_at = NOW() WHERE id = $1',
+        [req.params.id, String(original_text)]
+      );
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // Paginated logs
   app.get('/api/tasks/:id/logs', verifyToken, async (req, res) => {
     try {

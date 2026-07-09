@@ -98,6 +98,8 @@ test('GET /api/token-report → 200 for admin (own data only without ?all=true)'
   // 實際花費：無 model → 以 sonnet($3/1M) 計；加權=100+50*5+10*0.1+5*1.25=357.25
   // cost = 3 * 357.25 / 1e6 = 0.00107175 USD
   expect(res.body.summary.cost_usd).toBeCloseTo(0.00107175, 8);
+  // 實際 Token 數＝與成本同一套加權等效顆數
+  expect(res.body.summary.actual_tokens).toBeCloseTo(357.25, 8);
 });
 
 test('GET /api/token-report?all=true → 200 for admin (all users data)', async () => {
@@ -129,6 +131,8 @@ test('GET /api/token-report → summary shape is correct', async () => {
   expect(typeof summary.cache_tokens).toBe('number');
   expect(typeof summary.cost_usd).toBe('number');
   expect(typeof summary.total_tasks).toBe('number');
+  expect(typeof summary.actual_tokens).toBe('number');
+  expect(typeof summary.avg_tokens_per_task).toBe('number');
   expect(typeof summary.avg_cost_per_task).toBe('number');
   expect(Array.isArray(by_agent)).toBe(true);
   expect(Array.isArray(by_project)).toBe(true);
@@ -154,7 +158,7 @@ test('GET /api/token-report → by_agent has correct shape', async () => {
   expect(res.body.by_agent.length).toBeGreaterThan(0);
   for (const entry of res.body.by_agent) {
     expect(typeof entry.agent_type).toBe('string');
-    expect(typeof entry.cost).toBe('number');
+    expect(typeof entry.tokens).toBe('number');
   }
 });
 
@@ -234,6 +238,9 @@ test('GET /api/token-report → tasks have agents array', async () => {
   const task = res.body.tasks[0];
   expect(Array.isArray(task.agents)).toBe(true);
   expect(task.agents[0].agent_type).toBe('qa');
+  // raw tokens=200+80+20+0=300
+  expect(task.agents[0].tokens).toBe(300);
+  expect(task.total_tokens).toBe(300);
   // 加權=200+80*5+20*0.1=602；無 model→sonnet$3；cost=3*602/1e6=0.001806 USD
   expect(task.agents[0].cost).toBeCloseTo(0.001806, 8);
 });

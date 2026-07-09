@@ -23,10 +23,11 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false };
+    return { task: null, logs: [], loading: true, answer: '', resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, showReject: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
+    canEditContent() { return this.task && this.task.status === 'new'; },
     canApprove() { return this.task && this.task.status === 'review_pending'; },
     canArchive() { return this.task && this.task.status === 'done'; },
     statusLabel() { return this.task ? (TD_STATUS_LABELS[this.task.status] || this.task.status) : ''; },
@@ -106,7 +107,24 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.submitting = false; }
     },
+    startEditContent() {
+      this.editText = this.task.original_text || '';
+      this.editingContent = true;
+    },
+    cancelEditContent() { this.editingContent = false; },
+    async saveContent() {
+      if (!this.editText.trim()) return;
+      this.savingContent = true;
+      try {
+        await Api.put(`tasks/${this.task.id}`, { original_text: this.editText });
+        this.editingContent = false;
+        showToast('內容已更新', 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingContent = false; }
+    },
     async approve() {
+      if (!confirm('確定審核通過，合併回主線？')) return;
       this.approving = true;
       try {
         await Api.post(`tasks/${this.task.id}/approve`, {});
@@ -276,6 +294,21 @@ window.TaskDetailView = Vue.defineComponent({
             <span v-else>{{ sourceLabel() }}</span>
             <span v-if="task.module">模組：{{ task.module }}</span>
             <span style="color:var(--text-muted);font-size:11px">最後更新：{{ formatTime(task.updated_at) }}</span>
+          </div>
+
+          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px">
+            <span>需求內容</span>
+            <button v-if="canEditContent && !editingContent" class="btn btn-outline btn-sm" @click="startEditContent">✎ 編輯</button>
+          </div>
+          <div v-if="!editingContent" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 14px;font-size:13px;white-space:pre-wrap;margin-bottom:16px">{{ task.original_text || '（無內容）' }}</div>
+          <div v-else style="margin-bottom:16px">
+            <textarea v-model="editText" style="width:100%;height:140px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;line-height:1.6;resize:vertical;box-sizing:border-box"></textarea>
+            <div style="margin-top:8px;display:flex;gap:8px">
+              <button class="btn btn-primary btn-sm" @click="saveContent" :disabled="savingContent || !editText.trim()">
+                {{ savingContent ? '儲存中...' : '儲存' }}
+              </button>
+              <button class="btn btn-outline btn-sm" @click="cancelEditContent" :disabled="savingContent">取消</button>
+            </div>
           </div>
 
           <div v-if="task.blocker_content || task.status === 'stopped'"

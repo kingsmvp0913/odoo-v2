@@ -60,6 +60,7 @@ function registerRoutes(app) {
         `SELECT
            COALESCE(SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens), 0) AS total_tokens,
            COALESCE(SUM(tu.cache_read_tokens + tu.cache_create_tokens), 0) AS cache_tokens,
+           COALESCE(SUM(${WEIGHTED}), 0) AS actual_tokens,
            COALESCE(SUM(${COST}), 0) AS cost_usd,
            COUNT(DISTINCT COALESCE(tu.task_id, tu.project_id::TEXT)) AS total_refs,
            COUNT(*) AS total_records
@@ -68,32 +69,32 @@ function registerRoutes(app) {
         baseParams
       );
 
-      // By agent（實際花費 USD）
+      // By agent（Token 數）
       const { rows: byAgent } = await query(
         `SELECT agent_type,
-           SUM(${COST}) AS cost
+           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
          FROM token_usage tu
          ${where}
-         GROUP BY agent_type ORDER BY cost DESC`,
+         GROUP BY agent_type ORDER BY tokens DESC`,
         baseParams
       );
 
-      // By project（實際花費 USD）
+      // By project（Token 數）
       const { rows: byProject } = await query(
         `SELECT p.id AS project_id, p.name AS project_name,
-           SUM(${COST}) AS cost
+           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
          FROM token_usage tu
          LEFT JOIN tasks t ON t.task_id = tu.task_id
          LEFT JOIN projects p ON p.id = COALESCE(tu.project_id, t.project_id)
          ${where}
-         GROUP BY p.id, p.name ORDER BY cost DESC`,
+         GROUP BY p.id, p.name ORDER BY tokens DESC`,
         baseParams
       );
 
-      // Daily trend（實際花費 USD；::date cast is compatible with both pg and pg-mem）
+      // Daily trend（Token 數；::date cast is compatible with both pg and pg-mem）
       const { rows: daily } = await query(
         `SELECT recorded_at::date AS date,
-           SUM(${COST}) AS cost
+           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
          FROM token_usage tu
          ${where}
          GROUP BY date ORDER BY date ASC`,
@@ -114,6 +115,7 @@ function registerRoutes(app) {
            tu.user_id,
            tu.agent_type,
            tu.model,
+           (tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens,
            ${COST} AS cost,
            tu.duration_ms,
            tu.recorded_at
@@ -170,15 +172,19 @@ function registerRoutes(app) {
             user_id:          row.user_id,
             username:         row.username,
             total_cost:       0,
+            total_tokens:     0,
             agents:           [],
             last_recorded_at: row.recorded_at
           };
         }
-        const rowCost = Number(row.cost) || 0;
-        taskMap[key].total_cost += rowCost;
+        const rowCost   = Number(row.cost) || 0;
+        const rowTokens = Number(row.tokens) || 0;
+        taskMap[key].total_cost   += rowCost;
+        taskMap[key].total_tokens += rowTokens;
         taskMap[key].agents.push({
           agent_type:  row.agent_type,
           model:       row.model || null,
+          tokens:      rowTokens,
           cost:        rowCost,
           duration_ms: row.duration_ms
         });
@@ -187,27 +193,31 @@ function registerRoutes(app) {
         }
       }
 
-      const totalTokens = Number(summary.total_tokens) || 0;
-      const cacheTokens = Number(summary.cache_tokens) || 0;
-      const costUsd     = Number(summary.cost_usd) || 0;
-      const totalTasks  = Object.keys(taskMap).length;
+      const totalTokens  = Number(summary.total_tokens) || 0;
+      const cacheTokens  = Number(summary.cache_tokens) || 0;
+      const actualTokens = Number(summary.actual_tokens) || 0;
+      const costUsd      = Number(summary.cost_usd) || 0;
+      const totalTasks   = Object.keys(taskMap).length;
 
       res.json({
         summary: {
-          total_tokens:       totalTokens,
-          cache_tokens:       cacheTokens,
-          cost_usd:           costUsd,
-          total_tasks:        totalTasks,
+          total_tokens:        totalTokens,
+          cache_tokens:        cacheTokens,
+          // 實際 Token 數：與成本計算同一套加權（output=5x、cache_read=0.1x、cache_create=1.25x）等效顆數
+          actual_tokens:       actualTokens,
+          cost_usd:            costUsd,
+          total_tasks:         totalTasks,
+          avg_tokens_per_task: totalTasks ? actualTokens / totalTasks : 0,
           // 平均每任務以「實際花費」計
-          avg_cost_per_task:  totalTasks ? costUsd / totalTasks : 0
+          avg_cost_per_task:   totalTasks ? costUsd / totalTasks : 0
         },
-        by_agent:   byAgent.map(r => ({ agent_type: r.agent_type, cost: Number(r.cost) })),
+        by_agent:   byAgent.map(r => ({ agent_type: r.agent_type, tokens: Number(r.tokens) })),
         by_project: byProject.filter(r => r.project_name).map(r => ({
           project_id:   r.project_id,
           project_name: r.project_name,
-          cost:         Number(r.cost)
+          tokens:       Number(r.tokens)
         })),
-        daily: daily.map(r => ({ date: r.date, cost: Number(r.cost) })),
+        daily: daily.map(r => ({ date: r.date, tokens: Number(r.tokens) })),
         tasks: Object.values(taskMap)
       });
     } catch (err) {

@@ -197,3 +197,48 @@ test('POST /api/tasks → 401 無 token', async () => {
   const res = await request(app).post('/api/tasks').send({ title: 'x' });
   expect(res.status).toBe(401);
 });
+
+// 意圖：任務進 pipeline 前（new）可修正需求內容；一旦分析/開發已依原內容展開就不再允許改，避免內容與已產出的分析/程式碼脫節
+test('PUT /api/tasks/:id → status=new 時可修改 original_text', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_edit_new','odoo','E','舊內容','new') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).put(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ original_text: '新內容' });
+  expect(res.status).toBe(200);
+
+  const detail = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(detail.body.task.original_text).toBe('新內容');
+});
+
+test('PUT /api/tasks/:id → 非 new 狀態回 400，內容不變', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_edit_locked','odoo','E','舊內容','coding_running') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).put(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ original_text: '想改但不行' });
+  expect(res.status).toBe(400);
+
+  const detail = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(detail.body.task.original_text).toBe('舊內容');
+});
+
+test('PUT /api/tasks/:id → 缺 original_text 回 400', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_edit_empty','odoo','E','舊內容','new') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).put(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({});
+  expect(res.status).toBe(400);
+});

@@ -1,0 +1,16 @@
+---id---
+3764
+---title---
+IDX-2026070006: 品檢檢驗項目，判定預設改為YES
+---project---
+鴻久用戶
+---stage---
+未處理
+---classification---
+維修
+---description---
+品檢檢驗項目，判定預設為YES
+---message---
+[2026-07-01 06:28:19] 用戶回饋 創建
+---images---
+images/品檢檢驗項目.jpg

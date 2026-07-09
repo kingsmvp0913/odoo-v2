@@ -412,7 +412,7 @@ window.TaskListView = Vue.defineComponent({
               {{ t.title || t.task_id }}
             </div>
             <div v-if="!batchMode" style="display:flex;align-items:center;gap:6px">
-              <button v-if="!isStopped(t)" class="btn btn-ghost btn-sm"
+              <button v-if="!isStopped(t) && t.status !== 'done'" class="btn btn-ghost btn-sm"
                 :style="{ color: t.is_paused ? 'var(--warning)' : 'var(--text-muted)', fontSize: '12px', padding: '2px 8px' }"
                 @click="togglePause(t, $event)"
                 :title="t.is_paused ? '點擊恢復' : '點擊暫停'">
