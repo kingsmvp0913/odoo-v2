@@ -175,6 +175,17 @@ test('B-3 distillFeedback：QA 自然語言 → 去標籤後近原樣', () => {
   expect(body).toContain('note_t 應為 Text 型別');
 });
 
+test('B-3 distillFeedback：人工退回原因不截斷（跳過 400 字上限）', () => {
+  const { distillFeedback } = require('../pipeline/task-agent');
+  const longReason = '問題一：備註欄位型別錯，應為 Text；'.repeat(30); // 遠超過 400 字
+  const raw = `[人工退回]\n${longReason}`;
+  const { gate, body } = distillFeedback(raw);
+  expect(gate).toBe('人工退回');
+  expect(body.length).toBeGreaterThan(400);
+  expect(body).not.toContain('…');
+  expect(body).toBe(longReason.trim());
+});
+
 // ---- B-5 runTaskCoding resume/fresh 分流 ----
 async function insertCodingTask(suffix, extra = {}) {
   const cols = ['user_id','task_id','source','title','analysis_yaml','git_branch','status','project_id'];

@@ -114,7 +114,8 @@ function distillFeedback(raw) {
     body = rest.replace(/\n{3,}/g, '\n\n').trim(); // 自然語言（QA/E2E）：近原樣，只收斂空白
   }
 
-  if (body.length > 400) body = body.slice(0, 400) + '…';
+  // 人工審核退回是使用者手打的完整說明，不像自動化來源的 traceback/失敗訊息需要收斂，跳過截斷
+  if (gate !== '人工退回' && body.length > 400) body = body.slice(0, 400) + '…';
   if (logRef) body += '\n' + logRef;
   return { gate, body };
 }
