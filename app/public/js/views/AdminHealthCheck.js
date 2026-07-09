@@ -55,7 +55,7 @@ window.AdminHealthCheckView = Vue.defineComponent({
     </div>
     <div class="content">
       <div style="max-width:1000px">
-        <div class="admin-section" style="display:flex;align-items:center;gap:12px">
+        <div class="settings-section" style="display:flex;align-items:center;gap:12px;margin-bottom:var(--space-5)">
           <label style="font-size:13px">近
             <input type="number" v-model.number="windowDays" min="1" style="width:64px" class="form-control" /> 天
           </label>
@@ -67,8 +67,8 @@ window.AdminHealthCheckView = Vue.defineComponent({
           </span>
         </div>
 
-        <div v-for="f in findings" :key="f.id" class="admin-section"
-          style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface)">
+        <div v-for="f in findings" :key="f.id"
+          style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <span style="font-family:monospace;font-weight:600">{{ f.agent_label || f.agent_name }}</span>
             <span :style="{fontSize:'11px',padding:'1px 8px',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
@@ -80,23 +80,22 @@ window.AdminHealthCheckView = Vue.defineComponent({
           <button v-if="f.suggested_prompt" class="btn btn-outline btn-sm" @click="applyToEditor(f)">帶入編輯器 →</button>
         </div>
 
-        <div class="admin-section">
+        <div class="settings-section">
           <h2 class="section-title">歷史健檢</h2>
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
-            <thead><tr style="border-bottom:1px solid var(--border);text-align:left">
-              <th style="padding:6px 10px">時間</th><th style="padding:6px 10px">視窗</th>
-              <th style="padding:6px 10px">狀態</th><th style="padding:6px 10px">診斷數</th>
-            </tr></thead>
-            <tbody>
-              <tr v-for="h in history" :key="h.id" style="border-bottom:1px solid var(--border);cursor:pointer" @click="openRun(h.id)">
-                <td style="padding:6px 10px">{{ new Date(h.created_at).toLocaleString() }}</td>
-                <td style="padding:6px 10px">{{ h.window_days }} 天</td>
-                <td style="padding:6px 10px">{{ h.status }}</td>
-                <td style="padding:6px 10px">{{ h.findings_count }}</td>
-              </tr>
-              <tr v-if="history.length === 0"><td colspan="4" style="padding:16px;text-align:center;color:var(--text-muted)">尚無健檢紀錄</td></tr>
-            </tbody>
-          </table>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>時間</th><th>視窗</th><th>狀態</th><th>診斷數</th></tr></thead>
+              <tbody>
+                <tr v-for="h in history" :key="h.id" class="clickable" @click="openRun(h.id)">
+                  <td>{{ new Date(h.created_at).toLocaleString() }}</td>
+                  <td>{{ h.window_days }} 天</td>
+                  <td>{{ h.status }}</td>
+                  <td>{{ h.findings_count }}</td>
+                </tr>
+                <tr v-if="history.length === 0" class="empty-row"><td colspan="4">尚無健檢紀錄</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

@@ -74,7 +74,7 @@ window.ProjectListView = Vue.defineComponent({
       </button>
     </div>
     <div class="content">
-      <div v-if="showAddForm" class="admin-section" style="margin-bottom:20px">
+      <div v-if="showAddForm" class="settings-section" style="margin-bottom:20px">
         <h2 class="section-title">新增專案</h2>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
           <div class="form-group" style="margin:0">
@@ -104,7 +104,18 @@ window.ProjectListView = Vue.defineComponent({
         <input v-model="search" placeholder="搜尋專案名稱或版本..." class="form-control" style="max-width:320px" />
       </div>
 
-      <div v-if="loading" class="loading">載入中...</div>
+      <div v-if="loading">
+        <div class="project-card" v-for="i in 3" :key="i">
+          <div style="flex:1;min-width:0">
+            <Skeleton width="180px" height="16px" />
+            <div style="margin-top:8px"><Skeleton width="240px" height="13px" /></div>
+            <div style="margin-top:10px;display:flex;gap:6px">
+              <Skeleton width="72px" height="26px" radius="6px" />
+              <Skeleton width="72px" height="26px" radius="6px" />
+            </div>
+          </div>
+        </div>
+      </div>
       <div v-else>
         <div v-if="filteredProjects.length === 0" style="color:var(--text-muted);padding:16px 0">
           {{ search ? '沒有符合的專案' : '尚無專案，點擊「新增專案」開始建立' }}

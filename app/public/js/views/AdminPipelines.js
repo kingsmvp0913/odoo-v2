@@ -72,42 +72,63 @@ window.AdminPipelinesView = Vue.defineComponent({
       <h1>進行中 Pipeline</h1>
     </div>
     <div class="content">
-      <div v-if="loading" class="loading">載入中...</div>
+      <div v-if="loading" style="max-width:1000px">
+        <div class="settings-section">
+          <h2 class="section-title">真正執行中的任務</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>專案</th><th>任務</th><th>使用者</th><th>目前階段</th><th>已執行時間</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="i in 3" :key="i">
+                  <td><Skeleton width="80px" /></td>
+                  <td><Skeleton width="160px" /></td>
+                  <td><Skeleton width="70px" /></td>
+                  <td><Skeleton width="90px" /></td>
+                  <td><Skeleton width="60px" /></td>
+                  <td><Skeleton width="60px" /></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       <div v-else style="max-width:1000px">
-        <div class="admin-section">
+        <div class="settings-section">
           <h2 class="section-title">真正執行中的任務（{{ rows.length }}）</h2>
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
-            <thead>
-              <tr style="border-bottom:1px solid var(--border);text-align:left">
-                <th style="padding:8px 10px">專案</th>
-                <th style="padding:8px 10px">任務</th>
-                <th style="padding:8px 10px">使用者</th>
-                <th style="padding:8px 10px">目前階段</th>
-                <th style="padding:8px 10px">已執行時間</th>
-                <th style="padding:8px 10px">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="r in rows" :key="r.id" style="border-bottom:1px solid var(--border)">
-                <td style="padding:8px 10px">{{ r.project_name || '—' }}</td>
-                <td style="padding:8px 10px;font-weight:600">
-                  <a style="cursor:pointer" @click="$router.push('/task/' + r.id)">{{ r.title || r.task_id }}</a>
-                </td>
-                <td style="padding:8px 10px">{{ userName(r) }}</td>
-                <td style="padding:8px 10px">{{ statusLabel(r.status) }}</td>
-                <td style="padding:8px 10px;font-variant-numeric:tabular-nums">{{ fmtElapsed(r.elapsed_ms) }}</td>
-                <td style="padding:8px 10px">
-                  <button class="btn btn-outline btn-sm" style="color:var(--error)"
-                    :disabled="pausingId === r.id" @click="pause(r)">
-                    {{ pausingId === r.id ? '處理中...' : '暫停' }}
-                  </button>
-                </td>
-              </tr>
-              <tr v-if="rows.length === 0">
-                <td colspan="6" style="padding:16px;text-align:center;color:var(--text-muted)">目前沒有執行中的 pipeline</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>專案</th>
+                  <th>任務</th>
+                  <th>使用者</th>
+                  <th>目前階段</th>
+                  <th>已執行時間</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in rows" :key="r.id">
+                  <td>{{ r.project_name || '—' }}</td>
+                  <td style="font-weight:var(--fw-semibold)">
+                    <a style="cursor:pointer" @click="$router.push('/task/' + r.id)">{{ r.title || r.task_id }}</a>
+                  </td>
+                  <td>{{ userName(r) }}</td>
+                  <td>{{ statusLabel(r.status) }}</td>
+                  <td style="font-variant-numeric:tabular-nums">{{ fmtElapsed(r.elapsed_ms) }}</td>
+                  <td>
+                    <button class="btn btn-outline btn-sm" style="color:var(--error)"
+                      :disabled="pausingId === r.id" @click="pause(r)">
+                      {{ pausingId === r.id ? '處理中...' : '暫停' }}
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="rows.length === 0" class="empty-row">
+                  <td colspan="6">目前沒有執行中的 pipeline</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

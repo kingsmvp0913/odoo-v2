@@ -392,7 +392,17 @@ window.TaskListView = Vue.defineComponent({
         <span style="color:var(--text-muted)">{{ allSelected ? '取消全選' : '全選' }}（已選 {{ selectedIds.length }} / {{ filteredTasks.length }} 筆）</span>
       </div>
 
-      <div v-if="loading" class="loading">載入中...</div>
+      <div v-if="loading">
+        <div class="task-card" v-for="i in 4" :key="i">
+          <div class="task-header">
+            <Skeleton width="220px" height="16px" />
+          </div>
+          <div style="display:flex;gap:6px">
+            <Skeleton width="56px" height="18px" radius="10px" />
+            <Skeleton width="90px" height="18px" radius="10px" />
+          </div>
+        </div>
+      </div>
       <div v-else-if="filteredTasks.length === 0" class="empty-state">
         <div style="font-size:32px">📭</div>
         <p>{{ search ? '沒有符合搜尋的任務' : filter === 'needs_action' ? '沒有待回覆的任務' : filter === 'review_pending' ? '沒有待審核的任務' : '沒有任務' }}</p>

@@ -368,6 +368,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .modal-fade-enter-active, .modal-fade-leave-active { transition: none; } }
 
+/* ── Data table（共用；取代各頁手刻 <table>）── */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
+.data-table thead th { text-align: left; padding: var(--space-3) var(--space-4); font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text-muted); background: var(--bg); border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
+.data-table tbody td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); vertical-align: middle; }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr.clickable { cursor: pointer; }
+.data-table tbody tr.clickable:hover { background: var(--bg); }
+.data-table .empty-row td { padding: var(--space-6); text-align: center; color: var(--text-muted); }
+
+/* ── Skeleton（共用；取代純文字「載入中」）── */
+.skeleton { display: block; background: linear-gradient(90deg, var(--border) 25%, var(--border-strong) 37%, var(--border) 63%); background-size: 400% 100%; animation: skeletonShimmer 1.4s ease infinite; border-radius: var(--radius-sm); }
+@keyframes skeletonShimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; opacity: .6; } }
+
 /* ── Toasts ───────────────────────── */
 .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; }
 .toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.18); animation: toastIn 0.2s ease; max-width: 340px; }

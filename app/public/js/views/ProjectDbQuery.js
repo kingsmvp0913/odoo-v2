@@ -35,7 +35,18 @@ window.ProjectDbQueryView = Vue.defineComponent({
       const file = e.target.files && e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = () => { this.form.vpn_config = reader.result; this.form.vpn_config_name = file.name; };
+      reader.onload = () => {
+        this.form.vpn_config = reader.result;
+        this.form.vpn_config_name = file.name;
+        // 部分廠牌 GUI（如鴻久 SSLVPN）把帳密存成 openvpn 會忽略的 # 註解欄位；抓得到就直接代填。
+        const userMatch = reader.result.match(/^#SSLVPN_AUTH_USERNAME=(.*)$/m);
+        const passMatch = reader.result.match(/^#SSLVPN_AUTH_PASSWORD=(.*)$/m);
+        if (userMatch && userMatch[1].trim()) this.form.vpn_username = userMatch[1].trim();
+        if (passMatch && passMatch[1].trim()) this.form.vpn_password = passMatch[1].trim();
+        if ((userMatch && userMatch[1].trim()) || (passMatch && passMatch[1].trim())) {
+          showToast('已從設定檔自動帶入 VPN 帳密，請確認無誤', 'success');
+        }
+      };
       reader.readAsText(file);
     },
     async saveConn() {
@@ -69,30 +80,51 @@ window.ProjectDbQueryView = Vue.defineComponent({
       <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+pid())" style="margin-right:12px">← 返回專案</button>
       <h1>資料庫查詢</h1>
     </div>
-    <div class="content" v-if="!loading">
-      <div class="admin-section" style="margin-bottom:20px">
+    <div class="content" v-if="loading">
+      <div class="settings-section">
+        <h2 class="section-title">連線管理</h2>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>名稱</th><th>主機</th><th>模式</th><th>DB</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="i in 3" :key="i">
+                <td><Skeleton width="100px" /></td>
+                <td><Skeleton width="160px" /></td>
+                <td><Skeleton width="60px" /></td>
+                <td><Skeleton width="90px" /></td>
+                <td><Skeleton width="110px" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="content" v-else>
+      <div class="settings-section" style="margin-bottom:20px">
         <h2 class="section-title">連線管理（{{ conns.length }}）</h2>
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead><tr style="border-bottom:1px solid var(--border);text-align:left">
-            <th style="padding:8px 10px">名稱</th><th style="padding:8px 10px">主機</th><th style="padding:8px 10px">模式</th><th style="padding:8px 10px">DB</th><th style="padding:8px 10px">操作</th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="c in conns" :key="c.id" style="border-bottom:1px solid var(--border)">
-              <td style="padding:8px 10px;font-weight:600">{{ c.name }}</td>
-              <td style="padding:8px 10px">{{ c.connect_mode === 'direct' ? (c.db_user + '@' + c.db_host + ':' + c.db_port) : (c.ssh_user + '@' + c.ssh_host + ':' + c.ssh_port) }}</td>
-              <td style="padding:8px 10px">{{ c.connect_mode }}</td>
-              <td style="padding:8px 10px">{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
-              <td style="padding:8px 10px"><div style="display:flex;gap:6px">
-                <button class="btn btn-outline btn-sm" @click="editConn(c)">編輯</button>
-                <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteConn(c)">刪除</button>
-              </div></td>
-            </tr>
-            <tr v-if="conns.length === 0"><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted)">尚無連線</td></tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr>
+              <th>名稱</th><th>主機</th><th>模式</th><th>DB</th><th>操作</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="c in conns" :key="c.id">
+                <td style="font-weight:var(--fw-semibold)">{{ c.name }}</td>
+                <td>{{ c.connect_mode === 'direct' ? (c.db_user + '@' + c.db_host + ':' + c.db_port) : (c.ssh_user + '@' + c.ssh_host + ':' + c.ssh_port) }}</td>
+                <td>{{ c.connect_mode }}</td>
+                <td>{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
+                <td><div style="display:flex;gap:6px">
+                  <button class="btn btn-outline btn-sm" @click="editConn(c)">編輯</button>
+                  <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteConn(c)">刪除</button>
+                </div></td>
+              </tr>
+              <tr v-if="conns.length === 0" class="empty-row"><td colspan="5">尚無連線</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div class="admin-section" style="margin-bottom:20px">
+      <div class="settings-section" style="margin-bottom:20px">
         <h2 class="section-title">{{ form.id ? '編輯連線' : '新增連線' }}</h2>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
           <div class="form-group" style="margin:0"><label>連線名稱</label><input v-model="form.name" class="form-control" placeholder="hj-鴻久-正式" /></div>
@@ -137,7 +169,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
       </div>
 
-      <div class="admin-section">
+      <div class="settings-section">
         <h2 class="section-title">查詢（只允許 SELECT）</h2>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <select v-model="selectedId" class="form-control" style="max-width:280px">
@@ -148,18 +180,20 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
         <textarea v-model="sql" class="form-control" rows="4" placeholder="SELECT id, login FROM res_users LIMIT 20" style="font-family:monospace"></textarea>
         <div v-if="error" class="error-msg" style="margin-top:10px;white-space:pre-wrap">{{ error }}</div>
-        <div v-if="result" style="margin-top:10px;overflow-x:auto">
+        <div v-if="result" style="margin-top:10px">
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">{{ result.row_count }} 筆</div>
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <thead><tr style="border-bottom:1px solid var(--border);text-align:left">
-              <th v-for="col in result.columns" :key="col" style="padding:6px 8px">{{ col }}</th>
+          <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr>
+              <th v-for="col in result.columns" :key="col">{{ col }}</th>
             </tr></thead>
             <tbody>
-              <tr v-for="(row,i) in result.rows" :key="i" style="border-bottom:1px solid var(--border)">
-                <td v-for="(cell,j) in row" :key="j" style="padding:6px 8px">{{ cell }}</td>
+              <tr v-for="(row,i) in result.rows" :key="i">
+                <td v-for="(cell,j) in row" :key="j">{{ cell }}</td>
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

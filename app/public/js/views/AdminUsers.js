@@ -63,7 +63,25 @@ window.AdminUsersView = Vue.defineComponent({
       <h1>使用者管理</h1>
     </div>
     <div class="content">
-      <div v-if="loading" class="loading">載入中...</div>
+      <div v-if="loading" style="max-width:900px">
+        <div class="settings-section">
+          <h2 class="section-title">使用者列表</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>帳號</th><th>顯示名稱</th><th>角色</th><th>建立時間</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="i in 4" :key="i">
+                  <td><Skeleton width="90px" /></td>
+                  <td><Skeleton width="110px" /></td>
+                  <td><Skeleton width="50px" /></td>
+                  <td><Skeleton width="80px" /></td>
+                  <td><Skeleton width="140px" /></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       <div v-else style="max-width:900px">
 
         <!-- 搜尋 -->
@@ -72,48 +90,50 @@ window.AdminUsersView = Vue.defineComponent({
         </div>
 
         <!-- 使用者列表 -->
-        <div class="admin-section" style="margin-bottom:20px">
+        <div class="settings-section" style="margin-bottom:20px">
           <h2 class="section-title">使用者列表（{{ filteredUsers.length }}）</h2>
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
-            <thead>
-              <tr style="border-bottom:1px solid var(--border);text-align:left">
-                <th style="padding:8px 10px">帳號</th>
-                <th style="padding:8px 10px">顯示名稱</th>
-                <th style="padding:8px 10px">角色</th>
-                <th style="padding:8px 10px">建立時間</th>
-                <th style="padding:8px 10px">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="u in filteredUsers" :key="u.id" style="border-bottom:1px solid var(--border)">
-                <td style="padding:8px 10px;font-weight:600">{{ u.username }}</td>
-                <td style="padding:8px 10px">{{ u.display_name }}</td>
-                <td style="padding:8px 10px">
-                  <span :style="{ color: u.role === 'admin' ? 'var(--sidebar-accent)' : 'var(--text-muted)', fontWeight: 600 }">
-                    {{ u.role === 'admin' ? '管理員' : '一般' }}
-                  </span>
-                </td>
-                <td style="padding:8px 10px;font-size:12px;color:var(--text-muted)">
-                  {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
-                </td>
-                <td style="padding:8px 10px">
-                  <div style="display:flex;gap:6px">
-                    <button class="btn btn-outline btn-sm" @click="toggleRole(u)">
-                      {{ u.role === 'admin' ? '降為一般' : '升為管理員' }}
-                    </button>
-                    <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteUser(u)">刪除</button>
-                  </div>
-                </td>
-              </tr>
-              <tr v-if="filteredUsers.length === 0">
-                <td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted)">沒有符合的使用者</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>帳號</th>
+                  <th>顯示名稱</th>
+                  <th>角色</th>
+                  <th>建立時間</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="u in filteredUsers" :key="u.id">
+                  <td style="font-weight:var(--fw-semibold)">{{ u.username }}</td>
+                  <td>{{ u.display_name }}</td>
+                  <td>
+                    <span :style="{ color: u.role === 'admin' ? 'var(--sidebar-accent)' : 'var(--text-muted)', fontWeight: 'var(--fw-semibold)' }">
+                      {{ u.role === 'admin' ? '管理員' : '一般' }}
+                    </span>
+                  </td>
+                  <td style="font-size:var(--fs-sm);color:var(--text-muted)">
+                    {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
+                  </td>
+                  <td>
+                    <div style="display:flex;gap:6px">
+                      <button class="btn btn-outline btn-sm" @click="toggleRole(u)">
+                        {{ u.role === 'admin' ? '降為一般' : '升為管理員' }}
+                      </button>
+                      <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteUser(u)">刪除</button>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="filteredUsers.length === 0" class="empty-row">
+                  <td colspan="5">沒有符合的使用者</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <!-- 新增使用者 -->
-        <div class="admin-section">
+        <div class="settings-section">
           <h2 class="section-title">新增使用者</h2>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
             <div class="form-group" style="margin:0">
