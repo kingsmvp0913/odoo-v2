@@ -73,3 +73,17 @@ test('query() supports $1 parameterised queries', async () => {
   const result = await dbModule.query('SELECT $1::text AS name', ['hello']);
   expect(result.rows[0].name).toBe('hello');
 });
+
+test('migrate() creates task_messages table and teams_settings.writeback_odoo_notes column', async () => {
+  await dbModule.migrate();
+
+  const { rows: tables } = await dbModule.query(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`
+  );
+  expect(tables.map(r => r.table_name)).toContain('task_messages');
+
+  const { rows: cols } = await dbModule.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'teams_settings'`
+  );
+  expect(cols.map(r => r.column_name)).toContain('writeback_odoo_notes');
+});

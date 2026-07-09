@@ -249,6 +249,21 @@ async function migrate() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // 外部溝通紀錄：sync 從 Odoo/eService mail.message 逐筆拉進來的聊天紀錄（source='sync'，
+    // external_id=Odoo message id，供增量同步 dedup）＋使用者在詳情頁手動追加的留言（source='manual'）。
+    // original_text 之後只存 ticket 靜態欄位，聊天紀錄改由這張表存，分析時動態組回（見 sync.js assembleTaskContext）。
+    `CREATE TABLE IF NOT EXISTS task_messages (
+      id             SERIAL PRIMARY KEY,
+      task_id        INTEGER NOT NULL REFERENCES tasks(id),
+      source         TEXT NOT NULL DEFAULT 'manual',
+      external_id    TEXT,
+      author         TEXT,
+      content        TEXT NOT NULL,
+      occurred_at    TIMESTAMPTZ NOT NULL,
+      synced_to_odoo BOOLEAN NOT NULL DEFAULT false,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     // 工作流程健檢 agent（子專案 2）：admin 一鍵健檢的一次執行＋每 agent 診斷 finding。
     `CREATE TABLE IF NOT EXISTS health_check_runs (
       id           SERIAL PRIMARY KEY,
@@ -323,6 +338,7 @@ async function migrate() {
     { table: 'teams_settings', col: 'service_url', sql: 'ALTER TABLE teams_settings ADD COLUMN service_url TEXT' },
     { table: 'teams_settings', col: 'service_db',  sql: 'ALTER TABLE teams_settings ADD COLUMN service_db TEXT' },
     { table: 'teams_settings', col: 'test_mode',   sql: 'ALTER TABLE teams_settings ADD COLUMN test_mode BOOLEAN DEFAULT false' },
+    { table: 'teams_settings', col: 'writeback_odoo_notes', sql: 'ALTER TABLE teams_settings ADD COLUMN writeback_odoo_notes BOOLEAN DEFAULT false' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },
@@ -431,6 +447,12 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_rej_status     ON task_rejections (status)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_project    ON task_rejections (project_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_items_rid  ON rejection_items (rejection_id)').catch(() => {});
+
+  // task_messages（外部溝通紀錄）：依 task_id 排序讀取；external_id 供增量同步 dedup（同一任務同一
+  // Odoo message 只存一筆，manual 留言 external_id 為 NULL 不受此限制，可有多筆）
+  await query('CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages (task_id, occurred_at)').catch(() => {});
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS task_messages_task_external_uq
+               ON task_messages (task_id, external_id) WHERE external_id IS NOT NULL`).catch(() => {});
 
   // health_check_runs / health_check_findings（工作流程健檢）
   await query('CREATE INDEX IF NOT EXISTS idx_hcf_run ON health_check_findings (run_id)').catch(() => {});
