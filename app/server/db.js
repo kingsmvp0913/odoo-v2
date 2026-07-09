@@ -359,6 +359,13 @@ async function migrate() {
     { table: 'db_connections', col: 'db_password_enc', sql: 'ALTER TABLE db_connections ADD COLUMN db_password_enc TEXT' },
     { table: 'db_connections', col: 'db_ssl',          sql: 'ALTER TABLE db_connections ADD COLUMN db_ssl BOOLEAN DEFAULT false' },
     { table: 'db_connections', col: 'db_engine',       sql: "ALTER TABLE db_connections ADD COLUMN db_engine TEXT DEFAULT 'postgres'" },
+    // VPN Gateway：需要 VPN 才能連通的連線，經由 Docker 容器撥號 + TCP 轉發
+    { table: 'db_connections', col: 'vpn_enabled',       sql: 'ALTER TABLE db_connections ADD COLUMN vpn_enabled BOOLEAN NOT NULL DEFAULT false' },
+    { table: 'db_connections', col: 'vpn_config_enc',    sql: 'ALTER TABLE db_connections ADD COLUMN vpn_config_enc TEXT' },
+    { table: 'db_connections', col: 'vpn_username',      sql: 'ALTER TABLE db_connections ADD COLUMN vpn_username TEXT' },
+    { table: 'db_connections', col: 'vpn_password_enc',  sql: 'ALTER TABLE db_connections ADD COLUMN vpn_password_enc TEXT' },
+    { table: 'db_connections', col: 'vpn_forward_port',  sql: 'ALTER TABLE db_connections ADD COLUMN vpn_forward_port INTEGER' },
+    { table: 'db_connections', col: 'vpn_container_name', sql: 'ALTER TABLE db_connections ADD COLUMN vpn_container_name TEXT' },
     { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
     { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" },
     // 每列記錄實際使用的 model（供報表按 model 單價算真實 USD 成本，對齊 ccusage 做法）

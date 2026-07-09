@@ -9,6 +9,7 @@ const { ensureConfig } = require('./lib/config');
 const { ensurePostgres } = require('./lib/postgres');
 const { ensureClaudeEnv } = require('./lib/claude-env');
 const { verifyRuntimeDeps } = require('./lib/checks');
+const { verifyDocker, ensureGatewayImage } = require('./lib/docker');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(ROOT, 'data', 'config.json');
@@ -43,6 +44,14 @@ async function main() {
     process.exit(1);
   }
   console.log('[OK] 執行期相依檢查通過');
+
+  const dockerCheck = verifyDocker();
+  if (dockerCheck.ok) {
+    ensureGatewayImage();
+    console.log('[OK] Docker 已就緒，VPN Gateway image 已備妥');
+  } else {
+    console.log(`[SKIP] 未偵測到 Docker，需要 VPN 才能連的資料庫查詢功能將無法使用（安裝 Docker 後重跑 node scripts/setup.js 即可補上）：${dockerCheck.hint}`);
+  }
 
   await ensurePostgres(cfg.DATABASE_URL);
   console.log('[OK] PostgreSQL 已就緒');

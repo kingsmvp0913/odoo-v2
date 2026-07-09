@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 
 const mockRunSelect = jest.fn();
 jest.mock('../lib/ssh-sql', () => ({ runSelect: (...a) => mockRunSelect(...a) }));
+jest.mock('../lib/vpn-gateway', () => ({
+  allocateForwardPort: jest.fn(() => 11000),
+  containerName: (id) => `vpn-conn-${id}`,
+  removeGateway: jest.fn(),
+}));
+const { removeGateway } = require('../lib/vpn-gateway');
 
 let dbModule, app, token, userToken, projectId;
 
@@ -144,4 +150,42 @@ test('/test 端點：非 admin → 403', async () => {
   const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`)
     .set({ Authorization: `Bearer ${userToken}` }).send({ connect_mode: 'direct', db_host: 'h', db_user: 'u', db_password: 'p', db_name: 'd' });
   expect(res.status).toBe(403);
+});
+
+describe('VPN 欄位 CRUD', () => {
+  let vpnCid;
+
+  test('POST 建立 vpn_enabled 連線時，自動分配 vpn_forward_port 與 vpn_container_name，回傳不含密碼/設定檔', async () => {
+    const res = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'vc1', ssh_host: '9.9.9.9', ssh_user: 'root', db_name: 'odoo_prd',
+      vpn_enabled: true, vpn_config: 'client\ndev tun\n', vpn_username: 'vu', vpn_password: 'vp',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.vpn_enabled).toBe(true);
+    expect(res.body.vpn_config_enc).toBeUndefined();
+    expect(res.body.vpn_password_enc).toBeUndefined();
+    vpnCid = res.body.id;
+  });
+
+  test('GET 查詢後可經 loadDecryptedConn 解密出明文 vpn_config/vpn_password', async () => {
+    const { loadDecryptedConn } = require('../db-query-routes');
+    const conn = await loadDecryptedConn(vpnCid, projectId);
+    expect(conn.vpn_config).toBe('client\ndev tun\n');
+    expect(conn.vpn_password).toBe('vp');
+  });
+
+  test('DELETE 有 VPN 的連線時，會呼叫 removeGateway 清容器', async () => {
+    const res = await request(app).delete(`/api/projects/${projectId}/db-connections/${vpnCid}`).set(auth());
+    expect(res.status).toBe(200);
+    expect(removeGateway).toHaveBeenCalledWith(expect.objectContaining({ id: vpnCid }));
+  });
+
+  test('DELETE 沒有 VPN 的連線時，不呼叫 removeGateway', async () => {
+    removeGateway.mockClear();
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'vc2', ssh_host: '9.9.9.8', ssh_user: 'root', db_name: 'odoo_prd',
+    });
+    await request(app).delete(`/api/projects/${projectId}/db-connections/${create.body.id}`).set(auth());
+    expect(removeGateway).not.toHaveBeenCalled();
+  });
 });

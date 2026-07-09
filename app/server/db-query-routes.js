@@ -2,8 +2,9 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { encrypt, decrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
+const { allocateForwardPort, containerName, removeGateway } = require('./lib/vpn-gateway');
 
-const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at';
+const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled';
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 function validateIdentifiers(b) {
@@ -52,15 +53,29 @@ function registerRoutes(app) {
       const pwEnc = authType === 'key' ? null : (b.ssh_password ? encrypt(b.ssh_password) : null);
       const keyEnc = authType === 'key' ? (b.ssh_key_content ? encrypt(b.ssh_key_content) : null) : null;
       const dbPwEnc = b.db_password ? encrypt(b.db_password) : null;
+      const vpnEnabled = !!b.vpn_enabled;
+      const vpnConfigEnc = vpnEnabled && b.vpn_config ? encrypt(b.vpn_config) : null;
+      const vpnPasswordEnc = vpnEnabled && b.vpn_password ? encrypt(b.vpn_password) : null;
       const { rows } = await query(
-        `INSERT INTO db_connections (project_id,name,ssh_host,ssh_port,ssh_user,auth_type,ssh_password_enc,ssh_key_enc,connect_mode,docker_container,db_user,sudo_user,db_name,db_host,db_port,db_password_enc,db_ssl,db_engine,description)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING ${PUBLIC_COLS}`,
+        `INSERT INTO db_connections (project_id,name,ssh_host,ssh_port,ssh_user,auth_type,ssh_password_enc,ssh_key_enc,connect_mode,docker_container,db_user,sudo_user,db_name,db_host,db_port,db_password_enc,db_ssl,db_engine,description,vpn_enabled,vpn_config_enc,vpn_username,vpn_password_enc)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING ${PUBLIC_COLS}`,
         [req.params.id, b.name, isDirect ? '' : b.ssh_host, b.ssh_port || 22, isDirect ? '' : b.ssh_user, authType, pwEnc, keyEnc,
          mode, b.docker_container || null, b.db_user || null, b.sudo_user || null, b.db_name,
          isDirect ? b.db_host : null, isDirect ? (b.db_port || 5432) : null, dbPwEnc, isDirect ? !!b.db_ssl : false,
-         isDirect ? (b.db_engine || 'postgres') : 'postgres', b.description || null]
+         isDirect ? (b.db_engine || 'postgres') : 'postgres', b.description || null,
+         vpnEnabled, vpnConfigEnc, vpnEnabled ? (b.vpn_username || null) : null, vpnPasswordEnc]
       );
-      res.status(201).json(rows[0]);
+      let conn = rows[0];
+      if (vpnEnabled) {
+        const { rows: usedRows } = await query('SELECT vpn_forward_port FROM db_connections WHERE vpn_forward_port IS NOT NULL');
+        const forwardPort = allocateForwardPort(usedRows.map(r => r.vpn_forward_port));
+        const { rows: updated } = await query(
+          `UPDATE db_connections SET vpn_forward_port=$1, vpn_container_name=$2 WHERE id=$3 RETURNING ${PUBLIC_COLS}`,
+          [forwardPort, containerName(conn.id), conn.id]
+        );
+        conn = updated[0];
+      }
+      res.status(201).json(conn);
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: err.message });
       if (err.code === '23505') return res.status(409).json({ error: '連線名稱已存在' });
@@ -86,12 +101,25 @@ function registerRoutes(app) {
       if (b.ssh_password) { set.push(`ssh_password_enc=$${idx++}`); params.push(encrypt(b.ssh_password)); }
       if (b.ssh_key_content) { set.push(`ssh_key_enc=$${idx++}`); params.push(encrypt(b.ssh_key_content)); }
       if (b.db_password) { set.push(`db_password_enc=$${idx++}`); params.push(encrypt(b.db_password)); }
+      if (b.vpn_enabled !== undefined) { set.push(`vpn_enabled=$${idx++}`); params.push(!!b.vpn_enabled); }
+      if (b.vpn_username !== undefined) { set.push(`vpn_username=$${idx++}`); params.push(b.vpn_username || null); }
+      if (b.vpn_config) { set.push(`vpn_config_enc=$${idx++}`); params.push(encrypt(b.vpn_config)); }
+      if (b.vpn_password) { set.push(`vpn_password_enc=$${idx++}`); params.push(encrypt(b.vpn_password)); }
       if (!set.length) return res.status(400).json({ error: '無可更新欄位' });
       params.push(req.params.cid, req.params.id);
-      const { rows } = await query(
-        `UPDATE db_connections SET ${set.join(', ')} WHERE id=$${idx++} AND project_id=$${idx} RETURNING ${PUBLIC_COLS}`, params
+      let { rows } = await query(
+        `UPDATE db_connections SET ${set.join(', ')} WHERE id=$${idx++} AND project_id=$${idx} RETURNING ${PUBLIC_COLS}, vpn_forward_port`, params
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      // 剛把 vpn_enabled 從 false 打開、之前沒分配過轉發 port 才需要分配
+      if (rows[0].vpn_enabled && !rows[0].vpn_forward_port) {
+        const { rows: usedRows } = await query('SELECT vpn_forward_port FROM db_connections WHERE vpn_forward_port IS NOT NULL');
+        const forwardPort = allocateForwardPort(usedRows.map(r => r.vpn_forward_port));
+        ({ rows } = await query(
+          `UPDATE db_connections SET vpn_forward_port=$1, vpn_container_name=$2 WHERE id=$3 RETURNING ${PUBLIC_COLS}`,
+          [forwardPort, containerName(req.params.cid), req.params.cid]
+        ));
+      }
       res.json(rows[0]);
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: err.message });
@@ -102,8 +130,10 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:id/db-connections/:cid', verifyToken, requireAdmin, async (req, res) => {
     try {
-      const { rows } = await query('DELETE FROM db_connections WHERE id=$1 AND project_id=$2 RETURNING id', [req.params.cid, req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      const { rows: [existing] } = await query('SELECT id, vpn_enabled, vpn_container_name FROM db_connections WHERE id=$1 AND project_id=$2', [req.params.cid, req.params.id]);
+      if (!existing) return res.status(404).json({ error: 'Not found' });
+      if (existing.vpn_enabled) removeGateway(existing);
+      await query('DELETE FROM db_connections WHERE id=$1 AND project_id=$2', [req.params.cid, req.params.id]);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -178,6 +208,8 @@ async function loadDecryptedConn(cid, projectId) {
   c.ssh_password = c.ssh_password_enc ? decrypt(c.ssh_password_enc) : '';
   c.ssh_key = c.ssh_key_enc ? decrypt(c.ssh_key_enc) : '';
   c.db_password = c.db_password_enc ? decrypt(c.db_password_enc) : '';
+  c.vpn_config = c.vpn_config_enc ? decrypt(c.vpn_config_enc) : '';
+  c.vpn_password = c.vpn_password_enc ? decrypt(c.vpn_password_enc) : '';
   return c;
 }
 

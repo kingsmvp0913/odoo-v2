@@ -26,6 +26,7 @@ if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/de
 fi
 command -v uvx &>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 command -v psql &>/dev/null || install_apt postgresql postgresql-contrib
+command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sudo sh; sudo usermod -aG docker "$USER" || true; }
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
