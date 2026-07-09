@@ -86,12 +86,13 @@
 [data-theme="dark"] .topbar,
 [data-theme="dark"] .page-header { background: var(--surface); }
 [data-theme="dark"] .field-input,
+[data-theme="dark"] .btn-outline,
+[data-theme="dark"] .login-box { background: var(--surface); }
+/* 輸入框一律白底黑字，不隨深色模式切換（辨識度優先於配色一致） */
 [data-theme="dark"] .form-control,
 [data-theme="dark"] .form-group input,
 [data-theme="dark"] .form-group select,
-[data-theme="dark"] .form-group textarea,
-[data-theme="dark"] .btn-outline,
-[data-theme="dark"] .login-box { background: var(--surface); }
+[data-theme="dark"] .form-group textarea { background: #fff; color: #111827; }
 [data-theme="dark"] .btn-outline:hover:not(:disabled) { background: #2a2a2a; border-color: #4a4a4a; }
 [data-theme="dark"] .setting-block-footer { background: #262626; }
 [data-theme="dark"] .tab-badge { background: #333333; color: rgba(255,255,255,0.75); }
