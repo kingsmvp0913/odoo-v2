@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { saveAttachmentFile } = require('../lib/attachments');
+const { saveAttachmentFile, readAttachmentFile } = require('../lib/attachments');
 
 // 來源對應欄位（odoo_project_name / service_respondent_name）以「一行一個名稱」儲存，
 // 比對在 JS 端做（pg-mem 不支援 string_to_array），支援一個專案綁多個來源名稱。
@@ -136,17 +136,15 @@ async function odooSearchRead(baseUrl, model, domain, fields, cookies, limit = 3
 }
 
 // 回寫「記錄備註」（mail.mt_note，非公開訊息、不通知客戶、不建活動）
-async function odooMessagePost(baseUrl, model, resId, body, cookies) {
+async function odooMessagePost(baseUrl, model, resId, body, cookies, attachmentIds = []) {
+  const kwargs = { body, subtype_xmlid: 'mail.mt_note' };
+  if (attachmentIds.length) kwargs.attachment_ids = attachmentIds;
   const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookies },
     body: JSON.stringify({
       jsonrpc: '2.0', method: 'call',
-      params: {
-        model, method: 'message_post',
-        args: [resId],
-        kwargs: { body, subtype_xmlid: 'mail.mt_note' }
-      }
+      params: { model, method: 'message_post', args: [resId], kwargs }
     })
   });
   const data = await res.json();
@@ -154,25 +152,57 @@ async function odooMessagePost(baseUrl, model, resId, body, cookies) {
   return data.result;
 }
 
-// 使用者在詳情頁新增的留言，best-effort 回寫來源系統。呼叫端負責判斷管理者開關是否開啟；
+async function odooAttachmentCreate(baseUrl, model, resId, name, base64Data, cookies) {
+  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookies },
+    body: JSON.stringify({
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'ir.attachment', method: 'create',
+        args: [{ name, datas: base64Data, res_model: model, res_id: resId }],
+        kwargs: {}
+      }
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`ir.attachment create failed: ${JSON.stringify(data.error)}`);
+  return data.result;
+}
+
+async function createOdooAttachments(baseUrl, model, resId, attachments, cookies) {
+  const ids = [];
+  for (const att of attachments) {
+    const buffer = readAttachmentFile(att.file_path);
+    ids.push(await odooAttachmentCreate(baseUrl, model, resId, att.filename, buffer.toString('base64'), cookies));
+  }
+  return ids;
+}
+
+// 使用者在詳情頁新增的留言（可能含附件），best-effort 回寫來源系統。呼叫端負責判斷管理者開關是否開啟；
 // 這裡只負責「開了就真的呼叫」與「憑證/來源不符就安靜跳過」，錯誤往上拋由呼叫端 catch。
-async function writebackTaskMessage(userId, task, content) {
+async function writebackTaskMessage(userId, task, content, attachments = []) {
   if (task.source !== 'odoo' && task.source !== 'service') return null;
   const sourceNumId = (task.task_id || '').match(/(\d+)$/)?.[1];
   if (!sourceNumId) return null;
 
   const settings = await resolveUserOdooSettings(userId);
   if (!settings) return null;
+  const resId = parseInt(sourceNumId, 10);
 
   if (task.source === 'odoo') {
     if (!settings.odoo_url || !settings.odoo_db || !settings.odoo_username || !settings.odoo_password) return null;
     const cookies = await odooAuth(settings.odoo_url, settings.odoo_db, settings.odoo_username, settings.odoo_password);
-    return odooMessagePost(settings.odoo_url, 'project.task', parseInt(sourceNumId, 10), content, cookies);
+    const attachmentExternalIds = await createOdooAttachments(settings.odoo_url, 'project.task', resId, attachments, cookies);
+    const messageExternalId = await odooMessagePost(settings.odoo_url, 'project.task', resId, content, cookies, attachmentExternalIds);
+    return { messageExternalId, attachmentExternalIds };
   }
 
   if (!settings.service_url || !settings.service_db || !settings.service_username || !settings.service_password) return null;
   const cookies = await odooAuth(settings.service_url, settings.service_db, settings.service_username, settings.service_password);
-  return odooMessagePost(settings.service_url, 'service.question.feedback', parseInt(sourceNumId, 10), content, cookies);
+  const attachmentExternalIds = await createOdooAttachments(settings.service_url, 'service.question.feedback', resId, attachments, cookies);
+  const messageExternalId = await odooMessagePost(settings.service_url, 'service.question.feedback', resId, content, cookies, attachmentExternalIds);
+  return { messageExternalId, attachmentExternalIds };
 }
 
 async function syncOdooUser(userId, settings) {

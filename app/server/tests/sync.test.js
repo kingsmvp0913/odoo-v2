@@ -478,3 +478,34 @@ test('syncUser eService 工單 file 為 false → 不產生附件', async () => 
   const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_service_3101'");
   expect(t.has_attachment).toBe(false);
 });
+
+test('writebackTaskMessage 帶附件 → 先 ir.attachment.create 再 message_post(attachment_ids)', async () => {
+  const os = require('os');
+  const path = require('path');
+  const fs = require('fs');
+  const attachments = require('../lib/attachments');
+  const tmpFile = attachments.saveAttachmentFile('wb-test', 'note.txt', Buffer.from('hello'));
+
+  mockFetch
+    .mockImplementationOnce(() => makeFetchResponse({ jsonrpc: '2.0', result: { uid: 1 } }, 'session_id=abc'))
+    .mockImplementationOnce(() => makeFetchResponse({ jsonrpc: '2.0', result: 5555 })) // ir.attachment.create
+    .mockImplementationOnce(() => makeFetchResponse({ jsonrpc: '2.0', result: 9999 })); // message_post
+
+  const result = await syncModule.writebackTaskMessage(
+    userId,
+    { source: 'odoo', task_id: 'task_odoo_9001' },
+    '回覆內容',
+    [{ filename: 'note.txt', file_path: tmpFile }]
+  );
+
+  expect(result.messageExternalId).toBe(9999);
+  expect(result.attachmentExternalIds).toEqual([5555]);
+
+  const attCallBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+  expect(attCallBody.params.model).toBe('ir.attachment');
+  expect(attCallBody.params.method).toBe('create');
+  expect(attCallBody.params.args[0].res_model).toBe('project.task');
+
+  const postCallBody = JSON.parse(mockFetch.mock.calls[2][1].body);
+  expect(postCallBody.params.kwargs.attachment_ids).toEqual([5555]);
+});
