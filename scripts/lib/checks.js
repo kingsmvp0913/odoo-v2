@@ -47,6 +47,9 @@ function verifyRuntimeDeps(deps = {}) {
   if (!commandExistsFn('uvx')) {
     missing.push({ name: 'uv', hint: '請安裝 uv：https://astral.sh/uv/install' });
   }
+  if (!commandExistsFn('psql')) {
+    missing.push({ name: 'psql', hint: '請安裝 PostgreSQL（含 psql CLI）：https://www.postgresql.org/download/' });
+  }
   if (!findChromeFn()) {
     missing.push({ name: 'chrome', hint: '請安裝 Google Chrome：https://www.google.com/chrome/（tour E2E 需要）' });
   }

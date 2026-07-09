@@ -27,4 +27,13 @@ describe('verifyRuntimeDeps', () => {
     expect(result.ok).toBe(false);
     expect(result.missing.find(m => m.name === 'chrome')).toBeTruthy();
   });
+
+  test('缺 psql 時列出 psql 與安裝指引', () => {
+    const result = verifyRuntimeDeps({
+      commandExists: (cmd) => cmd !== 'psql',
+      findChrome: () => 'chrome.exe',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.missing.find(m => m.name === 'psql')).toBeTruthy();
+  });
 });

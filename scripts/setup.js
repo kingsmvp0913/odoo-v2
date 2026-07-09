@@ -3,7 +3,7 @@
 // Usage: node scripts/setup.js [--skip-start]
 const path = require('path');
 const readline = require('readline');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 const { ensureConfig } = require('./lib/config');
 const { ensurePostgres } = require('./lib/postgres');
@@ -36,6 +36,14 @@ async function main() {
   asker.close();
   console.log('[OK] 設定檔就緒：' + CONFIG_PATH);
 
+  const { ok, missing } = verifyRuntimeDeps();
+  if (!ok) {
+    console.error('缺少下列執行期相依，請安裝後重新執行 node scripts/setup.js：');
+    for (const m of missing) console.error(`  - ${m.name}: ${m.hint}`);
+    process.exit(1);
+  }
+  console.log('[OK] 執行期相依檢查通過');
+
   await ensurePostgres(cfg.DATABASE_URL);
   console.log('[OK] PostgreSQL 已就緒');
 
@@ -44,14 +52,6 @@ async function main() {
 
   await ensureClaudeEnv();
   console.log('[OK] Claude Code 環境已就緒');
-
-  const { ok, missing } = verifyRuntimeDeps();
-  if (!ok) {
-    console.error('缺少下列執行期相依，請安裝後重新執行 node scripts/setup.js：');
-    for (const m of missing) console.error(`  - ${m.name}: ${m.hint}`);
-    process.exit(1);
-  }
-  console.log('[OK] 執行期相依檢查通過');
 
   if (skipStart) {
     console.log('已略過啟動（--skip-start）。可自行執行 node app/server/index.js 或 ./start.ps1 / ./start.sh。');
@@ -67,9 +67,9 @@ async function main() {
   const url = `http://localhost:${process.env.PORT}/setup.html`;
   console.log(`啟動 AI Dev：${url}`);
   try {
-    if (process.platform === 'win32') execSync(`start "" "${url}"`, { shell: 'cmd.exe' });
-    else if (process.platform === 'darwin') execSync(`open "${url}"`);
-    else execSync(`xdg-open "${url}"`);
+    if (process.platform === 'win32') execFileSync('cmd', ['/c', 'start', '', url]);
+    else if (process.platform === 'darwin') execFileSync('open', [url]);
+    else execFileSync('xdg-open', [url]);
   } catch {
     // 開瀏覽器失敗不擋啟動，使用者可自行開網址
   }
