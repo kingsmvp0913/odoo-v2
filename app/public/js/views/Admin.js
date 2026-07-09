@@ -148,7 +148,7 @@ window.AdminView = Vue.defineComponent({
               </div>
             </div>
 
-            <div class="conn-group" style="margin-top:20px">
+            <div class="conn-group" style="margin-top:var(--space-5)">
               <div class="conn-group-label">eService</div>
               <div class="conn-fields">
                 <div class="field-item">
@@ -248,14 +248,14 @@ window.AdminView = Vue.defineComponent({
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
               <div style="position:relative;width:44px;height:24px;flex-shrink:0">
                 <input type="checkbox" v-model="testMode" style="opacity:0;width:0;height:0;position:absolute" @change="saveTestMode" :disabled="savingTestMode" />
-                <div :style="{background: testMode ? 'var(--primary)' : 'var(--border)', borderRadius:'12px', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{background: testMode ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
                 <div :style="{position:'absolute', top:'3px', left: testMode ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
               </div>
-              <span style="font-size:14px;color:var(--text)">{{ testMode ? '測試模式已啟用' : '測試模式已關閉' }}</span>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ testMode ? '測試模式已啟用' : '測試模式已關閉' }}</span>
             </label>
           </div>
           <div v-if="testMode" class="setting-block-footer warn">
-            <span style="font-size:12px;color:var(--warning)">測試模式已啟用 — 請至「任務列表」使用「▶ 推進 Pipeline」按鈕手動推進</span>
+            <span style="font-size:var(--fs-sm);color:var(--warning)">測試模式已啟用 — 請至「任務列表」使用「▶ 推進 Pipeline」按鈕手動推進</span>
           </div>
         </div>
 
@@ -269,10 +269,10 @@ window.AdminView = Vue.defineComponent({
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
               <div style="position:relative;width:44px;height:24px;flex-shrink:0">
                 <input type="checkbox" v-model="writebackOdooNotes" style="opacity:0;width:0;height:0;position:absolute" @change="saveWriteback" :disabled="savingWriteback" />
-                <div :style="{background: writebackOdooNotes ? 'var(--primary)' : 'var(--border)', borderRadius:'12px', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{background: writebackOdooNotes ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
                 <div :style="{position:'absolute', top:'3px', left: writebackOdooNotes ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
               </div>
-              <span style="font-size:14px;color:var(--text)">{{ writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉' }}</span>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉' }}</span>
             </label>
           </div>
         </div>

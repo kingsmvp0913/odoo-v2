@@ -412,6 +412,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .answer-box textarea { width: 100%; height: 80px; resize: vertical; }
 .answer-actions { display: flex; gap: 8px; margin-top: 8px; }
 
+/* 失敗原因卡片（兩段式：警示標頭＋處理表單），dark-aware 取代原本寫死淺紅色 */
+.blocker-card { border: 1px solid #fca5a5; border-radius: var(--radius); overflow: hidden; margin-bottom: var(--space-4); }
+.blocker-card-head { background: #fff5f5; padding: 10px var(--space-3); font-size: var(--fs-base); white-space: pre-wrap; color: #991b1b; }
+.blocker-card-head strong { color: #dc2626; }
+.blocker-card-body { background: var(--surface); padding: var(--space-3); border-top: 1px solid #fca5a5; }
+[data-theme="dark"] .blocker-card { border-color: rgba(239,68,68,0.35); }
+[data-theme="dark"] .blocker-card-head { background: rgba(239,68,68,0.14); color: #fca5a5; }
+[data-theme="dark"] .blocker-card-head strong { color: #fca5a5; }
+[data-theme="dark"] .blocker-card-body { border-top-color: rgba(239,68,68,0.35); }
+.blocker-card-body textarea { border-color: #fca5a5; }
+[data-theme="dark"] .blocker-card-body textarea { border-color: rgba(239,68,68,0.35); }
+
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
 .empty-state p { font-size: 14px; margin-top: 8px; }
 .loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }

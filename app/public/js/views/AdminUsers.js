@@ -59,7 +59,7 @@ window.AdminUsersView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:12px">← 返回</button>
+      <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
       <h1>使用者管理</h1>
     </div>
     <div class="content">
@@ -85,12 +85,12 @@ window.AdminUsersView = Vue.defineComponent({
       <div v-else style="max-width:900px">
 
         <!-- 搜尋 -->
-        <div style="margin-bottom:16px">
+        <div style="margin-bottom:var(--space-4)">
           <input v-model="search" placeholder="搜尋帳號或顯示名稱..." class="form-control" style="max-width:320px" />
         </div>
 
         <!-- 使用者列表 -->
-        <div class="settings-section" style="margin-bottom:20px">
+        <div class="settings-section" style="margin-bottom:var(--space-5)">
           <h2 class="section-title">使用者列表（{{ filteredUsers.length }}）</h2>
           <div class="table-wrap">
             <table class="data-table">
@@ -135,7 +135,7 @@ window.AdminUsersView = Vue.defineComponent({
         <!-- 新增使用者 -->
         <div class="settings-section">
           <h2 class="section-title">新增使用者</h2>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
             <div class="form-group" style="margin:0">
               <label>帳號</label>
               <input v-model="newUser.username" placeholder="username" class="form-control" />

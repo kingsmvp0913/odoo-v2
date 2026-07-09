@@ -68,7 +68,7 @@ window.AdminPipelinesView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:12px">← 返回</button>
+      <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
       <h1>進行中 Pipeline</h1>
     </div>
     <div class="content">

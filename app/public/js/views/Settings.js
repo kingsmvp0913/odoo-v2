@@ -150,18 +150,18 @@ window.SettingsView = Vue.defineComponent({
             <div class="setting-block-title">外觀與通知</div>
           </div>
           <div class="setting-block-body">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;margin-bottom:12px">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md);margin-bottom:var(--space-3)">
               <input type="checkbox" :checked="isDark" @change="toggleTheme" style="width:16px;height:16px;cursor:pointer" />
               <span>深色模式</span>
             </label>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px">
+            <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md)">
                 <input type="checkbox" :checked="notifyOn" @change="toggleNotify" style="width:16px;height:16px;cursor:pointer" />
                 <span>桌面通知（有任務需要你處理時提醒）</span>
               </label>
               <button v-if="notifyOn" class="btn btn-primary btn-sm" @click="testNotify" style="white-space:nowrap">🔔 測試通知</button>
             </div>
-            <div style="font-size:12px;color:var(--text-muted);margin-top:6px">開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</div>
+            <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</div>
           </div>
         </div>
 
@@ -174,7 +174,7 @@ window.SettingsView = Vue.defineComponent({
             <div class="conn-fields-wrap">
               <!-- 帳號欄 -->
               <div>
-                <div class="field-item" style="margin-bottom:12px">
+                <div class="field-item" style="margin-bottom:var(--space-3)">
                   <label class="field-label">帳號</label>
                   <input :value="me.username" disabled class="field-input" />
                 </div>
@@ -185,11 +185,11 @@ window.SettingsView = Vue.defineComponent({
               </div>
               <!-- 密碼欄 -->
               <div>
-                <div class="field-item" style="margin-bottom:12px">
+                <div class="field-item" style="margin-bottom:var(--space-3)">
                   <label class="field-label">目前密碼</label>
                   <input v-model="pw.current" type="password" placeholder="••••••••" class="field-input" />
                 </div>
-                <div class="field-item" style="margin-bottom:12px">
+                <div class="field-item" style="margin-bottom:var(--space-3)">
                   <label class="field-label">新密碼 <span class="field-label-hint">至少 8 個字元</span></label>
                   <input v-model="pw.next" type="password" placeholder="••••••••" class="field-input" :class="{ error: pw.next && pw.next.length < 8 }" />
                 </div>
@@ -226,7 +226,7 @@ window.SettingsView = Vue.defineComponent({
             </div>
             <div class="field-item" style="margin-top:10px;max-width:320px">
               <label class="field-label">使用者 ID <span class="field-label-hint">任務負責人篩選</span></label>
-              <div style="display:flex;gap:8px">
+              <div style="display:flex;gap:var(--space-2)">
                 <input v-model="creds.odoo_user_id" placeholder="點擊驗證自動取得" class="field-input" />
                 <button class="btn btn-outline btn-sm" @click="verifyOdoo" :disabled="verifyingOdoo" style="white-space:nowrap">
                   {{ verifyingOdoo ? '驗證中...' : '驗證取得' }}
@@ -258,7 +258,7 @@ window.SettingsView = Vue.defineComponent({
             </div>
             <div class="field-item" style="margin-top:10px;max-width:320px">
               <label class="field-label">使用者 ID <span class="field-label-hint">任務負責人篩選</span></label>
-              <div style="display:flex;gap:8px">
+              <div style="display:flex;gap:var(--space-2)">
                 <input v-model="creds.service_user_id" placeholder="點擊驗證自動取得" class="field-input" />
                 <button class="btn btn-outline btn-sm" @click="verifyService" :disabled="verifyingService" style="white-space:nowrap">
                   {{ verifyingService ? '驗證中...' : '驗證取得' }}

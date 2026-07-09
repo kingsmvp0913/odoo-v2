@@ -357,7 +357,7 @@ window.TaskListView = Vue.defineComponent({
     <div class="topbar">
       <h1>任務列表</h1>
       <button class="btn btn-primary btn-sm" @click="openAdd">＋ 新增任務</button>
-      <span v-if="testMode" class="pill pill-warn" style="font-size:12px;padding:2px 8px">🧪 測試模式</span>
+      <span v-if="testMode" class="pill pill-warn" style="font-size:var(--fs-sm);padding:2px 8px">🧪 測試模式</span>
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
       </button>
@@ -369,7 +369,7 @@ window.TaskListView = Vue.defineComponent({
       </button>
     </div>
     <div class="content">
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center">
         <button class="btn btn-sm" :class="filter==='needs_action' ? 'btn-primary' : 'btn-outline'" @click="filter='needs_action'">
           需回覆<span v-if="needsActionCount > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionCount }}</span>
         </button>
@@ -384,10 +384,10 @@ window.TaskListView = Vue.defineComponent({
         </button>
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
         <input v-model="search" placeholder="搜尋任務標題、來源..." class="form-control"
-          style="width:240px;font-size:13px;padding:5px 10px;height:32px" />
+          style="width:240px;font-size:var(--fs-base);padding:5px 10px;height:32px" />
       </div>
 
-      <div v-if="batchMode" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:13px">
+      <div v-if="batchMode" style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base)">
         <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" style="width:16px;height:16px;cursor:pointer">
         <span style="color:var(--text-muted)">{{ allSelected ? '取消全選' : '全選' }}（已選 {{ selectedIds.length }} / {{ filteredTasks.length }} 筆）</span>
       </div>
@@ -413,7 +413,7 @@ window.TaskListView = Vue.defineComponent({
           :class="{ 'needs-action': needsAction(t) && !isStopped(t) && !t.is_paused && !batchMode, 'stopped': isStopped(t), 'paused': t.is_paused, 'processing': isProcessing(t) && !t.is_paused, 'batch-selected': batchMode && selectedIds.includes(t.id) }"
           @click="batchMode ? toggleSelect(t.id, $event) : openTask(t)">
           <div class="task-header">
-            <div class="task-title" style="display:flex;align-items:center;gap:8px">
+            <div class="task-title" style="display:flex;align-items:center;gap:var(--space-2)">
               <input v-if="batchMode" type="checkbox" :checked="selectedIds.includes(t.id)"
                 @click.stop="toggleSelect(t.id, $event)"
                 style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
@@ -423,25 +423,25 @@ window.TaskListView = Vue.defineComponent({
             </div>
             <div v-if="!batchMode" style="display:flex;align-items:center;gap:6px">
               <button v-if="!isStopped(t) && t.status !== 'done'" class="btn btn-ghost btn-sm"
-                :style="{ color: t.is_paused ? 'var(--warning)' : 'var(--text-muted)', fontSize: '12px', padding: '2px 8px' }"
+                :style="{ color: t.is_paused ? 'var(--warning)' : 'var(--text-muted)', fontSize: 'var(--fs-sm)', padding: '2px 8px' }"
                 @click="togglePause(t, $event)"
                 :title="t.is_paused ? '點擊恢復' : '點擊暫停'">
                 {{ t.is_paused ? '▐▐ 已暫停' : '⏸ 暫停' }}
               </button>
               <template v-if="isAdmin && filter !== 'archived'">
                 <button class="btn btn-ghost btn-sm"
-                  style="color:var(--text-muted);font-size:12px;padding:2px 8px"
+                  style="color:var(--text-muted);font-size:var(--fs-sm);padding:2px 8px"
                   @click="archiveTask(t, $event)" title="封存任務">⊞ 封存</button>
                 <button v-if="!t.approved_at" class="btn btn-ghost btn-sm"
-                  style="color:var(--danger);font-size:12px;padding:2px 8px"
+                  style="color:var(--danger);font-size:var(--fs-sm);padding:2px 8px"
                   @click="deleteTask(t, $event)" title="永久刪除（可重新同步匯入）">✕ 刪除</button>
               </template>
               <template v-if="isAdmin && filter === 'archived'">
                 <button class="btn btn-ghost btn-sm"
-                  style="color:var(--success);font-size:12px;padding:2px 8px"
+                  style="color:var(--success);font-size:var(--fs-sm);padding:2px 8px"
                   @click="unarchiveTask(t, $event)" title="解除封存，回到主列表">↩ 解封存</button>
                 <button v-if="!t.approved_at" class="btn btn-ghost btn-sm"
-                  style="color:var(--danger);font-size:12px;padding:2px 8px"
+                  style="color:var(--danger);font-size:var(--fs-sm);padding:2px 8px"
                   @click="deleteTask(t, $event)" title="永久刪除（可重新同步匯入）">✕ 刪除</button>
               </template>
               <div class="task-meta">{{ timeAgo(t.updated_at || t.created_at) }}</div>
@@ -464,7 +464,7 @@ window.TaskListView = Vue.defineComponent({
               <span class="status-badge" :class="t.status">{{ statusLabel(t.status) }}</span>
               <span v-if="t.is_paused" class="pill pill-warn">暫停中</span>
             </div>
-            <span v-if="t.module" style="font-size:11px;color:var(--text-muted)">{{ t.module }}</span>
+            <span v-if="t.module" style="font-size:var(--fs-xs);color:var(--text-muted)">{{ t.module }}</span>
           </div>
           <StatusBar :status="t.status" :source="t.source" />
         </div>
@@ -472,19 +472,19 @@ window.TaskListView = Vue.defineComponent({
 
       <!-- Batch action bar -->
       <div v-if="batchMode && selectedIds.length > 0"
-        style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:#1e293b;color:#fff;border-radius:12px;padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:200;font-size:13px;white-space:nowrap">
-        <span style="margin-right:4px;font-weight:600">{{ selectedIds.length }} 筆已選</span>
-        <button class="btn btn-sm" style="background:#f59e0b;color:#fff;border:none"
+        style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:var(--space-2);background:#1e293b;color:#fff;border-radius:var(--radius-lg);padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:200;font-size:var(--fs-base);white-space:nowrap">
+        <span style="margin-right:var(--space-1);font-weight:var(--fw-semibold)">{{ selectedIds.length }} 筆已選</span>
+        <button class="btn btn-sm" style="background:var(--warning);color:#fff;border:none"
           @click="batchPause" :disabled="batchWorking">⏸ 暫停</button>
         <template v-if="filter !== 'archived'">
           <button class="btn btn-sm" style="background:#64748b;color:#fff;border:none"
             @click="batchArchive" :disabled="batchWorking">⊞ 封存</button>
         </template>
         <template v-else>
-          <button class="btn btn-sm" style="background:#10b981;color:#fff;border:none"
+          <button class="btn btn-sm" style="background:var(--success);color:#fff;border:none"
             @click="batchUnarchive" :disabled="batchWorking">↩ 解封存</button>
         </template>
-        <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none"
+        <button class="btn btn-sm" style="background:var(--danger);color:#fff;border:none"
           @click="batchDelete" :disabled="batchWorking">✕ 刪除</button>
       </div>
     </div>
@@ -493,23 +493,23 @@ window.TaskListView = Vue.defineComponent({
     <div v-if="showAdd" @click.self="showAdd=false"
       style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px;width:640px;max-width:94vw;max-height:90vh;overflow:auto;box-shadow:0 12px 48px rgba(0,0,0,0.4)">
-        <h2 style="margin:0 0 20px;font-size:18px">新增任務</h2>
+        <h2 style="margin:0 0 20px;font-size:var(--fs-xl)">新增任務</h2>
 
-        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">專案 <span style="color:#ef4444">*</span></label>
-        <select v-model="newTask.project_id" class="form-control" style="width:100%;height:36px;font-size:14px;margin-bottom:18px">
+        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">專案 <span style="color:var(--danger)">*</span></label>
+        <select v-model="newTask.project_id" class="form-control" style="width:100%;height:36px;font-size:var(--fs-md);margin-bottom:18px">
           <option value="" disabled>請選擇專案</option>
           <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
 
-        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">標題 <span style="color:#ef4444">*</span></label>
+        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">標題 <span style="color:var(--danger)">*</span></label>
         <input v-model="newTask.title" class="form-control" placeholder="任務標題"
-          style="width:100%;height:36px;font-size:14px;margin-bottom:18px" @keyup.enter="submitAdd" />
+          style="width:100%;height:36px;font-size:var(--fs-md);margin-bottom:18px" @keyup.enter="submitAdd" />
 
-        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">內容 <span style="color:#ef4444">*</span></label>
+        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">內容 <span style="color:var(--danger)">*</span></label>
         <textarea v-model="newTask.original_text" class="form-control" placeholder="需求描述（給分診/分析 Agent 參考）"
-          style="width:100%;min-height:180px;font-size:14px;line-height:1.6;resize:vertical;margin-bottom:20px"></textarea>
+          style="width:100%;min-height:180px;font-size:var(--fs-md);line-height:1.6;resize:vertical;margin-bottom:20px"></textarea>
 
-        <div style="display:flex;justify-content:flex-end;gap:8px">
+        <div style="display:flex;justify-content:flex-end;gap:var(--space-2)">
           <button class="btn btn-outline btn-sm" @click="showAdd=false" :disabled="adding">取消</button>
           <button class="btn btn-primary btn-sm" @click="submitAdd" :disabled="adding">
             {{ adding ? '新增中...' : '新增' }}

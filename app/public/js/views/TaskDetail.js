@@ -286,10 +286,10 @@ window.TaskDetailView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="back" style="margin-right:12px">← 返回</button>
+      <button class="btn btn-outline btn-sm" @click="back" style="margin-right:var(--space-3)">← 返回</button>
       <h1>任務詳情</h1>
-      <span v-if="testMode" class="pill pill-warn" style="font-size:12px;padding:2px 8px">🧪 測試模式</span>
-      <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping" style="margin-left:8px">
+      <span v-if="testMode" class="pill pill-warn" style="font-size:var(--fs-sm);padding:2px 8px">🧪 測試模式</span>
+      <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping" style="margin-left:var(--space-2)">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
       </button>
     </div>
@@ -302,24 +302,24 @@ window.TaskDetailView = Vue.defineComponent({
           <div class="detail-meta">
             <span class="status-badge" :class="task.status">{{ statusLabel }}</span>
             <span v-if="serverConfirmedRunning" class="pill pill-info"
-              style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;font-weight:600">
+              style="display:inline-flex;align-items:center;gap:var(--space-1);padding:2px 8px;font-weight:var(--fw-semibold)">
               <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulseDot 1.4s ease-in-out infinite"></span>伺服器確認處理中
             </span>
             <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank"
-               style="color:var(--primary);text-decoration:none;font-weight:500">{{ sourceLabel() }}</a>
+               style="color:var(--primary);text-decoration:none;font-weight:var(--fw-medium)">{{ sourceLabel() }}</a>
             <span v-else>{{ sourceLabel() }}</span>
             <span v-if="task.module">模組：{{ task.module }}</span>
-            <span style="color:var(--text-muted);font-size:11px">最後更新：{{ formatTime(task.updated_at) }}</span>
+            <span style="color:var(--text-muted);font-size:var(--fs-xs)">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
 
-          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px">
+          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-4) 0 var(--space-2)">
             <span>需求內容</span>
             <button v-if="canEditContent && !editingContent" class="btn btn-outline btn-sm" @click="startEditContent">✎ 編輯</button>
           </div>
-          <div v-if="!editingContent" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 14px;font-size:13px;white-space:pre-wrap;margin-bottom:16px">{{ task.original_text || '（無內容）' }}</div>
-          <div v-else style="margin-bottom:16px">
-            <textarea v-model="editText" style="width:100%;height:140px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;line-height:1.6;resize:vertical;box-sizing:border-box"></textarea>
-            <div style="margin-top:8px;display:flex;gap:8px">
+          <div v-if="!editingContent" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-4)">{{ task.original_text || '（無內容）' }}</div>
+          <div v-else style="margin-bottom:var(--space-4)">
+            <textarea v-model="editText" style="width:100%;height:140px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);line-height:1.6;resize:vertical;box-sizing:border-box"></textarea>
+            <div style="margin-top:var(--space-2);display:flex;gap:var(--space-2)">
               <button class="btn btn-primary btn-sm" @click="saveContent" :disabled="savingContent || !editText.trim()">
                 {{ savingContent ? '儲存中...' : '儲存' }}
               </button>
@@ -327,37 +327,36 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
 
-          <div class="form-section" style="margin:16px 0 8px">外部溝通紀錄</div>
-          <div style="border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:16px">
-            <div v-if="!taskMessages.length" style="color:var(--text-muted);font-size:13px">尚無溝通紀錄</div>
-            <div v-for="m in taskMessages" :key="m.id" style="padding:8px 0;border-bottom:1px solid var(--border)">
-              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">
+          <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">外部溝通紀錄</div>
+          <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:var(--space-4)">
+            <div v-if="!taskMessages.length" style="color:var(--text-muted);font-size:var(--fs-base)">尚無溝通紀錄</div>
+            <div v-for="m in taskMessages" :key="m.id" style="padding:var(--space-2) 0;border-bottom:1px solid var(--border)">
+              <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-1)">
                 {{ m.source === 'manual' ? (m.author || '你') : '（同步）' }} · {{ formatTime(m.occurred_at) }}
                 <span v-if="m.source === 'manual' && m.synced_to_odoo" style="color:var(--success)">已回寫</span>
               </div>
-              <div style="font-size:13px;white-space:pre-wrap">{{ m.content }}</div>
+              <div style="font-size:var(--fs-base);white-space:pre-wrap">{{ m.content }}</div>
             </div>
-            <div style="margin-top:12px">
+            <div style="margin-top:var(--space-3)">
               <textarea v-model="newMessageText" placeholder="新增留言..."
-                style="width:100%;height:60px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box"></textarea>
+                style="width:100%;height:60px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:vertical;box-sizing:border-box"></textarea>
               <button class="btn btn-primary btn-sm" style="margin-top:6px" @click="sendTaskMessage" :disabled="sendingMessage || !newMessageText.trim()">
                 {{ sendingMessage ? '送出中...' : '送出留言' }}
               </button>
             </div>
           </div>
 
-          <div v-if="task.blocker_content || task.status === 'stopped'"
-            style="border:1px solid #fc8181;border-radius:8px;overflow:hidden;margin-bottom:16px">
-            <div style="background:#fff5f5;padding:10px 14px;font-size:13px;white-space:pre-wrap;color:#742a2a">
-              <strong style="color:#c53030">⚠ 失敗原因：</strong><br>{{ task.blocker_content || '任務分診失敗或執行中斷' }}
+          <div v-if="task.blocker_content || task.status === 'stopped'" class="blocker-card">
+            <div class="blocker-card-head">
+              <strong>⚠ 失敗原因：</strong><br>{{ task.blocker_content || '任務分診失敗或執行中斷' }}
             </div>
-            <div style="background:#fff;padding:12px 14px;border-top:1px solid #fed7d7">
-              <div style="font-size:12px;font-weight:600;color:#744210;margin-bottom:8px">處理失敗 — 說明你的修正方向，任務將回到失敗的那一關重試</div>
+            <div class="blocker-card-body">
+              <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">處理失敗 — 說明你的修正方向，任務將回到失敗的那一關重試</div>
               <textarea v-model="resolution"
                 placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續..."
-                style="width:100%;height:80px;padding:8px;border:1px solid #fc8181;border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box">
+                style="width:100%;height:80px;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:vertical;box-sizing:border-box">
               </textarea>
-              <div style="margin-top:8px">
+              <div style="margin-top:var(--space-2)">
                 <button class="btn btn-primary btn-sm" @click="resolveBlocker" :disabled="resolving || !resolution.trim()">
                   {{ resolving ? '處理中...' : '↺ 送出並從中斷處繼續' }}
                 </button>
@@ -373,11 +372,11 @@ window.TaskDetailView = Vue.defineComponent({
               </div>
             </div>
           </div>
-          <div v-else style="color:var(--text-muted);font-size:13px;margin:16px 0">尚無對話記錄</div>
+          <div v-else style="color:var(--text-muted);font-size:var(--fs-base);margin:var(--space-4) 0">尚無對話記錄</div>
 
           <div v-if="canAnswer" class="answer-box">
             <div class="form-section">回覆 AI 問題</div>
-            <textarea v-model="answer" placeholder="輸入你的回覆..." style="width:100%;height:80px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;resize:vertical"></textarea>
+            <textarea v-model="answer" placeholder="輸入你的回覆..." style="width:100%;height:80px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-md);resize:vertical"></textarea>
             <div class="answer-actions">
               <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !answer.trim()">
                 {{ submitting ? '送出中...' : '送出回覆' }}
@@ -385,9 +384,9 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
 
-          <div v-if="task.status === 'merge_conflict'" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div v-if="task.status === 'merge_conflict'" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
             <div class="form-section">合併衝突 — 需人工解決</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
               自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。
             </p>
             <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
@@ -395,74 +394,74 @@ window.TaskDetailView = Vue.defineComponent({
             </button>
           </div>
 
-          <div v-if="canApprove" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div v-if="canApprove" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
             <div class="form-section">最終人工審核</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
               已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
             </p>
             <button class="btn btn-primary" @click="approve" :disabled="approving || rejecting">
               {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
             </button>
-            <button class="btn btn-outline" style="margin-left:8px" @click="showReject = !showReject" :disabled="approving || rejecting">↩ 退回開發</button>
-            <div v-if="showReject" style="margin-top:12px">
+            <button class="btn btn-outline" style="margin-left:var(--space-2)" @click="showReject = !showReject" :disabled="approving || rejecting">↩ 退回開發</button>
+            <div v-if="showReject" style="margin-top:var(--space-3)">
               <textarea v-model="rejectReason" class="form-control" rows="4"
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
-              <button class="btn btn-primary btn-sm" style="margin-top:8px" @click="reject" :disabled="rejecting || !rejectReason.trim()">
+              <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="reject" :disabled="rejecting || !rejectReason.trim()">
                 {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
               </button>
             </div>
           </div>
 
-          <div v-if="canArchive" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div v-if="canArchive" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
             <div class="form-section">任務已完成</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">此任務已完成並更新文件。可手動封存，或滿一個月後自動封存。</p>
+            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">此任務已完成並更新文件。可手動封存，或滿一個月後自動封存。</p>
             <button class="btn btn-outline" @click="archive" :disabled="archiving">
               {{ archiving ? '封存中...' : '🗄 封存任務' }}
             </button>
           </div>
 
-          <div v-if="task.status === 'cs_reply_pending'" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div v-if="task.status === 'cs_reply_pending'" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
             <div class="form-section">客服回覆草稿</div>
-            <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 14px;font-size:13px;white-space:pre-wrap;margin-bottom:12px">{{ task.cs_reply }}</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">AI 已生成操作問題的回覆草稿，請確認內容後送出。</p>
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
+            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，請確認內容後送出。</p>
             <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
               {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
             </button>
           </div>
 
-          <div v-if="task.status === 'cs_data_needed'" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div v-if="task.status === 'cs_data_needed'" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
             <div class="form-section">需補充資料</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px">請填寫以下所有問題後送出，AI 將重新分析。</p>
+            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:14px">請填寫以下所有問題後送出，AI 將重新分析。</p>
             <div v-for="(q, idx) in csQuestions" :key="idx" style="margin-bottom:14px">
-              <div style="font-size:13px;font-weight:600;margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
-                <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
+              <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
                 <span>{{ q }}</span>
               </div>
               <textarea v-model="csAnswers[q]"
                 :ref="'csInput_' + idx"
                 :placeholder="'請填寫第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === csQuestions.length - 1 ? '／送出' : '') + '）'"
-                style="width:100%;height:72px;padding:8px;border:1px solid;border-color:csAnswers[q] && csAnswers[q].trim() ? 'var(--border)' : '#fc8181';border-radius:6px;font-size:13px;resize:vertical"
-                :style="{ borderColor: csAnswers[q] && csAnswers[q].trim() ? 'var(--border)' : '#fc8181' }"
+                style="width:100%;height:72px;padding:var(--space-2);border:1px solid;border-radius:var(--radius-sm);font-size:var(--fs-base);resize:vertical"
+                :style="{ borderColor: csAnswers[q] && csAnswers[q].trim() ? 'var(--border)' : 'var(--danger)' }"
                 @keydown.enter.prevent="handleCsEnter(idx)">
               </textarea>
             </div>
-            <div v-if="!csAllAnswered" style="font-size:12px;color:var(--danger);margin-bottom:10px">⚠ 請填寫所有問題才能送出</div>
+            <div v-if="!csAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請填寫所有問題才能送出</div>
             <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
               {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
             </button>
           </div>
         </div>
 
-        <div class="detail-card" style="margin-top:16px">
-          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="detail-card" style="margin-top:var(--space-4)">
+          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2)">
             <span>即時歷程記錄</span>
-            <span v-if="eventsLoading" style="font-size:11px;color:var(--text-muted)">載入中…</span>
+            <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
           </div>
           <div ref="eventsBox" @scroll="onEventsScroll"
-            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:6px;white-space:pre-wrap;word-break:break-word">
+            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:var(--fs-sm);line-height:1.5;padding:10px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word">
             <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
             <template v-else>
-              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:11px;margin-bottom:6px">— 已到最前 —</div>
+              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:var(--fs-xs);margin-bottom:6px">— 已到最前 —</div>
               <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)">{{ stripAnsi(ev.content) }}</span>
             </template>
           </div>

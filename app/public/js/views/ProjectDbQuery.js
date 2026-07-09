@@ -77,7 +77,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+pid())" style="margin-right:12px">← 返回專案</button>
+      <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+pid())" style="margin-right:var(--space-3)">← 返回專案</button>
       <h1>資料庫查詢</h1>
     </div>
     <div class="content" v-if="loading">
@@ -100,7 +100,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       </div>
     </div>
     <div class="content" v-else>
-      <div class="settings-section" style="margin-bottom:20px">
+      <div class="settings-section" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">連線管理（{{ conns.length }}）</h2>
         <div class="table-wrap">
           <table class="data-table">
@@ -112,7 +112,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
                 <td style="font-weight:var(--fw-semibold)">{{ c.name }}</td>
                 <td>{{ c.connect_mode === 'direct' ? (c.db_user + '@' + c.db_host + ':' + c.db_port) : (c.ssh_user + '@' + c.ssh_host + ':' + c.ssh_port) }}</td>
                 <td>{{ c.connect_mode }}</td>
-                <td>{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
+                <td>{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
                 <td><div style="display:flex;gap:6px">
                   <button class="btn btn-outline btn-sm" @click="editConn(c)">編輯</button>
                   <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteConn(c)">刪除</button>
@@ -124,9 +124,9 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
       </div>
 
-      <div class="settings-section" style="margin-bottom:20px">
+      <div class="settings-section" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">{{ form.id ? '編輯連線' : '新增連線' }}</h2>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
           <div class="form-group" style="margin:0"><label>連線名稱</label><input v-model="form.name" class="form-control" placeholder="hj-鴻久-正式" /></div>
           <div class="form-group" style="margin:0"><label>連線模式</label><select v-model="form.connect_mode" class="form-control"><option value="docker">docker（SSH→容器）</option><option value="local">local（SSH→本機）</option><option value="direct">direct（直連 TCP）</option></select></div>
           <template v-if="form.connect_mode!=='direct'">
@@ -135,7 +135,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
             <div class="form-group" style="margin:0"><label>SSH 使用者</label><input v-model="form.ssh_user" class="form-control" placeholder="root" /></div>
             <div class="form-group" style="margin:0"><label>認證方式</label><select v-model="form.auth_type" class="form-control"><option value="password">密碼</option><option value="key">金鑰</option></select></div>
             <div class="form-group" style="margin:0" v-if="form.auth_type==='password'"><label>SSH 密碼（留空＝不變）</label><input v-model="form.ssh_password" type="password" class="form-control" placeholder="••••••" /></div>
-            <div class="form-group" style="margin:0" v-else><label>SSH 金鑰內容（PEM）</label><textarea v-model="form.ssh_key_content" class="form-control" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----" style="font-family:monospace;font-size:11px"></textarea></div>
+            <div class="form-group" style="margin:0" v-else><label>SSH 金鑰內容（PEM）</label><textarea v-model="form.ssh_key_content" class="form-control" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----" style="font-family:monospace;font-size:var(--fs-xs)"></textarea></div>
             <div class="form-group" style="margin:0" v-if="form.connect_mode==='docker'"><label>Docker 容器</label><input v-model="form.docker_container" class="form-control" /></div>
             <div class="form-group" style="margin:0" v-if="form.connect_mode==='docker'"><label>DB 使用者</label><input v-model="form.db_user" class="form-control" /></div>
             <div class="form-group" style="margin:0" v-if="form.connect_mode==='local'"><label>sudo 使用者</label><input v-model="form.sudo_user" class="form-control" /></div>
@@ -150,11 +150,11 @@ window.ProjectDbQueryView = Vue.defineComponent({
           </template>
           <div class="form-group" style="margin:0"><label>資料庫名稱</label><input v-model="form.db_name" class="form-control" /></div>
         </div>
-        <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <div style="margin-bottom:var(--space-3);display:flex;align-items:center;gap:var(--space-2)">
           <input v-model="form.vpn_enabled" type="checkbox" id="vpnEnabled" style="width:auto" />
           <label for="vpnEnabled" style="margin:0">此連線需要 VPN</label>
         </div>
-        <div v-if="form.vpn_enabled" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;padding:12px;border:1px solid var(--border);border-radius:6px">
+        <div v-if="form.vpn_enabled" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3);padding:var(--space-3);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <div class="form-group" style="margin:0">
             <label>VPN 設定檔（.ovpn）{{ form.vpn_config_name ? '－已選擇：' + form.vpn_config_name : (form.id ? '（留空＝不變）' : '') }}</label>
             <input type="file" accept=".ovpn,.conf" class="form-control" @change="onVpnFileChange" />
@@ -171,7 +171,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
 
       <div class="settings-section">
         <h2 class="section-title">查詢（只允許 SELECT）</h2>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <div style="display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2)">
           <select v-model="selectedId" class="form-control" style="max-width:280px">
             <option value="">選擇連線...</option>
             <option v-for="c in conns" :key="c.id" :value="c.id">{{ c.name }}</option>
@@ -181,7 +181,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         <textarea v-model="sql" class="form-control" rows="4" placeholder="SELECT id, login FROM res_users LIMIT 20" style="font-family:monospace"></textarea>
         <div v-if="error" class="error-msg" style="margin-top:10px;white-space:pre-wrap">{{ error }}</div>
         <div v-if="result" style="margin-top:10px">
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">{{ result.row_count }} 筆</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-1)">{{ result.row_count }} 筆</div>
           <div class="table-wrap">
           <table class="data-table">
             <thead><tr>

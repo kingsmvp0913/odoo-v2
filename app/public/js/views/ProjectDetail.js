@@ -177,29 +177,29 @@ window.ProjectDetailView = Vue.defineComponent({
     <div v-if="loading" class="loading">載入中...</div>
     <template v-else-if="project">
       <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:12px">← 返回</button>
+        <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:var(--space-3)">← 返回</button>
         <h1>{{ project.name }}</h1>
-        <span style="font-size:13px;color:var(--text-muted);margin-left:12px">Odoo {{ project.odoo_version }}</span>
-        <div style="display:flex;gap:6px;margin-left:16px">
+        <span style="font-size:var(--fs-base);color:var(--text-muted);margin-left:var(--space-3)">Odoo {{ project.odoo_version }}</span>
+        <div style="display:flex;gap:6px;margin-left:var(--space-4)">
           <button class="btn btn-outline btn-sm" style="background:var(--primary);color:#fff">設定</button>
           <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
           <button class="btn btn-outline btn-sm" @click="goWiki">📖 Wiki</button>
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
-            <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unreadCount() }}</span>
+            <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unreadCount() }}</span>
           </button>
         </div>
       </div>
       <div class="content">
-        <div v-if="project.description" style="color:var(--text-muted);font-size:13px;margin-bottom:16px">{{ project.description }}</div>
+        <div v-if="project.description" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">{{ project.description }}</div>
 
         <div class="form-section">Git Repositories</div>
-        <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:13px;margin-bottom:16px">尚未綁定任何 repo</div>
-        <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:8px">
+        <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">尚未綁定任何 repo</div>
+        <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-2)">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div style="flex:1;min-width:0">
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                <span style="font-weight:600">{{ r.label }}</span>
-                <span v-if="r.is_primary" style="font-size:11px;background:var(--primary);color:#fff;border-radius:4px;padding:1px 6px">主要</span>
+                <span style="font-weight:var(--fw-semibold)">{{ r.label }}</span>
+                <span v-if="r.is_primary" style="font-size:var(--fs-xs);background:var(--primary);color:#fff;border-radius:4px;padding:1px 6px">主要</span>
                 <span v-if="r.clone_status === 'cloning'" class="pill pill-info">⟳ Clone 中...</span>
                 <span v-else-if="r.clone_status === 'done'" class="pill pill-success">✓ 已同步</span>
                 <span v-else-if="r.clone_status === 'error'" class="pill pill-danger">✕ Clone 失敗</span>
@@ -207,11 +207,11 @@ window.ProjectDetailView = Vue.defineComponent({
                 <span v-else-if="r.graphify_status === 'done'" class="pill pill-success">✓ 已索引</span>
                 <span v-else-if="r.graphify_status === 'error'" class="pill pill-danger" :title="r.graphify_error">✕ 索引失敗</span>
               </div>
-              <div style="font-size:12px;color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
-              <div v-if="r.local_path" style="font-size:12px;color:var(--text-muted)">路徑：{{ r.local_path }}</div>
-              <div v-if="r.clone_error" style="font-size:11px;color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
+              <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
+              <div v-if="r.local_path" style="font-size:var(--fs-sm);color:var(--text-muted)">路徑：{{ r.local_path }}</div>
+              <div v-if="r.clone_error" style="font-size:var(--fs-xs);color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
             </div>
-            <div style="display:flex;gap:6px;margin-left:12px;flex-shrink:0">
+            <div style="display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0">
               <button v-if="r.clone_status === 'error'" class="btn btn-outline btn-sm" @click="reclone(r.id)" title="重新 clone">↺</button>
               <button v-if="r.clone_status === 'done'" class="btn btn-outline btn-sm" @click="updateRepo(r.id)" title="git pull 拉最新程式碼">↻ 更新</button>
               <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="removeRepo(r.id)"
@@ -221,23 +221,23 @@ window.ProjectDetailView = Vue.defineComponent({
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--space-3)">
           <input v-model="newRepo.label" placeholder="標籤（如 main、plugin-hr）" class="form-control" />
           <input v-model="newRepo.repo_url" placeholder="Git URL（自動 clone）" class="form-control" />
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
             <input type="checkbox" v-model="newRepo.is_primary" /> 設為主要 repo
           </label>
         </div>
-        <button class="btn btn-primary btn-sm" style="margin-top:8px" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
+        <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
 
-        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+        <div style="margin-top:var(--space-5);padding-top:var(--space-4);border-top:1px solid var(--border)">
           <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
         </div>
 
-        <div style="margin-top:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px">
-          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px">同步來源對應</h3>
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">一行一個名稱，可綁定多個來源。</div>
-          <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+        <div style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">同步來源對應</h3>
+          <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">一行一個名稱，可綁定多個來源。</div>
+          <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
             <label>Odoo 專案名稱（同步時自動綁定）
               <textarea v-model="editOdooProjectName" class="form-control" rows="3" placeholder="與 Odoo ERP 的專案名稱完全一致，一行一個" style="margin-top:4px"></textarea>
             </label>
@@ -248,22 +248,22 @@ window.ProjectDetailView = Vue.defineComponent({
           </div>
         </div>
 
-        <div v-if="env" style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
+        <div v-if="env" style="margin-top:var(--space-6);padding-top:var(--space-4);border-top:1px solid var(--border)">
           <div class="form-section">Odoo 測試環境</div>
-          <div style="font-size:13px;margin-bottom:10px;display:flex;align-items:center;gap:8px">
+          <div style="font-size:var(--fs-base);margin-bottom:10px;display:flex;align-items:center;gap:var(--space-2)">
             <span>狀態：</span>
             <span :style="{ color: env.status === 'running' ? 'var(--success,#48bb78)' : env.status === 'error' ? 'var(--error)' : 'var(--text-muted)' }">
               {{ { idle:'● 閒置', setting_up:'⟳ 建立中（自動重新整理）', running:'● 運行中', error:'✕ 錯誤' }[env.status] || env.status }}
             </span>
-            <a v-if="env.url" :href="env.url" target="_blank" style="font-size:12px">{{ env.url }}</a>
-            <span v-if="env.port && env.status === 'running'" style="font-size:12px;color:var(--text-muted)">port {{ env.port }}</span>
+            <a v-if="env.url" :href="env.url" target="_blank" style="font-size:var(--fs-sm)">{{ env.url }}</a>
+            <span v-if="env.port && env.status === 'running'" style="font-size:var(--fs-sm);color:var(--text-muted)">port {{ env.port }}</span>
           </div>
           <div v-if="env.error_msg" class="error-msg" style="margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
           <details v-if="env.setup_log" style="margin-bottom:10px">
-            <summary style="font-size:12px;color:var(--text-muted);cursor:pointer;user-select:none">▶ 查看建立記錄</summary>
-            <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:11px;overflow-x:auto;margin-top:6px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{{ env.setup_log }}</pre>
+            <summary style="font-size:var(--fs-sm);color:var(--text-muted);cursor:pointer;user-select:none">▶ 查看建立記錄</summary>
+            <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:var(--fs-xs);overflow-x:auto;margin-top:6px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{{ env.setup_log }}</pre>
           </details>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
             <template v-if="env.status === 'idle' || env.status === 'error'">
               <button class="btn btn-primary btn-sm" @click="setupEnv" :disabled="envWorking">
                 <span v-if="envWorking" class="spinner"></span>{{ envWorking ? '處理中…' : (env.built ? '重新啟動' : '一鍵建立環境') }}
@@ -280,12 +280,12 @@ window.ProjectDetailView = Vue.defineComponent({
             <button v-if="env.status !== 'idle' || env.built" class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteEnv" :disabled="envWorking">刪除環境</button>
             <button class="btn btn-outline btn-sm" @click="loadEnv" :disabled="envWorking">↺ 重新整理</button>
           </div>
-          <div v-if="env.status === 'setting_up'" style="font-size:11px;color:var(--text-muted);margin-top:8px">
+          <div v-if="env.status === 'setting_up'" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:var(--space-2)">
             系統自動分配可用 port，每 5 秒自動更新狀態
           </div>
         </div>
       </div>
     </template>
-    <div v-else style="padding:24px;color:var(--text-muted)">專案不存在</div>
+    <div v-else style="padding:var(--space-6);color:var(--text-muted)">專案不存在</div>
   `
 });

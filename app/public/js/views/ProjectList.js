@@ -74,9 +74,9 @@ window.ProjectListView = Vue.defineComponent({
       </button>
     </div>
     <div class="content">
-      <div v-if="showAddForm" class="settings-section" style="margin-bottom:20px">
+      <div v-if="showAddForm" class="settings-section" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">新增專案</h2>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
           <div class="form-group" style="margin:0">
             <label>專案名稱</label>
             <input v-model="newProject.name" placeholder="例：my-odoo" class="form-control" />
@@ -86,7 +86,7 @@ window.ProjectListView = Vue.defineComponent({
             <input v-model="newProject.odoo_version" placeholder="例：17.0" class="form-control" />
           </div>
           <div class="form-group" style="margin:0">
-            <label>英文資料夾名稱 <span style="font-size:11px;color:var(--text-muted)">中文名稱必填此欄</span></label>
+            <label>英文資料夾名稱 <span style="font-size:var(--fs-xs);color:var(--text-muted)">中文名稱必填此欄</span></label>
             <input v-model="newProject.folder_name" placeholder="例：hong-jiu（留空則用專案名稱）" class="form-control" />
           </div>
           <div class="form-group" style="margin:0;grid-column:span 2">
@@ -94,13 +94,13 @@ window.ProjectListView = Vue.defineComponent({
             <input v-model="newProject.description" placeholder="專案描述..." class="form-control" />
           </div>
         </div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:var(--space-2)">
           <button class="btn btn-primary btn-sm" @click="add" :disabled="saving">{{ saving ? '建立中...' : '建立專案' }}</button>
           <button class="btn btn-outline btn-sm" @click="showAddForm = false">取消</button>
         </div>
       </div>
 
-      <div style="margin-bottom:16px">
+      <div style="margin-bottom:var(--space-4)">
         <input v-model="search" placeholder="搜尋專案名稱或版本..." class="form-control" style="max-width:320px" />
       </div>
 
@@ -117,19 +117,19 @@ window.ProjectListView = Vue.defineComponent({
         </div>
       </div>
       <div v-else>
-        <div v-if="filteredProjects.length === 0" style="color:var(--text-muted);padding:16px 0">
+        <div v-if="filteredProjects.length === 0" style="color:var(--text-muted);padding:var(--space-4) 0">
           {{ search ? '沒有符合的專案' : '尚無專案，點擊「新增專案」開始建立' }}
         </div>
         <div v-for="p in filteredProjects" :key="p.id" class="project-card" @click="go(p.id)">
           <div style="flex:1;min-width:0">
             <div class="project-card-name">{{ p.name }}</div>
-            <div v-if="p.folder_name" style="font-size:12px;color:var(--text-muted);margin-top:2px">資料夾：{{ p.folder_name }}</div>
-            <div style="font-size:13px;color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
-            <div v-if="p.description" style="font-size:12px;color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
+            <div v-if="p.folder_name" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">資料夾：{{ p.folder_name }}</div>
+            <div style="font-size:var(--fs-base);color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
+            <div v-if="p.description" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
             <div style="margin-top:10px;display:flex;gap:6px" @click.stop>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
               <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
-                <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:4px;border-radius:8px;background:var(--error,#e5484d);color:#fff;font-size:11px;line-height:16px;text-align:center">{{ unread(p.id) }}</span>
+                <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unread(p.id) }}</span>
               </button>
             </div>
           </div>

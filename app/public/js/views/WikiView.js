@@ -4,18 +4,18 @@ window.WikiNode = Vue.defineComponent({
   emits: ['open', 'refresh', 'remove'],
   template: `
     <div>
-      <div style="display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:13px"
+      <div style="display:flex;align-items:center;gap:var(--space-1);padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-base)"
         :style="{ background: currentSlug === node.slug ? 'var(--border)' : 'transparent', paddingLeft: (8 + depth*14) + 'px' }"
         @click="$emit('open', node.slug)">
         <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : node.node_type === 'notes' ? '📝' : '📄' }}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ node.title }}</span>
         <template v-if="node.node_type !== 'notes'">
-          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px"
+          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs)"
             :disabled="refreshing === node.slug"
             @click.stop="$emit('refresh', node.slug)" title="重新生成">
             {{ refreshing === node.slug ? '…' : '⟳' }}
           </button>
-          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:11px;color:var(--error)"
+          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs);color:var(--error)"
             @click.stop="$emit('remove', node.slug)" title="刪除">✕</button>
         </template>
       </div>
@@ -178,12 +178,12 @@ window.WikiView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="$router.push('/projects/' + $route.params.id)" style="margin-right:12px">← 返回專案</button>
+      <button class="btn btn-outline btn-sm" @click="$router.push('/projects/' + $route.params.id)" style="margin-right:var(--space-3)">← 返回專案</button>
       <h1>Wiki</h1>
       <button class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
         {{ building ? '建立中…' : '建立 wiki' }}
       </button>
-      <button class="btn btn-outline btn-sm" style="margin-left:8px" @click="openAddPage">+ 新增頁面</button>
+      <button class="btn btn-outline btn-sm" style="margin-left:var(--space-2)" @click="openAddPage">+ 新增頁面</button>
     </div>
     <div v-if="showAddModal" class="modal-overlay" @mousedown.self="showAddModal=false" @keyup.esc="showAddModal=false">
       <div class="modal" role="dialog" aria-modal="true">
@@ -208,8 +208,8 @@ window.WikiView = Vue.defineComponent({
         </div>
       </div>
     </div>
-    <div v-if="building" style="padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:4px">
+    <div v-if="building" style="padding:var(--space-2) var(--space-4);background:var(--surface);border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:var(--space-1)">
         <span>{{ progress.message || '建立中…' }}</span><span>{{ progress.percent }}%</span>
       </div>
       <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
@@ -217,26 +217,26 @@ window.WikiView = Vue.defineComponent({
       </div>
     </div>
     <div style="display:flex;height:calc(100vh - 56px);overflow:hidden">
-      <div style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:8px;flex-shrink:0">
-        <div v-if="loading" style="color:var(--text-muted);font-size:13px;padding:8px">載入中...</div>
+      <div style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:var(--space-2);flex-shrink:0">
+        <div v-if="loading" style="color:var(--text-muted);font-size:var(--fs-base);padding:var(--space-2)">載入中...</div>
         <template v-else>
           <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
             :current-slug="current && current.slug"
             :refreshing="refreshing"
             @open="loadPage" @refresh="refreshNode" @remove="removePage"></wiki-node>
-          <div v-if="pages.length === 0" style="color:var(--text-muted);font-size:12px;padding:8px">尚無頁面</div>
+          <div v-if="pages.length === 0" style="color:var(--text-muted);font-size:var(--fs-sm);padding:var(--space-2)">尚無頁面</div>
         </template>
       </div>
-      <div style="flex:1;overflow-y:auto;padding:24px">
+      <div style="flex:1;overflow-y:auto;padding:var(--space-6)">
         <div v-if="!current" style="color:var(--text-muted)">選擇或新增頁面</div>
         <template v-else>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4)">
             <h2 style="margin:0">{{ current.title }}</h2>
             <div v-if="current.node_type !== 'notes'">
               <button v-if="!editing" class="btn btn-outline btn-sm" @click="editing=true;editContent=current.content">編輯</button>
               <template v-else>
                 <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">儲存</button>
-                <button class="btn btn-outline btn-sm" style="margin-left:8px" @click="editing=false">取消</button>
+                <button class="btn btn-outline btn-sm" style="margin-left:var(--space-2)" @click="editing=false">取消</button>
               </template>
             </div>
             <div v-else>
@@ -244,11 +244,11 @@ window.WikiView = Vue.defineComponent({
             </div>
           </div>
           <template v-if="current.node_type === 'notes'">
-            <textarea v-model="editContent" style="width:100%;height:70vh;font-family:monospace;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
+            <textarea v-model="editContent" style="width:100%;height:70vh;font-family:monospace;font-size:var(--fs-base);padding:var(--space-2);border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
           </template>
           <template v-else>
-            <div v-if="!editing" v-html="renderedContent" style="line-height:1.7;font-size:14px"></div>
-            <textarea v-else v-model="editContent" style="width:100%;height:60vh;font-family:monospace;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
+            <div v-if="!editing" v-html="renderedContent" style="line-height:1.7;font-size:var(--fs-md)"></div>
+            <textarea v-else v-model="editContent" style="width:100%;height:60vh;font-family:monospace;font-size:var(--fs-base);padding:var(--space-2);border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
           </template>
         </template>
       </div>

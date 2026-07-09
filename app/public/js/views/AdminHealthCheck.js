@@ -50,33 +50,33 @@ window.AdminHealthCheckView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:12px">← 返回</button>
+      <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
       <h1>工作流程健檢</h1>
     </div>
     <div class="content">
       <div style="max-width:1000px">
-        <div class="settings-section" style="display:flex;align-items:center;gap:12px;margin-bottom:var(--space-5)">
-          <label style="font-size:13px">近
+        <div class="settings-section" style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-5)">
+          <label style="font-size:var(--fs-base)">近
             <input type="number" v-model.number="windowDays" min="1" style="width:64px" class="form-control" /> 天
           </label>
           <button class="btn btn-primary btn-sm" :disabled="running" @click="start">
             {{ running ? '健檢中...' : '開始健檢' }}
           </button>
-          <span v-if="run" style="font-size:12px;color:var(--text-muted)">
+          <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
             狀態：{{ run.status }}（{{ findings.length }} 個 agent 已診斷）
           </span>
         </div>
 
         <div v-for="f in findings" :key="f.id"
           style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            <span style="font-family:monospace;font-weight:600">{{ f.agent_label || f.agent_name }}</span>
-            <span :style="{fontSize:'11px',padding:'1px 8px',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
+          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px">
+            <span style="font-family:monospace;font-weight:var(--fw-semibold)">{{ f.agent_label || f.agent_name }}</span>
+            <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
               {{ sev(f.severity).label }}
             </span>
           </div>
-          <div style="font-size:13px;color:var(--text);margin-bottom:6px">{{ f.diagnosis }}</div>
-          <div v-if="f.rationale" style="font-size:12px;color:var(--text-muted);margin-bottom:6px">理由：{{ f.rationale }}</div>
+          <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px">{{ f.diagnosis }}</div>
+          <div v-if="f.rationale" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">理由：{{ f.rationale }}</div>
           <button v-if="f.suggested_prompt" class="btn btn-outline btn-sm" @click="applyToEditor(f)">帶入編輯器 →</button>
         </div>
 

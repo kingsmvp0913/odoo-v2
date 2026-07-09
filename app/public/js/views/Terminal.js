@@ -75,17 +75,17 @@ window.TerminalView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <h1>執行歷程 <span style="font-weight:400;font-size:14px">{{ taskTitle }}</span></h1>
+      <h1>執行歷程 <span style="font-weight:var(--fw-normal);font-size:var(--fs-md)">{{ taskTitle }}</span></h1>
       <button class="btn btn-outline btn-sm" @click="goBack">← 返回</button>
     </div>
     <div class="content" style="padding:0;display:flex;flex-direction:column;overflow:hidden">
-      <div v-if="error" style="padding:16px;color:var(--error)">{{ error }}</div>
+      <div v-if="error" style="padding:var(--space-4);color:var(--error)">{{ error }}</div>
       <div v-else style="flex:1;display:flex;flex-direction:column;min-height:0">
-        <div style="padding:8px 16px;background:var(--sidebar-bg);font-size:12px;color:var(--text-muted);display:flex;gap:16px;flex:none">
+        <div style="padding:var(--space-2) var(--space-4);background:var(--sidebar-bg);font-size:var(--fs-sm);color:var(--text-muted);display:flex;gap:var(--space-4);flex:none">
           <span>{{ running ? '⏳ 執行中...' : (exitCode === 0 ? '✅ 成功' : exitCode !== null ? '❌ 失敗 (code ' + exitCode + ')' : '⏸ 待機') }}</span>
           <span v-if="!running && exitCode === null" style="color:var(--text-muted)">等待 pipeline 啟動...</span>
         </div>
-        <div ref="termContainer" style="flex:1;min-height:0;padding:8px"></div>
+        <div ref="termContainer" style="flex:1;min-height:0;padding:var(--space-2)"></div>
       </div>
     </div>
   `
