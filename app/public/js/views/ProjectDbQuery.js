@@ -3,7 +3,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
   data() {
     return {
       conns: [], loading: true, saving: false, running: false, testing: false,
-      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '' },
+      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false, vpn_config: '', vpn_config_name: '', vpn_username: '', vpn_password: '' },
       selectedId: '', sql: '', result: null, error: ''
     };
   },
@@ -16,8 +16,8 @@ window.ProjectDbQueryView = Vue.defineComponent({
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
-    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '' }; },
-    editConn(c) { this.form = { ...c, ssh_password: '', db_password: '' }; },
+    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false, vpn_config: '', vpn_config_name: '', vpn_username: '', vpn_password: '' }; },
+    editConn(c) { this.form = { ...c, ssh_password: '', db_password: '', vpn_config: '', vpn_config_name: '', vpn_password: '' }; },
     validForm() {
       if (this.form.connect_mode === 'direct')
         return this.form.name && this.form.db_host && this.form.db_user && (this.form.id || this.form.db_password) && this.form.db_name;
@@ -30,6 +30,13 @@ window.ProjectDbQueryView = Vue.defineComponent({
         if (r.ok) showToast('連線成功', 'success'); else showToast('連線失敗：' + (r.error || '未知錯誤'), 'error');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.testing = false; }
+    },
+    onVpnFileChange(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { this.form.vpn_config = reader.result; this.form.vpn_config_name = file.name; };
+      reader.readAsText(file);
     },
     async saveConn() {
       if (!this.validForm()) return showToast(this.form.connect_mode === 'direct' ? '名稱/DB主機/DB使用者/密碼/資料庫 必填' : '名稱/主機/使用者/資料庫 必填', 'error');
@@ -74,7 +81,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
               <td style="padding:8px 10px;font-weight:600">{{ c.name }}</td>
               <td style="padding:8px 10px">{{ c.connect_mode === 'direct' ? (c.db_user + '@' + c.db_host + ':' + c.db_port) : (c.ssh_user + '@' + c.ssh_host + ':' + c.ssh_port) }}</td>
               <td style="padding:8px 10px">{{ c.connect_mode }}</td>
-              <td style="padding:8px 10px">{{ c.db_name }}</td>
+              <td style="padding:8px 10px">{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
               <td style="padding:8px 10px"><div style="display:flex;gap:6px">
                 <button class="btn btn-outline btn-sm" @click="editConn(c)">編輯</button>
                 <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteConn(c)">刪除</button>
@@ -110,6 +117,18 @@ window.ProjectDbQueryView = Vue.defineComponent({
             <div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px"><label style="margin:0">SSL</label><input v-model="form.db_ssl" type="checkbox" style="width:auto" /></div>
           </template>
           <div class="form-group" style="margin:0"><label>資料庫名稱</label><input v-model="form.db_name" class="form-control" /></div>
+        </div>
+        <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+          <input v-model="form.vpn_enabled" type="checkbox" id="vpnEnabled" style="width:auto" />
+          <label for="vpnEnabled" style="margin:0">此連線需要 VPN</label>
+        </div>
+        <div v-if="form.vpn_enabled" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;padding:12px;border:1px solid var(--border);border-radius:6px">
+          <div class="form-group" style="margin:0">
+            <label>VPN 設定檔（.ovpn）{{ form.vpn_config_name ? '－已選擇：' + form.vpn_config_name : (form.id ? '（留空＝不變）' : '') }}</label>
+            <input type="file" accept=".ovpn,.conf" class="form-control" @change="onVpnFileChange" />
+          </div>
+          <div class="form-group" style="margin:0"><label>VPN 帳號</label><input v-model="form.vpn_username" class="form-control" /></div>
+          <div class="form-group" style="margin:0"><label>VPN 密碼（留空＝不變）</label><input v-model="form.vpn_password" type="password" class="form-control" placeholder="••••••" /></div>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary btn-sm" @click="saveConn" :disabled="saving">{{ saving ? '儲存中...' : (form.id ? '更新連線' : '+ 新增連線') }}</button>
