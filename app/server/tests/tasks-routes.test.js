@@ -242,3 +242,157 @@ test('PUT /api/tasks/:id → 缺 original_text 回 400', async () => {
     .send({});
   expect(res.status).toBe(400);
 });
+
+test('GET /api/tasks/:id/messages → 新到舊排序', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_msg_list','odoo','M','base','new') RETURNING id`,
+    [userId]
+  );
+  await dbModule.query(
+    `INSERT INTO task_messages (task_id, source, external_id, content, occurred_at) VALUES
+     ($1,'sync','1','舊的','2026-07-01 09:00:00'),
+     ($1,'sync','2','新的','2026-07-05 09:00:00')`,
+    [t.id]
+  );
+
+  const res = await request(app).get(`/api/tasks/${t.id}/messages`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.map(m => m.content)).toEqual(['新的', '舊的']);
+});
+
+test('POST /api/tasks/:id/messages → 缺 content 回 400', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_msg_empty','odoo','M','base','coding_running') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({});
+  expect(res.status).toBe(400);
+});
+
+test('POST /api/tasks/:id/messages → 任何狀態都能新增，落地為 source=manual', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_msg_add','odoo','M','base','coding_running') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ content: '補充說明' });
+  expect(res.status).toBe(200);
+  expect(res.body.source).toBe('manual');
+  expect(res.body.content).toBe('補充說明');
+  expect(res.body.synced_to_odoo).toBe(false);
+});
+
+test('POST /api/tasks/:id/messages → writeback_odoo_notes=false 時不觸發任何對外呼叫', async () => {
+  const mockFetch = jest.fn();
+  const originalFetch = global.fetch;
+  global.fetch = mockFetch;
+  try {
+    await dbModule.query("UPDATE teams_settings SET writeback_odoo_notes = false WHERE id = 1");
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+       VALUES ($1,'task_odoo_5001','odoo','M','base','coding_running') RETURNING id`,
+      [userId]
+    );
+    const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ content: '不該回寫' });
+    expect(res.status).toBe(200);
+    expect(mockFetch).not.toHaveBeenCalled();
+  } finally { global.fetch = originalFetch; }
+});
+
+test('POST /api/tasks/:id/messages → writeback_odoo_notes=true 且回寫成功，external_id 更新避免下次重複拉回', async () => {
+  const mockFetch = jest.fn();
+  const originalFetch = global.fetch;
+  global.fetch = mockFetch;
+  try {
+    await dbModule.query(
+      `INSERT INTO teams_settings (id, odoo_url, odoo_db, writeback_odoo_notes)
+       VALUES (1, 'https://odoo.example.com', 'mydb', true)
+       ON CONFLICT (id) DO UPDATE SET odoo_url = $1, odoo_db = $2, writeback_odoo_notes = $3`,
+      ['https://odoo.example.com', 'mydb', true]
+    );
+    await dbModule.query(
+      'UPDATE users SET odoo_settings = $2 WHERE id = $1',
+      [userId, JSON.stringify({ odoo_username: 'admin', odoo_password: 'pass', odoo_user_id: 1 })]
+    );
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+       VALUES ($1,'task_odoo_5002','odoo','M','base','coding_running') RETURNING id`,
+      [userId]
+    );
+
+    mockFetch
+      .mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        headers: { get: (h) => h === 'set-cookie' ? 'session_id=abc' : null },
+        json: () => Promise.resolve({ jsonrpc: '2.0', result: { uid: 1 } })
+      }))
+      .mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        headers: { get: () => null },
+        json: () => Promise.resolve({ jsonrpc: '2.0', result: 88888 })
+      }));
+
+    const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ content: '回寫這則' });
+    expect(res.status).toBe(200);
+    expect(res.body.synced_to_odoo).toBe(true);
+
+    const { rows: [saved] } = await dbModule.query(
+      'SELECT external_id, synced_to_odoo FROM task_messages WHERE id = $1', [res.body.id]
+    );
+    expect(saved.external_id).toBe('88888');
+    expect(saved.synced_to_odoo).toBe(true);
+  } finally {
+    global.fetch = originalFetch;
+    await dbModule.query("UPDATE teams_settings SET writeback_odoo_notes = false WHERE id = 1");
+  }
+});
+
+test('POST /api/tasks/:id/messages → writeback 失敗時本地留言仍成功建立', async () => {
+  const mockFetch = jest.fn();
+  const originalFetch = global.fetch;
+  global.fetch = mockFetch;
+  try {
+    await dbModule.query(
+      `INSERT INTO teams_settings (id, odoo_url, odoo_db, writeback_odoo_notes)
+       VALUES (1, 'https://odoo.example.com', 'mydb', true)
+       ON CONFLICT (id) DO UPDATE SET odoo_url = $1, odoo_db = $2, writeback_odoo_notes = $3`,
+      ['https://odoo.example.com', 'mydb', true]
+    );
+    await dbModule.query(
+      'UPDATE users SET odoo_settings = $2 WHERE id = $1',
+      [userId, JSON.stringify({ odoo_username: 'admin', odoo_password: 'pass', odoo_user_id: 1 })]
+    );
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+       VALUES ($1,'task_odoo_5003','odoo','M','base','coding_running') RETURNING id`,
+      [userId]
+    );
+
+    mockFetch.mockImplementationOnce(() => Promise.reject(new Error('network down')));
+
+    const res = await request(app).post(`/api/tasks/${t.id}/messages`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ content: '網路壞掉也要存住' });
+    expect(res.status).toBe(200);
+    expect(res.body.synced_to_odoo).toBe(false);
+
+    const { rows: [saved] } = await dbModule.query(
+      'SELECT content FROM task_messages WHERE id = $1', [res.body.id]
+    );
+    expect(saved.content).toBe('網路壞掉也要存住');
+  } finally {
+    global.fetch = originalFetch;
+    await dbModule.query("UPDATE teams_settings SET writeback_odoo_notes = false WHERE id = 1");
+  }
+});

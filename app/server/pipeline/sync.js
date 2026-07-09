@@ -83,6 +83,46 @@ async function odooSearchRead(baseUrl, model, domain, fields, cookies, limit = 3
   return data.result || [];
 }
 
+// 回寫「記錄備註」（mail.mt_note，非公開訊息、不通知客戶、不建活動）
+async function odooMessagePost(baseUrl, model, resId, body, cookies) {
+  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookies },
+    body: JSON.stringify({
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model, method: 'message_post',
+        args: [resId],
+        kwargs: { body, subtype_xmlid: 'mail.mt_note' }
+      }
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`message_post ${model} failed: ${JSON.stringify(data.error)}`);
+  return data.result;
+}
+
+// 使用者在詳情頁新增的留言，best-effort 回寫來源系統。呼叫端負責判斷管理者開關是否開啟；
+// 這裡只負責「開了就真的呼叫」與「憑證/來源不符就安靜跳過」，錯誤往上拋由呼叫端 catch。
+async function writebackTaskMessage(userId, task, content) {
+  if (task.source !== 'odoo' && task.source !== 'service') return null;
+  const sourceNumId = (task.task_id || '').match(/(\d+)$/)?.[1];
+  if (!sourceNumId) return null;
+
+  const settings = await resolveUserOdooSettings(userId);
+  if (!settings) return null;
+
+  if (task.source === 'odoo') {
+    if (!settings.odoo_url || !settings.odoo_db || !settings.odoo_username || !settings.odoo_password) return null;
+    const cookies = await odooAuth(settings.odoo_url, settings.odoo_db, settings.odoo_username, settings.odoo_password);
+    return odooMessagePost(settings.odoo_url, 'project.task', parseInt(sourceNumId, 10), content, cookies);
+  }
+
+  if (!settings.service_url || !settings.service_db || !settings.service_username || !settings.service_password) return null;
+  const cookies = await odooAuth(settings.service_url, settings.service_db, settings.service_username, settings.service_password);
+  return odooMessagePost(settings.service_url, 'service.question.feedback', parseInt(sourceNumId, 10), content, cookies);
+}
+
 async function syncOdooUser(userId, settings) {
   const { odoo_url, odoo_db, odoo_username, odoo_password, odoo_user_id } = settings;
   if (!odoo_url || !odoo_db || !odoo_username || !odoo_password) return { added: 0 };
@@ -281,4 +321,4 @@ async function syncUser(userId) {
   return { odoo, service };
 }
 
-module.exports = { syncUser, stripHtml, resolveUserOdooSettings, assembleTaskContext };
+module.exports = { syncUser, stripHtml, resolveUserOdooSettings, assembleTaskContext, writebackTaskMessage };

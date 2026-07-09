@@ -3,6 +3,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { abortTask } = require('./pipeline/runner');
 const { removeWorktree, deleteBranchLocal } = require('./pipeline/git');
+const { writebackTaskMessage } = require('./pipeline/sync');
 
 // 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除。
 async function cleanupTaskGit(task) {
@@ -117,6 +118,59 @@ function registerRoutes(app) {
         [req.params.id, String(original_text)]
       );
       res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 外部溝通紀錄：sync 拉進來的聊天紀錄 + 使用者手動追加的留言，新到舊排序（畫面顯示用）
+  app.get('/api/tasks/:id/messages', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query(
+        'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const { rows } = await query(
+        'SELECT id, source, author, content, occurred_at, synced_to_odoo FROM task_messages WHERE task_id = $1 ORDER BY occurred_at DESC',
+        [req.params.id]
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 新增留言（不限任務狀態，逐步累積的補充資訊）；管理者開關開啟時 best-effort 回寫來源系統記錄備註
+  app.post('/api/tasks/:id/messages', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query(
+        'SELECT id, task_id, source FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const { content } = req.body || {};
+      if (!content || !String(content).trim()) return res.status(400).json({ error: '請填寫內容' });
+      const trimmed = String(content).trim();
+
+      const { rows: [me] } = await query('SELECT display_name FROM users WHERE id = $1', [req.userId]);
+      const { rows: [inserted] } = await query(
+        `INSERT INTO task_messages (task_id, source, author, content, occurred_at)
+         VALUES ($1, 'manual', $2, $3, NOW())
+         RETURNING id, source, author, content, occurred_at, synced_to_odoo`,
+        [req.params.id, me?.display_name || null, trimmed]
+      );
+
+      const { rows: [cfg] } = await query('SELECT writeback_odoo_notes FROM teams_settings WHERE id = 1');
+      if (cfg?.writeback_odoo_notes) {
+        try {
+          const newExternalId = await writebackTaskMessage(req.userId, tasks[0], trimmed);
+          if (newExternalId) {
+            await query(
+              'UPDATE task_messages SET external_id = $2, synced_to_odoo = true WHERE id = $1',
+              [inserted.id, String(newExternalId)]
+            );
+            inserted.synced_to_odoo = true;
+          }
+        } catch (e) { /* best-effort：回寫失敗不影響本地已儲存的留言 */ }
+      }
+      res.json(inserted);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
