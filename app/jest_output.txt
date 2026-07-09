@@ -1,0 +1,323 @@
+PASS server/tests/db-query-routes.test.js (6.815 s)
+PASS server/tests/admin-health-check-routes.test.js (7.494 s)
+PASS server/tests/auth.test.js (7.781 s)
+PASS server/tests/env-agent-health.test.js
+PASS server/tests/admin-routes.test.js (8.128 s)
+PASS server/tests/project-routes.test.js (8.496 s)
+PASS server/tests/tasks-routes.test.js (8.526 s)
+PASS server/tests/cs-agent.test.js
+  ● Console
+
+    console.error
+      [CS-AGENT] error task 6: timeout
+
+      51 |     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);
+      52 |     blockerMsg = `CS agent 執行失敗：${err.message}`;
+    > 53 |     console.error(`[CS-AGENT] error task ${taskId}:`, err.message);
+         |             ^
+      54 |   }
+      55 |
+      56 |   if (!result) {
+
+      at error (server/pipeline/cs-agent.js:53:13)
+      at Object.<anonymous> (server/tests/cs-agent.test.js:112:3)
+
+PASS server/tests/pipeline-routes.test.js
+PASS server/tests/task-agent.test.js
+PASS server/tests/wiki-routes.test.js
+PASS server/tests/admin-agents-routes.test.js
+PASS server/tests/token-report-routes.test.js (11.933 s)
+PASS server/tests/admin-pipeline-routes.test.js
+
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From server/tests/project-routes.test.js.
+
+      at Client._getPassword (node_modules/pg/lib/client.js:294:24)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+PASS server/tests/chat-routes.test.js
+PASS server/tests/analysis.test.js
+  ● Console
+
+    console.error
+      [ANALYSIS] API error task 6: Rate limit
+
+      42 |       [taskId]
+      43 |     );
+    > 44 |     console.error(`[ANALYSIS] API error task ${taskId}:`, apiErr.message);
+         |             ^
+      45 |     throw apiErr;
+      46 |   }
+      47 |
+
+      at Object.error [as analyzeTask] (server/pipeline/analysis.js:44:13)
+      at Object.<anonymous> (server/tests/analysis.test.js:148:3)
+
+PASS server/tests/db-migration.test.js
+FAIL server/tests/deploy-testing.test.js
+
+
+  ● Test suite failed to run
+
+    Unhandled error. (TypeError: pgPass is not a function
+
+      at Client._getPassword (node_modules/pg/lib/client.js:295:9)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+      at TCP.onStreamRead (node:internal/stream_base_commons:189:23))
+      at Client._getPassword (node_modules/pg/lib/client.js:303:14)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+
+  ● Test suite failed to run
+
+    Unhandled error. (TypeError: pgPass is not a function
+
+      at Client._getPassword (node_modules/pg/lib/client.js:295:9)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+      at TCP.onStreamRead (node:internal/stream_base_commons:189:23))
+      at Client._getPassword (node_modules/pg/lib/client.js:303:14)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+
+PASS server/tests/settings.test.js
+PASS server/tests/qa-agent.test.js
+PASS server/tests/runner.test.js
+PASS server/tests/library-agent.test.js
+  ● Console
+
+    console.error
+      [LIBRARY-AGENT] API error task 4: API down
+
+      206 |   } catch (err) {
+      207 |     await logFailedUsage({ taskId: task.task_id }, userId, 'wiki', err);
+    > 208 |     console.error(`[LIBRARY-AGENT] API error task ${taskId}:`, err.message);
+          |             ^
+      209 |   }
+      210 |
+      211 |   if (wikiUpdate?.slug && wikiUpdate?.title) {
+
+      at error (server/pipeline/library-agent.js:208:13)
+      at Object.<anonymous> (server/tests/library-agent.test.js:92:3)
+
+PASS server/tests/sync.test.js
+PASS server/tests/reject-route.test.js
+PASS server/tests/playwright-agent.test.js
+PASS server/tests/env-agent-seed.test.js
+PASS server/tests/library-agent-init.test.js
+PASS server/tests/env-routes.test.js
+PASS server/tests/claude-runner.test.js
+PASS server/tests/health-data.test.js
+PASS server/tests/reentry.test.js
+PASS server/tests/health-check-runner.test.js
+PASS server/tests/cron.test.js
+PASS server/tests/merge-agent.test.js
+PASS server/tests/db-connections-schema.test.js
+PASS server/tests/ensure-env.test.js
+PASS server/tests/db-query-ai.test.js
+PASS server/tests/classify-rejections.test.js
+PASS server/tests/server.test.js
+PASS server/tests/password.test.js
+PASS server/tests/nightly-shutdown.test.js
+PASS server/tests/env-agent-tour.test.js
+PASS server/tests/db.test.js
+PASS server/tests/git.test.js
+PASS server/tests/setup-config.test.js
+PASS server/tests/port-alloc.test.js
+PASS server/tests/crypto.test.js
+PASS server/tests/failure-classifier.test.js
+PASS server/tests/ssh-sql-direct.test.js
+PASS server/tests/teams-routes.test.js
+PASS server/tests/setup-postgres.test.js
+PASS server/tests/library-agent-source.test.js
+PASS server/tests/workflow-health-agent.test.js
+PASS server/tests/agent-loader.test.js
+  ● Console
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{answers}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:19:17)
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{original_text}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:25:33)
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{answers}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:25:33)
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{wiki}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:25:33)
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{work_dir}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:31:47)
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{repo_list}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:31:47)
+
+    console.warn
+      [AGENT-RENDER] 未匹配 placeholder：{{clarification}}（以空字串替換）
+
+      41 |     if (vars && vars[k] != null) return String(vars[k]);
+      42 |     // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+    > 43 |     console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+         |             ^
+      44 |     return '';
+      45 |   });
+      46 | }
+
+      at warn (server/pipeline/agent-loader.js:43:13)
+          at String.replace (<anonymous>)
+      at Object.replace [as render] (server/pipeline/agent-loader.js:40:23)
+      at Object.render (server/tests/agent-loader.test.js:31:47)
+
+PASS server/tests/ssh-sql-buildcmd.test.js
+PASS server/tests/agent-result.test.js
+PASS server/tests/ssh-sql-validate.test.js
+PASS server/tests/ssh-sql-parse.test.js
+PASS server/tests/env-agent-chrome.test.js
+PASS server/tests/project-lock.test.js
+PASS server/tests/notify.test.js
+PASS server/tests/setup-checks.test.js
+PASS server/tests/setup-claude-env.test.js
+  ● Console
+
+    console.log
+      偵測到尚未登入 Claude 訂閱帳號，即將開啟互動登入畫面，完成後會自動繼續...
+
+      at log (../scripts/lib/claude-env.js:27:13)
+
+    console.log
+      偵測到尚未登入 Claude 訂閱帳號，即將開啟互動登入畫面，完成後會自動繼續...
+
+      at log (../scripts/lib/claude-env.js:27:13)
+
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+Summary of all failing tests
+FAIL server/tests/deploy-testing.test.js
+
+
+  ● Test suite failed to run
+
+    Unhandled error. (TypeError: pgPass is not a function
+
+      at Client._getPassword (node_modules/pg/lib/client.js:295:9)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+      at TCP.onStreamRead (node:internal/stream_base_commons:189:23))
+      at Client._getPassword (node_modules/pg/lib/client.js:303:14)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+
+  ● Test suite failed to run
+
+    Unhandled error. (TypeError: pgPass is not a function
+
+      at Client._getPassword (node_modules/pg/lib/client.js:295:9)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+      at TCP.onStreamRead (node:internal/stream_base_commons:189:23))
+      at Client._getPassword (node_modules/pg/lib/client.js:303:14)
+      at Client._handleAuthMD5Password (node_modules/pg/lib/client.js:315:10)
+      at node_modules/pg/lib/connection.js:136:12
+      at Parser.parse (node_modules/pg-protocol/src/parser.ts:106:9)
+      at Socket.<anonymous> (node_modules/pg-protocol/src/index.ts:7:48)
+
+
+Test Suites: 1 failed, 62 passed, 63 total
+Tests:       452 passed, 452 total
+Snapshots:   0 total
+Time:        21.611 s, estimated 33 s
+Ran all test suites.

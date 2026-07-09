@@ -69,20 +69,20 @@ function registerRoutes(app) {
         baseParams
       );
 
-      // By agent（Token 數）
+      // By agent（實際 Token 數，與成本同一套加權）
       const { rows: byAgent } = await query(
         `SELECT agent_type,
-           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
+           SUM(${WEIGHTED}) AS tokens
          FROM token_usage tu
          ${where}
          GROUP BY agent_type ORDER BY tokens DESC`,
         baseParams
       );
 
-      // By project（Token 數）
+      // By project（實際 Token 數，與成本同一套加權）
       const { rows: byProject } = await query(
         `SELECT p.id AS project_id, p.name AS project_name,
-           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
+           SUM(${WEIGHTED}) AS tokens
          FROM token_usage tu
          LEFT JOIN tasks t ON t.task_id = tu.task_id
          LEFT JOIN projects p ON p.id = COALESCE(tu.project_id, t.project_id)
@@ -91,10 +91,10 @@ function registerRoutes(app) {
         baseParams
       );
 
-      // Daily trend（Token 數；::date cast is compatible with both pg and pg-mem）
+      // Daily trend（實際 Token 數，與成本同一套加權；::date cast is compatible with both pg and pg-mem）
       const { rows: daily } = await query(
         `SELECT recorded_at::date AS date,
-           SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens
+           SUM(${WEIGHTED}) AS tokens
          FROM token_usage tu
          ${where}
          GROUP BY date ORDER BY date ASC`,
@@ -115,7 +115,7 @@ function registerRoutes(app) {
            tu.user_id,
            tu.agent_type,
            tu.model,
-           (tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_create_tokens) AS tokens,
+           ${WEIGHTED} AS tokens,
            ${COST} AS cost,
            tu.duration_ms,
            tu.recorded_at

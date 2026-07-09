@@ -238,10 +238,10 @@ test('GET /api/token-report → tasks have agents array', async () => {
   const task = res.body.tasks[0];
   expect(Array.isArray(task.agents)).toBe(true);
   expect(task.agents[0].agent_type).toBe('qa');
-  // raw tokens=200+80+20+0=300
-  expect(task.agents[0].tokens).toBe(300);
-  expect(task.total_tokens).toBe(300);
-  // 加權=200+80*5+20*0.1=602；無 model→sonnet$3；cost=3*602/1e6=0.001806 USD
+  // 明細列改用實際 Token（加權）：200+80*5+20*0.1+0*1.25=602
+  expect(task.agents[0].tokens).toBe(602);
+  expect(task.total_tokens).toBe(602);
+  // 無 model→sonnet$3；cost=3*602/1e6=0.001806 USD
   expect(task.agents[0].cost).toBeCloseTo(0.001806, 8);
 });
 
