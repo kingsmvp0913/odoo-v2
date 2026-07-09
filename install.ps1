@@ -24,6 +24,7 @@ $chromeCandidates = @(
 if (-not ($chromeCandidates | Where-Object { Test-Path $_ })) { Install-WingetPackage "Google.Chrome" "Google Chrome" }
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { Install-WingetPackage "astral-sh.uv" "uv" }
 if (-not (Get-Command psql -ErrorAction SilentlyContinue)) { Install-WingetPackage "PostgreSQL.PostgreSQL" "PostgreSQL" }
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Install-WingetPackage "Docker.DockerDesktop" "Docker Desktop" }
 
 # 重新整理 PATH（winget 裝完當前 session 讀不到新 PATH）
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
