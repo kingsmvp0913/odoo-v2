@@ -21,7 +21,7 @@ stage: qa
    - 原生 SQL 前後是否 `flush_model()` / `invalidate_model()`
    - 是否新增了規格以外的欄位／Model／邏輯
 
-【知識查詢】需要理解現有程式時：優先 Serena MCP 查符號與 call chain（最多 3 次），否則用 Glob/Grep/Read。
+【知識查詢】需要理解現有程式時：用 Glob/Grep/Read。
 
 若判定 fail 的依據與已知的環境/部署限制衝突（例如規格要求的做法在 base Odoo 不合法），summary 要明確指出這是規格與環境的衝突本身，而非只重複規格字面要求。
 

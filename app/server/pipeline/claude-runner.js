@@ -1,6 +1,15 @@
 const { spawn } = require('child_process');
+const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
+
+// 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
+// 只有 analysis/coding 掛 context7（查 grep 補不了的 Odoo 原生 API）。實測 serena 即使在場也不被用
+// （Grep/Read 已覆蓋 repo 內 symbol 查詢），故全 pipeline 不掛 serena，省下冷啟動 indexing 與空找 schema。
+const MCP_PROFILES = { analysis: 'context7.json', coding: 'context7.json' };
+function mcpConfigPath(agentType) {
+  return path.join(__dirname, 'mcp', MCP_PROFILES[agentType] || 'none.json');
+}
 
 function formatEvent(ev) {
   if (!ev || !ev.type) return null;
@@ -46,6 +55,8 @@ function runClaude(prompt, opts = {}) {
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
+    // 每關只載入指定的 MCP，剝掉繼承的 serena 等（見 MCP_PROFILES）
+    args.push('--strict-mcp-config', '--mcp-config', mcpConfigPath(agentType));
     // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）
@@ -151,4 +162,4 @@ function stopReason(prefix, err) {
   return err && err.aborted ? '手動暫停' : `${prefix}：${err.message}`;
 }
 
-module.exports = { runClaude, abortError, stopReason };
+module.exports = { runClaude, abortError, stopReason, mcpConfigPath };
