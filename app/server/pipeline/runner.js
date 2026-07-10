@@ -22,12 +22,13 @@ const STAGE_LABELS = {
   new: '待分類', cs_running: '客服處理中', analysis_running: '分析中',
   confirm_answered: '已回覆澄清', branch_pending: '建立分支', coding_running: '開發中',
   qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
-  playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki', reject_triage: '退回分診中'
+  playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki',
+  reject_triage: '分診中', resolve_triage: '分診中'
 };
 // taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。
 const _inFlight = new Map();
 const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
-const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage'];
+const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage'];
 
 // 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
@@ -180,7 +181,8 @@ async function handleWiki(task, settings, signal) {
   await runLibraryAgent(task.id, task.user_id, signal);
 }
 
-// reject_triage：退回分診只判 bug 與否（bug→coding／規格類 respec→回 analysis 重寫 SD）
+// reject_triage（人工審核退回）／resolve_triage（卡關填修正指示）：共用通用分診員，
+// 讀 diff/log＋使用者的話判 resume/advance/fix/respec 決定下一步。
 async function handleRejectTriage(task, settings, signal) {
   const { runRejectTriage } = require('./reject-triage');
   await runRejectTriage(task.id, task.user_id, signal);
@@ -199,6 +201,7 @@ const HANDLERS = {
   playwright_running: handlePlaywright,
   wiki_updating: handleWiki,
   reject_triage: handleRejectTriage,
+  resolve_triage: handleRejectTriage,
 };
 
 // 執行一個任務：狀態重查（防過期快照）→ 寫階段標記 → 跑 handler → 失敗原因落地／Teams。

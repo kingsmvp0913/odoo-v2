@@ -138,6 +138,30 @@ test('resolve-blocker 有 resume_status → 回到中斷的那一關（而非 ne
   expect(after.blocker_content).toBeNull();
 });
 
+// 意圖：專案任務的修正指示不再盲目 resume，改交通用分診員（resolve_triage）讀 diff/log＋你的指示判去向；
+// resume_status/blocker/計數器保留給分診讀取，最終落點與歸零由分診處理（此處只驗路由的即時效果）。
+test('resolve-blocker 專案任務 → 進 resolve_triage 分診，保留 resume_status/計數器並落修正指示', async () => {
+  const { rows: [pj] } = await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('RB','17.0') RETURNING id");
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status, blocker_content, project_id, qa_retry_count)
+     VALUES ($1,'task_rb','odoo','R','stopped','qa_running','boom',$2,3) RETURNING id`,
+    [userId, pj.id]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/resolve-blocker`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolution: '沒事，這是誤判' });
+  expect(res.status).toBe(200);
+  const { rows: [after] } = await dbModule.query(
+    'SELECT status, resume_status, qa_retry_count, blocker_content FROM tasks WHERE id=$1', [t.id]
+  );
+  expect(after.status).toBe('resolve_triage');   // 進分診，不再盲目 resume
+  expect(after.resume_status).toBe('qa_running'); // 保留給分診判斷
+  expect(after.qa_retry_count).toBe(3);           // 不在此歸零（落點時才由分診 goto 處理）
+  expect(after.blocker_content).toBe('boom');     // 保留供分診讀
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [t.id]);
+  expect(logs.some(l => l.role === 'user' && l.content.includes('沒事，這是誤判'))).toBe(true);
+});
+
 test('GET /api/tasks/:id → returns task detail with logs array', async () => {
   const listRes = await request(app).get('/api/tasks')
     .set('Authorization', `Bearer ${adminToken}`);

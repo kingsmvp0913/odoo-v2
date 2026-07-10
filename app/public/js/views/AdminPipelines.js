@@ -11,7 +11,8 @@ const AP_STATUS_LABELS = {
   deploy_testing:     '部署測試區',
   playwright_running: 'E2E 測試中',
   wiki_updating:      '更新 Wiki',
-  reject_triage:      '退回分診中'
+  reject_triage:      '分診中',
+  resolve_triage:     '分診中'
 };
 
 function apFmtElapsed(ms) {

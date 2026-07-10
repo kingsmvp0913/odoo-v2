@@ -124,15 +124,17 @@ test('updateAgent 移除 <result> 契約標記遭拒（400，防 UI 改壞契約
   }
 });
 
-test('analysis-reject 可載入且 render 填入退回專屬 placeholder', () => {
+test('analysis-reject 可載入且 render 填入分診專屬 placeholder', () => {
   const { loadAgent } = require('../pipeline/agent-loader');
   const agent = loadAgent('analysis-reject');
   expect(agent.model).toBe('sonnet');
   const out = agent.render({
     project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
-    analysis_yaml: 'module: sale', reject_reason: '金額算錯', clarification: '（無）', allow_bug: 'true'
+    analysis_yaml: 'module: sale', stuck_stage: 'QA 審查', stop_context: '金額算錯',
+    user_instruction: '沒事誤判', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true'
   });
   expect(out).toContain('金額算錯');
+  expect(out).toContain('沒事誤判');
   expect(out).toContain('allow_bug = true');
   expect(out).toContain('git diff main...HEAD');
   // CLAUDE_MD_AGENTS → 應 prepend 專案規則（CLAUDE.md 內含「Odoo Constraints」字樣）

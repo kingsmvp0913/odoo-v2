@@ -515,7 +515,7 @@ function registerRoutes(app) {
   app.post('/api/tasks/:id/resolve-blocker', verifyToken, async (req, res) => {
     try {
       const { rows: tasks } = await query(
-        'SELECT id, status, resume_status FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, status, resume_status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
@@ -525,25 +525,36 @@ function registerRoutes(app) {
       const { resolution } = req.body;
       if (!resolution?.trim()) return res.status(400).json({ error: '請填寫解決說明' });
 
-      // 回到中斷的那一關續跑（resume_status）；沒有記錄則退回 new 重新分診。
-      // 只歸零與續跑關卡對應的計數器——全歸零會讓「繼續」一鍵繳械所有重試上限，
-      // 同樣的失敗可無上限重演（健檢 U2，任務 52 無限循環的直接機制）
-      const RESUME_COUNTER = {
-        qa_running: 'qa_retry_count',
-        deploy_testing: 'deploy_retry_count',
-        playwright_running: 'pw_retry_count'
-      };
-      const counterCol = RESUME_COUNTER[tasks[0].resume_status];
-      await query(
-        `UPDATE tasks SET status = COALESCE(resume_status, 'new'),
-         blocker_content = NULL, blocker_type = NULL, resume_status = NULL,
-         ${counterCol ? counterCol + ' = 0,' : ''} updated_at = NOW() WHERE id = $1`,
-        [req.params.id]
-      );
+      // 先落地修正指示（分診員讀 role='user' 的 [修正指示] 判斷去向）
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, `[修正指示] ${resolution.trim()}`]
       );
+
+      if (tasks[0].project_id) {
+        // 專案任務：不再盲目 resume——交給分診員讀 diff/log＋你的指示，判 resume/advance/fix/respec 決定下一步。
+        // 保留 resume_status/blocker_content/計數器供分診讀取，最終落點與計數歸零由分診 goto 處理。
+        await query(
+          "UPDATE tasks SET status = 'resolve_triage', updated_at = NOW() WHERE id = $1",
+          [req.params.id]
+        );
+      } else {
+        // 非專案任務：無 worktree/diff 可判 → 沿用直接回中斷的那一關續跑（沒記錄則退回 new）。
+        // 只歸零與續跑關卡對應的計數器——全歸零會讓「繼續」一鍵繳械所有重試上限，
+        // 同樣的失敗可無上限重演（健檢 U2，任務 52 無限循環的直接機制）
+        const RESUME_COUNTER = {
+          qa_running: 'qa_retry_count',
+          deploy_testing: 'deploy_retry_count',
+          playwright_running: 'pw_retry_count'
+        };
+        const counterCol = RESUME_COUNTER[tasks[0].resume_status];
+        await query(
+          `UPDATE tasks SET status = COALESCE(resume_status, 'new'),
+           blocker_content = NULL, blocker_type = NULL, resume_status = NULL,
+           ${counterCol ? counterCol + ' = 0,' : ''} updated_at = NOW() WHERE id = $1`,
+          [req.params.id]
+        );
+      }
       runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
