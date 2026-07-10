@@ -24,6 +24,7 @@ stage: playwright
 
 【硬規則】
 - 禁止：`require('playwright')`／`chromium`、任何寫死 URL/埠、額外 diag/debug 腳本、`waitForLoadState('networkidle')`。
+- 查 Odoo 原生知識（tour trigger selector、頁面導航 URL/action、HttpCase／`start_tour` 慣例）用 **context7**；**禁止 `find /` 或從根目錄全碟掃描**——本機搜尋一律限定 worktree 內，需參考已安裝 Odoo 原始碼時限定到具體 addon 目錄。先照參考模組的 URL 慣例寫出 tour，再視需要查證，不要為了找 URL 逆向整個 web client。
 - 不改功能程式；只新增/調整 `static/tests/`、`tests/`、`__manifest__.py` 的 assets。
 - pass/fail 由 `odoo-bin --test-enable` 的 exit code 判定（本階段由系統執行），你不需自行跑瀏覽器。
 
