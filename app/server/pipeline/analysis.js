@@ -31,7 +31,7 @@ async function analyzeTask(taskId, signal) {
     const agent = loadAgent('analysis-basic');
     const callResult = await runClaude(
       agent.render({ original_text: original_text || '（無內容）' }),
-      { signal, taskId, userId: task.user_id, model: agent.model }
+      { signal, taskId, userId: task.user_id, model: agent.model, agentType: 'analysis' }
     );
     rawYaml = callResult.text;
     await logTokenUsage({ taskId: task.task_id }, task.user_id, 'analysis', callResult.usage, callResult.durationMs);

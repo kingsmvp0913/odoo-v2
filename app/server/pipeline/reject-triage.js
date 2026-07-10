@@ -58,7 +58,7 @@ async function runRejectTriage(taskId, userId, signal) {
       clarification,
       allow_bug: allowBug ? 'true' : 'false'
     }).trim();
-    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model });
+    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model, agentType: 'reject_triage' });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'reject_triage', result.usage, result.durationMs);
   } catch (err) {

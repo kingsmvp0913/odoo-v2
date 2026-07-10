@@ -94,7 +94,7 @@ async function runTourStage(taskId, userId, signal) {
       login: E2E_LOGIN,
       module: moduleName
     }).trim();
-    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD } });
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD }, agentType: 'playwright' });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);

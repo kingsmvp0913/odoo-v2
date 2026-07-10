@@ -229,6 +229,18 @@ async function migrate() {
       recorded_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // 送給 Claude 的完整 prompt 稽核記錄（管理員頁「Prompt 送出記錄」）：每次 runClaude 送出前落一筆，
+    // 只保留最近 N 筆（送出路徑順手 prune），供確認實際送出內容。best-effort，寫入失敗不影響執行。
+    `CREATE TABLE IF NOT EXISTS prompt_logs (
+      id          SERIAL PRIMARY KEY,
+      agent_type  TEXT,
+      model       TEXT,
+      task_id     TEXT,
+      prompt      TEXT NOT NULL,
+      char_len    INTEGER NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
     // 退回原因表（工作流程健檢 agent 子專案 1）：review_pending 退回時記 raw 原因，
     // cron 慢慢跑分類 agent 拆成 rejection_items。以業務 task_id 為 key（硬刪/重置任務不失真）。
     `CREATE TABLE IF NOT EXISTS task_rejections (

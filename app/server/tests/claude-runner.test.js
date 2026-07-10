@@ -77,6 +77,34 @@ test('runClaude 逾時 → kill 子行程並以逾時錯誤 reject', async () =>
   expect(child.kill).toHaveBeenCalled();
 });
 
+// Prompt 稽核：runClaude 送出前把完整 prompt 落 prompt_logs（含 agent_type/model/task_id/字數），
+// 供管理員頁確認「實際送出了什麼」。落地為 best-effort（fire-and-forget），故輪詢等待。
+test('runClaude：送出前把完整 prompt 落 prompt_logs', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)) };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const PROMPT = '這是一段測試 prompt 內容 hello';
+  await runClaude(PROMPT, { agentType: 'coding', model: 'opus', taskId: 42 });
+
+  let row;
+  for (let i = 0; i < 20 && !row; i++) {
+    const { rows } = await dbModule.query("SELECT * FROM prompt_logs WHERE agent_type='coding'");
+    row = rows[0];
+  }
+  expect(row).toBeTruthy();
+  expect(row.prompt).toBe(PROMPT);
+  expect(row.model).toBe('opus');
+  expect(row.task_id).toBe('42');
+  expect(row.char_len).toBe(PROMPT.length);
+});
+
 // B-1（主題 B）：init 事件抓 session_id 回傳、給 resumeSessionId 才帶 --resume。
 // 原在 task-agent.test.js 測 spawnClaude，合併後 runClaude 承接（健檢 U13）。
 test('runClaude：從 init 事件抓到 session_id 並回傳', async () => {

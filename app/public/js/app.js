@@ -41,6 +41,7 @@ const router = createRouter({
     { path: '/admin/pipelines', component: window.AdminPipelinesView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/health', component: window.AdminHealthCheckView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/rejections', component: window.AdminRejectionsView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/admin/prompt-logs', component: window.AdminPromptLogsView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
 });

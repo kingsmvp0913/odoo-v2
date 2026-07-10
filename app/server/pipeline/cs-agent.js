@@ -43,7 +43,7 @@ async function runCsAgent(taskId, userId, signal) {
   let result = null;
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
-    const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model, agentType: 'cs' });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
     result = await parseAgentResult(text, { parse: JSON.parse, signal });
   } catch (err) {

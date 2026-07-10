@@ -23,7 +23,7 @@ async function classifyOne(rej) {
   const agent = loadAgent('reject-classifier');
   let items = null;
   try {
-    const { text, usage, durationMs } = await runClaude(agent.render({ reason: rej.reason }), { model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ reason: rej.reason }), { model: agent.model, agentType: 'reject_classify' });
     await logTokenUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.user_id, 'reject_classify', usage, durationMs);
     const parsed = await parseAgentResult(text, { parse: JSON.parse });
     if (Array.isArray(parsed) && parsed.length) items = parsed;

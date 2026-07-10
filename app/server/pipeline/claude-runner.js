@@ -41,7 +41,7 @@ function formatEvent(ev) {
 // 統一 runner（合併原 callClaude/spawnClaude，健檢 U13）：所有階段共用一份子行程實作，
 // 事件流同時寫 socket 與 task_events；支援 cwd（worktree 隔離）、session 捕捉、--resume（主題 B）。
 function runClaude(prompt, opts = {}) {
-  const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId, env } = opts;
+  const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId, env, agentType } = opts;
   return new Promise((resolve, reject) => {
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
@@ -107,6 +107,13 @@ function runClaude(prompt, opts = {}) {
     });
 
     child.stderr.on('data', d => { stderr += d.toString(); });
+    // 落地本次送出的完整 prompt 供管理員稽核（best-effort，失敗不影響 claude 執行）；只保留最近 100 筆
+    query(
+      'INSERT INTO prompt_logs (agent_type, model, task_id, prompt, char_len) VALUES ($1, $2, $3, $4, $5)',
+      [agentType || null, model || null, taskId != null ? String(taskId) : null, prompt, (prompt || '').length]
+    ).then(() => query(
+      'DELETE FROM prompt_logs WHERE id NOT IN (SELECT id FROM prompt_logs ORDER BY id DESC LIMIT 100)'
+    )).catch(() => {});
     child.stdin.write(prompt);
     child.stdin.end();
 

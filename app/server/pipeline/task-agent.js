@@ -192,7 +192,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
     const built = buildAnalysisPrompt(task, info, clarification, wtParent);
     // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
-    const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model });
+    const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
     raw = analysisResult.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
@@ -268,10 +268,10 @@ async function runCodingOnce(task, info, userId, signal, resolution, { resume })
       resolution: resolution || '（無）',
       commit_message: buildCommitMessage(task)
     }).trim();
-    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id });
+    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id, agentType: 'coding' });
   }
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding' });
 }
 
 async function runTaskCoding(taskId, userId, signal) {

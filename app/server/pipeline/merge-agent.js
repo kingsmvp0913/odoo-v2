@@ -34,7 +34,7 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   try {
     resolveResult = await runClaude(
       agent.render({ file_path: filePath, content }),
-      { ...opts, signal, model: agent.model }
+      { ...opts, signal, model: agent.model, agentType: 'merge' }
     );
   } catch (err) {
     if (opts.taskId) {

@@ -41,6 +41,20 @@ function registerRoutes(app) {
     res.json({ login: E2E_LOGIN, password: E2E_PASSWORD });
   });
 
+  // --- Prompt 送出記錄（最近 N 筆送給 Claude 的完整 prompt）---
+
+  app.get('/api/admin/prompt-logs', auth, async (req, res) => {
+    try {
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+      const { rows } = await query(
+        `SELECT id, agent_type, model, task_id, prompt, char_len, created_at
+           FROM prompt_logs ORDER BY id DESC LIMIT $1`,
+        [limit]
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // --- odoo_version_configs ---
 
   app.get('/api/admin/version-configs', auth, async (req, res) => {

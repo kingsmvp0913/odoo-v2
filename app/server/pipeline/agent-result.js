@@ -38,7 +38,7 @@ async function parseAgentResult(raw, { parse, signal } = {}) {
   let out = doParse(extractResult(raw));
   if (out != null) return out;
   try {
-    const repaired = await runClaude(REPAIR_PROMPT(raw), { model: 'haiku', signal });
+    const repaired = await runClaude(REPAIR_PROMPT(raw), { model: 'haiku', signal, agentType: 'repair' });
     out = doParse(extractResult(repaired.text));
   } catch { /* haiku 補救也失敗 → null */ }
   return out;

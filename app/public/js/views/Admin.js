@@ -321,6 +321,17 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
+        <!-- Prompt 送出記錄 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Prompt 送出記錄</div>
+            <div class="setting-block-desc">檢視最近送給 AI 的 prompt 完整內容，確認實際送出了什麼。</div>
+          </div>
+          <div class="setting-block-body">
+            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/prompt-logs')">前往 Prompt 記錄 →</button>
+          </div>
+        </div>
+
       </div>
     </div>
   `

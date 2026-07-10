@@ -41,7 +41,7 @@ async function runQaAgent(taskId, userId, signal) {
       resolution: (await latestResolution(taskId)) || '（無）'
     }).trim();
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
-    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model });
+    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model, agentType: 'qa' });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', result.usage, result.durationMs);
   } catch (err) {

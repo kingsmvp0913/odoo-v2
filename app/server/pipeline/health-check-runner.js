@@ -34,7 +34,7 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
       agent_prompt: full.body || '',
       summary: JSON.stringify(summary)
     });
-    const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model });
+    const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health' });
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
     const parsed = await parseAgentResult(text, { parse: JSON.parse });
     if (parsed && typeof parsed.diagnosis === 'string' && parsed.diagnosis.trim() && SEVERITIES.has(parsed.severity)) {

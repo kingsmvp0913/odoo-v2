@@ -146,7 +146,7 @@ ${src || '（無原始碼）'}`;
   let title = node.title, content = node.content;
   try {
     const agent = loadAgent('library');
-    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal });
     if (!p) throw new Error('agent 輸出無法解析為有效 JSON');
@@ -200,7 +200,7 @@ ${task.analysis_yaml || '無'}
 執行日誌（最後 20 筆）：
 ${logText || '無'}`;
 
-    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, taskId, userId, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, taskId, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
     wikiUpdate = await parseAgentResult(text, { parse: JSON.parse, signal });
   } catch (err) {
@@ -279,7 +279,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   let overviewTitle = '專案概論';
   let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
   try {
-    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model });
+    const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal });
     if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }

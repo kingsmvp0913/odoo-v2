@@ -33,7 +33,7 @@ async function chatReply(projectId, chatId, userMessage, userId) {
 
   let chatResult;
   try {
-    chatResult = await runClaude(prompt, { model: agent.model });
+    chatResult = await runClaude(prompt, { model: agent.model, agentType: 'chat' });
   } catch (err) {
     await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
     throw err;
