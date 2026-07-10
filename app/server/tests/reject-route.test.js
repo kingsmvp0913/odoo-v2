@@ -1,4 +1,4 @@
-// 意圖：review_pending 退回 → 任務回 coding 依原因修正、原因落 task_rejections（工作流程健檢子專案 1）。
+// 意圖：review_pending 退回 → 任務進 reject_triage 分診、原因落 task_rejections（工作流程健檢子專案 1）。
 process.env.JWT_SECRET = 'test-reject';
 const { newDb } = require('pg-mem');
 const express = require('express');

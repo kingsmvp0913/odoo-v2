@@ -72,7 +72,7 @@ function registerRoutes(app) {
     }
   });
 
-  // 最終人工審核退回：填原因 → 任務回 coding_running（原因當 feedback），原因落 task_rejections（健檢子專案 1）
+  // 最終人工審核退回：填原因 → 任務進 reject_triage 分診（不再直進 coding），原因落 task_rejections（健檢子專案 1）
   app.post('/api/tasks/:id/reject', verifyToken, async (req, res) => {
     try {
       const reason = ((req.body && req.body.reason) || '').trim();
