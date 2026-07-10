@@ -326,6 +326,49 @@ async function runTourTests(projectId, moduleName) {
   return { ok: true, log: out };
 }
 
+// 刪任務時把該任務的 module 從測試 DB 卸載（odoo-bin shell + button_immediate_uninstall）。
+// 回傳結構化結果，不整庫重建、保住人工 QA 資料。呼叫端負責「任務層依存」判斷（同專案別的任務是否也用它）。
+//   { result: 'uninstalled' | 'skipped_not_installed' | 'skipped_no_env' | 'skipped_dependents', dependents?: string[] }
+// 環境沒建過（venv/.ready 不在）→ module 不可能裝過，回 skipped_no_env 且不 spawn。
+// shell 非 0 或未回傳 RESULT → throw，由呼叫端 fail-open 捕捉。
+async function uninstallModule(projectId, moduleName) {
+  if (!moduleName) return { result: 'skipped_not_installed' };
+  const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id = $1', [projectId]);
+  if (!project) return { result: 'skipped_no_env' };
+  const dirName = project.folder_name || project.name;
+  const envDir = path.join(ENV_BASE, dirName);
+  const srcDir = path.join(envDir, 'src');
+  const odooBin = path.join(srcDir, 'odoo-bin');
+  const dbName = `test_${dirName}`;
+  const isWin = process.platform === 'win32';
+  const venvPython = path.join(envDir, 'venv', isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
+  if (!fs.existsSync(venvPython) || !fs.existsSync(path.join(envDir, '.ready'))) {
+    return { result: 'skipped_no_env' };
+  }
+  const extraAddons = await projectAddonsPaths(projectId);
+  const addonsPath = [path.join(srcDir, 'addons'), ...extraAddons].join(',');
+  const script = fs.readFileSync(path.join(__dirname, 'uninstall_module.py'), 'utf8');
+  const out = await execWithStdin(
+    venvPython,
+    [odooBin, 'shell', '-d', dbName, '--no-http', '--addons-path', addonsPath, ...odooDbArgs()],
+    script,
+    // 比照 seedOdooUsers：Windows stdin/os.environ 預設非 UTF-8，強制 UTF-8 正確讀取 module 名
+    { ...process.env, UNINSTALL_MODULE: moduleName, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+  );
+  const line = String(out).split(/\r?\n/).reverse().find(l => l.startsWith('RESULT:'));
+  if (!line) throw new Error(`卸載未回傳結果：${String(out).slice(-300)}`);
+  const payload = line.slice('RESULT:'.length).trim();
+  if (payload === 'uninstalled') return { result: 'uninstalled' };
+  if (payload === 'skipped_not_installed') return { result: 'skipped_not_installed' };
+  if (payload.startsWith('skipped_dependents:')) {
+    return {
+      result: 'skipped_dependents',
+      dependents: payload.slice('skipped_dependents:'.length).split(',').map(s => s.trim()).filter(Boolean),
+    };
+  }
+  throw new Error(`卸載回傳未知結果：${payload}`);
+}
+
 async function stopEnv(projectId) {
   const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
   if (!env) return;
@@ -390,4 +433,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, runTourTests, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
+module.exports = { runEnvSetup, upgradeModules, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };

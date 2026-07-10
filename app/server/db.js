@@ -328,6 +328,7 @@ async function migrate() {
     { table: 'tasks', col: 'coding_session_id',    sql: 'ALTER TABLE tasks ADD COLUMN coding_session_id TEXT' },
     { table: 'tasks', col: 'coding_resume_count',  sql: 'ALTER TABLE tasks ADD COLUMN coding_resume_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
+    { table: 'tasks', col: 'merge_resolutions',    sql: 'ALTER TABLE tasks ADD COLUMN merge_resolutions TEXT' },
     { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },
     { table: 'tasks', col: 'teams_message_id',          sql: 'ALTER TABLE tasks ADD COLUMN teams_message_id TEXT' },
     { table: 'teams_settings', col: 'odoo_sync_interval',    sql: 'ALTER TABLE teams_settings ADD COLUMN odoo_sync_interval INTEGER DEFAULT 60' },

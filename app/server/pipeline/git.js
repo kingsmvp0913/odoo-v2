@@ -206,6 +206,26 @@ async function ensureTestingBranch(repoPath) {
   }
 }
 
+// 讀某 ref 的 commit SHA（供重建 testing 前備份；呼叫端自行 catch 處理不存在的情況）
+async function revParse(repoPath, ref) {
+  const { stdout } = await execFileAsync('git', ['rev-parse', ref], { cwd: repoPath });
+  return stdout.trim();
+}
+
+// 重建 testing：checkout testing（缺則建）後 reset --hard 到最新 main。
+// approved 任務碼已在 main，reset 到 main 即自動含入；呼叫端再重併在飛任務。
+async function resetTestingToMain(repoPath) {
+  const main = await getMainBranch(repoPath);
+  await ensureTestingBranch(repoPath);
+  await execFileAsync('git', ['reset', '--hard', main], { cwd: repoPath });
+}
+
+// 還原 testing 到指定 SHA（重建失敗時回滾）
+async function resetTestingTo(repoPath, sha) {
+  await execFileAsync('git', ['checkout', 'testing'], { cwd: repoPath }).catch(() => {});
+  await execFileAsync('git', ['reset', '--hard', sha], { cwd: repoPath });
+}
+
 // checkout 指定分支並從 origin pull 最新（分析前確保讀到最新碼）。
 // origin 尚無該分支（空 repo / 尚未 push）→ 視為無可 pull、放行；其餘失敗（origin 不通／本地髒）→ throw 停任務。
 async function pullBranch(repoPath, branch) {
@@ -297,4 +317,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc };

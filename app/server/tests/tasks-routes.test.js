@@ -1,6 +1,21 @@
 const request = require('supertest');
 const { newDb } = require('pg-mem');
 
+// 卸載測試區 module 走 odoo-bin（無法在單元測試 spawn）→ 只 mock uninstallModule，
+// 其餘 env-agent 匯出保持真實，不影響 app 啟動。
+jest.mock('../pipeline/env-agent', () => {
+  const actual = jest.requireActual('../pipeline/env-agent');
+  return { ...actual, uninstallModule: jest.fn().mockResolvedValue({ result: 'skipped_not_installed' }) };
+});
+const envAgent = require('../pipeline/env-agent');
+
+// 重建 testing 分支涉及 git，無法在單元測試跑真實 repo → mock 之。
+jest.mock('../pipeline/rebuild-testing', () => ({
+  rebuildTesting: jest.fn().mockResolvedValue(null),
+  INFLIGHT_DEPLOYED: ['deploy_testing', 'playwright_running', 'review_pending'],
+}));
+const rebuildMod = require('../pipeline/rebuild-testing');
+
 process.env.JWT_SECRET = 'test-tasks-secret';
 
 let app, dbModule, adminToken, userId;
@@ -459,3 +474,128 @@ test('DELETE /api/tasks/:id → 任務有 task_messages 時仍可成功刪除，
 // 已用最小重現腳本驗證：即使不帶參數的字面量 SQL `ANY(ARRAY[1]::int[])` 也一樣查不到，
 // 換成 `id::text = ANY($1::text[])` 才正常）。這條路徑因此原本就沒有任何測試覆蓋，本次修復沿用
 // 同一個既有、已在正式環境跑過的 ANY(int[]) pattern，不因測試工具限制改寫正式程式碼。
+
+// --- 刪任務時卸載測試區 module（子系統 A）---
+// 共用：建一個專案 + 一個帶 module 的任務（git_branch 留空，跳過 cleanupTaskGit）
+let _projSeq = 0;
+async function makeProjectTask({ module, status = 'done' }) {
+  _projSeq += 1;
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ($1,'17.0') RETURNING id",
+    [`proj_uninstall_${_projSeq}`]
+  );
+  const yaml = module == null ? null : `module: ${module}`;
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, analysis_yaml)
+     VALUES ($1,$2,'odoo','T',$3,$4,$5) RETURNING id`,
+    [userId, `task_uninstall_${_projSeq}`, status, p.id, yaml]
+  );
+  return { projectId: p.id, taskId: t.id };
+}
+
+// 意圖：正常情況（module 沒別的任務用、Odoo 也無下游依存）刪任務要真的把 module 從測試區卸掉
+test('DELETE 任務 → 無兄弟、無下游依存時卸載其 module，任務被刪、無警告', async () => {
+  envAgent.uninstallModule.mockClear();
+  envAgent.uninstallModule.mockResolvedValueOnce({ result: 'uninstalled' });
+  const { projectId, taskId } = await makeProjectTask({ module: 'idx_solo' });
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(envAgent.uninstallModule).toHaveBeenCalledWith(projectId, 'idx_solo');
+  expect(res.body.warnings).toEqual([]);
+  const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [taskId]);
+  expect(rows.length).toBe(0);
+});
+
+// 意圖：module 還有同專案其他任務在用 → 誤卸會弄壞別人的測試區，必須跳過卸載但仍刪任務
+test('DELETE 任務 → 同專案其他任務也用同一 module 時不卸載，但仍刪除', async () => {
+  envAgent.uninstallModule.mockClear();
+  const { projectId, taskId } = await makeProjectTask({ module: 'idx_shared' });
+  await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, analysis_yaml)
+     VALUES ($1,'task_uninstall_sibling','odoo','T','coding_running',$2,'module: idx_shared')`,
+    [userId, projectId]
+  );
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(envAgent.uninstallModule).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [taskId]);
+  expect(rows.length).toBe(0);
+});
+
+// 意圖：硬卸有下游依存的 module 會被 Odoo 連鎖卸載上層 → 回警告、不卸，但刪除照走
+test('DELETE 任務 → module 有 Odoo 下游依存時回警告不卸載，任務仍被刪', async () => {
+  envAgent.uninstallModule.mockClear();
+  envAgent.uninstallModule.mockResolvedValueOnce({ result: 'skipped_dependents', dependents: ['idx_child'] });
+  const { taskId } = await makeProjectTask({ module: 'idx_parent' });
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(res.body.warnings.length).toBe(1);
+  expect(res.body.warnings[0]).toContain('idx_child');
+  const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [taskId]);
+  expect(rows.length).toBe(0);
+});
+
+// 意圖：卸載只是加值收尾，卸載丟例外時絕不能卡住刪除（fail-open），並把錯誤當警告回報
+test('DELETE 任務 → 卸載丟例外時任務仍被刪，錯誤以警告回報', async () => {
+  envAgent.uninstallModule.mockClear();
+  envAgent.uninstallModule.mockRejectedValueOnce(new Error('odoo shell boom'));
+  const { taskId } = await makeProjectTask({ module: 'idx_boom' });
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(res.body.warnings.length).toBe(1);
+  const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [taskId]);
+  expect(rows.length).toBe(0);
+});
+
+// 意圖：任務沒有 module（無 analysis_yaml）就沒有卸載對象，不該嘗試呼叫卸載
+test('DELETE 任務 → 無 analysis_yaml/module 時不嘗試卸載，任務被刪', async () => {
+  envAgent.uninstallModule.mockClear();
+  const { taskId } = await makeProjectTask({ module: null });
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(envAgent.uninstallModule).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [taskId]);
+  expect(rows.length).toBe(0);
+});
+
+// 意圖：刪任務後要重建 testing 分支（清掉被刪任務留在 testing 的 source），對該專案觸發一次
+test('DELETE 任務 → 刪除後對該專案觸發 testing 重建', async () => {
+  rebuildMod.rebuildTesting.mockClear();
+  const { projectId, taskId } = await makeProjectTask({ module: 'idx_rebuild' });
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(rebuildMod.rebuildTesting).toHaveBeenCalledWith(projectId, expect.anything());
+});
+
+// 意圖：重建暫停待人工（回警告）時，警告要跟卸載警告一起回給前端；刪除照樣完成
+test('DELETE 任務 → 重建回警告時併入 warnings，任務仍被刪', async () => {
+  rebuildMod.rebuildTesting.mockClear();
+  rebuildMod.rebuildTesting.mockResolvedValueOnce('任務 #9 需人工解衝突，解完將自動續跑');
+  const { taskId } = await makeProjectTask({ module: 'idx_rebuild_warn' });
+
+  const res = await request(app).delete(`/api/tasks/${taskId}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(res.body.warnings.some(w => w.includes('人工解衝突'))).toBe(true);
+  const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [taskId]);
+  expect(rows.length).toBe(0);
+});

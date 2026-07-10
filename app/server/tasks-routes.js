@@ -1,9 +1,13 @@
 const path = require('path');
+const yaml = require('js-yaml');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { abortTask, runPipeline } = require('./pipeline/runner');
 const { removeWorktree, deleteBranchLocal } = require('./pipeline/git');
 const { writebackTaskMessage } = require('./pipeline/sync');
+const { uninstallModule } = require('./pipeline/env-agent');
+const { rebuildTesting } = require('./pipeline/rebuild-testing');
+const { withProjectLock } = require('./pipeline/project-lock');
 
 // 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除。
 async function cleanupTaskGit(task) {
@@ -18,6 +22,36 @@ async function cleanupTaskGit(task) {
     const wtPath = path.join(wtParent, path.basename(repo.local_path));
     await removeWorktree(repo.local_path, wtPath).catch(() => {});
     await deleteBranchLocal(repo.local_path, task.git_branch, true).catch(() => {});
+  }
+}
+
+// 從任務 analysis_yaml 取 module 名（與 deploy-testing 同套解析）；取不到回空字串。
+function taskModule(task) {
+  if (!task || !task.analysis_yaml) return '';
+  try { return (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; }
+  catch { return ''; }
+}
+
+// 刪任務時卸載其測試區 module（子系統 A）。best-effort，回警告字串或 null，永不 throw、不擋刪除。
+// excludeIds：本次一併刪除的任務 id（含自己）——同專案其他「未隱藏且不在此清單」的任務若也用同一 module，
+// 代表還有人在用 → 跳過卸載。依存判斷在 JS 端做，避開 pg-mem 對 ANY(int[]) 的限制。
+async function uninstallTaskModule(task, excludeIds) {
+  const moduleName = taskModule(task);
+  if (!task.project_id || !moduleName) return null;
+  const { rows: siblings } = await query(
+    'SELECT id, analysis_yaml FROM tasks WHERE project_id = $1 AND is_hidden = false',
+    [task.project_id]
+  );
+  const ex = new Set(excludeIds);
+  if (siblings.some(s => !ex.has(s.id) && taskModule(s) === moduleName)) return null;
+  try {
+    const r = await withProjectLock(task.project_id, () => uninstallModule(task.project_id, moduleName));
+    if (r && r.result === 'skipped_dependents') {
+      return `模組 ${moduleName} 因有其他模組依存（${(r.dependents || []).join('、')}），已保留未卸載，請自行處理。`;
+    }
+    return null;
+  } catch (err) {
+    return `模組 ${moduleName} 卸載失敗（已略過，不影響刪除）：${err.message}`;
   }
 }
 
@@ -280,15 +314,23 @@ function registerRoutes(app) {
     try {
       const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
       if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可刪除任務' });
-      const { rows } = await query('SELECT id, task_id, project_id, git_branch, approved_at FROM tasks WHERE id = $1', [req.params.id]);
+      const { rows } = await query('SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       if (rows[0].approved_at) return res.status(403).json({ error: '已人工審核通過的任務不可刪除' });
+      const warnings = [];
+      const uw = await uninstallTaskModule(rows[0], [rows[0].id]);
+      if (uw) warnings.push(uw);
       await cleanupTaskGit(rows[0]);
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_messages WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM tasks WHERE id = $1', [req.params.id]);
-      res.json({ ok: true });
+      // 刪除後重建 testing 分支（清掉被刪任務留在 testing 的 source）；best-effort，警告併回
+      if (rows[0].project_id) {
+        const rw = await rebuildTesting(rows[0].project_id, req.userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
+        if (rw) warnings.push(rw);
+      }
+      res.json({ ok: true, warnings });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -301,18 +343,30 @@ function registerRoutes(app) {
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       // 已審核通過的任務跳過不刪；其餘先清 worktree/分支再刪
       const { rows: ts } = await query(
-        'SELECT id, task_id, project_id, git_branch, approved_at FROM tasks WHERE id = ANY($1::int[]) AND user_id = $2',
+        'SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = ANY($1::int[]) AND user_id = $2',
         [ids, req.userId]
       );
       const deletable = ts.filter(t => !t.approved_at);
       const delIds = deletable.map(t => t.id);
       if (!delIds.length) return res.json({ ok: true, affected: 0 });
+      // 卸載各任務的測試區 module（互相排除整批 delIds：同批要刪的任務不算「還有人在用」）
+      const warnings = [];
+      for (const t of deletable) {
+        const w = await uninstallTaskModule(t, delIds);
+        if (w) warnings.push(w);
+      }
       for (const t of deletable) await cleanupTaskGit(t);
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [delIds]);
       const { rowCount } = await query('DELETE FROM tasks WHERE id = ANY($1::int[])', [delIds]);
-      res.json({ ok: true, affected: rowCount });
+      // 刪除後每個涉及專案重建一次 testing（去重）
+      const projectIds = [...new Set(deletable.map(t => t.project_id).filter(Boolean))];
+      for (const pid of projectIds) {
+        const rw = await rebuildTesting(pid, req.userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
+        if (rw) warnings.push(rw);
+      }
+      res.json({ ok: true, affected: rowCount, warnings });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

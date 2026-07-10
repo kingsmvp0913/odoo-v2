@@ -278,9 +278,10 @@ window.TaskListView = Vue.defineComponent({
       e.stopPropagation();
       if (!await confirmDialog({ title: '永久刪除任務', message: `確定要永久刪除任務「${t.title || t.task_id}」？刪除後可重新同步匯入。`, danger: true, confirmText: '刪除' })) return;
       try {
-        await Api.delete(`tasks/${t.id}`);
+        const r = await Api.delete(`tasks/${t.id}`);
         this.tasks = this.tasks.filter(x => x.id !== t.id);
         showToast('任務已刪除，重新同步可重新匯入', 'warn');
+        (r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
       } catch (err) { showToast(err.message, 'error'); }
     },
     toggleBatchMode() {
@@ -304,6 +305,7 @@ window.TaskListView = Vue.defineComponent({
       try {
         const r = await Api.post('tasks/batch/delete', { ids: this.selectedIds });
         showToast(`已刪除 ${r.affected} 筆任務`, 'warn');
+        (r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
         this.selectedIds = [];
         await this.load();
       } catch (err) { showToast(err.message, 'error'); }

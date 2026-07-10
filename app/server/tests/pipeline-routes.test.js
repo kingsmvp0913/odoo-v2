@@ -16,6 +16,10 @@ jest.mock('../pipeline/git', () => ({
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   concludeMerge: jest.fn().mockResolvedValue(undefined)
 }));
+jest.mock('../pipeline/rebuild-testing', () => ({
+  rebuildTesting: jest.fn().mockResolvedValue(null),
+  INFLIGHT_DEPLOYED: ['deploy_testing', 'playwright_running', 'review_pending'],
+}));
 
 process.env.JWT_SECRET = 'test-pipeline-secret';
 
@@ -164,4 +168,35 @@ test('mark-conflict-resolved 專案任務：驗證通過（concludeMerge 了結�
   const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
   expect(after[0].status).toBe('deploy_testing');
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// 意圖：重建來源的衝突（merge_conflict_data.rebuild=true）解完，要還原原狀態、觸發續跑重建，
+// 而非走正常 merge_running 的 deploy_testing 出口——兩種衝突來源後續處理不同。
+test('mark-conflict-resolved：rebuild 來源 → 還原 prior_status、觸發重建、不進 deploy_testing', async () => {
+  const { concludeMerge } = require('../pipeline/git');
+  concludeMerge.mockResolvedValue(undefined);
+  const rebuildMod = require('../pipeline/rebuild-testing');
+  rebuildMod.rebuildTesting.mockClear().mockResolvedValue(null);
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('cfrb','17.0','cfrb') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, '/repos/cfrb/main']
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, merge_conflict_data) VALUES ($1,'task_cf_rb','odoo','T','merge_conflict',$2,$3) RETURNING id",
+    [userId, proj.id, JSON.stringify({ rebuild: true, prior_status: 'review_pending', repos: [{ repo: 'main', files: ['x.py'] }] })]
+  );
+
+  const res = await request(app).post(`/api/tasks/${t.id}/mark-conflict-resolved`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(rebuildMod.rebuildTesting).toHaveBeenCalledWith(proj.id, userId);
+  const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [t.id]);
+  expect(after[0].status).toBe('review_pending');  // 還原原關卡，非 deploy_testing
+  expect(after[0].merge_conflict_data).toBeNull();
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });

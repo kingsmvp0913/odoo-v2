@@ -144,4 +144,4 @@ async function doMerge(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
-module.exports = { runMergeAgent };
+module.exports = { runMergeAgent, resolveConflict };

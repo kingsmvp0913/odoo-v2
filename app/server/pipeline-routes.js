@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
@@ -168,13 +170,17 @@ function registerRoutes(app) {
   app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, status, project_id, merge_conflict_data, merge_resolutions FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       if (rows[0].status !== 'merge_conflict') {
         return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
       }
+      let cd = null;
+      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+      const isRebuild = !!(cd && cd.rebuild); // 來自刪任務觸發的 testing 重建，而非正常 merge_running
+
       // 轉 deploy 前驗證主 clone 已無未解衝突並了結 merge（commit）——
       // 否則半套 merge（MERGE_HEAD＋衝突標記）直接進部署，錯誤會被誤歸因為程式問題（健檢 U6）
       if (rows[0].project_id) {
@@ -183,6 +189,20 @@ function registerRoutes(app) {
           "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
           [rows[0].project_id]
         );
+        // 重建來源：了結前先把人解好的檔案內容記進 merge_resolutions，供之後重演預帶（best-effort，讀不到略過）
+        if (isRebuild) {
+          let map = {};
+          try { map = rows[0].merge_resolutions ? JSON.parse(rows[0].merge_resolutions) : {}; } catch { map = {}; }
+          for (const r of (cd.repos || [])) {
+            const repo = repos.find(x => x.label === r.repo);
+            if (!repo) continue;
+            map[r.repo] = map[r.repo] || {};
+            for (const f of (r.files || [])) {
+              try { map[r.repo][f] = fs.readFileSync(path.join(repo.local_path, f), 'utf8'); } catch { /* 讀不到就略過 */ }
+            }
+          }
+          await query('UPDATE tasks SET merge_resolutions = $2 WHERE id = $1', [rows[0].id, JSON.stringify(map)]);
+        }
         for (const repo of repos) {
           try {
             await concludeMerge(repo.local_path);
@@ -191,6 +211,18 @@ function registerRoutes(app) {
           }
         }
       }
+
+      if (isRebuild) {
+        // 還原原關卡、清 conflict data，再冪等重跑重建（可能再度停在下一個衝突）
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, cd.prior_status || 'deploy_testing']
+        );
+        const { rebuildTesting } = require('./pipeline/rebuild-testing');
+        const warn = await rebuildTesting(rows[0].project_id, req.userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
+        return res.json({ ok: true, warnings: warn ? [warn] : [] });
+      }
+
       await query(
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
         [req.params.id]

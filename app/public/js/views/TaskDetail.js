@@ -23,13 +23,23 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: true };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
     canEditContent() { return this.task && this.task.status === 'new'; },
-    canApprove() { return this.task && this.task.status === 'review_pending'; },
-    canArchive() { return this.task && this.task.status === 'done'; },
+    // 時間軸底下的單一動作區依 status 切成一種 mode；有主動作的狀態各自 render，其餘走通用留言
+    timelineActionMode() {
+      const s = this.task?.status;
+      if (s === 'confirm_pending')  return 'answer';
+      if (s === 'review_pending')   return 'review';
+      if (s === 'merge_conflict')   return 'conflict';
+      if (s === 'cs_reply_pending') return 'cs_reply';
+      if (s === 'cs_data_needed')   return 'cs_data';
+      if (s === 'stopped')          return 'blocker';
+      if (s === 'done')             return 'archive';
+      return 'message';
+    },
     statusLabel() { return this.task ? (TD_STATUS_LABELS[this.task.status] || this.task.status) : ''; },
     csQuestions() {
       if (!this.task?.cs_question) return [];
@@ -112,12 +122,6 @@ window.TaskDetailView = Vue.defineComponent({
       const init = {};
       qs.forEach(q => { if (!(q in this.csAnswers)) init[q] = ''; });
       this.csAnswers = { ...this.csAnswers, ...init };
-    },
-    // 對話時間軸下方的單一輸入框：canAnswer 時走回覆 AI 問題，否則走一般留言
-    async submitThreadInput() {
-      if (!this.newMessageText.trim()) return;
-      if (this.canAnswer) return this.submitAnswer();
-      return this.sendTaskMessage();
     },
     async submitAnswer() {
       this.submitting = true;
@@ -229,8 +233,9 @@ window.TaskDetailView = Vue.defineComponent({
     async markConflictResolved() {
       this.conflictResolving = true;
       try {
-        await Api.post(`tasks/${this.task.id}/mark-conflict-resolved`, {});
+        const r = await Api.post(`tasks/${this.task.id}/mark-conflict-resolved`, {});
         showToast('衝突已標記為解決，可繼續更新正式', 'success');
+        (r && r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.conflictResolving = false; }
@@ -400,7 +405,7 @@ window.TaskDetailView = Vue.defineComponent({
 
           <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">對話時間軸</div>
           <div v-if="timeline.length" class="conv-log">
-            <div v-for="item in timeline" :key="item._key">
+            <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
               <div class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
               <div class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
                 {{ timelineMeta(item) }} · {{ formatTime(item.ts) }}
@@ -408,27 +413,87 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
           <div v-else style="color:var(--text-muted);font-size:var(--fs-base);margin:var(--space-4) 0">尚無對話記錄</div>
-          <div style="margin-top:var(--space-3);margin-bottom:var(--space-4)">
-            <textarea v-model="newMessageText" class="form-control"
-              :placeholder="canAnswer ? '輸入你的回覆...' : '新增留言...'" rows="4"></textarea>
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
-              <label v-if="showWritebackOption" style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer">
-                <input type="checkbox" v-model="messageWriteback"> 回寫 Odoo
-              </label>
-              <span v-else></span>
-              <button class="btn btn-primary btn-sm" @click="submitThreadInput"
-                :disabled="sendingMessage || submitting || !newMessageText.trim()">
-                {{ (canAnswer ? submitting : sendingMessage) ? '送出中...' : (canAnswer ? '送出回覆並繼續' : '送出留言') }}
-              </button>
-            </div>
-          </div>
+          <div class="timeline-action" style="margin-top:var(--space-3);margin-bottom:var(--space-4)">
 
-          <div v-if="task.blocker_content || task.status === 'stopped'" class="blocker-card">
-            <div class="blocker-card-head">
-              <strong>⚠ 失敗原因：</strong><br>{{ task.blocker_content || '任務分診失敗或執行中斷' }}
-            </div>
-            <div class="blocker-card-body">
-              <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">處理失敗 — 說明你的修正方向，任務將回到失敗的那一關重試</div>
+            <!-- answer：AI 有問題等你回覆 -->
+            <template v-if="timelineActionMode === 'answer'">
+              <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
+              <textarea v-model="newMessageText" class="form-control" placeholder="輸入你的回覆..." rows="4"></textarea>
+              <div style="margin-top:6px;text-align:right">
+                <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !newMessageText.trim()">
+                  {{ submitting ? '送出中...' : '送出回覆並繼續' }}
+                </button>
+              </div>
+            </template>
+
+            <!-- review：最終人工審核（退回原因 → 退回／審核通過同列，通過在右且綠色） -->
+            <template v-else-if="timelineActionMode === 'review'">
+              <div class="form-section">最終人工審核</div>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
+                已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
+              </p>
+              <textarea v-model="rejectReason" class="form-control" rows="4"
+                placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
+              <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
+                <button class="btn btn-primary btn-sm" @click="reject" :disabled="rejecting || !rejectReason.trim()">
+                  {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
+                </button>
+                <button class="btn btn-success btn-sm" @click="approve" :disabled="approving || rejecting">
+                  {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
+                </button>
+              </div>
+            </template>
+
+            <!-- conflict：合併衝突，秀出實際錯誤 -->
+            <template v-else-if="timelineActionMode === 'conflict'">
+              <div class="form-section">合併衝突 — 需人工解決</div>
+              <div v-if="task.blocker_content" class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content }}</div>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
+                自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。
+              </p>
+              <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
+                {{ conflictResolving ? '處理中...' : '✓ 已手動解決衝突，繼續' }}
+              </button>
+            </template>
+
+            <!-- cs_reply：客服回覆草稿 -->
+            <template v-else-if="timelineActionMode === 'cs_reply'">
+              <div class="form-section">客服回覆草稿</div>
+              <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，請確認內容後送出。</p>
+              <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
+                {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
+              </button>
+            </template>
+
+            <!-- cs_data：需補充資料，逐題填答 -->
+            <template v-else-if="timelineActionMode === 'cs_data'">
+              <div class="form-section">需補充資料</div>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:14px">請填寫以下所有問題後送出，AI 將重新分析。</p>
+              <div v-for="(q, idx) in csQuestions" :key="idx" style="margin-bottom:14px">
+                <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                  <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
+                  <span>{{ q }}</span>
+                </div>
+                <textarea v-model="csAnswers[q]"
+                  :ref="'csInput_' + idx"
+                  :placeholder="'請填寫第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === csQuestions.length - 1 ? '／送出' : '') + '）'"
+                  class="form-control" :class="{ 'form-control-error': !(csAnswers[q] && csAnswers[q].trim()) }"
+                  rows="4"
+                  @keydown.enter.prevent="handleCsEnter(idx)">
+                </textarea>
+              </div>
+              <div v-if="!csAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請填寫所有問題才能送出</div>
+              <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
+                {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
+              </button>
+            </template>
+
+            <!-- blocker：處理失敗／中斷，醒目秀出錯誤內容 -->
+            <template v-else-if="timelineActionMode === 'blocker'">
+              <div class="form-section">處理失敗 — 需人工介入</div>
+              <div class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</div>
+              <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">說明你的修正方向，任務將回到失敗的那一關重試</div>
               <textarea v-model="resolution" class="form-control" rows="4"
                 placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續...">
               </textarea>
@@ -437,73 +502,31 @@ window.TaskDetailView = Vue.defineComponent({
                   {{ resolving ? '處理中...' : '↺ 送出並從中斷處繼續' }}
                 </button>
               </div>
-            </div>
-          </div>
+            </template>
 
-          <div v-if="task.status === 'merge_conflict'" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
-            <div class="form-section">合併衝突 — 需人工解決</div>
-            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
-              自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。
-            </p>
-            <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
-              {{ conflictResolving ? '處理中...' : '✓ 已手動解決衝突，繼續' }}
-            </button>
-          </div>
-
-          <div v-if="canApprove" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
-            <div class="form-section">最終人工審核</div>
-            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
-              已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
-            </p>
-            <button class="btn btn-primary" @click="approve" :disabled="approving || rejecting">
-              {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
-            </button>
-            <div style="margin-top:var(--space-3)">
-              <textarea v-model="rejectReason" class="form-control" rows="4"
-                placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
-              <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="reject" :disabled="rejecting || !rejectReason.trim()">
-                {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
+            <!-- archive：任務已完成 -->
+            <template v-else-if="timelineActionMode === 'archive'">
+              <div class="form-section">任務已完成</div>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">此任務已完成並更新文件。可手動封存，或滿一個月後自動封存。</p>
+              <button class="btn btn-outline" @click="archive" :disabled="archiving">
+                {{ archiving ? '封存中...' : '🗄 封存任務' }}
               </button>
-            </div>
-          </div>
+            </template>
 
-          <div v-if="canArchive" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
-            <div class="form-section">任務已完成</div>
-            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">此任務已完成並更新文件。可手動封存，或滿一個月後自動封存。</p>
-            <button class="btn btn-outline" @click="archive" :disabled="archiving">
-              {{ archiving ? '封存中...' : '🗄 封存任務' }}
-            </button>
-          </div>
-
-          <div v-if="task.status === 'cs_reply_pending'" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
-            <div class="form-section">客服回覆草稿</div>
-            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
-            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，請確認內容後送出。</p>
-            <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
-              {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
-            </button>
-          </div>
-
-          <div v-if="task.status === 'cs_data_needed'" style="margin-top:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border)">
-            <div class="form-section">需補充資料</div>
-            <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:14px">請填寫以下所有問題後送出，AI 將重新分析。</p>
-            <div v-for="(q, idx) in csQuestions" :key="idx" style="margin-bottom:14px">
-              <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
-                <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
-                <span>{{ q }}</span>
+            <!-- message：無主動作的狀態，通用留言（回寫預設不勾） -->
+            <template v-else>
+              <textarea v-model="newMessageText" class="form-control" placeholder="新增留言..." rows="4"></textarea>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+                <label v-if="showWritebackOption" style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer">
+                  <input type="checkbox" v-model="messageWriteback"> 同時回寫 Odoo 備註
+                </label>
+                <span v-else></span>
+                <button class="btn btn-primary btn-sm" @click="sendTaskMessage"
+                  :disabled="sendingMessage || !newMessageText.trim()">
+                  {{ sendingMessage ? '送出中...' : '送出留言' }}
+                </button>
               </div>
-              <textarea v-model="csAnswers[q]"
-                :ref="'csInput_' + idx"
-                :placeholder="'請填寫第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === csQuestions.length - 1 ? '／送出' : '') + '）'"
-                class="form-control" :class="{ 'form-control-error': !(csAnswers[q] && csAnswers[q].trim()) }"
-                rows="4"
-                @keydown.enter.prevent="handleCsEnter(idx)">
-              </textarea>
-            </div>
-            <div v-if="!csAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請填寫所有問題才能送出</div>
-            <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
-              {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
-            </button>
+            </template>
           </div>
         </div>
       </div>

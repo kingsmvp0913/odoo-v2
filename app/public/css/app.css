@@ -274,6 +274,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .btn-ghost:hover:not(:disabled) { background: var(--bg); color: var(--text); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover:not(:disabled) { opacity: 0.88; }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover:not(:disabled) { opacity: 0.88; }
 .btn-sm { padding: 5px 12px; font-size: 12px; }
 .tab-badge { display: inline-block; min-width: 18px; text-align: center; background: #e5e7eb; color: #374151; border-radius: 9px; padding: 0 5px; margin-left: 5px; font-size: 11px; font-weight: 600; line-height: 1.6; }
 .tab-badge.tab-badge-active { background: rgba(255,255,255,0.25); color: #fff; }
@@ -352,10 +354,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 
 /* ── Conv / Task detail ───────────────────────── */
 .conv-log { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
+.conv-row { display: flex; flex-direction: column; align-items: flex-start; }
+.conv-row.user { align-items: flex-end; }
 .conv-msg { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.6; max-width: 85%; white-space: pre-wrap; }
 .conv-msg.ai { background: #f0f4ff; align-self: flex-start; border: 1px solid #dde3ff; }
 .conv-msg.user { background: #f0fdf4; align-self: flex-end; border: 1px solid #bbf7d0; }
-.conv-msg.system { background: #f9fafb; align-self: center; color: var(--text-muted); font-size: 12px; font-style: italic; max-width: 100%; border: 1px solid var(--border); }
+.conv-msg.system { background: #f9fafb; align-self: flex-start; color: var(--text-muted); font-size: 12px; font-style: italic; max-width: 85%; border: 1px solid var(--border); }
 .conv-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
 /* ── Modal / Dialog（共用；取代原生 confirm/prompt）── */
