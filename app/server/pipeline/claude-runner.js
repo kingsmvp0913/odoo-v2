@@ -11,6 +11,10 @@ function mcpConfigPath(agentType) {
   return path.join(__dirname, 'mcp', MCP_PROFILES[agentType] || 'none.json');
 }
 
+// task_events 批次寫入：顯示走 socket 即時，持久化累積後批量落地（取代每行一筆的高頻 INSERT）
+const EVENT_FLUSH_MS = parseInt(process.env.PIPELINE_EVENT_FLUSH_MS || '500', 10);
+const EVENT_FLUSH_MAX = parseInt(process.env.PIPELINE_EVENT_FLUSH_MAX || '50', 10);
+
 function formatEvent(ev) {
   if (!ev || !ev.type) return null;
 
@@ -72,7 +76,20 @@ function runClaude(prompt, opts = {}) {
     let settled = false;
     let timer = null;
     const startedAt = Date.now();
-    const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); fn(); } };
+    // 執行歷程批次寫：emit 先進 buffer，計時器／滿批／收尾時一次多列落地（unnest WITH ORDINALITY 保序，回放 ORDER BY id 不亂序）
+    const eventBuf = [];
+    let flushTimer = null;
+    const flushEvents = () => {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      if (!eventBuf.length || !taskId) return Promise.resolve();
+      const batch = eventBuf.splice(0);
+      return query(
+        'INSERT INTO task_events (task_id, content) SELECT $1, content FROM unnest($2::text[]) WITH ORDINALITY AS t(content, ord) ORDER BY ord',
+        [taskId, batch]
+      ).catch(() => {});
+    };
+    // settle 前先 flush 殘餘事件，確保尾段落地且排在下一關 marker 之前
+    const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); Promise.resolve(flushEvents()).finally(fn); } };
     // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）
     const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
     // CLI 掛死時若無 timeout，任務會永久卡在 *_running、merge 鎖永不釋放，只能重啟 server（健檢 U9）
@@ -84,8 +101,10 @@ function runClaude(prompt, opts = {}) {
     const emit = text => {
       if (!text || !taskId) return;
       if (userId) notify.emitToUser(userId, 'terminal:output', { taskId, data: text });
-      // 落地執行歷程供事後回放（best-effort，寫入失敗不影響 claude 執行）
-      query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [taskId, text]).catch(() => {});
+      // 落地執行歷程供事後回放（批次寫：滿批立刻 flush，否則排定計時器；best-effort，寫入失敗不影響 claude 執行）
+      eventBuf.push(text);
+      if (eventBuf.length >= EVENT_FLUSH_MAX) flushEvents();
+      else if (!flushTimer) flushTimer = setTimeout(flushEvents, EVENT_FLUSH_MS);
     };
 
     child.stdout.on('data', d => {
