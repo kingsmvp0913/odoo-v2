@@ -459,3 +459,21 @@ test('DELETE /api/tasks/:id → 任務有 task_messages 時仍可成功刪除，
 // 已用最小重現腳本驗證：即使不帶參數的字面量 SQL `ANY(ARRAY[1]::int[])` 也一樣查不到，
 // 換成 `id::text = ANY($1::text[])` 才正常）。這條路徑因此原本就沒有任何測試覆蓋，本次修復沿用
 // 同一個既有、已在正式環境跑過的 ANY(int[]) pattern，不因測試工具限制改寫正式程式碼。
+
+// 意圖：退回對話要能一來一往——reject_confirm_pending（AI 待你回覆）送出回覆後，
+// 同一個 /answer 端點要導回 reject_triage 續跑分診，而非一般澄清的 confirm_answered
+test('POST /api/tasks/:id/answer → reject_confirm_pending 回覆導回 reject_triage 並落 user log', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'rcp_1','odoo','T','c','reject_confirm_pending') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ user_answer: '整區預設收合' });
+  expect(res.status).toBe(200);
+  const { rows: [row] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(row.status).toBe('reject_triage');
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [t.id]);
+  expect(logs.some(l => l.role === 'user' && l.content.includes('整區預設收合'))).toBe(true);
+});
