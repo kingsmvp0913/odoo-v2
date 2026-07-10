@@ -76,12 +76,16 @@ test('verdict fail 未達上限 → coding_running、計數+1、issues 進 log',
   claudeReturns({ verdict: 'fail', issues: ['第1條未實作'], summary: '修這個' });
   const id = await makeTask(0);
   await runQaAgent(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count, reentry_count FROM tasks WHERE id=$1', [id]);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count, reentry_count, retry_feedback FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(t.qa_retry_count).toBe(1);
   expect(t.reentry_count).toBe(1); // C-5：退回 coding 累加總循環次數
+  // summary（給實作 Agent 的修正指引）要進 retry_feedback，不能因 issues 存在被丟棄
+  expect(t.retry_feedback).toContain('修正指引：修這個');
   const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [id]);
   expect(logs.some(l => l.content.includes('第1條未實作'))).toBe(true);
+  // [QA 未通過] log 是下一輪 QA 的未解清單，修正指引不得混入被當成待驗項
+  expect(logs.some(l => l.content.includes('修正指引'))).toBe(false);
 });
 
 test('verdict fail 第 5 次 → stopped', async () => {

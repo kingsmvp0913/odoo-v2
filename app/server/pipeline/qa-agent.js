@@ -73,6 +73,9 @@ async function runQaAgent(taskId, userId, signal) {
 
   if (result?.verdict === 'fail') {
     const issues = Array.isArray(result.issues) ? result.issues.join('\n') : (result.summary || '未提供細節');
+    // summary 是 md 契約要求的「給實作 Agent 的修正指引」，要進 retry_feedback；
+    // 但不進 [QA 未通過] log——那份是下一輪 QA 的未解清單，混入指引會被當成待驗項
+    const feedback = (Array.isArray(result.issues) && result.summary) ? `${issues}\n修正指引：${result.summary}` : issues;
     await query(
       "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
       [taskId, `[QA 未通過]\n${issues}`]
@@ -89,7 +92,7 @@ async function runQaAgent(taskId, userId, signal) {
       if (await bumpReentryOrStop(taskId, userId)) return true; // 總循環達上限 → 已標 stopped
       await query(
         "UPDATE tasks SET status='coding_running', qa_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `[QA 未通過]\n${issues}`]
+        [taskId, nextCount, `[QA 未通過]\n${feedback}`]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     }

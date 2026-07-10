@@ -44,4 +44,4 @@ async function parseAgentResult(raw, { parse, signal } = {}) {
   return out;
 }
 
-module.exports = { extractResult, parseAgentResult };
+module.exports = { extractResult, parseAgentResult, stripFence };

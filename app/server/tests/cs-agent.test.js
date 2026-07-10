@@ -72,7 +72,18 @@ test('code_change_clear + 無專案 → stopped（需先綁定專案）', async 
   expect(t.blocker_content).toContain('綁定專案');
 });
 
-test('code_change_vague → cs_data_needed with question', async () => {
+// md 契約：vague 的問題清單是 questions 陣列（前端 TaskDetail 以 JSON.parse 逐題渲染）
+test('code_change_vague → cs_data_needed，questions 陣列存成 JSON', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_vague","questions":["請提供重現步驟","請提供錯誤截圖"]}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ title: 'Something wrong', text: 'It does not work.' });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_question FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('cs_data_needed');
+  expect(JSON.parse(t.cs_question)).toEqual(['請提供重現步驟', '請提供錯誤截圖']);
+});
+
+// 容錯：model 偏離契約回單數 question 字串時仍可用（前端 JSON.parse 失敗會退回單題顯示）
+test('code_change_vague 回單數 question 字串 → 仍存入 cs_question', async () => {
   mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_vague","reply":null,"question":"請提供重現步驟和錯誤截圖"}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Something wrong', text: 'It does not work.' });
   await runCsAgent(taskId, userId);

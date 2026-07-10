@@ -10,24 +10,16 @@ stage: cs
 
 把判斷結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字），三種格式擇一：
 <result>
-{
-  "type": "operation",
-  "reply": "給客戶的回覆文字（若 type=operation）",
-  "question": null
-}
+{"type":"operation","reply":"給客戶的回覆文字"}
 </result>
 或
-{
-  "type": "code_change_clear",
-  "reply": null,
-  "question": null
-}
+<result>
+{"type":"code_change_clear"}
+</result>
 或
-{
-  "type": "code_change_vague",
-  "reply": null,
-  "questions": ["問題1", "問題2", "問題3"]
-}
+<result>
+{"type":"code_change_vague","questions":["問題1","問題2","問題3"]}
+</result>
 
 判斷標準：
 - operation：純操作問題，用現有功能就能解決

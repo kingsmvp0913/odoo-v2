@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
+const { stripFence } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { mergeInto, commitAll, abortMerge } = require('./git');
 const { query } = require('../db');
@@ -43,13 +44,14 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
     }
     throw err;
   }
-  const resolved = resolveResult.text;
+  // model 對「直接輸出檔案內容」加 ``` fence 是高頻行為，不剝掉會把 fence 寫進檔案並 commit 進 testing
+  const resolved = stripFence(resolveResult.text);
   if (resolveResult.usage && opts.taskId) {
     const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
     if (t) await logTokenUsage({ taskId: t.task_id, projectId: t.project_id }, t.user_id, 'merge', resolveResult.usage, resolveResult.durationMs);
   }
   if (!resolved || resolved.includes('<<<<<<<')) return false;
-  fs.writeFileSync(fullPath, resolved);
+  fs.writeFileSync(fullPath, resolved + '\n');
   return true;
 }
 

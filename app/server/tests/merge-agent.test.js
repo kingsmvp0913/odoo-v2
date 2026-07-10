@@ -1,5 +1,7 @@
 const { newDb } = require('pg-mem');
 
+const mockRunClaude = jest.fn();
+jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn(),
   commitAll: jest.fn().mockResolvedValue(undefined),
@@ -26,6 +28,7 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
+  mockRunClaude.mockReset();
   gitMock.mergeInto.mockReset();
   gitMock.commitAll.mockReset().mockResolvedValue(undefined);
   gitMock.abortMerge.mockReset().mockResolvedValue(undefined);
@@ -111,4 +114,35 @@ test('解衝突後 commitAll 失敗 → abortMerge 清理再 stopped', async () 
   expect(gitMock.abortMerge).toHaveBeenCalledWith('/repos/mp/main');
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(rows[0].status).toBe('stopped');
+});
+
+// 意圖：merge agent 被要求「直接輸出檔案內容」，但 model 對純內容輸出加 ``` fence 是高頻行為；
+// 不剝掉就把 fence 原封寫進檔案並 commit 進 testing → 語法壞檔。此防線若默默失效要立即翻紅。
+test('resolveConflict 剝除 code fence 後才寫檔', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-agent-'));
+  fs.writeFileSync(path.join(dir, 'a.py'), '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task\n');
+  mockRunClaude.mockResolvedValueOnce({ text: '```python\nx = 2\n```', usage: null, durationMs: null });
+
+  const ok = await mergeMod.resolveConflict(dir, 'a.py');
+
+  expect(ok).toBe(true);
+  expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8')).toBe('x = 2\n');
+});
+
+test('resolveConflict 輸出仍含衝突標記 → false 且不覆寫檔案', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-agent-'));
+  const original = '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task\n';
+  fs.writeFileSync(path.join(dir, 'a.py'), original);
+  mockRunClaude.mockResolvedValueOnce({ text: '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task', usage: null, durationMs: null });
+
+  const ok = await mergeMod.resolveConflict(dir, 'a.py');
+
+  expect(ok).toBe(false);
+  expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8')).toBe(original);
 });
