@@ -86,9 +86,10 @@ function registerRoutes(app) {
       if (task.status !== 'review_pending') {
         return res.status(400).json({ error: `Task status '${task.status}' cannot be rejected; expected review_pending` });
       }
-      // 回 coding 依原因修正；reentry_count 只累加做統計、不強制 stopped（人為刻意退回，不套自動 runaway 上限）
+      // 回退回分診（reject_triage）：由 analysis-reject 判 bug/clarify/respec，不再瞎猜式直進 coding。
+      // reentry_count 只累加做統計、不強制 stopped（人為刻意退回，不套自動 runaway 上限）
       await query(
-        "UPDATE tasks SET status='coding_running', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1",
+        "UPDATE tasks SET status='reject_triage', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1",
         [req.params.id, `[人工退回]\n${reason}`]
       );
       // 落一筆 task_logs，讓退回原因跟 approve 一樣出現在任務詳細頁的對話時間軸（否則畫面上憑空消失）
@@ -100,7 +101,7 @@ function registerRoutes(app) {
         "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,$4,'new')",
         [task.task_id, task.project_id, req.userId, reason]
       );
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'coding_running' });
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'reject_triage' });
       runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {

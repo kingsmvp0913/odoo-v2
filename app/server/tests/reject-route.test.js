@@ -39,12 +39,12 @@ test('空白原因 → 400（狀態不變）', async () => {
   expect(t.status).toBe('review_pending');
 });
 
-test('review_pending 退回 → coding_running、原因帶入 feedback、reentry+1 不 stopped、落 task_rejections(new)', async () => {
+test('review_pending 退回 → reject_triage、原因帶入 feedback、reentry+1 不 stopped、落 task_rejections(new)', async () => {
   const res = await request(app).post(`/api/tasks/${taskDbId}/reject`).set(auth())
     .send({ reason: '備註欄位型別錯；審核清單想預設收合' });
   expect(res.status).toBe(200);
   const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, reentry_count FROM tasks WHERE id=$1', [taskDbId]);
-  expect(t.status).toBe('coding_running');          // 不是 stopped
+  expect(t.status).toBe('reject_triage');           // 進分診，不再直進 coding
   expect(t.retry_feedback).toContain('備註欄位型別錯');
   expect(t.reentry_count).toBe(1);                  // 只累加做統計
   const { rows: rej } = await dbModule.query('SELECT task_id, project_id, reason, status FROM task_rejections');
