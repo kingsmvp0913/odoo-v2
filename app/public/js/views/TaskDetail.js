@@ -424,19 +424,6 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
 
-          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2)">
-            <span>即時歷程記錄</span>
-            <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
-          </div>
-          <div ref="eventsBox" @scroll="onEventsScroll"
-            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:var(--fs-sm);line-height:1.5;padding:10px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word">
-            <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
-            <template v-else>
-              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:var(--fs-xs);margin-bottom:6px">— 已到最前 —</div>
-              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)" v-html="ansiToHtml(ev.content)"></span>
-            </template>
-          </div>
-
           <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">對話時間軸</div>
           <div v-if="timeline.length" class="conv-log">
             <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
@@ -567,6 +554,19 @@ window.TaskDetailView = Vue.defineComponent({
                   {{ sendingMessage ? '送出中...' : '送出留言' }}
                 </button>
               </div>
+            </template>
+          </div>
+
+          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-4) 0 var(--space-2)">
+            <span>即時歷程記錄</span>
+            <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
+          </div>
+          <div ref="eventsBox" @scroll="onEventsScroll"
+            style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:var(--fs-sm);line-height:1.5;padding:10px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word">
+            <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
+            <template v-else>
+              <div v-if="!eventsHasMore" style="color:#666;text-align:center;font-size:var(--fs-xs);margin-bottom:6px">— 已到最前 —</div>
+              <span v-for="(ev, i) in events" :key="ev.id || ('live'+i)" v-html="ansiToHtml(ev.content)"></span>
             </template>
           </div>
         </div>
