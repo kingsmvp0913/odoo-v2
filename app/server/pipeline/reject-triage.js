@@ -69,8 +69,13 @@ async function runRejectTriage(taskId, userId, signal) {
 
   const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
 
+  // 使用者面泡泡：原因總結＋結論。summary 缺漏則退回舊行為（不寫空泡泡）。
+  const summary = (result?.summary || '').trim();
+  const logAi = (content) => query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, content]);
+
   // bug（且允許）→ 保留 retry_feedback、SD 不動，轉 coding（coding 走 resume 修補）
   if (result?.decision === 'bug' && allowBug) {
+    if (summary) await logAi(summary);
     await query("UPDATE tasks SET status='coding_running', updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     return true;
@@ -79,7 +84,7 @@ async function runRejectTriage(taskId, userId, signal) {
   // clarify，或 bug 被防呆擋下 → 落 AI 提問，轉 reject_confirm_pending
   if (result?.decision === 'clarify' || (result?.decision === 'bug' && !allowBug)) {
     const question = (result?.decision === 'clarify' && result.question) ? result.question : REPEAT_REJECT_QUESTION;
-    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, question]);
+    await logAi(summary ? `${summary}\n\n${question}` : question);
     await query("UPDATE tasks SET status='reject_confirm_pending', updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'reject_confirm_pending' });
     return true;
@@ -87,6 +92,7 @@ async function runRejectTriage(taskId, userId, signal) {
 
   // respec → 改寫 SD、清空 retry_feedback（coding 走 fresh 重做），轉 coding
   if (result?.decision === 'respec' && result.analysis_yaml) {
+    if (summary) await logAi(summary);
     await query(
       "UPDATE tasks SET status='coding_running', analysis_yaml=$2, retry_feedback=NULL, updated_at=NOW() WHERE id=$1",
       [taskId, result.analysis_yaml]

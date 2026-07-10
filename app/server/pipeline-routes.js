@@ -94,10 +94,12 @@ function registerRoutes(app) {
         "UPDATE tasks SET status='reject_triage', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1",
         [req.params.id, `[人工退回]\n${reason}`]
       );
-      // 落一筆 task_logs，讓退回原因跟 approve 一樣出現在任務詳細頁的對話時間軸（否則畫面上憑空消失）
+      // 時間軸只落「[人工退回]」標記，不塞原因本文（審核者常整包貼錯誤 log，全灌進畫面沒意義）。
+      // 完整原因仍在 retry_feedback（分診 agent 讀）與 task_rejections.reason（分類 agent 讀），
+      // 使用者面的原因總結＋結論改由 reject-triage 的 AI 泡泡呈現。
       await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', $2)",
-        [req.params.id, `[人工退回]\n${reason}`]
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', '[人工退回]')",
+        [req.params.id]
       );
       await query(
         "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,$4,'new')",

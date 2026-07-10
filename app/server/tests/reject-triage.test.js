@@ -69,42 +69,61 @@ function claudeReturns(json) {
   runClaude.mockResolvedValue({ text: `x\n<result>\n${JSON.stringify(json)}\n</result>`, usage: null, durationMs: null });
 }
 
-test('decision bug → coding_running，保留 retry_feedback、SD 不變', async () => {
-  claudeReturns({ decision: 'bug' });
+test('decision bug → coding_running，保留 retry_feedback、SD 不變，summary 落 AI 泡泡', async () => {
+  claudeReturns({ decision: 'bug', summary: '退回原因：備註型別錯；結論：研判為程式 bug，已轉回 coding 修補。' });
   const id = await makeTask(1);
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, analysis_yaml FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(t.retry_feedback).toContain('備註型別錯');   // 保留 → coding 走 resume 修補
   expect(t.analysis_yaml).toBe('module: sale');        // SD 不動
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
+  expect(logs.some(l => l.role === 'ai' && l.content.includes('研判為程式 bug'))).toBe(true);
 });
 
-test('decision respec → coding_running，改寫 SD、清空 retry_feedback', async () => {
-  claudeReturns({ decision: 'respec', analysis_yaml: 'module: sale\nrequirements:\n  - 備註改用 Text 型別' });
+test('decision respec → coding_running，改寫 SD、清空 retry_feedback，summary 落 AI 泡泡', async () => {
+  claudeReturns({ decision: 'respec', summary: '退回原因：備註需求變更；結論：已更新規格，將重新實作。', analysis_yaml: 'module: sale\nrequirements:\n  - 備註改用 Text 型別' });
   const id = await makeTask(1);
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, analysis_yaml FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(t.retry_feedback).toBeNull();                 // 清空 → coding 走 fresh 重做
   expect(t.analysis_yaml).toContain('Text 型別');
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
+  expect(logs.some(l => l.role === 'ai' && l.content.includes('已更新規格'))).toBe(true);
 });
 
-test('decision clarify → reject_confirm_pending，AI 提問落 log', async () => {
-  claudeReturns({ decision: 'clarify', question: '你要的預設收合是指整區還是逐項？' });
+test('decision clarify → reject_confirm_pending，AI 泡泡含 summary 與 question', async () => {
+  claudeReturns({ decision: 'clarify', summary: '退回原因：收合行為未定義。', question: '你要的預設收合是指整區還是逐項？' });
   const id = await makeTask(1);
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('reject_confirm_pending');
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
-  expect(logs.some(l => l.role === 'ai' && l.content.includes('預設收合'))).toBe(true);
+  const ai = logs.find(l => l.role === 'ai');
+  expect(ai).toBeTruthy();
+  expect(ai.content).toContain('收合行為未定義');       // summary
+  expect(ai.content).toContain('預設收合');             // question
 });
 
-test('防呆：同 task 第 2 次退回，模型判 bug 也強制轉 clarify', async () => {
-  claudeReturns({ decision: 'bug' });
+test('防呆：同 task 第 2 次退回，模型判 bug 也強制轉 clarify，AI 泡泡含 summary', async () => {
+  claudeReturns({ decision: 'bug', summary: '退回原因：同一問題再次被退。' });
   const id = await makeTask(2);   // 已 2 筆 rejection → allow_bug=false
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('reject_confirm_pending');
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
+  const ai = logs.find(l => l.role === 'ai');
+  expect(ai.content).toContain('同一問題再次被退');      // summary
+  expect(ai.content).toContain('上一輪');                // REPEAT_REJECT_QUESTION
+});
+
+test('agent 未回 summary → 不因缺欄位丟例外，bug 仍轉 coding_running', async () => {
+  claudeReturns({ decision: 'bug' });   // 無 summary（fallback）
+  const id = await makeTask(1);
+  await expect(runRejectTriage(id, userId)).resolves.toBe(true);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
 });
 
 test('無有效 result → stopped', async () => {

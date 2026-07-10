@@ -42,17 +42,20 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 
 【輸出】判斷完成後，把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。
 
+每個 decision 都必須帶 `summary`：2–4 句繁體中文，寫給審核者看，內容為「退回原因總結 ＋ 本輪判定結論」。
+不要把原始 traceback／錯誤 log 原文抄進 summary，要濃縮成人看得懂的重點。
+
 是程式 bug（SD 是對的）：
 <result>
-{"decision":"bug"}
+{"decision":"bug","summary":"退回原因總結…；結論：研判為程式 bug，已轉回 coding 修補。"}
 </result>
 
 規格問題、需先向審核者問清楚：
 <result>
-{"decision":"clarify","question":"具體、可回答的問題（可含你的初步理解讓對方確認）"}
+{"decision":"clarify","summary":"退回原因總結 ＋ 你的初步判斷…","question":"具體、可回答的問題（可含你的初步理解讓對方確認）"}
 </result>
 
 規格問題、已看懂要改什麼：
 <result>
-{"decision":"respec","analysis_yaml":"<改寫後完整 yaml 字串，換行用 \n>"}
+{"decision":"respec","summary":"退回原因總結…；結論：已更新規格，將重新實作。","analysis_yaml":"<改寫後完整 yaml 字串，換行用 \n>"}
 </result>

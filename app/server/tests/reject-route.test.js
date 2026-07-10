@@ -51,13 +51,15 @@ test('review_pending 退回 → reject_triage、原因帶入 feedback、reentry+
   expect(rej.length).toBe(1);
   expect(rej[0].task_id).toBe('task_odoo_1');       // 業務 id（穩定，硬刪不失真）
   expect(rej[0].status).toBe('new');
+  expect(rej[0].reason).toContain('備註欄位型別錯'); // 原始全文仍保留給分類 agent
   const { rows: logRows } = await dbModule.query(
     "SELECT role, content FROM task_logs WHERE task_id=$1 ORDER BY id", [taskDbId]
   );
+  // 時間軸只留標記，不渲染原始原因本文（避免整包錯誤 log 灌進畫面）
   expect(logRows.length).toBe(1);
   expect(logRows[0].role).toBe('system');
-  expect(logRows[0].content).toContain('[人工退回]');
-  expect(logRows[0].content).toContain('備註欄位型別錯');
+  expect(logRows[0].content).toBe('[人工退回]');
+  expect(logRows[0].content).not.toContain('備註欄位型別錯');
 });
 
 test('非 review_pending（已被上題退回成 coding）→ 400', async () => {
