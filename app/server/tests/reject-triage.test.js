@@ -1,5 +1,7 @@
-// 意圖：退回後分診——bug 直進 coding（保留 retry_feedback 走 resume）、respec 改寫 SD 後 fresh 重做、
-// clarify 落 AI 提問轉 reject_confirm_pending；同 task 二次退回禁判 bug；無有效結果 stopped。
+// 意圖：退回分診只判 bug 與否——bug 直進 coding（保留 retry_feedback 走 resume）；
+// 規格類（respec，含二次退回禁 bug 被降級者）不自己改 SD，改轉回 analysis 重寫，
+// 並把分診結論以 user 澄清落地餵給重跑的分析，清 retry_feedback/coding_session_id 走全新一輪；
+// 無有效結果 stopped。
 const { newDb } = require('pg-mem');
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
@@ -81,41 +83,30 @@ test('decision bug → coding_running，保留 retry_feedback、SD 不變，summ
   expect(logs.some(l => l.role === 'ai' && l.content.includes('研判為程式 bug'))).toBe(true);
 });
 
-test('decision respec → coding_running，改寫 SD、清空 retry_feedback，summary 落 AI 泡泡', async () => {
-  claudeReturns({ decision: 'respec', summary: '退回原因：備註需求變更；結論：已更新規格，將重新實作。', analysis_yaml: 'module: sale\nrequirements:\n  - 備註改用 Text 型別' });
+test('decision respec → analysis_running：不自己改 SD，清 retry_feedback/coding_session_id，結論以 user 澄清落地餵回分析', async () => {
+  claudeReturns({ decision: 'respec', summary: '退回原因：備註需求變更；結論：判定為規格問題，交回分析階段重寫 SD。' });
   const id = await makeTask(1);
   await runRejectTriage(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, analysis_yaml FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('coding_running');
-  expect(t.retry_feedback).toBeNull();                 // 清空 → coding 走 fresh 重做
-  expect(t.analysis_yaml).toContain('Text 型別');
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, coding_session_id, analysis_yaml FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('analysis_running');           // 交回分析重寫，非直接 coding
+  expect(t.retry_feedback).toBeNull();                 // 清退回內容
+  expect(t.coding_session_id).toBeNull();              // 清舊 coding session → fresh 重跑
+  expect(t.analysis_yaml).toBe('module: sale');        // triage 不自己動 SD
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
-  expect(logs.some(l => l.role === 'ai' && l.content.includes('已更新規格'))).toBe(true);
+  // 分診結論以 user 澄清落地，analysis 重跑的 clarification（讀 role='user'）才拿得到
+  expect(logs.some(l => l.role === 'user' && l.content.includes('需調整規格') && l.content.includes('規格問題'))).toBe(true);
 });
 
-test('decision clarify → reject_confirm_pending，AI 泡泡含 summary 與 question', async () => {
-  claudeReturns({ decision: 'clarify', summary: '退回原因：收合行為未定義。', question: '你要的預設收合是指整區還是逐項？' });
-  const id = await makeTask(1);
-  await runRejectTriage(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('reject_confirm_pending');
-  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
-  const ai = logs.find(l => l.role === 'ai');
-  expect(ai).toBeTruthy();
-  expect(ai.content).toContain('收合行為未定義');       // summary
-  expect(ai.content).toContain('預設收合');             // question
-});
-
-test('防呆：同 task 第 2 次退回，模型判 bug 也強制轉 clarify，AI 泡泡含 summary', async () => {
+test('防呆：同 task 第 2 次退回，模型判 bug 也強制降級為規格類 → analysis_running', async () => {
   claudeReturns({ decision: 'bug', summary: '退回原因：同一問題再次被退。' });
   const id = await makeTask(2);   // 已 2 筆 rejection → allow_bug=false
   await runRejectTriage(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('reject_confirm_pending');
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, coding_session_id FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('analysis_running');
+  expect(t.retry_feedback).toBeNull();
+  expect(t.coding_session_id).toBeNull();
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
-  const ai = logs.find(l => l.role === 'ai');
-  expect(ai.content).toContain('同一問題再次被退');      // summary
-  expect(ai.content).toContain('上一輪');                // REPEAT_REJECT_QUESTION
+  expect(logs.some(l => l.role === 'user' && l.content.includes('同一問題再次被退'))).toBe(true);
 });
 
 test('agent 未回 summary → 不因缺欄位丟例外，bug 仍轉 coding_running', async () => {

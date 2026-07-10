@@ -180,7 +180,7 @@ async function handleWiki(task, settings, signal) {
   await runLibraryAgent(task.id, task.user_id, signal);
 }
 
-// reject_triage：退回版分析分診（bug→coding／clarify→reject_confirm_pending／respec→改 SD 後 coding）
+// reject_triage：退回分診只判 bug 與否（bug→coding／規格類 respec→回 analysis 重寫 SD）
 async function handleRejectTriage(task, settings, signal) {
   const { runRejectTriage } = require('./reject-triage');
   await runRejectTriage(task.id, task.user_id, signal);

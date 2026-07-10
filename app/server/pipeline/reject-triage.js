@@ -8,10 +8,6 @@ const { ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 
-// 同 task 第二次以上退回時給的預設澄清提問（模型判 bug 被防呆擋下時沿用）
-const REPEAT_REJECT_QUESTION =
-  '這個問題上一輪已當作程式 bug 修正過但仍被退回，請具體說明期望的正確行為與規格，我會據此更新分析書再重做。';
-
 async function stop(taskId, userId, reason) {
   await query("UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1", [taskId, reason]);
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
@@ -91,23 +87,20 @@ async function runRejectTriage(taskId, userId, signal) {
     return true;
   }
 
-  // clarify，或 bug 被防呆擋下 → 落 AI 提問，轉 reject_confirm_pending
-  if (result?.decision === 'clarify' || (result?.decision === 'bug' && !allowBug)) {
-    const question = (result?.decision === 'clarify' && result.question) ? result.question : REPEAT_REJECT_QUESTION;
-    await logAi(summary ? `${summary}\n\n${question}` : question);
-    await query("UPDATE tasks SET status='reject_confirm_pending', updated_at=NOW() WHERE id=$1", [taskId]);
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'reject_confirm_pending' });
-    return true;
-  }
-
-  // respec → 改寫 SD、清空 retry_feedback（coding 走 fresh 重做），轉 coding
-  if (result?.decision === 'respec' && result.analysis_yaml) {
-    if (summary) await logAi(summary);
+  // 規格類（respec），或 bug 被防呆擋下 → 分診員不自己改 SD，交回分析階段重寫。
+  // 把分診結論當「使用者澄清」餵給重跑的 analysis（其 clarification 讀 role='user'），指出要往哪改；
+  // 清 retry_feedback／coding_session_id 走全新一輪（重建乾淨 worktree → 重寫 SD → fresh coding）。
+  if (result?.decision === 'respec' || result?.decision === 'bug') {
+    const handoff = summary || '審核者退回，判定為規格問題，請依退回原因重新分析並調整規格。';
     await query(
-      "UPDATE tasks SET status='coding_running', analysis_yaml=$2, retry_feedback=NULL, updated_at=NOW() WHERE id=$1",
-      [taskId, result.analysis_yaml]
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+      [taskId, `[退回—需調整規格]\n${handoff}`]
     );
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+    await query(
+      "UPDATE tasks SET status='analysis_running', retry_feedback=NULL, coding_session_id=NULL, updated_at=NOW() WHERE id=$1",
+      [taskId]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'analysis_running' });
     return true;
   }
 
