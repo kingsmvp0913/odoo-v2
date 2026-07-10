@@ -46,6 +46,31 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 讀取常駐 Odoo server 的 runtime log（尾端），供前端「查看 log」除錯（asset 503／崩潰 traceback 等）。
+  app.get('/api/projects/:id/env/log', verifyToken, async (req, res) => {
+    try {
+      const fs = require('fs');
+      const { ENV_BASE: base, runtimeLogPath } = require('./pipeline/env-agent');
+      const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
+      if (!project) return res.status(404).json({ error: 'project not found' });
+      const dirName = project.folder_name || project.name;
+      const logPath = runtimeLogPath(path.join(base, dirName));
+      if (!fs.existsSync(logPath)) return res.json({ log: '', exists: false });
+      // 只回尾端 256KB，避免大 log 撐爆前端與網路
+      const MAX = 256 * 1024;
+      const { size } = fs.statSync(logPath);
+      const start = size > MAX ? size - MAX : 0;
+      const fd = fs.openSync(logPath, 'r');
+      try {
+        const buf = Buffer.alloc(size - start);
+        fs.readSync(fd, buf, 0, buf.length, start);
+        let log = buf.toString('utf8');
+        if (start > 0) log = '…（前段省略）\n' + log.slice(log.indexOf('\n') + 1);
+        res.json({ log, exists: true, truncated: start > 0 });
+      } finally { fs.closeSync(fd); }
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.post('/api/projects/:id/env/stop', verifyToken, async (req, res) => {
     try {
       const { stopEnv } = require('./pipeline/env-agent');

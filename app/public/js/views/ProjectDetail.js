@@ -12,7 +12,9 @@ window.ProjectDetailView = Vue.defineComponent({
       _pollTimer: null,
       _reposPollTimer: null,
       editOdooProjectName: '',
-      editServiceRespondentName: ''
+      editServiceRespondentName: '',
+      runtimeLog: null,
+      logLoading: false
     };
   },
   computed: {
@@ -150,6 +152,14 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
     },
+    async viewLog() {
+      this.logLoading = true;
+      try {
+        const data = await Api.get(`projects/${this.$route.params.id}/env/log`);
+        this.runtimeLog = data.exists ? (data.log || '（log 為空，server 尚未輸出）') : '（尚無 log 檔，環境未啟動過）';
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.logLoading = false; }
+    },
     async deleteEnv() {
       if (!await confirmDialog({ title: '刪除測試環境', message: '確定刪除整個測試環境？將移除 Odoo 原始碼與 venv（數 GB），下次需重新建立。', danger: true, confirmText: '刪除' })) return;
       this.envWorking = true;
@@ -277,8 +287,19 @@ window.ProjectDetailView = Vue.defineComponent({
               <button class="btn btn-outline btn-sm" @click="stopEnv" :disabled="envWorking">停止</button>
             </template>
             <button v-if="env.built" class="btn btn-outline btn-sm" @click="syncUsers" :disabled="envWorking || env.status === 'setting_up'">👥 同步使用者</button>
+            <button v-if="env.built || env.status !== 'idle'" class="btn btn-outline btn-sm" @click="viewLog" :disabled="logLoading">
+              <span v-if="logLoading" class="spinner"></span>📄 查看 log
+            </button>
             <button v-if="env.status !== 'idle' || env.built" class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteEnv" :disabled="envWorking">刪除環境</button>
             <button class="btn btn-outline btn-sm" @click="loadEnv" :disabled="envWorking">↺ 重新整理</button>
+          </div>
+          <div v-if="runtimeLog !== null" style="margin-top:var(--space-3)">
+            <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px">
+              <span style="font-size:var(--fs-sm);color:var(--text-muted)">Odoo 運行記錄（server log 尾端）</span>
+              <button class="btn btn-outline btn-sm" @click="viewLog" :disabled="logLoading" title="重新抓取最新 log">↺</button>
+              <button class="btn btn-outline btn-sm" @click="runtimeLog = null">關閉</button>
+            </div>
+            <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:var(--fs-xs);overflow-x:auto;white-space:pre-wrap;max-height:420px;overflow-y:auto">{{ runtimeLog }}</pre>
           </div>
           <div v-if="env.status === 'setting_up'" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:var(--space-2)">
             系統自動分配可用 port，每 5 秒自動更新狀態

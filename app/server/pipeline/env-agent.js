@@ -10,6 +10,9 @@ const { allocateProjectPort, loopbackHostForPort } = require('../port-alloc');
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
 
+// 常駐 Odoo server 的 runtime log 檔路徑（單一慣例，供啟動端寫入與 route 端讀取共用）
+function runtimeLogPath(envDir) { return path.join(envDir, 'odoo.log'); }
+
 function execCmd(bin, args) {
   return new Promise((resolve, reject) => {
     // maxBuffer 預設僅 1MB，Odoo 升級 log 超過會以 maxBuffer exceeded 假失敗
@@ -209,10 +212,18 @@ async function runEnvSetup(projectId) {
     const pythonw = path.join(venvDir, 'Scripts', 'pythonw.exe');
     if (fs.existsSync(pythonw)) serverPython = pythonw;
   }
-  const child = spawn(serverPython, [odooBin, '-d', dbName, `--http-port=${port}`, '--http-interface=0.0.0.0', '--addons-path', addonsPath, ...odooDbArgs()], {
+  // 常駐 server 的 runtime log：交由 Odoo 原生 --logfile 自寫（pythonw 無主控台、detached 導 stdio 到檔不可靠），
+  // 供前端「查看 log」按鈕除錯（如 asset bundle 503 → 後台空白，traceback 只在此可見）。
+  // 每次啟動先清空，只保留當次執行的 log，避免無上限成長。
+  const logPath = runtimeLogPath(envDir);
+  try { fs.rmSync(logPath, { force: true }); } catch {}
+  const child = spawn(serverPython, [odooBin, '-d', dbName, `--http-port=${port}`, '--http-interface=0.0.0.0', `--logfile=${logPath}`, '--addons-path', addonsPath, ...odooDbArgs()], {
     detached: true,
     stdio: 'ignore',
-    windowsHide: true  // 背景運行，不另開 Windows 主控台視窗（pythonw 為主要手段，此為輔）
+    windowsHide: true,  // 背景運行，不另開 Windows 主控台視窗（pythonw 為主要手段，此為輔）
+    // PYTHONUTF8：強制 Python 以 UTF-8 寫 --logfile，否則 Windows 用系統編碼（cp950）寫檔，
+    // 中文 traceback／錯誤訊息（env 載 zh_TW）會變亂碼，讓 log 對中文錯誤失去鑑識價值。
+    env: { ...process.env, PYTHONUTF8: '1' }
   });
   // detached/unref 的子行程，仍會在父程序存活期間送出 exit 事件；用來偵測「啟動即崩」。
   let earlyExit = null;
@@ -433,4 +444,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE };
+module.exports = { runEnvSetup, upgradeModules, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath };
