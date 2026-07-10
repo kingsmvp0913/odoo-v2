@@ -68,6 +68,7 @@ window.ProjectChatView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
     },
     handleEnter(e) {
+      if (e.isComposing || e.keyCode === 229) return; // IME 組字中，Enter 用於選字，不送出
       if (e.shiftKey) return; // Shift+Enter = newline
       e.preventDefault();
       this.send();
@@ -92,7 +93,7 @@ window.ProjectChatView = Vue.defineComponent({
       } finally { this.sending = false; }
     },
     scrollToBottom() {
-      const el = this.$el && this.$el.querySelector('.chat-messages');
+      const el = this.$refs.messages;
       if (el) el.scrollTop = el.scrollHeight;
     },
     formatTime(ts) {
@@ -133,7 +134,7 @@ window.ProjectChatView = Vue.defineComponent({
           請選擇或建立對話
         </div>
         <template v-else>
-          <div class="chat-messages" style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px">
+          <div class="chat-messages" ref="messages" style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px">
             <div v-if="loadingMsgs" class="loading">載入中...</div>
             <div v-for="m in messages" :key="m.id">
               <div :style="{ display:'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }">
