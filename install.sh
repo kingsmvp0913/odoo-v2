@@ -21,6 +21,7 @@ echo "Node.js $(node --version)"
 
 command -v git &>/dev/null || install_apt git
 command -v python3 &>/dev/null || install_apt python3 python3-venv python3-pip
+command -v xmllint &>/dev/null || install_apt libxml2-utils
 if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
   install_apt google-chrome-stable || install_apt chromium-browser
 fi
