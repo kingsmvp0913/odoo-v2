@@ -6,7 +6,7 @@ const { getProjectInfo, worktreeParent, latestResolution } = require('./task-age
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 
-const QA_LIMIT = 3;
+const QA_LIMIT = 5;
 
 // QA 審查：對照 SD 檢查任務 diff。pass→merge_running；fail→退 coding 並計數（滿 QA_LIMIT→stopped）。
 async function runQaAgent(taskId, userId, signal) {
@@ -32,12 +32,20 @@ async function runQaAgent(taskId, userId, signal) {
     // 主分支名依實際 repo 而定（main/master），寫死 main 會讓 diff 基底錯誤、審查失準
     const { getMainBranch } = require('./git');
     const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+    // 撈最近一筆 QA 未解清單餵給本輪：QA 逐項重驗（修好的掉、沒修的留、新的加），讓迴圈收斂而非每輪重新發散。
+    // 新語意下每筆 [QA 未通過] 本身即「當下完整未解清單」，取最新一筆＝最完整，不必串接歷史。
+    const { rows: [prev] } = await query(
+      "SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 未通過]%' ORDER BY id DESC LIMIT 1",
+      [taskId]
+    );
+    const priorFindings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（首輪，無上輪清單）';
     const prompt = agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
       main_branch: mainBranch,
       git_branch: task.git_branch || '（未設定）',
       analysis_yaml: task.analysis_yaml || '（無規格）',
+      prior_findings: priorFindings,
       resolution: (await latestResolution(taskId)) || '（無）'
     }).trim();
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改

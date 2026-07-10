@@ -84,13 +84,38 @@ test('verdict fail 未達上限 → coding_running、計數+1、issues 進 log',
   expect(logs.some(l => l.content.includes('第1條未實作'))).toBe(true);
 });
 
-test('verdict fail 第 3 次 → stopped', async () => {
+test('verdict fail 第 5 次 → stopped', async () => {
   claudeReturns({ verdict: 'fail', issues: ['又錯'] });
-  const id = await makeTask(2); // 已 2 次，本次是第 3 次
+  const id = await makeTask(4); // 已 4 次，本次是第 5 次（QA_LIMIT=5）
   await runQaAgent(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');
-  expect(t.qa_retry_count).toBe(3);
+  expect(t.qa_retry_count).toBe(5);
+});
+
+// 收斂關鍵：QA 每輪必須看到上一輪的未解清單，才能逐項重驗、不重新發散。
+// 這條意圖若默默失效，迴圈會退回「每輪各抓不同子集」的打轉，故明確鎖住。
+test('上一輪 [QA 未通過] 會帶入本輪 QA 的 prompt', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['沿用問題'] });
+  const id = await makeTask(0);
+  // 正式格式為「[QA 未通過]\n<清單>」，但 pg-mem 的 LIKE '%' 不跨換行（正式 Postgres 會），
+  // 故 seed 用標頭+空白；查詢前綴比對與 strip 的 \s* 對空白/換行行為一致，僅 pg-mem 換行處理不同。
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+    [id, '[QA 未通過] 按鈕位置未緊鄰新增按鈕']
+  );
+  await runQaAgent(id, userId);
+  const sentPrompt = runClaude.mock.calls[0][0];
+  expect(sentPrompt).toContain('按鈕位置未緊鄰新增按鈕');
+  expect(sentPrompt).not.toContain('[QA 未通過]'); // 標頭已剝除，只留清單本體
+});
+
+test('首輪無上一輪清單 → prompt 帶入佔位字串', async () => {
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const sentPrompt = runClaude.mock.calls[0][0];
+  expect(sentPrompt).toContain('（首輪，無上輪清單）');
 });
 
 test('無 RESULT-JSON → stopped', async () => {
