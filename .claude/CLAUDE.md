@@ -60,3 +60,15 @@ When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` befo
 **Rule 10 — Checkpoint After Every Significant Step**: Summarize what was done, what's verified, and what's left. Don't continue from a state you can't describe back. If you lose track, stop and restate.
 
 **Rule 12 — Fail Loud**: "Completed" is wrong if anything was skipped silently. "Tests pass" is wrong if any were skipped. Default to surfacing uncertainty, not hiding it.
+
+<!-- platform-only -->
+## 5. 測試環境 log／附件路徑（除錯查詢用）
+> 皆為平台自身路徑；一律相對 repo 根 `odoo-v2/`，可用對應 env var 覆寫（勿寫死絕對路徑）。`<folder>` = `projects.folder_name`（缺則 `name`），對應 Odoo DB 名為 `test_<folder>`。
+
+- **Odoo runtime log（常駐 server）**：`odoo-envs/<folder>/odoo.log`（env `ODOO_ENV_BASE` 覆寫 base）。每次啟動清空、只留當次執行；專案環境頁「📄 查看 log」看尾端 256KB。asset bundle 503／process 崩潰的 traceback 只在此可見。
+- **建置 log（clone/venv/pip/init/seed）**：存 DB `odoo_envs.setup_log` 欄；專案環境頁「查看建立記錄」展開。
+- **Deploy 升級失敗 log**：`data/logs/deploy-task<taskId>-<n>.log`（env `DEPLOY_LOG_DIR`）。含 exitCode／stderr／stdout。
+- **E2E tour 失敗 log**：`data/logs/e2e-task<taskId>-<timestamp>.log`（env `E2E_LOG_DIR`）。
+- **任務附件（平台內上傳）**：`app/uploads/task_<taskId>/<timestamp>_<檔名>`（env `UPLOAD_DIR`）；DB 只存相對 uploadRoot 的路徑。
+- **Odoo 內部 filestore（ir.attachment 二進位，如 asset bundle）**：`%LOCALAPPDATA%\OpenERP S.A\Odoo\filestore\test_<folder>\`（未指定 `--data-dir` 時 Odoo 的預設 data_dir）。
+<!-- /platform-only -->

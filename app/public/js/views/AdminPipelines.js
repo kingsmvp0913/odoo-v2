@@ -10,7 +10,8 @@ const AP_STATUS_LABELS = {
   merge_running:      '併入測試中',
   deploy_testing:     '部署測試區',
   playwright_running: 'E2E 測試中',
-  wiki_updating:      '更新 Wiki'
+  wiki_updating:      '更新 Wiki',
+  reject_triage:      '退回分診中'
 };
 
 function apFmtElapsed(ms) {

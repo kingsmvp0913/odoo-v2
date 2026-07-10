@@ -75,15 +75,17 @@ window.TokenReportView = Vue.defineComponent({
     taskLabel(t) {
       if (t.kind === 'chat') {
         const name = t.deleted ? '(已刪除)' : (t.title || '(舊對話)');
-        return `${t.project_name || '—'} > chat > ${name}`;
+        return `chat > ${name}`;
       }
       if (t.kind === 'task') {
         if (t.title) return t.title;
         if (t.deleted) return '(已刪除任務)';
         return t.task_id || '（無標題）';
       }
-      // wiki 等專案層級記錄
-      return `${t.project_name || '—'} > ${t.kind}`;
+      // wiki／workflow_health 等專案層級記錄：kind 即 agent stage，套中文對照表
+      // 無所屬專案（如 workflow_health）不加「— >」前綴，直接顯示名稱
+      const label = this.agentLabel(t.kind);
+      return t.project_name ? `${t.project_name} > ${label}` : label;
     },
     // 可連結時回傳路由：task → 任務頁、chat → 對話頁；已刪除或無 id 則回 null（不連結）
     taskLink(t) {
