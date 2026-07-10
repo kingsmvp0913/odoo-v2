@@ -1,8 +1,10 @@
+const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectInfo, worktreeParent } = require('./task-agent');
+const { ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 
@@ -43,6 +45,13 @@ async function runRejectTriage(taskId, userId, signal) {
     .filter(l => l.role === 'user' || l.role === 'ai')
     .map(l => `${l.role === 'ai' ? 'AI' : '審核者'}：${l.content}`).join('\n') || '（無）';
 
+  // 測試環境 runtime log 路徑（供 agent 自行判斷是否 Bash 讀取實機證據；path 統一正斜線好給 Git Bash 用）
+  const { rows: [proj] } = await query('SELECT folder_name, name FROM projects WHERE id=$1', [task.project_id]);
+  const dirName = proj ? (proj.folder_name || proj.name) : null;
+  const runtimeLog = dirName
+    ? runtimeLogPath(path.join(ENV_BASE, dirName)).replace(/\\/g, '/')
+    : '（無法解析測試環境 log 路徑）';
+
   let raw;
   try {
     const agent = loadAgent('analysis-reject');
@@ -56,6 +65,7 @@ async function runRejectTriage(taskId, userId, signal) {
       analysis_yaml: task.analysis_yaml || '（無規格）',
       reject_reason: rejectReason,
       clarification,
+      runtime_log_path: runtimeLog,
       allow_bug: allowBug ? 'true' : 'false'
     }).trim();
     const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model, agentType: 'reject_triage' });

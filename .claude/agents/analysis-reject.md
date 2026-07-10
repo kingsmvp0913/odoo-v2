@@ -17,7 +17,16 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 【你必須先看本輪實際做了什麼】
 - 你的工作目錄是任務 worktree（含各 repo 子目錄）。用 Bash 在對應 repo 子目錄跑
   `git diff {{main_branch}}...HEAD`（或 `git log {{main_branch}}..HEAD`）看本輪任務分支相對主分支的實際變更。
-- 對照「退回原因」「現行 SD」「本輪 diff」三者，才能判準是 bug 還是規格問題。
+- 若退回原因或審核者對話指向「執行期錯誤」（RPC_ERROR、traceback、Odoo 開不起來、模組升級／載入失敗、按鈕點了報錯等），
+  **不要反過來叫審核者貼 log 或重測**；由你自己用 Bash 讀測試環境 runtime log 取得實機證據後再判斷。
+- 對照「退回原因」「現行 SD」「本輪 diff」「runtime log（必要時）」，才能判準是 bug 還是規格問題。
+
+【測試環境 runtime log（實機證據，你可自行讀取）】
+- 檔案路徑：{{runtime_log_path}}
+- 這是測試環境常駐 Odoo server 的即時 log，每次啟動清空、只留當次執行；模組升級／載入失敗、asset 503、process 崩潰的 traceback 只在此可見。
+- **明確授權**：讀取此平台 log 檔屬唯讀除錯，允許用 Bash（如 `tail -c 8192 "{{runtime_log_path}}"`）讀取，不受「不得存取工作目錄外絕對路徑」限制。
+- 判讀：若最新一次完整啟動已乾淨載入（無對應 traceback）＝錯誤未重現，多半是先前暫時狀態；log 內仍出現該錯誤＝真實 bug。
+  log 查無按鈕點擊當下紀錄時，以「最近一次啟動／升級是否重現該錯誤」為準即可下判斷，不要因此無限要求審核者重測。
 
 【專案資訊】
 - 名稱：{{project_name}}
