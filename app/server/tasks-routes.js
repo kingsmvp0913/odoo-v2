@@ -230,8 +230,9 @@ function registerRoutes(app) {
       }
 
       const { rows: [cfg] } = await query('SELECT writeback_odoo_notes FROM teams_settings WHERE id = 1');
-      // 沒帶 writeback 欄位時預設 true（維持現況行為）；前端明確傳 false 才跳過這則的回寫
-      const wantsWriteback = req.body?.writeback !== false;
+      // 沒帶 writeback 欄位時預設 true（維持現況行為）；前端明確傳 false 才跳過這則的回寫。
+      // 留言改走 multipart（夾帶附件），writeback 以字串傳入，故以字串 'false' 比對。
+      const wantsWriteback = String(req.body?.writeback) !== 'false';
       if (cfg?.writeback_odoo_notes && wantsWriteback) {
         try {
           const result = await writebackTaskMessage(req.userId, tasks[0], trimmed, attachmentRows);
