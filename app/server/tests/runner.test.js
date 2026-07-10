@@ -23,6 +23,7 @@ jest.mock('../pipeline/task-agent', () => ({
   runTaskAnalysis: jest.fn().mockResolvedValue(undefined),
   runTaskCoding: jest.fn().mockResolvedValue(true)
 }));
+jest.mock('../pipeline/reject-triage', () => ({ runRejectTriage: jest.fn().mockResolvedValue(undefined) }));
 
 let dbModule, runnerModule, userId;
 
@@ -66,6 +67,7 @@ beforeEach(async () => {
   require('../pipeline/playwright-agent').runTourStage.mockReset().mockResolvedValue(undefined);
   require('../pipeline/task-agent').runTaskAnalysis.mockReset().mockResolvedValue(undefined);
   require('../pipeline/task-agent').runTaskCoding.mockReset().mockResolvedValue(true);
+  require('../pipeline/reject-triage').runRejectTriage.mockReset().mockResolvedValue(undefined);
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
@@ -283,4 +285,15 @@ test('C-4 全機上限跨 user 併發掃描不超過 MAX_GLOBAL（TOCTOU 防護�
     await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId2]);
     await dbModule.query('DELETE FROM users WHERE id = $1', [userId2]);
   }
+});
+
+test('reject_triage 任務會被派工並呼叫 runRejectTriage', async () => {
+  const { runRejectTriage } = require('../pipeline/reject-triage');
+  const { rows: [p] } = await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('RTP','17.0') RETURNING id");
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'rtq_1','odoo','T','reject_triage',$2) RETURNING id",
+    [userId, p.id]
+  );
+  await run();
+  expect(runRejectTriage).toHaveBeenCalledWith(t.id, userId, expect.anything());
 });

@@ -55,8 +55,8 @@ async function uninstallTaskModule(task, excludeIds) {
   }
 }
 
-const NEEDS_ACTION_STATUSES = ['confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
-const ANSWER_ALLOWED_STATUSES = ['confirm_pending'];
+const NEEDS_ACTION_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
+const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'reject_confirm_pending'];
 
 function registerRoutes(app) {
   // List tasks with optional filters
@@ -428,9 +428,11 @@ function registerRoutes(app) {
       const { user_answer } = req.body;
       if (!user_answer) return res.status(400).json({ error: 'user_answer required' });
 
+      // confirm_pending → confirm_answered（回初次分析）；reject_confirm_pending → reject_triage（回退回分診續談）
+      const nextStatus = tasks[0].status === 'reject_confirm_pending' ? 'reject_triage' : 'confirm_answered';
       await query(
-        "UPDATE tasks SET status = 'confirm_answered', updated_at = NOW() WHERE id = $1",
-        [req.params.id]
+        "UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1",
+        [req.params.id, nextStatus]
       );
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",

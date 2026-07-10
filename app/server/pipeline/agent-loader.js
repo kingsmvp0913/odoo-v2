@@ -26,7 +26,7 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 
 // 會實際碰客戶 Odoo repo（讀/寫程式碼、審查 diff）的 agent：CLAUDE.md 的 Odoo 開發規則對它們是唯一真相來源，
 // 呼叫時自動 prepend；其餘 agent（分類器、merge、wiki、chat...）跟 Odoo 開發規範無關，不注入。
-const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'coding-project', 'coding-retry', 'qa', 'playwright']);
+const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'analysis-reject', 'coding-project', 'coding-retry', 'qa', 'playwright']);
 
 // name → { mtimeMs, agent }
 const _cache = new Map();

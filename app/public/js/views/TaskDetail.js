@@ -1,4 +1,4 @@
-const ANSWER_ALLOWED = ['confirm_pending'];
+const ANSWER_ALLOWED = ['confirm_pending', 'reject_confirm_pending'];
 const TD_STATUS_LABELS = {
   new:                 '待分類',
   analysis_running:    '分析中',
@@ -12,6 +12,8 @@ const TD_STATUS_LABELS = {
   deploy_testing:      '部署測試區',
   playwright_running:  'E2E 測試中',
   review_pending:      '等待審核',
+  reject_triage:       '退回分診中',
+  reject_confirm_pending: 'AI 待你回覆',
   wiki_updating:       '更新 Wiki',
   cs_running:          '客服處理',
   cs_reply_pending:    '等待確認回覆',
@@ -31,7 +33,7 @@ window.TaskDetailView = Vue.defineComponent({
     // 時間軸底下的單一動作區依 status 切成一種 mode；有主動作的狀態各自 render，其餘走通用留言
     timelineActionMode() {
       const s = this.task?.status;
-      if (s === 'confirm_pending')  return 'answer';
+      if (s === 'confirm_pending' || s === 'reject_confirm_pending')  return 'answer';
       if (s === 'review_pending')   return 'review';
       if (s === 'merge_conflict')   return 'conflict';
       if (s === 'cs_reply_pending') return 'cs_reply';
