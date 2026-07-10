@@ -310,6 +310,17 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
+        <!-- 退回原因管理 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">退回原因管理</div>
+            <div class="setting-block-desc">檢視所有人工退回原因與分類，可批次刪除。</div>
+          </div>
+          <div class="setting-block-body">
+            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/rejections')">前往退回原因管理 →</button>
+          </div>
+        </div>
+
       </div>
     </div>
   `

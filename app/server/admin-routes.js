@@ -365,6 +365,43 @@ function registerRoutes(app) {
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
+
+  // --- 退回原因管理（task_rejections / rejection_items）---
+
+  // 一列一筆退回，join 專案名＋聚合分類條目數，created_at DESC，分頁回傳 total
+  app.get('/api/admin/rejections', auth, async (req, res) => {
+    try {
+      let limit = parseInt(req.query.limit, 10); if (!Number.isInteger(limit) || limit <= 0) limit = 50;
+      limit = Math.min(limit, 200);
+      let offset = parseInt(req.query.offset, 10); if (!Number.isInteger(offset) || offset < 0) offset = 0;
+      const { rows } = await query(
+        `SELECT tr.id, tr.task_id, tr.project_id, p.name AS project_name, tr.reason, tr.status, tr.created_at,
+                COUNT(ri.id)::int AS item_count
+           FROM task_rejections tr
+           LEFT JOIN projects p ON p.id = tr.project_id
+           LEFT JOIN rejection_items ri ON ri.rejection_id = tr.id
+          GROUP BY tr.id, p.name
+          ORDER BY tr.created_at DESC, tr.id DESC
+          LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+      const { rows: [{ total }] } = await query('SELECT COUNT(*)::int AS total FROM task_rejections');
+      res.json({ rows, total });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 批次刪除（rejection_items 靠 FK ON DELETE CASCADE 一併清）。用動態 IN 佔位避開 pg-mem ANY(int[]) 限制。
+  app.post('/api/admin/rejections/delete', auth, async (req, res) => {
+    try {
+      const ids = req.body && req.body.ids;
+      if (!Array.isArray(ids) || !ids.length || !ids.every(Number.isInteger)) {
+        return res.status(400).json({ error: 'ids 必須為非空整數陣列' });
+      }
+      const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+      const { rowCount } = await query(`DELETE FROM task_rejections WHERE id IN (${placeholders})`, ids);
+      res.json({ deleted: rowCount });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 }
 
 module.exports = { registerRoutes };
