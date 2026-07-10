@@ -4,7 +4,7 @@ window.AdminView = Vue.defineComponent({
     return {
       odoo: { url: '', db: '', sync_interval: 60 },
       service: { url: '', db: '', sync_interval: 60 },
-      teams: { tenant_id: '', client_id: '', client_secret: '', team_id: '', channel_id: '', webhook_url: '' },
+      teams: { tenant_id: '', client_id: '', client_secret: '', team_id: '', channel_id: '', webhook_url: '', notify_webhook_url: '' },
       e2e: { login: '', password: '' },
       testMode: false,
       writebackOdooNotes: false,
@@ -35,7 +35,8 @@ window.AdminView = Vue.defineComponent({
           Object.assign(this.teams, {
             tenant_id: d.tenant_id || '', client_id: d.client_id || '',
             client_secret: d.client_secret || '', team_id: d.team_id || '',
-            channel_id: d.channel_id || '', webhook_url: d.webhook_url || ''
+            channel_id: d.channel_id || '', webhook_url: d.webhook_url || '',
+            notify_webhook_url: d.notify_webhook_url || ''
           });
         }
         try { this.e2e = await Api.get('admin/e2e-account'); } catch (_) { /* 顯示用，取不到不擋頁面 */ }
@@ -225,6 +226,10 @@ window.AdminView = Vue.defineComponent({
               <div class="field-item">
                 <label class="field-label">Webhook URL</label>
                 <input v-model="teams.webhook_url" placeholder="https://yourserver.com/api/teams/webhook" class="field-input" />
+              </div>
+              <div class="field-item">
+                <label class="field-label">外部通知 Webhook（選填）</label>
+                <input v-model="teams.notify_webhook_url" placeholder="任務需人工處理時 POST JSON 至此網址" class="field-input" />
               </div>
             </div>
           </div>

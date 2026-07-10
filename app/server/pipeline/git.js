@@ -88,6 +88,15 @@ async function refExists(repoPath, ref) {
   } catch { return false; }
 }
 
+// 任務分支相對主分支的完整 diff（三點語法＝只看分支自己的變更），供人工審核檢視
+async function diffBranch(repoPath, baseBranch, branch) {
+  const { stdout } = await execFileAsync(
+    'git', ['diff', `${baseBranch}...${branch}`],
+    { cwd: repoPath, maxBuffer: 16 * 1024 * 1024 }
+  );
+  return stdout;
+}
+
 // repo 是否已有任何 commit（unborn HEAD → false）
 async function hasCommits(repoPath) {
   try {
@@ -317,4 +326,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, refExists };

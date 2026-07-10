@@ -26,7 +26,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [] };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -188,6 +188,32 @@ window.TaskDetailView = Vue.defineComponent({
         window.open(url, '_blank');
         setTimeout(() => URL.revokeObjectURL(url), 30000);
       } catch (e) { showToast(e.message, 'error'); }
+    },
+    async toggleDiff() {
+      if (this.diffOpen) { this.diffOpen = false; return; }
+      this.diffError = '';
+      if (!this.diffData) {
+        this.diffLoading = true;
+        try {
+          this.diffData = await Api.get(`tasks/${this.task.id}/diff`);
+        } catch (e) {
+          this.diffError = e.message;
+          this.diffLoading = false;
+          return;
+        }
+        this.diffLoading = false;
+      }
+      this.diffOpen = true;
+    },
+    diffLines(diff) {
+      return diff.split('\n').map(text => {
+        let cls = '';
+        if (text.startsWith('diff --git') || text.startsWith('index ') || text.startsWith('+++') || text.startsWith('---')) cls = 'diff-meta';
+        else if (text.startsWith('@@')) cls = 'diff-hunk';
+        else if (text.startsWith('+')) cls = 'diff-add';
+        else if (text.startsWith('-')) cls = 'diff-del';
+        return { text, cls };
+      });
     },
     async approve() {
       if (!await confirmDialog({ title: '審核通過', message: `確定審核通過，將分支 ${this.task.git_branch || ''} 合併回主線並更新文件？`, confirmText: '確認合併' })) return;
@@ -459,6 +485,21 @@ window.TaskDetailView = Vue.defineComponent({
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
                 已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
               </p>
+              <div style="margin-bottom:var(--space-3)">
+                <button class="btn btn-secondary btn-sm" @click="toggleDiff" :disabled="diffLoading">
+                  {{ diffLoading ? '載入中...' : (diffOpen ? '收合程式變更' : '查看程式變更 diff') }}
+                </button>
+              </div>
+              <div v-if="diffError" class="error-msg" style="margin-bottom:var(--space-3)">{{ diffError }}</div>
+              <div v-if="diffOpen && diffData">
+                <div v-for="r in diffData.repos" :key="r.label" style="margin-bottom:var(--space-3)">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">{{ r.label }}</div>
+                  <div v-if="r.missing" style="color:var(--text-muted);font-size:var(--fs-sm)">分支已清理，無法取得 diff</div>
+                  <div v-else-if="!r.diff" style="color:var(--text-muted);font-size:var(--fs-sm)">此 repo 無變更</div>
+                  <div v-else class="diff-view"><div v-for="(ln, i) in diffLines(r.diff)" :key="i" :class="['diff-line', ln.cls]">{{ ln.text }}</div></div>
+                  <div v-if="r.truncated" style="color:var(--text-muted);font-size:var(--fs-sm);margin-top:var(--space-1)">（diff 過大已截斷，完整內容請至 repo 檢視）</div>
+                </div>
+              </div>
               <textarea v-model="rejectReason" class="form-control" rows="4"
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
               <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">

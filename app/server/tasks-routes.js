@@ -151,6 +151,41 @@ function registerRoutes(app) {
     }
   });
 
+  // 審核用 diff：任務分支相對主分支的程式變更（逐 repo）。分支已清（已核准）的 repo 標 missing。
+  app.get('/api/tasks/:id/diff', verifyToken, async (req, res) => {
+    try {
+      const { rows: [task] } = await query(
+        'SELECT id, project_id, git_branch FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (!task.project_id || !task.git_branch) return res.status(400).json({ error: '此任務沒有專案分支，無可檢視的程式變更' });
+
+      const { getProjectInfo } = require('./pipeline/task-agent');
+      const { getMainBranch, refExists, diffBranch } = require('./pipeline/git');
+      const info = await getProjectInfo(task.project_id);
+      if (!info?.repos?.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
+
+      // 超大 diff 截斷保護：審核介面看重點即可，完整內容仍在 git
+      const MAX_CHARS = 300000;
+      const repos = [];
+      for (const repo of info.repos) {
+        if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) {
+          repos.push({ label: repo.label, missing: true, diff: '' });
+          continue;
+        }
+        const mainBranch = await getMainBranch(repo.local_path).catch(() => 'main');
+        let diff = await diffBranch(repo.local_path, mainBranch, task.git_branch);
+        const truncated = diff.length > MAX_CHARS;
+        if (truncated) diff = diff.slice(0, MAX_CHARS);
+        repos.push({ label: repo.label, diff, truncated });
+      }
+      res.json({ branch: task.git_branch, repos });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Edit task content — only while status='new'（尚未進 pipeline，之後分析/開發已依此內容展開，不再允許改）
   app.put('/api/tasks/:id', verifyToken, async (req, res) => {
     try {

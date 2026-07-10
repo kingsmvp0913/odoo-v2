@@ -138,6 +138,8 @@ if (require.main === module) {
     ).catch(() => {});
 
     setIo(io);
+    // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
+    require('./notify-webhook').registerWebhookChannel();
     startCron();
     httpServer.listen(PORT, () => console.log(`AI Dev http://localhost:${PORT}`));
   }).catch(err => {

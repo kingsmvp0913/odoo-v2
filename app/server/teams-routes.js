@@ -25,10 +25,10 @@ function registerRoutes(app) {
 
   app.put('/api/admin/teams-settings', auth, async (req, res) => {
     try {
-      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes } = req.body;
+      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes } = req.body;
       await query(`
-        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, updated_at)
-        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, updated_at)
+        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
         ON CONFLICT (id) DO UPDATE SET
           tenant_id             = $1,
           client_id             = $2,
@@ -37,20 +37,22 @@ function registerRoutes(app) {
           channel_id            = $5,
           mention_users         = $6::jsonb,
           webhook_url            = $7,
-          odoo_sync_interval    = COALESCE($8, teams_settings.odoo_sync_interval),
-          service_sync_interval = COALESCE($9, teams_settings.service_sync_interval),
-          odoo_url              = COALESCE($10, teams_settings.odoo_url),
-          odoo_db               = COALESCE($11, teams_settings.odoo_db),
-          service_url           = COALESCE($12, teams_settings.service_url),
-          service_db            = COALESCE($13, teams_settings.service_db),
-          test_mode             = $14,
-          writeback_odoo_notes  = $15,
+          notify_webhook_url    = $8,
+          odoo_sync_interval    = COALESCE($9, teams_settings.odoo_sync_interval),
+          service_sync_interval = COALESCE($10, teams_settings.service_sync_interval),
+          odoo_url              = COALESCE($11, teams_settings.odoo_url),
+          odoo_db               = COALESCE($12, teams_settings.odoo_db),
+          service_url           = COALESCE($13, teams_settings.service_url),
+          service_db            = COALESCE($14, teams_settings.service_db),
+          test_mode             = $15,
+          writeback_odoo_notes  = $16,
           updated_at            = NOW()
       `, [
         tenant_id || null, client_id || null, client_secret || null,
         team_id || null, channel_id || null,
         JSON.stringify(Array.isArray(mention_users) ? mention_users : []),
         webhook_url || null,
+        notify_webhook_url || null,
         odoo_sync_interval != null ? parseInt(odoo_sync_interval) : null,
         service_sync_interval != null ? parseInt(service_sync_interval) : null,
         odoo_url || null, odoo_db || null,

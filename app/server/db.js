@@ -363,6 +363,8 @@ async function migrate() {
     { table: 'teams_settings', col: 'odoo_sync_interval',    sql: 'ALTER TABLE teams_settings ADD COLUMN odoo_sync_interval INTEGER DEFAULT 60' },
     { table: 'teams_settings', col: 'service_sync_interval', sql: 'ALTER TABLE teams_settings ADD COLUMN service_sync_interval INTEGER DEFAULT 60' },
     { table: 'projects', col: 'folder_name', sql: 'ALTER TABLE projects ADD COLUMN folder_name TEXT' },
+    // 外部通知 webhook（outbound）：任務進入需人工動作狀態時 POST；與 webhook_url（Teams inbound）不同用途
+    { table: 'teams_settings', col: 'notify_webhook_url', sql: 'ALTER TABLE teams_settings ADD COLUMN notify_webhook_url TEXT' },
     { table: 'teams_settings', col: 'odoo_url',  sql: 'ALTER TABLE teams_settings ADD COLUMN odoo_url TEXT' },
     { table: 'teams_settings', col: 'odoo_db',   sql: 'ALTER TABLE teams_settings ADD COLUMN odoo_db TEXT' },
     { table: 'teams_settings', col: 'service_url', sql: 'ALTER TABLE teams_settings ADD COLUMN service_url TEXT' },

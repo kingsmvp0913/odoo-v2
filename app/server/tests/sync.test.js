@@ -238,11 +238,18 @@ test('assembleTaskContext() 組出標題／專案／狀態／分類標頭，無 
   expect(ctx).toContain('---message---\n無訊息內容');
 });
 
-test('assembleTaskContext() has_attachment=true 時附加純文字提醒，false 時不附加', async () => {
+// 意圖：附件（客戶截圖）是需求的主要載體，context 必須列出可 Read 的絕對路徑並明確授權唯讀，
+// agent 才會真的去看；沒有附件時不得出現附件區塊（避免空洞指示）。
+test('assembleTaskContext() 有附件時列出絕對路徑供 Read，無附件時不附加區塊', async () => {
   const { rows: [withAtt] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, has_attachment, status)
      VALUES ($1,'task_ctx_att','odoo','A','desc',true,'new') RETURNING id`,
     [userId]
+  );
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, $2, $3, $4, 'ticket_main')`,
+    [withAtt.id, '維修單欄位.png', 'image/png', `task_${withAtt.id}/1_維修單欄位.png`]
   );
   const { rows: [noAtt] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, has_attachment, status)
@@ -251,8 +258,12 @@ test('assembleTaskContext() has_attachment=true 時附加純文字提醒，false
   );
   const ctxWith = await syncModule.assembleTaskContext(withAtt.id);
   const ctxWithout = await syncModule.assembleTaskContext(noAtt.id);
-  expect(ctxWith).toContain('此任務有附件');
-  expect(ctxWithout).not.toContain('此任務有附件');
+  expect(ctxWith).toContain('【任務附件】');
+  expect(ctxWith).toContain('維修單欄位.png');
+  const { uploadRoot } = require('../lib/attachments');
+  expect(ctxWith).toContain(require('path').resolve(uploadRoot(), `task_${withAtt.id}/1_維修單欄位.png`));
+  expect(ctxWith).not.toContain('無法直接讀取');
+  expect(ctxWithout).not.toContain('【任務附件】');
 });
 
 test('assembleTaskContext() 依時間正序組回多筆 task_messages', async () => {

@@ -1,5 +1,6 @@
+const path = require('path');
 const { query } = require('../db');
-const { saveAttachmentFile, readAttachmentFile } = require('../lib/attachments');
+const { saveAttachmentFile, readAttachmentFile, uploadRoot } = require('../lib/attachments');
 
 // 來源對應欄位（odoo_project_name / service_respondent_name）以「一行一個名稱」儲存，
 // 比對在 JS 端做（pg-mem 不支援 string_to_array），支援一個專案綁多個來源名稱。
@@ -81,6 +82,17 @@ async function odooReadAttachments(baseUrl, ids, cookies) {
   const data = await res.json();
   if (data.error) throw new Error(`ir.attachment read failed: ${JSON.stringify(data.error)}`);
   return data.result || [];
+}
+
+// eService 主附件只有 binary 沒有檔名；補上副檔名，agent 的 Read 工具才會把截圖當圖片檢視
+function sniffFileExt(buf) {
+  if (buf.length >= 4) {
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return '.png';
+    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return '.jpg';
+    if (buf.toString('ascii', 0, 4) === 'GIF8') return '.gif';
+    if (buf.toString('ascii', 0, 4) === '%PDF') return '.pdf';
+  }
+  return '';
 }
 
 // 只處理這次新插入的訊息（insertTaskMessages 回傳值），已存在訊息的附件不重複抓
@@ -324,8 +336,9 @@ async function syncServiceUser(userId, settings) {
       );
       if (inserted) {
         if (task.file) {
-          const name = `ticket_${task.id}_attachment`;
-          const relPath = saveAttachmentFile(inserted.id, name, Buffer.from(task.file, 'base64'));
+          const buf = Buffer.from(task.file, 'base64');
+          const name = `ticket_${task.id}_attachment${sniffFileExt(buf)}`;
+          const relPath = saveAttachmentFile(inserted.id, name, buf);
           await query(
             `INSERT INTO task_attachments (task_id, filename, file_path, origin, synced_to_odoo)
              VALUES ($1, $2, $3, 'ticket_main', true)`,
@@ -360,7 +373,7 @@ async function syncServiceUser(userId, settings) {
 
 async function assembleTaskContext(taskId) {
   const { rows: [task] } = await query(
-    `SELECT t.title, t.original_text, t.stage_label, t.classification_label, t.has_attachment, p.name AS project_name
+    `SELECT t.title, t.original_text, t.stage_label, t.classification_label, p.name AS project_name
      FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
      WHERE t.id = $1`,
     [taskId]
@@ -377,8 +390,15 @@ async function assembleTaskContext(taskId) {
     `狀態: ${task.stage_label || '（無）'}`,
     `分類: ${task.classification_label || '（無）'}`
   ].join('\n');
-  const attachmentNote = task.has_attachment
-    ? '\n（此任務有附件，AI 無法直接讀取附件內容，請提醒使用者本人查看附件）'
+  // 附件（客戶截圖等）是需求描述的主要載體之一，agent 有 Read 工具可直接檢視——
+  // 列出絕對路徑並明確授權唯讀，否則 agent 會因「禁止存取工作目錄外路徑」規則跳過不讀。
+  const { rows: atts } = await query(
+    'SELECT filename, mimetype, file_path FROM task_attachments WHERE task_id = $1 ORDER BY id',
+    [taskId]
+  );
+  const attachmentNote = atts.length
+    ? '\n\n【任務附件】以下檔案可用 Read 工具讀取（圖片可直接檢視）。明確授權：讀取這些附件屬唯讀，不受「不得存取工作目錄外路徑」限制；僅可讀取，不得修改。\n' +
+      atts.map(a => `- ${a.filename}${a.mimetype ? `（${a.mimetype}）` : ''}：${path.resolve(uploadRoot(), a.file_path)}`).join('\n')
     : '';
   return `${header}\n\n${task.original_text || ''}${attachmentNote}\n\n---message---\n${msgLines || '無訊息內容'}`;
 }

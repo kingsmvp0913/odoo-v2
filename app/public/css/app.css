@@ -452,3 +452,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 
 /* ── form-section (old style, kept for compat) ─── */
 .form-section { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 12px; }
+
+/* ── 審核 diff 檢視（TaskDetail review）──── */
+.diff-view {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.diff-line { white-space: pre; color: var(--text-secondary); }
+.diff-line.diff-add { color: var(--success); }
+.diff-line.diff-del { color: var(--danger); }
+.diff-line.diff-hunk { color: var(--info); }
+.diff-line.diff-meta { color: var(--text-muted); font-weight: 600; }
