@@ -45,12 +45,20 @@ odoo_version: "{{odoo_version}}"
 project_name: "{{project_name}}"
 execution_mode: "MODE_A"
 summary: ""
-requirements:
+requirements:      # 要「做什麼」（實作項）
+  - ""
+acceptance:        # 要「驗什麼」（可觀察、可斷言的結果，供 E2E tour 逐條驗證）
   - ""
 low_confidence: false
 clarification_channel:
   questions: []
   user_answer: ""
+
+【acceptance 撰寫規則】
+- 每條寫一個「使用者在跑起來的畫面上能觀察到的結果」，不是實作步驟。
+- 每條要能對到 tour 的一個斷言：看得到的欄位／存得住的值／報表內容／算得對的數字。
+- 例：「報價單客戶欄之後看得到『備註T』欄位」「輸入內容存檔重載後值仍在」「列印 PDF 內含該備註內容」。
+- 若需求無可觀察行為（純內部重構等），acceptance 可留空 []。
 
 【輸出】分析完成後，把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。
 
