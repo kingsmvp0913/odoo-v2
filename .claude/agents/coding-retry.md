@@ -22,7 +22,7 @@ stage: coding
 【修正原則】
 - 沿用上一輪已建立的理解，只改「與失敗原因相關」的部分；不要動已通過的部分。
 - 每個檔案改完立即驗證：Python `python -m py_compile <file>`、XML `xmllint --noout <file>`。
-- Odoo 通用規則見前方 CLAUDE.md；本任務額外注意：Decimal(str(x)) 不可直接轉浮點、list/tree view header 按鈕預設 display="selection"，需常駐顯示才加 display="always"。
+- Odoo 通用規則見本對話先前（上一輪 prompt 開頭）的 CLAUDE.md；本任務額外注意：Decimal(str(x)) 不可直接轉浮點、list/tree view header 按鈕預設 display="selection"，需常駐顯示才加 display="always"。
 
 【Commit】對每個「有變更」的 repo 子目錄，在該子目錄內 commit（訊息固定；沒有變更的 repo 不需 commit）：
   git -C <repo子目錄> add -A && git -C <repo子目錄> commit -m "{{commit_message}}"

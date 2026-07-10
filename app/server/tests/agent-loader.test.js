@@ -140,3 +140,14 @@ test('analysis-reject 可載入且 render 填入分診專屬 placeholder', () =>
   // CLAUDE_MD_AGENTS → 應 prepend 專案規則（CLAUDE.md 內含「Odoo Constraints」字樣）
   expect(out).toContain('Odoo Constraints');
 });
+
+// 意圖（健檢 U3）：coding-retry 只走 --resume，session 已含 fresh 輪帶入的 CLAUDE.md；
+// 再 prepend 會佔掉 resume prompt 八成以上，抵銷「resume 只送短 feedback」的省 token 設計
+test('coding-retry 不重複注入 CLAUDE.md（resume 短 prompt）', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+  const out = loadAgent('coding-retry').render({
+    gate: 'QA 未通過', retry_feedback: 'x', resolution: '（無）', commit_message: 'm'
+  });
+  expect(out).not.toContain('Odoo Constraints');
+  expect(out).toContain('接續「同一個任務的上一輪實作」');
+});

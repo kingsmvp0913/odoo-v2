@@ -175,6 +175,18 @@ test('B-3 distillFeedback：QA 自然語言 → 去標籤後近原樣', () => {
   expect(body).toContain('note_t 應為 Text 型別');
 });
 
+// 意圖：QA 的 issues 是「當下完整未解清單」，截斷會讓 coding 看不到部分問題→白跑一輪
+// （QA gate 沒有 deploy/E2E 的「完整 log」逃生口，截掉就真的丟了）
+test('B-3 distillFeedback：QA 未解清單不截斷（跳過 400 字上限）', () => {
+  const { distillFeedback } = require('../pipeline/task-agent');
+  const issues = Array.from({ length: 12 }, (_, i) => `問題 ${i + 1}：欄位 f${i} 未依規格實作（規格要求 Text 型別且需 tracking，實作用了 Char 也漏了 tracking），請修正後以存檔重載驗證`).join('\n');
+  const { gate, body } = distillFeedback(`[QA 未通過]\n${issues}`);
+  expect(gate).toBe('QA 未通過');
+  expect(body.length).toBeGreaterThan(400);
+  expect(body).toContain('問題 12');   // 清單尾端不得被截掉
+  expect(body).not.toContain('…');
+});
+
 test('B-3 distillFeedback：人工退回原因不截斷（跳過 400 字上限）', () => {
   const { distillFeedback } = require('../pipeline/task-agent');
   const longReason = '問題一：備註欄位型別錯，應為 Text；'.repeat(30); // 遠超過 400 字

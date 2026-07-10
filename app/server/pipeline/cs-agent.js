@@ -75,6 +75,13 @@ async function runCsAgent(taskId, userId, signal) {
       [taskId, result.question || JSON.stringify(result.questions || [])]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'cs_data_needed' });
+  } else if (result.type !== 'code_change_clear') {
+    // 契約只有三種 type；未知值靜默放行成 code_change_clear 會拿垃圾輸出繼續燒 analysis token（Rule 12）
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, `CS agent 回傳未知分類 type：${JSON.stringify(result.type)}，請檢查 terminal 輸出`]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
   } else if (!task.project_id) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",

@@ -13,10 +13,11 @@ const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..'
 // 常駐 Odoo server 的 runtime log 檔路徑（單一慣例，供啟動端寫入與 route 端讀取共用）
 function runtimeLogPath(envDir) { return path.join(envDir, 'odoo.log'); }
 
-function execCmd(bin, args) {
+function execCmd(bin, args, signal) {
   return new Promise((resolve, reject) => {
     // maxBuffer 預設僅 1MB，Odoo 升級 log 超過會以 maxBuffer exceeded 假失敗
-    execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+    // signal：手動暫停任務時中止 odoo-bin 子行程（否則 deploy／E2E 階段按暫停沒反應）
+    execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024, windowsHide: true, signal }, (err, stdout, stderr) => {
       if (err) {
         // 保留完整診斷：只留 stderr 的話，「幾秒就死、stderr 只有 banner」的失敗會無從鑑識（健檢根因 C）
         const e = new Error(stderr || err.message);
@@ -292,7 +293,7 @@ async function syncUsers(projectId) {
 }
 
 // 對測試區資料庫執行模組升級（odoo-bin -u）。載入/語法錯會以非 0 結束並 throw，供上層判定退回 coding。
-async function upgradeModules(projectId, modules) {
+async function upgradeModules(projectId, modules, signal) {
   const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id = $1', [projectId]);
   if (!project) throw new Error('project not found');
   const dirName = project.folder_name || project.name;
@@ -309,13 +310,13 @@ async function upgradeModules(projectId, modules) {
   // 有指定模組：-i 安裝（新模組只 -u 不會裝，Odoo 只印 warning 卻 exit 0＝假成功）＋ -u 更新（既有模組），兩者同給涵蓋新/舊。
   // 未指定：-u all 更新全部已安裝。
   const modFlags = (modules && modules.length) ? ['-i', modArg, '-u', modArg] : ['-u', modArg];
-  const out = await execCmd(venvPython, [odooBin, ...modFlags, '-d', dbName, '--stop-after-init', '--addons-path', addonsPath, ...odooDbArgs()]);
+  const out = await execCmd(venvPython, [odooBin, ...modFlags, '-d', dbName, '--stop-after-init', '--addons-path', addonsPath, ...odooDbArgs()], signal);
   return { ok: true, log: out };
 }
 
 // E2E via tour：與升級同一條 odoo-bin 指令，加 --test-enable 觸發 tour、--test-tags 只跑本模組測試。
 // exit 非 0（tour/斷言失敗或載入錯）由 execCmd throw，供上層依 deploy 同套邏輯分類。
-async function runTourTests(projectId, moduleName) {
+async function runTourTests(projectId, moduleName, signal) {
   if (!moduleName) throw new Error('未指定 module，無法執行 tour 測試');
   const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id = $1', [projectId]);
   if (!project) throw new Error('project not found');
@@ -333,7 +334,7 @@ async function runTourTests(projectId, moduleName) {
     odooBin, '-i', moduleName, '-u', moduleName, '-d', dbName, '--stop-after-init',
     '--test-enable', '--test-tags', `/${moduleName}`,
     '--addons-path', addonsPath, ...odooDbArgs()
-  ]);
+  ], signal);
   return { ok: true, log: out };
 }
 

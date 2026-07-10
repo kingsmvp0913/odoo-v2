@@ -13,6 +13,10 @@ jest.mock('../pipeline/ensure-env', () => ({ ensureEnvRunning: jest.fn() }));
 jest.mock('../pipeline/env-agent', () => ({ runTourTests: jest.fn() }));
 jest.mock('../pipeline/failure-classifier', () => ({ classifyFailureWithAgent: jest.fn() }));
 jest.mock('../pipeline/reentry', () => ({ bumpReentryOrStop: jest.fn().mockResolvedValue(false) }));
+jest.mock('../pipeline/git', () => ({
+  mergeInto: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
+  abortMerge: jest.fn().mockResolvedValue(undefined)
+}));
 
 let dbModule, runTourStage, taskAgent, runClaude, ensureEnvRunning, envAgent, classifier, projectId, userId;
 
@@ -43,6 +47,9 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(async () => {
   runClaude.mockReset(); runClaude.mockResolvedValue({ text: '', usage: {}, durationMs: 1 });
   taskAgent.getProjectInfo.mockReset(); taskAgent.getProjectInfo.mockResolvedValue({ root: '/repos/pwp' });
+  const git = require('../pipeline/git');
+  git.mergeInto.mockReset().mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  git.abortMerge.mockReset().mockResolvedValue(undefined);
   ensureEnvRunning.mockReset(); ensureEnvRunning.mockResolvedValue(true);
   envAgent.runTourTests.mockReset();
   classifier.classifyFailureWithAgent.mockReset(); classifier.classifyFailureWithAgent.mockResolvedValue('code');
@@ -103,6 +110,51 @@ test('code 失敗達 PW_LIMIT → stopped', async () => {
   const id = await makeTask(2); // 第 3 次
   await runTourStage(id, userId);
   expect((await statusOf(id)).status).toBe('stopped');
+});
+
+// --- 假綠燈根治：tour commit 在任務分支（worktree），不併入 testing 的話
+//     addons-path（主 clone）收不到新 tour，--test-tags 匹配不到測試就 exit 0 ---
+
+async function makeBranchTask() {
+  seq++;
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, status, project_id, analysis_yaml, git_branch) VALUES ($1,$2,'manual','playwright_running',$3,'module: idx_x',$4) RETURNING id",
+    [userId, `tb_${seq}`, projectId, `task/tb_${seq}`]);
+  return t.id;
+}
+
+test('tour 檔先併入 testing（逐 repo）、之後才跑 runTourTests', async () => {
+  const git = require('../pipeline/git');
+  taskAgent.getProjectInfo.mockResolvedValue({
+    root: '/repos/pwp',
+    repos: [{ label: 'main', local_path: '/repos/pwp/main', subdir: 'main' }]
+  });
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: '1 passed' });
+  const id = await makeBranchTask();
+  await runTourStage(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, git_branch FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('review_pending');
+  expect(git.mergeInto).toHaveBeenCalledWith('/repos/pwp/main', 'testing', t.git_branch);
+  expect(git.mergeInto.mock.invocationCallOrder[0]).toBeLessThan(envAgent.runTourTests.mock.invocationCallOrder[0]);
+});
+
+test('tour 檔併入 testing 衝突 → abortMerge 清半套、stopped(tech)、不跑測試', async () => {
+  const git = require('../pipeline/git');
+  taskAgent.getProjectInfo.mockResolvedValue({
+    root: '/repos/pwp',
+    repos: [{ label: 'main', local_path: '/repos/pwp/main', subdir: 'main' }]
+  });
+  git.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['idx_x/tests/test_tour.py'] });
+  const id = await makeBranchTask();
+  await runTourStage(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('tech');
+  expect(t.blocker_content).toContain('test_tour.py');
+  expect(git.abortMerge).toHaveBeenCalledWith('/repos/pwp/main');
+  expect(envAgent.runTourTests).not.toHaveBeenCalled();
 });
 
 // --- 健檢：tour 失敗完整輸出不得永久遺失（比照 deploy-testing 的 saveDeployLog）---

@@ -29,7 +29,9 @@ jest.mock('../pipeline/git', () => ({
   abortMerge: jest.fn().mockResolvedValue(undefined),
   mergeToMain: jest.fn().mockResolvedValue(undefined),
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
-  removeWorktree: jest.fn().mockResolvedValue(undefined)
+  removeWorktree: jest.fn().mockResolvedValue(undefined),
+  discardPyc: jest.fn().mockResolvedValue(undefined),
+  ensureTestingBranch: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn().mockResolvedValue({ ok: true, log: '' }),
@@ -133,6 +135,7 @@ beforeEach(async () => {
   });
   const git = require('../pipeline/git');
   git.mergeInto.mockReset().mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  git.ensureTestingBranch.mockReset().mockResolvedValue(undefined);
   const env = require('../pipeline/env-agent');
   env.upgradeModules.mockReset().mockResolvedValue({ ok: true, log: '' });
   env.runTourTests.mockReset().mockResolvedValue({ ok: true, log: 'tests passed' });
@@ -159,6 +162,13 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
   expect(task.status).toBe('review_pending');
   expect(task.git_branch).toBe(`task/${t.task_id}`);
   expect(task.blocker_content).toBeNull();
+
+  // 部署／E2E 的分支正確性：升級前主 clone 歸位 testing；tour commit 併入 testing 後才跑測試
+  // （merge 關卡＋playwright 關卡各併一次 testing，缺 playwright 那次＝新 tour 不會被執行的假綠燈）
+  const git = require('../pipeline/git');
+  expect(git.ensureTestingBranch).toHaveBeenCalledWith(REPO_PATH);
+  const testingMerges = git.mergeInto.mock.calls.filter(c => c[1] === 'testing' && c[2] === `task/${t.task_id}`);
+  expect(testingMerges.length).toBe(2);
 
   // prompt 組裝正確性：placeholder 全數替換、規則注入、密碼不落 prompt
   for (const c of calls) expect(c.prompt).not.toContain('{{');
@@ -217,12 +227,11 @@ test('S2 QA fail → coding resume（--resume＋opus＋蒸餾 feedback，短 pro
   expect(task.coding_resume_count).toBe(1);
   expect(task.retry_feedback).toBeNull(); // 成功消費後清空
 
-  // token 效率：resume prompt 小於全量 fresh prompt。
-  // 已知待優化（本模擬量化出的發現）：coding-retry 在 CLAUDE_MD_AGENTS 名單內，每次 resume
-  // 重複前置整份 CLAUDE.md（約佔 resume prompt 82%），而 --resume 的 session 上下文已含這份
-  // 規則（fresh prompt 帶過）。若把 coding-retry 移出名單，resume prompt 可再縮 ~80%。
+  // token 效率：resume prompt 必須顯著小於全量 fresh prompt（<50%）。
+  // coding-retry 不再重複注入 CLAUDE.md（--resume 的 session 上下文已含 fresh 輪帶入的規則），
+  // 本模擬曾量化出注入時 CLAUDE.md 佔 resume prompt 82%——此斷言釘住修正不回退。
   const codingCalls = calls.filter(c => c.agentType === 'coding');
-  expect(codingCalls[1].prompt.length).toBeLessThan(codingCalls[0].prompt.length);
+  expect(codingCalls[1].prompt.length).toBeLessThan(codingCalls[0].prompt.length * 0.5);
 });
 
 // ---------- S3 部署失敗歸因 ----------

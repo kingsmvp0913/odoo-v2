@@ -26,7 +26,9 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 
 // 會實際碰客戶 Odoo repo（讀/寫程式碼、審查 diff）的 agent：CLAUDE.md 的 Odoo 開發規則對它們是唯一真相來源，
 // 呼叫時自動 prepend；其餘 agent（分類器、merge、wiki、chat...）跟 Odoo 開發規範無關，不注入。
-const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'analysis-reject', 'coding-project', 'coding-retry', 'qa', 'playwright']);
+// coding-retry 不注入：它只走 --resume，session 上下文已含 fresh 輪（coding-project）帶入的規則，
+// 重複前置會佔掉 resume prompt 八成以上、抵銷「resume 只送短 feedback」的省 token 設計（健檢 U3）。
+const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'analysis-reject', 'coding-project', 'qa', 'playwright']);
 
 // name → { mtimeMs, agent }
 const _cache = new Map();

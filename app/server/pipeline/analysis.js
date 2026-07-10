@@ -8,6 +8,9 @@ const notify = require('../notify');
 const { assembleTaskContext } = require('./sync');
 
 const REQUIRED_FIELDS = ['case_id', 'module', 'odoo_version', 'execution_mode', 'summary'];
+// API 失敗保留 analysis_running 讓 cron 重試（transient 自癒），但需上限兜底：
+// 持久性故障（CLI 壞掉、credentials）不設限會每分鐘無限重試、token 與機器空燒
+const ANALYSIS_RETRY_LIMIT = parseInt(process.env.PIPELINE_ANALYSIS_RETRY_LIMIT || '3', 10);
 
 function determineNextStatus(parsed) {
   const hasQuestions = Array.isArray(parsed?.clarification_channel?.questions) &&
@@ -37,6 +40,19 @@ async function analyzeTask(taskId, signal) {
     await logTokenUsage({ taskId: task.task_id }, task.user_id, 'analysis', callResult.usage, callResult.durationMs);
   } catch (apiErr) {
     await logFailedUsage({ taskId: task.task_id }, task.user_id, 'analysis', apiErr);
+    if (apiErr.aborted) throw apiErr; // 手動暫停：不計失敗、狀態原地，解除暫停後從這一關重跑
+    const { rows: [r] } = await query(
+      'UPDATE tasks SET analysis_retry_count = COALESCE(analysis_retry_count, 0) + 1, updated_at = NOW() WHERE id = $1 RETURNING analysis_retry_count',
+      [taskId]
+    );
+    if ((r?.analysis_retry_count || 0) >= ANALYSIS_RETRY_LIMIT) {
+      await query(
+        "UPDATE tasks SET status = 'stopped', blocker_content = $2, updated_at = NOW() WHERE id = $1",
+        [taskId, `分析連續 ${ANALYSIS_RETRY_LIMIT} 次執行失敗，需人工介入。最後錯誤：${apiErr.message}`]
+      );
+      notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
+      return { next_status: 'stopped', analysis_yaml: null };
+    }
     await query(
       "UPDATE tasks SET status = 'analysis_running', updated_at = NOW() WHERE id = $1",
       [taskId]
@@ -67,7 +83,7 @@ async function analyzeTask(taskId, signal) {
   const cleanYaml = extractResult(rawYaml) || rawYaml;
 
   await query(
-    `UPDATE tasks SET status = $2, analysis_yaml = $3, updated_at = NOW() WHERE id = $1`,
+    `UPDATE tasks SET status = $2, analysis_yaml = $3, analysis_retry_count = 0, updated_at = NOW() WHERE id = $1`,
     [taskId, next_status, cleanYaml]
   );
 

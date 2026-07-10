@@ -8,6 +8,10 @@ jest.mock('../pipeline/env-agent', () => ({
   runEnvSetup: jest.fn()
 }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
+jest.mock('../pipeline/git', () => ({
+  discardPyc: jest.fn().mockResolvedValue(undefined),
+  ensureTestingBranch: jest.fn().mockResolvedValue(undefined)
+}));
 
 let dbModule, runDeployTesting, envAgent;
 let userId, projectId;
@@ -62,7 +66,11 @@ beforeEach(async () => {
   envAgent.upgradeModules.mockReset();
   envAgent.runEnvSetup.mockReset();
   require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
+  const git = require('../pipeline/git');
+  git.discardPyc.mockReset().mockResolvedValue(undefined);
+  git.ensureTestingBranch.mockReset().mockResolvedValue(undefined);
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [projectId]);
+  await dbModule.query('DELETE FROM project_repos WHERE project_id=$1', [projectId]);
 });
 
 let seq = 0;
@@ -86,7 +94,59 @@ test('env 運行 + 升級成功 → playwright_running', async () => {
   await runDeployTesting(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('playwright_running');
-  expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale']);
+  expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale'], undefined);
+});
+
+// --- 分支歸位：addons-path 指主 clone 工作樹，別任務的 analysis/approve 會把 clone 留在 main，
+//     不先 checkout testing 就會對錯的分支升級（假綠燈）---
+
+test('升級前逐 repo 切回 testing 分支（先 discardPyc 再 checkout，於升級之前）', async () => {
+  await setEnvRunning();
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/dp/main',true,'done')",
+    [projectId]
+  );
+  envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+  const git = require('../pipeline/git');
+  const id = await makeTask();
+  await runDeployTesting(id, userId);
+
+  expect(git.ensureTestingBranch).toHaveBeenCalledWith('/repos/dp/main');
+  expect(git.discardPyc.mock.invocationCallOrder[0]).toBeLessThan(git.ensureTestingBranch.mock.invocationCallOrder[0]);
+  expect(git.ensureTestingBranch.mock.invocationCallOrder[0]).toBeLessThan(envAgent.upgradeModules.mock.invocationCallOrder[0]);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('playwright_running');
+});
+
+test('checkout testing 失敗 → stopped(env)，不升級、不退 coding', async () => {
+  await setEnvRunning();
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/dp/main',true,'done')",
+    [projectId]
+  );
+  require('../pipeline/git').ensureTestingBranch.mockRejectedValue(new Error('checkout blocked'));
+  const id = await makeTask();
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, deploy_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+  expect(t.deploy_retry_count).toBe(0);
+  expect(envAgent.upgradeModules).not.toHaveBeenCalled();
+});
+
+// --- 手動暫停：中止子行程屬使用者操作，不是失敗，狀態原地、不分類不計數 ---
+
+test('升級中 abort（signal.aborted）→ 狀態停在 deploy_testing、不計數、無 blocker', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockRejectedValue(Object.assign(new Error('killed'), { killed: true }));
+  const ctrl = new AbortController();
+  ctrl.abort();
+  const id = await makeTask();
+  await runDeployTesting(id, userId, ctrl.signal);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content, deploy_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('deploy_testing');
+  expect(t.blocker_content).toBeNull();
+  expect(t.deploy_retry_count).toBe(0);
 });
 
 test('升級失敗未達上限 → coding_running、計數+1', async () => {

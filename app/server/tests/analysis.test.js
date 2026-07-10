@@ -147,6 +147,41 @@ test('analyzeTask API error → resets to analysis_running and rethrows', async 
 
   await expect(analysisModule.analyzeTask(taskId)).rejects.toThrow('Rate limit');
 
-  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  const { rows } = await dbModule.query('SELECT status, analysis_retry_count FROM tasks WHERE id = $1', [taskId]);
   expect(rows[0].status).toBe('analysis_running');
+  expect(rows[0].analysis_retry_count).toBe(1); // 失敗計數，供上限兜底
+});
+
+// 意圖：analysis_running 是 runnable 狀態，API 失敗保留原狀會被 cron 每分鐘重派——
+// 持久性故障（CLI 壞掉、credentials）不設上限＝無限重試、token 與機器空燒
+test('analyzeTask API 連續失敗達上限 → stopped（不再無限重試）', async () => {
+  mockRunClaude.mockRejectedValue(new Error('spawn claude ENOENT'));
+  await dbModule.query('UPDATE tasks SET analysis_retry_count = 2 WHERE id = $1', [taskId]);
+
+  const result = await analysisModule.analyzeTask(taskId); // 第 3 次：不再 rethrow，直接停
+  expect(result.next_status).toBe('stopped');
+
+  const { rows } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id = $1', [taskId]);
+  expect(rows[0].status).toBe('stopped');
+  expect(rows[0].blocker_content).toContain('分析連續 3 次執行失敗');
+});
+
+test('analyzeTask 手動暫停（aborted）→ 不計失敗、狀態原地', async () => {
+  mockRunClaude.mockRejectedValue(Object.assign(new Error('手動暫停'), { aborted: true }));
+
+  await expect(analysisModule.analyzeTask(taskId)).rejects.toThrow('手動暫停');
+
+  const { rows } = await dbModule.query('SELECT status, analysis_retry_count FROM tasks WHERE id = $1', [taskId]);
+  expect(rows[0].status).toBe('analysis_running');
+  expect(rows[0].analysis_retry_count).toBe(0);
+});
+
+test('analyzeTask 成功 → analysis_retry_count 歸零（transient 自癒後不留殘帳）', async () => {
+  await dbModule.query('UPDATE tasks SET analysis_retry_count = 2 WHERE id = $1', [taskId]);
+  mockRunClaude.mockResolvedValue({ text: '<result>\n' + VALID_YAML_MODE_A + '\n</result>', usage: null, durationMs: null });
+
+  await analysisModule.analyzeTask(taskId);
+
+  const { rows } = await dbModule.query('SELECT analysis_retry_count FROM tasks WHERE id = $1', [taskId]);
+  expect(rows[0].analysis_retry_count).toBe(0);
 });

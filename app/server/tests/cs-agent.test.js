@@ -106,6 +106,16 @@ test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔c
   expect(t.status).toBe('analysis_running');
 });
 
+// 意圖（Rule 12）：契約只有三種 type，未知值以前會靜默放行成 code_change_clear → 拿垃圾輸出繼續燒 analysis token
+test('未知分類 type → stopped（不得靜默放行進分析）', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"banana"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('未知分類');
+});
+
 test('API error → stopped', async () => {
   mockRunClaude.mockRejectedValueOnce(new Error('timeout'));
   const { userId, taskId } = await makeTask();

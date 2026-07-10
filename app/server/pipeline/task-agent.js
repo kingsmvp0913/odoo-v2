@@ -114,8 +114,10 @@ function distillFeedback(raw) {
     body = rest.replace(/\n{3,}/g, '\n\n').trim(); // 自然語言（QA/E2E）：近原樣，只收斂空白
   }
 
-  // 人工審核退回是使用者手打的完整說明，不像自動化來源的 traceback/失敗訊息需要收斂，跳過截斷
-  if (gate !== '人工退回' && body.length > 400) body = body.slice(0, 400) + '…';
+  // 人工審核退回是使用者手打的完整說明；QA 的 issues 是「當下完整未解清單」，截斷會讓 coding
+  // 看不到部分問題→白跑一輪（QA gate 也沒有「完整 log」逃生口）。兩者都跳過截斷，只收斂
+  // 自動化來源（部署/E2E 的 traceback、失敗訊息）。
+  if (gate !== '人工退回' && gate !== 'QA 未通過' && body.length > 400) body = body.slice(0, 400) + '…';
   if (logRef) body += '\n' + logRef;
   return { gate, body };
 }
@@ -244,6 +246,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
 }
 
 const RESUME_LIMIT = 2; // 每個 session 世代最多 resume 幾次，之後強制 fresh（避免在錯誤方向上一直加碼）
+// coding 是最長的階段（探索＋實作＋逐檔驗證＋commit），共用預設 600s 常不夠；
+// 逾時＝整輪報廢重跑（比放寬上限更貴），故獨立放寬、可用 env 調整
+const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '1800000', 10);
 
 // resume 失敗是否值得 fallback 到 fresh：
 // error（session 遺失／CLI 壞掉，快速非零退出）→ 值得重來；
@@ -268,10 +273,10 @@ async function runCodingOnce(task, info, userId, signal, resolution, { resume })
       resolution: resolution || '（無）',
       commit_message: buildCommitMessage(task)
     }).trim();
-    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id, agentType: 'coding' });
+    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS });
   }
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding' });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS });
 }
 
 async function runTaskCoding(taskId, userId, signal) {

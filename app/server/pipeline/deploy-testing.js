@@ -48,10 +48,10 @@ async function runDeployTesting(taskId, userId, signal) {
     [taskId]
   );
   if (!task || !task.project_id) return false;
-  return withProjectLock(task.project_id, () => doDeploy(task, taskId, userId));
+  return withProjectLock(task.project_id, () => doDeploy(task, taskId, userId, signal));
 }
 
-async function doDeploy(task, taskId, userId) {
+async function doDeploy(task, taskId, userId, signal) {
   let running = false;
   try { running = await ensureEnvRunning(task.project_id); } catch { running = false; }
   if (!running) {
@@ -63,6 +63,28 @@ async function doDeploy(task, taskId, userId) {
     return;
   }
 
+  // 升級前確保各主 clone 檢出 testing：別任務的 analysis（ensureMainBranch）或 approve（mergeToMain）
+  // 會把主 clone 留在 main——addons-path 指向主 clone 工作樹，不歸位就會對錯的分支升級／測試（假綠燈）。
+  // 先丟 tracked pyc 的髒改動，避免 checkout 被 build 產物擋住（比照 mergeInto）。
+  const { discardPyc, ensureTestingBranch } = require('./git');
+  const { rows: repos } = await query(
+    "SELECT local_path, label FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+    [task.project_id]
+  );
+  for (const repo of repos) {
+    try {
+      await discardPyc(repo.local_path);
+      await ensureTestingBranch(repo.local_path);
+    } catch (e) {
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+        [taskId, `部署前切換 ${repo.label} 到 testing 分支失敗：${e.message}`]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return;
+    }
+  }
+
   let moduleName = '';
   try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; }
   catch { /* SD 解析失敗則升級全部 */ }
@@ -72,14 +94,18 @@ async function doDeploy(task, taskId, userId) {
   let err = null;
   try {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 測試區升級模組 ${moduleName || 'all'}...\n` });
-    await upgradeModules(task.project_id, mods);
+    await upgradeModules(task.project_id, mods, signal);
   } catch (e) { err = e; }
+
+  // 手動暫停中止子行程：非失敗，狀態原地不動、不分類不計數，解除暫停後從這一關重跑
+  if (err && signal?.aborted) return;
 
   // transient（網路抖動/被砍）→ 自動重試一次，不佔計數；再敗重新分類（多半 env）
   if (err && (await classifyFailureWithAgent(err.message, clsCtx)) === 'transient') {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 暫時性失敗，自動重試一次...\n` });
     err = null;
-    try { await upgradeModules(task.project_id, mods); } catch (e) { err = e; }
+    try { await upgradeModules(task.project_id, mods, signal); } catch (e) { err = e; }
+    if (err && signal?.aborted) return;
   }
 
   if (err) {

@@ -12,6 +12,7 @@ const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { extractOdooError } = require('./deploy-testing');
+const { withProjectLock } = require('./project-lock');
 
 const PW_LIMIT = 3;
 
@@ -103,15 +104,46 @@ async function runTourStage(taskId, userId, signal) {
     return true;
   }
 
-  // 2) Node 跑 tour（odoo-bin --test-enable），依 exit code 判定
+  // 2) tour commit 在任務分支（worktree），主 clone 的 testing 分支還沒有它——
+  //    不先併入 testing，odoo-bin 的 addons-path（指主 clone）收不到新 tour，
+  //    --test-tags 匹配不到任何測試就 exit 0＝結構性假綠燈。故先把 task 分支再併一次 testing
+  //    （功能碼已在 merge 關卡併過，這次只帶入 tour 測試檔；mergeInto 同時保證 testing 已檢出）。
+  //    動共用主 clone＋測試 DB → 全程持專案鎖，與同專案 merge/deploy/analysis 序列化。
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
-  let log = '', err = null;
-  try { ({ log } = await runTourTests(task.project_id, moduleName)); } catch (e) { err = e; }
+  let log = '', err = null, mergeStop = null;
+  await withProjectLock(task.project_id, async () => {
+    for (const repo of (info?.repos || [])) {
+      if (!task.git_branch) break;
+      try {
+        const { mergeInto } = require('./git');
+        const m = await mergeInto(repo.local_path, 'testing', task.git_branch);
+        if (m.hasConflicts) {
+          const { abortMerge } = require('./git');
+          await abortMerge(repo.local_path).catch(() => {});
+          mergeStop = `tour 測試檔併入 testing 發生衝突（${repo.subdir}: ${m.conflictFiles.join(', ')}），需人工處理`;
+          return;
+        }
+      } catch (e) {
+        mergeStop = `tour 測試檔併入 testing 失敗（${repo.subdir}）：${e.message}`;
+        return;
+      }
+    }
 
-  // transient（網路抖動/被砍）→ 自動重試一次，不佔計數（比照 deploy）
-  if (err && (await classifyFailureWithAgent(err.message, clsCtx)) === 'transient') {
-    err = null;
-    try { ({ log } = await runTourTests(task.project_id, moduleName)); } catch (e) { err = e; }
+    // 3) Node 跑 tour（odoo-bin --test-enable），依 exit code 判定
+    try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
+    if (err && signal?.aborted) return;
+
+    // transient（網路抖動/被砍）→ 自動重試一次，不佔計數（比照 deploy）
+    if (err && (await classifyFailureWithAgent(err.message, clsCtx)) === 'transient') {
+      err = null;
+      try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
+    }
+  });
+  // 手動暫停中止子行程：非失敗，狀態原地不動，解除暫停後從這一關重跑
+  if (signal?.aborted) return true;
+  if (mergeStop) {
+    await stopTask(taskId, userId, mergeStop, 'tech');
+    return true;
   }
 
   if (!err) {
