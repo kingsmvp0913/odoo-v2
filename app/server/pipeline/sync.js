@@ -2,6 +2,13 @@ const path = require('path');
 const { query } = require('../db');
 const { saveAttachmentFile, readAttachmentFile, uploadRoot } = require('../lib/attachments');
 
+// 對外 HTTP 一律帶逾時：來源 Odoo/eService 無回應（hang 而非報錯）時，
+// 裸 fetch 會讓 syncUser 無限等待、拖住整輪 cron 同步；錯誤路徑呼叫端已有 catch。
+const FETCH_TIMEOUT_MS = parseInt(process.env.SYNC_FETCH_TIMEOUT_MS || '30000', 10);
+function fetchWithTimeout(url, opts = {}) {
+  return fetch(url, { ...opts, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+}
+
 // 來源對應欄位（odoo_project_name / service_respondent_name）以「一行一個名稱」儲存，
 // 比對在 JS 端做（pg-mem 不支援 string_to_array），支援一個專案綁多個來源名稱。
 async function findProjectBySourceName(column, name) {
@@ -67,7 +74,7 @@ async function insertTaskMessages(taskDbId, messages) {
 
 async function odooReadAttachments(baseUrl, ids, cookies) {
   if (!ids.length) return [];
-  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+  const res = await fetchWithTimeout(`${baseUrl}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookies },
     body: JSON.stringify({
@@ -115,7 +122,7 @@ async function ingestMessageAttachments(baseUrl, taskDbId, insertedMessages, coo
 }
 
 async function odooAuth(baseUrl, db, login, password) {
-  const res = await fetch(`${baseUrl}/web/session/authenticate`, {
+  const res = await fetchWithTimeout(`${baseUrl}/web/session/authenticate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -130,7 +137,7 @@ async function odooAuth(baseUrl, db, login, password) {
 }
 
 async function odooSearchRead(baseUrl, model, domain, fields, cookies, limit = 30) {
-  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+  const res = await fetchWithTimeout(`${baseUrl}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookies },
     body: JSON.stringify({
@@ -151,7 +158,7 @@ async function odooSearchRead(baseUrl, model, domain, fields, cookies, limit = 3
 async function odooMessagePost(baseUrl, model, resId, body, cookies, attachmentIds = []) {
   const kwargs = { body, subtype_xmlid: 'mail.mt_note' };
   if (attachmentIds.length) kwargs.attachment_ids = attachmentIds;
-  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+  const res = await fetchWithTimeout(`${baseUrl}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookies },
     body: JSON.stringify({
@@ -165,7 +172,7 @@ async function odooMessagePost(baseUrl, model, resId, body, cookies, attachmentI
 }
 
 async function odooAttachmentCreate(baseUrl, model, resId, name, base64Data, cookies) {
-  const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+  const res = await fetchWithTimeout(`${baseUrl}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookies },
     body: JSON.stringify({

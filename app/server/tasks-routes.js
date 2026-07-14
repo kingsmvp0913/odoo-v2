@@ -531,11 +531,13 @@ function registerRoutes(app) {
       if (!user_answer) return res.status(400).json({ error: 'user_answer required' });
 
       // confirm_pending → confirm_answered（回初次分析）；reject_confirm_pending → reject_triage（回退回分診續談）
+      // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答（否則下游 agent 會讀到重複答案）
       const nextStatus = tasks[0].status === 'reject_confirm_pending' ? 'reject_triage' : 'confirm_answered';
-      await query(
-        "UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1",
-        [req.params.id, nextStatus]
+      const { rowCount } = await query(
+        "UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1 AND status = $3",
+        [req.params.id, nextStatus, tasks[0].status]
       );
+      if (!rowCount) return res.json({ ok: true });
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, user_answer]
@@ -560,20 +562,25 @@ function registerRoutes(app) {
       const { resolution } = req.body;
       if (!resolution?.trim()) return res.status(400).json({ error: '請填寫解決說明' });
 
-      // 先落地修正指示（分診員讀 role='user' 的 [修正指示] 判斷去向）
-      await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
-        [req.params.id, `[修正指示] ${resolution.trim()}`]
-      );
-
       if (tasks[0].project_id) {
         // 專案任務：不再盲目 resume——交給分診員讀 diff/log＋你的指示，判 resume/advance/fix/respec 決定下一步。
         // 保留 resume_status/blocker_content/計數器供分診讀取，最終落點與計數歸零由分診 goto 處理。
-        await query(
-          "UPDATE tasks SET status = 'resolve_triage', updated_at = NOW() WHERE id = $1",
+        // 條件更新防雙擊：先搶到轉移權的請求才落地修正指示，避免分診讀到重複指示
+        const { rowCount } = await query(
+          "UPDATE tasks SET status = 'resolve_triage', updated_at = NOW() WHERE id = $1 AND status = 'stopped'",
           [req.params.id]
         );
+        if (!rowCount) return res.json({ ok: true });
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+          [req.params.id, `[修正指示] ${resolution.trim()}`]
+        );
       } else {
+        // 非專案任務走原路：先落地修正指示（無分診員，直接續跑）
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+          [req.params.id, `[修正指示] ${resolution.trim()}`]
+        );
         // 非專案任務：無 worktree/diff 可判 → 沿用直接回中斷的那一關續跑（沒記錄則退回 new）。
         // 只歸零與續跑關卡對應的計數器——全歸零會讓「繼續」一鍵繳械所有重試上限，
         // 同樣的失敗可無上限重演（健檢 U2，任務 52 無限循環的直接機制）

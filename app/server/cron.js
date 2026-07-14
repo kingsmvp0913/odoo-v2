@@ -37,8 +37,13 @@ async function autoArchiveDone() {
   );
 }
 
+let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
+let _lastShutdownMinute = null; // 同一分鐘只觸發一次夜間關機（tick 延遲時的重複防護）
+
 function startCron() {
   _job = cron.schedule('* * * * *', async () => {
+    if (_tickRunning) return;
+    _tickRunning = true;
     try {
       const intervals = await getGlobalSettings();
       const odooMs    = (intervals.odoo_sync_interval || 60) * 60000;
@@ -75,16 +80,20 @@ function startCron() {
         await classifyPendingRejections().catch(err => console.error('[CRON] reject-classify:', err.message));
       }
 
-      // Nightly env shutdown
+      // Nightly env shutdown（依 server 本機時區比對；容器時區與維運預期不同時請以 TZ env 對齊）
       const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
       const [sh, sm] = shutdownTime.split(':').map(Number);
       const nowDate = new Date();
-      if (nowDate.getHours() === sh && nowDate.getMinutes() === sm) {
+      const minuteKey = `${nowDate.getFullYear()}-${nowDate.getMonth()}-${nowDate.getDate()} ${nowDate.getHours()}:${nowDate.getMinutes()}`;
+      if (nowDate.getHours() === sh && nowDate.getMinutes() === sm && _lastShutdownMinute !== minuteKey) {
+        _lastShutdownMinute = minuteKey;
         const { nightlyShutdown } = require('./pipeline/env-agent');
         nightlyShutdown().catch(err => console.error('[CRON] nightly shutdown:', err.message));
       }
     } catch (err) {
       console.error('[CRON] tick error:', err.message);
+    } finally {
+      _tickRunning = false;
     }
   });
   return _job;

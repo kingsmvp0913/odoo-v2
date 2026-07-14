@@ -101,6 +101,11 @@ function createApp() {
 }
 
 if (require.main === module) {
+  // 最後防線：漏接的例外（如子行程 stream 的 EPIPE）不可拖垮整個 pipeline server——
+  // 任務狀態都在 DB，行程活著才能繼續派工；只記 log 供鑑識，不退出。
+  process.on('uncaughtException', err => console.error('[FATAL] uncaughtException:', err));
+  process.on('unhandledRejection', err => console.error('[FATAL] unhandledRejection:', err));
+
   const { migrate } = require('./db');
   const { setIo } = require('./notify');
   const { startCron } = require('./cron');
@@ -135,6 +140,13 @@ if (require.main === module) {
     const { query: q } = require('./db');
     await q(
       "UPDATE odoo_envs SET status='error', error_msg='伺服器重啟，建立程序中斷', updated_at=NOW() WHERE status='setting_up'"
+    ).catch(() => {});
+    // 同理重置其他 fire-and-forget 的 running 殘留（無人續跑，會永遠顯示執行中）
+    await q(
+      "UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE status='running'"
+    ).catch(() => {});
+    await q(
+      "UPDATE project_repos SET graphify_status='error' WHERE graphify_status='running'"
     ).catch(() => {});
 
     setIo(io);

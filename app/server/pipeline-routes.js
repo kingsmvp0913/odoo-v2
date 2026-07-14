@@ -4,6 +4,10 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 
+// approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToMain
+// （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
+const _approving = new Set();
+
 function registerRoutes(app) {
   app.post('/api/pipeline/run', verifyToken, async (req, res) => {
     try {
@@ -20,6 +24,9 @@ function registerRoutes(app) {
 
   // 最終人工審核通過：把 task 分支併回 main、清理 worktree 與分支，轉入 wiki 更新
   app.post('/api/tasks/:id/approve', verifyToken, async (req, res) => {
+    const approveKey = String(req.params.id);
+    if (_approving.has(approveKey)) return res.status(409).json({ error: '審核通過處理中，請勿重複送出' });
+    _approving.add(approveKey);
     try {
       const { rows } = await query(
         'SELECT id, task_id, status, git_branch, project_id FROM tasks WHERE id = $1 AND user_id = $2',
@@ -69,18 +76,23 @@ function registerRoutes(app) {
         }
       });
 
-      await query(
-        "UPDATE tasks SET status = 'wiki_updating', approved_at = NOW(), updated_at = NOW() WHERE id = $1",
+      // 條件更新（WHERE status）：佔位之外的第二道防線，狀態已被他處改動就不再覆寫
+      const { rowCount } = await query(
+        "UPDATE tasks SET status = 'wiki_updating', approved_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'review_pending'",
         [req.params.id]
       );
-      await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回主線並清理分支，正在更新文件')",
-        [req.params.id]
-      );
+      if (rowCount) {
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回主線並清理分支，正在更新文件')",
+          [req.params.id]
+        );
+      }
       runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: '合併主線失敗：' + err.message });
+    } finally {
+      _approving.delete(approveKey);
     }
   });
 
@@ -100,10 +112,12 @@ function registerRoutes(app) {
       }
       // 回退回分診（reject_triage）：由 analysis-reject 判 bug/clarify/respec，不再瞎猜式直進 coding。
       // reentry_count 只累加做統計、不強制 stopped（人為刻意退回，不套自動 runaway 上限）
-      await query(
-        "UPDATE tasks SET status='reject_triage', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1",
+      // 條件更新防雙擊：輸掉競態的請求不再重複落 log／task_rejections
+      const { rowCount } = await query(
+        "UPDATE tasks SET status='reject_triage', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1 AND status='review_pending'",
         [req.params.id, `[人工退回]\n${reason}`]
       );
+      if (!rowCount) return res.json({ ok: true });
       // 時間軸只落「[人工退回]」標記，不塞原因本文（審核者常整包貼錯誤 log，全灌進畫面沒意義）。
       // 完整原因仍在 retry_feedback（分診 agent 讀）與 task_rejections.reason（分類 agent 讀），
       // 使用者面的原因總結＋結論改由 reject-triage 的 AI 泡泡呈現。
@@ -133,8 +147,9 @@ function registerRoutes(app) {
       if (rows[0].status !== 'cs_reply_pending') {
         return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_reply_pending` });
       }
+      // 條件更新防雙擊：檢查到更新之間狀態被改（另一請求已完成）就不動作
       await query(
-        "UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = $1",
+        "UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = $1 AND status = 'cs_reply_pending'",
         [req.params.id]
       );
       res.json({ ok: true });
@@ -153,10 +168,12 @@ function registerRoutes(app) {
       if (rows[0].status !== 'cs_data_needed') {
         return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_data_needed` });
       }
-      await query(
-        "UPDATE tasks SET status = 'cs_running', updated_at = NOW() WHERE id = $1",
+      // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答（否則 cs-agent 會讀到重複答案）
+      const { rowCount } = await query(
+        "UPDATE tasks SET status = 'cs_running', updated_at = NOW() WHERE id = $1 AND status = 'cs_data_needed'",
         [req.params.id]
       );
+      if (!rowCount) return res.json({ ok: true });
       const { answers, note } = req.body;
       let logContent = '';
       if (answers && typeof answers === 'object') {
