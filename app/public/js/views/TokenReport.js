@@ -308,6 +308,38 @@ window.TokenReportView = Vue.defineComponent({
 
         </div>
 
+        <!-- 各關卡成本與失敗率：失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標 -->
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5)" v-if="report.by_agent.length">
+          <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);padding:var(--space-3) var(--space-3) 0;color:var(--text-secondary)">各關卡成本與失敗率</div>
+          <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+            <thead>
+              <tr style="font-weight:var(--fw-semibold);font-size:var(--fs-xs);color:var(--text-muted)">
+                <th style="padding:var(--space-2) var(--space-3);text-align:left">關卡</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">實際 Token 數</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">花費</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">呼叫數</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">失敗數</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">失敗率</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in report.by_agent" :key="'ag-'+r.agent_type" style="border-top:1px solid var(--border)">
+                <td style="padding:var(--space-2) var(--space-3)">
+                  <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:agentColor(r.agent_type),display:'inline-block',marginRight:'6px'}"></span>{{ agentLabel(r.agent_type) }}
+                </td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right" :title="fmtNum(r.tokens)">{{ fmtShort(r.tokens) }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ fmtUSD(r.cost_usd) }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.calls }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.failed_calls }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right"
+                  :style="{color: r.fail_rate >= 0.2 ? 'var(--danger)' : (r.fail_rate > 0 ? 'var(--warning)' : 'var(--text-muted)')}">
+                  {{ (r.fail_rate * 100).toFixed(0) }}%
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         <!-- 明細表 -->
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
           <div style="max-height:520px;overflow-y:auto">

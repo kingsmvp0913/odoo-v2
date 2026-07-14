@@ -265,3 +265,23 @@ test('end=今天（date-only）→ 含當天記錄（邊界補到當日結束）
   // 加權=1000；無 model→sonnet$3；cost=3*1000/1e6=0.003 USD
   expect(hit.total_cost).toBeCloseTo(0.003, 8);
 });
+
+// 意圖：失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標；
+// by_agent 必須帶 per-stage 的成本與失敗率，讓「哪一關最燒」可視化。
+test('by_agent 帶成本與失敗率：失敗記錄（status≠completed）計入 fail_rate', async () => {
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, status, source)
+     VALUES ('task_odoo_2', $1, 'qa', 0, 0, 0, 0, 'timeout', 'server')`,
+    [regularUserId]
+  );
+  const res = await request(app)
+    .get('/api/token-report')
+    .set('Authorization', `Bearer ${userToken}`);
+  expect(res.status).toBe(200);
+  const qa = res.body.by_agent.find(r => r.agent_type === 'qa');
+  expect(qa).toBeTruthy();
+  expect(qa.calls).toBe(2);          // 1 成功 + 1 timeout
+  expect(qa.failed_calls).toBe(1);
+  expect(qa.fail_rate).toBeCloseTo(0.5);
+  expect(typeof qa.cost_usd).toBe('number');
+});

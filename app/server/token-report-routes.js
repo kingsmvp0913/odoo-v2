@@ -69,10 +69,15 @@ function registerRoutes(app) {
         baseParams
       );
 
-      // By agent（實際 Token 數，與成本同一套加權）
+      // By agent（實際 Token 數＋成本＋失敗率，與成本同一套加權）。
+      // 失敗＝status 非 completed（timeout/aborted/error 都記帳，健檢 U12）；
+      // 失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標。
       const { rows: byAgent } = await query(
         `SELECT agent_type,
-           SUM(${WEIGHTED}) AS tokens
+           SUM(${WEIGHTED}) AS tokens,
+           SUM(${COST}) AS cost_usd,
+           COUNT(*) AS calls,
+           SUM(CASE WHEN COALESCE(tu.status,'completed') <> 'completed' THEN 1 ELSE 0 END) AS failed_calls
          FROM token_usage tu
          ${where}
          GROUP BY agent_type ORDER BY tokens DESC`,
@@ -211,7 +216,18 @@ function registerRoutes(app) {
           // 平均每任務以「實際花費」計
           avg_cost_per_task:   totalTasks ? costUsd / totalTasks : 0
         },
-        by_agent:   byAgent.map(r => ({ agent_type: r.agent_type, tokens: Number(r.tokens) })),
+        by_agent:   byAgent.map(r => {
+          const calls = Number(r.calls) || 0;
+          const failed = Number(r.failed_calls) || 0;
+          return {
+            agent_type: r.agent_type,
+            tokens: Number(r.tokens),
+            cost_usd: Number(r.cost_usd) || 0,
+            calls,
+            failed_calls: failed,
+            fail_rate: calls ? failed / calls : 0
+          };
+        }),
         by_project: byProject.filter(r => r.project_name).map(r => ({
           project_id:   r.project_id,
           project_name: r.project_name,
