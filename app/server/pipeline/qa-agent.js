@@ -7,11 +7,14 @@ const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 
 const QA_LIMIT = 5;
+// 每個 QA session 世代最多 resume 幾次（比照 coding 的 RESUME_LIMIT）：重驗走 --resume
+// 續用上輪對話（已含規格、規則、上輪 diff 探索），只送短增量 prompt 省 token
+const QA_RESUME_LIMIT = 2;
 
 // QA 審查：對照 SD 檢查任務 diff。pass→merge_running；fail→退 coding 並計數（滿 QA_LIMIT→stopped）。
 async function runQaAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -28,7 +31,6 @@ async function runQaAgent(taskId, userId, signal) {
 
   let raw;
   try {
-    const agent = loadAgent('qa');
     // 主分支名依實際 repo 而定（main/master），寫死 main 會讓 diff 基底錯誤、審查失準
     const { getMainBranch } = require('./git');
     const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
@@ -39,19 +41,49 @@ async function runQaAgent(taskId, userId, signal) {
       [taskId]
     );
     const priorFindings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（首輪，無上輪清單）';
-    const prompt = agent.render({
-      project_name: info.name,
-      odoo_version: info.odoo_version,
-      main_branch: mainBranch,
-      git_branch: task.git_branch || '（未設定）',
-      analysis_yaml: task.analysis_yaml || '（無規格）',
-      prior_findings: priorFindings,
-      resolution: (await latestResolution(taskId)) || '（無）'
-    }).trim();
+    const resolution = (await latestResolution(taskId)) || '（無）';
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
-    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model, agentType: 'qa' });
-    raw = result.text;
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', result.usage, result.durationMs);
+    const cwd = worktreeParent(info.root, task.task_id);
+
+    // 重驗走 --resume：上輪 session 已含規格＋審查規則＋repo 探索，本輪只送「重取 diff＋逐項重驗」
+    // 的短增量 prompt（比照 coding 的省 token 設計）。首輪／無上輪清單／resume 額度用完 → fresh。
+    const canResume = !!task.qa_session_id && (task.qa_resume_count || 0) < QA_RESUME_LIMIT && !!prev;
+    let callResult = null;
+    if (canResume) {
+      const retryAgent = loadAgent('qa-retry');
+      const prompt = retryAgent.render({
+        main_branch: mainBranch,
+        git_branch: task.git_branch || '（未設定）',
+        prior_findings: priorFindings,
+        resolution
+      }).trim();
+      try {
+        callResult = await runClaude(prompt, { cwd, taskId, userId, signal, resumeSessionId: task.qa_session_id, model: retryAgent.model, agentType: 'qa' });
+        await query('UPDATE tasks SET qa_resume_count = qa_resume_count + 1, qa_session_id = COALESCE($2, qa_session_id) WHERE id=$1', [taskId, callResult.sessionId]).catch(() => {});
+      } catch (err) {
+        // timeout/abort 不 fallback（交外層原樣處理）；其餘（session 遺失、CLI 壞掉）記帳後清 session 改跑 fresh 一次
+        if (err.aborted || err.claudeStatus === 'timeout') throw err;
+        await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
+        await query('UPDATE tasks SET qa_session_id=NULL, qa_resume_count=0 WHERE id=$1', [taskId]).catch(() => {});
+        callResult = null;
+      }
+    }
+    if (!callResult) {
+      const agent = loadAgent('qa');
+      const prompt = agent.render({
+        project_name: info.name,
+        odoo_version: info.odoo_version,
+        main_branch: mainBranch,
+        git_branch: task.git_branch || '（未設定）',
+        analysis_yaml: task.analysis_yaml || '（無規格）',
+        prior_findings: priorFindings,
+        resolution
+      }).trim();
+      callResult = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'qa' });
+      await query('UPDATE tasks SET qa_session_id=$2, qa_resume_count=0 WHERE id=$1', [taskId, callResult.sessionId || null]).catch(() => {});
+    }
+    raw = callResult.text;
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', callResult.usage, callResult.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
     if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑

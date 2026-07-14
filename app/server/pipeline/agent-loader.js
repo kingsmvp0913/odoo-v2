@@ -26,9 +26,14 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 
 // 會實際碰客戶 Odoo repo（讀/寫程式碼、審查 diff）的 agent：CLAUDE.md 的 Odoo 開發規則對它們是唯一真相來源，
 // 呼叫時自動 prepend；其餘 agent（分類器、merge、wiki、chat...）跟 Odoo 開發規範無關，不注入。
-// coding-retry 不注入：它只走 --resume，session 上下文已含 fresh 輪（coding-project）帶入的規則，
+// 注入模式：'full'＝整份過濾後 CLAUDE.md；'qa'＝只注入審查相關段落（§1 Odoo Constraints＋Rule 12）——
+// QA 只讀不寫，整份注入（Hard Rules 的寫入規範、前端配色、log 路徑等）是每輪固定的 token 浪費。
+// coding-retry／qa-retry 不注入：只走 --resume，session 上下文已含 fresh 輪帶入的規則，
 // 重複前置會佔掉 resume prompt 八成以上、抵銷「resume 只送短 feedback」的省 token 設計（健檢 U3）。
-const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'analysis-reject', 'coding-project', 'qa', 'playwright']);
+const CLAUDE_MD_AGENTS = new Map([
+  ['analysis-basic', 'full'], ['analysis-project', 'full'], ['analysis-reject', 'full'],
+  ['coding-project', 'full'], ['qa', 'qa'], ['playwright', 'full']
+]);
 
 // 診斷／修復型關卡：注入濃縮版 systematic-debugging（headless-safe），遇失敗先找 root cause 再改。
 // coding-retry 不在此列——靠 --resume 從 coding-project 的 session 繼承，不重送（守健檢 U3）。
@@ -65,6 +70,24 @@ function loadPipelineRules() {
   return text;
 }
 
+// QA 精簡規則：只取「§1 Odoo Constraints」全文＋「Rule 12 fail-loud」段落。
+// QA 是唯讀審查者，Hard Rules／Edit Protocol／前端規範對它無作用卻每輪照付 token。
+let _qaRulesCache = null;
+function loadQaRules() {
+  const stat = fs.statSync(CLAUDE_MD_PATH);
+  if (_qaRulesCache && _qaRulesCache.mtimeMs === stat.mtimeMs) return _qaRulesCache.text;
+  const full = loadPipelineRules();
+  const sec = full.match(/## 1\. Odoo Constraints[\s\S]*?(?=\n## |$)/);
+  const rule12 = full.match(/\*\*Rule 12[^\n]*[\s\S]*?(?=\n\n|$)/);
+  const text = [
+    '# 審查依據（節錄自專案 CLAUDE.md）',
+    sec ? sec[0].trim() : '',
+    rule12 ? rule12[0].trim() : ''
+  ].filter(Boolean).join('\n\n');
+  _qaRulesCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
 function loadDebugMethodology() {
   const stat = fs.statSync(DEBUG_MD_PATH);
   if (_debugCache && _debugCache.mtimeMs === stat.mtimeMs) return _debugCache.text;
@@ -73,7 +96,7 @@ function loadDebugMethodology() {
   return text;
 }
 
-function makeRender(body, includeRules, includeDebug) {
+function makeRender(body, rulesMode, includeDebug) {
   return vars => {
     const rendered = body.replace(/\{\{(\w+)\}\}/g, (_, k) => {
       if (vars && vars[k] != null) return String(vars[k]);
@@ -83,7 +106,8 @@ function makeRender(body, includeRules, includeDebug) {
     });
     let out = rendered;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
-    if (includeRules) out = `${loadPipelineRules()}\n\n${out}`;
+    if (rulesMode === 'full') out = `${loadPipelineRules()}\n\n${out}`;
+    else if (rulesMode === 'qa') out = `${loadQaRules()}\n\n${out}`;
     return out;
   };
 }
@@ -107,7 +131,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.has(meta.name || name), DEBUG_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;

@@ -17,7 +17,17 @@ beforeAll(async () => {
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule = require('../db');
-  dbModule._setPoolForTesting(new Pool());
+  const pool = new Pool();
+  // pg-mem 缺陷 shim（同 workflow-scenarios）：pg-mem 把 LIKE 的 '[' 誤當 regex 字元類，
+  // '[QA 未通過]%' 前綴查詢永遠 0 列；改寫成 substring 前綴比較以還原真 PG 語意。
+  const rawQuery = pool.query.bind(pool);
+  pool.query = (sql, ...rest) => {
+    if (typeof sql === 'string') {
+      sql = sql.replace(/(\w+)\s+LIKE\s+'(\[[^%']*)%'/g, (_, col, prefix) => `substring(${col}, 1, ${prefix.length}) = '${prefix}'`);
+    }
+    return rawQuery(sql, ...rest);
+  };
+  dbModule._setPoolForTesting(pool);
   await dbModule.migrate();
 
   const bcrypt = require('bcryptjs');
@@ -128,4 +138,52 @@ test('無 RESULT-JSON → stopped', async () => {
   await runQaAgent(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');
+});
+
+// 意圖（比照 coding 健檢 U3）：QA 重驗走 --resume 續用上輪 session（已含規格＋規則＋diff 探索），
+// 只送短增量 prompt；fresh 才送全量規格。省 token 且讓重驗聚焦在未解清單。
+test('QA resume：有 qa_session_id＋上輪未解清單 → --resume 短 prompt、count+1', async () => {
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-1', qa_resume_count=0 WHERE id=$1", [id]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\n備註欄位未加進 form view')", [id]
+  );
+  await runQaAgent(id, userId);
+
+  const opts = runClaude.mock.calls[0][1];
+  expect(opts.resumeSessionId).toBe('qs-1');                       // 續用上輪 session
+  expect(runClaude.mock.calls[0][0]).toContain('備註欄位未加進 form view'); // 未解清單有帶
+  expect(runClaude.mock.calls[0][0]).not.toContain('module: sale');  // 不重送全量規格
+  const { rows: [t] } = await dbModule.query('SELECT qa_resume_count, status FROM tasks WHERE id=$1', [id]);
+  expect(t.qa_resume_count).toBe(1);
+  expect(t.status).toBe('merge_running');
+});
+
+test('QA fresh：首輪（無 session）→ 全量 prompt、存 qa_session_id', async () => {
+  runClaude.mockResolvedValue({
+    text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null, sessionId: 'qs-new'
+  });
+  const id = await makeTask();
+  await runQaAgent(id, userId);
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBeUndefined();
+  expect(runClaude.mock.calls[0][0]).toContain('module: sale');      // fresh 帶全量規格
+  const { rows: [t] } = await dbModule.query('SELECT qa_session_id FROM tasks WHERE id=$1', [id]);
+  expect(t.qa_session_id).toBe('qs-new');
+});
+
+test('QA resume 額度用完（count=2）→ 強制 fresh 全量', async () => {
+  runClaude.mockResolvedValue({
+    text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null, sessionId: 'qs-gen2'
+  });
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-old', qa_resume_count=2 WHERE id=$1", [id]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\n還是不對')", [id]
+  );
+  await runQaAgent(id, userId);
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBeUndefined(); // 不 resume
+  const { rows: [t] } = await dbModule.query('SELECT qa_session_id, qa_resume_count FROM tasks WHERE id=$1', [id]);
+  expect(t.qa_session_id).toBe('qs-gen2'); // 換新世代
+  expect(t.qa_resume_count).toBe(0);
 });

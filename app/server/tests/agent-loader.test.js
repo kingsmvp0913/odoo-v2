@@ -186,3 +186,26 @@ describe('DEBUG_AGENTS 注入 systematic-debugging 方法論', () => {
     expect(out).not.toContain('# 系統化除錯（pipeline 版）');
   });
 });
+
+// 意圖（token 效率）：QA 是唯讀審查者——只注入審查相關段落（§1 Odoo Constraints＋Rule 12），
+// Hard Rules 的寫入規範／前端配色／log 路徑對它無作用卻每輪照付 token。
+test('qa 只注入精簡審查規則：含 Odoo Constraints 與 Rule 12，不含 Hard Rules 全文', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+  const out = loadAgent('qa').render({
+    project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+    analysis_yaml: 'module: sale', prior_findings: '（首輪，無上輪清單）', resolution: '（無）'
+  });
+  expect(out).toContain('Odoo Constraints');
+  expect(out).toContain('Rule 12');
+  expect(out).not.toContain('Hard Rules');       // §0 寫入規範不注入
+  expect(out).not.toContain('app/public');       // 前端規範不注入
+});
+
+test('qa-retry 不重複注入規則（resume 短 prompt，比照 coding-retry）', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+  const out = loadAgent('qa-retry').render({
+    main_branch: 'main', git_branch: 'task/x', prior_findings: 'x', resolution: '（無）'
+  });
+  expect(out).not.toContain('Odoo Constraints');
+  expect(out).toContain('接續「同一個任務的上一輪 QA 審查」');
+});
