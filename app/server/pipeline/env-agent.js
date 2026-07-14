@@ -29,24 +29,60 @@ function execCmd(bin, args, signal) {
   });
 }
 
-// 與 execCmd 相同，但把 input 餵進 stdin（execFile 非同步版不支援 input）
-function execWithStdin(bin, args, input, env) {
+// 與 execCmd 相同，但把 input 餵進 stdin（execFile 非同步版不支援 input）。
+// timeout 必備：odoo-bin shell 若因 DB lock／等待輸入卡住，無 timeout 會讓 seed／卸載階段永久 hang，
+// 整條 pipeline 卡死只能重啟 server（比照 execCmd 的 600s 上限）。
+function execWithStdin(bin, args, input, env, { timeoutMs = 600000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { env, windowsHide: true });
     let out = '', err = '';
+    let settled = false;
+    let exited = false;
+    child.on('exit', () => { exited = true; });
+    const done = fn => { if (!settled) { settled = true; clearTimeout(timer); fn(); } };
+    // SIGTERM 不理就升級 SIGKILL，避免殭屍 odoo-bin 佔資源
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
+      const t = setTimeout(() => { if (!exited) { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } } }, 5000);
+      if (t.unref) t.unref();
+      done(() => reject(new Error(`odoo-bin shell 逾時（${Math.round(timeoutMs / 1000)}s）`)));
+    }, timeoutMs);
     child.stdout.on('data', d => { out += d; });
     child.stderr.on('data', d => { err += d; });
-    child.on('error', reject);
-    child.on('close', code => code === 0 ? resolve(out) : reject(new Error(err || `exit ${code}`)));
+    child.on('error', e => done(() => reject(e)));
+    child.on('close', code => done(() => code === 0 ? resolve(out) : reject(new Error(err || `exit ${code}`))));
+    // 子行程提早死掉時 stdin 會發 EPIPE error，無 handler 會變 uncaughtException 拖垮 server
+    child.stdin.on?.('error', () => {});
     child.stdin.write(input);
     child.stdin.end();
   });
 }
 
+// pid 是否還活著（signal 0 只探測不送訊號）
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// 溫和殺行程：SIGTERM → 寬限期輪詢 → 仍活著補 SIGKILL。取代裸 SIGTERM（Odoo 可能延遲或忽略
+// SIGTERM → port 續佔，之後 waitForPort 永遠失敗）。best-effort：pid 不存在直接返回。
+async function killPidGracefully(pid, graceMs = 5000) {
+  if (!pid) return;
+  try { process.kill(pid, 'SIGTERM'); } catch { return; }
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) return;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch { /* 寬限期內剛好退出 */ }
+}
+
 // 探測埠是否真的接受連線（Odoo 已 listen）。逾時內反覆重試，最終回 true/false。
 // 用於啟動後健康檢查：Odoo spawn 後需數秒載入才 listen，唯有實測連得上才算「running」，
 // 否則 process 崩了卻標 running（stale running）→ 死掉的 URL 被餵給 E2E 卻永遠好不了。
-function waitForPort(port, timeoutMs = 90000, intervalMs = 1000) {
+// 預設 90s 可用 ENV_HEALTH_TIMEOUT_MS 放寬：大量模組首次載入（asset bundle）可能超過 90s 才 listen，
+// 被誤殺會標 error 即使其實正要起來
+const HEALTH_TIMEOUT_MS = parseInt(process.env.ENV_HEALTH_TIMEOUT_MS || '90000', 10);
+function waitForPort(port, timeoutMs = HEALTH_TIMEOUT_MS, intervalMs = 1000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
     const attempt = () => {
@@ -111,7 +147,20 @@ async function projectAddonsPaths(projectId) {
   return rows.map(r => r.local_path);
 }
 
-async function runEnvSetup(projectId) {
+// 同專案 setup 去重：手動建置（env-routes）、deploy（持專案鎖）、E2E（不持鎖）可能同時觸發；
+// 並行跑兩個 runEnvSetup 會 spawn 兩個 Odoo 搶同一 port——後者綁失敗、前者 pid 被覆寫成孤兒洩漏。
+// 不能在此包 withProjectLock（deploy 已持鎖呼叫，非重入會死鎖），改讓並行呼叫共享同一個 in-flight promise。
+const _setupInflight = new Map(); // String(projectId) → Promise
+
+function runEnvSetup(projectId) {
+  const key = String(projectId);
+  if (_setupInflight.has(key)) return _setupInflight.get(key);
+  const p = _runEnvSetup(projectId).finally(() => _setupInflight.delete(key));
+  _setupInflight.set(key, p);
+  return p;
+}
+
+async function _runEnvSetup(projectId) {
   const { rows: [project] } = await query(
     'SELECT name, folder_name, odoo_version, port FROM projects WHERE id = $1',
     [projectId]
@@ -165,8 +214,15 @@ async function runEnvSetup(projectId) {
     return;
   }
 
+  // clone 完整性：上次 clone 被中斷（app 重啟／10 分鐘 timeout 砍掉）會留下半殘 srcDir；
+  // 只看「目錄存在」會永久跳過 clone → 後續步驟因缺檔永遠失敗且無法自癒，必須人工刪目錄。
+  // 以 odoo-bin＋.git 存在為「完整」判準；不完整就先清掉重 clone（git clone 也拒絕 clone 進非空目錄）。
+  const cloneIntact = fs.existsSync(odooBin) && fs.existsSync(path.join(srcDir, '.git'));
+  if (!cloneIntact && fs.existsSync(srcDir)) {
+    try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch { /* 留給 clone 步驟報錯 */ }
+  }
   const steps = [
-    ...(!fs.existsSync(srcDir) ? [
+    ...(!cloneIntact ? [
       { name: 'clone', bin: 'git', args: ['clone', 'https://github.com/odoo/odoo.git', '--branch', `${major}.0`, '--depth=1', srcDir] }
     ] : []),
     { name: 'venv', bin: systemPython, args: ['-m', 'venv', '--clear', '--copies', venvDir] },
@@ -216,6 +272,11 @@ async function runEnvSetup(projectId) {
   // 常駐 server 的 runtime log：交由 Odoo 原生 --logfile 自寫（pythonw 無主控台、detached 導 stdio 到檔不可靠），
   // 供前端「查看 log」按鈕除錯（如 asset bundle 503 → 後台空白，traceback 只在此可見）。
   // 每次啟動先清空，只保留當次執行的 log，避免無上限成長。
+  // 既有環境還在跑（重按建立、crash 後 DB 仍記著活 pid）就直接再 spawn 會撞 port：
+  // 新行程綁失敗被標 error、舊 pid 又被覆寫 → 孤兒行程洩漏。先溫和殺掉舊行程再啟動。
+  const { rows: [prevEnv] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
+  if (prevEnv?.pid) await killPidGracefully(prevEnv.pid);
+
   const logPath = runtimeLogPath(envDir);
   try { fs.rmSync(logPath, { force: true }); } catch {}
   const child = spawn(serverPython, [odooBin, '-d', dbName, `--http-port=${port}`, '--http-interface=0.0.0.0', `--logfile=${logPath}`, '--addons-path', addonsPath, ...odooDbArgs()], {
@@ -238,9 +299,9 @@ async function runEnvSetup(projectId) {
   if (earlyExit || !healthy) {
     const reason = earlyExit
       ? `Odoo process 啟動後隨即結束（exit=${earlyExit.code}${earlyExit.sig ? `/${earlyExit.sig}` : ''}）`
-      : `Odoo 啟動逾時：90 秒內埠 ${port} 未進入監聽`;
+      : `Odoo 啟動逾時：${Math.round(HEALTH_TIMEOUT_MS / 1000)} 秒內埠 ${port} 未進入監聽`;
     log += `[start] PID=${pid} port=${port} → 健康檢查失敗：${reason}\n`;
-    try { if (pid) process.kill(pid, 'SIGTERM'); } catch {}
+    await killPidGracefully(pid);
     await query(
       "UPDATE odoo_envs SET status='error', pid=NULL, url=NULL, error_msg=$2, setup_log=$3, updated_at=NOW() WHERE project_id=$1",
       [projectId, reason, log]
@@ -384,9 +445,7 @@ async function uninstallModule(projectId, moduleName) {
 async function stopEnv(projectId) {
   const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
   if (!env) return;
-  if (env.pid) {
-    try { process.kill(env.pid, 'SIGTERM'); } catch {}
-  }
+  await killPidGracefully(env.pid);
   await query(
     "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
     [projectId]
@@ -403,9 +462,7 @@ async function nightlyShutdown() {
       [env.project_id]
     );
     if (busy) continue;
-    if (env.pid) {
-      try { process.kill(env.pid, 'SIGTERM'); } catch {}
-    }
+    await killPidGracefully(env.pid);
     await query(
       "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
       [env.project_id]

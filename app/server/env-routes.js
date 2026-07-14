@@ -39,7 +39,8 @@ function registerRoutes(app) {
   app.post('/api/projects/:id/env/setup', verifyToken, async (req, res) => {
     try {
       const { runEnvSetup } = require('./pipeline/env-agent');
-      runEnvSetup(req.params.id, req.body?.port).catch(err =>
+      // 併發防護在 runEnvSetup 內（同專案 in-flight 去重），連按建立不會 spawn 兩個 Odoo
+      runEnvSetup(req.params.id).catch(err =>
         console.error('[ENV] setup error:', err.message)
       );
       res.json({ ok: true, message: '環境建立已開始' });

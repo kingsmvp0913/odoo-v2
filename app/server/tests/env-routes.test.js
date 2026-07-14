@@ -61,12 +61,13 @@ test('POST setup → triggers runEnvSetup and returns ok', async () => {
   mockRunEnvSetup.mockResolvedValueOnce(undefined);
   const res = await request(app)
     .post(`/api/projects/${projectId}/env/setup`)
-    .set(auth()).send({ port: 8070 });
+    .set(auth()).send({});
   expect(res.status).toBe(200);
   expect(res.body.ok).toBe(true);
   // fire-and-forget so we need to wait a tick
   await new Promise(r => setTimeout(r, 10));
-  expect(mockRunEnvSetup).toHaveBeenCalledWith(String(projectId), 8070);
+  // port 由 projects.port 決定（建專案時已固定分配），route 不再轉傳 body 參數
+  expect(mockRunEnvSetup).toHaveBeenCalledWith(String(projectId));
 });
 
 test('GET env → returns record after upsert', async () => {
