@@ -19,8 +19,12 @@ async function chatReply(projectId, chatId, userMessage, userId) {
     .map(m => `${m.role === 'ai' ? '助理' : '用戶'}：${m.content}`)
     .join('\n\n');
 
+  const { rows: projRows } = await query('SELECT name FROM projects WHERE id = $1', [projectId]);
+  const projectName = projRows[0]?.name || String(projectId);
+
   const agent = loadAgent('chat');
   const prompt = agent.render({
+    project_name: projectName,
     wiki: wikiContext || '（無 wiki）',
     history: historyText ? '\n\n[對話歷史]\n' + historyText : '',
     user_message: userMessage

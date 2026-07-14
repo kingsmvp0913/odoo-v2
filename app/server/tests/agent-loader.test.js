@@ -80,10 +80,10 @@ describe('updateAgent', () => {
   });
 
   test('改 prompt 會寫入新 body（保留既有 placeholder）', () => {
-    const p = '新的提示詞 {{wiki}} {{history}} {{user_message}}';
+    const p = '新的提示詞 {{project_name}} {{wiki}} {{history}} {{user_message}}';
     const updated = L.updateAgent('chat', { prompt: p });
     expect(updated.body.trim()).toBe(p);
-    expect(updated.render({ wiki: 'W', history: 'H', user_message: 'X' })).toContain('X');
+    expect(updated.render({ project_name: 'P', wiki: 'W', history: 'H', user_message: 'X' })).toContain('X');
   });
 
   test('移除既有 placeholder 遭拒（400，防契約漂移）', () => {
