@@ -43,13 +43,23 @@ function registerRoutes(app) {
       const path = require('path');
       const { mergeToMain, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
       const { withProjectLock } = require('./pipeline/project-lock');
+      const { buildGitEnv } = require('./lib/git-identity');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
+
+      // push 回 main 要歸屬到審核者（任務發起人）本人，非平台服務帳號
+      let gitEnv;
+      try {
+        gitEnv = await buildGitEnv(req.userId);
+      } catch (e) {
+        if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: '請先到設定填個人 GitHub PAT' });
+        throw e;
+      }
 
       // 併主線＋清理 worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
       await withProjectLock(task.project_id, async () => {
         // 逐 repo 併入 main（任一失敗即中止，狀態不變）
         for (const repo of repos) {
-          await mergeToMain(repo.local_path, task.git_branch);
+          await mergeToMain(repo.local_path, task.git_branch, gitEnv);
         }
         // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
         for (const repo of repos) {

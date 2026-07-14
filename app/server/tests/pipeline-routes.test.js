@@ -1,5 +1,8 @@
 const request = require('supertest');
 const { newDb } = require('pg-mem');
+const jwt = require('jsonwebtoken');
+process.env.APP_SECRET = 'test-pipeline-appsecret';
+const { encrypt } = require('../lib/crypto');
 
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({
   messages: { create: jest.fn() }
@@ -43,6 +46,9 @@ beforeAll(async () => {
   const me = await request(app).get('/api/auth/me')
     .set('Authorization', `Bearer ${adminToken}`);
   userId = me.body.id;
+
+  // approve 併主線會解發起 user 的 gitEnv（Task 9）；種一組 PAT 讓既有 approve 測試維持過關
+  await dbModule.query('UPDATE users SET github_pat_enc = $2 WHERE id = $1', [userId, encrypt('test-pat-token')]);
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -99,7 +105,8 @@ test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉
   const res = await request(app).post(`/api/tasks/${taskId}/approve`)
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(mergeToMain).toHaveBeenCalledWith('/repos/ap/main', 'task/task_review_ok');
+  expect(mergeToMain).toHaveBeenCalledWith('/repos/ap/main', 'task/task_review_ok',
+    expect.objectContaining({ GIT_PAT: 'test-pat-token' }));
   expect(deleteBranchLocal).toHaveBeenCalled();
 
   const { rows: updated } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
@@ -107,6 +114,37 @@ test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉
 
   await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/approve → review_pending 但發起 user 無 PAT → 400，且不呼叫 mergeToMain', async () => {
+  const { mergeToMain } = require('../pipeline/git');
+  mergeToMain.mockClear();
+
+  const { rows: [nopatUser] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('nopat', 'x', 'NoPAT') RETURNING id"
+  );
+  const nopatToken = jwt.sign({ userId: nopatUser.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('NoPatProj','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/nopat/main',true,'done')",
+    [proj.id]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_nopat','odoo','Test','review_pending',$2,'task/task_nopat') RETURNING id",
+    [nopatUser.id, proj.id]
+  );
+
+  const res = await request(app).post(`/api/tasks/${t.id}/approve`)
+    .set('Authorization', `Bearer ${nopatToken}`);
+
+  expect(res.status).toBe(400);
+  expect(res.body.error).toMatch(/PAT/);
+  expect(mergeToMain).not.toHaveBeenCalled();
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
 
 test('POST /api/tasks/:id/mark-conflict-resolved → deploy_testing', async () => {
