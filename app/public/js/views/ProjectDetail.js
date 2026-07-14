@@ -14,6 +14,7 @@ window.ProjectDetailView = Vue.defineComponent({
       editOdooProjectName: '',
       editServiceRespondentName: '',
       editE2eDisabled: false,
+      savingE2e: false,
       runtimeLog: null,
       logLoading: false
     };
@@ -184,11 +185,13 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (err) { showToast(err.message, 'error'); }
     },
     async saveE2eSetting() {
+      this.savingE2e = true;
       try {
         await Api.patch(`projects/${this.project.id}`, { e2e_disabled: this.editE2eDisabled });
-        showToast('已儲存', 'success');
+        showToast(this.editE2eDisabled ? '已停用 E2E 測試' : '已啟用 E2E 測試', 'success');
         await this.load();
       } catch (err) { showToast(err.message, 'error'); }
+      finally { this.savingE2e = false; }
     },
     isAdmin() { return window.UserStore.role === 'admin'; }
   },
@@ -270,13 +273,15 @@ window.ProjectDetailView = Vue.defineComponent({
         <div style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">測試流程設定</h3>
           <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
-            <label style="display:flex;align-items:flex-start;gap:var(--space-2);cursor:pointer">
-              <input type="checkbox" v-model="editE2eDisabled" style="margin-top:3px" />
-              <span>停用 E2E 測試<br>
-                <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；勾選後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
-              </span>
+            <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；停用後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
+                <input type="checkbox" v-model="editE2eDisabled" style="opacity:0;width:0;height:0;position:absolute" @change="saveE2eSetting" :disabled="savingE2e" />
+                <div :style="{background: editE2eDisabled ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{position:'absolute', top:'3px', left: editE2eDisabled ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              </div>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eDisabled ? '已停用 E2E 測試' : 'E2E 測試啟用中' }}</span>
             </label>
-            <button class="btn btn-primary btn-sm" @click="saveE2eSetting" style="align-self:flex-start">儲存設定</button>
           </div>
         </div>
 
