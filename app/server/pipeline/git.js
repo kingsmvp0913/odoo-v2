@@ -154,8 +154,10 @@ async function ensureMainBranch(repoPath, gitEnv) {
 
 async function syncWithMain(repoPath, gitEnv) {
   const main = await getMainBranch(repoPath);
+  // fetch 失敗容忍（離線時退而 merge 本地 main），但要留下 lastErr 供最終歸因
   await execFileAsync('git', ['fetch', 'origin', main], gitOpts(repoPath, gitEnv)).catch(() => {});
 
+  let lastErr = null;
   for (const target of [`origin/${main}`, main]) {
     try {
       await execFileAsync('git', ['merge', target, '--no-edit'], gitOpts(repoPath, gitEnv));
@@ -170,9 +172,12 @@ async function syncWithMain(repoPath, gitEnv) {
       if (msg.includes('already up to date') || msg.includes('already up-to-date')) {
         return { hasConflicts: false, conflictFiles: [] };
       }
+      lastErr = err;
     }
   }
-  return { hasConflicts: false, conflictFiles: [] };
+  // 兩個 target 都以「非衝突、非 up-to-date」的原因失敗（unrelated histories、index 殘留等）＝真失敗，
+  // 必須 throw——回「無衝突成功」會讓未實際同步的碼被當成已同步繼續往下跑（假成功）
+  throw lastErr || new Error('syncWithMain：merge 失敗且無可歸因錯誤');
 }
 
 async function abortMerge(repoPath) {
@@ -253,6 +258,9 @@ async function pullBranch(repoPath, branch, gitEnv) {
   } catch (err) {
     const msg = `${err.stderr || ''}${err.message || ''}`.toLowerCase();
     if (msg.includes("couldn't find remote ref") || msg.includes('no such ref')) return;
+    // pull 撞衝突會把主 clone 留在 merge-in-progress（MERGE_HEAD＋衝突標記），
+    // 下次 checkout/pull 都會失敗、無法自癒——throw 前先清掉半殘 merge（best-effort）
+    await abortMerge(repoPath);
     throw err;
   }
 }

@@ -128,8 +128,19 @@ async function doBranch(task, settings) {
       }
     }
   } else if (settings.git_repo_path) {
-    await checkoutDefault(settings.git_repo_path);
-    await createBranch(settings.git_repo_path, branchName);
+    // 這裡不接錯誤的話會被 runTask 的 catch 吞掉、狀態停在 branch_pending → cron 每分鐘無限重試同樣失敗；
+    // 比照專案路徑：git 失敗直接 stopped 留下原因，等人工處理
+    try {
+      await checkoutDefault(settings.git_repo_path);
+      await createBranch(settings.git_repo_path, branchName);
+    } catch (e) {
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+        [taskId, `建立分支失敗：${e.message}`]
+      );
+      notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
+      return;
+    }
   }
   await query(
     "UPDATE tasks SET status = 'coding_running', git_branch = $2, updated_at = NOW() WHERE id = $1",

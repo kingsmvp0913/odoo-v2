@@ -112,7 +112,7 @@ async function runRejectTriage(taskId, userId, signal) {
     return stop(taskId, userId, stopReason('分診 Agent 執行失敗', err));
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
+  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
   const summary = (result?.summary || '').trim();
   const logAi = (content) => query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, content]);
 
@@ -121,9 +121,12 @@ async function runRejectTriage(taskId, userId, signal) {
   if (decision === 'fix' && !allowBug) decision = 'respec';
 
   // 共用：清停下狀態、落到某 status（並歸零該關計數器）。keepFeedback 保留 retry_feedback 給重跑的關卡當回饋。
+  // reentry_count 一併歸零：分診＝人工已介入，總循環兜底（MAX_REENTRY）額度應重新起算——
+  // 否則達上限被停過的任務，人工放回後只剩一次下游失敗額度就再度永久 stopped，人工介入實質失效。
+  // （代價：前端顯示的循環次數變成「距上次人工介入」的次數，屬可接受語意。）
   const goto = async (nextStatus, { keepFeedback = false, freshRespec = false } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
-    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'updated_at=NOW()'];
+    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'reentry_count=0', 'updated_at=NOW()'];
     if (!keepFeedback) sets.push('retry_feedback=NULL');
     if (freshRespec) sets.push('coding_session_id=NULL');
     if (counter) sets.push(`${counter}=0`);

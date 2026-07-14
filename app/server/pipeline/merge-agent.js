@@ -78,6 +78,23 @@ async function doMerge(task, taskId, userId, signal) {
   const branch = task.git_branch;
   const conflictByRepo = [];
 
+  // 主 clone 殘留 in-progress merge（MERGE_HEAD）防護：
+  // - 同專案另有任務停在 merge_conflict ＝ 人工正在該 clone 上解衝突（mark-conflict-resolved 才會了結），
+  //   此時進場 merge 必撞牆被誤標 stopped → 改為本輪不動作（狀態留 merge_running），等下一 tick 再試。
+  // - 否則屬殘留（前一任務崩潰未清）→ abortMerge 自癒後繼續。
+  for (const repo of repos) {
+    if (!fs.existsSync(path.join(repo.local_path, '.git', 'MERGE_HEAD'))) continue;
+    const { rows: [pending] } = await query(
+      "SELECT 1 FROM tasks WHERE project_id=$1 AND status='merge_conflict' AND id<>$2 LIMIT 1",
+      [task.project_id, taskId]
+    );
+    if (pending) {
+      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：另一任務衝突待人工解決中，本輪暫緩併入\n` });
+      return;
+    }
+    await abortMerge(repo.local_path).catch(() => {});
+  }
+
   for (const repo of repos) {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：併入 testing...\n` });
 
