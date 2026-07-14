@@ -183,3 +183,14 @@ test('tasks 具有 stage_label / classification_label / has_attachment 欄位', 
   expect(cols).toContain('classification_label');
   expect(cols).toContain('has_attachment');
 });
+
+test('users 表含 per-user git 認證欄位', async () => {
+  const { rows } = await dbModule.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name='users'`
+  );
+  const cols = rows.map(r => r.column_name);
+  expect(cols).toContain('github_pat_enc');
+  expect(cols).toContain('github_login');
+  expect(cols).toContain('git_name');
+  expect(cols).toContain('git_email');
+});

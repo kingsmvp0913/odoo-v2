@@ -405,7 +405,11 @@ async function migrate() {
     { table: 'token_usage', col: 'model',   sql: 'ALTER TABLE token_usage ADD COLUMN model TEXT' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
-    { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' }
+    { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },
+    { table: 'users', col: 'github_pat_enc', sql: 'ALTER TABLE users ADD COLUMN github_pat_enc TEXT' },
+    { table: 'users', col: 'github_login',   sql: 'ALTER TABLE users ADD COLUMN github_login TEXT' },
+    { table: 'users', col: 'git_name',       sql: 'ALTER TABLE users ADD COLUMN git_name TEXT' },
+    { table: 'users', col: 'git_email',      sql: 'ALTER TABLE users ADD COLUMN git_email TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
