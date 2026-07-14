@@ -32,6 +32,13 @@ test('GET /ai/wiki/pages 回索引、不含 content（loopback）', async () => 
   expect(res.body.pages[0].content).toBeUndefined();
 });
 
+test('GET /ai/wiki/pages 依 name 也可查（chat 執行時傳的是 projects.name，非 folder_name）', async () => {
+  const res = await request(app).get('/ai/wiki/pages').query({ project: '鴻久' });
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);
+  expect(res.body.pages.map(p => p.slug).sort()).toEqual(['overview', 'sale']);
+});
+
 test('GET /ai/wiki/page 回單頁 content（loopback）', async () => {
   const res = await request(app).get('/ai/wiki/page?project=hungjou&slug=sale');
   expect(res.status).toBe(200);
