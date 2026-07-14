@@ -149,6 +149,16 @@ async function doDeploy(task, taskId, userId, signal) {
     return;
   }
 
+  // 專案停用 E2E（如串接外部系統無法在測試區實測）：純程式跳過 tour，直接進最終人工審核。
+  // 留一行痕跡，審核者才知是刻意跳過而非流程壞掉。
+  const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
+  if (proj && proj.e2e_disabled) {
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E 已依專案設定停用，跳過')", [taskId]);
+    await query("UPDATE tasks SET status='review_pending', updated_at=NOW() WHERE id=$1", [taskId]);
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
+    return;
+  }
+
   await query("UPDATE tasks SET status='playwright_running', updated_at=NOW() WHERE id=$1", [taskId]);
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
 }

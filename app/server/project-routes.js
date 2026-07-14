@@ -204,7 +204,7 @@ function registerRoutes(app) {
 
   app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
-      const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name } = req.body;
+      const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name, e2e_disabled } = req.body;
       // 防重：來源對應名稱不可同時綁到多個專案
       const conflicts = [];
       if ('odoo_project_name' in req.body) {
@@ -217,29 +217,23 @@ function registerRoutes(app) {
         const msg = conflicts.map(c => `「${c.name}」已被專案「${c.project}」使用`).join('；');
         return res.status(409).json({ error: `來源對應名稱衝突：${msg}` });
       }
-      // For odoo_project_name and service_respondent_name: use direct assignment (not COALESCE) when
-      // the key is present in the request body, so callers can explicitly clear the field with null/empty.
-      // When the key is absent, fall back to the existing DB value.
-      const odooProjSql = 'odoo_project_name' in req.body
-        ? '$6'
-        : 'odoo_project_name';
-      const respondentSql = 'service_respondent_name' in req.body
-        ? '$7'
-        : 'service_respondent_name';
-      const params = [req.params.id, name || null, odoo_version || null, description || null,
-        folder_name || null,
-        'odoo_project_name' in req.body ? (odoo_project_name || null) : null,
-        'service_respondent_name' in req.body ? (service_respondent_name || null) : null];
+      // 動態組 SET／params，佔位號永遠對齊實際引用（勿塞未被引用的參數——真・PostgreSQL 會報 bind 參數數不符）。
+      const sets = [];
+      const params = [req.params.id];
+      // name/odoo_version/description/folder_name：COALESCE，未帶則保留現值（無法清空，符合現行語意）
+      const setCoalesce = (col, val) => { params.push(val); sets.push(`${col} = COALESCE($${params.length}, ${col})`); };
+      setCoalesce('name', name || null);
+      setCoalesce('odoo_version', odoo_version || null);
+      setCoalesce('description', description || null);
+      setCoalesce('folder_name', folder_name || null);
+      // 對應名稱：body 帶此鍵才更新，且用直接賦值（可用 null/空字串明確清空）；未帶則整欄不動
+      const setDirect = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+      if ('odoo_project_name' in req.body) setDirect('odoo_project_name', odoo_project_name || null);
+      if ('service_respondent_name' in req.body) setDirect('service_respondent_name', service_respondent_name || null);
+      if ('e2e_disabled' in req.body) setDirect('e2e_disabled', !!e2e_disabled);
+      sets.push('updated_at = NOW()');
       const { rows } = await query(
-        `UPDATE projects SET
-           name                    = COALESCE($2, name),
-           odoo_version            = COALESCE($3, odoo_version),
-           description             = COALESCE($4, description),
-           folder_name             = COALESCE($5, folder_name),
-           odoo_project_name       = ${odooProjSql},
-           service_respondent_name = ${respondentSql},
-           updated_at              = NOW()
-         WHERE id = $1 RETURNING *`,
+        `UPDATE projects SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
         params
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });

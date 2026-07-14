@@ -165,6 +165,30 @@ test('PATCH mapping → 409 when a source name is already used by another projec
   expect(r3.status).toBe(200);
 });
 
+test('PATCH e2e_disabled → round-trip 存取，且不影響其他欄位', async () => {
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'E2eProj', odoo_version: '17.0', description: '保留描述' });
+  const pid = p.body.id;
+  expect(p.body.e2e_disabled).toBe(false);   // 預設 false
+
+  const on = await request(app).patch(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`)
+    .send({ e2e_disabled: true });
+  expect(on.status).toBe(200);
+  expect(on.body.e2e_disabled).toBe(true);
+  expect(on.body.description).toBe('保留描述');   // 未帶的欄位不動
+
+  const off = await request(app).patch(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`)
+    .send({ e2e_disabled: false });
+  expect(off.body.e2e_disabled).toBe(false);
+
+  // 不帶 e2e_disabled 的請求不得覆蓋現值
+  await request(app).patch(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`)
+    .send({ e2e_disabled: true });
+  const keep = await request(app).patch(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`)
+    .send({ description: '只改描述' });
+  expect(keep.body.e2e_disabled).toBe(true);
+});
+
 test('GET /api/projects → 含 unread_count', async () => {
   const pRes = await request(app).post('/api/projects')
     .set('Authorization', `Bearer ${token}`)

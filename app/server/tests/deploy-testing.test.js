@@ -97,6 +97,22 @@ test('env 運行 + 升級成功 → playwright_running', async () => {
   expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale'], undefined);
 });
 
+test('專案停用 E2E + 升級成功 → 跳過 tour，直接 review_pending 並留痕跡', async () => {
+  await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
+  try {
+    await setEnvRunning();
+    envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+    const id = await makeTask();
+    await runDeployTesting(id, userId);
+    const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('review_pending');   // 純程式跳過，不進 playwright_running
+    const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1", [id]);
+    expect(logs.some(l => l.content.includes('E2E 已依專案設定停用，跳過'))).toBe(true);
+  } finally {
+    await dbModule.query('UPDATE projects SET e2e_disabled=false WHERE id=$1', [projectId]);
+  }
+});
+
 // --- 分支歸位：addons-path 指主 clone 工作樹，別任務的 analysis/approve 會把 clone 留在 main，
 //     不先 checkout testing 就會對錯的分支升級（假綠燈）---
 

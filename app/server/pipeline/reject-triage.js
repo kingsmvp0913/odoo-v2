@@ -144,7 +144,16 @@ async function runRejectTriage(taskId, userId, signal) {
   // advance → 放行推進到 target（白名單，最遠 review）；target 不合法則保守退回 resume
   if (decision === 'advance' && TARGET_STATUS[result?.target]) {
     if (summary) await logAi(summary);
-    await goto(TARGET_STATUS[result.target]);
+    let advanceTo = TARGET_STATUS[result.target];
+    // 專案停用 E2E：advance 推進到 E2E 時改導向最終人工審核（旗標在此處也當家，堵住繞過主推進點的路徑）
+    if (advanceTo === 'playwright_running') {
+      const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
+      if (proj && proj.e2e_disabled) {
+        await logAi('E2E 已依專案設定停用，跳過');
+        advanceTo = 'review_pending';
+      }
+    }
+    await goto(advanceTo);
     return true;
   }
 

@@ -13,6 +13,7 @@ window.ProjectDetailView = Vue.defineComponent({
       _reposPollTimer: null,
       editOdooProjectName: '',
       editServiceRespondentName: '',
+      editE2eDisabled: false,
       runtimeLog: null,
       logLoading: false
     };
@@ -68,6 +69,7 @@ window.ProjectDetailView = Vue.defineComponent({
         this.repos = data.repos || [];
         this.editOdooProjectName = data.odoo_project_name || '';
         this.editServiceRespondentName = data.service_respondent_name || '';
+        this.editE2eDisabled = !!data.e2e_disabled;
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -181,6 +183,13 @@ window.ProjectDetailView = Vue.defineComponent({
         await this.load();
       } catch (err) { showToast(err.message, 'error'); }
     },
+    async saveE2eSetting() {
+      try {
+        await Api.patch(`projects/${this.project.id}`, { e2e_disabled: this.editE2eDisabled });
+        showToast('已儲存', 'success');
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+    },
     isAdmin() { return window.UserStore.role === 'admin'; }
   },
   template: `
@@ -255,6 +264,19 @@ window.ProjectDetailView = Vue.defineComponent({
               <textarea v-model="editServiceRespondentName" class="form-control" rows="3" placeholder="與 eService 的 respondent 名稱完全一致，一行一個" style="margin-top:4px"></textarea>
             </label>
             <button class="btn btn-primary btn-sm" @click="saveProjectMapping" style="align-self:flex-start">儲存對應</button>
+          </div>
+        </div>
+
+        <div style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">測試流程設定</h3>
+          <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
+            <label style="display:flex;align-items:flex-start;gap:var(--space-2);cursor:pointer">
+              <input type="checkbox" v-model="editE2eDisabled" style="margin-top:3px" />
+              <span>停用 E2E 測試<br>
+                <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；勾選後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
+              </span>
+            </label>
+            <button class="btn btn-primary btn-sm" @click="saveE2eSetting" style="align-self:flex-start">儲存設定</button>
           </div>
         </div>
 
