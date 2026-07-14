@@ -16,7 +16,8 @@ window.SettingsView = Vue.defineComponent({
       verifyingOdoo: false,
       verifyingService: false,
       isDark: (window.ThemeManager && ThemeManager.current() === 'dark'),
-      notifyOn: (window.NotifyManager && NotifyManager.isOn())
+      notifyOn: (window.NotifyManager && NotifyManager.isOn()),
+      githubPat: { input: '', configured: false, login: '', saving: false }
     };
   },
   computed: {
@@ -49,7 +50,9 @@ window.SettingsView = Vue.defineComponent({
     async load() {
       this.loading = true;
       try {
-        const [me, settings] = await Promise.all([Api.get('auth/me'), Api.get('settings')]);
+        const [me, settings, pat] = await Promise.all([
+          Api.get('auth/me'), Api.get('settings'), Api.get('settings/github-pat')
+        ]);
         this.me.username = me.username || '';
         this.me.display_name = me.display_name || '';
         const s = settings.odoo_settings || {};
@@ -60,6 +63,8 @@ window.SettingsView = Vue.defineComponent({
         this.creds.service_username = s.service_username || '';
         this.creds.service_password = s.service_password || '';
         this.creds.service_user_id  = s.service_user_id  || '';
+        this.githubPat.configured = !!pat.configured;
+        this.githubPat.login = pat.login || '';
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -132,6 +137,26 @@ window.SettingsView = Vue.defineComponent({
         showToast(`驗證成功，使用者 ID：${uid}`, 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.verifyingService = false; }
+    },
+    async saveGithubPat() {
+      if (!this.githubPat.input.trim()) { showToast('請貼上 PAT', 'error'); return; }
+      this.githubPat.saving = true;
+      try {
+        const r = await Api.post('settings/github-pat', { pat: this.githubPat.input.trim() });
+        this.githubPat.configured = true;
+        this.githubPat.login = r.login;
+        this.githubPat.input = '';
+        showToast(`已連結 GitHub 帳號 ${r.login}`, 'success');
+      } catch (e) {
+        showToast(e.message || 'PAT 驗證失敗', 'error');
+      } finally { this.githubPat.saving = false; }
+    },
+    async removeGithubPat() {
+      if (!await confirmDialog({ title: '移除 GitHub PAT', message: '移除後你的任務將無法 push，直到重新設定。', danger: true, confirmText: '移除' })) return;
+      await Api.delete('settings/github-pat');
+      this.githubPat.configured = false;
+      this.githubPat.login = '';
+      showToast('已移除 GitHub PAT', 'success');
     }
   },
   template: `
@@ -204,6 +229,32 @@ window.SettingsView = Vue.defineComponent({
           </div>
           <div class="setting-block-footer">
             <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">{{ saving ? '儲存中...' : '儲存帳號設定' }}</button>
+          </div>
+        </div>
+
+        <!-- GitHub 認證 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">GitHub 認證</div>
+            <div class="setting-block-desc">個人 GitHub Personal Access Token，供你的任務推送程式碼使用。</div>
+          </div>
+          <div class="setting-block-body">
+            <p v-if="githubPat.configured" style="color:var(--text-muted)">已連結：<strong>{{ githubPat.login }}</strong></p>
+            <div v-else class="error-msg" style="margin-bottom:var(--space-2)">
+              尚未設定個人 GitHub PAT——你的任務將被擋下，請先設定。
+            </div>
+            <div class="field-item" style="max-width:420px">
+              <input type="password" v-model="githubPat.input" placeholder="貼上 GitHub Personal Access Token" class="field-input" />
+            </div>
+            <p style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:var(--space-2)">
+              需對目標 org repo 有 read/write 權限；若 org 開啟 SAML SSO，建立後請在 GitHub「Authorize」此 token。
+            </p>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="saveGithubPat" :disabled="githubPat.saving">
+              {{ githubPat.saving ? '驗證中...' : (githubPat.configured ? '更新 PAT' : '儲存 PAT') }}
+            </button>
+            <button v-if="githubPat.configured" class="btn btn-outline btn-sm" style="color:var(--error)" @click="removeGithubPat">移除</button>
           </div>
         </div>
 
