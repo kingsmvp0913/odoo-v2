@@ -132,6 +132,36 @@ test('resolveConflict 剝除 code fence 後才寫檔', async () => {
   expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8')).toBe('x = 2\n');
 });
 
+// 意圖：改逐 hunk 解衝突後，多個衝突區塊要各自解、非衝突行原樣保留——
+// 這是「不再整份檔案進 prompt」的正確性底線（大檔省 token 不得以改壞無衝突內容為代價）。
+test('resolveConflict 多個 hunk：逐塊解、非衝突行原樣保留', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-agent-'));
+  fs.writeFileSync(path.join(dir, 'a.py'),
+    'keep_top = True\n' +
+    '<<<<<<< HEAD\na = 1\n=======\na = 2\n>>>>>>> task\n' +
+    'keep_mid = True\n' +
+    '<<<<<<< HEAD\nb = 1\n=======\nb = 2\n>>>>>>> task\n' +
+    'keep_bottom = True\n');
+  // 由後往前解：第一次呼叫收到 b 的 hunk、第二次收到 a 的 hunk
+  mockRunClaude
+    .mockResolvedValueOnce({ text: 'b = 2', usage: null, durationMs: null })
+    .mockResolvedValueOnce({ text: 'a = 2', usage: null, durationMs: null });
+
+  const ok = await mergeMod.resolveConflict(dir, 'a.py');
+
+  expect(ok).toBe(true);
+  expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8'))
+    .toBe('keep_top = True\na = 2\nkeep_mid = True\nb = 2\nkeep_bottom = True\n');
+  // 每個 hunk 一次呼叫，且【衝突區塊】段只含該 hunk（前後文允許包含鄰近內容）
+  expect(mockRunClaude).toHaveBeenCalledTimes(2);
+  const block0 = mockRunClaude.mock.calls[0][0].split('【衝突區塊】')[1].split('【後文脈絡】')[0];
+  expect(block0).toContain('b = 1');
+  expect(block0).not.toContain('a = 1');
+});
+
 test('resolveConflict 輸出仍含衝突標記 → false 且不覆寫檔案', async () => {
   const os = require('os');
   const fs = require('fs');

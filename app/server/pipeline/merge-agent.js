@@ -20,6 +20,23 @@ async function getProjectRepos(projectId) {
   return rows;
 }
 
+// 每個衝突 hunk 附帶的前後文行數：解衝突需要局部語境（import、所在 function），但不需要整份檔案
+const CONFLICT_CTX_LINES = parseInt(process.env.MERGE_CONFLICT_CTX_LINES || '30', 10);
+
+// 找出所有成對的 <<<<<<< … >>>>>>> 區塊（行號範圍，含頭尾標記行）
+function findConflictBlocks(lines) {
+  const blocks = [];
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith('<<<<<<<')) start = i;
+    else if (start !== -1 && lines[i].startsWith('>>>>>>>')) { blocks.push({ start, end: i }); start = -1; }
+  }
+  return blocks;
+}
+
+// 逐 hunk 解衝突：只把「衝突區塊±前後文」餵給 agent，不再整份檔案進 prompt——
+// 大檔（長 view XML／大 model）整份進 prompt 是 merge 關卡最貴的單點，且要求 model
+// 原樣回寫整檔也放大抄寫錯誤面。由後往前替換，前面 hunk 的行號不位移。
 async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   const fullPath = path.join(repoPath, filePath);
   let content;
@@ -30,28 +47,43 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   }
   if (!content.includes('<<<<<<<')) return true;
 
+  const lines = content.split('\n');
+  const blocks = findConflictBlocks(lines);
+  if (!blocks.length) return false; // 有標記卻無成對區塊（畸形）→ 交人工
+
   const agent = loadAgent('merge');
-  let resolveResult;
-  try {
-    resolveResult = await runClaude(
-      agent.render({ file_path: filePath, content }),
-      { ...opts, signal, model: agent.model, agentType: 'merge' }
-    );
-  } catch (err) {
-    if (opts.taskId) {
-      const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
-      if (t) await logFailedUsage({ taskId: t.task_id, projectId: t.project_id }, t.user_id, 'merge', err);
-    }
-    throw err;
-  }
-  // model 對「直接輸出檔案內容」加 ``` fence 是高頻行為，不剝掉會把 fence 寫進檔案並 commit 進 testing
-  const resolved = stripFence(resolveResult.text);
-  if (resolveResult.usage && opts.taskId) {
+  // 記帳歸屬只查一次（如今每 hunk 一次呼叫，避免重複查詢）
+  let ref = null, refUser = null;
+  if (opts.taskId) {
     const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
-    if (t) await logTokenUsage({ taskId: t.task_id, projectId: t.project_id }, t.user_id, 'merge', resolveResult.usage, resolveResult.durationMs);
+    if (t) { ref = { taskId: t.task_id, projectId: t.project_id }; refUser = t.user_id; }
   }
-  if (!resolved || resolved.includes('<<<<<<<')) return false;
-  fs.writeFileSync(fullPath, resolved + '\n');
+
+  for (let b = blocks.length - 1; b >= 0; b--) {
+    const { start, end } = blocks[b];
+    const prompt = agent.render({
+      file_path: filePath,
+      before_context: lines.slice(Math.max(0, start - CONFLICT_CTX_LINES), start).join('\n') || '（檔案開頭）',
+      conflict_block: lines.slice(start, end + 1).join('\n'),
+      after_context: lines.slice(end + 1, Math.min(lines.length, end + 1 + CONFLICT_CTX_LINES)).join('\n') || '（檔案結尾）'
+    });
+    let resolveResult;
+    try {
+      resolveResult = await runClaude(prompt, { ...opts, signal, model: agent.model, agentType: 'merge' });
+    } catch (err) {
+      if (ref) await logFailedUsage(ref, refUser, 'merge', err);
+      throw err;
+    }
+    if (resolveResult.usage && ref) {
+      await logTokenUsage(ref, refUser, 'merge', resolveResult.usage, resolveResult.durationMs);
+    }
+    // model 對「直接輸出內容」加 ``` fence 是高頻行為，不剝掉會把 fence 寫進檔案並 commit 進 testing
+    const resolved = stripFence(resolveResult.text);
+    if (!resolved || /^(<<<<<<<|=======|>>>>>>>)/m.test(resolved)) return false;
+    lines.splice(start, end - start + 1, ...resolved.split('\n'));
+  }
+
+  fs.writeFileSync(fullPath, lines.join('\n'));
   return true;
 }
 
