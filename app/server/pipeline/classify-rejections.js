@@ -25,8 +25,9 @@ async function classifyOne(rej) {
   try {
     const { text, usage, durationMs } = await runClaude(agent.render({ reason: rej.reason }), { model: agent.model, agentType: 'reject_classify' });
     await logTokenUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.user_id, 'reject_classify', usage, durationMs);
-    const parsed = await parseAgentResult(text, { parse: JSON.parse });
-    if (Array.isArray(parsed) && parsed.length) items = parsed;
+    const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: { taskId: rej.task_id, projectId: rej.project_id }, userId: rej.user_id });
+    // 空陣列是合法結果（agent 判定無可拆項目）→ 視為已分類（零項目），不落 error
+    if (Array.isArray(parsed)) items = parsed;
   } catch (err) {
     await logFailedUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.user_id, 'reject_classify', err);
   }

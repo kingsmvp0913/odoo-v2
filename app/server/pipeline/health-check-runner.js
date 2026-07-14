@@ -25,18 +25,24 @@ async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {})
 
 async function checkOne(runId, agent, ha, windowDays, startedBy) {
   let finding = null;
+  // 摘要聚合失敗＝根本沒呼叫 claude，不可落失敗帳（否則 calls/failed_calls 統計灌水）
+  let prompt = null;
   try {
     const full = loadAgent(agent.name);                     // 取現行 prompt body
     const summary = await buildAgentSummary(agent, { windowDays });
-    const prompt = ha.render({
+    prompt = ha.render({
       agent_label: agent.label,
       agent_role: full.role || '',
       agent_prompt: full.body || '',
       summary: JSON.stringify(summary)
     });
+  } catch (err) {
+    console.error('[HEALTH-CHECK] summary error:', err.message);
+  }
+  if (prompt) try {
     const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health' });
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
-    const parsed = await parseAgentResult(text, { parse: JSON.parse });
+    const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: {}, userId: startedBy });
     if (parsed && typeof parsed.diagnosis === 'string' && parsed.diagnosis.trim() && SEVERITIES.has(parsed.severity)) {
       finding = {
         severity: parsed.severity,

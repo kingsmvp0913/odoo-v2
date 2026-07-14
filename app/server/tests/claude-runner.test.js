@@ -68,7 +68,7 @@ test('runClaude 逾時 → kill 子行程並以逾時錯誤 reject', async () =>
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: () => {}, end: () => {} };
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
   child.kill = jest.fn(() => { setImmediate(() => child.emit('close', 143)); });
   spawn.mockReturnValue(child);
 
@@ -85,7 +85,7 @@ test('runClaude：送出前把完整 prompt 落 prompt_logs', async () => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)) };
+  child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)), on: () => {} };
   child.kill = jest.fn();
   spawn.mockReturnValueOnce(child);
 
@@ -113,7 +113,7 @@ test('runClaude：從 init 事件抓到 session_id 並回傳', async () => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: () => {}, end: () => {} };
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
   child.kill = jest.fn();
   spawn.mockReturnValue(child);
 
@@ -133,7 +133,7 @@ test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含'
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)) };
+    child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)), on: () => {} };
     child.kill = jest.fn();
     return child;
   };
@@ -146,6 +146,36 @@ test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含'
   spawn.mockReturnValueOnce(mk());
   await runClaude('p', {});
   expect(spawn.mock.calls[spawn.mock.calls.length - 1][1]).not.toContain('--resume');
+});
+
+// 暫停時序缺口：signal 在 runClaude 被呼叫「之前」就已 abort（使用者在前置 DB 查詢／
+// 同關前一次 runClaude 期間按暫停）——addEventListener 對已 abort 的 signal 不會觸發，
+// 不前置檢查的話整段 claude 會照跑白燒 token。
+test('runClaude：signal 已 abort → 不 spawn、直接以手動暫停 reject', async () => {
+  const { spawn } = require('child_process');
+  spawn.mockClear();
+  const { runClaude } = require('../pipeline/claude-runner');
+  const ctrl = new AbortController();
+  ctrl.abort();
+  await expect(runClaude('p', { signal: ctrl.signal })).rejects.toMatchObject({ aborted: true });
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+// exit code null＝被外部 signal 終止（OOM killer 等）：不能拿空結果當成功回傳，
+// 否則下游拿到空輸出會誤歸因成「agent 沒回有效結果」。
+test('runClaude：exit code null（外部 kill）→ reject 而非空成功', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.emit('close', null, 'SIGKILL');
+  await expect(p).rejects.toThrow(/外部終止/);
 });
 
 // 健檢 U12：失敗/中斷/逾時的執行也要記帳（usage 為零＋status 標記），

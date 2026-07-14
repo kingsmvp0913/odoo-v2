@@ -45,7 +45,7 @@ async function runCsAgent(taskId, userId, signal) {
   try {
     const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model, agentType: 'cs' });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
-    result = await parseAgentResult(text, { parse: JSON.parse, signal });
+    result = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId: task.user_id });
   } catch (err) {
     // CLI/API 執行失敗與「回應無法解析」是不同問題，分開歸因（健檢流程層 P3）
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);

@@ -20,6 +20,8 @@ function mcpConfigPath(agentType) {
 // task_events 批次寫入：顯示走 socket 即時，持久化累積後批量落地（取代每行一筆的高頻 INSERT）
 const EVENT_FLUSH_MS = parseInt(process.env.PIPELINE_EVENT_FLUSH_MS || '500', 10);
 const EVENT_FLUSH_MAX = parseInt(process.env.PIPELINE_EVENT_FLUSH_MAX || '50', 10);
+// SIGTERM 後的寬限期，逾期未退出升級 SIGKILL
+const KILL_GRACE_MS = parseInt(process.env.PIPELINE_KILL_GRACE_MS || '5000', 10);
 
 function formatEvent(ev) {
   if (!ev || !ev.type) return null;
@@ -62,6 +64,11 @@ function formatEvent(ev) {
 function runClaude(prompt, opts = {}) {
   const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId, env, agentType } = opts;
   return new Promise((resolve, reject) => {
+    // signal 已 abort（使用者在前置 DB 查詢／組 prompt 期間、或同關前一次 runClaude 進行中按暫停）：
+    // addEventListener 對已 abort 的 signal 永遠不會觸發 → 不檢查的話這一整段 claude 會照跑燒 token
+    if (signal?.aborted) {
+      return reject(Object.assign(abortError(), { claudeStatus: 'aborted', durationMs: 0 }));
+    }
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
@@ -71,6 +78,18 @@ function runClaude(prompt, opts = {}) {
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd, env: env ? { ...process.env, ...env } : process.env });
+    // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
+    // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。
+    child.stdin.on?.('error', () => {});
+
+    let exited = false;
+    child.on('exit', () => { exited = true; });
+    // SIGTERM 後寬限期未退出就升級 SIGKILL：claude 掛死不理 SIGTERM 時避免殭屍行程佔資源
+    const killChild = () => {
+      try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
+      const t = setTimeout(() => { if (!exited) { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } } }, KILL_GRACE_MS);
+      if (t.unref) t.unref();
+    };
 
     let resultText = '';
     let usage = null;
@@ -100,7 +119,7 @@ function runClaude(prompt, opts = {}) {
     const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
     // CLI 掛死時若無 timeout，任務會永久卡在 *_running、merge 鎖永不釋放，只能重啟 server（健檢 U9）
     timer = setTimeout(() => {
-      child.kill('SIGTERM');
+      killChild();
       finish(() => reject(fail(new Error(`claude 執行逾時（${Math.round(timeoutMs / 1000)}s）`), 'timeout')));
     }, timeoutMs);
     // 有 taskId 才有落地對象；socket 另需 userId 才知道推給誰（前端依 taskId 路由終端輸出）
@@ -155,15 +174,17 @@ function runClaude(prompt, opts = {}) {
 
     if (signal) {
       signal.addEventListener('abort', () => {
-        child.kill('SIGTERM');
+        killChild();
         finish(() => reject(fail(abortError(), 'aborted')));
       }, { once: true });
     }
 
-    child.on('close', code => {
+    child.on('close', (code, sig) => {
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
       finish(() => {
-        if (code !== 0 && code !== null) reject(fail(new Error(stderr.trim() || `claude exited with code ${code}`), 'error'));
+        // code null＝被 signal 終止：自家的 timeout/abort kill 已先 settle（此處為 no-op），
+        // 走到這裡代表外部殺掉（OOM killer 等）→ 視為失敗，不能拿空結果當成功回傳
+        if (code !== 0) reject(fail(new Error(stderr.trim() || (code === null ? `claude 行程被外部終止（${sig || 'signal'}）` : `claude exited with code ${code}`)), 'error'));
         else {
           // 實際 model：優先用事件回報的 resolved id，退回 opts 的 model alias（sonnet/opus…）
           const finalModel = usedModel || model || null;

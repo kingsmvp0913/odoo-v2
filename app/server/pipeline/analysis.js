@@ -65,11 +65,16 @@ async function analyzeTask(taskId, signal) {
   let parsed;
   try {
     // 統一契約：<result> 包住的 YAML，剝 fence＋解析失敗先 haiku 補救一次（健檢 F）
-    parsed = await parseAgentResult(rawYaml, { parse: s => yaml.load(s, { schema: yaml.CORE_SCHEMA }), signal });
+    parsed = await parseAgentResult(rawYaml, {
+      parse: s => yaml.load(s, { schema: yaml.CORE_SCHEMA }), signal,
+      ref: { taskId: task.task_id }, userId: task.user_id
+    });
     if (!parsed) throw new Error('無法解析為有效 YAML');
     const missing = REQUIRED_FIELDS.filter(f => parsed?.[f] == null || parsed[f] === '');
     if (missing.length > 0) throw new Error(`Missing required YAML fields: ${missing.join(', ')}`);
   } catch (parseErr) {
+    if (parseErr.aborted) throw parseErr; // 補救期間手動暫停：不是解析失敗，狀態原地不動
+
     await query(
       `UPDATE tasks SET status = 'stopped', blocker_content = $2, updated_at = NOW() WHERE id = $1`,
       [taskId, `Analysis YAML error: ${parseErr.message}\n\n${rawYaml.slice(0, 500)}`]
@@ -97,4 +102,6 @@ async function analyzeTask(taskId, signal) {
   return { next_status, analysis_yaml: cleanYaml };
 }
 
-module.exports = { analyzeTask };
+// determineNextStatus / REQUIRED_FIELDS 供 task-agent（analysis-project 路徑）共用：
+// 兩條分析路徑同一份「YAML → 下一狀態」推導與必要欄位驗證，避免雙契約漂移
+module.exports = { analyzeTask, determineNextStatus, REQUIRED_FIELDS };

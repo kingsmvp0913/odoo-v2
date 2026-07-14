@@ -1,7 +1,9 @@
 const { runClaude } = require('./claude-runner');
+const { logTokenUsage, logFailedUsage } = require('./token-logger');
 
-// 統一 agent 輸出契約解析（健檢主題 F）：所有 agent 走同一份，取代逐個修的貪婪 regex／裸 YAML。
+// 統一 agent 輸出契約解析（健檢主題 F）：需要結構化結果的 agent 走同一份，取代逐個修的貪婪 regex／裸 YAML。
 // 契約：結果資料包在 <result>…</result>（Claude 訓練過的 XML 閉合標籤，比自訂 ---END--- 更可靠）。
+// 註：merge（吐裸檔案內容）、deploy-fix（裸 JSON）、playwright／chat（自然語言）刻意不用此契約。
 const OPEN = '<result>';
 const CLOSE = '</result>';
 
@@ -30,7 +32,9 @@ const REPAIR_PROMPT = raw =>
 
 // 解析 agent 輸出：先直接 extract+parse，失敗才用 haiku 補救一次（只修格式、不改語意），
 // 仍失敗回 null（呼叫端 stopped）。agent 已花完數十萬 token，不該因收尾格式抖動整輪報廢（健檢 F）。
-async function parseAgentResult(raw, { parse, signal } = {}) {
+// ref/userId：補救那一次 haiku 呼叫的記帳歸屬（不帶則不記帳，僅測試允許）。
+// abort（手動暫停）必須 rethrow 而非吞成 null——吞掉會讓呼叫端把「暫停」誤標成 stopped。
+async function parseAgentResult(raw, { parse, signal, ref, userId } = {}) {
   const doParse = s => {
     if (s == null) return null;
     try { const v = parse(s); return v == null ? null : v; } catch { return null; }
@@ -39,8 +43,13 @@ async function parseAgentResult(raw, { parse, signal } = {}) {
   if (out != null) return out;
   try {
     const repaired = await runClaude(REPAIR_PROMPT(raw), { model: 'haiku', signal, agentType: 'repair' });
+    if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
     out = doParse(extractResult(repaired.text));
-  } catch { /* haiku 補救也失敗 → null */ }
+  } catch (err) {
+    if (err && err.aborted) throw err;
+    if (ref) await logFailedUsage(ref, userId, 'repair', err);
+    /* haiku 補救也失敗 → null */
+  }
   return out;
 }
 

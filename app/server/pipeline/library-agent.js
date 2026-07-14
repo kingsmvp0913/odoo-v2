@@ -148,7 +148,7 @@ ${src || '（無原始碼）'}`;
     const agent = loadAgent('library');
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
-    const p = await parseAgentResult(text, { parse: JSON.parse, signal });
+    const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
     if (!p) throw new Error('agent 輸出無法解析為有效 JSON');
     title = p.title || title; content = p.content ?? content;
   } catch (err) {
@@ -223,9 +223,10 @@ ${ovRow?.content || '（尚未建立）'}
 
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, taskId, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
-    wikiUpdate = await parseAgentResult(text, { parse: JSON.parse, signal });
+    wikiUpdate = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { taskId: task.task_id }, userId });
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id }, userId, 'wiki', err);
+    if (err.aborted) return; // 手動暫停：狀態留在 wiki_updating，解除暫停後重跑本關，不可直接標 done
     console.error(`[LIBRARY-AGENT] API error task ${taskId}:`, err.message);
   }
 
@@ -309,7 +310,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   try {
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
-    const p = await parseAgentResult(text, { parse: JSON.parse, signal });
+    const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
     if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);

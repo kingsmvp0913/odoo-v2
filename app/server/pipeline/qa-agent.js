@@ -63,7 +63,7 @@ async function runQaAgent(taskId, userId, signal) {
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
+  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
 
   if (result?.verdict === 'pass') {
     await query("UPDATE tasks SET status='merge_running', updated_at=NOW() WHERE id=$1", [taskId]);
