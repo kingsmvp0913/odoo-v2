@@ -4,7 +4,8 @@ const { execFile } = require('child_process');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
-const { ensureTestingBranch } = require('./pipeline/git');
+const { ensureTestingBranch, ensureMainBranch, pullBranch } = require('./pipeline/git');
+const { withProjectLock } = require('./pipeline/project-lock');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
@@ -51,7 +52,7 @@ function computeDestPath(projectFolder, label) {
   return path.join(REPOS_BASE, slugify(projectFolder), slugify(label));
 }
 
-function triggerClone(repoId, repoUrl, destPath) {
+function triggerClone(projectId, repoId, repoUrl, destPath) {
   // Security: validate URL scheme to prevent injection
   if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
     query(
@@ -62,14 +63,15 @@ function triggerClone(repoId, repoUrl, destPath) {
   }
 
   const isAlreadyCloned = fs.existsSync(path.join(destPath, '.git'));
-  if (!isAlreadyCloned) {
-    try { fs.mkdirSync(path.dirname(destPath), { recursive: true }); } catch {}
+  if (isAlreadyCloned) {
+    // 更新既有主 clone：包 withProjectLock 與 pipeline 對同一主 clone 的 git 操作序列化。
+    // 不能用 bare `git pull`——主 clone 常駐無 upstream 的 testing 分支，會報「no tracking information」。
+    withProjectLock(projectId, () => updateMainClone(repoId, destPath)).catch(() => {});
+    return;
   }
-  const gitArgs = isAlreadyCloned
-    ? ['-C', destPath, 'pull', '--ff-only']
-    : ['clone', '--', repoUrl, destPath];
 
-  execFile('git', gitArgs, { timeout: 300000 }, async (err, _stdout, stderr) => {
+  try { fs.mkdirSync(path.dirname(destPath), { recursive: true }); } catch {}
+  execFile('git', ['clone', '--', repoUrl, destPath], { timeout: 300000 }, async (err, _stdout, stderr) => {
     if (err) {
       const msg = (stderr || err.message || 'clone failed').slice(0, 500);
       await query(
@@ -86,6 +88,27 @@ function triggerClone(repoId, repoUrl, destPath) {
       runGraphify(repoId, destPath);
     }
   });
+}
+
+// 更新既有主 clone 到最新 main：checkout 主分支 + git pull origin <main>（帶明確 remote/branch），
+// 拉完回常駐 testing（測試環境 addons 來源分支）。沿用 pipeline task-agent 的更新 main 寫法。
+async function updateMainClone(repoId, destPath) {
+  try {
+    const base = await ensureMainBranch(destPath); // checkout main/master（僅遠端則建本地追蹤分支）
+    await pullBranch(destPath, base);              // git pull origin <base>
+    try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋更新完成 */ }
+    await query(
+      'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
+      [repoId, 'done']
+    );
+    runGraphify(repoId, destPath);
+  } catch (err) {
+    const msg = (err.stderr || err.message || 'update failed').slice(0, 500);
+    await query(
+      'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+      [repoId, 'error', msg]
+    ).catch(() => {});
+  }
 }
 
 function registerRoutes(app) {
@@ -285,7 +308,7 @@ function registerRoutes(app) {
          VALUES ($1, $2, $3, $4, $5, 'cloning') RETURNING *`,
         [req.params.id, label, repo_url, destPath, is_primary || false]
       );
-      triggerClone(rows[0].id, repo_url, destPath);
+      triggerClone(req.params.id, rows[0].id, repo_url, destPath);
       res.status(201).json(rows[0]);
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'label already exists in this project' });
@@ -330,7 +353,7 @@ function registerRoutes(app) {
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
       if (urlChanged) {
-        triggerClone(rows[0].id, rows[0].repo_url, newLocalPath);
+        triggerClone(req.params.id, rows[0].id, rows[0].repo_url, newLocalPath);
       }
       res.json(rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -372,7 +395,7 @@ function registerRoutes(app) {
         "UPDATE project_repos SET clone_status='cloning', clone_error=NULL WHERE id=$1",
         [repo.id]
       );
-      triggerClone(repo.id, repo.repo_url, repo.local_path);
+      triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path);
       res.json({ ok: true, cloning: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
