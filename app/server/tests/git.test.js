@@ -278,3 +278,38 @@ test('untrackPyc：無 staged 變動時不 commit', async () => {
   expect(calls).toContainEqual(['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '*.pyc']);
   expect(calls.some(a => a.includes('commit'))).toBe(false);
 });
+
+test('pullBranch 帶 gitEnv 時把 env 併入 opts', async () => {
+  const opts = [];
+  childProcess.execFile.mockImplementation((cmd, args, o, cb) => {
+    opts.push(o); (typeof o === 'function' ? o : cb)(null, 'ok', '');
+  });
+  const gitEnv = { GIT_PAT: 'tok', GIT_AUTHOR_NAME: 'Bob' };
+  await gitModule.pullBranch('/repo', 'main', gitEnv);
+  // 每個 execFile 的 opts 都應帶 cwd 且 env 含注入值
+  expect(opts.every(o => o && o.cwd === '/repo')).toBe(true);
+  expect(opts.some(o => o.env && o.env.GIT_PAT === 'tok' && o.env.GIT_AUTHOR_NAME === 'Bob')).toBe(true);
+});
+
+test('pullBranch 不帶 gitEnv 時 opts 維持 { cwd }（不破既有斷言）', async () => {
+  const opts = [];
+  childProcess.execFile.mockImplementation((cmd, args, o, cb) => {
+    opts.push(o); (typeof o === 'function' ? o : cb)(null, 'ok', '');
+  });
+  await gitModule.pullBranch('/repo', 'main');
+  expect(opts).toContainEqual({ cwd: '/repo' });
+});
+
+test('untrackPyc 帶 gitEnv 時 commit 不再寫死 pipeline 身分', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, o, cb) => {
+    calls.push(args);
+    const done = typeof o === 'function' ? o : cb;
+    if (args[0] === 'diff' && args.includes('--cached')) return done(new Error('staged'));
+    done(null, 'ok', '');
+  });
+  await gitModule.untrackPyc('/repo', { GIT_COMMITTER_NAME: 'Bob' });
+  const commit = calls.find(a => a.includes('commit'));
+  expect(commit).toBeDefined();
+  expect(commit).not.toContain('user.name=pipeline');
+});

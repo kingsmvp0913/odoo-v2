@@ -25,16 +25,17 @@ async function discardPyc(repoPath) {
 
 // 把 tracked pyc 從 index 移除（配合 exclude 永久忽略），有 staged 變動才 commit（避免空 commit）。
 // 一次根治：之後該分支不再追蹤 pyc，從它長出的分支／併入它的 merge 都不再被 build 產物干擾。
-async function untrackPyc(repoPath) {
-  await execFileAsync('git', ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '*.pyc'], { cwd: repoPath }).catch(() => {});
+async function untrackPyc(repoPath, gitEnv) {
+  await execFileAsync('git', ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '*.pyc'], gitOpts(repoPath, gitEnv)).catch(() => {});
   try {
     // diff --cached --quiet：有 staged 變動時以非 0 離開 → 進 catch 才 commit
-    await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: repoPath });
+    await execFileAsync('git', ['diff', '--cached', '--quiet'], gitOpts(repoPath, gitEnv));
   } catch {
-    await execFileAsync('git', [
-      '-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
-      'commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）'
-    ], { cwd: repoPath }).catch(() => {});
+    const commitArgs = gitEnv
+      ? ['commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）']
+      : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
+         'commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）'];
+    await execFileAsync('git', commitArgs, gitOpts(repoPath, gitEnv)).catch(() => {});
   }
 }
 
@@ -47,6 +48,13 @@ function execFileAsync(cmd, args, opts) {
       else resolve({ stdout, stderr });
     });
   });
+}
+
+// gitEnv 有值才把 env 併入 opts；無值維持 { cwd }，確保既有呼叫端與測試不受影響。
+function gitOpts(cwd, gitEnv, extra) {
+  const o = { cwd, ...extra };
+  if (gitEnv) o.env = { ...process.env, ...gitEnv };
+  return o;
 }
 
 async function createBranch(repoPath, branchName) {
@@ -117,44 +125,45 @@ async function getMainBranch(repoPath) {
 
 // 確保本地有可用的主分支並 checkout；沒有就建立（空 repo 補一個初始 commit）。回傳分支名。
 // 供分析前使用：避免「repo 無 main」時整條流程卡死。
-async function ensureMainBranch(repoPath) {
+async function ensureMainBranch(repoPath, gitEnv) {
   // 1) 本地已有 main/master
   for (const b of ['main', 'master']) {
     if (await refExists(repoPath, `refs/heads/${b}`)) {
-      await execFileAsync('git', ['checkout', b], { cwd: repoPath });
+      await execFileAsync('git', ['checkout', b], gitOpts(repoPath, gitEnv));
       return b;
     }
   }
   // 2) 僅遠端有 → 建立本地追蹤分支
   for (const b of ['main', 'master']) {
     if (await refExists(repoPath, `refs/remotes/origin/${b}`)) {
-      await execFileAsync('git', ['checkout', '-B', b, `origin/${b}`], { cwd: repoPath });
+      await execFileAsync('git', ['checkout', '-B', b, `origin/${b}`], gitOpts(repoPath, gitEnv));
       return b;
     }
   }
   // 3) 完全沒有（空 repo / 未初始化）→ 本地建立 main；無 commit 則補一個空初始 commit
-  await execFileAsync('git', ['checkout', '-B', 'main'], { cwd: repoPath });
+  await execFileAsync('git', ['checkout', '-B', 'main'], gitOpts(repoPath, gitEnv));
   if (!(await hasCommits(repoPath))) {
-    await execFileAsync('git', [
-      '-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
-      'commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）'
-    ], { cwd: repoPath });
+    const commitArgs = gitEnv
+      ? ['commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）']
+      : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
+         'commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）'];
+    await execFileAsync('git', commitArgs, gitOpts(repoPath, gitEnv));
   }
   return 'main';
 }
 
-async function syncWithMain(repoPath) {
+async function syncWithMain(repoPath, gitEnv) {
   const main = await getMainBranch(repoPath);
-  await execFileAsync('git', ['fetch', 'origin', main], { cwd: repoPath }).catch(() => {});
+  await execFileAsync('git', ['fetch', 'origin', main], gitOpts(repoPath, gitEnv)).catch(() => {});
 
   for (const target of [`origin/${main}`, main]) {
     try {
-      await execFileAsync('git', ['merge', target, '--no-edit'], { cwd: repoPath });
+      await execFileAsync('git', ['merge', target, '--no-edit'], gitOpts(repoPath, gitEnv));
       return { hasConflicts: false, conflictFiles: [] };
     } catch (err) {
       const msg = (err.stderr || err.message || '').toLowerCase();
       if (msg.includes('conflict') || msg.includes('automatic merge failed')) {
-        const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+        const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], gitOpts(repoPath, gitEnv)).catch(() => ({ stdout: '' }));
         const conflictFiles = stdout.trim().split('\n').filter(Boolean);
         return { hasConflicts: true, conflictFiles };
       }
@@ -170,9 +179,9 @@ async function abortMerge(repoPath) {
   await execFileAsync('git', ['merge', '--abort'], { cwd: repoPath }).catch(() => {});
 }
 
-async function commitAll(repoPath, message) {
-  await execFileAsync('git', ['add', '-A'], { cwd: repoPath });
-  await execFileAsync('git', ['commit', '-m', message], { cwd: repoPath });
+async function commitAll(repoPath, message, gitEnv) {
+  await execFileAsync('git', ['add', '-A'], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', ['commit', '-m', message], gitOpts(repoPath, gitEnv));
 }
 
 // merge_conflict 人工解完後的收尾驗證：仍有未解衝突就拋錯擋下；有 MERGE_HEAD 就 commit 了結。
@@ -186,18 +195,18 @@ async function concludeMerge(repoPath) {
   }
 }
 
-async function mergeToMain(repoPath, branchName) {
+async function mergeToMain(repoPath, branchName, gitEnv) {
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath); // 避免 testing 工作樹上 tracked pyc 的改動擋住 checkout main
   const main = await getMainBranch(repoPath);
-  await execFileAsync('git', ['checkout', main], { cwd: repoPath });
+  await execFileAsync('git', ['checkout', main], gitOpts(repoPath, gitEnv));
   try {
-    await execFileAsync('git', ['merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], { cwd: repoPath });
-    await untrackPyc(repoPath); // 停止 main 追蹤 pyc → 之後從 main 長出的 task 分支不再帶 pyc
+    await execFileAsync('git', ['merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], gitOpts(repoPath, gitEnv));
+    await untrackPyc(repoPath, gitEnv); // 停止 main 追蹤 pyc → 之後從 main 長出的 task 分支不再帶 pyc
     // 併入本機 main 後同步推遠端；沒推的話審核通過的程式碼只留在 server 本機 clone，遠端看不到（健檢：approve 缺 push）
-    await execFileAsync('git', ['push', 'origin', main], { cwd: repoPath });
+    await execFileAsync('git', ['push', 'origin', main], gitOpts(repoPath, gitEnv));
   } catch (err) {
-    await execFileAsync('git', ['checkout', branchName], { cwd: repoPath }).catch(() => {});
+    await execFileAsync('git', ['checkout', branchName], gitOpts(repoPath, gitEnv)).catch(() => {});
     throw err;
   }
 }
@@ -237,10 +246,10 @@ async function resetTestingTo(repoPath, sha) {
 
 // checkout 指定分支並從 origin pull 最新（分析前確保讀到最新碼）。
 // origin 尚無該分支（空 repo / 尚未 push）→ 視為無可 pull、放行；其餘失敗（origin 不通／本地髒）→ throw 停任務。
-async function pullBranch(repoPath, branch) {
-  await execFileAsync('git', ['checkout', branch], { cwd: repoPath });
+async function pullBranch(repoPath, branch, gitEnv) {
+  await execFileAsync('git', ['checkout', branch], gitOpts(repoPath, gitEnv));
   try {
-    await execFileAsync('git', ['pull', 'origin', branch], { cwd: repoPath });
+    await execFileAsync('git', ['pull', 'origin', branch], gitOpts(repoPath, gitEnv));
   } catch (err) {
     const msg = `${err.stderr || ''}${err.message || ''}`.toLowerCase();
     if (msg.includes("couldn't find remote ref") || msg.includes('no such ref')) return;
@@ -284,36 +293,37 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
 
 // 在主 clone 把 sourceBranch 併進 targetBranch（例：task/<id> → testing）。
 // 回傳格式比照 syncWithMain，讓上層沿用衝突處理。
-async function mergeInto(mainRepoPath, targetBranch, sourceBranch) {
+async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   // 確保 target 分支存在：沒有（空 repo / 尚未建 testing）就從主分支建出來，避免 checkout 失敗卡住
   try {
-    await execFileAsync('git', ['checkout', targetBranch], { cwd: mainRepoPath });
+    await execFileAsync('git', ['checkout', targetBranch], gitOpts(mainRepoPath, gitEnv));
   } catch {
     const base = await getMainBranch(mainRepoPath);
-    await execFileAsync('git', ['checkout', '-B', targetBranch, base], { cwd: mainRepoPath });
+    await execFileAsync('git', ['checkout', '-B', targetBranch, base], gitOpts(mainRepoPath, gitEnv));
   }
   ensureGitignorePyc(mainRepoPath); // 讓 target 工作樹既有的未追蹤 pyc 變 ignored，merge 才不會被擋
   await discardPyc(mainRepoPath);   // 再還原 tracked pyc 的本地改動，解除「local changes would be overwritten」
   try {
-    await execFileAsync('git', ['merge', '--no-ff', '--no-edit', sourceBranch], { cwd: mainRepoPath });
-    await untrackPyc(mainRepoPath); // merge 後把 target（testing）上的 pyc 移出版控，之後不再累積
+    await execFileAsync('git', ['merge', '--no-ff', '--no-edit', sourceBranch], gitOpts(mainRepoPath, gitEnv));
+    await untrackPyc(mainRepoPath, gitEnv); // merge 後把 target（testing）上的 pyc 移出版控，之後不再累積
     return { hasConflicts: false, conflictFiles: [] };
   } catch (err) {
     // git merge 衝突訊息寫在 stdout（非 stderr），三者都要看
     const msg = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`.toLowerCase();
     if (msg.includes('conflict') || msg.includes('automatic merge failed')) {
-      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: mainRepoPath }).catch(() => ({ stdout: '' }));
+      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], gitOpts(mainRepoPath, gitEnv)).catch(() => ({ stdout: '' }));
       let conflictFiles = stdout.trim().split('\n').filter(Boolean);
       // pyc 是 build 產物，衝突無意義：移除後若已無真正衝突就完成這次 merge，避免假衝突卡任務
       const pyc = conflictFiles.filter(f => f.endsWith('.pyc'));
       if (pyc.length) {
-        await execFileAsync('git', ['rm', '-f', '--quiet', '--ignore-unmatch', ...pyc], { cwd: mainRepoPath }).catch(() => {});
+        await execFileAsync('git', ['rm', '-f', '--quiet', '--ignore-unmatch', ...pyc], gitOpts(mainRepoPath, gitEnv)).catch(() => {});
         conflictFiles = conflictFiles.filter(f => !f.endsWith('.pyc'));
         if (conflictFiles.length === 0) {
-          await execFileAsync('git', [
-            '-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local', 'commit', '--no-edit'
-          ], { cwd: mainRepoPath }).catch(() => {});
-          await untrackPyc(mainRepoPath);
+          const commitArgs = gitEnv
+            ? ['commit', '--no-edit']
+            : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local', 'commit', '--no-edit'];
+          await execFileAsync('git', commitArgs, gitOpts(mainRepoPath, gitEnv)).catch(() => {});
+          await untrackPyc(mainRepoPath, gitEnv);
           return { hasConflicts: false, conflictFiles: [] };
         }
       }
