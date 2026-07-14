@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -172,7 +173,17 @@ function runClaude(prompt, opts = {}) {
         }
       });
     });
-    child.on('error', err => finish(() => reject(fail(err, 'error'))));
+    child.on('error', err => {
+      // spawn 的 ENOENT 有兩種來源、無法從 err 本身區分：cwd 目錄不存在，或 PATH 找不到 claude。
+      // cwd（多為任務 worktree）不存在最常見於「停在早期階段的任務被 resume」時 worktree 尚未建立——
+      // 別再誤報成找不到 claude，據 cwd 是否存在給正確歸因。
+      if (err.code === 'ENOENT') {
+        err.message = (cwd && !fs.existsSync(cwd))
+          ? `工作目錄不存在（worktree 可能尚未建立或已清除）：${cwd}`
+          : '找不到 claude 執行檔（PATH 未含 claude 安裝目錄），請確認 claude CLI 可用';
+      }
+      finish(() => reject(fail(err, 'error')));
+    });
   });
 }
 

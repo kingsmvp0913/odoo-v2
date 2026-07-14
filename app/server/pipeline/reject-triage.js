@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -98,7 +99,11 @@ async function runRejectTriage(taskId, userId, signal) {
       runtime_log_path: runtimeLog,
       allow_bug: allowBug ? 'true' : 'false'
     }).trim();
-    const result = await runClaude(prompt, { cwd: worktreeParent(info.root, task.task_id), taskId, userId, signal, model: agent.model, agentType: 'reject_triage' });
+    // 停在早期分析階段就被 resume 時 worktree 尚未建立；worktree 不存在 → 退回專案根（一定存在），
+    // 否則 spawn 會拿不存在的 cwd 直接 ENOENT。分診不需任務 worktree（判 resume 後回 analysis 會重建）。
+    const wt = worktreeParent(info.root, task.task_id);
+    const cwd = fs.existsSync(wt) ? wt : info.root;
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'reject_triage' });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'reject_triage', result.usage, result.durationMs);
   } catch (err) {
