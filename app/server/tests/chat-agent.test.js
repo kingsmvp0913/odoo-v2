@@ -22,13 +22,14 @@ beforeEach(() => {
   });
 });
 
-test('prompt 帶入專案名、wiki 降為參考來源之一，且無「wiki 優先」框架', async () => {
+test('prompt 帶入專案名、指示按需查 wiki，不預載 wiki 內容', async () => {
   await chatReply('1', '2', '正式區某張單金額算錯', 99);
   expect(mockRunClaude).toHaveBeenCalledTimes(1);
   const prompt = mockRunClaude.mock.calls[0][0];
-  expect(prompt).toContain('鴻久');                       // 專案名帶入
-  expect(prompt).toContain('來源之一');                    // wiki 被降級標示
-  expect(prompt).not.toContain('請根據以下 Wiki 資料回答'); // 舊的 wiki 優先框架已移除
+  expect(prompt).toContain('鴻久');                 // 專案名帶入
+  expect(prompt).toContain('/ai/wiki/pages');       // 按需查 wiki 指引
+  expect(prompt).not.toContain('請根據以下 Wiki 資料回答'); // 無舊 wiki 優先框架
+  expect(prompt).not.toContain('維基內容');          // 不預載 wiki 內容（mock 的 wiki content 不應出現）
 });
 
 test('Branch A：prompt 指示資料類問題用 getSQL（skill 原生可達）', async () => {
