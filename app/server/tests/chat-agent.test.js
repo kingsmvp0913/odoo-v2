@@ -30,3 +30,11 @@ test('prompt 帶入專案名、wiki 降為參考來源之一，且無「wiki 優
   expect(prompt).toContain('來源之一');                    // wiki 被降級標示
   expect(prompt).not.toContain('請根據以下 Wiki 資料回答'); // 舊的 wiki 優先框架已移除
 });
+
+test('Branch A：prompt 指示資料類問題用 getSQL（skill 原生可達）', async () => {
+  await chatReply('1', '2', '正式區 res_partner 有幾筆', 99);
+  expect(mockRunClaude).toHaveBeenCalledTimes(1);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('getSQL');
+  expect(prompt).toContain('唯讀');
+});
