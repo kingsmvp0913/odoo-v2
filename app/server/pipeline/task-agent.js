@@ -9,6 +9,8 @@ const { buildGitEnv, NoGitCredentialError } = require('../lib/git-identity');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext } = require('./sync');
+const yaml = require('js-yaml');
+const { determineNextStatus, REQUIRED_FIELDS } = require('./analysis');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -226,18 +228,24 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
+  // 契約（analysis-project.md）：<result> 內「裸 YAML」，與 analysis-basic 同一份約定。
+  // 舊契約要 agent 把整份 YAML 做 JSON 逃逸再包 JSON——多欄位含引號時逃逸極易出錯；
+  // 改裸 YAML，下一狀態由 server 端 determineNextStatus 推導（與 analysis.js 單一真相）。
+  const result = await parseAgentResult(raw, {
+    parse: s => yaml.load(s, { schema: yaml.CORE_SCHEMA }), signal,
+    ref: { taskId: task.task_id, projectId: task.project_id }, userId
+  });
 
-  if (result?.status === 'stopped') {
+  if (result && typeof result === 'object' && result.stopped_reason) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, result.error || '分析 Agent 停止，未回傳原因']
+      [taskId, String(result.stopped_reason)]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
   }
 
-  if (!result?.status || !result?.analysis_yaml) {
+  if (!result || typeof result !== 'object') {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content='分析 Agent 未回傳有效結果，請檢查 terminal 輸出', updated_at=NOW() WHERE id=$1`,
       [taskId]
@@ -246,20 +254,23 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  // 未知 status 不再靜默放行成 branch_pending：可能讓「需確認」的任務未經確認就開工（違反 Rule 12）
-  if (!['branch_pending', 'confirm_pending'].includes(result.status)) {
+  // 必要欄位缺漏不得放行：殘缺 SD 進 coding 會拿垃圾規格燒 token（Rule 12 fail-loud）
+  const missing = REQUIRED_FIELDS.filter(f => result[f] == null || result[f] === '');
+  if (missing.length > 0) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, `分析 Agent 回傳未預期的 status：${result.status}`]
+      [taskId, `分析結果缺少必要欄位：${missing.join(', ')}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
   }
+
+  const nextStatus = determineNextStatus(result); // branch_pending | confirm_pending
   await query(
     `UPDATE tasks SET status=$2, analysis_yaml=$3, updated_at=NOW() WHERE id=$1`,
-    [taskId, result.status, result.analysis_yaml]
+    [taskId, nextStatus, yaml.dump(result)]
   );
-  notify.emitToUser(userId, 'task:updated', { taskId, status: result.status });
+  notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   return true;
 }
 
@@ -368,8 +379,6 @@ async function runTaskCoding(taskId, userId, signal) {
     }
 
     raw = codingResult.text;
-    // 執行成功才算消費、才清空；失敗/逾時/暫停保留給下一次重試，避免盲改（健檢止血 11）
-    if (task.retry_feedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
     await logTokenUsage(ref, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
     await logFailedUsage(ref, userId, 'coding', err);
@@ -382,8 +391,11 @@ async function runTaskCoding(taskId, userId, signal) {
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal });
+  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref, userId });
   if (result?.status === 'qa_running') {
+    // 走到「確定推進」才消費 retry_feedback；解析失敗轉 stopped 時保留，
+    // 讓之後分診放回 coding 仍有上一輪失敗上下文可 resume（避免盲改，健檢止血 11）
+    if (task.retry_feedback) await query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [taskId]).catch(() => {});
     await query(`UPDATE tasks SET status='qa_running', updated_at=NOW() WHERE id=$1`, [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'qa_running' });
   } else {

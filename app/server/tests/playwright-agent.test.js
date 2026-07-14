@@ -62,8 +62,8 @@ let seq = 0;
 async function makeTask(pwCount = 0) {
   seq++;
   const { rows: [t] } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, status, project_id, analysis_yaml, pw_retry_count) VALUES ($1,$2,'manual','playwright_running',$3,'module: idx_x',$4) RETURNING id",
-    [userId, `tt_${seq}`, projectId, pwCount]);
+    "INSERT INTO tasks (user_id, task_id, source, status, project_id, analysis_yaml, git_branch, pw_retry_count) VALUES ($1,$2,'manual','playwright_running',$3,'module: idx_x',$4,$5) RETURNING id",
+    [userId, `tt_${seq}`, projectId, `task/tt_${seq}`, pwCount]);
   return t.id;
 }
 const statusOf = async (id) => (await dbModule.query('SELECT status, blocker_type, pw_retry_count FROM tasks WHERE id=$1', [id])).rows[0];
@@ -187,4 +187,26 @@ test('tour 失敗且分類 code → 完整 log 落地成檔，retry_feedback 附
   } finally {
     delete process.env.E2E_LOG_DIR;
   }
+});
+
+// 防呆：無已 clone repo 時不得 fallback 到 process.cwd()——
+// tour-author 帶 --dangerously-skip-permissions，會把測試檔寫進平台自身 repo
+test('專案無已 clone repo（info=null）→ stopped，不以 process.cwd() 執行 agent', async () => {
+  taskAgent.getProjectInfo.mockResolvedValue(null);
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  const s = await statusOf(id);
+  expect(s.status).toBe('stopped');
+  expect(runClaude).not.toHaveBeenCalled();
+});
+
+// 防結構性假綠燈：無任務分支＝tour 無法併入 testing，--test-tags 匹配不到任何測試 exit 0＝假通過
+test('任務缺 git_branch → stopped，不執行 tour（避免 0 測試假綠燈直達審核）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, status, project_id, analysis_yaml) VALUES ($1,'tt_nobranch','manual','playwright_running',$2,'module: idx_x') RETURNING id",
+    [userId, projectId]);
+  await runTourStage(t.id, userId);
+  const s = await statusOf(t.id);
+  expect(s.status).toBe('stopped');
+  expect(envAgent.runTourTests).not.toHaveBeenCalled();
 });

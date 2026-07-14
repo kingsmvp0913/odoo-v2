@@ -60,19 +60,30 @@ clarification_channel:
 - 例：「報價單客戶欄之後看得到『備註T』欄位」「輸入內容存檔重載後值仍在」「列印 PDF 內含該備註內容」。
 - 若需求無可觀察行為（純內部重構等），acceptance 可留空 []。
 
-【輸出】分析完成後，把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。
+【輸出】分析完成後，把 analysis.yaml 內容「直接」包在 <result></result> 標籤內回傳：
+標籤內是合法 YAML——不要 JSON 包裝、不要 code fence、標籤外不要任何其他文字。
+下一步（直接實作或先向使用者確認）由系統依 YAML 欄位判定，你不需要回報 status：
+- 需使用者確認 → execution_mode 設 "MODE_B"，或把具體問題寫進 clarification_channel.questions（非空即轉人工確認），其餘欄位照常填。
+- 規格明確可實作 → execution_mode "MODE_A"、questions 留空 []。
 
-規格明確、可直接實作：
 <result>
-{"status":"branch_pending","analysis_yaml":"<yaml 字串，換行用 \n>"}
+case_id: "{{task_id}}"
+module: idx_sale_note
+odoo_version: "{{odoo_version}}"
+project_name: "{{project_name}}"
+execution_mode: "MODE_A"
+summary: "……"
+requirements:
+  - "……"
+acceptance:
+  - "……"
+low_confidence: false
+clarification_channel:
+  questions: []
+  user_answer: ""
 </result>
 
-需使用者確認（MODE_B，或規格有需澄清的問題）：**status 為 confirm_pending，但 analysis_yaml 仍必須帶上**（把問題寫進 yaml 的 clarification_channel.questions，勿只回 status）：
+規格不清楚、完全無法分析時，只輸出 stopped_reason 一個欄位：
 <result>
-{"status":"confirm_pending","analysis_yaml":"case_id: \"...\"\nmodule: ...\nexecution_mode: \"MODE_B\"\nclarification_channel:\n  questions:\n    - 問題1\n    - 問題2\n  user_answer: \"\"\n"}
-</result>
-
-規格不清楚無法繼續：
-<result>
-{"status":"stopped","error":"詳細原因（使用者看得懂的說明）"}
+stopped_reason: "詳細原因（使用者看得懂的說明）"
 </result>

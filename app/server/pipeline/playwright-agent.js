@@ -86,7 +86,19 @@ async function runTourStage(taskId, userId, signal) {
 
   // 1) tour-author agent：把 tour+HttpCase 寫進模組並 commit（結果由下方 exit code 判，不解析其文字）
   const info = await getProjectInfo(task.project_id);
-  const cwd = info?.root ? worktreeParent(info.root, task.task_id) : process.cwd();
+  // 防呆：無已 clone 完成的 repo 時不得 fallback 到 process.cwd()——
+  // agent 帶 --dangerously-skip-permissions，會把測試檔寫進平台自身的 repo
+  if (!info?.root) {
+    await stopTask(taskId, userId, '專案未設定任何已完成 clone 的 Repo，無法產生 tour 測試', 'env');
+    return true;
+  }
+  // 防結構性假綠燈：無任務分支＝tour 無法併入 testing，addons-path 收不到新 tour，
+  // --test-tags 匹配不到任何測試 exit 0＝假通過直達人工審核
+  if (!task.git_branch) {
+    await stopTask(taskId, userId, '任務缺少 git 分支，tour 測試無法併入 testing 執行', 'tech');
+    return true;
+  }
+  const cwd = worktreeParent(info.root, task.task_id);
   try {
     const agent = loadAgent('playwright');
     const prompt = agent.render({
@@ -112,8 +124,7 @@ async function runTourStage(taskId, userId, signal) {
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
   let log = '', err = null, mergeStop = null;
   await withProjectLock(task.project_id, async () => {
-    for (const repo of (info?.repos || [])) {
-      if (!task.git_branch) break;
+    for (const repo of (info.repos || [])) {
       try {
         const { mergeInto } = require('./git');
         const m = await mergeInto(repo.local_path, 'testing', task.git_branch);
