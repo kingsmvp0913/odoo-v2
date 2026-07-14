@@ -30,6 +30,12 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 // 重複前置會佔掉 resume prompt 八成以上、抵銷「resume 只送短 feedback」的省 token 設計（健檢 U3）。
 const CLAUDE_MD_AGENTS = new Set(['analysis-basic', 'analysis-project', 'analysis-reject', 'coding-project', 'qa', 'playwright']);
 
+// 診斷／修復型關卡：注入濃縮版 systematic-debugging（headless-safe），遇失敗先找 root cause 再改。
+// coding-retry 不在此列——靠 --resume 從 coding-project 的 session 繼承，不重送（守健檢 U3）。
+const DEBUG_AGENTS = new Set(['analysis-reject', 'coding-project']);
+const DEBUG_MD_PATH = path.join(__dirname, 'systematic-debugging.md');
+let _debugCache = null;
+
 // name → { mtimeMs, agent }
 const _cache = new Map();
 // CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
@@ -59,7 +65,15 @@ function loadPipelineRules() {
   return text;
 }
 
-function makeRender(body, includeRules) {
+function loadDebugMethodology() {
+  const stat = fs.statSync(DEBUG_MD_PATH);
+  if (_debugCache && _debugCache.mtimeMs === stat.mtimeMs) return _debugCache.text;
+  const text = fs.readFileSync(DEBUG_MD_PATH, 'utf8').trim();
+  _debugCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
+function makeRender(body, includeRules, includeDebug) {
   return vars => {
     const rendered = body.replace(/\{\{(\w+)\}\}/g, (_, k) => {
       if (vars && vars[k] != null) return String(vars[k]);
@@ -67,7 +81,10 @@ function makeRender(body, includeRules) {
       console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
       return '';
     });
-    return includeRules ? `${loadPipelineRules()}\n\n${rendered}` : rendered;
+    let out = rendered;
+    if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
+    if (includeRules) out = `${loadPipelineRules()}\n\n${out}`;
+    return out;
   };
 }
 
@@ -90,7 +107,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.has(meta.name || name), DEBUG_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;

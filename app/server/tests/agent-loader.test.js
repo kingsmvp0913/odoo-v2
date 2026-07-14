@@ -151,3 +151,38 @@ test('coding-retry 不重複注入 CLAUDE.md（resume 短 prompt）', () => {
   expect(out).not.toContain('Odoo Constraints');
   expect(out).toContain('接續「同一個任務的上一輪實作」');
 });
+
+// 意圖：只有「診斷／修復型」關卡（analysis-reject、coding-project）該拿到系統化除錯方法論；
+// 其餘關卡不得被污染。coding-retry 尤其不可拿（靠 --resume 繼承 coding-project 的 session，守 U3）。
+describe('DEBUG_AGENTS 注入 systematic-debugging 方法論', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+
+  test('analysis-reject render 含方法論標記', () => {
+    const out = loadAgent('analysis-reject').render({
+      project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+      analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true'
+    });
+    expect(out).toContain('# 系統化除錯（pipeline 版）');
+  });
+
+  test('coding-project render 含方法論標記', () => {
+    const out = loadAgent('coding-project').render({
+      project_name: 'P', odoo_version: '17.0', analysis_yaml: 'module: sale',
+      work_dir: '/w', repo_list: '- sale/', task_id: 'task_1', commit_message: 'm'
+    });
+    expect(out).toContain('# 系統化除錯（pipeline 版）');
+  });
+
+  test('coding-retry render 不含方法論（守 U3，靠 --resume 繼承）', () => {
+    const out = loadAgent('coding-retry').render({
+      gate: 'QA 未通過', retry_feedback: 'x', resolution: '（無）', commit_message: 'm'
+    });
+    expect(out).not.toContain('# 系統化除錯（pipeline 版）');
+  });
+
+  test('非診斷關（cs）render 不含方法論', () => {
+    const out = loadAgent('cs').render({ title: 'T', original_text: 'x', wiki: 'y' });
+    expect(out).not.toContain('# 系統化除錯（pipeline 版）');
+  });
+});
