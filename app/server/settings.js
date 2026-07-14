@@ -2,6 +2,8 @@ const http = require('http');
 const https = require('https');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { fetchGitHubIdentity } = require('./lib/github-api');
+const { encrypt } = require('./lib/crypto');
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -126,6 +128,42 @@ function registerRoutes(app) {
     } catch (err) {
       res.status(500).json({ error: `連線失敗：${err.message}` });
     }
+  });
+  // 存個人 GitHub PAT：先呼叫 GitHub API 驗證並抓身分，通過才加密存。
+  app.post('/api/settings/github-pat', verifyToken, async (req, res) => {
+    const { pat } = req.body || {};
+    if (!pat) return res.status(400).json({ error: '請貼上 GitHub PAT' });
+    let identity;
+    try {
+      identity = await fetchGitHubIdentity(pat);
+    } catch (err) {
+      return res.status(401).json({ error: err.message });
+    }
+    try {
+      const enc = encrypt(pat);
+      await query(
+        `UPDATE users SET github_pat_enc=$2, github_login=$3, git_name=$4, git_email=$5 WHERE id=$1`,
+        [req.userId, enc, identity.login, identity.name, identity.email]
+      );
+      res.json({ login: identity.login });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/settings/github-pat', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query('SELECT github_pat_enc, github_login FROM users WHERE id=$1', [req.userId]);
+      const u = rows[0] || {};
+      res.json({ configured: !!u.github_pat_enc, login: u.github_login || null });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/settings/github-pat', verifyToken, async (req, res) => {
+    try {
+      await query('UPDATE users SET github_pat_enc=NULL, github_login=NULL, git_name=NULL, git_email=NULL WHERE id=$1', [req.userId]);
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 }
 
