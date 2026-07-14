@@ -141,13 +141,19 @@ if (require.main === module) {
     await q(
       "UPDATE odoo_envs SET status='error', error_msg='伺服器重啟，建立程序中斷', updated_at=NOW() WHERE status='setting_up'"
     ).catch(() => {});
-    // 同理重置其他 fire-and-forget 的 running 殘留（無人續跑，會永遠顯示執行中）
-    await q(
-      "UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE status='running'"
-    ).catch(() => {});
-    await q(
-      "UPDATE project_repos SET graphify_status='error' WHERE graphify_status='running'"
-    ).catch(() => {});
+    // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續、graphify 冪等重建），
+    // 不再一律標 error 作廢
+    try {
+      const { resumeInterruptedRuns } = require('./pipeline/health-check-runner');
+      await resumeInterruptedRuns();
+    } catch (e) { console.error('[STARTUP] health-check resume:', e.message); }
+    try {
+      const { rows: stuck } = await q(
+        "SELECT id, local_path FROM project_repos WHERE graphify_status='running' AND local_path IS NOT NULL"
+      );
+      const { runGraphify } = require('./pipeline/graphify-runner');
+      for (const r of stuck) runGraphify(r.id, r.local_path);
+    } catch (e) { console.error('[STARTUP] graphify resume:', e.message); }
 
     setIo(io);
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）

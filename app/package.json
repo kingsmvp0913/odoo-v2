@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
+    "@upstash/context7-mcp": "^3.2.3",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "js-yaml": "^4.1.0",

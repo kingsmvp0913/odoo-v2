@@ -15,7 +15,10 @@ function withProjectLock(projectId, fn) {
   const prev = _chains.get(projectId) || Promise.resolve();
   const run = prev.then(fn, fn); // 前一個 resolve 或 reject 都接續跑 fn
   // 鏈尾吞掉錯誤，避免一個失敗污染後續排隊者；呼叫端仍從 run 拿到真實結果/錯誤
-  _chains.set(projectId, run.then(() => {}, () => {}));
+  const tail = run.then(() => {}, () => {});
+  _chains.set(projectId, tail);
+  // 鏈尾結清且沒有新工作接上（Map 裡仍是自己）→ 移除，避免 Map 隨專案數緩慢累積
+  tail.then(() => { if (_chains.get(projectId) === tail) _chains.delete(projectId); });
   return run;
 }
 

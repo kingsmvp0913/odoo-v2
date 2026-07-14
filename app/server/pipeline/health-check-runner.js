@@ -11,7 +11,10 @@ const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 // 聚合摘要 → 跑 opus 健檢 agent → 落一筆 finding。單一 agent 失敗不影響其他（best-effort）。
 async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {}) {
   try {
-    const targets = listAgents().filter(a => a.stage && a.stage !== 'workflow_health');
+    // 續跑支援：跳過此 run 已有 finding 的 agent——server 重啟後從中斷點接續，不重跑已完成者
+    const { rows: doneRows } = await query('SELECT agent_name FROM health_check_findings WHERE run_id=$1', [runId]);
+    const doneSet = new Set(doneRows.map(r => r.agent_name));
+    const targets = listAgents().filter(a => a.stage && a.stage !== 'workflow_health' && !doneSet.has(a.name));
     const ha = loadAgent('workflow-health');
     for (const agent of targets) {
       await checkOne(runId, agent, ha, windowDays, startedBy);
@@ -68,4 +71,15 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
   }
 }
 
-module.exports = { runHealthCheck };
+// 啟動續跑：上次 server 重啟時跑到一半的健檢（status='running'）從中斷點接續，
+// 而非永遠停在 running 或一律標 error 作廢。fire-and-forget，比照原觸發路徑。
+async function resumeInterruptedRuns() {
+  const { rows } = await query("SELECT id FROM health_check_runs WHERE status='running'");
+  for (const r of rows) {
+    console.log(`[HEALTH-CHECK] resume interrupted run ${r.id}`);
+    runHealthCheck(r.id).catch(() => {});
+  }
+  return rows.length;
+}
+
+module.exports = { runHealthCheck, resumeInterruptedRuns };

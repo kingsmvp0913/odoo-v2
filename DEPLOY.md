@@ -39,6 +39,18 @@
 
 日後啟動（不重跑安裝）：Windows 用 `.\start.ps1`，Linux 用 `./start.sh`。
 
+## ⚠️ 硬限制：僅允許單一 Node 行程
+
+App 的互斥機制（任務派工去重 `_inFlight`、專案鎖 `project-lock`、環境建置去重、approve 佔位）
+全部存在 **Node 行程記憶體內**，不在資料庫。因此：
+
+- **禁止** `pm2 -i 2`／cluster mode／同時起兩個 `node server/index.js`。
+- **禁止** 兩台機器指向同一個 PostgreSQL 各跑一份 App。
+
+違反時兩個行程各持一份互不知情的鎖：同一任務會被重複派工、同專案的 merge/deploy 併發寫壞
+共用主 clone、測試環境會 spawn 兩個 Odoo 搶同一 port——症狀（git 損壞、port 衝突）看不出根因。
+需要水平擴展時，先把上述互斥全數改為 PostgreSQL advisory lock 再說。
+
 ## 重跑安裝
 
 `install.ps1`/`install.sh` 與 `scripts/setup.js` 皆為 idempotent：已安裝的系統套件、已存在的 `data/config.json`、已就緒的 PostgreSQL role/db、已登入的 Claude、已裝的 MCP/plugin 都會跳過，不會覆蓋既有資料。
