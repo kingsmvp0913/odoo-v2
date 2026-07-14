@@ -188,17 +188,38 @@ async function runLibraryAgent(taskId, userId, signal) {
   );
   const logText = logs.reverse().map(l => `[${l.role}] ${l.content}`).join('\n');
 
+  // parse moduleName 前移：往上補需它定位模組頁、並作為 parents 白名單
+  let moduleName = 'uncategorized';
+  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || 'uncategorized'; }
+  catch { /* keep default */ }
+  const moduleSlug = `module-${moduleName}`;
+
+  // 撈現有總覽＋該模組頁內容，供 agent 判斷是否需往上補
+  const { rows: [ovRow] } = await query(
+    "SELECT content FROM wiki_pages WHERE project_id=$1 AND slug='overview'", [task.project_id]);
+  const { rows: [modRow] } = await query(
+    'SELECT content FROM wiki_pages WHERE project_id=$1 AND slug=$2', [task.project_id, moduleSlug]);
+
   let wikiUpdate = null;
   try {
     const agent = loadAgent('library');
-    const context = `類型：任務完成紀錄（新增/更新功能頁）
+    const context = `類型：任務完成紀錄（新增/更新功能頁，並視需要往上修正模組頁/總覽）
 slug 規則：英文小寫+連字號，描述功能主題（如 "sales-order-flow"）。
 任務標題：${task.title || '未命名'}
 任務分析：
 ${task.analysis_yaml || '無'}
 
 執行日誌（最後 20 筆）：
-${logText || '無'}`;
+${logText || '無'}
+
+本任務所屬模組：${moduleName}（模組頁 slug：${moduleSlug}）
+現有模組頁內容：
+${modRow?.content || '（尚未建立）'}
+
+現有專案總覽內容：
+${ovRow?.content || '（尚未建立）'}
+
+若這次功能讓「模組頁」或「總覽」變得有誤或不完整，於 parents 附上修正後內容（只附需要動的頁、保留既有正確內容）；不需要則不附 parents。`;
 
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, taskId, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
@@ -210,17 +231,13 @@ ${logText || '無'}`;
 
   if (wikiUpdate?.slug && wikiUpdate?.title) {
     try {
-      let moduleName = 'uncategorized';
-      try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || 'uncategorized'; }
-      catch { /* keep default */ }
-
       // 確保 overview + module 節點存在（不覆寫既有內容）
       const overviewId = await _ensureNode(
         task.project_id, null, 'overview', 'overview', '專案概論',
         '# 專案概論\n\n（尚未建立，可至 Wiki 按「建立 wiki」生成骨架）'
       );
       const moduleId = await _ensureNode(
-        task.project_id, overviewId, 'module', `module-${moduleName}`, moduleName, `# ${moduleName}`
+        task.project_id, overviewId, 'module', moduleSlug, moduleName, `# ${moduleName}`
       );
 
       // 功能頁：依主題 slug upsert，掛在模組節點下
@@ -228,6 +245,17 @@ ${logText || '無'}`;
         task.project_id, moduleId, 'function',
         wikiUpdate.slug, wikiUpdate.title, wikiUpdate.content || ''
       );
+
+      // 往上補：只允許改「總覽」與本任務模組頁，其餘 slug 忽略（防亂改無關頁）
+      const allowed = new Set(['overview', moduleSlug]);
+      for (const parent of Array.isArray(wikiUpdate.parents) ? wikiUpdate.parents : []) {
+        if (parent && allowed.has(parent.slug) && typeof parent.content === 'string' && parent.content.trim()) {
+          await query(
+            'UPDATE wiki_pages SET content=$3, updated_at=NOW() WHERE project_id=$1 AND slug=$2',
+            [task.project_id, parent.slug, parent.content]
+          );
+        }
+      }
     } catch (err) {
       console.error(`[LIBRARY-AGENT] wiki upsert error task ${taskId}:`, err.message);
     }
