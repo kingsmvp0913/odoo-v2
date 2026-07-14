@@ -1,6 +1,7 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
+const { loopbackOnly } = require('./db-query-routes');
 
 function registerRoutes(app) {
   const base = '/api/projects/:projectId/wiki';
@@ -107,6 +108,30 @@ function registerRoutes(app) {
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/ai/wiki/pages', loopbackOnly, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT w.slug, w.title, w.node_type
+           FROM wiki_pages w JOIN projects p ON p.id = w.project_id
+          WHERE p.folder_name=$1 OR p.name=$1
+          ORDER BY (w.node_type <> 'overview'), w.node_type, w.title ASC`,
+        [req.query.project]);
+      res.json({ ok: true, pages: rows });
+    } catch (err) { res.json({ ok: false, error: err.message }); }
+  });
+
+  app.get('/ai/wiki/page', loopbackOnly, async (req, res) => {
+    try {
+      const { rows: [page] } = await query(
+        `SELECT w.slug, w.title, w.content
+           FROM wiki_pages w JOIN projects p ON p.id = w.project_id
+          WHERE (p.folder_name=$1 OR p.name=$1) AND w.slug=$2`,
+        [req.query.project, req.query.slug]);
+      if (!page) return res.json({ ok: false, error: '找不到該 wiki 頁' });
+      res.json({ ok: true, ...page });
+    } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 }
 
