@@ -215,6 +215,7 @@ function registerRoutes(app) {
       // 否則半套 merge（MERGE_HEAD＋衝突標記）直接進部署，錯誤會被誤歸因為程式問題（健檢 U6）
       if (rows[0].project_id) {
         const { concludeMerge } = require('./pipeline/git');
+        const { withProjectLock } = require('./pipeline/project-lock');
         const { rows: repos } = await query(
           "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
           [rows[0].project_id]
@@ -233,13 +234,18 @@ function registerRoutes(app) {
           }
           await query('UPDATE tasks SET merge_resolutions = $2 WHERE id = $1', [rows[0].id, JSON.stringify(map)]);
         }
-        for (const repo of repos) {
-          try {
-            await concludeMerge(repo.local_path);
-          } catch (err) {
-            return res.status(400).json({ error: `${repo.label}：${err.message}` });
+        // concludeMerge 對主 clone commit → 持專案鎖，避免與同專案 merge/deploy/approve 交錯
+        const concludeErr = await withProjectLock(rows[0].project_id, async () => {
+          for (const repo of repos) {
+            try {
+              await concludeMerge(repo.local_path);
+            } catch (err) {
+              return `${repo.label}：${err.message}`;
+            }
           }
-        }
+          return null;
+        });
+        if (concludeErr) return res.status(400).json({ error: concludeErr });
       }
 
       if (isRebuild) {

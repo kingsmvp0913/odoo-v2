@@ -1,5 +1,5 @@
 const { runClaude } = require('./claude-runner');
-const { parseAgentResult, extractResult } = require('./agent-result');
+const { parseAgentResult } = require('./agent-result');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const yaml = require('js-yaml');
@@ -84,8 +84,9 @@ async function analyzeTask(taskId, signal) {
   }
 
   const next_status = determineNextStatus(parsed);
-  // 存剝乾淨的 YAML（去掉 <result> 包絡與 fence），別把契約標記雜訊帶進下游 spec
-  const cleanYaml = extractResult(rawYaml) || rawYaml;
+  // 存「實際解析成功的物件」的正規化 YAML：haiku 補救成功時 extractResult(rawYaml) 取到的
+  // 仍是原始壞文本，存那份會讓 analysis_yaml 與實際採用的內容不一致（task-agent 路徑同做法）
+  const cleanYaml = yaml.dump(parsed);
 
   await query(
     `UPDATE tasks SET status = $2, analysis_yaml = $3, analysis_retry_count = 0, updated_at = NOW() WHERE id = $1`,
