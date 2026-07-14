@@ -102,8 +102,13 @@ beforeAll(async () => {
   await dbModule.migrate();
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass', 4);
+  // 每人自己的 GitHub PAT：task-agent 在 analysis/coding 前會解 gitEnv，未設 PAT 就停任務（blocker=git_cred）。
+  // 本檔跑真實 task-agent（非 mock buildGitEnv），須給測試使用者一組可解密的 PAT 才能走到正常流程。
+  process.env.APP_SECRET = process.env.APP_SECRET || 'test-app-secret';
+  const { encrypt } = require('../lib/crypto');
   const { rows: [u] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('wf', $1, 'WF', 'user') RETURNING id", [hash]
+    "INSERT INTO users (username, password_hash, display_name, role, github_pat_enc, github_login, git_name, git_email) VALUES ('wf', $1, 'WF', 'user', $2, 'wf', 'WF', 'wf@users.noreply.github.com') RETURNING id",
+    [hash, encrypt('test-pat-token')]
   );
   userId = u.id;
   const { rows: [p] } = await dbModule.query(
