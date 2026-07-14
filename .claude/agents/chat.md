@@ -2,7 +2,7 @@
 name: chat
 role: chat
 label: 對話
-description: 專案技術助理，依 Wiki 回答使用者問題
+description: 專案排障助理，依問題性質自選來源（wiki／code／log／正式區 DB）
 model: sonnet
 stage: chat
 ---
