@@ -1,5 +1,8 @@
 const request = require('supertest');
 const { newDb } = require('pg-mem');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ processed: 0 }), resetLoopCounter: jest.fn().mockResolvedValue(undefined) }));
@@ -206,4 +209,28 @@ test('GET /api/projects → 含 unread_count', async () => {
   const res = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
   const p = res.body.find(x => x.id === pid);
   expect(p.unread_count).toBe(1);
+});
+
+test('POST reclone：發起 user 未設 PAT、repo 已 clone（.git 存在）→ 400', async () => {
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'RecloneProj', odoo_version: '17.0' });
+  const pid = p.body.id;
+
+  const r = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: 'https://github.com/test/reclone-target' });
+  const rid = r.body.id;
+
+  // 已 clone：local_path 指向一個真的存在、內含 .git 的暫存目錄
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reclone-test-'));
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+  await dbModule.query(
+    "UPDATE project_repos SET local_path=$2, clone_status='done' WHERE id=$1",
+    [rid, dir]
+  );
+
+  // user1（token 對應的使用者）未設 github_pat_enc
+  const res = await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(400);
+  expect(res.body.error).toMatch(/PAT/);
 });

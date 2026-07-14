@@ -6,6 +6,7 @@ const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
 const { ensureTestingBranch, ensureMainBranch, pullBranch } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
+const { buildGitEnv } = require('./lib/git-identity');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
@@ -52,7 +53,7 @@ function computeDestPath(projectFolder, label) {
   return path.join(REPOS_BASE, slugify(projectFolder), slugify(label));
 }
 
-function triggerClone(projectId, repoId, repoUrl, destPath) {
+function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv) {
   // Security: validate URL scheme to prevent injection
   if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
     query(
@@ -66,7 +67,7 @@ function triggerClone(projectId, repoId, repoUrl, destPath) {
   if (isAlreadyCloned) {
     // 更新既有主 clone：包 withProjectLock 與 pipeline 對同一主 clone 的 git 操作序列化。
     // 不能用 bare `git pull`——主 clone 常駐無 upstream 的 testing 分支，會報「no tracking information」。
-    withProjectLock(projectId, () => updateMainClone(repoId, destPath)).catch(() => {});
+    withProjectLock(projectId, () => updateMainClone(repoId, destPath, gitEnv)).catch(() => {});
     return;
   }
 
@@ -92,10 +93,10 @@ function triggerClone(projectId, repoId, repoUrl, destPath) {
 
 // 更新既有主 clone 到最新 main：checkout 主分支 + git pull origin <main>（帶明確 remote/branch），
 // 拉完回常駐 testing（測試環境 addons 來源分支）。沿用 pipeline task-agent 的更新 main 寫法。
-async function updateMainClone(repoId, destPath) {
+async function updateMainClone(repoId, destPath, gitEnv) {
   try {
-    const base = await ensureMainBranch(destPath); // checkout main/master（僅遠端則建本地追蹤分支）
-    await pullBranch(destPath, base);              // git pull origin <base>
+    const base = await ensureMainBranch(destPath, gitEnv); // checkout main/master（僅遠端則建本地追蹤分支）
+    await pullBranch(destPath, base, gitEnv);              // git pull origin <base>
     try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋更新完成 */ }
     await query(
       'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
@@ -385,11 +386,24 @@ function registerRoutes(app) {
       );
       if (!repo) return res.status(404).json({ error: 'Not found' });
       if (!repo.local_path) return res.status(400).json({ error: 'No local_path set' });
+
+      // 更新既有 clone 需用發起 user（reclone 按鈕操作者）的 PAT；無 PAT 直接擋下不進背景更新。
+      const isAlreadyCloned = fs.existsSync(path.join(repo.local_path, '.git'));
+      let gitEnv;
+      if (isAlreadyCloned) {
+        try {
+          gitEnv = await buildGitEnv(req.userId);
+        } catch (e) {
+          if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: '請先到設定填個人 GitHub PAT' });
+          throw e;
+        }
+      }
+
       await query(
         "UPDATE project_repos SET clone_status='cloning', clone_error=NULL WHERE id=$1",
         [repo.id]
       );
-      triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path);
+      triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path, gitEnv);
       res.json({ ok: true, cloning: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
