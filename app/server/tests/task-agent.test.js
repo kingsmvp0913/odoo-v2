@@ -3,6 +3,8 @@
 const { newDb } = require('pg-mem');
 const { EventEmitter } = require('events');
 const path = require('path');
+process.env.APP_SECRET = 'test-app-secret';
+const { encrypt } = require('../lib/crypto');
 
 // 可控 spawn mock：記錄每次呼叫的 args 與 stdin，並依腳本 emit 事件（session_id、result、exit code）
 function mockClaude({ onCall } = {}) {
@@ -53,7 +55,8 @@ beforeAll(async () => {
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('p', 4);
   const { rows: [u] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('ta', $1, 'T') RETURNING id", [hash]
+    "INSERT INTO users (username, password_hash, display_name, github_pat_enc, github_login, git_name, git_email) VALUES ('ta', $1, 'T', $2, 'ta', 'T', 'ta@users.noreply.github.com') RETURNING id",
+    [hash, encrypt('test-pat-token')]
   );
   userId = u.id;
   const { rows: [p] } = await dbModule.query(
@@ -82,6 +85,24 @@ test('分析前 pull main 失敗 → 任務 stopped，不繼續分析', async ()
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
   expect(after.blocker_content).toContain('main');
+});
+
+test('任務發起人未設 PAT → 停任務、blocker=git_cred', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('p', 4);
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('ta_nopat', $1, 'NoPat') RETURNING id", [hash]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_nopat','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [u.id, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, u.id);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('stopped');
+  expect(after.blocker_type).toBe('git_cred');
+  expect(after.blocker_content).toMatch(/PAT/);
 });
 
 test('coding retry：retry_feedback（上一輪失敗訊息）確實帶進 claude prompt，且用完清空', async () => {

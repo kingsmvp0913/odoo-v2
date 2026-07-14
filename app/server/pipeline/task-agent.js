@@ -5,6 +5,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
 const { withProjectLock } = require('./project-lock');
+const { buildGitEnv, NoGitCredentialError } = require('../lib/git-identity');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext } = require('./sync');
@@ -159,6 +160,23 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
+  // 每人自己的 GitHub PAT：analysis pull 前先解出該任務發起人的 git 注入 env；
+  // 未設 PAT → 停任務等使用者去設定填 PAT，不得拿 pipeline 共用身分硬幹。
+  let gitEnv;
+  try {
+    gitEnv = await buildGitEnv(userId);
+  } catch (e) {
+    if (e instanceof NoGitCredentialError) {
+      await query(
+        `UPDATE tasks SET status='stopped', blocker_type='git_cred', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+        [taskId, '請先到設定填個人 GitHub PAT，任務才能存取 GitHub。']
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
+    throw e;
+  }
+
   // 任務 worktree（一個任務一個，analysis 建、coding 沿用、approve 併 main 後才刪）：
   // 持鎖 pull 最新 main 並確保 task 分支 worktree 於最新 main（reset=true，此階段尚無程式變更）。
   // analysis 讀它 → 永遠讀「乾淨 main」，不受別任務把共用主 clone 切到 testing 的污染（健檢 U7）。
@@ -169,7 +187,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
     try {
       for (const repo of info.repos) {
         const base = await ensureMainBranch(repo.local_path);
-        await pullBranch(repo.local_path, base);
+        await pullBranch(repo.local_path, base, gitEnv);
         await ensureWorktreeAtMain(repo.local_path, path.join(wtParent, repo.subdir), `task/${task.task_id}`, base, true);
       }
     } catch (e) { setupErr = e; }
@@ -259,7 +277,7 @@ function shouldResumeFallback(err) {
 
 // 跑一輪 coding。resume=true 用 coding-retry 短 prompt＋--resume 續用前一輪對話（省 token，健檢 U3）；
 // 否則用 coding-project 全量 prompt。成功回傳 runClaude 的結果（含 sessionId），失敗 throw。
-async function runCodingOnce(task, info, userId, signal, resolution, { resume }) {
+async function runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume }) {
   const cwd = worktreeParent(info.root, task.task_id);
   // 被下游退回重跑（resume，或帶著 retry_feedback）→ 升級 opus：同樣的腦袋再猜一次收斂率低，
   // 換更強的腦袋比無差別重跑 sonnet 更省 token 又提高收斂（健檢 F escalate）。
@@ -273,10 +291,10 @@ async function runCodingOnce(task, info, userId, signal, resolution, { resume })
       resolution: resolution || '（無）',
       commit_message: buildCommitMessage(task)
     }).trim();
-    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS });
+    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
   }
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 
 async function runTaskCoding(taskId, userId, signal) {
@@ -296,6 +314,23 @@ async function runTaskCoding(taskId, userId, signal) {
     return true;
   }
 
+  // 每人自己的 GitHub PAT：coding 呼叫 claude 前先解出該任務發起人的 git 注入 env
+  // （子行程內的 git commit/push 靠這組身分／PAT），未設 PAT → 停任務等使用者去設定填 PAT。
+  let gitEnv;
+  try {
+    gitEnv = await buildGitEnv(userId);
+  } catch (e) {
+    if (e instanceof NoGitCredentialError) {
+      await query(
+        `UPDATE tasks SET status='stopped', blocker_type='git_cred', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+        [taskId, '請先到設定填個人 GitHub PAT，任務才能存取 GitHub。']
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
+    throw e;
+  }
+
   const ref = { taskId: task.task_id, projectId: task.project_id };
   let raw;
   try {
@@ -310,7 +345,7 @@ async function runTaskCoding(taskId, userId, signal) {
     let codingResult;
     if (canResume) {
       try {
-        codingResult = await runCodingOnce(task, info, userId, signal, resolution, { resume: true });
+        codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume: true });
         // resume 成功：計數 +1；--resume 沿用同 session id（init 會回同一個）
         await query(
           'UPDATE tasks SET coding_resume_count = coding_resume_count + 1, coding_session_id = COALESCE($2, coding_session_id) WHERE id=$1',
@@ -323,12 +358,12 @@ async function runTaskCoding(taskId, userId, signal) {
         await logFailedUsage(ref, userId, 'coding', err);
         await query('UPDATE tasks SET coding_session_id=NULL, coding_resume_count=0 WHERE id=$1', [taskId]);
         task.coding_session_id = null;
-        codingResult = await runCodingOnce(task, info, userId, signal, resolution, { resume: false });
+        codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume: false });
         await query('UPDATE tasks SET coding_session_id=$2, coding_resume_count=0 WHERE id=$1', [taskId, codingResult.sessionId]);
       }
     } else {
       // fresh：首次／resume 用完（強制新世代）／無 feedback。全量 prompt 仍帶未蒸餾 retry_feedback。
-      codingResult = await runCodingOnce(task, info, userId, signal, resolution, { resume: false });
+      codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume: false });
       await query('UPDATE tasks SET coding_session_id=$2, coding_resume_count=0 WHERE id=$1', [taskId, codingResult.sessionId]);
     }
 
