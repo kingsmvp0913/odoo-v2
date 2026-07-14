@@ -184,6 +184,7 @@ async function migrate() {
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       status     TEXT NOT NULL DEFAULT 'idle',
       pid        INTEGER,
+      pid_started_at TEXT,
       port       INTEGER,
       url        TEXT,
       error_msg  TEXT,
@@ -356,6 +357,10 @@ async function migrate() {
     { table: 'tasks', col: 'coding_session_id',    sql: 'ALTER TABLE tasks ADD COLUMN coding_session_id TEXT' },
     { table: 'tasks', col: 'coding_resume_count',  sql: 'ALTER TABLE tasks ADD COLUMN coding_resume_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'analysis_retry_count', sql: 'ALTER TABLE tasks ADD COLUMN analysis_retry_count INTEGER DEFAULT 0' },
+    { table: 'tasks', col: 'qa_session_id',        sql: 'ALTER TABLE tasks ADD COLUMN qa_session_id TEXT' },
+    { table: 'tasks', col: 'qa_resume_count',      sql: 'ALTER TABLE tasks ADD COLUMN qa_resume_count INTEGER DEFAULT 0' },
+    // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
+    { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
     { table: 'tasks', col: 'merge_resolutions',    sql: 'ALTER TABLE tasks ADD COLUMN merge_resolutions TEXT' },
     { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },

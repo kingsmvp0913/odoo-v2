@@ -58,23 +58,9 @@ function execWithStdin(bin, args, input, env, { timeoutMs = 600000 } = {}) {
   });
 }
 
-// pid 是否還活著（signal 0 只探測不送訊號）
-function processAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-
-// 溫和殺行程：SIGTERM → 寬限期輪詢 → 仍活著補 SIGKILL。取代裸 SIGTERM（Odoo 可能延遲或忽略
-// SIGTERM → port 續佔，之後 waitForPort 永遠失敗）。best-effort：pid 不存在直接返回。
-async function killPidGracefully(pid, graceMs = 5000) {
-  if (!pid) return;
-  try { process.kill(pid, 'SIGTERM'); } catch { return; }
-  const deadline = Date.now() + graceMs;
-  while (Date.now() < deadline) {
-    if (!processAlive(pid)) return;
-    await new Promise(r => setTimeout(r, 250));
-  }
-  try { process.kill(pid, 'SIGKILL'); } catch { /* 寬限期內剛好退出 */ }
-}
+// 溫和殺行程（SIGTERM→寬限→SIGKILL）與 pid 身分指紋共用 lib/proc.js。
+// expectedStart 用 odoo_envs.pid_started_at：app 重啟後 OS 可能把舊 pid 派給無關行程，核對不符即拒殺。
+const { killPidGracefully, pidStartTime } = require('../lib/proc');
 
 // 探測埠是否真的接受連線（Odoo 已 listen）。逾時內反覆重試，最終回 true/false。
 // 用於啟動後健康檢查：Odoo spawn 後需數秒載入才 listen，唯有實測連得上才算「running」，
@@ -274,8 +260,8 @@ async function _runEnvSetup(projectId) {
   // 每次啟動先清空，只保留當次執行的 log，避免無上限成長。
   // 既有環境還在跑（重按建立、crash 後 DB 仍記著活 pid）就直接再 spawn 會撞 port：
   // 新行程綁失敗被標 error、舊 pid 又被覆寫 → 孤兒行程洩漏。先溫和殺掉舊行程再啟動。
-  const { rows: [prevEnv] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
-  if (prevEnv?.pid) await killPidGracefully(prevEnv.pid);
+  const { rows: [prevEnv] } = await query('SELECT pid, pid_started_at FROM odoo_envs WHERE project_id=$1', [projectId]);
+  if (prevEnv?.pid) await killPidGracefully(prevEnv.pid, { expectedStart: prevEnv.pid_started_at });
 
   const logPath = runtimeLogPath(envDir);
   try { fs.rmSync(logPath, { force: true }); } catch {}
@@ -292,6 +278,8 @@ async function _runEnvSetup(projectId) {
   child.once('exit', (code, sig) => { earlyExit = { code, sig }; });
   child.unref();
   const pid = child.pid || null;
+  // 行程身分指紋（Linux /proc starttime；其他平台 null）：供之後 kill 前核對防 pid 重用誤殺
+  const pidStartedAt = pid ? pidStartTime(pid) : null;
 
   // 啟動後健康檢查：探測埠真的 listen（或偵測到 process 提早結束）才標 running。
   // 逾時／崩潰 → 標 error（非 running），避免 stale running 把死掉的 URL 交給 E2E（本次事故根因）。
@@ -311,8 +299,8 @@ async function _runEnvSetup(projectId) {
   log += `[start] PID=${pid} port=${port} 健康檢查通過\n`;
 
   await query(
-    "UPDATE odoo_envs SET status='running', pid=$2, port=$3, url=$4, setup_log=$5, updated_at=NOW() WHERE project_id=$1",
-    [projectId, pid, port, `http://${envHost}:${port}`, log]
+    "UPDATE odoo_envs SET status='running', pid=$2, pid_started_at=$3, port=$4, url=$5, setup_log=$6, updated_at=NOW() WHERE project_id=$1",
+    [projectId, pid, pidStartedAt, port, `http://${envHost}:${port}`, log]
   );
 }
 
@@ -443,17 +431,17 @@ async function uninstallModule(projectId, moduleName) {
 }
 
 async function stopEnv(projectId) {
-  const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [projectId]);
+  const { rows: [env] } = await query('SELECT pid, pid_started_at FROM odoo_envs WHERE project_id=$1', [projectId]);
   if (!env) return;
-  await killPidGracefully(env.pid);
+  await killPidGracefully(env.pid, { expectedStart: env.pid_started_at });
   await query(
-    "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
+    "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
     [projectId]
   );
 }
 
 async function nightlyShutdown() {
-  const { rows } = await query("SELECT project_id, pid FROM odoo_envs WHERE status='running'");
+  const { rows } = await query("SELECT project_id, pid, pid_started_at FROM odoo_envs WHERE status='running'");
   for (const env of rows) {
     // 跳過使用中的 env：該專案有任務正在 deploy_testing／playwright_running，
     // 砍了會讓 deploy/E2E 中途死掉被誤歸因為程式問題（健檢：夜間 shutdown 誤歸因）
@@ -462,9 +450,9 @@ async function nightlyShutdown() {
       [env.project_id]
     );
     if (busy) continue;
-    await killPidGracefully(env.pid);
+    await killPidGracefully(env.pid, { expectedStart: env.pid_started_at });
     await query(
-      "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
+      "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
       [env.project_id]
     );
   }

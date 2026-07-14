@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
+const { killChildGracefully } = require('../lib/proc');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
@@ -13,8 +14,24 @@ const MCP_PROFILES = {
   analysis: 'context7.json', coding: 'context7.json',
   playwright: 'context7.json', qa: 'context7.json', reject_triage: 'context7.json', chat: 'context7.json',
 };
+// context7 啟動策略：優先用本地依賴（node ＋ 執行期解析的絕對路徑）——npx -y 每次 spawn 都可能
+// 重新下載套件（冷啟動慢、離線直接失敗）。未安裝時退回原 npx 版 context7.json。
+let _context7Path = null;
+function context7ConfigPath() {
+  if (_context7Path) return _context7Path;
+  const fallback = path.join(__dirname, 'mcp', 'context7.json');
+  try {
+    const pkgDir = path.dirname(require.resolve('@upstash/context7-mcp/package.json'));
+    const entry = path.join(pkgDir, 'dist', 'index.js');
+    if (!fs.existsSync(entry)) throw new Error('entry missing');
+    const gen = path.join(__dirname, 'mcp', 'context7.local.json');
+    fs.writeFileSync(gen, JSON.stringify({ mcpServers: { context7: { command: process.execPath, args: [entry] } } }, null, 2));
+    _context7Path = gen;
+  } catch { _context7Path = fallback; }
+  return _context7Path;
+}
 function mcpConfigPath(agentType) {
-  return path.join(__dirname, 'mcp', MCP_PROFILES[agentType] || 'none.json');
+  return MCP_PROFILES[agentType] ? context7ConfigPath() : path.join(__dirname, 'mcp', 'none.json');
 }
 
 // task_events 批次寫入：顯示走 socket 即時，持久化累積後批量落地（取代每行一筆的高頻 INSERT）
@@ -82,14 +99,8 @@ function runClaude(prompt, opts = {}) {
     // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。
     child.stdin.on?.('error', () => {});
 
-    let exited = false;
-    child.on('exit', () => { exited = true; });
     // SIGTERM 後寬限期未退出就升級 SIGKILL：claude 掛死不理 SIGTERM 時避免殭屍行程佔資源
-    const killChild = () => {
-      try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
-      const t = setTimeout(() => { if (!exited) { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } } }, KILL_GRACE_MS);
-      if (t.unref) t.unref();
-    };
+    const killChild = () => killChildGracefully(child, KILL_GRACE_MS);
 
     let resultText = '';
     let usage = null;
