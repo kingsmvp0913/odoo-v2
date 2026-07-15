@@ -5,7 +5,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
 const { withProjectLock } = require('./project-lock');
-const { buildGitEnv, NoGitCredentialError } = require('../lib/git-identity');
+const { buildGitEnv } = require('../lib/git-identity');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext } = require('./sync');
@@ -168,7 +168,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
   try {
     gitEnv = await buildGitEnv(userId);
   } catch (e) {
-    if (e instanceof NoGitCredentialError) {
+    if (e.code === 'NO_GIT_CRED') {
       await query(
         `UPDATE tasks SET status='stopped', blocker_type='git_cred', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
         [taskId, '請先到設定填個人 GitHub PAT，任務才能存取 GitHub。']
@@ -188,7 +188,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
   await withProjectLock(task.project_id, async () => {
     try {
       for (const repo of info.repos) {
-        const base = await ensureMainBranch(repo.local_path);
+        const base = await ensureMainBranch(repo.local_path, gitEnv);
         await pullBranch(repo.local_path, base, gitEnv);
         await ensureWorktreeAtMain(repo.local_path, path.join(wtParent, repo.subdir), `task/${task.task_id}`, base, true);
       }
@@ -331,7 +331,7 @@ async function runTaskCoding(taskId, userId, signal) {
   try {
     gitEnv = await buildGitEnv(userId);
   } catch (e) {
-    if (e instanceof NoGitCredentialError) {
+    if (e.code === 'NO_GIT_CRED') {
       await query(
         `UPDATE tasks SET status='stopped', blocker_type='git_cred', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
         [taskId, '請先到設定填個人 GitHub PAT，任務才能存取 GitHub。']

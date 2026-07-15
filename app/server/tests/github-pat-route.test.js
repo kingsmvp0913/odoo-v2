@@ -38,6 +38,7 @@ test('GET github-pat：回狀態但不含 token', async () => {
   expect(res.body.configured).toBe(true);
   expect(res.body.login).toBe('bob');
   expect(JSON.stringify(res.body)).not.toMatch(/ghp_real/);
+  expect(Object.keys(res.body)).not.toContain('github_pat_enc');
 });
 
 test('POST github-pat：PAT 無效 → 401 且不儲存變更', async () => {

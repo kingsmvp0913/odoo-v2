@@ -72,6 +72,7 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv) {
   }
 
   try { fs.mkdirSync(path.dirname(destPath), { recursive: true }); } catch {}
+  // 初次 clone 沿用機器憑證（未帶 per-user gitEnv）——spec 明列的唯一例外；請勿誤加 gitEnv
   execFile('git', ['clone', '--', repoUrl, destPath], { timeout: 300000 }, async (err, _stdout, stderr) => {
     if (err) {
       const msg = (stderr || err.message || 'clone failed').slice(0, 500);
