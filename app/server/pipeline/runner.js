@@ -23,12 +23,12 @@ const STAGE_LABELS = {
   confirm_answered: '已回覆澄清', branch_pending: '建立分支', coding_running: '開發中',
   qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki',
-  reject_triage: '分診中', resolve_triage: '分診中'
+  reject_triage: '分診中', resolve_triage: '分診中', respec_running: '追加需求更新規格中'
 };
 // taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。
 const _inFlight = new Map();
 const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
-const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage'];
+const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage', 'respec_running'];
 
 // 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
@@ -199,6 +199,12 @@ async function handleRejectTriage(task, settings, signal) {
   await runRejectTriage(task.id, task.user_id, signal);
 }
 
+// respec_running：使用者途中留言＝追加需求，增量 patch 進 analysis_yaml → 退回 coding 補實作
+async function handleRespec(task, settings, signal) {
+  const { runRespecPatch } = require('./respec-agent');
+  await runRespecPatch(task.id, task.user_id, signal);
+}
+
 const HANDLERS = {
   new: handleCs,
   cs_running: handleCs,
@@ -213,6 +219,7 @@ const HANDLERS = {
   wiki_updating: handleWiki,
   reject_triage: handleRejectTriage,
   resolve_triage: handleRejectTriage,
+  respec_running: handleRespec,
 };
 
 // 執行一個任務：狀態重查（防過期快照）→ 寫階段標記 → 跑 handler → 失敗原因落地／Teams。
@@ -250,6 +257,27 @@ async function runTask(task, settings, signal) {
       const reason = `\n\x1b[91m❌ 失敗：${u.blocker_content || '未提供原因'}\x1b[0m\n`;
       notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: reason });
       await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, reason]).catch(() => {});
+    }
+
+    // 追加需求佇列檢查點：coding／QA 剛「成功推進」的兩個邊界攔一次——若該任務有待吸收的使用者留言
+    // （task_messages.applied_at IS NULL），改轉 respec_running（增量改寫規格後退回 coding），而非往下一關。
+    // 只攔這兩個成功轉移，merge 之後不回頭；當前這輪 agent 已跑完才在此攔，不中斷現場（＝插隊到下一輪）。
+    const advancedPastCodingOrQa =
+      (prevStatus === 'coding_running' && u.status === 'qa_running') ||
+      (prevStatus === 'qa_running' && u.status === 'merge_running');
+    if (advancedPastCodingOrQa) {
+      const { rows: [pend] } = await query(
+        "SELECT COUNT(*)::int AS n FROM task_messages WHERE task_id = $1 AND source = 'manual' AND applied_at IS NULL",
+        [task.id]
+      );
+      if (pend && pend.n > 0) {
+        // 條件式：只有狀態仍是剛推進的那關才改（防與其他寫入競態）
+        await query(
+          "UPDATE tasks SET status = 'respec_running', updated_at = NOW() WHERE id = $1 AND status = $2",
+          [task.id, u.status]
+        );
+        notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'respec_running' });
+      }
     }
     if (u.status !== prevStatus) {
       try {

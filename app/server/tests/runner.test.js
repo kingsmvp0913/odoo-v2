@@ -24,6 +24,7 @@ jest.mock('../pipeline/task-agent', () => ({
   runTaskCoding: jest.fn().mockResolvedValue(true)
 }));
 jest.mock('../pipeline/reject-triage', () => ({ runRejectTriage: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../pipeline/respec-agent', () => ({ runRespecPatch: jest.fn().mockResolvedValue(undefined) }));
 
 let dbModule, runnerModule, userId;
 
@@ -68,6 +69,8 @@ beforeEach(async () => {
   require('../pipeline/task-agent').runTaskAnalysis.mockReset().mockResolvedValue(undefined);
   require('../pipeline/task-agent').runTaskCoding.mockReset().mockResolvedValue(true);
   require('../pipeline/reject-triage').runRejectTriage.mockReset().mockResolvedValue(undefined);
+  require('../pipeline/respec-agent').runRespecPatch.mockReset().mockResolvedValue(undefined);
+  await dbModule.query('DELETE FROM task_messages WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
@@ -171,6 +174,74 @@ test('qa_running → qa-agent', async () => {
   const taskId = await insertTask('qa_running');
   await run();
   expect(runQaAgent).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+// --- 追加需求佇列檢查點（respec_running）---
+
+async function addManualMsg(taskId, content = '請加個匯出 Excel 按鈕') {
+  await dbModule.query(
+    "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1,'manual','me',$2, NOW())",
+    [taskId, content]
+  );
+}
+
+test('coding 跑完＋有待吸收留言 → 攔下轉 respec_running（不逕自進 QA）', async () => {
+  const ta = require('../pipeline/task-agent');
+  const respec = require('../pipeline/respec-agent');
+  // mock coding 成功推進到 qa_running（真實 coding 會改狀態；mock 預設不改，故在此顯式模擬）
+  ta.runTaskCoding.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='qa_running' WHERE id=$1", [id]);
+    return true;
+  });
+  const taskId = await insertTask('coding_running');
+  await addManualMsg(taskId);
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('respec_running');
+  expect(respec.runRespecPatch).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+test('coding 跑完但無待吸收留言 → 照常進 QA，不觸發 respec', async () => {
+  const ta = require('../pipeline/task-agent');
+  const respec = require('../pipeline/respec-agent');
+  ta.runTaskCoding.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='qa_running' WHERE id=$1", [id]);
+    return true;
+  });
+  const taskId = await insertTask('coding_running');
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('qa_running');
+  expect(respec.runRespecPatch).not.toHaveBeenCalled();
+});
+
+test('QA 通過（→merge）＋有待吸收留言 → 攔下轉 respec_running', async () => {
+  const qa = require('../pipeline/qa-agent');
+  const respec = require('../pipeline/respec-agent');
+  qa.runQaAgent.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='merge_running' WHERE id=$1", [id]);
+  });
+  const taskId = await insertTask('qa_running');
+  await addManualMsg(taskId);
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('respec_running');
+  expect(respec.runRespecPatch).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+test('coding 失敗（→stopped）即使有留言也不觸發 respec（只攔成功推進）', async () => {
+  const ta = require('../pipeline/task-agent');
+  const respec = require('../pipeline/respec-agent');
+  ta.runTaskCoding.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='stopped' WHERE id=$1", [id]);
+    return true;
+  });
+  const taskId = await insertTask('coding_running');
+  await addManualMsg(taskId);
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('stopped');
+  expect(respec.runRespecPatch).not.toHaveBeenCalled();
 });
 
 test('deploy_testing → deploy-testing', async () => {

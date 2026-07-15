@@ -120,7 +120,7 @@ function distillFeedback(raw) {
   // 人工審核退回是使用者手打的完整說明；QA 的 issues 是「當下完整未解清單」，截斷會讓 coding
   // 看不到部分問題→白跑一輪（QA gate 也沒有「完整 log」逃生口）。兩者都跳過截斷，只收斂
   // 自動化來源（部署/E2E 的 traceback、失敗訊息）。
-  if (gate !== '人工退回' && gate !== 'QA 未通過' && body.length > 400) body = body.slice(0, 400) + '…';
+  if (gate !== '人工退回' && gate !== 'QA 未通過' && gate !== '追加需求' && body.length > 400) body = body.slice(0, 400) + '…';
   if (logRef) body += '\n' + logRef;
   return { gate, body };
 }

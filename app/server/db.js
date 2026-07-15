@@ -427,6 +427,19 @@ async function migrate() {
     if (!tableColsCache[table].has(col)) await query(sql);
   }
 
+  // 追加需求佇列：task_messages.applied_at（NULL＝待吸收進規格，coding／QA 檢查點會撿起）。
+  // 務必只在「欄位初次建立」時一次性把既有列回填為 occurred_at（＝視為已處理，不追溯重跑舊任務）；
+  // 不可每次啟動都把 NULL 標記掉，否則會把「還沒被吸收的新留言」誤殺成已處理。
+  {
+    const { rows } = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name='task_messages' AND column_name='applied_at'`
+    );
+    if (!rows.length) {
+      await query('ALTER TABLE task_messages ADD COLUMN applied_at TIMESTAMPTZ');
+      await query('UPDATE task_messages SET applied_at = occurred_at');
+    }
+  }
+
   // projects.port 一次性回填：每專案固定分配專屬測試埠（新欄位，既有專案初次皆為 NULL）。
   // 依 id 順序自既有最大埠之上連續配發（首次即 8069 起）；冪等（無 NULL 即跳過）。
   {

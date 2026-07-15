@@ -7,6 +7,7 @@ const TD_STATUS_LABELS = {
   confirm_answered:    '已回覆',
   coding_running:      '開發中',
   qa_running:          'QA 審查中',
+  respec_running:      '追加需求更新規格中',
   merge_running:       '併入測試中',
   merge_conflict:      '合併衝突',
   deploy_testing:      '部署測試區',
