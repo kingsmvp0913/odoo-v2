@@ -26,9 +26,10 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {} };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, copyingToOnline: false };
   },
   computed: {
+    isAdmin() { return window.UserStore.role === 'admin'; },
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
     canEditContent() { return this.task && this.task.status === 'new'; },
     // 時間軸底下的單一動作區依 status 切成一種 mode；有主動作的狀態各自 render，其餘走通用留言
@@ -273,6 +274,17 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }
     },
+    async copyToOnline() {
+      if (!await confirmDialog({ title: '複製到正式區', message: '將本任務改動的模組整包覆蓋到正式區 addons 目錄底下同名目錄，舊目錄直接蓋掉。此動作不影響任務狀態、不合併分支。確定？', confirmText: '確認複製' })) return;
+      this.copyingToOnline = true;
+      try {
+        const r = await Api.post(`tasks/${this.task.id}/copy-to-online`, {});
+        const copied = (r.copied || []).length ? `已複製 ${r.copied.join('、')} 到 ${r.base}` : '沒有可複製的模組';
+        const skipped = (r.skipped || []).length ? `（略過 ${r.skipped.length} 個非模組檔）` : '';
+        showToast(`${copied}${skipped}`, (r.copied || []).length ? 'success' : 'info');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.copyingToOnline = false; }
+    },
     async reject() {
       if (!this.rejectReason.trim()) return;
       this.rejecting = true;
@@ -316,6 +328,16 @@ window.TaskDetailView = Vue.defineComponent({
       if (item.kind === 'log') return this.roleLabel(item.role);
       return item.source === 'manual' ? (item.author || '你') : '（同步）';
     },
+    // 只有「使用者自己貼的」（右側 manual）長 LOG 才收合；AI／系統／同步訊息不收（本就該整理過）。
+    // 判定＝內容命中 log 特徵 且 夠長（>8 行或 >400 字），啟發式，誤收成本僅多點一下展開。
+    isErrorLog(item) {
+      if (item.kind !== 'message' || item.source !== 'manual') return false;
+      const c = item.content || '';
+      if (c.length <= 400 && (c.match(/\n/g) || []).length + 1 <= 8) return false;
+      return /Traceback \(most recent call last\)|File ".*", line \d+|^\s*at |\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}|\b(?:ERROR|WARNING|CRITICAL|Exception)\b|\bError:/m.test(c);
+    },
+    logLineCount(item) { return (String(item.content || '').match(/\n/g) || []).length + 1; },
+    toggleLog(key) { this.expandedLogs[key] = !this.expandedLogs[key]; },
     formatTime(ts) {
       if (!ts) return '';
       return new Date(ts).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -521,7 +543,13 @@ window.TaskDetailView = Vue.defineComponent({
           <div v-if="timeline.length" class="conv-panel">
             <div class="conv-log">
               <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
-                <div class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
+                <template v-if="isErrorLog(item)">
+                  <button type="button" class="conv-log-chip" @click="toggleLog(item._key)">
+                    {{ expandedLogs[item._key] ? '▾' : '▸' }} [錯誤LOG · {{ logLineCount(item) }} 行]
+                  </button>
+                  <pre v-if="expandedLogs[item._key]" class="conv-log-pre">{{ item.content }}</pre>
+                </template>
+                <div v-else class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
                 <div v-if="item.attachments && item.attachments.length" class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
                   <span v-for="a in item.attachments" :key="a.id" style="margin-right:8px">
                     📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
@@ -598,7 +626,10 @@ window.TaskDetailView = Vue.defineComponent({
               <textarea v-model="rejectReason" class="form-control" rows="4"
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="reject"></textarea>
-              <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
+              <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
+                <button v-if="isAdmin" class="btn btn-outline btn-sm" style="margin-right:auto" @click="copyToOnline" :disabled="copyingToOnline || approving || rejecting">
+                  {{ copyingToOnline ? '複製中...' : '📦 複製到正式區' }}
+                </button>
                 <button class="btn btn-primary btn-sm" @click="reject" :disabled="rejecting || !rejectReason.trim()">
                   {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
                 </button>
@@ -615,9 +646,11 @@ window.TaskDetailView = Vue.defineComponent({
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
                 自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。
               </p>
-              <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
-                {{ conflictResolving ? '處理中...' : '✓ 已手動解決衝突，繼續' }}
-              </button>
+              <div style="text-align:right">
+                <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
+                  {{ conflictResolving ? '處理中...' : '✓ 已手動解決衝突，繼續' }}
+                </button>
+              </div>
             </template>
 
             <!-- cs_reply：客服回覆草稿 -->
@@ -625,9 +658,11 @@ window.TaskDetailView = Vue.defineComponent({
               <div class="form-section">客服回覆草稿</div>
               <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，請確認內容後送出。</p>
-              <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
-                {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
-              </button>
+              <div style="text-align:right">
+                <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
+                  {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
+                </button>
+              </div>
             </template>
 
             <!-- cs_data：需補充資料，逐題填答 -->
@@ -648,9 +683,11 @@ window.TaskDetailView = Vue.defineComponent({
                 </textarea>
               </div>
               <div v-if="!csAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請填寫所有問題才能送出</div>
-              <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
-                {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
-              </button>
+              <div style="text-align:right">
+                <button class="btn btn-primary" @click="csDataSubmit" :disabled="csRetrying || !csAllAnswered">
+                  {{ csRetrying ? '處理中...' : '↺ 送出補充資料，重新分析' }}
+                </button>
+              </div>
             </template>
 
             <!-- blocker：處理失敗／中斷，醒目秀出錯誤內容 -->
@@ -662,7 +699,7 @@ window.TaskDetailView = Vue.defineComponent({
                 placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續...（Enter 送出，Shift+Enter 換行）"
                 @keydown.enter.exact.prevent="resolveBlocker">
               </textarea>
-              <div style="margin-top:var(--space-2)">
+              <div style="text-align:right;margin-top:var(--space-2)">
                 <button class="btn btn-primary btn-sm" @click="resolveBlocker" :disabled="resolving || !resolution.trim()">
                   {{ resolving ? '處理中...' : '↺ 送出並從中斷處繼續' }}
                 </button>
@@ -673,9 +710,11 @@ window.TaskDetailView = Vue.defineComponent({
             <template v-else-if="timelineActionMode === 'archive'">
               <div class="form-section">任務已完成</div>
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">此任務已完成並更新文件。可手動封存，或滿一個月後自動封存。</p>
-              <button class="btn btn-outline" @click="archive" :disabled="archiving">
-                {{ archiving ? '封存中...' : '🗄 封存任務' }}
-              </button>
+              <div style="text-align:right">
+                <button class="btn btn-outline" @click="archive" :disabled="archiving">
+                  {{ archiving ? '封存中...' : '🗄 封存任務' }}
+                </button>
+              </div>
             </template>
 
             <!-- message：無主動作的狀態，通用留言（回寫預設不勾） -->
@@ -684,11 +723,10 @@ window.TaskDetailView = Vue.defineComponent({
                 @keydown.enter.exact.prevent="sendTaskMessage"></textarea>
               <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected" style="display:block;margin-top:6px;font-size:var(--fs-xs)" />
               <div v-if="newMessageFiles.length" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">已選擇：{{ newMessageFiles.map(f => f.name).join('、') }}</div>
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+              <div style="display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);margin-top:6px">
                 <label v-if="showWritebackOption" style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer">
                   <input type="checkbox" v-model="messageWriteback"> 同時回寫 Odoo 備註
                 </label>
-                <span v-else></span>
                 <button class="btn btn-primary btn-sm" @click="sendTaskMessage"
                   :disabled="sendingMessage || !newMessageText.trim()">
                   {{ sendingMessage ? '送出中...' : '送出留言' }}

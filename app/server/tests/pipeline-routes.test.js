@@ -1,6 +1,9 @@
 const request = require('supertest');
 const { newDb } = require('pg-mem');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 process.env.APP_SECRET = 'test-pipeline-appsecret';
 const { encrypt } = require('../lib/crypto');
 
@@ -17,7 +20,10 @@ jest.mock('../pipeline/git', () => ({
   mergeToMain: jest.fn().mockResolvedValue(undefined),
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
-  concludeMerge: jest.fn().mockResolvedValue(undefined)
+  concludeMerge: jest.fn().mockResolvedValue(undefined),
+  getMainBranch: jest.fn().mockResolvedValue('main'),
+  diffNameOnly: jest.fn().mockResolvedValue([]),
+  refExists: jest.fn().mockResolvedValue(true)
 }));
 jest.mock('../pipeline/rebuild-testing', () => ({
   rebuildTesting: jest.fn().mockResolvedValue(null),
@@ -236,5 +242,75 @@ test('mark-conflict-resolved：rebuild 來源 → 還原 prior_status、觸發�
   const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [t.id]);
   expect(after[0].status).toBe('review_pending');  // 還原原關卡，非 deploy_testing
   expect(after[0].merge_conflict_data).toBeNull();
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+});
+
+// --- copy-to-online：過渡期管理員手動把模組整包搬到正式區 ---
+
+test('copy-to-online → 403 非管理員', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('plainuser','x','U','user') RETURNING id"
+  );
+  const token = jwt.sign({ userId: u.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  const res = await request(app).post('/api/tasks/1/copy-to-online')
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(403);
+});
+
+test('copy-to-online → 400 任務非 review_pending', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cto_bad','odoo','T','coding') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/copy-to-online`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
+});
+
+test('copy-to-online → 整包複製改動模組到 ONLINE_ADDONS_DIR，非模組檔列 skipped', async () => {
+  const { getMainBranch, diffNameOnly, refExists } = require('../pipeline/git');
+  refExists.mockResolvedValue(true);
+  getMainBranch.mockResolvedValue('main');
+  diffNameOnly.mockResolvedValue(['idx_demo/models/sale_order.py', 'README.md']);
+
+  // 真實臨時 worktree：<tmpRepoParent>/.worktrees/<task_id>/main/idx_demo/{__manifest__.py,models/..}
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cto-'));
+  const localPath = path.join(tmp, 'repos', 'main');
+  fs.mkdirSync(localPath, { recursive: true });
+  const taskKey = 'task_cto_ok';
+  const wtRepo = path.join(tmp, 'repos', '.worktrees', taskKey, 'main');
+  const modelsDir = path.join(wtRepo, 'idx_demo', 'models');
+  fs.mkdirSync(modelsDir, { recursive: true });
+  fs.writeFileSync(path.join(wtRepo, 'idx_demo', '__manifest__.py'), "{'name':'demo'}");
+  fs.writeFileSync(path.join(modelsDir, 'sale_order.py'), '# hi');
+
+  const dest = path.join(tmp, 'online_addons');
+  process.env.ONLINE_ADDONS_DIR = dest;
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('CTO','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, localPath]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,$2,'odoo','T','review_pending',$3,$4) RETURNING id",
+    [userId, taskKey, proj.id, `task/${taskKey}`]
+  );
+
+  const res = await request(app).post(`/api/tasks/${t.id}/copy-to-online`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  expect(res.body.copied).toEqual(['idx_demo']);
+  expect(res.body.skipped).toContain('README.md');
+  // 檔案真的落到正式區
+  expect(fs.existsSync(path.join(dest, 'idx_demo', '__manifest__.py'))).toBe(true);
+  expect(fs.existsSync(path.join(dest, 'idx_demo', 'models', 'sale_order.py'))).toBe(true);
+
+  delete process.env.ONLINE_ADDONS_DIR;
+  fs.rmSync(tmp, { recursive: true, force: true });
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });

@@ -105,6 +105,15 @@ async function diffBranch(repoPath, baseBranch, branch) {
   return stdout;
 }
 
+// 分支相對主分支改動的檔案清單（相對 repo 根的路徑陣列，空白行剔除）。
+async function diffNameOnly(repoPath, baseBranch, branch) {
+  const { stdout } = await execFileAsync(
+    'git', ['diff', '--name-only', `${baseBranch}...${branch}`],
+    { cwd: repoPath, maxBuffer: 16 * 1024 * 1024 }
+  );
+  return stdout.split('\n').map(s => s.trim()).filter(Boolean);
+}
+
 // repo 是否已有任何 commit（unborn HEAD → false）
 async function hasCommits(repoPath) {
   try {
@@ -358,4 +367,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };

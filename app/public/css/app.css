@@ -361,6 +361,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .conv-msg.user { background: #f0fdf4; align-self: flex-end; border: 1px solid #bbf7d0; }
 .conv-msg.system { background: #f9fafb; align-self: flex-start; color: var(--text-muted); font-size: 12px; font-style: italic; max-width: 85%; border: 1px solid var(--border); }
 .conv-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+/* 使用者自己貼的長 LOG：預設收合成標籤，點開展開全文（dark-aware，勿寫死淺色底） */
+.conv-log-chip { align-self: flex-end; font-size: 12px; padding: 4px 10px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; font-family: inherit; }
+.conv-log-chip:hover { color: var(--text); border-color: var(--text-muted); }
+.conv-log-pre { align-self: flex-end; max-width: 85%; margin-top: 6px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 12px; line-height: 1.5; max-height: 320px; overflow: auto; white-space: pre; }
 /* 對話時間軸獨立面板：用 --bg（比 card 深一階，深色模式 surface 與 card 同色會糊在一起）做內凹面板＋邊框，和上下區塊明確區隔 */
 .conv-panel { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 var(--space-4); }
 .conv-panel .conv-log { margin: 0; }
