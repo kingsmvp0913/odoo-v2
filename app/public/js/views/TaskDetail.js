@@ -276,11 +276,11 @@ window.TaskDetailView = Vue.defineComponent({
       finally { this.approving = false; }
     },
     async copyToOnline() {
-      if (!await confirmDialog({ title: '複製到正式區', message: '將本任務改動的模組整包覆蓋到正式區 addons 目錄底下同名目錄，舊目錄直接蓋掉。此動作不影響任務狀態、不合併分支。確定？', confirmText: '確認複製' })) return;
+      if (!await confirmDialog({ title: '打包到舊開發環境', message: '將本任務改動的模組，依 repo 整包覆蓋到舊開發環境對應資料夾（<repo>/<模組>），舊目錄直接蓋掉。此動作不影響任務狀態、不合併分支。確定？', confirmText: '確認打包' })) return;
       this.copyingToOnline = true;
       try {
         const r = await Api.post(`tasks/${this.task.id}/copy-to-online`, {});
-        const copied = (r.copied || []).length ? `已複製 ${r.copied.join('、')} 到 ${r.base}` : '沒有可複製的模組';
+        const copied = (r.copied || []).length ? `已打包 ${r.copied.join('、')} 到 ${r.base}` : '沒有可打包的模組';
         const skipped = (r.skipped || []).length ? `（略過 ${r.skipped.length} 個非模組檔）` : '';
         showToast(`${copied}${skipped}`, (r.copied || []).length ? 'success' : 'info');
       } catch (e) { showToast(e.message, 'error'); }
@@ -495,6 +495,10 @@ window.TaskDetailView = Vue.defineComponent({
         {{ task.is_paused ? '▐▐ 已暫停' : '⏸ 暫停' }}
       </button>
       <a v-if="task && task.env_url" :href="task.env_url" target="_blank" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
+      <button v-if="isAdmin && task && task.git_branch" class="btn btn-outline btn-sm" style="margin-left:auto"
+        @click="copyToOnline" :disabled="copyingToOnline" title="把本任務改動的模組整包打包到舊開發環境 online_addons">
+        {{ copyingToOnline ? '打包中...' : '📦 打包到舊開發環境' }}
+      </button>
     </div>
     <div class="content">
       <div v-if="loading" class="loading">載入中...</div>
@@ -628,9 +632,6 @@ window.TaskDetailView = Vue.defineComponent({
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="reject"></textarea>
               <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
-                <button v-if="isAdmin" class="btn btn-outline btn-sm" style="margin-right:auto" @click="copyToOnline" :disabled="copyingToOnline || approving || rejecting">
-                  {{ copyingToOnline ? '複製中...' : '📦 複製到正式區' }}
-                </button>
                 <button class="btn btn-primary btn-sm" @click="reject" :disabled="rejecting || !rejectReason.trim()">
                   {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
                 </button>

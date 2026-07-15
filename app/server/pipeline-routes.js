@@ -8,6 +8,13 @@ const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 // （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
 const _approving = new Set();
 
+// repo 在舊開發環境的資料夾名＝git URL 最後一層去掉 .git（如 .../odoo17_hungjou.git → odoo17_hungjou）。
+// 取不到 URL 時退回 clone 目錄名（local_path 最後一層）。
+function repoDirName(repo) {
+  const seg = String(repo.repo_url || '').replace(/\.git$/i, '').replace(/[\/\\]+$/, '').split(/[\/\\]/).pop();
+  return seg || path.basename(repo.local_path);
+}
+
 // 從改動檔（相對 repo 根，git 用正斜線）往上找含 __manifest__.py 的祖先目錄＝Odoo 模組根。
 // 回 { name, dir }（dir 為 worktree 內絕對路徑）；改動檔不屬任何模組（如 repo 根檔）回 null。
 function findModuleDir(wtRepo, relFile) {
@@ -167,15 +174,13 @@ function registerRoutes(app) {
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       const task = rows[0];
-      if (task.status !== 'review_pending') {
-        return res.status(400).json({ error: `任務狀態 '${task.status}' 無法複製；需為 review_pending` });
-      }
+      // 不限任務狀態：只要分支還在（未併回主線清除）就能搬——過渡期讓管理員隨時手動佈署。
       if (!task.git_branch || !task.project_id) {
-        return res.status(400).json({ error: '任務缺少分支或專案，無法複製' });
+        return res.status(400).json({ error: '任務尚無分支或專案，無可複製的程式' });
       }
 
       const { rows: repos } = await query(
-        "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+        "SELECT local_path, repo_url FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
         [task.project_id]
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
@@ -183,7 +188,6 @@ function registerRoutes(app) {
       const base = process.env.ONLINE_ADDONS_DIR || 'C:/online_addons';
       const { getMainBranch, diffNameOnly, refExists } = require('./pipeline/git');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
-      fs.mkdirSync(base, { recursive: true });
 
       const copied = [];
       const skipped = [];
@@ -192,6 +196,7 @@ function registerRoutes(app) {
         if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) continue;
         const mainBranch = await getMainBranch(repo.local_path);
         const wtRepo = path.join(wtParent, path.basename(repo.local_path));
+        const repoDir = repoDirName(repo); // 依 repo（git URL 末段）放：<base>/<repoDir>/<module>
         const changed = await diffNameOnly(repo.local_path, mainBranch, task.git_branch);
         const modules = new Map(); // moduleName → worktree 內來源目錄（去重）
         for (const rel of changed) {
@@ -200,16 +205,18 @@ function registerRoutes(app) {
           else skipped.push(rel); // 不屬任何模組的改動檔，明列不靜默略過（Fail loud）
         }
         for (const [name, srcDir] of modules) {
-          const dest = path.join(base, name);
+          const dest = path.join(base, repoDir, name);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
           fs.rmSync(dest, { recursive: true, force: true }); // 整包覆蓋：先刪再複製，正確反映新增/刪除/改名
           fs.cpSync(srcDir, dest, { recursive: true });
-          if (!copied.includes(name)) copied.push(name);
+          const rel = `${repoDir}/${name}`;
+          if (!copied.includes(rel)) copied.push(rel);
         }
       }
 
       res.json({ copied, skipped, base });
     } catch (err) {
-      res.status(500).json({ error: '複製到正式區失敗：' + err.message });
+      res.status(500).json({ error: '打包到舊開發環境失敗：' + err.message });
     }
   });
 
