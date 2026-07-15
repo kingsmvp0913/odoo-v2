@@ -45,16 +45,17 @@ describe('classifyFailure 純函式', () => {
     expect(classifyFailure("ImportError: cannot import name 'Model' from 'odoo.models'")).toBe('code');
   });
 
-  // 反轉舉證回歸（task 84）：缺依賴的 install-time UserError 本質是環境／跨模組問題，
-  // 純函式不得只因它含 Traceback／odoo.exceptions 就判 code（那兩條已從 CODE 移除）→ 回 unknown 交給 agent。
-  test('缺依賴 UserError（install 中止）→ 不判 code，回 unknown（task 84 震盪根因）', () => {
+  // 回歸（task 84）：缺依賴的 install-time UserError 是鐵板釘釘的部署環境問題（相依模組不在 addons path）。
+  // 必須由純函式直接判 env——不可只拆掉 CODE 全包網後回 unknown 丟給 haiku agent，實測 agent 會因
+  // 「depends 寫在 manifest」誤判成 code、退 coding 空轉。故加精準 ENV 規則 /not available in your system/ 鎖死。
+  test('缺依賴 UserError（install 中止）→ 直接判 env（task 84 震盪根因）', () => {
     const tb = [
       'Traceback (most recent call last):',
       '  File "/odoo-envs/proj/src/odoo/addons/base/models/ir_module.py", line 700',
       "odoo.exceptions.UserError: You try to install module 'idx_hj' that depends on module 'web_login_styles'.",
       'But the latter module is not available in your system.'
     ].join('\n');
-    expect(classifyFailure(tb)).toBe('unknown'); // 兩張全包網（Traceback／odoo.exceptions）已拆，不再誤搶成 code
+    expect(classifyFailure(tb)).toBe('env'); // 精準 ENV 規則命中，不再被 CODE 誤搶、也不必賭 agent
   });
 
   // 反轉舉證：籠統 ValidationError 不再算「明確開發者寫錯」（install 時常來自資料/設定）→ unknown 交給 agent

@@ -28,7 +28,11 @@ const ENV = [
   /Permission denied/i, /PermissionError/i,
   /Address already in use/i, /port .* in use/i,
   /database .* does not exist/i, /no space left on device/i,
-  /測試環境無法啟動/, /環境尚未建立/
+  /測試環境無法啟動/, /環境尚未建立/,
+  // Odoo 安裝時相依模組不在 addons path（"depends on module X. But the latter module is not
+  // available in your system."）＝部署環境缺模組，非本任務程式碼可修——鐵板釘釘的 env，
+  // 不可交 haiku agent 猜（實測 agent 會因「depends 寫在 manifest」誤判成 code、退 coding 空轉，task 84）。
+  /not available in your system/i
 ];
 
 // 模組程式碼錯誤——退 coding 修。反轉舉證：只收「明確是開發者寫錯」的特徵，
