@@ -26,7 +26,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {} };
   },
   computed: {
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
@@ -50,6 +50,11 @@ window.TaskDetailView = Vue.defineComponent({
     },
     csAllAnswered() {
       return this.csQuestions.length > 0 && this.csQuestions.every(q => (this.csAnswers[q] || '').trim());
+    },
+    // confirm_pending 的分析澄清問題（來自後端解析 analysis_yaml）；逐題各一回答框
+    clarQuestions() { return this.clarification?.questions || []; },
+    clarAllAnswered() {
+      return this.clarQuestions.length > 0 && this.clarQuestions.every((q, i) => (this.answerFields[i] || '').trim());
     },
     // 合併「外部溝通紀錄」與「對話紀錄」成一條依時間排序的時間軸（含人工審核事件，因為 approve/reject 都會寫 task_logs）
     timeline() {
@@ -121,17 +126,35 @@ window.TaskDetailView = Vue.defineComponent({
       this.task = data.task || data;
       this.logs = data.logs || [];
       this.ticketAttachments = data.attachments || [];
+      this.clarification = data.clarification || { summary: '', questions: [] };
       // Init answer fields for each cs question
       const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
       const init = {};
       qs.forEach(q => { if (!(q in this.csAnswers)) init[q] = ''; });
       this.csAnswers = { ...this.csAnswers, ...init };
+      // Init answer fields for each clarification question（逐題各一框）
+      const clarInit = {};
+      this.clarification.questions.forEach((q, i) => { if (!(i in this.answerFields)) clarInit[i] = ''; });
+      this.answerFields = { ...this.answerFields, ...clarInit };
     },
     async submitAnswer() {
+      // 逐題模式：把每題答案配對成單一 user_answer（後端契約不變，分析重跑讀得到 Q/A 對應）；
+      // 無解析問題時（如 reject_confirm_pending，AI 提問在時間軸）沿用單一留言框。
+      let user_answer;
+      if (this.clarQuestions.length) {
+        if (!this.clarAllAnswered) return;
+        user_answer = this.clarQuestions
+          .map((q, i) => `Q${i + 1}: ${q}\nA${i + 1}: ${(this.answerFields[i] || '').trim()}`)
+          .join('\n\n');
+      } else {
+        user_answer = this.newMessageText.trim();
+        if (!user_answer) return;
+      }
       this.submitting = true;
       try {
-        await Api.post(`tasks/${this.task.id}/answer`, { user_answer: this.newMessageText.trim() });
+        await Api.post(`tasks/${this.task.id}/answer`, { user_answer });
         this.newMessageText = '';
+        this.answerFields = {};
         showToast('回覆已送出', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
@@ -321,6 +344,17 @@ window.TaskDetailView = Vue.defineComponent({
         this.csDataSubmit();
       }
     },
+    // 分析澄清問題逐題填答：Enter 跳下一題，最後一題全答完則送出（Shift+Enter 換行由 .exact 放行）
+    handleClarEnter(idx) {
+      const nextIdx = idx + 1;
+      if (nextIdx < this.clarQuestions.length) {
+        const next = this.$refs['clarInput_' + nextIdx];
+        const el = Array.isArray(next) ? next[0] : next;
+        if (el) el.focus();
+      } else if (this.clarAllAnswered) {
+        this.submitAnswer();
+      }
+    },
     async resolveBlocker() {
       if (!this.resolution.trim()) return;
       this.resolving = true;
@@ -470,13 +504,40 @@ window.TaskDetailView = Vue.defineComponent({
 
             <!-- answer：AI 有問題等你回覆 -->
             <template v-if="timelineActionMode === 'answer'">
-              <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
-              <textarea v-model="newMessageText" class="form-control" placeholder="輸入你的回覆..." rows="4"></textarea>
-              <div style="margin-top:6px;text-align:right">
-                <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !newMessageText.trim()">
-                  {{ submitting ? '送出中...' : '送出回覆並繼續' }}
-                </button>
-              </div>
+              <!-- 分析澄清問題：逐題各一回答框 -->
+              <template v-if="clarQuestions.length">
+                <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
+                <div v-if="clarification.summary" style="font-size:var(--fs-sm);color:var(--text-muted);white-space:pre-wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:var(--space-3)">{{ clarification.summary }}</div>
+                <div v-for="(q, idx) in clarQuestions" :key="idx" style="margin-bottom:14px">
+                  <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                    <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
+                    <span style="white-space:pre-wrap">{{ q }}</span>
+                  </div>
+                  <textarea v-model="answerFields[idx]"
+                    :ref="'clarInput_' + idx"
+                    :placeholder="'請回答第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === clarQuestions.length - 1 ? '／送出' : '') + '，Shift+Enter 換行）'"
+                    class="form-control" :class="{ 'form-control-error': !(answerFields[idx] && answerFields[idx].trim()) }"
+                    rows="3"
+                    @keydown.enter.exact.prevent="handleClarEnter(idx)"></textarea>
+                </div>
+                <div v-if="!clarAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請回答所有問題才能送出</div>
+                <div style="text-align:right">
+                  <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !clarAllAnswered">
+                    {{ submitting ? '送出中...' : '送出回覆並繼續' }}
+                  </button>
+                </div>
+              </template>
+              <!-- 無解析問題（如退回對話，AI 提問已在時間軸）：單一回覆框 -->
+              <template v-else>
+                <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
+                <textarea v-model="newMessageText" class="form-control" placeholder="輸入你的回覆...（Enter 送出，Shift+Enter 換行）" rows="4"
+                  @keydown.enter.exact.prevent="submitAnswer"></textarea>
+                <div style="margin-top:6px;text-align:right">
+                  <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !newMessageText.trim()">
+                    {{ submitting ? '送出中...' : '送出回覆並繼續' }}
+                  </button>
+                </div>
+              </template>
             </template>
 
             <!-- review：最終人工審核（退回原因 → 退回／審核通過同列，通過在右且綠色） -->
@@ -501,7 +562,8 @@ window.TaskDetailView = Vue.defineComponent({
                 </div>
               </div>
               <textarea v-model="rejectReason" class="form-control" rows="4"
-                placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）"></textarea>
+                placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）。Enter 送出，Shift+Enter 換行"
+                @keydown.enter.exact.prevent="reject"></textarea>
               <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
                 <button class="btn btn-primary btn-sm" @click="reject" :disabled="rejecting || !rejectReason.trim()">
                   {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
@@ -545,10 +607,10 @@ window.TaskDetailView = Vue.defineComponent({
                 </div>
                 <textarea v-model="csAnswers[q]"
                   :ref="'csInput_' + idx"
-                  :placeholder="'請填寫第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === csQuestions.length - 1 ? '／送出' : '') + '）'"
+                  :placeholder="'請填寫第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === csQuestions.length - 1 ? '／送出' : '') + '，Shift+Enter 換行）'"
                   class="form-control" :class="{ 'form-control-error': !(csAnswers[q] && csAnswers[q].trim()) }"
                   rows="4"
-                  @keydown.enter.prevent="handleCsEnter(idx)">
+                  @keydown.enter.exact.prevent="handleCsEnter(idx)">
                 </textarea>
               </div>
               <div v-if="!csAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請填寫所有問題才能送出</div>
@@ -563,7 +625,8 @@ window.TaskDetailView = Vue.defineComponent({
               <div class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</div>
               <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">說明你的修正方向，任務將回到失敗的那一關重試</div>
               <textarea v-model="resolution" class="form-control" rows="4"
-                placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續...">
+                placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續...（Enter 送出，Shift+Enter 換行）"
+                @keydown.enter.exact.prevent="resolveBlocker">
               </textarea>
               <div style="margin-top:var(--space-2)">
                 <button class="btn btn-primary btn-sm" @click="resolveBlocker" :disabled="resolving || !resolution.trim()">
@@ -583,7 +646,8 @@ window.TaskDetailView = Vue.defineComponent({
 
             <!-- message：無主動作的狀態，通用留言（回寫預設不勾） -->
             <template v-else>
-              <textarea v-model="newMessageText" class="form-control" placeholder="新增留言..." rows="4"></textarea>
+              <textarea v-model="newMessageText" class="form-control" placeholder="新增留言...（Enter 送出，Shift+Enter 換行）" rows="4"
+                @keydown.enter.exact.prevent="sendTaskMessage"></textarea>
               <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected" style="display:block;margin-top:6px;font-size:var(--fs-xs)" />
               <div v-if="newMessageFiles.length" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">已選擇：{{ newMessageFiles.map(f => f.name).join('、') }}</div>
               <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">

@@ -175,6 +175,34 @@ test('GET /api/tasks/:id → returns task detail with logs array', async () => {
   expect(Array.isArray(res.body.logs)).toBe(true);
 });
 
+// confirm_pending 的澄清問題只存在 analysis_yaml，前端無 YAML parser → 後端須解析成 clarification 回傳，
+// 否則整合後的時間軸「AI 有問題等待你回覆」下方是空白，使用者看不到要回答什麼（task 81 的回歸）。
+test('GET /api/tasks/:id → confirm_pending 解析 analysis_yaml 回傳 clarification 問題清單', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml)
+     VALUES ($1,'task_clarify','odoo','C','confirm_pending',$2) RETURNING id`,
+    [userId, 'summary: "改動摘要"\nclarification_channel:\n  questions:\n    - "問題一？"\n    - "問題二？"\n']
+  );
+  const res = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.clarification.questions).toEqual(['問題一？', '問題二？']);
+  expect(res.body.clarification.summary).toBe('改動摘要');
+});
+
+// reject_confirm_pending 共用 answer 區但走時間軸對話，analysis_yaml 常殘留當初分析的問題 → 不可冒出來。
+test('GET /api/tasks/:id → reject_confirm_pending 不回傳殘留的分析問題', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml)
+     VALUES ($1,'task_reject_clarify','odoo','R','reject_confirm_pending',$2) RETURNING id`,
+    [userId, 'summary: "舊摘要"\nclarification_channel:\n  questions:\n    - "舊問題？"\n']
+  );
+  const res = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.clarification.questions).toEqual([]);
+});
+
 test('GET /api/tasks/:id → 404 for non-existent task', async () => {
   const res = await request(app).get('/api/tasks/999999')
     .set('Authorization', `Bearer ${adminToken}`);

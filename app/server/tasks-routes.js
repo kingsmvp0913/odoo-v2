@@ -45,6 +45,19 @@ function taskModule(task) {
   catch { return ''; }
 }
 
+// 從 analysis_yaml 取澄清摘要與問題清單，供 confirm_pending 在前端列出讓使用者回答（前端無 YAML parser）。
+// 兼容巢狀 clarification_channel.questions 與扁平陣列（與 teams.js notifyQuestion 同套解析）。取不到回空。
+function taskClarification(task) {
+  if (!task || !task.analysis_yaml) return { summary: '', questions: [] };
+  try {
+    const parsed = yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {};
+    const ch = parsed.clarification_channel;
+    const questions = Array.isArray(ch?.questions) ? ch.questions.filter(q => typeof q === 'string')
+      : Array.isArray(ch) ? ch.filter(q => typeof q === 'string') : [];
+    return { summary: typeof parsed.summary === 'string' ? parsed.summary : '', questions };
+  } catch { return { summary: '', questions: [] }; }
+}
+
 // 刪任務時卸載其測試區 module（子系統 A）。best-effort，回警告字串或 null，永不 throw、不擋刪除。
 // excludeIds：本次一併刪除的任務 id（含自己）——同專案其他「未隱藏且不在此清單」的任務若也用同一 module，
 // 代表還有人在用 → 跳過卸載。依存判斷在 JS 端做，避開 pg-mem 對 ANY(int[]) 的限制。
@@ -145,7 +158,10 @@ function registerRoutes(app) {
         'SELECT id, filename, mimetype FROM task_attachments WHERE task_id = $1 AND message_id IS NULL',
         [req.params.id]
       );
-      res.json({ task: tasks[0], logs: logs.reverse(), attachments });
+      // 澄清問題只在 confirm_pending 出（初次分析）；reject_confirm_pending 共用同一 answer 區但走時間軸對話，
+      // 其 analysis_yaml 常殘留當初分析的舊問題，不可誤冒出來。
+      const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', questions: [] };
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
