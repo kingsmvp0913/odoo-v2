@@ -198,6 +198,16 @@ async function commitAll(repoPath, message, gitEnv) {
   await execFileAsync('git', ['commit', '-m', message], gitOpts(repoPath, gitEnv));
 }
 
+// 解衝突後只 stage「衝突檔本身」再 commit。git merge 撞衝突時已把非衝突變更放進 index，
+// 這裡不可用 git add -A——否則會把工作樹裡未追蹤的產物（如 graphify 輸出、暫存檔）一併掃進
+// testing，污染部署產物且撐大歷史。files 為空時仍 commit（涵蓋非衝突變更已入 index 的情形）。
+async function commitResolved(repoPath, files, message, gitEnv) {
+  if (files && files.length) {
+    await execFileAsync('git', ['add', '--', ...files], gitOpts(repoPath, gitEnv));
+  }
+  await execFileAsync('git', ['commit', '-m', message], gitOpts(repoPath, gitEnv));
+}
+
 // merge_conflict 人工解完後的收尾驗證：仍有未解衝突就拋錯擋下；有 MERGE_HEAD 就 commit 了結。
 // 沒有這道防線，半套 merge（衝突標記）會直接進 deploy，Python SyntaxError 被誤歸因為程式問題。
 async function concludeMerge(repoPath) {
@@ -367,4 +377,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };

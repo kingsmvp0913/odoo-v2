@@ -313,3 +313,30 @@ test('untrackPyc 帶 gitEnv 時 commit 不再寫死 pipeline 身分', async () =
   expect(commit).toBeDefined();
   expect(commit).not.toContain('user.name=pipeline');
 });
+
+// 意圖：解衝突 commit 只能 stage「衝突檔本身」，絕不可 git add -A——否則工作樹裡未追蹤的
+// 產物（graphify 輸出等）會被一併掃進 testing、污染部署產物。此防線失效要立即翻紅。
+test('commitResolved 只 stage 指定檔、不用 git add -A', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, o, cb) => {
+    calls.push(args);
+    (typeof o === 'function' ? o : cb)(null, 'ok', '');
+  });
+  await gitModule.commitResolved('/repo', ['a/x.py', 'b/y.xml'], 'msg');
+  const add = calls.find(a => a[0] === 'add');
+  expect(add).toEqual(['add', '--', 'a/x.py', 'b/y.xml']);
+  expect(calls.some(a => a[0] === 'add' && a.includes('-A'))).toBe(false);
+  expect(calls.find(a => a[0] === 'commit')).toEqual(['commit', '-m', 'msg']);
+});
+
+// 意圖：非衝突變更已在 merge 時進 index，files 為空仍要 commit（不可空跑漏掉合併結果）。
+test('commitResolved files 為空 → 跳過 add 直接 commit', async () => {
+  const calls = [];
+  childProcess.execFile.mockImplementation((cmd, args, o, cb) => {
+    calls.push(args);
+    (typeof o === 'function' ? o : cb)(null, 'ok', '');
+  });
+  await gitModule.commitResolved('/repo', [], 'msg');
+  expect(calls.some(a => a[0] === 'add')).toBe(false);
+  expect(calls.find(a => a[0] === 'commit')).toEqual(['commit', '-m', 'msg']);
+});

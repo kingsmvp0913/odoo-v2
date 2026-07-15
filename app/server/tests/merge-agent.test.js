@@ -4,7 +4,7 @@ const mockRunClaude = jest.fn();
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn(),
-  commitAll: jest.fn().mockResolvedValue(undefined),
+  commitResolved: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
@@ -30,7 +30,7 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(async () => {
   mockRunClaude.mockReset();
   gitMock.mergeInto.mockReset();
-  gitMock.commitAll.mockReset().mockResolvedValue(undefined);
+  gitMock.commitResolved.mockReset().mockResolvedValue(undefined);
   gitMock.abortMerge.mockReset().mockResolvedValue(undefined);
   require('../notify').emitToUser.mockReset();
   await dbModule.query('DELETE FROM tasks');
@@ -104,9 +104,9 @@ test('mergeInto 拋錯 → 先 abortMerge 清理再 stopped', async () => {
   expect(rows[0].status).toBe('stopped');
 });
 
-test('解衝突後 commitAll 失敗 → abortMerge 清理再 stopped', async () => {
+test('解衝突後 commitResolved 失敗 → abortMerge 清理再 stopped', async () => {
   gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: [] });
-  gitMock.commitAll.mockRejectedValue(new Error('commit failed'));
+  gitMock.commitResolved.mockRejectedValue(new Error('commit failed'));
   const taskId = await setupProjectTask(['main']);
 
   await mergeMod.runMergeAgent(taskId, userId, undefined);
@@ -175,4 +175,55 @@ test('resolveConflict 輸出仍含衝突標記 → false 且不覆寫檔案', as
 
   expect(ok).toBe(false);
   expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8')).toBe(original);
+});
+
+// 意圖：AI 解衝突常把縮排解爛（本次事故真因：idx_repair_bom.py 有一行掉了縮排 → IndentationError）。
+// 這種檔沒有衝突標記卻壞掉，須在 commit 進 testing 前被 py_compile 擋下。此閘門失效＝壞碼進部署。
+test('verifyResolvedSyntax 抓出縮排壞掉的 py、放行正常檔', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-syntax-'));
+  fs.writeFileSync(path.join(dir, 'good.py'), 'def f():\n    x = 1\n    return x\n');
+  // 第二行多一格縮排 → unexpected indent（比照事故現場）
+  fs.writeFileSync(path.join(dir, 'bad.py'), 'x = 1\n    y = 2\n');
+
+  const bad = await mergeMod.verifyResolvedSyntax(dir, ['good.py', 'bad.py']);
+
+  expect(bad).toEqual(['bad.py']);
+});
+
+// 意圖：AI 解出的檔即使無衝突標記，只要語法壞掉就不得 commit 進 testing——改列 merge_conflict 交人工。
+// 沒有這道閘門，壞碼進 testing → deploy 才爆 IndentationError 並被誤歸因為程式問題（本次事故）。
+test('AI 解出的檔語法壞掉 → 不 commit、改 merge_conflict', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-e2e-'));
+  fs.writeFileSync(path.join(dir, 'bad.py'), '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task\n');
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['bad.py'] });
+  // AI 回傳「無衝突標記但縮排壞掉」的內容
+  mockRunClaude.mockResolvedValueOnce({ text: 'x = 2\n    y = 3\n', usage: null, durationMs: null });
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('E','17.0','e') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, git_branch)
+     VALUES ($1,'task_odoo_e1','odoo','T','c','merge_running',$2,'task/task_odoo_e1') RETURNING id`,
+    [userId, proj.id]
+  );
+
+  await mergeMod.runMergeAgent(t.id, userId, undefined);
+
+  expect(gitMock.commitResolved).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [t.id]);
+  expect(rows[0].status).toBe('merge_conflict');
+  const data = typeof rows[0].merge_conflict_data === 'string'
+    ? JSON.parse(rows[0].merge_conflict_data) : rows[0].merge_conflict_data;
+  expect(data.repos[0].files).toContain('bad.py');
 });

@@ -1,10 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { stripFence } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { mergeInto, commitAll, abortMerge } = require('./git');
+const { mergeInto, commitResolved, abortMerge } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -87,6 +88,35 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   return true;
 }
 
+function execFileP(cmd, args, opts) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, opts, (err, stdout, stderr) => {
+      if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
+      else resolve({ stdout, stderr });
+    });
+  });
+}
+
+// commit 進 testing 前驗 AI 解衝突結果的語法：.py→py_compile，.xml→xmllint。
+// AI 常把縮排／語法解壞，產出「無衝突標記卻壞掉」的檔——直接 commit 進 testing 會讓
+// deploy 升級以 IndentationError/ParseError 收場並誤歸因為程式問題。回傳語法壞掉的檔清單。
+// 驗證工具本身不在環境（ENOENT）時略過該檔——無法驗 ≠ 壞，不因缺 linter 誤擋合併。
+async function verifyResolvedSyntax(repoPath, files) {
+  const bad = [];
+  for (const f of files) {
+    const abs = path.join(repoPath, f);
+    if (!fs.existsSync(abs)) continue;
+    try {
+      if (f.endsWith('.py')) await execFileP('python', ['-m', 'py_compile', abs], { cwd: repoPath });
+      else if (f.endsWith('.xml')) await execFileP('xmllint', ['--noout', abs], { cwd: repoPath });
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      bad.push(f);
+    }
+  }
+  return bad;
+}
+
 async function runMergeAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, project_id, git_branch FROM tasks WHERE id = $1',
@@ -162,9 +192,18 @@ async function doMerge(task, taskId, userId, signal) {
       }
     }
 
+    // commit 進 testing 前驗語法：AI 解衝突把縮排／語法解壞的檔不得進 testing（否則 deploy 才爆、
+    // 又被誤歸因為程式問題）。壞檔改列入 failed 交人工，未 stage → 仍屬未解衝突，人工收尾能擋住。
+    const resolvedFiles = mergeResult.conflictFiles.filter(f => !failed.includes(f));
+    const badSyntax = await verifyResolvedSyntax(repo.local_path, resolvedFiles);
+    for (const f of badSyntax) {
+      failed.push(f);
+      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label} 解衝突後語法仍壞（未通過 py_compile／xmllint），交人工: ${f}\n` });
+    }
+
     if (failed.length === 0) {
       try {
-        await commitAll(repo.local_path, `[merge] ${branch} → testing (resolve conflicts)`);
+        await commitResolved(repo.local_path, mergeResult.conflictFiles, `[merge] ${branch} → testing (resolve conflicts)`);
         notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：衝突已自動解決\n` });
       } catch (err) {
         await abortMerge(repo.local_path).catch(() => {});
@@ -195,4 +234,4 @@ async function doMerge(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
-module.exports = { runMergeAgent, resolveConflict };
+module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax };
