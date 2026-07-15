@@ -31,6 +31,13 @@ async function buildGitEnv(userId) {
     GIT_PAT: pat,
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
+    // 機器上設定的 credential.helper（如 Windows Credential Manager）會搶在 GIT_ASKPASS 前被 git 嘗試，
+    // 導致仍以機器帳號認證、PAT 被靜默繞過。清空 helper 清單（GIT_CONFIG_* 等效 -c credential.helper=）
+    // 讓 askpass 成為唯一來源；GIT_TERMINAL_PROMPT=0 讓壞/空 PAT 直接失敗，不會 headless 卡死等互動輸入。
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'credential.helper',
+    GIT_CONFIG_VALUE_0: '',
+    GIT_TERMINAL_PROMPT: '0',
   };
 }
 

@@ -37,4 +37,8 @@ test('buildGitEnv：有 PAT → 回注入 env（token 解密、身分帶入）',
   expect(env.GIT_COMMITTER_NAME).toBe('Bob');
   expect(env.GIT_COMMITTER_EMAIL).toBe('bob@corp.com');
   expect(env.GIT_ASKPASS).toMatch(/git-askpass\.(cmd|sh)$/);
+  expect(env.GIT_CONFIG_COUNT).toBe('1');
+  expect(env.GIT_CONFIG_KEY_0).toBe('credential.helper');
+  expect(env.GIT_CONFIG_VALUE_0).toBe('');
+  expect(env.GIT_TERMINAL_PROMPT).toBe('0');
 });
