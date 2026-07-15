@@ -53,7 +53,11 @@ function computeDestPath(projectFolder, label) {
   return path.join(REPOS_BASE, slugify(projectFolder), slugify(label));
 }
 
-function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv) {
+function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
+  // projectId 來自 req.params.id（字串）；pipeline 的 withProjectLock 用 DB 數字 project_id 當 key。
+  // Map key 字串≠數字會讓「更新 repo」與 pipeline 的 git 操作不互斥——coerce 成數字才真正序列化，
+  // 否則 updateMainClone 內的 testing reset --hard 可能與 deploy/merge 併發壞掉共用主 clone。
+  projectId = Number(projectId);
   // Security: validate URL scheme to prevent injection
   if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
     query(
@@ -67,7 +71,7 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv) {
   if (isAlreadyCloned) {
     // 更新既有主 clone：包 withProjectLock 與 pipeline 對同一主 clone 的 git 操作序列化。
     // 不能用 bare `git pull`——主 clone 常駐無 upstream 的 testing 分支，會報「no tracking information」。
-    withProjectLock(projectId, () => updateMainClone(repoId, destPath, gitEnv)).catch(() => {});
+    withProjectLock(projectId, () => updateMainClone(repoId, destPath, gitEnv, projectId, userId)).catch(() => {});
     return;
   }
 
@@ -93,12 +97,21 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv) {
 }
 
 // 更新既有主 clone 到最新 main：checkout 主分支 + git pull origin <main>（帶明確 remote/branch），
-// 拉完回常駐 testing（測試環境 addons 來源分支）。沿用 pipeline task-agent 的更新 main 寫法。
-async function updateMainClone(repoId, destPath, gitEnv) {
+// 拉完把 testing 重長到最新 main（測試環境 addons 來源分支）。沿用 pipeline task-agent 的更新 main 寫法。
+async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
   try {
     const base = await ensureMainBranch(destPath, gitEnv); // checkout main/master（僅遠端則建本地追蹤分支）
     await pullBranch(destPath, base, gitEnv);              // git pull origin <base>
-    try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋更新完成 */ }
+    // pull 只更新 main；testing（deploy 實際部署的分支）不會自動跟上——單向往前併的流程從不把 main
+    // 後來的新 commit 帶回 testing。故拉完主動重長 testing 到最新 main＋重併在飛任務，
+    // 否則使用者 push 的依賴修正（如缺的 module）進了 main 卻不在 testing，deploy 仍找不到。
+    // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
+    if (projectId) {
+      const { rebuildTestingWithinLock } = require('./pipeline/rebuild-testing');
+      await rebuildTestingWithinLock(projectId, userId).catch(() => {});
+    } else {
+      try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋更新完成 */ }
+    }
     await query(
       'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
       [repoId, 'done']
@@ -404,7 +417,7 @@ function registerRoutes(app) {
         "UPDATE project_repos SET clone_status='cloning', clone_error=NULL WHERE id=$1",
         [repo.id]
       );
-      triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path, gitEnv);
+      triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path, gitEnv, req.userId);
       res.json({ ok: true, cloning: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

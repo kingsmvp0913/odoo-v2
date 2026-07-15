@@ -27,6 +27,8 @@ async function rebuildTesting(projectId, userId, signal) {
   return withProjectLock(projectId, () => doRebuild(projectId, userId, signal));
 }
 
+// 無鎖版：呼叫端「必須自己已持有 withProjectLock(projectId)」才可呼叫（withProjectLock 不可重入，
+// 從已持鎖處再呼叫 rebuildTesting 會死鎖）。供「更新 repo」端點（triggerClone 已在鎖內）等場景使用。
 async function doRebuild(projectId, userId, signal) {
   const { rows: repos } = await query(
     "SELECT local_path, label FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
@@ -90,4 +92,4 @@ async function doRebuild(projectId, userId, signal) {
   return null;
 }
 
-module.exports = { rebuildTesting, INFLIGHT_DEPLOYED };
+module.exports = { rebuildTesting, rebuildTestingWithinLock: doRebuild, INFLIGHT_DEPLOYED };
