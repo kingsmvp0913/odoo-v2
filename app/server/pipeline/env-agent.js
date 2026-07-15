@@ -143,16 +143,30 @@ async function projectVenvPython(projectId) {
   return fs.existsSync(venvPython) ? venvPython : null;
 }
 
-// deploy 前自動補裝自訂模組宣告的 Python 相依：env 建置只裝 Odoo 核心的 requirements.txt（srcDir），
-// 各模組自帶的 <repo>/requirements.txt 與 <repo>/<module>/requirements.txt 從沒被裝 → 宣告 external
-// dependency 的模組（如 alnas_xlsx 需 xlsxtpl）安裝時就缺。掃 addon repos 的 requirements.txt 逐一
-// pip install（idempotent，已裝快速略過）。best-effort：單檔裝不動只記錄不中斷，真正缺的相依會讓
-// 後續升級以清楚錯誤停下。回傳 log 字串（無可裝則空字串）。
+// 從 __manifest__.py 文字抽出 external_dependencies 的 python 套件清單。
+// manifest 是 Python dict literal，用 regex 抓 external_dependencies 內的 'python': [ ... ]（可跨行）。
+function pythonExternalDeps(manifestText) {
+  const s = String(manifestText || '');
+  const ext = s.match(/external_dependencies['"]?\s*:\s*\{/);
+  if (!ext) return [];
+  const py = s.slice(ext.index).match(/['"]python['"]\s*:\s*\[([\s\S]*?)\]/);
+  if (!py) return [];
+  return [...py[1].matchAll(/['"]([^'"]+)['"]/g)].map(m => m[1]);
+}
+
+// deploy 前自動補裝自訂模組宣告的 Python 相依。相依宣告有兩處來源，都要涵蓋：
+//   (1) <repo>/requirements.txt 與 <repo>/<module>/requirements.txt
+//   (2) 各模組 __manifest__.py 的 external_dependencies['python']（Odoo 安裝時實際檢查的權威來源；
+//       不少模組如 idx_hj 只在此宣告、無 requirements.txt）
+// env 建置只裝 Odoo 核心 requirements → 這兩處宣告的（xlsxtpl、smbprotocol…）安裝時就缺。
+// 掃齊逐一 pip install（idempotent，已裝快速略過）。best-effort：裝不動只記錄不中斷，真正缺的相依
+// 會讓後續升級以清楚錯誤停下。回傳 log 字串（無可裝則空字串）。
 async function installModuleRequirements(projectId, signal) {
   const venvPython = await projectVenvPython(projectId);
   if (!venvPython) return '';                      // 環境尚未建好，交由建置流程處理
   const repos = await projectAddonsPaths(projectId);
   const reqFiles = [];
+  const manifestPkgs = new Set();
   for (const repo of repos) {
     const root = path.join(repo, 'requirements.txt');
     if (fs.existsSync(root)) reqFiles.push(root);
@@ -160,18 +174,33 @@ async function installModuleRequirements(projectId, signal) {
     try { entries = fs.readdirSync(repo, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      const f = path.join(repo, e.name, 'requirements.txt');
-      if (fs.existsSync(f)) reqFiles.push(f);
+      const modDir = path.join(repo, e.name);
+      const req = path.join(modDir, 'requirements.txt');
+      if (fs.existsSync(req)) reqFiles.push(req);
+      const manifest = path.join(modDir, '__manifest__.py');
+      if (fs.existsSync(manifest)) {
+        try { for (const p of pythonExternalDeps(fs.readFileSync(manifest, 'utf8'))) manifestPkgs.add(p); }
+        catch { /* 讀不到就略過 */ }
+      }
     }
   }
-  if (!reqFiles.length) return '';
+  if (!reqFiles.length && !manifestPkgs.size) return '';
   let log = '';
   for (const f of reqFiles) {
     try {
       const out = await execCmd(venvPython, ['-m', 'pip', 'install', '-r', f], signal);
-      log += `[pip-mod] OK ${f}\n${String(out).slice(-200)}\n`;
+      log += `[pip-req] OK ${f}\n${String(out).slice(-200)}\n`;
     } catch (err) {
-      log += `[pip-mod] FAIL ${f}: ${String(err.stderr || err.message || '').slice(-200)}\n`;
+      log += `[pip-req] FAIL ${f}: ${String(err.stderr || err.message || '').slice(-200)}\n`;
+    }
+  }
+  if (manifestPkgs.size) {
+    const pkgs = [...manifestPkgs];
+    try {
+      const out = await execCmd(venvPython, ['-m', 'pip', 'install', ...pkgs], signal);
+      log += `[pip-manifest] OK ${pkgs.join(' ')}\n${String(out).slice(-200)}\n`;
+    } catch (err) {
+      log += `[pip-manifest] FAIL ${pkgs.join(' ')}: ${String(err.stderr || err.message || '').slice(-200)}\n`;
     }
   }
   return log;
@@ -534,4 +563,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath };
