@@ -8,7 +8,11 @@ window.ProjectChatView = Vue.defineComponent({
       newInput: '',
       sending: false,
       loadingMsgs: false,
-      newTitle: ''
+      newTitle: '',
+      draftingTask: false,
+      showTaskModal: false,
+      taskDraft: { title: '', original_text: '' },
+      creatingTask: false
     };
   },
   async created() { await this.loadChats(); },
@@ -92,6 +96,31 @@ window.ProjectChatView = Vue.defineComponent({
         showToast(e.message, 'error');
       } finally { this.sending = false; }
     },
+    async toTask() {
+      if (!this.activeChat || this.draftingTask) return;
+      this.draftingTask = true;
+      try {
+        const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {});
+        this.taskDraft = { title: draft.title || '', original_text: draft.original_text || '' };
+        this.showTaskModal = true;
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.draftingTask = false; }
+    },
+    async submitTask() {
+      if (!this.taskDraft.title.trim()) return showToast('請填寫標題', 'error');
+      if (!this.taskDraft.original_text.trim()) return showToast('請填寫內容', 'error');
+      this.creatingTask = true;
+      try {
+        await Api.post('tasks', {
+          title: this.taskDraft.title.trim(),
+          original_text: this.taskDraft.original_text,
+          project_id: this.$route.params.id
+        });
+        this.showTaskModal = false;
+        showToast('已建立任務，將於下輪 pipeline 自動分診', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.creatingTask = false; }
+    },
     scrollToBottom() {
       const el = this.$refs.messages;
       if (el) el.scrollTop = el.scrollHeight;
@@ -134,6 +163,12 @@ window.ProjectChatView = Vue.defineComponent({
           請選擇或建立對話
         </div>
         <template v-else>
+          <div style="padding:8px var(--space-4);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:var(--fs-base);font-weight:var(--fw-semibold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ activeChat.title }}</span>
+            <button class="btn btn-outline btn-sm" @click="toTask" :disabled="draftingTask || sending">
+              {{ draftingTask ? '摘要中...' : '＋ 轉為任務' }}
+            </button>
+          </div>
           <div class="chat-messages" ref="messages" style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px">
             <div v-if="loadingMsgs" class="loading">載入中...</div>
             <div v-for="m in messages" :key="m.id">
@@ -167,6 +202,30 @@ window.ProjectChatView = Vue.defineComponent({
             </button>
           </div>
         </template>
+      </div>
+    </div>
+
+    <!-- 轉為任務：可編輯草稿，確認才建立 -->
+    <div v-if="showTaskModal" @click.self="showTaskModal=false"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px;width:640px;max-width:94vw;max-height:90vh;overflow:auto;box-shadow:0 12px 48px rgba(0,0,0,0.4)">
+        <h2 style="margin:0 0 8px;font-size:var(--fs-xl)">轉為任務</h2>
+        <p style="margin:0 0 20px;font-size:var(--fs-sm);color:var(--text-muted)">已依對話摘要草稿，確認或修改後建立任務。</p>
+
+        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">標題 <span style="color:var(--danger)">*</span></label>
+        <input v-model="taskDraft.title" class="form-control" placeholder="任務標題"
+          style="width:100%;height:36px;font-size:var(--fs-md);margin-bottom:18px" />
+
+        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">內容 <span style="color:var(--danger)">*</span></label>
+        <textarea v-model="taskDraft.original_text" class="form-control" placeholder="需求描述（給分診/分析 Agent 參考）"
+          style="width:100%;min-height:180px;font-size:var(--fs-md);line-height:1.6;resize:vertical;margin-bottom:20px"></textarea>
+
+        <div style="display:flex;justify-content:flex-end;gap:var(--space-2)">
+          <button class="btn btn-outline btn-sm" @click="showTaskModal=false" :disabled="creatingTask">取消</button>
+          <button class="btn btn-primary btn-sm" @click="submitTask" :disabled="creatingTask">
+            {{ creatingTask ? '建立中...' : '建立任務' }}
+          </button>
+        </div>
       </div>
     </div>
   `

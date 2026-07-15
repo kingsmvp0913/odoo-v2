@@ -7,6 +7,9 @@ process.env.JWT_SECRET = 'test-secret';
 const mockChatReply = jest.fn();
 jest.mock('../pipeline/chat-agent', () => ({ chatReply: mockChatReply }));
 
+const mockDraftTask = jest.fn();
+jest.mock('../pipeline/chat-to-task', () => ({ draftTaskFromChat: (...a) => mockDraftTask(...a) }));
+
 const mockEmitToUser = jest.fn();
 jest.mock('../notify', () => ({
   emitToUser: (...a) => mockEmitToUser(...a),
@@ -46,7 +49,7 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
-beforeEach(() => { mockChatReply.mockReset(); mockEmitToUser.mockReset(); });
+beforeEach(() => { mockChatReply.mockReset(); mockEmitToUser.mockReset(); mockDraftTask.mockReset(); });
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
@@ -170,6 +173,51 @@ test('GET messages → 他人 chat 回 404', async () => {
   const res = await request(app)
     .get(`/api/projects/${projectId}/chats/${chat.id}/messages`).set(auth());
   expect(res.status).toBe(404);
+});
+
+test('POST draft-task → 回摘要草稿（不建任務）', async () => {
+  mockDraftTask.mockResolvedValueOnce({ title: '金額算錯', original_text: '正式區某單金額算錯' });
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'轉任務',$2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/draft-task`).set(auth()).send({});
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual({ title: '金額算錯', original_text: '正式區某單金額算錯' });
+  expect(mockDraftTask).toHaveBeenCalledWith(String(projectId), String(chat.id), userId);
+});
+
+test('POST draft-task → 他人 chat 回 404 且不呼叫摘要', async () => {
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('other3','x','O3') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'別人的轉任務',$2) RETURNING id",
+    [projectId, other.id]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/draft-task`).set(auth()).send({});
+  expect(res.status).toBe(404);
+  expect(mockDraftTask).not.toHaveBeenCalled();
+});
+
+test('POST draft-task → 摘要層丟 status 錯誤時照該 status 回', async () => {
+  const err = new Error('對話沒有內容可摘要'); err.status = 400;
+  mockDraftTask.mockRejectedValueOnce(err);
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'空轉',$2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/draft-task`).set(auth()).send({});
+  expect(res.status).toBe(400);
+  expect(res.body.error).toBe('對話沒有內容可摘要');
+});
+
+test('POST draft-task → 401 無 token', async () => {
+  const res = await request(app).post(`/api/projects/${projectId}/chats/1/draft-task`).send({});
+  expect(res.status).toBe(401);
 });
 
 test('unread：AI 訊息未讀計入，read 後歸零', async () => {

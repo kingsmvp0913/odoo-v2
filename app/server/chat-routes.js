@@ -98,6 +98,19 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 把整串排障對話摘要成任務草稿（不建任務）——前端拿去讓使用者編輯確認後才走 POST /api/tasks
+  app.post('/api/projects/:projectId/chats/:id/draft-task', verifyToken, async (req, res) => {
+    try {
+      const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
+      if (!chat) return res.status(404).json({ error: 'Not found' });
+      const { draftTaskFromChat } = require('./pipeline/chat-to-task');
+      const draft = await draftTaskFromChat(req.params.projectId, req.params.id, req.userId);
+      res.json(draft);
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/projects/:projectId/chats/:id/read', verifyToken, async (req, res) => {
     try {
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
