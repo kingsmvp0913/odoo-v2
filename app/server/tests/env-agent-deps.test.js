@@ -36,3 +36,20 @@ test('非字串/空輸入 → 空陣列，不炸', () => {
   expect(pythonExternalDeps(null)).toEqual([]);
   expect(pythonExternalDeps('')).toEqual([]);
 });
+
+// 安全：manifest 由外部 repo 提供，惡意/畸形項（會被 pip 當旗標）必須丟棄，不得流到 pip argv
+test('污染的 manifest 夾帶 pip 旗標/URL/路徑 → 白名單過濾掉，只留合法套件名', () => {
+  const manifest = `{
+    "external_dependencies": {
+        "python": [
+            "requests",
+            "--index-url=http://evil/simple",
+            "-e /tmp/x",
+            "https://evil/pkg.tar.gz",
+            "a b; rm -rf /",
+            "smbprotocol==1.17.0",
+        ],
+    },
+  }`;
+  expect(pythonExternalDeps(manifest)).toEqual(['requests', 'smbprotocol==1.17.0']);
+});

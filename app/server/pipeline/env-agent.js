@@ -143,15 +143,25 @@ async function projectVenvPython(projectId) {
   return fs.existsSync(venvPython) ? venvPython : null;
 }
 
+// PEP 508 套件名（含 optional extras 與版本限定）。manifest 由 GitHub 拉來的 repo 提供、非可信輸入：
+// 不符者一律丟棄，防被污染的 manifest 夾帶 pip 旗標（--index-url=http://evil、-e /path…）做
+// argument injection（execFile 無 shell 注入，但畸形項會被 pip 當選項解析＝argv 旗標走私）。
+// 名稱＋optional 版本限定；不含 extras（Odoo manifest 的 python 相依是 import 名，無 extras；
+// 且 extras 的 ']' 會與清單抽取的 ']' 混淆）。任何含旗標/URL/路徑/空白的畸形項都不符 → 丟棄。
+const SAFE_PKG = /^[A-Za-z0-9][A-Za-z0-9._-]*([<>=!~]=?[A-Za-z0-9._*+-]+)?$/;
+
 // 從 __manifest__.py 文字抽出 external_dependencies 的 python 套件清單。
 // manifest 是 Python dict literal，用 regex 抓 external_dependencies 內的 'python': [ ... ]（可跨行）。
+// 只回傳通過 SAFE_PKG 白名單的項目——會被 pip 當旗標的惡意/畸形項在此就丟棄。
 function pythonExternalDeps(manifestText) {
   const s = String(manifestText || '');
   const ext = s.match(/external_dependencies['"]?\s*:\s*\{/);
   if (!ext) return [];
   const py = s.slice(ext.index).match(/['"]python['"]\s*:\s*\[([\s\S]*?)\]/);
   if (!py) return [];
-  return [...py[1].matchAll(/['"]([^'"]+)['"]/g)].map(m => m[1]);
+  return [...py[1].matchAll(/['"]([^'"]+)['"]/g)]
+    .map(m => m[1].trim())
+    .filter(name => SAFE_PKG.test(name));
 }
 
 // deploy 前自動補裝自訂模組宣告的 Python 相依。相依宣告有兩處來源，都要涵蓋：
@@ -197,7 +207,8 @@ async function installModuleRequirements(projectId, signal) {
   if (manifestPkgs.size) {
     const pkgs = [...manifestPkgs];
     try {
-      const out = await execCmd(venvPython, ['-m', 'pip', 'install', ...pkgs], signal);
+      // '--' 終止 pip 選項解析：即使白名單漏網，套件名也不會被當旗標（防 argv 旗標走私，縱深防禦）
+      const out = await execCmd(venvPython, ['-m', 'pip', 'install', '--', ...pkgs], signal);
       log += `[pip-manifest] OK ${pkgs.join(' ')}\n${String(out).slice(-200)}\n`;
     } catch (err) {
       log += `[pip-manifest] FAIL ${pkgs.join(' ')}: ${String(err.stderr || err.message || '').slice(-200)}\n`;
