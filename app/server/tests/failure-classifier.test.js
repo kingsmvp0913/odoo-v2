@@ -1,5 +1,6 @@
 // 意圖：把失敗分 transient/env/code 三類，各退對地方（健檢根因 B、U5）。
-// 分類器保守偏向：只有明確才改判，模糊回 unknown 交給 agent；agent 也判不出預設 code（安全＝現況）。
+// 反轉舉證：只有「明確是開發者寫錯」才判 code 退 coding；模糊回 unknown 交給 agent，
+// agent 也判不出 → 預設 env（丟人工，不退 coding 空轉——避免 task 84 那種缺依賴誤判成 code 的震盪）。
 const { newDb } = require('pg-mem');
 
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() }));
@@ -44,6 +45,23 @@ describe('classifyFailure 純函式', () => {
     expect(classifyFailure("ImportError: cannot import name 'Model' from 'odoo.models'")).toBe('code');
   });
 
+  // 反轉舉證回歸（task 84）：缺依賴的 install-time UserError 本質是環境／跨模組問題，
+  // 純函式不得只因它含 Traceback／odoo.exceptions 就判 code（那兩條已從 CODE 移除）→ 回 unknown 交給 agent。
+  test('缺依賴 UserError（install 中止）→ 不判 code，回 unknown（task 84 震盪根因）', () => {
+    const tb = [
+      'Traceback (most recent call last):',
+      '  File "/odoo-envs/proj/src/odoo/addons/base/models/ir_module.py", line 700',
+      "odoo.exceptions.UserError: You try to install module 'idx_hj' that depends on module 'web_login_styles'.",
+      'But the latter module is not available in your system.'
+    ].join('\n');
+    expect(classifyFailure(tb)).toBe('unknown'); // 兩張全包網（Traceback／odoo.exceptions）已拆，不再誤搶成 code
+  });
+
+  // 反轉舉證：籠統 ValidationError 不再算「明確開發者寫錯」（install 時常來自資料/設定）→ unknown 交給 agent
+  test('籠統 ValidationError（無 field/syntax 特徵）→ 回 unknown 不判 code', () => {
+    expect(classifyFailure('odoo.exceptions.ValidationError: 檢核未通過')).toBe('unknown');
+  });
+
   test('unknown：無法明確判定', () => {
     expect(classifyFailure('something totally unexpected happened')).toBe('unknown');
     expect(classifyFailure('')).toBe('unknown');
@@ -71,14 +89,20 @@ describe('classifyFailureWithAgent', () => {
     expect(runClaude).toHaveBeenCalled();
   });
 
-  test('unknown → agent 出錯 → 預設 code（安全）', async () => {
+  test('unknown → agent 出錯 → 預設 env（丟人工，不退 coding 空轉）', async () => {
     runClaude.mockRejectedValue(new Error('agent down'));
     const r = await classifyFailureWithAgent('weird novel error xyz');
-    expect(r).toBe('code');
+    expect(r).toBe('env');
   });
 
-  test('unknown → agent 回不合法內容 → 預設 code', async () => {
+  test('unknown → agent 回不合法內容 → 預設 env', async () => {
     runClaude.mockResolvedValue({ text: 'not json at all' });
+    const r = await classifyFailureWithAgent('weird novel error xyz');
+    expect(r).toBe('env');
+  });
+
+  test('unknown → agent 明確回 code → 仍尊重 agent 判 code（明確才退 coding）', async () => {
+    runClaude.mockResolvedValue({ text: '{"type":"code"}' });
     const r = await classifyFailureWithAgent('weird novel error xyz');
     expect(r).toBe('code');
   });

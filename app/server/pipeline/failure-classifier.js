@@ -3,9 +3,10 @@
  *
  *   classifyFailure(text, opts?)      → 'transient' | 'env' | 'code' | 'unknown'（純函式，零 token）
  *   classifyFailureWithAgent(text)    → 同上，但 unknown 時叫 deploy-fix agent（haiku）分類；
- *                                        agent 出錯或仍判不出 → 'code'（安全預設＝現況）
+ *                                        agent 出錯或仍判不出 → 'env'（反轉舉證：判不準就丟人工，不退 coding 空轉）
  *
- * 保守偏向：只有「明確」才改判 env/transient，其餘回 unknown。timeout 由呼叫端先攔（不進此分類）。
+ * 反轉舉證：只有「明確是開發者寫錯」才判 code 退 coding；env/transient 或任何模糊 → 丟人工。
+ * timeout 由呼叫端先攔（不進此分類）。
  */
 const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
@@ -30,12 +31,14 @@ const ENV = [
   /測試環境無法啟動/, /環境尚未建立/
 ];
 
-// 模組程式碼錯誤——退 coding 修
+// 模組程式碼錯誤——退 coding 修。反轉舉證：只收「明確是開發者寫錯」的特徵，
+// 刻意不收 /Traceback/、/odoo\.(exceptions|tools)/、/ValidationError/——每個 env 失敗也都會印這些
+//（Odoo 一律把錯誤包成 traceback＋exception），留著等於全包網，會把環境問題（如缺依賴的
+// UserError「depends on module ... not available」）誤判成 code、退 coding 空轉（task 84 震盪根因）。
 const CODE = [
-  /Traceback \(most recent call last\)/, /ParseError/i, /ValidationError/i,
-  /XMLSyntaxError/i, /SyntaxError/i, /IndentationError/i,
+  /ParseError/i, /XMLSyntaxError/i, /SyntaxError/i, /IndentationError/i,
   /Invalid field/i, /Invalid view/i, /does not exist on model/i,
-  /Field .* does not exist/i, /odoo\.(exceptions|tools)/i,
+  /Field .* does not exist/i,
   /cannot import name/i // 模組在、名稱不對＝開發者寫錯 import（有別於缺套件的 ModuleNotFoundError）
 ];
 
@@ -60,7 +63,8 @@ const VALID = new Set(['transient', 'env', 'code']);
 async function classifyFailureWithAgent(text, opts = {}) {
   const first = classifyFailure(text, opts);
   if (first !== 'unknown') return first;
-  // 判不出來才叫 haiku agent 分類（不自動修）；任何差錯都保守回 code（＝現行行為，安全）
+  // 判不出來才叫 haiku agent 分類（不自動修）；agent 出錯或仍判不出 → 丟人工（env），
+  // 不預設退 coding——寧可讓人看一眼，也不要把環境／跨模組問題丟回 coding 空轉
   try {
     const agent = loadAgent('deploy-fix');
     const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: String(text || '').slice(0, 2000) }), { model: agent.model, agentType: 'deploy_fix' });
@@ -74,7 +78,7 @@ async function classifyFailureWithAgent(text, opts = {}) {
       if (VALID.has(type)) return type;
     }
   } catch { /* fall through to safe default */ }
-  return 'code';
+  return 'env';
 }
 
 module.exports = { classifyFailure, classifyFailureWithAgent };
