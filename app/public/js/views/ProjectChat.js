@@ -205,25 +205,25 @@ window.ProjectChatView = Vue.defineComponent({
       </div>
     </div>
 
-    <!-- 轉為任務：可編輯草稿，確認才建立 -->
-    <div v-if="showTaskModal" @click.self="showTaskModal=false"
-      style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px;width:640px;max-width:94vw;max-height:90vh;overflow:auto;box-shadow:0 12px 48px rgba(0,0,0,0.4)">
-        <h2 style="margin:0 0 8px;font-size:var(--fs-xl)">轉為任務</h2>
-        <p style="margin:0 0 20px;font-size:var(--fs-sm);color:var(--text-muted)">已依對話摘要草稿，確認或修改後建立任務。</p>
-
-        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">標題 <span style="color:var(--danger)">*</span></label>
-        <input v-model="taskDraft.title" class="form-control" placeholder="任務標題"
-          style="width:100%;height:36px;font-size:var(--fs-md);margin-bottom:18px" />
-
-        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">內容 <span style="color:var(--danger)">*</span></label>
-        <textarea v-model="taskDraft.original_text" class="form-control" placeholder="需求描述（給分診/分析 Agent 參考）"
-          style="width:100%;min-height:180px;font-size:var(--fs-md);line-height:1.6;resize:vertical;margin-bottom:20px"></textarea>
-
-        <div style="display:flex;justify-content:flex-end;gap:var(--space-2)">
-          <button class="btn btn-outline btn-sm" @click="showTaskModal=false" :disabled="creatingTask">取消</button>
-          <button class="btn btn-primary btn-sm" @click="submitTask" :disabled="creatingTask">
-            {{ creatingTask ? '建立中...' : '建立任務' }}
+    <!-- 轉為任務：可編輯草稿，確認才建立（用標準 modal class，深色主題可讀）-->
+    <div v-if="showTaskModal" class="modal-overlay" @mousedown.self="showTaskModal=false" @keyup.esc="showTaskModal=false">
+      <div class="modal modal-elevated" role="dialog" aria-modal="true" style="width:600px">
+        <div class="modal-title">轉為任務</div>
+        <div class="modal-body">
+          <div class="field-item" style="margin-bottom:var(--space-4)">
+            <label class="field-label">標題 <span style="color:var(--danger)">*</span></label>
+            <input class="form-control" v-model="taskDraft.title" placeholder="任務標題" @keyup.enter="submitTask" />
+          </div>
+          <div class="field-item">
+            <label class="field-label">內容 <span style="color:var(--danger)">*</span></label>
+            <textarea class="form-control" v-model="taskDraft.original_text" placeholder="需求描述（給分診/分析 Agent 參考）"
+              style="min-height:180px;line-height:1.6;resize:vertical"></textarea>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" @click="showTaskModal=false" :disabled="creatingTask">取消</button>
+          <button class="btn btn-primary" @click="submitTask" :disabled="creatingTask">
+            {{ creatingTask ? '建立中...' : '建立' }}
           </button>
         </div>
       </div>

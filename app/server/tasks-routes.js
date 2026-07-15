@@ -145,7 +145,10 @@ function registerRoutes(app) {
   app.get('/api/tasks/:id', verifyToken, async (req, res) => {
     try {
       const { rows: tasks } = await query(
-        'SELECT * FROM tasks WHERE id = $1 AND user_id = $2 AND is_hidden = false',
+        `SELECT t.*, e.url AS env_url
+           FROM tasks t
+           LEFT JOIN odoo_envs e ON e.project_id = t.project_id AND e.status = 'running'
+          WHERE t.id = $1 AND t.user_id = $2 AND t.is_hidden = false`,
         [req.params.id, req.userId]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
@@ -154,14 +157,22 @@ function registerRoutes(app) {
         'SELECT id, role, content, created_at FROM task_logs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 5',
         [req.params.id]
       );
+      // 抓全部附件（含 message 的）算實際大小：主附件清單只給非空的主附件；has_attachment 依「有沒有任何非空附件」重算
       const { rows: attRows } = await query(
-        'SELECT id, filename, mimetype, file_path FROM task_attachments WHERE task_id = $1 AND message_id IS NULL',
+        'SELECT id, filename, mimetype, file_path, message_id FROM task_attachments WHERE task_id = $1',
         [req.params.id]
       );
-      // 帶實際大小；濾掉 0-byte 空檔（來源未成功上傳的死列），沒有真內容就不吐給前端＝主附件區塊自然隱藏。不把 file_path 外洩給前端
-      const attachments = attRows
-        .map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: attachmentSize(a.file_path) }))
-        .filter(a => a.size > 0);
+      const withSize = attRows.map(a => ({ ...a, size: attachmentSize(a.file_path) }));
+      // 主附件清單：濾掉 0-byte 空檔（來源未成功上傳的死列），沒有真內容就不吐給前端＝主附件區塊自然隱藏。不把 file_path 外洩給前端
+      const attachments = withSize
+        .filter(a => a.message_id === null && a.size > 0)
+        .map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: a.size }));
+      // 舊碼把空附件也設了 has_attachment=true → 殘留旗標讓「含附件」pill 誤顯示。依實際非空附件重算並自癒回寫，詳情頁與任務列表一起修正
+      const realHasAttachment = withSize.some(a => a.size > 0);
+      if (!!tasks[0].has_attachment !== realHasAttachment) {
+        await query('UPDATE tasks SET has_attachment = $1 WHERE id = $2', [realHasAttachment, req.params.id]);
+        tasks[0].has_attachment = realHasAttachment;
+      }
       // 澄清問題只在 confirm_pending 出（初次分析）；reject_confirm_pending 共用同一 answer 區但走時間軸對話，
       // 其 analysis_yaml 常殘留當初分析的舊問題，不可誤冒出來。
       const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', questions: [] };

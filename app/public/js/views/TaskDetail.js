@@ -160,6 +160,14 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.submitting = false; }
     },
+    async togglePause() {
+      if (!this.task) return;
+      try {
+        const r = await Api.put(`tasks/${this.task.id}/pause`, {});
+        this.task.is_paused = r.is_paused;
+        showToast(r.is_paused ? '任務已暫停，Pipeline 將跳過' : '任務已恢復', r.is_paused ? 'warn' : 'success');
+      } catch (err) { showToast(err.message, 'error'); }
+    },
     startEditContent() {
       this.editText = this.task.original_text || '';
       this.editingContent = true;
@@ -458,6 +466,12 @@ window.TaskDetailView = Vue.defineComponent({
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping" style="margin-left:var(--space-2)">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
       </button>
+      <button v-if="task && task.status !== 'stopped' && task.status !== 'done'" class="btn btn-ghost btn-sm"
+        :style="{ color: task.is_paused ? 'var(--warning)' : 'var(--text-muted)', fontSize: 'var(--fs-sm)', padding: '2px 8px', marginLeft: 'var(--space-2)' }"
+        @click="togglePause" :title="task.is_paused ? '點擊恢復' : '點擊暫停'">
+        {{ task.is_paused ? '▐▐ 已暫停' : '⏸ 暫停' }}
+      </button>
+      <a v-if="task && task.env_url" :href="task.env_url" target="_blank" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
     </div>
     <div class="content">
       <div v-if="loading" class="loading">載入中...</div>
@@ -498,14 +512,8 @@ window.TaskDetailView = Vue.defineComponent({
           <div v-if="ticketAttachments.length" style="margin-bottom:16px">
             <div class="form-section" style="margin-bottom:6px">主附件</div>
             <div v-for="a in ticketAttachments" :key="a.id" style="font-size:13px;margin-bottom:4px">
-              <template v-if="a.size === 0">
-                📎 <span style="color:var(--text-muted)">{{ a.filename }}</span>
-                <span style="color:var(--danger);font-size:var(--fs-xs);margin-left:6px">此附件無內容（0 bytes），來源可能未成功上傳</span>
-              </template>
-              <template v-else>
-                📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
-                <span v-if="a.size" style="color:var(--text-muted);font-size:var(--fs-xs);margin-left:6px">（{{ formatSize(a.size) }}）</span>
-              </template>
+              📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
+              <span v-if="a.size" style="color:var(--text-muted);font-size:var(--fs-xs);margin-left:6px">（{{ formatSize(a.size) }}）</span>
             </div>
           </div>
 

@@ -361,8 +361,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .conv-msg.user { background: #f0fdf4; align-self: flex-end; border: 1px solid #bbf7d0; }
 .conv-msg.system { background: #f9fafb; align-self: flex-start; color: var(--text-muted); font-size: 12px; font-style: italic; max-width: 85%; border: 1px solid var(--border); }
 .conv-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-/* 對話時間軸獨立面板：surface 底＋邊框，避免泡泡與上下區塊混在一起 */
-.conv-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 var(--space-4); }
+/* 對話時間軸獨立面板：用 --bg（比 card 深一階，深色模式 surface 與 card 同色會糊在一起）做內凹面板＋邊框，和上下區塊明確區隔 */
+.conv-panel { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 var(--space-4); }
 .conv-panel .conv-log { margin: 0; }
 /* 時間軸下方動作區與對話面板拉開，加分隔線 */
 .timeline-action { border-top: 1px solid var(--border); padding-top: var(--space-4); }
@@ -377,6 +377,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .modal-fade-enter-active, .modal-fade-leave-active { transition: opacity var(--transition) ease; }
 .modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .modal-fade-enter-active, .modal-fade-leave-active { transition: none; } }
+/* 深色模式下，同色系 --surface 卡片會糊進深色頁面背景＝跳窗浮不起來。此 modifier 用抬升色＋強邊框讓它明顯浮出（淺色模式白卡本就有對比，不需覆寫）*/
+[data-theme="dark"] .modal-elevated { background: #2b2b2b; border-color: var(--border-strong); }
 
 /* ── Data table（共用；取代各頁手刻 <table>）── */
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
