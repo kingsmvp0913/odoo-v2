@@ -8,11 +8,12 @@ jest.mock('../pipeline/claude-runner', () => ({ ...jest.requireActual('../pipeli
 
 let dbModule, runRespecPatch, runClaude, userId, projectId, taskSeq = 0;
 
-async function insertTask(analysisYaml) {
+// codingSessionId 預設 'sess-1'＝coding 已跑過（途中追加需求流程）；傳 null＝coding 未曾跑過（規格審核閘門改規格流程）
+async function insertTask(analysisYaml, codingSessionId = 'sess-1') {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, analysis_yaml, coding_session_id)
-     VALUES ($1, $2, 'odoo', 'T', 'c', 'respec_running', $3, $4, 'sess-1') RETURNING id`,
-    [userId, `t_${++taskSeq}`, projectId, analysisYaml]
+     VALUES ($1, $2, 'odoo', 'T', 'c', 'respec_running', $3, $4, $5) RETURNING id`,
+    [userId, `t_${++taskSeq}`, projectId, analysisYaml, codingSessionId]
   );
   return t.id;
 }
@@ -110,4 +111,35 @@ test('無待吸收留言（競態）→ 直接退回 coding，不呼叫 agent', 
   expect(runClaude).not.toHaveBeenCalled();
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(t.status).toBe('coding_running');
+});
+
+// 規格審核閘門的改規格：coding 從未跑過（coding_session_id 為 NULL）。patch 完要退回 spec_review
+// 讓使用者重看，且不設 retry_feedback（此時尚無 coding session 可 resume）。
+test('pre-coding（無 coding_session_id）：patch 規格→退回 spec_review、不設 retry_feedback', async () => {
+  const taskId = await insertTask('module: sale\nsummary: 原摘要', null);
+  await addMsg(taskId, '請把摘要改成新摘要');
+  runClaude.mockResolvedValue({
+    text: '<result>\nmodule: sale\nsummary: 新摘要\n</result>',
+    usage: null, durationMs: null
+  });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, analysis_yaml, retry_feedback FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('spec_review');           // 退回審核閘門重看，非 coding
+  expect(t.analysis_yaml).toContain('新摘要');      // 規格已更新
+  expect(t.retry_feedback).toBeNull();             // 尚無 coding 可 resume，不設 retry_feedback
+  const { rows: [m] } = await dbModule.query('SELECT applied_at FROM task_messages WHERE task_id=$1', [taskId]);
+  expect(m.applied_at).not.toBeNull();             // 意見標記已吸收（防反覆觸發）
+});
+
+test('pre-coding 無待吸收留言（競態）→ 退回 spec_review，不呼叫 agent', async () => {
+  const taskId = await insertTask('module: sale', null);
+  // 不插入任何留言
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  expect(runClaude).not.toHaveBeenCalled();
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('spec_review');
 });

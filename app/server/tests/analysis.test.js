@@ -45,6 +45,20 @@ clarification_channel:
     - 請確認欄位格式？
   user_answer: ""`;
 
+const YAML_MODE_B_WITH_QUESTIONS = `case_id: "task_odoo_9005"
+module: sale
+odoo_version: "17.0"
+project_name: null
+execution_mode: MODE_B
+summary: 先確認但也有待答問題
+requirements:
+  - 修正銷售
+low_confidence: false
+clarification_channel:
+  questions:
+    - 這個欄位放哪？
+  user_answer: ""`;
+
 const YAML_LOW_CONFIDENCE = `case_id: "task_odoo_9004"
 module: account
 odoo_version: "17.0"
@@ -103,16 +117,26 @@ test('analyzeTask MODE_A → next_status branch_pending, analysis_yaml saved', a
   expect(rows[0].analysis_yaml).toContain('MODE_A');
 });
 
-// 健檢 U14：final_pending 是死狀態（無 handler、無前端標籤、卡死不可見）。
-// MODE_B＝「先確認再實作」，語意上就是等使用者確認 → 走活的 confirm_pending。
-test('analyzeTask MODE_B → confirm_pending（先確認再實作，不得產出死狀態）', async () => {
+// MODE_B＝「先確認再實作」，且無待答問題 → 進規格審核閘門 spec_review，
+// 讓使用者看過完整規格再決定開工（取代舊的塞進 confirm_pending——那關是答問題用的，
+// MODE_B 無問題時會叫使用者回覆卻無題可回，UX 是壞的）。
+test('analyzeTask MODE_B 且無待答問題 → spec_review（規格審核閘門）', async () => {
   mockRunClaude.mockResolvedValue({ text: '<result>\n' + VALID_YAML_MODE_B + '\n</result>', usage: null, durationMs: null });
 
   const result = await analysisModule.analyzeTask(taskId);
-  expect(result.next_status).toBe('confirm_pending');
+  expect(result.next_status).toBe('spec_review');
 
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
-  expect(rows[0].status).toBe('confirm_pending');
+  expect(rows[0].status).toBe('spec_review');
+});
+
+// MODE_B 但仍有待答問題 → 澄清問題分支優先，先進 confirm_pending 答題（答完重分析、
+// 若仍 MODE_B 且無問題才會走到 spec_review）。確保新行為沒吃掉既有的問題優先序。
+test('analyzeTask MODE_B 且有待答問題 → confirm_pending（問題分支優先）', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>\n' + YAML_MODE_B_WITH_QUESTIONS + '\n</result>', usage: null, durationMs: null });
+
+  const result = await analysisModule.analyzeTask(taskId);
+  expect(result.next_status).toBe('confirm_pending');
 });
 
 test('analyzeTask with questions → next_status confirm_pending', async () => {

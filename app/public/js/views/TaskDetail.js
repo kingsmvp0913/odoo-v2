@@ -12,6 +12,7 @@ const TD_STATUS_LABELS = {
   merge_conflict:      '合併衝突',
   deploy_testing:      '部署測試區',
   playwright_running:  'E2E 測試中',
+  spec_review:         '等待規格確認',
   review_pending:      '等待審核',
   reject_triage:       '分診中',
   resolve_triage:      '分診中',
@@ -27,7 +28,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, copyingToOnline: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -37,6 +38,7 @@ window.TaskDetailView = Vue.defineComponent({
     timelineActionMode() {
       const s = this.task?.status;
       if (s === 'confirm_pending' || s === 'reject_confirm_pending')  return 'answer';
+      if (s === 'spec_review')      return 'spec_review';
       if (s === 'review_pending')   return 'review';
       if (s === 'merge_conflict')   return 'conflict';
       if (s === 'cs_reply_pending') return 'cs_reply';
@@ -129,6 +131,7 @@ window.TaskDetailView = Vue.defineComponent({
       this.logs = data.logs || [];
       this.ticketAttachments = data.attachments || [];
       this.clarification = data.clarification || { summary: '', questions: [] };
+      this.spec = data.spec || null; // spec_review 審核頁的規格（後端已 parse analysis_yaml）
       // Init answer fields for each cs question
       const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
       const init = {};
@@ -296,6 +299,29 @@ window.TaskDetailView = Vue.defineComponent({
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.rejecting = false; }
+    },
+    // MODE_B 規格審核閘門——確認規格沒問題，開始實作
+    async specApprove() {
+      if (!await confirmDialog({ title: '規格審核通過', message: '確定規格沒問題，開始實作？', confirmText: '開始實作' })) return;
+      this.specApproving = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/spec-approve`, {});
+        showToast('規格審核通過，開始實作', 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.specApproving = false; }
+    },
+    // MODE_B 規格審核閘門——送出修改意見，交給 AI 依意見更新規格後回到審核頁
+    async specRevise() {
+      if (!this.specFeedback.trim()) return;
+      this.specRevising = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/spec-revise`, { feedback: this.specFeedback.trim() });
+        showToast('已送出修改意見，AI 正在更新規格', 'success');
+        this.specFeedback = '';
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.specRevising = false; }
     },
     sourceUrl() {
       if (!this.task) return null;
@@ -605,6 +631,47 @@ window.TaskDetailView = Vue.defineComponent({
                   </button>
                 </div>
               </template>
+            </template>
+
+            <!-- spec_review：MODE_B 規格審核閘門（看過規格 → 確認開工／寫意見改規格） -->
+            <template v-else-if="timelineActionMode === 'spec_review'">
+              <div class="form-section">規格審核</div>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
+                以下是 AI 分析出的規格，請確認沒問題後開始實作；若要調整，於下方寫修改意見送出，AI 會依意見更新規格再回到這裡。
+              </p>
+              <div v-if="spec" style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
+                <div v-if="spec.summary" style="margin-bottom:var(--space-3)">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">摘要</div>
+                  <div style="font-size:var(--fs-base);white-space:pre-wrap">{{ spec.summary }}</div>
+                </div>
+                <div v-if="spec.module" style="margin-bottom:var(--space-3)">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">模組</div>
+                  <code>{{ spec.module }}</code>
+                </div>
+                <div v-if="spec.requirements && spec.requirements.length" style="margin-bottom:var(--space-3)">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">實作項</div>
+                  <ul style="margin:0;padding-left:var(--space-4);font-size:var(--fs-base)">
+                    <li v-for="(r, i) in spec.requirements" :key="'req'+i" style="white-space:pre-wrap;margin-bottom:2px">{{ r }}</li>
+                  </ul>
+                </div>
+                <div v-if="spec.acceptance && spec.acceptance.length">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">驗收項</div>
+                  <ul style="margin:0;padding-left:var(--space-4);font-size:var(--fs-base)">
+                    <li v-for="(a, i) in spec.acceptance" :key="'acc'+i" style="white-space:pre-wrap;margin-bottom:2px">{{ a }}</li>
+                  </ul>
+                </div>
+              </div>
+              <textarea v-model="specFeedback" class="form-control" rows="3"
+                placeholder="要調整規格的話寫在這裡（例：備註欄位改成多行、加一個匯出按鈕）。Enter 送出，Shift+Enter 換行"
+                @keydown.enter.exact.prevent="specRevise"></textarea>
+              <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
+                <button class="btn btn-secondary btn-sm" @click="specRevise" :disabled="specRevising || specApproving || !specFeedback.trim()">
+                  {{ specRevising ? '送出中...' : '送出修改意見' }}
+                </button>
+                <button class="btn btn-success btn-sm" @click="specApprove" :disabled="specApproving || specRevising">
+                  {{ specApproving ? '處理中...' : '✓ 確認沒問題，開始實作' }}
+                </button>
+              </div>
             </template>
 
             <!-- review：最終人工審核（退回原因 → 退回／審核通過同列，通過在右且綠色） -->

@@ -58,6 +58,23 @@ function taskClarification(task) {
   } catch { return { summary: '', questions: [] }; }
 }
 
+// 從 analysis_yaml 解析出審核頁要渲染的規格（前端無 YAML parser）：只挑人要看的欄位，
+// case_id/odoo_version/clarification_channel/low_confidence 屬 metadata/內部控制，不外吐。解析失敗回 null。
+function taskSpec(task) {
+  if (!task || !task.analysis_yaml) return null;
+  try {
+    const p = yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {};
+    const strList = v => Array.isArray(v) ? v.filter(x => typeof x === 'string') : [];
+    return {
+      summary: typeof p.summary === 'string' ? p.summary : '',
+      module: typeof p.module === 'string' ? p.module : '',
+      execution_mode: typeof p.execution_mode === 'string' ? p.execution_mode : '',
+      requirements: strList(p.requirements),
+      acceptance: strList(p.acceptance),
+    };
+  } catch { return null; }
+}
+
 // 刪任務時卸載其測試區 module（子系統 A）。best-effort，回警告字串或 null，永不 throw、不擋刪除。
 // excludeIds：本次一併刪除的任務 id（含自己）——同專案其他「未隱藏且不在此清單」的任務若也用同一 module，
 // 代表還有人在用 → 跳過卸載。依存判斷在 JS 端做，避開 pg-mem 對 ANY(int[]) 的限制。
@@ -81,7 +98,7 @@ async function uninstallTaskModule(task, excludeIds) {
   }
 }
 
-const NEEDS_ACTION_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'review_pending', 'stopped'];
+const NEEDS_ACTION_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
 const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'reject_confirm_pending'];
 const SAFE_INLINE_MIMETYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
 
@@ -176,7 +193,9 @@ function registerRoutes(app) {
       // 澄清問題只在 confirm_pending 出（初次分析）；reject_confirm_pending 共用同一 answer 區但走時間軸對話，
       // 其 analysis_yaml 常殘留當初分析的舊問題，不可誤冒出來。
       const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', questions: [] };
-      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification });
+      // spec_review（MODE_B 規格審核閘門）：附解析後的規格供審核頁渲染；其他狀態不附（防殘留規格冒出）
+      const spec = tasks[0].status === 'spec_review' ? taskSpec(tasks[0]) : null;
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

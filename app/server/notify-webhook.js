@@ -1,7 +1,7 @@
 const { query } = require('./db');
 
 // 通用外部通知 channel（outbound webhook）：任務進入需人工動作狀態（stopped/review_pending/
-// confirm_pending…，見 notify.js ACTION_STATUSES）時，把 payload POST 到 admin 設定的
+// spec_review/confirm_pending…，見 notify.js ACTION_STATUSES）時，把 payload POST 到 admin 設定的
 // notify_webhook_url。這是使用者不在網頁上、也沒設 Microsoft Teams 時唯一的離線通知出口——
 // LINE Notify 轉發、Slack incoming webhook、自建接收端都能直接接。
 

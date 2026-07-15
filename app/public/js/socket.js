@@ -33,7 +33,7 @@
 
     _socket.on('notify:action', (data) => {
       const ACTION_LABELS = {
-        confirm_pending: '等待確認', review_pending: '等待審核', stopped: '失敗待確認',
+        confirm_pending: '等待確認', spec_review: '等待規格確認', review_pending: '等待審核', stopped: '失敗待確認',
         cs_data_needed: '需補資料', cs_reply_pending: '等待回覆確認',
         merge_conflict: '合併衝突'
       };

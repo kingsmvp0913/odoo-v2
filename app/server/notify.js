@@ -5,7 +5,7 @@ let _io = null;
 // 需要使用者動作的狀態（單一真相）——進入這些狀態時發出 action 通知
 const ACTION_STATUSES = new Set([
   'confirm_pending', 'stopped', 'cs_data_needed', 'cs_reply_pending',
-  'merge_conflict', 'review_pending'
+  'merge_conflict', 'spec_review', 'review_pending'
 ]);
 
 // 可插拔通知 channel（供之後串接 Teams / Discord）：fn(userId, payload)

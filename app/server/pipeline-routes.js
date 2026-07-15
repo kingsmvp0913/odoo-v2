@@ -159,6 +159,68 @@ function registerRoutes(app) {
     }
   });
 
+  // MODE_B 規格審核閘門——確認沒問題：spec_review → branch_pending，續跑 pipeline 進 coding。
+  app.post('/api/tasks/:id/spec-approve', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      if (rows[0].status !== 'spec_review') {
+        return res.status(400).json({ error: `Task status '${rows[0].status}' cannot be approved; expected spec_review` });
+      }
+      // 條件更新防雙擊：輸掉競態的請求不再重複推進
+      const { rowCount } = await query(
+        "UPDATE tasks SET status = 'branch_pending', updated_at = NOW() WHERE id = $1 AND status = 'spec_review'",
+        [req.params.id]
+      );
+      if (rowCount) {
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '規格審核通過，開始實作')",
+          [req.params.id]
+        );
+        require('./notify').emitToUser(req.userId, 'task:updated', { taskId: rows[0].id, status: 'branch_pending' });
+      }
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // MODE_B 規格審核閘門——寫修改意見：把意見寫成 manual 留言（與「途中追加需求」同一吸收管道，
+  // respec-agent 讀 applied_at IS NULL 的 manual 留言），轉 respec_running 由 respec-agent 增量改規格後回 spec_review。
+  app.post('/api/tasks/:id/spec-revise', verifyToken, async (req, res) => {
+    try {
+      const feedback = ((req.body && req.body.feedback) || '').trim();
+      if (!feedback) return res.status(400).json({ error: '請填寫修改意見' });
+      const { rows } = await query(
+        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      if (rows[0].status !== 'spec_review') {
+        return res.status(400).json({ error: `Task status '${rows[0].status}' cannot be revised; expected spec_review` });
+      }
+      // 條件更新防雙擊：先搶到轉移權的請求才落地留言，避免 respec 讀到重複意見
+      const { rowCount } = await query(
+        "UPDATE tasks SET status = 'respec_running', updated_at = NOW() WHERE id = $1 AND status = 'spec_review'",
+        [req.params.id]
+      );
+      if (!rowCount) return res.json({ ok: true });
+      await query(
+        "INSERT INTO task_messages (task_id, source, content, occurred_at) VALUES ($1, 'manual', $2, NOW())",
+        [req.params.id, feedback]
+      );
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: rows[0].id, status: 'respec_running' });
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // 過渡期手動佈署：管理員把 task 分支改動的模組整包複製到正式區 online_addons。
   // 純搬程式——不動任務狀態、不合併分支、不推進 pipeline（審核仍走 approve）。
   app.post('/api/tasks/:id/copy-to-online', verifyToken, async (req, res) => {

@@ -314,3 +314,106 @@ test('copy-to-online → 不限審核狀態，整包複製改動模組到 ONLINE
   fs.rmSync(tmp, { recursive: true, force: true });
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
+
+// --- MODE_B 規格審核閘門：spec-approve（確認開工）／spec-revise（寫意見改規格）---
+
+test('POST /api/tasks/:id/spec-approve → spec_review 轉 branch_pending 並跑 pipeline', async () => {
+  const { runPipeline } = require('../pipeline/runner');
+  runPipeline.mockClear();
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_spec_ok','odoo','T','spec_review') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/spec-approve`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(200);
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(after[0].status).toBe('branch_pending');
+  expect(runPipeline).toHaveBeenCalledWith(userId);
+
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/spec-approve → 非 spec_review 狀態 → 400、狀態不變', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_spec_badstate','odoo','T','coding_running') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/spec-approve`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(400);
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(after[0].status).toBe('coding_running');
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/spec-revise → 寫 manual 留言(applied_at NULL) 並轉 respec_running', async () => {
+  const { runPipeline } = require('../pipeline/runner');
+  runPipeline.mockClear();
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_spec_revise','odoo','T','spec_review') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/spec-revise`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ feedback: '請把備註欄位改成多行文字' });
+
+  expect(res.status).toBe(200);
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(after[0].status).toBe('respec_running');
+  const { rows: msgs } = await dbModule.query(
+    "SELECT content, source, applied_at FROM task_messages WHERE task_id = $1", [taskId]
+  );
+  expect(msgs.length).toBe(1);
+  expect(msgs[0].content).toContain('多行文字');
+  expect(msgs[0].source).toBe('manual');
+  expect(msgs[0].applied_at).toBeNull(); // 待 respec 吸收
+  expect(runPipeline).toHaveBeenCalledWith(userId);
+
+  await dbModule.query('DELETE FROM task_messages WHERE task_id = $1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/spec-revise → 空 feedback → 400', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_spec_revise_empty','odoo','T','spec_review') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/spec-revise`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ feedback: '   ' });
+
+  expect(res.status).toBe(400);
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+  expect(after[0].status).toBe('spec_review'); // 狀態不變
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/spec-revise → 非 spec_review 狀態 → 400', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_spec_revise_badstate','odoo','T','coding_running') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/spec-revise`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ feedback: '改一下' });
+
+  expect(res.status).toBe(400);
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});

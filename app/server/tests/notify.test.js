@@ -14,6 +14,7 @@ function fakeIo() {
 test('ACTION_STATUSES 含關鍵需動作狀態、不含進行中或已移除狀態', () => {
   expect(notify.ACTION_STATUSES.has('confirm_pending')).toBe(true);
   expect(notify.ACTION_STATUSES.has('review_pending')).toBe(true);
+  expect(notify.ACTION_STATUSES.has('spec_review')).toBe(true); // MODE_B 規格審核閘門也是需人工動作狀態
   expect(notify.ACTION_STATUSES.has('coding_running')).toBe(false);
   expect(notify.ACTION_STATUSES.has('deploy_ready')).toBe(false);
 });
