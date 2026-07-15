@@ -361,6 +361,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .conv-msg.user { background: #f0fdf4; align-self: flex-end; border: 1px solid #bbf7d0; }
 .conv-msg.system { background: #f9fafb; align-self: flex-start; color: var(--text-muted); font-size: 12px; font-style: italic; max-width: 85%; border: 1px solid var(--border); }
 .conv-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+/* 對話時間軸獨立面板：surface 底＋邊框，避免泡泡與上下區塊混在一起 */
+.conv-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 var(--space-4); }
+.conv-panel .conv-log { margin: 0; }
+/* 時間軸下方動作區與對話面板拉開，加分隔線 */
+.timeline-action { border-top: 1px solid var(--border); padding-top: var(--space-4); }
 
 /* ── Modal / Dialog（共用；取代原生 confirm/prompt）── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: var(--space-4); z-index: var(--z-modal); }

@@ -9,7 +9,7 @@ const { writebackTaskMessage } = require('./pipeline/sync');
 const { uninstallModule } = require('./pipeline/env-agent');
 const { rebuildTesting } = require('./pipeline/rebuild-testing');
 const { withProjectLock } = require('./pipeline/project-lock');
-const { saveAttachmentFile, readAttachmentFile } = require('./lib/attachments');
+const { saveAttachmentFile, readAttachmentFile, sniffFile, attachmentSize } = require('./lib/attachments');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -154,10 +154,14 @@ function registerRoutes(app) {
         'SELECT id, role, content, created_at FROM task_logs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 5',
         [req.params.id]
       );
-      const { rows: attachments } = await query(
-        'SELECT id, filename, mimetype FROM task_attachments WHERE task_id = $1 AND message_id IS NULL',
+      const { rows: attRows } = await query(
+        'SELECT id, filename, mimetype, file_path FROM task_attachments WHERE task_id = $1 AND message_id IS NULL',
         [req.params.id]
       );
+      // 帶實際大小；濾掉 0-byte 空檔（來源未成功上傳的死列），沒有真內容就不吐給前端＝主附件區塊自然隱藏。不把 file_path 外洩給前端
+      const attachments = attRows
+        .map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: attachmentSize(a.file_path) }))
+        .filter(a => a.size > 0);
       // 澄清問題只在 confirm_pending 出（初次分析）；reject_confirm_pending 共用同一 answer 區但走時間軸對話，
       // 其 analysis_yaml 常殘留當初分析的舊問題，不可誤冒出來。
       const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', questions: [] };
@@ -319,10 +323,16 @@ function registerRoutes(app) {
       if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
       const att = rows[0];
       const buffer = readAttachmentFile(att.file_path);
-      const safeMimetype = SAFE_INLINE_MIMETYPES.has(att.mimetype) ? att.mimetype : 'application/octet-stream';
+      // 空檔（0 bytes）：來源附件本身無內容，直接回明確錯誤，不讓前端下載一個打不開的空檔
+      if (!buffer.length) return res.status(410).json({ error: '此附件無內容（0 bytes），來源可能未成功上傳檔案' });
+      // 舊資料常缺 mimetype／檔名缺副檔名（早期 sniff 只認 4 種）→ serve 時即時嗅測補齊，修好既有壞列免重新同步
+      const sniff = sniffFile(buffer);
+      const effMime = att.mimetype || sniff.mime;
+      const safeMimetype = SAFE_INLINE_MIMETYPES.has(effMime) ? effMime : 'application/octet-stream';
+      const fname = /\.[a-z0-9]+$/i.test(att.filename) ? att.filename : att.filename + sniff.ext;
       res.setHeader('Content-Type', safeMimetype);
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(att.filename)}"`);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fname)}"`);
       res.send(buffer);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

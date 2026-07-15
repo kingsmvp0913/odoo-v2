@@ -1,6 +1,6 @@
 const path = require('path');
 const { query } = require('../db');
-const { saveAttachmentFile, readAttachmentFile, uploadRoot } = require('../lib/attachments');
+const { saveAttachmentFile, readAttachmentFile, uploadRoot, sniffFile } = require('../lib/attachments');
 
 // 對外 HTTP 一律帶逾時：來源 Odoo/eService 無回應（hang 而非報錯）時，
 // 裸 fetch 會讓 syncUser 無限等待、拖住整輪 cron 同步；錯誤路徑呼叫端已有 catch。
@@ -91,15 +91,10 @@ async function odooReadAttachments(baseUrl, ids, cookies) {
   return data.result || [];
 }
 
-// eService 主附件只有 binary 沒有檔名；補上副檔名，agent 的 Read 工具才會把截圖當圖片檢視
-function sniffFileExt(buf) {
-  if (buf.length >= 4) {
-    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return '.png';
-    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return '.jpg';
-    if (buf.toString('ascii', 0, 4) === 'GIF8') return '.gif';
-    if (buf.toString('ascii', 0, 4) === '%PDF') return '.pdf';
-  }
-  return '';
+// eService 主附件的 binary 欄位：Odoo 在 bin_size context 下會回「大小字串」（如 "1.50 Kb"）而非真資料，
+// 那種值 base64 解出來是壞的／空的。判斷是否為真 base64 檔資料：非空字串、且不是人類可讀的大小字串。
+function looksLikeSizeString(s) {
+  return typeof s === 'string' && /^\s*[\d.]+\s*(bytes?|[kmg]b)\s*$/i.test(s);
 }
 
 // 只處理這次新插入的訊息（insertTaskMessages 回傳值），已存在訊息的附件不重複抓
@@ -145,7 +140,8 @@ async function odooSearchRead(baseUrl, model, domain, fields, cookies, limit = 3
       params: {
         model, method: 'search_read',
         args: [],
-        kwargs: { domain, fields, limit }
+        // bin_size:false → binary 欄位（如 service 的 file）回真 base64 資料，而非「大小字串」佔位值
+        kwargs: { domain, fields, limit, context: { bin_size: false } }
       }
     })
   });
@@ -342,16 +338,20 @@ async function syncServiceUser(userId, settings) {
         [userId, taskKey, title, original_text, stageLabel, classificationLabel]
       );
       if (inserted) {
-        if (task.file) {
+        // 只在拿到「真 base64 資料」時才建主附件：擋掉 bin_size 大小字串與空值，避免寫出打不開的 0-byte／壞檔
+        if (typeof task.file === 'string' && task.file && !looksLikeSizeString(task.file)) {
           const buf = Buffer.from(task.file, 'base64');
-          const name = `ticket_${task.id}_attachment${sniffFileExt(buf)}`;
-          const relPath = saveAttachmentFile(inserted.id, name, buf);
-          await query(
-            `INSERT INTO task_attachments (task_id, filename, file_path, origin, synced_to_odoo)
-             VALUES ($1, $2, $3, 'ticket_main', true)`,
-            [inserted.id, name, relPath]
-          );
-          await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [inserted.id]);
+          if (buf.length > 0) {
+            const { ext, mime } = sniffFile(buf);
+            const name = `ticket_${task.id}_attachment${ext}`;
+            const relPath = saveAttachmentFile(inserted.id, name, buf);
+            await query(
+              `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin, synced_to_odoo)
+               VALUES ($1, $2, $3, $4, 'ticket_main', true)`,
+              [inserted.id, name, mime, relPath]
+            );
+            await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [inserted.id]);
+          }
         }
         const insertedMsgs = await insertTaskMessages(inserted.id, messages);
         await ingestMessageAttachments(service_url, inserted.id, insertedMsgs, cookies);

@@ -200,15 +200,32 @@ window.TaskDetailView = Vue.defineComponent({
     onMessageFilesSelected(e) {
       this.newMessageFiles = Array.from(e.target.files || []);
     },
+    formatSize(bytes) {
+      if (!bytes) return '0 B';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    },
     async downloadAttachment(attId, filename) {
       try {
         const res = await fetch(`/api/tasks/${this.task.id}/attachments/${attId}/download`, {
           headers: { Authorization: `Bearer ${Api.getToken()}` }
         });
-        if (!res.ok) throw new Error('下載失敗');
+        if (!res.ok) {
+          // 後端對空檔/找不到會回 JSON 錯誤訊息，讀出來讓使用者知道真因
+          const msg = await res.json().then(j => j.error).catch(() => '下載失敗');
+          throw new Error(msg || '下載失敗');
+        }
         const blob = await res.blob();
+        if (!blob.size) throw new Error('此附件無內容（0 bytes），無法開啟');
         const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
+        // 用 <a download> 觸發下載，保住原始檔名與副檔名；window.open(blobUrl) 會存成無副檔名亂數檔而打不開
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'attachment';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 30000);
       } catch (e) { showToast(e.message, 'error'); }
     },
@@ -481,21 +498,30 @@ window.TaskDetailView = Vue.defineComponent({
           <div v-if="ticketAttachments.length" style="margin-bottom:16px">
             <div class="form-section" style="margin-bottom:6px">主附件</div>
             <div v-for="a in ticketAttachments" :key="a.id" style="font-size:13px;margin-bottom:4px">
-              📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
+              <template v-if="a.size === 0">
+                📎 <span style="color:var(--text-muted)">{{ a.filename }}</span>
+                <span style="color:var(--danger);font-size:var(--fs-xs);margin-left:6px">此附件無內容（0 bytes），來源可能未成功上傳</span>
+              </template>
+              <template v-else>
+                📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
+                <span v-if="a.size" style="color:var(--text-muted);font-size:var(--fs-xs);margin-left:6px">（{{ formatSize(a.size) }}）</span>
+              </template>
             </div>
           </div>
 
           <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">對話時間軸</div>
-          <div v-if="timeline.length" class="conv-log">
-            <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
-              <div class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
-              <div v-if="item.attachments && item.attachments.length" class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
-                <span v-for="a in item.attachments" :key="a.id" style="margin-right:8px">
-                  📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
-                </span>
-              </div>
-              <div class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
-                {{ timelineMeta(item) }} · {{ formatTime(item.ts) }}
+          <div v-if="timeline.length" class="conv-panel">
+            <div class="conv-log">
+              <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
+                <div class="conv-msg" :class="timelineClass(item)">{{ item.content }}</div>
+                <div v-if="item.attachments && item.attachments.length" class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
+                  <span v-for="a in item.attachments" :key="a.id" style="margin-right:8px">
+                    📎 <a href="#" @click.prevent="downloadAttachment(a.id, a.filename)" style="color:var(--primary)">{{ a.filename }}</a>
+                  </span>
+                </div>
+                <div class="conv-msg-meta" :style="{ textAlign: timelineClass(item) === 'user' ? 'right' : 'left' }">
+                  {{ timelineMeta(item) }} · {{ formatTime(item.ts) }}
+                </div>
               </div>
             </div>
           </div>
@@ -507,7 +533,7 @@ window.TaskDetailView = Vue.defineComponent({
               <!-- 分析澄清問題：逐題各一回答框 -->
               <template v-if="clarQuestions.length">
                 <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
-                <div v-if="clarification.summary" style="font-size:var(--fs-sm);color:var(--text-muted);white-space:pre-wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:var(--space-3)">{{ clarification.summary }}</div>
+                <!-- clarification.summary（AI 分析摘要）僅供後端 AI 理解需求，畫面不顯示，避免與下方問題重複雜亂 -->
                 <div v-for="(q, idx) in clarQuestions" :key="idx" style="margin-bottom:14px">
                   <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
                     <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>

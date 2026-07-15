@@ -43,3 +43,38 @@ test('saveAttachmentFile 對惡意 taskId 也會清掉危險字元，不逃出 u
   expect(relPath).not.toContain('..');
   expect(fs.existsSync(path.join(tmpRoot, relPath))).toBe(true);
 });
+
+test('sniffFile 依 magic bytes 認出常見檔型與 mimetype', () => {
+  const { sniffFile } = attachments;
+  expect(sniffFile(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0]))).toEqual({ ext: '.png', mime: 'image/png' });
+  expect(sniffFile(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toEqual({ ext: '.jpg', mime: 'image/jpeg' });
+  expect(sniffFile(Buffer.from('GIF89a'))).toEqual({ ext: '.gif', mime: 'image/gif' });
+  expect(sniffFile(Buffer.from('%PDF-1.7'))).toEqual({ ext: '.pdf', mime: 'application/pdf' });
+  // WEBP: RIFF....WEBP
+  expect(sniffFile(Buffer.concat([Buffer.from('RIFF'), Buffer.from([0, 0, 0, 0]), Buffer.from('WEBP')]))).toEqual({ ext: '.webp', mime: 'image/webp' });
+});
+
+test('sniffFile 分辨 Office OpenXML（zip 內含 xl/ word/ ppt/）', () => {
+  const { sniffFile } = attachments;
+  const zip = ext => Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('....[Content_Types].xml...' + ext)]);
+  expect(sniffFile(zip('xl/workbook.xml')).ext).toBe('.xlsx');
+  expect(sniffFile(zip('word/document.xml')).ext).toBe('.docx');
+  expect(sniffFile(zip('ppt/presentation.xml')).ext).toBe('.pptx');
+  // 純 zip 無 Office 標記 → 一般 zip
+  expect(sniffFile(Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x11, 0x22]))).toEqual({ ext: '.zip', mime: 'application/zip' });
+});
+
+test('sniffFile 認不出時回 octet-stream、無副檔名', () => {
+  const { sniffFile } = attachments;
+  expect(sniffFile(Buffer.from('random-junk'))).toEqual({ ext: '', mime: 'application/octet-stream' });
+  expect(sniffFile(Buffer.alloc(0))).toEqual({ ext: '', mime: 'application/octet-stream' });
+});
+
+test('attachmentSize 回實際位元組數；0-byte 檔回 0', () => {
+  const rel = attachments.saveAttachmentFile(99, 'data.bin', Buffer.from('12345'));
+  expect(attachments.attachmentSize(rel)).toBe(5);
+  const empty = attachments.saveAttachmentFile(99, 'empty.bin', Buffer.alloc(0));
+  expect(attachments.attachmentSize(empty)).toBe(0);
+  // 讀不到的路徑 best-effort 回 0
+  expect(attachments.attachmentSize('task_99/nope.bin')).toBe(0);
+});

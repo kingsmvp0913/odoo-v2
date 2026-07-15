@@ -124,6 +124,7 @@ window.TaskListView = Vue.defineComponent({
       else if (this.filter === 'paused')       list = this.tasks.filter(t => t.is_paused);
       else if (this.filter === 'needs_action') list = this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused));
       else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
+      else if (this.filter === 'pending')      list = this.tasks.filter(t => !t.is_paused && t.status !== 'done');
       else                                     list = this.tasks; // 全部 = 含暫停中
       const q = this.search.toLowerCase().trim();
       if (!q) return list;
@@ -137,6 +138,7 @@ window.TaskListView = Vue.defineComponent({
     },
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
+    pendingCount() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done').length; },
     pausedCount() { return this.tasks.filter(t => t.is_paused).length; },
     allCount()    { return this.tasks.length; },
     allSelected() {
@@ -381,6 +383,9 @@ window.TaskListView = Vue.defineComponent({
         <button class="btn btn-sm" :class="filter==='review_pending' ? 'btn-primary' : 'btn-outline'" @click="filter='review_pending'">
           待審核<span v-if="reviewPendingCount > 0" class="tab-badge" :class="filter==='review_pending' ? 'tab-badge-active' : ''">{{ reviewPendingCount }}</span>
         </button>
+        <button class="btn btn-sm" :class="filter==='pending' ? 'btn-primary' : 'btn-outline'" @click="filter='pending'">
+          待處理<span v-if="pendingCount > 0" class="tab-badge" :class="filter==='pending' ? 'tab-badge-active' : ''">{{ pendingCount }}</span>
+        </button>
         <button class="btn btn-sm" :class="filter==='all' ? 'btn-primary' : 'btn-outline'" @click="filter='all'">
           全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allCount }}</span>
         </button>
@@ -410,7 +415,7 @@ window.TaskListView = Vue.defineComponent({
       </div>
       <div v-else-if="filteredTasks.length === 0" class="empty-state">
         <div style="font-size:32px">📭</div>
-        <p>{{ search ? '沒有符合搜尋的任務' : filter === 'needs_action' ? '沒有待回覆的任務' : filter === 'review_pending' ? '沒有待審核的任務' : '沒有任務' }}</p>
+        <p>{{ search ? '沒有符合搜尋的任務' : filter === 'needs_action' ? '沒有待回覆的任務' : filter === 'review_pending' ? '沒有待審核的任務' : filter === 'pending' ? '沒有待處理的任務' : '沒有任務' }}</p>
       </div>
       <div v-else>
         <div v-for="t in filteredTasks" :key="t.id"
