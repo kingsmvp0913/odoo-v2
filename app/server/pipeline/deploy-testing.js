@@ -3,24 +3,33 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules } = require('./env-agent');
+const { upgradeModules, installModuleRequirements } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
 
 const DEPLOY_LIMIT = 3;
 
-// 從 Odoo 完整 log 抽出「真正的錯誤」：錯誤/Traceback 在 log 結尾，開頭是版本/addons paths 橫幅。
-// 優先取最後一段 Traceback；否則取最後一個 ERROR/CRITICAL 行起；都沒有則取結尾。
+// 從 Odoo 完整 log 抽出「真正的錯誤」給人看：Python traceback 的原因在「結尾的例外行」
+// （如 odoo.exceptions.UserError: ...），開頭是無用的呼叫堆疊（server.py→decorator.py…）。
+// 舊版從 traceback 開頭切 → blocker 只顯示呼叫堆疊、真正原因被截掉，使用者被迫翻 log。
+// 改為：從尾端找最後一個例外行，連同其說明帶到最前，一眼看到原因（如「external dependency ... xlsxtpl」）。
 function extractOdooError(log) {
   const s = String(log == null ? '' : log).trim();
-  const tb = s.lastIndexOf('Traceback (most recent call last)');
-  if (tb !== -1) return s.slice(tb).trim().slice(0, 1200);
+  if (!s) return '(log 為空)';
   const lines = s.split(/\r?\n/);
+  // Python 例外行：以「例外類別名（結尾 Error/Exception/Warning）: 訊息」起頭，且不含日誌時間戳前綴。
+  // 從尾往上找最後一個 → 那是最外層、對人最有意義的原因。
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (/ERROR|CRITICAL/.test(lines[i])) return lines.slice(i).join('\n').trim().slice(0, 1200);
+    if (/^[\w.]*(Error|Exception|Warning|Interrupt)\b.*:/.test(lines[i].trim())) {
+      return lines.slice(i).join('\n').trim().slice(0, 800);
+    }
   }
-  // 沒有任何錯誤行＝行程在載入模組前就死了，多半是環境/啟動層問題而非模組程式碼——
+  // 無標準例外行 → 退回最後一個 ERROR/CRITICAL 行起
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/ERROR|CRITICAL/.test(lines[i])) return lines.slice(i).join('\n').trim().slice(0, 800);
+  }
+  // 完全沒有錯誤標記＝行程在載入模組前就死了，多半是環境/啟動層問題而非模組程式碼——
   // 標注出來，人與 coding agent 才不會拿 banner 當程式錯誤鑑識（健檢根因 C）
   return '（log 無 ERROR/Traceback——可能是環境或啟動層問題，非模組程式碼錯誤）\n' + s.slice(-600).trim();
 }
@@ -38,6 +47,14 @@ function saveDeployLog(taskId, count, err) {
     ].join('\n'));
     return file;
   } catch { return null; }
+}
+
+// 把 deploy 失敗的 env/code 判定寫進執行歷程，讓「為什麼停／為什麼回開發」可稽核（不再是黑箱：
+// 舊行為只在 stop 時透過 blocker_content 留痕，code→coding 那條靜默，看起來像「沒分 env/code」）。
+function emitDeployVerdict(userId, taskId, verdict) {
+  const msg = `\n\x1b[93m⚖ 部署失敗判定：${verdict}\x1b[0m\n`;
+  notify.emitToUser(userId, 'terminal:output', { taskId, data: msg });
+  return query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [taskId, msg]).catch(() => {});
 }
 
 // 部署測試區（純程式）：確保 env 運行 → odoo-bin -u 升級。
@@ -91,6 +108,15 @@ async function doDeploy(task, taskId, userId, signal) {
 
   const mods = moduleName ? [moduleName] : [];
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
+
+  // 升級前自動補裝各自訂模組宣告的 Python 相依（env 建置只裝 Odoo 核心 requirements，模組自帶的漏裝）。
+  // best-effort：裝不動不硬擋，真正缺的相依會讓下方升級以清楚錯誤停下。
+  try {
+    const reqLog = await installModuleRequirements(task.project_id, signal);
+    if (reqLog) notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 補裝模組 Python 相依...\n` });
+  } catch { /* best-effort */ }
+  if (signal?.aborted) return;
+
   let err = null;
   try {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 測試區升級模組 ${moduleName || 'all'}...\n` });
@@ -115,6 +141,7 @@ async function doDeploy(task, taskId, userId, signal) {
 
     if (cls !== 'code') {
       // 環境/仍暫時性問題：停下等人工修環境，不動 coding 計數。
+      await emitDeployVerdict(userId, taskId, '環境問題（非程式碼）→ 停等人工，不退開發');
       // env 路徑不累加 deploy_retry_count，log 檔名用時間戳避免重複覆蓋、丟失前次診斷
       const logFile = saveDeployLog(taskId, `env-${Date.now()}`, err);
       const logRef = logFile ? `\n完整 log：${logFile}` : '';
@@ -128,6 +155,9 @@ async function doDeploy(task, taskId, userId, signal) {
 
     // 程式碼問題：退回 coding 修正並計數（滿上限 stopped）
     const nextCount = (task.deploy_retry_count || 0) + 1;
+    await emitDeployVerdict(userId, taskId, nextCount >= DEPLOY_LIMIT
+      ? `程式問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`
+      : `程式問題 → 退開發修正（第 ${nextCount}/${DEPLOY_LIMIT} 次）`);
     const logFile = saveDeployLog(taskId, nextCount, err);
     const logRef = logFile ? `\n完整 log：${logFile}` : '';
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[部署測試區升級失敗]')", [taskId]);

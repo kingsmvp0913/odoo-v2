@@ -5,6 +5,7 @@ const { newDb } = require('pg-mem');
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn(),
+  installModuleRequirements: jest.fn(),
   runEnvSetup: jest.fn()
 }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
@@ -54,16 +55,39 @@ test('extractOdooError：抽出結尾真正錯誤，而非開頭版本/addons pa
   expect(out).not.toContain('Odoo version 17.0');
 });
 
-test('extractOdooError：優先抓 Traceback 段', () => {
+// 意圖：blocker 要讓人一眼看到原因。Python traceback 原因在結尾例外行，開頭是無用呼叫堆疊；
+// 舊版從開頭切 → 使用者只看到 server.py→decorator.py、真正原因被截掉、被迫翻 log。
+test('extractOdooError：多層 traceback → 帶出結尾例外行（真正原因），非開頭呼叫堆疊', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Traceback (most recent call last):',
+    '  File ".../odoo/service/server.py", line 1422, in preload_registries',
+    '    registry = Registry.new(dbname, update_module=update_module)',
+    '  File ".../decorator.py", line 232, in fun',
+    '    return caller(func, *(extras + args), **kw)',
+    'odoo.exceptions.UserError: Unable to install module "alnas_xlsx" because an external dependency is not met: Python library not installed: xlsxtpl'
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out.startsWith('odoo.exceptions.UserError')).toBe(true); // 例外行放最前
+  expect(out).toContain('xlsxtpl');                               // 真正原因帶出來
+  expect(out).toContain('external dependency');
+  expect(out).not.toContain('preload_registries');               // 開頭無用的呼叫堆疊不塞給人
+});
+
+// 舊意圖是「回傳整段 traceback、開頭 Traceback header」；改版後改為「原因（結尾例外行）放最前」——
+// blocker 一眼可讀，不再開頭塞無用 header／banner（完整 traceback 仍在 saveDeployLog 落的 log 檔供 agent 定位）。
+test('extractOdooError：traceback → 帶出結尾例外行（原因）放最前，不含 banner/header', () => {
   const { extractOdooError } = require('../pipeline/deploy-testing');
   const log = 'banner\naddons paths...\nTraceback (most recent call last)\n  File "x.py", line 3\nKeyError: sale_order';
   const out = extractOdooError(log);
-  expect(out.startsWith('Traceback')).toBe(true);
+  expect(out.startsWith('KeyError')).toBe(true);   // 原因在最前
   expect(out).toContain('KeyError');
+  expect(out).not.toContain('banner');             // 開頭 banner/header 不塞給人
 });
 
 beforeEach(async () => {
   envAgent.upgradeModules.mockReset();
+  envAgent.installModuleRequirements.mockReset().mockResolvedValue('');
   envAgent.runEnvSetup.mockReset();
   require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   const git = require('../pipeline/git');
@@ -186,6 +210,18 @@ test('升級失敗第 3 次（code 類）→ stopped', async () => {
   expect(t.deploy_retry_count).toBe(3);
 });
 
+// 意圖：升級前自動補裝各模組宣告的 Python 相依（env 建置只裝 Odoo 核心 requirements，模組自帶的漏裝→
+// 宣告 external dependency 的模組安裝時就缺）。必須在 upgradeModules 之前跑，相依才會就位。
+test('deploy 升級前先補裝模組 Python 相依，且在 upgradeModules 之前', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockResolvedValue({ ok: true });
+  const id = await makeTask(0);
+  await runDeployTesting(id, userId);
+  expect(envAgent.installModuleRequirements).toHaveBeenCalledWith(projectId, undefined);
+  expect(envAgent.installModuleRequirements.mock.invocationCallOrder[0])
+    .toBeLessThan(envAgent.upgradeModules.mock.invocationCallOrder[0]);   // 補裝在升級之前
+});
+
 test('環境起不來 → stopped（不退 coding、不升級）', async () => {
   // 無 odoo_envs row；runEnvSetup 不改狀態 → 仍非 running
   envAgent.runEnvSetup.mockResolvedValue(undefined);
@@ -243,6 +279,11 @@ test('A-3 env 類失敗（DB 連不上）→ stopped、blocker_type=env、deploy
   expect(t.status).toBe('stopped');            // 不退 coding
   expect(t.blocker_type).toBe('env');
   expect(t.deploy_retry_count).toBe(0);        // 環境問題不佔計數（＝根因 B 修好）
+  // 判定寫進執行歷程，人工能看出「為什麼停」（不再黑箱）。pg-mem 的 LIKE 抓不到中文子字串，改 JS 過濾
+  const { rows: ev } = await dbModule.query('SELECT content FROM task_events WHERE task_id=$1', [id]);
+  const verdict = ev.map(r => r.content).filter(c => c.includes('部署失敗判定'));
+  expect(verdict).toHaveLength(1);
+  expect(verdict[0]).toMatch(/環境問題/);
 });
 
 test('A-3 code 類失敗（ParseError）→ 退 coding、計數+1（現行不破）', async () => {
@@ -253,6 +294,12 @@ test('A-3 code 類失敗（ParseError）→ 退 coding、計數+1（現行不破
   const { rows: [t] } = await dbModule.query('SELECT status, deploy_retry_count FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(t.deploy_retry_count).toBe(1);
+  // 判定寫進歷程，人工能看出「為什麼回開發、第幾次」（不再黑箱）。pg-mem LIKE 抓不到中文，改 JS 過濾
+  const { rows: ev } = await dbModule.query('SELECT content FROM task_events WHERE task_id=$1', [id]);
+  const verdict = ev.map(r => r.content).filter(c => c.includes('部署失敗判定'));
+  expect(verdict).toHaveLength(1);
+  expect(verdict[0]).toMatch(/程式問題/);
+  expect(verdict[0]).toMatch(/第 1\/3/);
 });
 
 test('A-3 transient 失敗 → 自動重試一次；第二次成功 → playwright，計數不變', async () => {
