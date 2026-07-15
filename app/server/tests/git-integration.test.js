@@ -131,3 +131,38 @@ test('syncWithMain：與 main 衝突 → hasConflicts＋檔名（不假成功）
   expect(r.conflictFiles).toContain('a.py');
   await git.abortMerge(repo);
 }, 30000);
+
+// 意圖：主 clone 工作樹是 deploy 目標，odoo-bin -u 會在其中留下產物弄髒工作樹。
+// 舊 resetTestingToMain 用普通 checkout，從別的分支（updateMainClone 先 pull 把樹切到 main）切回
+// testing 時會被「local changes would be overwritten」擋住 → 整個重建默默失敗、testing 沒跟上 main
+// （task 84 實測卡住主因）。此測驗證髒工作樹下仍能強制重長 testing 到最新 main。
+test('resetTestingToMain：工作樹髒（tracked 改動＋未追蹤碰撞）仍強制重長 testing 到最新 main', async () => {
+  const repo = await makeRepo();                 // main: a.py=x=1
+  // testing 從舊 main 建，且獨有一個 main 沒有的追蹤檔（供製造未追蹤碰撞）
+  await sh(repo, 'checkout', '-b', 'testing');
+  await write(repo, 't_only.py', 'only=1\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'testing 獨有檔');
+  // main 前進：改碼＋新增依賴模組目錄（模擬使用者後來 push 的 web_login_styles）
+  await sh(repo, 'checkout', 'main');
+  await write(repo, 'a.py', 'x = 2\n');
+  await write(repo, 'dep_mod/__init__.py', '# dep\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'main 前進：改碼＋加依賴模組');
+  // 模擬 updateMainClone：pull 後工作樹停在 main，再被 deploy 產物弄髒兩種方式：
+  await sh(repo, 'checkout', 'main');
+  await write(repo, 'a.py', 'x = 999  # tracked 髒改動\n');       // (1) tracked 改動 → 普通 checkout 被擋
+  await write(repo, 't_only.py', 'untracked collide\n');          // (2) 未追蹤檔，與 testing 追蹤路徑相撞 → 連 -f 都被擋
+
+  // 舊碼在此會拋錯（checkout testing 被兩種髒法擋住）→ 重建默默失敗；新碼先 clean 再 -f 強制切換後 reset
+  await git.resetTestingToMain(repo);
+
+  expect((await sh(repo, 'branch', '--show-current')).stdout.trim()).toBe('testing');
+  const testingSha = (await sh(repo, 'rev-parse', 'testing')).stdout.trim();
+  const mainSha = (await sh(repo, 'rev-parse', 'main')).stdout.trim();
+  expect(testingSha).toBe(mainSha);                                              // testing 已重長到最新 main
+  expect(fs.existsSync(path.join(repo, 'dep_mod', '__init__.py'))).toBe(true);   // 依賴模組進了 testing
+  expect(fs.existsSync(path.join(repo, 't_only.py'))).toBe(false);              // reset 到 main（無此檔）→ 移除
+  expect(fs.readFileSync(path.join(repo, 'a.py'), 'utf8').replace(/\r/g, '')).toBe('x = 2\n'); // 髒改動丟棄、還原成 main 版（正規化 CRLF）
+  expect((await sh(repo, 'status', '--porcelain')).stdout.trim()).toBe('');      // 工作樹乾淨
+}, 30000);

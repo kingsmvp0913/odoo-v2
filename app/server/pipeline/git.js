@@ -237,9 +237,23 @@ async function revParse(repoPath, ref) {
 
 // 重建 testing：checkout testing（缺則建）後 reset --hard 到最新 main。
 // approved 任務碼已在 main，reset 到 main 即自動含入；呼叫端再重併在飛任務。
+// 主 clone 工作樹是 deploy 目標，odoo-bin -u 會在其中留下產物；若沿用普通 checkout，從別的分支
+// （如 updateMainClone 先 pull 把樹切到 main）切回 testing 會被「local/untracked would be overwritten」
+// 擋住 → 整個重建默默失敗、testing 沒跟上 main（實測 task 84 卡住主因）。重建本就是破壞性操作
+// （目的即丟掉 testing 現況重長到 main），故切換前先清 pyc、並用 -f 強制切換、reset 後 clean 未追蹤殘留。
 async function resetTestingToMain(repoPath) {
   const main = await getMainBranch(repoPath);
-  await ensureTestingBranch(repoPath);
+  ensureGitignorePyc(repoPath);
+  await discardPyc(repoPath);
+  // 切換前先清未追蹤殘留（deploy/graphify 產物）：未追蹤檔若與 testing 追蹤的檔路徑相撞，
+  // 連 checkout -f 都會被「untracked working tree files would be overwritten」擋住。-d 不含 -x，保留 .gitignore 忽略項。
+  await execFileAsync('git', ['clean', '-fd'], { cwd: repoPath }).catch(() => {});
+  // -f 強制切換，丟棄 tracked 檔的髒改動（deploy 目標工作樹常被 odoo-bin 弄髒）
+  try {
+    await execFileAsync('git', ['checkout', '-f', 'testing'], { cwd: repoPath });
+  } catch {
+    await execFileAsync('git', ['checkout', '-f', '-B', 'testing', main], { cwd: repoPath });
+  }
   await execFileAsync('git', ['reset', '--hard', main], { cwd: repoPath });
 }
 
