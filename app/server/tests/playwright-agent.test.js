@@ -69,10 +69,21 @@ async function makeTask(pwCount = 0) {
 const statusOf = async (id) => (await dbModule.query('SELECT status, blocker_type, pw_retry_count FROM tasks WHERE id=$1', [id])).rows[0];
 
 test('tour 全過（exit0）→ review_pending', async () => {
-  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'idx_x: 1 passed, 0 failed' });
+  // 真實通過的 log 含 odoo.tests 命名空間（HttpCase/tour 執行必經該 logger），代表確實跑了測試
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'INFO test_x odoo.tests.runner: idx_x: 1 tests 0.50s 0 failed, 0 error(s)' });
   const id = await makeTask();
   await runTourStage(id, userId);
   expect((await statusOf(id)).status).toBe('review_pending');
+});
+
+test('exit0 但 log 無測試執行痕跡（--test-tags 匹配 0 個）→ 退 coding（防假綠燈，健檢項2）', async () => {
+  // agent 沒寫出測試檔或 test tag 拼錯 → odoo-bin 仍 exit0，但 log 無 odoo.tests＝這關等於沒測
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'INFO test_x odoo.modules.loading: Modules loaded.' });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  const s = await statusOf(id);
+  expect(s.status).toBe('coding_running');
+  expect(s.pw_retry_count).toBe(1);
 });
 
 test('exit0 但 log 含 Chrome executable not found → env stopped（防假綠燈）', async () => {
@@ -129,7 +140,7 @@ test('tour 檔先併入 testing（逐 repo）、之後才跑 runTourTests', asyn
     root: '/repos/pwp',
     repos: [{ label: 'main', local_path: '/repos/pwp/main', subdir: 'main' }]
   });
-  envAgent.runTourTests.mockResolvedValue({ ok: true, log: '1 passed' });
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests 0 failed, 0 error(s)' });
   const id = await makeBranchTask();
   await runTourStage(id, userId);
 

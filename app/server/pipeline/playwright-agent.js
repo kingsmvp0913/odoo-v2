@@ -122,7 +122,7 @@ async function runTourStage(taskId, userId, signal) {
   //    （功能碼已在 merge 關卡併過，這次只帶入 tour 測試檔；mergeInto 同時保證 testing 已檢出）。
   //    動共用主 clone＋測試 DB → 全程持專案鎖，與同專案 merge/deploy/analysis 序列化。
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
-  let log = '', err = null, mergeStop = null;
+  let log = '', err = null, mergeStop = null, cls = null;
   await withProjectLock(task.project_id, async () => {
     for (const repo of (info.repos || [])) {
       try {
@@ -144,10 +144,14 @@ async function runTourStage(taskId, userId, signal) {
     try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
     if (err && signal?.aborted) return;
 
-    // transient（網路抖動/被砍）→ 自動重試一次，不佔計數（比照 deploy）
-    if (err && (await classifyFailureWithAgent(err.message, clsCtx)) === 'transient') {
+    // 失敗只分類一次（健檢 F3：舊版 148/172 對同一 err 逐字問 haiku 兩次）。
+    // 逾時被殺當環境問題、不重試（健檢 F8）；transient 自動重試一次，重試仍敗直接判 env（不重問，避免漂移）。
+    if (err) cls = err.killed ? 'env' : await classifyFailureWithAgent(err.message, clsCtx);
+    if (err && cls === 'transient') {
       err = null;
       try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
+      if (err && signal?.aborted) return;
+      if (err) cls = 'env'; // 重試仍敗（含再次逾時）：一律當環境問題停等人工，不重新分類
     }
   });
   // 手動暫停中止子行程：非失敗，狀態原地不動，解除暫停後從這一關重跑
@@ -163,13 +167,21 @@ async function runTourStage(taskId, userId, signal) {
       await stopTask(taskId, userId, 'tour 被跳過（測試機找不到 Chrome），E2E 未實際執行。請確認測試環境已安裝 Google Chrome。', 'env');
       return true;
     }
+    // 防假綠燈（健檢項2）：agent 沒寫出測試檔／test tag 拼錯 → --test-tags /module 匹配 0 個測試，
+    // odoo-bin 仍 exit 0＝假綠燈直達人工審核。真的有跑測試時 log 必含 odoo.tests 命名空間
+    //（HttpCase/tour 一律走該 logger）；完全沒有＝這關等於沒測，退 coding 補測試。
+    if (!/odoo\.tests/i.test(log)) {
+      await bounceToCoding(task, taskId, userId,
+        'E2E 未實際執行任何測試（--test-tags 匹配 0 個測試）：多為 tour 測試檔未產出或 test tag 未對到模組。請確認測試檔已寫入模組並正確標記。');
+      return true;
+    }
     await query("UPDATE tasks SET status='review_pending', updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
     return true;
   }
 
-  // 失敗分類（比照 deploy）：env／env 已非 running → 停等修環境；code → 退 coding 計數
-  const cls = await classifyFailureWithAgent(err.message, clsCtx);
+  // 失敗分類（比照 deploy）：env／env 已非 running → 停等修環境；code → 退 coding 計數。
+  // cls 已在 lock 內算過（健檢 F3），此處直接重用，不再問第二次 haiku。
   const odooErr = extractOdooError(err.message);
   const logFile = saveTourLog(taskId, err);
   const logRef = logFile ? `\n完整 log：${logFile}` : '';
