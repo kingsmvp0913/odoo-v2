@@ -16,6 +16,14 @@ jest.mock('../pipeline/rebuild-testing', () => ({
 }));
 const rebuildMod = require('../pipeline/rebuild-testing');
 
+// 項11（刪除/封存先中止在飛 agent）要斷言 abortTask 被呼叫：routes 於載入時解構 runner 匯出，
+// 事後 spyOn 攔不到 → 比照 admin-*-routes 既有寫法直接 mock runner（其餘匯出照實供 createApp 其他 route 用）
+jest.mock('../pipeline/runner', () => ({
+  ...jest.requireActual('../pipeline/runner'),
+  runPipeline: jest.fn().mockResolvedValue({ dispatched: 0 }),
+  abortTask: jest.fn()
+}));
+
 process.env.JWT_SECRET = 'test-tasks-secret';
 
 let app, dbModule, adminToken, userId;
@@ -24,7 +32,26 @@ beforeAll(async () => {
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule = require('../db');
-  dbModule._setPoolForTesting(new Pool());
+  const pool = new Pool();
+  // pg-mem 缺陷 shim（比照他檔 LIKE shim）：pg-mem 對 `= ANY($n::int[])`＋JS 陣列參數一律回空集合
+  // （真 PostgreSQL 正常），批次 delete/archive 路徑會被誤測成 no-op。改寫成 IN (字面數字) 還原語意。
+  const rawQuery = pool.query.bind(pool);
+  pool.query = (sql, params, ...rest) => {
+    if (typeof sql === 'string' && Array.isArray(params)) {
+      let m;
+      while ((m = sql.match(/= ANY\(\$(\d+)::int\[\]\)/))) {
+        const idx = +m[1] - 1;
+        const arr = params[idx];
+        if (!Array.isArray(arr)) break;
+        const lit = arr.map(Number).filter(Number.isFinite);
+        sql = sql.replace(m[0], lit.length ? `IN (${lit.join(',')})` : 'IN (NULL)');
+        params = params.slice(0, idx).concat(params.slice(idx + 1));
+        sql = sql.replace(/\$(\d+)/g, (t, d) => (+d > idx + 1 ? `$${+d - 1}` : t));
+      }
+    }
+    return rawQuery(sql, params, ...rest);
+  };
+  dbModule._setPoolForTesting(pool);
   await dbModule.migrate();
   const { createApp } = require('../index');
   app = createApp();
@@ -861,4 +888,48 @@ test('POST /api/tasks/:id/answer → reject_confirm_pending 回覆導回 reject_
   expect(row.status).toBe('reject_triage');
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [t.id]);
   expect(logs.some(l => l.role === 'user' && l.content.includes('整區預設收合'))).toBe(true);
+});
+
+
+// 項11 意圖：刪除／封存執行中任務必須先中止在飛 agent，否則子行程續跑到逾時（最長 30 分鐘）、
+// 甚至邊清 worktree 邊寫檔。四個入口（單筆/批次 × 刪除/封存）都要呼叫 abortTask。
+test('DELETE /api/tasks/:id → 先 abortTask 中止在飛 agent（項11）', async () => {
+  const { abortTask } = require('../pipeline/runner');
+  abortTask.mockClear();
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1, 'task_abort_del', 'odoo', 'T', 'c', 'coding_running') RETURNING id`, [userId]
+  );
+  const res = await request(app).delete(`/api/tasks/${t.id}`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(abortTask).toHaveBeenCalledWith(String(t.id));
+});
+
+test('POST /api/tasks/:id/archive → 先 abortTask（項11）', async () => {
+  const { abortTask } = require('../pipeline/runner');
+  abortTask.mockClear();
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1, 'task_abort_arc', 'odoo', 'T', 'c', 'qa_running') RETURNING id`, [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/archive`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(abortTask).toHaveBeenCalledWith(String(t.id));
+});
+
+test('批次刪除／批次封存 → 每筆先 abortTask（項11）', async () => {
+  const { abortTask } = require('../pipeline/runner');
+  const mk = async sfx => (await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1, $2, 'odoo', 'T', 'c', 'coding_running') RETURNING id`, [userId, `task_abort_${sfx}`]
+  )).rows[0].id;
+  const a = await mk('b1'), b = await mk('b2');
+  abortTask.mockClear();
+  const del = await request(app).post('/api/tasks/batch/delete').send({ ids: [a] }).set('Authorization', `Bearer ${adminToken}`);
+  expect(del.status).toBe(200);
+  expect(abortTask).toHaveBeenCalledWith(a);
+  abortTask.mockClear();
+  const arc = await request(app).post('/api/tasks/batch/archive').send({ ids: [b] }).set('Authorization', `Bearer ${adminToken}`);
+  expect(arc.status).toBe(200);
+  expect(abortTask).toHaveBeenCalledWith(b);
 });

@@ -436,6 +436,36 @@ function registerRoutes(app) {
   });
 
   // Archive task (admin only — hides from main view, visible in archived tab)
+  // batch 路由必須先於 `/api/tasks/:id/...` 註冊：Express 依註冊順序比對，後註冊的
+  // batch/archive 會被 :id/archive 以 id='batch' 吞掉（整數轉型 500，批次封存整個失效）。
+  app.post('/api/tasks/batch/archive', verifyToken, async (req, res) => {
+    try {
+      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
+      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
+      const ids = (req.body.ids || []).map(Number).filter(Boolean);
+      if (!ids.length) return res.json({ ok: true, affected: 0 });
+      ids.forEach(id => abortTask(id)); // 封存執行中任務：中止在飛 agent（健檢項11）
+      const { rowCount } = await query(
+        'UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
+        [ids, req.userId]
+      );
+      res.json({ ok: true, affected: rowCount });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/tasks/batch/unarchive', verifyToken, async (req, res) => {
+    try {
+      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
+      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可解除封存' });
+      const ids = (req.body.ids || []).map(Number).filter(Boolean);
+      if (!ids.length) return res.json({ ok: true, affected: 0 });
+      const { rowCount } = await query(
+        'UPDATE tasks SET is_hidden = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
+        [ids, req.userId]
+      );
+      res.json({ ok: true, affected: rowCount });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.post('/api/tasks/:id/archive', verifyToken, async (req, res) => {
     try {
       const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
@@ -546,34 +576,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/tasks/batch/archive', verifyToken, async (req, res) => {
-    try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
-      const ids = (req.body.ids || []).map(Number).filter(Boolean);
-      if (!ids.length) return res.json({ ok: true, affected: 0 });
-      ids.forEach(id => abortTask(id)); // 封存執行中任務：中止在飛 agent（健檢項11）
-      const { rowCount } = await query(
-        'UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
-        [ids, req.userId]
-      );
-      res.json({ ok: true, affected: rowCount });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
 
-  app.post('/api/tasks/batch/unarchive', verifyToken, async (req, res) => {
-    try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可解除封存' });
-      const ids = (req.body.ids || []).map(Number).filter(Boolean);
-      if (!ids.length) return res.json({ ok: true, affected: 0 });
-      const { rowCount } = await query(
-        'UPDATE tasks SET is_hidden = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
-        [ids, req.userId]
-      );
-      res.json({ ok: true, affected: rowCount });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
 
   // User answer to clarification question
   app.post('/api/tasks/:id/answer', verifyToken, async (req, res) => {
