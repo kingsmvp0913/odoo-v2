@@ -12,7 +12,6 @@
 
 const path = require('path');
 const { query } = require('../db');
-const { analyzeTask } = require('./analysis');
 const { createBranch, checkoutDefault, ensureWorktreeAtMain, getMainBranch } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const notify = require('../notify');
@@ -73,13 +72,16 @@ async function handleCs(task, settings, signal) {
   await runCsAgent(task.id, task.user_id, signal);
 }
 
-// analysis_running：專案任務走 task-agent，否則走 analysis.js
+// analysis_running：task-agent 分析；未綁專案（runTaskAnalysis 回 false）則停止
 async function handleAnalysis(task, settings, signal) {
-  if (task.project_id) {
-    const { runTaskAnalysis } = require('./task-agent');
-    await runTaskAnalysis(task.id, task.user_id, signal);
-  } else {
-    await analyzeTask(task.id, signal);
+  const { runTaskAnalysis } = require('./task-agent');
+  const handled = await runTaskAnalysis(task.id, task.user_id, signal);
+  if (!handled) {
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_content='任務未綁定專案，無法分析', updated_at=NOW() WHERE id=$1",
+      [task.id]
+    );
+    notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'stopped' });
   }
 }
 

@@ -4,7 +4,6 @@ const { newDb } = require('pg-mem');
 // 全機上限壓到 6，讓「跨 user 併發不超派」測試不必塞 30 個任務即可觸發（runner 於載入時讀此 env）
 process.env.PIPELINE_MAX_GLOBAL = '6';
 
-jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn().mockResolvedValue(undefined),
   checkoutDefault: jest.fn().mockResolvedValue(undefined),
@@ -20,7 +19,7 @@ jest.mock('../pipeline/playwright-agent', () => ({ runTourStage: jest.fn().mockR
 // runTask 狀態真的推進時會自動續跑（見 runner.js 的 auto-continue）；branch_pending→coding_running 屬實際變化，
 // 會立刻串連派工到 coding_running，故需 mock task-agent 避免打到真的邏輯（非專案任務原本就會 return false）
 jest.mock('../pipeline/task-agent', () => ({
-  runTaskAnalysis: jest.fn().mockResolvedValue(undefined),
+  runTaskAnalysis: jest.fn().mockResolvedValue(true),
   runTaskCoding: jest.fn().mockResolvedValue(true)
 }));
 jest.mock('../pipeline/reject-triage', () => ({ runRejectTriage: jest.fn().mockResolvedValue(undefined) }));
@@ -56,7 +55,6 @@ afterAll(() => { dbModule._setPoolForTesting(null); delete process.env.PIPELINE_
 beforeEach(async () => {
   const git = require('../pipeline/git');
   const cs = require('../pipeline/cs-agent');
-  require('../pipeline/analysis').analyzeTask.mockReset();
   git.createBranch.mockReset().mockResolvedValue(undefined);
   git.checkoutDefault.mockReset().mockResolvedValue(undefined);
   git.ensureWorktreeAtMain.mockReset().mockResolvedValue(undefined);
@@ -66,7 +64,7 @@ beforeEach(async () => {
   require('../pipeline/qa-agent').runQaAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/deploy-testing').runDeployTesting.mockReset().mockResolvedValue(undefined);
   require('../pipeline/playwright-agent').runTourStage.mockReset().mockResolvedValue(undefined);
-  require('../pipeline/task-agent').runTaskAnalysis.mockReset().mockResolvedValue(undefined);
+  require('../pipeline/task-agent').runTaskAnalysis.mockReset().mockResolvedValue(true);
   require('../pipeline/task-agent').runTaskCoding.mockReset().mockResolvedValue(true);
   require('../pipeline/reject-triage').runRejectTriage.mockReset().mockResolvedValue(undefined);
   require('../pipeline/respec-agent').runRespecPatch.mockReset().mockResolvedValue(undefined);
@@ -87,13 +85,27 @@ async function insertTask(status, suffix = Date.now(), projectId = null) {
 
 // --- handler 分派 ---
 
-test('analysis_running → analyzeTask', async () => {
-  const { analyzeTask } = require('../pipeline/analysis');
-  analyzeTask.mockResolvedValue({ next_status: 'branch_pending', analysis_yaml: 'yaml' });
-  const taskId = await insertTask('analysis_running');
+test('analysis_running 綁專案 → runTaskAnalysis', async () => {
+  const { runTaskAnalysis } = require('../pipeline/task-agent');
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('R 專案', '17.0') RETURNING id"
+  );
+  const taskId = await insertTask('analysis_running', Date.now(), p.id);
   const r = await run();
   expect(r.dispatched).toBe(1);
-  expect(analyzeTask).toHaveBeenCalledWith(taskId, expect.anything());
+  expect(runTaskAnalysis).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+// 源頭已保證同步進來的任務都綁專案；萬一有未綁專案任務漏進分析關，runTaskAnalysis 回 false，
+// 應直接 stopped（與 coding 關對稱），不再走已移除的 analysis-basic 一次性分析路徑。
+test('analysis_running 未綁專案 → runTaskAnalysis 回 false → stopped', async () => {
+  const { runTaskAnalysis } = require('../pipeline/task-agent');
+  runTaskAnalysis.mockResolvedValue(false);
+  const taskId = await insertTask('analysis_running');
+  await run();
+  const { rows } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id = $1', [taskId]);
+  expect(rows[0].status).toBe('stopped');
+  expect(rows[0].blocker_content).toContain('專案');
 });
 
 test('branch_pending 非專案 → createBranch → coding_running', async () => {

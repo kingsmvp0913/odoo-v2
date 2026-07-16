@@ -259,17 +259,22 @@ async function syncOdooUser(userId, settings) {
     const stageLabel = task.stage_id ? task.stage_id[1] : null;
 
     const taskKey = `task_odoo_${task.id}`;
+    // 依 Odoo 專案名對應平台專案：所有同步進來的任務都必須綁得到專案，綁不到的新任務不入庫
+    const odooProjectName = task.project_id ? task.project_id[1] : null;
+    const projId = await findProjectBySourceName('odoo_project_name', odooProjectName);
     const existing = await query(
       'SELECT id, status, is_hidden FROM tasks WHERE user_id = $1 AND task_id = $2',
       [userId, taskKey]
     );
     if (existing.rows.length === 0) {
+      // 綁不到對應專案 → 不同步進來（來源仍在 Odoo，對應建好後下次 sync 會自動補拉）
+      if (!projId) continue;
       const { rows: [inserted] } = await query(
-        `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, status)
-         VALUES ($1, $2, 'odoo', $3, $4, $5, 'new')
+        `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, project_id, status)
+         VALUES ($1, $2, 'odoo', $3, $4, $5, $6, 'new')
          ON CONFLICT (user_id, task_id) DO NOTHING
          RETURNING id`,
-        [userId, taskKey, task.name, original_text, stageLabel]
+        [userId, taskKey, task.name, original_text, stageLabel, projId]
       );
       if (inserted) {
         const insertedMsgs = await insertTaskMessages(inserted.id, messages);
@@ -283,16 +288,6 @@ async function syncOdooUser(userId, settings) {
         const insertedMsgs = await insertTaskMessages(t.id, messages);
         await ingestMessageAttachments(odoo_url, t.id, insertedMsgs, cookies);
       }
-    }
-
-    // 自動綁定專案（對新任務與既有未綁定任務都生效；project_id IS NULL 保證不動到已綁定者）
-    const odooProjectName = task.project_id ? task.project_id[1] : null;
-    const projId = await findProjectBySourceName('odoo_project_name', odooProjectName);
-    if (projId) {
-      await query(
-        'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
-        [projId, userId, taskKey]
-      );
     }
   }
   return { added, found };
@@ -325,17 +320,21 @@ async function syncServiceUser(userId, settings) {
     const classificationLabel = task.classification ? task.classification[1] : null;
 
     const taskKey = `task_service_${task.id}`;
+    // 依 respondent 名對應平台專案：綁不到的新工單不入庫（對應建好後下次 sync 自動補拉）
+    const respondentName = task.respondent ? task.respondent[1] : null;
+    const projId = await findProjectBySourceName('service_respondent_name', respondentName);
     const existing = await query(
       'SELECT id, status, is_hidden FROM tasks WHERE user_id = $1 AND task_id = $2',
       [userId, taskKey]
     );
     if (existing.rows.length === 0) {
+      if (!projId) continue;
       const { rows: [inserted] } = await query(
-        `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, classification_label, status, task_type)
-         VALUES ($1, $2, 'service', $3, $4, $5, $6, 'cs_running', 'service')
+        `INSERT INTO tasks (user_id, task_id, source, title, original_text, stage_label, classification_label, project_id, status, task_type)
+         VALUES ($1, $2, 'service', $3, $4, $5, $6, $7, 'cs_running', 'service')
          ON CONFLICT (user_id, task_id) DO NOTHING
          RETURNING id`,
-        [userId, taskKey, title, original_text, stageLabel, classificationLabel]
+        [userId, taskKey, title, original_text, stageLabel, classificationLabel, projId]
       );
       if (inserted) {
         // 只在拿到「真 base64 資料」時才建主附件：擋掉 bin_size 大小字串與空值，避免寫出打不開的 0-byte／壞檔
@@ -363,16 +362,6 @@ async function syncServiceUser(userId, settings) {
         const insertedMsgs = await insertTaskMessages(t.id, messages);
         await ingestMessageAttachments(service_url, t.id, insertedMsgs, cookies);
       }
-    }
-
-    // 自動綁定專案（對新任務與既有未綁定任務都生效；project_id IS NULL 保證不動到已綁定者）
-    const respondentName = task.respondent ? task.respondent[1] : null;
-    const projId = await findProjectBySourceName('service_respondent_name', respondentName);
-    if (projId) {
-      await query(
-        'UPDATE tasks SET project_id = $1 WHERE user_id = $2 AND task_id = $3 AND project_id IS NULL',
-        [projId, userId, taskKey]
-      );
     }
   }
   return { added, found: tasks.length };

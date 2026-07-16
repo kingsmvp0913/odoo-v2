@@ -97,11 +97,14 @@ test('syncUser with no tasks → returns { added: 0 } for both sources', async (
 });
 
 test('syncUser adds new Odoo task to DB', async () => {
+  await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, odoo_project_name) VALUES ('入庫測試專案 A', '17.0', 'Proj-99')"
+  );
   setupOdooMocks({
     tasks: [{
       id: 9001,
       name: 'Test Task A',
-      project_id: [1, 'My Project'],
+      project_id: [1, 'Proj-99'],
       stage_id: [2, 'In Progress'],
       description: '<p>Task description</p>'
     }],
@@ -150,6 +153,9 @@ test('syncUser skips duplicate tasks (ON CONFLICT DO NOTHING)', async () => {
 });
 
 test('syncUser adds new Service task to DB', async () => {
+  await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, service_respondent_name) VALUES ('客服對應專案', '17.0', '王小明')"
+  );
   setupOdooMocks({ tasks: [] });
   setupServiceMocks({
     tasks: [{
@@ -519,4 +525,49 @@ test('writebackTaskMessage 帶附件 → 先 ir.attachment.create 再 message_po
 
   const postCallBody = JSON.parse(mockFetch.mock.calls[2][1].body);
   expect(postCallBody.params.kwargs.attachment_ids).toEqual([5555]);
+});
+
+// 意圖：所有同步進來的任務都必須綁得到平台專案；綁不到對應專案的「新」Odoo 任務不該入庫，
+// 否則會產生無專案任務、卡在無法開發。來源仍在 Odoo，下次對應建好後 sync 會自動補拉。
+test('syncUser 新 Odoo 任務綁不到對應專案 → 不入庫（added=0、tasks 無列）', async () => {
+  setupOdooMocks({
+    tasks: [{
+      id: 9500,
+      name: '無專案對應任務',
+      project_id: [88, 'ZZZ 查無對應專案'],
+      stage_id: [2, 'In Progress'],
+      description: '<p>x</p>'
+    }],
+    messages: [{ id: 801, date: '2026-07-01 09:00:00', body: '<p>c</p>' }]
+  });
+  setupServiceMocks({ tasks: [] });
+
+  const result = await syncModule.syncUser(userId);
+  expect(result.odoo.added).toBe(0);
+
+  const { rows } = await dbModule.query(
+    "SELECT id FROM tasks WHERE task_id = 'task_odoo_9500' AND user_id = $1", [userId]
+  );
+  expect(rows.length).toBe(0);
+});
+
+// 意圖：客服工單同樣依 respondent 對應專案；respondent 綁不到平台專案的「新」工單不入庫。
+test('syncUser 新客服工單 respondent 綁不到對應專案 → 不入庫（added=0、tasks 無列）', async () => {
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3500, name_seq: 'SQ-3500', subject: '無對應工單',
+      state: 'open', question_description: '<p>desc</p>',
+      classification: false, respondent: [99, '查無此對應人ZZZ'], file: false
+    }],
+    messages: [{ id: 802, date: '2026-07-01 09:00:00', body: '<p>c</p>', attachment_ids: [] }]
+  });
+
+  const result = await syncModule.syncUser(userId);
+  expect(result.service.added).toBe(0);
+
+  const { rows } = await dbModule.query(
+    "SELECT id FROM tasks WHERE task_id = 'task_service_3500' AND user_id = $1", [userId]
+  );
+  expect(rows.length).toBe(0);
 });
