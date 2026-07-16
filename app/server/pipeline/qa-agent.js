@@ -105,8 +105,9 @@ async function runQaAgent(taskId, userId, signal) {
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
     if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
-    // 依失敗類別歸因 blocker_type（env/code/transient）；判不出（unknown）留 null 交人工，不再一律 null（健檢根因 B）
-    const cls = classifyFailure(err.message, { claudeStatus: err.claudeStatus });
+    // 依失敗類別歸因 blocker_type（env/code/transient）；判不出（unknown）留 null 交人工，不再一律 null（健檢根因 B）。
+    // timeout 分類器契約上不判（回 unknown），但它是 infra 而非程式問題——比照 deploy 關標 env，人工一眼可識別（健檢 R4）
+    const cls = err.claudeStatus === 'timeout' ? 'env' : classifyFailure(err.message, { claudeStatus: err.claudeStatus });
     await query(
       "UPDATE tasks SET status='stopped', blocker_type=$3, blocker_content=$2, updated_at=NOW() WHERE id=$1",
       [taskId, stopReason('QA Agent 執行失敗', err), cls === 'unknown' ? null : cls]
@@ -115,11 +116,45 @@ async function runQaAgent(taskId, userId, signal) {
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
+  let result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
 
-  // 正規化 verdict 再比對：大小寫／前後空白變體（PASS／FAIL／「 pass 」）都落到既有 handler，
-  // 否則 FAIL＋完整 issues 清單會被整包丟到「未回傳有效結果」stopped、不退 coding、log 不寫
-  const verdict = String(result?.verdict).trim().toLowerCase();
+  // 正規化 verdict 再比對：大小寫／前後空白／詞形變體（PASS／FAIL／「 pass 」／passed／failed）都落到
+  // 既有 handler，否則 FAIL＋完整 issues 清單會被整包丟到「未回傳有效結果」stopped、不退 coding、log 不寫
+  const normalizeVerdict = r => {
+    const v = String(r?.verdict).trim().toLowerCase();
+    return v === 'passed' ? 'pass' : v === 'failed' ? 'fail' : v;
+  };
+  // fail 必須附可行動細節（issues 或 summary）才有資格退 coding——「未提供細節」的 fail 會讓 coding
+  // 瞎改一輪、還污染下一輪 QA 的未解清單，白燒 qa_retry/reentry（健檢 R3）
+  const failDetail = r => {
+    const list = Array.isArray(r?.issues) ? r.issues.map(s => String(s).trim()).filter(Boolean) : [];
+    const summary = String(r?.summary || '').trim();
+    return list.length || summary ? { list, summary } : null;
+  };
+  let verdict = normalizeVerdict(result);
+
+  if (verdict === 'fail' && !failDetail(result)) {
+    // fail 卻沒任何細節＝本輪審查無效：重問一次（非退 coding、不寫 [QA 未通過] log、不佔計數）；
+    // 重問仍無細節才停等人工，blocker 講明實際收到的內容而非泛稱格式錯誤
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: '[QA] 回報 fail 但未附問題清單，視為無效審查，重問一次...\n' });
+    try {
+      raw = await attempt();
+      result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
+      verdict = normalizeVerdict(result);
+    } catch (err) {
+      if (err.aborted) return true; // 手動暫停：比照上方，狀態原地不動
+      await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
+      result = null; verdict = ''; // 重問也掛掉 → 走下方無效結果停等人工
+    }
+    if (verdict === 'fail' && !failDetail(result)) {
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_content='QA 連兩輪回報 fail 但未附任何問題清單（issues/summary 皆空），無法退開發修正，請人工檢視 diff', updated_at=NOW() WHERE id=$1",
+        [taskId]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
+  }
 
   if (verdict === 'pass') {
     await query("UPDATE tasks SET status='merge_running', updated_at=NOW() WHERE id=$1", [taskId]);
@@ -128,10 +163,11 @@ async function runQaAgent(taskId, userId, signal) {
   }
 
   if (verdict === 'fail') {
-    const issues = Array.isArray(result.issues) ? result.issues.join('\n') : (result.summary || '未提供細節');
+    const detail = failDetail(result); // 上方已擋掉無細節的 fail，此處必有值
+    const issues = detail.list.length ? detail.list.join('\n') : detail.summary;
     // summary 是 md 契約要求的「給實作 Agent 的修正指引」，要進 retry_feedback；
     // 但不進 [QA 未通過] log——那份是下一輪 QA 的未解清單，混入指引會被當成待驗項
-    const feedback = (Array.isArray(result.issues) && result.summary) ? `${issues}\n修正指引：${result.summary}` : issues;
+    const feedback = (detail.list.length && detail.summary) ? `${issues}\n修正指引：${detail.summary}` : issues;
     await query(
       "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
       [taskId, `[QA 未通過]\n${issues}`]

@@ -108,3 +108,15 @@ describe('classifyFailureWithAgent', () => {
     expect(r).toBe('code');
   });
 });
+
+// R1 意圖：Claude API 過載/伺服器錯是 agent 關卡實際最常見的失敗字面，等幾秒重試幾乎必過；
+// 不收進 TRANSIENT 就落 unknown → 關卡直接停等人工（QA 關實測 529/500 停機、blocker_type=null）。
+describe('R1 Claude API 過載/5xx 屬 transient', () => {
+  test('529 overloaded / 500 internal → transient（可自動重試）', () => {
+    expect(classifyFailure('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe('transient');
+    expect(classifyFailure('API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}')).toBe('transient');
+  });
+  test('4xx（如 400 bad request）不可誤判 transient——重試救不了請求本身的錯', () => {
+    expect(classifyFailure('API Error: 400 {"type":"error","error":{"type":"invalid_request_error"}}')).toBe('unknown');
+  });
+});

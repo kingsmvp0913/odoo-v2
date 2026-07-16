@@ -16,7 +16,10 @@ const { logTokenUsage } = require('./token-logger');
 const TRANSIENT = [
   /\bECONNRESET\b/i, /\bETIMEDOUT\b/i, /\bENETUNREACH\b/i, /\bEAI_AGAIN\b/i,
   /socket hang up/i, /could not resolve host/i, /\bkilled\b/i,
-  /connection reset/i, /temporarily unavailable/i
+  /connection reset/i, /temporarily unavailable/i,
+  // Claude API 過載/伺服器錯（"API Error: 529 {...overloaded_error...}"、"API Error: 500 ..."）——
+  // 等幾秒重試幾乎必過，卻是 agent 關卡實際最常見的失敗字面；不收就落 unknown 直接停等人工（健檢 R1）
+  /\boverloaded\b/i, /API Error:? 5\d\d/i
 ];
 
 // 環境/基礎設施問題（非模組程式碼）——不該退 coding。

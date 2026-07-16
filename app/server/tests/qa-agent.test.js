@@ -273,3 +273,75 @@ test('F13 verdict 前後空白＋大寫 " PASS " → merge_running', async () =>
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('merge_running');
 });
+
+// R1 意圖：QA agent 掛在 API 過載（529/500）時應比照網路抖動自動重試一次，
+// 不可停等人工再燒一次分診才得出「重跑就好」的結論。
+test('R1 QA 遇 529 overloaded → 自動重試一次成功 → merge_running', async () => {
+  const id = await makeTask();
+  runClaude
+    .mockRejectedValueOnce(Object.assign(new Error('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'), { claudeStatus: 'error' }))
+    .mockResolvedValueOnce({ text: '<result>\n{"verdict":"pass"}\n</result>', usage: null, durationMs: null });
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+  expect(t.qa_retry_count).toBe(0); // infra 重試不佔 QA 計數
+  expect(runClaude).toHaveBeenCalledTimes(2);
+});
+
+// R2 意圖：verdict 詞形變體（passed/failed）語意完全明確，不可被當「未回傳有效結果」丟棄整輪審查。
+test('R2 verdict "passed" → merge_running', async () => {
+  claudeReturns({ verdict: 'passed' });
+  const id = await makeTask();
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+});
+
+test('R2 verdict "failed"＋issues → 退 coding', async () => {
+  claudeReturns({ verdict: 'failed', issues: ['詞形變體也要退 coding'] });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.qa_retry_count).toBe(1);
+});
+
+// R3 意圖：fail 卻沒任何可行動細節（issues/summary 皆空）＝無效審查。退 coding 只會讓實作
+// Agent 拿「未提供細節」瞎改一輪、還污染下一輪 QA 的未解清單。應重問一次，仍無細節才停等人工。
+test('R3 fail 無細節 → 重問一次拿到細節 → 退 coding、log 無「未提供細節」', async () => {
+  const id = await makeTask(0);
+  runClaude
+    .mockResolvedValueOnce({ text: '<result>\n{"verdict":"fail","issues":[]}\n</result>', usage: null, durationMs: null })
+    .mockResolvedValueOnce({ text: '<result>\n{"verdict":"fail","issues":["真正的問題"]}\n</result>', usage: null, durationMs: null });
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.qa_retry_count).toBe(1); // 無效那輪不計數，有效 fail 才計
+  expect(runClaude).toHaveBeenCalledTimes(2);
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [id]);
+  expect(logs.some(l => l.content.includes('真正的問題'))).toBe(true);
+  expect(logs.some(l => l.content.includes('未提供細節'))).toBe(false); // 污染源不得進未解清單
+});
+
+test('R3 連兩輪 fail 皆無細節 → stopped、不退 coding、不寫 [QA 未通過] log', async () => {
+  const id = await makeTask(0);
+  runClaude.mockResolvedValue({ text: '<result>\n{"verdict":"fail","issues":[],"summary":""}\n</result>', usage: null, durationMs: null });
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.qa_retry_count).toBe(0);
+  expect(t.blocker_content).toContain('連兩輪');
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '[QA 未通過]%'", [id]);
+  expect(logs.length).toBe(0);
+});
+
+// R4 意圖：timeout 是 infra 而非程式問題，停下時要標 blocker_type='env'（比照 deploy 關），
+// 人工/分診一眼識別，不必讀 blocker 文字猜。
+test('R4 fresh QA timeout → stopped、blocker_type=env', async () => {
+  const id = await makeTask();
+  runClaude.mockRejectedValue(Object.assign(new Error('claude 執行逾時（600s）'), { claudeStatus: 'timeout' }));
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+});
