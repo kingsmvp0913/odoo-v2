@@ -5,6 +5,7 @@ const { loadAgent } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, latestResolution } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
+const { classifyFailure } = require('./failure-classifier');
 
 const QA_LIMIT = 5;
 // 每個 QA session 世代最多 resume 幾次（比照 coding 的 RESUME_LIMIT）：重驗走 --resume
@@ -29,8 +30,8 @@ async function runQaAgent(taskId, userId, signal) {
     return true;
   }
 
-  let raw;
-  try {
+  // 產出本輪 QA 原始輸出（resume 或 fresh）：抽成內部函式，好在 transient 失敗時整段重跑一次（比照 deploy-testing）
+  const attempt = async () => {
     // 主分支名依實際 repo 而定（main/master），寫死 main 會讓 diff 基底錯誤、審查失準
     const { getMainBranch } = require('./git');
     const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
@@ -61,8 +62,14 @@ async function runQaAgent(taskId, userId, signal) {
         callResult = await runClaude(prompt, { cwd, taskId, userId, signal, resumeSessionId: task.qa_session_id, model: retryAgent.model, agentType: 'qa' });
         await query('UPDATE tasks SET qa_resume_count = qa_resume_count + 1, qa_session_id = COALESCE($2, qa_session_id) WHERE id=$1', [taskId, callResult.sessionId]).catch(() => {});
       } catch (err) {
-        // timeout/abort 不 fallback（交外層原樣處理）；其餘（session 遺失、CLI 壞掉）記帳後清 session 改跑 fresh 一次
-        if (err.aborted || err.claudeStatus === 'timeout') throw err;
+        if (err.aborted) throw err; // 手動暫停：交外層原樣處理，session 留著解除後續用
+        // timeout：清掉 stale session（並歸零 count，比照 session-lost 分支）再 rethrow，讓下次解鎖
+        // 降級為 fresh 讀新脈絡；否則人工每次解鎖都拿同一 stale session 重演同一 timeout、counter 也永不推進
+        if (err.claudeStatus === 'timeout') {
+          await query('UPDATE tasks SET qa_session_id=NULL, qa_resume_count=0 WHERE id=$1', [taskId]).catch(() => {});
+          throw err;
+        }
+        // 其餘（session 遺失、CLI 壞掉）記帳後清 session 改跑 fresh 一次
         await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
         await query('UPDATE tasks SET qa_session_id=NULL, qa_resume_count=0 WHERE id=$1', [taskId]).catch(() => {});
         callResult = null;
@@ -82,14 +89,27 @@ async function runQaAgent(taskId, userId, signal) {
       callResult = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'qa' });
       await query('UPDATE tasks SET qa_session_id=$2, qa_resume_count=0 WHERE id=$1', [taskId, callResult.sessionId || null]).catch(() => {});
     }
-    raw = callResult.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', callResult.usage, callResult.durationMs);
+    return callResult.text;
+  };
+
+  let raw;
+  try {
+    try {
+      raw = await attempt();
+    } catch (err) {
+      // transient（網路抖動/行程被砍）→ 自動重試一次，不佔任何計數（比照 deploy-testing）；其餘原樣往外拋
+      if (err.aborted || classifyFailure(err.message, { claudeStatus: err.claudeStatus }) !== 'transient') throw err;
+      raw = await attempt();
+    }
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
     if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
+    // 依失敗類別歸因 blocker_type（env/code/transient）；判不出（unknown）留 null 交人工，不再一律 null（健檢根因 B）
+    const cls = classifyFailure(err.message, { claudeStatus: err.claudeStatus });
     await query(
-      "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-      [taskId, stopReason('QA Agent 執行失敗', err)]
+      "UPDATE tasks SET status='stopped', blocker_type=$3, blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, stopReason('QA Agent 執行失敗', err), cls === 'unknown' ? null : cls]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
@@ -97,13 +117,17 @@ async function runQaAgent(taskId, userId, signal) {
 
   const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
 
-  if (result?.verdict === 'pass') {
+  // 正規化 verdict 再比對：大小寫／前後空白變體（PASS／FAIL／「 pass 」）都落到既有 handler，
+  // 否則 FAIL＋完整 issues 清單會被整包丟到「未回傳有效結果」stopped、不退 coding、log 不寫
+  const verdict = String(result?.verdict).trim().toLowerCase();
+
+  if (verdict === 'pass') {
     await query("UPDATE tasks SET status='merge_running', updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'merge_running' });
     return true;
   }
 
-  if (result?.verdict === 'fail') {
+  if (verdict === 'fail') {
     const issues = Array.isArray(result.issues) ? result.issues.join('\n') : (result.summary || '未提供細節');
     // summary 是 md 契約要求的「給實作 Agent 的修正指引」，要進 retry_feedback；
     // 但不進 [QA 未通過] log——那份是下一輪 QA 的未解清單，混入指引會被當成待驗項

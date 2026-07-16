@@ -91,8 +91,10 @@ async function runRespecPatch(taskId, userId, signal) {
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'spec_review' });
   } else {
     // 途中追加需求：retry_feedback 帶 [追加需求] 前綴（distillFeedback 取 gate='追加需求'、body=需求本文餵給 coding-retry resume），退回 coding。
+    // 一併清 qa_session_id／歸零 qa_resume_count：規格已改，下輪 QA 必須跑 fresh 讀新 analysis_yaml，
+    // 否則 resume 舊 session（內嵌舊規格、qa-retry prompt 不帶新規格）＝用舊規格審查。
     await query(
-      "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', updated_at = NOW() WHERE id = $1",
+      "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
       [taskId, newYaml, `[追加需求]\n${requirements}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });

@@ -187,3 +187,89 @@ test('QA resume 額度用完（count=2）→ 強制 fresh 全量', async () => {
   expect(t.qa_session_id).toBe('qs-gen2'); // 換新世代
   expect(t.qa_resume_count).toBe(0);
 });
+
+// F11 意圖：QA 執行失敗不再一律 status=stopped/blocker_type=null 黑箱；比照 deploy 接 failure-classifier——
+// transient 自動重試一次（不佔計數），非 transient 把分類寫進 blocker_type，判不出才留 null 交人工。
+test('F11 transient 失敗 → 自動重試一次（不計數），成功後照常判定', async () => {
+  const id = await makeTask();
+  runClaude
+    .mockRejectedValueOnce(new Error('socket hang up'))
+    .mockResolvedValueOnce({ text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null, sessionId: 'qs' });
+  await runQaAgent(id, userId);
+  expect(runClaude).toHaveBeenCalledTimes(2); // 原一次＋自動重試一次
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+  expect(t.qa_retry_count).toBe(0); // 重試不佔 QA 失敗計數
+});
+
+test('F11 transient 重試後仍失敗 → stopped、blocker_type=transient', async () => {
+  const id = await makeTask();
+  runClaude.mockRejectedValue(new Error('ECONNRESET'));
+  await runQaAgent(id, userId);
+  expect(runClaude).toHaveBeenCalledTimes(2);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('transient');
+});
+
+test('F11 環境問題 → stopped、blocker_type=env（不重試）', async () => {
+  const id = await makeTask();
+  runClaude.mockRejectedValue(new Error('could not connect to server: connection refused'));
+  await runQaAgent(id, userId);
+  expect(runClaude).toHaveBeenCalledTimes(1); // 非 transient 不重試
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+});
+
+test('F11 程式錯誤 → blocker_type=code', async () => {
+  const id = await makeTask();
+  runClaude.mockRejectedValue(new Error('SyntaxError: invalid syntax'));
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT blocker_type FROM tasks WHERE id=$1', [id]);
+  expect(t.blocker_type).toBe('code');
+});
+
+test('F11 判不出的失敗 → stopped、blocker_type 留 null（交人工）', async () => {
+  const id = await makeTask();
+  runClaude.mockRejectedValue(new Error('某種說不清的錯'));
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBeNull();
+});
+
+// F12 意圖：resume 逾時若不清 stale session，人工每次解鎖都拿同一 session 重演同一 timeout、
+// counter 也永不推進、永遠碰不到 QA_RESUME_LIMIT。故 timeout 要清 qa_session_id／歸零 count 讓下次降 fresh。
+test('F12 resume timeout → 清 qa_session_id／歸零 qa_resume_count 後 stopped', async () => {
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-stale', qa_resume_count=1 WHERE id=$1", [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\n舊問題')", [id]);
+  runClaude.mockRejectedValue(Object.assign(new Error('claude 執行逾時（600s）'), { claudeStatus: 'timeout' }));
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_session_id, qa_resume_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.qa_session_id).toBeNull(); // stale session 已清，下次解鎖降 fresh 讀新脈絡
+  expect(t.qa_resume_count).toBe(0);
+});
+
+// F13 意圖：verdict 用嚴格 === 比對時，大小寫／空白變體會整包落到「無效結果」stopped，
+// 最痛的是 FAIL＋完整 issues 被丟棄、不退 coding、log 不寫。正規化後各變體要落到既有 handler。
+test('F13 verdict 大寫 FAIL → 退 coding（不被當無效結果丟棄）', async () => {
+  claudeReturns({ verdict: 'FAIL', issues: ['大寫也要退 coding'] });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.qa_retry_count).toBe(1);
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [id]);
+  expect(logs.some(l => l.content.includes('大寫也要退 coding'))).toBe(true);
+});
+
+test('F13 verdict 前後空白＋大寫 " PASS " → merge_running', async () => {
+  claudeReturns({ verdict: ' PASS ' });
+  const id = await makeTask();
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+});
