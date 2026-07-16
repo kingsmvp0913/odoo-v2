@@ -3,7 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
@@ -34,6 +34,13 @@ function extractOdooError(log) {
   return '（log 無 ERROR/Traceback——可能是環境或啟動層問題，非模組程式碼錯誤）\n' + s.slice(-600).trim();
 }
 
+// 從 'No module named X' 類錯誤抽出缺的模組/套件名（供缺件細分：自家 addon import／已宣告／漏宣告）。
+// 找不到回 null。
+function parseMissingModule(text) {
+  const m = String(text == null ? '' : text).match(/No module named ['"]([\w.]+)['"]/i);
+  return m ? m[1] : null;
+}
+
 // 失敗診斷完整落地：blocker/feedback 只留摘要，exit code 與兩路輸出存檔供事後鑑識
 function saveDeployLog(taskId, count, err) {
   try {
@@ -55,6 +62,18 @@ function emitDeployVerdict(userId, taskId, verdict) {
   const msg = `\n\x1b[93m⚖ 部署失敗判定：${verdict}\x1b[0m\n`;
   notify.emitToUser(userId, 'terminal:output', { taskId, data: msg });
   return query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [taskId, msg]).catch(() => {});
+}
+
+// 升級逾時被中止：重試無益（只會再 hang 一次），一律當環境／資源問題停等人工（健檢 F8）。
+async function stopEnvTimeout(taskId, userId, err) {
+  await emitDeployVerdict(userId, taskId, '升級逾時被中止 → 停等人工（重試無益），視為環境／資源問題');
+  const logFile = saveDeployLog(taskId, `timeout-${Date.now()}`, err);
+  const logRef = logFile ? `\n完整 log：${logFile}` : '';
+  await query(
+    "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+    [taskId, `測試區升級逾時（超過 10 分鐘被中止），多為環境／資源問題（DB lock、資源不足或啟動卡住），請檢查後重試。${logRef}`]
+  );
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
 }
 
 // 部署測試區（純程式）：確保 env 運行 → odoo-bin -u 升級。
@@ -111,9 +130,11 @@ async function doDeploy(task, taskId, userId, signal) {
 
   // 升級前自動補裝各自訂模組宣告的 Python 相依（env 建置只裝 Odoo 核心 requirements，模組自帶的漏裝）。
   // best-effort：裝不動不硬擋，真正缺的相依會讓下方升級以清楚錯誤停下。
+  // reqLog（含逐套件 OK/FAIL）保留下來：終端顯示＋失敗時帶進 blocker，不再收下即丟（健檢 F5）。
+  let reqLog = '';
   try {
-    const reqLog = await installModuleRequirements(task.project_id, signal);
-    if (reqLog) notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 補裝模組 Python 相依...\n` });
+    reqLog = (await installModuleRequirements(task.project_id, signal)) || '';
+    if (reqLog) notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 補裝模組 Python 相依...\n${reqLog}` });
   } catch { /* best-effort */ }
   if (signal?.aborted) return;
 
@@ -126,70 +147,123 @@ async function doDeploy(task, taskId, userId, signal) {
   // 手動暫停中止子行程：非失敗，狀態原地不動、不分類不計數，解除暫停後從這一關重跑
   if (err && signal?.aborted) return;
 
-  // transient（網路抖動/被砍）→ 自動重試一次，不佔計數；再敗重新分類（多半 env）
-  if (err && (await classifyFailureWithAgent(err.message, clsCtx)) === 'transient') {
+  // 升級逾時被殺（execCmd 600s timeout kill）：重試只會再 hang 一次 10 分鐘，直接當環境/資源問題
+  // 停等人工（健檢 F8）。必須在 transient 之前攔——否則 err.message 帶 "killed" 會落 transient 而重跑再 hang。
+  if (err && err.killed) {
+    await stopEnvTimeout(taskId, userId, err);
+    return;
+  }
+
+  // 依失敗類別歸因，只算一次（健檢 F3：舊版同一 err 逐字問 haiku 兩次、token 雙倍且判定漂移）
+  let cls = err ? await classifyFailureWithAgent(err.message, clsCtx) : null;
+
+  // transient（網路抖動/被砍）→ 自動重試一次，不佔計數
+  if (err && cls === 'transient') {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 暫時性失敗，自動重試一次...\n` });
     err = null;
     try { await upgradeModules(task.project_id, mods, signal); } catch (e) { err = e; }
     if (err && signal?.aborted) return;
+    if (err && err.killed) { await stopEnvTimeout(taskId, userId, err); return; }
+    // 重試仍敗：不重新問 haiku（避免判定漂移把網路抖動退成 code 燒 opus），直接當環境問題停等人工
+    if (err) cls = 'env';
   }
 
   if (err) {
-    // 依失敗類別歸因：env/transient 不是程式問題，不退 coding、不加計數（健檢根因 B）
-    const cls = await classifyFailureWithAgent(err.message, clsCtx);
-    const odooErr = extractOdooError(err.message);
+    // 缺套件細分（健檢 F4/F6/F7）：'No module named X' 有三種真相，別一律當 env 停等人工——
+    //   - X 以 odoo.addons.<module> 起頭＝coding 自家 import 打錯路徑（指到不存在的 model/檔）＝程式問題
+    //   - X 是第三方套件且模組已宣告＝真環境缺件，自動 pip 補裝＋重試升級一次
+    //   - X 是第三方套件但沒宣告＝該退 coding 補 __manifest__ 宣告（否則環境重建必復發）
+    let codeHint = '';
+    const missing = cls === 'env' ? parseMissingModule(err.message) : null;
+    if (missing) {
+      if (/^odoo\.addons\./i.test(missing)) {
+        cls = 'code';
+        codeHint = `\n（缺的是自家模組路徑 ${missing}，多為 import 打錯 model/檔名，請修正 import）`;
+      } else {
+        const topPkg = missing.split('.')[0].toLowerCase();
+        const declared = await getDeclaredPythonDeps(task.project_id);
+        if (declared.has(topPkg)) {
+          notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 缺套件 ${topPkg} 已宣告，自動 pip 補裝後重試升級一次...\n` });
+          const fix = await installPythonPackage(task.project_id, topPkg, signal);
+          reqLog += fix.log;
+          notify.emitToUser(userId, 'terminal:output', { taskId, data: fix.log });
+          if (fix.ok) {
+            err = null;
+            try { await upgradeModules(task.project_id, mods, signal); } catch (e) { err = e; }
+            if (err && signal?.aborted) return;
+            if (err && err.killed) { await stopEnvTimeout(taskId, userId, err); return; }
+            if (err) cls = await classifyFailureWithAgent(err.message, clsCtx); // 補裝後仍敗，重新分類
+          }
+          // fix.ok=false（pip 裝不動）：維持 env，pipLog 已納入 reqLog 帶進下方 blocker
+        } else {
+          cls = 'code';
+          codeHint = `\n請在模組 __manifest__.py 的 external_dependencies['python'] 補上宣告：${topPkg}（缺套件但未宣告，人工手動 pip 後環境一重建就再次缺件）`;
+        }
+      }
+    }
 
-    if (cls !== 'code') {
-      // 環境/仍暫時性問題：停下等人工修環境，不動 coding 計數。
-      await emitDeployVerdict(userId, taskId, '環境問題（非程式碼）→ 停等人工，不退開發');
-      // env 路徑不累加 deploy_retry_count，log 檔名用時間戳避免重複覆蓋、丟失前次診斷
-      const logFile = saveDeployLog(taskId, `env-${Date.now()}`, err);
+    if (err) {
+      const odooErr = extractOdooError(err.message);
+      const pipRef = /FAIL/.test(reqLog) ? `\npip 補裝紀錄：\n${reqLog.slice(-400)}` : '';
+
+      if (cls !== 'code') {
+        // 環境/仍暫時性問題：停下等人工修環境，不動 coding 計數。
+        await emitDeployVerdict(userId, taskId, '環境問題（非程式碼）→ 停等人工，不退開發');
+        // env 路徑不累加 deploy_retry_count，log 檔名用時間戳避免重複覆蓋、丟失前次診斷
+        const logFile = saveDeployLog(taskId, `env-${Date.now()}`, err);
+        const logRef = logFile ? `\n完整 log：${logFile}` : '';
+        await query(
+          "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+          [taskId, `環境問題（非程式碼），請檢查測試環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}${pipRef}`]
+        );
+        notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+        return;
+      }
+
+      // 程式碼問題：退回 coding 修正並計數（滿上限 stopped）
+      const nextCount = (task.deploy_retry_count || 0) + 1;
+      const logFile = saveDeployLog(taskId, nextCount, err);
       const logRef = logFile ? `\n完整 log：${logFile}` : '';
-      await query(
-        "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-        [taskId, `環境問題（非程式碼），請檢查測試環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[部署測試區升級失敗]')", [taskId]);
+      const feedback = `[部署測試區升級失敗]\n${odooErr}${codeHint}${logRef}`;
+      if (nextCount >= DEPLOY_LIMIT) {
+        await emitDeployVerdict(userId, taskId, `程式問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);
+        await query(
+          "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
+          [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${codeHint}${logRef}`]
+        );
+        notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      } else {
+        // 總循環達上限 → 停下，但保留本次真診斷（健檢 F10：舊版被通用「循環 N 次」訊息整包覆寫）。
+        // emitDeployVerdict 移到確定會退開發之後才發，避免觸頂時仍留下「退開發第 1/3 次」的誤導事件。
+        const { bumpReentryOrStop } = require('./reentry');
+        if (await bumpReentryOrStop(taskId, userId, { blockerType: 'code',
+            blockerContent: `最後錯誤：${odooErr.slice(0, 500)}${logRef}` })) return;
+        await emitDeployVerdict(userId, taskId, `程式問題 → 退開發修正（第 ${nextCount}/${DEPLOY_LIMIT} 次）`);
+        await query(
+          "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+          [taskId, nextCount, feedback]
+        );
+        notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+      }
       return;
     }
-
-    // 程式碼問題：退回 coding 修正並計數（滿上限 stopped）
-    const nextCount = (task.deploy_retry_count || 0) + 1;
-    await emitDeployVerdict(userId, taskId, nextCount >= DEPLOY_LIMIT
-      ? `程式問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`
-      : `程式問題 → 退開發修正（第 ${nextCount}/${DEPLOY_LIMIT} 次）`);
-    const logFile = saveDeployLog(taskId, nextCount, err);
-    const logRef = logFile ? `\n完整 log：${logFile}` : '';
-    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[部署測試區升級失敗]')", [taskId]);
-    if (nextCount >= DEPLOY_LIMIT) {
-      await query(
-        "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${logRef}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
-    } else {
-      const { bumpReentryOrStop } = require('./reentry');
-      if (await bumpReentryOrStop(taskId, userId)) return; // 總循環達上限 → 已標 stopped
-      await query(
-        "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, `[部署測試區升級失敗]\n${odooErr}${logRef}`]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
-    }
-    return;
+    // err 被自動補裝清掉 → 落到下方成功流程
   }
 
+  // 部署成功：歸零 deploy_retry_count（健檢 F9：舊版成功不歸零，新 bug 首次部署失敗即被前輪累計推爆、
+  // 一次自動重試額度都沒有）。
   // 專案停用 E2E（如串接外部系統無法在測試區實測）：純程式跳過 tour，直接進最終人工審核。
   // 留一行痕跡，審核者才知是刻意跳過而非流程壞掉。
   const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
   if (proj && proj.e2e_disabled) {
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E 已依專案設定停用，跳過')", [taskId]);
-    await query("UPDATE tasks SET status='review_pending', updated_at=NOW() WHERE id=$1", [taskId]);
+    await query("UPDATE tasks SET status='review_pending', deploy_retry_count=0, updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
     return;
   }
 
-  await query("UPDATE tasks SET status='playwright_running', updated_at=NOW() WHERE id=$1", [taskId]);
+  await query("UPDATE tasks SET status='playwright_running', deploy_retry_count=0, updated_at=NOW() WHERE id=$1", [taskId]);
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
 }
 

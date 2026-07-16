@@ -23,8 +23,11 @@ const TRANSIENT = [
 // 注意：pattern 要精確，避免誤傷 code traceback。故不用 /ImportError/（開發者錯 import 是 code，
 // 缺套件由 ModuleNotFoundError/No module named 覆蓋）、不用 /venv/（Odoo traceback 路徑常含 venv 目錄）。
 const ENV = [
-  /could not connect to server/i, /connection refused/i,
+  /could not connect to server/i, /connection refused/i, /\bECONNREFUSED\b/i,
   /ModuleNotFoundError/i, /No module named/i,
+  // 模組有宣告 external_dependencies 但環境缺該套件時 Odoo 的字面（"an external dependency is not
+  // met: Python library not installed: xlsxtpl"）——鐵板釘釘的缺件，別讓它落到 unknown 交 haiku 猜（健檢 F1）
+  /external dependency is not met/i, /Python library not installed/i,
   /Permission denied/i, /PermissionError/i,
   /Address already in use/i, /port .* in use/i,
   /database .* does not exist/i, /no space left on device/i,
@@ -71,7 +74,11 @@ async function classifyFailureWithAgent(text, opts = {}) {
   // 不預設退 coding——寧可讓人看一眼，也不要把環境／跨模組問題丟回 coding 空轉
   try {
     const agent = loadAgent('deploy-fix');
-    const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: String(text || '').slice(0, 2000) }), { model: agent.model, agentType: 'deploy_fix' });
+    // 餵 haiku 的是「真因」而非 log 開頭：Odoo traceback 決定性例外行在結尾，slice(0,2000) 會把它砍掉、
+    // 只剩無用的 INFO banner，haiku 只能瞎猜（健檢 F2）。改用 extractOdooError 從尾端抽例外行。
+    // lazy require 避免與 deploy-testing 的循環相依（呼叫時該模組已完整載入）。
+    const { extractOdooError } = require('./deploy-testing');
+    const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: extractOdooError(text) }), { model: agent.model, agentType: 'deploy_fix' });
     // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
     if (opts.taskId || opts.projectId) {
       await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);

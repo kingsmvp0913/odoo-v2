@@ -52,6 +52,10 @@ test('runTourTests：odoo-bin 帶 --test-enable 與 --test-tags /<module>，對 
   expect(args).toContain('--test-enable');
   const i = args.indexOf('--test-tags');
   expect(args[i + 1]).toBe('/idx_x');
+  // 項4：HttpCase 必須綁自取的空閒埠，不落預設 8069（撞常駐 server）
+  const hp = args.indexOf('--http-port');
+  expect(hp).toBeGreaterThan(-1);
+  expect(Number(args[hp + 1])).toBeGreaterThan(0);
   expect(args).toEqual(expect.arrayContaining(['-i', 'idx_x', '-u', 'idx_x', '-d', `test_${DIR}`, '--stop-after-init']));
 });
 

@@ -18,7 +18,7 @@ stage: deploy_fix
 - env：環境/基礎設施問題——缺 Python 套件（ModuleNotFoundError）、資料庫連不上、檔案權限、port 佔用、測試環境未啟動。改程式沒用，要修環境。
 - transient：暫時性問題——網路抖動、連線重置、行程被中止（killed）、暫時無法連線。重試可能就好。
 
-無法判斷時回 {"type":"code"}（最保守）。
+無法判斷時回 {"type":"env"}（判不準就交人工看一眼，不要退回 coding 空轉——改程式改不動環境問題）。
 
 錯誤內容：
 {{error_text}}

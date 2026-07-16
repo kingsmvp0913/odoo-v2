@@ -24,7 +24,9 @@ function execCmd(bin, args, signal) {
         e.exitCode = err.code; e.killed = !!err.killed; e.stdout = stdout; e.stderr = stderr;
         return reject(e);
       }
-      resolve(stdout);
+      // Odoo 的 Python logging 預設寫 stderr——測試結果、unittest.SkipTest 都在 stderr。
+      // 成功路徑只回 stdout 會讓上層（如 playwright 防假綠燈檢查）拿到空字串＝死碼（健檢項3）。
+      resolve(stderr ? `${stdout}\n${stderr}` : stdout);
     });
   });
 }
@@ -210,11 +212,70 @@ async function installModuleRequirements(projectId, signal) {
       // '--' 終止 pip 選項解析：即使白名單漏網，套件名也不會被當旗標（防 argv 旗標走私，縱深防禦）
       const out = await execCmd(venvPython, ['-m', 'pip', 'install', '--', ...pkgs], signal);
       log += `[pip-manifest] OK ${pkgs.join(' ')}\n${String(out).slice(-200)}\n`;
-    } catch (err) {
-      log += `[pip-manifest] FAIL ${pkgs.join(' ')}: ${String(err.stderr || err.message || '').slice(-200)}\n`;
+    } catch (batchErr) {
+      // 批次一鑊全翻多半只因其中一個套件名打錯——逐一 fallback，讓裝得起來的照裝，
+      // 只有真的裝不動的留 FAIL 痕跡（避免一顆壞蘋果拖垮整批，健檢 F5）。
+      log += `[pip-manifest] BATCH FAIL，改逐一安裝：${String(batchErr.stderr || batchErr.message || '').slice(-200)}\n`;
+      for (const p of pkgs) {
+        try {
+          const out = await execCmd(venvPython, ['-m', 'pip', 'install', '--', p], signal);
+          log += `[pip-manifest] OK ${p}\n${String(out).slice(-120)}\n`;
+        } catch (err) {
+          log += `[pip-manifest] FAIL ${p}: ${String(err.stderr || err.message || '').slice(-200)}\n`;
+        }
+      }
     }
   }
   return log;
+}
+
+// 蒐集本專案「已宣告」的 Python 相依名（小寫集合），供缺套件時判斷是「真環境缺件」還是「漏宣告」
+//（健檢 F6）。來源同 installModuleRequirements：各模組 __manifest__ 的 external_dependencies.python
+// ＋各層 requirements.txt 的頂層套件名（去掉版本限定與 extras）。
+async function getDeclaredPythonDeps(projectId) {
+  const declared = new Set();
+  const repos = await projectAddonsPaths(projectId);
+  const addName = (raw) => {
+    const name = String(raw || '').trim().split(/[<>=!~;\s\[]/)[0].trim().toLowerCase();
+    if (name && !name.startsWith('#') && !name.startsWith('-')) declared.add(name);
+  };
+  const readReq = (file) => {
+    try { for (const ln of fs.readFileSync(file, 'utf8').split(/\r?\n/)) addName(ln); }
+    catch { /* 讀不到就略過 */ }
+  };
+  for (const repo of repos) {
+    const rootReq = path.join(repo, 'requirements.txt');
+    if (fs.existsSync(rootReq)) readReq(rootReq);
+    let entries = [];
+    try { entries = fs.readdirSync(repo, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const modDir = path.join(repo, e.name);
+      const req = path.join(modDir, 'requirements.txt');
+      if (fs.existsSync(req)) readReq(req);
+      const manifest = path.join(modDir, '__manifest__.py');
+      if (fs.existsSync(manifest)) {
+        try { for (const p of pythonExternalDeps(fs.readFileSync(manifest, 'utf8'))) addName(p); }
+        catch { /* 讀不到就略過 */ }
+      }
+    }
+  }
+  return declared;
+}
+
+// 針對性補裝單一 Python 套件（缺件且已宣告時的自動修復用，健檢 F4）。回傳 { ok, log }。
+// 名稱先過 SAFE_PKG 白名單，杜絕 argv 旗標走私；不符者不裝、回 ok:false。
+async function installPythonPackage(projectId, pkg, signal) {
+  const name = String(pkg || '').trim();
+  if (!SAFE_PKG.test(name)) return { ok: false, log: `[pip-fix] SKIP 非法套件名 ${name}\n` };
+  const venvPython = await projectVenvPython(projectId);
+  if (!venvPython) return { ok: false, log: '[pip-fix] SKIP 環境尚未建立\n' };
+  try {
+    const out = await execCmd(venvPython, ['-m', 'pip', 'install', '--', name], signal);
+    return { ok: true, log: `[pip-fix] OK ${name}\n${String(out).slice(-200)}\n` };
+  } catch (err) {
+    return { ok: false, log: `[pip-fix] FAIL ${name}: ${String(err.stderr || err.message || '').slice(-200)}\n` };
+  }
 }
 
 // 同專案 setup 去重：手動建置（env-routes）、deploy（持專案鎖）、E2E（不持鎖）可能同時觸發；
@@ -447,6 +508,19 @@ async function upgradeModules(projectId, modules, signal) {
   return { ok: true, log: out };
 }
 
+// 向 OS 要一個當下空閒的 TCP 埠（listen 0 讓核心配發）。tour 的 HttpCase 用它，
+// 避免綁 Odoo 預設 8069 撞到常駐 server（第一個專案就配到 8069，E2E 前一步才剛確保它活著）。
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
 // E2E via tour：與升級同一條 odoo-bin 指令，加 --test-enable 觸發 tour、--test-tags 只跑本模組測試。
 // exit 非 0（tour/斷言失敗或載入錯）由 execCmd throw，供上層依 deploy 同套邏輯分類。
 async function runTourTests(projectId, moduleName, signal) {
@@ -463,9 +537,12 @@ async function runTourTests(projectId, moduleName, signal) {
   const isWin = process.platform === 'win32';
   const venvPython = path.join(envDir, 'venv', isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
   if (!fs.existsSync(venvPython)) throw new Error('環境尚未建立，請先建立測試環境');
+  // HttpCase 會自起 http server，不帶 --http-port 會綁預設 8069＝撞常駐 server（健檢項4）。
+  // 取一個空閒埠給測試進程，與常駐 server 隔開。
+  const httpPort = await findFreePort();
   const out = await execCmd(venvPython, [
     odooBin, '-i', moduleName, '-u', moduleName, '-d', dbName, '--stop-after-init',
-    '--test-enable', '--test-tags', `/${moduleName}`,
+    '--test-enable', '--test-tags', `/${moduleName}`, '--http-port', String(httpPort),
     '--addons-path', addonsPath, ...odooDbArgs()
   ], signal);
   return { ok: true, log: out };
@@ -574,4 +651,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath };

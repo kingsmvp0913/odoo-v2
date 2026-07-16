@@ -47,3 +47,19 @@ test('達上限：回傳 true 並直接標 stopped（總循環兜底）', async 
   expect(t.status).toBe('stopped');
   expect(t.blocker_content).toContain('循環');
 });
+
+// F10：觸頂停下時保留本次真診斷（ParseError／log 路徑／code 歸因），不再被通用「循環 N 次」訊息整包覆寫。
+test('達上限且帶 diag：保留真診斷與 blocker_type，不只留通用循環訊息', async () => {
+  const id = await mkTask(MAX_REENTRY - 1);
+  const stopped = await bumpReentryOrStop(id, userId, {
+    blockerType: 'code',
+    blockerContent: '最後錯誤：ParseError bad view\n完整 log：/tmp/deploy-task9-3.log'
+  });
+  expect(stopped).toBe(true);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('code');            // 歸因保住
+  expect(t.blocker_content).toContain('循環');     // 仍點出總循環觸頂
+  expect(t.blocker_content).toContain('ParseError'); // 但本次真因不丟
+  expect(t.blocker_content).toContain('完整 log：'); // log 路徑不丟
+});
