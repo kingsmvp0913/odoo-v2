@@ -442,6 +442,7 @@ function registerRoutes(app) {
       if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
       const { rows } = await query('SELECT id FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      abortTask(req.params.id); // 封存執行中任務：中止在飛 agent，否則子行程續跑到逾時（健檢項11）
       await query(
         "UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = $1",
         [req.params.id]
@@ -473,6 +474,7 @@ function registerRoutes(app) {
       const { rows } = await query('SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       if (rows[0].approved_at) return res.status(403).json({ error: '已人工審核通過的任務不可刪除' });
+      abortTask(req.params.id); // 先中止在飛 agent，否則子行程會邊清 worktree 邊續寫（健檢項11）
       const warnings = [];
       const uw = await uninstallTaskModule(rows[0], [rows[0].id]);
       if (uw) warnings.push(uw);
@@ -506,6 +508,7 @@ function registerRoutes(app) {
       const deletable = ts.filter(t => !t.approved_at);
       const delIds = deletable.map(t => t.id);
       if (!delIds.length) return res.json({ ok: true, affected: 0 });
+      delIds.forEach(id => abortTask(id)); // 先中止在飛 agent 再清 worktree／刪除（健檢項11）
       // 卸載各任務的測試區 module（互相排除整批 delIds：同批要刪的任務不算「還有人在用」）
       const warnings = [];
       for (const t of deletable) {
@@ -549,6 +552,7 @@ function registerRoutes(app) {
       if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
+      ids.forEach(id => abortTask(id)); // 封存執行中任務：中止在飛 agent（健檢項11）
       const { rowCount } = await query(
         'UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
         [ids, req.userId]

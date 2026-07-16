@@ -241,6 +241,36 @@ test('QA 通過（→merge）＋有待吸收留言 → 攔下轉 respec_running'
   expect(respec.runRespecPatch).toHaveBeenCalledWith(taskId, userId, expect.anything());
 });
 
+// 健檢項1：merge 之後的階段（deploy／E2E）期間留言，過去會一路綠燈到 done、永不被吸收。
+// 現在 deploy 成功推進到 E2E 時也攔一次。
+test('deploy 成功（→playwright）＋有待吸收留言 → 攔下轉 respec_running（項1）', async () => {
+  const { runDeployTesting } = require('../pipeline/deploy-testing');
+  const respec = require('../pipeline/respec-agent');
+  runDeployTesting.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='playwright_running' WHERE id=$1", [id]);
+  });
+  const taskId = await insertTask('deploy_testing');
+  await addManualMsg(taskId);
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('respec_running');
+  expect(respec.runRespecPatch).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+test('E2E 通過（→review_pending）＋有待吸收留言 → 攔下轉 respec_running（項1）', async () => {
+  const { runTourStage } = require('../pipeline/playwright-agent');
+  const respec = require('../pipeline/respec-agent');
+  runTourStage.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='review_pending' WHERE id=$1", [id]);
+  });
+  const taskId = await insertTask('playwright_running');
+  await addManualMsg(taskId);
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('respec_running');
+  expect(respec.runRespecPatch).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
 test('coding 失敗（→stopped）即使有留言也不觸發 respec（只攔成功推進）', async () => {
   const ta = require('../pipeline/task-agent');
   const respec = require('../pipeline/respec-agent');

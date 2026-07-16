@@ -261,13 +261,20 @@ async function runTask(task, settings, signal) {
       await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, reason]).catch(() => {});
     }
 
-    // 追加需求佇列檢查點：coding／QA 剛「成功推進」的兩個邊界攔一次——若該任務有待吸收的使用者留言
+    // 追加需求佇列檢查點：任務每次「成功推進」到下一關就攔一次——若有待吸收的使用者留言
     // （task_messages.applied_at IS NULL），改轉 respec_running（增量改寫規格後退回 coding），而非往下一關。
-    // 只攔這兩個成功轉移，merge 之後不回頭；當前這輪 agent 已跑完才在此攔，不中斷現場（＝插隊到下一輪）。
-    const advancedPastCodingOrQa =
-      (prevStatus === 'coding_running' && u.status === 'qa_running') ||
-      (prevStatus === 'qa_running' && u.status === 'merge_running');
-    if (advancedPastCodingOrQa) {
+    // 涵蓋 coding→QA→merge→deploy→E2E→審核 各邊界（健檢項1：舊版只攔前兩個，使用者在 merge／deploy／
+    // E2E 期間留言會一路綠燈到 done、永不被吸收）。當前這輪 agent 已跑完才在此攔，不中斷現場（＝插隊到下一輪）。
+    // respec 會標記 applied_at，故不會無限回頭；review_pending 是人工審核關，留言由審核者當面處理。
+    const ABSORB_ON_ADVANCE = {
+      coding_running: ['qa_running'],
+      qa_running: ['merge_running'],
+      merge_running: ['deploy_testing'],
+      deploy_testing: ['playwright_running', 'review_pending'],
+      playwright_running: ['review_pending'],
+    };
+    const advancedForward = (ABSORB_ON_ADVANCE[prevStatus] || []).includes(u.status);
+    if (advancedForward) {
       const { rows: [pend] } = await query(
         "SELECT COUNT(*)::int AS n FROM task_messages WHERE task_id = $1 AND source = 'manual' AND applied_at IS NULL",
         [task.id]

@@ -35,7 +35,7 @@ jest.mock('../pipeline/git', () => ({
 }));
 jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn().mockResolvedValue({ ok: true, log: '' }),
-  runTourTests: jest.fn().mockResolvedValue({ ok: true, log: 'tests passed' }),
+  runTourTests: jest.fn().mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests, 0 failed, 0 error(s)' }),
   ENV_BASE: '/envs',
   runtimeLogPath: dir => dir + '/odoo.log'
 }));
@@ -145,7 +145,7 @@ beforeEach(async () => {
   git.ensureTestingBranch.mockReset().mockResolvedValue(undefined);
   const env = require('../pipeline/env-agent');
   env.upgradeModules.mockReset().mockResolvedValue({ ok: true, log: '' });
-  env.runTourTests.mockReset().mockResolvedValue({ ok: true, log: 'tests passed' });
+  env.runTourTests.mockReset().mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests, 0 failed, 0 error(s)' });
   require('../pipeline/ensure-env').ensureEnvRunning.mockReset().mockResolvedValue(true);
   await dbModule.query('DELETE FROM token_usage');
   await dbModule.query('DELETE FROM task_events');
