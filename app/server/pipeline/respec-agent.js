@@ -11,14 +11,16 @@ const yaml = require('js-yaml');
 // 只讀 retry_feedback），退回 coding_running 走 resume 增量補實作。留言標 applied_at＝已吸收（防反覆觸發）。
 async function runRespecPatch(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, analysis_yaml, coding_session_id FROM tasks WHERE id = $1', [taskId]
+    'SELECT id, task_id, project_id, analysis_yaml, coding_session_id, git_branch FROM tasks WHERE id = $1', [taskId]
   );
   if (!task) return;
 
-  // coding_session_id 只在 coding fresh 成功後寫入 → 不存在＝coding 從未跑過＝這是規格審核閘門的改規格
-  // （spec_review 嚴格在 coding 之前）。patch 完退回 spec_review 讓使用者重看、不設 retry_feedback（尚無 session 可 resume）。
-  // 存在＝途中追加需求，照舊退回 coding_running 走 resume 增量補實作、帶 retry_feedback。
-  const preCoding = !task.coding_session_id;
+  // pre-coding 判定不能只看 coding_session_id：coding fresh 成功但 CLI 沒回 sessionId 時會存 NULL
+  // （task-agent 以 COALESCE 防的正是這件事），已併版部署中的任務留言會被誤送回 spec_review、任務倒退過 merge。
+  // git_branch 於 branch_pending→coding 轉移必寫＝「已開工」的可靠訊號；兩者皆空才是規格審核閘門的改規格
+  // （spec_review 嚴格在 coding 之前）。pre-coding：patch 完退回 spec_review 讓使用者重看、不設 retry_feedback
+  // （尚無 session 可 resume）；否則照舊退回 coding_running 增量補實作、帶 retry_feedback（無 session 則 fresh）。
+  const preCoding = !task.coding_session_id && !task.git_branch;
   const returnStatus = preCoding ? 'spec_review' : 'coding_running';
 
   // 撈這批待吸收留言（capture ids：patch 期間新進的留言留到下一個檢查點，不在這批標記）

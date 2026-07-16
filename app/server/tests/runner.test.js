@@ -15,6 +15,7 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo
 jest.mock('../pipeline/cs-agent', () => ({ runCsAgent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/qa-agent', () => ({ runQaAgent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/deploy-testing', () => ({ runDeployTesting: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../pipeline/merge-agent', () => ({ runMergeAgent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/playwright-agent', () => ({ runTourStage: jest.fn().mockResolvedValue(undefined) }));
 // runTask 狀態真的推進時會自動續跑（見 runner.js 的 auto-continue）；branch_pending→coding_running 屬實際變化，
 // 會立刻串連派工到 coding_running，故需 mock task-agent 避免打到真的邏輯（非專案任務原本就會 return false）
@@ -63,6 +64,7 @@ beforeEach(async () => {
   cs.runCsAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/qa-agent').runQaAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/deploy-testing').runDeployTesting.mockReset().mockResolvedValue(undefined);
+  require('../pipeline/merge-agent').runMergeAgent.mockReset().mockResolvedValue(undefined);
   require('../pipeline/playwright-agent').runTourStage.mockReset().mockResolvedValue(undefined);
   require('../pipeline/task-agent').runTaskAnalysis.mockReset().mockResolvedValue(true);
   require('../pipeline/task-agent').runTaskCoding.mockReset().mockResolvedValue(true);
@@ -250,6 +252,21 @@ test('deploy 成功（→playwright）＋有待吸收留言 → 攔下轉 respec
     await dbModule.query("UPDATE tasks SET status='playwright_running' WHERE id=$1", [id]);
   });
   const taskId = await insertTask('deploy_testing');
+  await addManualMsg(taskId);
+  await run();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('respec_running');
+  expect(respec.runRespecPatch).toHaveBeenCalledWith(taskId, userId, expect.anything());
+});
+
+// merge→deploy 是吸收表的第三個邊界（stage2 補測：另兩個已測，此邊界漏了會讓 merge 期間留言晚一關才被吸收）
+test('merge 成功（→deploy_testing）＋有待吸收留言 → 攔下轉 respec_running（項1）', async () => {
+  const { runMergeAgent } = require('../pipeline/merge-agent');
+  const respec = require('../pipeline/respec-agent');
+  runMergeAgent.mockImplementation(async (id) => {
+    await dbModule.query("UPDATE tasks SET status='deploy_testing' WHERE id=$1", [id]);
+  });
+  const taskId = await insertTask('merge_running');
   await addManualMsg(taskId);
   await run();
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
