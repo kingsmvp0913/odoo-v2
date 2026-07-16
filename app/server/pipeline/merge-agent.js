@@ -46,7 +46,16 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
   } catch {
     return false;
   }
-  if (!content.includes('<<<<<<<')) return true;
+  if (!content.includes('<<<<<<<')) {
+    // 無文字衝突標記 ≠ 已解決：二進位／modify-delete 類衝突以 utf8 讀不到 <<<<<<< 標記，
+    // 若無條件 return true 會把「完全沒決策」的檔當已解決 commit 進 testing。改查 git 是否仍 unmerged
+    // （ls-files -u 有輸出＝該檔仍在衝突 index），是則交人工（return false），別靜默放行。
+    try {
+      const { stdout } = await execFileP('git', ['ls-files', '-u', '--', filePath], { cwd: repoPath });
+      if (stdout.trim()) return false;
+    } catch { /* git 查詢失敗不阻斷：維持「無標記即已解決」的原判斷 */ }
+    return true;
+  }
 
   const lines = content.split('\n');
   const blocks = findConflictBlocks(lines);
@@ -97,20 +106,46 @@ function execFileP(cmd, args, opts) {
   });
 }
 
+// 跨平台選 Python interpreter：Windows 慣用 python、Linux 常只有 python3（比照 env-agent），
+// 亦尊重 PYTHON_BIN 覆寫。主 interpreter 不在（ENOENT）就 fallback 試另一個；兩者皆無 → 回 false
+// 讓呼叫端記錄「未驗」，不靜默當驗過（否則 Linux 無 python 時整條 .py 語法防線默默關閉）。
+async function pyCompile(abs, repoPath) {
+  const isWin = process.platform === 'win32';
+  const candidates = [...new Set(
+    [process.env.PYTHON_BIN, isWin ? 'python' : 'python3', isWin ? 'python3' : 'python'].filter(Boolean)
+  )];
+  for (const py of candidates) {
+    try {
+      await execFileP(py, ['-m', 'py_compile', abs], { cwd: repoPath });
+      return true; // 驗過
+    } catch (err) {
+      if (err.code === 'ENOENT') continue; // 此 interpreter 不存在 → 試下一個
+      throw err; // 真語法錯 → 交呼叫端列入 bad
+    }
+  }
+  return false; // 所有 interpreter 都不存在，無法驗
+}
+
 // commit 進 testing 前驗 AI 解衝突結果的語法：.py→py_compile，.xml→xmllint。
 // AI 常把縮排／語法解壞，產出「無衝突標記卻壞掉」的檔——直接 commit 進 testing 會讓
 // deploy 升級以 IndentationError/ParseError 收場並誤歸因為程式問題。回傳語法壞掉的檔清單。
-// 驗證工具本身不在環境（ENOENT）時略過該檔——無法驗 ≠ 壞，不因缺 linter 誤擋合併。
+// .py 的 interpreter 缺席改記可見警告（見 pyCompile），xmllint 缺席仍略過該檔——無法驗 ≠ 壞，不因缺 linter 誤擋。
 async function verifyResolvedSyntax(repoPath, files) {
   const bad = [];
   for (const f of files) {
     const abs = path.join(repoPath, f);
     if (!fs.existsSync(abs)) continue;
     try {
-      if (f.endsWith('.py')) await execFileP('python', ['-m', 'py_compile', abs], { cwd: repoPath });
-      else if (f.endsWith('.xml')) await execFileP('xmllint', ['--noout', abs], { cwd: repoPath });
+      if (f.endsWith('.py')) {
+        if (!(await pyCompile(abs, repoPath))) {
+          // 缺 python／python3 → 無法驗，但不靜默假裝驗過（Linux 常缺 python）→ 至少要可見
+          console.warn(`[MERGE] 找不到 python／python3，未能驗 .py 語法（未擋，請確認測試機 interpreter）: ${f}`);
+        }
+      } else if (f.endsWith('.xml')) {
+        await execFileP('xmllint', ['--noout', abs], { cwd: repoPath });
+      }
     } catch (err) {
-      if (err.code === 'ENOENT') continue;
+      if (err.code === 'ENOENT') continue; // xmllint 缺席 → 無法驗，不因缺 linter 誤擋
       bad.push(f);
     }
   }
@@ -191,6 +226,11 @@ async function doMerge(task, taskId, userId, signal) {
         failed.push(file);
       }
     }
+
+    // 手動暫停會讓 resolveConflict 內 runClaude 拋出 aborted，被上面逐檔 catch 吞成 failed；
+    // 不在此攔截就會把「暫停」誤判為「衝突」標成 merge_conflict。比照 playwright-agent 既有守衛：
+    // 暫停＝非失敗，狀態原地不動（留 merge_running），解除暫停後重跑本關。
+    if (signal?.aborted) return;
 
     // commit 進 testing 前驗語法：AI 解衝突把縮排／語法解壞的檔不得進 testing（否則 deploy 才爆、
     // 又被誤歸因為程式問題）。壞檔改列入 failed 交人工，未 stage → 仍屬未解衝突，人工收尾能擋住。

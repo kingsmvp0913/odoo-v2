@@ -227,3 +227,87 @@ test('AI 解出的檔語法壞掉 → 不 commit、改 merge_conflict', async ()
     ? JSON.parse(rows[0].merge_conflict_data) : rows[0].merge_conflict_data;
   expect(data.repos[0].files).toContain('bad.py');
 });
+
+// 意圖：使用者按暫停時 resolveConflict 內 runClaude 拋 aborted，被逐檔 catch 吞成 failed。
+// 沒有 abort 守衛就會把「暫停」誤標成 merge_conflict（假衝突）。暫停＝狀態原地不動（留 merge_running）。
+test('暫停中止（signal.aborted）→ 不誤標 merge_conflict、狀態留 merge_running', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-abort-'));
+  fs.writeFileSync(path.join(dir, 'a.py'), '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task\n');
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['a.py'] });
+  // 比照 runClaude 被暫停時的行為：拋出帶 aborted 旗標的 error
+  const aborted = new Error('aborted'); aborted.aborted = true;
+  mockRunClaude.mockRejectedValueOnce(aborted);
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P','17.0','p') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, git_branch)
+     VALUES ($1,'task_odoo_p1','odoo','T','c','merge_running',$2,'task/task_odoo_p1') RETURNING id`,
+    [userId, proj.id]
+  );
+
+  await mergeMod.runMergeAgent(t.id, userId, { aborted: true });
+
+  expect(gitMock.commitResolved).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(rows[0].status).toBe('merge_running'); // 非 merge_conflict
+});
+
+// 意圖：二進位／modify-delete 類衝突以 utf8 讀不到 <<<<<<< 標記，但 git 仍視為 unmerged。
+// 無條件 return true 會把「完全沒決策」的檔當已解決 commit 進 testing → 須改查 git 是否仍 unmerged。
+test('無文字標記但 git 仍 unmerged（modify-delete）→ resolveConflict 回 false 交人工', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-md-'));
+  const g = (args) => execFileSync('git', args, { cwd: dir });
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 't@t']);
+  g(['config', 'user.name', 't']);
+  fs.writeFileSync(path.join(dir, 'f.py'), 'x = 1\n');
+  g(['add', 'f.py']); g(['commit', '-q', '-m', 'init']);
+  g(['checkout', '-q', '-b', 'feat']);
+  fs.writeFileSync(path.join(dir, 'f.py'), 'x = 2\n');
+  g(['add', 'f.py']); g(['commit', '-q', '-m', 'mod']);
+  g(['checkout', '-q', 'main']);
+  g(['rm', '-q', 'f.py']); g(['commit', '-q', '-m', 'del']);
+  try { g(['merge', 'feat']); } catch { /* modify/delete 衝突 → 非 0 離開 */ }
+  // f.py 此時是 feat 版（x = 2，無衝突標記），但 index 仍 unmerged
+  expect(fs.readFileSync(path.join(dir, 'f.py'), 'utf8')).not.toContain('<<<<<<<');
+  expect(execFileSync('git', ['ls-files', '-u', '--', 'f.py'], { cwd: dir }).toString().trim()).not.toBe('');
+
+  const ok = await mergeMod.resolveConflict(dir, 'f.py');
+
+  expect(ok).toBe(false); // 修正前：無標記即 return true（靜默假解決）
+  expect(mockRunClaude).not.toHaveBeenCalled();
+});
+
+// 意圖：Linux 主機常無 python（只有 python3）。修正前 interpreter 硬寫 'python'、PYTHON_BIN 完全被忽略，
+// 導致無法跨平台選 interpreter。此測試證明 PYTHON_BIN 已被採用（不再硬寫 python）——用一個「存在但不是 python」
+// 的 interpreter（git）驗一個好檔：因 interpreter 被真正採用，good.py 會被判為壞（git 不吃 -m py_compile）。
+// 修正前 PYTHON_BIN 被忽略、走真 python → good.py 通過 → []，故此測試會 fail-then-pass。
+test('PYTHON_BIN 指定的 interpreter 被採用（非硬寫 python）', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-pybin-'));
+  fs.writeFileSync(path.join(dir, 'good.py'), 'def f():\n    return 1\n');
+
+  const origPyBin = process.env.PYTHON_BIN;
+  try {
+    process.env.PYTHON_BIN = 'git'; // 存在但非 python：`git -m py_compile ...` 非 0 離開（非 ENOENT）
+    const bad = await mergeMod.verifyResolvedSyntax(dir, ['good.py']);
+    expect(bad).toEqual(['good.py']); // interpreter 真被採用；修正前忽略 PYTHON_BIN 走真 python → []
+  } finally {
+    if (origPyBin === undefined) delete process.env.PYTHON_BIN; else process.env.PYTHON_BIN = origPyBin;
+  }
+});
