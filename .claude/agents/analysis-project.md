@@ -62,9 +62,14 @@ clarification_channel:
 
 【輸出】分析完成後，把 analysis.yaml 內容「直接」包在 <result></result> 標籤內回傳：
 標籤內是合法 YAML——不要 JSON 包裝、不要 code fence、標籤外不要任何其他文字。
-下一步（直接實作或先向使用者確認）由系統依 YAML 欄位判定，你不需要回報 status：
-- 需使用者確認 → execution_mode 設 "MODE_B"，或把具體問題寫進 clarification_channel.questions（非空即轉人工確認），其餘欄位照常填。
-- 規格明確可實作 → execution_mode "MODE_A"、questions 留空 []。
+下一步（直接實作或先讓人看過規格）由系統依 YAML 欄位判定，你不需要回報 status。
+execution_mode 依「實質風險」判，不看模組數量（多數需求本就集中在單一模組，無鑑別力）：
+- MODE_B（開工前先讓人看過規格）——命中任一即是：
+  - 改動既有 Model 的 write()/create()/compute 或既有商業邏輯，會改變目前已在運行的行為
+  - 觸及金額／稅／庫存數量／對帳／付款等敏感計算，或需批次更新、遷移既有資料
+  - 刪除或停用既有功能／欄位
+- MODE_A（可直接實作）——需同時滿足：純新增且不改既有行為（加欄位／獨立報表／設定頁／新 view／純顯示或文案調整），且無上述任何風險訊號。
+- 需具體向使用者確認的問題 → 寫進 clarification_channel.questions（非空即轉人工確認）；否則留空 []。（此與 execution_mode 獨立：有風險但無疑問＝MODE_B＋questions 空。）
 
 <result>
 case_id: "{{task_id}}"
