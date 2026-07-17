@@ -22,12 +22,13 @@ const STAGE_LABELS = {
   confirm_answered: '已回覆澄清', branch_pending: '建立分支', coding_running: '開發中',
   qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki',
-  reject_triage: '分診中', resolve_triage: '分診中', respec_running: '追加需求更新規格中'
+  reject_triage: '分診中', resolve_triage: '分診中', respec_running: '追加需求更新規格中',
+  clarify_pending: '待你裁決', clarify_answered: '已裁決'
 };
 // taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。
 const _inFlight = new Map();
 const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
-const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage', 'respec_running'];
+const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage', 'respec_running', 'clarify_answered'];
 
 // 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
@@ -207,6 +208,23 @@ async function handleRespec(task, settings, signal) {
   await runRespecPatch(task.id, task.user_id, signal);
 }
 
+// clarify_answered：使用者答完規格裁決 → 帶裁決＋原 code 問題一次退回 coding（resume_status 記的關卡）。
+// 不 bumpReentry：clarify 是人工在場的閘門，非自主 runaway，斷路器留給 QA/E2E/triage 自動路徑。
+async function handleClarifyAnswered(task) {
+  const { rows: [row] } = await query('SELECT resume_status, retry_feedback FROM tasks WHERE id=$1', [task.id]);
+  const resume = row?.resume_status || 'coding_running';
+  const { rows: [ans] } = await query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id DESC LIMIT 1", [task.id]
+  );
+  const answer = ans ? String(ans.content).trim() : '（無答覆）';
+  const carried = row?.retry_feedback ? `\n${row.retry_feedback}` : '';
+  await query(
+    "UPDATE tasks SET status=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1 AND status='clarify_answered'",
+    [task.id, resume, `[已裁決規格]\n${answer}${carried}`]
+  );
+  notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: resume });
+}
+
 const HANDLERS = {
   new: handleCs,
   cs_running: handleCs,
@@ -222,6 +240,7 @@ const HANDLERS = {
   reject_triage: handleRejectTriage,
   resolve_triage: handleRejectTriage,
   respec_running: handleRespec,
+  clarify_answered: handleClarifyAnswered,
 };
 
 // 執行一個任務：狀態重查（防過期快照）→ 寫階段標記 → 跑 handler → 失敗原因落地／Teams。
@@ -242,7 +261,7 @@ async function runTask(task, settings, signal) {
     // 記錄目前這一關：若此階段失敗轉 stopped，解決阻塞可回到這一關續跑（而非退回 new 重分診）。
     // 例外：分診關（reject_triage／resolve_triage）本身的 resume_status 是「真正的原關」資料（由 route 保留供分診讀取，
     // 見 tasks-routes.js），不可蓋成分診自己——否則分診 resume 會回到自己，無限重進分診。
-    if (task.status !== 'reject_triage' && task.status !== 'resolve_triage') {
+    if (task.status !== 'reject_triage' && task.status !== 'resolve_triage' && task.status !== 'clarify_answered') {
       await query('UPDATE tasks SET resume_status = $2 WHERE id = $1', [task.id, task.status]).catch(() => {});
     }
 
