@@ -204,14 +204,14 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
   expect(usage.map(r => r.agent_type).sort()).toEqual(expect.arrayContaining(['analysis', 'coding', 'cs', 'playwright', 'qa', 'wiki']));
 });
 
-// ---------- S2 QA 退回 → resume 重跑（省 token 路徑）→ 通過 ----------
-test('S2 QA fail → coding resume（--resume＋opus＋蒸餾 feedback，短 prompt）→ QA pass → review_pending', async () => {
+// ---------- S2 QA 退回 → 無狀態修正輪（不 resume、讀既有碼增量修）→ 通過 ----------
+test('S2 QA fail → coding 修正輪（不 --resume＋opus＋帶 QA feedback）→ QA pass → review_pending', async () => {
   const issues = ['備註欄位未加進 form view', '欄位未設 tracking'];
   scriptAgent('coding', () => ({ text: resultJson({ status: 'qa_running' }), sessionId: 'sess-A' }));
   scriptAgent('qa', () => ({ text: resultJson({ verdict: 'fail', issues, summary: '請補 view 與 tracking' }) }));
   scriptAgent('coding', async (prompt, opts) => {
-    // resume 路徑核心斷言：沿用 session、升級 opus、帶入蒸餾後的 QA 回饋
-    expect(opts.resumeSessionId).toBe('sess-A');
+    // 無狀態修正輪核心斷言：不 resume、升級 opus、帶 QA 回饋（全量 prompt 讓它讀 worktree 既有碼增量修）
+    expect(opts.resumeSessionId).toBeUndefined();
     expect(opts.model).toBe('opus');
     expect(prompt).toContain('QA 未通過');
     expect(prompt).toContain('備註欄位未加進 form view');
@@ -231,14 +231,7 @@ test('S2 QA fail → coding resume（--resume＋opus＋蒸餾 feedback，短 pro
   expect(task.status).toBe('review_pending');
   expect(task.qa_retry_count).toBe(1);
   expect(task.reentry_count).toBe(1);
-  expect(task.coding_resume_count).toBe(1);
   expect(task.retry_feedback).toBeNull(); // 成功消費後清空
-
-  // token 效率：resume prompt 必須顯著小於全量 fresh prompt（<50%）。
-  // coding-retry 不再重複注入 CLAUDE.md（--resume 的 session 上下文已含 fresh 輪帶入的規則），
-  // 本模擬曾量化出注入時 CLAUDE.md 佔 resume prompt 82%——此斷言釘住修正不回退。
-  const codingCalls = calls.filter(c => c.agentType === 'coding');
-  expect(codingCalls[1].prompt.length).toBeLessThan(codingCalls[0].prompt.length * 0.5);
 });
 
 // ---------- S3 部署失敗歸因 ----------

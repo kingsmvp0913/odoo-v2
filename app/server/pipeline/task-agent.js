@@ -274,43 +274,24 @@ async function runTaskAnalysis(taskId, userId, signal) {
   return true;
 }
 
-const RESUME_LIMIT = 2; // 每個 session 世代最多 resume 幾次，之後強制 fresh（避免在錯誤方向上一直加碼）
 // coding 是最長的階段（探索＋實作＋逐檔驗證＋commit），共用預設 600s 常不夠；
 // 逾時＝整輪報廢重跑（比放寬上限更貴），故獨立放寬、可用 env 調整
 const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '1800000', 10);
 
-// resume 失敗是否值得 fallback 到 fresh：
-// error（session 遺失／CLI 壞掉，快速非零退出）→ 值得重來；
-// timeout（已燒久）／aborted（手動暫停）→ 不值得，照原失敗處理
-function shouldResumeFallback(err) {
-  return err?.claudeStatus === 'error';
-}
-
-// 跑一輪 coding。resume=true 用 coding-retry 短 prompt＋--resume 續用前一輪對話（省 token，健檢 U3）；
-// 否則用 coding-project 全量 prompt。成功回傳 runClaude 的結果（含 sessionId），失敗 throw。
-async function runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume }) {
+// 跑一輪 coding：無狀態，一律用 coding-project 統一 prompt（不 --resume）。
+// 省 token 靠 prompt cache（實測 coding 全價 input 僅佔 0.28%，重送規則/spec 幾乎免費），
+// 不再靠 session 記憶——每輪都讀 worktree 既有碼做增量修正（見 coding-project.md），避免 session drift 與整包重寫。
+// retry_feedback 存在＝被下游退回的修正輪 → 升級 opus（同腦袋再猜收斂率低）。
+async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const cwd = worktreeParent(info.root, task.task_id);
-  // 被下游退回重跑（resume，或帶著 retry_feedback）→ 升級 opus：同樣的腦袋再猜一次收斂率低，
-  // 換更強的腦袋比無差別重跑 sonnet 更省 token 又提高收斂（健檢 F escalate）。
-  const escalateModel = (resume || task.retry_feedback) ? 'opus' : null;
-  if (resume) {
-    const { gate, body } = distillFeedback(task.retry_feedback || '');
-    const agent = loadAgent('coding-retry');
-    const prompt = agent.render({
-      gate,
-      retry_feedback: body || '（無細節，請檢視上一輪自己的變更）',
-      resolution: resolution || '（無）',
-      commit_message: buildCommitMessage(task)
-    }).trim();
-    return runClaude(prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || agent.model, resumeSessionId: task.coding_session_id, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
-  }
+  const escalateModel = task.retry_feedback ? 'opus' : null;
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 
 async function runTaskCoding(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback, coding_session_id, coding_resume_count FROM tasks WHERE id = $1',
+    'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -346,38 +327,10 @@ async function runTaskCoding(taskId, userId, signal) {
   let raw;
   try {
     const resolution = await latestResolution(taskId);
-    // coding_session_id 只在 fresh 成功後寫入 → 它存在＝前一輪 coding 成功過＝這次是被下游退回的重跑。
-    // 觸發信號只認 retry_feedback：resolution（latestResolution）永不消費，用它當條件會讓過期舊指示誤觸發
-    // resume（feedback 為空時帶著舊指示重跑，可能覆蓋已通過部分）。resolution 仍會在 resume prompt 帶入為輔助。
-    const canResume = !!task.coding_session_id
-      && (task.coding_resume_count || 0) < RESUME_LIMIT
-      && !!task.retry_feedback;
-
-    let codingResult;
-    if (canResume) {
-      try {
-        codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume: true });
-        // resume 成功：計數 +1；--resume 沿用同 session id（init 會回同一個）
-        await query(
-          'UPDATE tasks SET coding_resume_count = coding_resume_count + 1, coding_session_id = COALESCE($2, coding_session_id) WHERE id=$1',
-          [taskId, codingResult.sessionId]
-        );
-      } catch (err) {
-        if (!shouldResumeFallback(err)) throw err; // timeout/aborted → 不 fallback，交給外層 stopped
-        // session 遺失／CLI 壞掉 → 記這次失敗帳，清 session 改跑全量 fresh（只 fallback 一次，不遞迴）。
-        // 註：resume 失敗＋fresh 也失敗時，coding 會有 2 筆失敗記帳（各對應一次真實呼叫，刻意保留）。
-        await logFailedUsage(ref, userId, 'coding', err);
-        await query('UPDATE tasks SET coding_session_id=NULL, coding_resume_count=0 WHERE id=$1', [taskId]);
-        task.coding_session_id = null;
-        codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume: false });
-        await query('UPDATE tasks SET coding_session_id=$2, coding_resume_count=0 WHERE id=$1', [taskId, codingResult.sessionId]);
-      }
-    } else {
-      // fresh：首次／resume 用完（強制新世代）／無 feedback。全量 prompt 仍帶未蒸餾 retry_feedback。
-      codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv, { resume: false });
-      await query('UPDATE tasks SET coding_session_id=$2, coding_resume_count=0 WHERE id=$1', [taskId, codingResult.sessionId]);
-    }
-
+    // 無狀態：一律 fresh 跑統一 prompt（不 resume；靠 prompt cache 省 input）。coding 每輪讀 worktree 既有碼做增量。
+    const codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv);
+    // 記本輪 session id 當「已開工」marker（供 respec 等判斷；不再用於 resume）
+    await query('UPDATE tasks SET coding_session_id=$2 WHERE id=$1', [taskId, codingResult.sessionId]).catch(() => {});
     raw = codingResult.text;
     await logTokenUsage(ref, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
@@ -409,4 +362,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, latestResolution, distillFeedback, shouldResumeFallback };
+module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, latestResolution, distillFeedback };

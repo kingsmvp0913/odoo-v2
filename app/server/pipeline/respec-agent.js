@@ -7,8 +7,8 @@ const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
 
 // respec_running：使用者途中留言＝追加需求。把待吸收的 manual 留言增量 patch 進 analysis_yaml
-// （維持單一規格來源，QA 重驗吃得到），並把需求塞進 retry_feedback（coding-retry resume 不讀 analysis_yaml，
-// 只讀 retry_feedback），退回 coding_running 走 resume 增量補實作。留言標 applied_at＝已吸收（防反覆觸發）。
+// （維持單一規格來源，QA 重驗吃得到），並把需求也塞進 retry_feedback（coding 每輪都帶 retry_feedback，
+// 確保新需求一定被看到），退回 coding_running 增量補實作。留言標 applied_at＝已吸收（防反覆觸發）。
 async function runRespecPatch(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, project_id, analysis_yaml, coding_session_id, git_branch FROM tasks WHERE id = $1', [taskId]
@@ -92,7 +92,7 @@ async function runRespecPatch(taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'spec_review' });
   } else {
-    // 途中追加需求：retry_feedback 帶 [追加需求] 前綴（distillFeedback 取 gate='追加需求'、body=需求本文餵給 coding-retry resume），退回 coding。
+    // 途中追加需求：retry_feedback 帶 [追加需求] 前綴＋需求本文，退回 coding（coding 每輪都讀 retry_feedback 做增量）。
     // 一併清 qa_session_id／歸零 qa_resume_count：規格已改，下輪 QA 必須跑 fresh 讀新 analysis_yaml，
     // 否則 resume 舊 session（內嵌舊規格、qa-retry prompt 不帶新規格）＝用舊規格審查。
     await query(
