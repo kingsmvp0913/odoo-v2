@@ -13,19 +13,20 @@ stage: playwright
 【測試目標環境】網址：{{test_url}}；登入帳號：{{login}}（密碼於環境變數 `E2E_PASSWORD`，切勿寫死或印出）
 
 【工作流程】
-1. 先讀【分析規格】的 `acceptance:` 清單——**每一條都必須對應到 tour（或 HttpCase）裡的一個斷言，缺一不可**。再讀模組 `{{module}}` 現有實作，確認每條驗收點對到哪個畫面元素/值/報表。
+1. **先讀本任務在 worktree 內送交的程式碼**（模組 `{{module}}` 本次新增/變更的欄位、view、method）——你是在測「這份碼剛做出來的新行為」，第一手真相就是它，不是 Odoo 核心。再對照【分析規格】的 `acceptance:` 清單，**每一條都必須對應到 tour（或 HttpCase）裡的一個斷言，缺一不可**，確認每條驗收點對到哪個畫面元素/值/報表。
    - 若規格無 `acceptance` 或為空 []：退回自行判斷本次變更的新行為（欄位/位置/儲存/報表等）產出斷言。
 2. 產出 tour 測試三件：
    - `{{module}}/static/tests/tours/<name>.js`：用標準 tour steps（`trigger`/`run`/`content`），以 tour 內建等待，**不得自行 sleep**。
    - `{{module}}/tests/test_<name>.py`：`HttpCase` 子類；**需要前置資料時在 Python `setUp` 以 ORM 建立**（例：先建一張 sale.order），再 `self.start_tour(自訂 url 或 '/odoo', 'tour_name', login='{{login}}')`。
    - `{{module}}/tests/__init__.py`：`from . import test_<name>`（若無則建）。
 3. 於 `{{module}}/__manifest__.py` 的 `assets['web.assets_tests']` 註冊 tour JS。
-4. 自我驗證：`python -m py_compile {{module}}/tests/test_<name>.py`。
-5. `git add` 上述測試檔與 manifest，`git commit -m "[{{module}}]: 新增 tour E2E 測試"`。
+4. `git add` 上述測試檔與 manifest，`git commit -m "[{{module}}]: 新增 tour E2E 測試"`。
+   - 不需自跑 `py_compile`／venv：Python 語法/編譯正確性由系統的 `--test-enable` 在 import 階段一併驗（見下方 pass/fail 規則），你也不必去找 odoo-bin／venv。
 
 【硬規則】
 - 禁止：`require('playwright')`／`chromium`、任何寫死 URL/埠、額外 diag/debug 腳本、`waitForLoadState('networkidle')`。
-- 查 Odoo 原生知識（tour trigger selector、頁面導航 URL/action、HttpCase／`start_tour` 慣例）用 **context7**；**禁止 `find /` 或從根目錄全碟掃描**——本機搜尋一律限定 worktree 內，需參考已安裝 Odoo 原始碼時限定到具體 addon 目錄。先照參考模組的 URL 慣例寫出 tour，再視需要查證，不要為了找 URL 逆向整個 web client。
+- **查證順序（與 coding 相反）**：coding 是「先查 Odoo API 再寫」；你是在測已寫好的碼，**先看本任務送交的碼**（worktree 內本模組的欄位/model/view 名——這些就是你的 selector 依據，如 `[name='欄位名']`），**有需要 Odoo 原生慣例（tour trigger selector、頁面導航 URL/action、HttpCase／`start_tour` 寫法）才走 context7 查**。selector 拿不準時，先用已知的欄位/model 名寫**最小斷言**（如確認欄位存在），再視情況用 context7 查證。
+- **測試環境已在 `{{test_url}}` 運行、`--test-enable` 由系統執行**：**禁止 `find`／掃磁碟找 odoo-bin／venv／安裝源，也禁止為了推斷 DOM 結構去通讀已安裝的 Odoo 核心原始碼**（`odoo-envs/.../addons/...`、`web/static/src` 等）。這些是你逾時卡死的主因；需要的原生慣例一律走 context7，不要在硬碟上翻核心。
 - 不改功能程式；只新增/調整 `static/tests/`、`tests/`、`__manifest__.py` 的 assets。
 - pass/fail 由 `odoo-bin --test-enable` 的 exit code 判定（本階段由系統執行），你不需自行跑瀏覽器。
 
