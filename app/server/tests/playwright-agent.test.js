@@ -10,7 +10,7 @@ jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn(), stopReason
 jest.mock('../pipeline/agent-loader', () => ({ loadAgent: () => ({ model: 'sonnet', render: () => 'PROMPT' }) }));
 jest.mock('../pipeline/task-agent', () => ({ getProjectInfo: jest.fn(), worktreeParent: () => '/cwd' }));
 jest.mock('../pipeline/ensure-env', () => ({ ensureEnvRunning: jest.fn() }));
-jest.mock('../pipeline/env-agent', () => ({ runTourTests: jest.fn() }));
+jest.mock('../pipeline/env-agent', () => ({ runTourTests: jest.fn(), stopEnv: jest.fn() }));
 jest.mock('../pipeline/failure-classifier', () => ({ classifyFailureWithAgent: jest.fn() }));
 jest.mock('../pipeline/reentry', () => ({ bumpReentryOrStop: jest.fn().mockResolvedValue(false) }));
 jest.mock('../pipeline/git', () => ({
@@ -52,6 +52,7 @@ beforeEach(async () => {
   git.abortMerge.mockReset().mockResolvedValue(undefined);
   ensureEnvRunning.mockReset(); ensureEnvRunning.mockResolvedValue(true);
   envAgent.runTourTests.mockReset();
+  envAgent.stopEnv.mockReset().mockResolvedValue(undefined);
   classifier.classifyFailureWithAgent.mockReset(); classifier.classifyFailureWithAgent.mockResolvedValue('code');
   require('../pipeline/reentry').bumpReentryOrStop.mockResolvedValue(false);
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [projectId]);
@@ -129,6 +130,34 @@ test('P4 tour 進程猝死（非常規退出碼＋無錯誤）→ stopped/env，
   expect(s.blocker_type).toBe('env');
   expect(s.pw_retry_count).toBe(0);                          // infra 猝死不佔計數
   expect(classifier.classifyFailureWithAgent).not.toHaveBeenCalled(); // 猝死走確定性判定，不問 haiku
+});
+
+// P3：跑 tour 前暫停常駐 server（避免測試進程 -u test_cwt 與 live server 搶同顆 DB），跑完務必重起。
+test('P3 跑 tour 前 stopEnv、跑完 ensureEnvRunning 重起，順序正確', async () => {
+  const { ensureEnvRunning } = require('../pipeline/ensure-env');
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests 0 failed, 0 error(s)' });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  expect(envAgent.stopEnv).toHaveBeenCalledWith(projectId);
+  // stopEnv 在 runTourTests 之前
+  expect(envAgent.stopEnv.mock.invocationCallOrder[0])
+    .toBeLessThan(envAgent.runTourTests.mock.invocationCallOrder[0]);
+  // 重起（ensureEnvRunning）在 runTourTests 之後——ensureEnvRunning 也在階段開頭被叫一次，取最後一次
+  const restartOrder = ensureEnvRunning.mock.invocationCallOrder.at(-1);
+  expect(restartOrder).toBeGreaterThan(envAgent.runTourTests.mock.invocationCallOrder[0]);
+  const s = await statusOf(id);
+  expect(s.status).toBe('review_pending');
+});
+
+// P3：即使 tour 失敗，也要重起常駐 server（try/finally），別把環境留在 idle。
+test('P3 tour 失敗也重起常駐 server（finally）', async () => {
+  const { ensureEnvRunning } = require('../pipeline/ensure-env');
+  envAgent.runTourTests.mockRejectedValue(Object.assign(new Error('AssertionError'), { exitCode: 1 }));
+  classifier.classifyFailureWithAgent.mockResolvedValue('code');
+  const id = await makeTask(0);
+  await runTourStage(id, userId);
+  const restartOrder = ensureEnvRunning.mock.invocationCallOrder.at(-1);
+  expect(restartOrder).toBeGreaterThan(envAgent.runTourTests.mock.invocationCallOrder[0]);
 });
 
 test('code 失敗達 PW_LIMIT → stopped', async () => {

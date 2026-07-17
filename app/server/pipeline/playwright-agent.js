@@ -9,7 +9,7 @@ const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
 const { getProjectInfo, worktreeParent } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { ensureEnvRunning } = require('./ensure-env');
-const { runTourTests } = require('./env-agent');
+const { runTourTests, stopEnv } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { extractOdooError, looksLikeInfraDeath } = require('./deploy-testing');
 const { withProjectLock } = require('./project-lock');
@@ -140,18 +140,26 @@ async function runTourStage(taskId, userId, signal) {
       }
     }
 
-    // 3) Node 跑 tour（odoo-bin --test-enable），依 exit code 判定
-    try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
-    if (err && signal?.aborted) return;
-
-    // 失敗只分類一次（健檢 F3：舊版 148/172 對同一 err 逐字問 haiku 兩次）。
-    // 逾時被殺當環境問題、不重試（健檢 F8）；transient 自動重試一次，重試仍敗直接判 env（不重問，避免漂移）。
-    if (err) cls = (err.killed || looksLikeInfraDeath(err)) ? 'env' : await classifyFailureWithAgent(err.message, clsCtx);
-    if (err && cls === 'transient') {
-      err = null;
+    // 3) 跑 tour 前暫停常駐 server（P3）：測試進程會 `-u <module> -d test_<folder>`，與 live server 同顆 DB
+    //    併跑會 registry 走鏽／Postgres 鎖競爭。HttpCase 會自起獨立 http server（不需常駐 server），故暫停安全。
+    //    跑完（含重試、手動中止）務必重起——後續關卡、同專案其他任務與使用者瀏覽都需要它活著，用 try/finally 保證。
+    await stopEnv(task.project_id).catch(() => {});
+    try {
+      // Node 跑 tour（odoo-bin --test-enable），依 exit code 判定
       try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
       if (err && signal?.aborted) return;
-      if (err) cls = 'env'; // 重試仍敗（含再次逾時）：一律當環境問題停等人工，不重新分類
+
+      // 失敗只分類一次（健檢 F3：舊版 148/172 對同一 err 逐字問 haiku 兩次）。
+      // 逾時被殺／猝死當環境問題、不重試（F8/P4）；transient 自動重試一次，重試仍敗直接判 env（不重問，避免漂移）。
+      if (err) cls = (err.killed || looksLikeInfraDeath(err)) ? 'env' : await classifyFailureWithAgent(err.message, clsCtx);
+      if (err && cls === 'transient') {
+        err = null;
+        try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }
+        if (err && signal?.aborted) return;
+        if (err) cls = 'env'; // 重試仍敗（含再次逾時）：一律當環境問題停等人工，不重新分類
+      }
+    } finally {
+      await ensureEnvRunning(task.project_id).catch(() => {}); // 重起常駐 server（無論成敗/中止）
     }
   });
   // 手動暫停中止子行程：非失敗，狀態原地不動，解除暫停後從這一關重跑
