@@ -890,6 +890,24 @@ test('POST /api/tasks/:id/answer → reject_confirm_pending 回覆導回 reject_
   expect(logs.some(l => l.role === 'user' && l.content.includes('整區預設收合'))).toBe(true);
 });
 
+// 意圖：clarify_pending（respec-patch 澄清中）也要能收使用者回覆並導回 clarify_answered 續跑，
+// 不是只有 confirm_pending/reject_confirm_pending 兩態才能答覆
+test('POST /api/tasks/:id/answer → clarify_pending 可答覆並導回 clarify_answered 並落 user log', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'cp_1','odoo','T','c','clarify_pending') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ user_answer: '用小計、含稅' });
+  expect(res.status).toBe(200);
+  const { rows: [row] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(row.status).toBe('clarify_answered');
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [t.id]);
+  expect(logs.some(l => l.role === 'user' && l.content.includes('用小計、含稅'))).toBe(true);
+});
+
 
 // 項11 意圖：刪除／封存執行中任務必須先中止在飛 agent，否則子行程續跑到逾時（最長 30 分鐘）、
 // 甚至邊清 worktree 邊寫檔。四個入口（單筆/批次 × 刪除/封存）都要呼叫 abortTask。

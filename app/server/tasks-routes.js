@@ -98,8 +98,8 @@ async function uninstallTaskModule(task, excludeIds) {
   }
 }
 
-const NEEDS_ACTION_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
-const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'reject_confirm_pending'];
+const NEEDS_ACTION_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'clarify_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
+const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'reject_confirm_pending', 'clarify_pending'];
 const SAFE_INLINE_MIMETYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
 
 function registerRoutes(app) {
@@ -593,9 +593,12 @@ function registerRoutes(app) {
       const { user_answer } = req.body;
       if (!user_answer) return res.status(400).json({ error: 'user_answer required' });
 
-      // confirm_pending → confirm_answered（回初次分析）；reject_confirm_pending → reject_triage（回退回分診續談）
+      // confirm_pending → confirm_answered（回初次分析）；reject_confirm_pending → reject_triage（回退回分診續談）；
+      // clarify_pending → clarify_answered（respec-patch 澄清續談）
       // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答（否則下游 agent 會讀到重複答案）
-      const nextStatus = tasks[0].status === 'reject_confirm_pending' ? 'reject_triage' : 'confirm_answered';
+      const nextStatus = tasks[0].status === 'reject_confirm_pending' ? 'reject_triage'
+        : tasks[0].status === 'clarify_pending' ? 'clarify_answered'
+        : 'confirm_answered';
       const { rowCount } = await query(
         "UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1 AND status = $3",
         [req.params.id, nextStatus, tasks[0].status]
