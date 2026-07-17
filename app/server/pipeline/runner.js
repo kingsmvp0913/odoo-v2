@@ -34,6 +34,19 @@ const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_ans
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
 const MAX_GLOBAL = parseInt(process.env.PIPELINE_MAX_GLOBAL || '30', 10);
 
+// 重 odoo-bin 階段的全機併發上限：E2E（tour 產生 20 分＋odoo-bin --test-enable）與 deploy（odoo-bin -u）
+// 都吃 odoo-bin＋Postgres，單台機器同時跑太多會互相拖垮、逾時激增（實測 3 個 E2E 併發把 tour 產生拖爆 600s）。
+// 在 dispatch 層限流：滿載就不派、留給下一輪（不佔 _inFlight 槽，避免餓死 coding/QA 派工）。
+const STAGE_CONCURRENCY = {
+  playwright_running: parseInt(process.env.E2E_MAX_CONCURRENT || '2', 10),
+  deploy_testing: parseInt(process.env.DEPLOY_MAX_CONCURRENT || '3', 10),
+};
+function inflightInStage(status) {
+  let n = 0;
+  for (const e of _inFlight.values()) if (e.status === status) n++;
+  return n;
+}
+
 function abortTask(taskId) {
   const entry = _inFlight.get(Number(taskId));
   if (entry) entry.ctrl.abort();
@@ -343,12 +356,17 @@ function dispatchTask(task, settings) {
   // 全域上限即時核對：slots 是掃描開頭的快照，跨 user 併發掃描（cron 每 user fire-and-forget）
   // 會各自對同一份 _inFlight.size 算預算而超派；在此同步佔位點即時擋，讓所有掃描共用同一原子檢查。
   if (_inFlight.size >= MAX_GLOBAL) return false;
+  // 重 odoo-bin 階段（E2E/deploy）全機併發上限：同步佔位點原子核對（與 MAX_GLOBAL 同一保證），
+  // 滿載就不派、留給下一輪；skip 不消耗 slots，其他關（coding/QA）照常派工。
+  const cap = STAGE_CONCURRENCY[task.status];
+  if (cap && inflightInStage(task.status) >= cap) return false;
   const ctrl = new AbortController();
   const promise = runTask(task, settings, ctrl.signal).finally(() => {
     _inFlight.delete(task.id);
     return continuePipelineIfAdvanced(task);
   });
-  _inFlight.set(task.id, { ctrl, userId: task.user_id, promise, startedAt: Date.now() });
+  // status 記在飛階段：供 inflightInStage 計數重階段併發（此執行代表的關卡＝派工當下的 status）
+  _inFlight.set(task.id, { ctrl, userId: task.user_id, promise, startedAt: Date.now(), status: task.status });
   return true;
 }
 

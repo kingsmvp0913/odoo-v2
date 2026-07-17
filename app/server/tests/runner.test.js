@@ -364,6 +364,44 @@ test('C-4 已在飛的任務不重複派；槽位釋出後下一輪續派', asyn
   expect(r3.dispatched).toBe(1); // 只派 B
 });
 
+// --- P2：重 odoo-bin 階段（E2E/deploy）dispatch 層併發上限 ---
+
+test('P2 E2E 全機併發上限（E2E_MAX_CONCURRENT 預設 2）：4 個 playwright 只派 2，其餘留下輪', async () => {
+  const { runTourStage } = require('../pipeline/playwright-agent');
+  let openGate;
+  const gate = new Promise(res => { openGate = res; });
+  runTourStage.mockImplementation(() => gate);
+  const ids = [];
+  for (let i = 0; i < 4; i++) ids.push(await insertTask('playwright_running', `e2e${i}`));
+
+  const r = await runnerModule.runPipeline(userId);
+  expect(r.dispatched).toBe(2);                              // E2E 上限 2，其餘 2 個 skip（不佔槽）
+  expect(runnerModule.getInflightTaskIds().length).toBe(2);
+
+  openGate();
+  await runnerModule.whenIdle();
+  // 被 skip 的仍是 playwright_running（沒被吃掉/沒 stopped），下輪槽位釋出即可派
+  for (const id of ids) await dbModule.query("UPDATE tasks SET status='done' WHERE id=$1", [id]);
+});
+
+test('P2 E2E 上限不餓死其他關：3 個 E2E＋1 個 new → E2E 派 2、cs 仍派 1', async () => {
+  const { runTourStage } = require('../pipeline/playwright-agent');
+  const { runCsAgent } = require('../pipeline/cs-agent');
+  let openGate;
+  const gate = new Promise(res => { openGate = res; });
+  runTourStage.mockImplementation(() => gate);
+  runCsAgent.mockImplementation(() => gate);
+  for (let i = 0; i < 3; i++) await insertTask('playwright_running', `e2ex${i}`);
+  const csId = await insertTask('new', 'cshead'); // 較新 → 排在 E2E 之後被掃到
+
+  const r = await runnerModule.runPipeline(userId);
+  expect(r.dispatched).toBe(3);                                  // E2E 2 + cs 1（cs 不被 E2E 上限擋）
+  expect(runnerModule.getInflightTaskIds()).toContain(csId);     // 其他關沒被餓死
+
+  openGate();
+  await runnerModule.whenIdle();
+});
+
 test('C-4 暫停的任務不被掃到、不執行 handler', async () => {
   const { runCsAgent } = require('../pipeline/cs-agent');
   const t = await insertTask('new', 'paused');
