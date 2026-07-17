@@ -115,6 +115,22 @@ test('tour 失敗且分類 env → stopped/env（不退 coding）', async () => 
   expect(s.blocker_type).toBe('env');
 });
 
+// P4：tour 進程猝死（非常規退出碼＋無 Odoo 錯誤）→ 直接 env，不叫 classifier 瞎猜成 code 退 coding。
+test('P4 tour 進程猝死（非常規退出碼＋無錯誤）→ stopped/env，不呼叫 classifier、不退 coding', async () => {
+  envAgent.runTourTests.mockRejectedValue(Object.assign(
+    new Error('loading module web (10/65)\nloading module hr (30/65)'),
+    { exitCode: 4294967295, killed: false }
+  ));
+  classifier.classifyFailureWithAgent.mockResolvedValue('code'); // 若被叫到會誤判 code
+  const id = await makeTask(0);
+  await runTourStage(id, userId);
+  const s = await statusOf(id);
+  expect(s.status).toBe('stopped');
+  expect(s.blocker_type).toBe('env');
+  expect(s.pw_retry_count).toBe(0);                          // infra 猝死不佔計數
+  expect(classifier.classifyFailureWithAgent).not.toHaveBeenCalled(); // 猝死走確定性判定，不問 haiku
+});
+
 test('code 失敗達 PW_LIMIT → stopped', async () => {
   envAgent.runTourTests.mockRejectedValue(Object.assign(new Error('AssertionError'), { exitCode: 1 }));
   classifier.classifyFailureWithAgent.mockResolvedValue('code');

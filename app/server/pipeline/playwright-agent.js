@@ -11,7 +11,7 @@ const { runClaude, stopReason } = require('./claude-runner');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
-const { extractOdooError } = require('./deploy-testing');
+const { extractOdooError, looksLikeInfraDeath } = require('./deploy-testing');
 const { withProjectLock } = require('./project-lock');
 
 const PW_LIMIT = 3;
@@ -146,7 +146,7 @@ async function runTourStage(taskId, userId, signal) {
 
     // 失敗只分類一次（健檢 F3：舊版 148/172 對同一 err 逐字問 haiku 兩次）。
     // 逾時被殺當環境問題、不重試（健檢 F8）；transient 自動重試一次，重試仍敗直接判 env（不重問，避免漂移）。
-    if (err) cls = err.killed ? 'env' : await classifyFailureWithAgent(err.message, clsCtx);
+    if (err) cls = (err.killed || looksLikeInfraDeath(err)) ? 'env' : await classifyFailureWithAgent(err.message, clsCtx);
     if (err && cls === 'transient') {
       err = null;
       try { ({ log } = await runTourTests(task.project_id, moduleName, signal)); } catch (e) { err = e; }

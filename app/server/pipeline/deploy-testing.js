@@ -34,6 +34,25 @@ function extractOdooError(log) {
   return '（log 無 ERROR/Traceback——可能是環境或啟動層問題，非模組程式碼錯誤）\n' + s.slice(-600).trim();
 }
 
+// 進程異常死亡但 log 無任何 Odoo 錯誤行＝infra／資源層死亡（OS-kill／OOM／crash／access violation），
+// 非模組程式碼問題。真程式錯（ParseError／ImportError／語法錯）必在 log 留 ERROR／CRITICAL／Traceback；
+// 完全沒有＝還沒載到本模組就整個被幹掉（如核心模組升級吃光資源）——退 coding 無用（改本模組救不了核心死），
+// 一律歸 env。107 事故：deploy log exitCode 4294967295、killed:no、只到核心模組載入即中止。
+// 註：err.killed（我方 timeout kill）另由 stopEnvTimeout 攔，不走這裡。
+function looksLikeInfraDeath(err) {
+  if (!err) return false;
+  // OS-kill／crash／OOM／access violation 在 Windows 以非常規退出碼結束（4294967295=0xFFFFFFFF、0xC000_xxxx
+  // 等 >=2^31），POSIX 被信號殺為負值。正常 Odoo 程式錯誤走 SystemExit(1)——exit 1 的清楚錯誤交既有 classifier，
+  // 不在此攔（否則會把「Connection refused」這類已能正確歸 env 的搶走、改成不同 verdict）。
+  const code = err.exitCode;
+  const abnormalExit = typeof code === 'number' && (code < 0 || code >= 0x80000000);
+  if (!abnormalExit) return false;
+  // 且 log 無任何 Odoo 錯誤行（真程式錯必留 ERROR／CRITICAL／Traceback）：猝死＋無錯誤＝還沒載到本模組就被幹掉。
+  const log = `${err.message || ''}\n${err.stderr || ''}\n${err.stdout || ''}`;
+  const hasOdooError = /Traceback \(most recent call last\)|\bERROR\b|\bCRITICAL\b|^[ \t]*[\w.]*(Error|Exception|Warning|Interrupt)\b.*:/m.test(log);
+  return !hasOdooError;
+}
+
 // 從 'No module named X' 類錯誤抽出缺的模組/套件名（供缺件細分：自家 addon import／已宣告／漏宣告）。
 // 找不到回 null。
 function parseMissingModule(text) {
@@ -72,6 +91,18 @@ async function stopEnvTimeout(taskId, userId, err) {
   await query(
     "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
     [taskId, `測試區升級逾時（超過 10 分鐘被中止），多為環境／資源問題（DB lock、資源不足或啟動卡住），請檢查後重試。${logRef}`]
+  );
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+}
+
+// 升級進程異常死亡（非我方逾時、log 無 Odoo 錯誤＝infra／資源層被中止）：停等人工，不退 coding（比照 stopEnvTimeout）。
+async function stopEnvDeath(taskId, userId, err) {
+  await emitDeployVerdict(userId, taskId, '升級進程異常結束但 log 無 Odoo 錯誤（infra／資源層）→ 停等人工，不退開發');
+  const logFile = saveDeployLog(taskId, `envdeath-${Date.now()}`, err);
+  const logRef = logFile ? `\n完整 log：${logFile}` : '';
+  await query(
+    "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+    [taskId, `測試區升級進程異常結束（退出碼 ${err.exitCode ?? '?'}）但 log 無任何 Odoo 錯誤，多為核心模組升級被 OS／資源中止（未達本模組），視為環境／資源問題，請檢查後重試。${logRef}`]
   );
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
 }
@@ -151,6 +182,12 @@ async function doDeploy(task, taskId, userId, signal) {
   // 停等人工（健檢 F8）。必須在 transient 之前攔——否則 err.message 帶 "killed" 會落 transient 而重跑再 hang。
   if (err && err.killed) {
     await stopEnvTimeout(taskId, userId, err);
+    return;
+  }
+  // 進程異常死亡（非我方 kill）但 log 無任何 Odoo 錯誤＝infra／資源層死亡，退 coding 無用，歸 env（見 looksLikeInfraDeath）。
+  // 必須在 classifyFailureWithAgent 之前攔——否則 haiku 會把「沒有錯誤行的異常退出」瞎猜成 code 而誤退 coding（107 事故）。
+  if (err && looksLikeInfraDeath(err)) {
+    await stopEnvDeath(taskId, userId, err);
     return;
   }
 
@@ -267,4 +304,4 @@ async function doDeploy(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
 }
 
-module.exports = { runDeployTesting, extractOdooError };
+module.exports = { runDeployTesting, extractOdooError, looksLikeInfraDeath };
