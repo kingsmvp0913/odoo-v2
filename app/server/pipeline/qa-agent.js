@@ -15,7 +15,7 @@ const QA_RESUME_LIMIT = 2;
 // QA 審查：對照 SD 檢查任務 diff。pass→merge_running；fail→退 coding 並計數（滿 QA_LIMIT→stopped）。
 async function runQaAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count, qa_prompt_ver FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count, qa_prompt_ver, qa_reviewed_commit FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -27,6 +27,28 @@ async function runQaAgent(taskId, userId, signal) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_content='專案未設定任何已完成 clone 的 Repo', updated_at=NOW() WHERE id=$1",
       [taskId]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return true;
+  }
+
+  // 死結熔斷（P6）：自上輪 QA 後任務分支 HEAD 未變＝coding 認定程式已對、未提交任何修正，但 QA 又要 fail
+  // → 兩邊僵住。與其一路燒到 QA_LIMIT（現在每輪都是全新 opus coding），提早停下轉人工裁決
+  // （既有 triage 能判 QA 對→advance 放行、QA 錯→fix 補指示）。以單一主 repo 為準（單模組任務為主）。
+  let headSha = null;
+  if (task.git_branch && info.repos?.[0]?.local_path) {
+    const { revParse } = require('./git');
+    try { headSha = await revParse(info.repos[0].local_path, task.git_branch); } catch { /* 分支未建／無 commit：略過偵測 */ }
+  }
+  if (headSha && task.qa_reviewed_commit === headSha && (task.qa_retry_count || 0) > 0) {
+    const { rows: [prev] } = await query(
+      "SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 未通過]%' ORDER BY id DESC LIMIT 1",
+      [taskId]
+    );
+    const findings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（見上輪 QA 清單）';
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, `QA 與開發僵局：自上輪 QA 後任務分支未有新 commit（coding 認為程式已正確、未修改），但 QA 仍判未通過。需你裁決 QA 指出的問題是否成立——成立→補充如何修正；不成立→可裁決放行。\n\nQA 未解清單：\n${findings.slice(0, 500)}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
@@ -117,6 +139,9 @@ async function runQaAgent(taskId, userId, signal) {
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
   }
+
+  // 記下本輪實際審查的分支 HEAD：下輪 QA 若 HEAD 未變＝coding 未提交修正 → 上方死結熔斷提早轉人工。
+  if (headSha) await query('UPDATE tasks SET qa_reviewed_commit=$2 WHERE id=$1', [taskId, headSha]).catch(() => {});
 
   let result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
 

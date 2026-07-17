@@ -9,6 +9,8 @@ jest.mock('../pipeline/task-agent', () => {
   const actual = jest.requireActual('../pipeline/task-agent');
   return { ...actual, getProjectInfo: jest.fn() };
 });
+// 死結熔斷（P6）用 revParse 取任務分支 HEAD；getMainBranch 是 attempt() 內既有呼叫。
+jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main'), revParse: jest.fn() }));
 
 let dbModule, runQaAgent, taskAgent, runClaude;
 let userId, projectId;
@@ -55,6 +57,9 @@ beforeEach(() => {
     name: 'QP', odoo_version: '17.0', root: '/repos/qp',
     repos: [{ subdir: 'main', local_path: '/repos/qp/main' }]
   });
+  const git = require('../pipeline/git');
+  git.getMainBranch.mockReset().mockResolvedValue('main');
+  git.revParse.mockReset(); // 預設回 undefined → headSha null → 不觸發死結（既有測試不受影響）
 });
 
 let seq = 0;
@@ -75,6 +80,51 @@ function claudeReturns(json) {
     text: `前置輸出\n<result>\n${JSON.stringify(json)}\n</result>`, usage: null, durationMs: null
   });
 }
+
+// P6 死結熔斷：自上輪 QA 後任務分支 HEAD 未變（coding 未提交修正）＋已退過一次 → 提早停下轉人工裁決，
+// 不再燒 QA、不再退 coding（避免像 104 那樣 QA 幻覺誤判時一路空轉到 QA_LIMIT）。
+test('P6 死結：HEAD 未變＋已有前輪 fail → stopped(code) 轉裁決，不跑 QA、不退 coding', async () => {
+  const git = require('../pipeline/git');
+  git.revParse.mockResolvedValue('sha-frozen');
+  const id = await makeTask(1); // qa_retry_count=1（已退過一次）
+  await dbModule.query("UPDATE tasks SET qa_reviewed_commit='sha-frozen' WHERE id=$1", [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\nxmlid 不存在')", [id]);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('code');
+  expect(t.blocker_content).toContain('僵局');
+  expect(t.blocker_content).toContain('xmlid 不存在'); // 帶上 QA 未解清單供人工裁決
+  expect(t.qa_retry_count).toBe(1);                     // 不再累加、不再退 coding
+  expect(runClaude).not.toHaveBeenCalled();             // 提早熔斷，不燒 QA
+});
+
+// 反向：HEAD 有變（coding 真的提交了修正）→ 照常審查，並記下本輪審過的新 commit。
+test('P6 非死結：HEAD 有變 → 照常審查、記錄新 reviewed_commit', async () => {
+  const git = require('../pipeline/git');
+  git.revParse.mockResolvedValue('sha-new');
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(1);
+  await dbModule.query("UPDATE tasks SET qa_reviewed_commit='sha-old' WHERE id=$1", [id]);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_reviewed_commit FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+  expect(t.qa_reviewed_commit).toBe('sha-new'); // 記下本輪審過的 commit，供下輪比對
+  expect(runClaude).toHaveBeenCalled();
+});
+
+// 首輪（qa_retry_count=0）不得誤判死結（即使 reviewed_commit 恰等於 HEAD）。
+test('P6 首輪 qa_retry_count=0 → 不熔斷、照常審查', async () => {
+  const git = require('../pipeline/git');
+  git.revParse.mockResolvedValue('sha-x');
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+  const id = await makeTask(0);
+  await dbModule.query("UPDATE tasks SET qa_reviewed_commit='sha-x' WHERE id=$1", [id]);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(runClaude).toHaveBeenCalled();
+});
 
 test('verdict pass → merge_running', async () => {
   claudeReturns({ verdict: 'pass' });

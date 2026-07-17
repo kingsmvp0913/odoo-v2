@@ -375,6 +375,9 @@ async function migrate() {
     // QA session 綁定的 prompt 版本指紋（agent-loader.promptVersion）：resume 前比對，qa prompt 變了就強制 fresh。
     // （coding 已改無狀態、無 session，不需此欄。）既有列為 NULL≠現版本 → 下次自動 fresh。
     { table: 'tasks', col: 'qa_prompt_ver',        sql: 'ALTER TABLE tasks ADD COLUMN qa_prompt_ver TEXT' },
+    // 上輪 QA 審過的任務分支 HEAD commit（死結熔斷用）：本輪 HEAD 若與其相同＝coding 未提交任何修正，
+    // QA 卻仍要 fail → 兩邊僵局，提早停下轉人工裁決，不燒到 QA_LIMIT。
+    { table: 'tasks', col: 'qa_reviewed_commit',   sql: 'ALTER TABLE tasks ADD COLUMN qa_reviewed_commit TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
