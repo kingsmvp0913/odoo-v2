@@ -80,6 +80,9 @@ test('code_change_vague → cs_data_needed，questions 陣列存成 JSON', async
   const { rows: [t] } = await dbModule.query('SELECT status, cs_question FROM tasks WHERE id=$1', [taskId]);
   expect(t.status).toBe('cs_data_needed');
   expect(JSON.parse(t.cs_question)).toEqual(['請提供重現步驟', '請提供錯誤截圖']);
+  // 問題也要寫進時間軸（含問題本文），否則答完換面板就看不到問過什麼（B1）
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('[需要你補充資料]') && l.content.includes('請提供重現步驟'))).toBe(true);
 });
 
 // 容錯：model 偏離契約回單數 question 字串時仍可用（前端 JSON.parse 失敗會退回單題顯示）

@@ -335,6 +335,8 @@ function registerRoutes(app) {
           [req.params.id, logContent]
         );
       }
+      // 補資料後推 task:updated：讓開著該任務頁的瀏覽器即時重抓、看到剛補的答案（否則要手動 F5 才更新）
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
       runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {

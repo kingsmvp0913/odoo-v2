@@ -10,7 +10,7 @@ const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext } = require('./sync');
 const yaml = require('js-yaml');
-const { determineNextStatus, REQUIRED_FIELDS } = require('./analysis');
+const { determineNextStatus, REQUIRED_FIELDS, logAnalysisGate } = require('./analysis');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -220,11 +220,12 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  const nextStatus = determineNextStatus(result); // branch_pending | confirm_pending
+  const nextStatus = determineNextStatus(result); // branch_pending | confirm_pending | spec_review
   await query(
     `UPDATE tasks SET status=$2, analysis_yaml=$3, updated_at=NOW() WHERE id=$1`,
     [taskId, nextStatus, yaml.dump(result)]
   );
+  await logAnalysisGate(taskId, result, nextStatus);
   notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   return true;
 }

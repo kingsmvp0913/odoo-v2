@@ -70,6 +70,16 @@ async function runCsAgent(taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'cs_reply_pending' });
   } else if (result.type === 'code_change_vague') {
+    // 把要問的問題也寫進時間軸（role='ai'），否則問題只存在 cs_question 欄、只在動作面板顯示，
+    // 答完換面板就從對話時間軸消失＝使用者看不到「當初問了什麼」。
+    const qs = Array.isArray(result.questions) ? result.questions : (result.question ? [result.question] : []);
+    const qText = qs.map((q, i) => `${i + 1}. ${String(q).trim()}`).filter(Boolean).join('\n');
+    if (qText) {
+      await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+        [taskId, `[需要你補充資料]\n${qText}`]
+      );
+    }
     await query(
       "UPDATE tasks SET status='cs_data_needed', cs_question=$2, updated_at=NOW() WHERE id=$1",
       [taskId, result.question || JSON.stringify(result.questions || [])]

@@ -12,6 +12,24 @@ const REQUIRED_FIELDS = ['case_id', 'module', 'odoo_version', 'execution_mode', 
 // 持久性故障（CLI 壞掉、credentials）不設限會每分鐘無限重試、token 與機器空燒
 const ANALYSIS_RETRY_LIMIT = parseInt(process.env.PIPELINE_ANALYSIS_RETRY_LIMIT || '3', 10);
 
+// 把「分析結果 → 下一個閘門」寫成一筆時間軸訊息（role='ai'）：讓使用者在對話時間軸看到分析里程碑
+// 與「需要回答的問題／待審的規格」，而非只在動作面板一閃而過（答完換面板就消失＝時間軸看不到問過什麼）。
+// 兩條分析路徑（analysis-basic 的 analyzeTask、analysis-project 的 task-agent）共用，避免雙寫漂移。
+async function logAnalysisGate(taskId, parsed, nextStatus) {
+  const head = `模組：${parsed?.module || ''}｜重點：${parsed?.summary || ''}`;
+  let content;
+  if (nextStatus === 'confirm_pending') {
+    const qs = (parsed?.clarification_channel?.questions || [])
+      .map((q, i) => `${i + 1}. ${String(q).trim()}`).filter(Boolean).join('\n');
+    content = `[需要你回答]\n${head}${qs ? `\n\n${qs}` : ''}`;
+  } else if (nextStatus === 'spec_review') {
+    content = `[等待你審核規格]\n${head}`;
+  } else {
+    content = `分析完成，直接開工\n${head}`;
+  }
+  await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, content]);
+}
+
 function determineNextStatus(parsed) {
   const hasQuestions = Array.isArray(parsed?.clarification_channel?.questions) &&
     parsed.clarification_channel.questions.length > 0;
@@ -93,10 +111,7 @@ async function analyzeTask(taskId, signal) {
     [taskId, next_status, cleanYaml]
   );
 
-  await query(
-    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-    [taskId, `Analysis: ${parsed.summary || ''}\nMode: ${parsed.execution_mode}\nModule: ${parsed.module}`]
-  );
+  await logAnalysisGate(taskId, parsed, next_status);
 
   notify.emitToUser(task.user_id, 'task:updated', { taskId, status: next_status });
 
@@ -105,4 +120,4 @@ async function analyzeTask(taskId, signal) {
 
 // determineNextStatus / REQUIRED_FIELDS 供 task-agent（analysis-project 路徑）共用：
 // 兩條分析路徑同一份「YAML → 下一狀態」推導與必要欄位驗證，避免雙契約漂移
-module.exports = { analyzeTask, determineNextStatus, REQUIRED_FIELDS };
+module.exports = { analyzeTask, determineNextStatus, REQUIRED_FIELDS, logAnalysisGate };

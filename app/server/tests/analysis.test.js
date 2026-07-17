@@ -128,6 +128,10 @@ test('analyzeTask MODE_B 且無待答問題 → spec_review（規格審核閘門
 
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
   expect(rows[0].status).toBe('spec_review');
+
+  // 進閘門要在時間軸留一筆 ai 訊息，否則使用者答完（審核）後看不到「當初待審的是什麼」（B1）
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('[等待你審核規格]'))).toBe(true);
 });
 
 // MODE_B 但仍有待答問題 → 澄清問題分支優先，先進 confirm_pending 答題（答完重分析、
@@ -147,6 +151,10 @@ test('analyzeTask with questions → next_status confirm_pending', async () => {
 
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
   expect(rows[0].status).toBe('confirm_pending');
+
+  // 待答問題要寫進時間軸（含問題本文），否則答完換面板就看不到問過什麼（B1）
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('[需要你回答]'))).toBe(true);
 });
 
 test('analyzeTask low_confidence → next_status confirm_pending', async () => {
