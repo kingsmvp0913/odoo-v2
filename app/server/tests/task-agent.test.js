@@ -169,56 +169,6 @@ test('coding spawn 失敗 → retry_feedback 保留，下次重試不致盲改',
 
 // （B-1 runner 的 session_id 捕捉／--resume 測試已隨 runner 合併移至 claude-runner.test.js）
 
-test('B-3 distillFeedback：Odoo traceback → 只留 idx_ frame＋例外行、附 log 路徑', () => {
-  const { distillFeedback } = require('../pipeline/task-agent');
-  const raw = [
-    '[部署測試區升級失敗]',
-    'Traceback (most recent call last)',
-    '  File "/odoo/addons/base/models/ir_ui_view.py", line 400, in _validate',
-    '    raise ValidationError(msg)',
-    '  File "/repos/tap/main/idx_sale_note_t/views/sale_order_views.xml", line 5, in _apply',
-    '    <field name="note_t"/>',
-    'odoo.tools.convert.ParseError: Invalid view: field "note_t" does not exist',
-    '完整 log：C:\odoo-v2\data\logs\deploy-task52-3.log'
-  ].join('\n');
-  const { gate, body } = distillFeedback(raw);
-  expect(gate).toBe('部署測試區升級失敗');
-  expect(body).toContain('idx_sale_note_t');           // 模組 frame 留下
-  expect(body).toContain('ParseError');                // 例外行留下
-  expect(body).not.toContain('ir_ui_view.py');         // framework frame 砍掉
-  expect(body).toContain('完整 log：');                 // 逃生口保留
-});
-
-test('B-3 distillFeedback：QA 自然語言 → 去標籤後近原樣', () => {
-  const { distillFeedback } = require('../pipeline/task-agent');
-  const { gate, body } = distillFeedback('[QA 未通過]\n欄位 note_t 應為 Text 型別，實作用了 Char');
-  expect(gate).toBe('QA 未通過');
-  expect(body).toContain('note_t 應為 Text 型別');
-});
-
-// 意圖：QA 的 issues 是「當下完整未解清單」，截斷會讓 coding 看不到部分問題→白跑一輪
-// （QA gate 沒有 deploy/E2E 的「完整 log」逃生口，截掉就真的丟了）
-test('B-3 distillFeedback：QA 未解清單不截斷（跳過 400 字上限）', () => {
-  const { distillFeedback } = require('../pipeline/task-agent');
-  const issues = Array.from({ length: 12 }, (_, i) => `問題 ${i + 1}：欄位 f${i} 未依規格實作（規格要求 Text 型別且需 tracking，實作用了 Char 也漏了 tracking），請修正後以存檔重載驗證`).join('\n');
-  const { gate, body } = distillFeedback(`[QA 未通過]\n${issues}`);
-  expect(gate).toBe('QA 未通過');
-  expect(body.length).toBeGreaterThan(400);
-  expect(body).toContain('問題 12');   // 清單尾端不得被截掉
-  expect(body).not.toContain('…');
-});
-
-test('B-3 distillFeedback：人工退回原因不截斷（跳過 400 字上限）', () => {
-  const { distillFeedback } = require('../pipeline/task-agent');
-  const longReason = '問題一：備註欄位型別錯，應為 Text；'.repeat(30); // 遠超過 400 字
-  const raw = `[人工退回]\n${longReason}`;
-  const { gate, body } = distillFeedback(raw);
-  expect(gate).toBe('人工退回');
-  expect(body.length).toBeGreaterThan(400);
-  expect(body).not.toContain('…');
-  expect(body).toBe(longReason.trim());
-});
-
 // ---- B-5 runTaskCoding（無狀態：一律 fresh 統一 prompt，不 --resume）----
 async function insertCodingTask(suffix, extra = {}) {
   const cols = ['user_id','task_id','source','title','analysis_yaml','git_branch','status','project_id'];

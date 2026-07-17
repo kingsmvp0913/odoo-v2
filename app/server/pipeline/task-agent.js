@@ -80,51 +80,6 @@ async function latestResolution(taskId) {
   return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
 }
 
-// resume 路徑專用：把 retry_feedback 蒸餾成更精簡的內容，讓已有完整上下文的 session 只收重點（健檢 U3）。
-// 回傳 { gate:關卡, body:蒸餾後內容 }。逃生口：保留「完整 log：<路徑>」，蒸餾不足時 resume agent 可自行 Read。
-function distillFeedback(raw) {
-  const s = String(raw || '').trim();
-  if (!s) return { gate: '', body: '' };
-
-  let gate = '', rest = s;
-  const tag = s.match(/^\[([^\]]+)\]\s*/); // 開頭的 [QA 未通過] / [部署測試區升級失敗] / [E2E 測試未通過]
-  if (tag) { gate = tag[1]; rest = s.slice(tag[0].length); }
-
-  let logRef = '';
-  const logM = rest.match(/完整 log：.+$/m);
-  if (logM) { logRef = logM[0]; rest = rest.replace(logM[0], '').trim(); }
-
-  let body;
-  const tbIdx = rest.indexOf('Traceback (most recent call last)');
-  if (tbIdx !== -1) {
-    // Python traceback：只留「使用者模組 frame」＋最後例外行，砍掉 framework frames。
-    // 可編輯模組一律 idx_ 開頭（新建規則；原生模組禁止修改）→ 以 idx_ 判定使用者 frame。
-    const lines = rest.slice(tbIdx).split(/\r?\n/);
-    const kept = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\s*File .*idx_\w+/.test(lines[i])) {
-        kept.push(lines[i].trim());
-        if (lines[i + 1] && /^\s+\S/.test(lines[i + 1])) kept.push(lines[i + 1].trim());
-      }
-    }
-    const exc = [...lines].reverse().find(l => {
-      const t = l.trim();
-      return /^[\w.]+(Error|Exception|Warning|Failed)\b/.test(t) || /^[\w.]+: \S/.test(t);
-    });
-    if (exc) kept.push(exc.trim());
-    body = kept.join('\n') || lines.slice(-3).map(l => l.trim()).join('\n');
-  } else {
-    body = rest.replace(/\n{3,}/g, '\n\n').trim(); // 自然語言（QA/E2E）：近原樣，只收斂空白
-  }
-
-  // 人工審核退回是使用者手打的完整說明；QA 的 issues 是「當下完整未解清單」，截斷會讓 coding
-  // 看不到部分問題→白跑一輪（QA gate 也沒有「完整 log」逃生口）。兩者都跳過截斷，只收斂
-  // 自動化來源（部署/E2E 的 traceback、失敗訊息）。
-  if (gate !== '人工退回' && gate !== 'QA 未通過' && gate !== '追加需求' && body.length > 400) body = body.slice(0, 400) + '…';
-  if (logRef) body += '\n' + logRef;
-  return { gate, body };
-}
-
 function buildCodingPrompt(task, info, resolution, retryFeedback) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
@@ -362,4 +317,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, latestResolution, distillFeedback };
+module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, latestResolution };
