@@ -416,6 +416,49 @@ function registerRoutes(app) {
       res.json({ deleted: rowCount });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
+
+  // --- 失敗分類樣本（classify_samples）：failure-classifier 的 regex 判不出、交 haiku 的案例 ---
+  // read-only 聚合供人工把高頻 pattern 升級成零 token regex（健檢：haiku fallback 回饋迴圈）。
+  // 高頻 pattern 在 JS 聚合（取前 80 字），避開 pg-mem 對 LEFT()/substring 的支援落差。
+  app.get('/api/admin/classify-samples', auth, async (req, res) => {
+    try {
+      let days = parseInt(req.query.days, 10); if (!Number.isInteger(days) || days <= 0) days = 14;
+      days = Math.min(days, 90);
+      const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+
+      // 判定分佈：haiku 真的判出各類（agent_ok=true）vs 沒判出只落預設 env（agent_ok=false）。
+      // agent_ok 全是 false 時代表 haiku 幾乎沒幫上忙，這關可考慮省掉直接 unknown→env。
+      const { rows: byVerdict } = await query(
+        `SELECT verdict, agent_ok, COUNT(*)::int AS n FROM classify_samples
+          WHERE recorded_at >= $1 GROUP BY verdict, agent_ok ORDER BY n DESC`,
+        [cutoff]
+      );
+
+      // 近期樣本（看實際文字）
+      const { rows: recent } = await query(
+        `SELECT id, task_id, error_text, verdict, agent_ok, recorded_at FROM classify_samples
+          WHERE recorded_at >= $1 ORDER BY recorded_at DESC, id DESC LIMIT 50`,
+        [cutoff]
+      );
+
+      // 高頻真因（前 80 字聚合）：復發最多的就該補進 regex。窗內全撈上限 5000 筆在 JS 聚合。
+      const { rows: texts } = await query(
+        `SELECT error_text, recorded_at FROM classify_samples WHERE recorded_at >= $1 LIMIT 5000`,
+        [cutoff]
+      );
+      const bucket = new Map();
+      for (const t of texts) {
+        const key = String(t.error_text || '').slice(0, 80);
+        const cur = bucket.get(key) || { pattern: key, n: 0, last_seen: t.recorded_at };
+        cur.n += 1;
+        if (t.recorded_at > cur.last_seen) cur.last_seen = t.recorded_at;
+        bucket.set(key, cur);
+      }
+      const topPatterns = [...bucket.values()].sort((a, b) => b.n - a.n).slice(0, 20);
+
+      res.json({ days, total: texts.length, byVerdict, topPatterns, recent });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 }
 
 module.exports = { registerRoutes };

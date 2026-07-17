@@ -326,6 +326,17 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
+        <!-- 失敗分類樣本 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">失敗分類樣本</div>
+            <div class="setting-block-desc">regex 判不出、交 haiku 分類的案例。看高頻 pattern，把復發的補進 failure-classifier 的 regex 降低 haiku 呼叫量。</div>
+          </div>
+          <div class="setting-block-body">
+            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/classify-samples')">前往分類樣本 →</button>
+          </div>
+        </div>
+
         <!-- Prompt 送出記錄 -->
         <div class="setting-block">
           <div class="setting-block-head">
