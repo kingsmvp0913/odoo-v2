@@ -369,3 +369,15 @@ test('fail 無 spec_questions → 照舊 coding_running、qa_retry_count+1', asy
   expect(t.status).toBe('coding_running');
   expect(t.qa_retry_count).toBe(1);
 });
+
+// 意圖：純規格歧義（spec_questions 非空、issues/summary 皆空）不可被 R3「無細節」誤攔，
+// 必須直接進 clarify_pending 問使用者，且只呼叫一次 QA（不重問、不 stopped）。
+test('純 spec_questions（無 issues/summary）→ clarify_pending，不被 R3 攔截', async () => {
+  claudeReturns({ verdict: 'fail', spec_questions: ['金額用單價還是小計?'], issues: [], summary: '' });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('clarify_pending');
+  expect(t.qa_retry_count).toBe(0);
+  expect(runClaude).toHaveBeenCalledTimes(1); // 沒有被 R3 重問
+});

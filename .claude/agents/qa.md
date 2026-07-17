@@ -60,6 +60,6 @@ stage: qa
 </result>
 未通過：
 <result>
-{"verdict":"fail","issues":["具體問題1","具體問題2"],"summary":"給實作 Agent 的修正指引（使用者看得懂）"}
+{"verdict":"fail","issues":["具體問題1","具體問題2"],"summary":"給實作 Agent 的修正指引（使用者看得懂）","spec_questions":["規格歧義的具體問題（沒有就給空陣列或省略）"]}
 </result>
 ※ issues 必須是「當下完整的未解清單」＝仍未修正的舊項 + 這輪新發現，而非只列這輪新找到的。已在本輪修正的舊項不要列。

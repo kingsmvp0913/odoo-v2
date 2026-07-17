@@ -30,5 +30,5 @@ stage: qa
 
 【輸出】與上一輪相同的契約（標籤外不要其他文字）：
 通過：<result>{"verdict":"pass"}</result>
-未通過：<result>{"verdict":"fail","issues":["…"],"summary":"給實作 Agent 的修正指引"}</result>
+未通過：<result>{"verdict":"fail","issues":["…"],"summary":"給實作 Agent 的修正指引","spec_questions":["規格歧義的具體問題（沒有就給空陣列或省略）"]}</result>
 ※ issues 必須是「當下完整的未解清單」＝仍未修正的舊項＋這輪新發現。

@@ -131,9 +131,12 @@ async function runQaAgent(taskId, userId, signal) {
     const summary = String(r?.summary || '').trim();
     return list.length || summary ? { list, summary } : null;
   };
+  // spec_questions 非空＝有效的規格裁決請求：即使沒有 issues/summary 也不算「無細節的無效 fail」，
+  // 不可被 R3 攔截吞掉（否則規格歧義永遠進不了 clarify gate）。
+  const hasSpec = r => Array.isArray(r?.spec_questions) && r.spec_questions.some(s => String(s).trim());
   let verdict = normalizeVerdict(result);
 
-  if (verdict === 'fail' && !failDetail(result)) {
+  if (verdict === 'fail' && !failDetail(result) && !hasSpec(result)) {
     // fail 卻沒任何細節＝本輪審查無效：重問一次（非退 coding、不寫 [QA 未通過] log、不佔計數）；
     // 重問仍無細節才停等人工，blocker 講明實際收到的內容而非泛稱格式錯誤
     notify.emitToUser(userId, 'terminal:output', { taskId, data: '[QA] 回報 fail 但未附問題清單，視為無效審查，重問一次...\n' });
@@ -146,7 +149,7 @@ async function runQaAgent(taskId, userId, signal) {
       await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
       result = null; verdict = ''; // 重問也掛掉 → 走下方無效結果停等人工
     }
-    if (verdict === 'fail' && !failDetail(result)) {
+    if (verdict === 'fail' && !failDetail(result) && !hasSpec(result)) {
       await query(
         "UPDATE tasks SET status='stopped', blocker_content='QA 連兩輪回報 fail 但未附任何問題清單（issues/summary 皆空），無法退開發修正，請人工檢視 diff', updated_at=NOW() WHERE id=$1",
         [taskId]
