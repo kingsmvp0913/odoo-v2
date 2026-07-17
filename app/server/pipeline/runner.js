@@ -313,7 +313,7 @@ async function runTask(task, settings, signal) {
         if (ts?.tenant_id && ts?.client_id && ts?.client_secret && ts?.team_id && ts?.channel_id) {
           const { enqueue } = require('../teams');
           enqueue('task', task.id);
-          if (u.status === 'confirm_pending' || u.status === 'reject_confirm_pending') enqueue('question', task.id);
+          if (u.status === 'confirm_pending' || u.status === 'reject_confirm_pending' || u.status === 'clarify_pending') enqueue('question', task.id);
         }
       } catch { /* teams 未設定或不可用 */ }
     }
