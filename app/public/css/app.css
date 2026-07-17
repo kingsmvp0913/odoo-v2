@@ -120,6 +120,7 @@
 [data-theme="dark"] .status-badge.analysis_running { background: rgba(139,92,246,0.16); color: #c4b5fd; }
 [data-theme="dark"] .status-badge.confirm_pending,
 [data-theme="dark"] .status-badge.final_pending,
+[data-theme="dark"] .status-badge.clarify_pending,
 [data-theme="dark"] .status-badge.cs_data_needed { background: rgba(245,158,11,0.16); color: #fcd34d; }
 [data-theme="dark"] .status-badge.confirm_answered,
 [data-theme="dark"] .status-badge.qa_running { background: rgba(16,185,129,0.16); color: #6ee7b7; }
@@ -316,7 +317,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .status-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
 .status-badge.new { background: #eff6ff; color: #1d4ed8; }
 .status-badge.analysis_running { background: #f5f3ff; color: #6d28d9; }
-.status-badge.confirm_pending, .status-badge.final_pending { background: #fffbeb; color: #92400e; }
+.status-badge.confirm_pending, .status-badge.final_pending, .status-badge.clarify_pending { background: #fffbeb; color: #92400e; }
 .status-badge.confirm_answered { background: #ecfdf5; color: #065f46; }
 .status-badge.coding_running { background: #eff6ff; color: #1e40af; }
 .status-badge.qa_running { background: #ecfdf5; color: #065f46; }
