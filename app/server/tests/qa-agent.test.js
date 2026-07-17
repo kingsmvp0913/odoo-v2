@@ -60,10 +60,12 @@ beforeEach(() => {
 let seq = 0;
 async function makeTask(qaCount = 0) {
   seq++;
+  const { promptVersion } = require('../pipeline/agent-loader');
+  // 預設帶「當前 qa 版本」，讓有 qa_session 的 resume 測試通過版本閘門；指定 STALE 的由測試自行 UPDATE 覆蓋。
   const { rows: [t] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch, analysis_yaml, qa_retry_count)
-     VALUES ($1,$2,'odoo','T','qa_running',$3,'task/x','module: sale',$4) RETURNING id`,
-    [userId, `qa_${seq}`, projectId, qaCount]
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch, analysis_yaml, qa_retry_count, qa_prompt_ver)
+     VALUES ($1,$2,'odoo','T','qa_running',$3,'task/x','module: sale',$4,$5) RETURNING id`,
+    [userId, `qa_${seq}`, projectId, qaCount, promptVersion('qa')]
   );
   return t.id;
 }
@@ -186,6 +188,30 @@ test('QA resume 額度用完（count=2）→ 強制 fresh 全量', async () => {
   const { rows: [t] } = await dbModule.query('SELECT qa_session_id, qa_resume_count FROM tasks WHERE id=$1', [id]);
   expect(t.qa_session_id).toBe('qs-gen2'); // 換新世代
   expect(t.qa_resume_count).toBe(0);
+});
+
+// 意圖：改過 qa prompt 後，帶舊 qa_session 的任務不可 resume（吃不到新審查規則）→ 走 fresh 全量。
+test('QA prompt 版本不符 → 不 resume、走 fresh 全量、存新版本', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  runClaude.mockResolvedValue({ text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null, sessionId: 'qs-newver' });
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-old', qa_resume_count=0, qa_prompt_ver='STALE' WHERE id=$1", [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id,role,content) VALUES ($1,'ai','[QA 未通過]\n舊問題')", [id]);
+  await runQaAgent(id, userId);
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBeUndefined();  // 版本不符 → fresh
+  expect(runClaude.mock.calls[0][0]).toContain('module: sale');         // 全量規格
+  const { rows: [t] } = await dbModule.query('SELECT qa_prompt_ver FROM tasks WHERE id=$1', [id]);
+  expect(t.qa_prompt_ver).toBe(promptVersion('qa'));                    // fresh 存現版本
+});
+
+test('QA prompt 版本相符 → 照常 resume', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  runClaude.mockResolvedValue({ text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null });
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-keep', qa_resume_count=0, qa_prompt_ver=$2 WHERE id=$1", [id, promptVersion('qa')]);
+  await dbModule.query("INSERT INTO task_logs (task_id,role,content) VALUES ($1,'ai','[QA 未通過]\n備註欄位')", [id]);
+  await runQaAgent(id, userId);
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBe('qs-keep');   // 版本相符 → resume
 });
 
 // F11 意圖：QA 執行失敗不再一律 status=stopped/blocker_type=null 黑箱；比照 deploy 接 failure-classifier——

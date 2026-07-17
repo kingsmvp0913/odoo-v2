@@ -1,7 +1,7 @@
 const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { loadAgent } = require('./agent-loader');
+const { loadAgent, promptVersion } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, latestResolution } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
@@ -15,10 +15,12 @@ const QA_RESUME_LIMIT = 2;
 // QA 審查：對照 SD 檢查任務 diff。pass→merge_running；fail→退 coding 並計數（滿 QA_LIMIT→stopped）。
 async function runQaAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count, qa_prompt_ver FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
+  // prompt 版本綁定：qa prompt 改過（版本不符）或舊任務（NULL）→ resume 前判為不可續用，走 fresh 吃新指令。
+  const qaVer = promptVersion('qa');
 
   const info = await getProjectInfo(task.project_id);
   if (!info?.root) {
@@ -48,7 +50,7 @@ async function runQaAgent(taskId, userId, signal) {
 
     // 重驗走 --resume：上輪 session 已含規格＋審查規則＋repo 探索，本輪只送「重取 diff＋逐項重驗」
     // 的短增量 prompt（比照 coding 的省 token 設計）。首輪／無上輪清單／resume 額度用完 → fresh。
-    const canResume = !!task.qa_session_id && (task.qa_resume_count || 0) < QA_RESUME_LIMIT && !!prev;
+    const canResume = !!task.qa_session_id && (task.qa_resume_count || 0) < QA_RESUME_LIMIT && !!prev && task.qa_prompt_ver === qaVer;
     let callResult = null;
     if (canResume) {
       const retryAgent = loadAgent('qa-retry');
@@ -87,7 +89,7 @@ async function runQaAgent(taskId, userId, signal) {
         resolution
       }).trim();
       callResult = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'qa' });
-      await query('UPDATE tasks SET qa_session_id=$2, qa_resume_count=0 WHERE id=$1', [taskId, callResult.sessionId || null]).catch(() => {});
+      await query('UPDATE tasks SET qa_session_id=$2, qa_resume_count=0, qa_prompt_ver=$3 WHERE id=$1', [taskId, callResult.sessionId || null, qaVer]).catch(() => {});
     }
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', callResult.usage, callResult.durationMs);
     return callResult.text;

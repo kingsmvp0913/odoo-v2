@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
+const crypto = require('crypto');
 
 const AGENTS_DIR = path.join(__dirname, '..', '..', '..', '.claude', 'agents');
 const CLAUDE_MD_PATH = path.join(__dirname, '..', '..', '..', '.claude', 'CLAUDE.md');
@@ -28,15 +29,15 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 // 呼叫時自動 prepend；其餘 agent（分類器、merge、wiki、chat...）跟 Odoo 開發規範無關，不注入。
 // 注入模式：'full'＝整份過濾後 CLAUDE.md；'qa'＝只注入審查相關段落（§1 Odoo Constraints＋Rule 12）——
 // QA 只讀不寫，整份注入（Hard Rules 的寫入規範、前端配色、log 路徑等）是每輪固定的 token 浪費。
-// coding-retry／qa-retry 不注入：只走 --resume，session 上下文已含 fresh 輪帶入的規則，
+// qa-retry 不注入：只走 --resume，session 上下文已含 fresh 輪帶入的規則，
 // 重複前置會佔掉 resume prompt 八成以上、抵銷「resume 只送短 feedback」的省 token 設計（健檢 U3）。
+// （coding 已改無狀態單一 agent，無 coding-retry；coding-project 每輪 fresh、靠 prompt cache 省重送的規則。）
 const CLAUDE_MD_AGENTS = new Map([
   ['analysis-basic', 'full'], ['analysis-project', 'full'], ['analysis-reject', 'full'],
   ['coding-project', 'full'], ['qa', 'qa'], ['playwright', 'full']
 ]);
 
 // 診斷／修復型關卡：注入濃縮版 systematic-debugging（headless-safe），遇失敗先找 root cause 再改。
-// coding-retry 不在此列——靠 --resume 從 coding-project 的 session 繼承，不重送（守健檢 U3）。
 const DEBUG_AGENTS = new Set(['analysis-reject', 'coding-project']);
 const DEBUG_MD_PATH = path.join(__dirname, 'systematic-debugging.md');
 let _debugCache = null;
@@ -163,6 +164,19 @@ function invalidate(name) {
   else _cache.clear();
 }
 
+// 靜態系統提示的版本指紋（注入的 CLAUDE.md 規則 ＋ systematic-debugging ＋ agent body，與 makeRender 同組成，
+// 但不含 per-task 的 {{placeholder}} 替換）。供 session 綁定：建 session 時記下版本，resume 前比對——
+// prompt 內容變了（改 agent／CLAUDE.md／debug 方法論）就強制 fresh，讓新指令生效；沒變則照常 resume 省 token。
+function promptVersion(name) {
+  const agent = loadAgent(name);
+  const mode = CLAUDE_MD_AGENTS.get(name) || false;
+  let s = agent.body;
+  if (DEBUG_AGENTS.has(name)) s = `${loadDebugMethodology()}\n\n${s}`;
+  if (mode === 'full') s = `${loadPipelineRules()}\n\n${s}`;
+  else if (mode === 'qa') s = `${loadQaRules()}\n\n${s}`;
+  return crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
+}
+
 /**
  * 更新 agent 的 model 與 prompt body，寫回 .md（保留其餘 frontmatter 原樣）。
  * 錯誤以 err.status 標記（404 未知 name / 400 非法 model）。
@@ -206,4 +220,4 @@ function updateAgent(name, { model, prompt } = {}) {
   return loadAgent(name);
 }
 
-module.exports = { loadAgent, listAgents, listNames, getLabels, agentPath, invalidate, updateAgent, AGENTS_DIR, ALLOWED_MODELS };
+module.exports = { loadAgent, listAgents, listNames, getLabels, agentPath, invalidate, updateAgent, promptVersion, AGENTS_DIR, ALLOWED_MODELS };
