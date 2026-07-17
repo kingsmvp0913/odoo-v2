@@ -121,12 +121,15 @@ async function runRejectTriage(taskId, userId, signal) {
   if (decision === 'fix' && !allowBug) decision = 'respec';
 
   // 共用：清停下狀態、落到某 status（並歸零該關計數器）。keepFeedback 保留 retry_feedback 給重跑的關卡當回饋。
-  // reentry_count 一併歸零：分診＝人工已介入，總循環兜底（MAX_REENTRY）額度應重新起算——
+  // reentry_count 預設一併歸零：分診＝人工已介入，總循環兜底（MAX_REENTRY）額度應重新起算——
   // 否則達上限被停過的任務，人工放回後只剩一次下游失敗額度就再度永久 stopped，人工介入實質失效。
   // （代價：前端顯示的循環次數變成「距上次人工介入」的次數，屬可接受語意。）
-  const goto = async (nextStatus, { keepFeedback = false, freshRespec = false } = {}) => {
+  // 例外：fix→coding 呼叫端會先過 bumpReentryOrStop 斷路器並傳 resetReentry:false——
+  // 人工判 fix 的退回本身也計入總循環額度，不再無條件重取，避免人工退回無限繞過斷路器（長尾主因）。
+  const goto = async (nextStatus, { keepFeedback = false, freshRespec = false, resetReentry = true } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
-    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'reentry_count=0', 'updated_at=NOW()'];
+    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'updated_at=NOW()'];
+    if (resetReentry) sets.push('reentry_count=0');
     if (!keepFeedback) sets.push('retry_feedback=NULL');
     if (freshRespec) sets.push('coding_session_id=NULL');
     if (counter) sets.push(`${counter}=0`);
@@ -142,10 +145,14 @@ async function runRejectTriage(taskId, userId, signal) {
     return true;
   }
 
-  // fix → coding：保留 retry_feedback（退回原因／失敗回饋）給 coding resume 當修補依據
+  // fix → coding：保留 retry_feedback（退回原因／失敗回饋）給 coding resume 當修補依據。
+  // 先過總循環斷路器（bumpReentryOrStop）：人工退回的 fix 也計入額度，達上限直接 stopped，
+  // 不再無條件放行——關掉「人工退回無限繞過斷路器」的長尾漏洞。
   if (decision === 'fix') {
     if (summary) await logAi(summary);
-    await goto('coding_running', { keepFeedback: true });
+    const { bumpReentryOrStop } = require('./reentry');
+    if (await bumpReentryOrStop(taskId, userId, { blockerContent: summary || '' })) return true; // 達上限已標 stopped
+    await goto('coding_running', { keepFeedback: true, resetReentry: false });
     return true;
   }
 

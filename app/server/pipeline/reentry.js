@@ -13,7 +13,7 @@
 const { query } = require('../db');
 const notify = require('../notify');
 
-const MAX_REENTRY = parseInt(process.env.PIPELINE_MAX_REENTRY || '10', 10);
+const MAX_REENTRY = parseInt(process.env.PIPELINE_MAX_REENTRY || '6', 10);
 
 async function bumpReentryOrStop(taskId, userId, diag = {}) {
   const { rows: [t] } = await query(

@@ -93,16 +93,24 @@ test('fix → coding_running：保留 retry_feedback、SD 不動、summary 落 A
   expect(logs.some(l => l.role === 'ai' && l.content.includes('研判為程式 bug'))).toBe(true);
 });
 
-// 人工分診＝人工已介入，總循環兜底（MAX_REENTRY）額度須重新起算；不歸零的話，
-// 達上限被停過的任務放回 coding 後只剩一次下游失敗額度就再度永久 stopped，人工介入實質失效。
-test('goto（fix）→ reentry_count 歸零：人工介入後重取總循環額度', async () => {
+// Task 6：fix→coding 不再無條件歸零 reentry_count（那正是人工退回繞過總循環斷路器的長尾主因）。
+// 改為先過 bumpReentryOrStop：未達上限才放行且累加計數；達上限直接 stopped，不再進 coding。
+test('fix → coding_running 且 reentry_count 累加（不再繞過斷路器）', async () => {
   claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
   const id = await makeTask({ rejectCount: 1 });
-  await dbModule.query('UPDATE tasks SET reentry_count=10 WHERE id=$1', [id]); // 曾達 MAX_REENTRY
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, reentry_count FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
-  expect(t.reentry_count).toBe(0);
+  expect(t.reentry_count).toBe(1);
+});
+
+test('fix 達 MAX_REENTRY（6）→ stopped，不再無條件放行進 coding', async () => {
+  claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
+  const id = await makeTask({ rejectCount: 1 });
+  await dbModule.query('UPDATE tasks SET reentry_count=6 WHERE id=$1', [id]); // 已達新上限
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
 });
 
 test('respec → analysis_running：不自己改 SD，清 retry_feedback/coding_session_id，結論以 user 澄清餵回分析', async () => {

@@ -29,6 +29,10 @@ async function mkTask(reentry = 0) {
   return t.id;
 }
 
+test('MAX_REENTRY 預設為 6（收斂：舊值 10 拉長長尾）', () => {
+  expect(MAX_REENTRY).toBe(6);
+});
+
 test('未達上限：+1 並回傳 false（呼叫端續設 coding_running）', async () => {
   const id = await mkTask(0);
   const stopped = await bumpReentryOrStop(id, userId);
