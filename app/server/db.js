@@ -262,6 +262,19 @@ async function migrate() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // classify_samples：failure-classifier 的 regex 判不出（unknown）、交 haiku 分類的案例留樣本
+    // （真因文字＋最終判定＋haiku 是否真的判出）。用途：定期看高頻 pattern → 升級成零 token 的 regex，
+    // 讓 haiku fallback 呼叫量單調下降（健檢：deploy-fix haiku fallback 缺回饋迴圈）。
+    `CREATE TABLE IF NOT EXISTS classify_samples (
+      id           SERIAL PRIMARY KEY,
+      task_id      TEXT,
+      project_id   INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+      error_text   TEXT NOT NULL,
+      verdict      TEXT NOT NULL,
+      agent_ok     BOOLEAN NOT NULL DEFAULT false,
+      recorded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
     // 外部溝通紀錄：sync 從 Odoo/eService mail.message 逐筆拉進來的聊天紀錄（source='sync'，
     // external_id=Odoo message id，供增量同步 dedup）＋使用者在詳情頁手動追加的留言（source='manual'）。
     // original_text 之後只存 ticket 靜態欄位，聊天紀錄改由這張表存，分析時動態組回（見 sync.js assembleTaskContext）。
@@ -512,6 +525,9 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_rej_status     ON task_rejections (status)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_project    ON task_rejections (project_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_items_rid  ON rejection_items (rejection_id)').catch(() => {});
+
+  // classify_samples：依時間看近期案例、聚合高頻 pattern
+  await query('CREATE INDEX IF NOT EXISTS idx_cs_recorded_at ON classify_samples (recorded_at DESC)').catch(() => {});
 
   // task_messages（外部溝通紀錄）：依 task_id 排序讀取；external_id 供增量同步 dedup（同一任務同一
   // Odoo message 只存一筆，manual 留言 external_id 為 NULL 不受此限制，可有多筆）

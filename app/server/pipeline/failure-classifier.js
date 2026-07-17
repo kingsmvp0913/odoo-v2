@@ -74,14 +74,17 @@ async function classifyFailureWithAgent(text, opts = {}) {
   const first = classifyFailure(text, opts);
   if (first !== 'unknown') return first;
   // 判不出來才叫 haiku agent 分類（不自動修）；agent 出錯或仍判不出 → 丟人工（env），
-  // 不預設退 coding——寧可讓人看一眼，也不要把環境／跨模組問題丟回 coding 空轉
+  // 不預設退 coding——寧可讓人看一眼，也不要把環境／跨模組問題丟回 coding 空轉。
+  // 餵 haiku 的是「真因」而非 log 開頭：Odoo traceback 決定性例外行在結尾，slice(0,2000) 會把它砍掉、
+  // 只剩無用的 INFO banner，haiku 只能瞎猜（健檢 F2）。改用 extractOdooError 從尾端抽例外行。
+  // lazy require 避免與 deploy-testing 的循環相依（呼叫時該模組已完整載入）。
+  const { extractOdooError } = require('./deploy-testing');
+  const errText = extractOdooError(text);
+  // 判定收斂到單一出口：預設 env（安全側，丟人工），只有 haiku 明確判出合法類別才覆寫。
+  let verdict = 'env', agentOk = false;
   try {
     const agent = loadAgent('deploy-fix');
-    // 餵 haiku 的是「真因」而非 log 開頭：Odoo traceback 決定性例外行在結尾，slice(0,2000) 會把它砍掉、
-    // 只剩無用的 INFO banner，haiku 只能瞎猜（健檢 F2）。改用 extractOdooError 從尾端抽例外行。
-    // lazy require 避免與 deploy-testing 的循環相依（呼叫時該模組已完整載入）。
-    const { extractOdooError } = require('./deploy-testing');
-    const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: extractOdooError(text) }), { model: agent.model, agentType: 'deploy_fix' });
+    const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: errText }), { model: agent.model, agentType: 'deploy_fix' });
     // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
     if (opts.taskId || opts.projectId) {
       await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);
@@ -89,10 +92,25 @@ async function classifyFailureWithAgent(text, opts = {}) {
     const m = String(out || '').match(/\{[\s\S]*\}/);
     if (m) {
       const type = JSON.parse(m[0]).type;
-      if (VALID.has(type)) return type;
+      if (VALID.has(type)) { verdict = type; agentOk = true; }
     }
-  } catch { /* fall through to safe default */ }
-  return 'env';
+  } catch { /* fall through to safe default env */ }
+  // regex 沒涵蓋這個 pattern（才會走到 haiku）→ 留樣本供日後升級成零 token regex（回饋迴圈）。
+  await recordClassifySample(errText, verdict, agentOk, opts);
+  return verdict;
+}
+
+// 把「regex 判不出、交 haiku」的案例（真因文字＋最終判定＋haiku 是否真的判出）留成樣本。
+// 用途：定期看高頻 error_text，把復發的補進上方 TRANSIENT/ENV/CODE regex，讓 haiku 呼叫量單調下降。
+// 全程 best-effort：記樣本失敗絕不影響分類結果（分類是主線，樣本是副產物）。
+async function recordClassifySample(errText, verdict, agentOk, opts) {
+  try {
+    const { query } = require('../db');
+    await query(
+      'INSERT INTO classify_samples (task_id, project_id, error_text, verdict, agent_ok) VALUES ($1,$2,$3,$4,$5)',
+      [opts.taskId != null ? String(opts.taskId) : null, opts.projectId || null, String(errText).slice(0, 2000), verdict, agentOk]
+    );
+  } catch { /* 記樣本失敗不阻斷分類 */ }
 }
 
 module.exports = { classifyFailure, classifyFailureWithAgent };
