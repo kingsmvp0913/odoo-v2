@@ -63,3 +63,44 @@ test('unknown → haiku 回不合法內容 → 留樣本（verdict=env、agent_o
   expect(rows[0].verdict).toBe('env');
   expect(rows[0].agent_ok).toBe(false);
 });
+
+// —— 以下四例：驗證前面已修正的分類行為各一個點（健檢 R1 過載、task 84 env 釘死、反轉舉證不誤判 code、text task_id 一致）——
+
+test('regex 判得出（transient：API 過載 529）→ 不叫 haiku、不留樣本（等幾秒重試幾乎必過，健檢 R1）', async () => {
+  const r = await classifyFailureWithAgent('API Error: 529 {"type":"overloaded_error","message":"Overloaded"}', { projectId });
+  expect(r).toBe('transient');
+  expect(mockRunClaude).not.toHaveBeenCalled(); // 過載屬 regex transient，直接重試、不進 haiku（否則白花 token 又停等人工）
+  const { rows } = await dbModule.query('SELECT * FROM classify_samples');
+  expect(rows.length).toBe(0);
+});
+
+test('regex 判得出（env：depends 模組不在 addons path）→ 不叫 haiku、不留樣本（task 84 震盪根因用 regex 釘死）', async () => {
+  const r = await classifyFailureWithAgent('module idx_sale_x depends on module base_geoengine. But the latter module is not available in your system.', { projectId });
+  expect(r).toBe('env');
+  expect(mockRunClaude).not.toHaveBeenCalled(); // 若落 unknown 交 haiku，會因「depends 寫在 manifest」被誤判 code 退 coding 空轉（task 84）
+  const { rows } = await dbModule.query('SELECT * FROM classify_samples');
+  expect(rows.length).toBe(0);
+});
+
+test('裸 Traceback + ValidationError（env 也會印）→ 不判 code、落 unknown 交 haiku（留樣本）（反轉舉證：只收明確開發錯）', async () => {
+  mockRunClaude.mockResolvedValue({ text: '{"type":"code"}', usage: null, durationMs: null });
+  const r = await classifyFailureWithAgent(
+    'Traceback (most recent call last):\n  File "sale_order.py", line 12, in _check\n    raise ValidationError(...)\nodoo.exceptions.ValidationError: 金額不可為負',
+    { taskId: 'task_odoo_84', projectId }
+  );
+  // 關鍵：CODE regex 刻意不收裸 Traceback/ValidationError（每個 env 失敗也都印這些）。此例必須「落 unknown → 叫 haiku」，
+  // 而非被 regex 直接判 code——若 mockRunClaude 沒被呼叫，代表 regex 又把環境問題誤收成 code（task 84 回歸）。
+  expect(mockRunClaude).toHaveBeenCalled();
+  expect(r).toBe('code'); // 這裡的 code 來自 haiku 明確判定，非 regex 誤判
+  const { rows } = await dbModule.query('SELECT agent_ok FROM classify_samples');
+  expect(rows.length).toBe(1);
+  expect(rows[0].agent_ok).toBe(true);
+});
+
+test('taskId 傳整數 → 樣本 task_id 以字串存（classify_samples.task_id 為 text，需 String() 一致）', async () => {
+  mockRunClaude.mockResolvedValue({ text: '{"type":"code"}', usage: null, durationMs: null });
+  await classifyFailureWithAgent('some brand new mystery error QQ', { taskId: 777, projectId });
+  const { rows } = await dbModule.query('SELECT task_id FROM classify_samples');
+  expect(rows.length).toBe(1);
+  expect(rows[0].task_id).toBe('777'); // 整數 id 經 String() 轉存，與 text 欄位一致（勿存成數字型別）
+});
