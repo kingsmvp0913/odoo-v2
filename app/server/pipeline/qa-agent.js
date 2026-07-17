@@ -163,6 +163,16 @@ async function runQaAgent(taskId, userId, signal) {
   }
 
   if (verdict === 'fail') {
+    // 規格歧義分流（規格 §3.1/§3.2）：spec_questions 非空 → 批次問使用者，同輪 code 問題暫存待答完一次補。
+    const specQs = Array.isArray(result?.spec_questions)
+      ? result.spec_questions.map(s => String(s).trim()).filter(Boolean) : [];
+    if (specQs.length) {
+      const d = failDetail(result);
+      const codeCarry = d ? (d.list.length ? d.list.join('\n') : d.summary) : '';
+      const { enterClarifyGate } = require('./verdict-router');
+      await enterClarifyGate(taskId, userId, { questions: specQs, codeFeedback: codeCarry });
+      return true;
+    }
     const detail = failDetail(result); // 上方已擋掉無細節的 fail，此處必有值
     const issues = detail.list.length ? detail.list.join('\n') : detail.summary;
     // summary 是 md 契約要求的「給實作 Agent 的修正指引」，要進 retry_feedback；

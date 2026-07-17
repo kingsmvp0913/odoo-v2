@@ -345,3 +345,27 @@ test('R4 fresh QA timeout → stopped、blocker_type=env', async () => {
   expect(t.status).toBe('stopped');
   expect(t.blocker_type).toBe('env');
 });
+
+// 意圖：QA 判規格歧義（spec_questions 非空）→ 進 clarify_pending 批次問人，不退 coding、不加 qa_retry_count。
+test('spec_questions 非空 → clarify_pending、批次問題、不加 qa_retry_count', async () => {
+  claudeReturns({ verdict: 'fail', spec_questions: ['金額用單價還是小計?', '要不要含稅?'], issues: ['順帶：按鈕漏綁'] });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count, resume_status, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('clarify_pending');
+  expect(t.qa_retry_count).toBe(0);           // 規格裁決非 code-fix 輪，不計數
+  expect(t.resume_status).toBe('coding_running');
+  expect(t.retry_feedback).toContain('按鈕漏綁'); // 同輪 code 問題暫存，答完一次補
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [id]);
+  expect(logs.some(l => l.content.includes('金額用單價還是小計?') && l.content.includes('要不要含稅?'))).toBe(true);
+});
+
+// 回歸：fail 但無 spec_questions → 照舊退 coding（反轉舉證：漏給類別＝維持現況）。
+test('fail 無 spec_questions → 照舊 coding_running、qa_retry_count+1', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['純 code bug'] });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.qa_retry_count).toBe(1);
+});
