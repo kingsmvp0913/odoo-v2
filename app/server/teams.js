@@ -16,7 +16,8 @@ const STATUS_DISPLAY = {
   spec_review: '🟠 等待規格確認',
   review_pending: '🟢 等待審核', wiki_updating: '🔵 更新文件',
   done: '✅ 完成', stopped: '🔴 失敗待確認', merge_conflict: '🔴 合併衝突',
-  cs_running: '🔵 客服分析', cs_reply_pending: '🟡 等候送出', cs_data_needed: '🟡 需補充資料'
+  cs_running: '🔵 客服分析', cs_reply_pending: '🟡 等候送出', cs_data_needed: '🟡 需補充資料',
+  clarify_pending: '🟡 待你裁決', clarify_answered: '🔵 已裁決'
 };
 
 let _tokenCache = { token: null, expiresAt: 0 };
@@ -213,33 +214,51 @@ async function notifyTask(taskId) {
   }
 }
 
+// 依任務狀態決定要推播哪些問題：clarify_pending 走 QA 的 [需要你裁決] log（見 verdict-router.enterClarifyGate）；
+// 其餘（如 confirm_pending）走 analysis_yaml 的 clarification_channel。兩者不混用，避免 clarify_pending
+// 誤貼 analysis 階段的過期問題。
+function selectQuestions(status, analysisYaml, clarifyLogContent) {
+  if (status === 'clarify_pending') {
+    if (!clarifyLogContent) return [];
+    return clarifyLogContent.replace(/^\[需要你裁決\]\s*/, '').split('\n').map(s => s.trim()).filter(Boolean);
+  }
+  if (!analysisYaml) return [];
+  try {
+    const yaml = require('js-yaml');
+    // js-yaml v4: load() uses CORE_SCHEMA by default (no arbitrary code execution)
+    const parsed = yaml.load(analysisYaml, { schema: yaml.CORE_SCHEMA });
+    if (parsed && typeof parsed === 'object') {
+      // Nested format (CLAUDE.md standard): clarification_channel.questions: []
+      if (Array.isArray(parsed.clarification_channel?.questions)) {
+        return parsed.clarification_channel.questions.filter(q => typeof q === 'string');
+      // Flat array format (legacy)
+      } else if (Array.isArray(parsed.clarification_channel)) {
+        return parsed.clarification_channel.filter(q => typeof q === 'string');
+      }
+    }
+  } catch {}
+  return [];
+}
+
 async function notifyQuestion(taskId) {
   const settings = await getSettings();
   if (!isConfigured(settings)) return;
 
   const { rows: [task] } = await query(
-    'SELECT id, teams_message_id, analysis_yaml FROM tasks WHERE id = $1',
+    'SELECT id, teams_message_id, analysis_yaml, status FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task?.teams_message_id) return;
 
-  let questions = [];
-  if (task.analysis_yaml) {
-    try {
-      const yaml = require('js-yaml');
-      // js-yaml v4: load() uses CORE_SCHEMA by default (no arbitrary code execution)
-      const parsed = yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA });
-      if (parsed && typeof parsed === 'object') {
-        // Nested format (CLAUDE.md standard): clarification_channel.questions: []
-        if (Array.isArray(parsed.clarification_channel?.questions)) {
-          questions = parsed.clarification_channel.questions.filter(q => typeof q === 'string');
-        // Flat array format (legacy)
-        } else if (Array.isArray(parsed.clarification_channel)) {
-          questions = parsed.clarification_channel.filter(q => typeof q === 'string');
-        }
-      }
-    } catch {}
+  let clarifyLog = '';
+  if (task.status === 'clarify_pending') {
+    const { rows } = await query(
+      "SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' AND content LIKE '[需要你裁決]%' ORDER BY id DESC LIMIT 1",
+      [task.id]
+    );
+    clarifyLog = rows[0]?.content || '';
   }
+  const questions = selectQuestions(task.status, task.analysis_yaml, clarifyLog);
   if (!questions.length) return;
 
   const token = await getAccessToken(settings);
@@ -284,4 +303,4 @@ function enqueue(type, taskId) {
   setImmediate(_drain); // returns immediately; pipeline never waits
 }
 
-module.exports = { enqueue, sendTestMessage, resetTokenCache, isConfigured, getSettings };
+module.exports = { enqueue, sendTestMessage, resetTokenCache, isConfigured, getSettings, selectQuestions };
