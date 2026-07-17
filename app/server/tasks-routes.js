@@ -509,6 +509,11 @@ function registerRoutes(app) {
       const uw = await uninstallTaskModule(rows[0], [rows[0].id]);
       if (uw) warnings.push(uw);
       await cleanupTaskGit(rows[0]);
+      // 只清「任務生命週期」子表（隨任務死）。以下四張刻意「不」隨任務刪、保留為跨任務資料，勿再當漏刪補進來：
+      //   token_usage       → 計費/成本歷史（token-report ?all=true 專門把已刪任務列為孤兒；刪了成本統計會縮水）
+      //   prompt_logs       → 全域只留最新 100 筆的除錯 ring buffer，自動汰除（見 claude-runner）
+      //   task_rejections   → 退回稽核＋分類器訓練語料（reject-triage 算 allow_bug、classify-rejections 餵訓練、admin 有獨立管理頁）
+      //   classify_samples  → 分類器準確率訓練語料（admin 依 recorded_at 時窗統計）
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_attachments WHERE task_id = $1', [req.params.id]);
@@ -546,6 +551,7 @@ function registerRoutes(app) {
         if (w) warnings.push(w);
       }
       for (const t of deletable) await cleanupTaskGit(t);
+      // 同單筆刪除：只清任務生命週期子表；token_usage/prompt_logs/task_rejections/classify_samples 刻意保留（原因見上方單筆刪除註解）。
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_attachments WHERE task_id = ANY($1::int[])', [delIds]);
