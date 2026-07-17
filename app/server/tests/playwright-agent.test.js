@@ -132,6 +132,15 @@ test('P4 tour 進程猝死（非常規退出碼＋無錯誤）→ stopped/env，
   expect(classifier.classifyFailureWithAgent).not.toHaveBeenCalled(); // 猝死走確定性判定，不問 haiku
 });
 
+// P1：tour 產生放寬 timeout（比照 coding），別再像 106 那樣死在預設 600s。
+test('P1 tour-author runClaude 帶放寬的 timeoutMs（預設 1200s）', async () => {
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests 0 failed, 0 error(s)' });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  expect(runClaude).toHaveBeenCalled();
+  expect(runClaude.mock.calls[0][1].timeoutMs).toBe(1200000); // 20 分，非預設 600s
+});
+
 // P3：跑 tour 前暫停常駐 server（避免測試進程 -u test_cwt 與 live server 搶同顆 DB），跑完務必重起。
 test('P3 跑 tour 前 stopEnv、跑完 ensureEnvRunning 重起，順序正確', async () => {
   const { ensureEnvRunning } = require('../pipeline/ensure-env');

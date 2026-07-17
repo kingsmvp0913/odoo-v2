@@ -15,6 +15,9 @@ const { extractOdooError, looksLikeInfraDeath } = require('./deploy-testing');
 const { withProjectLock } = require('./project-lock');
 
 const PW_LIMIT = 3;
+// tour 產生＝重探索＋讀範例＋寫 tour/HttpCase，與 coding 同屬長階段，預設 600s 常不夠
+//（106 事故：claude 執行逾時整整 600s、tour 沒寫完就被砍）。獨立放寬、可用 env 調整（比照 coding 的 CODING_TIMEOUT_MS）。
+const E2E_TIMEOUT_MS = parseInt(process.env.PIPELINE_E2E_TIMEOUT_MS || '1200000', 10);
 
 // 失敗診斷完整落地（比照 deploy-testing.js 的 saveDeployLog）：blocker/feedback 只留摘要，
 // 完整 stdout/stderr/exitCode 存檔供事後鑑識，避免 tour 斷言細節與 traceback 永久遺失。
@@ -107,7 +110,7 @@ async function runTourStage(taskId, userId, signal) {
       login: E2E_LOGIN,
       module: moduleName
     }).trim();
-    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD }, agentType: 'playwright' });
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD }, agentType: 'playwright', timeoutMs: E2E_TIMEOUT_MS });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);
