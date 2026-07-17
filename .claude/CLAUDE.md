@@ -7,6 +7,8 @@
 ## Skills
 - **getSQL** (`.claude/skills/getSQL/SKILL.md`) - 透過 SSH-SQLM API 查詢遠端 PostgreSQL。觸發：`/getSQL`
 When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` before doing anything else.
+- **platformDB** (`.claude/skills/platformDB/SKILL.md`) - 查平台自己的本地 PostgreSQL（`claude` DB／port 5416）：tasks、token_usage、彈跳計數、pipeline 指標。觸發：`/platformDB`
+When the user types `/platformDB`, invoke the Skill tool with `skill: "platformDB"` before doing anything else.
 <!-- /platform-only -->
 
 ## 0. Hard Rules
