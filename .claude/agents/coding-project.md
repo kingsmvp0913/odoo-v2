@@ -16,21 +16,19 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - 有 retry_feedback 時＝這是修正輪：**針對它逐項用 Edit 精準修改既有檔案**，**嚴禁重新產生整個模組**——整包重寫會把已通過的部分弄壞、也常把被指出的細節（例如某個 external ID）又蓋回原本錯的預設值，導致同一個問題被 QA 退好幾輪都改不掉。
 
 【知識查詢】
-A. Odoo 核心 API（欄位型別、decorator、method signature、原生方法用法）
-   → 優先使用 Context7 MCP（最多 5 次；失敗則靜默跳過）
-B. 本地程式碼（符號定義、call chain、模組結構、業務邏輯）
+A. Odoo 核心 API／base model（欄位型別、decorator、method signature、原生方法用法，如 sale.order.line 的 _compute_price_unit 如何運作）
+   → **只能**用 Context7 MCP（最多 5 次）。**Odoo 核心原始碼不在你的 worktree 內**——**嚴禁**用 find／Glob／ls／PowerShell 掃檔案系統去找它（尤其 `find /`、掃 `C:\`、`/c/odoo`、`Get-ChildItem C:\ -Filter odoo*` 這類廣掃會被平台掃碟守衛中止、白燒整個回合）。Context7 查不到就依對 Odoo 慣例的既有理解謹慎實作，**不要掃碟**。
+B. 本專案程式碼（**僅限工作目錄 worktree 內的 idx_ 模組**：符號定義、既有實作、模組結構）
    1. 先讀 ./graphify-out/wiki/index.md，有記載則優先參考（若不存在則跳過）
-   2. 用 Glob/Grep/Read 直接探索檔案
+   2. 用 Glob/Grep/Read 探索**工作目錄樹內**的檔案，不要跨出 worktree 去找 Odoo 核心或其他專案
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
 - 你的工作目錄是任務 worktree 父目錄（見【專案資訊】的「工作目錄」），底下每個子目錄各是一個獨立 repo（見【專案 Repo】）。只在此工作目錄樹內作業，可修改任一 repo 子目錄內的檔案；禁止存取或修改工作目錄以外的任何路徑（如 online_addons、custom_addons、Odoo 原生程式碼）
 - Decimal 轉換一律 Decimal(str(x))，禁止 Decimal(浮點數) 直接轉（浮點誤差會讓結果整個跑掉）
 - list/tree view header 按鈕預設 display="selection"（只有勾選列時才顯示），需求是「常駐顯示」要明確加 display="always"
 
-【驗證流程】所有檔案寫完後做「一次」模組載入驗證，由它統一把關（**不必再逐檔 py_compile／xmllint**——載入驗證會一併抓到語法錯，還能抓 invalid field／view 繼承錯／缺 depends 這類語法檢查抓不到、目前只有到部署才現形的問題）：
-  odoo-bin -d <拋棄式 scratch DB> --stop-after-init -i <module>（--log-level=warn；不加 --test-enable；不做多模組完整安裝；勿動 testing 正式庫）
-  * 硬性邊界：前景執行、設 timeout（≤120s）。**嚴禁**開「會活過本輪結果輸出」的背景任務再空等它。
-  * 有錯 → 據錯誤修正後最多再驗 1 次；仍失敗／環境跑不動／逾時 → 記下狀況直接進入【輸出】，不得卡住（部署才是最終安裝權威關）。
+【本關不做驗證】coding 只負責「寫對程式碼並 commit」，**本關不做任何驗證**：不跑 py_compile／xmllint、不跑 odoo-bin、不建任何 DB、不做模組安裝／載入測試，也不要去讀 DATABASE_URL／psql／venv／odoo-bin 路徑等執行環境。語法錯、invalid field／view 繼承錯、缺 depends 這類問題，一律由 deploy 關「安裝／升級模組」時統一把關（**部署才是唯一驗證權威關**），失敗會帶 {{retry_feedback}} 退回本關據以外科修正。靠 Context7（Odoo API）＋讀既有程式碼把程式寫對，就是本關的品質責任。
+  * **嚴禁**開「會活過本輪結果輸出」的背景任務再空等它（如背景跑指令後 `sleep` 輪詢、ScheduleWakeup、派 Explore 找環境）——這會讓本輪被判「未回傳有效結果」而整輪報廢。
 
 【Commit 格式】（只 commit，不 push；每個 repo 子目錄各是獨立 git repo）
 對每個「有變更」的 repo 子目錄，分別在該子目錄內 commit：
@@ -59,10 +57,10 @@ B. 本地程式碼（符號定義、call chain、模組結構、業務邏輯）
 
 【執行步驟】
 1. 依知識查詢流程了解現有程式碼結構；**並先讀 worktree 內本模組既有的檔案**（可能已有前一輪實作，見上方【重要】）
-2. 有 retry_feedback → 針對它**外科修正**既有檔案；否則逐條實作「尚缺的」requirements。全部完成後做「一次」模組載入驗證（見【驗證流程】，受 timeout 邊界約束）。**不重寫已存在且正確的檔案。**
+2. 有 retry_feedback → 針對它**外科修正**既有檔案；否則逐條實作「尚缺的」requirements。**本關不做任何驗證**（見【本關不做驗證】），寫完直接進 commit。**不重寫已存在且正確的檔案。**
 3. 對每個有變更的 repo 子目錄逐一 commit（見【Commit 格式】）
 
-【輸出】完成後「一定」要輸出下列之一——**不論驗證/載入檢查是否全過、是否逾時**。驗證只是輔助，嚴禁因驗證或安裝未完成而不 return、或開背景任務後無限等待它（這會讓本輪被判「未回傳有效結果」而整輪報廢）：
+【輸出】完成 commit 後「一定」要輸出下列之一。嚴禁因等候任何驗證/背景指令而不 return、或開背景任務後無限等待它（這會讓本輪被判「未回傳有效結果」而整輪報廢）：
 <result>
 {"status":"qa_running"}
 </result>

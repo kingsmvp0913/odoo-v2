@@ -44,7 +44,7 @@ When the user types `/platformDB`, invoke the Skill tool with `skill: "platformD
 <!-- platform-only -->
 - 前端（`app/public`）配色一律走 `app.css` 的 CSS 變數／dark-aware class（如錯誤框套 `.error-msg`）；禁止在 inline style 寫死淺色 `background`（`#fff`/`#fef2f2`/`#f8fafc` 等）而不同時寫死可讀文字色——否則深色模式文字色吃 `var(--text)` 翻白＝隱形。底色需區隔時用 `var(--bg)`/`var(--surface)` 等變數，勿寫死。
 <!-- /platform-only -->
-- `[Step] → [Verify]`：Python `python -m py_compile <file>`；XML `xmllint --noout <file>`；可載入性 `odoo-bin -d test --stop-after-init -i <module>`（若可用）。
+- 驗證統一在 deploy 關「安裝／升級模組」時進行（語法錯、invalid field、view 繼承錯、缺 depends 一併把關）；pipeline 各關**不自行**跑 py_compile／xmllint／odoo-bin 或建 DB 做本地驗證，寫對程式碼靠 Context7＋讀既有碼。
 
 ## 3. Output Style
 繁中術語：專案/資料庫/佈署/模組. Keep English: Variable/Function/Hook/Class/Field/Model/Method/Controller.

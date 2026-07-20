@@ -125,11 +125,26 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { this.error = e.message; }
       finally { this.loading = false; }
     },
+    // 分頁撈完整對話 log（task_logs），避免 detail 端點只回末 5 筆而截斷對話時間軸。
+    // 順序不重要——timeline() 會依 ts 重排；每頁 ≤100，撈到不足一頁為止（cap 防呆）。
+    async fetchAllLogs() {
+      const all = [];
+      const PAGE = 100;
+      for (let offset = 0; offset < 2000; offset += PAGE) {
+        const rows = await Api.get(`tasks/${this.$route.params.id}/logs?limit=${PAGE}&offset=${offset}`);
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        all.push(...rows);
+        if (rows.length < PAGE) break;
+      }
+      return all;
+    },
     // 靜默重抓任務＋logs（不切 loading，避免即時更新時整頁閃「載入中」）
     async refresh() {
       const data = await Api.get(`tasks/${this.$route.params.id}`);
       this.task = data.task || data;
-      this.logs = data.logs || [];
+      // 對話時間軸要完整歷史：改撈分頁全量 log，撈失敗才退回 detail 的末 5 筆快照
+      try { this.logs = await this.fetchAllLogs(); }
+      catch { this.logs = data.logs || this.logs || []; }
       this.ticketAttachments = data.attachments || [];
       this.clarification = data.clarification || { summary: '', questions: [] };
       this.spec = data.spec || null; // spec_review 審核頁的規格（後端已 parse analysis_yaml）
