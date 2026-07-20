@@ -153,18 +153,14 @@ async function runQaAgent(taskId, userId, signal) {
     return v === 'passed' ? 'pass' : v === 'failed' ? 'fail' : v;
   };
   // fail 必須附可行動細節（issues 或 summary）才有資格退 coding——「未提供細節」的 fail 會讓 coding
-  // 瞎改一輪、還污染下一輪 QA 的未解清單，白燒 qa_retry/reentry（健檢 R3）
-  const failDetail = r => {
-    const list = Array.isArray(r?.issues) ? r.issues.map(s => String(s).trim()).filter(Boolean) : [];
-    const summary = String(r?.summary || '').trim();
-    return list.length || summary ? { list, summary } : null;
-  };
+  // 瞎改一輪、還污染下一輪 QA 的未解清單，白燒 qa_retry/reentry（健檢 R3）。判定與下方實際消費
+  // （parseQaIssues）須同一函式，否則 guard 放行的畸形 fail 會讓 detail.list 對 null 取屬性炸掉。
   // spec_questions 非空＝有效的規格裁決請求：即使沒有 issues/summary 也不算「無細節的無效 fail」，
   // 不可被 R3 攔截吞掉（否則規格歧義永遠進不了 clarify gate）。
   const hasSpec = r => Array.isArray(r?.spec_questions) && r.spec_questions.some(s => String(s).trim());
   let verdict = normalizeVerdict(result);
 
-  if (verdict === 'fail' && !failDetail(result) && !hasSpec(result)) {
+  if (verdict === 'fail' && !parseQaIssues(result) && !hasSpec(result)) {
     // fail 卻沒任何細節＝本輪審查無效：重問一次（非退 coding、不寫 [QA 未通過] log、不佔計數）；
     // 重問仍無細節才停等人工，blocker 講明實際收到的內容而非泛稱格式錯誤
     notify.emitToUser(userId, 'terminal:output', { taskId, data: '[QA] 回報 fail 但未附問題清單，視為無效審查，重問一次...\n' });
@@ -177,7 +173,7 @@ async function runQaAgent(taskId, userId, signal) {
       await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', err);
       result = null; verdict = ''; // 重問也掛掉 → 走下方無效結果停等人工
     }
-    if (verdict === 'fail' && !failDetail(result) && !hasSpec(result)) {
+    if (verdict === 'fail' && !parseQaIssues(result) && !hasSpec(result)) {
       await query(
         "UPDATE tasks SET status='stopped', blocker_content='QA 連兩輪回報 fail 但未附任何問題清單（issues/summary 皆空），無法退開發修正，請人工檢視 diff', updated_at=NOW() WHERE id=$1",
         [taskId]
@@ -198,7 +194,7 @@ async function runQaAgent(taskId, userId, signal) {
     const specQs = Array.isArray(result?.spec_questions)
       ? result.spec_questions.map(s => String(s).trim()).filter(Boolean) : [];
     if (specQs.length) {
-      const d = failDetail(result);
+      const d = parseQaIssues(result);
       const codeCarry = d ? (d.list.length ? d.list.join('\n') : d.summary) : '';
       const { enterClarifyGate } = require('./verdict-router');
       await enterClarifyGate(taskId, userId, { questions: specQs, codeFeedback: codeCarry });
