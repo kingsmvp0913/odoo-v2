@@ -47,7 +47,7 @@ test('render 漏傳 placeholder → console.warn 告警（不靜默劣化，健�
 test('listAgents 含所有實際使用的 agent', () => {
   const names = L.listAgents().map(a => a.name);
   for (const n of [
-    'analysis-basic', 'analysis-project', 'coding-project',
+    'analysis-project', 'coding-project',
     'cs', 'merge', 'deploy-fix', 'library', 'chat'
   ]) expect(names).toContain(n);
   // PS1「開工」pipeline 已退役，不應再有其 subagent

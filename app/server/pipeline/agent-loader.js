@@ -33,7 +33,7 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 // 重複前置會佔掉 resume prompt 八成以上、抵銷「resume 只送短 feedback」的省 token 設計（健檢 U3）。
 // （coding 已改無狀態單一 agent，無 coding-retry；coding-project 每輪 fresh、靠 prompt cache 省重送的規則。）
 const CLAUDE_MD_AGENTS = new Map([
-  ['analysis-basic', 'full'], ['analysis-project', 'full'], ['analysis-reject', 'full'],
+  ['analysis-project', 'full'], ['analysis-reject', 'full'],
   ['coding-project', 'full'], ['qa', 'qa'], ['playwright', 'full']
 ]);
 

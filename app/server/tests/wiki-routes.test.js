@@ -3,7 +3,6 @@ const { newDb } = require('pg-mem');
 
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ processed: 0 }), resetLoopCounter: jest.fn().mockResolvedValue(undefined) }));
-jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-wiki';

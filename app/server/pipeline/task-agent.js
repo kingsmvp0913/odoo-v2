@@ -183,7 +183,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  // 契約（analysis-project.md）：<result> 內「裸 YAML」，與 analysis-basic 同一份約定。
+  // 契約（analysis-project.md）：<result> 內「裸 YAML」。
   // 舊契約要 agent 把整份 YAML 做 JSON 逃逸再包 JSON——多欄位含引號時逃逸極易出錯；
   // 改裸 YAML，下一狀態由 server 端 determineNextStatus 推導（與 analysis.js 單一真相）。
   const result = await parseAgentResult(raw, {

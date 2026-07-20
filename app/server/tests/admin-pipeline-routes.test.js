@@ -10,7 +10,6 @@ jest.mock('../pipeline/runner', () => ({
   abortTask: jest.fn(),
   whenIdle: jest.fn().mockResolvedValue(undefined)
 }));
-jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-admin-pipeline';

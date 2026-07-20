@@ -8,7 +8,6 @@ jest.mock('../pipeline/runner', () => ({
   runPipeline: jest.fn().mockResolvedValue({ processed: 0 }),
   resetLoopCounter: jest.fn().mockResolvedValue(undefined)
 }));
-jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn()
 }));

@@ -13,7 +13,6 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({
 jest.mock('../pipeline/runner', () => ({
   runPipeline: jest.fn().mockResolvedValue({ dispatched: 2 })
 }));
-jest.mock('../pipeline/analysis', () => ({ analyzeTask: jest.fn() }));
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(),
   runDeploy: jest.fn(),

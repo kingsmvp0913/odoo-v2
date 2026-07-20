@@ -67,7 +67,7 @@ test('parseAgentResult：帶 ref 且補救失敗（非 abort）→ 落一筆 rep
   expect(mockLogFailed).toHaveBeenCalled();
 });
 
-test('parseAgentResult：YAML 路徑（analysis-basic）— <result> 包住含 fence 的 YAML 能 load', async () => {
+test('parseAgentResult：YAML 路徑（analysis-project）— <result> 包住含 fence 的 YAML 能 load', async () => {
   const raw = '<result>\n```yaml\ncase_id: "t1"\nmodule: sale\n```\n</result>';
   const v = await parseAgentResult(raw, { parse: yaml.load });
   expect(v.case_id).toBe('t1');
