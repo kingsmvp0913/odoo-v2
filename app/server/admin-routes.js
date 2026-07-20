@@ -389,12 +389,12 @@ function registerRoutes(app) {
       limit = Math.min(limit, 200);
       let offset = parseInt(req.query.offset, 10); if (!Number.isInteger(offset) || offset < 0) offset = 0;
       const { rows } = await query(
-        `SELECT tr.id, tr.task_id, tr.project_id, p.name AS project_name, tr.reason, tr.status, tr.created_at,
+        `SELECT tr.id, tr.task_id, tr.project_id, p.name AS project_name, tr.reason, tr.status, tr.source, tr.created_at,
                 COUNT(ri.id)::int AS item_count
            FROM task_rejections tr
            LEFT JOIN projects p ON p.id = tr.project_id
            LEFT JOIN rejection_items ri ON ri.rejection_id = tr.id
-          GROUP BY tr.id, p.name
+          GROUP BY tr.id, p.name, tr.source
           ORDER BY tr.created_at DESC, tr.id DESC
           LIMIT $1 OFFSET $2`,
         [limit, offset]

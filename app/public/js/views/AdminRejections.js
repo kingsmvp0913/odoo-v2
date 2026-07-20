@@ -78,12 +78,13 @@ window.AdminRejectionsView = Vue.defineComponent({
                   <th>任務 ID</th>
                   <th>原因</th>
                   <th style="width:80px">狀態</th>
+                  <th style="width:60px">來源</th>
                   <th style="width:60px">條目</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="loading"><td colspan="7" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
-                <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="7">目前沒有退回紀錄</td></tr>
+                <tr v-if="loading"><td colspan="8" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
+                <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="8">目前沒有退回紀錄</td></tr>
                 <tr v-for="r in rows" :key="r.id">
                   <td><input type="checkbox" :checked="!!selected[r.id]" @change="selected = { ...selected, [r.id]: $event.target.checked }" /></td>
                   <td style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
@@ -97,6 +98,7 @@ window.AdminRejectionsView = Vue.defineComponent({
                     </a>
                   </td>
                   <td style="font-size:var(--fs-sm)">{{ statusLabel[r.status] || r.status }}</td>
+                  <td style="font-size:var(--fs-sm)">{{ r.source === 'qa' ? 'QA' : '人工' }}</td>
                   <td style="text-align:center">{{ r.item_count }}</td>
                 </tr>
               </tbody>
