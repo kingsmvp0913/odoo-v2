@@ -104,10 +104,10 @@ test('fix → coding_running 且 reentry_count 累加（不再繞過斷路器）
   expect(t.reentry_count).toBe(1);
 });
 
-test('fix 達 MAX_REENTRY（6）→ stopped，不再無條件放行進 coding', async () => {
+test('fix 達 MAX_REENTRY（2）→ stopped，不再無條件放行進 coding', async () => {
   claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
   const id = await makeTask({ rejectCount: 1 });
-  await dbModule.query('UPDATE tasks SET reentry_count=6 WHERE id=$1', [id]); // 已達新上限
+  await dbModule.query('UPDATE tasks SET reentry_count=2 WHERE id=$1', [id]); // 已達新上限
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');

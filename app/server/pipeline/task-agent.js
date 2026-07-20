@@ -237,12 +237,13 @@ const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '18
 // 跑一輪 coding：無狀態，一律用 coding-project 統一 prompt（不 --resume）。
 // 省 token 靠 prompt cache（實測 coding 全價 input 僅佔 0.28%，重送規則/spec 幾乎免費），
 // 不再靠 session 記憶——每輪都讀 worktree 既有碼做增量修正（見 coding-project.md），避免 session drift 與整包重寫。
-// retry_feedback 存在＝被下游退回的修正輪 → 升級 opus（同腦袋再猜收斂率低）。
+// 一律用 coding agent 預設模型（不再依 retry_feedback 升級 opus）：升更貴的腦袋對 deploy/E2E
+// 這類非邏輯失敗（環境/污染/暫時性）無助益，且燒錢；改由總循環上限（MAX_REENTRY）超過即 stopped 交人工。
+// retry_feedback 仍保留、餵回 coding prompt 當失敗說明，只是不再拿它決定模型。
 async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const cwd = worktreeParent(info.root, task.task_id);
-  const escalateModel = task.retry_feedback ? 'opus' : null;
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: escalateModel || built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 
 async function runTaskCoding(taskId, userId, signal) {

@@ -29,8 +29,8 @@ async function mkTask(reentry = 0) {
   return t.id;
 }
 
-test('MAX_REENTRY 預設為 6（收斂：舊值 10 拉長長尾）', () => {
-  expect(MAX_REENTRY).toBe(6);
+test('MAX_REENTRY 預設為 2（不再靠升 opus 硬跑，跌倒 2 次即停下交人工）', () => {
+  expect(MAX_REENTRY).toBe(2);
 });
 
 test('未達上限：+1 並回傳 false（呼叫端續設 coding_running）', async () => {
