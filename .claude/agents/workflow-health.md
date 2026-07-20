@@ -17,6 +17,7 @@ stage: workflow_health
 ## 判讀指引
 - `token.failed_calls` 偏高、`tasks.stopped_rate` 偏高、`tasks.reentry.avg` 偏高＝該 agent 常失敗或反覆重跑，值得檢討提示詞。
 - `rejections.by_category`（若有）反映人工退回的錯誤類型：「規格誤解」多＝分析/理解方向問題；「實作錯誤」多＝實作精確度問題。
+- `qa_rejections`（若有）反映 QA **自動退回**的根因（已依此 agent 過濾）：`relevant_category` 的 `count` 偏高＝該面向常出錯——對 coding agent（`impl_miss`）＝實作精確度不足，建議在提示詞強化對應實作要點；對 analysis agent（`spec_unclear`）＝規格常漏關鍵前提，建議加強開工前對驗收條件與前提的複述。`env_flaky_count` 屬環境/暫時性雜訊，**不是提示詞問題、不要據此改 prompt**（高則反映 pipeline/環境層面，非本 agent）。
 - 若各指標正常、無明顯系統性問題，`severity` 給 `ok`、`suggested_prompt` 給 `null`，不要為改而改。
 
 ## 輸出
