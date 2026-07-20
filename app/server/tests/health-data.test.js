@@ -67,3 +67,26 @@ test('非 coding/analysis 的 agent → rejections 為 null', async () => {
   expect(s.token.calls).toBe(0);
   expect(s.token.failed_calls).toBe(0);
 });
+
+test('buildAgentSummary：coding 只看 QA impl_miss + env_flaky_count；human by_category 不含 qa', async () => {
+  // 造一筆 QA 退回（source=qa）：impl_miss x2, spec_unclear x1, env_flaky x1
+  const { rows: [qr] } = await dbModule.query(
+    "INSERT INTO task_rejections (task_id, reason, status, source) VALUES ('tq','s','classified','qa') RETURNING id");
+  for (const c of ['impl_miss', 'impl_miss', 'spec_unclear', 'env_flaky']) {
+    await dbModule.query(
+      'INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1,$2,$3)', [qr.id, 'd', c]);
+  }
+  // 一筆人工退回：category '實作錯誤'
+  const { rows: [hr] } = await dbModule.query(
+    "INSERT INTO task_rejections (task_id, reason, status, source) VALUES ('th','s','classified','human') RETURNING id");
+  await dbModule.query(
+    "INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1,'d','實作錯誤')", [hr.id]);
+
+  const { buildAgentSummary } = require('../pipeline/health-data');
+  const coding = await buildAgentSummary({ name: 'coding-project', stage: 'coding' });
+  expect(coding.qa_rejections).toEqual({ relevant_category: 'impl_miss', count: 2, env_flaky_count: 1 });
+  expect(coding.rejections.by_category).toEqual({ '實作錯誤': 2 }); // 不含 qa 的分類（累加前一個既有案例的 1 筆 human）
+
+  const analysis = await buildAgentSummary({ name: 'analysis-project', stage: 'analysis' });
+  expect(analysis.qa_rejections).toEqual({ relevant_category: 'spec_unclear', count: 1, env_flaky_count: 1 });
+});

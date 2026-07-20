@@ -57,12 +57,12 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
     const { rows: cats } = await query(
       `SELECT ri.category, COUNT(*)::int AS n
          FROM rejection_items ri JOIN task_rejections tr ON tr.id = ri.rejection_id
-        WHERE tr.created_at >= $1 GROUP BY ri.category`,
+        WHERE tr.created_at >= $1 AND tr.source = 'human' GROUP BY ri.category`,
       [cutoff]
     );
     const { rows: samp } = await query(
       `SELECT ri.description FROM rejection_items ri JOIN task_rejections tr ON tr.id = ri.rejection_id
-        WHERE tr.created_at >= $1 ORDER BY ri.id DESC LIMIT $2`,
+        WHERE tr.created_at >= $1 AND tr.source = 'human' ORDER BY ri.id DESC LIMIT $2`,
       [cutoff, SAMPLE]
     );
     rejections = {
@@ -71,7 +71,25 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
     };
   }
 
-  return { agent: agent.name, stage, window_days: windowDays, token, tasks, rejections };
+  // QA 自動退回的根因（依 agent 過濾其相關類）＋平台層 env_flaky 計數
+  let qa_rejections = null;
+  const QA_RELEVANT = { coding: 'impl_miss', analysis: 'spec_unclear' };
+  const relevant = QA_RELEVANT[stage];
+  if (relevant) {
+    const { rows: [q] } = await query(
+      `SELECT
+         SUM(CASE WHEN ri.category = $2 THEN 1 ELSE 0 END)::int          AS relevant_n,
+         SUM(CASE WHEN ri.category = 'env_flaky' THEN 1 ELSE 0 END)::int AS env_n
+       FROM rejection_items ri JOIN task_rejections tr ON tr.id = ri.rejection_id
+      WHERE tr.created_at >= $1 AND tr.source = 'qa'`,
+      [cutoff, relevant]
+    );
+    q.relevant_n = q.relevant_n || 0;
+    q.env_n = q.env_n || 0;
+    qa_rejections = { relevant_category: relevant, count: q.relevant_n, env_flaky_count: q.env_n };
+  }
+
+  return { agent: agent.name, stage, window_days: windowDays, token, tasks, rejections, qa_rejections };
 }
 
 module.exports = { buildAgentSummary };
