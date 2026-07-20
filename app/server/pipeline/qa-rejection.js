@@ -24,4 +24,19 @@ function parseQaIssues(result) {
   return (items.length || summary) ? { items, list: items.map(i => i.desc), summary } : null;
 }
 
-module.exports = { parseQaIssues, QA_CATEGORIES, DEFAULT_CATEGORY };
+async function recordQaRejection(task, items, summary) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const { rows: [tr] } = await query(
+    `INSERT INTO task_rejections (task_id, project_id, user_id, reason, status, source)
+     VALUES ($1, $2, $3, $4, 'classified', 'qa') RETURNING id`,
+    [task.task_id, task.project_id ?? null, task.user_id ?? null, String(summary || '').slice(0, 2000)]
+  );
+  for (const it of items) {
+    await query(
+      'INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1, $2, $3)',
+      [tr.id, it.desc, it.category]
+    );
+  }
+}
+
+module.exports = { parseQaIssues, recordQaRejection, QA_CATEGORIES, DEFAULT_CATEGORY };

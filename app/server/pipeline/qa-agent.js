@@ -6,6 +6,7 @@ const { getProjectInfo, worktreeParent, latestResolution } = require('./task-age
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
+const { parseQaIssues, recordQaRejection } = require('./qa-rejection');
 
 const QA_LIMIT = 5;
 // 每個 QA session 世代最多 resume 幾次（比照 coding 的 RESUME_LIMIT）：重驗走 --resume
@@ -15,7 +16,7 @@ const QA_RESUME_LIMIT = 2;
 // QA 審查：對照 SD 檢查任務 diff。pass→merge_running；fail→退 coding 並計數（滿 QA_LIMIT→stopped）。
 async function runQaAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count, qa_prompt_ver, qa_reviewed_commit FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, user_id, git_branch, analysis_yaml, qa_retry_count, qa_session_id, qa_resume_count, qa_prompt_ver, qa_reviewed_commit FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -203,8 +204,11 @@ async function runQaAgent(taskId, userId, signal) {
       await enterClarifyGate(taskId, userId, { questions: specQs, codeFeedback: codeCarry });
       return true;
     }
-    const detail = failDetail(result); // 上方已擋掉無細節的 fail，此處必有值
+    const detail = parseQaIssues(result); // 上方已擋掉無細節的 fail，此處必有值
     const issues = detail.list.length ? detail.list.join('\n') : detail.summary;
+    // 落地 QA 退回（含逐條根因）→ 退回紀錄＋餵健檢；env_flaky 也照寫供統計
+    await recordQaRejection(task, detail.items, detail.summary).catch(e =>
+      console.error('[QA] recordQaRejection 失敗:', e.message));
     // summary 是 md 契約要求的「給實作 Agent 的修正指引」，要進 retry_feedback；
     // 但不進 [QA 未通過] log——那份是下一輪 QA 的未解清單，混入指引會被當成待驗項
     const feedback = (detail.list.length && detail.summary) ? `${issues}\n修正指引：${detail.summary}` : issues;

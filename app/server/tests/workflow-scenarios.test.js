@@ -236,6 +236,30 @@ test('S2 QA fail → coding 修正輪（不 --resume＋不升 opus＋帶 QA feed
   expect(task.retry_feedback).toBeNull(); // 成功消費後清空
 });
 
+test('QA fail 帶分類 issues → 寫 task_rejections(source=qa)+rejection_items，且退 coding 行為不變', async () => {
+  scriptAgent('coding', () => ({ text: resultJson({ status: 'qa_running' }), sessionId: 'sess-Q' }));
+  scriptAgent('qa', () => ({ text: resultJson({ verdict: 'fail',
+    issues: [{ desc: '備註欄位未加進 form view', category: 'impl_miss' },
+             { desc: '規格未載明幣別', category: 'spec_unclear' }],
+    summary: '補 view 與幣別' }) }));
+  scriptAgent('coding', () => ({ text: resultJson({ status: 'qa_running' }), sessionId: 'sess-Q' }));
+  scriptAgent('qa', () => ({ text: resultJson({ verdict: 'pass' }) }));
+  scriptAgent('playwright', () => ({ text: 'tour ok' }));
+
+  const t = await insertTask('coding_running', { analysis_yaml: SD_YAML, git_branch: 'task/x' });
+  await run();
+
+  const task = await getTask(t.id);
+  expect(task.qa_retry_count).toBe(1);                         // 退 coding 行為不變
+  const { rows: [tr] } = await dbModule.query(
+    "SELECT id, source, status FROM task_rejections WHERE task_id=$1", [t.task_id]);
+  expect(tr.source).toBe('qa');
+  expect(tr.status).toBe('classified');
+  const { rows: items } = await dbModule.query(
+    'SELECT category FROM rejection_items WHERE rejection_id=$1 ORDER BY id', [tr.id]);
+  expect(items.map(i => i.category)).toEqual(['impl_miss', 'spec_unclear']);
+});
+
 // ---------- S3 部署失敗歸因 ----------
 test('S3a 部署失敗（Traceback＝code）→ 退 coding 帶蒸餾 feedback＋計數', async () => {
   const tb = [
