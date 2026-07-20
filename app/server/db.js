@@ -432,7 +432,8 @@ async function migrate() {
     { table: 'users', col: 'github_pat_enc', sql: 'ALTER TABLE users ADD COLUMN github_pat_enc TEXT' },
     { table: 'users', col: 'github_login',   sql: 'ALTER TABLE users ADD COLUMN github_login TEXT' },
     { table: 'users', col: 'git_name',       sql: 'ALTER TABLE users ADD COLUMN git_name TEXT' },
-    { table: 'users', col: 'git_email',      sql: 'ALTER TABLE users ADD COLUMN git_email TEXT' }
+    { table: 'users', col: 'git_email',      sql: 'ALTER TABLE users ADD COLUMN git_email TEXT' },
+    { table: 'task_rejections', col: 'source', sql: "ALTER TABLE task_rejections ADD COLUMN source TEXT NOT NULL DEFAULT 'human'" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
