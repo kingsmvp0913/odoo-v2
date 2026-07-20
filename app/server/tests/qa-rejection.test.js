@@ -18,3 +18,36 @@ test('migration：task_rejections.source 預設 human，既有寫法不帶 sourc
     [p.id]);
   expect(r.source).toBe('human');
 });
+
+const { parseQaIssues } = require('../pipeline/qa-rejection');
+
+test('parseQaIssues：物件 issue 保留合法 category', () => {
+  const r = parseQaIssues({ issues: [{ desc: 'A 欄位漏加', category: 'impl_miss' },
+                                      { desc: '規格沒說幣別', category: 'spec_unclear' }], summary: '修正指引' });
+  expect(r.items).toEqual([{ desc: 'A 欄位漏加', category: 'impl_miss' },
+                           { desc: '規格沒說幣別', category: 'spec_unclear' }]);
+  expect(r.list).toEqual(['A 欄位漏加', '規格沒說幣別']);
+  expect(r.summary).toBe('修正指引');
+});
+
+test('parseQaIssues：純字串 issue 向下相容 → category 預設 impl_miss', () => {
+  const r = parseQaIssues({ issues: ['view 未加欄位', '  '] }); // 空白項濾掉
+  expect(r.items).toEqual([{ desc: 'view 未加欄位', category: 'impl_miss' }]);
+  expect(r.list).toEqual(['view 未加欄位']);
+});
+
+test('parseQaIssues：非法 category → 退回 impl_miss', () => {
+  const r = parseQaIssues({ issues: [{ desc: 'x', category: 'qa_overstrict' }] });
+  expect(r.items[0].category).toBe('impl_miss');
+});
+
+test('parseQaIssues：無 issues 無 summary → null', () => {
+  expect(parseQaIssues({ verdict: 'fail' })).toBeNull();
+});
+
+test('parseQaIssues：只有 summary 無 issues → items 空、list 空、summary 保留', () => {
+  const r = parseQaIssues({ summary: '整體方向錯' });
+  expect(r.items).toEqual([]);
+  expect(r.list).toEqual([]);
+  expect(r.summary).toBe('整體方向錯');
+});
