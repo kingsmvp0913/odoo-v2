@@ -155,6 +155,31 @@ test('防呆：二次退回，模型判 fix 也強制降級 respec → analysis_
   expect(logs.some(l => l.role === 'user' && l.content.includes('同一問題再次被退'))).toBe(true);
 });
 
+// clarify → 統一問人閘門：退回原因含糊到 fix/respec 都說得通時停下問使用者，
+// 答完由 resume_status 導回原分診關續判；原退回原因不得被洗掉（carryFeedback 保留）。
+test('clarify（帶 questions）→ clarify_pending，resume_status 回 reject_triage，保留原退回原因', async () => {
+  claudeReturns({ decision: 'clarify', summary: '退回原因僅寫「備註不對」，無法判定是 bug 還是需求。',
+    questions: ['備註欄型別錯，是要修成正確型別（bug），還是改呈現需求（規格）？'] });
+  const id = await makeTask({ rejectCount: 1 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, resume_status, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('clarify_pending');
+  expect(t.resume_status).toBe('reject_triage');       // 答完回原分診關續判，非寫死 coding
+  expect(t.retry_feedback).toContain('備註型別錯');      // 原退回原因保留，二次進來讀得到
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
+  expect(logs.some(l => l.role === 'ai' && l.content.includes('需要你裁決') && l.content.includes('修成正確型別'))).toBe(true);
+  expect(logs.some(l => l.role === 'ai' && l.content.includes('無法判定'))).toBe(true); // summary 也落泡泡
+});
+
+// 缺 questions 的 clarify＝無效輸出（契約要求必帶）→ fail loud 停下，不靜默放行
+test('clarify 但無 questions → stopped（不靜默放行）', async () => {
+  claudeReturns({ decision: 'clarify', summary: '想問但沒給問題' });
+  const id = await makeTask({ rejectCount: 1 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+});
+
 // ---- 卡關修正指示入口（resolve_triage）----
 
 test('resolve 入口 advance target=e2e → playwright_running，並歸零 pw 計數器', async () => {

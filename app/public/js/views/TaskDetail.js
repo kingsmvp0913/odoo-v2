@@ -1,4 +1,4 @@
-const ANSWER_ALLOWED = ['confirm_pending', 'reject_confirm_pending', 'clarify_pending'];
+const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 const TD_STATUS_LABELS = {
   new:                 '待分類',
   analysis_running:    '分析中',
@@ -16,7 +16,6 @@ const TD_STATUS_LABELS = {
   review_pending:      '等待審核',
   reject_triage:       '分診中',
   resolve_triage:      '分診中',
-  reject_confirm_pending: 'AI 待你回覆',
   clarify_pending:     '待你裁決',
   clarify_answered:    '已裁決',
   wiki_updating:       '更新 Wiki',
@@ -39,7 +38,7 @@ window.TaskDetailView = Vue.defineComponent({
     // 時間軸底下的單一動作區依 status 切成一種 mode；有主動作的狀態各自 render，其餘走通用留言
     timelineActionMode() {
       const s = this.task?.status;
-      if (s === 'confirm_pending' || s === 'reject_confirm_pending' || s === 'clarify_pending')  return 'answer';
+      if (s === 'confirm_pending' || s === 'clarify_pending')  return 'answer';
       if (s === 'spec_review')      return 'spec_review';
       if (s === 'review_pending')   return 'review';
       if (s === 'merge_conflict')   return 'conflict';
@@ -146,7 +145,7 @@ window.TaskDetailView = Vue.defineComponent({
     },
     async submitAnswer() {
       // 逐題模式：把每題答案配對成單一 user_answer（後端契約不變，分析重跑讀得到 Q/A 對應）；
-      // 無解析問題時（如 reject_confirm_pending，AI 提問在時間軸）沿用單一留言框。
+      // 無解析問題時（如 clarify_pending，AI 提問在時間軸）沿用單一留言框。
       let user_answer;
       if (this.clarQuestions.length) {
         if (!this.clarAllAnswered) return;

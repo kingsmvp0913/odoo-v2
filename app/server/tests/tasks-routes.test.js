@@ -217,11 +217,11 @@ test('GET /api/tasks/:id → confirm_pending 解析 analysis_yaml 回傳 clarifi
   expect(res.body.clarification.summary).toBe('改動摘要');
 });
 
-// reject_confirm_pending 共用 answer 區但走時間軸對話，analysis_yaml 常殘留當初分析的問題 → 不可冒出來。
-test('GET /api/tasks/:id → reject_confirm_pending 不回傳殘留的分析問題', async () => {
+// clarify_pending 共用 answer 區但走時間軸對話，analysis_yaml 常殘留當初分析的問題 → 不可冒出來。
+test('GET /api/tasks/:id → clarify_pending 不回傳殘留的分析問題', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml)
-     VALUES ($1,'task_reject_clarify','odoo','R','reject_confirm_pending',$2) RETURNING id`,
+     VALUES ($1,'task_reject_clarify','odoo','R','clarify_pending',$2) RETURNING id`,
     [userId, 'summary: "舊摘要"\nclarification_channel:\n  questions:\n    - "舊問題？"\n']
   );
   const res = await request(app).get(`/api/tasks/${t.id}`)
@@ -872,26 +872,8 @@ test('DELETE 任務 → 重建回警告時併入 warnings，任務仍被刪', as
   expect(rows.length).toBe(0);
 });
 
-// 意圖：退回對話要能一來一往——reject_confirm_pending（AI 待你回覆）送出回覆後，
-// 同一個 /answer 端點要導回 reject_triage 續跑分診，而非一般澄清的 confirm_answered
-test('POST /api/tasks/:id/answer → reject_confirm_pending 回覆導回 reject_triage 並落 user log', async () => {
-  const { rows: [t] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
-     VALUES ($1,'rcp_1','odoo','T','c','reject_confirm_pending') RETURNING id`,
-    [userId]
-  );
-  const res = await request(app).post(`/api/tasks/${t.id}/answer`)
-    .set('Authorization', `Bearer ${adminToken}`)
-    .send({ user_answer: '整區預設收合' });
-  expect(res.status).toBe(200);
-  const { rows: [row] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
-  expect(row.status).toBe('reject_triage');
-  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [t.id]);
-  expect(logs.some(l => l.role === 'user' && l.content.includes('整區預設收合'))).toBe(true);
-});
-
-// 意圖：clarify_pending（respec-patch 澄清中）也要能收使用者回覆並導回 clarify_answered 續跑，
-// 不是只有 confirm_pending/reject_confirm_pending 兩態才能答覆
+// 意圖：clarify_pending（QA 規格裁決／分診問人／respec-patch 澄清）也要能收使用者回覆並導回 clarify_answered 續跑，
+// 不是只有 confirm_pending 才能答覆
 test('POST /api/tasks/:id/answer → clarify_pending 可答覆並導回 clarify_answered 並落 user log', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)

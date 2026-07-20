@@ -137,6 +137,23 @@ async function runRejectTriage(taskId, userId, signal) {
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   };
 
+  // clarify → 停下批次問人：退回原因含糊到 fix 與 respec 都說得通、且答案會左右去向時，不硬猜，
+  // 走與 QA 同一條統一 clarify 閘門問使用者。答完回原分診關（reject_triage/resolve_triage），
+  // 由本員帶「使用者答覆＋原退回原因」續判。carryFeedback 保原因避免被清空。
+  const clarifyQs = Array.isArray(result?.questions)
+    ? result.questions.map(q => String(q).trim()).filter(Boolean) : [];
+  if (decision === 'clarify' && clarifyQs.length) {
+    if (summary) await logAi(summary);
+    const { enterClarifyGate } = require('./verdict-router');
+    await enterClarifyGate(taskId, userId, {
+      questions: clarifyQs,
+      carryFeedback: task.retry_feedback,
+      resumeStatus: task.status,
+      fromStatus: task.status
+    });
+    return true;
+  }
+
   // respec → 交回分析：分診員不自己改 SD，把結論當「使用者澄清」餵給重跑的 analysis（clarification 讀 role='user'）
   if (decision === 'respec') {
     const handoff = summary || '判定為規格問題，請依停下原因重新分析並調整規格。';

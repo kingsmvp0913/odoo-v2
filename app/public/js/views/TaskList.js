@@ -1,4 +1,4 @@
-const NEEDS_ACTION = ['confirm_pending', 'reject_confirm_pending', 'clarify_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
+const NEEDS_ACTION = ['confirm_pending', 'clarify_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
 const STATUS_LABELS = {
   new:                '待分類',
   analysis_running:   '分析中',
@@ -15,7 +15,6 @@ const STATUS_LABELS = {
   review_pending:     '等待審核',
   reject_triage:      '分診中',
   resolve_triage:     '分診中',
-  reject_confirm_pending: 'AI 待你回覆',
   clarify_pending:    '待你裁決',
   clarify_answered:   '已裁決',
   wiki_updating:      '更新 Wiki',
