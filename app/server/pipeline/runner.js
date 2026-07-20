@@ -370,6 +370,24 @@ function dispatchTask(task, settings) {
   return true;
 }
 
+// (B) 尾巴獨佔：merge→deploy→E2E 共用 testing 分支＋test_cwt DB，同專案一次只能有一個任務在這條尾巴，
+// 否則別任務的 merge 會插進來、打破「單模組 -u 所依賴的 分支↔DB 一致性」（無辜任務 deploy 撞殘留 view）。
+// 判定純由 DB 狀態推導（免持久權杖、跨 stage 空檔與重啟自癒）：
+//   - deploy_testing / playwright_running ＝已經 merge 進場、正佔用 env → 恆擋別人（含暫停中，env 停在它的狀態）。
+//   - merge_running ＝請求進場 → 若同專案已有人在場、或有 id 更小的 merge 請求者，本輪不派、留待下一輪。
+// deploy_testing / playwright_running 本身（續跑自己的 span）不擋；只擋 merge_running 進場。
+async function mergeGateBlocked(task) {
+  if (task.status !== 'merge_running') return false;
+  const { rows } = await query(
+    `SELECT 1 FROM tasks WHERE project_id = $1 AND id <> $2 AND (
+        status IN ('deploy_testing', 'playwright_running')
+        OR (status = 'merge_running' AND id < $2 AND is_paused = false AND is_hidden = false)
+     ) LIMIT 1`,
+    [task.project_id, task.id]
+  );
+  return rows.length > 0;
+}
+
 // 掃描該 user 可跑任務，在併發上限內派工（不 await 任務完成 → 下一 tick 隨槽位釋出續派）。
 // 取代舊的循序 for-loop ＋ loop_counter 節流（健檢 U8）。
 async function runPipeline(userId) {
@@ -394,6 +412,7 @@ async function runPipeline(userId) {
       if (dispatched >= slots) break;
       if (_inFlight.size >= MAX_GLOBAL) break;   // 全機滿載，本輪停止派工（即時，跨 user 併發共用）
       if (_inFlight.has(task.id)) continue;      // 已在飛，不重複派
+      if (await mergeGateBlocked(task)) continue; // (B) 同專案尾巴已被佔／有更早進場者 → 留待下一輪
       if (dispatchTask(task, settings)) dispatched++;
     }
     return { dispatched };

@@ -402,6 +402,67 @@ test('P2 E2E 上限不餓死其他關：3 個 E2E＋1 個 new → E2E 派 2、cs
   await runnerModule.whenIdle();
 });
 
+// ===== (B) 尾巴獨佔：merge→deploy→E2E 共用 testing 分支＋test_cwt，同專案一次一個 =====
+async function mkProj(name) {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ($1, '17.0') RETURNING id", [name]);
+  return p.id;
+}
+
+test('(B) 同專案已有人在 deploy_testing（已進 env）→ merge_running 兄弟本輪不派、狀態不變', async () => {
+  const { runDeployTesting } = require('../pipeline/deploy-testing');
+  let openGate; const gate = new Promise(res => { openGate = res; });
+  runDeployTesting.mockImplementation(() => gate);
+  const proj = await mkProj('BTail1');
+  const a = await insertTask('deploy_testing', 'tailA', proj); // 已進 env、佔用
+  const b = await insertTask('merge_running', 'tailB', proj);  // 請求進場 → 應被擋
+
+  const r = await runnerModule.runPipeline(userId);
+  expect(r.dispatched).toBe(1);
+  expect(runnerModule.getInflightTaskIds()).toContain(a);
+  expect(runnerModule.getInflightTaskIds()).not.toContain(b);
+  const { rows: [bt] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [b]);
+  expect(bt.status).toBe('merge_running');                     // 沒被吃掉、留待下輪
+
+  openGate();
+  await runnerModule.whenIdle();
+  for (const id of [a, b]) await dbModule.query("UPDATE tasks SET status='done' WHERE id=$1", [id]);
+});
+
+test('(B) 同專案兩個 merge_running → 只派 id 較小者（避免兩個同時進場）', async () => {
+  const { runMergeAgent } = require('../pipeline/merge-agent');
+  let openGate; const gate = new Promise(res => { openGate = res; });
+  runMergeAgent.mockImplementation(() => gate);
+  const proj = await mkProj('BTail2');
+  const a = await insertTask('merge_running', 'twoA', proj);   // id 較小 → 先進
+  const b = await insertTask('merge_running', 'twoB', proj);
+
+  const r = await runnerModule.runPipeline(userId);
+  expect(r.dispatched).toBe(1);
+  expect(runnerModule.getInflightTaskIds()).toContain(a);
+  expect(runnerModule.getInflightTaskIds()).not.toContain(b);
+
+  openGate();
+  await runnerModule.whenIdle();
+  for (const id of [a, b]) await dbModule.query("UPDATE tasks SET status='done' WHERE id=$1", [id]);
+});
+
+test('(B) 尾巴閘不跨專案：不同專案各自的 merge_running 都能派', async () => {
+  const { runMergeAgent } = require('../pipeline/merge-agent');
+  let openGate; const gate = new Promise(res => { openGate = res; });
+  runMergeAgent.mockImplementation(() => gate);
+  const p1 = await mkProj('BTailX1'); const p2 = await mkProj('BTailX2');
+  const a = await insertTask('merge_running', 'xpA', p1);
+  const b = await insertTask('merge_running', 'xpB', p2);
+
+  const r = await runnerModule.runPipeline(userId);
+  expect(r.dispatched).toBe(2);                                // 跨專案互不阻擋
+
+  openGate();
+  await runnerModule.whenIdle();
+  for (const id of [a, b]) await dbModule.query("UPDATE tasks SET status='done' WHERE id=$1", [id]);
+});
+
 test('C-4 暫停的任務不被掃到、不執行 handler', async () => {
   const { runCsAgent } = require('../pipeline/cs-agent');
   const t = await insertTask('new', 'paused');
