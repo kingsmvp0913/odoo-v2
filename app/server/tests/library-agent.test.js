@@ -154,6 +154,31 @@ test('無 parents → 模組頁／總覽 content 原封不動', async () => {
   expect(mod.content).toBe('MOD-KNOWN');
 });
 
+// 意圖：功能頁 slug 若撞到骨架保留字（overview／module-*／project-notes），不得覆寫骨架節點的
+// node_type/parent_id（否則會造成父子環路、整棵樹在前端斷開全隱形）；改綴 fn- 前綴保留內容。
+test('防呆：功能頁 slug 撞 overview → 骨架不被覆寫，改掛 fn-overview', async () => {
+  const { userId, projectId } = await createUserAndProject();
+  // 先鋪一顆正常 overview 骨架（parent_id=NULL）
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id,parent_id,node_type,slug,title,content) VALUES ($1,null,'overview','overview','總覽','OV-SEED')",
+    [projectId]);
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>' + JSON.stringify({
+    slug: 'overview', title: '不該蓋掉總覽', content: '# 功能內容'
+  }) + '</result>', usage: null, durationMs: null });
+  const { rows: [task] } = await dbModule.query(
+    "INSERT INTO tasks (user_id,task_id,source,title,status,project_id,analysis_yaml) VALUES ($1,'TP4','odoo','F4','wiki_updating',$2,'module: sale') RETURNING id",
+    [userId, projectId]);
+  await runLibraryAgent(task.id, userId);
+  // overview 仍是 overview root，未被翻成 function
+  const { rows: [ov] } = await dbModule.query("SELECT node_type, parent_id, content FROM wiki_pages WHERE project_id=$1 AND slug='overview'", [projectId]);
+  expect(ov.node_type).toBe('overview');
+  expect(ov.parent_id).toBeNull();
+  // 功能內容改掛在 fn-overview（function），內容保留
+  const { rows: [fn] } = await dbModule.query("SELECT node_type, content FROM wiki_pages WHERE project_id=$1 AND slug='fn-overview'", [projectId]);
+  expect(fn.node_type).toBe('function');
+  expect(fn.content).toBe('# 功能內容');
+});
+
 test('白名單：parents 含非 overview／非本任務模組 slug → 忽略、不誤改', async () => {
   const { userId, projectId } = await createUserAndProject();
   await dbModule.query(

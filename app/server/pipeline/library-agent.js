@@ -242,9 +242,17 @@ ${ovRow?.content || '（尚未建立）'}
       );
 
       // 功能頁：依主題 slug upsert，掛在模組節點下
+      // 防呆：功能頁 slug 不得撞到骨架保留節點（overview / module-* / project-notes）。
+      // _upsertNode 的 ON CONFLICT 會覆寫 node_type/parent_id，撞名時會把骨架節點翻成 function、
+      // 重新掛到別的 parent，造成父子環路→整棵樹在前端斷開全隱形（曾實際發生於 overview）。
+      let fnSlug = wikiUpdate.slug;
+      if (fnSlug === 'overview' || fnSlug === 'project-notes' || fnSlug.startsWith('module-')) {
+        fnSlug = `fn-${fnSlug}`;
+        console.warn(`[LIBRARY-AGENT] task ${taskId}: 功能頁 slug 撞保留字「${wikiUpdate.slug}」，改用「${fnSlug}」避免覆寫骨架節點`);
+      }
       await _upsertNode(
         task.project_id, moduleId, 'function',
-        wikiUpdate.slug, wikiUpdate.title, wikiUpdate.content || ''
+        fnSlug, wikiUpdate.title, wikiUpdate.content || ''
       );
 
       // 往上補：只允許改「總覽」與本任務模組頁，其餘 slug 忽略（防亂改無關頁）
