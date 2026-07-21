@@ -152,21 +152,16 @@ window.TaskListView = Vue.defineComponent({
       else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
       else if (this.filter === 'pending')      list = this.tasks.filter(t => !t.is_paused && t.status !== 'done');
       else                                     list = this.tasks; // 全部 = 含暫停中
-      const q = this.search.toLowerCase().trim();
-      const filtered = !q ? list : list.filter(t =>
-        (t.title || '').toLowerCase().includes(q) ||
-        (t.task_id || '').toLowerCase().includes(q) ||
-        (t.source || '').toLowerCase().includes(q) ||
-        (t.module || '').toLowerCase().includes(q) ||
-        (t.project_name || '').toLowerCase().includes(q)
-      );
-      return this.applySort(filtered);
+      return this.applySort(list.filter(t => this.matchSearch(t)));
     },
+    // 全域導覽 badge 用：不受列表搜尋影響（見 needsActionCount watcher）
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
-    pendingCount() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done').length; },
-    pausedCount() { return this.tasks.filter(t => t.is_paused).length; },
-    allCount()    { return this.tasks.length; },
+    // 標籤 badge 用：與 filteredTasks 一致套用搜尋關鍵字，搜尋後即時反映各分類命中數
+    needsActionShown() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchSearch(t)).length; },
+    pendingShown() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done' && this.matchSearch(t)).length; },
+    pausedShown()  { return this.tasks.filter(t => t.is_paused && this.matchSearch(t)).length; },
+    allShown()     { return this.tasks.filter(t => this.matchSearch(t)).length; },
     allSelected() {
       return this.filteredTasks.length > 0 && this.filteredTasks.every(t => this.selectedIds.includes(t.id));
     }
@@ -188,6 +183,16 @@ window.TaskListView = Vue.defineComponent({
   mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
   beforeUnmount() { SocketManager.setRefreshCallback(null); },
   methods: {
+    // 搜尋關鍵字比對：filteredTasks 與各標籤計數共用，確保列表與 badge 一致
+    matchSearch(t) {
+      const q = this.search.toLowerCase().trim();
+      if (!q) return true;
+      return (t.title || '').toLowerCase().includes(q) ||
+        (t.task_id || '').toLowerCase().includes(q) ||
+        (t.source || '').toLowerCase().includes(q) ||
+        (t.module || '').toLowerCase().includes(q) ||
+        (t.project_name || '').toLowerCase().includes(q);
+    },
     async load() {
       this.loading = true;
       try {
@@ -416,16 +421,16 @@ window.TaskListView = Vue.defineComponent({
     <div class="content">
       <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center">
         <button class="btn btn-sm" :class="filter==='needs_action' ? 'btn-primary' : 'btn-outline'" @click="filter='needs_action'">
-          需回覆<span v-if="needsActionCount > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionCount }}</span>
+          需回覆<span v-if="needsActionShown > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='pending' ? 'btn-primary' : 'btn-outline'" @click="filter='pending'">
-          待處理<span v-if="pendingCount > 0" class="tab-badge" :class="filter==='pending' ? 'tab-badge-active' : ''">{{ pendingCount }}</span>
+          待處理<span v-if="pendingShown > 0" class="tab-badge" :class="filter==='pending' ? 'tab-badge-active' : ''">{{ pendingShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='paused' ? 'btn-primary' : 'btn-outline'" @click="filter='paused'">
-          暫停中<span v-if="pausedCount > 0" class="tab-badge" :class="filter==='paused' ? 'tab-badge-active' : ''">{{ pausedCount }}</span>
+          暫停中<span v-if="pausedShown > 0" class="tab-badge" :class="filter==='paused' ? 'tab-badge-active' : ''">{{ pausedShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='all' ? 'btn-primary' : 'btn-outline'" @click="filter='all'">
-          全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allCount }}</span>
+          全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
         <input v-model="search" placeholder="搜尋任務標題、來源..." class="form-control"
