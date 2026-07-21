@@ -15,7 +15,9 @@ window.TokenReportView = Vue.defineComponent({
       expandedTasks: {},
       labels: {},
       chartW: 800,
-      chartH: 200
+      chartH: 200,
+      zoom: null,      // { title, slices } — 圓餅放大 modal
+      hoverIdx: null   // modal 內滑鼠指到的扇形 index
     };
   },
   computed: {
@@ -62,6 +64,19 @@ window.TokenReportView = Vue.defineComponent({
     // 明細表最多顯示前 100 筆，其餘靠容器垂直捲動不再往下撐高頁面
     visibleTasks() {
       return (this.report?.tasks || []).slice(0, 100);
+    },
+    // 三張圓餅的扇形（含 frac 百分比）：小圖與放大 modal 共用同一份，顏色不重覆
+    agentSlices() {
+      if (!this.report) return [];
+      return this.piePath(this.report.by_agent.map(r => ({ value: r.tokens, color: this.agentColor(r.agent_type), label: this.agentLabel(r.agent_type) })));
+    },
+    projectSlices() {
+      if (!this.report) return [];
+      return this.piePath(this.report.by_project.map((r, i) => ({ value: r.tokens, color: this.catColor(i), label: r.project_name })));
+    },
+    userSlices() {
+      if (!this.report) return [];
+      return this.piePath(this.report.by_user.map((r, i) => ({ value: r.tokens, color: this.catColor(i), label: r.username })));
     }
   },
   async created() {
@@ -130,24 +145,37 @@ window.TokenReportView = Vue.defineComponent({
     toggleTask(key) {
       this.expandedTasks[key] = !this.expandedTasks[key];
     },
+    // agent 語意固定色：全報表（圓餅／表格／展開列）一致；改為相鄰易辨的十色，去掉原本紫紫、橘橘撞色
     agentColor(type) {
-      const map = { cs: '#7c3aed', triage: '#6b7280', analysis: '#2563eb', coding: '#059669',
-                    qa: '#d97706', merge: '#db2777', deploy_fix: '#dc2626', wiki: '#0891b2', chat: '#f59e0b',
-                    workflow_health: '#7e22ce' };
-      return map[type] || '#6b7280';
+      const map = { analysis: '#2a78d6', coding: '#1baf7a', qa: '#eda100', cs: '#4a3aa7',
+                    merge: '#e87ba4', deploy_fix: '#e34948', wiki: '#0891b2', chat: '#eb6834',
+                    triage: '#6b7280', workflow_health: '#008300' };
+      return map[type] || '#94a3b8';
+    },
+    // 專案／使用者圓餅：依序取 20 色類別盤（隨主題切換深淺）；超過 20 筆才用黃金角補色，仍保持可辨
+    catColor(i) {
+      return i < 20 ? `var(--cat-${i + 1})` : `hsl(${Math.round((i * 137.508) % 360)}, 65%, 55%)`;
+    },
+    openZoom(title, slices) {
+      if (!slices || !slices.length) return;
+      this.hoverIdx = null;
+      this.zoom = { title, slices };
     },
     // SVG pie chart
     piePath(slices) {
       const total = slices.reduce((s, r) => s + r.value, 0);
       if (!total) return [];
       let angle = -Math.PI / 2;
+      const r = 70, cx = 90, cy = 90;
       return slices.map(s => {
         const frac = s.value / total;
         const a0 = angle;
         angle += frac * 2 * Math.PI;
         const a1 = angle;
-        const r = 70;
-        const cx = 90, cy = 90;
+        // 單一資料＝整圓：起訖點重合會讓 A 弧退化成畫不出來（畫面空白）→ 改用上下兩段半弧填滿整圓
+        if (frac >= 1) {
+          return { ...s, frac, d: `M${cx - r},${cy} A${r},${r},0,1,1,${cx + r},${cy} A${r},${r},0,1,1,${cx - r},${cy}Z` };
+        }
         const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
         const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
         const large = frac > 0.5 ? 1 : 0;
@@ -251,12 +279,12 @@ window.TokenReportView = Vue.defineComponent({
         <div style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5)">
 
           <!-- Agent 圓餅圖 -->
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3)">
-            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">Agent 類型</div>
-            <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_agent.length">
-              <path v-for="s in piePath(report.by_agent.map(r=>({value:r.tokens,color:agentColor(r.agent_type),label:agentLabel(r.agent_type)})))"
-                :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);cursor:zoom-in" @click="openZoom('Agent 類型', agentSlices)">
+            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">Agent 類型 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（點擊放大）</span></div>
+            <svg viewBox="0 0 180 180" width="154" height="154" v-if="agentSlices.length">
+              <path v-for="s in agentSlices"
+                :key="s.label" :d="s.d" :style="{fill:s.color}" opacity="0.9">
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}（{{ (s.frac*100).toFixed(1) }}%）</title>
               </path>
             </svg>
             <div v-for="r in report.by_agent" :key="r.agent_type"
@@ -267,33 +295,33 @@ window.TokenReportView = Vue.defineComponent({
           </div>
 
           <!-- 專案圓餅圖 -->
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3)">
-            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">專案分布</div>
-            <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_project.length">
-              <path v-for="(s,i) in piePath(report.by_project.map((r,i)=>({value:r.tokens,color:'hsl('+(i*60)+',60%,50%)',label:r.project_name})))"
-                :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);cursor:zoom-in" @click="openZoom('專案分布', projectSlices)">
+            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">專案分布 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（點擊放大）</span></div>
+            <svg viewBox="0 0 180 180" width="154" height="154" v-if="projectSlices.length">
+              <path v-for="s in projectSlices"
+                :key="s.label" :d="s.d" :style="{fill:s.color}" opacity="0.9">
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}（{{ (s.frac*100).toFixed(1) }}%）</title>
               </path>
             </svg>
             <div v-for="(r,i) in report.by_project" :key="r.project_id"
               style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1)">
-              <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:'hsl('+(i*60)+',60%,50%)',display:'inline-block'}"></span>
+              <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:catColor(i),display:'inline-block'}"></span>
               {{ r.project_name }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
 
           <!-- 使用者圓餅圖 -->
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3)">
-            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">使用者分布</div>
-            <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_user.length">
-              <path v-for="(s,i) in piePath(report.by_user.map((r,i)=>({value:r.tokens,color:'hsl('+(i*60+30)+',55%,55%)',label:r.username})))"
-                :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
-                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);cursor:zoom-in" @click="openZoom('使用者分布', userSlices)">
+            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">使用者分布 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（點擊放大）</span></div>
+            <svg viewBox="0 0 180 180" width="154" height="154" v-if="userSlices.length">
+              <path v-for="s in userSlices"
+                :key="s.label" :d="s.d" :style="{fill:s.color}" opacity="0.9">
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}（{{ (s.frac*100).toFixed(1) }}%）</title>
               </path>
             </svg>
             <div v-for="(r,i) in report.by_user" :key="r.user_id"
               style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1)">
-              <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:'hsl('+(i*60+30)+',55%,55%)',display:'inline-block'}"></span>
+              <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:catColor(i),display:'inline-block'}"></span>
               {{ r.username }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
@@ -415,6 +443,41 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
       </template>
+
+      <!-- 圓餅放大 modal：點小圖開啟，滑鼠移到扇形／圖例顯示百分比 -->
+      <div v-if="zoom" class="pie-modal-overlay" @click="zoom=null">
+        <div class="pie-modal" @click.stop>
+          <div class="pie-modal-head">
+            <span>{{ zoom.title }}</span>
+            <button class="pie-modal-close" @click="zoom=null" title="關閉">✕</button>
+          </div>
+          <div class="pie-modal-body">
+            <svg viewBox="0 0 180 180" width="320" height="320" style="max-width:70vw;height:auto">
+              <path v-for="(s,i) in zoom.slices" :key="i" :d="s.d" class="pie-slice"
+                :style="{fill:s.color, opacity: hoverIdx===null || hoverIdx===i ? 1 : 0.3}"
+                @mouseenter="hoverIdx=i" @mouseleave="hoverIdx=null">
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}（{{ (s.frac*100).toFixed(1) }}%）</title>
+              </path>
+            </svg>
+            <div class="pie-modal-caption">
+              <template v-if="hoverIdx!==null">
+                <span :style="{width:'12px',height:'12px',borderRadius:'50%',background:zoom.slices[hoverIdx].color,display:'inline-block'}"></span>
+                {{ zoom.slices[hoverIdx].label }} — {{ fmtNum(zoom.slices[hoverIdx].value) }}（<strong style="margin:0 2px">{{ (zoom.slices[hoverIdx].frac*100).toFixed(1) }}%</strong>）
+              </template>
+              <span v-else class="caption-hint">滑鼠移到扇形或圖例可看百分比</span>
+            </div>
+            <div class="pie-modal-legend">
+              <div v-for="(s,i) in zoom.slices" :key="i"
+                :class="{'lg-active': hoverIdx===i}"
+                @mouseenter="hoverIdx=i" @mouseleave="hoverIdx=null">
+                <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:s.color,display:'inline-block',flexShrink:0}"></span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.label }}</span>
+                <span style="color:var(--text-muted)">{{ (s.frac*100).toFixed(1) }}%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   `
 });

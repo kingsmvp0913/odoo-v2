@@ -126,6 +126,7 @@ window.TaskListView = Vue.defineComponent({
       archivedTasks: [],
       filter: 'needs_action',
       search: '',
+      sort: 'updated_desc',
       loading: true,
       syncing: false,
       testMode: false,
@@ -152,14 +153,14 @@ window.TaskListView = Vue.defineComponent({
       else if (this.filter === 'pending')      list = this.tasks.filter(t => !t.is_paused && t.status !== 'done');
       else                                     list = this.tasks; // 全部 = 含暫停中
       const q = this.search.toLowerCase().trim();
-      if (!q) return list;
-      return list.filter(t =>
+      const filtered = !q ? list : list.filter(t =>
         (t.title || '').toLowerCase().includes(q) ||
         (t.task_id || '').toLowerCase().includes(q) ||
         (t.source || '').toLowerCase().includes(q) ||
         (t.module || '').toLowerCase().includes(q) ||
         (t.project_name || '').toLowerCase().includes(q)
       );
+      return this.applySort(filtered);
     },
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
@@ -200,6 +201,18 @@ window.TaskListView = Vue.defineComponent({
         }
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
+    },
+    applySort(list) {
+      const arr = list.slice();
+      const ts = v => new Date(v || 0).getTime();
+      switch (this.sort) {
+        case 'updated_asc':  return arr.sort((a, b) => ts(a.updated_at || a.created_at) - ts(b.updated_at || b.created_at));
+        case 'created_desc': return arr.sort((a, b) => ts(b.created_at) - ts(a.created_at));
+        case 'created_asc':  return arr.sort((a, b) => ts(a.created_at) - ts(b.created_at));
+        case 'title_asc':    return arr.sort((a, b) => (a.title || a.task_id || '').localeCompare(b.title || b.task_id || '', 'zh-Hant'));
+        case 'status_asc':   return arr.sort((a, b) => (a.status || '').localeCompare(b.status || '') || ts(b.updated_at) - ts(a.updated_at));
+        default:             return arr.sort((a, b) => ts(b.updated_at || b.created_at) - ts(a.updated_at || a.created_at)); // updated_desc
+      }
     },
     needsAction(t) { return NEEDS_ACTION.includes(t.status); },
     isProcessing(t) {
@@ -405,21 +418,27 @@ window.TaskListView = Vue.defineComponent({
         <button class="btn btn-sm" :class="filter==='needs_action' ? 'btn-primary' : 'btn-outline'" @click="filter='needs_action'">
           需回覆<span v-if="needsActionCount > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionCount }}</span>
         </button>
-        <button class="btn btn-sm" :class="filter==='review_pending' ? 'btn-primary' : 'btn-outline'" @click="filter='review_pending'">
-          待審核<span v-if="reviewPendingCount > 0" class="tab-badge" :class="filter==='review_pending' ? 'tab-badge-active' : ''">{{ reviewPendingCount }}</span>
-        </button>
         <button class="btn btn-sm" :class="filter==='pending' ? 'btn-primary' : 'btn-outline'" @click="filter='pending'">
           待處理<span v-if="pendingCount > 0" class="tab-badge" :class="filter==='pending' ? 'tab-badge-active' : ''">{{ pendingCount }}</span>
-        </button>
-        <button class="btn btn-sm" :class="filter==='all' ? 'btn-primary' : 'btn-outline'" @click="filter='all'">
-          全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allCount }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='paused' ? 'btn-primary' : 'btn-outline'" @click="filter='paused'">
           暫停中<span v-if="pausedCount > 0" class="tab-badge" :class="filter==='paused' ? 'tab-badge-active' : ''">{{ pausedCount }}</span>
         </button>
+        <button class="btn btn-sm" :class="filter==='all' ? 'btn-primary' : 'btn-outline'" @click="filter='all'">
+          全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allCount }}</span>
+        </button>
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
         <input v-model="search" placeholder="搜尋任務標題、來源..." class="form-control"
           style="width:240px;font-size:var(--fs-base);padding:5px 10px;height:32px" />
+        <select v-model="sort" class="form-control" title="排序方式"
+          style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
+          <option value="updated_desc">最近更新</option>
+          <option value="updated_asc">最早更新</option>
+          <option value="created_desc">最新建立</option>
+          <option value="created_asc">最舊建立</option>
+          <option value="title_asc">標題 A→Z</option>
+          <option value="status_asc">依狀態</option>
+        </select>
       </div>
 
       <div v-if="batchMode" style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base)">
@@ -445,7 +464,7 @@ window.TaskListView = Vue.defineComponent({
       <div v-else>
         <div v-for="t in filteredTasks" :key="t.id"
           class="task-card"
-          :class="{ 'needs-action': needsAction(t) && !isStopped(t) && !t.is_paused && !batchMode, 'stopped': isStopped(t), 'paused': t.is_paused, 'processing': isProcessing(t) && !t.is_paused, 'batch-selected': batchMode && selectedIds.includes(t.id) }"
+          :class="{ 'done': t.status === 'done', 'archived': filter === 'archived' && t.status !== 'done', 'needs-action': filter !== 'archived' && needsAction(t) && !isStopped(t) && !t.is_paused && !batchMode, 'stopped': filter !== 'archived' && isStopped(t), 'paused': filter !== 'archived' && t.is_paused, 'processing': filter !== 'archived' && isProcessing(t) && !t.is_paused, 'batch-selected': batchMode && selectedIds.includes(t.id) }"
           @click="batchMode ? toggleSelect(t.id, $event) : openTask(t)">
           <div class="task-header">
             <div class="task-title" style="display:flex;align-items:center;gap:var(--space-2)">

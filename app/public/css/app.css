@@ -61,6 +61,11 @@
   --transition-slow: 0.3s;
   /* 整站放大倍率（1 = 原始大小）。改這一個值即可整站等比縮放 */
   --ui-zoom: 1.1;
+  /* 圖表類別配色（20 色）：10 色相×2 明度階、相鄰色差夠大（任兩色最小 RGB 距≈67）；圓餅／圖例依序取用不循環 */
+  --cat-1: #b62020; --cat-2: #3e20b6; --cat-3: #49df85; --cat-4: #b67a20; --cat-5: #9820b6;
+  --cat-6: #49dfdf; --cat-7: #98b620; --cat-8: #b6207a; --cat-9: #4985df; --cat-10: #3eb620;
+  --cat-11: #df4949; --cat-12: #6749df; --cat-13: #20b65c; --cat-14: #dfa349; --cat-15: #c149df;
+  --cat-16: #20b6b6; --cat-17: #c1df49; --cat-18: #df49a3; --cat-19: #205cb6; --cat-20: #67df49;
 }
 
 /* 深色模式：Notion 風溫暖中性灰，非冷藍黑；邊框極細微 */
@@ -82,6 +87,11 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow: 0 2px 8px rgba(0,0,0,0.4);
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.55);
+  /* 同一組 20 色類別配色的深色階（對深色面板調亮，非直接翻色）*/
+  --cat-1: #dd4b4b; --cat-2: #684bdd; --cat-3: #90eab4; --cat-4: #dda24b; --cat-5: #c04bdd;
+  --cat-6: #90eaea; --cat-7: #c0dd4b; --cat-8: #dd4ba2; --cat-9: #90b4ea; --cat-10: #68dd4b;
+  --cat-11: #ea9090; --cat-12: #a290ea; --cat-13: #4bdd85; --cat-14: #eac690; --cat-15: #d890ea;
+  --cat-16: #4bdddd; --cat-17: #d8ea90; --cat-18: #ea90c6; --cat-19: #4b85dd; --cat-20: #a2ea90;
 }
 
 /* 寫死淺色的中性面板 → 改用變數 */
@@ -330,6 +340,8 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .task-card.needs-action { border-left: 4px solid var(--warning); background: #fffbeb; }
 .task-card.stopped { border-left: 3px solid var(--danger); }
 .task-card.paused { border-left: 3px solid #9ca3af; opacity: 0.75; }
+.task-card.done { border-left: 3px solid var(--success); }
+.task-card.archived { border-left: 3px dashed #94a3b8; opacity: 0.6; }
 .task-card.batch-selected { border-left: 3px solid var(--primary) !important; background: #eff6ff; }
 .task-card.processing { border-left: 3px solid var(--primary); }
 .task-card.processing::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent 0%, var(--primary) 50%, transparent 100%); animation: cardSweep 1.8s ease-in-out infinite; }
@@ -360,6 +372,20 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .status-badge.wiki_updating { background: #eff6ff; color: #1d4ed8; }
 .status-badge.cs_running, .status-badge.cs_reply_pending { background: #fdf4ff; color: #86198f; }
 .status-badge.cs_data_needed { background: #fffbeb; color: #92400e; }
+
+/* ── 圓餅放大 modal ──────────────────── */
+.pie-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); padding: var(--space-4); }
+.pie-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: var(--space-5); max-width: 90vw; max-height: 90vh; overflow: auto; }
+.pie-modal-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-3); font-weight: var(--fw-semibold); font-size: var(--fs-lg); color: var(--text); }
+.pie-modal-close { background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1; color: var(--text-muted); padding: 2px 6px; }
+.pie-modal-close:hover { color: var(--text); }
+.pie-modal-body { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); }
+.pie-modal-caption { font-size: var(--fs-md); color: var(--text); min-height: 22px; display: flex; align-items: center; gap: 8px; }
+.pie-modal-caption .caption-hint { color: var(--text-muted); }
+.pie-modal-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; width: 100%; max-width: 360px; font-size: var(--fs-sm); }
+.pie-modal-legend > div { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: default; padding: 2px 4px; border-radius: var(--radius-sm); }
+.pie-modal-legend > div.lg-active { background: var(--primary-light); color: var(--text); }
+.pie-slice { cursor: pointer; transition: opacity 0.12s; }
 
 /* ── Stepper ──────────────────────── */
 .stepper { display: flex; align-items: flex-start; width: 100%; padding-top: 8px; }
