@@ -20,6 +20,7 @@ jest.mock('../pipeline/git', () => ({
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   concludeMerge: jest.fn().mockResolvedValue(undefined),
+  applyConflictChoices: jest.fn().mockResolvedValue([]),
   getMainBranch: jest.fn().mockResolvedValue('main'),
   diffNameOnly: jest.fn().mockResolvedValue([]),
   refExists: jest.fn().mockResolvedValue(true)
@@ -242,6 +243,81 @@ test('mark-conflict-resolved：rebuild 來源 → 還原 prior_status、觸發�
   expect(after[0].status).toBe('review_pending');  // 還原原關卡，非 deploy_testing
   expect(after[0].merge_conflict_data).toBeNull();
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+});
+
+// --- 塊 C：逐檔裁決衝突 resolve-conflicts ---
+// 意圖：使用者對每個衝突檔選「取新版/取舊版/手解」，全部收斂 → commit 了結 → deploy_testing。
+test('resolve-conflicts：全部取一側、無殘留 → concludeMerge → deploy_testing（done）', async () => {
+  const { concludeMerge, applyConflictChoices } = require('../pipeline/git');
+  concludeMerge.mockClear().mockResolvedValue(undefined);
+  applyConflictChoices.mockClear().mockResolvedValue([]); // 套用後無殘留未解
+  const taskId = await insertConflictProjectTask('rcclean');
+  await dbModule.query(
+    "UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1",
+    [taskId, JSON.stringify({ repos: [{ repo: 'main', files: ['a.py'], details: { 'a.py': { recommendation: 'take_theirs' } } }] })]
+  );
+
+  const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolutions: [{ repo: 'main', file: 'a.py', action: 'take_theirs' }] });
+
+  expect(res.status).toBe(200);
+  expect(res.body.done).toBe(true);
+  expect(applyConflictChoices).toHaveBeenCalledWith('/repos/rcclean/main', expect.any(Map));
+  expect(concludeMerge).toHaveBeenCalledWith('/repos/rcclean/main');
+  const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+  expect(after[0].status).toBe('deploy_testing');
+  expect(after[0].merge_conflict_data).toBeNull();
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// 意圖：有檔選「手解」→ 套用後仍未解 → 留 merge_conflict，且 merge_conflict_data 只留未解檔（已解卡片消失）。
+test('resolve-conflicts：含 manual → 仍 merge_conflict、資料只留未解檔（not done）', async () => {
+  const { concludeMerge, applyConflictChoices } = require('../pipeline/git');
+  concludeMerge.mockClear();
+  applyConflictChoices.mockClear().mockResolvedValue(['b.py']); // b.py 選 manual，仍未解
+  const taskId = await insertConflictProjectTask('rcmanual');
+  await dbModule.query(
+    "UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1",
+    [taskId, JSON.stringify({ repos: [{ repo: 'main', files: ['a.py', 'b.py'] }] })]
+  );
+
+  const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolutions: [
+      { repo: 'main', file: 'a.py', action: 'take_theirs' },
+      { repo: 'main', file: 'b.py', action: 'manual' }
+    ] });
+
+  expect(res.status).toBe(200);
+  expect(res.body.done).toBe(false);
+  expect(concludeMerge).not.toHaveBeenCalled(); // 有未解不得了結
+  const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+  expect(after[0].status).toBe('merge_conflict');
+  const cd = typeof after[0].merge_conflict_data === 'string' ? JSON.parse(after[0].merge_conflict_data) : after[0].merge_conflict_data;
+  expect(cd.repos[0].files).toEqual(['b.py']);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('resolve-conflicts：非 merge_conflict 狀態 → 400', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_rc_wrong','odoo','T','deploy_testing') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/resolve-conflicts`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolutions: [{ repo: 'main', file: 'a.py', action: 'take_theirs' }] });
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
+});
+
+test('resolve-conflicts：不合法 action → 400', async () => {
+  const taskId = await insertConflictProjectTask('rcbad');
+  const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolutions: [{ repo: 'main', file: 'a.py', action: 'nonsense' }] });
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
 // --- copy-to-online：過渡期管理員手動把模組整包搬到正式區 ---

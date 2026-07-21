@@ -416,6 +416,78 @@ function registerRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // 逐檔裁決衝突（塊 C）：body.resolutions = [{ repo, file, action:'take_theirs'|'take_ours'|'manual' }]。
+  // 對每個 repo 套用裁決（取一側或保留人工）＋接受已自動解好的檔，全部收斂則 commit → deploy_testing；
+  // 仍有 manual／未決檔則留 merge_conflict（提示使用者手解剩餘檔後按「已手動解決」收尾）。
+  const RESOLVE_ACTIONS = ['take_theirs', 'take_ours', 'manual'];
+  app.post('/api/tasks/:id/resolve-conflicts', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        'SELECT id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      if (rows[0].status !== 'merge_conflict') {
+        return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
+      }
+      const resolutions = Array.isArray(req.body?.resolutions) ? req.body.resolutions : [];
+      if (!resolutions.length) return res.status(400).json({ error: 'resolutions required' });
+      for (const r of resolutions) {
+        if (!RESOLVE_ACTIONS.includes(r.action)) return res.status(400).json({ error: `invalid action: ${r.action}` });
+      }
+      if (!rows[0].project_id) return res.status(400).json({ error: '此任務沒有專案，無法套用衝突裁決' });
+
+      const { concludeMerge, applyConflictChoices } = require('./pipeline/git');
+      const { withProjectLock } = require('./pipeline/project-lock');
+      const { rows: repos } = await query(
+        "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
+        [rows[0].project_id]
+      );
+
+      // 逐 repo 套用（持專案鎖，避免與同專案 merge/deploy 交錯）。回傳每 repo 仍未解的檔。
+      const outcome = await withProjectLock(rows[0].project_id, async () => {
+        const stillOpen = [];
+        for (const repo of repos) {
+          const choices = new Map(
+            resolutions.filter(r => r.repo === repo.label).map(r => [r.file, r.action])
+          );
+          let remaining;
+          try {
+            remaining = await applyConflictChoices(repo.local_path, choices);
+          } catch (err) {
+            return { error: `${repo.label}：套用裁決失敗 — ${err.message}` };
+          }
+          if (remaining.length) { stillOpen.push({ repo: repo.label, files: remaining }); continue; }
+          try {
+            await concludeMerge(repo.local_path); // 無未解＋有 MERGE_HEAD → commit 了結
+          } catch (err) {
+            return { error: `${repo.label}：${err.message}` };
+          }
+        }
+        return { stillOpen };
+      });
+      if (outcome.error) return res.status(400).json({ error: outcome.error });
+
+      if (outcome.stillOpen.length) {
+        // 尚有 manual／未決檔：保留 merge_conflict，更新資料只留未解檔（清掉已解檔的卡片）
+        await query(
+          "UPDATE tasks SET merge_conflict_data = $2, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, JSON.stringify({ repos: outcome.stillOpen })]
+        );
+        return res.json({ ok: true, done: false, remaining: outcome.stillOpen });
+      }
+
+      await query(
+        "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+        [rows[0].id]
+      );
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      res.json({ ok: true, done: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
 
 module.exports = { registerRoutes };

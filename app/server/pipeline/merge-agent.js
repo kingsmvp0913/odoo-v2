@@ -3,9 +3,9 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
-const { stripFence } = require('./agent-result');
+const { stripFence, parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { mergeInto, commitResolved, abortMerge } = require('./git');
+const { mergeInto, commitResolved, abortMerge, restoreConflictMarkers } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -89,12 +89,67 @@ async function resolveConflict(repoPath, filePath, signal, opts = {}) {
     }
     // model 對「直接輸出內容」加 ``` fence 是高頻行為，不剝掉會把 fence 寫進檔案並 commit 進 testing
     const resolved = stripFence(resolveResult.text);
-    if (!resolved || /^(<<<<<<<|=======|>>>>>>>)/m.test(resolved)) return false;
+    // 守衛（本次事故守線）：resolved 不得含衝突標記、也不得殘留 ``` fence。
+    // stripFence 只剝「整段以 ``` 開頭」；AI 若回「中文說明開頭、正確碼夾在中段 fence 裡」（本次事故），
+    // 整段原封通過 → 殘留的 ``` 即證據，判失敗回 false。因 writeFileSync 在迴圈之後，任一 hunk 失敗
+    // 即提早 return，磁碟上的原始衝突標記原封不動（不再把散文垃圾落盤）。
+    if (!resolved || /^(<<<<<<<|=======|>>>>>>>)/m.test(resolved) || resolved.includes('```')) return false;
     lines.splice(start, end - start + 1, ...resolved.split('\n'));
   }
 
   fs.writeFileSync(fullPath, lines.join('\n'));
   return true;
+}
+
+// 取衝突檔某一側的整檔內容（git merge index stage）：2＝ours(testing)、3＝theirs(task 分支)。
+// 該側不存在（modify-delete）→ 回提示字串。過長截斷（避免大檔撐爆分析 prompt）。
+const EXPLAIN_SIDE_MAX = parseInt(process.env.MERGE_EXPLAIN_SIDE_MAX || '8000', 10);
+async function conflictSide(repoPath, file, stage) {
+  try {
+    const { stdout } = await execFileP('git', ['show', `:${stage}:${file}`], { cwd: repoPath, maxBuffer: 10 * 1024 * 1024 });
+    return stdout.length > EXPLAIN_SIDE_MAX ? stdout.slice(0, EXPLAIN_SIDE_MAX) + '\n…（截斷）' : stdout;
+  } catch {
+    return '（此側無此檔／已刪除）';
+  }
+}
+
+const REC_ENUM = ['take_theirs', 'take_ours', 'manual'];
+function parseExplain(s) {
+  const o = JSON.parse(s);
+  if (!o || !REC_ENUM.includes(o.recommendation)) return null;
+  return {
+    classification: String(o.classification || '').trim() || '衝突',
+    reason: String(o.reason || '').trim(),
+    recommendation: o.recommendation,
+    rationale: String(o.rationale || '').trim()
+  };
+}
+
+// 對一個「無法自動解決」的衝突檔產生結構化建議（給人裁決）。解析失敗回 null——
+// 呼叫端據此退回純檔名的舊行為，分析失敗絕不擋住收尾。
+async function explainConflict(repoPath, file, signal, opts = {}) {
+  const agent = loadAgent('merge-explain');
+  const [ours, theirs] = await Promise.all([
+    conflictSide(repoPath, file, 2),
+    conflictSide(repoPath, file, 3)
+  ]);
+  const prompt = agent.render({ file_path: file, ours, theirs });
+  let ref = null, refUser = null;
+  if (opts.taskId) {
+    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
+    if (t) { ref = { taskId: t.task_id, projectId: t.project_id }; refUser = t.user_id; }
+  }
+  let res;
+  try {
+    res = await runClaude(prompt, { ...opts, signal, model: agent.model, agentType: 'merge-explain' });
+  } catch (err) {
+    if (ref) await logFailedUsage(ref, refUser, 'merge-explain', err);
+    if (err && err.aborted) throw err;
+    return null;
+  }
+  if (!res || res.text == null) return null;
+  if (res.usage && ref) await logTokenUsage(ref, refUser, 'merge-explain', res.usage, res.durationMs);
+  return parseAgentResult(res.text, { parse: parseExplain, signal, ref, userId: refUser });
 }
 
 function execFileP(cmd, args, opts) {
@@ -255,7 +310,20 @@ async function doMerge(task, taskId, userId, signal) {
         return;
       }
     } else {
-      conflictByRepo.push({ repo: repo.label, files: failed });
+      // 失敗檔（自動解不掉／語法壞掉）：先還原成帶衝突標記，避免工作樹殘留 AI 寫壞的散文/壞碼；
+      // 再逐檔產生結構化建議（原因＋建議解法）供人裁決。解析失敗的檔留無 detail（前端退回純檔名顯示），
+      // 分析失敗不擋收尾。暫停中止則原地不動（不誤標 merge_conflict）。
+      for (const f of failed) await restoreConflictMarkers(repo.local_path, f);
+      const details = {};
+      for (const f of failed) {
+        try {
+          const d = await explainConflict(repo.local_path, f, signal, { taskId, userId, notify });
+          if (d) details[f] = d;
+        } catch (err) {
+          if (err && err.aborted) return;
+        }
+      }
+      conflictByRepo.push({ repo: repo.label, files: failed, details });
     }
   }
 
@@ -274,4 +342,4 @@ async function doMerge(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
-module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax };
+module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict };

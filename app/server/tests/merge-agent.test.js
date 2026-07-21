@@ -5,7 +5,8 @@ jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn(),
   commitResolved: jest.fn().mockResolvedValue(undefined),
-  abortMerge: jest.fn().mockResolvedValue(undefined)
+  abortMerge: jest.fn().mockResolvedValue(undefined),
+  restoreConflictMarkers: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 
@@ -177,6 +178,28 @@ test('resolveConflict 輸出仍含衝突標記 → false 且不覆寫檔案', as
   expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8')).toBe(original);
 });
 
+// 意圖：本次事故真因——merge agent 沒回乾淨程式碼，而是回「中文說明＋夾在中段的 ``` fence」。
+// stripFence 只處理「整段以 ``` 開頭」，這種「散文開頭、中段才有 fence」原封通過舊守衛被寫進 .py。
+// 守衛須加擋「殘留 fence」：判失敗、回 false，且因 writeFileSync 在迴圈之後 → 檔案原始衝突標記原封不動。
+test('resolveConflict AI 回散文＋中段 fence → false 且不覆寫檔案（守住本次事故）', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-prose-'));
+  const original = '<<<<<<< HEAD\n=======\nx = 2\n>>>>>>> task\n';
+  fs.writeFileSync(path.join(dir, 'a.py'), original);
+  // 比照事故現場：AI 以中文說明開頭，正確程式碼夾在中段的 code fence 裡
+  mockRunClaude.mockResolvedValueOnce({
+    text: '這是單邊新增，非真衝突，應保留該分支內容。正確的最終內容：\n\n```\nx = 2\n```',
+    usage: null, durationMs: null
+  });
+
+  const ok = await mergeMod.resolveConflict(dir, 'a.py');
+
+  expect(ok).toBe(false);
+  expect(fs.readFileSync(path.join(dir, 'a.py'), 'utf8')).toBe(original); // 未被寫壞
+});
+
 // 意圖：AI 解衝突常把縮排解爛（本次事故真因：idx_repair_bom.py 有一行掉了縮排 → IndentationError）。
 // 這種檔沒有衝突標記卻壞掉，須在 commit 進 testing 前被 py_compile 擋下。此閘門失效＝壞碼進部署。
 test('verifyResolvedSyntax 抓出縮排壞掉的 py、放行正常檔', async () => {
@@ -289,6 +312,56 @@ test('無文字標記但 git 仍 unmerged（modify-delete）→ resolveConflict 
 
   expect(ok).toBe(false); // 修正前：無標記即 return true（靜默假解決）
   expect(mockRunClaude).not.toHaveBeenCalled();
+});
+
+// 意圖：退回人工前，對每個失敗檔產生「結構化原因＋建議」（塊 B）。both-added 衝突時
+// 要能讀到 index 兩側（ours=stage2 / theirs=stage3），並把 AI 回的 JSON 解析成裁決卡片資料。
+function bothAddedRepo() {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-explain-'));
+  const g = (args) => execFileSync('git', args, { cwd: dir });
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 't@t']); g(['config', 'user.name', 't']);
+  g(['commit', '-q', '--allow-empty', '-m', 'base']);
+  g(['checkout', '-q', '-b', 'feat']);
+  fs.writeFileSync(path.join(dir, 'f.py'), 'x = 1\ny = 2\n'); // theirs（新版）
+  g(['add', 'f.py']); g(['commit', '-q', '-m', 'feat add']);
+  g(['checkout', '-q', 'main']);
+  fs.writeFileSync(path.join(dir, 'f.py'), 'x = 1\n');        // ours（舊版）
+  g(['add', 'f.py']); g(['commit', '-q', '-m', 'main add']);
+  try { g(['merge', 'feat']); } catch { /* both-added 衝突 */ }
+  return dir;
+}
+
+test('explainConflict：AI 回合法 JSON → 結構化建議（含兩側內容）', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"classification":"both-added","reason":"兩邊各自新增","recommendation":"take_theirs","rationale":"新版為舊版超集"}</result>',
+    usage: null, durationMs: null
+  });
+
+  const d = await mergeMod.explainConflict(dir, 'f.py', undefined, {});
+
+  expect(d).toEqual({
+    classification: 'both-added', reason: '兩邊各自新增',
+    recommendation: 'take_theirs', rationale: '新版為舊版超集'
+  });
+  // 兩側內容有進 prompt（ours=舊版、theirs=新版）
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('x = 1');
+  expect(prompt).toContain('y = 2');
+});
+
+test('explainConflict：AI 回無法解析（含修復也失敗）→ null（退回純檔名）', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValue({ text: '我覺得應該取新版', usage: null, durationMs: null });
+
+  const d = await mergeMod.explainConflict(dir, 'f.py', undefined, {});
+
+  expect(d).toBeNull();
 });
 
 // 意圖：Linux 主機常無 python（只有 python3）。修正前 interpreter 硬寫 'python'、PYTHON_BIN 完全被忽略，

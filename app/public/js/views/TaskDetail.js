@@ -29,7 +29,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -49,6 +49,31 @@ window.TaskDetailView = Vue.defineComponent({
       return 'message';
     },
     statusLabel() { return this.task ? (TD_STATUS_LABELS[this.task.status] || this.task.status) : ''; },
+    // merge_conflict 的結構化衝突資料（後端 merge_conflict_data，可能為 JSON 字串）
+    conflictData() {
+      if (!this.task?.merge_conflict_data) return null;
+      try {
+        return typeof this.task.merge_conflict_data === 'string'
+          ? JSON.parse(this.task.merge_conflict_data) : this.task.merge_conflict_data;
+      } catch { return null; }
+    },
+    // 逐檔裁決卡片：[{repo, file, key, detail}]；detail 可能為 null（舊資料／AI 分析失敗＝無建議）
+    conflictItems() {
+      const cd = this.conflictData;
+      if (!cd || !Array.isArray(cd.repos)) return [];
+      const items = [];
+      for (const r of cd.repos) {
+        for (const f of (r.files || [])) {
+          items.push({ repo: r.repo, file: f, key: r.repo + '||' + f, detail: (r.details && r.details[f]) || null });
+        }
+      }
+      return items;
+    },
+    // 重建 testing 引發的衝突沿用舊「已手動解決」流程（不走逐檔裁決）
+    isRebuildConflict() { return !!(this.conflictData && this.conflictData.rebuild); },
+    conflictAllChosen() {
+      return this.conflictItems.length > 0 && this.conflictItems.every(i => !!this.conflictChoices[i.key]);
+    },
     csQuestions() {
       if (!this.task?.cs_question) return [];
       try { return JSON.parse(this.task.cs_question); } catch { return [this.task.cs_question]; }
@@ -157,6 +182,15 @@ window.TaskDetailView = Vue.defineComponent({
       const clarInit = {};
       this.clarification.questions.forEach((q, i) => { if (!(i in this.answerFields)) clarInit[i] = ''; });
       this.answerFields = { ...this.answerFields, ...clarInit };
+      // 逐檔裁決：預設落在 AI 建議（無建議則留 manual，強迫使用者自己選）
+      const REC = ['take_theirs', 'take_ours', 'manual'];
+      const cc = {};
+      this.conflictItems.forEach(i => {
+        if (!(i.key in this.conflictChoices)) {
+          cc[i.key] = REC.includes(i.detail?.recommendation) ? i.detail.recommendation : 'manual';
+        }
+      });
+      this.conflictChoices = { ...this.conflictChoices, ...cc };
     },
     async submitAnswer() {
       // 逐題模式：把每題答案配對成單一 user_answer（後端契約不變，分析重跑讀得到 Q/A 對應）；
@@ -393,6 +427,21 @@ window.TaskDetailView = Vue.defineComponent({
         this.$router.push('/');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.archiving = false; }
+    },
+    recLabel(action) {
+      return { take_theirs: '取新版（任務分支）', take_ours: '取舊版（testing 現況）', manual: '我自己手解' }[action] || action;
+    },
+    async submitConflictResolutions() {
+      if (!this.conflictAllChosen) return;
+      this.submittingConflicts = true;
+      try {
+        const resolutions = this.conflictItems.map(i => ({ repo: i.repo, file: i.file, action: this.conflictChoices[i.key] }));
+        const r = await Api.post(`tasks/${this.task.id}/resolve-conflicts`, { resolutions });
+        if (r && r.done) showToast('衝突已依裁決套用，繼續部署', 'success');
+        else showToast('已套用；仍有選「手解」的檔，請在 Repo 解完後按下方「已手動解決」收尾', 'warn', 9000);
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.submittingConflicts = false; }
     },
     async markConflictResolved() {
       this.conflictResolving = true;
@@ -726,14 +775,58 @@ window.TaskDetailView = Vue.defineComponent({
 
             <!-- conflict：合併衝突，秀出實際錯誤 -->
             <template v-else-if="timelineActionMode === 'conflict'">
-              <div class="form-section">合併衝突 — 需人工解決</div>
-              <div v-if="task.blocker_content" class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content }}</div>
-              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
-                自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。
-              </p>
-              <div style="text-align:right">
-                <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
-                  {{ conflictResolving ? '處理中...' : '✓ 已手動解決衝突，繼續' }}
+              <div class="form-section">合併衝突 — 請逐檔裁決</div>
+
+              <!-- 逐檔裁決卡片（新流程）：有結構化衝突資料且非重建來源時 -->
+              <template v-if="conflictItems.length && !isRebuildConflict">
+                <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:14px">
+                  自動合併有 {{ conflictItems.length }} 個檔需要你決定。每個檔已附原因與 AI 建議（預設已選建議），確認後送出即可。
+                </p>
+                <div v-for="(it, idx) in conflictItems" :key="it.key"
+                  style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;background:var(--surface)">
+                  <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                    <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px">{{ idx + 1 }}</span>
+                    <span><code>{{ it.repo }} / {{ it.file }}</code></span>
+                  </div>
+                  <div v-if="it.detail" style="font-size:var(--fs-sm);color:var(--text-muted);margin:0 0 8px 24px">
+                    <div><b>衝突型態：</b>{{ it.detail.classification }}</div>
+                    <div v-if="it.detail.reason"><b>原因：</b>{{ it.detail.reason }}</div>
+                    <div v-if="it.detail.rationale"><b>AI 建議：</b>{{ recLabel(it.detail.recommendation) }} — {{ it.detail.rationale }}</div>
+                  </div>
+                  <div v-else style="font-size:var(--fs-sm);color:var(--text-muted);margin:0 0 8px 24px">（無法自動分析此檔，請自行判斷或選「我自己手解」）</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:14px;margin-left:24px">
+                    <label v-for="act in ['take_theirs','take_ours','manual']" :key="act"
+                      style="font-size:var(--fs-sm);display:flex;align-items:center;gap:5px;cursor:pointer">
+                      <input type="radio" :name="'conflict_' + idx" :value="act" v-model="conflictChoices[it.key]">
+                      <span>{{ recLabel(act) }}<span v-if="it.detail && it.detail.recommendation === act" style="color:var(--primary)"> ★建議</span></span>
+                    </label>
+                  </div>
+                </div>
+                <div style="text-align:right">
+                  <button class="btn btn-primary" @click="submitConflictResolutions" :disabled="submittingConflicts || !conflictAllChosen">
+                    {{ submittingConflicts ? '處理中...' : '✓ 送出裁決，繼續' }}
+                  </button>
+                </div>
+              </template>
+
+              <!-- 舊流程 fallback：無結構化資料（舊任務）或重建來源衝突 → 手動解決後收尾 -->
+              <template v-else>
+                <div v-if="task.blocker_content" class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content }}</div>
+                <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
+                  自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。
+                </p>
+                <div style="text-align:right">
+                  <button class="btn btn-primary" @click="markConflictResolved" :disabled="conflictResolving">
+                    {{ conflictResolving ? '處理中...' : '✓ 已手動解決衝突，繼續' }}
+                  </button>
+                </div>
+              </template>
+
+              <!-- 逐檔裁決後仍剩「手解」檔時，用這顆收尾 -->
+              <div v-if="conflictItems.length && !isRebuildConflict" style="text-align:right;margin-top:10px">
+                <button class="btn btn-secondary" @click="markConflictResolved" :disabled="conflictResolving"
+                  style="font-size:var(--fs-sm)">
+                  {{ conflictResolving ? '處理中...' : '已在 Repo 手動解完剩餘檔，收尾繼續' }}
                 </button>
               </div>
             </template>

@@ -219,6 +219,41 @@ async function concludeMerge(repoPath) {
   }
 }
 
+// merge_conflict 逐檔裁決「取一側」：從 merge index 的某一 stage 取整檔內容覆蓋工作樹再 stage。
+// side='theirs'＝被併入分支（task 分支，git stage 3）；side='ours'＝target 分支（testing，stage 2）。
+// checkout --theirs/--ours 直接讀 index stage，不管工作樹現況（即使被 AI 寫壞也會被乾淨覆蓋）。
+async function checkoutSide(repoPath, file, side) {
+  const flag = side === 'ours' ? '--ours' : '--theirs';
+  await execFileAsync('git', ['checkout', flag, '--', file], { cwd: repoPath });
+  await execFileAsync('git', ['add', '--', file], { cwd: repoPath });
+}
+
+// 把某檔還原成「帶衝突標記」的狀態（-m＝recreate merge conflict）。用於自動解失敗／語法壞掉的檔：
+// 若不還原，工作樹會留下 AI 寫壞的內容（無標記的散文/壞碼），走人工手解時看到的是垃圾而非真衝突。
+async function restoreConflictMarkers(repoPath, file) {
+  await execFileAsync('git', ['checkout', '-m', '--', file], { cwd: repoPath }).catch(() => {});
+}
+
+async function listUnmerged(repoPath) {
+  const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoPath });
+  return stdout.trim().split('\n').filter(Boolean);
+}
+
+// merge_conflict 逐檔裁決套用（塊 C）：對 repo 內每個仍 unmerged 的檔——
+// - choices 有指定 take_theirs/take_ours → 取該側；'manual' → 保留衝突（人工另解）。
+// - 未指定的 unmerged 檔＝merge-agent 已自動解好、只是尚未 stage（失敗檔存在時不會 commitResolved）→
+//   接受工作樹內容 stage 之。回傳套用後「仍 unmerged」的檔（manual／未決者）。
+async function applyConflictChoices(repoPath, choices) {
+  for (const f of await listUnmerged(repoPath)) {
+    const action = choices.get(f);
+    if (action === 'take_theirs') await checkoutSide(repoPath, f, 'theirs');
+    else if (action === 'take_ours') await checkoutSide(repoPath, f, 'ours');
+    else if (action === 'manual') { /* 保留衝突，人工另解 */ }
+    else await execFileAsync('git', ['add', '--', f], { cwd: repoPath }); // 自動解好的檔：接受工作樹
+  }
+  return listUnmerged(repoPath);
+}
+
 async function mergeToMain(repoPath, branchName, gitEnv) {
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath); // 避免 testing 工作樹上 tracked pyc 的改動擋住 checkout main
@@ -377,4 +412,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
