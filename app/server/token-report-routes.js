@@ -7,7 +7,8 @@ function registerRoutes(app) {
       // Check admin role via DB (verifyToken only sets req.userId)
       const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
       const isAdmin = me?.role === 'admin';
-      const showAll = isAdmin && req.query.all === 'true';
+      if (!isAdmin) return res.status(403).json({ error: '用量報表僅管理員可見' });
+      const showAll = req.query.all === 'true';
 
       const now = new Date();
       const defaultStart = new Date(now);
@@ -93,6 +94,17 @@ function registerRoutes(app) {
          LEFT JOIN projects p ON p.id = COALESCE(tu.project_id, t.project_id)
          ${where}
          GROUP BY p.id, p.name ORDER BY tokens DESC`,
+        baseParams
+      );
+
+      // By user（實際 Token 數，與成本同一套加權）
+      const { rows: byUser } = await query(
+        `SELECT u.id AS user_id, COALESCE(u.display_name, u.username) AS username,
+           SUM(${WEIGHTED}) AS tokens
+         FROM token_usage tu
+         LEFT JOIN users u ON u.id = tu.user_id
+         ${where}
+         GROUP BY u.id, u.display_name, u.username ORDER BY tokens DESC`,
         baseParams
       );
 
@@ -232,6 +244,11 @@ function registerRoutes(app) {
           project_id:   r.project_id,
           project_name: r.project_name,
           tokens:       Number(r.tokens)
+        })),
+        by_user: byUser.filter(r => r.username).map(r => ({
+          user_id:  r.user_id,
+          username: r.username,
+          tokens:   Number(r.tokens)
         })),
         daily: daily.map(r => ({ date: r.date, tokens: Number(r.tokens) })),
         tasks: Object.values(taskMap)

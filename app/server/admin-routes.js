@@ -342,24 +342,27 @@ function registerRoutes(app) {
     catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // --- 進行中 Pipeline 監控（跨使用者，僅 admin）---
+  // --- 進行中 Pipeline 監控：admin 看全部，一般使用者只看自己的 ---
 
   // 真正在飛（有活著的 process）的 task，非撈 status='*_running'（那可能是殘留）。以 _inFlight 為準。
-  app.get('/api/admin/pipeline/active', auth, async (req, res) => {
+  app.get('/api/admin/pipeline/active', verifyToken, async (req, res) => {
     try {
       const info = getInflightInfo();
       if (!info.length) return res.json([]);
       const byId = new Map(info.map(i => [Number(i.taskId), i.startedAt]));
       const ids = [...byId.keys()];
+      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
+      const isAdmin = me?.role === 'admin';
       const ph = ids.map((_, i) => '$' + (i + 1)).join(',');
+      // 一般使用者只看自己的在飛任務（多綁一個 user_id 參數）；admin 看全部
       const { rows } = await query(
         `SELECT t.id, t.task_id, t.title, t.status, t.project_id,
                 p.name AS project_name, t.user_id, u.username, u.display_name
          FROM tasks t
          LEFT JOIN projects p ON p.id = t.project_id
          LEFT JOIN users u ON u.id = t.user_id
-         WHERE t.id IN (${ph})`,
-        ids
+         WHERE t.id IN (${ph})${isAdmin ? '' : ` AND t.user_id = $${ids.length + 1}`}`,
+        isAdmin ? ids : [...ids, req.userId]
       );
       const now = Date.now();
       const list = rows.map(r => ({ ...r, elapsed_ms: now - (byId.get(r.id) || now) }));
@@ -368,12 +371,17 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // 暫停並 kill 指定 task 的行程（不綁 owner，跨使用者）。is_paused=true 使之後不再派工。
-  app.post('/api/admin/pipeline/tasks/:id/pause', auth, async (req, res) => {
+  // 暫停並 kill 指定 task 的行程。is_paused=true 使之後不再派工。
+  // 一般使用者只能暫停自己的任務（非自己的 → rowCount 0 → 404，不會 kill 到別人的行程）。
+  app.post('/api/admin/pipeline/tasks/:id/pause', verifyToken, async (req, res) => {
     try {
+      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
+      const isAdmin = me?.role === 'admin';
       const { rowCount } = await query(
-        'UPDATE tasks SET is_paused = true, updated_at = NOW() WHERE id = $1',
-        [req.params.id]
+        isAdmin
+          ? 'UPDATE tasks SET is_paused = true, updated_at = NOW() WHERE id = $1'
+          : 'UPDATE tasks SET is_paused = true, updated_at = NOW() WHERE id = $1 AND user_id = $2',
+        isAdmin ? [req.params.id] : [req.params.id, req.userId]
       );
       if (!rowCount) return res.status(404).json({ error: 'Task not found' });
       abortTask(req.params.id);

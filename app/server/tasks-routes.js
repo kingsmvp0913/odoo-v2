@@ -440,8 +440,7 @@ function registerRoutes(app) {
   // batch/archive 會被 :id/archive 以 id='batch' 吞掉（整數轉型 500，批次封存整個失效）。
   app.post('/api/tasks/batch/archive', verifyToken, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
+      // 批次操作一律只動「自己的」任務（WHERE user_id），故開放一般使用者管理自己的任務清單
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       ids.forEach(id => abortTask(id)); // 封存執行中任務：中止在飛 agent（健檢項11）
@@ -454,8 +453,6 @@ function registerRoutes(app) {
   });
   app.post('/api/tasks/batch/unarchive', verifyToken, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可解除封存' });
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       const { rowCount } = await query(
@@ -529,11 +526,9 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Batch operations (admin only)
+  // Batch operations：只動自己的任務（WHERE user_id）＋已審核通過的跳過不刪，故開放一般使用者
   app.post('/api/tasks/batch/delete', verifyToken, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可刪除任務' });
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       // 已審核通過的任務跳過不刪；其餘先清 worktree/分支再刪

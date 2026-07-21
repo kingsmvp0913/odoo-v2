@@ -15,6 +15,8 @@ window.needsActionCount = needsActionCount;
 const claudeUsage = ref(null);
 async function loadClaudeUsage() {
   if (!Api.isLoggedIn()) return;
+  // 用量僅管理員可見；非 admin 不打（避免 403 噪音）
+  if (window.UserStore.role !== 'admin') return;
   try { claudeUsage.value = await Api.get('claude-usage'); } catch { /* keep stale */ }
 }
 window.loadClaudeUsage = loadClaudeUsage;
@@ -33,12 +35,12 @@ const router = createRouter({
     { path: '/projects/:id/chat', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat/:chatId', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/db', component: window.ProjectDbQueryView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true } },
+    { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/agents', component: window.AdminAgentsView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/pipelines', component: window.AdminPipelinesView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/admin/pipelines', component: window.AdminPipelinesView, meta: { requiresAuth: true } },
     { path: '/admin/health', component: window.AdminHealthCheckView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/rejections', component: window.AdminRejectionsView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/classify-samples', component: window.AdminClassifySamplesView, meta: { requiresAuth: true, requiresAdmin: true } },
@@ -95,6 +97,11 @@ const App = defineComponent({
       add('opus', 'Opus 週', u.seven_day_opus);
       add('sonnet', 'Sonnet 週', u.seven_day_sonnet);
       return rows;
+    },
+    usageStale() { return !!(this.claudeUsage && this.claudeUsage.stale); },
+    usageUpdatedLabel() {
+      const iso = this.claudeUsage && this.claudeUsage.updated_at;
+      return iso ? this.fmtReset(iso) : '';
     }
   },
   async mounted() {
@@ -141,10 +148,10 @@ const App = defineComponent({
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">📁 專案</a>
             </router-link>
-            <router-link v-if="isAdmin" to="/admin/pipelines" custom v-slot="{ navigate, isActive }">
+            <router-link to="/admin/pipelines" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">🚦 進行中 Pipeline</a>
             </router-link>
-            <router-link to="/token-report" custom v-slot="{ navigate, isActive }">
+            <router-link v-if="isAdmin" to="/token-report" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">📊 用量報表</a>
             </router-link>
             <router-link to="/settings" custom v-slot="{ navigate, isActive }">
@@ -155,8 +162,8 @@ const App = defineComponent({
             </router-link>
           </nav>
           <div class="sidebar-footer">
-            <div v-if="usageBars.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
-              <div class="usage-title">Claude 用量</div>
+            <div v-if="isAdmin && usageBars.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
+              <div class="usage-title">Claude 用量<span v-if="usageStale && usageUpdatedLabel" class="usage-stale">· 最後更新 {{ usageUpdatedLabel }}</span></div>
               <div v-for="bar in usageBars" :key="bar.key" class="usage-row">
                 <div class="usage-row-top">
                   <span>{{ bar.label }}</span>

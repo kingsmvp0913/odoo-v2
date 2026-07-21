@@ -370,7 +370,7 @@ window.TaskListView = Vue.defineComponent({
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
       </button>
-      <button v-if="isAdmin" class="btn btn-sm" :class="batchMode ? 'btn-primary' : 'btn-outline'" @click="toggleBatchMode">
+      <button class="btn btn-sm" :class="batchMode ? 'btn-primary' : 'btn-outline'" @click="toggleBatchMode">
         {{ batchMode ? '✕ 取消批次' : '☑ 批次' }}
       </button>
       <button class="btn btn-outline btn-sm" @click="syncNow" :disabled="syncing">

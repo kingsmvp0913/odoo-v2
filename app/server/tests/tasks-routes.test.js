@@ -933,3 +933,35 @@ test('批次刪除／批次封存 → 每筆先 abortTask（項11）', async () 
   expect(arc.status).toBe(200);
   expect(abortTask).toHaveBeenCalledWith(b);
 });
+
+// 意圖：批次功能開放給一般使用者（只動自己的任務）。移除 batch archive/delete 的 admin-only 限制後，
+// 一般使用者可批次封存/刪除自己的任務，但 WHERE user_id 保證動不到別人的（affected 0）。
+test('一般使用者可批次封存自己的任務、動不到別人的', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('userpass1', 4);
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('reg_batch',$1,'Reg','user') RETURNING id", [hash]
+  );
+  const login = await request(app).post('/api/auth/login').send({ username: 'reg_batch', password: 'userpass1' });
+  const token = login.body.token;
+  const { rows: [own] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status) VALUES ($1,'reg_own','manual','R','x','new') RETURNING id", [u.id]
+  );
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status) VALUES ($1,'admin_other','manual','A','x','new') RETURNING id", [userId]
+  );
+
+  // 自己的 → 200 且 affected 1、is_hidden true（不再 403）
+  const arch = await request(app).post('/api/tasks/batch/archive').set('Authorization', `Bearer ${token}`).send({ ids: [own.id] });
+  expect(arch.status).toBe(200);
+  expect(arch.body.affected).toBe(1);
+  const { rows: [a1] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id=$1', [own.id]);
+  expect(a1.is_hidden).toBe(true);
+
+  // 別人的 → 200 但 affected 0（WHERE user_id 擋下），且該任務未被封存
+  const cross = await request(app).post('/api/tasks/batch/archive').set('Authorization', `Bearer ${token}`).send({ ids: [other.id] });
+  expect(cross.status).toBe(200);
+  expect(cross.body.affected).toBe(0);
+  const { rows: [a2] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id=$1', [other.id]);
+  expect(a2.is_hidden).toBe(false);
+});

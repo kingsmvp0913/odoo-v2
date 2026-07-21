@@ -68,10 +68,15 @@ describe('GET /api/admin/pipeline/active', () => {
     expect(res.status).toBe(401);
   });
 
-  test('403 for non-admin', async () => {
-    runner.getInflightInfo.mockReturnValue([]);
+  test('一般使用者只看自己的在飛任務（他人的不出現）', async () => {
+    const now = Date.now();
+    runner.getInflightInfo.mockReturnValue([
+      { taskId: taskA, userId: adminId, startedAt: now - 60000 },   // admin 的
+      { taskId: taskB, userId: userId, startedAt: now - 300000 }    // bob 的
+    ]);
     const res = await request(app).get('/api/admin/pipeline/active').set('Authorization', `Bearer ${userToken}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(res.body.map(r => r.id)).toEqual([taskB]); // 只有自己的 taskB
   });
 
   test('回空陣列 when 沒有任何真正在飛的任務（不撈 status）', async () => {
@@ -108,9 +113,17 @@ describe('GET /api/admin/pipeline/active', () => {
 });
 
 describe('POST /api/admin/pipeline/tasks/:id/pause', () => {
-  test('403 for non-admin（且不觸發 abort）', async () => {
+  test('一般使用者暫停自己的任務 → 200 且觸發 abort', async () => {
     const res = await request(app).post(`/api/admin/pipeline/tasks/${taskB}/pause`).set('Authorization', `Bearer ${userToken}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    const { rows: [t] } = await dbModule.query('SELECT is_paused FROM tasks WHERE id=$1', [taskB]);
+    expect(t.is_paused).toBe(true);
+    expect(runner.abortTask).toHaveBeenCalledWith(String(taskB));
+  });
+
+  test('一般使用者暫停他人任務 → 404 且不 abort', async () => {
+    const res = await request(app).post(`/api/admin/pipeline/tasks/${taskA}/pause`).set('Authorization', `Bearer ${userToken}`);
+    expect(res.status).toBe(404); // WHERE user_id 不符 → rowCount 0
     expect(runner.abortTask).not.toHaveBeenCalled();
   });
 

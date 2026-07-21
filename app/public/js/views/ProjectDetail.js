@@ -209,6 +209,7 @@ window.ProjectDetailView = Vue.defineComponent({
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
             <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unreadCount() }}</span>
           </button>
+          <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
         </div>
       </div>
       <div class="content">
@@ -252,10 +253,6 @@ window.ProjectDetailView = Vue.defineComponent({
         </div>
         <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
 
-        <div style="margin-top:var(--space-5);padding-top:var(--space-4);border-top:1px solid var(--border)">
-          <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
-        </div>
-
         <div style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">同步來源對應</h3>
           <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">一行一個名稱，可綁定多個來源。</div>
@@ -270,7 +267,7 @@ window.ProjectDetailView = Vue.defineComponent({
           </div>
         </div>
 
-        <div style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div v-if="isAdmin()" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">測試流程設定</h3>
           <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；停用後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
