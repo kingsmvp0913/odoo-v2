@@ -300,6 +300,56 @@ function runEnvSetup(projectId) {
   return p;
 }
 
+// 各 Odoo 大版本相容的 CPython 小版本（偏好序，探測時逐一嘗試機器上是否實際可用）。
+// 依 Odoo 官方對各版本的 Python 需求整理，讓自動部署（13→未來 20+）免逐版本人工設定：
+//   舊版（13/14）的舊相依（gevent 等）只有舊 Python 才有預編譯 wheel／才編得起來；新版要新 Python。
+const ODOO_PYTHON_PREFS = {
+  13: ['3.8', '3.7', '3.6'],
+  14: ['3.8', '3.7', '3.6'],
+  15: ['3.9', '3.8', '3.10'],
+  16: ['3.10', '3.9', '3.8'],
+  17: ['3.11', '3.10', '3.12'],
+  18: ['3.12', '3.11', '3.10'],
+  19: ['3.12', '3.11'],
+};
+// 未列於上表的未來新版（如 2026 的 20）：由新到舊試這些「當代」Python。
+const MODERN_PYTHONS = ['3.13', '3.12', '3.11'];
+
+// 探測機器上某個 CPython 小版本是否可用，回傳可當 venv 基底的直譯器（Windows 回實際 python.exe 完整路徑，
+// 其他平台回 pythonX.Y 名）；不可用回 null。Windows 走 py launcher（py -3.8）問出 executable。
+async function probePython(version) {
+  try {
+    if (isWindows) {
+      const out = await execCmd('py', [`-${version}`, '-c', 'import sys;print(sys.executable)']);
+      const p = String(out).trim().split(/\r?\n/).pop().trim();
+      return p && fs.existsSync(p) ? p : null;
+    }
+    const bin = `python${version}`;
+    await execCmd(bin, ['--version']);
+    return bin;
+  } catch { return null; }
+}
+
+// 為某 Odoo 大版本自動挑一個「相容且機器上實際可用」的 Python 來建 venv（免逐版本人工設定）：
+//   1) 明確 override 最優先（逃生艙）：PYTHON_BIN_<major> → PYTHON_BIN
+//   2) 依相容表逐一探測；未列的未來新版探測當代 Python（新→舊）
+//   3) 都探不到 → 回退系統預設 python，並在 note 明說缺哪些版本（建置仍嘗試，失敗有跡可循）
+async function resolveSystemPython(major) {
+  const override = process.env[`PYTHON_BIN_${major}`] || process.env.PYTHON_BIN;
+  if (override) return { python: override, note: `[py] Odoo ${major}：使用 override ${override}` };
+  const prefs = ODOO_PYTHON_PREFS[major] || MODERN_PYTHONS;
+  for (const v of prefs) {
+    const found = await probePython(v);
+    if (found) return { python: found, note: `[py] Odoo ${major} → Python ${v}（${found}）` };
+  }
+  const fallback = isWindows ? 'python' : 'python3';
+  return {
+    python: fallback,
+    note: `[py] 警告：找不到 Odoo ${major} 相容的 Python（試過 ${prefs.join('/')}），回退 ${fallback}；`
+      + `若建置因相依不相容失敗，請在測試機安裝對應 Python（Windows 經 py launcher 即可被自動偵測）`
+  };
+}
+
 async function _runEnvSetup(projectId) {
   const { rows: [project] } = await query(
     'SELECT name, folder_name, odoo_version, port FROM projects WHERE id = $1',
@@ -334,10 +384,12 @@ async function _runEnvSetup(projectId) {
   const isWin = process.platform === 'win32';
   const venvDir = path.join(envDir, 'venv');
   const venvPython = path.join(venvDir, isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
-  // 建 venv 的直譯器：優先讀該 Odoo 大版本專用的 PYTHON_BIN_<major>（如 PYTHON_BIN_13），
-  // 讓舊版（odoo13/14 的舊 gevent 只有舊 Python 才有預編譯 wheel／才編得起來）能綁相容的舊 Python，
-  // 不影響其他版本；未設則回退全域 PYTHON_BIN、再回退系統 python。
-  const systemPython = process.env[`PYTHON_BIN_${major}`] || process.env.PYTHON_BIN || (isWin ? 'python' : 'python3');
+  // 建 venv 的直譯器：全自動為此 Odoo 大版本挑一個「相容且機器上實際可用」的 Python，
+  // 涵蓋 13→未來 20+ 免逐版本人工設定（見 resolveSystemPython）。
+  const { python: systemPython, note: pyNote } = await resolveSystemPython(major);
+  // Odoo≤16 綁較舊生態：setuptools<58 才含 2to3（舊相依源碼編譯所需）並保留 pkg_resources；
+  // ≥17 用 <81（Python 3.12 venv 不再內建 setuptools，且 setuptools≥81 移除了 pkg_resources）。
+  const setuptoolsPin = parseInt(major, 10) <= 16 ? 'setuptools<58' : 'setuptools<81';
   // 完整建置成功後寫入；存在即代表 clone/venv/pip/init 都已完成，停止後可直接快速啟動
   const readyMarker = path.join(envDir, '.ready');
 
@@ -372,7 +424,7 @@ async function _runEnvSetup(projectId) {
     // 補 wheel 與 setuptools：Python 3.12 起 venv 不再內建 setuptools，Odoo（module.py import pkg_resources）
     // 會 ModuleNotFoundError；且 setuptools≥81 已移除 pkg_resources，故釘 <81 保留它。wheel 讓 pip 優先取
     // 預編譯 binary（如 gevent），避免在缺編譯器／新版 Python 下走原始碼編譯而失敗。
-    { name: 'pip',  bin: venvPython, args: ['-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools<81'] },
+    { name: 'pip',  bin: venvPython, args: ['-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', setuptoolsPin] },
     { name: 'pip-req', bin: venvPython, args: ['-m', 'pip', 'install', '-r', path.join(srcDir, 'requirements.txt')] },
     { name: 'init', bin: venvPython, args: [odooBin, '-d', dbName, '--stop-after-init', '-i', 'base', '--without-demo=all', '--load-language=zh_TW', '--addons-path', addonsPath, ...odooDbArgs()] },
   ];
@@ -380,7 +432,7 @@ async function _runEnvSetup(projectId) {
   // 停止後再啟動：偵測到既有 .ready 標記與 venv，跳過整套建置，只重新啟動 process
   const alreadyBuilt = fs.existsSync(readyMarker) && fs.existsSync(venvPython);
 
-  let log = '';
+  let log = pyNote ? `${pyNote}\n` : '';
   if (alreadyBuilt) {
     log += '[fast-start] 偵測到既有環境（.ready），跳過 clone/venv/pip/init，直接啟動\n';
   } else {
@@ -671,4 +723,4 @@ async function cleanupProjectEnv(projectId) {
   }
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, seedOdooUsers, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, resolveSystemPython, probePython, ODOO_PYTHON_PREFS };
