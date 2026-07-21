@@ -28,6 +28,14 @@ if [ -z "$JWT_SECRET" ]; then
 fi
 
 export JWT_SECRET
+
+APP_SECRET="$(read_config APP_SECRET)"
+if [ -z "$APP_SECRET" ]; then
+  echo "Error: APP_SECRET missing from config.json." >&2
+  exit 1
+fi
+export APP_SECRET
+
 _PORT="$(read_config PORT)"
 if [ -n "$_PORT" ]; then export PORT="$_PORT"; fi
 export DATABASE_URL="$(read_config DATABASE_URL)"

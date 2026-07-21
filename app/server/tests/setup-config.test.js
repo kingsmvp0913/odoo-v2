@@ -63,6 +63,19 @@ describe('ensureConfig', () => {
     expect(fs.existsSync(configPath)).toBe(true);
   });
 
+  test('PG_USER 留白時套用預設值 aidev，避免產生不合法的空 user DATABASE_URL', async () => {
+    const configPath = path.join(tmpDir, 'config.json');
+    // 模擬使用者一路 Enter：ask() 收到空輸入時回傳呼叫方給的 defaultValue
+    const ask = jest.fn((name, def) => Promise.resolve(def));
+
+    const cfg = await ensureConfig(configPath, ask);
+
+    expect(cfg.DATABASE_URL).toBe('postgres://aidev:@localhost:5432/aidev');
+    // parseDatabaseUrl 的 IDENT_RE 會擋掉空 user；預設帶 aidev 才不會中止安裝
+    const { parseDatabaseUrl } = require('../../../scripts/lib/postgres');
+    expect(() => parseDatabaseUrl(cfg.DATABASE_URL)).not.toThrow();
+  });
+
   test('config 不存在且填了 ANTHROPIC_API_KEY 時會寫入該欄位', async () => {
     const configPath = path.join(tmpDir, 'config.json');
     const answers = { PG_HOST: 'localhost', PG_PORT: '5432', PG_DB: 'aidev', PG_USER: 'alice', PG_PASSWORD: 'pw', ANTHROPIC_API_KEY: 'sk-ant-xxx' };

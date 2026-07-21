@@ -20,7 +20,7 @@ async function ensureConfig(configPath, ask) {
   const pgHost = await ask('PG_HOST', 'localhost');
   const pgPort = await ask('PG_PORT', '5432');
   const pgDb = await ask('PG_DB', 'aidev');
-  const pgUser = await ask('PG_USER', '');
+  const pgUser = await ask('PG_USER', 'aidev');
   const pgPassword = await ask('PG_PASSWORD', '');
   const apiKey = await ask('ANTHROPIC_API_KEY', '');
 

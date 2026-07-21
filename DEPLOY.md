@@ -31,11 +31,15 @@
 ```
 
 安裝過程中僅需：
-1. 輸入 PostgreSQL 連線資訊（`PG_HOST`/`PG_PORT`/`PG_DB`/`PG_USER`/`PG_PASSWORD`，可留白用預設值）。
+1. 輸入 PostgreSQL 連線資訊：`PG_HOST`/`PG_PORT`/`PG_DB` 可直接 Enter 用預設值（`localhost`/`5432`/`aidev`）；**`PG_USER` 必填**（留白會導致 `DATABASE_URL` 不合法而中止，預設帶 `aidev`），`PG_PASSWORD` 建議設定。
 2. 選填 `ANTHROPIC_API_KEY`（資料庫查詢 AI 功能用，可留空稍後補）。
 3. 完成一次 `claude` 訂閱登入（跳出登入畫面時完成即可，此步無法自動化）。
 
 完成後瀏覽器會自動開啟 `http://localhost:3939/setup.html`。
+
+> **Ubuntu 首次安裝兩個常見手動點**：
+> - **PostgreSQL peer auth**：`apt` 裝的 `postgres` 帳號預設無密碼、走 peer auth，腳本的 admin 連線常失敗而無法自動建 role/db。裝前先 `export PGADMIN_USER=postgres PGADMIN_PASSWORD=...`，或先 `sudo -u postgres psql` 手動建好 role＋db（腳本偵測已存在會跳過）。詳見下方「疑難排解」。
+> - **Docker 群組需重登**：`install.sh` 裝完 Docker 後把你加進 `docker` 群組，但**當前 session 尚未生效**，VPN Gateway image 這關會被 `[SKIP]`。登出再登入後重跑 `node scripts/setup.js` 即補上（非必要功能可略過）。
 
 日後啟動（不重跑安裝）：Windows 用 `.\start.ps1`，Linux 用 `./start.sh`。
 
