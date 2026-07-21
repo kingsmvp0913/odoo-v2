@@ -59,6 +59,8 @@
   /* transition 時長 */
   --transition: 0.12s;
   --transition-slow: 0.3s;
+  /* 整站放大倍率（1 = 原始大小）。改這一個值即可整站等比縮放 */
+  --ui-zoom: 1.1;
 }
 
 /* 深色模式：Notion 風溫暖中性灰，非冷藍黑；邊框極細微 */
@@ -172,10 +174,11 @@
 [data-theme="dark"] .setting-block-footer.warn { background: rgba(245,158,11,0.10); border-top-color: rgba(245,158,11,0.30); }
 
 body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
-/* 整體介面放大：改此值即可整站等比縮放（1 = 原始大小；1.1 = 放大 10%）*/
-body { zoom: 1.1; }
+/* 整體介面放大：zoom 會把子樹的 100vh 也放大→需把根高度改成 calc(100vh / zoom)，
+   縮放後剛好等於一個視窗高，才不會裁掉 sidebar footer／內容底部 */
+body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 
-#app { display: flex; height: 100vh; }
+#app { display: flex; height: 100%; }
 
 /* ── Sidebar ───────────────────────── */
 .sidebar { width: 220px; background: var(--sidebar-bg); color: var(--sidebar-text); display: flex; flex-direction: column; flex-shrink: 0; }
@@ -438,7 +441,7 @@ body { zoom: 1.1; }
 .processing-icon { display: inline-block; animation: spin 1s linear infinite; font-style: normal; line-height: 1; }
 
 /* ── Login ───────────────────────── */
-.login-wrap { flex: 1; display: flex; align-items: center; justify-content: center; height: 100vh; background: var(--sidebar-bg); }
+.login-wrap { flex: 1; display: flex; align-items: center; justify-content: center; height: 100%; background: var(--sidebar-bg); }
 .login-box { background: #fff; border-radius: var(--radius-lg); padding: 36px 40px; width: 380px; box-shadow: 0 8px 32px rgba(0,0,0,.25); }
 .login-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; letter-spacing: -0.3px; }
 .login-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; }

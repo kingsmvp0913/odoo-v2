@@ -133,7 +133,7 @@ const App = defineComponent({
       <router-view />
     </template>
     <template v-else>
-      <div style="display:flex;height:100vh;flex:1;min-width:0">
+      <div style="display:flex;height:100%;flex:1;min-width:0">
         <aside class="sidebar">
           <div class="sidebar-header" style="display:flex;align-items:center;gap:6px">
             <div>AI Dev<span>工作台</span></div>
