@@ -399,6 +399,21 @@ function registerRoutes(app) {
           LIMIT $1 OFFSET $2`,
         [limit, offset]
       );
+      // 帶出本頁每筆退回的分類條目（description＋category）。動態 IN 佔位避開 pg-mem ANY(int[]) 限制。
+      const ids = rows.map(r => r.id);
+      if (ids.length) {
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+        const { rows: items } = await query(
+          `SELECT rejection_id, description, category FROM rejection_items
+            WHERE rejection_id IN (${placeholders}) ORDER BY id`,
+          ids
+        );
+        const byRej = {};
+        for (const it of items) {
+          (byRej[it.rejection_id] = byRej[it.rejection_id] || []).push({ description: it.description, category: it.category });
+        }
+        for (const r of rows) r.items = byRej[r.id] || [];
+      }
       const { rows: [{ total }] } = await query('SELECT COUNT(*)::int AS total FROM task_rejections');
       res.json({ rows, total });
     } catch (err) { res.status(500).json({ error: err.message }); }

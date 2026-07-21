@@ -91,6 +91,21 @@ test('GET /api/admin/rejections：admin → 一列一筆退回，含專案名與
   expect(idxB).toBeLessThan(idxA);
 });
 
+test('GET /api/admin/rejections：每列帶出分類條目（description＋category），供 UI 展開顯示', async () => {
+  const id = await makeRejection('帶條目原因', 2);
+  const res = await request(app).get('/api/admin/rejections').set(admin());
+  expect(res.status).toBe(200);
+  const row = res.body.rows.find(r => r.id === id);
+  expect(Array.isArray(row.items)).toBe(true);
+  expect(row.items.length).toBe(2);
+  expect(row.items.map(it => it.description).sort()).toEqual(['item 0', 'item 1']);
+  expect(row.items.every(it => it.category === '其他')).toBe(true);
+  // 無條目者回空陣列，不是 undefined
+  const empty = await makeRejection('無條目原因', 0);
+  const res2 = await request(app).get('/api/admin/rejections').set(admin());
+  expect(res2.body.rows.find(r => r.id === empty).items).toEqual([]);
+});
+
 test('POST /api/admin/rejections/delete：非 admin → 403', async () => {
   const res = await request(app).post('/api/admin/rejections/delete').set(user()).send({ ids: [1] });
   expect(res.status).toBe(403);

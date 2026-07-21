@@ -31,7 +31,7 @@ window.AdminPromptLogsView = Vue.defineComponent({
       <h1>Prompt 送出記錄</h1>
     </div>
     <div class="content">
-      <div style="max-width:1000px">
+      <div>
         <div class="settings-section">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3)">
             <h2 class="section-title" style="margin:0">最近送給 AI 的 prompt（最新 {{ limit }} 筆）</h2>

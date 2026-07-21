@@ -59,7 +59,7 @@ window.AdminRejectionsView = Vue.defineComponent({
       <h1>退回原因管理</h1>
     </div>
     <div class="content">
-      <div style="max-width:1000px">
+      <div>
         <div class="settings-section">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3)">
             <h2 class="section-title" style="margin:0">退回紀錄（共 {{ total }}）</h2>
@@ -80,11 +80,12 @@ window.AdminRejectionsView = Vue.defineComponent({
                   <th style="width:80px">狀態</th>
                   <th style="width:60px">來源</th>
                   <th style="width:60px">條目</th>
+                  <th>分類明細</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="loading"><td colspan="8" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
-                <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="8">目前沒有退回紀錄</td></tr>
+                <tr v-if="loading"><td colspan="9" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
+                <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="9">目前沒有退回紀錄</td></tr>
                 <tr v-for="r in rows" :key="r.id">
                   <td><input type="checkbox" :checked="!!selected[r.id]" @change="selected = { ...selected, [r.id]: $event.target.checked }" /></td>
                   <td style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
@@ -100,6 +101,14 @@ window.AdminRejectionsView = Vue.defineComponent({
                   <td style="font-size:var(--fs-sm)">{{ statusLabel[r.status] || r.status }}</td>
                   <td style="font-size:var(--fs-sm)">{{ r.source === 'qa' ? 'QA' : '人工' }}</td>
                   <td style="text-align:center">{{ r.item_count }}</td>
+                  <td style="font-size:var(--fs-sm)">
+                    <span v-if="!(r.items && r.items.length)" style="color:var(--text-muted)">—</span>
+                    <div v-for="(it, i) in r.items" :key="i"
+                      style="display:flex;gap:var(--space-2);align-items:baseline;padding:2px 0">
+                      <span class="pill pill-info" style="flex-shrink:0">{{ it.category }}</span>
+                      <span style="white-space:pre-wrap;word-break:break-word">{{ it.description }}</span>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
