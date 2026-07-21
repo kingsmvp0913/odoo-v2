@@ -64,7 +64,15 @@ window.ProjectListView = Vue.defineComponent({
     unread(id) { return UnreadStore.byProject[String(id)] || 0; },
     go(id) { this.$router.push(`/projects/${id}`); },
     goWiki(id) { this.$router.push(`/projects/${id}/wiki`); },
-    goChat(id) { this.$router.push(`/projects/${id}/chat`); }
+    goChat(id) { this.$router.push(`/projects/${id}/chat`); },
+    goDb(id) { this.$router.push(`/projects/${id}/db`); },
+    async initWiki(id) {
+      try {
+        await Api.post(`projects/${id}/wiki/init`, {});
+        showToast('Wiki 初始化完成', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    isAdmin() { return window.UserStore.role === 'admin'; }
   },
   template: `
     <div class="topbar">
@@ -126,14 +134,16 @@ window.ProjectListView = Vue.defineComponent({
             <div v-if="p.folder_name" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">資料夾：{{ p.folder_name }}</div>
             <div style="font-size:var(--fs-base);color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
             <div v-if="p.description" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
-            <div style="margin-top:10px;display:flex;gap:6px" @click.stop>
+            <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" @click.stop>
+              <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
               <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
                 <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unread(p.id) }}</span>
               </button>
+              <button v-if="!p.has_wiki" class="btn btn-outline btn-sm" @click="initWiki(p.id)">🔄 初始化 Wiki</button>
             </div>
           </div>
-          <button class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p)">刪除</button>
+          <button v-if="isAdmin()" class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p)">刪除</button>
         </div>
       </div>
     </div>
