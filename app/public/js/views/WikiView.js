@@ -216,7 +216,7 @@ window.WikiView = Vue.defineComponent({
         <div :style="{ width: progress.percent + '%', height: '100%', background: 'var(--primary)', transition: 'width .3s' }"></div>
       </div>
     </div>
-    <div style="display:flex;height:calc(100vh - 56px);overflow:hidden">
+    <div style="display:flex;height:calc(100% - 56px);overflow:hidden">
       <div style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:var(--space-2);flex-shrink:0">
         <div v-if="loading" style="color:var(--text-muted);font-size:var(--fs-base);padding:var(--space-2)">載入中...</div>
         <template v-else>
