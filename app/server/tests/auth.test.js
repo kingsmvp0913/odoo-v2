@@ -131,3 +131,69 @@ test('登入成功不補寫 password_enc', async () => {
   const after = await dbModule.query("SELECT password_enc FROM users WHERE username='bf'");
   expect(after.rows[0].password_enc).toBeNull();
 });
+
+// --- 自助註冊 ＋ 待審核閘門 ---
+
+// 意圖：自助註冊建 pending 帳號（role=user、approved=false），回 token 供本次精靈設定憑證用。
+// approved 唯一在此設 false——其餘建立路徑（setup/admin/直接 INSERT）預設 true，安全模型只擋自助註冊。
+test('POST /api/auth/register → 建 pending user、回 token', async () => {
+  const res = await request(app).post('/api/auth/register').send({
+    username: 'newbie', password: 'password123', display_name: '新人'
+  });
+  expect(res.status).toBe(201);
+  expect(res.body.token).toBeDefined();
+  const { rows: [u] } = await dbModule.query("SELECT role, approved FROM users WHERE username='newbie'");
+  expect(u.role).toBe('user');
+  expect(u.approved).toBe(false);
+});
+
+test('POST /api/auth/register → 帳號重複 409', async () => {
+  const res = await request(app).post('/api/auth/register').send({
+    username: 'newbie', password: 'password123', display_name: '新人2'
+  });
+  expect(res.status).toBe(409);
+});
+
+test('POST /api/auth/register → 密碼<8 → 400', async () => {
+  const res = await request(app).post('/api/auth/register').send({
+    username: 'shorty', password: 'abc', display_name: 'S'
+  });
+  expect(res.status).toBe(400);
+});
+
+// 意圖：pending 帳號密碼對也不得登入（管理員核准前）。
+test('POST /api/auth/login → 未核准帳號 403 pendingApproval', async () => {
+  const res = await request(app).post('/api/auth/login').send({ username: 'newbie', password: 'password123' });
+  expect(res.status).toBe(403);
+  expect(res.body.pendingApproval).toBe(true);
+});
+
+// 意圖：未核准閘門——pending token 只准碰 auth/settings，碰工作台 API 一律 403 pendingApproval。
+test('未核准閘門：pending token 打工作台 API → 403；打 settings → 放行（非閘門 403）', async () => {
+  // 拿 pending 帳號的 register token
+  const reg = await request(app).post('/api/auth/register').send({
+    username: 'pend2', password: 'password123', display_name: 'P2'
+  });
+  const pendToken = reg.body.token;
+
+  const blocked = await request(app).get('/api/tasks').set('Authorization', `Bearer ${pendToken}`);
+  expect(blocked.status).toBe(403);
+  expect(blocked.body.pendingApproval).toBe(true);
+
+  // settings 白名單：閘門放行（route 自身因缺 body 回 400，證明不是被閘門 403 擋）
+  const passed = await request(app).post('/api/settings/verify-odoo').set('Authorization', `Bearer ${pendToken}`).send({});
+  expect(passed.status).not.toBe(403);
+});
+
+// 意圖：已核准（admin）token 不被閘門擋。
+test('未核准閘門：admin token 打工作台 API 不被擋（非 403 pendingApproval）', async () => {
+  const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.pendingApproval).toBeUndefined();
+  expect(res.status).not.toBe(403);
+});
+
+// 意圖：/me 要回 approved 供前端導向（pending→精靈/等待頁）。
+test('GET /api/auth/me → 含 approved', async () => {
+  const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.approved).toBe(true);
+});

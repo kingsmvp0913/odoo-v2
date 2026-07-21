@@ -22,6 +22,33 @@ function createApp() {
   const app = express();
   app.use(express.json());
   app.use(express.static(path.join(__dirname, '../public')));
+
+  // 未核准閘門：擋「已登入但 approved=false」的自助註冊帳號碰工作台 API。
+  // 白名單（auth/setup/settings/system config）放行——註冊精靈要能靠 register token 設定憑證。
+  // 無 token／壞 token 不在此擋（交各路由 verifyToken 回 401），只認得出、且未核准的才 403。
+  {
+    const jwt = require('jsonwebtoken');
+    const { query } = require('./db');
+    // req.path 在 app.use('/api',…) 下已剝除 /api 前綴（如 /tasks、/settings/github-pat）
+    const whitelisted = p =>
+      p.startsWith('/auth/') || p.startsWith('/setup/') ||
+      p === '/settings' || p.startsWith('/settings/') || p === '/system/config';
+    app.use('/api', async (req, res, next) => {
+      if (whitelisted(req.path)) return next();
+      const header = req.headers.authorization;
+      if (!header?.startsWith('Bearer ')) return next();
+      let userId;
+      try { userId = jwt.verify(header.slice(7), process.env.JWT_SECRET).userId; } catch { return next(); }
+      try {
+        const { rows } = await query('SELECT role, approved FROM users WHERE id=$1', [userId]);
+        if (rows[0] && rows[0].role !== 'admin' && rows[0].approved === false) {
+          return res.status(403).json({ error: '帳號審核中，管理員核准後即可使用', pendingApproval: true });
+        }
+      } catch { /* 查詢失敗不阻斷：交下游處理 */ }
+      next();
+    });
+  }
+
   registerAuthRoutes(app);
   registerSettingsRoutes(app);
   registerTasksRoutes(app);

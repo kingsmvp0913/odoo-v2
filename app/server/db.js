@@ -433,6 +433,9 @@ async function migrate() {
     { table: 'users', col: 'github_login',   sql: 'ALTER TABLE users ADD COLUMN github_login TEXT' },
     { table: 'users', col: 'git_name',       sql: 'ALTER TABLE users ADD COLUMN git_name TEXT' },
     { table: 'users', col: 'git_email',      sql: 'ALTER TABLE users ADD COLUMN git_email TEXT' },
+    // 自助註冊審核閘門：DEFAULT true → 既有帳號與所有可信建立路徑（setup/admin）自動核准；
+    // 唯一寫 false 的是 /api/auth/register。故新增欄位即回填既有列 true，不需另做 backfill。
+    { table: 'users', col: 'approved',       sql: 'ALTER TABLE users ADD COLUMN approved BOOLEAN NOT NULL DEFAULT true' },
     { table: 'task_rejections', col: 'source', sql: "ALTER TABLE task_rejections ADD COLUMN source TEXT NOT NULL DEFAULT 'human'" }
   ];
   const tableColsCache = {};

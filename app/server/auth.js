@@ -80,6 +80,28 @@ function registerRoutes(app) {
     }
   });
 
+  // POST /api/auth/register — 自助註冊（建 pending 帳號，回 token 供本次引導精靈設定憑證）。
+  // 與 setup 不同：users 非空也可註冊；一律 role='user'、approved=false（唯一寫 false 的路徑）。
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { username, password, display_name } = req.body;
+      if (!username || !password || !display_name) {
+        return res.status(400).json({ error: 'username, password, display_name required' });
+      }
+      if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
+
+      const password_hash = await hashPassword(password);
+      const { rows: inserted } = await query(
+        'INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ($1, $2, $3, $4, false) RETURNING id',
+        [username, password_hash, display_name, 'user']
+      );
+      res.status(201).json({ token: signToken(inserted[0].id) });
+    } catch (err) {
+      if (err.code === '23505') return res.status(409).json({ error: '帳號已存在' });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/auth/login — authenticate and return token + user (no password_hash)
   app.post('/api/auth/login', async (req, res) => {
     try {
@@ -93,6 +115,10 @@ function registerRoutes(app) {
       if (!user || !(await checkPassword(password, user.password_hash))) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+      // 待審核帳號密碼對也不放行（管理員核准前）
+      if (user.approved === false) {
+        return res.status(403).json({ error: '帳號審核中，管理員核准後即可登入', pendingApproval: true });
+      }
 
       const { password_hash, password_enc, ...safeUser } = user;
       res.json({ token: signToken(user.id), user: safeUser });
@@ -105,7 +131,7 @@ function registerRoutes(app) {
   app.get('/api/auth/me', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, username, display_name, role, odoo_settings, sync_interval FROM users WHERE id = $1',
+        'SELECT id, username, display_name, role, approved, odoo_settings, sync_interval FROM users WHERE id = $1',
         [req.userId]
       );
       if (!rows[0]) return res.status(404).json({ error: 'User not found' });

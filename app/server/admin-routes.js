@@ -109,7 +109,7 @@ function registerRoutes(app) {
 
   app.get('/api/admin/users', auth, async (req, res) => {
     try {
-      const { rows } = await query('SELECT id, username, display_name, role, created_at FROM users ORDER BY id ASC');
+      const { rows } = await query('SELECT id, username, display_name, role, approved, created_at FROM users ORDER BY id ASC');
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -134,13 +134,14 @@ function registerRoutes(app) {
 
   app.put('/api/admin/users/:id', auth, async (req, res) => {
     try {
-      const { role, display_name } = req.body;
+      const { role, display_name, approved } = req.body;
       const { rows } = await query(
         `UPDATE users SET
            role = COALESCE($2, role),
-           display_name = COALESCE($3, display_name)
-         WHERE id = $1 RETURNING id, username, display_name, role`,
-        [req.params.id, role || null, display_name || null]
+           display_name = COALESCE($3, display_name),
+           approved = COALESCE($4, approved)
+         WHERE id = $1 RETURNING id, username, display_name, role, approved`,
+        [req.params.id, role || null, display_name || null, typeof approved === 'boolean' ? approved : null]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(rows[0]);

@@ -48,6 +48,14 @@ window.AdminUsersView = Vue.defineComponent({
         showToast(`已${verb}`, 'success');
       } catch (e) { showToast(e.message, 'error'); }
     },
+    async approve(user) {
+      if (!await confirmDialog({ title: '核准帳號', message: `確定核准「${user.display_name || user.username}」？核准後即可登入使用。`, confirmText: '核准' })) return;
+      try {
+        await Api.put(`admin/users/${user.id}`, { approved: true });
+        await this.loadUsers();
+        showToast('已核准', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
     async deleteUser(user) {
       if (!await confirmDialog({ title: '刪除使用者', message: `確定刪除使用者「${user.display_name || user.username}」？`, danger: true, confirmText: '刪除' })) return;
       try {
@@ -111,12 +119,14 @@ window.AdminUsersView = Vue.defineComponent({
                     <span :style="{ color: u.role === 'admin' ? 'var(--sidebar-accent)' : 'var(--text-muted)', fontWeight: 'var(--fw-semibold)' }">
                       {{ u.role === 'admin' ? '管理員' : '一般' }}
                     </span>
+                    <span v-if="u.approved === false" class="pill pill-warn" style="margin-left:6px">待審核</span>
                   </td>
                   <td style="font-size:var(--fs-sm);color:var(--text-muted)">
                     {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
                   </td>
                   <td>
                     <div style="display:flex;gap:6px">
+                      <button v-if="u.approved === false" class="btn btn-primary btn-sm" @click="approve(u)">核准</button>
                       <button class="btn btn-outline btn-sm" @click="toggleRole(u)">
                         {{ u.role === 'admin' ? '降為一般' : '升為管理員' }}
                       </button>

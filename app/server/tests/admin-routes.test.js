@@ -63,6 +63,22 @@ test('POST /api/admin/users → 建立使用者並寫入可解回原密碼的 pa
   expect(decrypt(u.password_enc)).toBe('e2epass123');
 });
 
+// 意圖：管理員核准 pending 帳號後即可登入（自助註冊審核閘門的收尾）。
+test('PUT /api/admin/users/:id approved=true → pending 帳號可登入', async () => {
+  await request(app).post('/api/auth/register').send({ username: 'wait1', password: 'password123', display_name: 'W1' });
+  const before = await request(app).post('/api/auth/login').send({ username: 'wait1', password: 'password123' });
+  expect(before.status).toBe(403);
+
+  const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username='wait1'");
+  const upd = await request(app).put(`/api/admin/users/${u.id}`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ approved: true });
+  expect(upd.status).toBe(200);
+  expect(upd.body.approved).toBe(true);
+
+  const after = await request(app).post('/api/auth/login').send({ username: 'wait1', password: 'password123' });
+  expect(after.status).toBe(200);
+});
+
 // --- 固定 E2E 測試帳號（唯讀）---
 
 test('GET /api/admin/e2e-account → 回固定帳密 auto_test_user', async () => {
