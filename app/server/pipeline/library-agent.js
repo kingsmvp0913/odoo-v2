@@ -200,6 +200,16 @@ async function runLibraryAgent(taskId, userId, signal) {
   const { rows: [modRow] } = await query(
     'SELECT content FROM wiki_pages WHERE project_id=$1 AND slug=$2', [task.project_id, moduleSlug]);
 
+  // 撈該模組下現有功能頁（slug + title），供 agent 判斷這次是否為既有功能的更新，
+  // 避免同一功能因不同任務生成不同 slug 而被重複新增成多頁
+  const { rows: existingFns } = await query(
+    `SELECT w.slug, w.title FROM wiki_pages w
+       JOIN wiki_pages m ON m.id = w.parent_id
+      WHERE w.project_id=$1 AND m.slug=$2 AND w.node_type='function'
+      ORDER BY w.title`,
+    [task.project_id, moduleSlug]
+  );
+
   let wikiUpdate = null;
   try {
     const agent = loadAgent('library');
@@ -213,6 +223,9 @@ ${task.analysis_yaml || '無'}
 ${logText || '無'}
 
 本任務所屬模組：${moduleName}（模組頁 slug：${moduleSlug}）
+本模組現有功能頁（若這次任務是修改其中某個既有功能，請沿用該頁 slug 以「更新」它，不要用新 slug 重複新增；確實是新功能才給新 slug）：
+${existingFns.length ? existingFns.map(f => `- ${f.slug}：${f.title}`).join('\n') : '（尚無）'}
+
 現有模組頁內容：
 ${modRow?.content || '（尚未建立）'}
 
@@ -249,6 +262,16 @@ ${ovRow?.content || '（尚未建立）'}
       if (fnSlug === 'overview' || fnSlug === 'project-notes' || fnSlug.startsWith('module-')) {
         fnSlug = `fn-${fnSlug}`;
         console.warn(`[LIBRARY-AGENT] task ${taskId}: 功能頁 slug 撞保留字「${wikiUpdate.slug}」，改用「${fnSlug}」避免覆寫骨架節點`);
+      }
+      // 同功能去重：同模組下若已有相同標題的功能頁，沿用既有 slug 改為更新，
+      // 避免 agent 生成新 slug 導致同一功能被重複新增（agent 未重用時的最後防線）
+      const { rows: [dup] } = await query(
+        "SELECT slug FROM wiki_pages WHERE project_id=$1 AND parent_id=$2 AND node_type='function' AND title=$3 LIMIT 1",
+        [task.project_id, moduleId, wikiUpdate.title]
+      );
+      if (dup && dup.slug !== fnSlug) {
+        console.warn(`[LIBRARY-AGENT] task ${taskId}: 已有同標題功能頁「${wikiUpdate.title}」(slug=${dup.slug})，改為更新既有頁，不以新 slug「${fnSlug}」新增`);
+        fnSlug = dup.slug;
       }
       await _upsertNode(
         task.project_id, moduleId, 'function',
