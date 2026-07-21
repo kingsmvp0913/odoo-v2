@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { query } = require('./db');
+const { deleteTaskDir } = require('./lib/attachments');
 const { hashPassword } = require('./password');
 const { encryptSafe } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
@@ -150,11 +151,36 @@ function registerRoutes(app) {
 
   app.delete('/api/admin/users/:id', auth, async (req, res) => {
     try {
-      if (parseInt(req.params.id) === req.userId) return res.status(400).json({ error: '不能刪除自己的帳號' });
-      const { rows } = await query('DELETE FROM users WHERE id = $1 RETURNING id', [req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      const id = parseInt(req.params.id);
+      if (id === req.userId) return res.status(400).json({ error: '不能刪除自己的帳號' });
+      // 參照 users(id) 的外鍵多數無 ON DELETE，直接刪 users 會違反 tasks_user_id_fkey 等外鍵，
+      // 故先依相依順序清該使用者的關聯資料再刪帳號。token_usage／task_rejections 等已設 ON DELETE SET NULL
+      // （保留為跨任務計費／訓練歷史），不在此手動刪。
+      await query('BEGIN');
+      const { rows: taskRows } = await query('SELECT id FROM tasks WHERE user_id = $1', [id]);
+      const taskIds = taskRows.map(r => r.id);
+      if (taskIds.length) {
+        await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [taskIds]);
+        await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [taskIds]);
+        await query('DELETE FROM task_attachments WHERE task_id = ANY($1::int[])', [taskIds]);
+        await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [taskIds]);
+        await query('DELETE FROM tasks WHERE user_id = $1', [id]);
+        taskIds.forEach(tid => deleteTaskDir(tid)); // 連帶清各任務磁碟上的 uploads/task_<id>
+      }
+      await query('DELETE FROM sessions WHERE user_id = $1', [id]);
+      await query('DELETE FROM loop_counter WHERE user_id = $1', [id]);
+      await query('UPDATE project_chats SET user_id = NULL WHERE user_id = $1', [id]); // 對話留給專案，僅解除建立者關聯
+      const { rows } = await query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+      if (!rows.length) {
+        await query('ROLLBACK');
+        return res.status(404).json({ error: 'Not found' });
+      }
+      await query('COMMIT');
       res.json({ ok: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) {
+      await query('ROLLBACK').catch(() => {});
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // --- project_maps ---
