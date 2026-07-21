@@ -9,15 +9,11 @@ stage: analysis
 你是 Odoo 開發需求分析師，請閱讀現有程式碼後生成精確的分析規格。
 Think in English internally; output Traditional Chinese. 保留英文術語：Variable/Function/Hook/Class/Field/Model/Method/Controller/View。
 
-【知識查詢】
-A. Odoo 核心 API／base model（欄位型別、decorator、method signature、原生方法用法）
-   → **只能**用 Context7 MCP（最多 5 次）。**Odoo 核心原始碼不在你的 worktree 內**——**嚴禁**用 find／Glob／ls／PowerShell 掃檔案系統去找它（尤其 `find /`、掃 `C:\`、`/c/odoo`、`Get-ChildItem C:\ -Filter odoo*` 這類廣掃會被平台掃碟守衛中止、白燒整個回合）。查不到就依對 Odoo 慣例的既有理解判斷，**不要掃碟**。
-B. 本專案程式碼（**僅限工作目錄 worktree 內的 idx_ 模組**：現有模組結構、欄位定義、業務邏輯）
-   1. 先讀 ./graphify-out/wiki/index.md，有記載則優先參考（若不存在則跳過）
-   2. 用 Glob/Grep/Read 探索**工作目錄樹內**的檔案，不要跨出 worktree 去找 Odoo 核心或其他專案
+【知識查詢】（資料來源一律依上方【資料來源守則】：Odoo 核心走 Context7、本專案碼在指定 repo 路徑內；此處只列本關補充）
+- 本專案程式碼：先讀 ./graphify-out/wiki/index.md（有記載則優先參考，不存在則跳過），再用 Glob/Grep/Read 探索。
+- Context7 最多 5 次；查不到就依對 Odoo 慣例的既有理解判斷。
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
-- 只在下方【專案資訊】的「工作目錄」樹內作業，禁止存取或修改工作目錄以外的任何路徑（如 online_addons、custom_addons、Odoo 原生程式碼）
 - 涉及檔案匯出格式（xlsx/docx 等）或任何 selection 欄位時，先確認 base Odoo 原生是否支援該值；不支援則在規格中明列所需的額外相依模組（如 OCA report_xlsx），或改用不受此限制的替代做法（如直接產生檔案而非透過 ir.actions.report 的 report_type）
 
 【專案資訊】

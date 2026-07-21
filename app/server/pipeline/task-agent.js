@@ -3,7 +3,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { pullBranch, ensureMainBranch, ensureWorktreeAtMain } = require('./git');
+const { pullBranch, ensureMainBranch, ensureWorktreeAtMain, getMainBranch } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
@@ -53,7 +53,14 @@ function worktreeParent(root, taskId) {
   return path.join(root, '.worktrees', taskId);
 }
 
-function buildAnalysisPrompt(task, info, clarification, workDir) {
+// 本任務各 repo 的 worktree 絕對路徑清單：供 source-routing 注入，讓 agent 直接 `git -C <路徑>`／限定探索範圍，
+// 不用 pwd/ls 探路、不用猜子目錄名（歷程實測 97 次探路、59 次猜 repo 名）。
+function buildRepoPaths(info, taskId) {
+  const wt = worktreeParent(info.root, taskId);
+  return (info.repos || []).map(r => `- ${path.join(wt, r.subdir)}`).join('\n') || '（無 repo）';
+}
+
+function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch) {
   const agent = loadAgent('analysis-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -62,6 +69,9 @@ function buildAnalysisPrompt(task, info, clarification, workDir) {
       odoo_version: info.odoo_version,
       work_dir: workDir || info.root,
       repo_list: repoList,
+      repo_paths: buildRepoPaths(info, task.task_id),
+      main_branch: mainBranch || 'main',
+      git_branch: task.git_branch || `task/${task.task_id}`,
       original_text: task.original_text || '（無內容）',
       task_id: task.task_id,
       clarification: clarification || '（無）'
@@ -80,7 +90,7 @@ async function latestResolution(taskId) {
   return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
 }
 
-function buildCodingPrompt(task, info, resolution, retryFeedback) {
+function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -89,6 +99,8 @@ function buildCodingPrompt(task, info, resolution, retryFeedback) {
       odoo_version: info.odoo_version,
       work_dir: worktreeParent(info.root, task.task_id),
       git_branch: task.git_branch || '（未設定）',
+      main_branch: mainBranch || 'main',
+      repo_paths: buildRepoPaths(info, task.task_id),
       analysis_yaml: task.analysis_yaml || '（無規格）',
       commit_message: buildCommitMessage(task),
       repo_list: repoList,
@@ -164,9 +176,11 @@ async function runTaskAnalysis(taskId, userId, signal) {
   );
   const clarification = logs.reverse().filter(l => l.role === 'user').map(l => l.content).join('\n');
 
+  // base 主分支依實際 repo 而定（main/master）：供 source-routing 給出正確 diff 基底，避免 agent 猜成 main→fatal
+  const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
   let raw;
   try {
-    const built = buildAnalysisPrompt(task, info, clarification, wtParent);
+    const built = buildAnalysisPrompt(task, info, clarification, wtParent, mainBranch);
     // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
     const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
@@ -242,7 +256,8 @@ const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '18
 // retry_feedback 仍保留、餵回 coding prompt 當失敗說明，只是不再拿它決定模型。
 async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const cwd = worktreeParent(info.root, task.task_id);
-  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '');
+  const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', mainBranch);
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 
@@ -319,4 +334,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, latestResolution };
+module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, buildRepoPaths, latestResolution };

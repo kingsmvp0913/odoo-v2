@@ -13,7 +13,7 @@ stage: qa
 你在無人值守的 pipeline 中執行，沒有互動管道可以提問：即使通用規則要求「先詢問再繼續」，也不得輸出問句或等待回覆——把疑點寫成 fail 的 issues/summary，一律以下方 <result> 契約收尾。
 
 【檢查方式】
-1. 對每個 repo 子目錄執行 `git -C <子目錄> diff {{main_branch}}...{{git_branch}}` 取得本任務的變更（若該 repo 無變更則跳過）。
+1. 對【資料來源守則】列出的每個 repo 絕對路徑取得本任務變更：`git -C "<絕對路徑>" diff {{main_branch}}...{{git_branch}}`（該 repo 無變更則跳過；分支名照抄、勿改成 main/HEAD）。
 2. 逐條比對【分析規格】的 requirements：是否都有實作、有無漏做或做錯。務必窮盡式找出所有問題，不要找到一批就停——一次列齊，才能讓實作 Agent 一輪修完、避免來回打轉。
 3. 檢查 Odoo 規範違反：
    - 是否誤用原生 `round()`（應改 Decimal + ROUND_HALF_UP）
@@ -21,8 +21,6 @@ stage: qa
    - 同一 Model 是否只有一個 view 檔、同一原生 view 是否只繼承一次
    - 原生 SQL 前後是否 `flush_model()` / `invalidate_model()`
    - 是否新增了規格以外的欄位／Model／邏輯
-
-【知識查詢】需要理解現有程式時：用 Glob/Grep/Read（限 worktree 內）。需查 Odoo 原生 API／判斷 base Odoo 是否支援某做法時：用 **context7**，**不要 `find /` 或去掃 Odoo core 原始碼（odoo-envs）**。
 
 若判定 fail 的依據與已知的環境/部署限制衝突（例如規格要求的做法在 base Odoo 不合法），summary 要明確指出這是規格與環境的衝突本身，而非只重複規格字面要求。
 

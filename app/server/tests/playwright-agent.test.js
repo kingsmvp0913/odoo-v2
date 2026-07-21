@@ -8,14 +8,15 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn(), stopReason: (m) => m }));
 jest.mock('../pipeline/agent-loader', () => ({ loadAgent: () => ({ model: 'sonnet', render: () => 'PROMPT' }) }));
-jest.mock('../pipeline/task-agent', () => ({ getProjectInfo: jest.fn(), worktreeParent: () => '/cwd' }));
+jest.mock('../pipeline/task-agent', () => ({ getProjectInfo: jest.fn(), worktreeParent: () => '/cwd', buildRepoPaths: () => '- /cwd/idx_x' }));
 jest.mock('../pipeline/ensure-env', () => ({ ensureEnvRunning: jest.fn() }));
 jest.mock('../pipeline/env-agent', () => ({ runTourTests: jest.fn(), stopEnv: jest.fn() }));
 jest.mock('../pipeline/failure-classifier', () => ({ classifyFailureWithAgent: jest.fn() }));
 jest.mock('../pipeline/reentry', () => ({ bumpReentryOrStop: jest.fn().mockResolvedValue(false) }));
 jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
-  abortMerge: jest.fn().mockResolvedValue(undefined)
+  abortMerge: jest.fn().mockResolvedValue(undefined),
+  getMainBranch: jest.fn().mockResolvedValue('main')
 }));
 
 let dbModule, runTourStage, taskAgent, runClaude, ensureEnvRunning, envAgent, classifier, projectId, userId;
@@ -46,7 +47,7 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
   runClaude.mockReset(); runClaude.mockResolvedValue({ text: '', usage: {}, durationMs: 1 });
-  taskAgent.getProjectInfo.mockReset(); taskAgent.getProjectInfo.mockResolvedValue({ root: '/repos/pwp' });
+  taskAgent.getProjectInfo.mockReset(); taskAgent.getProjectInfo.mockResolvedValue({ root: '/repos/pwp', repos: [{ local_path: '/repos/pwp/main', subdir: 'main' }] });
   const git = require('../pipeline/git');
   git.mergeInto.mockReset().mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
   git.abortMerge.mockReset().mockResolvedValue(undefined);

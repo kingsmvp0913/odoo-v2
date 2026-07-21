@@ -6,7 +6,7 @@ const yaml = require('js-yaml');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
-const { getProjectInfo, worktreeParent } = require('./task-agent');
+const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests, stopEnv } = require('./env-agent');
@@ -104,11 +104,17 @@ async function runTourStage(taskId, userId, signal) {
   const cwd = worktreeParent(info.root, task.task_id);
   try {
     const agent = loadAgent('playwright');
+    // base 主分支依實際 repo 而定（main/master）：供 source-routing 給出正確 diff 基底
+    const { getMainBranch } = require('./git');
+    const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
       test_url: env.url,
       login: E2E_LOGIN,
-      module: moduleName
+      module: moduleName,
+      repo_paths: buildRepoPaths(info, task.task_id),
+      main_branch: mainBranch,
+      git_branch: task.git_branch || '（未設定）'
     }).trim();
     const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD }, agentType: 'playwright', timeoutMs: E2E_TIMEOUT_MS });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);

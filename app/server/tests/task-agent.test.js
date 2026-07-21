@@ -38,7 +38,8 @@ jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFail
 jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
   ensureMainBranch: jest.fn().mockResolvedValue('main'),
-  ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined)
+  ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
+  getMainBranch: jest.fn().mockResolvedValue('main')
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
 

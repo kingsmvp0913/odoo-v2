@@ -2,7 +2,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
-const { getProjectInfo, worktreeParent, latestResolution } = require('./task-agent');
+const { getProjectInfo, worktreeParent, buildRepoPaths, latestResolution } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
@@ -80,6 +80,7 @@ async function runQaAgent(taskId, userId, signal) {
       const prompt = retryAgent.render({
         main_branch: mainBranch,
         git_branch: task.git_branch || '（未設定）',
+        repo_paths: buildRepoPaths(info, task.task_id),
         prior_findings: priorFindings,
         resolution
       }).trim();
@@ -107,6 +108,7 @@ async function runQaAgent(taskId, userId, signal) {
         odoo_version: info.odoo_version,
         main_branch: mainBranch,
         git_branch: task.git_branch || '（未設定）',
+        repo_paths: buildRepoPaths(info, task.task_id),
         analysis_yaml: task.analysis_yaml || '（無規格）',
         prior_findings: priorFindings,
         resolution

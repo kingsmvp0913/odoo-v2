@@ -42,6 +42,16 @@ const DEBUG_AGENTS = new Set(['analysis-reject', 'coding-project']);
 const DEBUG_MD_PATH = path.join(__dirname, 'systematic-debugging.md');
 let _debugCache = null;
 
+// 在客戶 worktree 內作業、會碰程式碼／git 的關卡：注入「資料來源守則」（source-routing.md），
+// 把平台已解析好的 repo 絕對路徑、base／任務分支直接填進 prompt——根治歷程實測的亂跑
+// （猜 base 分支打成 main→fatal、pwd/ls 探路、猜子目錄名、掃硬碟找 Odoo 核心）。
+// 片段用 {{repo_paths}}／{{main_branch}}／{{git_branch}} 佔位，呼叫端須一併傳入這三個真值。
+const SOURCE_ROUTING_AGENTS = new Set([
+  'analysis-project', 'coding-project', 'qa', 'qa-retry', 'analysis-reject', 'playwright'
+]);
+const SOURCE_ROUTING_MD_PATH = path.join(__dirname, 'source-routing.md');
+let _sourceRoutingCache = null;
+
 // name → { mtimeMs, agent }
 const _cache = new Map();
 // CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
@@ -97,15 +107,28 @@ function loadDebugMethodology() {
   return text;
 }
 
-function makeRender(body, rulesMode, includeDebug) {
+function loadSourceRouting() {
+  const stat = fs.statSync(SOURCE_ROUTING_MD_PATH);
+  if (_sourceRoutingCache && _sourceRoutingCache.mtimeMs === stat.mtimeMs) return _sourceRoutingCache.text;
+  const text = fs.readFileSync(SOURCE_ROUTING_MD_PATH, 'utf8').trim();
+  _sourceRoutingCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
+// {{placeholder}} 替換：漏傳的替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
+function fillPlaceholders(text, vars) {
+  return text.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+    if (vars && vars[k] != null) return String(vars[k]);
+    console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
+    return '';
+  });
+}
+
+function makeRender(body, rulesMode, includeDebug, includeSourceRouting) {
   return vars => {
-    const rendered = body.replace(/\{\{(\w+)\}\}/g, (_, k) => {
-      if (vars && vars[k] != null) return String(vars[k]);
-      // 漏傳的 placeholder 被替成空字串、agent 收到空洞 prompt 照常執行＝最難察覺的準確性殺手 → 至少留告警（健檢 F）
-      console.warn(`[AGENT-RENDER] 未匹配 placeholder：{{${k}}}（以空字串替換）`);
-      return '';
-    });
-    let out = rendered;
+    let out = fillPlaceholders(body, vars);
+    // source-routing 用同一組 vars 填入已解析的 repo 路徑／分支，緊貼 body 上方（最貼近任務、最顯眼）
+    if (includeSourceRouting) out = `${fillPlaceholders(loadSourceRouting(), vars)}\n\n${out}`;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
     if (rulesMode === 'full') out = `${loadPipelineRules()}\n\n${out}`;
     else if (rulesMode === 'qa') out = `${loadQaRules()}\n\n${out}`;
@@ -132,7 +155,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;
@@ -171,6 +194,7 @@ function promptVersion(name) {
   const agent = loadAgent(name);
   const mode = CLAUDE_MD_AGENTS.get(name) || false;
   let s = agent.body;
+  if (SOURCE_ROUTING_AGENTS.has(name)) s = `${loadSourceRouting()}\n\n${s}`;
   if (DEBUG_AGENTS.has(name)) s = `${loadDebugMethodology()}\n\n${s}`;
   if (mode === 'full') s = `${loadPipelineRules()}\n\n${s}`;
   else if (mode === 'qa') s = `${loadQaRules()}\n\n${s}`;

@@ -28,11 +28,10 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 只有當使用者描述的是「問題／錯誤／哪裡不對／要改什麼」時，才往下走【查清真相】做除錯。
 
 【你必須先查清真相】（問題回報時才需要；純流程指令走上面的快速通道）
-- 工作目錄是任務 worktree（含各 repo 子目錄）。用 Bash 跑 `git diff {{main_branch}}...HEAD`（或 `git log {{main_branch}}..HEAD`）看本輪實際改了什麼。
+- 看本輪實際改了什麼：對【資料來源守則】列出的 repo 絕對路徑跑 `git -C "<絕對路徑>" diff {{main_branch}}...{{git_branch}}`（或 `git -C "<絕對路徑>" log {{main_branch}}..{{git_branch}}`）。cwd 是容器、不是 repo，別在容器根跑 git、別把基底打成 main/HEAD。
 - **不要去判「這是不是本任務的模組／是不是誤植」。** 審核退回一定有東西要處理——查清它是「實作性問題」還是「需求／規格問題」即可，路由規則見【決定下一步】。
 - 若停下原因指向「執行期錯誤」（RPC_ERROR、traceback、Odoo 開不起來、模組升級／載入失敗、按鈕點了報錯等），
   **不要反過來叫人貼 log**；由你自己讀測試環境 runtime log 取得實機證據。
-- 需查 Odoo 原生 API／判斷是否「不符 Odoo 標準」時用 **context7**；本機搜尋限 worktree 內，**禁止 `find /` 或全碟掃描 Odoo core（odoo-envs）**。
 
 【測試環境 runtime log（實機證據，你可自行讀取）】
 - 檔案路徑：{{runtime_log_path}}

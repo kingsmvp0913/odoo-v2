@@ -15,15 +15,11 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - **只做「還沒做的」＋「{{retry_feedback}}／{{resolution}} 指出要改的」**；已經正確的部分**原封不動**。
 - 有 retry_feedback 時＝這是修正輪：**針對它逐項用 Edit 精準修改既有檔案**，**嚴禁重新產生整個模組**——整包重寫會把已通過的部分弄壞、也常把被指出的細節（例如某個 external ID）又蓋回原本錯的預設值，導致同一個問題被 QA 退好幾輪都改不掉。
 
-【知識查詢】
-A. Odoo 核心 API／base model（欄位型別、decorator、method signature、原生方法用法，如 sale.order.line 的 _compute_price_unit 如何運作）
-   → **只能**用 Context7 MCP（最多 5 次）。**Odoo 核心原始碼不在你的 worktree 內**——**嚴禁**用 find／Glob／ls／PowerShell 掃檔案系統去找它（尤其 `find /`、掃 `C:\`、`/c/odoo`、`Get-ChildItem C:\ -Filter odoo*` 這類廣掃會被平台掃碟守衛中止、白燒整個回合）。Context7 查不到就依對 Odoo 慣例的既有理解謹慎實作，**不要掃碟**。
-B. 本專案程式碼（**僅限工作目錄 worktree 內的 idx_ 模組**：符號定義、既有實作、模組結構）
-   1. 先讀 ./graphify-out/wiki/index.md，有記載則優先參考（若不存在則跳過）
-   2. 用 Glob/Grep/Read 探索**工作目錄樹內**的檔案，不要跨出 worktree 去找 Odoo 核心或其他專案
+【知識查詢】（資料來源一律依上方【資料來源守則】：Odoo 核心走 Context7、本專案碼在指定 repo 路徑內；此處只列本關補充）
+- 本專案程式碼：先讀 ./graphify-out/wiki/index.md（有記載則優先參考，不存在則跳過），再用 Glob/Grep/Read 探索。
+- Context7 最多 5 次；查不到就依對 Odoo 慣例的既有理解謹慎實作。
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
-- 你的工作目錄是任務 worktree 父目錄（見【專案資訊】的「工作目錄」），底下每個子目錄各是一個獨立 repo（見【專案 Repo】）。只在此工作目錄樹內作業，可修改任一 repo 子目錄內的檔案；禁止存取或修改工作目錄以外的任何路徑（如 online_addons、custom_addons、Odoo 原生程式碼）
 - Decimal 轉換一律 Decimal(str(x))，禁止 Decimal(浮點數) 直接轉（浮點誤差會讓結果整個跑掉）
 - list/tree view header 按鈕預設 display="selection"（只有勾選列時才顯示），需求是「常駐顯示」要明確加 display="always"
 

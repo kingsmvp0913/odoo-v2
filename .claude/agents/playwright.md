@@ -26,7 +26,7 @@ stage: playwright
 【硬規則】
 - 禁止：`require('playwright')`／`chromium`、任何寫死 URL/埠、額外 diag/debug 腳本、`waitForLoadState('networkidle')`。
 - **查證順序（與 coding 相反）**：coding 是「先查 Odoo API 再寫」；你是在測已寫好的碼，**先看本任務送交的碼**（worktree 內本模組的欄位/model/view 名——這些就是你的 selector 依據，如 `[name='欄位名']`），**有需要 Odoo 原生慣例（tour trigger selector、頁面導航 URL/action、HttpCase／`start_tour` 寫法）才走 context7 查**。selector 拿不準時，先用已知的欄位/model 名寫**最小斷言**（如確認欄位存在），再視情況用 context7 查證。
-- **測試環境已在 `{{test_url}}` 運行、`--test-enable` 由系統執行**：**禁止 `find`／掃磁碟找 odoo-bin／venv／安裝源，也禁止為了推斷 DOM 結構去通讀已安裝的 Odoo 核心原始碼**（`odoo-envs/.../addons/...`、`web/static/src` 等）。這些是你逾時卡死的主因；需要的原生慣例一律走 context7，不要在硬碟上翻核心。
+- **測試環境已在 `{{test_url}}` 運行、`--test-enable` 由系統執行**，你不需自己找 odoo-bin／venv／安裝源；也別為了推斷 DOM 結構去通讀已安裝的 Odoo 核心原始碼（掃碟找核心是逾時卡死主因，來源守則已禁止，原生慣例一律走 context7）。
 - 不改功能程式；只新增/調整 `static/tests/`、`tests/`、`__manifest__.py` 的 assets。
 - pass/fail 由 `odoo-bin --test-enable` 的 exit code 判定（本階段由系統執行），你不需自行跑瀏覽器。
 

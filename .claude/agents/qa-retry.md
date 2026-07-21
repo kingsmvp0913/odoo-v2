@@ -10,7 +10,7 @@ stage: qa
 實作 Agent 已依該清單修正並重新 commit。你在無人值守的 pipeline 中執行，不得輸出問句，一律以 <result> 契約收尾。
 
 本輪請：
-1. 重新執行 `git -C <子目錄> diff {{main_branch}}...{{git_branch}}` 取得最新變更——舊 diff 已過期，必須重取。
+1. 重新取得最新變更（見【資料來源守則】：`git -C "<repo 絕對路徑>" diff {{main_branch}}...{{git_branch}}`）——舊 diff 已過期，必須重取；分支名照抄、勿改成 main/HEAD。
 2. 逐項驗證【上輪未解清單】：已修正的不要再列進 issues；仍未修正的保留（可沿用原描述）。
 3. 再窮盡式檢查清單沒涵蓋的新問題。審查規則沿用本對話先前（上一輪 prompt）的內容，此處不重複。
 

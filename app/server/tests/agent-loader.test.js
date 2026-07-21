@@ -136,7 +136,9 @@ test('analysis-reject 可載入且 render 填入分診專屬 placeholder', () =>
   expect(out).toContain('金額算錯');
   expect(out).toContain('沒事誤判');
   expect(out).toContain('allow_bug = true');
-  expect(out).toContain('git diff main...HEAD');
+  // 分診查真相改用「已解析的 git -C <絕對路徑> diff base...branch」，不再叫 agent 打 main...HEAD（歷程實測 fatal 主因）
+  expect(out).toContain('git -C');
+  expect(out).toContain('diff main...task/x');
   // CLAUDE_MD_AGENTS → 應 prepend 專案規則（CLAUDE.md 內含「Odoo Constraints」字樣）
   expect(out).toContain('Odoo Constraints');
 });
@@ -165,6 +167,28 @@ describe('DEBUG_AGENTS 注入 systematic-debugging 方法論', () => {
   test('非診斷關（cs）render 不含方法論', () => {
     const out = loadAgent('cs').render({ title: 'T', original_text: 'x', wiki: 'y' });
     expect(out).not.toContain('# 系統化除錯（pipeline 版）');
+  });
+});
+
+// 意圖：碰程式碼／git 的關卡（SOURCE_ROUTING_AGENTS）該拿到「資料來源守則」，且平台已解析的
+// repo 絕對路徑／base 分支被真正填入 prompt（根治歷程實測的探路、猜分支、掃碟亂跑）；其餘關卡不注入。
+describe('SOURCE_ROUTING_AGENTS 注入資料來源守則（填入已解析真值）', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+
+  test('qa render 含守則，且填入 repo 絕對路徑與 base...branch 指令', () => {
+    const out = loadAgent('qa').render({
+      project_name: 'P', odoo_version: '17.0', main_branch: 'master', git_branch: 'task/9',
+      repo_paths: '- C:/proj/.worktrees/9/idx_sale', analysis_yaml: 'module: sale',
+      prior_findings: '（首輪）', resolution: '（無）'
+    });
+    expect(out).toContain('資料來源守則');
+    expect(out).toContain('C:/proj/.worktrees/9/idx_sale');   // 已解析的絕對路徑，非 <子目錄> 佔位
+    expect(out).toContain('diff master...task/9');             // base 依實際 repo（master），非硬打 main
+  });
+
+  test('非碰碼關（cs）不注入守則', () => {
+    const out = loadAgent('cs').render({ title: 'T', original_text: 'x', wiki: 'y' });
+    expect(out).not.toContain('資料來源守則');
   });
 });
 
