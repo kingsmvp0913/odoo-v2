@@ -34,6 +34,26 @@ function mcpConfigPath(agentType) {
   return MCP_PROFILES[agentType] ? context7ConfigPath() : path.join(__dirname, 'mcp', 'none.json');
 }
 
+// 掃碟守衛：PreToolUse hook 攔截「從磁碟根／worktree 外」的 find 與遞迴廣掃（見 hooks/scan-guard.js）。
+// prompt 早已禁止全碟掃描並向 agent 保證「會被平台掃碟守衛中止」，此處把那道守衛真的掛上，讓禁令有牙齒。
+// 產生一份只含 hook 的 settings 供 --settings 併入；hook 指令用 forward-slash 路徑（跨 cmd/bash 皆可）＋PATH 上的 node。
+let _scanGuardPath = null;
+function scanGuardSettingsPath() {
+  if (_scanGuardPath) return _scanGuardPath;
+  const script = path.join(__dirname, 'hooks', 'scan-guard.js').replace(/\\/g, '/');
+  const gen = path.join(__dirname, 'hooks', 'scan-guard.settings.json');
+  const settings = {
+    hooks: {
+      PreToolUse: [
+        { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${script}"` }] },
+      ],
+    },
+  };
+  fs.writeFileSync(gen, JSON.stringify(settings, null, 2));
+  _scanGuardPath = gen;
+  return _scanGuardPath;
+}
+
 // task_events 批次寫入：顯示走 socket 即時，持久化累積後批量落地（取代每行一筆的高頻 INSERT）
 const EVENT_FLUSH_MS = parseInt(process.env.PIPELINE_EVENT_FLUSH_MS || '500', 10);
 const EVENT_FLUSH_MAX = parseInt(process.env.PIPELINE_EVENT_FLUSH_MAX || '50', 10);
@@ -91,6 +111,8 @@ function runClaude(prompt, opts = {}) {
     if (model) args.push('--model', model);
     // 每關只載入指定的 MCP，剝掉繼承的 serena 等（見 MCP_PROFILES）
     args.push('--strict-mcp-config', '--mcp-config', mcpConfigPath(agentType));
+    // 每關都掛掃碟守衛：攔全域 find／遞迴廣掃，避免滾成全碟掃描逾時（見 scanGuardSettingsPath）
+    args.push('--settings', scanGuardSettingsPath());
     // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）

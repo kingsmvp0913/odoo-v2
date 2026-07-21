@@ -47,3 +47,5 @@ Thumbs.db
 
 # 執行期生成的 MCP 設定（claude-runner 依本機安裝位置產生）
 app/server/pipeline/mcp/context7.local.json
+# 執行期生成的掃碟守衛 settings（claude-runner 依本機 hook 腳本路徑產生）
+app/server/pipeline/hooks/scan-guard.settings.json
