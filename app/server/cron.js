@@ -1,4 +1,6 @@
 const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
 const { query } = require('./db');
 const { syncUser } = require('./pipeline/sync');
 const { runPipeline } = require('./pipeline/runner');
@@ -50,6 +52,34 @@ async function cleanupOldTaskEvents() {
   );
 }
 
+// deploy／E2E 失敗 log（data/logs 下的 *.log）過去無任何清理機制——每失敗一次留一檔、永不回收。
+// 掃 DEPLOY_LOG_DIR／E2E_LOG_DIR（預設同為 data/logs），刪 mtime 超過保留期的 .log。同步 fs 但檔量小、每小時一次。
+const DEPLOY_LOG_RETENTION_DAYS = parseInt(process.env.DEPLOY_LOG_RETENTION_DAYS || '14', 10);
+function cleanupOldDeployLogs() {
+  const dirs = [...new Set([
+    process.env.DEPLOY_LOG_DIR || path.join(__dirname, '..', '..', 'data', 'logs'),
+    process.env.E2E_LOG_DIR || path.join(__dirname, '..', '..', 'data', 'logs'),
+  ])];
+  const cutoff = Date.now() - DEPLOY_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  for (const dir of dirs) {
+    let files;
+    try { files = fs.readdirSync(dir); } catch { continue; } // 目錄不存在＝還沒產生過 log，略過
+    for (const f of files) {
+      if (!f.endsWith('.log')) continue;
+      const fp = path.join(dir, f);
+      try { if (fs.statSync(fp).mtimeMs < cutoff) fs.rmSync(fp, { force: true }); } catch { /* 併發刪除/權限：best-effort */ }
+    }
+  }
+}
+
+// token_usage 每個 pipeline 關卡 INSERT 一列、只增不減（是計費歷史，刻意不隨任務刪）。
+// 報表要長歷史故保留期設大（預設 180 天，env 可調）；只裁掉超過保留期的明細，避免單調暴增。
+const TOKEN_USAGE_RETENTION_DAYS = parseInt(process.env.TOKEN_USAGE_RETENTION_DAYS || '180', 10);
+async function cleanupOldTokenUsage() {
+  const cutoff = new Date(Date.now() - TOKEN_USAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  return query('DELETE FROM token_usage WHERE recorded_at < $1', [cutoff]);
+}
+
 let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
 let _lastShutdownMinute = null; // 同一分鐘只觸發一次夜間關機（tick 延遲時的重複防護）
 
@@ -87,9 +117,11 @@ function startCron() {
       // 自動封存：完成滿一個月的任務移出主列表（冪等）
       await autoArchiveDone().catch(err => console.error('[CRON] auto-archive:', err.message));
 
-      // 每小時第 0 分清一次過期 task_events（冪等；重入鎖已保證單飛）
+      // 每小時第 0 分清一次過期 task_events／deploy-E2E log 檔／token_usage（冪等；重入鎖已保證單飛）
       if (new Date().getMinutes() === 0) {
         await cleanupOldTaskEvents().catch(err => console.error('[CRON] events-cleanup:', err.message));
+        try { cleanupOldDeployLogs(); } catch (err) { console.error('[CRON] deploy-log-cleanup:', err.message); }
+        await cleanupOldTokenUsage().catch(err => console.error('[CRON] token-usage-cleanup:', err.message));
       }
 
       // 退回原因慢慢整理：每 tick 撈一小批 status='new' 的退回跑分類 agent（工作流程健檢子專案 1）
@@ -130,4 +162,4 @@ function stopCron() {
   if (_job) { _job.stop(); _job = null; }
 }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage };

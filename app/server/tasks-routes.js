@@ -9,7 +9,7 @@ const { writebackTaskMessage } = require('./pipeline/sync');
 const { uninstallModule } = require('./pipeline/env-agent');
 const { rebuildTesting } = require('./pipeline/rebuild-testing');
 const { withProjectLock } = require('./pipeline/project-lock');
-const { saveAttachmentFile, readAttachmentFile, sniffFile, attachmentSize } = require('./lib/attachments');
+const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize } = require('./lib/attachments');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -517,6 +517,7 @@ function registerRoutes(app) {
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_attachments WHERE task_id = $1', [req.params.id]);
+      deleteTaskDir(req.params.id); // 連帶清磁碟上的 uploads/task_<id>（否則實體檔變孤兒）
       await query('DELETE FROM task_messages WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM tasks WHERE id = $1', [req.params.id]);
       // 刪除後重建 testing 分支（清掉被刪任務留在 testing 的 source）；best-effort，警告併回
@@ -555,6 +556,7 @@ function registerRoutes(app) {
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_attachments WHERE task_id = ANY($1::int[])', [delIds]);
+      delIds.forEach(id => deleteTaskDir(id)); // 連帶清各任務磁碟上的 uploads/task_<id>
       await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [delIds]);
       const { rowCount } = await query('DELETE FROM tasks WHERE id = ANY($1::int[])', [delIds]);
       // 刪除後每個涉及專案重建一次 testing（去重）

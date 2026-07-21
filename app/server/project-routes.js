@@ -7,6 +7,7 @@ const { runGraphify } = require('./pipeline/graphify-runner');
 const { ensureTestingBranch, ensureMainBranch, pullBranch } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
+const { deleteTaskDir } = require('./lib/attachments');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
@@ -276,6 +277,7 @@ function registerRoutes(app) {
         await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [taskDbIds]);
         await query('DELETE FROM token_usage WHERE task_id = ANY($1::text[])', [taskTextIds]);
         await query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
+        taskDbIds.forEach(id => deleteTaskDir(id)); // 連帶清各任務磁碟上的 uploads/task_<id>
       }
       const { rows } = await query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
       if (!rows.length) {

@@ -70,6 +70,16 @@ test('sniffFile 認不出時回 octet-stream、無副檔名', () => {
   expect(sniffFile(Buffer.alloc(0))).toEqual({ ext: '', mime: 'application/octet-stream' });
 });
 
+// 意圖：刪任務必須連帶清磁碟上的 task_<id> 目錄，否則實體上傳檔變孤兒永不回收、磁碟只增不減。
+test('deleteTaskDir 刪掉整個 task 上傳目錄（含檔案）；不存在時不丟錯', () => {
+  const rel = attachments.saveAttachmentFile(555, 'a.png', Buffer.from('x'));
+  const dir = path.join(tmpRoot, 'task_555');
+  expect(fs.existsSync(path.join(tmpRoot, rel))).toBe(true); // 前提：檔在
+  attachments.deleteTaskDir(555);
+  expect(fs.existsSync(dir)).toBe(false);                    // 目錄與檔都被清
+  expect(() => attachments.deleteTaskDir(555)).not.toThrow(); // 再刪一次（已不存在）不炸
+});
+
 test('attachmentSize 回實際位元組數；0-byte 檔回 0', () => {
   const rel = attachments.saveAttachmentFile(99, 'data.bin', Buffer.from('12345'));
   expect(attachments.attachmentSize(rel)).toBe(5);

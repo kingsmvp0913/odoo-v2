@@ -21,6 +21,14 @@ function saveAttachmentFile(taskId, filename, buffer) {
   return path.join(`task_${safeId}`, safeName);
 }
 
+// 刪任務時連帶清掉整個 task_<id> 上傳目錄——過去只刪 DB 的 task_attachments 列，磁碟實體檔變孤兒永不回收。
+// best-effort：目錄不存在或刪除失敗都不擋刪任務流程。
+function deleteTaskDir(taskId) {
+  const safeId = String(taskId).replace(/\.\./g, '_').replace(/[^\w.\-]/g, '_');
+  const dir = path.join(uploadRoot(), `task_${safeId}`);
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 已不存在／權限：忽略 */ }
+}
+
 function readAttachmentFile(relativePath) {
   const root = path.resolve(uploadRoot());
   const resolved = path.resolve(root, relativePath);
@@ -61,4 +69,4 @@ function sniffFile(buf) {
   return { ext: '', mime: 'application/octet-stream' };
 }
 
-module.exports = { uploadRoot, taskDir, saveAttachmentFile, readAttachmentFile, sniffFile, attachmentSize };
+module.exports = { uploadRoot, taskDir, saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize };
