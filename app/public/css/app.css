@@ -93,6 +93,9 @@
 [data-theme="dark"] .form-group input,
 [data-theme="dark"] .form-group select,
 [data-theme="dark"] .form-group textarea { background: #fff; color: #111827; }
+/* 輸入框強制白底 → placeholder 也要配深灰；否則深色模式的近白 --text-placeholder 印在白底上＝隱形
+   （症狀：只靠 placeholder 當說明的欄位如「新增 Repo」的標籤／Git URL 看起來是兩個空框，不知要填什麼） */
+[data-theme="dark"] .form-control::placeholder { color: #9ca3af; }
 [data-theme="dark"] .btn-outline:hover:not(:disabled) { background: #2a2a2a; border-color: #4a4a4a; }
 [data-theme="dark"] .setting-block-footer { background: #262626; }
 [data-theme="dark"] .tab-badge { background: #333333; color: rgba(255,255,255,0.75); }
