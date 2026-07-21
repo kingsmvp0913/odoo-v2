@@ -6,13 +6,9 @@
 
 ## 啟用
 
-設環境變數即可，**預設不啟用**（`venv` 模式，行為不變）：
-
-```
-ODOO_ENV_MODE=docker
-```
-
-平台已依賴 docker（VPN gateway 已用 Linux 容器），無需額外基礎設施。
+在 **管理設定 → 測試區建置模式** 切成「Docker 模式」即可，**預設 venv**（行為不變）。
+設定存 `teams_settings.env_mode`（`venv`／`docker`），改完即時生效、免重啟、免環境變數；
+對「之後新建或重建」的測試區生效。平台已依賴 docker（VPN gateway 已用 Linux 容器），無需額外基礎設施。
 
 ## 運作方式
 
