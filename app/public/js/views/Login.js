@@ -99,12 +99,10 @@ window.LoginView = Vue.defineComponent({
   },
   template: `
     <div class="login-wrap">
-      <div class="login-box" :style="mode === 'register' ? 'max-width:520px' : ''">
+      <!-- 登入 / 首次設定 -->
+      <div class="login-box" v-if="mode !== 'register'">
         <div class="login-title">AI Dev</div>
-
-        <!-- 登入 / 首次設定 -->
-        <template v-if="mode !== 'register'">
-          <div class="login-sub">{{ mode === 'setup' ? '首次設定管理帳號' : '登入工作台' }}</div>
+        <div class="login-sub">{{ mode === 'setup' ? '首次設定管理帳號' : '登入工作台' }}</div>
           <div v-if="error" class="error-msg">{{ error }}</div>
           <form @submit.prevent="submit">
             <div v-if="mode === 'setup'" class="form-group">
@@ -126,20 +124,24 @@ window.LoginView = Vue.defineComponent({
           <div v-if="mode === 'login'" style="text-align:center;margin-top:14px;font-size:var(--fs-sm);color:var(--text-muted)">
             還沒有帳號？<a href="javascript:void(0)" @click="goRegister" style="color:var(--primary);font-weight:var(--fw-semibold)">註冊新帳號</a>
           </div>
-        </template>
+        </div>
 
-        <!-- 註冊精靈 -->
-        <template v-else>
-          <div class="login-sub">註冊新帳號</div>
-          <!-- Stepper -->
-          <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin:6px 0 18px">
-            <template v-for="(s, i) in steps" :key="i">
-              <div :title="s" :style="{width:'24px',height:'24px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'var(--fs-xs)',fontWeight:'var(--fw-semibold)',flexShrink:0,background: (step >= i+1 ? 'var(--primary)' : 'var(--border)'), color: (step >= i+1 ? '#fff' : 'var(--text-muted)')}">{{ i+1 }}</div>
-              <div v-if="i < steps.length-1" :style="{width:'16px',height:'2px',background: (step > i+1 ? 'var(--primary)' : 'var(--border)')}"></div>
-            </template>
-          </div>
-          <div style="text-align:center;font-weight:var(--fw-semibold);margin-bottom:12px">{{ step }}. {{ steps[step-1] }}</div>
-          <div v-if="error" class="error-msg">{{ error }}</div>
+        <!-- 註冊精靈：左右分欄（左窄步驟／右寬表單）-->
+        <div class="login-box register-box" v-else>
+          <div class="register-split">
+            <aside class="register-aside">
+              <div class="login-title">AI Dev</div>
+              <div class="login-sub">註冊新帳號</div>
+              <ul class="register-steps">
+                <li v-for="(s, i) in steps" :key="i" class="register-step" :class="{ 'is-active': step === i+1, 'is-done': step > i+1 }">
+                  <span class="rs-num">{{ step > i+1 ? '✓' : i+1 }}</span>
+                  <span>{{ s }}</span>
+                </li>
+              </ul>
+            </aside>
+            <div class="register-main">
+              <div class="register-step-title">{{ step }}. {{ steps[step-1] }}</div>
+              <div v-if="error" class="error-msg">{{ error }}</div>
 
           <!-- Step 1 建立帳號 -->
           <template v-if="step === 1">
@@ -240,8 +242,9 @@ window.LoginView = Vue.defineComponent({
               <button class="btn btn-primary" style="width:100%;margin-top:14px" @click="backToLogin">前往登入頁</button>
             </div>
           </template>
-        </template>
-      </div>
+            </div>
+          </div>
+        </div>
     </div>
   `
 });
