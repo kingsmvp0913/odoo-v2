@@ -1,6 +1,6 @@
 // 意圖：pid 存 DB、app 重啟後 OS 可能把同一 pid 派給無關行程；kill 前必須核對行程身分指紋
 // （Linux /proc starttime），不符即拒殺——否則會殺錯無辜行程。
-const { processAlive, pidStartTime, killPidGracefully } = require('../lib/proc');
+const { processAlive, pidStartTime, killPidGracefully, killChildGracefully } = require('../lib/proc');
 
 test('processAlive：自己的 pid 為 true、不存在的 pid 為 false', () => {
   expect(processAlive(process.pid)).toBe(true);
@@ -34,4 +34,28 @@ test('killPidGracefully：expectedStart 相符 → 照常送 SIGTERM', async () 
   const st = pidStartTime(child.pid);
   await killPidGracefully(child.pid, { expectedStart: st, graceMs: 2000 });
   expect(processAlive(child.pid)).toBe(false);
+});
+
+// 意圖：Windows 上殺 claude 子行程時，必須連它 Bash 出去的孫程序（如 find.exe）一起收，
+// 否則孫程序變孤兒常駐吃資源。這正是本次修的核心——用「父→孫」兩層行程樹釘住這個行為。
+test('killChildGracefully（win32）：連孫程序一起收，不留孤兒', async () => {
+  if (process.platform !== 'win32') return;
+  const { spawn } = require('child_process');
+  // 父行程 spawn 一個長命孫行程，把孫的 pid 印到 stdout 供測試核對
+  const parent = spawn(process.execPath, ['-e',
+    "const{spawn}=require('child_process');" +
+    "const g=spawn(process.execPath,['-e','setInterval(()=>{},1e9)'],{stdio:'ignore'});" +
+    "process.stdout.write(String(g.pid));setInterval(()=>{},1e9);"
+  ], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  parent.stdout.on('data', d => { out += d.toString(); });
+  // 等孫 pid 印出
+  for (let i = 0; i < 40 && !out; i++) await new Promise(r => setTimeout(r, 50));
+  const grandPid = parseInt(out.trim(), 10);
+  expect(processAlive(grandPid)).toBe(true); // 前提：孫確實還活著
+
+  killChildGracefully(parent); // 只殺父：舊行為會漏掉孫，taskkill /T 應連根收
+  // taskkill 是 spawn 出去非同步，輪詢等它把整棵樹收乾淨
+  for (let i = 0; i < 60 && processAlive(grandPid); i++) await new Promise(r => setTimeout(r, 50));
+  expect(processAlive(grandPid)).toBe(false);
 });

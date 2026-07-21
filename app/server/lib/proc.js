@@ -10,6 +10,21 @@
  * 非 Linux（Windows/macOS）或讀取失敗回 null → 呼叫端 best-effort 放行（維持原行為）。
  */
 const fs = require('fs');
+const { spawn } = require('child_process');
+
+const isWindows = process.platform === 'win32';
+
+// Windows 沒有真正的 signal：child.kill()／process.kill() 只 TerminateProcess「單一 pid」，
+// 殺不到孫程序。claude 子行程用 Bash 工具再開的 find.exe（曾滾成 `find /` 全碟掃描）會因此
+// 變孤兒常駐、狂吃 I/O。taskkill /T 連整棵行程樹一起收；/F 強制。best-effort、不阻塞、吞錯。
+function killTreeWindows(pid) {
+  if (!pid) return;
+  try {
+    const p = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    p.on?.('error', () => {}); // taskkill 不在 PATH／pid 已消失：忽略
+    p.unref?.();
+  } catch { /* spawn 失敗：best-effort 放行 */ }
+}
 
 function processAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -33,6 +48,8 @@ async function killPidGracefully(pid, { graceMs = 5000, expectedStart = null } =
     const cur = pidStartTime(pid);
     if (cur != null && String(cur) !== String(expectedStart)) return;
   }
+  // Windows：signal 殺不到子孫，直接 taskkill 整棵樹（含 odoo worker、find.exe 等）
+  if (isWindows) { killTreeWindows(pid); return; }
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
@@ -45,6 +62,10 @@ async function killPidGracefully(pid, { graceMs = 5000, expectedStart = null } =
 // ChildProcess 版：依 exit 事件判斷（不輪詢），SIGTERM 後寬限期未退出補 SIGKILL。
 // 同步回傳，供事件回呼（timeout/abort handler）內直接呼叫。
 function killChildGracefully(child, graceMs = 5000) {
+  // Windows：child.kill 只砍 claude 本身，留下它 Bash 出去的 find.exe 當孤兒。taskkill /T 連根收。
+  // （Windows 上 SIGTERM 本就等同 TerminateProcess 立即硬殺，改走 taskkill 對 claude 本身無行為差異，
+  //  差別只在多帶走整棵子孫樹，故不需保留寬限期。）
+  if (isWindows) { killTreeWindows(child?.pid); return; }
   let exited = false;
   child.once?.('exit', () => { exited = true; });
   try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
