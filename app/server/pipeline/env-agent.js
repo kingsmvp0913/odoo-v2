@@ -334,7 +334,10 @@ async function _runEnvSetup(projectId) {
   const isWin = process.platform === 'win32';
   const venvDir = path.join(envDir, 'venv');
   const venvPython = path.join(venvDir, isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python');
-  const systemPython = process.env.PYTHON_BIN || (isWin ? 'python' : 'python3');
+  // 建 venv 的直譯器：優先讀該 Odoo 大版本專用的 PYTHON_BIN_<major>（如 PYTHON_BIN_13），
+  // 讓舊版（odoo13/14 的舊 gevent 只有舊 Python 才有預編譯 wheel／才編得起來）能綁相容的舊 Python，
+  // 不影響其他版本；未設則回退全域 PYTHON_BIN、再回退系統 python。
+  const systemPython = process.env[`PYTHON_BIN_${major}`] || process.env.PYTHON_BIN || (isWin ? 'python' : 'python3');
   // 完整建置成功後寫入；存在即代表 clone/venv/pip/init 都已完成，停止後可直接快速啟動
   const readyMarker = path.join(envDir, '.ready');
 
@@ -366,7 +369,10 @@ async function _runEnvSetup(projectId) {
       { name: 'clone', bin: 'git', args: ['clone', 'https://github.com/odoo/odoo.git', '--branch', `${major}.0`, '--depth=1', srcDir] }
     ] : []),
     { name: 'venv', bin: systemPython, args: ['-m', 'venv', '--clear', '--copies', venvDir] },
-    { name: 'pip',  bin: venvPython, args: ['-m', 'pip', 'install', '--upgrade', 'pip'] },
+    // 補 wheel 與 setuptools：Python 3.12 起 venv 不再內建 setuptools，Odoo（module.py import pkg_resources）
+    // 會 ModuleNotFoundError；且 setuptools≥81 已移除 pkg_resources，故釘 <81 保留它。wheel 讓 pip 優先取
+    // 預編譯 binary（如 gevent），避免在缺編譯器／新版 Python 下走原始碼編譯而失敗。
+    { name: 'pip',  bin: venvPython, args: ['-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools<81'] },
     { name: 'pip-req', bin: venvPython, args: ['-m', 'pip', 'install', '-r', path.join(srcDir, 'requirements.txt')] },
     { name: 'init', bin: venvPython, args: [odooBin, '-d', dbName, '--stop-after-init', '-i', 'base', '--without-demo=all', '--load-language=zh_TW', '--addons-path', addonsPath, ...odooDbArgs()] },
   ];
