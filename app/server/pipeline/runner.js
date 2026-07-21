@@ -281,6 +281,17 @@ async function runTask(task, settings, signal) {
     await handler(task, settings, signal);
   } catch (err) {
     console.error(`[RUNNER] task ${task.id} error:`, err.message);
+    // 手動暫停（abort）＝正常流程：狀態已由 API 設 is_paused，解除後由本關 resume 續跑，不留錯痕、不改狀態。
+    if (!err.aborted && !signal?.aborted) {
+      // 未預期例外（handler 未自行處理成 stopped）：Fail Loud——轉 stopped 附原因，
+      // 下方 post-status check 會把原因寫進執行歷程（task_events）＋推播＋Teams 通知，
+      // 讓「莫名中斷」在前端有跡可循；也避免狀態卡在 running 被 cron 每分鐘無限重試（比照 handleBranch git 失敗處理）。
+      // 條件式 status=prevStatus：handler 已推進狀態才拋錯時不覆蓋（只處理真的卡在原關的例外）。
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1 AND status=$3",
+        [task.id, `系統錯誤：${err.message || '未知錯誤'}`, prevStatus]
+      ).catch(e => console.error(`[RUNNER] task ${task.id} stop-on-error write failed:`, e.message));
+    }
   }
 
   // 處理後狀態：剛轉 stopped → 把阻塞原因寫進執行歷程（集中一處涵蓋所有 agent 的 stop）
