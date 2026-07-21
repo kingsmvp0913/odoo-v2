@@ -455,31 +455,75 @@ test('syncUser 訊息無 attachment_ids → 不呼叫 ir.attachment、不產生 
   expect(atts.length).toBe(0);
 });
 
-test('syncUser eService 工單 file 有值 → 存一筆 ticket_main 附件', async () => {
+// 意圖：service.question.feedback.file 是 Many2many→ir.attachment，search_read 回傳「附件 id 陣列」而非 base64；
+// 真正位元組要再 ir.attachment.read 取 datas（同訊息附件機制）。過去誤把 id 陣列當 base64 解＝寫出 1-byte 壞檔。
+// 這裡驗證：file=[id] 時去參照取真檔、存 ticket_main 附件，檔名／mimetype 用來源 ir.attachment 的真值。
+test('syncUser eService 工單 file 為附件 id 陣列 → ir.attachment.read 取真檔存 ticket_main', async () => {
   setupOdooMocks({ tasks: [] });
   setupServiceMocks({
     tasks: [{
       id: 3100, name_seq: 'SQ-3100', subject: '附件工單',
       state: 'draft', question_description: '<p>desc</p>',
       classification: false, respondent: [5, '王小明'],
-      file: Buffer.from('fake-file-bytes').toString('base64')
+      file: [7001]
     }],
     messages: []
   });
+  // ingestTicketMainAttachments → ir.attachment.read
+  const realBytes = Buffer.from('\x89PNG\r\n\x1a\n-real-image-bytes', 'latin1');
+  mockFetch.mockImplementationOnce(() => makeFetchResponse({
+    jsonrpc: '2.0',
+    result: [{ id: 7001, name: '委外維修.png', mimetype: 'image/png', datas: realBytes.toString('base64') }]
+  }));
 
   await syncModule.syncUser(userId);
 
   const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_service_3100'");
   expect(t.has_attachment).toBe(true);
   const { rows: atts } = await dbModule.query(
-    "SELECT origin, message_id FROM task_attachments WHERE task_id = $1", [t.id]
+    "SELECT origin, message_id, filename, mimetype, file_path, external_attachment_id FROM task_attachments WHERE task_id = $1", [t.id]
   );
   expect(atts.length).toBe(1);
   expect(atts[0].origin).toBe('ticket_main');
   expect(atts[0].message_id).toBeNull();
+  expect(atts[0].filename).toBe('委外維修.png');
+  expect(atts[0].mimetype).toBe('image/png');
+  expect(atts[0].external_attachment_id).toBe('7001');
+  // 磁碟上是真檔內容，不是 1-byte 壞檔
+  const { readAttachmentFile } = require('../lib/attachments');
+  expect(readAttachmentFile(atts[0].file_path).equals(realBytes)).toBe(true);
 });
 
-test('syncUser eService 工單 file 為 false → 不產生附件', async () => {
+// file 是 m2m，可多附件；一次 read 全部取回，逐一落地
+test('syncUser eService 工單 file 多個 id → 存多筆 ticket_main 附件', async () => {
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3102, name_seq: 'SQ-3102', subject: '多附件工單',
+      state: 'draft', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'],
+      file: [7010, 7011]
+    }],
+    messages: []
+  });
+  mockFetch.mockImplementationOnce(() => makeFetchResponse({
+    jsonrpc: '2.0',
+    result: [
+      { id: 7010, name: 'a.jpg', mimetype: 'image/jpeg', datas: Buffer.from('aaa').toString('base64') },
+      { id: 7011, name: 'b.jpg', mimetype: 'image/jpeg', datas: Buffer.from('bbb').toString('base64') }
+    ]
+  }));
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [t] } = await dbModule.query("SELECT id FROM tasks WHERE task_id = 'task_service_3102'");
+  const { rows: atts } = await dbModule.query(
+    "SELECT external_attachment_id FROM task_attachments WHERE task_id = $1 ORDER BY id", [t.id]
+  );
+  expect(atts.map(a => a.external_attachment_id)).toEqual(['7010', '7011']);
+});
+
+test('syncUser eService 工單 file 為 false → 不呼叫 ir.attachment、不產生附件', async () => {
   setupOdooMocks({ tasks: [] });
   setupServiceMocks({
     tasks: [{
@@ -494,6 +538,152 @@ test('syncUser eService 工單 file 為 false → 不產生附件', async () => 
 
   const { rows: [t] } = await dbModule.query("SELECT id, has_attachment FROM tasks WHERE task_id = 'task_service_3101'");
   expect(t.has_attachment).toBe(false);
+  const { rows: atts } = await dbModule.query('SELECT * FROM task_attachments WHERE task_id = $1', [t.id]);
+  expect(atts.length).toBe(0);
+});
+
+// 核心回歸（task 129 情境）：既有工單首次同步時 file 為空、之後才補圖，再同步必須回填主附件。
+test('syncUser 既有 eService 工單再同步 → 回填先前漏抓的 ticket_main 主附件', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, has_attachment)
+     VALUES ($1,'task_service_3807','service','委外維修單','desc','cs_running', false) RETURNING id`,
+    [userId]
+  );
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3807, name_seq: 'IDX-2026070049', subject: '委外維修單，要有廠商簡稱',
+      state: 'open', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'], file: [6177]
+    }],
+    messages: []
+  });
+  mockFetch.mockImplementationOnce(() => makeFetchResponse({
+    jsonrpc: '2.0',
+    result: [{ id: 6177, name: '委外維修-增加廠商簡稱.jpg', mimetype: 'image/jpeg', datas: Buffer.from('jpeg-bytes').toString('base64') }]
+  }));
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [after] } = await dbModule.query("SELECT has_attachment FROM tasks WHERE id = $1", [t.id]);
+  expect(after.has_attachment).toBe(true);
+  const { rows: atts } = await dbModule.query(
+    "SELECT origin, filename, external_attachment_id FROM task_attachments WHERE task_id = $1", [t.id]
+  );
+  expect(atts.length).toBe(1);
+  expect(atts[0].origin).toBe('ticket_main');
+  expect(atts[0].filename).toBe('委外維修-增加廠商簡稱.jpg');
+});
+
+// 舊版把 id 陣列當 base64 寫出的 1-byte 壞檔列（origin=ticket_main、external_attachment_id 為 NULL）
+// 必須在回填時汰換：刪壞列＋落地真檔，最終每附件只留一筆正確列，不留重複。
+test('syncUser 回填時清掉舊版 1-byte 壞檔列（external_attachment_id NULL）並換成真檔', async () => {
+  const attachments = require('../lib/attachments');
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, has_attachment)
+     VALUES ($1,'task_service_3814','service','舊壞檔工單','desc','cs_running', true) RETURNING id`,
+    [userId]
+  );
+  // 模擬舊版壞檔：1-byte 檔 + external_attachment_id 為 NULL 的 ticket_main 列
+  const badRel = attachments.saveAttachmentFile(t.id, 'ticket_3814_attachment', Buffer.from([0x21]));
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin, synced_to_odoo)
+     VALUES ($1, 'ticket_3814_attachment', NULL, $2, 'ticket_main', true)`,
+    [t.id, badRel]
+  );
+
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3814, name_seq: 'IDX-2026070056', subject: '復修累計次數不對',
+      state: 'open', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'], file: [6200]
+    }],
+    messages: []
+  });
+  const good = Buffer.from('good-image-content-bytes');
+  mockFetch.mockImplementationOnce(() => makeFetchResponse({
+    jsonrpc: '2.0',
+    result: [{ id: 6200, name: 'real.jpg', mimetype: 'image/jpeg', datas: good.toString('base64') }]
+  }));
+
+  await syncModule.syncUser(userId);
+
+  const { rows: atts } = await dbModule.query(
+    "SELECT filename, file_path, external_attachment_id FROM task_attachments WHERE task_id = $1", [t.id]
+  );
+  expect(atts.length).toBe(1); // 壞列已刪，只剩真檔列
+  expect(atts[0].external_attachment_id).toBe('6200');
+  expect(attachments.readAttachmentFile(atts[0].file_path).equals(good)).toBe(true);
+  // 舊壞檔實體已被收走
+  expect(attachments.attachmentSize(badRel)).toBe(0);
+});
+
+// 舊壞檔清掉、來源 file 又已無附件（file=[]）時，has_attachment 必須據實收回 false，別讓旗標說謊
+test('syncUser 清掉舊壞檔且來源已無附件 → has_attachment 收回 false、無附件列', async () => {
+  const attachments = require('../lib/attachments');
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, has_attachment)
+     VALUES ($1,'task_service_3791','service','來源已無附件','desc','cs_running', true) RETURNING id`,
+    [userId]
+  );
+  const badRel = attachments.saveAttachmentFile(t.id, 'ticket_3791_attachment', Buffer.from([0x21]));
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin, synced_to_odoo)
+     VALUES ($1, 'ticket_3791_attachment', NULL, $2, 'ticket_main', true)`,
+    [t.id, badRel]
+  );
+
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3791, name_seq: 'IDX-2026070033', subject: '信件通知字體加大',
+      state: 'draft', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'], file: []
+    }],
+    messages: []
+  });
+
+  await syncModule.syncUser(userId);
+
+  const { rows: [after] } = await dbModule.query("SELECT has_attachment FROM tasks WHERE id = $1", [t.id]);
+  expect(after.has_attachment).toBe(false);
+  const { rows: atts } = await dbModule.query('SELECT * FROM task_attachments WHERE task_id = $1', [t.id]);
+  expect(atts.length).toBe(0);
+  expect(attachments.attachmentSize(badRel)).toBe(0);
+});
+
+// 冪等：已有正確 ticket_main（external_attachment_id 已對上）的工單再同步，不重抓、不重複插入
+test('syncUser 既有正確 ticket_main 再同步 → 不重複抓取或插入', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, has_attachment)
+     VALUES ($1,'task_service_3900','service','已同步工單','desc','cs_running', true) RETURNING id`,
+    [userId]
+  );
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin, external_attachment_id, synced_to_odoo)
+     VALUES ($1, 'done.jpg', 'image/jpeg', $2, 'ticket_main', '8000', true)`,
+    [t.id, `task_${t.id}/done.jpg`]
+  );
+
+  setupOdooMocks({ tasks: [] });
+  setupServiceMocks({
+    tasks: [{
+      id: 3900, name_seq: 'SQ-3900', subject: '已同步',
+      state: 'open', question_description: '<p>desc</p>',
+      classification: false, respondent: [5, '王小明'], file: [8000]
+    }],
+    messages: []
+  });
+  // 不排入 ir.attachment.read mock：若程式又去抓就會拿到錯的下一個 mock 或報錯
+
+  await syncModule.syncUser(userId);
+
+  const { rows: atts } = await dbModule.query(
+    "SELECT external_attachment_id FROM task_attachments WHERE task_id = $1", [t.id]
+  );
+  expect(atts.length).toBe(1);
+  expect(atts[0].external_attachment_id).toBe('8000');
 });
 
 test('writebackTaskMessage 帶附件 → 先 ir.attachment.create 再 message_post(attachment_ids)', async () => {

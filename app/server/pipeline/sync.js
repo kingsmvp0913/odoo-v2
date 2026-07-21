@@ -1,6 +1,6 @@
 const path = require('path');
 const { query } = require('../db');
-const { saveAttachmentFile, readAttachmentFile, uploadRoot, sniffFile } = require('../lib/attachments');
+const { saveAttachmentFile, readAttachmentFile, uploadRoot, deleteAttachmentFile } = require('../lib/attachments');
 
 // 對外 HTTP 一律帶逾時：來源 Odoo/eService 無回應（hang 而非報錯）時，
 // 裸 fetch 會讓 syncUser 無限等待、拖住整輪 cron 同步；錯誤路徑呼叫端已有 catch。
@@ -91,12 +91,6 @@ async function odooReadAttachments(baseUrl, ids, cookies) {
   return data.result || [];
 }
 
-// eService 主附件的 binary 欄位：Odoo 在 bin_size context 下會回「大小字串」（如 "1.50 Kb"）而非真資料，
-// 那種值 base64 解出來是壞的／空的。判斷是否為真 base64 檔資料：非空字串、且不是人類可讀的大小字串。
-function looksLikeSizeString(s) {
-  return typeof s === 'string' && /^\s*[\d.]+\s*(bytes?|[kmg]b)\s*$/i.test(s);
-}
-
 // 只處理這次新插入的訊息（insertTaskMessages 回傳值），已存在訊息的附件不重複抓
 async function ingestMessageAttachments(baseUrl, taskDbId, insertedMessages, cookies) {
   for (const { localId, attachment_ids } of insertedMessages) {
@@ -113,6 +107,59 @@ async function ingestMessageAttachments(baseUrl, taskDbId, insertedMessages, coo
       );
       await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [taskDbId]);
     }
+  }
+}
+
+// eService 工單主附件：service.question.feedback.file 是 Many2many→ir.attachment，search_read 回傳的是
+// 「附件 id 陣列」（如 [6177]）而非 base64；真正的位元組要再 ir.attachment.read 取 datas（與訊息附件同機制）。
+// 過去誤把 id 陣列當 base64 解，寫出 1-byte 壞檔／或被守衛整個略過，導致所有工單主圖從來沒被正確載下來。
+// 這裡去參照 id 取真檔，並在既有任務上「回填」——首次同步時 file 為空、之後才補圖的工單靠此補齊。
+// 冪等：以 external_attachment_id 對已存在的 ticket_main 做 dedup；並先汰換舊版無 external_attachment_id 的殘檔列（1-byte 壞檔）。
+async function ingestTicketMainAttachments(baseUrl, taskDbId, fileIds, cookies) {
+  const ids = Array.isArray(fileIds) ? fileIds.filter(id => Number.isInteger(id)) : [];
+
+  // 舊版把 [id] 當 base64 寫出的壞檔列：origin=ticket_main 但 external_attachment_id 為 NULL，連磁碟實體檔一起收
+  const { rows: legacy } = await query(
+    `SELECT id, file_path FROM task_attachments
+     WHERE task_id = $1 AND origin = 'ticket_main' AND external_attachment_id IS NULL`,
+    [taskDbId]
+  );
+  for (const row of legacy) {
+    deleteAttachmentFile(row.file_path);
+    await query('DELETE FROM task_attachments WHERE id = $1', [row.id]);
+  }
+
+  if (ids.length) {
+    // 已正確落地的（external_attachment_id 對得上）不重抓
+    const { rows: existing } = await query(
+      `SELECT external_attachment_id FROM task_attachments
+       WHERE task_id = $1 AND origin = 'ticket_main' AND external_attachment_id IS NOT NULL`,
+      [taskDbId]
+    );
+    const have = new Set(existing.map(r => String(r.external_attachment_id)));
+    const missing = ids.filter(id => !have.has(String(id)));
+    if (missing.length) {
+      const files = await odooReadAttachments(baseUrl, missing, cookies);
+      for (const att of files) {
+        if (!att.datas) continue;
+        const name = att.name || `ticket_attachment_${att.id}`;
+        const relPath = saveAttachmentFile(taskDbId, name, Buffer.from(att.datas, 'base64'));
+        await query(
+          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin, external_attachment_id, synced_to_odoo)
+           VALUES ($1, $2, $3, $4, 'ticket_main', $5, true)`,
+          [taskDbId, name, att.mimetype || null, relPath, String(att.id)]
+        );
+      }
+    }
+  }
+
+  // 汰換／新增後據實重算 has_attachment：舊壞檔清掉、來源又無附件時要把旗標收回 false（別讓旗標說謊）。
+  // 只在真的動過（清了壞檔或有 file id）時重算，未涉及主附件的任務不多打一次 UPDATE。
+  if (legacy.length || ids.length) {
+    const { rows: [cnt] } = await query(
+      'SELECT COUNT(*) AS n FROM task_attachments WHERE task_id = $1', [taskDbId]
+    );
+    await query('UPDATE tasks SET has_attachment = $2 WHERE id = $1', [taskDbId, Number(cnt.n) > 0]);
   }
 }
 
@@ -337,21 +384,7 @@ async function syncServiceUser(userId, settings) {
         [userId, taskKey, title, original_text, stageLabel, classificationLabel, projId]
       );
       if (inserted) {
-        // 只在拿到「真 base64 資料」時才建主附件：擋掉 bin_size 大小字串與空值，避免寫出打不開的 0-byte／壞檔
-        if (typeof task.file === 'string' && task.file && !looksLikeSizeString(task.file)) {
-          const buf = Buffer.from(task.file, 'base64');
-          if (buf.length > 0) {
-            const { ext, mime } = sniffFile(buf);
-            const name = `ticket_${task.id}_attachment${ext}`;
-            const relPath = saveAttachmentFile(inserted.id, name, buf);
-            await query(
-              `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin, synced_to_odoo)
-               VALUES ($1, $2, $3, $4, 'ticket_main', true)`,
-              [inserted.id, name, mime, relPath]
-            );
-            await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [inserted.id]);
-          }
-        }
+        await ingestTicketMainAttachments(service_url, inserted.id, task.file, cookies);
         const insertedMsgs = await insertTaskMessages(inserted.id, messages);
         await ingestMessageAttachments(service_url, inserted.id, insertedMsgs, cookies);
       }
@@ -359,6 +392,8 @@ async function syncServiceUser(userId, settings) {
     } else {
       const t = existing.rows[0];
       if (t.status !== 'done' && !t.is_hidden) {
+        // 既有工單也回填主附件：首次同步時 file 為空、事後才補圖的工單靠此補齊（如 task 129）
+        await ingestTicketMainAttachments(service_url, t.id, task.file, cookies);
         const insertedMsgs = await insertTaskMessages(t.id, messages);
         await ingestMessageAttachments(service_url, t.id, insertedMsgs, cookies);
       }

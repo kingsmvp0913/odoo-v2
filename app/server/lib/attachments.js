@@ -29,6 +29,16 @@ function deleteTaskDir(taskId) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 已不存在／權限：忽略 */ }
 }
 
+// 刪單一附件實體檔（相對 uploadRoot），best-effort。用於汰換舊版壞檔列時連磁碟一起收，避免留孤兒檔。
+function deleteAttachmentFile(relativePath) {
+  try {
+    const root = path.resolve(uploadRoot());
+    const resolved = path.resolve(root, relativePath);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) return;
+    fs.rmSync(resolved, { force: true });
+  } catch { /* 不存在／權限：忽略 */ }
+}
+
 function readAttachmentFile(relativePath) {
   const root = path.resolve(uploadRoot());
   const resolved = path.resolve(root, relativePath);
@@ -69,4 +79,4 @@ function sniffFile(buf) {
   return { ext: '', mime: 'application/octet-stream' };
 }
 
-module.exports = { uploadRoot, taskDir, saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize };
+module.exports = { uploadRoot, taskDir, saveAttachmentFile, deleteTaskDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize };
