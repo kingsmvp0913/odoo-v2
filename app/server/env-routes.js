@@ -56,7 +56,7 @@ function registerRoutes(app) {
       if (!project) return res.status(404).json({ error: 'project not found' });
       const dirName = project.folder_name || project.name;
       // Docker 模式：常駐 server 的 runtime log 在容器內，改讀 `docker logs`（尾端 2000 行）。
-      if (isDockerMode()) {
+      if (await isDockerMode()) {
         const dockerEnv = require('./lib/docker-env');
         const ctx = await dockerCtxFor(req.params.id);
         if (!ctx || !(await dockerEnv.containerExists(ctx.container))) return res.json({ log: '', exists: false });

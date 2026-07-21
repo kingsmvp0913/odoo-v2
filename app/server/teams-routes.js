@@ -25,10 +25,10 @@ function registerRoutes(app) {
 
   app.put('/api/admin/teams-settings', auth, async (req, res) => {
     try {
-      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes } = req.body;
+      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode } = req.body;
       await query(`
-        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, updated_at)
-        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, updated_at)
+        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17,'venv'), NOW())
         ON CONFLICT (id) DO UPDATE SET
           tenant_id             = $1,
           client_id             = $2,
@@ -46,6 +46,7 @@ function registerRoutes(app) {
           service_db            = COALESCE($14, teams_settings.service_db),
           test_mode             = $15,
           writeback_odoo_notes  = $16,
+          env_mode              = COALESCE($17, teams_settings.env_mode),
           updated_at            = NOW()
       `, [
         tenant_id || null, client_id || null, client_secret || null,
@@ -58,7 +59,9 @@ function registerRoutes(app) {
         odoo_url || null, odoo_db || null,
         service_url || null, service_db || null,
         test_mode ? true : false,
-        writeback_odoo_notes ? true : false
+        writeback_odoo_notes ? true : false,
+        // 只接受 venv／docker；未帶（舊前端）傳 null 由 COALESCE 保留現值，不誤清
+        env_mode === undefined ? null : (env_mode === 'docker' ? 'docker' : 'venv')
       ]);
       resetTokenCache();
       res.json({ ok: true });

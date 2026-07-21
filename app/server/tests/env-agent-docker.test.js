@@ -27,23 +27,24 @@ let dbModule, envAgent, dockerEnv;
 const PID = 1001; // 單一共用 fixture 專案（odoo 13 / folder=shopx）
 
 beforeAll(async () => {
-  process.env.ODOO_ENV_MODE = 'docker';
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule = require('../db');
   dbModule._setPoolForTesting(new Pool());
   await dbModule.migrate();
+  // 模式由管理設定（teams_settings.env_mode）決定，非環境變數
+  await dbModule.query("INSERT INTO teams_settings (id, env_mode) VALUES (1, 'docker')");
   await dbModule.query(
     `INSERT INTO projects (id, name, odoo_version, folder_name, port) VALUES (${PID}, 'P-docker', '13.0', 'shopx', 8070)`
   );
   envAgent = require('../pipeline/env-agent');
   dockerEnv = require('../lib/docker-env');
 });
-afterAll(() => { dbModule._setPoolForTesting(null); delete process.env.ODOO_ENV_MODE; });
+afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(() => { for (const f of Object.values(dockerEnv)) if (jest.isMockFunction(f)) f.mockClear(); });
 
-test('isDockerMode 反映 ODOO_ENV_MODE', () => {
-  expect(envAgent.isDockerMode()).toBe(true);
+test('isDockerMode 反映管理設定 teams_settings.env_mode', async () => {
+  expect(await envAgent.isDockerMode()).toBe(true);
 });
 
 test('dockerCtxFor：由專案組出容器名/image/dbName（odoo13→odoo-idx:13）', async () => {

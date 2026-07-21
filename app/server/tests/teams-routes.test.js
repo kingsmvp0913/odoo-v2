@@ -41,3 +41,32 @@ test('PUT /api/admin/teams-settings 預設 writeback_odoo_notes=false', async ()
   // 直接檢查型別是 boolean 即可（避免測試順序耦合）
   expect(typeof getRes.body.writeback_odoo_notes).toBe('boolean');
 });
+
+// 意圖：測試區建置模式（venv/docker）由管理設定持久化、可讀回；未帶欄位時不清掉現值。
+test('PUT /api/admin/teams-settings 可設定並讀回 env_mode=docker', async () => {
+  const putRes = await request(app).put('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ env_mode: 'docker' });
+  expect(putRes.status).toBe(200);
+  const getRes = await request(app).get('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(getRes.body.env_mode).toBe('docker');
+});
+
+test('PUT 未帶 env_mode → 保留現值（不誤清）', async () => {
+  await request(app).put('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ writeback_odoo_notes: false });   // 只改別的欄位、不帶 env_mode
+  const getRes = await request(app).get('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(getRes.body.env_mode).toBe('docker'); // 仍是上一條設的 docker
+});
+
+test('PUT env_mode 非法值 → 正規化為 venv', async () => {
+  await request(app).put('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ env_mode: 'bogus' });
+  const getRes = await request(app).get('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(getRes.body.env_mode).toBe('venv');
+});

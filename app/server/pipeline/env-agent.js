@@ -10,13 +10,19 @@ const { allocateProjectPort, loopbackHostForPort } = require('../port-alloc');
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
 
-// Docker 模式（ODOO_ENV_MODE=docker）：測試區改建在官方 odoo:<major> image 上，徹底避開宿主多版本
-// Python／gevent 編譯問題，自動涵蓋 odoo 13→未來 20+。預設 'venv'（不改變既有行為），設 docker 才啟用。
+// Docker 模式：測試區改建在官方 odoo:<major> image 上，徹底避開宿主多版本 Python／gevent 編譯，
+// 自動涵蓋 odoo 13→未來 20+。由「管理設定 → 環境建置模式」切換（teams_settings.env_mode），
+// 預設 'venv'（行為不變）。讀 DB 設定而非環境變數，改設定即時生效、免重啟。
 const dockerEnv = require('../lib/docker-env');
 const DOCKER_CTX_DIR = path.resolve(__dirname, '..', '..', 'docker'); // app/docker（含 Dockerfile.odoo）
 // 容器內 tour（HttpCase）自起的 http 埠：與常駐 server 的 8069 錯開（exec 與 server 共用容器網路）。
 const DOCKER_TEST_HTTP_PORT = 8169;
-function isDockerMode() { return (process.env.ODOO_ENV_MODE || 'venv').toLowerCase() === 'docker'; }
+async function isDockerMode() {
+  try {
+    const { rows: [s] } = await query("SELECT env_mode FROM teams_settings WHERE id = 1");
+    return (s?.env_mode || 'venv').toLowerCase() === 'docker';
+  } catch { return false; }
+}
 
 // 組某專案的 docker 操作上下文（容器名、image、DB、addons 掛載、db 連線參數、env 目錄）。
 async function dockerCtxFor(projectId) {
@@ -216,7 +222,7 @@ function pythonExternalDeps(manifestText) {
 // 掃齊逐一 pip install（idempotent，已裝快速略過）。best-effort：裝不動只記錄不中斷，真正缺的相依
 // 會讓後續升級以清楚錯誤停下。回傳 log 字串（無可裝則空字串）。
 async function installModuleRequirements(projectId, signal) {
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     // docker：把宣告的相依名以 root 在常駐容器內 pip 安裝（image 未內建；requirements.txt 的版本釘定
     // 在 docker 模式先以套件名安裝，未逐檔 -r，屬 Stage 1 取捨——精確版本釘定為後續強化項）。
     const ctx = await dockerCtxFor(projectId);
@@ -320,7 +326,7 @@ async function getDeclaredPythonDeps(projectId) {
 async function installPythonPackage(projectId, pkg, signal) {
   const name = String(pkg || '').trim();
   if (!SAFE_PKG.test(name)) return { ok: false, log: `[pip-fix] SKIP 非法套件名 ${name}\n` };
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) return { ok: false, log: '[pip-fix] SKIP 容器未運行\n' };
     const { code, stdout, stderr } = await dockerEnv.execPipInstall(ctx.container, [name], { signal });
@@ -400,7 +406,7 @@ async function resolveSystemPython(major) {
 }
 
 async function _runEnvSetup(projectId) {
-  if (isDockerMode()) return _runEnvSetupDocker(projectId);
+  if (await isDockerMode()) return _runEnvSetupDocker(projectId);
   const { rows: [project] } = await query(
     'SELECT name, folder_name, odoo_version, port FROM projects WHERE id = $1',
     [projectId]
@@ -593,7 +599,7 @@ async function seedOdooUsers({ venvPython, odooBin, dbName, addonsPath }) {
 
 // 不重建環境，直接把本系統 users 補進/更新到既有 Odoo 測試區（供獨立「同步使用者」按鈕）
 async function syncUsers(projectId) {
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) throw new Error('環境尚未建立或容器未運行，請先建立測試環境');
     return _seedOdooUsersDocker(ctx);
@@ -616,7 +622,7 @@ async function syncUsers(projectId) {
 // 對測試區資料庫執行模組升級（odoo-bin -u）。載入/語法錯會以非 0 結束並 throw，供上層判定退回 coding。
 async function upgradeModules(projectId, modules, signal) {
   const modArgDocker = (modules && modules.length ? modules : ['all']).join(',');
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (!ctx) throw new Error('project not found');
     if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
@@ -666,7 +672,7 @@ function findFreePort() {
 // exit 非 0（tour/斷言失敗或載入錯）由 execCmd throw，供上層依 deploy 同套邏輯分類。
 async function runTourTests(projectId, moduleName, signal) {
   if (!moduleName) throw new Error('未指定 module，無法執行 tour 測試');
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (!ctx) throw new Error('project not found');
     if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
@@ -711,7 +717,7 @@ async function runTourTests(projectId, moduleName, signal) {
 // shell 非 0 或未回傳 RESULT → throw，由呼叫端 fail-open 捕捉。
 async function uninstallModule(projectId, moduleName) {
   if (!moduleName) return { result: 'skipped_not_installed' };
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) return { result: 'skipped_no_env' };
     const script = fs.readFileSync(path.join(__dirname, 'uninstall_module.py'), 'utf8');
@@ -768,7 +774,7 @@ async function uninstallModule(projectId, moduleName) {
 }
 
 async function stopEnv(projectId) {
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (ctx) { await dockerEnv.stopContainer(ctx.container); await dockerEnv.removeContainer(ctx.container); }
     await query(
@@ -787,7 +793,7 @@ async function stopEnv(projectId) {
 }
 
 async function nightlyShutdown() {
-  const docker = isDockerMode();
+  const docker = await isDockerMode();
   const { rows } = await query("SELECT project_id, pid, pid_started_at FROM odoo_envs WHERE status='running'");
   for (const env of rows) {
     // 跳過使用中的 env：該專案有任務正在 deploy_testing／playwright_running，
@@ -818,7 +824,7 @@ async function envIsActive(projectId) {
   const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [projectId]);
   if (!project) return false;
   const dirName = project.folder_name || project.name;
-  if (isDockerMode()) {
+  if (await isDockerMode()) {
     const ctx = await dockerCtxFor(projectId);
     if (ctx && await dockerEnv.containerExists(ctx.container)) return true;
     return fs.existsSync(path.join(ENV_BASE, dirName, '.docker-ready'));

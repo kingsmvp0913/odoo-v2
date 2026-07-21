@@ -8,12 +8,14 @@ window.AdminView = Vue.defineComponent({
       e2e: { login: '', password: '' },
       testMode: false,
       writebackOdooNotes: false,
+      envMode: 'venv',
       loading: true,
       savingConn: false,
       savingTeams: false,
       testingTeams: false,
       savingTestMode: false,
       savingWriteback: false,
+      savingEnvMode: false,
       steppingPipeline: false,
       navTools: [
         { title: '使用者管理', desc: '新增、刪除帳號，調整角色與存取權限。', to: '/admin/users' },
@@ -40,6 +42,7 @@ window.AdminView = Vue.defineComponent({
           this.service.sync_interval = d.service_sync_interval ?? 60;
           this.testMode            = !!d.test_mode;
           this.writebackOdooNotes  = !!d.writeback_odoo_notes;
+          this.envMode             = d.env_mode || 'venv';
           Object.assign(this.teams, {
             tenant_id: d.tenant_id || '', client_id: d.client_id || '',
             client_secret: d.client_secret || '', team_id: d.team_id || '',
@@ -110,6 +113,19 @@ window.AdminView = Vue.defineComponent({
         showToast(this.writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉', 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.savingWriteback = false; }
+    },
+    async saveEnvMode() {
+      this.savingEnvMode = true;
+      try {
+        await Api.put('admin/teams-settings', {
+          ...this.teams,
+          odoo_url: this.odoo.url, odoo_db: this.odoo.db, odoo_sync_interval: this.odoo.sync_interval,
+          service_url: this.service.url, service_db: this.service.db, service_sync_interval: this.service.sync_interval,
+          env_mode: this.envMode
+        });
+        showToast(this.envMode === 'docker' ? 'Docker 模式已啟用（測試區改用官方 odoo image）' : 'venv 模式已啟用（宿主 Python 建置）', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingEnvMode = false; }
     },
     async stepPipeline() {
       this.steppingPipeline = true;
@@ -287,6 +303,27 @@ window.AdminView = Vue.defineComponent({
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉' }}</span>
             </label>
+          </div>
+        </div>
+
+        <!-- 測試區建置模式（venv / docker） -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">測試區建置模式</div>
+            <div class="setting-block-desc">venv＝在宿主用 Python 虛擬環境建置；Docker＝用官方 odoo image 建容器，自動涵蓋 Odoo 13→20+，免處理宿主多版本 Python／gevent。切換後對「之後新建或重建」的測試區生效。</div>
+          </div>
+          <div class="setting-block-body">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
+                <input type="checkbox" :checked="envMode === 'docker'" style="opacity:0;width:0;height:0;position:absolute" @change="envMode = $event.target.checked ? 'docker' : 'venv'; saveEnvMode()" :disabled="savingEnvMode" />
+                <div :style="{background: envMode === 'docker' ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{position:'absolute', top:'3px', left: envMode === 'docker' ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              </div>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ envMode === 'docker' ? 'Docker 模式' : 'venv 模式' }}</span>
+            </label>
+          </div>
+          <div v-if="envMode === 'docker'" class="setting-block-footer warn">
+            <span style="font-size:var(--fs-sm);color:var(--warning)">Docker 模式 — 測試機需已安裝並啟動 Docker；首次建各版本會先 build image（較久）。首跑注意事項見 app/docker/README.md</span>
           </div>
         </div>
 
