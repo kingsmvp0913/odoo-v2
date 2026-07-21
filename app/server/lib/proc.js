@@ -75,4 +75,4 @@ function killChildGracefully(child, graceMs = 5000) {
   if (t.unref) t.unref();
 }
 
-module.exports = { processAlive, pidStartTime, killPidGracefully, killChildGracefully };
+module.exports = { processAlive, pidStartTime, killPidGracefully, killChildGracefully, killTreeWindows, isWindows };

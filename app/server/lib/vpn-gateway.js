@@ -67,6 +67,9 @@ async function ensureDockerRunning(deps = {}) {
 
   try {
     const child = spawn(DOCKER_DESKTOP_EXE, [], { detached: true, stdio: 'ignore' });
+    // spawn 的 ENOENT（Docker Desktop 未裝／路徑不符）是非同步 'error' 事件，try/catch 攔不到——
+    // 無 handler 會變 uncaughtException 拖垮整個 server。吞掉即可，下方輪詢逾時會回報清楚錯誤。
+    child.once('error', () => {});
     child.unref();
   } catch {
     // 啟動失敗就繼續輪詢，逾時後統一回報清楚錯誤

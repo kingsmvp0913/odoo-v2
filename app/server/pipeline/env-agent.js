@@ -17,7 +17,7 @@ function execCmd(bin, args, signal) {
   return new Promise((resolve, reject) => {
     // maxBuffer 預設僅 1MB，Odoo 升級 log 超過會以 maxBuffer exceeded 假失敗
     // signal：手動暫停任務時中止 odoo-bin 子行程（否則 deploy／E2E 階段按暫停沒反應）
-    execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024, windowsHide: true, signal }, (err, stdout, stderr) => {
+    const child = execFile(bin, args, { timeout: 600000, maxBuffer: 50 * 1024 * 1024, windowsHide: true, signal }, (err, stdout, stderr) => {
       if (err) {
         // 保留完整診斷：只留 stderr 的話，「幾秒就死、stderr 只有 banner」的失敗會無從鑑識（健檢根因 C）
         const e = new Error(stderr || err.message);
@@ -28,6 +28,18 @@ function execCmd(bin, args, signal) {
       // 成功路徑只回 stdout 會讓上層（如 playwright 防假綠燈檢查）拿到空字串＝死碼（健檢項3）。
       resolve(stderr ? `${stdout}\n${stderr}` : stdout);
     });
+    // execFile 的 signal/timeout 在 Windows 只 TerminateProcess 單一 pid：runTourTests 的 odoo-bin
+    // 會派 Chrome（tour）、pip install 會派編譯器當孫程序——被單 pid 砍後孫程序變孤兒常駐吃資源。
+    // 暫停/逾時時對同一 pid 補一刀 taskkill /T /F 連整棵樹收（非 Windows 維持 execFile 原生行為）。
+    if (isWindows) {
+      const reap = () => killTreeWindows(child.pid);
+      const t = setTimeout(reap, 600000); if (t.unref) t.unref();
+      child.on('exit', () => clearTimeout(t));
+      if (signal) {
+        if (signal.aborted) reap();
+        else signal.addEventListener('abort', reap, { once: true });
+      }
+    }
   });
 }
 
@@ -39,14 +51,11 @@ function execWithStdin(bin, args, input, env, { timeoutMs = 600000 } = {}) {
     const child = spawn(bin, args, { env, windowsHide: true });
     let out = '', err = '';
     let settled = false;
-    let exited = false;
-    child.on('exit', () => { exited = true; });
     const done = fn => { if (!settled) { settled = true; clearTimeout(timer); fn(); } };
-    // SIGTERM 不理就升級 SIGKILL，避免殭屍 odoo-bin 佔資源
+    // 逾時回收：走 proc.js 的 killChildGracefully（SIGTERM→寬限→SIGKILL；Windows 走 taskkill /T /F
+    // 連子孫一起收，避免 odoo-bin shell 若派子行程時留孤兒）
     const timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
-      const t = setTimeout(() => { if (!exited) { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } } }, 5000);
-      if (t.unref) t.unref();
+      killChildGracefully(child);
       done(() => reject(new Error(`odoo-bin shell 逾時（${Math.round(timeoutMs / 1000)}s）`)));
     }, timeoutMs);
     child.stdout.on('data', d => { out += d; });
@@ -62,7 +71,7 @@ function execWithStdin(bin, args, input, env, { timeoutMs = 600000 } = {}) {
 
 // 溫和殺行程（SIGTERM→寬限→SIGKILL）與 pid 身分指紋共用 lib/proc.js。
 // expectedStart 用 odoo_envs.pid_started_at：app 重啟後 OS 可能把舊 pid 派給無關行程，核對不符即拒殺。
-const { killPidGracefully, pidStartTime } = require('../lib/proc');
+const { killPidGracefully, killChildGracefully, killTreeWindows, isWindows, pidStartTime } = require('../lib/proc');
 
 // 探測埠是否真的接受連線（Odoo 已 listen）。逾時內反覆重試，最終回 true/false。
 // 用於啟動後健康檢查：Odoo spawn 後需數秒載入才 listen，唯有實測連得上才算「running」，
@@ -421,6 +430,9 @@ async function _runEnvSetup(projectId) {
   // detached/unref 的子行程，仍會在父程序存活期間送出 exit 事件；用來偵測「啟動即崩」。
   let earlyExit = null;
   child.once('exit', (code, sig) => { earlyExit = { code, sig }; });
+  // spawn 失敗（venv 損毀、pythonw 不存在等）是非同步 'error' 事件、非同步 throw：無 handler 會變
+  // uncaughtException 拖垮整個 server。導成 earlyExit 讓下方健檢走 status='error' 收斂，不崩 server。
+  child.once('error', e => { earlyExit = earlyExit || { code: null, sig: null, err: String(e && e.message || e) }; });
   child.unref();
   const pid = child.pid || null;
   // 行程身分指紋（Linux /proc starttime；其他平台 null）：供之後 kill 前核對防 pid 重用誤殺
@@ -431,7 +443,9 @@ async function _runEnvSetup(projectId) {
   const healthy = await waitForPort(port);
   if (earlyExit || !healthy) {
     const reason = earlyExit
-      ? `Odoo process 啟動後隨即結束（exit=${earlyExit.code}${earlyExit.sig ? `/${earlyExit.sig}` : ''}）`
+      ? (earlyExit.err
+          ? `Odoo process 啟動失敗（spawn error：${earlyExit.err}）`
+          : `Odoo process 啟動後隨即結束（exit=${earlyExit.code}${earlyExit.sig ? `/${earlyExit.sig}` : ''}）`)
       : `Odoo 啟動逾時：${Math.round(HEALTH_TIMEOUT_MS / 1000)} 秒內埠 ${port} 未進入監聽`;
     log += `[start] PID=${pid} port=${port} → 健康檢查失敗：${reason}\n`;
     await killPidGracefully(pid);
