@@ -132,7 +132,7 @@ window.ProjectChatView = Vue.defineComponent({
   },
   template: `
     <div class="topbar">
-      <button class="btn btn-outline btn-sm" @click="$router.push('/projects/' + $route.params.id)" style="margin-right:var(--space-3)">← 返回專案</button>
+      <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:var(--space-3)">← 返回專案列表</button>
       <h1>專案對話</h1>
     </div>
     <div style="flex:1;display:flex;overflow:hidden;min-width:0">

@@ -14,7 +14,15 @@ window.AdminView = Vue.defineComponent({
       testingTeams: false,
       savingTestMode: false,
       savingWriteback: false,
-      steppingPipeline: false
+      steppingPipeline: false,
+      navTools: [
+        { title: '使用者管理', desc: '新增、刪除帳號，調整角色與存取權限。', to: '/admin/users' },
+        { title: 'Agent 管理', desc: '調整各 agent 的模型與提示詞。', to: '/admin/agents' },
+        { title: '工作流程健檢', desc: '分析各 pipeline agent 近期表現，提出提示詞改進建議。', to: '/admin/health' },
+        { title: '退回原因管理', desc: '檢視所有人工退回原因與分類，可批次刪除。', to: '/admin/rejections' },
+        { title: '失敗分類樣本', desc: 'regex 判不出、交 haiku 分類的案例。看高頻 pattern，把復發的補進 regex 降低呼叫量。', to: '/admin/classify-samples' },
+        { title: 'Prompt 送出記錄', desc: '檢視最近送給 AI 的 prompt 完整內容，確認實際送出了什麼。', to: '/admin/prompt-logs' }
+      ]
     };
   },
   async created() { await this.loadAll(); },
@@ -282,69 +290,12 @@ window.AdminView = Vue.defineComponent({
           </div>
         </div>
 
-        <!-- 使用者管理 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">使用者管理</div>
-            <div class="setting-block-desc">新增、刪除帳號，調整角色與存取權限。</div>
-          </div>
-          <div class="setting-block-body">
-            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/users')">前往使用者管理 →</button>
-          </div>
-        </div>
-
-        <!-- Agent 管理 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">Agent 管理</div>
-            <div class="setting-block-desc">調整各 agent 的模型與提示詞。</div>
-          </div>
-          <div class="setting-block-body">
-            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/agents')">前往 Agent 管理 →</button>
-          </div>
-        </div>
-
-        <!-- 工作流程健檢 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">工作流程健檢</div>
-            <div class="setting-block-desc">分析各 pipeline agent 近期表現，提出提示詞改進建議。</div>
-          </div>
-          <div class="setting-block-body">
-            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/health')">前往健檢 →</button>
-          </div>
-        </div>
-
-        <!-- 退回原因管理 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">退回原因管理</div>
-            <div class="setting-block-desc">檢視所有人工退回原因與分類，可批次刪除。</div>
-          </div>
-          <div class="setting-block-body">
-            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/rejections')">前往退回原因管理 →</button>
-          </div>
-        </div>
-
-        <!-- 失敗分類樣本 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">失敗分類樣本</div>
-            <div class="setting-block-desc">regex 判不出、交 haiku 分類的案例。看高頻 pattern，把復發的補進 failure-classifier 的 regex 降低 haiku 呼叫量。</div>
-          </div>
-          <div class="setting-block-body">
-            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/classify-samples')">前往分類樣本 →</button>
-          </div>
-        </div>
-
-        <!-- Prompt 送出記錄 -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">Prompt 送出記錄</div>
-            <div class="setting-block-desc">檢視最近送給 AI 的 prompt 完整內容，確認實際送出了什麼。</div>
-          </div>
-          <div class="setting-block-body">
-            <button class="btn btn-primary btn-sm" @click="$router.push('/admin/prompt-logs')">前往 Prompt 記錄 →</button>
+        <!-- 管理工具 -->
+        <div class="settings-section-label">管理工具</div>
+        <div class="nav-card-grid">
+          <div v-for="t in navTools" :key="t.to" class="nav-card" @click="$router.push(t.to)">
+            <div class="nav-card-title">{{ t.title }}<span class="nav-card-arrow">→</span></div>
+            <div class="nav-card-desc">{{ t.desc }}</div>
           </div>
         </div>
 

@@ -138,6 +138,7 @@ window.LoginView = Vue.defineComponent({
                   <span>{{ s }}</span>
                 </li>
               </ul>
+              <button class="register-cancel" @click="backToLogin">← 取消，返回登入</button>
             </aside>
             <div class="register-main">
               <div class="register-step-title">{{ step }}. {{ steps[step-1] }}</div>

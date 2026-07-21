@@ -248,7 +248,7 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
         <!-- 圖表區 -->
-        <div style="display:grid;grid-template-columns:180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5)">
+        <div style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5)">
 
           <!-- Agent 圓餅圖 -->
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3)">
@@ -282,7 +282,23 @@ window.TokenReportView = Vue.defineComponent({
             </div>
           </div>
 
-          <!-- 折線圖（填滿第三欄） -->
+          <!-- 使用者圓餅圖 -->
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3)">
+            <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">使用者分布</div>
+            <svg viewBox="0 0 180 180" width="154" height="154" v-if="report.by_user.length">
+              <path v-for="(s,i) in piePath(report.by_user.map((r,i)=>({value:r.tokens,color:'hsl('+(i*60+30)+',55%,55%)',label:r.username})))"
+                :key="s.label" :d="s.d" :fill="s.color" opacity="0.9">
+                <title>{{ s.label }}: {{ fmtNum(s.value) }}</title>
+              </path>
+            </svg>
+            <div v-for="(r,i) in report.by_user" :key="r.user_id"
+              style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1)">
+              <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:'hsl('+(i*60+30)+',55%,55%)',display:'inline-block'}"></span>
+              {{ r.username }}: {{ fmtShort(r.tokens) }}
+            </div>
+          </div>
+
+          <!-- 折線圖（填滿第四欄） -->
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);display:flex;flex-direction:column">
             <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">每日趨勢</div>
             <!-- 繪圖區：flex:1 撐滿卡片剩餘高度；SVG 絕對定位填滿它，不反過來撐高容器（避免 ResizeObserver 循環） -->

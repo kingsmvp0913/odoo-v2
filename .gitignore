@@ -24,6 +24,7 @@ env/
 
 # ─── 機密設定(改用 config.example.json 交付)──────────
 /data/config.json
+/data/claude-usage.json
 .env
 .env.*
 !.env.example

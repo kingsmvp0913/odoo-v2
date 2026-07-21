@@ -172,6 +172,8 @@
 [data-theme="dark"] .setting-block-footer.warn { background: rgba(245,158,11,0.10); border-top-color: rgba(245,158,11,0.30); }
 
 body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+/* 整體介面放大：改此值即可整站等比縮放（1 = 原始大小；1.1 = 放大 10%）*/
+body { zoom: 1.1; }
 
 #app { display: flex; height: 100vh; }
 
@@ -180,7 +182,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .sidebar-header { padding: 18px 16px 10px; }
 .sidebar-header strong { display: block; font-size: 14px; font-weight: 700; color: #fff; letter-spacing: -0.2px; }
 .sidebar-header span { font-size: 11px; color: var(--sidebar-text); }
-.sidebar nav { flex: 1; padding: 6px 8px; }
+.sidebar nav { flex: 1; padding: 6px 8px; min-height: 0; overflow-y: auto; }
 .sidebar nav a { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 13px; color: var(--sidebar-text); text-decoration: none; cursor: pointer; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
 .sidebar nav a:hover { background: rgba(255,255,255,0.07); color: #e5e7eb; }
 .sidebar nav a.active { background: rgba(99,102,241,0.18); color: #fff; font-weight: 500; }
@@ -192,6 +194,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .usage-mini:hover { background: rgba(255,255,255,0.05); }
 .usage-mini:hover .usage-title { opacity: 1; color: #e5e7eb; }
 .usage-title { font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--sidebar-text); opacity: 0.7; }
+.usage-stale { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.85; }
 .usage-row-top { display: flex; justify-content: space-between; font-size: 10px; color: var(--sidebar-text); margin-bottom: 3px; }
 .usage-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
 .usage-fill { height: 100%; border-radius: 3px; background: var(--sidebar-accent); transition: width 0.3s ease; }
@@ -216,6 +219,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 /* ── Setting layout ───────────────────────── */
 .settings-layout { display: flex; flex-direction: column; gap: 16px; }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
+
+/* 管理工具導覽卡 */
+.settings-section-label { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-muted); margin: 8px 2px 0; }
+.nav-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.nav-card {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 16px 18px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.nav-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow); }
+.nav-card-title { font-size: 14px; font-weight: 600; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.nav-card-arrow { color: var(--text-muted); font-size: 15px; transition: transform .15s, color .15s; }
+.nav-card:hover .nav-card-arrow { transform: translateX(3px); color: var(--primary); }
+.nav-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
 
 .setting-block {
   background: var(--card-bg);
@@ -435,6 +457,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .register-step.is-active .rs-num { background: var(--primary); color: #fff; }
 .register-step.is-done { color: var(--sidebar-active); }
 .register-step.is-done .rs-num { background: var(--success); color: #fff; }
+.register-cancel { margin-top: 22px; padding: 0; background: none; border: 0; cursor: pointer; font-size: var(--fs-sm); color: var(--sidebar-text); }
+.register-cancel:hover { color: var(--sidebar-active); }
 .register-main { flex: 1; min-width: 0; padding: 32px 36px; }
 .register-step-title { font-size: var(--fs-xl); font-weight: var(--fw-semibold); margin-bottom: 16px; color: var(--text); }
 @media (max-width: 640px) {
