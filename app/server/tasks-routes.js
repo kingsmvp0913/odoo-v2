@@ -125,7 +125,7 @@ function registerRoutes(app) {
 
       const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.approved_at, t.created_at, t.updated_at,
                           e.url AS env_url,
-                          p.name AS project_name
+                          p.name AS project_name, p.e2e_disabled
                    FROM tasks t
                    LEFT JOIN odoo_envs e ON e.project_id = t.project_id AND e.status = 'running'
                    LEFT JOIN projects p ON p.id = t.project_id

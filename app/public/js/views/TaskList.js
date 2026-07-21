@@ -25,16 +25,30 @@ const STATUS_LABELS = {
   stopped:            '失敗待確認'
 };
 
-const FLOW_DEV = [
+// 部署（deploy_testing）與 E2E 測試（playwright_running）拆成兩格：部署一定跑，E2E 專案可停用
+// （e2e_disabled → deploy_testing 直接跳 review_pending）。停用時「測試」格會被 buildFlow 濾掉，
+// 不留幽靈步驟。
+const DEV_STEPS = [
   { label: '分析',  statuses: ['analysis_running', 'branch_pending'] },
   { label: '確認',  statuses: ['confirm_pending', 'confirm_answered', 'clarify_pending', 'clarify_answered', 'spec_review'] },
   { label: '開發',  statuses: ['coding_running'] },
   { label: 'QA',    statuses: ['qa_running', 'merge_running'] },
-  { label: '測試',  statuses: ['deploy_testing', 'playwright_running'] },
+  { label: '部署',  statuses: ['deploy_testing'] },
+  { label: '測試',  statuses: ['playwright_running'] },
   { label: '審核',  statuses: ['review_pending', 'wiki_updating'] },
   { label: '完成',  statuses: ['done'] },
 ];
+// 客服升級成改程式的工單，開頭補一格「客服」標出來源，讓開發流程接在客服後面。
+const CS_STEP = { label: '客服', statuses: ['cs_running'] };
+// 客服流程分兩版：純回覆走 客服→確認→完成；只有真的退回要補資料時才插入「補資料」一格。
+// 補資料與確認是互斥分支（cs-agent 三種結果各走各的），不能排成前後兩步，否則純回覆型
+// 工單停在「確認」會把從沒經過的「補資料」誤標成已完成。
 const FLOW_CS = [
+  { label: '客服',   statuses: ['cs_running'] },
+  { label: '確認',   statuses: ['cs_reply_pending'] },
+  { label: '完成',   statuses: ['done'] },
+];
+const FLOW_CS_DATA = [
   { label: '客服',   statuses: ['cs_running'] },
   { label: '補資料', statuses: ['cs_data_needed'] },
   { label: '確認',   statuses: ['cs_reply_pending'] },
@@ -51,18 +65,27 @@ function timeAgo(ts) {
   return `${Math.floor(diff / 86400000)} 天前`;
 }
 
-const CS_ACTIVE_STATUSES = ['cs_running', 'cs_data_needed', 'cs_reply_pending'];
+// 依任務屬性組出該顯示的流程。純客服的兩種結果先攔掉，其餘皆為開發流程；
+// service 來源進到開發狀態＝一定是客服升級改程式（純客服工單不會進 dev 狀態）→ 前置「客服」格。
+function buildFlow({ status, source, gitBranch, e2eDisabled }) {
+  if (status === 'cs_data_needed') return FLOW_CS_DATA;
+  if (status === 'cs_running' || status === 'cs_reply_pending') return FLOW_CS;
+  // 完成時光靠 status 分不出「純客服結案」還是「升級改程式後結案」（都是 done+service）。
+  // 升級改程式的工單一定建過分支（git_branch 有值），純客服回覆的永遠沒有 → 以此分流。
+  if (status === 'done' && source === 'service' && !gitBranch) return FLOW_CS;
+  let steps = source === 'service' ? [CS_STEP, ...DEV_STEPS] : DEV_STEPS;
+  if (e2eDisabled) steps = steps.filter(s => s.label !== '測試');
+  return steps;
+}
 
 const StatusBar = Vue.defineComponent({
   name: 'StatusBar',
-  props: { status: String, source: String },
+  props: { status: String, source: String, gitBranch: String, e2eDisabled: Boolean },
   computed: {
     isNew()     { return this.status === 'new'; },
     isStopped() { return STOPPED_STATUSES.includes(this.status); },
     flow() {
-      if (CS_ACTIVE_STATUSES.includes(this.status)) return FLOW_CS;
-      if (this.status === 'done' && this.source === 'service') return FLOW_CS;
-      return FLOW_DEV;
+      return buildFlow({ status: this.status, source: this.source, gitBranch: this.gitBranch, e2eDisabled: this.e2eDisabled });
     },
     activeIdx() {
       if (this.status === 'done') return this.flow.length;
@@ -478,7 +501,7 @@ window.TaskListView = Vue.defineComponent({
             </div>
             <span v-if="t.module" style="font-size:var(--fs-xs);color:var(--text-muted)">{{ t.module }}</span>
           </div>
-          <StatusBar :status="t.status" :source="t.source" />
+          <StatusBar :status="t.status" :source="t.source" :git-branch="t.git_branch" :e2e-disabled="t.e2e_disabled" />
         </div>
       </div>
 
