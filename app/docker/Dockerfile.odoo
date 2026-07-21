@@ -1,0 +1,22 @@
+# 平台自建的 Odoo 測試區 image：以官方 odoo:<major> 為基底（Python／相依／gevent 全部預先編好，
+# 徹底避開宿主的多版本 Python 相容問題），再補上 chromium 供 E2E tour（HttpCase）使用——
+# 官方 image 不含瀏覽器，缺它 tour 會被 Odoo 判為 SkipTest 而 exit 0＝假綠燈。
+#
+# 由 docker-env.buildImage 以 --build-arg ODOO_MAJOR=<13..20> 建成 odoo-idx:<major>，每版本建一次即快取共用。
+
+ARG ODOO_MAJOR=17
+FROM odoo:${ODOO_MAJOR}
+
+# 裝 chromium 需 root（官方 image 預設以 odoo user 執行）；裝完切回 odoo user。
+USER root
+
+# chromium：Debian 套件提供 /usr/bin/chromium，Odoo tests/common.py 的 ChromeBrowser 會自動偵測到。
+# 一併裝字型，避免 headless 截圖/測試因缺字型出錯。--no-install-recommends 控制 image 體積。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# tour 在容器內多以 root 相關限制跑 chromium，常需 --no-sandbox；提供給 Odoo 偵測（若該版本支援）。
+ENV CHROME_FLAGS="--no-sandbox --headless=new --disable-gpu"
+
+USER odoo
