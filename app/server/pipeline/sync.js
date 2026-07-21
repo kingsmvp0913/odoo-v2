@@ -460,6 +460,49 @@ async function resolveUserOdooSettings(userId) {
   };
 }
 
+// 封存平台任務：比照手動封存（tasks-routes 的 /archive）——先中止在飛 agent（否則子行程續跑到逾時），
+// 再落 is_hidden＝true 並清 is_paused。runner 以 lazy require 取用，避免同步模組載入期的相依繞圈。
+async function archiveTask(taskDbId) {
+  const { abortTask } = require('./runner');
+  abortTask(taskDbId);
+  await query(
+    "UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = $1",
+    [taskDbId]
+  );
+}
+
+// 來源已結案 → 封存對應平台任務。主同步只抓「未結案」的單，結案者會直接從結果消失、無法用「消失」
+// 可靠推斷（改派／limit 漏抓／暫時抓不到都會誤判成結案），故改針對「既有、未封存」的平台任務，
+// 用其來源 id 明確回查來源目前是否已結案（closedDomain 為各來源專屬的結案反面條件）。回傳封存筆數。
+async function archiveClosedTasks(userId, opts) {
+  const { baseUrl, db, username, password, source, keyPrefix, model, closedDomain } = opts;
+  if (!baseUrl || !db || !username || !password) return 0;
+
+  const { rows } = await query(
+    'SELECT id, task_id FROM tasks WHERE user_id = $1 AND source = $2 AND is_hidden = false',
+    [userId, source]
+  );
+  const idMap = new Map();
+  const re = new RegExp(`^${keyPrefix}(\\d+)$`);
+  for (const r of rows) {
+    const m = String(r.task_id).match(re);
+    if (m) idMap.set(parseInt(m[1], 10), r.id);
+  }
+  if (idMap.size === 0) return 0;
+
+  const cookies = await odooAuth(baseUrl, db, username, password);
+  const sourceIds = [...idMap.keys()];
+  const closed = await odooSearchRead(
+    baseUrl, model, [['id', 'in', sourceIds], ...closedDomain], ['id'], cookies, sourceIds.length
+  );
+  let archived = 0;
+  for (const rec of closed) {
+    const dbId = idMap.get(rec.id);
+    if (dbId) { await archiveTask(dbId); archived++; }
+  }
+  return archived;
+}
+
 async function syncUser(userId) {
   const settings = await resolveUserOdooSettings(userId);
   if (!settings) return { odoo: { added: 0 }, service: { added: 0 } };
@@ -473,6 +516,23 @@ async function syncUser(userId) {
     console.error(`[SYNC] Service user ${userId}:`, err.message);
     return { added: 0, error: err.message };
   });
+
+  // 主同步跑完後再各做一次結案偵測封存；best-effort，失敗只記 log、不影響 added 統計。
+  // Odoo 結案＝階段折疊（stage_id.fold=true，涵蓋已完成／取消欄位）；eService 結案＝state 非 draft/open。
+  odoo.archived = await archiveClosedTasks(userId, {
+    baseUrl: settings.odoo_url, db: settings.odoo_db,
+    username: settings.odoo_username, password: settings.odoo_password,
+    source: 'odoo', keyPrefix: 'task_odoo_', model: 'project.task',
+    closedDomain: [['stage_id.fold', '=', true]]
+  }).catch(err => { console.error(`[SYNC] archive odoo user ${userId}:`, err.message); return 0; });
+
+  service.archived = await archiveClosedTasks(userId, {
+    baseUrl: settings.service_url, db: settings.service_db,
+    username: settings.service_username, password: settings.service_password,
+    source: 'service', keyPrefix: 'task_service_', model: 'service.question.feedback',
+    closedDomain: [['state', 'not in', ['draft', 'open']]]
+  }).catch(err => { console.error(`[SYNC] archive service user ${userId}:`, err.message); return 0; });
+
   return { odoo, service };
 }
 
