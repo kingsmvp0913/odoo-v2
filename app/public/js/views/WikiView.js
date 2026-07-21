@@ -180,10 +180,10 @@ window.WikiView = Vue.defineComponent({
     <div class="topbar">
       <button class="btn btn-outline btn-sm" @click="$router.push('/projects/' + $route.params.id)" style="margin-right:var(--space-3)">← 返回專案</button>
       <h1>Wiki</h1>
-      <button class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
+      <button v-if="!pages.length" class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
         {{ building ? '建立中…' : '建立 wiki' }}
       </button>
-      <button class="btn btn-outline btn-sm" style="margin-left:var(--space-2)" @click="openAddPage">+ 新增頁面</button>
+      <button class="btn btn-outline btn-sm" :style="pages.length ? 'margin-left:auto' : 'margin-left:var(--space-2)'" @click="openAddPage">+ 新增頁面</button>
     </div>
     <div v-if="showAddModal" class="modal-overlay" @mousedown.self="showAddModal=false" @keyup.esc="showAddModal=false">
       <div class="modal" role="dialog" aria-modal="true">

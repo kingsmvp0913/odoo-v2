@@ -139,6 +139,9 @@ function registerRoutes(app) {
       const { rows: counts } = await query('SELECT project_id, COUNT(*) AS cnt FROM project_repos GROUP BY project_id');
       const countMap = {};
       for (const c of counts) countMap[String(c.project_id)] = Number(c.cnt);
+      const { rows: wikiCounts } = await query('SELECT project_id, COUNT(*) AS cnt FROM wiki_pages GROUP BY project_id');
+      const wikiMap = {};
+      for (const w of wikiCounts) wikiMap[String(w.project_id)] = Number(w.cnt);
       const { rows: unreadRows } = await query(
         `SELECT c.project_id, COUNT(m.id) AS unread
          FROM project_chats c
@@ -153,7 +156,8 @@ function registerRoutes(app) {
       res.json(projects.map(p => ({
         ...p,
         repo_count: countMap[String(p.id)] || 0,
-        unread_count: unreadMap[String(p.id)] || 0
+        unread_count: unreadMap[String(p.id)] || 0,
+        has_wiki: (wikiMap[String(p.id)] || 0) > 0
       })));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -200,7 +204,10 @@ function registerRoutes(app) {
          WHERE c.project_id = $1 AND c.user_id = $2`,
         [req.params.id, req.userId]
       );
-      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0) });
+      const { rows: [wikiRow] } = await query(
+        'SELECT COUNT(*) AS cnt FROM wiki_pages WHERE project_id = $1', [req.params.id]
+      );
+      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0), has_wiki: Number(wikiRow ? wikiRow.cnt : 0) > 0 });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

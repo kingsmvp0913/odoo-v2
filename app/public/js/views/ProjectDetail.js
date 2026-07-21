@@ -209,7 +209,7 @@ window.ProjectDetailView = Vue.defineComponent({
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
             <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unreadCount() }}</span>
           </button>
-          <button class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
+          <button v-if="!project.has_wiki" class="btn btn-outline btn-sm" @click="initWiki">🔄 初始化 Wiki</button>
         </div>
       </div>
       <div class="content">
