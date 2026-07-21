@@ -51,10 +51,18 @@ function registerRoutes(app) {
   app.get('/api/projects/:id/env/log', verifyToken, async (req, res) => {
     try {
       const fs = require('fs');
-      const { ENV_BASE: base, runtimeLogPath } = require('./pipeline/env-agent');
+      const { ENV_BASE: base, runtimeLogPath, isDockerMode, dockerCtxFor } = require('./pipeline/env-agent');
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (!project) return res.status(404).json({ error: 'project not found' });
       const dirName = project.folder_name || project.name;
+      // Docker 模式：常駐 server 的 runtime log 在容器內，改讀 `docker logs`（尾端 2000 行）。
+      if (isDockerMode()) {
+        const dockerEnv = require('./lib/docker-env');
+        const ctx = await dockerCtxFor(req.params.id);
+        if (!ctx || !(await dockerEnv.containerExists(ctx.container))) return res.json({ log: '', exists: false });
+        const log = await dockerEnv.containerLogs(ctx.container, { tail: 2000 }).catch(() => '');
+        return res.json({ log: log.slice(-256 * 1024), exists: !!log });
+      }
       const logPath = runtimeLogPath(path.join(base, dirName));
       if (!fs.existsSync(logPath)) return res.json({ log: '', exists: false });
       // 只回尾端 256KB，避免大 log 撐爆前端與網路
