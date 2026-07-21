@@ -45,6 +45,11 @@ test('容器不存在時，寫入設定檔、docker run 啟動、等待轉發 po
   expect(args).toContain('--name');
   expect(args).toContain('vpn-conn-7');
   expect(args).toContain('--cap-add=NET_ADMIN');
+  // openvpn 在容器內要建立 tun0 必須存取 /dev/net/tun 裝置節點；只給 NET_ADMIN capability
+  // 而不掛入該裝置，會在撥通後倒在 "Cannot open TUN/TAP dev /dev/net/tun"，tun0 永遠不出現。
+  const devIdx = args.indexOf('--device');
+  expect(devIdx).toBeGreaterThanOrEqual(0);
+  expect(args[devIdx + 1]).toBe('/dev/net/tun');
   expect(args).toContain('-p');
   expect(args).toContain('127.0.0.1:11007:9999');
   expect(args).toContain('-v');

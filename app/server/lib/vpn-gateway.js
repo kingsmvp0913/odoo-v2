@@ -136,6 +136,9 @@ function startGateway(conn, deps) {
   writeFileSync(tmpFile, conn.vpn_config, { mode: 0o600 });
   execFileSync('docker', [
     'run', '-d', '--name', conn.vpn_container_name, '--cap-add=NET_ADMIN',
+    // NET_ADMIN 只給「設定網路」的權限，還要把 /dev/net/tun 裝置節點掛進容器，
+    // openvpn 才能開 tun0；缺這行會在撥通後倒在 "Cannot open TUN/TAP dev"，tun0 永不出現。
+    '--device', '/dev/net/tun',
     '-p', `127.0.0.1:${conn.vpn_forward_port}:9999`,
     '-v', `${tmpFile}:/config/client.ovpn:ro`,
     '-e', `VPN_USER=${conn.vpn_username || ''}`,
