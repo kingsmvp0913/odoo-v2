@@ -79,6 +79,36 @@ test('PUT /api/admin/users/:id approved=true → pending 帳號可登入', async
   expect(after.status).toBe(200);
 });
 
+// 意圖：刪除帳號前必須先清該使用者所有參照（tasks 及其子表、sessions、loop_counter），
+// 否則 tasks_user_id_fkey 等外鍵會擋下刪除。這是「沒辦法刪除會員」回報的核心。
+test('DELETE /api/admin/users/:id → 連帶清任務與子表後成功刪除', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('pass1234', 4);
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('todelete', $1, 'ToDelete', 'user') RETURNING id",
+    [hash]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, status) VALUES ($1, 'T-1', 'manual', 'new') RETURNING id",
+    [u.id]
+  );
+  await dbModule.query("INSERT INTO task_events (task_id, content) VALUES ($1, 'e')", [t.id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', 'l')", [t.id]);
+  await dbModule.query("INSERT INTO task_messages (task_id, content, occurred_at) VALUES ($1, 'm', NOW())", [t.id]);
+  await dbModule.query("INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, 'h', NOW())", [u.id]);
+  await dbModule.query("INSERT INTO loop_counter (user_id) VALUES ($1)", [u.id]);
+
+  const res = await request(app).delete(`/api/admin/users/${u.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);
+
+  const { rows: gone } = await dbModule.query('SELECT id FROM users WHERE id = $1', [u.id]);
+  expect(gone.length).toBe(0);
+  const { rows: tasksGone } = await dbModule.query('SELECT id FROM tasks WHERE user_id = $1', [u.id]);
+  expect(tasksGone.length).toBe(0);
+});
+
 // --- 固定 E2E 測試帳號（唯讀）---
 
 test('GET /api/admin/e2e-account → 回固定帳密 auto_test_user', async () => {
