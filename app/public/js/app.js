@@ -62,12 +62,14 @@ router.beforeEach(async (to) => {
 
 router.afterEach((to) => {
   if (Api.isLoggedIn() && to.path !== '/login') {
+    // 每次導覽刷新角色（登入後第一次導覽即設好 role）→ 再依角色載入用量小工具
     Api.get('auth/me').then(me => {
+      window.UserStore.role = me.role || '';
       SocketManager.initSocket(me.id);
+      loadClaudeUsage();
     }).catch(() => {});
-    loadClaudeUsage();
   }
-  if (to.path === '/login') SocketManager.disconnectSocket();
+  if (to.path === '/login') { SocketManager.disconnectSocket(); window.UserStore.role = ''; }
 });
 
 setInterval(loadClaudeUsage, 60000);
@@ -78,7 +80,9 @@ const App = defineComponent({
   data() { return { _role: '', isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
   computed: {
     isLoggedIn() { return Api.isLoggedIn(); },
-    isAdmin() { return this._role === 'admin'; },
+    // 角色以 reactive 的 UserStore 為單一來源：每次導覽（含剛登入）由 afterEach 更新，
+    // 不再只靠 mounted 一次性載入 → 表單登入後 isAdmin 立即正確，免重新整理
+    isAdmin() { return window.UserStore.role === 'admin'; },
     usageBars() {
       const u = this.claudeUsage;
       if (!u || !u.available) return [];
@@ -122,7 +126,7 @@ const App = defineComponent({
       return new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     },
     toggleTheme() { ThemeManager.toggle(); },
-    logout() { Api.clearToken(); SocketManager.disconnectSocket(); this.$router.push('/login'); }
+    logout() { Api.clearToken(); window.UserStore.role = ''; SocketManager.disconnectSocket(); this.$router.push('/login'); }
   },
   template: `
     <template v-if="!isLoggedIn || $route.path === '/login'">
