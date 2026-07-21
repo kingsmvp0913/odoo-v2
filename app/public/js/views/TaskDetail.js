@@ -29,7 +29,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -97,6 +97,9 @@ window.TaskDetailView = Vue.defineComponent({
       }));
       return [...msgs, ...logs].sort((a, b) => new Date(a.ts) - new Date(b.ts));
     },
+    // 只渲染末 N 筆（最新）；往上捲再增量載入更早的，避免整條歷史撐開版面
+    visibleTimeline() { return this.timeline.slice(-this.convVisible); },
+    hasMoreConv() { return this.timeline.length > this.convVisible; },
     // 留言模式（非回覆 AI 問題）且任務有外部來源、管理者開了回寫開關時，才顯示「回寫 Odoo」勾選框
     showWritebackOption() {
       return !this.canAnswer && this.writebackEnabled && !!this.task && (this.task.source === 'odoo' || this.task.source === 'service');
@@ -142,8 +145,16 @@ window.TaskDetailView = Vue.defineComponent({
       if (this._onTermOutput) sock.off('terminal:output', this._onTermOutput);
     }
   },
+  watch: {
+    // 對話時間軸：只要目前釘在底部（初始／或使用者停在底部）就隨新內容貼底看最新；
+    // 使用者一往上捲，onConvScroll 會解除釘住，之後新訊息不再打斷閱讀
+    'timeline.length'(n) {
+      if (n && this._convPinBottom !== false) this.$nextTick(() => this.scrollConvToBottom());
+    }
+  },
   methods: {
     async load() {
+      this._convPinBottom = true; this.convVisible = 5;
       this.loading = true;
       try {
         await this.refresh();
@@ -242,6 +253,8 @@ window.TaskDetailView = Vue.defineComponent({
     async loadTaskMessages() {
       try {
         this.taskMessages = await Api.get(`tasks/${this.$route.params.id}/messages`);
+        // 初載完成後貼底看最新（此時 logs 已載入、conv-panel 確定已掛載，補上 watch 首次時序可能落空的貼底）
+        if (this._convPinBottom !== false) this.$nextTick(() => this.scrollConvToBottom());
       } catch { /* best-effort */ }
     },
     async sendTaskMessage() {
@@ -546,6 +559,20 @@ window.TaskDetailView = Vue.defineComponent({
       return out;
     },
     scrollEventsToBottom() { const c = this.$refs.eventsBox; if (c) c.scrollTop = c.scrollHeight; },
+    scrollConvToBottom() { const c = this.$refs.convPanel; if (c) c.scrollTop = c.scrollHeight; },
+    // 捲到頂→載入更早，並補回捲動位移讓畫面不跳（新內容撐高後維持原本閱讀點）
+    loadMoreConv() {
+      const c = this.$refs.convPanel;
+      const prevH = c ? c.scrollHeight : 0;
+      this.convVisible += 10;
+      this.$nextTick(() => { if (c) c.scrollTop += c.scrollHeight - prevH; });
+    },
+    onConvScroll(e) {
+      const el = e.target;
+      // 跟隨使用者位置：停在底部→維持釘住（新訊息貼底）；往上捲→解除釘住
+      this._convPinBottom = (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+      if (el.scrollTop <= 8 && this.hasMoreConv) this.loadMoreConv();
+    },
     async loadEvents() {
       try {
         const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10`);
@@ -636,9 +663,10 @@ window.TaskDetailView = Vue.defineComponent({
           </div>
 
           <div class="form-section" style="margin:var(--space-4) 0 var(--space-2)">對話時間軸</div>
-          <div v-if="timeline.length" class="conv-panel">
+          <div v-if="timeline.length" class="conv-panel" ref="convPanel" @scroll="onConvScroll">
             <div class="conv-log">
-              <div v-for="item in timeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
+              <button v-if="hasMoreConv" type="button" class="conv-loadmore" @click="loadMoreConv">▲ 載入更早的對話（還有 {{ timeline.length - convVisible }} 筆）</button>
+              <div v-for="item in visibleTimeline" :key="item._key" class="conv-row" :class="timelineClass(item)">
                 <template v-if="isErrorLog(item)">
                   <button type="button" class="conv-log-chip" @click="toggleLog(item._key)">
                     {{ expandedLogs[item._key] ? '▾' : '▸' }} [錯誤LOG · {{ logLineCount(item) }} 行]
