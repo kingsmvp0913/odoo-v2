@@ -14,16 +14,15 @@ function stripFence(s) {
   return t.replace(/^```[^\n]*\n?/, '').replace(/\n?```\s*$/, '').trim();
 }
 
-// 取最後一組 <result>…</result> 內容（無閉合標籤則取 <result> 之後到結尾）；找不到回 null。
+// 取最後一組 <result>…</result> 內容（缺 </result> 閉合＝截斷／不完整，回 null 交上層 repair 重取）；找不到回 null。
 // 用 lastIndexOf 取「最後一個」<result>：prompt 內若先給範例 <result> 再給答案，不會誤取範例。
 function extractResult(text) {
   if (!text) return null;
-  const start = text.lastIndexOf(OPEN);
+  const end = text.lastIndexOf(CLOSE);
+  if (end === -1) return null;
+  const start = text.lastIndexOf(OPEN, end);
   if (start === -1) return null;
-  const afterOpen = start + OPEN.length;
-  const end = text.indexOf(CLOSE, afterOpen);
-  const inner = end !== -1 ? text.slice(afterOpen, end) : text.slice(afterOpen);
-  return stripFence(inner);
+  return stripFence(text.slice(start + OPEN.length, end));
 }
 
 const REPAIR_PROMPT = raw =>

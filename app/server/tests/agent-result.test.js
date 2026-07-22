@@ -73,3 +73,22 @@ test('parseAgentResult：YAML 路徑（analysis-project）— <result> 包住含
   expect(v.case_id).toBe('t1');
   expect(v.module).toBe('sale');
 });
+
+// 意圖：agent 最終輸出被截斷（有 <result> 卻無 </result>）＝不完整，不可拿殘缺內容冒充完整結果放行（Rule 12 fail loud）。
+// 這正是 task 128 卡「未回傳有效結果」的根因：截斷的 <result> 被當有效結果解析。
+test('extractResult：有 <result> 但無 </result>（輸出被截斷）→ 回 null，不取殘缺內容', () => {
+  expect(extractResult('前言\n<result>\ncase_id: t1\nmodule: sale\nfiles:')).toBeNull();
+});
+
+test('extractResult：完整組在前、截斷殘句在後 → 取最後一組「有閉合」的內容', () => {
+  const r = extractResult('<result>{"x":1}</result> 收尾殘句 <result>{"x":2');
+  expect(JSON.parse(r).x).toBe(1);
+});
+
+test('parseAgentResult：analysis 最終輸出被截斷（無 </result>）→ 觸發 haiku 補救而非誤判成功', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>\ncase_id: t9\nmodule: sale\nsummary: s\nrequirements: r\n</result>' });
+  const raw = '<result>\ncase_id: t9\nmodule: sale\nsummary: s\nrequirements:'; // 截斷、無閉合
+  const v = await parseAgentResult(raw, { parse: yaml.load });
+  expect(mockRunClaude).toHaveBeenCalledTimes(1);
+  expect(v.case_id).toBe('t9');
+});
