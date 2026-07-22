@@ -70,3 +70,21 @@ test('PUT env_mode 非法值 → 正規化為 venv', async () => {
     .set('Authorization', `Bearer ${adminToken}`);
   expect(getRes.body.env_mode).toBe('venv');
 });
+
+test('PUT 三欄可存並讀回（未帶欄位不清空既有值）', async () => {
+  // 先存一次帶三欄
+  await request(app).put('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ usage_gate_enabled: false, usage_gate_5h_threshold: 85, usage_gate_7d_threshold: 92 });
+  let res = await request(app).get('/api/admin/teams-settings').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.usage_gate_enabled).toBe(false);
+  expect(res.body.usage_gate_5h_threshold).toBe(85);
+  expect(res.body.usage_gate_7d_threshold).toBe(92);
+  // 再存一次不帶這三欄（只改 test_mode）→ 三欄應保留
+  await request(app).put('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ test_mode: true });
+  res = await request(app).get('/api/admin/teams-settings').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.usage_gate_5h_threshold).toBe(85);
+  expect(res.body.usage_gate_enabled).toBe(false);
+});

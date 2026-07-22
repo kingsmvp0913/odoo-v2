@@ -13,6 +13,18 @@ function registerRoutes(app) {
       res.json({ available: false, error: err.message });
     }
   });
+
+  // 閘門狀態（admin-only）：供設定頁顯示「正常／已暫停」與觸發視窗、現值、門檻、重置時間
+  app.get('/api/usage-gate/status', verifyToken, async (req, res) => {
+    try {
+      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
+      if (me?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+      const { getGateState } = require('./pipeline/usage-gate');
+      res.json(await getGateState());
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
 
 module.exports = { registerRoutes };

@@ -25,10 +25,10 @@ function registerRoutes(app) {
 
   app.put('/api/admin/teams-settings', auth, async (req, res) => {
     try {
-      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode } = req.body;
+      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold } = req.body;
       await query(`
-        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, updated_at)
-        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17,'venv'), NOW())
+        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold, updated_at)
+        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17,'venv'), COALESCE($18, true), COALESCE($19, 90), COALESCE($20, 95), NOW())
         ON CONFLICT (id) DO UPDATE SET
           tenant_id             = $1,
           client_id             = $2,
@@ -47,6 +47,9 @@ function registerRoutes(app) {
           test_mode             = $15,
           writeback_odoo_notes  = $16,
           env_mode              = COALESCE($17, teams_settings.env_mode),
+          usage_gate_enabled       = COALESCE($18, teams_settings.usage_gate_enabled),
+          usage_gate_5h_threshold  = COALESCE($19, teams_settings.usage_gate_5h_threshold),
+          usage_gate_7d_threshold  = COALESCE($20, teams_settings.usage_gate_7d_threshold),
           updated_at            = NOW()
       `, [
         tenant_id || null, client_id || null, client_secret || null,
@@ -61,7 +64,11 @@ function registerRoutes(app) {
         test_mode ? true : false,
         writeback_odoo_notes ? true : false,
         // 只接受 venv／docker；未帶（舊前端）傳 null 由 COALESCE 保留現值，不誤清
-        env_mode === undefined ? null : (env_mode === 'docker' ? 'docker' : 'venv')
+        env_mode === undefined ? null : (env_mode === 'docker' ? 'docker' : 'venv'),
+        // 未帶（舊前端）傳 null 由 COALESCE 保留現值，不誤清；enabled 明確布林
+        usage_gate_enabled == null ? null : !!usage_gate_enabled,
+        usage_gate_5h_threshold != null ? parseInt(usage_gate_5h_threshold) : null,
+        usage_gate_7d_threshold != null ? parseInt(usage_gate_7d_threshold) : null
       ]);
       resetTokenCache();
       res.json({ ok: true });
