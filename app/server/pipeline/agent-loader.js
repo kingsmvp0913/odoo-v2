@@ -62,7 +62,7 @@ const NOTES_AGENTS = new Set([
 
 // chat 與 cs 共用的「技術客服調查能力」片段（cs-capability.md）：唯一真相來源，改一處兩邊生效。
 // 片段用 {{project_name}}／{{repo_paths}} 佔位，呼叫端 render 時須一併傳入這兩個真值。
-const CS_CAPABILITY_AGENTS = new Set(['chat', 'cs']);
+const CS_CAPABILITY_AGENTS = new Set(['chat']);
 const CS_CAPABILITY_MD_PATH = path.join(__dirname, 'cs-capability.md');
 let _csCapabilityCache = null;
 
