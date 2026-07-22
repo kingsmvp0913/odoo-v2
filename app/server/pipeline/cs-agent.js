@@ -67,6 +67,14 @@ async function runCsAgent(taskId, userId, signal) {
   }
 
   if (result.type === 'operation') {
+    // 把回覆也寫進時間軸（role='ai'），否則回覆只存在 cs_reply 欄、只在 cs_reply_pending 動作面板顯示，
+    // 任務一離開該狀態（→done）面板消失＝使用者再也看不到客服回答了什麼（與下方 vague 問題同理）。
+    if (result.reply) {
+      await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+        [taskId, `[客服回覆]\n${result.reply}`]
+      );
+    }
     await query(
       "UPDATE tasks SET status='cs_reply_pending', cs_reply=$2, updated_at=NOW() WHERE id=$1",
       [taskId, result.reply || '']

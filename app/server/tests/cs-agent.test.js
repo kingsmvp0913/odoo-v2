@@ -54,6 +54,16 @@ test('operation → cs_reply_pending with reply', async () => {
   expect(t.cs_reply).toContain('匯出');
 });
 
+// 意圖：operation 回覆也要寫進對話時間軸（role='ai'）。否則回覆只存在 cs_reply 欄、只在 cs_reply_pending
+// 動作面板顯示，任務一離開該狀態（→done）面板消失＝使用者再也看不到客服回答了什麼（與 vague 問題同理）。
+test('operation → 回覆寫進時間軸 task_logs（role=ai）', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"operation","reply":"請到設定 > 權限開啟該欄位"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask();
+  await runCsAgent(taskId, userId);
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('請到設定 > 權限開啟該欄位'))).toBe(true);
+});
+
 test('code_change_clear + 有專案 → analysis_running', async () => {
   mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({
