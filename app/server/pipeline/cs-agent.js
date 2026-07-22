@@ -14,16 +14,6 @@ async function runCsAgent(taskId, userId, signal) {
   if (!task) return;
   task.original_text = await assembleTaskContext(taskId);
 
-  let wikiContext = '';
-  if (task.project_id) {
-    // 分類任務只需知道專案有哪些主題，不需 wiki 全文（避免 wiki 隨任務累積讓每個工單分流成本線性膨脹，健檢 F）
-    const { rows: pages } = await query(
-      'SELECT title FROM wiki_pages WHERE project_id = $1 ORDER BY updated_at DESC LIMIT 20',
-      [task.project_id]
-    );
-    wikiContext = pages.map(p => `- ${p.title}`).join('\n');
-  }
-
   // 使用者先前輪次已補充的答案（cs-data-submit 寫入 task_logs）。cs-agent 重跑時
   // 必須帶入，否則看不到已回答內容 → 重複詢問 → cs_data_needed ↔ cs_running 鬼打牆。
   const { rows: priorAnswers } = await query(
@@ -32,12 +22,25 @@ async function runCsAgent(taskId, userId, signal) {
   );
   const answers = priorAnswers.length ? priorAnswers.map(l => l.content).join('\n\n') : '（尚無）';
 
+  // 技術客服能力片段需要 repo 路徑與專案名：此關尚未建 worktree，讀主 clone（唯讀）。
+  const { getProjectInfo } = require('./task-agent');
+  let projectName = '（未綁定專案）';
+  let repoPaths = '（無 repo，僅能查 wiki／正式區 DB／log）';
+  if (task.project_id) {
+    const info = await getProjectInfo(task.project_id).catch(() => null);
+    if (info) {
+      projectName = info.name;
+      if (info.repos.length) repoPaths = info.repos.map(r => `- ${r.local_path}`).join('\n');
+    }
+  }
+
   const agent = loadAgent('cs');
   const prompt = agent.render({
     title: task.title || '未命名',
     original_text: task.original_text || '（無詳細內容）',
-    wiki: wikiContext || '（無 wiki）',
-    answers
+    answers,
+    project_name: projectName,
+    repo_paths: repoPaths
   });
 
   let result = null;

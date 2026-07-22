@@ -8,7 +8,7 @@ const L = require('../pipeline/agent-loader');
 
 test('loadAgent 解析 frontmatter（model / stage / label）', () => {
   const a = L.loadAgent('cs');
-  expect(a.model).toBe('haiku'); // 健檢 F：cs 純分類降 haiku
+  expect(a.model).toBe('sonnet'); // cs 升級為可調查的技術客服
   expect(a.stage).toBe('cs');
   expect(a.label).toBe('客服');
   expect(typeof a.render).toBe('function');
@@ -186,9 +186,11 @@ describe('SOURCE_ROUTING_AGENTS 注入資料來源守則（填入已解析真值
     expect(out).toContain('diff master...task/9');             // base 依實際 repo（master），非硬打 main
   });
 
-  test('非碰碼關（cs）不注入守則', () => {
-    const out = loadAgent('cs').render({ title: 'T', original_text: 'x', wiki: 'y' });
-    expect(out).not.toContain('資料來源守則');
+  test('非碰碼關（cs）不注入 source-routing 守則，但注入技術客服能力片段', () => {
+    const out = loadAgent('cs').render({ title: 'T', original_text: 'x', answers: '（尚無）', project_name: 'P', repo_paths: '- /repos/p/idx' });
+    expect(out).not.toContain('資料來源守則');   // 非 SOURCE_ROUTING_AGENTS
+    expect(out).toContain('技術客服');            // 是 CS_CAPABILITY_AGENTS
+    expect(out).toContain('/repos/p/idx');        // repo 路徑填入
   });
 });
 

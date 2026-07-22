@@ -78,7 +78,7 @@ test('GET /api/admin/agents/:name → 含 prompt', async () => {
   const res = await request(app).get('/api/admin/agents/cs')
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(res.body.model).toBe('haiku'); // 健檢 F：cs 降 haiku
+  expect(res.body.model).toBe('sonnet'); // cs 升級為可調查的技術客服
   expect(res.body.prompt).toContain('客服');
 });
 

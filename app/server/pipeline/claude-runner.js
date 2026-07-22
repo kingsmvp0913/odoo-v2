@@ -13,6 +13,7 @@ const { killChildGracefully } = require('../lib/proc');
 const MCP_PROFILES = {
   analysis: 'context7.json', coding: 'context7.json',
   playwright: 'context7.json', qa: 'context7.json', reject_triage: 'context7.json', chat: 'context7.json',
+  cs: 'context7.json',
 };
 // context7 啟動策略：優先用本地依賴（node ＋ 執行期解析的絕對路徑）——npx -y 每次 spawn 都可能
 // 重新下載套件（冷啟動慢、離線直接失敗）。未安裝時退回原 npx 版 context7.json。
