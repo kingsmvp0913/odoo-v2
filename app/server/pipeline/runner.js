@@ -353,7 +353,8 @@ async function continuePipelineIfAdvanced(task) {
   try {
     const { rows: [cur] } = await query('SELECT status FROM tasks WHERE id = $1', [task.id]);
     if (cur && cur.status !== task.status && RUNNABLE_STATUSES.includes(cur.status)) {
-      await runPipeline(task.user_id);
+      // 自動接續下一關＝auto：閘門 blocked 時，讓當前這關跑完就停、不再自動接續（in-flight 跨完當關即停）
+      await runPipeline(task.user_id, { auto: true });
     }
   } catch (err) {
     console.error('[RUNNER] auto-continue error:', err.message);
@@ -401,7 +402,14 @@ async function mergeGateBlocked(task) {
 
 // 掃描該 user 可跑任務，在併發上限內派工（不 await 任務完成 → 下一 tick 隨槽位釋出續派）。
 // 取代舊的循序 for-loop ＋ loop_counter 節流（健檢 U8）。
-async function runPipeline(userId) {
+async function runPipeline(userId, { auto = false } = {}) {
+  // 用量閘門：只擋自動推進（cron／自動接續）。手動入口 auto:false，不查、不擋——
+  // 使用者自己點「繼續」自負用量後果。lazy require 避免非 auto 路徑載入用量模組（測試 hermetic）。
+  if (auto) {
+    const { getGateState } = require('./usage-gate');
+    const gate = await getGateState();
+    if (gate.blocked) return { dispatched: 0, blocked: true };
+  }
   if (_pipelineRunning.has(userId)) return { dispatched: 0 }; // 掃描鎖：防同 user 重複掃描
   _pipelineRunning.add(userId);
   try {

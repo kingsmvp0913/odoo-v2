@@ -8,6 +8,10 @@
  *   2) 準確：prompt 組裝正確（placeholder 全數替換、CLAUDE.md 規則注入、澄清/回饋確實帶入）。
  *   3) 省 token：resume 短 prompt 顯著小於全量 prompt、退回重跑升級 opus、feedback 蒸餾生效。
  */
+jest.mock('../pipeline/usage-gate', () => ({
+  getGateState: jest.fn().mockResolvedValue({ enabled: true, blocked: false }),
+  _resetForTesting: jest.fn()
+}));
 const os = require('os');
 const fs = require('fs');
 const path = require('path');

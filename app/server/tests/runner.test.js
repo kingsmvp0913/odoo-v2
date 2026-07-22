@@ -1,3 +1,7 @@
+jest.mock('../pipeline/usage-gate', () => ({
+  getGateState: jest.fn().mockResolvedValue({ enabled: true, blocked: false }),
+  _resetForTesting: jest.fn()
+}));
 const path = require('path');
 const { newDb } = require('pg-mem');
 

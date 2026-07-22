@@ -1,3 +1,7 @@
+jest.mock('../pipeline/usage-gate', () => ({
+  getGateState: jest.fn().mockResolvedValue({ enabled: true, blocked: false }),
+  _resetForTesting: jest.fn()
+}));
 const { newDb } = require('pg-mem');
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 // clarify_answered → coding_running 屬實際狀態推進，會被 auto-continue 串連派工到 coding_running

@@ -24,7 +24,7 @@ async function runForUser(userId, { skipPipeline = false } = {}) {
     if (total > 0) {
       notify.emitToUser(userId, 'task:synced', { count: total });
     }
-    if (!skipPipeline) await runPipeline(userId);
+    if (!skipPipeline) await runPipeline(userId, { auto: true });
   } catch (err) {
     console.error(`[CRON] user ${userId}:`, err.message);
   }
@@ -109,7 +109,7 @@ function startCron() {
           runForUser(user.id, { skipPipeline: testMode });
         } else if (!testMode) {
           // 每分鐘仍推進 pipeline（不同步）；cs 分類已由 runPipeline 接手 new 狀態
-          runPipeline(user.id)
+          runPipeline(user.id, { auto: true })
             .catch(err => console.error(`[CRON] pipeline user ${user.id}:`, err.message));
         }
       }
