@@ -34,4 +34,3 @@ stage: cs
 
 使用者已補充的資料（先前輪次的回答）：
 {{answers}}
-</content>
