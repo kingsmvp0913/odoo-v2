@@ -76,6 +76,31 @@ test('code_change_clear + 有專案 → analysis_running', async () => {
   expect(t.status).toBe('analysis_running');
 });
 
+// 意圖：cs 深入查證後判 clear 時，其初步定因 reason 要 (1) 寫進時間軸讓使用者看到「為何判定要改程式」
+// (2) 存 cs_findings 供分析關當待驗證線索，免得 cs 查過的根因被丟掉、分析從零重查（雙倍 token）。
+test('code_change_clear 帶 reason → 寫時間軸＋存 cs_findings，仍進分析', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reason":"按鈕 groups 漏資材主管群組，idx_maintenance.xml:159，設定無法解決"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: '指派評估設定', text: '指派評估如何設定' });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_findings FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('analysis_running');
+  expect(t.cs_findings).toContain('資材主管');
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('[客服判定：需改程式]') && l.content.includes('資材主管'))).toBe(true);
+});
+
+// fail-safe：model 沒吐 reason 時不得中斷——照舊進分析，cs_findings 留空，分析退回獨立重查（現況）
+test('code_change_clear 無 reason → 進分析、cs_findings 留空、不寫時間軸', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: 'Bug', text: 'crash' });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_findings FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('analysis_running');
+  expect(t.cs_findings).toBeNull();
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.length).toBe(0);
+});
+
 test('code_change_clear + 無專案 → stopped（需先綁定專案）', async () => {
   mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({ title: 'Bug', text: 'export crashes' });

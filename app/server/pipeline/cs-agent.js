@@ -110,9 +110,19 @@ async function runCsAgent(taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
   } else {
+    // code_change_clear：cs 已實查、reason 是初步定因。
+    // (1) 寫進時間軸（role='ai'），否則使用者只看到任務憑空跳進分析、不知道客服為何判定要改程式。
+    // (2) 存 cs_findings 供分析關當「待驗證線索」，免得 cs 查過的根因被丟掉、分析從零重查（雙倍 token）。
+    const reason = typeof result.reason === 'string' ? result.reason.trim() : '';
+    if (reason) {
+      await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+        [taskId, `[客服判定：需改程式]\n${reason}`]
+      );
+    }
     await query(
-      "UPDATE tasks SET status='analysis_running', updated_at=NOW() WHERE id=$1",
-      [taskId]
+      "UPDATE tasks SET status='analysis_running', cs_findings=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, reason || null]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'analysis_running' });
   }

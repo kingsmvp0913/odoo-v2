@@ -359,6 +359,7 @@ async function migrate() {
     { table: 'tasks', col: 'task_type',          sql: "ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT 'odoo'" },
     { table: 'tasks', col: 'cs_reply',           sql: 'ALTER TABLE tasks ADD COLUMN cs_reply TEXT' },
     { table: 'tasks', col: 'cs_question',        sql: 'ALTER TABLE tasks ADD COLUMN cs_question TEXT' },
+    { table: 'tasks', col: 'cs_findings',        sql: 'ALTER TABLE tasks ADD COLUMN cs_findings TEXT' },
     { table: 'tasks', col: 'deploy_retry_count',   sql: 'ALTER TABLE tasks ADD COLUMN deploy_retry_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'qa_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN qa_retry_count INTEGER DEFAULT 0' },
     { table: 'tasks', col: 'pw_retry_count',       sql: 'ALTER TABLE tasks ADD COLUMN pw_retry_count INTEGER DEFAULT 0' },

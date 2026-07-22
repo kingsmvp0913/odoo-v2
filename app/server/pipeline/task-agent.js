@@ -76,6 +76,7 @@ function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch, pro
       original_text: task.original_text || '（無內容）',
       task_id: task.task_id,
       clarification: clarification || '（無）',
+      cs_findings: task.cs_findings ? task.cs_findings.trim() : '（無）',
       project_notes: projectNotes || ''
     }).trim(),
     model: agent.model
@@ -116,7 +117,7 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch, pr
 
 async function runTaskAnalysis(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, cs_findings FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;

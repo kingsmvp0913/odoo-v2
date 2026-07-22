@@ -106,6 +106,36 @@ test('任務發起人未設 PAT → 停任務、blocker=git_cred', async () => {
   expect(after.blocker_content).toMatch(/PAT/);
 });
 
+// 意圖：cs 判 code_change_clear 時查過的初步定因（cs_findings）要帶進分析 prompt，讓分析從此起步、
+// 不必從零重查同一根因（省 token）；且必須標明「待驗證、勿直接採信」，避免分析盲信 cs 可能的錯判。
+test('cs_findings（客服初步定因）帶進分析 prompt 且標明待驗證', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  let captured = '';
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = {
+      write: (d) => { captured += d; },
+      end: () => { setImmediate(() => {
+        child.stdout.emit('data', JSON.stringify({ type: 'result', result: '<result>\ncase_id: "x"\nmodule: "idx_x"\n</result>', usage: null, duration_ms: 10 }) + '\n');
+        child.emit('close', 0);
+      }); }
+    };
+    return child;
+  });
+
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, cs_findings) VALUES ($1,'ta_csf','service','指派評估設定','指派評估如何設定','analysis_running',$2,$3) RETURNING id",
+    [userId, projectId, '按鈕 groups 漏資材主管群組，idx_maintenance.xml:159，設定無法解決']
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  expect(captured).toContain('按鈕 groups 漏資材主管群組');   // cs 定因進 prompt
+  expect(captured).toContain('待驗證');                      // 標明勿直接採信
+});
+
 test('coding retry：retry_feedback（上一輪失敗訊息）確實帶進 claude prompt，且用完清空', async () => {
   const { spawn } = require('child_process');
   const { EventEmitter } = require('events');

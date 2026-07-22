@@ -184,6 +184,13 @@ test('tasks 具有 stage_label / classification_label / has_attachment 欄位', 
   expect(cols).toContain('has_attachment');
 });
 
+test('migrate 加 tasks.cs_findings 欄位（cs 初步定因，供分析當待驗證線索）', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='tasks' AND column_name='cs_findings'"
+  );
+  expect(rows.length).toBe(1);
+});
+
 // 意圖：舊專案的備註頁都寫著出廠樣板文字（非空），若不清空會被 getProjectNotes 誤判「有內容」而
 // 把無意義樣板注入各關卡 prompt。migrate 一次性正規化：內容恰為舊樣板→清空；使用者已改的保留；可重跑。
 describe('migrate 正規化舊備註樣板', () => {
