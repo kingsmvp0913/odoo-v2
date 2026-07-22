@@ -156,7 +156,7 @@ function makeRender(body, rulesMode, includeDebug, includeSourceRouting, include
     // source-routing 用同一組 vars 填入已解析的 repo 路徑／分支，緊貼 body 上方（最貼近任務、最顯眼）
     if (includeSourceRouting) out = `${fillPlaceholders(loadSourceRouting(), vars)}\n\n${out}`;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
-    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 備註 → debug → sourcerouting → body。
+    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 備註 → debug → sourcerouting → csCapability → body。
     // 空／未傳不注入，維持與現況一致的 cache 前綴。
     if (includeNotes && vars && vars.project_notes && String(vars.project_notes).trim()) {
       out = `# 專案備註（人工維護，優先遵循）\n\n${String(vars.project_notes).trim()}\n\n${out}`;
