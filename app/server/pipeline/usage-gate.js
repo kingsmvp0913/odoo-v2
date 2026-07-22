@@ -9,7 +9,7 @@ async function getGateState() {
       'SELECT usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold FROM teams_settings WHERE id=1'
     );
     s = rows[0] || {};
-  } catch { /* 讀不到設定＝視為預設啟用（下方 default） */ }
+  } catch { /* 讀不到設定＝視為預設啟用（下方 default），config 讀取失敗故意 fail-closed 保護，不悄悄關閉閘門 */ }
 
   const enabled = s.usage_gate_enabled != null ? !!s.usage_gate_enabled : true;
   const th5 = s.usage_gate_5h_threshold ?? 90;
@@ -74,10 +74,12 @@ async function _sendGateNotification(state) {
 async function evaluateAndNotify() {
   const state = await getGateState();
   const nowBlocked = !!state.blocked;
-  if (nowBlocked && !_lastBlocked) {
-    await _sendGateNotification(state);
-  }
+  const wasBlocked = _lastBlocked;
   _lastBlocked = nowBlocked;
+  if (nowBlocked && !wasBlocked) {
+    // fire-and-forget：慢／卡住的 Teams 或 webhook 呼叫不得讓 cron tick 卡死
+    _sendGateNotification(state).catch(() => {});
+  }
   return state;
 }
 

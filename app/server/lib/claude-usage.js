@@ -42,7 +42,8 @@ async function fetchUsage() {
       Authorization: `Bearer ${token}`,
       'anthropic-beta': 'oauth-2025-04-20',
       'Content-Type': 'application/json'
-    }
+    },
+    signal: AbortSignal.timeout(10000)
   });
   if (!res.ok) throw new Error(`usage api ${res.status}`);
   return res.json();
@@ -72,7 +73,9 @@ async function getUsage() {
       cache = { at: Date.now(), data: stale };
       return stale;
     }
-    return { available: false, error: err.message };
+    const data = { available: false, error: err.message };
+    cache = { at: Date.now(), data };
+    return data;
   }
 }
 
