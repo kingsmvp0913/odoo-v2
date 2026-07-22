@@ -44,8 +44,43 @@ async function getGateState() {
   };
 }
 
-// 邊緣通知的狀態（Task 6 填內容），此處先建立以固定介面
 let _lastBlocked = false;
+
+function _gateMessage(state) {
+  const r = state.reason || {};
+  const win = r.window === '5h' ? '5 小時視窗' : '本週';
+  const staleNote = r.stale ? '（用量資料為快取，可能不是最新）' : '';
+  return `Claude 用量閘門觸發：${win}用量 ${r.current}% 已達門檻 ${r.threshold}%，暫停自動推進任務${staleNote}。重置時間：${r.resets_at || '未知'}。`;
+}
+
+async function _sendGateNotification(state) {
+  const msg = _gateMessage(state);
+  const payload = { type: 'usage_gate_blocked', message: msg, reason: state.reason };
+  // socket 廣播（管理員在線即時看到）
+  try { require('../notify').emitAll('usage-gate:changed', { blocked: true, reason: state.reason }); } catch { /* 通知不影響閘門 */ }
+  // 外部 webhook（離線出口）
+  try { await require('../notify-webhook').sendWebhook(null, payload); } catch { /* best-effort */ }
+  // Teams（若已設定）
+  try {
+    const teams = require('../teams');
+    const settings = await teams.getSettings();
+    if (teams.isConfigured(settings)) {
+      await teams.sendChannelMessage(settings, `<p><strong>⏸ ${msg}</strong></p>`);
+    }
+  } catch { /* best-effort */ }
+}
+
+// cron 每 tick 呼叫一次：偵測 false→true 邊緣只發一次，避免每分鐘重複轟炸。
+async function evaluateAndNotify() {
+  const state = await getGateState();
+  const nowBlocked = !!state.blocked;
+  if (nowBlocked && !_lastBlocked) {
+    await _sendGateNotification(state);
+  }
+  _lastBlocked = nowBlocked;
+  return state;
+}
+
 function _resetForTesting() { _lastBlocked = false; }
 
-module.exports = { getGateState, _resetForTesting };
+module.exports = { getGateState, evaluateAndNotify, _resetForTesting };

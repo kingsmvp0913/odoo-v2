@@ -269,13 +269,15 @@ async function notifyQuestion(taskId) {
   }, token);
 }
 
-async function sendTestMessage(settings) {
+async function sendChannelMessage(settings, html) {
   const token = await getAccessToken(settings);
   const path = `/teams/${settings.team_id}/channels/${settings.channel_id}/messages`;
-  const result = await graphPost(path, {
-    body: { contentType: 'html', content: '<p><strong>✅ Teams 整合測試成功！</strong></p><p>odoo-v2 已成功連線至此頻道。</p>' }
-  }, token);
+  const result = await graphPost(path, { body: { contentType: 'html', content: html } }, token);
   return result?.id;
+}
+
+async function sendTestMessage(settings) {
+  return sendChannelMessage(settings, '<p><strong>✅ Teams 整合測試成功！</strong></p><p>odoo-v2 已成功連線至此頻道。</p>');
 }
 
 // --- Notification Queue ---
@@ -303,4 +305,4 @@ function enqueue(type, taskId) {
   setImmediate(_drain); // returns immediately; pipeline never waits
 }
 
-module.exports = { enqueue, sendTestMessage, resetTokenCache, isConfigured, getSettings, selectQuestions };
+module.exports = { enqueue, sendTestMessage, sendChannelMessage, resetTokenCache, isConfigured, getSettings, selectQuestions };

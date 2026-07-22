@@ -93,6 +93,12 @@ function startCron() {
       const serviceMs = (intervals.service_sync_interval || 60) * 60000;
       const testMode  = !!intervals.test_mode;
 
+      // 用量閘門：每 tick 評估一次，未 blocked→blocked 的邊緣發一次通知（旁路，失敗只記 log）
+      try {
+        const { evaluateAndNotify } = require('./pipeline/usage-gate');
+        await evaluateAndNotify();
+      } catch (err) { console.error('[CRON] usage-gate:', err.message); }
+
       // Only sync if at least one source is enabled
       if (!odooMs && !serviceMs) return;
 
