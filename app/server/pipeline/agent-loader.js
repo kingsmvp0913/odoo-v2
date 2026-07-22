@@ -60,6 +60,20 @@ const NOTES_AGENTS = new Set([
   'chat', 'chat-to-task'
 ]);
 
+// chat 與 cs 共用的「技術客服調查能力」片段（cs-capability.md）：唯一真相來源，改一處兩邊生效。
+// 片段用 {{project_name}}／{{repo_paths}} 佔位，呼叫端 render 時須一併傳入這兩個真值。
+const CS_CAPABILITY_AGENTS = new Set(['chat', 'cs']);
+const CS_CAPABILITY_MD_PATH = path.join(__dirname, 'cs-capability.md');
+let _csCapabilityCache = null;
+
+function loadCsCapability() {
+  const stat = fs.statSync(CS_CAPABILITY_MD_PATH);
+  if (_csCapabilityCache && _csCapabilityCache.mtimeMs === stat.mtimeMs) return _csCapabilityCache.text;
+  const text = fs.readFileSync(CS_CAPABILITY_MD_PATH, 'utf8').trim();
+  _csCapabilityCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
 // name → { mtimeMs, agent }
 const _cache = new Map();
 // CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
@@ -134,9 +148,11 @@ function fillPlaceholders(text, vars) {
   });
 }
 
-function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes) {
+function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability) {
   return vars => {
     let out = fillPlaceholders(body, vars);
+    // 技術客服能力片段：緊貼 body 上方（最內層、最貼近該關輸出契約）
+    if (includeCsCapability) out = `${fillPlaceholders(loadCsCapability(), vars)}\n\n${out}`;
     // source-routing 用同一組 vars 填入已解析的 repo 路徑／分支，緊貼 body 上方（最貼近任務、最顯眼）
     if (includeSourceRouting) out = `${fillPlaceholders(loadSourceRouting(), vars)}\n\n${out}`;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
@@ -170,7 +186,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;
@@ -209,6 +225,7 @@ function promptVersion(name) {
   const agent = loadAgent(name);
   const mode = CLAUDE_MD_AGENTS.get(name) || false;
   let s = agent.body;
+  if (CS_CAPABILITY_AGENTS.has(name)) s = `${loadCsCapability()}\n\n${s}`;
   if (SOURCE_ROUTING_AGENTS.has(name)) s = `${loadSourceRouting()}\n\n${s}`;
   if (DEBUG_AGENTS.has(name)) s = `${loadDebugMethodology()}\n\n${s}`;
   if (mode === 'full') s = `${loadPipelineRules()}\n\n${s}`;

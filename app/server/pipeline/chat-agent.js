@@ -16,10 +16,17 @@ async function chatReply(projectId, chatId, userMessage, userId) {
   const { rows: projRows } = await query('SELECT name FROM projects WHERE id = $1', [projectId]);
   const projectName = projRows[0]?.name || String(projectId);
 
+  const { getProjectInfo } = require('./task-agent');
+  const info = await getProjectInfo(projectId).catch(() => null);
+  const repoPaths = info && info.repos.length
+    ? info.repos.map(r => `- ${r.local_path}`).join('\n')
+    : '（無 repo，僅能查 wiki／正式區 DB／log）';
+
   const agent = loadAgent('chat');
   const projectNotes = await getProjectNotes(projectId).catch(() => null);
   const prompt = agent.render({
     project_name: projectName,
+    repo_paths: repoPaths,
     history: historyText ? '\n\n[對話歷史]\n' + historyText : '',
     user_message: userMessage,
     project_notes: projectNotes || ''

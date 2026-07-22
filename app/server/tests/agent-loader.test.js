@@ -192,6 +192,22 @@ describe('SOURCE_ROUTING_AGENTS 注入資料來源守則（填入已解析真值
   });
 });
 
+// 意圖：技術客服能力（cs-capability）是 chat 與 cs 的共用真相來源——兩者 render 都要注入，
+// 且 {{project_name}}／{{repo_paths}} 被真正填入（chat/cs 才查得到 repo、curl 得到 wiki）。
+describe('CS_CAPABILITY_AGENTS 注入技術客服能力片段', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+
+  test('chat render 含能力片段，且填入 project_name 與 repo 路徑', () => {
+    const out = loadAgent('chat').render({
+      project_name: '鴻久', repo_paths: '- /repos/hj/idx_sale',
+      history: '', user_message: '預計售價權限在哪'
+    });
+    expect(out).toContain('技術客服');                 // 片段 persona
+    expect(out).toContain('/ai/wiki/pages?project=鴻久'); // project_name 填入 curl 指引
+    expect(out).toContain('/repos/hj/idx_sale');        // repo 路徑填入
+  });
+});
+
 // 意圖（token 效率）：QA 是唯讀審查者——只注入審查相關段落（§1 Odoo Constraints＋§2 Python Constraints＋Rule 12），
 // Hard Rules 的寫入規範／前端配色／log 路徑對它無作用卻每輪照付 token。
 // Python 規則（round()→台灣四捨五入）是財務正確性把關，拆成獨立 §2 後仍須進 QA。
@@ -261,11 +277,11 @@ describe('NOTES_AGENTS 注入專案備註（人工維護，優先遵循）', () 
 
   test('chat（無規則／debug）→ 備註直接 prepend 在 body 前', () => {
     const out = loadAgent('chat').render({
-      project_name: 'P', history: '', user_message: '你好', project_notes: '窗口 Amy'
+      project_name: 'P', repo_paths: '- /repos/x', history: '', user_message: '你好', project_notes: '窗口 Amy'
     });
     expect(out).toContain(NOTES_HEADER);
     expect(out).toContain('窗口 Amy');
-    expect(out.indexOf(NOTES_HEADER)).toBeLessThan(out.indexOf('你是本專案的排障助理'));
+    expect(out.indexOf(NOTES_HEADER)).toBeLessThan(out.indexOf('以下是使用者在本專案的排障對話'));
   });
 
   test('chat-to-task 有備註 → 注入', () => {
