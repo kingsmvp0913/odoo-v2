@@ -353,6 +353,37 @@ test('POST /api/tasks → 401 無 token', async () => {
   expect(res.status).toBe(401);
 });
 
+test('POST /api/tasks 夾帶附件 → 建立 manual 附件並設 has_attachment', async () => {
+  const res = await request(app).post('/api/tasks')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('title', '附檔任務')
+    .field('original_text', '需求描述')
+    .attach('files', Buffer.from('fake-image-bytes'), 'req.png');
+  expect(res.status).toBe(201);
+  expect(res.body.source).toBe('manual');
+
+  const { rows: atts } = await dbModule.query(
+    "SELECT origin, filename FROM task_attachments WHERE task_id = $1", [res.body.id]
+  );
+  expect(atts.length).toBe(1);
+  expect(atts[0].origin).toBe('manual');
+  expect(atts[0].filename).toBe('req.png');
+
+  const { rows: [t] } = await dbModule.query(
+    "SELECT has_attachment FROM tasks WHERE id = $1", [res.body.id]
+  );
+  expect(t.has_attachment).toBe(true);
+});
+
+test('POST /api/tasks 超過檔案數量限制 → 400', async () => {
+  let req = request(app).post('/api/tasks')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('title', '太多檔案');
+  for (let i = 0; i < 6; i++) req = req.attach('files', Buffer.from('x'), `f${i}.txt`);
+  const res = await req;
+  expect(res.status).toBe(400);
+});
+
 // 意圖：任務進 pipeline 前（new）可修正需求內容；一旦分析/開發已依原內容展開就不再允許改，避免內容與已產出的分析/程式碼脫節
 test('PUT /api/tasks/:id → status=new 時可修改 original_text', async () => {
   const { rows: [t] } = await dbModule.query(

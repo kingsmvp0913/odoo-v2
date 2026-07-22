@@ -138,7 +138,8 @@ function registerRoutes(app) {
   });
 
   // Manually create a task → enters pipeline as 'new'（立刻觸發 triage，不等下一輪排程）
-  app.post('/api/tasks', verifyToken, async (req, res) => {
+  // 掛 uploadMessageFiles：新增任務可夾帶附件（origin='manual'），純 JSON 呼叫仍相容（multer 放行、req.files 空）
+  app.post('/api/tasks', verifyToken, uploadMessageFiles, async (req, res) => {
     try {
       const { title, original_text, project_id } = req.body || {};
       if (!title || !String(title).trim()) {
@@ -151,6 +152,19 @@ function registerRoutes(app) {
          RETURNING id, task_id, source, title, status, project_id, created_at, updated_at`,
         [req.userId, taskId, String(title).trim(), original_text || '', project_id || null]
       );
+      const newId = rows[0].id;
+      // 附件先落地再跑 pipeline：分診/分析經 assembleTaskContext 讀 task_attachments，須在觸發前寫入
+      for (const file of req.files || []) {
+        const relPath = saveAttachmentFile(newId, file.originalname, file.buffer);
+        await query(
+          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, 'manual')`,
+          [newId, file.originalname, file.mimetype, relPath]
+        );
+      }
+      if ((req.files || []).length) {
+        await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [newId]);
+      }
       runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.status(201).json(rows[0]);
     } catch (err) {
