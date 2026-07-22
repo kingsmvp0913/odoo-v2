@@ -7,8 +7,11 @@
 //
 // 與既有 lib/vpn-gateway.js 相同：平台已依賴 docker（VPN gateway 已用 Linux 容器），故不新增基礎設施。
 
-const { spawn } = require('child_process');
+const { spawn, execFileSync: realExecFileSync } = require('child_process');
 const path = require('path');
+
+// Docker Desktop（Windows）自動啟動的等待上限（秒）：冷啟動 Linux engine 常要 30~90 秒，放寬到 120 秒。
+const DOCKER_START_TIMEOUT_SEC = 120;
 
 // 官方 odoo image 內建核心 addons 目錄。傳 --addons-path 會「覆寫」image 的 odoo.conf 預設，
 // 故必須把核心 addons 顯式列回，否則 base 都找不到。可用 env 覆寫以因應 image 版本差異（實機首跑檢查點）。
@@ -79,9 +82,25 @@ function mountFlags(mounts) {
   return out;
 }
 
-// odoo 一律要帶的 DB 與 addons 參數（-d、--addons-path 含核心、已 remap 的 db 連線）；run/one-shot 共用。
+// odoo 一律要帶的 DB 與 addons 參數（-d、--addons-path 含核心、已 remap 的 db 連線）；exec 路徑用
+// （docker exec 不走 image entrypoint，CLI --db_* 直接生效）。run 路徑改走 dbEnvFlags，見下。
 function odooDbAddonsArgs({ dbName, mounts = [], dbArgs = [] }) {
   return ['-d', dbName, '--addons-path', containerAddonsPath(mounts), ...remapDbHostForContainer(dbArgs)];
+}
+
+// 把 odoo db CLI 參數（--db_host/port/user/password，localhost 已 remap）轉成官方 odoo image 的
+// entrypoint 認得的環境變數旗標（-e HOST=... 等）。docker run 專用：entrypoint 會依這組 env 在使用者
+// 參數「後面」補一組 --db_host/... ，若我們仍走 CLI 傳，會被那組覆蓋（Odoo 參數重複時後者勝，見
+// /entrypoint.sh）。故 run 的連線一律改用 env，讓 entrypoint 產生正確連線。
+function dbEnvFlags(dbArgs = []) {
+  const remapped = remapDbHostForContainer(dbArgs);
+  const map = { '--db_host': 'HOST', '--db_port': 'PORT', '--db_user': 'USER', '--db_password': 'PASSWORD' };
+  const out = [];
+  for (let i = 0; i < remapped.length - 1; i++) {
+    const envName = map[remapped[i]];
+    if (envName) out.push('-e', `${envName}=${remapped[i + 1]}`);
+  }
+  return out;
 }
 
 // 組「常駐 server」的 `docker run -d ...`（純函式，供單測逐項驗證）。
@@ -94,9 +113,11 @@ function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [
     '--add-host', 'host.docker.internal:host-gateway',
     '-p', `${host || '127.0.0.1'}:${port}:8069`,
     ...mountFlags(mounts),
+    // DB 連線走 entrypoint env（見 dbEnvFlags）；-d／--addons-path 仍走 CLI（entrypoint 不碰）。
+    ...dbEnvFlags(dbArgs),
     image, 'odoo',
     '--http-port=8069', '--http-interface=0.0.0.0',
-    ...odooDbAddonsArgs({ dbName, mounts, dbArgs }),
+    '-d', dbName, '--addons-path', containerAddonsPath(mounts),
     ...serverArgs,
   ];
 }
@@ -141,6 +162,41 @@ async function dockerAvailable(deps = {}) {
   return code === 0;
 }
 
+// 同步版 daemon 檢查（供 ensureDockerRunning 的輪詢用；execFileSync 可注入 mock）。
+function isDockerDaemonUp(execFileSync) {
+  try {
+    execFileSync('docker', ['info'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Docker Desktop（Windows）裝好但引擎沒啟動時，背景幫使用者把引擎起來，省得每次操作都要
+// 先手動開 Docker Desktop。用官方 `docker desktop start`：背景起引擎、不跳 GUI 視窗，且不帶
+// -d 時會同步等到引擎就緒才回（--timeout 設上限）；比啟動 Docker Desktop.exe 乾淨（不開視窗、
+// 不需寫死安裝路徑）。非 Windows（如未來的共用 Linux 主機，Docker 通常已是常駐服務）直接回錯，
+// 交由環境本身管理 daemon 生命週期。daemon 已在跑則直接回、不啟動。
+async function ensureDockerRunning(deps = {}) {
+  const execFileSync = deps.execFileSync || realExecFileSync;
+  const platform = deps.platform || process.platform;
+
+  if (isDockerDaemonUp(execFileSync)) return;
+
+  if (platform !== 'win32') {
+    throw new Error('Docker 引擎未啟動，請手動啟動 Docker 服務');
+  }
+
+  try {
+    execFileSync('docker', ['desktop', 'start', '--timeout', String(DOCKER_START_TIMEOUT_SEC)], { stdio: 'ignore' });
+  } catch {
+    // start 指令失敗／逾時／舊版無此子指令 → 下方再確認一次 daemon，仍不通就回報清楚錯誤
+  }
+
+  if (isDockerDaemonUp(execFileSync)) return;
+  throw new Error('Docker 引擎啟動逾時，請手動確認 Docker Desktop');
+}
+
 // image 是否已存在本機。
 async function imageExists(tag, deps = {}) {
   const { code, stdout } = await runDocker(['images', '-q', tag], deps);
@@ -183,13 +239,20 @@ async function runContainer(opts, deps = {}) {
 // 與常駐 server 併行、連同一宿主 DB。odooArgs 為 odoo 之後的參數；本函式補 odoo 與 db/addons 參數。
 // interactive+input 供 odoo shell 讀 stdin 腳本。回傳 { code, stdout, stderr }（原樣供呼叫端解析）。
 async function execOdoo({ container, dbName, dbArgs = [], mounts = [], odooArgs = [], interactive = false, env = {} }, io = {}) {
-  const argv = ['odoo', ...odooDbAddonsArgs({ dbName, mounts, dbArgs }), ...odooArgs];
+  // odoo 子指令（如 shell）必須緊接在 odoo 之後、排在 db/addons 參數之前；否則 odoo 走預設 server 指令、
+  // 把子指令當多餘位置參數而報 "unrecognized parameters: 'shell'"。開頭非 '-' 者即視為子指令，提到最前。
+  const hasSubcmd = odooArgs.length > 0 && !String(odooArgs[0]).startsWith('-');
+  const subcmd = hasSubcmd ? [odooArgs[0]] : [];
+  const rest = hasSubcmd ? odooArgs.slice(1) : odooArgs;
+  const argv = ['odoo', ...subcmd, ...odooDbAddonsArgs({ dbName, mounts, dbArgs }), ...rest];
   return runDocker(buildExecArgs({ container, argv, interactive, env }), io);
 }
 
 // 在容器內以 root 補裝 Python 套件（自訂模組宣告的相依，image 未內建）。pkgs 已由呼叫端過白名單。
 async function execPipInstall(container, pkgs, io = {}) {
-  const argv = ['python', '-m', 'pip', 'install', '--', ...pkgs];
+  // 官方 odoo image（Debian 與 Ubuntu 皆然）只有 python3、沒有 python 別名——用 python 會 not found、
+  // 導致自訂模組宣告的相依全部裝不進去、模組 import 時 ModuleNotFoundError。
+  const argv = ['python3', '-m', 'pip', 'install', '--', ...pkgs];
   return runDocker(buildExecArgs({ container, argv, user: 'root' }), io);
 }
 
@@ -210,9 +273,10 @@ async function containerLogs(name, { tail = 2000 } = {}, deps = {}) {
 module.exports = {
   // 純函式（單測用）
   imageTagFor, majorDigits, containerNameFor, remapDbHostForContainer, addonsMounts,
-  containerAddonsPath, odooDbAddonsArgs, buildRunArgs, buildExecArgs,
+  containerAddonsPath, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs,
   // 低階 IO
-  runDocker, dockerAvailable, imageExists, containerExists, containerRunning,
+  runDocker, dockerAvailable, isDockerDaemonUp, ensureDockerRunning,
+  imageExists, containerExists, containerRunning,
   // 生命週期
   ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, containerLogs,
   // 常數

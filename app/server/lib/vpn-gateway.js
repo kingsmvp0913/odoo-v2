@@ -1,16 +1,14 @@
-const { execFileSync: realExecFileSync, spawn: realSpawn } = require('child_process');
+const { execFileSync: realExecFileSync } = require('child_process');
 const realFs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
+// Docker daemon 沒起時自動啟動 Docker Desktop 的邏輯已上移到通用驅動層 docker-env，兩邊共用一份。
+const { ensureDockerRunning } = require('./docker-env');
 
 const IMAGE_NAME = 'odoo-v2-vpn-gateway:latest';
 const GATEWAY_TIMEOUT_MS = 25000;
 const POLL_INTERVAL_MS = 1000;
-
-const DOCKER_START_TIMEOUT_MS = 90000;
-const DOCKER_POLL_INTERVAL_MS = 3000;
-const DOCKER_DESKTOP_EXE = 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe';
 
 const PORT_RANGE_START = 11000;
 const PORT_RANGE_END = 11999;
@@ -39,48 +37,6 @@ function isContainerRunning(name, execFileSync) {
   } catch {
     return false;
   }
-}
-
-function isDockerDaemonUp(execFileSync) {
-  try {
-    execFileSync('docker', ['info'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Docker Desktop（Windows）裝好但引擎沒啟動時，背景幫使用者開起來再輪詢等待，
-// 省得每次查詢都要先手動開 Docker Desktop。非 Windows（如未來的共用 Linux 主機，
-// Docker 通常已是常駐服務）直接回錯，交由環境本身管理 daemon 生命週期。
-async function ensureDockerRunning(deps = {}) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
-  const spawn = deps.spawn || realSpawn;
-  const sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const platform = deps.platform || process.platform;
-
-  if (isDockerDaemonUp(execFileSync)) return;
-
-  if (platform !== 'win32') {
-    throw new Error('Docker 引擎未啟動，請手動啟動 Docker 服務');
-  }
-
-  try {
-    const child = spawn(DOCKER_DESKTOP_EXE, [], { detached: true, stdio: 'ignore' });
-    // spawn 的 ENOENT（Docker Desktop 未裝／路徑不符）是非同步 'error' 事件，try/catch 攔不到——
-    // 無 handler 會變 uncaughtException 拖垮整個 server。吞掉即可，下方輪詢逾時會回報清楚錯誤。
-    child.once('error', () => {});
-    child.unref();
-  } catch {
-    // 啟動失敗就繼續輪詢，逾時後統一回報清楚錯誤
-  }
-
-  const maxAttempts = Math.ceil(DOCKER_START_TIMEOUT_MS / DOCKER_POLL_INTERVAL_MS);
-  for (let i = 0; i < maxAttempts; i++) {
-    await sleep(DOCKER_POLL_INTERVAL_MS);
-    if (isDockerDaemonUp(execFileSync)) return;
-  }
-  throw new Error('Docker 引擎啟動逾時，請手動確認 Docker Desktop');
 }
 
 function defaultWaitForPort(port, timeoutMs) {

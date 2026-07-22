@@ -24,13 +24,17 @@ function registerRoutes(app) {
           env.url = null;
         }
       }
-      // built = 環境目錄已完整建置（.ready 標記存在），前端據此顯示「重新啟動」而非「一鍵建立環境」
+      // built = 環境目錄已完整建置，前端據此顯示「重新啟動」而非「一鍵建立環境」、並顯示「同步使用者」。
+      // venv 模式標記為 .ready、docker 模式為 .docker-ready（見 env-agent），任一存在即視為已建置。
       try {
         const fs = require('fs');
         const { ENV_BASE: base } = require('./pipeline/env-agent');
         const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
         const dirName = project ? (project.folder_name || project.name) : null;
-        env.built = !!(dirName && fs.existsSync(path.join(base, dirName, '.ready')));
+        env.built = !!(dirName && (
+          fs.existsSync(path.join(base, dirName, '.ready')) ||
+          fs.existsSync(path.join(base, dirName, '.docker-ready'))
+        ));
       } catch { env.built = false; }
       res.json(env);
     } catch (err) { res.status(500).json({ error: err.message }); }

@@ -10,11 +10,31 @@ FROM odoo:${ODOO_MAJOR}
 # 裝 chromium 需 root（官方 image 預設以 odoo user 執行）；裝完切回 odoo user。
 USER root
 
-# chromium：Debian 套件提供 /usr/bin/chromium，Odoo tests/common.py 的 ChromeBrowser 會自動偵測到。
-# 一併裝字型，避免 headless 截圖/測試因缺字型出錯。--no-install-recommends 控制 image 體積。
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
+# 瀏覽器（E2E tour HttpCase 用）＋字型。Odoo tests/common.py 的 ChromeBrowser 會自動偵測 chromium。
+# 兩個「隨版本而變」的坑，都用「先試、失敗才補救」自我適應，免逐版寫死：
+#  (1) apt 來源：舊 odoo 的 base（13/14=Debian buster）在 Debian 停止支援後套件庫從 deb.debian.org 移到
+#      archive.debian.org，直接 apt-get update 會 404。故先照常試，失敗才改指 archive、關過期檢查重試；
+#      新版 base（Debian bookworm／Ubuntu）不受影響。
+#  (2) 瀏覽器：odoo 舊版 base 是 Debian（有 chromium apt 套件）；新版（17+）改 Ubuntu base——Ubuntu 的
+#      chromium 只出 snap、apt「no installation candidate」裝不起來。故先試 chromium（Debian）；裝不起來
+#      （Ubuntu）改裝 Google Chrome 官方 .deb，並 symlink 成 chromium 讓 Odoo 偵測得到。
+RUN set -eux; \
+    if ! apt-get update; then \
+        sed -i 's/deb\.debian\.org/archive.debian.org/g; s/security\.debian\.org/archive.debian.org/g' /etc/apt/sources.list; \
+        sed -i '/-updates/d' /etc/apt/sources.list; \
+        apt-get -o Acquire::Check-Valid-Until=false update; \
+    fi; \
+    apt-get install -y --no-install-recommends fonts-liberation fonts-noto-cjk ca-certificates; \
+    if apt-get install -y --no-install-recommends chromium; then \
+        :; \
+    else \
+        apt-get install -y --no-install-recommends wget; \
+        wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; \
+        apt-get install -y --no-install-recommends /tmp/chrome.deb; \
+        rm -f /tmp/chrome.deb; \
+        ln -sf /usr/bin/google-chrome-stable /usr/local/bin/chromium; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
 
 # tour 在容器內多以 root 相關限制跑 chromium，常需 --no-sandbox；提供給 Odoo 偵測（若該版本支援）。
 ENV CHROME_FLAGS="--no-sandbox --headless=new --disable-gpu"

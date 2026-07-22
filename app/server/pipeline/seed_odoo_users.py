@@ -14,8 +14,21 @@ Users = env['res.users'].with_context(no_reset_password=True)
 # 同時相容 ≤18（groups_id）與 19+（group_ids）。
 group_field = 'group_ids' if 'group_ids' in Users._fields else 'groups_id'
 
-# 確保繁體中文已啟用（載入語言包後才能將 user 語言設為 zh_TW）
-env['res.lang']._activate_lang('zh_TW')
+# 確保繁體中文已啟用（載入語言包後才能將 user 語言設為 zh_TW）。_activate_lang 為 Odoo 14+ API；
+# Odoo 13 沒有，會丟 AttributeError 讓整支 seed 中止＝同步使用者失敗。13 建置時已 --load-language=zh_TW
+# 載入，只需確保該語言 active（沒載過才走安裝精靈）；失敗不致命，不阻斷後續 user 建立。
+Lang = env['res.lang']
+if hasattr(Lang, '_activate_lang'):
+    Lang._activate_lang('zh_TW')
+else:
+    try:
+        existing = Lang.with_context(active_test=False).search([('code', '=', 'zh_TW')], limit=1)
+        if existing:
+            existing.active = True
+        else:
+            env['base.language.install'].create({'lang': 'zh_TW', 'overwrite': False}).lang_install()
+    except Exception as e:
+        print('SEED_LANG_WARN', e)
 
 seeded = 0
 for u in users:
