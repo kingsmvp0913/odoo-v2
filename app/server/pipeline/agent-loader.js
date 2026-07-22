@@ -89,18 +89,20 @@ function loadPipelineRules() {
   return text;
 }
 
-// QA 精簡規則：只取「§1 Odoo Constraints」全文＋「Rule 12 fail-loud」段落。
+// QA 精簡規則：只取「§1 Odoo Constraints」＋「§2 Python Constraints」全文＋「Rule 12 fail-loud」段落。
 // QA 是唯讀審查者，Hard Rules／Edit Protocol／前端規範對它無作用卻每輪照付 token。
 let _qaRulesCache = null;
 function loadQaRules() {
   const stat = fs.statSync(CLAUDE_MD_PATH);
   if (_qaRulesCache && _qaRulesCache.mtimeMs === stat.mtimeMs) return _qaRulesCache.text;
   const full = loadPipelineRules();
-  const sec = full.match(/## 1\. Odoo Constraints[\s\S]*?(?=\n## |$)/);
+  const odoo = full.match(/## 1\. Odoo Constraints[\s\S]*?(?=\n## |$)/);
+  const python = full.match(/## 2\. Python Constraints[\s\S]*?(?=\n## |$)/);
   const rule12 = full.match(/\*\*Rule 12[^\n]*[\s\S]*?(?=\n\n|$)/);
   const text = [
     '# 審查依據（節錄自專案 CLAUDE.md）',
-    sec ? sec[0].trim() : '',
+    odoo ? odoo[0].trim() : '',
+    python ? python[0].trim() : '',
     rule12 ? rule12[0].trim() : ''
   ].filter(Boolean).join('\n\n');
   _qaRulesCache = { mtimeMs: stat.mtimeMs, text };

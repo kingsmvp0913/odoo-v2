@@ -24,17 +24,20 @@ When the user types `/platformDB`, invoke the Skill tool with `skill: "platformD
 ## 1. Odoo Constraints
 - Models: `_inherit`. Views: `inherit_id` + `xpath`. Controllers: `super()`.
 - 無法透過標準 Odoo 擴充達成 → 明確向使用者說明，不要硬幹或繞過。
-- Commit: `[Module]: Why (not what)`. File edit: `@Path | Anchor | Action`.
 - Views XML 命名：`<model>_views.xml`；同一 Model 只能有一個 view 檔案。
 - View 繼承：同一 addons 若已繼承某原生 view，新增內容直接寫入該繼承 view，禁止另建第二個繼承。
 - 新建 module（addon）命名一律以 `idx_` 開頭（例：`idx_sale_note`）；沿用既有 module 時不改名。
+- 新建 module 的 `__manifest__.py` 欄位慣例：`name` 以小寫 `idx` 直接接中文顯示名（無空格、無底線，例：資料夾 `idx_hj` → `name = 'idx維修'`）；`summary`、`description` 一律中文；`author` 固定 `'IDX'`。沿用既有 module 時不改。
 - Models 命名：一個 Model 一個 `.py` 檔；單頭＋明細單據（如 `sale.order` + `sale.order.line`）合併，以單頭為檔名（`sale_order.py`）。
 - View 放置：依 view 所屬的 Model 放入對應 XML。例：銷售訂單頁的 product tree view → `product_template_views.xml`。
 - 樣板文件（xls/docx）一律放 `<module>/static/<type>/`。例：`hr/static/xls/abc-test.xlsx`。
-- 禁用原生 `round()`（銀行家捨入，30.5→30，非台灣四捨五入）；改用 `Decimal` + `ROUND_HALF_UP`。
 - 原生 SQL 執行前呼叫 `flush_model()`，執行後呼叫 `invalidate_model()`，避免 ORM cache 導致畫面不更新。
 
-## 2. Edit Protocol
+## 2. Python Constraints
+- 禁用原生 `round()`（銀行家捨入，30.5→30，非台灣四捨五入）；改用 `Decimal` + `ROUND_HALF_UP`。
+
+## 3. Edit Protocol
+- Commit: `[Module]: Why (not what)`. File edit: `@Path | Anchor | Action`.
 - **Minimum code that solves the problem.** No speculative features. No abstractions for single-use code. (Test: would a senior engineer call this overcomplicated?)
 - Touch only what you must. Don't clean up adjacent code, comments, or formatting that isn't yours.
 - Match existing code style exactly. Zero drive-by refactoring.
@@ -46,10 +49,10 @@ When the user types `/platformDB`, invoke the Skill tool with `skill: "platformD
 <!-- /platform-only -->
 - 驗證統一在 deploy 關「安裝／升級模組」時進行（語法錯、invalid field、view 繼承錯、缺 depends 一併把關）；pipeline 各關**不自行**跑 py_compile／xmllint／odoo-bin 或建 DB 做本地驗證，寫對程式碼靠 Context7＋讀既有碼。
 
-## 3. Output Style
+## 4. Output Style
 繁中術語：專案/資料庫/佈署/模組. Keep English: Variable/Function/Hook/Class/Field/Model/Method/Controller.
 
-## 4. General Engineering Rules
+## 5. General Engineering Rules
 
 **Rule 4 — Goal-Driven Execution**: Define success criteria before starting. Iterate until verified. Don't follow steps mechanically; define success and drive to it. Strong success criteria enable independent looping.
 
@@ -64,7 +67,7 @@ When the user types `/platformDB`, invoke the Skill tool with `skill: "platformD
 **Rule 12 — Fail Loud**: "Completed" is wrong if anything was skipped silently. "Tests pass" is wrong if any were skipped. Default to surfacing uncertainty, not hiding it.
 
 <!-- platform-only -->
-## 5. 測試環境 log／附件路徑（除錯查詢用）
+## 6. 測試環境 log／附件路徑（除錯查詢用）
 > 皆為平台自身路徑；一律相對 repo 根 `odoo-v2/`，可用對應 env var 覆寫（勿寫死絕對路徑）。`<folder>` = `projects.folder_name`（缺則 `name`），對應 Odoo DB 名為 `test_<folder>`。
 
 - **Odoo runtime log（常駐 server）**：`odoo-envs/<folder>/odoo.log`（env `ODOO_ENV_BASE` 覆寫 base）。每次啟動清空、只留當次執行；專案環境頁「📄 查看 log」看尾端 256KB。asset bundle 503／process 崩潰的 traceback 只在此可見。

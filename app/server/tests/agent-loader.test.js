@@ -192,15 +192,18 @@ describe('SOURCE_ROUTING_AGENTS 注入資料來源守則（填入已解析真值
   });
 });
 
-// 意圖（token 效率）：QA 是唯讀審查者——只注入審查相關段落（§1 Odoo Constraints＋Rule 12），
+// 意圖（token 效率）：QA 是唯讀審查者——只注入審查相關段落（§1 Odoo Constraints＋§2 Python Constraints＋Rule 12），
 // Hard Rules 的寫入規範／前端配色／log 路徑對它無作用卻每輪照付 token。
-test('qa 只注入精簡審查規則：含 Odoo Constraints 與 Rule 12，不含 Hard Rules 全文', () => {
+// Python 規則（round()→台灣四捨五入）是財務正確性把關，拆成獨立 §2 後仍須進 QA。
+test('qa 只注入精簡審查規則：含 Odoo/Python Constraints 與 Rule 12，不含 Hard Rules 全文', () => {
   const { loadAgent } = require('../pipeline/agent-loader');
   const out = loadAgent('qa').render({
     project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
     analysis_yaml: 'module: sale', prior_findings: '（首輪，無上輪清單）', resolution: '（無）'
   });
   expect(out).toContain('Odoo Constraints');
+  expect(out).toContain('Python Constraints');
+  expect(out).toContain('ROUND_HALF_UP');        // §2 Python 規則須到 QA（財務正確性）
   expect(out).toContain('Rule 12');
   expect(out).not.toContain('Hard Rules');       // §0 寫入規範不注入
   expect(out).not.toContain('app/public');       // 前端規範不注入
