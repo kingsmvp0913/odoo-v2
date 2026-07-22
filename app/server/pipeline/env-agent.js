@@ -866,6 +866,9 @@ async function _runEnvSetupDocker(projectId) {
   const envHost = loopbackHostForPort(port);
   fs.mkdirSync(ctx.envDir, { recursive: true });
   const readyMarker = path.join(ctx.envDir, '.docker-ready');
+  // filestore 綁到宿主持久目錄（與 DB 同樣持久），避免容器 rm+run 重建後 attachment 檔遺失、asset 500。
+  const filestoreDir = path.join(ctx.envDir, 'filestore');
+  fs.mkdirSync(filestoreDir, { recursive: true });
 
   await query(
     `INSERT INTO odoo_envs (project_id, status, port, updated_at) VALUES ($1,'setting_up',$2,NOW())
@@ -896,7 +899,7 @@ async function _runEnvSetupDocker(projectId) {
   const initArgs = firstBuild ? ['-i', 'base', '--without-demo=all', '--load-language=zh_TW'] : [];
   const run = await dockerEnv.runContainer({
     name: ctx.container, image: ctx.image, host: envHost, port, dbName: ctx.dbName,
-    dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs,
+    dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs, filestoreDir,
   });
   log += `[docker] run ${run.ok ? 'OK' : 'FAIL'}\n${run.log.slice(-300)}\n`;
   if (!run.ok) return _failEnv(projectId, `docker run 失敗：${(run.stderr || '').slice(-200)}`, log);

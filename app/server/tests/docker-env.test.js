@@ -86,6 +86,15 @@ describe('buildRunArgs', () => {
     expect(preImage).toContain('HOST=host.docker.internal');
     expect(preImage).toContain('USER=odoo');
   });
+  test('filestoreDir → 綁 /var/lib/odoo/filestore（持久化，避免重建容器遺失 attachment）', () => {
+    const a = d.buildRunArgs({ name: 'c', image: 'odoo-idx:17', port: 8070, dbName: 'test_p1', filestoreDir: '/host/env/filestore' });
+    const image = 'odoo-idx:17';
+    const preImage = a.slice(0, a.indexOf(image));
+    expect(preImage).toContain('/host/env/filestore:/var/lib/odoo/filestore');
+  });
+  test('未給 filestoreDir → 不加該 -v（沿用容器預設 volume）', () => {
+    expect(args.some(x => String(x).includes('/var/lib/odoo/filestore'))).toBe(false);
+  });
 });
 
 describe('buildExecArgs（docker exec 進常駐容器跑一次性指令）', () => {

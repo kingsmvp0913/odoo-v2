@@ -107,12 +107,16 @@ function dbEnvFlags(dbArgs = []) {
 //   name/image/host/port：容器名、image、宿主 loopback host（127.0.0.x）、對外埠 → 對映容器內 8069。
 //   dbArgs：odoo db 參數（本函式 remap localhost）；mounts：addonsMounts 結果；
 //   serverArgs：額外 server 參數（首次啟動帶 -i base 等 init 旗標，Odoo 裝完 base 後續跑 server）。
-function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [], serverArgs = [] }) {
+function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [], serverArgs = [], filestoreDir } = {}) {
   return ['run', '-d', '--name', name,
     // 宿主 DB 走 host-gateway；Linux 原生 docker 沒有 host.docker.internal，需顯式加。
     '--add-host', 'host.docker.internal:host-gateway',
     '-p', `${host || '127.0.0.1'}:${port}:8069`,
     ...mountFlags(mounts),
+    // filestore（ir.attachment 二進位，含 asset bundle）持久化到宿主：容器是拋棄式的、會被 rm+run 重建，
+    // 若 filestore 留在匿名 volume 會隨重建遺失，但宿主 DB 的 attachment 記錄還在 → asset 檔不見、每個
+    // asset 請求 500。綁到宿主目錄讓它與 DB 同樣持久（rw，Odoo 需寫入）。未指定則沿用容器預設 volume。
+    ...(filestoreDir ? ['-v', `${filestoreDir}:/var/lib/odoo/filestore`] : []),
     // DB 連線走 entrypoint env（見 dbEnvFlags）；-d／--addons-path 仍走 CLI（entrypoint 不碰）。
     ...dbEnvFlags(dbArgs),
     image, 'odoo',
