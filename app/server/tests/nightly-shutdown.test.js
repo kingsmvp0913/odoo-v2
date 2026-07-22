@@ -1,8 +1,11 @@
 // 意圖：夜間 shutdown 不得砍掉「正在被任務使用中」的 env，否則 deploy/E2E 中途死掉會被誤歸因為程式問題。
 const { newDb } = require('pg-mem');
 
-jest.mock('child_process', () => ({ execFile: jest.fn(), spawn: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn() }));
+jest.mock('../lib/docker-env', () => {
+  const actual = jest.requireActual('../lib/docker-env');
+  return { ...actual, stopContainer: jest.fn().mockResolvedValue({ code: 0 }), removeContainer: jest.fn().mockResolvedValue(undefined) };
+});
 
 let dbModule, nightlyShutdown, userId;
 

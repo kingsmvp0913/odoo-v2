@@ -54,33 +54,15 @@ function registerRoutes(app) {
   // 讀取常駐 Odoo server 的 runtime log（尾端），供前端「查看 log」除錯（asset 503／崩潰 traceback 等）。
   app.get('/api/projects/:id/env/log', verifyToken, async (req, res) => {
     try {
-      const fs = require('fs');
-      const { ENV_BASE: base, runtimeLogPath, isDockerMode, dockerCtxFor } = require('./pipeline/env-agent');
+      const { dockerCtxFor } = require('./pipeline/env-agent');
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (!project) return res.status(404).json({ error: 'project not found' });
-      const dirName = project.folder_name || project.name;
-      // Docker 模式：常駐 server 的 runtime log 在容器內，改讀 `docker logs`（尾端 2000 行）。
-      if (await isDockerMode()) {
-        const dockerEnv = require('./lib/docker-env');
-        const ctx = await dockerCtxFor(req.params.id);
-        if (!ctx || !(await dockerEnv.containerExists(ctx.container))) return res.json({ log: '', exists: false });
-        const log = await dockerEnv.containerLogs(ctx.container, { tail: 2000 }).catch(() => '');
-        return res.json({ log: log.slice(-256 * 1024), exists: !!log });
-      }
-      const logPath = runtimeLogPath(path.join(base, dirName));
-      if (!fs.existsSync(logPath)) return res.json({ log: '', exists: false });
-      // 只回尾端 256KB，避免大 log 撐爆前端與網路
-      const MAX = 256 * 1024;
-      const { size } = fs.statSync(logPath);
-      const start = size > MAX ? size - MAX : 0;
-      const fd = fs.openSync(logPath, 'r');
-      try {
-        const buf = Buffer.alloc(size - start);
-        fs.readSync(fd, buf, 0, buf.length, start);
-        let log = buf.toString('utf8');
-        if (start > 0) log = '…（前段省略）\n' + log.slice(log.indexOf('\n') + 1);
-        res.json({ log, exists: true, truncated: start > 0 });
-      } finally { fs.closeSync(fd); }
+      // 常駐 server 的 runtime log 在容器內，讀 `docker logs`（尾端 2000 行、再截尾端 256KB）。
+      const dockerEnv = require('./lib/docker-env');
+      const ctx = await dockerCtxFor(req.params.id);
+      if (!ctx || !(await dockerEnv.containerExists(ctx.container))) return res.json({ log: '', exists: false });
+      const log = await dockerEnv.containerLogs(ctx.container, { tail: 2000 }).catch(() => '');
+      return res.json({ log: log.slice(-256 * 1024), exists: !!log });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

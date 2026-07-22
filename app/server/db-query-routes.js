@@ -1,8 +1,9 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
-const { encrypt, decrypt } = require('./lib/crypto');
+const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
 const { allocateForwardPort, containerName, removeGateway } = require('./lib/vpn-gateway');
+const { loadDecryptedConn } = require('./lib/db-connections');
 
 const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled';
 
@@ -200,17 +201,6 @@ function registerRoutes(app) {
       res.json(await runSelect(conn, sql || ''));
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
-}
-
-async function loadDecryptedConn(cid, projectId) {
-  const { rows: [c] } = await query('SELECT * FROM db_connections WHERE id=$1 AND project_id=$2', [cid, projectId]);
-  if (!c) return null;
-  c.ssh_password = c.ssh_password_enc ? decrypt(c.ssh_password_enc) : '';
-  c.ssh_key = c.ssh_key_enc ? decrypt(c.ssh_key_enc) : '';
-  c.db_password = c.db_password_enc ? decrypt(c.db_password_enc) : '';
-  c.vpn_config = c.vpn_config_enc ? decrypt(c.vpn_config_enc) : '';
-  c.vpn_password = c.vpn_password_enc ? decrypt(c.vpn_password_enc) : '';
-  return c;
 }
 
 module.exports = { registerRoutes, loadDecryptedConn, loopbackOnly };
