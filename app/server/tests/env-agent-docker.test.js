@@ -1,6 +1,6 @@
-// 意圖：ODOO_ENV_MODE=docker 時，env-agent 的公開入口要正確路由到 docker 實作，並把正確參數
-// 交給 docker-env（純參數組裝另在 docker-env.test.js 驗）。用 mock docker-env + pg-mem 鎖住
-// 「路由 + 契約」：build/upgrade/uninstall/seed/stop 走對分支、帶對 dbName/odooArgs/SEED_USERS。
+// 意圖：env-agent 的公開入口（docker 唯一模式）要把正確參數交給 docker-env（純參數組裝另在
+// docker-env.test.js 驗）。用 mock docker-env + pg-mem 鎖住「契約」：
+// build/upgrade/uninstall/seed/stop 帶對 dbName/odooArgs/SEED_USERS。
 // 註：pg-mem 在本檔情境下多次 INSERT projects 會踩 SERIAL/pkey quirk，故只建「一個」fixture 專案
 // （單列 INSERT、當作第一筆寫入）並全測試共用；需要 odoo_envs 的測試各自 upsert。
 const { newDb } = require('pg-mem');
@@ -43,10 +43,6 @@ beforeAll(async () => {
 });
 afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(() => { for (const f of Object.values(dockerEnv)) if (jest.isMockFunction(f)) f.mockClear(); });
-
-test('isDockerMode 反映管理設定 teams_settings.env_mode', async () => {
-  expect(await envAgent.isDockerMode()).toBe(true);
-});
 
 test('dockerCtxFor：由專案組出容器名/image/dbName（odoo13→odoo-idx:13）', async () => {
   const ctx = await envAgent.dockerCtxFor(PID);
