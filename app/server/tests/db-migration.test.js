@@ -194,3 +194,14 @@ test('users 表含 per-user git 認證欄位', async () => {
   expect(cols).toContain('git_name');
   expect(cols).toContain('git_email');
 });
+
+test('migrate 加 teams_settings 用量閘門三欄（含預設 true/90/95）', async () => {
+  await dbModule.query('DELETE FROM teams_settings');
+  await dbModule.query('INSERT INTO teams_settings (id) VALUES (1)');
+  const { rows: [s] } = await dbModule.query(
+    'SELECT usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold FROM teams_settings WHERE id=1'
+  );
+  expect(s.usage_gate_enabled).toBe(true);
+  expect(s.usage_gate_5h_threshold).toBe(90);
+  expect(s.usage_gate_7d_threshold).toBe(95);
+});

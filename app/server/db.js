@@ -396,6 +396,10 @@ async function migrate() {
     { table: 'teams_settings', col: 'writeback_odoo_notes', sql: 'ALTER TABLE teams_settings ADD COLUMN writeback_odoo_notes BOOLEAN DEFAULT false' },
     // 測試區建置模式：'venv'（預設，宿主 venv）或 'docker'（官方 odoo image，自動涵蓋 13→20+）。由管理設定切換。
     { table: 'teams_settings', col: 'env_mode', sql: "ALTER TABLE teams_settings ADD COLUMN env_mode TEXT DEFAULT 'venv'" },
+    // Claude 用量閘門：超標停自動推進（全域單一，全台共用同一 claude 帳號）
+    { table: 'teams_settings', col: 'usage_gate_enabled',     sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_enabled BOOLEAN DEFAULT true' },
+    { table: 'teams_settings', col: 'usage_gate_5h_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_5h_threshold INTEGER DEFAULT 90' },
+    { table: 'teams_settings', col: 'usage_gate_7d_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_7d_threshold INTEGER DEFAULT 95' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },
