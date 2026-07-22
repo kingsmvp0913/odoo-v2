@@ -140,7 +140,8 @@ window.TaskListView = Vue.defineComponent({
       showAdd: false,
       adding: false,
       projects: [],
-      newTask: { title: '', original_text: '', project_id: '' }
+      newTask: { title: '', original_text: '', project_id: '' },
+      newFiles: []
     };
   },
   computed: {
@@ -229,19 +230,25 @@ window.TaskListView = Vue.defineComponent({
     openTask(t) { this.$router.push(`/task/${t.id}`); },
     openAdd() {
       this.newTask = { title: '', original_text: '', project_id: '' };
+      this.newFiles = [];
       this.showAdd = true;
+    },
+    onAddFilesSelected(e) {
+      this.newFiles = Array.from(e.target.files || []);
     },
     async submitAdd() {
       if (!this.newTask.project_id) return showToast('請選擇專案', 'error');
       if (!this.newTask.title.trim()) return showToast('請填寫標題', 'error');
       if (!this.newTask.original_text.trim()) return showToast('請填寫內容', 'error');
+      if (this.newFiles.length > 5) return showToast('最多上傳 5 個附件', 'error');
       this.adding = true;
       try {
-        await Api.post('tasks', {
-          title: this.newTask.title.trim(),
-          original_text: this.newTask.original_text,
-          project_id: this.newTask.project_id || null
-        });
+        const fd = new FormData();
+        fd.append('title', this.newTask.title.trim());
+        fd.append('original_text', this.newTask.original_text);
+        if (this.newTask.project_id) fd.append('project_id', this.newTask.project_id);
+        this.newFiles.forEach(f => fd.append('files', f));
+        await Api.postForm('tasks', fd);
         this.showAdd = false;
         this.filter = 'all';
         await this.load();
@@ -567,6 +574,11 @@ window.TaskListView = Vue.defineComponent({
         <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">內容 <span style="color:var(--danger)">*</span></label>
         <textarea v-model="newTask.original_text" class="form-control" placeholder="需求描述（給分診/分析 Agent 參考）"
           style="width:100%;min-height:180px;font-size:var(--fs-md);line-height:1.6;resize:vertical;margin-bottom:20px"></textarea>
+
+        <label style="display:block;font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px">附件（選填，最多 5 個）</label>
+        <input type="file" multiple @change="onAddFilesSelected"
+          style="display:block;font-size:var(--fs-sm);margin-bottom:6px" />
+        <div v-if="newFiles.length" style="font-size:var(--fs-xs);color:var(--text-muted);margin-bottom:16px">已選擇：{{ newFiles.map(f => f.name).join('、') }}</div>
 
         <div style="display:flex;justify-content:flex-end;gap:var(--space-2)">
           <button class="btn btn-outline btn-sm" @click="showAdd=false" :disabled="adding">取消</button>
