@@ -6,11 +6,25 @@ describe('verifyDocker', () => {
     expect(verifyDocker({ execFileSync })).toEqual({ ok: true });
   });
 
-  test('docker info 失敗時回報 ok:false 並附安裝提示', () => {
-    const execFileSync = jest.fn(() => { throw new Error('not found'); });
+  test('docker 未安裝（ENOENT）時提示安裝', () => {
+    const execFileSync = jest.fn(() => { const e = new Error('spawn docker ENOENT'); e.code = 'ENOENT'; throw e; });
     const result = verifyDocker({ execFileSync });
     expect(result.ok).toBe(false);
-    expect(result.hint).toMatch(/docker/i);
+    expect(result.hint).toMatch(/安裝.*Docker/);
+  });
+
+  test('已安裝但無權存取 socket 時提示加入 docker 群組（非誤報未安裝）', () => {
+    const execFileSync = jest.fn(() => { const e = new Error('exit 1'); e.stderr = 'permission denied while trying to connect to the Docker daemon socket'; throw e; });
+    const result = verifyDocker({ execFileSync });
+    expect(result.ok).toBe(false);
+    expect(result.hint).toMatch(/usermod -aG docker/);
+  });
+
+  test('已安裝但 daemon 沒起時提示啟動服務', () => {
+    const execFileSync = jest.fn(() => { const e = new Error('exit 1'); e.stderr = 'Cannot connect to the Docker daemon'; throw e; });
+    const result = verifyDocker({ execFileSync });
+    expect(result.ok).toBe(false);
+    expect(result.hint).toMatch(/daemon 連不上/);
   });
 });
 

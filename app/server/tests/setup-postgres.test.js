@@ -59,4 +59,21 @@ describe('ensurePostgres', () => {
     expect(sqls.some(s => s.includes('CREATE ROLE'))).toBe(false);
     expect(sqls.some(s => s.includes('CREATE DATABASE "aidev"'))).toBe(true);
   });
+
+  test('admin 連線一律帶 -w（不互動詢問密碼，避免卡在 Password 提示）', async () => {
+    const execFileSync = makeFakeExec({ directConnectFails: true });
+    await ensurePostgres('postgres://alice:pw@localhost:5432/aidev', { execFileSync });
+    const adminCalls = execFileSync.calls.filter(c => c.args.includes('-tAc'));
+    expect(adminCalls.length).toBeGreaterThan(0);
+    expect(adminCalls.every(c => c.args.includes('-w'))).toBe(true);
+  });
+
+  test('admin 建立失敗時，丟出含補救指示（PGADMIN/peer auth）的錯誤', async () => {
+    const execFileSync = (cmd, args) => {
+      if (args.includes('-c')) throw new Error('connection refused'); // 直連失敗 → 走 admin
+      throw new Error('psql: fe_sendauth: no password supplied');      // admin 也失敗
+    };
+    expect(() => ensurePostgres('postgres://alice:pw@localhost:5432/aidev', { execFileSync }))
+      .toThrow(/PGADMIN|peer auth/);
+  });
 });

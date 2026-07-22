@@ -16,7 +16,7 @@ read_config() {
   node -e "
     try {
       const c = require(process.argv[1]);
-      process.stdout.write(c[process.argv[2]] || '');
+      process.stdout.write(String(c[process.argv[2]] ?? ''));
     } catch(e) { process.exit(1); }
   " "$CONFIG" "$1"
 }

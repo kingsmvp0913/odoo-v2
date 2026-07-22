@@ -76,6 +76,16 @@ describe('ensureConfig', () => {
     expect(() => parseDatabaseUrl(cfg.DATABASE_URL)).not.toThrow();
   });
 
+  test('PG_USER 含不合法字元（如 email）時丟錯且不寫出 config.json', async () => {
+    const configPath = path.join(tmpDir, 'config.json');
+    const answers = { PG_HOST: 'localhost', PG_PORT: '5432', PG_DB: 'aidev', PG_USER: 'odoo@ideaxpress.biz', PG_PASSWORD: 'pw', ANTHROPIC_API_KEY: '' };
+    const ask = jest.fn((name) => Promise.resolve(answers[name]));
+
+    await expect(ensureConfig(configPath, ask)).rejects.toThrow(/PG_USER/);
+    // 關鍵：壞值不能被寫進檔案，否則 idempotent 重跑會跳過詢問、拿舊壞值卡死
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
   test('config 不存在且填了 ANTHROPIC_API_KEY 時會寫入該欄位', async () => {
     const configPath = path.join(tmpDir, 'config.json');
     const answers = { PG_HOST: 'localhost', PG_PORT: '5432', PG_DB: 'aidev', PG_USER: 'alice', PG_PASSWORD: 'pw', ANTHROPIC_API_KEY: 'sk-ant-xxx' };
