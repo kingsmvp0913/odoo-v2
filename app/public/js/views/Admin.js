@@ -9,6 +9,8 @@ window.AdminView = Vue.defineComponent({
       testMode: false,
       writebackOdooNotes: false,
       envMode: 'venv',
+      usageGate: { enabled: true, th5: 90, th7: 95 },
+      gateStatus: null,
       loading: true,
       savingConn: false,
       savingTeams: false,
@@ -16,6 +18,7 @@ window.AdminView = Vue.defineComponent({
       savingTestMode: false,
       savingWriteback: false,
       savingEnvMode: false,
+      savingUsageGate: false,
       steppingPipeline: false,
       navTools: [
         { title: '使用者管理', desc: '新增、刪除帳號，調整角色與存取權限。', to: '/admin/users' },
@@ -43,6 +46,9 @@ window.AdminView = Vue.defineComponent({
           this.testMode            = !!d.test_mode;
           this.writebackOdooNotes  = !!d.writeback_odoo_notes;
           this.envMode             = d.env_mode || 'venv';
+          this.usageGate.enabled = d.usage_gate_enabled != null ? !!d.usage_gate_enabled : true;
+          this.usageGate.th5     = d.usage_gate_5h_threshold ?? 90;
+          this.usageGate.th7     = d.usage_gate_7d_threshold ?? 95;
           Object.assign(this.teams, {
             tenant_id: d.tenant_id || '', client_id: d.client_id || '',
             client_secret: d.client_secret || '', team_id: d.team_id || '',
@@ -51,6 +57,7 @@ window.AdminView = Vue.defineComponent({
           });
         }
         try { this.e2e = await Api.get('admin/e2e-account'); } catch (_) { /* 顯示用，取不到不擋頁面 */ }
+        try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -126,6 +133,27 @@ window.AdminView = Vue.defineComponent({
         showToast(this.envMode === 'docker' ? 'Docker 模式已啟用（測試區改用官方 odoo image）' : 'venv 模式已啟用（宿主 Python 建置）', 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.savingEnvMode = false; }
+    },
+    async saveUsageGate() {
+      const { th5, th7 } = this.usageGate;
+      if (![th5, th7].every(n => Number.isInteger(n) && n >= 1 && n <= 100)) {
+        showToast('門檻需為 1–100 的整數', 'error');
+        return;
+      }
+      this.savingUsageGate = true;
+      try {
+        await Api.put('admin/teams-settings', {
+          ...this.teams,
+          odoo_url: this.odoo.url, odoo_db: this.odoo.db, odoo_sync_interval: this.odoo.sync_interval,
+          service_url: this.service.url, service_db: this.service.db, service_sync_interval: this.service.sync_interval,
+          usage_gate_enabled: this.usageGate.enabled,
+          usage_gate_5h_threshold: th5,
+          usage_gate_7d_threshold: th7
+        });
+        showToast('用量閘門設定已儲存', 'success');
+        try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { /* 顯示用 */ }
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingUsageGate = false; }
     },
     async stepPipeline() {
       this.steppingPipeline = true;
@@ -263,6 +291,55 @@ window.AdminView = Vue.defineComponent({
             </button>
             <button class="btn btn-ghost btn-sm" @click="testTeams" :disabled="testingTeams">
               {{ testingTeams ? '發送中...' : '傳送測試訊息' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Claude 用量閘門 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Claude 用量閘門</div>
+            <div class="setting-block-desc">Claude 帳號用量達門檻時，自動停止 Pipeline 自動推進（手動「繼續」不受影響）。5 小時視窗或本週任一超標即暫停。全台共用同一帳號，此設定為全域。</div>
+          </div>
+          <div class="setting-block-body">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
+                <input type="checkbox" v-model="usageGate.enabled" style="opacity:0;width:0;height:0;position:absolute" />
+                <div :style="{background: usageGate.enabled ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{position:'absolute', top:'3px', left: usageGate.enabled ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              </div>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ usageGate.enabled ? '閘門已啟用' : '閘門已停用（不看用量，維持自動推進）' }}</span>
+            </label>
+            <div class="conn-fields" style="margin-top:var(--space-4)">
+              <div class="field-item field-item-narrow">
+                <label class="field-label">5 小時視窗門檻（%）</label>
+                <input v-model.number="usageGate.th5" type="number" min="1" max="100" class="field-input" />
+              </div>
+              <div class="field-item field-item-narrow">
+                <label class="field-label">本週門檻（%）</label>
+                <input v-model.number="usageGate.th7" type="number" min="1" max="100" class="field-input" />
+              </div>
+            </div>
+            <div v-if="gateStatus" style="margin-top:var(--space-4);font-size:var(--fs-sm)">
+              <template v-if="gateStatus.blocked">
+                <span style="color:var(--warning)">
+                  ⏸ 已暫停：{{ gateStatus.reason.window === '5h' ? '5 小時視窗' : '本週' }}用量 {{ gateStatus.reason.current }}% 已達門檻 {{ gateStatus.reason.threshold }}%{{ gateStatus.reason.stale ? '（快取資料）' : '' }}；重置：{{ gateStatus.reason.resets_at || '未知' }}
+                </span>
+              </template>
+              <template v-else-if="gateStatus.enabled === false">
+                <span style="color:var(--text-muted)">閘門已停用</span>
+              </template>
+              <template v-else-if="gateStatus.available === false">
+                <span style="color:var(--text-muted)">尚無用量資料，暫不啟用閘門（fail-open）</span>
+              </template>
+              <template v-else>
+                <span style="color:var(--success)">正常運行中（5h {{ gateStatus.five_hour ? gateStatus.five_hour.utilization : '—' }}% / 週 {{ gateStatus.seven_day ? gateStatus.seven_day.utilization : '—' }}%）</span>
+              </template>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="saveUsageGate" :disabled="savingUsageGate">
+              {{ savingUsageGate ? '儲存中...' : '儲存閘門設定' }}
             </button>
           </div>
         </div>
