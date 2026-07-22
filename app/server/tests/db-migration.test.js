@@ -184,6 +184,48 @@ test('tasks 具有 stage_label / classification_label / has_attachment 欄位', 
   expect(cols).toContain('has_attachment');
 });
 
+// 意圖：舊專案的備註頁都寫著出廠樣板文字（非空），若不清空會被 getProjectNotes 誤判「有內容」而
+// 把無意義樣板注入各關卡 prompt。migrate 一次性正規化：內容恰為舊樣板→清空；使用者已改的保留；可重跑。
+describe('migrate 正規化舊備註樣板', () => {
+  const OLD_TEMPLATE = '# 專案備註\n\n在此記錄專案注意事項、部署環境、聯絡窗口等人工維護的資訊。';
+
+  async function makeNotes(name, content) {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ($1,'17.0') RETURNING id", [name]
+    );
+    await dbModule.query(
+      "INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content) VALUES ($1,NULL,'notes','project-notes','專案備註',$2)",
+      [p.id, content]
+    );
+    return p.id;
+  }
+  const notesOf = async (pid) => {
+    const { rows: [r] } = await dbModule.query(
+      "SELECT content FROM wiki_pages WHERE project_id=$1 AND slug='project-notes'", [pid]
+    );
+    return r.content;
+  };
+
+  test('內容恰為舊樣板 → 清成空字串', async () => {
+    const pid = await makeNotes('舊樣板專案', OLD_TEMPLATE);
+    await dbModule.migrate();
+    expect(await notesOf(pid)).toBe('');
+  });
+
+  test('使用者已改內容 → 保留不動', async () => {
+    const pid = await makeNotes('已改備註專案', '# 專案備註\n\n部署到 8069 埠');
+    await dbModule.migrate();
+    expect(await notesOf(pid)).toBe('# 專案備註\n\n部署到 8069 埠');
+  });
+
+  test('重跑 idempotent（第二次不再變動）', async () => {
+    const pid = await makeNotes('冪等專案', OLD_TEMPLATE);
+    await dbModule.migrate();
+    await dbModule.migrate();
+    expect(await notesOf(pid)).toBe('');
+  });
+});
+
 test('users 表含 per-user git 認證欄位', async () => {
   const { rows } = await dbModule.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name='users'`

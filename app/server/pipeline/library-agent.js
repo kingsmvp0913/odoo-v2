@@ -357,9 +357,9 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
     emit('modules', 40 + Math.round(((i + 1) / total) * 55), `建立 ${mod.module}`);
   }
 
-  // 專案備註：人工維護區塊，AI 不觸碰
-  await _ensureNode(projectId, null, 'notes', 'project-notes', '專案備註',
-    '# 專案備註\n\n在此記錄專案注意事項、部署環境、聯絡窗口等人工維護的資訊。');
+  // 專案備註：人工維護區塊，AI 不觸碰。預設空白——有內容（trim 非空）才會注入各開發關卡（吃 cache），
+  // 說明文字改放 Wiki UI 的灰字提示，不寫進 content 以免被當「有備註」注入。
+  await _ensureNode(projectId, null, 'notes', 'project-notes', '專案備註', '');
 
   emit('done', 100, '完成');
   return { ok: true, slug: 'overview', modules: manifests.length };

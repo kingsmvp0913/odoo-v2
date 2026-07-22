@@ -2,6 +2,7 @@ const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
+const { getProjectNotes } = require('./project-notes');
 const { query } = require('../db');
 
 // 排障對話 → 任務草稿。摘要整串對話成 {title, original_text}，只回草稿、不建任務——
@@ -22,7 +23,8 @@ async function draftTaskFromChat(projectId, chatId, userId) {
     .join('\n\n');
 
   const agent = loadAgent('chat-to-task');
-  const prompt = agent.render({ history });
+  const projectNotes = await getProjectNotes(projectId).catch(() => null);
+  const prompt = agent.render({ history, project_notes: projectNotes || '' });
 
   const ref = { projectId, chatId };
   let result;

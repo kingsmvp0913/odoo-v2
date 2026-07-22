@@ -214,3 +214,73 @@ test('qa-retry 不重複注入規則（resume 短 prompt）', () => {
   expect(out).not.toContain('Odoo Constraints');
   expect(out).toContain('接續「同一個任務的上一輪 QA 審查」');
 });
+
+// 意圖：使用者在 wiki 手寫的「專案備註」要注入 NOTES_AGENTS 各關卡，位置固定在
+// 「CLAUDE.md 規則之後、debug／source-routing 之前」——同專案跨任務前綴不變＝吃 prompt cache；
+// 空備註不得注入以免破壞前綴。備註是 per-project 動態值，不進 promptVersion 靜態指紋。
+describe('NOTES_AGENTS 注入專案備註（人工維護，優先遵循）', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const NOTES_HEADER = '# 專案備註（人工維護，優先遵循）';
+
+  const codingVars = (extra) => ({
+    project_name: 'P', odoo_version: '17.0', analysis_yaml: 'module: sale',
+    work_dir: '/w', repo_list: '- sale/', task_id: 'task_1', commit_message: 'm',
+    main_branch: 'master', git_branch: 'task/1', repo_paths: '- /w/sale',
+    ...extra
+  });
+
+  test('coding-project 有備註 → 注入，且排在規則後、debug 前', () => {
+    const out = loadAgent('coding-project').render(codingVars({ project_notes: '部署到 8069 埠' }));
+    expect(out).toContain(NOTES_HEADER);
+    expect(out).toContain('部署到 8069 埠');
+    const iRules = out.indexOf('Odoo Constraints');
+    const iNotes = out.indexOf(NOTES_HEADER);
+    const iDebug = out.indexOf('# 系統化除錯（pipeline 版）');
+    expect(iRules).toBeGreaterThanOrEqual(0);
+    expect(iNotes).toBeGreaterThan(iRules);   // 規則在備註之前
+    expect(iDebug).toBeGreaterThan(iNotes);   // 備註在 debug 之前
+  });
+
+  test('備註空字串 → 不注入（前綴與現況一致）', () => {
+    const out = loadAgent('coding-project').render(codingVars({ project_notes: '' }));
+    expect(out).not.toContain(NOTES_HEADER);
+  });
+
+  test('備註純空白 → 不注入', () => {
+    const out = loadAgent('coding-project').render(codingVars({ project_notes: '   \n  ' }));
+    expect(out).not.toContain(NOTES_HEADER);
+  });
+
+  test('未傳 project_notes → 不注入', () => {
+    const out = loadAgent('coding-project').render(codingVars());
+    expect(out).not.toContain(NOTES_HEADER);
+  });
+
+  test('chat（無規則／debug）→ 備註直接 prepend 在 body 前', () => {
+    const out = loadAgent('chat').render({
+      project_name: 'P', history: '', user_message: '你好', project_notes: '窗口 Amy'
+    });
+    expect(out).toContain(NOTES_HEADER);
+    expect(out).toContain('窗口 Amy');
+    expect(out.indexOf(NOTES_HEADER)).toBeLessThan(out.indexOf('你是本專案的排障助理'));
+  });
+
+  test('chat-to-task 有備註 → 注入', () => {
+    const out = loadAgent('chat-to-task').render({ history: 'x', project_notes: '窗口 Amy' });
+    expect(out).toContain(NOTES_HEADER);
+    expect(out).toContain('窗口 Amy');
+  });
+
+  test('非 NOTES_AGENTS（merge）即使傳 project_notes 也不注入', () => {
+    const out = loadAgent('merge').render({ project_notes: '窗口 Amy' });
+    expect(out).not.toContain(NOTES_HEADER);
+  });
+
+  test('promptVersion 不因備註改變（動態值不進靜態指紋）', () => {
+    // promptVersion 只吃 agent name，不吃 vars → 備註無從進入指紋；鎖定其為穩定 12 碼 hash。
+    const v1 = promptVersion('coding-project');
+    const v2 = promptVersion('coding-project');
+    expect(v1).toBe(v2);
+    expect(v1).toMatch(/^[0-9a-f]{12}$/);
+  });
+});

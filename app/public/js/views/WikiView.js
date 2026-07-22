@@ -51,7 +51,8 @@ window.WikiView = Vue.defineComponent({
     await this.loadPages();
     const slug = this.$route.params.slug;
     if (slug) await this.loadPage(slug);
-    else if (this.pages.length > 0) await this.loadPage(this.pages[0].slug);
+    // 無指定頁時開排序後第一項（＝專案備註），讓進 Wiki 直接看到備註
+    else if (this.tree.length > 0) await this.loadPage(this.tree[0].slug);
   },
   mounted() {
     this._progressHandler = (d) => this._onProgress(d);
@@ -76,10 +77,11 @@ window.WikiView = Vue.defineComponent({
         else roots.push(byId[p.id]);
       });
       roots.sort((a, b) => {
+        // 專案備註排最前（人工維護、最常看），其次概論，其餘照原序
+        if (a.node_type === 'notes') return -1;
+        if (b.node_type === 'notes') return 1;
         if (a.node_type === 'overview') return -1;
         if (b.node_type === 'overview') return 1;
-        if (a.node_type === 'notes') return 1;
-        if (b.node_type === 'notes') return -1;
         return 0;
       });
       return roots;
@@ -244,6 +246,9 @@ window.WikiView = Vue.defineComponent({
             </div>
           </div>
           <template v-if="current.node_type === 'notes'">
+            <p style="color:var(--text-muted);font-size:var(--fs-sm);margin:0 0 var(--space-2)">
+              在此記錄專案注意事項、部署環境、聯絡窗口等人工維護的資訊。此處內容會自動注入各開發關卡，供 AI 優先遵循。
+            </p>
             <textarea v-model="editContent" style="width:100%;height:70vh;font-family:monospace;font-size:var(--fs-base);padding:var(--space-2);border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
           </template>
           <template v-else>

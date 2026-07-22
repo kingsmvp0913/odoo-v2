@@ -586,6 +586,17 @@ async function migrate() {
       }
     }
   } catch { /* non-blocking, skip if tables not ready */ }
+
+  // One-time normalization: 舊專案的 project-notes 頁都寫著出廠樣板文字（非空），會被 getProjectNotes
+  // 誤判「有內容」而注入無意義樣板到各關卡 prompt。樣板由 _ensureNode verbatim 寫入，故以精確比對命中、
+  // 清成空字串；使用者已改的內容不相等→保留。idempotent（清成空後不再命中）。
+  try {
+    await query(
+      `UPDATE wiki_pages SET content = ''
+       WHERE node_type = 'notes' AND content = $1`,
+      ['# 專案備註\n\n在此記錄專案注意事項、部署環境、聯絡窗口等人工維護的資訊。']
+    );
+  } catch { /* non-blocking */ }
 }
 
 /**

@@ -52,6 +52,14 @@ const SOURCE_ROUTING_AGENTS = new Set([
 const SOURCE_ROUTING_MD_PATH = path.join(__dirname, 'source-routing.md');
 let _sourceRoutingCache = null;
 
+// 會吃「使用者手寫專案備註」的關卡：開發五關（同吃 CLAUDE.md 那組）＋兩個對話關（chat／chat-to-task）。
+// 備註是 per-project 動態值，由呼叫端 await getProjectNotes 後以 {{的姊妹}} project_notes var 傳入 render；
+// 注入位置固定在「規則之後、debug 之前」——同專案跨任務前綴不變＝吃 prompt cache（空備註不注入以免破壞前綴）。
+const NOTES_AGENTS = new Set([
+  'analysis-project', 'analysis-reject', 'coding-project', 'qa', 'playwright',
+  'chat', 'chat-to-task'
+]);
+
 // name → { mtimeMs, agent }
 const _cache = new Map();
 // CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
@@ -124,12 +132,17 @@ function fillPlaceholders(text, vars) {
   });
 }
 
-function makeRender(body, rulesMode, includeDebug, includeSourceRouting) {
+function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes) {
   return vars => {
     let out = fillPlaceholders(body, vars);
     // source-routing 用同一組 vars 填入已解析的 repo 路徑／分支，緊貼 body 上方（最貼近任務、最顯眼）
     if (includeSourceRouting) out = `${fillPlaceholders(loadSourceRouting(), vars)}\n\n${out}`;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
+    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 備註 → debug → sourcerouting → body。
+    // 空／未傳不注入，維持與現況一致的 cache 前綴。
+    if (includeNotes && vars && vars.project_notes && String(vars.project_notes).trim()) {
+      out = `# 專案備註（人工維護，優先遵循）\n\n${String(vars.project_notes).trim()}\n\n${out}`;
+    }
     if (rulesMode === 'full') out = `${loadPipelineRules()}\n\n${out}`;
     else if (rulesMode === 'qa') out = `${loadQaRules()}\n\n${out}`;
     return out;
@@ -155,7 +168,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;

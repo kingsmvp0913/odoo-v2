@@ -7,6 +7,7 @@ const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
 const { parseQaIssues, recordQaRejection } = require('./qa-rejection');
+const { getProjectNotes } = require('./project-notes');
 
 const QA_LIMIT = 5;
 // 每個 QA session 世代最多 resume 幾次（比照 coding 的 RESUME_LIMIT）：重驗走 --resume
@@ -103,6 +104,7 @@ async function runQaAgent(taskId, userId, signal) {
     }
     if (!callResult) {
       const agent = loadAgent('qa');
+      const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
       const prompt = agent.render({
         project_name: info.name,
         odoo_version: info.odoo_version,
@@ -111,7 +113,8 @@ async function runQaAgent(taskId, userId, signal) {
         repo_paths: buildRepoPaths(info, task.task_id),
         analysis_yaml: task.analysis_yaml || '（無規格）',
         prior_findings: priorFindings,
-        resolution
+        resolution,
+        project_notes: projectNotes || ''
       }).trim();
       callResult = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'qa' });
       await query('UPDATE tasks SET qa_session_id=$2, qa_resume_count=0, qa_prompt_ver=$3 WHERE id=$1', [taskId, callResult.sessionId || null, qaVer]).catch(() => {});

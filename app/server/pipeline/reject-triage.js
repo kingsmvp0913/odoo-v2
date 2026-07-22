@@ -5,6 +5,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
+const { getProjectNotes } = require('./project-notes');
 const { ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
@@ -87,6 +88,7 @@ async function runRejectTriage(taskId, userId, signal) {
     const agent = loadAgent('analysis-reject');
     const { getMainBranch } = require('./git');
     const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+    const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
     const prompt = agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
@@ -98,7 +100,8 @@ async function runRejectTriage(taskId, userId, signal) {
       stop_context: stopContext,
       user_instruction: userInstruction,
       runtime_log_path: runtimeLog,
-      allow_bug: allowBug ? 'true' : 'false'
+      allow_bug: allowBug ? 'true' : 'false',
+      project_notes: projectNotes || ''
     }).trim();
     // 停在早期分析階段就被 resume 時 worktree 尚未建立；worktree 不存在 → 退回專案根（一定存在），
     // 否則 spawn 會拿不存在的 cwd 直接 ENOENT。分診不需任務 worktree（判 resume 後回 analysis 會重建）。

@@ -11,6 +11,7 @@ const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext } = require('./sync');
 const yaml = require('js-yaml');
 const { determineNextStatus, REQUIRED_FIELDS, logAnalysisGate } = require('./analysis');
+const { getProjectNotes } = require('./project-notes');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -60,7 +61,7 @@ function buildRepoPaths(info, taskId) {
   return (info.repos || []).map(r => `- ${path.join(wt, r.subdir)}`).join('\n') || '（無 repo）';
 }
 
-function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch) {
+function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch, projectNotes) {
   const agent = loadAgent('analysis-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -74,7 +75,8 @@ function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch) {
       git_branch: task.git_branch || `task/${task.task_id}`,
       original_text: task.original_text || '（無內容）',
       task_id: task.task_id,
-      clarification: clarification || '（無）'
+      clarification: clarification || '（無）',
+      project_notes: projectNotes || ''
     }).trim(),
     model: agent.model
   };
@@ -90,7 +92,7 @@ async function latestResolution(taskId) {
   return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
 }
 
-function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch) {
+function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch, projectNotes) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -105,7 +107,8 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch) {
       commit_message: buildCommitMessage(task),
       repo_list: repoList,
       resolution: resolution || '（無）',
-      retry_feedback: retryFeedback || '（無）'
+      retry_feedback: retryFeedback || '（無）',
+      project_notes: projectNotes || ''
     }).trim(),
     model: agent.model
   };
@@ -178,9 +181,10 @@ async function runTaskAnalysis(taskId, userId, signal) {
 
   // base 主分支依實際 repo 而定（main/master）：供 source-routing 給出正確 diff 基底，避免 agent 猜成 main→fatal
   const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+  const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   let raw;
   try {
-    const built = buildAnalysisPrompt(task, info, clarification, wtParent, mainBranch);
+    const built = buildAnalysisPrompt(task, info, clarification, wtParent, mainBranch, projectNotes);
     // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
     const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
@@ -257,7 +261,8 @@ const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '18
 async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const cwd = worktreeParent(info.root, task.task_id);
   const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
-  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', mainBranch);
+  const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
+  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', mainBranch, projectNotes);
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 

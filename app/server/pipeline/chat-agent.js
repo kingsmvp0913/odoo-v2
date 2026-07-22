@@ -1,6 +1,7 @@
 const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
+const { getProjectNotes } = require('./project-notes');
 const { query } = require('../db');
 
 async function chatReply(projectId, chatId, userMessage, userId) {
@@ -16,10 +17,12 @@ async function chatReply(projectId, chatId, userMessage, userId) {
   const projectName = projRows[0]?.name || String(projectId);
 
   const agent = loadAgent('chat');
+  const projectNotes = await getProjectNotes(projectId).catch(() => null);
   const prompt = agent.render({
     project_name: projectName,
     history: historyText ? '\n\n[對話歷史]\n' + historyText : '',
-    user_message: userMessage
+    user_message: userMessage,
+    project_notes: projectNotes || ''
   });
 
   await query(

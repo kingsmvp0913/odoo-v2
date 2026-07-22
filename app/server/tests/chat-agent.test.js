@@ -13,9 +13,10 @@ const { chatReply } = require('../pipeline/chat-agent');
 beforeEach(() => {
   mockRunClaude.mockClear();
   mockQuery.mockReset();
-  // 依 SQL 內容分派回傳：wiki_pages / project_chat_messages(history) / projects.name / INSERT
+  // 依 SQL 內容分派回傳：wiki_pages(專案備註) / project_chat_messages(history) / projects.name / INSERT
   mockQuery.mockImplementation((sql) => {
-    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [{ title: 'W', content: '維基內容' }] });
+    // getProjectNotes 查 project-notes 頁；此測試專案未寫備註 → 回空（不注入）
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
     if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
     if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
     return Promise.resolve({ rows: [] }); // INSERT 等
@@ -29,7 +30,20 @@ test('prompt 帶入專案名、指示按需查 wiki，不預載 wiki 內容', as
   expect(prompt).toContain('鴻久');                 // 專案名帶入
   expect(prompt).toContain('/ai/wiki/pages');       // 按需查 wiki 指引
   expect(prompt).not.toContain('請根據以下 Wiki 資料回答'); // 無舊 wiki 優先框架
-  expect(prompt).not.toContain('維基內容');          // 不預載 wiki 內容（mock 的 wiki content 不應出現）
+  expect(prompt).not.toContain('# 專案備註（人工維護，優先遵循）'); // 未寫備註 → 不注入備註區塊
+});
+
+test('專案有備註 → 注入 prompt（供 chat 優先遵循，免再 curl）', async () => {
+  mockQuery.mockImplementation((sql) => {
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [{ content: '部署到 8069 埠，窗口 Amy' }] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await chatReply('1', '2', '部署在哪個埠', 99);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('# 專案備註（人工維護，優先遵循）');
+  expect(prompt).toContain('部署到 8069 埠，窗口 Amy');
 });
 
 test('Branch A：prompt 指示資料類問題用 getSQL（skill 原生可達）', async () => {
