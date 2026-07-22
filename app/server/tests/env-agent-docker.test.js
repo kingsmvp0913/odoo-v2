@@ -9,6 +9,7 @@ jest.mock('../lib/docker-env', () => {
   const actual = jest.requireActual('../lib/docker-env');
   return {
     ...actual,
+    ensureDockerRunning: jest.fn().mockResolvedValue(undefined),
     ensureImage: jest.fn().mockResolvedValue({ ok: true, log: '[image] ok\n' }),
     runContainer: jest.fn().mockResolvedValue({ ok: true, log: 'cid\n' }),
     removeContainer: jest.fn().mockResolvedValue(undefined),
@@ -61,6 +62,16 @@ test('runEnvSetup（docker）：image build 失敗 → 落 error，確實走到 
   const { rows: [env] } = await dbModule.query('SELECT status, error_msg FROM odoo_envs WHERE project_id=$1', [PID]);
   expect(env.status).toBe('error');
   expect(env.error_msg).toContain('image');
+});
+
+test('runEnvSetup（docker）：Docker 引擎沒起（ensureDockerRunning reject）→ 落 error，且不進 build', async () => {
+  dockerEnv.ensureDockerRunning.mockRejectedValueOnce(new Error('Docker 引擎啟動逾時，請手動確認 Docker Desktop'));
+  await envAgent.runEnvSetup(PID);
+  expect(dockerEnv.ensureDockerRunning).toHaveBeenCalled();
+  expect(dockerEnv.ensureImage).not.toHaveBeenCalled(); // preflight 失敗就收尾，不浪費時間去 build
+  const { rows: [env] } = await dbModule.query('SELECT status, error_msg FROM odoo_envs WHERE project_id=$1', [PID]);
+  expect(env.status).toBe('error');
+  expect(env.error_msg).toContain('Docker');
 });
 
 test('upgradeModules（docker）：exec odoo -i/-u <mod> --stop-after-init，帶對 dbName', async () => {

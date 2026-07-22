@@ -68,15 +68,23 @@ describe('buildRunArgs', () => {
     const vIdx = args.indexOf('-v');
     expect(args[vIdx + 1]).toBe('/repos/p1/main:/mnt/extra-addons/main:ro');
   });
-  test('odoo 參數：db、addons-path 含核心、db_host 已 remap、server 參數帶入', () => {
+  test('odoo 參數：db、addons-path 含核心、server 參數帶入；DB 連線不走 CLI（改走 entrypoint env）', () => {
     const odooIdx = args.indexOf('odoo');
     const tail = args.slice(odooIdx);
     expect(tail).toContain('test_p1');
     const apIdx = tail.indexOf('--addons-path');
     expect(tail[apIdx + 1]).toContain(d.CORE_ADDONS);
-    const hIdx = tail.indexOf('--db_host');
-    expect(tail[hIdx + 1]).toBe('host.docker.internal');
     expect(tail).toContain('--without-demo=all');
+    // 官方 image entrypoint 會在使用者參數後補一組 --db_host/... 覆蓋 CLI 值，故 run 的 DB 連線
+    // 一律不放 CLI（否則被覆蓋成 db:5432/odoo），改用 -e HOST=... 讓 entrypoint 組出正確連線。
+    expect(tail).not.toContain('--db_host');
+  });
+  test('DB 連線改以 entrypoint env 傳入（-e HOST/USER，localhost 已 remap）', () => {
+    // image 之前的 -e 旗標區
+    const image = 'odoo-idx:16';
+    const preImage = args.slice(0, args.indexOf(image));
+    expect(preImage).toContain('HOST=host.docker.internal');
+    expect(preImage).toContain('USER=odoo');
   });
 });
 
@@ -148,5 +156,43 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     const r = await d.ensureImage('16', '/ctx', { spawnFn: fakeSpawn({ code: 0, stdout: 'imgid\n' }) });
     expect(r.ok).toBe(true);
     expect(r.log).toContain('已存在');
+  });
+
+  // argv 組法：捕捉實際傳給 spawn 的參數（execOdoo 走 runDocker→spawn）
+  function captureSpawn(captured) {
+    return (cmd, args) => { captured.cmd = cmd; captured.args = args; return fakeSpawn({ code: 0, stdout: 'ok' })(); };
+  }
+  test('execOdoo：shell 子指令排在 odoo 之後、db 參數之前（否則 odoo 報 unrecognized shell）', async () => {
+    const cap = {};
+    await d.execOdoo(
+      { container: 'c1', dbName: 'test_p1', dbArgs: ['--db_host', 'localhost'], mounts: [], odooArgs: ['shell', '--no-http'], interactive: true },
+      { spawnFn: captureSpawn(cap), input: 'print(1)' }
+    );
+    const a = cap.args;
+    expect(a[0]).toBe('exec');
+    const odooIdx = a.indexOf('odoo');
+    expect(a[odooIdx + 1]).toBe('shell');            // shell 緊接 odoo
+    expect(a.indexOf('shell')).toBeLessThan(a.indexOf('-d')); // 在 db 參數之前
+    expect(a).toContain('--no-http');
+  });
+  test('execOdoo：以 - 開頭的 odooArgs（如 -i）維持 server 指令，不誤判成子指令', async () => {
+    const cap = {};
+    await d.execOdoo(
+      { container: 'c1', dbName: 'test_p1', dbArgs: [], mounts: [], odooArgs: ['-i', 'sale', '--stop-after-init'] },
+      { spawnFn: captureSpawn(cap) }
+    );
+    const a = cap.args;
+    const odooIdx = a.indexOf('odoo');
+    expect(a[odooIdx + 1]).toBe('-d');               // 沒有子指令，直接接 db 參數
+    expect(a.indexOf('-d')).toBeLessThan(a.indexOf('-i'));
+  });
+  test('execPipInstall：用 python3（官方 image 無 python 別名）、以 root 補件', async () => {
+    const cap = {};
+    await d.execPipInstall('c1', ['docxtpl', 'htmldocx'], { spawnFn: captureSpawn(cap) });
+    const a = cap.args;
+    expect(a.slice(0, 4)).toEqual(['exec', '-u', 'root', 'c1']);
+    expect(a.slice(4, 8)).toEqual(['python3', '-m', 'pip', 'install']);
+    expect(a).toContain('docxtpl');
+    expect(a).toContain('htmldocx');
   });
 });

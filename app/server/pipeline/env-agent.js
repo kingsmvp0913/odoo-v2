@@ -118,11 +118,11 @@ const { killPidGracefully, killChildGracefully, killTreeWindows, isWindows, pidS
 // 預設 90s 可用 ENV_HEALTH_TIMEOUT_MS 放寬：大量模組首次載入（asset bundle）可能超過 90s 才 listen，
 // 被誤殺會標 error 即使其實正要起來
 const HEALTH_TIMEOUT_MS = parseInt(process.env.ENV_HEALTH_TIMEOUT_MS || '90000', 10);
-function waitForPort(port, timeoutMs = HEALTH_TIMEOUT_MS, intervalMs = 1000) {
+function waitForPort(port, timeoutMs = HEALTH_TIMEOUT_MS, intervalMs = 1000, host = '127.0.0.1') {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
     const attempt = () => {
-      const sock = net.connect({ port, host: '127.0.0.1' });
+      const sock = net.connect({ port, host });
       sock.setTimeout(2000);
       const fail = () => {
         sock.destroy();
@@ -878,6 +878,14 @@ async function _runEnvSetupDocker(projectId) {
   let log = `[docker] mode=docker image=${ctx.image} container=${ctx.container} port=${port}\n`;
   const firstBuild = !fs.existsSync(readyMarker);
 
+  // 0) 確保 Docker daemon 在跑（Windows 自動啟動 Docker Desktop 並等待就緒）。
+  // 沒這道 preflight，daemon 沒起時會直接落到 build 拿到一串 npipe 連線亂碼、誤報「image build 失敗」。
+  try {
+    await dockerEnv.ensureDockerRunning();
+  } catch (e) {
+    return _failEnv(projectId, 'Docker 引擎未啟動或啟動逾時，請確認 Docker Desktop', log + `[docker] ${e.message}\n`);
+  }
+
   // 1) 確保平台 image（odoo:<major> + chromium）；首次 build 較久
   const img = await dockerEnv.ensureImage(ctx.major, DOCKER_CTX_DIR);
   log += img.log;
@@ -893,8 +901,9 @@ async function _runEnvSetupDocker(projectId) {
   log += `[docker] run ${run.ok ? 'OK' : 'FAIL'}\n${run.log.slice(-300)}\n`;
   if (!run.ok) return _failEnv(projectId, `docker run 失敗：${(run.stderr || '').slice(-200)}`, log);
 
-  // 3) 健康檢查：埠已 host-mapped，沿用 waitForPort。首次含 base 安裝，放寬逾時。
-  const healthy = await waitForPort(port, firstBuild ? Math.max(HEALTH_TIMEOUT_MS, 300000) : HEALTH_TIMEOUT_MS);
+  // 3) 健康檢查：容器發佈在 envHost（127.0.0.x，每專案獨立 loopback host），故探 envHost 而非
+  // 127.0.0.1（docker -p 只綁 envHost，探 127.0.0.1 會永遠連不到、卡建立中）。首次含 base 安裝，放寬逾時。
+  const healthy = await waitForPort(port, firstBuild ? Math.max(HEALTH_TIMEOUT_MS, 300000) : HEALTH_TIMEOUT_MS, 1000, envHost);
   if (!healthy) {
     log += `[docker] 健康檢查失敗，容器 log：\n${await dockerEnv.containerLogs(ctx.container).catch(() => '')}`;
     await dockerEnv.removeContainer(ctx.container);
