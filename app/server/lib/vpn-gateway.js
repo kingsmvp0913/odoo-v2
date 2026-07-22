@@ -1,13 +1,14 @@
-const { execFileSync: realExecFileSync } = require('child_process');
+const { execFileSync: realExecFileSync, execFile: realExecFile } = require('child_process');
 const realFs = require('fs');
 const os = require('os');
 const path = require('path');
-const net = require('net');
 // Docker daemon 沒起時自動啟動 Docker Desktop 的邏輯已上移到通用驅動層 docker-env，兩邊共用一份。
 const { ensureDockerRunning } = require('./docker-env');
 
 const IMAGE_NAME = 'odoo-v2-vpn-gateway:latest';
-const GATEWAY_TIMEOUT_MS = 25000;
+// 40 秒須大於 entrypoint 等 tun0 的 30 秒上限＋撥通後路由建立的數秒，避免把「慢但會成功」的
+// 撥號誤判逾時；撥號失敗的容器會在 entrypoint 的 30 秒後退出，剛好落在此窗內被就緒檢查撈到 log。
+const GATEWAY_TIMEOUT_MS = 40000;
 const POLL_INTERVAL_MS = 1000;
 
 const PORT_RANGE_START = 11000;
@@ -39,21 +40,39 @@ function isContainerRunning(name, execFileSync) {
   }
 }
 
-function defaultWaitForPort(port, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + timeoutMs;
-    (function attempt() {
-      const sock = net.connect({ host: '127.0.0.1', port }, () => { sock.end(); resolve(); });
-      sock.on('error', () => {
-        sock.destroy();
-        if (Date.now() >= deadline) {
-          reject(new Error(`VPN 連線逾時（${Math.round(timeoutMs / 1000)} 秒內轉發 port 未就緒），請確認 VPN 帳號密碼與設定檔是否正確`));
-        } else {
-          setTimeout(attempt, POLL_INTERVAL_MS);
-        }
-      });
-    })();
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 在容器內用 nc 對目標開一個 TCP 連線探測可達性。成功（exit 0）代表 tun0 已建立、VPN 路由
+// 已能送達目標——這才是真正就緒。用非同步 execFile，撥號輪詢期間不阻塞 Node 事件迴圈。
+function probeReachable(name, host, port, execFile) {
+  return new Promise((resolve) => {
+    execFile('docker', ['exec', name, 'nc', '-z', '-w', '2', host, String(port)], (err) => resolve(!err));
   });
+}
+
+// 為何不沿用「轉發 port 可連上」當就緒訊號：docker 的 -p userland proxy 在容器一啟動（毫秒級）
+// 就接受該 port 的 TCP 連線，即使容器內 socat 還沒 listen、tun0 還沒撥通。只看轉發 port 會誤判
+// 「已就緒」→ 呼叫端過早清掉掛載進去的 .ovpn，openvpn 可能還沒開檔就撲空（"Error opening
+// configuration file" → 容器立即退出）；就算僥倖沒撲空，第一個查詢也會在路由還沒建立時發出而逾時。
+// 改成輪詢容器內「真的連得到目標」才算就緒，並在容器中途退出時撈 log 給出可診斷的錯誤。
+async function defaultWaitReachable(name, host, port, timeoutMs, deps) {
+  const execFileSync = deps.execFileSync || realExecFileSync;
+  const execFile = deps.execFile || realExecFile;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!isContainerRunning(name, execFileSync)) {
+      let log = '';
+      try { log = execFileSync('docker', ['logs', '--tail', '20', name], { encoding: 'utf8' }); } catch { /* 容器可能已被移除 */ }
+      throw new Error(`VPN 撥號失敗，容器已結束（多為帳號密碼或設定檔錯誤）：\n${log}`.trim());
+    }
+    if (await probeReachable(name, host, port, execFile)) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`VPN 連線逾時（${Math.round(timeoutMs / 1000)} 秒內未能透過隧道連到 ${host}:${port}），請確認 VPN 帳號密碼與設定檔是否正確`);
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
 }
 
 // image 不存在時（機器從沒 build 過，或 Dockerfile 有更新）現場 build，
@@ -111,7 +130,7 @@ async function ensureGatewayRunning(conn, deps = {}) {
   const writeFileSync = deps.writeFileSync || realFs.writeFileSync;
   const rmSync = deps.rmSync || realFs.rmSync;
   const tmpFilePath = deps.tmpFilePath || ((id) => path.join(os.tmpdir(), `vpn-${id}.ovpn`));
-  const waitForPort = deps.waitForPort || defaultWaitForPort;
+  const waitReachable = deps.waitReachable || defaultWaitReachable;
 
   await ensureDockerRunning(deps);
 
@@ -121,9 +140,11 @@ async function ensureGatewayRunning(conn, deps = {}) {
   // tmpFile 路徑先算好（跟 startGateway 內部算法一致），這樣就算 startGateway
   // 半路丟出例外（如 docker run 失敗），外層 finally 仍知道要清哪個檔案。
   const tmpFile = tmpFilePath(conn.id);
+  const { host: targetHost, port: targetPort } = targetHostPort(conn);
   try {
     startGateway({ ...conn, vpn_container_name: name }, { execFileSync, writeFileSync, rmSync, tmpFilePath });
-    await waitForPort(conn.vpn_forward_port, GATEWAY_TIMEOUT_MS);
+    // 等「隧道真的連得到目標」才算就緒——這也保證 .ovpn 撐到 openvpn 開檔之後才被清掉。
+    await waitReachable(name, targetHost, targetPort, GATEWAY_TIMEOUT_MS, { execFileSync, execFile: deps.execFile });
   } finally {
     rmSync(tmpFile, { recursive: true, force: true });
   }
