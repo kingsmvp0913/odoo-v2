@@ -479,7 +479,11 @@ window.TaskDetailView = Vue.defineComponent({
       if (!this.csAllAnswered) return;
       this.csRetrying = true;
       try {
-        await Api.post(`tasks/${this.task.id}/cs-data-submit`, { answers: { ...this.csAnswers } });
+        // 只送「當前這輪」的問題答案——csAnswers 以問題文字為 key 且跨 refresh 累積，
+        // 直接整包送會夾帶上一輪已答過的舊題（值被 refresh 清成空）→ 時間軸出現整塊空 A。
+        const answers = {};
+        this.csQuestions.forEach(q => { answers[q] = this.csAnswers[q] || ''; });
+        await Api.post(`tasks/${this.task.id}/cs-data-submit`, { answers });
         this.csAnswers = {};
         showToast('已補充資料，重新送入分析', 'success');
         await this.load();
