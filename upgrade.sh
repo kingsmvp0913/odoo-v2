@@ -28,17 +28,18 @@ if ! git diff --quiet "$BEFORE" "$AFTER" -- app/package.json app/package-lock.js
   (cd app && npm install)
 fi
 
-# 3. 停舊 server：先砍 tmux session、再補殺任何殘留 node 行程，避免 3939 被佔用／
+# 3. 只停「server 行程」、不砍整個 tmux session。
+#    關鍵：若你正 attach 在 aidev session 裡跑本腳本，kill-session 會把你當場踢出 tmux
+#    並中斷後續重啟；改用 pkill 只結束 node server，session 保留，避免 3939 被佔用／
 #    違反「僅允許單一 Node 行程」的硬限制（見 DEPLOY.md）。
 echo "重啟 server..."
-tmux kill-session -t "$SESSION" 2>/dev/null || true
 pkill -f 'app/server/index.js' 2>/dev/null || true
 sleep 1
 
-# 4. 在 tmux 背景啟動（./start.sh 前景阻塞，由 tmux 保活；DB schema 於啟動時自動 migrate）。
-#    用 send-keys 而非把指令塞進 new-session，好處是 start.sh 若中途結束，session 內留下
-#    shell 與錯誤訊息可 attach 檢視，不會整個 session 消失看不到原因。
-tmux new-session -d -s "$SESSION"
+# 4. 確保 session 存在（沒有才建），再把啟動指令送進去。send-keys 會排在本腳本結束後執行，
+#    所以就算你人在 aidev 裡跑，這行也會在你回到 prompt 後接手把 server 起回來。
+#    ./start.sh 前景阻塞、由 tmux 保活；DB schema 於啟動時自動 migrate。
+tmux has-session -t "$SESSION" 2>/dev/null || tmux new-session -d -s "$SESSION"
 tmux send-keys -t "$SESSION" "cd '$ROOT' && ./start.sh" Enter
 
 echo "完成。server 已在 tmux session '$SESSION' 背景啟動。"
