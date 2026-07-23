@@ -89,7 +89,28 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
     qa_rejections = { relevant_category: relevant, count: q.relevant_n, env_flaky_count: q.env_n };
   }
 
-  return { agent: agent.name, stage, window_days: windowDays, token, tasks, rejections, qa_rejections };
+  // wiki 文件漂移：對 chat／cs 兩關才有意義（它們是漂移回報來源），比照 rejections 依 category 彙整＋抽樣本
+  let wiki_drift = null;
+  const DRIFT_SOURCE = { chat: 'chat', cs: 'cs' };
+  const driftSrc = DRIFT_SOURCE[stage];
+  if (driftSrc) {
+    const { rows: cats } = await query(
+      `SELECT COALESCE(category,'未分類') AS category, COUNT(*)::int AS n
+         FROM wiki_drift WHERE source=$1 AND created_at >= $2 GROUP BY category`,
+      [driftSrc, cutoff]
+    );
+    const { rows: samp } = await query(
+      `SELECT slug, reason FROM wiki_drift
+        WHERE source=$1 AND created_at >= $2 ORDER BY id DESC LIMIT $3`,
+      [driftSrc, cutoff, SAMPLE]
+    );
+    wiki_drift = {
+      by_category: Object.fromEntries(cats.map(c => [c.category, c.n])),
+      samples: samp.map(s => (s.slug ? `${s.slug}：` : '') + s.reason)
+    };
+  }
+
+  return { agent: agent.name, stage, window_days: windowDays, token, tasks, rejections, qa_rejections, wiki_drift };
 }
 
 module.exports = { buildAgentSummary };

@@ -128,6 +128,11 @@ function startCron() {
         await cleanupOldTaskEvents().catch(err => console.error('[CRON] events-cleanup:', err.message));
         try { cleanupOldDeployLogs(); } catch (err) { console.error('[CRON] deploy-log-cleanup:', err.message); }
         await cleanupOldTokenUsage().catch(err => console.error('[CRON] token-usage-cleanup:', err.message));
+        // 每小時把已分類的 wiki 漂移套用成「從程式碼重生該頁」的更新（獨立 runner；同頁去重不重複更新）
+        if (!testMode) {
+          const { applyPendingWikiDrift } = require('./pipeline/wiki-drift-runner');
+          await applyPendingWikiDrift().catch(err => console.error('[CRON] wiki-drift-apply:', err.message));
+        }
       }
 
       // 退回原因慢慢整理：每 tick 撈一小批 status='new' 的退回跑分類 agent（工作流程健檢子專案 1）

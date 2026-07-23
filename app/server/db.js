@@ -275,6 +275,7 @@ async function migrate() {
       reason      TEXT NOT NULL,
       category    TEXT,
       status      TEXT NOT NULL DEFAULT 'new',
+      applied_at  TIMESTAMPTZ,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
@@ -459,7 +460,8 @@ async function migrate() {
     // 自助註冊審核閘門：DEFAULT true → 既有帳號與所有可信建立路徑（setup/admin）自動核准；
     // 唯一寫 false 的是 /api/auth/register。故新增欄位即回填既有列 true，不需另做 backfill。
     { table: 'users', col: 'approved',       sql: 'ALTER TABLE users ADD COLUMN approved BOOLEAN NOT NULL DEFAULT true' },
-    { table: 'task_rejections', col: 'source', sql: "ALTER TABLE task_rejections ADD COLUMN source TEXT NOT NULL DEFAULT 'human'" }
+    { table: 'task_rejections', col: 'source', sql: "ALTER TABLE task_rejections ADD COLUMN source TEXT NOT NULL DEFAULT 'human'" },
+    { table: 'wiki_drift', col: 'applied_at', sql: 'ALTER TABLE wiki_drift ADD COLUMN applied_at TIMESTAMPTZ' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
