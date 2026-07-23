@@ -43,6 +43,42 @@
 
 日後啟動（不重跑安裝）：Windows 用 `.\start.ps1`，Linux 用 `./start.sh`。
 
+## Docker 模式（Linux）
+
+適用於「公司規定服務必須跑在容器內」或宿主低位埠已被其他服務佔滿的機器。平台本體跑在單一容器內，
+測試區 Odoo 以平行（sibling）容器建立。Windows 機不適用，維持原本的 `install.ps1` 流程。
+
+```bash
+cp .env.example .env      # 依實際位置調整 HOST_REPO_DIR / HOST_ENV_BASE
+mkdir -p "$HOST_ENV_BASE" # 先自己建，否則 bind mount 會由 docker 建成 root 擁有、容器內寫不進去
+docker compose up -d
+docker exec -it odoo-v2 node scripts/setup.js --skip-start
+docker exec -it odoo-v2 claude          # 一次性訂閱登入，憑證存於 volume
+docker restart odoo-v2
+```
+
+平台埠 `8771`、容器內 PostgreSQL 埠 `8772`、測試區埠範圍由 `config.json` 的
+`PROJECT_PORT_MIN`／`PROJECT_PORT_MAX` 指定。
+
+**同構掛載**：`.env` 的 `HOST_REPO_DIR`／`HOST_ENV_BASE` 會同時作為宿主與容器內的路徑。兩者必須
+相同——平台在容器內 spawn `docker run -v <path>` 時，該路徑由宿主的 docker daemon 解讀，路徑不
+同構會讓測試區掛到不存在的目錄、自訂 addons 全數遺失。
+
+**容器身分**：image 內的 `odoo` 使用者 uid/gid 固定 `1004:1004`（對齊宿主）並屬 gid `999`
+（宿主 `docker` 群組）。若你的宿主 uid/gid 不同，需同步修改 `Dockerfile` 內的對應數值。
+
+**修改 `docker/entrypoint.sh` 後必須 `docker compose build`**：它是 `COPY` 進 image 的，
+只 `restart` 不會生效（容器會拿舊版，症狀是改動看起來完全沒作用）。
+
+**PostgreSQL 監聽位址每次啟動重新偵測**：測試區容器經 `host.docker.internal` 連進來，該位址即
+宿主 docker0 的 IP，各機 daemon 的 `bip` 設定不同（docker 預設 `172.17.0.1`，本機為 `10.0.0.1`），
+故由 entrypoint 偵測後寫入 `conf.d/odoo-v2.conf` 與 `pg_hba.conf`；偵測不到時可用
+`PG_BRIDGE_ADDR`／`PG_BRIDGE_NET` 覆寫。
+
+**容器重建後需重跑 `setup.js`**：claude 的登入憑證在 `claude-home` volume 內會保留，但 MCP／
+plugin 設定寫在容器檔案系統的 `~/.claude.json`，`compose up` 重建容器時會消失，重跑
+`docker exec -it odoo-v2 node scripts/setup.js --skip-start` 即補回（idempotent，不會動到資料庫）。
+
 ## ⚠️ 硬限制：僅允許單一 Node 行程
 
 App 的互斥機制（任務派工去重 `_inFlight`、專案鎖 `project-lock`、環境建置去重、approve 佔位）

@@ -67,6 +67,10 @@ ENV PGADMIN_USER=odoo
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
+# claude 設定目錄：compose 掛 named volume 於此保存登入憑證。volume 首次掛載會沿用 image 內
+# 該路徑的擁有者，image 內若不存在則 docker 建成 root:root，claude 寫 plugins/ 會 EACCES。
+RUN mkdir -p /home/odoo/.claude && chown odoo:odoo /home/odoo/.claude
+
 USER odoo
 
 # uv/uvx（serena MCP 用）。裝在使用者家目錄，故須在 USER 切換之後。
