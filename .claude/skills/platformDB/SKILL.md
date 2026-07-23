@@ -29,6 +29,8 @@ node .claude/skills/platformDB/query.js --file q.sql             # 從檔讀 SQL
 | `task_rejections` / `rejection_items` | 人工審核退回原因與其分類拆解 |
 | `classify_samples` | failure-classifier regex 判不出、交 haiku 的樣本 |
 | `health_check_runs` / `health_check_findings` | 工作流程健檢執行與診斷 |
+| `wiki_drift` | chat／cs 回報「wiki 頁錯、程式碼對」的漂移佇列。`status`(new→classified／error)、`category`(缺漏/過時/錯誤/用詞/其他)、`applied_at`(每小時 runner 觸發重生的時間) |
+| `wiki_pages` | 專案 wiki。`node_type='troubleshooting'` 為排障結論（chat/cs 經 `<memory>` 側通道留存，slug 皆 `ts-` 前綴） |
 
 完整 schema 見 `app/server/db.js` 的 `migrate()`。
 
@@ -50,6 +52,28 @@ SELECT COUNT(*) FILTER (WHERE qa_retry_count>0) qa_bounced,
 SELECT task_id, COUNT(*) runs FROM token_usage
 WHERE agent_type='coding' AND source='server'
 GROUP BY task_id ORDER BY runs DESC;
+
+-- token 成本總覽（依 model×關卡；含失敗輪才是真實成本）
+SELECT model, agent_type, COUNT(*) runs,
+       SUM(input_tokens) t_in, SUM(output_tokens) t_out,
+       SUM(cache_read_tokens) t_cache_read
+FROM token_usage GROUP BY model, agent_type ORDER BY t_out DESC;
+
+-- wiki 漂移佇列健康度（分類是否消化中、都是哪類錯）
+SELECT status, category, COUNT(*) FROM wiki_drift
+GROUP BY status, category ORDER BY status, count DESC;
+
+-- 最近被漂移觸發重生的頁（runner 每小時跑、7 天內同頁去重）
+SELECT p.name project, d.slug, MAX(d.applied_at) applied, COUNT(*) reports
+FROM wiki_drift d JOIN projects p ON p.id=d.project_id
+WHERE d.applied_at IS NOT NULL
+GROUP BY p.name, d.slug ORDER BY applied DESC LIMIT 20;
+
+-- 各專案累積的排障結論（troubleshooting 知識庫存量）
+SELECT p.name, COUNT(*) entries, MAX(w.updated_at) last_update
+FROM wiki_pages w JOIN projects p ON p.id=w.project_id
+WHERE w.node_type='troubleshooting' AND w.slug <> 'troubleshooting'
+GROUP BY p.name ORDER BY entries DESC;
 ```
 
 ## Common Mistakes

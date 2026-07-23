@@ -7,8 +7,16 @@
 ## Skills
 - **getSQL** (`.claude/skills/getSQL/SKILL.md`) - 透過 SSH-SQLM API 查詢遠端 PostgreSQL。觸發：`/getSQL`
 When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` before doing anything else.
-- **platformDB** (`.claude/skills/platformDB/SKILL.md`) - 查平台自己的本地 PostgreSQL（`claude` DB／port 5416）：tasks、token_usage、彈跳計數、pipeline 指標。觸發：`/platformDB`
+- **platformDB** (`.claude/skills/platformDB/SKILL.md`) - 查平台自己的本地 PostgreSQL（`claude` DB／port 5416）：tasks、token_usage、彈跳計數、pipeline 指標、wiki 漂移觀測。觸發：`/platformDB`
 When the user types `/platformDB`, invoke the Skill tool with `skill: "platformDB"` before doing anything else.
+- **agentPrompt** (`.claude/skills/agentPrompt/SKILL.md`) - 改 `.claude/agents/*.md`、共用 prompt 片段（source-routing／systematic-debugging／cs-capability）或 agent-loader 注入設定**之前必讀**：placeholder／`<result>`／側通道契約與驗證方式。觸發：`/agentPrompt`
+When the user types `/agentPrompt`, invoke the Skill tool with `skill: "agentPrompt"` before doing anything else.
+- **debugTask** (`.claude/skills/debugTask/SKILL.md`) - 依 taskId 一鍵拉齊失敗任務的全部除錯資訊（狀態、彈跳計數、task_events、deploy/E2E/odoo log、setup_log）＋「症狀→看哪裡」判讀表。觸發：`/debugTask`
+When the user types `/debugTask`, invoke the Skill tool with `skill: "debugTask"` before doing anything else.
+- **platformDev** (`.claude/skills/platformDev/SKILL.md`) - 開發平台本體（`app/server`／`app/public`）的慣例：jest/pg-mem/supertest、測試配對、前端結構與**配色 dark-mode 硬規則**（動 `app/public` 前先載入）。觸發：`/platformDev`
+When the user types `/platformDev`, invoke the Skill tool with `skill: "platformDev"` before doing anything else.
+- **wikiQuery** (`.claude/skills/wikiQuery/SKILL.md`) - 查專案 wiki 知識庫（頁面清單／內容／troubleshooting 排障結論）與漂移修正流向。觸發：`/wikiQuery`
+When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"` before doing anything else.
 <!-- /platform-only -->
 
 ## 0. Hard Rules
@@ -45,7 +53,7 @@ When the user types `/platformDB`, invoke the Skill tool with `skill: "platformD
 - Conformance > personal taste inside the codebase. Follow conventions even when you disagree.
 - If a codebase convention seems harmful, surface it explicitly. Don't fork silently.
 <!-- platform-only -->
-- 前端（`app/public`）配色一律走 `app.css` 的 CSS 變數／dark-aware class（如錯誤框套 `.error-msg`）；禁止在 inline style 寫死淺色 `background`（`#fff`/`#fef2f2`/`#f8fafc` 等）而不同時寫死可讀文字色——否則深色模式文字色吃 `var(--text)` 翻白＝隱形。底色需區隔時用 `var(--bg)`/`var(--surface)` 等變數，勿寫死。
+- 動 `app/public`／`app/server` 前先載入 **platformDev** skill（前端配色 dark-mode 硬規則與測試慣例已固化在該處）。
 <!-- /platform-only -->
 - 驗證統一在 deploy 關「安裝／升級模組」時進行（語法錯、invalid field、view 繼承錯、缺 depends 一併把關）；pipeline 各關**不自行**跑 py_compile／xmllint／odoo-bin 或建 DB 做本地驗證，寫對程式碼靠 Context7＋讀既有碼。
 
