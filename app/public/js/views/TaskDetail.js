@@ -880,22 +880,17 @@ window.TaskDetailView = Vue.defineComponent({
             <template v-else-if="timelineActionMode === 'cs_reply'">
               <div class="form-section">客服回覆草稿</div>
               <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
-              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，請確認內容後送出。</p>
-              <div style="text-align:right">
-                <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，確認內容後送出結案；若要調整或有疑問，於下方追問，客服會依此重新處理（釐清後若需改程式會自動轉開發）。</p>
+              <textarea v-model="csFollowup" class="form-control" rows="3"
+                placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行"
+                @keydown.enter.exact.prevent="csFollowupSubmit"></textarea>
+              <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
+                <button class="btn btn-secondary btn-sm" @click="csFollowupSubmit" :disabled="csFollowingUp || csConfirming || !csFollowup.trim()">
+                  {{ csFollowingUp ? '送出中...' : '送出' }}
+                </button>
+                <button class="btn btn-success btn-sm" @click="csConfirm" :disabled="csConfirming || csFollowingUp">
                   {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
                 </button>
-              </div>
-              <div style="margin-top:var(--space-3);border-top:1px solid var(--border);padding-top:var(--space-3)">
-                <p style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">草稿要調整或有疑問？在下方追問，客服會依此重新處理（釐清後若需改程式會自動轉開發）。</p>
-                <textarea v-model="csFollowup" class="form-control" rows="3"
-                  placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行"
-                  @keydown.enter.exact.prevent="csFollowupSubmit"></textarea>
-                <div style="text-align:right;margin-top:var(--space-2)">
-                  <button class="btn btn-secondary btn-sm" @click="csFollowupSubmit" :disabled="csFollowingUp || !csFollowup.trim()">
-                    {{ csFollowingUp ? '送出中...' : '送出' }}
-                  </button>
-                </div>
               </div>
             </template>
 
