@@ -3,9 +3,7 @@
     "defaultMode": "bypassPermissions",
     "allow": [
       "Read(**)",
-      "Write(**)",
       "Edit(**)",
-      "Glob(**)",
       "Grep(**)",
       "Bash(**)",
       "PowerShell(*)",
