@@ -22,8 +22,11 @@ async function runCsAgent(taskId, userId, signal) {
   );
   const answers = priorAnswers.length ? priorAnswers.map(l => l.content).join('\n\n') : '（尚無）';
 
-  // 追問重跑（cs_reply_pending→cs_running）時，撈最近一版 [客服回覆] 草稿當上下文，讓「把回覆改客氣點／
-  // 補一句 X」這種針對草稿的追問能連貫修訂。無前一版（首輪/補資料迴圈）則傳「（無）」＝行為不變。
+  // 撈最近一版 [客服回覆] 草稿（若有）當上下文，讓「把回覆改客氣點／補一句 X」這種針對草稿的追問能連貫
+  // 修訂——典型是追問重跑（cs_reply_pending→cs_running）。注意：只要曾有 operation 輪次寫過 [客服回覆]，
+  // 該筆 log 就會一直留著，補資料迴圈（cs_data_needed→cs-data-submit→cs_running）重跑時也會撈到同一份舊
+  // 草稿，並非「無前一版」；cs.md 已引導 agent 依最新使用者輸入判斷情境，非空不代表當次一定是追問。無任何
+  // 一版則傳「（無）」。
   const { rows: [priorReplyRow] } = await query(
     "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' AND content LIKE '[客服回覆]%' ORDER BY created_at DESC, id DESC LIMIT 1",
     [taskId]

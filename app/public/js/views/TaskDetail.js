@@ -492,6 +492,7 @@ window.TaskDetailView = Vue.defineComponent({
     },
     // 客服回覆這關追問：送出後 cs 依「原問題＋前一版草稿＋這次追問」重新處理（修草稿／釐清後轉補資料或開發）
     async csFollowupSubmit() {
+      if (this.csFollowingUp) return;
       if (!this.csFollowup.trim()) return;
       this.csFollowingUp = true;
       try {
