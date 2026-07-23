@@ -180,6 +180,29 @@ test('clarify 但無 questions → stopped（不靜默放行）', async () => {
   expect(t.status).toBe('stopped');
 });
 
+// answer → 純提問（僅最終人工審核退回）：在時間軸回答，不路由，回滾這次退回（提問不算退回）。
+test('answer（純提問）→ review_pending：Q&A 落時間軸、刪最近 task_rejections、reentry-1、清退回標記', async () => {
+  claudeReturns({ decision: 'answer', summary: '這個欄位設計成唯讀，是因為它同步自來源工單。' });
+  const id = await makeTask({ rejectCount: 1 });   // retry_feedback='[人工退回]\n備註型別錯'
+  await dbModule.query('UPDATE tasks SET reentry_count=1 WHERE id=$1', [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'system','[人工退回]')", [id]);
+
+  await runRejectTriage(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, reentry_count, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('review_pending');       // 留在原地讓對話持續
+  expect(t.reentry_count).toBe(0);               // 提問不算退回 → 回滾 +1
+  expect(t.retry_feedback).toBeNull();           // 退回標記／原因清掉
+  const { rows: rej } = await dbModule.query(
+    "SELECT id FROM task_rejections WHERE task_id=(SELECT task_id FROM tasks WHERE id=$1) AND status='new'", [id]
+  );
+  expect(rej.length).toBe(0);                     // 本次退回記錄刪除
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
+  expect(logs.some(l => l.role === 'user' && l.content.includes('備註型別錯'))).toBe(true);   // 提問落時間軸(=退回原因本文)
+  expect(logs.some(l => l.role === 'ai' && l.content.includes('同步自來源工單'))).toBe(true);  // 回答落時間軸
+  expect(logs.some(l => l.role === 'system' && l.content === '[人工退回]')).toBe(false);       // 系統退回標記回滾
+});
+
 // ---- 卡關修正指示入口（resolve_triage）----
 
 test('resolve 入口 advance target=e2e → playwright_running，並歸零 pw 計數器', async () => {

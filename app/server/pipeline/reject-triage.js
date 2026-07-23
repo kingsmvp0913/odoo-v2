@@ -141,6 +141,30 @@ async function runRejectTriage(taskId, userId, signal) {
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   };
 
+  // answer → 純提問（僅最終人工審核退回）：在時間軸回答，不路由。回滾這次 /reject 的副作用——提問不算退回，
+  // 只有真的退回修改才計入退回統計／健檢。刪本次 task_rejections(new)＋系統退回標記、reentry_count-1、清 retry_feedback。
+  if (decision === 'answer' && isReject) {
+    const question = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（提問）';
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, question]);
+    await logAi(summary || '（無回答）');
+    const { rows: [rej] } = await query(
+      "SELECT id FROM task_rejections WHERE task_id=$1 AND status='new' ORDER BY created_at DESC, id DESC LIMIT 1",
+      [task.task_id]
+    );
+    if (rej) await query('DELETE FROM task_rejections WHERE id=$1', [rej.id]);
+    const { rows: [sys] } = await query(
+      "SELECT id FROM task_logs WHERE task_id=$1 AND role='system' AND content='[人工退回]' ORDER BY created_at DESC, id DESC LIMIT 1",
+      [taskId]
+    );
+    if (sys) await query('DELETE FROM task_logs WHERE id=$1', [sys.id]);
+    await query(
+      "UPDATE tasks SET status='review_pending', reentry_count = CASE WHEN reentry_count > 0 THEN reentry_count - 1 ELSE 0 END, retry_feedback=NULL, updated_at=NOW() WHERE id=$1",
+      [taskId]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
+    return true;
+  }
+
   // clarify → 停下批次問人：退回原因含糊到 fix 與 respec 都說得通、且答案會左右去向時，不硬猜，
   // 走與 QA 同一條統一 clarify 閘門問使用者。答完回原分診關（reject_triage/resolve_triage），
   // 由本員帶「使用者答覆＋原退回原因」續判。carryFeedback 保原因避免被清空。

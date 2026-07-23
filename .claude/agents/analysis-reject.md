@@ -45,12 +45,13 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - `advance`：**僅限**卡關（修正指示）情境下使用者明確要求推進到某一關（如「環境修好了繼續」「重測 E2E」）→ 推進到指定關卡，**必須帶 target**：`qa`｜`merge`｜`deploy`｜`e2e`｜`review`。**審核退回不得用 advance 放掉問題**——退回一定是 bug 或需求，只能 fix／respec。
 - `clarify`：**退回原因含糊到 `fix` 與 `respec` 都說得通、且使用者的答案會決定去哪一邊**時 → 停下批次問使用者，**必須帶 questions**（1–3 個具體、二選一式的問題）。這是「問清楚勝過亂猜」的出口。**別濫用**：只要查程式／實機證據能判定是 bug 還是需求，就直接 fix／respec，不要問；純環境／再跑一次不要問（走 resume）。
 - `resume`：純環境／transient／單純再跑一次 → 回原關（{{stuck_stage}}）重跑。**確定是暫時狀態時用；「fix/respec 二選一但拿不準」該走 `clarify` 問人，不是用 resume 拖。**
+- `answer`：**僅限最終人工審核退回**情境——使用者填的是**純提問**（想理解為什麼這樣做、確認某個設計意圖、問影響範圍），不牽涉回報 bug、也沒要求改什麼 → 回 `summary`（給使用者的回答），**不路由、不動規格、不動任何狀態**。只要牽涉「哪裡不對／要改什麼」就走 `fix`／`respec`，不要用 `answer`；卡關修正指示（resolve）情境不要用 `answer`。
 
 【限制】
 - allow_bug = {{allow_bug}}。若為 false（同一問題上一輪已當程式問題修過仍被退）→ **禁止 fix**，改走 `respec`（交回分析重寫 SD）或 `resume`。
 - `advance` 的 target 最遠只到 `review`（送審）；不得放行到「完成」——核准是使用者的手動動作。
 
-【輸出】把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。decision 只有 resume／advance／fix／respec／clarify；advance 必帶 target、clarify 必帶 questions（字串陣列）。
+【輸出】把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。decision 只有 resume／advance／fix／respec／clarify／answer；advance 必帶 target、clarify 必帶 questions（字串陣列）。
 每個都必帶 summary：2–4 句繁體中文，寫給使用者看——停下原因總結 ＋ 你的結論（去向與理由）。不要把原始 traceback／log 原文抄進 summary，要濃縮成人看得懂的重點。
 
 範例（respec 的 summary 要含審核者要的正確行為／該調整的規格）：
@@ -62,4 +63,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 </result>
 <result>
 {"decision":"clarify","summary":"退回原因僅寫『備註不對』，無法判定是型別 bug 還是要改需求。","questions":["備註欄目前顯示型別錯誤，是要修正成正確型別（bug），還是改變備註的呈現需求（規格調整）？"]}
+</result>
+<result>
+{"decision":"answer","summary":"備註欄目前唯讀，是因為它同步自來源工單、由系統寫入以避免兩邊不一致——這是規格的既定設計，不是 bug。若想讓它可手動編輯，請直接說要調整需求。"}
 </result>
