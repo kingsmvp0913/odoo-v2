@@ -12,7 +12,7 @@ ENV LC_ALL=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg git tmux \
         python3 python3-venv python3-pip \
-        libxml2-utils \
+        libxml2-utils iproute2 \
         postgresql postgresql-contrib \
         openssh-client \
     && rm -rf /var/lib/apt/lists/*
@@ -56,6 +56,10 @@ RUN groupadd -g 1004 odoo \
 ENV PGDATA=/var/lib/postgresql/data
 ENV PGBIN=/usr/lib/postgresql/16/bin
 RUN mkdir -p "$PGDATA" && chown -R odoo:odoo "$PGDATA" && chmod 700 "$PGDATA"
+
+# unix socket 目錄：apt 的 postgresql 套件把它建成 postgres:postgres，而叢集是以 odoo 執行，
+# 會在此建 .s.PGSQL.<port>.lock —— 不改擁有者則 postmaster 一啟動就 FATAL: Permission denied。
+RUN chown odoo:odoo /var/run/postgresql
 
 # ensurePostgres 的 admin 身分：initdb 以 odoo 建叢集，故 superuser 即 odoo（預設值 postgres 不存在）。
 ENV PGADMIN_USER=odoo

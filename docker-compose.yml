@@ -1,0 +1,27 @@
+services:
+  odoo-v2:
+    build: .
+    image: odoo-v2:latest
+    container_name: odoo-v2
+    # host 網路：容器內外的埠與 127.0.0.x loopback 完全同構。這是三件事的前提——
+    # (1) 平台連得到測試區綁的 127.0.0.x；(2) 測試區的 host.docker.internal:8772 指得到平台 PG；
+    # (3) 配埠時的 bind 探測看得到宿主真實佔用。
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      # 平台建立測試區 sibling 容器用的宿主 socket。
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 同構掛載（宿主路徑 === 容器路徑），見 .env.example 的說明。
+      - ${HOST_REPO_DIR}:${HOST_REPO_DIR}
+      - ${HOST_ENV_BASE}:${HOST_ENV_BASE}
+      # claude 訂閱登入憑證與 PG 資料：不得隨容器重建而消失。
+      - claude-home:/home/odoo/.claude
+      - pgdata:/var/lib/postgresql/data
+    working_dir: ${HOST_REPO_DIR}
+    environment:
+      APP_DIR: ${HOST_REPO_DIR}
+      ODOO_ENV_BASE: ${HOST_ENV_BASE}
+
+volumes:
+  claude-home:
+  pgdata:
