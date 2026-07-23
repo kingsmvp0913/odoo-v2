@@ -15,13 +15,14 @@ async function runRespecPatch(taskId, userId, signal) {
   );
   if (!task) return;
 
-  // pre-coding 判定不能只看 coding_session_id：coding fresh 成功但 CLI 沒回 sessionId 時會存 NULL
-  // （task-agent 以 COALESCE 防的正是這件事），已併版部署中的任務留言會被誤送回 spec_review、任務倒退過 merge。
-  // git_branch 於 branch_pending→coding 轉移必寫＝「已開工」的可靠訊號；兩者皆空才是規格審核閘門的改規格
-  // （spec_review 嚴格在 coding 之前）。pre-coding：patch 完退回 spec_review 讓使用者重看、不設 retry_feedback
-  // （尚無 session 可 resume）；否則照舊退回 coding_running 增量補實作、帶 retry_feedback（無 session 則 fresh）。
+  // pre-coding（規格審核閘門，coding 尚未開工）＝對話式規格問答，委派 spec-review 處理器讀 task_logs 判 answer/revise。
+  // 判定不能只看 coding_session_id：coding fresh 成功但 CLI 沒回 sessionId 時會存 NULL（task-agent 以 COALESCE 防的正是這件事）；
+  // git_branch 於 branch_pending→coding 轉移必寫＝「已開工」的可靠訊號，兩者皆空才是 pre-coding。
   const preCoding = !task.coding_session_id && !task.git_branch;
-  const returnStatus = preCoding ? 'spec_review' : 'coding_running';
+  if (preCoding) {
+    const { runSpecReview } = require('./spec-review');
+    return runSpecReview(task, userId, signal);
+  }
 
   // 撈這批待吸收留言（capture ids：patch 期間新進的留言留到下一個檢查點，不在這批標記）
   const { rows: pending } = await query(
@@ -29,9 +30,9 @@ async function runRespecPatch(taskId, userId, signal) {
     [taskId]
   );
   if (!pending.length) {
-    // 競態：留言已被別的路徑吸收 → 不空跑 agent，直接退回原關卡
-    await query("UPDATE tasks SET status=$2, updated_at=NOW() WHERE id=$1", [taskId, returnStatus]);
-    notify.emitToUser(userId, 'task:updated', { taskId, status: returnStatus });
+    // 競態：留言已被別的路徑吸收 → 不空跑 agent，直接退回 coding
+    await query("UPDATE tasks SET status='coding_running', updated_at=NOW() WHERE id=$1", [taskId]);
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     return;
   }
   // maxId＝這批最後一則的 id（SERIAL 單調遞增）：patch 期間新進的留言 id 必更大，用 id <= maxId
@@ -84,23 +85,14 @@ async function runRespecPatch(taskId, userId, signal) {
     "UPDATE task_messages SET applied_at = NOW() WHERE task_id = $1 AND source = 'manual' AND applied_at IS NULL AND id <= $2",
     [taskId, maxId]
   );
-  if (preCoding) {
-    // 規格審核閘門的改規格：更新規格後退回 spec_review 讓使用者重看，不設 retry_feedback（尚無 coding 可 resume）。
-    await query(
-      "UPDATE tasks SET analysis_yaml = $2, status = 'spec_review', updated_at = NOW() WHERE id = $1",
-      [taskId, newYaml]
-    );
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'spec_review' });
-  } else {
-    // 途中追加需求：retry_feedback 帶 [追加需求] 前綴＋需求本文，退回 coding（coding 每輪都讀 retry_feedback 做增量）。
-    // 一併清 qa_session_id／歸零 qa_resume_count：規格已改，下輪 QA 必須跑 fresh 讀新 analysis_yaml，
-    // 否則 resume 舊 session（內嵌舊規格、qa-retry prompt 不帶新規格）＝用舊規格審查。
-    await query(
-      "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
-      [taskId, newYaml, `[追加需求]\n${requirements}`]
-    );
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
-  }
+  // 途中追加需求：retry_feedback 帶 [追加需求] 前綴＋需求本文，退回 coding（coding 每輪都讀 retry_feedback 做增量）。
+  // 一併清 qa_session_id／歸零 qa_resume_count：規格已改，下輪 QA 必須跑 fresh 讀新 analysis_yaml，
+  // 否則 resume 舊 session（內嵌舊規格、qa-retry prompt 不帶新規格）＝用舊規格審查。
+  await query(
+    "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
+    [taskId, newYaml, `[追加需求]\n${requirements}`]
+  );
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
 }
 
 module.exports = { runRespecPatch };

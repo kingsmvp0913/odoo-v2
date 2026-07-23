@@ -34,7 +34,8 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 // （coding 已改無狀態單一 agent，無 coding-retry；coding-project 每輪 fresh、靠 prompt cache 省重送的規則。）
 const CLAUDE_MD_AGENTS = new Map([
   ['analysis-project', 'full'], ['analysis-reject', 'full'],
-  ['coding-project', 'full'], ['qa', 'qa'], ['playwright', 'full']
+  ['coding-project', 'full'], ['qa', 'qa'], ['playwright', 'full'],
+  ['spec-review', 'full']
 ]);
 
 // 診斷／修復型關卡：注入濃縮版 systematic-debugging（headless-safe），遇失敗先找 root cause 再改。
@@ -57,7 +58,7 @@ let _sourceRoutingCache = null;
 // 注入位置固定在「規則之後、debug 之前」——同專案跨任務前綴不變＝吃 prompt cache（空備註不注入以免破壞前綴）。
 const NOTES_AGENTS = new Set([
   'analysis-project', 'analysis-reject', 'coding-project', 'qa', 'playwright',
-  'chat', 'chat-to-task'
+  'chat', 'chat-to-task', 'spec-review'
 ]);
 
 // chat 與 cs 共用的「技術客服調查能力」片段（cs-capability.md）：唯一真相來源，改一處兩邊生效。
