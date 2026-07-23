@@ -22,6 +22,16 @@ async function runCsAgent(taskId, userId, signal) {
   );
   const answers = priorAnswers.length ? priorAnswers.map(l => l.content).join('\n\n') : '（尚無）';
 
+  // 追問重跑（cs_reply_pending→cs_running）時，撈最近一版 [客服回覆] 草稿當上下文，讓「把回覆改客氣點／
+  // 補一句 X」這種針對草稿的追問能連貫修訂。無前一版（首輪/補資料迴圈）則傳「（無）」＝行為不變。
+  const { rows: [priorReplyRow] } = await query(
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' AND content LIKE '[客服回覆]%' ORDER BY created_at DESC, id DESC LIMIT 1",
+    [taskId]
+  );
+  const priorReply = priorReplyRow
+    ? priorReplyRow.content.replace(/^\[客服回覆\]\s*/, '').trim()
+    : '（無）';
+
   // 技術客服能力片段需要 repo 路徑與專案名：此關尚未建 worktree，讀主 clone（唯讀）。
   const { getProjectInfo } = require('./task-agent');
   let projectName = '（未綁定專案）';
@@ -39,6 +49,7 @@ async function runCsAgent(taskId, userId, signal) {
     title: task.title || '未命名',
     original_text: task.original_text || '（無詳細內容）',
     answers,
+    prior_reply: priorReply,
     project_name: projectName,
     repo_paths: repoPaths
   });

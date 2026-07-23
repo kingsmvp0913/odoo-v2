@@ -212,3 +212,29 @@ test('cs 拿到 context7 MCP profile（可查 Odoo API）', () => {
   const { mcpConfigPath } = require('../pipeline/claude-runner');
   expect(mcpConfigPath('cs')).toMatch(/context7/);
 });
+
+// 追問重跑（cs_reply_pending→cs_running）時要帶入前一版 [客服回覆] 草稿，讓「改措辭」類追問能連貫修訂
+test('追問重跑帶入前一版 [客服回覆] 草稿當脈絡', async () => {
+  const { userId, taskId } = await makeTask();
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+    [taskId, '[客服回覆] 請到設定 > 權限開啟該欄位']
+  );
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+    [taskId, '回覆請再客氣一點']
+  );
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"operation","reply":"您好，煩請至設定 > 權限開啟該欄位，謝謝"}</result>', usage: null, durationMs: null });
+  await runCsAgent(taskId, userId);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('請到設定 > 權限開啟該欄位');   // 前一版草稿帶入 prompt
+});
+
+// 無前一版 [客服回覆]：prior_reply 傳「（無）」，三分類行為不變（首輪/補資料迴圈）
+test('無前一版 [客服回覆]：仍照常三分類（operation → cs_reply_pending）', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"operation","reply":"見設定 > 權限"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask();
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('cs_reply_pending');   // 無前一版不影響原分類流程
+});
