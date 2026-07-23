@@ -10,7 +10,9 @@ function runGraphify(repoId, localPath) {
     [repoId]
   ).catch(() => {});
 
-  const child = spawn('python', [SCRIPT, localPath], {
+  // Windows 慣用 python、Linux 常只有 python3（比照 checks.js／merge-agent），尊重 PYTHON_BIN 覆寫。
+  const interpreter = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
+  const child = spawn(interpreter, [SCRIPT, localPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 600000
   });

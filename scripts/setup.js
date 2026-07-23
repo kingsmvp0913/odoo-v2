@@ -9,6 +9,7 @@ const { ensureConfig } = require('./lib/config');
 const { ensurePostgres } = require('./lib/postgres');
 const { ensureClaudeEnv } = require('./lib/claude-env');
 const { verifyRuntimeDeps } = require('./lib/checks');
+const { ensureGraphify } = require('./lib/graphify');
 const { verifyDocker, ensureGatewayImage } = require('./lib/docker');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -44,6 +45,9 @@ async function main() {
     process.exit(1);
   }
   console.log('[OK] 執行期相依檢查通過');
+
+  const graphifyStep = ensureGraphify();
+  console.log(`[OK] graphify 索引相依已就緒（${graphifyStep.status}）`);
 
   const dockerCheck = verifyDocker();
   if (dockerCheck.ok) {
