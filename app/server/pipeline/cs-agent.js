@@ -6,6 +6,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { assembleTaskContext } = require('./sync');
 const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
+const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
 
 async function runCsAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
@@ -74,13 +75,19 @@ async function runCsAgent(taskId, userId, signal) {
     console.error(`[CS-AGENT] error task ${taskId}:`, err.message);
   }
 
-  // 客服釐清出可留存的結論（典型是 operation：只回覆、不改程式，不會走任務流程進 library agent）時，
-  // agent 會另附 <memory> 側通道，寫回 wiki 疑難排解區供日後查詢。需綁定專案；失敗留痕不中斷分流。
+  // 兩個選用側通道（需綁定專案；解析或寫入失敗都留痕不中斷分流）：
+  //  <memory>    釐清出可留存的結論（典型 operation：只回覆不改程式，不進 library agent）→ 寫回疑難排解區
+  //  <wiki-drift> 讀碼發現某 wiki 頁與程式碼矛盾（頁錯、碼對）→ 入漂移佇列供健檢彙整（不自動改文件）
   if (task.project_id) {
-    const { entry } = extractMemoryBlock(rawText);
-    if (entry) {
-      try { await recordTroubleshooting(task.project_id, entry); }
+    const mem = extractMemoryBlock(rawText);
+    if (mem.entry) {
+      try { await recordTroubleshooting(task.project_id, mem.entry); }
       catch (err) { console.error(`[CS-AGENT] troubleshooting 寫回失敗 task ${taskId}:`, err.message); }
+    }
+    const drift = extractDriftBlock(rawText);
+    if (drift.entry) {
+      try { await enqueueWikiDrift({ projectId: task.project_id, taskId: task.task_id, userId: task.user_id, source: 'cs', slug: drift.entry.slug, reason: drift.entry.reason }); }
+      catch (err) { console.error(`[CS-AGENT] wiki-drift 入列失敗 task ${taskId}:`, err.message); }
     }
   }
 

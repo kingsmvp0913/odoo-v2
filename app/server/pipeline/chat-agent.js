@@ -3,6 +3,7 @@ const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
 const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
+const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
 const { query } = require('../db');
 
 async function chatReply(projectId, chatId, userMessage, userId) {
@@ -47,13 +48,19 @@ async function chatReply(projectId, chatId, userMessage, userId) {
   }
   await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
 
-  // 排障釐清出可留存的結論時，agent 會於回覆末端附一段 <memory> 側通道：剝掉再顯示、內容寫回 wiki
-  // 疑難排解區，供下次 AI／人員查詢。側通道解析或寫入失敗都不得影響對話回覆本身（Rule 12：失敗留痕不中斷）。
-  const { entry, cleaned } = extractMemoryBlock(chatResult.text);
-  const reply = cleaned || '（無回覆）';
-  if (entry) {
-    try { await recordTroubleshooting(projectId, entry); }
+  // 兩個選用側通道，剝掉再顯示、內容各自旁路處理，解析或寫入失敗都不得影響對話回覆本身（Rule 12）：
+  //  <memory>    釐清出可留存的結論 → 寫回 wiki 疑難排解區
+  //  <wiki-drift> 讀碼發現某 wiki 頁與程式碼矛盾（頁錯、碼對）→ 入漂移佇列供健檢彙整（不自動改文件）
+  const mem = extractMemoryBlock(chatResult.text);
+  const drift = extractDriftBlock(mem.cleaned);
+  const reply = drift.cleaned || '（無回覆）';
+  if (mem.entry) {
+    try { await recordTroubleshooting(projectId, mem.entry); }
     catch (err) { console.error(`[CHAT-AGENT] troubleshooting 寫回失敗 chat ${chatId}:`, err.message); }
+  }
+  if (drift.entry) {
+    try { await enqueueWikiDrift({ projectId, userId, source: 'chat', slug: drift.entry.slug, reason: drift.entry.reason }); }
+    catch (err) { console.error(`[CHAT-AGENT] wiki-drift 入列失敗 chat ${chatId}:`, err.message); }
   }
 
   await query(

@@ -84,3 +84,29 @@ test('回覆含 <memory> → 結論寫回 wiki 疑難排解、且存檔的回覆
   expect(replyInsert[1][2]).toBe('確認了：稅率沒帶到才算錯。');
   expect(replyInsert[1][2]).not.toContain('<memory>');
 });
+
+test('回覆含 <wiki-drift> → 入漂移佇列、回覆剝除側通道（不自動改文件）', async () => {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '這頁寫錯了。\n<wiki-drift>{"slug":"sale-flow","reason":"頁面說自動確認，程式要手動"}</wiki-drift>',
+    usage: {}, durationMs: 1
+  });
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/INSERT INTO wiki_drift/.test(sql)) return Promise.resolve({ rows: [{ id: 9 }] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+
+  const reply = await chatReply('1', '2', '這功能頁對嗎', 99);
+
+  const enqueue = mockQuery.mock.calls.find(c => /INSERT INTO wiki_drift/.test(c[0]));
+  expect(enqueue).toBeTruthy();
+  // params: [projectId, taskId, userId, source, slug, reason]
+  expect(enqueue[1][3]).toBe('chat');
+  expect(enqueue[1][4]).toBe('sale-flow');
+  expect(enqueue[1][5]).toBe('頁面說自動確認，程式要手動');
+  expect(reply).toBe('這頁寫錯了。');
+  expect(reply).not.toContain('<wiki-drift>');
+});

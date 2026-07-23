@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { stripFence } = require('./agent-result');
+const { extractTaggedBlock } = require('./agent-result');
 
 // 排障／客服「釐清後的結論」寫回 wiki 的共用模組。chat 與 cs 兩關會用到，抽出避免各寫一份。
 // 設計：這兩關是知識的破口——chat 純 Q&A 從不寫 wiki、cs 判 operation（只回覆不改程式）也不會進 library
@@ -8,24 +8,19 @@ const { stripFence } = require('./agent-result');
 // 讀回不在此處——agent 透過既有 /ai/wiki curl 端點自行查（見 cs-capability.md），省 token 且不隨筆數膨脹。
 
 const CONTAINER_SLUG = 'troubleshooting';
-const MEM_OPEN = '<memory>';
-const MEM_CLOSE = '</memory>';
 
 // 從 agent 輸出取出選用的 <memory>…</memory> 側通道（與主要輸出契約獨立：chat 的自然語言回覆、cs 的
 // <result> JSON 皆不受影響）。回 { entry, cleaned }：entry 為解析後的結論物件或 null；cleaned 為移除
 // 該區塊後的文字（供 chat 顯示回覆時剝掉，不讓使用者看到側通道）。缺／解析失敗＝沒有結論，靜默略過。
 function extractMemoryBlock(text) {
-  const raw = String(text || '');
-  const end = raw.lastIndexOf(MEM_CLOSE);
-  if (end === -1) return { entry: null, cleaned: raw.trim() };
-  const start = raw.lastIndexOf(MEM_OPEN, end);
-  if (start === -1) return { entry: null, cleaned: raw.trim() };
-  const cleaned = (raw.slice(0, start) + raw.slice(end + MEM_CLOSE.length)).trim();
+  const { inner, cleaned } = extractTaggedBlock(text, 'memory');
   let entry = null;
-  try {
-    const obj = JSON.parse(stripFence(raw.slice(start + MEM_OPEN.length, end)));
-    if (obj && obj.title && obj.content) entry = obj;
-  } catch { /* 側通道格式壞掉不影響主回覆，當作沒帶 */ }
+  if (inner != null) {
+    try {
+      const obj = JSON.parse(inner);
+      if (obj && obj.title && obj.content) entry = obj;
+    } catch { /* 側通道格式壞掉不影響主回覆，當作沒帶 */ }
+  }
   return { entry, cleaned };
 }
 

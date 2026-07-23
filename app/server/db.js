@@ -262,6 +262,22 @@ async function migrate() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // wiki_drift：chat／cs 為回答而讀了程式碼、發現某 wiki 頁描述與程式碼矛盾（頁錯、碼對）時回報的佇列。
+    // 仿 task_rejections——status='new' 進、cron 慢慢跑分類 agent 補 category、標 classified（供健檢分組彙整）。
+    // 只回報不自動改文件（正典的修正走 ⟳ 重生／人工）。category 未分類前為 NULL。
+    `CREATE TABLE IF NOT EXISTS wiki_drift (
+      id          SERIAL PRIMARY KEY,
+      project_id  INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+      task_id     TEXT,
+      user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      source      TEXT NOT NULL DEFAULT 'chat',
+      slug        TEXT,
+      reason      TEXT NOT NULL,
+      category    TEXT,
+      status      TEXT NOT NULL DEFAULT 'new',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
     // classify_samples：failure-classifier 的 regex 判不出（unknown）、交 haiku 分類的案例留樣本
     // （真因文字＋最終判定＋haiku 是否真的判出）。用途：定期看高頻 pattern → 升級成零 token 的 regex，
     // 讓 haiku fallback 呼叫量單調下降（健檢：deploy-fix haiku fallback 缺回饋迴圈）。
@@ -541,6 +557,10 @@ async function migrate() {
   await query('CREATE INDEX IF NOT EXISTS idx_rej_status     ON task_rejections (status)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_project    ON task_rejections (project_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_rej_items_rid  ON rejection_items (rejection_id)').catch(() => {});
+
+  // wiki_drift（wiki 頁與程式碼漂移回報表）
+  await query('CREATE INDEX IF NOT EXISTS idx_wdrift_status  ON wiki_drift (status)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_wdrift_project ON wiki_drift (project_id)').catch(() => {});
 
   // classify_samples：依時間看近期案例、聚合高頻 pattern
   await query('CREATE INDEX IF NOT EXISTS idx_cs_recorded_at ON classify_samples (recorded_at DESC)').catch(() => {});

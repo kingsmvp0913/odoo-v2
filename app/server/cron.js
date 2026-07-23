@@ -134,6 +134,9 @@ function startCron() {
       if (!testMode) {
         const { classifyPendingRejections } = require('./pipeline/classify-rejections');
         await classifyPendingRejections().catch(err => console.error('[CRON] reject-classify:', err.message));
+        // 同理：chat／cs 回報的「wiki 頁與程式碼漂移」慢慢分類，供健檢彙整
+        const { classifyPendingWikiDrift } = require('./pipeline/wiki-drift');
+        await classifyPendingWikiDrift().catch(err => console.error('[CRON] wiki-drift-classify:', err.message));
       }
 
       // Nightly env shutdown。時區：預設 server 本機；容器跑 UTC 而維運預期台灣時間時，

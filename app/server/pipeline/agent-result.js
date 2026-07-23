@@ -25,6 +25,20 @@ function extractResult(text) {
   return stripFence(text.slice(start + OPEN.length, end));
 }
 
+// 通用側通道抽取：取最後一組 <tag>…</tag>，回 { inner:<剝 fence 後的內層字串或 null>, cleaned:<移除該區塊後的全文> }。
+// 與主要 <result> 契約獨立，供 chat/cs 在自然語言回覆末端夾帶選用的機器讀取區塊（memory／wiki-drift）；
+// 呼叫端自行 JSON.parse＋驗證。缺該標籤時 inner=null、cleaned=原文（trim）。
+function extractTaggedBlock(text, tag) {
+  const raw = String(text || '');
+  const open = `<${tag}>`, close = `</${tag}>`;
+  const end = raw.lastIndexOf(close);
+  if (end === -1) return { inner: null, cleaned: raw.trim() };
+  const start = raw.lastIndexOf(open, end);
+  if (start === -1) return { inner: null, cleaned: raw.trim() };
+  const cleaned = (raw.slice(0, start) + raw.slice(end + close.length)).trim();
+  return { inner: stripFence(raw.slice(start + open.length, end)), cleaned };
+}
+
 const REPAIR_PROMPT = raw =>
   '以下是某 agent 的輸出，可能夾雜多餘文字或格式錯誤。請只回傳其中的「結果資料」本身，' +
   '完整包在 <result></result> 標籤內，標籤外不要有任何其他文字：\n\n' + raw;
@@ -52,4 +66,4 @@ async function parseAgentResult(raw, { parse, signal, ref, userId } = {}) {
   return out;
 }
 
-module.exports = { extractResult, parseAgentResult, stripFence };
+module.exports = { extractResult, parseAgentResult, stripFence, extractTaggedBlock };
