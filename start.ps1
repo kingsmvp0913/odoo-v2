@@ -25,6 +25,9 @@ $env:PORT          = if ($config.PORT) { $config.PORT } else { 3939 }
 if ($config.DATABASE_URL)     { $env:DATABASE_URL     = $config.DATABASE_URL }
 if ($config.ANTHROPIC_API_KEY) { $env:ANTHROPIC_API_KEY = $config.ANTHROPIC_API_KEY }
 if ($config.APP_SECRET)       { $env:APP_SECRET       = $config.APP_SECRET }
+# 測試區埠範圍（選用）：未設定則沿用程式預設 8069-20068，行為不變。
+if ($config.PROJECT_PORT_MIN) { $env:PROJECT_PORT_MIN = $config.PROJECT_PORT_MIN }
+if ($config.PROJECT_PORT_MAX) { $env:PROJECT_PORT_MAX = $config.PROJECT_PORT_MAX }
 
 $port = if ($config.PORT) { $config.PORT } else { 3939 }
 Start-Process "http://localhost:$port"

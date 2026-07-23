@@ -40,6 +40,13 @@ _PORT="$(read_config PORT)"
 if [ -n "$_PORT" ]; then export PORT="$_PORT"; fi
 export DATABASE_URL="$(read_config DATABASE_URL)"
 
+# 測試區埠範圍（選用）：宿主低位埠已被其他服務佔滿的機器可整段換到乾淨區段；
+# 未設定則沿用程式預設 8069-20068，其他機器行為不變。
+_PPMIN="$(read_config PROJECT_PORT_MIN)"
+if [ -n "$_PPMIN" ]; then export PROJECT_PORT_MIN="$_PPMIN"; fi
+_PPMAX="$(read_config PROJECT_PORT_MAX)"
+if [ -n "$_PPMAX" ]; then export PROJECT_PORT_MAX="$_PPMAX"; fi
+
 ANTHROPIC_KEY="$(read_config ANTHROPIC_API_KEY)"
 if [ -n "$ANTHROPIC_KEY" ]; then export ANTHROPIC_API_KEY="$ANTHROPIC_KEY"; fi
 
