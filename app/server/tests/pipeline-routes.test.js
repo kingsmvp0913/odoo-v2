@@ -430,32 +430,24 @@ test('POST /api/tasks/:id/spec-approve → 非 spec_review 狀態 → 400、狀�
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
-test('POST /api/tasks/:id/spec-revise → 寫 manual 留言(applied_at NULL) 並轉 respec_running', async () => {
-  const { runPipeline } = require('../pipeline/runner');
-  runPipeline.mockClear();
-  const { rows } = await dbModule.query(
+test('POST /api/tasks/:id/spec-revise → 寫 task_logs(user) 並轉 respec_running（不寫 task_messages）', async () => {
+  const { rows: [t] } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_spec_revise','odoo','T','spec_review') RETURNING id",
     [userId]
   );
-  const taskId = rows[0].id;
-
+  const taskId = t.id;
   const res = await request(app).post(`/api/tasks/${taskId}/spec-revise`)
-    .set('Authorization', `Bearer ${adminToken}`)
-    .send({ feedback: '請把備註欄位改成多行文字' });
-
+    .set('Authorization', `Bearer ${adminToken}`).send({ feedback: '為什麼備註欄設計成唯讀？' });
   expect(res.status).toBe(200);
-  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
-  expect(after[0].status).toBe('respec_running');
-  const { rows: msgs } = await dbModule.query(
-    "SELECT content, source, applied_at FROM task_messages WHERE task_id = $1", [taskId]
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(after.status).toBe('respec_running');
+  const { rows: logs } = await dbModule.query(
+    "SELECT role, content FROM task_logs WHERE task_id=$1", [taskId]
   );
-  expect(msgs.length).toBe(1);
-  expect(msgs[0].content).toContain('多行文字');
-  expect(msgs[0].source).toBe('manual');
-  expect(msgs[0].applied_at).toBeNull(); // 待 respec 吸收
-  expect(runPipeline).toHaveBeenCalledWith(userId);
-
-  await dbModule.query('DELETE FROM task_messages WHERE task_id = $1', [taskId]);
+  expect(logs.some(l => l.role === 'user' && l.content.includes('為什麼備註欄設計成唯讀'))).toBe(true);
+  const { rows: msgs } = await dbModule.query('SELECT id FROM task_messages WHERE task_id=$1', [taskId]);
+  expect(msgs.length).toBe(0);   // 提問走 task_logs，不再落 task_messages
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 

@@ -189,8 +189,8 @@ function registerRoutes(app) {
     }
   });
 
-  // MODE_B 規格審核閘門——寫修改意見：把意見寫成 manual 留言（與「途中追加需求」同一吸收管道，
-  // respec-agent 讀 applied_at IS NULL 的 manual 留言），轉 respec_running 由 respec-agent 增量改規格後回 spec_review。
+  // MODE_B 規格審核閘門——送出提問／修改意見：提問落 task_logs（role='user'）＝時間軸真相來源，
+  // 轉 respec_running 由對話式 spec-review agent 讀對話判 answer/revise（回答或重產規格）後回 spec_review。
   app.post('/api/tasks/:id/spec-revise', verifyToken, async (req, res) => {
     try {
       const feedback = ((req.body && req.body.feedback) || '').trim();
@@ -203,14 +203,16 @@ function registerRoutes(app) {
       if (rows[0].status !== 'spec_review') {
         return res.status(400).json({ error: `Task status '${rows[0].status}' cannot be revised; expected spec_review` });
       }
-      // 條件更新防雙擊：先搶到轉移權的請求才落地留言，避免 respec 讀到重複意見
+      // 條件更新防雙擊：先搶到轉移權的請求才落地提問，避免 spec-review agent 讀到重複輸入
       const { rowCount } = await query(
         "UPDATE tasks SET status = 'respec_running', updated_at = NOW() WHERE id = $1 AND status = 'spec_review'",
         [req.params.id]
       );
       if (!rowCount) return res.json({ ok: true });
+      // spec_review 一律 pre-coding：提問／修改意見落 task_logs（role='user'）＝時間軸與 spec-review agent 的對話真相來源。
+      // 不再寫 task_messages（那是 mid-coding 途中追加需求的吸收管道，pre-coding 不共用，避免舊意見洩漏到 coding 階段被誤吸收）。
       await query(
-        "INSERT INTO task_messages (task_id, source, content, occurred_at) VALUES ($1, 'manual', $2, NOW())",
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, feedback]
       );
       require('./notify').emitToUser(req.userId, 'task:updated', { taskId: rows[0].id, status: 'respec_running' });

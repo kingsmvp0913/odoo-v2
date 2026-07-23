@@ -734,7 +734,7 @@ window.TaskDetailView = Vue.defineComponent({
             <template v-else-if="timelineActionMode === 'spec_review'">
               <div class="form-section">規格審核</div>
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
-                以下是 AI 分析出的規格，請確認沒問題後開始實作；若要調整，於下方寫修改意見送出，AI 會依意見更新規格再回到這裡。
+                以下是 AI 分析出的規格，請確認沒問題後開始實作。下方可提問或要求調整規格：提問時 AI 會直接在時間軸回答、規格不變；判定要改時才重產規格再回到這裡。
               </p>
               <div v-if="spec" style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
                 <div v-if="spec.summary" style="margin-bottom:var(--space-3)">
@@ -759,11 +759,11 @@ window.TaskDetailView = Vue.defineComponent({
                 </div>
               </div>
               <textarea v-model="specFeedback" class="form-control" rows="3"
-                placeholder="要調整規格的話寫在這裡（例：備註欄位改成多行、加一個匯出按鈕）。Enter 送出，Shift+Enter 換行"
+                placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行、加一個匯出按鈕）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="specRevise"></textarea>
               <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
                 <button class="btn btn-secondary btn-sm" @click="specRevise" :disabled="specRevising || specApproving || !specFeedback.trim()">
-                  {{ specRevising ? '送出中...' : '送出修改意見' }}
+                  {{ specRevising ? '送出中...' : '送出' }}
                 </button>
                 <button class="btn btn-success btn-sm" @click="specApprove" :disabled="specApproving || specRevising">
                   {{ specApproving ? '處理中...' : '✓ 確認沒問題，開始實作' }}
