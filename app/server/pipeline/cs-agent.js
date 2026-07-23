@@ -5,6 +5,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
 const { assembleTaskContext } = require('./sync');
+const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
 
 async function runCsAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
@@ -58,9 +59,11 @@ async function runCsAgent(taskId, userId, signal) {
   });
 
   let result = null;
+  let rawText = '';
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
     const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model, agentType: 'cs' });
+    rawText = text || '';
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
     result = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId: task.user_id });
   } catch (err) {
@@ -69,6 +72,16 @@ async function runCsAgent(taskId, userId, signal) {
     if (err.aborted) return; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
     blockerMsg = `CS agent 執行失敗：${err.message}`;
     console.error(`[CS-AGENT] error task ${taskId}:`, err.message);
+  }
+
+  // 客服釐清出可留存的結論（典型是 operation：只回覆、不改程式，不會走任務流程進 library agent）時，
+  // agent 會另附 <memory> 側通道，寫回 wiki 疑難排解區供日後查詢。需綁定專案；失敗留痕不中斷分流。
+  if (task.project_id) {
+    const { entry } = extractMemoryBlock(rawText);
+    if (entry) {
+      try { await recordTroubleshooting(task.project_id, entry); }
+      catch (err) { console.error(`[CS-AGENT] troubleshooting 寫回失敗 task ${taskId}:`, err.message); }
+    }
   }
 
   if (!result) {

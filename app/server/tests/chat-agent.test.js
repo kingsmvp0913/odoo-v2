@@ -56,3 +56,31 @@ test('Branch A：prompt 指示資料類問題用 getSQL（skill 原生可達）'
   expect(prompt).toContain('getSQL');
   expect(prompt).toContain('唯讀');
 });
+
+test('回覆含 <memory> → 結論寫回 wiki 疑難排解、且存檔的回覆已剝除側通道', async () => {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '確認了：稅率沒帶到才算錯。\n<memory>{"slug":"tax-missing","title":"稅率漏帶","content":"# 原因\\n稅率欄空"}</memory>',
+    usage: {}, durationMs: 1
+  });
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/SELECT id FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [{ id: 7 }] }); // 容器 id
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });                     // 專案備註：無
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+
+  const reply = await chatReply('1', '2', '金額為何算錯', 99);
+
+  // 寫回：ts- 前綴、掛容器、upsert
+  const upsert = mockQuery.mock.calls.find(c => /INSERT INTO wiki_pages[\s\S]*DO UPDATE/.test(c[0]));
+  expect(upsert).toBeTruthy();
+  expect(upsert[1]).toEqual(['1', 7, 'ts-tax-missing', '稅率漏帶', '# 原因\n稅率欄空']);
+
+  // 顯示／存檔的回覆不含機器側通道
+  expect(reply).toBe('確認了：稅率沒帶到才算錯。');
+  const replyInsert = mockQuery.mock.calls.find(c => /INSERT INTO project_chat_messages/.test(c[0]) && c[1] && c[1][1] === 'ai');
+  expect(replyInsert[1][2]).toBe('確認了：稅率沒帶到才算錯。');
+  expect(replyInsert[1][2]).not.toContain('<memory>');
+});

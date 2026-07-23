@@ -2,6 +2,7 @@ const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
+const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
 const { query } = require('../db');
 
 async function chatReply(projectId, chatId, userMessage, userId) {
@@ -44,8 +45,16 @@ async function chatReply(projectId, chatId, userMessage, userId) {
     await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
     throw err;
   }
-  const reply = chatResult.text || '（無回覆）';
   await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
+
+  // 排障釐清出可留存的結論時，agent 會於回覆末端附一段 <memory> 側通道：剝掉再顯示、內容寫回 wiki
+  // 疑難排解區，供下次 AI／人員查詢。側通道解析或寫入失敗都不得影響對話回覆本身（Rule 12：失敗留痕不中斷）。
+  const { entry, cleaned } = extractMemoryBlock(chatResult.text);
+  const reply = cleaned || '（無回覆）';
+  if (entry) {
+    try { await recordTroubleshooting(projectId, entry); }
+    catch (err) { console.error(`[CHAT-AGENT] troubleshooting 寫回失敗 chat ${chatId}:`, err.message); }
+  }
 
   await query(
     'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',

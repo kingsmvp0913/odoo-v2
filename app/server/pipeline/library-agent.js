@@ -103,6 +103,7 @@ async function refreshWikiNode(projectId, slug, userId, signal) {
   );
   if (!node) { const e = new Error('Wiki node not found'); e.status = 404; throw e; }
   if (node.node_type === 'notes') { const e = new Error('專案備註為人工維護，不支援重新生成'); e.status = 400; throw e; }
+  if (node.node_type === 'troubleshooting') { const e = new Error('疑難排解由排障／客服對話累積，無原始碼可重生'); e.status = 400; throw e; }
 
   const { rows: [project] } = await query('SELECT * FROM projects WHERE id=$1', [projectId]);
   const { rows: readyRepos } = await query(

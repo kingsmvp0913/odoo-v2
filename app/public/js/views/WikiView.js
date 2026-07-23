@@ -7,15 +7,15 @@ window.WikiNode = Vue.defineComponent({
       <div style="display:flex;align-items:center;gap:var(--space-1);padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-base)"
         :style="{ background: currentSlug === node.slug ? 'var(--border)' : 'transparent', paddingLeft: (8 + depth*14) + 'px' }"
         @click="$emit('open', node.slug)">
-        <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : node.node_type === 'notes' ? '📝' : '📄' }}</span>
+        <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : node.node_type === 'notes' ? '📝' : node.node_type === 'troubleshooting' ? '🔧' : '📄' }}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ node.title }}</span>
         <template v-if="node.node_type !== 'notes'">
-          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs)"
+          <button v-if="node.node_type !== 'troubleshooting'" class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs)"
             :disabled="refreshing === node.slug"
             @click.stop="$emit('refresh', node.slug)" title="重新生成">
             {{ refreshing === node.slug ? '…' : '⟳' }}
           </button>
-          <button class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs);color:var(--error)"
+          <button v-if="node.slug !== 'troubleshooting'" class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs);color:var(--error)"
             @click.stop="$emit('remove', node.slug)" title="刪除">✕</button>
         </template>
       </div>
