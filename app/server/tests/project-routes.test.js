@@ -171,7 +171,7 @@ test('PATCH e2e_disabled → round-trip 存取，且不影響其他欄位', asyn
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
     .send({ name: 'E2eProj', odoo_version: '17.0', description: '保留描述' });
   const pid = p.body.id;
-  expect(p.body.e2e_disabled).toBe(false);   // 預設 false
+  expect(p.body.e2e_disabled).toBe(true);   // 預設 true（新建專案預設關閉 E2E）
 
   const on = await request(app).patch(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`)
     .send({ e2e_disabled: true });

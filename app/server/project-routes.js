@@ -173,7 +173,9 @@ function registerRoutes(app) {
         const port = await allocateProjectPort();
         try {
           const { rows } = await query(
-            `INSERT INTO projects (name, odoo_version, description, folder_name, port) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
+            // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
+            `INSERT INTO projects (name, odoo_version, description, folder_name, port, e2e_disabled) VALUES ($1, $2, $3, $4, $5, true) RETURNING *`,
             [name, odoo_version, description || null, folder_name || null, port]
           );
           return res.status(201).json(rows[0]);
