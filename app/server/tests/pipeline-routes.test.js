@@ -499,6 +499,7 @@ test('POST /api/tasks/:id/cs-followup → 寫 task_logs(user) 並轉 cs_running'
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [taskId]);
   expect(logs.some(l => l.role === 'user' && l.content.includes('17.0'))).toBe(true);
   await dbModule.query('DELETE FROM task_logs WHERE task_id=$1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
 test('POST /api/tasks/:id/cs-followup → 非 cs_reply_pending → 400、狀態不變', async () => {
@@ -511,6 +512,7 @@ test('POST /api/tasks/:id/cs-followup → 非 cs_reply_pending → 400、狀態�
   expect(res.status).toBe(400);
   const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('done');
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
 
 test('POST /api/tasks/:id/cs-followup → 空 note → 400', async () => {
@@ -521,4 +523,5 @@ test('POST /api/tasks/:id/cs-followup → 空 note → 400', async () => {
   const res = await request(app).post(`/api/tasks/${t.id}/cs-followup`)
     .set('Authorization', `Bearer ${adminToken}`).send({ note: '   ' });
   expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });

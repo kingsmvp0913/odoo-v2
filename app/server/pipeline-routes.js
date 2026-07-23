@@ -350,8 +350,6 @@ function registerRoutes(app) {
   // 由 cs 依「原問題＋前一版草稿＋這次追問」重新三分類——修出新草稿留在原地、或釐清後判定需補資料/改程式自然分流。
   app.post('/api/tasks/:id/cs-followup', verifyToken, async (req, res) => {
     try {
-      const note = ((req.body && req.body.note) || '').trim();
-      if (!note) return res.status(400).json({ error: '請填寫追問內容' });
       const { rows } = await query(
         'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
@@ -360,6 +358,8 @@ function registerRoutes(app) {
       if (rows[0].status !== 'cs_reply_pending') {
         return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_reply_pending` });
       }
+      const note = ((req.body && req.body.note) || '').trim();
+      if (!note) return res.status(400).json({ error: '請填寫追問內容' });
       // 條件更新防雙擊：先搶到轉移權的請求才落地追問，避免 cs-agent 讀到重複輸入
       const { rowCount } = await query(
         "UPDATE tasks SET status = 'cs_running', updated_at = NOW() WHERE id = $1 AND status = 'cs_reply_pending'",
