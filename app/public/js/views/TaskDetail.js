@@ -29,7 +29,7 @@ const TD_STATUS_LABELS = {
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -490,6 +490,18 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.csRetrying = false; }
     },
+    // 客服回覆這關追問：送出後 cs 依「原問題＋前一版草稿＋這次追問」重新處理（修草稿／釐清後轉補資料或開發）
+    async csFollowupSubmit() {
+      if (!this.csFollowup.trim()) return;
+      this.csFollowingUp = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/cs-followup`, { note: this.csFollowup.trim() });
+        showToast('已送出，客服正在重新處理', 'success');
+        this.csFollowup = '';
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.csFollowingUp = false; }
+    },
     handleCsEnter(idx) {
       const nextIdx = idx + 1;
       if (nextIdx < this.csQuestions.length) {
@@ -863,7 +875,7 @@ window.TaskDetailView = Vue.defineComponent({
               </div>
             </template>
 
-            <!-- cs_reply：客服回覆草稿 -->
+            <!-- cs_reply：客服回覆草稿（確認結案，或追問讓客服依脈絡重新處理） -->
             <template v-else-if="timelineActionMode === 'cs_reply'">
               <div class="form-section">客服回覆草稿</div>
               <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
@@ -872,6 +884,17 @@ window.TaskDetailView = Vue.defineComponent({
                 <button class="btn btn-primary" @click="csConfirm" :disabled="csConfirming">
                   {{ csConfirming ? '處理中...' : '✓ 確認送出，結案' }}
                 </button>
+              </div>
+              <div style="margin-top:var(--space-3);border-top:1px solid var(--border);padding-top:var(--space-3)">
+                <p style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">草稿要調整或有疑問？在下方追問，客服會依此重新處理（釐清後若需改程式會自動轉開發）。</p>
+                <textarea v-model="csFollowup" class="form-control" rows="3"
+                  placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行"
+                  @keydown.enter.exact.prevent="csFollowupSubmit"></textarea>
+                <div style="text-align:right;margin-top:var(--space-2)">
+                  <button class="btn btn-secondary btn-sm" @click="csFollowupSubmit" :disabled="csFollowingUp || !csFollowup.trim()">
+                    {{ csFollowingUp ? '送出中...' : '送出' }}
+                  </button>
+                </div>
               </div>
             </template>
 

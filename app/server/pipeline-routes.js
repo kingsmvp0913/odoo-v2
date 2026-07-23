@@ -346,6 +346,38 @@ function registerRoutes(app) {
     }
   });
 
+  // 客服回覆這關追問／補充：把追問寫進 task_logs（role='user'）＝釐清對話真相來源，轉 cs_running 重跑 cs agent，
+  // 由 cs 依「原問題＋前一版草稿＋這次追問」重新三分類——修出新草稿留在原地、或釐清後判定需補資料/改程式自然分流。
+  app.post('/api/tasks/:id/cs-followup', verifyToken, async (req, res) => {
+    try {
+      const note = ((req.body && req.body.note) || '').trim();
+      if (!note) return res.status(400).json({ error: '請填寫追問內容' });
+      const { rows } = await query(
+        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      if (rows[0].status !== 'cs_reply_pending') {
+        return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_reply_pending` });
+      }
+      // 條件更新防雙擊：先搶到轉移權的請求才落地追問，避免 cs-agent 讀到重複輸入
+      const { rowCount } = await query(
+        "UPDATE tasks SET status = 'cs_running', updated_at = NOW() WHERE id = $1 AND status = 'cs_reply_pending'",
+        [req.params.id]
+      );
+      if (!rowCount) return res.json({ ok: true });
+      await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+        [req.params.id, note]
+      );
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
+      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(

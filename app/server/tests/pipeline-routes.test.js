@@ -484,3 +484,41 @@ test('POST /api/tasks/:id/spec-revise → 非 spec_review 狀態 → 400', async
 
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
+
+test('POST /api/tasks/:id/cs-followup → 寫 task_logs(user) 並轉 cs_running', async () => {
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cs_followup','service','T','cs_reply_pending') RETURNING id",
+    [userId]
+  );
+  const taskId = t.id;
+  const res = await request(app).post(`/api/tasks/${taskId}/cs-followup`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ note: '客戶用的是 17.0，回覆請提到' });
+  expect(res.status).toBe(200);
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(after.status).toBe('cs_running');
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [taskId]);
+  expect(logs.some(l => l.role === 'user' && l.content.includes('17.0'))).toBe(true);
+  await dbModule.query('DELETE FROM task_logs WHERE task_id=$1', [taskId]);
+});
+
+test('POST /api/tasks/:id/cs-followup → 非 cs_reply_pending → 400、狀態不變', async () => {
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cs_followup_bad','service','T','done') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/cs-followup`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ note: 'x' });
+  expect(res.status).toBe(400);
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('done');
+});
+
+test('POST /api/tasks/:id/cs-followup → 空 note → 400', async () => {
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cs_followup_empty','service','T','cs_reply_pending') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/cs-followup`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ note: '   ' });
+  expect(res.status).toBe(400);
+});
