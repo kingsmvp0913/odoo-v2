@@ -56,6 +56,29 @@ grep -q "^include_dir = 'conf.d'" "$PGDATA/postgresql.conf" \
 echo "[entrypoint] 啟動 PostgreSQL（port ${PGPORT_APP}）..."
 "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/postgresql.log" -w -t 60 start
 
+# 本腳本自己留下來當 PID 1 監工，不用 exec 交棒——exec 之後這支腳本就不存在了，容器被停時
+# 沒有任何行程能在結束前 pg_ctl stop，postmaster 直接吃 SIGKILL，下次啟動得走 crash recovery
+# 並留下「another server might be running」的假警報，會蓋掉真正的異常。
+APP_PID=""
+
+stop_postgres() {
+  echo "[entrypoint] 關閉 PostgreSQL ..."
+  "$PGBIN/pg_ctl" -D "$PGDATA" -m fast -w -t 60 stop || true
+}
+
+# docker stop 的 SIGTERM 只送給 PID 1，故由這裡轉發給平台，等它收工再關資料庫。
+on_term() {
+  trap - TERM INT
+  if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+    echo "[entrypoint] 收到停止訊號，通知平台結束 ..."
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+  fi
+  stop_postgres
+  exit 0
+}
+trap on_term TERM INT
+
 if [ ! -f "$APP_DIR/data/config.json" ]; then
   echo ""
   echo "=============================================================="
@@ -67,7 +90,15 @@ if [ ! -f "$APP_DIR/data/config.json" ]; then
   echo "=============================================================="
   echo ""
   echo "[entrypoint] 保持容器存活等待安裝..."
-  exec tail -f /dev/null
+  tail -f /dev/null &
+else
+  "$APP_DIR/start.sh" &
 fi
+APP_PID=$!
 
-exec "$APP_DIR/start.sh"
+# 平台自己結束（crash 或被 kill）時也要正常關資料庫，再以同一個 exit code 退出，
+# 讓 compose 的 restart policy 決定是否重來。
+RC=0
+wait "$APP_PID" || RC=$?
+stop_postgres
+exit "$RC"

@@ -54,4 +54,6 @@ _port="$(read_config PORT)"; _url="http://localhost:${_port:-3939}"
 if command -v xdg-open &>/dev/null; then xdg-open "$_url" 2>/dev/null &
 elif command -v open &>/dev/null; then open "$_url" 2>/dev/null &
 fi
-node "$ROOT/app/server/index.js"
+# exec 取代本 shell：node 直接成為呼叫者的子行程，停止訊號（含容器的 SIGTERM）才送得到它，
+# 不會停在中間這層 bash 而讓 node 變孤兒。本行是腳本最後一步，行為與原本相同。
+exec node "$ROOT/app/server/index.js"
