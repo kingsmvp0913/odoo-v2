@@ -3,8 +3,15 @@ const { query } = require('./db');
 // 每個專案在「建立時」固定分配一個專屬測試埠（projects.port），執行期只讀不挑，
 // 從根本消除多人並行開測試區時「兩專案動態選到同埠→同網址→互蓋」的 race。
 // 刪專案為硬刪除（DELETE FROM projects）→ 該列的 port 隨之釋放，下次建立自動回收。
-const PORT_MIN = 8069;
-const PORT_MAX = 20068; // 12000 個槽；因埠會回收，只需容納「同時存在」的專案數（>2000 仍大量餘裕），且遠低於 OS ephemeral 埠段（32768）
+// 預設範圍維持 8069-20068；可由 PROJECT_PORT_MIN/PROJECT_PORT_MAX 覆寫，供「宿主低位埠已被
+// 其他服務佔滿」的機器整段搬到乾淨區段，而不影響未設定的機器（預設行為完全不變）。
+const PORT_MIN = Number(process.env.PROJECT_PORT_MIN) || 8069;
+const PORT_MAX = Number(process.env.PROJECT_PORT_MAX) || 20068; // 12000 個槽；因埠會回收，只需容納「同時存在」的專案數（>2000 仍大量餘裕），且遠低於 OS ephemeral 埠段（32768）
+
+// loopback host 的推導基準：固定值，不隨 PORT_MIN 移動。若跟著 PORT_MIN 走，一旦某機把
+// PORT_MIN 調高，該機 DB 內既有的低位埠會算出負的 n，(n >> 8) & 255 產生無效 host →
+// 既有專案測試區網址整個壞掉，且錯誤訊息不會指向埠設定。
+const LOOPBACK_BASE = 8069;
 
 // 取 [PORT_MIN, PORT_MAX] 內最低未被占用的埠（自動回收已刪專案釋出的埠）。
 // 並行同時建立偶爾會選到同埠，靠 projects.port 的 UNIQUE 擋下、由呼叫端 retry。
@@ -22,10 +29,10 @@ async function allocateProjectPort() {
 // 用字面 IP 而非 *.localhost 子網域——curl／Playwright／瀏覽器免 DNS 直接解析，Windows 也不會解析失敗。
 // 由 port 推導（port 已每專案唯一），故 host 亦唯一且穩定。
 function loopbackHostForPort(port) {
-  const n = (port - PORT_MIN) + 2; // 跳過 127.0.0.0（網段）與 127.0.0.1（既用）
+  const n = (port - LOOPBACK_BASE) + 2; // 跳過 127.0.0.0（網段）與 127.0.0.1（既用）
   const a = (n >> 8) & 255;
   const b = n & 255;
   return `127.0.${a}.${b}`;
 }
 
-module.exports = { allocateProjectPort, loopbackHostForPort, PORT_MIN, PORT_MAX };
+module.exports = { allocateProjectPort, loopbackHostForPort, PORT_MIN, PORT_MAX, LOOPBACK_BASE };
