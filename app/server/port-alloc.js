@@ -52,4 +52,23 @@ function loopbackHostForPort(port) {
   return `127.0.${a}.${b}`;
 }
 
-module.exports = { allocateProjectPort, loopbackHostForPort, isPortFree, PORT_MIN, PORT_MAX, LOOPBACK_BASE };
+// 測試區容器實際發佈到宿主的哪個位址。預設每專案一個 127.0.0.x（上方的 cookie 隔離）。
+// 反向代理佈署時必須改掉：nginx 多跑在另一個容器（bridge 網路），連不到宿主的 loopback，
+// 設成 docker 橋接閘道位址（entrypoint 偵測 docker0 的同一個值）才反代得到測試區。
+// 注意此位址會實際對外監聽——測試區內有 seed 進去的固定帳密，設定前先確認該介面不對外網開放。
+function envBindHost(port) {
+  return process.env.ENV_BIND_HOST || loopbackHostForPort(port);
+}
+
+// 使用者瀏覽器要開的測試區網址。未設樣板時＝直連綁定位址，與未反代時逐字相同。
+// 掛在公司網域下時瀏覽器與平台不在同一台機器，127.0.0.x 指向「使用者自己的電腦」而非測試區
+// ——畫面上連結看起來正常、點了卻連不上，本機重現不了，故網址必須能與綁定位址脫鉤。
+// 樣板可用 {folder}（專案目錄名）／{port}／{host}，例：https://{folder}.aidev.example.com
+function envPublicUrl(port, folder) {
+  const host = envBindHost(port);
+  const tpl = process.env.ENV_PUBLIC_URL_TEMPLATE;
+  if (!tpl) return `http://${host}:${port}`;
+  return tpl.replace(/\{folder\}/g, folder || '').replace(/\{port\}/g, String(port)).replace(/\{host\}/g, host);
+}
+
+module.exports = { allocateProjectPort, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree, PORT_MIN, PORT_MAX, LOOPBACK_BASE };

@@ -114,6 +114,41 @@ location = /odooAiDev { return 301 /odooAiDev/; }
 
 不需要 `app.set('trust proxy')`：App 全程未使用 `req.ip`／`req.protocol`／`req.secure`。
 
+### 測試區也要一起反代（否則「開啟測試區」點不開）
+
+平台掛上網域後，使用者的瀏覽器不再位於宿主機上，但測試區預設綁在宿主的 `127.0.0.x:<port>`
+——那個位址在使用者的電腦上指向他自己，連結看起來正常、點下去連不上。**本機開發永遠重現不了**
+（瀏覽器就在宿主上）。兩個設定要一起改，只改一個都不會通：
+
+1. `ENV_BIND_HOST`：測試區容器改綁 docker 橋接閘道位址（`ip -4 addr show docker0`，多為
+   `172.17.0.1`）。nginx 若跑在另一個容器（本機的 `agency-NginxUI-1`），它在 bridge 網路上
+   **連不到宿主 loopback**，不改這項反代必定 502。
+2. `ENV_PUBLIC_URL_TEMPLATE`：DB 內存的測試區網址改成反代後的對外網址，例
+   `https://{folder}.aidev.example.com`（`{folder}`＝`projects.folder_name`）。
+
+建議走 **wildcard 子網域**而非子路徑：預設每專案一個 `127.0.0.x` 是為了讓 cookie 依 host 隔離
+（多開測試區不互踢 session），改綁單一位址後這層隔離消失，改由每專案一個子網域取回。且 **Odoo
+本身不支援掛在子路徑**——`/web`、`/odoo` 與 asset 路徑皆為 root-absolute，與平台本體可掛子路徑
+是兩回事。需要 `*.aidev.<網域>` 的 DNS 與 wildcard 憑證。
+
+```nginx
+server {
+    server_name ~^(?<folder>[^.]+)\.aidev\.example\.com$;
+    location / {
+        proxy_pass http://172.17.0.1:$env_port;   # 埠對映見下
+        # 其餘 proxy_set_header 與 client_max_body_size 同上
+    }
+}
+```
+
+埠是每專案固定配發的（`projects.port`），nginx 無從自動得知，故實務上兩種做法：於 map 內逐專案
+列出 `folder → port`（新專案要補一行），或改用「同網域不同埠」樣板
+`ENV_PUBLIC_URL_TEMPLATE=https://aidev.example.com:{port}` 直接開埠（省去 nginx 設定，但整段
+`PROJECT_PORT_MIN`～`MAX` 都得對內網開放，且測試區內有 seed 的固定帳密，僅適用可信內網）。
+
+> 安全提醒：`ENV_BIND_HOST` 一設，測試區就從 loopback 移到實際會對外監聽的介面。請確認防火牆
+> 只放行 nginx 來源，測試區帳號（含 E2E 固定帳密）不應暴露到內網以外。
+
 ## ⚠️ 硬限制：僅允許單一 Node 行程
 
 App 的互斥機制（任務派工去重 `_inFlight`、專案鎖 `project-lock`、環境建置去重、approve 佔位）
