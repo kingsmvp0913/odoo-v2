@@ -52,9 +52,10 @@
     <input type="text" id="display_name" placeholder="系統管理員">
     <button id="btn" onclick="setup()">完成設定</button>
   </div>
+  <script src="js/base.js"></script>
   <script>
-    fetch('/api/setup/status').then(r => r.json()).then(d => {
-      if (!d.needsSetup) window.location.replace('/');
+    fetch(`${BASE_PATH}api/setup/status`).then(r => r.json()).then(d => {
+      if (!d.needsSetup) window.location.replace(BASE_PATH);
     }).catch(() => {}); // 網路失敗時靜默（頁面仍可正常使用）
 
     async function setup() {
@@ -75,7 +76,7 @@
       }
 
       btn.disabled = true; btn.textContent = '設定中...';
-      const res = await fetch('/api/auth/setup', {
+      const res = await fetch(`${BASE_PATH}api/auth/setup`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
@@ -85,7 +86,7 @@
         btn.disabled = false; btn.textContent = '完成設定'; return;
       }
       localStorage.setItem('aidev_token', data.token);
-      window.location.replace('/');
+      window.location.replace(BASE_PATH);
     }
   </script>
 </body>

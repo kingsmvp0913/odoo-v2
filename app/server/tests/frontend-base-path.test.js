@@ -67,3 +67,24 @@ describe('前端請求路徑接上 BASE_PATH', () => {
     expect(readPublic('js/socket.js')).toContain("path: BASE_PATH + 'socket.io'");
   });
 });
+
+// setup.html 是獨立頁面（不載入 SPA 的 js），但仍載入同一支 base.js，避免同一段推導邏輯
+// 出現第二份。它的兩處 location.replace('/') 在子路徑下會把人踢到 web-test 的網站根目錄
+// ——那是別的應用，不是平台首頁。
+describe('setup.html', () => {
+  test('載入 base.js', () => {
+    expect(readPublic('setup.html')).toContain('<script src="js/base.js"></script>');
+  });
+
+  test('兩處 fetch 皆接上 BASE_PATH', () => {
+    const src = readPublic('setup.html');
+    expect(src.match(/fetch\(`\$\{BASE_PATH\}api\//g)).toHaveLength(2);
+    expect(src.match(/fetch\(['"]\/api\//g)).toBeNull();
+  });
+
+  test('完成設定後導回平台首頁而非網站根目錄', () => {
+    const src = readPublic('setup.html');
+    expect(src.match(/location\.replace\(BASE_PATH\)/g)).toHaveLength(2);
+    expect(src.match(/location\.replace\(['"]\/['"]\)/g)).toBeNull();
+  });
+});
