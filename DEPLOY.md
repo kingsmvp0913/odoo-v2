@@ -161,6 +161,29 @@ App 的互斥機制（任務派工去重 `_inFlight`、專案鎖 `project-lock`�
 共用主 clone、測試環境會 spawn 兩個 Odoo 搶同一 port——症狀（git 損壞、port 衝突）看不出根因。
 需要水平擴展時，先把上述互斥全數改為 PostgreSQL advisory lock 再說。
 
+## 日常更新
+
+```bash
+./upgrade.sh
+```
+
+腳本會自行辨識佈署模式：偵測到容器 `odoo-v2` 在跑就走 Docker 流程（`git pull` →
+必要時在**容器內** `npm install` → `docker restart`），否則走原本的宿主流程。DB schema 於
+server 啟動時自動 migrate，不需另外處理。
+
+**不要在 Docker 模式的宿主上跑舊版宿主流程**：`pkill` 因 PID namespace 隔離殺不到容器內的
+node（且後接 `|| true` 不報錯＝看似成功但根本沒重啟），接著又會在宿主起第二份 server，
+違反下方「僅允許單一 Node 行程」的硬限制。
+
+**改到 `Dockerfile`／`docker/entrypoint.sh` 時 restart 不夠**（它們是 `COPY` 進 image 的）：
+
+```bash
+docker compose build && docker compose up -d
+docker exec -it odoo-v2 node scripts/setup.js --skip-start   # 重建容器會清掉 ~/.claude.json
+```
+
+`upgrade.sh` 偵測到這兩個檔有更動時會提示，但不自動執行——重建容器有副作用，時機由人決定。
+
 ## 重跑安裝
 
 `install.ps1`/`install.sh` 與 `scripts/setup.js` 皆為 idempotent：已安裝的系統套件、已存在的 `data/config.json`、已就緒的 PostgreSQL role/db、已登入的 Claude、已裝的 MCP/plugin 都會跳過，不會覆蓋既有資料。
