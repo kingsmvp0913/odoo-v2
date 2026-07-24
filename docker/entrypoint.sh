@@ -56,6 +56,32 @@ grep -q "^include_dir = 'conf.d'" "$PGDATA/postgresql.conf" \
 echo "[entrypoint] 啟動 PostgreSQL（port ${PGPORT_APP}）..."
 "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/postgresql.log" -w -t 60 start
 
+# initdb 不會給 superuser 設密碼，而本機走 trust（見上）＝平台自己怎麼連都通，密碼從未被驗證。
+# 但測試區容器來自橋接網段、走 scram-sha-256，role 無密碼必然驗證失敗——症狀要到「建測試區」
+# 才浮現，且錯誤訊息只說密碼錯，不會指向「密碼根本沒設過」。故每次啟動同步一次，讓 role 密碼
+# 與 config.json 的 DATABASE_URL 永遠一致（使用者日後改設定檔的密碼也會自動跟上）。
+sync_db_password() {
+  local pw
+  pw="$(python3 - "$APP_DIR/data/config.json" <<'PY' 2>/dev/null
+import json, sys, urllib.parse
+try:
+    url = json.load(open(sys.argv[1])).get('DATABASE_URL', '')
+except Exception:
+    sys.exit(0)
+print(urllib.parse.unquote(urllib.parse.urlparse(url).password or ''))
+PY
+)"
+  [ -n "$pw" ] || return 0
+  # SQL 字串字面值只需跳脫單引號（standard_conforming_strings 預設 on，反斜線不特殊）。
+  if "$PGBIN/psql" -p "$PGPORT_APP" -U odoo -d postgres -qtAc \
+       "ALTER ROLE odoo PASSWORD '$(printf '%s' "$pw" | sed "s/'/''/g")'" >/dev/null; then
+    echo "[entrypoint] 已同步 odoo role 密碼（與 config.json 一致）"
+  else
+    echo "[entrypoint] 警告：同步 odoo role 密碼失敗，測試區容器將連不到平台資料庫"
+  fi
+}
+sync_db_password
+
 # 本腳本自己留下來當 PID 1 監工，不用 exec 交棒——exec 之後這支腳本就不存在了，容器被停時
 # 沒有任何行程能在結束前 pg_ctl stop，postmaster 直接吃 SIGKILL，下次啟動得走 crash recovery
 # 並留下「another server might be running」的假警報，會蓋掉真正的異常。
