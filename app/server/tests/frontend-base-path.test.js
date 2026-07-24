@@ -25,3 +25,22 @@ describe('basePathFrom', () => {
       .toBe(basePathFrom('https://web-test.ideaxpress.biz/odooAiDev/'));
   });
 });
+
+const fs = require('fs');
+const path = require('path');
+const readPublic = (f) => fs.readFileSync(path.join(__dirname, '../../public', f), 'utf8');
+
+// 靜態守門：root-absolute 的資產路徑在本地（前綴 '/'）永遠正常，只有在子路徑部署時才會 404。
+// 本機測不出來，所以用掃描把它擋在 commit 前。
+describe('HTML 資產路徑不得為 root-absolute', () => {
+  test.each(['index.html', 'styleguide.html'])('%s', (file) => {
+    const offenders = readPublic(file).match(/(?:src|href|action)="\/[^"]*"/g) || [];
+    expect(offenders).toEqual([]);
+  });
+
+  test('index.html 於所有其他 script 之前載入 base.js', () => {
+    const html = readPublic('index.html');
+    expect(html).toContain('<script src="js/base.js"></script>');
+    expect(html.indexOf('js/base.js')).toBeLessThan(html.indexOf('js/api.js'));
+  });
+});

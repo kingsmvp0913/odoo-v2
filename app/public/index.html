@@ -4,48 +4,51 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Dev 工作台</title>
-  <link rel="stylesheet" href="/css/app.css" />
-  <link rel="stylesheet" href="/css/vendor/xterm.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/vendor/xterm.css" />
 </head>
 <body>
   <div id="app">
     <div class="loading">載入中...</div>
   </div>
 
+  <!-- 前綴來源：必須早於所有會組 URL 的 script -->
+  <script src="js/base.js"></script>
+
   <!-- Vendor (local copies — no external CDN dependency) -->
-  <script src="/js/vendor/vue.global.prod.js"></script>
-  <script src="/js/vendor/vue-router.global.prod.js"></script>
-  <script src="/js/vendor/xterm.js"></script>
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/vendor/vue.global.prod.js"></script>
+  <script src="js/vendor/vue-router.global.prod.js"></script>
+  <script src="js/vendor/xterm.js"></script>
+  <script src="socket.io/socket.io.js"></script>
 
   <!-- App layers (order matters) -->
-  <script src="/js/api.js"></script>
-  <script src="/js/store.js"></script>
-  <script src="/js/dialog.js"></script>
-  <script src="/js/skeleton.js"></script>
-  <script src="/js/theme.js"></script>
-  <script src="/js/notify-client.js"></script>
-  <script src="/js/views/Login.js"></script>
-  <script src="/js/views/TaskList.js"></script>
-  <script src="/js/views/TaskDetail.js"></script>
-  <script src="/js/views/Settings.js"></script>
-  <script src="/js/views/ProjectList.js"></script>
-  <script src="/js/views/ProjectDetail.js"></script>
-  <script src="/js/views/ProjectDbQuery.js"></script>
-  <script src="/js/views/Terminal.js"></script>
-  <script src="/js/vendor/marked.min.js"></script>
-  <script src="/js/views/WikiView.js"></script>
-  <script src="/js/views/ProjectChat.js"></script>
-  <script src="/js/views/Admin.js"></script>
-  <script src="/js/views/AdminUsers.js"></script>
-  <script src="/js/views/AdminAgents.js"></script>
-  <script src="/js/views/AdminPipelines.js"></script>
-  <script src="/js/views/AdminHealthCheck.js"></script>
-  <script src="/js/views/AdminRejections.js"></script>
-  <script src="/js/views/AdminClassifySamples.js"></script>
-  <script src="/js/views/AdminPromptLogs.js"></script>
-  <script src="/js/views/TokenReport.js"></script>
-  <script src="/js/socket.js"></script>
-  <script src="/js/app.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/dialog.js"></script>
+  <script src="js/skeleton.js"></script>
+  <script src="js/theme.js"></script>
+  <script src="js/notify-client.js"></script>
+  <script src="js/views/Login.js"></script>
+  <script src="js/views/TaskList.js"></script>
+  <script src="js/views/TaskDetail.js"></script>
+  <script src="js/views/Settings.js"></script>
+  <script src="js/views/ProjectList.js"></script>
+  <script src="js/views/ProjectDetail.js"></script>
+  <script src="js/views/ProjectDbQuery.js"></script>
+  <script src="js/views/Terminal.js"></script>
+  <script src="js/vendor/marked.min.js"></script>
+  <script src="js/views/WikiView.js"></script>
+  <script src="js/views/ProjectChat.js"></script>
+  <script src="js/views/Admin.js"></script>
+  <script src="js/views/AdminUsers.js"></script>
+  <script src="js/views/AdminAgents.js"></script>
+  <script src="js/views/AdminPipelines.js"></script>
+  <script src="js/views/AdminHealthCheck.js"></script>
+  <script src="js/views/AdminRejections.js"></script>
+  <script src="js/views/AdminClassifySamples.js"></script>
+  <script src="js/views/AdminPromptLogs.js"></script>
+  <script src="js/views/TokenReport.js"></script>
+  <script src="js/socket.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
