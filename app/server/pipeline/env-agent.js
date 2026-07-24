@@ -365,8 +365,12 @@ async function _runEnvSetupDocker(projectId) {
   fs.mkdirSync(ctx.envDir, { recursive: true });
   const readyMarker = path.join(ctx.envDir, '.docker-ready');
   // filestore 綁到宿主持久目錄（與 DB 同樣持久），避免容器 rm+run 重建後 attachment 檔遺失、asset 500。
+  // 權限必須放寬到人人可寫：官方 odoo image 內的 odoo 是 uid 101，與建立此目錄的宿主 uid 不同，
+  // 預設 0755 會讓容器寫不進去——症狀是裝 base 時 PermissionError 包成 res_lang_data.xml 的
+  // ParseError，完全指不向權限。chmod 另下一次：mkdir 的 mode 會被 umask 削掉。
   const filestoreDir = path.join(ctx.envDir, 'filestore');
   fs.mkdirSync(filestoreDir, { recursive: true });
+  fs.chmodSync(filestoreDir, 0o777);
 
   await query(
     `INSERT INTO odoo_envs (project_id, status, port, updated_at) VALUES ($1,'setting_up',$2,NOW())
