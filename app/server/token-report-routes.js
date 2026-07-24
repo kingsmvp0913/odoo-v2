@@ -108,6 +108,51 @@ function registerRoutes(app) {
         baseParams
       );
 
+      // 使用者統計：母體是「本期間完成的任務」（done_at 落在區間），算每人平均要花幾次人工介入。
+      // 介入＝人類實際輸入的次數：task_logs role='user'（澄清回答／規格裁決／修正指示／退回理由）
+      // ＋ task_messages source='manual'（途中留言）。分析關改採「寧可多問一輪」後，這是該政策的成本計——
+      // 平均值往上跑就代表問太兇，要回頭收窄 clarification 的觸發條件。
+      const taskConditions = ["t.status = 'done'", 't.done_at >= $1', 't.done_at <= $2'];
+      const taskParams = [start, end];
+      if (!showAll) {
+        taskConditions.push(`t.user_id = $${taskParams.length + 1}`);
+        taskParams.push(req.userId);
+      }
+      if (projectId) {
+        taskConditions.push(`t.project_id = $${taskParams.length + 1}`);
+        taskParams.push(projectId);
+      }
+      if (taskId) {
+        taskConditions.push(`t.task_id = $${taskParams.length + 1}`);
+        taskParams.push(taskId);
+      }
+      const taskWhere = 'WHERE ' + taskConditions.join(' AND ');
+
+      // 拆三段查再於 JS 合併：相關子查詢／LATERAL 在 pg-mem（測試用）不保證可用
+      const [{ rows: doneByUser }, { rows: logsByUser }, { rows: msgsByUser }] = await Promise.all([
+        query(
+          `SELECT t.user_id, COALESCE(u.display_name, u.username) AS username, COUNT(*) AS tasks
+             FROM tasks t JOIN users u ON u.id = t.user_id
+             ${taskWhere}
+            GROUP BY t.user_id, u.display_name, u.username`,
+          taskParams
+        ),
+        query(
+          `SELECT t.user_id, COUNT(*) AS n
+             FROM task_logs l JOIN tasks t ON t.id = l.task_id
+             ${taskWhere} AND l.role = 'user'
+            GROUP BY t.user_id`,
+          taskParams
+        ),
+        query(
+          `SELECT t.user_id, COUNT(*) AS n
+             FROM task_messages m JOIN tasks t ON t.id = m.task_id
+             ${taskWhere} AND m.source = 'manual'
+            GROUP BY t.user_id`,
+          taskParams
+        )
+      ]);
+
       // Daily trend（實際 Token 數，與成本同一套加權；::date cast is compatible with both pg and pg-mem）
       const { rows: daily } = await query(
         `SELECT recorded_at::date AS date,
@@ -210,6 +255,23 @@ function registerRoutes(app) {
         }
       }
 
+      const logCount = {};
+      for (const r of logsByUser) logCount[r.user_id] = Number(r.n) || 0;
+      const msgCount = {};
+      for (const r of msgsByUser) msgCount[r.user_id] = Number(r.n) || 0;
+      // 依「平均介入次數」排序：要看的是誰的任務最耗人力，不是誰的任務多
+      const userStats = doneByUser.map(r => {
+        const doneTasks     = Number(r.tasks) || 0;
+        const interventions = (logCount[r.user_id] || 0) + (msgCount[r.user_id] || 0);
+        return {
+          user_id:           r.user_id,
+          username:          r.username,
+          done_tasks:        doneTasks,
+          interventions,
+          avg_interventions: doneTasks ? interventions / doneTasks : 0
+        };
+      }).sort((a, b) => b.avg_interventions - a.avg_interventions);
+
       const totalTokens  = Number(summary.total_tokens) || 0;
       const cacheTokens  = Number(summary.cache_tokens) || 0;
       const actualTokens = Number(summary.actual_tokens) || 0;
@@ -250,6 +312,7 @@ function registerRoutes(app) {
           username: r.username,
           tokens:   Number(r.tokens)
         })),
+        user_stats: userStats,
         daily: daily.map(r => ({ date: r.date, tokens: Number(r.tokens) })),
         tasks: Object.values(taskMap)
       });

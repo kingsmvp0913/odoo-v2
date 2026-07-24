@@ -297,3 +297,58 @@ test('by_agent 帶成本與失敗率：失敗記錄（status≠completed）計�
   expect(qa.fail_rate).toBeCloseTo(0.5);
   expect(typeof qa.cost_usd).toBe('number');
 });
+
+// 意圖：分析關改採「寧可多問一輪」後，需要一個成本計來看該政策有沒有問過頭——
+// 使用者統計以「本期間完成的任務」為母體，介入＝人類真的動手輸入的次數
+// （task_logs role='user'：澄清回答／規格裁決／修正指示／退回理由；task_messages source='manual'：途中留言）。
+// 平均值是關鍵欄位：任務多的人分母大，只看總數會誤判成他最耗人力。
+test('user_stats：以完成任務為母體，介入次數＝user log ＋ manual 留言，平均值以任務數為分母', async () => {
+  const { rows: [t1] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, done_at)
+     VALUES ($1,'task_iv_1','odoo','完成A','done', NOW()) RETURNING id`,
+    [regularUserId]
+  );
+  const { rows: [t2] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, done_at)
+     VALUES ($1,'task_iv_2','odoo','完成B','done', NOW()) RETURNING id`,
+    [regularUserId]
+  );
+  // t1：2 次澄清回答 + 1 則途中留言 = 3 次介入
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','答一')", [t1.id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','[修正指示] 答二')", [t1.id]);
+  await dbModule.query("INSERT INTO task_messages (task_id, source, content, occurred_at) VALUES ($1,'manual','途中留言', NOW())", [t1.id]);
+  // agent 自己寫的 ai/system 記錄不算介入
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','客服回覆')", [t1.id]);
+  // 從 Odoo 同步進來的訊息不是人在平台上介入，不算
+  await dbModule.query("INSERT INTO task_messages (task_id, source, content, occurred_at) VALUES ($1,'odoo','同步訊息', NOW())", [t2.id]);
+  // t2：1 次介入
+
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','答三')", [t2.id]);
+
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const row = res.body.user_stats.find(r => r.user_id === regularUserId);
+  expect(row).toBeTruthy();
+  expect(row.done_tasks).toBe(2);
+  expect(row.interventions).toBe(4);              // 3 + 1，ai/system 與 odoo 來源都不計
+  expect(row.avg_interventions).toBeCloseTo(2);   // 4 / 2
+});
+
+// 意圖：未完成的任務不該進母體——否則跑到一半的任務會把平均值稀釋成假的好看。
+test('user_stats：未完成（status≠done）的任務與其介入都不計入', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status)
+     VALUES ($1,'task_iv_open','odoo','進行中','coding_running') RETURNING id`,
+    [regularUserId]
+  );
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','進行中的回答')", [t.id]);
+
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  const row = res.body.user_stats.find(r => r.user_id === regularUserId);
+  expect(row.done_tasks).toBe(2);        // 仍是前一測的兩張
+  expect(row.interventions).toBe(4);     // 進行中任務的回答沒被算進去
+});

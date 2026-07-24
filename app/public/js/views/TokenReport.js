@@ -384,6 +384,35 @@ window.TokenReportView = Vue.defineComponent({
           </table>
         </div>
 
+        <!-- 使用者統計：母體是本期間完成的任務。平均介入次數＝每完成一張任務要人插手幾次，
+             這是「分析關寧可多問一輪」政策的成本計——數字往上跑就代表問太兇 -->
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5)" v-if="report.user_stats && report.user_stats.length">
+          <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);padding:var(--space-3) var(--space-3) 0;color:var(--text-secondary)">
+            使用者統計 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（本期間完成的任務；介入＝澄清回答、規格裁決、修正指示、退回理由、途中留言）</span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+            <thead>
+              <tr style="font-weight:var(--fw-semibold);font-size:var(--fs-xs);color:var(--text-muted)">
+                <th style="padding:var(--space-2) var(--space-3);text-align:left">使用者</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">完成任務</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">介入次數</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">平均每任務介入</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in report.user_stats" :key="'us-'+r.user_id" style="border-top:1px solid var(--border)">
+                <td style="padding:var(--space-2) var(--space-3)">{{ r.username }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.done_tasks }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.interventions }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right"
+                  :style="{color: r.avg_interventions >= 4 ? 'var(--danger)' : (r.avg_interventions >= 2 ? 'var(--warning)' : 'var(--text-muted)')}">
+                  {{ r.avg_interventions.toFixed(1) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         <!-- 明細表 -->
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
           <div style="max-height:520px;overflow-y:auto">
