@@ -129,12 +129,11 @@ function registerRoutes(app) {
       }
       const taskWhere = 'WHERE ' + taskConditions.join(' AND ');
 
-      // 拆多段查再於 JS 合併：相關子查詢／LATERAL／percentile_cont 在 pg-mem（測試用）不保證可用，
-      // 中位數也一併在 JS 算（平均會被少數卡很久的任務拉爆，不能用）。
+      // 拆多段查再於 JS 合併：相關子查詢與 LATERAL 在 pg-mem（測試用）不保證可用
       const PIPELINE_STAGES = ['analysis', 'coding', 'qa', 'playwright'];
       const [{ rows: doneTaskRows }, { rows: stageCallRows }, { rows: rejectRows }, { rows: rejectCatRows }] = await Promise.all([
         query(
-          `SELECT t.task_id, t.project_id, p.name AS project_name, t.created_at, t.done_at
+          `SELECT t.task_id, t.project_id, p.name AS project_name
              FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
              ${taskWhere}`,
           taskParams
@@ -284,7 +283,6 @@ function registerRoutes(app) {
             done_tasks:   0,
             first_pass:   0,
             rejected:     0,
-            leadHours:    [],
             stageTotals:  {},
             categories:   {}
           });
@@ -296,21 +294,11 @@ function registerRoutes(app) {
         if (PIPELINE_STAGES.every(s => (calls[s] || 0) <= 1)) a.first_pass++;
         for (const s of PIPELINE_STAGES) a.stageTotals[s] = (a.stageTotals[s] || 0) + (calls[s] || 0);
         if (rejectCount[t.task_id]) a.rejected++;
-        if (t.created_at && t.done_at) {
-          a.leadHours.push((new Date(t.done_at) - new Date(t.created_at)) / 3600000);
-        }
       }
       for (const r of rejectCatRows) {
         const a = projAgg.get(r.project_id == null ? 'none' : r.project_id);
         if (a) a.categories[r.category] = (a.categories[r.category] || 0) + (Number(r.n) || 0);
       }
-
-      const median = arr => {
-        if (!arr.length) return null;
-        const s = [...arr].sort((x, y) => x - y);
-        const m = Math.floor(s.length / 2);
-        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-      };
 
       // 依一次過關率由低到高：最需要處理的專案排最前面
       const projectStats = [...projAgg.values()].map(a => {
@@ -321,7 +309,6 @@ function registerRoutes(app) {
           done_tasks:        a.done_tasks,
           first_pass_rate:   a.done_tasks ? a.first_pass / a.done_tasks : 0,
           reject_rate:       a.done_tasks ? a.rejected / a.done_tasks : 0,
-          median_lead_hours: median(a.leadHours),
           avg_stage_calls:   Object.fromEntries(
             PIPELINE_STAGES.map(s => [s, a.done_tasks ? a.stageTotals[s] / a.done_tasks : 0])
           ),

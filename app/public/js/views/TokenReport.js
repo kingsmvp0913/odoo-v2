@@ -136,14 +136,6 @@ window.TokenReportView = Vue.defineComponent({
       if (n > 0)     return '$' + n.toFixed(5);
       return '$0';
     },
-    // 前置時間：不足一天用小時，超過用天——任務動輒跨日，全用小時看不出量級
-    fmtHours(h) {
-      if (h == null) return '—';
-      h = Number(h);
-      if (h < 1)  return Math.round(h * 60) + ' 分';
-      if (h < 48) return h.toFixed(1).replace(/\.0$/, '') + ' 小時';
-      return (h / 24).toFixed(1).replace(/\.0$/, '') + ' 天';
-    },
     fmtShort(n) {
       n = Number(n || 0);
       if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
@@ -409,7 +401,6 @@ window.TokenReportView = Vue.defineComponent({
                 <th style="padding:var(--space-2) var(--space-3);text-align:left">專案</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">完成任務</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">一次過關率</th>
-                <th style="padding:var(--space-2) var(--space-3);text-align:right">前置時間中位</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">人工退回率</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:left">主要退回原因</th>
               </tr>
@@ -422,7 +413,6 @@ window.TokenReportView = Vue.defineComponent({
                   :style="{color: r.first_pass_rate < 0.5 ? 'var(--danger)' : (r.first_pass_rate < 0.8 ? 'var(--warning)' : 'var(--success)')}">
                   {{ (r.first_pass_rate * 100).toFixed(0) }}%
                 </td>
-                <td style="padding:var(--space-2) var(--space-3);text-align:right;color:var(--text-muted)">{{ fmtHours(r.median_lead_hours) }}</td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right"
                   :style="{color: r.reject_rate >= 0.3 ? 'var(--danger)' : (r.reject_rate > 0 ? 'var(--warning)' : 'var(--text-muted)')}">
                   {{ (r.reject_rate * 100).toFixed(0) }}%
