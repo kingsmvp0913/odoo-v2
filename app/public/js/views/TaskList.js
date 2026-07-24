@@ -1,30 +1,4 @@
 const NEEDS_ACTION = ['confirm_pending', 'clarify_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
-const STATUS_LABELS = {
-  new:                '待分類',
-  analysis_running:   '分析中',
-  branch_pending:     '建立分支',
-  confirm_pending:    '等待確認',
-  confirm_answered:   '已回覆',
-  coding_running:     '開發中',
-  qa_running:         'QA 審查中',
-  merge_running:      '併入測試中',
-  merge_conflict:     '合併衝突',
-  deploy_testing:     '部署測試區',
-  playwright_running: 'E2E 測試中',
-  spec_review:        '等待規格確認',
-  review_pending:     '等待審核',
-  reject_triage:      '分診中',
-  resolve_triage:     '分診中',
-  clarify_pending:    '待你裁決',
-  clarify_answered:   '已裁決',
-  wiki_updating:      '更新 Wiki',
-  cs_running:         '客服處理',
-  cs_reply_pending:   '等待回覆確認',
-  cs_data_needed:     '需補資料',
-  done:               '完成',
-  stopped:            '失敗待確認'
-};
-
 // 部署（deploy_testing）與 E2E 測試（playwright_running）拆成兩格：部署一定跑，E2E 專案可停用
 // （e2e_disabled → deploy_testing 直接跳 review_pending）。停用時「測試」格會被 buildFlow 濾掉，
 // 不留幽靈步驟。

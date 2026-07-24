@@ -1,31 +1,4 @@
 const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
-const TD_STATUS_LABELS = {
-  new:                 '待分類',
-  analysis_running:    '分析中',
-  branch_pending:      '建立分支',
-  confirm_pending:     '等待確認',
-  confirm_answered:    '已回覆',
-  coding_running:      '開發中',
-  qa_running:          'QA 審查中',
-  respec_running:      '追加需求更新規格中',
-  merge_running:       '併入測試中',
-  merge_conflict:      '合併衝突',
-  deploy_testing:      '部署測試區',
-  playwright_running:  'E2E 測試中',
-  spec_review:         '等待規格確認',
-  review_pending:      '等待審核',
-  reject_triage:       '分診中',
-  resolve_triage:      '分診中',
-  clarify_pending:     '待你裁決',
-  clarify_answered:    '已裁決',
-  wiki_updating:       '更新 Wiki',
-  cs_running:          '客服處理',
-  cs_reply_pending:    '等待確認回覆',
-  cs_data_needed:      '需補充資料',
-  done:                '完成',
-  stopped:             '失敗待確認'
-};
-
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
@@ -48,7 +21,7 @@ window.TaskDetailView = Vue.defineComponent({
       if (s === 'done')             return 'archive';
       return 'message';
     },
-    statusLabel() { return this.task ? (TD_STATUS_LABELS[this.task.status] || this.task.status) : ''; },
+    statusLabel() { return this.task ? (STATUS_LABELS[this.task.status] || this.task.status) : ''; },
     // merge_conflict 的結構化衝突資料（後端 merge_conflict_data，可能為 JSON 字串）
     conflictData() {
       if (!this.task?.merge_conflict_data) return null;

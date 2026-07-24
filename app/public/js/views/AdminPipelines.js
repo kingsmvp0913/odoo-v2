@@ -1,20 +1,4 @@
 // 進行中 Pipeline 監控（跨使用者，僅 admin）。資料以後端 _inFlight 為準＝真正在跑的，非 status。
-const AP_STATUS_LABELS = {
-  new:                '待分類',
-  cs_running:         '客服處理',
-  analysis_running:   '分析中',
-  confirm_answered:   '已回覆',
-  branch_pending:     '建立分支',
-  coding_running:     '開發中',
-  qa_running:         'QA 審查中',
-  merge_running:      '併入測試中',
-  deploy_testing:     '部署測試區',
-  playwright_running: 'E2E 測試中',
-  wiki_updating:      '更新 Wiki',
-  reject_triage:      '分診中',
-  resolve_triage:     '分診中'
-};
-
 function apFmtElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);
@@ -50,7 +34,7 @@ window.AdminPipelinesView = Vue.defineComponent({
         this.loading = false;
       }
     },
-    statusLabel(s) { return AP_STATUS_LABELS[s] || s; },
+    statusLabel(s) { return STATUS_LABELS[s] || s; },
     fmtElapsed(ms) { return apFmtElapsed(ms); },
     userName(r) { return r.display_name || r.username || `#${r.user_id}`; },
     async pause(row) {

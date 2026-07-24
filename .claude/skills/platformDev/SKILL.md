@@ -27,6 +27,7 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 ## 前端結構（`app/public`）
 - 無框架 vanilla JS：`js/views/*.js` 各頁 view、`js/store.js` 狀態、`js/socket.js`（socket.io 即時事件）、`js/api.js`（fetch 包裝）、`js/dialog.js`／`js/theme.js`。
 - 元件外觀對照 `styleguide.html`；新 UI 先看有沒有現成 class。
+- 任務狀態的中文標籤只有 `js/status-labels.js` 一份（`window.STATUS_LABELS`），view 不得自帶——`frontend-status-labels.test.js` 會擋。後端 `runner.js` 的 `STAGE_LABELS` 是「執行歷程」另一套文案，刻意不共用，但**新增流程狀態要兩邊都補**（該測試斷言前端涵蓋後端 key）。
 
 ## 配色／dark-mode 硬規則（原 CLAUDE.md §3 條文，真相在此）
 - 配色一律走 `app.css` 的 CSS 變數／dark-aware class（如錯誤框套 `.error-msg`）。
@@ -38,3 +39,5 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 - 新 `/ai/*` 端點忘掛 `loopbackOnly` → 對外暴露無認證端點。
 - 前端 inline style 寫死 `#fff` 背景 → 深色模式隱形字（上方硬規則）。
 - 改 pipeline agent 的 prompt 或共用片段卻沒看 **agentPrompt** skill → 契約靜默壞掉。
+- 新增 pipeline 關卡只補了後端，前端 `status-labels.js` 沒補 → 該狀態在畫面顯示英文 status（`respec_running` 曾如此漏在列表頁）。
+- 寫「掃描全樹」類的靜態守衛時列死檔案清單 → 之後新增的 view 檔一律漏掃，防線形同虛設（見 `frontend-base-path.test.js` 的 `walk()`）。
