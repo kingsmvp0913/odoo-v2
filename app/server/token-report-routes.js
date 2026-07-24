@@ -78,6 +78,7 @@ function registerRoutes(app) {
            SUM(${WEIGHTED}) AS tokens,
            SUM(${COST}) AS cost_usd,
            COUNT(*) AS calls,
+           COUNT(DISTINCT tu.task_id) AS tasks,
            SUM(CASE WHEN COALESCE(tu.status,'completed') <> 'completed' THEN 1 ELSE 0 END) AS failed_calls
          FROM token_usage tu
          ${where}
@@ -108,10 +109,10 @@ function registerRoutes(app) {
         baseParams
       );
 
-      // 使用者統計：母體是「本期間完成的任務」（done_at 落在區間），算每人平均要花幾次人工介入。
-      // 介入＝人類實際輸入的次數：task_logs role='user'（澄清回答／規格裁決／修正指示／退回理由）
-      // ＋ task_messages source='manual'（途中留言）。分析關改採「寧可多問一輪」後，這是該政策的成本計——
-      // 平均值往上跑就代表問太兇，要回頭收窄 clarification 的觸發條件。
+      // 專案品質統計：母體是「本期間完成的任務」（done_at 落在區間）。
+      // 重跑次數一律由 token_usage 的列數推算，不讀 tasks 的 *_retry_count／reentry_count——
+      // 那些欄位在分診 goto（reject-triage）與 resolve-blocker 續跑時會被歸零，是「本次嘗試」的計數器，
+      // 不是生涯總數，拿來算彈跳率會嚴重低估。token_usage 每次呼叫一列且不可重置，才是可靠的重跑紀錄。
       const taskConditions = ["t.status = 'done'", 't.done_at >= $1', 't.done_at <= $2'];
       const taskParams = [start, end];
       if (!showAll) {
@@ -128,27 +129,37 @@ function registerRoutes(app) {
       }
       const taskWhere = 'WHERE ' + taskConditions.join(' AND ');
 
-      // 拆三段查再於 JS 合併：相關子查詢／LATERAL 在 pg-mem（測試用）不保證可用
-      const [{ rows: doneByUser }, { rows: logsByUser }, { rows: msgsByUser }] = await Promise.all([
+      // 拆多段查再於 JS 合併：相關子查詢／LATERAL／percentile_cont 在 pg-mem（測試用）不保證可用，
+      // 中位數也一併在 JS 算（平均會被少數卡很久的任務拉爆，不能用）。
+      const PIPELINE_STAGES = ['analysis', 'coding', 'qa', 'playwright'];
+      const [{ rows: doneTaskRows }, { rows: stageCallRows }, { rows: rejectRows }, { rows: rejectCatRows }] = await Promise.all([
         query(
-          `SELECT t.user_id, COALESCE(u.display_name, u.username) AS username, COUNT(*) AS tasks
-             FROM tasks t JOIN users u ON u.id = t.user_id
+          `SELECT t.task_id, t.project_id, p.name AS project_name, t.created_at, t.done_at
+             FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
+             ${taskWhere}`,
+          taskParams
+        ),
+        query(
+          `SELECT tu.task_id, tu.agent_type, COUNT(*) AS n
+             FROM token_usage tu JOIN tasks t ON t.task_id = tu.task_id
+             ${taskWhere} AND tu.agent_type = ANY($${taskParams.length + 1}::text[])
+            GROUP BY tu.task_id, tu.agent_type`,
+          [...taskParams, PIPELINE_STAGES]
+        ),
+        query(
+          `SELECT tr.task_id, COUNT(*) AS n
+             FROM task_rejections tr JOIN tasks t ON t.task_id = tr.task_id
              ${taskWhere}
-            GROUP BY t.user_id, u.display_name, u.username`,
+            GROUP BY tr.task_id`,
           taskParams
         ),
         query(
-          `SELECT t.user_id, COUNT(*) AS n
-             FROM task_logs l JOIN tasks t ON t.id = l.task_id
-             ${taskWhere} AND l.role = 'user'
-            GROUP BY t.user_id`,
-          taskParams
-        ),
-        query(
-          `SELECT t.user_id, COUNT(*) AS n
-             FROM task_messages m JOIN tasks t ON t.id = m.task_id
-             ${taskWhere} AND m.source = 'manual'
-            GROUP BY t.user_id`,
+          `SELECT t.project_id, ri.category, COUNT(*) AS n
+             FROM rejection_items ri
+             JOIN task_rejections tr ON tr.id = ri.rejection_id
+             JOIN tasks t ON t.task_id = tr.task_id
+             ${taskWhere}
+            GROUP BY t.project_id, ri.category`,
           taskParams
         )
       ]);
@@ -255,23 +266,71 @@ function registerRoutes(app) {
         }
       }
 
-      const logCount = {};
-      for (const r of logsByUser) logCount[r.user_id] = Number(r.n) || 0;
-      const msgCount = {};
-      for (const r of msgsByUser) msgCount[r.user_id] = Number(r.n) || 0;
-      // 依「平均介入次數」排序：要看的是誰的任務最耗人力，不是誰的任務多
-      const userStats = doneByUser.map(r => {
-        const doneTasks     = Number(r.tasks) || 0;
-        const interventions = (logCount[r.user_id] || 0) + (msgCount[r.user_id] || 0);
-        return {
-          user_id:           r.user_id,
-          username:          r.username,
-          done_tasks:        doneTasks,
-          interventions,
-          avg_interventions: doneTasks ? interventions / doneTasks : 0
-        };
-      }).sort((a, b) => b.avg_interventions - a.avg_interventions);
+      // 每任務每關的呼叫次數；> 1 即該關重跑過
+      const stageCalls = {};
+      for (const r of stageCallRows) {
+        (stageCalls[r.task_id] || (stageCalls[r.task_id] = {}))[r.agent_type] = Number(r.n) || 0;
+      }
+      const rejectCount = {};
+      for (const r of rejectRows) rejectCount[r.task_id] = Number(r.n) || 0;
 
+      const projAgg = new Map();
+      for (const t of doneTaskRows) {
+        const key = t.project_id == null ? 'none' : t.project_id;
+        if (!projAgg.has(key)) {
+          projAgg.set(key, {
+            project_id:   t.project_id,
+            project_name: t.project_name || '（未綁專案）',
+            done_tasks:   0,
+            first_pass:   0,
+            rejected:     0,
+            leadHours:    [],
+            stageTotals:  {},
+            categories:   {}
+          });
+        }
+        const a = projAgg.get(key);
+        a.done_tasks++;
+        const calls = stageCalls[t.task_id] || {};
+        // 一次過關＝四個 agent 關卡都沒有第二次呼叫。沒跑到的關（如無 tour）計 0，不算失敗。
+        if (PIPELINE_STAGES.every(s => (calls[s] || 0) <= 1)) a.first_pass++;
+        for (const s of PIPELINE_STAGES) a.stageTotals[s] = (a.stageTotals[s] || 0) + (calls[s] || 0);
+        if (rejectCount[t.task_id]) a.rejected++;
+        if (t.created_at && t.done_at) {
+          a.leadHours.push((new Date(t.done_at) - new Date(t.created_at)) / 3600000);
+        }
+      }
+      for (const r of rejectCatRows) {
+        const a = projAgg.get(r.project_id == null ? 'none' : r.project_id);
+        if (a) a.categories[r.category] = (a.categories[r.category] || 0) + (Number(r.n) || 0);
+      }
+
+      const median = arr => {
+        if (!arr.length) return null;
+        const s = [...arr].sort((x, y) => x - y);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+      };
+
+      // 依一次過關率由低到高：最需要處理的專案排最前面
+      const projectStats = [...projAgg.values()].map(a => {
+        const topCat = Object.entries(a.categories).sort((x, y) => y[1] - x[1])[0];
+        return {
+          project_id:        a.project_id,
+          project_name:      a.project_name,
+          done_tasks:        a.done_tasks,
+          first_pass_rate:   a.done_tasks ? a.first_pass / a.done_tasks : 0,
+          reject_rate:       a.done_tasks ? a.rejected / a.done_tasks : 0,
+          median_lead_hours: median(a.leadHours),
+          avg_stage_calls:   Object.fromEntries(
+            PIPELINE_STAGES.map(s => [s, a.done_tasks ? a.stageTotals[s] / a.done_tasks : 0])
+          ),
+          top_reject_category: topCat ? topCat[0] : null,
+          top_reject_count:    topCat ? topCat[1] : 0
+        };
+      }).sort((a, b) => a.first_pass_rate - b.first_pass_rate);
+
+      const doneTaskCount = doneTaskRows.length;
       const totalTokens  = Number(summary.total_tokens) || 0;
       const cacheTokens  = Number(summary.cache_tokens) || 0;
       const actualTokens = Number(summary.actual_tokens) || 0;
@@ -287,19 +346,26 @@ function registerRoutes(app) {
           cost_usd:            costUsd,
           total_tasks:         totalTasks,
           avg_tokens_per_task: totalTasks ? actualTokens / totalTasks : 0,
-          // 平均每任務以「實際花費」計
-          avg_cost_per_task:   totalTasks ? costUsd / totalTasks : 0
+          // 本期間完成的任務數，是下面「每張交付成本」的分母
+          done_tasks:          doneTaskCount,
+          // 每張「交付」任務的成本：分母用完成數，不用 total_tasks——後者含跑到一半、
+          // 被砍掉、還沒完成的任務，除出來的數字會低於真實單位成本
+          avg_cost_per_task:   doneTaskCount ? costUsd / doneTaskCount : 0
         },
         by_agent:   byAgent.map(r => {
           const calls = Number(r.calls) || 0;
           const failed = Number(r.failed_calls) || 0;
+          const tasks = Number(r.tasks) || 0;
           return {
             agent_type: r.agent_type,
             tokens: Number(r.tokens),
             cost_usd: Number(r.cost_usd) || 0,
             calls,
             failed_calls: failed,
-            fail_rate: calls ? failed / calls : 0
+            fail_rate: calls ? failed / calls : 0,
+            // 平均每任務呼叫幾次：1.0＝從不重跑。比 fail_rate 準——fail_rate 只算 timeout/error，
+            // 漏掉「跑完了但結果被打回重來」，而後者才是重跑成本的主要來源。
+            avg_calls_per_task: tasks ? calls / tasks : 0
           };
         }),
         by_project: byProject.filter(r => r.project_name).map(r => ({
@@ -312,7 +378,7 @@ function registerRoutes(app) {
           username: r.username,
           tokens:   Number(r.tokens)
         })),
-        user_stats: userStats,
+        project_stats: projectStats,
         daily: daily.map(r => ({ date: r.date, tokens: Number(r.tokens) })),
         tasks: Object.values(taskMap)
       });

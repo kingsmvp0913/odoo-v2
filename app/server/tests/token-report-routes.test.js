@@ -298,57 +298,96 @@ test('by_agent 帶成本與失敗率：失敗記錄（status≠completed）計�
   expect(typeof qa.cost_usd).toBe('number');
 });
 
-// 意圖：分析關改採「寧可多問一輪」後，需要一個成本計來看該政策有沒有問過頭——
-// 使用者統計以「本期間完成的任務」為母體，介入＝人類真的動手輸入的次數
-// （task_logs role='user'：澄清回答／規格裁決／修正指示／退回理由；task_messages source='manual'：途中留言）。
-// 平均值是關鍵欄位：任務多的人分母大，只看總數會誤判成他最耗人力。
-test('user_stats：以完成任務為母體，介入次數＝user log ＋ manual 留言，平均值以任務數為分母', async () => {
-  const { rows: [t1] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, status, done_at)
-     VALUES ($1,'task_iv_1','odoo','完成A','done', NOW()) RETURNING id`,
-    [regularUserId]
-  );
-  const { rows: [t2] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, status, done_at)
-     VALUES ($1,'task_iv_2','odoo','完成B','done', NOW()) RETURNING id`,
-    [regularUserId]
-  );
-  // t1：2 次澄清回答 + 1 則途中留言 = 3 次介入
-  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','答一')", [t1.id]);
-  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','[修正指示] 答二')", [t1.id]);
-  await dbModule.query("INSERT INTO task_messages (task_id, source, content, occurred_at) VALUES ($1,'manual','途中留言', NOW())", [t1.id]);
-  // agent 自己寫的 ai/system 記錄不算介入
-  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','客服回覆')", [t1.id]);
-  // 從 Odoo 同步進來的訊息不是人在平台上介入，不算
-  await dbModule.query("INSERT INTO task_messages (task_id, source, content, occurred_at) VALUES ($1,'odoo','同步訊息', NOW())", [t2.id]);
-  // t2：1 次介入
+// 註：這幾個測試刻意不帶 ?project_id—— summary query 的專案篩選用了 EXISTS 相關子查詢，
+// pg-mem 無法解析當中的 tu.task_id（真 Postgres 正常）。project_stats 本來就依專案分組，
+// 直接在回傳裡找該專案那列即可，不需要篩選。
 
-  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','答三')", [t2.id]);
+// 意圖：一次過關率是「分析升 opus」這類改動的驗收指標，必須用不可重置的來源算。
+// tasks 的 *_retry_count／reentry_count 會在分診 goto 與 resolve-blocker 續跑時被歸零
+// （reject-triage.js:136、tasks-routes.js 的 RESUME_COUNTER），拿來算會低估彈跳；
+// token_usage 每次呼叫一列且不可重置，才是可靠的重跑紀錄。
+let qualityProjectId;
+test('project_stats：一次過關率由 token_usage 列數推算，某關跑第二次即不算一次過關', async () => {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('品質統計專案', '17.0') RETURNING id"
+  );
+  qualityProjectId = p.id;
+  const seed = async (taskId, title, stages) => {
+    await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, created_at, done_at)
+       VALUES ($1,$2,'odoo',$3,'done',$4, NOW(), NOW())`,
+      [regularUserId, taskId, title, p.id]
+    );
+    for (const ag of stages) {
+      await dbModule.query(
+        `INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source)
+         VALUES ($1, $2, $3, 10, 1, 0, 0, 'server')`,
+        [taskId, regularUserId, ag]
+      );
+    }
+  };
+  await seed('task_fp_clean',  '一次過',   ['analysis', 'coding', 'qa', 'playwright']);
+  await seed('task_fp_bounce', '有彈跳',   ['analysis', 'coding', 'coding', 'qa', 'playwright', 'playwright']);
+  // 沒有 tour 的任務：該關 0 次呼叫，不該被當成失敗
+  await seed('task_fp_notour', '無 tour', ['analysis', 'coding', 'qa']);
 
   const res = await request(app)
     .get('/api/token-report?all=true')
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  const row = res.body.user_stats.find(r => r.user_id === regularUserId);
+  const row = res.body.project_stats.find(r => r.project_id === p.id);
   expect(row).toBeTruthy();
-  expect(row.done_tasks).toBe(2);
-  expect(row.interventions).toBe(4);              // 3 + 1，ai/system 與 odoo 來源都不計
-  expect(row.avg_interventions).toBeCloseTo(2);   // 4 / 2
+  expect(row.done_tasks).toBe(3);
+  expect(row.first_pass_rate).toBeCloseTo(2 / 3);            // 只有 bounce 那張不算
+  expect(row.avg_stage_calls.coding).toBeCloseTo(4 / 3);     // (1+2+1)/3
+  expect(row.avg_stage_calls.playwright).toBeCloseTo(1);     // (1+2+0)/3，沒跑的計 0
 });
 
-// 意圖：未完成的任務不該進母體——否則跑到一半的任務會把平均值稀釋成假的好看。
-test('user_stats：未完成（status≠done）的任務與其介入都不計入', async () => {
-  const { rows: [t] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, status)
-     VALUES ($1,'task_iv_open','odoo','進行中','coding_running') RETURNING id`,
-    [regularUserId]
+// 意圖：人工退回是「規格沒對齊」的最終訊號，退回原因分類 cron 早就在算，報表要看得到；
+// 退回率的分母是完成任務數，才能跨專案比較。
+test('project_stats：人工退回率與主要退回原因（rejection_items 分類）', async () => {
+  const { rows: [rej] } = await dbModule.query(
+    `INSERT INTO task_rejections (task_id, project_id, user_id, reason)
+     VALUES ('task_fp_bounce', $1, $2, '欄位放錯位置') RETURNING id`,
+    [qualityProjectId, regularUserId]
   );
-  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','進行中的回答')", [t.id]);
+  await dbModule.query(
+    "INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1, '欄位放錯位置', 'spec_mismatch')",
+    [rej.id]
+  );
 
   const res = await request(app)
     .get('/api/token-report?all=true')
     .set('Authorization', `Bearer ${adminToken}`);
-  const row = res.body.user_stats.find(r => r.user_id === regularUserId);
-  expect(row.done_tasks).toBe(2);        // 仍是前一測的兩張
-  expect(row.interventions).toBe(4);     // 進行中任務的回答沒被算進去
+  const row = res.body.project_stats.find(r => r.project_id === qualityProjectId);
+  expect(row.done_tasks).toBe(3);
+  expect(row.reject_rate).toBeCloseTo(1 / 3);      // 三張裡一張被退過
+  expect(row.top_reject_category).toBe('spec_mismatch');
+  expect(row.top_reject_count).toBe(1);
+});
+
+// 意圖：每張交付成本的分母必須是「完成任務數」。用 total_tasks（token_usage 的 ref 數，
+// 含跑一半／被砍掉／未完成的任務）當分母會把單位成本除得比實際低，看起來比真實便宜。
+test('summary.avg_cost_per_task 分母是完成任務數，不是 token_usage 的 ref 數', async () => {
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const { summary } = res.body;
+  expect(summary.done_tasks).toBeGreaterThan(0);
+  expect(summary.done_tasks).not.toBe(summary.total_tasks);   // 兩者確實不同，才驗得出用了哪個
+  expect(summary.avg_cost_per_task).toBeCloseTo(summary.cost_usd / summary.done_tasks, 10);
+});
+
+// 意圖：各關的重跑要看得到——fail_rate 只算 timeout/error，漏掉「跑完但被打回重來」，
+// 而後者才是重跑成本的主要來源。avg_calls_per_task = 1.0 代表該關從不重跑。
+// 用 playwright 斷言：全檔只有上面的 fixture 寫過這個 agent_type，不受其他測試的資料干擾。
+test('by_agent.avg_calls_per_task：同任務同關卡跑兩次 → 平均呼叫數 > 1', async () => {
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  const pw = res.body.by_agent.find(r => r.agent_type === 'playwright');
+  expect(pw).toBeTruthy();
+  expect(pw.calls).toBe(3);                          // clean 1 次 + bounce 2 次
+  expect(pw.avg_calls_per_task).toBeCloseTo(1.5);    // 3 次呼叫 / 2 個任務
 });

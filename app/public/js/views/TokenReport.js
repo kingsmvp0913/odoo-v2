@@ -136,6 +136,14 @@ window.TokenReportView = Vue.defineComponent({
       if (n > 0)     return '$' + n.toFixed(5);
       return '$0';
     },
+    // 前置時間：不足一天用小時，超過用天——任務動輒跨日，全用小時看不出量級
+    fmtHours(h) {
+      if (h == null) return '—';
+      h = Number(h);
+      if (h < 1)  return Math.round(h * 60) + ' 分';
+      if (h < 48) return h.toFixed(1).replace(/\.0$/, '') + ' 小時';
+      return (h / 24).toFixed(1).replace(/\.0$/, '') + ' 天';
+    },
     fmtShort(n) {
       n = Number(n || 0);
       if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
@@ -271,7 +279,7 @@ window.TokenReportView = Vue.defineComponent({
           </div>
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4);text-align:center">
             <div style="font-size:24px;font-weight:var(--fw-bold);color:var(--warning)" :title="'$'+Number(report.summary.avg_cost_per_task||0).toFixed(6)">{{ fmtUSD(report.summary.avg_cost_per_task) }}</div>
-            <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-1)">平均每任務</div>
+            <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-1)" :title="'期間總花費 ÷ 完成任務數 '+report.summary.done_tasks">每張交付成本</div>
           </div>
         </div>
 
@@ -362,6 +370,7 @@ window.TokenReportView = Vue.defineComponent({
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">實際 Token 數</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">花費</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">呼叫數</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">平均每任務呼叫</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">失敗數</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">失敗率</th>
               </tr>
@@ -374,6 +383,10 @@ window.TokenReportView = Vue.defineComponent({
                 <td style="padding:var(--space-2) var(--space-3);text-align:right" :title="fmtNum(r.tokens)">{{ fmtShort(r.tokens) }}</td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ fmtUSD(r.cost_usd) }}</td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.calls }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right"
+                  :style="{color: r.avg_calls_per_task >= 2 ? 'var(--danger)' : (r.avg_calls_per_task > 1.2 ? 'var(--warning)' : 'var(--text-muted)')}">
+                  {{ r.avg_calls_per_task.toFixed(2) }}
+                </td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.failed_calls }}</td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right"
                   :style="{color: r.fail_rate >= 0.2 ? 'var(--danger)' : (r.fail_rate > 0 ? 'var(--warning)' : 'var(--text-muted)')}">
@@ -384,29 +397,39 @@ window.TokenReportView = Vue.defineComponent({
           </table>
         </div>
 
-        <!-- 使用者統計：母體是本期間完成的任務。平均介入次數＝每完成一張任務要人插手幾次，
-             這是「分析關寧可多問一輪」政策的成本計——數字往上跑就代表問太兇 -->
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5)" v-if="report.user_stats && report.user_stats.length">
+        <!-- 專案品質統計：母體是本期間完成的任務。一次過關率＝四個 agent 關卡都沒重跑的比例，
+             由 token_usage 列數推算（tasks 的 *_retry_count 會被分診歸零，不可用） -->
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5)" v-if="report.project_stats && report.project_stats.length">
           <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);padding:var(--space-3) var(--space-3) 0;color:var(--text-secondary)">
-            使用者統計 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（本期間完成的任務；介入＝澄清回答、規格裁決、修正指示、退回理由、途中留言）</span>
+            專案品質統計 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（本期間完成的任務；一次過關＝分析／開發／QA／E2E 四關都沒重跑）</span>
           </div>
           <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
             <thead>
               <tr style="font-weight:var(--fw-semibold);font-size:var(--fs-xs);color:var(--text-muted)">
-                <th style="padding:var(--space-2) var(--space-3);text-align:left">使用者</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:left">專案</th>
                 <th style="padding:var(--space-2) var(--space-3);text-align:right">完成任務</th>
-                <th style="padding:var(--space-2) var(--space-3);text-align:right">介入次數</th>
-                <th style="padding:var(--space-2) var(--space-3);text-align:right">平均每任務介入</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">一次過關率</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">前置時間中位</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:right">人工退回率</th>
+                <th style="padding:var(--space-2) var(--space-3);text-align:left">主要退回原因</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in report.user_stats" :key="'us-'+r.user_id" style="border-top:1px solid var(--border)">
-                <td style="padding:var(--space-2) var(--space-3)">{{ r.username }}</td>
+              <tr v-for="r in report.project_stats" :key="'ps-'+(r.project_id||'none')" style="border-top:1px solid var(--border)">
+                <td style="padding:var(--space-2) var(--space-3)">{{ r.project_name }}</td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.done_tasks }}</td>
-                <td style="padding:var(--space-2) var(--space-3);text-align:right">{{ r.interventions }}</td>
                 <td style="padding:var(--space-2) var(--space-3);text-align:right"
-                  :style="{color: r.avg_interventions >= 4 ? 'var(--danger)' : (r.avg_interventions >= 2 ? 'var(--warning)' : 'var(--text-muted)')}">
-                  {{ r.avg_interventions.toFixed(1) }}
+                  :style="{color: r.first_pass_rate < 0.5 ? 'var(--danger)' : (r.first_pass_rate < 0.8 ? 'var(--warning)' : 'var(--success)')}">
+                  {{ (r.first_pass_rate * 100).toFixed(0) }}%
+                </td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right;color:var(--text-muted)">{{ fmtHours(r.median_lead_hours) }}</td>
+                <td style="padding:var(--space-2) var(--space-3);text-align:right"
+                  :style="{color: r.reject_rate >= 0.3 ? 'var(--danger)' : (r.reject_rate > 0 ? 'var(--warning)' : 'var(--text-muted)')}">
+                  {{ (r.reject_rate * 100).toFixed(0) }}%
+                </td>
+                <td style="padding:var(--space-2) var(--space-3);color:var(--text-muted)">
+                  <span v-if="r.top_reject_category">{{ r.top_reject_category }}（{{ r.top_reject_count }}）</span>
+                  <span v-else>—</span>
                 </td>
               </tr>
             </tbody>
