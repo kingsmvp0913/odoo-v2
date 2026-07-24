@@ -44,6 +44,18 @@ test('render 漏傳 placeholder → console.warn 告警（不靜默劣化，健�
   spy.mockRestore();
 });
 
+// 意圖（Rule 9）：retry_feedback／resolution 是「長度大、每輪會變」的區塊值，只該在自己的
+// 【】標題底下注入一次。曾經在說明句中間也寫了 {{retry_feedback}}，fillPlaceholders 全域替換後
+// 兩個後果：句子被整段失敗訊息塞爆而語意壞掉；body 從那一行起每輪都不同 → 破壞 coding 賴以省
+// input 的 prompt cache 前綴（coding 每輪 fresh，見 task-agent.js）。短識別值（branch/專案名）
+// 重複 inline 無此問題，故只釘這兩個。
+test('coding-project 的區塊型 placeholder 只在專屬區塊出現一次（保語意與 cache 前綴）', () => {
+  const body = L.loadAgent('coding-project').body;
+  for (const ph of ['{{retry_feedback}}', '{{resolution}}']) {
+    expect(body.split(ph).length - 1).toBe(1);
+  }
+});
+
 test('listAgents 含所有實際使用的 agent', () => {
   const names = L.listAgents().map(a => a.name);
   for (const n of [

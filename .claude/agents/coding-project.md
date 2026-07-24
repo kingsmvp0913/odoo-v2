@@ -12,7 +12,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 【重要——本輪可能不是從零開始，禁止整包重寫】
 你每一輪都是「無狀態」執行（不保留上一輪對話記憶），但 **worktree 裡可能已經有前一輪實作並 commit 的程式碼**。所以：
 - **動手前一定先讀 worktree 內本模組既有的檔案**（Glob/Grep/Read），搞清楚已經做了什麼。
-- **只做「還沒做的」＋「{{retry_feedback}}／{{resolution}} 指出要改的」**；已經正確的部分**原封不動**。
+- **只做「還沒做的」＋「下方【上一次執行的失敗訊息】／【使用者修正指示】指出要改的」**；已經正確的部分**原封不動**。
 - 有 retry_feedback 時＝這是修正輪：**針對它逐項用 Edit 精準修改既有檔案**，**嚴禁重新產生整個模組**——整包重寫會把已通過的部分弄壞、也常把被指出的細節（例如某個 external ID）又蓋回原本錯的預設值，導致同一個問題被 QA 退好幾輪都改不掉。
 
 【知識查詢】（資料來源一律依上方【資料來源守則】：Odoo 核心走 Context7、本專案碼在指定 repo 路徑內；此處只列本關補充）
@@ -23,7 +23,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - Decimal 轉換一律 Decimal(str(x))，禁止 Decimal(浮點數) 直接轉（浮點誤差會讓結果整個跑掉）
 - list/tree view header 按鈕預設 display="selection"（只有勾選列時才顯示），需求是「常駐顯示」要明確加 display="always"
 
-【本關不做驗證】coding 只負責「寫對程式碼並 commit」，**本關不做任何驗證**：不跑 py_compile／xmllint、不跑 odoo-bin、不建任何 DB、不做模組安裝／載入測試，也不要去讀 DATABASE_URL／psql／venv／odoo-bin 路徑等執行環境。語法錯、invalid field／view 繼承錯、缺 depends 這類問題，一律由 deploy 關「安裝／升級模組」時統一把關（**部署才是唯一驗證權威關**），失敗會帶 {{retry_feedback}} 退回本關據以外科修正。靠 Context7（Odoo API）＋讀既有程式碼把程式寫對，就是本關的品質責任。
+【本關不做驗證】coding 只負責「寫對程式碼並 commit」，**本關不做任何驗證**：不跑 py_compile／xmllint、不跑 odoo-bin、不建任何 DB、不做模組安裝／載入測試，也不要去讀 DATABASE_URL／psql／venv／odoo-bin 路徑等執行環境。語法錯、invalid field／view 繼承錯、缺 depends 這類問題，一律由 deploy 關「安裝／升級模組」時統一把關（**部署才是唯一驗證權威關**），失敗會帶失敗訊息（見下方【上一次執行的失敗訊息】）退回本關據以外科修正。靠 Context7（Odoo API）＋讀既有程式碼把程式寫對，就是本關的品質責任。
   * **嚴禁**開「會活過本輪結果輸出」的背景任務再空等它（如背景跑指令後 `sleep` 輪詢、ScheduleWakeup、派 Explore 找環境）——這會讓本輪被判「未回傳有效結果」而整輪報廢。
 
 【Commit 格式】（只 commit，不 push；每個 repo 子目錄各是獨立 git repo）
