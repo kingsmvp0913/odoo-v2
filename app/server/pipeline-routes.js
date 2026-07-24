@@ -249,7 +249,11 @@ function registerRoutes(app) {
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
-      const base = process.env.ONLINE_ADDONS_DIR || 'C:/online_addons';
+      // 正式區 addons 目錄。Windows 沿用既有預設；其他平台（含容器佈署）未設定即中止——
+      // 'C:/online_addons' 在 Linux 是「相對路徑」，會把模組複製到工作目錄下一個叫 C: 的目錄，
+      // 然後照常回報 copied 成功，正式區卻永遠讀不到；錯誤完全不指向成因，故寧可擋在這裡。
+      const base = process.env.ONLINE_ADDONS_DIR || (process.platform === 'win32' ? 'C:/online_addons' : null);
+      if (!base) return res.status(500).json({ error: '未設定 ONLINE_ADDONS_DIR（正式區 addons 目錄），無法複製到正式區' });
       const { getMainBranch, diffNameOnly, refExists } = require('./pipeline/git');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 

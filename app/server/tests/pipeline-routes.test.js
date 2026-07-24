@@ -390,6 +390,38 @@ test('copy-to-online → 不限審核狀態，整包複製改動模組到 ONLINE
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
 
+// 意圖：Linux（含容器佈署）未設定 ONLINE_ADDONS_DIR 時必須擋下來。舊預設 'C:/online_addons'
+// 在 Linux 是相對路徑，會把模組複製到工作目錄下一個叫 C: 的目錄並回報 copied 成功——
+// 正式區讀不到任何東西，而畫面顯示佈署完成。Windows 機不受影響（該預設在那裡是有效路徑）。
+test('copy-to-online → 非 Windows 未設 ONLINE_ADDONS_DIR 時中止，不得靜默複製到相對路徑', async () => {
+  if (process.platform === 'win32') return;
+  const { getMainBranch, diffNameOnly, refExists } = require('../pipeline/git');
+  refExists.mockResolvedValue(true);
+  getMainBranch.mockResolvedValue('main');
+  diffNameOnly.mockResolvedValue(['idx_demo/models/sale_order.py']);
+  delete process.env.ONLINE_ADDONS_DIR;
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('CTO2','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main',$2,$3,true,'done')",
+    [proj.id, 'https://github.com/Ideaxpress-odoo/odoo17_hungjou.git', path.join(os.tmpdir(), 'cto2', 'repos', 'main')]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_cto_noenv','odoo','T','coding_running',$2,'task/task_cto_noenv') RETURNING id",
+    [userId, proj.id]
+  );
+
+  const res = await request(app).post(`/api/tasks/${t.id}/copy-to-online`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(res.status).toBe(500);
+  expect(res.body.error).toContain('ONLINE_ADDONS_DIR');
+  expect(fs.existsSync(path.join(process.cwd(), 'C:'))).toBe(false);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+});
+
 // --- MODE_B 規格審核閘門：spec-approve（確認開工）／spec-revise（寫意見改規格）---
 
 test('POST /api/tasks/:id/spec-approve → spec_review 轉 branch_pending 並跑 pipeline', async () => {

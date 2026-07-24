@@ -4,7 +4,7 @@ const path = require('path');
 const { query } = require('../db');
 const { ensureTestingBranch } = require('./git');
 const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
-const { allocateProjectPort, loopbackHostForPort } = require('../port-alloc');
+const { allocateProjectPort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
@@ -361,7 +361,7 @@ async function _runEnvSetupDocker(projectId) {
   if (!ctx) return;
   let port = ctx.project.port;
   if (!port) { port = await allocateProjectPort(); await query('UPDATE projects SET port=$2 WHERE id=$1', [projectId, port]); }
-  const envHost = loopbackHostForPort(port);
+  const envHost = envBindHost(port);
   fs.mkdirSync(ctx.envDir, { recursive: true });
   const readyMarker = path.join(ctx.envDir, '.docker-ready');
   // filestore 綁到宿主持久目錄（與 DB 同樣持久），避免容器 rm+run 重建後 attachment 檔遺失、asset 500。
@@ -422,7 +422,7 @@ async function _runEnvSetupDocker(projectId) {
 
   await query(
     "UPDATE odoo_envs SET status='running', pid=NULL, pid_started_at=NULL, port=$2, url=$3, setup_log=$4, updated_at=NOW() WHERE project_id=$1",
-    [projectId, port, `http://${envHost}:${port}`, log]
+    [projectId, port, envPublicUrl(port, ctx.dirName), log]
   );
 
   // VPN 共管：測試區進入 running 後背景暖機該專案所有 vpn 連線（fire-and-forget，不 await；
