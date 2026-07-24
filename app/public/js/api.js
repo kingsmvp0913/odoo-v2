@@ -12,7 +12,7 @@ const Api = {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     let res;
     try {
-      res = await fetch(`/api/${path}`, {
+      res = await fetch(`${BASE_PATH}api/${path}`, {
         method,
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined
@@ -38,7 +38,7 @@ const Api = {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     let res;
     try {
-      res = await fetch(`/api/${path}`, { method: 'POST', headers, body: formData });
+      res = await fetch(`${BASE_PATH}api/${path}`, { method: 'POST', headers, body: formData });
     } catch (e) {
       throw new Error('伺服器沒回應');
     }

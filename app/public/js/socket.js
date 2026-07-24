@@ -5,6 +5,9 @@
   function initSocket(userId) {
     if (_socket) return;
     _socket = io({
+      // socket.io 的 path 只吃絕對路徑，不會跟著頁面前綴走，必須明示；漏掉會握手 404 後
+      // 靜默退回 polling——即時通知變慢但不報錯。
+      path: BASE_PATH + 'socket.io',
       transports: ['websocket', 'polling'],
       auth: { token: Api.getToken() }
     });

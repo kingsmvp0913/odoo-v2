@@ -44,3 +44,26 @@ describe('HTML 資產路徑不得為 root-absolute', () => {
     expect(html.indexOf('js/base.js')).toBeLessThan(html.indexOf('js/api.js'));
   });
 });
+
+// socket.io client 的 path 選項只接受絕對路徑字串（無法用相對路徑），這是 BASE_PATH 必須以
+// 全域變數存在、而不能只靠相對 URL 解析的主因。漏掉它的症狀是 websocket 握手 404 後靜默
+// 退回 polling——功能看起來正常，只是即時通知變慢，不會有錯誤訊息。
+describe('前端請求路徑接上 BASE_PATH', () => {
+  test.each([
+    ['js/api.js'],
+    ['js/socket.js'],
+    ['js/views/TaskDetail.js'],
+  ])('%s 不得有 root-absolute 的 /api 或 /socket.io', (file) => {
+    const offenders = readPublic(file).match(/['"`]\/(api|socket\.io)\//g) || [];
+    expect(offenders).toEqual([]);
+  });
+
+  test('api.js 兩處 fetch 皆以 BASE_PATH 開頭', () => {
+    const src = readPublic('js/api.js');
+    expect(src.match(/fetch\(`\$\{BASE_PATH\}api\//g)).toHaveLength(2);
+  });
+
+  test('socket.js 明示 path 選項（否則 socket.io 會用預設的 /socket.io）', () => {
+    expect(readPublic('js/socket.js')).toContain("path: BASE_PATH + 'socket.io'");
+  });
+});

@@ -284,7 +284,7 @@ window.TaskDetailView = Vue.defineComponent({
     },
     async downloadAttachment(attId, filename) {
       try {
-        const res = await fetch(`/api/tasks/${this.task.id}/attachments/${attId}/download`, {
+        const res = await fetch(`${BASE_PATH}api/tasks/${this.task.id}/attachments/${attId}/download`, {
           headers: { Authorization: `Bearer ${Api.getToken()}` }
         });
         if (!res.ok) {
