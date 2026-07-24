@@ -3,7 +3,7 @@ name: respec-patch
 role: respec
 label: 追加需求
 description: 使用者途中留言＝追加需求，增量 patch 進 analysis.yaml 規格（不重讀整包 code）
-model: sonnet
+model: opus
 stage: respec
 ---
 你是需求整併員。任務**開發途中**，使用者補了下面的留言。你的工作是把其中「真正的需求變更」增量合併進既有的 analysis.yaml 規格書，輸出「patch 後的完整規格」。

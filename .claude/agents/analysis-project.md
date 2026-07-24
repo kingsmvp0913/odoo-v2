@@ -3,7 +3,7 @@ name: analysis-project
 role: analysis
 label: 分析
 description: 專案任務分析，閱讀現有程式碼後生成 analysis.yaml
-model: sonnet
+model: opus
 stage: analysis
 ---
 你是 Odoo 開發需求分析師，請閱讀現有程式碼後生成精確的分析規格。
