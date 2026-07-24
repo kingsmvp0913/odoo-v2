@@ -79,6 +79,41 @@ docker restart odoo-v2
 plugin 設定寫在容器檔案系統的 `~/.claude.json`，`compose up` 重建容器時會消失，重跑
 `docker exec -it odoo-v2 node scripts/setup.js --skip-start` 即補回（idempotent，不會動到資料庫）。
 
+## 掛在既有網域的子路徑下（反向代理）
+
+平台可掛在既有網域的子路徑（本機為 `https://web-test.ideaxpress.biz/odooAiDev/`）。前端會從
+`document.baseURI` 推導前綴，**伺服器端與 `config.json` 皆不需任何設定**——Windows 本地開在根
+路徑時前綴自動為 `/`，行為與未反代時逐字相同。故本節只需在反向代理端設定。
+
+於既有 server block 內加入（本機的 nginx 跑在容器 `agency-NginxUI-1`，設定檔為
+`sites-available/IDX`；改完 `nginx -t` 通過再 `nginx -s reload`）：
+
+```nginx
+location /odooAiDev/ {
+    proxy_pass http://host.docker.internal:8771/;   # 尾斜線＝剝掉前綴，後端看到的路徑與本地相同
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    client_max_body_size 50m;
+    proxy_read_timeout 600s;
+}
+location = /odooAiDev { return 301 /odooAiDev/; }
+```
+
+兩個踩到才會發現的前提，且**本地無 nginx 的環境完全重現不了**：
+
+- **`client_max_body_size` 必須在此覆蓋**。`nginx.conf` 的 http 層全域值為 `2m`，不覆蓋則任務
+  附件超過 2MB 會被 nginx 擋成 413，請求根本到不了 App。
+- **`Upgrade`／`Connection` 標頭必須帶**。缺了 socket.io 會在 websocket 握手失敗後**靜默**退回
+  polling——功能全部正常，只有即時通知變慢，不會有任何錯誤訊息。驗收時要確認
+  `_socket.io.engine.transport.name === 'websocket'`，不能只看畫面會動。
+
+不需要 `app.set('trust proxy')`：App 全程未使用 `req.ip`／`req.protocol`／`req.secure`。
+
 ## ⚠️ 硬限制：僅允許單一 Node 行程
 
 App 的互斥機制（任務派工去重 `_inFlight`、專案鎖 `project-lock`、環境建置去重、approve 佔位）
