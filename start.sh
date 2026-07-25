@@ -50,6 +50,15 @@ if [ -n "$_PPMAX" ]; then export PROJECT_PORT_MAX="$_PPMAX"; fi
 ANTHROPIC_KEY="$(read_config ANTHROPIC_API_KEY)"
 if [ -n "$ANTHROPIC_KEY" ]; then export ANTHROPIC_API_KEY="$ANTHROPIC_KEY"; fi
 
+# 有缺才裝：pull 到新增相依（如 archiver）後直接啟動會 MODULE_NOT_FOUND；
+# 比對 npm 的 hidden lockfile 與 package-lock.json，缺標記或 lockfile 較新才補裝，相依已滿足則秒過。
+_MARKER="$ROOT/app/node_modules/.package-lock.json"
+_LOCK="$ROOT/app/package-lock.json"
+if [ ! -f "$_MARKER" ] || { [ -f "$_LOCK" ] && [ "$_LOCK" -nt "$_MARKER" ]; }; then
+  echo "偵測到相依有異動，執行 npm install..."
+  ( cd "$ROOT/app" && npm install --prefer-offline )
+fi
+
 _port="$(read_config PORT)"; _url="http://localhost:${_port:-3939}"
 if command -v xdg-open &>/dev/null; then xdg-open "$_url" 2>/dev/null &
 elif command -v open &>/dev/null; then open "$_url" 2>/dev/null &
