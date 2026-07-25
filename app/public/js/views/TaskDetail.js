@@ -2,7 +2,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, copyingToOnline: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -314,16 +314,35 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }
     },
-    async copyToOnline() {
-      if (!await confirmDialog({ title: '打包到舊開發環境', message: '將本任務改動的模組，依 repo 整包覆蓋到舊開發環境對應資料夾（<repo>/<模組>），舊目錄直接蓋掉。此動作不影響任務狀態、不合併分支。確定？', confirmText: '確認打包' })) return;
-      this.copyingToOnline = true;
+    async downloadCodeZip() {
+      this.downloadingZip = true;
+      let url = null;
       try {
-        const r = await Api.post(`tasks/${this.task.id}/copy-to-online`, {});
-        const copied = (r.copied || []).length ? `已打包 ${r.copied.join('、')} 到 ${r.base}` : '沒有可打包的模組';
-        const skipped = (r.skipped || []).length ? `（略過 ${r.skipped.length} 個非模組檔）` : '';
-        showToast(`${copied}${skipped}`, (r.copied || []).length ? 'success' : 'info');
+        const { blob, headers } = await Api.getBlob(`tasks/${this.task.id}/code-zip`);
+        // header 於伺服器端編碼過（非 ASCII 檔名會生出無效 header）；解不開就當沒有，不擋下載。
+        const readList = (name) => {
+          try { return JSON.parse(decodeURIComponent(headers.get(name) || '')) || []; }
+          catch { return []; }
+        };
+        url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${this.task.task_id}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        const entries = readList('X-Zip-Entries');
+        const skipped = readList('X-Zip-Skipped');
+        showToast(
+          `已下載 ${entries.join('、') || 'zip'}${skipped.length ? `（略過 ${skipped.length} 個非模組檔）` : ''}`,
+          'success'
+        );
       } catch (e) { showToast(e.message, 'error'); }
-      finally { this.copyingToOnline = false; }
+      finally {
+        // 撤銷必須晚於 click：過早撤掉會讓瀏覽器抓不到內容，下載靜默失敗。
+        if (url) setTimeout(() => URL.revokeObjectURL(url), 10000);
+        this.downloadingZip = false;
+      }
     },
     async reject() {
       if (!this.rejectReason.trim()) return;
@@ -604,8 +623,8 @@ window.TaskDetailView = Vue.defineComponent({
       </button>
       <a v-if="task && task.env_url" :href="task.env_url" target="_blank" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
       <button v-if="isAdmin && task && task.git_branch" class="btn btn-outline btn-sm" style="margin-left:auto"
-        @click="copyToOnline" :disabled="copyingToOnline" title="把本任務改動的模組整包打包到舊開發環境 online_addons">
-        {{ copyingToOnline ? '打包中...' : '📦 打包到舊開發環境' }}
+        @click="downloadCodeZip" :disabled="downloadingZip" title="下載本任務改動模組的 zip（內含 <repo>/<模組> 結構，可直接覆蓋到正式區 addons）">
+        {{ downloadingZip ? '打包中...' : '📦 下載程式碼 zip' }}
       </button>
     </div>
     <div class="content">

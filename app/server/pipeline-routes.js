@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const archiver = require('archiver');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
@@ -8,7 +9,7 @@ const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 // （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
 const _approving = new Set();
 
-// repo 在舊開發環境的資料夾名＝git URL 最後一層去掉 .git（如 .../odoo17_hungjou.git → odoo17_hungjou）。
+// repo 在壓縮檔內的資料夾名＝git URL 最後一層去掉 .git（如 .../odoo17_hungjou.git → odoo17_hungjou）。
 // 取不到 URL 時退回 clone 目錄名（local_path 最後一層）。
 function repoDirName(repo) {
   const seg = String(repo.repo_url || '').replace(/\.git$/i, '').replace(/[\/\\]+$/, '').split(/[\/\\]/).pop();
@@ -223,13 +224,14 @@ function registerRoutes(app) {
     }
   });
 
-  // 過渡期手動佈署：管理員把 task 分支改動的模組整包複製到正式區 online_addons。
-  // 純搬程式——不動任務狀態、不合併分支、不推進 pipeline（審核仍走 approve）。
-  app.post('/api/tasks/:id/copy-to-online', verifyToken, async (req, res) => {
+  // 過渡期手動佈署：管理員下載本任務改動模組的 zip，自行解壓到正式區 addons。
+  // 純打包——不動任務狀態、不合併分支、不推進 pipeline（審核仍走 approve）。
+  // 壓縮檔內維持 <repo>/<模組>/ 結構，解壓後可直接整包覆蓋既有 addons 目錄。
+  app.get('/api/tasks/:id/code-zip', verifyToken, async (req, res) => {
     try {
       const { rows: urows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
       if (!urows.length || urows[0].role !== 'admin') {
-        return res.status(403).json({ error: '僅管理員可複製到正式區' });
+        return res.status(403).json({ error: '僅管理員可下載程式碼' });
       }
 
       const { rows } = await query(
@@ -238,9 +240,9 @@ function registerRoutes(app) {
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       const task = rows[0];
-      // 不限任務狀態：只要分支還在（未併回主線清除）就能搬——過渡期讓管理員隨時手動佈署。
+      // 不限任務狀態：只要分支還在（未併回主線清除）就能打包——過渡期讓管理員隨時自行佈署。
       if (!task.git_branch || !task.project_id) {
-        return res.status(400).json({ error: '任務尚無分支或專案，無可複製的程式' });
+        return res.status(400).json({ error: '任務尚無分支或專案，無可打包的程式' });
       }
 
       const { rows: repos } = await query(
@@ -249,22 +251,19 @@ function registerRoutes(app) {
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
-      // 正式區 addons 目錄。Windows 沿用既有預設；其他平台（含容器佈署）未設定即中止——
-      // 'C:/online_addons' 在 Linux 是「相對路徑」，會把模組複製到工作目錄下一個叫 C: 的目錄，
-      // 然後照常回報 copied 成功，正式區卻永遠讀不到；錯誤完全不指向成因，故寧可擋在這裡。
-      const base = process.env.ONLINE_ADDONS_DIR || (process.platform === 'win32' ? 'C:/online_addons' : null);
-      if (!base) return res.status(500).json({ error: '未設定 ONLINE_ADDONS_DIR（正式區 addons 目錄），無法複製到正式區' });
       const { getMainBranch, diffNameOnly, refExists } = require('./pipeline/git');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 
-      const copied = [];
+      // 先把全部來源目錄算完再開始輸出：header 一旦送出就改不回 JSON 錯誤，
+      // 中途才失敗只會得到一個半截、解不開的 zip，且瀏覽器照樣顯示下載成功。
+      const entries = []; // { zipPath, srcDir }
       const skipped = [];
       for (const repo of repos) {
-        // 分支已清（多為已審核通過）→ 無 diff／worktree 可搬，略過該 repo
+        // 分支已清（多為已審核通過）→ 無 diff／worktree 可打包，略過該 repo
         if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) continue;
         const mainBranch = await getMainBranch(repo.local_path);
         const wtRepo = path.join(wtParent, path.basename(repo.local_path));
-        const repoDir = repoDirName(repo); // 依 repo（git URL 末段）放：<base>/<repoDir>/<module>
+        const repoDir = repoDirName(repo); // 依 repo（git URL 末段）分層：<repoDir>/<module>
         const changed = await diffNameOnly(repo.local_path, mainBranch, task.git_branch);
         const modules = new Map(); // moduleName → worktree 內來源目錄（去重）
         for (const rel of changed) {
@@ -273,18 +272,34 @@ function registerRoutes(app) {
           else skipped.push(rel); // 不屬任何模組的改動檔，明列不靜默略過（Fail loud）
         }
         for (const [name, srcDir] of modules) {
-          const dest = path.join(base, repoDir, name);
-          fs.mkdirSync(path.dirname(dest), { recursive: true });
-          fs.rmSync(dest, { recursive: true, force: true }); // 整包覆蓋：先刪再複製，正確反映新增/刪除/改名
-          fs.cpSync(srcDir, dest, { recursive: true });
-          const rel = `${repoDir}/${name}`;
-          if (!copied.includes(rel)) copied.push(rel);
+          const zipPath = `${repoDir}/${name}`;
+          if (!entries.some(e => e.zipPath === zipPath)) entries.push({ zipPath, srcDir });
         }
       }
+      if (!entries.length) return res.status(400).json({ error: '本任務沒有可打包的模組改動' });
 
-      res.json({ copied, skipped, base });
+      // 打包清單走 header：body 是 binary，沒有第二個地方能回報「哪些改動檔不屬任何模組」。
+      // 逐字放會讓非 ASCII 檔名生出無效 header（Node 直接丟 ERR_INVALID_CHAR），故編碼後再帶。
+      res.setHeader('X-Zip-Entries', encodeURIComponent(JSON.stringify(entries.map(e => e.zipPath))));
+      res.setHeader('X-Zip-Skipped', encodeURIComponent(JSON.stringify(skipped)));
+      res.setHeader('Access-Control-Expose-Headers', 'X-Zip-Entries, X-Zip-Skipped');
+      res.setHeader('Content-Type', 'application/zip');
+      // 檔名只留安全字元：task_id 目前恆為英數與底線，但它源自外部系統，不該由它決定 header 內容。
+      res.setHeader('Content-Disposition', `attachment; filename="${String(task.task_id).replace(/[^\w.-]/g, '_')}.zip"`);
+
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      // 串流中途出錯（來源目錄被刪、磁碟 IO）已無法改回 JSON——中止連線讓瀏覽器判定下載失敗，
+      // 好過送出一個看似完整、解壓才發現壞掉的檔案。
+      archive.on('error', (err) => {
+        console.error('[CODE-ZIP] archive error:', err.message);
+        res.destroy();
+      });
+      archive.pipe(res);
+      for (const { zipPath, srcDir } of entries) archive.directory(srcDir, zipPath);
+      await archive.finalize();
     } catch (err) {
-      res.status(500).json({ error: '打包到舊開發環境失敗：' + err.message });
+      if (res.headersSent) return res.destroy();
+      res.status(500).json({ error: '打包程式碼失敗：' + err.message });
     }
   });
 

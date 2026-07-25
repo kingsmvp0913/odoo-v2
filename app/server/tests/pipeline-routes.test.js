@@ -320,30 +320,30 @@ test('resolve-conflicts：不合法 action → 400', async () => {
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
-// --- copy-to-online：過渡期管理員手動把模組整包搬到正式區 ---
+// --- code-zip：過渡期管理員下載改動模組的 zip，自行解壓到正式區 ---
 
-test('copy-to-online → 403 非管理員', async () => {
+test('code-zip → 403 非管理員', async () => {
   const { rows: [u] } = await dbModule.query(
     "INSERT INTO users (username, password_hash, display_name, role) VALUES ('plainuser','x','U','user') RETURNING id"
   );
   const token = jwt.sign({ userId: u.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-  const res = await request(app).post('/api/tasks/1/copy-to-online')
+  const res = await request(app).get('/api/tasks/1/code-zip')
     .set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(403);
 });
 
-test('copy-to-online → 400 任務尚無分支', async () => {
+test('code-zip → 400 任務尚無分支', async () => {
   const { rows } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cto_bad','odoo','T','coding_running') RETURNING id",
     [userId]
   );
-  const res = await request(app).post(`/api/tasks/${rows[0].id}/copy-to-online`)
+  const res = await request(app).get(`/api/tasks/${rows[0].id}/code-zip`)
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(400);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });
 
-test('copy-to-online → 不限審核狀態，整包複製改動模組到 ONLINE_ADDONS_DIR，非模組檔列 skipped', async () => {
+test('code-zip → 不限審核狀態，回傳含 <repo>/<模組> 結構的 zip，非模組檔列在 skipped header', async () => {
   const { getMainBranch, diffNameOnly, refExists } = require('../pipeline/git');
   refExists.mockResolvedValue(true);
   getMainBranch.mockResolvedValue('main');
@@ -360,9 +360,6 @@ test('copy-to-online → 不限審核狀態，整包複製改動模組到 ONLINE
   fs.writeFileSync(path.join(wtRepo, 'idx_demo', '__manifest__.py'), "{'name':'demo'}");
   fs.writeFileSync(path.join(modelsDir, 'sale_order.py'), '# hi');
 
-  const dest = path.join(tmp, 'online_addons');
-  process.env.ONLINE_ADDONS_DIR = dest;
-
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('CTO','17.0') RETURNING id"
   );
@@ -375,50 +372,59 @@ test('copy-to-online → 不限審核狀態，整包複製改動模組到 ONLINE
     [userId, taskKey, proj.id, `task/${taskKey}`]
   );
 
-  const res = await request(app).post(`/api/tasks/${t.id}/copy-to-online`)
-    .set('Authorization', `Bearer ${adminToken}`);
+  const res = await request(app).get(`/api/tasks/${t.id}/code-zip`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .buffer(true).parse((r, cb) => { const c = []; r.on('data', d => c.push(d)); r.on('end', () => cb(null, Buffer.concat(c))); });
 
   expect(res.status).toBe(200);
-  // 依 repo（git URL 末段 odoo17_hungjou）放：<base>/odoo17_hungjou/<module>
-  expect(res.body.copied).toEqual(['odoo17_hungjou/idx_demo']);
-  expect(res.body.skipped).toContain('README.md');
-  expect(fs.existsSync(path.join(dest, 'odoo17_hungjou', 'idx_demo', '__manifest__.py'))).toBe(true);
-  expect(fs.existsSync(path.join(dest, 'odoo17_hungjou', 'idx_demo', 'models', 'sale_order.py'))).toBe(true);
+  expect(res.headers['content-type']).toBe('application/zip');
+  expect(res.headers['content-disposition']).toContain(`${taskKey}.zip`);
+  // 依 repo（git URL 末段 odoo17_hungjou）分層：<repo>/<module>
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries']))).toEqual(['odoo17_hungjou/idx_demo']);
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-skipped']))).toContain('README.md');
 
-  delete process.env.ONLINE_ADDONS_DIR;
+  // 內容真的解得開才算數：只驗 header 的話，回傳半截 zip 也會綠燈。
+  // 不引入解壓相依——ZIP 的 local file header 前綴為 PK\x03\x04，檔名以明文存放，直接掃即可。
+  const buf = res.body;
+  expect(buf.slice(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  const asText = buf.toString('latin1');
+  expect(asText).toContain('odoo17_hungjou/idx_demo/__manifest__.py');
+  expect(asText).toContain('odoo17_hungjou/idx_demo/models/sale_order.py');
+  expect(asText).not.toContain('README.md');
+
   fs.rmSync(tmp, { recursive: true, force: true });
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
 
-// 意圖：Linux（含容器佈署）未設定 ONLINE_ADDONS_DIR 時必須擋下來。舊預設 'C:/online_addons'
-// 在 Linux 是相對路徑，會把模組複製到工作目錄下一個叫 C: 的目錄並回報 copied 成功——
-// 正式區讀不到任何東西，而畫面顯示佈署完成。Windows 機不受影響（該預設在那裡是有效路徑）。
-test('copy-to-online → 非 Windows 未設 ONLINE_ADDONS_DIR 時中止，不得靜默複製到相對路徑', async () => {
-  if (process.platform === 'win32') return;
-  const { getMainBranch, diffNameOnly, refExists } = require('../pipeline/git');
+// 意圖：沒有任何模組改動時必須在「開始輸出前」擋下並回 JSON。header 一旦送出就改不回錯誤，
+// 使用者只會拿到一個 0 模組的空 zip，還以為佈署包好了。
+test('code-zip → 沒有模組改動時回 400，不得送出空 zip', async () => {
+  const { diffNameOnly, refExists } = require('../pipeline/git');
   refExists.mockResolvedValue(true);
-  getMainBranch.mockResolvedValue('main');
-  diffNameOnly.mockResolvedValue(['idx_demo/models/sale_order.py']);
-  delete process.env.ONLINE_ADDONS_DIR;
+  diffNameOnly.mockResolvedValue(['README.md']); // 有改動，但不屬任何模組
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cto2-'));
+  const localPath = path.join(tmp, 'repos', 'main');
+  fs.mkdirSync(localPath, { recursive: true });
 
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('CTO2','17.0') RETURNING id"
   );
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main',$2,$3,true,'done')",
-    [proj.id, 'https://github.com/Ideaxpress-odoo/odoo17_hungjou.git', path.join(os.tmpdir(), 'cto2', 'repos', 'main')]
+    [proj.id, 'https://github.com/Ideaxpress-odoo/odoo17_hungjou.git', localPath]
   );
   const { rows: [t] } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_cto_noenv','odoo','T','coding_running',$2,'task/task_cto_noenv') RETURNING id",
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_cto_empty','odoo','T','coding_running',$2,'task/task_cto_empty') RETURNING id",
     [userId, proj.id]
   );
 
-  const res = await request(app).post(`/api/tasks/${t.id}/copy-to-online`)
+  const res = await request(app).get(`/api/tasks/${t.id}/code-zip`)
     .set('Authorization', `Bearer ${adminToken}`);
 
-  expect(res.status).toBe(500);
-  expect(res.body.error).toContain('ONLINE_ADDONS_DIR');
-  expect(fs.existsSync(path.join(process.cwd(), 'C:'))).toBe(false);
+  expect(res.status).toBe(400);
+  expect(res.body.error).toContain('沒有可打包的模組');
+  fs.rmSync(tmp, { recursive: true, force: true });
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
 

@@ -27,10 +27,6 @@ services:
       # 測試區對外用（未設則維持每專案 127.0.0.x 直連，本機開發行為不變）。見 .env.example。
       ENV_BIND_HOST: ${ENV_BIND_HOST:-}
       ENV_PUBLIC_URL_TEMPLATE: ${ENV_PUBLIC_URL_TEMPLATE:-}
-      # 正式區 addons 目錄；非 Windows 未設定時「複製到正式區」會直接中止（不靜默複製到錯位置）。
-      # 要用此功能得另在上方 volumes 補一行同構掛載 `- ${ONLINE_ADDONS_DIR}:${ONLINE_ADDONS_DIR}`，
-      # 否則模組只會寫進容器自己的檔案系統，宿主的正式區看不到，且容器重建即消失。
-      ONLINE_ADDONS_DIR: ${ONLINE_ADDONS_DIR:-}
 
 volumes:
   claude-home:

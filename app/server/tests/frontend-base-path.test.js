@@ -69,9 +69,13 @@ describe('前端請求路徑接上 BASE_PATH', () => {
     expect(offenders).toEqual([]);
   });
 
-  test('api.js 兩處 fetch 皆以 BASE_PATH 開頭', () => {
+  test('api.js 每一處 fetch 皆以 BASE_PATH 開頭（含檔案下載的 getBlob）', () => {
     const src = readPublic('js/api.js');
-    expect(src.match(/fetch\(`\$\{BASE_PATH\}api\//g)).toHaveLength(2);
+    // 負向後查排除 this._fetch(...) 的呼叫端——它們最終都走同一個 fetch，不是第二個 URL 來源。
+    const all = src.match(/(?<![\w$])fetch\(/g) || [];
+    const prefixed = src.match(/fetch\(`\$\{BASE_PATH\}api\//g) || [];
+    expect(prefixed).toHaveLength(all.length);
+    expect(all.length).toBeGreaterThanOrEqual(3); // _fetch／postForm／getBlob
   });
 
   test('socket.js 明示 path 選項（否則 socket.io 會用預設的 /socket.io）', () => {
