@@ -181,9 +181,15 @@ function isDockerDaemonUp(execFileSync) {
 // -d 時會同步等到引擎就緒才回（--timeout 設上限）；比啟動 Docker Desktop.exe 乾淨（不開視窗、
 // 不需寫死安裝路徑）。非 Windows（如未來的共用 Linux 主機，Docker 通常已是常駐服務）直接回錯，
 // 交由環境本身管理 daemon 生命週期。daemon 已在跑則直接回、不啟動。
+//
+// 陷阱：Docker Desktop「App 外殼在跑、但 Linux 引擎（WSL2 的 docker-desktop distro）停了」時，
+// `docker desktop start` 只看外殼、會秒回 "already running" 卻不去把停掉的引擎拉回來 → daemon 仍不通。
+// 故 start 後再探一次，若仍不通就改用 `docker desktop restart` 強制整個後端重拉（restart 較重，只在
+// start 救不回來時才動）；再不通才 fail loud，代表 WSL2 distro 可能已損壞，非平台可解、交回使用者。
 async function ensureDockerRunning(deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
   const platform = deps.platform || process.platform;
+  const T = String(DOCKER_START_TIMEOUT_SEC);
 
   if (isDockerDaemonUp(execFileSync)) return;
 
@@ -192,13 +198,21 @@ async function ensureDockerRunning(deps = {}) {
   }
 
   try {
-    execFileSync('docker', ['desktop', 'start', '--timeout', String(DOCKER_START_TIMEOUT_SEC)], { stdio: 'ignore' });
+    execFileSync('docker', ['desktop', 'start', '--timeout', T], { stdio: 'ignore' });
   } catch {
-    // start 指令失敗／逾時／舊版無此子指令 → 下方再確認一次 daemon，仍不通就回報清楚錯誤
+    // start 指令失敗／逾時／舊版無此子指令 → 下方再確認一次 daemon，仍不通就走 restart 退回
   }
-
   if (isDockerDaemonUp(execFileSync)) return;
-  throw new Error('Docker 引擎啟動逾時，請手動確認 Docker Desktop');
+
+  // 走到這＝start 沒能把引擎拉起來（含「already running」但 WSL2 引擎停掉的情況）→ 強制重拉後端
+  try {
+    execFileSync('docker', ['desktop', 'restart', '--timeout', T], { stdio: 'ignore' });
+  } catch {
+    // restart 也失敗／舊版無此子指令 → 下方最後確認一次 daemon，仍不通就 fail loud
+  }
+  if (isDockerDaemonUp(execFileSync)) return;
+
+  throw new Error('Docker 引擎啟動失敗：Docker Desktop 在跑但 Linux 引擎拉不起來，請手動重啟或重裝 Docker Desktop');
 }
 
 // image 是否已存在本機。

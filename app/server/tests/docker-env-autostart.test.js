@@ -11,6 +11,7 @@ function fakeDeps(overrides = {}) {
 }
 
 const isStart = (call) => call[1][0] === 'desktop' && call[1][1] === 'start';
+const isRestart = (call) => call[1][0] === 'desktop' && call[1][1] === 'restart';
 const isInfo = (call) => call[1][0] === 'info';
 
 test('daemon 已啟動時直接回傳，不呼叫 docker desktop start', async () => {
@@ -35,9 +36,27 @@ test('Windows 上 daemon 未啟動時，呼叫 docker desktop start --timeout �
   expect(startCall[1]).toEqual(['desktop', 'start', '--timeout', '120']);
 });
 
-test('start 後仍連不上 daemon 時，丟出中文逾時錯誤', async () => {
-  const deps = fakeDeps(); // execFileSync 永遠丟錯（含 start 失敗、info 不通）
-  await expect(ensureDockerRunning(deps)).rejects.toThrow(/Docker 引擎啟動逾時/);
+test('start 後仍連不上 daemon 時，先試 restart 再放棄；仍不通則丟出明確錯誤', async () => {
+  const deps = fakeDeps(); // execFileSync 永遠丟錯（含 start／restart 失敗、info 不通）
+  await expect(ensureDockerRunning(deps)).rejects.toThrow(/Docker 引擎啟動失敗/);
+  // start 救不回來時，必須再試一次 restart（強制重拉整個後端）才放棄
+  expect(deps.execFileSync.mock.calls.some(isRestart)).toBe(true);
+});
+
+test('start 秒回但引擎沒起來（App 在跑、WSL2 引擎停）時，改用 restart 重拉後回傳', async () => {
+  let restarted = false;
+  const execFileSync = jest.fn((cmd, args) => {
+    if (args[0] === 'desktop' && args[1] === 'start') return '';                 // start 秒回 already running，卻沒真的起引擎
+    if (args[0] === 'desktop' && args[1] === 'restart') { restarted = true; return ''; }
+    if (args[0] === 'info' && !restarted) throw new Error('daemon not reachable'); // restart 前引擎不通
+    return ''; // restart 後 info 成功
+  });
+  const deps = fakeDeps({ execFileSync });
+  await ensureDockerRunning(deps);
+
+  const restartCall = execFileSync.mock.calls.find(isRestart);
+  expect(restartCall).toBeTruthy();
+  expect(restartCall[1]).toEqual(['desktop', 'restart', '--timeout', '120']);
 });
 
 test('非 Windows 平台時，daemon 沒啟動直接回中文錯誤，不嘗試自動啟動', async () => {
