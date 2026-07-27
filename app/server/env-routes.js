@@ -1,6 +1,7 @@
 const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { mintSsoToken } = require('./sso');
 
 function registerRoutes(app) {
   app.get('/api/projects/:id/env', verifyToken, async (req, res) => {
@@ -37,6 +38,17 @@ function registerRoutes(app) {
         ));
       } catch { env.built = false; }
       res.json(env);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 平台簽發一次性 SSO token，導向測試區 idx_aidev_sso 模組免密登入
+  app.get('/api/projects/:id/env/sso', verifyToken, async (req, res) => {
+    try {
+      const { rows: [env] } = await query('SELECT url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]);
+      if (!env?.url || !env.sso_secret) return res.status(409).json({ error: '測試區尚未就緒' });
+      const { rows: [u] } = await query('SELECT username, display_name FROM users WHERE id=$1', [req.userId]);
+      const token = mintSsoToken({ secret: env.sso_secret, login: u.username, name: u.display_name, ttlSec: 60 });
+      res.redirect(`${env.url.replace(/\/$/, '')}/aidev/sso?token=${encodeURIComponent(token)}`);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
