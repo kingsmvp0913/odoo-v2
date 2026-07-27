@@ -47,8 +47,14 @@ describe('addonsMounts / containerAddonsPath', () => {
   test('containerAddonsPath 必含核心 addons（否則 base 找不到）', () => {
     const m = d.addonsMounts(['/repos/p/main']);
     const p = d.containerAddonsPath(m);
-    expect(p).toBe(`/mnt/extra-addons/main,${d.CORE_ADDONS}`);
+    expect(p).toBe(`${d.PLATFORM_ADDONS_CONTAINER},/mnt/extra-addons/main,${d.CORE_ADDONS}`);
     expect(p).toContain(d.CORE_ADDONS);
+  });
+  test('containerAddonsPath 必含平台 addons（idx_aidev_sso 免密登入模組所在）', () => {
+    // 平台自帶 addons（app/docker/addons）必須進「每個」測試區的 addons-path，否則平台簽發 token 的
+    // /aidev/sso 端點在測試區根本不存在。無專案 repo（mounts 空）時也必須在。
+    expect(d.containerAddonsPath([])).toContain(d.PLATFORM_ADDONS_CONTAINER);
+    expect(d.containerAddonsPath(d.addonsMounts(['/repos/p/main']))).toContain(d.PLATFORM_ADDONS_CONTAINER);
   });
 });
 
@@ -94,6 +100,14 @@ describe('buildRunArgs', () => {
   });
   test('未給 filestoreDir → 不加該 -v（沿用容器預設 volume）', () => {
     expect(args.some(x => String(x).includes('/var/lib/odoo/filestore'))).toBe(false);
+  });
+
+  test('平台 addons 目錄一律唯讀掛入（idx_aidev_sso 進每個測試區）', () => {
+    // 專案 repo 之外，平台自帶 addons（app/docker/addons）必掛入且列入 addons-path。
+    expect(args).toContain(`${d.PLATFORM_ADDONS_HOST}:${d.PLATFORM_ADDONS_CONTAINER}:ro`);
+    const odooIdx = args.indexOf('odoo');
+    const apIdx = args.indexOf('--addons-path', odooIdx);
+    expect(args[apIdx + 1]).toContain(d.PLATFORM_ADDONS_CONTAINER);
   });
 
   test('buildRunArgs 加上 DB manager hardening 旗標', () => {

@@ -398,7 +398,7 @@ async function _runEnvSetupDocker(projectId) {
 
   // 2) 移除同名舊容器（冪等）→ 起常駐容器（首次帶 init 旗標，Odoo 裝完 base 續跑 server）
   await dockerEnv.removeContainer(ctx.container);
-  const initArgs = firstBuild ? ['-i', 'base', '--without-demo=all', '--load-language=zh_TW'] : [];
+  const initArgs = firstBuild ? ['-i', 'base,idx_aidev_sso', '--without-demo=all', '--load-language=zh_TW'] : [];
   const run = await dockerEnv.runContainer({
     name: ctx.container, image: ctx.image, host: envHost, port, dbName: ctx.dbName,
     dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs, filestoreDir,

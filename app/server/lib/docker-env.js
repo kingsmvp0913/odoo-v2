@@ -20,6 +20,13 @@ const CORE_ADDONS = process.env.ODOO_IMAGE_CORE_ADDONS || '/usr/lib/python3/dist
 // 容器內掛載自訂 addons 的根目錄（各 host repo 掛成此目錄下的子目錄）。
 const EXTRA_ADDONS_ROOT = '/mnt/extra-addons';
 
+// 平台自帶 addons（app/docker/addons，含 idx_aidev_sso 免密登入模組）：必須掛進「每個」測試區並列入
+// addons-path，否則平台簽發 token 導向的 /aidev/sso 端點在測試區根本不存在。與專案 repo 分開（固定容器
+// 路徑 _platform，不與 addonsMounts 的 basename 命名衝突），唯讀掛載。host 路徑由本檔位置推導
+// （app/server/lib → app/docker/addons），不寫死絕對路徑。
+const PLATFORM_ADDONS_HOST = path.resolve(__dirname, '..', '..', 'docker', 'addons');
+const PLATFORM_ADDONS_CONTAINER = `${EXTRA_ADDONS_ROOT}/_platform`;
+
 // 大版本數字：'17.0'→'17'、17→'17'（取第一段的數字，避免 '17.0' 變成 '170'）。
 function majorDigits(major) {
   return String(major).split('.')[0].replace(/\D/g, '');
@@ -72,7 +79,7 @@ function addonsMounts(hostPaths) {
 // 容器內完整 addons-path 字串：核心 addons + 各掛載子目錄（順序：自訂優先於核心，與 venv 模式一致——
 // venv 模式 addons-path = [src/addons, ...extraAddons]，自訂在後；此處核心置後以讓自訂覆蓋能力相同）。
 function containerAddonsPath(mounts) {
-  return [...(mounts || []).map(m => m.container), CORE_ADDONS].join(',');
+  return [PLATFORM_ADDONS_CONTAINER, ...(mounts || []).map(m => m.container), CORE_ADDONS].join(',');
 }
 
 // 掛載 addons 的 `-v` 片段（唯讀）；run/one-shot 共用。
@@ -113,6 +120,8 @@ function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [
     '--add-host', 'host.docker.internal:host-gateway',
     '-p', `${host || '127.0.0.1'}:${port}:8069`,
     ...mountFlags(mounts),
+    // 平台自帶 addons（含 idx_aidev_sso 免密登入模組）：唯讀掛入每個測試區，並由 containerAddonsPath 列入 addons-path。
+    '-v', `${PLATFORM_ADDONS_HOST}:${PLATFORM_ADDONS_CONTAINER}:ro`,
     // filestore（ir.attachment 二進位，含 asset bundle）持久化到宿主：容器是拋棄式的、會被 rm+run 重建，
     // 若 filestore 留在匿名 volume 會隨重建遺失，但宿主 DB 的 attachment 記錄還在 → asset 檔不見、每個
     // asset 請求 500。綁到宿主目錄讓它與 DB 同樣持久（rw，Odoo 需寫入）。未指定則沿用容器預設 volume。
@@ -301,5 +310,5 @@ module.exports = {
   // 生命週期
   ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, containerLogs,
   // 常數
-  CORE_ADDONS, EXTRA_ADDONS_ROOT,
+  CORE_ADDONS, EXTRA_ADDONS_ROOT, PLATFORM_ADDONS_HOST, PLATFORM_ADDONS_CONTAINER,
 };
