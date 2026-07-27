@@ -7,6 +7,7 @@ const { ensureTestingBranch } = require('./git');
 const { E2E_LOGIN } = require('./e2e-account');
 const { allocateProjectPort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
+const { syncNginxMap } = require('../lib/nginx-map');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
@@ -434,6 +435,10 @@ async function _runEnvSetupDocker(projectId) {
     "UPDATE odoo_envs SET status='running', pid=NULL, pid_started_at=NULL, port=$2, url=$3, setup_log=$4, updated_at=NOW() WHERE project_id=$1",
     [projectId, port, envPublicUrl(port, ctx.dirName), log]
   );
+
+  // 對外曝露：測試區 running 後同步 nginx map（fire-and-forget；gate 未設＝no-op，Windows 零影響）。
+  // 同步失敗只影響對外連結、不阻斷環境（模組內已自 catch 並 loud log）。
+  syncNginxMap().catch(() => {});
 
   // VPN 共管：測試區進入 running 後背景暖機該專案所有 vpn 連線（fire-and-forget，不 await；
   // 撥號慢[≤25s/條]不該延後測試區可用時間，查詢時的 lazy ensureGatewayRunning 會冪等補等）。
