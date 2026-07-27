@@ -65,6 +65,9 @@ router.afterEach((to) => {
     // 每次導覽刷新角色（登入後第一次導覽即設好 role）→ 再依角色載入用量小工具
     Api.get('auth/me').then(me => {
       window.UserStore.role = me.role || '';
+      // 深色偏好也在此同步：表單登入只走 afterEach（不經 mounted 的已登入分支），
+      // 漏了會讓無痕登入永遠停在預設淺色（localStorage 空、又沒讀 DB 偏好）。
+      ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
       SocketManager.initSocket(me.id);
       loadClaudeUsage();
     }).catch(() => {});
