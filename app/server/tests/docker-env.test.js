@@ -95,6 +95,19 @@ describe('buildRunArgs', () => {
   test('未給 filestoreDir → 不加該 -v（沿用容器預設 volume）', () => {
     expect(args.some(x => String(x).includes('/var/lib/odoo/filestore'))).toBe(false);
   });
+
+  test('buildRunArgs 加上 DB manager hardening 旗標', () => {
+    const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', host: '127.0.0.2', port: 8069, dbName: 'test_demo' });
+    expect(args).toContain('--no-database-list');
+    expect(args).toContain('--dbfilter=^test_demo$');
+  });
+
+  test('buildRunArgs 帶 adminPasswd 時加 --admin_passwd，未帶則不加', () => {
+    const withPw = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo', adminPasswd: 's3cr3t' });
+    expect(withPw).toContain('--admin_passwd=s3cr3t');
+    const without = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo' });
+    expect(without.some(a => a.startsWith('--admin_passwd'))).toBe(false);
+  });
 });
 
 describe('buildExecArgs（docker exec 進常駐容器跑一次性指令）', () => {
