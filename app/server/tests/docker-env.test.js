@@ -110,23 +110,21 @@ describe('buildRunArgs', () => {
     expect(args[apIdx + 1]).toContain(d.PLATFORM_ADDONS_CONTAINER);
   });
 
-  test('buildRunArgs 加上 DB manager hardening 旗標', () => {
+  test('buildRunArgs 加上 DB manager hardening 旗標（--db-filter 為 Odoo CLI 選項名，非 config 的 dbfilter）', () => {
     const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', host: '127.0.0.2', port: 8069, dbName: 'test_demo' });
     expect(args).toContain('--no-database-list');
-    expect(args).toContain('--dbfilter=^test_demo$');
+    expect(args).toContain('--db-filter=^test_demo$');
   });
 
-  test('dbfilter 對 dbName 做 regex-escape：含 "." 的資料夾名不會被當 pattern 放寬', () => {
+  test('db-filter 對 dbName 做 regex-escape：含 "." 的資料夾名不會被當 pattern 放寬', () => {
     const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_a.b' });
-    expect(args).toContain('--dbfilter=^test_a\\.b$');
-    expect(args).not.toContain('--dbfilter=^test_a.b$');
+    expect(args).toContain('--db-filter=^test_a\\.b$');
+    expect(args).not.toContain('--db-filter=^test_a.b$');
   });
 
-  test('buildRunArgs 帶 adminPasswd 時加 --admin_passwd，未帶則不加', () => {
-    const withPw = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo', adminPasswd: 's3cr3t' });
-    expect(withPw).toContain('--admin_passwd=s3cr3t');
-    const without = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo' });
-    expect(without.some(a => a.startsWith('--admin_passwd'))).toBe(false);
+  test('不帶 master 密碼旗標：Odoo 17 無 --admin_passwd CLI 選項，靠 --no-database-list 關管理介面', () => {
+    const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo' });
+    expect(args.some(a => String(a).startsWith('--admin_passwd'))).toBe(false);
   });
 });
 

@@ -119,7 +119,7 @@ function dbEnvFlags(dbArgs = []) {
 //   name/image/host/port：容器名、image、宿主 loopback host（127.0.0.x）、對外埠 → 對映容器內 8069。
 //   dbArgs：odoo db 參數（本函式 remap localhost）；mounts：addonsMounts 結果；
 //   serverArgs：額外 server 參數（首次啟動帶 -i base 等 init 旗標，Odoo 裝完 base 後續跑 server）。
-function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [], serverArgs = [], filestoreDir, adminPasswd } = {}) {
+function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [], serverArgs = [], filestoreDir } = {}) {
   return ['run', '-d', '--name', name,
     // 宿主 DB 走 host-gateway；Linux 原生 docker 沒有 host.docker.internal，需顯式加。
     '--add-host', 'host.docker.internal:host-gateway',
@@ -135,9 +135,9 @@ function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [
     ...dbEnvFlags(dbArgs),
     image, 'odoo',
     '--http-port=8069', '--http-interface=0.0.0.0',
-    // hardening：關未認證 DB 列舉、鎖此容器只認自己的 DB、關 DB 管理主密碼（預設 admin）
-    '--no-database-list', `--dbfilter=^${escapeRegExp(dbName)}$`,
-    ...(adminPasswd ? [`--admin_passwd=${adminPasswd}`] : []),
+    // hardening：關未認證 DB 列舉、鎖此容器只認自己的 DB（Odoo CLI 選項名為 --db-filter，
+    // 非 config 檔的 dbfilter；master 密碼 admin_passwd 無對應 CLI，且 list_db=False 已關管理介面故不設）。
+    '--no-database-list', `--db-filter=^${escapeRegExp(dbName)}$`,
     '-d', dbName, '--addons-path', containerAddonsPath(mounts),
     ...serverArgs,
   ];

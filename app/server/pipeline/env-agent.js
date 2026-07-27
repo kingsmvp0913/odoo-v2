@@ -400,12 +400,9 @@ async function _runEnvSetupDocker(projectId) {
   // 2) 移除同名舊容器（冪等）→ 起常駐容器（首次帶 init 旗標，Odoo 裝完 base 續跑 server）
   await dockerEnv.removeContainer(ctx.container);
   const initArgs = firstBuild ? ['-i', 'base,idx_aidev_sso', '--without-demo=all', '--load-language=zh_TW'] : [];
-  // DB manager 主密碼隨機化：list_db=False 已足夠關閉管理介面，此為 belt-and-suspenders，避免留預設 admin。
-  // 純用完即丟，不落地、不供人使用。
-  const adminPasswd = crypto.randomBytes(24).toString('hex');
   const run = await dockerEnv.runContainer({
     name: ctx.container, image: ctx.image, host: envHost, port, dbName: ctx.dbName,
-    dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs, filestoreDir, adminPasswd,
+    dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs, filestoreDir,
   });
   log += `[docker] run ${run.ok ? 'OK' : 'FAIL'}\n${run.log.slice(-300)}\n`;
   if (!run.ok) return _failEnv(projectId, `docker run 失敗：${(run.stderr || '').slice(-200)}`, log);
