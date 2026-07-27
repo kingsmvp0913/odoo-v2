@@ -27,6 +27,11 @@ const EXTRA_ADDONS_ROOT = '/mnt/extra-addons';
 const PLATFORM_ADDONS_HOST = path.resolve(__dirname, '..', '..', 'docker', 'addons');
 const PLATFORM_ADDONS_CONTAINER = `${EXTRA_ADDONS_ROOT}/_platform`;
 
+// 跳脫 regex 特殊字元，供 dbfilter 把 dbName 當純字面比對（而非 pattern）用。
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // 大版本數字：'17.0'→'17'、17→'17'（取第一段的數字，避免 '17.0' 變成 '170'）。
 function majorDigits(major) {
   return String(major).split('.')[0].replace(/\D/g, '');
@@ -131,7 +136,7 @@ function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [
     image, 'odoo',
     '--http-port=8069', '--http-interface=0.0.0.0',
     // hardening：關未認證 DB 列舉、鎖此容器只認自己的 DB、關 DB 管理主密碼（預設 admin）
-    '--no-database-list', `--dbfilter=^${dbName}$`,
+    '--no-database-list', `--dbfilter=^${escapeRegExp(dbName)}$`,
     ...(adminPasswd ? [`--admin_passwd=${adminPasswd}`] : []),
     '-d', dbName, '--addons-path', containerAddonsPath(mounts),
     ...serverArgs,

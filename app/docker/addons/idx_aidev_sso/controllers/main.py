@@ -34,7 +34,7 @@ def _login_as(user):
 
 class AidevSso(http.Controller):
     # 平台簽發一次性 token 導向此端點：驗 HMAC 章 + 驗 exp → 佔用 jti（防重放）→ JIT 建 user →
-    # 免密建 session → 導 /odoo。save_session 維持預設 True（否則新建的 session 不寫回 store、
+    # 免密建 session → 導 /web（13-16 僅 /web，17+ 會自動轉 /odoo）。save_session 維持預設 True（否則新建的 session 不寫回 store、
     # 登入不生效，見 Task 2 spike）。
     @http.route('/aidev/sso', type='http', auth='public', csrf=False)
     def sso(self, token=None, **kw):
@@ -73,7 +73,7 @@ class AidevSso(http.Controller):
         UsedToken.search([('expires_at', '<', fields.Datetime.now())]).unlink()
         try:
             with request.env.cr.savepoint():
-                UsedToken.create({'jti': jti, 'expires_at': datetime.fromtimestamp(data['exp'])})
+                UsedToken.create({'jti': jti, 'expires_at': datetime.utcfromtimestamp(data['exp'])})
         except IntegrityError:
             return request.make_response('replay', status=403)
 
@@ -88,4 +88,4 @@ class AidevSso(http.Controller):
                 gfield: [(4, gid)],
             })
         _login_as(user)
-        return request.redirect('/odoo')
+        return request.redirect('/web')

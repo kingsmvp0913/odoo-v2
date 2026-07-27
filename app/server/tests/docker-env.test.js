@@ -116,6 +116,12 @@ describe('buildRunArgs', () => {
     expect(args).toContain('--dbfilter=^test_demo$');
   });
 
+  test('dbfilter 對 dbName 做 regex-escape：含 "." 的資料夾名不會被當 pattern 放寬', () => {
+    const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_a.b' });
+    expect(args).toContain('--dbfilter=^test_a\\.b$');
+    expect(args).not.toContain('--dbfilter=^test_a.b$');
+  });
+
   test('buildRunArgs 帶 adminPasswd 時加 --admin_passwd，未帶則不加', () => {
     const withPw = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo', adminPasswd: 's3cr3t' });
     expect(withPw).toContain('--admin_passwd=s3cr3t');
