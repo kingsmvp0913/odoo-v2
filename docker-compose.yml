@@ -27,6 +27,13 @@ services:
       # 測試區對外用（未設則維持每專案 127.0.0.x 直連，本機開發行為不變）。見 .env.example。
       ENV_BIND_HOST: ${ENV_BIND_HOST:-}
       ENV_PUBLIC_URL_TEMPLATE: ${ENV_PUBLIC_URL_TEMPLATE:-}
+      # port 模式反代（全 opt-in）：NGINX_SYNC_CONF_FILE 是總 gate，連同下列一起設齊才會自動
+      # 寫入每個 running 測試區的 ssl server block。NGINX_SYNC_CONF_FILE 須為 odoo-v2 寫得到、
+      # 且已 include 進 agency-NginxUI-1 之 http{} 的共享路徑（雙容器 bind mount 同一宿主檔）。
+      NGINX_CONTAINER: ${NGINX_CONTAINER:-}
+      NGINX_SYNC_CONF_FILE: ${NGINX_SYNC_CONF_FILE:-}
+      ENV_TLS_CERT: ${ENV_TLS_CERT:-}
+      ENV_TLS_KEY: ${ENV_TLS_KEY:-}
 
 volumes:
   claude-home:
