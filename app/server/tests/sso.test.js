@@ -58,16 +58,16 @@ test('GET env/sso → 409 當測試區尚未就緒（無 url/sso_secret）', asy
   expect(res.status).toBe(409);
 });
 
-test('GET env/sso → 302 導向測試區並帶 token', async () => {
+test('GET env/sso → 200 回免密登入 URL 並帶 token', async () => {
   await dbModule.query(
     "INSERT INTO odoo_envs (project_id, url, sso_secret) VALUES ($1, 'http://localhost:8071/', 'ssosecret') ON CONFLICT (project_id) DO UPDATE SET url='http://localhost:8071/', sso_secret='ssosecret'",
     [projectId]
   );
   const res = await request(app).get(`/api/projects/${projectId}/env/sso`).set(auth());
-  expect(res.status).toBe(302);
-  expect(res.headers.location).toContain('http://localhost:8071/aidev/sso?token=');
+  expect(res.status).toBe(200);
+  expect(res.body.url).toContain('http://localhost:8071/aidev/sso?token=');
   // TTL 收緊：token 有效期不得超過 30 秒（URL query 會進 access log，縮小可重放窗）。
-  const tok = decodeURIComponent(res.headers.location.split('token=')[1]);
+  const tok = decodeURIComponent(res.body.url.split('token=')[1]);
   const payload = JSON.parse(Buffer.from(tok.split('.')[0], 'base64url').toString());
   expect(payload.exp - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(30);
 });

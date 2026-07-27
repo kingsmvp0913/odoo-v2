@@ -5,7 +5,6 @@ window.AdminView = Vue.defineComponent({
       odoo: { url: '', db: '', sync_interval: 60 },
       service: { url: '', db: '', sync_interval: 60 },
       teams: { tenant_id: '', client_id: '', client_secret: '', team_id: '', channel_id: '', webhook_url: '', notify_webhook_url: '' },
-      e2e: { login: '', password: '' },
       testMode: false,
       writebackOdooNotes: false,
       usageGate: { enabled: true, th5: 90, th7: 95 },
@@ -53,7 +52,6 @@ window.AdminView = Vue.defineComponent({
             notify_webhook_url: d.notify_webhook_url || ''
           });
         }
-        try { this.e2e = await Api.get('admin/e2e-account'); } catch (_) { /* 顯示用，取不到不擋頁面 */ }
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
@@ -208,26 +206,6 @@ window.AdminView = Vue.defineComponent({
             <button class="btn btn-primary btn-sm" @click="saveConn" :disabled="savingConn">
               {{ savingConn ? '儲存中...' : '儲存連線設定' }}
             </button>
-          </div>
-        </div>
-
-        <!-- E2E 測試帳號（固定，唯讀顯示）-->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">E2E 測試帳號</div>
-            <div class="setting-block-desc">Playwright 自動化測試登入測試區用的固定帳號。建立環境／同步使用者時會自動寫入 Odoo 測試區（管理員權限）。此帳密固定、無法從此處修改。</div>
-          </div>
-          <div class="setting-block-body">
-            <div class="conn-fields">
-              <div class="field-item">
-                <label class="field-label">帳號</label>
-                <input :value="e2e.login" class="field-input" readonly />
-              </div>
-              <div class="field-item">
-                <label class="field-label">密碼</label>
-                <input :value="e2e.password" class="field-input" readonly />
-              </div>
-            </div>
           </div>
         </div>
 

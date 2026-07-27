@@ -218,17 +218,6 @@ async function _runEnvSetup(projectId) {
   return _runEnvSetupDocker(projectId);
 }
 
-// 不重建環境，直接把本系統 users 補進/更新到既有 Odoo 測試區（供獨立「同步使用者」按鈕）
-async function syncUsers(projectId) {
-  const ctx = await dockerCtxFor(projectId);
-  if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) throw new Error('環境尚未建立或容器未運行，請先建立測試環境');
-  // 沿用既有環境憑證（缺才補產）：seed 需 E2E 密碼與 SSO secret，dockerCtxFor 不含這兩者
-  const creds = await _ensureEnvCredentials(projectId, false);
-  ctx.ssoSecret = creds.ssoSecret;
-  ctx.e2ePassword = creds.e2ePassword;
-  return _seedOdooUsersDocker(ctx);
-}
-
 // 對測試區資料庫執行模組升級（odoo-bin -u）。載入/語法錯會以非 0 結束並 throw，供上層判定退回 coding。
 async function upgradeModules(projectId, modules, signal) {
   const modArg = (modules && modules.length ? modules : ['all']).join(',');
@@ -385,7 +374,7 @@ async function _runEnvSetupDocker(projectId) {
 
   // 每環境隨機憑證：SSO 簽章 secret（給 mintSsoToken 與 seed 寫 config param）＋ E2E 隨機密碼（給 seed
   // 與 playwright 登入）。每次建置換新，掛到 ctx 供下方 seed 使用。
-  const creds = await _ensureEnvCredentials(projectId, true);
+  const creds = await _ensureEnvCredentials(projectId);
   ctx.ssoSecret = creds.ssoSecret;
   ctx.e2ePassword = creds.e2ePassword;
 
@@ -448,16 +437,12 @@ async function _runEnvSetupDocker(projectId) {
   startProjectVpns(projectId).catch(() => {});
 }
 
-// 產（或沿用）每環境的 SSO 簽章 secret 與 E2E 密碼並存 odoo_envs（單一真相來源，供 mintSsoToken／
-// seed 寫 config param／playwright 讀密碼共用，避免多處各產生而漂移）。regenerate=true 一律換新（建置時，
-// 讓每環境憑證獨立、原始碼公開亦非通用後門）；false 沿用既有、僅缺漏補產（同步使用者按鈕：不無謂換
-// secret 使既有 token 失效）。回 { ssoSecret, e2ePassword }。
-async function _ensureEnvCredentials(projectId, regenerate) {
-  const { rows: [env] } = await query('SELECT sso_secret, e2e_password FROM odoo_envs WHERE project_id=$1', [projectId]);
-  let ssoSecret = env && env.sso_secret;
-  let e2ePassword = env && env.e2e_password;
-  if (regenerate || !ssoSecret) ssoSecret = crypto.randomBytes(32).toString('hex');
-  if (regenerate || !e2ePassword) e2ePassword = crypto.randomBytes(18).toString('base64url');
+// 產每環境的 SSO 簽章 secret 與 E2E 密碼並存 odoo_envs（單一真相來源，供 mintSsoToken／
+// seed 寫 config param／playwright 讀密碼共用，避免多處各產生而漂移）。每次建置一律換新，
+// 讓每環境憑證獨立、原始碼公開亦非通用後門。回 { ssoSecret, e2ePassword }。
+async function _ensureEnvCredentials(projectId) {
+  const ssoSecret = crypto.randomBytes(32).toString('hex');
+  const e2ePassword = crypto.randomBytes(18).toString('base64url');
   await query('UPDATE odoo_envs SET sso_secret=$2, e2e_password=$3 WHERE project_id=$1', [projectId, ssoSecret, e2ePassword]);
   return { ssoSecret, e2ePassword };
 }
@@ -477,4 +462,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };

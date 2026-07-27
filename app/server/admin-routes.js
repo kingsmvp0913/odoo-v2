@@ -10,7 +10,6 @@ const { verifyToken } = require('./auth');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runHealthCheck } = require('./pipeline/health-check-runner');
-const { E2E_LOGIN, E2E_PASSWORD } = require('./pipeline/e2e-account');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -35,12 +34,6 @@ async function requireAdmin(req, res, next) {
 
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];
-
-  // --- 固定 E2E 測試帳號（唯讀顯示；建立環境／同步使用者時自動寫入測試區）---
-
-  app.get('/api/admin/e2e-account', auth, (_req, res) => {
-    res.json({ login: E2E_LOGIN, password: E2E_PASSWORD });
-  });
 
   // --- Prompt 送出記錄（最近 N 筆送給 Claude 的完整 prompt）---
 

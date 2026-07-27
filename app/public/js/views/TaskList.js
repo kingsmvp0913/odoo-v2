@@ -202,6 +202,18 @@ window.TaskListView = Vue.defineComponent({
     statusLabel,
     timeAgo,
     openTask(t) { this.$router.push(`/task/${t.id}`); },
+    async openEnv(t) {
+      // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
+      // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
+      const w = window.open('about:blank', '_blank');
+      try {
+        const { url } = await Api.get(`projects/${t.project_id}/env/sso`);
+        if (w) w.location = url; else window.location = url;
+      } catch (e) {
+        if (w) w.close();
+        showToast(e.message || '無法開啟測試區', 'error');
+      }
+    },
     openAdd() {
       this.newTask = { title: '', original_text: '', project_id: '' };
       this.newFiles = [];
@@ -495,7 +507,7 @@ window.TaskListView = Vue.defineComponent({
                   @click.stop="$router.push('/projects/' + t.project_id)">
               {{ t.project_name }}
             </span>
-            <a v-if="t.env_url" :href="t.env_url" target="_blank" @click.stop class="env-chip">
+            <a v-if="t.env_url" href="#" @click.stop.prevent="openEnv(t)" class="env-chip">
               🖥 測試機
             </a>
           </div>
