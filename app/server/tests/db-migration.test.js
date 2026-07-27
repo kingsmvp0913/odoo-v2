@@ -254,3 +254,11 @@ test('migrate 加 teams_settings 用量閘門三欄（含預設 true/90/95）', 
   expect(s.usage_gate_5h_threshold).toBe(90);
   expect(s.usage_gate_7d_threshold).toBe(95);
 });
+
+test('odoo_envs 有 sso_secret 與 e2e_password 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='odoo_envs'"
+  );
+  const cols = rows.map(r => r.column_name);
+  expect(cols).toEqual(expect.arrayContaining(['sso_secret', 'e2e_password']));
+});

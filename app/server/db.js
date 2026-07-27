@@ -189,6 +189,8 @@ async function migrate() {
       url        TEXT,
       error_msg  TEXT,
       setup_log  TEXT,
+      sso_secret TEXT,
+      e2e_password TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(project_id)
@@ -397,6 +399,9 @@ async function migrate() {
     { table: 'tasks', col: 'qa_reviewed_commit',   sql: 'ALTER TABLE tasks ADD COLUMN qa_reviewed_commit TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
+    // 每環境憑證：SSO 密鑰、E2E 隨機密碼（測試區安全 hardening）
+    { table: 'odoo_envs', col: 'sso_secret',       sql: 'ALTER TABLE odoo_envs ADD COLUMN sso_secret TEXT' },
+    { table: 'odoo_envs', col: 'e2e_password',     sql: 'ALTER TABLE odoo_envs ADD COLUMN e2e_password TEXT' },
     { table: 'tasks', col: 'merge_conflict_data',  sql: 'ALTER TABLE tasks ADD COLUMN merge_conflict_data TEXT' },
     { table: 'tasks', col: 'merge_resolutions',    sql: 'ALTER TABLE tasks ADD COLUMN merge_resolutions TEXT' },
     { table: 'users', col: 'password_enc',         sql: 'ALTER TABLE users ADD COLUMN password_enc TEXT' },
