@@ -39,14 +39,16 @@ test('空白原因 → 400（狀態不變）', async () => {
   expect(t.status).toBe('review_pending');
 });
 
-test('review_pending 退回 → reject_triage、原因帶入 feedback、reentry+1 不 stopped、落 task_rejections(new)', async () => {
+test('review_pending 退回 → reject_triage、原因帶入 feedback、不動 reentry（統計改看 task_rejections）、落 task_rejections(new)', async () => {
   const res = await request(app).post(`/api/tasks/${taskDbId}/reject`).set(auth())
     .send({ reason: '備註欄位型別錯；審核清單想預設收合' });
   expect(res.status).toBe(200);
   const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, reentry_count FROM tasks WHERE id=$1', [taskDbId]);
   expect(t.status).toBe('reject_triage');           // 進分診，不再直進 coding
   expect(t.retry_feedback).toContain('備註欄位型別錯');
-  expect(t.reentry_count).toBe(1);                  // 只累加做統計
+  // 人工退回不累加 reentry_count：否則會與下游 reject_triage 判 fix 時的 +1 疊加，
+  // 讓乾淨任務（reentry=0）被退一次就撞 MAX_REENTRY 卡死在 stopped，coding 一次都沒重跑。統計改由 task_rejections 承接。
+  expect(t.reentry_count).toBe(0);
   const { rows: rej } = await dbModule.query('SELECT task_id, project_id, reason, status FROM task_rejections');
   expect(rej.length).toBe(1);
   expect(rej[0].task_id).toBe('task_odoo_1');       // 業務 id（穩定，硬刪不失真）

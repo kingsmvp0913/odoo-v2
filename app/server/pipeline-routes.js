@@ -134,10 +134,12 @@ function registerRoutes(app) {
         return res.status(400).json({ error: `Task status '${task.status}' cannot be rejected; expected review_pending` });
       }
       // 回退回分診（reject_triage）：由 analysis-reject 判 bug/clarify/respec，不再瞎猜式直進 coding。
-      // reentry_count 只累加做統計、不強制 stopped（人為刻意退回，不套自動 runaway 上限）
+      // 不動 reentry_count：人工退回本身不是一次「退回 coding 的循環」，真正的循環由 reject_triage 判 fix→coding
+      // 時經 bumpReentryOrStop 累加即可。若在此先 +1，會與下游 fix 的 +1 疊加，讓乾淨任務被退一次就撞總循環上限
+      // 卡死（coding 一次都沒為修正重跑）。人工退回次數改由 task_rejections 統計，不與自動 runaway 斷路器共用計數。
       // 條件更新防雙擊：輸掉競態的請求不再重複落 log／task_rejections
       const { rowCount } = await query(
-        "UPDATE tasks SET status='reject_triage', retry_feedback=$2, reentry_count=reentry_count+1, updated_at=NOW() WHERE id=$1 AND status='review_pending'",
+        "UPDATE tasks SET status='reject_triage', retry_feedback=$2, updated_at=NOW() WHERE id=$1 AND status='review_pending'",
         [req.params.id, `[人工退回]\n${reason}`]
       );
       if (!rowCount) return res.json({ ok: true });

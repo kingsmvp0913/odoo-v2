@@ -181,17 +181,17 @@ test('clarify 但無 questions → stopped（不靜默放行）', async () => {
 });
 
 // answer → 純提問（僅最終人工審核退回）：在時間軸回答，不路由，回滾這次退回（提問不算退回）。
-test('answer（純提問）→ review_pending：Q&A 落時間軸、刪最近 task_rejections、reentry-1、清退回標記', async () => {
+test('answer（純提問）→ review_pending：Q&A 落時間軸、刪最近 task_rejections、不動 reentry、清退回標記', async () => {
   claudeReturns({ decision: 'answer', summary: '這個欄位設計成唯讀，是因為它同步自來源工單。' });
   const id = await makeTask({ rejectCount: 1 });   // retry_feedback='[人工退回]\n備註型別錯'
-  await dbModule.query('UPDATE tasks SET reentry_count=1 WHERE id=$1', [id]);
+  await dbModule.query('UPDATE tasks SET reentry_count=1 WHERE id=$1', [id]);  // 模擬先前真實自動彈跳累積的計數
   await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'system','[人工退回]')", [id]);
 
   await runRejectTriage(id, userId);
 
   const { rows: [t] } = await dbModule.query('SELECT status, reentry_count, retry_feedback FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('review_pending');       // 留在原地讓對話持續
-  expect(t.reentry_count).toBe(0);               // 提問不算退回 → 回滾 +1
+  expect(t.reentry_count).toBe(1);               // 提問不動 reentry：/reject 已不再 +1，此處也不扣，才不會誤傷真實彈跳計數
   expect(t.retry_feedback).toBeNull();           // 退回標記／原因清掉
   const { rows: rej } = await dbModule.query(
     "SELECT id FROM task_rejections WHERE task_id=(SELECT task_id FROM tasks WHERE id=$1) AND status='new'", [id]

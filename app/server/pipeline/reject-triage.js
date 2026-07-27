@@ -142,7 +142,8 @@ async function runRejectTriage(taskId, userId, signal) {
   };
 
   // answer → 純提問（僅最終人工審核退回）：在時間軸回答，不路由。回滾這次 /reject 的副作用——提問不算退回，
-  // 只有真的退回修改才計入退回統計／健檢。刪本次 task_rejections(new)＋系統退回標記、reentry_count-1、清 retry_feedback。
+  // 只有真的退回修改才計入退回統計／健檢。刪本次 task_rejections(new)＋系統退回標記、清 retry_feedback。
+  // 不動 reentry_count：/reject 本就不再累加它，故此處也無 +1 可回滾；若硬扣會誤傷真實自動彈跳累積的計數。
   if (decision === 'answer' && isReject) {
     const question = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（提問）';
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, question]);
@@ -158,7 +159,7 @@ async function runRejectTriage(taskId, userId, signal) {
     );
     if (sys) await query('DELETE FROM task_logs WHERE id=$1', [sys.id]);
     await query(
-      "UPDATE tasks SET status='review_pending', reentry_count = CASE WHEN reentry_count > 0 THEN reentry_count - 1 ELSE 0 END, retry_feedback=NULL, updated_at=NOW() WHERE id=$1",
+      "UPDATE tasks SET status='review_pending', retry_feedback=NULL, updated_at=NOW() WHERE id=$1",
       [taskId]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
