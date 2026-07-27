@@ -79,7 +79,7 @@ const App = defineComponent({
   setup() { return { toasts, needsActionCount, claudeUsage }; },
   data() { return { _role: '', isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
   computed: {
-    isLoggedIn() { return Api.isLoggedIn(); },
+    isLoggedIn() { return Api.authState.loggedIn; },
     // 角色以 reactive 的 UserStore 為單一來源：每次導覽（含剛登入）由 afterEach 更新，
     // 不再只靠 mounted 一次性載入 → 表單登入後 isAdmin 立即正確，免重新整理
     isAdmin() { return window.UserStore.role === 'admin'; },

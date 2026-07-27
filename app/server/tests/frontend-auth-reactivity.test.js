@@ -1,0 +1,29 @@
+const fs = require('fs');
+const path = require('path');
+const read = (f) => fs.readFileSync(path.join(__dirname, '../../public', f), 'utf8');
+
+// 守的契約：驅動「登入殼層 vs 登入頁」切換的登入狀態必須 reactive。
+// 症狀（1.png）：Api.isLoggedIn() 讀 localStorage（非 reactive），App 的 isLoggedIn
+// computed 卡在首次求值 false → 表單登入後 v-if 仍停在裸 <router-view>，sidebar/main
+// 從未 render，TaskListView 的 topbar/content 掉進 #app 的橫排 flex → 版面塌掉，只能重整。
+// 這是靜態守門（前端無 Vue mount 測試 infra），把回歸擋在 commit 前。
+describe('登入狀態必須 reactive（表單登入後版面立即切殼層，免重整）', () => {
+  const api = read('js/api.js');
+  const app = read('js/app.js');
+
+  test('api.js 以 reactive 旗標保存登入狀態', () => {
+    expect(api).toMatch(/authState:\s*Vue\.reactive/);
+  });
+
+  test('setToken／clearToken 皆同步 authState.loggedIn（涵蓋登入、登出、401 清除）', () => {
+    expect(api).toMatch(/setToken\([^)]*\)\s*{[^}]*authState\.loggedIn\s*=\s*true/);
+    expect(api).toMatch(/clearToken\(\)\s*{[^}]*authState\.loggedIn\s*=\s*false/);
+  });
+
+  test('App 的 isLoggedIn computed 讀 reactive authState，而非非-reactive 的 Api.isLoggedIn()', () => {
+    const m = app.match(/isLoggedIn\(\)\s*{\s*return\s+([^;]+);/);
+    expect(m).not.toBeNull();
+    expect(m[1]).toContain('authState');
+    expect(m[1]).not.toContain('isLoggedIn()');
+  });
+});

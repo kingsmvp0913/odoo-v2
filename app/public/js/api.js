@@ -1,9 +1,13 @@
 const TOKEN_KEY = 'aidev_token';
 
 const Api = {
+  // 登入狀態要能被 Vue 追蹤：localStorage 非 reactive，直接讓 computed 讀 token 會卡在
+  // 首次求值（表單登入後版面切不到殼層、必須重整）。以 reactive 旗標當單一真相，
+  // 所有 token 變動一律經 setToken/clearToken 同步。
+  authState: Vue.reactive({ loggedIn: !!localStorage.getItem(TOKEN_KEY) }),
   getToken() { return localStorage.getItem(TOKEN_KEY); },
-  setToken(t) { localStorage.setItem(TOKEN_KEY, t); },
-  clearToken() { localStorage.removeItem(TOKEN_KEY); },
+  setToken(t) { localStorage.setItem(TOKEN_KEY, t); this.authState.loggedIn = true; },
+  clearToken() { localStorage.removeItem(TOKEN_KEY); this.authState.loggedIn = false; },
   isLoggedIn() { return !!this.getToken(); },
 
   async _fetch(method, path, body) {
