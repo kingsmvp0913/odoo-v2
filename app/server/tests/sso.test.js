@@ -66,6 +66,10 @@ test('GET env/sso → 302 導向測試區並帶 token', async () => {
   const res = await request(app).get(`/api/projects/${projectId}/env/sso`).set(auth());
   expect(res.status).toBe(302);
   expect(res.headers.location).toContain('http://localhost:8071/aidev/sso?token=');
+  // TTL 收緊：token 有效期不得超過 30 秒（URL query 會進 access log，縮小可重放窗）。
+  const tok = decodeURIComponent(res.headers.location.split('token=')[1]);
+  const payload = JSON.parse(Buffer.from(tok.split('.')[0], 'base64url').toString());
+  expect(payload.exp - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(30);
 });
 
 test('401 without token', async () => {

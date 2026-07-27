@@ -47,7 +47,7 @@ function registerRoutes(app) {
       const { rows: [env] } = await query('SELECT url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]);
       if (!env?.url || !env.sso_secret) return res.status(409).json({ error: '測試區尚未就緒' });
       const { rows: [u] } = await query('SELECT username, display_name FROM users WHERE id=$1', [req.userId]);
-      const token = mintSsoToken({ secret: env.sso_secret, login: u.username, name: u.display_name, ttlSec: 60 });
+      const token = mintSsoToken({ secret: env.sso_secret, login: u.username, name: u.display_name, ttlSec: 30 });
       res.redirect(`${env.url.replace(/\/$/, '')}/aidev/sso?token=${encodeURIComponent(token)}`);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
