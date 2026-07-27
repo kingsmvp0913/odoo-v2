@@ -100,14 +100,22 @@ test('uninstallModule（docker）：解析 RESULT: 行、傳 UNINSTALL_MODULE', 
   expect(arg.interactive).toBe(true);
 });
 
-test('syncUsers（docker）：seed 走 exec，SEED_USERS 帶入本系統 users', async () => {
+test('syncUsers（docker）：只 seed E2E（不再灌平台 users＋hash），傳 AIDEV_SSO_SECRET', async () => {
   const bcrypt = require('bcryptjs');
+  // 平台有 user 也不得被灌進測試區（憑證外洩防線）
   await dbModule.query("INSERT INTO users (username, password_hash, display_name, role) VALUES ('u1', $1, 'U1', 'user')", [await bcrypt.hash('p', 4)]);
   await envAgent.syncUsers(PID);
   const arg = dockerEnv.execOdoo.mock.calls[0][0];
   const seeded = JSON.parse(arg.env.SEED_USERS);
-  expect(seeded.some(u => u.login === 'u1')).toBe(true);       // 本系統 user
-  expect(seeded.some(u => u.password_plain)).toBe(true);       // 固定 E2E 帳號
+  expect(seeded.some(u => u.login === 'u1')).toBe(false);      // 平台 user 不外洩
+  expect(seeded).toHaveLength(1);                              // 只有 E2E 一筆
+  expect(seeded[0].password_plain).toBeTruthy();               // E2E 隨機明文密碼
+  expect(seeded[0].password).toBeUndefined();                  // 無平台 password_hash
+  expect(arg.env.AIDEV_SSO_SECRET).toMatch(/^[0-9a-f]{64}$/);  // 32-byte hex SSO secret
+  // 憑證已落 odoo_envs 供 mintSsoToken／playwright 讀
+  const { rows: [env] } = await dbModule.query('SELECT sso_secret, e2e_password FROM odoo_envs WHERE project_id=$1', [PID]);
+  expect(env.sso_secret).toBe(arg.env.AIDEV_SSO_SECRET);
+  expect(env.e2e_password).toBe(seeded[0].password_plain);
 });
 
 test('stopEnv（docker）：stop+rm 容器並標 idle', async () => {

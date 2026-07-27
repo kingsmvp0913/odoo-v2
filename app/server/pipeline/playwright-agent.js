@@ -119,7 +119,10 @@ async function runTourStage(taskId, userId, signal) {
       git_branch: task.git_branch || '（未設定）',
       project_notes: projectNotes || ''
     }).trim();
-    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD }, agentType: 'playwright', timeoutMs: E2E_TIMEOUT_MS });
+    // 登入密碼改讀該環境隨機 E2E 密碼（每環境獨立、非原始碼公開後門）；舊環境（無值）退回固定值相容。
+    const { rows: [envCreds] } = await query('SELECT e2e_password FROM odoo_envs WHERE project_id=$1', [task.project_id]);
+    const e2ePassword = envCreds?.e2e_password || E2E_PASSWORD;
+    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD: e2ePassword }, agentType: 'playwright', timeoutMs: E2E_TIMEOUT_MS });
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);
