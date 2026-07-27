@@ -294,6 +294,8 @@ function registerRoutes(app) {
         return res.status(404).json({ error: 'Not found' });
       }
       await query('COMMIT');
+      // 專案硬刪除後 port 釋放：同步 nginx map 移除該子網域（fire-and-forget；gate 未設＝no-op）。
+      require('./lib/nginx-map').syncNginxMap().catch(() => {});
       res.json({ ok: true });
     } catch (err) {
       await query('ROLLBACK').catch(() => {});

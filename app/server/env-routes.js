@@ -1,6 +1,7 @@
 const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { mintSsoToken } = require('./sso');
 
 function registerRoutes(app) {
   app.get('/api/projects/:id/env', verifyToken, async (req, res) => {
@@ -24,7 +25,7 @@ function registerRoutes(app) {
           env.url = null;
         }
       }
-      // built = 環境目錄已完整建置，前端據此顯示「重新啟動」而非「一鍵建立環境」、並顯示「同步使用者」。
+      // built = 環境目錄已完整建置，前端據此顯示「重新啟動」而非「一鍵建立環境」。
       // venv 模式標記為 .ready、docker 模式為 .docker-ready（見 env-agent），任一存在即視為已建置。
       try {
         const fs = require('fs');
@@ -37,6 +38,17 @@ function registerRoutes(app) {
         ));
       } catch { env.built = false; }
       res.json(env);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 平台簽發一次性 SSO token，導向測試區 idx_aidev_sso 模組免密登入
+  app.get('/api/projects/:id/env/sso', verifyToken, async (req, res) => {
+    try {
+      const { rows: [env] } = await query('SELECT url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]);
+      if (!env?.url || !env.sso_secret) return res.status(409).json({ error: '測試區尚未就緒' });
+      const { rows: [u] } = await query('SELECT username, display_name FROM users WHERE id=$1', [req.userId]);
+      const token = mintSsoToken({ secret: env.sso_secret, login: u.username, name: u.display_name, ttlSec: 30 });
+      res.json({ url: `${env.url.replace(/\/$/, '')}/aidev/sso?token=${encodeURIComponent(token)}` });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -71,19 +83,6 @@ function registerRoutes(app) {
       const { stopEnv } = require('./pipeline/env-agent');
       await stopEnv(req.params.id);
       res.json({ ok: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
-
-  app.post('/api/projects/:id/env/sync-users', verifyToken, async (req, res) => {
-    try {
-      // #3 建立中不得同步（DB 正在 init，避免撞在一起）
-      const { rows: [env] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [req.params.id]);
-      if (env?.status === 'setting_up') {
-        return res.status(409).json({ error: '環境建立中，請待建立完成再同步' });
-      }
-      const { syncUsers } = require('./pipeline/env-agent');
-      const log = await syncUsers(req.params.id);
-      res.json({ ok: true, log });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

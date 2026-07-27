@@ -100,16 +100,6 @@ test('uninstallModule（docker）：解析 RESULT: 行、傳 UNINSTALL_MODULE', 
   expect(arg.interactive).toBe(true);
 });
 
-test('syncUsers（docker）：seed 走 exec，SEED_USERS 帶入本系統 users', async () => {
-  const bcrypt = require('bcryptjs');
-  await dbModule.query("INSERT INTO users (username, password_hash, display_name, role) VALUES ('u1', $1, 'U1', 'user')", [await bcrypt.hash('p', 4)]);
-  await envAgent.syncUsers(PID);
-  const arg = dockerEnv.execOdoo.mock.calls[0][0];
-  const seeded = JSON.parse(arg.env.SEED_USERS);
-  expect(seeded.some(u => u.login === 'u1')).toBe(true);       // 本系統 user
-  expect(seeded.some(u => u.password_plain)).toBe(true);       // 固定 E2E 帳號
-});
-
 test('stopEnv（docker）：stop+rm 容器並標 idle', async () => {
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [PID]);
   await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'running',8070)", [PID]);

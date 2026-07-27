@@ -1,11 +1,13 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { query } = require('../db');
 const { ensureTestingBranch } = require('./git');
-const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
+const { E2E_LOGIN } = require('./e2e-account');
 const { allocateProjectPort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
+const { syncNginxMap } = require('../lib/nginx-map');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
@@ -217,13 +219,6 @@ async function _runEnvSetup(projectId) {
   return _runEnvSetupDocker(projectId);
 }
 
-// 不重建環境，直接把本系統 users 補進/更新到既有 Odoo 測試區（供獨立「同步使用者」按鈕）
-async function syncUsers(projectId) {
-  const ctx = await dockerCtxFor(projectId);
-  if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) throw new Error('環境尚未建立或容器未運行，請先建立測試環境');
-  return _seedOdooUsersDocker(ctx);
-}
-
 // 對測試區資料庫執行模組升級（odoo-bin -u）。載入/語法錯會以非 0 結束並 throw，供上層判定退回 coding。
 async function upgradeModules(projectId, modules, signal) {
   const modArg = (modules && modules.length ? modules : ['all']).join(',');
@@ -378,6 +373,12 @@ async function _runEnvSetupDocker(projectId) {
     [projectId, port]
   );
 
+  // 每環境隨機憑證：SSO 簽章 secret（給 mintSsoToken 與 seed 寫 config param）＋ E2E 隨機密碼（給 seed
+  // 與 playwright 登入）。每次建置換新，掛到 ctx 供下方 seed 使用。
+  const creds = await _ensureEnvCredentials(projectId);
+  ctx.ssoSecret = creds.ssoSecret;
+  ctx.e2ePassword = creds.e2ePassword;
+
   for (const m of ctx.mounts) { try { await ensureTestingBranch(m.host); } catch { /* 非致命 */ } }
 
   let log = `[docker] mode=docker image=${ctx.image} container=${ctx.container} port=${port}\n`;
@@ -398,7 +399,7 @@ async function _runEnvSetupDocker(projectId) {
 
   // 2) 移除同名舊容器（冪等）→ 起常駐容器（首次帶 init 旗標，Odoo 裝完 base 續跑 server）
   await dockerEnv.removeContainer(ctx.container);
-  const initArgs = firstBuild ? ['-i', 'base', '--without-demo=all', '--load-language=zh_TW'] : [];
+  const initArgs = firstBuild ? ['-i', 'base,idx_aidev_sso', '--without-demo=all', '--load-language=zh_TW'] : [];
   const run = await dockerEnv.runContainer({
     name: ctx.container, image: ctx.image, host: envHost, port, dbName: ctx.dbName,
     dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs, filestoreDir,
@@ -418,6 +419,13 @@ async function _runEnvSetupDocker(projectId) {
 
   // 4) 補裝自訂模組 Python 相依（image 未內建）＋ seed users
   try { log += await installModuleRequirements(projectId); } catch (e) { log += `[deps] FAIL ${e.message}\n`; }
+  // 既有環境（非首次 build）initArgs 為空 → idx_aidev_sso 未隨 base 裝上，SSO 端點 404、config param 無消費者。
+  // 首次已由 initArgs `-i base,idx_aidev_sso` 裝；此處只補非首次。用既有 upgradeModules（-i/-u，deploy 亦以此
+  // 對運行中容器裝/升模組）；-i 對已裝模組 idempotent，可安全無條件執行。best-effort：失敗只記錄不阻斷環境起來。
+  if (!firstBuild) {
+    try { await upgradeModules(projectId, ['idx_aidev_sso']); log += '[sso] idx_aidev_sso 安裝/升級 OK\n'; }
+    catch (e) { log += `[sso] idx_aidev_sso 安裝失敗：${String(e.message || e).slice(-200)}\n`; }
+  }
   try { log += await _seedOdooUsersDocker(ctx); } catch (e) { log += `[seed] FAIL ${e.message}\n`; }
 
   await query(
@@ -425,25 +433,38 @@ async function _runEnvSetupDocker(projectId) {
     [projectId, port, envPublicUrl(port, ctx.dirName), log]
   );
 
+  // 對外曝露：測試區 running 後同步 nginx map（fire-and-forget；gate 未設＝no-op，Windows 零影響）。
+  // 同步失敗只影響對外連結、不阻斷環境（模組內已自 catch 並 loud log）。
+  syncNginxMap().catch(() => {});
+
   // VPN 共管：測試區進入 running 後背景暖機該專案所有 vpn 連線（fire-and-forget，不 await；
   // 撥號慢[≤25s/條]不該延後測試區可用時間，查詢時的 lazy ensureGatewayRunning 會冪等補等）。
   startProjectVpns(projectId).catch(() => {});
 }
 
-// seed users（docker）：odoo shell + stdin 腳本，users 經 SEED_USERS env 傳入（同 venv 契約）。
+// 產每環境的 SSO 簽章 secret 與 E2E 密碼並存 odoo_envs（單一真相來源，供 mintSsoToken／
+// seed 寫 config param／playwright 讀密碼共用，避免多處各產生而漂移）。每次建置一律換新，
+// 讓每環境憑證獨立、原始碼公開亦非通用後門。回 { ssoSecret, e2ePassword }。
+async function _ensureEnvCredentials(projectId) {
+  const ssoSecret = crypto.randomBytes(32).toString('hex');
+  const e2ePassword = crypto.randomBytes(18).toString('base64url');
+  await query('UPDATE odoo_envs SET sso_secret=$2, e2e_password=$3 WHERE project_id=$1', [projectId, ssoSecret, e2ePassword]);
+  return { ssoSecret, e2ePassword };
+}
+
+// seed users（docker）：odoo shell + stdin 腳本。不再撈全平台 users＋password_hash 灌進測試區（憑證外洩），
+// 只 seed E2E 帳號一筆（每環境隨機密碼），並把該環境 SSO secret 透過 AIDEV_SSO_SECRET 傳入，由腳本寫進
+// ir.config_parameter('aidev.sso_secret') 供 idx_aidev_sso 驗章。其餘平台使用者改由 SSO JIT 首登時建立。
 async function _seedOdooUsersDocker(ctx) {
-  const { rows: users } = await query(
-    'SELECT username AS login, display_name AS name, password_hash AS password FROM users ORDER BY id'
-  );
-  users.push({ login: E2E_LOGIN, name: 'E2E 自動測試', password_plain: E2E_PASSWORD });
+  const users = [{ login: E2E_LOGIN, name: 'E2E 自動測試', password_plain: ctx.e2ePassword }];
   const script = fs.readFileSync(path.join(__dirname, 'seed_odoo_users.py'), 'utf8');
   const { code, stdout, stderr } = await dockerEnv.execOdoo({
     container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
     odooArgs: ['shell', '--no-http'], interactive: true,
-    env: { SEED_USERS: JSON.stringify(users), PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+    env: { SEED_USERS: JSON.stringify(users), AIDEV_SSO_SECRET: ctx.ssoSecret, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
   }, { input: script });
   if (code !== 0) throw new Error((stderr || stdout || '').slice(-300));
-  return `[seed] ${users.length} users → ${String(stdout).trim().slice(-200)}\n`;
+  return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, syncUsers, nightlyShutdown, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };

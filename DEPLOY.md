@@ -118,36 +118,53 @@ location = /odooAiDev { return 301 /odooAiDev/; }
 
 平台掛上網域後，使用者的瀏覽器不再位於宿主機上，但測試區預設綁在宿主的 `127.0.0.x:<port>`
 ——那個位址在使用者的電腦上指向他自己，連結看起來正常、點下去連不上。**本機開發永遠重現不了**
-（瀏覽器就在宿主上）。兩個設定要一起改，只改一個都不會通：
+（瀏覽器就在宿主上）。
 
-1. `ENV_BIND_HOST`：測試區容器改綁 docker 橋接閘道位址（`ip -4 addr show docker0`，多為
-   `172.17.0.1`）。nginx 若跑在另一個容器（本機的 `agency-NginxUI-1`），它在 bridge 網路上
-   **連不到宿主 loopback**，不改這項反代必定 502。
-2. `ENV_PUBLIC_URL_TEMPLATE`：DB 內存的測試區網址改成反代後的對外網址，例
-   `https://{folder}.aidev.example.com`（`{folder}`＝`projects.folder_name`）。
+**採 port 模式**（同網域不同埠）：所有測試區共用一個裸網域、靠 port 區分，例
+`https://odoo-ai-dev.ideaxpress.biz:21000`、`:21001`…。為何不用 wildcard 子網域——DNS 若託管在
+不支援 `*` 記錄、也無 ACME DNS API 的商（如 Wix），wildcard 起不來；port 模式只需**裸網域一張
+HTTP-01 憑證**（可一鍵簽、自動續期），憑證只認主機名不認 port、一張蓋全部埠，且新專案自動配埠、
+**零人工 DNS/憑證**。
 
-建議走 **wildcard 子網域**而非子路徑：預設每專案一個 `127.0.0.x` 是為了讓 cookie 依 host 隔離
-（多開測試區不互踢 session），改綁單一位址後這層隔離消失，改由每專案一個子網域取回。且 **Odoo
-本身不支援掛在子路徑**——`/web`、`/odoo` 與 asset 路徑皆為 root-absolute，與平台本體可掛子路徑
-是兩回事。需要 `*.aidev.<網域>` 的 DNS 與 wildcard 憑證。
+> Odoo 不支援掛子路徑（`/web`、`/odoo`、asset 皆 root-absolute），故只能子網域或 port、不能子路徑。
+> cookie 依 host 隔離、不看 port——同網域多埠共用 cookie；但真人一次只操作一個測試區、E2E 各跑在
+> 獨立瀏覽器 context，故實務上不受影響。
+
+設定（`data/config.json`，全 opt-in，未設＝維持 loopback、Windows／未反代機不受影響）：
+
+| key | 值 | 用途 |
+|-----|----|----|
+| `ENV_BIND_HOST` | docker0 閘道（本機 `10.0.0.1`；`ip -4 addr show docker0`） | 測試區容器改綁此位址，讓另一容器的 nginx 連得到（綁 loopback 必 502） |
+| `ENV_PUBLIC_URL_TEMPLATE` | `https://odoo-ai-dev.ideaxpress.biz:{port}` | 對外網址；SSO 導向亦沿用此值 |
+| `NGINX_CONTAINER` | `agency-NginxUI-1` | 平台 `docker exec` 對它 `nginx -t`／`-s reload` |
+| `NGINX_SYNC_CONF_FILE` | 共享 conf 路徑（例 `/etc/nginx/conf.d/odoo-envs.conf`） | **同步總 gate**；平台自動寫入每 port 的 ssl server block |
+| `ENV_TLS_CERT` / `ENV_TLS_KEY` | 裸網域憑證／私鑰路徑（nginx 容器內） | 每段 server block 共用 |
+
+平台依 running 測試區自動產生（`lib/nginx-map.js`；寫檔後 `nginx -t` 過才 reload、壞就 rollback），
+每個 port 一段：
 
 ```nginx
 server {
-    server_name ~^(?<folder>[^.]+)\.aidev\.example\.com$;
+    listen 21000 ssl;
+    server_name odoo-ai-dev.ideaxpress.biz;
+    ssl_certificate     /etc/nginx/ssl/odoo-ai-dev.ideaxpress.biz_P256/fullchain.cer;
+    ssl_certificate_key /etc/nginx/ssl/odoo-ai-dev.ideaxpress.biz_P256/private.key;
     location / {
-        proxy_pass http://172.17.0.1:$env_port;   # 埠對映見下
-        # 其餘 proxy_set_header 與 client_max_body_size 同上
+        proxy_pass http://10.0.0.1:21000;         # ENV_BIND_HOST:同埠
+        proxy_set_header Upgrade $http_upgrade;    # 缺了 Odoo bus/longpolling 靜默退化
+        proxy_set_header Connection "upgrade";
+        # Host／X-Forwarded-*／client_max_body_size 50m／proxy_read_timeout 600s
     }
 }
 ```
 
-埠是每專案固定配發的（`projects.port`），nginx 無從自動得知，故實務上兩種做法：於 map 內逐專案
-列出 `folder → port`（新專案要補一行），或改用「同網域不同埠」樣板
-`ENV_PUBLIC_URL_TEMPLATE=https://aidev.example.com:{port}` 直接開埠（省去 nginx 設定，但整段
-`PROJECT_PORT_MIN`～`MAX` 都得對內網開放，且測試區內有 seed 的固定帳密，僅適用可信內網）。
+一次性人工（平台不自動）：於 NginxUI 簽裸網域 HTTP-01 憑證；重建 `agency-NginxUI-1` 對外 publish
+`PROJECT_PORT_MIN`–`MAX`（綁公網／區網介面，與 `10.0.0.1` 的容器不同介面、不衝突）；`nginx.conf`
+的 `include conf.d/*.conf` 需在 `http{}` 內（才放得下 server block）。
 
-> 安全提醒：`ENV_BIND_HOST` 一設，測試區就從 loopback 移到實際會對外監聽的介面。請確認防火牆
-> 只放行 nginx 來源，測試區帳號（含 E2E 固定帳密）不應暴露到內網以外。
+> 安全提醒：曝露的埠段務必以 **VPN／IP 白名單**擋在可信來源內——測試區跑未審程式碼，且與平台
+> 共用 PostgreSQL superuser（見設計文件殘留風險），攻進一個測試區有機會跨庫觸及平台 DB。
+> 測試區帳號（含 E2E）不應暴露到可信網路以外。
 
 ## ⚠️ 硬限制：僅允許單一 Node 行程
 

@@ -48,5 +48,11 @@ for u in users:
         env.cr.execute("UPDATE res_users SET password=%s WHERE id=%s", (u['password'], rec.id))
     seeded += 1
 
+# 寫入該環境的 SSO 簽章 secret，供 idx_aidev_sso 讀 ir.config_parameter('aidev.sso_secret') 驗章免密登入。
+# 每環境獨立、由平台於建環境時隨機產生並存 odoo_envs；無值時（相容舊契約）略過不寫。
+secret = os.environ.get('AIDEV_SSO_SECRET')
+if secret:
+    env['ir.config_parameter'].sudo().set_param('aidev.sso_secret', secret)
+
 env.cr.commit()
 print('SEED_DONE', seeded)
