@@ -37,7 +37,7 @@ test('env running 且埠實測活著 → true，不呼叫 runEnvSetup（避免�
   waitForPort.mockResolvedValue(true);
   const ok = await ensureEnvRunning(projectId);
   expect(ok).toBe(true);
-  expect(waitForPort).toHaveBeenCalledWith(8069, 5000, 500);
+  expect(waitForPort).toHaveBeenCalledWith(8069, 5000, 500, '127.0.0.2'); // envBindHost(8069)
   expect(runEnvSetup).not.toHaveBeenCalled();
 });
 
@@ -78,4 +78,14 @@ test('env 起不來（runEnvSetup 後仍非 running）→ false，交由上層�
   const ok = await ensureEnvRunning(projectId);
   expect(ok).toBe(false);
   expect(runEnvSetup).toHaveBeenCalledWith(projectId);
+});
+
+// 意圖（真 bug）：container 綁的是該埠對應的 loopback host（或 ENV_BIND_HOST），
+// 但這裡的快速健康檢查用預設 127.0.0.1 → 永遠連不上 → 每次 deploy/E2E 都白跑一次完整 runEnvSetup。
+// 租約制下更糟：每次都白借白還一輪埠。
+test('健康檢查探的是容器實際綁定的 host，不是 127.0.0.1', async () => {
+  await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'running',21000)", [projectId]);
+  waitForPort.mockResolvedValue(true);
+  await ensureEnvRunning(projectId);
+  expect(waitForPort).toHaveBeenCalledWith(21000, 5000, 500, '127.0.50.133'); // loopbackHostForPort(21000)
 });
