@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { query } = require('../db');
 const { ensureTestingBranch } = require('./git');
 const { E2E_LOGIN } = require('./e2e-account');
-const { allocateProjectPort, envBindHost, envPublicUrl } = require('../port-alloc');
+const { leasePort, releasePort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 const { syncNginxMap } = require('../lib/nginx-map');
 
@@ -21,7 +21,11 @@ const DOCKER_TEST_HTTP_PORT = 8169;
 
 // 組某專案的 docker 操作上下文（容器名、image、DB、addons 掛載、db 連線參數、env 目錄）。
 async function dockerCtxFor(projectId) {
-  const { rows: [project] } = await query('SELECT name, folder_name, odoo_version, port FROM projects WHERE id=$1', [projectId]);
+  const { rows: [project] } = await query(
+    `SELECT p.name, p.folder_name, p.odoo_version, e.port
+       FROM projects p LEFT JOIN odoo_envs e ON e.project_id = p.id
+      WHERE p.id=$1`, [projectId]
+  );
   if (!project) return null;
   const dirName = project.folder_name || project.name;
   const major = (project.odoo_version || '17.0').split('.')[0];
@@ -287,7 +291,7 @@ async function stopEnv(projectId) {
   const ctx = await dockerCtxFor(projectId);
   if (ctx) { await dockerEnv.stopContainer(ctx.container); await dockerEnv.removeContainer(ctx.container); }
   await query(
-    "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
+    "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, port=NULL, updated_at=NOW() WHERE project_id=$1",
     [projectId]
   );
 }
@@ -307,7 +311,7 @@ async function nightlyShutdown() {
     const ctx = await dockerCtxFor(env.project_id);
     if (ctx) { await dockerEnv.stopContainer(ctx.container); await dockerEnv.removeContainer(ctx.container); }
     await query(
-      "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
+      "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, port=NULL, updated_at=NOW() WHERE project_id=$1",
       [env.project_id]
     );
   }
@@ -354,8 +358,17 @@ async function cleanupProjectEnv(projectId) {
 async function _runEnvSetupDocker(projectId) {
   const ctx = await dockerCtxFor(projectId);
   if (!ctx) return;
+  // 租約：沿用現有租約（重跑 setup 時容器會 rm+run，埠不變即可重用），沒有才借新的。
+  // 池滿時注入 reclaim 徵收一個閒置夠久的測試區讓位——deploy／E2E 與人工建置走同一套規則。
   let port = ctx.project.port;
-  if (!port) { port = await allocateProjectPort(); await query('UPDATE projects SET port=$2 WHERE id=$1', [projectId, port]); }
+  if (!port) {
+    // odoo_envs 列必須先存在才寫得進租約（首次建置時尚無此列）
+    await query(
+      "INSERT INTO odoo_envs (project_id, status, updated_at) VALUES ($1,'setting_up',NOW()) ON CONFLICT (project_id) DO NOTHING",
+      [projectId]
+    );
+    port = await leasePort(projectId, { reclaim: (victimId) => stopEnv(victimId) });
+  }
   const envHost = envBindHost(port);
   fs.mkdirSync(ctx.envDir, { recursive: true });
   const readyMarker = path.join(ctx.envDir, '.docker-ready');
