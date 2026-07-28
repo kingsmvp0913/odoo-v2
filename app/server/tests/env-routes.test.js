@@ -64,7 +64,7 @@ test('POST setup → triggers runEnvSetup and returns ok', async () => {
   expect(res.body.ok).toBe(true);
   // fire-and-forget so we need to wait a tick
   await new Promise(r => setTimeout(r, 10));
-  // port 由 projects.port 決定（建專案時已固定分配），route 不再轉傳 body 參數
+  // port 為租約，存於 odoo_envs.port（啟動測試區時借、停止時還），route 不再轉傳 body 參數
   expect(mockRunEnvSetup).toHaveBeenCalledWith(String(projectId));
 });
 

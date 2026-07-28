@@ -196,7 +196,7 @@ describe('syncNginxMap', () => {
   });
 });
 
-// —— SQL 實跑（pg-mem）：只納入 running 且 projects.port 非空者 ——
+// —— SQL 實跑（pg-mem）：只納入 running 且租約埠（odoo_envs.port）非空者 ——
 describe('syncNginxMap SQL（pg-mem 實跑）', () => {
   const KEYS = ['NGINX_SYNC_CONF_FILE', 'NGINX_CONTAINER', 'ENV_PUBLIC_URL_TEMPLATE', 'ENV_BIND_HOST', 'ENV_TLS_CERT', 'ENV_TLS_KEY'];
   const OLD = {};
@@ -210,15 +210,15 @@ describe('syncNginxMap SQL（pg-mem 實跑）', () => {
     await dbModule.migrate();
 
     const { rows: [p1] } = await dbModule.query(
-      "INSERT INTO projects (name, odoo_version, folder_name, port) VALUES ('P1','17.0','alpha',21000) RETURNING id");
+      "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P1','17.0','alpha') RETURNING id");
     await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'running',21000)", [p1.id]);
 
     const { rows: [p2] } = await dbModule.query(
-      "INSERT INTO projects (name, odoo_version, folder_name, port) VALUES ('P2','17.0','beta',21001) RETURNING id");
+      "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P2','17.0','beta') RETURNING id");
     await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'idle',21001)", [p2.id]);
 
     const { rows: [p3] } = await dbModule.query(
-      "INSERT INTO projects (name, odoo_version, port) VALUES ('gamma','17.0',21002) RETURNING id");
+      "INSERT INTO projects (name, odoo_version) VALUES ('gamma','17.0') RETURNING id");
     await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'running',21002)", [p3.id]);
   });
 
@@ -252,5 +252,32 @@ describe('syncNginxMap SQL（pg-mem 實跑）', () => {
     expect(written).toContain('listen 21000 ssl;');
     expect(written).toContain('listen 21002 ssl;');
     expect(written).not.toContain('listen 21001 ssl;');
+  });
+
+  // 意圖：port 是租約，載體在 odoo_envs。若這裡讀成 projects.port，租約制上線後新專案
+  // 永遠產不出 server block——症狀是「測試區建好了但外面連不上」，且完全不指向 nginx 同步。
+  test('server block 的埠取自 odoo_envs.port，不是 projects.port', async () => {
+    process.env.NGINX_SYNC_CONF_FILE = '/m/envs.conf';
+    process.env.NGINX_CONTAINER = 'c';
+    process.env.ENV_PUBLIC_URL_TEMPLATE = 'https://odoo-ai-dev.example:{port}';
+    process.env.ENV_BIND_HOST = '10.0.0.1';
+    process.env.ENV_TLS_CERT = '/ssl/fullchain.cer';
+    process.env.ENV_TLS_KEY = '/ssl/private.key';
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('lease-only','17.0','lo') RETURNING id");
+    await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'running',21007)", [p.id]);
+
+    const store = new Map();
+    const fs = {
+      existsSync: pth => store.has(pth), readFileSync: pth => store.get(pth),
+      writeFileSync: (pth, c) => store.set(pth, c),
+      renameSync: (a, b) => { store.set(b, store.get(a)); store.delete(a); },
+      unlinkSync: pth => store.delete(pth),
+    };
+    const run = jest.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+
+    await syncNginxMap({ fs, run });
+
+    expect(store.get('/m/envs.conf')).toContain('listen 21007 ssl;');
   });
 });

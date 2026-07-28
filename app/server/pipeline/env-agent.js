@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { query } = require('../db');
 const { ensureTestingBranch } = require('./git');
 const { E2E_LOGIN } = require('./e2e-account');
-const { leasePort, releasePort, envBindHost, envPublicUrl } = require('../port-alloc');
+const { leasePort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 const { syncNginxMap } = require('../lib/nginx-map');
 

@@ -14,12 +14,14 @@ const { execFile } = require('child_process');
 // 共用 nginx 上其他站台的下次 reload。同步失敗只影響對外連結，不阻斷建/刪環境。
 // 曝露的埠段務必以 VPN／IP 白名單擋在可信來源內（測試區跑未審程式碼、且與平台共用 PG superuser）。
 
-// 只納入「測試區 running 且已配發 projects.port」者。
+// 只納入「測試區 running 且持有租約埠」者。
+// 埠是租約，載體在 odoo_envs.port（projects.port 已停用）。讀錯來源的症狀是
+// 「測試區建好了但外面連不上」，且錯誤完全不指向 nginx 同步，故此處來源不可再漂移。
 const RUNNING_SQL = `
-  SELECT p.port AS port
-  FROM projects p JOIN odoo_envs e ON e.project_id = p.id
-  WHERE e.status = 'running' AND p.port IS NOT NULL
-  ORDER BY p.port`;
+  SELECT e.port AS port
+  FROM odoo_envs e
+  WHERE e.status = 'running' AND e.port IS NOT NULL
+  ORDER BY e.port`;
 
 // 由對外網址樣板推導 server_name 的主機名（去掉 port）。樣板未設或無法解析 → null。
 function publicHost() {
