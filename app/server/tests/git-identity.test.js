@@ -1,4 +1,6 @@
 const { newDb } = require('pg-mem');
+const path = require('path');
+const { execFileSync } = require('child_process');
 process.env.APP_SECRET = 'test-app-secret';
 const { encrypt } = require('../lib/crypto');
 
@@ -16,6 +18,14 @@ afterAll(() => dbModule._setPoolForTesting(null));
 test('askpassAnswer：Username 提示回 x-access-token、其餘回 token', () => {
   expect(gitId.askpassAnswer("Username for 'https://github.com': ", 'TK')).toBe('x-access-token');
   expect(gitId.askpassAnswer("Password for 'https://x@github.com': ", 'TK')).toBe('TK');
+});
+
+test('git-askpass.sh 在 git 追蹤為可執行（100755）——POSIX 的 git 直接 exec GIT_ASKPASS，缺執行位元會 Permission denied', () => {
+  // 檢查 git index/tree 的 mode（跨平台不受 Windows 檔案系統無執行位元影響）
+  const out = execFileSync('git', ['ls-files', '-s', 'app/server/lib/git-askpass.sh'], {
+    cwd: path.resolve(__dirname, '..', '..', '..'), encoding: 'utf8',
+  });
+  expect(out.split(/\s+/)[0]).toBe('100755');
 });
 
 test('buildGitEnv：無 PAT → throw NoGitCredentialError', async () => {
