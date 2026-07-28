@@ -262,3 +262,19 @@ test('odoo_envs 有 sso_secret 與 e2e_password 欄位', async () => {
   const cols = rows.map(r => r.column_name);
   expect(cols).toEqual(expect.arrayContaining(['sso_secret', 'e2e_password']));
 });
+
+// 意圖：port 租約載體從 projects 移到 odoo_envs——併發借埠時要由 DB 擋下撞埠，
+// 且 port 為 NULL（未租用）的列必須能有多筆，故必須是 partial unique index。
+test('odoo_envs 有 last_active_at 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT 1 FROM information_schema.columns WHERE table_name='odoo_envs' AND column_name='last_active_at'"
+  );
+  expect(rows.length).toBe(1);
+});
+
+test('teams_settings 有 port_pool_min/max 欄位', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_name='teams_settings' AND column_name IN ('port_pool_min','port_pool_max')"
+  );
+  expect(rows.length).toBe(2);
+});

@@ -466,7 +466,12 @@ async function migrate() {
     // 唯一寫 false 的是 /api/auth/register。故新增欄位即回填既有列 true，不需另做 backfill。
     { table: 'users', col: 'approved',       sql: 'ALTER TABLE users ADD COLUMN approved BOOLEAN NOT NULL DEFAULT true' },
     { table: 'task_rejections', col: 'source', sql: "ALTER TABLE task_rejections ADD COLUMN source TEXT NOT NULL DEFAULT 'human'" },
-    { table: 'wiki_drift', col: 'applied_at', sql: 'ALTER TABLE wiki_drift ADD COLUMN applied_at TIMESTAMPTZ' }
+    { table: 'wiki_drift', col: 'applied_at', sql: 'ALTER TABLE wiki_drift ADD COLUMN applied_at TIMESTAMPTZ' },
+    // port 租約制：閒置判定用（由 cron 解析容器 log 更新）
+    { table: 'odoo_envs', col: 'last_active_at', sql: 'ALTER TABLE odoo_envs ADD COLUMN last_active_at TIMESTAMPTZ' },
+    // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
+    { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
+    { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -548,8 +553,12 @@ async function migrate() {
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
-  // 專案專屬測試埠不得重複：並行建立撞同埠時由 DB 擋下，呼叫端重取（見 port-alloc.js）
-  await query('CREATE UNIQUE INDEX IF NOT EXISTS projects_port_idx ON projects (port)').catch(() => {});
+  // port 改為租約制（借還於 odoo_envs.port）後，projects.port 不再配發，其 UNIQUE 必須移除，
+  // 否則舊資料殘留的埠會擋住新專案建立。欄位本身保留（db.js 無 drop column 機制，同 odoo_envs.pid 處境）。
+  await query('DROP INDEX IF EXISTS projects_port_idx').catch(() => {});
+  // 租約併發保護：兩個 setup 同時選到同埠時由 DB 擋下第二個，呼叫端重取（見 port-alloc.js leasePort）。
+  // 必須是 partial——未租用的列 port 為 NULL 且可有多筆。
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS odoo_envs_port_idx ON odoo_envs (port) WHERE port IS NOT NULL').catch(() => {});
 
   // 執行歷程：依 task_id 取全部事件、以 id 排序回放
   await query('CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events (task_id, id)').catch(() => {});
