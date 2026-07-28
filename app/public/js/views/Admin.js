@@ -23,7 +23,8 @@ window.AdminView = Vue.defineComponent({
         { title: '工作流程健檢', desc: '分析各 pipeline agent 近期表現，提出提示詞改進建議。', to: '/admin/health' },
         { title: '退回原因管理', desc: '檢視所有人工退回原因與分類，可批次刪除。', to: '/admin/rejections' },
         { title: '失敗分類樣本', desc: 'regex 判不出、交 haiku 分類的案例。看高頻 pattern，把復發的補進 regex 降低呼叫量。', to: '/admin/classify-samples' },
-        { title: 'Prompt 送出記錄', desc: '檢視最近送給 AI 的 prompt 完整內容，確認實際送出了什麼。', to: '/admin/prompt-logs' }
+        { title: 'Prompt 送出記錄', desc: '檢視最近送給 AI 的 prompt 完整內容，確認實際送出了什麼。', to: '/admin/prompt-logs' },
+        { title: '測試區 port 池', desc: '設定測試區可用的埠段範圍，檢視每個槽位由誰租用、閒置多久。', to: '/admin/port-pool' }
       ]
     };
   },
