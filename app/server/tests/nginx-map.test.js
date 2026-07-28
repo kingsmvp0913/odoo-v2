@@ -27,6 +27,10 @@ describe('buildServerBlocks', () => {
     // 靠 Host 拼絕對網址，跳轉/redirect 的 Location 就會掉 port、落到 443。
     expect(out).toContain('proxy_set_header Host $http_host;');
     expect(out).not.toContain('proxy_set_header Host $host;');
+    // X-Forwarded-Host 必送：Odoo 17 http.py 的 ProxyFix 守門是「proxy_mode 且 HTTP_X_FORWARDED_HOST
+    // 存在」兩者都要——漏了它，連 X-Forwarded-Proto:https 也一起被無視 → 產 http:// redirect → 打到
+    // 只收 TLS 的 port 回 400。用 $http_host 讓 ProxyFix 的 x_host 一併吃到正確 port。
+    expect(out).toContain('proxy_set_header X-Forwarded-Host $http_host;');
     // Odoo 需要的 websocket upgrade 標頭（缺了 bus/longpolling 靜默退化）
     expect(out).toContain('proxy_set_header Upgrade $http_upgrade;');
     expect(out).toContain('proxy_set_header Connection "upgrade";');
