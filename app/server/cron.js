@@ -101,6 +101,37 @@ function startCron() {
         await evaluateAndNotify();
       } catch (err) { console.error('[CRON] usage-gate:', err.message); }
 
+      // Nightly env shutdown。時區：預設 server 本機；容器跑 UTC 而維運預期台灣時間時，
+      // 設 ODOO_ENV_SHUTDOWN_TZ=Asia/Taipei（IANA 名稱）即可，不必動系統 TZ。
+      const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
+      const [sh, sm] = shutdownTime.split(':').map(Number);
+      const tz = process.env.ODOO_ENV_SHUTDOWN_TZ || '';
+      const nowDate = new Date();
+      let curH = nowDate.getHours(), curM = nowDate.getMinutes();
+      if (tz) {
+        try {
+          const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(nowDate);
+          [curH, curM] = parts.split(':').map(Number);
+        } catch (e) { console.error('[CRON] 無效的 ODOO_ENV_SHUTDOWN_TZ，退回本機時區:', e.message); }
+      }
+      const minuteKey = `${nowDate.getFullYear()}-${nowDate.getMonth()}-${nowDate.getDate()} ${curH}:${curM}`;
+      if (curH === sh && curM === sm && _lastShutdownMinute !== minuteKey) {
+        _lastShutdownMinute = minuteKey;
+        const { nightlyShutdown } = require('./pipeline/env-agent');
+        nightlyShutdown().catch(err => console.error('[CRON] nightly shutdown:', err.message));
+      }
+
+      // 閒置測試區回收：釋放 port 租約，讓小段埠能支撐大量專案。與夜間關機互不重疊
+      // （後者是全面清場，此處只收閒置的），兩者都跳過有進行中任務的專案。
+      if (Date.now() - _lastIdleSweepAt >= IDLE_SWEEP_INTERVAL_MS) {
+        _lastIdleSweepAt = Date.now();
+        const { sweepIdleEnvs } = require('./pipeline/env-agent');
+        sweepIdleEnvs().catch(err => console.error('[CRON] idle sweep:', err.message));
+      }
+
+      // 測試區生命週期（夜間關機／閒置回收）必須排在同步的提前 return 之前：
+      // 關閉同步是「不要去撈單」，與「要不要管理測試區」無關。綁在一起的話，
+      // 同步一關就變成埠只借不還、池子單向耗盡，且症狀完全不指向同步設定。
       // Only sync if at least one source is enabled
       if (!odooMs && !serviceMs) return;
 
@@ -144,34 +175,6 @@ function startCron() {
         // 同理：chat／cs 回報的「wiki 頁與程式碼漂移」慢慢分類，供健檢彙整
         const { classifyPendingWikiDrift } = require('./pipeline/wiki-drift');
         await classifyPendingWikiDrift().catch(err => console.error('[CRON] wiki-drift-classify:', err.message));
-      }
-
-      // Nightly env shutdown。時區：預設 server 本機；容器跑 UTC 而維運預期台灣時間時，
-      // 設 ODOO_ENV_SHUTDOWN_TZ=Asia/Taipei（IANA 名稱）即可，不必動系統 TZ。
-      const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
-      const [sh, sm] = shutdownTime.split(':').map(Number);
-      const tz = process.env.ODOO_ENV_SHUTDOWN_TZ || '';
-      const nowDate = new Date();
-      let curH = nowDate.getHours(), curM = nowDate.getMinutes();
-      if (tz) {
-        try {
-          const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(nowDate);
-          [curH, curM] = parts.split(':').map(Number);
-        } catch (e) { console.error('[CRON] 無效的 ODOO_ENV_SHUTDOWN_TZ，退回本機時區:', e.message); }
-      }
-      const minuteKey = `${nowDate.getFullYear()}-${nowDate.getMonth()}-${nowDate.getDate()} ${curH}:${curM}`;
-      if (curH === sh && curM === sm && _lastShutdownMinute !== minuteKey) {
-        _lastShutdownMinute = minuteKey;
-        const { nightlyShutdown } = require('./pipeline/env-agent');
-        nightlyShutdown().catch(err => console.error('[CRON] nightly shutdown:', err.message));
-      }
-
-      // 閒置測試區回收：釋放 port 租約，讓小段埠能支撐大量專案。與夜間關機互不重疊
-      // （後者是全面清場，此處只收閒置的），兩者都跳過有進行中任務的專案。
-      if (Date.now() - _lastIdleSweepAt >= IDLE_SWEEP_INTERVAL_MS) {
-        _lastIdleSweepAt = Date.now();
-        const { sweepIdleEnvs } = require('./pipeline/env-agent');
-        sweepIdleEnvs().catch(err => console.error('[CRON] idle sweep:', err.message));
       }
     } catch (err) {
       console.error('[CRON] tick error:', err.message);

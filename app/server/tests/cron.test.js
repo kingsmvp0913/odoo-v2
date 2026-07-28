@@ -7,6 +7,14 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({
 jest.mock('../pipeline/sync', () => ({
   syncUser: jest.fn().mockResolvedValue({ odoo: { added: 2 }, service: { added: 0 } })
 }));
+// node-cron 只保留「登記 callback」的行為，讓測試能直接手動跑一次 tick（不等真的到分鐘邊界）
+jest.mock('node-cron', () => ({ schedule: jest.fn(() => ({ stop: jest.fn() })) }));
+jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ processed: 0 }) }));
+jest.mock('../pipeline/usage-gate', () => ({ evaluateAndNotify: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../pipeline/env-agent', () => ({
+  nightlyShutdown: jest.fn().mockResolvedValue(undefined),
+  sweepIdleEnvs: jest.fn().mockResolvedValue(undefined)
+}));
 
 let dbModule, cronModule, notifyModule;
 let userId;
@@ -132,4 +140,26 @@ test('cleanupOldTokenUsage 裁掉超過保留期的列，保留較新的', async
   const { rows: newRows } = await dbModule.query("SELECT 1 FROM token_usage WHERE task_id='tu_recent'");
   expect(oldRows.length).toBe(0);
   expect(newRows.length).toBe(1);
+});
+
+// 意圖：關閉 Odoo／eService 同步是「不要去撈單」，不該連帶停掉測試區的生命週期管理。
+// 埠只借不還會讓池子單向耗盡，症狀是「沒幾個測試區卻說併發已滿」，完全不指向同步設定。
+// 註：目前 `(intervals.odoo_sync_interval || 60)` 讓 0 被當成 60，故那個提前 return 現階段其實
+// 不可達、本測試搬動前後皆綠；留著是為了在該預設值邏輯被修正時，生命週期不會又被同步條件擋住。
+test('兩個同步間隔都關閉時，閒置回收仍會執行', async () => {
+  const nodeCron = require('node-cron');
+  const envAgent = require('../pipeline/env-agent');
+  await dbModule.query(
+    'INSERT INTO teams_settings (id, odoo_sync_interval, service_sync_interval) VALUES (1, 0, 0) ' +
+    'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
+  );
+  envAgent.sweepIdleEnvs.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick();
+  } finally {
+    cronModule.stopCron();
+  }
+  expect(envAgent.sweepIdleEnvs).toHaveBeenCalled();
 });
