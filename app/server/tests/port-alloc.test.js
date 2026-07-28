@@ -117,3 +117,56 @@ test('池全滿且無可徵收 → 拋出錯誤，訊息含池範圍', async () 
   const c = await mkProject('c');
   await expect(leasePort(c, ALL_FREE)).rejects.toThrow(/21000-21001/);
 });
+
+// 意圖：池滿時要先讓位再借，而不是直接把錯誤丟給使用者。徵收動作由呼叫端注入——
+// port-alloc 若直接 require env-agent 會造成循環相依（env-agent 已 require port-alloc）。
+test('池滿 + 有可徵收者 → 徵收後借得到埠', async () => {
+  await dbModule.query('INSERT INTO teams_settings (id, port_pool_min, port_pool_max) VALUES (1, 21000, 21000)');
+  const a = await mkProject('a');
+  await leasePort(a, ALL_FREE); // 佔滿唯一的槽
+  await dbModule.query("UPDATE odoo_envs SET status='running', last_active_at=NOW() - interval '30 minutes' WHERE project_id=$1", [a]);
+
+  const b = await mkProject('b');
+  const reclaimed = [];
+  const port = await leasePort(b, {
+    isPortFree: async () => true,
+    reclaim: async (victimId) => {
+      reclaimed.push(victimId);
+      await releasePort(victimId);
+      await dbModule.query("UPDATE odoo_envs SET status='idle' WHERE project_id=$1", [victimId]);
+    },
+  });
+  expect(reclaimed).toEqual([a]);
+  expect(port).toBe(21000);
+});
+
+test('池滿 + 無可徵收者（都還很活躍）→ 拋錯且不呼叫 reclaim', async () => {
+  await dbModule.query('INSERT INTO teams_settings (id, port_pool_min, port_pool_max) VALUES (1, 21000, 21000)');
+  const a = await mkProject('a');
+  await leasePort(a, ALL_FREE);
+  await dbModule.query("UPDATE odoo_envs SET status='running', last_active_at=NOW() WHERE project_id=$1", [a]);
+
+  const b = await mkProject('b');
+  let called = false;
+  await expect(leasePort(b, {
+    isPortFree: async () => true,
+    reclaim: async () => { called = true; },
+  })).rejects.toThrow(/併發已滿/);
+  expect(called).toBe(false);
+});
+
+// 意圖：徵收只做一輪。若做成迴圈，尖峰時會連環砍掉一整排測試區，使用者體感是「別人一直把我踢掉」。
+test('徵收後仍借不到 → 直接拋錯，不再連環徵收', async () => {
+  await dbModule.query('INSERT INTO teams_settings (id, port_pool_min, port_pool_max) VALUES (1, 21000, 21000)');
+  const a = await mkProject('a');
+  await leasePort(a, ALL_FREE);
+  await dbModule.query("UPDATE odoo_envs SET status='running', last_active_at=NOW() - interval '30 minutes' WHERE project_id=$1", [a]);
+
+  const b = await mkProject('b');
+  let calls = 0;
+  await expect(leasePort(b, {
+    isPortFree: async () => true,
+    reclaim: async () => { calls++; /* 故意不釋放 */ },
+  })).rejects.toThrow(/併發已滿/);
+  expect(calls).toBe(1);
+});

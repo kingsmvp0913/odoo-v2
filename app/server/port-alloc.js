@@ -50,13 +50,8 @@ async function claimPort(projectId, port) {
   return true;
 }
 
-// 借一個埠給該專案：取池內最低「未被租用且宿主可實際綁定」的埠，寫進 odoo_envs.port 並回傳。
-// 探測與寫入之間存在 TOCTOU 空窗，由 odoo_envs_port_idx（partial UNIQUE）擋下併發撞埠，
-// 撞到就往下一個埠重試——這是原本「建立時固定配發＋projects.port UNIQUE」那套保護的等價替代。
-async function leasePort(projectId, deps = {}) {
-  const probe = deps.isPortFree || isPortFree;
-  const claim = deps.claim || claimPort;
-  const { min, max } = await getPoolRange();
+// 掃一輪池子，找到就借。回 null 表示這輪全滿。
+async function _tryLease(projectId, probe, claim, min, max) {
   const { rows } = await query('SELECT port FROM odoo_envs WHERE port IS NOT NULL');
   const used = new Set(rows.map(r => r.port));
   for (let p = min; p <= max; p++) {
@@ -70,7 +65,34 @@ async function leasePort(projectId, deps = {}) {
       throw err;
     }
   }
-  throw new Error(`測試區併發已滿：埠池 ${min}-${max} 已全數租用或被宿主佔用`);
+  return null;
+}
+
+// 借一個埠給該專案：取池內最低「未被租用且宿主可實際綁定」的埠，寫進 odoo_envs.port 並回傳。
+// 探測與寫入之間存在 TOCTOU 空窗，由 odoo_envs_port_idx（partial UNIQUE）擋下併發撞埠，
+// 撞到就往下一個埠重試——這是原本「建立時固定配發＋projects.port UNIQUE」那套保護的等價替代。
+//
+// 池滿時先徵收一個閒置夠久的測試區讓位（deps.reclaim 由呼叫端注入，未注入即不徵收）。
+// 徵收只做一輪：做成迴圈的話尖峰時會連環砍掉一整排測試區，使用者體感是「一直被別人踢掉」。
+async function leasePort(projectId, deps = {}) {
+  const probe = deps.isPortFree || isPortFree;
+  const claim = deps.claim || claimPort;
+  const { min, max } = await getPoolRange();
+
+  const first = await _tryLease(projectId, probe, claim, min, max);
+  if (first != null) return first;
+
+  if (deps.reclaim) {
+    const { findReclaimable } = require('./lib/port-reclaim');
+    const victim = await findReclaimable();
+    if (victim) {
+      await deps.reclaim(victim.project_id);
+      const second = await _tryLease(projectId, probe, claim, min, max);
+      if (second != null) return second;
+    }
+  }
+
+  throw new Error(`測試區併發已滿（埠池 ${min}-${max}）且無閒置可回收，請先停止其他專案的測試區，或聯絡管理員擴充 port 範圍`);
 }
 
 // 歸還租約。停機／夜間關機／閒置回收／刪除專案皆須呼叫，否則池子會單向耗盡。
