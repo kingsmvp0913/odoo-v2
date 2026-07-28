@@ -176,24 +176,15 @@ function registerRoutes(app) {
     try {
       const { name, odoo_version, description, folder_name } = req.body;
       if (!name || !odoo_version) return res.status(400).json({ error: 'name and odoo_version required' });
-      const { allocateProjectPort } = require('./port-alloc');
-      // 建立時就固定分配專屬測試埠：不同專案永遠不同埠，消除執行期並行選埠相撞。
-      // 並行建立偶爾撞同埠 → projects.port UNIQUE 擋下、重取再試（建立為低頻，retry 成本可忽略）。
-      for (let attempt = 0; ; attempt++) {
-        const port = await allocateProjectPort();
-        try {
-          const { rows } = await query(
-            // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
-            // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
-            `INSERT INTO projects (name, odoo_version, description, folder_name, port, e2e_disabled) VALUES ($1, $2, $3, $4, $5, true) RETURNING *`,
-            [name, odoo_version, description || null, folder_name || null, port]
-          );
-          return res.status(201).json(rows[0]);
-        } catch (err) {
-          if (err.code === '23505' && err.constraint === 'projects_port_idx' && attempt < 5) continue; // 撞埠→重取
-          throw err; // 名稱重複等其他違反 → 交由外層處理
-        }
-      }
+      // 測試埠不在此配發：已改為租約制，由 env-agent 於「啟動測試區」時向池借、停止時歸還
+      // （見 port-alloc.js leasePort）。建立時就佔埠會讓沒開過測試區的專案白白吃掉併發槽。
+      const { rows } = await query(
+        // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
+        // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
+        `INSERT INTO projects (name, odoo_version, description, folder_name, e2e_disabled) VALUES ($1, $2, $3, $4, true) RETURNING *`,
+        [name, odoo_version, description || null, folder_name || null]
+      );
+      return res.status(201).json(rows[0]);
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'project name already exists' });
       res.status(500).json({ error: err.message });

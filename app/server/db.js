@@ -497,19 +497,8 @@ async function migrate() {
     }
   }
 
-  // projects.port 一次性回填：每專案固定分配專屬測試埠（新欄位，既有專案初次皆為 NULL）。
-  // 依 id 順序自既有最大埠之上連續配發（首次即 8069 起）；冪等（無 NULL 即跳過）。
-  {
-    const { rows: nullRows } = await query('SELECT id FROM projects WHERE port IS NULL ORDER BY id');
-    if (nullRows.length) {
-      const { rows: [mx] } = await query('SELECT MAX(port) AS m FROM projects');
-      let next = Math.max(8069, mx && mx.m != null ? mx.m + 1 : 8069);
-      for (const r of nullRows) {
-        await query('UPDATE projects SET port=$1 WHERE id=$2', [next, r.id]);
-        next++;
-      }
-    }
-  }
+  // （原 projects.port 一次性回填已移除：埠改為租約制，載體是 odoo_envs.port；
+  //   projects.port 欄位因 db.js 無 drop column 機制而保留，但不再讀寫。）
 
   // 退場：E2E 改全域固定帳號（e2e-account.js），移除每專案欄位（存在才 drop，冪等）
   for (const col of ['e2e_test_login', 'e2e_test_password_enc']) {

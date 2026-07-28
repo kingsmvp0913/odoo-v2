@@ -233,3 +233,14 @@ test('POST reclone：發起 user 未設 PAT、repo 已 clone（.git 存在）→
   expect(res.status).toBe(400);
   expect(res.body.error).toMatch(/PAT/);
 });
+
+// 意圖：埠改為租約制後，建立專案不該再佔用埠——否則專案數一多就把整池吃光，
+// 而那些專案的測試區可能根本沒開過。
+test('建立專案不配發 port（port 欄位維持 NULL）', async () => {
+  const res = await request(app)
+    .post('/api/projects')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ name: 'no-port-proj', odoo_version: '17.0' });
+  expect(res.status).toBe(201);
+  expect(res.body.port).toBeNull();
+});

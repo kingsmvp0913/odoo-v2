@@ -278,3 +278,12 @@ test('teams_settings 有 port_pool_min/max 欄位', async () => {
   );
   expect(rows.length).toBe(2);
 });
+
+// 意圖：租約制下 projects.port 已無意義。舊的一次性回填若留著，每次啟動都會把 NULL 填回
+// 8069 起的舊池埠段——值沒人讀，卻會讓人以為這欄位還有效，且與現行池範圍完全無關。
+test('migrate 不再回填 projects.port', async () => {
+  await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('no-backfill','17.0')");
+  await dbModule.migrate();
+  const { rows: [p] } = await dbModule.query("SELECT port FROM projects WHERE name='no-backfill'");
+  expect(p.port).toBeNull();
+});
