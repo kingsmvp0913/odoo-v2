@@ -91,8 +91,11 @@ function startCron() {
     _tickRunning = true;
     try {
       const intervals = await getGlobalSettings();
-      const odooMs    = (intervals.odoo_sync_interval || 60) * 60000;
-      const serviceMs = (intervals.service_sync_interval || 60) * 60000;
+      // 必須是 ?? 而非 ||：管理員設定頁明寫「同步間隔（分鐘，0 停用）」，而 0 || 60 會算成 60
+      // ——使用者以為關掉了，實際照樣每小時撈單，且畫面顯示的 0 看起來完全正常。
+      // 只有未設定（NULL）才退回預設 60。
+      const odooMs    = (intervals.odoo_sync_interval ?? 60) * 60000;
+      const serviceMs = (intervals.service_sync_interval ?? 60) * 60000;
       const testMode  = !!intervals.test_mode;
 
       // 用量閘門：每 tick 評估一次，未 blocked→blocked 的邊緣發一次通知（旁路，失敗只記 log）

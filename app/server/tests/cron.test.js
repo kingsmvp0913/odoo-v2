@@ -144,8 +144,9 @@ test('cleanupOldTokenUsage 裁掉超過保留期的列，保留較新的', async
 
 // 意圖：關閉 Odoo／eService 同步是「不要去撈單」，不該連帶停掉測試區的生命週期管理。
 // 埠只借不還會讓池子單向耗盡，症狀是「沒幾個測試區卻說併發已滿」，完全不指向同步設定。
-// 註：目前 `(intervals.odoo_sync_interval || 60)` 讓 0 被當成 60，故那個提前 return 現階段其實
-// 不可達、本測試搬動前後皆綠；留著是為了在該預設值邏輯被修正時，生命週期不會又被同步條件擋住。
+//
+// ⚠ 順序有意義：閒置掃描的節流狀態 `_lastIdleSweepAt` 是 cron.js 的模組層變數，跑過一次 tick
+// 就會用掉 10 分鐘額度。本測試必須是本檔中第一個跑完整 tick 的案例，否則會被節流擋掉而假紅。
 test('兩個同步間隔都關閉時，閒置回收仍會執行', async () => {
   const nodeCron = require('node-cron');
   const envAgent = require('../pipeline/env-agent');
@@ -162,4 +163,25 @@ test('兩個同步間隔都關閉時，閒置回收仍會執行', async () => {
     cronModule.stopCron();
   }
   expect(envAgent.sweepIdleEnvs).toHaveBeenCalled();
+});
+
+// 意圖：管理員設定頁明寫「同步間隔（分鐘，0 停用）」。若用 `|| 60`，0 會被算成 60——
+// 使用者以為關掉了卻照樣每小時撈單，而畫面上那個 0 看起來完全正常。這種「設定假裝生效」
+// 的 bug 沒有任何症狀指向成因，只能靠測試釘住。
+test('同步間隔設 0 → 真的停用，不去撈單', async () => {
+  const nodeCron = require('node-cron');
+  const { syncUser } = require('../pipeline/sync');
+  await dbModule.query(
+    'INSERT INTO teams_settings (id, odoo_sync_interval, service_sync_interval) VALUES (1, 0, 0) ' +
+    'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
+  );
+  syncUser.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick();
+  } finally {
+    cronModule.stopCron();
+  }
+  expect(syncUser).not.toHaveBeenCalled();
 });
