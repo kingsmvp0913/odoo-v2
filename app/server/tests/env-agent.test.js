@@ -30,6 +30,21 @@ describe('env-agent 測試區 seed 不外洩平台憑證', () => {
   });
 });
 
+// 意圖：Odoo 的 HTTP 路由只在 server 進程啟動時 import 已安裝模組的 controllers 建立。若 idx_aidev_sso
+// 改由 docker exec 另起進程安裝（upgradeModules），模組雖進 DB，常駐 server 從沒 import 過它的
+// controllers → /aidev/sso 回 404、免密登入整條死。鎖住「一律由 initArgs 交給常駐 server 自己 -i」。
+describe('env-agent SSO 模組必須由常駐 server 進程安裝', () => {
+  test('非首次 build 的 initArgs 仍帶 -i idx_aidev_sso（不是空陣列）', () => {
+    const m = src.match(/const initArgs = firstBuild[\s\S]{0,220}?;/);
+    expect(m).not.toBeNull();
+    expect(m[0]).toMatch(/:\s*\['-i',\s*'idx_aidev_sso'\]/);
+  });
+
+  test('不得改回用 upgradeModules（docker exec）補裝 idx_aidev_sso', () => {
+    expect(src).not.toMatch(/upgradeModules\([^)]*idx_aidev_sso/);
+  });
+});
+
 describe('seed_odoo_users.py 寫入 SSO config param', () => {
   test('commit 前把 AIDEV_SSO_SECRET 寫入 ir.config_parameter aidev.sso_secret', () => {
     expect(seedSrc).toMatch(/set_param\(\s*['"]aidev\.sso_secret['"]/);

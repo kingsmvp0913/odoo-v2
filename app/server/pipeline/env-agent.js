@@ -399,7 +399,13 @@ async function _runEnvSetupDocker(projectId) {
 
   // 2) 移除同名舊容器（冪等）→ 起常駐容器（首次帶 init 旗標，Odoo 裝完 base 續跑 server）
   await dockerEnv.removeContainer(ctx.container);
-  const initArgs = firstBuild ? ['-i', 'base,idx_aidev_sso', '--without-demo=all', '--load-language=zh_TW'] : [];
+  // idx_aidev_sso 一律由「常駐 server 進程自己」以 -i 裝：Odoo 的 HTTP 路由是進程啟動時 import
+  // 已安裝模組的 controllers 建立的，用 docker exec 另起進程裝只會把模組寫進 DB，常駐進程從沒
+  // import 過該模組的 controllers → /aidev/sso 回 404（Odoo 找不到頁面），要重啟容器才會出現。
+  // -i 對已安裝模組 idempotent，故非首次也帶。
+  const initArgs = firstBuild
+    ? ['-i', 'base,idx_aidev_sso', '--without-demo=all', '--load-language=zh_TW']
+    : ['-i', 'idx_aidev_sso'];
   const run = await dockerEnv.runContainer({
     name: ctx.container, image: ctx.image, host: envHost, port, dbName: ctx.dbName,
     dbArgs: ctx.dbArgs, mounts: ctx.mounts, serverArgs: initArgs, filestoreDir,
@@ -419,13 +425,6 @@ async function _runEnvSetupDocker(projectId) {
 
   // 4) 補裝自訂模組 Python 相依（image 未內建）＋ seed users
   try { log += await installModuleRequirements(projectId); } catch (e) { log += `[deps] FAIL ${e.message}\n`; }
-  // 既有環境（非首次 build）initArgs 為空 → idx_aidev_sso 未隨 base 裝上，SSO 端點 404、config param 無消費者。
-  // 首次已由 initArgs `-i base,idx_aidev_sso` 裝；此處只補非首次。用既有 upgradeModules（-i/-u，deploy 亦以此
-  // 對運行中容器裝/升模組）；-i 對已裝模組 idempotent，可安全無條件執行。best-effort：失敗只記錄不阻斷環境起來。
-  if (!firstBuild) {
-    try { await upgradeModules(projectId, ['idx_aidev_sso']); log += '[sso] idx_aidev_sso 安裝/升級 OK\n'; }
-    catch (e) { log += `[sso] idx_aidev_sso 安裝失敗：${String(e.message || e).slice(-200)}\n`; }
-  }
   try { log += await _seedOdooUsersDocker(ctx); } catch (e) { log += `[seed] FAIL ${e.message}\n`; }
 
   await query(
