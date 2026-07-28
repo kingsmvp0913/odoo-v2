@@ -43,9 +43,43 @@ function isPortFree(host, port) {
   });
 }
 
-// 取池內最低「DB 未配發且宿主可實際綁定」的埠（自動回收已刪專案釋出的埠）。
-// 探測與真正 run 之間存在 TOCTOU 空窗，但埠於專案建立時配發一次、projects.port 有 UNIQUE 擋併發，
-// 實務上足夠；併發同時選到同埠仍由 UNIQUE 擋下、由呼叫端 retry。
+// 把埠寫進該專案的租約列。抽成可注入的一步，讓「撞 UNIQUE 要重取」這條路徑能被單測驗證
+// （pg-mem 不保證支援 partial unique index）。回 true 表示搶到。
+async function claimPort(projectId, port) {
+  await query('UPDATE odoo_envs SET port=$2, updated_at=NOW() WHERE project_id=$1', [projectId, port]);
+  return true;
+}
+
+// 借一個埠給該專案：取池內最低「未被租用且宿主可實際綁定」的埠，寫進 odoo_envs.port 並回傳。
+// 探測與寫入之間存在 TOCTOU 空窗，由 odoo_envs_port_idx（partial UNIQUE）擋下併發撞埠，
+// 撞到就往下一個埠重試——這是原本「建立時固定配發＋projects.port UNIQUE」那套保護的等價替代。
+async function leasePort(projectId, deps = {}) {
+  const probe = deps.isPortFree || isPortFree;
+  const claim = deps.claim || claimPort;
+  const { min, max } = await getPoolRange();
+  const { rows } = await query('SELECT port FROM odoo_envs WHERE port IS NOT NULL');
+  const used = new Set(rows.map(r => r.port));
+  for (let p = min; p <= max; p++) {
+    if (used.has(p)) continue;
+    if (!await probe(loopbackHostForPort(p), p)) continue;
+    try {
+      await claim(projectId, p);
+      return p;
+    } catch (err) {
+      if (err.code === '23505') continue; // 併發搶同埠：換下一個
+      throw err;
+    }
+  }
+  throw new Error(`測試區併發已滿：埠池 ${min}-${max} 已全數租用或被宿主佔用`);
+}
+
+// 歸還租約。停機／夜間關機／閒置回收／刪除專案皆須呼叫，否則池子會單向耗盡。
+async function releasePort(projectId) {
+  await query('UPDATE odoo_envs SET port=NULL, updated_at=NOW() WHERE project_id=$1', [projectId]);
+}
+
+// 舊的「建立專案時固定配發 projects.port」路徑。已由 leasePort 取代，僅為讓尚未改寫的
+// 呼叫端（env-agent.js／project-routes.js，於後續 task 改）仍能載入而暫留；勿用於新程式碼。
 async function allocateProjectPort(deps = {}) {
   const probe = deps.isPortFree || isPortFree;
   const { min, max } = await getPoolRange();
@@ -89,6 +123,7 @@ function envPublicUrl(port, folder) {
 }
 
 module.exports = {
-  allocateProjectPort, getPoolRange, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree,
+  leasePort, releasePort, getPoolRange, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree,
+  allocateProjectPort, // 暫留：待 env-agent／project-routes 改用 leasePort 後移除
   DEFAULT_PORT_MIN, DEFAULT_PORT_MAX, LOOPBACK_BASE,
 };
