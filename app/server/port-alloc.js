@@ -1,18 +1,34 @@
 const net = require('net');
 const { query } = require('./db');
 
-// 每個專案在「建立時」固定分配一個專屬測試埠（projects.port），執行期只讀不挑，
-// 從根本消除多人並行開測試區時「兩專案動態選到同埠→同網址→互蓋」的 race。
-// 刪專案為硬刪除（DELETE FROM projects）→ 該列的 port 隨之釋放，下次建立自動回收。
-// 預設範圍維持 8069-20068；可由 PROJECT_PORT_MIN/PROJECT_PORT_MAX 覆寫，供「宿主低位埠已被
-// 其他服務佔滿」的機器整段搬到乾淨區段，而不影響未設定的機器（預設行為完全不變）。
-const PORT_MIN = Number(process.env.PROJECT_PORT_MIN) || 8069;
-const PORT_MAX = Number(process.env.PROJECT_PORT_MAX) || 20068; // 12000 個槽；因埠會回收，只需容納「同時存在」的專案數（>2000 仍大量餘裕），且遠低於 OS ephemeral 埠段（32768）
+// 測試區 port 採「租約制」：專案啟動測試區時從池中借一個、停止時歸還（見 leasePort/releasePort）。
+// 池範圍必須與「nginx 容器 publish 的埠段 ＋ 對外 NAT／防火牆放行段」逐字一致——平台改得了池設定，
+// 改不了那兩層，設定超出放行範圍時測試區會靜默連不上（管理員介面的常駐警語即為此）。
+// 預設 21000-21012：高位段乾淨，且避開 8069（Odoo）／8080（Tomcat 等）這類本機常見服務。
+// 優先序 DB（teams_settings）> env > 預設值；DB 於執行期讀取，管理員改完免重啟即生效。
+const DEFAULT_PORT_MIN = 21000;
+const DEFAULT_PORT_MAX = 21012;
 
 // loopback host 的推導基準：固定值，不隨 PORT_MIN 移動。若跟著 PORT_MIN 走，一旦某機把
 // PORT_MIN 調高，該機 DB 內既有的低位埠會算出負的 n，(n >> 8) & 255 產生無效 host →
 // 既有專案測試區網址整個壞掉，且錯誤訊息不會指向埠設定。
 const LOOPBACK_BASE = 8069;
+
+// 池範圍的單一真相來源。每次借埠都重讀，故管理員介面改完下一次借埠就生效（不需重啟 server）。
+// 三層各自獨立退回：DB 只設了 min 沒設 max 時，max 仍退回 env／預設，不會被當成 0。
+async function getPoolRange() {
+  let row = null;
+  try {
+    const { rows } = await query('SELECT port_pool_min, port_pool_max FROM teams_settings WHERE id=1');
+    row = rows[0] || null;
+  } catch { /* 尚未 migrate 或無 teams_settings：退回 env／預設 */ }
+  const envMin = Number(process.env.PROJECT_PORT_MIN) || DEFAULT_PORT_MIN;
+  const envMax = Number(process.env.PROJECT_PORT_MAX) || DEFAULT_PORT_MAX;
+  return {
+    min: row?.port_pool_min ?? envMin,
+    max: row?.port_pool_max ?? envMax,
+  };
+}
 
 // —— 唯一的 IO 邊界：實際嘗試綁定，測試以 deps.isPortFree 注入 mock。 ——
 // 探測位址必須是 docker 待會要綁的完全相同位址（該埠的 loopback host）：衝突多來自其他服務綁
@@ -27,18 +43,19 @@ function isPortFree(host, port) {
   });
 }
 
-// 取 [PORT_MIN, PORT_MAX] 內最低「DB 未配發且宿主可實際綁定」的埠（自動回收已刪專案釋出的埠）。
+// 取池內最低「DB 未配發且宿主可實際綁定」的埠（自動回收已刪專案釋出的埠）。
 // 探測與真正 run 之間存在 TOCTOU 空窗，但埠於專案建立時配發一次、projects.port 有 UNIQUE 擋併發，
 // 實務上足夠；併發同時選到同埠仍由 UNIQUE 擋下、由呼叫端 retry。
 async function allocateProjectPort(deps = {}) {
   const probe = deps.isPortFree || isPortFree;
+  const { min, max } = await getPoolRange();
   const { rows } = await query('SELECT port FROM projects WHERE port IS NOT NULL');
   const used = new Set(rows.map(r => r.port));
-  for (let p = PORT_MIN; p <= PORT_MAX; p++) {
+  for (let p = min; p <= max; p++) {
     if (used.has(p)) continue;
     if (await probe(loopbackHostForPort(p), p)) return p;
   }
-  throw new Error(`無可用測試埠：${PORT_MIN}-${PORT_MAX} 已全數配發或被宿主佔用`);
+  throw new Error(`無可用測試埠：${min}-${max} 已全數配發或被宿主佔用`);
 }
 
 // 每個測試區用不同的 loopback host（127.0.0.0/8 全段在 Windows/Linux 皆路由到本機），
@@ -71,4 +88,7 @@ function envPublicUrl(port, folder) {
   return tpl.replace(/\{folder\}/g, folder || '').replace(/\{port\}/g, String(port)).replace(/\{host\}/g, host);
 }
 
-module.exports = { allocateProjectPort, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree, PORT_MIN, PORT_MAX, LOOPBACK_BASE };
+module.exports = {
+  allocateProjectPort, getPoolRange, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree,
+  DEFAULT_PORT_MIN, DEFAULT_PORT_MAX, LOOPBACK_BASE,
+};
