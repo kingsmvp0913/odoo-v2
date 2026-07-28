@@ -100,20 +100,6 @@ async function releasePort(projectId) {
   await query('UPDATE odoo_envs SET port=NULL, updated_at=NOW() WHERE project_id=$1', [projectId]);
 }
 
-// 舊的「建立專案時固定配發 projects.port」路徑。已由 leasePort 取代，僅為讓尚未改寫的
-// 呼叫端（env-agent.js／project-routes.js，於後續 task 改）仍能載入而暫留；勿用於新程式碼。
-async function allocateProjectPort(deps = {}) {
-  const probe = deps.isPortFree || isPortFree;
-  const { min, max } = await getPoolRange();
-  const { rows } = await query('SELECT port FROM projects WHERE port IS NOT NULL');
-  const used = new Set(rows.map(r => r.port));
-  for (let p = min; p <= max; p++) {
-    if (used.has(p)) continue;
-    if (await probe(loopbackHostForPort(p), p)) return p;
-  }
-  throw new Error(`無可用測試埠：${min}-${max} 已全數配發或被宿主佔用`);
-}
-
 // 每個測試區用不同的 loopback host（127.0.0.0/8 全段在 Windows/Linux 皆路由到本機），
 // 讓瀏覽器 cookie 依 host 隔離：多開不同專案測試區不再互蓋 session（Odoo「操作已過期」）。
 // 用字面 IP 而非 *.localhost 子網域——curl／Playwright／瀏覽器免 DNS 直接解析，Windows 也不會解析失敗。
@@ -146,6 +132,5 @@ function envPublicUrl(port, folder) {
 
 module.exports = {
   leasePort, releasePort, getPoolRange, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree,
-  allocateProjectPort, // 暫留：待 env-agent／project-routes 改用 leasePort 後移除
   DEFAULT_PORT_MIN, DEFAULT_PORT_MAX, LOOPBACK_BASE,
 };
