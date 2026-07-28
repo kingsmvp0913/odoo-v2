@@ -317,6 +317,54 @@ async function nightlyShutdown() {
   }
 }
 
+// 閒置回收：port 池能用一小段埠支撐大量專案的前提。每輪做兩件事——
+//   1. 從容器 log 更新 last_active_at（真實 HTTP 請求才算；輪詢類不算，見 lib/env-activity）
+//   2. 閒置逾時或壽命逾時的環境停機並歸還租約
+// 門檻刻意比「池滿徵收」（ENV_IDLE_TIMEOUT_PRESSURE_MIN，預設 15 分）寬鬆：沒人在等就別打擾使用者。
+// 壽命上限是保底——輪詢類請求若有漏擋，環境會永遠不閒置，靠這條收掉。
+const IDLE_TIMEOUT_MIN = parseInt(process.env.ENV_IDLE_TIMEOUT_MIN || '60', 10);
+const MAX_LIFETIME_HOURS = parseInt(process.env.ENV_MAX_LIFETIME_HOURS || '8', 10);
+
+async function sweepIdleEnvs(deps = {}) {
+  const idleMin = deps.idleMin ?? IDLE_TIMEOUT_MIN;
+  const maxHours = deps.maxHours ?? MAX_LIFETIME_HOURS;
+  const { parseLastActivity } = require('../lib/env-activity');
+  const { rows } = await query("SELECT project_id FROM odoo_envs WHERE status='running'");
+  let updated = 0, stopped = 0;
+
+  for (const { project_id: projectId } of rows) {
+    // 使用中的專案完全不碰（同 nightlyShutdown 的鐵則）：砍了會讓 deploy/E2E 中途死掉被誤歸因
+    const { rows: [busy] } = await query(
+      "SELECT 1 FROM tasks WHERE project_id=$1 AND status IN ('deploy_testing','playwright_running') AND is_paused=false AND is_hidden=false LIMIT 1",
+      [projectId]
+    );
+    if (busy) continue;
+
+    // 抓 log 失敗（容器沒了／docker 暫時不通）不得中斷整輪——一個壞環境不該讓所有環境都收不掉
+    try {
+      const ctx = await dockerCtxFor(projectId);
+      if (ctx) {
+        const logText = await dockerEnv.containerLogs(ctx.container, { tail: 500 });
+        const at = parseLastActivity(logText);
+        if (at) {
+          await query('UPDATE odoo_envs SET last_active_at=$2 WHERE project_id=$1', [projectId, at.toISOString()]);
+          updated++;
+        }
+      }
+    } catch { /* 抓不到活動時間就沿用既有值，交由下方逾時判定 */ }
+
+    const { rows: [expired] } = await query(
+      `SELECT 1 FROM odoo_envs
+        WHERE project_id=$1
+          AND ( COALESCE(last_active_at, updated_at) < NOW() - ($2 || ' minutes')::interval
+             OR created_at < NOW() - ($3 || ' hours')::interval )`,
+      [projectId, String(idleMin), String(maxHours)]
+    );
+    if (expired) { await stopEnv(projectId); stopped++; }
+  }
+  return { updated, stopped };
+}
+
 // 該專案是否有「使用中」的測試環境：建立中／運行中，或容器仍在／已建置完成（.docker-ready 仍在）。
 // 用於防呆：環境使用中時不得移除其掛載的 repo。
 async function envIsActive(projectId) {
@@ -479,4 +527,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };

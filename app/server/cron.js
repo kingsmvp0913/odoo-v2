@@ -82,6 +82,8 @@ async function cleanupOldTokenUsage() {
 
 let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
 let _lastShutdownMinute = null; // 同一分鐘只觸發一次夜間關機（tick 延遲時的重複防護）
+let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
+const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
 function startCron() {
   _job = cron.schedule('* * * * *', async () => {
@@ -162,6 +164,14 @@ function startCron() {
         _lastShutdownMinute = minuteKey;
         const { nightlyShutdown } = require('./pipeline/env-agent');
         nightlyShutdown().catch(err => console.error('[CRON] nightly shutdown:', err.message));
+      }
+
+      // 閒置測試區回收：釋放 port 租約，讓小段埠能支撐大量專案。與夜間關機互不重疊
+      // （後者是全面清場，此處只收閒置的），兩者都跳過有進行中任務的專案。
+      if (Date.now() - _lastIdleSweepAt >= IDLE_SWEEP_INTERVAL_MS) {
+        _lastIdleSweepAt = Date.now();
+        const { sweepIdleEnvs } = require('./pipeline/env-agent');
+        sweepIdleEnvs().catch(err => console.error('[CRON] idle sweep:', err.message));
       }
     } catch (err) {
       console.error('[CRON] tick error:', err.message);
