@@ -543,6 +543,67 @@ function registerRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // 逐檔追問釐清（給非工程師）：body = { repo, file, question }。針對單一衝突檔問 AI，白話作答並在必要
+  // 時調整 ★建議；問答串存回 merge_conflict_data.details[file].qa。全程停 merge_conflict、不推進 pipeline。
+  app.post('/api/tasks/:id/merge-clarify', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        'SELECT id, task_id, status, project_id, merge_conflict_data, analysis_yaml FROM tasks WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
+      if (rows[0].status !== 'merge_conflict') {
+        return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
+      }
+      const repo = String(req.body?.repo || '').trim();
+      const file = String(req.body?.file || '').trim();
+      const question = String(req.body?.question || '').trim();
+      if (!repo || !file) return res.status(400).json({ error: 'repo and file required' });
+      if (!question) return res.status(400).json({ error: 'question required' });
+      if (!rows[0].project_id) return res.status(400).json({ error: '此任務沒有專案，無法追問' });
+
+      let cd = null;
+      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+      if (!cd || !Array.isArray(cd.repos)) return res.status(400).json({ error: '無衝突資料可追問' });
+      if (cd.rebuild) return res.status(400).json({ error: '重建來源的衝突不支援追問，請手動解決' });
+      const repoEntry = cd.repos.find(r => r.repo === repo);
+      if (!repoEntry || !(repoEntry.files || []).includes(file)) {
+        return res.status(400).json({ error: '找不到該衝突檔' });
+      }
+
+      const { rows: repos } = await query(
+        "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
+        [rows[0].project_id]
+      );
+      const repoRow = repos.find(r => r.label === repo);
+      if (!repoRow) return res.status(400).json({ error: `找不到 repo：${repo}` });
+
+      repoEntry.details = repoEntry.details || {};
+      const detail = repoEntry.details[file] = repoEntry.details[file] || {};
+      detail.qa = detail.qa || [];
+
+      const { clarifyConflict } = require('./pipeline/merge-agent');
+      const result = await clarifyConflict(
+        repoRow.local_path, file,
+        { question, priorDetail: repoEntry.details[file], businessContext: rows[0].analysis_yaml, history: detail.qa },
+        null, { taskId: rows[0].id, userId: req.userId }
+      );
+
+      detail.qa.push({ q: question, a: result.answer });
+      const changed = result.recommendation !== 'keep';
+      if (changed) { detail.recommendation = result.recommendation; detail.rationale = result.rationale; }
+
+      await query(
+        'UPDATE tasks SET merge_conflict_data = $2, updated_at = NOW() WHERE id = $1',
+        [rows[0].id, JSON.stringify(cd)]
+      );
+      // 不改 status、不呼叫 runPipeline：追問不推進 pipeline，使用者按裁決鈕才往前走
+      res.json({ ok: true, answer: result.answer, recommendation: detail.recommendation, rationale: detail.rationale, changed });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
 
 module.exports = { registerRoutes };

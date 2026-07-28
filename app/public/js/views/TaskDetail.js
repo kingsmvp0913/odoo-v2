@@ -2,7 +2,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -460,6 +460,28 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.submittingConflicts = false; }
     },
+    // 逐檔追問：問 AI，答覆塞進來源資料讓卡片即時顯示（不整頁 reload）；AI 改建議時同步 ★建議與 radio 預選
+    async submitClarify(it) {
+      const q = (this.clarifyText[it.key] || '').trim();
+      if (!q || this.clarifying[it.key]) return;
+      this.clarifying = { ...this.clarifying, [it.key]: true };
+      try {
+        const r = await Api.post(`tasks/${this.task.id}/merge-clarify`, { repo: it.repo, file: it.file, question: q });
+        const cd = this.conflictData;
+        const repoEntry = cd && Array.isArray(cd.repos) && cd.repos.find(x => x.repo === it.repo);
+        if (repoEntry) {
+          repoEntry.details = repoEntry.details || {};
+          const d = repoEntry.details[it.file] = repoEntry.details[it.file] || {};
+          d.qa = d.qa || [];
+          d.qa.push({ q, a: r.answer });
+          if (r.changed) { d.recommendation = r.recommendation; d.rationale = r.rationale; }
+          this.task.merge_conflict_data = cd; // 觸發 conflictItems 重算
+          if (r.changed) this.conflictChoices = { ...this.conflictChoices, [it.key]: r.recommendation };
+        }
+        this.clarifyText = { ...this.clarifyText, [it.key]: '' };
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.clarifying = { ...this.clarifying, [it.key]: false }; }
+    },
     async markConflictResolved() {
       this.conflictResolving = true;
       try {
@@ -849,6 +871,26 @@ window.TaskDetailView = Vue.defineComponent({
                       <input type="radio" :name="'conflict_' + idx" :value="act" v-model="conflictChoices[it.key]">
                       <span>{{ recLabel(act) }}<span v-if="it.detail && it.detail.recommendation === act" style="color:var(--primary)"> ★建議</span></span>
                     </label>
+                  </div>
+
+                  <!-- 追問區：非工程師看不懂時先問 AI，問清楚再裁決（有結構化 detail 才顯示） -->
+                  <div v-if="it.detail" style="margin:12px 0 0 24px;padding-top:10px;border-top:1px dashed var(--border)">
+                    <div v-if="it.detail.qa && it.detail.qa.length" style="margin-bottom:8px">
+                      <div v-for="(qa, qi) in it.detail.qa" :key="qi" style="margin-bottom:8px">
+                        <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text)">你：{{ qa.q }}</div>
+                        <div style="font-size:var(--fs-sm);color:var(--text-muted);white-space:pre-wrap;margin-top:2px">AI：{{ qa.a }}</div>
+                      </div>
+                    </div>
+                    <div style="font-size:var(--fs-xs);color:var(--text-muted);margin-bottom:4px">不確定怎麼選？可以先問 AI，問清楚再決定。</div>
+                    <textarea v-model="clarifyText[it.key]" rows="2"
+                      placeholder="看不懂這個衝突？問問看，例如：這兩個版本差在哪？我選「取新版」會失去什麼？"
+                      style="width:100%;font-size:var(--fs-sm);padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);resize:vertical;box-sizing:border-box"></textarea>
+                    <div style="text-align:right;margin-top:6px">
+                      <button class="btn btn-secondary" @click="submitClarify(it)"
+                        :disabled="clarifying[it.key] || !(clarifyText[it.key] || '').trim()" style="font-size:var(--fs-sm)">
+                        {{ clarifying[it.key] ? '思考中...' : '送出追問' }}
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div style="text-align:right">

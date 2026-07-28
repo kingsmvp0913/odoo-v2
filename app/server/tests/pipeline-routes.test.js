@@ -29,6 +29,7 @@ jest.mock('../pipeline/rebuild-testing', () => ({
   rebuildTesting: jest.fn().mockResolvedValue(null),
   INFLIGHT_DEPLOYED: ['deploy_testing', 'playwright_running', 'review_pending'],
 }));
+jest.mock('../pipeline/merge-agent', () => ({ clarifyConflict: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-pipeline-secret';
 
@@ -316,6 +317,79 @@ test('resolve-conflicts：不合法 action → 400', async () => {
   const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
     .set('Authorization', `Bearer ${adminToken}`)
     .send({ resolutions: [{ repo: 'main', file: 'a.py', action: 'nonsense' }] });
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// --- 逐檔追問釐清 merge-clarify（給非工程師）---
+// 意圖：追問問答落進 merge_conflict_data.details[file].qa；AI 回 keep 時不動既有建議、狀態維持 merge_conflict。
+test('merge-clarify：AI 回 keep → 問答入 qa、不改建議、不推進 pipeline', async () => {
+  const { clarifyConflict } = require('../pipeline/merge-agent');
+  const { runPipeline } = require('../pipeline/runner');
+  clarifyConflict.mockClear().mockResolvedValue({ answer: '就是兩邊都新增了同一個檔', recommendation: 'keep', rationale: '' });
+  runPipeline.mockClear();
+  const taskId = await insertConflictProjectTask('mckeep');
+  await dbModule.query("UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1", [taskId,
+    JSON.stringify({ repos: [{ repo: 'main', files: ['a.py'], details: { 'a.py': { recommendation: 'manual', rationale: 'x', qa: [] } } }] })]);
+
+  const res = await request(app).post(`/api/tasks/${taskId}/merge-clarify`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ repo: 'main', file: 'a.py', question: '這是什麼意思？' });
+
+  expect(res.status).toBe(200);
+  expect(res.body.changed).toBe(false);
+  expect(res.body.recommendation).toBe('manual');
+  // clarifyConflict 收到 repo 路徑＋本檔問答歷史
+  expect(clarifyConflict).toHaveBeenCalledWith('/repos/mckeep/main', 'a.py',
+    expect.objectContaining({ question: '這是什麼意思？' }), null, expect.objectContaining({ taskId }));
+  expect(runPipeline).not.toHaveBeenCalled(); // 追問不推進 pipeline
+  const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+  expect(after[0].status).toBe('merge_conflict');
+  const cd = typeof after[0].merge_conflict_data === 'string' ? JSON.parse(after[0].merge_conflict_data) : after[0].merge_conflict_data;
+  expect(cd.repos[0].details['a.py'].qa).toEqual([{ q: '這是什麼意思？', a: '就是兩邊都新增了同一個檔' }]);
+  expect(cd.repos[0].details['a.py'].recommendation).toBe('manual'); // keep：建議不動
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// 意圖：AI 判斷有更適合選項時回非 keep → 同步更新 details[file].recommendation/rationale，回 changed=true。
+test('merge-clarify：AI 回非 keep → 更新建議、changed=true', async () => {
+  const { clarifyConflict } = require('../pipeline/merge-agent');
+  clarifyConflict.mockClear().mockResolvedValue({ answer: '新版是舊版超集，選取新版不會失去東西', recommendation: 'take_theirs', rationale: '新版超集' });
+  const taskId = await insertConflictProjectTask('mcchg');
+  await dbModule.query("UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1", [taskId,
+    JSON.stringify({ repos: [{ repo: 'main', files: ['a.py'], details: { 'a.py': { recommendation: 'manual', rationale: 'x', qa: [] } } }] })]);
+
+  const res = await request(app).post(`/api/tasks/${taskId}/merge-clarify`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ repo: 'main', file: 'a.py', question: '我選取新版會失去什麼？' });
+
+  expect(res.status).toBe(200);
+  expect(res.body.changed).toBe(true);
+  expect(res.body.recommendation).toBe('take_theirs');
+  const { rows: after } = await dbModule.query('SELECT merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+  const cd = typeof after[0].merge_conflict_data === 'string' ? JSON.parse(after[0].merge_conflict_data) : after[0].merge_conflict_data;
+  expect(cd.repos[0].details['a.py'].recommendation).toBe('take_theirs');
+  expect(cd.repos[0].details['a.py'].rationale).toBe('新版超集');
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('merge-clarify：非 merge_conflict 狀態 → 400', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_mc_wrong','odoo','T','deploy_testing') RETURNING id", [userId]);
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/merge-clarify`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ repo: 'main', file: 'a.py', question: '?' });
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
+});
+
+test('merge-clarify：空 question → 400', async () => {
+  const taskId = await insertConflictProjectTask('mcempty');
+  await dbModule.query("UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1", [taskId,
+    JSON.stringify({ repos: [{ repo: 'main', files: ['a.py'], details: { 'a.py': { qa: [] } } }] })]);
+  const res = await request(app).post(`/api/tasks/${taskId}/merge-clarify`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ repo: 'main', file: 'a.py', question: '   ' });
   expect(res.status).toBe(400);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });

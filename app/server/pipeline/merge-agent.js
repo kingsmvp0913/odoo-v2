@@ -152,6 +152,63 @@ async function explainConflict(repoPath, file, signal, opts = {}) {
   return parseAgentResult(res.text, { parse: parseExplain, signal, ref, userId: refUser });
 }
 
+// 追問作答用：送給 agent 的對話歷史只帶最近 N 輪，讓每次呼叫成本有上界（不隨對話無限膨脹）。
+const CLARIFY_HISTORY_ROUNDS = parseInt(process.env.MERGE_CLARIFY_HISTORY_ROUNDS || '6', 10);
+const CLARIFY_REC_ENUM = ['take_theirs', 'take_ours', 'manual', 'keep'];
+// 解析失敗（AI 掛／格式壞）的軟 fallback：answer 提示重問、keep 不動原建議，不擋收尾。
+const CLARIFY_FALLBACK = { answer: 'AI 回覆解析失敗，請重問或直接依原建議裁決。', recommendation: 'keep', rationale: '' };
+
+function parseClarify(s) {
+  const o = JSON.parse(s);
+  if (!o || typeof o.answer !== 'string' || !o.answer.trim()) return null;
+  return {
+    answer: o.answer.trim(),
+    // 非列舉值一律當 keep（不動建議），避免 AI 亂填把預選帶歪
+    recommendation: CLARIFY_REC_ENUM.includes(o.recommendation) ? o.recommendation : 'keep',
+    rationale: String(o.rationale || '').trim()
+  };
+}
+
+// 對單一衝突檔的追問作答（給非工程師）：吃兩側碼＋初始說明＋任務業務背景＋本檔問答歷史＋新問題，
+// 回 { answer, recommendation, rationale }（recommendation='keep' 表示不動原建議）。
+// 解析／AI 失敗回 CLARIFY_FALLBACK，不擋收尾；abort（手動暫停）rethrow。只讀 git，不碰工作樹。
+async function clarifyConflict(repoPath, file, ctx, signal, opts = {}) {
+  const agent = loadAgent('merge-clarify');
+  const [ours, theirs] = await Promise.all([
+    conflictSide(repoPath, file, 2),
+    conflictSide(repoPath, file, 3)
+  ]);
+  const d = ctx.priorDetail;
+  const prior = d && d.classification
+    ? `衝突型態：${d.classification}\n原因：${d.reason}\n目前建議：${d.recommendation}（${d.rationale}）`
+    : '（無初始分析）';
+  const history = (ctx.history || []).slice(-CLARIFY_HISTORY_ROUNDS)
+    .map(t => `Q: ${t.q}\nA: ${t.a}`).join('\n\n') || '（本檔尚無先前問答）';
+  const prompt = agent.render({
+    file_path: file, ours, theirs,
+    prior_explanation: prior,
+    business_context: ctx.businessContext || '（無規格）',
+    history,
+    question: ctx.question
+  });
+  let ref = null, refUser = null;
+  if (opts.taskId) {
+    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
+    if (t) { ref = { taskId: t.task_id, projectId: t.project_id }; refUser = t.user_id; }
+  }
+  let res;
+  try {
+    res = await runClaude(prompt, { ...opts, signal, model: agent.model, agentType: 'merge-clarify' });
+  } catch (err) {
+    if (ref) await logFailedUsage(ref, refUser, 'merge-clarify', err);
+    if (err && err.aborted) throw err;
+    return { ...CLARIFY_FALLBACK };
+  }
+  if (res.usage && ref) await logTokenUsage(ref, refUser, 'merge-clarify', res.usage, res.durationMs);
+  const parsed = await parseAgentResult(res.text, { parse: parseClarify, signal, ref, userId: refUser });
+  return parsed || { ...CLARIFY_FALLBACK };
+}
+
 function execFileP(cmd, args, opts) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, opts, (err, stdout, stderr) => {
@@ -342,4 +399,4 @@ async function doMerge(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
-module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict };
+module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict, clarifyConflict };

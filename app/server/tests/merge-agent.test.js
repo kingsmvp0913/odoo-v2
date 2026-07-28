@@ -364,6 +364,72 @@ test('explainConflict：AI 回無法解析（含修復也失敗）→ null（退
   expect(d).toBeNull();
 });
 
+// --- 逐檔追問釐清（merge-clarify，給非工程師）---
+// 意圖：AI 判斷有更適合的選項時回實際 recommendation，呼叫端據此改 ★建議與 radio 預選。
+test('clarifyConflict：AI 回非 keep → 帶新建議（answer/recommendation/rationale）', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"answer":"新版多了 y=2，選取新版不會失去舊版內容","recommendation":"take_theirs","rationale":"新版為舊版超集"}</result>',
+    usage: null, durationMs: null
+  });
+
+  const r = await mergeMod.clarifyConflict(dir, 'f.py',
+    { question: '這兩版差在哪？', priorDetail: null, businessContext: null, history: [] }, undefined, {});
+
+  expect(r).toEqual({
+    answer: '新版多了 y=2，選取新版不會失去舊版內容',
+    recommendation: 'take_theirs', rationale: '新版為舊版超集'
+  });
+  // 兩側內容有進 prompt（讓 AI 看得到 ours/theirs）
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('這兩版差在哪？');
+  expect(prompt).toContain('y = 2');
+});
+
+// 意圖：AI 判斷維持原建議時回 keep，呼叫端不得改動既有 ★建議（避免每次追問亂改預選）。
+test('clarifyConflict：AI 回 keep → 只作答、不改建議', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"answer":"就是兩邊都新增了同一個檔","recommendation":"keep","rationale":"維持原建議"}</result>',
+    usage: null, durationMs: null
+  });
+
+  const r = await mergeMod.clarifyConflict(dir, 'f.py',
+    { question: '這是什麼意思？', priorDetail: { classification: 'both-added', reason: '兩邊各自新增', recommendation: 'manual', rationale: 'x' }, businessContext: null, history: [] }, undefined, {});
+
+  expect(r.answer).toBe('就是兩邊都新增了同一個檔');
+  expect(r.recommendation).toBe('keep');
+});
+
+// 意圖：AI 掛／回覆無法解析（含 haiku 修復也失敗）→ 軟 fallback，answer 提示重問、keep 不動建議，不擋收尾。
+test('clarifyConflict：無法解析 → 軟 fallback（keep、不擋收尾）', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValue({ text: '嗯我覺得選新版好了', usage: null, durationMs: null });
+
+  const r = await mergeMod.clarifyConflict(dir, 'f.py',
+    { question: '?', priorDetail: null, businessContext: null, history: [] }, undefined, {});
+
+  expect(r.recommendation).toBe('keep');
+  expect(r.answer).toContain('解析失敗');
+});
+
+// 意圖：對話歷史只帶最近 N 輪（預設 6），讓每次呼叫成本有上界、不隨對話無限膨脹。
+test('clarifyConflict：history 只帶最近 6 輪進 prompt', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"answer":"ok","recommendation":"keep","rationale":""}</result>', usage: null, durationMs: null
+  });
+  const history = Array.from({ length: 8 }, (_, i) => ({ q: `q${i}`, a: `a${i}` }));
+
+  await mergeMod.clarifyConflict(dir, 'f.py',
+    { question: '新問題', priorDetail: null, businessContext: null, history }, undefined, {});
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('q7');       // 最新
+  expect(prompt).toContain('q2');       // 最近 6 輪的邊界（index 2..7）
+  expect(prompt).not.toContain('q1');   // 更舊的被截掉
+});
+
 // 意圖：Linux 主機常無 python（只有 python3）。修正前 interpreter 硬寫 'python'、PYTHON_BIN 完全被忽略，
 // 導致無法跨平台選 interpreter。此測試證明 PYTHON_BIN 已被採用（不再硬寫 python）——用一個「存在但不是 python」
 // 的 interpreter（git）驗一個好檔：因 interpreter 被真正採用，good.py 會被判為壞（git 不吃 -m py_compile）。
