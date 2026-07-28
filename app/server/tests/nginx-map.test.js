@@ -23,6 +23,10 @@ describe('buildServerBlocks', () => {
     expect(out).toContain('server_name odoo-ai-dev.example;');
     expect(out).toContain('ssl_certificate /etc/nginx/ssl/odoo-ai-dev.example/fullchain.cer;');
     expect(out).toContain('ssl_certificate_key /etc/nginx/ssl/odoo-ai-dev.example/private.key;');
+    // Host 必須用 $http_host（含 port）：$host 會砍掉 port，Odoo（未開 proxy_mode）
+    // 靠 Host 拼絕對網址，跳轉/redirect 的 Location 就會掉 port、落到 443。
+    expect(out).toContain('proxy_set_header Host $http_host;');
+    expect(out).not.toContain('proxy_set_header Host $host;');
     // Odoo 需要的 websocket upgrade 標頭（缺了 bus/longpolling 靜默退化）
     expect(out).toContain('proxy_set_header Upgrade $http_upgrade;');
     expect(out).toContain('proxy_set_header Connection "upgrade";');
