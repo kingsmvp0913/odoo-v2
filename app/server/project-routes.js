@@ -54,6 +54,13 @@ function computeDestPath(projectFolder, label) {
   return path.join(REPOS_BASE, slugify(projectFolder), slugify(label));
 }
 
+// 全新 clone 取發起人 gitEnv：有設 PAT 就帶（私有 repo 靠它認證），沒設就回 undefined 退機器憑證。
+// 有別於「更新既有 clone」的硬性擋 PAT——初次 clone 不想因某人沒設 PAT 就完全無法加 repo（public repo 仍可）。
+async function optionalGitEnv(userId) {
+  try { return await buildGitEnv(userId); }
+  catch (e) { if (e.code === 'NO_GIT_CRED') return undefined; throw e; }
+}
+
 function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   // projectId 來自 req.params.id（字串）；pipeline 的 withProjectLock 用 DB 數字 project_id 當 key。
   // Map key 字串≠數字會讓「更新 repo」與 pipeline 的 git 操作不互斥——coerce 成數字才真正序列化，
@@ -77,8 +84,11 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   }
 
   try { fs.mkdirSync(path.dirname(destPath), { recursive: true }); } catch {}
-  // 初次 clone 沿用機器憑證（未帶 per-user gitEnv）——spec 明列的唯一例外；請勿誤加 gitEnv
-  execFile('git', ['clone', '--', repoUrl, destPath], { timeout: 300000 }, async (err, _stdout, stderr) => {
+  // 初次 clone 帶發起人 PAT（私有 repo 靠它認證，機器上無憑證時才 clone 得動）；
+  // 未設 PAT 時 gitEnv 為 undefined → 不注入 env、沿用機器憑證（public repo／機器帳號情境不變）。
+  const cloneOpts = { timeout: 300000 };
+  if (gitEnv) cloneOpts.env = { ...process.env, ...gitEnv };
+  execFile('git', ['clone', '--', repoUrl, destPath], cloneOpts, async (err, _stdout, stderr) => {
     if (err) {
       const msg = (stderr || err.message || 'clone failed').slice(0, 500);
       await query(
@@ -333,7 +343,7 @@ function registerRoutes(app) {
          VALUES ($1, $2, $3, $4, $5, 'cloning') RETURNING *`,
         [req.params.id, label, repo_url, destPath, is_primary || false]
       );
-      triggerClone(req.params.id, rows[0].id, repo_url, destPath);
+      triggerClone(req.params.id, rows[0].id, repo_url, destPath, await optionalGitEnv(req.userId), req.userId);
       res.status(201).json(rows[0]);
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'label already exists in this project' });
@@ -378,7 +388,7 @@ function registerRoutes(app) {
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
       if (urlChanged) {
-        triggerClone(req.params.id, rows[0].id, rows[0].repo_url, newLocalPath);
+        triggerClone(req.params.id, rows[0].id, rows[0].repo_url, newLocalPath, await optionalGitEnv(req.userId), req.userId);
       }
       res.json(rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -418,6 +428,7 @@ function registerRoutes(app) {
       if (!repo.local_path) return res.status(400).json({ error: 'No local_path set' });
 
       // 更新既有 clone 需用發起 user（reclone 按鈕操作者）的 PAT；無 PAT 直接擋下不進背景更新。
+      // 全新 clone（.git 不在）則 best-effort：有 PAT 就帶（私有 repo 靠它），沒設退機器憑證。
       const isAlreadyCloned = fs.existsSync(path.join(repo.local_path, '.git'));
       let gitEnv;
       if (isAlreadyCloned) {
@@ -427,6 +438,8 @@ function registerRoutes(app) {
           if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: '請先到設定填個人 GitHub PAT' });
           throw e;
         }
+      } else {
+        gitEnv = await optionalGitEnv(req.userId);
       }
 
       await query(
