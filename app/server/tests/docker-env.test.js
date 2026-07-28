@@ -126,6 +126,11 @@ describe('buildRunArgs', () => {
     const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo' });
     expect(args.some(a => String(a).startsWith('--admin_passwd'))).toBe(false);
   });
+
+  test('帶 --proxy-mode：反代終結 TLS，Odoo 須信任 X-Forwarded-Proto 才不會產 http:// redirect 打回 400', () => {
+    const args = d.buildRunArgs({ name: 'c', image: 'odoo:17', port: 8069, dbName: 'test_demo' });
+    expect(args).toContain('--proxy-mode');
+  });
 });
 
 describe('buildExecArgs（docker exec 進常駐容器跑一次性指令）', () => {

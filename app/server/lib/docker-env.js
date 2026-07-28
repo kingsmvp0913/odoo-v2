@@ -135,6 +135,10 @@ function buildRunArgs({ name, image, host, port, dbName, dbArgs = [], mounts = [
     ...dbEnvFlags(dbArgs),
     image, 'odoo',
     '--http-port=8069', '--http-interface=0.0.0.0',
+    // 反代模式：信任 nginx 送的 X-Forwarded-Proto/Host，否則 Odoo 認連線為 http、
+    // 產絕對 redirect 用 http:// → 打到只收 TLS 的 nginx port 回 400。直連模式無 X-Forwarded-*
+    // 標頭故不受影響（Odoo 用真實值）。前提：後端埠只有 nginx 連得到（綁 docker0 + VPN/白名單）。
+    '--proxy-mode',
     // hardening：關未認證 DB 列舉、鎖此容器只認自己的 DB（Odoo CLI 選項名為 --db-filter，
     // 非 config 檔的 dbfilter；master 密碼 admin_passwd 無對應 CLI，且 list_db=False 已關管理介面故不設）。
     '--no-database-list', `--db-filter=^${escapeRegExp(dbName)}$`,
