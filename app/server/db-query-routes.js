@@ -131,7 +131,10 @@ function registerRoutes(app) {
       // 剛把 vpn_enabled 從 false 打開就一律重配，不是只在「之前沒配過埠」才配：停用期間
       // 同目標的埠名額可能已被別條連線佔走，或這條自己的目標被改過。重配後若同專案已有同目標
       // 的連線，assignForwardPort 本來就會沿用它的埠，不會造成無謂的容器重建。
-      const becameEnabled = rows[0].vpn_enabled && !(before && before.vpn_enabled);
+      // 也要保留「已啟用但埠是 NULL」的自癒路徑（POST 建立時 assignForwardPort 曾經失敗、
+      // 或遷移半途中斷留下的孤兒）：ssh-sql.js 教使用者「重新儲存一次連線設定」就是靠這條路，
+      // 若只認 false→true 轉換，這種連線再怎麼存檔都補不回埠，使用者照著錯誤訊息做也沒用。
+      const becameEnabled = rows[0].vpn_enabled && (!(before && before.vpn_enabled) || !rows[0].vpn_forward_port);
       // 目標(host:port)真的變了才重配：同專案共用一個容器，舊埠若沒跟著換，改過主機的這條連線
       // 會跟另一條連線搶同一個轉發埠的 listen（docker -p 同埠掛兩個目標），容器起不來。
       // 反過來若目標沒變、也沒有 false→true 轉換就不能重配，否則每次存檔都可能換埠＝每次都重建容器＝斷線重撥。

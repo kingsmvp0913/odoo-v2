@@ -334,4 +334,29 @@ describe('連線的 VPN 開關與配埠', () => {
     const { rows: [row] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [cid]);
     expect(row.vpn_forward_port).toBe(22050);
   });
+
+  // Finding（re-review）：Fix1b 只認 false→true 轉換的話，「vpn_enabled=true 但 vpn_forward_port
+  // 是 NULL」的孤兒連線（POST 建立時 assignForwardPort 曾失敗、或遷移半途中斷留下的）再怎麼存檔
+  // 都補不回埠。ssh-sql.js 給使用者的錯誤訊息正是「請重新儲存一次連線設定」——這支測試同時是
+  // 「照著錯誤訊息做真的有效」的守門員：故意存檔一次不相干的欄位，斷言埠會被補上。
+  test('已啟用但轉發埠是 NULL 的連線，照錯誤訊息「重新儲存一次」真的能補回埠', async () => {
+    allocateForwardPort.mockReturnValueOnce(22060);
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'connOrphan', ssh_host: '10.9.9.6', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_orphan', vpn_enabled: true,
+    });
+    const cid = create.body.id;
+    // 模擬孤兒狀態：vpn_enabled 已是 true，但埠因故是 NULL（不透過 PUT，直接還原成故障後的樣子）
+    await dbModule.query('UPDATE db_connections SET vpn_forward_port=NULL WHERE id=$1', [cid]);
+
+    allocateForwardPort.mockClear();
+    allocateForwardPort.mockReturnValueOnce(22070);
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${cid}`).set(auth())
+      .send({ description: '照錯誤訊息重新儲存一次' }); // 不動 vpn_enabled、不動主機，純粹「重存」
+    expect(put.status).toBe(200);
+    expect(allocateForwardPort).toHaveBeenCalled();
+
+    const { rows: [row] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [cid]);
+    expect(row.vpn_forward_port).toBe(22070);
+  });
 });
