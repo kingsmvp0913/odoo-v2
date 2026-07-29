@@ -55,6 +55,7 @@ requirements:      # 要「做什麼」（實作項）
   - ""
 acceptance:        # 要「驗什麼」（可觀察、可斷言的結果，供 E2E tour 逐條驗證）
   - ""
+permissions: |     # 誰能用、能做什麼（用畫面上的名詞寫）。沒有涉及權限異動就留空
 low_confidence: false
 clarification_channel:
   intro: ""        # 白話說明段（可留空）；不是問題的內容一律放這裡
@@ -66,6 +67,11 @@ clarification_channel:
 - 每條要能對到 tour 的一個斷言：看得到的欄位／存得住的值／報表內容／算得對的數字。
 - 例：「報價單客戶欄之後看得到『備註T』欄位」「輸入內容存檔重載後值仍在」「列印 PDF 內含該備註內容」。
 - 若需求無可觀察行為（純內部重構等），acceptance 可留空 []。
+
+【permissions 撰寫規則】
+- 這一欄是寫給使用者看的，用畫面上的名詞（群組的中文 name、選單路徑、欄位的 string），不要只寫 Model 技術名。
+- 依 CLAUDE.md 的權限守則 P0~P6 推導；推得出來的寫這裡給使用者過目，推不出來的（P4 那三種）寫進 clarification_channel.questions，不要在這裡自己決定。
+- 本次沒有新增／變更任何 ir.model.access 或 res.groups（例如只是既有單據加欄位，適用 P1）→ 整欄留空，不要寫「無」或編一段說明。
 
 【輸出】分析完成後，把 analysis.yaml 內容「直接」包在 <result></result> 標籤內回傳：
 標籤內是合法 YAML——不要 JSON 包裝、不要 code fence、標籤外不要任何其他文字。
@@ -100,6 +106,8 @@ requirements:
   - "……"
 acceptance:
   - "……"
+permissions: |
+  「銷售 / 使用者」群組的人可以在報價單看到並填寫這個備註欄；不另開刪除權限。
 low_confidence: false
 clarification_channel:
   intro: |

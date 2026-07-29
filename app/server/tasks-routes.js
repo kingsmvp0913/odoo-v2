@@ -93,6 +93,7 @@ function taskClarification(task) {
 
 // 從 analysis_yaml 解析出審核頁要渲染的規格（前端無 YAML parser）：只挑人要看的欄位，
 // case_id/odoo_version/clarification_channel/low_confidence 屬 metadata/內部控制，不外吐。解析失敗回 null。
+// permissions 是白名單成員：它是使用者按「核准」的三大依據之一，漏放行會讓審核頁權限區塊永遠空白且無錯誤訊息。
 function taskSpec(task) {
   if (!task || !task.analysis_yaml) return null;
   try {
@@ -104,6 +105,7 @@ function taskSpec(task) {
       execution_mode: typeof p.execution_mode === 'string' ? p.execution_mode : '',
       requirements: strList(p.requirements),
       acceptance: strList(p.acceptance),
+      permissions: typeof p.permissions === 'string' ? p.permissions : '',
     };
   } catch { return null; }
 }

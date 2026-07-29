@@ -239,6 +239,27 @@ test('qa 只注入精簡審查規則：含 Odoo/Python Constraints 與 Rule 12�
   expect(out).not.toContain('app/public');       // 前端規範不注入
 });
 
+// 意圖（Rule 9）：權限守則放在 CLAUDE.md §1 內部（### 三級標題），是為了讓 loadQaRules 的
+// `## 1. Odoo Constraints ... (?=\n## )` 節錄剛好把它一起帶進 QA——QA 要比對實作與規格 permissions
+// 是否一致（P6）。若有人改成 `## 權限` 二級標題，regex 會提早截斷、QA 靜默拿不到守則。
+test('權限守則 P0~P6 必須待在 §1 內，才會同時進 full 模式與 QA 精簡模式', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+  const ANCHOR = '權限一律由「錨點」推導';
+
+  const qaOut = loadAgent('qa').render({
+    project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+    analysis_yaml: 'module: sale', prior_findings: '（首輪，無上輪清單）', resolution: '（無）'
+  });
+  expect(qaOut).toContain(ANCHOR);
+  expect(qaOut).toContain('perm_unlink=1');        // P5 也要進 QA
+  expect(qaOut).toContain('QA 關要比對實作與');     // P6 專屬片語（只存在於 CLAUDE.md，不會被片段假綠）
+
+  const analysisOut = loadAgent('analysis-project').render({
+    project_name: 'P', odoo_version: '17.0', original_text: 'OT', task_id: 'task_1'
+  });
+  expect(analysisOut).toContain(ANCHOR);
+});
+
 test('qa-retry 不重複注入規則（resume 短 prompt）', () => {
   const { loadAgent } = require('../pipeline/agent-loader');
   const out = loadAgent('qa-retry').render({
@@ -316,4 +337,102 @@ describe('NOTES_AGENTS 注入專案備註（人工維護，優先遵循）', () 
     expect(v1).toBe(v2);
     expect(v1).toMatch(/^[0-9a-f]{12}$/);
   });
+});
+
+// 意圖（Rule 9）：說人話守則要進「會產出給人看的文字」的 11 關。它刻意不走 CLAUDE.md——
+// CLAUDE.md 只餵得到 7 關，漏掉 cs／merge-explain／merge-clarify／chat／chat-to-task／library，
+// 而這些正是最需要白話的地方。反過來 playwright／coding-project 產的是碼，沒人讀，注入純屬浪費。
+describe('PLAIN_LANGUAGE_AGENTS 注入說人話守則', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const PL_HEADER = '# 說人話守則';
+
+  test('CLAUDE.md 餵不到的關（cs／merge-explain／library／chat-to-task）也拿得到', () => {
+    expect(loadAgent('cs').render({ title: 'T', original_text: 'x', answers: '（尚無）', project_name: 'P', repo_paths: '- /r' })).toContain(PL_HEADER);
+    expect(loadAgent('merge-explain').render({})).toContain(PL_HEADER);
+    expect(loadAgent('library').render({})).toContain(PL_HEADER);
+    expect(loadAgent('chat-to-task').render({ history: 'x' })).toContain(PL_HEADER);
+  });
+
+  test('產碼關（coding-project／playwright／merge）不注入', () => {
+    const coding = loadAgent('coding-project').render({
+      project_name: 'P', odoo_version: '17.0', analysis_yaml: 'module: sale',
+      work_dir: '/w', repo_list: '- sale/', task_id: 'task_1', commit_message: 'm'
+    });
+    expect(coding).not.toContain(PL_HEADER);
+    expect(loadAgent('merge').render({})).not.toContain(PL_HEADER);
+  });
+
+  test('qa-retry 不注入（--resume 短 prompt，重複前置會抵銷省 token 設計）', () => {
+    const out = loadAgent('qa-retry').render({ main_branch: 'main', git_branch: 'task/x', prior_findings: 'x', resolution: '（無）' });
+    expect(out).not.toContain(PL_HEADER);
+  });
+
+  test('順序：CLAUDE.md 規則 → 說人話 → 專案備註 → debug', () => {
+    const out = loadAgent('analysis-reject').render({
+      project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+      analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true',
+      project_notes: '窗口 Amy'
+    });
+    const iRules = out.indexOf('Odoo Constraints');
+    const iPlain = out.indexOf(PL_HEADER);
+    const iNotes = out.indexOf('# 專案備註（人工維護，優先遵循）');
+    const iDebug = out.indexOf('# 系統化除錯（pipeline 版）');
+    expect(iRules).toBeGreaterThanOrEqual(0);
+    expect(iPlain).toBeGreaterThan(iRules);
+    expect(iNotes).toBeGreaterThan(iPlain);
+    expect(iDebug).toBeGreaterThan(iNotes);
+  });
+
+  // 意圖：這是本次改動唯一會「靜默失效」的點——片段改了但 promptVersion 沒把它算進去，
+  // 綁定的 resume session 不會 fresh，新規則永遠不生效且無任何錯誤訊息，事後查不出原因。
+  test('promptVersion 把說人話片段算進靜態指紋（改片段就換版、強制 fresh）', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const PL_PATH = path.join(__dirname, '..', 'pipeline', 'plain-language.md');
+    const orig = fs.readFileSync(PL_PATH, 'utf8');
+    try {
+      const before = promptVersion('cs');
+      fs.writeFileSync(PL_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
+      expect(promptVersion('cs')).not.toBe(before);
+    } finally {
+      fs.writeFileSync(PL_PATH, orig);
+    }
+  });
+
+  test('未注入的 agent 指紋不受片段變動影響', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const PL_PATH = path.join(__dirname, '..', 'pipeline', 'plain-language.md');
+    const orig = fs.readFileSync(PL_PATH, 'utf8');
+    try {
+      const before = promptVersion('playwright');
+      fs.writeFileSync(PL_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
+      expect(promptVersion('playwright')).toBe(before);
+    } finally {
+      fs.writeFileSync(PL_PATH, orig);
+    }
+  });
+
+  // 意圖（Rule 9）：名單裡打錯字或日後 agent 檔改名 → 靜默不注入且無任何紅燈，
+  // 正是本片段要防的失敗形態。逐一 render 把 11 關全部鎖死（render({}) 只會 console.warn
+  // 未匹配 placeholder，不會 throw）。
+  test('11 關全數注入（防未來改名或打錯字靜默失效）', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const n of ['analysis-project', 'analysis-reject', 'clarify-chat', 'spec-review', 'qa',
+                       'merge-explain', 'merge-clarify', 'cs', 'chat', 'chat-to-task', 'library']) {
+        expect(loadAgent(n).render({})).toContain(PL_HEADER);
+      }
+    } finally { spy.mockRestore(); }
+  });
+});
+
+// 意圖（Rule 9）：P6 要求分析關把權限攤開給人看。若 analysis-project 的 YAML 格式與範例沒有
+// permissions 欄位，agent 不會憑空生出這一欄——規格審核畫面就永遠是空的，P6 形同虛設。
+test('analysis-project 的 YAML 格式與範例都含 permissions 區塊（P6 的落地點）', () => {
+  const body = require('../pipeline/agent-loader').loadAgent('analysis-project').body;
+  // 格式區塊與 <result> 範例各一次，共 2 次
+  expect(body.split('permissions:').length - 1).toBe(2);
+  expect(body).toContain('沒有涉及權限異動就留空');
 });

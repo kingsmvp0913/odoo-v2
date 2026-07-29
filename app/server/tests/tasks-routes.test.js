@@ -268,6 +268,49 @@ test('GET /api/tasks/:id → spec_review 解析 analysis_yaml 回傳 spec 物件
   expect(res.body.spec.acceptance).toEqual(['報價單看得到備註欄位']);
 });
 
+// 意圖（Rule 9）：taskSpec 是欄位白名單。permissions 是使用者按「核准」的三大判斷依據之一
+// （summary ＋ acceptance ＋ permissions），沒放行就到不了審核畫面——YAML 有寫、畫面卻空白，
+// 且不會有任何錯誤訊息。這條測試釘死白名單必須含 permissions。
+test('GET /api/tasks/:id → spec 帶出 permissions（權限攤開給人看，P6）', async () => {
+  const yamlText = [
+    'case_id: "task_perm"',
+    'module: idx_sale_note',
+    'odoo_version: "17.0"',
+    'execution_mode: MODE_B',
+    'summary: 在報價單加備註欄位',
+    'requirements:',
+    '  - 加一個 note 欄位',
+    'acceptance:',
+    '  - 報價單看得到備註欄位',
+    'permissions: |',
+    '  「銷售 / 使用者」群組可以看到並填寫這個備註欄；不另開刪除權限。',
+    'low_confidence: false',
+  ].join('\n');
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml)
+     VALUES ($1,'task_specperm','odoo','SP','spec_review',$2) RETURNING id`,
+    [userId, yamlText]
+  );
+  const res = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.spec.permissions).toContain('「銷售 / 使用者」群組');
+});
+
+// 沒有權限異動的任務（P1：既有單據加欄位）→ permissions 缺欄，前端要拿到空字串而非 undefined，
+// 才能靠 v-if 乾淨地整塊不顯示。
+test('GET /api/tasks/:id → 無 permissions 欄位時回空字串（不顯示權限區塊）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml)
+     VALUES ($1,'task_specnoperm','odoo','SNP','spec_review',$2) RETURNING id`,
+    [userId, 'case_id: "x"\nmodule: m\nexecution_mode: MODE_B\nsummary: s\n']
+  );
+  const res = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.spec.permissions).toBe('');
+});
+
 // 非 spec_review 不附 spec（避免其他狀態殘留規格冒出來，比照 clarification 的狀態守門）
 test('GET /api/tasks/:id → 非 spec_review 不回傳 spec', async () => {
   const { rows: [t] } = await dbModule.query(

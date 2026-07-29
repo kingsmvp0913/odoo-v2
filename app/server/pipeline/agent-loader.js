@@ -75,6 +75,26 @@ function loadCsCapability() {
   return text;
 }
 
+// 會產出「給人看的文字」的關卡：注入說人話守則（plain-language.md）。刻意不走 CLAUDE.md——
+// CLAUDE.md 只餵得到 7 關，漏掉 cs／merge-explain／merge-clarify／chat／chat-to-task／library，
+// 而這些正是最需要白話的地方；反之 playwright／coding-project 產的是碼，沒人讀，注入純屬浪費。
+// 片段無 placeholder（全平台不變的靜態文字），故排在「規則之後、專案備註之前」——
+// 靜態的排前面才能讓 prompt cache 前綴儘量長。
+const PLAIN_LANGUAGE_AGENTS = new Set([
+  'analysis-project', 'analysis-reject', 'clarify-chat', 'spec-review', 'qa',
+  'merge-explain', 'merge-clarify', 'cs', 'chat', 'chat-to-task', 'library'
+]);
+const PLAIN_LANGUAGE_MD_PATH = path.join(__dirname, 'plain-language.md');
+let _plainLanguageCache = null;
+
+function loadPlainLanguage() {
+  const stat = fs.statSync(PLAIN_LANGUAGE_MD_PATH);
+  if (_plainLanguageCache && _plainLanguageCache.mtimeMs === stat.mtimeMs) return _plainLanguageCache.text;
+  const text = fs.readFileSync(PLAIN_LANGUAGE_MD_PATH, 'utf8').trim();
+  _plainLanguageCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
 // name → { mtimeMs, agent }
 const _cache = new Map();
 // CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
@@ -149,7 +169,7 @@ function fillPlaceholders(text, vars) {
   });
 }
 
-function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability) {
+function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability, includePlainLanguage) {
   return vars => {
     let out = fillPlaceholders(body, vars);
     // 技術客服能力片段：緊貼 body 上方（最內層、最貼近該關輸出契約）
@@ -157,11 +177,13 @@ function makeRender(body, rulesMode, includeDebug, includeSourceRouting, include
     // source-routing 用同一組 vars 填入已解析的 repo 路徑／分支，緊貼 body 上方（最貼近任務、最顯眼）
     if (includeSourceRouting) out = `${fillPlaceholders(loadSourceRouting(), vars)}\n\n${out}`;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
-    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 備註 → debug → sourcerouting → csCapability → body。
+    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 說人話 → 備註 → debug → sourceRouting → csCapability → body。
     // 空／未傳不注入，維持與現況一致的 cache 前綴。
     if (includeNotes && vars && vars.project_notes && String(vars.project_notes).trim()) {
       out = `# 專案備註（人工維護，優先遵循）\n\n${String(vars.project_notes).trim()}\n\n${out}`;
     }
+    // 說人話守則排在「規則之後、備註之前」（prepend 順序相反）：靜態片段先於 per-project 動態值，保 cache 前綴
+    if (includePlainLanguage) out = `${loadPlainLanguage()}\n\n${out}`;
     if (rulesMode === 'full') out = `${loadPipelineRules()}\n\n${out}`;
     else if (rulesMode === 'qa') out = `${loadQaRules()}\n\n${out}`;
     return out;
@@ -187,7 +209,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name), PLAIN_LANGUAGE_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;
@@ -219,7 +241,7 @@ function invalidate(name) {
   else _cache.clear();
 }
 
-// 靜態系統提示的版本指紋（注入的 CLAUDE.md 規則 ＋ systematic-debugging ＋ agent body，與 makeRender 同組成，
+// 靜態系統提示的版本指紋（注入的 CLAUDE.md 規則 ＋ 說人話守則 ＋ systematic-debugging ＋ agent body，與 makeRender 同組成，
 // 但不含 per-task 的 {{placeholder}} 替換）。供 session 綁定：建 session 時記下版本，resume 前比對——
 // prompt 內容變了（改 agent／CLAUDE.md／debug 方法論）就強制 fresh，讓新指令生效；沒變則照常 resume 省 token。
 function promptVersion(name) {
@@ -229,6 +251,7 @@ function promptVersion(name) {
   if (CS_CAPABILITY_AGENTS.has(name)) s = `${loadCsCapability()}\n\n${s}`;
   if (SOURCE_ROUTING_AGENTS.has(name)) s = `${loadSourceRouting()}\n\n${s}`;
   if (DEBUG_AGENTS.has(name)) s = `${loadDebugMethodology()}\n\n${s}`;
+  if (PLAIN_LANGUAGE_AGENTS.has(name)) s = `${loadPlainLanguage()}\n\n${s}`;
   if (mode === 'full') s = `${loadPipelineRules()}\n\n${s}`;
   else if (mode === 'qa') s = `${loadQaRules()}\n\n${s}`;
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
