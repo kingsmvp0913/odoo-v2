@@ -12,8 +12,10 @@ jest.mock('../lib/vpn-gateway', () => ({
   targetHostPort: (c) => ((c.connect_mode || 'docker') === 'direct'
     ? { host: c.db_host, port: c.db_port || 5432 }
     : { host: c.ssh_host, port: c.ssh_port || 22 }),
+  removeGateway: jest.fn(),
+  projectContainerName: (id) => `vpn-proj-${id}`,
 }));
-const { allocateForwardPort } = require('../lib/vpn-gateway');
+const { allocateForwardPort, removeGateway } = require('../lib/vpn-gateway');
 
 let dbModule, app, token, userToken, projectId;
 
@@ -187,6 +189,16 @@ describe('專案層 VPN 設定', () => {
     const userAuth = { Authorization: `Bearer ${userToken}` };
     expect((await request(app).get(`/api/projects/${projectId}/vpn`).set(userAuth)).status).toBe(200);
     expect((await request(app).put(`/api/projects/${projectId}/vpn`).set(userAuth).send({ vpn_username: 'x' })).status).toBe(403);
+  });
+
+  // Finding 2：容器 label 指紋只涵蓋 targets、不涵蓋憑證，換帳密／設定檔後執行中的容器不會
+  // 自動換憑證。砍掉舊容器讓下次用到時用新憑證重建，是目前唯一能讓「改憑證」生效的地方。
+  test('PUT 成功後會呼叫 removeGateway，讓執行中的容器帶著新憑證重建', async () => {
+    removeGateway.mockClear();
+    const res = await request(app).put(`/api/projects/${projectId}/vpn`).set(auth())
+      .send({ vpn_username: 'changed' });
+    expect(res.status).toBe(200);
+    expect(removeGateway).toHaveBeenCalledWith(expect.objectContaining({ containerName: `vpn-proj-${projectId}` }));
   });
 });
 

@@ -2,7 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
-const { allocateForwardPort, targetHostPort } = require('./lib/vpn-gateway');
+const { allocateForwardPort, targetHostPort, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn } = require('./lib/db-connections');
 
 const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled';
@@ -189,6 +189,11 @@ function registerRoutes(app) {
       params.push(req.params.id);
       const { rowCount } = await query(`UPDATE projects SET ${set.join(', ')} WHERE id=$${idx}`, params);
       if (!rowCount) return res.status(404).json({ error: 'Not found' });
+      // 容器 label 指紋只涵蓋 targets、不涵蓋憑證，ensureGatewayRunning 光看指紋相符就早退，
+      // 換帳密／設定檔不會讓執行中的容器換憑證。砍掉舊容器，下次用到時自然會用新憑證重建。
+      // removeGateway 內部已 try/catch（容器不存在不丟錯），這裡再包一層是為了保險：
+      // 改憑證這件事不該因為 docker 沒裝／沒跑而變成 500。
+      try { removeGateway({ containerName: projectContainerName(req.params.id) }); } catch { /* 不擋這次設定更新 */ }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
