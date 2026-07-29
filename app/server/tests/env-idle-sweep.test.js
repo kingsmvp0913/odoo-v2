@@ -159,6 +159,29 @@ test('對外還很活躍 → 名額不動', async () => {
   expect(r.slotsReleased).toBe(0);
 });
 
+// 意圖：借名額時會把 last_active_at 推到現在（那就是「有人要看」的證據），但同一輪 sweep 的主迴圈
+// 緊接著用容器 log 解析出的時間戳「無條件覆寫」同一個欄位。log 反映的是「上一次真的有請求」，
+// 在「剛借到名額、瀏覽器還沒打第一個請求」的數秒空窗裡它必然比較舊——覆寫下去等於把時間往回撥，
+// 同一輪的對外回收就立刻把剛借出的名額收走，使用者當下拿到 502。時間只能往前，不能往後。
+test('log 的活動時間比 last_active_at 舊 → 不得往回撥，剛借出的名額不能被同一輪收走', async () => {
+  const pid = await mkEnv('a', 21000, { startedMinAgo: 5, lastActiveMinAgo: 0 });
+  await dbModule.query('UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() WHERE project_id=$1', [pid]);
+  dockerEnv.containerLogs.mockResolvedValue(logAt(45));   // 上一次真請求在 45 分鐘前
+  const r = await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.external_slot).toBe(0);
+  expect(r.slotsReleased).toBe(0);
+});
+
+// 意圖：往前推的方向必須照舊生效——只擋回撥，不是整個停掉更新。
+test('log 的活動時間比 last_active_at 新 → 照常往前更新', async () => {
+  const pid = await mkEnv('a', 21000, { startedMinAgo: 90, lastActiveMinAgo: 80 });
+  dockerEnv.containerLogs.mockResolvedValue(logAt(1));
+  await sweepIdleEnvs({ idleMin: 60, maxHours: 999 });
+  const { rows: [env] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.status).toBe('running');   // 剛剛才有人操作，不該被當成閒置 80 分收掉
+});
+
 // 意圖：stopEnv 沒清名額的話，那個 slot 會被永久佔住——DB 裡有人持有、實際上環境已經沒了，
 // 而 nginx 段也跟著消失（RUNNING_SQL 要求 status='running'），症狀是「名額少了一個且找不到誰佔的」。
 test('stopEnv 一併歸還對外名額', async () => {

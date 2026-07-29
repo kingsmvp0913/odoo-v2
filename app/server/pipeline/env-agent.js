@@ -378,7 +378,15 @@ async function sweepIdleEnvs(deps = {}) {
         const logText = await dockerEnv.containerLogs(ctx.container, { tail: 500 });
         const at = parseLastActivity(logText);
         if (at) {
-          await query('UPDATE odoo_envs SET last_active_at=$2 WHERE project_id=$1', [projectId, at.toISOString()]);
+          // 只准往前，不准往回撥：借對外名額時會把 last_active_at 推到現在（「有人要看」的證據），
+          // 而 log 反映的是「上一次真的有請求」，在剛借完、瀏覽器還沒發第一個請求的空窗裡必然較舊。
+          // 無條件覆寫等於把時間倒退，下面的對外回收就會把剛借出的名額立刻收走。
+          // 用 WHERE 擋而非 GREATEST：pg-mem 不支援 GREATEST，會靜默回 NULL 把欄位清掉。
+          await query(
+            `UPDATE odoo_envs SET last_active_at=$2::timestamptz
+              WHERE project_id=$1 AND (last_active_at IS NULL OR last_active_at < $2::timestamptz)`,
+            [projectId, at.toISOString()]
+          );
           updated++;
         }
       }
