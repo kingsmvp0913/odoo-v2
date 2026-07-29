@@ -1,49 +1,77 @@
 const fs = require('fs');
 const { execFile } = require('child_process');
 
-// 測試區對外曝露（port 模式）：把「running 的測試區 → 對外埠」寫成共用 nginx 的 include 檔，
-// 每個測試區產一段 `server { listen <port> ssl; ... proxy_pass http://<ENV_BIND_HOST>:<port>; }`。
-// 全部共用同一張裸網域憑證（server_name 皆為 ENV_PUBLIC_URL_TEMPLATE 的主機名），
-// 使用者連 `https://<host>:<port>`——憑證只認主機名不認 port，一張蓋全部埠。
+// 測試區對外曝露（子網域模式）：把「running 且持有對外名額（external_slot）的測試區 → 內部埠」
+// 寫成共用 nginx 的 include 檔，每個持名額者產一段
+// `server { listen 443 ssl; server_name <slot 對應子網域>; proxy_pass http://<ENV_BIND_HOST>:<port>; }`。
+// 對外一律走 443、靠 server_name 分流；連到哪個內部埠才是「這台在跑哪個測試區」的實際差異，
+// 不再靠「開了哪個埠」這種需要 NAT 逐一放行的方式暴露。
 //
-// 為何不用 wildcard 子網域：DNS 在 Wix，不支援 `*` 記錄、也無 ACME DNS API，wildcard 起不來。
-// port 模式只需裸網域一張 HTTP-01 憑證（可一鍵簽），且新專案自動配埠、零人工 DNS/憑證。
+// slot 與子網域的對應由 ENV_EXTERNAL_URL_TEMPLATE（形如 https://odoo-ai-test-{slot}.ideaxpress.biz）
+// 代入 {slot} 推出，只認 0–9 共 10 個固定子網域。
+//
+// 為何不是 wildcard：DNS 在 Wix，不支援 `*` 記錄、也無 ACME DNS API，wildcard 憑證起不來；
+// 改用一張涵蓋 10 個固定子網域的 SAN 憑證（HTTP-01 逐一簽好即可）替代每測試區各配一張裸網域憑證，
+// 也不必再靠「開埠」讓使用者分辨測試區。
+//
+// 曝露的名額是租約（odoo_envs.external_slot），與 pipeline 跑用的內部埠（odoo_envs.port）是兩個池：
+// 只有 running 且持有 external_slot（真人在看）的才會被列進這份 conf；pipeline 自己在跑但沒人在看
+// 的環境有 port、沒 slot，不會被對外曝露——這是雙池分離的落地點。
 //
 // 安全前提：整段以 env `NGINX_SYNC_CONF_FILE` 當 gate——未設＝完全不執行，Windows/未反代機零影響。
-// 寫檔後先 `nginx -t`，過才 reload；不過就 rollback 舊檔、絕不 reload 壞檔，以免壞設定卡到同一台
-// 共用 nginx 上其他站台的下次 reload。同步失敗只影響對外連結，不阻斷建/刪環境。
+// 寫檔前必先過 assertServerNames 這道守衛（見下方函式）：這份 conf 會被 include 進與正式站
+// （AICEO/IDX…）共用的同一台 nginx，一旦 server_name 推導出錯，等於把測試區的 location 蓋到
+// 正式站的網域上。寫檔後先 `nginx -t`，過才 reload；不過就 rollback 舊檔、絕不 reload 壞檔，
+// 以免壞設定卡到同一台共用 nginx 上其他站台的下次 reload。同步失敗只影響對外連結，不阻斷建/刪環境。
 // 曝露的埠段務必以 VPN／IP 白名單擋在可信來源內（測試區跑未審程式碼、且與平台共用 PG superuser）。
 
-// 只納入「測試區 running 且持有租約埠」者。
-// 埠是租約，載體在 odoo_envs.port（projects.port 已停用）。讀錯來源的症狀是
-// 「測試區建好了但外面連不上」，且錯誤完全不指向 nginx 同步，故此處來源不可再漂移。
+// 只納入「running 且持有對外名額」者。pipeline 跑起來但沒人在看的環境有 port、沒 slot，
+// 故不會被寫進 nginx——這是雙池分離的落地點，讀錯條件就退回「pipeline 吃掉對外名額」的老問題。
 const RUNNING_SQL = `
-  SELECT e.port AS port
+  SELECT e.external_slot AS slot, e.port AS port
   FROM odoo_envs e
-  WHERE e.status = 'running' AND e.port IS NOT NULL
-  ORDER BY e.port`;
+  WHERE e.status = 'running' AND e.external_slot IS NOT NULL AND e.port IS NOT NULL
+  ORDER BY e.external_slot`;
 
-// 由對外網址樣板推導 server_name 的主機名（去掉 port）。樣板未設或無法解析 → null。
-function publicHost() {
-  const tpl = process.env.ENV_PUBLIC_URL_TEMPLATE;
+// 由對外網址樣板代入 slot 推出該段的 server_name。樣板未設或無法解析 → null。
+function externalServerName(slot) {
+  const tpl = process.env.ENV_EXTERNAL_URL_TEMPLATE;
   if (!tpl) return null;
-  try {
-    const sub = tpl.replace(/\{port\}/g, '0').replace(/\{folder\}/g, 'x').replace(/\{host\}/g, 'x');
-    return new URL(sub).hostname || null;
-  } catch { return null; }
+  try { return new URL(tpl.replace(/\{slot\}/g, String(slot))).hostname || null; }
+  catch { return null; }
 }
 
-// 純函式：running 埠 rows → nginx server block 字串。cfg = { host, bindHost, cert, key }。
-// 無 port 的項略過（不寫半截 block）；無 running 者回空字串（空 conf 檔對 nginx 合法）。
+// 寫檔前的最後一道保全。這份 conf 會被 include 進與正式站共用的同一台 nginx，
+// 程式一旦產出非預期的 server_name，等於把測試區的 location 蓋到正式站的網域上。
+// 兩項斷言：
+//   1. 每段都推得出 server_name
+//   2. 主機名最左標籤以 -<slot> 結尾 → 反證樣板確實含 {slot}
+//      （缺 {slot} 時 10 個名額會產出 10 段同名 server_name，直接蓋掉那個網域）
+// 刻意不寫死 `odoo-ai-test` 字面值：寫死的話換網域就得改碼，而漏改的症狀是守衛全面誤擋。
+function assertServerNames(entries) {
+  for (const e of entries || []) {
+    if (!e || !e.port) continue;
+    const name = externalServerName(e.slot);
+    if (!name) throw new Error(`slot ${e.slot} 無法由 ENV_EXTERNAL_URL_TEMPLATE 推出 server_name，中止同步`);
+    const label = String(name).split('.')[0];
+    if (!new RegExp(`-${e.slot}$`).test(label)) {
+      throw new Error(`server_name「${name}」未以 -${e.slot} 結尾＝樣板缺 {slot}；多個名額會產出同名 server_name 並蓋掉共用 nginx 上的其他站台，中止同步`);
+    }
+  }
+}
+
+// 純函式：持名額的環境 rows → nginx server block 字串。cfg = { bindHost, cert, key }。
+// 對外一律 443、靠 server_name 分流；內部埠只出現在 proxy_pass（容器→宿主，不經 NAT）。
+// 無 port 的項略過（不寫半截 block）；無人持有名額時回空字串（空 conf 檔對 nginx 合法）。
 function buildServerBlocks(entries, cfg) {
-  const { host, bindHost, cert, key } = cfg || {};
+  const { bindHost, cert, key } = cfg || {};
   const blocks = [];
   for (const e of entries || []) {
     if (!e || !e.port) continue;
     blocks.push(
 `server {
-    listen ${e.port} ssl;
-    server_name ${host};
+    listen 443 ssl;
+    server_name ${externalServerName(e.slot)};
     ssl_certificate ${cert};
     ssl_certificate_key ${key};
     location / {
@@ -83,7 +111,6 @@ async function syncNginxMap(deps = {}) {
   const run = deps.run || defaultRun;
   const container = process.env.NGINX_CONTAINER; // 容器名以 env 設定，不寫死
   const cfg = {
-    host: deps.host || publicHost(),
     bindHost: process.env.ENV_BIND_HOST,
     cert: process.env.ENV_TLS_CERT,
     key: process.env.ENV_TLS_KEY,
@@ -91,11 +118,15 @@ async function syncNginxMap(deps = {}) {
 
   try {
     if (!container) throw new Error('NGINX_SYNC_CONF_FILE 已設但缺 NGINX_CONTAINER');
-    const missing = ['host', 'bindHost', 'cert', 'key'].filter(k => !cfg[k]);
+    const missing = ['bindHost', 'cert', 'key'].filter(k => !cfg[k]);
     if (missing.length) {
-      throw new Error(`NGINX_SYNC_CONF_FILE 已設但缺設定：${missing.join('/')}（需 ENV_PUBLIC_URL_TEMPLATE／ENV_BIND_HOST／ENV_TLS_CERT／ENV_TLS_KEY）`);
+      throw new Error(`NGINX_SYNC_CONF_FILE 已設但缺設定：${missing.join('/')}（需 ENV_BIND_HOST／ENV_TLS_CERT／ENV_TLS_KEY）`);
+    }
+    if (!process.env.ENV_EXTERNAL_URL_TEMPLATE) {
+      throw new Error('NGINX_SYNC_CONF_FILE 已設但缺 ENV_EXTERNAL_URL_TEMPLATE（子網域模式的 server_name 來源）');
     }
     const { rows } = await q(RUNNING_SQL);
+    assertServerNames(rows); // 守衛不過即 throw，落入下方 catch：不寫檔、不 reload、loud log
     const content = buildServerBlocks(rows, cfg);
     const prev = fsx.existsSync(confFile) ? fsx.readFileSync(confFile, 'utf8') : null;
 
@@ -123,4 +154,4 @@ async function syncNginxMap(deps = {}) {
   }
 }
 
-module.exports = { buildServerBlocks, syncNginxMap, publicHost };
+module.exports = { buildServerBlocks, syncNginxMap, externalServerName, assertServerNames };
