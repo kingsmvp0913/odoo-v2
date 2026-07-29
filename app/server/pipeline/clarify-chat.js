@@ -85,7 +85,13 @@ function failMessage(err) {
 async function runClarifyChat(task, userId, signal, mode) {
   const taskId = task.id;
   const ref = { taskId: task.task_id, projectId: task.project_id };
-  const modeCfg = MODE_RULES[mode] || MODE_RULES.answer_or_proceed;
+  // 未知 mode 退到「最嚴格」而非最寬鬆：這行是「結構性擋住推進」的唯一落點，
+  // 呼叫端拼錯字不該讓限制最嚴的入口靜默變成可推進。
+  let modeCfg = MODE_RULES[mode];
+  if (!modeCfg) {
+    console.error(`[CLARIFY] 未知 mode '${mode}'，退到只准 answer`);
+    modeCfg = MODE_RULES.ask;
+  }
 
   let raw;
   try {
@@ -107,10 +113,10 @@ async function runClarifyChat(task, userId, signal, mode) {
     return;
   }
 
-  let parsed;
-  try {
-    parsed = await parseAgentResult(raw, { parse: parseClarifyChat, signal, ref, userId });
-  } catch { parsed = null; }
+  // 不包 try/catch：parseAgentResult 只在「補救呼叫本身被 abort」時往外拋，
+  // 那是手動暫停＝正常流程，必須讓它往上傳（比照 spec-review／respec-agent），
+  // 吞掉會把暫停誤標成「AI 回覆失敗」寫進時間軸還改狀態。解析失敗它自己回 null。
+  const parsed = await parseAgentResult(raw, { parse: parseClarifyChat, signal, ref, userId });
   if (!parsed) {
     await failBack(task, userId, 'AI 回覆失敗，請再送出一次。（未回傳有效結果）');
     return;

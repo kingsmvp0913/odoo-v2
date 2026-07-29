@@ -148,3 +148,25 @@ test('clarify_pending 來的任務：proceed 進 clarify_answered', async () => 
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(rows[0].status).toBe('clarify_answered');
 });
+
+// 未知 mode 是程式 bug，但降級方向決定它是「安全地少做」還是「危險地多做」
+test('未知的 mode → 退到最嚴格（只准 answer），不得靜默變成可推進', async () => {
+  const task = await makeTask('clarify_chat_running');
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n我要往前跑\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat(task, 1, null, 'typo_mode');
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_pending');
+});
+
+// 手動暫停＝正常流程：狀態原地不動、時間軸不留錯誤訊息（比照 runner.js 的 abort 慣例）
+test('補救解析階段被手動暫停 → 例外往上傳，不得寫成「AI 回覆失敗」', async () => {
+  const task = await makeTask('clarify_chat_running');
+  runClaude.mockResolvedValueOnce({ text: '這不是合法的 result 格式', usage: {}, durationMs: 1 });
+  // 讓補救呼叫拋出 aborted 例外（parseAgentResult 唯一會往外拋的情況）
+  const aborted = new Error('aborted');
+  aborted.aborted = true;
+  runClaude.mockRejectedValueOnce(aborted);
+  await expect(runClarifyChat(task, 1, null, 'answer_or_proceed')).rejects.toThrow();
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [task.id]);
+  expect(logs.some(l => l.content.includes('AI 回覆失敗'))).toBe(false);
+});
