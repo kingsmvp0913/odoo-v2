@@ -2,7 +2,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -59,8 +59,10 @@ window.TaskDetailView = Vue.defineComponent({
     },
     // confirm_pending 的分析澄清問題（來自後端解析 analysis_yaml）；逐題各一回答框
     clarQuestions() { return this.clarification?.questions || []; },
+    // intro 是白話說明段，不是題目：不編號、不必答，顯示在題目上方
+    clarIntro() { return this.clarification?.intro || ''; },
     clarAllAnswered() {
-      return this.clarQuestions.length > 0 && this.clarQuestions.every((q, i) => (this.answerFields[i] || '').trim());
+      return this.clarVisible().every(q => !q.required || String(this.answerFields[q.id] ?? '').trim());
     },
     // 合併「外部溝通紀錄」與「對話紀錄」成一條依時間排序的時間軸（含人工審核事件，因為 approve/reject 都會寫 task_logs）
     timeline() {
@@ -177,9 +179,11 @@ window.TaskDetailView = Vue.defineComponent({
       const init = {};
       qs.forEach(q => { if (!(q in this.csAnswers)) init[q] = ''; });
       this.csAnswers = { ...this.csAnswers, ...init };
-      // Init answer fields for each clarification question（逐題各一框）
+      // Init answer fields for each clarification question（逐題各一框，以題目 id 為鍵）
+      // q.answer 是 clarify-chat 依對話預填的答案：使用者已經講過的事不該再要他打一次，
+      // 但只當初值——他隨時可以改掉。已有輸入時不覆蓋（避免打字打到一半被重抓的資料洗掉）。
       const clarInit = {};
-      this.clarification.questions.forEach((q, i) => { if (!(i in this.answerFields)) clarInit[i] = ''; });
+      this.clarification.questions.forEach(q => { if (!(q.id in this.answerFields)) clarInit[q.id] = q.answer || ''; });
       this.answerFields = { ...this.answerFields, ...clarInit };
       // 逐檔裁決：預設落在 AI 建議（無建議則留 manual，強迫使用者自己選）
       const REC = ['take_theirs', 'take_ours', 'manual'];
@@ -191,28 +195,51 @@ window.TaskDetailView = Vue.defineComponent({
       });
       this.conflictChoices = { ...this.conflictChoices, ...cc };
     },
+    // depends_on 條件不滿足 → 該題收起，不顯示也不擋送出。條件指向不存在的題目時照常顯示（fail open）。
+    clarVisible() {
+      const byId = new Map(this.clarQuestions.map(q => [q.id, q]));
+      return this.clarQuestions.filter(q => {
+        const dep = q.depends_on;
+        if (!dep || !byId.has(dep.question)) return true;
+        return String(this.answerFields[dep.question] ?? '') === String(dep.equals);
+      });
+    },
     async submitAnswer() {
-      // 逐題模式：把每題答案配對成單一 user_answer（後端契約不變，分析重跑讀得到 Q/A 對應）；
-      // 無解析問題時（如 clarify_pending，AI 提問在時間軸）沿用單一留言框。
-      let user_answer;
+      // 結構化題目模式：改送 answers 物件（後端 Task 5 已支援），不再自己拼 Q1:／A1: 文字；
+      // 無解析問題時（如 clarify_pending，AI 提問在時間軸）沿用單一留言框（舊 user_answer 契約）。
+      let payload;
       if (this.clarQuestions.length) {
         if (!this.clarAllAnswered) return;
-        user_answer = this.clarQuestions
-          .map((q, i) => `Q${i + 1}: ${q}\nA${i + 1}: ${(this.answerFields[i] || '').trim()}`)
-          .join('\n\n');
+        // 只送看得見的題目：被 depends_on 收起來的題目不該把殘留輸入帶去給 AI
+        const answers = {};
+        this.clarVisible().forEach(q => { answers[q.id] = String(this.answerFields[q.id] ?? '').trim(); });
+        payload = { answers };
       } else {
-        user_answer = this.newMessageText.trim();
-        if (!user_answer) return;
+        const t = this.newMessageText.trim();
+        if (!t) return;
+        payload = { user_answer: t };
       }
       this.submitting = true;
       try {
-        await Api.post(`tasks/${this.task.id}/answer`, { user_answer });
+        await Api.post(`tasks/${this.task.id}/answer`, payload);
         this.newMessageText = '';
         this.answerFields = {};
-        showToast('回覆已送出', 'success');
+        showToast('回覆已送出，AI 正在確認', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.submitting = false; }
+    },
+    async submitAsk() {
+      const question = this.askText.trim();
+      if (!question) return;
+      this.askSubmitting = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/clarify-ask`, { question });
+        this.askText = '';
+        showToast('已送出提問，任務不會往下跑', 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.askSubmitting = false; }
     },
     async togglePause() {
       if (!this.task) return;
@@ -741,28 +768,49 @@ window.TaskDetailView = Vue.defineComponent({
 
             <!-- answer：AI 有問題等你回覆 -->
             <template v-if="timelineActionMode === 'answer'">
-              <!-- 分析澄清問題：逐題各一回答框 -->
+              <!-- 分析澄清問題：頁籤拆「規格書 QA」與「提問」，依題型渲染 -->
               <template v-if="clarQuestions.length">
-                <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
-                <!-- clarification.summary（AI 分析摘要）僅供後端 AI 理解需求，畫面不顯示，避免與下方問題重複雜亂 -->
-                <div v-for="(q, idx) in clarQuestions" :key="idx" style="margin-bottom:14px">
-                  <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
-                    <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
-                    <span style="white-space:pre-wrap">{{ q }}</span>
+                <div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:var(--space-3)">
+                  <button class="btn btn-sm" :class="clarTab === 'qa' ? 'btn-primary' : 'btn-ghost'" @click="clarTab = 'qa'">規格書 QA</button>
+                  <button class="btn btn-sm" :class="clarTab === 'ask' ? 'btn-primary' : 'btn-ghost'" @click="clarTab = 'ask'">提問</button>
+                </div>
+
+                <template v-if="clarTab === 'qa'">
+                  <div v-if="clarIntro" style="background:var(--surface);color:var(--text-secondary);border-radius:6px;padding:var(--space-3);margin-bottom:var(--space-3);white-space:pre-wrap;font-size:var(--fs-sm)">{{ clarIntro }}</div>
+                  <div v-for="(q, idx) in clarVisible()" :key="q.id" style="margin-bottom:14px">
+                    <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                      <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
+                      <span style="white-space:pre-wrap">{{ q.text }}</span>
+                      <span v-if="!q.required" style="color:var(--text-muted);font-size:var(--fs-xs);flex-shrink:0">選填</span>
+                    </div>
+                    <div v-if="q.type === 'choice'" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px">
+                      <label v-for="opt in q.options" :key="opt.key" style="display:flex;gap:6px;align-items:flex-start;cursor:pointer;font-size:var(--fs-sm)">
+                        <input type="radio" :name="'clar_' + q.id" :value="opt.key" v-model="answerFields[q.id]" style="margin-top:3px">
+                        <span>{{ opt.label }}</span>
+                      </label>
+                    </div>
+                    <textarea v-else v-model="answerFields[q.id]"
+                      class="form-control" rows="3"
+                      :class="{ 'form-control-error': q.required && !String(answerFields[q.id] || '').trim() }"
+                      placeholder="請輸入你的回答..."></textarea>
                   </div>
-                  <textarea v-model="answerFields[idx]"
-                    :ref="'clarInput_' + idx"
-                    :placeholder="'請回答第 ' + (idx + 1) + ' 題...（Enter 跳下題' + (idx === clarQuestions.length - 1 ? '／送出' : '') + '，Shift+Enter 換行）'"
-                    class="form-control" :class="{ 'form-control-error': !(answerFields[idx] && answerFields[idx].trim()) }"
-                    rows="3"
-                    @keydown.enter.exact.prevent="handleClarEnter(idx)"></textarea>
-                </div>
-                <div v-if="!clarAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 請回答所有問題才能送出</div>
-                <div style="text-align:right">
-                  <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !clarAllAnswered">
-                    {{ submitting ? '送出中...' : '送出回覆並繼續' }}
-                  </button>
-                </div>
+                  <div v-if="!clarAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 還有必答的問題沒回答</div>
+                  <div style="text-align:right">
+                    <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !clarAllAnswered">
+                      {{ submitting ? '送出中...' : '送出回答' }}
+                    </button>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div style="font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:var(--space-2)">有看不懂的地方就直接問，問完再回去答題。問問題不會讓任務往下跑。</div>
+                  <textarea v-model="askText" class="form-control" rows="3" placeholder="例如：我測試好像正常，要怎麼重現這個情況？"></textarea>
+                  <div style="margin-top:6px;text-align:right">
+                    <button class="btn btn-primary btn-sm" @click="submitAsk" :disabled="askSubmitting || !askText.trim()">
+                      {{ askSubmitting ? '送出中...' : '送出提問' }}
+                    </button>
+                  </div>
+                </template>
               </template>
               <!-- 無解析問題（如退回對話，AI 提問已在時間軸）：單一回覆框 -->
               <template v-else>
