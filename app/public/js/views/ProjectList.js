@@ -6,7 +6,7 @@ window.ProjectListView = Vue.defineComponent({
       loading: true,
       search: '',
       showAddForm: false,
-      newProject: { name: '', folder_name: '', odoo_version: '', description: '' },
+      newProject: { name: '', folder_name: '', odoo_version: '', description: '', edition: 'community' },
       saving: false
     };
   },
@@ -39,7 +39,7 @@ window.ProjectListView = Vue.defineComponent({
       this.saving = true;
       try {
         await Api.post('projects', { ...this.newProject });
-        this.newProject = { name: '', folder_name: '', odoo_version: '', description: '' };
+        this.newProject = { name: '', folder_name: '', odoo_version: '', description: '', edition: 'community' };
         this.showAddForm = false;
         await this.load();
         showToast('已新增專案', 'success');
@@ -96,6 +96,13 @@ window.ProjectListView = Vue.defineComponent({
           <div class="form-group" style="margin:0">
             <label>英文資料夾名稱 <span style="font-size:var(--fs-xs);color:var(--text-muted)">中文名稱必填此欄</span></label>
             <input v-model="newProject.folder_name" placeholder="例：hong-jiu（留空則用專案名稱）" class="form-control" />
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>版本類型</label>
+            <select v-model="newProject.edition" class="form-control">
+              <option value="community">社群版（Community）</option>
+              <option value="enterprise">企業版（Enterprise）</option>
+            </select>
           </div>
           <div class="form-group" style="margin:0;grid-column:span 2">
             <label>說明（選填）</label>

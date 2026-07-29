@@ -346,6 +346,20 @@ async function migrate() {
       rationale         TEXT,
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+
+    // 企業版來源：Odoo 企業版只是一包額外的 addons 目錄，故不分 image、只按「大版本」各備一份。
+    // odoo_version 存大版本數字字串（'17'）：17 的 enterprise addons 不能給 18 用，一版一列。
+    `CREATE TABLE IF NOT EXISTS enterprise_sources (
+      odoo_version   TEXT PRIMARY KEY,
+      repo_url       TEXT NOT NULL,
+      branch         TEXT,
+      local_path     TEXT,
+      clone_status   TEXT NOT NULL DEFAULT 'pending',   -- pending | syncing | done | error
+      error_msg      TEXT,
+      last_synced_at TIMESTAMPTZ,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -471,7 +485,9 @@ async function migrate() {
     { table: 'odoo_envs', col: 'last_active_at', sql: 'ALTER TABLE odoo_envs ADD COLUMN last_active_at TIMESTAMPTZ' },
     // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
-    { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' }
+    { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },
+    // 企業版：預設 community，既有專案升級後行為不變（不會突然要求 enterprise 來源）
+    { table: 'projects', col: 'edition', sql: "ALTER TABLE projects ADD COLUMN edition TEXT NOT NULL DEFAULT 'community'" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
