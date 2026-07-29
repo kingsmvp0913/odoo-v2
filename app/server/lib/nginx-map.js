@@ -23,7 +23,9 @@ const { execFile } = require('child_process');
 // （AICEO/IDX…）共用的同一台 nginx，一旦 server_name 推導出錯，等於把測試區的 location 蓋到
 // 正式站的網域上。寫檔後先 `nginx -t`，過才 reload；不過就 rollback 舊檔、絕不 reload 壞檔，
 // 以免壞設定卡到同一台共用 nginx 上其他站台的下次 reload。同步失敗只影響對外連結，不阻斷建/刪環境。
-// 曝露的埠段務必以 VPN／IP 白名單擋在可信來源內（測試區跑未審程式碼、且與平台共用 PG superuser）。
+// 對外曝露面因此收斂成固定 10 個子網域走 443：原本每個測試區各自對外的 21000–21099 埠段全部
+// 收回內網、不再對公網開放；443 本來就已對公網開通常無需再逐一放行 NAT。真要限制來源（測試區
+// 跑未審程式碼、且與平台共用 PG superuser），改在 443 前端加 IP 白名單／VPN，不再是逐埠管制。
 
 // 只納入「running 且持有對外名額」者。pipeline 跑起來但沒人在看的環境有 port、沒 slot，
 // 故不會被寫進 nginx——這是雙池分離的落地點，讀錯條件就退回「pipeline 吃掉對外名額」的老問題。

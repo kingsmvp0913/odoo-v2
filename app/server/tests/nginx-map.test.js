@@ -30,6 +30,14 @@ describe('buildServerBlocks', () => {
     expect(out).toContain('proxy_set_header Upgrade $http_upgrade;');
     expect(out).toContain('proxy_set_header Connection "upgrade";');
     expect(out).toContain('client_max_body_size 50m;');
+    // Host 必須用 $http_host（含 port）：$host 會砍掉 port，Odoo（未開 proxy_mode）
+    // 靠 Host 拼絕對網址，跳轉/redirect 的 Location 就會掉 port、落到 443。
+    expect(out).toContain('proxy_set_header Host $http_host;');
+    expect(out).not.toContain('proxy_set_header Host $host;');
+    // X-Forwarded-Host 必送：Odoo 17 http.py 的 ProxyFix 守門是「proxy_mode 且 HTTP_X_FORWARDED_HOST
+    // 存在」兩者都要——漏了它，連 X-Forwarded-Proto:https 也一起被無視 → 產 http:// redirect → 打到
+    // 只收 TLS 的 port 回 400。用 $http_host 讓 ProxyFix 的 x_host 一併吃到正確 port。
+    expect(out).toContain('proxy_set_header X-Forwarded-Host $http_host;');
   });
 
   test('跳過無 port 的項（不寫半截 block）', () => {
@@ -197,6 +205,22 @@ describe('syncNginxMap', () => {
 
     expect(res.rolledBack).toBe(true);
     expect(fs._store.has('/m/envs.conf')).toBe(false);
+  });
+
+  // 意圖：assertServerNames 是「寫檔前最後一道保全」，這個接線點必須被獨立守著——
+  // 若日後有人把守衛移到 buildServerBlocks 之後、或不小心包進吞例外的分支，
+  // 上面那些用合法樣板的 test 全部仍會綠燈，唯有這裡（刻意用壞樣板）能抓到。
+  test('樣板缺 {slot} → syncNginxMap 回 ok:false 且不寫檔（守衛真的接在寫檔之前）', async () => {
+    setAll();
+    process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-dev.example.com'; // 缺 {slot}
+    const fs = fakeFs();
+    const run = jest.fn();
+    const res = await syncNginxMap({ fs, run, query: async () => ({ rows: [{ slot: 0, port: 21000 }] }) });
+
+    expect(res.ok).toBe(false);
+    expect(fs._store.size).toBe(0); // 守衛擋在寫檔之前，不該有任何檔案內容
+    expect(run).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
   });
 });
 
