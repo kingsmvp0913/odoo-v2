@@ -69,7 +69,7 @@ function latestLog(dir, prefix) {
     params.push(key); conds.push(`task_id = $${params.length}`);
     const { rows: tasks } = await pool.query(
       `SELECT id, task_id, title, status, is_paused, blocker_content, git_branch, project_id,
-              reentry_count, qa_retry_count, pw_retry_count, deploy_retry_count, coding_resume_count, updated_at
+              reentry_count, qa_retry_count, pw_retry_count, deploy_retry_count, qa_resume_count, updated_at
        FROM tasks WHERE ${conds.join(' OR ')} ORDER BY updated_at DESC`, params);
     if (!tasks.length) { console.error(`找不到任務：${key}`); process.exitCode = 1; return; }
     if (tasks.length > 1) console.log(`⚠ 命中 ${tasks.length} 筆（task_id 跨使用者重複），以最近更新的一筆為準。`);
@@ -78,7 +78,7 @@ function latestLog(dir, prefix) {
     section(`任務 #${t.id}（task_id=${t.task_id}）`);
     console.log(`標題：${t.title || '（無）'}`);
     console.log(`狀態：${t.status}${t.is_paused ? '（已暫停）' : ''}　分支：${t.git_branch || '（無）'}`);
-    console.log(`彈跳計數：reentry=${t.reentry_count} qa=${t.qa_retry_count} e2e(pw)=${t.pw_retry_count} deploy=${t.deploy_retry_count} coding_resume=${t.coding_resume_count}`);
+    console.log(`彈跳計數：reentry=${t.reentry_count} qa=${t.qa_retry_count} e2e(pw)=${t.pw_retry_count} deploy=${t.deploy_retry_count} qa_resume=${t.qa_resume_count}`);
     if (t.blocker_content) console.log(`blocker：${t.blocker_content}`);
 
     // 2. 專案與環境
