@@ -478,6 +478,11 @@ async function migrate() {
     { table: 'db_connections', col: 'vpn_password_enc',  sql: 'ALTER TABLE db_connections ADD COLUMN vpn_password_enc TEXT' },
     { table: 'db_connections', col: 'vpn_forward_port',  sql: 'ALTER TABLE db_connections ADD COLUMN vpn_forward_port INTEGER' },
     { table: 'db_connections', col: 'vpn_container_name', sql: 'ALTER TABLE db_connections ADD COLUMN vpn_container_name TEXT' },
+    // VPN 憑證上移專案層：一個專案＝一個客戶站點＝一組 VPN，同專案所有連線共用一條隧道。
+    // db_connections 的同名欄位自此為死欄（不清空、不 drop，留作遷移出錯時的回頭路）。
+    { table: 'projects', col: 'vpn_config_enc',   sql: 'ALTER TABLE projects ADD COLUMN vpn_config_enc TEXT' },
+    { table: 'projects', col: 'vpn_username',     sql: 'ALTER TABLE projects ADD COLUMN vpn_username TEXT' },
+    { table: 'projects', col: 'vpn_password_enc', sql: 'ALTER TABLE projects ADD COLUMN vpn_password_enc TEXT' },
     { table: 'token_usage', col: 'chat_id', sql: 'ALTER TABLE token_usage ADD COLUMN chat_id INTEGER' },
     { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" },
     // 每列記錄實際使用的 model（供報表按 model 單價算真實 USD 成本，對齊 ccusage 做法）
@@ -568,6 +573,9 @@ async function migrate() {
        blocker_content = COALESCE(blocker_content, '流程改版，請人工重新確認')
      WHERE status IN ('final_pending','deploy_pending','deploy_fixing','deploy_ready')`
   ).catch(() => {});
+
+  // VPN 憑證上移專案層（同專案共用一條隧道）。獨立模組，見 lib/vpn-migrate.js 的註解。
+  await require('./lib/vpn-migrate').migrateVpnToProjects(query).catch(() => {});
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
