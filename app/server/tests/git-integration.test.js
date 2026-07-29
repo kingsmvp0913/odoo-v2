@@ -298,3 +298,72 @@ test('mergeToAiBranch：併入 ai-dev 並推遠端，實體 main 完全不動', 
   const { stdout: mainAfter } = await sh(repo, 'rev-parse', 'main');
   expect(mainAfter.trim()).toBe(mainBefore.trim());
 }, 30000);
+
+describe('ai-dev 隔離：端到端', () => {
+  test('全新專案 → 建 ai-dev → 任務從 ai-dev 切 → approve 後 ai-dev 前進而 main 不動', async () => {
+    const repo = await makeRepo();
+    const { stdout: mainAtStart } = await sh(repo, 'rev-parse', 'main');
+
+    // 1. 第一張任務開工：ai-dev 自動建立，內容 == main
+    await git.ensureAiBranch(repo, undefined);
+    await git.syncMainIntoAi(repo, undefined);
+    const { stdout: aiInit } = await sh(repo, 'rev-parse', 'ai-dev');
+    expect(aiInit.trim()).toBe(mainAtStart.trim());
+
+    // 2. 任務 A 從 ai-dev 切、寫碼、核准
+    await sh(repo, 'checkout', '-b', 'task/a', 'ai-dev');
+    await write(repo, 'a_feature.py', 'a = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'task a');
+    await git.mergeToAiBranch(repo, 'task/a', undefined);
+
+    // 3. 任務 B 從 ai-dev 切 → 看得到 A 的成果（這是切點選 ai-dev 的全部理由）
+    await git.ensureAiBranch(repo, undefined);
+    await sh(repo, 'checkout', '-b', 'task/b', 'ai-dev');
+    expect(fs.existsSync(path.join(repo, 'a_feature.py'))).toBe(true);
+
+    // 4. 實體 main 從頭到尾一步都沒動
+    const { stdout: mainAtEnd } = await sh(repo, 'rev-parse', 'main');
+    expect(mainAtEnd.trim()).toBe(mainAtStart.trim());
+    // 遠端 main 也沒動
+    const { stdout: remoteMain } = await sh(repo, 'rev-parse', 'origin/main');
+    expect(remoteMain.trim()).toBe(mainAtStart.trim());
+  }, 60000);
+
+  test('工程師手推 commit 到 main → 下一張任務開工後該 commit 出現在 ai-dev', async () => {
+    const repo = await makeRepo();
+    await git.ensureAiBranch(repo, undefined);
+    // AI 先做了一版
+    await write(repo, 'ai.py', 'ai = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'ai work');
+    // 工程師直接改 main（不同檔，不衝突）
+    await sh(repo, 'checkout', 'main');
+    await write(repo, 'hotfix.py', 'fix = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'engineer hotfix');
+
+    await git.syncMainIntoAi(repo, undefined);
+
+    // 兩邊的碼都在 ai-dev 上
+    expect(fs.existsSync(path.join(repo, 'ai.py'))).toBe(true);
+    expect(fs.existsSync(path.join(repo, 'hotfix.py'))).toBe(true);
+  }, 60000);
+
+  test('testing 重長到 ai-dev 後，含已核准但未進 main 的成果', async () => {
+    const repo = await makeRepo();
+    await git.ensureAiBranch(repo, undefined);
+    await sh(repo, 'checkout', '-b', 'task/c', 'ai-dev');
+    await write(repo, 'c.py', 'c = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'task c');
+    await git.mergeToAiBranch(repo, 'task/c', undefined);
+
+    await git.resetTestingToAiBranch(repo);
+
+    expect(fs.existsSync(path.join(repo, 'c.py'))).toBe(true);
+    const { stdout: t } = await sh(repo, 'rev-parse', 'testing');
+    const { stdout: a } = await sh(repo, 'rev-parse', 'ai-dev');
+    expect(t.trim()).toBe(a.trim());
+  }, 60000);
+});
