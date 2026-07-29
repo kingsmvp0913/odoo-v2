@@ -414,3 +414,12 @@ describe('PLAIN_LANGUAGE_AGENTS 注入說人話守則', () => {
     }
   });
 });
+
+// 意圖（Rule 9）：P6 要求分析關把權限攤開給人看。若 analysis-project 的 YAML 格式與範例沒有
+// permissions 欄位，agent 不會憑空生出這一欄——規格審核畫面就永遠是空的，P6 形同虛設。
+test('analysis-project 的 YAML 格式與範例都含 permissions 區塊（P6 的落地點）', () => {
+  const body = require('../pipeline/agent-loader').loadAgent('analysis-project').body;
+  // 格式區塊與 <result> 範例各一次，共 2 次
+  expect(body.split('permissions:').length - 1).toBe(2);
+  expect(body).toContain('沒有涉及權限異動就留空');
+});
