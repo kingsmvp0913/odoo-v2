@@ -844,7 +844,7 @@ window.TaskDetailView = Vue.defineComponent({
                   <div style="border-top:1px solid var(--border);margin-top:var(--space-3);padding-top:var(--space-3)">
                     <div v-if="!clarifyDraft" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
                       <span style="font-size:var(--fs-sm);color:var(--text-secondary)">問完了？讓 AI 依這段對話調整題目：</span>
-                      <button class="btn btn-secondary btn-sm" @click="requestClarifyRevise" :disabled="draftBusy">更新規格書 QA</button>
+                      <button class="btn btn-outline btn-sm" @click="requestClarifyRevise" :disabled="draftBusy">更新規格書 QA</button>
                     </div>
                     <div v-else>
                       <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:6px">AI 建議這樣調整題目</div>
