@@ -207,6 +207,76 @@ test('logFailedUsage：失敗執行落一筆零用量記錄，status 標注失�
   expect(rows[0].duration_ms).toBe(600000);
 });
 
+// 認證失效歸因：claude 憑證在並發 spawn 下被刷新踩空時印 "Not logged in" 走 stdout、stderr 空，
+// 舊版只剩泛用「claude exited with code 1」，blocker 看不出真因、分類器也判不出。
+// 須把 stdout 掃到的認證字面浮到 reject 訊息，並標 claudeStatus='auth' 供分類器歸 transient。
+test('runClaude：stdout 印 Not logged in 後 exit 1 → 可讀的認證失效訊息＋claudeStatus=auth', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', 'Not logged in\n'); // 非 JSON 行，走 raw emit 分支
+  child.emit('close', 1);
+  await expect(p).rejects.toMatchObject({
+    message: expect.stringContaining('未登入或認證失效'),
+    claudeStatus: 'auth',
+  });
+  await expect(p).rejects.toThrow(/Not logged in/); // 保留原始字面供分類器與人工判讀
+});
+
+// stderr 才印認證字面的變體（CLI 版本差異）也要歸因，不可只認 stdout
+test('runClaude：stderr 印認證字面 → 同樣標 claudeStatus=auth', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stderr.emit('data', 'Invalid API key · Please run /login');
+  child.emit('close', 1);
+  await expect(p).rejects.toMatchObject({ claudeStatus: 'auth' });
+});
+
+// 回歸：非認證的 exit 1 不可被新分支吃掉，訊息與 claudeStatus 維持原樣
+test('runClaude：非認證的 exit 1 → 維持原訊息與 claudeStatus=error', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const mk = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+    child.kill = jest.fn();
+    return child;
+  };
+  const { runClaude } = require('../pipeline/claude-runner');
+
+  const c1 = mk();
+  spawn.mockReturnValueOnce(c1);
+  const p1 = runClaude('p', {});
+  c1.stderr.emit('data', 'boom something broke');
+  c1.emit('close', 1);
+  await expect(p1).rejects.toMatchObject({ message: 'boom something broke', claudeStatus: 'error' });
+
+  const c2 = mk();
+  spawn.mockReturnValueOnce(c2);
+  const p2 = runClaude('p', {});
+  c2.emit('close', 1);
+  await expect(p2).rejects.toMatchObject({ message: 'claude exited with code 1', claudeStatus: 'error' });
+});
+
 test('logTokenUsage：成功但 usage 為 null 時維持不落帳（相容既有行為）', async () => {
   await expect(require('../pipeline/token-logger').logTokenUsage({ taskId: 'x2' }, null, 'cs', null, null))
     .resolves.toBeUndefined();

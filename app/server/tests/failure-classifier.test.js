@@ -120,3 +120,23 @@ describe('R1 Claude API 過載/5xx 屬 transient', () => {
     expect(classifyFailure('API Error: 400 {"type":"error","error":{"type":"invalid_request_error"}}')).toBe('unknown');
   });
 });
+
+// 認證失效：所有 agent 共用一份會過期／會被刷新改寫的互動式 OAuth 憑證檔，並發 spawn 在
+// token 輪替瞬間互相踩空 → claude 印 "Not logged in"（走 stdout、stderr 空）→ exit 1。
+// 舊版落 unknown → 交 haiku 猜 → 預設 env → 任務直接停等人工。實測重跑就過，故歸 transient，
+// 讓既有重試上限自癒；耗盡才丟人工（此時 blocker 已被 runner 改成可讀的「未登入」訊息）。
+describe('Claude CLI 認證失效屬 transient', () => {
+  test('Not logged in／Please run /login／Invalid API key → transient', () => {
+    expect(classifyFailure('Not logged in')).toBe('transient');
+    expect(classifyFailure('Invalid API key · Please run /login')).toBe('transient');
+    expect(classifyFailure('API Error: 401 {"type":"error","error":{"type":"authentication_error"}}')).toBe('transient');
+  });
+
+  test('runner 已改寫成中文訊息（claudeStatus=auth）→ 仍判 transient', () => {
+    expect(classifyFailure('Claude CLI 未登入或認證失效：Not logged in', { claudeStatus: 'auth' })).toBe('transient');
+  });
+
+  test('Permission denied（Odoo 檔案權限）不被認證簽章誤搶，維持 env', () => {
+    expect(classifyFailure('PermissionError: [Errno 13] Permission denied')).toBe('env');
+  });
+});

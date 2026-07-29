@@ -11,6 +11,7 @@
 const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
+const { AUTH_FAIL } = require('./auth-signature');
 
 // 快速、可重試的暫時性失敗（網路抖動、行程被砍、連線重置）
 const TRANSIENT = [
@@ -19,7 +20,10 @@ const TRANSIENT = [
   /connection reset/i, /temporarily unavailable/i,
   // Claude API 過載/伺服器錯（"API Error: 529 {...overloaded_error...}"、"API Error: 500 ..."）——
   // 等幾秒重試幾乎必過，卻是 agent 關卡實際最常見的失敗字面；不收就落 unknown 直接停等人工（健檢 R1）
-  /\boverloaded\b/i, /API Error:? 5\d\d/i
+  /\boverloaded\b/i, /API Error:? 5\d\d/i,
+  // claude CLI 認證失效（並發 spawn 撞共用 OAuth 憑證刷新，"Not logged in"）——實測重跑就過，
+  // 當純安全網交既有重試上限自癒；耗盡才丟人工，此時 blocker 已是可讀的「未登入」訊息（見 auth-signature.js）
+  ...AUTH_FAIL
 ];
 
 // 環境/基礎設施問題（非模組程式碼）——不該退 coding。
@@ -61,6 +65,8 @@ function classifyFailure(text, opts = {}) {
   if (!s.trim()) return 'unknown';
   // timeout 不在此分類（重試太貴）：呼叫端依 claudeStat 先處理
   if (opts.claudeStatus === 'timeout') return 'unknown';
+  // runner 已認定認證失效：權威訊號，不必再靠訊息字面（訊息可能已被改寫或截斷）
+  if (opts.claudeStatus === 'auth') return 'transient';
   // 先 transient（最該優先自動重試）、再 env（別怪 coding）、最後 code
   if (matchAny(TRANSIENT, s)) return 'transient';
   if (matchAny(ENV, s)) return 'env';

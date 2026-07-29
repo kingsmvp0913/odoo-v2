@@ -4,6 +4,7 @@ const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
+const { looksLikeAuthFailure } = require('./auth-signature');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
@@ -132,6 +133,9 @@ function runClaude(prompt, opts = {}) {
     let usedModel = null;
     let lineBuffer = '';
     let stderr = '';
+    // 認證失效的原始字面：claude 把 "Not logged in" 印在 stdout（非 JSON 行）且 stderr 空，
+    // 不留存的話 close 只剩泛用退出碼、真因整個蒸發（見 auth-signature.js）
+    let authReason = null;
     let settled = false;
     let timer = null;
     const startedAt = Date.now();
@@ -190,6 +194,7 @@ function runClaude(prompt, opts = {}) {
             durationMs = ev.duration_ms || null;
           }
         } catch {
+          if (!authReason && looksLikeAuthFailure(line)) authReason = line.slice(0, 200);
           emit(line + '\n');
         }
       }
@@ -218,8 +223,14 @@ function runClaude(prompt, opts = {}) {
       finish(() => {
         // code null＝被 signal 終止：自家的 timeout/abort kill 已先 settle（此處為 no-op），
         // 走到這裡代表外部殺掉（OOM killer 等）→ 視為失敗，不能拿空結果當成功回傳
-        if (code !== 0) reject(fail(new Error(stderr.trim() || (code === null ? `claude 行程被外部終止（${sig || 'signal'}）` : `claude exited with code ${code}`)), 'error'));
-        else {
+        if (code !== 0) {
+          const raw = stderr.trim();
+          // 認證失效優先歸因：否則只剩泛用「exited with code 1」，blocker 看不出真因、
+          // 分類器也判不出（→ 停等人工）。標 claudeStatus='auth' 供分類器歸 transient 自癒。
+          const auth = authReason || (looksLikeAuthFailure(raw) ? raw.slice(0, 200) : null);
+          if (auth) reject(fail(new Error(`Claude CLI 未登入或認證失效：${auth}`), 'auth'));
+          else reject(fail(new Error(raw || (code === null ? `claude 行程被外部終止（${sig || 'signal'}）` : `claude exited with code ${code}`)), 'error'));
+        } else {
           // 實際 model：優先用事件回報的 resolved id，退回 opts 的 model alias（sonnet/opus…）
           const finalModel = usedModel || model || null;
           // 折進 usage，讓 logTokenUsage 零改動就能落 model 欄
