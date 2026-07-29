@@ -201,3 +201,51 @@ test('ensureAiBranch：已存在 → 冪等，不改動 SHA', async () => {
   const { stdout: cur } = await sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
   expect(cur.trim()).toBe('ai-dev');
 }, 30000);
+
+test('syncMainIntoAi：main 有新 commit → 帶進 ai-dev', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  // 模擬工程師直接改 main
+  await sh(repo, 'checkout', 'main');
+  await write(repo, 'eng.py', 'engineer = 1\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'engineer change');
+
+  const r = await git.syncMainIntoAi(repo);
+
+  expect(r.hasConflicts).toBe(false);
+  const { stdout: cur } = await sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  expect(cur.trim()).toBe('ai-dev');
+  expect(fs.existsSync(path.join(repo, 'eng.py'))).toBe(true); // 工程師的碼進到 ai-dev 了
+}, 30000);
+
+test('syncMainIntoAi：main 沒有新東西 → 無衝突且不動 ai-dev', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  await write(repo, 'ai.py', 'ai = 1\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'ai work');
+  const { stdout: before } = await sh(repo, 'rev-parse', 'ai-dev');
+
+  const r = await git.syncMainIntoAi(repo);
+
+  expect(r.hasConflicts).toBe(false);
+  const { stdout: after } = await sh(repo, 'rev-parse', 'ai-dev');
+  expect(after.trim()).toBe(before.trim()); // 沒東西可併就不該產生 commit
+}, 30000);
+
+test('syncMainIntoAi：兩邊改同一行 → hasConflicts＋檔名，留 MERGE_HEAD 給人工', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  await write(repo, 'a.py', 'x = 2\n');   // AI 在 ai-dev 上改
+  await sh(repo, 'commit', '-am', 'ai change');
+  await sh(repo, 'checkout', 'main');
+  await write(repo, 'a.py', 'x = 3\n');   // 工程師在 main 上改同一行
+  await sh(repo, 'commit', '-am', 'engineer change');
+
+  const r = await git.syncMainIntoAi(repo);
+
+  expect(r.hasConflicts).toBe(true);
+  expect(r.conflictFiles).toContain('a.py');
+  expect(fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD'))).toBe(true);
+}, 30000);
