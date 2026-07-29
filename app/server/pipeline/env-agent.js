@@ -8,6 +8,7 @@ const { E2E_LOGIN } = require('./e2e-account');
 const { leasePort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 const { syncNginxMap } = require('../lib/nginx-map');
+const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
@@ -22,7 +23,7 @@ const DOCKER_TEST_HTTP_PORT = 8169;
 // 組某專案的 docker 操作上下文（容器名、image、DB、addons 掛載、db 連線參數、env 目錄）。
 async function dockerCtxFor(projectId) {
   const { rows: [project] } = await query(
-    `SELECT p.name, p.folder_name, p.odoo_version, e.port
+    `SELECT p.name, p.folder_name, p.odoo_version, p.edition, e.port
        FROM projects p LEFT JOIN odoo_envs e ON e.project_id = p.id
       WHERE p.id=$1`, [projectId]
   );
@@ -30,12 +31,22 @@ async function dockerCtxFor(projectId) {
   const dirName = project.folder_name || project.name;
   const major = (project.odoo_version || '17.0').split('.')[0];
   const hostPaths = await projectAddonsPaths(projectId);
+  const mounts = dockerEnv.addonsMounts(hostPaths);
+  // 企業版：把該大版本的 enterprise addons 以唯讀掛入，且排在專案 repos「之後」、核心「之前」——
+  // 順序即覆蓋權（專案自訂可蓋 enterprise，enterprise 的 web_enterprise 要能蓋核心 web）。
+  // 解析不到來源時不掛、改記 enterpriseError，由 setup 據此 fail loud（不可默默跑成社群版）。
+  let enterpriseError = null;
+  if (project.edition === 'enterprise') {
+    const ent = await resolveEnterprisePath(project.odoo_version);
+    if (ent.ok) mounts.push({ host: ent.path, container: dockerEnv.ENTERPRISE_CONTAINER_DIR, enterprise: true });
+    else enterpriseError = ent.error;
+  }
   return {
-    project, dirName, major,
+    project, dirName, major, enterpriseError,
     dbName: `test_${dirName}`,
     image: dockerEnv.imageTagFor(major),
     container: dockerEnv.containerNameFor(dirName),
-    mounts: dockerEnv.addonsMounts(hostPaths),
+    mounts,
     dbArgs: odooDbArgs(),
     envDir: path.join(ENV_BASE, dirName),
   };
@@ -406,6 +417,17 @@ async function cleanupProjectEnv(projectId) {
 async function _runEnvSetupDocker(projectId) {
   const ctx = await dockerCtxFor(projectId);
   if (!ctx) return;
+  // 企業版缺件一律 fail loud：靜默降級成社群版會讓人以為在測企業版，而且毫無跡象。
+  // 擺在借埠之前——建不起來的環境不該先白佔一個併發槽。
+  if (ctx.enterpriseError) {
+    await query(
+      `INSERT INTO odoo_envs (project_id, status, error_msg, setup_log, updated_at)
+       VALUES ($1,'error',$2,$3,NOW())
+       ON CONFLICT (project_id) DO UPDATE SET status='error', error_msg=$2, setup_log=$3, updated_at=NOW()`,
+      [projectId, ctx.enterpriseError, `[docker] ${ctx.enterpriseError}\n`]
+    );
+    return;
+  }
   // 租約：沿用現有租約（重跑 setup 時容器會 rm+run，埠不變即可重用），沒有才借新的。
   // 池滿時注入 reclaim 徵收一個閒置夠久的測試區讓位——deploy／E2E 與人工建置走同一套規則。
   let port = ctx.project.port;
@@ -440,7 +462,11 @@ async function _runEnvSetupDocker(projectId) {
   ctx.ssoSecret = creds.ssoSecret;
   ctx.e2ePassword = creds.e2ePassword;
 
-  for (const m of ctx.mounts) { try { await ensureTestingBranch(m.host); } catch { /* 非致命 */ } }
+  // enterprise 是唯讀共用來源、不屬於任何專案的 repo，不得開／切 testing 分支
+  for (const m of ctx.mounts) {
+    if (m.enterprise) continue;
+    try { await ensureTestingBranch(m.host); } catch { /* 非致命 */ }
+  }
 
   let log = `[docker] mode=docker image=${ctx.image} container=${ctx.container} port=${port}\n`;
   const firstBuild = !fs.existsSync(readyMarker);

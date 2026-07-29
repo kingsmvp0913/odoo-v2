@@ -56,6 +56,23 @@ describe('addonsMounts / containerAddonsPath', () => {
     expect(d.containerAddonsPath([])).toContain(d.PLATFORM_ADDONS_CONTAINER);
     expect(d.containerAddonsPath(d.addonsMounts(['/repos/p/main']))).toContain(d.PLATFORM_ADDONS_CONTAINER);
   });
+  test('enterprise 掛載排在專案 repos 之後、核心之前（順序即覆蓋權）', () => {
+    const mounts = [
+      ...d.addonsMounts(['/repos/p/main']),
+      { host: '/enterprise/17', container: d.ENTERPRISE_CONTAINER_DIR, enterprise: true },
+    ];
+    expect(d.containerAddonsPath(mounts))
+      .toBe(`${d.PLATFORM_ADDONS_CONTAINER},/mnt/extra-addons/main,/mnt/enterprise,${d.CORE_ADDONS}`);
+  });
+  test('enterprise 掛載一律唯讀（容器內寫不進共用來源）', () => {
+    // mountFlags 未匯出（module.exports :312-323），故從 buildRunArgs 的實際輸出驗證，
+    // 不為了測試而擴大匯出面。
+    const args = d.buildRunArgs({
+      name: 'c', image: 'i', host: '127.0.0.1', port: 21000, dbName: 'test_x',
+      mounts: [{ host: '/enterprise/17', container: d.ENTERPRISE_CONTAINER_DIR, enterprise: true }],
+    });
+    expect(args).toContain('/enterprise/17:/mnt/enterprise:ro');
+  });
 });
 
 describe('buildRunArgs', () => {

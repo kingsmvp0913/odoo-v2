@@ -27,6 +27,10 @@ const EXTRA_ADDONS_ROOT = '/mnt/extra-addons';
 const PLATFORM_ADDONS_HOST = path.resolve(__dirname, '..', '..', 'docker', 'addons');
 const PLATFORM_ADDONS_CONTAINER = `${EXTRA_ADDONS_ROOT}/_platform`;
 
+// 企業版 addons 的固定容器掛載點：與專案 repo 的 /mnt/extra-addons/<basename> 分開，避免和 basename
+// 撞名；固定路徑讓 addons-path 的「專案自訂 → enterprise → 核心」順序可預期。
+const ENTERPRISE_CONTAINER_DIR = '/mnt/enterprise';
+
 // 跳脫 regex 特殊字元，供 dbfilter 把 dbName 當純字面比對（而非 pattern）用。
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -320,4 +324,5 @@ module.exports = {
   ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, containerLogs,
   // 常數
   CORE_ADDONS, EXTRA_ADDONS_ROOT, PLATFORM_ADDONS_HOST, PLATFORM_ADDONS_CONTAINER,
+  ENTERPRISE_CONTAINER_DIR,
 };
