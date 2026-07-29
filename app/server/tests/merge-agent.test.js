@@ -450,3 +450,31 @@ test('PYTHON_BIN 指定的 interpreter 被採用（非硬寫 python）', async (
     if (origPyBin === undefined) delete process.env.PYTHON_BIN; else process.env.PYTHON_BIN = origPyBin;
   }
 });
+
+// 意圖：抽出後的 resolveConflicts 是 doMerge 內「逐檔自動解→語法驗證→失敗檔還原標記→產結構化建議」
+// 流程的共用版本，供 Task 6 的 main→ai-dev 同步路徑重用。此處直接驗契約（不經 doMerge/DB 狀態機）。
+// 注意：resolveConflict 對檔案內容用真 fs 讀寫，故沿用既有測試慣例（os.tmpdir()）而非假路徑 '/repo'——
+// 假路徑會讓 fs.readFileSync 直接 ENOENT，resolveConflict 提早回 false，測不到「全部自動解成功」情境。
+describe('resolveConflicts（抽出的共用衝突處理）', () => {
+  test('全部自動解成功 → failed 為空、details 為空', async () => {
+    const os = require('os');
+    const fs = require('fs');
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-resolveall-'));
+    fs.writeFileSync(path.join(dir, 'a.py'), '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task\n');
+    mockRunClaude.mockResolvedValueOnce({ text: 'x = 2', usage: null, durationMs: null });
+
+    const r = await mergeMod.resolveConflicts(dir, ['a.py'], { taskId: 1, userId, label: 'r1' }, null);
+
+    expect(r.failed).toEqual([]);
+    expect(r.details).toEqual({});
+    expect(r.aborted).toBeUndefined();
+  });
+
+  test('signal 已中止 → 回 aborted，呼叫端不得標成衝突', async () => {
+    const r = await mergeMod.resolveConflicts('/repo', ['a.py'], { taskId: 1, userId, label: 'r1' }, { aborted: true });
+
+    expect(r.aborted).toBe(true);
+    expect(r.failed).toEqual([]);
+  });
+});

@@ -264,6 +264,52 @@ async function verifyResolvedSyntax(repoPath, files) {
   return bad;
 }
 
+// 逐檔解衝突的完整流程：自動解 → 語法驗證 → 失敗檔還原衝突標記並產結構化建議。
+// task/<id> → testing 與 main → ai-dev 兩條路徑共用。刻意不做任何狀態轉換、不 commit——
+// 由呼叫端決定成功後要 commit 到哪、失敗後要把任務停在哪個狀態。
+// 回傳 { failed, details }；手動暫停回 { aborted: true }，呼叫端必須原地不動。
+async function resolveConflicts(repoPath, conflictFiles, opts, signal) {
+  const { taskId, userId, label } = opts;
+  const failed = [];
+  for (const file of conflictFiles) {
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${label} 處理: ${file}\n` });
+    try {
+      const ok = await resolveConflict(repoPath, file, signal, { taskId, userId, notify });
+      if (!ok) failed.push(file);
+    } catch {
+      failed.push(file);
+    }
+  }
+
+  // 手動暫停會讓 resolveConflict 內 runClaude 拋出 aborted，被上面逐檔 catch 吞成 failed；
+  // 不在此攔截就會把「暫停」誤判為「衝突」。暫停＝非失敗，呼叫端狀態原地不動。
+  if (signal?.aborted) return { aborted: true, failed: [], details: {} };
+
+  // commit 前驗語法：AI 把縮排／語法解壞的檔不得放行（否則 deploy 才爆、又被誤歸因為程式問題）。
+  const resolvedFiles = conflictFiles.filter(f => !failed.includes(f));
+  const badSyntax = await verifyResolvedSyntax(repoPath, resolvedFiles);
+  for (const f of badSyntax) {
+    failed.push(f);
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${label} 解衝突後語法仍壞（未通過 py_compile／xmllint），交人工: ${f}\n` });
+  }
+
+  if (!failed.length) return { failed, details: {} };
+
+  // 失敗檔先還原成帶衝突標記，避免工作樹殘留 AI 寫壞的散文／壞碼；再逐檔產生結構化建議供人裁決。
+  // 分析失敗的檔留無 detail（前端退回純檔名顯示），不擋收尾。
+  for (const f of failed) await restoreConflictMarkers(repoPath, f);
+  const details = {};
+  for (const f of failed) {
+    try {
+      const d = await explainConflict(repoPath, f, signal, { taskId, userId, notify });
+      if (d) details[f] = d;
+    } catch (err) {
+      if (err && err.aborted) return { aborted: true, failed: [], details: {} };
+    }
+  }
+  return { failed, details };
+}
+
 async function runMergeAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, project_id, git_branch FROM tasks WHERE id = $1',
@@ -327,33 +373,10 @@ async function doMerge(task, taskId, userId, signal) {
       continue;
     }
 
-    // 嘗試自動解衝突（逐檔）
-    const failed = [];
-    for (const file of mergeResult.conflictFiles) {
-      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label} 處理: ${file}\n` });
-      try {
-        const ok = await resolveConflict(repo.local_path, file, signal, { taskId, userId, notify });
-        if (!ok) failed.push(file);
-      } catch {
-        failed.push(file);
-      }
-    }
+    const r = await resolveConflicts(repo.local_path, mergeResult.conflictFiles, { taskId, userId, label: repo.label }, signal);
+    if (r.aborted) return;
 
-    // 手動暫停會讓 resolveConflict 內 runClaude 拋出 aborted，被上面逐檔 catch 吞成 failed；
-    // 不在此攔截就會把「暫停」誤判為「衝突」標成 merge_conflict。比照 playwright-agent 既有守衛：
-    // 暫停＝非失敗，狀態原地不動（留 merge_running），解除暫停後重跑本關。
-    if (signal?.aborted) return;
-
-    // commit 進 testing 前驗語法：AI 解衝突把縮排／語法解壞的檔不得進 testing（否則 deploy 才爆、
-    // 又被誤歸因為程式問題）。壞檔改列入 failed 交人工，未 stage → 仍屬未解衝突，人工收尾能擋住。
-    const resolvedFiles = mergeResult.conflictFiles.filter(f => !failed.includes(f));
-    const badSyntax = await verifyResolvedSyntax(repo.local_path, resolvedFiles);
-    for (const f of badSyntax) {
-      failed.push(f);
-      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label} 解衝突後語法仍壞（未通過 py_compile／xmllint），交人工: ${f}\n` });
-    }
-
-    if (failed.length === 0) {
+    if (r.failed.length === 0) {
       try {
         await commitResolved(repo.local_path, mergeResult.conflictFiles, `[merge] ${branch} → testing (resolve conflicts)`);
         notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：衝突已自動解決\n` });
@@ -367,20 +390,7 @@ async function doMerge(task, taskId, userId, signal) {
         return;
       }
     } else {
-      // 失敗檔（自動解不掉／語法壞掉）：先還原成帶衝突標記，避免工作樹殘留 AI 寫壞的散文/壞碼；
-      // 再逐檔產生結構化建議（原因＋建議解法）供人裁決。解析失敗的檔留無 detail（前端退回純檔名顯示），
-      // 分析失敗不擋收尾。暫停中止則原地不動（不誤標 merge_conflict）。
-      for (const f of failed) await restoreConflictMarkers(repo.local_path, f);
-      const details = {};
-      for (const f of failed) {
-        try {
-          const d = await explainConflict(repo.local_path, f, signal, { taskId, userId, notify });
-          if (d) details[f] = d;
-        } catch (err) {
-          if (err && err.aborted) return;
-        }
-      }
-      conflictByRepo.push({ repo: repo.label, files: failed, details });
+      conflictByRepo.push({ repo: repo.label, files: r.failed, details: r.details });
     }
   }
 
@@ -399,4 +409,4 @@ async function doMerge(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
-module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict, clarifyConflict };
+module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict, clarifyConflict, resolveConflicts };
