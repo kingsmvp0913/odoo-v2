@@ -98,6 +98,12 @@ function registerRoutes(app) {
     try {
       const b = req.body || {};
       validateIdentifiers(b);
+      // 改前的目標(host:port)先存起來：改完若目標變了，舊轉發埠不能留著沿用，見下方判斷。
+      const { rows: beforeRows } = await query(
+        'SELECT connect_mode, ssh_host, ssh_port, db_host, db_port FROM db_connections WHERE id=$1 AND project_id=$2',
+        [req.params.cid, req.params.id]
+      );
+      const before = beforeRows[0];
       const set = [];
       const params = [];
       let idx = 1;
@@ -120,7 +126,15 @@ function registerRoutes(app) {
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       // 剛把 vpn_enabled 從 false 打開、之前沒配過埠才需要配
-      if (rows[0].vpn_enabled && !rows[0].vpn_forward_port) {
+      const justEnabled = rows[0].vpn_enabled && !rows[0].vpn_forward_port;
+      // 目標(host:port)真的變了才重配：同專案共用一個容器，舊埠若沒跟著換，改過主機的這條連線
+      // 會跟另一條連線搶同一個轉發埠的 listen（docker -p 同埠掛兩個目標），容器起不來。
+      // 反過來若目標沒變就不能重配，否則每次存檔都可能換埠＝每次都重建容器＝斷線重撥。
+      const beforeTarget = before && targetHostPort(before);
+      const afterTarget = targetHostPort(rows[0]);
+      const targetMoved = rows[0].vpn_enabled && rows[0].vpn_forward_port && beforeTarget &&
+        (beforeTarget.host !== afterTarget.host || Number(beforeTarget.port) !== Number(afterTarget.port));
+      if (justEnabled || targetMoved) {
         const forwardPort = await assignForwardPort(req.params.id, { ...rows[0], id: req.params.cid });
         ({ rows } = await query(
           `UPDATE db_connections SET vpn_forward_port=$1 WHERE id=$2 RETURNING ${PUBLIC_COLS}`,

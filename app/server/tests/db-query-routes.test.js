@@ -218,4 +218,44 @@ describe('連線的 VPN 開關與配埠', () => {
     expect(projectTargets).toContainEqual({ host: '192.168.1.233', port: 22, forwardPort: 22000 });
     expect(target).toEqual({ host: '192.168.1.233', port: 22 });
   });
+
+  // 同專案共用一個容器：若改了目標主機卻沿用舊埠，會跟另一條連線搶同一個轉發埠的 listen，
+  // 容器起不來（見 Finding 2）。反過來目標沒變就不能重配，否則每次存檔都可能換埠＝每次都重建容器。
+  test('目標沒變時 PUT 存檔不會換埠（避免無謂重建容器）', async () => {
+    allocateForwardPort.mockReturnValueOnce(22010);
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'vpnconn3', ssh_host: '10.0.0.1', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_a', vpn_enabled: true,
+    });
+    const cid = create.body.id;
+    const { rows: [before] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [cid]);
+    expect(before.vpn_forward_port).toBe(22010);
+
+    allocateForwardPort.mockClear();
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${cid}`).set(auth())
+      .send({ description: '改個備註而已，沒動主機' });
+    expect(put.status).toBe(200);
+    expect(allocateForwardPort).not.toHaveBeenCalled();
+
+    const { rows: [after] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [cid]);
+    expect(after.vpn_forward_port).toBe(22010);
+  });
+
+  test('改掉目標主機（ssh_host）後會重配轉發埠，不再沿用舊值', async () => {
+    allocateForwardPort.mockReturnValueOnce(22020);
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'vpnconn4', ssh_host: '10.0.0.2', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_b', vpn_enabled: true,
+    });
+    const cid = create.body.id;
+
+    allocateForwardPort.mockReturnValueOnce(22030);
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${cid}`).set(auth())
+      .send({ ssh_host: '10.0.0.99' }); // 打錯 IP 修正：目標主機真的變了
+    expect(put.status).toBe(200);
+
+    const { rows: [after] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [cid]);
+    expect(after.vpn_forward_port).toBe(22030);
+    expect(after.vpn_forward_port).not.toBe(22020);
+  });
 });
