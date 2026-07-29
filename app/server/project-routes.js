@@ -11,6 +11,11 @@ const { deleteTaskDir } = require('./lib/attachments');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
+// 明列欄位，不用 SELECT */RETURNING *：projects 已存了 vpn_config_enc／vpn_username／vpn_password_enc
+// （VPN 憑證密文），這些路由給一般已登入使用者，密文外流一樣是機密外洩。VPN 狀態改走專屬的
+// GET /api/projects/:id/vpn（只回 has_config/vpn_username），這裡完全不帶三個 vpn_* 欄位。
+const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, e2e_disabled, edition';
+
 async function requireAdmin(req, res, next) {
   try {
     const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
@@ -158,7 +163,7 @@ function registerRoutes(app) {
 
   app.get('/api/projects', verifyToken, async (req, res) => {
     try {
-      const { rows: projects } = await query('SELECT * FROM projects ORDER BY name ASC');
+      const { rows: projects } = await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects ORDER BY name ASC`);
       const { rows: counts } = await query('SELECT project_id, COUNT(*) AS cnt FROM project_repos GROUP BY project_id');
       const countMap = {};
       for (const c of counts) countMap[String(c.project_id)] = Number(c.cnt);
@@ -198,7 +203,7 @@ function registerRoutes(app) {
         // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
         // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
         `INSERT INTO projects (name, odoo_version, description, folder_name, e2e_disabled, edition)
-         VALUES ($1, $2, $3, $4, true, $5) RETURNING *`,
+         VALUES ($1, $2, $3, $4, true, $5) RETURNING ${PROJECT_PUBLIC_COLS}`,
         [name, odoo_version, description || null, folder_name || null, edition || 'community']
       );
       return res.status(201).json(rows[0]);
@@ -210,7 +215,7 @@ function registerRoutes(app) {
 
   app.get('/api/projects/:id', verifyToken, async (req, res) => {
     try {
-      const { rows: [project] } = await query('SELECT * FROM projects WHERE id = $1', [req.params.id]);
+      const { rows: [project] } = await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects WHERE id = $1`, [req.params.id]);
       if (!project) return res.status(404).json({ error: 'Not found' });
       const { rows: repos } = await query(
         'SELECT * FROM project_repos WHERE project_id = $1 ORDER BY is_primary DESC, label ASC',
@@ -240,7 +245,7 @@ function registerRoutes(app) {
            odoo_version = COALESCE($3, odoo_version),
            description = COALESCE($4, description),
            updated_at = NOW()
-         WHERE id = $1 RETURNING *`,
+         WHERE id = $1 RETURNING ${PROJECT_PUBLIC_COLS}`,
         [req.params.id, name || null, odoo_version || null, description || null]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
@@ -285,7 +290,7 @@ function registerRoutes(app) {
       }
       sets.push('updated_at = NOW()');
       const { rows } = await query(
-        `UPDATE projects SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+        `UPDATE projects SET ${sets.join(', ')} WHERE id = $1 RETURNING ${PROJECT_PUBLIC_COLS}`,
         params
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });

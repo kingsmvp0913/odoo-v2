@@ -78,6 +78,29 @@ test('GET /api/projects/:id → 200 with repos array', async () => {
   expect(Array.isArray(res.body.repos)).toBe(true);
 });
 
+// Finding 1（Task 8 opus review）：projects 存了 vpn_config_enc／vpn_password_enc（VPN 憑證密文）之後，
+// 這兩條泛用列表／單筆路由若沿用 SELECT *，會把密文一起吐給任何已登入使用者——VPN 狀態應只走
+// 專屬的 GET /api/projects/:id/vpn（見 db-query-routes.js），這裡完全不該出現這兩個欄位。
+describe('projects 路由不外洩 VPN 憑證密文', () => {
+  test('先在專案設定 VPN，再驗證 GET /api/projects 與 GET /api/projects/:id 都不含密文欄位', async () => {
+    const put = await request(app).put(`/api/projects/${projectId}/vpn`).set('Authorization', `Bearer ${token}`)
+      .send({ vpn_config: 'client\ndev tun', vpn_username: 'aicd5', vpn_password: 'Aicd5' });
+    expect(put.status).toBe(200);
+
+    const list = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
+    expect(list.status).toBe(200);
+    const proj = list.body.find(p => p.id === projectId);
+    expect(proj).toBeDefined();
+    expect(proj.vpn_config_enc).toBeUndefined();
+    expect(proj.vpn_password_enc).toBeUndefined();
+
+    const single = await request(app).get(`/api/projects/${projectId}`).set('Authorization', `Bearer ${token}`);
+    expect(single.status).toBe(200);
+    expect(single.body.vpn_config_enc).toBeUndefined();
+    expect(single.body.vpn_password_enc).toBeUndefined();
+  });
+});
+
 test('POST /api/projects/:id/repos → 400 missing fields', async () => {
   const res = await request(app).post(`/api/projects/${projectId}/repos`)
     .set('Authorization', `Bearer ${token}`)
