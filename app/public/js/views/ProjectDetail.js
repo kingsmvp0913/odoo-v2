@@ -254,6 +254,9 @@ window.ProjectDetailView = Vue.defineComponent({
         <span style="font-size:var(--fs-base);color:var(--text-muted);margin-left:var(--space-3)">Odoo {{ project.odoo_version }}</span>
         <div style="display:flex;gap:6px;margin-left:var(--space-4)">
           <button class="btn btn-outline btn-sm" style="background:var(--primary);color:#fff">設定</button>
+          <button class="btn btn-outline btn-sm" @click="openRelease"
+            :disabled="!repos.some(r => r.clone_status === 'done')"
+            title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
           <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
           <button class="btn btn-outline btn-sm" @click="goWiki">📖 Wiki</button>
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
@@ -265,12 +268,7 @@ window.ProjectDetailView = Vue.defineComponent({
       <div class="content">
         <div v-if="project.description" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">{{ project.description }}</div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)">
-          <div class="form-section">Git Repositories</div>
-          <button class="btn btn-outline btn-sm" @click="openRelease"
-            :disabled="!repos.some(r => r.clone_status === 'done')"
-            title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
-        </div>
+        <div class="form-section">Git Repositories</div>
         <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">尚未綁定任何 repo</div>
         <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-2)">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
