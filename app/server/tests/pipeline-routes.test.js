@@ -22,6 +22,7 @@ jest.mock('../pipeline/git', () => ({
   concludeMerge: jest.fn().mockResolvedValue(undefined),
   applyConflictChoices: jest.fn().mockResolvedValue([]),
   getMainBranch: jest.fn().mockResolvedValue('main'),
+  AI_BRANCH: 'ai-dev',
   diffNameOnly: jest.fn().mockResolvedValue([]),
   refExists: jest.fn().mockResolvedValue(true)
 }));
@@ -29,7 +30,11 @@ jest.mock('../pipeline/rebuild-testing', () => ({
   rebuildTesting: jest.fn().mockResolvedValue(null),
   INFLIGHT_DEPLOYED: ['deploy_testing', 'playwright_running', 'review_pending'],
 }));
-jest.mock('../pipeline/merge-agent', () => ({ clarifyConflict: jest.fn() }));
+jest.mock('../pipeline/merge-agent', () => ({
+  clarifyConflict: jest.fn(),
+  DEFAULT_LABELS: { oursLabel: 'testing 現況', theirsLabel: '任務分支（新版）' },
+  SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
+}));
 
 process.env.JWT_SECRET = 'test-pipeline-secret';
 
@@ -345,6 +350,38 @@ describe('sync 衝突的裁決收尾', () => {
     await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
   });
 
+  // 意圖（C-2）：部分裁決（有檔選 manual）會重寫 merge_conflict_data，此時 sync／prior_status
+  // 旗標必須留著。掉了的話：剩下的卡片退回一般 merge 文案（兩側語意相反，使用者會選反邊），
+  // 且使用者手解完按「已手動解決」時會被當成一般 merge 衝突推去 deploy_testing——但這張任務還停在
+  // 分析階段（analysis_yaml/git_branch 皆 NULL、worktree 沒建過），整個分析＋開發階段被靜默跳過。
+  test('resolve-conflicts：sync 衝突部分裁決（含 manual）→ sync／prior_status 旗標不得遺失', async () => {
+    const { concludeMerge, applyConflictChoices } = require('../pipeline/git');
+    concludeMerge.mockClear();
+    applyConflictChoices.mockClear().mockResolvedValue(['b.py']); // b.py 選 manual，仍未解
+    const taskId = await insertConflictProjectTask('syncpart');
+    await dbModule.query(
+      "UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1",
+      [taskId, JSON.stringify({ sync: true, prior_status: 'analysis_running', repos: [{ repo: 'main', files: ['a.py', 'b.py'] }] })]
+    );
+
+    const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ resolutions: [
+        { repo: 'main', file: 'a.py', action: 'take_theirs' },
+        { repo: 'main', file: 'b.py', action: 'manual' }
+      ] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.done).toBe(false);
+    const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+    expect(after[0].status).toBe('merge_conflict');
+    const cd = typeof after[0].merge_conflict_data === 'string' ? JSON.parse(after[0].merge_conflict_data) : after[0].merge_conflict_data;
+    expect(cd.sync).toBe(true);
+    expect(cd.prior_status).toBe('analysis_running');
+    expect(cd.repos[0].files).toEqual(['b.py']); // 已解的 a.py 卡片仍要消失
+    await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+  });
+
   test('mark-conflict-resolved：sync 衝突 → 回 analysis_running', async () => {
     const { rows: [t] } = await dbModule.query(
       "INSERT INTO tasks (user_id, task_id, source, title, status, merge_conflict_data) VALUES ($1,'task_sync_mc','odoo','T','merge_conflict',$2) RETURNING id",
@@ -355,8 +392,9 @@ describe('sync 衝突的裁決收尾', () => {
       .set('Authorization', `Bearer ${adminToken}`).send({});
 
     expect(res.status).toBe(200);
-    const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+    const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [t.id]);
     expect(after[0].status).toBe('analysis_running');
+    expect(after[0].merge_conflict_data).toBeNull(); // 收尾必須清空，否則重跑分析又被當成有未解衝突
     await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
   });
 
@@ -430,6 +468,39 @@ test('merge-clarify：AI 回非 keep → 更新建議、changed=true', async () 
   expect(cd.repos[0].details['a.py'].recommendation).toBe('take_theirs');
   expect(cd.repos[0].details['a.py'].rationale).toBe('新版超集');
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// 意圖（I-1）：sync 衝突的追問也要帶對兩側標籤。sync 的 ours 是 ai-dev（AI 的碼）、theirs 是 main
+// （工程師的碼），與併 testing 相反；沿用預設會讓 AI 的白話說明跟同一張卡片上的按鈕
+// （取工程師版／取 AI 版）互相矛盾，正是使用者最需要正確資訊的那一刻。
+test('merge-clarify：sync 衝突 → 帶 sync 兩側標籤；一般衝突帶預設標籤', async () => {
+  const { clarifyConflict } = require('../pipeline/merge-agent');
+  clarifyConflict.mockClear().mockResolvedValue({ answer: 'a', recommendation: 'keep', rationale: '' });
+  const syncTaskId = await insertConflictProjectTask('mcsync');
+  await dbModule.query("UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1", [syncTaskId,
+    JSON.stringify({ sync: true, prior_status: 'analysis_running', repos: [{ repo: 'main', files: ['a.py'] }] })]);
+
+  await request(app).post(`/api/tasks/${syncTaskId}/merge-clarify`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ repo: 'main', file: 'a.py', question: '差在哪？' });
+
+  expect(clarifyConflict).toHaveBeenCalledWith(expect.any(String), 'a.py', expect.any(Object), null,
+    expect.objectContaining({ oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }));
+
+  clarifyConflict.mockClear();
+  const plainTaskId = await insertConflictProjectTask('mcplain');
+  await dbModule.query("UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1", [plainTaskId,
+    JSON.stringify({ repos: [{ repo: 'main', files: ['a.py'] }] })]);
+
+  await request(app).post(`/api/tasks/${plainTaskId}/merge-clarify`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ repo: 'main', file: 'a.py', question: '差在哪？' });
+
+  expect(clarifyConflict).toHaveBeenCalledWith(expect.any(String), 'a.py', expect.any(Object), null,
+    expect.objectContaining({ oursLabel: 'testing 現況', theirsLabel: '任務分支（新版）' }));
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [syncTaskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [plainTaskId]);
 });
 
 test('merge-clarify：非 merge_conflict 狀態 → 400', async () => {
@@ -514,6 +585,8 @@ test('code-zip → 不限審核狀態，回傳含 <repo>/<模組> 結構的 zip�
   expect(res.headers['content-disposition']).toContain(`${taskKey}.zip`);
   // 依 repo（git URL 末段 odoo17_hungjou）分層：<repo>/<module>
   expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries']))).toEqual(['odoo17_hungjou/idx_demo']);
+  // C-1：打包範圍以任務切點 ai-dev 為基底；用 main 會把其他已核准、尚未回流 main 的任務模組也打進來
+  expect(diffNameOnly).toHaveBeenCalledWith(localPath, 'ai-dev', `task/${taskKey}`);
   expect(JSON.parse(decodeURIComponent(res.headers['x-zip-skipped']))).toContain('README.md');
 
   // 內容真的解得開才算數：只驗 header 的話，回傳半截 zip 也會綠燈。
