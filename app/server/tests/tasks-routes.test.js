@@ -311,7 +311,7 @@ test('POST /api/tasks/:id/answer → 400 for non-confirm_pending task', async ()
   expect(res.status).toBe(400);
 });
 
-test('POST /api/tasks/:id/answer → updates status to confirm_answered', async () => {
+test('POST /api/tasks/:id/answer → 轉 clarify_chat_running 交判斷層（不再直接推進成 confirm_answered）', async () => {
   const listRes = await request(app).get('/api/tasks')
     .set('Authorization', `Bearer ${adminToken}`);
   const task = listRes.body.find(t => t.status === 'confirm_pending');
@@ -324,7 +324,7 @@ test('POST /api/tasks/:id/answer → updates status to confirm_answered', async 
   // Verify status updated
   const detail = await request(app).get(`/api/tasks/${task.id}`)
     .set('Authorization', `Bearer ${adminToken}`);
-  expect(detail.body.task.status).toBe('confirm_answered');
+  expect(detail.body.task.status).toBe('clarify_chat_running');
 });
 
 // 意圖：手動新增的任務要以 'new' 進入 pipeline（由 triage 接手），source 標記為 manual
@@ -906,9 +906,10 @@ test('DELETE 任務 → 重建回警告時併入 warnings，任務仍被刪', as
   expect(rows.length).toBe(0);
 });
 
-// 意圖：clarify_pending（QA 規格裁決／分診問人／respec-patch 澄清）也要能收使用者回覆並導回 clarify_answered 續跑，
-// 不是只有 confirm_pending 才能答覆
-test('POST /api/tasks/:id/answer → clarify_pending 可答覆並導回 clarify_answered 並落 user log', async () => {
+// 意圖：clarify_pending（QA 規格裁決／分診問人／respec-patch 澄清）也要能收使用者回覆，
+// 不是只有 confirm_pending 才能答覆；但答覆一樣先交判斷層（clarify_chat_running），
+// 是否真的推進成 clarify_answered 由 clarify-chat agent 判斷（task 5 行為變更）
+test('POST /api/tasks/:id/answer → clarify_pending 可答覆並落 user log，先轉 clarify_chat_running', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
      VALUES ($1,'cp_1','odoo','T','c','clarify_pending') RETURNING id`,
@@ -919,7 +920,7 @@ test('POST /api/tasks/:id/answer → clarify_pending 可答覆並導回 clarify_
     .send({ user_answer: '用小計、含稅' });
   expect(res.status).toBe(200);
   const { rows: [row] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
-  expect(row.status).toBe('clarify_answered');
+  expect(row.status).toBe('clarify_chat_running');
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [t.id]);
   expect(logs.some(l => l.role === 'user' && l.content.includes('用小計、含稅'))).toBe(true);
 });
@@ -1102,4 +1103,114 @@ test('GET /api/tasks/:id → 題目的預填答案 answer 要保留（AI 依對�
   expect(res.body.clarification.questions[0].answer).toBe('B');
   expect(res.body.clarification.questions[1].answer).toBeUndefined(); // 沒預填的題目不得憑空長出 answer 鍵
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// task 5：送出回答／提問／重產題目／套用草案——四支路由改走判斷層（clarify_chat_running + runPipeline），
+// 不再自己呼叫 runClarifyChat（避免繞過 runner 的 _inFlight 互斥）。
+jest.mock('../pipeline/clarify-chat', () => ({
+  ...jest.requireActual('../pipeline/clarify-chat'),
+  runClarifyChat: jest.fn().mockResolvedValue(undefined)
+}));
+const clarifyChat = require('../pipeline/clarify-chat');
+
+test('POST /answer → 不再直接推進，先轉 clarify_chat_running 交給判斷層', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_answer_gate','odoo','T','confirm_pending') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+  const res = await request(app).post(`/api/tasks/${taskId}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ user_answer: '問：要自動編號嗎？\n答：我不懂，可以白話一點嗎？' });
+  expect(res.status).toBe(200);
+  const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(after[0].status).toBe('clarify_chat_running');
+  expect(after[0].status).not.toBe('confirm_answered');
+  // 這支路由會寫 task_logs（無 ON DELETE CASCADE），先清 log 再刪任務，避免 FK 違規
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /clarify-ask → 提問寫進 task_logs，狀態轉 clarify_chat_running', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_clar_ask','odoo','T','confirm_pending') RETURNING id",
+    [userId]
+  );
+  const taskId = rows[0].id;
+  const res = await request(app).post(`/api/tasks/${taskId}/clarify-ask`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ question: '我要怎麼重現這個情況？' });
+  expect(res.status).toBe(200);
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='user'", [taskId]);
+  expect(logs[0].content).toContain('怎麼重現');
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /clarify-ask → 空內容 400', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_clar_ask_empty','odoo','T','confirm_pending') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/clarify-ask`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ question: '   ' });
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
+});
+
+test('POST /clarify-apply → 草案寫進 analysis_yaml 的 clarification_channel 並清空草案', async () => {
+  const draft = ['intro: 新說明', 'questions:', '  - id: q1', '    text: 新題目', '    type: text', '    required: true'].join('\n');
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml, clarify_draft) VALUES ($1,'task_clar_apply','odoo','T','confirm_pending',$2,$3) RETURNING id",
+    [userId, 'summary: 原規格\nclarification_channel:\n  questions:\n    - 舊題目\n', draft]
+  );
+  const taskId = rows[0].id;
+  const res = await request(app).post(`/api/tasks/${taskId}/clarify-apply`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(res.status).toBe(200);
+  const { rows: after } = await dbModule.query('SELECT analysis_yaml, clarify_draft FROM tasks WHERE id=$1', [taskId]);
+  expect(after[0].clarify_draft).toBeNull();
+  expect(after[0].analysis_yaml).toContain('新題目');
+  expect(after[0].analysis_yaml).toContain('summary: 原規格'); // 規格其餘部分不得被草案洗掉
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /clarify-apply → 沒有草案時 400，不動 analysis_yaml', async () => {
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_clar_apply_none','odoo','T','confirm_pending','summary: x') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/clarify-apply`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
+});
+
+test('POST /answer → 必答題沒答滿時 400（後端也要擋，不能只靠前端）', async () => {
+  const y = ['summary: s', 'clarification_channel:', '  questions:', '    - id: q1', '      text: 必答題', '      type: text', '      required: true'].join('\n');
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_answer_required','odoo','T','confirm_pending',$2) RETURNING id",
+    [userId, y]
+  );
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ answers: { q1: '  ' } });
+  expect(res.status).toBe(400);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
+});
+
+test('POST /answer → depends_on 未滿足的題目不算必填，可直接送出', async () => {
+  const y = [
+    'summary: s', 'clarification_channel:', '  questions:',
+    '    - id: q1', '      text: 要自動重編嗎', '      type: choice', '      required: true',
+    '      options:', '        - key: A', '          label: 要', '        - key: B', '          label: 不要',
+    '    - id: q2', '      text: 怎麼算', '      type: text', '      required: true',
+    '      depends_on: { question: q1, equals: A }'
+  ].join('\n');
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_answer_depends','odoo','T','confirm_pending',$2) RETURNING id",
+    [userId, y]
+  );
+  const res = await request(app).post(`/api/tasks/${rows[0].id}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`).send({ answers: { q1: 'B' } });
+  expect(res.status).toBe(200);
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [rows[0].id]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });

@@ -242,7 +242,7 @@ function registerRoutes(app) {
       const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', intro: '', questions: [] };
       // spec_review（MODE_B 規格審核閘門）：附解析後的規格供審核頁渲染；其他狀態不附（防殘留規格冒出）
       const spec = tasks[0].status === 'spec_review' ? taskSpec(tasks[0]) : null;
-      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec });
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec, clarify_draft: tasks[0].clarify_draft || null });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -629,35 +629,148 @@ function registerRoutes(app) {
 
 
 
+  // 必答判定：depends_on 條件不滿足的題目不算必答（前端會收起來，後端也要一致，不能只靠前端擋）。
+  // 條件指向不存在的題目時 fail open——照樣視為要顯示、要作答，寧可多問也不要題目憑空消失。
+  function unansweredRequired(questions, answers) {
+    const byId = new Map(questions.map(q => [q.id, q]));
+    return questions.filter(q => {
+      if (!q.required) return false;
+      const dep = q.depends_on;
+      if (dep && byId.has(dep.question) && String(answers[dep.question] ?? '') !== String(dep.equals)) return false;
+      return !String(answers[q.id] ?? '').trim();
+    });
+  }
+
   // User answer to clarification question
+  // 送出回答不再直接推進：先轉 clarify_chat_running 交給 clarify-chat agent 判斷使用者是答完了還是在反問。
+  // （舊行為讓「我還是不懂，怎麼重現？」被當成有效答案直接開工——正式站 task 5。）
   app.post('/api/tasks/:id/answer', verifyToken, async (req, res) => {
     try {
       const { rows: tasks } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      if (!ANSWER_ALLOWED_STATUSES.includes(tasks[0].status)) {
-        return res.status(400).json({ error: `Task status '${tasks[0].status}' does not accept answers` });
+      const task = tasks[0];
+      if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
+        return res.status(400).json({ error: `Task status '${task.status}' does not accept answers` });
       }
 
-      const { user_answer } = req.body;
-      if (!user_answer) return res.status(400).json({ error: 'user_answer required' });
+      // 兩種輸入：新版逐題 answers 物件；舊版單一 user_answer 字串（clarify_pending 的自由文字框仍用）
+      const answers = req.body && typeof req.body.answers === 'object' && req.body.answers ? req.body.answers : null;
+      let user_answer = (req.body && req.body.user_answer) || '';
+      if (answers) {
+        const { questions } = taskClarification(task);
+        const missing = unansweredRequired(questions, answers);
+        if (missing.length) {
+          return res.status(400).json({ error: `還有必答的問題沒回答：${missing.map(q => q.text).join('、')}` });
+        }
+        user_answer = questions
+          .filter(q => String(answers[q.id] ?? '').trim())
+          .map(q => `問：${q.text}\n答：${String(answers[q.id]).trim()}`)
+          .join('\n\n');
+      }
+      if (!user_answer.trim()) return res.status(400).json({ error: 'user_answer required' });
 
-      // confirm_pending → confirm_answered（回初次分析）；
-      // clarify_pending → clarify_answered（QA 規格裁決／分診問人／respec-patch 澄清續談，答完由 resume_status 導回原關）
-      // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答（否則下游 agent 會讀到重複答案）
-      const nextStatus = tasks[0].status === 'clarify_pending' ? 'clarify_answered' : 'confirm_answered';
+      // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答。
+      // resume_status 記回程狀態、clarify_mode 記這次入口——執行器靠這兩欄還原情境。
       const { rowCount } = await query(
-        "UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1 AND status = $3",
-        [req.params.id, nextStatus, tasks[0].status]
+        "UPDATE tasks SET status='clarify_chat_running', resume_status=$2, clarify_mode='answer_or_proceed', updated_at=NOW() WHERE id = $1 AND status = $2",
+        [req.params.id, task.status]
       );
       if (!rowCount) return res.json({ ok: true });
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, user_answer]
       );
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
       runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 澄清關主動提問：只回答、永不推進（mode='ask' 在結構上就不允許 proceed）
+  app.post('/api/tasks/:id/clarify-ask', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = tasks[0];
+      if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
+        return res.status(400).json({ error: `Task status '${task.status}' 不接受提問` });
+      }
+      const question = ((req.body && req.body.question) || '').trim();
+      if (!question) return res.status(400).json({ error: '請填寫你的問題' });
+
+      const { rowCount } = await query(
+        "UPDATE tasks SET status='clarify_chat_running', resume_status=$2, clarify_mode='ask', updated_at=NOW() WHERE id = $1 AND status = $2",
+        [req.params.id, task.status]
+      );
+      if (!rowCount) return res.json({ ok: true });
+      await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [req.params.id, question]);
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
+      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 依這段對話重產題目草案：只寫 clarify_draft，不動 analysis_yaml
+  app.post('/api/tasks/:id/clarify-revise', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = tasks[0];
+      if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
+        return res.status(400).json({ error: `Task status '${task.status}' 不接受更新題目` });
+      }
+      const { rowCount } = await query(
+        "UPDATE tasks SET status='clarify_chat_running', resume_status=$2, clarify_mode='revise', updated_at=NOW() WHERE id = $1 AND status = $2",
+        [req.params.id, task.status]
+      );
+      if (!rowCount) return res.json({ ok: true });
+      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
+      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 套用草案：把 clarify_draft 併回 analysis_yaml 的 clarification_channel，其餘欄位原封不動
+  app.post('/api/tasks/:id/clarify-apply', verifyToken, async (req, res) => {
+    try {
+      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = tasks[0];
+      if (!task.clarify_draft) return res.status(400).json({ error: '沒有待套用的草案' });
+
+      let merged;
+      try {
+        const spec = yaml.load(task.analysis_yaml || '', { schema: yaml.CORE_SCHEMA }) || {};
+        const draft = yaml.load(task.clarify_draft, { schema: yaml.CORE_SCHEMA }) || {};
+        spec.clarification_channel = draft;
+        merged = yaml.dump(spec, { lineWidth: -1 });
+      } catch (e) {
+        return res.status(400).json({ error: `草案格式有誤，無法套用：${e.message}` });
+      }
+      await query('UPDATE tasks SET analysis_yaml=$2, clarify_draft=NULL, updated_at=NOW() WHERE id=$1', [req.params.id, merged]);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 放棄草案
+  app.post('/api/tasks/:id/clarify-discard', verifyToken, async (req, res) => {
+    try {
+      const { rowCount } = await query(
+        'UPDATE tasks SET clarify_draft=NULL, updated_at=NOW() WHERE id=$1 AND user_id=$2',
+        [req.params.id, req.userId]
+      );
+      if (!rowCount) return res.status(404).json({ error: 'Task not found' });
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
