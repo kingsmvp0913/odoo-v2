@@ -130,8 +130,8 @@ async function doDeploy(task, taskId, userId, signal) {
     return;
   }
 
-  // 升級前確保各主 clone 檢出 testing：別任務的 analysis（ensureMainBranch）或 approve（mergeToAiBranch）
-  // 會把主 clone 留在 main——addons-path 指向主 clone 工作樹，不歸位就會對錯的分支升級／測試（假綠燈）。
+  // 升級前確保各主 clone 檢出 testing：別任務的 analysis（ensureMainBranch）會把主 clone 留在 main，
+  // 或 approve（mergeToAiBranch）會留在 ai-dev——addons-path 指向主 clone 工作樹，不歸位就會對錯的分支升級／測試（假綠燈）。
   // 先丟 tracked pyc 的髒改動，避免 checkout 被 build 產物擋住（比照 mergeInto）。
   const { discardPyc, ensureTestingBranch } = require('./git');
   const { rows: repos } = await query(
