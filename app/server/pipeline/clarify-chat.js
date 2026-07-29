@@ -61,10 +61,11 @@ async function loadConversation(taskId) {
 
 // agent 失敗／解析失敗時退回的狀態：這兩關是「等你回答」，一旦 stopped 使用者就失去回答入口。
 // 使用者的答案在跑 agent 之前已寫進 task_logs，不會遺失。
-// 回程狀態由 resume_status 記載（路由在轉 clarify_chat_running 時寫入原狀態）；
-// 直接以 clarify_pending 狀態呼叫時（補跑路徑）也認得。
+// 回程狀態由 clarify_from 記載（路由在轉 clarify_chat_running 時寫入）。
+// 不讀 resume_status——那欄屬於 verdict-router／reject-triage 的「回去哪一關」語意。
+// 補跑路徑（直接以 clarify_pending 狀態呼叫）也認得。
 function fallbackStatus(task) {
-  return task.resume_status === 'clarify_pending' || task.status === 'clarify_pending'
+  return task.clarify_from === 'clarify_pending' || task.status === 'clarify_pending'
     ? 'clarify_pending' : 'confirm_pending';
 }
 

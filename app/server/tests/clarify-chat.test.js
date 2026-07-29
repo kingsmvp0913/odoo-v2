@@ -143,11 +143,28 @@ test('認證失效 → 訊息點明與回答無關，狀態一樣退回不 stopp
 test('clarify_pending 來的任務：proceed 進 clarify_answered', async () => {
   const task = await makeTask('clarify_chat_running');
   // 執行器現在會依 taskId 重查完整列（見 task 4 修復），mutate 記憶體物件不會生效，須真的寫進 DB
-  await dbModule.query("UPDATE tasks SET resume_status='clarify_pending' WHERE id=$1", [task.id]);
+  // 回程狀態走 clarify_from（非 resume_status——那欄是 verdict-router／reject-triage 的「回去哪一關」）。
+  await dbModule.query("UPDATE tasks SET clarify_from='clarify_pending' WHERE id=$1", [task.id]);
   runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n收到裁決\n</result>', usage: {}, durationMs: 1 });
   await runClarifyChat(task, 1, null, 'answer_or_proceed');
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(rows[0].status).toBe('clarify_answered');
+});
+
+// C1 回歸：clarify_pending 來的任務（QA 規格裁決）走完整條路後，proceed 必須回 clarify_answered，
+// 且 verdict-router 寫在 resume_status 的「要回去哪一關」不得被洗掉（曾經被路由／runner 誤蓋成
+// clarify_chat_running，導致執行器誤判回 confirm_pending、任務整包重跑分析）。
+test('clarify_pending 任務：clarify_from 記回程，resume_status 保持 verdict-router 寫的值', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query(
+    "UPDATE tasks SET clarify_from='clarify_pending', clarify_mode='answer_or_proceed', resume_status='coding_running' WHERE id=$1",
+    [task.id]
+  );
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n收到裁決\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat({ id: task.id }, 1, null, null);
+  const { rows } = await dbModule.query('SELECT status, resume_status FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('clarify_answered');
+  expect(rows[0].resume_status).toBe('coding_running'); // 不得被澄清流程洗掉
 });
 
 // 未知 mode 是程式 bug，但降級方向決定它是「安全地少做」還是「危險地多做」

@@ -420,6 +420,9 @@ async function migrate() {
     // 澄清關這一輪走哪個入口（answer_or_proceed／ask／revise）：路由寫入、執行器讀取。
     // 不用參數傳遞是因為派工要經 runner 的 _inFlight 互斥，而 runner 的 SELECT 撈不到臨時參數。
     { table: 'tasks', col: 'clarify_mode',         sql: 'ALTER TABLE tasks ADD COLUMN clarify_mode TEXT' },
+    // 澄清對話的回程狀態（confirm_pending／clarify_pending）。不能借用 resume_status——
+    // 那欄已被 verdict-router／reject-triage 用來記「要回去哪一關」，覆寫會讓 QA 裁決導回 coding 的路徑消失。
+    { table: 'tasks', col: 'clarify_from',         sql: 'ALTER TABLE tasks ADD COLUMN clarify_from TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     // 每環境憑證：SSO 密鑰、E2E 隨機密碼（測試區安全 hardening）

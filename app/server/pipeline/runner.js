@@ -279,7 +279,9 @@ async function runTask(task, settings, signal) {
     // 記錄目前這一關：若此階段失敗轉 stopped，解決阻塞可回到這一關續跑（而非退回 new 重分診）。
     // 例外：分診關（reject_triage／resolve_triage）本身的 resume_status 是「真正的原關」資料（由 route 保留供分診讀取，
     // 見 tasks-routes.js），不可蓋成分診自己——否則分診 resume 會回到自己，無限重進分診。
-    if (task.status !== 'reject_triage' && task.status !== 'resolve_triage' && task.status !== 'clarify_answered') {
+    // clarify_chat_running 也要排除：它的回程狀態走 clarify_from（見 clarify-chat.js），resume_status
+    // 這裡是 verdict-router／reject-triage 寫的「真正原關」，蓋成 clarify_chat_running 會讓那條回程路徑消失。
+    if (task.status !== 'reject_triage' && task.status !== 'resolve_triage' && task.status !== 'clarify_answered' && task.status !== 'clarify_chat_running') {
       await query('UPDATE tasks SET resume_status = $2 WHERE id = $1', [task.id, task.status]).catch(() => {});
     }
 

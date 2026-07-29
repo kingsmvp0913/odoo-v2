@@ -673,9 +673,10 @@ function registerRoutes(app) {
       if (!user_answer.trim()) return res.status(400).json({ error: 'user_answer required' });
 
       // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答。
-      // resume_status 記回程狀態、clarify_mode 記這次入口——執行器靠這兩欄還原情境。
+      // clarify_from 記回程狀態、clarify_mode 記這次入口——執行器靠這兩欄還原情境。
+      // 不可用 resume_status：那欄是 verdict-router／reject-triage 的「要回去哪一關」，覆寫會洗掉 QA 裁決的回程。
       const { rowCount } = await query(
-        "UPDATE tasks SET status='clarify_chat_running', resume_status=$2, clarify_mode='answer_or_proceed', updated_at=NOW() WHERE id = $1 AND status = $2",
+        "UPDATE tasks SET status='clarify_chat_running', clarify_from=$2, clarify_mode='answer_or_proceed', updated_at=NOW() WHERE id = $1 AND status = $2",
         [req.params.id, task.status]
       );
       if (!rowCount) return res.json({ ok: true });
@@ -704,7 +705,7 @@ function registerRoutes(app) {
       if (!question) return res.status(400).json({ error: '請填寫你的問題' });
 
       const { rowCount } = await query(
-        "UPDATE tasks SET status='clarify_chat_running', resume_status=$2, clarify_mode='ask', updated_at=NOW() WHERE id = $1 AND status = $2",
+        "UPDATE tasks SET status='clarify_chat_running', clarify_from=$2, clarify_mode='ask', updated_at=NOW() WHERE id = $1 AND status = $2",
         [req.params.id, task.status]
       );
       if (!rowCount) return res.json({ ok: true });
@@ -727,7 +728,7 @@ function registerRoutes(app) {
         return res.status(400).json({ error: `Task status '${task.status}' 不接受更新題目` });
       }
       const { rowCount } = await query(
-        "UPDATE tasks SET status='clarify_chat_running', resume_status=$2, clarify_mode='revise', updated_at=NOW() WHERE id = $1 AND status = $2",
+        "UPDATE tasks SET status='clarify_chat_running', clarify_from=$2, clarify_mode='revise', updated_at=NOW() WHERE id = $1 AND status = $2",
         [req.params.id, task.status]
       );
       if (!rowCount) return res.json({ ok: true });
