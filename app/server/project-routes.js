@@ -119,7 +119,7 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
     if (projectId) {
       const { rebuildTestingWithinLock } = require('./pipeline/rebuild-testing');
-      // 別靜默吞掉重建結果：resetTestingToMain 失敗會回警告字串（doRebuild 內部已還原備份），
+      // 別靜默吞掉重建結果：resetTestingToAiBranch 失敗會回警告字串（doRebuild 內部已還原備份），
       // 吞掉會讓「testing 沒跟上 main」查無可查——落 server log 供診斷（fail loud）
       const warn = await rebuildTestingWithinLock(projectId, userId).catch(e => `testing 重建異常：${e.message}`);
       if (warn) console.warn(`[updateMainClone] repo ${repoId} testing 重建未乾淨：${warn}`);

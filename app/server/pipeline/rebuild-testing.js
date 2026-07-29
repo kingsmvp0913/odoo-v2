@@ -7,7 +7,7 @@ const git = require('./git');
 const { resolveConflict } = require('./merge-agent');
 
 // 「在飛且已部署過 testing」的任務狀態：碼已在 testing、尚未 approve，重建時要重併回去。
-// approved 任務碼已在 main（reset 到 main 自動含入）、其分支已砍，故不列入。
+// approved 任務碼已在 ai-dev（reset 到 ai-dev 自動含入）、其分支已砍，故不列入。
 const INFLIGHT_DEPLOYED = ['deploy_testing', 'playwright_running', 'review_pending'];
 
 // 把該任務記錄的衝突解法寫回工作樹對應檔（清掉衝突標記）。有寫入回 true，無記錄回 false。
@@ -21,7 +21,7 @@ function applyRecordedResolution(repo, task, file) {
   return true;
 }
 
-// 刪任務後重建 testing 分支：每個主 clone reset 到 main、再把存活的在飛任務重併回去。
+// 刪任務後重建 testing 分支：每個主 clone reset 到 ai-dev、再把存活的在飛任務重併回去。
 // 回傳警告字串（暫停待人工／fail-open 還原）或 null（乾淨完成）。包在 withProjectLock 內與 pipeline 序列化。
 async function rebuildTesting(projectId, userId, signal) {
   return withProjectLock(projectId, () => doRebuild(projectId, userId, signal));
@@ -48,7 +48,7 @@ async function doRebuild(projectId, userId, signal) {
     // 備份現有 testing SHA，供非衝突類失敗時還原
     const backupSha = await git.revParse(repo.local_path, 'testing').catch(() => null);
     try {
-      await git.resetTestingToMain(repo.local_path);
+      await git.resetTestingToAiBranch(repo.local_path);
     } catch (err) {
       if (backupSha) await git.resetTestingTo(repo.local_path, backupSha).catch(() => {});
       return `testing 重建失敗（${repo.label}）：${err.message}，已還原，未影響刪除`;
