@@ -40,9 +40,15 @@ window.AdminEnterpriseView = Vue.defineComponent({
       finally { this.syncing = ''; }
     },
     async remove(v) {
-      if (!await confirmDialog(`確定移除 Odoo ${v} 的企業版來源？已下載的檔案會保留，但之後建立企業版測試區會失敗。`)) return;
+      const ok = await confirmDialog({
+        title: '移除企業版來源',
+        message: `確定移除 Odoo ${v} 的企業版來源？已下載的檔案會保留，但之後建立企業版測試區會失敗。`,
+        danger: true,
+        confirmText: '移除'
+      });
+      if (!ok) return;
       try {
-        await Api.del(`admin/enterprise-sources/${v}`);
+        await Api.delete(`admin/enterprise-sources/${v}`);
         await this.load();
         showToast('已移除', 'success');
       } catch (e) { showToast(e.message, 'error'); }
@@ -102,7 +108,12 @@ window.AdminEnterpriseView = Vue.defineComponent({
 
         <div class="setting-block">
           <div class="setting-block-head">
-            <div class="setting-block-title">已登記版本</div>
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div class="setting-block-title">已登記版本</div>
+              <button class="btn btn-outline btn-sm" :disabled="loading" @click="load">
+                {{ loading ? '載入中...' : '重新整理' }}
+              </button>
+            </div>
             <div class="setting-block-desc">狀態非「可用」時，該版本的企業版專案建置測試區會直接失敗（不會默默降級成社群版）。</div>
           </div>
           <div class="setting-block-body">
