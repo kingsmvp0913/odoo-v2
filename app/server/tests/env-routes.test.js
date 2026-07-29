@@ -210,6 +210,29 @@ describe('/env/sso 借對外名額', () => {
     expect(env.external_slot).toBeNull();
   });
 
+  // 意圖與上面兩支的「歸還名額」不同：這裡管的是**內部埠租約**。埠是租來的（leasePort／releasePort），
+  // `releasePort` 的註解明寫「停機／夜間關機／閒置回收／刪除專案皆須呼叫，否則池子會單向耗盡」，
+  // 而池子只有 21000-21019 共 20 個。停機路徑（env-agent 的 stopEnv／nightlyShutdown）都清了 port，
+  // 只有 route 這兩條沒清 → 每刪一次環境就永久少一個埠，最後所有專案都起不了測試區。
+  // 對外名額有 20 分鐘閒置掃描兜底，內部埠沒有等價的自動回收，所以這個洩漏是永久的。
+  test('刪除環境一併歸還內部埠租約', async () => {
+    const pid = await mkEnv('k', { status: 'running', port: 21008, sso_secret: 'sec' });
+    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const { rows: [env] } = await dbModule.query('SELECT port FROM odoo_envs WHERE project_id=$1', [pid]);
+    expect(env.port).toBeNull();
+  });
+
+  test('偵測 pid 已死自癒回 idle 時一併歸還內部埠租約', async () => {
+    const pid = await mkEnv('l', { status: 'running', port: 21010, sso_secret: 'sec' });
+    await dbModule.query('UPDATE odoo_envs SET pid=$2 WHERE project_id=$1', [pid, 2147483001]); // 不存在的 pid
+    const res = await request(app).get(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('idle');
+    const { rows: [env] } = await dbModule.query('SELECT port FROM odoo_envs WHERE project_id=$1', [pid]);
+    expect(env.port).toBeNull();
+  });
+
   // 意圖：使用者按「開啟測試區」時環境可能已被閒置回收停掉。回 409「尚未就緒」等於要他自己
   // 去找「建立環境」按鈕再等——那個按鈕在專案頁，任務頁根本沒有。改成直接幫他起。
   // runEnvSetup 已在檔案頂端被 mock 為 mockRunEnvSetup（POST /env/setup 沿用同一支 spy），
