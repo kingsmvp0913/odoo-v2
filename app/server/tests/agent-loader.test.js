@@ -338,3 +338,79 @@ describe('NOTES_AGENTS 注入專案備註（人工維護，優先遵循）', () 
     expect(v1).toMatch(/^[0-9a-f]{12}$/);
   });
 });
+
+// 意圖（Rule 9）：說人話守則要進「會產出給人看的文字」的 11 關。它刻意不走 CLAUDE.md——
+// CLAUDE.md 只餵得到 7 關，漏掉 cs／merge-explain／merge-clarify／chat／chat-to-task／library，
+// 而這些正是最需要白話的地方。反過來 playwright／coding-project 產的是碼，沒人讀，注入純屬浪費。
+describe('PLAIN_LANGUAGE_AGENTS 注入說人話守則', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const PL_HEADER = '# 說人話守則';
+
+  test('CLAUDE.md 餵不到的關（cs／merge-explain／library／chat-to-task）也拿得到', () => {
+    expect(loadAgent('cs').render({ title: 'T', original_text: 'x', answers: '（尚無）', project_name: 'P', repo_paths: '- /r' })).toContain(PL_HEADER);
+    expect(loadAgent('merge-explain').render({})).toContain(PL_HEADER);
+    expect(loadAgent('library').render({})).toContain(PL_HEADER);
+    expect(loadAgent('chat-to-task').render({ history: 'x' })).toContain(PL_HEADER);
+  });
+
+  test('產碼關（coding-project／playwright／merge）不注入', () => {
+    const coding = loadAgent('coding-project').render({
+      project_name: 'P', odoo_version: '17.0', analysis_yaml: 'module: sale',
+      work_dir: '/w', repo_list: '- sale/', task_id: 'task_1', commit_message: 'm'
+    });
+    expect(coding).not.toContain(PL_HEADER);
+    expect(loadAgent('merge').render({})).not.toContain(PL_HEADER);
+  });
+
+  test('qa-retry 不注入（--resume 短 prompt，重複前置會抵銷省 token 設計）', () => {
+    const out = loadAgent('qa-retry').render({ main_branch: 'main', git_branch: 'task/x', prior_findings: 'x', resolution: '（無）' });
+    expect(out).not.toContain(PL_HEADER);
+  });
+
+  test('順序：CLAUDE.md 規則 → 說人話 → 專案備註 → debug', () => {
+    const out = loadAgent('analysis-reject').render({
+      project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+      analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true',
+      project_notes: '窗口 Amy'
+    });
+    const iRules = out.indexOf('Odoo Constraints');
+    const iPlain = out.indexOf(PL_HEADER);
+    const iNotes = out.indexOf('# 專案備註（人工維護，優先遵循）');
+    const iDebug = out.indexOf('# 系統化除錯（pipeline 版）');
+    expect(iRules).toBeGreaterThanOrEqual(0);
+    expect(iPlain).toBeGreaterThan(iRules);
+    expect(iNotes).toBeGreaterThan(iPlain);
+    expect(iDebug).toBeGreaterThan(iNotes);
+  });
+
+  // 意圖：這是本次改動唯一會「靜默失效」的點——片段改了但 promptVersion 沒把它算進去，
+  // 綁定的 resume session 不會 fresh，新規則永遠不生效且無任何錯誤訊息，事後查不出原因。
+  test('promptVersion 把說人話片段算進靜態指紋（改片段就換版、強制 fresh）', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const PL_PATH = path.join(__dirname, '..', 'pipeline', 'plain-language.md');
+    const orig = fs.readFileSync(PL_PATH, 'utf8');
+    try {
+      const before = promptVersion('cs');
+      fs.writeFileSync(PL_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
+      expect(promptVersion('cs')).not.toBe(before);
+    } finally {
+      fs.writeFileSync(PL_PATH, orig);
+    }
+  });
+
+  test('未注入的 agent 指紋不受片段變動影響', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const PL_PATH = path.join(__dirname, '..', 'pipeline', 'plain-language.md');
+    const orig = fs.readFileSync(PL_PATH, 'utf8');
+    try {
+      const before = promptVersion('playwright');
+      fs.writeFileSync(PL_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
+      expect(promptVersion('playwright')).toBe(before);
+    } finally {
+      fs.writeFileSync(PL_PATH, orig);
+    }
+  });
+});
