@@ -7,7 +7,9 @@ process.env.APP_SECRET = 'test-app-secret';
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn(), stopReason: (m) => m }));
-jest.mock('../pipeline/agent-loader', () => ({ loadAgent: () => ({ model: 'sonnet', render: () => 'PROMPT' }) }));
+// var + mock 前綴：jest.mock 的 factory 被提升到宣告之前執行，const 會撞 TDZ、非 mock* 命名會被 jest 擋下
+var mockRenderSpy = jest.fn(() => 'PROMPT');
+jest.mock('../pipeline/agent-loader', () => ({ loadAgent: () => ({ model: 'sonnet', render: mockRenderSpy }) }));
 jest.mock('../pipeline/task-agent', () => ({ getProjectInfo: jest.fn(), worktreeParent: () => '/cwd', buildRepoPaths: () => '- /cwd/idx_x' }));
 jest.mock('../pipeline/ensure-env', () => ({ ensureEnvRunning: jest.fn() }));
 jest.mock('../pipeline/env-agent', () => ({ runTourTests: jest.fn(), stopEnv: jest.fn() }));
@@ -57,8 +59,9 @@ beforeEach(async () => {
   envAgent.stopEnv.mockReset().mockResolvedValue(undefined);
   classifier.classifyFailureWithAgent.mockReset(); classifier.classifyFailureWithAgent.mockResolvedValue('code');
   require('../pipeline/reentry').bumpReentryOrStop.mockResolvedValue(false);
+  mockRenderSpy.mockClear();
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [projectId]);
-  await dbModule.query("INSERT INTO odoo_envs (project_id, status, url) VALUES ($1,'running','http://127.0.0.3:8070')", [projectId]);
+  await dbModule.query("INSERT INTO odoo_envs (project_id, status, url, port) VALUES ($1,'running','http://127.0.0.3:8070',21000)", [projectId]);
 });
 
 let seq = 0;
@@ -77,6 +80,42 @@ test('tour 全過（exit0）→ review_pending', async () => {
   const id = await makeTask();
   await runTourStage(id, userId);
   expect((await statusOf(id)).status).toBe('review_pending');
+});
+
+// 意圖：子網域模式下 odoo_envs.url 開機時一律存 NULL——對外網址改成「真人借到檢視名額的當下」
+// 才算得出來，而 pipeline 從不借名額。E2E 是 docker exec 進容器跑的、根本不經對外網址，若這關
+// 仍拿 url 當前置條件，正式機每張啟用 E2E 的任務都會卡在「測試環境未提供 URL」，
+// 而本機（port 模式 url 有值）永遠重現不了。前置條件必須是內部埠。
+test('url 為 NULL 但持有內部埠（子網域模式）→ 照常執行，不因缺 url 停任務', async () => {
+  await dbModule.query('UPDATE odoo_envs SET url=NULL, port=21005 WHERE project_id=$1', [projectId]);
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'INFO test_x odoo.tests.runner: idx_x: 1 tests 0.50s 0 failed, 0 error(s)' });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  expect((await statusOf(id)).status).toBe('review_pending');
+});
+
+// 意圖：test_url 是餵給 tour-author agent 的環境位址（agents/playwright.md 明寫「測試環境已在
+// {{test_url}} 運行」）。子網域模式下不能塞空值或塞一個沒人持有名額時連不上的對外網址——
+// 必須是平台自己剛健檢過、agent 也連得到的內部綁定位址。
+test('test_url 用內部綁定位址現算，不讀 odoo_envs.url', async () => {
+  await dbModule.query('UPDATE odoo_envs SET url=NULL, port=21005 WHERE project_id=$1', [projectId]);
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: 'INFO test_x odoo.tests.runner: idx_x: 1 tests 0.50s 0 failed, 0 error(s)' });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  const { envBindHost } = require('../port-alloc');
+  expect(mockRenderSpy).toHaveBeenCalled();
+  expect(mockRenderSpy.mock.calls[0][0].test_url).toBe(`http://${envBindHost(21005)}:21005`);
+});
+
+// 意圖：真正的前置條件是「借到內部埠」。沒埠代表環境沒真的起來，此時放行會讓 agent 拿到
+// 一個組不出來的位址，且失敗原因會被歸到程式碼而不是環境。
+test('無內部埠 → 停任務並歸 env（不是 code）', async () => {
+  await dbModule.query('UPDATE odoo_envs SET url=NULL, port=NULL WHERE project_id=$1', [projectId]);
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  const s = await statusOf(id);
+  expect(s.status).toBe('stopped');
+  expect(s.blocker_type).toBe('env');
 });
 
 test('exit0 但 log 無測試執行痕跡（--test-tags 匹配 0 個）→ 退 coding（防假綠燈，健檢項2）', async () => {
