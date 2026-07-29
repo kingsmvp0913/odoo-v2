@@ -252,7 +252,7 @@ test('權限守則 P0~P6 必須待在 §1 內，才會同時進 full 模式與 Q
   });
   expect(qaOut).toContain(ANCHOR);
   expect(qaOut).toContain('perm_unlink=1');        // P5 也要進 QA
-  expect(qaOut).toContain('permissions');          // P6：QA 要比對的欄位名
+  expect(qaOut).toContain('QA 關要比對實作與');     // P6 專屬片語（只存在於 CLAUDE.md，不會被片段假綠）
 
   const analysisOut = loadAgent('analysis-project').render({
     project_name: 'P', odoo_version: '17.0', original_text: 'OT', task_id: 'task_1'
@@ -412,6 +412,19 @@ describe('PLAIN_LANGUAGE_AGENTS 注入說人話守則', () => {
     } finally {
       fs.writeFileSync(PL_PATH, orig);
     }
+  });
+
+  // 意圖（Rule 9）：名單裡打錯字或日後 agent 檔改名 → 靜默不注入且無任何紅燈，
+  // 正是本片段要防的失敗形態。逐一 render 把 11 關全部鎖死（render({}) 只會 console.warn
+  // 未匹配 placeholder，不會 throw）。
+  test('11 關全數注入（防未來改名或打錯字靜默失效）', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const n of ['analysis-project', 'analysis-reject', 'clarify-chat', 'spec-review', 'qa',
+                       'merge-explain', 'merge-clarify', 'cs', 'chat', 'chat-to-task', 'library']) {
+        expect(loadAgent(n).render({})).toContain(PL_HEADER);
+      }
+    } finally { spy.mockRestore(); }
   });
 });
 

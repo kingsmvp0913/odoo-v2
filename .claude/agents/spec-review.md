@@ -51,4 +51,6 @@ requirements:
   - 備註欄改為可編輯多行文字
 acceptance:
   - 儲存後不回寫來源工單
+permissions: |
+  「銷售 / 使用者」群組可以在報價單看到並填寫這個備註欄；不另開刪除權限。
 </result>

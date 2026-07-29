@@ -53,7 +53,7 @@ When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"
   - (b) 需要新增 `res.groups`
   - (c) 推導結果是 admin-only（`base.group_system`／`base.group_no_one`）
 - **P5 `unlink` 單獨確認**：規格沒明說「要能刪」，就不准填 `perm_unlink=1`。
-- **P6 規格必須攤開**：分析關要在 `analysis.yaml` 的 `permissions` 區塊，用畫面上的名詞寫出「誰能用、能做什麼」。開發關不得產出規格沒寫的權限；QA 關要比對實作與 `permissions` 是否一致。
+- **P6 規格必須攤開**：分析關要在 `analysis.yaml` 的 `permissions` 區塊，用畫面上的名詞寫出「誰能用、能做什麼」。開發關不得產出規格沒寫的權限；QA 關要比對實作與 `permissions` 是否一致。規格**沒有** `permissions` 欄位、或該欄留空時（本規則上線前產出的舊規格，或 P1 情境本就不需寫）→ 依 P0~P5 推導照常實作，QA 不得僅以「規格沒寫權限」為由退回。
 
 ## 2. Python Constraints
 - 禁用原生 `round()`（銀行家捨入，30.5→30，非台灣四捨五入）；改用 `Decimal` + `ROUND_HALF_UP`。
