@@ -43,13 +43,17 @@ When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"
 
 ### 權限（ir.model.access / res.groups）
 權限一律由「錨點」推導，不得自由心證；推不出來就問，不准猜。
-- **P0 先認體系**：動任何權限前，先讀本專案 `security/*.xml` 的 `res.groups` 與 `ir.model.access.csv`，判定這專案用哪一種權限體系（標準 user/manager 兩層／四拆能力群組／角色群組），再談個別功能。不得套用通用假設，特別是**不得假設存在「App 級群組」**。
-- **P1 `_inherit` 既有 Model → 不新增 access 列**：加欄位不需要新 ACL。唯一例外是任務本身就要改該 Model 的權限——此時必須同時以 `active=False` 停用被取代的原生列。
+
+- **P0 先認體系**：動任何權限前，先讀本專案 `security/*.xml` 的 `res.groups` 與 `ir.model.access.csv`，判定這專案用哪一種權限體系（標準 user/manager 兩層／四拆能力群組／角色群組），再談個別功能。不得套用通用假設，特別是不得假設存在「App 級群組」。
+- **P1 `_inherit` 既有 Model → 不新增 access 列**。加欄位不需要新 ACL。唯一例外：任務本身就是要改該 Model 的權限——此時必須同時以 `active=False` 停用被取代的原生列。
 - **P2 新 Model → 比照它的錨**：有主人（Many2one 指向某單據）就比照主人的 groups 與 rwcu；獨立主檔則比照同層級的鄰居主檔。
-- **P3 選單／報表的 `groups` → 用「能看到它所操作的那個 Model」的那個群組**：四拆體系是 `group_*_search`，標準兩層體系是該模組的 user 群組。掛在「設定」子樹底下的不寫 `groups`，繼承 parent。
-- **P4 這三種一律停下來問（寫進 `clarification_channel.questions`），不准自己決定**：(a) 推導結果與同專案同類 Model 的既有寫法不一致（例：主檔權限四拆、旁邊的明細卻全開）；(b) 需要新增 `res.groups`；(c) 推導結果是 admin-only（`base.group_system`／`base.group_no_one`）。
+- **P3 選單／報表的 `groups` → 用「能看到它所操作的那個 Model」的那個群組**。在四拆體系是 `group_*_search`；在標準兩層體系是該模組的 user 群組。掛在「設定」子樹底下的則不寫 `groups`，繼承 parent。
+- **P4 這三種一律停下來問（寫進 `clarification_channel.questions`），不准自己決定**：
+  - (a) 推導結果與同專案中同類 Model 的既有寫法不一致（例：主檔權限四拆、旁邊的明細卻全開）
+  - (b) 需要新增 `res.groups`
+  - (c) 推導結果是 admin-only（`base.group_system`／`base.group_no_one`）
 - **P5 `unlink` 單獨確認**：規格沒明說「要能刪」，就不准填 `perm_unlink=1`。
-- **P6 規格必須攤開**：分析關要在 `analysis.yaml` 的 `permissions` 區塊，用畫面上的名詞寫出「誰能用、能做什麼」；開發關不得產出規格沒寫的權限；QA 關要比對實作與 `permissions` 是否一致。
+- **P6 規格必須攤開**：分析關要在 `analysis.yaml` 的 `permissions` 區塊，用畫面上的名詞寫出「誰能用、能做什麼」。開發關不得產出規格沒寫的權限；QA 關要比對實作與 `permissions` 是否一致。
 
 ## 2. Python Constraints
 - 禁用原生 `round()`（銀行家捨入，30.5→30，非台灣四捨五入）；改用 `Decimal` + `ROUND_HALF_UP`。
