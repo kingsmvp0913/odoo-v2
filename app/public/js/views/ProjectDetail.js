@@ -357,8 +357,6 @@ window.ProjectDetailView = Vue.defineComponent({
             <span :style="{ color: env.status === 'running' ? 'var(--success,#48bb78)' : env.status === 'error' ? 'var(--error)' : 'var(--text-muted)' }">
               {{ { idle:'● 閒置', setting_up:'⟳ 建立中（自動重新整理）', running:'● 運行中', error:'✕ 錯誤' }[env.status] || env.status }}
             </span>
-            <a v-if="env.url" href="#" @click.prevent="openEnv" style="font-size:var(--fs-sm)">{{ env.url }}</a>
-            <span v-if="env.port && env.status === 'running'" style="font-size:var(--fs-sm);color:var(--text-muted)">port {{ env.port }}</span>
           </div>
           <div v-if="env.error_msg" class="error-msg" style="margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
           <details v-if="env.setup_log" style="margin-bottom:10px">
@@ -375,7 +373,7 @@ window.ProjectDetailView = Vue.defineComponent({
               <span class="spinner"></span>建立中…
             </button>
             <template v-if="env.status === 'running'">
-              <button v-if="env.url" class="btn btn-primary btn-sm" @click="openEnv">開啟測試區</button>
+              <button v-if="env.status === 'running'" class="btn btn-primary btn-sm" @click="openEnv">開啟測試區</button>
               <button class="btn btn-outline btn-sm" @click="stopEnv" :disabled="envWorking">停止</button>
             </template>
             <button v-if="env.built || env.status !== 'idle'" class="btn btn-outline btn-sm" @click="viewLog" :disabled="logLoading">
