@@ -51,8 +51,16 @@ function registerRoutes(app) {
       const { rows: [env] } = await query(
         'SELECT status, url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]
       );
-      if (!env || env.status !== 'running' || !env.sso_secret) {
-        return res.status(409).json({ error: '測試區尚未就緒' });
+      // 環境可能已被閒置回收停掉。回 409 等於要使用者自己去專案頁找「建立環境」再等——
+      // 任務頁根本沒有那個按鈕。直接幫他起，回 202 讓前端顯示進度並輪詢。
+      // runEnvSetup 內建同專案 in-flight 去重，連按不會 spawn 兩個。
+      if (!env || !env.sso_secret) return res.status(409).json({ error: '測試區尚未就緒' });
+      if (env.status !== 'running') {
+        if (env.status !== 'setting_up') {
+          const { runEnvSetup } = require('./pipeline/env-agent');
+          runEnvSetup(req.params.id).catch(e => console.error('[ENV] sso autostart error:', e.message));
+        }
+        return res.status(202).json({ starting: true, message: '測試區建立中，完成後會自動開啟' });
       }
 
       let url = env.url;

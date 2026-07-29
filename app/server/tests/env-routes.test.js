@@ -151,9 +151,11 @@ describe('/env/sso 借對外名額', () => {
     expect(env.external_slot).toBeNull();
   });
 
-  test('環境未 running → 409，且不借名額', async () => {
+  // 缺 sso_secret 代表環境從沒建成功過，Task 9 之後這才是真正的 409（重起也沒用）；
+  // 若已有 sso_secret 只是 status 不是 running，改走 202 自動起（見下方新測試）。
+  test('環境未就緒（無 sso_secret）→ 409，且不借名額', async () => {
     process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
-    const pid = await mkEnv('c', { status: 'idle', sso_secret: 'sec' });
+    const pid = await mkEnv('c', { status: 'idle' });
     const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(409);
     const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
@@ -171,5 +173,29 @@ describe('/env/sso 借對外名額', () => {
     const { rows: [env] } = await dbModule.query('SELECT external_slot, status FROM odoo_envs WHERE project_id=$1', [pid]);
     expect(env.external_slot).toBeNull();
     expect(env.status).toBe('running');   // 只收名額，不停環境
+  });
+
+  // 意圖：使用者按「開啟測試區」時環境可能已被閒置回收停掉。回 409「尚未就緒」等於要他自己
+  // 去找「建立環境」按鈕再等——那個按鈕在專案頁，任務頁根本沒有。改成直接幫他起。
+  // runEnvSetup 已在檔案頂端被 mock 為 mockRunEnvSetup（POST /env/setup 沿用同一支 spy），
+  // /env/sso 走的是同一個 require('./pipeline/env-agent')，故不需另建 spy。
+  test('環境 idle → 觸發建立並回 202 starting，不回 url', async () => {
+    process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
+    mockRunEnvSetup.mockResolvedValueOnce(undefined);
+    const pid = await mkEnv('e', { status: 'idle', sso_secret: 'sec' });
+    const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(202);
+    expect(res.body.starting).toBe(true);
+    expect(res.body.url).toBeUndefined();
+    expect(mockRunEnvSetup).toHaveBeenCalledWith(String(pid));
+  });
+
+  // 意圖：連按兩次不得起兩個環境。runEnvSetup 內建 in-flight 去重，但這裡要確認我們有走到它，
+  // 而不是各自 spawn——setting_up 代表已經有一個在跑，不該再觸發一次。
+  test('環境 setting_up → 回 202 但不再觸發建立', async () => {
+    const pid = await mkEnv('f', { status: 'setting_up', sso_secret: 'sec' });
+    const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(202);
+    expect(mockRunEnvSetup).not.toHaveBeenCalled();
   });
 });
