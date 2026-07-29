@@ -86,13 +86,14 @@ async function runRejectTriage(taskId, userId, signal) {
   let raw;
   try {
     const agent = loadAgent('analysis-reject');
-    const { getMainBranch } = require('./git');
-    const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+    // base 分支＝任務切點 ai-dev：用 main 當 diff 基底會把其他已核准任務的變更算成本任務的成果
+    const { AI_BRANCH } = require('./git');
+    const baseBranch = AI_BRANCH;
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
     const prompt = agent.render({
       project_name: info.name,
       odoo_version: info.odoo_version,
-      main_branch: mainBranch,
+      main_branch: baseBranch,
       git_branch: task.git_branch || '（未設定）',
       repo_paths: buildRepoPaths(info, task.task_id),
       analysis_yaml: task.analysis_yaml || '（無規格）',

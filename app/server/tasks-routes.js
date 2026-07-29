@@ -226,7 +226,7 @@ function registerRoutes(app) {
       if (!task.project_id || !task.git_branch) return res.status(400).json({ error: '此任務沒有專案分支，無可檢視的程式變更' });
 
       const { getProjectInfo } = require('./pipeline/task-agent');
-      const { getMainBranch, refExists, diffBranch } = require('./pipeline/git');
+      const { AI_BRANCH, refExists, diffBranch } = require('./pipeline/git');
       const info = await getProjectInfo(task.project_id);
       if (!info?.repos?.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
@@ -238,8 +238,9 @@ function registerRoutes(app) {
           repos.push({ label: repo.label, missing: true, diff: '' });
           continue;
         }
-        const mainBranch = await getMainBranch(repo.local_path).catch(() => 'main');
-        let diff = await diffBranch(repo.local_path, mainBranch, task.git_branch);
+        // diff 基底＝任務切點 ai-dev：用 main 會讓審核者看到其他已核准任務夾雜其中的改動
+        const baseBranch = AI_BRANCH;
+        let diff = await diffBranch(repo.local_path, baseBranch, task.git_branch);
         const truncated = diff.length > MAX_CHARS;
         if (truncated) diff = diff.slice(0, MAX_CHARS);
         repos.push({ label: repo.label, diff, truncated });

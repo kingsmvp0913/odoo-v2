@@ -9,8 +9,9 @@ jest.mock('../pipeline/task-agent', () => {
   const actual = jest.requireActual('../pipeline/task-agent');
   return { ...actual, getProjectInfo: jest.fn() };
 });
-// 死結熔斷（P6）用 revParse 取任務分支 HEAD；getMainBranch 是 attempt() 內既有呼叫。
-jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main'), revParse: jest.fn() }));
+// 死結熔斷（P6）用 revParse 取任務分支 HEAD；AI_BRANCH 是 attempt() 取 diff 基底用的常數
+// （getMainBranch 留著只為證明它已不再被 QA 呼叫）。
+jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main'), revParse: jest.fn(), AI_BRANCH: 'ai-dev' }));
 
 let dbModule, runQaAgent, taskAgent, runClaude;
 let userId, projectId;
@@ -174,6 +175,21 @@ test('上一輪 [QA 未通過] 會帶入本輪 QA 的 prompt', async () => {
   const sentPrompt = runClaude.mock.calls[0][0];
   expect(sentPrompt).toContain('按鈕位置未緊鄰新增按鈕');
   expect(sentPrompt).not.toContain('[QA 未通過]'); // 標頭已剝除，只留清單本體
+});
+
+// 意圖（C-1）：QA 的 diff 基底必須是任務切點 ai-dev，不是實體 main。任務分支從 ai-dev 切、
+// ai-dev 又含 main 全部歷史 → 以 main 當基底時 `git diff main...task/X` 的 merge-base 落在 main 的 tip，
+// 會把其他已核准但尚未回流 main 的任務變更一併算成本任務的成果；QA 拿別人的碼對照本任務規格審查，
+// 會誤判「做了規格沒要求的東西」而退回，或反過來把別人的碼當本任務成果放行。
+test('C-1 QA prompt 的 diff 基底是 ai-dev（任務切點），不是實體 main', async () => {
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const sentPrompt = runClaude.mock.calls[0][0];
+  expect(sentPrompt).toContain('diff ai-dev...task/x');
+  expect(sentPrompt).not.toContain('diff main...task/x');
+  const git = require('../pipeline/git');
+  expect(git.getMainBranch).not.toHaveBeenCalled(); // 基底不再取決於 repo 實際主分支名
 });
 
 test('首輪無上一輪清單 → prompt 帶入佔位字串', async () => {
