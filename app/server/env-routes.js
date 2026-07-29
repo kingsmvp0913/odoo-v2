@@ -49,12 +49,20 @@ function registerRoutes(app) {
   app.get('/api/projects/:id/env/sso', verifyToken, async (req, res) => {
     try {
       const { rows: [env] } = await query(
-        'SELECT status, url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]
+        'SELECT status, url, sso_secret, error_msg FROM odoo_envs WHERE project_id=$1', [req.params.id]
       );
       // 環境可能已被閒置回收停掉。回 409 等於要使用者自己去專案頁找「建立環境」再等——
       // 任務頁根本沒有那個按鈕。直接幫他起，回 202 讓前端顯示進度並輪詢。
       // runEnvSetup 內建同專案 in-flight 去重，連按不會 spawn 兩個。
       if (!env || !env.sso_secret) return res.status(409).json({ error: '測試區尚未就緒' });
+      // status='error' 不能自動重試：_failEnv 只改 status，不清 sso_secret，所以「曾經建成功、
+      // 之後重啟失敗」也會落在這裡——若當一般未就緒自動重試，_setupInflight 在失敗 settle 後
+      // 立刻刪 key，下一次輪詢就會重跑一整輪 docker build/pip install/DB init。建置失敗多半
+      // 是不會自癒的原因（映像壞掉、埠衝突、磁碟滿），重跑只會放大問題，還讓使用者永遠看到
+      // 「建立中」而看不到真正的錯誤——這裡直接把 error_msg 帶出來讓他知道發生了什麼事。
+      if (env.status === 'error') {
+        return res.status(409).json({ error: env.error_msg || '測試區建立失敗，請到專案頁查看建立記錄' });
+      }
       if (env.status !== 'running') {
         if (env.status !== 'setting_up') {
           const { runEnvSetup } = require('./pipeline/env-agent');

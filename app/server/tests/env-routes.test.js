@@ -113,9 +113,9 @@ async function mkEnv(name, opts = {}) {
     [`${name}-sso-${_envSsoSeq}`]
   );
   await dbModule.query(
-    `INSERT INTO odoo_envs (project_id, status, port, url, sso_secret, external_slot)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [p.id, opts.status || 'idle', opts.port ?? null, opts.url ?? null, opts.sso_secret ?? null, opts.external_slot ?? null]
+    `INSERT INTO odoo_envs (project_id, status, port, url, sso_secret, external_slot, error_msg)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [p.id, opts.status || 'idle', opts.port ?? null, opts.url ?? null, opts.sso_secret ?? null, opts.external_slot ?? null, opts.error_msg ?? null]
   );
   return p.id;
 }
@@ -196,6 +196,18 @@ describe('/env/sso 借對外名額', () => {
     const pid = await mkEnv('f', { status: 'setting_up', sso_secret: 'sec' });
     const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(202);
+    expect(mockRunEnvSetup).not.toHaveBeenCalled();
+  });
+
+  // 意圖：_failEnv 只把 status 改成 error，不清 sso_secret（曾經建成功、之後重啟失敗＝
+  // sso_secret 仍在）。若把這當一般未就緒自動重試，_setupInflight 失敗 settle 後立刻刪 key，
+  // 下一次輪詢就會重跑一整輪 docker build/pip install/DB init，且使用者只會看到「建立中」
+  // 而看不到真正失敗的原因。這裡要斷言兩件事：不觸發 runEnvSetup、回應帶出 error_msg。
+  test('環境 error → 409 且不觸發建立，訊息帶出 error_msg', async () => {
+    const pid = await mkEnv('g', { status: 'error', sso_secret: 'sec', error_msg: 'docker image build 失敗' });
+    const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('docker image build 失敗');
     expect(mockRunEnvSetup).not.toHaveBeenCalled();
   });
 });

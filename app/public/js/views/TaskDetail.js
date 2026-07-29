@@ -140,15 +140,11 @@ window.TaskDetailView = Vue.defineComponent({
       if (w) {
         try {
           w.document.write('<p style="font-family:sans-serif;padding:2rem">測試區建立中，請稍候…</p>');
-        } catch { /* 極少數瀏覽器擋 about:blank 寫入，不影響後續導向 */ }
+        } catch (e) { console.debug('about:blank document.write 被瀏覽器擋下，不影響後續導向:', e && e.message); }
       }
       try {
-        let r = await Api.get(`projects/${this.task.project_id}/env/sso`);
-        while (r && r.starting) {
-          await new Promise(s => setTimeout(s, 5000));
-          r = await Api.get(`projects/${this.task.project_id}/env/sso`);
-        }
-        if (w) w.location = r.url; else window.location = r.url;
+        const url = await pollEnvSso(this.task.project_id);
+        if (w) w.location = url; else window.location = url;
       } catch (e) {
         if (w) w.close();
         showToast(e.message || '無法開啟測試區', 'error');
