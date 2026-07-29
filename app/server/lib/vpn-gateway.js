@@ -5,6 +5,8 @@ const path = require('path');
 const crypto = require('crypto');
 // Docker daemon 沒起時自動啟動 Docker Desktop 的邏輯已上移到通用驅動層 docker-env，兩邊共用一份。
 const { ensureDockerRunning } = require('./docker-env');
+// project-lock.js 是純 Promise 鏈、零 require，lib/ 引用它不會拖進 pipeline 的相依鏈。
+const { withProjectLock } = require('../pipeline/project-lock');
 
 const IMAGE_BASE = 'odoo-v2-vpn-gateway';
 const VPN_GATEWAY_DIR = path.resolve(__dirname, 'vpn-gateway');
@@ -185,7 +187,20 @@ function startGateway(gw, deps) {
   return tmpFile;
 }
 
-async function ensureGatewayRunning(gw, deps = {}) {
+// 同一容器（同一專案）的並發呼叫必須排隊，不能只鎖 docker run 那段：早退檢查
+// （容器在跑且指紋相符就沿用）也要在鎖內，等到鎖的一方才會重新檢查一次、發現
+// 前一方已經建好就直接早退——不會誤判「被搶走」而重建、害隧道斷線重撥。
+//
+// key 刻意用 `vpn:${gw.containerName}` 這個獨立命名空間，不直接用 projectId：
+// pipeline（merge／deploy／worktree／analysis-pull／approve）已經拿 projectId 當 key
+// 序列化，VPN 撥號最長 40 秒，若共用同一個 key 會讓撥號期間整個專案的 pipeline 工作
+// 全部卡住排隊。containerName（`vpn-proj-<id>`）本來就是「一專案一個」的唯一識別，
+// 直接借用即可，不需要為此改 Gw 契約多塞一個 projectId 欄位。
+function ensureGatewayRunning(gw, deps = {}) {
+  return withProjectLock(`vpn:${gw.containerName}`, () => ensureGatewayRunningLocked(gw, deps));
+}
+
+async function ensureGatewayRunningLocked(gw, deps) {
   const execFileSync = deps.execFileSync || realExecFileSync;
   const writeFileSync = deps.writeFileSync || realFs.writeFileSync;
   const rmSync = deps.rmSync || realFs.rmSync;

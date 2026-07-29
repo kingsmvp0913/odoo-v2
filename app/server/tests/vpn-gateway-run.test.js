@@ -261,6 +261,70 @@ test('docker run 用的 image tag 與 ensureImageBuilt 檢查/build 的 tag 是�
   expect(runImage).toMatch(/^odoo-v2-vpn-gateway:[0-9a-f]{12}$/);
 });
 
+// Fix B：容器共用成單一資源後，同一個 containerName 的併發呼叫會互砍。
+//
+// 注意「兩邊都跑 docker run」不是能分辨有無鎖的訊號：isContainerRunning 檢查到 docker run
+// 之間全是同步的 execFileSync，單執行緒下第二個呼叫者永遠是在容器已建好之後才醒來。
+// 真正的破壞窗口在 waitReachable——先到者在那裡 await（最長 40 秒）讓出 event loop，
+// 後到者此時進場；只要兩邊的目標集合不同（實際場景：測試區起動的 fire-and-forget 撥號讀到
+// 舊的連線清單，使用者剛存好第二條連線後查詢觸發的 lazy 撥號讀到新的），後到者就會判定
+// 指紋不符而走 removeStaleContainer，把先到者還在撥號的容器 stop+rm 掉，
+// 讓先到者在 waitReachable 撞見容器消失、對使用者報一個假的「撥號失敗」。
+//
+// withProjectLock 排隊後：後到者要等先到者整段做完才開始，先到者正常撥通回報成功，
+// 後到者才接著依新的目標集合重建——兩邊都成功。
+test('併發呼叫：後到者不得在先到者撥號途中把容器砍掉重建（Fix B）', async () => {
+  const SPEC_ONE = '22000:192.168.1.233:22';
+  const oneTarget = { ...baseGw, targets: [baseGw.targets[0]] };
+
+  let running = null; // 容器現在掛的 targets 指紋；null＝沒有容器
+  const execFileSync = jest.fn((cmd, args) => {
+    if (args[0] === 'info') return '';
+    if (args[0] === 'images') return 'sha256:abc123\n';
+    if (args[0] === 'stop' || args[0] === 'rm') { running = null; return ''; }
+    if (args[0] === 'run') { running = args[args.indexOf('--label') + 1].replace('targets=', ''); return ''; }
+    if (args[0] === 'inspect') {
+      if (running === null) throw new Error('No such object');
+      if (String(args[2] || '').includes('State.Running')) return 'true\n';
+      if (String(args[2] || '').includes('Labels')) return `${running}\n`;
+    }
+    return '';
+  });
+
+  // 撥號中停住，由測試決定何時「撥通」，藉此把後到者放進先到者的撥號窗口內。
+  const dialing = [];
+  const waitReachable = jest.fn(async () => {
+    const mine = running; // 這次 docker run 起的那個容器
+    await new Promise(resolve => dialing.push(resolve));
+    // 真實的 waitReachable 靠 docker exec 探目標，容器被砍掉會直接報「容器已結束」
+    if (running !== mine) throw new Error('VPN 撥號失敗，容器已結束');
+  });
+
+  const deps = {
+    execFileSync,
+    writeFileSync: jest.fn(),
+    rmSync: jest.fn(),
+    tmpFilePath: jest.fn(() => 'C:\\tmp\\vpn-proj-2.ovpn'),
+    waitReachable,
+  };
+
+  const first = ensureGatewayRunning(oneTarget, deps); // 測試區起動的 fire-and-forget 撥號
+  const second = ensureGatewayRunning(baseGw, deps); // 使用者剛存好第二條連線後的 lazy 撥號
+  const settled = Promise.allSettled([first, second]);
+  // 有鎖時後到者要等先到者整段做完才進撥號，兩邊不會同時在 dialing 裡——逐輪放行直到都收斂。
+  for (let i = 0; i < 10; i++) {
+    dialing.splice(0).forEach(resolve => resolve());
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  const [r1, r2] = await settled;
+
+  // 沒有鎖時這裡會是 rejected：先到者的容器在它撥號途中被後到者砍掉
+  expect(r1.status).toBe('fulfilled');
+  expect(r1.value).toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC_ONE });
+  expect(r2.status).toBe('fulfilled');
+  expect(r2.value).toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC });
+});
+
 describe('imageTag：tag 依 Dockerfile／entrypoint.sh 內容雜湊', () => {
   function makeFixtureDir(dockerfileContent, entrypointContent) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vpn-gateway-hash-'));
