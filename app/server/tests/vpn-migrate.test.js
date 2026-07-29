@@ -109,12 +109,21 @@ test('沒有任何連線帶設定檔的專案完全不動', async () => {
 test('多專案各自搬各自的，不互相污染', async () => {
   const a = await seedProject('A');
   const b = await seedProject('B');
-  await seedConn(a, { vpn_enabled: true, vpn_config_enc: 'ENC_A', vpn_username: 'ua', vpn_password_enc: 'PA' });
-  await seedConn(b, { vpn_enabled: true, vpn_config_enc: 'ENC_B', vpn_username: 'ub', vpn_password_enc: 'PB' });
+  // 兩個專案的連線刻意打去同一台機器（192.168.1.233:22，seedConn 預設值），
+  // 用來驗證全域埠不撞號——這是 used 陣列必須宣告在跨專案迴圈「外層」的唯一保障。
+  const connA = await seedConn(a, { vpn_enabled: true, vpn_config_enc: 'ENC_A', vpn_username: 'ua', vpn_password_enc: 'PA' });
+  const connB = await seedConn(b, { vpn_enabled: true, vpn_config_enc: 'ENC_B', vpn_username: 'ub', vpn_password_enc: 'PB' });
 
   await migrateVpnToProjects(dbModule.query);
 
   const { rows } = await dbModule.query('SELECT id, vpn_config_enc, vpn_username FROM projects ORDER BY id');
   expect(rows.find(r => r.id === a).vpn_username).toBe('ua');
   expect(rows.find(r => r.id === b).vpn_username).toBe('ub');
+
+  const { rows: conns } = await dbModule.query('SELECT id, vpn_forward_port FROM db_connections WHERE id IN ($1,$2)', [connA, connB]);
+  const portA = conns.find(r => r.id === connA).vpn_forward_port;
+  const portB = conns.find(r => r.id === connB).vpn_forward_port;
+  expect(portA).toBe(22000);
+  expect(portB).toBe(22001);
+  expect(portA).not.toBe(portB);
 });
