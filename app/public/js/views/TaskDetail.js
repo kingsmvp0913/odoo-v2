@@ -2,7 +2,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, clarTab: 'qa', askText: '', askSubmitting: false, clarifyDraft: null, draftBusy: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -173,6 +173,7 @@ window.TaskDetailView = Vue.defineComponent({
       catch { this.logs = data.logs || this.logs || []; }
       this.ticketAttachments = data.attachments || [];
       this.clarification = data.clarification || { summary: '', questions: [] };
+      this.clarifyDraft = data.clarify_draft || null;
       this.spec = data.spec || null; // spec_review 審核頁的規格（後端已 parse analysis_yaml）
       // Init answer fields for each cs question
       const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
@@ -240,6 +241,36 @@ window.TaskDetailView = Vue.defineComponent({
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.askSubmitting = false; }
+    },
+    // 依提問對話請 AI 重產題目草案：只落 clarify_draft，不動 analysis_yaml——草案要先給人看過
+    async requestClarifyRevise() {
+      this.draftBusy = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/clarify-revise`, {});
+        showToast('AI 正在依對話調整題目', 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.draftBusy = false; }
+    },
+    // 套用草案：題目換了，answerFields 殘留的舊答案會錯位到新題目的 id 上，需清空
+    async applyClarifyDraft() {
+      this.draftBusy = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/clarify-apply`, {});
+        this.answerFields = {};
+        this.clarTab = 'qa';
+        showToast('題目已更新', 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.draftBusy = false; }
+    },
+    async discardClarifyDraft() {
+      this.draftBusy = true;
+      try {
+        await Api.post(`tasks/${this.task.id}/clarify-discard`, {});
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.draftBusy = false; }
     },
     async togglePause() {
       if (!this.task) return;
@@ -809,6 +840,20 @@ window.TaskDetailView = Vue.defineComponent({
                     <button class="btn btn-primary btn-sm" @click="submitAsk" :disabled="askSubmitting || !askText.trim()">
                       {{ askSubmitting ? '送出中...' : '送出提問' }}
                     </button>
+                  </div>
+                  <div style="border-top:1px solid var(--border);margin-top:var(--space-3);padding-top:var(--space-3)">
+                    <div v-if="!clarifyDraft" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                      <span style="font-size:var(--fs-sm);color:var(--text-secondary)">問完了？讓 AI 依這段對話調整題目：</span>
+                      <button class="btn btn-secondary btn-sm" @click="requestClarifyRevise" :disabled="draftBusy">更新規格書 QA</button>
+                    </div>
+                    <div v-else>
+                      <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:6px">AI 建議這樣調整題目</div>
+                      <pre style="background:var(--surface);color:var(--text);border-radius:6px;padding:var(--space-3);max-height:280px;overflow:auto;font-size:var(--fs-xs);white-space:pre-wrap">{{ clarifyDraft }}</pre>
+                      <div style="text-align:right;margin-top:6px;display:flex;gap:6px;justify-content:flex-end">
+                        <button class="btn btn-ghost btn-sm" @click="discardClarifyDraft" :disabled="draftBusy">不要，維持原樣</button>
+                        <button class="btn btn-primary btn-sm" @click="applyClarifyDraft" :disabled="draftBusy">套用</button>
+                      </div>
+                    </div>
                   </div>
                 </template>
               </template>
