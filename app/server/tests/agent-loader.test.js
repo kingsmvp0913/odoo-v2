@@ -239,6 +239,27 @@ test('qa 只注入精簡審查規則：含 Odoo/Python Constraints 與 Rule 12�
   expect(out).not.toContain('app/public');       // 前端規範不注入
 });
 
+// 意圖（Rule 9）：權限守則放在 CLAUDE.md §1 內部（### 三級標題），是為了讓 loadQaRules 的
+// `## 1. Odoo Constraints ... (?=\n## )` 節錄剛好把它一起帶進 QA——QA 要比對實作與規格 permissions
+// 是否一致（P6）。若有人改成 `## 權限` 二級標題，regex 會提早截斷、QA 靜默拿不到守則。
+test('權限守則 P0~P6 必須待在 §1 內，才會同時進 full 模式與 QA 精簡模式', () => {
+  const { loadAgent } = require('../pipeline/agent-loader');
+  const ANCHOR = '權限一律由「錨點」推導';
+
+  const qaOut = loadAgent('qa').render({
+    project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+    analysis_yaml: 'module: sale', prior_findings: '（首輪，無上輪清單）', resolution: '（無）'
+  });
+  expect(qaOut).toContain(ANCHOR);
+  expect(qaOut).toContain('perm_unlink=1');        // P5 也要進 QA
+  expect(qaOut).toContain('permissions');          // P6：QA 要比對的欄位名
+
+  const analysisOut = loadAgent('analysis-project').render({
+    project_name: 'P', odoo_version: '17.0', original_text: 'OT', task_id: 'task_1'
+  });
+  expect(analysisOut).toContain(ANCHOR);
+});
+
 test('qa-retry 不重複注入規則（resume 短 prompt）', () => {
   const { loadAgent } = require('../pipeline/agent-loader');
   const out = loadAgent('qa-retry').render({
