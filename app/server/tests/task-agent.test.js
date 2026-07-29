@@ -39,11 +39,18 @@ jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
   ensureMainBranch: jest.fn().mockResolvedValue('main'),
   ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
-  getMainBranch: jest.fn().mockResolvedValue('main')
+  getMainBranch: jest.fn().mockResolvedValue('main'),
+  AI_BRANCH: 'ai-dev',
+  ensureAiBranch: jest.fn().mockResolvedValue('ai-dev'),
+  syncMainIntoAi: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
+  commitResolved: jest.fn().mockResolvedValue(undefined)
+}));
+jest.mock('../pipeline/merge-agent', () => ({
+  resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} })
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
-let dbModule, runTaskAnalysis, runTaskCoding, git;
+let dbModule, runTaskAnalysis, runTaskCoding, git, mergeAgent;
 let userId, projectId;
 
 beforeAll(async () => {
@@ -70,13 +77,14 @@ beforeAll(async () => {
   );
 
   git = require('../pipeline/git');
+  mergeAgent = require('../pipeline/merge-agent');
   ({ runTaskAnalysis, runTaskCoding } = require('../pipeline/task-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
-test('分析前 pull main 失敗 → 任務 stopped，不繼續分析', async () => {
-  git.pullBranch.mockRejectedValueOnce(new Error('could not resolve host github.com'));
+test('分析前同步 ai-dev 失敗 → 任務 stopped，不繼續分析', async () => {
+  git.syncMainIntoAi.mockRejectedValueOnce(new Error('could not resolve host github.com'));
   const { rows: [t] } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_pull','odoo','T','需求','analysis_running',$2) RETURNING id",
     [userId, projectId]
@@ -85,7 +93,7 @@ test('分析前 pull main 失敗 → 任務 stopped，不繼續分析', async ()
   expect(handled).toBe(true);
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
-  expect(after.blocker_content).toContain('main');
+  expect(after.blocker_content).toContain('ai-dev');
 });
 
 test('任務發起人未設 PAT → 停任務、blocker=git_cred', async () => {
@@ -283,9 +291,9 @@ test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且�
   );
   await runTaskAnalysis(t.id, userId);
 
-  // 建立任務 worktree（branch task/<id>、reset=true 讀最新 main）；worktree 路徑用 task_id（非拋棄式）
+  // 建立任務 worktree（branch task/<id>、reset=true、base=ai-dev＝任務切點）；worktree 路徑用 task_id（非拋棄式）
   expect(git.ensureWorktreeAtMain).toHaveBeenCalledWith(
-    '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'main', true
+    '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'ai-dev', true
   );
   // claude cwd 是任務 worktree 父目錄（coding 之後會沿用同一個）
   expect(calls[0].cwd).toContain(path.join('.worktrees', 'ana_iso'));
@@ -351,4 +359,77 @@ test('F-failloud：analysis 回 stopped_reason → stopped 帶原因', async () 
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
   expect(after.blocker_content).toContain('無法分析');
+});
+
+// ===== 主題 G：切點改 ai-dev、開工前同步 main（Task 6）=====
+// 沿用本檔既有的 git mock 樣態（git.<fn>），非 brief 假設的獨立 gitMock/queryMock 變數；
+// merge_conflict_data 走真的 pg-mem DB（TEXT 欄位），比照 merge-agent.test.js 的 JSON.parse 慣例讀回。
+
+test('G-1 analysis 開工：worktree 從 ai-dev 切，不從 main 切', async () => {
+  mockClaude();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g1','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  expect(git.ensureWorktreeAtMain).toHaveBeenCalledWith(
+    '/repos/tap/main', expect.any(String), 'task/ta_g1', 'ai-dev', true
+  );
+});
+
+test('G-2 先 ensureAiBranch 再 syncMainIntoAi，順序不可顛倒（ai-dev 不存在時 sync 會 checkout 失敗）', async () => {
+  mockClaude();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g2','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  const ensureOrder = git.ensureAiBranch.mock.invocationCallOrder[0];
+  const syncOrder = git.syncMainIntoAi.mock.invocationCallOrder[0];
+  expect(ensureOrder).toBeLessThan(syncOrder);
+});
+
+test('G-3 sync 衝突且自動解不掉 → 停 merge_conflict，資料帶 sync 旗標與 prior_status', async () => {
+  git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
+  mergeAgent.resolveConflicts.mockResolvedValueOnce({ failed: ['a.py'], details: { 'a.py': { recommendation: 'manual' } } });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g3','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('merge_conflict');
+  const cd = typeof after.merge_conflict_data === 'string' ? JSON.parse(after.merge_conflict_data) : after.merge_conflict_data;
+  expect(cd.sync).toBe(true);
+  expect(cd.prior_status).toBe('analysis_running'); // 裁決完要能回到分析重跑
+  expect(cd.repos[0].files).toEqual(['a.py']);
+});
+
+test('G-4 sync 衝突但自動解光了 → commit 後照常繼續分析，不停任務', async () => {
+  mockClaude();
+  git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
+  mergeAgent.resolveConflicts.mockResolvedValueOnce({ failed: [], details: {} });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g4','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  expect(git.commitResolved).toHaveBeenCalledWith('/repos/tap/main', ['a.py'], '[sync] main → ai-dev (resolve conflicts)');
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).not.toBe('merge_conflict'); // 解光了就不該卡人
+});
+
+test('G-5 sync 期間手動暫停 → 狀態原地不動，不誤標 merge_conflict 也不標 stopped', async () => {
+  git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
+  mergeAgent.resolveConflicts.mockResolvedValueOnce({ aborted: true, failed: [], details: {} });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g5','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('analysis_running'); // 原地不動，解除暫停後從這一關重跑
+  expect(after.blocker_content).toBeNull();
 });

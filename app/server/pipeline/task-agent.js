@@ -3,7 +3,8 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { pullBranch, ensureMainBranch, ensureWorktreeAtMain, getMainBranch } = require('./git');
+const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved } = require('./git');
+const { resolveConflicts } = require('./merge-agent');
 const { withProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
@@ -150,25 +151,46 @@ async function runTaskAnalysis(taskId, userId, signal) {
     throw e;
   }
 
-  // 任務 worktree（一個任務一個，analysis 建、coding 沿用、approve 併 main 後才刪）：
-  // 持鎖 pull 最新 main 並確保 task 分支 worktree 於最新 main（reset=true，此階段尚無程式變更）。
-  // analysis 讀它 → 永遠讀「乾淨 main」，不受別任務把共用主 clone 切到 testing 的污染（健檢 U7）。
-  // pull 失敗（origin 不通／本地髒）→ 停下等人工。
+  // 任務 worktree（一個任務一個，analysis 建、coding 沿用、approve 併 ai-dev 後才刪）：
+  // 持鎖確保 ai-dev 存在 → 把實體 main 的新 commit 帶進來 → 在 ai-dev 上長出 task 分支 worktree
+  // （reset=true，此階段尚無程式變更）。切點是 ai-dev 而非 main：後面的任務才看得到前面已核准
+  // 但尚未進 main 的成果，不會反覆撞同一個檔。
   const wtParent = worktreeParent(info.root, task.task_id);
   let setupErr = null;
+  let syncConflict = null;
+  let syncAborted = false;
   await withProjectLock(task.project_id, async () => {
     try {
       for (const repo of info.repos) {
-        const base = await ensureMainBranch(repo.local_path, gitEnv);
-        await pullBranch(repo.local_path, base, gitEnv);
-        await ensureWorktreeAtMain(repo.local_path, path.join(wtParent, repo.subdir), `task/${task.task_id}`, base, true);
+        await ensureAiBranch(repo.local_path, gitEnv);
+        const sync = await syncMainIntoAi(repo.local_path, gitEnv);
+        if (sync.hasConflicts) {
+          // 工程師直接改 main 的碼與 AI 改過的地方撞到了。複用 merge 那套三層：
+          // 自動解 → 語法驗證 → 解不掉才停下來跳裁決卡片給人。
+          const r = await resolveConflicts(repo.local_path, sync.conflictFiles, { taskId, userId, label: repo.label }, signal);
+          if (r.aborted) { syncAborted = true; return; }
+          if (r.failed.length) { syncConflict = { repo: repo.label, files: r.failed, details: r.details }; return; }
+          await commitResolved(repo.local_path, sync.conflictFiles, `[sync] main → ${AI_BRANCH} (resolve conflicts)`);
+        }
+        await ensureWorktreeAtMain(repo.local_path, path.join(wtParent, repo.subdir), `task/${task.task_id}`, AI_BRANCH, true);
       }
     } catch (e) { setupErr = e; }
   });
+  if (syncAborted) return true; // 手動暫停：非失敗，狀態原地不動，解除暫停後從這一關重跑
+  if (syncConflict) {
+    // prior_status 記 analysis_running：裁決完回到這一關重跑。此時 sync 的 merge 已 commit，
+    // 重跑 syncMainIntoAi 會得到 Already up to date，冪等。
+    await query(
+      "UPDATE tasks SET status='merge_conflict', merge_conflict_data=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, JSON.stringify({ sync: true, prior_status: 'analysis_running', repos: [syncConflict] })]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'merge_conflict' });
+    return true;
+  }
   if (setupErr) {
     await query(
       `UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-      [taskId, `分析前更新 main 失敗（請確認 origin 可連線且本地無未提交變更）：${setupErr.message}`]
+      [taskId, `分析前同步 ${AI_BRANCH} 失敗（請確認 origin 可連線且本地無未提交變更）：${setupErr.message}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
@@ -180,8 +202,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
   );
   const clarification = logs.reverse().filter(l => l.role === 'user').map(l => l.content).join('\n');
 
-  // base 主分支依實際 repo 而定（main/master）：供 source-routing 給出正確 diff 基底，避免 agent 猜成 main→fatal
-  const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+  // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
+  // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
+  const mainBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   let raw;
   try {
@@ -261,7 +284,9 @@ const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '18
 // retry_feedback 仍保留、餵回 coding prompt 當失敗說明，只是不再拿它決定模型。
 async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const cwd = worktreeParent(info.root, task.task_id);
-  const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+  // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
+  // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
+  const mainBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', mainBranch, projectNotes);
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
