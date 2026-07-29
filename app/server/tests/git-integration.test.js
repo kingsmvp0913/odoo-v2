@@ -166,3 +166,38 @@ test('resetTestingToMain：工作樹髒（tracked 改動＋未追蹤碰撞）仍
   expect(fs.readFileSync(path.join(repo, 'a.py'), 'utf8').replace(/\r/g, '')).toBe('x = 2\n'); // 髒改動丟棄、還原成 main 版（正規化 CRLF）
   expect((await sh(repo, 'status', '--porcelain')).stdout.trim()).toBe('');      // 工作樹乾淨
 }, 30000);
+
+test('ensureAiBranch：本地與遠端都沒有 → 從 main 建立、內容相同、遠端出現該分支', async () => {
+  const repo = await makeRepo();
+  const b = await git.ensureAiBranch(repo);
+  expect(b).toBe('ai-dev');
+
+  // 已 checkout 到 ai-dev
+  const { stdout: cur } = await sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  expect(cur.trim()).toBe('ai-dev');
+  // 內容 == main（初次建立時兩者同一顆 commit）
+  const { stdout: a } = await sh(repo, 'rev-parse', 'ai-dev');
+  const { stdout: m } = await sh(repo, 'rev-parse', 'main');
+  expect(a.trim()).toBe(m.trim());
+  // 已推上遠端：使用者要在 GitHub 上看得到並合併它
+  const { stdout: remote } = await sh(repo, 'ls-remote', '--heads', 'origin', 'ai-dev');
+  expect(remote).toContain('refs/heads/ai-dev');
+}, 30000);
+
+test('ensureAiBranch：已存在 → 冪等，不改動 SHA', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  await write(repo, 'c.py', 'z = 1\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'ai work');
+  const { stdout: before } = await sh(repo, 'rev-parse', 'ai-dev');
+
+  await sh(repo, 'checkout', 'main'); // 模擬別的流程把 clone 切走
+  const b = await git.ensureAiBranch(repo);
+
+  expect(b).toBe('ai-dev');
+  const { stdout: after } = await sh(repo, 'rev-parse', 'ai-dev');
+  expect(after.trim()).toBe(before.trim()); // 既有工作不得被重建覆蓋
+  const { stdout: cur } = await sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  expect(cur.trim()).toBe('ai-dev');
+}, 30000);

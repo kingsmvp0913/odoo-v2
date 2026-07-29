@@ -161,6 +161,28 @@ async function ensureMainBranch(repoPath, gitEnv) {
   return 'main';
 }
 
+// pipeline 的主線分支：AI 產出一律落在此，實體 main 只有人工在 GitHub 上合併時才會動。
+const AI_BRANCH = 'ai-dev';
+
+// 確保本地有 ai-dev 並 checkout；沒有就從實體 main 建立並 push -u。回傳 AI_BRANCH。
+// 只在「首次建立」時推遠端——使用者要在 GitHub 上看得到這條分支才能合併它；push 失敗不擋
+// （無 PAT／origin 不通時仍應可本地跑），approve 那次 push 會補上。
+async function ensureAiBranch(repoPath, gitEnv) {
+  if (await refExists(repoPath, `refs/heads/${AI_BRANCH}`)) {
+    await execFileAsync('git', ['checkout', AI_BRANCH], gitOpts(repoPath, gitEnv));
+    return AI_BRANCH;
+  }
+  if (await refExists(repoPath, `refs/remotes/origin/${AI_BRANCH}`)) {
+    await execFileAsync('git', ['checkout', '-B', AI_BRANCH, `origin/${AI_BRANCH}`], gitOpts(repoPath, gitEnv));
+    return AI_BRANCH;
+  }
+  // 完全沒有 → 從實體 main 建（ensureMainBranch 一併處理空 repo／僅遠端有 main 的情況）
+  const main = await ensureMainBranch(repoPath, gitEnv);
+  await execFileAsync('git', ['checkout', '-B', AI_BRANCH, main], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', ['push', '-u', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv)).catch(() => {});
+  return AI_BRANCH;
+}
+
 async function syncWithMain(repoPath, gitEnv) {
   const main = await getMainBranch(repoPath);
   // fetch 失敗容忍（離線時退而 merge 本地 main），但要留下 lastErr 供最終歸因
@@ -412,4 +434,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
