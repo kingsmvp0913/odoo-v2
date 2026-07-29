@@ -186,6 +186,30 @@ describe('/env/sso 借對外名額', () => {
     expect(env.status).toBe('running');   // 只收名額，不停環境
   });
 
+  // 意圖：名額載體是 DB 欄位，任何把環境打回 idle 的路徑都必須一併歸還，否則那個 slot 由一個
+  // 已經不存在的環境持有——而它不會出現在 nginx conf（RUNNING_SQL 要求 running），
+  // 症狀是「名額少一個且查不到誰佔的」，要等 20 分鐘閒置掃描才自己好。
+  test('刪除環境一併歸還對外名額', async () => {
+    process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
+    const pid = await mkEnv('i', { status: 'running', port: 21004, sso_secret: 'sec' });
+    await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
+    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+    expect(env.external_slot).toBeNull();
+  });
+
+  // 意圖：同上，另一條把 running 打回 idle 的路徑——DB 標 running 但 process 已死的自癒。
+  test('偵測 pid 已死自癒回 idle 時一併歸還對外名額', async () => {
+    const pid = await mkEnv('j', { status: 'running', port: 21006, sso_secret: 'sec', external_slot: 5 });
+    await dbModule.query('UPDATE odoo_envs SET pid=$2 WHERE project_id=$1', [pid, 2147483000]); // 不存在的 pid
+    const res = await request(app).get(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('idle');
+    const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+    expect(env.external_slot).toBeNull();
+  });
+
   // 意圖：使用者按「開啟測試區」時環境可能已被閒置回收停掉。回 409「尚未就緒」等於要他自己
   // 去找「建立環境」按鈕再等——那個按鈕在專案頁，任務頁根本沒有。改成直接幫他起。
   // runEnvSetup 已在檔案頂端被 mock 為 mockRunEnvSetup（POST /env/setup 沿用同一支 spy），

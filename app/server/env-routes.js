@@ -18,7 +18,8 @@ function registerRoutes(app) {
         try { process.kill(env.pid, 0); } catch { alive = false; }
         if (!alive) {
           await query(
-            "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, updated_at=NOW() WHERE project_id=$1",
+            // external_slot 一併清：環境其實已經沒了，留著等於一個 slot 被幽靈佔住
+            "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, external_slot=NULL, updated_at=NOW() WHERE project_id=$1",
             [req.params.id]
           );
           env.status = 'idle';
@@ -156,7 +157,8 @@ function registerRoutes(app) {
       }
 
       await query(
-        "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, error_msg=NULL, setup_log=NULL, updated_at=NOW() WHERE project_id=$1",
+        // external_slot 一併清：整個環境目錄都刪了，那個 slot 不歸還就會被幽靈佔住
+        "UPDATE odoo_envs SET status='idle', pid=NULL, url=NULL, external_slot=NULL, error_msg=NULL, setup_log=NULL, updated_at=NOW() WHERE project_id=$1",
         [req.params.id]
       );
       res.json({ ok: true });
