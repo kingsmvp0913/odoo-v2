@@ -437,6 +437,10 @@ async function migrate() {
     { table: 'teams_settings', col: 'usage_gate_enabled',     sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_enabled BOOLEAN DEFAULT true' },
     { table: 'teams_settings', col: 'usage_gate_5h_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_5h_threshold INTEGER DEFAULT 90' },
     { table: 'teams_settings', col: 'usage_gate_7d_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_7d_threshold INTEGER DEFAULT 95' },
+    // Claude 專屬長效憑證（claude setup-token 產生，綁訂閱、效期一年）：加密存放，
+    // 由 lib/claude-auth 解密後注入每個 claude 子行程的 CLAUDE_CODE_OAUTH_TOKEN，
+    // 取代共用互動式憑證檔（併發 spawn 撞刷新會印 Not logged in）
+    { table: 'teams_settings', col: 'claude_oauth_token_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN claude_oauth_token_enc TEXT' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },

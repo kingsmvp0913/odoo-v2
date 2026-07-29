@@ -207,6 +207,63 @@ test('logFailedUsage：失敗執行落一筆零用量記錄，status 標注失�
   expect(rows[0].duration_ms).toBe(600000);
 });
 
+// 管理員在網頁設定的長效憑證要真的到得了子行程：注入點集中在 runner（19 個呼叫端零改動），
+// 且不得蓋掉呼叫端自帶的 env（playwright 的 E2E_PASSWORD、coding 關的 git 身分）。
+describe('Claude 長效憑證注入 spawn env', () => {
+  const claudeAuth = require('../lib/claude-auth');
+  const mkChild = () => {
+    const { EventEmitter } = require('events');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)), on: () => {} };
+    child.kill = jest.fn();
+    return child;
+  };
+  const lastEnv = () => {
+    const { spawn } = require('child_process');
+    return spawn.mock.calls[spawn.mock.calls.length - 1][2].env;
+  };
+
+  afterEach(() => claudeAuth._setForTesting(null));
+
+  test('已設定 → spawn env 帶 CLAUDE_CODE_OAUTH_TOKEN，且呼叫端 env 不被蓋掉', async () => {
+    const { spawn } = require('child_process');
+    const { runClaude } = require('../pipeline/claude-runner');
+    claudeAuth._setForTesting('sk-oat-live');
+    spawn.mockReturnValueOnce(mkChild());
+    await runClaude('p', { env: { E2E_PASSWORD: 'pw' } });
+    expect(lastEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-oat-live');
+    expect(lastEnv().E2E_PASSWORD).toBe('pw');
+  });
+
+  // 未設定時必須「完全不碰」這個 key，否則會蓋掉手動 export 的環境變數（方案 1 手動版仍須可用）
+  test('未設定 → 不塞該 key，繼承自 process.env 的值原樣通過', async () => {
+    const { spawn } = require('child_process');
+    const { runClaude } = require('../pipeline/claude-runner');
+    claudeAuth._setForTesting(null);
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'from-shell';
+    try {
+      spawn.mockReturnValueOnce(mkChild());
+      await runClaude('p', {});
+      expect(lastEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('from-shell');
+    } finally { delete process.env.CLAUDE_CODE_OAUTH_TOKEN; }
+  });
+
+  // UI 設定優先於環境變數——「在網頁上換帳號」若被 shell 的舊值蓋過就失去意義
+  test('DB 有設定 → 覆蓋 process.env 的同名變數', async () => {
+    const { spawn } = require('child_process');
+    const { runClaude } = require('../pipeline/claude-runner');
+    claudeAuth._setForTesting('from-db');
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'from-shell';
+    try {
+      spawn.mockReturnValueOnce(mkChild());
+      await runClaude('p', {});
+      expect(lastEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('from-db');
+    } finally { delete process.env.CLAUDE_CODE_OAUTH_TOKEN; }
+  });
+});
+
 // 認證失效歸因：claude 憑證在並發 spawn 下被刷新踩空時印 "Not logged in" 走 stdout、stderr 空，
 // 舊版只剩泛用「claude exited with code 1」，blocker 看不出真因、分類器也判不出。
 // 須把 stdout 掃到的認證字面浮到 reject 訊息，並標 claudeStatus='auth' 供分類器歸 transient。

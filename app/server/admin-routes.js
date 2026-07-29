@@ -5,8 +5,11 @@ const { execFile } = require('child_process');
 const { query } = require('./db');
 const { deleteTaskDir } = require('./lib/attachments');
 const { hashPassword } = require('./password');
-const { encryptSafe } = require('./lib/crypto');
+const { encrypt, encryptSafe } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
+const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
+const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
+const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runHealthCheck } = require('./pipeline/health-check-runner');
@@ -34,6 +37,54 @@ async function requireAdmin(req, res, next) {
 
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];
+
+  // --- Claude 長效憑證（全平台一把）---
+  // 由 claude setup-token 產生，取代共用的互動式憑證檔（併發 spawn 撞刷新會印 Not logged in）。
+  // 走專屬端點而非 teams-settings 的全量 upsert：那支 PUT 漏帶欄位就清空，且沒有自然的驗證時機。
+
+  app.get('/api/admin/claude-token', auth, async (req, res) => {
+    try {
+      const { rows } = await query('SELECT claude_oauth_token_enc FROM teams_settings WHERE id = 1');
+      // 只回布林：token 不論明文密文都不得回流前端
+      res.json({ configured: !!rows[0]?.claude_oauth_token_enc, shadowed_by: shadowingEnvVar() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/claude-token', auth, async (req, res) => {
+    const token = String(req.body?.token || '').trim();
+    if (!token) return res.status(400).json({ error: '請貼上 Claude token' });
+    if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 token' });
+    // 先驗證再存（比照 GitHub PAT）：貼錯或過期當場擋下，不必等下一張任務炸掉。
+    // 驗證必須用「候選 token」而非快取裡的舊值，否則換帳號等於沒驗——env 在 runner 內排最後，會覆蓋快取值。
+    let warning = null;
+    try {
+      await runClaude('回覆 ok', { env: { CLAUDE_CODE_OAUTH_TOKEN: token }, timeoutMs: 60000 });
+    } catch (err) {
+      if (err.claudeStatus === 'auth' || looksLikeAuthFailure(err.message)) {
+        return res.status(400).json({ error: 'token 無效或已過期，未儲存' });
+      }
+      // 非認證失敗（API 過載、網路抖動）仍然存：換 token 的時機往往正是服務不穩的時候，
+      // 因為一次 529 就把管理員鎖在外面才是更糟的失敗模式。據實回報沒驗成功。
+      warning = `已儲存，但驗證未能完成：${err.message}`;
+    }
+    try {
+      await query(
+        `INSERT INTO teams_settings (id, claude_oauth_token_enc, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET claude_oauth_token_enc = $1, updated_at = NOW()`,
+        [encrypt(token)]
+      );
+      await resetClaudeTokenCache(); // 下一個 spawn 即生效，不必重啟 server
+      res.json(warning ? { ok: true, warning } : { ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/admin/claude-token', auth, async (req, res) => {
+    try {
+      await query('UPDATE teams_settings SET claude_oauth_token_enc = NULL, updated_at = NOW() WHERE id = 1');
+      await resetClaudeTokenCache(); // 退回本機憑證檔行為
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
   // --- Prompt 送出記錄（最近 N 筆送給 Claude 的完整 prompt）---
 

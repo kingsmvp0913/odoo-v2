@@ -187,6 +187,8 @@ if (require.main === module) {
     } catch (e) { console.error('[STARTUP] graphify resume:', e.message); }
 
     setIo(io);
+    // Claude 長效憑證載入快取：runClaude 同步取用，故必須在派工開始前備妥（未設定則沿用本機憑證檔）
+    await require('./lib/claude-auth').loadClaudeToken();
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
     require('./notify-webhook').registerWebhookChannel();
     startCron();

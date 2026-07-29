@@ -9,6 +9,10 @@ window.AdminView = Vue.defineComponent({
       writebackOdooNotes: false,
       usageGate: { enabled: true, th5: 90, th7: 95 },
       gateStatus: null,
+      claudeToken: { configured: false, shadowed_by: null },
+      claudeTokenInput: '',
+      savingClaudeToken: false,
+      clearingClaudeToken: false,
       loading: true,
       savingConn: false,
       savingTeams: false,
@@ -55,8 +59,36 @@ window.AdminView = Vue.defineComponent({
           });
         }
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
+        try { this.claudeToken = await Api.get('admin/claude-token'); } catch (_) { /* 顯示用 */ }
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
+    },
+    async saveClaudeToken() {
+      const token = (this.claudeTokenInput || '').trim();
+      if (!token) { showToast('請貼上 token', 'error'); return; }
+      this.savingClaudeToken = true;
+      try {
+        // 後端會先實際跑一次 claude 驗證才存，故這裡等待時間較長（數秒）
+        const r = await Api.post('admin/claude-token', { token });
+        this.claudeTokenInput = '';
+        showToast(r.warning || '憑證已儲存並驗證通過', r.warning ? 'error' : 'success');
+        this.claudeToken = await Api.get('admin/claude-token');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingClaudeToken = false; }
+    },
+    async clearClaudeToken() {
+      if (!await confirmDialog({
+        title: '清除 Claude 憑證',
+        message: '清除後 pipeline 會改用伺服器本機的 Claude 登入憑證（併發時可能再出現認證失效）。確定要清除嗎？',
+        danger: true, confirmText: '清除'
+      })) return;
+      this.clearingClaudeToken = true;
+      try {
+        await Api.delete('admin/claude-token');
+        showToast('憑證已清除', 'success');
+        this.claudeToken = await Api.get('admin/claude-token');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.clearingClaudeToken = false; }
     },
     async saveConn() {
       this.savingConn = true;
@@ -304,6 +336,37 @@ window.AdminView = Vue.defineComponent({
           <div class="setting-block-footer">
             <button class="btn btn-primary btn-sm" @click="saveUsageGate" :disabled="savingUsageGate">
               {{ savingUsageGate ? '儲存中...' : '儲存閘門設定' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Claude 認證憑證 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Claude 認證憑證</div>
+            <div class="setting-block-desc">在任一台裝有 Claude Code 的機器執行 <code>claude setup-token</code> 產生長效 token（綁訂閱、不另計費，效期一年），貼在這裡即可。設定後所有 pipeline 子行程改用它認證，取代伺服器本機的登入憑證檔——後者在多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。換帳號只要貼新的 token，不必重啟伺服器。</div>
+          </div>
+          <div class="setting-block-body">
+            <div style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">
+              <span v-if="claudeToken.configured" style="color:var(--success)">✓ 已設定憑證</span>
+              <span v-else style="color:var(--text-muted)">尚未設定，目前使用伺服器本機的 Claude 登入</span>
+            </div>
+            <div v-if="claudeToken.shadowed_by" style="font-size:var(--fs-sm);color:var(--warning);margin-bottom:var(--space-3)">
+              ⚠ 伺服器環境變數 <code>{{ claudeToken.shadowed_by }}</code> 的優先序高於此設定，目前這裡設的憑證不會生效。請先移除該環境變數並重啟伺服器。
+            </div>
+            <div class="conn-fields">
+              <div class="field-item">
+                <label class="field-label">貼上 token</label>
+                <input v-model="claudeTokenInput" type="password" class="field-input" placeholder="claude setup-token 產生的 token" autocomplete="off" />
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="saveClaudeToken" :disabled="savingClaudeToken">
+              {{ savingClaudeToken ? '驗證中...' : '儲存並驗證' }}
+            </button>
+            <button v-if="claudeToken.configured" class="btn btn-ghost btn-sm" @click="clearClaudeToken" :disabled="clearingClaudeToken">
+              {{ clearingClaudeToken ? '清除中...' : '清除憑證' }}
             </button>
           </div>
         </div>

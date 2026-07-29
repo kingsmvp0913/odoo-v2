@@ -5,6 +5,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { looksLikeAuthFailure } = require('./auth-signature');
+const { getClaudeAuthEnv } = require('../lib/claude-auth');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
@@ -117,8 +118,13 @@ function runClaude(prompt, opts = {}) {
     args.push('--settings', scanGuardSettingsPath());
     // 續用前一輪對話（含規格理解、codebase 探索、上輪 diff），重跑只送短 feedback（健檢 U3）
     if (resumeSessionId) args.push('--resume', resumeSessionId);
-    // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd, env: env ? { ...process.env, ...env } : process.env });
+    // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）。
+    // 認證憑證在此集中注入（19 個呼叫端零改動）：管理員設定優先於繼承的環境變數，
+    // 未設定時回空物件、完全不碰該 key；呼叫端自帶的 env 排最後，語意不受影響。
+    const child = spawn('claude', args, {
+      stdio: ['pipe', 'pipe', 'pipe'], cwd,
+      env: { ...process.env, ...getClaudeAuthEnv(), ...(env || {}) },
+    });
     // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
     // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。
     child.stdin.on?.('error', () => {});
