@@ -528,7 +528,7 @@ window.TaskListView = Vue.defineComponent({
                   @click.stop="$router.push('/projects/' + t.project_id)">
               {{ t.project_name }}
             </span>
-            <a v-if="t.env_status === 'running'" href="#" @click.stop.prevent="openEnv(t)" class="env-chip">
+            <a v-if="t.env_status" href="#" @click.stop.prevent="openEnv(t)" class="env-chip">
               🖥 測試機
             </a>
           </div>

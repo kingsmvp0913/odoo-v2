@@ -728,7 +728,7 @@ window.TaskDetailView = Vue.defineComponent({
         @click="togglePause" :title="task.is_paused ? '點擊恢復' : '點擊暫停'">
         {{ task.is_paused ? '▐▐ 已暫停' : '⏸ 暫停' }}
       </button>
-      <a v-if="task && task.env_status === 'running'" href="#" @click.prevent="openEnv" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
+      <a v-if="task && task.env_status" href="#" @click.prevent="openEnv" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
       <button v-if="isAdmin && task && task.git_branch" class="btn btn-outline btn-sm" style="margin-left:auto"
         @click="downloadCodeZip" :disabled="downloadingZip" title="下載本任務改動模組的 zip（內含 <repo>/<模組> 結構，可直接覆蓋到正式區 addons）">
         {{ downloadingZip ? '打包中...' : '📦 下載程式碼 zip' }}
