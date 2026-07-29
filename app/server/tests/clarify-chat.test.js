@@ -185,12 +185,25 @@ test('只給精簡 task 物件時自己重查：agent 仍拿得到 analysis_yaml
   expect(prompt).not.toContain('（無規格）');
 });
 
-// mode 走 DB 而非參數：路由寫 clarify_mode='ask' 的任務，即使 runner 沒傳 mode 也不能被推進
-test('mode 從 tasks.clarify_mode 讀：ask 的任務即使 agent 回 proceed 也推不動', async () => {
+// 這條驗的是「ask 規則本身會擋住 proceed」這個行為，不是在證明 mode 有從 DB 讀出來——
+// 未知/空 mode 的降級目標剛好也是 MODE_RULES.ask，allow 完全相同，讀不到 clarify_mode 也會走到一樣的結果，
+// 沒有鑑別力去證明「DB 讀取」這件事（鑑別力的證明見下一條 answer_or_proceed 版本）。
+test('clarify_mode=ask 的任務即使 agent 回 proceed 也推不動', async () => {
   const task = await makeTask('clarify_chat_running');
   await dbModule.query("UPDATE tasks SET clarify_mode='ask' WHERE id=$1", [task.id]);
   runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n我要往前跑\n</result>', usage: {}, durationMs: 1 });
   await runClarifyChat({ id: task.id }, 1, null, null);
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(rows[0].status).toBe('confirm_pending');
+});
+
+// mode 走 DB 而非參數：這條的鑑別力在於「讀到 answer_or_proceed 才會放行 proceed」——
+// 若 mode 讀不到而退到 fallback（只准 answer），狀態會卡在 confirm_pending 而非 confirm_answered。
+test('mode 從 tasks.clarify_mode 讀：讀到 answer_or_proceed 時 proceed 才放行', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_mode='answer_or_proceed' WHERE id=$1", [task.id]);
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n了解，開始實作。\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat({ id: task.id }, 1, null, null);
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_answered');
 });
