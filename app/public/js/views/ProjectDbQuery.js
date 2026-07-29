@@ -3,11 +3,14 @@ window.ProjectDbQueryView = Vue.defineComponent({
   data() {
     return {
       conns: [], loading: true, saving: false, running: false, testing: false,
-      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false, vpn_config: '', vpn_config_name: '', vpn_username: '', vpn_password: '' },
+      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false },
+      vpn: { has_config: false, vpn_username: '' },
+      vpnForm: { vpn_config: '', vpn_config_name: '', vpn_username: '', vpn_password: '' },
+      vpnSaving: false,
       selectedId: '', sql: '', result: null, error: ''
     };
   },
-  async created() { await this.load(); },
+  async created() { await Promise.all([this.load(), this.loadVpn()]); },
   methods: {
     pid() { return this.$route.params.id; },
     async load() {
@@ -16,8 +19,8 @@ window.ProjectDbQueryView = Vue.defineComponent({
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
-    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false, vpn_config: '', vpn_config_name: '', vpn_username: '', vpn_password: '' }; },
-    editConn(c) { this.form = { ...c, ssh_password: '', db_password: '', vpn_config: '', vpn_config_name: '', vpn_password: '' }; },
+    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false }; },
+    editConn(c) { this.form = { ...c, ssh_password: '', db_password: '' }; },
     validForm() {
       if (this.form.connect_mode === 'direct')
         return this.form.name && this.form.db_host && this.form.db_user && (this.form.id || this.form.db_password) && this.form.db_name;
@@ -31,23 +34,44 @@ window.ProjectDbQueryView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.testing = false; }
     },
+    async loadVpn() {
+      try {
+        this.vpn = await Api.get(`projects/${this.pid()}/vpn`);
+        this.vpnForm.vpn_username = this.vpn.vpn_username || '';
+      } catch (e) { showToast(e.message, 'error'); }
+    },
     onVpnFileChange(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
-        this.form.vpn_config = reader.result;
-        this.form.vpn_config_name = file.name;
-        // 部分廠牌 GUI（如鴻久 SSLVPN）把帳密存成 openvpn 會忽略的 # 註解欄位；抓得到就直接代填。
+        this.vpnForm.vpn_config = reader.result;
+        this.vpnForm.vpn_config_name = file.name;
+        // 部分廠牌 GUI（如鴻久 SSLVPN）把帳密存成 openvpn 會忽略的 # 註解欄位，且做過混淆；
+        // 抓得到就還原後代填（原樣帶入會存成連不上的亂碼帳號）。
         const userMatch = reader.result.match(/^#SSLVPN_AUTH_USERNAME=(.*)$/m);
         const passMatch = reader.result.match(/^#SSLVPN_AUTH_PASSWORD=(.*)$/m);
-        if (userMatch && userMatch[1].trim()) this.form.vpn_username = userMatch[1].trim();
-        if (passMatch && passMatch[1].trim()) this.form.vpn_password = passMatch[1].trim();
-        if ((userMatch && userMatch[1].trim()) || (passMatch && passMatch[1].trim())) {
-          showToast('已從設定檔自動帶入 VPN 帳密，請確認無誤', 'success');
-        }
+        if (userMatch && userMatch[1].trim()) this.vpnForm.vpn_username = DEOBFUSCATE_SSLVPN(userMatch[1].trim());
+        if (passMatch && passMatch[1].trim()) this.vpnForm.vpn_password = DEOBFUSCATE_SSLVPN(passMatch[1].trim());
+        if (userMatch || passMatch) showToast('已從設定檔帶入 VPN 帳密（已還原混淆），請確認無誤', 'success');
       };
       reader.readAsText(file);
+    },
+    async saveVpn() {
+      this.vpnSaving = true;
+      try {
+        await Api.put(`projects/${this.pid()}/vpn`, {
+          vpn_config: this.vpnForm.vpn_config || undefined,
+          vpn_username: this.vpnForm.vpn_username,
+          vpn_password: this.vpnForm.vpn_password || undefined,
+        });
+        this.vpnForm.vpn_config = '';
+        this.vpnForm.vpn_config_name = '';
+        this.vpnForm.vpn_password = '';
+        await this.loadVpn();
+        showToast('已儲存專案 VPN 設定', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.vpnSaving = false; }
     },
     async saveConn() {
       if (!this.validForm()) return showToast(this.form.connect_mode === 'direct' ? '名稱/DB主機/DB使用者/密碼/資料庫 必填' : '名稱/主機/使用者/資料庫 必填', 'error');
@@ -101,6 +125,27 @@ window.ProjectDbQueryView = Vue.defineComponent({
     </div>
     <div class="content" v-else>
       <div class="settings-section" style="margin-bottom:var(--space-5)">
+        <h2 class="section-title">
+          專案 VPN 設定
+          <span v-if="vpn.has_config" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">已設定</span>
+        </h2>
+        <p style="color:var(--text-muted);font-size:var(--fs-sm);margin:0 0 var(--space-3)">
+          一個專案共用一組 VPN：下方勾選「需要 VPN」的連線會共用同一條隧道，只撥號一次。
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
+          <div class="form-group" style="grid-column:1/-1;margin:0">
+            <label>VPN 設定檔（.ovpn）{{ vpnForm.vpn_config_name ? '－已選擇：' + vpnForm.vpn_config_name : (vpn.has_config ? '（留空＝不變）' : '') }}</label>
+            <input type="file" accept=".ovpn,.conf" class="form-control" @change="onVpnFileChange" />
+          </div>
+          <div class="form-group" style="margin:0"><label>VPN 帳號</label><input v-model="vpnForm.vpn_username" class="form-control" /></div>
+          <div class="form-group" style="margin:0"><label>VPN 密碼（留空＝不變）</label><input v-model="vpnForm.vpn_password" type="password" class="form-control" placeholder="••••••" /></div>
+        </div>
+        <div style="margin-top:var(--space-3)">
+          <button class="btn btn-primary" :disabled="vpnSaving" @click="saveVpn">{{ vpnSaving ? '儲存中…' : '儲存 VPN 設定' }}</button>
+        </div>
+      </div>
+
+      <div class="settings-section" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">連線管理（{{ conns.length }}）</h2>
         <div class="table-wrap">
           <table class="data-table">
@@ -152,15 +197,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
         <div style="margin-bottom:var(--space-3);display:flex;align-items:center;gap:var(--space-2)">
           <input v-model="form.vpn_enabled" type="checkbox" id="vpnEnabled" style="width:auto" />
-          <label for="vpnEnabled" style="margin:0">此連線需要 VPN</label>
-        </div>
-        <div v-if="form.vpn_enabled" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3);padding:var(--space-3);border:1px solid var(--border);border-radius:var(--radius-sm)">
-          <div class="form-group" style="margin:0">
-            <label>VPN 設定檔（.ovpn）{{ form.vpn_config_name ? '－已選擇：' + form.vpn_config_name : (form.id ? '（留空＝不變）' : '') }}</label>
-            <input type="file" accept=".ovpn,.conf" class="form-control" @change="onVpnFileChange" />
-          </div>
-          <div class="form-group" style="margin:0"><label>VPN 帳號</label><input v-model="form.vpn_username" class="form-control" /></div>
-          <div class="form-group" style="margin:0"><label>VPN 密碼（留空＝不變）</label><input v-model="form.vpn_password" type="password" class="form-control" placeholder="••••••" /></div>
+          <label for="vpnEnabled" style="margin:0">此連線需要 VPN（使用上方的專案 VPN 設定）</label>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary btn-sm" @click="saveConn" :disabled="saving">{{ saving ? '儲存中...' : (form.id ? '更新連線' : '+ 新增連線') }}</button>
