@@ -1,4 +1,7 @@
-const { ensureGatewayRunning } = require('../lib/vpn-gateway');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { ensureGatewayRunning, imageTag } = require('../lib/vpn-gateway');
 
 // 鴻久的真實形狀：兩個目標（Odoo 那台走 ssh、SM 那台走 mssql），共用一條隧道。
 const baseGw = {
@@ -227,4 +230,75 @@ test('逾時錯誤訊息要列出所有目標，方便判斷是哪台不通', as
     ),
   });
   await expect(ensureGatewayRunning(baseGw, deps)).rejects.toThrow(/192\.168\.1\.240:1433/);
+});
+
+// 這支測試直接對應這次修的缺口：舊版 IMAGE_NAME 是寫死的 :latest，ensureImageBuilt 只要看到
+// 「同名 image 存在」就跳過 build——任何已經 build 過一次的機器（如 ai-server）之後改
+// entrypoint.sh，容器內還是跑舊版，且完全沒有錯誤訊息可看。若把 ensureImageBuilt 檢查/build
+// 用的 tag 跟 docker run 用的 tag 改壞成不同值，這支測試會抓到；若改回寫死 :latest，
+// `.not.toBe('odoo-v2-vpn-gateway:latest')` 這行會紅。
+test('docker run 用的 image tag 與 ensureImageBuilt 檢查/build 的 tag 是同一個（不是寫死的 :latest）', async () => {
+  const deps = fakeDeps({
+    execFileSync: jest.fn((cmd, args) => {
+      if (args[0] === 'info') return '';
+      if (args[0] === 'images') return ''; // image 不存在 → 走 build 分支，同時撈到查詢用的 tag
+      if (args[0] === 'inspect') throw new Error('No such object');
+      return '';
+    }),
+  });
+  await ensureGatewayRunning(baseGw, deps);
+
+  const imagesCall = deps.execFileSync.mock.calls.find(c => c[1][0] === 'images');
+  const buildCall = deps.execFileSync.mock.calls.find(c => c[1][0] === 'build');
+  const runCall = deps.execFileSync.mock.calls.find(c => c[1][0] === 'run');
+  const queriedTag = imagesCall[1][2];
+  const builtTag = buildCall[1][2];
+  const runImage = runCall[1][runCall[1].length - 1];
+
+  expect(queriedTag).toBe(builtTag);
+  expect(runImage).toBe(queriedTag);
+  expect(runImage).not.toBe('odoo-v2-vpn-gateway:latest');
+  expect(runImage).toMatch(/^odoo-v2-vpn-gateway:[0-9a-f]{12}$/);
+});
+
+describe('imageTag：tag 依 Dockerfile／entrypoint.sh 內容雜湊', () => {
+  function makeFixtureDir(dockerfileContent, entrypointContent) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vpn-gateway-hash-'));
+    fs.writeFileSync(path.join(dir, 'Dockerfile'), dockerfileContent);
+    fs.writeFileSync(path.join(dir, 'entrypoint.sh'), entrypointContent);
+    return dir;
+  }
+
+  test('建置內容（Dockerfile 或 entrypoint.sh）不同，算出的 tag 就不同', () => {
+    const dirA = makeFixtureDir('FROM alpine:3.20\n', '#!/bin/sh\necho a\n');
+    const dirB = makeFixtureDir('FROM alpine:3.20\n', '#!/bin/sh\necho b\n');
+    try {
+      expect(imageTag(dirA)).not.toBe(imageTag(dirB));
+    } finally {
+      fs.rmSync(dirA, { recursive: true, force: true });
+      fs.rmSync(dirB, { recursive: true, force: true });
+    }
+  });
+
+  // 同一份邏輯內容不能因為換行符不同就算出不同 tag，否則同一份程式碼在 Windows（CRLF）
+  // 與 Linux（LF）上、甚至同一台機器因 git autocrlf 設定不同，會被誤判成「內容變了」。
+  test('內容相同、只是換行符不同（CRLF vs LF），tag 要相同', () => {
+    const dirCRLF = makeFixtureDir('FROM alpine:3.20\r\nRUN x\r\n', '#!/bin/sh\r\necho hi\r\n');
+    const dirLF = makeFixtureDir('FROM alpine:3.20\nRUN x\n', '#!/bin/sh\necho hi\n');
+    try {
+      expect(imageTag(dirCRLF)).toBe(imageTag(dirLF));
+    } finally {
+      fs.rmSync(dirCRLF, { recursive: true, force: true });
+      fs.rmSync(dirLF, { recursive: true, force: true });
+    }
+  });
+
+  test('讀不到建置檔案時 fail loud（丟錯，不靜默退回舊行為）', () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vpn-gateway-hash-empty-'));
+    try {
+      expect(() => imageTag(emptyDir)).toThrow();
+    } finally {
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
 });

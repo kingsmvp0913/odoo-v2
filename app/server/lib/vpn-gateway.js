@@ -2,10 +2,12 @@ const { execFileSync: realExecFileSync, execFile: realExecFile } = require('chil
 const realFs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 // Docker daemon 沒起時自動啟動 Docker Desktop 的邏輯已上移到通用驅動層 docker-env，兩邊共用一份。
 const { ensureDockerRunning } = require('./docker-env');
 
-const IMAGE_NAME = 'odoo-v2-vpn-gateway:latest';
+const IMAGE_BASE = 'odoo-v2-vpn-gateway';
+const VPN_GATEWAY_DIR = path.resolve(__dirname, 'vpn-gateway');
 // 40 秒須大於 entrypoint 等 tun0 的 30 秒上限＋撥通後路由建立的數秒，避免把「慢但會成功」的
 // 撥號誤判逾時；撥號失敗的容器會在 entrypoint 的 30 秒後退出，剛好落在此窗內被就緒檢查撈到 log。
 const GATEWAY_TIMEOUT_MS = 40000;
@@ -105,13 +107,31 @@ async function defaultWaitReachable(name, targets, timeoutMs, deps) {
   }
 }
 
-// image 不存在時（機器從沒 build 過，或 Dockerfile 有更新）現場 build，
+// image tag 依 Dockerfile／entrypoint.sh 的內容雜湊，不再固定用 :latest：舊版只看
+// 「image 存不存在」，任何已經 build 過一次的機器（含 ai-server）之後改 entrypoint.sh／
+// Dockerfile，ensureImageBuilt 一律略過 build，容器內還在跑舊版 entrypoint，且完全沒有
+// 錯誤訊息可看（隧道照樣撥得通，只是轉發沒起來）。改成內容雜湊當 tag 後，「image 不存在」
+// 與「image 內容已過期」變成同一件事，天然會觸發重建。
+// 讀檔後把 \r\n 正規化成 \n 再算雜湊：這兩個檔在 Windows 上可能是 CRLF、Linux 上是 LF，
+// 若不正規化，同一份實際內容會因換行符不同、甚至同一台機器的 git autocrlf 設定不同，
+// 算出不同的雜湊值——輕則多 build 一次，重則讓雜湊「內容不變 tag 就不變」的前提不成立。
+function imageTag(dir = VPN_GATEWAY_DIR) {
+  const hash = crypto.createHash('sha256');
+  for (const file of ['Dockerfile', 'entrypoint.sh']) {
+    // 讀檔失敗（路徑被改壞、檔案被誤刪）直接讓例外往外丟，不要吞掉退回舊行為——
+    // 那等於這次修法沒做，回到「image 存在就跳過」的老路。
+    const content = realFs.readFileSync(path.join(dir, file), 'utf8');
+    hash.update(content.replace(/\r\n/g, '\n'));
+  }
+  return `${IMAGE_BASE}:${hash.digest('hex').slice(0, 12)}`;
+}
+
+// image 不存在時（機器從沒 build 過，或內容雜湊變了）現場 build，
 // 不強求使用者記得先跑過一鍵安裝的 Docker 準備步驟。
-function ensureImageBuilt(execFileSync) {
-  const out = execFileSync('docker', ['images', '-q', IMAGE_NAME], { encoding: 'utf8' });
+function ensureImageBuilt(execFileSync, imageName) {
+  const out = execFileSync('docker', ['images', '-q', imageName], { encoding: 'utf8' });
   if (out.trim()) return;
-  const dockerfileDir = path.resolve(__dirname, 'vpn-gateway');
-  execFileSync('docker', ['build', '-t', IMAGE_NAME, dockerfileDir], { stdio: 'inherit' });
+  execFileSync('docker', ['build', '-t', imageName, VPN_GATEWAY_DIR], { stdio: 'inherit' });
 }
 
 // isContainerRunning 只代表「目前沒在跑」，不代表「不存在」——容器可能是
@@ -130,7 +150,10 @@ function removeStaleContainer(name, execFileSync) {
 // 容器讀到「檔案消失」。清理時機交給呼叫端在確認容器真的起來之後才做。
 function startGateway(gw, deps) {
   const { execFileSync, writeFileSync, rmSync, tmpFilePath } = deps;
-  ensureImageBuilt(execFileSync);
+  // 算一次、docker run 沿用同一個值——兩處若各自呼叫 imageTag() 理論上結果相同，
+  // 但只算一次能避免「其中一處讀檔時機不同導致 tag 不一致」的疑慮。
+  const imageName = imageTag();
+  ensureImageBuilt(execFileSync, imageName);
   // 先清遷移前留下的舊容器（vpn-conn-*）：它們會用同一組帳號掛著另一個 openvpn session
   for (const stale of gw.staleContainers || []) removeStaleContainer(stale, execFileSync);
   removeStaleContainer(gw.containerName, execFileSync);
@@ -156,7 +179,7 @@ function startGateway(gw, deps) {
     '-e', `VPN_PASS=${gw.password || ''}`,
     '-e', `TARGETS=${spec}`,
     '--label', `targets=${spec}`,
-    IMAGE_NAME,
+    imageName,
   );
   execFileSync('docker', args, { stdio: 'pipe' });
   return tmpFile;
@@ -200,4 +223,4 @@ function removeGateway(gw, deps = {}) {
   try { execFileSync('docker', ['rm', '-f', gw.containerName], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
 }
 
-module.exports = { allocateForwardPort, projectContainerName, targetHostPort, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
+module.exports = { allocateForwardPort, projectContainerName, targetHostPort, imageTag, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
