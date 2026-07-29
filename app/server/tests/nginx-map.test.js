@@ -305,30 +305,75 @@ describe('syncNginxMap SQL（pg-mem 實跑）', () => {
 // 意圖：這台 nginx 與多個正式站共用，一次 reload 會重讀所有站的設定。閒置回收／夜間關機
 // 會在幾秒內連續還掉一整批名額，逐一 reload 等於連續打擾正式站。合併成一次。
 describe('syncNginxMapDebounced', () => {
-  const savedConf = process.env.NGINX_SYNC_CONF_FILE;
+  const KEYS = ['NGINX_SYNC_CONF_FILE', 'NGINX_CONTAINER', 'ENV_EXTERNAL_URL_TEMPLATE', 'ENV_BIND_HOST', 'ENV_TLS_CERT', 'ENV_TLS_KEY'];
+  const OLD = {};
+  // 一組讓所有必需設定齊備的 env（個別測試再覆寫要驗的那項）
+  function setAll() {
+    process.env.NGINX_SYNC_CONF_FILE = '/etc/nginx/odoo/envs.conf';
+    process.env.NGINX_CONTAINER = 'agency-NginxUI-1';
+    process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-dev-{slot}.example.com';
+    process.env.ENV_BIND_HOST = '10.0.0.1';
+    process.env.ENV_TLS_CERT = '/ssl/fullchain.cer';
+    process.env.ENV_TLS_KEY = '/ssl/private.key';
+  }
+  beforeEach(() => {
+    KEYS.forEach(k => { OLD[k] = process.env[k]; });
+  });
   afterEach(() => {
-    if (savedConf === undefined) delete process.env.NGINX_SYNC_CONF_FILE;
-    else process.env.NGINX_SYNC_CONF_FILE = savedConf;
+    KEYS.forEach(k => { if (OLD[k] === undefined) delete process.env[k]; else process.env[k] = OLD[k]; });
   });
 
+  function fakeFs(initial) {
+    const store = new Map(Object.entries(initial || {}));
+    return {
+      _store: store,
+      existsSync: p => store.has(p),
+      readFileSync: p => store.get(p),
+      writeFileSync: (p, c) => store.set(p, c),
+      renameSync: (a, b) => { store.set(b, store.get(a)); store.delete(a); },
+      unlinkSync: p => store.delete(p),
+    };
+  }
+
+  // 意圖：防抖的目的是保護共用 nginx 不被連續 reload。若只斷言回傳值，把防抖整段拿掉也會過——
+  // 必須驗證底層實際執行的次數，確認短時間內的多次呼叫真的被合併成了一次 syncNginxMap。
   test('窗口內連續三次呼叫 → 只實際同步一次', async () => {
-    delete process.env.NGINX_SYNC_CONF_FILE; // gate 關閉：syncNginxMap 直接回 skipped，不碰 fs
+    setAll();
     const { syncNginxMapDebounced } = require('../lib/nginx-map');
+    const fs = fakeFs();
+    const run = jest.fn()
+      .mockResolvedValueOnce({ code: 0, stdout: 'syntax ok', stderr: '' })  // nginx -t
+      .mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' });          // reload
+    const query = async () => ({ rows: [{ slot: 0, port: 21000 }] });
+
     const rs = await Promise.all([
-      syncNginxMapDebounced({ debounceMs: 5 }),
-      syncNginxMapDebounced({ debounceMs: 5 }),
-      syncNginxMapDebounced({ debounceMs: 5 }),
+      syncNginxMapDebounced({ debounceMs: 5, fs, run, query }),
+      syncNginxMapDebounced({ debounceMs: 5, fs, run, query }),
+      syncNginxMapDebounced({ debounceMs: 5, fs, run, query }),
     ]);
+
+    // 三個呼叫端都拿到同一次同步的結果
     expect(rs).toHaveLength(3);
-    for (const r of rs) expect(r.skipped).toBe(true); // 三個呼叫端都拿到同一次同步的結果
+    for (const r of rs) expect(r.ok).toBe(true);
+
+    // 窗口內三次呼叫，底層只執行了一次同步（一輪同步 = -t 一次 + reload 一次）
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, 'docker', ['exec', 'agency-NginxUI-1', 'nginx', '-t']);
+    expect(run).toHaveBeenNthCalledWith(2, 'docker', ['exec', 'agency-NginxUI-1', 'nginx', '-s', 'reload']);
   });
 
   // 意圖：合併不等於吞掉。等待中的呼叫端都必須拿到結果，否則上游的 await 會永遠掛著。
   test('每個呼叫端都拿到結果（合併不吞 promise）', async () => {
-    delete process.env.NGINX_SYNC_CONF_FILE;
+    setAll();
     const { syncNginxMapDebounced } = require('../lib/nginx-map');
-    const a = syncNginxMapDebounced({ debounceMs: 5 });
-    const b = syncNginxMapDebounced({ debounceMs: 5 });
+    const fs = fakeFs();
+    const run = jest.fn()
+      .mockResolvedValueOnce({ code: 0, stdout: 'ok', stderr: '' })
+      .mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' });
+    const query = async () => ({ rows: [] }); // 空名額表
+
+    const a = syncNginxMapDebounced({ debounceMs: 5, fs, run, query });
+    const b = syncNginxMapDebounced({ debounceMs: 5, fs, run, query });
     await expect(a).resolves.toBeDefined();
     await expect(b).resolves.toBeDefined();
   });
