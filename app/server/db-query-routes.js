@@ -2,7 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
-const { allocateForwardPort, targetHostPort, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
+const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn } = require('./lib/db-connections');
 
 const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled';
@@ -194,9 +194,17 @@ function registerRoutes(app) {
       if (!rowCount) return res.status(404).json({ error: 'Not found' });
       // 容器 label 指紋只涵蓋 targets、不涵蓋憑證，ensureGatewayRunning 光看指紋相符就早退，
       // 換帳密／設定檔不會讓執行中的容器換憑證。砍掉舊容器，下次用到時自然會用新憑證重建。
-      // removeGateway 內部已 try/catch（容器不存在不丟錯），這裡再包一層是為了保險：
-      // 改憑證這件事不該因為 docker 沒裝／沒跑而變成 500。
-      try { removeGateway({ containerName: projectContainerName(req.params.id) }); } catch { /* 不擋這次設定更新 */ }
+      // 先 stopGateway（docker stop＝SIGTERM，給 openvpn 機會正常關閉並通知 VPN 伺服器斷線）
+      // 再 removeGateway（docker rm -f）：直接 rm -f 是 SIGKILL，會讓伺服器端殘留一個沒有
+      // 正常結束的 session，可能導致下一次重連（改密碼後往往只隔幾秒）被誤判為衝突而拒絕——
+      // 這與 vpn-gateway.js 的 removeStaleContainer 是同一個理由，重用既有 stopGateway/removeGateway
+      // 兩個匯出函式，不再複製一份 stop+rm 邏輯。兩者內部都已 try/catch（容器不存在不丟錯），
+      // 這裡再包一層是為了保險：改憑證這件事不該因為 docker 沒裝／沒跑而變成 500。
+      try {
+        const gw = { containerName: projectContainerName(req.params.id) };
+        stopGateway(gw);
+        removeGateway(gw);
+      } catch { /* 不擋這次設定更新 */ }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
