@@ -321,6 +321,65 @@ test('resolve-conflicts：不合法 action → 400', async () => {
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
+// --- sync 衝突（main → ai-dev 開工前同步，merge_conflict_data.sync=true）的裁決收尾 ---
+// 意圖：碼還沒開始寫，sync 衝突解完不能像 task 分支併 testing 那樣進 deploy_testing，要回分析重跑。
+describe('sync 衝突的裁決收尾', () => {
+  test('resolve-conflicts：sync 衝突全解完 → 回 analysis_running 而非 deploy_testing', async () => {
+    const { concludeMerge, applyConflictChoices } = require('../pipeline/git');
+    concludeMerge.mockClear().mockResolvedValue(undefined);
+    applyConflictChoices.mockClear().mockResolvedValue([]); // 套用後無殘留未解
+    const taskId = await insertConflictProjectTask('syncrc');
+    await dbModule.query(
+      "UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1",
+      [taskId, JSON.stringify({ sync: true, prior_status: 'analysis_running', repos: [{ repo: 'main', files: ['a.py'] }] })]
+    );
+
+    const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ resolutions: [{ repo: 'main', file: 'a.py', action: 'take_theirs' }] });
+
+    expect(res.status).toBe(200);
+    const { rows: after } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+    expect(after[0].status).toBe('analysis_running'); // 不是 deploy_testing——碼還沒寫呢
+    expect(after[0].merge_conflict_data).toBeNull();
+    await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+  });
+
+  test('mark-conflict-resolved：sync 衝突 → 回 analysis_running', async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status, merge_conflict_data) VALUES ($1,'task_sync_mc','odoo','T','merge_conflict',$2) RETURNING id",
+      [userId, JSON.stringify({ sync: true, prior_status: 'analysis_running', repos: [{ repo: 'r1', files: ['a.py'] }] })]
+    );
+
+    const res = await request(app).post(`/api/tasks/${t.id}/mark-conflict-resolved`)
+      .set('Authorization', `Bearer ${adminToken}`).send({});
+
+    expect(res.status).toBe(200);
+    const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+    expect(after[0].status).toBe('analysis_running');
+    await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+  });
+
+  test('普通 merge 衝突（無 sync 旗標）→ 仍走 deploy_testing（回歸）', async () => {
+    const { concludeMerge, applyConflictChoices } = require('../pipeline/git');
+    concludeMerge.mockClear().mockResolvedValue(undefined);
+    applyConflictChoices.mockClear().mockResolvedValue([]);
+    const taskId = await insertConflictProjectTask('syncreg');
+    await dbModule.query(
+      "UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1",
+      [taskId, JSON.stringify({ repos: [{ repo: 'main', files: ['a.py'] }] })]
+    );
+
+    await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ resolutions: [{ repo: 'main', file: 'a.py', action: 'take_theirs' }] });
+
+    const { rows: after } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+    expect(after[0].status).toBe('deploy_testing');
+    await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+  });
+});
+
 // --- 逐檔追問釐清 merge-clarify（給非工程師）---
 // 意圖：追問問答落進 merge_conflict_data.details[file].qa；AI 回 keep 時不動既有建議、狀態維持 merge_conflict。
 test('merge-clarify：AI 回 keep → 問答入 qa、不改建議、不推進 pipeline', async () => {

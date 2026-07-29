@@ -412,6 +412,7 @@ function registerRoutes(app) {
       let cd = null;
       try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
       const isRebuild = !!(cd && cd.rebuild); // 來自刪任務觸發的 testing 重建，而非正常 merge_running
+      const isSync = !!(cd && cd.sync); // 來自 main → ai-dev 同步，而非 task 分支併 testing
 
       // 轉 deploy 前驗證主 clone 已無未解衝突並了結 merge（commit）——
       // 否則半套 merge（MERGE_HEAD＋衝突標記）直接進部署，錯誤會被誤歸因為程式問題（健檢 U6）
@@ -461,6 +462,16 @@ function registerRoutes(app) {
         return res.json({ ok: true, warnings: warn ? [warn] : [] });
       }
 
+      if (isSync) {
+        // sync 衝突解完＝ai-dev 已含 main 的新碼，回分析重跑（此時 sync 已 commit，重跑冪等）
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, cd.prior_status || 'analysis_running']
+        );
+        runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+        return res.json({ ok: true });
+      }
+
       await query(
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
         [req.params.id]
@@ -479,7 +490,7 @@ function registerRoutes(app) {
   app.post('/api/tasks/:id/resolve-conflicts', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, status, project_id, merge_conflict_data FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
@@ -531,6 +542,18 @@ function registerRoutes(app) {
           [rows[0].id, JSON.stringify({ repos: outcome.stillOpen })]
         );
         return res.json({ ok: true, done: false, remaining: outcome.stillOpen });
+      }
+
+      let cd = null;
+      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+      if (cd && cd.sync) {
+        // 比照 mark-conflict-resolved：sync 衝突解完回分析重跑，不進部署（程式碼還沒開始寫）
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, cd.prior_status || 'analysis_running']
+        );
+        runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+        return res.json({ ok: true, done: true });
       }
 
       await query(
