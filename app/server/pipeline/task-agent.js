@@ -1,9 +1,10 @@
+const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved } = require('./git');
+const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge } = require('./git');
 const { resolveConflicts } = require('./merge-agent');
 const { withProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
@@ -159,23 +160,54 @@ async function runTaskAnalysis(taskId, userId, signal) {
   let setupErr = null;
   let syncConflict = null;
   let syncAborted = false;
+  let syncBlocked = false;
   await withProjectLock(task.project_id, async () => {
+    // 主 clone 殘留 in-progress merge（MERGE_HEAD）防護（比照 merge-agent.js doMerge 同名守衛）：
+    // - 同專案另有任務停在 merge_conflict＝人工正在該 clone 上解衝突（裁決端點的 concludeMerge 才會了結），
+    //   此時進場同步必撞牆被誤標 stopped → 本輪不動作，留在 analysis_running 等下一 tick 再試。
+    // - 否則屬殘留（前一輪 abort／崩潰未清）→ abortMerge 自癒後繼續。
+    for (const repo of info.repos) {
+      if (!fs.existsSync(path.join(repo.local_path, '.git', 'MERGE_HEAD'))) continue;
+      const { rows: [pending] } = await query(
+        "SELECT 1 FROM tasks WHERE project_id=$1 AND status='merge_conflict' AND id<>$2 LIMIT 1",
+        [task.project_id, taskId]
+      );
+      if (pending) {
+        notify.emitToUser(userId, 'terminal:output', { taskId, data: `[SYNC] ${repo.label}：另一任務衝突待人工解決中，本輪暫緩同步\n` });
+        syncBlocked = true;
+        return;
+      }
+      await abortMerge(repo.local_path).catch(() => {});
+    }
+
+    let repo; // 記本輪同步到哪個 repo，供 catch 清半套 merge 用（無 const 遮蔽，供下方 catch 讀取）
     try {
-      for (const repo of info.repos) {
+      for (repo of info.repos) {
         await ensureAiBranch(repo.local_path, gitEnv);
         const sync = await syncMainIntoAi(repo.local_path, gitEnv);
         if (sync.hasConflicts) {
           // 工程師直接改 main 的碼與 AI 改過的地方撞到了。複用 merge 那套三層：
           // 自動解 → 語法驗證 → 解不掉才停下來跳裁決卡片給人。
           const r = await resolveConflicts(repo.local_path, sync.conflictFiles, { taskId, userId, label: repo.label }, signal);
-          if (r.aborted) { syncAborted = true; return; }
-          if (r.failed.length) { syncConflict = { repo: repo.label, files: r.failed, details: r.details }; return; }
+          if (r.aborted) {
+            // 手動暫停：resolveConflicts 中斷在半套 merge，主 clone 卡 MERGE_HEAD，先清掉再原地不動，
+            // 否則解除暫停後重跑會在 syncMainIntoAi 的 checkout main 撞牆、被誤標 stopped。
+            await abortMerge(repo.local_path).catch(() => {});
+            syncAborted = true;
+            return;
+          }
+          if (r.failed.length) { syncConflict = { repo: repo.label, files: r.failed, details: r.details }; return; } // 留 MERGE_HEAD 給裁決端點的 concludeMerge 收尾，不可 abortMerge
           await commitResolved(repo.local_path, sync.conflictFiles, `[sync] main → ${AI_BRANCH} (resolve conflicts)`);
         }
         await ensureWorktreeAtMain(repo.local_path, path.join(wtParent, repo.subdir), `task/${task.task_id}`, AI_BRANCH, true);
       }
-    } catch (e) { setupErr = e; }
+    } catch (e) {
+      // 半套 merge（MERGE_HEAD）留在主 clone 會污染同專案後續任務，先清掉再停（比照 merge-agent.js:360-361）
+      await abortMerge(repo.local_path).catch(() => {});
+      setupErr = e;
+    }
   });
+  if (syncBlocked) return true; // 本輪不動作：留在 analysis_running，等下一 tick 再試
   if (syncAborted) return true; // 手動暫停：非失敗，狀態原地不動，解除暫停後從這一關重跑
   if (syncConflict) {
     // prior_status 記 analysis_running：裁決完回到這一關重跑。此時 sync 的 merge 已 commit，

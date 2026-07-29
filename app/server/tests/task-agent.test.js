@@ -43,7 +43,8 @@ jest.mock('../pipeline/git', () => ({
   AI_BRANCH: 'ai-dev',
   ensureAiBranch: jest.fn().mockResolvedValue('ai-dev'),
   syncMainIntoAi: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
-  commitResolved: jest.fn().mockResolvedValue(undefined)
+  commitResolved: jest.fn().mockResolvedValue(undefined),
+  abortMerge: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../pipeline/merge-agent', () => ({
   resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} })
@@ -389,7 +390,8 @@ test('G-2 先 ensureAiBranch 再 syncMainIntoAi，順序不可顛倒（ai-dev �
   expect(ensureOrder).toBeLessThan(syncOrder);
 });
 
-test('G-3 sync 衝突且自動解不掉 → 停 merge_conflict，資料帶 sync 旗標與 prior_status', async () => {
+test('G-3 sync 衝突且自動解不掉 → 停 merge_conflict，資料帶 sync 旗標與 prior_status，且不 abortMerge（留 MERGE_HEAD 給裁決端點收尾）', async () => {
+  git.abortMerge.mockClear();
   git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
   mergeAgent.resolveConflicts.mockResolvedValueOnce({ failed: ['a.py'], details: { 'a.py': { recommendation: 'manual' } } });
   const { rows: [t] } = await dbModule.query(
@@ -404,6 +406,7 @@ test('G-3 sync 衝突且自動解不掉 → 停 merge_conflict，資料帶 sync 
   expect(cd.sync).toBe(true);
   expect(cd.prior_status).toBe('analysis_running'); // 裁決完要能回到分析重跑
   expect(cd.repos[0].files).toEqual(['a.py']);
+  expect(git.abortMerge).not.toHaveBeenCalled(); // 裁決端點的 concludeMerge 要靠 MERGE_HEAD 收尾，這裡不可清
 });
 
 test('G-4 sync 衝突但自動解光了 → commit 後照常繼續分析，不停任務', async () => {
@@ -420,7 +423,8 @@ test('G-4 sync 衝突但自動解光了 → commit 後照常繼續分析，不�
   expect(after.status).not.toBe('merge_conflict'); // 解光了就不該卡人
 });
 
-test('G-5 sync 期間手動暫停 → 狀態原地不動，不誤標 merge_conflict 也不標 stopped', async () => {
+test('G-5 sync 期間手動暫停 → 狀態原地不動、不誤標 merge_conflict 也不標 stopped，且先清半套 merge（否則重跑會在 checkout main 撞牆）', async () => {
+  git.abortMerge.mockClear();
   git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
   mergeAgent.resolveConflicts.mockResolvedValueOnce({ aborted: true, failed: [], details: {} });
   const { rows: [t] } = await dbModule.query(
@@ -432,4 +436,79 @@ test('G-5 sync 期間手動暫停 → 狀態原地不動，不誤標 merge_confl
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('analysis_running'); // 原地不動，解除暫停後從這一關重跑
   expect(after.blocker_content).toBeNull();
+  expect(git.abortMerge).toHaveBeenCalledWith('/repos/tap/main');
+});
+
+test('G-6 setupErr（sync 之外的例外，如建 worktree 失敗）→ stopped 前先清半套 merge，避免污染同專案後續任務', async () => {
+  git.abortMerge.mockClear();
+  git.ensureWorktreeAtMain.mockRejectedValueOnce(new Error('boom worktree'));
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g6','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  expect(git.abortMerge).toHaveBeenCalledWith('/repos/tap/main');
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('stopped');
+  expect(after.blocker_content).toContain('boom worktree');
+});
+
+// 意圖：主 clone 殘留 MERGE_HEAD 時的進場守衛（比照 merge-agent.js doMerge 的同名守衛語意）；
+// 用真的暫存目錄＋真的 .git/MERGE_HEAD 檔案，因為 task-agent.js 用真的 fs.existsSync 判斷（未 mock fs）。
+test('G-9 進場守衛：主 clone 殘留 MERGE_HEAD 且同專案另一任務卡 merge_conflict 待人工解 → 本輪不動作', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-guard-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(path.join(dir, '.git', 'MERGE_HEAD'), 'abcdef\n');
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('TAP-G9', '17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  // 同專案另一任務正卡在 merge_conflict（人工正在裁決）
+  await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g9_other','odoo','T','c','merge_conflict',$2) RETURNING id",
+    [userId, proj.id]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g9','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, proj.id]
+  );
+
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('analysis_running'); // 本輪不動作，非 stopped（否則失敗代價比 merge 那關更高）
+  expect(after.blocker_content).toBeNull();
+});
+
+test('G-10 進場守衛：主 clone 殘留 MERGE_HEAD 但無人在裁決（前一輪殘留）→ abortMerge 自癒後照常同步', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  mockClaude();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-guard-heal-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(path.join(dir, '.git', 'MERGE_HEAD'), 'abcdef\n');
+  git.abortMerge.mockClear();
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('TAP-G10', '17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g10','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, proj.id]
+  );
+
+  await runTaskAnalysis(t.id, userId);
+  expect(git.abortMerge).toHaveBeenCalledWith(dir); // 自癒
+  expect(git.ensureAiBranch).toHaveBeenCalledWith(dir, expect.anything()); // 自癒後照常繼續同步
 });
