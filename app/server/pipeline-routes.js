@@ -5,7 +5,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 
-// approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToMain
+// approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToAiBranch
 // （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
 const _approving = new Set();
 
@@ -45,7 +45,7 @@ function registerRoutes(app) {
     res.json({ inflight: getInflightTaskIds() });
   });
 
-  // 最終人工審核通過：把 task 分支併回 main、清理 worktree 與分支，轉入 wiki 更新
+  // 最終人工審核通過：把 task 分支併回 ai-dev、清理 worktree 與分支，轉入 wiki 更新
   app.post('/api/tasks/:id/approve', verifyToken, async (req, res) => {
     const approveKey = String(req.params.id);
     if (_approving.has(approveKey)) return res.status(409).json({ error: '審核通過處理中，請勿重複送出' });
@@ -71,12 +71,12 @@ function registerRoutes(app) {
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
       const path = require('path');
-      const { mergeToMain, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
+      const { mergeToAiBranch, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
       const { withProjectLock } = require('./pipeline/project-lock');
       const { buildGitEnv } = require('./lib/git-identity');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 
-      // push 回 main 要歸屬到審核者（任務發起人）本人，非平台服務帳號
+      // push 回 ai-dev 要歸屬到審核者（任務發起人）本人，非平台服務帳號
       let gitEnv;
       try {
         gitEnv = await buildGitEnv(req.userId);
@@ -87,9 +87,9 @@ function registerRoutes(app) {
 
       // 併主線＋清理 worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
       await withProjectLock(task.project_id, async () => {
-        // 逐 repo 併入 main（任一失敗即中止，狀態不變）
+        // 逐 repo 併入 ai-dev（任一失敗即中止，狀態不變）
         for (const repo of repos) {
-          await mergeToMain(repo.local_path, task.git_branch, gitEnv);
+          await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
         }
         // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
         for (const repo of repos) {
@@ -106,14 +106,14 @@ function registerRoutes(app) {
       );
       if (rowCount) {
         await query(
-          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回主線並清理分支，正在更新文件')",
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回 ai-dev 分支並清理分支，正在更新文件')",
           [req.params.id]
         );
       }
       runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: '合併主線失敗：' + err.message });
+      res.status(500).json({ error: '合併 ai-dev 失敗：' + err.message });
     } finally {
       _approving.delete(approveKey);
     }

@@ -16,7 +16,7 @@ jest.mock('../pipeline/runner', () => ({
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(),
   runDeploy: jest.fn(),
-  mergeToMain: jest.fn().mockResolvedValue(undefined),
+  mergeToAiBranch: jest.fn().mockResolvedValue(undefined),
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   concludeMerge: jest.fn().mockResolvedValue(undefined),
@@ -95,7 +95,7 @@ test('POST /api/tasks/:id/approve → 404 for non-existent task', async () => {
 });
 
 test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉 wiki_updating', async () => {
-  const { mergeToMain, deleteBranchLocal } = require('../pipeline/git');
+  const { mergeToAiBranch, deleteBranchLocal } = require('../pipeline/git');
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('AP','17.0') RETURNING id"
   );
@@ -112,7 +112,7 @@ test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉
   const res = await request(app).post(`/api/tasks/${taskId}/approve`)
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(mergeToMain).toHaveBeenCalledWith('/repos/ap/main', 'task/task_review_ok',
+  expect(mergeToAiBranch).toHaveBeenCalledWith('/repos/ap/main', 'task/task_review_ok',
     expect.objectContaining({ GIT_PAT: 'test-pat-token' }));
   expect(deleteBranchLocal).toHaveBeenCalled();
 
@@ -123,9 +123,9 @@ test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
-test('POST /api/tasks/:id/approve → review_pending 但發起 user 無 PAT → 400，且不呼叫 mergeToMain', async () => {
-  const { mergeToMain } = require('../pipeline/git');
-  mergeToMain.mockClear();
+test('POST /api/tasks/:id/approve → review_pending 但發起 user 無 PAT → 400，且不呼叫 mergeToAiBranch', async () => {
+  const { mergeToAiBranch } = require('../pipeline/git');
+  mergeToAiBranch.mockClear();
 
   const { rows: [nopatUser] } = await dbModule.query(
     "INSERT INTO users (username, password_hash, display_name) VALUES ('nopat', 'x', 'NoPAT') RETURNING id"
@@ -149,7 +149,7 @@ test('POST /api/tasks/:id/approve → review_pending 但發起 user 無 PAT → 
 
   expect(res.status).toBe(400);
   expect(res.body.error).toMatch(/PAT/);
-  expect(mergeToMain).not.toHaveBeenCalled();
+  expect(mergeToAiBranch).not.toHaveBeenCalled();
 
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });

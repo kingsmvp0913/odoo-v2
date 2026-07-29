@@ -32,7 +32,7 @@ jest.mock('../pipeline/git', () => ({
   commitAll: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined),
   restoreConflictMarkers: jest.fn().mockResolvedValue(undefined),
-  mergeToMain: jest.fn().mockResolvedValue(undefined),
+  mergeToAiBranch: jest.fn().mockResolvedValue(undefined),
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   discardPyc: jest.fn().mockResolvedValue(undefined),

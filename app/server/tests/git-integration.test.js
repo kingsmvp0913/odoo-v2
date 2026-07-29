@@ -249,3 +249,29 @@ test('syncMainIntoAi：兩邊改同一行 → hasConflicts＋檔名，留 MERGE_
   expect(r.conflictFiles).toContain('a.py');
   expect(fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD'))).toBe(true);
 }, 30000);
+
+test('mergeToAiBranch：併入 ai-dev 並推遠端，實體 main 完全不動', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  const { stdout: mainBefore } = await sh(repo, 'rev-parse', 'main');
+
+  await sh(repo, 'checkout', '-b', 'task/t9', 'ai-dev');
+  await write(repo, 'feat.py', 'feat = 1\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'feature');
+
+  await git.mergeToAiBranch(repo, 'task/t9');
+
+  // 併進 ai-dev：直接列 ai-dev 那顆 commit 的完整 tree，確認 feat.py 真的在裡面
+  // （git show --stat 對 merge commit 預設不列變更檔，故不能拿它斷言）
+  const { stdout: files } = await sh(repo, 'ls-tree', '-r', '--name-only', 'ai-dev');
+  expect(files.split('\n')).toContain('feat.py');
+  expect(fs.existsSync(path.join(repo, 'feat.py'))).toBe(true);
+  // 推上遠端 ai-dev
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev');
+  const { stdout: localAi } = await sh(repo, 'rev-parse', 'ai-dev');
+  expect(remoteAi.trim()).toBe(localAi.trim());
+  // 實體 main 一步都沒動——這是本次改動的核心保證
+  const { stdout: mainAfter } = await sh(repo, 'rev-parse', 'main');
+  expect(mainAfter.trim()).toBe(mainBefore.trim());
+}, 30000);
