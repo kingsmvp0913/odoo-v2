@@ -411,6 +411,9 @@ async function migrate() {
     // 上輪 QA 審過的任務分支 HEAD commit（死結熔斷用）：本輪 HEAD 若與其相同＝coding 未提交任何修正，
     // QA 卻仍要 fail → 兩邊僵局，提早停下轉人工裁決，不燒到 QA_LIMIT。
     { table: 'tasks', col: 'qa_reviewed_commit',   sql: 'ALTER TABLE tasks ADD COLUMN qa_reviewed_commit TEXT' },
+    // 澄清關「更新規格書 QA」產出的題目草案（YAML 片段）：AI 不得直接覆蓋使用者正在看的題目，
+    // 先落此欄供前端顯示新舊對照，使用者按套用才寫進 analysis_yaml。
+    { table: 'tasks', col: 'clarify_draft',        sql: 'ALTER TABLE tasks ADD COLUMN clarify_draft TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     // 每環境憑證：SSO 密鑰、E2E 隨機密碼（測試區安全 hardening）

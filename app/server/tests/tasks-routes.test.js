@@ -213,7 +213,10 @@ test('GET /api/tasks/:id → confirm_pending 解析 analysis_yaml 回傳 clarifi
   const res = await request(app).get(`/api/tasks/${t.id}`)
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(res.body.clarification.questions).toEqual(['問題一？', '問題二？']);
+  expect(res.body.clarification.questions).toEqual([
+    { id: 'q1', text: '問題一？', type: 'text', required: true },
+    { id: 'q2', text: '問題二？', type: 'text', required: true }
+  ]);
   expect(res.body.clarification.summary).toBe('改動摘要');
 });
 
@@ -995,4 +998,76 @@ test('一般使用者可批次封存自己的任務、動不到別人的', async
   expect(cross.body.affected).toBe(0);
   const { rows: [a2] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id=$1', [other.id]);
   expect(a2.is_hidden).toBe(false);
+});
+
+test('GET /api/tasks/:id → clarification 舊字串陣列轉成結構化題目（相容既有任務）', async () => {
+  const yamlOld = [
+    'case_id: "T-old"',
+    'summary: 舊格式任務',
+    'clarification_channel:',
+    '  questions:',
+    '    - 第一個問題？',
+    '    - 第二個問題？',
+    '  user_answer: ""'
+  ].join('\n');
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_clar_legacy','odoo','T','confirm_pending',$2) RETURNING id",
+    [userId, yamlOld]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).get(`/api/tasks/${taskId}`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.clarification.questions).toEqual([
+    { id: 'q1', text: '第一個問題？', type: 'text', required: true },
+    { id: 'q2', text: '第二個問題？', type: 'text', required: true }
+  ]);
+  expect(res.body.clarification.intro).toBe('');
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('GET /api/tasks/:id → clarification 新結構保留 intro／選項／條件題，說明段不進題目清單', async () => {
+  const yamlNew = [
+    'case_id: "T-new"',
+    'summary: 新格式任務',
+    'clarification_channel:',
+    '  intro: 這段是白話說明，不用回答。',
+    '  questions:',
+    '    - id: q1',
+    '      text: 項次要不要自動重編？',
+    '      type: choice',
+    '      required: true',
+    '      options:',
+    '        - key: A',
+    '          label: 自動重編',
+    '        - key: B',
+    '          label: 維持手動',
+    '    - id: q2',
+    '      text: 自動重編怎麼算？',
+    '      type: choice',
+    '      required: true',
+    '      depends_on: { question: q1, equals: A }',
+    '      options:',
+    '        - key: A',
+    '          label: 連續編',
+    '        - key: B',
+    '          label: 分段編',
+    '  user_answer: ""'
+  ].join('\n');
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_clar_new','odoo','T','confirm_pending',$2) RETURNING id",
+    [userId, yamlNew]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).get(`/api/tasks/${taskId}`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.clarification.intro).toBe('這段是白話說明，不用回答。');
+  expect(res.body.clarification.questions).toHaveLength(2);
+  expect(res.body.clarification.questions[0].options).toEqual([
+    { key: 'A', label: '自動重編' }, { key: 'B', label: '維持手動' }
+  ]);
+  expect(res.body.clarification.questions[1].depends_on).toEqual({ question: 'q1', equals: 'A' });
+
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });

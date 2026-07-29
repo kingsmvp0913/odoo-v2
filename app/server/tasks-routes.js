@@ -45,17 +45,47 @@ function taskModule(task) {
   catch { return ''; }
 }
 
-// 從 analysis_yaml 取澄清摘要與問題清單，供 confirm_pending 在前端列出讓使用者回答（前端無 YAML parser）。
-// 兼容巢狀 clarification_channel.questions 與扁平陣列（與 teams.js notifyQuestion 同套解析）。取不到回空。
+// 從 analysis_yaml 取澄清說明與題目清單，供 confirm_pending 在前端渲染（前端無 YAML parser）。
+// 題目格式有兩代：新版是含 id/type/required/options/depends_on 的物件，舊版是純字串陣列
+// （既有任務的 analysis_yaml 已凍結在舊格式）——舊字串就地補成 text 必答題，不做資料遷移。
+// intro 是白話說明段，刻意與 questions 分家：它一旦混進題目清單就會被編號成「Q1」並被要求作答。
+function normalizeQuestion(q, idx) {
+  const fallbackId = `q${idx + 1}`;
+  if (typeof q === 'string') return { id: fallbackId, text: q, type: 'text', required: true };
+  if (!q || typeof q !== 'object' || typeof q.text !== 'string' || !q.text.trim()) return null;
+  const out = {
+    id: typeof q.id === 'string' && q.id.trim() ? q.id.trim() : fallbackId,
+    text: q.text,
+    type: q.type === 'choice' ? 'choice' : 'text',
+    required: q.required !== false
+  };
+  if (out.type === 'choice') {
+    out.options = (Array.isArray(q.options) ? q.options : [])
+      .filter(o => o && typeof o.key === 'string' && typeof o.label === 'string')
+      .map(o => ({ key: o.key, label: o.label }));
+    if (!out.options.length) { out.type = 'text'; delete out.options; } // 選項全壞的 choice 題退成文字題，總比題目消失好
+  }
+  const dep = q.depends_on;
+  if (dep && typeof dep === 'object' && typeof dep.question === 'string' && dep.equals !== undefined) {
+    out.depends_on = { question: dep.question, equals: String(dep.equals) };
+  }
+  return out;
+}
+
 function taskClarification(task) {
-  if (!task || !task.analysis_yaml) return { summary: '', questions: [] };
+  const empty = { summary: '', intro: '', questions: [] };
+  if (!task || !task.analysis_yaml) return empty;
   try {
     const parsed = yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {};
     const ch = parsed.clarification_channel;
-    const questions = Array.isArray(ch?.questions) ? ch.questions.filter(q => typeof q === 'string')
-      : Array.isArray(ch) ? ch.filter(q => typeof q === 'string') : [];
-    return { summary: typeof parsed.summary === 'string' ? parsed.summary : '', questions };
-  } catch { return { summary: '', questions: [] }; }
+    const rawList = Array.isArray(ch?.questions) ? ch.questions : Array.isArray(ch) ? ch : [];
+    const questions = rawList.map(normalizeQuestion).filter(Boolean);
+    return {
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      intro: typeof ch?.intro === 'string' ? ch.intro : '',
+      questions
+    };
+  } catch { return empty; }
 }
 
 // 從 analysis_yaml 解析出審核頁要渲染的規格（前端無 YAML parser）：只挑人要看的欄位，
@@ -206,7 +236,7 @@ function registerRoutes(app) {
       }
       // 澄清問題只在 confirm_pending 出（初次分析）；clarify_pending 共用同一 answer 區但走時間軸對話，
       // 其 analysis_yaml 常殘留當初分析的舊問題，不可誤冒出來。
-      const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', questions: [] };
+      const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', intro: '', questions: [] };
       // spec_review（MODE_B 規格審核閘門）：附解析後的規格供審核頁渲染；其他狀態不附（防殘留規格冒出）
       const spec = tasks[0].status === 'spec_review' ? taskSpec(tasks[0]) : null;
       res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec });
