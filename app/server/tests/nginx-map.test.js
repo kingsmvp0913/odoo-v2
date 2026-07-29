@@ -301,3 +301,35 @@ describe('syncNginxMap SQL（pg-mem 實跑）', () => {
     expect(fakeFs.written).toBe('');
   });
 });
+
+// 意圖：這台 nginx 與多個正式站共用，一次 reload 會重讀所有站的設定。閒置回收／夜間關機
+// 會在幾秒內連續還掉一整批名額，逐一 reload 等於連續打擾正式站。合併成一次。
+describe('syncNginxMapDebounced', () => {
+  const savedConf = process.env.NGINX_SYNC_CONF_FILE;
+  afterEach(() => {
+    if (savedConf === undefined) delete process.env.NGINX_SYNC_CONF_FILE;
+    else process.env.NGINX_SYNC_CONF_FILE = savedConf;
+  });
+
+  test('窗口內連續三次呼叫 → 只實際同步一次', async () => {
+    delete process.env.NGINX_SYNC_CONF_FILE; // gate 關閉：syncNginxMap 直接回 skipped，不碰 fs
+    const { syncNginxMapDebounced } = require('../lib/nginx-map');
+    const rs = await Promise.all([
+      syncNginxMapDebounced({ debounceMs: 5 }),
+      syncNginxMapDebounced({ debounceMs: 5 }),
+      syncNginxMapDebounced({ debounceMs: 5 }),
+    ]);
+    expect(rs).toHaveLength(3);
+    for (const r of rs) expect(r.skipped).toBe(true); // 三個呼叫端都拿到同一次同步的結果
+  });
+
+  // 意圖：合併不等於吞掉。等待中的呼叫端都必須拿到結果，否則上游的 await 會永遠掛著。
+  test('每個呼叫端都拿到結果（合併不吞 promise）', async () => {
+    delete process.env.NGINX_SYNC_CONF_FILE;
+    const { syncNginxMapDebounced } = require('../lib/nginx-map');
+    const a = syncNginxMapDebounced({ debounceMs: 5 });
+    const b = syncNginxMapDebounced({ debounceMs: 5 });
+    await expect(a).resolves.toBeDefined();
+    await expect(b).resolves.toBeDefined();
+  });
+});

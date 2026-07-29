@@ -156,4 +156,29 @@ async function syncNginxMap(deps = {}) {
   }
 }
 
-module.exports = { buildServerBlocks, syncNginxMap, externalServerName, assertServerNames };
+// 防抖版入口。這台 nginx 與多個正式站共用，一次 reload 會重讀所有站的設定；閒置回收與夜間
+// 關機會在幾秒內連續還掉一整批名額，逐一 reload 等於連續打擾正式站。窗口內的多次變動合併成一次。
+//
+// ⚠️ 借名額的路徑不得用這個版本——借完會立刻把網址交給瀏覽器開新頁，delay 期間 nginx 還沒
+// reload，使用者當下拿到 502。借用 syncNginxMap（同步等 -t + reload 完成），只有「還」走這裡。
+const DEBOUNCE_MS = parseInt(process.env.NGINX_SYNC_DEBOUNCE_MS || '1500', 10);
+let _debounceTimer = null;
+let _debounceWaiters = [];
+
+function syncNginxMapDebounced(deps = {}) {
+  return new Promise((resolve) => {
+    _debounceWaiters.push(resolve);
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(async () => {
+      _debounceTimer = null;
+      const waiters = _debounceWaiters;
+      _debounceWaiters = [];
+      const result = await syncNginxMap(deps).catch(err => ({ ok: false, error: err.message }));
+      for (const w of waiters) w(result);
+    }, deps.debounceMs ?? DEBOUNCE_MS);
+    // 別讓這個 timer 拖住 process 結束（cron 短命進程／jest）
+    if (_debounceTimer.unref) _debounceTimer.unref();
+  });
+}
+
+module.exports = { buildServerBlocks, syncNginxMap, syncNginxMapDebounced, externalServerName, assertServerNames };
