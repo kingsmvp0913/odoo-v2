@@ -315,6 +315,10 @@ test('POST reclone：同步衝突 → abort 還原並落 clone_error，不留半
   expect(gitMock.abortMerge).toHaveBeenCalledWith(dir);
   expect(row.clone_status).toBe('error');
   expect(row.clone_error).toContain('a.py');
+  // I-2：clone_status='error' 之後這個 repo 就從 pipeline 消失（全平台撈 repo 一律 WHERE
+  // clone_status='done'），「開一張任務處理」會撈到 0 個 repo＝死路，不得出現在指示裡。
+  expect(row.clone_error).not.toContain('開一張任務');
+  expect(row.clone_error).toContain('GitHub');
 });
 
 // 意圖：埠改為租約制後，建立專案不該再佔用埠——否則專案數一多就把整池吃光，

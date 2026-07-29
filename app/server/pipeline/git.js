@@ -357,6 +357,7 @@ async function resetTestingToAiBranch(repoPath) {
   // 切換前先清未追蹤殘留（deploy/graphify 產物）：未追蹤檔若與 testing 追蹤的檔路徑相撞，
   // 連 checkout -f 都會被「untracked working tree files would be overwritten」擋住。-d 不含 -x，保留 .gitignore 忽略項。
   await execFileAsync('git', ['clean', '-fd'], { cwd: repoPath }).catch(() => {});
+  // -f 強制切換，丟棄 tracked 檔的髒改動（deploy 目標工作樹常被 odoo-bin 弄髒）
   try {
     await execFileAsync('git', ['checkout', '-f', 'testing'], { cwd: repoPath });
   } catch {

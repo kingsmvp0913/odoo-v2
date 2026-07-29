@@ -118,10 +118,12 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     await ensureAiBranch(destPath, gitEnv);
     const sync = await syncMainIntoAi(destPath, gitEnv);
     if (sync.hasConflicts) {
-      // 此處不綁任何任務，沒有裁決 UI 可用。abort 還原讓 ai-dev 維持原狀並 fail loud；
-      // 下一張任務的 analysis 會撞到同一個衝突，屆時循正常管道掛到那張任務上裁決。
+      // 此處不綁任何任務，沒有裁決 UI 可用。abort 還原讓 ai-dev 維持原狀並 fail loud。
+      // 訊息只留「去 GitHub 合併」這條：外層 catch 會把 repo 標成 clone_status='error'，而全平台
+      // 撈 repo 一律 WHERE clone_status='done'——repo 一旦是 error 就從 pipeline 消失，「開一張任務
+      // 處理」保證撈到 0 個 repo、approve 直接 400，那是條死路，不能寫進指示裡。
       await abortMerge(destPath);
-      throw new Error(`main → ai-dev 同步衝突（${sync.conflictFiles.join(', ')}），請開一張任務處理，或先在 GitHub 上解決`);
+      throw new Error(`main → ai-dev 同步衝突（${sync.conflictFiles.join(', ')}），請先在 GitHub 上把 ai-dev 合併回 main 再更新`);
     }
     // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
     if (projectId) {
