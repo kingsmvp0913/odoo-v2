@@ -9,9 +9,13 @@ async function logAnalysisGate(taskId, parsed, nextStatus) {
   const head = `模組：${parsed?.module || ''}｜重點：${parsed?.summary || ''}`;
   let content;
   if (nextStatus === 'confirm_pending') {
+    // 題目有兩代：新版是物件（取 .text）、舊版是純字串（取自身）——取不到文字的項目略過，不印空白編號。
     const qs = (parsed?.clarification_channel?.questions || [])
-      .map((q, i) => `${i + 1}. ${String(q).trim()}`).filter(Boolean).join('\n');
-    content = `[需要你回答]\n${head}${qs ? `\n\n${qs}` : ''}`;
+      .map(q => (typeof q === 'string' ? q : q?.text))
+      .filter(t => typeof t === 'string' && t.trim())
+      .map((t, i) => `${i + 1}. ${t.trim()}`).join('\n');
+    const intro = typeof parsed?.clarification_channel?.intro === 'string' ? parsed.clarification_channel.intro.trim() : '';
+    content = `[需要你回答]\n${head}${intro ? `\n\n${intro}` : ''}${qs ? `\n\n${qs}` : ''}`;
   } else if (nextStatus === 'spec_review') {
     content = `[等待你審核規格]\n${head}`;
   } else {

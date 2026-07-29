@@ -229,8 +229,11 @@ function selectQuestions(status, analysisYaml, clarifyLogContent) {
     const parsed = yaml.load(analysisYaml, { schema: yaml.CORE_SCHEMA });
     if (parsed && typeof parsed === 'object') {
       // Nested format (CLAUDE.md standard): clarification_channel.questions: []
+      // 題目有兩代：新版是物件（取 .text）、舊版是純字串（取自身）——取不到文字的項目略過。
       if (Array.isArray(parsed.clarification_channel?.questions)) {
-        return parsed.clarification_channel.questions.filter(q => typeof q === 'string');
+        return parsed.clarification_channel.questions
+          .map(q => (typeof q === 'string' ? q : q?.text))
+          .filter(t => typeof t === 'string' && t.trim());
       // Flat array format (legacy)
       } else if (Array.isArray(parsed.clarification_channel)) {
         return parsed.clarification_channel.filter(q => typeof q === 'string');

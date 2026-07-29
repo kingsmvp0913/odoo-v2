@@ -136,7 +136,9 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
 
   if (decision === 'proceed') {
     const next = fallbackStatus(task) === 'clarify_pending' ? 'clarify_answered' : 'confirm_answered';
-    await query("UPDATE tasks SET status=$2, updated_at=NOW() WHERE id=$1", [taskId, next]);
+    // 清 clarify_draft：留著舊草案，之後若重跑分析又回到 confirm_pending 產生新題目，
+    // 前端會讀到過期草案、使用者按套用就把新題目整組覆蓋成舊的。
+    await query("UPDATE tasks SET status=$2, clarify_draft=NULL, updated_at=NOW() WHERE id=$1", [taskId, next]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: next });
     return;
   }

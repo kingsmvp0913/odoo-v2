@@ -746,6 +746,9 @@ function registerRoutes(app) {
       const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
       const task = tasks[0];
+      if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
+        return res.status(400).json({ error: `Task status '${task.status}' 不接受套用草案` });
+      }
       if (!task.clarify_draft) return res.status(400).json({ error: '沒有待套用的草案' });
 
       let merged;
@@ -767,6 +770,11 @@ function registerRoutes(app) {
   // 放棄草案
   app.post('/api/tasks/:id/clarify-discard', verifyToken, async (req, res) => {
     try {
+      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      if (!ANSWER_ALLOWED_STATUSES.includes(tasks[0].status)) {
+        return res.status(400).json({ error: `Task status '${tasks[0].status}' 不接受放棄草案` });
+      }
       const { rowCount } = await query(
         'UPDATE tasks SET clarify_draft=NULL, updated_at=NOW() WHERE id=$1 AND user_id=$2',
         [req.params.id, req.userId]

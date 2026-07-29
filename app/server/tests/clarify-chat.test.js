@@ -95,6 +95,19 @@ test('答齊了 → proceed → confirm_answered', async () => {
   expect(rows[0].status).toBe('confirm_answered');
 });
 
+// I2 回歸：proceed 時若殘留舊草案（先前 revise 產生、使用者沒套用也沒放棄），必須清掉——
+// 否則之後若又重跑分析回到 confirm_pending 產生新題目，前端仍讀到過期草案，使用者按套用會把
+// 新題目整組覆蓋成舊的（掉資料）。
+test('proceed 時清掉殘留的 clarify_draft，避免之後覆蓋新題目', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_draft='intro: 舊草案' WHERE id=$1", [task.id]);
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n了解，開始實作。\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat({ id: task.id }, 1, null, 'answer_or_proceed');
+  const { rows } = await dbModule.query('SELECT status, clarify_draft FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_answered');
+  expect(rows[0].clarify_draft).toBeNull();
+});
+
 test('提問入口即使 agent 硬回 proceed 也推不動（結構性限制，不靠 prompt 自律）', async () => {
   const task = await makeTask('clarify_chat_running');
   runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n我要往前跑\n</result>', usage: {}, durationMs: 1 });
