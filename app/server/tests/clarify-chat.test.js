@@ -142,7 +142,8 @@ test('認證失效 → 訊息點明與回答無關，狀態一樣退回不 stopp
 
 test('clarify_pending 來的任務：proceed 進 clarify_answered', async () => {
   const task = await makeTask('clarify_chat_running');
-  task.resume_status = 'clarify_pending';
+  // 執行器現在會依 taskId 重查完整列（見 task 4 修復），mutate 記憶體物件不會生效，須真的寫進 DB
+  await dbModule.query("UPDATE tasks SET resume_status='clarify_pending' WHERE id=$1", [task.id]);
   runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n收到裁決\n</result>', usage: {}, durationMs: 1 });
   await runClarifyChat(task, 1, null, 'answer_or_proceed');
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
@@ -169,4 +170,27 @@ test('補救解析階段被手動暫停 → 例外往上傳，不得寫成「AI 
   await expect(runClarifyChat(task, 1, null, 'answer_or_proceed')).rejects.toThrow();
   const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [task.id]);
   expect(logs.some(l => l.content.includes('AI 回覆失敗'))).toBe(false);
+});
+
+// runner 派工的 task 物件只有六個欄位（runner.js:425），執行器若直接用它，agent 會拿到「（無規格）」
+test('只給精簡 task 物件時自己重查：agent 仍拿得到 analysis_yaml', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_mode='answer_or_proceed' WHERE id=$1", [task.id]);
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: answer\nREPLY:\n好\n</result>', usage: {}, durationMs: 1 });
+  // 模擬 runner 的精簡列
+  await runClarifyChat({ id: task.id, task_id: task.task_id, status: 'clarify_chat_running', user_id: 1, project_id: null, blocker_content: null }, 1, null, null);
+  expect(runClaude).toHaveBeenCalled();
+  const prompt = runClaude.mock.calls[runClaude.mock.calls.length - 1][0];
+  expect(prompt).toContain('summary: s');   // makeTask 寫入的 analysis_yaml
+  expect(prompt).not.toContain('（無規格）');
+});
+
+// mode 走 DB 而非參數：路由寫 clarify_mode='ask' 的任務，即使 runner 沒傳 mode 也不能被推進
+test('mode 從 tasks.clarify_mode 讀：ask 的任務即使 agent 回 proceed 也推不動', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_mode='ask' WHERE id=$1", [task.id]);
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: proceed\nREPLY:\n我要往前跑\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat({ id: task.id }, 1, null, null);
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_pending');
 });

@@ -414,6 +414,9 @@ async function migrate() {
     // 澄清關「更新規格書 QA」產出的題目草案（YAML 片段）：AI 不得直接覆蓋使用者正在看的題目，
     // 先落此欄供前端顯示新舊對照，使用者按套用才寫進 analysis_yaml。
     { table: 'tasks', col: 'clarify_draft',        sql: 'ALTER TABLE tasks ADD COLUMN clarify_draft TEXT' },
+    // 澄清關這一輪走哪個入口（answer_or_proceed／ask／revise）：路由寫入、執行器讀取。
+    // 不用參數傳遞是因為派工要經 runner 的 _inFlight 互斥，而 runner 的 SELECT 撈不到臨時參數。
+    { table: 'tasks', col: 'clarify_mode',         sql: 'ALTER TABLE tasks ADD COLUMN clarify_mode TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     // 每環境憑證：SSO 密鑰、E2E 隨機密碼（測試區安全 hardening）

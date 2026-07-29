@@ -255,9 +255,10 @@ const HANDLERS = {
   resolve_triage: handleRejectTriage,
   respec_running: handleRespec,
   clarify_answered: handleClarifyAnswered,
-  // clarify_chat_running：正常情況由路由直接跑完；這條路徑是 server 在 agent 跑完前重啟的補跑，
-  // 只可能是「送出回答」那個入口（ask/revise 兩個入口不改狀態，重啟後不會留下待跑任務）。
-  clarify_chat_running: (task, settings, signal) => runClarifyChat(task, task.user_id, signal, 'answer_or_proceed'),
+  // clarify_chat_running：三個澄清入口共用這一條派工路徑（路由只改狀態並寫 clarify_mode，
+  // 實際派工一律經 dispatchTask ＝ 受 _inFlight 互斥保護，不會與 cron 掃描重複派）。
+  // mode 傳 null＝由執行器讀 tasks.clarify_mode，避免此處寫死而讓 ask/revise 被當成送出回答。
+  clarify_chat_running: (task, settings, signal) => runClarifyChat(task, task.user_id, signal, null),
 };
 
 // 執行一個任務：狀態重查（防過期快照）→ 寫階段標記 → 跑 handler → 失敗原因落地／Teams。

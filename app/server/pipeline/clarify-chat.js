@@ -82,8 +82,14 @@ function failMessage(err) {
   return `AI 回覆失敗，請再送出一次。（${stopReason('澄清問答', err)}）`;
 }
 
-async function runClarifyChat(task, userId, signal, mode) {
-  const taskId = task.id;
+async function runClarifyChat(taskArg, userId, signal, mode) {
+  const taskId = taskArg.id;
+  // 重查完整任務列：runner 派工只 SELECT 六個欄位（runner.js:425），analysis_yaml／resume_status／
+  // clarify_mode 都不在其中——直接用傳進來的物件會讓 agent 拿到「（無規格）」。
+  const { rows: [task] } = await query('SELECT * FROM tasks WHERE id=$1', [taskId]);
+  if (!task) return;
+  // mode 以 DB 為準（路由寫入），呼叫端顯式指定時才覆蓋（供測試與未來的直呼叫）
+  mode = mode || task.clarify_mode;
   const ref = { taskId: task.task_id, projectId: task.project_id };
   // 未知 mode 退到「最嚴格」而非最寬鬆：這行是「結構性擋住推進」的唯一落點，
   // 呼叫端拼錯字不該讓限制最嚴的入口靜默變成可推進。
