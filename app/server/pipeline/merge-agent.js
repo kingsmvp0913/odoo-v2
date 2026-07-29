@@ -5,7 +5,7 @@ const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { stripFence, parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { mergeInto, commitResolved, abortMerge, restoreConflictMarkers } = require('./git');
+const { AI_BRANCH, mergeInto, commitResolved, abortMerge, restoreConflictMarkers } = require('./git');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -113,6 +113,13 @@ async function conflictSide(repoPath, file, stage) {
   }
 }
 
+// 兩側標籤（餵給 merge-explain／merge-clarify 的 prompt）：預設是「task 分支 → testing」的語意。
+// main → ai-dev 的同步衝突兩側恰好相反（ours＝AI 的碼、theirs＝工程師的碼），沿用預設會讓 AI 把
+// 工程師剛推的碼講成「本次任務刻意的升級」、建議系統性偏 take_theirs，產出的說明文字也會跟裁決
+// 卡片上的按鈕（取工程師版／取 AI 版）在同一張卡片裡自相矛盾。
+const DEFAULT_LABELS = { oursLabel: 'testing 現況', theirsLabel: '任務分支（新版）' };
+const SYNC_LABELS = { oursLabel: `${AI_BRANCH}（AI 現況）`, theirsLabel: 'main（工程師新進）' };
+
 const REC_ENUM = ['take_theirs', 'take_ours', 'manual'];
 function parseExplain(s) {
   const o = JSON.parse(s);
@@ -128,20 +135,25 @@ function parseExplain(s) {
 // 對一個「無法自動解決」的衝突檔產生結構化建議（給人裁決）。解析失敗回 null——
 // 呼叫端據此退回純檔名的舊行為，分析失敗絕不擋住收尾。
 async function explainConflict(repoPath, file, signal, opts = {}) {
+  const { oursLabel, theirsLabel, ...runOpts } = opts;
   const agent = loadAgent('merge-explain');
   const [ours, theirs] = await Promise.all([
     conflictSide(repoPath, file, 2),
     conflictSide(repoPath, file, 3)
   ]);
-  const prompt = agent.render({ file_path: file, ours, theirs });
+  const prompt = agent.render({
+    file_path: file, ours, theirs,
+    ours_label: oursLabel || DEFAULT_LABELS.oursLabel,
+    theirs_label: theirsLabel || DEFAULT_LABELS.theirsLabel
+  });
   let ref = null, refUser = null;
-  if (opts.taskId) {
-    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
+  if (runOpts.taskId) {
+    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [runOpts.taskId]);
     if (t) { ref = { taskId: t.task_id, projectId: t.project_id }; refUser = t.user_id; }
   }
   let res;
   try {
-    res = await runClaude(prompt, { ...opts, signal, model: agent.model, agentType: 'merge-explain' });
+    res = await runClaude(prompt, { ...runOpts, signal, model: agent.model, agentType: 'merge-explain' });
   } catch (err) {
     if (ref) await logFailedUsage(ref, refUser, 'merge-explain', err);
     if (err && err.aborted) throw err;
@@ -173,6 +185,7 @@ function parseClarify(s) {
 // 回 { answer, recommendation, rationale }（recommendation='keep' 表示不動原建議）。
 // 解析／AI 失敗回 CLARIFY_FALLBACK，不擋收尾；abort（手動暫停）rethrow。只讀 git，不碰工作樹。
 async function clarifyConflict(repoPath, file, ctx, signal, opts = {}) {
+  const { oursLabel, theirsLabel, ...runOpts } = opts;
   const agent = loadAgent('merge-clarify');
   const [ours, theirs] = await Promise.all([
     conflictSide(repoPath, file, 2),
@@ -186,19 +199,21 @@ async function clarifyConflict(repoPath, file, ctx, signal, opts = {}) {
     .map(t => `Q: ${t.q}\nA: ${t.a}`).join('\n\n') || '（本檔尚無先前問答）';
   const prompt = agent.render({
     file_path: file, ours, theirs,
+    ours_label: oursLabel || DEFAULT_LABELS.oursLabel,
+    theirs_label: theirsLabel || DEFAULT_LABELS.theirsLabel,
     prior_explanation: prior,
     business_context: ctx.businessContext || '（無規格）',
     history,
     question: ctx.question
   });
   let ref = null, refUser = null;
-  if (opts.taskId) {
-    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [opts.taskId]);
+  if (runOpts.taskId) {
+    const { rows: [t] } = await query('SELECT task_id, user_id, project_id FROM tasks WHERE id=$1', [runOpts.taskId]);
     if (t) { ref = { taskId: t.task_id, projectId: t.project_id }; refUser = t.user_id; }
   }
   let res;
   try {
-    res = await runClaude(prompt, { ...opts, signal, model: agent.model, agentType: 'merge-clarify' });
+    res = await runClaude(prompt, { ...runOpts, signal, model: agent.model, agentType: 'merge-clarify' });
   } catch (err) {
     if (ref) await logFailedUsage(ref, refUser, 'merge-clarify', err);
     if (err && err.aborted) throw err;
@@ -267,9 +282,11 @@ async function verifyResolvedSyntax(repoPath, files) {
 // 逐檔解衝突的完整流程：自動解 → 語法驗證 → 失敗檔還原衝突標記並產結構化建議。
 // task/<id> → testing 與 main → ai-dev 兩條路徑共用。刻意不做任何狀態轉換、不 commit——
 // 由呼叫端決定成功後要 commit 到哪、失敗後要把任務停在哪個狀態。
+// opts.oursLabel／theirsLabel＝兩側的人話標籤（預設為併 testing 的語意；sync 呼叫端須傳 SYNC_LABELS，
+// 否則 merge-explain 會用相反的語意描述兩側，見 DEFAULT_LABELS 註解）。
 // 回傳 { failed, details }；手動暫停回 { aborted: true }，呼叫端必須原地不動。
 async function resolveConflicts(repoPath, conflictFiles, opts, signal) {
-  const { taskId, userId, label } = opts;
+  const { taskId, userId, label, oursLabel, theirsLabel } = opts;
   const failed = [];
   for (const file of conflictFiles) {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${label} 處理: ${file}\n` });
@@ -301,7 +318,7 @@ async function resolveConflicts(repoPath, conflictFiles, opts, signal) {
   const details = {};
   for (const f of failed) {
     try {
-      const d = await explainConflict(repoPath, f, signal, { taskId, userId, notify });
+      const d = await explainConflict(repoPath, f, signal, { taskId, userId, notify, oursLabel, theirsLabel });
       if (d) details[f] = d;
     } catch (err) {
       if (err && err.aborted) return { aborted: true, failed: [], details: {} };
@@ -409,4 +426,4 @@ async function doMerge(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'deploy_testing' });
 }
 
-module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict, clarifyConflict, resolveConflicts };
+module.exports = { runMergeAgent, resolveConflict, verifyResolvedSyntax, explainConflict, clarifyConflict, resolveConflicts, DEFAULT_LABELS, SYNC_LABELS };
