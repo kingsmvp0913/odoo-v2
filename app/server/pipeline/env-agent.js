@@ -535,7 +535,8 @@ async function _runEnvSetupDocker(projectId) {
 
   // VPN 共管：測試區進入 running 後背景暖機該專案所有 vpn 連線（fire-and-forget，不 await；
   // 撥號慢[≤25s/條]不該延後測試區可用時間，查詢時的 lazy ensureGatewayRunning 會冪等補等）。
-  startProjectVpns(projectId).catch(() => {});
+  // 回傳的彙整 log（OK/FAIL/SKIP）是新架構下唯一一次撥號成敗的訊號，不能像舊架構一樣丟掉。
+  startProjectVpns(projectId).then(l => l && console.log(l)).catch(() => {});
 }
 
 // 產每環境的 SSO 簽章 secret 與 E2E 密碼並存 odoo_envs（單一真相來源，供 mintSsoToken／
