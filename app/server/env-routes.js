@@ -7,7 +7,8 @@ function registerRoutes(app) {
   app.get('/api/projects/:id/env', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, status, pid, port, url, error_msg, setup_log, updated_at FROM odoo_envs WHERE project_id = $1',
+        // external_slot：前端據此才知道「現在有沒有借著對外名額」，決定要不要給歸還按鈕
+        'SELECT id, status, pid, port, url, external_slot, error_msg, setup_log, updated_at FROM odoo_envs WHERE project_id = $1',
         [req.params.id]
       );
       const env = rows.length ? rows[0] : { status: 'idle' };

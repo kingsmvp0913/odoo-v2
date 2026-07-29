@@ -164,6 +164,17 @@ describe('/env/sso 借對外名額', () => {
 
   // 意圖：真人關掉分頁偵測不到，所以「還名額」只有明確按鈕與閒置逾時兩條路。
   // 少了明確這條，名額只能等 20 分鐘自然到期，10 個名額的池子體感會非常小。
+  // 意圖：前端要能在「已借到名額」時才顯示歸還按鈕，就得從 GET /env 看得到名額。
+  // 沒帶這欄的話按鈕只能無條件顯示，按下去對沒借名額的環境是個空操作。
+  test('GET /env 帶出 external_slot（前端據此決定歸還按鈕顯不顯示）', async () => {
+    process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
+    const pid = await mkEnv('h', { status: 'running', port: 21003, sso_secret: 'sec' });
+    await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
+    const res = await request(app).get(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(typeof res.body.external_slot).toBe('number');
+  });
+
   test('關閉對外端點歸還名額', async () => {
     process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
     const pid = await mkEnv('d', { status: 'running', port: 21002, sso_secret: 'sec' });

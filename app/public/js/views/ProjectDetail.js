@@ -155,6 +155,17 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
     },
+    // 對外檢視名額只有 10 個、且真人「關掉分頁」偵測不到，沒有這顆按鈕就只剩「閒置 20 分」
+    // 一條歸還路徑——別人得乾等前一個人逾時才借得到。只收名額、不停環境（pipeline 可能還在用）。
+    async releaseExternal() {
+      this.envWorking = true;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/env/external/release`, {});
+        showToast('已歸還對外名額，環境仍在運行', 'success');
+        await this.loadEnv();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.envWorking = false; }
+    },
     async openEnv() {
       // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
       // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
@@ -381,6 +392,8 @@ window.ProjectDetailView = Vue.defineComponent({
             </button>
             <template v-if="env.status === 'running'">
               <button v-if="env.status === 'running'" class="btn btn-primary btn-sm" @click="openEnv">開啟測試區</button>
+              <button v-if="env.external_slot != null" class="btn btn-outline btn-sm" @click="releaseExternal" :disabled="envWorking"
+                title="把對外檢視名額還回池子讓別人能用。環境本身不停，pipeline 不受影響">關閉對外</button>
               <button class="btn btn-outline btn-sm" @click="stopEnv" :disabled="envWorking">停止</button>
             </template>
             <button v-if="env.built || env.status !== 'idle'" class="btn btn-outline btn-sm" @click="viewLog" :disabled="logLoading">
