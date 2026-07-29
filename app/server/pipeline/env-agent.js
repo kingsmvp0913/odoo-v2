@@ -317,7 +317,6 @@ async function stopEnv(projectId) {
   );
   // 停機後 conf 內那段仍指著已被移除的容器（舊分頁重整會拿到 502）。走防抖版：
   // 夜間關機／批次回收會連續呼叫，逐一 reload 等於連續打擾共用 nginx 上的正式站。
-  const { syncNginxMapDebounced } = require('../lib/nginx-map');
   syncNginxMapDebounced().catch(() => {});
 }
 
@@ -342,7 +341,6 @@ async function nightlyShutdown() {
   }
   // 停機後 conf 內那段仍指著已被移除的容器（舊分頁重整會拿到 502）。走防抖版：
   // 夜間關機／批次回收會連續呼叫，逐一 reload 等於連續打擾共用 nginx 上的正式站。
-  const { syncNginxMapDebounced } = require('../lib/nginx-map');
   syncNginxMapDebounced().catch(() => {});
 }
 
@@ -418,10 +416,7 @@ async function sweepIdleEnvs(deps = {}) {
     slotsReleased++;
     console.log(`[env-sweep] 專案 ${pid} 對外閒置逾 ${externalIdleMin} 分，歸還檢視名額（環境不停）`);
   }
-  if (slotsReleased) {
-    const { syncNginxMapDebounced } = require('../lib/nginx-map');
-    syncNginxMapDebounced().catch(() => {});
-  }
+  if (slotsReleased) syncNginxMapDebounced().catch(() => {});
 
   return { updated, stopped, slotsReleased };
 }

@@ -5,6 +5,13 @@ const { newDb } = require('pg-mem');
 
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn() }));
 jest.mock('../lib/project-vpn', () => ({ startProjectVpns: jest.fn().mockResolvedValue(), stopProjectVpns: jest.fn().mockResolvedValue() }));
+// nginx 同步在單元測試不該真的跑（會排一個防抖 timer 再去讀 env gate）；改 mock 以便斷言
+// 「停機／歸還名額後有沒有去同步 conf」——漏了的話 conf 會留著指向已消失容器的那一段。
+jest.mock('../lib/nginx-map', () => ({
+  syncNginxMap: jest.fn().mockResolvedValue({ ok: true }),
+  syncNginxMapDebounced: jest.fn().mockResolvedValue({ ok: true }),
+}));
+
 jest.mock('../lib/docker-env', () => {
   const actual = jest.requireActual('../lib/docker-env');
   return {
@@ -15,7 +22,7 @@ jest.mock('../lib/docker-env', () => {
   };
 });
 
-let dbModule, sweepIdleEnvs, stopEnv, dockerEnv, userId;
+let dbModule, sweepIdleEnvs, stopEnv, dockerEnv, nginxMap, userId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -28,6 +35,7 @@ beforeAll(async () => {
   );
   userId = u.id;
   dockerEnv = require('../lib/docker-env');
+  nginxMap = require('../lib/nginx-map');
   ({ sweepIdleEnvs, stopEnv } = require('../pipeline/env-agent'));
 });
 
@@ -38,6 +46,7 @@ beforeEach(async () => {
   await dbModule.query('DELETE FROM odoo_envs');
   await dbModule.query('DELETE FROM projects');
   dockerEnv.containerLogs.mockReset().mockResolvedValue('');
+  nginxMap.syncNginxMapDebounced.mockClear();
 });
 
 // startedMinAgo：環境已啟動多久（updated_at）；lastActiveMinAgo：null 表示 last_active_at 為 NULL
@@ -191,4 +200,28 @@ test('stopEnv 一併歸還對外名額', async () => {
   const { rows: [env] } = await dbModule.query('SELECT external_slot, port FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(env.external_slot).toBeNull();
   expect(env.port).toBeNull();
+});
+
+// 意圖：這份 conf 是共用 nginx 的 include 檔。停機後那一段仍指著已被移除的容器，舊分頁重整會拿到
+// 502；歸還名額後那個子網域也該從 conf 消失，否則下一個借到同號 slot 的人會被導到別人的環境。
+// 兩條路徑都必須走防抖版（批次回收會連續呼叫，逐一 reload 等於連續打擾同一台 nginx 上的正式站）。
+test('停機後會同步 nginx conf（走防抖版）', async () => {
+  const pid = await mkEnv('a', 21000);
+  await stopEnv(pid);
+  expect(nginxMap.syncNginxMapDebounced).toHaveBeenCalled();
+  expect(nginxMap.syncNginxMap).not.toHaveBeenCalled();
+});
+
+test('歸還對外名額後會同步 nginx conf（走防抖版）', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query("UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() - interval '45 minutes' WHERE project_id=$1", [pid]);
+  await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  expect(nginxMap.syncNginxMapDebounced).toHaveBeenCalled();
+});
+
+test('沒有任何名額到期 → 不去打擾共用 nginx', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query('UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() WHERE project_id=$1', [pid]);
+  await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  expect(nginxMap.syncNginxMapDebounced).not.toHaveBeenCalled();
 });
