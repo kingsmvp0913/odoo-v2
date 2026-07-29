@@ -575,7 +575,9 @@ async function migrate() {
   ).catch(() => {});
 
   // VPN 憑證上移專案層（同專案共用一條隧道）。獨立模組，見 lib/vpn-migrate.js 的註解。
-  await require('./lib/vpn-migrate').migrateVpnToProjects(query).catch(() => {});
+  // 這是迴圈跑多筆 UPDATE、沒包交易，中途失敗可能半套（部分連線埠改到 22000 系列、部分留在
+  // 舊值）——不能吞得無聲無息，至少要印出來讓人知道要去查；遷移失敗不該擋住整個 server 起動，故不 throw。
+  await require('./lib/vpn-migrate').migrateVpnToProjects(query).catch(e => console.error('[vpn-migrate]', e.message));
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});

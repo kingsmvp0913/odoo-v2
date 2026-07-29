@@ -172,7 +172,6 @@ describe('專案層 VPN 設定', () => {
 
     const res = await request(app).get(`/api/projects/${projectId}/vpn`).set(auth());
     expect(res.body).toEqual({ has_config: true, vpn_username: 'aicd5' });
-    expect(JSON.stringify(res.body)).not.toMatch(/dev tun|Aicd5/);
   });
 
   // 「留空＝不變」是連線表單既有慣例，VPN 卡片必須一致，否則使用者改帳號就會把 .ovpn 清掉

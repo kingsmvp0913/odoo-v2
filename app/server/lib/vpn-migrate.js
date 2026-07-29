@@ -1,5 +1,6 @@
 // VPN 憑證上移專案層的一次性遷移。獨立成模組而非塞進 db.js，是為了能用 pg-mem 單獨測，
-// 且 db.js 不必 require 到 docker 相關的 vpn-gateway 依賴鏈。
+// 且 db.js 不必在自己的頂層 require 到 docker 相關的 vpn-gateway 依賴鏈——本模組仍會
+// require 到它，但延後到 db.js 的 migrate() 呼叫時才發生（見 db.js 內的 require('./lib/vpn-migrate')）。
 const { allocateForwardPort, targetHostPort } = require('./vpn-gateway');
 
 const PORT_RANGE_START = 22000;
