@@ -1,77 +1,82 @@
-// 意圖：VPN 與測試區生命週期共管的正確性＝「起停時對哪些連線做什麼、失敗怎麼隔離」。
-// 這些純協調邏輯離線可測，把三個真正會出事的情境鎖死：
-//   ①單條 VPN 撥號失敗不能拖垮整批（其餘仍要嘗試、整體不 throw）
-//   ②非 vpn_enabled／未配埠的連線不能被誤起
-//   ③停機收 VPN 若 docker 掛了不能反過來擋住測試區停機流程
-jest.mock('../db', () => ({ query: jest.fn() }));
-jest.mock('../lib/db-connections', () => ({ loadDecryptedConn: jest.fn() }));
-jest.mock('../lib/vpn-gateway', () => ({ ensureGatewayRunning: jest.fn(), stopGateway: jest.fn() }));
+// 意圖：VPN 與測試區生命週期共管的正確性＝「起停時做什麼、失敗怎麼隔離」。
+// 三個真正會出事的情境：
+//   ①撥號失敗不能擋住測試區（Odoo 本身不走 VPN 網路）
+//   ②專案沒設定 VPN／沒有目標時不能白撥號
+//   ③停機收 VPN 若 docker 掛了不能反過來擋住測試區停機
+jest.mock('../lib/db-connections', () => ({ loadProjectVpn: jest.fn() }));
+jest.mock('../lib/vpn-gateway', () => ({
+  ensureGatewayRunning: jest.fn(),
+  stopGateway: jest.fn(),
+  projectContainerName: (id) => `vpn-proj-${id}`,
+}));
 
-const { query } = require('../db');
-const { loadDecryptedConn } = require('../lib/db-connections');
+const { loadProjectVpn } = require('../lib/db-connections');
 const { ensureGatewayRunning, stopGateway } = require('../lib/vpn-gateway');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 
+const gw = (over = {}) => ({
+  containerName: 'vpn-proj-7', config: 'cfg', username: 'u', password: 'p',
+  targets: [
+    { forwardPort: 22000, host: '192.168.1.233', port: 22 },
+    { forwardPort: 22001, host: '192.168.1.240', port: 1433 },
+  ],
+  staleContainers: [], ...over,
+});
+
 beforeEach(() => {
-  query.mockReset(); loadDecryptedConn.mockReset();
-  ensureGatewayRunning.mockReset(); stopGateway.mockReset();
+  loadProjectVpn.mockReset();
+  ensureGatewayRunning.mockReset();
+  stopGateway.mockReset();
 });
 
 describe('startProjectVpns', () => {
-  test('對每條 vpn_enabled 連線都解密並 ensureGatewayRunning', async () => {
-    query.mockResolvedValue({ rows: [{ id: 1 }, { id: 2 }] });
-    loadDecryptedConn.mockImplementation(async (id) => ({ id, name: `c${id}`, vpn_forward_port: 11000 + id }));
-    ensureGatewayRunning.mockResolvedValue({ forwardPort: 11001 });
+  test('整個專案只撥一次號、只起一個容器', async () => {
+    loadProjectVpn.mockResolvedValue(gw());
+    ensureGatewayRunning.mockResolvedValue({ containerName: 'vpn-proj-7', targetsSpec: 'x' });
     const log = await startProjectVpns(7);
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('vpn_enabled=true'), [7]);
-    expect(loadDecryptedConn).toHaveBeenCalledWith(1, 7);
-    expect(loadDecryptedConn).toHaveBeenCalledWith(2, 7);
-    expect(ensureGatewayRunning).toHaveBeenCalledTimes(2);
-    expect(log).toContain('c1 OK');
-    expect(log).toContain('c2 OK');
+    expect(ensureGatewayRunning).toHaveBeenCalledTimes(1);
+    expect(ensureGatewayRunning).toHaveBeenCalledWith(expect.objectContaining({ containerName: 'vpn-proj-7' }), expect.anything());
+    expect(log).toContain('vpn-proj-7 OK');
+    expect(log).toContain('2 個目標');
   });
 
-  test('單條撥號失敗不影響其他條、整體不 throw', async () => {
-    query.mockResolvedValue({ rows: [{ id: 1 }, { id: 2 }] });
-    loadDecryptedConn.mockImplementation(async (id) => ({ id, name: `c${id}`, vpn_forward_port: 11000 + id }));
-    ensureGatewayRunning
-      .mockRejectedValueOnce(new Error('撥號逾時'))
-      .mockResolvedValueOnce({ forwardPort: 11002 });
+  test('撥號失敗只記 log、不 throw（不擋測試區起動）', async () => {
+    loadProjectVpn.mockResolvedValue(gw());
+    ensureGatewayRunning.mockRejectedValue(new Error('撥號逾時'));
     const log = await startProjectVpns(7);
-    expect(ensureGatewayRunning).toHaveBeenCalledTimes(2);   // 第一條失敗仍嘗試第二條
-    expect(log).toContain('c1 FAIL 撥號逾時');
-    expect(log).toContain('c2 OK');
+    expect(log).toContain('FAIL 撥號逾時');
   });
 
-  test('未配轉發埠的連線跳過、不呼叫 ensureGatewayRunning', async () => {
-    query.mockResolvedValue({ rows: [{ id: 1 }] });
-    loadDecryptedConn.mockResolvedValue({ id: 1, name: 'legacy', vpn_forward_port: null });
-    const log = await startProjectVpns(7);
-    expect(ensureGatewayRunning).not.toHaveBeenCalled();
-    expect(log).toContain('legacy SKIP');
-  });
-
-  test('無 vpn_enabled 連線時不碰 gateway、回空字串', async () => {
-    query.mockResolvedValue({ rows: [] });
+  test('專案沒設定 VPN 時不碰 gateway', async () => {
+    loadProjectVpn.mockResolvedValue(null);
     const log = await startProjectVpns(7);
     expect(ensureGatewayRunning).not.toHaveBeenCalled();
     expect(log).toBe('');
   });
+
+  test('有設定但沒有任何已配埠的目標時不撥號', async () => {
+    loadProjectVpn.mockResolvedValue(gw({ targets: [] }));
+    const log = await startProjectVpns(7);
+    expect(ensureGatewayRunning).not.toHaveBeenCalled();
+    expect(log).toContain('SKIP');
+  });
+
+  test('讀取設定本身丟錯（如 APP_SECRET 換過導致解密失敗）也不 throw', async () => {
+    loadProjectVpn.mockRejectedValue(new Error('Unsupported state or unable to authenticate data'));
+    const log = await startProjectVpns(7);
+    expect(log).toContain('FAIL');
+    expect(ensureGatewayRunning).not.toHaveBeenCalled();
+  });
 });
 
 describe('stopProjectVpns', () => {
-  test('對每條 vpn_enabled 連線都 stopGateway', async () => {
-    query.mockResolvedValue({ rows: [
-      { id: 1, vpn_container_name: 'vpn-conn-1' },
-      { id: 2, vpn_container_name: 'vpn-conn-2' },
-    ] });
+  test('停該專案的單一容器（免查 DB、免解密）', async () => {
     await stopProjectVpns(7);
-    expect(stopGateway).toHaveBeenCalledTimes(2);
-    expect(stopGateway).toHaveBeenCalledWith(expect.objectContaining({ vpn_container_name: 'vpn-conn-1' }), expect.anything());
+    expect(stopGateway).toHaveBeenCalledTimes(1);
+    expect(stopGateway).toHaveBeenCalledWith({ containerName: 'vpn-proj-7' }, expect.anything());
   });
 
   test('stopGateway 丟錯不會讓 stopProjectVpns throw（不擋停機）', async () => {
-    query.mockResolvedValue({ rows: [{ id: 1, vpn_container_name: 'vpn-conn-1' }] });
     stopGateway.mockImplementation(() => { throw new Error('docker 掛了'); });
     await expect(stopProjectVpns(7)).resolves.toBeUndefined();
   });

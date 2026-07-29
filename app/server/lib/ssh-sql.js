@@ -230,13 +230,15 @@ async function runSelect(conn, sql) {
 
   let effectiveConn = conn;
   if (conn.vpn_enabled) {
-    let forwardPort;
+    // 憑證在專案層（conn.vpn 由 db-connections 組出）。缺什麼就講什麼，別讓使用者對著逾時訊息猜。
+    if (!conn.vpn) return { ok: false, error: '[VPN] 專案尚未設定 VPN，請先到專案 VPN 設定上傳 .ovpn' };
+    if (!conn.vpn_forward_port) return { ok: false, error: '[VPN] 此連線尚未配置轉發埠，請重新儲存一次連線設定' };
     try {
-      ({ forwardPort } = await ensureGatewayRunning(conn));
+      await ensureGatewayRunning(conn.vpn);
     } catch (e) {
       return { ok: false, error: `[VPN] ${e.message}` };
     }
-    effectiveConn = applyVpnForward(conn, forwardPort);
+    effectiveConn = applyVpnForward(conn, conn.vpn_forward_port);
   }
 
   if ((effectiveConn.connect_mode || 'docker') === 'direct') return runDirect(effectiveConn, sql);

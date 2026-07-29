@@ -36,4 +36,41 @@ if [ "$tun_ready" != "true" ]; then
   exit 1
 fi
 
-exec socat TCP-LISTEN:9999,fork,reuseaddr TCP:"${TARGET_HOST}":"${TARGET_PORT}"
+# TARGETS 格式：listenPort:host:port[,listenPort:host:port...]（由 vpn-gateway.js 組出，依 listenPort 排序）。
+# 每個目標各起一個 socat 背景行程，容器內 listen 埠與主機 publish 的埠同號。
+if [ -z "$TARGETS" ]; then
+  echo "TARGETS 未設定，無可轉發的目標" >&2
+  exit 1
+fi
+
+pids=""
+IFS=','
+for spec in $TARGETS; do
+  # 驗證至少有兩個冒號（listenPort:host:port）
+  case "$spec" in
+    *:*:*) ;;
+    *) echo "TARGETS 格式錯誤：$spec" >&2; exit 1 ;;
+  esac
+
+  listen_port="${spec%%:*}"
+  rest="${spec#*:}"
+  target_host="${rest%%:*}"
+  target_port="${rest##*:}"
+  if [ -z "$listen_port" ] || [ -z "$target_host" ] || [ -z "$target_port" ]; then
+    echo "TARGETS 格式錯誤：$spec" >&2
+    exit 1
+  fi
+  echo "轉發 ${listen_port} -> ${target_host}:${target_port}"
+  socat TCP-LISTEN:"${listen_port}",fork,reuseaddr TCP:"${target_host}":"${target_port}" &
+  pids="$pids $!"
+done
+unset IFS
+
+# 任一 socat 結束就讓整個容器退出：留著半殘的容器會讓「容器在跑」被誤判成「隧道可用」。
+# `wait -n` 需要 bash（image 已裝，且 shebang 就是 bash）。
+set +e
+wait -n $pids
+status=$?
+set -e
+echo "有轉發行程結束（exit ${status}），關閉容器" >&2
+exit "${status:-1}"

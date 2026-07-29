@@ -11,19 +11,28 @@ const IMAGE_NAME = 'odoo-v2-vpn-gateway:latest';
 const GATEWAY_TIMEOUT_MS = 40000;
 const POLL_INTERVAL_MS = 1000;
 
-const PORT_RANGE_START = 11000;
-const PORT_RANGE_END = 11999;
+// 22000-22999：使用者要求便於在機器上控管，且避開測試區的 21000-21012。
+const PORT_RANGE_START = 22000;
+const PORT_RANGE_END = 22999;
 
-function allocateForwardPort(usedPorts = []) {
+// 轉發埠以「專案 × 目標(host:port)」為單位：同專案已有連線指向同一台機器就沿用它的埠。
+// 這樣新增「指向既有目標」的連線不必重建容器（docker 的 -p 在建立時就固定，重建＝斷線重撥）。
+function allocateForwardPort(usedPorts = [], projectTargets = [], target = null) {
+  if (target) {
+    const hit = projectTargets.find(
+      t => t.host === target.host && Number(t.port) === Number(target.port)
+    );
+    if (hit) return hit.forwardPort;
+  }
   const used = new Set(usedPorts);
   for (let p = PORT_RANGE_START; p <= PORT_RANGE_END; p++) {
     if (!used.has(p)) return p;
   }
-  throw new Error('沒有可用的 VPN 轉發 port（11000-11999 已滿）');
+  throw new Error('沒有可用的 VPN 轉發 port（22000-22999 已滿）');
 }
 
-function containerName(connId) {
-  return `vpn-conn-${connId}`;
+function projectContainerName(projectId) {
+  return `vpn-proj-${projectId}`;
 }
 
 function targetHostPort(conn) {
@@ -52,12 +61,30 @@ function probeReachable(name, host, port, execFile) {
   });
 }
 
+// 目標指紋：依 forwardPort 排序後 join，同時當 TARGETS 環境變數與容器 label。
+// 拿它比對「跑著的容器是否涵蓋現在需要的目標」，不符才重建（重建＝斷線重撥，要盡量避免）。
+function targetsSpec(targets) {
+  return [...targets]
+    .sort((a, b) => a.forwardPort - b.forwardPort)
+    .map(t => `${t.forwardPort}:${t.host}:${t.port}`)
+    .join(',');
+}
+
+function runningTargetsSpec(name, execFileSync) {
+  try {
+    return execFileSync('docker', ['inspect', '-f', '{{index .Config.Labels "targets"}}', name], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
 // 為何不沿用「轉發 port 可連上」當就緒訊號：docker 的 -p userland proxy 在容器一啟動（毫秒級）
 // 就接受該 port 的 TCP 連線，即使容器內 socat 還沒 listen、tun0 還沒撥通。只看轉發 port 會誤判
 // 「已就緒」→ 呼叫端過早清掉掛載進去的 .ovpn，openvpn 可能還沒開檔就撲空（"Error opening
 // configuration file" → 容器立即退出）；就算僥倖沒撲空，第一個查詢也會在路由還沒建立時發出而逾時。
 // 改成輪詢容器內「真的連得到目標」才算就緒，並在容器中途退出時撈 log 給出可診斷的錯誤。
-async function defaultWaitReachable(name, host, port, timeoutMs, deps) {
+// 就緒＝隧道真的連得到「任一」目標。全部都要通的話，某台目標機器關機就會擋住整個 gateway。
+async function defaultWaitReachable(name, targets, timeoutMs, deps) {
   const execFileSync = deps.execFileSync || realExecFileSync;
   const execFile = deps.execFile || realExecFile;
   const deadline = Date.now() + timeoutMs;
@@ -67,9 +94,12 @@ async function defaultWaitReachable(name, host, port, timeoutMs, deps) {
       try { log = execFileSync('docker', ['logs', '--tail', '20', name], { encoding: 'utf8' }); } catch { /* 容器可能已被移除 */ }
       throw new Error(`VPN 撥號失敗，容器已結束（多為帳號密碼或設定檔錯誤）：\n${log}`.trim());
     }
-    if (await probeReachable(name, host, port, execFile)) return;
+    for (const t of targets) {
+      if (await probeReachable(name, t.host, t.port, execFile)) return;
+    }
     if (Date.now() >= deadline) {
-      throw new Error(`VPN 連線逾時（${Math.round(timeoutMs / 1000)} 秒內未能透過隧道連到 ${host}:${port}），請確認 VPN 帳號密碼與設定檔是否正確`);
+      const list = targets.map(t => `${t.host}:${t.port}`).join('、');
+      throw new Error(`VPN 連線逾時（${Math.round(timeoutMs / 1000)} 秒內未能透過隧道連到 ${list}），請確認 VPN 帳號密碼與設定檔是否正確`);
     }
     await sleep(POLL_INTERVAL_MS);
   }
@@ -98,69 +128,76 @@ function removeStaleContainer(name, execFileSync) {
 // 回傳寫好的暫存 .ovpn 路徑，故意不在這裡刪除：`docker run -d` 幾乎立刻回傳，
 // 但容器內的 openvpn 需要一點時間才會真正打開這個掛載進去的檔案；太早刪會讓
 // 容器讀到「檔案消失」。清理時機交給呼叫端在確認容器真的起來之後才做。
-function startGateway(conn, deps) {
+function startGateway(gw, deps) {
   const { execFileSync, writeFileSync, rmSync, tmpFilePath } = deps;
   ensureImageBuilt(execFileSync);
-  removeStaleContainer(conn.vpn_container_name, execFileSync);
-  const { host: targetHost, port: targetPort } = targetHostPort(conn);
-  const tmpFile = tmpFilePath(conn.id);
+  // 先清遷移前留下的舊容器（vpn-conn-*）：它們會用同一組帳號掛著另一個 openvpn session
+  for (const stale of gw.staleContainers || []) removeStaleContainer(stale, execFileSync);
+  removeStaleContainer(gw.containerName, execFileSync);
+
+  const spec = targetsSpec(gw.targets);
+  const tmpFile = tmpFilePath(gw.containerName);
   // 前一次若因故（如舊版本的清檔案時機問題）留下同路徑的殘留物，Docker 在掛載
   // 一個「主機端不存在」的來源路徑時可能自動建成空目錄；不管殘留的是檔案還是
   // 目錄，寫入前一律先強制清掉，確保這裡一定是全新的一般檔案。
   rmSync(tmpFile, { recursive: true, force: true });
-  writeFileSync(tmpFile, conn.vpn_config, { mode: 0o600 });
-  execFileSync('docker', [
-    'run', '-d', '--name', conn.vpn_container_name, '--cap-add=NET_ADMIN',
+  writeFileSync(tmpFile, gw.config, { mode: 0o600 });
+
+  const args = ['run', '-d', '--name', gw.containerName, '--cap-add=NET_ADMIN',
     // NET_ADMIN 只給「設定網路」的權限，還要把 /dev/net/tun 裝置節點掛進容器，
     // openvpn 才能開 tun0；缺這行會在撥通後倒在 "Cannot open TUN/TAP dev"，tun0 永不出現。
-    '--device', '/dev/net/tun',
-    '-p', `127.0.0.1:${conn.vpn_forward_port}:9999`,
+    '--device', '/dev/net/tun'];
+  for (const t of [...gw.targets].sort((a, b) => a.forwardPort - b.forwardPort)) {
+    args.push('-p', `127.0.0.1:${t.forwardPort}:${t.forwardPort}`);
+  }
+  args.push(
     '-v', `${tmpFile}:/config/client.ovpn:ro`,
-    '-e', `VPN_USER=${conn.vpn_username || ''}`,
-    '-e', `VPN_PASS=${conn.vpn_password || ''}`,
-    '-e', `TARGET_HOST=${targetHost}`,
-    '-e', `TARGET_PORT=${targetPort}`,
+    '-e', `VPN_USER=${gw.username || ''}`,
+    '-e', `VPN_PASS=${gw.password || ''}`,
+    '-e', `TARGETS=${spec}`,
+    '--label', `targets=${spec}`,
     IMAGE_NAME,
-  ], { stdio: 'pipe' });
+  );
+  execFileSync('docker', args, { stdio: 'pipe' });
   return tmpFile;
 }
 
-async function ensureGatewayRunning(conn, deps = {}) {
+async function ensureGatewayRunning(gw, deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
   const writeFileSync = deps.writeFileSync || realFs.writeFileSync;
   const rmSync = deps.rmSync || realFs.rmSync;
-  const tmpFilePath = deps.tmpFilePath || ((id) => path.join(os.tmpdir(), `vpn-${id}.ovpn`));
+  const tmpFilePath = deps.tmpFilePath || ((name) => path.join(os.tmpdir(), `${name}.ovpn`));
   const waitReachable = deps.waitReachable || defaultWaitReachable;
 
   await ensureDockerRunning(deps);
 
-  const name = conn.vpn_container_name || containerName(conn.id);
-  if (isContainerRunning(name, execFileSync)) return { forwardPort: conn.vpn_forward_port };
+  const name = gw.containerName;
+  const spec = targetsSpec(gw.targets);
+  if (isContainerRunning(name, execFileSync) && runningTargetsSpec(name, execFileSync) === spec) {
+    return { containerName: name, targetsSpec: spec };
+  }
 
   // tmpFile 路徑先算好（跟 startGateway 內部算法一致），這樣就算 startGateway
   // 半路丟出例外（如 docker run 失敗），外層 finally 仍知道要清哪個檔案。
-  const tmpFile = tmpFilePath(conn.id);
-  const { host: targetHost, port: targetPort } = targetHostPort(conn);
+  const tmpFile = tmpFilePath(name);
   try {
-    startGateway({ ...conn, vpn_container_name: name }, { execFileSync, writeFileSync, rmSync, tmpFilePath });
+    startGateway(gw, { execFileSync, writeFileSync, rmSync, tmpFilePath });
     // 等「隧道真的連得到目標」才算就緒——這也保證 .ovpn 撐到 openvpn 開檔之後才被清掉。
-    await waitReachable(name, targetHost, targetPort, GATEWAY_TIMEOUT_MS, { execFileSync, execFile: deps.execFile });
+    await waitReachable(name, gw.targets, GATEWAY_TIMEOUT_MS, { execFileSync, execFile: deps.execFile });
   } finally {
     rmSync(tmpFile, { recursive: true, force: true });
   }
-  return { forwardPort: conn.vpn_forward_port };
+  return { containerName: name, targetsSpec: spec };
 }
 
-function stopGateway(conn, deps = {}) {
+function stopGateway(gw, deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
-  const name = conn.vpn_container_name || containerName(conn.id);
-  try { execFileSync('docker', ['stop', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
+  try { execFileSync('docker', ['stop', gw.containerName], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
 }
 
-function removeGateway(conn, deps = {}) {
+function removeGateway(gw, deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
-  const name = conn.vpn_container_name || containerName(conn.id);
-  try { execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
+  try { execFileSync('docker', ['rm', '-f', gw.containerName], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
 }
 
-module.exports = { allocateForwardPort, containerName, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
+module.exports = { allocateForwardPort, projectContainerName, targetHostPort, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
