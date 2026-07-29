@@ -28,26 +28,40 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn().mockResolvedValue(undefined) }));
 // env-agent.js:8 以解構匯入 leasePort，故 mock 工廠回傳的函式會被它取用；只 mock 借埠，
 // 其餘（envBindHost／envPublicUrl）保留真實行為。
+// 回傳值刻意選池外埠（29999，實機埠池只到 21000-21012）：waitForPort 是真函式、會做真 TCP
+// 連線，選池內埠（如 21000）在開發機上若剛好有真測試區在跑會連得上，走到不同分支。
 jest.mock('../port-alloc', () => {
   const actual = jest.requireActual('../port-alloc');
-  return { ...actual, leasePort: jest.fn().mockResolvedValue(21000) };
+  return { ...actual, leasePort: jest.fn().mockResolvedValue(29999) };
 });
 
-let dbModule, envAgent, dockerEnv, gitMod, portAlloc, tmpBase, entDir;
+let dbModule, envAgent, dockerEnv, gitMod, portAlloc, tmpBase, entBase, entDir, repoDir, prevEnv;
 const PID = 2001; // 單一共用 fixture 專案（pg-mem 多次 INSERT projects 會踩 SERIAL quirk）
 
 beforeAll(async () => {
-  tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-mount-'));
-  process.env.ENTERPRISE_BASE_DIR = tmpBase;
-  // 偏離 brief 逐字稿之處（測試環境限制，非production邏輯調整，詳見 task-5-report.md）：
-  // ①ODOO_ENV_BASE 改指向 tmp 目錄——否則最後一個測試會在真實 repo 樹下寫入 odoo-envs/entx。
-  // ②ENV_HEALTH_TIMEOUT_MS 調小——env-agent.js 對「首次建置」的健康檢查有 Math.max(...,300000)
-  //   的硬下限，這是既有健康檢查設計（不是本 task 引入的行為）；最後一個測試首次真的走到
-  //   runEnvSetup 全流程（此前全庫沒有測試走到這麼遠），不處理會讓該測試真等 300 秒。
+  // ENTERPRISE_BASE_DIR（enterprise 共用來源根）與 ODOO_ENV_BASE（測試區 env 目錄根）語意無關，
+  // 各用各的 tmp 根，避免只靠 folder_name='entx' vs 版本目錄名 '17' 僥倖不撞。
+  tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-envbase-'));
+  entBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-srcbase-'));
+  // 保存呼叫本檔前 process.env 可能已有的原始值，afterAll 照原樣還原（而非直接 delete）——
+  // 同一 jest worker 若接著跑其他測試檔，不該被本檔留下的空值／殘值污染。
+  prevEnv = {
+    ENTERPRISE_BASE_DIR: process.env.ENTERPRISE_BASE_DIR,
+    ODOO_ENV_BASE: process.env.ODOO_ENV_BASE,
+    ENV_HEALTH_TIMEOUT_MS: process.env.ENV_HEALTH_TIMEOUT_MS,
+  };
+  process.env.ENTERPRISE_BASE_DIR = entBase;
+  // ODOO_ENV_BASE 改指向 tmp 目錄——否則最後一個測試會在真實 repo 樹下寫入 odoo-envs/entx。
   process.env.ODOO_ENV_BASE = tmpBase;
+  // env-agent.js 對「首次建置」的健康檢查有 Math.max(...,300000) 的硬下限（既有健康檢查設計，
+  // 非本功能引入）；最後一個測試會走完整 runEnvSetup，調小逾時＋下面預放 .docker-ready 才不用真等 300 秒。
   process.env.ENV_HEALTH_TIMEOUT_MS = '300';
-  entDir = path.join(tmpBase, '17');
+  entDir = path.join(entBase, '17');
   fs.mkdirSync(entDir, { recursive: true });
+  // 專案自己的 repo（非 enterprise）：唯有 mounts 裡真的有「專案 repo + enterprise」兩筆，
+  // 「順序即覆蓋權」的斷言才有意義（否則 mounts 永遠只有 enterprise 一筆，push/unshift 測不出差異）。
+  repoDir = path.join(tmpBase, 'repo-main');
+  fs.mkdirSync(repoDir, { recursive: true });
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule = require('../db');
@@ -55,6 +69,10 @@ beforeAll(async () => {
   await dbModule.migrate();
   await dbModule.query(
     `INSERT INTO projects (id, name, odoo_version, folder_name, edition) VALUES (${PID}, 'P-ent', '17.0', 'entx', 'community')`
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','https://x/main.git',$2,true,'done')",
+    [PID, repoDir]
   );
   envAgent = require('../pipeline/env-agent');
   dockerEnv = require('../lib/docker-env');
@@ -64,16 +82,17 @@ beforeAll(async () => {
 
 afterAll(() => {
   dbModule._setPoolForTesting(null);
-  delete process.env.ENTERPRISE_BASE_DIR;
-  delete process.env.ODOO_ENV_BASE;
-  delete process.env.ENV_HEALTH_TIMEOUT_MS;
+  for (const [k, v] of Object.entries(prevEnv)) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
   try { fs.rmSync(tmpBase, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(entBase, { recursive: true, force: true }); } catch {}
 });
 
 beforeEach(async () => {
   for (const f of Object.values(dockerEnv)) if (jest.isMockFunction(f)) f.mockClear();
   gitMod.ensureTestingBranch.mockClear();
-  portAlloc.leasePort.mockClear().mockResolvedValue(21000);
+  portAlloc.leasePort.mockClear().mockResolvedValue(29999);
   await dbModule.query('DELETE FROM enterprise_sources');
   await dbModule.query('DELETE FROM odoo_envs');
   await dbModule.query("UPDATE projects SET edition='community' WHERE id=$1", [PID]);
@@ -101,6 +120,8 @@ test('企業版專案：mounts 末端加入 enterprise，容器路徑固定 /mnt
 });
 
 // 意圖：順序就是覆蓋權。專案自訂模組要能覆蓋 enterprise，enterprise 要能覆蓋核心（web_enterprise 蓋 web）。
+// fixture 已有一筆真正的 project_repos，故 mounts 此時是 [專案 repo, enterprise] 兩筆——
+// 若 dockerCtxFor 把 push 誤植成 unshift（enterprise 排到專案 repo 前面），此斷言會抓到。
 test('addons-path 順序：專案 repos 在前、/mnt/enterprise 居中、核心在最後', async () => {
   await registerSource();
   await dbModule.query("UPDATE projects SET edition='enterprise' WHERE id=$1", [PID]);
@@ -133,8 +154,9 @@ test('企業版但來源未登記 → setup 直接失敗、訊息指名版本，
   expect(dockerEnv.runContainer).not.toHaveBeenCalled();
 });
 
-// 意圖：enterprise 是唯讀共用來源，絕不能被當成專案 repo 去開／切 testing 分支。
-test('啟動時不對 enterprise 目錄呼叫 ensureTestingBranch', async () => {
+// 意圖：enterprise 是唯讀共用來源，絕不能被當成專案 repo 去開／切 testing 分支——但排除邏輯要跟
+// 「迴圈根本沒跑」區分開，故同時正面驗證一般專案 repo（repoDir）仍會被呼叫 ensureTestingBranch。
+test('啟動時不對 enterprise 目錄呼叫 ensureTestingBranch，但一般專案 repo 仍會', async () => {
   await registerSource();
   await dbModule.query("UPDATE projects SET edition='enterprise' WHERE id=$1", [PID]);
   // 預先放 .docker-ready，讓本次視為非首次建置（firstBuild=false）：健康檢查改用上面調小的
@@ -145,4 +167,5 @@ test('啟動時不對 enterprise 目錄呼叫 ensureTestingBranch', async () => 
   await envAgent.runEnvSetup(PID);
   const touched = gitMod.ensureTestingBranch.mock.calls.map(c => c[0]);
   expect(touched).not.toContain(entDir);
+  expect(touched).toContain(repoDir);
 });
