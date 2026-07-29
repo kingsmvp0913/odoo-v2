@@ -1006,6 +1006,9 @@ window.TaskDetailView = Vue.defineComponent({
 
             <!-- message：無主動作的狀態，通用留言（回寫預設不勾） -->
             <template v-else>
+              <!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因要看得見，否則會靜默卡好幾天。
+                   只認 sync_wait，避免把「分診中」等狀態殘留的上次停下原因也當成當前錯誤秀出來 -->
+              <div v-if="task.blocker_type === 'sync_wait' && task.blocker_content" class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content }}</div>
               <textarea v-model="newMessageText" class="form-control" placeholder="新增留言...（Enter 送出，Shift+Enter 換行）" rows="4"
                 @keydown.enter.exact.prevent="sendTaskMessage"></textarea>
               <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected" style="display:block;margin-top:6px;font-size:var(--fs-xs)" />

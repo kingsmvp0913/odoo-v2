@@ -5,8 +5,8 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge } = require('./git');
-const { resolveConflicts } = require('./merge-agent');
-const { withProjectLock } = require('./project-lock');
+const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
+const { tryProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
@@ -63,7 +63,7 @@ function buildRepoPaths(info, taskId) {
   return (info.repos || []).map(r => `- ${path.join(wt, r.subdir)}`).join('\n') || '（無 repo）';
 }
 
-function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch, projectNotes) {
+function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, projectNotes) {
   const agent = loadAgent('analysis-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -73,7 +73,7 @@ function buildAnalysisPrompt(task, info, clarification, workDir, mainBranch, pro
       work_dir: workDir || info.root,
       repo_list: repoList,
       repo_paths: buildRepoPaths(info, task.task_id),
-      main_branch: mainBranch || 'main',
+      main_branch: baseBranch || 'main',
       git_branch: task.git_branch || `task/${task.task_id}`,
       original_text: task.original_text || '（無內容）',
       task_id: task.task_id,
@@ -95,7 +95,7 @@ async function latestResolution(taskId) {
   return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
 }
 
-function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch, projectNotes) {
+function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, projectNotes) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -104,7 +104,7 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, mainBranch, pr
       odoo_version: info.odoo_version,
       work_dir: worktreeParent(info.root, task.task_id),
       git_branch: task.git_branch || '（未設定）',
-      main_branch: mainBranch || 'main',
+      main_branch: baseBranch || 'main',
       repo_paths: buildRepoPaths(info, task.task_id),
       analysis_yaml: task.analysis_yaml || '（無規格）',
       commit_message: buildCommitMessage(task),
@@ -160,8 +160,10 @@ async function runTaskAnalysis(taskId, userId, signal) {
   let setupErr = null;
   let syncConflict = null;
   let syncAborted = false;
-  let syncBlocked = false;
-  await withProjectLock(task.project_id, async () => {
+  let syncBlockedBy = null;
+  // 取不到鎖就早退（不排隊）：本段的 resolveConflicts 每個 hunk 一次 runClaude，可持鎖數分鐘，
+  // 排隊者會白佔一個派工槽。sync 本身冪等，下一 tick 再試零成本。
+  const { locked } = await tryProjectLock(task.project_id, async () => {
     // 主 clone 殘留 in-progress merge（MERGE_HEAD）防護（比照 merge-agent.js doMerge 同名守衛）：
     // - 同專案另有任務停在 merge_conflict＝人工正在該 clone 上解衝突（裁決端點的 concludeMerge 才會了結），
     //   此時進場同步必撞牆被誤標 stopped → 本輪不動作，留在 analysis_running 等下一 tick 再試。
@@ -169,12 +171,12 @@ async function runTaskAnalysis(taskId, userId, signal) {
     for (const repo of info.repos) {
       if (!fs.existsSync(path.join(repo.local_path, '.git', 'MERGE_HEAD'))) continue;
       const { rows: [pending] } = await query(
-        "SELECT 1 FROM tasks WHERE project_id=$1 AND status='merge_conflict' AND id<>$2 LIMIT 1",
+        "SELECT id FROM tasks WHERE project_id=$1 AND status='merge_conflict' AND id<>$2 LIMIT 1",
         [task.project_id, taskId]
       );
       if (pending) {
         notify.emitToUser(userId, 'terminal:output', { taskId, data: `[SYNC] ${repo.label}：另一任務衝突待人工解決中，本輪暫緩同步\n` });
-        syncBlocked = true;
+        syncBlockedBy = pending.id;
         return;
       }
       await abortMerge(repo.local_path).catch(() => {});
@@ -188,7 +190,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
         if (sync.hasConflicts) {
           // 工程師直接改 main 的碼與 AI 改過的地方撞到了。複用 merge 那套三層：
           // 自動解 → 語法驗證 → 解不掉才停下來跳裁決卡片給人。
-          const r = await resolveConflicts(repo.local_path, sync.conflictFiles, { taskId, userId, label: repo.label }, signal);
+          // 兩側標籤要傳 SYNC_LABELS：這裡 ours＝ai-dev（AI 的碼）、theirs＝main（工程師的碼），
+          // 與併 testing 的預設語意相反，不換會讓 merge-explain 的說明與建議整個反過來。
+          const r = await resolveConflicts(repo.local_path, sync.conflictFiles, { taskId, userId, label: repo.label, ...SYNC_LABELS }, signal);
           if (r.aborted) {
             // 手動暫停：resolveConflicts 中斷在半套 merge，主 clone 卡 MERGE_HEAD，先清掉再原地不動，
             // 否則解除暫停後重跑會在 syncMainIntoAi 的 checkout main 撞牆、被誤標 stopped。
@@ -203,11 +207,25 @@ async function runTaskAnalysis(taskId, userId, signal) {
       }
     } catch (e) {
       // 半套 merge（MERGE_HEAD）留在主 clone 會污染同專案後續任務，先清掉再停（比照 merge-agent.js:360-361）
-      await abortMerge(repo.local_path).catch(() => {});
+      // repo 為 undefined（info.repos 為空）時 `repo.local_path` 是同步 TypeError，.catch 攔不到，
+      // 例外會逃出鎖的 callback 繞過下面整套錯誤處理（setupErr → stopped）→ 先判有值才清。
+      if (repo) await abortMerge(repo.local_path).catch(() => {});
       setupErr = e;
     }
   });
-  if (syncBlocked) return true; // 本輪不動作：留在 analysis_running，等下一 tick 再試
+  if (!locked) return true; // 同專案另有工作持鎖：本輪完全不動作，下一 tick 再試（sync 冪等）
+  if (syncBlockedBy) {
+    // 原地不動（狀態不改），但卡住原因要落地：socket 事件是瞬時的，沒開著終端面板就永遠看不到，
+    // 任務在列表上只是「分析中」卻可能掛好幾天。寫進 blocker_content 讓它重整後仍看得見。
+    await query(
+      "UPDATE tasks SET blocker_type='sync_wait', blocker_content=$2 WHERE id=$1",
+      [taskId, `等待任務 #${syncBlockedBy} 的同步衝突處理完成（同一 Repo 一次只能有一組衝突在解）`]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'analysis_running' });
+    return true; // 本輪不動作：留在 analysis_running，等下一 tick 再試
+  }
+  // 擋住的原因已不成立 → 清掉等待訊息（只清自己寫的那種，別動真正的 blocker）
+  await query("UPDATE tasks SET blocker_type=NULL, blocker_content=NULL WHERE id=$1 AND blocker_type='sync_wait'", [taskId]);
   if (syncAborted) return true; // 手動暫停：非失敗，狀態原地不動，解除暫停後從這一關重跑
   if (syncConflict) {
     // prior_status 記 analysis_running：裁決完回到這一關重跑。此時 sync 的 merge 已 commit，
@@ -236,11 +254,11 @@ async function runTaskAnalysis(taskId, userId, signal) {
 
   // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
   // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
-  const mainBranch = AI_BRANCH;
+  const baseBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   let raw;
   try {
-    const built = buildAnalysisPrompt(task, info, clarification, wtParent, mainBranch, projectNotes);
+    const built = buildAnalysisPrompt(task, info, clarification, wtParent, baseBranch, projectNotes);
     // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
     const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
@@ -318,9 +336,9 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const cwd = worktreeParent(info.root, task.task_id);
   // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
   // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
-  const mainBranch = AI_BRANCH;
+  const baseBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
-  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', mainBranch, projectNotes);
+  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes);
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 
