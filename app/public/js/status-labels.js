@@ -22,6 +22,7 @@ const STATUS_LABELS = {
   resolve_triage:     '分診中',
   clarify_pending:    '待你裁決',
   clarify_answered:   '已裁決',
+  clarify_chat_running: 'AI 回覆中',
   wiki_updating:      '更新 Wiki',
   cs_running:         '客服處理',
   cs_reply_pending:   '等待確認回覆',

@@ -15,6 +15,7 @@ const { query } = require('../db');
 const { createBranch, checkoutDefault, ensureWorktreeAtMain, AI_BRANCH } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const notify = require('../notify');
+const { runClarifyChat } = require('./clarify-chat');
 
 // 執行歷程階段標記的中文顯示（僅影響顯示文字，status 值與流程判斷不變）
 const STAGE_LABELS = {
@@ -23,12 +24,12 @@ const STAGE_LABELS = {
   qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki',
   reject_triage: '分診中', resolve_triage: '分診中', respec_running: '追加需求更新規格中',
-  clarify_pending: '待你裁決', clarify_answered: '已裁決'
+  clarify_pending: '待你裁決', clarify_answered: '已裁決', clarify_chat_running: 'AI 回覆中'
 };
 // taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。
 const _inFlight = new Map();
 const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
-const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage', 'respec_running', 'clarify_answered'];
+const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage', 'respec_running', 'clarify_answered', 'clarify_chat_running'];
 
 // 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
@@ -254,6 +255,9 @@ const HANDLERS = {
   resolve_triage: handleRejectTriage,
   respec_running: handleRespec,
   clarify_answered: handleClarifyAnswered,
+  // clarify_chat_running：正常情況由路由直接跑完；這條路徑是 server 在 agent 跑完前重啟的補跑，
+  // 只可能是「送出回答」那個入口（ask/revise 兩個入口不改狀態，重啟後不會留下待跑任務）。
+  clarify_chat_running: (task, settings, signal) => runClarifyChat(task, task.user_id, signal, 'answer_or_proceed'),
 };
 
 // 執行一個任務：狀態重查（防過期快照）→ 寫階段標記 → 跑 handler → 失敗原因落地／Teams。
