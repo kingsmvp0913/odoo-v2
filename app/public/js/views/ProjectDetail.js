@@ -18,7 +18,12 @@ window.ProjectDetailView = Vue.defineComponent({
       editEdition: 'community',
       savingEdition: false,
       runtimeLog: null,
-      logLoading: false
+      logLoading: false,
+      showReleaseModal: false,
+      releasePending: [],
+      releaseLoading: false,
+      releaseWorking: false,
+      releaseRepos: null
     };
   },
   computed: {
@@ -209,7 +214,36 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (err) { showToast(err.message, 'error'); }
       finally { this.savingEdition = false; }
     },
-    isAdmin() { return window.UserStore.role === 'admin'; }
+    isAdmin() { return window.UserStore.role === 'admin'; },
+    async openRelease() {
+      this.showReleaseModal = true;
+      this.releaseRepos = null;
+      this.releaseLoading = true;
+      try {
+        const data = await Api.get(`projects/${this.$route.params.id}/pending-release`);
+        this.releasePending = data.tasks || [];
+      } catch (e) {
+        showToast(e.message, 'error');
+        this.showReleaseModal = false;
+      } finally { this.releaseLoading = false; }
+    },
+    async doRelease() {
+      this.releaseWorking = true;
+      this.releaseRepos = null;
+      try {
+        const data = await Api.post(`projects/${this.$route.params.id}/release`, {});
+        if (data.ok) {
+          this.showReleaseModal = false;
+          const n = (data.tasks || []).length;
+          // ok 只代表「沒有任何 repo 失敗」；ai-dev 不存在時也是 ok，但實際什麼都沒上
+          showToast(n ? `已上正式，${n} 張任務` : '沒有任何變更需要上正式', n ? 'success' : 'info');
+        } else {
+          // 失敗細節留在彈窗裡攤開，不縮成一句 toast
+          this.releaseRepos = data.repos || [];
+        }
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.releaseWorking = false; }
+    }
   },
   template: `
     <div v-if="loading" class="loading">載入中...</div>
@@ -231,7 +265,12 @@ window.ProjectDetailView = Vue.defineComponent({
       <div class="content">
         <div v-if="project.description" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">{{ project.description }}</div>
 
-        <div class="form-section">Git Repositories</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)">
+          <div class="form-section">Git Repositories</div>
+          <button class="btn btn-outline btn-sm" @click="openRelease"
+            :disabled="!repos.some(r => r.clone_status === 'done')"
+            title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
+        </div>
         <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">尚未綁定任何 repo</div>
         <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-2)">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -362,5 +401,58 @@ window.ProjectDetailView = Vue.defineComponent({
       </div>
     </template>
     <div v-else style="padding:var(--space-6);color:var(--text-muted)">專案不存在</div>
+
+    <!-- 上正式：列出待合併任務供確認，整條 ai-dev 一起併進 main -->
+    <div v-if="showReleaseModal" class="modal-overlay" @mousedown.self="showReleaseModal=false" @keyup.esc="showReleaseModal=false">
+      <div class="modal modal-elevated" role="dialog" aria-modal="true" style="width:600px">
+        <div class="modal-title">合併到正式（main）</div>
+        <div class="modal-body">
+          <div v-if="releaseLoading" class="loading">載入中...</div>
+          <template v-else>
+            <div v-if="releasePending.length === 0" style="color:var(--text-muted);font-size:var(--fs-base)">
+              目前沒有待上正式的任務。
+            </div>
+            <template v-else>
+              <div style="font-size:var(--fs-base);margin-bottom:var(--space-3)">
+                以下 {{ releasePending.length }} 張任務已核准、尚未上正式：
+              </div>
+              <div style="max-height:280px;overflow-y:auto">
+                <div v-for="t in releasePending" :key="t.task_id"
+                  style="display:flex;gap:var(--space-2);align-items:baseline;padding:6px 0;border-bottom:1px solid var(--border)">
+                  <span style="font-weight:var(--fw-semibold);flex-shrink:0">#{{ t.task_id }}</span>
+                  <span style="flex:1;min-width:0">{{ t.title }}</span>
+                  <span style="font-size:var(--fs-xs);color:var(--text-muted);flex-shrink:0">{{ t.status }}</span>
+                </div>
+              </div>
+              <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-3)">
+                ⚠ 會把整條 ai-dev 一次合併到 main，無法只挑其中幾張。
+              </div>
+            </template>
+            <!-- 失敗細節：哪個 repo、哪些檔案衝突，完整攤開 -->
+            <div v-if="releaseRepos" style="margin-top:var(--space-3)">
+              <div v-for="r in releaseRepos" :key="r.label" style="margin-bottom:var(--space-2)">
+                <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold)">{{ r.label }}</div>
+                <div v-if="r.hasConflicts" class="error-msg">
+                  <div>合併衝突，未上正式。main 有平台以外的改動，請先在 GitHub 上處理。</div>
+                  <div style="margin-top:4px">衝突檔案：</div>
+                  <div v-for="f in r.conflictFiles" :key="f" style="font-family:monospace;font-size:var(--fs-xs)">{{ f }}</div>
+                </div>
+                <div v-else-if="r.error" class="error-msg" style="white-space:pre-wrap">{{ r.error }}</div>
+                <div v-else-if="r.merged" style="font-size:var(--fs-sm);color:var(--text-muted)">已合併</div>
+                <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">無 ai-dev 分支，略過</div>
+                <div v-if="r.restoreFailed" class="error-msg" style="white-space:pre-wrap;margin-top:4px">主 clone 未能切回 testing 分支，請到下方「Odoo 測試環境」重建環境後再部署。</div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" @click="showReleaseModal=false" :disabled="releaseWorking">取消</button>
+          <button class="btn btn-primary" @click="doRelease"
+            :disabled="releaseWorking || releaseLoading || releasePending.length === 0">
+            <span v-if="releaseWorking" class="spinner"></span>{{ releaseWorking ? '合併中…' : '確認合併' }}
+          </button>
+        </div>
+      </div>
+    </div>
   `
 });

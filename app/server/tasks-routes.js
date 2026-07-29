@@ -156,7 +156,7 @@ function registerRoutes(app) {
         params.push(source);
       }
 
-      const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.approved_at, t.created_at, t.updated_at,
+      const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.approved_at, t.merged_to_main_at, t.created_at, t.updated_at,
                           e.url AS env_url,
                           p.name AS project_name, p.e2e_disabled
                    FROM tasks t

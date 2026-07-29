@@ -400,6 +400,9 @@ async function migrate() {
     { table: 'tasks', col: 'blocker_type',         sql: 'ALTER TABLE tasks ADD COLUMN blocker_type TEXT' },
     { table: 'tasks', col: 'resume_status',        sql: 'ALTER TABLE tasks ADD COLUMN resume_status TEXT' },
     { table: 'tasks', col: 'approved_at',          sql: 'ALTER TABLE tasks ADD COLUMN approved_at TIMESTAMPTZ' },
+    // 「上正式」按鈕把 ai-dev 併進 main 並 push 成功的時間。approved_at 只代表併進 ai-dev，
+    // 兩者的差集＝待上正式。若改在 GitHub 上手動合併，此欄不會被寫入（已知代價，見設計文件）。
+    { table: 'tasks', col: 'merged_to_main_at',    sql: 'ALTER TABLE tasks ADD COLUMN merged_to_main_at TIMESTAMPTZ' },
     { table: 'tasks', col: 'retry_feedback',       sql: 'ALTER TABLE tasks ADD COLUMN retry_feedback TEXT' },
     { table: 'tasks', col: 'coding_session_id',    sql: 'ALTER TABLE tasks ADD COLUMN coding_session_id TEXT' },
     { table: 'tasks', col: 'analysis_retry_count', sql: 'ALTER TABLE tasks ADD COLUMN analysis_retry_count INTEGER DEFAULT 0' },

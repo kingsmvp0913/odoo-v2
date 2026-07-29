@@ -325,6 +325,48 @@ async function mergeToAiBranch(repoPath, branchName, gitEnv) {
   }
 }
 
+// 把主 clone 切回常駐的 testing 分支（測試環境 addons 來源）。停在 main 會讓下一次 deploy
+// 部署到錯的分支。回 true 代表沒切回去——呼叫端須明講，不可靜默。
+async function restoreTestingCheckout(repoPath) {
+  try {
+    await discardPyc(repoPath);
+    await ensureTestingBranch(repoPath);
+    return false;
+  } catch { return true; }
+}
+
+// 「上正式」：把 ai-dev 併進實體 main 並推遠端，與 mergeToAiBranch 反向，由使用者按按鈕觸發。
+// 回 { merged, hasConflicts, conflictFiles, restoreFailed }；ai-dev 不存在（專案從未跑過任務）
+// 回 merged:false 而非拋錯。衝突刻意不交給 AI 解——這是正式區，退回讓人在 GitHub 上處理。
+async function releaseAiToMain(repoPath, gitEnv) {
+  // 主 clone 的工作樹是 deploy 目標，常被 odoo-bin 弄髒；不先清，第一步 checkout 就會被
+  // 「local changes would be overwritten」擋住。
+  ensureGitignorePyc(repoPath);
+  await discardPyc(repoPath);
+  if (!(await refExists(repoPath, `refs/heads/${AI_BRANCH}`))) {
+    return { merged: false, hasConflicts: false, conflictFiles: [], restoreFailed: false };
+  }
+  const main = await getMainBranch(repoPath);
+  let result;
+  try {
+    // 本地 main 落後 origin/main（有人在 GitHub 上動過）時直接 merge+push 會被 non-fast-forward 打回
+    await pullBranch(repoPath, main, gitEnv);
+    const { hasConflicts, conflictFiles } = await mergeInto(repoPath, main, AI_BRANCH, gitEnv);
+    if (hasConflicts) {
+      await abortMerge(repoPath);
+      result = { merged: false, hasConflicts: true, conflictFiles };
+    } else {
+      await execFileAsync('git', ['push', 'origin', main], gitOpts(repoPath, gitEnv));
+      result = { merged: true, hasConflicts: false, conflictFiles: [] };
+    }
+  } catch (err) {
+    await restoreTestingCheckout(repoPath); // 失敗也不能把主 clone 留在 main
+    throw err;
+  }
+  result.restoreFailed = await restoreTestingCheckout(repoPath);
+  return result;
+}
+
 async function deleteBranchLocal(repoPath, branchName, force = false) {
   await execFileAsync('git', ['branch', force ? '-D' : '-d', branchName], { cwd: repoPath });
 }
@@ -467,4 +509,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
