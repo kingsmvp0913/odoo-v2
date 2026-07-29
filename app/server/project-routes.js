@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
-const { ensureTestingBranch, ensureMainBranch, pullBranch } = require('./pipeline/git');
+const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
 const { deleteTaskDir } = require('./lib/attachments');
@@ -107,15 +107,22 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   });
 }
 
-// 更新既有主 clone 到最新 main：checkout 主分支 + git pull origin <main>（帶明確 remote/branch），
-// 拉完把 testing 重長到最新 main（測試環境 addons 來源分支）。沿用 pipeline task-agent 的更新 main 寫法。
+// 更新既有主 clone：checkout 主分支 + git pull origin <main>，再把 main 的新 commit 帶進 ai-dev，
+// 最後把 testing 重長到最新 ai-dev（測試環境 addons 來源分支）。
+// 少了中間那步，使用者 push 進 main 的依賴修正（如缺的 module）會傳不到測試環境——
+// testing 是以 ai-dev 為基準重建的，main 不在那條線上。
 async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
   try {
     const base = await ensureMainBranch(destPath, gitEnv); // checkout main/master（僅遠端則建本地追蹤分支）
     await pullBranch(destPath, base, gitEnv);              // git pull origin <base>
-    // pull 只更新 main；testing（deploy 實際部署的分支）不會自動跟上——單向往前併的流程從不把 main
-    // 後來的新 commit 帶回 testing。故拉完主動重長 testing 到最新 main＋重併在飛任務，
-    // 否則使用者 push 的依賴修正（如缺的 module）進了 main 卻不在 testing，deploy 仍找不到。
+    await ensureAiBranch(destPath, gitEnv);
+    const sync = await syncMainIntoAi(destPath, gitEnv);
+    if (sync.hasConflicts) {
+      // 此處不綁任何任務，沒有裁決 UI 可用。abort 還原讓 ai-dev 維持原狀並 fail loud；
+      // 下一張任務的 analysis 會撞到同一個衝突，屆時循正常管道掛到那張任務上裁決。
+      await abortMerge(destPath);
+      throw new Error(`main → ai-dev 同步衝突（${sync.conflictFiles.join(', ')}），請開一張任務處理，或先在 GitHub 上解決`);
+    }
     // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
     if (projectId) {
       const { rebuildTestingWithinLock } = require('./pipeline/rebuild-testing');
