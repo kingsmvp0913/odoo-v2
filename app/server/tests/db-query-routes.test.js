@@ -258,4 +258,69 @@ describe('連線的 VPN 開關與配埠', () => {
     expect(after.vpn_forward_port).toBe(22030);
     expect(after.vpn_forward_port).not.toBe(22020);
   });
+
+  // Finding 1：conn B 指向 H 啟用 VPN 得埠 → 停用 B（埠留著不清）→ 新建 conn A 也指向 H，
+  // 若配埠時看不到「已停用」的 B 就會另外分到一個埠 → 兩條連線指向同一台機器卻各佔一個埠，
+  // 之後 loadProjectVpn 用 host:port 去重＋容器只 publish 存活那個埠時，另一條連線就會連到
+  // 沒 publish 的埠而 ECONNREFUSED。驗證：assignForwardPort 傳給 allocateForwardPort 的 peers
+  // 陣列要包含停用中的連線（Fix 1a）；且重新啟用一定要重配、不能因為「已有埠」就跳過（Fix 1b）。
+  test('Fix1：停用連線的目標仍要被視為既有埠，重新啟用一定要重配，最終同目標的兩條連線埠一致', async () => {
+    allocateForwardPort.mockReturnValueOnce(22040);
+    const createB = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'connB', ssh_host: '10.9.9.9', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_h', vpn_enabled: true,
+    });
+    const bId = createB.body.id;
+    let row = (await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [bId])).rows[0];
+    expect(row.vpn_forward_port).toBe(22040);
+
+    // 停用 B：埠留著（既有行為，DELETE 也不動 docker，這裡也不動 vpn_forward_port）
+    const disableB = await request(app).put(`/api/projects/${projectId}/db-connections/${bId}`).set(auth())
+      .send({ vpn_enabled: false });
+    expect(disableB.status).toBe(200);
+
+    // 新建 conn A 也指向 H：驗證 peers 陣列有把「已停用」的 B 算進去（Fix 1a）
+    allocateForwardPort.mockClear();
+    allocateForwardPort.mockReturnValueOnce(22040); // 沿用 B 的埠（同目標理應共用）
+    const createA = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'connA', ssh_host: '10.9.9.9', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_h2', vpn_enabled: true,
+    });
+    const aId = createA.body.id;
+    const [, peersAtCreateA] = allocateForwardPort.mock.calls[0];
+    expect(peersAtCreateA).toContainEqual({ host: '10.9.9.9', port: 22, forwardPort: 22040 });
+
+    // 重新啟用 B：即使「已有埠」也要重配（Fix 1b），不能因為 justEnabled 舊邏輯只看「沒配過埠」而跳過
+    allocateForwardPort.mockClear();
+    allocateForwardPort.mockReturnValueOnce(22040);
+    const enableB = await request(app).put(`/api/projects/${projectId}/db-connections/${bId}`).set(auth())
+      .send({ vpn_enabled: true });
+    expect(enableB.status).toBe(200);
+    expect(allocateForwardPort).toHaveBeenCalled();
+
+    const { rows: [aRow] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [aId]);
+    const { rows: [bRow] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [bId]);
+    expect(aRow.vpn_forward_port).toBe(22040);
+    expect(bRow.vpn_forward_port).toBe(22040);
+  });
+
+  // 防止 Fix 1b 退化成「vpn_enabled 每次是 true 就重配」：沒有 false→true 轉換時不能重配，
+  // 否則每次存檔都可能換埠＝每次都重建容器＝斷線重撥。
+  test('Fix1b 反例：vpn_enabled 已是 true 時再送一次 true（無轉換）不會重配埠', async () => {
+    allocateForwardPort.mockReturnValueOnce(22050);
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'connC', ssh_host: '10.9.9.5', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_c', vpn_enabled: true,
+    });
+    const cid = create.body.id;
+
+    allocateForwardPort.mockClear();
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${cid}`).set(auth())
+      .send({ vpn_enabled: true }); // 已經是 true，再送一次 true：不是 false→true 轉換
+    expect(put.status).toBe(200);
+    expect(allocateForwardPort).not.toHaveBeenCalled();
+
+    const { rows: [row] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [cid]);
+    expect(row.vpn_forward_port).toBe(22050);
+  });
 });

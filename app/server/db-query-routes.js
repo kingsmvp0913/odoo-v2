@@ -35,10 +35,12 @@ function loopbackOnly(req, res, next) {
 // 這樣新增連線多半不必重建容器（容器的 -p 在建立時就固定，重建＝斷線重撥）。
 async function assignForwardPort(projectId, conn) {
   const { rows: usedRows } = await query('SELECT vpn_forward_port FROM db_connections WHERE vpn_forward_port IS NOT NULL');
+  // 不濾 vpn_enabled：停用中的連線一樣佔著全域名額（見上面 usedRows 查詢），若這裡濾掉
+  // 停用連線，新連線就看不到它、拿不到同一個埠，之後這個目標的埠會在兩條連線間發散。
   const { rows: peers } = await query(
     `SELECT connect_mode, ssh_host, ssh_port, db_host, db_port, vpn_forward_port
        FROM db_connections
-      WHERE project_id=$1 AND vpn_enabled=true AND vpn_forward_port IS NOT NULL AND id<>$2`,
+      WHERE project_id=$1 AND vpn_forward_port IS NOT NULL AND id<>$2`,
     [projectId, conn.id]
   );
   const projectTargets = peers.map(p => ({ ...targetHostPort(p), forwardPort: p.vpn_forward_port }));
@@ -98,9 +100,10 @@ function registerRoutes(app) {
     try {
       const b = req.body || {};
       validateIdentifiers(b);
-      // 改前的目標(host:port)先存起來：改完若目標變了，舊轉發埠不能留著沿用，見下方判斷。
+      // 改前的目標(host:port)與 vpn_enabled 先存起來：改完若目標變了，舊轉發埠不能留著沿用；
+      // vpn_enabled 從 false 變 true 也要重配，見下方判斷。
       const { rows: beforeRows } = await query(
-        'SELECT connect_mode, ssh_host, ssh_port, db_host, db_port FROM db_connections WHERE id=$1 AND project_id=$2',
+        'SELECT connect_mode, ssh_host, ssh_port, db_host, db_port, vpn_enabled FROM db_connections WHERE id=$1 AND project_id=$2',
         [req.params.cid, req.params.id]
       );
       const before = beforeRows[0];
@@ -125,16 +128,18 @@ function registerRoutes(app) {
         `UPDATE db_connections SET ${set.join(', ')} WHERE id=$${idx++} AND project_id=$${idx} RETURNING ${PUBLIC_COLS}, vpn_forward_port`, params
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
-      // 剛把 vpn_enabled 從 false 打開、之前沒配過埠才需要配
-      const justEnabled = rows[0].vpn_enabled && !rows[0].vpn_forward_port;
+      // 剛把 vpn_enabled 從 false 打開就一律重配，不是只在「之前沒配過埠」才配：停用期間
+      // 同目標的埠名額可能已被別條連線佔走，或這條自己的目標被改過。重配後若同專案已有同目標
+      // 的連線，assignForwardPort 本來就會沿用它的埠，不會造成無謂的容器重建。
+      const becameEnabled = rows[0].vpn_enabled && !(before && before.vpn_enabled);
       // 目標(host:port)真的變了才重配：同專案共用一個容器，舊埠若沒跟著換，改過主機的這條連線
       // 會跟另一條連線搶同一個轉發埠的 listen（docker -p 同埠掛兩個目標），容器起不來。
-      // 反過來若目標沒變就不能重配，否則每次存檔都可能換埠＝每次都重建容器＝斷線重撥。
+      // 反過來若目標沒變、也沒有 false→true 轉換就不能重配，否則每次存檔都可能換埠＝每次都重建容器＝斷線重撥。
       const beforeTarget = before && targetHostPort(before);
       const afterTarget = targetHostPort(rows[0]);
       const targetMoved = rows[0].vpn_enabled && rows[0].vpn_forward_port && beforeTarget &&
         (beforeTarget.host !== afterTarget.host || Number(beforeTarget.port) !== Number(afterTarget.port));
-      if (justEnabled || targetMoved) {
+      if (becameEnabled || targetMoved) {
         const forwardPort = await assignForwardPort(req.params.id, { ...rows[0], id: req.params.cid });
         ({ rows } = await query(
           `UPDATE db_connections SET vpn_forward_port=$1 WHERE id=$2 RETURNING ${PUBLIC_COLS}`,
