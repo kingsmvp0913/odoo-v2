@@ -177,6 +177,37 @@ server {
 > 共用 PostgreSQL superuser（見設計文件殘留風險），攻進一個測試區有機會跨庫觸及平台 DB。
 > 測試區帳號（含 E2E）不應暴露到可信網路以外。
 
+### 企業版（Enterprise）測試區
+
+Odoo 企業版與社群版的 server 本體是同一份程式碼，企業版只是多一包 addons 目錄
+（`web_enterprise` 覆蓋社群版 `web`）。因此平台**不為企業版另建 image**，只在該專案的容器多掛一個
+唯讀 volume：
+
+```
+-v <ENTERPRISE_BASE_DIR>/<大版本>:/mnt/enterprise:ro
+--addons-path=/mnt/extra-addons/_platform,<專案 repos>,/mnt/enterprise,<核心 addons>
+```
+
+設定步驟：
+
+1. 管理員 → 企業版來源 → 按大版本登記 enterprise repo（URL＋分支）→ 按「同步」。
+   私有 repo 需操作者先在「設定」填個人 GitHub PAT。
+2. 專案 → 建立時選「企業版」，或在專案頁的「Odoo 版本類型」切換（管理員限定）。
+3. 重新建置該專案的測試區。
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `ENTERPRISE_BASE_DIR` | `<repo 根>/enterprise` | 企業版 addons 共用目錄，各大版本一個子目錄 |
+
+注意事項：
+
+- **enterprise addons 分大版本**，17 的不能給 18 用；每個要支援的版本各登記一列。
+- 企業版來源**不進 pipeline**：不寫入 `project_repos`，不會被開 testing 分支、不被 AI 改動、
+  不被 deploy commit／push，掛載一律 `:ro`。
+- 專案標為企業版但該版本未登記或未同步成功時，**建置測試區會直接失敗**並指名版本，
+  刻意不降級成社群版——降級會讓人以為在測企業版，實際不是。
+- 未填訂閱碼的企業版 DB 30 天後會持續跳到期提示（功能仍可用）。測試區壽命通常遠短於此，不處理。
+
 ## ⚠️ 硬限制：僅允許單一 Node 行程
 
 App 的互斥機制（任務派工去重 `_inFlight`、專案鎖 `project-lock`、環境建置去重、approve 佔位）
