@@ -11,19 +11,28 @@ const IMAGE_NAME = 'odoo-v2-vpn-gateway:latest';
 const GATEWAY_TIMEOUT_MS = 40000;
 const POLL_INTERVAL_MS = 1000;
 
-const PORT_RANGE_START = 11000;
-const PORT_RANGE_END = 11999;
+// 22000-22999：使用者要求便於在機器上控管，且避開測試區的 21000-21012。
+const PORT_RANGE_START = 22000;
+const PORT_RANGE_END = 22999;
 
-function allocateForwardPort(usedPorts = []) {
+// 轉發埠以「專案 × 目標(host:port)」為單位：同專案已有連線指向同一台機器就沿用它的埠。
+// 這樣新增「指向既有目標」的連線不必重建容器（docker 的 -p 在建立時就固定，重建＝斷線重撥）。
+function allocateForwardPort(usedPorts = [], projectTargets = [], target = null) {
+  if (target) {
+    const hit = projectTargets.find(
+      t => t.host === target.host && Number(t.port) === Number(target.port)
+    );
+    if (hit) return hit.forwardPort;
+  }
   const used = new Set(usedPorts);
   for (let p = PORT_RANGE_START; p <= PORT_RANGE_END; p++) {
     if (!used.has(p)) return p;
   }
-  throw new Error('沒有可用的 VPN 轉發 port（11000-11999 已滿）');
+  throw new Error('沒有可用的 VPN 轉發 port（22000-22999 已滿）');
 }
 
-function containerName(connId) {
-  return `vpn-conn-${connId}`;
+function projectContainerName(projectId) {
+  return `vpn-proj-${projectId}`;
 }
 
 function targetHostPort(conn) {
@@ -163,4 +172,4 @@ function removeGateway(conn, deps = {}) {
   try { execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
 }
 
-module.exports = { allocateForwardPort, containerName, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
+module.exports = { allocateForwardPort, projectContainerName, targetHostPort, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
