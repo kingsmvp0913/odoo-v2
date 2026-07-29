@@ -2,7 +2,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, clarTab: 'qa', askText: '', askSubmitting: false, clarifyDraft: null, draftBusy: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, clarTab: 'qa', askText: '', askSubmitting: false, clarifyDraft: null, draftBusy: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -886,16 +886,23 @@ window.TaskDetailView = Vue.defineComponent({
                   <code>{{ spec.module }}</code>
                 </div>
                 <div v-if="spec.requirements && spec.requirements.length" style="margin-bottom:var(--space-3)">
-                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">實作項</div>
-                  <ul style="margin:0;padding-left:var(--space-4);font-size:var(--fs-base)">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1);cursor:pointer;user-select:none"
+                    @click="specReqOpen = !specReqOpen">
+                    {{ specReqOpen ? '▾' : '▸' }} 實作項（給 AI 的施工細節，共 {{ spec.requirements.length }} 項）
+                  </div>
+                  <ul v-if="specReqOpen" style="margin:0;padding-left:var(--space-4);font-size:var(--fs-base)">
                     <li v-for="(r, i) in spec.requirements" :key="'req'+i" style="white-space:pre-wrap;margin-bottom:2px">{{ r }}</li>
                   </ul>
                 </div>
-                <div v-if="spec.acceptance && spec.acceptance.length">
+                <div v-if="spec.acceptance && spec.acceptance.length" style="margin-bottom:var(--space-3)">
                   <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">驗收項</div>
                   <ul style="margin:0;padding-left:var(--space-4);font-size:var(--fs-base)">
                     <li v-for="(a, i) in spec.acceptance" :key="'acc'+i" style="white-space:pre-wrap;margin-bottom:2px">{{ a }}</li>
                   </ul>
+                </div>
+                <div v-if="spec.permissions && spec.permissions.trim()">
+                  <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">權限</div>
+                  <div style="font-size:var(--fs-base);white-space:pre-wrap">{{ spec.permissions }}</div>
                 </div>
               </div>
               <textarea v-model="specFeedback" class="form-control" rows="3"
