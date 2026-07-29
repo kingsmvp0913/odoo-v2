@@ -69,9 +69,9 @@ window.AdminPortPoolView = Vue.defineComponent({
           </div>
           <div class="setting-block-footer warn">
             <div style="font-size:var(--fs-sm);color:var(--text);margin-bottom:var(--space-3)">
-              ⚠ 修改範圍後必須請維運同步：nginx 容器重新 publish 新埠段、對外 NAT／防火牆放行新範圍。
-              平台只能偵測「宿主能否綁定」，<strong>無法確認對外是否放行</strong>——設定超出放行範圍時，
-              測試區會建得起來但外面連不進去。
+              ⚠ 這段埠只綁在宿主給反向代理連，<strong>不對外開放</strong>，改範圍不需要維運配合。
+              上限＝同時最多幾個測試區活著（含 pipeline 在跑的），拉高前先確認主機記憶體吃得下。
+              平台只能偵測「宿主能否綁定」，該埠被機器上其他服務佔用時會顯示無法綁定。
             </div>
             <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">
               {{ saving ? '儲存中...' : '儲存範圍' }}

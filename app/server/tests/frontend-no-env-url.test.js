@@ -26,6 +26,15 @@ test('前端不得把內部埠印在畫面上（內部埠不對外，印了會�
   expect(offenders.map(p => path.relative(VIEW_DIR, p))).toEqual([]);
 });
 
+// 意圖：子網域模式下內部埠只走 nginx 的 proxy_pass，不 publish、不需 NAT 放行。埠池頁那句
+// 「改範圍要請維運 publish／放行 NAT」是 port 模式時代的遺物，而那個畫面正是上線步驟要求操作員
+// 把上限從 21012 拉到 21019 的地方——留著會讓他以為得先等 IT 放行，直接卡住上線。
+test('埠池設定頁不得再要求 publish 埠段／放行 NAT（內部埠已不對外）', () => {
+  const src = fs.readFileSync(path.join(VIEW_DIR, 'views/AdminPortPool.js'), 'utf8');
+  expect(src).not.toMatch(/publish/i);
+  expect(src).not.toMatch(/NAT/);
+});
+
 // 意圖：真人「關掉分頁」偵測不到，所以歸還檢視名額只有兩條路——閒置逾時與明確按鈕。
 // 後端 POST /env/external/release 若沒有任何前端入口，就只剩閒置那一條，10 個名額的池子
 // 體感會小得多（別人得等前一個人閒置滿 20 分鐘才借得到）。

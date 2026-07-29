@@ -2,10 +2,8 @@ const net = require('net');
 const { query } = require('./db');
 
 // 測試區 port 採「租約制」：專案啟動測試區時從池中借一個、停止時歸還（見 leasePort/releasePort）。
-// 池範圍必須與「nginx 容器 publish 的埠段 ＋ 對外 NAT／防火牆放行段」逐字一致——平台改得了池設定，
-// 改不了那兩層，設定超出放行範圍時測試區會靜默連不上（管理員介面的常駐警語即為此）。
-// 預設 21000-21019：子網域模式下這段埠只綁 ENV_BIND_HOST 供 nginx 反代，不對公網 publish、
-// 不需 NAT 放行，故上限只受主機資源限制（port 模式時代的「必須等於 NAT 放行段」已不適用）。
+// 預設 21000-21019：這段埠只綁 ENV_BIND_HOST 供 nginx 從宿主端反代，不對公網 publish、不需 NAT
+// 放行，故上限只受主機資源限制（port 模式時代「必須等於 NAT 放行段」的硬性約束已不適用）。
 // 高位段乾淨，且避開 8069（Odoo）／8080（Tomcat 等）這類本機常見服務。
 // 優先序 DB（teams_settings）> env > 預設值；DB 於執行期讀取，管理員改完免重啟即生效。
 const DEFAULT_PORT_MIN = 21000;
