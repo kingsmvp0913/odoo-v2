@@ -367,3 +367,60 @@ describe('連線的 VPN 開關與配埠', () => {
     expect(row.vpn_forward_port).toBe(22070);
   });
 });
+
+// Fix A：以前 /test 路由組出的 conn 完全沒有 vpn_enabled/vpn/vpn_forward_port，
+// runSelect 因此永遠跳過 VPN 分支直連內網位址——遷移後平台主機已不在 VPN 網路內，
+// 這會讓每條 vpn_enabled 連線的「測試連線」按鈕必定逾時。
+describe('/test 端點：VPN 轉發（Fix A）', () => {
+  let vcid;
+  test('先建一條 VPN 連線供本組測試使用', async () => {
+    allocateForwardPort.mockReturnValueOnce(22080);
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'vpnTestConn', ssh_host: '10.9.9.50', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_vt', vpn_enabled: true,
+    });
+    vcid = create.body.id;
+    const { rows: [row] } = await dbModule.query('SELECT vpn_forward_port FROM db_connections WHERE id=$1', [vcid]);
+    expect(row.vpn_forward_port).toBe(22080);
+  });
+
+  test('編輯既有 VPN 連線點測試連線：從已存那筆帶出 vpn(Gw) 與 vpn_forward_port', async () => {
+    mockRunSelect.mockResolvedValueOnce({ ok: true, columns: [], rows: [], row_count: 0 });
+    const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`).set(auth()).send({
+      id: vcid, connect_mode: 'docker', ssh_host: '10.9.9.50', ssh_user: 'root',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_vt', vpn_enabled: true,
+    });
+    expect(res.status).toBe(200);
+    const call = mockRunSelect.mock.calls.at(-1);
+    expect(call[0].vpn_enabled).toBe(true);
+    expect(call[0].vpn_forward_port).toBe(22080);
+    expect(call[0].vpn).toEqual(expect.objectContaining({ containerName: `vpn-proj-${projectId}` }));
+  });
+
+  // 新建連線還沒存檔，天生沒有轉發埠；不該為了「能測」去現場配埠（配埠會寫 DB，測試連線不該有副作用）。
+  // 但要帶出專案的 Gw，讓 runSelect 報「此連線尚未配置轉發埠」而不是更上游、會誤導的「專案尚未設定 VPN」。
+  test('新建連線（未帶 id）勾 VPN：帶出專案 Gw 但沒有轉發埠，且不觸發配埠', async () => {
+    allocateForwardPort.mockClear();
+    mockRunSelect.mockResolvedValueOnce({ ok: false, error: '[VPN] 此連線尚未配置轉發埠，請重新儲存一次連線設定' });
+    const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`).set(auth()).send({
+      connect_mode: 'docker', ssh_host: '10.9.9.51', ssh_user: 'root',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_vt2', vpn_enabled: true,
+    });
+    expect(res.status).toBe(200);
+    const call = mockRunSelect.mock.calls.at(-1);
+    expect(call[0].vpn_enabled).toBe(true);
+    expect(call[0].vpn_forward_port).toBeUndefined();
+    expect(call[0].vpn).toEqual(expect.objectContaining({ containerName: `vpn-proj-${projectId}` }));
+    expect(allocateForwardPort).not.toHaveBeenCalled();
+  });
+
+  test('未勾 VPN 的一般連線：不帶 vpn 物件，不查專案 VPN', async () => {
+    mockRunSelect.mockResolvedValueOnce({ ok: true, columns: [], rows: [], row_count: 0 });
+    const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`).set(auth()).send({
+      connect_mode: 'direct', db_host: 'h2', db_user: 'u', db_password: 'p', db_name: 'd',
+    });
+    expect(res.status).toBe(200);
+    const call = mockRunSelect.mock.calls.at(-1);
+    expect(call[0].vpn).toBeUndefined();
+  });
+});

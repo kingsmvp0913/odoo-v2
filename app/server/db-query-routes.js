@@ -3,7 +3,7 @@ const { verifyToken } = require('./auth');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
 const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
-const { loadDecryptedConn } = require('./lib/db-connections');
+const { loadDecryptedConn, loadProjectVpn } = require('./lib/db-connections');
 
 const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled';
 
@@ -220,6 +220,7 @@ function registerRoutes(app) {
         ssh_password: b.ssh_password || '', ssh_key: b.ssh_key_content || '',
         docker_container: b.docker_container, db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name,
         db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, db_engine: b.db_engine, db_password: b.db_password || '',
+        vpn_enabled: b.vpn_enabled,
       };
       if (b.id) {
         const stored = await loadDecryptedConn(b.id, req.params.id);
@@ -231,7 +232,17 @@ function registerRoutes(app) {
           if (!conn.ssh_password && sameSshHost) conn.ssh_password = stored.ssh_password;
           if (!conn.ssh_key && sameSshHost) conn.ssh_key = stored.ssh_key;
           if (!conn.db_password && sameDbHost) conn.db_password = stored.db_password;
+          // VPN 憑證(Gw)與轉發埠沒有表單欄位可填，一律沿用已存那筆——與上面密碼回填同一段、
+          // 同一個 loadDecryptedConn 呼叫，不另開讀取路徑。
+          conn.vpn = stored.vpn;
+          conn.vpn_forward_port = stored.vpn_forward_port;
         }
+      } else if (conn.vpn_enabled) {
+        // 新建連線還沒存檔，天生沒有轉發埠（配埠是存檔才做的事，測試連線不該有副作用去現場配）。
+        // 但先把專案的 VPN 憑證(Gw)帶出來，讓 runSelect 因為「有 vpn 物件、缺 forward_port」
+        // 報出「此連線尚未配置轉發埠，請重新儲存一次連線設定」，而不是更上游、會誤導的
+        // 「專案尚未設定 VPN」（專案其實已經設定了，只是這條新連線還沒配埠）。
+        conn.vpn = await loadProjectVpn(req.params.id);
       }
       res.json(await runSelect(conn, 'SELECT 1'));
     } catch (err) { res.status(500).json({ error: err.message }); }
