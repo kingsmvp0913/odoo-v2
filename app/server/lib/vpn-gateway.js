@@ -143,7 +143,7 @@ async function ensureGatewayRunning(conn, deps = {}) {
 
   await ensureDockerRunning(deps);
 
-  const name = conn.vpn_container_name || containerName(conn.id);
+  const name = conn.vpn_container_name || projectContainerName(conn.project_id);
   if (isContainerRunning(name, execFileSync)) return { forwardPort: conn.vpn_forward_port };
 
   // tmpFile 路徑先算好（跟 startGateway 內部算法一致），這樣就算 startGateway
@@ -162,13 +162,13 @@ async function ensureGatewayRunning(conn, deps = {}) {
 
 function stopGateway(conn, deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
-  const name = conn.vpn_container_name || containerName(conn.id);
+  const name = conn.vpn_container_name || projectContainerName(conn.project_id);
   try { execFileSync('docker', ['stop', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
 }
 
 function removeGateway(conn, deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
-  const name = conn.vpn_container_name || containerName(conn.id);
+  const name = conn.vpn_container_name || projectContainerName(conn.project_id);
   try { execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
 }
 

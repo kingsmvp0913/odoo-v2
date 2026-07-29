@@ -6,10 +6,10 @@ test('stopGateway 呼叫 docker stop', () => {
   expect(execFileSync).toHaveBeenCalledWith('docker', ['stop', 'vpn-conn-3'], { stdio: 'ignore' });
 });
 
-test('stopGateway 沒有 vpn_container_name 時用 containerName(id) 推算', () => {
+test('stopGateway 沒有 vpn_container_name 時用 projectContainerName(project_id) 推算', () => {
   const execFileSync = jest.fn();
-  stopGateway({ id: 5 }, { execFileSync });
-  expect(execFileSync).toHaveBeenCalledWith('docker', ['stop', 'vpn-conn-5'], { stdio: 'ignore' });
+  stopGateway({ id: 5, project_id: 42, vpn_container_name: null }, { execFileSync });
+  expect(execFileSync).toHaveBeenCalledWith('docker', ['stop', 'vpn-proj-42'], { stdio: 'ignore' });
 });
 
 test('stopGateway 容器不存在時不丟出錯誤', () => {
