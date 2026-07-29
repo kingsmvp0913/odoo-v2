@@ -8,11 +8,12 @@ const jwt = require('jsonwebtoken');
 const mockRunSelect = jest.fn();
 jest.mock('../lib/ssh-sql', () => ({ runSelect: (...a) => mockRunSelect(...a) }));
 jest.mock('../lib/vpn-gateway', () => ({
-  allocateForwardPort: jest.fn(() => 11000),
-  containerName: (id) => `vpn-conn-${id}`,
-  removeGateway: jest.fn(),
+  allocateForwardPort: jest.fn(() => 22000),
+  targetHostPort: (c) => ((c.connect_mode || 'docker') === 'direct'
+    ? { host: c.db_host, port: c.db_port || 5432 }
+    : { host: c.ssh_host, port: c.ssh_port || 22 }),
 }));
-const { removeGateway } = require('../lib/vpn-gateway');
+const { allocateForwardPort } = require('../lib/vpn-gateway');
 
 let dbModule, app, token, userToken, projectId;
 
@@ -152,40 +153,69 @@ test('/test 端點：非 admin → 403', async () => {
   expect(res.status).toBe(403);
 });
 
-describe('VPN 欄位 CRUD', () => {
-  let vpnCid;
+// 舊版「VPN 欄位 CRUD」描述區塊（連線層存憑證、DELETE 呼叫 removeGateway）已隨本次改動
+// 整段作廢，改由下方「專案層 VPN 設定」與「連線的 VPN 開關與配埠」取代。
 
-  test('POST 建立 vpn_enabled 連線時，自動分配 vpn_forward_port 與 vpn_container_name，回傳不含密碼/設定檔', async () => {
+describe('專案層 VPN 設定', () => {
+  test('未設定時 GET 回 has_config:false', async () => {
+    const res = await request(app).get(`/api/projects/${projectId}/vpn`).set(auth());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ has_config: false, vpn_username: '' });
+  });
+
+  test('PUT 存入後 GET 回 has_config:true 與帳號，且不外洩設定檔與密碼', async () => {
+    const put = await request(app).put(`/api/projects/${projectId}/vpn`).set(auth())
+      .send({ vpn_config: 'client\ndev tun', vpn_username: 'aicd5', vpn_password: 'Aicd5' });
+    expect(put.status).toBe(200);
+
+    const res = await request(app).get(`/api/projects/${projectId}/vpn`).set(auth());
+    expect(res.body).toEqual({ has_config: true, vpn_username: 'aicd5' });
+    expect(JSON.stringify(res.body)).not.toMatch(/dev tun|Aicd5/);
+  });
+
+  // 「留空＝不變」是連線表單既有慣例，VPN 卡片必須一致，否則使用者改帳號就會把 .ovpn 清掉
+  test('PUT 只帶帳號時，不動已存的設定檔與密碼', async () => {
+    await request(app).put(`/api/projects/${projectId}/vpn`).set(auth())
+      .send({ vpn_config: 'cfg', vpn_username: 'old', vpn_password: 'pw' });
+    await request(app).put(`/api/projects/${projectId}/vpn`).set(auth()).send({ vpn_username: 'new' });
+
+    const res = await request(app).get(`/api/projects/${projectId}/vpn`).set(auth());
+    expect(res.body).toEqual({ has_config: true, vpn_username: 'new' });
+  });
+
+  test('一般使用者可讀但不可寫', async () => {
+    const userAuth = { Authorization: `Bearer ${userToken}` };
+    expect((await request(app).get(`/api/projects/${projectId}/vpn`).set(userAuth)).status).toBe(200);
+    expect((await request(app).put(`/api/projects/${projectId}/vpn`).set(userAuth).send({ vpn_username: 'x' })).status).toBe(403);
+  });
+});
+
+describe('連線的 VPN 開關與配埠', () => {
+  test('建立時打開 VPN 會配埠，且不接受憑證欄位（憑證只在專案層）', async () => {
+    allocateForwardPort.mockReturnValueOnce(22000);
     const res = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
-      name: 'vc1', ssh_host: '9.9.9.9', ssh_user: 'root', db_name: 'odoo_prd',
-      vpn_enabled: true, vpn_config: 'client\ndev tun\n', vpn_username: 'vu', vpn_password: 'vp',
+      name: 'vpnconn', ssh_host: '192.168.1.233', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_tst',
+      vpn_enabled: true, vpn_config: 'SHOULD_BE_IGNORED', vpn_username: 'ignored', vpn_password: 'ignored',
     });
     expect(res.status).toBe(201);
     expect(res.body.vpn_enabled).toBe(true);
-    expect(res.body.vpn_config_enc).toBeUndefined();
-    expect(res.body.vpn_password_enc).toBeUndefined();
-    vpnCid = res.body.id;
+
+    const { rows: [row] } = await dbModule.query('SELECT vpn_forward_port, vpn_config_enc, vpn_username FROM db_connections WHERE id=$1', [res.body.id]);
+    expect(row.vpn_forward_port).toBe(22000);
+    expect(row.vpn_config_enc).toBeNull();   // 憑證欄位是死欄，不得再被寫入
+    expect(row.vpn_username).toBeNull();
   });
 
-  test('GET 查詢後可經 loadDecryptedConn 解密出明文 vpn_config/vpn_password', async () => {
-    const { loadDecryptedConn } = require('../db-query-routes');
-    const conn = await loadDecryptedConn(vpnCid, projectId);
-    expect(conn.vpn_config).toBe('client\ndev tun\n');
-    expect(conn.vpn_password).toBe('vp');
-  });
-
-  test('DELETE 有 VPN 的連線時，會呼叫 removeGateway 清容器', async () => {
-    const res = await request(app).delete(`/api/projects/${projectId}/db-connections/${vpnCid}`).set(auth());
-    expect(res.status).toBe(200);
-    expect(removeGateway).toHaveBeenCalledWith(expect.objectContaining({ id: vpnCid }));
-  });
-
-  test('DELETE 沒有 VPN 的連線時，不呼叫 removeGateway', async () => {
-    removeGateway.mockClear();
-    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
-      name: 'vc2', ssh_host: '9.9.9.8', ssh_user: 'root', db_name: 'odoo_prd',
+  test('配埠時把同專案已配的目標傳給 allocateForwardPort（同目標才共用得到埠）', async () => {
+    allocateForwardPort.mockClear();
+    await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'vpnconn2', ssh_host: '192.168.1.233', ssh_user: 'root', connect_mode: 'docker',
+      docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_prd', vpn_enabled: true,
     });
-    await request(app).delete(`/api/projects/${projectId}/db-connections/${create.body.id}`).set(auth());
-    expect(removeGateway).not.toHaveBeenCalled();
+    const [usedPorts, projectTargets, target] = allocateForwardPort.mock.calls[0];
+    expect(Array.isArray(usedPorts)).toBe(true);
+    expect(projectTargets).toContainEqual({ host: '192.168.1.233', port: 22, forwardPort: 22000 });
+    expect(target).toEqual({ host: '192.168.1.233', port: 22 });
   });
 });
