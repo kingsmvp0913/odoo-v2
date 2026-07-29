@@ -27,6 +27,10 @@ function slugify(s) {
   return (s || 'repo').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
 }
 
+// 企業版與社群版差在「測試區掛不掛 enterprise addons」。值域在 API 邊界擋，否則怪值要到建置測試區
+// 那一刻才炸，而且錯誤訊息指不回這裡。
+const EDITIONS = ['community', 'enterprise'];
+
 // 來源對應欄位以「一行一個名稱」儲存
 function parseSourceNames(text) {
   return String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -174,15 +178,19 @@ function registerRoutes(app) {
 
   app.post('/api/projects', verifyToken, async (req, res) => {
     try {
-      const { name, odoo_version, description, folder_name } = req.body;
+      const { name, odoo_version, description, folder_name, edition } = req.body;
       if (!name || !odoo_version) return res.status(400).json({ error: 'name and odoo_version required' });
+      if (edition !== undefined && !EDITIONS.includes(edition)) {
+        return res.status(400).json({ error: 'edition 只能是 community 或 enterprise' });
+      }
       // 測試埠不在此配發：已改為租約制，由 env-agent 於「啟動測試區」時向池借、停止時歸還
       // （見 port-alloc.js leasePort）。建立時就佔埠會讓沒開過測試區的專案白白吃掉併發槽。
       const { rows } = await query(
         // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
         // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
-        `INSERT INTO projects (name, odoo_version, description, folder_name, e2e_disabled) VALUES ($1, $2, $3, $4, true) RETURNING *`,
-        [name, odoo_version, description || null, folder_name || null]
+        `INSERT INTO projects (name, odoo_version, description, folder_name, e2e_disabled, edition)
+         VALUES ($1, $2, $3, $4, true, $5) RETURNING *`,
+        [name, odoo_version, description || null, folder_name || null, edition || 'community']
       );
       return res.status(201).json(rows[0]);
     } catch (err) {
@@ -260,6 +268,12 @@ function registerRoutes(app) {
       if ('odoo_project_name' in req.body) setDirect('odoo_project_name', odoo_project_name || null);
       if ('service_respondent_name' in req.body) setDirect('service_respondent_name', service_respondent_name || null);
       if ('e2e_disabled' in req.body) setDirect('e2e_disabled', !!e2e_disabled);
+      if ('edition' in req.body) {
+        if (!EDITIONS.includes(req.body.edition)) {
+          return res.status(400).json({ error: 'edition 只能是 community 或 enterprise' });
+        }
+        setDirect('edition', req.body.edition);
+      }
       sets.push('updated_at = NOW()');
       const { rows } = await query(
         `UPDATE projects SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,

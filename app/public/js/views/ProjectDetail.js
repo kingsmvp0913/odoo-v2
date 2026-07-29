@@ -15,6 +15,8 @@ window.ProjectDetailView = Vue.defineComponent({
       editServiceRespondentName: '',
       editE2eDisabled: false,
       savingE2e: false,
+      editEdition: 'community',
+      savingEdition: false,
       runtimeLog: null,
       logLoading: false
     };
@@ -71,6 +73,7 @@ window.ProjectDetailView = Vue.defineComponent({
         this.editOdooProjectName = data.odoo_project_name || '';
         this.editServiceRespondentName = data.service_respondent_name || '';
         this.editE2eDisabled = !!data.e2e_disabled;
+        this.editEdition = data.edition || 'community';
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -197,6 +200,15 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (err) { showToast(err.message, 'error'); }
       finally { this.savingE2e = false; }
     },
+    async saveEdition() {
+      this.savingEdition = true;
+      try {
+        await Api.patch(`projects/${this.project.id}`, { edition: this.editEdition });
+        showToast('已儲存，需重新建置測試區才會生效', 'success');
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+      finally { this.savingEdition = false; }
+    },
     isAdmin() { return window.UserStore.role === 'admin'; }
   },
   template: `
@@ -283,6 +295,21 @@ window.ProjectDetailView = Vue.defineComponent({
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eDisabled ? '已停用 E2E 測試' : 'E2E 測試啟用中' }}</span>
             </label>
+          </div>
+        </div>
+
+        <div v-if="isAdmin()" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">Odoo 版本類型</h3>
+          <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
+            <span style="font-size:var(--fs-sm);color:var(--text-muted)">
+              企業版會在建置測試區時額外掛入該 Odoo 大版本的 enterprise addons（唯讀）。
+              需先由管理員在「企業版來源」登記並同步該版本，否則建置會直接失敗。
+              <strong>改動後需重新建置測試區才會生效。</strong>
+            </span>
+            <select v-model="editEdition" class="form-control" style="max-width:280px" @change="saveEdition" :disabled="savingEdition">
+              <option value="community">社群版（Community）</option>
+              <option value="enterprise">企業版（Enterprise）</option>
+            </select>
           </div>
         </div>
 
