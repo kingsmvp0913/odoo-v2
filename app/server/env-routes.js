@@ -41,14 +41,48 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // 平台簽發一次性 SSO token，導向測試區 idx_aidev_sso 模組免密登入
+  // 平台簽發一次性 SSO token，導向測試區 idx_aidev_sso 模組免密登入。
+  //
+  // 對外名額（external_slot）在這裡借——不在建環境時配。pipeline 的 deploy/E2E 走 docker exec、
+  // 不經對外網址，若在建環境時就配名額，pipeline 併發跑幾十個環境會把 10 個名額瞬間吃光。
+  // 這個端點就是「有真人要看」的唯一訊號。
   app.get('/api/projects/:id/env/sso', verifyToken, async (req, res) => {
     try {
-      const { rows: [env] } = await query('SELECT url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]);
-      if (!env?.url || !env.sso_secret) return res.status(409).json({ error: '測試區尚未就緒' });
+      const { rows: [env] } = await query(
+        'SELECT status, url, sso_secret FROM odoo_envs WHERE project_id=$1', [req.params.id]
+      );
+      if (!env || env.status !== 'running' || !env.sso_secret) {
+        return res.status(409).json({ error: '測試區尚未就緒' });
+      }
+
+      let url = env.url;
+      if (process.env.ENV_EXTERNAL_URL_TEMPLATE) {
+        const { acquireExternalSlot } = require('./lib/external-slot');
+        const { envExternalUrl } = require('./port-alloc');
+        const { syncNginxMap } = require('./lib/nginx-map');
+        const slot = await acquireExternalSlot(req.params.id);
+        url = envExternalUrl(slot);
+        // 這裡必須 await 真正的同步（不能用 debounced 版）：下一行就要把網址交給瀏覽器開新頁，
+        // nginx 還沒 reload 的話使用者當下拿到 502。「還」的路徑才走防抖。
+        await syncNginxMap();
+      }
+      if (!url) return res.status(409).json({ error: '測試區尚未就緒' });
+
       const { rows: [u] } = await query('SELECT username, display_name FROM users WHERE id=$1', [req.userId]);
       const token = mintSsoToken({ secret: env.sso_secret, login: u.username, name: u.display_name, ttlSec: 30 });
-      res.json({ url: `${env.url.replace(/\/$/, '')}/aidev/sso?token=${encodeURIComponent(token)}` });
+      res.json({ url: `${url.replace(/\/$/, '')}/aidev/sso?token=${encodeURIComponent(token)}` });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 明確歸還對外名額。真人「關掉分頁」偵測不到，故歸還只有兩條路：這個端點與閒置逾時。
+  // 只收名額、不停環境——pipeline 可能還要用這個環境。
+  app.post('/api/projects/:id/env/external/release', verifyToken, async (req, res) => {
+    try {
+      const { releaseExternalSlot } = require('./lib/external-slot');
+      const { syncNginxMapDebounced } = require('./lib/nginx-map');
+      await releaseExternalSlot(req.params.id);
+      syncNginxMapDebounced().catch(() => {});
+      res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

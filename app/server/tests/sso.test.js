@@ -59,8 +59,10 @@ test('GET env/sso → 409 當測試區尚未就緒（無 url/sso_secret）', asy
 });
 
 test('GET env/sso → 200 回免密登入 URL 並帶 token', async () => {
+  // status 必須是 running：/env/sso 現在明確檢查狀態（子網域模式下要在這裡借對外名額，
+  // 只有 url/sso_secret 存在但環境其實已停機的話不該再簽發免密登入連結）。
   await dbModule.query(
-    "INSERT INTO odoo_envs (project_id, url, sso_secret) VALUES ($1, 'http://localhost:8071/', 'ssosecret') ON CONFLICT (project_id) DO UPDATE SET url='http://localhost:8071/', sso_secret='ssosecret'",
+    "INSERT INTO odoo_envs (project_id, status, url, sso_secret) VALUES ($1, 'running', 'http://localhost:8071/', 'ssosecret') ON CONFLICT (project_id) DO UPDATE SET status='running', url='http://localhost:8071/', sso_secret='ssosecret'",
     [projectId]
   );
   const res = await request(app).get(`/api/projects/${projectId}/env/sso`).set(auth());
