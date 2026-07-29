@@ -46,6 +46,7 @@ const router = createRouter({
     { path: '/admin/classify-samples', component: window.AdminClassifySamplesView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/prompt-logs', component: window.AdminPromptLogsView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/port-pool', component: window.AdminPortPoolView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/admin/enterprise', component: window.AdminEnterpriseView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
 });
