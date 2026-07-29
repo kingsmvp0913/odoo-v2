@@ -152,4 +152,4 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: back });
 }
 
-module.exports = { parseClarifyChat, runClarifyChat, MODE_RULES };
+module.exports = { parseClarifyChat, runClarifyChat, loadConversation, MODE_RULES };

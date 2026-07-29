@@ -14,6 +14,7 @@ const { assembleTaskContext } = require('./sync');
 const yaml = require('js-yaml');
 const { determineNextStatus, REQUIRED_FIELDS, logAnalysisGate } = require('./analysis');
 const { getProjectNotes } = require('./project-notes');
+const { loadConversation } = require('./clarify-chat');
 
 function buildCommitMessage(task) {
   const title = (task.title || '').trim() || task.task_id;
@@ -246,11 +247,10 @@ async function runTaskAnalysis(taskId, userId, signal) {
     return true;
   }
 
-  // 回帶先前澄清問答的使用者回覆，供 confirm_answered 重跑時參考
-  const { rows: logs } = await query(
-    "SELECT role, content FROM task_logs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 10", [taskId]
-  );
-  const clarification = logs.reverse().filter(l => l.role === 'user').map(l => l.content).join('\n');
+  // 回帶先前澄清問答，供 confirm_answered 重跑時參考。
+  // 必須含 role='ai'：只帶 user 會讓 agent 看不到自己上一輪問過什麼，於是換個角度把同一件事重問一次
+  // （正式站 task 5 連問三輪都在問「項次要不要自動重編」）。比照 spec-review 的對話組裝。
+  const clarification = await loadConversation(taskId);
 
   // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
   // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。

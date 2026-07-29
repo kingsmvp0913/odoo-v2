@@ -57,6 +57,7 @@ acceptance:        # 要「驗什麼」（可觀察、可斷言的結果，供 E
   - ""
 low_confidence: false
 clarification_channel:
+  intro: ""        # 白話說明段（可留空）；不是問題的內容一律放這裡
   questions: []
   user_answer: ""
 
@@ -79,6 +80,15 @@ execution_mode 依「實質風險」判，不看模組數量（多數需求本�
   **一次把所有阻斷性模糊點列齊**：questions 要在這一輪就窮盡所有會影響實作決策的疑問，禁止分批追問（每追問一輪就是一次完整重分析，貴且拖慢）。有多個疑問就一次全列。
   但「禁止分批」只針對「本可一次問完卻硬拆成多輪」；**答覆後重跑時，若使用者的答案本身又引出新的阻斷性疑問，仍應再問**——不要為了「已經問過一次」而對真實的新疑問視而不見、硬猜下去。
 
+**questions 撰寫契約**（違反會讓畫面編號錯亂或強迫使用者回答不該回答的題目）：
+- 白話說明、背景、「這部分不用您決定」這類**不是問題的內容一律放 `intro`**，不得放進 questions。
+- 每筆是一個獨立問題的物件：`id`／`text`／`type`（`choice`｜`text`）／`required`，
+  `choice` 另附 `options`（每項 `key`＋`label`）。
+- `text` 內**不得自帶「Q1：」「問題1：」之類編號**——畫面會自己編號，自帶會變成雙重編號。
+- `text` 內**不得寫「只有第 1 題選 A 才需要回答」**這類條件敘述——用 `depends_on: { question: q1, equals: A }` 表達。
+- 能給選項的一律用 `choice`，不要把 (A)(B)(C) 寫進 text 讓使用者自己打字。
+- **已經問過且得到答案的點，不得換個說法再問一次**；使用者的答案已在【使用者補充說明】裡（含 AI 前一輪的提問）。
+
 <result>
 case_id: "{{task_id}}"
 module: idx_sale_note
@@ -92,7 +102,19 @@ acceptance:
   - "……"
 low_confidence: false
 clarification_channel:
-  questions: []
+  intro: |
+    您影片裡的『位置亂跳』，原因是項目超過 40 筆時系統自動分頁，拖曳只在當前頁生效。
+    這部分會直接修好，不用您決定。
+  questions:
+    - id: q1
+      text: 項次那一欄的數字要維持手動輸入嗎？
+      type: choice
+      required: true
+      options:
+        - key: A
+          label: 系統自動重編
+        - key: B
+          label: 維持手動輸入
   user_answer: ""
 </result>
 

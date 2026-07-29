@@ -8,7 +8,7 @@ const { newDb } = require('pg-mem');
 const { runClaude } = require('../pipeline/claude-runner');
 let dbModule;
 
-const { parseClarifyChat, runClarifyChat } = require('../pipeline/clarify-chat');
+const { parseClarifyChat, runClarifyChat, loadConversation } = require('../pipeline/clarify-chat');
 
 test('parseClarifyChat：answer 只取 DECISION 與 REPLY，不得有題目', () => {
   const out = parseClarifyChat('DECISION: answer\nREPLY:\n分頁是指超過 40 筆時只顯示前 40 筆。\n第二行也算回覆。');
@@ -206,4 +206,14 @@ test('mode 從 tasks.clarify_mode 讀：讀到 answer_or_proceed 時 proceed 才
   await runClarifyChat({ id: task.id }, 1, null, null);
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(rows[0].status).toBe('confirm_answered');
+});
+
+test('回帶對話必須含 AI 發言：只帶 user 會讓分析 agent 看不到自己問過什麼而重複追問（B 回歸）', async () => {
+  const task = await makeTask('confirm_pending');
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','請問項次要自動編號嗎？')", [task.id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','不用')", [task.id]);
+  const conv = await loadConversation(task.id);
+  expect(conv).toContain('AI：請問項次要自動編號嗎？');
+  expect(conv).toContain('使用者：不用');
+  expect(conv.indexOf('AI：')).toBeLessThan(conv.indexOf('使用者：')); // 由舊到新
 });
