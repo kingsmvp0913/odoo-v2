@@ -169,3 +169,14 @@ test('啟動時不對 enterprise 目錄呼叫 ensureTestingBranch，但一般專
   expect(touched).not.toContain(entDir);
   expect(touched).toContain(repoDir);
 });
+
+// 意圖：企業版來源可能在建置成功「之後」才失效（管理員刪掉來源列、或目錄被清）。此時 upgradeModules
+// 若照跑 exec，缺 /mnt/enterprise 的 addons-path 會讓 Odoo 因相依模組找不到而非 0 結束——那會以
+// 「模組相依缺失」的面貌出現，容易被誤判成 code 問題退回 coding。故 dockerCtxFor 一旦標了
+// enterpriseError，upgradeModules 要先擋、報明確指名版本的錯誤，且完全不去碰 docker exec。
+test('企業版來源事後失效（未登記/已被移除）→ upgradeModules 直接拋錯，不呼叫 execOdoo', async () => {
+  await dbModule.query("UPDATE projects SET edition='enterprise' WHERE id=$1", [PID]);
+  // 刻意不 registerSource：等同來源列已被管理員移除，dockerCtxFor 會把 enterpriseError 設上
+  await expect(envAgent.upgradeModules(PID, ['m'])).rejects.toThrow(/17/);
+  expect(dockerEnv.execOdoo).not.toHaveBeenCalled();
+});

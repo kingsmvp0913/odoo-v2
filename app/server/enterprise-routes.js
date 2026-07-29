@@ -53,8 +53,17 @@ function registerRoutes(app) {
   app.post('/api/admin/enterprise-sources/:version/sync', auth, async (req, res) => {
     try {
       const major = majorDigits(req.params.version);
-      const { rows } = await query('SELECT 1 FROM enterprise_sources WHERE odoo_version=$1', [major]);
+      if (!major) return res.status(400).json({ error: '版本格式不正確（例：17 或 17.0）' });
+      const { rows } = await query('SELECT clone_status, updated_at FROM enterprise_sources WHERE odoo_version=$1', [major]);
       if (!rows.length) return res.status(404).json({ error: `Odoo ${major} 的企業版來源尚未設定` });
+      // 併發保護：前端按鈕在 202 回應後立刻恢復可按，畫面要等 3 秒後那次輪詢才顯示「同步中」，
+      // 空窗期很容易被按第二次；同一目錄兩個 git 同時操作可能撞 index.lock，最終由後完成者
+      // 決定 clone_status，可能出現「狀態 done、目錄其實半套」。逾時條件必要：server 若在
+      // 同步中途重啟，狀態會永遠停在 syncing，無條件擋會變成永久鎖死、再也無法重試。
+      const src = rows[0];
+      const syncingRecently = src.clone_status === 'syncing'
+        && new Date(src.updated_at).getTime() > Date.now() - 30 * 60 * 1000;
+      if (syncingRecently) return res.status(409).json({ error: '同步進行中，請稍候再試' });
       let gitEnv;
       try {
         gitEnv = await buildGitEnv(req.userId);
@@ -71,7 +80,9 @@ function registerRoutes(app) {
   // 移除後下次建置會由 resolveEnterprisePath fail loud 擋下。
   app.delete('/api/admin/enterprise-sources/:version', auth, async (req, res) => {
     try {
-      await query('DELETE FROM enterprise_sources WHERE odoo_version=$1', [majorDigits(req.params.version)]);
+      const major = majorDigits(req.params.version);
+      if (!major) return res.status(400).json({ error: '版本格式不正確（例：17 或 17.0）' });
+      await query('DELETE FROM enterprise_sources WHERE odoo_version=$1', [major]);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

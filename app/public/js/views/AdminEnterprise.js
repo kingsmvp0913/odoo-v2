@@ -21,7 +21,7 @@ window.AdminEnterpriseView = Vue.defineComponent({
       if (!this.form.odoo_version || !this.form.repo_url) return showToast('請填版本與 repo URL', 'error');
       this.saving = true;
       try {
-        await Api.put(`admin/enterprise-sources/${this.form.odoo_version}`, {
+        await Api.put(`admin/enterprise-sources/${encodeURIComponent(this.form.odoo_version)}`, {
           repo_url: this.form.repo_url, branch: this.form.branch
         });
         this.form = { odoo_version: '', repo_url: '', branch: '' };

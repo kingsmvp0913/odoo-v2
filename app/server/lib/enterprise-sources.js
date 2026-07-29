@@ -64,6 +64,9 @@ async function syncSource(major, gitEnv) {
   try {
     if (fs.existsSync(path.join(dest, '.git'))) {
       const ref = src.branch || 'HEAD';
+      // origin 是首次 clone 當下寫進 .git/config 的 URL；管理員事後用「編輯」改 repo_url
+      // 只改 DB，若不在此收斂 remote，fetch 抓的仍是舊 repo——會回報同步成功，掛進容器的卻是錯的來源。
+      await runGit(['-C', dest, 'remote', 'set-url', 'origin', src.repo_url], opts);
       await runGit(['-C', dest, 'fetch', '--depth', '1', 'origin', ref], opts);
       await runGit(['-C', dest, 'reset', '--hard', 'FETCH_HEAD'], opts);
     } else {

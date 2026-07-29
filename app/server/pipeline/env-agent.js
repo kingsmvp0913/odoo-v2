@@ -239,6 +239,9 @@ async function upgradeModules(projectId, modules, signal) {
   const modArg = (modules && modules.length ? modules : ['all']).join(',');
   const ctx = await dockerCtxFor(projectId);
   if (!ctx) throw new Error('project not found');
+  // 建置成功「之後」企業版來源才失效（來源列被刪／目錄被清）時，ctx.mounts 會缺 /mnt/enterprise，
+  // 這裡先擋掉、報明確的版本錯誤，避免以「模組相依缺失」的面貌出現而被誤判成 code 問題退回 coding。
+  if (ctx.enterpriseError) throw new Error(ctx.enterpriseError);
   if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
   // 有指定模組給 -i＋-u（新裝＋更新，新模組只 -u 不會裝、Odoo 只印 warning 卻 exit 0＝假成功）；未指定則 -u all。
   const modFlags = (modules && modules.length) ? ['-i', modArg, '-u', modArg] : ['-u', modArg];
@@ -256,6 +259,9 @@ async function runTourTests(projectId, moduleName, signal) {
   if (!moduleName) throw new Error('未指定 module，無法執行 tour 測試');
   const ctx = await dockerCtxFor(projectId);
   if (!ctx) throw new Error('project not found');
+  // 同 upgradeModules：企業版來源在建置成功之後失效時，先擋、報明確版本錯誤，
+  // 避免以「模組相依缺失」的面貌出現而被誤判成 code 問題退回 coding。
+  if (ctx.enterpriseError) throw new Error(ctx.enterpriseError);
   if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
   // chromium 已在 image 內；HttpCase 於容器內自起 http server（用 DOCKER_TEST_HTTP_PORT 與常駐 8069 錯開）
   const { code, stdout, stderr } = await dockerEnv.execOdoo({
@@ -278,6 +284,10 @@ async function uninstallModule(projectId, moduleName) {
   if (!moduleName) return { result: 'skipped_not_installed' };
   const ctx = await dockerCtxFor(projectId);
   if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) return { result: 'skipped_no_env' };
+  // 同 upgradeModules：企業版來源在建置成功之後失效時先擋、報明確版本錯誤。呼叫端
+  // （tasks-routes.uninstallTaskModule）本就 best-effort catch 任何 throw 轉成警告字串、不擋刪除，
+  // 故沿用既有 throw 風格而非再多加一個 skipped_* 分支。
+  if (ctx.enterpriseError) throw new Error(ctx.enterpriseError);
   const script = fs.readFileSync(path.join(__dirname, 'uninstall_module.py'), 'utf8');
   const { code, stdout, stderr } = await dockerEnv.execOdoo({
     container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,

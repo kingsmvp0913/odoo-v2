@@ -104,6 +104,35 @@ test('POST sync 未登記版本 → 404，不觸發同步', async () => {
   expect(ent.syncSource).not.toHaveBeenCalled();
 });
 
+test('POST sync 版本格式不正確 → 400，不觸發同步', async () => {
+  const res = await request(app).post('/api/admin/enterprise-sources/abc/sync').set(auth());
+  expect(res.status).toBe(400);
+  expect(ent.syncSource).not.toHaveBeenCalled();
+});
+
+// 意圖：前端按鈕在 202 回應後立刻恢復可按，畫面要等 3 秒後那次輪詢才顯示「同步中」，
+// 空窗期很容易被連按第二次。同一目錄兩個 git 同時操作可能撞 index.lock，最終由後完成者
+// 決定 clone_status，可能出現「狀態 done、目錄其實半套」——故需擋下重複觸發。
+test('POST sync 但仍在同步中（未逾時）→ 409，不重複觸發', async () => {
+  await dbModule.query(
+    "INSERT INTO enterprise_sources (odoo_version, repo_url, clone_status, updated_at) VALUES ('17','https://x/e.git','syncing',NOW())"
+  );
+  const res = await request(app).post('/api/admin/enterprise-sources/17/sync').set(auth());
+  expect(res.status).toBe(409);
+  expect(ent.syncSource).not.toHaveBeenCalled();
+});
+
+// 意圖：逾時條件是必要的另一面——server 若在同步中途重啟，狀態會永遠停在 syncing，
+// 無條件擋會變成永久鎖死、再也無法重試，故超過 30 分鐘的 syncing 仍要放行。
+test('POST sync 但 syncing 狀態已逾時（server 疑似曾在同步中重啟）→ 仍可重新觸發', async () => {
+  await dbModule.query(
+    "INSERT INTO enterprise_sources (odoo_version, repo_url, clone_status, updated_at) VALUES ('17','https://x/e.git','syncing', NOW() - interval '31 minutes')"
+  );
+  const res = await request(app).post('/api/admin/enterprise-sources/17/sync').set(auth());
+  expect(res.status).toBe(202);
+  expect(ent.syncSource).toHaveBeenCalled();
+});
+
 // 意圖：私有 repo 沒 PAT 一定失敗，與其讓 git 在背景報一串看不懂的認證錯誤，不如當場說清楚。
 test('POST sync 但管理員沒設 PAT → 400 指向設定頁', async () => {
   await dbModule.query("INSERT INTO enterprise_sources (odoo_version, repo_url) VALUES ('17','https://x/e.git')");
@@ -121,6 +150,13 @@ test('DELETE 移除來源登記', async () => {
   expect(res.status).toBe(200);
   const { rows } = await dbModule.query('SELECT 1 FROM enterprise_sources');
   expect(rows).toHaveLength(0);
+});
+
+// 意圖：version 正規化失敗（majorDigits 回空字串）時若不擋，DELETE 會用 odoo_version='' 去刪、
+// 命中 0 列卻仍回 {ok:true}——對管理員是假成功。
+test('DELETE 版本格式不正確 → 400，不誤回假成功', async () => {
+  const res = await request(app).delete('/api/admin/enterprise-sources/abc').set(auth());
+  expect(res.status).toBe(400);
 });
 
 test('非管理員 → 403', async () => {

@@ -120,6 +120,26 @@ test('已 clone 過 → 走 fetch + reset --hard，不重新 clone', async () =>
   expect(calls.some(a => a.includes('clone'))).toBe(false);
 });
 
+// 意圖：管理員把 URL 填錯後用「編輯」改成正確 URL 再同步，是本功能要擋的最危險情境——
+// 若只改 DB 不改 git remote，fetch 會抓 clone 當下寫進 .git/config 的舊 origin，卻回報成功、
+// 狀態顯示可用，掛進容器的其實是錯的 repo。故已 clone 過的來源再同步時，必須先把 origin
+// 收斂到 DB 目前的 repo_url，才能 fetch 到「使用者現在以為在用」的那個 repo。
+test('已 clone 過的來源改了 repo_url 後再同步 → git 參數要帶新 URL（不可黏著舊 origin）', async () => {
+  const dir = path.join(tmpBase, '20');
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+  await dbModule.query(
+    "INSERT INTO enterprise_sources (odoo_version, repo_url, branch, local_path, clone_status) VALUES ('20','https://old-wrong/e.git','20.0',$1,'done')",
+    [dir]
+  );
+  // 模擬管理員事後用「編輯」修正 URL：PUT 只改 DB，不動既有 clone 的 git remote
+  await dbModule.query("UPDATE enterprise_sources SET repo_url='https://correct/e.git' WHERE odoo_version='20'");
+  gitOk();
+  const r = await ent.syncSource('20');
+  expect(r.ok).toBe(true);
+  const calls = mockExecFile.mock.calls.map(c => c[1]);
+  expect(calls.some(a => a.includes('https://correct/e.git'))).toBe(true);
+});
+
 test('同步未登記的版本 → 回錯誤，不去碰 git', async () => {
   const r = await ent.syncSource('19');
   expect(r.ok).toBe(false);
