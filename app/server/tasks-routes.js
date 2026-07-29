@@ -59,6 +59,9 @@ function normalizeQuestion(q, idx) {
     type: q.type === 'choice' ? 'choice' : 'text',
     required: q.required !== false
   };
+  // 預填答案：clarify-chat 在 revise 時把對話中已確定的答案填進來，前端拿它當答案框初值。
+  // 不在白名單裡就會被這個函式丟掉，使用者會被要求重答自己剛講過的事。
+  if (q.answer !== undefined && q.answer !== null && String(q.answer).trim()) out.answer = String(q.answer);
   if (out.type === 'choice') {
     out.options = (Array.isArray(q.options) ? q.options : [])
       .filter(o => o && typeof o.key === 'string' && typeof o.label === 'string')

@@ -1071,3 +1071,35 @@ test('GET /api/tasks/:id → clarification 新結構保留 intro／選項／條�
 
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
+
+test('GET /api/tasks/:id → 題目的預填答案 answer 要保留（AI 依對話填的答案不得被解析器丟掉）', async () => {
+  const y = [
+    'summary: s',
+    'clarification_channel:',
+    '  questions:',
+    '    - id: q1',
+    '      text: 項次要自動重編嗎',
+    '      type: choice',
+    '      required: true',
+    '      answer: B',
+    '      options:',
+    '        - key: A',
+    '          label: 自動重編',
+    '        - key: B',
+    '          label: 維持手動',
+    '    - id: q2',
+    '      text: 沒填答案的題目',
+    '      type: text',
+    '      required: true',
+    '  user_answer: ""'
+  ].join('\n');
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_clar_prefill','odoo','T','confirm_pending',$2) RETURNING id",
+    [userId, y]
+  );
+  const taskId = rows[0].id;
+  const res = await request(app).get(`/api/tasks/${taskId}`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.clarification.questions[0].answer).toBe('B');
+  expect(res.body.clarification.questions[1].answer).toBeUndefined(); // 沒預填的題目不得憑空長出 answer 鍵
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
