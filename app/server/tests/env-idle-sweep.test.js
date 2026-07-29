@@ -15,7 +15,7 @@ jest.mock('../lib/docker-env', () => {
   };
 });
 
-let dbModule, sweepIdleEnvs, dockerEnv, userId;
+let dbModule, sweepIdleEnvs, stopEnv, dockerEnv, userId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -28,7 +28,7 @@ beforeAll(async () => {
   );
   userId = u.id;
   dockerEnv = require('../lib/docker-env');
-  ({ sweepIdleEnvs } = require('../pipeline/env-agent'));
+  ({ sweepIdleEnvs, stopEnv } = require('../pipeline/env-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -131,4 +131,41 @@ test('某個環境抓 log 失敗 → 不中斷整輪，其餘照常處理', asyn
   const { rows } = await dbModule.query('SELECT project_id, status FROM odoo_envs ORDER BY project_id');
   expect(rows.find(r => r.project_id === good).status).toBe('idle');
   expect(rows.find(r => r.project_id === bad).status).toBe('idle'); // 抓不到 log 不影響「閒太久該收」的判定
+});
+
+// 意圖：對外名額與環境本身的去留是兩件事。pipeline 可能還要用這個環境（不能停），
+// 但沒人在看就該把稀缺的對外名額還回去——N=10 量的是「同時幾個人在看」，不是「幾個環境活著」。
+test('對外閒置逾時 → 只收回名額，環境維持 running', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query(
+    "UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() - interval '45 minutes' WHERE project_id=$1",
+    [pid]
+  );
+  const r = await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  const { rows: [env] } = await dbModule.query(
+    'SELECT external_slot, status FROM odoo_envs WHERE project_id=$1', [pid]
+  );
+  expect(env.external_slot).toBeNull();
+  expect(env.status).toBe('running');
+  expect(r.slotsReleased).toBe(1);
+});
+
+test('對外還很活躍 → 名額不動', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query("UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() WHERE project_id=$1", [pid]);
+  const r = await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.external_slot).toBe(0);
+  expect(r.slotsReleased).toBe(0);
+});
+
+// 意圖：stopEnv 沒清名額的話，那個 slot 會被永久佔住——DB 裡有人持有、實際上環境已經沒了，
+// 而 nginx 段也跟著消失（RUNNING_SQL 要求 status='running'），症狀是「名額少了一個且找不到誰佔的」。
+test('stopEnv 一併歸還對外名額', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query('UPDATE odoo_envs SET external_slot=2 WHERE project_id=$1', [pid]);
+  await stopEnv(pid);
+  const { rows: [env] } = await dbModule.query('SELECT external_slot, port FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.external_slot).toBeNull();
+  expect(env.port).toBeNull();
 });

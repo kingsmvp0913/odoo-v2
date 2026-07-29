@@ -7,7 +7,7 @@ const { ensureTestingBranch } = require('./git');
 const { E2E_LOGIN } = require('./e2e-account');
 const { leasePort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
-const { syncNginxMap } = require('../lib/nginx-map');
+const { syncNginxMapDebounced } = require('../lib/nginx-map');
 const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
@@ -312,9 +312,13 @@ async function stopEnv(projectId) {
   const ctx = await dockerCtxFor(projectId);
   if (ctx) { await dockerEnv.stopContainer(ctx.container); await dockerEnv.removeContainer(ctx.container); }
   await query(
-    "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, port=NULL, updated_at=NOW() WHERE project_id=$1",
+    "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, port=NULL, external_slot=NULL, updated_at=NOW() WHERE project_id=$1",
     [projectId]
   );
+  // 停機後 conf 內那段仍指著已被移除的容器（舊分頁重整會拿到 502）。走防抖版：
+  // 夜間關機／批次回收會連續呼叫，逐一 reload 等於連續打擾共用 nginx 上的正式站。
+  const { syncNginxMapDebounced } = require('../lib/nginx-map');
+  syncNginxMapDebounced().catch(() => {});
 }
 
 async function nightlyShutdown() {
@@ -332,10 +336,14 @@ async function nightlyShutdown() {
     const ctx = await dockerCtxFor(env.project_id);
     if (ctx) { await dockerEnv.stopContainer(ctx.container); await dockerEnv.removeContainer(ctx.container); }
     await query(
-      "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, port=NULL, updated_at=NOW() WHERE project_id=$1",
+      "UPDATE odoo_envs SET status='idle', pid=NULL, pid_started_at=NULL, url=NULL, port=NULL, external_slot=NULL, updated_at=NOW() WHERE project_id=$1",
       [env.project_id]
     );
   }
+  // 停機後 conf 內那段仍指著已被移除的容器（舊分頁重整會拿到 502）。走防抖版：
+  // 夜間關機／批次回收會連續呼叫，逐一 reload 等於連續打擾共用 nginx 上的正式站。
+  const { syncNginxMapDebounced } = require('../lib/nginx-map');
+  syncNginxMapDebounced().catch(() => {});
 }
 
 // 閒置回收：port 池能用一小段埠支撐大量專案的前提。每輪做兩件事——
@@ -349,9 +357,11 @@ const MAX_LIFETIME_HOURS = parseInt(process.env.ENV_MAX_LIFETIME_HOURS || '8', 1
 async function sweepIdleEnvs(deps = {}) {
   const idleMin = deps.idleMin ?? IDLE_TIMEOUT_MIN;
   const maxHours = deps.maxHours ?? MAX_LIFETIME_HOURS;
+  const { idleMinutes, releaseExternalSlot } = require('../lib/external-slot');
+  const externalIdleMin = deps.externalIdleMin ?? idleMinutes();
   const { parseLastActivity } = require('../lib/env-activity');
   const { rows } = await query("SELECT project_id FROM odoo_envs WHERE status='running'");
-  let updated = 0, stopped = 0;
+  let updated = 0, stopped = 0, slotsReleased = 0;
 
   for (const { project_id: projectId } of rows) {
     // 使用中的專案完全不碰（同 nightlyShutdown 的鐵則）：砍了會讓 deploy/E2E 中途死掉被誤歸因
@@ -383,7 +393,29 @@ async function sweepIdleEnvs(deps = {}) {
     );
     if (expired) { await stopEnv(projectId); stopped++; }
   }
-  return { updated, stopped };
+
+  // 對外名額回收。必須排在主迴圈「之後」——主迴圈才剛從容器 log 把 last_active_at 更新到最新，
+  // 排在前面會拿上一輪的舊值判定，剛借出的名額會被立刻收走。
+  //
+  // 與環境去留分開判定：pipeline 可能還要用這個環境（不能停），但沒人在看就該把名額還回去。
+  // 已被主迴圈停掉的環境其 external_slot 已由 stopEnv 清空，不會重複處理。
+  const { rows: staleSlots } = await query(
+    `SELECT project_id FROM odoo_envs
+      WHERE external_slot IS NOT NULL
+        AND COALESCE(last_active_at, updated_at) < NOW() - ($1 || ' minutes')::interval`,
+    [String(externalIdleMin)]
+  );
+  for (const { project_id: pid } of staleSlots) {
+    await releaseExternalSlot(pid);
+    slotsReleased++;
+    console.log(`[env-sweep] 專案 ${pid} 對外閒置逾 ${externalIdleMin} 分，歸還檢視名額（環境不停）`);
+  }
+  if (slotsReleased) {
+    const { syncNginxMapDebounced } = require('../lib/nginx-map');
+    syncNginxMapDebounced().catch(() => {});
+  }
+
+  return { updated, stopped, slotsReleased };
 }
 
 // 該專案是否有「使用中」的測試環境：建立中／運行中，或容器仍在／已建置完成（.docker-ready 仍在）。
@@ -524,14 +556,17 @@ async function _runEnvSetupDocker(projectId) {
   try { log += await installModuleRequirements(projectId); } catch (e) { log += `[deps] FAIL ${e.message}\n`; }
   try { log += await _seedOdooUsersDocker(ctx); } catch (e) { log += `[seed] FAIL ${e.message}\n`; }
 
+  // 子網域模式下對外網址是「借到名額的當下才算得出來」，開機時存進 url 會是一個誰都連不上的
+  // 舊 port 模式網址（內部埠已不對公網開）。未設子網域樣板時（本機／未反代機）逐字維持原行為。
+  const bootUrl = process.env.ENV_EXTERNAL_URL_TEMPLATE ? null : envPublicUrl(port, ctx.dirName);
   await query(
     "UPDATE odoo_envs SET status='running', pid=NULL, pid_started_at=NULL, port=$2, url=$3, setup_log=$4, updated_at=NOW() WHERE project_id=$1",
-    [projectId, port, envPublicUrl(port, ctx.dirName), log]
+    [projectId, port, bootUrl, log]
   );
 
-  // 對外曝露：測試區 running 後同步 nginx map（fire-and-forget；gate 未設＝no-op，Windows 零影響）。
-  // 同步失敗只影響對外連結、不阻斷環境（模組內已自 catch 並 loud log）。
-  syncNginxMap().catch(() => {});
+  // 對外曝露：此時尚無人持有名額，同步後 conf 通常不變；仍呼叫是為了收斂殘留段
+  // （fire-and-forget；gate 未設＝no-op，Windows 零影響）。
+  syncNginxMapDebounced().catch(() => {});
 
   // VPN 共管：測試區進入 running 後背景暖機該專案所有 vpn 連線（fire-and-forget，不 await；
   // 撥號慢[≤25s/條]不該延後測試區可用時間，查詢時的 lazy ensureGatewayRunning 會冪等補等）。
