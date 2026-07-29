@@ -3,14 +3,25 @@ const { newDb } = require('pg-mem');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { encrypt } = require('../lib/crypto');
 
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ processed: 0 }), resetLoopCounter: jest.fn().mockResolvedValue(undefined) }));
-jest.mock('../pipeline/git', () => ({ createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn() }));
+jest.mock('../pipeline/git', () => ({
+  createBranch: jest.fn(),
+  runDeploy: jest.fn(),
+  checkoutDefault: jest.fn(),
+  ensureMainBranch: jest.fn(),
+  pullBranch: jest.fn(),
+  ensureTestingBranch: jest.fn(),
+  ensureAiBranch: jest.fn(),
+  syncMainIntoAi: jest.fn(),
+  abortMerge: jest.fn(),
+}));
 
 process.env.JWT_SECRET = 'test-proj';
 process.env.APP_SECRET = 'test-proj-appsecret'; // E-2：PATCH 加密 E2E 測試密碼需 APP_SECRET
-let app, dbModule, token;
+let app, dbModule, token, gitMock;
 
 beforeAll(async () => {
   const db = newDb();
@@ -20,6 +31,7 @@ beforeAll(async () => {
   await dbModule.migrate();
   const { createApp } = require('../index');
   app = createApp();
+  gitMock = require('../pipeline/git');
   const res = await request(app).post('/api/auth/setup').send({ username: 'user1', password: 'pass1234', display_name: 'User' });
   token = res.body.token;
   const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username = 'user1'");
@@ -232,6 +244,81 @@ test('POST reclone：發起 user 未設 PAT、repo 已 clone（.git 存在）→
     .set('Authorization', `Bearer ${token}`).send({});
   expect(res.status).toBe(400);
   expect(res.body.error).toMatch(/PAT/);
+});
+
+// updateMainClone 是背景（fire-and-forget）流程，reclone 端點回應後才在背景跑完；
+// 用輪詢 clone_status 取代直接呼叫（該函式未 export，且不宜為測試新增 export）。
+async function waitReclone(rid) {
+  for (let i = 0; i < 100; i++) {
+    const { rows: [r] } = await dbModule.query(
+      'SELECT clone_status, clone_error FROM project_repos WHERE id=$1', [rid]
+    );
+    if (r.clone_status !== 'cloning') return r;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error('reclone 逾時未完成（clone_status 卡在 cloning）');
+}
+
+// 建一個「已 clone、已設 PAT」可觸發 updateMainClone 更新流程的 repo
+async function setupReclonableRepo(name) {
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name, odoo_version: '17.0' });
+  const pid = p.body.id;
+  const r = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: `https://github.com/test/${name}` });
+  const rid = r.body.id;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+  await dbModule.query(
+    "UPDATE project_repos SET local_path=$2, clone_status='done' WHERE id=$1", [rid, dir]
+  );
+  await dbModule.query('UPDATE users SET github_pat_enc=$2 WHERE id=$1', [userId, encrypt('test-pat-token')]);
+  return { pid, rid, dir };
+}
+
+// 意圖：testing 已改以 ai-dev 為基準重建；「更新 repo」若只 pull main 不同步進 ai-dev，
+// 使用者 push 進 main 的修正（如補上缺的 module）就傳不到測試環境。
+test('POST reclone：pull 完 main 後把新 commit 帶進 ai-dev，testing 才跟得上', async () => {
+  gitMock.ensureMainBranch.mockResolvedValue('main');
+  gitMock.pullBranch.mockResolvedValue(undefined);
+  gitMock.ensureAiBranch.mockResolvedValue(undefined);
+  gitMock.syncMainIntoAi.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+
+  const { pid, rid } = await setupReclonableRepo('reclone-sync-ok');
+  const res = await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+
+  const row = await waitReclone(rid);
+  expect(row.clone_status).toBe('done');
+  expect(gitMock.ensureAiBranch).toHaveBeenCalled();
+  expect(gitMock.syncMainIntoAi).toHaveBeenCalled();
+  expect(gitMock.pullBranch.mock.invocationCallOrder[0])
+    .toBeLessThan(gitMock.syncMainIntoAi.mock.invocationCallOrder[0]);
+});
+
+// 意圖：這裡不綁任何任務，沒有裁決 UI 可用——撞衝突時必須 abort 讓 ai-dev 還原、不留半殘 merge，
+// 並 fail loud 落 clone_error；下一張任務的 analysis 會撞到同一衝突，屆時循正常管道掛上去裁決。
+test('POST reclone：同步衝突 → abort 還原並落 clone_error，不留半殘 merge', async () => {
+  gitMock.ensureMainBranch.mockResolvedValue('main');
+  gitMock.pullBranch.mockResolvedValue(undefined);
+  gitMock.ensureAiBranch.mockResolvedValue(undefined);
+  gitMock.syncMainIntoAi.mockResolvedValue({ hasConflicts: true, conflictFiles: ['a.py'] });
+  gitMock.abortMerge.mockResolvedValue(undefined);
+
+  const { pid, rid, dir } = await setupReclonableRepo('reclone-sync-conflict');
+  const res = await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+
+  const row = await waitReclone(rid);
+  expect(gitMock.abortMerge).toHaveBeenCalledWith(dir);
+  expect(row.clone_status).toBe('error');
+  expect(row.clone_error).toContain('a.py');
+  // I-2：clone_status='error' 之後這個 repo 就從 pipeline 消失（全平台撈 repo 一律 WHERE
+  // clone_status='done'），「開一張任務處理」會撈到 0 個 repo＝死路，不得出現在指示裡。
+  expect(row.clone_error).not.toContain('開一張任務');
+  expect(row.clone_error).toContain('GitHub');
 });
 
 // 意圖：埠改為租約制後，建立專案不該再佔用埠——否則專案數一多就把整池吃光，

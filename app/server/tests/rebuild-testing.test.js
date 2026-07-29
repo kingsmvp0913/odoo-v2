@@ -6,7 +6,7 @@ const { newDb } = require('pg-mem');
 // git 層 mock（比照 merge-agent.test）；衝突檔不存在於磁碟時 resolveConflict 會自然回 false。
 jest.mock('../pipeline/git', () => ({
   revParse: jest.fn().mockResolvedValue('oldsha'),
-  resetTestingToMain: jest.fn().mockResolvedValue(undefined),
+  resetTestingToAiBranch: jest.fn().mockResolvedValue(undefined),
   resetTestingTo: jest.fn().mockResolvedValue(undefined),
   mergeInto: jest.fn(),
   commitAll: jest.fn().mockResolvedValue(undefined),
@@ -33,11 +33,11 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
-  for (const k of ['revParse', 'resetTestingToMain', 'resetTestingTo', 'mergeInto', 'commitAll', 'abortMerge']) {
+  for (const k of ['revParse', 'resetTestingToAiBranch', 'resetTestingTo', 'mergeInto', 'commitAll', 'abortMerge']) {
     gitMock[k].mockReset();
   }
   gitMock.revParse.mockResolvedValue('oldsha');
-  gitMock.resetTestingToMain.mockResolvedValue(undefined);
+  gitMock.resetTestingToAiBranch.mockResolvedValue(undefined);
   gitMock.resetTestingTo.mockResolvedValue(undefined);
   gitMock.commitAll.mockResolvedValue(undefined);
   gitMock.abortMerge.mockResolvedValue(undefined);
@@ -78,7 +78,7 @@ test('重建 → 每 repo reset 到 main，並重併在飛任務，無衝突不�
 
   const warning = await rebuildMod.rebuildTesting(projectId, userId, undefined);
 
-  expect(gitMock.resetTestingToMain).toHaveBeenCalledTimes(2); // 每 repo 一次
+  expect(gitMock.resetTestingToAiBranch).toHaveBeenCalledTimes(2); // 每 repo 一次
   expect(gitMock.mergeInto).toHaveBeenCalledTimes(4);          // 2 repo × 2 task
   for (const c of gitMock.mergeInto.mock.calls) expect(c[1]).toBe('testing');
   expect(warning).toBeNull();
@@ -121,7 +121,7 @@ test('重建 → 衝突且無解法時該任務置 merge_conflict(rebuild=true,p
 // 意圖：非衝突類 git 錯（reset 失敗）→ 還原 testing 到備份 SHA、回警告，且不動任何任務（fail-open）
 test('重建 → reset 失敗時還原 testing 備份 SHA、回警告、不擋刪除', async () => {
   gitMock.revParse.mockResolvedValue('backup123');
-  gitMock.resetTestingToMain.mockRejectedValue(new Error('reset boom'));
+  gitMock.resetTestingToAiBranch.mockRejectedValue(new Error('reset boom'));
   const projectId = await makeProject(['main']);
   const taskId = await addTask(projectId, { status: 'review_pending', branch: 'task/d', taskId: 'd' });
 
@@ -150,7 +150,7 @@ test('rebuildTestingWithinLock：已持有 project lock 內呼叫不死鎖，且
   );
 
   expect(result).toBeNull();                                    // 乾淨完成，非死鎖
-  expect(gitMock.resetTestingToMain).toHaveBeenCalledTimes(1);
+  expect(gitMock.resetTestingToAiBranch).toHaveBeenCalledTimes(1);
   expect(gitMock.mergeInto).toHaveBeenCalledWith('/repos/mp/main', 'testing', 'task/w');
 });
 

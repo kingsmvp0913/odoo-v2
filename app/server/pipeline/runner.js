@@ -12,7 +12,7 @@
 
 const path = require('path');
 const { query } = require('../db');
-const { createBranch, checkoutDefault, ensureWorktreeAtMain, getMainBranch } = require('./git');
+const { createBranch, checkoutDefault, ensureWorktreeAtMain, AI_BRANCH } = require('./git');
 const { withProjectLock } = require('./project-lock');
 const notify = require('../notify');
 
@@ -126,8 +126,8 @@ async function doBranch(task, settings) {
         try {
           for (const repo of repos) {
             const wtPath = path.join(wtParent, path.basename(repo.local_path));
-            const base = await getMainBranch(repo.local_path);
-            await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, base, false);
+            // 切點是 ai-dev（與 analysis 一致）：從 main 切會看不到已核准但尚未進 main 的成果
+            await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, AI_BRANCH, false);
           }
           return null;
         } catch (e) {

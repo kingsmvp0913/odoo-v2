@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
-const { ensureTestingBranch, ensureMainBranch, pullBranch } = require('./pipeline/git');
+const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
 const { deleteTaskDir } = require('./lib/attachments');
@@ -111,19 +111,28 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   });
 }
 
-// 更新既有主 clone 到最新 main：checkout 主分支 + git pull origin <main>（帶明確 remote/branch），
-// 拉完把 testing 重長到最新 main（測試環境 addons 來源分支）。沿用 pipeline task-agent 的更新 main 寫法。
+// 更新既有主 clone：checkout 主分支 + git pull origin <main>，再把 main 的新 commit 帶進 ai-dev，
+// 最後把 testing 重長到最新 ai-dev（測試環境 addons 來源分支）。
+// 少了中間那步，使用者 push 進 main 的依賴修正（如缺的 module）會傳不到測試環境——
+// testing 是以 ai-dev 為基準重建的，main 不在那條線上。
 async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
   try {
     const base = await ensureMainBranch(destPath, gitEnv); // checkout main/master（僅遠端則建本地追蹤分支）
     await pullBranch(destPath, base, gitEnv);              // git pull origin <base>
-    // pull 只更新 main；testing（deploy 實際部署的分支）不會自動跟上——單向往前併的流程從不把 main
-    // 後來的新 commit 帶回 testing。故拉完主動重長 testing 到最新 main＋重併在飛任務，
-    // 否則使用者 push 的依賴修正（如缺的 module）進了 main 卻不在 testing，deploy 仍找不到。
+    await ensureAiBranch(destPath, gitEnv);
+    const sync = await syncMainIntoAi(destPath, gitEnv);
+    if (sync.hasConflicts) {
+      // 此處不綁任何任務，沒有裁決 UI 可用。abort 還原讓 ai-dev 維持原狀並 fail loud。
+      // 訊息只留「去 GitHub 合併」這條：外層 catch 會把 repo 標成 clone_status='error'，而全平台
+      // 撈 repo 一律 WHERE clone_status='done'——repo 一旦是 error 就從 pipeline 消失，「開一張任務
+      // 處理」保證撈到 0 個 repo、approve 直接 400，那是條死路，不能寫進指示裡。
+      await abortMerge(destPath);
+      throw new Error(`main → ai-dev 同步衝突（${sync.conflictFiles.join(', ')}），請先在 GitHub 上把 ai-dev 合併回 main 再更新`);
+    }
     // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
     if (projectId) {
       const { rebuildTestingWithinLock } = require('./pipeline/rebuild-testing');
-      // 別靜默吞掉重建結果：resetTestingToMain 失敗會回警告字串（doRebuild 內部已還原備份），
+      // 別靜默吞掉重建結果：resetTestingToAiBranch 失敗會回警告字串（doRebuild 內部已還原備份），
       // 吞掉會讓「testing 沒跟上 main」查無可查——落 server log 供診斷（fail loud）
       const warn = await rebuildTestingWithinLock(projectId, userId).catch(e => `testing 重建異常：${e.message}`);
       if (warn) console.warn(`[updateMainClone] repo ${repoId} testing 重建未乾淨：${warn}`);

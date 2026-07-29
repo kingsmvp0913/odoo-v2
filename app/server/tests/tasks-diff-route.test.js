@@ -76,7 +76,9 @@ test('有專案分支 → 200 回逐 repo diff', async () => {
   expect(res.status).toBe(200);
   expect(res.body.branch).toBe('task/x');
   expect(res.body.repos).toEqual([{ label: 'main', diff: 'diff --git a/a.py b/a.py\n+x = 1', truncated: false }]);
-  expect(gitMock.diffBranch).toHaveBeenCalledWith('/repos/p/main', 'main', 'task/x');
+  // C-1：diff 基底＝任務切點 ai-dev。用 main 會讓審核者看到其他已核准、尚未回流 main 的任務改動
+  // 一起夾在本任務的 diff 裡（第 N 張任務會看到前 N-1 張的全部程式碼）。
+  expect(gitMock.diffBranch).toHaveBeenCalledWith('/repos/p/main', 'ai-dev', 'task/x');
 });
 
 // 意圖：分支已清理（已核准）的 repo 要標 missing 而非 500，審核歷史頁不因此炸掉

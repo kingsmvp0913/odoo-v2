@@ -105,9 +105,10 @@ async function runTourStage(taskId, userId, signal) {
   const cwd = worktreeParent(info.root, task.task_id);
   try {
     const agent = loadAgent('playwright');
-    // base 主分支依實際 repo 而定（main/master）：供 source-routing 給出正確 diff 基底
-    const { getMainBranch } = require('./git');
-    const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+    // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
+    // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
+    const { AI_BRANCH } = require('./git');
+    const baseBranch = AI_BRANCH;
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
@@ -115,7 +116,7 @@ async function runTourStage(taskId, userId, signal) {
       login: E2E_LOGIN,
       module: moduleName,
       repo_paths: buildRepoPaths(info, task.task_id),
-      main_branch: mainBranch,
+      main_branch: baseBranch,
       git_branch: task.git_branch || '（未設定）',
       project_notes: projectNotes || ''
     }).trim();

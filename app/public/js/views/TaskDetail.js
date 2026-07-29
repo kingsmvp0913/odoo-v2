@@ -44,6 +44,9 @@ window.TaskDetailView = Vue.defineComponent({
     },
     // 重建 testing 引發的衝突沿用舊「已手動解決」流程（不走逐檔裁決）
     isRebuildConflict() { return !!(this.conflictData && this.conflictData.rebuild); },
+    // 此次衝突來自「把 main 的新 commit 拉進 ai-dev」而非任務分支併 testing——
+    // 兩側的意義完全不同，裁決文案必須跟著換，否則使用者會選反邊
+    isSyncConflict() { return !!(this.conflictData && this.conflictData.sync); },
     conflictAllChosen() {
       return this.conflictItems.length > 0 && this.conflictItems.every(i => !!this.conflictChoices[i.key]);
     },
@@ -446,7 +449,12 @@ window.TaskDetailView = Vue.defineComponent({
       finally { this.archiving = false; }
     },
     recLabel(action) {
-      return { take_theirs: '取新版（任務分支）', take_ours: '取舊版（testing 現況）', manual: '我自己手解' }[action] || action;
+      // take_ours = merge 的目標分支（stage 2）、take_theirs = 被併入的來源分支（stage 3）。
+      // 普通 merge：目標 testing、來源 task 分支。sync：目標 ai-dev（AI 的碼）、來源 main（工程師的碼）。
+      const m = this.isSyncConflict
+        ? { take_theirs: '取工程師版（main 新進）', take_ours: '取 AI 版（ai-dev 現況）', manual: '我自己手解' }
+        : { take_theirs: '取新版（任務分支）', take_ours: '取舊版（testing 現況）', manual: '我自己手解' };
+      return m[action] || action;
     },
     async submitConflictResolutions() {
       if (!this.conflictAllChosen) return;
@@ -853,6 +861,10 @@ window.TaskDetailView = Vue.defineComponent({
                 <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:14px">
                   自動合併有 {{ conflictItems.length }} 個檔需要你決定。每個檔已附原因與 AI 建議（預設已選建議），確認後送出即可。
                 </p>
+                <div v-if="isSyncConflict" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:10px">
+                  這張任務開工前要把 main 上工程師改的程式拉進來，但和 AI 已改過的地方撞到了。
+                  裁決完會回到分析重跑，不會直接進部署。
+                </div>
                 <div v-for="(it, idx) in conflictItems" :key="it.key"
                   style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;background:var(--surface)">
                   <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
@@ -994,6 +1006,9 @@ window.TaskDetailView = Vue.defineComponent({
 
             <!-- message：無主動作的狀態，通用留言（回寫預設不勾） -->
             <template v-else>
+              <!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因要看得見，否則會靜默卡好幾天。
+                   只認 sync_wait，避免把「分診中」等狀態殘留的上次停下原因也當成當前錯誤秀出來 -->
+              <div v-if="task.blocker_type === 'sync_wait' && task.blocker_content" class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content }}</div>
               <textarea v-model="newMessageText" class="form-control" placeholder="新增留言...（Enter 送出，Shift+Enter 換行）" rows="4"
                 @keydown.enter.exact.prevent="sendTaskMessage"></textarea>
               <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected" style="display:block;margin-top:6px;font-size:var(--fs-xs)" />

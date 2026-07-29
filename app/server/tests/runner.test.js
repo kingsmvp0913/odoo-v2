@@ -13,7 +13,8 @@ jest.mock('../pipeline/git', () => ({
   checkoutDefault: jest.fn().mockResolvedValue(undefined),
   runDeploy: jest.fn().mockResolvedValue(undefined),
   ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
-  getMainBranch: jest.fn().mockResolvedValue('main')
+  getMainBranch: jest.fn().mockResolvedValue('main'),
+  AI_BRANCH: 'ai-dev'
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 jest.mock('../pipeline/cs-agent', () => ({ runCsAgent: jest.fn().mockResolvedValue(undefined) }));
@@ -139,12 +140,30 @@ test('branch_pending 專案任務：每 repo 冪等確保 worktree（reset=false
   expect(ensureWorktreeAtMain).toHaveBeenCalledTimes(2);
   for (const c of ensureWorktreeAtMain.mock.calls) {
     expect(c[2]).toBe('task/task_odoo_wt1'); // branch
-    expect(c[3]).toBe('main');               // base
+    expect(c[3]).toBe('ai-dev');             // base＝任務切點（Task 6：改從 ai-dev 切，非 main）
     expect(c[4]).toBe(false);                // 沿用、不 reset
     expect(c[1]).toContain(path.join('.worktrees', 'task_odoo_wt1'));
   }
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t]);
   expect(rows[0].status).toBe('coding_running');
+});
+
+// brief 原測試直接呼叫未匯出的 doBranch；runner.js 只匯出 runPipeline 等，改走既有測試沿用的
+// insertTask+run() 管道觸發 branch_pending handler，驗證同一件事：worktree base 用 ai-dev（非 main）。
+test('branch_pending 重入：worktree base 用 ai-dev', async () => {
+  const { ensureWorktreeAtMain } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P3','17.0','p3') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/p3/main',true,'done')", [proj.id]
+  );
+  await insertTask('branch_pending', 'wt3', proj.id);
+  await run();
+
+  expect(ensureWorktreeAtMain).toHaveBeenCalledWith(
+    expect.any(String), expect.any(String), expect.stringContaining('task/task_odoo_wt3'), 'ai-dev', false
+  );
 });
 
 test('branch_pending worktree 建立失敗 → 任務 stopped，原因寫進執行歷程', async () => {

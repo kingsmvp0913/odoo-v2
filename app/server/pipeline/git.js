@@ -344,14 +344,14 @@ async function revParse(repoPath, ref) {
   return stdout.trim();
 }
 
-// 重建 testing：checkout testing（缺則建）後 reset --hard 到最新 main。
-// approved 任務碼已在 main，reset 到 main 即自動含入；呼叫端再重併在飛任務。
+// 重建 testing：checkout testing（缺則建）後 reset --hard 到最新 ai-dev。
+// approved 任務碼已在 ai-dev，reset 到 ai-dev 即自動含入；呼叫端再重併在飛任務。
+// ai-dev 尚未建立（專案從未跑過任務、僅用「更新 repo」）→ 退回實體 main，不讓重建整個失敗。
 // 主 clone 工作樹是 deploy 目標，odoo-bin -u 會在其中留下產物；若沿用普通 checkout，從別的分支
-// （如 updateMainClone 先 pull 把樹切到 main）切回 testing 會被「local/untracked would be overwritten」
-// 擋住 → 整個重建默默失敗、testing 沒跟上 main（實測 task 84 卡住主因）。重建本就是破壞性操作
-// （目的即丟掉 testing 現況重長到 main），故切換前先清 pyc、並用 -f 強制切換、reset 後 clean 未追蹤殘留。
-async function resetTestingToMain(repoPath) {
-  const main = await getMainBranch(repoPath);
+// 切回 testing 會被「local/untracked would be overwritten」擋住 → 整個重建默默失敗（實測 task 84 卡住主因）。
+// 重建本就是破壞性操作，故切換前先清 pyc、用 -f 強制切換、reset 後 clean 未追蹤殘留。
+async function resetTestingToAiBranch(repoPath) {
+  const base = (await refExists(repoPath, `refs/heads/${AI_BRANCH}`)) ? AI_BRANCH : await getMainBranch(repoPath);
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath);
   // 切換前先清未追蹤殘留（deploy/graphify 產物）：未追蹤檔若與 testing 追蹤的檔路徑相撞，
@@ -361,9 +361,9 @@ async function resetTestingToMain(repoPath) {
   try {
     await execFileAsync('git', ['checkout', '-f', 'testing'], { cwd: repoPath });
   } catch {
-    await execFileAsync('git', ['checkout', '-f', '-B', 'testing', main], { cwd: repoPath });
+    await execFileAsync('git', ['checkout', '-f', '-B', 'testing', base], { cwd: repoPath });
   }
-  await execFileAsync('git', ['reset', '--hard', main], { cwd: repoPath });
+  await execFileAsync('git', ['reset', '--hard', base], { cwd: repoPath });
 }
 
 // 還原 testing 到指定 SHA（重建失敗時回滾）
@@ -467,4 +467,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToMain, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };

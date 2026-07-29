@@ -58,9 +58,11 @@ async function runQaAgent(taskId, userId, signal) {
 
   // 產出本輪 QA 原始輸出（resume 或 fresh）：抽成內部函式，好在 transient 失敗時整段重跑一次（比照 deploy-testing）
   const attempt = async () => {
-    // 主分支名依實際 repo 而定（main/master），寫死 main 會讓 diff 基底錯誤、審查失準
-    const { getMainBranch } = require('./git');
-    const mainBranch = await getMainBranch(info.repos[0].local_path).catch(() => 'main');
+    // diff 基底＝任務切點 ai-dev（非實體 main）。任務分支從 ai-dev 切，而 ai-dev 含 main 全部歷史，
+    // 故 `git diff main...task/X` 的 merge-base 落在 main 的 tip → 會把其他已核准、尚未回流 main 的
+    // 任務變更算成本任務的 diff，審查對象整個錯掉（第 N 張任務會看到前 N-1 張的全部程式碼）。
+    const { AI_BRANCH } = require('./git');
+    const baseBranch = AI_BRANCH;
     // 撈最近一筆 QA 未解清單餵給本輪：QA 逐項重驗（修好的掉、沒修的留、新的加），讓迴圈收斂而非每輪重新發散。
     // 新語意下每筆 [QA 未通過] 本身即「當下完整未解清單」，取最新一筆＝最完整，不必串接歷史。
     const { rows: [prev] } = await query(
@@ -79,7 +81,7 @@ async function runQaAgent(taskId, userId, signal) {
     if (canResume) {
       const retryAgent = loadAgent('qa-retry');
       const prompt = retryAgent.render({
-        main_branch: mainBranch,
+        main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
         prior_findings: priorFindings,
@@ -108,7 +110,7 @@ async function runQaAgent(taskId, userId, signal) {
       const prompt = agent.render({
         project_name: info.name,
         odoo_version: info.odoo_version,
-        main_branch: mainBranch,
+        main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
         analysis_yaml: task.analysis_yaml || '（無規格）',

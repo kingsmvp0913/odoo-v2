@@ -3,6 +3,7 @@ const { newDb } = require('pg-mem');
 const mockRunClaude = jest.fn();
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../pipeline/git', () => ({
+  AI_BRANCH: 'ai-dev', // SYNC_LABELS 用它組出「ai-dev（AI 現況）」
   mergeInto: jest.fn(),
   commitResolved: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined),
@@ -355,6 +356,57 @@ test('explainConflict：AI 回合法 JSON → 結構化建議（含兩側內容�
   expect(prompt).toContain('y = 2');
 });
 
+// 意圖（I-1）：兩側標籤必須跟著呼叫端的合併方向走。sync（main → ai-dev）時 ours 是 AI 的碼、
+// theirs 是工程師的碼，與併 testing 恰好相反；沿用寫死的「testing 現況／任務分支（新版）」會讓
+// merge-explain 把工程師剛推的碼當成「本次任務刻意的升級」而系統性偏向 take_theirs，
+// 產出的 reason/rationale 也會跟裁決卡片上的按鈕文案（取工程師版／取 AI 版）自相矛盾。
+test('explainConflict：未給標籤 → 用併 testing 的預設兩側說法', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"classification":"both-added","reason":"r","recommendation":"manual","rationale":"x"}</result>',
+    usage: null, durationMs: null
+  });
+
+  await mergeMod.explainConflict(dir, 'f.py', undefined, {});
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('testing 現況');
+  expect(prompt).toContain('任務分支（新版）');
+});
+
+test('explainConflict：sync 標籤 → prompt 兩側改以 ai-dev／main 描述，不再出現 testing 說法', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"classification":"both-added","reason":"r","recommendation":"manual","rationale":"x"}</result>',
+    usage: null, durationMs: null
+  });
+
+  await mergeMod.explainConflict(dir, 'f.py', undefined, { ...mergeMod.SYNC_LABELS });
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('ai-dev（AI 現況）');
+  expect(prompt).toContain('main（工程師新進）');
+  expect(prompt).not.toContain('testing 現況');
+  expect(prompt).not.toContain('任務分支（新版）');
+  // 標籤不得混進 runClaude 的執行參數（那裡只認 taskId/userId/model 等）
+  expect(mockRunClaude.mock.calls[0][1].oursLabel).toBeUndefined();
+});
+
+test('clarifyConflict：sync 標籤 → 白話回答的兩側說法也跟著換', async () => {
+  const dir = bothAddedRepo();
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"answer":"a","recommendation":"keep","rationale":""}</result>', usage: null, durationMs: null
+  });
+
+  await mergeMod.clarifyConflict(dir, 'f.py',
+    { question: '差在哪？', priorDetail: null, businessContext: null, history: [] },
+    undefined, { ...mergeMod.SYNC_LABELS });
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('main（工程師新進）');
+  expect(prompt).not.toContain('testing 現況');
+});
+
 test('explainConflict：AI 回無法解析（含修復也失敗）→ null（退回純檔名）', async () => {
   const dir = bothAddedRepo();
   mockRunClaude.mockResolvedValue({ text: '我覺得應該取新版', usage: null, durationMs: null });
@@ -449,4 +501,32 @@ test('PYTHON_BIN 指定的 interpreter 被採用（非硬寫 python）', async (
   } finally {
     if (origPyBin === undefined) delete process.env.PYTHON_BIN; else process.env.PYTHON_BIN = origPyBin;
   }
+});
+
+// 意圖：抽出後的 resolveConflicts 是 doMerge 內「逐檔自動解→語法驗證→失敗檔還原標記→產結構化建議」
+// 流程的共用版本，供 Task 6 的 main→ai-dev 同步路徑重用。此處直接驗契約（不經 doMerge/DB 狀態機）。
+// 注意：resolveConflict 對檔案內容用真 fs 讀寫，故沿用既有測試慣例（os.tmpdir()）而非假路徑 '/repo'——
+// 假路徑會讓 fs.readFileSync 直接 ENOENT，resolveConflict 提早回 false，測不到「全部自動解成功」情境。
+describe('resolveConflicts（抽出的共用衝突處理）', () => {
+  test('全部自動解成功 → failed 為空、details 為空', async () => {
+    const os = require('os');
+    const fs = require('fs');
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-resolveall-'));
+    fs.writeFileSync(path.join(dir, 'a.py'), '<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> task\n');
+    mockRunClaude.mockResolvedValueOnce({ text: 'x = 2', usage: null, durationMs: null });
+
+    const r = await mergeMod.resolveConflicts(dir, ['a.py'], { taskId: 1, userId, label: 'r1' }, null);
+
+    expect(r.failed).toEqual([]);
+    expect(r.details).toEqual({});
+    expect(r.aborted).toBeUndefined();
+  });
+
+  test('signal 已中止 → 回 aborted，呼叫端不得標成衝突', async () => {
+    const r = await mergeMod.resolveConflicts('/repo', ['a.py'], { taskId: 1, userId, label: 'r1' }, { aborted: true });
+
+    expect(r.aborted).toBe(true);
+    expect(r.failed).toEqual([]);
+  });
 });

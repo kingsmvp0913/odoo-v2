@@ -7,7 +7,7 @@ const { newDb } = require('pg-mem');
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ ...jest.requireActual('../pipeline/claude-runner'), runClaude: jest.fn() }));
-jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main') }));
+jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main'), AI_BRANCH: 'ai-dev' }));
 jest.mock('../pipeline/task-agent', () => {
   const actual = jest.requireActual('../pipeline/task-agent');
   return { ...actual, getProjectInfo: jest.fn() };

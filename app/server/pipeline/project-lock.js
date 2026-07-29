@@ -22,4 +22,18 @@ function withProjectLock(projectId, fn) {
   return run;
 }
 
-module.exports = { withProjectLock };
+/**
+ * 取不到鎖就早退的變體：回 { locked:false } 表示該專案正忙、fn 完全沒跑。
+ *
+ * 給「本輪不做也沒關係、下一 tick 再試零成本」的冪等工作用（analysis 的進場同步）。
+ * 用 withProjectLock 會排隊等——而 analysis 的鎖區段含 AI 逐 hunk 解衝突，實測可達數分鐘；
+ * 排隊者卡在 prev.then 上等，卻已被 dispatchTask 佔走一個 in-flight 槽（MAX_PER_USER=5），
+ * 同專案幾張任務同進 analysis 就會綁死該使用者全部派工額度，連別專案的任務都派不出去。
+ * 檢查與掛鏈都在同一個同步區段內完成，故 has() 與 withProjectLock() 之間不會有競態。
+ */
+function tryProjectLock(projectId, fn) {
+  if (_chains.has(projectId)) return Promise.resolve({ locked: false });
+  return withProjectLock(projectId, fn).then(value => ({ locked: true, value }));
+}
+
+module.exports = { withProjectLock, tryProjectLock };

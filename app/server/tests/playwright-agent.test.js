@@ -16,7 +16,8 @@ jest.mock('../pipeline/reentry', () => ({ bumpReentryOrStop: jest.fn().mockResol
 jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
   abortMerge: jest.fn().mockResolvedValue(undefined),
-  getMainBranch: jest.fn().mockResolvedValue('main')
+  getMainBranch: jest.fn().mockResolvedValue('main'),
+  AI_BRANCH: 'ai-dev'
 }));
 
 let dbModule, runTourStage, taskAgent, runClaude, ensureEnvRunning, envAgent, classifier, projectId, userId;

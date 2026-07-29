@@ -253,7 +253,7 @@ function registerRoutes(app) {
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
-      const { getMainBranch, diffNameOnly, refExists } = require('./pipeline/git');
+      const { AI_BRANCH, diffNameOnly, refExists } = require('./pipeline/git');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 
       // 先把全部來源目錄算完再開始輸出：header 一旦送出就改不回 JSON 錯誤，
@@ -263,10 +263,11 @@ function registerRoutes(app) {
       for (const repo of repos) {
         // 分支已清（多為已審核通過）→ 無 diff／worktree 可打包，略過該 repo
         if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) continue;
-        const mainBranch = await getMainBranch(repo.local_path);
+        // diff 基底＝任務切點 ai-dev：用 main 會把其他已核准、尚未回流 main 的任務模組也打包進來
+        const baseBranch = AI_BRANCH;
         const wtRepo = path.join(wtParent, path.basename(repo.local_path));
         const repoDir = repoDirName(repo); // 依 repo（git URL 末段）分層：<repoDir>/<module>
-        const changed = await diffNameOnly(repo.local_path, mainBranch, task.git_branch);
+        const changed = await diffNameOnly(repo.local_path, baseBranch, task.git_branch);
         const modules = new Map(); // moduleName → worktree 內來源目錄（去重）
         for (const rel of changed) {
           const mod = findModuleDir(wtRepo, rel);
@@ -412,6 +413,7 @@ function registerRoutes(app) {
       let cd = null;
       try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
       const isRebuild = !!(cd && cd.rebuild); // 來自刪任務觸發的 testing 重建，而非正常 merge_running
+      const isSync = !!(cd && cd.sync); // 來自 main → ai-dev 同步，而非 task 分支併 testing
 
       // 轉 deploy 前驗證主 clone 已無未解衝突並了結 merge（commit）——
       // 否則半套 merge（MERGE_HEAD＋衝突標記）直接進部署，錯誤會被誤歸因為程式問題（健檢 U6）
@@ -461,6 +463,16 @@ function registerRoutes(app) {
         return res.json({ ok: true, warnings: warn ? [warn] : [] });
       }
 
+      if (isSync) {
+        // sync 衝突解完＝ai-dev 已含 main 的新碼，回分析重跑（此時 sync 已 commit，重跑冪等）
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, cd.prior_status || 'analysis_running']
+        );
+        runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+        return res.json({ ok: true });
+      }
+
       await query(
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
         [req.params.id]
@@ -479,7 +491,7 @@ function registerRoutes(app) {
   app.post('/api/tasks/:id/resolve-conflicts', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        'SELECT id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
+        'SELECT id, status, project_id, merge_conflict_data FROM tasks WHERE id = $1 AND user_id = $2',
         [req.params.id, req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
@@ -524,13 +536,29 @@ function registerRoutes(app) {
       });
       if (outcome.error) return res.status(400).json({ error: outcome.error });
 
+      let cd = null;
+      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+
       if (outcome.stillOpen.length) {
-        // 尚有 manual／未決檔：保留 merge_conflict，更新資料只留未解檔（清掉已解檔的卡片）
+        // 尚有 manual／未決檔：保留 merge_conflict，更新資料只留未解檔（清掉已解檔的卡片）。
+        // sync／prior_status 等旗標必須沿用——整包覆寫會讓 sync 衝突退化成一般 merge 衝突：
+        // 卡片文案退回「任務分支／testing」（兩側恰好相反，使用者會選反邊），收尾時還會把仍停在
+        // 分析階段（無 analysis_yaml／無分支／無 worktree）的任務直接推去 deploy_testing。
         await query(
           "UPDATE tasks SET merge_conflict_data = $2, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, JSON.stringify({ repos: outcome.stillOpen })]
+          [rows[0].id, JSON.stringify({ ...(cd || {}), repos: outcome.stillOpen })]
         );
         return res.json({ ok: true, done: false, remaining: outcome.stillOpen });
+      }
+
+      if (cd && cd.sync) {
+        // 比照 mark-conflict-resolved：sync 衝突解完回分析重跑，不進部署（程式碼還沒開始寫）
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, cd.prior_status || 'analysis_running']
+        );
+        runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+        return res.json({ ok: true, done: true });
       }
 
       await query(
@@ -583,11 +611,13 @@ function registerRoutes(app) {
       const detail = repoEntry.details[file] = repoEntry.details[file] || {};
       detail.qa = detail.qa || [];
 
-      const { clarifyConflict } = require('./pipeline/merge-agent');
+      const { clarifyConflict, DEFAULT_LABELS, SYNC_LABELS } = require('./pipeline/merge-agent');
+      // sync 衝突的兩側（ours=ai-dev、theirs=main）與併 testing 相反，標籤要跟著換，
+      // 否則 AI 的白話說明會跟同一張卡片上的按鈕文案（取工程師版／取 AI 版）自相矛盾。
       const result = await clarifyConflict(
         repoRow.local_path, file,
         { question, priorDetail: repoEntry.details[file], businessContext: rows[0].analysis_yaml, history: detail.qa },
-        null, { taskId: rows[0].id, userId: req.userId }
+        null, { taskId: rows[0].id, userId: req.userId, ...(cd.sync ? SYNC_LABELS : DEFAULT_LABELS) }
       );
 
       detail.qa.push({ q: question, a: result.answer });

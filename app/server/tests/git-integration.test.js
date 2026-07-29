@@ -133,10 +133,10 @@ test('syncWithMain：與 main 衝突 → hasConflicts＋檔名（不假成功）
 }, 30000);
 
 // 意圖：主 clone 工作樹是 deploy 目標，odoo-bin -u 會在其中留下產物弄髒工作樹。
-// 舊 resetTestingToMain 用普通 checkout，從別的分支（updateMainClone 先 pull 把樹切到 main）切回
+// 舊版用普通 checkout，從別的分支（updateMainClone 先 pull 把樹切到 main）切回
 // testing 時會被「local changes would be overwritten」擋住 → 整個重建默默失敗、testing 沒跟上 main
-// （task 84 實測卡住主因）。此測驗證髒工作樹下仍能強制重長 testing 到最新 main。
-test('resetTestingToMain：工作樹髒（tracked 改動＋未追蹤碰撞）仍強制重長 testing 到最新 main', async () => {
+// （task 84 實測卡住主因）。此測驗證髒工作樹下（ai-dev 不存在、退回 main）仍能強制重長 testing。
+test('resetTestingToAiBranch：工作樹髒（tracked 改動＋未追蹤碰撞）仍強制重長 testing 到最新 main', async () => {
   const repo = await makeRepo();                 // main: a.py=x=1
   // testing 從舊 main 建，且獨有一個 main 沒有的追蹤檔（供製造未追蹤碰撞）
   await sh(repo, 'checkout', '-b', 'testing');
@@ -155,7 +155,7 @@ test('resetTestingToMain：工作樹髒（tracked 改動＋未追蹤碰撞）仍
   await write(repo, 't_only.py', 'untracked collide\n');          // (2) 未追蹤檔，與 testing 追蹤路徑相撞 → 連 -f 都被擋
 
   // 舊碼在此會拋錯（checkout testing 被兩種髒法擋住）→ 重建默默失敗；新碼先 clean 再 -f 強制切換後 reset
-  await git.resetTestingToMain(repo);
+  await git.resetTestingToAiBranch(repo);
 
   expect((await sh(repo, 'branch', '--show-current')).stdout.trim()).toBe('testing');
   const testingSha = (await sh(repo, 'rev-parse', 'testing')).stdout.trim();
@@ -165,6 +165,29 @@ test('resetTestingToMain：工作樹髒（tracked 改動＋未追蹤碰撞）仍
   expect(fs.existsSync(path.join(repo, 't_only.py'))).toBe(false);              // reset 到 main（無此檔）→ 移除
   expect(fs.readFileSync(path.join(repo, 'a.py'), 'utf8').replace(/\r/g, '')).toBe('x = 2\n'); // 髒改動丟棄、還原成 main 版（正規化 CRLF）
   expect((await sh(repo, 'status', '--porcelain')).stdout.trim()).toBe('');      // 工作樹乾淨
+}, 30000);
+
+test('resetTestingToAiBranch：testing 重長到 ai-dev（含尚未進 main 的成果）', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  await write(repo, 'approved.py', 'done = 1\n'); // 已核准、還沒進 main
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'approved work');
+
+  await git.resetTestingToAiBranch(repo);
+
+  const { stdout: t } = await sh(repo, 'rev-parse', 'testing');
+  const { stdout: a } = await sh(repo, 'rev-parse', 'ai-dev');
+  expect(t.trim()).toBe(a.trim());
+  expect(fs.existsSync(path.join(repo, 'approved.py'))).toBe(true); // 不會從測試環境消失
+}, 30000);
+
+test('resetTestingToAiBranch：ai-dev 不存在時退回 main，不整個炸掉', async () => {
+  const repo = await makeRepo();
+  await git.resetTestingToAiBranch(repo);
+  const { stdout: t } = await sh(repo, 'rev-parse', 'testing');
+  const { stdout: m } = await sh(repo, 'rev-parse', 'main');
+  expect(t.trim()).toBe(m.trim());
 }, 30000);
 
 test('ensureAiBranch：本地與遠端都沒有 → 從 main 建立、內容相同、遠端出現該分支', async () => {
@@ -275,3 +298,72 @@ test('mergeToAiBranch：併入 ai-dev 並推遠端，實體 main 完全不動', 
   const { stdout: mainAfter } = await sh(repo, 'rev-parse', 'main');
   expect(mainAfter.trim()).toBe(mainBefore.trim());
 }, 30000);
+
+describe('ai-dev 隔離：端到端', () => {
+  test('全新專案 → 建 ai-dev → 任務從 ai-dev 切 → approve 後 ai-dev 前進而 main 不動', async () => {
+    const repo = await makeRepo();
+    const { stdout: mainAtStart } = await sh(repo, 'rev-parse', 'main');
+
+    // 1. 第一張任務開工：ai-dev 自動建立，內容 == main
+    await git.ensureAiBranch(repo, undefined);
+    await git.syncMainIntoAi(repo, undefined);
+    const { stdout: aiInit } = await sh(repo, 'rev-parse', 'ai-dev');
+    expect(aiInit.trim()).toBe(mainAtStart.trim());
+
+    // 2. 任務 A 從 ai-dev 切、寫碼、核准
+    await sh(repo, 'checkout', '-b', 'task/a', 'ai-dev');
+    await write(repo, 'a_feature.py', 'a = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'task a');
+    await git.mergeToAiBranch(repo, 'task/a', undefined);
+
+    // 3. 任務 B 從 ai-dev 切 → 看得到 A 的成果（這是切點選 ai-dev 的全部理由）
+    await git.ensureAiBranch(repo, undefined);
+    await sh(repo, 'checkout', '-b', 'task/b', 'ai-dev');
+    expect(fs.existsSync(path.join(repo, 'a_feature.py'))).toBe(true);
+
+    // 4. 實體 main 從頭到尾一步都沒動
+    const { stdout: mainAtEnd } = await sh(repo, 'rev-parse', 'main');
+    expect(mainAtEnd.trim()).toBe(mainAtStart.trim());
+    // 遠端 main 也沒動
+    const { stdout: remoteMain } = await sh(repo, 'rev-parse', 'origin/main');
+    expect(remoteMain.trim()).toBe(mainAtStart.trim());
+  }, 60000);
+
+  test('工程師手推 commit 到 main → 下一張任務開工後該 commit 出現在 ai-dev', async () => {
+    const repo = await makeRepo();
+    await git.ensureAiBranch(repo, undefined);
+    // AI 先做了一版
+    await write(repo, 'ai.py', 'ai = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'ai work');
+    // 工程師直接改 main（不同檔，不衝突）
+    await sh(repo, 'checkout', 'main');
+    await write(repo, 'hotfix.py', 'fix = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'engineer hotfix');
+
+    await git.syncMainIntoAi(repo, undefined);
+
+    // 兩邊的碼都在 ai-dev 上
+    expect(fs.existsSync(path.join(repo, 'ai.py'))).toBe(true);
+    expect(fs.existsSync(path.join(repo, 'hotfix.py'))).toBe(true);
+  }, 60000);
+
+  test('testing 重長到 ai-dev 後，含已核准但未進 main 的成果', async () => {
+    const repo = await makeRepo();
+    await git.ensureAiBranch(repo, undefined);
+    await sh(repo, 'checkout', '-b', 'task/c', 'ai-dev');
+    await write(repo, 'c.py', 'c = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'task c');
+    await git.mergeToAiBranch(repo, 'task/c', undefined);
+
+    await git.resetTestingToAiBranch(repo);
+
+    expect(fs.existsSync(path.join(repo, 'c.py'))).toBe(true);
+    const { stdout: t } = await sh(repo, 'rev-parse', 'testing');
+    const { stdout: a } = await sh(repo, 'rev-parse', 'ai-dev');
+    expect(t.trim()).toBe(a.trim());
+  }, 60000);
+});

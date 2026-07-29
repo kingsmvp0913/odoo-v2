@@ -39,11 +39,20 @@ jest.mock('../pipeline/git', () => ({
   pullBranch: jest.fn(),
   ensureMainBranch: jest.fn().mockResolvedValue('main'),
   ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
-  getMainBranch: jest.fn().mockResolvedValue('main')
+  getMainBranch: jest.fn().mockResolvedValue('main'),
+  AI_BRANCH: 'ai-dev',
+  ensureAiBranch: jest.fn().mockResolvedValue('ai-dev'),
+  syncMainIntoAi: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
+  commitResolved: jest.fn().mockResolvedValue(undefined),
+  abortMerge: jest.fn().mockResolvedValue(undefined)
+}));
+jest.mock('../pipeline/merge-agent', () => ({
+  resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} }),
+  SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
-let dbModule, runTaskAnalysis, runTaskCoding, git;
+let dbModule, runTaskAnalysis, runTaskCoding, git, mergeAgent;
 let userId, projectId;
 
 beforeAll(async () => {
@@ -70,13 +79,14 @@ beforeAll(async () => {
   );
 
   git = require('../pipeline/git');
+  mergeAgent = require('../pipeline/merge-agent');
   ({ runTaskAnalysis, runTaskCoding } = require('../pipeline/task-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
-test('分析前 pull main 失敗 → 任務 stopped，不繼續分析', async () => {
-  git.pullBranch.mockRejectedValueOnce(new Error('could not resolve host github.com'));
+test('分析前同步 ai-dev 失敗 → 任務 stopped，不繼續分析', async () => {
+  git.syncMainIntoAi.mockRejectedValueOnce(new Error('could not resolve host github.com'));
   const { rows: [t] } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_pull','odoo','T','需求','analysis_running',$2) RETURNING id",
     [userId, projectId]
@@ -85,7 +95,7 @@ test('分析前 pull main 失敗 → 任務 stopped，不繼續分析', async ()
   expect(handled).toBe(true);
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
-  expect(after.blocker_content).toContain('main');
+  expect(after.blocker_content).toContain('ai-dev');
 });
 
 test('任務發起人未設 PAT → 停任務、blocker=git_cred', async () => {
@@ -283,9 +293,9 @@ test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且�
   );
   await runTaskAnalysis(t.id, userId);
 
-  // 建立任務 worktree（branch task/<id>、reset=true 讀最新 main）；worktree 路徑用 task_id（非拋棄式）
+  // 建立任務 worktree（branch task/<id>、reset=true、base=ai-dev＝任務切點）；worktree 路徑用 task_id（非拋棄式）
   expect(git.ensureWorktreeAtMain).toHaveBeenCalledWith(
-    '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'main', true
+    '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'ai-dev', true
   );
   // claude cwd 是任務 worktree 父目錄（coding 之後會沿用同一個）
   expect(calls[0].cwd).toContain(path.join('.worktrees', 'ana_iso'));
@@ -351,4 +361,200 @@ test('F-failloud：analysis 回 stopped_reason → stopped 帶原因', async () 
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
   expect(after.blocker_content).toContain('無法分析');
+});
+
+// ===== 主題 G：切點改 ai-dev、開工前同步 main（Task 6）=====
+// 沿用本檔既有的 git mock 樣態（git.<fn>），非 brief 假設的獨立 gitMock/queryMock 變數；
+// merge_conflict_data 走真的 pg-mem DB（TEXT 欄位），比照 merge-agent.test.js 的 JSON.parse 慣例讀回。
+
+test('G-1 analysis 開工：worktree 從 ai-dev 切，不從 main 切', async () => {
+  mockClaude();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g1','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  expect(git.ensureWorktreeAtMain).toHaveBeenCalledWith(
+    '/repos/tap/main', expect.any(String), 'task/ta_g1', 'ai-dev', true
+  );
+});
+
+test('G-2 先 ensureAiBranch 再 syncMainIntoAi，順序不可顛倒（ai-dev 不存在時 sync 會 checkout 失敗）', async () => {
+  mockClaude();
+  // 必須清掉先前測試的呼叫紀錄：invocationCallOrder[0] 取的是整個測試檔第一次呼叫，
+  // 不清就算本 run 順序顛倒也照樣拿到舊的正確順序＝這條硬約束的唯一守門測試永遠不會紅。
+  git.ensureAiBranch.mockClear();
+  git.syncMainIntoAi.mockClear();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g2','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  const ensureOrder = git.ensureAiBranch.mock.invocationCallOrder[0];
+  const syncOrder = git.syncMainIntoAi.mock.invocationCallOrder[0];
+  expect(ensureOrder).toBeLessThan(syncOrder);
+});
+
+test('G-3 sync 衝突且自動解不掉 → 停 merge_conflict，資料帶 sync 旗標與 prior_status，且不 abortMerge（留 MERGE_HEAD 給裁決端點收尾）', async () => {
+  git.abortMerge.mockClear();
+  git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
+  mergeAgent.resolveConflicts.mockResolvedValueOnce({ failed: ['a.py'], details: { 'a.py': { recommendation: 'manual' } } });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g3','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('merge_conflict');
+  const cd = typeof after.merge_conflict_data === 'string' ? JSON.parse(after.merge_conflict_data) : after.merge_conflict_data;
+  expect(cd.sync).toBe(true);
+  expect(cd.prior_status).toBe('analysis_running'); // 裁決完要能回到分析重跑
+  expect(cd.repos[0].files).toEqual(['a.py']);
+  expect(git.abortMerge).not.toHaveBeenCalled(); // 裁決端點的 concludeMerge 要靠 MERGE_HEAD 收尾，這裡不可清
+  // I-1：sync 的兩側語意與「併入 testing」相反（ours=ai-dev 的 AI 碼、theirs=main 的工程師碼），
+  // 不帶標籤時 merge-explain 會把工程師的碼講成「本次任務刻意的升級」、建議系統性偏 take_theirs
+  expect(mergeAgent.resolveConflicts).toHaveBeenCalledWith(
+    '/repos/tap/main', ['a.py'],
+    expect.objectContaining({ oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }),
+    undefined
+  );
+});
+
+test('G-4 sync 衝突但自動解光了 → commit 後照常繼續分析，不停任務', async () => {
+  mockClaude();
+  git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
+  mergeAgent.resolveConflicts.mockResolvedValueOnce({ failed: [], details: {} });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g4','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  expect(git.commitResolved).toHaveBeenCalledWith('/repos/tap/main', ['a.py'], '[sync] main → ai-dev (resolve conflicts)');
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).not.toBe('merge_conflict'); // 解光了就不該卡人
+});
+
+test('G-5 sync 期間手動暫停 → 狀態原地不動、不誤標 merge_conflict 也不標 stopped，且先清半套 merge（否則重跑會在 checkout main 撞牆）', async () => {
+  git.abortMerge.mockClear();
+  git.syncMainIntoAi.mockResolvedValueOnce({ hasConflicts: true, conflictFiles: ['a.py'] });
+  mergeAgent.resolveConflicts.mockResolvedValueOnce({ aborted: true, failed: [], details: {} });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g5','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('analysis_running'); // 原地不動，解除暫停後從這一關重跑
+  expect(after.blocker_content).toBeNull();
+  expect(git.abortMerge).toHaveBeenCalledWith('/repos/tap/main');
+});
+
+test('G-6 setupErr（sync 之外的例外，如建 worktree 失敗）→ stopped 前先清半套 merge，避免污染同專案後續任務', async () => {
+  git.abortMerge.mockClear();
+  git.ensureWorktreeAtMain.mockRejectedValueOnce(new Error('boom worktree'));
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g6','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  expect(git.abortMerge).toHaveBeenCalledWith('/repos/tap/main');
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('stopped');
+  expect(after.blocker_content).toContain('boom worktree');
+});
+
+// 意圖：主 clone 殘留 MERGE_HEAD 時的進場守衛（比照 merge-agent.js doMerge 的同名守衛語意）；
+// 用真的暫存目錄＋真的 .git/MERGE_HEAD 檔案，因為 task-agent.js 用真的 fs.existsSync 判斷（未 mock fs）。
+test('G-9 進場守衛：主 clone 殘留 MERGE_HEAD 且同專案另一任務卡 merge_conflict 待人工解 → 本輪不動作', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-guard-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(path.join(dir, '.git', 'MERGE_HEAD'), 'abcdef\n');
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('TAP-G9', '17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  // 同專案另一任務正卡在 merge_conflict（人工正在裁決）
+  const { rows: [blocker] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g9_other','odoo','T','c','merge_conflict',$2) RETURNING id",
+    [userId, proj.id]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g9','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, proj.id]
+  );
+
+  const handled = await runTaskAnalysis(t.id, userId);
+  expect(handled).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('analysis_running'); // 本輪不動作，非 stopped（否則失敗代價比 merge 那關更高）
+  // I-3 fail loud：狀態不變，但卡住原因必須落地。原本只送一則 socket 事件＝沒開終端面板就永遠看不到，
+  // 任務可能「分析中」掛好幾天沒人知道在等誰。
+  expect(after.blocker_type).toBe('sync_wait');
+  expect(after.blocker_content).toContain(`#${blocker.id}`);
+});
+
+// 意圖（I-3 的另一半）：擋住的原因消失後要自己清掉，否則畫面會一直掛著已不成立的等待訊息。
+test('G-9b 擋住的衝突任務解決後 → 下一輪同步照常進行，sync_wait 等待訊息清空', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  mockClaude({ onCall: (c) => {
+    c.stdout.emit('data', JSON.stringify({ type: 'result',
+      result: '<result>\ncase_id: "g9b"\nmodule: idx_x\nodoo_version: "17.0"\nexecution_mode: "MODE_A"\nsummary: "s"\n</result>',
+      usage: null, duration_ms: 5 }) + '\n');
+    c.emit('close', 0);
+  }});
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-guard-clear-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('TAP-G9B', '17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, blocker_type, blocker_content) VALUES ($1,'ta_g9b','odoo','T','需求','analysis_running',$2,'sync_wait','等待任務 #999 的同步衝突處理完成') RETURNING id",
+    [userId, proj.id]
+  );
+
+  await runTaskAnalysis(t.id, userId); // 無 MERGE_HEAD → 守衛不觸發
+  const { rows: [after] } = await dbModule.query('SELECT blocker_type, blocker_content FROM tasks WHERE id=$1', [t.id]);
+  expect(after.blocker_type).toBeNull();
+  expect(after.blocker_content).toBeNull();
+});
+
+test('G-10 進場守衛：主 clone 殘留 MERGE_HEAD 但無人在裁決（前一輪殘留）→ abortMerge 自癒後照常同步', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  mockClaude();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-guard-heal-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(path.join(dir, '.git', 'MERGE_HEAD'), 'abcdef\n');
+  git.abortMerge.mockClear();
+
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('TAP-G10', '17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
+    [proj.id, dir]
+  );
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_g10','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, proj.id]
+  );
+
+  await runTaskAnalysis(t.id, userId);
+  expect(git.abortMerge).toHaveBeenCalledWith(dir); // 自癒
+  expect(git.ensureAiBranch).toHaveBeenCalledWith(dir, expect.anything()); // 自癒後照常繼續同步
 });

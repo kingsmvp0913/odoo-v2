@@ -6,9 +6,9 @@ description: 分析單一無法自動解決的 Git 合併衝突檔，輸出結�
 model: sonnet
 stage: merge
 ---
-以下是一個「無法自動解決」的 Git 合併衝突檔。這是把任務分支併入 testing 時發生的衝突：
-- 「testing 端（現況）」＝目標分支既有的內容
-- 「任務分支端（新版）」＝本次任務要併入的內容
+以下是一個「無法自動解決」的 Git 合併衝突檔。兩側的來源如下（照這兩個名稱稱呼它們，不要自行改用別的分支名）：
+- 「{{ours_label}}」＝合併目標端既有的內容（git stage 2／ours）
+- 「{{theirs_label}}」＝這次要併進來的內容（git stage 3／theirs）
 
 請判斷衝突性質並給出建議，**只輸出一個 JSON**，完整包在 `<result></result>` 內，標籤外不要有任何其他文字：
 
@@ -24,16 +24,16 @@ stage: merge
 ```
 
 recommendation 的判準：
-- `take_theirs`（取新版／任務分支）：任務分支是 testing 端的超集，或明顯是本次任務刻意的升級，取新版不會遺失 testing 端內容。
-- `take_ours`（取舊版／testing）：任務分支的改動是誤加、或會破壞 testing 既有功能。
+- `take_theirs`（取「{{theirs_label}}」）：這一側是另一側的超集、或明顯是刻意的新增／升級，取它不會遺失「{{ours_label}}」的內容。
+- `take_ours`（取「{{ours_label}}」）：「{{theirs_label}}」的改動是誤加、或會破壞「{{ours_label}}」既有功能。
 - `manual`（需人工逐行合併）：兩邊各有必要且互斥的改動，取任一整側都會遺失東西，無法用「取整側」解決。
 
 判不準時傾向 `manual`，不要臆測。
 
 【檔案】{{file_path}}
 
-【testing 端（現況）內容】
+【「{{ours_label}}」內容】
 {{ours}}
 
-【任務分支端（新版）內容】
+【「{{theirs_label}}」內容】
 {{theirs}}
