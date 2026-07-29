@@ -3,7 +3,7 @@
 // 症狀是連結看起來正常、點了卻連不上（127.0.0.x 在使用者的電腦上指向他自己），
 // 而本機開發（瀏覽器就在宿主上）永遠重現不了。故未設定時必須逐字維持原行為。
 
-const ENV_KEYS = ['ENV_BIND_HOST', 'ENV_PUBLIC_URL_TEMPLATE'];
+const ENV_KEYS = ['ENV_BIND_HOST', 'ENV_PUBLIC_URL_TEMPLATE', 'ENV_EXTERNAL_URL_TEMPLATE'];
 
 function withEnv(env, fn) {
   const saved = {};
@@ -72,6 +72,49 @@ describe('envPublicUrl', () => {
   test('無 folder（專案未設 folder_name 且名稱為空）時不炸，只是留空', () => {
     withEnv({ ENV_PUBLIC_URL_TEMPLATE: 'https://{folder}.example.com' }, (m) => {
       expect(m.envPublicUrl(8069, undefined)).toBe('https://.example.com');
+    });
+  });
+});
+
+// 意圖：對外子網域網址與 port 模式網址必須並存且互不干擾——正式機走子網域，本機／未反代機
+// 走 port 模式。合成同一個函式的話，本機開發會拿到 null（無 slot、無樣板）而永遠開不了測試區，
+// 且那個症狀在正式機重現不了。
+describe('envExternalUrl', () => {
+  test('樣板未設 → null（子網域模式關閉，呼叫端退回 port 模式）', () => {
+    withEnv({}, (m) => {
+      expect(m.envExternalUrl(3)).toBeNull();
+    });
+  });
+
+  test('未持有 slot（null）→ null，即使樣板已設', () => {
+    withEnv({ ENV_EXTERNAL_URL_TEMPLATE: 'https://odoo-ai-test-{slot}.example.com' }, (m) => {
+      expect(m.envExternalUrl(null)).toBeNull();
+      expect(m.envExternalUrl(undefined)).toBeNull();
+    });
+  });
+
+  test('slot 0 不得被當成「沒有」——0 是合法名額', () => {
+    withEnv({ ENV_EXTERNAL_URL_TEMPLATE: 'https://odoo-ai-test-{slot}.example.com' }, (m) => {
+      expect(m.envExternalUrl(0)).toBe('https://odoo-ai-test-0.example.com');
+    });
+  });
+
+  test('slot 代入樣板產出對外網址', () => {
+    withEnv({ ENV_EXTERNAL_URL_TEMPLATE: 'https://odoo-ai-test-{slot}.example.com' }, (m) => {
+      expect(m.envExternalUrl(7)).toBe('https://odoo-ai-test-7.example.com');
+    });
+  });
+
+  test('同一佔位符出現多次全部替換', () => {
+    withEnv({ ENV_EXTERNAL_URL_TEMPLATE: 'https://t-{slot}.example.com/{slot}' }, (m) => {
+      expect(m.envExternalUrl(2)).toBe('https://t-2.example.com/2');
+    });
+  });
+
+  // 意圖：子網域模式開啟時，port 模式的網址組法不得受影響——兩者是不同機器上的不同途徑。
+  test('設了子網域樣板不影響 envPublicUrl 的既有行為', () => {
+    withEnv({ ENV_EXTERNAL_URL_TEMPLATE: 'https://odoo-ai-test-{slot}.example.com' }, (m) => {
+      expect(m.envPublicUrl(8069, 'demo')).toBe('http://127.0.0.2:8069');
     });
   });
 });
