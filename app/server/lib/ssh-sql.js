@@ -72,16 +72,16 @@ function buildPsqlCmd(conn, sql) {
     const dbUser = conn.db_user || 'odoo';
     if (password) {
       const safePw = password.replace(/'/g, "'\\''");
-      return `echo '${safePw}' | sudo -S bash -c 'echo ${encoded} | base64 -d | docker exec -i ${container} psql -U ${dbUser} -d ${dbName} --csv'`;
+      return `echo '${safePw}' | sudo -S bash -c 'echo ${encoded} | base64 -d | docker exec -i ${container} psql -v ON_ERROR_STOP=1 -U ${dbUser} -d ${dbName} --csv'`;
     }
-    return `echo ${encoded} | base64 -d | sudo docker exec -i ${container} psql -U ${dbUser} -d ${dbName} --csv`;
+    return `echo ${encoded} | base64 -d | sudo docker exec -i ${container} psql -v ON_ERROR_STOP=1 -U ${dbUser} -d ${dbName} --csv`;
   }
   const sudoUser = conn.sudo_user || 'odoo';
   if (password) {
     const safePw = password.replace(/'/g, "'\\''");
-    return `echo '${safePw}' | sudo -S -u ${sudoUser} bash -c 'echo ${encoded} | base64 -d | psql -d ${dbName} --csv'`;
+    return `echo '${safePw}' | sudo -S -u ${sudoUser} bash -c 'echo ${encoded} | base64 -d | psql -v ON_ERROR_STOP=1 -d ${dbName} --csv'`;
   }
-  return `echo ${encoded} | base64 -d | sudo -u ${sudoUser} psql -d ${dbName} --csv`;
+  return `echo ${encoded} | base64 -d | sudo -u ${sudoUser} psql -v ON_ERROR_STOP=1 -d ${dbName} --csv`;
 }
 
 function parseCsv(text) {
@@ -246,7 +246,9 @@ async function runSelect(conn, sql) {
   catch (e) { return { ok: false, error: `[SSH] ${e.message}` }; }
   const cleanErr = res.stderr.split('\n').filter(l => !l.trim().startsWith('[sudo]')).join('\n');
   if (res.code !== 0) return { ok: false, error: cleanErr.trim() || res.stdout.trim() || `exit ${res.code}` };
-  if (!res.stdout.trim()) return { ok: true, columns: [], rows: [], row_count: 0 };
+  // --csv 連 0 筆也會印表頭，所以 stdout 全空＝查詢沒真的跑成功（舊版 psql 吃不到 ON_ERROR_STOP 時
+  // SQL 錯誤仍會 exit 0）。這裡不能回「成功 0 筆」，否則錯誤被偽裝成查無資料害呼叫端誤判。
+  if (!res.stdout.trim()) return { ok: false, error: cleanErr.trim() || 'psql 未回傳任何輸出，查詢未成功執行' };
   const parsed = parseCsv(res.stdout.trim());
   return { ok: true, columns: parsed[0] || [], rows: parsed.slice(1), row_count: Math.max(0, parsed.length - 1) };
 }
