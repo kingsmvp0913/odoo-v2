@@ -155,12 +155,30 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.envWorking = false; }
     },
+    // 對外檢視名額只有 10 個、且真人「關掉分頁」偵測不到，沒有這顆按鈕就只剩「閒置 20 分」
+    // 一條歸還路徑——別人得乾等前一個人逾時才借得到。只收名額、不停環境（pipeline 可能還在用）。
+    async releaseExternal() {
+      this.envWorking = true;
+      try {
+        await Api.post(`projects/${this.$route.params.id}/env/external/release`, {});
+        showToast('已歸還對外名額，環境仍在運行', 'success');
+        await this.loadEnv();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.envWorking = false; }
+    },
     async openEnv() {
       // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
       // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
       const w = window.open('about:blank', '_blank');
+      // 環境可能已被閒置回收，後端會自動起並回 starting；首建可達數分鐘，
+      // 空白分頁乾等會被當成當掉，故先在分頁裡寫一句話再輪詢。
+      if (w) {
+        try {
+          w.document.write('<p style="font-family:sans-serif;padding:2rem">測試區建立中，請稍候…</p>');
+        } catch (e) { console.debug('about:blank document.write 被瀏覽器擋下，不影響後續導向:', e && e.message); }
+      }
       try {
-        const { url } = await Api.get(`projects/${this.$route.params.id}/env/sso`);
+        const url = await pollEnvSso(this.$route.params.id);
         if (w) w.location = url; else window.location = url;
       } catch (e) {
         if (w) w.close();
@@ -357,8 +375,6 @@ window.ProjectDetailView = Vue.defineComponent({
             <span :style="{ color: env.status === 'running' ? 'var(--success,#48bb78)' : env.status === 'error' ? 'var(--error)' : 'var(--text-muted)' }">
               {{ { idle:'● 閒置', setting_up:'⟳ 建立中（自動重新整理）', running:'● 運行中', error:'✕ 錯誤' }[env.status] || env.status }}
             </span>
-            <a v-if="env.url" href="#" @click.prevent="openEnv" style="font-size:var(--fs-sm)">{{ env.url }}</a>
-            <span v-if="env.port && env.status === 'running'" style="font-size:var(--fs-sm);color:var(--text-muted)">port {{ env.port }}</span>
           </div>
           <div v-if="env.error_msg" class="error-msg" style="margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
           <details v-if="env.setup_log" style="margin-bottom:10px">
@@ -375,7 +391,9 @@ window.ProjectDetailView = Vue.defineComponent({
               <span class="spinner"></span>建立中…
             </button>
             <template v-if="env.status === 'running'">
-              <button v-if="env.url" class="btn btn-primary btn-sm" @click="openEnv">開啟測試區</button>
+              <button v-if="env.status === 'running'" class="btn btn-primary btn-sm" @click="openEnv">開啟測試區</button>
+              <button v-if="env.external_slot != null" class="btn btn-outline btn-sm" @click="releaseExternal" :disabled="envWorking"
+                title="把對外檢視名額還回池子讓別人能用。環境本身不停，pipeline 不受影響">關閉對外</button>
               <button class="btn btn-outline btn-sm" @click="stopEnv" :disabled="envWorking">停止</button>
             </template>
             <button v-if="env.built || env.status !== 'idle'" class="btn btn-outline btn-sm" @click="viewLog" :disabled="logLoading">

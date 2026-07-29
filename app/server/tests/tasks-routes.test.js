@@ -1257,3 +1257,48 @@ test('POST /answer → depends_on 未滿足的題目不算必填，可直接送�
   await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [rows[0].id]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });
+
+// 意圖：任務頁的「🖥 測試機」入口靠 env_status 決定顯不顯示。若 JOIN 只收 running，
+// 環境被閒置回收後 env_status 變 NULL＝入口整個消失，使用者連按都按不到——而「按下去自動幫他起」
+// 正是 /env/sso 回 202 的全部理由。JOIN 必須帶回真實狀態（含 idle／setting_up／error），
+// 「要不要顯示」與「顯示成什麼」交給前端與端點判斷。
+describe('env_status 契約：非 running 的環境也要帶回狀態', () => {
+  let envProjectId, envTaskId;
+  beforeAll(async () => {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ('EnvStatusProj','17.0') RETURNING id"
+    );
+    envProjectId = p.id;
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'task_env_status','odoo','T','new',$2) RETURNING id",
+      [userId, envProjectId]
+    );
+    envTaskId = t.id;
+    await dbModule.query(
+      "INSERT INTO odoo_envs (project_id, status) VALUES ($1,'idle')", [envProjectId]
+    );
+  });
+  afterAll(async () => {
+    await dbModule.query('DELETE FROM tasks WHERE id=$1', [envTaskId]);
+    await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [envProjectId]);
+    await dbModule.query('DELETE FROM projects WHERE id=$1', [envProjectId]);
+  });
+
+  test('列表：環境 idle → env_status 為 idle（不是 null）', async () => {
+    const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${adminToken}`);
+    const t = res.body.find(x => x.id === envTaskId);
+    expect(t.env_status).toBe('idle');
+  });
+
+  test('明細：環境 idle → env_status 為 idle（不是 null）', async () => {
+    const res = await request(app).get(`/api/tasks/${envTaskId}`).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.task.env_status).toBe('idle');
+  });
+
+  test('專案根本沒有環境列 → env_status 為 null（入口才該真的消失）', async () => {
+    const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${adminToken}`);
+    const t = res.body.find(x => x.task_id === 'task_odoo_1');
+    expect(t.env_status).toBeNull();
+  });
+});

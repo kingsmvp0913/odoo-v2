@@ -15,8 +15,8 @@ const isValidPort = v => Number.isInteger(v) && v >= 1 && v <= 65535;
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];
 
-  // 池狀態儀表板。只回「平台看得到的事實」——誰在租、宿主綁不綁得起來；
-  // 對外 NAT／防火牆是否放行平台測不出來，該落差由前端常駐警語說明。
+  // 池狀態儀表板。只回「平台看得到的事實」——誰在租、宿主綁不綁得起來。
+  // 這段埠不對外（只給反向代理從宿主端連），故無「對外是否放行」的落差要說明。
   app.get('/api/admin/port-pool', auth, async (req, res) => {
     try {
       const { min, max } = await portAlloc.getPoolRange();

@@ -5,6 +5,13 @@ const { newDb } = require('pg-mem');
 
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn() }));
 jest.mock('../lib/project-vpn', () => ({ startProjectVpns: jest.fn().mockResolvedValue(), stopProjectVpns: jest.fn().mockResolvedValue() }));
+// nginx 同步在單元測試不該真的跑（會排一個防抖 timer 再去讀 env gate）；改 mock 以便斷言
+// 「停機／歸還名額後有沒有去同步 conf」——漏了的話 conf 會留著指向已消失容器的那一段。
+jest.mock('../lib/nginx-map', () => ({
+  syncNginxMap: jest.fn().mockResolvedValue({ ok: true }),
+  syncNginxMapDebounced: jest.fn().mockResolvedValue({ ok: true }),
+}));
+
 jest.mock('../lib/docker-env', () => {
   const actual = jest.requireActual('../lib/docker-env');
   return {
@@ -15,7 +22,7 @@ jest.mock('../lib/docker-env', () => {
   };
 });
 
-let dbModule, sweepIdleEnvs, dockerEnv, userId;
+let dbModule, sweepIdleEnvs, stopEnv, dockerEnv, nginxMap, userId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -28,7 +35,8 @@ beforeAll(async () => {
   );
   userId = u.id;
   dockerEnv = require('../lib/docker-env');
-  ({ sweepIdleEnvs } = require('../pipeline/env-agent'));
+  nginxMap = require('../lib/nginx-map');
+  ({ sweepIdleEnvs, stopEnv } = require('../pipeline/env-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -38,6 +46,7 @@ beforeEach(async () => {
   await dbModule.query('DELETE FROM odoo_envs');
   await dbModule.query('DELETE FROM projects');
   dockerEnv.containerLogs.mockReset().mockResolvedValue('');
+  nginxMap.syncNginxMapDebounced.mockClear();
 });
 
 // startedMinAgo：環境已啟動多久（updated_at）；lastActiveMinAgo：null 表示 last_active_at 為 NULL
@@ -131,4 +140,88 @@ test('某個環境抓 log 失敗 → 不中斷整輪，其餘照常處理', asyn
   const { rows } = await dbModule.query('SELECT project_id, status FROM odoo_envs ORDER BY project_id');
   expect(rows.find(r => r.project_id === good).status).toBe('idle');
   expect(rows.find(r => r.project_id === bad).status).toBe('idle'); // 抓不到 log 不影響「閒太久該收」的判定
+});
+
+// 意圖：對外名額與環境本身的去留是兩件事。pipeline 可能還要用這個環境（不能停），
+// 但沒人在看就該把稀缺的對外名額還回去——N=10 量的是「同時幾個人在看」，不是「幾個環境活著」。
+test('對外閒置逾時 → 只收回名額，環境維持 running', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query(
+    "UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() - interval '45 minutes' WHERE project_id=$1",
+    [pid]
+  );
+  const r = await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  const { rows: [env] } = await dbModule.query(
+    'SELECT external_slot, status FROM odoo_envs WHERE project_id=$1', [pid]
+  );
+  expect(env.external_slot).toBeNull();
+  expect(env.status).toBe('running');
+  expect(r.slotsReleased).toBe(1);
+});
+
+test('對外還很活躍 → 名額不動', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query("UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() WHERE project_id=$1", [pid]);
+  const r = await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.external_slot).toBe(0);
+  expect(r.slotsReleased).toBe(0);
+});
+
+// 意圖：借名額時會把 last_active_at 推到現在（那就是「有人要看」的證據），但同一輪 sweep 的主迴圈
+// 緊接著用容器 log 解析出的時間戳「無條件覆寫」同一個欄位。log 反映的是「上一次真的有請求」，
+// 在「剛借到名額、瀏覽器還沒打第一個請求」的數秒空窗裡它必然比較舊——覆寫下去等於把時間往回撥，
+// 同一輪的對外回收就立刻把剛借出的名額收走，使用者當下拿到 502。時間只能往前，不能往後。
+test('log 的活動時間比 last_active_at 舊 → 不得往回撥，剛借出的名額不能被同一輪收走', async () => {
+  const pid = await mkEnv('a', 21000, { startedMinAgo: 5, lastActiveMinAgo: 0 });
+  await dbModule.query('UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() WHERE project_id=$1', [pid]);
+  dockerEnv.containerLogs.mockResolvedValue(logAt(45));   // 上一次真請求在 45 分鐘前
+  const r = await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.external_slot).toBe(0);
+  expect(r.slotsReleased).toBe(0);
+});
+
+// 意圖：往前推的方向必須照舊生效——只擋回撥，不是整個停掉更新。
+test('log 的活動時間比 last_active_at 新 → 照常往前更新', async () => {
+  const pid = await mkEnv('a', 21000, { startedMinAgo: 90, lastActiveMinAgo: 80 });
+  dockerEnv.containerLogs.mockResolvedValue(logAt(1));
+  await sweepIdleEnvs({ idleMin: 60, maxHours: 999 });
+  const { rows: [env] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.status).toBe('running');   // 剛剛才有人操作，不該被當成閒置 80 分收掉
+});
+
+// 意圖：stopEnv 沒清名額的話，那個 slot 會被永久佔住——DB 裡有人持有、實際上環境已經沒了，
+// 而 nginx 段也跟著消失（RUNNING_SQL 要求 status='running'），症狀是「名額少了一個且找不到誰佔的」。
+test('stopEnv 一併歸還對外名額', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query('UPDATE odoo_envs SET external_slot=2 WHERE project_id=$1', [pid]);
+  await stopEnv(pid);
+  const { rows: [env] } = await dbModule.query('SELECT external_slot, port FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(env.external_slot).toBeNull();
+  expect(env.port).toBeNull();
+});
+
+// 意圖：這份 conf 是共用 nginx 的 include 檔。停機後那一段仍指著已被移除的容器，舊分頁重整會拿到
+// 502；歸還名額後那個子網域也該從 conf 消失，否則下一個借到同號 slot 的人會被導到別人的環境。
+// 兩條路徑都必須走防抖版（批次回收會連續呼叫，逐一 reload 等於連續打擾同一台 nginx 上的正式站）。
+test('停機後會同步 nginx conf（走防抖版）', async () => {
+  const pid = await mkEnv('a', 21000);
+  await stopEnv(pid);
+  expect(nginxMap.syncNginxMapDebounced).toHaveBeenCalled();
+  expect(nginxMap.syncNginxMap).not.toHaveBeenCalled();
+});
+
+test('歸還對外名額後會同步 nginx conf（走防抖版）', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query("UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() - interval '45 minutes' WHERE project_id=$1", [pid]);
+  await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  expect(nginxMap.syncNginxMapDebounced).toHaveBeenCalled();
+});
+
+test('沒有任何名額到期 → 不去打擾共用 nginx', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query('UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() WHERE project_id=$1', [pid]);
+  await sweepIdleEnvs({ idleMin: 999, maxHours: 999, externalIdleMin: 20 });
+  expect(nginxMap.syncNginxMapDebounced).not.toHaveBeenCalled();
 });

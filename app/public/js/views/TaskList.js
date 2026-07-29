@@ -214,8 +214,15 @@ window.TaskListView = Vue.defineComponent({
       // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
       // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
       const w = window.open('about:blank', '_blank');
+      // 環境可能已被閒置回收，後端會自動起並回 starting；首建可達數分鐘，
+      // 空白分頁乾等會被當成當掉，故先在分頁裡寫一句話再輪詢。
+      if (w) {
+        try {
+          w.document.write('<p style="font-family:sans-serif;padding:2rem">測試區建立中，請稍候…</p>');
+        } catch (e) { console.debug('about:blank document.write 被瀏覽器擋下，不影響後續導向:', e && e.message); }
+      }
       try {
-        const { url } = await Api.get(`projects/${t.project_id}/env/sso`);
+        const url = await pollEnvSso(t.project_id);
         if (w) w.location = url; else window.location = url;
       } catch (e) {
         if (w) w.close();
@@ -521,7 +528,7 @@ window.TaskListView = Vue.defineComponent({
                   @click.stop="$router.push('/projects/' + t.project_id)">
               {{ t.project_name }}
             </span>
-            <a v-if="t.env_url" href="#" @click.stop.prevent="openEnv(t)" class="env-chip">
+            <a v-if="t.env_status" href="#" @click.stop.prevent="openEnv(t)" class="env-chip">
               🖥 測試機
             </a>
           </div>

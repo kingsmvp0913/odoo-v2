@@ -504,6 +504,9 @@ async function migrate() {
     { table: 'wiki_drift', col: 'applied_at', sql: 'ALTER TABLE wiki_drift ADD COLUMN applied_at TIMESTAMPTZ' },
     // port 租約制：閒置判定用（由 cron 解析容器 log 更新）
     { table: 'odoo_envs', col: 'last_active_at', sql: 'ALTER TABLE odoo_envs ADD COLUMN last_active_at TIMESTAMPTZ' },
+    // 對外子網域名額（0..count-1）。刻意獨立於 port：port 是 pipeline 也在佔的內部資源，
+    // 由 port 推導對外網址等於「只要有環境在跑就佔一個對外名額」，正是本次要消除的問題。
+    { table: 'odoo_envs', col: 'external_slot', sql: 'ALTER TABLE odoo_envs ADD COLUMN external_slot INTEGER' },
     // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
     { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },
@@ -590,6 +593,9 @@ async function migrate() {
   // 租約併發保護：兩個 setup 同時選到同埠時由 DB 擋下第二個，呼叫端重取（見 port-alloc.js leasePort）。
   // 必須是 partial——未租用的列 port 為 NULL 且可有多筆。
   await query('CREATE UNIQUE INDEX IF NOT EXISTS odoo_envs_port_idx ON odoo_envs (port) WHERE port IS NOT NULL').catch(() => {});
+  // 對外名額併發保護：兩人同時開不同專案的測試區時由 DB 擋下第二個，呼叫端換下一個 slot
+  // （見 lib/external-slot.js acquireExternalSlot）。必須是 partial——未曝露的列為 NULL 且可有多筆。
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS odoo_envs_extslot_idx ON odoo_envs (external_slot) WHERE external_slot IS NOT NULL').catch(() => {});
 
   // 執行歷程：依 task_id 取全部事件、以 id 排序回放
   await query('CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events (task_id, id)').catch(() => {});

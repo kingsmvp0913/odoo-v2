@@ -20,10 +20,11 @@ function loadFresh(env = {}) {
   return mod;
 }
 
-test('未設定時預設 21000/21012（高位段，避開 8069/8080 常見服務）', () => {
+// 意圖：內部池不再受 NAT 放行段限制，上限只受主機資源限制。
+test('未設定時預設 21000/21019（高位段，避開 8069/8080 常見服務）', () => {
   const mod = loadFresh();
   expect(mod.DEFAULT_PORT_MIN).toBe(21000);
-  expect(mod.DEFAULT_PORT_MAX).toBe(21012);
+  expect(mod.DEFAULT_PORT_MAX).toBe(21019);
 });
 
 test('LOOPBACK_BASE 固定 8069，不隨 PORT_MIN 移動', () => {
@@ -60,10 +61,10 @@ describe('getPoolRange 優先序', () => {
 
   beforeEach(async () => { await dbModule.query('DELETE FROM teams_settings'); });
 
-  test('DB 未設 + env 未設 → 用預設值 21000/21012', async () => {
+  test('DB 未設 + env 未設 → 用預設值 21000/21019', async () => {
     delete process.env.PROJECT_PORT_MIN;
     delete process.env.PROJECT_PORT_MAX;
-    expect(await getPoolRange()).toEqual({ min: 21000, max: 21012 });
+    expect(await getPoolRange()).toEqual({ min: 21000, max: 21019 });
   });
 
   test('DB 未設 + env 有設 → 用 env（既有只設 config.json 的部署行為不變）', async () => {
@@ -94,6 +95,6 @@ describe('getPoolRange 優先序', () => {
 
   test('DB 只設了一半（min 有值 max 為 NULL）→ 該項退回 env／預設，不當成 0', async () => {
     await dbModule.query('INSERT INTO teams_settings (id, port_pool_min) VALUES (1, 21005)');
-    expect(await getPoolRange()).toEqual({ min: 21005, max: 21012 });
+    expect(await getPoolRange()).toEqual({ min: 21005, max: 21019 });
   });
 });

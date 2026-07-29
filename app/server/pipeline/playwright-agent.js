@@ -75,11 +75,17 @@ async function runTourStage(taskId, userId, signal) {
     await stopTask(taskId, userId, '測試環境未運行且無法自動啟動，請至專案環境頁檢查', 'env');
     return true;
   }
-  const { rows: [env] } = await query('SELECT url FROM odoo_envs WHERE project_id=$1', [task.project_id]);
-  if (!env?.url) {
-    await stopTask(taskId, userId, '測試環境未提供 URL，無法執行 E2E 測試', 'env');
+  // 位址由內部埠現算，不讀 odoo_envs.url：子網域模式下開機時 url 一律存 NULL（對外網址是
+  // 真人借到檢視名額的當下才算得出來，而 pipeline 從不借名額）。tour 是 docker exec 進容器跑的、
+  // 不經對外網址，沿用 url 會讓正式機每張啟用 E2E 的任務都停在「未提供 URL」，本機重現不了。
+  // 用 envBindHost 而非對外網址：那正是 ensureEnvRunning 剛剛探通的位址，agent 也連得到。
+  const { rows: [env] } = await query('SELECT port FROM odoo_envs WHERE project_id=$1', [task.project_id]);
+  if (!env?.port) {
+    await stopTask(taskId, userId, '測試環境未持有埠，無法執行 E2E 測試', 'env');
     return true;
   }
+  const { envBindHost } = require('../port-alloc');
+  const testUrl = `http://${envBindHost(env.port)}:${env.port}`;
 
   let moduleName = '';
   try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; } catch { /* SD 解析失敗 */ }
@@ -112,7 +118,7 @@ async function runTourStage(taskId, userId, signal) {
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
-      test_url: env.url,
+      test_url: testUrl,
       login: E2E_LOGIN,
       module: moduleName,
       repo_paths: buildRepoPaths(info, task.task_id),

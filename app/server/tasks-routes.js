@@ -159,10 +159,12 @@ function registerRoutes(app) {
       }
 
       const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.approved_at, t.merged_to_main_at, t.created_at, t.updated_at,
-                          e.url AS env_url,
+                          e.status AS env_status,
                           p.name AS project_name, p.e2e_disabled
                    FROM tasks t
-                   LEFT JOIN odoo_envs e ON e.project_id = t.project_id AND e.status = 'running'
+                   -- 不限 running：環境被閒置回收後仍要帶回 idle，前端的「🖥 測試機」入口才不會
+                   -- 整個消失。按下去由 /env/sso 自動起環境（202）或帶出建立失敗原因（409）。
+                   LEFT JOIN odoo_envs e ON e.project_id = t.project_id
                    LEFT JOIN projects p ON p.id = t.project_id
                    WHERE t.${conditions.join(' AND t.')} ORDER BY t.updated_at DESC`;
       const { rows } = await query(sql, params);
@@ -211,9 +213,10 @@ function registerRoutes(app) {
   app.get('/api/tasks/:id', verifyToken, async (req, res) => {
     try {
       const { rows: tasks } = await query(
-        `SELECT t.*, e.url AS env_url
+        `SELECT t.*, e.status AS env_status
            FROM tasks t
-           LEFT JOIN odoo_envs e ON e.project_id = t.project_id AND e.status = 'running'
+           -- 不限 running：理由同列表 route（環境被回收後入口不得消失）
+           LEFT JOIN odoo_envs e ON e.project_id = t.project_id
           WHERE t.id = $1 AND t.user_id = $2 AND t.is_hidden = false`,
         [req.params.id, req.userId]
       );

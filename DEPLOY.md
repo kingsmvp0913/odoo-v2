@@ -120,37 +120,57 @@ location = /odooAiDev { return 301 /odooAiDev/; }
 ——那個位址在使用者的電腦上指向他自己，連結看起來正常、點下去連不上。**本機開發永遠重現不了**
 （瀏覽器就在宿主上）。
 
-**採 port 模式**（同網域不同埠）：所有測試區共用一個裸網域、靠 port 區分，例
-`https://odoo-ai-dev.ideaxpress.biz:21000`、`:21001`…。為何不用 wildcard 子網域——DNS 若託管在
-不支援 `*` 記錄、也無 ACME DNS API 的商（如 Wix），wildcard 起不來；port 模式只需**裸網域一張
-HTTP-01 憑證**（可一鍵簽、自動續期），憑證只認主機名不認 port、一張蓋全部埠，且新專案自動配埠、
-**零人工 DNS/憑證**。
+**採「雙池 ＋ 按需子網域」**：對外曝露與「環境活著」脫鉤，兩個池獨立配發、獨立回收。
+
+- **內部埠池**（`PROJECT_PORT_MIN`–`MAX`，預設 `21000`–`21019`）：每個 running 環境借一個，綁
+  `ENV_BIND_HOST`（如 `10.0.0.1`）。**不對公網 publish、不需 NAT 放行**——它只出現在 nginx 的
+  `proxy_pass`（nginx 容器 → 宿主方向）。上限只受主機資源限制。
+- **對外子網域池**（`EXTERNAL_SLOT_COUNT`，預設 `10`）：slot `0..N-1` 對應
+  `odoo-ai-test-<slot>.<網域>`，全部走 443。**只有真人點「開啟測試區」時才借**
+  （`GET /api/projects/:id/env/sso`），閒置 `EXTERNAL_IDLE_MIN`（預設 20）分鐘、按「關閉對外」
+  （`POST /api/projects/:id/env/external/release`）或環境停機時歸還。
+
+> pipeline 的 deploy／E2E 走 `docker exec` 進既有容器，不使用對外網址，**永遠不佔對外名額**。
+> 故 `EXTERNAL_SLOT_COUNT` 的意義是「同時最多幾個人在看環境」，與 pipeline 併發無關。
+
+為何不用 wildcard 子網域——DNS 若託管在不支援 `*` 記錄、也無 ACME DNS API 的商（如 Wix），
+wildcard 憑證起不來；改建**固定 N 筆 A record ＋ 一張蓋 N 個名字的 SAN 憑證**（HTTP-01 逐一簽）。
 
 > Odoo 不支援掛子路徑（`/web`、`/odoo`、asset 皆 root-absolute），故只能子網域或 port、不能子路徑。
-> cookie 依 host 隔離、不看 port——同網域多埠共用 cookie；但真人一次只操作一個測試區、E2E 各跑在
-> 獨立瀏覽器 context，故實務上不受影響。
+> 子網域模式下每個 slot 是獨立 host，cookie 天然隔離，多人同時看不同測試區不再互蓋 session。
+> slot 會重用：A 還掉 slot 3、B 借到 slot 3 後，瀏覽器對 `odoo-ai-test-3` 的舊 cookie 會落到 B，
+> 但 B 是新的 Odoo session，登入即覆蓋。
 
 設定（`data/config.json`，全 opt-in，未設＝維持 loopback、Windows／未反代機不受影響）：
 
 | key | 值 | 用途 |
 |-----|----|----|
 | `ENV_BIND_HOST` | docker0 閘道（本機 `10.0.0.1`；`ip -4 addr show docker0`） | 測試區容器改綁此位址，讓另一容器的 nginx 連得到（綁 loopback 必 502） |
-| `ENV_PUBLIC_URL_TEMPLATE` | `https://odoo-ai-dev.ideaxpress.biz:{port}` | 對外網址；SSO 導向亦沿用此值 |
+| `ENV_EXTERNAL_URL_TEMPLATE` | `https://odoo-ai-test-{slot}.ideaxpress.biz` | **設了就啟用子網域模式**；未設＝維持 port 模式，本機／未反代機零影響。**樣板必須含 `{slot}`**，否則同步會被守衛中止（見下） |
+| `EXTERNAL_SLOT_COUNT` | `10` | 對外檢視名額數；**必須等於實際建好的 A record 筆數與 SAN 憑證涵蓋數**，多設的 slot 會產出連不上的網址 |
+| `EXTERNAL_IDLE_MIN` | `20` | 對外閒置多久自動歸還名額（**環境本身不停**，pipeline 可能還要用） |
+| `NGINX_SYNC_DEBOUNCE_MS` | `1500` | 批次歸還名額時合併 reload 的靜默窗口。**只有「還」走防抖**；「借」走同步版（等 `nginx -t` + reload 完成才把網址交給瀏覽器，否則使用者當下拿到 502） |
 | `NGINX_CONTAINER` | `agency-NginxUI-1` | 平台 `docker exec` 對它 `nginx -t`／`-s reload` |
-| `NGINX_SYNC_CONF_FILE` | 共享 conf 路徑（例 `/etc/nginx/conf.d/odoo-envs.conf`） | **同步總 gate**；平台自動寫入每 port 的 ssl server block |
-| `ENV_TLS_CERT` / `ENV_TLS_KEY` | 裸網域憑證／私鑰路徑（nginx 容器內） | 每段 server block 共用 |
+| `NGINX_SYNC_CONF_FILE` | 共享 conf 路徑（例 `/etc/nginx/conf.d/odoo-envs.conf`） | **同步總 gate**；未設＝整段不執行 |
+| `ENV_TLS_CERT` / `ENV_TLS_KEY` | SAN 憑證／私鑰路徑（nginx 容器內） | 每段 server block 共用 |
 
-平台依 running 測試區自動產生（`lib/nginx-map.js`；寫檔後 `nginx -t` 過才 reload、壞就 rollback），
-每個 port 一段：
+> `ENV_PUBLIC_URL_TEMPLATE` 在子網域模式下不再作為對外網址來源——環境開機時 `odoo_envs.url`
+> 存 NULL，對外網址一律在「借到名額的當下」才由 `ENV_EXTERNAL_URL_TEMPLATE` 算出。
+
+`NGINX_SYNC_CONF_FILE` 一旦設了，`ENV_BIND_HOST`／`ENV_TLS_CERT`／`ENV_TLS_KEY`／
+`ENV_EXTERNAL_URL_TEMPLATE` 缺任一個都會讓同步 **throw 並 loud log、不寫檔**（`lib/nginx-map.js`）。
+
+平台依「running **且持有對外名額**」的測試區自動產生（`lib/nginx-map.js`；寫檔前先過 server_name
+白名單守衛，寫檔後 `nginx -t` 過才 reload、壞就 rollback），每個名額一段：
 
 ```nginx
 server {
-    listen 21000 ssl;
-    server_name odoo-ai-dev.ideaxpress.biz;
-    ssl_certificate     /etc/nginx/ssl/odoo-ai-dev.ideaxpress.biz_P256/fullchain.cer;
-    ssl_certificate_key /etc/nginx/ssl/odoo-ai-dev.ideaxpress.biz_P256/private.key;
+    listen 443 ssl;
+    server_name odoo-ai-test-3.ideaxpress.biz;   # slot 決定名字
+    ssl_certificate     /etc/nginx/ssl/<SAN>/fullchain.cer;
+    ssl_certificate_key /etc/nginx/ssl/<SAN>/private.key;
     location / {
-        proxy_pass http://10.0.0.1:21000;         # ENV_BIND_HOST:同埠
+        proxy_pass http://10.0.0.1:21047;          # 內部埠決定後端，與 slot 無關
         proxy_set_header Upgrade $http_upgrade;    # 缺了 Odoo bus/longpolling 靜默退化
         proxy_set_header Connection "upgrade";
         # Host／X-Forwarded-*／client_max_body_size 50m／proxy_read_timeout 600s
@@ -158,24 +178,59 @@ server {
 }
 ```
 
-一次性人工（平台不自動）：於 NginxUI 簽裸網域 HTTP-01 憑證；重建 `agency-NginxUI-1` 對外 publish
-`PROJECT_PORT_MIN`–`MAX`（綁公網／區網介面，與 `10.0.0.1` 的容器不同介面、不衝突）；`nginx.conf`
-的 `include conf.d/*.conf` 需在 `http{}` 內（才放得下 server block）。
+> **守衛（`assertServerNames`）**：這份 conf 被 include 進與正式站（AICEO／IDX…）共用的同一台
+> nginx，server_name 推導出錯等於把測試區蓋到正式站網域上。故寫檔前逐段斷言「主機名最左標籤
+> 以 `-<slot>` 結尾」——樣板漏了 `{slot}` 時 N 個名額會產出 N 段同名 server_name，守衛會直接
+> **中止本次同步、不寫檔、loud log**。
 
-> **埠池為租約制**：`PROJECT_PORT_MIN`–`MAX`（或管理員介面的池範圍）**必須等於**「nginx 容器 publish 的埠段
-> ∩ 對外 NAT／防火牆放行段」。平台只在池內借還，專案總數不受限，同時運行數上限＝槽數。
+一次性人工（平台不自動）：簽 SAN 憑證（見下方上線步驟）；`nginx.conf` 的 `include conf.d/*.conf`
+需在 `http{}` 內（才放得下 server block）。**不再需要**重建 `agency-NginxUI-1` 去 publish 埠段。
+
+> **埠池為租約制**，載體是 `odoo_envs.port`。內部埠不對外，**port 模式時代「池範圍必須等於
+> nginx publish 段 ∩ NAT 放行段」的硬性約束已解除**；要擴充併發只需把上限往上拉，對外不受影響。
 >
-> 現況（2026-07-28）：nginx publish `21000-21099`、NAT `21000-21012` 同號一對一、池設 `21000-21012`。
-> 要擴充併發只需在管理員介面把上限往上拉——但**上限超過 NAT 放行段會靜默失效**
-> （nginx 收得到、外面進不來），拉之前先確認 NAT 已放行該段。
+> ⚠️ **上限的真正生效點是資料庫**：優先序 **DB（`teams_settings.port_pool_min/max`）> env
+> （`PROJECT_PORT_MIN`／`MAX`）> 程式預設（21000–21019）**。正式機 DB 已存 `21012`，
+> 光改 `config.json` 或程式預設**不會生效**、且會被 DB 值靜默蓋掉——症狀是併發卡在 13 個環境
+> 且錯誤完全不指向埠池設定。要改請到**管理員 → 埠池**介面（執行期讀取，改完免重啟）。
 >
 > 埠池專屬：這段埠不得再給機器上其他服務使用。閒置測試區會自動停機並歸還埠
 > （`ENV_IDLE_TIMEOUT_MIN`，預設 60 分；池滿時徵收門檻 `ENV_IDLE_TIMEOUT_PRESSURE_MIN`，預設 15 分；
-> 壽命上限 `ENV_MAX_LIFETIME_HOURS`，預設 8 小時）。
+> 壽命上限 `ENV_MAX_LIFETIME_HOURS`，預設 8 小時）。對外名額另有一套較短的門檻
+> （`EXTERNAL_IDLE_MIN`，預設 20 分），到期只收名額、不停環境。
 
-> 安全提醒：曝露的埠段務必以 **VPN／IP 白名單**擋在可信來源內——測試區跑未審程式碼，且與平台
-> 共用 PostgreSQL superuser（見設計文件殘留風險），攻進一個測試區有機會跨庫觸及平台 DB。
-> 測試區帳號（含 E2E）不應暴露到可信網路以外。
+#### 切換到子網域模式的上線步驟
+
+1. **DNS**：建 `EXTERNAL_SLOT_COUNT` 筆 `odoo-ai-test-0..9.<網域>` A record，全指同一公網 IP。
+2. **憑證**：簽一張 SAN 蓋滿這 N 個名字：
+   ```bash
+   acme.sh --issue \
+     -d odoo-ai-test-0.<網域> -d odoo-ai-test-1.<網域> ... -d odoo-ai-test-9.<網域> \
+     --webroot <acme webroot 路徑>
+   ```
+   **續簽需 port 80 的 acme-challenge**（Wix 無 DNS-01，此路不可省）：另加一段 `listen 80`
+   涵蓋全部 `odoo-ai-test-*`，`location /.well-known/acme-challenge` 導到 acme webroot。
+3. **設定**：`data/config.json` 填上表的 key（至少 `ENV_EXTERNAL_URL_TEMPLATE`、
+   `EXTERNAL_SLOT_COUNT`、`EXTERNAL_IDLE_MIN`、`ENV_TLS_CERT`／`KEY`），重啟平台。
+4. **⚠️ 內部埠池上限要手動調**：見上方警語——優先序是 DB > env > 程式預設，正式機 DB 已存
+   `21012`。到「管理員 → 埠池」把上限改成 `21019`（或更高）。**漏了這步的症狀是併發卡在 13
+   且不指向成因。**
+5. **低流量時段驗證**：`nginx -t` → 開 2–3 個環境、各自按「開啟測試區」拿到不同的
+   `odoo-ai-test-N`、確認可達且 session 互不互蓋 → 確認同一台 nginx 上的正式站
+   （AICEO／IDX／…）無異常。
+6. **驗證雙池分離**：讓 pipeline 同時跑多個環境，確認對外名額佔用數**不變**（＝當下在看的人數）。
+7. **驗證歸還**：對外閒置逾 `EXTERNAL_IDLE_MIN` 後 slot 自動釋放、nginx 段消失，環境本身不受影響。
+8. **IT 收埠**：確認無誤後，把對外的 `21000`–`21099` 全部收回內網，只留 443。
+   （**回滾前需先請 IT 重開**，見下。）
+
+**回滾**：還原程式與 `data/config.json` 的新增 key（拿掉 `ENV_EXTERNAL_URL_TEMPLATE` 即關閉子網域
+模式）→ 下次環境起停即回舊行為。`odoo_envs.external_slot` 欄位留著無害，DNS／憑證留著不影響。
+但若已執行步驟 8 收掉對外埠段，回滾前必須先請 IT 重開。
+
+> 安全提醒：對外面收斂成固定 N 個子網域走 443 後，仍應以 **VPN／IP 白名單**擋在可信來源內——
+> 測試區跑未審程式碼，且與平台共用 PostgreSQL superuser（見設計文件殘留風險），攻進一個測試區
+> 有機會跨庫觸及平台 DB。測試區帳號（含 E2E）不應暴露到可信網路以外。管制點從「逐埠」改為
+> 「443 前端」。
 
 ### 企業版（Enterprise）測試區
 

@@ -2,12 +2,12 @@ const net = require('net');
 const { query } = require('./db');
 
 // 測試區 port 採「租約制」：專案啟動測試區時從池中借一個、停止時歸還（見 leasePort/releasePort）。
-// 池範圍必須與「nginx 容器 publish 的埠段 ＋ 對外 NAT／防火牆放行段」逐字一致——平台改得了池設定，
-// 改不了那兩層，設定超出放行範圍時測試區會靜默連不上（管理員介面的常駐警語即為此）。
-// 預設 21000-21012：高位段乾淨，且避開 8069（Odoo）／8080（Tomcat 等）這類本機常見服務。
+// 預設 21000-21019：這段埠只綁 ENV_BIND_HOST 供 nginx 從宿主端反代，不對公網 publish、不需 NAT
+// 放行，故上限只受主機資源限制（port 模式時代「必須等於 NAT 放行段」的硬性約束已不適用）。
+// 高位段乾淨，且避開 8069（Odoo）／8080（Tomcat 等）這類本機常見服務。
 // 優先序 DB（teams_settings）> env > 預設值；DB 於執行期讀取，管理員改完免重啟即生效。
 const DEFAULT_PORT_MIN = 21000;
-const DEFAULT_PORT_MAX = 21012;
+const DEFAULT_PORT_MAX = 21019;
 
 // loopback host 的推導基準：固定值，不隨 PORT_MIN 移動。若跟著 PORT_MIN 走，一旦某機把
 // PORT_MIN 調高，該機 DB 內既有的低位埠會算出負的 n，(n >> 8) & 255 產生無效 host →
@@ -130,7 +130,18 @@ function envPublicUrl(port, folder) {
   return tpl.replace(/\{folder\}/g, folder || '').replace(/\{port\}/g, String(port)).replace(/\{host\}/g, host);
 }
 
+// 對外子網域網址。與 envPublicUrl 刻意分成兩個函式、吃兩個不同的 env：
+//   envPublicUrl(port, folder)  → port 模式／本機直連，開機時就算得出來，存進 odoo_envs.url
+//   envExternalUrl(slot)        → 子網域模式，只有真人借到名額的當下才算得出來
+// 合成一個的話，本機（無 slot、無樣板）會拿到 null 而永遠開不了測試區，且正式機重現不了。
+// 樣板未設 ＝ 子網域模式關閉，呼叫端據此退回 port 模式，既有部署行為逐字不變。
+function envExternalUrl(slot) {
+  const tpl = process.env.ENV_EXTERNAL_URL_TEMPLATE;
+  if (slot == null || !tpl) return null; // slot 0 是合法名額，故用 == null 而非 falsy 判定
+  return tpl.replace(/\{slot\}/g, String(slot));
+}
+
 module.exports = {
-  leasePort, releasePort, getPoolRange, loopbackHostForPort, envBindHost, envPublicUrl, isPortFree,
+  leasePort, releasePort, getPoolRange, loopbackHostForPort, envBindHost, envPublicUrl, envExternalUrl, isPortFree,
   DEFAULT_PORT_MIN, DEFAULT_PORT_MAX, LOOPBACK_BASE,
 };
