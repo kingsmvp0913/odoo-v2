@@ -17,6 +17,7 @@ jest.mock('../pipeline/git', () => ({
   ensureAiBranch: jest.fn(),
   syncMainIntoAi: jest.fn(),
   abortMerge: jest.fn(),
+  releaseAiToMain: jest.fn(),
 }));
 
 process.env.JWT_SECRET = 'test-proj';
@@ -330,4 +331,159 @@ test('建立專案不配發 port（port 欄位維持 NULL）', async () => {
     .send({ name: 'no-port-proj', odoo_version: '17.0' });
   expect(res.status).toBe(201);
   expect(res.body.port).toBeNull();
+});
+
+// ---- 上正式（ai-dev → main）----
+// 意圖：合併是不可逆的正式區操作，「標記已上正式」必須只在真的推上去之後發生。
+// 任何一個 repo 沒成功就不標記——寧可下次清單多列幾張，也不要標了卻沒上去。
+
+// 直接 INSERT 建 repo，避開 POST /repos 會觸發的背景 clone（會與測試的狀態改寫競態）
+async function makeReleaseProject(name, labels = ['main']) {
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name, odoo_version: '17.0' });
+  const pid = p.body.id;
+  const dirs = [];
+  for (const label of labels) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-${label}-`));
+    await dbModule.query(
+      `INSERT INTO project_repos (project_id, label, repo_url, local_path, clone_status, is_primary)
+       VALUES ($1, $2, $3, $4, 'done', $5)`,
+      [pid, label, `https://github.com/test/${name}`, dir, label === labels[0]]
+    );
+    dirs.push(dir);
+  }
+  await dbModule.query('UPDATE users SET github_pat_enc=$2 WHERE id=$1', [userId, encrypt('test-pat-token')]);
+  return { pid, dirs };
+}
+
+let taskSeq = 0;
+async function addTask(pid, { approved = true, merged = false } = {}) {
+  const taskId = `REL-${++taskSeq}`;
+  await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, approved_at, merged_to_main_at)
+     VALUES ($1, $2, 'manual', $3, 'done', $4, $5, $6)`,
+    [userId, taskId, `任務 ${taskId}`, pid, approved ? new Date() : null, merged ? new Date() : null]
+  );
+  return taskId;
+}
+
+const okRelease = { merged: true, hasConflicts: false, conflictFiles: [], restoreFailed: false };
+
+async function mergedFlags(pid) {
+  const { rows } = await dbModule.query(
+    'SELECT task_id, merged_to_main_at FROM tasks WHERE project_id = $1 ORDER BY task_id', [pid]
+  );
+  return rows;
+}
+
+test('GET pending-release：只回已核准且尚未上正式的任務', async () => {
+  const { pid } = await makeReleaseProject('rel-list');
+  const pending = await addTask(pid, { approved: true });
+  await addTask(pid, { approved: true, merged: true }); // 已上正式
+  await addTask(pid, { approved: false });              // 還沒核准
+
+  const res = await request(app).get(`/api/projects/${pid}/pending-release`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(200);
+  expect(res.body.tasks.map(t => t.task_id)).toEqual([pending]);
+});
+
+test('POST release：全部 repo 成功 → 待上正式的任務被標記，已上正式的不動', async () => {
+  gitMock.releaseAiToMain.mockReset().mockResolvedValue(okRelease);
+  const { pid, dirs } = await makeReleaseProject('rel-ok');
+  const pending = await addTask(pid, { approved: true });
+  const already = await addTask(pid, { approved: true, merged: true });
+  const { rows: [before] } = await dbModule.query(
+    'SELECT merged_to_main_at FROM tasks WHERE task_id = $1', [already]
+  );
+
+  const res = await request(app).post(`/api/projects/${pid}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);
+  expect(res.body.tasks.map(t => t.task_id)).toEqual([pending]);
+  expect(gitMock.releaseAiToMain).toHaveBeenCalledTimes(1);
+  expect(gitMock.releaseAiToMain.mock.calls[0][0]).toBe(dirs[0]);
+
+  const rows = await mergedFlags(pid);
+  expect(rows.find(r => r.task_id === pending).merged_to_main_at).not.toBeNull();
+  // 已上正式的任務不該被重新蓋掉時間
+  expect(new Date(rows.find(r => r.task_id === already).merged_to_main_at).getTime())
+    .toBe(new Date(before.merged_to_main_at).getTime());
+});
+
+test('POST release：合併衝突 → 不標記，回傳衝突檔案', async () => {
+  gitMock.releaseAiToMain.mockReset().mockResolvedValue(
+    { merged: false, hasConflicts: true, conflictFiles: ['models/sale_order.py'], restoreFailed: false }
+  );
+  const { pid } = await makeReleaseProject('rel-conflict');
+  await addTask(pid, { approved: true });
+
+  const res = await request(app).post(`/api/projects/${pid}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(false);
+  expect(res.body.repos[0].conflictFiles).toEqual(['models/sale_order.py']);
+  expect(res.body.tasks).toEqual([]);
+  expect((await mergedFlags(pid)).every(r => r.merged_to_main_at === null)).toBe(true);
+});
+
+test('POST release：多 repo 其中一個失敗 → 一張都不標記', async () => {
+  gitMock.releaseAiToMain.mockReset()
+    .mockResolvedValueOnce(okRelease)
+    .mockRejectedValueOnce(Object.assign(new Error('push rejected'), { stderr: 'protected branch' }));
+  const { pid } = await makeReleaseProject('rel-partial', ['main', 'plugin']);
+  await addTask(pid, { approved: true });
+
+  const res = await request(app).post(`/api/projects/${pid}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(false);
+  expect(res.body.repos).toHaveLength(2);
+  expect(res.body.repos[1].error).toContain('protected branch');
+  expect((await mergedFlags(pid)).every(r => r.merged_to_main_at === null)).toBe(true);
+});
+
+test('POST release：未設 PAT → 400 且完全不碰 git', async () => {
+  gitMock.releaseAiToMain.mockReset().mockResolvedValue(okRelease);
+  const { pid } = await makeReleaseProject('rel-nopat');
+  await addTask(pid, { approved: true });
+  await dbModule.query('UPDATE users SET github_pat_enc=NULL WHERE id=$1', [userId]);
+
+  const res = await request(app).post(`/api/projects/${pid}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(400);
+  expect(res.body.error).toContain('PAT');
+  expect(gitMock.releaseAiToMain).not.toHaveBeenCalled();
+  expect((await mergedFlags(pid)).every(r => r.merged_to_main_at === null)).toBe(true);
+
+  await dbModule.query('UPDATE users SET github_pat_enc=$2 WHERE id=$1', [userId, encrypt('test-pat-token')]);
+});
+
+// 意圖：使用者開著彈窗期間別人 approve 了新任務，那張也會被這次 merge 一起推上 main。
+// 若沿用開窗當下的清單標記就會漏掉它，之後永遠顯示「待上正式」。
+test('POST release：git 執行期間新核准的任務也一併標記', async () => {
+  const { pid } = await makeReleaseProject('rel-race');
+  await addTask(pid, { approved: true });
+  gitMock.releaseAiToMain.mockReset().mockImplementation(async () => {
+    await addTask(pid, { approved: true }); // 合併進行中冒出來的新核准任務
+    return okRelease;
+  });
+
+  const res = await request(app).post(`/api/projects/${pid}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+  expect(res.body.tasks).toHaveLength(2);
+  expect((await mergedFlags(pid)).every(r => r.merged_to_main_at !== null)).toBe(true);
+});
+
+test('POST release：專案沒有 clone 完成的 repo → 400', async () => {
+  gitMock.releaseAiToMain.mockReset().mockResolvedValue(okRelease);
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'rel-norepo', odoo_version: '17.0' });
+
+  const res = await request(app).post(`/api/projects/${p.body.id}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(400);
+  expect(gitMock.releaseAiToMain).not.toHaveBeenCalled();
 });

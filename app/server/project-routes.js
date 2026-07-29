@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
-const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge } = require('./pipeline/git');
+const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge, releaseAiToMain } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
 const { deleteTaskDir } = require('./lib/attachments');
@@ -462,6 +462,79 @@ function registerRoutes(app) {
       );
       triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path, gitEnv, req.userId);
       res.json({ ok: true, cloning: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // --- 上正式（ai-dev → main）---
+
+  // 待上正式＝已核准併進 ai-dev、但尚未被「上正式」按鈕推上 main 的任務。
+  // 前端 TaskList 的「待上正式」篩選用同一份定義，兩處數字必然一致。
+  const PENDING_RELEASE_SQL =
+    `SELECT task_id, title, status, approved_at
+     FROM tasks
+     WHERE project_id = $1 AND approved_at IS NOT NULL AND merged_to_main_at IS NULL
+     ORDER BY approved_at`;
+
+  app.get('/api/projects/:id/pending-release', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(PENDING_RELEASE_SQL, [req.params.id]);
+      res.json({ tasks: rows });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/projects/:id/release', verifyToken, async (req, res) => {
+    try {
+      const { rows: [project] } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
+      if (!project) return res.status(404).json({ error: 'Not found' });
+
+      // 推 main 用操作者本人的 PAT，歸屬才正確；沒設 PAT 就直接擋，不退機器憑證。
+      let gitEnv;
+      try {
+        gitEnv = await buildGitEnv(req.userId);
+      } catch (e) {
+        if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: '請先到設定填個人 GitHub PAT' });
+        throw e;
+      }
+
+      const { rows: repos } = await query(
+        `SELECT id, label, local_path FROM project_repos
+         WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL
+         ORDER BY is_primary DESC, id`,
+        [project.id]
+      );
+      if (!repos.length) return res.status(400).json({ error: '此專案沒有可用的 repo（clone 尚未完成）' });
+
+      // 逐 repo 序列化，且與 pipeline 對同一主 clone 的 git 操作互斥。
+      const results = await withProjectLock(Number(project.id), async () => {
+        const out = [];
+        for (const repo of repos) {
+          try {
+            out.push({ label: repo.label, ...(await releaseAiToMain(repo.local_path, gitEnv)) });
+          } catch (err) {
+            // git merge/push 的真正原因常寫在 stdout 而非 stderr，三者都收
+            const detail = `${err.stderr || ''}${err.stdout || ''}` || err.message || 'git 操作失敗';
+            out.push({ label: repo.label, merged: false, hasConflicts: false, conflictFiles: [], restoreFailed: false, error: detail.slice(0, 2000) });
+          }
+        }
+        return out;
+      });
+
+      // 刻意在 git 操作之後才查清單並直接 UPDATE：使用者開著彈窗期間若有人 approve 了新任務，
+      // 那張也會被這次 merge 推上 main，用開窗當下的舊清單標記會漏掉它。
+      // 全部 repo 都成功、且至少有一個真的合了才標記——寧可下次多列幾張，也不要標了卻沒上去。
+      const allOk = results.every(r => !r.error && !r.hasConflicts);
+      const anyMerged = results.some(r => r.merged);
+      let tasks = [];
+      if (allOk && anyMerged) {
+        const { rows } = await query(
+          `UPDATE tasks SET merged_to_main_at = NOW()
+           WHERE project_id = $1 AND approved_at IS NOT NULL AND merged_to_main_at IS NULL
+           RETURNING task_id, title`,
+          [project.id]
+        );
+        tasks = rows;
+      }
+      res.json({ ok: allOk, repos: results, tasks });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

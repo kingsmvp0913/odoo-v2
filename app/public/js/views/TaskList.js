@@ -99,6 +99,7 @@ window.TaskListView = Vue.defineComponent({
       tasks: [],
       archivedTasks: [],
       filter: 'needs_action',
+      releaseFilter: 'all',
       search: '',
       sort: 'updated_desc',
       loading: true,
@@ -127,16 +128,16 @@ window.TaskListView = Vue.defineComponent({
       else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
       else if (this.filter === 'pending')      list = this.tasks.filter(t => !t.is_paused && t.status !== 'done');
       else                                     list = this.tasks; // 全部 = 含暫停中
-      return this.applySort(list.filter(t => this.matchSearch(t)));
+      return this.applySort(list.filter(t => this.matchSearch(t) && this.matchRelease(t)));
     },
     // 全域導覽 badge 用：不受列表搜尋影響（見 needsActionCount watcher）
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
-    // 標籤 badge 用：與 filteredTasks 一致套用搜尋關鍵字，搜尋後即時反映各分類命中數
-    needsActionShown() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchSearch(t)).length; },
-    pendingShown() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done' && this.matchSearch(t)).length; },
-    pausedShown()  { return this.tasks.filter(t => t.is_paused && this.matchSearch(t)).length; },
-    allShown()     { return this.tasks.filter(t => this.matchSearch(t)).length; },
+    // 標籤 badge 用：與 filteredTasks 一致套用搜尋關鍵字與上正式篩選，篩選後即時反映各分類命中數
+    needsActionShown() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchSearch(t) && this.matchRelease(t)).length; },
+    pendingShown() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done' && this.matchSearch(t) && this.matchRelease(t)).length; },
+    pausedShown()  { return this.tasks.filter(t => t.is_paused && this.matchSearch(t) && this.matchRelease(t)).length; },
+    allShown()     { return this.tasks.filter(t => this.matchSearch(t) && this.matchRelease(t)).length; },
     allSelected() {
       return this.filteredTasks.length > 0 && this.filteredTasks.every(t => this.selectedIds.includes(t.id));
     }
@@ -167,6 +168,13 @@ window.TaskListView = Vue.defineComponent({
         (t.source || '').toLowerCase().includes(q) ||
         (t.module || '').toLowerCase().includes(q) ||
         (t.project_name || '').toLowerCase().includes(q);
+    },
+    // 已上正式＝ai-dev 已被「上正式」按鈕併進 main；待上正式＝已核准併進 ai-dev 但還沒上。
+    // 與後端 /pending-release 同一份定義，兩處數字必然一致；未核准的任務兩者皆非。
+    matchRelease(t) {
+      if (this.releaseFilter === 'released') return !!t.merged_to_main_at;
+      if (this.releaseFilter === 'pending_release') return !!t.approved_at && !t.merged_to_main_at;
+      return true;
     },
     async load() {
       this.loading = true;
@@ -428,6 +436,12 @@ window.TaskListView = Vue.defineComponent({
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
         <input v-model="search" placeholder="搜尋任務標題、來源..." class="form-control"
           style="width:240px;font-size:var(--fs-base);padding:5px 10px;height:32px" />
+        <select v-model="releaseFilter" class="form-control" title="是否已合併到正式 main"
+          style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
+          <option value="all">全部</option>
+          <option value="released">已上正式</option>
+          <option value="pending_release">待上正式</option>
+        </select>
         <select v-model="sort" class="form-control" title="排序方式"
           style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
           <option value="updated_desc">最近更新</option>
@@ -515,6 +529,7 @@ window.TaskListView = Vue.defineComponent({
             <div style="display:flex;align-items:center;gap:6px">
               <span class="status-badge" :class="t.status">{{ statusLabel(t.status) }}</span>
               <span v-if="t.is_paused" class="pill pill-warn">暫停中</span>
+              <span v-if="t.merged_to_main_at" class="pill pill-success" title="已合併到正式 main">🚀 已上正式</span>
             </div>
             <span v-if="t.module" style="font-size:var(--fs-xs);color:var(--text-muted)">{{ t.module }}</span>
           </div>
