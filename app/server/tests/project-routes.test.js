@@ -527,10 +527,12 @@ describe('DELETE /api/projects/:id 的資料完整性', () => {
   const envAgent = require('../pipeline/env-agent');
   let cleanupSpy;
 
+  let stopEnvSpy;
   beforeEach(() => {
     cleanupSpy = jest.spyOn(envAgent, 'cleanupProjectEnv').mockResolvedValue(undefined);
+    stopEnvSpy = jest.spyOn(envAgent, 'stopEnv').mockResolvedValue(undefined);
   });
-  afterEach(() => cleanupSpy.mockRestore());
+  afterEach(() => { cleanupSpy.mockRestore(); stopEnvSpy.mockRestore(); });
 
   async function mkProjectWithTask(name, opts = {}) {
     const { rows: [p] } = await dbModule.query(
@@ -594,6 +596,27 @@ describe('DELETE /api/projects/:id 的資料完整性', () => {
   // 意圖：`query` 是 pool.query 薄包裝，BEGIN/COMMIT 會落在不同 pooled connection 上＝根本沒有
   // 交易，而且那個 BEGIN 會讓連線帶著開啟中的交易被還回池子、污染之後的無關查詢。正確做法是
   // db.withTransaction（取專屬 client）。這支守衛擋住有人把裸 BEGIN 寫回來。
+  // 意圖：這條鎖的是我自己上一版修法製造出來的 regression——把不可逆清理移到 COMMIT 之後是對的，
+  // 但 project_repos／odoo_envs 對 projects 都是 ON DELETE CASCADE，交易一提交那些列就被帶走，
+  // cleanupProjectEnv 自己再去查只會查到空的 → 目錄與容器全留在磁碟上，而且沒有任何路徑會再回收它們。
+  //
+  // 上面那支「順序守衛」抓不到這件事，因為它把 cleanupProjectEnv 整個 mock 掉，只驗「有沒有被呼叫」、
+  // 沒驗「被呼叫時拿不拿得到完成工作所需的資料」。教訓：mock 掉一個協作者之後，至少要對「傳給它的
+  // 參數是否足以讓它真的做事」下斷言，否則測到的只是呼叫本身。
+  test('清理必須拿到交易前取好的路徑快照，且容器要真的被停掉', async () => {
+    const { projectId: pid } = await mkProjectWithTask('snap-proj');
+    await dbModule.query(
+      "INSERT INTO project_repos (project_id, label, repo_url, local_path, clone_status) VALUES ($1,'main','u','/repos/snap-proj/main','done')",
+      [pid]
+    );
+    const res = await request(app).delete(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(stopEnvSpy).toHaveBeenCalled();            // 沒停＝容器繼續跑並佔著埠
+    const snapshot = cleanupSpy.mock.calls[0][1];
+    expect(snapshot).toBeDefined();                   // 沒傳快照＝清理註定查到空的，整段變 no-op
+    expect(snapshot.repoPaths).toContain('/repos/snap-proj/main');
+  });
+
   test('不得用 query() 直接下 BEGIN／COMMIT／ROLLBACK（守衛：交易必須走 withTransaction）', () => {
     for (const f of ['project-routes.js', 'admin-routes.js']) {
       const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');

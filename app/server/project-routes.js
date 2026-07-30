@@ -301,8 +301,17 @@ function registerRoutes(app) {
   app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       // 順序是關鍵：可回滾的 DB 刪除先做完並 COMMIT，不可逆的實體刪除（測試環境、repo clone、
-      // uploads 目錄）才動。反過來的話——這正是原本的寫法——DB 一失敗就留下「專案還在，但環境
-      // 與 clone 已經消失」的破碎狀態，而且每按一次刪除就再破壞一次。
+      // uploads 目錄）才動。反過來的話 DB 一失敗就留下「專案還在，但環境與 clone 已經消失」的
+      // 破碎狀態，而且每按一次刪除就再破壞一次。
+      //
+      // 但清理需要的路徑必須「在交易之前」先抓：project_repos／odoo_envs 對 projects 都是
+      // ON DELETE CASCADE，COMMIT 之後那些列就沒了，清理函式再去查只會查到空的，整個清理
+      // 退化成 no-op（磁碟與容器全留著）。容器則在交易前就停——停容器是可逆的（可以再啟動），
+      // 與「刪目錄不可逆」不是同一個層級，而 stopEnv 同樣得在 odoo_envs 還在時才做得到。
+      const { snapshotProjectPaths, cleanupProjectEnv, stopEnv } = require('./pipeline/env-agent');
+      const envSnapshot = await snapshotProjectPaths(req.params.id);
+      await stopEnv(req.params.id).catch(() => {});
+
       const taskDbIds = await withTransaction(async (client) => {
         const { rows: taskRows } = await client.query(
           'SELECT id FROM tasks WHERE project_id = $1', [req.params.id]
@@ -336,8 +345,9 @@ function registerRoutes(app) {
       });
 
       // ── 以下皆不可逆，只在 COMMIT 成功後執行 ──
-      const { cleanupProjectEnv } = require('./pipeline/env-agent');
-      await cleanupProjectEnv(req.params.id);       // kill 環境 process、移除 env 與 clone 目錄
+      // 帶交易前取好的 snapshot：此刻 projects／project_repos／odoo_envs 的列都已被 cascade 刪掉，
+      // 不傳的話 cleanupProjectEnv 會查到空的、什麼都不刪。
+      await cleanupProjectEnv(req.params.id, envSnapshot); // 移除 env 目錄、各 repo clone 與整棵 .worktrees
       taskDbIds.forEach(id => deleteTaskDir(id));   // 各任務磁碟上的 uploads/task_<id>
       // 專案硬刪除後 port 釋放：同步 nginx map 移除該子網域（fire-and-forget；gate 未設＝no-op）。
       require('./lib/nginx-map').syncNginxMap().catch(() => {});
