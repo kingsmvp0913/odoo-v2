@@ -137,7 +137,7 @@ if (require.main === module) {
   process.on('uncaughtException', err => console.error('[FATAL] uncaughtException:', err));
   process.on('unhandledRejection', err => console.error('[FATAL] unhandledRejection:', err));
 
-  const { migrate } = require('./db');
+  const { migrate, query } = require('./db');
   const { setIo } = require('./notify');
   const { startCron } = require('./cron');
 
@@ -148,12 +148,18 @@ if (require.main === module) {
   const httpServer = createServer(app);
   const io = new Server(httpServer, { cors: { origin: '*' } });
 
-  io.use((socket, next) => {
+  // 與 auth.js 的 verifyToken 同一條規則：簽章有效不等於帳號還在。JWT 最長 7 天，
+  // 帳號被刪之後舊 token 仍驗得過——HTTP 端已補上「users 列是否還在」的檢查，這裡若不補，
+  // 被停權的人照樣連得上 socket 繼續收所有推播，撤銷等於只做一半。
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
     if (!token) return next(new Error('Unauthorized'));
     try {
       const payload = jwt.verify(token, JWT_SECRET);
       if (!payload.userId) return next(new Error('Unauthorized'));
+      // 查詢失敗一律拒絕，不 fallback 放行——DB 掛掉時寧可連不上，也不要變成無認證通道。
+      const { rows } = await query('SELECT 1 FROM users WHERE id = $1', [payload.userId]);
+      if (!rows.length) return next(new Error('Unauthorized'));
       socket.userId = payload.userId;
       next();
     } catch {
