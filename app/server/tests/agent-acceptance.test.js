@@ -26,3 +26,32 @@ describe('SD acceptance 驗收點導入', () => {
     expect(body).toContain('退回自行判斷');       // 無 acceptance 時的 fallback
   });
 });
+
+// 意圖：`issues[].category` 是退回根因統計（rejection_items.category）的唯一來源。
+// qa.md 明列三選一並在範例裡示範物件形狀；qa-retry.md 的輸出契約卻只寫 `"issues":["…"]`，
+// resume 輪照契約回純字串 → parseQaIssues 一律套 DEFAULT_CATEGORY(impl_miss)。
+// 後果不是「少一個欄位」而是資料靜默失真：所有 resume 輪的退回都被記成「實作寫錯」，
+// spec_unclear／env_flaky 在統計上永遠掛零，健檢據此得出「規格沒問題」的錯誤結論。
+// 這是 prompt 契約，沒有可執行分支能驗——用靜態守衛釘住。
+describe('qa-retry 輸出契約含 issues[].category', () => {
+  beforeEach(() => invalidate());
+
+  const CATEGORIES = require('../pipeline/qa-rejection').QA_CATEGORIES;
+
+  test('qa-retry 的 issues 是帶 category 的物件、且列出與 JS 端一致的三個合法值', () => {
+    const body = loadAgent('qa-retry').body;
+    // 契約範例必須是物件形狀（desc + category），不是裸字串陣列
+    expect(body).toMatch(/"issues"\s*:\s*\[\s*\{/);
+    expect(body).toContain('"desc"');
+    expect(body).toContain('"category"');
+    // 三個合法值逐一列出——少列一個，模型就永遠不會產出那一類
+    for (const c of CATEGORIES) expect(body).toContain(c);
+  });
+
+  test('qa-retry 與 qa 用同一組 category 值（兩份契約不得分岔）', () => {
+    const retry = loadAgent('qa-retry').body;
+    const first = loadAgent('qa').body;
+    const pick = b => [...CATEGORIES].filter(c => b.includes(c)).sort();
+    expect(pick(retry)).toEqual(pick(first));
+  });
+});

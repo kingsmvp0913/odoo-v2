@@ -27,8 +27,13 @@ stage: qa
   - 規格本身模糊/矛盾，或你與實作對意圖認知不同、規格無法裁決 → 放進 `spec_questions`（會停下來問使用者，別叫開發瞎猜）。
 - 判不準時偏向 `issues`（不要濫用 spec_questions 製造不必要的停等）。
 - `spec_questions` 為需要使用者「二選一/給方向」的具體問題字串陣列；沒有就省略或給空陣列。
+- `issues` 每條為物件 `{"desc": "問題描述", "category": "根因"}`，其中 `category` 三選一：
+  - `spec_unclear`＝規格沒講清/沒涵蓋，落差其實源自規格（非本次實作的錯）
+  - `impl_miss`＝規格有寫、實作漏做或做錯（預設；不確定歸此）
+  - `env_flaky`＝與本次實作無關的環境/暫時性因素（審 diff 時罕見）
+  （不得使用其他值；`desc` 為給實作 Agent 看的具體問題。沿用上輪未解項時一併沿用它原本的 category。）
 
 【輸出】與上一輪相同的契約（標籤外不要其他文字）：
 通過：<result>{"verdict":"pass"}</result>
-未通過：<result>{"verdict":"fail","issues":["…"],"summary":"給實作 Agent 的修正指引","spec_questions":["規格歧義的具體問題（沒有就給空陣列或省略）"]}</result>
+未通過：<result>{"verdict":"fail","issues":[{"desc":"具體問題1","category":"impl_miss"}],"summary":"給實作 Agent 的修正指引","spec_questions":["規格歧義的具體問題（沒有就給空陣列或省略）"]}</result>
 ※ issues 必須是「當下完整的未解清單」＝仍未修正的舊項＋這輪新發現。

@@ -5,18 +5,32 @@ const mockRunClaude = jest.fn().mockResolvedValue({ text: '<result>{"slug":"test
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 
-let dbModule, runLibraryAgent;
+let dbModule, runLibraryAgent, realPool;
 
 beforeAll(async () => {
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule = require('../db');
-  dbModule._setPoolForTesting(new Pool());
+  realPool = new Pool();
+  dbModule._setPoolForTesting(realPool);
   await dbModule.migrate();
   ({ runLibraryAgent } = require('../pipeline/library-agent'));
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
+
+// 讓符合 pattern 的 SQL 失敗，其餘照跑真 pg-mem。db.query 每次都重取 pool，故換 pool 即可攔截
+// （library-agent 在載入時就把 query 解構出去了，spyOn 模組物件攔不到）。
+function withFailingSql(pattern, fn) {
+  const proxy = {
+    query: (text, params) => pattern.test(String(text))
+      ? Promise.reject(new Error('wiki_pages 寫入被拒'))
+      : realPool.query(text, params),
+    connect: (...a) => realPool.connect(...a)
+  };
+  dbModule._setPoolForTesting(proxy);
+  return Promise.resolve().then(fn).finally(() => dbModule._setPoolForTesting(realPool));
+}
 
 let userSeq = 0;
 async function createUserAndProject() {
@@ -92,6 +106,67 @@ test('API error → still sets task done', async () => {
   await runLibraryAgent(task.id, userId);
   const { rows: [updated] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
   expect(updated.status).toBe('done');
+});
+
+// 意圖：agent 執行失敗（API 掛掉／逾時）與「回了東西但不是 JSON」是兩種完全不同的病。
+// 現況兩者共用同一個 else 分支，一律寫「輸出無法解析為有效 JSON」——真因（API down）被抹掉，
+// 排查的人會去查 prompt／契約，而不是去看服務狀態。任務又照樣標 done，wiki 缺頁沒有第二個線索。
+test('F-failloud：agent 執行失敗 → task_logs 要留真因，不得謊報「無法解析為有效 JSON」', async () => {
+  mockRunClaude.mockRejectedValueOnce(new Error('Claude CLI exited: ETIMEDOUT'));
+  const { userId, projectId } = await createUserAndProject();
+  const { rows: [task] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'T_apierr','odoo','Feat','wiki_updating',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runLibraryAgent(task.id, userId);
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [task.id]);
+  const failLog = logs.find(l => l.content.includes('wiki 更新失敗'));
+  expect(failLog).toBeTruthy();
+  expect(failLog.content).toContain('ETIMEDOUT');
+  expect(failLog.content).not.toContain('無法解析為有效 JSON');
+});
+
+// 意圖：agent 回得好好的，但寫 wiki 那段炸了（DB 錯誤／約束衝突）→ 現況只有 console.error，
+// task_logs 一個字都沒有、任務照樣 done。使用者看到「完成」卻找不到新頁，平台端也查無此案。
+test('F-failloud：wiki 寫入失敗 → task_logs 留痕（不得完全無痕標 done）', async () => {
+  const { userId, projectId } = await createUserAndProject();
+  const { rows: [task] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'T_upserterr','odoo','Feat','wiki_updating',$2) RETURNING id",
+    [userId, projectId]
+  );
+  // 讓 wiki 寫入路徑上的第一個 query 失敗（_ensureNode 的 INSERT）
+  await withFailingSql(/INSERT INTO wiki_pages/i, () => runLibraryAgent(task.id, userId));
+  const { rows: [updated] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [task.id]);
+  expect(updated.status).toBe('done');
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [task.id]);
+  const failLog = logs.find(l => l.content.includes('wiki 更新失敗'));
+  expect(failLog).toBeTruthy();
+  expect(failLog.content).toContain('wiki_pages 寫入被拒');
+});
+
+// 意圖：`troubleshooting` 是排障／客服對話累積的容器節點（wiki-routes 明擋刪除與重生）。
+// 它不在功能頁保留字清單裡：agent 只要吐 slug="troubleshooting"，_upsertNode 的 ON CONFLICT
+// 就把容器頁翻成 function 並改掛到模組節點下——整包疑難排解紀錄連同子節點在樹上錯位。
+test('防呆：功能頁 slug 撞 troubleshooting → 容器不被翻成功能頁，改掛 fn-troubleshooting', async () => {
+  const { userId, projectId } = await createUserAndProject();
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id,parent_id,node_type,slug,title,content) VALUES ($1,null,'troubleshooting','troubleshooting','疑難排解','TS-SEED')",
+    [projectId]);
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>' + JSON.stringify({
+    slug: 'troubleshooting', title: '不該蓋掉疑難排解', content: '# 功能內容'
+  }) + '</result>', usage: null, durationMs: null });
+  const { rows: [task] } = await dbModule.query(
+    "INSERT INTO tasks (user_id,task_id,source,title,status,project_id,analysis_yaml) VALUES ($1,'TP5','odoo','F5','wiki_updating',$2,'module: sale') RETURNING id",
+    [userId, projectId]);
+  await runLibraryAgent(task.id, userId);
+
+  const { rows: [ts] } = await dbModule.query("SELECT node_type, parent_id, content FROM wiki_pages WHERE project_id=$1 AND slug='troubleshooting'", [projectId]);
+  expect(ts.node_type).toBe('troubleshooting');
+  expect(ts.parent_id).toBeNull();
+  expect(ts.content).toBe('TS-SEED');
+  const { rows: [fn] } = await dbModule.query("SELECT node_type, content FROM wiki_pages WHERE project_id=$1 AND slug='fn-troubleshooting'", [projectId]);
+  expect(fn.node_type).toBe('function');
+  expect(fn.content).toBe('# 功能內容');
 });
 
 // 意圖：parse 失敗不再靜默跳過卻標 done → task_logs 留痕，讓 wiki 缺頁有跡可循（健檢 F fail-loud）

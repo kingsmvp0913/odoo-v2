@@ -544,9 +544,19 @@ function registerRoutes(app) {
         // sync／prior_status 等旗標必須沿用——整包覆寫會讓 sync 衝突退化成一般 merge 衝突：
         // 卡片文案退回「任務分支／testing」（兩側恰好相反，使用者會選反邊），收尾時還會把仍停在
         // 分析階段（無 analysis_yaml／無分支／無 worktree）的任務直接推去 deploy_testing。
+        // 同理 repos 也不可整包換成 stillOpen——那只有 { repo, files }，未解檔的 details
+        // （AI 原因／★建議／merge-clarify 逐檔追問問答）會一併蒸發，且只能重花 token 問回來。
+        const prevRepos = Array.isArray(cd?.repos) ? cd.repos : [];
+        const stillOpen = outcome.stillOpen.map(o => {
+          const prevDetails = prevRepos.find(r => r.repo === o.repo)?.details;
+          if (!prevDetails) return o;
+          const details = {};
+          for (const f of o.files) if (prevDetails[f]) details[f] = prevDetails[f]; // 已解檔的 detail 隨卡片一起消失
+          return Object.keys(details).length ? { ...o, details } : o;
+        });
         await query(
           "UPDATE tasks SET merge_conflict_data = $2, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, JSON.stringify({ ...(cd || {}), repos: outcome.stillOpen })]
+          [rows[0].id, JSON.stringify({ ...(cd || {}), repos: stillOpen })]
         );
         return res.json({ ok: true, done: false, remaining: outcome.stillOpen });
       }

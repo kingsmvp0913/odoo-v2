@@ -10,12 +10,22 @@ async function requireAdmin(req, res, next) {
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
 
+// 明列欄位，不用 SELECT *：這張表同時存了 claude_oauth_token_enc（全平台唯一一把 Claude 長效
+// 憑證的密文）。專屬端點 GET /api/admin/claude-token 刻意只回布林——「token 不論明文密文都不得
+// 回流前端」——SELECT * 會從旁邊把同一個值整包吐出去，那道防線等於白設。新增欄位時若是機密，
+// 不要加進這份清單（比照 project-routes 的 PROJECT_PUBLIC_COLS）。
+const TEAMS_PUBLIC_COLS = 'id, tenant_id, client_id, client_secret, team_id, channel_id, '
+  + 'odoo_base_url, eservice_base_url, mention_users, webhook_url, notify_webhook_url, '
+  + 'odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, '
+  + 'test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, '
+  + 'usage_gate_5h_threshold, usage_gate_7d_threshold, port_pool_min, port_pool_max, updated_at';
+
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];
 
   app.get('/api/admin/teams-settings', auth, async (req, res) => {
     try {
-      const { rows } = await query('SELECT * FROM teams_settings WHERE id = 1');
+      const { rows } = await query(`SELECT ${TEAMS_PUBLIC_COLS} FROM teams_settings WHERE id = 1`);
       const s = rows[0] || {};
       // Never return client_secret plaintext
       if (s.client_secret) s.client_secret = '••••••';

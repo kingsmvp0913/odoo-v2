@@ -17,16 +17,29 @@ function signToken(userId) {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
 
-function verifyToken(req, res, next) {
+// JWT 有效期 7 天且無狀態：只驗簽章的話，管理員刪掉離職者帳號後，對方手上的舊 token 仍能打
+// 所有 API 最長 7 天＝「刪除帳號」對安全性等於沒發生。撤銷載體用 users 列本身（帳號一刪、
+// 列就不在），不另造黑名單表——`sessions` 表雖然存在，但全庫沒有任何一處簽發或查詢它，
+// 拿它當撤銷來源等於要先補一套 session 生命週期，改動面遠大於本問題。
+// 代價是每個請求多一次主鍵查詢；index.js 的未核准閘門對所有 /api 本來就已經查一次 users，
+// 量級相同。DB 查詢失敗一律 401（不 fallback 放行——那等於沒有檢查）。
+async function verifyToken(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  let payload;
   try {
-    const payload = jwt.verify(header.slice(7), JWT_SECRET);
-    req.userId = payload.userId;
-    next();
+    payload = jwt.verify(header.slice(7), JWT_SECRET);
   } catch {
-    res.status(401).json({ error: 'Invalid token' });
+    return res.status(401).json({ error: 'Invalid token' });
   }
+  try {
+    const { rows } = await query('SELECT 1 FROM users WHERE id = $1', [payload.userId]);
+    if (!rows.length) return res.status(401).json({ error: 'Invalid token' });
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  req.userId = payload.userId;
+  next();
 }
 
 function registerRoutes(app) {

@@ -5,7 +5,7 @@ const { execFile } = require('child_process');
 const { query, withTransaction } = require('./db');
 const { deleteTaskDir } = require('./lib/attachments');
 const { hashPassword } = require('./password');
-const { encrypt, encryptSafe } = require('./lib/crypto');
+const { encrypt } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
 const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
@@ -165,10 +165,14 @@ function registerRoutes(app) {
       if (!username || !password) return res.status(400).json({ error: 'username and password required' });
       if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
       const password_hash = await hashPassword(password);
+      // 不寫 password_enc：那欄是「可用 APP_SECRET 解回明文的登入密碼」，原為 E2E 借用使用者密碼
+      // 而存，E2E 改全域測試帳號後已退場——auth.js 的 setup／改密碼／登入都不再寫，db.js 每次
+      // 啟動還會把既有值清成 NULL。這裡是最後一條殘留的寫入路徑（寫了下次重啟就沒了，只剩外洩面）。
+      // 欄位本身依 db.js 無 drop column 機制的慣例保留。
       const { rows } = await query(
-        `INSERT INTO users (username, password_hash, display_name, role, password_enc)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id, username, display_name, role`,
-        [username, password_hash, display_name || username, role || 'user', encryptSafe(password)]
+        `INSERT INTO users (username, password_hash, display_name, role)
+         VALUES ($1, $2, $3, $4) RETURNING id, username, display_name, role`,
+        [username, password_hash, display_name || username, role || 'user']
       );
       res.status(201).json(rows[0]);
     } catch (err) {

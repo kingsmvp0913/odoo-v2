@@ -212,6 +212,7 @@ async function runLibraryAgent(taskId, userId, signal) {
   );
 
   let wikiUpdate = null;
+  let agentError = null; // agent 執行失敗的真因；與「回了東西但解析不出」是兩種病，訊息不可共用
   try {
     const agent = loadAgent('library');
     const context = `類型：任務完成紀錄（新增/更新功能頁，並視需要往上修正模組頁/總覽）
@@ -242,7 +243,14 @@ ${ovRow?.content || '（尚未建立）'}
     await logFailedUsage({ taskId: task.task_id }, userId, 'wiki', err);
     if (err.aborted) return; // 手動暫停：狀態留在 wiki_updating，解除暫停後重跑本關，不可直接標 done
     console.error(`[LIBRARY-AGENT] API error task ${taskId}:`, err.message);
+    agentError = err.message;
   }
+
+  // 任務照樣會標 done，所以 wiki 沒更新時的唯一線索就是這條 log——訊息必須是真因，
+  // 謊報成「無法解析為有效 JSON」會把排查的人導去查 prompt／契約而不是去看服務狀態。
+  const logWikiFailure = msg => query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai',$2)", [taskId, msg]
+  ).catch(() => {});
 
   if (wikiUpdate?.slug && wikiUpdate?.title) {
     try {
@@ -259,8 +267,10 @@ ${ovRow?.content || '（尚未建立）'}
       // 防呆：功能頁 slug 不得撞到骨架保留節點（overview / module-* / project-notes）。
       // _upsertNode 的 ON CONFLICT 會覆寫 node_type/parent_id，撞名時會把骨架節點翻成 function、
       // 重新掛到別的 parent，造成父子環路→整棵樹在前端斷開全隱形（曾實際發生於 overview）。
+      // troubleshooting 是排障／客服對話累積的容器頁（wiki-routes 明擋刪除與重生），
+      // 撞名會把它翻成 function 並改掛到模組節點下，整包排障紀錄連子節點在樹上錯位。
       let fnSlug = wikiUpdate.slug;
-      if (fnSlug === 'overview' || fnSlug === 'project-notes' || fnSlug.startsWith('module-')) {
+      if (fnSlug === 'overview' || fnSlug === 'project-notes' || fnSlug === 'troubleshooting' || fnSlug.startsWith('module-')) {
         fnSlug = `fn-${fnSlug}`;
         console.warn(`[LIBRARY-AGENT] task ${taskId}: 功能頁 slug 撞保留字「${wikiUpdate.slug}」，改用「${fnSlug}」避免覆寫骨架節點`);
       }
@@ -290,14 +300,16 @@ ${ovRow?.content || '（尚未建立）'}
         }
       }
     } catch (err) {
+      // 寫入炸掉不能只有 console.error：任務仍會標 done，使用者看到「完成」卻找不到新頁，
+      // 平台端也查無此案（健檢 F fail-loud）
       console.error(`[LIBRARY-AGENT] wiki upsert error task ${taskId}:`, err.message);
+      await logWikiFailure(`[wiki 更新失敗] 寫入 wiki 時發生錯誤：${err.message}`);
     }
+  } else if (agentError) {
+    await logWikiFailure(`[wiki 更新失敗] library agent 執行失敗：${agentError}，本次未更新 wiki`);
   } else {
     // parse 失敗不再靜默跳過卻標 done：留痕 task_logs，讓 wiki 缺頁有跡可循（健檢 F fail-loud）
-    await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai',$2)",
-      [taskId, '[wiki 更新失敗] library agent 輸出無法解析為有效 JSON，本次未更新 wiki']
-    ).catch(() => {});
+    await logWikiFailure('[wiki 更新失敗] library agent 輸出無法解析為有效 JSON，本次未更新 wiki');
   }
 
   try {

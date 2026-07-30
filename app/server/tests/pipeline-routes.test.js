@@ -305,6 +305,50 @@ test('resolve-conflicts：含 manual → 仍 merge_conflict、資料只留未解
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
+// 意圖：部分裁決時，未解檔的 AI 說明／★建議／逐檔追問問答（details[file]）必須留著。
+// `repos: outcome.stillOpen` 是整包覆寫——stillOpen 只有 { repo, files }，details 一併蒸發：
+// 使用者對 b.py 問了三輪才問懂的白話解釋，在按下「送出裁決（a.py 取新版、b.py 我自己解）」的
+// 瞬間全部消失，卡片退化成只剩檔名，而且要救回來只能重花 token 再問一次 AI。
+test('resolve-conflicts：部分裁決 → 未解檔的 AI 建議／追問問答不得被抹掉', async () => {
+  const { concludeMerge, applyConflictChoices } = require('../pipeline/git');
+  concludeMerge.mockClear();
+  applyConflictChoices.mockClear().mockResolvedValue(['b.py']); // b.py 選 manual，仍未解
+  const taskId = await insertConflictProjectTask('rcdetail');
+  await dbModule.query(
+    "UPDATE tasks SET merge_conflict_data=$2 WHERE id=$1",
+    [taskId, JSON.stringify({ repos: [{
+      repo: 'main',
+      files: ['a.py', 'b.py'],
+      details: {
+        'a.py': { reason: 'a 兩邊都改了欄位', recommendation: 'take_theirs' },
+        'b.py': {
+          reason: 'b 兩邊都新增了同名 method',
+          recommendation: 'manual',
+          qa: [{ q: '這樣選會不會少掉折扣？', a: '不會，折扣在另一個檔' }]
+        }
+      }
+    }] })]
+  );
+
+  const res = await request(app).post(`/api/tasks/${taskId}/resolve-conflicts`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ resolutions: [
+      { repo: 'main', file: 'a.py', action: 'take_theirs' },
+      { repo: 'main', file: 'b.py', action: 'manual' }
+    ] });
+
+  expect(res.status).toBe(200);
+  expect(res.body.done).toBe(false);
+  const { rows: after } = await dbModule.query('SELECT merge_conflict_data FROM tasks WHERE id=$1', [taskId]);
+  const cd = typeof after[0].merge_conflict_data === 'string' ? JSON.parse(after[0].merge_conflict_data) : after[0].merge_conflict_data;
+  expect(cd.repos[0].files).toEqual(['b.py']);
+  expect(cd.repos[0].details['b.py'].reason).toBe('b 兩邊都新增了同名 method');
+  expect(cd.repos[0].details['b.py'].qa).toEqual([{ q: '這樣選會不會少掉折扣？', a: '不會，折扣在另一個檔' }]);
+  // 已解檔的卡片與其 detail 要一起消失，否則畫面留著解掉的檔
+  expect(cd.repos[0].details['a.py']).toBeUndefined();
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
 test('resolve-conflicts：非 merge_conflict 狀態 → 400', async () => {
   const { rows } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_rc_wrong','odoo','T','deploy_testing') RETURNING id",

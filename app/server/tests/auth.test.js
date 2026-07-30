@@ -197,3 +197,33 @@ test('GET /api/auth/me → 含 approved', async () => {
   const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${adminToken}`);
   expect(res.body.approved).toBe(true);
 });
+
+// --- JWT 撤銷：帳號被刪除後，已簽發的 token 必須立即失效 ---
+// 意圖：token 有效期 7 天且無狀態，`verifyToken` 只驗簽章不看資料庫。離職者帳號被管理員刪掉後，
+// 他手上的舊 token 仍能打所有 API 最長 7 天——「刪除帳號」這個動作對安全性等於沒有發生。
+// 這裡刻意用「使用者自己資料範圍」的端點（/api/auth/me）驗證：它不經 admin guard，
+// 是撤銷失效時最赤裸的破口。
+test('刪除帳號後，該帳號既有 JWT 立即失效（401，不得放行 7 天）', async () => {
+  const reg = await request(app).post('/api/auth/register').send({
+    username: 'leaver', password: 'password123', display_name: '離職者'
+  });
+  const leaverToken = reg.body.token;
+  const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username='leaver'");
+  await dbModule.query('UPDATE users SET approved = true WHERE id = $1', [u.id]);
+
+  // 刪除前：token 可用（確保後面的 401 是「被撤銷」而不是「本來就不能用」）
+  const before = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${leaverToken}`);
+  expect(before.status).toBe(200);
+
+  await dbModule.query('DELETE FROM users WHERE id = $1', [u.id]);
+
+  const after = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${leaverToken}`);
+  expect(after.status).toBe(401);
+});
+
+// 意圖：撤銷檢查不得改成「任何 DB 例外都放行」——那等於沒有檢查。
+test('有效 token 仍正常放行（撤銷檢查不得誤殺在職帳號）', async () => {
+  const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.username).toBe('admin');
+});

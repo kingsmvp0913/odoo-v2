@@ -51,16 +51,22 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 let createdConfigId;
 let createdMapId;
 
-// --- users：建立時寫入 E2E 憑證 password_enc ---
-
-test('POST /api/admin/users → 建立使用者並寫入可解回原密碼的 password_enc', async () => {
-  const { decrypt } = require('../lib/crypto');
+// --- users：建立帳號不得持有可還原密碼 ---
+// 意圖：`password_enc` 是「主題 E」已退場的欄位——auth.js 的 setup／改密碼／登入三條路徑都不再寫，
+// db.js 每次啟動還會把既有值清成 NULL（原本是給 E2E 借用使用者密碼登入，已改全域測試帳號）。
+// 這支管理員建帳號的 INSERT 是唯一漏網的殘留：它寫進去的是「可用 APP_SECRET 解回明文的登入密碼」，
+// 與同一份程式碼的決策直接牴觸，而且下次 server 重啟就被清掉＝寫了也沒人用，純粹是外洩面。
+test('POST /api/admin/users → 不寫 password_enc（系統不持有可還原的登入密碼）', async () => {
   const res = await request(app).post('/api/admin/users')
     .set('Authorization', `Bearer ${adminToken}`)
     .send({ username: 'e2euser', password: 'e2epass123', display_name: 'E2E', role: 'user' });
   expect(res.status).toBe(201);
-  const { rows: [u] } = await dbModule.query("SELECT password_enc FROM users WHERE username='e2euser'");
-  expect(decrypt(u.password_enc)).toBe('e2epass123');
+  const { rows: [u] } = await dbModule.query("SELECT password_enc, password_hash FROM users WHERE username='e2euser'");
+  expect(u.password_enc).toBeNull();
+  // 帳號本身仍要能用（bcrypt hash 有寫），不是靠「整條 INSERT 壞掉」而通過
+  expect(u.password_hash).toBeTruthy();
+  const login = await request(app).post('/api/auth/login').send({ username: 'e2euser', password: 'e2epass123' });
+  expect(login.status).toBe(200);
 });
 
 // 意圖：管理員核准 pending 帳號後即可登入（自助註冊審核閘門的收尾）。

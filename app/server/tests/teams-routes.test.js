@@ -127,3 +127,24 @@ test('PUT /api/admin/teams-settings 明確送 false 仍要能關掉 test_mode', 
     .set('Authorization', `Bearer ${adminToken}`);
   expect(getRes.body.test_mode).toBe(false);
 });
+
+// 意圖：`claude_oauth_token_enc` 是全平台唯一一把 Claude 長效憑證的密文。專屬端點
+// GET /api/admin/claude-token 刻意只回布林（「token 不論明文密文都不得回流前端」），但這支
+// GET 走 `SELECT *`，把同一張表同一個欄位整包吐出去——密文落進瀏覽器＝APP_SECRET 一旦外洩
+// 即可解回明文。改用白名單欄位（比照 project-routes 的 PROJECT_PUBLIC_COLS）。
+test('GET /api/admin/teams-settings 不得回傳 claude_oauth_token_enc（密文亦不得回流前端）', async () => {
+  await dbModule.query(
+    `INSERT INTO teams_settings (id, claude_oauth_token_enc, client_secret) VALUES (1, 'ENC_CLAUDE_TOKEN', 'raw-secret')
+     ON CONFLICT (id) DO UPDATE SET claude_oauth_token_enc = 'ENC_CLAUDE_TOKEN', client_secret = 'raw-secret'`
+  );
+  const res = await request(app).get('/api/admin/teams-settings')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.claude_oauth_token_enc).toBeUndefined();
+  // 不能靠「整包不回」蒙混：一般設定欄位仍要讀得到，否則前端管理頁會空掉
+  expect(res.body).toHaveProperty('odoo_url');
+  expect(res.body).toHaveProperty('env_mode');
+  expect(res.body).toHaveProperty('usage_gate_5h_threshold');
+  // 既有的 client_secret 遮蔽行為不得回歸
+  expect(res.body.client_secret).toBe('••••••');
+});
