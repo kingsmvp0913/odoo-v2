@@ -209,6 +209,15 @@ async function migrate() {
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 「單一派工者」值班牌（見 dispatch-lease.js）：只會有 id=1 這一列。
+    // 跨行程互斥必須放 DB——runner.js 的 _inFlight 只是行程內記憶體，兩個行程各記各的。
+    `CREATE TABLE IF NOT EXISTS dispatcher_lease (
+      id         INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      holder     TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     `CREATE TABLE IF NOT EXISTS odoo_envs (
       id         SERIAL PRIMARY KEY,
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

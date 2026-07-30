@@ -432,6 +432,13 @@ async function runPipeline(userId, { auto = false } = {}) {
   // 用量閘門：只擋自動推進（cron／自動接續）。手動入口 auto:false，不查、不擋——
   // 使用者自己點「繼續」自負用量後果。lazy require 避免非 auto 路徑載入用量模組（測試 hermetic）。
   if (auto) {
+    // 單一派工者：自動推進（cron tick／continuePipelineIfAdvanced）只有值班者能做，
+    // 否則兩個行程會各憑自己的 _inFlight（行程內記憶體）把同一任務同一關各派一次。
+    // 只認明確的 false：null＝本行程沒跑過 cron（單元測試），維持不限制。
+    // 手動入口是 auto:false，不受此限——值班牌卡住時人工仍推得動任務（見 dispatch-lease.js）。
+    if (require('../dispatch-lease').isDispatcher() === false) {
+      return { dispatched: 0, notDispatcher: true };
+    }
     const { getGateState } = require('./usage-gate');
     const gate = await getGateState();
     if (gate.blocked) return { dispatched: 0, blocked: true };

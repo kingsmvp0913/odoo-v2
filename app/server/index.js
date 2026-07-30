@@ -197,8 +197,25 @@ if (require.main === module) {
     await require('./lib/claude-auth').loadClaudeToken();
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
     require('./notify-webhook').registerWebhookChannel();
-    startCron();
-    httpServer.listen(PORT, () => console.log(`AI Dev http://localhost:${PORT}`));
+    // 綁埠失敗必須讓行程結束，且 cron 只在綁到埠之後才起。
+    // 舊順序（先 startCron() 再 listen()）踩過一次實際事故：重複啟動時 listen 的 EADDRINUSE 以
+    // 'error' 事件丟出、沒人接 → 變成 uncaughtException → 被上面那道「最後防線」吞掉、行程活下來，
+    // 於是留下一個沒有 HTTP 埠、前端完全看不到、卻每分鐘照樣 runPipeline 派工的隱形派工者。
+    // 兩個 cron 共用同一個 DB 而 _inFlight 只是行程內記憶體 → 同一任務同一關被派兩次、
+    // 兩支 claude 並行寫同一個 worktree，reentry_count 也被記兩次（MAX_REENTRY 一次彈跳就打滿）。
+    // 只在「還沒 listening」時退出：綁到埠之後的執行期錯誤照舊只記 log，不因偶發錯誤殺掉在飛任務。
+    let listening = false;
+    httpServer.on('error', err => {
+      if (listening) return console.error('[SERVER] error:', err.message);
+      console.error(`[FATAL] 無法綁定埠 ${PORT}（${err.code || err.message}）——很可能已有另一個 server 在跑。`);
+      console.error('[FATAL] 行程結束，避免留下一個看不見但照樣派工的 cron。');
+      process.exit(1);
+    });
+    httpServer.listen(PORT, () => {
+      listening = true;
+      console.log(`AI Dev http://localhost:${PORT}`);
+      startCron();
+    });
   }).catch(err => {
     console.error('DB migration failed:', err);
     process.exit(1);

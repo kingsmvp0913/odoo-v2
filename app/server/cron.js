@@ -4,6 +4,7 @@ const path = require('path');
 const { query } = require('./db');
 const { syncUser } = require('./pipeline/sync');
 const { runPipeline } = require('./pipeline/runner');
+const { acquireDispatchLease } = require('./dispatch-lease');
 const notify = require('./notify');
 
 const lastOdooSync = new Map();
@@ -90,6 +91,13 @@ function startCron() {
     if (_tickRunning) return;
     _tickRunning = true;
     try {
+      // 單一派工者：搶不到值班牌就整個 tick 不做事（見 dispatch-lease.js）。
+      // ⚠ 這是本檔唯一一個「共用的提前結束」，且與下方刻意避免的那種 early return 性質不同：
+      // 那些是「某項工作失敗／被關閉」不該連坐其他工作；這裡是「本行程根本不該是值班者」——
+      // 同步撈單、自動封存、夜間關機、閒置回收、wiki 分類全部都只能由值班者做一次，
+      // 否則就是今天那個事故：兩個行程對同一個 DB 把整組排程副作用各做一遍。
+      if (!(await acquireDispatchLease())) return;
+
       const intervals = await getGlobalSettings();
       // 必須是 ?? 而非 ||：管理員設定頁明寫「同步間隔（分鐘，0 停用）」，而 0 || 60 會算成 60
       // ——使用者以為關掉了，實際照樣每小時撈單，且畫面顯示的 0 看起來完全正常。
