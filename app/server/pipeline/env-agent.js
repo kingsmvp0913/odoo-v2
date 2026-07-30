@@ -13,6 +13,10 @@ const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
 
+// repo clone 根（與 project-routes.js 同一個定義）。只用於 cleanupProjectEnv 刪除專案根目錄前的
+// 範圍檢查——pipeline 不得 require route 檔（會連帶要求 JWT_SECRET 才能載入），故在此各自宣告。
+const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', '..', 'repos');
+
 // 測試區一律建在官方 odoo:<major> image 的容器上，徹底避開宿主多版本 Python／gevent 編譯，
 // 自動涵蓋 odoo 13→未來 20+（唯一建置模式；舊的宿主 venv 模式已移除）。
 const dockerEnv = require('../lib/docker-env');
@@ -234,6 +238,23 @@ async function _runEnvSetup(projectId) {
   return _runEnvSetupDocker(projectId);
 }
 
+// 把 docker exec 的結果包成 Error，並帶齊 deploy／E2E 判定失敗歸屬時要看的四個欄位。
+// exitCode／killed 不是裝飾品，是兩道守衛的唯一輸入：
+//   - deploy-testing.looksLikeInfraDeath 用 exitCode 判「進程猝死（非常規退出碼）且 log 無 Odoo
+//     錯誤」＝infra／資源層死亡，退 coding 無用（107 事故）；
+//   - deploy-testing／playwright-agent 用 killed 判「我方逾時砍掉」＝重試只會再 hang 一次，直接
+//     停等人工（健檢 F8）。
+// docker 化時漏帶這兩欄，兩道守衛在 undefined 上恆為 false ＝整組死碼，逾時／猝死會一路走到
+// haiku 分類器被瞎猜成 code 而誤退開發。
+function _execError(message, { code, timedOut, stdout, stderr }) {
+  const e = new Error(message);
+  e.stdout = stdout;
+  e.stderr = stderr;
+  e.exitCode = code;          // docker exec 轉傳容器內指令的退出碼；逾時被砍時為 null
+  e.killed = !!timedOut;      // 只有「我方 timeout kill」算 killed（見 docker-env.runDocker）
+  return e;
+}
+
 // 對測試區資料庫執行模組升級（odoo-bin -u）。載入/語法錯會以非 0 結束並 throw，供上層判定退回 coding。
 async function upgradeModules(projectId, modules, signal) {
   const modArg = (modules && modules.length ? modules : ['all']).join(',');
@@ -245,11 +266,11 @@ async function upgradeModules(projectId, modules, signal) {
   if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
   // 有指定模組給 -i＋-u（新裝＋更新，新模組只 -u 不會裝、Odoo 只印 warning 卻 exit 0＝假成功）；未指定則 -u all。
   const modFlags = (modules && modules.length) ? ['-i', modArg, '-u', modArg] : ['-u', modArg];
-  const { code, stdout, stderr } = await dockerEnv.execOdoo({
+  const { code, timedOut, stdout, stderr } = await dockerEnv.execOdoo({
     container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
     odooArgs: [...modFlags, '--stop-after-init'],
   }, { signal });
-  if (code !== 0) { const e = new Error(stderr || stdout || 'docker upgrade failed'); e.stdout = stdout; e.stderr = stderr; throw e; }
+  if (code !== 0) { throw _execError(stderr || stdout || 'docker upgrade failed', { code, timedOut, stdout, stderr }); }
   return { ok: true, log: (stdout || '') + (stderr || '') };
 }
 
@@ -264,14 +285,14 @@ async function runTourTests(projectId, moduleName, signal) {
   if (ctx.enterpriseError) throw new Error(ctx.enterpriseError);
   if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
   // chromium 已在 image 內；HttpCase 於容器內自起 http server（用 DOCKER_TEST_HTTP_PORT 與常駐 8069 錯開）
-  const { code, stdout, stderr } = await dockerEnv.execOdoo({
+  const { code, timedOut, stdout, stderr } = await dockerEnv.execOdoo({
     container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
     odooArgs: [
       '-i', moduleName, '-u', moduleName, '--stop-after-init',
       '--test-enable', '--test-tags', `/${moduleName}`, '--http-port', String(DOCKER_TEST_HTTP_PORT),
     ],
   }, { signal });
-  if (code !== 0) { const e = new Error(stderr || stdout || 'docker tour failed'); e.stdout = stdout; e.stderr = stderr; throw e; }
+  if (code !== 0) { throw _execError(stderr || stdout || 'docker tour failed', { code, timedOut, stdout, stderr }); }
   return { ok: true, log: (stdout || '') + (stderr || '') };
 }
 
@@ -436,22 +457,51 @@ async function envIsActive(projectId) {
 
 // 刪除專案前的連帶清理：kill 環境 process、移除 env 與各 repo clone 目錄。
 // DB row（odoo_envs / project_repos）由 FK cascade 處理，此處只負責檔案與程序。
-async function cleanupProjectEnv(projectId) {
-  try { await stopEnv(projectId); } catch {}
+// 專案硬刪除的清理必須分兩段，因為 project_repos／odoo_envs 對 projects 都是 ON DELETE CASCADE：
+// 刪除端點的 DB 交易一 COMMIT，這裡要查的列就全被 cascade 帶走，之後再查等於查空 →
+// 整個清理變成完整 no-op（目錄與容器全留在磁碟上，而且沒有任何路徑會再回收它們）。
+// 所以呼叫端必須在交易「之前」先取得這份路徑快照，交易「之後」才帶著它來刪檔——
+// 不可逆的刪檔仍排在最後，但不再依賴已經消失的 DB 列。
+async function snapshotProjectPaths(projectId) {
   const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [projectId]);
-  if (project) {
-    const dirName = project.folder_name || project.name;
+  const { rows: repos } = await query('SELECT local_path FROM project_repos WHERE project_id=$1', [projectId]);
+  return {
+    dirName: project ? (project.folder_name || project.name) : null,
+    repoPaths: repos.map(r => r.local_path).filter(Boolean),
+  };
+}
+
+// snapshot 省略時自行查（給「專案列還在」的呼叫端用）；硬刪除路徑必須傳入交易前取好的快照。
+async function cleanupProjectEnv(projectId, snapshot = null) {
+  try { await stopEnv(projectId); } catch {}
+  const snap = snapshot || await snapshotProjectPaths(projectId);
+  if (snap.dirName) {
+    const dirName = snap.dirName;
     const envDir = path.join(ENV_BASE, dirName);
     const resolved = path.resolve(envDir);
     if (resolved.startsWith(path.resolve(ENV_BASE) + path.sep) && fs.existsSync(envDir)) {
       try { fs.rmSync(envDir, { recursive: true, force: true }); } catch {}
     }
   }
-  const { rows: repos } = await query('SELECT local_path FROM project_repos WHERE project_id=$1', [projectId]);
+  const repos = snap.repoPaths.map(local_path => ({ local_path }));
+  // 各 repo clone 與所有任務 worktree 同住一個「專案根」：clone 是 <REPOS_BASE>/<專案目錄>/<label>、
+  // coding／QA 的工作樹是 <專案根>/.worktrees/<task_id>/<label>（見 pipeline/task-agent.js
+  // worktreeParent）。只逐一刪 local_path 會把整棵 .worktrees 與專案根目錄留在磁碟上——那才是
+  // 佔空間的大宗（每張任務一份完整工作樹），而且專案已經不存在，沒有任何路徑會再回收它們。
+  const roots = new Set();
   for (const r of repos) {
-    if (r.local_path && fs.existsSync(r.local_path)) {
+    if (!r.local_path) continue;
+    const root = path.dirname(path.resolve(r.local_path));
+    // 往上刪一層比刪 local_path 本身危險：local_path 是 DB 內容，被寫壞時 dirname 可能指到磁碟根。
+    // 只有確定落在 REPOS_BASE 底下才敢整個專案根刪掉，否則退回原本的「只刪這個 repo 目錄」。
+    if (root.startsWith(path.resolve(REPOS_BASE) + path.sep)) roots.add(root);
+    else if (fs.existsSync(r.local_path)) {
       try { fs.rmSync(r.local_path, { recursive: true, force: true }); } catch {}
     }
+  }
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
   }
 }
 
@@ -557,7 +607,18 @@ async function _runEnvSetupDocker(projectId) {
 
   // 4) 補裝自訂模組 Python 相依（image 未內建）＋ seed users
   try { log += await installModuleRequirements(projectId); } catch (e) { log += `[deps] FAIL ${e.message}\n`; }
-  try { log += await _seedOdooUsersDocker(ctx); } catch (e) { log += `[seed] FAIL ${e.message}\n`; }
+  // seed 失敗不得放行成 running：這一步寫的是「測試區裡的 E2E 帳號」與
+  // 「ir.config_parameter('aidev.sso_secret')」，而平台端的 sso_secret／e2e_password 在上面
+  // 已經先存進 odoo_envs 了。放行的話兩邊憑證不一致——SSO 免密登入驗章失敗、E2E 拿一組
+  // DB 裡不存在的密碼登入，症狀（登入失敗／404）完全不指向 seed，而 setup_log 裡那行
+  // [seed] FAIL 沒有任何人會去看。比照健康檢查失敗：移除容器、落 error 讓原因浮上畫面。
+  try {
+    log += await _seedOdooUsersDocker(ctx);
+  } catch (e) {
+    log += `[seed] FAIL ${e.message}\n`;
+    await dockerEnv.removeContainer(ctx.container);
+    return _failEnv(projectId, `測試區帳號 seed 失敗（SSO／E2E 憑證未寫入）：${e.message}`, log);
+  }
 
   // 子網域模式下對外網址是「借到名額的當下才算得出來」，開機時存進 url 會是一個誰都連不上的
   // 舊 port 模式網址（內部埠已不對公網開）。未設子網域樣板時（本機／未反代機）逐字維持原行為。
@@ -602,4 +663,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };

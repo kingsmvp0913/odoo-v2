@@ -78,6 +78,28 @@ test('upgradeModules（docker）：exec odoo -i/-u <mod> --stop-after-init，帶
   expect(arg.dbName).toBe('test_shopx');
 });
 
+// 意圖：deploy／E2E 判定失敗歸屬的兩道守衛只吃 err.exitCode 與 err.killed——
+//   looksLikeInfraDeath（非常規退出碼＋log 無 Odoo 錯誤＝infra 死亡，退 coding 無用）
+//   err.killed（我方逾時砍掉＝重試無益，直接停等人工）
+// docker 化後這兩欄沒被帶出來，兩道守衛在 undefined 上恆為 false ＝整組死碼，猝死／逾時會被
+// haiku 瞎猜成 code 誤退開發（107 事故）。用 4294967295 這個真實事故值當輸入才有鑑別力。
+test('upgradeModules 失敗：Error 帶 exitCode（供 looksLikeInfraDeath 判猝死），非逾時則 killed=false', async () => {
+  dockerEnv.execOdoo.mockResolvedValueOnce({ code: 4294967295, stdout: '', stderr: 'boom' });
+  await expect(envAgent.upgradeModules(PID, ['m'])).rejects.toMatchObject({ exitCode: 4294967295, killed: false });
+});
+
+test('upgradeModules 逾時被砍：Error 帶 killed=true（deploy 據此停等人工，不再重跑一次 10 分鐘）', async () => {
+  dockerEnv.execOdoo.mockResolvedValueOnce({ code: null, timedOut: true, stdout: '', stderr: '[docker] 逾時（600s）' });
+  await expect(envAgent.upgradeModules(PID, ['m'])).rejects.toMatchObject({ killed: true });
+});
+
+test('runTourTests 失敗：同樣帶 exitCode／killed（E2E 走同一套 env/code 歸屬）', async () => {
+  dockerEnv.execOdoo.mockResolvedValueOnce({ code: 1, stdout: 'AssertionError', stderr: '' });
+  await expect(envAgent.runTourTests(PID, 'mod_x')).rejects.toMatchObject({ exitCode: 1, killed: false });
+  dockerEnv.execOdoo.mockResolvedValueOnce({ code: null, timedOut: true, stdout: '', stderr: 'timeout' });
+  await expect(envAgent.runTourTests(PID, 'mod_x')).rejects.toMatchObject({ killed: true });
+});
+
 test('upgradeModules（docker）：容器未運行 → throw', async () => {
   dockerEnv.containerRunning.mockResolvedValueOnce(false);
   await expect(envAgent.upgradeModules(PID, ['m'])).rejects.toThrow(/容器未運行/);

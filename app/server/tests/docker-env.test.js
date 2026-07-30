@@ -202,6 +202,19 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     const r = await d.runDocker(['info'], { spawnFn: fakeSpawn({ code: 0, stdout: 'ok' }) });
     expect(r).toEqual({ code: 0, stdout: 'ok', stderr: '' });
   });
+  // 意圖：逾時被我方 SIGKILL 與「指令自己非 0 結束」的 code 都可能是 null，唯一能分辨的就是這個
+  // 旗標。env-agent 用它標 err.killed，deploy 才知道「重試只會再 hang 一次 10 分鐘」而直接停等人工。
+  test('逾時被砍時回傳 timedOut=true（正常結束不帶此欄）', async () => {
+    const neverCloses = () => {
+      const ch = new EventEmitter();
+      ch.stdout = new EventEmitter(); ch.stderr = new EventEmitter();
+      ch.stdin = { write() {}, end() {} }; ch.kill = () => {};
+      return ch; // 永不 close：模擬 odoo 升級卡住
+    };
+    const r = await d.runDocker(['exec', 'c1', 'odoo'], { spawnFn: neverCloses, timeoutMs: 20 });
+    expect(r.timedOut).toBe(true);
+    expect(r.code).toBeNull();
+  });
   test('imageExists：有輸出→true', async () => {
     const yes = await d.imageExists('odoo-idx:16', { spawnFn: fakeSpawn({ code: 0, stdout: 'abc123\n' }) });
     expect(yes).toBe(true);

@@ -223,6 +223,17 @@ describe('/env/sso 借對外名額', () => {
     expect(env.port).toBeNull();
   });
 
+  // 意圖：測試區只有 docker 一種模式，Odoo 跑在容器裡、odoo_envs.pid 恆為 NULL——原本的
+  // process.kill(pid, SIGTERM) 打不到任何東西。於是刪除環境後：目錄沒了、DB 說埠已歸還，
+  // 容器卻還在跑而且還綁著那個埠。leasePort 會實測綁定所以不會配爆，但池子（只有 20 個）
+  // 會靜默縮水，且從 DB 完全查不出是誰佔的。stopEnv 是唯一真正 stop+rm 容器的路徑。
+  test('刪除環境必須真的停掉容器（只清 DB 欄位會留下綁著該埠的孤兒容器）', async () => {
+    const pid = await mkEnv('m', { status: 'running', port: 21012, sso_secret: 'sec' });
+    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(mockStopEnv).toHaveBeenCalledWith(String(pid));
+  });
+
   test('偵測 pid 已死自癒回 idle 時一併歸還內部埠租約', async () => {
     const pid = await mkEnv('l', { status: 'running', port: 21010, sso_secret: 'sec' });
     await dbModule.query('UPDATE odoo_envs SET pid=$2 WHERE project_id=$1', [pid, 2147483001]); // 不存在的 pid

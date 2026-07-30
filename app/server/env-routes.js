@@ -142,8 +142,12 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:id/env', verifyToken, async (req, res) => {
     try {
-      const { rows: [env] } = await query('SELECT pid FROM odoo_envs WHERE project_id=$1', [req.params.id]);
-      if (env?.pid) { try { process.kill(env.pid, 'SIGTERM'); } catch {} }
+      // 測試區只有 docker 一種模式，Odoo 跑在容器裡而不是宿主 process——odoo_envs.pid 恆為 NULL
+      //（見 env-agent 的 UPDATE ... pid=NULL），原本的 process.kill(pid) 打不到任何東西：目錄砍了、
+      // DB 欄位清了，容器照跑而且還綁著下面剛被標成「已歸還」的埠。leasePort 會實測綁定所以不會
+      // 配爆，但池子靜默縮水且查不出是誰佔的。stopEnv 才是真正 stop+rm 容器（並收該專案 VPN）的路徑。
+      const { stopEnv } = require('./pipeline/env-agent');
+      await stopEnv(req.params.id);
 
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (project) {

@@ -59,6 +59,32 @@ test('start 秒回但引擎沒起來（App 在跑、WSL2 引擎停）時，改�
   expect(restartCall[1]).toEqual(['desktop', 'restart', '--timeout', '120']);
 });
 
+// 意圖（真事故等級）：平台是單進程常駐。`docker desktop start --timeout 120` 會等到引擎就緒才回，
+// 用 execFileSync 跑等於把整個事件迴圈凍住——最壞 start＋restart 兩輪約 4 分鐘，期間所有 HTTP 請求、
+// cron、pipeline 全部停擺，而觸發點是「有人按了建立測試區」這種日常操作。
+// 鑑別力來源：同時注入同步與非同步兩種 exec，斷言走的是非同步那條，且等待期間 timer 仍會被執行。
+// 修法前 deps.execFile 根本不會被看一眼（execFileSync 優先），start 從未發出 → 前兩個斷言即失敗。
+test('daemon 啟動指令走非同步 execFile，等待期間不凍結事件迴圈', async () => {
+  const pendingStart = [];
+  const execFile = jest.fn((cmd, args, opts, cb) => {
+    if (args[0] === 'info') return cb(new Error('daemon not reachable'));
+    pendingStart.push(cb); // desktop start：模擬引擎冷啟動，先不回呼
+  });
+  const syncExec = jest.fn(() => { throw new Error('daemon not reachable'); });
+  const p = ensureDockerRunning({ execFile, execFileSync: syncExec, platform: 'win32' });
+
+  // 若啟動指令是同步跑的，這個 timer 在 ensureDockerRunning 回來之前不可能被執行。
+  let ticked = false;
+  await new Promise(r => setTimeout(() => { ticked = true; r(); }, 0));
+  expect(pendingStart).toHaveLength(1); // 已發出 start 且仍在等引擎
+  expect(ticked).toBe(true);            // 等待期間事件迴圈仍活著
+  expect(syncExec).not.toHaveBeenCalled();
+
+  execFile.mockImplementation((cmd, args, opts, cb) => cb(null, '')); // 引擎起來了
+  pendingStart[0](null, '');
+  await expect(p).resolves.toBeUndefined();
+});
+
 test('非 Windows 平台時，daemon 沒啟動直接回中文錯誤，不嘗試自動啟動', async () => {
   const deps = fakeDeps({ platform: 'linux' });
   await expect(ensureDockerRunning(deps)).rejects.toThrow(/Docker 引擎未啟動/);

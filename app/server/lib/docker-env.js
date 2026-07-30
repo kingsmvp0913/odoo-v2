@@ -7,7 +7,7 @@
 //
 // 與既有 lib/vpn-gateway.js 相同：平台已依賴 docker（VPN gateway 已用 Linux 容器），故不新增基礎設施。
 
-const { spawn, execFileSync: realExecFileSync } = require('child_process');
+const { spawn, execFile: realExecFile } = require('child_process');
 const path = require('path');
 
 // Docker Desktop（Windows）自動啟動的等待上限（秒）：冷啟動 Linux engine 常要 30~90 秒，放寬到 120 秒。
@@ -174,7 +174,9 @@ function runDocker(args, { input, signal, timeoutMs = 600000, spawnFn = spawn } 
     const done = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* already gone */ }
-      done({ code: null, stdout, stderr: stderr + `\n[docker] 逾時（${Math.round(timeoutMs / 1000)}s）` });
+      // timedOut 是「我方主動砍掉」與「指令自己非 0 結束」的唯一區別（兩者 code 都可能是 null）。
+      // 呼叫端據此標 err.killed——deploy 的「逾時重試無益，直接停等人工」守衛只認那一欄。
+      done({ code: null, timedOut: true, stdout, stderr: stderr + `\n[docker] 逾時（${Math.round(timeoutMs / 1000)}s）` });
     }, timeoutMs);
     child.stdout?.on('data', d => { stdout += d; });
     child.stderr?.on('data', d => { stderr += d; });
@@ -191,14 +193,22 @@ async function dockerAvailable(deps = {}) {
   return code === 0;
 }
 
-// 同步版 daemon 檢查（供 ensureDockerRunning 的輪詢用；execFileSync 可注入 mock）。
-function isDockerDaemonUp(execFileSync) {
-  try {
-    execFileSync('docker', ['info'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
+// 跑一次 docker CLI，只關心成敗。預設走非同步 execFile：`docker desktop start` 這類指令會等到
+// 引擎就緒才回（最長 DOCKER_START_TIMEOUT_SEC），用 execFileSync 會把整個 Node 事件迴圈凍住
+// ——平台是單進程常駐，那段期間所有 HTTP 請求、cron、pipeline 全部停擺（最壞 start+restart 兩
+// 輪＝約 4 分鐘）。
+// deps.execFile（非同步）優先；deps.execFileSync 是 legacy 注入路徑，僅為既有呼叫端
+//（lib/vpn-gateway.js 及其測試以同步 mock 注入 deps）保留，不片面更動它們的契約。
+function dockerCli(deps, args, timeoutMs) {
+  if (!deps.execFile && deps.execFileSync) {
+    let ok = true;
+    try { deps.execFileSync('docker', args, { stdio: 'ignore' }); } catch { ok = false; }
+    return Promise.resolve(ok);
   }
+  const execFile = deps.execFile || realExecFile;
+  return new Promise((resolve) => {
+    execFile('docker', args, { windowsHide: true, timeout: timeoutMs }, (err) => resolve(!err));
+  });
 }
 
 // Docker Desktop（Windows）裝好但引擎沒啟動時，背景幫使用者把引擎起來，省得每次操作都要
@@ -212,30 +222,25 @@ function isDockerDaemonUp(execFileSync) {
 // 故 start 後再探一次，若仍不通就改用 `docker desktop restart` 強制整個後端重拉（restart 較重，只在
 // start 救不回來時才動）；再不通才 fail loud，代表 WSL2 distro 可能已損壞，非平台可解、交回使用者。
 async function ensureDockerRunning(deps = {}) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
   const platform = deps.platform || process.platform;
   const T = String(DOCKER_START_TIMEOUT_SEC);
+  // 指令自身的等待上限已由 --timeout 控制；外層再給 30 秒緩衝，避免 CLI 卡死時這個 Promise 永不 settle。
+  const cliTimeoutMs = (DOCKER_START_TIMEOUT_SEC + 30) * 1000;
+  const daemonUp = () => dockerCli(deps, ['info'], 20000);
 
-  if (isDockerDaemonUp(execFileSync)) return;
+  if (await daemonUp()) return;
 
   if (platform !== 'win32') {
     throw new Error('Docker 引擎未啟動，請手動啟動 Docker 服務');
   }
 
-  try {
-    execFileSync('docker', ['desktop', 'start', '--timeout', T], { stdio: 'ignore' });
-  } catch {
-    // start 指令失敗／逾時／舊版無此子指令 → 下方再確認一次 daemon，仍不通就走 restart 退回
-  }
-  if (isDockerDaemonUp(execFileSync)) return;
+  // start 指令失敗／逾時／舊版無此子指令都不特別處理 → 下方再確認一次 daemon，仍不通就走 restart 退回
+  await dockerCli(deps, ['desktop', 'start', '--timeout', T], cliTimeoutMs);
+  if (await daemonUp()) return;
 
   // 走到這＝start 沒能把引擎拉起來（含「already running」但 WSL2 引擎停掉的情況）→ 強制重拉後端
-  try {
-    execFileSync('docker', ['desktop', 'restart', '--timeout', T], { stdio: 'ignore' });
-  } catch {
-    // restart 也失敗／舊版無此子指令 → 下方最後確認一次 daemon，仍不通就 fail loud
-  }
-  if (isDockerDaemonUp(execFileSync)) return;
+  await dockerCli(deps, ['desktop', 'restart', '--timeout', T], cliTimeoutMs);
+  if (await daemonUp()) return;
 
   throw new Error('Docker 引擎啟動失敗：Docker Desktop 在跑但 Linux 引擎拉不起來，請手動重啟或重裝 Docker Desktop');
 }
@@ -318,7 +323,7 @@ module.exports = {
   imageTagFor, majorDigits, containerNameFor, remapDbHostForContainer, addonsMounts,
   containerAddonsPath, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs,
   // 低階 IO
-  runDocker, dockerAvailable, isDockerDaemonUp, ensureDockerRunning,
+  runDocker, dockerAvailable, ensureDockerRunning,
   imageExists, containerExists, containerRunning,
   // 生命週期
   ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, containerLogs,
