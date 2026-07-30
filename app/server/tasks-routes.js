@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const multer = require('multer');
@@ -22,20 +23,44 @@ function uploadMessageFiles(req, res, next) {
   });
 }
 
-// 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除。
+// 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除；
+// 比照 uninstallTaskModule 回警告字串陣列（永不 throw），由呼叫端併進 res.warnings。
 async function cleanupTaskGit(task) {
-  if (!task.project_id || !task.git_branch) return;
+  const warnings = [];
+  // 安全邊界：只有 project_id／task_id 缺席才真的無從清起——工作樹路徑完全由 project_repos.local_path
+  // 與 task_id 推導，兩者缺一就沒有可信的目標，寧可漏清也不亂刪。git_branch 刻意不再當前提：
+  // 工作樹在 analysis 關就建好、git_branch 要到 coding 關才寫入，用它當守衛會讓「進 coding 前被刪」
+  // 的任務整包工作樹（每份約 58MB）永遠留在磁碟上，沒有任何其他路徑會回收它。
+  if (!task.project_id || !task.task_id) return warnings;
   const { rows: repos } = await query(
     "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
     [task.project_id]
   );
-  if (!repos.length) return;
-  const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
+  if (!repos.length) return warnings;
+  const wtRoot = path.join(path.dirname(repos[0].local_path), '.worktrees');
+  const wtParent = path.join(wtRoot, task.task_id);
+  // task_id 是外部同步進來的字串又直接當目錄名用：確認它沒把路徑帶出 .worktrees（`..`／子路徑），
+  // 否則下面的 rmdir 會刪到別人的目錄。推導不出安全路徑就整個放棄。
+  if (path.dirname(path.resolve(wtParent)) !== path.resolve(wtRoot)) return warnings;
   for (const repo of repos) {
     const wtPath = path.join(wtParent, path.basename(repo.local_path));
-    await removeWorktree(repo.local_path, wtPath).catch(() => {});
-    await deleteBranchLocal(repo.local_path, task.git_branch, true).catch(() => {});
+    await removeWorktree(repo.local_path, wtPath).catch(() => {}); // 失敗與否一律看下方「目錄是否真的空了」，比錯誤訊息可靠
+    // 分支刪除失敗刻意不出警告：清理現在也涵蓋沒進過 coding 的任務，「branch not found」是常態
+    // 而非異常，且殘留 ref 不佔磁碟——為它噴警告只會把下方真正的磁碟警告淹掉。
+    if (task.git_branch) await deleteBranchLocal(repo.local_path, task.git_branch, true).catch(() => {});
   }
+  // 外層 .worktrees/<task_id>/ 從來沒人刪（只刪內層 <label>），空目錄就這樣一直累積。
+  // 只在「確認已空」時用非遞迴 rmdir 收掉；還有殘留就保留現場並浮上來，絕不遞迴刪掉
+  // 可能屬於別的 repo／別人的內容。這也是移除失敗唯一的對外訊號（原本被 .catch(() => {}) 吞掉）。
+  let left;
+  try { left = fs.readdirSync(wtParent); } catch { return warnings; } // 讀不到＝目錄不存在，本來就沒東西可清
+  if (left.length) {
+    warnings.push(`工作樹 ${wtParent} 未能完全清除（殘留：${left.join('、')}），請自行刪除以釋放磁碟空間。`);
+    return warnings;
+  }
+  try { fs.rmdirSync(wtParent); }
+  catch (err) { warnings.push(`工作樹目錄 ${wtParent} 刪除失敗（${err.message}），請自行刪除以釋放磁碟空間。`); }
+  return warnings;
 }
 
 // 從任務 analysis_yaml 取 module 名（與 deploy-testing 同套解析）；取不到回空字串。
@@ -562,7 +587,7 @@ function registerRoutes(app) {
       const warnings = [];
       const uw = await uninstallTaskModule(rows[0], [rows[0].id]);
       if (uw) warnings.push(uw);
-      await cleanupTaskGit(rows[0]);
+      warnings.push(...await cleanupTaskGit(rows[0]));
       // 只清「任務生命週期」子表（隨任務死）。以下四張刻意「不」隨任務刪、保留為跨任務資料，勿再當漏刪補進來：
       //   token_usage       → 計費/成本歷史（token-report ?all=true 專門把已刪任務列為孤兒；刪了成本統計會縮水）
       //   prompt_logs       → 全域只留最新 100 筆的除錯 ring buffer，自動汰除（見 claude-runner）
@@ -603,7 +628,7 @@ function registerRoutes(app) {
         const w = await uninstallTaskModule(t, delIds);
         if (w) warnings.push(w);
       }
-      for (const t of deletable) await cleanupTaskGit(t);
+      for (const t of deletable) warnings.push(...await cleanupTaskGit(t));
       // 同單筆刪除：只清任務生命週期子表；token_usage/prompt_logs/task_rejections/classify_samples 刻意保留（原因見上方單筆刪除註解）。
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);

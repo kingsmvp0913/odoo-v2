@@ -24,6 +24,15 @@ jest.mock('../pipeline/runner', () => ({
   abortTask: jest.fn()
 }));
 
+// 清工作樹／刪分支要跑真實 git（單元測試沒有真 repo）→ 只 mock 這兩支，其餘匯出照實。
+// removeWorktree 的預設實作刻意「真的把目錄從磁碟刪掉」，這樣外層目錄該不該被清才測得出來。
+jest.mock('../pipeline/git', () => ({
+  ...jest.requireActual('../pipeline/git'),
+  removeWorktree: jest.fn(),
+  deleteBranchLocal: jest.fn()
+}));
+const gitMod = require('../pipeline/git');
+
 process.env.JWT_SECRET = 'test-tasks-secret';
 
 let app, dbModule, adminToken, userId;
@@ -1303,5 +1312,167 @@ describe('env_status 契約：非 running 的環境也要帶回狀態', () => {
     const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${adminToken}`);
     const t = res.body.find(x => x.task_id === 'task_odoo_1');
     expect(t.env_status).toBeNull();
+  });
+});
+
+// --- 刪任務時清工作樹（cleanupTaskGit）---
+// 磁碟無上限成長的三個缺陷：①git_branch 當守衛 → 進 coding 前被刪的任務整包工作樹（每份約 58MB）
+// 從沒被清過 ②移除失敗被 .catch(() => {}) 吞掉 → 沒人知道 ③外層 .worktrees/<task_id>/ 從來不刪。
+describe('cleanupTaskGit：刪任務要真的把工作樹從磁碟清掉', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  let tmpBase, seq = 0;
+
+  beforeAll(() => { tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'wtclean-')); });
+  afterAll(() => { try { fs.rmSync(tmpBase, { recursive: true, force: true }); } catch { /* best-effort */ } });
+
+  beforeEach(() => {
+    // 預設＝git worktree remove 成功：真的把目錄刪掉，外層目錄才會真的變空
+    gitMod.removeWorktree.mockReset();
+    gitMod.removeWorktree.mockImplementation(async (repoPath, wtPath) => {
+      fs.rmSync(wtPath, { recursive: true, force: true });
+    });
+    gitMod.deleteBranchLocal.mockReset();
+    gitMod.deleteBranchLocal.mockResolvedValue(undefined);
+  });
+
+  // 建出跟正式環境同構的磁碟佈局：<專案根>/<label> 是 clone、<專案根>/.worktrees/<task_id>/<label> 是工作樹
+  async function makeFixture({ labels = ['main'], gitBranch = null, taskKey }) {
+    seq += 1;
+    const root = path.join(tmpBase, `proj_${seq}`);
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ($1,'17.0') RETURNING id", [`wtclean_${seq}`]
+    );
+    const repoPaths = {};
+    for (const [i, label] of labels.entries()) {
+      const local = path.join(root, label);
+      fs.mkdirSync(local, { recursive: true });
+      repoPaths[label] = local;
+      await dbModule.query(
+        "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,$2,'git@x/y.git',$3,$4,'done')",
+        [p.id, label, local, i === 0]
+      );
+    }
+    const key = taskKey || `task_wtclean_${seq}`;
+    const wtParent = path.join(root, '.worktrees', key);
+    for (const label of labels) {
+      fs.mkdirSync(path.join(wtParent, label), { recursive: true });
+      fs.writeFileSync(path.join(wtParent, label, 'big.py'), 'x'.repeat(1024));
+    }
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch)
+       VALUES ($1,$2,'odoo','T','coding_running',$3,$4) RETURNING id`,
+      [userId, key, p.id, gitBranch]
+    );
+    return { projectId: p.id, taskId: t.id, taskKey: key, root, wtParent, repoPaths };
+  }
+
+  const del = id => request(app).delete(`/api/tasks/${id}`).set('Authorization', `Bearer ${adminToken}`);
+
+  // 缺陷①：git_branch 要到 coding 關才寫入，但工作樹在 analysis 關就建好了。
+  // 用 git_branch 當守衛＝任何「進 coding 前被刪」的任務都整包漏清，這是漏的主因。
+  test('任務沒有 git_branch（進 coding 前被刪）→ 工作樹仍要被清掉', async () => {
+    const f = await makeFixture({ gitBranch: null });
+    expect(fs.existsSync(f.wtParent)).toBe(true);
+
+    const res = await del(f.taskId);
+
+    expect(res.status).toBe(200);
+    expect(gitMod.removeWorktree).toHaveBeenCalledWith(f.repoPaths.main, path.join(f.wtParent, 'main'));
+    expect(fs.existsSync(f.wtParent)).toBe(false);
+    // 沒有分支就沒有分支可刪，不該亂呼叫（否則每次都在噴 branch not found）
+    expect(gitMod.deleteBranchLocal).not.toHaveBeenCalled();
+  });
+
+  // 缺陷③：內層 <label> 清掉後外層 .worktrees/<task_id>/ 從來沒人刪（cwt 已累積 21 個空目錄）
+  test('工作樹全清乾淨 → 外層 .worktrees/<task_id> 也要一併刪掉', async () => {
+    const f = await makeFixture({ labels: ['main', 'extra'], gitBranch: 'task/x' });
+
+    const res = await del(f.taskId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.warnings).toEqual([]);
+    expect(fs.existsSync(f.wtParent)).toBe(false);
+    expect(fs.existsSync(path.join(f.root, '.worktrees'))).toBe(true); // 只刪自己那層，.worktrees 本身留著
+  });
+
+  // 缺陷②：removeWorktree 失敗代表那 58MB 還躺在磁碟上，卻被 .catch(() => {}) 吞掉＝沒人會知道。
+  // 該端點本來就有 warnings 陣列（卸載／重建都在用），失敗要走同一條路浮上來。
+  test('工作樹移除失敗 → 以 warnings 回報，不再被吞掉；任務照樣刪除', async () => {
+    const f = await makeFixture({ gitBranch: 'task/y' });
+    gitMod.removeWorktree.mockRejectedValue(new Error('worktree is locked'));
+
+    const res = await del(f.taskId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.warnings.some(w => w.includes(f.wtParent))).toBe(true);
+    expect(fs.existsSync(path.join(f.wtParent, 'main'))).toBe(true); // 現場保留，不是靜默消失
+    const { rows } = await dbModule.query('SELECT id FROM tasks WHERE id=$1', [f.taskId]);
+    expect(rows.length).toBe(0); // 清理只是收尾，永遠不擋刪除
+  });
+
+  // 兩個 repo 才驗得出「外層目錄只能在全部清完後才刪」：只有一個 repo 時，
+  // 迴圈內刪與迴圈後刪的行為完全相同，全綠證明不了任何事。
+  test('兩個 repo 只清掉一個 → 外層目錄必須保留（不得遞迴刪掉另一個 repo 的工作樹）並警告', async () => {
+    const f = await makeFixture({ labels: ['main', 'extra'], gitBranch: 'task/z' });
+    gitMod.removeWorktree.mockImplementation(async (repoPath, wtPath) => {
+      if (wtPath.endsWith('extra')) throw new Error('worktree is dirty');
+      fs.rmSync(wtPath, { recursive: true, force: true });
+    });
+
+    const res = await del(f.taskId);
+
+    expect(res.status).toBe(200);
+    expect(fs.existsSync(path.join(f.wtParent, 'main'))).toBe(false);
+    expect(fs.existsSync(path.join(f.wtParent, 'extra', 'big.py'))).toBe(true); // 沒被連坐 rm -rf
+    expect(fs.existsSync(f.wtParent)).toBe(true);
+    expect(res.body.warnings.some(w => w.includes(f.wtParent) && w.includes('extra'))).toBe(true);
+  });
+
+  // 安全邊界：外層目錄的刪除只能碰 .worktrees/<自己的 task_id>，同專案其他任務的工作樹不得受影響
+  test('同專案還有別的任務工作樹 → 只清自己那層，別人的原封不動', async () => {
+    const f = await makeFixture({ gitBranch: null, taskKey: 'task_wtclean_victim' });
+    const otherWt = path.join(f.root, '.worktrees', 'task_wtclean_other', 'main');
+    fs.mkdirSync(otherWt, { recursive: true });
+    fs.writeFileSync(path.join(otherWt, 'keep.py'), 'keep');
+
+    const res = await del(f.taskId);
+
+    expect(res.status).toBe(200);
+    expect(fs.existsSync(f.wtParent)).toBe(false);
+    expect(fs.existsSync(path.join(otherWt, 'keep.py'))).toBe(true);
+  });
+
+  // 有分支時分支照刪（回歸防護）；但分支刪除失敗不製造警告——cleanup 現在也涵蓋沒進過 coding 的任務，
+  // 「branch not found」是常態而非異常，且殘留 ref 不佔磁碟，噴警告只會讓真正的磁碟警告被淹沒。
+  test('有 git_branch → 每個 repo 都刪分支；刪分支失敗不製造警告', async () => {
+    const f = await makeFixture({ labels: ['main', 'extra'], gitBranch: 'task/task_keep' });
+    gitMod.deleteBranchLocal.mockRejectedValue(new Error("branch 'task/task_keep' not found"));
+
+    const res = await del(f.taskId);
+
+    expect(res.status).toBe(200);
+    expect(gitMod.deleteBranchLocal).toHaveBeenCalledTimes(2);
+    expect(gitMod.deleteBranchLocal).toHaveBeenCalledWith(f.repoPaths.main, 'task/task_keep', true);
+    expect(res.body.warnings).toEqual([]);
+  });
+
+  // 批次刪除走的是另一個端點，同樣要清工作樹並把警告帶回（兩條路各自實作過一次，容易只修一邊）
+  test('批次刪除 → 一樣清工作樹，失敗一樣進 warnings', async () => {
+    const ok = await makeFixture({ gitBranch: null });
+    const bad = await makeFixture({ gitBranch: null });
+    gitMod.removeWorktree.mockImplementation(async (repoPath, wtPath) => {
+      if (wtPath.startsWith(bad.wtParent)) throw new Error('worktree is locked');
+      fs.rmSync(wtPath, { recursive: true, force: true });
+    });
+
+    const res = await request(app).post('/api/tasks/batch/delete')
+      .send({ ids: [ok.taskId, bad.taskId] }).set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(fs.existsSync(ok.wtParent)).toBe(false);
+    expect(fs.existsSync(bad.wtParent)).toBe(true);
+    expect(res.body.warnings.some(w => w.includes(bad.wtParent))).toBe(true);
   });
 });
