@@ -1,4 +1,4 @@
-const { execFileSync: realExecFileSync, execFile: realExecFile } = require('child_process');
+const { execFile: realExecFile } = require('child_process');
 const realFs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -18,6 +18,25 @@ const POLL_INTERVAL_MS = 1000;
 // 22000-22999：使用者要求便於在機器上控管，且避開測試區的 21000-21012。
 const PORT_RANGE_START = 22000;
 const PORT_RANGE_END = 22999;
+
+// 本模組所有 docker 呼叫的唯一出口，一律走非同步 execFile：ssh-sql 的 lazy 撥號是在使用者
+// 下查詢時才觸發的，只要有任何一個同步 execFileSync 卡住（`docker build` 動輒數分鐘），
+// 整個 Node 事件迴圈就凍結、全平台所有人一起卡死。
+// maxBuffer 放大到 64MB：同步版的 `docker build` 用 stdio:'inherit' 不經緩衝，改非同步後輸出
+// 會被收進緩衝區，用預設的 1MB 會讓「build 成功但 log 太長」被誤判成 ENOBUFS 失敗。
+const EXEC_OPTS = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+
+// 用 callback 形式（而非 util.promisify）呼叫注入進來的 execFile：真的 child_process.execFile
+// 帶 promisify.custom（resolve 成 { stdout, stderr }），測試注入的 jest.fn 沒有（resolve 成 stdout），
+// 兩者被 promisify 出來的回傳型別不同，會讓測試與正式碼走在不同語意上。
+function docker(execFile, args) {
+  return new Promise((resolve, reject) => {
+    execFile('docker', args, EXEC_OPTS, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout == null ? '' : String(stdout));
+    });
+  });
+}
 
 // 轉發埠以「專案 × 目標(host:port)」為單位：同專案已有連線指向同一台機器就沿用它的埠。
 // 這樣新增「指向既有目標」的連線不必重建容器（docker 的 -p 在建立時就固定，重建＝斷線重撥）。
@@ -44,9 +63,9 @@ function targetHostPort(conn) {
   return { host: conn.ssh_host, port: conn.ssh_port || 22 };
 }
 
-function isContainerRunning(name, execFileSync) {
+async function isContainerRunning(name, execFile) {
   try {
-    const out = execFileSync('docker', ['inspect', '-f', '{{.State.Running}}', name], { encoding: 'utf8' });
+    const out = await docker(execFile, ['inspect', '-f', '{{.State.Running}}', name]);
     return out.trim() === 'true';
   } catch {
     return false;
@@ -59,10 +78,13 @@ function sleep(ms) {
 
 // 在容器內用 nc 對目標開一個 TCP 連線探測可達性。成功（exit 0）代表 tun0 已建立、VPN 路由
 // 已能送達目標——這才是真正就緒。用非同步 execFile，撥號輪詢期間不阻塞 Node 事件迴圈。
-function probeReachable(name, host, port, execFile) {
-  return new Promise((resolve) => {
-    execFile('docker', ['exec', name, 'nc', '-z', '-w', '2', host, String(port)], (err) => resolve(!err));
-  });
+async function probeReachable(name, host, port, execFile) {
+  try {
+    await docker(execFile, ['exec', name, 'nc', '-z', '-w', '2', host, String(port)]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // 目標指紋：依 forwardPort 排序後 join，同時當 TARGETS 環境變數與容器 label。
@@ -74,9 +96,9 @@ function targetsSpec(targets) {
     .join(',');
 }
 
-function runningTargetsSpec(name, execFileSync) {
+async function runningTargetsSpec(name, execFile) {
   try {
-    return execFileSync('docker', ['inspect', '-f', '{{index .Config.Labels "targets"}}', name], { encoding: 'utf8' }).trim();
+    return (await docker(execFile, ['inspect', '-f', '{{index .Config.Labels "targets"}}', name])).trim();
   } catch {
     return null;
   }
@@ -89,13 +111,12 @@ function runningTargetsSpec(name, execFileSync) {
 // 改成輪詢容器內「真的連得到目標」才算就緒，並在容器中途退出時撈 log 給出可診斷的錯誤。
 // 就緒＝隧道真的連得到「任一」目標。全部都要通的話，某台目標機器關機就會擋住整個 gateway。
 async function defaultWaitReachable(name, targets, timeoutMs, deps) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
   const execFile = deps.execFile || realExecFile;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (!isContainerRunning(name, execFileSync)) {
+    if (!(await isContainerRunning(name, execFile))) {
       let log = '';
-      try { log = execFileSync('docker', ['logs', '--tail', '20', name], { encoding: 'utf8' }); } catch { /* 容器可能已被移除 */ }
+      try { log = await docker(execFile, ['logs', '--tail', '20', name]); } catch { /* 容器可能已被移除 */ }
       throw new Error(`VPN 撥號失敗，容器已結束（多為帳號密碼或設定檔錯誤）：\n${log}`.trim());
     }
     for (const t of targets) {
@@ -130,10 +151,10 @@ function imageTag(dir = VPN_GATEWAY_DIR) {
 
 // image 不存在時（機器從沒 build 過，或內容雜湊變了）現場 build，
 // 不強求使用者記得先跑過一鍵安裝的 Docker 準備步驟。
-function ensureImageBuilt(execFileSync, imageName) {
-  const out = execFileSync('docker', ['images', '-q', imageName], { encoding: 'utf8' });
+async function ensureImageBuilt(execFile, imageName) {
+  const out = await docker(execFile, ['images', '-q', imageName]);
   if (out.trim()) return;
-  execFileSync('docker', ['build', '-t', imageName, VPN_GATEWAY_DIR], { stdio: 'inherit' });
+  await docker(execFile, ['build', '-t', imageName, VPN_GATEWAY_DIR]);
 }
 
 // isContainerRunning 只代表「目前沒在跑」，不代表「不存在」——容器可能是
@@ -142,23 +163,24 @@ function ensureImageBuilt(execFileSync, imageName) {
 // （SIGTERM，給 openvpn 機會正常關閉並通知 VPN 伺服器斷線），而不是直接 rm -f
 // （SIGKILL）：粗暴砍掉會讓伺服器端殘留一個沒有正常結束的 session，可能導致
 // 下一次重連被誤判為衝突而拒絕。stop 之後再 rm -f 確保容器名稱一定被釋放。
-function removeStaleContainer(name, execFileSync) {
-  try { execFileSync('docker', ['stop', '-t', '5', name], { stdio: 'ignore' }); } catch { /* 可能沒在跑或不存在 */ }
-  try { execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' }); } catch { /* 容器可能本來就不存在 */ }
+async function removeStaleContainer(name, execFile) {
+  try { await docker(execFile, ['stop', '-t', '5', name]); } catch { /* 可能沒在跑或不存在 */ }
+  try { await docker(execFile, ['rm', '-f', name]); } catch { /* 容器可能本來就不存在 */ }
 }
 
 // 回傳寫好的暫存 .ovpn 路徑，故意不在這裡刪除：`docker run -d` 幾乎立刻回傳，
 // 但容器內的 openvpn 需要一點時間才會真正打開這個掛載進去的檔案；太早刪會讓
 // 容器讀到「檔案消失」。清理時機交給呼叫端在確認容器真的起來之後才做。
-function startGateway(gw, deps) {
-  const { execFileSync, writeFileSync, rmSync, tmpFilePath } = deps;
+async function startGateway(gw, deps) {
+  const { execFile, writeFileSync, rmSync, tmpFilePath } = deps;
   // 算一次、docker run 沿用同一個值——兩處若各自呼叫 imageTag() 理論上結果相同，
   // 但只算一次能避免「其中一處讀檔時機不同導致 tag 不一致」的疑慮。
+  // imageTag 只讀兩個小檔案算雜湊（純檔案運算、毫秒級），維持同步不影響事件迴圈。
   const imageName = imageTag();
-  ensureImageBuilt(execFileSync, imageName);
+  await ensureImageBuilt(execFile, imageName);
   // 先清遷移前留下的舊容器（vpn-conn-*）：它們會用同一組帳號掛著另一個 openvpn session
-  for (const stale of gw.staleContainers || []) removeStaleContainer(stale, execFileSync);
-  removeStaleContainer(gw.containerName, execFileSync);
+  for (const stale of gw.staleContainers || []) await removeStaleContainer(stale, execFile);
+  await removeStaleContainer(gw.containerName, execFile);
 
   const spec = targetsSpec(gw.targets);
   const tmpFile = tmpFilePath(gw.containerName);
@@ -183,7 +205,7 @@ function startGateway(gw, deps) {
     '--label', `targets=${spec}`,
     imageName,
   );
-  execFileSync('docker', args, { stdio: 'pipe' });
+  await docker(execFile, args);
   return tmpFile;
 }
 
@@ -196,22 +218,27 @@ function startGateway(gw, deps) {
 // 序列化，VPN 撥號最長 40 秒，若共用同一個 key 會讓撥號期間整個專案的 pipeline 工作
 // 全部卡住排隊。containerName（`vpn-proj-<id>`）本來就是「一專案一個」的唯一識別，
 // 直接借用即可，不需要為此改 Gw 契約多塞一個 projectId 欄位。
+//
+// 全部 docker 呼叫改非同步後，這個鎖比以前更關鍵：舊版從 isContainerRunning 到 docker run
+// 之間全是同步的，單執行緒天然不會有第二個呼叫者插進來；現在每個 docker 呼叫都是一個
+// await 讓出點，早退檢查與重建之間佈滿競態窗口。鎖必須繼續包住「整個主體」（含早退檢查）。
 function ensureGatewayRunning(gw, deps = {}) {
   return withProjectLock(`vpn:${gw.containerName}`, () => ensureGatewayRunningLocked(gw, deps));
 }
 
 async function ensureGatewayRunningLocked(gw, deps) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
+  const execFile = deps.execFile || realExecFile;
   const writeFileSync = deps.writeFileSync || realFs.writeFileSync;
   const rmSync = deps.rmSync || realFs.rmSync;
   const tmpFilePath = deps.tmpFilePath || ((name) => path.join(os.tmpdir(), `${name}.ovpn`));
   const waitReachable = deps.waitReachable || defaultWaitReachable;
 
+  // deps 原樣往下傳：daemon 檢查住在 docker-env，它自己決定要用哪個注入點。
   await ensureDockerRunning(deps);
 
   const name = gw.containerName;
   const spec = targetsSpec(gw.targets);
-  if (isContainerRunning(name, execFileSync) && runningTargetsSpec(name, execFileSync) === spec) {
+  if (await isContainerRunning(name, execFile) && await runningTargetsSpec(name, execFile) === spec) {
     return { containerName: name, targetsSpec: spec };
   }
 
@@ -219,23 +246,23 @@ async function ensureGatewayRunningLocked(gw, deps) {
   // 半路丟出例外（如 docker run 失敗），外層 finally 仍知道要清哪個檔案。
   const tmpFile = tmpFilePath(name);
   try {
-    startGateway(gw, { execFileSync, writeFileSync, rmSync, tmpFilePath });
+    await startGateway(gw, { execFile, writeFileSync, rmSync, tmpFilePath });
     // 等「隧道真的連得到目標」才算就緒——這也保證 .ovpn 撐到 openvpn 開檔之後才被清掉。
-    await waitReachable(name, gw.targets, GATEWAY_TIMEOUT_MS, { execFileSync, execFile: deps.execFile });
+    await waitReachable(name, gw.targets, GATEWAY_TIMEOUT_MS, { execFile: deps.execFile });
   } finally {
     rmSync(tmpFile, { recursive: true, force: true });
   }
   return { containerName: name, targetsSpec: spec };
 }
 
-function stopGateway(gw, deps = {}) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
-  try { execFileSync('docker', ['stop', gw.containerName], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
+async function stopGateway(gw, deps = {}) {
+  const execFile = deps.execFile || realExecFile;
+  try { await docker(execFile, ['stop', gw.containerName]); } catch { /* 容器可能早已不存在 */ }
 }
 
-function removeGateway(gw, deps = {}) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
-  try { execFileSync('docker', ['rm', '-f', gw.containerName], { stdio: 'ignore' }); } catch { /* 容器可能早已不存在 */ }
+async function removeGateway(gw, deps = {}) {
+  const execFile = deps.execFile || realExecFile;
+  try { await docker(execFile, ['rm', '-f', gw.containerName]); } catch { /* 容器可能早已不存在 */ }
 }
 
 module.exports = { allocateForwardPort, projectContainerName, targetHostPort, imageTag, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };

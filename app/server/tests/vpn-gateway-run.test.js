@@ -17,11 +17,29 @@ const baseGw = {
 };
 const SPEC = '22000:192.168.1.233:22,22001:192.168.1.240:1433';
 
+// vpn-gateway 自己的 docker 呼叫已全面非同步化，注入點是 callback 形式的 execFile
+// （簽名 (cmd, args, opts, cb)）。deps.execFileSync 仍要注入，但只剩一個用途：deps 原樣
+// 往下傳給 docker-env 的 ensureDockerRunning 探 `docker info`——不注入的話測試會真的去戳
+// 本機 docker，daemon 沒起時還會觸發 `docker desktop start --timeout 120` 卡兩分鐘。
+const dockerInfoUp = () => jest.fn(() => '');
+
+// 把「同步回傳字串／丟錯」的假 docker 行為包成 execFile 的 callback 介面。
+// 刻意用 process.nextTick 而非當場呼叫 cb：讓 mock 跟真的 execFile 一樣是真非同步，
+// 否則「同步版也會過」的測試等於沒測到非同步化。
+function asExecFile(handler) {
+  return jest.fn((cmd, args, opts, cb) => {
+    const done = typeof opts === 'function' ? opts : cb;
+    let out;
+    try { out = handler(cmd, args); } catch (e) { process.nextTick(() => done(e)); return; }
+    process.nextTick(() => done(null, out == null ? '' : out));
+  });
+}
+
 function fakeDeps(overrides = {}) {
   return {
-    // 預設：daemon 已啟動、image 已 build、容器不存在（inspect 失敗）
-    execFileSync: jest.fn((cmd, args) => {
-      if (args[0] === 'info') return '';
+    execFileSync: dockerInfoUp(),
+    // 預設：image 已 build、容器不存在（inspect 失敗）
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'images') return 'sha256:abc123\n';
       if (args[0] === 'inspect') throw new Error('No such object');
       return '';
@@ -36,8 +54,7 @@ function fakeDeps(overrides = {}) {
 
 // 容器在跑、且 label 指紋等於現在需要的目標集合 → 直接沿用（inspect 兩次：Running + Labels）
 function runningWithSpec(spec) {
-  return jest.fn((cmd, args) => {
-    if (args[0] === 'info') return '';
+  return asExecFile((cmd, args) => {
     if (args[0] === 'images') return 'sha256:abc123\n';
     if (args[0] === 'inspect' && String(args[2] || '').includes('State.Running')) return 'true\n';
     if (args[0] === 'inspect' && String(args[2] || '').includes('Labels')) return `${spec}\n`;
@@ -46,21 +63,21 @@ function runningWithSpec(spec) {
 }
 
 test('容器已在跑且目標指紋相同時，直接沿用，不重建也不等待', async () => {
-  const deps = fakeDeps({ execFileSync: runningWithSpec(SPEC) });
+  const deps = fakeDeps({ execFile: runningWithSpec(SPEC) });
   const result = await ensureGatewayRunning(baseGw, deps);
   expect(result).toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC });
-  expect(deps.execFileSync.mock.calls.some(c => c[1][0] === 'run')).toBe(false);
+  expect(deps.execFile.mock.calls.some(c => c[1][0] === 'run')).toBe(false);
   expect(deps.waitReachable).not.toHaveBeenCalled();
   expect(deps.writeFileSync).not.toHaveBeenCalled();
 });
 
 // 這是共用容器方案唯一「必須重建」的情境：使用者新增了打去第三台機器的連線。
 test('容器在跑但目標指紋不同時（多了新目標），先 stop+rm 再重建', async () => {
-  const deps = fakeDeps({ execFileSync: runningWithSpec('22000:192.168.1.233:22') });
+  const deps = fakeDeps({ execFile: runningWithSpec('22000:192.168.1.233:22') });
   await ensureGatewayRunning(baseGw, deps);
 
-  const stopIdx = deps.execFileSync.mock.calls.findIndex(c => c[1][0] === 'stop');
-  const runIdx = deps.execFileSync.mock.calls.findIndex(c => c[1][0] === 'run');
+  const stopIdx = deps.execFile.mock.calls.findIndex(c => c[1][0] === 'stop');
+  const runIdx = deps.execFile.mock.calls.findIndex(c => c[1][0] === 'run');
   expect(stopIdx).toBeGreaterThanOrEqual(0);
   expect(runIdx).toBeGreaterThan(stopIdx);
 });
@@ -72,7 +89,7 @@ test('容器不存在時：寫設定檔、多目標 docker run、等待就緒', 
   expect(result).toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC });
   expect(deps.writeFileSync).toHaveBeenCalledWith('C:\\tmp\\vpn-proj-2.ovpn', 'client\ndev tun\n...', { mode: 0o600 });
 
-  const args = deps.execFileSync.mock.calls.find(c => c[1][0] === 'run')[1];
+  const args = deps.execFile.mock.calls.find(c => c[1][0] === 'run')[1];
   expect(args).toContain('--name');
   expect(args).toContain('vpn-proj-2');
   expect(args).toContain('--cap-add=NET_ADMIN');
@@ -107,19 +124,18 @@ test('起容器前會先清掉 staleContainers 列出的舊容器', async () => 
   const deps = fakeDeps();
   await ensureGatewayRunning(gw, deps);
 
-  const rmNames = deps.execFileSync.mock.calls.filter(c => c[1][0] === 'rm').map(c => c[1][2]);
+  const rmNames = deps.execFile.mock.calls.filter(c => c[1][0] === 'rm').map(c => c[1][2]);
   expect(rmNames).toContain('vpn-conn-1');
   expect(rmNames).toContain('vpn-conn-3');
-  const runIdx = deps.execFileSync.mock.calls.findIndex(c => c[1][0] === 'run');
-  const lastRmIdx = deps.execFileSync.mock.calls.map(c => c[1][0]).lastIndexOf('rm');
+  const runIdx = deps.execFile.mock.calls.findIndex(c => c[1][0] === 'run');
+  const lastRmIdx = deps.execFile.mock.calls.map(c => c[1][0]).lastIndexOf('rm');
   expect(runIdx).toBeGreaterThan(lastRmIdx);
 });
 
 test('清舊容器時容器本來就不存在（stop/rm 皆失敗），不影響後續 docker run', async () => {
   const gw = { ...baseGw, staleContainers: ['vpn-conn-1'] };
   const deps = fakeDeps({
-    execFileSync: jest.fn((cmd, args) => {
-      if (args[0] === 'info') return '';
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'images') return 'sha256:abc123\n';
       if (args[0] === 'inspect') throw new Error('No such object');
       if (args[0] === 'stop' || args[0] === 'rm') throw new Error('No such container');
@@ -128,7 +144,7 @@ test('清舊容器時容器本來就不存在（stop/rm 皆失敗），不影響
   });
   const result = await ensureGatewayRunning(gw, deps);
   expect(result.containerName).toBe('vpn-proj-2');
-  expect(deps.execFileSync.mock.calls.some(c => c[1][0] === 'run')).toBe(true);
+  expect(deps.execFile.mock.calls.some(c => c[1][0] === 'run')).toBe(true);
 });
 
 test('暫存 .ovpn 要等就緒檢查完成才清除（太早刪會讓 openvpn 開檔撲空）', async () => {
@@ -145,14 +161,14 @@ test('暫存 .ovpn 要等就緒檢查完成才清除（太早刪會讓 openvpn �
 test('VPN 帳密留空時，環境變數仍帶入空字串（不丟錯）', async () => {
   const deps = fakeDeps();
   await ensureGatewayRunning({ ...baseGw, username: undefined, password: undefined }, deps);
-  const args = deps.execFileSync.mock.calls.find(c => c[1][0] === 'run')[1];
+  const args = deps.execFile.mock.calls.find(c => c[1][0] === 'run')[1];
   expect(args).toContain('VPN_USER=');
   expect(args).toContain('VPN_PASS=');
 });
 
 test('暫存設定檔在 docker run 失敗時仍會被清除', async () => {
   const deps = fakeDeps({
-    execFileSync: jest.fn((cmd, args) => {
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'inspect') throw new Error('No such object');
       if (args[0] === 'run') throw new Error('docker daemon not running');
       return '';
@@ -164,16 +180,15 @@ test('暫存設定檔在 docker run 失敗時仍會被清除', async () => {
 
 test('image 不存在時，docker run 之前會先 build', async () => {
   const deps = fakeDeps({
-    execFileSync: jest.fn((cmd, args) => {
-      if (args[0] === 'info') return '';
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'images') return '';
       if (args[0] === 'inspect') throw new Error('No such object');
       return '';
     }),
   });
   await ensureGatewayRunning(baseGw, deps);
-  const buildIdx = deps.execFileSync.mock.calls.findIndex(c => c[1][0] === 'build');
-  const runIdx = deps.execFileSync.mock.calls.findIndex(c => c[1][0] === 'run');
+  const buildIdx = deps.execFile.mock.calls.findIndex(c => c[1][0] === 'build');
+  const runIdx = deps.execFile.mock.calls.findIndex(c => c[1][0] === 'run');
   expect(buildIdx).toBeGreaterThanOrEqual(0);
   expect(runIdx).toBeGreaterThan(buildIdx);
 });
@@ -183,16 +198,19 @@ test('image 不存在時，docker run 之前會先 build', async () => {
 test('不注入 waitReachable 時：只要有一個目標 nc 探測成功就算就緒', async () => {
   let started = false;
   const deps = {
-    execFileSync: jest.fn((cmd, args) => {
-      if (args[0] === 'info') return '';
+    execFileSync: dockerInfoUp(),
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'images') return 'sha256:abc\n';
       if (args[0] === 'run') { started = true; return ''; }
       if (args[0] === 'inspect' && String(args[2] || '').includes('State.Running')) return started ? 'true\n' : 'false\n';
       if (args[0] === 'inspect' && String(args[2] || '').includes('Labels')) return '\n';
+      // nc 探測：第一個目標不通、第二個通 → 仍算就緒
+      if (args[0] === 'exec') {
+        if (args[6] !== '192.168.1.240') throw new Error('nc fail');
+        return '';
+      }
       return '';
     }),
-    // 第一個目標不通、第二個通 → 仍算就緒
-    execFile: jest.fn((cmd, args, cb) => cb(args[6] === '192.168.1.240' ? null : new Error('nc fail'))),
     writeFileSync: jest.fn(),
     rmSync: jest.fn(),
     tmpFilePath: () => 'C:\\tmp\\vpn-proj-2.ovpn',
@@ -206,15 +224,15 @@ test('不注入 waitReachable 時：只要有一個目標 nc 探測成功就算�
 
 test('不注入 waitReachable 時，容器撥號中途退出：撈 docker logs 併入錯誤，不傻等到逾時', async () => {
   const deps = {
-    execFileSync: jest.fn((cmd, args) => {
-      if (args[0] === 'info') return '';
+    execFileSync: dockerInfoUp(),
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'images') return 'sha256:abc\n';
       if (args[0] === 'inspect' && String(args[2] || '').includes('State.Running')) return 'false\n';
       if (args[0] === 'inspect' && String(args[2] || '').includes('Labels')) return '\n';
       if (args[0] === 'logs') return 'AUTH: Received control message: AUTH_FAILED\n';
+      if (args[0] === 'exec') throw new Error('nc: bad address');
       return '';
     }),
-    execFile: jest.fn((cmd, args, cb) => cb(new Error('nc: bad address'))),
     writeFileSync: jest.fn(),
     rmSync: jest.fn(),
     tmpFilePath: () => 'C:\\tmp\\vpn-proj-2.ovpn',
@@ -239,8 +257,7 @@ test('逾時錯誤訊息要列出所有目標，方便判斷是哪台不通', as
 // `.not.toBe('odoo-v2-vpn-gateway:latest')` 這行會紅。
 test('docker run 用的 image tag 與 ensureImageBuilt 檢查/build 的 tag 是同一個（不是寫死的 :latest）', async () => {
   const deps = fakeDeps({
-    execFileSync: jest.fn((cmd, args) => {
-      if (args[0] === 'info') return '';
+    execFile: asExecFile((cmd, args) => {
       if (args[0] === 'images') return ''; // image 不存在 → 走 build 分支，同時撈到查詢用的 tag
       if (args[0] === 'inspect') throw new Error('No such object');
       return '';
@@ -248,9 +265,9 @@ test('docker run 用的 image tag 與 ensureImageBuilt 檢查/build 的 tag 是�
   });
   await ensureGatewayRunning(baseGw, deps);
 
-  const imagesCall = deps.execFileSync.mock.calls.find(c => c[1][0] === 'images');
-  const buildCall = deps.execFileSync.mock.calls.find(c => c[1][0] === 'build');
-  const runCall = deps.execFileSync.mock.calls.find(c => c[1][0] === 'run');
+  const imagesCall = deps.execFile.mock.calls.find(c => c[1][0] === 'images');
+  const buildCall = deps.execFile.mock.calls.find(c => c[1][0] === 'build');
+  const runCall = deps.execFile.mock.calls.find(c => c[1][0] === 'run');
   const queriedTag = imagesCall[1][2];
   const builtTag = buildCall[1][2];
   const runImage = runCall[1][runCall[1].length - 1];
@@ -261,11 +278,53 @@ test('docker run 用的 image tag 與 ensureImageBuilt 檢查/build 的 tag 是�
   expect(runImage).toMatch(/^odoo-v2-vpn-gateway:[0-9a-f]{12}$/);
 });
 
+// 本模組會被 lib/ssh-sql.js 在使用者下 SQL 查詢時 lazy 呼叫，而平台是單一 Node 常駐進程：
+// 只要 docker 呼叫還是 execFileSync，一次查詢觸發的 `docker build`（數分鐘）就會把整個
+// 事件迴圈凍住，全平台所有人一起卡死。這支測試把 build 停在測試手上不放，證明「build 還沒
+// 回來時，事件迴圈仍然轉得動」。
+//
+// 同步版本下這支必紅：舊碼的 build 走 deps.execFileSync，這裡注入的 execFile 根本不會被
+// 呼叫到 build，buildStarted 永遠不 resolve → 1 秒後由下面的 race 明確報「仍是阻塞式呼叫」。
+test('docker build 進行中，事件迴圈仍能處理其他工作（不再凍住整個平台）', async () => {
+  let signalBuildStarted;
+  const buildStarted = new Promise(resolve => { signalBuildStarted = resolve; });
+  let finishBuild = null;
+  let buildDone = false;
+
+  const deps = fakeDeps({
+    execFile: jest.fn((cmd, args, opts, cb) => {
+      if (args[0] === 'build') {
+        finishBuild = () => { buildDone = true; cb(null, ''); };
+        signalBuildStarted();
+        return; // 卡住不回，模擬一個跑很久的 docker build
+      }
+      if (args[0] === 'images') return void process.nextTick(() => cb(null, '')); // image 不存在 → 要 build
+      if (args[0] === 'inspect') return void process.nextTick(() => cb(new Error('No such object')));
+      process.nextTick(() => cb(null, ''));
+    }),
+  });
+
+  const pending = ensureGatewayRunning(baseGw, deps);
+  await Promise.race([
+    buildStarted,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('docker build 沒有走非同步 execFile —— 仍是阻塞式呼叫')), 1000)),
+  ]);
+
+  // 走到這行就代表事件迴圈沒被 build 佔住；再排一個一般的 macrotask 確認它真的跑得起來。
+  await new Promise(resolve => setImmediate(resolve));
+  expect(buildDone).toBe(false); // build 還沒結束
+  expect(deps.execFile.mock.calls.some(c => c[1][0] === 'run')).toBe(false); // 也還沒往下走到 docker run
+
+  finishBuild();
+  await expect(pending).resolves.toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC });
+});
+
 // Fix B：容器共用成單一資源後，同一個 containerName 的併發呼叫會互砍。
 //
-// 注意「兩邊都跑 docker run」不是能分辨有無鎖的訊號：isContainerRunning 檢查到 docker run
-// 之間全是同步的 execFileSync，單執行緒下第二個呼叫者永遠是在容器已建好之後才醒來。
-// 真正的破壞窗口在 waitReachable——先到者在那裡 await（最長 40 秒）讓出 event loop，
+// docker 呼叫改非同步後，isContainerRunning 到 docker run 之間每一步都是讓出點，競態窗口
+// 比舊版更大（舊版那段全同步，後到者只可能在 waitReachable 那個唯一的 await 點插進來）。
+// 最典型的破壞窗口仍是 waitReachable——先到者在那裡 await（最長 40 秒）讓出 event loop，
 // 後到者此時進場；只要兩邊的目標集合不同（實際場景：測試區起動的 fire-and-forget 撥號讀到
 // 舊的連線清單，使用者剛存好第二條連線後查詢觸發的 lazy 撥號讀到新的），後到者就會判定
 // 指紋不符而走 removeStaleContainer，把先到者還在撥號的容器 stop+rm 掉，
@@ -278,8 +337,7 @@ test('併發呼叫：後到者不得在先到者撥號途中把容器砍掉重�
   const oneTarget = { ...baseGw, targets: [baseGw.targets[0]] };
 
   let running = null; // 容器現在掛的 targets 指紋；null＝沒有容器
-  const execFileSync = jest.fn((cmd, args) => {
-    if (args[0] === 'info') return '';
+  const execFile = asExecFile((cmd, args) => {
     if (args[0] === 'images') return 'sha256:abc123\n';
     if (args[0] === 'stop' || args[0] === 'rm') { running = null; return ''; }
     if (args[0] === 'run') { running = args[args.indexOf('--label') + 1].replace('targets=', ''); return ''; }
@@ -301,7 +359,8 @@ test('併發呼叫：後到者不得在先到者撥號途中把容器砍掉重�
   });
 
   const deps = {
-    execFileSync,
+    execFileSync: dockerInfoUp(),
+    execFile,
     writeFileSync: jest.fn(),
     rmSync: jest.fn(),
     tmpFilePath: jest.fn(() => 'C:\\tmp\\vpn-proj-2.ovpn'),

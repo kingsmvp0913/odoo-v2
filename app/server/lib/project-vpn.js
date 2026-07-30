@@ -24,7 +24,7 @@ async function startProjectVpns(projectId, deps = {}) {
 
 // 測試區停時呼叫：只停不刪（SIGTERM 讓 openvpn 正常斷線通知伺服器）。永不 throw。
 async function stopProjectVpns(projectId, deps = {}) {
-  try { stopGateway({ containerName: projectContainerName(projectId) }, deps); } catch { /* 永不擋停機 */ }
+  try { await stopGateway({ containerName: projectContainerName(projectId) }, deps); } catch { /* 永不擋停機 */ }
 }
 
 module.exports = { startProjectVpns, stopProjectVpns };

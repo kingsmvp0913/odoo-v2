@@ -202,8 +202,8 @@ function registerRoutes(app) {
       // 這裡再包一層是為了保險：改憑證這件事不該因為 docker 沒裝／沒跑而變成 500。
       try {
         const gw = { containerName: projectContainerName(req.params.id) };
-        stopGateway(gw);
-        removeGateway(gw);
+        await stopGateway(gw);
+        await removeGateway(gw);
       } catch { /* 不擋這次設定更新 */ }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
