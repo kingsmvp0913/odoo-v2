@@ -24,7 +24,8 @@ RUN set -eux; \
         sed -i '/-updates/d' /etc/apt/sources.list; \
         apt-get -o Acquire::Check-Valid-Until=false update; \
     fi; \
-    apt-get install -y --no-install-recommends fonts-liberation fonts-noto-cjk ca-certificates; \
+    apt-get install -y --no-install-recommends fonts-liberation fonts-noto-cjk ca-certificates \
+        unixodbc unixodbc-dev tdsodbc freetds-bin; \
     if apt-get install -y --no-install-recommends chromium; then \
         :; \
     else \
@@ -35,6 +36,40 @@ RUN set -eux; \
         ln -sf /usr/bin/google-chrome-stable /usr/local/bin/chromium; \
     fi; \
     rm -rf /var/lib/apt/lists/*
+
+# ODBC driver 註冊：客戶模組（idx_hj）用 pyodbc 連 SM(MSSQL)，連線字串的 DRIVER 名取自 Odoo 設定
+# wf_mssql.driver，其 Selection 只有三個值，Linux/Docker 那個逐字就是 "FreeTDS"（另兩個是 Windows 用的
+# ODBC Driver 17/18）；且連線字串固定帶 TDS_Version=7.1＝FreeTDS 專屬參數。故這裡註冊的 driver 名
+# 必須逐字是 FreeTDS，改名等於全部連線失敗。
+# 註：unixodbc 提供的 libodbc.so.2 才是 import pyodbc 真正需要的系統函式庫——manifest 的
+# external_dependencies 攔不住這種缺失（Odoo 只查 pip metadata 存不存在、不會真的 import），
+# 也沒有任何欄位能宣告 apt 套件名，所以只能在這裡寫死。
+RUN set -eux; \
+    drv="$(find /usr/lib -name 'libtdsodbc.so*' 2>/dev/null | head -n1)"; \
+    if [ -n "$drv" ] && ! grep -q '^\[FreeTDS\]' /etc/odbcinst.ini 2>/dev/null; then \
+        printf '[FreeTDS]\nDescription = FreeTDS\nDriver = %s\nFileUsage = 1\n' "$drv" >> /etc/odbcinst.ini; \
+    fi
+
+# 自訂模組宣告的 Python 相依（全平台聯集，由 docker-env.ensureImage 以 --build-arg 帶入）。
+# 內建在 image 而非容器可寫層：容器層 pip 裝的東西容器一被 rm（夜間關機／閒置回收）就全滅，
+# 而 DB 裡那些模組仍是已安裝 → 重建時常駐進程一啟動就 ModuleNotFoundError → registry 載入失敗 →
+# 連 idx_aidev_sso 一起回滾 → 測試區點開是 Not Found，而 run/pip/seed/健檢全部回報成功。
+# 放在最後一層：這份清單最常變，擺前面會讓 apt 那層跟著失效重跑。
+# 兩個「隨 base 版本而變」的坑，都必須先處理，否則只有部分版本裝得起來：
+#  (1) 舊 base（odoo13/14＝Debian buster）內建 pip 18.1／Python 3.7，它的 pytoml 解析不了現代的
+#      pyproject.toml，裝到 cryptography（paramiko 的相依）就整包倒。先自我升級到 pip 24 即可解，
+#      升完 13 個套件在 Python 3.7 上全數安裝成功（實測）。
+#  (2) 新 base（Debian bookworm＋／Ubuntu 24.04＋）的 PEP 668 會擋 root pip，需 --break-system-packages。
+#      但這個選項在 pip 18.1 上是「no such option」＝硬錯，所以退路本身也要能失敗（|| true）。
+ARG PIP_PKGS=""
+RUN set -eux; \
+    if [ -n "$PIP_PKGS" ]; then \
+        python3 -m pip install --upgrade --no-cache-dir pip setuptools wheel \
+        || python3 -m pip install --upgrade --no-cache-dir --break-system-packages pip setuptools wheel \
+        || true; \
+        python3 -m pip install --no-cache-dir -- $PIP_PKGS \
+        || python3 -m pip install --no-cache-dir --break-system-packages -- $PIP_PKGS; \
+    fi
 
 # tour 在容器內多以 root 相關限制跑 chromium，常需 --no-sandbox；提供給 Odoo 偵測（若該版本支援）。
 ENV CHROME_FLAGS="--no-sandbox --headless=new --disable-gpu"

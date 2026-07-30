@@ -1,6 +1,9 @@
 // 意圖：Docker 測試區的正確性都在「怎麼組 docker 參數」——連宿主 DB 的 host 改寫、addons 掛載映射、
 // addons-path 補核心、容器名/image 標籤清洗、run/exec argv。這些是純函式，離線就能把實機才會踩到的
 // 坑（漏核心 addons→base 找不到、localhost 連不到宿主 DB、addons basename 撞名互蓋）鎖死在測試裡。
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const d = require('../lib/docker-env');
 
 describe('image 標籤 / 容器名清洗', () => {
@@ -227,10 +230,102 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     const stop = await d.containerRunning('c1', { spawnFn: fakeSpawn({ code: 0, stdout: 'false\n' }) });
     expect(stop).toBe(false);
   });
-  test('ensureImage：image 已存在 → 不 build', async () => {
-    const r = await d.ensureImage('16', '/ctx', { spawnFn: fakeSpawn({ code: 0, stdout: 'imgid\n' }) });
+  // 依序回應多次 docker 呼叫（第 1 次是 image inspect、之後是 build），並記下每次的 argv
+  function scriptedSpawn(scripts, calls) {
+    let i = 0;
+    return (cmd, args) => {
+      calls.push(args);
+      return fakeSpawn(scripts[Math.min(i++, scripts.length - 1)])();
+    };
+  }
+
+  test('ensureImage：相依指紋相符 → 不 build', async () => {
+    const fp = d.depsFingerprint(['pyodbc', 'xlsxtpl']);
+    const calls = [];
+    const r = await d.ensureImage('16', '/ctx', { pipPkgs: ['xlsxtpl', 'pyodbc'] },
+      { spawnFn: scriptedSpawn([{ code: 0, stdout: `${fp}|image\n` }], calls) });
     expect(r.ok).toBe(true);
     expect(r.log).toContain('已存在');
+    expect(calls.some(a => a[0] === 'build')).toBe(false);
+  });
+
+  // 意圖：image 已存在就早退，會讓「改了相依清單／Dockerfile」毫無效果——同一個坑在 vpn-gateway
+  // 的 entrypoint.sh 上踩過一次（九關程式碼審查全綠但實機完全無效）。判準必須是內容指紋而非存在性。
+  test('ensureImage：相依清單變了（指紋不符）→ 仍會 build，且把聯集帶進 build-arg 與 label', async () => {
+    const calls = [];
+    const r = await d.ensureImage('16', '/ctx', { pipPkgs: ['xlsxtpl', 'pyodbc'] },
+      { spawnFn: scriptedSpawn([{ code: 0, stdout: 'stale-fingerprint|image\n' }, { code: 0, stdout: 'built' }], calls) });
+    expect(r.ok).toBe(true);
+    const build = calls.find(a => a[0] === 'build');
+    expect(build).toBeDefined();
+    expect(build).toContain('PIP_PKGS=pyodbc xlsxtpl');           // 去重後排序，順序穩定才有指紋意義
+    expect(build).toContain(`idx.deps=${d.depsFingerprint(['pyodbc', 'xlsxtpl'])}`);
+  });
+
+  // 意圖：某專案宣告一個裝不動的套件時，不可以變成「全平台都建不了測試區」。預裝失敗要退回現行的
+  // 「容器層 pip」路徑（installModuleRequirements 照跑），但必須在 setup_log 大聲說，不得靜默降級。
+  test('ensureImage：預裝相依 build 失敗 → 退回不預裝再 build 一次，回 ok 且 log 大聲說', async () => {
+    const calls = [];
+    const r = await d.ensureImage('16', '/ctx', { pipPkgs: ['nosuchpkg'] }, {
+      spawnFn: scriptedSpawn([
+        { code: 0, stdout: '|\n' },                    // image 不存在／無 label
+        { code: 1, stderr: 'No matching distribution found for nosuchpkg' },
+        { code: 0, stdout: 'built' },
+      ], calls),
+    });
+    expect(r.ok).toBe(true);
+    expect(r.log).toContain('退回');
+    expect(r.log).toContain('nosuchpkg');              // 真因要看得到，不能只說「失敗」
+    const builds = calls.filter(a => a[0] === 'build');
+    expect(builds).toHaveLength(2);
+    expect(builds[1]).toContain('PIP_PKGS=');          // 第二次不帶任何套件
+    expect(builds[1]).toContain('idx.pip=fallback');
+  });
+
+  // 意圖：退回產生的 image 指紋一樣（否則每次建環境都要白付一次 30 分鐘 build），但使用者不能因此
+  // 再也看不到警告——只要這顆 image 是退回來的，每次都要在建立記錄裡重申。
+  test('ensureImage：退回產生的 image 之後每次仍在 log 警告，不因指紋相符而靜默', async () => {
+    const fp = d.depsFingerprint(['nosuchpkg']);
+    const calls = [];
+    const r = await d.ensureImage('16', '/ctx', { pipPkgs: ['nosuchpkg'] },
+      { spawnFn: scriptedSpawn([{ code: 0, stdout: `${fp}|fallback\n` }], calls) });
+    expect(r.ok).toBe(true);
+    expect(calls.some(a => a[0] === 'build')).toBe(false);
+    expect(r.log).toContain('容器層');
+  });
+
+  // 意圖：系統套件（unixodbc／FreeTDS）寫死在 Dockerfile，pip 清單不會變。若指紋只看 pip 清單，
+  // 改了 Dockerfile 就永遠不會重 build——正是 vpn-gateway entrypoint.sh 那個坑。
+  test('ensureImage：只改 Dockerfile（pip 清單不變）也要重 build', async () => {
+    const ctx = fs.mkdtempSync(path.join(os.tmpdir(), 'imgctx-'));
+    const dfPath = path.join(ctx, 'Dockerfile.odoo');
+    fs.writeFileSync(dfPath, 'FROM odoo:16\n');
+    const pkgs = ['xlsxtpl'];
+    const fpBefore = d.depsFingerprint(pkgs, fs.readFileSync(dfPath, 'utf8'));
+
+    const before = [];
+    await d.ensureImage('16', ctx, { pipPkgs: pkgs },
+      { spawnFn: scriptedSpawn([{ code: 0, stdout: `${fpBefore}|image\n` }], before) });
+    expect(before.some(a => a[0] === 'build')).toBe(false); // 沒動任何東西 → 不 build
+
+    fs.writeFileSync(dfPath, 'FROM odoo:16\nRUN apt-get install -y unixodbc\n');
+    const after = [];
+    await d.ensureImage('16', ctx, { pipPkgs: pkgs },
+      { spawnFn: scriptedSpawn([{ code: 0, stdout: `${fpBefore}|image\n` }, { code: 0, stdout: 'built' }], after) });
+    expect(after.some(a => a[0] === 'build')).toBe(true);
+  });
+
+  test('ensureImage：兩次 build 都失敗 → ok:false，帶出第一次（有預裝）的真因', async () => {
+    const calls = [];
+    const r = await d.ensureImage('16', '/ctx', { pipPkgs: ['nosuchpkg'] }, {
+      spawnFn: scriptedSpawn([
+        { code: 0, stdout: '|\n' },
+        { code: 1, stderr: 'No matching distribution found for nosuchpkg' },
+        { code: 1, stderr: 'apt-get update failed' },
+      ], calls),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.log).toContain('nosuchpkg');
   });
 
   // argv 組法：捕捉實際傳給 spawn 的參數（execOdoo 走 runDocker→spawn）

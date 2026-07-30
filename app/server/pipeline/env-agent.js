@@ -211,6 +211,23 @@ async function getDeclaredPythonDeps(projectId) {
   return declared;
 }
 
+// 全平台所有專案宣告的 Python 相依聯集（供 image 預裝，見 docker-env.ensureImage）。
+// 刻意「不分專案」：實測聯集只有十來個且幾乎全來自同一個專案，分專案建 image 一個都沒省到，
+// 只會讓 image 數量變成「專案數 × 版本數」（每個 3GB+）。版本釘定與 installModuleRequirements
+// 同一取捨（只裝套件名），故聯集不會比現況更容易撞版本。
+async function getAllDeclaredPythonDeps() {
+  const { rows } = await query(
+    "SELECT DISTINCT project_id FROM project_repos WHERE clone_status='done' AND local_path IS NOT NULL"
+  );
+  const all = new Set();
+  for (const r of rows) {
+    for (const name of await getDeclaredPythonDeps(r.project_id)) {
+      if (SAFE_PKG.test(name)) all.add(name);
+    }
+  }
+  return [...all].sort();
+}
+
 // 針對性補裝單一 Python 套件（缺件且已宣告時的自動修復用，健檢 F4）。回傳 { ok, log }。
 // 名稱先過 SAFE_PKG 白名單，杜絕 argv 旗標走私；不符者不裝、回 ok:false。
 async function installPythonPackage(projectId, pkg, signal) {
@@ -590,8 +607,10 @@ async function _runEnvSetupDocker(projectId) {
     return _failEnv(projectId, 'Docker 引擎未啟動或啟動逾時，請確認 Docker Desktop', log + `[docker] ${e.message}\n`);
   }
 
-  // 1) 確保平台 image（odoo:<major> + chromium）；首次 build 較久
-  const img = await dockerEnv.ensureImage(ctx.major, DOCKER_CTX_DIR);
+  // 1) 確保平台 image（odoo:<major> + chromium + 預裝的 Python 相依）；首次 build 較久。
+  // 相依必須內建在 image：容器層 pip 裝的東西容器一被 rm（夜間關機／閒置回收）就全滅，而 DB 裡
+  // 那些模組仍是已安裝 → 重建時常駐進程一啟動就 ModuleNotFoundError → registry 載入失敗。
+  const img = await dockerEnv.ensureImage(ctx.major, DOCKER_CTX_DIR, { pipPkgs: await getAllDeclaredPythonDeps() });
   log += img.log;
   if (!img.ok) return _failEnv(projectId, 'docker image build 失敗', log);
 
@@ -703,4 +722,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
