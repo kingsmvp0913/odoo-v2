@@ -248,10 +248,19 @@ async function runQaAgent(taskId, userId, signal) {
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {
       const { bumpReentryOrStop } = require('./reentry');
-      if (await bumpReentryOrStop(taskId, userId)) return true; // 總循環達上限 → 已標 stopped
+      // retry_feedback／qa_retry_count 必須在斷路器之前落地：觸頂時 bumpReentryOrStop 會直接標
+      // stopped 並讓本函式提早 return，等到下面才寫的話，本輪 QA 找到的問題兩邊都留不下來——
+      // 畫面上只剩「循環 N 次仍未通過」（使用者看不到 QA 到底說了什麼），retry_feedback 也還是
+      // NULL，事後人工把任務推回 coding 時開發拿不到任何退回原因，只會空手重跑並被同樣的問題再退。
       await query(
-        "UPDATE tasks SET status='coding_running', qa_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+        'UPDATE tasks SET qa_retry_count=$2, retry_feedback=$3 WHERE id=$1',
         [taskId, nextCount, `[QA 未通過]\n${feedback}`]
+      );
+      // 帶 diag：觸頂停下時把本輪真正的問題寫進 blocker_content（reentry.js 早就支援，先前沒帶）
+      if (await bumpReentryOrStop(taskId, userId, { blockerContent: `本輪 QA 未通過：\n${issues.slice(0, 500)}` })) return true;
+      await query(
+        "UPDATE tasks SET status='coding_running', updated_at=NOW() WHERE id=$1",
+        [taskId]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
     }

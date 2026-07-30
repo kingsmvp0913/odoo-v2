@@ -127,6 +127,29 @@ test('P6 首輪 qa_retry_count=0 → 不熔斷、照常審查', async () => {
   expect(runClaude).toHaveBeenCalled();
 });
 
+// 觸頂那一擊最容易把資訊弄丟：bumpReentryOrStop 一標 stopped 就提早 return。
+// 現場（task 157）就是這樣——使用者只看到「循環 4 次仍未通過」，看不到 QA 說了什麼；
+// retry_feedback 停在 NULL，事後人工推回 coding 時開發空手重跑、被同一個問題再退一輪。
+test('reentry 觸頂 → QA 本輪的問題要同時留在 blocker_content 與 retry_feedback', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['恢復按鈕在維修單已確認時實際無效'], summary: '改這裡' });
+  const id = await makeTask(0);
+  // 已用掉全部總循環額度（MAX_REENTRY 預設 2）→ 本輪必定觸頂
+  await dbModule.query('UPDATE tasks SET reentry_count=$2 WHERE id=$1', [id, 2]);
+  await runQaAgent(id, userId);
+
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, blocker_content, retry_feedback, qa_retry_count FROM tasks WHERE id=$1', [id]
+  );
+  expect(t.status).toBe('stopped');
+  // 使用者在畫面上看得到真正的問題，不只是「循環 N 次」
+  expect(t.blocker_content).toContain('循環');
+  expect(t.blocker_content).toContain('恢復按鈕在維修單已確認時實際無效');
+  // 人工事後推回 coding 時，開發拿得到退回原因（含修正指引）
+  expect(t.retry_feedback).toContain('恢復按鈕在維修單已確認時實際無效');
+  expect(t.retry_feedback).toContain('修正指引：改這裡');
+  expect(t.qa_retry_count).toBe(1);
+});
+
 test('verdict pass → merge_running', async () => {
   claudeReturns({ verdict: 'pass' });
   const id = await makeTask();
