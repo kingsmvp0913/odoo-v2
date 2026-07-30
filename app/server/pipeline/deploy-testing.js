@@ -39,13 +39,22 @@ function extractOdooError(log) {
 // 完全沒有＝還沒載到本模組就整個被幹掉（如核心模組升級吃光資源）——退 coding 無用（改本模組救不了核心死），
 // 一律歸 env。107 事故：deploy log exitCode 4294967295、killed:no、只到核心模組載入即中止。
 // 註：err.killed（我方 timeout kill）另由 stopEnvTimeout 攔，不走這裡。
+// 容器內指令被訊號砍死時，shell／docker exec 回的是 128+N：137=128+9（SIGKILL，容器 OOM-kill 的標準長相）、
+// 139=128+11（SIGSEGV，原生層崩潰）。deploy 已全面 docker 化，OOM 走的正是這條而非下方 Windows 的形狀。
+// 取捨：128+N 這個「形狀」本身不算證據（一般工具也能正常回這區間的值），故不整段收 129–159，只收這兩個
+// 明確是資源層猝死的訊號；143（SIGTERM）＝有秩序地被要求停止（docker stop／夜間關機），語意不是資源層死亡，
+// 交既有 classifier 即可（落 env，結果一樣安全）。我方 timeout kill 另由 err.killed 攔，不進這裡。
+// 誤判成本不對稱是此處放寬的依據：多攔＝停等人工看一眼（安全側）；漏攔＝退 coding 重寫一整輪再 OOM 一次。
+const SIGNAL_DEATH_EXITS = new Set([137, 139]);
+
 function looksLikeInfraDeath(err) {
   if (!err) return false;
   // OS-kill／crash／OOM／access violation 在 Windows 以非常規退出碼結束（4294967295=0xFFFFFFFF、0xC000_xxxx
   // 等 >=2^31），POSIX 被信號殺為負值。正常 Odoo 程式錯誤走 SystemExit(1)——exit 1 的清楚錯誤交既有 classifier，
   // 不在此攔（否則會把「Connection refused」這類已能正確歸 env 的搶走、改成不同 verdict）。
   const code = err.exitCode;
-  const abnormalExit = typeof code === 'number' && (code < 0 || code >= 0x80000000);
+  const abnormalExit = typeof code === 'number'
+    && (code < 0 || code >= 0x80000000 || SIGNAL_DEATH_EXITS.has(code));
   if (!abnormalExit) return false;
   // 且 log 無任何 Odoo 錯誤行（真程式錯必留 ERROR／CRITICAL／Traceback）：猝死＋無錯誤＝還沒載到本模組就被幹掉。
   const log = `${err.message || ''}\n${err.stderr || ''}\n${err.stdout || ''}`;

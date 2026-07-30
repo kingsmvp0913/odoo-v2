@@ -366,6 +366,59 @@ test('P4 進程猝死（非常規退出碼＋無 Odoo 錯誤，未達本模組�
   expect(ev.map(r => r.content).some(c => c.includes('進程異常結束'))).toBe(true);
 });
 
+// P4-容器：容器內指令被訊號砍死時退出碼是 128+N（137=SIGKILL／OOM-kill、139=SIGSEGV），
+// 不是 Windows 原生 process 那種 >=2^31 的形狀。deploy 已 docker 化，OOM 走的正是這條——
+// 漏認會落到 haiku 分類器被瞎猜成 code、退 coding 重寫一整輪程式碼然後再 OOM 一次（純燒 token）。
+// 鑑別力：光看 status/blocker_type 沒用（泛用 env 路徑也是 stopped+env），必須斷言
+// 「沒問 haiku」＋「blocker 是猝死專屬文案」才分得出有沒有走到 stopEnvDeath。
+test('P4-容器 exitCode 137（OOM-kill）＋無 Odoo 錯誤 → stopEnvDeath，不問 haiku、不退 coding', async () => {
+  const { runClaude } = require('../pipeline/claude-runner');
+  await setEnvRunning();
+  const err = new Error('loading module base (1/65)\nloading module web (12/65)'); // 只到核心模組載入
+  err.exitCode = 137; err.killed = false; err.stderr = err.message;
+  envAgent.upgradeModules.mockRejectedValue(err);
+  const id = await makeTask(0);
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content, deploy_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+  expect(t.deploy_retry_count).toBe(0);
+  expect(t.blocker_content).toContain('進程異常結束'); // 猝死專屬文案，非泛用「環境問題（非程式碼）」
+  expect(t.blocker_content).toContain('137');          // 退出碼帶進 blocker 供人鑑識
+  expect(runClaude).not.toHaveBeenCalled();            // 在 classifier 之前攔下＝零 token
+  expect(envAgent.upgradeModules).toHaveBeenCalledTimes(1); // 不重試再 OOM 一次
+});
+
+test('P4-容器 exitCode 139（SIGSEGV）＋無 Odoo 錯誤 → stopEnvDeath，不問 haiku、不退 coding', async () => {
+  const { runClaude } = require('../pipeline/claude-runner');
+  await setEnvRunning();
+  const err = new Error('loading module base (1/65)');
+  err.exitCode = 139; err.killed = false; err.stderr = err.message;
+  envAgent.upgradeModules.mockRejectedValue(err);
+  const id = await makeTask(0);
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content, deploy_retry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+  expect(t.deploy_retry_count).toBe(0);
+  expect(t.blocker_content).toContain('進程異常結束');
+  expect(runClaude).not.toHaveBeenCalled();
+});
+
+// P4-容器 邊界：128+N 這個「形狀」本身不足以判定被訊號砍死（一般工具也能正常回這區間的值）。
+// 只收 137／139 這兩個資源層猝死的訊號，不整段收 129–159；143（SIGTERM）＝有秩序地被要求停止
+//（docker stop／夜間關機），語意不是資源層死亡 → 仍交既有 classifier（落 env，結果一樣安全）。
+test('P4-容器 邊界：exitCode 143（SIGTERM）不算猝死 → 走既有 classifier，非 stopEnvDeath 專屬文案', async () => {
+  await setEnvRunning();
+  const err = new Error('loading module base (1/65)');
+  err.exitCode = 143; err.killed = false; err.stderr = err.message;
+  envAgent.upgradeModules.mockRejectedValue(err);
+  const id = await makeTask(0);
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.blocker_content).not.toContain('進程異常結束'); // 沒有整段收 129–159
+});
+
 // P4 邊界：非常規退出碼但 log 有真 Odoo 錯誤（ParseError）→ 仍屬 code，退 coding（別把真程式錯誤放走）。
 test('P4 邊界：非常規退出碼但 log 有 ParseError → 仍退 coding（不誤放）', async () => {
   await setEnvRunning();
