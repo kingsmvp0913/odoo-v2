@@ -70,13 +70,31 @@ describe('startProjectVpns', () => {
 });
 
 describe('stopProjectVpns', () => {
-  test('停該專案的單一容器（免查 DB、免解密）', async () => {
+  test('停該專案的單一容器', async () => {
+    loadProjectVpn.mockResolvedValue(gw());
     await stopProjectVpns(7);
     expect(stopGateway).toHaveBeenCalledTimes(1);
     expect(stopGateway).toHaveBeenCalledWith({ containerName: 'vpn-proj-7' }, expect.anything());
   });
 
+  // 意圖：這條沒有早退的話，任何呼叫 stopEnv 的程式（含測試）都會對宿主機盲發
+  // `docker stop vpn-proj-<id>`。實測跑 project-routes.test.js 就把本機同名的真容器停掉——
+  // pg-mem 裡的假專案 id 跟真機器上的容器名撞在一起，而 stopGateway 對「容器不存在」是靜默的，
+  // 所以砍錯東西完全沒有任何訊號。對照 startProjectVpns 早就會先確認有設定才動作。
+  test('專案沒設定 VPN 時完全不發 docker 指令', async () => {
+    loadProjectVpn.mockResolvedValue(null);
+    await stopProjectVpns(7);
+    expect(stopGateway).not.toHaveBeenCalled();
+  });
+
+  test('讀取設定丟錯時也不發 docker 指令（寧可留著殘留容器，也不盲打宿主機）', async () => {
+    loadProjectVpn.mockRejectedValue(new Error('Unsupported state or unable to authenticate data'));
+    await expect(stopProjectVpns(7)).resolves.toBeUndefined();
+    expect(stopGateway).not.toHaveBeenCalled();
+  });
+
   test('stopGateway 丟錯不會讓 stopProjectVpns throw（不擋停機）', async () => {
+    loadProjectVpn.mockResolvedValue(gw());
     stopGateway.mockImplementation(() => { throw new Error('docker 掛了'); });
     await expect(stopProjectVpns(7)).resolves.toBeUndefined();
   });

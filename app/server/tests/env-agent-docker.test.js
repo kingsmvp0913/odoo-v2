@@ -23,6 +23,11 @@ jest.mock('../lib/docker-env', () => {
 });
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn().mockResolvedValue(undefined) }));
+// runEnvSetup／stopEnv 會 start/stopProjectVpns；不 mock 會對本機 docker 發真指令（實測會停掉真容器）。
+jest.mock('../lib/project-vpn', () => ({
+  startProjectVpns: jest.fn().mockResolvedValue(''),
+  stopProjectVpns: jest.fn().mockResolvedValue(undefined),
+}));
 
 let dbModule, envAgent, dockerEnv;
 const PID = 1001; // 單一共用 fixture 專案（odoo 13 / folder=shopx）

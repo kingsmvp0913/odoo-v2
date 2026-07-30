@@ -6,6 +6,32 @@ const os = require('os');
 const { encrypt } = require('../lib/crypto');
 
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
+// 本檔不碰實機 docker：PUT /api/projects/:id/vpn 會 stop+rm `vpn-proj-<id>`、刪專案會 stop+rm
+// odoo 容器。pg-mem 給的專案 id 從 1 開始，跟開發機上真的容器名撞得剛剛好（實測 `vpn-proj-1`
+// 真的被 docker rm -f 掉），而這些函式對「容器不存在」都是靜默的，砍錯完全沒有訊號。
+jest.mock('../lib/vpn-gateway', () => {
+  const actual = jest.requireActual('../lib/vpn-gateway');
+  return {
+    ...actual,
+    ensureGatewayRunning: jest.fn().mockResolvedValue(undefined),
+    stopGateway: jest.fn().mockResolvedValue(undefined),
+    removeGateway: jest.fn().mockResolvedValue(undefined),
+  };
+});
+jest.mock('../lib/docker-env', () => {
+  const actual = jest.requireActual('../lib/docker-env');
+  return {
+    ...actual,
+    stopContainer: jest.fn().mockResolvedValue({ code: 0 }),
+    removeContainer: jest.fn().mockResolvedValue(undefined),
+    containerExists: jest.fn().mockResolvedValue(false),
+    containerRunning: jest.fn().mockResolvedValue(false),
+  };
+});
+jest.mock('../lib/project-vpn', () => ({
+  startProjectVpns: jest.fn().mockResolvedValue(''),
+  stopProjectVpns: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ processed: 0 }), resetLoopCounter: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(),

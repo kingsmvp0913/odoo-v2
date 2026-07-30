@@ -26,6 +26,12 @@ jest.mock('../lib/docker-env', () => {
 });
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn().mockResolvedValue(undefined) }));
+// runEnvSetup 尾巴會 startProjectVpns；目前 fixture 沒設 VPN 欄位所以還沒真打 docker，
+// 但那是巧合——fixture 一補 vpn_config_enc 就會對本機 docker 發真指令。先鎖住。
+jest.mock('../lib/project-vpn', () => ({
+  startProjectVpns: jest.fn().mockResolvedValue(''),
+  stopProjectVpns: jest.fn().mockResolvedValue(undefined),
+}));
 // env-agent.js:8 以解構匯入 leasePort，故 mock 工廠回傳的函式會被它取用；只 mock 借埠，
 // 其餘（envBindHost／envPublicUrl）保留真實行為。
 // 回傳值刻意選池外埠（29999，實機埠池只到 21000-21012）：waitForPort 是真函式、會做真 TCP

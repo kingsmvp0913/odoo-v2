@@ -6,6 +6,11 @@ jest.mock('../lib/docker-env', () => {
   const actual = jest.requireActual('../lib/docker-env');
   return { ...actual, stopContainer: jest.fn().mockResolvedValue({ code: 0 }), removeContainer: jest.fn().mockResolvedValue(undefined) };
 });
+// nightlyShutdown 會 stopProjectVpns；不 mock 會對本機 docker 發真指令（實測會停掉真容器）。
+jest.mock('../lib/project-vpn', () => ({
+  startProjectVpns: jest.fn().mockResolvedValue(''),
+  stopProjectVpns: jest.fn().mockResolvedValue(undefined),
+}));
 
 let dbModule, nightlyShutdown, userId;
 
