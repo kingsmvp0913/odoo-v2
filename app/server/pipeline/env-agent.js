@@ -1,4 +1,5 @@
 const net = require('net');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -508,6 +509,21 @@ async function cleanupProjectEnv(projectId, snapshot = null) {
 // ================= 測試區生命週期（docker 容器） =================
 // 所有 docker 參數組裝在 lib/docker-env.js（純函式、已單測）；此處只做「查 DB／落狀態／串起 docker 呼叫」。
 
+// 探測測試區的 SSO 免密登入 route 是否不存在（true ＝ 404 ＝ idx_aidev_sso 沒安裝成功）。
+// 判定只認 404：不帶 token 時 controller 回 403（bad token）、secret 未設時回 503，這些都代表
+// controller 已經載入了。反過來只認 403 會把 503 誤判成沒安裝，白重啟一輪還掩蓋真正的 secret 問題。
+// 連不上／逾時一律回 false（不做判定）：健檢剛過，此時連不上另有原因，不該由本函式定調成模組問題。
+function _ssoRouteMissing(host, port, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    const req = http.get({ host, port, path: '/aidev/sso', timeout: timeoutMs }, (res) => {
+      res.resume(); // 不排掉 body 的話 socket 不會釋放，這個 Promise 之後的流程會拖著一個 handle
+      resolve(res.statusCode === 404);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
 // 建置＋啟動：build image → 起常駐容器（首次帶 -i base 裝底）→ 健康檢查 → 補相依 → seed。
 async function _runEnvSetupDocker(projectId) {
   const ctx = await dockerCtxFor(projectId);
@@ -618,6 +634,30 @@ async function _runEnvSetupDocker(projectId) {
     log += `[seed] FAIL ${e.message}\n`;
     await dockerEnv.removeContainer(ctx.container);
     return _failEnv(projectId, `測試區帳號 seed 失敗（SSO／E2E 憑證未寫入）：${e.message}`, log);
+  }
+
+  // CMD 上的 -i idx_aidev_sso 有可能整個被回滾：專案模組宣告的 Python 相依是上面
+  // installModuleRequirements 才用 pip 補進「容器可寫層」的，容器一被 rm（夜間關機／閒置回收）
+  // 就跟著消失，而 DB 裡那些模組仍是已安裝——於是重建時常駐進程一啟動就 ModuleNotFoundError
+  // → Failed to load registry → 連 idx_aidev_sso 一起回滾。症狀是 /aidev/sso 回 404，但
+  // run／pip／seed 與健康檢查全部回報成功（健檢只探埠），使用者要到點下「開啟測試區」才看到
+  // Not Found 且毫無線索。相依此刻已補齊，重啟常駐進程即可讓 -i 重跑並 import controllers。
+  // 只在真的 404 時才重啟：健康環境（含所有首次建置）不必白付一次 Odoo 冷啟。
+  if (await _ssoRouteMissing(envHost, port)) {
+    log += '[sso] /aidev/sso 回 404（-i idx_aidev_sso 被 registry 載入失敗回滾）→ 相依已補齊，重啟容器重試\n';
+    await dockerEnv.restartContainer(ctx.container);
+    if (!await waitForPort(port, HEALTH_TIMEOUT_MS, 1000, envHost)) {
+      log += `[docker] 重啟後容器 log：\n${await dockerEnv.containerLogs(ctx.container).catch(() => '')}`;
+      return _failEnv(projectId, `測試區重啟後未進入監聽：埠 ${port}`, log);
+    }
+    // 仍 404 ＝ 相依真的補不齊（模組漏宣告 external_dependencies.python、或 pip 裝不動——
+    // installModuleRequirements 是 best-effort 不中斷）。比照 seed 失敗不放行：留在 running
+    // 只會讓使用者點進去看到 Not Found，而 setup_log 裡的真因沒有人會去看。
+    if (await _ssoRouteMissing(envHost, port)) {
+      log += `[docker] 容器 log：\n${await dockerEnv.containerLogs(ctx.container).catch(() => '')}`;
+      return _failEnv(projectId, 'idx_aidev_sso 未安裝成功，開啟測試區會是 Not Found（多半是自訂模組的 Python 相依缺件），詳見建立記錄', log);
+    }
+    log += '[sso] 重啟後 /aidev/sso 已就緒\n';
   }
 
   // 子網域模式下對外網址是「借到名額的當下才算得出來」，開機時存進 url 會是一個誰都連不上的

@@ -312,6 +312,14 @@ async function removeContainer(name, deps = {}) {
   await runDocker(['rm', '-f', name], deps); // -f 連運行中一起移除；不存在不報錯（code!=0 但無害）
 }
 
+// 重啟常駐容器（沿用建立時的 CMD，含 -i idx_aidev_sso）。用途只有一個：模組的 Python 相依是
+// 容器起來後才用 execPipInstall 補的，補之前啟動的常駐進程 registry 已載入失敗、-i 被回滾；
+// 而 execOdoo 另起進程去裝只會寫進 DB，常駐進程仍沒 import 過該模組的 controllers → route 照樣
+// 404（見 env-agent.js 的 initArgs 註解）。唯有重啟常駐進程才會既裝上又 import。
+async function restartContainer(name, deps = {}) {
+  return runDocker(['restart', '-t', '10', name], deps);
+}
+
 // 抓容器 log（供前端「查看 log」）。tail 限制行數避免無上限。
 async function containerLogs(name, { tail = 2000 } = {}, deps = {}) {
   const { stdout, stderr } = await runDocker(['logs', '--tail', String(tail), name], deps);
@@ -326,7 +334,7 @@ module.exports = {
   runDocker, dockerAvailable, ensureDockerRunning,
   imageExists, containerExists, containerRunning,
   // 生命週期
-  ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, containerLogs,
+  ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, restartContainer, containerLogs,
   // 常數
   CORE_ADDONS, EXTRA_ADDONS_ROOT, PLATFORM_ADDONS_HOST, PLATFORM_ADDONS_CONTAINER,
   ENTERPRISE_CONTAINER_DIR,
