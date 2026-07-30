@@ -116,17 +116,41 @@ test('提問入口即使 agent 硬回 proceed 也推不動（結構性限制，�
   expect(rows[0].status).toBe('confirm_pending');
 });
 
-test('revise → 草案只落 clarify_draft，analysis_yaml 一個字都不動', async () => {
+// 草案「產生 → 給人看 → 手動套用」兩段式已退役：實測使用者按了「更新規格書 QA」以為題目就更新了，
+// 其實還停在草案、要再按一次「套用」，於是他看著過期題目在對話裡把講過的話重講一遍（正式站 task 171）。
+// 現在 revise 一律就地併進 analysis_yaml，且不得留下 clarify_draft——留著的話下游會拿過期草案覆蓋新題目。
+test('revise → 新題目就地併進 analysis_yaml，且不留下會覆蓋它的舊草案', async () => {
   const task = await makeTask('clarify_chat_running');
   runClaude.mockResolvedValueOnce({
     text: '<result>\nDECISION: revise\nREPLY:\n調整了\n---QUESTIONS---\nintro: 新說明\nquestions: []\n</result>',
     usage: {}, durationMs: 1
   });
-  await runClarifyChat(task, 1, null, 'revise');
+  // mode 用 'ask'：獨立的 revise 入口（手動按「更新規格書 QA」）已經退役，題目改寫一律
+  // 發生在提問對話中。挑 'ask' 才有鑑別力——它同時證明 ask 允許 revise（舊規則只准 answer）。
+  await runClarifyChat(task, 1, null, 'ask');
   const { rows } = await dbModule.query('SELECT status, clarify_draft, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
   expect(rows[0].status).toBe('confirm_pending');
-  expect(rows[0].clarify_draft).toContain('intro: 新說明');
-  expect(rows[0].analysis_yaml).toBe('summary: s');
+  expect(rows[0].analysis_yaml).toContain('新說明');   // 就地更新，使用者當場看到最新結論
+  expect(rows[0].analysis_yaml).toContain('summary');   // 併入而非整包覆寫，既有規格仍在
+  expect(rows[0].clarify_draft).toBeNull();             // 留著草案＝下游會用它覆蓋新題目
+});
+
+// 就地改寫的代價：寫壞就直接毀掉規格。既有 analysis_yaml 解析不出來時寧可讓題目維持原樣，
+// 也不能拿 AI 這輪的產出去覆蓋——並且要讓使用者看得到「這次沒更新」，不是靜靜地失敗。
+test('revise 但既有規格解析不了 → analysis_yaml 原封不動，且時間軸講明沒更新', async () => {
+  const task = await makeTask('clarify_chat_running');
+  const broken = 'summary: [這行沒收尾';
+  await dbModule.query('UPDATE tasks SET analysis_yaml=$2, clarify_mode=$3 WHERE id=$1', [task.id, broken, 'ask']);
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: revise\nREPLY:\n調整了\n---QUESTIONS---\nintro: 新說明\nquestions: []\n</result>',
+    usage: {}, durationMs: 1
+  });
+  await runClarifyChat({ id: task.id }, 1, null, null);
+  const { rows } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].analysis_yaml).toBe(broken);
+  expect(rows[0].status).toBe('confirm_pending');
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' ORDER BY id", [task.id]);
+  expect(logs[logs.length - 1].content).toContain('沒有更新');
 });
 
 test('agent 失敗 → 狀態退回 confirm_pending，不是 stopped', async () => {
