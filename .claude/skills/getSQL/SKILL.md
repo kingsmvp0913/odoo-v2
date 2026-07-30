@@ -13,6 +13,15 @@ description: Use when querying remote PostgreSQL databases via v2 platform AI en
 
 依當前處理中的專案、開啟檔案路徑（如 `online_addons/<專案>/`）、對話主題，推斷對應的 v2 專案名稱（folder_name 或 name）。
 
+> **互動式 session 要先自己取通行碼**（pipeline 派出去的 agent 由平台自動注入，你自己敲的沒有）。
+> 在 repo 根目錄執行一次即可：
+>
+> ```bash
+> export AIDEV_AI_TOKEN=$(node -e "process.env.APP_SECRET=require('./data/config.json').APP_SECRET;console.log(require('./app/server/lib/ai-token').aiToken())")
+> ```
+>
+> 沒帶或帶錯會回 403 並在訊息裡說明是通行碼問題——不是資料庫或連線壞掉。
+
 ### 第二步：列出該專案連線
 
 ```bash

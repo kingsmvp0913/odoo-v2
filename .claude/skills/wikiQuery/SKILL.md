@@ -10,6 +10,15 @@ description: Use when reading a project's wiki knowledge base from an interactiv
 
 ## 端點（loopback-only，免認證）
 
+> **互動式 session 要先自己取通行碼**（pipeline 派出去的 agent 由平台自動注入，你自己敲的沒有）。
+> 在 repo 根目錄執行一次即可：
+>
+> ```bash
+> export AIDEV_AI_TOKEN=$(node -e "process.env.APP_SECRET=require('./data/config.json').APP_SECRET;console.log(require('./app/server/lib/ai-token').aiToken())")
+> ```
+>
+> 沒帶或帶錯會回 403 並在訊息裡說明是通行碼問題——不是資料庫或連線壞掉。
+
 ```bash
 # 1. 列頁面清單（slug/title/node_type）；project 參數＝projects.folder_name 或 name
 curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/pages?project=<專案名>"
