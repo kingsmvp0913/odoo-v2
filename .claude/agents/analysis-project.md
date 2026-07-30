@@ -71,6 +71,9 @@ clarification_channel:
 【permissions 撰寫規則】
 - 這一欄是寫給使用者看的，用畫面上的名詞（群組的中文 name、選單路徑、欄位的 string），不要只寫 Model 技術名。
 - 依 CLAUDE.md 的權限守則 P0~P6 推導；推得出來的寫這裡給使用者過目，推不出來的（P4 那三種）寫進 clarification_channel.questions，不要在這裡自己決定。
+- **「這個動作要沿用既有權限，還是另外開一個群組？」這種問法本身就是違規的**——沿用錨點是預設答案（P1／P2／P3），
+  你讀 code 就看得到那個按鈕／選單／欄位現在掛的是哪個 `groups`，那就是答案。只有 P4 那三種（與同專案同類寫法不一致、
+  真的必須新增 `res.groups`、推導結果是 admin-only）才准列成問題，而且要寫明「為什麼推不出來」。
 - 本次沒有新增／變更任何 ir.model.access 或 res.groups（例如只是既有單據加欄位，適用 P1）→ 整欄留空，不要寫「無」或編一段說明。
 
 【輸出】分析完成後，把 analysis.yaml 內容「直接」包在 <result></result> 標籤內回傳：
