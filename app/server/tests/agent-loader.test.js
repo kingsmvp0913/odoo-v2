@@ -486,3 +486,82 @@ describe('SPEC_LOOKUP_AGENTS 注入查碼守則', () => {
     }
   });
 });
+
+// 意圖（Rule 9）：發問守則要進「會產出要使用者回答的問題」的四關。三條規則各自針對一個實測過的病症：
+// Q1 決策樹＝規格只寫了「一次列齊所有阻斷性模糊點」卻沒給窮盡的方法；Q2＝把該自己讀 code 的事拿去問人
+// （cs 已有此規則、成效實證，這裡泛化到其他三關）；Q3＝丟白卷讓非工程師面對空白提示詞。
+// 名單刻意不含 spec-review／respec-patch（只回答與改規格、自己不提問）與 qa（低頻出口，且每輪必跑＝最貴注入點）。
+describe('ASKING_WELL_AGENTS 注入發問守則', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const AW_HEADER = '# 發問守則';
+
+  // 名單裡打錯字或日後 agent 檔改名 → 靜默不注入、無任何紅燈，正是本片段要防的失敗形態
+  test('四關全數注入（防未來改名或打錯字靜默失效）', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const n of ['analysis-project', 'clarify-chat', 'analysis-reject', 'cs']) {
+        expect(loadAgent(n).render({})).toContain(AW_HEADER);
+      }
+    } finally { spy.mockRestore(); }
+  });
+
+  // 這條鎖住的是「誰該收到」這個判斷本身：spec-review／respec-patch 讀對話後只回答或重產規格，
+  // 自己不提問；qa 的 spec_questions 是低頻出口而它每輪必跑。日後要加人進來必須先讓這條紅。
+  test('不產題目的關不注入（spec-review／respec-patch／qa／coding-project）', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const n of ['spec-review', 'respec-patch', 'qa', 'coding-project']) {
+        expect(loadAgent(n).render({})).not.toContain(AW_HEADER);
+      }
+    } finally { spy.mockRestore(); }
+  });
+
+  test('順序：CLAUDE.md 規則 → 說人話 → 發問守則 → 專案備註 → debug', () => {
+    const out = loadAgent('analysis-reject').render({
+      project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
+      analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true',
+      project_notes: '窗口 Amy'
+    });
+    const iRules = out.indexOf('Odoo Constraints');
+    const iPlain = out.indexOf('# 說人話守則');
+    const iAsk = out.indexOf(AW_HEADER);
+    const iNotes = out.indexOf('# 專案備註（人工維護，優先遵循）');
+    const iDebug = out.indexOf('# 系統化除錯（pipeline 版）');
+    expect(iRules).toBeGreaterThanOrEqual(0);
+    expect(iPlain).toBeGreaterThan(iRules);
+    expect(iAsk).toBeGreaterThan(iPlain);
+    expect(iNotes).toBeGreaterThan(iAsk);
+    expect(iDebug).toBeGreaterThan(iNotes);
+  });
+
+  // 三條規則是這支片段的全部價值；被截斷或改寫掉其中一條，注入照樣「成功」而不會有紅燈
+  test('三條規則都在片段裡（片段被截斷時要紅）', () => {
+    const out = loadAgent('analysis-project').render({
+      project_name: 'P', odoo_version: '17.0', work_dir: '/w', repo_list: '- sale/',
+      task_id: 'task_1', original_text: 'x', clarification: '（無）', cs_findings: '（無）',
+      main_branch: 'main', git_branch: 'task/x', repo_paths: '- /w/sale'
+    });
+    expect(out).toContain('## Q1 先攤決策樹，再決定哪些要問');
+    expect(out).toContain('## Q2 查得到的事實不准問');
+    expect(out).toContain('## Q3 每題附建議答案與猜錯的代價');
+  });
+
+  // 同 plain-language／spec-lookup 的教訓：片段沒進指紋 → 綁定的 resume session 不 fresh，
+  // 新規則永遠不生效且無錯誤訊息，事後查不出原因
+  test('promptVersion 把發問守則算進靜態指紋（改片段就換版）', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const AW_PATH = path.join(__dirname, '..', 'pipeline', 'asking-well.md');
+    const orig = fs.readFileSync(AW_PATH, 'utf8');
+    try {
+      const before = promptVersion('clarify-chat');
+      const beforeQa = promptVersion('qa');
+      fs.writeFileSync(AW_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
+      expect(promptVersion('clarify-chat')).not.toBe(before);
+      expect(promptVersion('qa')).toBe(beforeQa); // 未注入的關不受影響
+    } finally {
+      fs.writeFileSync(AW_PATH, orig);
+    }
+  });
+});

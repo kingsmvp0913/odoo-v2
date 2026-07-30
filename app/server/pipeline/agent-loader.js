@@ -111,6 +111,25 @@ function loadPlainLanguage() {
   return text;
 }
 
+// 會產出「要使用者回答的問題」的四關：注入發問守則（asking-well.md）。同樣刻意不走 CLAUDE.md——
+// CLAUDE.md `full` 那 7 關裡 coding-project／playwright 根本不產題目，注入是每輪固定浪費；
+// 反過來 cs 拿不到 CLAUDE.md，卻是最常直接問客戶問題的關。spec-review／respec-patch 只回答與改規格、
+// 自己不提問，故不在此列。qa 的 spec_questions 屬低頻出口，暫不納入（它每輪必跑，是最貴的注入點）。
+// 片段無 placeholder（全平台不變的靜態文字），排在說人話之後、專案備註之前——靜態的排前面保 prompt cache 前綴。
+const ASKING_WELL_AGENTS = new Set([
+  'analysis-project', 'clarify-chat', 'analysis-reject', 'cs'
+]);
+const ASKING_WELL_MD_PATH = path.join(__dirname, 'asking-well.md');
+let _askingWellCache = null;
+
+function loadAskingWell() {
+  const stat = fs.statSync(ASKING_WELL_MD_PATH);
+  if (_askingWellCache && _askingWellCache.mtimeMs === stat.mtimeMs) return _askingWellCache.text;
+  const text = fs.readFileSync(ASKING_WELL_MD_PATH, 'utf8').trim();
+  _askingWellCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
 // name → { mtimeMs, agent }
 const _cache = new Map();
 // CLAUDE.md 過濾後內容快取（mtime-based，同 agent 快取手法）
@@ -185,7 +204,7 @@ function fillPlaceholders(text, vars) {
   });
 }
 
-function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability, includePlainLanguage, includeSpecLookup) {
+function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability, includePlainLanguage, includeSpecLookup, includeAskingWell) {
   return vars => {
     let out = fillPlaceholders(body, vars);
     // 查碼守則：與 sourceRouting 同層級（含已解析的 repo 路徑），緊貼 body 上方最顯眼。
@@ -198,11 +217,13 @@ function makeRender(body, rulesMode, includeDebug, includeSourceRouting, include
     // source-routing 用同一組 vars 填入已解析的 repo 路徑／分支，緊貼 body 上方（最貼近任務、最顯眼）
     if (includeSourceRouting) out = `${fillPlaceholders(loadSourceRouting(), vars)}\n\n${out}`;
     if (includeDebug) out = `${loadDebugMethodology()}\n\n${out}`;
-    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 說人話 → 備註 → debug → sourceRouting → csCapability → body。
+    // 專案備註排在 debug 之後、規則之前 → 最終 top→bottom：規則 → 說人話 → 發問守則 → 備註 → debug → sourceRouting → csCapability → body。
     // 空／未傳不注入，維持與現況一致的 cache 前綴。
     if (includeNotes && vars && vars.project_notes && String(vars.project_notes).trim()) {
       out = `# 專案備註（人工維護，優先遵循）\n\n${String(vars.project_notes).trim()}\n\n${out}`;
     }
+    // 發問守則與說人話同為靜態片段，兩者相鄰擺在備註之前，讓 cache 前綴儘量長
+    if (includeAskingWell) out = `${loadAskingWell()}\n\n${out}`;
     // 說人話守則排在「規則之後、備註之前」（prepend 順序相反）：靜態片段先於 per-project 動態值，保 cache 前綴
     if (includePlainLanguage) out = `${loadPlainLanguage()}\n\n${out}`;
     if (rulesMode === 'full') out = `${loadPipelineRules()}\n\n${out}`;
@@ -230,7 +251,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name), PLAIN_LANGUAGE_AGENTS.has(meta.name || name), SPEC_LOOKUP_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name), PLAIN_LANGUAGE_AGENTS.has(meta.name || name), SPEC_LOOKUP_AGENTS.has(meta.name || name), ASKING_WELL_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;
@@ -273,6 +294,7 @@ function promptVersion(name) {
   if (CS_CAPABILITY_AGENTS.has(name)) s = `${loadCsCapability()}\n\n${s}`;
   if (SOURCE_ROUTING_AGENTS.has(name)) s = `${loadSourceRouting()}\n\n${s}`;
   if (DEBUG_AGENTS.has(name)) s = `${loadDebugMethodology()}\n\n${s}`;
+  if (ASKING_WELL_AGENTS.has(name)) s = `${loadAskingWell()}\n\n${s}`;
   if (PLAIN_LANGUAGE_AGENTS.has(name)) s = `${loadPlainLanguage()}\n\n${s}`;
   if (mode === 'full') s = `${loadPipelineRules()}\n\n${s}`;
   else if (mode === 'qa') s = `${loadQaRules()}\n\n${s}`;
