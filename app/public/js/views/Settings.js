@@ -4,6 +4,9 @@ window.SettingsView = Vue.defineComponent({
     return {
       me: { username: '', display_name: '' },
       teamsUserId: '',
+      // 載入當下的整包 odoo_settings。PUT /api/settings 是整包覆寫，儲存時得原樣帶回去，
+      // 否則不在這張表單上的偏好（theme…）會被這次儲存抹掉。
+      savedSettings: {},
       creds: {
         odoo_username: '', odoo_password: '', odoo_user_id: '',
         service_username: '', service_password: '', service_user_id: ''
@@ -56,6 +59,7 @@ window.SettingsView = Vue.defineComponent({
         this.me.username = me.username || '';
         this.me.display_name = me.display_name || '';
         const s = settings.odoo_settings || {};
+        this.savedSettings          = s;
         this.teamsUserId            = s.teams_user_id   || '';
         this.creds.odoo_username    = s.odoo_username   || '';
         this.creds.odoo_password    = s.odoo_password   || '';
@@ -71,7 +75,12 @@ window.SettingsView = Vue.defineComponent({
     async save() {
       this.saving = true;
       try {
-        const odoo_settings = { teams_user_id: this.teamsUserId, ...this.creds };
+        // PUT /api/settings 整包覆寫 odoo_settings（不是 merge），所以得先鋪回載入時的整包，
+        // 否則深色模式偏好會被這次儲存從後端刪掉——本機 localStorage 還在，要換裝置或開無痕
+        // 視窗才發現永遠回淺色。theme 另外取當下值：使用者可能在同一頁按過深色模式開關
+        // （那顆已即時寫回後端），沿用載入時的舊值等於把剛切好的偏好倒回去。
+        const odoo_settings = { ...this.savedSettings, teams_user_id: this.teamsUserId, ...this.creds };
+        if (window.ThemeManager) odoo_settings.theme = ThemeManager.current();
         await Promise.all([
           Api.put('auth/me', { display_name: this.me.display_name }),
           Api.put('settings', { odoo_settings })

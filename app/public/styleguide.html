@@ -161,6 +161,26 @@
       </div>
     </section>
 
+    <!-- ── 選項卡 ── -->
+    <section class="sg-section">
+      <h2>選項卡（單選題）</h2>
+      <p class="sg-note">單選題一律用 <code>.opt-list</code> + <code>.opt-card</code>，整塊可點、hover 有高亮、選中的加 <code>.selected</code>。原生 radio 以 <code>&lt;input&gt;</code> 保留（隱藏）供鍵盤操作，圓點由 <code>.opt-card-dot</code> 畫。</p>
+      <div class="sg-panel">
+        <div class="opt-list" style="max-width:520px">
+          <label class="opt-card selected">
+            <input type="radio" name="sg_opt" checked />
+            <span class="opt-card-dot"></span>
+            <span>已選中的選項</span>
+          </label>
+          <label class="opt-card">
+            <input type="radio" name="sg_opt" />
+            <span class="opt-card-dot"></span>
+            <span>未選中的選項（滑鼠移上去看 hover）</span>
+          </label>
+        </div>
+      </div>
+    </section>
+
     <!-- ── 卡片 ── -->
     <section class="sg-section">
       <h2>卡片容器</h2>

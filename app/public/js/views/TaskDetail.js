@@ -821,9 +821,10 @@ window.TaskDetailView = Vue.defineComponent({
                       <span style="white-space:pre-wrap">{{ q.text }}</span>
                       <span v-if="!q.required" style="color:var(--text-muted);font-size:var(--fs-xs);flex-shrink:0">選填</span>
                     </div>
-                    <div v-if="q.type === 'choice'" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px">
-                      <label v-for="opt in q.options" :key="opt.key" style="display:flex;gap:6px;align-items:flex-start;cursor:pointer;font-size:var(--fs-sm)">
-                        <input type="radio" :name="'clar_' + q.id" :value="opt.key" v-model="answerFields[q.id]" style="margin-top:3px">
+                    <div v-if="q.type === 'choice'" class="opt-list" style="margin-bottom:6px">
+                      <label v-for="opt in q.options" :key="opt.key" class="opt-card" :class="{ selected: answerFields[q.id] === opt.key }">
+                        <input type="radio" :name="'clar_' + q.id" :value="opt.key" v-model="answerFields[q.id]">
+                        <span class="opt-card-dot"></span>
                         <span>{{ opt.label }}</span>
                       </label>
                     </div>

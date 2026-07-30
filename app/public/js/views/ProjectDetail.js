@@ -131,7 +131,13 @@ window.ProjectDetailView = Vue.defineComponent({
     async loadEnv() {
       try {
         this.env = await Api.get(`projects/${this.$route.params.id}/env`);
-      } catch { this.env = { status: 'idle' }; }
+      } catch {
+        // 暫時性失敗（server 重啟、網路抖動）不得改寫狀態：寫成 idle 會讓 env.status 的 watcher
+        // 立刻 _stopPoll()，之後再也沒有人去問真實狀態，畫面永遠停在「未建立」但環境其實正在建。
+        // 「這專案沒有環境」後端是回 200 + {status:'idle'}（見 env-routes.js），走的是成功路徑，
+        // 所以保留舊狀態不會讓已刪除的環境留下殘影。只有首次載入尚無狀態可留時才給預設值。
+        if (!this.env) this.env = { status: 'idle' };
+      }
     },
     async setupEnv() {
       const restart = this.env && this.env.built;

@@ -28,6 +28,27 @@ describe('狀態標籤單一來源', () => {
   });
 });
 
+// 上面那條只認「叫 STATUS_LABELS 的變數」，換個名字就整個繞過——socket.js 的第二份表叫 labels
+// 與 ACTION_LABELS，因此一直沒被擋下，而且已經實際漂移：cs_reply_pending 在它那裡是「等待回覆確認」、
+// 單一來源是「等待確認回覆」；branch_pending 是「準備建立分支」、單一來源是「建立分支」。
+// 所以改成看「內容」而不是看名字：任何檔案只要出現 3 個以上「已知狀態 key: 中文字串」的鍵值對，
+// 就是又抄了一份。門檻取 3 是因為單獨用 done／new 當一般物件鍵是常見且無害的（AdminEnterprise、
+// AdminRejections 各有一個），3 個以上同時命中才可能是狀態表。
+// 註解必須先剝掉，否則這段說明文字本身就會把測試染紅。
+describe('狀態標籤單一來源（不看變數名，看內容）', () => {
+  const STATUS_KEYS = new Set(Object.keys(STATUS_LABELS));
+  const LABEL_PAIR = /(\w+)\s*:\s*(['"`])([^'"`\n]*[一-鿿][^'"`\n]*)\2/g;
+  const stripComments = (src) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+
+  test.each(publicJsFiles)('%s 不得以任何變數名複製狀態標籤', (file) => {
+    const src = stripComments(readPublic(file));
+    const hits = [...src.matchAll(LABEL_PAIR)].map((m) => m[1]).filter((k) => STATUS_KEYS.has(k));
+    const offenders = [...new Set(hits)].sort();
+    expect(offenders.length >= 3 ? offenders : []).toEqual([]);
+  });
+});
+
 // runner.js 的 STAGE_LABELS 是後端「執行歷程」用的階段標記，文案刻意與前端不同（客服處理中／
 // 已回覆澄清），故兩份並存、不合併。但它的 key 集合＝後端流程實際會走到的狀態，前端缺任何一個
 // 就會在畫面上顯示英文 status——respec_running 就是這樣只存在於詳情頁、列表漏掉。

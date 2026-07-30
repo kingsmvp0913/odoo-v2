@@ -2,8 +2,12 @@ const { createApp, defineComponent, ref, onMounted } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
 
 const toasts = ref([]);
+// id 同時是 v-for 的 :key 與「時間到移除自己」那段 filter 的依據，必須逐則唯一。
+// 原本取 Date.now()：同一輪同步程式碼連發的多則會拿到相同毫秒值，先到期的那則會把同 id 的
+// 其他則一起濾掉——訊息互相吃掉且不報錯（socket 事件批次抵達時就是這個情境）。
+let _toastSeq = 0;
 function showToast(message, level = 'info', duration = 4000) {
-  const id = Date.now();
+  const id = ++_toastSeq;
   toasts.value.push({ id, message, level });
   setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, duration);
 }
