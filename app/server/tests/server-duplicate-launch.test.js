@@ -12,6 +12,8 @@
  * 先把埠占住，再啟動一個 server，斷言它必須自己結束。
  */
 const net = require('net');
+const os = require('os');
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -63,11 +65,13 @@ async function freePort() {
 test('埠已被占用時重複啟動 server → 該行程必須結束，不可留下照樣派工的 cron', async () => {
   const port = await freePort();
   const blocker = await occupy(port);          // 模擬「前一個 server 還活著」
+  // fatal.log 導到暫存目錄：既不污染真的 data/logs，也才驗得到「有沒有留下鑑識紀錄」
+  const fatalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-launch-'));
   let child;
   try {
     child = spawn(process.execPath, ['-e', BOOTSTRAP], {
       cwd: APP_DIR,
-      env: { ...process.env, SERVER_DIR, PORT: String(port), JWT_SECRET: 'test-secret', DATABASE_URL: '' },
+      env: { ...process.env, SERVER_DIR, PORT: String(port), JWT_SECRET: 'test-secret', DATABASE_URL: '', FATAL_LOG_DIR: fatalDir },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let out = '', err = '';
@@ -86,11 +90,17 @@ test('埠已被占用時重複啟動 server → 該行程必須結束，不可�
     // 真正的斷言：綁不到埠的行程必須自己結束，且在那之前不可已經把 cron 排下去。
     // 三個條件各自對應一種回歸：把 startCron() 搬回 listen 之前 → cron已排程 變 true；
     // 拿掉 httpServer 的 'error' handler → 行程已結束 變 false 且 吞掉致命錯誤 變 true。
+    // fatal.log：上次那個致命錯誤只寫 console，而 server 常以背景方式啟動、stdout 沒人收，
+    // 於是藏了三小時。所以「有沒有留下不依賴 stdout 的鑑識紀錄」本身就是要守的行為。
+    const fatalPath = path.join(fatalDir, 'fatal.log');
+    const fatalLog = fs.existsSync(fatalPath) ? fs.readFileSync(fatalPath, 'utf8') : '';
+
     expect({
       行程已結束: exited,
       吞掉致命錯誤: /\[FATAL\] uncaughtException/.test(err),
       cron已排程: out.includes('[TEST] cron-scheduled'),
-    }).toEqual({ 行程已結束: true, 吞掉致命錯誤: false, cron已排程: false });
+      有留下鑑識紀錄: fatalLog.includes('EADDRINUSE'),
+    }).toEqual({ 行程已結束: true, 吞掉致命錯誤: false, cron已排程: false, 有留下鑑識紀錄: true });
   } finally {
     if (child && child.exitCode === null) child.kill();
     await new Promise(r => blocker.close(r));

@@ -48,5 +48,18 @@ if ($needInstall) {
 }
 
 $port = if ($config.PORT) { $config.PORT } else { 3939 }
+
+# 埠占用預檢：先開瀏覽器再啟動，會讓「重複執行」看起來像成功了——瀏覽器照樣跳出來、
+# 連到的其實是前一個 server，而這次啟動已經失敗。index.js 現在會自己結束並印原因，
+# 但那行訊息一閃即逝，容易被當成正常。在這裡先擋掉，訊息才留得住。
+# 取不到 Get-NetTCPConnection（舊系統）時安靜略過，index.js 那道守衛仍會把關。
+$busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+if ($busy) {
+    $pids = ($busy | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
+    Write-Host "Error: 埠 $port 已被占用（PID $pids）——server 應該已經在跑了。" -ForegroundColor Red
+    Write-Host "       要重啟請先結束那個行程：Stop-Process -Id $pids -Force" -ForegroundColor Yellow
+    exit 1
+}
+
 Start-Process "http://localhost:$port"
 node (Join-Path $Root "app\server\index.js")

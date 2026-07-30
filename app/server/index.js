@@ -2,6 +2,7 @@ const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const { registerRoutes: registerAuthRoutes } = require('./auth');
 const { registerRoutes: registerSettingsRoutes } = require('./settings');
 const { registerRoutes: registerTasksRoutes } = require('./tasks-routes');
@@ -133,9 +134,36 @@ function createApp() {
 
 if (require.main === module) {
   // 最後防線：漏接的例外（如子行程 stream 的 EPIPE）不可拖垮整個 pipeline server——
-  // 任務狀態都在 DB，行程活著才能繼續派工；只記 log 供鑑識，不退出。
-  process.on('uncaughtException', err => console.error('[FATAL] uncaughtException:', err));
-  process.on('unhandledRejection', err => console.error('[FATAL] unhandledRejection:', err));
+  // 任務狀態都在 DB，行程活著才能繼續派工；只記 log 供鑑識，不退出。本機沒有 supervisor
+  // （start.ps1 前景跑），一律 exit 等於平台掛到有人手動重啟，代價比讓它活著更高。
+  //
+  // 但「啟動階段」必須例外：那時的例外代表行程只初始化了一半，繼續活著就是我們付過代價的那個
+  // 形狀——沒有 HTTP 埠、前端看不到，卻有一個 cron 每分鐘照樣派工的隱形派工者（見 e1d6ca71）。
+  // 所以 booted 之前一律 exit(1)。
+  //
+  // 另一半病根是「靜默」：上次那個致命錯誤只寫到 console，而 server 常以背景方式啟動、
+  // stdout 沒人收，於是藏了三小時。改成同時寫一份 fatal.log，不依賴啟動方式怎麼處理 stdout。
+  let booted = false;
+  // 位置比照 deploy／E2E log 的慣例（data/logs＋env 覆寫，見 CLAUDE.md §6）
+  const FATAL_LOG = path.join(
+    process.env.FATAL_LOG_DIR || path.join(__dirname, '..', '..', 'data', 'logs'), 'fatal.log'
+  );
+  const recordFatal = (kind, err) => {
+    const phase = booted ? '啟動後' : '啟動階段';
+    console.error(`[FATAL] ${kind}（${phase}）:`, err);
+    // 記錄動作本身不能再拋（目錄不存在／磁碟滿）：留住 console 那份就好，
+    // 不要讓「記下致命錯誤」變成第二個致命錯誤
+    try {
+      fs.mkdirSync(path.dirname(FATAL_LOG), { recursive: true });
+      fs.appendFileSync(FATAL_LOG, `[${new Date().toISOString()}] ${kind}（${phase}）\n${(err && (err.stack || err.message)) || String(err)}\n\n`);
+    } catch { /* 記錄失敗不影響歸因，console 已有一份 */ }
+    if (!booted) {
+      console.error('[FATAL] 發生在啟動階段：行程結束，避免留下半初始化、看不見卻照樣派工的 server。');
+      process.exit(1);
+    }
+  };
+  process.on('uncaughtException', err => recordFatal('uncaughtException', err));
+  process.on('unhandledRejection', err => recordFatal('unhandledRejection', err));
 
   const { migrate, query } = require('./db');
   const { setIo } = require('./notify');
@@ -203,18 +231,21 @@ if (require.main === module) {
     // 於是留下一個沒有 HTTP 埠、前端完全看不到、卻每分鐘照樣 runPipeline 派工的隱形派工者。
     // 兩個 cron 共用同一個 DB 而 _inFlight 只是行程內記憶體 → 同一任務同一關被派兩次、
     // 兩支 claude 並行寫同一個 worktree，reentry_count 也被記兩次（MAX_REENTRY 一次彈跳就打滿）。
-    // 只在「還沒 listening」時退出：綁到埠之後的執行期錯誤照舊只記 log，不因偶發錯誤殺掉在飛任務。
-    let listening = false;
+    // 只在「還沒綁到埠」時退出：綁到埠之後的執行期錯誤照舊只記 log，不因偶發錯誤殺掉在飛任務。
+    // 沿用上方的 booted 旗標——「綁到埠並起了 cron」就是這支 server 的啟動完成點，
+    // 兩處對「啟動階段」的判斷必須是同一個，否則會出現一邊算啟動中、一邊算啟動完的矛盾狀態。
+    // 走 recordFatal 而非自己 console＋exit：這樣「綁不到埠」這件事也會留進 fatal.log。
+    // 上次就是因為它只寫 console、而 server 常以背景方式啟動沒人收 stdout，才藏了三小時。
     httpServer.on('error', err => {
-      if (listening) return console.error('[SERVER] error:', err.message);
-      console.error(`[FATAL] 無法綁定埠 ${PORT}（${err.code || err.message}）——很可能已有另一個 server 在跑。`);
-      console.error('[FATAL] 行程結束，避免留下一個看不見但照樣派工的 cron。');
-      process.exit(1);
+      if (booted) return console.error('[SERVER] error:', err.message);
+      recordFatal('listen 失敗', new Error(
+        `無法綁定埠 ${PORT}（${err.code || err.message}）——很可能已有另一個 server 在跑`
+      ));
     });
     httpServer.listen(PORT, () => {
-      listening = true;
       console.log(`AI Dev http://localhost:${PORT}`);
       startCron();
+      booted = true;
     });
   }).catch(err => {
     console.error('DB migration failed:', err);
