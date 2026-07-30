@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
-const { query } = require('./db');
+const { query, withTransaction } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
 const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge, releaseAiToMain } = require('./pipeline/git');
@@ -300,34 +300,50 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
-      // #4 刪專案前連帶清理：kill 環境 process、移除 env 與 clone 目錄（DB row 由 FK cascade 處理）
+      // 順序是關鍵：可回滾的 DB 刪除先做完並 COMMIT，不可逆的實體刪除（測試環境、repo clone、
+      // uploads 目錄）才動。反過來的話——這正是原本的寫法——DB 一失敗就留下「專案還在，但環境
+      // 與 clone 已經消失」的破碎狀態，而且每按一次刪除就再破壞一次。
+      const taskDbIds = await withTransaction(async (client) => {
+        const { rows: taskRows } = await client.query(
+          'SELECT id FROM tasks WHERE project_id = $1', [req.params.id]
+        );
+        const ids = taskRows.map(r => r.id);
+        if (ids.length) {
+          // 參照 tasks(id) 的 4 張子表全是裸的 REFERENCES、**沒有任何 ON DELETE CASCADE**
+          // （原本的註解宣稱有，那是錯的），所以每一張都必須顯式刪：漏掉任一張都會讓下面
+          // DELETE FROM tasks 撞 FK。task_attachments 還參照 task_messages(id)，必須排在
+          // task_messages 之前。
+          // token_usage 刻意不刪——計費／成本歷史跨任務保留，與單張任務刪除的既有決策一致
+          // （見 tasks-routes.js 刪除端點那段「刻意不隨任務刪」的清單）。刪整個專案沒有理由
+          // 比刪單張任務更慢殺。
+          //
+          // 用 `IN (SELECT ...)` 而不是 `= ANY($1::int[])`：後者在 pg-mem 上，只要目標欄位
+          // 有索引就會靜默匹配 0 列（實測；無索引才正常），於是這些 DELETE 全變 no-op、
+          // 測試永遠證明不了子列真的被清掉。順帶少一趟 round trip。
+          await client.query('DELETE FROM task_attachments WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
+          await client.query('DELETE FROM task_events      WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
+          await client.query('DELETE FROM task_logs        WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
+          await client.query('DELETE FROM task_messages    WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
+          await client.query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
+        }
+        const { rows } = await client.query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
+        if (!rows.length) {
+          const e = new Error('Not found');
+          e.status = 404;   // 交易由 withTransaction 回滾；用狀態碼帶出「不存在」與真錯誤區分
+          throw e;
+        }
+        return ids;
+      });
+
+      // ── 以下皆不可逆，只在 COMMIT 成功後執行 ──
       const { cleanupProjectEnv } = require('./pipeline/env-agent');
-      await cleanupProjectEnv(req.params.id);
-      await query('BEGIN');
-      const { rows: taskRows } = await query(
-        'SELECT id, task_id FROM tasks WHERE project_id = $1', [req.params.id]
-      );
-      if (taskRows.length) {
-        const taskDbIds   = taskRows.map(r => r.id);
-        const taskTextIds = taskRows.map(r => r.task_id);
-        await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [taskDbIds]);
-        await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])',  [taskDbIds]);
-        await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [taskDbIds]);
-        await query('DELETE FROM token_usage WHERE task_id = ANY($1::text[])', [taskTextIds]);
-        await query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
-        taskDbIds.forEach(id => deleteTaskDir(id)); // 連帶清各任務磁碟上的 uploads/task_<id>
-      }
-      const { rows } = await query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
-      if (!rows.length) {
-        await query('ROLLBACK');
-        return res.status(404).json({ error: 'Not found' });
-      }
-      await query('COMMIT');
+      await cleanupProjectEnv(req.params.id);       // kill 環境 process、移除 env 與 clone 目錄
+      taskDbIds.forEach(id => deleteTaskDir(id));   // 各任務磁碟上的 uploads/task_<id>
       // 專案硬刪除後 port 釋放：同步 nginx map 移除該子網域（fire-and-forget；gate 未設＝no-op）。
       require('./lib/nginx-map').syncNginxMap().catch(() => {});
       res.json({ ok: true });
     } catch (err) {
-      await query('ROLLBACK').catch(() => {});
+      if (err.status === 404) return res.status(404).json({ error: 'Not found' });
       res.status(500).json({ error: err.message });
     }
   });

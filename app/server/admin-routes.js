@@ -2,7 +2,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
-const { query } = require('./db');
+const { query, withTransaction } = require('./db');
 const { deleteTaskDir } = require('./lib/attachments');
 const { hashPassword } = require('./password');
 const { encrypt, encryptSafe } = require('./lib/crypto');
@@ -200,29 +200,37 @@ function registerRoutes(app) {
       // 參照 users(id) 的外鍵多數無 ON DELETE，直接刪 users 會違反 tasks_user_id_fkey 等外鍵，
       // 故先依相依順序清該使用者的關聯資料再刪帳號。token_usage／task_rejections 等已設 ON DELETE SET NULL
       // （保留為跨任務計費／訓練歷史），不在此手動刪。
-      await query('BEGIN');
-      const { rows: taskRows } = await query('SELECT id FROM tasks WHERE user_id = $1', [id]);
-      const taskIds = taskRows.map(r => r.id);
-      if (taskIds.length) {
-        await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [taskIds]);
-        await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [taskIds]);
-        await query('DELETE FROM task_attachments WHERE task_id = ANY($1::int[])', [taskIds]);
-        await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [taskIds]);
-        await query('DELETE FROM tasks WHERE user_id = $1', [id]);
-        taskIds.forEach(tid => deleteTaskDir(tid)); // 連帶清各任務磁碟上的 uploads/task_<id>
-      }
-      await query('DELETE FROM sessions WHERE user_id = $1', [id]);
-      await query('DELETE FROM loop_counter WHERE user_id = $1', [id]);
-      await query('UPDATE project_chats SET user_id = NULL WHERE user_id = $1', [id]); // 對話留給專案，僅解除建立者關聯
-      const { rows } = await query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
-      if (!rows.length) {
-        await query('ROLLBACK');
-        return res.status(404).json({ error: 'Not found' });
-      }
-      await query('COMMIT');
+      // 交易走 withTransaction 取專屬連線：透過共用的 query 包裝下交易指令，會讓開始與提交
+      // 落在池子裡不同連線上＝根本沒有交易（詳見 db.js withTransaction 的說明）。
+      // 子表刪除用 IN (SELECT ...) 而非 = ANY($1::int[])：後者在 pg-mem 上只要目標欄位有索引
+      // 就靜默匹配 0 列，測試會證明不了子列真的被清掉。
+      const taskIds = await withTransaction(async (client) => {
+        const { rows: taskRows } = await client.query('SELECT id FROM tasks WHERE user_id = $1', [id]);
+        const ids = taskRows.map(r => r.id);
+        if (ids.length) {
+          // task_attachments 參照 task_messages(id)，必須排在 task_messages 之前
+          await client.query('DELETE FROM task_attachments WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
+          await client.query('DELETE FROM task_events      WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
+          await client.query('DELETE FROM task_logs        WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
+          await client.query('DELETE FROM task_messages    WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
+          await client.query('DELETE FROM tasks WHERE user_id = $1', [id]);
+        }
+        await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+        await client.query('DELETE FROM loop_counter WHERE user_id = $1', [id]);
+        await client.query('UPDATE project_chats SET user_id = NULL WHERE user_id = $1', [id]); // 對話留給專案，僅解除建立者關聯
+        const { rows } = await client.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+        if (!rows.length) {
+          const e = new Error('Not found');
+          e.status = 404;
+          throw e;
+        }
+        return ids;
+      });
+      // 不可逆，只在 COMMIT 成功後做：各任務磁碟上的 uploads/task_<id>
+      taskIds.forEach(tid => deleteTaskDir(tid));
       res.json({ ok: true });
     } catch (err) {
-      await query('ROLLBACK').catch(() => {});
+      if (err.status === 404) return res.status(404).json({ error: 'Not found' });
       res.status(500).json({ error: err.message });
     }
   });

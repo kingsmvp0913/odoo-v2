@@ -36,6 +36,36 @@ async function query(text, params) {
 }
 
 /**
+ * 在單一連線上跑一個真交易。
+ *
+ * **不要用 `query('BEGIN')`。** `query` 是 `pool.query` 的薄包裝，每次呼叫都可能拿到
+ * 池子裡不同的連線——`BEGIN` 落在連線 A、各個 `DELETE` 落在 B/C/D、`COMMIT` 落在 E，
+ * 於是每個語句各自 autocommit（根本沒有交易），而那個 `BEGIN` 還會讓連線 A 帶著一個
+ * 開啟中的交易被還回池子，污染之後拿到 A 的無關查詢。
+ *
+ * fn 收到專屬 client，交易內的每一條語句都必須用 `client.query`（用 `query` 就跑到池外了）。
+ *
+ * @param {(client: import('pg').PoolClient) => Promise<T>} fn
+ * @returns {Promise<T>} fn 的回傳值（COMMIT 成功後）
+ * @template T
+ */
+async function withTransaction(fn) {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    // ROLLBACK 本身失敗（連線已斷等）不該蓋掉真正的病因——往外丟的一律是原始錯誤。
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Creates all 7 application tables if they don't exist.
  * Safe to call multiple times (idempotent via IF NOT EXISTS).
  *
@@ -683,4 +713,4 @@ function _setPoolForTesting(pool) {
   _pool = pool;
 }
 
-module.exports = { getPool, migrate, query, _setPoolForTesting };
+module.exports = { getPool, migrate, query, withTransaction, _setPoolForTesting };

@@ -510,3 +510,94 @@ test('POST release：專案沒有 clone 完成的 repo → 400', async () => {
   expect(res.status).toBe(400);
   expect(gitMock.releaseAiToMain).not.toHaveBeenCalled();
 });
+
+// ── 刪除專案的資料完整性 ───────────────────────────────────────────────────────
+// 這個端點原本零測試覆蓋，所以以下三個缺陷同時存活：
+//   1. 第 303 行註解宣稱「DB row 由 FK cascade 處理」，但 4 個子表全是裸的
+//      REFERENCES tasks(id)、沒有一個 ON DELETE CASCADE。
+//   2. db.js 的 query 是 pool.query 薄包裝，每次呼叫可能拿到不同 pooled connection，
+//      所以 BEGIN/COMMIT/ROLLBACK 根本不構成交易——每個 DELETE 各自 autocommit。
+//   3. cleanupProjectEnv（實體刪除測試環境與 repo clone、不可逆）排在所有 DB 操作之前。
+// 三者相加：任何帶附件的專案，每按一次刪除就永久失去 log／事件／對話與環境，而專案本身還在。
+//
+// ⚠️ pg-mem 的 ROLLBACK 是假的（實測：INSERT 後 ROLLBACK，列數仍為 1），所以
+// 「失敗時已刪的列會被回滾」這件事**無法在本地測試證明**，只能靠真 PostgreSQL。
+// 以下三支測的是不依賴回滾語意、仍具鑑別力的部分。
+describe('DELETE /api/projects/:id 的資料完整性', () => {
+  const envAgent = require('../pipeline/env-agent');
+  let cleanupSpy;
+
+  beforeEach(() => {
+    cleanupSpy = jest.spyOn(envAgent, 'cleanupProjectEnv').mockResolvedValue(undefined);
+  });
+  afterEach(() => cleanupSpy.mockRestore());
+
+  async function mkProjectWithTask(name, opts = {}) {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ($1, '17') RETURNING id", [name]
+    );
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, project_id) VALUES ($1, $2, 'manual', $3) RETURNING id",
+      [userId, `t_${name}`, p.id]
+    );
+    if (opts.attachment) {
+      await dbModule.query(
+        "INSERT INTO task_attachments (task_id, filename, file_path, origin) VALUES ($1, 'a.png', 'x/a.png', 'manual')",
+        [t.id]
+      );
+    }
+    if (opts.tokenUsage) {
+      await dbModule.query(
+        "INSERT INTO token_usage (task_id, project_id, agent_type) VALUES ($1, $2, 'coding')",
+        [`t_${name}`, p.id]
+      );
+    }
+    return { projectId: p.id, taskId: t.id, taskTextId: `t_${name}` };
+  }
+
+  // 意圖：附件是任務的正常產物（使用者上傳、eService 同步都會建），所以「有附件的專案」
+  // 是常態而非邊界。漏刪 task_attachments 讓 DELETE FROM tasks 撞 FK，整個端點對這類
+  // 專案永久失效——而且因為交易是假的，前面幾個 DELETE 已經 autocommit 出去了。
+  test('帶附件的專案要能真的刪掉（漏刪 task_attachments 會撞 FK）', async () => {
+    const { projectId: pid } = await mkProjectWithTask('fk-proj', { attachment: true });
+    const res = await request(app).delete(`/api/projects/${pid}`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const { rows: proj } = await dbModule.query('SELECT id FROM projects WHERE id = $1', [pid]);
+    expect(proj).toHaveLength(0);
+    const { rows: tasks } = await dbModule.query('SELECT id FROM tasks WHERE project_id = $1', [pid]);
+    expect(tasks).toHaveLength(0);
+  });
+
+  // 意圖：不可逆的動作（實體刪除測試環境與 repo clone）必須排在可逆的 DB 操作**之後**。
+  // 用「刪一個不存在的 id」當鑑別案例：正確實作會先查不到、回 404 就結束，永遠不碰檔案系統；
+  // 原實作把 cleanupProjectEnv 放在最前面，所以連不存在的專案都會先跑一次實體清理。
+  // 這支測試同時鎖住「順序」這個不變量，之後有人把 cleanup 搬回前面就會轉紅。
+  test('刪不存在的專案不得觸發任何實體清理（不可逆動作必須排在 DB 之後）', async () => {
+    const res = await request(app).delete('/api/projects/999999').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(404);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+  });
+
+  // 意圖：token_usage 是計費／成本歷史，單張任務刪除刻意保留它（tasks-routes.js 刪除端點那段
+  // 明寫理由：token-report ?all=true 專門把已刪任務列為孤兒，刪了成本統計會縮水）。刪整個專案
+  // 沒有理由比刪單張任務更慢殺，本守衛鎖住兩邊一致。
+  //
+  // ⚠️ 為什麼是靜態守衛而不是行為測試：我先寫過行為版（建 token_usage 列 → 刪專案 → 斷言列還在），
+  // 它在修法前就是綠的＝零鑑別力。原因是 pg-mem 的 `= ANY($1::…[])` 只要目標欄位有索引就靜默
+  // 匹配 0 列（實測：裸表刪得掉、加了索引 rowCount=0），所以那條 DELETE 在 pg-mem 裡本來就是
+  // no-op，行為測試不管碼對不對都會過。改測原始碼即可獲得真正的鑑別力。
+  test('project-routes 不得出現 DELETE FROM token_usage（守衛：計費歷史不隨專案刪）', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'project-routes.js'), 'utf8');
+    expect(src).not.toMatch(/DELETE\s+FROM\s+token_usage/i);
+  });
+
+  // 意圖：`query` 是 pool.query 薄包裝，BEGIN/COMMIT 會落在不同 pooled connection 上＝根本沒有
+  // 交易，而且那個 BEGIN 會讓連線帶著開啟中的交易被還回池子、污染之後的無關查詢。正確做法是
+  // db.withTransaction（取專屬 client）。這支守衛擋住有人把裸 BEGIN 寫回來。
+  test('不得用 query() 直接下 BEGIN／COMMIT／ROLLBACK（守衛：交易必須走 withTransaction）', () => {
+    for (const f of ['project-routes.js', 'admin-routes.js']) {
+      const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+      expect(src).not.toMatch(/\bquery\(\s*['"`](BEGIN|COMMIT|ROLLBACK)/i);
+    }
+  });
+});
