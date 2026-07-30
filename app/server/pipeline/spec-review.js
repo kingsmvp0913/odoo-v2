@@ -3,6 +3,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectNotes } = require('./project-notes');
+const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
@@ -54,12 +55,15 @@ async function runSpecReview(task, userId, signal) {
   try {
     const agent = loadAgent('spec-review');
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
+    // 分析關建好的 worktree：有就讓它自己查碼再回答／改規格，沒有就照舊只看 analysis_yaml
+    const work = await taskWorkContext(task);
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
       conversation,
-      project_notes: projectNotes || ''
+      project_notes: projectNotes || '',
+      repo_paths: work ? work.repoPaths : ''
     }).trim();
-    const result = await runClaude(prompt, { taskId, userId, signal, model: agent.model, agentType: 'respec' });
+    const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
     raw = result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {

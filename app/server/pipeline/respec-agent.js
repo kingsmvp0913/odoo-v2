@@ -2,6 +2,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
+const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
@@ -44,11 +45,15 @@ async function runRespecPatch(taskId, userId, signal) {
   const agent = loadAgent('respec-patch');
   let raw;
   try {
+    // 分析關建好的 worktree：追加需求要落成 requirements 給開發關照做，憑印象寫錯欄位名下游就照著錯，
+    // 有 worktree 就讓它先查證再寫；沒有就照舊只看 analysis_yaml
+    const work = await taskWorkContext(task);
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
-      requirements
+      requirements,
+      repo_paths: work ? work.repoPaths : ''
     }).trim();
-    const result = await runClaude(prompt, { taskId, userId, signal, model: agent.model, agentType: 'respec' });
+    const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
     raw = result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {

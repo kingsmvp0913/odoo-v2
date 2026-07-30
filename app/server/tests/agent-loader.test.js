@@ -436,3 +436,53 @@ test('analysis-project 的 YAML 格式與範例都含 permissions 區塊（P6 �
   expect(body.split('permissions:').length - 1).toBe(2);
   expect(body).toContain('沒有涉及權限異動就留空');
 });
+
+// 意圖（Rule 9）：clarify-chat／spec-review／respec-patch 三關手上原本只有 analysis_yaml，
+// 連「使用者說的『客戶代號』是哪個 Field」都得回頭問人（正式站 task 171：8 個來回、6 分鐘、
+// $1.4 還沒推進）。片段給它們 repo 路徑＋「查得到就別問」的硬規則，呼叫端同時把 cwd 指到同一個 worktree。
+describe('SPEC_LOOKUP_AGENTS 注入查碼守則', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const SL_HEADER = '# 查核程式碼';
+
+  test('三關都拿得到，且 repo 路徑真的被填進去（沒填＝agent 不知道要去哪查）', () => {
+    const paths = '- C:/repos/hj/.worktrees/task_9/idx_hj';
+    const clar = loadAgent('clarify-chat').render({ analysis_yaml: 'module: hj', conversation: 'x', mode_rule: 'r', repo_paths: paths });
+    const spec = loadAgent('spec-review').render({ analysis_yaml: 'module: hj', conversation: 'x', repo_paths: paths });
+    const patch = loadAgent('respec-patch').render({ analysis_yaml: 'module: hj', requirements: '1. x', repo_paths: paths });
+    for (const out of [clar, spec, patch]) {
+      expect(out).toContain(SL_HEADER);
+      expect(out).toContain(paths);
+    }
+  });
+
+  // 這條是本次改動最容易靜默壞掉的地方：任務還沒建 worktree 時呼叫端傳空字串，
+  // 若照樣注入，agent 會拿到一份「路徑是空的」的查碼指令，然後開始自己亂找（歷程實測會滾成掃碟）。
+  test('沒有 repo 路徑時整段不注入，不留下空路徑的查碼指令', () => {
+    const out = loadAgent('clarify-chat').render({ analysis_yaml: 'module: hj', conversation: 'x', mode_rule: 'r', repo_paths: '' });
+    expect(out).not.toContain(SL_HEADER);
+  });
+
+  test('本來就有 source-routing 的關（qa）不重複注入這一份', () => {
+    const out = loadAgent('qa').render({
+      main_branch: 'main', git_branch: 'task/x', repo_paths: '- /w/sale',
+      analysis_yaml: 'module: sale', diff: 'x', resolution: '（無）'
+    });
+    expect(out).not.toContain(SL_HEADER);
+  });
+
+  // 同 plain-language 的教訓：片段沒進指紋 → 綁定的 resume session 不 fresh，新規則永遠不生效且無錯誤訊息
+  test('promptVersion 把查碼片段算進靜態指紋', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const SL_PATH = path.join(__dirname, '..', 'pipeline', 'spec-lookup.md');
+    const orig = fs.readFileSync(SL_PATH, 'utf8');
+    try {
+      const before = promptVersion('clarify-chat');
+      fs.writeFileSync(SL_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
+      expect(promptVersion('clarify-chat')).not.toBe(before);
+      expect(promptVersion('qa')).toBe(promptVersion('qa')); // 未注入的關不受影響
+    } finally {
+      fs.writeFileSync(SL_PATH, orig);
+    }
+  });
+});
