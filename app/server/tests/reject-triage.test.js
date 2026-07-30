@@ -113,14 +113,24 @@ test('fix 達 MAX_REENTRY（2）→ stopped，不再無條件放行進 coding', 
   expect(t.status).toBe('stopped');
 });
 
-test('respec → analysis_running：不自己改 SD，清 retry_feedback/coding_session_id，結論以 user 澄清餵回分析', async () => {
+// git_branch 必須跟著 coding_session_id 一起清：respec-agent 判「pre-coding」（＝規格審核閘門的
+// 對話式問答，該委派給 spec-review）的條件是 `!coding_session_id && !git_branch`，刻意要求兩者皆空
+// ——因為 coding fresh 成功但 CLI 沒回 sessionId 時 coding_session_id 會是 NULL，單看它不可靠。
+// 只清一半的後果：任務 respec 回分析、重產規格、停在 spec_review，使用者按「送出修改意見」時
+// respec-agent 因 git_branch 還在而判定「已開工」，跳過 spec-review 對話、把使用者的修改意見當成
+// 追加需求 patch 進規格後**直接轉 coding_running**——規格審核閘門被靜默繞過，使用者never 得到
+// 重新確認規格的機會，而且他不會知道。
+// 清掉是安全的：branch_pending→coding 一定會重寫 git_branch（runner.js 該處 UPDATE），
+// 且分支名由 task_id 決定，重算得到同一個值。
+test('respec → analysis_running：清 retry_feedback/coding_session_id/git_branch，結論以 user 澄清餵回分析', async () => {
   claudeReturns({ decision: 'respec', summary: '退回原因：備註需求變更；結論：判定為規格問題，交回分析階段重寫 SD。' });
   const id = await makeTask({ rejectCount: 1 });
   await runRejectTriage(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, coding_session_id, analysis_yaml FROM tasks WHERE id=$1', [id]);
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, coding_session_id, git_branch, analysis_yaml FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('analysis_running');
   expect(t.retry_feedback).toBeNull();
   expect(t.coding_session_id).toBeNull();
+  expect(t.git_branch).toBeNull();   // 少這行＝規格審核閘門被靜默繞過
   expect(t.analysis_yaml).toBe('module: sale');
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
   expect(logs.some(l => l.role === 'user' && l.content.includes('需調整規格') && l.content.includes('規格問題'))).toBe(true);

@@ -136,7 +136,13 @@ async function runRejectTriage(taskId, userId, signal) {
     const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'updated_at=NOW()'];
     if (resetReentry) sets.push('reentry_count=0');
     if (!keepFeedback) sets.push('retry_feedback=NULL');
-    if (freshRespec) sets.push('coding_session_id=NULL');
+    // freshRespec＝交回分析重寫規格，coding 的痕跡要一併清乾淨。git_branch 必須跟 coding_session_id
+    // 一起清：respec-agent 判「pre-coding」（＝規格審核閘門的對話式問答，該委派 spec-review）的條件是
+    // 兩者皆空，只清一半會讓任務重產規格、停在 spec_review 後，使用者按「送出修改意見」時被判成
+    // 「已開工」→ 跳過 spec-review 對話、把修改意見當追加需求 patch 完直接轉 coding_running，
+    // 規格審核閘門被靜默繞過。清掉安全：branch_pending→coding 一定會重寫 git_branch，且分支名由
+    // task_id 決定、重算同值。
+    if (freshRespec) sets.push('coding_session_id=NULL', 'git_branch=NULL');
     if (counter) sets.push(`${counter}=0`);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id=$1`, [taskId, nextStatus]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });

@@ -132,12 +132,12 @@ function startCron() {
         sweepIdleEnvs().catch(err => console.error('[CRON] idle sweep:', err.message));
       }
 
-      // 測試區生命週期（夜間關機／閒置回收）必須排在同步的提前 return 之前：
-      // 關閉同步是「不要去撈單」，與「要不要管理測試區」無關。綁在一起的話，
-      // 同步一關就變成埠只借不還、池子單向耗盡，且症狀完全不指向同步設定。
-      // Only sync if at least one source is enabled
-      if (!odooMs && !serviceMs) return;
-
+      // 這裡刻意沒有「兩個同步都關就 return」的提前結束。關閉同步是「不要去外部撈單」，與
+      // 「要不要推進 pipeline」「要不要做清理排程」「要不要管理測試區」都無關——共用一個 return
+      // 會讓管理員把同步關掉的同時，整個平台停止推進任務（任務凍在原狀態）、自動封存與各項清理
+      // 也一起停掉，而症狀完全不指向同步設定。
+      // 不需要額外的守衛：下面每個 user 的 shouldSyncOdoo／shouldSyncService 各自帶 `> 0` 判斷，
+      // 兩個間隔都是 0 時自然全部落到 else 分支（只推進 pipeline、不撈單）。
       const { rows: users } = await query('SELECT id FROM users');
       const now = Date.now();
       for (const user of users) {

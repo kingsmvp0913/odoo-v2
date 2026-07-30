@@ -28,7 +28,7 @@ function registerRoutes(app) {
       const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold } = req.body;
       await query(`
         INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold, updated_at)
-        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17,'venv'), COALESCE($18, true), COALESCE($19, 90), COALESCE($20, 95), NOW())
+        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15, false), COALESCE($16, false), COALESCE($17,'venv'), COALESCE($18, true), COALESCE($19, 90), COALESCE($20, 95), NOW())
         ON CONFLICT (id) DO UPDATE SET
           tenant_id             = $1,
           client_id             = $2,
@@ -44,8 +44,12 @@ function registerRoutes(app) {
           odoo_db               = COALESCE($12, teams_settings.odoo_db),
           service_url           = COALESCE($13, teams_settings.service_url),
           service_db            = COALESCE($14, teams_settings.service_db),
-          test_mode             = $15,
-          writeback_odoo_notes  = $16,
+          -- 未帶時保留現值（比照同段 env_mode／usage_gate_*）。這兩欄原本是唯二沒有 COALESCE 的，
+          -- 而前端把它們存在 this.testMode／this.writebackOdooNotes、不在 this.teams 裡，於是
+          -- 「儲存連線設定」「儲存 Teams 設定」「儲存用量閘門」三顆按鈕都不會帶它們＝按一下就
+          -- 靜默關掉「測試模式」，pipeline 在管理員以為還暫停時恢復自動派工。
+          test_mode             = COALESCE($15, teams_settings.test_mode),
+          writeback_odoo_notes  = COALESCE($16, teams_settings.writeback_odoo_notes),
           env_mode              = COALESCE($17, teams_settings.env_mode),
           usage_gate_enabled       = COALESCE($18, teams_settings.usage_gate_enabled),
           usage_gate_5h_threshold  = COALESCE($19, teams_settings.usage_gate_5h_threshold),
@@ -61,8 +65,10 @@ function registerRoutes(app) {
         service_sync_interval != null ? parseInt(service_sync_interval) : null,
         odoo_url || null, odoo_db || null,
         service_url || null, service_db || null,
-        test_mode ? true : false,
-        writeback_odoo_notes ? true : false,
+        // 未帶傳 null 由 COALESCE 保留現值；明確送 false 仍要能關掉，故不可用 `x ? true : false`
+        // （那會把「沒帶」與「帶 false」壓成同一個值）。
+        test_mode == null ? null : !!test_mode,
+        writeback_odoo_notes == null ? null : !!writeback_odoo_notes,
         // 只接受 venv／docker；未帶（舊前端）傳 null 由 COALESCE 保留現值，不誤清
         env_mode === undefined ? null : (env_mode === 'docker' ? 'docker' : 'venv'),
         // 未帶（舊前端）傳 null 由 COALESCE 保留現值，不誤清；enabled 明確布林

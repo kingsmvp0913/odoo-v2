@@ -185,3 +185,32 @@ test('同步間隔設 0 → 真的停用，不去撈單', async () => {
   }
   expect(syncUser).not.toHaveBeenCalled();
 });
+
+// 意圖：關閉來源同步（兩個間隔都 0）＝「不要去外部撈單」，與「要不要推進 pipeline」「要不要做
+// 清理排程」是三件無關的事。原本這三者共用同一個提前 return（`if (!odooMs && !serviceMs) return;`），
+// 於是管理員一把同步關掉，整個平台就停止推進任務——任務全部凍在原狀態、自動封存與各項清理
+// 也一起停掉，而症狀完全不指向「同步設定」。
+// （同段上方的註解已經為「測試區生命週期」講過同一個道理並把它移到 return 之前，但只搬了那一項；
+// 這裡是把剩下的 pipeline 推進與清理一併從那個 return 底下救出來。）
+// 這支測試鎖住：同步關閉時，pipeline 仍須被推進。
+test('同步全關（間隔皆 0）仍要推進 pipeline，不得被同步的提前 return 一起關掉', async () => {
+  const nodeCron = require('node-cron');
+  const { runPipeline } = require('../pipeline/runner');
+  const { syncUser } = require('../pipeline/sync');
+  await dbModule.query(
+    'INSERT INTO teams_settings (id, odoo_sync_interval, service_sync_interval) VALUES (1, 0, 0) ' +
+    'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
+  );
+  runPipeline.mockClear();
+  syncUser.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick();
+  } finally {
+    cronModule.stopCron();
+  }
+  expect(runPipeline).toHaveBeenCalled();
+  // 同時確認沒有修過頭：同步關閉就是不該去撈單
+  expect(syncUser).not.toHaveBeenCalled();
+});
