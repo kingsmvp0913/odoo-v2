@@ -16,7 +16,7 @@ description: Use when querying remote PostgreSQL databases via v2 platform AI en
 ### 第二步：列出該專案連線
 
 ```bash
-curl "http://localhost:3939/ai/db/connections?project=<專案名>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/db/connections?project=<專案名>"
 ```
 
 回傳範例：
@@ -38,6 +38,7 @@ curl "http://localhost:3939/ai/db/connections?project=<專案名>"
 
 ```bash
 curl -X POST http://localhost:3939/ai/db/query \
+  -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"connection_id": 1, "sql": "SELECT id, login FROM res_users LIMIT 5"}'
 ```

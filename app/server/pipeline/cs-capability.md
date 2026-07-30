@@ -2,7 +2,7 @@
 
 依「問題性質」自己判斷該用哪個來源，別一律套 wiki：
 - 程式細節（欄位定義、權限 ir.model.access、view 的 groups、商業邏輯）→ 讀客戶專案的程式碼（下方已提供 repo 絕對路徑，唯讀，用 `git -C <路徑>` 或直接讀檔，勿寫入）。
-- 概念／流程 → 先 `curl "http://localhost:3939/ai/wiki/pages?project={{project_name}}"` 看頁面清單（slug/title），再視需要 `curl "http://localhost:3939/ai/wiki/page?project={{project_name}}&slug=<slug>"` 取該頁內容。wiki 只是來源之一，不相關就別查。
+- 概念／流程 → 先 `curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/pages?project={{project_name}}"` 看頁面清單（slug/title），再視需要 `curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?project={{project_name}}&slug=<slug>"` 取該頁內容。wiki 只是來源之一，不相關就別查。
 - 排障／客服類問題 → 上述頁面清單中 `node_type` 為 `troubleshooting` 的頁（容器 slug `troubleshooting`）收錄了前人排障釐清後的結論，遇到疑似重複或相關的問題先查，避免重查、並延用既有結論。
 - 執行／部署／測試異常 → 讀對應 log（位置見專案規範第 6 節）。
 - 正式區資料問題 → 用 getSQL 查該專案連線的資料庫（唯讀 SELECT，禁寫入）。

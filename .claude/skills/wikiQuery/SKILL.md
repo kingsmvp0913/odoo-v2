@@ -12,10 +12,10 @@ description: Use when reading a project's wiki knowledge base from an interactiv
 
 ```bash
 # 1. 列頁面清單（slug/title/node_type）；project 參數＝projects.folder_name 或 name
-curl "http://localhost:3939/ai/wiki/pages?project=<專案名>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/pages?project=<專案名>"
 
 # 2. 取單頁內容
-curl "http://localhost:3939/ai/wiki/page?project=<專案名>&slug=<slug>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?project=<專案名>&slug=<slug>"
 ```
 
 ## node_type 判讀

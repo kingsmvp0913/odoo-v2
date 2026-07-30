@@ -6,6 +6,7 @@ const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { looksLikeAuthFailure } = require('./auth-signature');
 const { getClaudeAuthEnv } = require('../lib/claude-auth');
+const { aiTokenEnv } = require('../lib/ai-token');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
@@ -123,7 +124,9 @@ function runClaude(prompt, opts = {}) {
     // 未設定時回空物件、完全不碰該 key；呼叫端自帶的 env 排最後，語意不受影響。
     const child = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'], cwd,
-      env: { ...process.env, ...getClaudeAuthEnv(), ...(env || {}) },
+      // aiTokenEnv：/ai/* 端點的通行碼。agent 用 curl 打那些端點時要帶進 header——
+      // 沒有它，agent 查不到客戶 DB／wiki，而症狀（403）完全不像認證問題（見 lib/ai-token.js）。
+      env: { ...process.env, ...getClaudeAuthEnv(), ...aiTokenEnv(), ...(env || {}) },
     });
     // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
     // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。

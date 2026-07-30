@@ -237,6 +237,22 @@ describe('Claude 長效憑證注入 spawn env', () => {
     expect(lastEnv().E2E_PASSWORD).toBe('pw');
   });
 
+  // /ai/* 端點的通行碼：算得出來但沒注入子行程，agent 就打不開那些端點，
+  // 而症狀是「AI 突然查不到客戶 DB／wiki」，看起來完全不像認證問題（見 lib/ai-token.js）。
+  test('spawn env 帶 AIDEV_AI_TOKEN，值與 aiToken() 一致', async () => {
+    const { spawn } = require('child_process');
+    const { runClaude } = require('../pipeline/claude-runner');
+    const { aiToken } = require('../lib/ai-token');
+    const saved = process.env.APP_SECRET;
+    process.env.APP_SECRET = 'runner-ai-token-secret';
+    try {
+      spawn.mockReturnValueOnce(mkChild());
+      await runClaude('p', {});
+      expect(lastEnv().AIDEV_AI_TOKEN).toBe(aiToken());
+      expect(lastEnv().AIDEV_AI_TOKEN).toBeTruthy();
+    } finally { if (saved === undefined) delete process.env.APP_SECRET; else process.env.APP_SECRET = saved; }
+  });
+
   // 未設定時必須「完全不碰」這個 key，否則會蓋掉手動 export 的環境變數（方案 1 手動版仍須可用）
   test('未設定 → 不塞該 key，繼承自 process.env 的值原樣通過', async () => {
     const { spawn } = require('child_process');

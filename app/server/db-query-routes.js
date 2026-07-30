@@ -2,6 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
+const { aiEndpointGuard } = require('./lib/ai-token');
 const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn, loadProjectVpn } = require('./lib/db-connections');
 
@@ -25,11 +26,7 @@ async function requireAdmin(req, res, next) {
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
 
-function loopbackOnly(req, res, next) {
-  const ip = (req.socket && req.socket.remoteAddress) || '';
-  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
-  return res.status(403).json({ ok: false, error: 'AI endpoint 僅限本機' });
-}
+// /ai/* 的守衛在 lib/ai-token.js：來源 IP ＋ 通行碼兩道（見該檔說明為何不能只靠前者）。
 
 // 轉發埠以「專案 × 目標」為單位：同專案已有連線指向同一台機器就沿用它的埠，
 // 這樣新增連線多半不必重建容器（容器的 -p 在建立時就固定，重建＝斷線重撥）。
@@ -257,7 +254,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/ai/db/connections', loopbackOnly, async (req, res) => {
+  app.get('/ai/db/connections', aiEndpointGuard, async (req, res) => {
     try {
       const project = req.query.project;
       let rows;
@@ -273,7 +270,7 @@ function registerRoutes(app) {
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 
-  app.post('/ai/db/query', loopbackOnly, async (req, res) => {
+  app.post('/ai/db/query', aiEndpointGuard, async (req, res) => {
     try {
       const { connection_id, sql } = req.body || {};
       const { rows: [c] } = await query('SELECT project_id FROM db_connections WHERE id=$1', [connection_id]);
@@ -284,4 +281,4 @@ function registerRoutes(app) {
   });
 }
 
-module.exports = { registerRoutes, loadDecryptedConn, loopbackOnly };
+module.exports = { registerRoutes, loadDecryptedConn };

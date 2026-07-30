@@ -1,7 +1,7 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
-const { loopbackOnly } = require('./db-query-routes');
+const { aiEndpointGuard } = require('./lib/ai-token');
 
 function registerRoutes(app) {
   const base = '/api/projects/:projectId/wiki';
@@ -112,7 +112,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/ai/wiki/pages', loopbackOnly, async (req, res) => {
+  app.get('/ai/wiki/pages', aiEndpointGuard, async (req, res) => {
     try {
       const { rows } = await query(
         `SELECT w.slug, w.title, w.node_type
@@ -124,7 +124,7 @@ function registerRoutes(app) {
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 
-  app.get('/ai/wiki/page', loopbackOnly, async (req, res) => {
+  app.get('/ai/wiki/page', aiEndpointGuard, async (req, res) => {
     try {
       const { rows: [page] } = await query(
         `SELECT w.slug, w.title, w.content
