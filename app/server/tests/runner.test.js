@@ -29,6 +29,7 @@ jest.mock('../pipeline/task-agent', () => ({
   runTaskCoding: jest.fn().mockResolvedValue(true)
 }));
 jest.mock('../pipeline/reject-triage', () => ({ runRejectTriage: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../pipeline/clarify-chat', () => ({ runClarifyChat: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/respec-agent', () => ({ runRespecPatch: jest.fn().mockResolvedValue(undefined) }));
 
 let dbModule, runnerModule, userId;
@@ -566,4 +567,41 @@ test('reject_triage 任務會被派工並呼叫 runRejectTriage', async () => {
   );
   await run();
   expect(runRejectTriage).toHaveBeenCalledWith(t.id, userId, expect.anything());
+});
+
+// runTask 在跑 handler 前會把 resume_status 寫成「目前這一關」。對這四個狀態必須例外，否則
+// resume_status 裡的「真正的原關」被自己蓋掉——分診 resume 會回到分診自己（無限重進分診）、
+// 澄清對話的回程會指向 clarify_chat_running（QA 裁決導回 coding 的路徑整條消失）。
+// 這是防死循環的關鍵防線，四個狀態逐一釘住。
+describe('resume_status 覆寫排除清單', () => {
+  const cases = [
+    ['reject_triage',        'review_pending'],
+    ['resolve_triage',       'playwright_running'],
+    ['clarify_chat_running', 'coding_running'],
+  ];
+  test.each(cases)('%s 派工時不得覆寫 resume_status', async (status, home) => {
+    const { rows: [p] } = await dbModule.query(
+      `INSERT INTO projects (name, odoo_version) VALUES ('RS_${status}','17.0') RETURNING id`);
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, resume_status)
+       VALUES ($1,$2,'odoo','T',$3,$4,$5) RETURNING id`,
+      [userId, `rs_${status}`, status, p.id, home]
+    );
+    await run();
+    const { rows: [after] } = await dbModule.query('SELECT resume_status FROM tasks WHERE id=$1', [t.id]);
+    expect(after.resume_status).toBe(home);
+  });
+});
+
+// clarify_answered 的例外由「handleClarifyAnswered 讀 resume_status 決定去哪一關」間接鎖住：
+// 被覆寫成 clarify_answered 的話，任務會被送回 clarify_answered 自己（死循環）而非 coding_running。
+test('clarify_answered 派工時不得覆寫 resume_status（否則回到自己形成死循環）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status)
+     VALUES ($1,'rs_clarify_answered','odoo','T','clarify_answered','coding_running') RETURNING id`,
+    [userId]
+  );
+  await run();
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('coding_running');
 });

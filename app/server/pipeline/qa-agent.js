@@ -8,8 +8,19 @@ const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
 const { parseQaIssues, recordQaRejection } = require('./qa-rejection');
 const { getProjectNotes } = require('./project-notes');
+const yaml = require('js-yaml');
 
 const QA_LIMIT = 5;
+// 規格歧義 clarify 迴圈的上限。使用者的裁決由 runner.handleClarifyAnswered 追加進 analysis_yaml
+// 的 spec_decisions，故「已裁決輪數」＝該清單長度——計數與裁決落地是同一件事，不另開計數器。
+// 到頂仍判規格不明＝這條迴圈收斂不了，再問只是無限來回燒 token，停下交人工。
+const QA_SPEC_LIMIT = 2;
+
+function specDecisionCount(analysisYaml) {
+  let spec;
+  try { spec = yaml.load(analysisYaml || '', { schema: yaml.CORE_SCHEMA }); } catch { return 0; }
+  return Array.isArray(spec?.spec_decisions) ? spec.spec_decisions.length : 0;
+}
 // 每個 QA session 世代最多 resume 幾次（比照 coding 的 RESUME_LIMIT）：重驗走 --resume
 // 續用上輪對話（已含規格、規則、上輪 diff 探索），只送短增量 prompt 省 token
 const QA_RESUME_LIMIT = 2;
@@ -201,6 +212,15 @@ async function runQaAgent(taskId, userId, signal) {
     const specQs = Array.isArray(result?.spec_questions)
       ? result.spec_questions.map(s => String(s).trim()).filter(Boolean) : [];
     if (specQs.length) {
+      // 迴圈斷路器：已裁決 QA_SPEC_LIMIT 輪還在問規格 → 停下交人工，不再進閘門
+      if (specDecisionCount(task.analysis_yaml) >= QA_SPEC_LIMIT) {
+        await query(
+          "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+          [taskId, `QA 已就規格歧義請你裁決 ${QA_SPEC_LIMIT} 次，本輪仍判規格不明確——再問下去只是無限來回，請人工確認規格內容。\n\n本輪仍未確定：\n${specQs.join('\n')}`]
+        );
+        notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+        return true;
+      }
       const d = parseQaIssues(result);
       const codeCarry = d ? (d.list.length ? d.list.join('\n') : d.summary) : '';
       const { enterClarifyGate } = require('./verdict-router');

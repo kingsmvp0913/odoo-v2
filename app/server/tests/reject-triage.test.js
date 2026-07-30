@@ -50,7 +50,7 @@ beforeEach(() => {
 
 let seq = 0;
 // 建一個分診中的任務。預設為人工退回入口（reject_triage）。
-async function makeTask({ rejectCount = 1, status = 'reject_triage', resume_status = null, blocker = null,
+async function makeTask({ rejectCount = 1, qaRejects = 0, status = 'reject_triage', resume_status = null, blocker = null,
   qa = 0, deploy = 0, pw = 0, instruction = null } = {}) {
   seq++;
   const bizId = `rt_${seq}`;
@@ -63,6 +63,13 @@ async function makeTask({ rejectCount = 1, status = 'reject_triage', resume_stat
   for (let i = 0; i < rejectCount; i++) {
     await dbModule.query(
       "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,'r','new')",
+      [bizId, projectId, userId]
+    );
+  }
+  // QA 自動退回也寫同一張 task_rejections（source='qa'），但不是「人工退回」
+  for (let i = 0; i < qaRejects; i++) {
+    await dbModule.query(
+      "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status, source) VALUES ($1,$2,$3,'qa','classified','qa')",
       [bizId, projectId, userId]
     );
   }
@@ -181,6 +188,26 @@ test('clarify（帶 questions）→ clarify_pending，resume_status 回 reject_t
   expect(logs.some(l => l.role === 'ai' && l.content.includes('無法判定'))).toBe(true); // summary 也落泡泡
 });
 
+// 防呆的母體是「人工退回」。QA 自動退回也落同一張 task_rejections（source='qa'），一併算進去
+// 會讓「一次 QA fail」就把後續所有人工退回的 fix 分支永久關掉——程式 bug 從此只能被降級成 respec，
+// 白跑一輪分析重寫規格。
+test('QA 自動退回不計入人工退回次數：仍走 fix，不被降級成 respec', async () => {
+  claudeReturns({ decision: 'fix', summary: '研判為程式 bug，轉回 coding 修補。' });
+  const id = await makeTask({ rejectCount: 1, qaRejects: 2 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');   // 混算會變成 analysis_running（allow_bug=false）
+});
+
+// 模型輸出的大小寫／尾隨空白不穩定；不正規化就會被判「未回傳有效結果」，整包分診結論被丟掉、任務 stopped。
+test('decision 大小寫／空白飄動 → 正規化後照樣走 fix，不當成無效結果', async () => {
+  claudeReturns({ decision: ' FIX \n', summary: '轉回 coding 修補。' });
+  const id = await makeTask({ rejectCount: 1 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+});
+
 // 缺 questions 的 clarify＝無效輸出（契約要求必帶）→ fail loud 停下，不靜默放行
 test('clarify 但無 questions → stopped（不靜默放行）', async () => {
   claudeReturns({ decision: 'clarify', summary: '想問但沒給問題' });
@@ -248,6 +275,27 @@ test('resolve 入口 resume → 回原關（resume_status）並歸零該關計�
   const { rows: [t] } = await dbModule.query('SELECT status, qa_retry_count, resume_status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('qa_running');
   expect(t.qa_retry_count).toBe(0);
+  expect(t.resume_status).toBeNull();
+});
+
+// clarify 閘門會把 resume_status 蓋成分診關本身（＝答完的回程）。resolve 入口的 resume_status
+// 存的是「真正的原關」，被蓋掉就永久遺失：答完回分診續判時 homeStatus 退化成 coding_running
+// （或指回分診自己形成死循環），任務落到不是它該回去的關，該關的重試額度也對不上。
+test('resolve 入口 clarify 往返後 resume → 仍回真正的原關（原關不因 clarify 遺失）', async () => {
+  claudeReturns({ decision: 'clarify', summary: '指示含糊，無法判定。', questions: ['是程式 bug 還是需求變更？'] });
+  const id = await makeTask({ status: 'resolve_triage', resume_status: 'playwright_running', blocker: 'E2E boom', pw: 3, instruction: '再看看' });
+  await runRejectTriage(id, userId);
+  const { rows: [mid] } = await dbModule.query('SELECT status, resume_status FROM tasks WHERE id=$1', [id]);
+  expect(mid.status).toBe('clarify_pending');
+  expect(mid.resume_status).toBe('resolve_triage');   // 答完的回程＝回分診續判（此語意不變）
+
+  // 使用者答完 → runner.handleClarifyAnswered 依 resume_status 把任務送回 resolve_triage 續判
+  await dbModule.query("UPDATE tasks SET status='resolve_triage' WHERE id=$1", [id]);
+  claudeReturns({ decision: 'resume', summary: '已確認是環境問題，回原關重跑。' });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, pw_retry_count, resume_status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('playwright_running');   // 不是 coding_running、也不是分診關自己
+  expect(t.pw_retry_count).toBe(0);
   expect(t.resume_status).toBeNull();
 });
 

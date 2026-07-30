@@ -366,6 +366,31 @@ test('project_stats：人工退回率與主要退回原因（rejection_items 分
   expect(row.top_reject_count).toBe(1);
 });
 
+// 意圖：這張報表講的是「人工退回」——使用者對交付結果不滿意的訊號。QA 自動退回是 pipeline 內部
+// 的來回，落在同一張 task_rejections（source='qa'）且用的是另一套分類詞彙（impl_miss/spec_unclear/
+// env_flaky）。混算會同時汙染兩件事：退回率被灌水（人工其實沒退），主要退回原因被 QA 的詞彙洗掉。
+test('project_stats：QA 自動退回（source=qa）不計入人工退回率與主要退回原因', async () => {
+  const { rows: [qrej] } = await dbModule.query(
+    `INSERT INTO task_rejections (task_id, project_id, user_id, reason, status, source)
+     VALUES ('task_fp_clean', $1, $2, 'QA 自動退回', 'classified', 'qa') RETURNING id`,
+    [qualityProjectId, regularUserId]
+  );
+  for (const d of ['漏欄位', '型別錯']) {
+    await dbModule.query(
+      "INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1, $2, 'impl_miss')",
+      [qrej.id, d]
+    );
+  }
+
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  const row = res.body.project_stats.find(r => r.project_id === qualityProjectId);
+  expect(row.reject_rate).toBeCloseTo(1 / 3);        // 仍只有人工退過的那一張，不是 2/3
+  expect(row.top_reject_category).toBe('spec_mismatch'); // 不得被 QA 的 impl_miss（2 筆）蓋掉
+  expect(row.top_reject_count).toBe(1);
+});
+
 // 意圖：每張交付成本的分母必須是「完成任務數」。用 total_tasks（token_usage 的 ref 數，
 // 含跑一半／被砍掉／未完成的任務）當分母會把單位成本除得比實際低，看起來比真實便宜。
 test('summary.avg_cost_per_task 分母是完成任務數，不是 token_usage 的 ref 數', async () => {

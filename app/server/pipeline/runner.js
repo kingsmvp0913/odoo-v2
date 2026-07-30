@@ -16,6 +16,7 @@ const { createBranch, checkoutDefault, ensureWorktreeAtMain, AI_BRANCH } = requi
 const { withProjectLock } = require('./project-lock');
 const notify = require('../notify');
 const { runClarifyChat } = require('./clarify-chat');
+const yaml = require('js-yaml');
 
 // 執行歷程階段標記的中文顯示（僅影響顯示文字，status 值與流程判斷不變）
 const STAGE_LABELS = {
@@ -222,20 +223,38 @@ async function handleRespec(task, settings, signal) {
   await runRespecPatch(task.id, task.user_id, signal);
 }
 
+// 分診關：它的 clarify 問的是「這算 bug 還是規格」＝路由問題，答案交回分診員判，不是規格條文。
+const TRIAGE_RESUME = new Set(['reject_triage', 'resolve_triage']);
+
+// 把使用者的規格裁決追加進 analysis_yaml 的 spec_decisions。只寫進 retry_feedback 等於只有
+// 「這一輪 coding」看得到；下一輪 QA 讀的是規格本體，看不到裁決就會拿同一份有歧義的規格原題
+// 再問——QA 規格歧義的無限來回正是這樣長出來的。解析不出物件就整個不寫：既有 spec 是資產，
+// 寧可不落地也不能被覆寫成殘缺內容（QA 的 QA_SPEC_LIMIT 斷路器仍會兜住迴圈）。
+async function recordSpecDecision(taskId, analysisYaml, answer) {
+  let spec;
+  try { spec = yaml.load(analysisYaml || '', { schema: yaml.CORE_SCHEMA }); } catch { return; }
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return;
+  const prior = Array.isArray(spec.spec_decisions) ? spec.spec_decisions : [];
+  spec.spec_decisions = [...prior, `使用者裁決：${answer}`];
+  await query('UPDATE tasks SET analysis_yaml=$2 WHERE id=$1', [taskId, yaml.dump(spec, { lineWidth: -1 })]);
+}
+
 // clarify_answered：使用者答完規格裁決 → 帶裁決＋原 code 問題一次退回 coding（resume_status 記的關卡）。
 // 不 bumpReentry：clarify 是人工在場的閘門，非自主 runaway，斷路器留給 QA/E2E/triage 自動路徑。
 async function handleClarifyAnswered(task) {
-  const { rows: [row] } = await query('SELECT resume_status, retry_feedback FROM tasks WHERE id=$1', [task.id]);
+  const { rows: [row] } = await query('SELECT resume_status, retry_feedback, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
   const resume = row?.resume_status || 'coding_running';
   const { rows: [ans] } = await query(
     "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id DESC LIMIT 1", [task.id]
   );
   const answer = ans ? String(ans.content).trim() : '（無答覆）';
   const carried = row?.retry_feedback ? `\n${row.retry_feedback}` : '';
-  await query(
+  const { rowCount } = await query(
     "UPDATE tasks SET status=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1 AND status='clarify_answered'",
     [task.id, resume, `[已裁決規格]\n${answer}${carried}`]
   );
+  // 條件更新沒搶到就不落地裁決：避免重複派工把同一則答覆追加兩次進規格
+  if (rowCount && !TRIAGE_RESUME.has(resume)) await recordSpecDecision(task.id, row?.analysis_yaml, answer);
   notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: resume });
 }
 

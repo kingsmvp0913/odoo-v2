@@ -453,6 +453,10 @@ async function migrate() {
     // 澄清對話的回程狀態（confirm_pending／clarify_pending）。不能借用 resume_status——
     // 那欄已被 verdict-router／reject-triage 用來記「要回去哪一關」，覆寫會讓 QA 裁決導回 coding 的路徑消失。
     { table: 'tasks', col: 'clarify_from',         sql: 'ALTER TABLE tasks ADD COLUMN clarify_from TEXT' },
+    // 分診關（reject_triage／resolve_triage）的「真正原關」。分診走 clarify 問人時，閘門會把
+    // resume_status 寫成分診關自己（＝答完的回程），原關若不另存就永久遺失，任務答完會回到分診
+    // 自己（死循環）或退化成 coding_running。同 clarify_from 的理由：不可共用 resume_status。
+    { table: 'tasks', col: 'triage_home',          sql: 'ALTER TABLE tasks ADD COLUMN triage_home TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     // 每環境憑證：SSO 密鑰、E2E 隨機密碼（測試區安全 hardening）

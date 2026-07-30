@@ -452,6 +452,30 @@ test('spec_questions 非空 → clarify_pending、批次問題、不加 qa_retry
   expect(logs.some(l => l.content.includes('金額用單價還是小計?') && l.content.includes('要不要含稅?'))).toBe(true);
 });
 
+// 意圖：規格歧義的 clarify 迴圈必須有界。裁決寫回 analysis_yaml（runner.handleClarifyAnswered）
+// 之後，QA 若仍就規格再問，代表這條迴圈收斂不了——再問只是無限來回燒 token，該停下交人工。
+test('已裁決兩輪仍再問規格 → stopped 交人工，不再進 clarify 閘門', async () => {
+  const id = await makeTask(0);
+  await dbModule.query('UPDATE tasks SET analysis_yaml=$2 WHERE id=$1',
+    [id, 'summary: s\nspec_decisions:\n  - 使用者裁決：用小計\n  - 使用者裁決：含稅\n']);
+  claudeReturns({ verdict: 'fail', spec_questions: ['還是不確定要不要含稅?'] });
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('含稅');    // 未解的問題要帶給人看，不能只講「已達上限」
+});
+
+// 尚未達上限時行為不變（證明上面那條擋的是「已裁決兩輪」而非把整條 clarify 路徑關掉）
+test('已裁決一輪 → 仍可再進一次 clarify 閘門', async () => {
+  const id = await makeTask(0);
+  await dbModule.query('UPDATE tasks SET analysis_yaml=$2 WHERE id=$1',
+    [id, 'summary: s\nspec_decisions:\n  - 使用者裁決：用小計\n']);
+  claudeReturns({ verdict: 'fail', spec_questions: ['要不要含稅?'] });
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('clarify_pending');
+});
+
 // 回歸：fail 但無 spec_questions → 照舊退 coding（反轉舉證：漏給類別＝維持現況）。
 test('fail 無 spec_questions → 照舊 coding_running、qa_retry_count+1', async () => {
   claudeReturns({ verdict: 'fail', issues: ['純 code bug'] });

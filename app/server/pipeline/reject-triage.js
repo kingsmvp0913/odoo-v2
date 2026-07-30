@@ -25,6 +25,9 @@ const TARGET_STATUS = {
 const RESUME_COUNTER = {
   qa_running: 'qa_retry_count', deploy_testing: 'deploy_retry_count', playwright_running: 'pw_retry_count'
 };
+// 分診關自己：resume_status 若指向這兩者，代表它是 clarify 閘門寫的「回分診續判」回程，
+// 不是原關——原關另存在 triage_home（見 db.js）。誤當原關會讓分診 resume 回到自己、無限重進分診。
+const TRIAGE_STATUSES = new Set(['reject_triage', 'resolve_triage']);
 
 async function stop(taskId, userId, reason) {
   await query("UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1", [taskId, reason]);
@@ -36,7 +39,7 @@ async function stop(taskId, userId, reason) {
 // 讀 diff＋runtime log 查清真相，依「停下原因＋使用者的話」判 resume/advance/fix/respec 決定下一步。
 async function runRejectTriage(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, status, git_branch, analysis_yaml, retry_feedback, resume_status, blocker_content FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, status, git_branch, analysis_yaml, retry_feedback, resume_status, triage_home, blocker_content FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -46,9 +49,11 @@ async function runRejectTriage(taskId, userId, signal) {
 
   const isReject = task.status === 'reject_triage';
 
-  // 防呆：同一 task 已退回幾次（task_rejections 存業務 id）；>=2 禁 fix（只能 advance/respec/resume）
+  // 防呆：同一 task 已被「人工」退回幾次（task_rejections 存業務 id）；>=2 禁 fix（只能 advance/respec/resume）。
+  // 必須排除 source='qa'：QA 自動退回落同一張表，混算會讓一次 QA fail 就把後續所有人工退回的
+  // fix 分支永久關掉——真正的程式 bug 從此只能被降級成 respec，白跑一輪分析重寫規格。
   const { rows: [{ n }] } = await query(
-    'SELECT COUNT(*)::int AS n FROM task_rejections WHERE task_id = $1', [task.task_id]
+    "SELECT COUNT(*)::int AS n FROM task_rejections WHERE task_id = $1 AND source = 'human'", [task.task_id]
   );
   const allowBug = n <= 1;
 
@@ -60,14 +65,16 @@ async function runRejectTriage(taskId, userId, signal) {
     userInstruction = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（無退回原因）';
     homeStatus = 'review_pending';
   } else {
-    stuckStage = STAGE_LABEL[task.resume_status] || task.resume_status || '（未知）';
+    // resume_status 指向分診關本身＝走過 clarify 往返（閘門把回程寫在該欄），真正的原關在 triage_home
+    const home = (TRIAGE_STATUSES.has(task.resume_status) ? null : task.resume_status) || task.triage_home;
+    stuckStage = STAGE_LABEL[home] || home || '（未知）';
     stopContext = (task.blocker_content || '（無停下原因）').trim();
     const { rows: [instr] } = await query(
       "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' AND content LIKE '[修正指示]%' ORDER BY created_at DESC LIMIT 1",
       [taskId]
     );
     userInstruction = instr ? instr.content.replace(/^\[修正指示\]\s*/, '').trim() : '（無指示）';
-    homeStatus = task.resume_status || 'coding_running';
+    homeStatus = home || 'coding_running';
   }
   // 併入近幾則對話（審核退回時審核者可能有補充）
   const { rows: dlg } = await query(
@@ -121,7 +128,10 @@ async function runRejectTriage(taskId, userId, signal) {
   const summary = (result?.summary || '').trim();
   const logAi = (content) => query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, content]);
 
-  let decision = result?.decision;
+  // 列舉值先正規化再比對（大小寫／前後空白）：模型輸出不穩定，' FIX ' 這種飄動會一路掉到
+  // 「未回傳有效結果」，整包分診結論被丟掉、任務白白 stopped。target 同理（不合法會靜默降級成 resume）。
+  let decision = String(result?.decision ?? '').trim().toLowerCase();
+  const target = String(result?.target ?? '').trim().toLowerCase();
   // 防呆：不准 fix 時降級為 respec（同一問題已當程式問題修過仍被退）
   if (decision === 'fix' && !allowBug) decision = 'respec';
 
@@ -133,7 +143,8 @@ async function runRejectTriage(taskId, userId, signal) {
   // 人工判 fix 的退回本身也計入總循環額度，不再無條件重取，避免人工退回無限繞過斷路器（長尾主因）。
   const goto = async (nextStatus, { keepFeedback = false, freshRespec = false, resetReentry = true } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
-    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'updated_at=NOW()'];
+    // triage_home 一併清：本次分診已落地，暫存的原關用完即棄，留著會被下一次分診誤當原關
+    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'triage_home=NULL', 'updated_at=NOW()'];
     if (resetReentry) sets.push('reentry_count=0');
     if (!keepFeedback) sets.push('retry_feedback=NULL');
     // freshRespec＝交回分析重寫規格，coding 的痕跡要一併清乾淨。git_branch 必須跟 coding_session_id
@@ -180,6 +191,9 @@ async function runRejectTriage(taskId, userId, signal) {
     ? result.questions.map(q => String(q).trim()).filter(Boolean) : [];
   if (decision === 'clarify' && clarifyQs.length) {
     if (summary) await logAi(summary);
+    // 閘門會把 resume_status 寫成分診關自己（答完的回程）——原關先搬進 triage_home，否則永久遺失。
+    // 只有 resolve 入口有原關可保（reject 入口的原關固定是 review_pending，不需暫存）。
+    if (!isReject) await query('UPDATE tasks SET triage_home=$2 WHERE id=$1', [taskId, homeStatus]);
     const { enterClarifyGate } = require('./verdict-router');
     await enterClarifyGate(taskId, userId, {
       questions: clarifyQs,
@@ -210,9 +224,9 @@ async function runRejectTriage(taskId, userId, signal) {
   }
 
   // advance → 放行推進到 target（白名單，最遠 review）；target 不合法則保守退回 resume
-  if (decision === 'advance' && TARGET_STATUS[result?.target]) {
+  if (decision === 'advance' && TARGET_STATUS[target]) {
     if (summary) await logAi(summary);
-    let advanceTo = TARGET_STATUS[result.target];
+    let advanceTo = TARGET_STATUS[target];
     // 專案停用 E2E：advance 推進到 E2E 時改導向最終人工審核（旗標在此處也當家，堵住繞過主推進點的路徑）
     if (advanceTo === 'playwright_running') {
       const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);

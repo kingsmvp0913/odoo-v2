@@ -145,10 +145,13 @@ function registerRoutes(app) {
             GROUP BY tu.task_id, tu.agent_type`,
           [...taskParams, PIPELINE_STAGES]
         ),
+        // 退回率／主要退回原因只算「人工退回」（source='human'）。QA 自動退回落同一張表但屬
+        // pipeline 內部來回，且用另一套分類詞彙（impl_miss／spec_unclear／env_flaky）——混算會
+        // 同時把退回率灌水（人工其實沒退）與讓主要退回原因被 QA 的詞彙洗掉。比照 health-data.js。
         query(
           `SELECT tr.task_id, COUNT(*) AS n
              FROM task_rejections tr JOIN tasks t ON t.task_id = tr.task_id
-             ${taskWhere}
+             ${taskWhere} AND tr.source = 'human'
             GROUP BY tr.task_id`,
           taskParams
         ),
@@ -157,7 +160,7 @@ function registerRoutes(app) {
              FROM rejection_items ri
              JOIN task_rejections tr ON tr.id = ri.rejection_id
              JOIN tasks t ON t.task_id = tr.task_id
-             ${taskWhere}
+             ${taskWhere} AND tr.source = 'human'
             GROUP BY t.project_id, ri.category`,
           taskParams
         )
