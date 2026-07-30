@@ -244,10 +244,14 @@ function registerRoutes(app) {
       }
       // 澄清問題只在 confirm_pending 出（初次分析）；clarify_pending 共用同一 answer 區但走時間軸對話，
       // 其 analysis_yaml 常殘留當初分析的舊問題，不可誤冒出來。
-      const clarification = tasks[0].status === 'confirm_pending' ? taskClarification(tasks[0]) : { summary: '', intro: '', questions: [] };
+      // AI 回話期間（clarify_chat_running）也要照出：題目一消失，畫面就整塊換成通用留言框，
+      // 使用者每問一句就被踢離「提問」頁籤，回來還得自己切回去。只認回程是 confirm_pending 的那種。
+      const showClar = tasks[0].status === 'confirm_pending'
+        || (tasks[0].status === 'clarify_chat_running' && tasks[0].clarify_from === 'confirm_pending');
+      const clarification = showClar ? taskClarification(tasks[0]) : { summary: '', intro: '', questions: [] };
       // spec_review（MODE_B 規格審核閘門）：附解析後的規格供審核頁渲染；其他狀態不附（防殘留規格冒出）
       const spec = tasks[0].status === 'spec_review' ? taskSpec(tasks[0]) : null;
-      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec, clarify_draft: tasks[0].clarify_draft || null });
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -723,73 +727,6 @@ function registerRoutes(app) {
     }
   });
 
-  // 依這段對話重產題目草案：只寫 clarify_draft，不動 analysis_yaml
-  app.post('/api/tasks/:id/clarify-revise', verifyToken, async (req, res) => {
-    try {
-      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      const task = tasks[0];
-      if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
-        return res.status(400).json({ error: `Task status '${task.status}' 不接受更新題目` });
-      }
-      const { rowCount } = await query(
-        "UPDATE tasks SET status='clarify_chat_running', clarify_from=$2, clarify_mode='revise', updated_at=NOW() WHERE id = $1 AND status = $2",
-        [req.params.id, task.status]
-      );
-      if (!rowCount) return res.json({ ok: true });
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
-      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 套用草案：把 clarify_draft 併回 analysis_yaml 的 clarification_channel，其餘欄位原封不動
-  app.post('/api/tasks/:id/clarify-apply', verifyToken, async (req, res) => {
-    try {
-      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      const task = tasks[0];
-      if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
-        return res.status(400).json({ error: `Task status '${task.status}' 不接受套用草案` });
-      }
-      if (!task.clarify_draft) return res.status(400).json({ error: '沒有待套用的草案' });
-
-      let merged;
-      try {
-        const spec = yaml.load(task.analysis_yaml || '', { schema: yaml.CORE_SCHEMA }) || {};
-        const draft = yaml.load(task.clarify_draft, { schema: yaml.CORE_SCHEMA }) || {};
-        spec.clarification_channel = draft;
-        merged = yaml.dump(spec, { lineWidth: -1 });
-      } catch (e) {
-        return res.status(400).json({ error: `草案格式有誤，無法套用：${e.message}` });
-      }
-      await query('UPDATE tasks SET analysis_yaml=$2, clarify_draft=NULL, updated_at=NOW() WHERE id=$1', [req.params.id, merged]);
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 放棄草案
-  app.post('/api/tasks/:id/clarify-discard', verifyToken, async (req, res) => {
-    try {
-      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      if (!ANSWER_ALLOWED_STATUSES.includes(tasks[0].status)) {
-        return res.status(400).json({ error: `Task status '${tasks[0].status}' 不接受放棄草案` });
-      }
-      const { rowCount } = await query(
-        'UPDATE tasks SET clarify_draft=NULL, updated_at=NOW() WHERE id=$1 AND user_id=$2',
-        [req.params.id, req.userId]
-      );
-      if (!rowCount) return res.status(404).json({ error: 'Task not found' });
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
   // Resolve a blocked task — saves user's resolution note, resets status to new for retriage
   app.post('/api/tasks/:id/resolve-blocker', verifyToken, async (req, res) => {
     try {

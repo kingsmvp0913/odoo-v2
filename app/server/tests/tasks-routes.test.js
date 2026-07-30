@@ -1199,31 +1199,34 @@ test('POST /clarify-ask → 空內容 400', async () => {
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });
 
-test('POST /clarify-apply → 草案寫進 analysis_yaml 的 clarification_channel 並清空草案', async () => {
-  const draft = ['intro: 新說明', 'questions:', '  - id: q1', '    text: 新題目', '    type: text', '    required: true'].join('\n');
+// 草案「產生 → 人工套用」兩段式已退役（clarify-chat 直接就地改寫 analysis_yaml），
+// 對應的 /clarify-revise、/clarify-apply、/clarify-discard 三個端點一併移除；
+// 「新題目併入時不得洗掉規格其餘部分」的 intent 移到 clarify-chat.test.js 的 revise 測試守。
+
+// AI 回話期間題目必須繼續回傳：一斷掉前端就整塊換成通用留言框，使用者每問一句
+// 就被踢出「提問」頁籤，AI 答完還得自己切回去（本次回報的第 4 個症狀）。
+test('GET /api/tasks/:id → clarify_chat_running（回程 confirm_pending）仍回題目，AI 回話期間版面不換走', async () => {
+  const y = ['summary: s', 'clarification_channel:', '  questions:', '    - id: q1', '      text: 題目一', '      type: text', '      required: true'].join('\n');
   const { rows } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml, clarify_draft) VALUES ($1,'task_clar_apply','odoo','T','confirm_pending',$2,$3) RETURNING id",
-    [userId, 'summary: 原規格\nclarification_channel:\n  questions:\n    - 舊題目\n', draft]
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml, clarify_from) VALUES ($1,'task_clar_busy','odoo','T','clarify_chat_running',$2,'confirm_pending') RETURNING id",
+    [userId, y]
   );
-  const taskId = rows[0].id;
-  const res = await request(app).post(`/api/tasks/${taskId}/clarify-apply`)
-    .set('Authorization', `Bearer ${adminToken}`).send({});
+  const res = await request(app).get(`/api/tasks/${rows[0].id}`).set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  const { rows: after } = await dbModule.query('SELECT analysis_yaml, clarify_draft FROM tasks WHERE id=$1', [taskId]);
-  expect(after[0].clarify_draft).toBeNull();
-  expect(after[0].analysis_yaml).toContain('新題目');
-  expect(after[0].analysis_yaml).toContain('summary: 原規格'); // 規格其餘部分不得被草案洗掉
-  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+  expect(res.body.clarification.questions).toHaveLength(1);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });
 
-test('POST /clarify-apply → 沒有草案時 400，不動 analysis_yaml', async () => {
+// 但 clarify_pending 那條路（QA 規格裁決）走的是時間軸對話，其 analysis_yaml 常殘留
+// 當初分析的舊問題——回程不是 confirm_pending 就一律不吐，否則舊題目會憑空冒出來。
+test('GET /api/tasks/:id → clarify_chat_running 但回程是 clarify_pending → 不吐殘留題目', async () => {
+  const y = ['summary: s', 'clarification_channel:', '  questions:', '    - id: q1', '      text: 殘留舊題', '      type: text', '      required: true'].join('\n');
   const { rows } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml) VALUES ($1,'task_clar_apply_none','odoo','T','confirm_pending','summary: x') RETURNING id",
-    [userId]
+    "INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml, clarify_from) VALUES ($1,'task_clar_busy2','odoo','T','clarify_chat_running',$2,'clarify_pending') RETURNING id",
+    [userId, y]
   );
-  const res = await request(app).post(`/api/tasks/${rows[0].id}/clarify-apply`)
-    .set('Authorization', `Bearer ${adminToken}`).send({});
-  expect(res.status).toBe(400);
+  const res = await request(app).get(`/api/tasks/${rows[0].id}`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.clarification.questions).toHaveLength(0);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });
 

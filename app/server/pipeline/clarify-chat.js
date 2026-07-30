@@ -3,14 +3,28 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectNotes } = require('./project-notes');
+const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
 
 // 澄清閘門的對話關（confirm_pending／clarify_pending 共用）：跑 clarify-chat agent。
-// 三種決策：answer（回答、狀態原地不動）／proceed（推進）／revise（產題目草案）。
+// 三種決策：answer（回答、狀態原地不動）／proceed（推進）／revise（就地改寫題目）。
 // 推進與否由 mode 在結構上限定——不靠 prompt 自律，「提問」入口就算 agent 硬回 proceed 也推不動。
 const Q_SEP = '---QUESTIONS---';
+
+// 把 agent 重產的題目併回 analysis_yaml 的 clarification_channel，其餘欄位原封不動。
+// 解析不出來就回 null 讓呼叫端放棄更新——AI 產出的 YAML 壞掉時絕不可覆蓋既有 spec（會整包掉規格）。
+function mergeClarification(analysisYaml, questionsYaml) {
+  try {
+    const spec = yaml.load(analysisYaml || '', { schema: yaml.CORE_SCHEMA }) || {};
+    if (typeof spec !== 'object' || Array.isArray(spec)) return null;
+    const draft = yaml.load(questionsYaml, { schema: yaml.CORE_SCHEMA });
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return null;
+    spec.clarification_channel = draft;
+    return yaml.dump(spec, { lineWidth: -1 });
+  } catch { return null; }
+}
 
 function parseClarifyChat(s) {
   const text = String(s).trim();
@@ -41,12 +55,10 @@ const MODE_RULES = {
     rule: '本次只允許 `answer` 或 `proceed`。使用者剛送出題目的回答——他若在反問、或有必答題沒被答到，回 answer；都答齊了才回 proceed。'
   },
   ask: {
-    allow: ['answer'],
-    rule: '本次只允許 `answer`。使用者是主動來提問的，不是來答題的——單純回答他的問題，不要催他答題，也不要推進任務。'
-  },
-  revise: {
-    allow: ['revise'],
-    rule: '本次只允許 `revise`。使用者問完了，要你依這段對話重新產出題目清單（含已可確定的預填答案）。'
+    allow: ['answer', 'revise'],
+    rule: '本次只允許 `answer` 或 `revise`。使用者是來提問、補充或糾正方向的，不是來答題的——不要催他答題，也不要推進任務。'
+      + '這一輪對話**已經談出結論**（某題的答案定了、或做法方向改了、或某題已不需要問）才回 `revise` 把題目整份重產；'
+      + '只是來回問答、還沒有結論，就回 `answer` 別動題目。'
   }
 };
 
@@ -104,13 +116,16 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
   try {
     const agent = loadAgent('clarify-chat');
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
+    // 分析關建好的 worktree：有就讓它自己查碼（少一輪「這是哪個欄位」的來回），沒有就照舊純對話
+    const work = await taskWorkContext(task);
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
       conversation: await loadConversation(taskId),
       mode_rule: modeCfg.rule,
-      project_notes: projectNotes || ''
+      project_notes: projectNotes || '',
+      repo_paths: work ? work.repoPaths : ''
     }).trim();
-    const result = await runClaude(prompt, { taskId, userId, signal, model: agent.model, agentType: 'respec' });
+    const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
     raw = result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {
@@ -136,16 +151,28 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
 
   if (decision === 'proceed') {
     const next = fallbackStatus(task) === 'clarify_pending' ? 'clarify_answered' : 'confirm_answered';
-    // 清 clarify_draft：留著舊草案，之後若重跑分析又回到 confirm_pending 產生新題目，
-    // 前端會讀到過期草案、使用者按套用就把新題目整組覆蓋成舊的。
+    // 清 clarify_draft：草案流程已退役（revise 改為就地寫進 analysis_yaml），
+    // 這裡順手把舊任務殘留的草案清掉，免得欄位長期掛著沒人看的過期題目。
     await query("UPDATE tasks SET status=$2, clarify_draft=NULL, updated_at=NOW() WHERE id=$1", [taskId, next]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: next });
     return;
   }
 
+  // 就地改寫題目：使用者在對話裡談出結論後，「規格書 QA」那頁必須當場反映最新結論，
+  // 否則他看到的是過期題目、還得再把講過的話打一次（草案＋手動套用的舊流程正是卡點）。
   if (decision === 'revise') {
     const back = fallbackStatus(task);
-    await query("UPDATE tasks SET clarify_draft=$2, status=$3, updated_at=NOW() WHERE id=$1", [taskId, parsed.questions_yaml, back]);
+    const merged = mergeClarification(task.analysis_yaml, parsed.questions_yaml);
+    if (merged) {
+      await query("UPDATE tasks SET analysis_yaml=$2, updated_at=NOW() WHERE id=$1", [taskId, merged]);
+    } else {
+      // 規格或題目 YAML 壞掉：寧可留著舊題目也不覆蓋，並讓使用者看得到「這次沒更新」
+      await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+        [taskId, '（題目這次沒有更新：規格格式異常，上面的回覆仍然有效，請再說一次或人工確認規格。）']
+      );
+    }
+    await query("UPDATE tasks SET status=$2, updated_at=NOW() WHERE id=$1", [taskId, back]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: back });
     return;
   }
@@ -155,4 +182,4 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: back });
 }
 
-module.exports = { parseClarifyChat, runClarifyChat, loadConversation, MODE_RULES };
+module.exports = { parseClarifyChat, runClarifyChat, loadConversation, mergeClarification, MODE_RULES };
