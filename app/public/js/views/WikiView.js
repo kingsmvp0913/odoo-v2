@@ -66,7 +66,7 @@ window.WikiView = Vue.defineComponent({
   computed: {
     renderedContent() {
       if (!this.current) return '';
-      return window.marked ? window.marked.parse(this.current.content) : this.current.content;
+      return renderMarkdown(this.current.content);
     },
     tree() {
       const byId = {};
