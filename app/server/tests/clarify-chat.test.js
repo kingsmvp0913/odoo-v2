@@ -271,3 +271,50 @@ test('回帶對話必須含 AI 發言：只帶 user 會讓分析 agent 看不到
   expect(conv).toContain('使用者：不用');
   expect(conv.indexOf('AI：')).toBeLessThan(conv.indexOf('使用者：')); // 由舊到新
 });
+
+// 續接輪：同一場澄清對話續用同一個 claude session，省掉每輪重新探索程式碼。
+// 權威規格每輪重送——session 內可能殘留 revise 前的舊版本。
+test('續接輪：有 clarify_session_id ＋指紋相符 → 帶 --resume，prompt 含當前規格', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('clarify-chat')}.${promptVersion('clarify-chat-retry')}`;
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query(
+    "UPDATE tasks SET analysis_yaml='summary: 目前這版', clarify_session_id=$2, clarify_prompt_ver=$3 WHERE id=$1",
+    [task.id, 'cl-1', ver]
+  );
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','再問一題')", [task.id]);
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: answer\nREPLY:\n回答\n</result>',
+    usage: {}, durationMs: 1, sessionId: 'cl-1'
+  });
+
+  await runClarifyChat({ id: task.id }, 1, null, 'ask');
+
+  // ⚠ 本檔沒有 beforeEach 重置 mock，mock.calls 跨 test 累積 —— 必須取最後一次呼叫
+  const [prompt, opts] = runClaude.mock.calls.at(-1);
+  expect(opts.resumeSessionId).toBe('cl-1');
+  expect(prompt).toContain('目前這版');       // 權威規格重送
+});
+
+test('推進（proceed）→ 清掉 clarify session（這場對話結束了）', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('clarify-chat')}.${promptVersion('clarify-chat-retry')}`;
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query(
+    'UPDATE tasks SET clarify_session_id=$2, clarify_prompt_ver=$3 WHERE id=$1',
+    [task.id, 'cl-2', ver]
+  );
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: proceed\nREPLY:\n了解，開始實作。\n</result>',
+    usage: {}, durationMs: 1, sessionId: 'cl-2'
+  });
+
+  await runClarifyChat({ id: task.id }, 1, null, 'answer_or_proceed');
+
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, clarify_session_id, clarify_prompt_ver FROM tasks WHERE id=$1', [task.id]
+  );
+  expect(t.status).toBe('confirm_answered');
+  expect(t.clarify_session_id).toBeNull();
+  expect(t.clarify_prompt_ver).toBeNull();
+});

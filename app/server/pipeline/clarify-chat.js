@@ -5,6 +5,7 @@ const { loadAgent } = require('./agent-loader');
 const { getProjectNotes } = require('./project-notes');
 const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
+const { withResume } = require('./with-resume');
 const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
 
@@ -118,14 +119,43 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
     // 分析關建好的 worktree：有就讓它自己查碼（少一輪「這是哪個欄位」的來回），沒有就照舊純對話
     const work = await taskWorkContext(task);
-    const prompt = agent.render({
-      analysis_yaml: task.analysis_yaml || '（無規格）',
-      conversation: await loadConversation(taskId),
-      mode_rule: modeCfg.rule,
-      project_notes: projectNotes || '',
-      repo_paths: work ? work.repoPaths : ''
-    }).trim();
-    const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
+    const retryAgent = loadAgent('clarify-chat-retry');
+    const conversation = await loadConversation(taskId);
+    // 續接輪只送「使用者這輪講的話」＋當前規格全文＋本輪 mode；先前的探索與回覆都在 session 裡。
+    // loadConversation 回的是組好的字串，不能直接取最後一則 user 發言，另查。
+    const { rows: [lastU] } = await query(
+      "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY created_at DESC, id DESC LIMIT 1",
+      [taskId]
+    );
+    const result = await withResume({
+      freshAgentName: 'clarify-chat',
+      retryAgentName: 'clarify-chat-retry',
+      getSession: async () => {
+        const { rows: [r] } = await query('SELECT clarify_session_id, clarify_prompt_ver FROM tasks WHERE id=$1', [taskId]);
+        return r && r.clarify_session_id ? { sessionId: r.clarify_session_id, promptVer: r.clarify_prompt_ver } : null;
+      },
+      setSession: ({ sessionId, promptVer }) =>
+        query('UPDATE tasks SET clarify_session_id=$2, clarify_prompt_ver=$3 WHERE id=$1', [taskId, sessionId, promptVer]),
+      clearSession: () =>
+        query('UPDATE tasks SET clarify_session_id=NULL, clarify_prompt_ver=NULL WHERE id=$1', [taskId]),
+      renderFresh: () => agent.render({
+        analysis_yaml: task.analysis_yaml || '（無規格）',
+        conversation,
+        mode_rule: modeCfg.rule,
+        project_notes: projectNotes || '',
+        repo_paths: work ? work.repoPaths : ''
+      }).trim(),
+      // mode 每輪重算：clarify_mode 可能與 session 開場時不同，retry prompt 一律送本輪 modeCfg.rule，
+      // 不可用 session 內殘留的舊 mode（見 clarify-chat.js 上方 modeCfg 降級邏輯）。
+      renderRetry: () => retryAgent.render({
+        analysis_yaml: task.analysis_yaml || '（無規格）',
+        mode_rule: modeCfg.rule,
+        new_message: lastU ? lastU.content : '（無新發言）'
+      }).trim(),
+      onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err),
+      model: agent.model,
+      runOpts: { cwd: work ? work.cwd : undefined, taskId, userId, signal, agentType: 'respec' }
+    });
     raw = result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {
@@ -153,7 +183,11 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
     const next = fallbackStatus(task) === 'clarify_pending' ? 'clarify_answered' : 'confirm_answered';
     // 清 clarify_draft：草案流程已退役（revise 改為就地寫進 analysis_yaml），
     // 這裡順手把舊任務殘留的草案清掉，免得欄位長期掛著沒人看的過期題目。
-    await query("UPDATE tasks SET status=$2, clarify_draft=NULL, updated_at=NOW() WHERE id=$1", [taskId, next]);
+    // 推進＝這場澄清對話結束，一併清掉續接用的 session（下次進來是全新的一場）
+    await query(
+      "UPDATE tasks SET status=$2, clarify_draft=NULL, clarify_session_id=NULL, clarify_prompt_ver=NULL, updated_at=NOW() WHERE id=$1",
+      [taskId, next]
+    );
     notify.emitToUser(userId, 'task:updated', { taskId, status: next });
     return;
   }
