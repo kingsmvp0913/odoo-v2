@@ -1,0 +1,211 @@
+/* 新手教程覆蓋層。全部 tour- 前綴、零 element selector、不覆寫任何既有 class。
+   刪掉本檔與 tour.js／tour-courses.js 即完全消失。守衛見 tour-isolation.test.js。 */
+
+.tour-launch {
+  font: inherit; font-size: var(--fs-base); cursor: pointer;
+  background: transparent; border: 1px solid rgba(255,255,255,.18);
+  color: var(--sidebar-text); border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3); margin-right: auto;
+  transition: color var(--transition), border-color var(--transition);
+}
+.tour-launch:hover { color: var(--sidebar-active); border-color: var(--primary); }
+.tour-launch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tour-launch-badge {
+  display: inline-block; margin-left: var(--space-1);
+  background: var(--primary); color: #fff;
+  border-radius: 99px; padding: 0 5px; font-size: var(--fs-2xs);
+}
+
+.tour-layer {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: rgba(9,9,12,.55); backdrop-filter: blur(2px);
+  display: flex; flex-direction: column;
+}
+
+.tour-ribbon {
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--primary); color: #fff; font-size: var(--fs-sm);
+}
+.tour-ribbon-label { font-weight: var(--fw-semibold); }
+.tour-ribbon-sub { opacity: .82; font-size: var(--fs-xs); }
+.tour-dots { margin-left: auto; display: flex; gap: 5px; }
+.tour-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255,255,255,.35);
+  transition: background var(--transition-slow), transform var(--transition-slow);
+}
+.tour-dot.is-now { background: #fff; transform: scale(1.45); }
+.tour-dot.is-done { background: rgba(255,255,255,.75); }
+.tour-quit {
+  font: inherit; font-size: var(--fs-xs); cursor: pointer;
+  background: rgba(255,255,255,.16); border: none; color: #fff;
+  border-radius: var(--radius-sm); padding: 3px var(--space-2);
+}
+.tour-quit:hover { background: rgba(255,255,255,.28); }
+.tour-quit:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.tour-canvas { flex: 1; position: relative; overflow: hidden; }
+.tour-screen {
+  position: absolute; inset: 0; overflow-y: auto;
+  background: var(--bg); padding: var(--space-5); scroll-behavior: smooth;
+}
+.tour-screen-title { font-size: var(--fs-xl); font-weight: var(--fw-semibold); margin-bottom: var(--space-4); }
+
+.tour-block {
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--space-4); margin-bottom: var(--space-3);
+}
+.tour-block-title { font-weight: var(--fw-semibold); font-size: var(--fs-md); }
+.tour-block-desc { color: var(--text-muted); font-size: var(--fs-sm); margin-bottom: var(--space-3); }
+.tour-field { margin-bottom: var(--space-2); }
+.tour-label { display: block; font-size: var(--fs-sm); color: var(--text-secondary); margin-bottom: var(--space-1); }
+.tour-input {
+  width: 100%; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-base);
+}
+.tour-input:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+.tour-cols { display: flex; gap: var(--space-3); }
+.tour-cols > .tour-field { flex: 1; }
+.tour-alert {
+  color: var(--danger); font-size: var(--fs-sm);
+  background: rgba(239,68,68,.09); border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3);
+}
+.tour-check { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: var(--fs-md); }
+.tour-check > .tour-checkbox { width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary); }
+.tour-sub { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 6px; }
+.tour-save {
+  font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-medium); cursor: pointer;
+  padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm);
+  border: 1px solid transparent; background: var(--primary); color: #fff;
+}
+.tour-save.is-outline { background: transparent; color: var(--primary); border-color: var(--border); }
+.tour-save:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.tour-guide {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px;
+  font-size: var(--fs-sm); line-height: 1.8; margin-bottom: var(--space-3);
+}
+.tour-guide-list { margin: 6px 0 0 18px; padding: 0; }
+.tour-guide-link {
+  display: inline-block; margin-top: 8px;
+  color: var(--primary); font-weight: var(--fw-semibold); text-decoration: none;
+}
+.tour-guide-link:hover { text-decoration: underline; }
+
+.tour-hole {
+  position: absolute; border-radius: var(--radius); pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(9,9,12,.66), 0 0 0 2px var(--primary) inset;
+  transition: top .42s cubic-bezier(.3,.9,.3,1), left .42s cubic-bezier(.3,.9,.3,1),
+              width .42s cubic-bezier(.3,.9,.3,1), height .42s cubic-bezier(.3,.9,.3,1);
+}
+.tour-hole::after {
+  content: ''; position: absolute; inset: -3px; border-radius: var(--radius-lg);
+  border: 2px solid var(--primary); opacity: .5;
+  animation: tour-ring 1.9s ease-out infinite;
+}
+@keyframes tour-ring {
+  0% { transform: scale(1); opacity: .5; }
+  70%, 100% { transform: scale(1.035); opacity: 0; }
+}
+.tour-hole.is-full {
+  top: 50%; left: 50%; width: 0; height: 0;
+  box-shadow: 0 0 0 9999px rgba(9,9,12,.7);
+}
+.tour-hole.is-full::after { display: none; }
+
+.tour-bubble {
+  position: absolute; width: 292px;
+  background: var(--card-bg); color: var(--text);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  padding: var(--space-4);
+  transition: top .42s cubic-bezier(.3,.9,.3,1), left .42s cubic-bezier(.3,.9,.3,1);
+}
+.tour-bubble.is-center {
+  top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: 348px; text-align: center;
+}
+.tour-arrow { position: absolute; width: 0; height: 0; }
+.tour-bubble[data-side="left"] > .tour-arrow {
+  right: -8px; top: 22px;
+  border-top: 8px solid transparent; border-bottom: 8px solid transparent;
+  border-left: 8px solid var(--card-bg);
+}
+.tour-bubble[data-side="bottom"] > .tour-arrow {
+  top: -8px; left: 26px;
+  border-left: 8px solid transparent; border-right: 8px solid transparent;
+  border-bottom: 8px solid var(--card-bg);
+}
+.tour-bubble.is-center > .tour-arrow { display: none; }
+
+.tour-title {
+  font-size: var(--fs-lg); font-weight: var(--fw-bold);
+  text-wrap: balance; margin-bottom: var(--space-2);
+}
+.tour-bubble.is-center > .tour-title { font-size: var(--fs-2xl); }
+.tour-text { font-size: var(--fs-base); color: var(--text-secondary); line-height: 1.65; }
+.tour-warn {
+  margin-top: var(--space-2); padding: var(--space-2) var(--space-3);
+  background: rgba(245,158,11,.13); border-radius: var(--radius-sm);
+  font-size: var(--fs-sm); color: var(--text-secondary); text-align: left;
+}
+.tour-foot { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-4); }
+.tour-bubble.is-center > .tour-foot { justify-content: center; }
+.tour-count {
+  margin-right: auto; font-size: var(--fs-sm); color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tour-bubble.is-center > .tour-count { display: none; }
+.tour-btn {
+  font: inherit; font-size: var(--fs-base); font-weight: var(--fw-medium); cursor: pointer;
+  padding: var(--space-2) var(--space-4); border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  transition: background var(--transition), border-color var(--transition);
+}
+.tour-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tour-btn-primary { background: var(--primary); color: #fff; }
+.tour-btn-primary:hover { background: var(--primary-hover); }
+.tour-btn-ghost { background: transparent; color: var(--text-muted); border-color: var(--border); }
+.tour-btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
+
+.tour-menu {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: min(520px, calc(100vw - 32px));
+  background: var(--card-bg); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg); padding: var(--space-5);
+}
+.tour-menu-title { font-size: var(--fs-2xl); font-weight: var(--fw-bold); margin-bottom: var(--space-1); }
+.tour-menu-sub { font-size: var(--fs-base); color: var(--text-muted); margin-bottom: var(--space-4); }
+.tour-menu-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.tour-menu-item {
+  display: flex; align-items: center; gap: var(--space-3); width: 100%;
+  font: inherit; text-align: left; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--space-3) var(--space-4);
+  color: var(--text);
+}
+.tour-menu-item:hover { border-color: var(--primary); }
+.tour-menu-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tour-menu-num {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--primary-light); color: var(--primary);
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm); font-weight: var(--fw-semibold);
+}
+.tour-menu-item.is-done > .tour-menu-num { background: var(--success); color: #fff; }
+.tour-menu-body { flex: 1; min-width: 0; }
+.tour-menu-name { font-size: var(--fs-md); font-weight: var(--fw-semibold); }
+.tour-menu-desc { font-size: var(--fs-sm); color: var(--text-muted); }
+.tour-menu-steps { flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-hole, .tour-bubble, .tour-dot { transition: none; }
+  .tour-hole::after { animation: none; }
+  .tour-screen { scroll-behavior: auto; }
+}
+@media (max-width: 820px) {
+  .tour-bubble { width: min(292px, calc(100vw - 32px)); }
+}
