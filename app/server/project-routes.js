@@ -134,6 +134,15 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
       await abortMerge(destPath);
       throw new Error(`main → ai-dev 同步衝突（${sync.conflictFiles.join(', ')}），請先在 GitHub 上把 ai-dev 合併回 main 再更新`);
     }
+    // 先回寫 done 再重建 testing，順序不可倒：doRebuild 撈 repo 帶 `WHERE clone_status='done'`，
+    // 而 reclone 端點進來就把本 repo 標成 'cloning'——先重建的話它撈到 0 個 repo、直接 return null
+    // （＝乾淨完成），testing 永遠不會被重長，連下面那道 fail-loud 都不會觸發。
+    // 提早回寫不會讓 pipeline 插隊：整段仍在 triggerClone 的 withProjectLock 內，pipeline 的
+    // git 操作拿不到鎖。此刻 pull 與 main→ai-dev 同步都已成功，這個 clone 本來就已經是 done。
+    await query(
+      'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
+      [repoId, 'done']
+    );
     // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
     if (projectId) {
       const { rebuildTestingWithinLock } = require('./pipeline/rebuild-testing');
@@ -144,10 +153,6 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     } else {
       try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋更新完成 */ }
     }
-    await query(
-      'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
-      [repoId, 'done']
-    );
     runGraphify(repoId, destPath);
   } catch (err) {
     const msg = (err.stderr || err.message || 'update failed').slice(0, 500);

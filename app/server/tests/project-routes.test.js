@@ -44,6 +44,13 @@ jest.mock('../pipeline/git', () => ({
   syncMainIntoAi: jest.fn(),
   abortMerge: jest.fn(),
   releaseAiToMain: jest.fn(),
+  // rebuild-testing 刻意不 mock：更新 repo 的最後一步（testing 重長到 ai-dev）就在它裡面，
+  // 連它一起 mock 掉會讓「有沒有真的重建」測不到。它實際會呼叫的 git 函式在這裡補上。
+  revParse: jest.fn().mockResolvedValue('sha-backup'),
+  resetTestingToAiBranch: jest.fn().mockResolvedValue(undefined),
+  resetTestingTo: jest.fn().mockResolvedValue(undefined),
+  mergeInto: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
+  commitAll: jest.fn().mockResolvedValue(undefined),
 }));
 
 process.env.JWT_SECRET = 'test-proj';
@@ -345,6 +352,27 @@ test('POST reclone：pull 完 main 後把新 commit 帶進 ai-dev，testing 才�
   expect(gitMock.syncMainIntoAi).toHaveBeenCalled();
   expect(gitMock.pullBranch.mock.invocationCallOrder[0])
     .toBeLessThan(gitMock.syncMainIntoAi.mock.invocationCallOrder[0]);
+});
+
+// 意圖：更新 repo 的最後一步是把 testing 重長到最新 ai-dev——那是測試環境 addons 的實際來源分支。
+// 上一支測試叫「testing 才跟得上」，但只驗到 syncMainIntoAi，重建那半邊完全沒被覆蓋；
+// 實測鴻久 testing 停在四天前、落後 ai-dev 16 個檔，而全程零錯誤訊息（doRebuild 撈不到 repo 時
+// 回 null＝乾淨完成，updateMainClone 那道刻意設計的 fail-loud console.warn 因此不會觸發）。
+test('POST reclone：更新完成後 testing 真的被重長到 ai-dev（不是只 pull 完就算）', async () => {
+  gitMock.ensureMainBranch.mockResolvedValue('main');
+  gitMock.pullBranch.mockResolvedValue(undefined);
+  gitMock.ensureAiBranch.mockResolvedValue(undefined);
+  gitMock.syncMainIntoAi.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  gitMock.resetTestingToAiBranch.mockClear();
+
+  const { pid, rid, dir } = await setupReclonableRepo('reclone-rebuild-testing');
+  const res = await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+
+  const row = await waitReclone(rid);
+  expect(row.clone_status).toBe('done');
+  expect(gitMock.resetTestingToAiBranch).toHaveBeenCalledWith(dir);
 });
 
 // 意圖：這裡不綁任何任務，沒有裁決 UI 可用——撞衝突時必須 abort 讓 ai-dev 還原、不留半殘 merge，
