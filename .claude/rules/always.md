@@ -15,4 +15,5 @@
 9. **平台主 clone 常駐 `testing` 分支（測試環境 addons 來源），任何切分支操作結束必須切回** — 停在別的分支會讓下次 deploy 部署到錯分支。切不回去要回報，但不可回滾已完成的 push。
 10. **平台目標優先序固定：穩定 > 準確 > 省 token** — 取捨衝突時據此裁決。實測為省 token 而犧牲穩定，反而在失敗迴圈上多花更多。
 11. **此 repo 沒有 `project_members` 表，12 個 project 端點裡 11 個只有 `verifyToken`——專案共享是既有設計** — 新增 project 端點不能假設有專案層級授權；高風險動作必須自行加權限檢查。
+12. **取指令的 exit code 不要經過管線或尾隨指令** — `cmd | tail`、`cmd; echo "exit=$?"` 拿到的都不是 `cmd` 的碼（背景任務通知回報的也是整串的碼）。此 repo 已因此誤判三次：把失敗的 `docker build` 報成成功、把有紅燈的 `npm test` 讀成 exit 0。**先落檔再統計**，要 exit code 就 `cmd > out 2>&1; echo "EXITCODE=$?" >> out`。
 
