@@ -252,4 +252,249 @@ window.TOUR_COURSES = [
       }
     ]
   }
+
+  ,{
+    id: 'ui',
+    name: '任務介面',
+    desc: '認得畫面上的東西，尤其「怎麼看出輪到我」',
+    screenTitle: '任務列表',
+    screen: `
+      <div class="tour-block" data-step="tabs" style="display:flex;gap:var(--space-2);align-items:center">
+        <span class="tour-save" style="cursor:default">需回覆 <b>2</b></span>
+        <span class="tour-save is-outline" style="cursor:default">待處理 5</span>
+        <span class="tour-save is-outline" style="cursor:default">暫停中 0</span>
+        <span class="tour-save is-outline" style="cursor:default">全部 31</span>
+      </div>
+
+      <div class="tour-block" data-step="card-wait" style="border-left:3px solid var(--warning)">
+        <div style="display:flex;align-items:center;gap:var(--space-2)">
+          <span class="tour-block-title">維修單新增備註欄位</span>
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--warning);display:inline-block"></span>
+        </div>
+        <div data-step="badges" style="margin:var(--space-2) 0">
+          <span class="tour-save" style="cursor:default">等待確認</span>
+          <span class="tour-sub" style="margin:0 0 0 var(--space-2)">輪到你回答</span>
+        </div>
+        <div data-step="stepper" class="tour-sub" style="margin:0">
+          分析 ●──● 確認 ──○ 開發 ──○ QA ──○ 部署 ──○ 測試 ──○ 審核 ──○ 完成
+        </div>
+        <div data-step="chips" style="margin-top:var(--space-2)">
+          <span class="tour-save is-outline" style="cursor:default">Odoo 工單</span>
+          <span class="tour-save is-outline" style="cursor:default">鴻久維修</span>
+          <span class="tour-save is-outline" style="cursor:default">🖥 測試機</span>
+        </div>
+      </div>
+
+      <div class="tour-block">
+        <div class="tour-block-title">銷售報表加上月份篩選</div>
+        <div class="tour-sub" style="margin:var(--space-2) 0 0">
+          <span class="tour-save is-outline" style="cursor:default">開發中</span>　AI 正在做，不用管
+        </div>
+      </div>
+
+      <div class="tour-block" data-step="detail">
+        <div class="tour-block-title">點進任務之後</div>
+        <div class="tour-block-desc">由上往下固定是這四段。</div>
+        <div class="tour-sub" style="margin:0;line-height:2">
+          ① 需求內容　→　② 對話紀錄　→　<b style="color:var(--primary)">③ 要你動手的區域</b>　→　④ 即時歷程
+        </div>
+      </div>
+
+      <div class="tour-block" data-step="pipeline">
+        <div class="tour-block-title">🚦 進行中 Pipeline</div>
+        <div class="tour-block-desc">側邊欄第三個連結。</div>
+        <div class="tour-sub" style="margin:0">
+          維修單新增備註欄位　·　開發中　·　已跑 4m 12s　　<span class="tour-save is-outline" style="cursor:default">暫停</span>
+        </div>
+      </div>
+    `,
+    steps: [
+      {
+        target: '[data-step="tabs"]',
+        title: '預設就幫你篩好了',
+        text: '一進來停在<strong>「需回覆」</strong>分頁，列出來的都是<strong>在等你的</strong>。<br><br>數字就是還有幾件事等你處理。想看全部再切「全部」。',
+        next: '下一個'
+      },
+      {
+        target: '[data-step="card-wait"]',
+        title: '黃色 ＝ 輪到你',
+        text: '<strong>左邊一條黃線加上一顆會呼吸的黃點</strong>，就是在等你。整份清單只要掃黃色就好。<br><br>這是最該記住的一個訊號。',
+        next: '下一個'
+      },
+      {
+        target: '[data-step="badges"]',
+        title: '狀態標籤',
+        text: '狀態總共三十幾種，但<strong>你只要認得會停下來等人的那幾個</strong>：等待確認、等待規格確認、待你裁決、等待審核、失敗待確認。<br><br>其餘都是 AI 在跑，看看就好。',
+        next: '下一個'
+      },
+      {
+        target: '[data-step="stepper"]',
+        title: '流程走到哪一格',
+        text: '八格從分析走到完成，實心的是走過的，空心的還沒。<br><br>不用記每一格在幹嘛，<strong>看它有沒有在動</strong>就夠了。',
+        next: '下一個'
+      },
+      {
+        target: '[data-step="detail"]',
+        title: '任務詳情的四段',
+        text: '點進任務後由上往下固定是這四段。<br><br><strong>第三段是會變的</strong>——輪到你回答問題、確認規格、或驗收的時候，該做的事就出現在那裡。其他時候那裡是留言框。',
+        next: '下一個'
+      },
+      {
+        target: '[data-step="chips"]',
+        title: '卡片上的其他標記',
+        text: '<strong>來源</strong>（從 Odoo 或客服系統來的，點了開原單）、<strong>專案</strong>（點了跳專案頁）、<strong>🖥 測試機</strong>（點了直接開測試環境，驗收時最常用）。',
+        next: '最後一個'
+      },
+      {
+        target: '[data-step="pipeline"]',
+        title: '🚦 想知道現在跑到哪',
+        text: '側邊欄的「進行中 Pipeline」列出<strong>你自己</strong>正在跑的任務，看得到目前在哪一關、已經跑多久，每三秒更新。<br><br>某張卡太久沒動時，可以在這裡按「暫停」把它停下來。',
+        warn: '只看得到也只能暫停<strong>自己的</strong>任務，不會影響別人。',
+        next: '完成這一課'
+      }
+    ]
+  },
+
+  {
+    id: 'flow',
+    name: '實際流程',
+    desc: '輪到你時做什麼，從建任務到上正式',
+    screenTitle: '一條任務的一生',
+    screen: `
+      <div class="tour-block" data-step="create">
+        <div class="tour-block-title">① 新增任務</div>
+        <div class="tour-field">
+          <label class="tour-label">專案</label>
+          <input class="tour-input" value="鴻久維修" />
+        </div>
+        <div class="tour-field">
+          <label class="tour-label">標題</label>
+          <input class="tour-input" value="維修單要能填備註" />
+        </div>
+        <div class="tour-field">
+          <label class="tour-label">內容</label>
+          <input class="tour-input" value="維修單填不了備註，師傅回來要另外用紙條交代，常常漏掉。" />
+        </div>
+      </div>
+
+      <div class="tour-block" data-step="clarify">
+        <div class="tour-block-title">② AI 反問你</div>
+        <div class="tour-block-desc">分析完覺得有不確定的地方，會停下來問。</div>
+        <div class="tour-sub" style="margin:0 0 var(--space-2)">備註要讓誰看得到？</div>
+        <div class="tour-cols">
+          <span class="tour-save is-outline" style="cursor:default">只有內部</span>
+          <span class="tour-save is-outline" style="cursor:default">客戶也看得到</span>
+          <span class="tour-save is-outline" style="cursor:default">都不合適</span>
+        </div>
+      </div>
+
+      <div class="tour-block" data-step="spec">
+        <div class="tour-block-title">③ 確認規格</div>
+        <div class="tour-block-desc">AI 把要做的事寫成規格給你過目。</div>
+        <div class="tour-sub" style="margin:0 0 var(--space-3)">在維修單加一個備註欄，僅內部可見，列印時不帶出。</div>
+        <button class="tour-save is-outline" type="button">送出意見</button>
+        <button class="tour-save" type="button">✓ 確認沒問題，開始實作</button>
+      </div>
+
+      <div class="tour-block" data-step="waiting">
+        <div class="tour-block-title">④ 開發 → QA → 部署 → 測試</div>
+        <div class="tour-block-desc">這四關不用你出手。</div>
+        <div class="tour-sub" style="margin:0">出錯的話它會自己重試，真的過不了才會停下來找你。</div>
+      </div>
+
+      <div class="tour-block" data-step="review">
+        <div class="tour-block-title">⑤ 驗收</div>
+        <div class="tour-block-desc">東西做好了，裝在測試環境等你看。</div>
+        <div class="tour-sub" style="margin:0 0 var(--space-3)">先點卡片上的 <b>🖥 測試機</b> 進去實際操作看看。</div>
+        <div class="tour-field">
+          <input class="tour-input" placeholder="不滿意的話，寫下哪裡要改" />
+        </div>
+        <button class="tour-save is-outline" type="button">確認退回，回開發依原因修正</button>
+        <button class="tour-save" type="button">✓ 審核通過，納入待上正式</button>
+      </div>
+
+      <div class="tour-block" data-step="release">
+        <div class="tour-block-title">⑥ 上正式</div>
+        <div class="tour-alert">審核通過 ≠ 已經上線。</div>
+        <div class="tour-sub" style="margin:0">要到<b>專案頁</b>按「🚀 上正式」，才會真的進到正式區。</div>
+      </div>
+
+      <div class="tour-block" data-step="stopped">
+        <div class="tour-block-title">⑦ 失敗待確認</div>
+        <div class="tour-alert">連續失敗，需要人工介入。</div>
+        <div class="tour-field">
+          <input class="tour-input" placeholder="寫下你的判斷或補充資訊" />
+        </div>
+        <button class="tour-save" type="button">↺ 送出並從中斷處繼續</button>
+      </div>
+
+      <div class="tour-block" data-step="conflict">
+        <div class="tour-block-title">⑧ 合併衝突（少見）</div>
+        <div class="tour-block-desc">同一個檔案兩邊都改了，要你決定用哪一邊。</div>
+        <div class="tour-sub" style="margin:0 0 var(--space-2)">sale_order.py — 兩邊都動了同一段</div>
+        <div class="tour-cols">
+          <span class="tour-save is-outline" style="cursor:default">用這次的</span>
+          <span class="tour-save is-outline" style="cursor:default">用原本的</span>
+          <span class="tour-save is-outline" style="cursor:default">我自己處理</span>
+        </div>
+      </div>
+    `,
+    steps: [
+      {
+        target: null,
+        title: '一條任務會經過的關卡',
+        text: '大部分時間 AI 自己跑，只有幾個路口需要你決定。<br><br>下面把這些路口<strong>全部排在一頁</strong>方便你認得它們——<strong>實際上同一時間只會出現其中一個</strong>，就在任務詳情頁的中間那一段。',
+        next: '開始'
+      },
+      {
+        target: '[data-step="create"]',
+        title: '① 用你自己的話寫',
+        text: '不用寫得像規格書。<strong>把「現在什麼情況、為什麼困擾」講清楚就好</strong>，怎麼做是 AI 的事。<br><br>寫得越具體，後面反問你的次數越少。',
+        next: '下一關'
+      },
+      {
+        target: '[data-step="clarify"]',
+        title: '② 回答 AI 的問題',
+        text: '分析完有不確定的地方，它會停下來問你，多半是選擇題。<br><br>選項都不對就用<strong>「都不合適」</strong>自己補充。反過來你也可以先問它問題再回答。',
+        next: '下一關'
+      },
+      {
+        target: '[data-step="spec"]',
+        title: '③ 看懂再按確認',
+        text: '這是動工前<strong>最後一次改方向的機會</strong>，按下去就開始寫程式了。<br><br>看不懂或覺得不對，寫在意見欄送回去，它會改完再問一次。',
+        next: '下一關'
+      },
+      {
+        target: '[data-step="waiting"]',
+        title: '④ 這段可以去忙別的',
+        text: '開發、QA、部署到測試環境、跑自動測試，四關都不用你出手。<br><br>失敗它會自己重試，真的過不了才會停下來找你（那就是第 ⑦ 關）。',
+        next: '下一關'
+      },
+      {
+        target: '[data-step="review"]',
+        title: '⑤ 一定要實際點過再核准',
+        text: '先點卡片上的 <strong>🖥 測試機</strong> 進去真的操作看看，別只看程式碼變更。<br><br>不滿意就填原因退回，它會照你寫的去修；滿意才按核准。',
+        next: '下一關'
+      },
+      {
+        target: '[data-step="release"]',
+        title: '⑥ 核准了還沒上線',
+        text: '這是最多人誤會的地方。<strong>審核通過只是「排進待上正式」</strong>，東西還在測試區。<br><br>要真的生效，得到<strong>專案頁</strong>按「🚀 上正式」，那時才會合併到正式區。',
+        warn: '一按會把該專案<strong>所有已核准的任務一起</strong>送上去，不能只挑其中幾張。',
+        next: '下一關'
+      },
+      {
+        target: '[data-step="stopped"]',
+        title: '⑦ 卡住了怎麼辦',
+        text: '連續失敗它會停下來，把卡在哪裡寫給你看。<br><br>你不用會修程式，<strong>把你知道的補充上去</strong>（例如「那個欄位其實叫別的名字」），送出後它會從中斷的地方接著跑。',
+        next: '最後一關'
+      },
+      {
+        target: '[data-step="conflict"]',
+        title: '⑧ 合併衝突（不常遇到）',
+        text: '同一個檔案，這張任務和別人都改到同一段，系統不敢自己決定。<br><br>每個檔案挑一邊即可。<strong>看不懂就先用旁邊的追問功能問清楚再選</strong>，不用硬猜。',
+        next: '完成這一課'
+      }
+    ]
+  }
 ];
