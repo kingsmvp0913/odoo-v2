@@ -106,7 +106,7 @@ function registerRoutes(app) {
       );
       if (rowCount) {
         await query(
-          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已合併回 ai-dev 分支並清理分支，正在更新文件')",
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已納入待上正式清單，正在更新文件')",
           [req.params.id]
         );
       }

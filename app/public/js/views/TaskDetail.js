@@ -386,11 +386,11 @@ window.TaskDetailView = Vue.defineComponent({
       });
     },
     async approve() {
-      if (!await confirmDialog({ title: '審核通過', message: `確定審核通過，將分支 ${this.task.git_branch || ''} 合併回主線並更新文件？`, confirmText: '確認合併' })) return;
+      if (!await confirmDialog({ title: '審核通過', message: '確定審核通過？這張任務會納入待上正式清單並更新文件；要真正在正式區生效，還要到專案頁按「🚀 上正式」。', confirmText: '確認通過' })) return;
       this.approving = true;
       try {
         await Api.post(`tasks/${this.task.id}/approve`, {});
-        showToast('已審核通過，合併回主線並更新文件', 'success');
+        showToast('已審核通過，納入待上正式並更新文件', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }
@@ -924,7 +924,7 @@ window.TaskDetailView = Vue.defineComponent({
             <template v-else-if="timelineActionMode === 'review'">
               <div class="form-section">最終人工審核</div>
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">
-                已通過 QA、測試區部署與 E2E 測試。確認後將分支 <code>{{ task.git_branch }}</code> 合併回主線、更新文件。
+                已通過 QA、測試區部署與 E2E 測試。確認後這張任務即完成驗收，會納入待上正式清單並更新文件；要真正在正式區生效，再到專案頁按「🚀 上正式」。
               </p>
               <div style="margin-bottom:var(--space-3)">
                 <button class="btn btn-secondary btn-sm" @click="toggleDiff" :disabled="diffLoading">
@@ -949,7 +949,7 @@ window.TaskDetailView = Vue.defineComponent({
                   {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
                 </button>
                 <button class="btn btn-success btn-sm" @click="approve" :disabled="approving || rejecting">
-                  {{ approving ? '處理中...' : '✓ 審核通過，合併回主線' }}
+                  {{ approving ? '處理中...' : '✓ 審核通過，納入待上正式' }}
                 </button>
               </div>
             </template>
