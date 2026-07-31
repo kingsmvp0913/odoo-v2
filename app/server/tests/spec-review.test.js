@@ -173,6 +173,40 @@ test('首輪：無 session → 不帶 --resume，且跑完存下 session', async
   expect(t.spec_session_id).toBe('sp-new');
 });
 
+// with-resume.js 的 onRetryFailed callback 可能回傳非 thenable（測試常見的 jest.fn()、
+// 或未來任何同步 callback）——helper 必須用 Promise.resolve() 包一層才能安全 .catch，
+// 否則 TypeError 逃出 withResume，讓「retry 失敗必定靜默降級成 fresh」的保證失效。
+// 這裡驗證退兩件事：① 確實降級成功（不是整個失敗變 stopped）② onRetryFailed 拿到的是真正的參數。
+test('續接輪 retry 失敗 → 降級 fresh 成功，且 onRetryFailed(logFailedUsage) 拿到真正的參數', async () => {
+  const { logFailedUsage } = require('../pipeline/token-logger');
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('spec-review')}.${promptVersion('spec-review-retry')}`;
+  const id = await insertTask('module: sale\nsummary: 目前這版');
+  await dbModule.query('UPDATE tasks SET spec_session_id=$2, spec_prompt_ver=$3 WHERE id=$1', [id, 'sp-fail', ver]);
+  await addLog(id, 'user', '繼續');
+  const task = await loadTask(id);
+  const retryErr = new Error('session 遺失');
+  logFailedUsage.mockClear();
+  runClaude.mockRejectedValueOnce(retryErr);
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: answer\nREPLY:\n好的。\n</result>',
+    usage: null, durationMs: null, sessionId: 'sp-fresh'
+  });
+
+  await runSpecReview(task, userId, undefined);
+
+  // 降級成功：狀態回到 spec_review（不是被 TypeError 打到 stopped），且確實跑了第二次（fresh）呼叫
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('spec_review');
+  expect(runClaude).toHaveBeenCalledTimes(2);
+  // 真正的引數，而不只是「有被呼叫」
+  const call = logFailedUsage.mock.calls.find(c => c[3] === retryErr);
+  expect(call).toBeDefined();
+  expect(call[0]).toEqual({ taskId: task.task_id, projectId: task.project_id });
+  expect(call[1]).toBe(userId);
+  expect(call[2]).toBe('respec');
+});
+
 test('analysis 重產規格 → 清掉 spec session（防 triage 判 respec 繞一圈後續接到舊規格的 session）', async () => {
   const { writeAnalysisYaml } = require('../pipeline/runner');
   const id = await insertTask('module: sale\nsummary: 舊');

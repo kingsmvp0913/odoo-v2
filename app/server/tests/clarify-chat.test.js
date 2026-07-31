@@ -296,6 +296,33 @@ test('續接輪：有 clarify_session_id ＋指紋相符 → 帶 --resume，prom
   expect(prompt).toContain('目前這版');       // 權威規格重送
 });
 
+// mode 每輪重算：clarify_mode 可能與 session 開場時不同，retry prompt 必須送本輪的 mode_rule，
+// 不能沿用 session 裡開場時的舊 mode——否則 AI 會誤以為自己還在舊 mode 下，
+// JS 端卻已用新 mode 的 allow 清單悄悄降級決策，AI 講的話（例如「這就開始實作」）與實際不符。
+// 刻意挑 answer_or_proceed（非 ask）：未知 mode 會降級成 ask，若拿 ask 的規則文字去斷言，
+// 不管 mode 有沒有真的重送都會通過，沒有鑑別力（testing.md 規則 18 的同款陷阱）。
+test('續接輪：本輪 mode 為 answer_or_proceed → retry prompt 帶該 mode 的規則文字', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const { MODE_RULES } = require('../pipeline/clarify-chat');
+  const ver = `${promptVersion('clarify-chat')}.${promptVersion('clarify-chat-retry')}`;
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query(
+    "UPDATE tasks SET clarify_session_id=$2, clarify_prompt_ver=$3 WHERE id=$1",
+    [task.id, 'cl-mode', ver]
+  );
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','都答完了')", [task.id]);
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: proceed\nREPLY:\n了解。\n</result>',
+    usage: {}, durationMs: 1, sessionId: 'cl-mode'
+  });
+
+  await runClarifyChat({ id: task.id }, 1, null, 'answer_or_proceed');
+
+  // ⚠ 本檔沒有 beforeEach 重置 mock，取最後一次呼叫
+  const [prompt] = runClaude.mock.calls.at(-1);
+  expect(prompt).toContain(MODE_RULES.answer_or_proceed.rule);
+});
+
 test('推進（proceed）→ 清掉 clarify session（這場對話結束了）', async () => {
   const { promptVersion } = require('../pipeline/agent-loader');
   const ver = `${promptVersion('clarify-chat')}.${promptVersion('clarify-chat-retry')}`;
