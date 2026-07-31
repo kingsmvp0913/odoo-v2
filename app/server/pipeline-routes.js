@@ -161,7 +161,8 @@ function registerRoutes(app) {
       }
       // 條件更新防雙擊：輸掉競態的請求不再重複推進
       const { rowCount } = await query(
-        "UPDATE tasks SET status = 'branch_pending', updated_at = NOW() WHERE id = $1 AND status = 'spec_review'",
+        // 離開閘門＝這場規格問答結束，清掉續接用的 session（下次進來一定是全新的一場）
+        "UPDATE tasks SET status = 'branch_pending', spec_session_id = NULL, spec_prompt_ver = NULL, updated_at = NOW() WHERE id = $1 AND status = 'spec_review'",
         [req.params.id]
       );
       if (rowCount) {

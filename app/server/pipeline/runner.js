@@ -249,13 +249,22 @@ const TRIAGE_RESUME = new Set(['reject_triage', 'resolve_triage']);
 // 「這一輪 coding」看得到；下一輪 QA 讀的是規格本體，看不到裁決就會拿同一份有歧義的規格原題
 // 再問——QA 規格歧義的無限來回正是這樣長出來的。解析不出物件就整個不寫：既有 spec 是資產，
 // 寧可不落地也不能被覆寫成殘缺內容（QA 的 QA_SPEC_LIMIT 斷路器仍會兜住迴圈）。
+// 規格重產＝這份規格與先前那場 spec_review 問答已無關，必須清掉 session：
+// triage 判 respec 會繞回 analysis 重產規格再進 spec_review，不清會續接到記著舊規格的 session。
+async function writeAnalysisYaml(taskId, spec) {
+  await query(
+    'UPDATE tasks SET analysis_yaml=$2, spec_session_id=NULL, spec_prompt_ver=NULL WHERE id=$1',
+    [taskId, yaml.dump(spec, { lineWidth: -1 })]
+  );
+}
+
 async function recordSpecDecision(taskId, analysisYaml, answer) {
   let spec;
   try { spec = yaml.load(analysisYaml || '', { schema: yaml.CORE_SCHEMA }); } catch { return; }
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return;
   const prior = Array.isArray(spec.spec_decisions) ? spec.spec_decisions : [];
   spec.spec_decisions = [...prior, `使用者裁決：${answer}`];
-  await query('UPDATE tasks SET analysis_yaml=$2 WHERE id=$1', [taskId, yaml.dump(spec, { lineWidth: -1 })]);
+  await writeAnalysisYaml(taskId, spec);
 }
 
 // clarify_answered：使用者答完規格裁決 → 帶裁決＋原 code 問題一次退回 coding（resume_status 記的關卡）。
@@ -508,4 +517,4 @@ async function runPipeline(userId, { auto = false } = {}) {
 
 // RUNNABLE_STATUSES 一併匯出：stations.test.js 用它斷言「每個合法回程站都真的有 handler 跑得動」。
 // 不匯出就只能在測試裡抄一份清單，日後新增站時那份抄本不會更新＝防線失效。
-module.exports = { runPipeline, abortTask, getInflightTaskIds, getInflightInfo, whenIdle, RUNNABLE_STATUSES };
+module.exports = { runPipeline, abortTask, getInflightTaskIds, getInflightInfo, whenIdle, RUNNABLE_STATUSES, writeAnalysisYaml };

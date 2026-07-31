@@ -172,3 +172,15 @@ test('首輪：無 session → 不帶 --resume，且跑完存下 session', async
   const { rows: [t] } = await dbModule.query('SELECT spec_session_id FROM tasks WHERE id=$1', [id]);
   expect(t.spec_session_id).toBe('sp-new');
 });
+
+test('analysis 重產規格 → 清掉 spec session（防 triage 判 respec 繞一圈後續接到舊規格的 session）', async () => {
+  const { writeAnalysisYaml } = require('../pipeline/runner');
+  const id = await insertTask('module: sale\nsummary: 舊');
+  await dbModule.query("UPDATE tasks SET spec_session_id='sp-stale', spec_prompt_ver='F.R' WHERE id=$1", [id]);
+
+  await writeAnalysisYaml(id, { module: 'sale', summary: '重產的新規格' });
+
+  const { rows: [t] } = await dbModule.query('SELECT spec_session_id, spec_prompt_ver FROM tasks WHERE id=$1', [id]);
+  expect(t.spec_session_id).toBeNull();
+  expect(t.spec_prompt_ver).toBeNull();
+});
