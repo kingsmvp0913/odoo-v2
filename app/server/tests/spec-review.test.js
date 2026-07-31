@@ -218,3 +218,19 @@ test('analysis 重產規格 → 清掉 spec session（防 triage 判 respec 繞�
   expect(t.spec_session_id).toBeNull();
   expect(t.spec_prompt_ver).toBeNull();
 });
+
+test('analysis 重產規格 → 一併清掉 clarify session（舊 clarify 對話問的是已作廢的題目）', async () => {
+  const { writeAnalysisYaml } = require('../pipeline/runner');
+  const id = await insertTask('module: sale\nsummary: 舊');
+  await dbModule.query(
+    "UPDATE tasks SET clarify_session_id='cl-stale', clarify_prompt_ver='F.R' WHERE id=$1", [id]
+  );
+
+  await writeAnalysisYaml(id, { module: 'sale', summary: '重產的新規格' });
+
+  const { rows: [t] } = await dbModule.query(
+    'SELECT clarify_session_id, clarify_prompt_ver FROM tasks WHERE id=$1', [id]
+  );
+  expect(t.clarify_session_id).toBeNull();
+  expect(t.clarify_prompt_ver).toBeNull();
+});

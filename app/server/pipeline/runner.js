@@ -250,12 +250,16 @@ const TRIAGE_RESUME = new Set(['reject_triage', 'resolve_triage']);
 // 再問——QA 規格歧義的無限來回正是這樣長出來的。解析不出物件就整個不寫：既有 spec 是資產，
 // 寧可不落地也不能被覆寫成殘缺內容（QA 的 QA_SPEC_LIMIT 斷路器仍會兜住迴圈）。
 // 規格重產＝這份規格與先前那場 spec_review 問答已無關，必須清掉 session：不清會讓下一場
-// spec_review 對話續接到記著舊規格的 session。此函式是真正落地的那一刻（task-agent.js 分析關
-// 寫出新規格、recordSpecDecision 追加裁決都經此），故為主防線；reject-triage.js 的 goto 對
-// respec 路徑另外清一次同樣欄位，只是進 analysis 之前的備援，不是真正的規格重產發生點。
+// spec_review 對話續接到記著舊規格的 session。同理，clarify 對話問的是舊規格 clarification_channel
+// 裡的題目，規格一重產舊題目就跟著作廢，clarify_session_id 也必須一併清掉——否則 respec 繞一圈回到
+// confirm_pending 時，withResume 只認 prompt 指紋，會續接到談論已被取代舊規格的 clarify 對話。
+// 此函式是真正落地的那一刻（task-agent.js 分析關寫出新規格、recordSpecDecision 追加裁決都經此），
+// 故為主防線；reject-triage.js 的 goto 對 respec 路徑另外清一次同樣欄位，只是進 analysis 之前的
+// 備援，不是真正的規格重產發生點。
 async function writeAnalysisYaml(taskId, spec) {
   await query(
-    'UPDATE tasks SET analysis_yaml=$2, spec_session_id=NULL, spec_prompt_ver=NULL WHERE id=$1',
+    'UPDATE tasks SET analysis_yaml=$2, spec_session_id=NULL, spec_prompt_ver=NULL, '
+    + 'clarify_session_id=NULL, clarify_prompt_ver=NULL WHERE id=$1',
     [taskId, yaml.dump(spec, { lineWidth: -1 })]
   );
 }
