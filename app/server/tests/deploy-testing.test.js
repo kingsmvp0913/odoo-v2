@@ -87,6 +87,57 @@ test('extractOdooError：traceback → 帶出結尾例外行（原因）放最�
   expect(out).not.toContain('banner');             // 開頭 banner/header 不塞給人
 });
 
+// 意圖：Python 的 chained exception（`raise X from Y`）真因在**第一段**，結尾那段只是包裝。
+// Odoo 載入 data 檔時任何例外都會被包成 ParseError，所以這是 deploy 失敗的高頻形態。
+// 舊版一律取「最後一個例外行」→ 只拿到 ParseError 與被截斷的 XML，肇事的 .py 檔與行號完全消失，
+// 使用者與 coding agent 都只能去翻 log 檔（task 171 實例：真因在 alnas_xlsx，卻被報成 idx_hj 的 XML 有問題）。
+test('extractOdooError：chained exception → 根因（第一段）與肇事檔案行號必須帶出，不能只有外層包裝', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Traceback (most recent call last):',
+    '  File "/usr/lib/python3/dist-packages/odoo/tools/convert.py", line 610, in _tag_root',
+    '    f(rec)',
+    '  File "/mnt/extra-addons/repo/alnas_xlsx/models/ir_actions_report.py", line 30, in _check_report_type',
+    '    and not rec.report_xlsx_jinja_template_name.endswith(".xlsx")',
+    "AttributeError: 'bool' object has no attribute 'endswith'",
+    '',
+    'The above exception was the direct cause of the following exception:',
+    '',
+    'Traceback (most recent call last):',
+    '  File "/usr/lib/python3/dist-packages/odoo/service/server.py", line 1392, in preload_registries',
+    '    registry = Registry.new(dbname, update_module=update_module)',
+    'odoo.tools.convert.ParseError: while parsing /mnt/extra-addons/repo/idx_hj/reports/idx_maintenance_report.xml:15, somewhere inside',
+    '<record id="action_report_repair_maintenance" model="ir.actions.report">',
+    '            <field name="name">研發報價單</field>'
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out).toContain('AttributeError');                              // 根因例外
+  expect(out).toContain('alnas_xlsx/models/ir_actions_report.py');      // 肇事檔案——舊版完全看不到
+  expect(out).toContain('30');                                          // 肇事行號
+  expect(out).toContain('ParseError');                                  // 外層包裝仍保留（知道是載入誰時炸的）
+  expect(out).toContain('idx_maintenance_report.xml');                  // 觸發點
+});
+
+// 意圖：`During handling of the above exception` 是另一種串接寫法（隱式鏈），同樣要帶出根因。
+test('extractOdooError：During handling 隱式鏈 → 同樣帶出根因', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Traceback (most recent call last):',
+    '  File "/mnt/extra-addons/repo/idx_hj/models/x.py", line 12, in _compute',
+    'KeyError: sale_employee_id',
+    '',
+    'During handling of the above exception, another exception occurred:',
+    '',
+    'Traceback (most recent call last):',
+    '  File ".../odoo/models.py", line 4918, in _create',
+    'odoo.exceptions.ValidationError: 欄位設定有誤'
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out).toContain('KeyError');
+  expect(out).toContain('idx_hj/models/x.py');
+  expect(out).toContain('ValidationError');
+});
+
 beforeEach(async () => {
   envAgent.upgradeModules.mockReset();
   envAgent.installModuleRequirements.mockReset().mockResolvedValue('');

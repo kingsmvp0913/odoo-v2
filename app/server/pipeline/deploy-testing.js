@@ -14,17 +14,54 @@ const DEPLOY_LIMIT = 3;
 // （如 odoo.exceptions.UserError: ...），開頭是無用的呼叫堆疊（server.py→decorator.py…）。
 // 舊版從 traceback 開頭切 → blocker 只顯示呼叫堆疊、真正原因被截掉，使用者被迫翻 log。
 // 改為：從尾端找最後一個例外行，連同其說明帶到最前，一眼看到原因（如「external dependency ... xlsxtpl」）。
+// Python 例外行：以「例外類別名（結尾 Error/Exception/Warning）: 訊息」起頭，且不含日誌時間戳前綴。
+const EXC_LINE = /^[\w.]*(Error|Exception|Warning|Interrupt)\b.*:/;
+// chained exception 的兩種串接標記（`raise X from Y` 與巢狀 except）——真因在標記「之前」那一段。
+const CHAIN_MARK = /^(?:The above exception was the direct cause of the following exception|During handling of the above exception, another exception occurred):\s*$/;
+
+// 從尾往上找例外行的 index（-1＝沒有）
+function findExcIdx(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) if (EXC_LINE.test(lines[i].trim())) return i;
+  return -1;
+}
+
+// 例外行上方最近的 traceback frame＝實際肇事的檔案與行號（真因裡最有價值的一行）
+function blameFrame(lines, beforeIdx) {
+  for (let i = beforeIdx - 1; i >= 0; i--) {
+    const m = lines[i].match(/^\s*File "([^"]+)", line (\d+)(?:, in (.+))?$/);
+    if (m) return `  ↳ ${m[1]}:${m[2]}${m[3] ? ` in ${m[3].trim()}` : ''}`;
+  }
+  return null;
+}
+
 function extractOdooError(log) {
   const s = String(log == null ? '' : log).trim();
   if (!s) return '(log 為空)';
   const lines = s.split(/\r?\n/);
-  // Python 例外行：以「例外類別名（結尾 Error/Exception/Warning）: 訊息」起頭，且不含日誌時間戳前綴。
-  // 從尾往上找最後一個 → 那是最外層、對人最有意義的原因。
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^[\w.]*(Error|Exception|Warning|Interrupt)\b.*:/.test(lines[i].trim())) {
-      return lines.slice(i).join('\n').trim().slice(0, 800);
+
+  // chained exception：真因在第一段，結尾那段只是包裝。Odoo 載入 data 檔時會把任何例外都包成
+  // ParseError，所以這是 deploy 失敗的高頻形態；只取結尾＝肇事的 .py 檔與行號整個消失，
+  // 人與 coding agent 都只剩「某個 XML 有問題」的錯誤印象（task 171：真因在 alnas_xlsx，
+  // 卻被報成 idx_hj 的報表 XML 壞掉，coding 被導去改根本沒問題的檔）。
+  // 根因放最前是硬需求——blocker_content 只截前 500 字。
+  const segs = [];
+  let segStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (CHAIN_MARK.test(lines[i].trim())) { segs.push(lines.slice(segStart, i)); segStart = i + 1; }
+  }
+  if (segs.length) {
+    const rootIdx = findExcIdx(segs[0]);
+    const outerIdx = findExcIdx(lines);
+    if (rootIdx >= 0 && outerIdx >= 0) {
+      const root = [segs[0][rootIdx].trim(), blameFrame(segs[0], rootIdx)].filter(Boolean).join('\n');
+      const outer = lines.slice(outerIdx).join('\n').trim().slice(0, 600);
+      return `${root}\n↓ 被包裝成：\n${outer}`;
     }
   }
+
+  // 單層：從尾往上找最後一個例外行 → 那是最外層、對人最有意義的原因。
+  const idx = findExcIdx(lines);
+  if (idx >= 0) return lines.slice(idx).join('\n').trim().slice(0, 800);
   // 無標準例外行 → 退回最後一個 ERROR/CRITICAL 行起
   for (let i = lines.length - 1; i >= 0; i--) {
     if (/ERROR|CRITICAL/.test(lines[i])) return lines.slice(i).join('\n').trim().slice(0, 800);
