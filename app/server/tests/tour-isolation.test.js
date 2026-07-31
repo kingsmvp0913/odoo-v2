@@ -42,3 +42,34 @@ describe('tour js 不打 API', () => {
     expect(src).not.toMatch(/\bApi\.(get|post|patch|delete|postForm|getBlob)\s*\(/);
   });
 });
+
+describe('教程接線', () => {
+  const html = () => read('index.html');
+  const appJs = () => read('js/app.js');
+
+  // base.js 必須恆為第一支：frontend-base-path.test.js 也守這條，
+  // 這裡再寫一次是因為本 task 就是在動 script 清單，容易插錯位置。
+  test('tour 的 script 都排在 base.js 之後、app.js 之前', () => {
+    const src = html();
+    const at = (f) => src.indexOf(f);
+    expect(at('js/base.js')).toBeLessThan(at('js/tour-courses.js'));
+    expect(at('js/tour-courses.js')).toBeLessThan(at('js/tour.js'));
+    expect(at('js/tour.js')).toBeLessThan(at('js/app.js'));
+  });
+
+  test('index.html 載入 tour.css', () => {
+    expect(html()).toContain('href="css/tour.css"');
+  });
+
+  // 使用者明確指定按鈕位置在登出左邊；靠 DOM 先後順序守住。
+  test('入口按鈕排在「登出」之前', () => {
+    const src = appJs();
+    expect(src.indexOf('tour-launch')).toBeLessThan(src.indexOf('>登出<'));
+  });
+
+  test('TourHost 有被註冊且掛進 template', () => {
+    const src = appJs();
+    expect(src).toContain("app.component('TourHost', window.TourHost)");
+    expect(src).toContain('<tour-host />');
+  });
+});

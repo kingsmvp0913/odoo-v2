@@ -115,7 +115,8 @@ const App = defineComponent({
     usageUpdatedLabel() {
       const iso = this.claudeUsage && this.claudeUsage.updated_at;
       return iso ? this.fmtReset(iso) : '';
-    }
+    },
+    tourRemaining() { return window.TourManager ? TourManager.remainingCount() : 0; },
   },
   async mounted() {
     this._onThemeChange = e => { this.isDark = e.detail === 'dark'; };
@@ -135,7 +136,8 @@ const App = defineComponent({
       return new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     },
     toggleTheme() { ThemeManager.toggle(); },
-    logout() { Api.clearToken(); window.UserStore.role = ''; SocketManager.disconnectSocket(); this.$router.push('/login'); }
+    logout() { Api.clearToken(); window.UserStore.role = ''; SocketManager.disconnectSocket(); this.$router.push('/login'); },
+    openTour() { TourManager.open(); }
   },
   template: `
     <template v-if="!isLoggedIn || $route.path === '/login'">
@@ -188,7 +190,12 @@ const App = defineComponent({
                 <div v-if="bar.reset" class="usage-reset">重置 {{ bar.reset }}</div>
               </div>
             </div>
-            <a @click="logout" style="cursor:pointer">登出</a>
+            <div style="display:flex;align-items:center;gap:var(--space-3)">
+              <button class="tour-launch" type="button" @click="openTour" title="開啟新手教程">
+                🎓 新手教程<span v-if="tourRemaining" class="tour-launch-badge">{{ tourRemaining }}</span>
+              </button>
+              <a @click="logout" style="cursor:pointer">登出</a>
+            </div>
           </div>
         </aside>
         <div class="main">
@@ -200,6 +207,7 @@ const App = defineComponent({
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}</div>
     </div>
     <confirm-dialog-host />
+    <tour-host />
   `
 });
 
@@ -207,5 +215,6 @@ const app = createApp(App);
 app.component('ConfirmDialogHost', window.ConfirmDialogHost);
 app.component('Skeleton', window.Skeleton);
 app.component('ReleaseModal', window.ReleaseModal);
+app.component('TourHost', window.TourHost);
 app.use(router);
 app.mount('#app');

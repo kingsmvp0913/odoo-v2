@@ -158,7 +158,7 @@
   margin-right: auto; font-size: var(--fs-sm); color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
-.tour-bubble.is-center > .tour-count { display: none; }
+.tour-bubble.is-center .tour-count { display: none; }
 .tour-btn {
   font: inherit; font-size: var(--fs-base); font-weight: var(--fw-medium); cursor: pointer;
   padding: var(--space-2) var(--space-4); border-radius: var(--radius-sm);
