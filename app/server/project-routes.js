@@ -258,6 +258,39 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 對應設定不掛 requireAdmin：一般使用者本來就能建專案／加 repo／建環境，
+  // 唯獨這一步被擋會讓專案永遠收不到任務。刻意獨立成端點而非放寬既有 PATCH，
+  // 避免 folder_name／e2e_disabled 這些高風險欄位跟著開放。
+  app.patch('/api/projects/:id/mapping', verifyToken, async (req, res) => {
+    try {
+      const { odoo_project_name, service_respondent_name } = req.body;
+      const conflicts = [];
+      if ('odoo_project_name' in req.body) {
+        conflicts.push(...await findMappingConflicts('odoo_project_name', odoo_project_name, req.params.id));
+      }
+      if ('service_respondent_name' in req.body) {
+        conflicts.push(...await findMappingConflicts('service_respondent_name', service_respondent_name, req.params.id));
+      }
+      if (conflicts.length) {
+        const msg = conflicts.map(c => `「${c.name}」已被專案「${c.project}」使用`).join('；');
+        return res.status(409).json({ error: `來源對應名稱衝突：${msg}` });
+      }
+      const sets = [];
+      const params = [req.params.id];
+      const setDirect = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+      if ('odoo_project_name' in req.body) setDirect('odoo_project_name', odoo_project_name || null);
+      if ('service_respondent_name' in req.body) setDirect('service_respondent_name', service_respondent_name || null);
+      if (!sets.length) return res.status(400).json({ error: '未提供任何對應欄位' });
+      sets.push('updated_at = NOW()');
+      const { rows } = await query(
+        `UPDATE projects SET ${sets.join(', ')} WHERE id = $1 RETURNING ${PROJECT_PUBLIC_COLS}`,
+        params
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      res.json(rows[0]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name, e2e_disabled } = req.body;

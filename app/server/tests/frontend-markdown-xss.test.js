@@ -151,6 +151,15 @@ describe('v-html 綁定白名單', () => {
   const VETTED = new Set([
     'renderedContent',      // WikiView：走 renderMarkdown，見本檔上方行為測試
     'ansiToHtml(ev.content)', // TaskDetail：函式內自行 escape 後才組 HTML（TaskDetail.js 的 esc()）
+    // tour.js：course.screen／step.text／step.warn 三者的字串來源全部是
+    // tour-courses.js 裡硬編的靜態字面值；教程刻意不打任何 API（tour-isolation.test.js
+    // 守「不得出現 fetch/Api. 呼叫」），進度只存 localStorage，沒有 DB 資料、
+    // API 回應或使用者輸入會流進這三個綁定。
+    // ⚠️ 日後若有人把動態資料（API 回應、DB 內容、使用者輸入）接進
+    // screen／text／warn，這三筆白名單就失效了，必須改走跳脫。
+    'course.screen',        // tour.js：見上方共同理由
+    'step.text',            // tour.js：見上方共同理由
+    'step.warn',            // tour.js：見上方共同理由
   ]);
 
   const found = [];

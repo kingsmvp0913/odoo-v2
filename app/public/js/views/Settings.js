@@ -24,6 +24,7 @@ window.SettingsView = Vue.defineComponent({
     };
   },
   computed: {
+    patLink() { return 'https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform'; },
     pwValidation() {
       if (!this.pw.current) return '請輸入目前密碼';
       if (this.pw.next.length < 8) return '新密碼至少 8 個字元';
@@ -255,9 +256,21 @@ window.SettingsView = Vue.defineComponent({
             <div class="field-item" style="max-width:420px">
               <input type="password" v-model="githubPat.input" placeholder="貼上 GitHub Personal Access Token" class="field-input" />
             </div>
-            <p style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:var(--space-2)">
-              需對目標 org repo 有 read/write 權限；若 org 開啟 SAML SSO，建立後請在 GitHub「Authorize」此 token。
-            </p>
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:var(--fs-sm);line-height:1.8;margin-top:var(--space-2)">
+              <b>如何取得 PAT：</b>
+              <ol style="margin:6px 0 0 18px;padding:0">
+                <li>GitHub → 右上頭像 → <b>Settings</b> → 左側最底 <b>Developer settings</b></li>
+                <li><b>Personal access tokens → Tokens (classic) → Generate new token (classic)</b></li>
+                <li><b>Scopes</b> 勾 <code>repo</code>；<b>Expiration</b> 建議 90 天以上</li>
+                <li>按 <b>Generate token</b>，複製那串 <code>ghp_...</code>（<b>只會顯示一次</b>）</li>
+              </ol>
+              <div style="margin-top:8px">
+                <a :href="patLink" target="_blank" rel="noopener" style="color:var(--primary);font-weight:var(--fw-semibold)">↗ 開啟 GitHub 建立權杖頁（已預帶 repo 權限與名稱）</a>
+              </div>
+              <div style="margin-top:8px;color:var(--text-muted)">
+                需對目標 org repo 有 read/write 權限；若 org 開啟 SAML SSO，建立後請在 GitHub「Authorize」此 token。
+              </div>
+            </div>
           </div>
           <div class="setting-block-footer">
             <button class="btn btn-primary btn-sm" @click="saveGithubPat" :disabled="githubPat.saving">

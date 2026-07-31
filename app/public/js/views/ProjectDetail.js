@@ -211,7 +211,7 @@ window.ProjectDetailView = Vue.defineComponent({
           odoo_project_name:       this.editOdooProjectName      || null,
           service_respondent_name: this.editServiceRespondentName || null
         };
-        await Api.patch(`projects/${this.project.id}`, payload);
+        await Api.patch(`projects/${this.project.id}/mapping`, payload);
         showToast('已儲存', 'success');
         await this.load();
       } catch (err) { showToast(err.message, 'error'); }
