@@ -10,8 +10,7 @@
 //   placement    說明框方位偏好；塞不下時引擎會自己換邊
 //   interactive  允許使用者真的點光圈裡的東西（預設擋住，避免在示範資料上打真 API）
 //   warn         補充提醒，會渲染成說明框底部的提示區塊
-//
-// 課程層級的 adminOnly：那幾頁的路由本來就有 requiresAdmin，非管理員連選單都不該看到。
+//   adminOnly    課程走到的路由有 requiresAdmin（報表、管理員設定）→ 非管理員連選單都不該看到
 window.TOUR_COURSES = [
   {
     id: 'setup',
@@ -171,7 +170,7 @@ window.TOUR_COURSES = [
         placement: 'left',
         title: '它會自己去查，不會叫你回去看',
         text: '回答之前它會依問題性質自己挑來源：<strong>Wiki、專案程式碼、測試區 log、正式區資料庫</strong>。<br><br>所以「是不是我權限不夠？」這種問題它查得出來，不用你先自己判斷。',
-        warn: '要它查得到正式區的資料，管理員得先設好那個專案的資料庫連線——這在「資料庫查詢」那一課。'
+        warn: '要它查得到正式區的資料，那個專案得先設好資料庫連線（專案頁的「資料庫查詢」）——「資料庫查詢」那一課會帶你設。'
       },
       {
         route: '/projects/demo/chat/demo',
@@ -328,15 +327,14 @@ window.TOUR_COURSES = [
 
   {
     id: 'db',
-    name: '資料庫查詢（管理員）',
+    name: '資料庫查詢',
     desc: 'VPN、連線設定與唯讀查詢',
-    adminOnly: true,
     steps: [
       {
         route: '/projects/demo/db',
         target: '[data-tour="db-conns"]',
         title: '這一頁設不設，差別很大',
-        text: '這裡登記的是<strong>正式區資料庫的唯讀連線</strong>。設好之後有兩個用處：<br><br>① 你自己可以在下面直接下 SQL 查正式區資料，不用去麻煩 MIS。<br>② <strong>更重要的是 — Chat 和客服分診的 AI 會用它去查正式區</strong>。沒設，AI 遇到「這張單的金額為什麼是空的」就只能回你「我查不到資料」。',
+        text: '這裡登記的是<strong>正式區資料庫的唯讀連線</strong>，每個人都能設、也都能用。設好之後有兩個用處：<br><br>① 你自己可以在下面直接下 SQL 查正式區資料，不用去麻煩 MIS。<br>② <strong>更重要的是 — Chat 和客服分診的 AI 會用它去查正式區</strong>。沒設，AI 遇到「這張單的金額為什麼是空的」就只能回你「我查不到資料」。',
         warn: '一個專案可以登記多組連線（正式、備援、不同客戶各一組）。'
       },
       {

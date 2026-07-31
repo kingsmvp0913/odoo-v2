@@ -151,7 +151,7 @@ window.ProjectListView = Vue.defineComponent({
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" @click.stop>
               <button class="btn btn-outline btn-sm" data-tour="proj-release" @click="releaseId = p.id" :disabled="!p.repo_count"
                 title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
-              <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
+              <button class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
               <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
                 <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unread(p.id) }}</span>

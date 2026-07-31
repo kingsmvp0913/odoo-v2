@@ -252,7 +252,7 @@ window.ProjectDetailView = Vue.defineComponent({
           <button class="btn btn-outline btn-sm" @click="showReleaseModal = true"
             :disabled="!repos.some(r => r.clone_status === 'done')"
             title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
-          <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
+          <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
           <button class="btn btn-outline btn-sm" @click="goWiki">📖 Wiki</button>
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
             <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unreadCount() }}</span>

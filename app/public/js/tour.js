@@ -276,8 +276,9 @@
       }
     },
     template: `
+      <!-- 遮罩上點一下就離開（比照 driver.js）：光圈本身與說明框不在遮罩內，點它們不會誤關 -->
       <div v-if="state.open" class="tour-layer" ref="layer">
-        <div v-for="(m, i) in masks" :key="i" class="tour-mask" :style="m"></div>
+        <div v-for="(m, i) in masks" :key="i" class="tour-mask" :style="m" @click="quit"></div>
         <div v-if="blockHole && box" class="tour-mask tour-mask-hole" :style="{
           top: box.top + 'px', left: box.left + 'px', width: box.width + 'px', height: box.height + 'px' }"></div>
         <div v-if="box" class="tour-ring" :style="{

@@ -17,14 +17,10 @@ function validateIdentifiers(b) {
   }
 }
 
-// 主題 E：DB 連線管理與對正式庫查詢限管理員（一般 user 不該全權直達正式 PG）
-async function requireAdmin(req, res, next) {
-  try {
-    const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-    if (!rows.length || rows[0].role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-    next();
-  } catch (err) { res.status(500).json({ error: err.message }); }
-}
+// DB 連線管理與對正式庫查詢開放給所有登入者（原本限管理員）。
+// 理由是這組連線的主要受益者是一般使用者：Chat 與客服分診的 agent 要靠它查正式區資料，
+// 連線沒設，最先撞牆的是不能設定的那群人。與本 repo 其餘 project 端點的授權層級一致
+// （皆只有 verifyToken，專案共享是既有設計）。查詢端本身仍只放行 SELECT。
 
 // /ai/* 的守衛在 lib/ai-token.js：來源 IP ＋ 通行碼兩道（見該檔說明為何不能只靠前者）。
 
@@ -52,7 +48,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/db-connections', verifyToken, requireAdmin, async (req, res) => {
+  app.post('/api/projects/:id/db-connections', verifyToken, async (req, res) => {
     try {
       const b = req.body || {};
       const mode = b.connect_mode || 'docker';
@@ -93,7 +89,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.put('/api/projects/:id/db-connections/:cid', verifyToken, requireAdmin, async (req, res) => {
+  app.put('/api/projects/:id/db-connections/:cid', verifyToken, async (req, res) => {
     try {
       const b = req.body || {};
       validateIdentifiers(b);
@@ -154,7 +150,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.delete('/api/projects/:id/db-connections/:cid', verifyToken, requireAdmin, async (req, res) => {
+  app.delete('/api/projects/:id/db-connections/:cid', verifyToken, async (req, res) => {
     try {
       const { rows: [existing] } = await query('SELECT id FROM db_connections WHERE id=$1 AND project_id=$2', [req.params.cid, req.params.id]);
       if (!existing) return res.status(404).json({ error: 'Not found' });
@@ -176,7 +172,7 @@ function registerRoutes(app) {
   });
 
   // 留空＝不變（比照連線表單既有慣例）：使用者只改帳號時不該把 .ovpn 或密碼清掉。
-  app.put('/api/projects/:id/vpn', verifyToken, requireAdmin, async (req, res) => {
+  app.put('/api/projects/:id/vpn', verifyToken, async (req, res) => {
     try {
       const b = req.body || {};
       const set = [];
@@ -208,7 +204,7 @@ function registerRoutes(app) {
 
   // 連線測試：以表單值直接試連（跑 SELECT 1），與正式查詢走同一條 runSelect 路徑。
   // 密碼欄留空且帶 id → 回填該連線已存密碼（比照「留空＝不變」）。
-  app.post('/api/projects/:id/db-connections/test', verifyToken, requireAdmin, async (req, res) => {
+  app.post('/api/projects/:id/db-connections/test', verifyToken, async (req, res) => {
     try {
       const b = req.body || {};
       const conn = {
@@ -245,7 +241,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/db-connections/:cid/query', verifyToken, requireAdmin, async (req, res) => {
+  app.post('/api/projects/:id/db-connections/:cid/query', verifyToken, async (req, res) => {
     try {
       const conn = await loadDecryptedConn(req.params.cid, req.params.id);
       if (!conn) return res.status(404).json({ error: 'Not found' });

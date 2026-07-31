@@ -77,10 +77,11 @@ describe('data-tour 錨點與課程定義對得上', () => {
   });
 });
 
-// 報表／管理員設定／資料庫查詢的路由都有 requiresAdmin，教程帶一般使用者過去只會被導回首頁。
+// 報表與管理員設定的路由有 requiresAdmin，教程帶一般使用者過去只會被導回首頁。
+// （資料庫查詢已開放給所有登入者，故不在此清單內。）
 describe('管理員限定課程不對一般使用者出現', () => {
   const courses = read('js/tour-courses.js');
-  const ADMIN_ROUTES = ['/token-report', '/admin', '/projects/demo/db'];
+  const ADMIN_ROUTES = ['/token-report', '/admin'];
 
   test('引擎依 UserStore.role 過濾 adminOnly', () => {
     const src = read('js/tour.js');
