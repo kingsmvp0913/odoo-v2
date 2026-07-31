@@ -135,6 +135,10 @@
       quit() { close(); },
       isDone(id) { void this.state.doneVersion; return doneCourses().includes(id); },
 
+      // 點遮罩離開只給課程選單用。課程進行中不關：那時遮罩佔滿整個畫面，
+      // 讀到一半想把說明框推開而點一下背景是很自然的動作，關掉會讓人得從頭再點一次。
+      onMaskClick() { if (!this.course) this.quit(); },
+
       // 教程收掉時人可能還停在示範頁（/task/demo），示範資料一撤那頁會變成 404，先帶回任務列表
       leaveDemo() {
         const demo = window.TourDemo;
@@ -276,9 +280,8 @@
       }
     },
     template: `
-      <!-- 遮罩上點一下就離開（比照 driver.js）：光圈本身與說明框不在遮罩內，點它們不會誤關 -->
-      <div v-if="state.open" class="tour-layer" ref="layer">
-        <div v-for="(m, i) in masks" :key="i" class="tour-mask" :style="m" @click="quit"></div>
+      <div v-if="state.open" class="tour-layer" :class="{ 'is-menu': !course }" ref="layer">
+        <div v-for="(m, i) in masks" :key="i" class="tour-mask" :style="m" @click="onMaskClick"></div>
         <div v-if="blockHole && box" class="tour-mask tour-mask-hole" :style="{
           top: box.top + 'px', left: box.left + 'px', width: box.width + 'px', height: box.height + 'px' }"></div>
         <div v-if="box" class="tour-ring" :style="{
