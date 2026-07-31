@@ -17,8 +17,10 @@ async function enterClarifyGate(taskId, userId,
     [taskId, `[需要你裁決]\n${qList.join('\n')}`]
   );
   const feedback = carryFeedback != null ? carryFeedback : (codeFeedback ? `[QA 未通過]\n${codeFeedback}` : null);
+  // 進閘門＝開一場全新對話：清 clarify_session_id／clarify_prompt_ver，理由與規格側 writeAnalysisYaml
+  // 對稱（runner.js）——這是本閘門唯一的進入點，殘留的舊 session 會讓下一場問答續接到已無關的對話。
   await query(
-    "UPDATE tasks SET status='clarify_pending', resume_status=$3, retry_feedback=$2, updated_at=NOW() WHERE id=$1 AND status=$4",
+    "UPDATE tasks SET status='clarify_pending', resume_status=$3, retry_feedback=$2, clarify_session_id=NULL, clarify_prompt_ver=NULL, updated_at=NOW() WHERE id=$1 AND status=$4",
     [taskId, feedback, resumeStatus, fromStatus]
   );
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'clarify_pending' });
