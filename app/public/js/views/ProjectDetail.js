@@ -67,7 +67,10 @@ window.ProjectDetailView = Vue.defineComponent({
     async load() {
       this.loading = true;
       try {
-        const data = await Api.get(`projects/${this.$route.params.id}`);
+        // 新手教程的示範專案（/projects/demo）：資料來自 tour-demo.js，不打 API
+        const data = window.TourDemo && window.TourDemo.isProject(this.$route.params.id)
+          ? window.TourDemo.project()
+          : await Api.get(`projects/${this.$route.params.id}`);
         this.project = data;
         UnreadStore.byProject[String(this.project.id)] = this.project.unread_count || 0;
         this.repos = data.repos || [];
@@ -125,6 +128,7 @@ window.ProjectDetailView = Vue.defineComponent({
     goWiki() { this.$router.push(`/projects/${this.$route.params.id}/wiki`); },
     goChat() { this.$router.push(`/projects/${this.$route.params.id}/chat`); },
     async loadEnv() {
+      if (window.TourDemo && window.TourDemo.isProject(this.$route.params.id)) { this.env = window.TourDemo.env(); return; }
       try {
         this.env = await Api.get(`projects/${this.$route.params.id}/env`);
       } catch {
@@ -243,7 +247,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:var(--space-3)">← 返回</button>
         <h1>{{ project.name }}</h1>
         <span style="font-size:var(--fs-base);color:var(--text-muted);margin-left:var(--space-3)">Odoo {{ project.odoo_version }}</span>
-        <div style="display:flex;gap:6px;margin-left:var(--space-4)">
+        <div data-tour="pd-tools" style="display:flex;gap:6px;margin-left:var(--space-4)">
           <button class="btn btn-outline btn-sm" style="background:var(--primary);color:#fff">設定</button>
           <button class="btn btn-outline btn-sm" @click="showReleaseModal = true"
             :disabled="!repos.some(r => r.clone_status === 'done')"
@@ -259,6 +263,8 @@ window.ProjectDetailView = Vue.defineComponent({
       <div class="content">
         <div v-if="project.description" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">{{ project.description }}</div>
 
+        <!-- 教程錨點：整個 repo 區塊要一起被打光，故只加一層 wrapper，內層不重排縮排 -->
+        <div data-tour="pd-repos">
         <div class="form-section">Git Repositories</div>
         <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">尚未綁定任何 repo</div>
         <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-2)">
@@ -296,8 +302,9 @@ window.ProjectDetailView = Vue.defineComponent({
           </label>
         </div>
         <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
+        </div>
 
-        <div style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div data-tour="pd-mapping" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">同步來源對應</h3>
           <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">一行一個名稱，可綁定多個來源。</div>
           <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
@@ -341,7 +348,7 @@ window.ProjectDetailView = Vue.defineComponent({
           </div>
         </div>
 
-        <div v-if="env" style="margin-top:var(--space-6);padding-top:var(--space-4);border-top:1px solid var(--border)">
+        <div v-if="env" data-tour="pd-env" style="margin-top:var(--space-6);padding-top:var(--space-4);border-top:1px solid var(--border)">
           <div class="form-section">Odoo 測試環境</div>
           <div style="font-size:var(--fs-base);margin-bottom:10px;display:flex;align-items:center;gap:var(--space-2)">
             <span>狀態：</span>

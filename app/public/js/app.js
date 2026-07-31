@@ -155,22 +155,22 @@ const App = defineComponent({
           </div>
           <nav>
             <router-link to="/" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">
+              <a data-tour="nav-tasks" :class="{ active: isActive }" @click="navigate">
                 📋 任務列表
                 <span v-if="needsActionCount > 0" class="badge">{{ needsActionCount }}</span>
               </a>
             </router-link>
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">📁 專案</a>
+              <a data-tour="nav-projects" :class="{ active: isActive }" @click="navigate">📁 專案</a>
             </router-link>
             <router-link to="/admin/pipelines" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">🚦 進行中 Pipeline</a>
+              <a data-tour="nav-pipeline" :class="{ active: isActive }" @click="navigate">🚦 進行中 Pipeline</a>
             </router-link>
             <router-link v-if="isAdmin" to="/token-report" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">📊 用量報表</a>
             </router-link>
             <router-link to="/settings" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">⚙️ 設定</a>
+              <a data-tour="nav-settings" :class="{ active: isActive }" @click="navigate">⚙️ 設定</a>
             </router-link>
             <router-link v-if="isAdmin" to="/admin" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">🔧 管理員</a>

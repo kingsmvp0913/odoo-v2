@@ -6,6 +6,10 @@ window.TaskDetailView = Vue.defineComponent({
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
+    // 新手教程的示範任務（/task/demo）：整頁資料改由 tour-demo.js 供應，一律不打 API。
+    // 課程換關卡＝換 demoStatus，watcher 會把動作區重新套用，人才看得到同一個位置換不同的事要做。
+    isTourDemo() { return !!(window.TourDemo && window.TourDemo.isTask(this.$route.params.id)); },
+    tourDemoStatus() { return window.TourDemo ? window.TourDemo.status : null; },
     canAnswer() { return this.task && ANSWER_ALLOWED.includes(this.task.status); },
     canEditContent() { return this.task && this.task.status === 'new'; },
     // 時間軸底下的單一動作區依 status 切成一種 mode；有主動作的狀態各自 render，其餘走通用留言
@@ -133,7 +137,8 @@ window.TaskDetailView = Vue.defineComponent({
     // 使用者一往上捲，onConvScroll 會解除釘住，之後新訊息不再打斷閱讀
     'timeline.length'(n) {
       if (n && this._convPinBottom !== false) this.$nextTick(() => this.scrollConvToBottom());
-    }
+    },
+    tourDemoStatus() { if (this.isTourDemo) this.refresh(); }
   },
   methods: {
     async openEnv() {
@@ -194,10 +199,12 @@ window.TaskDetailView = Vue.defineComponent({
     },
     async _refreshOnce() {
       // detail 與 logs 互不相依（logs 只吃路由上的 id）→ 並行發，省掉一趟序列往返
-      const [data, allLogs] = await Promise.all([
-        Api.get(`tasks/${this.$route.params.id}`),
-        this.fetchAllLogs().catch(() => null),
-      ]);
+      const [data, allLogs] = this.isTourDemo
+        ? [window.TourDemo.detail(), window.TourDemo.logs()]
+        : await Promise.all([
+          Api.get(`tasks/${this.$route.params.id}`),
+          this.fetchAllLogs().catch(() => null),
+        ]);
       this.task = data.task || data;
       // 對話時間軸要完整歷史：用分頁全量 log，撈失敗（null）才退回 detail 的末 5 筆快照
       this.logs = allLogs || data.logs || this.logs || [];
@@ -328,6 +335,7 @@ window.TaskDetailView = Vue.defineComponent({
       finally { this.savingContent = false; }
     },
     async loadTaskMessages() {
+      if (this.isTourDemo) { this.taskMessages = window.TourDemo.messages(); return; }
       try {
         this.taskMessages = await Api.get(`tasks/${this.$route.params.id}/messages`);
         // 初載完成後貼底看最新（此時 logs 已載入、conv-panel 確定已掛載，補上 watch 首次時序可能落空的貼底）
@@ -665,7 +673,7 @@ window.TaskDetailView = Vue.defineComponent({
       finally { this.resolving = false; }
     },
     async checkInflight() {
-      if (!this.task) return;
+      if (!this.task || this.isTourDemo) return;
       try {
         const data = await Api.get('pipeline/inflight');
         this.serverConfirmedRunning = (data.inflight || []).includes(this.task.id);
@@ -720,6 +728,7 @@ window.TaskDetailView = Vue.defineComponent({
       if (el.scrollTop <= 8 && this.hasMoreConv) this.loadMoreConv();
     },
     async loadEvents() {
+      if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
       try {
         const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10`);
         this.events = Array.isArray(rows) ? rows : [];
@@ -789,7 +798,7 @@ window.TaskDetailView = Vue.defineComponent({
             <span>需求內容</span>
             <button v-if="canEditContent && !editingContent" class="btn btn-outline btn-sm" @click="startEditContent">✎ 編輯</button>
           </div>
-          <div v-if="!editingContent" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-4)">{{ task.original_text || '（無內容）' }}</div>
+          <div v-if="!editingContent" data-tour="td-content" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-4)">{{ task.original_text || '（無內容）' }}</div>
           <div v-else style="margin-bottom:var(--space-4)">
             <textarea v-model="editText" style="width:100%;height:140px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);line-height:1.6;resize:vertical;box-sizing:border-box"></textarea>
             <div style="margin-top:var(--space-2);display:flex;gap:var(--space-2)">
@@ -832,7 +841,7 @@ window.TaskDetailView = Vue.defineComponent({
             </div>
           </div>
           <div v-else style="color:var(--text-muted);font-size:var(--fs-base);margin:var(--space-4) 0">尚無對話記錄</div>
-          <div class="timeline-action" style="margin-top:var(--space-3);margin-bottom:var(--space-4)">
+          <div class="timeline-action" data-tour="td-action" style="margin-top:var(--space-3);margin-bottom:var(--space-4)">
 
             <!-- answer：AI 有問題等你回覆 -->
             <template v-if="timelineActionMode === 'answer'">
@@ -1160,7 +1169,7 @@ window.TaskDetailView = Vue.defineComponent({
             <span>即時歷程記錄</span>
             <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
           </div>
-          <div ref="eventsBox" @scroll="onEventsScroll"
+          <div ref="eventsBox" data-tour="td-events" @scroll="onEventsScroll"
             style="height:320px;overflow-y:auto;background:#1a1a1a;color:#e0e0e0;font-family:Consolas,monospace;font-size:var(--fs-sm);line-height:1.5;padding:10px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word">
             <div v-if="!events.length" style="color:#888">尚無執行紀錄</div>
             <template v-else>

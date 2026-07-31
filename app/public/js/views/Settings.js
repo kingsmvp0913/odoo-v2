@@ -185,11 +185,11 @@ window.SettingsView = Vue.defineComponent({
             <div class="setting-block-title">外觀與通知</div>
           </div>
           <div class="setting-block-body">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md);margin-bottom:var(--space-3)">
+            <label data-tour="set-dark" style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md);margin-bottom:var(--space-3)">
               <input type="checkbox" :checked="isDark" @change="toggleTheme" style="width:16px;height:16px;cursor:pointer" />
               <span>深色模式</span>
             </label>
-            <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap">
+            <div data-tour="set-notify" style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap">
               <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md)">
                 <input type="checkbox" :checked="notifyOn" @change="toggleNotify" style="width:16px;height:16px;cursor:pointer" />
                 <span>桌面通知（有任務需要你處理時提醒）</span>
@@ -243,7 +243,7 @@ window.SettingsView = Vue.defineComponent({
         </div>
 
         <!-- GitHub 認證 -->
-        <div class="setting-block">
+        <div class="setting-block" data-tour="set-github">
           <div class="setting-block-head">
             <div class="setting-block-title">GitHub 認證</div>
             <div class="setting-block-desc">個人 GitHub Personal Access Token，供你的任務推送程式碼使用。</div>
@@ -281,7 +281,7 @@ window.SettingsView = Vue.defineComponent({
         </div>
 
         <!-- Odoo 帳號 -->
-        <div class="setting-block">
+        <div class="setting-block" data-tour="set-odoo">
           <div class="setting-block-head">
             <div class="setting-block-title">Odoo 帳號</div>
             <div class="setting-block-desc">Odoo 伺服器位址由管理員統一設定，此處填寫你的個人登入憑證。</div>
@@ -313,7 +313,7 @@ window.SettingsView = Vue.defineComponent({
         </div>
 
         <!-- eService 帳號 -->
-        <div class="setting-block">
+        <div class="setting-block" data-tour="set-eservice">
           <div class="setting-block-head">
             <div class="setting-block-title">eService 帳號</div>
             <div class="setting-block-desc">eService 伺服器位址由管理員統一設定，此處填寫你的個人登入憑證。</div>

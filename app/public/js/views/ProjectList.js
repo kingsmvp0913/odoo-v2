@@ -12,10 +12,16 @@ window.ProjectListView = Vue.defineComponent({
     };
   },
   computed: {
+    // 新手教程要有一張專案卡可以指，但新帳號一個專案都沒有 → 教程開著時插一張示範專案
+    // （只在畫面上，不進 this.projects，也不會被送出或刪除）。刪掉 tour-demo.js 即自動消失。
+    allProjects() {
+      const demo = window.TourDemo;
+      return demo && demo.active ? [demo.project(), ...this.projects] : this.projects;
+    },
     filteredProjects() {
       const q = this.search.toLowerCase();
-      if (!q) return this.projects;
-      return this.projects.filter(p =>
+      if (!q) return this.allProjects;
+      return this.allProjects.filter(p =>
         p.name.toLowerCase().includes(q) ||
         (p.description || '').toLowerCase().includes(q) ||
         p.odoo_version.toLowerCase().includes(q)
@@ -78,12 +84,12 @@ window.ProjectListView = Vue.defineComponent({
   template: `
     <div class="topbar">
       <h1>專案管理</h1>
-      <button class="btn btn-primary btn-sm" @click="showAddForm = !showAddForm">
+      <button class="btn btn-primary btn-sm" data-tour="proj-add" @click="showAddForm = !showAddForm">
         {{ showAddForm ? '取消' : '+ 新增專案' }}
       </button>
     </div>
     <div class="content">
-      <div v-if="showAddForm" class="settings-section" style="margin-bottom:var(--space-5)">
+      <div v-if="showAddForm" class="settings-section" data-tour="proj-form" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">新增專案</h2>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
           <div class="form-group" style="margin:0">
@@ -143,7 +149,7 @@ window.ProjectListView = Vue.defineComponent({
             <div style="font-size:var(--fs-base);color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
             <div v-if="p.description" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" @click.stop>
-              <button class="btn btn-outline btn-sm" @click="releaseId = p.id" :disabled="!p.repo_count"
+              <button class="btn btn-outline btn-sm" data-tour="proj-release" @click="releaseId = p.id" :disabled="!p.repo_count"
                 title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
               <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>

@@ -36,10 +36,49 @@ describe('tour.css 與既有樣式完全隔離', () => {
 });
 
 describe('tour js 不打 API', () => {
-  test.each(['js/tour.js', 'js/tour-courses.js'])('%s 不含 fetch/Api 呼叫', (f) => {
+  test.each(['js/tour.js', 'js/tour-courses.js', 'js/tour-demo.js'])('%s 不含 fetch/Api 呼叫', (f) => {
     const src = read(f);
     expect(src).not.toMatch(/\bfetch\s*\(/);
     expect(src).not.toMatch(/\bApi\.(get|post|patch|delete|postForm|getBlob)\s*\(/);
+  });
+});
+
+// 教程改成在真實畫面上打光後，靠 view 裡的 data-tour 錨點定位。
+// 錨點被改名或刪掉時教程只會在 console 警告後退成置中，畫面不會紅——所以在這裡對帳。
+describe('data-tour 錨點與課程定義對得上', () => {
+  const VIEW_FILES = [
+    'js/app.js', 'js/views/Settings.js', 'js/views/TaskList.js',
+    'js/views/TaskDetail.js', 'js/views/ProjectList.js', 'js/views/ProjectDetail.js'
+  ];
+  const anchors = new Set();
+  for (const f of VIEW_FILES) {
+    for (const m of read(f).matchAll(/data-tour="([^"]+)"/g)) anchors.add(m[1]);
+  }
+  const wanted = [...new Set(
+    [...read('js/tour-courses.js').matchAll(/\[data-tour="([^"]+)"\]/g)].map(m => m[1])
+  )];
+
+  test('掃得到錨點與課程選字（regex 失效時不得靜默通過）', () => {
+    expect(anchors.size).toBeGreaterThanOrEqual(10);
+    expect(wanted.length).toBeGreaterThanOrEqual(10);
+  });
+
+  test.each(wanted)('課程用到的 %s 在 view 裡存在', (name) => {
+    expect(anchors.has(name)).toBe(true);
+  });
+});
+
+// 示範資料只在教程開著、且看的正好是示範 id 時才接管；漏掉任一個守衛就會把真任務蓋掉。
+describe('示範資料的接線都有守衛', () => {
+  test.each([
+    'js/views/TaskList.js', 'js/views/TaskDetail.js',
+    'js/views/ProjectList.js', 'js/views/ProjectDetail.js'
+  ])('%s 只透過 window.TourDemo 取用（可整支刪除）', (f) => {
+    const src = read(f);
+    const uses = src.match(/TourDemo/g) || [];
+    expect(uses.length).toBeGreaterThan(0);
+    // 一律以 window. 前綴或 isTourDemo computed 存取 → tour-demo.js 不載入時不會 ReferenceError
+    expect(src).not.toMatch(/(?<!window\.)\bTourDemo\./);
   });
 });
 
@@ -52,7 +91,8 @@ describe('教程接線', () => {
   test('tour 的 script 都排在 base.js 之後、app.js 之前', () => {
     const src = html();
     const at = (f) => src.indexOf(f);
-    expect(at('js/base.js')).toBeLessThan(at('js/tour-courses.js'));
+    expect(at('js/base.js')).toBeLessThan(at('js/tour-demo.js'));
+    expect(at('js/tour-demo.js')).toBeLessThan(at('js/tour-courses.js'));
     expect(at('js/tour-courses.js')).toBeLessThan(at('js/tour.js'));
     expect(at('js/tour.js')).toBeLessThan(at('js/app.js'));
   });

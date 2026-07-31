@@ -120,7 +120,14 @@ window.TaskListView = Vue.defineComponent({
     };
   },
   computed: {
+    // 新手教程要有一張「輪到你」的卡片可以指，但新帳號一張任務都沒有 → 教程開著時在列表最前面
+    // 插一張示範任務。刻意只加在 filteredTasks（不進 this.tasks），各項計數與側欄 badge 才不會被灌水。
     filteredTasks() {
+      const demo = window.TourDemo;
+      const real = this.realFilteredTasks;
+      return demo && demo.active && this.filter !== 'archived' ? [demo.task(), ...real] : real;
+    },
+    realFilteredTasks() {
       let list;
       if (this.filter === 'archived')          list = this.archivedTasks;
       else if (this.filter === 'paused')       list = this.tasks.filter(t => t.is_paused);
@@ -414,7 +421,7 @@ window.TaskListView = Vue.defineComponent({
   template: `
     <div class="topbar">
       <h1>任務列表</h1>
-      <button class="btn btn-primary btn-sm" @click="openAdd">＋ 新增任務</button>
+      <button class="btn btn-primary btn-sm" data-tour="task-add" @click="openAdd">＋ 新增任務</button>
       <span v-if="testMode" class="pill pill-warn" style="font-size:var(--fs-sm);padding:2px 8px">🧪 測試模式</span>
       <button v-if="testMode" class="btn btn-primary btn-sm" @click="stepPipeline" :disabled="stepping">
         {{ stepping ? '執行中...' : '▶ 推進 Pipeline' }}
@@ -427,7 +434,7 @@ window.TaskListView = Vue.defineComponent({
       </button>
     </div>
     <div class="content">
-      <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center">
+      <div data-tour="task-filters" style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center">
         <button class="btn btn-sm" :class="filter==='needs_action' ? 'btn-primary' : 'btn-outline'" @click="filter='needs_action'">
           需回覆<span v-if="needsActionShown > 0" class="tab-badge" :class="filter==='needs_action' ? 'tab-badge-active' : ''">{{ needsActionShown }}</span>
         </button>
@@ -482,7 +489,7 @@ window.TaskListView = Vue.defineComponent({
       </div>
       <div v-else>
         <div v-for="t in filteredTasks" :key="t.id"
-          class="task-card"
+          class="task-card" data-tour="task-card"
           :class="{ 'done': t.status === 'done', 'archived': filter === 'archived' && t.status !== 'done', 'needs-action': filter !== 'archived' && needsAction(t) && !isStopped(t) && !t.is_paused && !batchMode, 'stopped': filter !== 'archived' && isStopped(t), 'paused': filter !== 'archived' && t.is_paused, 'processing': filter !== 'archived' && isProcessing(t) && !t.is_paused, 'batch-selected': batchMode && selectedIds.includes(t.id) }"
           @click="batchMode ? toggleSelect(t.id, $event) : openTask(t)">
           <div class="task-header">
@@ -520,7 +527,7 @@ window.TaskListView = Vue.defineComponent({
               <div class="task-meta">{{ timeAgo(t.updated_at || t.created_at) }}</div>
             </div>
           </div>
-          <div class="task-source" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <div class="task-source" data-tour="task-chips" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <a v-if="sourceUrl(t)" :href="sourceUrl(t)" target="_blank" @click.stop
                :class="sourceBadgeClass(t.source)">{{ sourceLabel(t.source) }}</a>
             <span v-else :class="sourceBadgeClass(t.source)">{{ sourceLabel(t.source) }}</span>
@@ -533,14 +540,16 @@ window.TaskListView = Vue.defineComponent({
             </a>
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <div style="display:flex;align-items:center;gap:6px">
+            <div data-tour="task-status" style="display:flex;align-items:center;gap:6px">
               <span class="status-badge" :class="t.status">{{ statusLabel(t.status) }}</span>
               <span v-if="t.is_paused" class="pill pill-warn">暫停中</span>
               <span v-if="t.merged_to_main_at" class="pill pill-success" title="已合併到正式 main">🚀 已上正式</span>
             </div>
             <span v-if="t.module" style="font-size:var(--fs-xs);color:var(--text-muted)">{{ t.module }}</span>
           </div>
-          <StatusBar :status="t.status" :source="t.source" :git-branch="t.git_branch" :e2e-disabled="t.e2e_disabled" />
+          <div data-tour="task-stepper">
+            <StatusBar :status="t.status" :source="t.source" :git-branch="t.git_branch" :e2e-disabled="t.e2e_disabled" />
+          </div>
         </div>
       </div>
 
