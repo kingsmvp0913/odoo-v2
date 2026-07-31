@@ -16,21 +16,6 @@ function repoDirName(repo) {
   return seg || path.basename(repo.local_path);
 }
 
-// 從改動檔（相對 repo 根，git 用正斜線）往上找含 __manifest__.py 的祖先目錄＝Odoo 模組根。
-// 回 { name, dir }（dir 為 worktree 內絕對路徑）；改動檔不屬任何模組（如 repo 根檔）回 null。
-function findModuleDir(wtRepo, relFile) {
-  let dir = path.dirname(relFile);
-  while (dir && dir !== '.' && dir !== path.sep && dir !== '/') {
-    if (fs.existsSync(path.join(wtRepo, dir, '__manifest__.py'))) {
-      return { name: path.basename(dir), dir: path.join(wtRepo, dir) };
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
 function registerRoutes(app) {
   app.post('/api/pipeline/run', verifyToken, async (req, res) => {
     try {
@@ -226,9 +211,10 @@ function registerRoutes(app) {
     }
   });
 
-  // 過渡期手動佈署：管理員下載本任務改動模組的 zip，自行解壓到正式區 addons。
+  // 過渡期手動佈署：管理員下載本任務改動檔的 zip，自行解壓到正式區 addons。
   // 純打包——不動任務狀態、不合併分支、不推進 pipeline（審核仍走 approve）。
-  // 壓縮檔內維持 <repo>/<模組>/ 結構，解壓後可直接整包覆蓋既有 addons 目錄。
+  // 壓縮檔內維持 <repo>/<repo 內原路徑> 結構，解壓後可直接覆蓋既有 addons 目錄。
+  // 只放本任務真的改過的檔：worktree 自 analysis 起就凍結，整包模組會把切點當下的舊版一併送出。
   app.get('/api/tasks/:id/code-zip', verifyToken, async (req, res) => {
     try {
       const { rows: urows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
@@ -256,36 +242,40 @@ function registerRoutes(app) {
       const { AI_BRANCH, diffNameOnly, refExists } = require('./pipeline/git');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 
-      // 先把全部來源目錄算完再開始輸出：header 一旦送出就改不回 JSON 錯誤，
+      // 先把全部來源檔算完再開始輸出：header 一旦送出就改不回 JSON 錯誤，
       // 中途才失敗只會得到一個半截、解不開的 zip，且瀏覽器照樣顯示下載成功。
-      const entries = []; // { zipPath, srcDir }
-      const skipped = [];
+      const entries = []; // { zipPath, srcFile }
+      const deleted = []; // 本任務刪除的檔（zip 表達不了刪除，只能請使用者手動移除）
+      const stale = [];   // 切點之後 ai-dev 上也被改過的檔＝覆蓋上去會蓋掉別人的改動
       for (const repo of repos) {
         // 分支已清（多為已審核通過）→ 無 diff／worktree 可打包，略過該 repo
         if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) continue;
-        // diff 基底＝任務切點 ai-dev：用 main 會把其他已核准、尚未回流 main 的任務模組也打包進來
+        // diff 基底＝任務切點 ai-dev：用 main 會把其他已核准、尚未回流 main 的任務改動也打包進來
         const baseBranch = AI_BRANCH;
         const wtRepo = path.join(wtParent, path.basename(repo.local_path));
-        const repoDir = repoDirName(repo); // 依 repo（git URL 末段）分層：<repoDir>/<module>
+        const repoDir = repoDirName(repo); // 依 repo（git URL 末段）分層：<repoDir>/<repo 內原路徑>
         const changed = await diffNameOnly(repo.local_path, baseBranch, task.git_branch);
-        const modules = new Map(); // moduleName → worktree 內來源目錄（去重）
+        // 反向三點 diff＝切點之後 ai-dev 自己的改動。與本任務改動的交集，就是兩邊都動過的檔。
+        const aiSide = await diffNameOnly(repo.local_path, task.git_branch, baseBranch);
         for (const rel of changed) {
-          const mod = findModuleDir(wtRepo, rel);
-          if (mod) modules.set(mod.name, mod.dir);
-          else skipped.push(rel); // 不屬任何模組的改動檔，明列不靜默略過（Fail loud）
-        }
-        for (const [name, srcDir] of modules) {
-          const zipPath = `${repoDir}/${name}`;
-          if (!entries.some(e => e.zipPath === zipPath)) entries.push({ zipPath, srcDir });
+          const srcFile = path.join(wtRepo, rel);
+          // 只打包本任務真的改過的檔：整包模組目錄會把 worktree 裡「切點當下的舊版」一起送出，
+          // 而 worktree 自 analysis 起就凍結，解壓覆蓋等於把期間的人工修正整批退版。
+          if (!fs.existsSync(srcFile)) { deleted.push(rel); continue; }
+          const zipPath = `${repoDir}/${rel}`;
+          if (entries.some(e => e.zipPath === zipPath)) continue;
+          entries.push({ zipPath, srcFile });
+          if (aiSide.includes(rel)) stale.push(zipPath);
         }
       }
-      if (!entries.length) return res.status(400).json({ error: '本任務沒有可打包的模組改動' });
+      if (!entries.length) return res.status(400).json({ error: '本任務沒有可打包的程式改動' });
 
-      // 打包清單走 header：body 是 binary，沒有第二個地方能回報「哪些改動檔不屬任何模組」。
+      // 打包清單走 header：body 是 binary，沒有第二個地方能回報刪除檔與覆蓋風險。
       // 逐字放會讓非 ASCII 檔名生出無效 header（Node 直接丟 ERR_INVALID_CHAR），故編碼後再帶。
       res.setHeader('X-Zip-Entries', encodeURIComponent(JSON.stringify(entries.map(e => e.zipPath))));
-      res.setHeader('X-Zip-Skipped', encodeURIComponent(JSON.stringify(skipped)));
-      res.setHeader('Access-Control-Expose-Headers', 'X-Zip-Entries, X-Zip-Skipped');
+      res.setHeader('X-Zip-Deleted', encodeURIComponent(JSON.stringify(deleted)));
+      res.setHeader('X-Zip-Stale', encodeURIComponent(JSON.stringify(stale)));
+      res.setHeader('Access-Control-Expose-Headers', 'X-Zip-Entries, X-Zip-Deleted, X-Zip-Stale');
       res.setHeader('Content-Type', 'application/zip');
       // 檔名只留安全字元：task_id 目前恆為英數與底線，但它源自外部系統，不該由它決定 header 內容。
       res.setHeader('Content-Disposition', `attachment; filename="${String(task.task_id).replace(/[^\w.-]/g, '_')}.zip"`);
@@ -298,7 +288,7 @@ function registerRoutes(app) {
         res.destroy();
       });
       archive.pipe(res);
-      for (const { zipPath, srcDir } of entries) archive.directory(srcDir, zipPath);
+      for (const { zipPath, srcFile } of entries) archive.file(srcFile, { name: zipPath });
       await archive.finalize();
     } catch (err) {
       if (res.headersSent) return res.destroy();

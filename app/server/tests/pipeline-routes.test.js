@@ -591,25 +591,23 @@ test('code-zip → 400 任務尚無分支', async () => {
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [rows[0].id]);
 });
 
-test('code-zip → 不限審核狀態，回傳含 <repo>/<模組> 結構的 zip，非模組檔列在 skipped header', async () => {
-  const { getMainBranch, diffNameOnly, refExists } = require('../pipeline/git');
-  refExists.mockResolvedValue(true);
-  getMainBranch.mockResolvedValue('main');
-  diffNameOnly.mockResolvedValue(['idx_demo/models/sale_order.py', 'README.md']);
-
-  // 真實臨時 worktree：<tmpRepoParent>/.worktrees/<task_id>/main/idx_demo/{__manifest__.py,models/..}
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cto-'));
+// 打包 zip 用的臨時 worktree：<tmp>/repos/main（主 clone）＋ .worktrees/<task_id>/main（任務工作樹）
+function makeZipFixture(prefix, taskKey, files) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const localPath = path.join(tmp, 'repos', 'main');
   fs.mkdirSync(localPath, { recursive: true });
-  const taskKey = 'task_cto_ok';
   const wtRepo = path.join(tmp, 'repos', '.worktrees', taskKey, 'main');
-  const modelsDir = path.join(wtRepo, 'idx_demo', 'models');
-  fs.mkdirSync(modelsDir, { recursive: true });
-  fs.writeFileSync(path.join(wtRepo, 'idx_demo', '__manifest__.py'), "{'name':'demo'}");
-  fs.writeFileSync(path.join(modelsDir, 'sale_order.py'), '# hi');
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(wtRepo, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+  return { tmp, localPath, wtRepo };
+}
 
+async function insertZipTask(projName, taskKey, localPath) {
   const { rows: [proj] } = await dbModule.query(
-    "INSERT INTO projects (name, odoo_version) VALUES ('CTO','17.0') RETURNING id"
+    "INSERT INTO projects (name, odoo_version) VALUES ($1,'17.0') RETURNING id", [projName]
   );
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main',$2,$3,true,'done')",
@@ -619,63 +617,125 @@ test('code-zip → 不限審核狀態，回傳含 <repo>/<模組> 結構的 zip�
     "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,$2,'odoo','T','coding_running',$3,$4) RETURNING id",
     [userId, taskKey, proj.id, `task/${taskKey}`]
   );
+  return t.id;
+}
 
-  const res = await request(app).get(`/api/tasks/${t.id}/code-zip`)
-    .set('Authorization', `Bearer ${adminToken}`)
-    .buffer(true).parse((r, cb) => { const c = []; r.on('data', d => c.push(d)); r.on('end', () => cb(null, Buffer.concat(c))); });
+const zipReq = (id) => request(app).get(`/api/tasks/${id}/code-zip`)
+  .set('Authorization', `Bearer ${adminToken}`)
+  .buffer(true).parse((r, cb) => { const c = []; r.on('data', d => c.push(d)); r.on('end', () => cb(null, Buffer.concat(c))); });
 
+// 意圖：只打包「本任務真的改過的檔」。舊版把改動檔放大成整個模組目錄，而模組其餘檔案來自
+// analysis 當下凍結的 worktree——實測任務分支落後 ai-dev 達 37 檔 3886 行，解壓覆蓋正式區
+// 等於把期間的人工修正整批退版。fixture 必須含一個「模組內但沒改過」的檔才有鑑別力。
+test('code-zip → 只打包改動檔，同模組未改動的檔不得混進來', async () => {
+  const { diffNameOnly, refExists } = require('../pipeline/git');
+  refExists.mockResolvedValue(true);
+  const taskKey = 'task_cto_ok';
+  diffNameOnly.mockImplementation(async (_p, base) =>
+    base === 'ai-dev' ? ['idx_demo/models/sale_order.py', 'README.md'] : []);
+
+  const { tmp, localPath } = makeZipFixture('cto-', taskKey, {
+    'idx_demo/__manifest__.py': "{'name':'demo'}",       // 模組內，但本任務沒改
+    'idx_demo/models/sale_order.py': '# hi',
+    'idx_demo/models/untouched.py': '# 不該進 zip',
+    'README.md': '# readme',
+  });
+  const id = await insertZipTask('CTO', taskKey, localPath);
+
+  const res = await zipReq(id);
   expect(res.status).toBe(200);
   expect(res.headers['content-type']).toBe('application/zip');
   expect(res.headers['content-disposition']).toContain(`${taskKey}.zip`);
-  // 依 repo（git URL 末段 odoo17_hungjou）分層：<repo>/<module>
-  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries']))).toEqual(['odoo17_hungjou/idx_demo']);
-  // C-1：打包範圍以任務切點 ai-dev 為基底；用 main 會把其他已核准、尚未回流 main 的任務模組也打進來
+  // 依 repo（git URL 末段 odoo17_hungjou）分層，其下維持 repo 內原路徑
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries']))).toEqual([
+    'odoo17_hungjou/idx_demo/models/sale_order.py', 'odoo17_hungjou/README.md'
+  ]);
+  // C-1：打包範圍以任務切點 ai-dev 為基底；用 main 會把其他已核准、尚未回流 main 的任務也打進來
   expect(diffNameOnly).toHaveBeenCalledWith(localPath, 'ai-dev', `task/${taskKey}`);
-  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-skipped']))).toContain('README.md');
 
   // 內容真的解得開才算數：只驗 header 的話，回傳半截 zip 也會綠燈。
   // 不引入解壓相依——ZIP 的 local file header 前綴為 PK\x03\x04，檔名以明文存放，直接掃即可。
   const buf = res.body;
   expect(buf.slice(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   const asText = buf.toString('latin1');
-  expect(asText).toContain('odoo17_hungjou/idx_demo/__manifest__.py');
   expect(asText).toContain('odoo17_hungjou/idx_demo/models/sale_order.py');
-  expect(asText).not.toContain('README.md');
+  expect(asText).toContain('odoo17_hungjou/README.md'); // 非模組檔也是本任務的改動，一樣要送
+  expect(asText).not.toContain('untouched.py');
+  expect(asText).not.toContain('__manifest__.py');
 
   fs.rmSync(tmp, { recursive: true, force: true });
-  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
 });
 
-// 意圖：沒有任何模組改動時必須在「開始輸出前」擋下並回 JSON。header 一旦送出就改不回錯誤，
-// 使用者只會拿到一個 0 模組的空 zip，還以為佈署包好了。
-test('code-zip → 沒有模組改動時回 400，不得送出空 zip', async () => {
+// 意圖：git 的改動清單含被刪除的檔，它們在 worktree 不存在。逐檔打包時若不先濾掉會直接讓
+// 打包炸掉；而「靜默略過」等於使用者永遠不知道要去正式區手動刪那個檔（zip 表達不了刪除）。
+test('code-zip → 本任務刪除的檔列進 deleted header，不列入 entries 也不讓打包失敗', async () => {
   const { diffNameOnly, refExists } = require('../pipeline/git');
   refExists.mockResolvedValue(true);
-  diffNameOnly.mockResolvedValue(['README.md']); // 有改動，但不屬任何模組
+  const taskKey = 'task_cto_del';
+  diffNameOnly.mockImplementation(async (_p, base) =>
+    base === 'ai-dev' ? ['idx_demo/models/keep.py', 'idx_demo/models/gone.py'] : []);
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cto2-'));
-  const localPath = path.join(tmp, 'repos', 'main');
-  fs.mkdirSync(localPath, { recursive: true });
+  const { tmp, localPath } = makeZipFixture('ctodel-', taskKey, { 'idx_demo/models/keep.py': '# keep' });
+  const id = await insertZipTask('CTODEL', taskKey, localPath);
 
-  const { rows: [proj] } = await dbModule.query(
-    "INSERT INTO projects (name, odoo_version) VALUES ('CTO2','17.0') RETURNING id"
-  );
-  await dbModule.query(
-    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main',$2,$3,true,'done')",
-    [proj.id, 'https://github.com/Ideaxpress-odoo/odoo17_hungjou.git', localPath]
-  );
-  const { rows: [t] } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_cto_empty','odoo','T','coding_running',$2,'task/task_cto_empty') RETURNING id",
-    [userId, proj.id]
-  );
+  const res = await zipReq(id);
+  expect(res.status).toBe(200);
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries'])))
+    .toEqual(['odoo17_hungjou/idx_demo/models/keep.py']);
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-deleted'])))
+    .toEqual(['idx_demo/models/gone.py']);
 
-  const res = await request(app).get(`/api/tasks/${t.id}/code-zip`)
+  fs.rmSync(tmp, { recursive: true, force: true });
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
+});
+
+// 意圖：任務分支切出去之後，ai-dev 上同一個檔也可能被人工或別的任務改過。這種檔一旦拿這包
+// 覆蓋上去就會把對方的改動蓋掉——這正是使用者實際踩到的坑，必須在下載當下就講出來。
+// fixture 要有一個「只有本任務改過」的檔，否則分不出是真的比對過還是把全部都標成有風險。
+test('code-zip → ai-dev 上也被改過的檔列進 stale header', async () => {
+  const { diffNameOnly, refExists } = require('../pipeline/git');
+  refExists.mockResolvedValue(true);
+  const taskKey = 'task_cto_stale';
+  const branch = `task/${taskKey}`;
+  diffNameOnly.mockImplementation(async (_p, base, head) => {
+    if (base === 'ai-dev' && head === branch) return ['idx_demo/models/both.py', 'idx_demo/models/mine.py'];
+    if (base === branch && head === 'ai-dev') return ['idx_demo/models/both.py', 'idx_demo/other.py'];
+    return [];
+  });
+
+  const { tmp, localPath } = makeZipFixture('ctostale-', taskKey, {
+    'idx_demo/models/both.py': '# both', 'idx_demo/models/mine.py': '# mine',
+  });
+  const id = await insertZipTask('CTOSTALE', taskKey, localPath);
+
+  const res = await zipReq(id);
+  expect(res.status).toBe(200);
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-stale'])))
+    .toEqual(['odoo17_hungjou/idx_demo/models/both.py']);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
+});
+
+// 意圖：沒有任何可打包的檔時必須在「開始輸出前」擋下並回 JSON。header 一旦送出就改不回錯誤，
+// 使用者只會拿到一個空 zip，還以為佈署包好了。
+test('code-zip → 沒有可打包的檔時回 400，不得送出空 zip', async () => {
+  const { diffNameOnly, refExists } = require('../pipeline/git');
+  refExists.mockResolvedValue(true);
+  const taskKey = 'task_cto_empty';
+  diffNameOnly.mockImplementation(async (_p, base) => base === 'ai-dev' ? ['idx_demo/models/gone.py'] : []);
+
+  const { tmp, localPath } = makeZipFixture('cto2-', taskKey, {}); // worktree 內一個檔都沒有
+  const id = await insertZipTask('CTO2', taskKey, localPath);
+
+  const res = await request(app).get(`/api/tasks/${id}/code-zip`)
     .set('Authorization', `Bearer ${adminToken}`);
 
   expect(res.status).toBe(400);
-  expect(res.body.error).toContain('沒有可打包的模組');
+  expect(res.body.error).toContain('沒有可打包');
   fs.rmSync(tmp, { recursive: true, force: true });
-  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
 });
 
 // --- MODE_B 規格審核閘門：spec-approve（確認開工）／spec-revise（寫意見改規格）---

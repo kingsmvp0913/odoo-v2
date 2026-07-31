@@ -28,6 +28,7 @@ jest.mock('../pipeline/git', () => ({
   ensureMainBranch: jest.fn().mockResolvedValue('main'),
   pullBranch: jest.fn().mockResolvedValue(undefined),
   ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
+  syncBranchWithAi: jest.fn().mockResolvedValue({ synced: true, conflictFiles: [], error: null }),
   AI_BRANCH: 'ai-dev',
   ensureAiBranch: jest.fn().mockResolvedValue('ai-dev'),
   syncMainIntoAi: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),

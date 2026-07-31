@@ -132,6 +132,72 @@ test('syncWithMain：與 main 衝突 → hasConflicts＋檔名（不假成功）
   await git.abortMerge(repo);
 }, 30000);
 
+// 意圖：worktree 是 analysis 當下建的，任務常在規格審核／確認閘門停留數天，期間 ai-dev 會被
+// 別的任務核准與實體 main 回流推進。不跟上的話 coding 是在過期的碼上寫，下載 zip 也會把
+// 期間的人工修正一起蓋掉（實測 3864／3868 落後 37 檔 3886 行）。
+test('syncBranchWithAi：任務分支尚無自己的 commit → fast-forward 拿到 ai-dev 最新內容', async () => {
+  const repo = await makeRepo();
+  await sh(repo, 'checkout', '-B', 'ai-dev', 'main');
+  const wt = path.join(base, 'wt', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t9', 'ai-dev', true); // analysis 當下的切點
+
+  // 任務卡在人工閘門期間，ai-dev 前進
+  await sh(repo, 'checkout', 'ai-dev');
+  await write(repo, 'b.py', 'y = 2\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'ai-dev moved on');
+  expect(fs.existsSync(path.join(wt, 'b.py'))).toBe(false); // 同步前看不到＝觀察到的處境
+
+  const r = await git.syncBranchWithAi(wt);
+  expect(r.synced).toBe(true);
+  // trim：Windows autocrlf 會把 git checkout 出來的檔轉成 CRLF，逐字比對會假紅
+  expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8').trim()).toBe('y = 2');
+}, 30000);
+
+// 意圖：QA 彈跳後重跑時分支已有 AI 的 commit，同步不得把它洗掉——兩邊改動必須並存。
+// 只驗 fast-forward 那條的話，這個「會弄丟已完成工作」的失敗模式完全測不到。
+test('syncBranchWithAi：分支已有 commit → 三方合併，AI 的改動與 ai-dev 的新進並存', async () => {
+  const repo = await makeRepo();
+  await sh(repo, 'checkout', '-B', 'ai-dev', 'main');
+  const wt = path.join(base, 'wt', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t10', 'ai-dev', true);
+
+  await write(wt, 'task_file.py', 'ai = 1\n');   // AI 已寫的碼
+  await sh(wt, 'add', '-A');
+  await sh(wt, 'commit', '-m', 'ai work');
+
+  await sh(repo, 'checkout', 'ai-dev');           // 同期 ai-dev 動了別的檔
+  await write(repo, 'b.py', 'y = 2\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'ai-dev moved on');
+
+  const r = await git.syncBranchWithAi(wt);
+  expect(r.synced).toBe(true);
+  expect(fs.readFileSync(path.join(wt, 'task_file.py'), 'utf8').trim()).toBe('ai = 1');
+  expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8').trim()).toBe('y = 2');
+}, 30000);
+
+// 意圖：衝突時最危險的不是「沒同步」，是留下半套 merge——worktree 帶著 MERGE_HEAD 與衝突標記
+// 交給 coding agent，它會把 <<<<<<< 當成程式碼一起改。必須 abort 回乾淨狀態並如實回報。
+test('syncBranchWithAi：衝突 → synced=false＋檔名，且 worktree 不留 MERGE_HEAD／衝突標記', async () => {
+  const repo = await makeRepo();
+  await sh(repo, 'checkout', '-B', 'ai-dev', 'main');
+  const wt = path.join(base, 'wt', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t11', 'ai-dev', true);
+
+  await write(wt, 'a.py', 'x = 5\n');             // 兩邊改同一行
+  await sh(wt, 'commit', '-am', 'ai edit');
+  await sh(repo, 'checkout', 'ai-dev');
+  await write(repo, 'a.py', 'x = 6\n');
+  await sh(repo, 'commit', '-am', 'ai-dev edit');
+
+  const r = await git.syncBranchWithAi(wt);
+  expect(r.synced).toBe(false);
+  expect(r.conflictFiles).toContain('a.py');
+  await expect(sh(wt, 'rev-parse', '--verify', 'MERGE_HEAD')).rejects.toThrow();
+  expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8').trim()).toBe('x = 5'); // 保留 AI 的版本，無衝突標記
+}, 30000);
+
 // 意圖：主 clone 工作樹是 deploy 目標，odoo-bin -u 會在其中留下產物弄髒工作樹。
 // 舊版用普通 checkout，從別的分支（updateMainClone 先 pull 把樹切到 main）切回
 // testing 時會被「local changes would be overwritten」擋住 → 整個重建默默失敗、testing 沒跟上 main

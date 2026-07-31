@@ -209,6 +209,34 @@ async function syncMainIntoAi(repoPath, gitEnv) {
   }
 }
 
+// 讓任務 worktree 跟上 ai-dev。worktree 是 analysis 當下建的，任務常在規格審核／確認閘門停留
+// 數天，期間 ai-dev 會被別的任務核准與實體 main 回流推進——不跟上的話 coding 在過期的碼上寫，
+// 下載 zip 也會把期間的人工修正一起蓋掉。
+// 允許 fast-forward：分支尚無自己的 commit（首次進 coding）時等同 reset，不生多餘的 merge commit。
+// 衝突／任何失敗一律 abort 回乾淨狀態再回報，不 throw——同步失敗不該擋住任務（穩定 > 準確），
+// 但半套 merge 留在 worktree 會讓 coding agent 把衝突標記當程式碼改。
+async function syncBranchWithAi(worktreePath, gitEnv) {
+  // 無 gitEnv 時補上身分：三方合併要產 merge commit，沒有 user.email 會直接失敗（比照 ensureMainBranch）
+  const ident = gitEnv ? [] : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local'];
+  try {
+    await execFileAsync('git', [...ident, 'merge', '--no-edit', AI_BRANCH], gitOpts(worktreePath, gitEnv));
+    return { synced: true, conflictFiles: [], error: null };
+  } catch (err) {
+    // git merge 衝突訊息寫在 stdout（非 stderr），三者都要看
+    const msg = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`.toLowerCase();
+    if (msg.includes('already up to date') || msg.includes('already up-to-date')) {
+      return { synced: true, conflictFiles: [], error: null };
+    }
+    let conflictFiles = [];
+    if (msg.includes('conflict') || msg.includes('automatic merge failed')) {
+      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], gitOpts(worktreePath, gitEnv)).catch(() => ({ stdout: '' }));
+      conflictFiles = stdout.trim().split('\n').filter(Boolean);
+    }
+    await abortMerge(worktreePath);
+    return { synced: false, conflictFiles, error: err.message };
+  }
+}
+
 async function syncWithMain(repoPath, gitEnv) {
   const main = await getMainBranch(repoPath);
   // fetch 失敗容忍（離線時退而 merge 本地 main），但要留下 lastErr 供最終歸因
@@ -509,4 +537,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };

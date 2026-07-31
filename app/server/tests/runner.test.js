@@ -13,6 +13,7 @@ jest.mock('../pipeline/git', () => ({
   checkoutDefault: jest.fn().mockResolvedValue(undefined),
   runDeploy: jest.fn().mockResolvedValue(undefined),
   ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
+  syncBranchWithAi: jest.fn().mockResolvedValue({ synced: true, conflictFiles: [], error: null }),
   getMainBranch: jest.fn().mockResolvedValue('main'),
   AI_BRANCH: 'ai-dev'
 }));
@@ -65,6 +66,7 @@ beforeEach(async () => {
   git.createBranch.mockReset().mockResolvedValue(undefined);
   git.checkoutDefault.mockReset().mockResolvedValue(undefined);
   git.ensureWorktreeAtMain.mockReset().mockResolvedValue(undefined);
+  git.syncBranchWithAi.mockReset().mockResolvedValue({ synced: true, conflictFiles: [], error: null });
   git.getMainBranch.mockReset().mockResolvedValue('main');
   require('../notify').emitToUser.mockReset();
   cs.runCsAgent.mockReset().mockResolvedValue(undefined);
@@ -165,6 +167,48 @@ test('branch_pending 重入：worktree base 用 ai-dev', async () => {
   expect(ensureWorktreeAtMain).toHaveBeenCalledWith(
     expect.any(String), expect.any(String), expect.stringContaining('task/task_odoo_wt3'), 'ai-dev', false
   );
+});
+
+// 意圖：worktree 是 analysis 當下建的，任務在規格審核閘門可能停留數天，期間 ai-dev 已被別的任務
+// 與實體 main 推進。進 coding 前不跟上，AI 就是在過期的碼上寫、下載 zip 也會蓋掉期間的人工修正。
+// 兩個 repo：只驗一個的話，「只同步 primary」這種漏法測不出來。
+test('branch_pending：每個 worktree 都跟上 ai-dev 後才進 coding', async () => {
+  const { ensureWorktreeAtMain, syncBranchWithAi } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P4','17.0','p4') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status)
+     VALUES ($1,'main','u','/repos/p4/main',true,'done'),($1,'hr','u','/repos/p4/hr',false,'done')`, [proj.id]
+  );
+  const t = await insertTask('branch_pending', 'wt4', proj.id);
+  await run();
+
+  expect(syncBranchWithAi).toHaveBeenCalledTimes(2);
+  const synced = syncBranchWithAi.mock.calls.map(c => c[0]);
+  expect(synced).toEqual(ensureWorktreeAtMain.mock.calls.map(c => c[1])); // 同一批 worktree 路徑，順序一致
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t]);
+  expect(rows[0].status).toBe('coding_running');
+});
+
+// 意圖：同步失敗不得擋住任務（穩定 > 準確），但也不得靜默——使用者事後看不出「這份產出是基於
+// 過期的碼」就無從判斷能不能直接佈署。落地必須在 task_logs（時間軸真相來源），不是只發 socket。
+test('branch_pending：ai-dev 同步衝突 → 任務照常進 coding，但落地成使用者看得到的提醒', async () => {
+  const { syncBranchWithAi } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P5','17.0','p5') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/p5/main',true,'done')", [proj.id]
+  );
+  const t = await insertTask('branch_pending', 'wt5', proj.id);
+  syncBranchWithAi.mockResolvedValueOnce({ synced: false, conflictFiles: ['idx_hj/models/a.py'], error: 'conflict' });
+  await run();
+
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t]);
+  expect(rows[0].status).toBe('coding_running'); // 不擋
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1", [t]);
+  expect(logs.some(r => r.content.includes('idx_hj/models/a.py'))).toBe(true);
 });
 
 test('branch_pending worktree 建立失敗 → 任務 stopped，原因寫進執行歷程', async () => {

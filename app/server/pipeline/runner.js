@@ -12,8 +12,9 @@
 
 const path = require('path');
 const { query } = require('../db');
-const { createBranch, checkoutDefault, ensureWorktreeAtMain, AI_BRANCH } = require('./git');
+const { createBranch, checkoutDefault, ensureWorktreeAtMain, syncBranchWithAi, AI_BRANCH } = require('./git');
 const { withProjectLock } = require('./project-lock');
+const { buildGitEnv } = require('../lib/git-identity');
 const notify = require('../notify');
 const { runClarifyChat } = require('./clarify-chat');
 const yaml = require('js-yaml');
@@ -117,19 +118,27 @@ async function doBranch(task, settings) {
   const branchName = `task/${task.task_id}`;
   if (task.project_id) {
     const { rows: repos } = await query(
-      "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+      "SELECT label, local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
       [task.project_id]
     );
     if (repos.length) {
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
+      // 同步合併若走三方合併會產 commit，有身分才記得到發起人名下。取不到（未設 PAT）不是致命的——
+      // 這段全是本機操作、不需憑證，syncBranchWithAi 會退回 pipeline 身分。
+      const gitEnv = await buildGitEnv(task.user_id).catch(() => null);
       // worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）。
       // 冪等（reset=false）：analysis 通常已建好此 worktree，這裡沿用不重建、不動已有內容。
+      const unsynced = []; // 未能跟上 ai-dev 的 worktree（不擋任務，但要讓使用者看得到）
       const err = await withProjectLock(task.project_id, async () => {
         try {
           for (const repo of repos) {
             const wtPath = path.join(wtParent, path.basename(repo.local_path));
             // 切點是 ai-dev（與 analysis 一致）：從 main 切會看不到已核准但尚未進 main 的成果
             await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, AI_BRANCH, false);
+            // worktree 是 analysis 當下建的，任務在規格審核閘門可能停留數天，期間 ai-dev 已被別的
+            // 任務與實體 main 推進。不跟上就是在過期的碼上開發，且下載 zip 會蓋掉期間的人工修正。
+            const sync = await syncBranchWithAi(wtPath, gitEnv);
+            if (!sync.synced) unsynced.push({ label: repo.label, files: sync.conflictFiles, error: sync.error });
           }
           return null;
         } catch (e) {
@@ -143,6 +152,15 @@ async function doBranch(task, settings) {
         );
         notify.emitToUser(task.user_id, 'task:updated', { taskId, status: 'stopped' });
         return;
+      }
+      // 同步失敗不擋任務（穩定 > 準確），但必須留在時間軸：使用者事後看不出「這份產出是基於過期的碼」，
+      // 就無從判斷能不能直接拿去佈署。socket 事件是瞬時的，沒開著面板就永遠看不到。
+      for (const u of unsynced) {
+        const detail = u.files?.length ? `衝突檔：${u.files.join('、')}` : (u.error || '未知原因');
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+          [taskId, `⚠️ ${u.label}：本任務的程式底稿未能跟上最新的 ${AI_BRANCH}，開發與下載的 zip 會基於較舊的版本（${detail}）`]
+        );
       }
     }
   } else if (settings.git_repo_path) {

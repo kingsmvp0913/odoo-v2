@@ -413,11 +413,17 @@ window.TaskDetailView = Vue.defineComponent({
         a.click();
         a.remove();
         const entries = readList('X-Zip-Entries');
-        const skipped = readList('X-Zip-Skipped');
-        showToast(
-          `已下載 ${entries.join('、') || 'zip'}${skipped.length ? `（略過 ${skipped.length} 個非模組檔）` : ''}`,
-          'success'
-        );
+        const deleted = readList('X-Zip-Deleted');
+        const stale = readList('X-Zip-Stale');
+        // 覆蓋風險必須當下就講：stale＝這些檔在任務切點之後也被別人改過，直接覆蓋會蓋掉對方的改動；
+        // deleted＝zip 表達不了刪除，不講的話正式區會永遠留著本該移除的檔。兩者都用警示色，不混在成功訊息裡。
+        showToast(`已下載 ${entries.length} 個改動檔`, 'success');
+        if (stale.length) {
+          showToast(`⚠️ 這 ${stale.length} 個檔在本任務之後也被改過，覆蓋會蓋掉對方的改動：${stale.join('、')}`, 'error');
+        }
+        if (deleted.length) {
+          showToast(`⚠️ 本任務刪除了這些檔，請自行到正式區移除：${deleted.join('、')}`, 'error');
+        }
       } catch (e) { showToast(e.message, 'error'); }
       finally {
         // 撤銷必須晚於 click：過早撤掉會讓瀏覽器抓不到內容，下載靜默失敗。
@@ -731,7 +737,7 @@ window.TaskDetailView = Vue.defineComponent({
       </button>
       <a v-if="task && task.env_status" href="#" @click.prevent="openEnv" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
       <button v-if="isAdmin && task && task.git_branch" class="btn btn-outline btn-sm" style="margin-left:auto"
-        @click="downloadCodeZip" :disabled="downloadingZip" title="下載本任務改動模組的 zip（內含 <repo>/<模組> 結構，可直接覆蓋到正式區 addons）">
+        @click="downloadCodeZip" :disabled="downloadingZip" title="下載本任務改動檔的 zip（內含 <repo>/<原路徑> 結構，可直接覆蓋到正式區 addons）">
         {{ downloadingZip ? '打包中...' : '📦 下載程式碼 zip' }}
       </button>
     </div>
