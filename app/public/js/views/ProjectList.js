@@ -7,7 +7,8 @@ window.ProjectListView = Vue.defineComponent({
       search: '',
       showAddForm: false,
       newProject: { name: '', folder_name: '', odoo_version: '', description: '', edition: 'community' },
-      saving: false
+      saving: false,
+      releaseId: null   // 開著上正式彈窗的專案 id
     };
   },
   computed: {
@@ -142,6 +143,8 @@ window.ProjectListView = Vue.defineComponent({
             <div style="font-size:var(--fs-base);color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
             <div v-if="p.description" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" @click.stop>
+              <button class="btn btn-outline btn-sm" @click="releaseId = p.id" :disabled="!p.repo_count"
+                title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
               <button v-if="isAdmin()" class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
               <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
@@ -153,6 +156,8 @@ window.ProjectListView = Vue.defineComponent({
           <button v-if="isAdmin()" class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p)">刪除</button>
         </div>
       </div>
+      <!-- 上正式：與專案詳細頁共用同一個彈窗元件 -->
+      <ReleaseModal v-if="releaseId" :key="releaseId" :project-id="releaseId" @close="releaseId = null" />
     </div>
   `
 });

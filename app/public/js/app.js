@@ -206,5 +206,6 @@ const App = defineComponent({
 const app = createApp(App);
 app.component('ConfirmDialogHost', window.ConfirmDialogHost);
 app.component('Skeleton', window.Skeleton);
+app.component('ReleaseModal', window.ReleaseModal);
 app.use(router);
 app.mount('#app');
