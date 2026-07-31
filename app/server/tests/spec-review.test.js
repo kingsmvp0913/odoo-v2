@@ -142,15 +142,19 @@ test('續接輪：revise 之後 session 不清（權威規格靠每輪重送，�
   const id = await insertTask('module: sale\nsummary: 舊');
   await dbModule.query('UPDATE tasks SET spec_session_id=$2, spec_prompt_ver=$3 WHERE id=$1', [id, 'sp-2', ver]);
   await addLog(id, 'user', '改成可編輯');
+  // mock 回傳與預存值不同的 sessionId：藉此區分「session 續存後被 helper 實際寫回新值」
+  // 與「欄位單純沒被動過、殘留舊值剛好符合預期」——兩者若用同一個 id 會無法區分。
   runClaude.mockResolvedValue({
     text: '<result>\nDECISION: revise\nREPLY:\n改好了\n---SPEC---\nmodule: sale\nsummary: 新\n</result>',
-    usage: null, durationMs: null, sessionId: 'sp-2'
+    usage: null, durationMs: null, sessionId: 'sp-2-cont'
   });
 
   await runSpecReview(await loadTask(id), userId, undefined);
 
+  const [, opts] = runClaude.mock.calls[0];
+  expect(opts.resumeSessionId).toBe('sp-2');     // revise 輪確實走 --resume 接續，而非重開新對話
   const { rows: [t] } = await dbModule.query('SELECT spec_session_id, analysis_yaml FROM tasks WHERE id=$1', [id]);
-  expect(t.spec_session_id).toBe('sp-2');        // 同一場對話，續接點保留
+  expect(t.spec_session_id).toBe('sp-2-cont');   // 續接點被 helper 實際寫回本輪回傳的新值（非殘留舊值）
   expect(t.analysis_yaml).toContain('新');
 });
 
