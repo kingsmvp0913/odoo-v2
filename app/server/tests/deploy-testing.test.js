@@ -553,3 +553,75 @@ test('F4 已宣告但 pip 裝不起來 → stopped(env)，blocker 帶 pip 補裝
   expect(t.blocker_content).toContain('pip 補裝紀錄');
   expect(envAgent.upgradeModules).toHaveBeenCalledTimes(1); // pip 失敗就不再重試升級
 });
+
+// 意圖：三段以上的鏈不能假設「第一段＝根因」。Odoo 的 @ormcache（_xmlid_lookup）在 cache-miss 時
+// 於 except KeyError: 內重拋，於是「xmlid 指到不存在的 external id」——coding agent 最常犯、且只有
+// deploy 這一關會攔到的錯——其錯誤鏈第一段永遠是 lru.py 的 KeyError，零診斷價值。
+// 真正可行動的 ValueError 在後面的段。取錯段的後果不只是難讀：blocker_content 只截前 500 字，
+// 開頭就被假根因佔滿，而 ↳ 會指向 Odoo core（CLAUDE.md 硬規則禁止修改的檔）。
+test('extractOdooError：ormcache 假異常在前的三段鏈 → 取真正可行動的那一段，不取 KeyError', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Traceback (most recent call last):',
+    '  File "/usr/lib/python3/dist-packages/odoo/tools/lru.py", line 34, in __getitem__',
+    '    return self.d[obj]',
+    "KeyError: ('ir.model.data', <function IrModelData._xmlid_lookup at 0x7f00>, 'base.module_category_x')",
+    '',
+    'During handling of the above exception, another exception occurred:',
+    '',
+    'Traceback (most recent call last):',
+    '  File "/usr/lib/python3/dist-packages/odoo/addons/base/models/ir_model.py", line 2208, in _xmlid_lookup',
+    '    raise ValueError(...)',
+    'ValueError: External ID not found in the system: base.module_category_x',
+    '',
+    'The above exception was the direct cause of the following exception:',
+    '',
+    'Traceback (most recent call last):',
+    '  File "/usr/lib/python3/dist-packages/odoo/tools/convert.py", line 610, in _tag_root',
+    'odoo.tools.convert.ParseError: while parsing /mnt/extra-addons/repo/idx_x/security/groups.xml:3, somewhere inside',
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out.startsWith('ValueError: External ID not found')).toBe(true);  // 可行動的根因放最前
+  expect(out).toContain('base.module_category_x');                          // 缺的是哪個 xmlid
+  expect(out).not.toContain('lru.py');                                      // 不把 ormcache 內部指成肇事點
+  expect(out).toContain('groups.xml');                                      // 外層仍指出是載入哪個檔時炸的
+});
+
+// 反向守衛：只跳過「認得出的雜訊」。第一段若本來就是真根因（task 171 那種），不得被跳過。
+test('extractOdooError：第一段就是真根因時不得被跳過', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Traceback (most recent call last):',
+    '  File "/mnt/extra-addons/repo/alnas_xlsx/models/ir_actions_report.py", line 30, in _check_report_type',
+    "AttributeError: 'bool' object has no attribute 'endswith'",
+    '',
+    'The above exception was the direct cause of the following exception:',
+    '',
+    'Traceback (most recent call last):',
+    'odoo.tools.convert.ParseError: while parsing /mnt/extra-addons/repo/idx_hj/reports/x.xml:15, somewhere inside',
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out.startsWith('AttributeError')).toBe(true);
+  expect(out).toContain('alnas_xlsx/models/ir_actions_report.py');
+});
+
+// blameFrame 要挑「人動得了的檔」：Odoo 例外幾乎都從 core 拋出，取最內層會常態指向 core 或
+// <decorator-gen-N> 這種 Python 動態產生的偽檔名（改不了也讀不了）。
+test('extractOdooError：肇事點跳過 core 與 <decorator-gen> 偽路徑，指向客戶模組', () => {
+  const { extractOdooError } = require('../pipeline/deploy-testing');
+  const log = [
+    'Traceback (most recent call last):',
+    '  File "/mnt/extra-addons/repo/idx_hj/models/sale_order.py", line 88, in _compute_total',
+    '  File "<decorator-gen-12>", line 2, in create',
+    '  File "/usr/lib/python3/dist-packages/odoo/api.py", line 431, in _model_create_multi',
+    'TypeError: unsupported operand',
+    '',
+    'The above exception was the direct cause of the following exception:',
+    '',
+    'odoo.tools.convert.ParseError: while parsing x.xml:1, somewhere inside',
+  ].join('\n');
+  const out = extractOdooError(log);
+  expect(out).toContain('idx_hj/models/sale_order.py:88');
+  expect(out).not.toContain('decorator-gen');
+  expect(out).not.toContain('odoo/api.py');
+});

@@ -422,3 +422,28 @@ test('完全認不得的 decision → stopped，訊息帶出實際收到的值',
   expect(t.status).toBe('stopped');
   expect(t.blocker_content).toContain('teleport');
 });
+
+// ---- 中繼關的回程不得被 safeReturnStatus 當成非法值吞掉 ----
+// 「回程狀態」有兩種語意：(a) pipeline 各關的回程（該收斂）、(b) 中繼關的原地續判。
+// respec_running 屬 (b)：追加需求檢查點攔截推進時把「原本要去的那一關」記在 respec_return_status，
+// respec 途中失敗（逾時／認證撞刷新／回非 YAML）會停在 stopped，使用者解除阻塞後 resume_status
+// 仍是 respec_running。不還原就會落到 coding_running，把跑到 deploy 的任務打回開發重跑整條尾巴——
+// 正好抵銷掉 respec_return_status 這個欄位存在的目的。
+test('respec 途中失敗後解除阻塞 → 回 respec_return_status 記的那一關，不被降級到 coding', async () => {
+  claudeReturns({ decision: 'resume', summary: '環境問題已排除，回原關重跑' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'respec_running' });
+  await dbModule.query("UPDATE tasks SET respec_return_status='deploy_testing' WHERE id=$1", [id]);
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, respec_return_status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('deploy_testing');        // 不是 coding_running
+  expect(t.respec_return_status).toBeNull();      // 用完即清，不留給下一輪誤讀
+});
+
+// 沒有 respec_return_status 可還原時（舊資料）才允許落安全預設，不得意外落到別的站。
+test('resume_status=respec_running 但沒有回程值 → 落安全預設 coding_running', async () => {
+  claudeReturns({ decision: 'resume', summary: 's' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'respec_running' });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+});

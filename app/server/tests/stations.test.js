@@ -31,10 +31,25 @@ test('呼叫端可指定自己的安全預設（merge 衝突裁決回原關）',
   expect(safeReturnStatus(null, 'analysis_running')).toBe('analysis_running');
 });
 
-// 終點與自我循環的站刻意不在值域內：回到 done/stopped 沒有意義；回到 clarify_*／*_triage 會讓
-// 任務回到「問問題的那一關」自己，形成無限重進（pipeline.md 第 53 條同類陷阱）。
-test.each(['done', 'stopped', 'clarify_pending', 'clarify_answered', 'reject_triage', 'resolve_triage', 'respec_running'])(
+// 終點與 pipeline 之外的狀態不在值域內：回到 done/stopped 沒有意義，clarify_* 是閘門本身。
+test.each(['done', 'stopped', 'clarify_pending', 'clarify_answered'])(
   '%s 不得作為回程目標', (s) => {
+    expect(RETURNABLE_STATUSES.has(s)).toBe(false);
+    expect(safeReturnStatus(s)).toBe('coding_running');
+  }
+);
+
+// ⚠️ 這三個是**中繼關**，語意與上面那組完全不同，不要因為「它們也不在白名單裡」就以為行為相同。
+// RETURNABLE_STATUSES 的語意是「pipeline 各關的回程」，中繼關不屬於它——但中繼關有自己的回程需求，
+// 由**呼叫端豁免**，不是由這裡放行：
+//   - reject_triage／resolve_triage：分診判 clarify 時，答完要回分診續判
+//     → runner.js handleClarifyAnswered 用 TRIAGE_RESUME 豁免（測試在 runner.test.js）
+//   - respec_running：respec 途中失敗後解除阻塞，要回 respec_return_status 記的那一關
+//     → reject-triage.js 算 home 時先還原（測試在 reject-triage.test.js）
+// 曾經只有這支測試、沒有那兩處豁免，於是「分診 clarify 往返整條斷掉」被這裡的綠燈釘死、
+// 沒有任何測試會紅。留這段註解是為了讓下一個人知道要去哪裡找配套。
+test.each(['reject_triage', 'resolve_triage', 'respec_running'])(
+  '%s 不在 pipeline 回程白名單內（其回程由呼叫端豁免，見上方註解）', (s) => {
     expect(RETURNABLE_STATUSES.has(s)).toBe(false);
     expect(safeReturnStatus(s)).toBe('coding_running');
   }

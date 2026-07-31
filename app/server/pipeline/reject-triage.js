@@ -15,7 +15,7 @@ const { safeReturnStatus } = require('./stations');
 const STAGE_LABEL = {
   analysis_running: '分析', coding_running: '開發', qa_running: 'QA 審查',
   merge_running: '併入測試', deploy_testing: '部署測試區', playwright_running: 'E2E 測試',
-  review_pending: '最終人工審核'
+  respec_running: '調整規格', review_pending: '最終人工審核'
 };
 // advance.target → 目標 status（白名單，最遠只到 review_pending，不含 done）
 const TARGET_STATUS = {
@@ -40,7 +40,7 @@ async function stop(taskId, userId, reason) {
 // 讀 diff＋runtime log 查清真相，依「停下原因＋使用者的話」判 resume/advance/fix/respec 決定下一步。
 async function runRejectTriage(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, status, git_branch, analysis_yaml, retry_feedback, resume_status, triage_home, blocker_content FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, status, git_branch, analysis_yaml, retry_feedback, resume_status, triage_home, respec_return_status, blocker_content FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -66,8 +66,15 @@ async function runRejectTriage(taskId, userId, signal) {
     userInstruction = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（無退回原因）';
     homeStatus = 'review_pending';
   } else {
-    // resume_status 指向分診關本身＝走過 clarify 往返（閘門把回程寫在該欄），真正的原關在 triage_home
-    const home = (TRIAGE_STATUSES.has(task.resume_status) ? null : task.resume_status) || task.triage_home;
+    // resume_status 指向分診關本身＝走過 clarify 往返（閘門把回程寫在該欄），真正的原關在 triage_home。
+    // respec_running 也是中繼關、不是原關：追加需求檢查點攔截推進時，「原本要去的那一關」記在
+    // respec_return_status。respec 途中失敗（claude 逾時／認證撞刷新／回非 YAML）會停在 stopped，
+    // 使用者解除阻塞後 resume_status 仍是 'respec_running'——不還原就會被下面的 safeReturnStatus
+    // 當成非法值落到 coding_running，把一張已經跑到 deploy 的任務打回開發重跑整條尾巴，
+    // 正好抵銷掉 respec_return_status 這個欄位存在的目的。
+    const home = task.resume_status === 'respec_running'
+      ? task.respec_return_status
+      : ((TRIAGE_STATUSES.has(task.resume_status) ? null : task.resume_status) || task.triage_home);
     stuckStage = STAGE_LABEL[home] || home || '（未知）';
     stopContext = (task.blocker_content || '（無停下原因）').trim();
     const { rows: [instr] } = await query(
@@ -156,7 +163,7 @@ async function runRejectTriage(taskId, userId, signal) {
   const goto = async (nextStatus, { keepFeedback = false, freshRespec = false, resetReentry = true } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
     // triage_home 一併清：本次分診已落地，暫存的原關用完即棄，留著會被下一次分診誤當原關
-    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'triage_home=NULL', 'updated_at=NOW()'];
+    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'triage_home=NULL', 'respec_return_status=NULL', 'updated_at=NOW()'];
     if (resetReentry) sets.push('reentry_count=0');
     if (!keepFeedback) sets.push('retry_feedback=NULL');
     // freshRespec＝交回分析重寫規格，coding 的痕跡要一併清乾淨。git_branch 必須跟 coding_session_id

@@ -25,13 +25,45 @@ function findExcIdx(lines) {
   return -1;
 }
 
-// 例外行上方最近的 traceback frame＝實際肇事的檔案與行號（真因裡最有價值的一行）
+const FRAME_LINE = /^\s*File "([^"]+)", line (\d+)(?:, in (.+))?$/;
+// Odoo 核心的路徑（docker 內為 dist-packages，本機 venv 亦同結尾）。核心檔一律不是「該改的檔」——
+// CLAUDE.md 硬規則禁止修改 core，指過去等於把 coding agent 導向死路。
+const CORE_PATH = /(^|\/)(usr\/lib\/python3\/dist-packages|site-packages)\/odoo\//;
+// Python 動態產生的偽檔名（<decorator-gen-5>、<string>、<frozen importlib._bootstrap>）——
+// 不是真的檔案，改不了也讀不了。Odoo 大量使用 @api.model_create_multi 等裝飾器，這類 frame 極常見。
+const PSEUDO_PATH = /^</;
+// 這個 frame 指向的檔案，人或 coding agent 真的動得了嗎
+function isActionableFrame(p) { return !PSEUDO_PATH.test(p) && !CORE_PATH.test(p); }
+
+// 例外行上方的 traceback frame 中，挑「最可能是該改的那個檔」：
+// 優先取最深的**非核心** frame（客戶模組掛在 /mnt/extra-addons，也涵蓋本機路徑），
+// 全部都在核心內才退回最內層。Odoo 的例外幾乎都從 core 拋出，直接取最內層會常態指向
+// odoo/tools/lru.py、odoo/models.py 這種與問題無關的位置。
 function blameFrame(lines, beforeIdx) {
+  let fallback = null;
   for (let i = beforeIdx - 1; i >= 0; i--) {
-    const m = lines[i].match(/^\s*File "([^"]+)", line (\d+)(?:, in (.+))?$/);
-    if (m) return `  ↳ ${m[1]}:${m[2]}${m[3] ? ` in ${m[3].trim()}` : ''}`;
+    const m = lines[i].match(FRAME_LINE);
+    if (!m) continue;
+    const label = `  ↳ ${m[1]}:${m[2]}${m[3] ? ` in ${m[3].trim()}` : ''}`;
+    if (isActionableFrame(m[1])) return label;  // 最深的可動檔案＝最可能該改的那個
+    if (!fallback) fallback = label;           // 記住最內層，全核心時才用
   }
-  return null;
+  return fallback;
+}
+
+// Odoo 的 @ormcache（如 _xmlid_lookup）在 cache-miss 時於 `except KeyError:` 區塊內重拋，
+// 於是「xmlid 找不到」這個高頻錯誤的鏈，第一段永遠是 lru.py 的 KeyError——零診斷價值，而真正
+// 可行動的 `ValueError: External ID not found in the system: xxx` 在後面的段。
+// 特徵是 KeyError 的內容為 ormcache 的 key tuple，必含 `<function ...>` 這個 repr。
+const ORMCACHE_NOISE = /^KeyError: \(.*<function .+>/;
+
+// 這一段 traceback 是否只是核心內部的中繼例外。**刻意只認明確認得出的雜訊**：
+// 起初寫成「整段沒有可動 frame 就算雜訊」，但 xmlid 這類錯誤純粹發生在 core 內
+//（客戶的 XML 是資料不是程式碼，traceback 裡本來就沒有客戶的 .py），那樣會把真正的根因
+// 一起跳過、最後退回第一段，等於沒修。寧可漏認雜訊，不可誤殺根因。
+function isNoiseSegment(seg) {
+  const i = findExcIdx(seg);
+  return i >= 0 && ORMCACHE_NOISE.test(seg[i].trim());
 }
 
 function extractOdooError(log) {
@@ -50,10 +82,15 @@ function extractOdooError(log) {
     if (CHAIN_MARK.test(lines[i].trim())) { segs.push(lines.slice(segStart, i)); segStart = i + 1; }
   }
   if (segs.length) {
-    const rootIdx = findExcIdx(segs[0]);
+    // 「第一段＝根因」對兩段鏈成立，三段以上就不一定：Odoo 最高頻的 xmlid 錯誤（ref 指到不存在的
+    // external id）第一段固定是 ormcache cache-miss 的 KeyError，真正可行動的
+    // 「ValueError: External ID not found in the system: xxx」在後面的段。
+    // 改成取「第一個含有客戶碼 frame 的段」；全部都是核心內部堆疊才退回第一段。
+    const rootSeg = segs.find(sg => !isNoiseSegment(sg) && findExcIdx(sg) >= 0) || segs[0];
+    const rootIdx = findExcIdx(rootSeg);
     const outerIdx = findExcIdx(lines);
     if (rootIdx >= 0 && outerIdx >= 0) {
-      const root = [segs[0][rootIdx].trim(), blameFrame(segs[0], rootIdx)].filter(Boolean).join('\n');
+      const root = [rootSeg[rootIdx].trim(), blameFrame(rootSeg, rootIdx)].filter(Boolean).join('\n');
       const outer = lines.slice(outerIdx).join('\n').trim().slice(0, 600);
       return `${root}\n↓ 被包裝成：\n${outer}`;
     }

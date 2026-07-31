@@ -262,7 +262,16 @@ async function recordSpecDecision(taskId, analysisYaml, answer) {
 // 不 bumpReentry：clarify 是人工在場的閘門，非自主 runaway，斷路器留給 QA/E2E/triage 自動路徑。
 async function handleClarifyAnswered(task) {
   const { rows: [row] } = await query('SELECT resume_status, retry_feedback, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
-  const resume = safeReturnStatus(row?.resume_status);
+  // 「回程狀態」有兩種語意，不能一律用 safeReturnStatus 收斂：
+  //   (a) pipeline 各關的回程（qa_running／deploy_testing…）→ 該收斂，非法值會變殭屍。
+  //   (b) **中繼關的原地續判**：分診判 clarify 時，enterClarifyGate 刻意把 resume_status 寫成分診關
+  //       自己（verdict-router.js 的註解逐字寫著這是設計本意），使用者答完要回分診「帶著答案續判」。
+  // 這兩個 triage 狀態不在 RETURNABLE_STATUSES（回程目標白名單）內，但它們在 RUNNABLE_STATUSES 內、
+  // HANDLERS 查得到，回去跑得動、不會變殭屍。少了這個豁免，分診的 clarify 出口整條失效：任務被無
+  // 條件當成 fix 丟進 coding 帶著未解歧義開工，而下面那行的 TRIAGE_RESUME 守衛也會因為 resume 已被
+  // 改寫而永遠命中不了 → 路由問題的答覆被誤寫進 analysis_yaml 的 spec_decisions，永久污染規格本體。
+  const rawResume = row?.resume_status;
+  const resume = TRIAGE_RESUME.has(rawResume) ? rawResume : safeReturnStatus(rawResume);
   const { rows: [ans] } = await query(
     "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id DESC LIMIT 1", [task.id]
   );

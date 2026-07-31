@@ -649,3 +649,38 @@ test('clarify_answered 派工時不得覆寫 resume_status（否則回到自己�
   const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('coding_running');
 });
+
+// 分診的 clarify 出口：分診判「我得先問清楚才能決定 fix 還是 respec」時，enterClarifyGate 刻意把
+// resume_status 寫成分診關自己（verdict-router.js 的註解逐字寫著這是設計本意），使用者答完要回分診
+// 帶著答案續判。這兩個狀態不在 RETURNABLE_STATUSES（那是「pipeline 各關的回程」白名單），但它們在
+// RUNNABLE_STATUSES 內、HANDLERS 查得到，回去跑得動。
+// 少了這個豁免的後果不只是走錯站：resume 被改寫後，handleClarifyAnswered 的 TRIAGE_RESUME 守衛
+// 永遠命中不了 → 路由問題的答覆（「這算 bug 還是規格？」）被寫進 analysis_yaml 的 spec_decisions，
+// 而那份規格是 QA 每輪重驗的唯一依據＝永久污染規格本體。
+test.each(['resolve_triage', 'reject_triage'])(
+  'clarify 答完回分診續判（resume_status=%s）：不得被值域收斂改道到 coding',
+  async (triage) => {
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status, analysis_yaml)
+       VALUES ($1,$2,'odoo','T','clarify_answered',$3,'module: sale') RETURNING id`,
+      [userId, `rs_back_${triage}`, triage]
+    );
+    await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','算 bug，請直接修')", [t.id]);
+    await run();
+    const { rows: [after] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [t.id]);
+    expect(after.status).toBe(triage);                        // 回分診，不是 coding_running
+    expect(after.analysis_yaml).toBe('module: sale');          // 路由答覆不得被寫進規格
+  }
+);
+
+// 反向守衛：豁免只給這兩個中繼關，其餘非法值仍要被收斂掉，不能因此開了大門。
+test('clarify 回程是認不得的狀態 → 仍收斂到 coding_running（不製造殭屍）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status)
+     VALUES ($1,'rs_bogus','odoo','T','clarify_answered','qa_runing') RETURNING id`,
+    [userId]
+  );
+  await run();
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('coding_running');
+});
