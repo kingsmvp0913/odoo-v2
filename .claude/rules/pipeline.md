@@ -54,7 +54,7 @@ paths:
 81. **把 repo 標成 `clone_status='error'` 等同讓它從整個 pipeline 消失** — 全平台查詢都帶 `WHERE clone_status='done'`。
 82. **同步進來的任務一律要綁得到平台專案，綁不到就在源頭 `continue` 不入庫** — 不綁專案的任務下游沒有可行路徑。
 83. **來源系統的主同步 domain 只抓未結案單，「單子從結果消失」不能推斷結案** — 要用反面條件（Odoo `fold=true`、eService 非 draft/open）明確判定。
-84. **eService 同步的 domain 限 `state IN ['draft','open']`，`verifiy`／`cancel` 工單不會被拉進來** — 這是刻意的產品決策範圍，勿擅自擴 domain。
+84. **eService 同步的 domain 限 `state = 'open'`（只抓處理中），未處理／驗收完成／結案／作廢一律不進來** — 這是刻意的產品決策範圍，勿擅自擴 domain。用白名單而非排除清單，故不需知道其餘 state 代碼。未處理（`draft`）佔了原同步量的絕大多數且多為客戶剛丟進、尚未分流的雜訊單，一被接手轉 `open` 下輪同步自動補拉。**同步 domain 與 `archiveClosedTasks` 的結案條件（見 83）刻意不對稱**：退回未處理的單既不更新也不封存，會留在平台上——這是已裁決的取捨，不是待修的 bug。
 85. **同步既有資料的修法要在「插入」與「既有」兩個分支都呼叫** — 來源端事後才補的資料永遠不會被回填。同時依實際列數重算 `has_attachment` 之類旗標。
 86. **新增附件來源不需要改 pipeline——`assembleTaskContext` 查 `task_attachments` 無 origin 過濾** — 但附件必須早於 `runPipeline` 寫入，否則該輪 agent 讀不到。
 87. **wiki 的 `node_type='notes'`（project-notes）是人工維護保留節點，AI 不得覆寫** — `_ensureNode` 用 `ON CONFLICT DO NOTHING`、refresh/delete 對 notes 一律擋 400。
