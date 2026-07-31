@@ -558,3 +558,57 @@ test('G-10 進場守衛：主 clone 殘留 MERGE_HEAD 但無人在裁決（前�
   expect(git.abortMerge).toHaveBeenCalledWith(dir); // 自癒
   expect(git.ensureAiBranch).toHaveBeenCalledWith(dir, expect.anything()); // 自癒後照常繼續同步
 });
+
+// 意圖：留言的銷帳時點必須是「analysis 真的產出規格」，不能提前。
+// assembleTaskContext 不看 applied_at、會把所有留言讀進 original_text，所以只有這一輪跑完並寫出
+// analysis_yaml，才代表需求真的進了規格。分診的 respec 分支曾在跳關前就先銷帳，但那一輪可能失敗、
+// 被中止或使用者中途插手，第二輪分診改判 fix／advance 時留言已被標成已吸收＝需求永久消失，
+// 而且證據（applied_at IS NULL 這個待辦訊號）被自己刪掉，事後查不出來。
+function mockAnalysisResult(yamlBody) {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = {
+      write: () => {},
+      end: () => { setImmediate(() => {
+        child.stdout.emit('data', JSON.stringify({ type: 'result', result: `<result>\n${yamlBody}\n</result>`, usage: null, duration_ms: 10 }) + '\n');
+        child.emit('close', 0);
+      }); }
+    };
+    return child;
+  });
+}
+
+test('analysis 成功寫出規格 → 該批留言才銷帳', async () => {
+  mockAnalysisResult('case_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"');
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_absorb_ok','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await dbModule.query(
+    "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1,'manual','me','順便把單價改成可編輯',NOW())", [t.id]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const { rows: [m] } = await dbModule.query('SELECT applied_at FROM task_messages WHERE task_id=$1', [t.id]);
+  expect(m.applied_at).not.toBeNull();
+});
+
+test('analysis 沒產出有效規格（停在 stopped）→ 留言不得銷帳，留給下一輪', async () => {
+  mockAnalysisResult('這不是有效的規格物件');   // 缺必要欄位 → 走 stopped，不寫 analysis_yaml
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_absorb_fail','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await dbModule.query(
+    "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1,'manual','me','順便把單價改成可編輯',NOW())", [t.id]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).not.toBe('branch_pending');   // 確認真的沒成功產出規格
+  const { rows: [m] } = await dbModule.query('SELECT applied_at FROM task_messages WHERE task_id=$1', [t.id]);
+  expect(m.applied_at).toBeNull();                   // 需求還在待辦，不會人間蒸發
+});

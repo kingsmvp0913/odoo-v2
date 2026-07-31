@@ -130,6 +130,16 @@ async function runTaskAnalysis(taskId, userId, signal) {
   );
   if (!task || !task.project_id) return false;
   task.original_text = await assembleTaskContext(taskId);
+  // assembleTaskContext 不看 applied_at、會把所有留言讀進 original_text，所以「analysis 跑完並寫出
+  // 規格」才是留言真正被吸收的時點。記下當下這批的最大 id，成功後才銷帳（比照 respec-agent 的
+  // id <= maxId 寫法，patch 期間新進的留言留給下一個檢查點）。
+  // 分診的 respec 分支原本在跳關前就先銷帳，但 analysis 這輪可能失敗、被中止或使用者中途插手，
+  // 第二輪分診改判 fix／advance 時留言已被標成已吸收＝需求永久消失，而且證據被自己刪掉。
+  const { rows: [pendMax] } = await query(
+    "SELECT MAX(id) AS max_id FROM task_messages WHERE task_id=$1 AND source='manual' AND applied_at IS NULL",
+    [taskId]
+  );
+  const absorbUpTo = pendMax?.max_id || null;
 
   const info = await getProjectInfo(task.project_id);
   if (!info?.root) {
@@ -322,6 +332,13 @@ async function runTaskAnalysis(taskId, userId, signal) {
     `UPDATE tasks SET status=$2, analysis_yaml=$3, updated_at=NOW() WHERE id=$1`,
     [taskId, nextStatus, yaml.dump(result)]
   );
+  // 規格已成功寫出＝這批留言真的被吸收了，此時才銷帳（理由見上方 absorbUpTo）
+  if (absorbUpTo) {
+    await query(
+      "UPDATE task_messages SET applied_at=NOW() WHERE task_id=$1 AND source='manual' AND applied_at IS NULL AND id <= $2",
+      [taskId, absorbUpTo]
+    );
+  }
   await logAnalysisGate(taskId, result, nextStatus);
   notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   return true;

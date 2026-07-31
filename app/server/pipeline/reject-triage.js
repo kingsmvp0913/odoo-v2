@@ -227,15 +227,8 @@ async function runRejectTriage(taskId, userId, signal) {
   if (decision === 'respec') {
     const handoff = summary || '判定為規格問題，請依停下原因重新分析並調整規格。';
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, `[分診—需調整規格]\n${handoff}`]);
-    // 待吸收留言在此銷帳——且**只有這條分支**可以。analysis 重跑時 assembleTaskContext（sync.js）
-    // 讀全部留言且不看 applied_at，需求一定會被重新寫進規格，銷帳不會弄丟東西；不銷帳則規格寫好後
-    // 推進到 coding 時又被 runner 的檢查點當成新需求撈一次。
-    // 其他分支（fix／advance／resume）刻意不銷帳：它們的落點 coding／QA／deploy／review
-    // 沒有任何一個讀 task_messages，標了就等於把使用者在關卡執行期間補的真需求靜默丟掉。
-    await query(
-      "UPDATE task_messages SET applied_at=NOW() WHERE task_id=$1 AND source='manual' AND applied_at IS NULL",
-      [taskId]
-    );
+    // 留言的銷帳不在這裡：analysis 這輪可能失敗或被中止，跳關前先銷帳會讓第二輪分診改判 fix／
+    // advance 時需求已消失。改由 task-agent.js 在「成功寫出新規格」的同一段落地（見該處註解）。
     await goto('analysis_running', { freshRespec: true });
     return true;
   }

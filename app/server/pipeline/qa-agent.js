@@ -61,7 +61,10 @@ async function runQaAgent(taskId, userId, signal) {
     const findings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（見上輪 QA 清單）';
     await query(
       "UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-      [taskId, `QA 與開發僵局：自上輪 QA 後任務分支未有新 commit（coding 認為程式已正確、未修改），但 QA 仍判未通過。需你裁決 QA 指出的問題是否成立——成立→補充如何修正；不成立→可裁決放行。\n\nQA 未解清單：\n${findings.slice(0, 500)}`]
+      // 放行的措辭要寫死給使用者看：QA 這一關不再讀使用者的修正指示（那是流程層的話，放行與否
+      // 由分診的 advance 決定），所以「我覺得 QA 判錯了」必須講成分診聽得懂的推進指令才有用。
+      // 不寫明的話使用者只會寫「這個沒問題，繼續」，分診多半判 resume＝回 QA 重跑，原地打轉。
+      [taskId, `QA 與開發僵局：自上輪 QA 後任務分支未有新 commit（coding 認為程式已正確、未修改），但 QA 仍判未通過。需你裁決 QA 指出的問題是否成立——\n・成立 → 在修正指示裡補充「該怎麼修」。\n・不成立、要放行 → 請明確寫「跳過 QA，直接推進到合併」（只寫「沒問題」「繼續」會被判成回 QA 重跑，原地打轉）。\n\nQA 未解清單：\n${findings.slice(0, 500)}`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;

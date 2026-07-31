@@ -369,6 +369,9 @@ async function runTask(task, settings, signal) {
       merge_running: ['deploy_testing'],
       deploy_testing: ['playwright_running', 'review_pending'],
       playwright_running: ['review_pending'],
+      // 人工審核退回 → 分診 → 回 review_pending 這條路也要攔：否則審核期間補的留言永遠等不到
+      // 檢查點，會跟著任務一路走到 done，需求沒實作而且沒有任何訊號。
+      reject_triage: ['review_pending'],
     };
     const advancedForward = (ABSORB_ON_ADVANCE[prevStatus] || []).includes(u.status);
     if (advancedForward) {

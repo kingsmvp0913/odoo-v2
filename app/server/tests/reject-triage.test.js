@@ -359,15 +359,15 @@ test.each([
   expect(await pendingCount(id)).toBe(1);       // 仍待吸收，留給檢查點吸收進規格
 });
 
-// 只有 respec 有資格銷帳：它落到 analysis_running，assembleTaskContext 讀全部留言且不看
-// applied_at，需求一定會被重新寫進規格。不銷帳則規格寫好後推進到 coding 時又被檢查點撈一次。
-test('respec：交回 analysis 重寫規格 → 留言銷帳（analysis 會重讀，不會弄丟）', async () => {
+// respec 也不在這裡銷帳：它只是「把任務交回 analysis」，analysis 那一輪可能失敗、被中止或使用者
+// 中途插手，第二輪分診改判 fix／advance 時留言已被標成已吸收＝需求永久消失、證據還被自己刪掉。
+// 銷帳的正確時點是「analysis 真的產出新規格」，落在 task-agent.js（見該處 absorbUpTo 註解）。
+test('respec：交回 analysis 時尚不銷帳（等 analysis 真的寫出規格才算吸收）', async () => {
   claudeReturns({ decision: 'respec', summary: 's' });
   const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
   await addManualMsg(id, '順便把單價欄位改成可編輯');
-  expect(await pendingCount(id)).toBe(1);       // 前置條件成立才有鑑別力
   await runRejectTriage(id, userId);
-  expect(await pendingCount(id)).toBe(0);
+  expect(await pendingCount(id)).toBe(1);       // 仍待吸收，交給 analysis
 });
 
 // 上面那條「respec 才銷帳」的正確性建立在「分診真的看得到留言」之上——看不到就無從分辨
