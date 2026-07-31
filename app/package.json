@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "start": "node server/index.js",
-    "test": "jest --runInBand --forceExit",
-    "test:quiet": "jest --runInBand --forceExit --silent --noStackTrace --no-color"
+    "test": "jest --runInBand",
+    "test:quiet": "jest --runInBand --silent --noStackTrace --no-color"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
