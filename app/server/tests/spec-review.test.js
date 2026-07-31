@@ -116,3 +116,55 @@ test('agent 無有效 result → stopped', async () => {
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');
 });
+
+test('續接輪：有 spec_session_id ＋指紋相符 → 帶 --resume，且 prompt 含當前規格全文', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('spec-review')}.${promptVersion('spec-review-retry')}`;
+  const id = await insertTask('module: sale\nsummary: 目前這版');
+  await dbModule.query('UPDATE tasks SET spec_session_id=$2, spec_prompt_ver=$3 WHERE id=$1', [id, 'sp-1', ver]);
+  await addLog(id, 'user', '那個欄位可以改嗎？');
+  runClaude.mockResolvedValue({
+    text: '<result>\nDECISION: answer\nREPLY:\n可以。\n</result>',
+    usage: null, durationMs: null, sessionId: 'sp-1'
+  });
+
+  await runSpecReview(await loadTask(id), userId, undefined);
+
+  const [prompt, opts] = runClaude.mock.calls[0];
+  expect(opts.resumeSessionId).toBe('sp-1');
+  // 權威重送：session 內可能殘留舊版規格，每輪必須重送 DB 的當前版本
+  expect(prompt).toContain('目前這版');
+});
+
+test('續接輪：revise 之後 session 不清（權威規格靠每輪重送，不靠重開 session）', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('spec-review')}.${promptVersion('spec-review-retry')}`;
+  const id = await insertTask('module: sale\nsummary: 舊');
+  await dbModule.query('UPDATE tasks SET spec_session_id=$2, spec_prompt_ver=$3 WHERE id=$1', [id, 'sp-2', ver]);
+  await addLog(id, 'user', '改成可編輯');
+  runClaude.mockResolvedValue({
+    text: '<result>\nDECISION: revise\nREPLY:\n改好了\n---SPEC---\nmodule: sale\nsummary: 新\n</result>',
+    usage: null, durationMs: null, sessionId: 'sp-2'
+  });
+
+  await runSpecReview(await loadTask(id), userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT spec_session_id, analysis_yaml FROM tasks WHERE id=$1', [id]);
+  expect(t.spec_session_id).toBe('sp-2');        // 同一場對話，續接點保留
+  expect(t.analysis_yaml).toContain('新');
+});
+
+test('首輪：無 session → 不帶 --resume，且跑完存下 session', async () => {
+  const id = await insertTask('module: sale');
+  await addLog(id, 'user', '第一個問題');
+  runClaude.mockResolvedValue({
+    text: '<result>\nDECISION: answer\nREPLY:\n回答\n</result>',
+    usage: null, durationMs: null, sessionId: 'sp-new'
+  });
+
+  await runSpecReview(await loadTask(id), userId, undefined);
+
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBeUndefined();
+  const { rows: [t] } = await dbModule.query('SELECT spec_session_id FROM tasks WHERE id=$1', [id]);
+  expect(t.spec_session_id).toBe('sp-new');
+});

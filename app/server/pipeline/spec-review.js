@@ -5,6 +5,7 @@ const { loadAgent } = require('./agent-loader');
 const { getProjectNotes } = require('./project-notes');
 const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
+const { withResume } = require('./with-resume');
 const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
 
@@ -54,16 +55,40 @@ async function runSpecReview(task, userId, signal) {
   let raw;
   try {
     const agent = loadAgent('spec-review');
+    const retryAgent = loadAgent('spec-review-retry');
     const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
     // 分析關建好的 worktree：有就讓它自己查碼再回答／改規格，沒有就照舊只看 analysis_yaml
     const work = await taskWorkContext(task);
-    const prompt = agent.render({
-      analysis_yaml: task.analysis_yaml || '（無規格）',
-      conversation,
-      project_notes: projectNotes || '',
-      repo_paths: work ? work.repoPaths : ''
-    }).trim();
-    const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
+    // 續接輪只送「使用者這輪講的話」＋當前規格全文；先前的探索與回覆都在 session 裡。
+    // 規格一律重送 DB 版本：revise 輪會改寫 analysis_yaml，session 內殘留的舊版不可信。
+    const lastUser = [...dlg].reverse().find(l => l.role === 'user');
+    const result = await withResume({
+      freshAgentName: 'spec-review',
+      retryAgentName: 'spec-review-retry',
+      getSession: async () => {
+        const { rows: [r] } = await query('SELECT spec_session_id, spec_prompt_ver FROM tasks WHERE id=$1', [taskId]);
+        return r && r.spec_session_id ? { sessionId: r.spec_session_id, promptVer: r.spec_prompt_ver } : null;
+      },
+      setSession: ({ sessionId, promptVer }) =>
+        query('UPDATE tasks SET spec_session_id=$2, spec_prompt_ver=$3 WHERE id=$1', [taskId, sessionId, promptVer]),
+      clearSession: () =>
+        query('UPDATE tasks SET spec_session_id=NULL, spec_prompt_ver=NULL WHERE id=$1', [taskId]),
+      renderFresh: () => agent.render({
+        analysis_yaml: task.analysis_yaml || '（無規格）',
+        conversation,
+        project_notes: projectNotes || '',
+        repo_paths: work ? work.repoPaths : ''
+      }).trim(),
+      renderRetry: () => retryAgent.render({
+        analysis_yaml: task.analysis_yaml || '（無規格）',
+        new_message: lastUser ? lastUser.content : '（無新發言）'
+      }).trim(),
+      // retry 失敗會靜默降級跑 fresh，使用者照樣拿到回覆——但失敗那次的 token／時間必須記帳，
+      // 否則「失敗重跑」這個最貴的情境在 token_usage 裡完全隱形（健檢 U12；qa-agent.js:117-120 同款）
+      onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err),
+      model: agent.model,
+      runOpts: { cwd: work ? work.cwd : undefined, taskId, userId, signal, agentType: 'respec' }
+    });
     raw = result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {

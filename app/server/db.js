@@ -459,6 +459,13 @@ async function migrate() {
     // 澄清關這一輪走哪個入口（answer_or_proceed／ask／revise）：路由寫入、執行器讀取。
     // 不用參數傳遞是因為派工要經 runner 的 _inFlight 互斥，而 runner 的 SELECT 撈不到臨時參數。
     { table: 'tasks', col: 'clarify_mode',         sql: 'ALTER TABLE tasks ADD COLUMN clarify_mode TEXT' },
+    // 對話式閘門的 session 續接（spec_review／clarify_pending）：同一場問答續用同一個 claude session，
+    // 省掉每輪重新探索程式碼。*_prompt_ver 存 fresh＋retry 兩個 agent 的組合指紋，任一 prompt 變更即強制 fresh。
+    // 離開閘門時清空（見 pipeline-routes 核准端點／clarify-chat proceed 分支）。
+    { table: 'tasks', col: 'spec_session_id',      sql: 'ALTER TABLE tasks ADD COLUMN spec_session_id TEXT' },
+    { table: 'tasks', col: 'spec_prompt_ver',      sql: 'ALTER TABLE tasks ADD COLUMN spec_prompt_ver TEXT' },
+    { table: 'tasks', col: 'clarify_session_id',   sql: 'ALTER TABLE tasks ADD COLUMN clarify_session_id TEXT' },
+    { table: 'tasks', col: 'clarify_prompt_ver',   sql: 'ALTER TABLE tasks ADD COLUMN clarify_prompt_ver TEXT' },
     // 澄清對話的回程狀態（confirm_pending／clarify_pending）。不能借用 resume_status——
     // 那欄已被 verdict-router／reject-triage 用來記「要回去哪一關」，覆寫會讓 QA 裁決導回 coding 的路徑消失。
     { table: 'tasks', col: 'clarify_from',         sql: 'ALTER TABLE tasks ADD COLUMN clarify_from TEXT' },
