@@ -520,3 +520,39 @@ test('純 spec_questions（無 issues/summary）→ clarify_pending，不被 R3 
   expect(t.qa_retry_count).toBe(0);
   expect(runClaude).toHaveBeenCalledTimes(1); // 沒有被 R3 重問
 });
+
+// 意圖：QA 不得看到「使用者修正指示」。那是流程層的話（「已修正」「直接推進到部署測試區」），
+// 而放行與否是 triage 的 advance 分支在管——QA 沒有做這個決策的資訊（看不到彈跳次數、失敗歷史）。
+// 舊版 qa.md 寫著「例如使用者明確要求忽略某項或已說明處理方式」，等於明文教它把流程指令當放行依據。
+// 規格層級的決定不走這條路：那本來就會經 respec／analysis 進 analysis_yaml，維持單一規格來源。
+// 這支測試釘住的是「訊息到不了 QA」這個結構保證，不是 prompt 的措辭。
+test('fresh：使用者修正指示不得進 QA prompt（放行是 triage 的職責，不是 QA 的）', async () => {
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(0);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','[修正指示] 已修正，直接進入部屬測試區環節')", [id]
+  );
+
+  await runQaAgent(id, userId);
+
+  const prompt = runClaude.mock.calls[0][0];
+  expect(prompt).not.toContain('已修正，直接進入部屬測試區環節');
+  expect(prompt).not.toContain('使用者修正指示');
+  expect(prompt).toContain('module: sale');            // 規格仍在＝不是整個 prompt 都空了
+});
+
+test('resume：重驗輪同樣不得帶入使用者修正指示', async () => {
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(1);
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-1' WHERE id=$1", [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\nxmlid 不存在')", [id]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','[修正指示] 忽略該錯誤，直接繼續')", [id]
+  );
+
+  await runQaAgent(id, userId);
+
+  const prompt = runClaude.mock.calls[0][0];
+  expect(prompt).not.toContain('忽略該錯誤，直接繼續');
+  expect(prompt).toContain('xmlid 不存在');            // 上輪未解清單仍在＝重驗輪本身正常
+});

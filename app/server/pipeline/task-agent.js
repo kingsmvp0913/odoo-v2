@@ -86,14 +86,19 @@ function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, pro
   };
 }
 
-// 取最近一筆「修正指示」（失敗處理時使用者輸入）；供 resume 後的階段帶入 prompt，讓指示真的生效
+// 取最近一筆「修正指示」（失敗處理時使用者輸入）；供 resume 後的階段帶入 prompt，讓指示真的生效。
+// 帶上送出時間：這段話沒有失效機制，會被往後每一輪 coding 讀到，而它可能是「繼續」「已修正」
+// 這種只對當時那次卡關有意義的流程指令。agent 沒有時間就無從判斷它是否還適用，只能從字面猜。
 async function latestResolution(taskId) {
   const { rows } = await query(
-    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'user' AND content LIKE '[修正指示]%' ORDER BY created_at DESC LIMIT 1",
+    "SELECT content, created_at FROM task_logs WHERE task_id = $1 AND role = 'user' AND content LIKE '[修正指示]%' ORDER BY created_at DESC LIMIT 1",
     [taskId]
   );
   if (!rows.length) return '';
-  return rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
+  const text = rows[0].content.replace(/^\[修正指示\]\s*/, '').trim();
+  if (!text) return '';
+  const at = rows[0].created_at ? new Date(rows[0].created_at).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }) : '（時間不明）';
+  return `（送出時間：${at}）\n${text}`;
 }
 
 function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, projectNotes) {

@@ -2,7 +2,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
-const { getProjectInfo, worktreeParent, buildRepoPaths, latestResolution } = require('./task-agent');
+const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
@@ -81,7 +81,10 @@ async function runQaAgent(taskId, userId, signal) {
       [taskId]
     );
     const priorFindings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（首輪，無上輪清單）';
-    const resolution = (await latestResolution(taskId)) || '（無）';
+    // 刻意不帶「使用者修正指示」進 QA：那是流程層的話（「已修正」「直接推進」），而放行與否是
+    // triage 的 advance 分支在管，QA 沒有做這個決策的資訊（看不到彈跳次數與失敗歷史）。舊版 prompt
+    // 還寫著「例如使用者明確要求忽略某項」，等於明文教它把流程指令當放行依據。規格層級的決定不走
+    // 這條路——那本來就會經 respec／analysis 進 analysis_yaml，維持單一規格來源。
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
     const cwd = worktreeParent(info.root, task.task_id);
 
@@ -95,8 +98,7 @@ async function runQaAgent(taskId, userId, signal) {
         main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
-        prior_findings: priorFindings,
-        resolution
+        prior_findings: priorFindings
       }).trim();
       try {
         callResult = await runClaude(prompt, { cwd, taskId, userId, signal, resumeSessionId: task.qa_session_id, model: retryAgent.model, agentType: 'qa' });
@@ -126,7 +128,6 @@ async function runQaAgent(taskId, userId, signal) {
         repo_paths: buildRepoPaths(info, task.task_id),
         analysis_yaml: task.analysis_yaml || '（無規格）',
         prior_findings: priorFindings,
-        resolution,
         project_notes: projectNotes || ''
       }).trim();
       callResult = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'qa' });
