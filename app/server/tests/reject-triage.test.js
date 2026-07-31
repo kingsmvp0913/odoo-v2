@@ -324,3 +324,68 @@ test('無有效 result → stopped', async () => {
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');
 });
+
+// ---- 使用者留言的銷帳（防被 runner 的追加需求檢查點二次消費）----
+// 意圖：使用者要推進卡住的任務，唯一管道是留言框——所以「用留言下流程指令」是常態。
+// 分診讀了它、據此做出決策，就必須一併銷帳；否則 runner.js 的追加需求檢查點會在下一次成功推進時
+// 看到 applied_at IS NULL，把同一句流程指令當成新需求丟進 respec 跑一輪再退回 coding。
+// task 171 實例：「已修正，直接推進到部署測試區」在 deploy 成功後害整條 pipeline 重跑。
+async function addManualMsg(taskId, content = '確認是其他問題造成，已修正，直接推進到部署測試區環節') {
+  await dbModule.query(
+    "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1,'manual','me',$2,NOW())",
+    [taskId, content]
+  );
+}
+async function pendingCount(taskId) {
+  const { rows: [r] } = await dbModule.query(
+    "SELECT COUNT(*)::int AS n FROM task_messages WHERE task_id=$1 AND source='manual' AND applied_at IS NULL", [taskId]
+  );
+  return r.n;
+}
+
+// 銷帳的資格條件＝「落點會不會重新讀到這則留言」，不是「分診有沒有做出決策」。
+// fix→coding_running、advance→qa/merge/deploy/review、resume→原關：這些落點**沒有一個**讀
+// task_messages（assembleTaskContext 只有 runTaskAnalysis 會呼叫），標了就是把使用者在關卡執行
+// 期間補的真需求靜默丟掉——比二次消費更糟，因為畫面上留言還在、使用者不會發現它永遠不生效。
+test.each([
+  ['advance', { decision: 'advance', target: 'deploy', summary: 's' }],
+  ['fix',     { decision: 'fix', summary: 's' }],
+  ['resume',  { decision: 'resume', summary: 's' }],
+])('%s：留言不得銷帳——落點都不讀 task_messages，標了等於丟掉', async (_name, verdict) => {
+  claudeReturns(verdict);
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await addManualMsg(id, '順便把單價欄位改成可編輯');
+  await runRejectTriage(id, userId);
+  expect(await pendingCount(id)).toBe(1);       // 仍待吸收，留給檢查點吸收進規格
+});
+
+// 只有 respec 有資格銷帳：它落到 analysis_running，assembleTaskContext 讀全部留言且不看
+// applied_at，需求一定會被重新寫進規格。不銷帳則規格寫好後推進到 coding 時又被檢查點撈一次。
+test('respec：交回 analysis 重寫規格 → 留言銷帳（analysis 會重讀，不會弄丟）', async () => {
+  claudeReturns({ decision: 'respec', summary: 's' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await addManualMsg(id, '順便把單價欄位改成可編輯');
+  expect(await pendingCount(id)).toBe(1);       // 前置條件成立才有鑑別力
+  await runRejectTriage(id, userId);
+  expect(await pendingCount(id)).toBe(0);
+});
+
+// 上面那條「respec 才銷帳」的正確性建立在「分診真的看得到留言」之上——看不到就無從分辨
+// 「順便改個欄位」（追加需求，該判 respec）與「已修正，直接推進」（流程指令，該判 advance）。
+// 這支釘住那個前提；拿掉留言注入，分診就只是在瞎猜。
+test('待吸收留言必須進分診 prompt（分辨追加需求與流程指令的唯一依據）', async () => {
+  claudeReturns({ decision: 'resume', summary: 's' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await addManualMsg(id, '順便把單價欄位改成可編輯');
+  await runRejectTriage(id, userId);
+  expect(runClaude.mock.calls[0][0]).toContain('順便把單價欄位改成可編輯');
+});
+
+// 反向守衛：clarify 是「還在問、尚未消費完」，此時銷帳會讓使用者答完後的真需求永遠不被吸收。
+test('clarify：尚未消費完 → 留言不得銷帳（否則答完後真需求會遺失）', async () => {
+  claudeReturns({ decision: 'clarify', questions: ['是規格要改，還是程式寫錯？'], summary: 's' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await addManualMsg(id, '這裡的金額算錯了');
+  await runRejectTriage(id, userId);
+  expect(await pendingCount(id)).toBe(1);       // 仍待吸收
+});

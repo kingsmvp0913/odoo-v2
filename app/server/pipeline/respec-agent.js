@@ -12,9 +12,12 @@ const yaml = require('js-yaml');
 // 確保新需求一定被看到），退回 coding_running 增量補實作。留言標 applied_at＝已吸收（防反覆觸發）。
 async function runRespecPatch(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, analysis_yaml, coding_session_id, git_branch FROM tasks WHERE id = $1', [taskId]
+    'SELECT id, task_id, project_id, analysis_yaml, coding_session_id, git_branch, respec_return_status FROM tasks WHERE id = $1', [taskId]
   );
   if (!task) return;
+
+  // 追加需求檢查點攔截推進時記下的「原本要去的那一關」；沒有（舊資料／其他入口）才退回 coding。
+  const returnTo = task.respec_return_status || 'coding_running';
 
   // pre-coding（規格審核閘門，coding 尚未開工）＝對話式規格問答，委派 spec-review 處理器讀 task_logs 判 answer/revise。
   // 判定不能只看 coding_session_id：coding fresh 成功但 CLI 沒回 sessionId 時會存 NULL（task-agent 以 COALESCE 防的正是這件事）；
@@ -31,9 +34,9 @@ async function runRespecPatch(taskId, userId, signal) {
     [taskId]
   );
   if (!pending.length) {
-    // 競態：留言已被別的路徑吸收 → 不空跑 agent，直接退回 coding
-    await query("UPDATE tasks SET status='coding_running', updated_at=NOW() WHERE id=$1", [taskId]);
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+    // 競態：留言已被別的路徑吸收 → 不空跑 agent，直接回原本要去的關
+    await query("UPDATE tasks SET status=$2, respec_return_status=NULL, updated_at=NOW() WHERE id=$1", [taskId, returnTo]);
+    notify.emitToUser(userId, 'task:updated', { taskId, status: returnTo });
     return;
   }
   // maxId＝這批最後一則的 id（SERIAL 單調遞增）：patch 期間新進的留言 id 必更大，用 id <= maxId
@@ -90,11 +93,28 @@ async function runRespecPatch(taskId, userId, signal) {
     "UPDATE task_messages SET applied_at = NOW() WHERE task_id = $1 AND source = 'manual' AND applied_at IS NULL AND id <= $2",
     [taskId, maxId]
   );
+
+  // 留言不含實質規格變更（使用者拿留言框下流程指令是常態——那是推進卡住任務的唯一管道），
+  // 規格一字未動就沒有東西要 coding 補實作：回原本要去的那一關，不退 coding。
+  // 否則一句「已修正，直接推進到部署測試區」會讓 coding→QA→merge→deploy 整條白跑一遍（task 171）。
+  // 規格沒變 ⇒ qa_session_id 不清（QA 可續用舊 session）、retry_feedback 不寫（沒有新需求要交代）。
+  const norm = s => String(s || '').replace(/\r\n/g, '\n').trim();
+  if (norm(newYaml) === norm(task.analysis_yaml)) {
+    await query(
+      "UPDATE tasks SET status = $2, respec_return_status = NULL, updated_at = NOW() WHERE id = $1",
+      [taskId, returnTo]
+    );
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId,
+      '留言不含規格變更（多為流程指示），規格維持原樣，任務照原流程繼續。']).catch(() => {});
+    notify.emitToUser(userId, 'task:updated', { taskId, status: returnTo });
+    return;
+  }
+
   // 途中追加需求：retry_feedback 帶 [追加需求] 前綴＋需求本文，退回 coding（coding 每輪都讀 retry_feedback 做增量）。
   // 一併清 qa_session_id／歸零 qa_resume_count：規格已改，下輪 QA 必須跑 fresh 讀新 analysis_yaml，
   // 否則 resume 舊 session（內嵌舊規格、qa-retry prompt 不帶新規格）＝用舊規格審查。
   await query(
-    "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
+    "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', respec_return_status = NULL, qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
     [taskId, newYaml, `[追加需求]\n${requirements}`]
   );
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });

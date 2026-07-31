@@ -350,8 +350,10 @@ async function runTask(task, settings, signal) {
       );
       if (pend && pend.n > 0) {
         // 條件式：只有狀態仍是剛推進的那關才改（防與其他寫入競態）
+        // respec_return_status 記下「原本要去的那一關」：留言若不含實質規格變更（例如使用者用留言
+        // 下流程指令），respec 就回這一關繼續，不必退 coding 讓整條 pipeline 白跑一遍。
         await query(
-          "UPDATE tasks SET status = 'respec_running', updated_at = NOW() WHERE id = $1 AND status = $2",
+          "UPDATE tasks SET status = 'respec_running', respec_return_status = $2, updated_at = NOW() WHERE id = $1 AND status = $2",
           [task.id, u.status]
         );
         notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'respec_running' });

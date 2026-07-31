@@ -83,6 +83,17 @@ async function runRejectTriage(taskId, userId, signal) {
   const convo = dlg.reverse().map(l => `${l.role === 'ai' ? 'AI' : '使用者'}：${l.content}`).join('\n');
   if (convo) userInstruction = `${userInstruction}\n---（近期對話）---\n${convo}`;
 
+  // 尚未納入規格的使用者留言：使用者在關卡執行期間補的話，可能是追加需求，也可能只是流程指令
+  // （「已修正，直接推進到部署測試區」這種）。分診看不到它就無從分辨——判 respec 才會讓 analysis
+  // 把需求寫進規格，判 advance／fix 則等於當它不存在。這也是 respec 分支有資格銷帳的前提。
+  const { rows: pendingMsgs } = await query(
+    "SELECT content FROM task_messages WHERE task_id=$1 AND source='manual' AND applied_at IS NULL ORDER BY occurred_at ASC, id ASC",
+    [taskId]
+  );
+  if (pendingMsgs.length) {
+    userInstruction = `${userInstruction}\n---（尚未納入規格的使用者留言）---\n${pendingMsgs.map(m => String(m.content).trim()).join('\n')}`;
+  }
+
   // 測試環境 runtime log 路徑（供 agent 自行判斷是否 Bash 讀取實機證據；正斜線好給 Git Bash 用）
   const { rows: [proj] } = await query('SELECT folder_name, name FROM projects WHERE id=$1', [task.project_id]);
   const dirName = proj ? (proj.folder_name || proj.name) : null;
@@ -208,6 +219,15 @@ async function runRejectTriage(taskId, userId, signal) {
   if (decision === 'respec') {
     const handoff = summary || '判定為規格問題，請依停下原因重新分析並調整規格。';
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, `[分診—需調整規格]\n${handoff}`]);
+    // 待吸收留言在此銷帳——且**只有這條分支**可以。analysis 重跑時 assembleTaskContext（sync.js）
+    // 讀全部留言且不看 applied_at，需求一定會被重新寫進規格，銷帳不會弄丟東西；不銷帳則規格寫好後
+    // 推進到 coding 時又被 runner 的檢查點當成新需求撈一次。
+    // 其他分支（fix／advance／resume）刻意不銷帳：它們的落點 coding／QA／deploy／review
+    // 沒有任何一個讀 task_messages，標了就等於把使用者在關卡執行期間補的真需求靜默丟掉。
+    await query(
+      "UPDATE task_messages SET applied_at=NOW() WHERE task_id=$1 AND source='manual' AND applied_at IS NULL",
+      [taskId]
+    );
     await goto('analysis_running', { freshRespec: true });
     return true;
   }

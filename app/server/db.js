@@ -466,6 +466,10 @@ async function migrate() {
     // resume_status 寫成分診關自己（＝答完的回程），原關若不另存就永久遺失，任務答完會回到分診
     // 自己（死循環）或退化成 coding_running。同 clarify_from 的理由：不可共用 resume_status。
     { table: 'tasks', col: 'triage_home',          sql: 'ALTER TABLE tasks ADD COLUMN triage_home TEXT' },
+    // 追加需求檢查點攔截推進時，「原本要去的那一關」。respec 若判定留言不含實質規格變更，
+    // 就回這一關繼續，不必退回 coding 讓整條 pipeline 重跑。同 clarify_from／triage_home 的理由：
+    // 不可共用 resume_status（那欄已被 verdict-router／reject-triage 佔用）。
+    { table: 'tasks', col: 'respec_return_status', sql: 'ALTER TABLE tasks ADD COLUMN respec_return_status TEXT' },
     // 行程身分指紋（Linux /proc starttime；其他平台 NULL）：kill 前核對防 pid 重用誤殺
     { table: 'odoo_envs', col: 'pid_started_at',   sql: 'ALTER TABLE odoo_envs ADD COLUMN pid_started_at TEXT' },
     // 每環境憑證：SSO 密鑰、E2E 隨機密碼（測試區安全 hardening）

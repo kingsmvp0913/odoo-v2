@@ -50,6 +50,9 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(async () => {
   runClaude.mockReset();
   await dbModule.query('DELETE FROM task_messages WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
+  // respec 判「無規格變更」時會寫一行 task_logs 交代原因（否則使用者看不到任務為何轉了一圈），
+  // 不一併清會讓下一個 test 的 DELETE tasks 撞 task_logs 的 FK。
+  await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id=$1', [userId]);
 });
 
@@ -145,4 +148,51 @@ test('已開工但 coding_session_id=NULL（CLI 沒回 sessionId）→ 退回 co
   const { rows: [after] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('coding_running');
   expect(after.retry_feedback).toContain('加一個欄位');
+});
+
+// 意圖：使用者要推進卡住的任務，唯一管道就是留言框——所以「用留言下流程指令」是常態，不是誤用。
+// 這種留言被檢查點攔下轉進 respec 後，規格會一字未動；舊版仍照樣退回 coding，害 coding→QA→merge
+// →deploy 整條白跑一遍（task 171：一句「已修正，直接推進到部署測試區」在 deploy 成功後觸發重跑）。
+// 用 review_pending 當回程值才有鑑別力：若用 coding_running，修好與沒修的結果一模一樣、測不出東西。
+test('留言不含規格變更 → 回原本要去的那一關，不退 coding、不清 qa_session_id', async () => {
+  const yamlSpec = 'module: sale\nfeatures:\n  - 折扣欄位';
+  const taskId = await insertTask(yamlSpec);
+  await dbModule.query(
+    "UPDATE tasks SET respec_return_status='review_pending', qa_session_id='qs-keep' WHERE id=$1", [taskId]
+  );
+  await addMsg(taskId, '確認升級失敗是其他問題造成，已修正，直接推進到部署測試區環節');
+  // 規格原樣回傳＝respec 判定這則留言沒有帶來規格變更
+  runClaude.mockResolvedValue({ text: `<result>\n${yamlSpec}\n</result>`, usage: null, durationMs: null });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, respec_return_status, retry_feedback, qa_session_id FROM tasks WHERE id=$1', [taskId]
+  );
+  expect(t.status).toBe('review_pending');        // 回原關續跑，不是退回 coding
+  expect(t.respec_return_status).toBeNull();      // 用完即清，不留給下一次誤用
+  expect(t.retry_feedback).toBeNull();            // 沒有新需求要交代給 coding
+  expect(t.qa_session_id).toBe('qs-keep');        // 規格沒變，QA 舊 session 可續用，不必強制 fresh
+  const { rows: [m] } = await dbModule.query('SELECT applied_at FROM task_messages WHERE task_id=$1', [taskId]);
+  expect(m.applied_at).not.toBeNull();            // 仍要銷帳，否則下個推進點又被攔一次
+});
+
+// 反向守衛：上面那條捷徑不能把「真的有追加需求」也一起放行——規格有變就必須退回 coding 補實作。
+test('留言含實質規格變更 → 仍退回 coding（回程值不得蓋過追加需求）', async () => {
+  const taskId = await insertTask('module: sale\nfeatures:\n  - 折扣欄位');
+  await dbModule.query("UPDATE tasks SET respec_return_status='review_pending' WHERE id=$1", [taskId]);
+  await addMsg(taskId, '請加匯出 Excel 按鈕');
+  runClaude.mockResolvedValue({
+    text: '<result>\nmodule: sale\nfeatures:\n  - 折扣欄位\n  - 匯出 Excel 按鈕\n</result>',
+    usage: null, durationMs: null
+  });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, respec_return_status, retry_feedback FROM tasks WHERE id=$1', [taskId]
+  );
+  expect(t.status).toBe('coding_running');        // 有新需求＝一定要回去補實作
+  expect(t.respec_return_status).toBeNull();
+  expect(t.retry_feedback).toContain('匯出 Excel 按鈕');
 });
