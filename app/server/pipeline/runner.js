@@ -17,6 +17,7 @@ const { withProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
 const notify = require('../notify');
 const { runClarifyChat } = require('./clarify-chat');
+const { safeReturnStatus } = require('./stations');
 const yaml = require('js-yaml');
 
 // 執行歷程階段標記的中文顯示（僅影響顯示文字，status 值與流程判斷不變）
@@ -261,7 +262,7 @@ async function recordSpecDecision(taskId, analysisYaml, answer) {
 // 不 bumpReentry：clarify 是人工在場的閘門，非自主 runaway，斷路器留給 QA/E2E/triage 自動路徑。
 async function handleClarifyAnswered(task) {
   const { rows: [row] } = await query('SELECT resume_status, retry_feedback, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
-  const resume = row?.resume_status || 'coding_running';
+  const resume = safeReturnStatus(row?.resume_status);
   const { rows: [ans] } = await query(
     "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id DESC LIMIT 1", [task.id]
   );
@@ -493,4 +494,6 @@ async function runPipeline(userId, { auto = false } = {}) {
   }
 }
 
-module.exports = { runPipeline, abortTask, getInflightTaskIds, getInflightInfo, whenIdle };
+// RUNNABLE_STATUSES 一併匯出：stations.test.js 用它斷言「每個合法回程站都真的有 handler 跑得動」。
+// 不匯出就只能在測試裡抄一份清單，日後新增站時那份抄本不會更新＝防線失效。
+module.exports = { runPipeline, abortTask, getInflightTaskIds, getInflightInfo, whenIdle, RUNNABLE_STATUSES };

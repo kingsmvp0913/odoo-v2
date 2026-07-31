@@ -389,3 +389,36 @@ test('clarify：尚未消費完 → 留言不得銷帳（否則答完後真需�
   await runRejectTriage(id, userId);
   expect(await pendingCount(id)).toBe(1);       // 仍待吸收
 });
+
+// ---- decision 認得但本輪用不了 → 停下交人工，且死因不得誤導 ----
+// 行為刻意維持 stopped（既有測試「clarify 但無 questions → stopped（不靜默放行）」守住的正是這點：
+// agent 說它得先問才能決定，放行等於讓任務帶著未解疑問繼續跑）。這裡只釘住「訊息要說實話」——
+// 舊版兩種情況都落到通用的「未回傳有效結果，請檢查 terminal」，會把人導去找根本不存在的解析失敗。
+test('clarify 但沒帶任何問題 → stopped，死因寫出真正原因而非「未回傳有效結果」', async () => {
+  claudeReturns({ decision: 'clarify', questions: [], summary: '需要更多資訊' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'qa_running' });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('沒有產出任何題目');
+  expect(t.blocker_content).not.toContain('未回傳有效結果');
+});
+
+test('resolve 入口回 answer（該決策僅適用人工審核退回）→ stopped，死因指出入口用錯', async () => {
+  claudeReturns({ decision: 'answer', summary: '這是提問' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'deploy_testing' });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('僅適用於最終人工審核退回');
+});
+
+// 反向守衛：真的認不得的 decision 才該用通用文案，且要帶上實際收到的值方便追。
+test('完全認不得的 decision → stopped，訊息帶出實際收到的值', async () => {
+  claudeReturns({ decision: 'teleport', summary: 's' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('teleport');
+});

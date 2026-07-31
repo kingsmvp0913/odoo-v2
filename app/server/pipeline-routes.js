@@ -3,6 +3,7 @@ const path = require('path');
 const archiver = require('archiver');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 
 // approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToAiBranch
@@ -446,7 +447,7 @@ function registerRoutes(app) {
         // 還原原關卡、清 conflict data，再冪等重跑重建（可能再度停在下一個衝突）
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, cd.prior_status || 'deploy_testing']
+          [rows[0].id, safeReturnStatus(cd.prior_status, 'deploy_testing')]
         );
         const { rebuildTesting } = require('./pipeline/rebuild-testing');
         const warn = await rebuildTesting(rows[0].project_id, req.userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
@@ -457,7 +458,7 @@ function registerRoutes(app) {
         // sync 衝突解完＝ai-dev 已含 main 的新碼，回分析重跑（此時 sync 已 commit，重跑冪等）
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, cd.prior_status || 'analysis_running']
+          [rows[0].id, safeReturnStatus(cd.prior_status, 'analysis_running')]
         );
         runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
         return res.json({ ok: true });
@@ -555,7 +556,7 @@ function registerRoutes(app) {
         // 比照 mark-conflict-resolved：sync 衝突解完回分析重跑，不進部署（程式碼還沒開始寫）
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, cd.prior_status || 'analysis_running']
+          [rows[0].id, safeReturnStatus(cd.prior_status, 'analysis_running')]
         );
         runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
         return res.json({ ok: true, done: true });

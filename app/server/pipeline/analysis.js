@@ -28,10 +28,15 @@ function determineNextStatus(parsed) {
   const hasQuestions = Array.isArray(parsed?.clarification_channel?.questions) &&
     parsed.clarification_channel.questions.length > 0;
   if (parsed?.low_confidence === true || hasQuestions) return 'confirm_pending';
-  // MODE_B＝先確認再實作 → 進規格審核閘門 spec_review，讓使用者看過完整規格再決定開工。
+  // MODE_A＝純新增且不改既有行為 → 直接開工；其餘一律進規格審核閘門 spec_review，讓使用者看過規格再開工。
   // （問題/low_confidence 分支已在上方優先攔截：MODE_B 有待答問題時先走 confirm_pending 答題。）
-  if (parsed?.execution_mode === 'MODE_B') return 'spec_review';
-  return 'branch_pending';
+  //
+  // fallback 指向最嚴格：舊版寫成「不等於 'MODE_B' 就 branch_pending」，值只要飄成 `mode_b`、
+  // `MODE_B（先確認）` 這類就靜默跳過人工規格閘門——而 MODE_B 正是「會動到既有行為／金額／稅／
+  // 庫存」的那一類，最不該被跳過，且跳過完全無聲（無警告、無測試會紅）。改成白名單式：只有明確
+  // 認得出 MODE_A 才放行開工。比對前正規化——模型輸出的大小寫與尾隨空白本來就不穩定。
+  const mode = String(parsed?.execution_mode ?? '').trim().toUpperCase();
+  return mode === 'MODE_A' ? 'branch_pending' : 'spec_review';
 }
 
 // determineNextStatus / REQUIRED_FIELDS / logAnalysisGate 供 task-agent（analysis-project 路徑）共用：

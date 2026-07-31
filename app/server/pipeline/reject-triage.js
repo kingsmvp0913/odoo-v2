@@ -9,6 +9,7 @@ const { getProjectNotes } = require('./project-notes');
 const { ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
+const { safeReturnStatus } = require('./stations');
 
 // 卡在哪一關的中文顯示（stuck_stage 用）
 const STAGE_LABEL = {
@@ -74,7 +75,7 @@ async function runRejectTriage(taskId, userId, signal) {
       [taskId]
     );
     userInstruction = instr ? instr.content.replace(/^\[修正指示\]\s*/, '').trim() : '（無指示）';
-    homeStatus = home || 'coding_running';
+    homeStatus = safeReturnStatus(home);
   }
   // 併入近幾則對話（審核退回時審核者可能有補充）
   const { rows: dlg } = await query(
@@ -266,7 +267,22 @@ async function runRejectTriage(taskId, userId, signal) {
     return true;
   }
 
-  return stop(taskId, userId, '分診 Agent 未回傳有效結果，請檢查 terminal 輸出');
+  // decision 認得、但這一輪用不了 → 停下交人工，並說清楚實際發生什麼。
+  // 刻意**不**比照 advance 缺 target 那樣降級放行——方向性相反：advance 降級是放棄往前推進、
+  // 回原關重跑（更保守）；這兩種降級卻是放寬：
+  //   - clarify 缺題：agent 說它得先問使用者才能決定方向，卻沒產出題目。放行＝讓任務帶著未解的
+  //     疑問繼續跑，多半重蹈覆轍。
+  //   - answer 走錯入口：agent 以為使用者只是提問，但 resolve 入口收到的是卡關修正指示。
+  //     放行＝使用者的疑問沒人回答。
+  // 只修訊息：舊版兩者都掉到下面那句通用文案，把「agent 挑錯決策」謊報成「未回傳有效結果」，
+  // 看到的人會跑去 terminal 找解析失敗——但根本沒有解析失敗，agent 有好好回結果。
+  const MISUSE = {
+    clarify: '分診判定需要先問你問題才能決定方向，卻沒有產出任何題目',
+    answer: '分診判定這是一則提問（該決策僅適用於最終人工審核退回），但這裡收到的是卡關修正指示',
+  };
+  if (MISUSE[decision]) return stop(taskId, userId, `${MISUSE[decision]}。請補充說明後再送出。`);
+
+  return stop(taskId, userId, `分診 Agent 未回傳有效結果（decision=${decision || '空'}），請檢查 terminal 輸出`);
 }
 
 module.exports = { runRejectTriage };

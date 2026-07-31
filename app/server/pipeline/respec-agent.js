@@ -6,6 +6,34 @@ const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const yaml = require('js-yaml');
+const { safeReturnStatus } = require('./stations');
+
+// 遞迴排序物件鍵並 trim 字串，讓「同一份規格的不同寫法」收斂成同一個字串。
+// 陣列順序保留（規格的 requirements 是有序的，重排屬實質變更）。
+function stableKey(v) {
+  if (Array.isArray(v)) return v.map(stableKey);
+  if (v && typeof v === 'object') {
+    return Object.keys(v).sort().reduce((o, k) => { o[k] = stableKey(v[k]); return o; }, {});
+  }
+  return typeof v === 'string' ? v.trim() : v;
+}
+
+// 兩份規格「語意上」是否相同。用來決定 respec 後任務回原關還是退回 coding 重做整條，
+// 所以誤判的代價是一整輪 coding→QA→merge→deploy 白跑。
+// 不能用位元組比對：agent 重排鍵序／換引號／改縮排都不是規格變更，而它是否逐字複製本來就不可控
+// （respec-patch.md 已明說不必逐字複製）。任一側解析失敗 → 退回位元組比對，寧可誤判成「有變更」
+// 多跑一輪，也不要把真需求當成沒變更而靜默丟掉。
+function specUnchanged(oldYaml, newYaml) {
+  const norm = s => String(s || '').replace(/\r\n/g, '\n').trim();
+  try {
+    const a = stableKey(yaml.load(norm(oldYaml), { schema: yaml.CORE_SCHEMA }));
+    const b = stableKey(yaml.load(norm(newYaml), { schema: yaml.CORE_SCHEMA }));
+    if (a && b && typeof a === 'object' && typeof b === 'object') {
+      return JSON.stringify(a) === JSON.stringify(b);
+    }
+  } catch { /* 解析失敗 → 落到位元組比對 */ }
+  return norm(oldYaml) === norm(newYaml);
+}
 
 // respec_running：使用者途中留言＝追加需求。把待吸收的 manual 留言增量 patch 進 analysis_yaml
 // （維持單一規格來源，QA 重驗吃得到），並把需求也塞進 retry_feedback（coding 每輪都帶 retry_feedback，
@@ -17,7 +45,7 @@ async function runRespecPatch(taskId, userId, signal) {
   if (!task) return;
 
   // 追加需求檢查點攔截推進時記下的「原本要去的那一關」；沒有（舊資料／其他入口）才退回 coding。
-  const returnTo = task.respec_return_status || 'coding_running';
+  const returnTo = safeReturnStatus(task.respec_return_status);
 
   // pre-coding（規格審核閘門，coding 尚未開工）＝對話式規格問答，委派 spec-review 處理器讀 task_logs 判 answer/revise。
   // 判定不能只看 coding_session_id：coding fresh 成功但 CLI 沒回 sessionId 時會存 NULL（task-agent 以 COALESCE 防的正是這件事）；
@@ -98,8 +126,9 @@ async function runRespecPatch(taskId, userId, signal) {
   // 規格一字未動就沒有東西要 coding 補實作：回原本要去的那一關，不退 coding。
   // 否則一句「已修正，直接推進到部署測試區」會讓 coding→QA→merge→deploy 整條白跑一遍（task 171）。
   // 規格沒變 ⇒ qa_session_id 不清（QA 可續用舊 session）、retry_feedback 不寫（沒有新需求要交代）。
-  const norm = s => String(s || '').replace(/\r\n/g, '\n').trim();
-  if (norm(newYaml) === norm(task.analysis_yaml)) {
+  //
+  // 比對走 specUnchanged（語意，非位元組）——理由見該函式註解。
+  if (specUnchanged(task.analysis_yaml, newYaml)) {
     await query(
       "UPDATE tasks SET status = $2, respec_return_status = NULL, updated_at = NOW() WHERE id = $1",
       [taskId, returnTo]

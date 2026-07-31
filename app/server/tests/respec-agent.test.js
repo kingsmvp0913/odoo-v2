@@ -196,3 +196,54 @@ test('留言含實質規格變更 → 仍退回 coding（回程值不得蓋過�
   expect(t.respec_return_status).toBeNull();
   expect(t.retry_feedback).toContain('匯出 Excel 按鈕');
 });
+
+// 意圖：路由旗標是「規格有無實質變更」，但 agent 是否逐字複製原規格本來就不可控——
+// respec-patch.md 自己也寫著「不必為此刻意逐字複製」。位元組比對會把重排鍵序／換引號／改縮排
+// 全判成「有變更」，把已跑到 QA/deploy 的任務打回開發重跑整條。這支釘住語意比對。
+test('規格只有排版差異（鍵序／引號／縮排）→ 視為未變更，回原關不退 coding', async () => {
+  const taskId = await insertTask("module: sale\nfeatures:\n  - 折扣欄位\nowner: 'IDX'");
+  await dbModule.query("UPDATE tasks SET respec_return_status='review_pending' WHERE id=$1", [taskId]);
+  await addMsg(taskId, '已修正，直接推進');
+  // 同一份規格：鍵序調換、引號風格改變、縮排加寬——語意完全相同
+  runClaude.mockResolvedValue({
+    text: '<result>\nowner: "IDX"\nmodule: sale\nfeatures:\n    - 折扣欄位\n</result>',
+    usage: null, durationMs: null
+  });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('review_pending');   // 沒被排版差異騙去退 coding
+  expect(t.retry_feedback).toBeNull();
+});
+
+// 反向守衛：語意比對不能寬鬆到把真需求也吃掉。陣列順序刻意視為實質變更（requirements 有序）。
+test('規格內容真的多一條 → 仍判有變更、退回 coding', async () => {
+  const taskId = await insertTask('module: sale\nfeatures:\n  - 折扣欄位');
+  await dbModule.query("UPDATE tasks SET respec_return_status='review_pending' WHERE id=$1", [taskId]);
+  await addMsg(taskId, '請加匯出 Excel 按鈕');
+  runClaude.mockResolvedValue({
+    text: '<result>\nmodule: sale\nfeatures:\n  - 折扣欄位\n  - 匯出 Excel 按鈕\n</result>',
+    usage: null, durationMs: null
+  });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('coding_running');
+  expect(t.retry_feedback).toContain('匯出 Excel 按鈕');
+});
+
+// 解析失敗時必須落到位元組比對的保守側：寧可誤判成「有變更」多跑一輪，也不要把真需求
+// 當成沒變更而靜默丟掉（那會讓使用者的需求人間蒸發且毫無痕跡）。
+test('舊規格不是合法 YAML → 退回位元組比對，內容不同仍判有變更', async () => {
+  const taskId = await insertTask('這不是 YAML: [[[壞掉的');
+  await dbModule.query("UPDATE tasks SET respec_return_status='review_pending' WHERE id=$1", [taskId]);
+  await addMsg(taskId, '請加匯出功能');
+  runClaude.mockResolvedValue({ text: '<result>\nmodule: sale\nfeatures:\n  - 匯出\n</result>', usage: null, durationMs: null });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('coding_running');
+});
