@@ -97,3 +97,22 @@ test('retry timeout → 清 session 並拋出，不在同一輪重跑（避免�
   expect(o.clearSession).toHaveBeenCalled();
   expect(runClaude).toHaveBeenCalledTimes(1);
 });
+
+test('retry 失敗且提供 onRetryFailed → 呼叫 callback 並傳原始 error，fresh 仍執行並回傳結果', async () => {
+  const onRetryFailed = jest.fn().mockResolvedValue(undefined);
+  runClaude
+    .mockRejectedValueOnce(Object.assign(new Error('session gone'), { claudeStatus: 'error' }))
+    .mockResolvedValueOnce({ text: 'ok from fresh', sessionId: 's-new' });
+  const o = makeOpts({
+    getSession: jest.fn().mockResolvedValue({ sessionId: 's-dead', promptVer: 'F1.R1' }),
+    onRetryFailed
+  });
+
+  const res = await withResume(o);
+
+  expect(onRetryFailed).toHaveBeenCalledTimes(1);
+  expect(onRetryFailed.mock.calls[0][0]).toHaveProperty('claudeStatus', 'error');
+  expect(runClaude).toHaveBeenCalledTimes(2);
+  expect(runClaude.mock.calls[1][0]).toBe('FRESH_PROMPT');
+  expect(res.text).toBe('ok from fresh');
+});

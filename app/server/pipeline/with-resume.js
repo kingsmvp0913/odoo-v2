@@ -18,7 +18,8 @@ async function withResume(opts) {
   const {
     freshAgentName, retryAgentName,
     getSession, setSession, clearSession,
-    renderFresh, renderRetry, model, runOpts
+    renderFresh, renderRetry, model, runOpts,
+    onRetryFailed
   } = opts;
 
   const ver = combinedVersion(freshAgentName, retryAgentName);
@@ -37,6 +38,8 @@ async function withResume(opts) {
       // （session 已清，下次進來自然是 fresh；比照 qa-agent.js:114）
       if (err && err.claudeStatus === 'timeout') throw err;
       // 其餘（session 遺失／CLI 壞掉）→ 落到下面 fresh，使用者這輪仍拿得到回覆
+      // 呼叫端可透過 onRetryFailed 記帳失敗的執行（比照 qa-agent.js:117-120）
+      if (onRetryFailed) await onRetryFailed(err).catch(() => {});
     }
   }
 
