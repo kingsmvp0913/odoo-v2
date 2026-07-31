@@ -347,7 +347,11 @@ async function syncServiceUser(userId, settings) {
   const cookies = await odooAuth(service_url, service_db, service_username, service_password);
   const tasks = await odooSearchRead(
     service_url, 'service.question.feedback',
-    [['processing_staff', 'in', [service_user_id || 1]], ['state', 'in', ['draft', 'open']]],
+    // 只抓「處理中」（open）：未處理（draft）多為客戶剛丟進來、尚未分流的雜訊單，
+    // 全拉進平台等於替每張未經人工過濾的單建任務、拉聊天紀錄與附件，成本高且多數用不到。
+    // 工單一被接手轉 open，下一輪同步就會自動補拉，不會漏。
+    // 驗收完成／結案／作廢本來就不在此白名單內（原 domain 亦然），維持不進來。
+    [['processing_staff', 'in', [service_user_id || 1]], ['state', '=', 'open']],
     ['id', 'name_seq', 'subject', 'system', 'state', 'question_description', 'classification', 'respondent', 'file'],
     cookies
   );

@@ -567,6 +567,36 @@ test('syncUser eService 工單 file 多個 id → 存多筆 ticket_main 附件',
   expect(atts.map(a => a.external_attachment_id)).toEqual(['7010', '7011']);
 });
 
+// 意圖：未處理（draft）＝客戶剛丟進來、還沒人分流的雜訊單，不該替它建任務、拉聊天紀錄與附件。
+// 這道防線只存在於送給 eService 的 domain 裡——mock 不會真的執行 domain，餵什麼就回什麼，
+// 所以「回傳結果沒有 draft」證明不了任何事；必須直接斷言「我們沒有跟 eService 要 draft」，
+// 否則 domain 被改回 ['draft','open'] 測試照樣全綠。
+test('syncUser eService 主同步 domain 不得索取未處理（draft）工單', async () => {
+  const domains = [];
+  mockFetch.mockImplementation((url, opts) => {
+    if (String(url).includes('/web/session/authenticate')) {
+      return makeFetchResponse({ jsonrpc: '2.0', result: { uid: 2 } }, 'session_id=svc');
+    }
+    const params = JSON.parse(opts.body).params || {};
+    if (params.method === 'search_read' && params.model === 'service.question.feedback') {
+      domains.push((params.kwargs && params.kwargs.domain) || []);
+    }
+    return makeFetchResponse({ jsonrpc: '2.0', result: [] });
+  });
+
+  await syncModule.syncUser(userId);
+
+  // 主同步＝帶 processing_staff 的那次；另一次是結案偵測（用 ['id','in',...] 回查），條件相反不可混用
+  const main = domains.find(d => d.some(c => Array.isArray(c) && c[0] === 'processing_staff'));
+  expect(main).toBeDefined();
+  const stateCond = main.find(c => Array.isArray(c) && c[0] === 'state');
+  expect(stateCond).toBeDefined();
+  // 用集合語意斷言而非逐字比對，'=' 與 'in' 兩種等價寫法都算通過
+  const wanted = [].concat(stateCond[2]);
+  expect(wanted).not.toContain('draft');
+  expect(wanted).toContain('open');
+});
+
 test('syncUser eService 工單 file 為 false → 不呼叫 ir.attachment、不產生附件', async () => {
   setupOdooMocks({ tasks: [] });
   setupServiceMocks({
