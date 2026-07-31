@@ -177,12 +177,30 @@ window.TaskDetailView = Vue.defineComponent({
       return all;
     },
     // 靜默重抓任務＋logs（不切 loading，避免即時更新時整頁閃「載入中」）
+    // 併發合併：送出類動作送完會自己重抓，而後端在同一個請求裡就推了 task:updated，
+    // socket handler 又抓一次 → 兩輪並行、誰後回來誰蓋上去（可能蓋回舊快照）。
+    // 飛行中再進來的只記一次尾隨重抓：保證事件之後的資料仍會抓到，但同時只有一輪在跑。
     async refresh() {
-      const data = await Api.get(`tasks/${this.$route.params.id}`);
+      if (this._refreshing) { this._refreshPending = true; return this._refreshing; }
+      this._refreshing = (async () => {
+        try {
+          do {
+            this._refreshPending = false;
+            await this._refreshOnce();
+          } while (this._refreshPending);
+        } finally { this._refreshing = null; this._refreshPending = false; }
+      })();
+      return this._refreshing;
+    },
+    async _refreshOnce() {
+      // detail 與 logs 互不相依（logs 只吃路由上的 id）→ 並行發，省掉一趟序列往返
+      const [data, allLogs] = await Promise.all([
+        Api.get(`tasks/${this.$route.params.id}`),
+        this.fetchAllLogs().catch(() => null),
+      ]);
       this.task = data.task || data;
-      // 對話時間軸要完整歷史：改撈分頁全量 log，撈失敗才退回 detail 的末 5 筆快照
-      try { this.logs = await this.fetchAllLogs(); }
-      catch { this.logs = data.logs || this.logs || []; }
+      // 對話時間軸要完整歷史：用分頁全量 log，撈失敗（null）才退回 detail 的末 5 筆快照
+      this.logs = allLogs || data.logs || this.logs || [];
       this.ticketAttachments = data.attachments || [];
       this.clarification = data.clarification || { summary: '', questions: [] };
       this.spec = data.spec || null; // spec_review 審核頁的規格（後端已 parse analysis_yaml）
@@ -264,7 +282,11 @@ window.TaskDetailView = Vue.defineComponent({
         this.answerFields = {};
         this.answerExtra = {};
         showToast('回覆已送出，AI 正在確認', 'success');
-        await this.load();
+        // 用 refresh 不用 load：load 會切 loading＝整個內容區被換成「載入中...」再重建，
+        // 送出後畫面整塊消失一下、已展開的對話還被收回 5 筆，看起來就像當掉。
+        // 這裡只要靜默換資料，再把對話釘到最新讓自己剛送出的內容看得到。
+        this._convPinBottom = true;
+        await this.refresh();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.submitting = false; }
     },
@@ -276,7 +298,8 @@ window.TaskDetailView = Vue.defineComponent({
         await Api.post(`tasks/${this.task.id}/clarify-ask`, { question });
         this.askText = '';
         showToast('已送出提問，任務不會往下跑', 'success');
-        await this.load();
+        this._convPinBottom = true;   // 同 submitAnswer：靜默重抓，不整頁閃「載入中」
+        await this.refresh();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.askSubmitting = false; }
     },
