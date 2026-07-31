@@ -172,7 +172,10 @@ async function runRejectTriage(taskId, userId, signal) {
     // 「已開工」→ 跳過 spec-review 對話、把修改意見當追加需求 patch 完直接轉 coding_running，
     // 規格審核閘門被靜默繞過。清掉安全：branch_pending→coding 一定會重寫 git_branch，且分支名由
     // task_id 決定、重算同值。
-    if (freshRespec) sets.push('coding_session_id=NULL', 'git_branch=NULL');
+    // spec_session_id／spec_prompt_ver 同樣一併清：真正落地點是 task-agent.js 分析關寫出新規格
+    // 那一刻（writeAnalysisYaml，主防線），這裡只是提早在交回 analysis 之前先清一次的備援——
+    // 萬一 analysis 那輪中途失敗、任務還沒走到那一刻就又被繞回 spec_review，也不會續接到舊 session。
+    if (freshRespec) sets.push('coding_session_id=NULL', 'git_branch=NULL', 'spec_session_id=NULL', 'spec_prompt_ver=NULL');
     if (counter) sets.push(`${counter}=0`);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id=$1`, [taskId, nextStatus]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });

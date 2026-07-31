@@ -143,6 +143,19 @@ test('respec → analysis_running：清 retry_feedback/coding_session_id/git_bra
   expect(logs.some(l => l.role === 'user' && l.content.includes('需調整規格') && l.content.includes('規格問題'))).toBe(true);
 });
 
+// Fix round 1（spec_review session 清除點）：真正落地點是 task-agent.js 分析關寫出新規格那一刻
+// （writeAnalysisYaml），這裡只是 goto 的 freshRespec 備援——提早在交回 analysis 之前先清一次，
+// 防 analysis 那輪中途失敗、任務還沒走到那一刻就又被繞回 spec_review 續接到舊 session。
+test('respec → analysis_running：也一併清 spec_session_id／spec_prompt_ver（備援，防繞回 spec_review 續接舊 session）', async () => {
+  claudeReturns({ decision: 'respec', summary: '判定為規格問題，交回分析重寫 SD。' });
+  const id = await makeTask({ rejectCount: 1 });
+  await dbModule.query("UPDATE tasks SET spec_session_id='sp-stale', spec_prompt_ver='F.R' WHERE id=$1", [id]);
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT spec_session_id, spec_prompt_ver FROM tasks WHERE id=$1', [id]);
+  expect(t.spec_session_id).toBeNull();
+  expect(t.spec_prompt_ver).toBeNull();
+});
+
 test('advance target=review → review_pending：誤判/點錯直接送審', async () => {
   claudeReturns({ decision: 'advance', target: 'review', summary: '結論：判定為誤判，直接推進到人工審核。' });
   const id = await makeTask({ rejectCount: 1 });

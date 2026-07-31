@@ -328,10 +328,12 @@ async function runTaskAnalysis(taskId, userId, signal) {
   }
 
   const nextStatus = determineNextStatus(result); // branch_pending | confirm_pending | spec_review
-  await query(
-    `UPDATE tasks SET status=$2, analysis_yaml=$3, updated_at=NOW() WHERE id=$1`,
-    [taskId, nextStatus, yaml.dump(result)]
-  );
+  // 規格經由 writeAnalysisYaml 落地（主防線：一併清 spec_session_id／spec_prompt_ver，理由見該函式
+  // 定義處——這裡是真正「規格重產」發生的地方，reject-triage.js 的 goto 只是備援）。
+  // status／updated_at 不屬於它的語意範圍，另開一次 UPDATE 補上。
+  const { writeAnalysisYaml } = require('./runner');
+  await writeAnalysisYaml(taskId, result);
+  await query(`UPDATE tasks SET status=$2, updated_at=NOW() WHERE id=$1`, [taskId, nextStatus]);
   // 規格已成功寫出＝這批留言真的被吸收了，此時才銷帳（理由見上方 absorbUpTo）
   if (absorbUpTo) {
     await query(

@@ -597,6 +597,21 @@ test('analysis 成功寫出規格 → 該批留言才銷帳', async () => {
   expect(m.applied_at).not.toBeNull();
 });
 
+// Fix round 1（spec_review session 清除點）：這裡才是「analysis 重產規格」真正落地的地方——
+// task-agent.js 的規格寫入必須經 writeAnalysisYaml 清掉 spec_session_id／spec_prompt_ver，
+// 否則重跑 analysis 後再進 spec_review，下一場對話會續接到記著舊規格的 claude session。
+test('analysis 成功寫出新規格 → 清掉舊的 spec_session_id／spec_prompt_ver', async () => {
+  mockAnalysisResult('case_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"');
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, spec_session_id, spec_prompt_ver) VALUES ($1,'ta_specclear','odoo','T','需求','analysis_running',$2,'sp-stale','F.R') RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const { rows: [after] } = await dbModule.query('SELECT spec_session_id, spec_prompt_ver FROM tasks WHERE id=$1', [t.id]);
+  expect(after.spec_session_id).toBeNull();
+  expect(after.spec_prompt_ver).toBeNull();
+});
+
 test('analysis 沒產出有效規格（停在 stopped）→ 留言不得銷帳，留給下一輪', async () => {
   mockAnalysisResult('這不是有效的規格物件');   // 缺必要欄位 → 走 stopped，不寫 analysis_yaml
   const { rows: [t] } = await dbModule.query(
