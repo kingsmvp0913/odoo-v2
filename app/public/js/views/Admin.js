@@ -192,7 +192,7 @@ window.AdminView = Vue.defineComponent({
       <div v-else class="settings-layout">
 
         <!-- 系統連線設定 -->
-        <div class="setting-block">
+        <div class="setting-block" data-tour="admin-conn">
           <div class="setting-block-head">
             <div class="setting-block-title">系統連線設定</div>
             <div class="setting-block-desc">設定全公司共用的伺服器位址。個人帳號密碼請至「個人設定」填寫。</div>
@@ -292,7 +292,7 @@ window.AdminView = Vue.defineComponent({
         </div>
 
         <!-- Claude 用量閘門 -->
-        <div class="setting-block">
+        <div class="setting-block" data-tour="admin-gate">
           <div class="setting-block-head">
             <div class="setting-block-title">Claude 用量閘門</div>
             <div class="setting-block-desc">Claude 帳號用量達門檻時，自動停止 Pipeline 自動推進（手動「繼續」不受影響）。5 小時視窗或本週任一超標即暫停。全台共用同一帳號，此設定為全域。</div>
@@ -341,7 +341,7 @@ window.AdminView = Vue.defineComponent({
         </div>
 
         <!-- Claude 認證憑證 -->
-        <div class="setting-block">
+        <div class="setting-block" data-tour="admin-token">
           <div class="setting-block-head">
             <div class="setting-block-title">Claude 認證憑證</div>
             <div class="setting-block-desc">在任一台裝有 Claude Code 的機器執行 <code>claude setup-token</code> 產生長效 token（綁訂閱、不另計費，效期一年），貼在這裡即可。設定後所有 pipeline 子行程改用它認證，取代伺服器本機的登入憑證檔——後者在多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。換帳號只要貼新的 token，不必重啟伺服器。</div>
@@ -412,7 +412,7 @@ window.AdminView = Vue.defineComponent({
 
         <!-- 管理工具 -->
         <div class="settings-section-label">管理工具</div>
-        <div class="nav-card-grid">
+        <div class="nav-card-grid" data-tour="admin-tools">
           <div v-for="t in navTools" :key="t.to" class="nav-card" @click="$router.push(t.to)">
             <div class="nav-card-title">{{ t.title }}<span class="nav-card-arrow">→</span></div>
             <div class="nav-card-desc">{{ t.desc }}</div>

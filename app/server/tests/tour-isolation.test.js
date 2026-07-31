@@ -48,19 +48,28 @@ describe('tour js 不打 API', () => {
 describe('data-tour 錨點與課程定義對得上', () => {
   const VIEW_FILES = [
     'js/app.js', 'js/views/Settings.js', 'js/views/TaskList.js',
-    'js/views/TaskDetail.js', 'js/views/ProjectList.js', 'js/views/ProjectDetail.js'
+    'js/views/TaskDetail.js', 'js/views/ProjectList.js', 'js/views/ProjectDetail.js',
+    'js/views/WikiView.js', 'js/views/ProjectChat.js', 'js/views/ProjectDbQuery.js',
+    'js/views/TokenReport.js', 'js/views/Admin.js'
   ];
   const anchors = new Set();
   for (const f of VIEW_FILES) {
     for (const m of read(f).matchAll(/data-tour="([^"]+)"/g)) anchors.add(m[1]);
   }
+  // Wiki 樹是遞迴元件，錨點由 node_type 組出來（:data-tour="'wiki-node-' + node.node_type"），
+  // 靜態掃不到字面值 → 在此列出後端 wiki 實際會產出的四種 node_type，並守住那段拼接還在。
+  test('wiki 樹的動態錨點仍以 node_type 拼接', () => {
+    expect(read('js/views/WikiView.js')).toContain(`:data-tour="'wiki-node-' + node.node_type"`);
+  });
+  ['notes', 'overview', 'module', 'troubleshooting'].forEach(t => anchors.add('wiki-node-' + t));
+
   const wanted = [...new Set(
     [...read('js/tour-courses.js').matchAll(/\[data-tour="([^"]+)"\]/g)].map(m => m[1])
   )];
 
   test('掃得到錨點與課程選字（regex 失效時不得靜默通過）', () => {
-    expect(anchors.size).toBeGreaterThanOrEqual(10);
-    expect(wanted.length).toBeGreaterThanOrEqual(10);
+    expect(anchors.size).toBeGreaterThanOrEqual(25);
+    expect(wanted.length).toBeGreaterThanOrEqual(25);
   });
 
   test.each(wanted)('課程用到的 %s 在 view 裡存在', (name) => {
@@ -68,11 +77,31 @@ describe('data-tour 錨點與課程定義對得上', () => {
   });
 });
 
+// 報表／管理員設定／資料庫查詢的路由都有 requiresAdmin，教程帶一般使用者過去只會被導回首頁。
+describe('管理員限定課程不對一般使用者出現', () => {
+  const courses = read('js/tour-courses.js');
+  const ADMIN_ROUTES = ['/token-report', '/admin', '/projects/demo/db'];
+
+  test('引擎依 UserStore.role 過濾 adminOnly', () => {
+    const src = read('js/tour.js');
+    expect(src).toMatch(/adminOnly/);
+    expect(src).toMatch(/UserStore\s*&&\s*window\.UserStore\.role === 'admin'/);
+  });
+
+  test.each(ADMIN_ROUTES)('走到 %s 的課程都標了 adminOnly', (route) => {
+    // 課程物件以 `id:` 起頭；把檔案切成一課一段後，含該路由的那幾段必須也含 adminOnly
+    const blocks = courses.split(/\n  \{\n/).filter(b => b.includes(`route: '${route}'`));
+    expect(blocks.length).toBeGreaterThan(0);
+    blocks.forEach(b => expect(b).toContain('adminOnly: true'));
+  });
+});
+
 // 示範資料只在教程開著、且看的正好是示範 id 時才接管；漏掉任一個守衛就會把真任務蓋掉。
 describe('示範資料的接線都有守衛', () => {
   test.each([
     'js/views/TaskList.js', 'js/views/TaskDetail.js',
-    'js/views/ProjectList.js', 'js/views/ProjectDetail.js'
+    'js/views/ProjectList.js', 'js/views/ProjectDetail.js',
+    'js/views/WikiView.js', 'js/views/ProjectChat.js', 'js/views/ProjectDbQuery.js'
   ])('%s 只透過 window.TourDemo 取用（可整支刪除）', (f) => {
     const src = read(f);
     const uses = src.match(/TourDemo/g) || [];

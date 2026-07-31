@@ -147,6 +147,59 @@
 
     env() {
       return { status: 'running', built: true, external_slot: null, setup_log: '', error_msg: '' };
+    },
+
+    // Wiki：四種 node_type 各一頁，教程要能分別指到（樹上的錨點是 wiki-node-<node_type>）
+    wikiPages() {
+      return [
+        { id: 1, slug: 'notes', title: '專案備註', node_type: 'notes', parent_id: null },
+        { id: 2, slug: 'overview', title: '專案概論', node_type: 'overview', parent_id: null },
+        { id: 3, slug: 'idx_hj', title: 'idx維修', node_type: 'module', parent_id: null },
+        { id: 4, slug: 'troubleshooting', title: '疑難排解', node_type: 'troubleshooting', parent_id: null }
+      ];
+    },
+    wikiPage(slug) {
+      const meta = this.wikiPages().find(p => p.slug === slug) || this.wikiPages()[0];
+      const body = {
+        notes: '- 正式區每天 02:00 備份，維護時段勿部署\n- 維修單的「工單編號」是客戶自己的編碼規則，不要改格式\n- 窗口：王小明（分機 210）',
+        overview: '# 專案概論\n\n鴻久維修的 Odoo 17 客製，主要圍繞維修單（repair.order）與零件耗用。\n\n## 模組\n\n- `idx_hj`：維修單客製欄位與報表\n\n## 對外整合\n\n- eService 工單同步',
+        idx_hj: '# idx維修\n\n維修單的客製模組。\n\n## Models\n\n- `repair.order`（`_inherit`）：新增工單編號、負責技師\n\n## Views\n\n- `repair_order_views.xml`',
+        troubleshooting: '# 疑難排解\n\n## 維修單報表列印是空白的\n\n報表樣板引用了 `note_internal`，但該欄位設了 `groups`，列印時的 sudo 身分讀不到 → 報表改讀不帶 groups 的欄位。\n\n## 測試區起不來、log 顯示 port 被佔用\n\n常駐 server 佔著 8069，跑測試要自取空閒埠並帶 `--http-port`。'
+      }[meta.slug] || '';
+      return { ...meta, content: body };
+    },
+
+    // Chat：一段已經聊出結論的對話，接下來就是示範「轉為任務」
+    chats() { return [{ id: this.ID, title: '維修單備註填不了', unread: 0 }]; },
+    chatMessages() {
+      return [
+        { id: 1, role: 'user', content: '維修單好像沒有地方可以填備註，是我沒開權限嗎？', created_at: ago(2) },
+        { id: 2, role: 'ai', content: '不是權限問題。我查過 idx_hj 的 repair.order，目前沒有任何備註欄位，也沒有在 view 上掛過——所以是還沒做，不是被藏起來。\n\n要加的話會動到維修單表單視圖，順帶要決定列印時要不要帶出來。', created_at: ago(2) }
+      ];
+    },
+    chatDraft() {
+      return {
+        title: '維修單要能填備註',
+        original_text: '維修單填不了備註，師傅回來要另外用紙條交代，常常漏掉。\n\n（由對話「維修單備註填不了」摘要而來）'
+      };
+    },
+
+    // 資料庫查詢：一組已設好的正式區連線 ＋ 一次查詢結果，讓查詢區有東西可指
+    db() {
+      return {
+        vpn: { has_config: true, vpn_username: 'hj-readonly' },
+        conns: [{
+          id: 1, name: 'hj-鴻久-正式', connect_mode: 'docker', ssh_host: '10.0.3.21', ssh_port: 22,
+          ssh_user: 'root', docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_prd',
+          db_port: 5432, vpn_enabled: true
+        }],
+        sql: 'SELECT id, name, state FROM repair_order ORDER BY id DESC LIMIT 3',
+        result: {
+          ok: true, row_count: 3,
+          columns: ['id', 'name', 'state'],
+          rows: [[1042, 'RO/2026/0142', 'done'], [1041, 'RO/2026/0141', 'under_repair'], [1040, 'RO/2026/0140', 'confirmed']]
+        }
+      };
     }
   });
 })();

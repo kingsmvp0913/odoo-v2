@@ -10,6 +10,8 @@
 //   placement    說明框方位偏好；塞不下時引擎會自己換邊
 //   interactive  允許使用者真的點光圈裡的東西（預設擋住，避免在示範資料上打真 API）
 //   warn         補充提醒，會渲染成說明框底部的提示區塊
+//
+// 課程層級的 adminOnly：那幾頁的路由本來就有 requiresAdmin，非管理員連選單都不該看到。
 window.TOUR_COURSES = [
   {
     id: 'setup',
@@ -102,7 +104,94 @@ window.TOUR_COURSES = [
         target: '[data-tour="pd-tools"]',
         placement: 'bottom',
         title: '專案頁上的三個工具',
-        text: '<strong>📖 Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑（排障結論）。<br><strong>💬 Chat</strong>：排障助理，會自己去翻 wiki、程式碼、log 和正式區資料庫，聊出結論可以直接變成一張任務。<br><strong>🚀 上正式</strong>：把已核准的任務真的送上正式區，下一課會再講一次。'
+        text: '<strong>📖 Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><strong>💬 Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>🚀 上正式</strong>：把已核准的任務真的送上正式區。<br><br>Wiki 和 Chat 各有一課，接下來就是。'
+      }
+    ]
+  },
+
+  {
+    id: 'wiki',
+    name: 'Wiki 知識庫',
+    desc: '專案備註、概論、疑難排解各是什麼',
+    steps: [
+      {
+        route: '/projects/demo/wiki/notes',
+        target: '[data-tour="wiki-tree"]',
+        placement: 'right',
+        title: 'Wiki 是 AI 和你共用的說明書',
+        text: '左邊這棵樹分四種頁，圖示就是分類：<br><br>📝 <strong>專案備註</strong>（你自己寫）　🏠 <strong>專案概論</strong>　📁 <strong>模組頁</strong>　🔧 <strong>疑難排解</strong><br><br>除了備註，其餘都是 AI 讀完整個 repo 產出的，單頁可以按 ⟳ 重新生成。'
+      },
+      {
+        route: '/projects/demo/wiki/notes',
+        target: '[data-tour="wiki-node-notes"]',
+        placement: 'right',
+        title: '📝 專案備註 — 最該花時間的一頁',
+        text: '整個 Wiki 只有這一頁是<strong>人工維護</strong>的，也只有這一頁不會被 AI 覆寫。<br><br>關鍵在於：<strong>這裡的內容會自動注入每一個開發關卡</strong>，分析、開發、QA 都會先讀它並優先遵循。等於是你對 AI 下的常駐規則。'
+      },
+      {
+        route: '/projects/demo/wiki/notes',
+        target: '[data-tour="wiki-content"]',
+        placement: 'left',
+        title: '備註要寫什麼',
+        text: '寫<strong>「AI 自己看程式碼看不出來」</strong>的事：維護時段、不能亂改的欄位格式、客戶的特殊慣例、聯絡窗口。<br><br>踩過一次的雷寫上去，之後每張任務都會自動避開，比每次在需求裡重講一遍有效。',
+        warn: '不要把規格寫在這裡。這頁是長期有效的約束，單張任務的需求請寫在任務內容。'
+      },
+      {
+        route: '/projects/demo/wiki/overview',
+        target: '[data-tour="wiki-content"]',
+        placement: 'left',
+        title: '🏠 專案概論 — 先看這頁',
+        text: '接手一個不熟的專案時從這頁開始：有哪些模組、跟外部系統怎麼串、資料怎麼流。<br><br>由 AI 讀完整個 repo 產出，程式改很多之後可以按 ⟳ 重新生成。<strong>看到跟程式碼對不上就重生成，不要將就。</strong>'
+      },
+      {
+        route: '/projects/demo/wiki/troubleshooting',
+        target: '[data-tour="wiki-content"]',
+        placement: 'left',
+        title: '🔧 疑難排解 — 會自己長大的一頁',
+        text: '這頁不用你寫。<strong>每次在 Chat 裡釐清出一個結論，AI 就會自動把它累積到這裡</strong>，下次遇到同樣症狀就查得到。<br><br>所以在 Chat 問問題不只是當下有答案，是在幫整個團隊存經驗。'
+      }
+    ]
+  },
+
+  {
+    id: 'chat',
+    name: 'Chat 與轉任務',
+    desc: '先問清楚再開單，聊出結論直接變任務',
+    steps: [
+      {
+        route: '/projects/demo/chat/demo',
+        target: '[data-tour="chat-list"]',
+        placement: 'right',
+        title: '不確定該不該開任務時，先來這裡',
+        text: 'Chat 是<strong>專案排障助理</strong>，每個專案各自一組對話，左邊可以開很多條、各聊各的。<br><br>問它不會建立任何任務、不會改到程式，純粹查清楚狀況。'
+      },
+      {
+        route: '/projects/demo/chat/demo',
+        target: '[data-tour="chat-messages"]',
+        placement: 'left',
+        title: '它會自己去查，不會叫你回去看',
+        text: '回答之前它會依問題性質自己挑來源：<strong>Wiki、專案程式碼、測試區 log、正式區資料庫</strong>。<br><br>所以「是不是我權限不夠？」這種問題它查得出來，不用你先自己判斷。',
+        warn: '要它查得到正式區的資料，管理員得先設好那個專案的資料庫連線——這在「資料庫查詢」那一課。'
+      },
+      {
+        route: '/projects/demo/chat/demo',
+        target: '[data-tour="chat-input"]',
+        placement: 'top',
+        title: '用講的就好',
+        text: '描述<strong>症狀和情境</strong>，不用先想好是哪個模組的問題。<br><br>例如「維修單的成本沒有帶出來，只有部分單有」——它會自己去比對哪幾張不一樣。'
+      },
+      {
+        route: '/projects/demo/chat/demo',
+        target: '[data-tour="chat-totask"]',
+        title: '＋ 轉為任務 — 這一課的重點',
+        text: '聊到結論是「這個要改程式」時，<strong>不要另外開分頁重打一次需求</strong>。按這顆，AI 會把整段對話摘要成一張任務草稿。<br><br>對話裡釐清過的細節都會被帶進去，AI 後面反問你的次數因此少很多。'
+      },
+      {
+        route: '/projects/demo/chat/demo',
+        click: '[data-tour="chat-totask"]',
+        target: '[data-tour="chat-modal"]',
+        title: '草稿是可以改的，確認才建立',
+        text: '摘要出來的<strong>標題和內容都能直接編輯</strong>，按下「建立」之前不會有任何任務產生。<br><br>建好的任務會自動掛在這個專案底下，下一輪 pipeline 就會開始分診。'
       }
     ]
   },
@@ -233,6 +322,109 @@ window.TOUR_COURSES = [
         placement: 'left',
         title: '⑨ 合併衝突（不常遇到）',
         text: '同一個檔案，這張任務和別人都改到同一段，系統不敢自己決定。<br><br>每個檔案挑一邊即可，預設已經停在 AI 的建議上。<strong>看不懂就先用下面的追問問清楚再選</strong>，不用硬猜。'
+      }
+    ]
+  },
+
+  {
+    id: 'db',
+    name: '資料庫查詢（管理員）',
+    desc: 'VPN、連線設定與唯讀查詢',
+    adminOnly: true,
+    steps: [
+      {
+        route: '/projects/demo/db',
+        target: '[data-tour="db-conns"]',
+        title: '這一頁設不設，差別很大',
+        text: '這裡登記的是<strong>正式區資料庫的唯讀連線</strong>。設好之後有兩個用處：<br><br>① 你自己可以在下面直接下 SQL 查正式區資料，不用去麻煩 MIS。<br>② <strong>更重要的是 — Chat 和客服分診的 AI 會用它去查正式區</strong>。沒設，AI 遇到「這張單的金額為什麼是空的」就只能回你「我查不到資料」。',
+        warn: '一個專案可以登記多組連線（正式、備援、不同客戶各一組）。'
+      },
+      {
+        route: '/projects/demo/db',
+        target: '[data-tour="db-vpn"]',
+        title: '要穿 VPN 才連得到的話，設在這裡',
+        text: '很多客戶的資料庫只開在內網。把 <strong>.ovpn 設定檔</strong>連同帳密上傳到這裡就好。<br><br><strong>一個專案共用一組 VPN</strong>：下面每一組連線各自勾「此連線需要 VPN」，它們會共用同一條隧道，只撥號一次，不會每查一次就重連。',
+        warn: '部分廠牌的 SSLVPN GUI 會把帳密混淆後藏在設定檔註解裡；上傳時系統會自動還原並代填，存檔前確認一下帳號對不對。'
+      },
+      {
+        route: '/projects/demo/db',
+        target: '[data-tour="db-form"]',
+        title: '三種連線模式，挑一個',
+        text: '<strong>docker</strong>：SSH 進主機、再進 DB 容器下指令（最常見，Odoo 多半這樣裝）。<br><strong>local</strong>：SSH 進主機、用 sudo 切成 DB 使用者。<br><strong>direct</strong>：直接連 TCP 埠（要對方開放，支援 PostgreSQL／MSSQL／MySQL）。<br><br>填完先按<strong>「測試連線」</strong>再存——存了才發現連不上，AI 那邊也會跟著查不到。'
+      },
+      {
+        route: '/projects/demo/db',
+        target: '[data-tour="db-query"]',
+        placement: 'top',
+        title: '只允許 SELECT',
+        text: '選連線、貼 SQL、按執行就好。<strong>後端只放行 SELECT，寫入類語句一律擋下</strong>，所以不用擔心手滑改到正式資料。<br><br>查出來的欄位直接以表格呈現，適合拿來核對「畫面上看到的和資料庫裡存的是不是同一回事」。'
+      },
+      {
+        route: '/projects/demo/chat/demo',
+        target: '[data-tour="chat-messages"]',
+        placement: 'left',
+        title: '設好之後，AI 就變得不一樣',
+        text: '回到 Chat：剛才那組連線設好了，AI 在回答之前就會<strong>自己去正式區把資料撈出來核對</strong>，而不是照著程式碼猜。<br><br>同一個問題，有沒有設連線，答案的可信度差很多。<strong>建議每個專案都設一組唯讀連線。</strong>'
+      }
+    ]
+  },
+
+  {
+    id: 'admin',
+    name: '報表與管理員設定',
+    desc: '看用量花在哪，以及全站設定',
+    adminOnly: true,
+    steps: [
+      {
+        route: '/token-report',
+        target: '[data-tour="tr-filters"]',
+        title: '用量報表：先框範圍',
+        text: '預設看最近 30 天。可以再依<strong>專案</strong>或<strong>單一任務 ID</strong> 收斂，改完按「查詢」。<br><br>查單一任務 ID 最常用——某張卡花特別多的時候，用它把那張攤開看是哪一關燒掉的。'
+      },
+      {
+        route: '/token-report',
+        target: '[data-tour="tr-summary"]',
+        title: '七張卡裡最該看的是最後一張',
+        text: '「<strong>每張交付成本</strong>」＝期間總花費 ÷ 完成任務數。這是唯一會隨流程好壞變動的數字。<br><br>它變高通常不是模型變貴，是<strong>任務在關卡之間彈跳</strong>（QA 退回、部署失敗重試）。總 Token 數看起來嚇人但沒有意義，要看實際 Token 數與花費。'
+      },
+      {
+        route: '/token-report',
+        target: '[data-tour="tr-charts"]',
+        title: '花在哪一關、哪個專案',
+        text: '三張圓餅分別是 <strong>Agent 類型／專案／使用者</strong>，點一下可以放大。右邊折線是每日趨勢。<br><br>某個 agent 的占比突然變大，通常代表那一關的提示詞該調了——可以到「管理員 → 工作流程健檢」讓 AI 分析。'
+      },
+      {
+        route: '/token-report',
+        target: '[data-tour="tr-tasks"]',
+        placement: 'top',
+        title: '明細：抓出那幾張異常的',
+        text: '逐張列出花費，展開可以看到<strong>每一關各花多少</strong>。<br><br>排在最前面的那幾張就是燒最多的，點進去看它彈跳了幾次，多半能找到規格沒寫清楚或環境有問題。'
+      },
+      {
+        route: '/admin',
+        target: '[data-tour="admin-conn"]',
+        title: '管理員設定：全公司共用的部分',
+        text: 'Odoo 與 eService 的<strong>伺服器位址、資料庫名稱、同步間隔</strong>設在這裡，全站共用一份。<br><br>個人的帳號密碼不在這裡——那是每個人自己到「個人設定」填的。同步間隔填 0 就是停用自動同步。'
+      },
+      {
+        route: '/admin',
+        target: '[data-tour="admin-gate"]',
+        title: '用量閘門 — 別讓額度一次燒光',
+        text: '全台共用同一個 Claude 帳號。用量達門檻時，這道閘門會<strong>自動停止 Pipeline 自動推進</strong>，但手動按「繼續」不受影響。<br><br>5 小時視窗或本週任一超標就暫停，兩個門檻可以各自調。',
+        warn: '沒有用量資料時採 fail-open（不擋），不會因為讀不到數字就把整條線停掉。'
+      },
+      {
+        route: '/admin',
+        target: '[data-tour="admin-token"]',
+        title: 'Claude 憑證 — 建議一定要設',
+        text: '在任一台裝有 Claude Code 的機器跑 <code>claude setup-token</code>，把產生的長效 token 貼進來即可（綁訂閱、不另計費，效期一年）。<br><br><strong>不設的話會用伺服器本機的登入憑證，多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。</strong>換帳號只要貼新的 token，不必重啟伺服器。'
+      },
+      {
+        route: '/admin',
+        target: '[data-tour="admin-tools"]',
+        placement: 'top',
+        title: '其他管理工具',
+        text: '常用的三個：<strong>使用者管理</strong>（開帳號、給權限）、<strong>Agent 管理</strong>（調各關的模型與提示詞）、<strong>工作流程健檢</strong>（讓 AI 分析近期表現並建議改提示詞）。<br><br>其餘是排查用的：退回原因、失敗分類樣本、Prompt 送出記錄、測試區 port 池、企業版來源。'
       }
     ]
   }

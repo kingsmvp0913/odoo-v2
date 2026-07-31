@@ -218,7 +218,7 @@ window.TokenReportView = Vue.defineComponent({
     <div class="content">
 
       <!-- 篩選列 -->
-      <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);align-items:center">
+      <div data-tour="tr-filters" style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);align-items:center">
         <select v-model="filters.range" class="form-control" style="width:100px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)">
           <option value="7">最近 7 天</option>
           <option value="30">最近 30 天</option>
@@ -244,7 +244,7 @@ window.TokenReportView = Vue.defineComponent({
       <template v-else-if="report">
 
         <!-- 摘要卡片 -->
-        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-3);margin-bottom:var(--space-5)">
+        <div data-tour="tr-summary" style="display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-3);margin-bottom:var(--space-5)">
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4);text-align:center">
             <div style="font-size:24px;font-weight:var(--fw-bold);color:var(--primary)" :title="fmtNum(report.summary.total_tokens)">{{ fmtShort(report.summary.total_tokens) }}</div>
             <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-1)">總 Token 數</div>
@@ -276,7 +276,7 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
         <!-- 圖表區 -->
-        <div style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5)">
+        <div data-tour="tr-charts" style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5)">
 
           <!-- Agent 圓餅圖 -->
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);cursor:zoom-in" @click="openZoom('Agent 類型', agentSlices)">
@@ -427,7 +427,7 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
         <!-- 明細表 -->
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <div data-tour="tr-tasks" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
           <div style="max-height:520px;overflow-y:auto">
           <table style="width:100%;border-collapse:collapse;font-size:var(--fs-base);table-layout:fixed">
             <thead>

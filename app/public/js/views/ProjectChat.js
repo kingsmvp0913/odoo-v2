@@ -18,9 +18,13 @@ window.ProjectChatView = Vue.defineComponent({
   async created() { await this.loadChats(); },
   beforeUnmount() { this._gone = true; },
   methods: {
+    // 新手教程的示範專案：對話內容來自 tour-demo.js，不打 API
+    isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
     async loadChats() {
       const pid = this.$route.params.id;
-      this.chats = await Api.get(`projects/${pid}/chats`).catch(() => []);
+      this.chats = this.isTourDemo()
+        ? window.TourDemo.chats()
+        : await Api.get(`projects/${pid}/chats`).catch(() => []);
       const cid = this.$route.params.chatId;
       if (cid) {
         this.activeChat = this.chats.find(c => String(c.id) === String(cid)) || null;
@@ -34,6 +38,7 @@ window.ProjectChatView = Vue.defineComponent({
     },
     async loadMessages() {
       if (!this.activeChat) return;
+      if (this.isTourDemo()) { this.messages = window.TourDemo.chatMessages(); return; }
       this.loadingMsgs = true;
       try {
         this.messages = await Api.get(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`);
@@ -42,7 +47,7 @@ window.ProjectChatView = Vue.defineComponent({
       finally { this.loadingMsgs = false; }
     },
     async markRead(chat) {
-      if (!chat) return;
+      if (!chat || this.isTourDemo()) return;
       const pid = this.$route.params.id;
       try {
         const { projectUnread } = await Api.post(`projects/${pid}/chats/${chat.id}/read`, {});
@@ -98,6 +103,7 @@ window.ProjectChatView = Vue.defineComponent({
     },
     async toTask() {
       if (!this.activeChat || this.draftingTask) return;
+      if (this.isTourDemo()) { this.taskDraft = window.TourDemo.chatDraft(); this.showTaskModal = true; return; }
       this.draftingTask = true;
       try {
         const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {});
@@ -136,7 +142,7 @@ window.ProjectChatView = Vue.defineComponent({
       <h1>專案對話</h1>
     </div>
     <div style="flex:1;display:flex;overflow:hidden;min-width:0">
-      <div style="width:220px;min-width:220px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden">
+      <div data-tour="chat-list" style="width:220px;min-width:220px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden">
         <div style="padding:10px;border-bottom:1px solid var(--border)">
           <input v-model="newTitle" placeholder="對話標題（選填）" class="form-control" style="margin-bottom:6px;font-size:var(--fs-sm)" @keyup.enter="createChat" />
           <button class="btn btn-primary btn-sm" style="width:100%" @click="createChat">+ 新對話</button>
@@ -165,11 +171,11 @@ window.ProjectChatView = Vue.defineComponent({
         <template v-else>
           <div style="padding:8px var(--space-4);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
             <span style="font-size:var(--fs-base);font-weight:var(--fw-semibold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ activeChat.title }}</span>
-            <button class="btn btn-outline btn-sm" @click="toTask" :disabled="draftingTask || sending">
+            <button class="btn btn-outline btn-sm" data-tour="chat-totask" @click="toTask" :disabled="draftingTask || sending">
               {{ draftingTask ? '摘要中...' : '＋ 轉為任務' }}
             </button>
           </div>
-          <div class="chat-messages" ref="messages" style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px">
+          <div class="chat-messages" data-tour="chat-messages" ref="messages" style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px">
             <div v-if="loadingMsgs" class="loading">載入中...</div>
             <div v-for="m in messages" :key="m.id">
               <div :style="{ display:'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }">
@@ -192,7 +198,7 @@ window.ProjectChatView = Vue.defineComponent({
               </div>
             </div>
           </div>
-          <div style="padding:var(--space-3);border-top:1px solid var(--border);display:flex;gap:var(--space-2);align-items:flex-end">
+          <div data-tour="chat-input" style="padding:var(--space-3);border-top:1px solid var(--border);display:flex;gap:var(--space-2);align-items:flex-end">
             <textarea v-model="newInput"
                       placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行)"
                       style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:none;height:60px"
@@ -207,7 +213,7 @@ window.ProjectChatView = Vue.defineComponent({
 
     <!-- 轉為任務：可編輯草稿，確認才建立（用標準 modal class，深色主題可讀）-->
     <div v-if="showTaskModal" class="modal-overlay" @mousedown.self="showTaskModal=false" @keyup.esc="showTaskModal=false">
-      <div class="modal modal-elevated" role="dialog" aria-modal="true" style="width:600px">
+      <div class="modal modal-elevated" data-tour="chat-modal" role="dialog" aria-modal="true" style="width:600px">
         <div class="modal-title">轉為任務</div>
         <div class="modal-body">
           <div class="field-item" style="margin-bottom:var(--space-4)">

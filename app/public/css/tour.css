@@ -16,8 +16,10 @@
   border-radius: 99px; padding: 0 5px; font-size: var(--fs-2xs);
 }
 
-/* 覆蓋層本身不吃事件，遮罩片才吃：光圈範圍因此天然可以互動（步驟另外決定要不要擋） */
-.tour-layer { position: fixed; inset: 0; z-index: var(--z-modal); pointer-events: none; }
+/* 覆蓋層本身不吃事件，遮罩片才吃：光圈範圍因此天然可以互動（步驟另外決定要不要擋）。
+   z-index 要比 --z-modal 高一階：教程會打光在 modal 上（例如 Chat 的「轉為任務」草稿），
+   同層時只靠 DOM 順序贏，一旦有人調整 App template 的掛載位置就會靜默被蓋住。 */
+.tour-layer { position: fixed; inset: 0; z-index: calc(var(--z-modal) + 1); pointer-events: none; }
 
 /* rgba(9,9,12,…) 是刻意的例外：遮罩黑不屬於任何語意色 token */
 .tour-mask { position: absolute; background: rgba(9,9,12,.55); pointer-events: auto; }

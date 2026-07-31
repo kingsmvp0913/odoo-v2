@@ -32,11 +32,18 @@
     }
     state.doneVersion++;   // 觸發入口按鈕的未完成數重算
   }
+  // 管理員限定的課程（報表、管理員設定、資料庫查詢）對一般使用者連選單都不該出現——
+  // 那幾頁的路由本來就有 requiresAdmin，教程帶過去只會被導回首頁。
+  // 讀 UserStore.role（reactive）→ 呼叫端的 computed 會在角色載入後自動重算。
+  function visibleCourses() {
+    const all = window.TOUR_COURSES || [];
+    const isAdmin = !!(window.UserStore && window.UserStore.role === 'admin');
+    return isAdmin ? all : all.filter(c => !c.adminOnly);
+  }
   function remainingCount() {
     void state.doneVersion; // 建立 reactive 依賴
-    const all = window.TOUR_COURSES || [];
     const done = doneCourses();
-    return all.filter(c => !done.includes(c.id)).length;
+    return visibleCourses().filter(c => !done.includes(c.id)).length;
   }
 
   // open=選單或課程都算開著；courseId 為 null 代表停在選單
@@ -68,7 +75,7 @@
     // 而 NaN !== NaN 恆真，每一步都會被自己的過期檢查擋掉，畫面永遠只剩說明框沒有光圈。
     created() { this._token = 0; },
     computed: {
-      courses() { return window.TOUR_COURSES || []; },
+      courses() { return visibleCourses(); },
       course() { return this.courses.find(c => c.id === this.state.courseId) || null; },
       step() { return this.course ? this.course.steps[this.state.stepIdx] : null; },
       lastIdx() { return this.course ? this.course.steps.length - 1 : 0; },
@@ -279,7 +286,7 @@
         <!-- 課程選單 -->
         <div v-if="!course" class="tour-menu">
           <div class="tour-menu-title">新手教程</div>
-          <div class="tour-menu-sub">四門短課，不用照順序，隨時可以關掉。教程會直接帶你走真的畫面。</div>
+          <div class="tour-menu-sub">{{ courses.length }} 門短課，不用照順序，隨時可以關掉。教程會直接帶你走真的畫面。</div>
           <div class="tour-menu-list">
             <button v-for="(c, i) in courses" :key="c.id" type="button"
               class="tour-menu-item" :class="{ 'is-done': isDone(c.id) }"

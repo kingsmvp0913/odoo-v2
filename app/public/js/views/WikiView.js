@@ -4,7 +4,8 @@ window.WikiNode = Vue.defineComponent({
   emits: ['open', 'refresh', 'remove'],
   template: `
     <div>
-      <div style="display:flex;align-items:center;gap:var(--space-1);padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-base)"
+      <div :data-tour="'wiki-node-' + node.node_type"
+        style="display:flex;align-items:center;gap:var(--space-1);padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-base)"
         :style="{ background: currentSlug === node.slug ? 'var(--border)' : 'transparent', paddingLeft: (8 + depth*14) + 'px' }"
         @click="$emit('open', node.slug)">
         <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : node.node_type === 'notes' ? '📝' : node.node_type === 'troubleshooting' ? '🔧' : '📄' }}</span>
@@ -63,6 +64,13 @@ window.WikiView = Vue.defineComponent({
     const sock = window._socket;
     if (sock && sock.off) sock.off('wiki:progress', this._progressHandler);
   },
+  watch: {
+    // 網址列的 slug 換了就換頁：元件不會為了 params 變化重建，少了這條，直接改網址（或教程導頁）
+    // 只會換掉網址、內容停在舊頁。loadPage 內的 router.replace 是同一個 slug，不會遞迴。
+    '$route.params.slug'(slug) {
+      if (slug && (!this.current || this.current.slug !== slug)) this.loadPage(slug);
+    }
+  },
   computed: {
     renderedContent() {
       if (!this.current) return '';
@@ -88,7 +96,10 @@ window.WikiView = Vue.defineComponent({
     }
   },
   methods: {
+    // 新手教程的示範專案：wiki 內容來自 tour-demo.js，不打 API
+    isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
     async loadPages() {
+      if (this.isTourDemo()) { this.pages = window.TourDemo.wikiPages(); this.loading = false; return; }
       this.loading = true;
       try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); }
       catch (e) { showToast(e.message, 'error'); }
@@ -96,7 +107,9 @@ window.WikiView = Vue.defineComponent({
     },
     async loadPage(slug) {
       try {
-        this.current = await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`);
+        this.current = this.isTourDemo()
+          ? window.TourDemo.wikiPage(slug)
+          : await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`);
         this.editContent = this.current.content;
         this.editing = false;
         this.$router.replace(`/projects/${this.$route.params.id}/wiki/${slug}`);
@@ -219,7 +232,7 @@ window.WikiView = Vue.defineComponent({
       </div>
     </div>
     <div style="display:flex;height:calc(100% - 56px);overflow:hidden">
-      <div style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:var(--space-2);flex-shrink:0">
+      <div data-tour="wiki-tree" style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:var(--space-2);flex-shrink:0">
         <div v-if="loading" style="color:var(--text-muted);font-size:var(--fs-base);padding:var(--space-2)">載入中...</div>
         <template v-else>
           <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
@@ -229,7 +242,7 @@ window.WikiView = Vue.defineComponent({
           <div v-if="pages.length === 0" style="color:var(--text-muted);font-size:var(--fs-sm);padding:var(--space-2)">尚無頁面</div>
         </template>
       </div>
-      <div style="flex:1;overflow-y:auto;padding:var(--space-6)">
+      <div data-tour="wiki-content" style="flex:1;overflow-y:auto;padding:var(--space-6)">
         <div v-if="!current" style="color:var(--text-muted)">選擇或新增頁面</div>
         <template v-else>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4)">

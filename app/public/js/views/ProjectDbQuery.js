@@ -13,7 +13,16 @@ window.ProjectDbQueryView = Vue.defineComponent({
   async created() { await Promise.all([this.load(), this.loadVpn()]); },
   methods: {
     pid() { return this.$route.params.id; },
+    // 新手教程的示範專案：連線與查詢結果來自 tour-demo.js，不打 API
+    isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.pid())); },
     async load() {
+      if (this.isTourDemo()) {
+        const d = window.TourDemo.db();
+        // 連查詢結果一起帶上：查詢區空著就沒東西可指，也看不出「查得到什麼」
+        this.conns = d.conns; this.selectedId = d.conns[0].id; this.sql = d.sql; this.result = d.result;
+        this.loading = false;
+        return;
+      }
       this.loading = true;
       try { this.conns = await Api.get(`projects/${this.pid()}/db-connections`); }
       catch (e) { showToast(e.message, 'error'); }
@@ -35,6 +44,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       finally { this.testing = false; }
     },
     async loadVpn() {
+      if (this.isTourDemo()) { this.vpn = window.TourDemo.db().vpn; this.vpnForm.vpn_username = this.vpn.vpn_username; return; }
       try {
         this.vpn = await Api.get(`projects/${this.pid()}/vpn`);
         this.vpnForm.vpn_username = this.vpn.vpn_username || '';
@@ -124,7 +134,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       </div>
     </div>
     <div class="content" v-else>
-      <div class="settings-section" style="margin-bottom:var(--space-5)">
+      <div class="settings-section" data-tour="db-vpn" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">
           專案 VPN 設定
           <span v-if="vpn.has_config" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">已設定</span>
@@ -145,7 +155,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
       </div>
 
-      <div class="settings-section" style="margin-bottom:var(--space-5)">
+      <div class="settings-section" data-tour="db-conns" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">連線管理（{{ conns.length }}）</h2>
         <div class="table-wrap">
           <table class="data-table">
@@ -169,7 +179,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
       </div>
 
-      <div class="settings-section" style="margin-bottom:var(--space-5)">
+      <div class="settings-section" data-tour="db-form" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">{{ form.id ? '編輯連線' : '新增連線' }}</h2>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
           <div class="form-group" style="margin:0"><label>連線名稱</label><input v-model="form.name" class="form-control" placeholder="hj-鴻久-正式" /></div>
@@ -206,7 +216,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section" data-tour="db-query">
         <h2 class="section-title">查詢（只允許 SELECT）</h2>
         <div style="display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2)">
           <select v-model="selectedId" class="form-control" style="max-width:280px">
