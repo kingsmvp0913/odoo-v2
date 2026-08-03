@@ -136,6 +136,30 @@ test('runClaude：從 init 事件抓到 session_id 並回傳', async () => {
   expect(r.sessionId).toBe('sess-abc');
 });
 
+// result-contract 關卡的救命索：assistantText 累積「整段」assistant 文字，即使 <result> 出現在中間輪、
+// 末輪 ev.result 只剩收尾散文，assistantText 仍保有完整 transcript 供 extractResult 撈回契約（task#79 回歸）。
+test('runClaude：assistantText 累積全部 assistant 文字（非只末輪 ev.result）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValue(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  // 中間輪吐出 <result>，末輪只剩收尾散文
+  child.stdout.emit('data', JSON.stringify({ type: 'assistant', message: { model: 'x', content: [{ type: 'text', text: '<result>{"ok":1}</result>' }] } }) + '\n');
+  child.stdout.emit('data', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '收尾散文' }] } }) + '\n');
+  child.stdout.emit('data', JSON.stringify({ type: 'result', result: '收尾散文', usage: null, duration_ms: 3 }) + '\n');
+  child.emit('close', 0);
+  const r = await p;
+  expect(r.text).toBe('收尾散文');                       // 末輪 ev.result 已丟契約
+  expect(r.assistantText).toContain('<result>{"ok":1}</result>');  // 但 transcript 撈得回
+});
+
 test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含', async () => {
   const { spawn } = require('child_process');
   const { EventEmitter } = require('events');

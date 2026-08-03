@@ -136,6 +136,10 @@ function runClaude(prompt, opts = {}) {
     const killChild = () => killChildGracefully(child, KILL_GRACE_MS);
 
     let resultText = '';
+    // 整段 assistant 文字（非只末輪 ev.result）：agent 把 <result> 當中間步驟吐出後，若還繼續講話
+    // 或派子任務，ev.result 只剩收尾散文、契約標籤整個蒸發。留全量 transcript 供 result-contract 關卡
+    // 用 extractResult 從中撈「最後一組」<result>，不靠 agent 自律把契約留在末輪（Rule 60／69）。
+    let assistantText = '';
     let usage = null;
     let durationMs = null;
     let sessionId = null;
@@ -195,6 +199,12 @@ function runClaude(prompt, opts = {}) {
           if (!usedModel && ev.type === 'assistant' && ev.message && ev.message.model) {
             usedModel = ev.message.model;
           }
+          // 累積所有 assistant text block（見 assistantText 宣告處）
+          if (ev.type === 'assistant' && ev.message?.content) {
+            for (const blk of ev.message.content) {
+              if (blk.type === 'text' && blk.text) assistantText += blk.text;
+            }
+          }
           const display = formatEvent(ev);
           if (display) emit(display);
           if (ev.type === 'result') {
@@ -244,7 +254,7 @@ function runClaude(prompt, opts = {}) {
           const finalModel = usedModel || model || null;
           // 折進 usage，讓 logTokenUsage 零改動就能落 model 欄
           if (usage && finalModel) usage.model = finalModel;
-          resolve({ text: resultText.trim(), usage, durationMs, sessionId, model: finalModel });
+          resolve({ text: resultText.trim(), assistantText: assistantText.trim(), usage, durationMs, sessionId, model: finalModel });
         }
       });
     });

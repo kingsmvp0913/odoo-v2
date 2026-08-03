@@ -133,6 +133,21 @@ test('code_change_vague 回單數 question 字串 → 仍存入 cs_question', as
   expect(t.cs_question).toContain('重現步驟');
 });
 
+// 回歸（task#79 真實故障）：cs 把 <result> 當中間步驟吐出後又補收尾散文／派子任務，末輪 ev.result（text）
+// 就不含契約標籤。改用整段 assistantText 解析後，仍能撈回最後一組 <result> 正常路由，不再誤判 stopped。
+test('末輪 text 無 <result>、assistantText 有 → 從 transcript 撈回契約正常路由', async () => {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '背景調查完成，維持先前已送出的 code_change_vague 結果與問題不變。',   // ev.result＝收尾散文，無標籤
+    assistantText: '先實地查證…\n<result>{"type":"code_change_vague","questions":["附件六階段要做到什麼程度","倉別 R06/R07 要建主檔還是只印在憑證上"]}</result>\n背景調查完成，維持先前已送出的 code_change_vague 結果與問題不變。',
+    usage: null, durationMs: null
+  });
+  const { userId, taskId } = await makeTask({ title: '叫修單憑證修改', text: '請修改如附件' });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_question FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('cs_data_needed');   // 不是 stopped
+  expect(JSON.parse(t.cs_question)).toEqual(['附件六階段要做到什麼程度', '倉別 R06/R07 要建主檔還是只印在憑證上']);
+});
+
 test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔cs_running 鬼打牆）', async () => {
   mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
   const { userId, taskId } = await makeTask({

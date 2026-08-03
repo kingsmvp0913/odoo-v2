@@ -63,10 +63,12 @@ async function runCsAgent(taskId, userId, signal) {
   let rawText = '';
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
-    const { text, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model, agentType: 'cs' });
-    rawText = text || '';
+    const { text, assistantText, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model, agentType: 'cs' });
+    // cs 會實地查證、有時把 <result> 當中間步驟吐出後又補收尾散文／派子任務，末輪 ev.result（text）就不含契約標籤。
+    // 用整段 assistant transcript（assistantText）解析，讓 extractResult 撈得回最後一組 <result>；退回 text 保底。
+    rawText = assistantText || text || '';
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
-    result = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId: task.user_id });
+    result = await parseAgentResult(rawText, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId: task.user_id });
   } catch (err) {
     // CLI/API 執行失敗與「回應無法解析」是不同問題，分開歸因（健檢流程層 P3）
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err);
