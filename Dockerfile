@@ -77,4 +77,13 @@ USER odoo
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/home/odoo/.local/bin:/home/odoo/.cargo/bin:${PATH}"
 
+# rtk（token 節流 CLI proxy，見 ~/.claude/RTK.md）。install.sh 亦裝進 ~/.local/bin，故與 uv 同放在
+# USER 切換之後。僅烘 binary，hook（rtk init -g）不在此啟用——那會改 Claude Code settings，另行決定。
+RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+
+# graphify 引擎（skill 底層跑的 PyPI 套件，發行名 graphifyy／模組與 CLI 皆為 graphify）。--user 裝進
+# ~/.local（非 volume，隨 image 保存）；Ubuntu 24.04 externally-managed 需 --break-system-packages，
+# 與 SKILL.md 自身安裝 fallback 一致。skill 檔本身在 ~/.claude volume，此處只補回被重建清掉的引擎。
+RUN python3 -m pip install --user --break-system-packages graphifyy
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
