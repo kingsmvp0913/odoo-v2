@@ -70,7 +70,10 @@ function registerRoutes(app) {
       if (env.status !== 'running') {
         if (env.status !== 'setting_up') {
           const { runEnvSetup } = require('./pipeline/env-agent');
-          runEnvSetup(req.params.id).catch(e => console.error('[ENV] sso autostart error:', e.message));
+          const { withProjectLock } = require('./pipeline/project-lock');
+          // 持專案鎖與 pipeline deploy/E2E 序列化（見 /env/setup 的說明）；key 必須 coerce 成 Number 才與數字 key 互斥。
+          withProjectLock(Number(req.params.id), () => runEnvSetup(req.params.id))
+            .catch(e => console.error('[ENV] sso autostart error:', e.message));
         }
         return res.status(202).json({ starting: true, message: '測試區建立中，完成後會自動開啟' });
       }
@@ -109,8 +112,11 @@ function registerRoutes(app) {
   app.post('/api/projects/:id/env/setup', verifyToken, async (req, res) => {
     try {
       const { runEnvSetup } = require('./pipeline/env-agent');
-      // 併發防護在 runEnvSetup 內（同專案 in-flight 去重），連按建立不會 spawn 兩個 Odoo
-      runEnvSetup(req.params.id).catch(err =>
+      const { withProjectLock } = require('./pipeline/project-lock');
+      // _setupInflight 只併「同 tick」的呼叫；手動建立與 pipeline deploy/E2E 不同步觸發時仍會各跑一輪
+      // runEnvSetup、互相污染 odoo_envs（爭埠漂移、輸家 _failEnv 蓋掉健康的 running）。持專案鎖與 pipeline
+      // 序列化。key 必須 coerce 成 Number——deploy 用 DB 數字 project_id 當 key，Map key 字串 '2'≠數字 2 不互斥。
+      withProjectLock(Number(req.params.id), () => runEnvSetup(req.params.id)).catch(err =>
         console.error('[ENV] setup error:', err.message)
       );
       res.json({ ok: true, message: '環境建立已開始' });

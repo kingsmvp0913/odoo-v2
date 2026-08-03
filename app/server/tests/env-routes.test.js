@@ -13,6 +13,15 @@ jest.mock('../pipeline/env-agent', () => ({
   ENV_BASE: require('path').resolve(__dirname, '..', '..', '..', 'odoo-envs')
 }));
 
+// 手動建立測試區的兩條入口（/env/setup、/env/sso 自動起）必須與 pipeline 的 deploy/E2E
+// 序列化——否則同時觸發 runEnvSetup 會爭埠、_failEnv 互蓋健康的 running（實測 project 2 埠 21000/21001 漂移）。
+// 這個 mock 保留「執行 fn」語意（讓 runEnvSetup 仍被呼叫），只用來斷言持鎖與 key 型別。
+const mockWithProjectLock = jest.fn((id, fn) => Promise.resolve().then(fn));
+jest.mock('../pipeline/project-lock', () => ({
+  withProjectLock: (id, fn) => mockWithProjectLock(id, fn),
+  tryProjectLock: jest.fn(),
+}));
+
 let dbModule, app;
 let userId, projectId, token;
 
@@ -45,7 +54,7 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
-beforeEach(() => { mockRunEnvSetup.mockReset(); mockStopEnv.mockReset(); });
+beforeEach(() => { mockRunEnvSetup.mockReset(); mockStopEnv.mockReset(); mockWithProjectLock.mockClear(); });
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
@@ -66,6 +75,34 @@ test('POST setup → triggers runEnvSetup and returns ok', async () => {
   await new Promise(r => setTimeout(r, 10));
   // port 為租約，存於 odoo_envs.port（啟動測試區時借、停止時還），route 不再轉傳 body 參數
   expect(mockRunEnvSetup).toHaveBeenCalledWith(String(projectId));
+});
+
+// 意圖：手動建立必須持專案鎖與 pipeline deploy/E2E 序列化。且 key 必須是「數字」project_id——
+// deploy-testing.js 用 DB 數字 project_id 當 withProjectLock 的 key，Map key 字串 '2' ≠ 數字 2 不互斥，
+// 傳字串等於根本沒鎖（正是 project 2 埠漂移＋env 被打成 error 的成因）。
+test('POST setup → 以數字 project_id 持鎖後才 runEnvSetup（字串 key 不會與 pipeline 互斥）', async () => {
+  mockRunEnvSetup.mockResolvedValueOnce(undefined);
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/env/setup`)
+    .set(auth()).send({});
+  expect(res.status).toBe(200);
+  await new Promise(r => setTimeout(r, 10));
+  expect(mockWithProjectLock).toHaveBeenCalledWith(projectId, expect.any(Function));
+  expect(typeof mockWithProjectLock.mock.calls[0][0]).toBe('number');
+  // 鎖住的 fn 執行後才真的呼叫 runEnvSetup
+  expect(mockRunEnvSetup).toHaveBeenCalledWith(String(projectId));
+});
+
+// 意圖：/env/sso 的「環境被回收 → 自動起」入口同樣要持鎖（與上同一 race 面）。
+test('GET env/sso 自動起 → 同樣以數字 project_id 持鎖', async () => {
+  mockRunEnvSetup.mockResolvedValueOnce(undefined);
+  const pid = await mkEnv('lock', { status: 'idle', sso_secret: 'sec' });
+  const res = await request(app).get(`/api/projects/${pid}/env/sso`).set(auth());
+  expect(res.status).toBe(202);
+  await new Promise(r => setTimeout(r, 10));
+  expect(mockWithProjectLock).toHaveBeenCalledWith(pid, expect.any(Function));
+  expect(typeof mockWithProjectLock.mock.calls[0][0]).toBe('number');
+  expect(mockRunEnvSetup).toHaveBeenCalledWith(String(pid));
 });
 
 test('GET env → returns record after upsert', async () => {

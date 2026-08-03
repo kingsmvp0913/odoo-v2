@@ -71,7 +71,10 @@ async function runTourStage(taskId, userId, signal) {
   );
   if (!task || !task.project_id) return false;
 
-  if (!(await ensureEnvRunning(task.project_id))) {
+  // 持專案鎖與手動建立（env-routes）序列化——兩者同時觸發 runEnvSetup 會爭埠並互蓋 odoo_envs。
+  // 只鎖住 ensureEnvRunning（秒級的探測／必要時起環境），不涵蓋下方長時 tour 產生——那才是
+  // rule #61 要避免的「長持鎖卡住同專案其他任務」。task.project_id 已是 DB 數字，key 型別正確。
+  if (!(await withProjectLock(task.project_id, () => ensureEnvRunning(task.project_id)))) {
     await stopTask(taskId, userId, '測試環境未運行且無法自動啟動，請至專案環境頁檢查', 'env');
     return true;
   }
