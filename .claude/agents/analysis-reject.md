@@ -52,7 +52,6 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - `answer`：**僅限最終人工審核退回**情境——使用者填的是**純提問**（想理解為什麼這樣做、確認某個設計意圖、問影響範圍），不牽涉回報 bug、也沒要求改什麼 → 回 `summary`（給使用者的回答），**不路由、不動規格、不動任何狀態**。只要牽涉「哪裡不對／要改什麼」就走 `fix`／`respec`，不要用 `answer`；卡關修正指示（resolve）情境不要用 `answer`。
 
 【限制】
-- allow_bug = {{allow_bug}}。若為 false（同一問題上一輪已當程式問題修過仍被退）→ **禁止 fix**，改走 `respec`（交回分析重寫 SD）或 `resume`。
 - `advance` 的 target 最遠只到 `review`（送審）；不得放行到「完成」——核准是使用者的手動動作。
 
 【輸出】把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字）。decision 只有 resume／advance／fix／respec／clarify／answer；advance 必帶 target、clarify 必帶 questions（字串陣列）。

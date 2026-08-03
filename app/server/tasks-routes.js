@@ -591,7 +591,7 @@ function registerRoutes(app) {
       // 只清「任務生命週期」子表（隨任務死）。以下四張刻意「不」隨任務刪、保留為跨任務資料，勿再當漏刪補進來：
       //   token_usage       → 計費/成本歷史（token-report ?all=true 專門把已刪任務列為孤兒；刪了成本統計會縮水）
       //   prompt_logs       → 全域只留最新 100 筆的除錯 ring buffer，自動汰除（見 claude-runner）
-      //   task_rejections   → 退回稽核＋分類器訓練語料（reject-triage 算 allow_bug、classify-rejections 餵訓練、admin 有獨立管理頁）
+      //   task_rejections   → 退回稽核＋分類器訓練語料（classify-rejections 餵訓練、admin 有獨立管理頁）
       //   classify_samples  → 分類器準確率訓練語料（admin 依 recorded_at 時窗統計）
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);

@@ -50,13 +50,11 @@ async function runRejectTriage(taskId, userId, signal) {
 
   const isReject = task.status === 'reject_triage';
 
-  // 防呆：同一 task 已被「人工」退回幾次（task_rejections 存業務 id）；>=2 禁 fix（只能 advance/respec/resume）。
-  // 必須排除 source='qa'：QA 自動退回落同一張表，混算會讓一次 QA fail 就把後續所有人工退回的
-  // fix 分支永久關掉——真正的程式 bug 從此只能被降級成 respec，白跑一輪分析重寫規格。
-  const { rows: [{ n }] } = await query(
-    "SELECT COUNT(*)::int AS n FROM task_rejections WHERE task_id = $1 AND source = 'human'", [task.task_id]
-  );
-  const allowBug = n <= 1;
+  // 這裡曾有「人工退回 >=2 次就禁 fix、強制降級 respec」的防呆。已移除：它算的是任務累計退回次數，
+  // 不是「同一問題重複退回」——兩件無關的退回（例：DB 欄位缺失 ＋ 按鈕樣式）會被算成同一筆帳，
+  // 把純樣式修正誤判成規格問題整包重跑分析（實測 task 157）。「這次退的跟上次是不是同一件事」
+  // 只有讀得懂內容的 agent 判得出來，改由它依「有沒有改變什麼算正確」自行判 fix／respec
+  // （分界線寫在 analysis-reject.md）。把關的是人：每一輪 fix 都是人主動退回換來的（見下方 fix 分支）。
 
   // 情境輸入：停在哪關、停下原因、使用者最新的話、以及 resume 的「原關」——依入口組不同來源
   let stuckStage, stopContext, userInstruction, homeStatus;
@@ -127,7 +125,6 @@ async function runRejectTriage(taskId, userId, signal) {
       stop_context: stopContext,
       user_instruction: userInstruction,
       runtime_log_path: runtimeLog,
-      allow_bug: allowBug ? 'true' : 'false',
       project_notes: projectNotes || ''
     }).trim();
     // 停在早期分析階段就被 resume 時 worktree 尚未建立；worktree 不存在 → 退回專案根（一定存在），
@@ -151,15 +148,11 @@ async function runRejectTriage(taskId, userId, signal) {
   // 「未回傳有效結果」，整包分診結論被丟掉、任務白白 stopped。target 同理（不合法會靜默降級成 resume）。
   let decision = String(result?.decision ?? '').trim().toLowerCase();
   const target = String(result?.target ?? '').trim().toLowerCase();
-  // 防呆：不准 fix 時降級為 respec（同一問題已當程式問題修過仍被退）
-  if (decision === 'fix' && !allowBug) decision = 'respec';
 
   // 共用：清停下狀態、落到某 status（並歸零該關計數器）。keepFeedback 保留 retry_feedback 給重跑的關卡當回饋。
-  // reentry_count 預設一併歸零：分診＝人工已介入，總循環兜底（MAX_REENTRY）額度應重新起算——
+  // reentry_count 一律歸零：分診＝人工已介入，總循環兜底（MAX_REENTRY）額度應重新起算——
   // 否則達上限被停過的任務，人工放回後只剩一次下游失敗額度就再度永久 stopped，人工介入實質失效。
   // （代價：前端顯示的循環次數變成「距上次人工介入」的次數，屬可接受語意。）
-  // 例外：fix→coding 呼叫端會先過 bumpReentryOrStop 斷路器並傳 resetReentry:false——
-  // 人工判 fix 的退回本身也計入總循環額度，不再無條件重取，避免人工退回無限繞過斷路器（長尾主因）。
   const goto = async (nextStatus, { keepFeedback = false, freshRespec = false, resetReentry = true } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
     // triage_home 一併清：本次分診已落地，暫存的原關用完即棄，留著會被下一次分診誤當原關
@@ -237,13 +230,13 @@ async function runRejectTriage(taskId, userId, signal) {
   }
 
   // fix → coding：保留 retry_feedback（退回原因／失敗回饋）給 coding resume 當修補依據。
-  // 先過總循環斷路器（bumpReentryOrStop）：人工退回的 fix 也計入額度，達上限直接 stopped，
-  // 不再無條件放行——關掉「人工退回無限繞過斷路器」的長尾漏洞。
+  // 刻意「不」過總循環斷路器（bumpReentryOrStop），reentry 一律歸零：斷路器防的是 QA／deploy／E2E
+  // 之間無人監督地空轉燒 token（那三關仍各自呼叫它），而分診的每一輪都是人主動退回／填修正指示
+  // 換來的，帶著新資訊，不是機器空轉。舊版讓人工退回也吃額度（MAX_REENTRY=2），結果是第二次退回
+  // 直接 stopped，且填修正指示 → 又判 fix → 又觸頂 → 任務永久推不動（實測過的死迴圈）。
   if (decision === 'fix') {
     if (summary) await logAi(summary);
-    const { bumpReentryOrStop } = require('./reentry');
-    if (await bumpReentryOrStop(taskId, userId, { blockerContent: summary || '' })) return true; // 達上限已標 stopped
-    await goto('coding_running', { keepFeedback: true, resetReentry: false });
+    await goto('coding_running', { keepFeedback: true });
     return true;
   }
 

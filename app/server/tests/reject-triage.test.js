@@ -100,24 +100,29 @@ test('fix → coding_running：保留 retry_feedback、SD 不動、summary 落 A
   expect(logs.some(l => l.role === 'ai' && l.content.includes('研判為程式 bug'))).toBe(true);
 });
 
-// Task 6：fix→coding 不再無條件歸零 reentry_count（那正是人工退回繞過總循環斷路器的長尾主因）。
-// 改為先過 bumpReentryOrStop：未達上限才放行且累加計數；達上限直接 stopped，不再進 coding。
-test('fix → coding_running 且 reentry_count 累加（不再繞過斷路器）', async () => {
+// 總循環斷路器（MAX_REENTRY）防的是 QA／deploy／E2E 之間無人監督地空轉燒 token——那三關各自
+// 呼叫 bumpReentryOrStop，不受此處影響。分診的每一輪 fix 都是人主動退回換來的，帶著新資訊，
+// 讓它也吃額度的後果是：第二次退回就 stopped，之後填修正指示 → 又判 fix → 又觸頂 → 永久推不動。
+test('fix → coding_running 且 reentry_count 歸零（人工介入＝額度重新起算）', async () => {
   claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
   const id = await makeTask({ rejectCount: 1 });
+  await dbModule.query('UPDATE tasks SET reentry_count=1 WHERE id=$1', [id]);
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, reentry_count FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
-  expect(t.reentry_count).toBe(1);
+  expect(t.reentry_count).toBe(0);
 });
 
-test('fix 達 MAX_REENTRY（2）→ stopped，不再無條件放行進 coding', async () => {
+// 死迴圈守衛：已在斷路器上限的任務被人工退回，仍須放行進 coding。舊行為在此直接 stopped，
+// 而使用者填修正指示會再走一次同一條路 → 再度 stopped，任務再也推不動。
+test('fix：已達 MAX_REENTRY 的任務被人工退回 → 仍放行進 coding，不卡死', async () => {
   claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
   const id = await makeTask({ rejectCount: 1 });
-  await dbModule.query('UPDATE tasks SET reentry_count=2 WHERE id=$1', [id]); // 已達新上限
+  await dbModule.query('UPDATE tasks SET reentry_count=2 WHERE id=$1', [id]); // 已達上限
   await runRejectTriage(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('stopped');
+  const { rows: [t] } = await dbModule.query('SELECT status, reentry_count FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.reentry_count).toBe(0);
 });
 
 // git_branch 必須跟著 coding_session_id 一起清：respec-agent 判「pre-coding」（＝規格審核閘門的
@@ -173,16 +178,17 @@ test('resume → 回原關（reject 入口的原關＝review_pending）', async 
   expect(t.status).toBe('review_pending');
 });
 
-test('防呆：二次退回，模型判 fix 也強制降級 respec → analysis_running', async () => {
-  claudeReturns({ decision: 'fix', summary: '退回原因：同一問題再次被退。' });
-  const id = await makeTask({ rejectCount: 2 });   // allow_bug=false
+// 舊版有「人工退回 >=2 次就禁 fix、強制降級 respec」的防呆。它算的是任務累計退回次數而非
+// 「同一問題重複退回」，會把兩件無關的退回算成同一筆帳——實測 task 157 因此把「按鈕樣式改一下」
+// 誤判成規格問題，整包重跑分析＋重寫實作。去向一律由 agent 依退回內容自行判定。
+test('多次人工退回後，模型判 fix 仍走 coding_running（不再被降級成 respec）', async () => {
+  claudeReturns({ decision: 'fix', summary: '純樣式問題，轉回 coding 調整 CSS class。' });
+  const id = await makeTask({ rejectCount: 3 });
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, coding_session_id FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('analysis_running');
-  expect(t.retry_feedback).toBeNull();
-  expect(t.coding_session_id).toBeNull();
-  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
-  expect(logs.some(l => l.role === 'user' && l.content.includes('同一問題再次被退'))).toBe(true);
+  expect(t.status).toBe('coding_running');
+  expect(t.retry_feedback).toContain('備註型別錯');   // 退回原因留給 coding 當修補依據
+  expect(t.coding_session_id).not.toBeNull();        // 不清 coding 痕跡＝不必從零重寫
 });
 
 // clarify → 統一問人閘門：退回原因含糊到 fix/respec 都說得通時停下問使用者，
@@ -199,17 +205,6 @@ test('clarify（帶 questions）→ clarify_pending，resume_status 回 reject_t
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
   expect(logs.some(l => l.role === 'ai' && l.content.includes('需要你裁決') && l.content.includes('修成正確型別'))).toBe(true);
   expect(logs.some(l => l.role === 'ai' && l.content.includes('無法判定'))).toBe(true); // summary 也落泡泡
-});
-
-// 防呆的母體是「人工退回」。QA 自動退回也落同一張 task_rejections（source='qa'），一併算進去
-// 會讓「一次 QA fail」就把後續所有人工退回的 fix 分支永久關掉——程式 bug 從此只能被降級成 respec，
-// 白跑一輪分析重寫規格。
-test('QA 自動退回不計入人工退回次數：仍走 fix，不被降級成 respec', async () => {
-  claudeReturns({ decision: 'fix', summary: '研判為程式 bug，轉回 coding 修補。' });
-  const id = await makeTask({ rejectCount: 1, qaRejects: 2 });
-  await runRejectTriage(id, userId);
-  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('coding_running');   // 混算會變成 analysis_running（allow_bug=false）
 });
 
 // 模型輸出的大小寫／尾隨空白不穩定；不正規化就會被判「未回傳有效結果」，整包分診結論被丟掉、任務 stopped。

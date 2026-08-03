@@ -474,7 +474,7 @@ async function removeWorktree(mainRepoPath, worktreePath) {
 
 // 任務 worktree（analysis 建、coding 沿用、approve 併 main 後才刪）：
 // 確保在 <base>（最新 main）長出的 task 分支 worktree 存在。冪等——已存在時，
-// reset=true 才重置到最新 main（供 analysis 重跑讀最新碼；此階段尚無程式變更），
+// reset=true 才重置到最新 main（供 analysis 重跑讀最新碼），
 // reset=false 則保留現有內容（branch_pending 沿用 analysis 已建好的，不動已有工作）。
 async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, reset) {
   ensureGitignorePyc(mainRepoPath);
@@ -486,6 +486,18 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
     return;
   }
   if (reset) {
+    // reset 的原意是「分析重跑要讀最新碼」，前提是此階段尚無程式變更——但 respec（分診判需調整
+    // 規格）會把已跑完 coding 的任務打回分析，此時分支上早有實作 commit，reset --hard 會把它整包
+    // 丟掉、逼 coding 從零重寫（實測 task 157：只為改兩顆按鈕的 CSS class 重寫 179 行）。
+    // 有領先 commit 就改用 merge 帶進最新 base，一樣達成「讀最新碼」，實作保留給下一輪外科式修改。
+    const { stdout } = await execFileAsync('git', ['rev-list', '--count', `${base}..HEAD`], { cwd: worktreePath });
+    if (Number(stdout.trim()) > 0) {
+      // 併不進來（與 base 撞同幾行）→ abort 後維持原樣：寧可讓分析讀到略舊的碼，也不能丟掉實作。
+      // 真正的衝突本來就由既有的 merge 關（task → testing）處理，不必在這裡搶著解。
+      await execFileAsync('git', ['merge', '--no-edit', base], { cwd: worktreePath })
+        .catch(async () => { await execFileAsync('git', ['merge', '--abort'], { cwd: worktreePath }).catch(() => {}); });
+      return;
+    }
     await execFileAsync('git', ['reset', '--hard', base], { cwd: worktreePath });
     await execFileAsync('git', ['clean', '-fd'], { cwd: worktreePath });
   }

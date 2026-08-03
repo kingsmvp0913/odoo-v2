@@ -115,6 +115,49 @@ test('ensureWorktreeAtMain：建立→冪等沿用（reset=false 保留內容）
   expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
 }, 30000);
 
+// 意圖：reset 的前提是「此階段尚無程式變更」，但 respec（分診判需調整規格）會把已跑完 coding 的
+// 任務打回分析，此時分支上早有實作 commit。無條件 reset --hard 會整包丟掉、逼 coding 從零重寫
+// （實測 task 157：只為改兩顆按鈕的 CSS class 重寫 179 行）。有領先 commit 時改用 merge。
+test('ensureWorktreeAtMain：分支已有領先 base 的 commit → reset=true 不得丟掉實作', async () => {
+  const repo = await makeRepo();
+  const wt = path.join(base, 'wt-ahead', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t12', 'main', true);
+
+  // coding 完成並 commit（分支領先 main 一個 commit）
+  await write(wt, 'feature.py', 'done = True\n');
+  await sh(wt, 'add', '-A');
+  await sh(wt, 'commit', '-m', 'impl');
+
+  // 期間 main 也前進（別的任務核准併入）
+  await write(repo, 'b.py', 'y = 2\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'main moves');
+
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t12', 'main', true);
+  expect(fs.existsSync(path.join(wt, 'feature.py'))).toBe(true);   // 實作保住
+  expect(fs.existsSync(path.join(wt, 'b.py'))).toBe(true);         // 最新 base 仍帶進來（分析讀得到新碼）
+}, 30000);
+
+// 併不進來時（與 base 撞同幾行）寧可讓分析讀到略舊的碼，也不能丟掉實作——半殘的 merge 狀態
+// 更要清乾淨，留著 MERGE_HEAD 會讓後續 coding 的 commit 整個卡住。
+test('ensureWorktreeAtMain：領先 commit 與 base 衝突 → 保住實作且不留半殘 merge', async () => {
+  const repo = await makeRepo();
+  const wt = path.join(base, 'wt-conflict', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t13', 'main', true);
+
+  await write(wt, 'a.py', 'x = 99\n');       // 改 main 也會改的同一行
+  await sh(wt, 'commit', '-am', 'impl');
+  await write(repo, 'a.py', 'x = 50\n');
+  await sh(repo, 'commit', '-am', 'main moves');
+
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t13', 'main', true);
+  // 行尾用 trim 比對：Windows 的 autocrlf 會讓 checkout 出來的檔變 CRLF（同檔既有紅燈的成因）
+  expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8').trim()).toBe('x = 99');  // 實作沒被丟掉
+  expect(fs.existsSync(path.join(wt, '.git'))).toBe(true);
+  const { stdout } = await sh(wt, 'status', '--porcelain');
+  expect(stdout.trim()).toBe('');                                                 // 無衝突標記殘留
+}, 30000);
+
 test('syncWithMain：與 main 衝突 → hasConflicts＋檔名（不假成功）', async () => {
   const repo = await makeRepo();
   await sh(repo, 'checkout', '-b', 'task/t4');

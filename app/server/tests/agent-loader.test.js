@@ -143,11 +143,10 @@ test('analysis-reject 可載入且 render 填入分診專屬 placeholder', () =>
   const out = agent.render({
     project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
     analysis_yaml: 'module: sale', stuck_stage: 'QA 審查', stop_context: '金額算錯',
-    user_instruction: '沒事誤判', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true'
+    user_instruction: '沒事誤判', runtime_log_path: 'C:/x/odoo.log'
   });
   expect(out).toContain('金額算錯');
   expect(out).toContain('沒事誤判');
-  expect(out).toContain('allow_bug = true');
   // 分診查真相改用「已解析的 git -C <絕對路徑> diff base...branch」，不再叫 agent 打 main...HEAD（歷程實測 fatal 主因）
   expect(out).toContain('git -C');
   expect(out).toContain('diff main...task/x');
@@ -163,7 +162,7 @@ describe('DEBUG_AGENTS 注入 systematic-debugging 方法論', () => {
     const out = loadAgent('analysis-reject').render({
       project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
       analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
-      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true'
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log'
     });
     expect(out).toContain('# 系統化除錯（pipeline 版）');
   });
@@ -371,7 +370,7 @@ describe('PLAIN_LANGUAGE_AGENTS 注入說人話守則', () => {
     const out = loadAgent('analysis-reject').render({
       project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
       analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
-      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true',
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log',
       project_notes: '窗口 Amy'
     });
     const iRules = out.indexOf('Odoo Constraints');
@@ -520,7 +519,7 @@ describe('ASKING_WELL_AGENTS 注入發問守則', () => {
     const out = loadAgent('analysis-reject').render({
       project_name: 'P', odoo_version: '17.0', main_branch: 'main', git_branch: 'task/x',
       analysis_yaml: 'module: sale', stuck_stage: 'QA', stop_context: 'x',
-      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log', allow_bug: 'true',
+      user_instruction: 'y', runtime_log_path: 'C:/x/odoo.log',
       project_notes: '窗口 Amy'
     });
     const iRules = out.indexOf('Odoo Constraints');
