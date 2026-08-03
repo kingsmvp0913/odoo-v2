@@ -155,20 +155,64 @@ test('rebuildTestingWithinLock：已持有 project lock 內呼叫不死鎖，且
 });
 
 // 意圖：衝突檔有記錄解法時，重演直接套用（寫回工作樹）→ 不暫停、自動 commit 續併（衝突記憶真的省掉人工）
+// fixture 用合法 py：commit 前的 verifyResolvedSyntax 會 py_compile 記錄解法，非合法碼會被擋（見下方語法測試）。
 test('重建 → 衝突檔有記錄解法時自動套用、不暫停', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rebuild-'));
   fs.mkdirSync(path.join(tmp, 'main'), { recursive: true }); // 真實 repo 工作樹目錄本就存在
   gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['x.py'] });
   const projectId = await makeProject(['main'], tmp);
-  const resolutions = JSON.stringify({ main: { 'x.py': 'RESOLVED CONTENT' } });
+  const resolutions = JSON.stringify({ main: { 'x.py': 'x = 1\n' } });
   const taskId = await addTask(projectId, { status: 'review_pending', branch: 'task/e', taskId: 'e', resolutions });
 
   const warning = await rebuildMod.rebuildTesting(projectId, userId, undefined);
 
   expect(warning).toBeNull();
   expect(gitMock.commitAll).toHaveBeenCalled();
-  expect(fs.readFileSync(path.join(tmp, 'main', 'x.py'), 'utf8')).toBe('RESOLVED CONTENT');
+  expect(fs.readFileSync(path.join(tmp, 'main', 'x.py'), 'utf8')).toBe('x = 1\n');
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(rows[0].status).toBe('review_pending'); // 未暫停
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// 意圖（本次事故守線 A）：記錄解法本身就含衝突標記時，不得盲寫落盤／commit 進 testing。
+// 事故重現：applyRecordedResolution 無條件寫檔＋return true → <<<<<<< 被 commit 進 testing → deploy ParseError。
+// 修正後：有標記＝視同無記錄，該檔落到 agent／人工。此處磁碟無該檔，resolveConflict 讀不到→failed→merge_conflict。
+test('重建 → 記錄解法含衝突標記時不套用、不 commit、置 merge_conflict', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rebuild-'));
+  fs.mkdirSync(path.join(tmp, 'main'), { recursive: true });
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['x.py'] });
+  const projectId = await makeProject(['main'], tmp);
+  const bad = '<<<<<<< HEAD\na\n=======\nb\n>>>>>>> task/z\n';
+  const resolutions = JSON.stringify({ main: { 'x.py': bad } });
+  const taskId = await addTask(projectId, { status: 'review_pending', branch: 'task/z', taskId: 'z', resolutions });
+
+  const warning = await rebuildMod.rebuildTesting(projectId, userId, undefined);
+
+  expect(warning).toMatch(/人工/);
+  expect(gitMock.commitAll).not.toHaveBeenCalled();
+  expect(fs.existsSync(path.join(tmp, 'main', 'x.py'))).toBe(false); // 帶標記的內容沒被寫進工作樹
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('merge_conflict');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// 意圖（本次事故守線 B）：記錄解法無衝突標記卻語法壞（本次事故：訊息字串被剝引號成裸中文＝SyntaxError）時，
+// 不得 commit 進 testing。修正前 doRebuild 完全不驗語法 → 壞碼進部署、模組 import 失敗、model 全不註冊。
+// 修正後 commit 前跑 verifyResolvedSyntax（py_compile），壞檔轉 failed → merge_conflict。
+test('重建 → 記錄解法無標記但語法壞時擋下、不 commit、置 merge_conflict', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rebuild-'));
+  fs.mkdirSync(path.join(tmp, 'main'), { recursive: true });
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['x.py'] });
+  const projectId = await makeProject(['main'], tmp);
+  const brokenPy = 'def f(:\n    pass\n'; // 無衝突標記、但 py_compile 失敗
+  const resolutions = JSON.stringify({ main: { 'x.py': brokenPy } });
+  const taskId = await addTask(projectId, { status: 'review_pending', branch: 'task/y', taskId: 'y', resolutions });
+
+  const warning = await rebuildMod.rebuildTesting(projectId, userId, undefined);
+
+  expect(warning).toMatch(/人工/);
+  expect(gitMock.commitAll).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('merge_conflict');
   fs.rmSync(tmp, { recursive: true, force: true });
 });

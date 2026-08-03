@@ -4,7 +4,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { withProjectLock } = require('./project-lock');
 const git = require('./git');
-const { resolveConflict } = require('./merge-agent');
+const { resolveConflict, verifyResolvedSyntax } = require('./merge-agent');
 
 // 「在飛且已部署過 testing」的任務狀態：碼已在 testing、尚未 approve，重建時要重併回去。
 // approved 任務碼已在 ai-dev（reset 到 ai-dev 自動含入）、其分支已砍，故不列入。
@@ -17,6 +17,9 @@ function applyRecordedResolution(repo, task, file) {
   try { map = JSON.parse(task.merge_resolutions); } catch { return false; }
   const content = map && map[repo.label] && map[repo.label][file];
   if (content == null) return false;
+  // 記錄的解法可能本身就壞（含衝突標記）——直接寫進 testing 會 commit 出帶 <<<<<<< 的檔，
+  // deploy 才以 ParseError 收場並誤歸因為程式問題。有標記＝視同無記錄，落到 agent／人工，不靜默放行。
+  if (/^(<<<<<<<|=======|>>>>>>>)/m.test(content)) return false;
   fs.writeFileSync(path.join(repo.local_path, file), content);
   return true;
 }
@@ -74,6 +77,12 @@ async function doRebuild(projectId, userId, signal) {
           if (!ok) failed.push(file);
         } catch { failed.push(file); }
       }
+
+      // commit 前驗語法：比照 doMerge 的 resolveConflicts，記錄解法／agent 可能「無衝突標記卻語法壞」
+      // （剝引號、縮排崩）——不驗就 commitAll 進 testing，deploy 才以 SyntaxError/ParseError 爆並誤歸因為程式問題。
+      const resolvedFiles = mergeResult.conflictFiles.filter(f => !failed.includes(f));
+      const badSyntax = await verifyResolvedSyntax(repo.local_path, resolvedFiles);
+      for (const f of badSyntax) if (!failed.includes(f)) failed.push(f);
 
       if (failed.length === 0) {
         await git.commitAll(repo.local_path, `[rebuild] ${task.git_branch} → testing`);
