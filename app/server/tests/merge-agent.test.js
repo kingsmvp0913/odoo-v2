@@ -10,8 +10,10 @@ jest.mock('../pipeline/git', () => ({
   restoreConflictMarkers: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
+// 預設「未設 PAT」（buildGitEnv 拋 NoGitCredentialError），與多數既有案例的情境一致
+jest.mock('../lib/git-identity', () => ({ buildGitEnv: jest.fn() }));
 
-let dbModule, mergeMod, gitMock, userId;
+let dbModule, mergeMod, gitMock, userId, identMock;
 
 beforeAll(async () => {
   const db = newDb();
@@ -24,6 +26,7 @@ beforeAll(async () => {
   );
   userId = rows[0].id;
   gitMock = require('../pipeline/git');
+  identMock = require('../lib/git-identity');
   mergeMod = require('../pipeline/merge-agent');
 });
 
@@ -35,6 +38,7 @@ beforeEach(async () => {
   gitMock.commitResolved.mockReset().mockResolvedValue(undefined);
   gitMock.abortMerge.mockReset().mockResolvedValue(undefined);
   require('../notify').emitToUser.mockReset();
+  identMock.buildGitEnv.mockReset().mockRejectedValue(new Error('未設 PAT'));
   await dbModule.query('DELETE FROM tasks');
   await dbModule.query('DELETE FROM project_repos');
   await dbModule.query('DELETE FROM projects');
@@ -70,6 +74,33 @@ test('merges task branch into testing for every repo, then deploy_testing', asyn
     expect(c[1]).toBe('testing');              // target
     expect(c[2]).toBe('task/task_odoo_m1');    // source（task 分支）
   }
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('deploy_testing');
+});
+
+// 意圖：併入 testing 產生的 merge commit 要記在發起人名下。不傳 gitEnv 的話，正式機上所有
+// testing 的合併都會掛成 pipeline@local（git blame 追不到人），而且沒有 global git config 的
+// 部署機會直接 "Committer identity unknown" 讓整個 merge 關 stopped（實測 ai-server）。
+test('mergeInto／commitResolved 收到發起人的 gitEnv', async () => {
+  const env = { GIT_COMMITTER_NAME: 'Bob', GIT_COMMITTER_EMAIL: 'bob@corp.com' };
+  identMock.buildGitEnv.mockResolvedValue(env);
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  const taskId = await setupProjectTask(['main']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(identMock.buildGitEnv).toHaveBeenCalledWith(userId);
+  expect(gitMock.mergeInto.mock.calls[0][3]).toBe(env);
+});
+
+// 意圖：未設 PAT 不可讓 merge 整個失敗——這段全是本機操作、不需憑證，退回 pipeline 身分即可。
+test('取不到 gitEnv 時仍照常併入（傳 null，由 git.js 退回 pipeline 身分）', async () => {
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  const taskId = await setupProjectTask(['main']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(gitMock.mergeInto.mock.calls[0][3]).toBeNull();
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(rows[0].status).toBe('deploy_testing');
 });

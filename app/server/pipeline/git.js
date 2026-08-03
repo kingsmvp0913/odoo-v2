@@ -31,10 +31,7 @@ async function untrackPyc(repoPath, gitEnv) {
     // diff --cached --quiet：有 staged 變動時以非 0 離開 → 進 catch 才 commit
     await execFileAsync('git', ['diff', '--cached', '--quiet'], gitOpts(repoPath, gitEnv));
   } catch {
-    const commitArgs = gitEnv
-      ? ['commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）']
-      : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
-         'commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）'];
+    const commitArgs = [...identArgs(gitEnv), 'commit', '-m', '移除誤入版控的 __pycache__/*.pyc（pipeline 自動清理）'];
     await execFileAsync('git', commitArgs, gitOpts(repoPath, gitEnv)).catch(() => {});
   }
 }
@@ -55,6 +52,13 @@ function gitOpts(cwd, gitEnv, extra) {
   const o = { cwd, ...extra };
   if (gitEnv) o.env = { ...process.env, ...gitEnv };
   return o;
+}
+
+// 會產生 commit 的 git 指令，無 gitEnv 時必須自帶身分：git 沒有 user.email 就直接失敗
+// （"Committer identity unknown"），而部署機的服務帳號通常沒設 global config——本機開發者有設，
+// 故此類失敗只在正式機出現。gitEnv 有值時不加，讓 GIT_COMMITTER_* 決定歸屬（見 lib/git-identity）。
+function identArgs(gitEnv) {
+  return gitEnv ? [] : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local'];
 }
 
 async function createBranch(repoPath, branchName) {
@@ -152,10 +156,7 @@ async function ensureMainBranch(repoPath, gitEnv) {
   // 3) 完全沒有（空 repo / 未初始化）→ 本地建立 main；無 commit 則補一個空初始 commit
   await execFileAsync('git', ['checkout', '-B', 'main'], gitOpts(repoPath, gitEnv));
   if (!(await hasCommits(repoPath))) {
-    const commitArgs = gitEnv
-      ? ['commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）']
-      : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local',
-         'commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）'];
+    const commitArgs = [...identArgs(gitEnv), 'commit', '--allow-empty', '-m', '初始化 main 分支（pipeline 自動建立）'];
     await execFileAsync('git', commitArgs, gitOpts(repoPath, gitEnv));
   }
   return 'main';
@@ -193,7 +194,7 @@ async function syncMainIntoAi(repoPath, gitEnv) {
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath);
   try {
-    await execFileAsync('git', ['merge', '--no-ff', '--no-edit', main], gitOpts(repoPath, gitEnv));
+    await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', '--no-edit', main], gitOpts(repoPath, gitEnv));
     return { hasConflicts: false, conflictFiles: [] };
   } catch (err) {
     // git merge 衝突訊息寫在 stdout（非 stderr），三者都要看
@@ -216,10 +217,8 @@ async function syncMainIntoAi(repoPath, gitEnv) {
 // 衝突／任何失敗一律 abort 回乾淨狀態再回報，不 throw——同步失敗不該擋住任務（穩定 > 準確），
 // 但半套 merge 留在 worktree 會讓 coding agent 把衝突標記當程式碼改。
 async function syncBranchWithAi(worktreePath, gitEnv) {
-  // 無 gitEnv 時補上身分：三方合併要產 merge commit，沒有 user.email 會直接失敗（比照 ensureMainBranch）
-  const ident = gitEnv ? [] : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local'];
   try {
-    await execFileAsync('git', [...ident, 'merge', '--no-edit', AI_BRANCH], gitOpts(worktreePath, gitEnv));
+    await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-edit', AI_BRANCH], gitOpts(worktreePath, gitEnv));
     return { synced: true, conflictFiles: [], error: null };
   } catch (err) {
     // git merge 衝突訊息寫在 stdout（非 stderr），三者都要看
@@ -245,7 +244,7 @@ async function syncWithMain(repoPath, gitEnv) {
   let lastErr = null;
   for (const target of [`origin/${main}`, main]) {
     try {
-      await execFileAsync('git', ['merge', target, '--no-edit'], gitOpts(repoPath, gitEnv));
+      await execFileAsync('git', [...identArgs(gitEnv), 'merge', target, '--no-edit'], gitOpts(repoPath, gitEnv));
       return { hasConflicts: false, conflictFiles: [] };
     } catch (err) {
       const msg = (err.stderr || err.message || '').toLowerCase();
@@ -271,7 +270,7 @@ async function abortMerge(repoPath) {
 
 async function commitAll(repoPath, message, gitEnv) {
   await execFileAsync('git', ['add', '-A'], gitOpts(repoPath, gitEnv));
-  await execFileAsync('git', ['commit', '-m', message], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', [...identArgs(gitEnv), 'commit', '-m', message], gitOpts(repoPath, gitEnv));
 }
 
 // 解衝突後只 stage「衝突檔本身」再 commit。git merge 撞衝突時已把非衝突變更放進 index，
@@ -281,7 +280,7 @@ async function commitResolved(repoPath, files, message, gitEnv) {
   if (files && files.length) {
     await execFileAsync('git', ['add', '--', ...files], gitOpts(repoPath, gitEnv));
   }
-  await execFileAsync('git', ['commit', '-m', message], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', [...identArgs(gitEnv), 'commit', '-m', message], gitOpts(repoPath, gitEnv));
 }
 
 // merge_conflict 人工解完後的收尾驗證：仍有未解衝突就拋錯擋下；有 MERGE_HEAD 就 commit 了結。
@@ -343,7 +342,7 @@ async function mergeToAiBranch(repoPath, branchName, gitEnv) {
     await execFileAsync('git', ['checkout', '-B', AI_BRANCH, main], gitOpts(repoPath, gitEnv));
   }
   try {
-    await execFileAsync('git', ['merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], gitOpts(repoPath, gitEnv));
+    await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], gitOpts(repoPath, gitEnv));
     await untrackPyc(repoPath, gitEnv); // 停止 ai-dev 追蹤 pyc → 之後從它長出的 task 分支不再帶 pyc
     // 沒推的話審核通過的程式碼只留在 server 本機 clone，遠端看不到（健檢：approve 缺 push）
     await execFileAsync('git', ['push', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
@@ -505,7 +504,7 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   ensureGitignorePyc(mainRepoPath); // 讓 target 工作樹既有的未追蹤 pyc 變 ignored，merge 才不會被擋
   await discardPyc(mainRepoPath);   // 再還原 tracked pyc 的本地改動，解除「local changes would be overwritten」
   try {
-    await execFileAsync('git', ['merge', '--no-ff', '--no-edit', sourceBranch], gitOpts(mainRepoPath, gitEnv));
+    await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', '--no-edit', sourceBranch], gitOpts(mainRepoPath, gitEnv));
     await untrackPyc(mainRepoPath, gitEnv); // merge 後把 target（testing）上的 pyc 移出版控，之後不再累積
     return { hasConflicts: false, conflictFiles: [] };
   } catch (err) {
@@ -520,10 +519,7 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
         await execFileAsync('git', ['rm', '-f', '--quiet', '--ignore-unmatch', ...pyc], gitOpts(mainRepoPath, gitEnv)).catch(() => {});
         conflictFiles = conflictFiles.filter(f => !f.endsWith('.pyc'));
         if (conflictFiles.length === 0) {
-          const commitArgs = gitEnv
-            ? ['commit', '--no-edit']
-            : ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local', 'commit', '--no-edit'];
-          await execFileAsync('git', commitArgs, gitOpts(mainRepoPath, gitEnv)).catch(() => {});
+          await execFileAsync('git', [...identArgs(gitEnv), 'commit', '--no-edit'], gitOpts(mainRepoPath, gitEnv)).catch(() => {});
           await untrackPyc(mainRepoPath, gitEnv);
           return { hasConflicts: false, conflictFiles: [] };
         }

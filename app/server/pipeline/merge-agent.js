@@ -6,6 +6,7 @@ const { loadAgent } = require('./agent-loader');
 const { stripFence, parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { AI_BRANCH, mergeInto, commitResolved, abortMerge, restoreConflictMarkers } = require('./git');
+const { buildGitEnv } = require('../lib/git-identity');
 const { query } = require('../db');
 const notify = require('../notify');
 
@@ -349,6 +350,9 @@ async function doMerge(task, taskId, userId, signal) {
 
   const branch = task.git_branch;
   const conflictByRepo = [];
+  // 併入 testing 會產 merge commit，要記在發起人名下。取不到（未設 PAT）不是致命的——
+  // 這段全是本機操作、不需憑證，git.js 會退回 pipeline 身分。
+  const gitEnv = await buildGitEnv(userId).catch(() => null);
 
   // 主 clone 殘留 in-progress merge（MERGE_HEAD）防護：
   // - 同專案另有任務停在 merge_conflict ＝ 人工正在該 clone 上解衝突（mark-conflict-resolved 才會了結），
@@ -372,7 +376,7 @@ async function doMerge(task, taskId, userId, signal) {
 
     let mergeResult;
     try {
-      mergeResult = await mergeInto(repo.local_path, 'testing', branch);
+      mergeResult = await mergeInto(repo.local_path, 'testing', branch, gitEnv);
     } catch (err) {
       // 半套 merge（MERGE_HEAD）留在主 clone 會污染同專案後續任務，先清掉再停
       await abortMerge(repo.local_path).catch(() => {});
@@ -395,7 +399,7 @@ async function doMerge(task, taskId, userId, signal) {
 
     if (r.failed.length === 0) {
       try {
-        await commitResolved(repo.local_path, mergeResult.conflictFiles, `[merge] ${branch} → testing (resolve conflicts)`);
+        await commitResolved(repo.local_path, mergeResult.conflictFiles, `[merge] ${branch} → testing (resolve conflicts)`, gitEnv);
         notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：衝突已自動解決\n` });
       } catch (err) {
         await abortMerge(repo.local_path).catch(() => {});

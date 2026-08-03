@@ -6,6 +6,9 @@ jest.mock('child_process', () => ({
 const childProcess = require('child_process');
 let gitModule;
 
+// 無 gitEnv 時，會產 commit 的指令一律自帶此身分（見 git.js identArgs）
+const PIPELINE_IDENT = ['-c', 'user.name=pipeline', '-c', 'user.email=pipeline@local'];
+
 beforeAll(() => {
   gitModule = require('../pipeline/git');
 });
@@ -200,15 +203,33 @@ test('mergeInto returns no conflicts on clean merge into testing', async () => {
     'git', ['checkout', 'testing'], { cwd: '/repo' }, expect.any(Function)
   );
   expect(childProcess.execFile).toHaveBeenCalledWith(
-    'git', ['merge', '--no-ff', '--no-edit', 'task/task_1'], { cwd: '/repo' }, expect.any(Function)
+    'git', [...PIPELINE_IDENT, 'merge', '--no-ff', '--no-edit', 'task/task_1'], { cwd: '/repo' }, expect.any(Function)
   );
+});
+
+// 意圖：merge commit 需要 committer identity，部署機的服務帳號沒有 global git config
+// （實測 ai-server：Committer identity unknown → 整個 merge 關 stopped）。無 gitEnv 時
+// 必須自帶 pipeline 身分；此防線失效只會在正式機炸，本機開發者有 global config 測不出來。
+test('mergeInto：無 gitEnv 時 merge 自帶 pipeline 身分', async () => {
+  mockExecFileSuccess();
+  await gitModule.mergeInto('/repo', 'testing', 'task/task_1');
+  const merge = childProcess.execFile.mock.calls.map(c => c[1]).find(a => a.includes('merge'));
+  expect(merge.slice(0, 4)).toEqual(PIPELINE_IDENT);
+});
+
+// 意圖：有 gitEnv（使用者已設 PAT）時不可寫死 pipeline 身分，否則 commit 全部歸屬錯人。
+test('mergeInto：帶 gitEnv 時 merge 不寫死 pipeline 身分', async () => {
+  mockExecFileSuccess();
+  await gitModule.mergeInto('/repo', 'testing', 'task/task_1', { GIT_COMMITTER_NAME: 'Bob' });
+  const merge = childProcess.execFile.mock.calls.map(c => c[1]).find(a => a.includes('merge'));
+  expect(merge).toEqual(['merge', '--no-ff', '--no-edit', 'task/task_1']);
 });
 
 test('mergeInto reports conflict files when merge fails with conflicts', async () => {
   // 真實 git：衝突訊息寫在 stdout（非 stderr、非 message）。此測試守住 stdout 判斷路徑。
   childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
     const done = typeof opts === 'function' ? opts : cb;
-    if (args[0] === 'merge') {
+    if (args.includes('merge')) {
       const err = new Error('Command failed: git merge');  // message 不含衝突關鍵字
       return done(err, 'CONFLICT (content): Merge conflict in f.txt\nAutomatic merge failed', '');
     }
@@ -241,7 +262,7 @@ test('mergeInto：merge 前還原 pyc 本地改動、merge 後把 pyc 移出版�
 test('mergeInto：pyc-only 假衝突自動化解，回傳無衝突', async () => {
   childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
     const done = typeof opts === 'function' ? opts : cb;
-    if (args[0] === 'merge') return done(new Error('x'), 'Automatic merge failed', '');
+    if (args.includes('merge')) return done(new Error('x'), 'Automatic merge failed', '');
     if (args[0] === 'diff' && args.includes('--diff-filter=U')) {
       return done(null, 'idx_x/models/__pycache__/sale_order.cpython-312.pyc\n', '');
     }
@@ -255,7 +276,7 @@ test('mergeInto：pyc-only 假衝突自動化解，回傳無衝突', async () =>
 test('mergeInto：pyc 與原始碼混合衝突時，仍回報非 pyc 檔', async () => {
   childProcess.execFile.mockImplementation((cmd, args, opts, cb) => {
     const done = typeof opts === 'function' ? opts : cb;
-    if (args[0] === 'merge') return done(new Error('x'), 'Automatic merge failed', '');
+    if (args.includes('merge')) return done(new Error('x'), 'Automatic merge failed', '');
     if (args[0] === 'diff' && args.includes('--diff-filter=U')) {
       return done(null, 'models/sale_order.py\nidx_x/models/__pycache__/sale_order.cpython-312.pyc\n', '');
     }
@@ -326,7 +347,7 @@ test('commitResolved 只 stage 指定檔、不用 git add -A', async () => {
   const add = calls.find(a => a[0] === 'add');
   expect(add).toEqual(['add', '--', 'a/x.py', 'b/y.xml']);
   expect(calls.some(a => a[0] === 'add' && a.includes('-A'))).toBe(false);
-  expect(calls.find(a => a[0] === 'commit')).toEqual(['commit', '-m', 'msg']);
+  expect(calls.find(a => a.includes('commit'))).toEqual([...PIPELINE_IDENT, 'commit', '-m', 'msg']);
 });
 
 // 意圖：非衝突變更已在 merge 時進 index，files 為空仍要 commit（不可空跑漏掉合併結果）。
@@ -338,5 +359,5 @@ test('commitResolved files 為空 → 跳過 add 直接 commit', async () => {
   });
   await gitModule.commitResolved('/repo', [], 'msg');
   expect(calls.some(a => a[0] === 'add')).toBe(false);
-  expect(calls.find(a => a[0] === 'commit')).toEqual(['commit', '-m', 'msg']);
+  expect(calls.find(a => a.includes('commit'))).toEqual([...PIPELINE_IDENT, 'commit', '-m', 'msg']);
 });
