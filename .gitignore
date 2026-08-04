@@ -24,12 +24,14 @@ env/
 
 # ─── 機密設定(改用 config.example.json 交付)──────────
 /data/config.json
+/data/config.json.host-backup
 /data/claude-usage.json
 # VPN 撥號時解密後的暫存 .ovpn(含憑證),用後即刪,絕不進版控
 /data/vpn-tmp/
 .env
 .env.*
 !.env.example
+docker-compose.override.yml
 
 # ─── 工具快取 ───────────────────────────────────────────
 .serena/cache/
@@ -54,6 +56,8 @@ Thumbs.db
 # ─── 設計史料(本機保留,不進 git)──────────────────
 /docs/
 
+# Claude Code 本機個人設定（每台機器各異，不進版控）
+.claude/settings.local.json
 # 執行期生成的 MCP 設定（claude-runner 依本機安裝位置產生）
 app/server/pipeline/mcp/context7.local.json
 # 執行期生成的掃碟守衛 settings（claude-runner 依本機 hook 腳本路徑產生）
