@@ -437,12 +437,12 @@ Block 0 的工具鏈已完成並實測，**只差基線圖本身**——它需�
 
 ```bash
 cd <平台主 clone>
-git fetch origin claude/work-platform-rwd-cost-rnb2up
-git worktree add ../odoo-v2-rwd claude/work-platform-rwd-cost-rnb2up
+git fetch origin master
+git worktree add ../odoo-v2-rwd -b rwd-baseline origin/master
 cd ../odoo-v2-rwd
 ```
 
-主 clone 全程停在 `testing`，不動。
+主 clone 全程停在 `testing`，不動。Block 0 的工具鏈已在 `master`，從那裡開 worktree 即可。
 
 **坑 2：基線圖會把畫面上的資料一起拍進版控。**
 截圖會拍到當下畫面的真實內容——任務標題、專案名稱、帳號、用量數字。基線圖是要 commit 的，等於**把這些資料放進 git 歷史**（刪不掉，只能改寫歷史）。
@@ -511,8 +511,10 @@ cd <worktree>
 git status --porcelain -uno          # 逐檔確認,禁用 git add -A
 git add app/rwd/baseline
 git commit -m "[RWD]: 建立桌機基線，讓後續每塊改動可機器驗證"
-git push -u origin claude/work-platform-rwd-cost-rnb2up
+git push origin HEAD:master          # 直接推主分支
 ```
+
+**推之前，§9.5 的 `rwd:check` 必須是「門禁：通過」。** 帶著會假紅的基線推上主分支，等於讓後面每一塊的紅燈都失去意義——那比沒有基線更糟。這是直接推 master（不經 PR review）唯一的把關點。
 
 然後回到本檔勾選 Block 0 的「基線產出」四項與 §4 總覽，並移除 Block 0 標題下的「進行中」註記（規格 §7）。
 
