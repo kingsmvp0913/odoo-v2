@@ -361,3 +361,18 @@ test('commitResolved files 為空 → 跳過 add 直接 commit', async () => {
   expect(calls.some(a => a[0] === 'add')).toBe(false);
   expect(calls.find(a => a.includes('commit'))).toEqual([...PIPELINE_IDENT, 'commit', '-m', 'msg']);
 });
+
+// 意圖：改動檔是中文／非 ASCII 檔名時（本專案 docx 範本、idx_ 模組常見），git 預設 core.quotePath
+// 會把路徑用引號＋八進位跳脫包起來。下游 code-zip 拿這串去 fs.existsSync 解不到→整批改動被當成
+// 刪除、entries 全空→回「本任務沒有可打包的程式改動」。必須關掉 quotePath，路徑才是真實可解析路徑。
+test('diffNameOnly 關閉 core.quotePath，非 ASCII 檔名不被跳脫', async () => {
+  childProcess.execFile.mockImplementation((cmd, args, o, cb) => {
+    (typeof o === 'function' ? o : cb)(null, 'idx_hj/static/docx/A_叫修報價單_run_card.docx\n', '');
+  });
+  const files = await gitModule.diffNameOnly('/repo', 'ai-dev', 'task/x');
+  expect(childProcess.execFile).toHaveBeenCalledWith(
+    'git', ['-c', 'core.quotePath=false', 'diff', '--name-only', 'ai-dev...task/x'],
+    expect.objectContaining({ cwd: '/repo' }), expect.any(Function)
+  );
+  expect(files).toEqual(['idx_hj/static/docx/A_叫修報價單_run_card.docx']);
+});

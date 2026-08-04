@@ -111,8 +111,10 @@ async function diffBranch(repoPath, baseBranch, branch) {
 
 // 分支相對主分支改動的檔案清單（相對 repo 根的路徑陣列，空白行剔除）。
 async function diffNameOnly(repoPath, baseBranch, branch) {
+  // core.quotePath=false：非 ASCII 檔名（中文 docx 範本、idx_ 模組）預設會被 git 用引號＋八進位
+  // 跳脫，下游 code-zip 拿去 fs.existsSync 解不到→整批改動被誤判為刪除、回「無可打包程式」。
   const { stdout } = await execFileAsync(
-    'git', ['diff', '--name-only', `${baseBranch}...${branch}`],
+    'git', ['-c', 'core.quotePath=false', 'diff', '--name-only', `${baseBranch}...${branch}`],
     { cwd: repoPath, maxBuffer: 16 * 1024 * 1024 }
   );
   return stdout.split('\n').map(s => s.trim()).filter(Boolean);
