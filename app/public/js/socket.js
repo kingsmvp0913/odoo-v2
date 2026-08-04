@@ -45,6 +45,11 @@
     _socket.on('chat:reply', (data) => {
       const pid = String(data.projectId);
       window.UnreadStore.byProject[pid] = (window.UnreadStore.byProject[pid] || 0) + 1;
+      // 桌面通知（受個人設定開關＋瀏覽器授權把關，未開啟則靜默）；tag 依 chatId 收合同串多次回覆
+      window.NotifyManager && window.NotifyManager.show(
+        '專案聊天有新回覆', '', `chat-${data.chatId}`,
+        () => { location.hash = `#/projects/${data.projectId}/chat/${data.chatId}`; }
+      );
     });
 
   }

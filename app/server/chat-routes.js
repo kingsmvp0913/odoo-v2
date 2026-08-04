@@ -29,6 +29,27 @@ async function projectUnread(projectId, userId) {
 }
 
 function registerRoutes(app) {
+  // GET /api/chats/unread
+  // 目前使用者跨所有專案的未讀 map（{ [projectId]: count }），供左側 menu 的專案 badge
+  // 在登入後首屏即準確填入 UnreadStore。沿用與 /api/projects 相同的 GROUP BY 寫法
+  // （非關聯子查詢，pg-mem 相容）。
+  app.get('/api/chats/unread', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT c.project_id, COUNT(m.id) AS unread
+         FROM project_chats c
+         LEFT JOIN project_chat_messages m
+           ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
+         WHERE c.user_id = $1
+         GROUP BY c.project_id`,
+        [req.userId]
+      );
+      const byProject = {};
+      for (const r of rows) byProject[String(r.project_id)] = Number(r.unread);
+      res.json({ byProject });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // GET /api/projects/:projectId/chats
   // Returns only chats owned by req.userId; each row includes unread count.
   // Uses LEFT JOIN instead of correlated subquery for pg-mem compatibility.

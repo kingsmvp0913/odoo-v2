@@ -25,6 +25,17 @@ async function loadClaudeUsage() {
 }
 window.loadClaudeUsage = loadClaudeUsage;
 
+// 登入後即抓一次跨專案未讀，填入 UnreadStore → 左側 menu 專案 badge 首屏就準確；
+// 之後靠 socket chat:reply 遞增、ProjectChat 標記已讀清零維持即時。
+async function loadUnread() {
+  if (!Api.isLoggedIn()) return;
+  try {
+    const { byProject } = await Api.get('chats/unread');
+    window.UnreadStore.byProject = byProject || {};
+  } catch { /* keep stale */ }
+}
+window.loadUnread = loadUnread;
+
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
@@ -76,6 +87,7 @@ router.afterEach((to) => {
       ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
       SocketManager.initSocket(me.id);
       loadClaudeUsage();
+      loadUnread();
     }).catch(() => {});
   }
   if (to.path === '/login') { SocketManager.disconnectSocket(); window.UserStore.role = ''; }
@@ -117,6 +129,9 @@ const App = defineComponent({
       return iso ? this.fmtReset(iso) : '';
     },
     tourRemaining() { return window.TourManager ? TourManager.remainingCount() : 0; },
+    projectUnreadTotal() {
+      return Object.values(window.UnreadStore.byProject).reduce((a, b) => a + (b || 0), 0);
+    },
   },
   async mounted() {
     this._onThemeChange = e => { this.isDark = e.detail === 'dark'; };
@@ -128,6 +143,7 @@ const App = defineComponent({
       ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
       this.isDark = ThemeManager.current() === 'dark';
       loadClaudeUsage();
+      loadUnread();
     }
   },
   unmounted() { window.removeEventListener('themechange', this._onThemeChange); },
@@ -161,7 +177,10 @@ const App = defineComponent({
               </a>
             </router-link>
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
-              <a data-tour="nav-projects" :class="{ active: isActive }" @click="navigate">📁 專案</a>
+              <a data-tour="nav-projects" :class="{ active: isActive }" @click="navigate">
+                📁 專案
+                <span v-if="projectUnreadTotal > 0" class="badge">{{ projectUnreadTotal }}</span>
+              </a>
             </router-link>
             <router-link to="/admin/pipelines" custom v-slot="{ navigate, isActive }">
               <a data-tour="nav-pipeline" :class="{ active: isActive }" @click="navigate">🚦 進行中 Pipeline</a>

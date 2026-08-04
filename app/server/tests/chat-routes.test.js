@@ -220,6 +220,49 @@ test('POST draft-task → 401 無 token', async () => {
   expect(res.status).toBe(401);
 });
 
+test('GET /api/chats/unread → 回本人跨專案未讀 map', async () => {
+  // 另建專案避開其他測試在 projectId 留下的殘留未讀（rule 17：表不清空）
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('UnreadAgg', '17.0') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'A',$2) RETURNING id",
+    [proj.id, userId]
+  );
+  await dbModule.query(
+    "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'user','q'),($1,'ai','a1'),($1,'ai','a2')",
+    [chat.id]
+  );
+  const res = await request(app).get('/api/chats/unread').set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.byProject[String(proj.id)]).toBe(2);
+});
+
+test('GET /api/chats/unread → 不計入他人 chat 的未讀', async () => {
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('UnreadAggOther', '17.0') RETURNING id"
+  );
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('unreadother','x','UO') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'B',$2) RETURNING id",
+    [proj.id, other.id]
+  );
+  await dbModule.query(
+    "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'ai','x')",
+    [chat.id]
+  );
+  const res = await request(app).get('/api/chats/unread').set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.byProject[String(proj.id)]).toBeUndefined();
+});
+
+test('GET /api/chats/unread → 401 無 token', async () => {
+  const res = await request(app).get('/api/chats/unread');
+  expect(res.status).toBe(401);
+});
+
 test('unread：AI 訊息未讀計入，read 後歸零', async () => {
   const { rows: [chat] } = await dbModule.query(
     "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'U',$2) RETURNING id",
