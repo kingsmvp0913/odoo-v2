@@ -42,6 +42,7 @@ window.ProjectChatView = Vue.defineComponent({
       this.loadingMsgs = true;
       try {
         this.messages = await Api.get(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`);
+        this.$nextTick(() => this.scrollToBottom());
         await this.markRead(this.activeChat);
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loadingMsgs = false; }
