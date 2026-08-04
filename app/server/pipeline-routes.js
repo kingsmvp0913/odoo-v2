@@ -51,13 +51,13 @@ function registerRoutes(app) {
       }
 
       const { rows: repos } = await query(
-        "SELECT local_path FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+        "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
         [task.project_id]
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
       const path = require('path');
-      const { mergeToAiBranch, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
+      const { mergeToAiBranch, AiPushConflictError, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
       const { withProjectLock } = require('./pipeline/project-lock');
       const { buildGitEnv } = require('./lib/git-identity');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
@@ -72,10 +72,17 @@ function registerRoutes(app) {
       }
 
       // 併主線＋清理 worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
-      await withProjectLock(task.project_id, async () => {
+      const conflict = await withProjectLock(task.project_id, async () => {
         // 逐 repo 併入 ai-dev（任一失敗即中止，狀態不變）
         for (const repo of repos) {
-          await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
+          try {
+            await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
+          } catch (err) {
+            // 遠端 ai-dev 被其他平台實例推進、且撞同一檔無法自動合 → 交既有 merge_conflict 閘門人工裁決。
+            // 留 MERGE_HEAD 不清；未併的 repo 與 worktree 也不動，解完重按審核即冪等續推。
+            if (err instanceof AiPushConflictError) return { repo: repo.label, files: err.conflictFiles };
+            throw err;
+          }
         }
         // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
         for (const repo of repos) {
@@ -83,7 +90,24 @@ function registerRoutes(app) {
           await removeWorktree(repo.local_path, wtPath).catch(() => {});
           await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
         }
+        return null;
       });
+
+      if (conflict) {
+        // 轉 merge_conflict：push_ai 變體標明「解完回審核站重推」，與 sync／rebuild 變體並列（見裁決端點）
+        const { rowCount } = await query(
+          "UPDATE tasks SET status='merge_conflict', merge_conflict_data=$2, updated_at=NOW() WHERE id=$1 AND status='review_pending'",
+          [req.params.id, JSON.stringify({ push_ai: true, prior_status: 'review_pending', repos: [conflict] })]
+        );
+        if (rowCount) {
+          await query(
+            "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', $2)",
+            [req.params.id, `[合併衝突] 遠端 ai-dev 已被其他變更推進，${conflict.repo}：${conflict.files.join(', ')} 需選擇保留哪一版`]
+          );
+          require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'merge_conflict' });
+        }
+        return res.json({ ok: true, conflict: true });
+      }
 
       // 條件更新（WHERE status）：佔位之外的第二道防線，狀態已被他處改動就不再覆寫
       const { rowCount } = await query(
@@ -444,6 +468,20 @@ function registerRoutes(app) {
         if (concludeErr) return res.status(400).json({ error: concludeErr });
       }
 
+      if (cd && cd.push_ai) {
+        // 併遠端 ai-dev 的衝突已了結（concludeMerge 已把併回的 origin/ai-dev commit）→ 回審核站。
+        // 重按「審核通過」即由 mergeToAiBranch 冪等續推：此時本機 ai-dev 已領先遠端，push 直接過。
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, safeReturnStatus(cd.prior_status, 'review_pending')]
+        );
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev')",
+          [rows[0].id]
+        );
+        return res.json({ ok: true });
+      }
+
       if (isRebuild) {
         // 還原原關卡、清 conflict data，再冪等重跑重建（可能再度停在下一個衝突）
         await query(
@@ -551,6 +589,19 @@ function registerRoutes(app) {
           [rows[0].id, JSON.stringify({ ...(cd || {}), repos: stillOpen })]
         );
         return res.json({ ok: true, done: false, remaining: outcome.stillOpen });
+      }
+
+      if (cd && cd.push_ai) {
+        // 併遠端 ai-dev 的衝突逐檔裁決完＋concludeMerge 已 commit → 回審核站，重按審核即冪等續推
+        await query(
+          "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
+          [rows[0].id, safeReturnStatus(cd.prior_status, 'review_pending')]
+        );
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev')",
+          [rows[0].id]
+        );
+        return res.json({ ok: true, done: true });
       }
 
       if (cd && cd.sync) {

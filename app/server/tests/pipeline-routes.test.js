@@ -17,6 +17,9 @@ jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(),
   runDeploy: jest.fn(),
   mergeToAiBranch: jest.fn().mockResolvedValue(undefined),
+  AiPushConflictError: class AiPushConflictError extends Error {
+    constructor(conflictFiles) { super('conflict'); this.name = 'AiPushConflictError'; this.conflictFiles = conflictFiles; }
+  },
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   concludeMerge: jest.fn().mockResolvedValue(undefined),
@@ -123,6 +126,68 @@ test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉
 
   const { rows: updated } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
   expect(updated[0].status).toBe('wiki_updating');
+
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/approve → 併遠端 ai-dev 撞 AiPushConflictError → 轉 merge_conflict（push_ai 變體），不 500', async () => {
+  const { mergeToAiBranch, AiPushConflictError } = require('../pipeline/git');
+  mergeToAiBranch.mockReset();
+  mergeToAiBranch.mockRejectedValueOnce(new AiPushConflictError(['idx_hj/static/docx/維修領料單.docx']));
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('APc','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/apc/main',true,'done')",
+    [proj.id]
+  );
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_review_conflict','odoo','Test','review_pending',$2,'task/task_review_conflict') RETURNING id",
+    [userId, proj.id]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/approve`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  // 關鍵 intent：衝突不再是死錯（500），而是導進人工裁決閘門
+  expect(res.status).toBe(200);
+  expect(res.body.conflict).toBe(true);
+
+  const { rows: updated } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id = $1', [taskId]);
+  expect(updated[0].status).toBe('merge_conflict');
+  const cd = JSON.parse(updated[0].merge_conflict_data);
+  expect(cd.push_ai).toBe(true);
+  expect(cd.prior_status).toBe('review_pending');
+  expect(cd.repos[0]).toMatchObject({ repo: 'main', files: ['idx_hj/static/docx/維修領料單.docx'] });
+
+  mergeToAiBranch.mockResolvedValue(undefined); // 還原給後續測試
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+test('POST /api/tasks/:id/mark-conflict-resolved → push_ai 變體解完 → 回 review_pending（供重按審核冪等續推）', async () => {
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('APr','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/apr/main',true,'done')",
+    [proj.id]
+  );
+  const cd = JSON.stringify({ push_ai: true, prior_status: 'review_pending', repos: [{ repo: 'main', files: ['x.docx'] }] });
+  const { rows } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch, merge_conflict_data) VALUES ($1,'task_pushai_resolved','odoo','Test','merge_conflict',$2,'task/t',$3) RETURNING id",
+    [userId, proj.id, cd]
+  );
+  const taskId = rows[0].id;
+
+  const res = await request(app).post(`/api/tasks/${taskId}/mark-conflict-resolved`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+
+  const { rows: updated } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id = $1', [taskId]);
+  expect(updated[0].status).toBe('review_pending'); // 不是 deploy_testing（那會跳過重推）
+  expect(updated[0].merge_conflict_data).toBeNull();
 
   await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);

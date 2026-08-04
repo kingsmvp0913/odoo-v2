@@ -408,6 +408,62 @@ test('mergeToAiBranch：併入 ai-dev 並推遠端，實體 main 完全不動', 
   expect(mainAfter.trim()).toBe(mainBefore.trim());
 }, 30000);
 
+test('mergeToAiBranch：遠端 ai-dev 被另一實例推進（不同檔）→ 自動 fetch 併回再推，不拋錯', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo); // 建 ai-dev 並 push -u origin
+  // 模擬「另一個平台實例」：另 clone 一份，在遠端 ai-dev 推一個不同檔
+  const other = path.join(base, 'other');
+  await run('git', ['clone', path.join(base, 'origin.git'), other]);
+  await sh(other, 'checkout', 'ai-dev');
+  await write(other, 'other.py', 'o = 1\n');
+  await sh(other, 'add', '-A');
+  await sh(other, 'commit', '-m', 'other instance');
+  await sh(other, 'push', 'origin', 'ai-dev');
+  // 本 repo 的任務分支改不同檔
+  await sh(repo, 'checkout', '-b', 'task/t', 'ai-dev');
+  await write(repo, 'mine.py', 'm = 1\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'my task');
+
+  // approve 當下本機 ai-dev 落後遠端 → 應被打回後自動對齊再推，不得拋錯
+  await git.mergeToAiBranch(repo, 'task/t');
+
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev');
+  const { stdout: localAi } = await sh(repo, 'rev-parse', 'ai-dev');
+  expect(remoteAi.trim()).toBe(localAi.trim()); // 本機＝遠端，push 成功
+  // 兩實例的碼都在（沒有誰蓋掉誰）
+  const { stdout: files } = await sh(repo, 'ls-tree', '-r', '--name-only', 'ai-dev');
+  expect(files.split('\n')).toEqual(expect.arrayContaining(['mine.py', 'other.py']));
+}, 30000);
+
+test('mergeToAiBranch：遠端 ai-dev 與本任務改同一檔且衝突 → 拋 AiPushConflictError 並留 MERGE_HEAD', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  const other = path.join(base, 'other');
+  await run('git', ['clone', path.join(base, 'origin.git'), other]);
+  await sh(other, 'checkout', 'ai-dev');
+  await write(other, 'shared.txt', 'OTHER VERSION\n');
+  await sh(other, 'add', '-A');
+  await sh(other, 'commit', '-m', 'other version');
+  await sh(other, 'push', 'origin', 'ai-dev');
+  // 本任務改「同一檔」為不同內容（模擬兩實例跑同一任務、各產一份）
+  await sh(repo, 'checkout', '-b', 'task/t', 'ai-dev');
+  await write(repo, 'shared.txt', 'MY VERSION\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'my version');
+
+  await expect(git.mergeToAiBranch(repo, 'task/t')).rejects.toMatchObject({
+    name: 'AiPushConflictError',
+    conflictFiles: expect.arrayContaining(['shared.txt']),
+  });
+  // 留 MERGE_HEAD 給裁決端點的 concludeMerge 收尾（不可被 abort）
+  expect(fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD'))).toBe(true);
+  // 遠端沒被本機推壞——仍是另一實例的版本
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev');
+  const { stdout: otherHead } = await sh(other, 'rev-parse', 'ai-dev');
+  expect(remoteAi.trim()).toBe(otherHead.trim());
+}, 30000);
+
 describe('ai-dev 隔離：端到端', () => {
   test('全新專案 → 建 ai-dev → 任務從 ai-dev 切 → approve 後 ai-dev 前進而 main 不動', async () => {
     const repo = await makeRepo();

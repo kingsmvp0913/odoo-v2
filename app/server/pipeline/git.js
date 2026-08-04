@@ -331,8 +331,60 @@ async function applyConflictChoices(repoPath, choices) {
   return listUnmerged(repoPath);
 }
 
+// 併遠端 ai-dev 時撞上無法自動合的真衝突（兩個平台實例跑同一任務、各改同一檔）。
+// 帶 conflictFiles，讓 approve 端點路由進既有 merge_conflict 閘門交人工裁決，而非吐 git 原文。
+class AiPushConflictError extends Error {
+  constructor(conflictFiles) {
+    super('併遠端 ai-dev 時發生衝突，需人工裁決保留哪一版');
+    this.name = 'AiPushConflictError';
+    this.conflictFiles = conflictFiles;
+  }
+}
+
+// 把本機 ai-dev 推上遠端；被 non-fast-forward 打回時 fetch＋把 origin/ai-dev 併回本機再重推，
+// bounded retry 吸收「多個平台實例共用同一遠端 ai-dev、各自本機 clone」夾在中間的競態。
+// 常見情況（另一實例推的是不同任務／不同檔）可自動對齊；真撞同一檔（binary docx 等無法自動合）
+// → 留 MERGE_HEAD 交裁決端點，拋 AiPushConflictError 供上層路由。
+// 首次直接 push：單實例正常情境沒有多餘 fetch（維持原本零往返成本），只有被打回才對齊。
+async function reconcileAndPushAi(repoPath, gitEnv) {
+  const MAX = 3;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await execFileAsync('git', ['push', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+      return;
+    } catch (err) {
+      const msg = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`.toLowerCase();
+      const nonFF = msg.includes('non-fast-forward') || msg.includes('fetch first') || msg.includes('updates were rejected');
+      if (!nonFF || attempt >= MAX) throw err; // 非競態（權限／網路等）或重試耗盡 → 原樣拋出
+      // 遠端被其他實例推進：抓下來併回本機 ai-dev 再重推
+      await execFileAsync('git', ['fetch', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+      await discardPyc(repoPath); // 解除 tracked pyc 本地改動擋 merge
+      try {
+        await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', '--no-edit', `origin/${AI_BRANCH}`], gitOpts(repoPath, gitEnv));
+      } catch (mErr) {
+        const mmsg = `${mErr.stdout || ''}${mErr.stderr || ''}${mErr.message || ''}`.toLowerCase();
+        if (mmsg.includes('already up to date') || mmsg.includes('already up-to-date')) continue; // 競態已被別處吸收，直接重推
+        if (!(mmsg.includes('conflict') || mmsg.includes('automatic merge failed'))) throw mErr;
+        // 有衝突：pyc 是 build 產物、衝突無意義，剔除後若已無真衝突就 commit 併續推
+        const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], gitOpts(repoPath, gitEnv)).catch(() => ({ stdout: '' }));
+        let conflictFiles = stdout.trim().split('\n').filter(Boolean);
+        const pyc = conflictFiles.filter(f => f.endsWith('.pyc'));
+        if (pyc.length) {
+          await execFileAsync('git', ['rm', '-f', '--quiet', '--ignore-unmatch', ...pyc], gitOpts(repoPath, gitEnv)).catch(() => {});
+          conflictFiles = conflictFiles.filter(f => !f.endsWith('.pyc'));
+        }
+        if (conflictFiles.length === 0) {
+          await execFileAsync('git', [...identArgs(gitEnv), 'commit', '--no-edit'], gitOpts(repoPath, gitEnv)).catch(() => {});
+          continue;
+        }
+        throw new AiPushConflictError(conflictFiles); // 留 MERGE_HEAD＋衝突標記交裁決端點
+      }
+    }
+  }
+}
+
 // 審核通過後把任務分支併入 ai-dev 並推遠端。實體 main 不碰——使用者自行在 GitHub 上合併 ai-dev → main。
-// ai-dev 只有平台會寫，故不存在「他人推了 main 導致本地過期」的非 fast-forward 競態。
+// 多個平台實例共用同一遠端 ai-dev（各自本機 clone），故 push 前必須對齊遠端，見 reconcileAndPushAi。
 async function mergeToAiBranch(repoPath, branchName, gitEnv) {
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath); // 避免 testing 工作樹上 tracked pyc 的改動擋住 checkout
@@ -347,8 +399,10 @@ async function mergeToAiBranch(repoPath, branchName, gitEnv) {
     await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], gitOpts(repoPath, gitEnv));
     await untrackPyc(repoPath, gitEnv); // 停止 ai-dev 追蹤 pyc → 之後從它長出的 task 分支不再帶 pyc
     // 沒推的話審核通過的程式碼只留在 server 本機 clone，遠端看不到（健檢：approve 缺 push）
-    await execFileAsync('git', ['push', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+    await reconcileAndPushAi(repoPath, gitEnv);
   } catch (err) {
+    // 併遠端 ai-dev 撞真衝突：留 MERGE_HEAD＋衝突標記給裁決端點，不可 checkout/abort（會毀掉待解狀態）
+    if (err instanceof AiPushConflictError) throw err;
     await execFileAsync('git', ['checkout', branchName], gitOpts(repoPath, gitEnv)).catch(() => {});
     throw err;
   }
@@ -547,4 +601,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
