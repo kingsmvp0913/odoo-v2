@@ -836,12 +836,12 @@ test('syncUser 新客服工單 respondent 綁不到對應專案 → 不入庫（
   expect(rows.length).toBe(0);
 });
 
-// 意圖：來源單結案後，主同步再也抓不到它（domain 只抓未結案），平台那張任務會一直留著。
-// 補上「回查來源狀態→已結案就封存」：既有未封存 Odoo 任務、來源階段已折疊（已完成／取消）→ 封存。
-test('syncUser 既有 Odoo 任務來源已結案（stage 折疊）→ 自動封存並回報 archived', async () => {
+// 意圖：sync 不再因來源結案而連動封存——既有 Odoo 任務即使來源階段已折疊（結案），也不得被 sync 封存。
+// （封存改為 cron 30 天自動或手動；fold 不必然＝結案，連動封存會秒封既有任務。）
+test('syncUser 既有 Odoo 任務來源已結案（stage 折疊）→ sync 不封存', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
-     VALUES ($1,'task_odoo_9600','odoo','待封存','desc','new') RETURNING id`,
+     VALUES ($1,'task_odoo_9600','odoo','來源已結案','desc','new') RETURNING id`,
     [userId]
   );
   routeClosedProbe({ odooClosed: [9600] });
@@ -849,28 +849,12 @@ test('syncUser 既有 Odoo 任務來源已結案（stage 折疊）→ 自動封�
   const result = await syncModule.syncUser(userId);
 
   const { rows: [after] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id = $1', [t.id]);
-  expect(after.is_hidden).toBe(true);
-  expect(result.odoo.archived).toBe(1);
-});
-
-// 意圖：來源仍未結案（回查回空）→ 絕不誤封存既有任務。
-test('syncUser 既有 Odoo 任務來源仍未結案 → 不封存、archived=0', async () => {
-  const { rows: [t] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
-     VALUES ($1,'task_odoo_9601','odoo','仍開啟','desc','new') RETURNING id`,
-    [userId]
-  );
-  routeClosedProbe({ odooClosed: [] });
-
-  const result = await syncModule.syncUser(userId);
-
-  const { rows: [after] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id = $1', [t.id]);
   expect(after.is_hidden).toBe(false);
-  expect(result.odoo.archived).toBe(0);
+  expect(result.odoo.archived).toBeUndefined();
 });
 
-// 意圖：一律封存含進行中——來源結案即無需再做，封存時比照手動封存中止在飛 agent（abortTask）。
-test('syncUser 進行中任務來源已結案 → 一律封存並中止在飛 agent', async () => {
+// 意圖：連帶保護在飛任務——來源結案也不得中止 agent 或封存，sync 完全不碰封存路徑。
+test('syncUser 進行中任務來源已結案 → sync 不中止 agent、不封存', async () => {
   const runner = require('../pipeline/runner');
   const spy = jest.spyOn(runner, 'abortTask');
   const { rows: [t] } = await dbModule.query(
@@ -882,18 +866,17 @@ test('syncUser 進行中任務來源已結案 → 一律封存並中止在飛 ag
 
   await syncModule.syncUser(userId);
 
-  const { rows: [after] } = await dbModule.query('SELECT is_hidden, is_paused FROM tasks WHERE id = $1', [t.id]);
-  expect(after.is_hidden).toBe(true);
-  expect(after.is_paused).toBe(false);
-  expect(spy).toHaveBeenCalledWith(t.id);
+  const { rows: [after] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id = $1', [t.id]);
+  expect(after.is_hidden).toBe(false);
+  expect(spy).not.toHaveBeenCalledWith(t.id);
   spy.mockRestore();
 });
 
-// 意圖：eService 結案（state 非 draft/open，涵蓋驗收完成／結案／作廢）→ 封存對應工單任務。
-test('syncUser 既有 eService 工單來源已結案（state 非 draft/open）→ 自動封存', async () => {
+// 意圖：eService 亦然——來源 state 已離開 open（結案／作廢）也不封存對應工單任務。
+test('syncUser 既有 eService 工單來源已結案（state 非 draft/open）→ sync 不封存', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
-     VALUES ($1,'task_service_3600','service','待封存工單','desc','cs_running') RETURNING id`,
+     VALUES ($1,'task_service_3600','service','來源已結案工單','desc','cs_running') RETURNING id`,
     [userId]
   );
   routeClosedProbe({ serviceClosed: [3600] });
@@ -901,6 +884,6 @@ test('syncUser 既有 eService 工單來源已結案（state 非 draft/open）�
   const result = await syncModule.syncUser(userId);
 
   const { rows: [after] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id = $1', [t.id]);
-  expect(after.is_hidden).toBe(true);
-  expect(result.service.archived).toBe(1);
+  expect(after.is_hidden).toBe(false);
+  expect(result.service.archived).toBeUndefined();
 });
