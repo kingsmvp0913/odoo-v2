@@ -851,9 +851,15 @@ window.TaskDetailView = Vue.defineComponent({
                   <button class="btn btn-sm" :class="clarTab === 'qa' ? 'btn-primary' : 'btn-ghost'" @click="clarTab = 'qa'">規格書 QA</button>
                   <button class="btn btn-sm" :class="clarTab === 'ask' ? 'btn-primary' : 'btn-ghost'" @click="clarTab = 'ask'">提問</button>
                 </div>
-                <div v-if="clarBusy" style="font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:var(--space-3)">💬 AI 正在回覆，稍候一下…</div>
+                <div v-if="clarBusy && clarTab === 'ask'" style="font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:var(--space-3)">💬 AI 正在回覆，稍候一下…</div>
 
                 <template v-if="clarTab === 'qa'">
+                  <!-- 送出回答後任務轉 clarify_chat_running：收起整組問題，改顯示處理中卡片，避免空白答案框被誤會成沒送出 -->
+                  <div v-if="clarBusy" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:var(--space-4);margin-bottom:var(--space-3);text-align:center">
+                    <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);color:var(--success);margin-bottom:6px">✓ 回覆已送出，AI 正在確認…</div>
+                    <div style="font-size:var(--fs-sm);color:var(--text-secondary)">AI 判斷後會回到這裡：可能直接往下跑，或把問題更新後再請你補答。</div>
+                  </div>
+                  <template v-else>
                   <div v-if="clarIntro" style="background:var(--surface);color:var(--text-secondary);border-radius:6px;padding:var(--space-3);margin-bottom:var(--space-3);white-space:pre-wrap;font-size:var(--fs-sm)">{{ clarIntro }}</div>
                   <div v-for="(q, idx) in clarVisible()" :key="q.id" style="margin-bottom:14px">
                     <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
@@ -881,6 +887,7 @@ window.TaskDetailView = Vue.defineComponent({
                       {{ submitting ? '送出中...' : '送出回答' }}
                     </button>
                   </div>
+                  </template>
                 </template>
 
                 <template v-else>
