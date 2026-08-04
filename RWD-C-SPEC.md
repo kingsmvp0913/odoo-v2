@@ -158,8 +158,8 @@ app/rwd/
 ### Block 0 — 截圖基線與斷點骨架
 
 > **進行中**：工具鏈已完成並實測（截圖決定性 diff = 0）。**還差基線圖本身** —— 產出需要一個跑起來的平台與 admin 帳號，
-> 在只有 repo 的環境（無 `data/config.json`、無 Postgres）無法完成。請在平台機器上跑：
-> `export RWD_USER=... RWD_PASS=... && cd app && npm run rwd:baseline`，產出後 commit `app/rwd/baseline/` 並勾選本 Block。
+> 在只有 repo 的環境（無 `data/config.json`、無 Postgres）無法完成。
+> **接續步驟見 §9**（含兩個必讀的坑：不要在主 clone 切分支、基線圖會把畫面資料拍進版控）。
 
 **目標**：建立可自動驗證「桌機沒被弄壞」的機器。本 Block **不改任何既有樣式**。
 
@@ -423,3 +423,107 @@ GROUP BY 1 ORDER BY 1;
 ```
 
 拿「某週 utilization 從 X% 走到 Y%」除以同期 `SUM(output_tokens)`，得到本帳號的真實換算率，再把 §8.1 的 80–120 萬 output 代入，即可取代上表的推估值。**建議在 Block 0 完成時做一次**，之後每個 Block 用實績滾動修正。
+
+---
+
+## §9 接續執行：在平台機器上產出基線
+
+Block 0 的工具鏈已完成並實測，**只差基線圖本身**——它需要一個跑起來的平台與 admin 帳號，在只有 repo 的環境產不出來。這一節是給「拿著這份規格到平台機器上繼續跑」的人。
+
+### 9.1 先看這兩個坑
+
+**坑 1：不要在主 clone 上切分支。**
+`rules/always.md` 9 —— 平台主 clone 常駐 `testing` 分支，那是測試環境 addons 的來源。在它上面 `git checkout` 到本專案分支，下次 deploy 就會部署到錯的分支。**開 worktree**（`rules/always.md` 5）：
+
+```bash
+cd <平台主 clone>
+git fetch origin claude/work-platform-rwd-cost-rnb2up
+git worktree add ../odoo-v2-rwd claude/work-platform-rwd-cost-rnb2up
+cd ../odoo-v2-rwd
+```
+
+主 clone 全程停在 `testing`，不動。
+
+**坑 2：基線圖會把畫面上的資料一起拍進版控。**
+截圖會拍到當下畫面的真實內容——任務標題、專案名稱、帳號、用量數字。基線圖是要 commit 的，等於**把這些資料放進 git 歷史**（刪不掉，只能改寫歷史）。
+
+決定要在哪裡產基線之前，先想清楚：
+
+| 產基線的環境 | 後果 |
+|---|---|
+| 正式區 | 基線最貼近真實版面（長標題、多筆資料才驗得出破版），但真實營運資料進版控 |
+| 測試區／本機 | 資料是假的，但版面可能過於乾淨，驗不出真實資料量下的破版 |
+
+repo 是私有、團隊成員本來就看得到平台資料的話，正式區可接受。**若有客戶名稱、聯絡資料之類不該擴散的內容，改用測試區**，並在 `routes.js` 的 `STABILIZE_CSS` 補上要遮的選擇器。這是你的判斷，規格不替你決定。
+
+### 9.2 前置
+
+```bash
+cd <worktree>/app
+npm install                    # package.json 已含 playwright / pixelmatch / pngjs
+```
+
+**瀏覽器不必另外下載**：`DEPLOY.md` 已把 Google Chrome 列為平台必需相依（tour E2E 用），直接指過去即可，省一次 ~150MB 下載：
+
+```bash
+# Linux 常見路徑，實際位置用 which 找
+export RWD_CHROMIUM=$(which google-chrome || which google-chrome-stable)
+```
+
+指不到就跑 `npx playwright install chromium` 讓 playwright 自己裝。
+症狀對照：`Executable doesn't exist at .../chromium_headless_shell-<build>` 就是版本對不上，設 `RWD_CHROMIUM` 即可。
+
+### 9.3 產基線
+
+```bash
+export RWD_BASE_URL=http://localhost:3939/     # 掛子路徑要改，例如 https://host/odooAiDev/
+export RWD_USER=<admin 帳號>
+export RWD_PASS=<密碼>
+
+cd <worktree>/app
+npm run rwd:baseline
+```
+
+帳號**必須是 admin**——12 個 admin 頁會被 `app.js:61` 的 guard 導回首頁，截到一堆錯的畫面卻不報錯。腳本會先驗 `auth/me`，非 admin 直接中止。
+
+### 9.4 判讀輸出
+
+腳本會印三段：
+
+- **`完成 N/M 張`** —— N < M 就是有跳過，退出碼為 1（少截幾張不算通過）
+- **`未產出`清單** —— 常見原因：
+  - `缺少樣本 taskId / projectId`：平台上還沒有任務或專案。先建一筆再跑。
+  - `Timeout`：該頁載入超過 30 秒，多半是後端某個 API 慢。記下來，那本身是個問題。
+- **`人工檢查清單`** —— `task-terminal` 與 `project-db` 兩條，設計上就不進自動 diff（規格 §2.4），不是錯誤。
+
+### 9.5 確認基線可用，然後提交
+
+```bash
+npm run rwd:check    # 剛產完基線就比對,應為「門禁：通過」
+```
+
+這一步是驗證基線本身有決定性——**如果剛產完就有桌機差異，代表某個動態內容沒被遮到**，要在 `routes.js` 的 `STABILIZE_CSS` 補上，重產基線，不要帶著會假紅的基線往下走。
+
+通過後：
+
+```bash
+cd <worktree>
+git status --porcelain -uno          # 逐檔確認,禁用 git add -A
+git add app/rwd/baseline
+git commit -m "[RWD]: 建立桌機基線，讓後續每塊改動可機器驗證"
+git push -u origin claude/work-platform-rwd-cost-rnb2up
+```
+
+然後回到本檔勾選 Block 0 的「基線產出」四項與 §4 總覽，並移除 Block 0 標題下的「進行中」註記（規格 §7）。
+
+### 9.6 收尾
+
+```bash
+cd <平台主 clone>
+git branch --show-current            # 必須是 testing
+git worktree remove ../odoo-v2-rwd   # 用完再移除,或留著給 Block 1 用
+```
+
+主 clone 沒停在 `testing` 就要回報（`rules/always.md` 9），但**不可回滾已完成的 push**。
+
+基線就位後即可開始 Block 1。
