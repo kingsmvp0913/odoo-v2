@@ -25,6 +25,8 @@ env/
 # ─── 機密設定(改用 config.example.json 交付)──────────
 /data/config.json
 /data/claude-usage.json
+# VPN 撥號時解密後的暫存 .ovpn(含憑證),用後即刪,絕不進版控
+/data/vpn-tmp/
 .env
 .env.*
 !.env.example

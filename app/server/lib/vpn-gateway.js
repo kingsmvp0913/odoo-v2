@@ -19,6 +19,20 @@ const POLL_INTERVAL_MS = 1000;
 const PORT_RANGE_START = 22000;
 const PORT_RANGE_END = 22999;
 
+// 暫存 .ovpn 的落點：必須是「宿主 === 容器」同構掛載的路徑，docker run -v 的來源才是宿主
+// daemon 看得到的真實檔案。平台容器化後（掛宿主 docker.sock、走宿主 daemon 起 sibling 容器）
+// os.tmpdir()（/tmp）是容器私有、不在 compose 的同構掛載清單（${HOST_REPO_DIR}／${HOST_ENV_BASE}）
+// 內：宿主 daemon 解析不到該來源路徑，會把 -v 目的地自動建成空目錄，openvpn 讀到空 config 直接
+// "You must define TUN/TAP device (--dev)" 退出 → 容器 Exit 1 → 就緒檢查報「容器已結束」。
+// APP_DIR 由 compose 設為 ${HOST_REPO_DIR} 並同構掛載；未容器化（本機開發，平台與 daemon 同一
+// namespace）時 APP_DIR 可能未設，退回 os.tmpdir() 仍正確。執行期讀 env、不在載入時 snapshot。
+function vpnTmpDir() {
+  return process.env.APP_DIR ? path.join(process.env.APP_DIR, 'data', 'vpn-tmp') : os.tmpdir();
+}
+function defaultTmpFilePath(name) {
+  return path.join(vpnTmpDir(), `${name}.ovpn`);
+}
+
 // 本模組所有 docker 呼叫的唯一出口，一律走非同步 execFile：ssh-sql 的 lazy 撥號是在使用者
 // 下查詢時才觸發的，只要有任何一個同步 execFileSync 卡住（`docker build` 動輒數分鐘），
 // 整個 Node 事件迴圈就凍結、全平台所有人一起卡死。
@@ -172,7 +186,7 @@ async function removeStaleContainer(name, execFile) {
 // 但容器內的 openvpn 需要一點時間才會真正打開這個掛載進去的檔案；太早刪會讓
 // 容器讀到「檔案消失」。清理時機交給呼叫端在確認容器真的起來之後才做。
 async function startGateway(gw, deps) {
-  const { execFile, writeFileSync, rmSync, tmpFilePath } = deps;
+  const { execFile, writeFileSync, rmSync, mkdirSync, tmpFilePath } = deps;
   // 算一次、docker run 沿用同一個值——兩處若各自呼叫 imageTag() 理論上結果相同，
   // 但只算一次能避免「其中一處讀檔時機不同導致 tag 不一致」的疑慮。
   // imageTag 只讀兩個小檔案算雜湊（純檔案運算、毫秒級），維持同步不影響事件迴圈。
@@ -187,6 +201,8 @@ async function startGateway(gw, deps) {
   // 前一次若因故（如舊版本的清檔案時機問題）留下同路徑的殘留物，Docker 在掛載
   // 一個「主機端不存在」的來源路徑時可能自動建成空目錄；不管殘留的是檔案還是
   // 目錄，寫入前一律先強制清掉，確保這裡一定是全新的一般檔案。
+  // 同構掛載目錄（如 APP_DIR/data/vpn-tmp）首次使用時可能還不存在，寫檔前先建。
+  mkdirSync(path.dirname(tmpFile), { recursive: true });
   rmSync(tmpFile, { recursive: true, force: true });
   writeFileSync(tmpFile, gw.config, { mode: 0o600 });
 
@@ -230,7 +246,8 @@ async function ensureGatewayRunningLocked(gw, deps) {
   const execFile = deps.execFile || realExecFile;
   const writeFileSync = deps.writeFileSync || realFs.writeFileSync;
   const rmSync = deps.rmSync || realFs.rmSync;
-  const tmpFilePath = deps.tmpFilePath || ((name) => path.join(os.tmpdir(), `${name}.ovpn`));
+  const mkdirSync = deps.mkdirSync || realFs.mkdirSync;
+  const tmpFilePath = deps.tmpFilePath || defaultTmpFilePath;
   const waitReachable = deps.waitReachable || defaultWaitReachable;
 
   // deps 原樣往下傳：daemon 檢查住在 docker-env，它自己決定要用哪個注入點。
@@ -246,7 +263,7 @@ async function ensureGatewayRunningLocked(gw, deps) {
   // 半路丟出例外（如 docker run 失敗），外層 finally 仍知道要清哪個檔案。
   const tmpFile = tmpFilePath(name);
   try {
-    await startGateway(gw, { execFile, writeFileSync, rmSync, tmpFilePath });
+    await startGateway(gw, { execFile, writeFileSync, rmSync, mkdirSync, tmpFilePath });
     // 等「隧道真的連得到目標」才算就緒——這也保證 .ovpn 撐到 openvpn 開檔之後才被清掉。
     await waitReachable(name, gw.targets, GATEWAY_TIMEOUT_MS, { execFile: deps.execFile });
   } finally {
@@ -265,4 +282,4 @@ async function removeGateway(gw, deps = {}) {
   try { await docker(execFile, ['rm', '-f', gw.containerName]); } catch { /* 容器可能早已不存在 */ }
 }
 
-module.exports = { allocateForwardPort, projectContainerName, targetHostPort, imageTag, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };
+module.exports = { allocateForwardPort, projectContainerName, targetHostPort, imageTag, defaultTmpFilePath, ensureGatewayRunning, ensureDockerRunning, stopGateway, removeGateway };

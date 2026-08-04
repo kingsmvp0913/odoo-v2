@@ -1,7 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { ensureGatewayRunning, imageTag } = require('../lib/vpn-gateway');
+const { ensureGatewayRunning, imageTag, defaultTmpFilePath } = require('../lib/vpn-gateway');
 
 // 鴻久的真實形狀：兩個目標（Odoo 那台走 ssh、SM 那台走 mssql），共用一條隧道。
 const baseGw = {
@@ -382,6 +382,36 @@ test('併發呼叫：後到者不得在先到者撥號途中把容器砍掉重�
   expect(r1.value).toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC_ONE });
   expect(r2.status).toBe('fulfilled');
   expect(r2.value).toEqual({ containerName: 'vpn-proj-2', targetsSpec: SPEC });
+});
+
+// 平台容器化後（掛宿主 docker.sock、走宿主 daemon 起 sibling 容器），docker run -v 的來源
+// 路徑是由「宿主 daemon」解析，不是平台容器內。os.tmpdir()（/tmp）是容器私有、不在 compose
+// 的同構掛載清單內：宿主看不到該檔 → Docker 把 -v 目的地建成空目錄 → openvpn 讀到空 config
+// 直接 "You must define TUN/TAP device (--dev)" 退出。暫存 .ovpn 必須落在同構掛載的 APP_DIR 下。
+describe('defaultTmpFilePath：.ovpn 暫存落點', () => {
+  test('容器化（APP_DIR 已設）時落在同構掛載的 APP_DIR 下，而非容器私有的 os.tmpdir()', () => {
+    const prev = process.env.APP_DIR;
+    process.env.APP_DIR = '/home/odoo/odoo-v2';
+    try {
+      const p = defaultTmpFilePath('vpn-proj-3');
+      expect(p.startsWith('/home/odoo/odoo-v2' + path.sep)).toBe(true);
+      // 關鍵鑑別力：不得落在 os.tmpdir()——那正是掛成空目錄、openvpn 讀不到 dev 的成因。
+      expect(p.startsWith(os.tmpdir() + path.sep)).toBe(false);
+      expect(p).toMatch(/vpn-proj-3\.ovpn$/);
+    } finally {
+      if (prev === undefined) delete process.env.APP_DIR; else process.env.APP_DIR = prev;
+    }
+  });
+
+  test('未容器化（APP_DIR 未設）時退回 os.tmpdir()，本機開發行為不變', () => {
+    const prev = process.env.APP_DIR;
+    delete process.env.APP_DIR;
+    try {
+      expect(defaultTmpFilePath('vpn-proj-3').startsWith(os.tmpdir() + path.sep)).toBe(true);
+    } finally {
+      if (prev !== undefined) process.env.APP_DIR = prev;
+    }
+  });
 });
 
 describe('imageTag：tag 依 Dockerfile／entrypoint.sh 內容雜湊', () => {
