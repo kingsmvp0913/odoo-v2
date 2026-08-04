@@ -604,3 +604,24 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .diff-line.diff-del { color: var(--danger); }
 .diff-line.diff-hunk { color: var(--info); }
 .diff-line.diff-meta { color: var(--text-muted); font-weight: 600; }
+
+/* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
+   桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
+   桌機路徑因此恆等於改造前，這是「不影響網站使用」的第一層保證。
+
+   注意 body 的 zoom: var(--ui-zoom)（本檔 197 行）——zoom 不改變 media query
+   的判定基準（仍按真實 viewport），但會把內容放大 1.1 倍，390px 的手機實際可用寬
+   只剩約 355px。Block 1 會在此把小螢幕的 --ui-zoom 覆寫為 1。
+
+   既有的 @media (max-width: 640px)（本檔 536 行，註冊頁專用）留待 Block 5 併入。
+   Block 0 只建立骨架，刻意不放任何規則。 */
+
+/* ── 平板 641–1023px ── */
+@media (max-width: 1023px) {
+  /* Block 1 起陸續填入 */
+}
+
+/* ── 手機 ≤640px ── */
+@media (max-width: 640px) {
+  /* Block 1 起陸續填入 */
+}

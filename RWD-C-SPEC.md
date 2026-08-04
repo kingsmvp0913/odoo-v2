@@ -16,7 +16,7 @@
 |---|---|
 | 路由 / View 檔 | 23 條 / 21 檔（5,891 行） |
 | `app/public/css/app.css` | 606 行 |
-| inline style（layout 相關，必須遷移） | 166 處（flex/grid 106、固定寬 37、grid-template 8、nowrap 15） |
+| inline style（layout 相關，必須遷移） | **156 處 / 23 檔**（分類命中 166 次：flex/grid 106、固定寬 37、nowrap 15、grid-template 8） |
 | `<table>` | 16 個 / 8 檔 |
 | shell（`app/public/js/app.js` template） | 1 處 |
 
@@ -41,7 +41,7 @@
 
 ### 2.2 遷移層 — inline style 抽 class 必須「值等價」
 
-166 處 layout inline style 要抽成 class 才能被 media query 覆寫（inline style 優先權高於 media query，不抽就改不動）。這是唯一會碰到桌機路徑的工作，硬規則：
+156 處 layout inline style 要抽成 class 才能被 media query 覆寫（inline style 優先權高於 media query，不抽就改不動）。這是唯一會碰到桌機路徑的工作，硬規則：
 
 - 抽出的 class 內容**與原 inline style 逐字相同**，不順手改值、不合併相似規則、不改順序。
 - 想調整的值一律留到後續 Block、在 media query 內處理。
@@ -110,6 +110,31 @@
 
 `rules/infra.md` 136：範圍窄、有明確答案的工作一律 Sonnet，用高階模型會撞 session limit。
 
+### 3.5 參考資料目錄：`app/rwd/`
+
+本次改進的一切（工具、基線、盤點資料）集中在 `app/rwd/`，一個目錄不散落。
+
+```
+app/rwd/
+├── README.md            目錄導覽：放什麼、怎麼跑、怎麼更新基線
+├── routes.js            路由清單與覆蓋狀態（唯一真相）
+├── capture.js           截圖
+├── compare.js           基線比對
+├── lib/session.js       登入取 token、注入 localStorage（主題／登入態）
+├── baseline/            基線圖 —— 進版控，門禁的一部分
+├── inventory/
+│   ├── scan.js          掃 layout inline style，產出下面那份清單（可重跑，剩餘處數即進度）
+│   └── inline-style.md  Block 2／3 的工作清單 —— 進版控
+├── snapshots/           每次執行的截圖 —— 不進版控
+└── diff/                差異輸出 —— 不進版控
+```
+
+**為什麼放 `app/` 底下而不是 repo 根**：`rules/infra.md` 113 —— Node 模組解析不跨目錄樹，repo 根的腳本 `require('playwright')` 找不到 `app/node_modules`。放 `app/rwd/` 才能往上解析到。
+
+**為什麼不放 `app/tests/`**：`app/package.json` 的 jest `testMatch` 是 `**/tests/**/*.test.js`，放進去一旦命中就會被 `npm run test:quiet` 撈進 node 環境跑而爆掉。`app/rwd/` 完全在 jest 視野外。
+
+**為什麼基線圖要進版控**：基線是「桌機 diff = 0」這道門禁的一半，不進版控就不可攜——換一台機器或換一個 worktree 就驗不了，等於沒有門禁。`rules/always.md` 8 已記載 `docs/` 不進版控造成「spec 傳不到別台機器」的痛點，同樣的坑不要再踩一次。`snapshots/` 與 `diff/` 是每次執行都重新產生的，一律排除。
+
 ---
 
 ## §4 Block 完成度總覽
@@ -132,25 +157,47 @@
 
 ### Block 0 — 截圖基線與斷點骨架
 
+> **進行中**：工具鏈已完成並實測（截圖決定性 diff = 0）。**還差基線圖本身** —— 產出需要一個跑起來的平台與 admin 帳號，
+> 在只有 repo 的環境（無 `data/config.json`、無 Postgres）無法完成。請在平台機器上跑：
+> `export RWD_USER=... RWD_PASS=... && cd app && npm run rwd:baseline`，產出後 commit `app/rwd/baseline/` 並勾選本 Block。
+
 **目標**：建立可自動驗證「桌機沒被弄壞」的機器。本 Block **不改任何既有樣式**。
 
 **動到的檔案**
-- 新增 `app/tests/visual/`（截圖腳本與基線圖）
-- `app/package.json`：新增 `visual:baseline` / `visual:check` script 與 Playwright devDependency
+- 新增 `app/rwd/`（見 §3.5 的目錄規劃）
+- `app/package.json`：新增 `rwd:baseline` / `rwd:check` script 與 Playwright devDependency
+- `.gitignore`：排除 `app/rwd/snapshots/` 與 `app/rwd/diff/` 兩個執行期產物目錄
 - `app/public/css/app.css`：僅在檔尾新增**空的**斷點區塊與註解
 - `app/public/styleguide.html`：登記斷點 token
 
 **實作要點**
-- 檔名**不可**用 `*.test.js` 放在 `tests/` 下 — `app/package.json` 的 jest `testMatch` 是 `**/tests/**/*.test.js`，命中就會被 `npm run test:quiet` 撈進 node 環境跑而爆掉。用 `capture.js` / `compare.js` 之類的名字，走獨立 npm script。
-- 截圖需登入：腳本要能帶測試帳號取得 token（沿用既有登入流程，勿新增後端端點）。
+- 目錄與命名依 §3.5，避開 jest `testMatch` 與 Node 模組解析兩個坑。
+- 前端是 **hash routing**（`app.js:29` `createWebHashHistory`），截圖 URL 形如 `<base>/#/task/1`。
+- 登入態與主題都走 localStorage，用 Playwright 的 `addInitScript` 在頁面載入前注入即可，不必走 UI 登入：
+  - token：`aidev_token`（`api.js:1`）
+  - 主題：`theme` = `dark` | `light`（`theme.js`，載入時立即 apply，不會閃爍）
+- token 由 `POST api/auth/login` 取得（`Login.js:30`），帳密走環境變數，**不得寫死或提交進版控**。
 - 環境已預裝 Chromium：`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`，**不要跑 `playwright install`**。
 - 路徑一律相對 repo 根或走環境變數（`CLAUDE.md` §0：禁止寫死絕對路徑）。
+- `requiresAdmin` 的頁面會呼叫 `auth/me` 驗身分（`app.js:61`），截圖帳號必須是 admin，否則 12 個 admin 頁會全部被導回首頁而截到錯的畫面。
 
-**驗收**
-- [ ] 產出桌機 1440px 基線圖（含淺／深兩主題）
+**驗收 — 工具鏈**（不需跑起來的平台，任何機器可驗）
+- [x] `app/rwd/` 目錄與腳本建立，npm script 就緒（`rwd:baseline` / `rwd:capture` / `rwd:check` / `rwd:gate` / `rwd:inventory`）
+- [x] **截圖決定性**：同一頁重跑兩次 diff = 0 —— 門禁不會假紅（實測 `styleguide.html` 淺／深各兩輪，皆 0 px）
+- [x] **比對抓得到差異**：跨主題比對正確判定為不同
+- [x] `app.css` 斷點骨架與 `styleguide.html` 斷點登記完成（空區塊，不影響渲染）
+- [x] 盤點清單產出：`app/rwd/inventory/inline-style.md`（156 處 / 23 檔）
+- [x] `cd app && npm run test:quiet`：154 個 suite **全部**在 `server/tests/`，`app/rwd/` 未被 jest 撈走
+
+> 該次執行有 1 紅：`server/tests/project-routes.test.js` 的「POST reclone」比對暫存目錄路徑失敗
+> （`reclone-rebuild-testing-*` vs `reclone-sync-ok-*`）。單獨跑也紅，且本 Block `app/server` 零改動，
+> 與 RWD 無關。它**不在** `rules/always.md` 2 的既有紅燈清單內（該清單是 `git-integration.test.js` 與 pgPass flake，
+> 兩者本次皆綠），後續 Block 判斷紅綠時請把它一併視為已知基線，不要當成自己弄壞的。
+
+**驗收 — 基線產出**（需要跑起來的平台與 admin 帳號）
+- [ ] `npm run rwd:baseline` 產出桌機 1440px 基線（淺／深）
 - [ ] 產出平板 820px、手機 390px 現況圖（此時預期破版，這是起始證據）
-- [ ] `npm run visual:check` 在無改動時 diff = 0
-- [ ] `cd app && npm run test:quiet` 的 `Tests: X passed` 數量與改動前一致（新腳本沒被 jest 誤撈）
+- [ ] `npm run rwd:check` 在無改動時門禁通過
 - [ ] 瀏覽器實測：平台功能與外觀完全未變
 
 **回滾**：revert 單一 commit；本 Block 未改既有樣式，回滾無副作用。
@@ -189,12 +236,15 @@
 
 ### Block 2 — inline style 等價遷移（第一批）
 
-**目標**：把兩個最大檔的 layout inline style 抽成 class。**嚴格遵守 §2.2 值等價**。
+**目標**：把高頻 6 頁的 layout inline style 抽成 class。**嚴格遵守 §2.2 值等價**。
 
-**動到的檔案**
-- `app/public/js/views/TaskDetail.js`（1,191 行 / 127 處 inline style）
-- `app/public/js/views/TokenReport.js`（525 行 / 127 處 inline style）
+**動到的檔案**（83 處，明細見 `app/rwd/inventory/inline-style.md`）
+- `views/TokenReport.js`（17）、`views/ProjectDetail.js`（14）、`views/TaskDetail.js`（14）
+- `views/ProjectChat.js`（13）、`views/TaskList.js`（13）、`views/Settings.js`（12）
 - `app/public/css/app.css`（新增等價 class）
+
+> 分批依**處數**而非檔案大小：`TaskDetail.js` / `TokenReport.js` 的 127 處是**全部** inline style，
+> layout 類其實只有 14 / 17 處。照檔案大小分會讓 Block 2 只有 31 處、Block 3 有 125 處。
 
 **只遷移這幾類**（其餘 inline style 原地不動）
 - `display: flex` / `display: grid`
@@ -214,13 +264,15 @@
 
 ### Block 3 — inline style 等價遷移（第二批）
 
-**目標**：其餘 19 個 view 檔的同類遷移。規則與 Block 2 完全相同。
+**目標**：其餘 16 檔的同類遷移（70 處）。規則與 Block 2 完全相同。
 
-**動到的檔案**：`app/public/js/views/` 其餘 19 檔、`app/public/js/release-modal.js`、`app/public/css/app.css`
+**動到的檔案**：`views/` 其餘 15 檔、`js/release-modal.js`、`app/public/css/app.css`。明細見 `app/rwd/inventory/inline-style.md` 的 Block 3 段落。
+
+> `js/app.js` 的 3 處由 Block 1 的 drawer 改造一併處理，**不要在此重複動它**。
 
 **驗收**
 - [ ] 桌機 46 張截圖 diff = 0
-- [ ] 全 `app/public` 的 layout 類 inline style 歸零（`display:flex|grid`、固定寬、`grid-template`、`nowrap`）
+- [ ] `npm run rwd:inventory` 重跑後 Block 2／3 的剩餘處數為 0
 - [ ] 深色模式無變化
 
 **回滾**：revert 單一 commit。

@@ -5,7 +5,12 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "jest --runInBand",
-    "test:quiet": "jest --runInBand --silent --noStackTrace --no-color"
+    "test:quiet": "jest --runInBand --silent --noStackTrace --no-color",
+    "rwd:baseline": "node rwd/capture.js --baseline",
+    "rwd:capture": "node rwd/capture.js",
+    "rwd:check": "node rwd/capture.js && node rwd/compare.js",
+    "rwd:gate": "node rwd/capture.js --gate-only && node rwd/compare.js --gate-only",
+    "rwd:inventory": "node rwd/inventory/scan.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
@@ -26,6 +31,9 @@
   "devDependencies": {
     "jest": "^29.7.0",
     "pg-mem": "^2.9.1",
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0",
     "supertest": "^7.0.0"
   },
   "jest": {

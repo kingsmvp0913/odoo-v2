@@ -35,6 +35,12 @@ env/
 .serena/cache/
 .serena/project.local.yml
 
+# ─── RWD 截圖的執行期產物 ───────────────────────────
+# baseline/ 與 inventory/ 要進版控(門禁不可攜就等於沒有門禁),
+# 這兩個目錄則是每次執行重新產生的,不進版控。
+/app/rwd/snapshots/
+/app/rwd/diff/
+
 # ─── 編輯器 / 作業系統 ──────────────────────────────────
 .DS_Store
 Thumbs.db

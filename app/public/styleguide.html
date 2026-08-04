@@ -84,6 +84,35 @@
       <div class="sg-panel" id="scale-font"></div>
     </section>
 
+    <!-- ── 斷點 ── -->
+    <section class="sg-section">
+      <h2>斷點 Breakpoints <span class="sg-flag ok">新增</span></h2>
+      <p class="sg-note">
+        規格見 <code>RWD-C-SPEC.md</code> §3.1。RWD 樣式一律寫在 <code>@media (max-width: ...)</code> 內，
+        <b>桌機 ≥1024px 不進任何新規則</b>——桌機路徑恆等於改造前。
+      </p>
+      <div class="sg-panel">
+        <div class="sg-scale-item">
+          <code>手機</code><span class="val">≤ 640px</span>
+          <span class="sg-note" style="margin:0">單欄、表格卡片化、底部導覽</span>
+        </div>
+        <div class="sg-scale-item">
+          <code>平板</code><span class="val">641–1023px</span>
+          <span class="sg-note" style="margin:0">sidebar 收成 drawer、格線降欄</span>
+        </div>
+        <div class="sg-scale-item">
+          <code>桌機</code><span class="val">≥ 1024px</span>
+          <span class="sg-note" style="margin:0">維持原樣，回歸門禁的比對基準</span>
+        </div>
+        <div class="sg-label">注意</div>
+        <p class="sg-note" style="margin:0">
+          <code>body</code> 有 <code>zoom: var(--ui-zoom)</code>（目前 1.1）。zoom 不改變 media query 的判定基準，
+          但會把內容放大 1.1 倍 —— 390px 的手機實際可用寬只剩約 355px。Block 1 會把小螢幕的
+          <code>--ui-zoom</code> 覆寫為 1；在那之前填斷點內的值都必須自行折算。
+        </p>
+      </div>
+    </section>
+
     <!-- ── 圓角 / 陰影 ── -->
     <section class="sg-section">
       <h2>圓角 · 陰影 · 字重</h2>
