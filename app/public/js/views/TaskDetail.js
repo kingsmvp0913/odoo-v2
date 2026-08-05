@@ -791,6 +791,7 @@ window.TaskDetailView = Vue.defineComponent({
             <span v-if="task.classification_label" class="pill" style="padding:2px 8px">📂 {{ task.classification_label }}</span>
             <span v-if="task.has_attachment" class="pill pill-info" style="padding:2px 8px">📎 含附件</span>
             <span v-if="task.module">模組：{{ task.module }}</span>
+            <span v-if="task.created_at" style="color:var(--text-muted);font-size:var(--fs-xs)">建立時間：{{ formatTime(task.created_at) }}</span>
             <span style="color:var(--text-muted);font-size:var(--fs-xs)">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
 
