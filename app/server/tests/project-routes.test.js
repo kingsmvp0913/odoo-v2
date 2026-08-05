@@ -104,6 +104,44 @@ test('GET /api/projects → 200 lists with repo_count', async () => {
   expect(res.body[0]).toHaveProperty('repo_count');
 });
 
+// #5 我的最愛：per-user 收藏，供專案列表置頂。驗 intent——收藏狀態要能反映在 is_favorite，
+// 且只反映「自己的」收藏（別人收藏同一專案不得讓我的 is_favorite 變 true）。
+describe('我的最愛（per-user）', () => {
+  const findP = (body) => body.find(p => p.id === projectId);
+
+  test('預設 is_favorite=false；POST 收藏 → true；DELETE 取消 → false', async () => {
+    let res = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
+    expect(findP(res.body).is_favorite).toBe(false);
+
+    const post = await request(app).post(`/api/projects/${projectId}/favorite`).set('Authorization', `Bearer ${token}`).send({});
+    expect(post.status).toBe(200);
+    res = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
+    expect(findP(res.body).is_favorite).toBe(true);
+
+    const del = await request(app).delete(`/api/projects/${projectId}/favorite`).set('Authorization', `Bearer ${token}`);
+    expect(del.status).toBe(200);
+    res = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
+    expect(findP(res.body).is_favorite).toBe(false);
+  });
+
+  test('別人收藏同一專案，不會讓我的 is_favorite 變 true（per-user 隔離）', async () => {
+    await dbModule.query(
+      "INSERT INTO users (username, password_hash, display_name) VALUES ('other-fav', 'x', 'Other')"
+    );
+    const { rows: [o] } = await dbModule.query("SELECT id FROM users WHERE username='other-fav'");
+    await dbModule.query('INSERT INTO project_favorites (user_id, project_id) VALUES ($1, $2)', [o.id, projectId]);
+    const res = await request(app).get('/api/projects').set('Authorization', `Bearer ${token}`);
+    expect(findP(res.body).is_favorite).toBe(false);
+  });
+
+  test('重複 POST 收藏 idempotent（ON CONFLICT DO NOTHING，不 500）', async () => {
+    await request(app).post(`/api/projects/${projectId}/favorite`).set('Authorization', `Bearer ${token}`).send({});
+    const again = await request(app).post(`/api/projects/${projectId}/favorite`).set('Authorization', `Bearer ${token}`).send({});
+    expect(again.status).toBe(200);
+    await request(app).delete(`/api/projects/${projectId}/favorite`).set('Authorization', `Bearer ${token}`); // 還原
+  });
+});
+
 test('GET /api/projects/:id → 200 with repos array', async () => {
   const res = await request(app).get(`/api/projects/${projectId}`).set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(200);

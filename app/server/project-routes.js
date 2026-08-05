@@ -186,12 +186,35 @@ function registerRoutes(app) {
       );
       const unreadMap = {};
       for (const u of unreadRows) unreadMap[String(u.project_id)] = Number(u.unread);
+      const { rows: favRows } = await query(
+        'SELECT project_id FROM project_favorites WHERE user_id = $1', [req.userId]
+      );
+      const favSet = new Set(favRows.map(f => f.project_id));
       res.json(projects.map(p => ({
         ...p,
         repo_count: countMap[String(p.id)] || 0,
         unread_count: unreadMap[String(p.id)] || 0,
-        has_wiki: (wikiMap[String(p.id)] || 0) > 0
+        has_wiki: (wikiMap[String(p.id)] || 0) > 0,
+        is_favorite: favSet.has(p.id)
       })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 我的最愛（per-user）：收藏／取消收藏。只動自己的 (user_id=req.userId)，故不需 admin 檢查（見 always.md rule 92）。
+  app.post('/api/projects/:id/favorite', verifyToken, async (req, res) => {
+    try {
+      await query(
+        'INSERT INTO project_favorites (user_id, project_id) VALUES ($1, $2) ON CONFLICT (user_id, project_id) DO NOTHING',
+        [req.userId, req.params.id]
+      );
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/projects/:id/favorite', verifyToken, async (req, res) => {
+    try {
+      await query('DELETE FROM project_favorites WHERE user_id = $1 AND project_id = $2', [req.userId, req.params.id]);
+      res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

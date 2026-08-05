@@ -15,8 +15,10 @@ window.ProjectListView = Vue.defineComponent({
     // 新手教程要有一張專案卡可以指，但新帳號一個專案都沒有 → 教程開著時插一張示範專案
     // （只在畫面上，不進 this.projects，也不會被送出或刪除）。刪掉 tour-demo.js 即自動消失。
     allProjects() {
+      // 我的最愛置頂：stable sort，同組內維持後端回傳的 name ASC 次序。
+      const sorted = [...this.projects].sort((a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0));
       const demo = window.TourDemo;
-      return demo && demo.active ? [demo.project(), ...this.projects] : this.projects;
+      return demo && demo.active ? [demo.project(), ...sorted] : sorted;
     },
     filteredProjects() {
       const q = this.search.toLowerCase();
@@ -67,6 +69,17 @@ window.ProjectListView = Vue.defineComponent({
         await this.load();
         showToast('已刪除', 'success');
       } catch (e) { showToast(e.message, 'error'); }
+    },
+    async toggleFavorite(p) {
+      const next = !p.is_favorite;
+      p.is_favorite = next;   // 樂觀更新：立即反映愛心與置頂排序
+      try {
+        if (next) await Api.post(`projects/${p.id}/favorite`, {});
+        else await Api.delete(`projects/${p.id}/favorite`);
+      } catch (e) {
+        p.is_favorite = !next;   // 失敗還原
+        showToast(e.message || '更新我的最愛失敗', 'error');
+      }
     },
     unread(id) { return UnreadStore.byProject[String(id)] || 0; },
     go(id) { this.$router.push(`/projects/${id}`); },
@@ -175,7 +188,13 @@ window.ProjectListView = Vue.defineComponent({
               <button v-if="!p.has_wiki" class="btn btn-outline btn-sm" @click="initWiki(p.id)">🔄 初始化 Wiki</button>
             </div>
           </div>
-          <button v-if="isAdmin()" class="btn btn-ghost btn-sm" style="color:var(--danger);flex-shrink:0;align-self:flex-start" @click.stop="remove(p)">刪除</button>
+          <div style="display:flex;gap:var(--space-1);flex-shrink:0;align-self:flex-start" @click.stop>
+            <button v-if="p.id !== 'demo'" class="btn btn-ghost btn-sm"
+              :style="{ fontSize: 'var(--fs-lg)', lineHeight: 1, color: p.is_favorite ? 'var(--danger)' : 'var(--text-muted)' }"
+              :title="p.is_favorite ? '取消我的最愛' : '加入我的最愛'"
+              @click="toggleFavorite(p)">{{ p.is_favorite ? '♥' : '♡' }}</button>
+            <button v-if="isAdmin()" class="btn btn-ghost btn-sm" style="color:var(--danger)" @click="remove(p)">刪除</button>
+          </div>
         </div>
       </div>
       <!-- 上正式：與專案詳細頁共用同一個彈窗元件 -->
