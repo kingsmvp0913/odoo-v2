@@ -1,6 +1,8 @@
 const { query } = require('../db');
 
-// status: 'completed' | 'timeout' | 'aborted' | 'error'。
+// status: 'completed' | 'timeout' | 'aborted' | 'interrupted' | 'error'。
+// aborted＝使用者手動暫停；interrupted＝被外部信號終止（伺服器重開／OOM kill）；兩者都不是執行失敗，
+// 用量報表把它們排除在呼叫數／失敗數之外（見 claude-runner.js 外部終止分支、token-report-routes.js by_agent）。
 // 失敗/中斷的執行也要記帳（usage 為零、留 status 與耗時），
 // 否則最貴的情境（失敗重跑）在帳面上隱形（健檢 U12）。
 async function logTokenUsage(ref, userId, agentType, usage, durationMs, status = 'completed') {

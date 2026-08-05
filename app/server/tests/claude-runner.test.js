@@ -195,9 +195,10 @@ test('runClaude：signal 已 abort → 不 spawn、直接以手動暫停 reject'
   expect(spawn).not.toHaveBeenCalled();
 });
 
-// exit code null＝被外部 signal 終止（OOM killer 等）：不能拿空結果當成功回傳，
-// 否則下游拿到空輸出會誤歸因成「agent 沒回有效結果」。
-test('runClaude：exit code null（外部 kill）→ reject 而非空成功', async () => {
+// exit code null＝被外部 signal 終止（OOM killer／伺服器重開）：不能拿空結果當成功回傳，
+// 否則下游拿到空輸出會誤歸因成「agent 沒回有效結果」。且須標 claudeStatus='interrupted'（非 error），
+// 用量報表才把它排除在失敗數之外（見 token-report-routes.js by_agent）。
+test('runClaude：exit code null（外部 kill）→ reject 且 claudeStatus=interrupted', async () => {
   const { spawn } = require('child_process');
   const { EventEmitter } = require('events');
   const child = new EventEmitter();
@@ -209,7 +210,7 @@ test('runClaude：exit code null（外部 kill）→ reject 而非空成功', as
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
   child.emit('close', null, 'SIGKILL');
-  await expect(p).rejects.toThrow(/外部終止/);
+  await expect(p).rejects.toMatchObject({ message: expect.stringMatching(/外部終止/), claudeStatus: 'interrupted' });
 });
 
 // 健檢 U12：失敗/中斷/逾時的執行也要記帳（usage 為零＋status 標記），

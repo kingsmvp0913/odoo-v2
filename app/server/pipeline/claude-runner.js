@@ -248,7 +248,15 @@ function runClaude(prompt, opts = {}) {
           // 分類器也判不出（→ 停等人工）。標 claudeStatus='auth' 供分類器歸 transient 自癒。
           const auth = authReason || (looksLikeAuthFailure(raw) ? raw.slice(0, 200) : null);
           if (auth) reject(fail(new Error(`Claude CLI 未登入或認證失效：${auth}`), 'auth'));
-          else reject(fail(new Error(raw || (code === null ? `claude 行程被外部終止（${sig || 'signal'}）` : `claude exited with code ${code}`)), 'error'));
+          else {
+            // code null＝被外部信號終止（伺服器重開／OOM kill 等），非執行失敗——標 interrupted，
+            // 與手動暫停 aborted 同類（用量報表把兩者都排除在呼叫數／失敗數之外）。routing 不受影響：
+            // 分類器只特判 timeout／auth，interrupted 一律走訊息分類，與原本的外部終止 error 走向一致。
+            // 真正的非零 exit（claude 自己 exit N）仍記 error。
+            const externalKill = code === null;
+            const msg = raw || (externalKill ? `claude 行程被外部終止（${sig || 'signal'}）` : `claude exited with code ${code}`);
+            reject(fail(new Error(msg), externalKill ? 'interrupted' : 'error'));
+          }
         } else {
           // 實際 model：優先用事件回報的 resolved id，退回 opts 的 model alias（sonnet/opus…）
           const finalModel = usedModel || model || null;

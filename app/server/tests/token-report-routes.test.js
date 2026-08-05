@@ -298,6 +298,35 @@ test('by_agent 帶成本與失敗率：失敗記錄（status≠completed）計�
   expect(typeof qa.cost_usd).toBe('number');
 });
 
+// 意圖：兩種「非執行失敗」都不得計入呼叫數／失敗率，否則會把該關失敗率灌爆（cs 曾因此顯示 60%）：
+//   aborted     ＝使用者手動暫停（abortTask），刻意中斷
+//   interrupted ＝claude 被外部信號終止（伺服器重開／OOM kill），非本次執行的錯
+// 真正的執行失敗（error/timeout）仍要計入。用獨有的 agent_type 'cs'（全檔只有本測試寫入）隔離。
+test('by_agent：手動暫停(aborted)與外部中斷(interrupted)不計入呼叫數與失敗數', async () => {
+  const seedCs = (taskId, status) => dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, status, source)
+     VALUES ($1, $2, 'cs', 0, 0, 0, 0, $3, 'server')`,
+    [taskId, regularUserId, status]
+  );
+  await seedCs('task_cs_a', 'completed');
+  await seedCs('task_cs_b', 'completed');
+  await seedCs('task_cs_c', 'error');        // 真正失敗（exit N）→ 計入
+  await seedCs('task_cs_c', 'aborted');      // 手動暫停 → 排除
+  await seedCs('task_cs_d', 'aborted');
+  await seedCs('task_cs_e', 'interrupted');  // 重開／外部中斷 → 排除
+  await seedCs('task_cs_f', 'interrupted');
+
+  const res = await request(app)
+    .get('/api/token-report?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const cs = res.body.by_agent.find(r => r.agent_type === 'cs');
+  expect(cs).toBeTruthy();
+  expect(cs.calls).toBe(3);              // 2 completed + 1 error；2 aborted + 2 interrupted 全排除
+  expect(cs.failed_calls).toBe(1);       // 只有 error 算失敗
+  expect(cs.fail_rate).toBeCloseTo(1 / 3);
+});
+
 // 註：這幾個測試刻意不帶 ?project_id—— summary query 的專案篩選用了 EXISTS 相關子查詢，
 // pg-mem 無法解析當中的 tu.task_id（真 Postgres 正常）。project_stats 本來就依專案分組，
 // 直接在回傳裡找該專案那列即可，不需要篩選。

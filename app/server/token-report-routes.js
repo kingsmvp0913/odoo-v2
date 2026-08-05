@@ -71,15 +71,18 @@ function registerRoutes(app) {
       );
 
       // By agent（實際 Token 數＋成本＋失敗率，與成本同一套加權）。
-      // 失敗＝status 非 completed（timeout/aborted/error 都記帳，健檢 U12）；
+      // 失敗＝status 為 timeout／error（真正的執行失敗）。以下兩種是刻意／外部中斷、非執行失敗，
+      // 一律排除在「呼叫數」與「失敗數」之外，否則會把失敗率灌爆（cs 曾因此顯示 60%）：
+      //   aborted     ＝使用者手動暫停（abortTask，cs-agent 等對 abort 直接 return、不留 blocker）
+      //   interrupted ＝claude 行程被外部信號終止（伺服器重開／OOM kill；見 claude-runner.js 外部終止分支）
       // 失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標。
       const { rows: byAgent } = await query(
         `SELECT agent_type,
            SUM(${WEIGHTED}) AS tokens,
            SUM(${COST}) AS cost_usd,
-           COUNT(*) AS calls,
+           SUM(CASE WHEN COALESCE(tu.status,'completed') NOT IN ('aborted','interrupted') THEN 1 ELSE 0 END) AS calls,
            COUNT(DISTINCT tu.task_id) AS tasks,
-           SUM(CASE WHEN COALESCE(tu.status,'completed') <> 'completed' THEN 1 ELSE 0 END) AS failed_calls
+           SUM(CASE WHEN COALESCE(tu.status,'completed') NOT IN ('completed','aborted','interrupted') THEN 1 ELSE 0 END) AS failed_calls
          FROM token_usage tu
          ${where}
          GROUP BY agent_type ORDER BY tokens DESC`,
