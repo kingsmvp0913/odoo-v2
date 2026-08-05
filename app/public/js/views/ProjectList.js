@@ -73,6 +73,21 @@ window.ProjectListView = Vue.defineComponent({
     goWiki(id) { this.$router.push(`/projects/${id}/wiki`); },
     goChat(id) { this.$router.push(`/projects/${id}/chat`); },
     goDb(id) { this.$router.push(`/projects/${id}/db`); },
+    async openEnv(id) {
+      // 與 ProjectDetail.openEnv 同：popup 必須在 click handler 內同步開；首建可達數分鐘，先寫字再輪詢 SSO URL。
+      const w = window.open('about:blank', '_blank');
+      if (w) {
+        try { w.document.write('<p style="font-family:sans-serif;padding:2rem">測試區建立中，請稍候…</p>'); }
+        catch (e) { console.debug('about:blank document.write 被瀏覽器擋下，不影響後續導向:', e && e.message); }
+      }
+      try {
+        const url = await pollEnvSso(id);
+        if (w) w.location = url; else window.location = url;
+      } catch (e) {
+        if (w) w.close();
+        showToast(e.message || '無法開啟測試區', 'error');
+      }
+    },
     async initWiki(id) {
       try {
         await Api.post(`projects/${id}/wiki/init`, {});
@@ -149,13 +164,14 @@ window.ProjectListView = Vue.defineComponent({
             <div style="font-size:var(--fs-base);color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
             <div v-if="p.description" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" @click.stop>
+              <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
+                <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unread(p.id) }}</span>
+              </button>
+              <button class="btn btn-outline btn-sm" @click="openEnv(p.id)" title="開啟此專案的測試區">🧪 測試區</button>
               <button class="btn btn-outline btn-sm" data-tour="proj-release" @click="releaseId = p.id" :disabled="!p.repo_count"
                 title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
               <button class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
-              <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
-                <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unread(p.id) }}</span>
-              </button>
               <button v-if="!p.has_wiki" class="btn btn-outline btn-sm" @click="initWiki(p.id)">🔄 初始化 Wiki</button>
             </div>
           </div>
