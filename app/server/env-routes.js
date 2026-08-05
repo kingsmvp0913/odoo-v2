@@ -12,10 +12,13 @@ function registerRoutes(app) {
         [req.params.id]
       );
       const env = rows.length ? rows[0] : { status: 'idle' };
-      // 若 DB 顯示 running 但 PID 已死（app 重啟、process crash），自動修正為 idle
-      if (env.status === 'running' && env.pid) {
-        let alive = true;
-        try { process.kill(env.pid, 0); } catch { alive = false; }
+      // 若 DB 顯示 running 但容器其實已不在（app 重啟、容器 crash／OOM／被外部 kill／重建中斷後
+      // 繞過 stopEnv 消失），自動修正為 idle。docker 是唯一模式、pid 恆為 NULL，不能靠 process.kill——
+      // 一律問容器在不在跑（envContainerAlive）。少了這條，孤兒 running 會一路撐到閒置掃描才被清，
+      // 期間使用者點「開啟」會拿到指向死容器的網址＝空白畫面。
+      if (env.status === 'running') {
+        const { envContainerAlive } = require('./pipeline/env-agent');
+        const alive = await envContainerAlive(req.params.id);
         if (!alive) {
           await query(
             // external_slot 一併清：環境其實已經沒了，留著等於一個 slot 被幽靈佔住。
@@ -67,7 +70,12 @@ function registerRoutes(app) {
       if (env.status === 'error') {
         return res.status(409).json({ error: env.error_msg || '測試區建立失敗，請到專案頁查看建立記錄' });
       }
-      if (env.status !== 'running') {
+      // status='running' 不能當真——容器可能已被 kill／OOM／重建中斷後繞過 stopEnv 消失（孤兒 running）。
+      // 若此時照給子網域網址，使用者拿到的是指向死容器的連結＝空白畫面，還白借一個對外名額。
+      // docker 是唯一模式、pid 恆為 NULL，只能問容器在不在跑；不活就跟 idle 一樣走自動起。
+      const { envContainerAlive } = require('./pipeline/env-agent');
+      const alive = env.status === 'running' && await envContainerAlive(req.params.id);
+      if (!alive) {
         if (env.status !== 'setting_up') {
           const { runEnvSetup } = require('./pipeline/env-agent');
           const { withProjectLock } = require('./pipeline/project-lock');

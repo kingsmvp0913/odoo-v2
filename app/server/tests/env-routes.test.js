@@ -6,9 +6,11 @@ process.env.JWT_SECRET = 'test-secret';
 
 const mockRunEnvSetup = jest.fn();
 const mockStopEnv = jest.fn();
+const mockEnvContainerAlive = jest.fn();
 jest.mock('../pipeline/env-agent', () => ({
   runEnvSetup: mockRunEnvSetup,
   stopEnv: mockStopEnv,
+  envContainerAlive: mockEnvContainerAlive,
   nightlyShutdown: jest.fn(),
   ENV_BASE: require('path').resolve(__dirname, '..', '..', '..', 'odoo-envs')
 }));
@@ -54,7 +56,12 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
-beforeEach(() => { mockRunEnvSetup.mockReset(); mockStopEnv.mockReset(); mockWithProjectLock.mockClear(); });
+beforeEach(() => {
+  mockRunEnvSetup.mockReset(); mockStopEnv.mockReset(); mockWithProjectLock.mockClear();
+  // 預設「容器活著」：docker 是唯一模式、pid 恆為 NULL，running 的活性一律問容器。
+  // 不設預設的話，既有 running 測試會被自癒邏輯誤打回 idle。
+  mockEnvContainerAlive.mockReset(); mockEnvContainerAlive.mockResolvedValue(true);
+});
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
@@ -236,10 +243,27 @@ describe('/env/sso 借對外名額', () => {
     expect(env.external_slot).toBeNull();
   });
 
-  // 意圖：同上，另一條把 running 打回 idle 的路徑——DB 標 running 但 process 已死的自癒。
-  test('偵測 pid 已死自癒回 idle 時一併歸還對外名額', async () => {
+  // 意圖：docker 是唯一模式、odoo_envs.pid 恆為 NULL，所以 running 的活性一律問「容器在不在跑」。
+  // 容器被外部 kill／OOM／重建中斷後繞過 stopEnv 消失時，DB 殘留 running 會讓使用者點開啟時
+  // 拿到一個指向死容器的網址（空白畫面）。GET /env 必須據容器活性把它自癒回 idle 並歸還 slot/port。
+  // 用假 pid 的舊寫法測不到這條——真實環境 pid 是 NULL，`&& env.pid` 這關永遠進不去。
+  test('docker 容器不在跑（pid 恆為 NULL）→ GET /env 自癒回 idle 並歸還 slot/port', async () => {
+    mockEnvContainerAlive.mockResolvedValueOnce(false);
+    const pid = await mkEnv('dead', { status: 'running', port: 21020, sso_secret: 'sec', external_slot: 7 });
+    // pid 欄位維持 NULL（mkEnv 不寫 pid）＝真實 docker 狀態
+    const res = await request(app).get(`/api/projects/${pid}/env`).set(auth());
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('idle');
+    const { rows: [env] } = await dbModule.query('SELECT status, external_slot, port FROM odoo_envs WHERE project_id=$1', [pid]);
+    expect(env.status).toBe('idle');
+    expect(env.external_slot).toBeNull();
+    expect(env.port).toBeNull();
+  });
+
+  // 意圖：同上，另一條把 running 打回 idle 的路徑——DB 標 running 但容器已不在的自癒，聚焦歸還對外名額。
+  test('偵測容器已死自癒回 idle 時一併歸還對外名額', async () => {
+    mockEnvContainerAlive.mockResolvedValueOnce(false);
     const pid = await mkEnv('j', { status: 'running', port: 21006, sso_secret: 'sec', external_slot: 5 });
-    await dbModule.query('UPDATE odoo_envs SET pid=$2 WHERE project_id=$1', [pid, 2147483000]); // 不存在的 pid
     const res = await request(app).get(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('idle');
@@ -271,9 +295,9 @@ describe('/env/sso 借對外名額', () => {
     expect(mockStopEnv).toHaveBeenCalledWith(String(pid));
   });
 
-  test('偵測 pid 已死自癒回 idle 時一併歸還內部埠租約', async () => {
+  test('偵測容器已死自癒回 idle 時一併歸還內部埠租約', async () => {
+    mockEnvContainerAlive.mockResolvedValueOnce(false);
     const pid = await mkEnv('l', { status: 'running', port: 21010, sso_secret: 'sec' });
-    await dbModule.query('UPDATE odoo_envs SET pid=$2 WHERE project_id=$1', [pid, 2147483001]); // 不存在的 pid
     const res = await request(app).get(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('idle');
@@ -315,5 +339,23 @@ describe('/env/sso 借對外名額', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toContain('docker image build 失敗');
     expect(mockRunEnvSetup).not.toHaveBeenCalled();
+  });
+
+  // 意圖：DB 標 running 但容器其實已不在（孤兒 running）時，點「開啟」不能拿 status 當真給一個
+  // 指向死容器的子網域網址——那正是使用者看到的空白畫面。必須偵測容器不活、改走自動起回 202，
+  // 且絕不借出對外名額給一個死掉的環境。這是 GET /env 自癒的同一個盲區在開啟路徑上的另一半。
+  test('status=running 但容器已死 → /env/sso 改走自動起回 202，不給死網址也不借名額', async () => {
+    process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
+    mockEnvContainerAlive.mockResolvedValueOnce(false);
+    mockRunEnvSetup.mockResolvedValueOnce(undefined);
+    const pid = await mkEnv('dead-sso', { status: 'running', port: 21022, sso_secret: 'sec' });
+    const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(202);
+    expect(res.body.starting).toBe(true);
+    expect(res.body.url).toBeUndefined();
+    await new Promise(r => setTimeout(r, 10));
+    expect(mockRunEnvSetup).toHaveBeenCalledWith(String(pid));
+    const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+    expect(env.external_slot).toBeNull();
   });
 });

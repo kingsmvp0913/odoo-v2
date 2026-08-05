@@ -57,6 +57,15 @@ async function dockerCtxFor(projectId) {
   };
 }
 
+// docker 是唯一模式、odoo_envs.pid 恆為 NULL，所以「running 是否還活著」不能靠 process.kill(pid)
+// （打不到任何東西、恆判活）。一律問容器在不在跑：容器被外部 kill／OOM／重建中斷後繞過 stopEnv
+// 消失時，DB 會殘留 running，唯有這個檢查揪得出來。專案已不存在（dockerCtxFor 回 null）視為不活。
+async function envContainerAlive(projectId) {
+  const ctx = await dockerCtxFor(projectId);
+  if (!ctx) return false;
+  return dockerEnv.containerRunning(ctx.container);
+}
+
 async function _failEnv(projectId, msg, log) {
   await query(
     "UPDATE odoo_envs SET status='error', error_msg=$2, setup_log=$3, updated_at=NOW() WHERE project_id=$1",
@@ -795,4 +804,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };
