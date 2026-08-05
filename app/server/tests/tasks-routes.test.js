@@ -1524,4 +1524,23 @@ describe('admin 存取地基 — loadTaskForActor / req.isAdmin', () => {
       .set('Authorization', `Bearer ${bobToken}`);
     expect(res2.status).toBe(404);
   });
+
+  test('admin 代 bob 回答澄清 → 任務轉 clarify_chat_running 且 runPipeline 帶 bob 的 userId', async () => {
+    const { runPipeline } = require('../pipeline/runner');
+    runPipeline.mockClear();
+    const res = await request(app).post(`/api/tasks/${bobTaskId}/answer`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ user_answer: 'admin 代答' });
+    expect(res.status).toBe(200);
+    const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [bobTaskId]);
+    expect(after.status).toBe('clarify_chat_running');
+    expect(runPipeline).toHaveBeenCalledWith(bobUserId);
+  });
+
+  test('非 admin 對別人任務回答 → 404，任務不變', async () => {
+    const res = await request(app).post('/api/tasks/2/answer') // task 2 屬 admin
+      .set('Authorization', `Bearer ${bobToken}`)
+      .send({ user_answer: 'x' });
+    expect(res.status).toBe(404);
+  });
 });

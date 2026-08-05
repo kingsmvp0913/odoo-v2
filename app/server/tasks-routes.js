@@ -290,10 +290,7 @@ function registerRoutes(app) {
   // 審核用 diff：任務分支相對主分支的程式變更（逐 repo）。分支已清（已核准）的 repo 標 missing。
   app.get('/api/tasks/:id/diff', verifyToken, async (req, res) => {
     try {
-      const { rows: [task] } = await query(
-        'SELECT id, project_id, git_branch FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
+      const task = await loadTaskForActor(req.params.id, req, 'id, project_id, git_branch');
       if (!task) return res.status(404).json({ error: 'Task not found' });
       if (!task.project_id || !task.git_branch) return res.status(400).json({ error: '此任務沒有專案分支，無可檢視的程式變更' });
 
@@ -326,12 +323,9 @@ function registerRoutes(app) {
   // Edit task content — only while status='new'（尚未進 pipeline，之後分析/開發已依此內容展開，不再允許改）
   app.put('/api/tasks/:id', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      if (tasks[0].status !== 'new') {
+      const task = await loadTaskForActor(req.params.id, req, 'id, status');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'new') {
         return res.status(400).json({ error: '任務已進入處理流程，無法修改內容' });
       }
       const { original_text } = req.body || {};
@@ -340,7 +334,7 @@ function registerRoutes(app) {
       }
       await query(
         'UPDATE tasks SET original_text = $2, updated_at = NOW() WHERE id = $1',
-        [req.params.id, String(original_text)]
+        [task.id, String(original_text)]
       );
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -349,11 +343,8 @@ function registerRoutes(app) {
   // 外部溝通紀錄：sync 拉進來的聊天紀錄 + 使用者手動追加的留言，新到舊排序（畫面顯示用）
   app.get('/api/tasks/:id/messages', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = await loadTaskForActor(req.params.id, req, 'id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       const { rows } = await query(
         'SELECT id, source, author, content, occurred_at, synced_to_odoo FROM task_messages WHERE task_id = $1 ORDER BY occurred_at DESC',
         [req.params.id]
@@ -372,11 +363,8 @@ function registerRoutes(app) {
   // 新增留言（不限任務狀態，逐步累積的補充資訊）；管理者開關開啟時 best-effort 回寫來源系統記錄備註
   app.post('/api/tasks/:id/messages', verifyToken, uploadMessageFiles, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT id, task_id, source FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = await loadTaskForActor(req.params.id, req, 'id, task_id, source, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       const { content } = req.body || {};
       if (!content || !String(content).trim()) return res.status(400).json({ error: '請填寫內容' });
       const trimmed = String(content).trim();
@@ -407,7 +395,7 @@ function registerRoutes(app) {
       const wantsWriteback = String(req.body?.writeback) !== 'false';
       if (cfg?.writeback_odoo_notes && wantsWriteback) {
         try {
-          const result = await writebackTaskMessage(req.userId, tasks[0], trimmed, attachmentRows);
+          const result = await writebackTaskMessage(task.user_id, task, trimmed, attachmentRows);
           if (result?.messageExternalId) {
             await query(
               'UPDATE task_messages SET external_id = $2, synced_to_odoo = true WHERE id = $1',
@@ -434,8 +422,8 @@ function registerRoutes(app) {
         `SELECT a.filename, a.mimetype, a.file_path
          FROM task_attachments a
          JOIN tasks t ON t.id = a.task_id
-         WHERE a.id = $1 AND a.task_id = $2 AND t.user_id = $3`,
-        [req.params.attId, req.params.id, req.userId]
+         WHERE a.id = $1 AND a.task_id = $2 AND (t.user_id = $3 OR $4 = true)`,
+        [req.params.attId, req.params.id, req.userId, !!req.isAdmin]
       );
       if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
       const att = rows[0];
@@ -457,11 +445,8 @@ function registerRoutes(app) {
   // Paginated logs
   app.get('/api/tasks/:id/logs', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = await loadTaskForActor(req.params.id, req, 'id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
 
       const offset = parseInt(req.query.offset) || 0;
       const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -478,11 +463,8 @@ function registerRoutes(app) {
   // 執行歷程：該任務所有事件（依序回放，供 Terminal 頁載入歷史）
   app.get('/api/tasks/:id/events', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
+      const task = await loadTaskForActor(req.params.id, req, 'id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
 
       // 無 limit → 全部（Terminal 全頁）；有 limit → 取最新 N 筆，before=<id> 再往前撈舊的（詳情頁即時歷程用）
       const limit = req.query.limit ? Math.min(parseInt(req.query.limit) || 10, 200) : null;
@@ -506,18 +488,15 @@ function registerRoutes(app) {
   // Toggle pause on a task
   app.put('/api/tasks/:id/pause', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, is_paused FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      const newPaused = !rows[0].is_paused;
+      const task = await loadTaskForActor(req.params.id, req, 'id, is_paused, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      const newPaused = !task.is_paused;
       await query(
         'UPDATE tasks SET is_paused = $2, updated_at = NOW() WHERE id = $1',
         [req.params.id, newPaused]
       );
       if (newPaused) abortTask(req.params.id);
-      else runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      else runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true, is_paused: newPaused });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -532,8 +511,8 @@ function registerRoutes(app) {
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       ids.forEach(id => abortTask(id)); // 封存執行中任務：中止在飛 agent（健檢項11）
       const { rowCount } = await query(
-        'UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
-        [ids, req.userId]
+        'UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND (user_id = $2 OR $3 = true)',
+        [ids, req.userId, !!req.isAdmin]
       );
       res.json({ ok: true, affected: rowCount });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -543,8 +522,8 @@ function registerRoutes(app) {
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       const { rowCount } = await query(
-        'UPDATE tasks SET is_hidden = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $2',
-        [ids, req.userId]
+        'UPDATE tasks SET is_hidden = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND (user_id = $2 OR $3 = true)',
+        [ids, req.userId, !!req.isAdmin]
       );
       res.json({ ok: true, affected: rowCount });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -620,8 +599,8 @@ function registerRoutes(app) {
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       // 已審核通過的任務跳過不刪；其餘先清 worktree/分支再刪
       const { rows: ts } = await query(
-        'SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = ANY($1::int[]) AND user_id = $2',
-        [ids, req.userId]
+        'SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = ANY($1::int[]) AND (user_id = $2 OR $3 = true)',
+        [ids, req.userId, !!req.isAdmin]
       );
       const deletable = ts.filter(t => !t.approved_at);
       const delIds = deletable.map(t => t.id);
@@ -657,10 +636,11 @@ function registerRoutes(app) {
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       const paused = req.body.paused !== false; // default true (pause)
       const { rowCount } = await query(
-        'UPDATE tasks SET is_paused = $2, updated_at = NOW() WHERE id = ANY($1::int[]) AND user_id = $3',
-        [ids, paused, req.userId]
+        'UPDATE tasks SET is_paused = $2, updated_at = NOW() WHERE id = ANY($1::int[]) AND (user_id = $3 OR $4 = true)',
+        [ids, paused, req.userId, !!req.isAdmin]
       );
       if (paused) ids.forEach(id => abortTask(id));
+      // 批次代操作無單一 owner，保留 req.userId（admin 自己觸發一輪掃描即可；見 task-3-brief）
       else runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true, affected: rowCount, is_paused: paused });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -685,12 +665,8 @@ function registerRoutes(app) {
   // （舊行為讓「我還是不懂，怎麼重現？」被當成有效答案直接開工——正式站 task 5。）
   app.post('/api/tasks/:id/answer', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      const task = tasks[0];
+      const task = await loadTaskForActor(req.params.id, req);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
         return res.status(400).json({ error: `Task status '${task.status}' does not accept answers` });
       }
@@ -723,8 +699,8 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, user_answer]
       );
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
-      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
+      runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -734,9 +710,8 @@ function registerRoutes(app) {
   // 澄清關主動提問：只回答、永不推進（mode='ask' 在結構上就不允許 proceed）
   app.post('/api/tasks/:id/clarify-ask', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query('SELECT * FROM tasks WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      const task = tasks[0];
+      const task = await loadTaskForActor(req.params.id, req);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       if (!ANSWER_ALLOWED_STATUSES.includes(task.status)) {
         return res.status(400).json({ error: `Task status '${task.status}' 不接受提問` });
       }
@@ -749,8 +724,8 @@ function registerRoutes(app) {
       );
       if (!rowCount) return res.json({ ok: true });
       await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [req.params.id, question]);
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
-      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
+      runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -760,18 +735,15 @@ function registerRoutes(app) {
   // Resolve a blocked task — saves user's resolution note, resets status to new for retriage
   app.post('/api/tasks/:id/resolve-blocker', verifyToken, async (req, res) => {
     try {
-      const { rows: tasks } = await query(
-        'SELECT id, status, resume_status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
-      if (!['stopped'].includes(tasks[0].status)) {
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, resume_status, project_id, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (!['stopped'].includes(task.status)) {
         return res.status(400).json({ error: '只有失敗待確認的任務可以重新處理' });
       }
       const { resolution } = req.body;
       if (!resolution?.trim()) return res.status(400).json({ error: '請填寫解決說明' });
 
-      if (tasks[0].project_id) {
+      if (task.project_id) {
         // 專案任務：不再盲目 resume——交給分診員讀 diff/log＋你的指示，判 resume/advance/fix/respec 決定下一步。
         // 保留 resume_status/blocker_content/計數器供分診讀取，最終落點與計數歸零由分診 goto 處理。
         // 條件更新防雙擊：先搶到轉移權的請求才落地修正指示，避免分診讀到重複指示
@@ -798,7 +770,7 @@ function registerRoutes(app) {
           deploy_testing: 'deploy_retry_count',
           playwright_running: 'pw_retry_count'
         };
-        const counterCol = RESUME_COUNTER[tasks[0].resume_status];
+        const counterCol = RESUME_COUNTER[task.resume_status];
         await query(
           `UPDATE tasks SET status = COALESCE(resume_status, 'new'),
            blocker_content = NULL, blocker_type = NULL, resume_status = NULL,
@@ -806,7 +778,7 @@ function registerRoutes(app) {
           [req.params.id]
         );
       }
-      runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

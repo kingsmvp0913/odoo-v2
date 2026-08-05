@@ -5,6 +5,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
+const { loadTaskForActor } = require('./lib/task-access');
 
 // approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToAiBranch
 // （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
@@ -37,12 +38,8 @@ function registerRoutes(app) {
     if (_approving.has(approveKey)) return res.status(409).json({ error: '審核通過處理中，請勿重複送出' });
     _approving.add(approveKey);
     try {
-      const { rows } = await query(
-        'SELECT id, task_id, status, git_branch, project_id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      const task = rows[0];
+      const task = await loadTaskForActor(req.params.id, req, 'id, task_id, status, git_branch, project_id, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       if (task.status !== 'review_pending') {
         return res.status(400).json({ error: `Task status '${task.status}' cannot be approved; expected review_pending` });
       }
@@ -104,7 +101,7 @@ function registerRoutes(app) {
             "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', $2)",
             [req.params.id, `[合併衝突] 遠端 ai-dev 已被其他變更推進，${conflict.repo}：${conflict.files.join(', ')} 需選擇保留哪一版`]
           );
-          require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'merge_conflict' });
+          require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'merge_conflict' });
         }
         return res.json({ ok: true, conflict: true });
       }
@@ -120,7 +117,7 @@ function registerRoutes(app) {
           [req.params.id]
         );
       }
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: '合併 ai-dev 失敗：' + err.message });
@@ -134,12 +131,8 @@ function registerRoutes(app) {
     try {
       const reason = ((req.body && req.body.reason) || '').trim();
       if (!reason) return res.status(400).json({ error: '請填寫退回原因' });
-      const { rows } = await query(
-        'SELECT id, task_id, status, project_id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      const task = rows[0];
+      const task = await loadTaskForActor(req.params.id, req, 'id, task_id, status, project_id, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       if (task.status !== 'review_pending') {
         return res.status(400).json({ error: `Task status '${task.status}' cannot be rejected; expected review_pending` });
       }
@@ -164,8 +157,8 @@ function registerRoutes(app) {
         "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,$4,'new')",
         [task.task_id, task.project_id, req.userId, reason]
       );
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: task.id, status: 'reject_triage' });
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'reject_triage' });
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -175,13 +168,10 @@ function registerRoutes(app) {
   // MODE_B 規格審核閘門——確認沒問題：spec_review → branch_pending，續跑 pipeline 進 coding。
   app.post('/api/tasks/:id/spec-approve', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'spec_review') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' cannot be approved; expected spec_review` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'spec_review') {
+        return res.status(400).json({ error: `Task status '${task.status}' cannot be approved; expected spec_review` });
       }
       // 條件更新防雙擊：輸掉競態的請求不再重複推進
       const { rowCount } = await query(
@@ -194,9 +184,9 @@ function registerRoutes(app) {
           "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '規格審核通過，開始實作')",
           [req.params.id]
         );
-        require('./notify').emitToUser(req.userId, 'task:updated', { taskId: rows[0].id, status: 'branch_pending' });
+        require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'branch_pending' });
       }
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -209,13 +199,10 @@ function registerRoutes(app) {
     try {
       const feedback = ((req.body && req.body.feedback) || '').trim();
       if (!feedback) return res.status(400).json({ error: '請填寫修改意見' });
-      const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'spec_review') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' cannot be revised; expected spec_review` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'spec_review') {
+        return res.status(400).json({ error: `Task status '${task.status}' cannot be revised; expected spec_review` });
       }
       // 條件更新防雙擊：先搶到轉移權的請求才落地提問，避免 spec-review agent 讀到重複輸入
       const { rowCount } = await query(
@@ -229,8 +216,8 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, feedback]
       );
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: rows[0].id, status: 'respec_running' });
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'respec_running' });
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -248,12 +235,8 @@ function registerRoutes(app) {
         return res.status(403).json({ error: '僅管理員可下載程式碼' });
       }
 
-      const { rows } = await query(
-        'SELECT id, task_id, status, git_branch, project_id FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      const task = rows[0];
+      const task = await loadTaskForActor(req.params.id, req, 'id, task_id, status, git_branch, project_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
       // 不限任務狀態：只要分支還在（未併回主線清除）就能打包——過渡期讓管理員隨時自行佈署。
       if (!task.git_branch || !task.project_id) {
         return res.status(400).json({ error: '任務尚無分支或專案，無可打包的程式' });
@@ -344,13 +327,10 @@ function registerRoutes(app) {
 
   app.post('/api/tasks/:id/cs-confirm', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'cs_reply_pending') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_reply_pending` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'cs_reply_pending') {
+        return res.status(400).json({ error: `Task status '${task.status}' is not cs_reply_pending` });
       }
       // 條件更新防雙擊：檢查到更新之間狀態被改（另一請求已完成）就不動作
       await query(
@@ -365,13 +345,10 @@ function registerRoutes(app) {
 
   app.post('/api/tasks/:id/cs-data-submit', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'cs_data_needed') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_data_needed` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'cs_data_needed') {
+        return res.status(400).json({ error: `Task status '${task.status}' is not cs_data_needed` });
       }
       // 條件更新防雙擊：輸掉競態的請求不再重複寫入回答（否則 cs-agent 會讀到重複答案）
       const { rowCount } = await query(
@@ -396,8 +373,8 @@ function registerRoutes(app) {
         );
       }
       // 補資料後推 task:updated：讓開著該任務頁的瀏覽器即時重抓、看到剛補的答案（否則要手動 F5 才更新）
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -408,13 +385,10 @@ function registerRoutes(app) {
   // 由 cs 依「原問題＋前一版草稿＋這次追問」重新三分類——修出新草稿留在原地、或釐清後判定需補資料/改程式自然分流。
   app.post('/api/tasks/:id/cs-followup', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'cs_reply_pending') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' is not cs_reply_pending` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'cs_reply_pending') {
+        return res.status(400).json({ error: `Task status '${task.status}' is not cs_reply_pending` });
       }
       const note = ((req.body && req.body.note) || '').trim();
       if (!note) return res.status(400).json({ error: '請填寫追問內容' });
@@ -428,8 +402,8 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, note]
       );
-      require('./notify').emitToUser(req.userId, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -438,32 +412,29 @@ function registerRoutes(app) {
 
   app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, status, project_id, merge_conflict_data, merge_resolutions FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'merge_conflict') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, project_id, merge_conflict_data, merge_resolutions, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'merge_conflict') {
+        return res.status(400).json({ error: `Task status '${task.status}' is not merge_conflict` });
       }
       let cd = null;
-      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+      try { cd = task.merge_conflict_data ? JSON.parse(task.merge_conflict_data) : null; } catch { cd = null; }
       const isRebuild = !!(cd && cd.rebuild); // 來自刪任務觸發的 testing 重建，而非正常 merge_running
       const isSync = !!(cd && cd.sync); // 來自 main → ai-dev 同步，而非 task 分支併 testing
 
       // 轉 deploy 前驗證主 clone 已無未解衝突並了結 merge（commit）——
       // 否則半套 merge（MERGE_HEAD＋衝突標記）直接進部署，錯誤會被誤歸因為程式問題（健檢 U6）
-      if (rows[0].project_id) {
+      if (task.project_id) {
         const { concludeMerge } = require('./pipeline/git');
         const { withProjectLock } = require('./pipeline/project-lock');
         const { rows: repos } = await query(
           "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
-          [rows[0].project_id]
+          [task.project_id]
         );
         // 重建來源：了結前先把人解好的檔案內容記進 merge_resolutions，供之後重演預帶（best-effort，讀不到略過）
         if (isRebuild) {
           let map = {};
-          try { map = rows[0].merge_resolutions ? JSON.parse(rows[0].merge_resolutions) : {}; } catch { map = {}; }
+          try { map = task.merge_resolutions ? JSON.parse(task.merge_resolutions) : {}; } catch { map = {}; }
           for (const r of (cd.repos || [])) {
             const repo = repos.find(x => x.label === r.repo);
             if (!repo) continue;
@@ -472,10 +443,10 @@ function registerRoutes(app) {
               try { map[r.repo][f] = fs.readFileSync(path.join(repo.local_path, f), 'utf8'); } catch { /* 讀不到就略過 */ }
             }
           }
-          await query('UPDATE tasks SET merge_resolutions = $2 WHERE id = $1', [rows[0].id, JSON.stringify(map)]);
+          await query('UPDATE tasks SET merge_resolutions = $2 WHERE id = $1', [task.id, JSON.stringify(map)]);
         }
         // concludeMerge 對主 clone commit → 持專案鎖，避免與同專案 merge/deploy/approve 交錯
-        const concludeErr = await withProjectLock(rows[0].project_id, async () => {
+        const concludeErr = await withProjectLock(task.project_id, async () => {
           for (const repo of repos) {
             try {
               await concludeMerge(repo.local_path);
@@ -493,11 +464,11 @@ function registerRoutes(app) {
         // 重按「審核通過」即由 mergeToAiBranch 冪等續推：此時本機 ai-dev 已領先遠端，push 直接過。
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, safeReturnStatus(cd.prior_status, 'review_pending')]
+          [task.id, safeReturnStatus(cd.prior_status, 'review_pending')]
         );
         await query(
           "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev')",
-          [rows[0].id]
+          [task.id]
         );
         return res.json({ ok: true });
       }
@@ -506,10 +477,12 @@ function registerRoutes(app) {
         // 還原原關卡、清 conflict data，再冪等重跑重建（可能再度停在下一個衝突）
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, safeReturnStatus(cd.prior_status, 'deploy_testing')]
+          [task.id, safeReturnStatus(cd.prior_status, 'deploy_testing')]
         );
         const { rebuildTesting } = require('./pipeline/rebuild-testing');
-        const warn = await rebuildTesting(rows[0].project_id, req.userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
+        // rebuildTesting 的 userId 用於整個專案內多筆受影響任務逐一通知／解衝突，非單一 task owner 可對應
+        // （brief 未列此項；語意不明時比照規則保留 req.userId，見任務報告）
+        const warn = await rebuildTesting(task.project_id, req.userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
         return res.json({ ok: true, warnings: warn ? [warn] : [] });
       }
 
@@ -517,9 +490,9 @@ function registerRoutes(app) {
         // sync 衝突解完＝ai-dev 已含 main 的新碼，回分析重跑（此時 sync 已 commit，重跑冪等）
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, safeReturnStatus(cd.prior_status, 'analysis_running')]
+          [task.id, safeReturnStatus(cd.prior_status, 'analysis_running')]
         );
-        runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+        runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
         return res.json({ ok: true });
       }
 
@@ -527,7 +500,7 @@ function registerRoutes(app) {
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
         [req.params.id]
       );
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -540,30 +513,27 @@ function registerRoutes(app) {
   const RESOLVE_ACTIONS = ['take_theirs', 'take_ours', 'manual'];
   app.post('/api/tasks/:id/resolve-conflicts', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, status, project_id, merge_conflict_data FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'merge_conflict') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, status, project_id, merge_conflict_data, user_id');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'merge_conflict') {
+        return res.status(400).json({ error: `Task status '${task.status}' is not merge_conflict` });
       }
       const resolutions = Array.isArray(req.body?.resolutions) ? req.body.resolutions : [];
       if (!resolutions.length) return res.status(400).json({ error: 'resolutions required' });
       for (const r of resolutions) {
         if (!RESOLVE_ACTIONS.includes(r.action)) return res.status(400).json({ error: `invalid action: ${r.action}` });
       }
-      if (!rows[0].project_id) return res.status(400).json({ error: '此任務沒有專案，無法套用衝突裁決' });
+      if (!task.project_id) return res.status(400).json({ error: '此任務沒有專案，無法套用衝突裁決' });
 
       const { concludeMerge, applyConflictChoices } = require('./pipeline/git');
       const { withProjectLock } = require('./pipeline/project-lock');
       const { rows: repos } = await query(
         "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
-        [rows[0].project_id]
+        [task.project_id]
       );
 
       // 逐 repo 套用（持專案鎖，避免與同專案 merge/deploy 交錯）。回傳每 repo 仍未解的檔。
-      const outcome = await withProjectLock(rows[0].project_id, async () => {
+      const outcome = await withProjectLock(task.project_id, async () => {
         const stillOpen = [];
         for (const repo of repos) {
           const choices = new Map(
@@ -587,7 +557,7 @@ function registerRoutes(app) {
       if (outcome.error) return res.status(400).json({ error: outcome.error });
 
       let cd = null;
-      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+      try { cd = task.merge_conflict_data ? JSON.parse(task.merge_conflict_data) : null; } catch { cd = null; }
 
       if (outcome.stillOpen.length) {
         // 尚有 manual／未決檔：保留 merge_conflict，更新資料只留未解檔（清掉已解檔的卡片）。
@@ -606,7 +576,7 @@ function registerRoutes(app) {
         });
         await query(
           "UPDATE tasks SET merge_conflict_data = $2, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, JSON.stringify({ ...(cd || {}), repos: stillOpen })]
+          [task.id, JSON.stringify({ ...(cd || {}), repos: stillOpen })]
         );
         return res.json({ ok: true, done: false, remaining: outcome.stillOpen });
       }
@@ -615,11 +585,11 @@ function registerRoutes(app) {
         // 併遠端 ai-dev 的衝突逐檔裁決完＋concludeMerge 已 commit → 回審核站，重按審核即冪等續推
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, safeReturnStatus(cd.prior_status, 'review_pending')]
+          [task.id, safeReturnStatus(cd.prior_status, 'review_pending')]
         );
         await query(
           "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev')",
-          [rows[0].id]
+          [task.id]
         );
         return res.json({ ok: true, done: true });
       }
@@ -628,17 +598,17 @@ function registerRoutes(app) {
         // 比照 mark-conflict-resolved：sync 衝突解完回分析重跑，不進部署（程式碼還沒開始寫）
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [rows[0].id, safeReturnStatus(cd.prior_status, 'analysis_running')]
+          [task.id, safeReturnStatus(cd.prior_status, 'analysis_running')]
         );
-        runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+        runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
         return res.json({ ok: true, done: true });
       }
 
       await query(
         "UPDATE tasks SET status = 'deploy_testing', merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-        [rows[0].id]
+        [task.id]
       );
-      runPipeline(req.userId).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
+      runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true, done: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -649,23 +619,20 @@ function registerRoutes(app) {
   // 時調整 ★建議；問答串存回 merge_conflict_data.details[file].qa。全程停 merge_conflict、不推進 pipeline。
   app.post('/api/tasks/:id/merge-clarify', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(
-        'SELECT id, task_id, status, project_id, merge_conflict_data, analysis_yaml FROM tasks WHERE id = $1 AND user_id = $2',
-        [req.params.id, req.userId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Task not found' });
-      if (rows[0].status !== 'merge_conflict') {
-        return res.status(400).json({ error: `Task status '${rows[0].status}' is not merge_conflict` });
+      const task = await loadTaskForActor(req.params.id, req, 'id, task_id, status, project_id, merge_conflict_data, analysis_yaml');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'merge_conflict') {
+        return res.status(400).json({ error: `Task status '${task.status}' is not merge_conflict` });
       }
       const repo = String(req.body?.repo || '').trim();
       const file = String(req.body?.file || '').trim();
       const question = String(req.body?.question || '').trim();
       if (!repo || !file) return res.status(400).json({ error: 'repo and file required' });
       if (!question) return res.status(400).json({ error: 'question required' });
-      if (!rows[0].project_id) return res.status(400).json({ error: '此任務沒有專案，無法追問' });
+      if (!task.project_id) return res.status(400).json({ error: '此任務沒有專案，無法追問' });
 
       let cd = null;
-      try { cd = rows[0].merge_conflict_data ? JSON.parse(rows[0].merge_conflict_data) : null; } catch { cd = null; }
+      try { cd = task.merge_conflict_data ? JSON.parse(task.merge_conflict_data) : null; } catch { cd = null; }
       if (!cd || !Array.isArray(cd.repos)) return res.status(400).json({ error: '無衝突資料可追問' });
       if (cd.rebuild) return res.status(400).json({ error: '重建來源的衝突不支援追問，請手動解決' });
       const repoEntry = cd.repos.find(r => r.repo === repo);
@@ -675,7 +642,7 @@ function registerRoutes(app) {
 
       const { rows: repos } = await query(
         "SELECT local_path, label FROM project_repos WHERE project_id = $1 AND clone_status = 'done' AND local_path IS NOT NULL",
-        [rows[0].project_id]
+        [task.project_id]
       );
       const repoRow = repos.find(r => r.label === repo);
       if (!repoRow) return res.status(400).json({ error: `找不到 repo：${repo}` });
@@ -687,10 +654,12 @@ function registerRoutes(app) {
       const { clarifyConflict, DEFAULT_LABELS, SYNC_LABELS } = require('./pipeline/merge-agent');
       // sync 衝突的兩側（ours=ai-dev、theirs=main）與併 testing 相反，標籤要跟著換，
       // 否則 AI 的白話說明會跟同一張卡片上的按鈕文案（取工程師版／取 AI 版）自相矛盾。
+      // clarifyConflict 內部的 token-usage 記帳已自行從 task.user_id 重查 owner（見 merge-agent.js:212-213），
+      // 這裡的 userId 是否需隨 actor→owner 改動語意不明確（brief 未列），保留 req.userId，見任務報告。
       const result = await clarifyConflict(
         repoRow.local_path, file,
-        { question, priorDetail: repoEntry.details[file], businessContext: rows[0].analysis_yaml, history: detail.qa },
-        null, { taskId: rows[0].id, userId: req.userId, ...(cd.sync ? SYNC_LABELS : DEFAULT_LABELS) }
+        { question, priorDetail: repoEntry.details[file], businessContext: task.analysis_yaml, history: detail.qa },
+        null, { taskId: task.id, userId: req.userId, ...(cd.sync ? SYNC_LABELS : DEFAULT_LABELS) }
       );
 
       detail.qa.push({ q: question, a: result.answer });
@@ -699,7 +668,7 @@ function registerRoutes(app) {
 
       await query(
         'UPDATE tasks SET merge_conflict_data = $2, updated_at = NOW() WHERE id = $1',
-        [rows[0].id, JSON.stringify(cd)]
+        [task.id, JSON.stringify(cd)]
       );
       // 不改 status、不呼叫 runPipeline：追問不推進 pipeline，使用者按裁決鈕才往前走
       res.json({ ok: true, answer: result.answer, recommendation: detail.recommendation, rationale: detail.rationale, changed });
