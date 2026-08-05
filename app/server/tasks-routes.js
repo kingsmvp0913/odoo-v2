@@ -168,8 +168,10 @@ function registerRoutes(app) {
   app.get('/api/tasks', verifyToken, async (req, res) => {
     try {
       const { needs_action, source, status, archived } = req.query;
-      const conditions = ['user_id = $1'];
-      const params = [req.userId];
+      const showAll = req.query.all === 'true' && req.isAdmin;
+      const conditions = [];
+      const params = [];
+      if (!showAll) { conditions.push(`user_id = $${params.length + 1}`); params.push(req.userId); }
       conditions.push(archived === 'true' ? 'is_hidden = true' : 'is_hidden = false');
 
       if (needs_action === 'true') {
@@ -185,6 +187,7 @@ function registerRoutes(app) {
       }
 
       const sql = `SELECT t.id, t.task_id, t.source, t.title, t.status, t.is_paused, t.project_id, t.git_branch, t.reentry_count, t.approved_at, t.merged_to_main_at, t.created_at, t.updated_at,
+                          t.user_id AS owner_id, COALESCE(u.display_name, u.username) AS owner_name,
                           e.status AS env_status,
                           p.name AS project_name, p.e2e_disabled
                    FROM tasks t
@@ -192,6 +195,7 @@ function registerRoutes(app) {
                    -- 整個消失。按下去由 /env/sso 自動起環境（202）或帶出建立失敗原因（409）。
                    LEFT JOIN odoo_envs e ON e.project_id = t.project_id
                    LEFT JOIN projects p ON p.id = t.project_id
+                   LEFT JOIN users u ON u.id = t.user_id
                    WHERE t.${conditions.join(' AND t.')} ORDER BY t.updated_at DESC`;
       const { rows } = await query(sql, params);
       res.json(rows);

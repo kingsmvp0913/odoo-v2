@@ -131,6 +131,22 @@ test('GET /api/tasks?source=service → returns only service task', async () => 
   expect(res.body[0].source).toBe('service');
 });
 
+test('admin GET /api/tasks?all=true → 含 bob 的任務且帶 owner_name', async () => {
+  const res = await request(app).get('/api/tasks?all=true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const bobTask = res.body.find(t => t.task_id === 'task_bob_1');
+  expect(bobTask).toBeTruthy();
+  expect(bobTask.owner_name).toBe('Bob');
+});
+
+test('非 admin GET /api/tasks?all=true → 參數被忽略，只回自己的', async () => {
+  const res = await request(app).get('/api/tasks?all=true')
+    .set('Authorization', `Bearer ${bobToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.every(t => t.task_id === 'task_bob_1')).toBe(true);
+});
+
 // 健檢 U2：全歸零會讓「繼續」一鍵繳械所有重試上限（任務 52 無限循環的直接機制）。
 // 新意圖：只歸零與續跑關卡對應的那一顆，其餘關卡的累計保留。
 test('POST /api/tasks/:id/resolve-blocker 無 resume_status → 回 new 且計數器全數保留', async () => {
