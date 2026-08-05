@@ -3,7 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
@@ -381,6 +381,38 @@ async function doDeploy(task, taskId, userId, signal) {
     await restartEnv(task.project_id);
   } catch (e) {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 重啟測試環境失敗（不阻斷部署，必要時可手動重建）：${e.message}\n` });
+  }
+
+  // 後台 asset bundle 冒煙檢查：排在重啟「之後」才有意義（測的是新 registry）。OWL/QWeb template
+  // （static/src/xml）的 xpath 錯誤只在瀏覽器首次請求 bundle 時 lazy 編譯才現形，且失敗是 WARNING＋404
+  // 不改 exit code——-u --stop-after-init 與無 tour 的 E2E 都碰不到，會一路綠燈到白屏。只有「後台頁能生成
+  // 但 bundle 明確 404/500」才判 code 失敗；連不上／registry 未就緒／拿不到 URL 一律 inconclusive 不阻斷
+  // （比照上面重啟失敗不擋部署），避免暫態誤報。
+  if (signal?.aborted) return;
+  let assetRes = { ok: true };
+  try { assetRes = await assetSmokeCheck(task.project_id); } catch { /* 檢查本身出錯不阻斷部署 */ }
+  if (assetRes.assetError) {
+    const nextCount = (task.deploy_retry_count || 0) + 1;
+    const detail = `[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來（多為 OWL/QWeb template 的 xpath 對不到目標，模組安裝與 --stop-after-init 都驗不到、只在瀏覽器開後台才現形）：${assetRes.reason || ''}`;
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, detail]);
+    if (nextCount >= DEPLOY_LIMIT) {
+      await emitDeployVerdict(userId, taskId, `asset 問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
+        [taskId, nextCount, detail.slice(0, 500)]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    } else {
+      const { bumpReentryOrStop } = require('./reentry');
+      if (await bumpReentryOrStop(taskId, userId, { blockerType: 'code', blockerContent: detail })) return;
+      await emitDeployVerdict(userId, taskId, `asset 問題 → 退開發修正（第 ${nextCount}/${DEPLOY_LIMIT} 次）`);
+      await query(
+        "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
+        [taskId, nextCount, detail]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+    }
+    return;
   }
 
   // 部署成功：歸零 deploy_retry_count（健檢 F9：舊版成功不歸零，新 bug 首次部署失敗即被前輪累計推爆、

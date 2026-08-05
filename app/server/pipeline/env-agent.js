@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { query } = require('../db');
 const { ensureTestingBranch } = require('./git');
 const { E2E_LOGIN } = require('./e2e-account');
+const { mintSsoToken } = require('../sso');
 const { leasePort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 const { syncNginxMapDebounced } = require('../lib/nginx-map');
@@ -612,6 +613,60 @@ function _ssoRouteMissing(host, port, timeoutMs = 5000) {
   });
 }
 
+// 一次 HTTP GET，回 { status, headers, body }；逾時／連線錯回 status:0（供 assetSmokeCheck 判 inconclusive）。
+function _assetHttpGet(host, port, pathUrl, cookie, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const req = http.get({ host, port, path: pathUrl, timeout: timeoutMs, headers: cookie ? { Cookie: cookie } : {} }, (res) => {
+      let body = '';
+      res.on('data', (c) => { if (body.length < 200000) body += c; }); // 只需前段抓 bundle URL，別無上限吃記憶體
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ status: 0 }); });
+    req.on('error', () => resolve({ status: 0 }));
+  });
+}
+
+// 後台 asset bundle 冒煙檢查（deploy 升級＋重啟「之後」呼叫，測的是新 registry）：SSO 免密登入、開一次
+// 後台，確認 web.assets_web bundle 編得出來。OWL/QWeb template（static/src/xml）的 xpath 對不到目標時，
+// bundle 只在瀏覽器首次請求時 lazy 編譯才失敗（WARNING＋404，不改 exit code），模組安裝、-u --stop-after-init、
+// 無 tour 的 E2E 全部驗不到 → 一路綠燈到白屏。判定：後台頁能生成(200)但 bundle 明確 404/500 ＝真 asset bug；
+// 連不上／registry 未就緒／拿不到 URL 一律 inconclusive（不阻斷部署），避免暫態誤報。deps.target 為測試接縫。
+async function assetSmokeCheck(projectId, deps = {}) {
+  const httpGet = deps.httpGet || _assetHttpGet;
+  let host, port, ssoSecret;
+  if (deps.target) {
+    ({ host, port, ssoSecret } = deps.target);
+  } else {
+    const ctx = await dockerCtxFor(projectId);
+    if (!ctx || !ctx.project.port || !(await dockerEnv.containerRunning(ctx.container))) return { ok: true, inconclusive: 'no_env' };
+    const { rows: [env] } = await query('SELECT sso_secret FROM odoo_envs WHERE project_id=$1', [projectId]);
+    if (!env || !env.sso_secret) return { ok: true, inconclusive: 'no_secret' };
+    port = ctx.project.port; host = envBindHost(port); ssoSecret = env.sso_secret;
+  }
+
+  const token = mintSsoToken({ secret: ssoSecret, login: E2E_LOGIN, name: 'E2E 自動測試', ttlSec: 30 });
+  // 1) SSO 免密登入拿 session cookie（seed 已把該環境 sso_secret 寫進 Odoo 端 ir.config_parameter）
+  const sso = await httpGet(host, port, `/aidev/sso?token=${encodeURIComponent(token)}`, null);
+  const rawCookie = sso.headers && sso.headers['set-cookie'];
+  const sc = (Array.isArray(rawCookie) ? rawCookie.join(';') : (rawCookie || '')).match(/session_id=[^;]+/);
+  if (!sc) return { ok: true, inconclusive: 'no_session' };
+  const cookie = sc[0];
+
+  // 2) 開後台抓 web.assets_web bundle URL。頁面出不來(非 200/無 body)＝registry 未就緒等暫態 → inconclusive
+  const web = await httpGet(host, port, '/web', cookie);
+  if (web.status !== 200 || !web.body) return { ok: true, inconclusive: 'backend_unavailable' };
+  const m = web.body.match(/\/web\/assets\/[^"']*web\.assets_web[^"']*\.min\.js/);
+  if (!m) return { ok: true, inconclusive: 'no_bundle_url' };
+  const bundleUrl = m[0];
+
+  // 3) 請求 bundle：明確 404/500 ＝ 編譯失敗（多為 template xpath 對不到目標）→ 真 asset bug
+  const bundle = await httpGet(host, port, bundleUrl, cookie);
+  if (bundle.status === 404 || bundle.status === 500) {
+    return { ok: false, assetError: true, reason: `${bundleUrl} → HTTP ${bundle.status}`, bundleUrl };
+  }
+  return { ok: true };
+}
+
 // 建置＋啟動：build image → 起常駐容器（首次帶 -i base 裝底）→ 健康檢查 → 補相依 → seed。
 async function _runEnvSetupDocker(projectId) {
   const ctx = await dockerCtxFor(projectId);
@@ -804,4 +859,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };

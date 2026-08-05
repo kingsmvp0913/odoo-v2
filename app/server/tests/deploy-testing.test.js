@@ -9,7 +9,8 @@ jest.mock('../pipeline/env-agent', () => ({
   getDeclaredPythonDeps: jest.fn(),
   installPythonPackage: jest.fn(),
   runEnvSetup: jest.fn(),
-  restartEnv: jest.fn().mockResolvedValue({ ok: true })
+  restartEnv: jest.fn().mockResolvedValue({ ok: true }),
+  assetSmokeCheck: jest.fn().mockResolvedValue({ ok: true })
 }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
 jest.mock('../pipeline/git', () => ({
@@ -146,6 +147,7 @@ beforeEach(async () => {
   envAgent.installPythonPackage.mockReset().mockResolvedValue({ ok: true, log: '[pip-fix] OK\n' });
   envAgent.runEnvSetup.mockReset();
   envAgent.restartEnv.mockReset().mockResolvedValue({ ok: true });
+  envAgent.assetSmokeCheck.mockReset().mockResolvedValue({ ok: true });
   require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   const git = require('../pipeline/git');
   git.discardPyc.mockReset().mockResolvedValue(undefined);
@@ -178,6 +180,34 @@ test('env 運行 + 升級成功 → playwright_running', async () => {
   expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale'], undefined);
   // 升級成功必須重啟常駐容器，否則常駐 server 仍持舊 controllers，新路由開測試區報錯（手動重啟才好）
   expect(envAgent.restartEnv).toHaveBeenCalledWith(projectId);
+});
+
+// 意圖：OWL/QWeb template（static/src/xml）的 xpath 錯誤只在瀏覽器首次請求 bundle 時 lazy 編譯才現形，
+// 且失敗是 WARNING＋404 不改 exit code——-u --stop-after-init 與無 tour 的 E2E 都碰不到，會一路綠燈到白屏。
+// 升級＋重啟後補一道 asset 冒煙檢查，明確 404/500 即判 code 失敗退 coding，不放行成 review/playwright。
+test('升級+重啟成功但後台 asset bundle 404（前端 template xpath 錯）→ 判 code 失敗退回 coding', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+  envAgent.assetSmokeCheck.mockResolvedValue({ ok: false, assetError: true, reason: 'web.assets_web.min.js → 404', bundleUrl: '/web/assets/x/web.assets_web.min.js' });
+  const id = await makeTask();
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  // asset 檢查必須排在重啟之後（測的是新 registry），故 restartEnv 先被呼叫
+  expect(envAgent.restartEnv).toHaveBeenCalledWith(projectId);
+  expect(envAgent.assetSmokeCheck).toHaveBeenCalledWith(projectId);
+});
+
+// 意圖：連不上／registry 未就緒／拿不到 bundle URL 一律 inconclusive，不得阻斷部署（比照重啟失敗不擋），
+// 避免暫態誤報把好任務打回 coding。
+test('asset 檢查 inconclusive（無法確認）→ 不阻斷，照常進 playwright_running', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+  envAgent.assetSmokeCheck.mockResolvedValue({ ok: true, inconclusive: 'registry_not_ready' });
+  const id = await makeTask();
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('playwright_running');
 });
 
 test('升級成功但重啟失敗 → 不阻斷部署，仍進 playwright_running（碼已進 DB）', async () => {
