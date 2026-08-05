@@ -4,6 +4,8 @@
 //   advance→放行推進到指定關（歸零該關計數器）；resume→回原關重跑；二次退回禁 fix 降級 respec；無效結果 stopped。
 const { newDb } = require('pg-mem');
 
+// 核心 source 供給走 docker 解壓——單測不碰真 docker，回固定守則字串即可（真行為由 odoo-core-src.test.js 驗）
+jest.mock('../lib/odoo-core-src', () => ({ coreSourceGuidance: () => '（測試：核心來源守則）', ensureOdooCoreSrc: () => '', majorOf: (v) => String(v || '').split('.')[0] }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ ...jest.requireActual('../pipeline/claude-runner'), runClaude: jest.fn() }));

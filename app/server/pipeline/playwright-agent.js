@@ -8,6 +8,7 @@ const { loadAgent } = require('./agent-loader');
 const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
 const { getProjectNotes } = require('./project-notes');
+const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { runClaude, stopReason } = require('./claude-runner');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests, stopEnv } = require('./env-agent');
@@ -125,6 +126,7 @@ async function runTourStage(taskId, userId, signal) {
       login: E2E_LOGIN,
       module: moduleName,
       repo_paths: buildRepoPaths(info, task.task_id),
+      odoo_core_src: coreSourceGuidance(info.odoo_version),
       main_branch: baseBranch,
       git_branch: task.git_branch || '（未設定）',
       project_notes: projectNotes || ''

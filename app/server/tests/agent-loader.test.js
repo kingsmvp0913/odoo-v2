@@ -190,11 +190,13 @@ describe('SOURCE_ROUTING_AGENTS 注入資料來源守則（填入已解析真值
     const out = loadAgent('qa').render({
       project_name: 'P', odoo_version: '17.0', main_branch: 'master', git_branch: 'task/9',
       repo_paths: '- C:/proj/.worktrees/9/idx_sale', analysis_yaml: 'module: sale',
+      odoo_core_src: '核心 addons 唯讀路徑：/data/odoo-core/17/addons',
       prior_findings: '（首輪）', resolution: '（無）'
     });
     expect(out).toContain('資料來源守則');
     expect(out).toContain('C:/proj/.worktrees/9/idx_sale');   // 已解析的絕對路徑，非 <子目錄> 佔位
     expect(out).toContain('diff master...task/9');             // base 依實際 repo（master），非硬打 main
+    expect(out).toContain('/data/odoo-core/17/addons');        // {{odoo_core_src}} 核心來源守則真的填入
   });
 
   test('非碰碼關（cs）不注入 source-routing 守則，但注入技術客服能力片段', () => {

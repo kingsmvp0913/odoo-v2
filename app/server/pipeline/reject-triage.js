@@ -5,6 +5,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
+const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { getProjectNotes } = require('./project-notes');
 const { ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { runClaude, stopReason } = require('./claude-runner');
@@ -120,6 +121,7 @@ async function runRejectTriage(taskId, userId, signal) {
       main_branch: baseBranch,
       git_branch: task.git_branch || '（未設定）',
       repo_paths: buildRepoPaths(info, task.task_id),
+      odoo_core_src: coreSourceGuidance(info.odoo_version),
       analysis_yaml: task.analysis_yaml || '（無規格）',
       stuck_stage: stuckStage,
       stop_context: stopContext,

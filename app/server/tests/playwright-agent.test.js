@@ -4,6 +4,8 @@
 const { newDb } = require('pg-mem');
 
 process.env.APP_SECRET = 'test-app-secret';
+// 核心 source 供給走 docker 解壓——單測不碰真 docker，回固定守則字串（真行為由 odoo-core-src.test.js 驗）
+jest.mock('../lib/odoo-core-src', () => ({ coreSourceGuidance: () => '（測試：核心來源守則）', ensureOdooCoreSrc: () => '', majorOf: (v) => String(v || '').split('.')[0] }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn(), stopReason: (m) => m }));

@@ -8,6 +8,7 @@ const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitR
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
+const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext } = require('./sync');
@@ -74,6 +75,7 @@ function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, pro
       work_dir: workDir || info.root,
       repo_list: repoList,
       repo_paths: buildRepoPaths(info, task.task_id),
+      odoo_core_src: coreSourceGuidance(info.odoo_version),
       main_branch: baseBranch || 'main',
       git_branch: task.git_branch || `task/${task.task_id}`,
       original_text: task.original_text || '（無內容）',
@@ -112,6 +114,7 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, pr
       git_branch: task.git_branch || '（未設定）',
       main_branch: baseBranch || 'main',
       repo_paths: buildRepoPaths(info, task.task_id),
+      odoo_core_src: coreSourceGuidance(info.odoo_version),
       analysis_yaml: task.analysis_yaml || '（無規格）',
       commit_message: buildCommitMessage(task),
       repo_list: repoList,

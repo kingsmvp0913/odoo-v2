@@ -3,6 +3,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
+const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
@@ -101,6 +102,7 @@ async function runQaAgent(taskId, userId, signal) {
         main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
+        odoo_core_src: coreSourceGuidance(info.odoo_version),
         prior_findings: priorFindings
       }).trim();
       try {
@@ -129,6 +131,7 @@ async function runQaAgent(taskId, userId, signal) {
         main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
+        odoo_core_src: coreSourceGuidance(info.odoo_version),
         analysis_yaml: task.analysis_yaml || '（無規格）',
         prior_findings: priorFindings,
         project_notes: projectNotes || ''

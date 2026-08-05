@@ -12,5 +12,5 @@
   git -C "<repo 絕對路徑>" diff {{main_branch}}...{{git_branch}}
 base 主分支＝`{{main_branch}}`；任務分支＝`{{git_branch}}`。提交也在對應 repo 內：`git -C "<絕對路徑>" add -A && git -C "<絕對路徑>" commit`。
 
-■ Odoo 核心 API／base model 用法（欄位型別、decorator、method 行為、原生 selector／URL 慣例）
-**只用 Context7 MCP**。Odoo 核心原始碼不在你的 worktree，**嚴禁**用 `find`／`ls`／`Get-ChildItem` 掃硬碟找 odoo 核心／odoo-bin／odoo-envs／venv（`find /`、掃 `C:\`、`/c/odoo` 這類廣掃會被平台掃碟守衛中止、白燒整回合）。Context7 查不到就依 Odoo 慣例謹慎判斷，**不要掃碟**。
+■ Odoo 核心原始碼／原生 API（欄位型別、decorator、method 行為、原生 template／view 結構、xpath 目標節點、selector／class 名／URL 慣例）
+{{odoo_core_src}}
