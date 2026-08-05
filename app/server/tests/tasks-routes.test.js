@@ -35,7 +35,7 @@ const gitMod = require('../pipeline/git');
 
 process.env.JWT_SECRET = 'test-tasks-secret';
 
-let app, dbModule, adminToken, userId;
+let app, dbModule, adminToken, userId, bobToken, bobUserId, bobTaskId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -83,6 +83,21 @@ beforeAll(async () => {
             ($1, 'task_service_1', 'service', 'Service Task 1', 'content 3', 'analysis_running')`,
     [userId]
   );
+
+  // 第二個使用者（非 admin），及其一筆任務——用來測 admin 接管與非 admin 隔離
+  await request(app).post('/api/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ username: 'bob', password: 'password123', display_name: 'Bob', role: 'user' });
+  const bobLogin = await request(app).post('/api/auth/login').send({ username: 'bob', password: 'password123' });
+  bobToken = bobLogin.body.token;
+  const bobMe = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${bobToken}`);
+  bobUserId = bobMe.body.id;
+  const { rows: [bt] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1, 'task_bob_1', 'odoo', 'Bob Task 1', 'bob content', 'confirm_pending') RETURNING id`,
+    [bobUserId]
+  );
+  bobTaskId = bt.id;
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -1474,5 +1489,23 @@ describe('cleanupTaskGit：刪任務要真的把工作樹從磁碟清掉', () =>
     expect(fs.existsSync(ok.wtParent)).toBe(false);
     expect(fs.existsSync(bad.wtParent)).toBe(true);
     expect(res.body.warnings.some(w => w.includes(bad.wtParent))).toBe(true);
+  });
+});
+
+describe('admin 存取地基 — loadTaskForActor / req.isAdmin', () => {
+  test('admin 可用 loadTaskForActor 取得別人的任務詳情（GET /api/tasks/:id 不 404）', async () => {
+    const res = await request(app).get(`/api/tasks/${bobTaskId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.task.title).toBe('Bob Task 1');
+  });
+
+  test('非 admin 取別人的任務詳情 → 404', async () => {
+    const res = await request(app).get(`/api/tasks/${bobTaskId}`)
+      .set('Authorization', `Bearer ${bobToken}`); // bob 拿得到自己的
+    expect(res.status).toBe(200);
+    const res2 = await request(app).get('/api/tasks/1') // task id 1 屬 admin
+      .set('Authorization', `Bearer ${bobToken}`);
+    expect(res2.status).toBe(404);
   });
 });

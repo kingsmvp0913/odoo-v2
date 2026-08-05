@@ -33,8 +33,10 @@ async function verifyToken(req, res, next) {
     return res.status(401).json({ error: 'Invalid token' });
   }
   try {
-    const { rows } = await query('SELECT 1 FROM users WHERE id = $1', [payload.userId]);
+    const { rows } = await query('SELECT role FROM users WHERE id = $1', [payload.userId]);
     if (!rows.length) return res.status(401).json({ error: 'Invalid token' });
+    req.role = rows[0].role;
+    req.isAdmin = rows[0].role === 'admin';
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }

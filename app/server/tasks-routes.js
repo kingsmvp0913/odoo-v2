@@ -11,6 +11,7 @@ const { uninstallModule } = require('./pipeline/env-agent');
 const { rebuildTesting } = require('./pipeline/rebuild-testing');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize } = require('./lib/attachments');
+const { loadTaskForActor } = require('./lib/task-access');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -242,8 +243,8 @@ function registerRoutes(app) {
            FROM tasks t
            -- 不限 running：理由同列表 route（環境被回收後入口不得消失）
            LEFT JOIN odoo_envs e ON e.project_id = t.project_id
-          WHERE t.id = $1 AND t.user_id = $2 AND t.is_hidden = false`,
-        [req.params.id, req.userId]
+          WHERE t.id = $1 AND (t.user_id = $2 OR $3 = true) AND t.is_hidden = false`,
+        [req.params.id, req.userId, !!req.isAdmin]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
 
