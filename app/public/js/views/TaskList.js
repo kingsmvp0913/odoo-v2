@@ -475,8 +475,9 @@ window.TaskListView = Vue.defineComponent({
       </div>
 
       <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center">
-        <button v-if="isAdmin" class="btn btn-sm" :class="showAllUsers ? 'btn-primary' : 'btn-outline'" @click="toggleAllUsers">
-          👥 {{ showAllUsers ? '全部使用者' : '只看自己' }}
+        <button v-if="isAdmin" class="btn btn-sm" :class="showAllUsers ? 'btn-primary' : 'btn-outline'" @click="toggleAllUsers"
+          :title="showAllUsers ? '目前顯示全部使用者的任務，點一下改回只顯示自己的' : '目前只顯示自己的任務，點一下顯示全部使用者的'">
+          👥 顯示全部使用者
         </button>
         <SearchableSelect v-if="isAdmin && showAllUsers" v-model="ownerFilter" :options="ownerOptions" placeholder="使用者" all-label="全部使用者" />
         <SearchableSelect v-model="projectFilter" :options="projectOptions" placeholder="專案" all-label="全部專案" />
