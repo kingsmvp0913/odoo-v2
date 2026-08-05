@@ -33,7 +33,9 @@ window.AdminPortPoolView = Vue.defineComponent({
     },
     stateLabel(s) {
       return { leased: '🟢 使用中', free: '⚪ 空閒', blocked: '🔴 宿主無法綁定' }[s.state] || s.state;
-    }
+    },
+    // 對外子網域網址取主機名（odoo-ai-test-N.…）；拿不到就原樣回傳。
+    hostOf(url) { try { return new URL(url).host; } catch { return url; } }
   },
   template: `
     <div class="page-header">
@@ -82,15 +84,24 @@ window.AdminPortPoolView = Vue.defineComponent({
         <div class="setting-block">
           <div class="setting-block-head">
             <div class="setting-block-title">槽位狀態</div>
-            <div class="setting-block-desc">「宿主無法綁定」通常代表該埠被機器上其他服務佔用。</div>
+            <div class="setting-block-desc">
+              有人在瀏覽的測試區走<strong>子網域</strong>對外曝露（顯示 odoo-ai-test-N 網址）；只有內部埠、沒人在看的是 pipeline 在跑，僅內網可達。「宿主無法綁定」通常代表該埠被機器上其他服務佔用。
+            </div>
           </div>
           <div class="setting-block-body">
             <div v-for="s in slots" :key="s.port"
                  style="display:flex;align-items:center;gap:var(--space-4);padding:var(--space-2) 0;border-bottom:1px solid var(--border)">
-              <code style="min-width:64px;color:var(--text)">{{ s.port }}</code>
-              <span style="min-width:140px;font-size:var(--fs-sm);color:var(--text)">{{ stateLabel(s) }}</span>
+              <code style="min-width:220px;color:var(--text);font-size:var(--fs-sm)">
+                <template v-if="s.external_url">{{ hostOf(s.external_url) }}</template>
+                <template v-else>:{{ s.port }}</template>
+              </code>
+              <span style="min-width:120px;font-size:var(--fs-sm);color:var(--text)">{{ stateLabel(s) }}</span>
               <span style="flex:1;font-size:var(--fs-sm);color:var(--text-muted)">
-                <template v-if="s.state === 'leased'">{{ s.project_name }} — {{ idleText(s) }}</template>
+                <template v-if="s.state === 'leased'">
+                  <span v-if="s.external_url" style="color:var(--success,#30a46c)">🌐 對外曝露</span>
+                  <span v-else>🔒 內網</span>
+                  · 內部埠 {{ s.port }} · {{ s.project_name }} — {{ idleText(s) }}
+                </template>
               </span>
             </div>
           </div>

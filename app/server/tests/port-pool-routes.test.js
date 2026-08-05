@@ -63,6 +63,28 @@ test('已租用的槽標 leased 並帶專案名', async () => {
   expect(slot.project_name).toBe('鴻久');
 });
 
+// #2(A) 網域模式：有人在看的環境持有 external_slot → 帶出子網域 URL 供前端顯示（取代裸 port）；
+// 只有內部埠、沒 slot 的（pipeline 在跑沒人看）external_url 為 null，前端據此標「內網」。
+test('持有 external_slot 的租用槽帶出子網域 URL；無 slot 則 external_url 為 null', async () => {
+  const prev = process.env.ENV_EXTERNAL_URL_TEMPLATE;
+  process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
+  try {
+    await dbModule.query('INSERT INTO teams_settings (id, port_pool_min, port_pool_max) VALUES (1, 21000, 21001)');
+    const { rows: [p1] } = await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('看中','17.0') RETURNING id");
+    const { rows: [p2] } = await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('純pipeline','17.0') RETURNING id");
+    await dbModule.query("INSERT INTO odoo_envs (project_id, status, port, external_slot) VALUES ($1,'running',21000,3)", [p1.id]);
+    await dbModule.query("INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,'running',21001)", [p2.id]);
+    const res = await request(app).get('/api/admin/port-pool').set(auth());
+    const exposed = res.body.slots.find(s => s.port === 21000);
+    const internal = res.body.slots.find(s => s.port === 21001);
+    expect(exposed.external_slot).toBe(3);
+    expect(exposed.external_url).toBe('https://odoo-ai-test-3.example.com');
+    expect(internal.external_url == null).toBe(true);
+  } finally {
+    if (prev === undefined) delete process.env.ENV_EXTERNAL_URL_TEMPLATE; else process.env.ENV_EXTERNAL_URL_TEMPLATE = prev;
+  }
+});
+
 // 意圖：宿主綁不起來的槽要看得見——那通常代表這段埠被別的服務佔了，或根本沒被放行。
 test('宿主綁不起來的槽標 blocked', async () => {
   await dbModule.query('INSERT INTO teams_settings (id, port_pool_min, port_pool_max) VALUES (1, 21000, 21001)');

@@ -21,7 +21,7 @@ function registerRoutes(app) {
     try {
       const { min, max } = await portAlloc.getPoolRange();
       const { rows: leases } = await query(
-        `SELECT e.port, e.project_id, e.last_active_at, p.name AS project_name
+        `SELECT e.port, e.project_id, e.last_active_at, e.external_slot, p.name AS project_name
            FROM odoo_envs e JOIN projects p ON p.id = e.project_id
           WHERE e.port IS NOT NULL`
       );
@@ -34,11 +34,15 @@ function registerRoutes(app) {
             port, state: 'leased',
             project_id: lease.project_id, project_name: lease.project_name,
             last_active_at: lease.last_active_at,
+            // 網域模式：有人在看的環境才持有對外名額（external_slot）→ 走子網域曝露；
+            // 只有 port、沒 slot 的是 pipeline 在跑但沒人看，只在內網、無對外子網域。
+            external_slot: lease.external_slot,
+            external_url: portAlloc.envExternalUrl(lease.external_slot),
           });
           continue;
         }
         const free = await portAlloc.isPortFree(portAlloc.loopbackHostForPort(port), port);
-        slots.push({ port, state: free ? 'free' : 'blocked', project_id: null, project_name: null, last_active_at: null });
+        slots.push({ port, state: free ? 'free' : 'blocked', project_id: null, project_name: null, last_active_at: null, external_slot: null, external_url: null });
       }
       res.json({ min, max, slots });
     } catch (err) { res.status(500).json({ error: err.message }); }
