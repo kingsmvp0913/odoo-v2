@@ -835,11 +835,21 @@ async function _runEnvSetupDocker(projectId) {
 }
 
 // 產每環境的 SSO 簽章 secret 與 E2E 密碼並存 odoo_envs（單一真相來源，供 mintSsoToken／
-// seed 寫 config param／playwright 讀密碼共用，避免多處各產生而漂移）。每次建置一律換新，
-// 讓每環境憑證獨立、原始碼公開亦非通用後門。回 { ssoSecret, e2ePassword }。
+// seed 寫 config param／playwright 讀密碼共用，避免多處各產生而漂移）。回 { ssoSecret, e2ePassword }。
+//
+// 沿用既有值、只在缺值時才產：secret 是 HMAC 簽章金鑰，平台端存 odoo_envs、Odoo 端存
+// ir.config_parameter('aidev.sso_secret')，兩者必須逐字相同才驗得過章。早先版本每次建置都重新
+// 亂數產一把並「立刻」寫進 odoo_envs（此函式在 setup 開頭就被呼叫），但 Odoo 端要等後面 seed 才
+// 更新——重建期間（尤其舊容器還活著、仍在服務 SSO 免密登入）平台已是新 secret、Odoo 還是舊
+// secret，這個視窗內簽出的 token 一律驗成 bad sig，要 F5 到 seed 寫完新 secret 才好。因為觸發重建
+// 的時機隨機（閒置回收後重開、pipeline deploy、手動重建都會），症狀就是「隨機 bad sig、F5 就好」
+// 且完全不指向成因。per-env 憑證獨立性靠「每環境產一次」即達成，逐次重產無安全效益卻製造脫鉤
+// 視窗，故改為沿用；只有缺值（首建，或舊資料尚無此欄位）才產新的——如此平台端與 Odoo 端恆為
+// 同一把 secret，seed 每次重寫的都是同值，脫鉤視窗從結構上消失。
 async function _ensureEnvCredentials(projectId) {
-  const ssoSecret = crypto.randomBytes(32).toString('hex');
-  const e2ePassword = crypto.randomBytes(18).toString('base64url');
+  const { rows: [cur] } = await query('SELECT sso_secret, e2e_password FROM odoo_envs WHERE project_id=$1', [projectId]);
+  const ssoSecret = (cur && cur.sso_secret) || crypto.randomBytes(32).toString('hex');
+  const e2ePassword = (cur && cur.e2e_password) || crypto.randomBytes(18).toString('base64url');
   await query('UPDATE odoo_envs SET sso_secret=$2, e2e_password=$3 WHERE project_id=$1', [projectId, ssoSecret, e2ePassword]);
   return { ssoSecret, e2ePassword };
 }
@@ -859,4 +869,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };
