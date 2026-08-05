@@ -389,6 +389,8 @@ test('待吸收留言必須進分診 prompt（分辨追加需求與流程指令�
   await addManualMsg(id, '順便把單價欄位改成可編輯');
   await runRejectTriage(id, userId);
   expect(runClaude.mock.calls[0][0]).toContain('順便把單價欄位改成可編輯');
+  // {{odoo_core_src}} 漏傳只會 console.warn，資料來源段會整段變空白（連禁止掃碟的警告都沒了）
+  expect(runClaude.mock.calls[0][0]).toContain('（測試：核心來源守則）');
 });
 
 // 反向守衛：clarify 是「還在問、尚未消費完」，此時銷帳會讓使用者答完後的真需求永遠不被吸收。

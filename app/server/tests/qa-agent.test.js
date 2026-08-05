@@ -248,6 +248,8 @@ test('QA resume：有 qa_session_id＋上輪未解清單 → --resume 短 prompt
   expect(opts.resumeSessionId).toBe('qs-1');                       // 續用上輪 session
   expect(runClaude.mock.calls[0][0]).toContain('備註欄位未加進 form view'); // 未解清單有帶
   expect(runClaude.mock.calls[0][0]).not.toContain('module: sale');  // 不重送全量規格
+  // {{odoo_core_src}} 漏傳只會 console.warn，資料來源段會整段變空白（連禁止掃碟的警告都沒了）
+  expect(runClaude.mock.calls[0][0]).toContain('（測試：核心來源守則）');
   const { rows: [t] } = await dbModule.query('SELECT qa_resume_count, status FROM tasks WHERE id=$1', [id]);
   expect(t.qa_resume_count).toBe(1);
   expect(t.status).toBe('merge_running');
@@ -261,6 +263,7 @@ test('QA fresh：首輪（無 session）→ 全量 prompt、存 qa_session_id', 
   await runQaAgent(id, userId);
   expect(runClaude.mock.calls[0][1].resumeSessionId).toBeUndefined();
   expect(runClaude.mock.calls[0][0]).toContain('module: sale');      // fresh 帶全量規格
+  expect(runClaude.mock.calls[0][0]).toContain('（測試：核心來源守則）'); // {{odoo_core_src}} 有傳，不是空白段
   const { rows: [t] } = await dbModule.query('SELECT qa_session_id FROM tasks WHERE id=$1', [id]);
   expect(t.qa_session_id).toBe('qs-new');
 });

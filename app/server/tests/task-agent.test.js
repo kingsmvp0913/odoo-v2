@@ -146,6 +146,8 @@ test('cs_findings（客服初步定因）帶進分析 prompt 且標明待驗證'
   await runTaskAnalysis(t.id, userId).catch(() => {});
   expect(captured).toContain('按鈕 groups 漏資材主管群組');   // cs 定因進 prompt
   expect(captured).toContain('待驗證');                      // 標明勿直接採信
+  // {{odoo_core_src}} 漏傳只會 console.warn，資料來源段會整段變空白（連禁止掃碟的警告都沒了）
+  expect(captured).toContain('（測試：核心來源守則）');
 });
 
 test('coding retry：retry_feedback（上一輪失敗訊息）確實帶進 claude prompt，且用完清空', async () => {
@@ -231,6 +233,7 @@ test('B-5 首次 coding → fresh 全量、存 session_id marker、進 QA', asyn
 
   expect(calls[0].args).not.toContain('--resume');           // 無狀態，永不 resume
   expect(calls[0].stdin).toContain('加欄位 note_t');          // 全量規格有帶
+  expect(calls[0].stdin).toContain('（測試：核心來源守則）');   // {{odoo_core_src}} 有傳，不是空白段
   const { rows: [t] } = await dbModule.query('SELECT coding_session_id, status FROM tasks WHERE id=$1', [id]);
   expect(t.coding_session_id).toBe('sess-fresh-1');          // 記 marker（供 respec 判「已開工」）
   expect(t.status).toBe('qa_running');

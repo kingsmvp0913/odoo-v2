@@ -182,6 +182,8 @@ test('P1 tour-author runClaude 帶放寬的 timeoutMs（預設 1200s）', async 
   await runTourStage(id, userId);
   expect(runClaude).toHaveBeenCalled();
   expect(runClaude.mock.calls[0][1].timeoutMs).toBe(1200000); // 20 分，非預設 600s
+  // {{odoo_core_src}} 漏傳只會 console.warn，資料來源段會整段變空白（連禁止掃碟的警告都沒了）
+  expect(mockRenderSpy.mock.calls[0][0].odoo_core_src).toBe('（測試：核心來源守則）');
 });
 
 // P3：跑 tour 前暫停常駐 server（避免測試進程 -u test_cwt 與 live server 搶同顆 DB），跑完務必重起。
