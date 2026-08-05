@@ -10,7 +10,8 @@ window.TokenReportView = Vue.defineComponent({
         start: '',
         end: '',
         project_id: '',
-        task_id: ''
+        task_id: '',
+        showAll: false   // 預設只看自己；勾選改看全站所有使用者（後端 ?all=true，本頁本就 admin-only）
       },
       expandedTasks: {},
       labels: {},
@@ -118,6 +119,7 @@ window.TokenReportView = Vue.defineComponent({
         if (end)   p.set('end', end);
         if (this.filters.project_id) p.set('project_id', this.filters.project_id);
         if (this.filters.task_id)    p.set('task_id', this.filters.task_id);
+        if (this.filters.showAll)    p.set('all', 'true');
         this.report = await Api.get(`token-report?${p.toString()}`);
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
@@ -235,6 +237,10 @@ window.TokenReportView = Vue.defineComponent({
         </select>
         <input v-model="filters.task_id" placeholder="任務 ID" class="form-control"
           style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)" />
+        <label style="display:flex;align-items:center;gap:var(--space-1);font-size:var(--fs-base);color:var(--text);cursor:pointer;user-select:none">
+          <input type="checkbox" v-model="filters.showAll" @change="load" />
+          全部使用者
+        </label>
         <button class="btn btn-primary btn-sm" @click="load" :disabled="loading">
           {{ loading ? '查詢中...' : '查詢' }}
         </button>
