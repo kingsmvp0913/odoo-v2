@@ -150,6 +150,7 @@ describe('v-html 綁定白名單', () => {
   // 新增一個沒審過的 v-html 就讓測試紅，逼人來想「這個字串從哪來、消毒了沒」。
   const VETTED = new Set([
     'renderedContent',      // WikiView：走 renderMarkdown，見本檔上方行為測試
+    'renderMd(m.content)',  // ProjectChat：renderMd 只是 renderMarkdown 的薄封裝（同一消毒入口）
     'ansiToHtml(ev.content)', // TaskDetail：函式內自行 escape 後才組 HTML（TaskDetail.js 的 esc()）
     // tour.js：step.text 的字串來源全部是 tour-courses.js 裡硬編的靜態字面值；
     // 教程刻意不打任何 API（tour-isolation.test.js 守「不得出現 fetch/Api. 呼叫」），

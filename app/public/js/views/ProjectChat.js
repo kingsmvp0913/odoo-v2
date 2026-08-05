@@ -135,7 +135,10 @@ window.ProjectChatView = Vue.defineComponent({
     formatTime(ts) {
       if (!ts) return '';
       return new Date(ts).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    }
+    },
+    // 走全站唯一的 markdown 消毒入口 renderMarkdown（見 markdown.js：轉義原始 HTML＋scheme 白名單）。
+    // AI 回覆常含標題／清單／程式碼區塊，純文字插值會整段以原文顯示。
+    renderMd(src) { return renderMarkdown(src); }
   },
   template: `
     <div class="topbar">
@@ -180,12 +183,12 @@ window.ProjectChatView = Vue.defineComponent({
             <div v-if="loadingMsgs" class="loading">載入中...</div>
             <div v-for="m in messages" :key="m.id">
               <div :style="{ display:'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }">
-                <div :style="{
-                  maxWidth:'70%', padding:'8px 12px', borderRadius:'10px', fontSize:'var(--fs-base)', whiteSpace:'pre-wrap',
+                <div class="chat-md" :style="{
+                  maxWidth:'70%', padding:'8px 12px', borderRadius:'10px', fontSize:'var(--fs-base)',
                   background: m.role === 'user' ? 'var(--primary)' : 'var(--surface)',
                   color: m.role === 'user' ? '#fff' : 'var(--text)',
                   border: m.role === 'ai' ? '1px solid var(--border)' : 'none'
-                }">{{ m.content }}</div>
+                }" v-html="renderMd(m.content)"></div>
               </div>
               <div :style="{ textAlign: m.role === 'user' ? 'right' : 'left', fontSize:'var(--fs-xs)', color:'var(--text-muted)', marginTop:'2px' }">
                 {{ m.role === 'user' ? '你' : '🤖 AI' }} · {{ formatTime(m.created_at) }}
