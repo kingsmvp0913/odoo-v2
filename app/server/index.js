@@ -219,6 +219,12 @@ if (require.main === module) {
       const { runGraphify } = require('./pipeline/graphify-runner');
       for (const r of stuck) runGraphify(r.id, r.local_path);
     } catch (e) { console.error('[STARTUP] graphify resume:', e.message); }
+    // 對話回覆若在 process 崩潰/重啟時執行到一半，reply_pending 會卡在 true、前端一直轉圈：
+    // 補上一則中斷訊息（計入未讀）並清除旗標。
+    try {
+      const { recoverInterruptedChats } = require('./pipeline/chat-agent');
+      await recoverInterruptedChats();
+    } catch (e) { console.error('[STARTUP] chat recover:', e.message); }
 
     setIo(io);
     // Claude 長效憑證載入快取：runClaude 同步取用，故必須在派工開始前備妥（未設定則沿用本機憑證檔）

@@ -81,6 +81,20 @@ test('GET chats → lists created chats', async () => {
   expect(res.body.length).toBeGreaterThanOrEqual(2);
 });
 
+// #3：GET chats 帶 reply_pending，前端據此顯示持續動畫（離開再回來仍在）。預設 false；設 true 要能反映。
+test('GET chats → 每筆帶 reply_pending，反映後端旗標', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id, reply_pending) VALUES ($1, '進行中', $2, true) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app).get(`/api/projects/${projectId}/chats`).set(auth());
+  const row = res.body.find(c => c.id === chat.id);
+  expect(row).toBeTruthy();
+  expect(row.reply_pending).toBe(true);
+  // 其他既有對話預設 false
+  expect(res.body.some(c => c.reply_pending === false)).toBe(true);
+});
+
 test('GET messages → empty for new chat', async () => {
   const { rows: [chat] } = await dbModule.query(
     "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '空對話', $2) RETURNING id",

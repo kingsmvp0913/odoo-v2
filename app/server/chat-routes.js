@@ -56,13 +56,13 @@ function registerRoutes(app) {
   app.get('/api/projects/:projectId/chats', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        `SELECT c.id, c.title, c.created_at,
+        `SELECT c.id, c.title, c.created_at, c.reply_pending,
                 COUNT(m.id) AS unread
          FROM project_chats c
          LEFT JOIN project_chat_messages m
            ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
          WHERE c.project_id = $1 AND c.user_id = $2
-         GROUP BY c.id, c.title, c.created_at
+         GROUP BY c.id, c.title, c.created_at, c.reply_pending
          ORDER BY c.created_at DESC`,
         [req.params.projectId, req.userId]
       );

@@ -8,7 +8,7 @@ jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFail
 const mockQuery = jest.fn();
 jest.mock('../db', () => ({ query: (...a) => mockQuery(...a) }));
 
-const { chatReply } = require('../pipeline/chat-agent');
+const { chatReply, recoverInterruptedChats, CHAT_INTERRUPTED_MSG } = require('../pipeline/chat-agent');
 
 beforeEach(() => {
   mockRunClaude.mockClear();
@@ -109,4 +109,56 @@ test('回覆含 <wiki-drift> → 入漂移佇列、回覆剝除側通道（不�
   expect(enqueue[1][5]).toBe('頁面說自動確認，程式要手動');
   expect(reply).toBe('這頁寫錯了。');
   expect(reply).not.toContain('<wiki-drift>');
+});
+
+// #3：回覆進行中要有 server 端旗標（持久動畫）；中斷時 AI 方要留訊息（計未讀）。
+test('成功回覆 → reply_pending 先設 true、finally 清為 false', async () => {
+  const calls = [];
+  mockQuery.mockImplementation((sql) => {
+    calls.push([sql]);
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await chatReply('1', '2', '正常問題', 99);
+  expect(calls.some(c => /reply_pending = true/.test(c[0]))).toBe(true);
+  expect(calls.some(c => /reply_pending = false/.test(c[0]))).toBe(true);
+});
+
+test('claude 出錯 → 補寫 AI 中斷訊息（role=ai 計未讀）＋清 reply_pending＋re-throw', async () => {
+  mockRunClaude.mockRejectedValueOnce(new Error('boom'));
+  const calls = [];
+  mockQuery.mockImplementation((sql, params) => {
+    calls.push([sql, params]);
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await expect(chatReply('1', '2', '會壞的問題', 99)).rejects.toThrow('boom');
+  const aiMsg = calls.find(c => /INSERT INTO project_chat_messages/.test(c[0]) && c[1] && c[1][1] === 'ai');
+  expect(aiMsg).toBeTruthy();
+  expect(aiMsg[1][2]).toBe(CHAT_INTERRUPTED_MSG);
+  expect(calls.some(c => /reply_pending = false/.test(c[0]))).toBe(true); // finally 有清
+});
+
+test('recoverInterruptedChats → 每個卡住的對話補中斷訊息並清 pending', async () => {
+  const calls = [];
+  mockQuery.mockImplementation((sql, params) => {
+    calls.push([sql, params]);
+    if (/SELECT id FROM project_chats WHERE reply_pending = true/.test(sql)) {
+      return Promise.resolve({ rows: [{ id: 5 }, { id: 8 }] });
+    }
+    return Promise.resolve({ rows: [] });
+  });
+  const n = await recoverInterruptedChats();
+  expect(n).toBe(2);
+  const aiInserts = calls.filter(c =>
+    /INSERT INTO project_chat_messages/.test(c[0]) && c[1] && c[1][1] === 'ai' && c[1][2] === CHAT_INTERRUPTED_MSG
+  );
+  expect(aiInserts.length).toBe(2);
+  expect(calls.filter(c => /reply_pending = false/.test(c[0])).length).toBe(2);
 });

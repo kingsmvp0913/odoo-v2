@@ -6,6 +6,10 @@ const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting
 const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
 const { query } = require('../db');
 
+// 對話回覆在產生途中中斷（claude-runner 出錯，或 server 進程崩潰/重啟）時，AI 方補寫的訊息。
+// role='ai' → 自動計入未讀徽章；讓懸著的提問至少有明確收尾與「請重試」的指引。
+const CHAT_INTERRUPTED_MSG = '⚠️ 這則回覆在產生途中中斷了（可能是伺服器重啟或連線異常）。你的訊息已保留，請重新發送以再試一次。';
+
 async function chatReply(projectId, chatId, userMessage, userId) {
   const { rows: history } = await query(
     'SELECT role, content FROM project_chat_messages WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 10',
@@ -38,37 +42,66 @@ async function chatReply(projectId, chatId, userMessage, userId) {
     'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
     [chatId, 'user', userMessage]
   );
+  // 標記「回覆進行中」：前端據此顯示持續動畫（離開對話再回來也還在，因為是 server 狀態而非本地 state）。
+  // 清除一律走下方 finally，確保成功／失敗／任何 throw 都不會留下卡住的 pending。
+  await query('UPDATE project_chats SET reply_pending = true WHERE id = $1', [chatId]);
 
-  let chatResult;
   try {
-    chatResult = await runClaude(prompt, { model: agent.model, agentType: 'chat' });
-  } catch (err) {
-    await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
-    throw err;
-  }
-  await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
+    let chatResult;
+    try {
+      chatResult = await runClaude(prompt, { model: agent.model, agentType: 'chat' });
+    } catch (err) {
+      await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
+      // 中斷也要讓 AI 方留一則訊息（role='ai' 自動計入未讀）：否則使用者的提問就這樣懸著、
+      // 既無回覆也無任何線索。process 直接崩潰的情形由啟動時 recoverInterruptedChats 兜底。
+      await query(
+        'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
+        [chatId, 'ai', CHAT_INTERRUPTED_MSG]
+      );
+      throw err;
+    }
+    await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
 
-  // 兩個選用側通道，剝掉再顯示、內容各自旁路處理，解析或寫入失敗都不得影響對話回覆本身（Rule 12）：
-  //  <memory>    釐清出可留存的結論 → 寫回 wiki 疑難排解區
-  //  <wiki-drift> 讀碼發現某 wiki 頁與程式碼矛盾（頁錯、碼對）→ 入漂移佇列供健檢彙整（不自動改文件）
-  const mem = extractMemoryBlock(chatResult.text);
-  const drift = extractDriftBlock(mem.cleaned);
-  const reply = drift.cleaned || '（無回覆）';
-  if (mem.entry) {
-    try { await recordTroubleshooting(projectId, mem.entry); }
-    catch (err) { console.error(`[CHAT-AGENT] troubleshooting 寫回失敗 chat ${chatId}:`, err.message); }
-  }
-  if (drift.entry) {
-    try { await enqueueWikiDrift({ projectId, userId, source: 'chat', slug: drift.entry.slug, reason: drift.entry.reason }); }
-    catch (err) { console.error(`[CHAT-AGENT] wiki-drift 入列失敗 chat ${chatId}:`, err.message); }
-  }
+    // 兩個選用側通道，剝掉再顯示、內容各自旁路處理，解析或寫入失敗都不得影響對話回覆本身（Rule 12）：
+    //  <memory>    釐清出可留存的結論 → 寫回 wiki 疑難排解區
+    //  <wiki-drift> 讀碼發現某 wiki 頁與程式碼矛盾（頁錯、碼對）→ 入漂移佇列供健檢彙整（不自動改文件）
+    const mem = extractMemoryBlock(chatResult.text);
+    const drift = extractDriftBlock(mem.cleaned);
+    const reply = drift.cleaned || '（無回覆）';
+    if (mem.entry) {
+      try { await recordTroubleshooting(projectId, mem.entry); }
+      catch (err) { console.error(`[CHAT-AGENT] troubleshooting 寫回失敗 chat ${chatId}:`, err.message); }
+    }
+    if (drift.entry) {
+      try { await enqueueWikiDrift({ projectId, userId, source: 'chat', slug: drift.entry.slug, reason: drift.entry.reason }); }
+      catch (err) { console.error(`[CHAT-AGENT] wiki-drift 入列失敗 chat ${chatId}:`, err.message); }
+    }
 
-  await query(
-    'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
-    [chatId, 'ai', reply]
-  );
+    await query(
+      'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
+      [chatId, 'ai', reply]
+    );
 
-  return reply;
+    return reply;
+  } finally {
+    await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [chatId]);
+  }
 }
 
-module.exports = { chatReply };
+// server 啟動時呼叫：process 若在 chatReply 執行到一半崩潰/被重啟，reply_pending 會永遠停在 true
+//（finally 沒機會跑），前端就一直轉圈。啟動代表舊的處理程序已死，把這些孤兒對話補上中斷訊息並清除
+// pending。單一平台實例假設下，啟動當下的 pending 必為死掉的前世遺留（見 deployment-topology）。
+async function recoverInterruptedChats() {
+  const { rows } = await query('SELECT id FROM project_chats WHERE reply_pending = true');
+  for (const c of rows) {
+    await query(
+      'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
+      [c.id, 'ai', CHAT_INTERRUPTED_MSG]
+    );
+    await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [c.id]);
+  }
+  if (rows.length) console.log(`[CHAT] 啟動修復：已為 ${rows.length} 個中斷的對話補上中斷訊息`);
+  return rows.length;
+}
+
+module.exports = { chatReply, recoverInterruptedChats, CHAT_INTERRUPTED_MSG };

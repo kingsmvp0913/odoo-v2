@@ -12,11 +12,13 @@ window.ProjectChatView = Vue.defineComponent({
       draftingTask: false,
       showTaskModal: false,
       taskDraft: { title: '', original_text: '' },
-      creatingTask: false
+      creatingTask: false,
+      replyPending: false,   // 後端 reply_pending：離開對話再回來仍能看到「回覆進行中」動畫
+      _pollTimer: null
     };
   },
   async created() { await this.loadChats(); },
-  beforeUnmount() { this._gone = true; },
+  beforeUnmount() { this._gone = true; this.stopReplyPoll(); },
   methods: {
     // 新手教程的示範專案：對話內容來自 tour-demo.js，不打 API
     isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
@@ -39,13 +41,40 @@ window.ProjectChatView = Vue.defineComponent({
     async loadMessages() {
       if (!this.activeChat) return;
       if (this.isTourDemo()) { this.messages = window.TourDemo.chatMessages(); return; }
+      this.stopReplyPoll();   // 切換／重載前先停掉舊對話的輪詢
       this.loadingMsgs = true;
       try {
         this.messages = await Api.get(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`);
+        this.replyPending = !!this.activeChat.reply_pending;
         this.$nextTick(() => this.scrollToBottom());
         await this.markRead(this.activeChat);
+        // 這則對話的回覆仍在後端進行中（可能是別的分頁／上一次離開時送出的）→ 輪詢等它落地
+        if (this.replyPending) this.startReplyPoll();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loadingMsgs = false; }
+    },
+    // 回覆進行中時每 3 秒回抓對話清單，看 active 對話的 reply_pending 是否已清除；清除即代表回覆
+    // （或中斷訊息）已落地，重載訊息顯示出來並收掉輪詢。
+    startReplyPoll() {
+      if (this._pollTimer || this.isTourDemo()) return;
+      this._pollTimer = setInterval(async () => {
+        if (this._gone || !this.activeChat) return this.stopReplyPoll();
+        const pid = this.$route.params.id;
+        let chats;
+        try { chats = await Api.get(`projects/${pid}/chats`); }
+        catch (e) { return; }   // 暫時抓不到就下一輪再試，不中斷輪詢
+        this.chats = chats;
+        const ac = chats.find(c => String(c.id) === String(this.activeChat.id));
+        if (ac) this.activeChat = ac;
+        if (!ac || !ac.reply_pending) {
+          this.stopReplyPoll();
+          await this.loadMessages();   // 落地後重載並 markRead（此時 reply_pending 已 false，不會再起輪詢）
+        }
+      }, 3000);
+    },
+    stopReplyPoll() {
+      if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+      this.replyPending = false;
     },
     async markRead(chat) {
       if (!chat || this.isTourDemo()) return;
@@ -157,6 +186,7 @@ window.ProjectChatView = Vue.defineComponent({
                :style="{ background: activeChat && activeChat.id === c.id ? 'var(--primary-light,#ebf4ff)' : '' }"
                @click="selectChat(c)">
             <span style="font-size:var(--fs-base);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">{{ c.title }}</span>
+            <span v-if="c.reply_pending" title="回覆進行中" style="margin-left:var(--space-1);flex-shrink:0;color:var(--text-muted);animation:pulse 1.2s ease-in-out infinite">●</span>
             <span v-if="c.unread" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center;flex-shrink:0">{{ c.unread }}</span>
             <button class="btn btn-outline btn-sm"
                     style="font-size:var(--fs-2xs);padding:1px 5px;margin-left:var(--space-1);color:var(--error);flex-shrink:0"
@@ -194,7 +224,7 @@ window.ProjectChatView = Vue.defineComponent({
                 {{ m.role === 'user' ? '你' : '🤖 AI' }} · {{ formatTime(m.created_at) }}
               </div>
             </div>
-            <div v-if="sending" style="display:flex;justify-content:flex-start">
+            <div v-if="sending || replyPending" style="display:flex;justify-content:flex-start">
               <div style="padding:8px 14px;border-radius:10px;background:var(--surface);border:1px solid var(--border);font-size:var(--fs-base);color:var(--text-muted);display:flex;align-items:center;gap:6px">
                 <span style="animation:pulse 1.2s ease-in-out infinite">●</span>
                 <span style="animation:pulse 1.2s ease-in-out infinite 0.3s">●</span>
