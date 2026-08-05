@@ -93,7 +93,7 @@ const StatusBar = Vue.defineComponent({
 
 window.TaskListView = Vue.defineComponent({
   name: 'TaskListView',
-  components: { StatusBar },
+  components: { StatusBar, SearchableSelect: window.SearchableSelect },
   data() {
     return {
       tasks: [],
@@ -116,7 +116,14 @@ window.TaskListView = Vue.defineComponent({
       adding: false,
       projects: [],
       newTask: { title: '', original_text: '', project_id: '' },
-      newFiles: []
+      newFiles: [],
+      // 結構化篩選（client-side AND 疊加）
+      projectFilter: '',
+      ownerFilter: '',
+      statusFilter: '',
+      sourceFilter: '',
+      showAllUsers: false,   // 預設 false＝只看自己（管理者需手動開）
+      users: [],             // admin 全部使用者清單（/api/admin/users）
     };
   },
   computed: {
@@ -135,22 +142,25 @@ window.TaskListView = Vue.defineComponent({
       else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
       else if (this.filter === 'pending')      list = this.tasks.filter(t => !t.is_paused && t.status !== 'done');
       else                                     list = this.tasks; // 全部 = 含暫停中
-      return this.applySort(list.filter(t => this.matchSearch(t) && this.matchRelease(t)));
+      return this.applySort(list.filter(t => this.matchAll(t)));
     },
     // 全域導覽 badge 用：不受列表搜尋影響（見 needsActionCount watcher）
     needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
     // 標籤 badge 用：與 filteredTasks 一致套用搜尋關鍵字與上正式篩選，篩選後即時反映各分類命中數
-    needsActionShown() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchSearch(t) && this.matchRelease(t)).length; },
-    pendingShown() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done' && this.matchSearch(t) && this.matchRelease(t)).length; },
-    pausedShown()  { return this.tasks.filter(t => t.is_paused && this.matchSearch(t) && this.matchRelease(t)).length; },
-    allShown()     { return this.tasks.filter(t => this.matchSearch(t) && this.matchRelease(t)).length; },
+    needsActionShown() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchAll(t)).length; },
+    pendingShown() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done' && this.matchAll(t)).length; },
+    pausedShown()  { return this.tasks.filter(t => t.is_paused && this.matchAll(t)).length; },
+    allShown()     { return this.tasks.filter(t => this.matchAll(t)).length; },
     allSelected() {
       return this.filteredTasks.length > 0 && this.filteredTasks.every(t => this.selectedIds.includes(t.id));
-    }
+    },
+    projectOptions() { return this.projects.map(p => ({ value: p.id, label: p.name })); },
+    ownerOptions() { return this.users.map(u => ({ value: u.id, label: u.display_name || u.username })); },
+    statusOptions() { return Object.keys(STATUS_LABELS).map(s => ({ value: s, label: STATUS_LABELS[s] })); },
   },
   watch: {
-    needsActionCount(v) { window.needsActionCount.value = v; },
+    needsActionCount(v) { if (!this.showAllUsers) window.needsActionCount.value = v; },
     filter() { this.selectedIds = []; this.batchMode = false; this.load(); }
   },
   async created() {
@@ -160,7 +170,10 @@ window.TaskListView = Vue.defineComponent({
       this.odooUrl = r.odoo_url || '';
       this.serviceUrl = r.service_url || '';
     }).catch(() => {});
-    Api.get('auth/me').then(r => { this.isAdmin = r.role === 'admin'; }).catch(() => {});
+    Api.get('auth/me').then(r => {
+      this.isAdmin = r.role === 'admin';
+      if (this.isAdmin) Api.get('admin/users').then(u => { this.users = u || []; }).catch(() => {});
+    }).catch(() => {});
     Api.get('projects').then(r => { this.projects = r || []; }).catch(() => {});
   },
   mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
@@ -183,6 +196,17 @@ window.TaskListView = Vue.defineComponent({
       if (this.releaseFilter === 'pending_release') return !!t.approved_at && !t.merged_to_main_at;
       return true;
     },
+    matchProject(t) { return !this.projectFilter || String(t.project_id) === String(this.projectFilter); },
+    matchOwner(t)   { return !this.ownerFilter   || String(t.owner_id) === String(this.ownerFilter); },
+    matchStatus(t)  { return !this.statusFilter  || t.status === this.statusFilter; },
+    matchSource(t)  { return !this.sourceFilter  || t.source === this.sourceFilter; },
+    matchAll(t) { return this.matchSearch(t) && this.matchRelease(t) && this.matchProject(t) && this.matchOwner(t) && this.matchStatus(t) && this.matchSource(t); },
+    clearFilters() { this.search=''; this.releaseFilter='all'; this.projectFilter=''; this.ownerFilter=''; this.statusFilter=''; this.sourceFilter=''; },
+    async toggleAllUsers() {
+      this.showAllUsers = !this.showAllUsers;
+      if (!this.showAllUsers) this.ownerFilter = '';
+      await this.load();
+    },
     async load() {
       this.loading = true;
       try {
@@ -190,9 +214,9 @@ window.TaskListView = Vue.defineComponent({
           const data = await Api.get('tasks?archived=true');
           this.archivedTasks = data.tasks || data;
         } else {
-          const data = await Api.get('tasks');
+          const data = await Api.get(this.showAllUsers ? 'tasks?all=true' : 'tasks');
           this.tasks = data.tasks || data;
-          window.needsActionCount.value = this.needsActionCount;
+          if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount;
         }
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
@@ -409,9 +433,9 @@ window.TaskListView = Vue.defineComponent({
       finally { this.batchWorking = false; }
     },
     refresh() {
-      Api.get('tasks').then(data => {
+      Api.get(this.showAllUsers ? 'tasks?all=true' : 'tasks').then(data => {
         this.tasks = data.tasks || data;
-        window.needsActionCount.value = this.needsActionCount;
+        if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount;
       }).catch(() => {});
       if (this.filter === 'archived') {
         Api.get('tasks?archived=true').then(data => { this.archivedTasks = data.tasks || data; }).catch(() => {});
@@ -448,16 +472,31 @@ window.TaskListView = Vue.defineComponent({
           全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
-        <input v-model="search" placeholder="搜尋任務標題、來源..." class="form-control"
-          style="width:240px;font-size:var(--fs-base);padding:5px 10px;height:32px" />
-        <select v-model="releaseFilter" class="form-control" title="是否已合併到正式 main"
-          style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
-          <option value="all">全部</option>
+      </div>
+
+      <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center">
+        <button v-if="isAdmin" class="btn btn-sm" :class="showAllUsers ? 'btn-primary' : 'btn-outline'" @click="toggleAllUsers">
+          👥 {{ showAllUsers ? '全部使用者' : '只看自己' }}
+        </button>
+        <SearchableSelect v-if="isAdmin && showAllUsers" v-model="ownerFilter" :options="ownerOptions" placeholder="使用者" all-label="全部使用者" />
+        <SearchableSelect v-model="projectFilter" :options="projectOptions" placeholder="專案" all-label="全部專案" />
+        <select v-model="statusFilter" class="form-control" title="狀態" style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
+          <option value="">全部狀態</option>
+          <option v-for="o in statusOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <select v-model="sourceFilter" class="form-control" title="來源" style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
+          <option value="">全部來源</option>
+          <option value="odoo">Odoo</option>
+          <option value="service">eService</option>
+          <option value="manual">手動增加</option>
+        </select>
+        <select v-model="releaseFilter" class="form-control" title="是否已合併到正式 main" style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
+          <option value="all">全部（上正式）</option>
           <option value="released">已上正式</option>
           <option value="pending_release">待上正式</option>
         </select>
-        <select v-model="sort" class="form-control" title="排序方式"
-          style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
+        <input v-model="search" placeholder="搜尋標題、來源…" class="form-control" style="width:200px;font-size:var(--fs-base);padding:5px 10px;height:32px" />
+        <select v-model="sort" class="form-control" title="排序方式" style="width:auto;font-size:var(--fs-base);padding:5px 10px;height:32px">
           <option value="updated_desc">最近更新</option>
           <option value="updated_asc">最早更新</option>
           <option value="created_desc">最新建立</option>
@@ -465,6 +504,7 @@ window.TaskListView = Vue.defineComponent({
           <option value="title_asc">標題 A→Z</option>
           <option value="status_asc">依狀態</option>
         </select>
+        <button class="btn btn-outline btn-sm" @click="clearFilters" title="清除所有篩選">✕ 清除篩選</button>
       </div>
 
       <div v-if="batchMode" style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base)">
@@ -534,6 +574,9 @@ window.TaskListView = Vue.defineComponent({
             <span v-if="t.project_id && t.project_name" class="proj-chip"
                   @click.stop="$router.push('/projects/' + t.project_id)">
               {{ t.project_name }}
+            </span>
+            <span v-if="showAllUsers && t.owner_name" class="proj-chip" style="cursor:default" @click.stop>
+              👤 {{ t.owner_name }}
             </span>
             <a v-if="t.env_status" href="#" @click.stop.prevent="openEnv(t)" class="env-chip">
               🖥 測試機
