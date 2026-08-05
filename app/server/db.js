@@ -195,6 +195,15 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 每人各自一份的「我的最愛」專案（專案列表置頂用）。無 project_members 表、專案共享是既有設計，
+    // 故最愛只能是 per-user；複合主鍵即天然去重、同一人同一專案不會重複收藏。
+    `CREATE TABLE IF NOT EXISTS project_favorites (
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, project_id)
+    )`,
+
     `CREATE TABLE IF NOT EXISTS teams_settings (
       id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
       tenant_id       TEXT,
@@ -521,6 +530,9 @@ async function migrate() {
     { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" },
     { table: 'project_chats', col: 'user_id', sql: 'ALTER TABLE project_chats ADD COLUMN user_id INTEGER REFERENCES users(id)' },
     { table: 'project_chats', col: 'last_read_message_id', sql: 'ALTER TABLE project_chats ADD COLUMN last_read_message_id INTEGER NOT NULL DEFAULT 0' },
+    // 回覆進行中旗標：前端據此顯示持續動畫（server 狀態，離開對話再回來仍在）。唯一寫 true 的地方是
+    // chatReply 開始跑 claude 前；成功／失敗／崩潰都會被清回 false（finally 或啟動時 recoverInterruptedChats）。
+    { table: 'project_chats', col: 'reply_pending', sql: 'ALTER TABLE project_chats ADD COLUMN reply_pending BOOLEAN NOT NULL DEFAULT false' },
     { table: 'db_connections', col: 'ssh_key_enc', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_key_enc TEXT' },
     // direct 連線模式（DBeaver 直連 TCP）：不經 SSH，pg 直連
     { table: 'db_connections', col: 'db_host',         sql: 'ALTER TABLE db_connections ADD COLUMN db_host TEXT' },
