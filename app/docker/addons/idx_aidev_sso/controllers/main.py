@@ -11,6 +11,12 @@ from odoo import fields, http
 from odoo.http import request
 
 
+# 16x16 灰底 PNG，作為 JIT 建帳號的佔位頭像（見 sso() 內註解：避開 hr_attendance 空集合核心 bug）。
+_PLACEHOLDER_AVATAR = (
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGOsqKhgIAUwkaR6VMOohiGlAQB//AGI+wtSTgAAAABJRU5ErkJggg=='
+)
+
+
 def _b64url_decode(s):
     return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
 
@@ -82,9 +88,17 @@ class AidevSso(http.Controller):
         user = Users.search([('login', '=', data['login'])], limit=1)
         if not user:
             gid = request.env.ref('base.group_system').id
+            # image_1920 必須在 create 當下就給值：內部使用者若無頭像，base res_users.create 會在
+            # create 後自動補一張 initials 頭像（`user.image_1920 = ...`），這個「後寫」會打進
+            # hr.res_users.write 的 image 分支，對「此新 user 還沒有的 hr.employee 空集合」做 write，
+            # 一路觸發 Odoo 19 hr_attendance._clean_attendance_officers 在空 recordset 上的核心 bug
+            # （TypeError: inconsistent models res.users() - hr.employee()）→ 只要 login 是尚未 seed 的
+            # 真人使用者、且環境裝了 hr_attendance（如 odoo19_HRM），JIT 建帳號就 500。預先給一張
+            # 佔位頭像讓 `not user.image_1920` 為 False，跳過那個後寫即繞開崩潰。
             user = Users.create({
                 'login': data['login'],
                 'name': data.get('name') or data['login'],
+                'image_1920': _PLACEHOLDER_AVATAR,
                 gfield: [(4, gid)],
             })
         _login_as(user)
