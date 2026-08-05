@@ -3,7 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
@@ -369,6 +369,18 @@ async function doDeploy(task, taskId, userId, signal) {
       return;
     }
     // err 被自動補裝清掉 → 落到下方成功流程
+  }
+
+  // 升級成功後重啟常駐容器：docker exec -u 的一次性進程只改了 DB，常駐 server 仍持進程啟動時 import 的
+  // registry 與 Python controllers——新增/改動的 controller(HTTP 路由)不重啟不生效、開測試區報錯，使用者
+  // 被迫手動重啟。重啟以原 CMD 重跑、重新 import 所有已裝模組 controllers。重啟失敗不阻斷部署（碼已進 DB），
+  // 只發一行提示；E2E tour 走自己的 exec http server、不受此重啟影響。
+  if (signal?.aborted) return;
+  try {
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: '[DEPLOY] 升級成功，重啟測試環境套用新碼...\n' });
+    await restartEnv(task.project_id);
+  } catch (e) {
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] 重啟測試環境失敗（不阻斷部署，必要時可手動重建）：${e.message}\n` });
   }
 
   // 部署成功：歸零 deploy_retry_count（健檢 F9：舊版成功不歸零，新 bug 首次部署失敗即被前輪累計推爆、

@@ -92,6 +92,51 @@ function waitForPort(port, timeoutMs = HEALTH_TIMEOUT_MS, intervalMs = 1000, hos
   });
 }
 
+// waitForPort 只證明「TCP 埠已綁上」，但 Odoo 的 ThreadedServer 是「先 start() 綁 http port、再
+// preload_registries() 跑 -i 安裝」——base 尚未裝完埠就已在監聽，純 TCP 探測會提早放行。seed 是另一個
+// odoo shell 進程、從 DB 重載自己的 registry，若此時 base 還沒 commit 進 DB，seed 會拿到半成品 registry
+// → env['res.users'] KeyError，隨後移除容器又連帶中止安裝（DB 只剩最早的 orm_signaling_* 表）。有 pip
+// 相依的專案因 installModuleRequirements 的耗時剛好遮住這個 race；純 base 專案沒有這段延遲必中。
+// 故在 seed 前補一道「DB 裡 -i 的模組真的 installed」的就緒閘。連的是測試 DB（test_<dirName>，與平台 DB
+// 同台 postgres、不同 database），故另建連線；DATABASE_URL 未設時無從查→放行(fail-open)。deps.createClient
+// 供單元測試注入假 client。回 true=就緒、false=逾時未就緒。
+async function waitForModulesInstalled({ dbName, modules, timeoutMs = HEALTH_TIMEOUT_MS, intervalMs = 1000 }, deps = {}) {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) return true; // 無連線資訊，無從把關 → 放行（單元測試以 deps.createClient 覆蓋此路徑）
+  const createClient = deps.createClient || (() => {
+    const { Client } = require('pg');
+    const u = new URL(rawUrl);
+    u.pathname = '/' + dbName;
+    return new Client({ connectionString: u.toString() });
+  });
+  const want = modules.length;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let installed = -1;
+    const client = createClient();
+    try {
+      await client.connect();
+      const { rows } = await client.query(
+        "SELECT count(*)::int AS n FROM ir_module_module WHERE name = ANY($1) AND state = 'installed'",
+        [modules]
+      );
+      installed = rows[0] ? rows[0].n : 0;
+    } catch {
+      // 新 DB 在 base 建表前查 ir_module_module 會 42P01（relation 不存在），或連線瞬間未就緒 → 視為未就緒續等
+      installed = -1;
+    } finally {
+      try { await client.end(); } catch { /* ignore */ }
+    }
+    if (installed >= want) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
+// 測試注入用：讓全流程測試在不連真 DB 下確定性地控制就緒閘（比照 db.js 的 _setPoolForTesting）。
+let _moduleReadyCheck = null;
+function _setModuleReadyCheckForTesting(fn) { _moduleReadyCheck = fn; }
+
 // 從 app 的 DATABASE_URL 推導 Odoo DB 連線參數，讓測試機連到同一台 PostgreSQL（否則 Odoo 預設連 localhost:5432 無密碼會失敗）
 function odooDbArgs() {
   const raw = process.env.DATABASE_URL;
@@ -290,6 +335,23 @@ async function upgradeModules(projectId, modules, signal) {
   }, { signal });
   if (code !== 0) { throw _execError(stderr || stdout || 'docker upgrade failed', { code, timedOut, stdout, stderr }); }
   return { ok: true, log: (stdout || '') + (stderr || '') };
+}
+
+// 重啟常駐測試容器，讓「進程啟動時才 import」的東西重載——升級走 docker exec 一次性進程(--stop-after-init)
+// 只改了 DB，常駐 server(綁 8069 那個)仍持舊的 registry 與 Python controllers；新增/改動的 controller(HTTP
+// 路由)不重啟不生效，使用者開測試區報錯需手動重啟。restart 以原 CMD 重跑，重新 import 所有已裝模組的
+// controllers 並 reload registry。等埠重新監聽才回；容器未運行→跳過（無常駐 server 可重啟，下次開測試區走建置）。
+async function restartEnv(projectId) {
+  const ctx = await dockerCtxFor(projectId);
+  if (!ctx) throw new Error('project not found');
+  if (!(await dockerEnv.containerRunning(ctx.container))) return { ok: false, skipped: 'not_running' };
+  await dockerEnv.restartContainer(ctx.container);
+  const port = ctx.project.port;
+  const envHost = envBindHost(port);
+  if (!await waitForPort(port, HEALTH_TIMEOUT_MS, 1000, envHost)) {
+    throw new Error(`測試環境重啟後埠 ${port} 未進入監聽`);
+  }
+  return { ok: true };
 }
 
 // E2E via tour：與升級同一條 odoo-bin 指令，加 --test-enable 觸發 tour、--test-tags 只跑本模組測試。
@@ -638,6 +700,17 @@ async function _runEnvSetupDocker(projectId) {
     await dockerEnv.removeContainer(ctx.container);
     return _failEnv(projectId, `Odoo 容器啟動逾時：埠 ${port} 未進入監聽`, log);
   }
+  // 埠通了不等於 registry 就緒：Odoo 綁 port 早於 preload_registries 跑完 -i 安裝（見 waitForModulesInstalled
+  // 註解）。seed 是獨立 odoo shell、從 DB 重載 registry，base 沒裝完就會 KeyError res.users。故在此把關：
+  // DB 裡 -i 的模組真的 installed 才放行；未就緒即中止且不寫 .docker-ready，讓下次仍以 firstBuild 重跑 -i base 自癒。
+  const wantModules = firstBuild ? ['base', 'idx_aidev_sso'] : ['idx_aidev_sso'];
+  const readyCheck = _moduleReadyCheck || waitForModulesInstalled;
+  if (!await readyCheck({ dbName: ctx.dbName, modules: wantModules, timeoutMs: firstBuild ? Math.max(HEALTH_TIMEOUT_MS, 300000) : HEALTH_TIMEOUT_MS })) {
+    log += `[docker] registry 未就緒：${ctx.dbName} 內 ${wantModules.join(',')} 未於期限內全部 installed（base 安裝未完成即被放行是舊 race 的根因）\n`;
+    log += `容器 log：\n${await dockerEnv.containerLogs(ctx.container).catch(() => '')}`;
+    await dockerEnv.removeContainer(ctx.container);
+    return _failEnv(projectId, `Odoo 模組安裝未完成（${wantModules.join('/')} 未就緒），已於 seed 前中止`, log);
+  }
   if (firstBuild) { try { fs.writeFileSync(readyMarker, new Date().toISOString()); } catch { /* 非致命 */ } }
 
   // 4) 補裝自訂模組 Python 相依（image 未內建）＋ seed users
@@ -722,4 +795,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, ENV_BASE, runtimeLogPath, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, restartEnv, ENV_BASE, runtimeLogPath, dockerCtxFor };

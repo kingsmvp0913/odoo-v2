@@ -8,7 +8,8 @@ jest.mock('../pipeline/env-agent', () => ({
   installModuleRequirements: jest.fn(),
   getDeclaredPythonDeps: jest.fn(),
   installPythonPackage: jest.fn(),
-  runEnvSetup: jest.fn()
+  runEnvSetup: jest.fn(),
+  restartEnv: jest.fn().mockResolvedValue({ ok: true })
 }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
 jest.mock('../pipeline/git', () => ({
@@ -144,6 +145,7 @@ beforeEach(async () => {
   envAgent.getDeclaredPythonDeps.mockReset().mockResolvedValue(new Set());
   envAgent.installPythonPackage.mockReset().mockResolvedValue({ ok: true, log: '[pip-fix] OK\n' });
   envAgent.runEnvSetup.mockReset();
+  envAgent.restartEnv.mockReset().mockResolvedValue({ ok: true });
   require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   const git = require('../pipeline/git');
   git.discardPyc.mockReset().mockResolvedValue(undefined);
@@ -174,6 +176,18 @@ test('env 運行 + 升級成功 → playwright_running', async () => {
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('playwright_running');
   expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale'], undefined);
+  // 升級成功必須重啟常駐容器，否則常駐 server 仍持舊 controllers，新路由開測試區報錯（手動重啟才好）
+  expect(envAgent.restartEnv).toHaveBeenCalledWith(projectId);
+});
+
+test('升級成功但重啟失敗 → 不阻斷部署，仍進 playwright_running（碼已進 DB）', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+  envAgent.restartEnv.mockRejectedValue(new Error('重啟後埠未監聽'));
+  const id = await makeTask();
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('playwright_running');
 });
 
 test('專案停用 E2E + 升級成功 → 跳過 tour，直接 review_pending 並留痕跡', async () => {
@@ -252,6 +266,8 @@ test('升級失敗未達上限 → coding_running、計數+1', async () => {
   const { rows: [t] } = await dbModule.query('SELECT status, deploy_retry_count FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(t.deploy_retry_count).toBe(1);
+  // 升級失敗（退 coding）不該重啟——重啟只在部署成功漏斗
+  expect(envAgent.restartEnv).not.toHaveBeenCalled();
 });
 
 test('升級失敗第 3 次（code 類）→ stopped', async () => {
