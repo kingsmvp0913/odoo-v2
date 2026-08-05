@@ -120,6 +120,30 @@ async function diffNameOnly(repoPath, baseBranch, branch) {
   return stdout.split('\n').map(s => s.trim()).filter(Boolean);
 }
 
+// 審核通過後任務分支已刪，但 mergeToAiBranch 的 --no-ff 在 ai-dev 留下一個
+// 「Merge branch '<branch>'」commit——用分支名回頭撈那個 merge，分支消失後仍能還原本任務改動。
+// --fixed-strings：分支名含 /，避免被當 regex；grep 帶結尾單引號，foo 不會誤中 foobar。
+// 找不到（跨實例 approve、本機 ai-dev 尚未 fetch 到該 merge）→ 回 null，由呼叫端當「無可打包」。
+async function findAiMergeCommit(repoPath, branchName, aiBranch) {
+  try {
+    const { stdout } = await execFileAsync(
+      'git', ['log', '--merges', '--format=%H', '--fixed-strings', `--grep=Merge branch '${branchName}'`, aiBranch],
+      { cwd: repoPath, maxBuffer: 4 * 1024 * 1024 }
+    );
+    return stdout.split('\n').map(s => s.trim()).filter(Boolean)[0] || null;
+  } catch { return null; }
+}
+
+// 讀某 commit/tree 下單一檔的原始位元組（binary-safe，供 code-zip 在 worktree 已清時取檔案內容）。
+// 檔案不存在於該 tree（本任務刪除的檔）→ git show 非零退出，往外拋給呼叫端當「已刪除」處理。
+async function showBlob(repoPath, ref, relPath) {
+  const { stdout } = await execFileAsync(
+    'git', ['show', `${ref}:${relPath}`],
+    { cwd: repoPath, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }
+  );
+  return stdout;
+}
+
 // repo 是否已有任何 commit（unborn HEAD → false）
 async function hasCommits(repoPath) {
   try {
@@ -601,4 +625,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };

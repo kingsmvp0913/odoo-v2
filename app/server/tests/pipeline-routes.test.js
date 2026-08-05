@@ -27,7 +27,9 @@ jest.mock('../pipeline/git', () => ({
   getMainBranch: jest.fn().mockResolvedValue('main'),
   AI_BRANCH: 'ai-dev',
   diffNameOnly: jest.fn().mockResolvedValue([]),
-  refExists: jest.fn().mockResolvedValue(true)
+  refExists: jest.fn().mockResolvedValue(true),
+  findAiMergeCommit: jest.fn().mockResolvedValue(null),
+  showBlob: jest.fn().mockResolvedValue(Buffer.from(''))
 }));
 jest.mock('../pipeline/rebuild-testing', () => ({
   rebuildTesting: jest.fn().mockResolvedValue(null),
@@ -799,6 +801,65 @@ test('code-zip → 沒有可打包的檔時回 400，不得送出空 zip', async
 
   expect(res.status).toBe(400);
   expect(res.body.error).toContain('沒有可打包');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
+});
+
+// 意圖：審核通過後任務分支與 worktree 都被刪，過去只會回「無可打包」＝按鈕還在卻下載失敗。
+// 現在改從併入 ai-dev 的 merge commit 還原本任務改動：分支不在時走 merge 路徑，內容取自 git blob
+// 而非 worktree，且被刪檔仍列 deleted、之後被 ai-dev 動過的檔仍列 stale。
+test('code-zip → 審核後分支已刪，改從 ai-dev 的 merge commit 打包', async () => {
+  const { diffNameOnly, refExists, findAiMergeCommit, showBlob } = require('../pipeline/git');
+  refExists.mockResolvedValue(false);              // 任務分支已刪＝審核後
+  findAiMergeCommit.mockResolvedValue('deadbeef');
+  const taskKey = 'task_cto_merged';
+  const branch = `task/${taskKey}`;
+  diffNameOnly.mockImplementation(async (_p, base, head) => {
+    if (base === 'deadbeef^1' && head === 'deadbeef') return ['idx_demo/models/sale_order.py', 'idx_demo/models/gone.py'];
+    if (base === 'deadbeef' && head === 'ai-dev')      return ['idx_demo/models/sale_order.py'];
+    return [];
+  });
+  showBlob.mockImplementation(async (_p, _sha, rel) => {
+    if (rel === 'idx_demo/models/gone.py') throw new Error('path does not exist in tree'); // 本任務刪除的檔
+    return Buffer.from('# blob ' + rel);
+  });
+
+  // 審核後 worktree 已刪：fixture 只給主 clone，不建 .worktrees——內容一律走 git blob
+  const { tmp, localPath } = makeZipFixture('ctomerged-', taskKey, {});
+  const id = await insertZipTask('CTOMERGED', taskKey, localPath);
+
+  const res = await zipReq(id);
+  expect(res.status).toBe(200);
+  expect(findAiMergeCommit).toHaveBeenCalledWith(localPath, branch, 'ai-dev');
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries'])))
+    .toEqual(['odoo17_hungjou/idx_demo/models/sale_order.py']);
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-deleted'])))
+    .toEqual(['idx_demo/models/gone.py']);
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-stale'])))
+    .toEqual(['odoo17_hungjou/idx_demo/models/sale_order.py']);
+  // 內容真的來自 blob buffer，且是完整可解的 zip（PK\x03\x04）
+  expect(res.body.slice(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  expect(res.body.toString('latin1')).toContain('odoo17_hungjou/idx_demo/models/sale_order.py');
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
+});
+
+// 意圖：審核後連 merge commit 都撈不到（跨實例 approve、本機 ai-dev 尚未 fetch）→ 仍回 400，
+// 不得送出空 zip；不會比修改前更糟。
+test('code-zip → 審核後撈不到 merge commit 時回 400', async () => {
+  const { refExists, findAiMergeCommit } = require('../pipeline/git');
+  refExists.mockResolvedValue(false);
+  findAiMergeCommit.mockResolvedValue(null);
+  const taskKey = 'task_cto_nomerge';
+  const { tmp, localPath } = makeZipFixture('ctonomerge-', taskKey, {});
+  const id = await insertZipTask('CTONOMERGE', taskKey, localPath);
+
+  const res = await request(app).get(`/api/tasks/${id}/code-zip`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(400);
+  expect(res.body.error).toContain('沒有可打包');
+
   fs.rmSync(tmp, { recursive: true, force: true });
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
 });

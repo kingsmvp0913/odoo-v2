@@ -265,32 +265,48 @@ function registerRoutes(app) {
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
-      const { AI_BRANCH, diffNameOnly, refExists } = require('./pipeline/git');
+      const { AI_BRANCH, diffNameOnly, refExists, findAiMergeCommit, showBlob } = require('./pipeline/git');
       const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
 
       // 先把全部來源檔算完再開始輸出：header 一旦送出就改不回 JSON 錯誤，
       // 中途才失敗只會得到一個半截、解不開的 zip，且瀏覽器照樣顯示下載成功。
-      const entries = []; // { zipPath, srcFile }
+      const entries = []; // { zipPath, srcFile } 或 { zipPath, buf }
       const deleted = []; // 本任務刪除的檔（zip 表達不了刪除，只能請使用者手動移除）
       const stale = [];   // 切點之後 ai-dev 上也被改過的檔＝覆蓋上去會蓋掉別人的改動
       for (const repo of repos) {
-        // 分支已清（多為已審核通過）→ 無 diff／worktree 可打包，略過該 repo
-        if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) continue;
-        // diff 基底＝任務切點 ai-dev：用 main 會把其他已核准、尚未回流 main 的任務改動也打包進來
-        const baseBranch = AI_BRANCH;
-        const wtRepo = path.join(wtParent, path.basename(repo.local_path));
         const repoDir = repoDirName(repo); // 依 repo（git URL 末段）分層：<repoDir>/<repo 內原路徑>
-        const changed = await diffNameOnly(repo.local_path, baseBranch, task.git_branch);
-        // 反向三點 diff＝切點之後 ai-dev 自己的改動。與本任務改動的交集，就是兩邊都動過的檔。
-        const aiSide = await diffNameOnly(repo.local_path, task.git_branch, baseBranch);
-        for (const rel of changed) {
-          const srcFile = path.join(wtRepo, rel);
+        let changed, aiSide, readSrc;
+        if (await refExists(repo.local_path, `refs/heads/${task.git_branch}`)) {
+          // 未審核：任務分支與凍結 worktree 都還在，diff 基底＝任務切點 ai-dev
+          //（用 main 會把其他已核准、尚未回流 main 的任務改動也打包進來），檔案內容取自 worktree。
+          const wtRepo = path.join(wtParent, path.basename(repo.local_path));
+          changed = await diffNameOnly(repo.local_path, AI_BRANCH, task.git_branch);
+          // 反向三點 diff＝切點之後 ai-dev 自己的改動。與本任務改動的交集，就是兩邊都動過的檔。
+          aiSide = await diffNameOnly(repo.local_path, task.git_branch, AI_BRANCH);
           // 只打包本任務真的改過的檔：整包模組目錄會把 worktree 裡「切點當下的舊版」一起送出，
           // 而 worktree 自 analysis 起就凍結，解壓覆蓋等於把期間的人工修正整批退版。
-          if (!fs.existsSync(srcFile)) { deleted.push(rel); continue; }
+          // worktree 內不存在＝本任務刪除的檔。
+          readSrc = (rel) => { const f = path.join(wtRepo, rel); return fs.existsSync(f) ? { srcFile: f } : null; };
+        } else {
+          // 審核通過後任務分支與 worktree 已清：改從併入 ai-dev 的 merge commit 還原本任務改動，
+          // 讓管理員在審核後仍能下 zip 自行佈署（原設計意圖，見上方 258 行註解）。
+          const mergeSha = await findAiMergeCommit(repo.local_path, task.git_branch, AI_BRANCH);
+          if (!mergeSha) continue; // 撈不到 merge（跨實例 approve／已回收）→ 無從打包，略過該 repo
+          // merge 相對第一父（切點側）的改動＝本任務改動；stale＝該 merge 之後 ai-dev 又動過的同檔。
+          changed = await diffNameOnly(repo.local_path, `${mergeSha}^1`, mergeSha);
+          aiSide = await diffNameOnly(repo.local_path, mergeSha, AI_BRANCH);
+          // 從 merge commit 的 tree 直接讀原始位元組；讀不到＝該檔在本任務被刪除。
+          readSrc = async (rel) => {
+            try { return { buf: await showBlob(repo.local_path, mergeSha, rel) }; }
+            catch { return null; }
+          };
+        }
+        for (const rel of changed) {
+          const src = await readSrc(rel);
+          if (!src) { deleted.push(rel); continue; }
           const zipPath = `${repoDir}/${rel}`;
           if (entries.some(e => e.zipPath === zipPath)) continue;
-          entries.push({ zipPath, srcFile });
+          entries.push({ zipPath, ...src });
           if (aiSide.includes(rel)) stale.push(zipPath);
         }
       }
@@ -314,7 +330,11 @@ function registerRoutes(app) {
         res.destroy();
       });
       archive.pipe(res);
-      for (const { zipPath, srcFile } of entries) archive.file(srcFile, { name: zipPath });
+      // buf＝審核後從 merge commit 讀出的位元組（記憶體）；srcFile＝未審核時 worktree 內的檔案路徑。
+      for (const e of entries) {
+        if (e.buf) archive.append(e.buf, { name: e.zipPath });
+        else archive.file(e.srcFile, { name: e.zipPath });
+      }
       await archive.finalize();
     } catch (err) {
       if (res.headersSent) return res.destroy();
