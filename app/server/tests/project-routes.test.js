@@ -57,6 +57,9 @@ jest.mock('../pipeline/git', () => ({
   // ai-dev 基底扶正（reconcileAiBranch）用的一組。預設 refExists=false＝遠端還沒有 ai-dev，
   // 扶正因此直接跳過，既有案例維持原本流程不被干擾；扶正本身另有專屬案例覆蓋。
   AI_BRANCH: 'ai-dev',
+  // 撞名守衛用；給真實行為而非 jest.fn()，否則那道守衛在測試裡形同不存在
+  remoteAiBranchName: (b) => (b ? `ai-dev-${String(b).replace(/\//g, '-')}` : 'ai-dev'),
+  remoteAiRef: jest.fn().mockResolvedValue('ai-dev'),
   refExists: jest.fn().mockResolvedValue(false),
   aiBranchBase: jest.fn().mockResolvedValue(null),
   aiOwnCommits: jest.fn().mockResolvedValue(0),
@@ -538,6 +541,38 @@ test('GET remote-branches：讀不到（私有 repo 無 PAT／網址錯）回 20
   expect(res.body.ok).toBe(false);
   expect(res.body.branches).toEqual([]);
   expect(res.body.reason).toContain('Authentication');
+});
+
+// 意圖：同一客戶 repo 可以被多個專案使用（跟不同主分支平行開發），但兩個專案落在同一條遠端
+// ai 分支上就會互相 force push 覆蓋，而且完全靜默。這道守衛把它變成新增當下就看得到的錯誤。
+test('POST repos：同 repo 同主分支的第二個專案 → 409，並指名是誰佔用', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const url = 'https://example.com/shared.git';
+  const p1 = await mk('clash-first');
+  await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
+
+  const p2 = await mk('clash-second');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
+  expect(res.status).toBe(409);
+  expect(res.body.error).toContain(`#${p1}`);       // 指名佔用者，否則使用者無從查起
+  expect(res.body.error).toContain('ai-dev-kangyue');
+});
+
+test('POST repos：同 repo 但不同主分支 → 放行（這正是要支援的平行開發）', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const url = 'https://example.com/parallel.git';
+  const p1 = await mk('parallel-a');
+  await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
+
+  const p2 = await mk('parallel-b');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'main' });
+  expect(res.status).toBe(201);
 });
 
 test('POST repos：選定的主分支要寫進 DB（之後不能改，寫錯就永久錯）', async () => {

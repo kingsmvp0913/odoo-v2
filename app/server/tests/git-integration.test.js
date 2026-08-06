@@ -312,8 +312,9 @@ test('ensureAiBranch：本地與遠端都沒有 → 從 main 建立、內容相�
   const { stdout: m } = await sh(repo, 'rev-parse', 'main');
   expect(a.trim()).toBe(m.trim());
   // 已推上遠端：使用者要在 GitHub 上看得到並合併它
-  const { stdout: remote } = await sh(repo, 'ls-remote', '--heads', 'origin', 'ai-dev');
-  expect(remote).toContain('refs/heads/ai-dev');
+  // 遠端名帶主分支後綴（本地仍是 ai-dev）：同一 repo 被多個專案用時才不會互相覆蓋
+  const { stdout: remote } = await sh(repo, 'ls-remote', '--heads', 'origin');
+  expect(remote).toContain('refs/heads/ai-dev-main');
 }, 30000);
 
 test('ensureAiBranch：已存在 → 冪等，不改動 SHA', async () => {
@@ -399,8 +400,8 @@ test('mergeToAiBranch：併入 ai-dev 並推遠端，實體 main 完全不動', 
   const { stdout: files } = await sh(repo, 'ls-tree', '-r', '--name-only', 'ai-dev');
   expect(files.split('\n')).toContain('feat.py');
   expect(fs.existsSync(path.join(repo, 'feat.py'))).toBe(true);
-  // 推上遠端 ai-dev
-  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev');
+  // 推上遠端（本地 ai-dev ↔ 遠端 ai-dev-main，靠 upstream 綁定）
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev-main');
   const { stdout: localAi } = await sh(repo, 'rev-parse', 'ai-dev');
   expect(remoteAi.trim()).toBe(localAi.trim());
   // 實體 main 一步都沒動——這是本次改動的核心保證
@@ -414,11 +415,12 @@ test('mergeToAiBranch：遠端 ai-dev 被另一實例推進（不同檔）→ �
   // 模擬「另一個平台實例」：另 clone 一份，在遠端 ai-dev 推一個不同檔
   const other = path.join(base, 'other');
   await run('git', ['clone', path.join(base, 'origin.git'), other]);
-  await sh(other, 'checkout', 'ai-dev');
+  // 另一實例同樣走 ensureAiBranch，於是也綁到 ai-dev-main；裸 push 走 upstream
+  await git.ensureAiBranch(other);
   await write(other, 'other.py', 'o = 1\n');
   await sh(other, 'add', '-A');
   await sh(other, 'commit', '-m', 'other instance');
-  await sh(other, 'push', 'origin', 'ai-dev');
+  await sh(other, 'push', 'origin', 'ai-dev:refs/heads/ai-dev-main');
   // 本 repo 的任務分支改不同檔
   await sh(repo, 'checkout', '-b', 'task/t', 'ai-dev');
   await write(repo, 'mine.py', 'm = 1\n');
@@ -428,7 +430,7 @@ test('mergeToAiBranch：遠端 ai-dev 被另一實例推進（不同檔）→ �
   // approve 當下本機 ai-dev 落後遠端 → 應被打回後自動對齊再推，不得拋錯
   await git.mergeToAiBranch(repo, 'task/t');
 
-  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev');
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev-main');
   const { stdout: localAi } = await sh(repo, 'rev-parse', 'ai-dev');
   expect(remoteAi.trim()).toBe(localAi.trim()); // 本機＝遠端，push 成功
   // 兩實例的碼都在（沒有誰蓋掉誰）
@@ -441,11 +443,11 @@ test('mergeToAiBranch：遠端 ai-dev 與本任務改同一檔且衝突 → 拋 
   await git.ensureAiBranch(repo);
   const other = path.join(base, 'other');
   await run('git', ['clone', path.join(base, 'origin.git'), other]);
-  await sh(other, 'checkout', 'ai-dev');
+  await git.ensureAiBranch(other);
   await write(other, 'shared.txt', 'OTHER VERSION\n');
   await sh(other, 'add', '-A');
   await sh(other, 'commit', '-m', 'other version');
-  await sh(other, 'push', 'origin', 'ai-dev');
+  await sh(other, 'push', 'origin', 'ai-dev:refs/heads/ai-dev-main');
   // 本任務改「同一檔」為不同內容（模擬兩實例跑同一任務、各產一份）
   await sh(repo, 'checkout', '-b', 'task/t', 'ai-dev');
   await write(repo, 'shared.txt', 'MY VERSION\n');
@@ -459,7 +461,7 @@ test('mergeToAiBranch：遠端 ai-dev 與本任務改同一檔且衝突 → 拋 
   // 留 MERGE_HEAD 給裁決端點的 concludeMerge 收尾（不可被 abort）
   expect(fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD'))).toBe(true);
   // 遠端沒被本機推壞——仍是另一實例的版本
-  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev');
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev-main');
   const { stdout: otherHead } = await sh(other, 'rev-parse', 'ai-dev');
   expect(remoteAi.trim()).toBe(otherHead.trim());
 }, 30000);
@@ -650,6 +652,81 @@ describe('ai-dev 基底', () => {
     const repo = await makeDivergedRepo();
     await sh(repo, 'worktree', 'add', path.join(base, 'wt-task1'), '-b', 'task/t1', 'ai-dev');
     await expect(git.rebuildAiBranch(repo, 'kangyue')).rejects.toThrow(/worktree/);
+  }, 30000);
+
+  // 遠端分支分化：同一客戶 repo 被多個專案使用時，本地都叫 ai-dev（分支語意散落各處，不改），
+  // 靠 upstream 綁到不同的遠端分支。沒有這層，兩個專案會互相 force push 覆蓋且完全靜默。
+  test('remoteAiBranchName：帶主分支後綴，且把 / 換掉（否則與同前綴分支互斥）', () => {
+    expect(git.remoteAiBranchName('kangyue')).toBe('ai-dev-kangyue');
+    expect(git.remoteAiBranchName('feature/x')).toBe('ai-dev-feature-x');
+    expect(git.remoteAiBranchName('')).toBe('ai-dev'); // 推導不出主分支時退回裸名
+  });
+
+  test('ensureAiBranch：新 repo 的遠端 ai 分支帶後綴，本地仍是 ai-dev', async () => {
+    const repo = await makeRepo();
+    await git.ensureAiBranch(repo);
+    expect(await git.refExists(repo, 'refs/heads/ai-dev')).toBe(true); // 本地名不變
+    const { stdout } = await sh(repo, 'ls-remote', '--heads', 'origin');
+    expect(stdout).toContain('refs/heads/ai-dev-main');
+    expect(await git.remoteAiRef(repo)).toBe('ai-dev-main');           // upstream 綁對了
+  }, 30000);
+
+  test('ensureAiBranch：遠端已是裸名 ai-dev（既有專案）→ 沿用，不另建帶後綴的', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'ai-dev', 'main');
+    await sh(repo, 'push', '-u', 'origin', 'ai-dev');
+    await sh(repo, 'checkout', 'main');
+    await sh(repo, 'branch', '-D', 'ai-dev'); // 模擬換機器重 clone：只剩遠端有
+
+    await git.ensureAiBranch(repo);
+    expect(await git.remoteAiRef(repo)).toBe('ai-dev'); // 既有產出都在它上面，不可丟下
+    const { stdout } = await sh(repo, 'ls-remote', '--heads', 'origin');
+    expect(stdout).not.toContain('ai-dev-main');
+  }, 30000);
+
+  // 這支是整個遠端分化的存在理由：沒有它，兩個專案的 AI 產出會在同一條遠端分支上互相覆蓋。
+  test('兩個專案跟不同主分支共用同一 repo → 各推各的遠端分支，互不覆蓋', async () => {
+    const origin = path.join(base, 'origin.git');
+    const seed = path.join(base, 'seed');
+    await run('git', ['init', '--bare', origin]);
+    await run('git', ['clone', origin, seed]);
+    await sh(seed, 'checkout', '-b', 'main');
+    await write(seed, 'a.py', 'x = 1\n');
+    await sh(seed, 'add', '-A');
+    await sh(seed, 'commit', '-m', 'init');
+    await sh(seed, 'push', '-u', 'origin', 'main');
+    await sh(seed, 'checkout', '-b', 'kangyue');
+    await write(seed, 'k.py', 'k = 1\n');
+    await sh(seed, 'add', '-A');
+    await sh(seed, 'commit', '-m', 'kangyue');
+    await sh(seed, 'push', '-u', 'origin', 'kangyue');
+
+    // 兩個專案各自 clone（平台就是這樣：每個專案一份獨立的 local_path）
+    const a = path.join(base, 'projA');
+    const b = path.join(base, 'projB');
+    await run('git', ['clone', origin, a]);
+    await run('git', ['clone', origin, b]);
+    await sh(a, 'remote', 'set-head', 'origin', 'main');
+    await sh(b, 'remote', 'set-head', 'origin', 'kangyue');
+
+    await git.ensureAiBranch(a);
+    await git.ensureAiBranch(b);
+
+    const { stdout } = await run('git', ['ls-remote', '--heads', origin]);
+    expect(stdout).toContain('refs/heads/ai-dev-main');
+    expect(stdout).toContain('refs/heads/ai-dev-kangyue');
+    expect(await git.remoteAiRef(a)).toBe('ai-dev-main');
+    expect(await git.remoteAiRef(b)).toBe('ai-dev-kangyue');
+
+    // 而且 A 推東西不會動到 B 的分支。裸 push（走 upstream）＝平台實際的推送路徑，
+    // 同時也驗證了 upstream 真的綁對——綁錯的話這一步就會推到 B 的分支上。
+    await write(a, 'ai.py', 'ai = 1\n');
+    await sh(a, 'add', '-A');
+    await sh(a, 'commit', '-m', 'A 的產出');
+    await sh(a, 'push', 'origin', 'ai-dev:refs/heads/ai-dev-main');
+    const { stdout: heads } = await run('git', ['ls-remote', '--heads', origin]);
+    const shaOf = (name) => (heads.split('\n').find(l => l.endsWith(`refs/heads/${name}`)) || '').split('\t')[0];
+    expect(shaOf('ai-dev-main')).not.toBe(shaOf('ai-dev-kangyue'));
   }, 30000);
 
   test('listRemoteBranchesByUrl：clone 前就讀得到分支與遠端預設分支', async () => {

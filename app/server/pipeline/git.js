@@ -221,7 +221,32 @@ async function ensureMainBranch(repoPath, gitEnv) {
 }
 
 // pipeline 的主線分支：AI 產出一律落在此，實體 main 只有人工在 GitHub 上合併時才會動。
+// 這個名字只代表「本地」的分支。遠端身分見 remoteAiRef——同一個客戶 repo 可能被多個平台專案
+// 使用（跟不同主分支平行開發），本地 clone 各自獨立不會互撞，撞的是遠端：大家都 push 到同一條
+// origin/ai-dev 互相覆蓋。故遠端帶上主分支後綴，本地維持不變。
+//
+// 為什麼不連本地一起改名：分支語意散落在 qa／playwright／reject-triage／task-agent 的 diff
+// 基底與 worktree 建立處（46 處、9 檔），其中 {{main_branch}} 還會餵進 agent prompt——改錯會
+// 讓 QA 對著錯的基底審查並「靜默通過」。只分化遠端可把改動收斂在本檔約十處。
 const AI_BRANCH = 'ai-dev';
+
+// 遠端的 ai 分支名。base 本身已是合法分支名，只需換掉 '/'：ai-dev-feature/x 會與 ai-dev-feature
+// 在 git 的目錄式 ref 下互斥（兩者不能同時存在）。
+function remoteAiBranchName(base) {
+  const safe = String(base || '').replace(/\//g, '-');
+  return safe ? `${AI_BRANCH}-${safe}` : AI_BRANCH;
+}
+
+// 本地 ai-dev 在遠端的身分＝它的 upstream，這是唯一真相來源（不另存 DB 欄位，免得兩邊不同步）。
+// 既有專案的 upstream 是 origin/ai-dev，於是一切照舊；新專案在 ensureAiBranch 首次 push 時綁到
+// ai-dev-<主分支>。沒設過 upstream（從未 push）則退回同名，與舊行為一致。
+async function remoteAiRef(repoPath) {
+  const { stdout } = await execFileAsync(
+    'git', ['rev-parse', '--abbrev-ref', `${AI_BRANCH}@{upstream}`], { cwd: repoPath }
+  ).catch(() => ({ stdout: '' }));
+  const s = stdout.trim();
+  return s.startsWith('origin/') ? s.slice('origin/'.length) : AI_BRANCH;
+}
 
 // 確保本地有 ai-dev 並 checkout；沒有就從實體 main 建立並 push -u。回傳 AI_BRANCH。
 // 只在「首次建立」時推遠端——使用者要在 GitHub 上看得到這條分支才能合併它；push 失敗不擋
@@ -231,15 +256,33 @@ async function ensureAiBranch(repoPath, gitEnv) {
     await execFileAsync('git', ['checkout', AI_BRANCH], gitOpts(repoPath, gitEnv));
     return AI_BRANCH;
   }
+  // 裸名優先，且在問主分支之前就先試：既有專案的 AI 產出全在 origin/ai-dev 上，不能因為改了
+  // 命名規則就丟下它。這條路徑刻意不呼叫 ensureMainBranch，讓既有專案的行為與過去完全相同。
   if (await refExists(repoPath, `refs/remotes/origin/${AI_BRANCH}`)) {
     await execFileAsync('git', ['checkout', '-B', AI_BRANCH, `origin/${AI_BRANCH}`], gitOpts(repoPath, gitEnv));
+    await setAiUpstream(repoPath, AI_BRANCH, gitEnv);
     return AI_BRANCH;
   }
   // 完全沒有 → 從實體 main 建（ensureMainBranch 一併處理空 repo／僅遠端有 main 的情況）
   const main = await ensureMainBranch(repoPath, gitEnv);
+  const scoped = remoteAiBranchName(main);
+  if (await refExists(repoPath, `refs/remotes/origin/${scoped}`)) {
+    await execFileAsync('git', ['checkout', '-B', AI_BRANCH, `origin/${scoped}`], gitOpts(repoPath, gitEnv));
+    await setAiUpstream(repoPath, scoped, gitEnv);
+    return AI_BRANCH;
+  }
   await execFileAsync('git', ['checkout', '-B', AI_BRANCH, main], gitOpts(repoPath, gitEnv));
-  await execFileAsync('git', ['push', '-u', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv)).catch(() => {});
+  // refspec 形式：本地 ai-dev 推成遠端 <scoped>，-u 同時把 upstream 綁定，之後 remoteAiRef 讀得到。
+  await execFileAsync('git', ['push', '-u', 'origin', `${AI_BRANCH}:refs/heads/${scoped}`], gitOpts(repoPath, gitEnv)).catch(() => {});
   return AI_BRANCH;
+}
+
+// 綁定本地 ai-dev 的 upstream。失敗不擋（遠端分支還不存在時 set-upstream-to 會失敗，
+// 那種情況等首次 push -u 補上即可）。
+async function setAiUpstream(repoPath, remoteBranch, gitEnv) {
+  await execFileAsync(
+    'git', ['branch', `--set-upstream-to=origin/${remoteBranch}`, AI_BRANCH], gitOpts(repoPath, gitEnv)
+  ).catch(() => {});
 }
 
 // —— ai-dev 基底診斷與重建 ——
@@ -253,17 +296,18 @@ async function ensureAiBranch(repoPath, gitEnv) {
 // 基底正確時回傳的就是主分支本身（距離＝ai-dev 自己的產出數），故呼叫端用「回傳值 !== 主分支」
 // 即可判定歪掉。回 null＝無從判斷（ai-dev 不存在、或沒有任何分支併入其中）。
 async function aiBranchBase(repoPath) {
+  const remoteAi = await remoteAiRef(repoPath);
   const { stdout } = await execFileAsync(
-    'git', ['branch', '-r', '--merged', `origin/${AI_BRANCH}`, '--format=%(refname:short)'], { cwd: repoPath }
+    'git', ['branch', '-r', '--merged', `origin/${remoteAi}`, '--format=%(refname:short)'], { cwd: repoPath }
   ).catch(() => ({ stdout: '' }));
   const merged = stdout.split('\n').map(s => s.trim()).filter(Boolean)
-    .filter(s => s.startsWith('origin/') && !s.endsWith('/HEAD') && s !== `origin/${AI_BRANCH}`)
+    .filter(s => s.startsWith('origin/') && !s.endsWith('/HEAD') && s !== `origin/${remoteAi}`)
     .map(s => s.replace(/^origin\//, ''));
   let best = null;
   let bestDist = Infinity;
   for (const b of merged) {
     const { stdout: c } = await execFileAsync(
-      'git', ['rev-list', '--count', `origin/${b}..origin/${AI_BRANCH}`], { cwd: repoPath }
+      'git', ['rev-list', '--count', `origin/${b}..origin/${remoteAi}`], { cwd: repoPath }
     ).catch(() => ({ stdout: '' }));
     const d = Number.parseInt(c.trim(), 10);
     if (Number.isFinite(d) && d < bestDist) { bestDist = d; best = b; }
@@ -276,15 +320,16 @@ async function aiBranchBase(repoPath) {
 // 基底選錯時會把「另一條分支的歷史」也算成產出（實測該專案得 120，真值是 0），於是重建被自己
 // 的守衛擋掉，永遠修不好。
 async function aiOwnCommits(repoPath, base) {
+  const remoteAi = await remoteAiRef(repoPath);
   const { stdout } = await execFileAsync(
     'git', ['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin'], { cwd: repoPath }
   ).catch(() => ({ stdout: '' }));
   const others = stdout.split('\n').map(s => s.trim()).filter(Boolean)
-    .filter(s => s !== `origin/${AI_BRANCH}` && !s.endsWith('/HEAD'));
+    .filter(s => s !== `origin/${remoteAi}` && !s.endsWith('/HEAD'));
   if (base && !others.includes(`origin/${base}`)) others.push(`origin/${base}`);
   if (!others.length) return null; // 沒有可比對的分支＝無從判斷，呼叫端不得視為 0
   const { stdout: c } = await execFileAsync(
-    'git', ['rev-list', '--count', `origin/${AI_BRANCH}`, '--not', ...others], { cwd: repoPath }
+    'git', ['rev-list', '--count', `origin/${remoteAi}`, '--not', ...others], { cwd: repoPath }
   ).catch(() => ({ stdout: '' }));
   const n = Number.parseInt(c.trim(), 10);
   return Number.isFinite(n) ? n : null;
@@ -305,8 +350,9 @@ async function rebuildAiBranch(repoPath, base, gitEnv) {
   const oldSha = await revParse(repoPath, AI_BRANCH).catch(() => null);
   // 先離開 ai-dev：branch -f 動不了當前 checkout 的分支。
   await execFileAsync('git', ['checkout', base], gitOpts(repoPath, gitEnv));
+  const remoteAi = await remoteAiRef(repoPath);
   await execFileAsync('git', ['branch', '-f', AI_BRANCH, `origin/${base}`], gitOpts(repoPath, gitEnv));
-  await execFileAsync('git', ['push', '--force-with-lease', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', ['push', '--force-with-lease', 'origin', `${AI_BRANCH}:refs/heads/${remoteAi}`], gitOpts(repoPath, gitEnv));
   const newSha = await revParse(repoPath, AI_BRANCH).catch(() => null);
   return { oldSha, newSha };
 }
@@ -337,7 +383,8 @@ async function listRemoteBranchesByUrl(url, gitEnv) {
 async function syncMainIntoAi(repoPath, gitEnv) {
   const main = await getMainBranch(repoPath);
   await pullBranch(repoPath, main, gitEnv);      // checkout main + pull（origin 無此分支則放行）
-  await pullBranch(repoPath, AI_BRANCH, gitEnv); // checkout ai-dev + pull
+  // ai-dev 的遠端可能不同名（多專案共用 repo 時帶主分支後綴），故明確指定遠端 ref
+  await pullBranch(repoPath, AI_BRANCH, gitEnv, await remoteAiRef(repoPath)); // checkout ai-dev + pull
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath);
   try {
@@ -493,19 +540,20 @@ class AiPushConflictError extends Error {
 // 首次直接 push：單實例正常情境沒有多餘 fetch（維持原本零往返成本），只有被打回才對齊。
 async function reconcileAndPushAi(repoPath, gitEnv) {
   const MAX = 3;
+  const remoteAi = await remoteAiRef(repoPath); // 遠端可能帶主分支後綴（多專案共用 repo）
   for (let attempt = 0; ; attempt++) {
     try {
-      await execFileAsync('git', ['push', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+      await execFileAsync('git', ['push', 'origin', `${AI_BRANCH}:refs/heads/${remoteAi}`], gitOpts(repoPath, gitEnv));
       return;
     } catch (err) {
       const msg = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`.toLowerCase();
       const nonFF = msg.includes('non-fast-forward') || msg.includes('fetch first') || msg.includes('updates were rejected');
       if (!nonFF || attempt >= MAX) throw err; // 非競態（權限／網路等）或重試耗盡 → 原樣拋出
       // 遠端被其他實例推進：抓下來併回本機 ai-dev 再重推
-      await execFileAsync('git', ['fetch', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+      await execFileAsync('git', ['fetch', 'origin', remoteAi], gitOpts(repoPath, gitEnv));
       await discardPyc(repoPath); // 解除 tracked pyc 本地改動擋 merge
       try {
-        await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', '--no-edit', `origin/${AI_BRANCH}`], gitOpts(repoPath, gitEnv));
+        await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', '--no-edit', `origin/${remoteAi}`], gitOpts(repoPath, gitEnv));
       } catch (mErr) {
         const mmsg = `${mErr.stdout || ''}${mErr.stderr || ''}${mErr.message || ''}`.toLowerCase();
         if (mmsg.includes('already up to date') || mmsg.includes('already up-to-date')) continue; // 競態已被別處吸收，直接重推
@@ -644,10 +692,12 @@ async function resetTestingTo(repoPath, sha) {
 
 // checkout 指定分支並從 origin pull 最新（分析前確保讀到最新碼）。
 // origin 尚無該分支（空 repo / 尚未 push）→ 視為無可 pull、放行；其餘失敗（origin 不通／本地髒）→ throw 停任務。
-async function pullBranch(repoPath, branch, gitEnv) {
+// remoteBranch 省略＝遠端同名（絕大多數分支如此）。ai-dev 在多專案共用 repo 時遠端會帶主分支
+// 後綴，必須明確傳入，否則會去拉別的專案的那條 ai-dev。
+async function pullBranch(repoPath, branch, gitEnv, remoteBranch) {
   await execFileAsync('git', ['checkout', branch], gitOpts(repoPath, gitEnv));
   try {
-    await execFileAsync('git', ['pull', 'origin', branch], gitOpts(repoPath, gitEnv));
+    await execFileAsync('git', ['pull', 'origin', remoteBranch || branch], gitOpts(repoPath, gitEnv));
   } catch (err) {
     const msg = `${err.stderr || ''}${err.message || ''}`.toLowerCase();
     if (msg.includes("couldn't find remote ref") || msg.includes('no such ref')) return;
@@ -749,4 +799,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
 }
 
 module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
-  aiBranchBase, aiOwnCommits, rebuildAiBranch, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };
+  aiBranchBase, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };

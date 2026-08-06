@@ -19,6 +19,13 @@ jest.mock('../pipeline/git', () => ({
   ensureTestingBranch: jest.fn().mockResolvedValue(undefined),
   ensureMainBranch: jest.fn().mockResolvedValue('main'),
   pullBranch: jest.fn().mockResolvedValue(undefined),
+  // 新增 repo 的撞名守衛與 clone 後的 ai-dev 基底扶正會用到。remoteAiBranchName 給真實行為
+  // 而非 jest.fn()，否則守衛形同不存在；refExists=false 讓扶正直接跳過，不干擾本檔的 PAT 劇本。
+  remoteAiBranchName: (b) => (b ? `ai-dev-${String(b).replace(/\//g, '-')}` : 'ai-dev'),
+  AI_BRANCH: 'ai-dev',
+  refExists: jest.fn().mockResolvedValue(false),
+  remoteAiRef: jest.fn().mockResolvedValue('ai-dev'),
+  getMainBranch: jest.fn().mockResolvedValue('main'),
 }));
 jest.mock('../pipeline/graphify-runner', () => ({ runGraphify: jest.fn() }));
 

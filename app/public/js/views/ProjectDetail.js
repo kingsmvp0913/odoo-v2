@@ -325,6 +325,11 @@ window.ProjectDetailView = Vue.defineComponent({
                   （建立後不可變更，需更換請移除 repo 重新新增）
                 </span>
               </div>
+              <!-- AI 分支在 GitHub 上的實際名字：同一 repo 被多個專案使用時會帶主分支後綴，
+                   既有專案則維持裸 ai-dev。兩種並存，不標出來會在 GitHub 上找錯分支。 -->
+              <div v-if="branchInfo[r.id] && branchInfo[r.id].ai_branch" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">
+                AI 分支：<code>{{ branchInfo[r.id].ai_branch }}</code>
+              </div>
               <div v-if="r.clone_error" style="font-size:var(--fs-xs);color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
             </div>
             <div style="display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0">

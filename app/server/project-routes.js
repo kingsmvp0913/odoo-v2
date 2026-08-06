@@ -149,10 +149,12 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
 // 本身也可能拋（背景回呼跑在任何時間點，模組狀態不保證還在），放進這裡的 try 才不會炸到外面。
 async function reconcileAiBranch(repoPath, base, gitEnv) {
   try {
-    const { aiBranchBase, aiOwnCommits, rebuildAiBranch, AI_BRANCH, refExists, getMainBranch } = require('./pipeline/git');
+    const { aiBranchBase, aiOwnCommits, rebuildAiBranch, refExists, getMainBranch, remoteAiRef } = require('./pipeline/git');
     const effBase = base || await getMainBranch(repoPath);
     if (!effBase) return null;
-    if (!await refExists(repoPath, `refs/remotes/origin/${AI_BRANCH}`)) return null; // 還沒有 ai-dev＝之後自然長在對的分支上
+    // 遠端的 ai 分支可能帶主分支後綴（多專案共用同一 repo），一律問 upstream，不可寫死 ai-dev
+    const remoteAi = await remoteAiRef(repoPath);
+    if (!await refExists(repoPath, `refs/remotes/origin/${remoteAi}`)) return null; // 還沒有＝之後自然長在對的分支上
     const actual = await aiBranchBase(repoPath);
     if (!actual || actual === effBase) return null;                                 // 基底正確（絕大多數）
     const own = await aiOwnCommits(repoPath, effBase);
@@ -506,11 +508,15 @@ function registerRoutes(app) {
       );
       if (!repo) return res.status(404).json({ error: 'Not found' });
       if (repo.clone_status !== 'done') {
-        return res.json({ branches: [], base_branch: repo.base_branch, effective: null, ready: false });
+        return res.json({ branches: [], base_branch: repo.base_branch, effective: null, ai_branch: null, ready: false });
       }
       const branches = await listRemoteBranches(repo.local_path).catch(() => []);
       const effective = await getMainBranch(repo.local_path).catch(() => null);
-      res.json({ branches, base_branch: repo.base_branch, effective, ready: true });
+      // AI 分支在遠端的實際名字：既有專案是裸 ai-dev、新專案帶主分支後綴，兩種並存，
+      // 不顯示的話使用者到 GitHub 上會找不到自己的那條。
+      const { remoteAiRef } = require('./pipeline/git');
+      const ai_branch = await remoteAiRef(repo.local_path).catch(() => null);
+      res.json({ branches, base_branch: repo.base_branch, effective, ai_branch, ready: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -537,6 +543,25 @@ function registerRoutes(app) {
 
       const { rows: [project] } = await query('SELECT folder_name, name FROM projects WHERE id=$1', [req.params.id]);
       if (!project) return res.status(404).json({ error: 'Project not found' });
+
+      // 同一個客戶 repo 可以被多個專案使用（跟不同主分支平行開發），但兩個專案不能落在同一條
+      // 遠端 ai 分支上——那會讓雙方的 AI 產出互相 force push 覆蓋，而且是靜默的。遠端名由主分支
+      // 決定，所以「同 repo_url ＋ 同主分支」就是撞名。比對算出來的分支名而非主分支原值，
+      // 才能連 feature/x 與 feature-x 這種正規化後才撞的邊角一起擋掉。
+      {
+        const { remoteAiBranchName } = require('./pipeline/git');
+        const mine = remoteAiBranchName(base_branch || '');
+        const { rows: siblings } = await query(
+          'SELECT project_id, base_branch FROM project_repos WHERE repo_url=$1 AND project_id<>$2',
+          [repo_url, req.params.id]
+        );
+        const clash = siblings.find(s => remoteAiBranchName(s.base_branch || '') === mine);
+        if (clash) {
+          return res.status(409).json({
+            error: `專案 #${clash.project_id} 已經以「${clash.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${mine}）而互相覆蓋。請改選其他主分支。`,
+          });
+        }
+      }
 
       if (is_primary) {
         await query('UPDATE project_repos SET is_primary = false WHERE project_id = $1', [req.params.id]);
