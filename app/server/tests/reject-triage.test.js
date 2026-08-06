@@ -220,6 +220,39 @@ test('fix → 既有失敗回饋與分診結論併存，互不覆蓋', async () 
   expect(t.retry_feedback).toContain('移除 depends 無效'); // 分診結論
 });
 
+// 意圖：落回 coding＝碼要重改，下游關卡累積的失敗計數算的是「舊碼」，不該延續到新碼上。
+// coding 沒有自己的計數器所以不在 RESUME_COUNTER 裡，結果是 goto('coding_running') 一個都不歸零
+// ——實測 task 109 的 deploy_retry_count 卡在 4（上限 3），此後每次「修正指示→分診 fix→coding→
+// QA→deploy」都在部署第一下就觸頂 stopped，coding 與 QA 每輪約 $1.7 是確定白燒的，且結果注定相同。
+test('fix → coding：下游計數器一併歸零，部署已觸頂的任務才推得動', async () => {
+  claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
+  const id = await makeTask({ rejectCount: 1, qa: 2, deploy: 4, pw: 1 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, qa_retry_count, deploy_retry_count, pw_retry_count FROM tasks WHERE id=$1', [id]
+  );
+  expect(t.status).toBe('coding_running');
+  expect(t.deploy_retry_count).toBe(0); // 超上限的舊計數不得延續，否則部署一下就死
+  expect(t.qa_retry_count).toBe(0);
+  expect(t.pw_retry_count).toBe(0);
+});
+
+// 鑑別力對照：落到「非 coding」的關卡時，只歸零該關自己的計數器，其餘一律保留。
+// 若寫成無條件全歸零，等於一鍵繳械所有重試上限，同樣的失敗可無限重演（健檢 U2／任務 52）。
+test('resume → 非 coding 關：只歸零該關計數器，其餘保留', async () => {
+  claudeReturns({ decision: 'resume', summary: '回原關重跑。' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'deploy_testing',
+    qa: 2, deploy: 4, pw: 1 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, qa_retry_count, deploy_retry_count, pw_retry_count FROM tasks WHERE id=$1', [id]
+  );
+  expect(t.status).toBe('deploy_testing');
+  expect(t.deploy_retry_count).toBe(0); // 落點自己的計數器歸零
+  expect(t.qa_retry_count).toBe(2);     // 其餘不動
+  expect(t.pw_retry_count).toBe(1);
+});
+
 // clarify → 統一問人閘門：退回原因含糊到 fix/respec 都說得通時停下問使用者，
 // 答完由 resume_status 導回原分診關續判；原退回原因不得被洗掉（carryFeedback 保留）。
 test('clarify（帶 questions）→ clarify_pending，resume_status 回 reject_triage，保留原退回原因', async () => {

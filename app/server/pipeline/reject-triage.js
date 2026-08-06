@@ -27,6 +27,11 @@ const TARGET_STATUS = {
 const RESUME_COUNTER = {
   qa_running: 'qa_retry_count', deploy_testing: 'deploy_retry_count', playwright_running: 'pw_retry_count'
 };
+// 落回 coding＝碼要重改，下游關卡累積的失敗計數算的是「舊碼」，不該延續到新碼上。
+// coding 自己沒有計數器，故它不在 RESUME_COUNTER 裡——但這使得 goto('coding_running') 一個計數器
+// 都不歸零：實測 task 109 的 deploy_retry_count 卡在 4（上限 3），此後每次「修正指示→分診 fix→
+// coding→QA→deploy」都在部署第一下就觸頂 stopped，coding 與 QA 是確定白跑的（每輪約 $1.7）。
+const CODING_RESET_COUNTERS = ['qa_retry_count', 'deploy_retry_count', 'pw_retry_count'];
 // 分診關自己：resume_status 若指向這兩者，代表它是 clarify 閘門寫的「回分診續判」回程，
 // 不是原關——原關另存在 triage_home（見 db.js）。誤當原關會讓分診 resume 回到自己、無限重進分診。
 const TRIAGE_STATUSES = new Set(['reject_triage', 'resolve_triage']);
@@ -174,7 +179,8 @@ async function runRejectTriage(taskId, userId, signal) {
     // 那一刻（writeAnalysisYaml，主防線），這裡只是提早在交回 analysis 之前先清一次的備援——
     // 萬一 analysis 那輪中途失敗、任務還沒走到那一刻就又被繞回 spec_review，也不會續接到舊 session。
     if (freshRespec) sets.push('coding_session_id=NULL', 'git_branch=NULL', 'spec_session_id=NULL', 'spec_prompt_ver=NULL');
-    if (counter) sets.push(`${counter}=0`);
+    if (nextStatus === 'coding_running') sets.push(...CODING_RESET_COUNTERS.map(c => `${c}=0`));
+    else if (counter) sets.push(`${counter}=0`);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id=$1`, params);
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   };
