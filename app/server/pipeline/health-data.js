@@ -9,25 +9,66 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
   const cutoff = new Date(Date.now() - windowDays * 86400000).toISOString();
   const stage = agent.stage;
 
+  // 成本用與 token-report 同一套加權（output=5×、cache_read=0.1×、cache_create=1.25× input），
+  // 單價依 model 取（未知/空一律以 sonnet 計）。健檢原本完全看不到成本，於是 30 天最大單項支出
+  // 的 agent 被判「表現正常」——成本是本平台最該被觀測的訊號，不能不在視野內。
+  const WEIGHTED = '(input_tokens + output_tokens * 5 + cache_read_tokens * 0.1 + cache_create_tokens * 1.25)';
+  const RATE = `(CASE
+         WHEN LOWER(COALESCE(model,'')) LIKE '%haiku%' THEN 1.0
+         WHEN LOWER(COALESCE(model,'')) LIKE '%opus%'  THEN 5.0
+         WHEN LOWER(COALESCE(model,'')) LIKE '%fable%' THEN 10.0
+         ELSE 3.0
+       END)`;
   const { rows: [tk] } = await query(
     `SELECT COUNT(*)::int AS calls,
             COALESCE(SUM(input_tokens),0)::int  AS input_tokens,
             COALESCE(SUM(output_tokens),0)::int AS output_tokens,
             COALESCE(SUM(cache_read_tokens),0)::int AS cache_read,
+            COALESCE(SUM(cache_create_tokens),0)::int AS cache_create,
+            COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd,
             COALESCE(AVG(duration_ms),0)::int   AS avg_duration_ms,
             COALESCE(SUM(CASE WHEN status <> 'completed' THEN 1 ELSE 0 END),0)::int AS failed_calls
        FROM token_usage
       WHERE agent_type = $1 AND recorded_at >= $2`,
     [stage, cutoff]
   );
-  const denom = tk.input_tokens + tk.cache_read;
+  // 分母必須含 cache_create：它是 1.25× 單價、cache_read 是 0.1×，漏掉最貴的那一項會讓這個比率
+  // 結構上不可能低——實測 chat 顯示 0.99（看似完美），實際上重寫快取吃掉了近半成本。
+  const denom = tk.input_tokens + tk.cache_read + tk.cache_create;
   const token = {
     calls: tk.calls,
     input_tokens: tk.input_tokens,
     output_tokens: tk.output_tokens,
+    cache_read: tk.cache_read,
+    cache_create: tk.cache_create,
+    cost_usd: Math.round(Number(tk.cost_usd) * 100) / 100,
     avg_duration_ms: tk.avg_duration_ms,
     cache_hit_rate: denom ? Math.round((tk.cache_read / denom) * 100) / 100 : 0,
     failed_calls: tk.failed_calls
+  };
+
+  // 每張任務在此關被呼叫幾次：本平台最真實的失敗訊號。失敗多半不是崩潰（那些都記 completed），
+  // 而是「跑完了但沒用」——空轉一輪、產出與上輪相同、下游照樣失敗。用 token_usage 的列數推算，
+  // 不讀 tasks 的 *_retry_count／reentry_count：那些會在分診放行時被歸零，是「本次嘗試」的計數器。
+  // 刻意不寫 `AND task_id IS NOT NULL`，也不用 SQL GROUP BY，改撈原始列在 JS 聚合：
+  // token_usage.task_id 有索引，而 pg-mem（測試用）對有索引欄位的 `IS NOT NULL AND <比較>`
+  // 會靜默回空集合（見 .claude/rules/testing.md 規則 15）——隔離跑該測試通過、全套跑同一支
+  // 拿到 0，是最難察覺的那種假失敗。NULL 在 JS 端濾掉，語意完全等價。
+  const { rows: repeatRows } = await query(
+    `SELECT task_id FROM token_usage WHERE agent_type = $1 AND recorded_at >= $2`,
+    [stage, cutoff]
+  );
+  const counts = new Map();
+  for (const r of repeatRows) {
+    if (!r.task_id) continue;
+    counts.set(r.task_id, (counts.get(r.task_id) || 0) + 1);
+  }
+  const ns = [...counts.values()];
+  const repeat_calls = {
+    tasks_with_calls: ns.length,
+    max: ns.length ? Math.max(...ns) : 0,
+    avg: ns.length ? Math.round((ns.reduce((a, b) => a + b, 0) / ns.length) * 100) / 100 : 0,
+    tasks_over_2: ns.filter(n => n > 2).length
   };
 
   const { rows: taskRows } = await query(
@@ -110,7 +151,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
     };
   }
 
-  return { agent: agent.name, stage, window_days: windowDays, token, tasks, rejections, qa_rejections, wiki_drift };
+  return { agent: agent.name, stage, window_days: windowDays, token, repeat_calls, tasks, rejections, qa_rejections, wiki_drift };
 }
 
 module.exports = { buildAgentSummary };

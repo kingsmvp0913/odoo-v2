@@ -1,7 +1,7 @@
 const { query } = require('../db');
 const { listAgents, loadAgent } = require('./agent-loader');
 const { runClaude } = require('./claude-runner');
-const { parseAgentResult } = require('./agent-result');
+const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { buildAgentSummary } = require('./health-data');
 
@@ -45,12 +45,20 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
   if (prompt) try {
     const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health' });
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
-    const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: {}, userId: startedBy });
+    // 建議的新提示詞走獨立 <prompt> 區塊，**先剝掉再解析 <result>**：被分析的 agent prompt 本身
+    // 常含 <result> 契約範例，把它塞進 JSON 字串會讓 extractResult 的 lastIndexOf('</result>')
+    // 抓到 prompt body 裡的那一個，切出破碎 JSON。實測 run#1：21 個 agent 有 5 個因此全滅，
+    // 而且全是「有話要說」（要附新提示詞）的那幾個——判正常的因為不附而都活了下來，
+    // 形成「結果永遠偏向一切正常」的存活者偏差。
+    // 相容舊格式：agent 若仍把 suggested_prompt 放 JSON 裡（能解析成功的情況）照樣接受。
+    const { inner: promptBlock, cleaned } = extractTaggedBlock(text, 'prompt');
+    const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
     if (parsed && typeof parsed.diagnosis === 'string' && parsed.diagnosis.trim() && SEVERITIES.has(parsed.severity)) {
+      const sp = (promptBlock && promptBlock.trim()) || parsed.suggested_prompt || null;
       finding = {
         severity: parsed.severity,
         diagnosis: parsed.diagnosis,
-        suggested_prompt: parsed.suggested_prompt || null,
+        suggested_prompt: sp,
         rationale: parsed.rationale || null
       };
     }

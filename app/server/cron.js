@@ -86,6 +86,24 @@ let _lastShutdownMinute = null; // 同一分鐘只觸發一次夜間關機（tic
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
+// 工作流程健檢：原本只有 admin 手動觸發，而實際上線後從沒被按過一次（run#1 是平台史上第一次）。
+// 再好的診斷不跑就沒有價值，改為每週自動跑一次。0 = 停用。
+const HEALTH_CHECK_INTERVAL_MS = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS || String(7 * 86400000), 10);
+const HEALTH_CHECK_WINDOW_DAYS = parseInt(process.env.HEALTH_CHECK_WINDOW_DAYS || '30', 10);
+
+// 距上次健檢是否已滿一週。以 DB 的 created_at 為準而非行程內變數：server 常重啟，
+// 用記憶體節流會變成「每次重啟後不久就再跑一次」，一次健檢要跑 20+ 個 opus。
+async function shouldRunHealthCheck() {
+  if (HEALTH_CHECK_INTERVAL_MS <= 0) return false;
+  const { rows } = await query(
+    "SELECT status, created_at FROM health_check_runs ORDER BY id DESC LIMIT 1"
+  );
+  const last = rows[0];
+  if (!last) return true;                                   // 從沒跑過 → 跑
+  if (last.status === 'running') return false;              // 上一輪還在跑 → 不疊加
+  return Date.now() - new Date(last.created_at).getTime() >= HEALTH_CHECK_INTERVAL_MS;
+}
+
 function startCron() {
   _job = cron.schedule('* * * * *', async () => {
     if (_tickRunning) return;
@@ -139,6 +157,21 @@ function startCron() {
         const { sweepIdleEnvs } = require('./pipeline/env-agent');
         sweepIdleEnvs().catch(err => console.error('[CRON] idle sweep:', err.message));
       }
+
+      // 每週工作流程健檢（fire-and-forget，比照 admin 手動觸發那條路徑）。
+      // 獨立 try：健檢排程壞掉不得連坐同步／關機／回收——本檔刻意不共用 early return。
+      try {
+        if (await shouldRunHealthCheck()) {
+          const { rows: [run] } = await query(
+            "INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,NULL) RETURNING id",
+            [HEALTH_CHECK_WINDOW_DAYS]
+          );
+          console.log(`[CRON] 啟動每週工作流程健檢 run ${run.id}`);
+          const { runHealthCheck } = require('./pipeline/health-check-runner');
+          runHealthCheck(run.id, { windowDays: HEALTH_CHECK_WINDOW_DAYS })
+            .catch(err => console.error('[CRON] health check:', err.message));
+        }
+      } catch (err) { console.error('[CRON] health check schedule:', err.message); }
 
       // 這裡刻意沒有「兩個同步都關就 return」的提前結束。關閉同步是「不要去外部撈單」，與
       // 「要不要推進 pipeline」「要不要做清理排程」「要不要管理測試區」都無關——共用一個 return

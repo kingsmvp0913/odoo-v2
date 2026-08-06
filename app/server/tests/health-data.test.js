@@ -90,3 +90,58 @@ test('buildAgentSummary：coding 只看 QA impl_miss + env_flaky_count；human b
   const analysis = await buildAgentSummary({ name: 'analysis-project', stage: 'analysis' });
   expect(analysis.qa_rejections).toEqual({ relevant_category: 'spec_unclear', count: 1, env_flaky_count: 1 });
 });
+
+// --- 成本、cache 拆解、空轉訊號 ---
+// 意圖：健檢原本完全看不到成本，於是 30 天最大單項支出的 agent（chat $36.1）被判「表現正常」。
+// 成本是本平台最該被觀測的訊號，不能不在健檢視野內。
+test('buildAgentSummary 帶出 cost_usd 與 cache_create（原本兩者皆不存在）', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hd2','h','HD2') RETURNING id");
+  // sonnet：1M input 單價 3.0；加權 = input + output*5 + cache_read*0.1 + cache_create*1.25
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id,user_id,agent_type,model,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,duration_ms,status,recorded_at)
+     VALUES ('C1',$1,'library','claude-sonnet-5',1000000,0,0,0,100,'completed',NOW())`, [u.id]);
+  const s = await buildAgentSummary({ name: 'library', stage: 'library', label: 'wiki' }, { windowDays: 30 });
+  expect(s.token.cost_usd).toBe(3);          // 1M input × $3/1M
+  expect(s.token.cache_create).toBe(0);
+  expect(s.token.cache_read).toBe(0);
+});
+
+// 意圖：cache_hit_rate 的分母原本只有 input+cache_read，漏掉 cache_create——而後者單價是
+// cache_read 的 12.5 倍。漏掉最貴的那一項會讓這個比率結構上不可能低（實測 chat 顯示 0.99，
+// 看似完美，實際上重寫快取吃掉近半成本），健檢因此拿到「一切良好」的假訊號。
+test('cache_hit_rate 分母含 cache_create（否則永遠接近 1）', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hd3','h','HD3') RETURNING id");
+  // 全部都是「重寫快取」：命中 0、重寫 900、input 100 → 正確答案是 0，舊算法會給 0
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id,user_id,agent_type,model,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,status,recorded_at)
+     VALUES ('M1',$1,'merge','claude-sonnet-5',100,0,100,800,'completed',NOW())`, [u.id]);
+  const s = await buildAgentSummary({ name: 'merge', stage: 'merge', label: '合併' }, { windowDays: 30 });
+  // 舊算法：100/(100+100)=0.5（看起來還行）；新算法：100/(100+100+800)=0.1（看得出在狂寫快取）
+  expect(s.token.cache_hit_rate).toBe(0.1);
+});
+
+// 意圖：本平台的失敗不是崩潰（那些都記 completed），是「跑完但沒用」——空轉一輪、產出與上輪
+// 相同、下游照樣失敗。failed_calls 對此完全無感（30 天幾乎全 0）。repeat_calls 由 token_usage
+// 列數推算，不讀 *_retry_count（那些會在分診放行時被歸零，是「本次嘗試」的計數器）。
+test('repeat_calls 反映同一任務在同一關重跑幾次（failed_calls 測不到的失敗）', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hd4','h','HD4') RETURNING id");
+  // R1 跑 3 次、R2 跑 1 次，全部 completed（＝failed_calls 會是 0，但明顯有反覆重跑）
+  for (let i = 0; i < 3; i++) {
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id,user_id,agent_type,model,input_tokens,status,recorded_at)
+       VALUES ('R1',$1,'playwright','claude-sonnet-5',10,'completed',NOW())`, [u.id]);
+  }
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id,user_id,agent_type,model,input_tokens,status,recorded_at)
+     VALUES ('R2',$1,'playwright','claude-sonnet-5',10,'completed',NOW())`, [u.id]);
+
+  const s = await buildAgentSummary({ name: 'playwright', stage: 'playwright', label: 'E2E' }, { windowDays: 30 });
+  expect(s.token.failed_calls).toBe(0);        // 崩潰指標看不出任何問題
+  expect(s.repeat_calls.tasks_with_calls).toBe(2);
+  expect(s.repeat_calls.max).toBe(3);          // 但確實有一張跑了 3 次
+  expect(s.repeat_calls.avg).toBe(2);
+  expect(s.repeat_calls.tasks_over_2).toBe(1);
+});

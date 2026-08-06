@@ -15,6 +15,11 @@ jest.mock('../pipeline/env-agent', () => ({
   nightlyShutdown: jest.fn().mockResolvedValue(undefined),
   sweepIdleEnvs: jest.fn().mockResolvedValue(undefined)
 }));
+// 健檢是 20+ 個 opus 的長工，測試只驗「有沒有被啟動」，不真的跑
+jest.mock('../pipeline/health-check-runner', () => ({
+  runHealthCheck: jest.fn().mockResolvedValue(undefined),
+  resumeInterruptedRuns: jest.fn().mockResolvedValue(0)
+}));
 
 let dbModule, cronModule, notifyModule;
 let userId;
@@ -213,4 +218,75 @@ test('同步全關（間隔皆 0）仍要推進 pipeline，不得被同步的提
   expect(runPipeline).toHaveBeenCalled();
   // 同時確認沒有修過頭：同步關閉就是不該去撈單
   expect(syncUser).not.toHaveBeenCalled();
+});
+
+// --- 每週工作流程健檢 ---
+// 意圖：健檢原本只有 admin 手動觸發，而上線後從沒被按過一次（run#1 是平台史上第一次執行）。
+// 再好的診斷不跑就沒有價值。節流以 DB 的 started_at 為準而非行程內變數——server 常重啟，
+// 用記憶體節流會變成「每次重啟後不久又跑一次」，而一次健檢要燒 20+ 個 opus。
+test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query(
+    'INSERT INTO teams_settings (id, odoo_sync_interval, service_sync_interval) VALUES (1, 0, 0) ' +
+    'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
+  );
+  runner.runHealthCheck.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); }
+
+  const { rows } = await dbModule.query('SELECT status, window_days FROM health_check_runs');
+  expect(rows).toHaveLength(1);
+  expect(rows[0].status).toBe('running');
+  expect(runner.runHealthCheck).toHaveBeenCalled();
+});
+
+// 不疊加：上一輪還在跑就跳過。健檢是 20+ 個 opus 的長工，重複啟動會讓同一份診斷跑兩遍。
+test('cron tick：上一輪健檢仍在 running → 不重複啟動', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('running',30,NOW())");
+  runner.runHealthCheck.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); }
+
+  expect(runner.runHealthCheck).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT id FROM health_check_runs');
+  expect(rows).toHaveLength(1);   // 沒有多建一筆
+});
+
+// 週期未到不跑：否則每分鐘一 tick 就是每分鐘一次健檢。
+test('cron tick：上次健檢在一週內 → 不跑', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '2 days',NOW())");
+  runner.runHealthCheck.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); }
+
+  expect(runner.runHealthCheck).not.toHaveBeenCalled();
+});
+
+// 超過一週就跑：這是這個排程存在的理由，不能只驗「不跑」的三種情況。
+test('cron tick：上次健檢超過一週 → 再跑一次', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '8 days',NOW())");
+  runner.runHealthCheck.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); }
+
+  expect(runner.runHealthCheck).toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT id FROM health_check_runs');
+  expect(rows).toHaveLength(2);   // 舊的保留、新的建立
 });
