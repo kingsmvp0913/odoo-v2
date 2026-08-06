@@ -300,7 +300,8 @@ test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且�
 
   // 建立任務 worktree（branch task/<id>、reset=true、base=ai-dev＝任務切點）；worktree 路徑用 task_id（非拋棄式）
   expect(git.ensureWorktreeAtMain).toHaveBeenCalledWith(
-    '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'ai-dev', true
+    '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'ai-dev', true,
+    expect.objectContaining({ GIT_COMMITTER_NAME: expect.any(String) })
   );
   // claude cwd 是任務 worktree 父目錄（coding 之後會沿用同一個）
   expect(calls[0].cwd).toContain(path.join('.worktrees', 'ana_iso'));
@@ -380,7 +381,9 @@ test('G-1 analysis 開工：worktree 從 ai-dev 切，不從 main 切', async ()
   );
   await runTaskAnalysis(t.id, userId);
   expect(git.ensureWorktreeAtMain).toHaveBeenCalledWith(
-    '/repos/tap/main', expect.any(String), 'task/ta_g1', 'ai-dev', true
+    '/repos/tap/main', expect.any(String), 'task/ta_g1', 'ai-dev', true,
+    // 帶 gitEnv：reset 時若分支已有實作 commit 會走 merge，非 ff 需建 commit ⇒ 沒身分會靜默 abort
+    expect.objectContaining({ GIT_COMMITTER_NAME: 'T' })
   );
 });
 

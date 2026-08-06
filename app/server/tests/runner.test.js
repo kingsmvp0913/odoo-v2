@@ -165,7 +165,8 @@ test('branch_pending 重入：worktree base 用 ai-dev', async () => {
   await run();
 
   expect(ensureWorktreeAtMain).toHaveBeenCalledWith(
-    expect.any(String), expect.any(String), expect.stringContaining('task/task_odoo_wt3'), 'ai-dev', false
+    expect.any(String), expect.any(String), expect.stringContaining('task/task_odoo_wt3'), 'ai-dev', false,
+    null // gitEnv：無 PAT 時為 null，merge 會退回 pipeline 身分（見 git.js identArgs）
   );
 });
 

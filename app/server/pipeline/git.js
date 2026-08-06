@@ -556,7 +556,7 @@ async function removeWorktree(mainRepoPath, worktreePath) {
 // 確保在 <base>（最新 main）長出的 task 分支 worktree 存在。冪等——已存在時，
 // reset=true 才重置到最新 main（供 analysis 重跑讀最新碼），
 // reset=false 則保留現有內容（branch_pending 沿用 analysis 已建好的，不動已有工作）。
-async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, reset) {
+async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, reset, gitEnv) {
   ensureGitignorePyc(mainRepoPath);
   const isWorktree = fs.existsSync(path.join(worktreePath, '.git'));
   if (!isWorktree) {
@@ -574,7 +574,9 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
     if (Number(stdout.trim()) > 0) {
       // 併不進來（與 base 撞同幾行）→ abort 後維持原樣：寧可讓分析讀到略舊的碼，也不能丟掉實作。
       // 真正的衝突本來就由既有的 merge 關（task → testing）處理，不必在這裡搶著解。
-      await execFileAsync('git', ['merge', '--no-edit', base], { cwd: worktreePath })
+      // 非 ff 的 merge 要建 commit，必須帶身分（identArgs）：正式機服務帳號沒有 global git config，
+      // 少了它會 100% 失敗並靜默 abort，「帶最新 base 給分析讀」等於從未生效（catch 不留任何訊息）。
+      await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-edit', base], gitOpts(worktreePath, gitEnv))
         .catch(async () => { await execFileAsync('git', ['merge', '--abort'], { cwd: worktreePath }).catch(() => {}); });
       return;
     }

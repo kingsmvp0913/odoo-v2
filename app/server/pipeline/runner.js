@@ -135,7 +135,7 @@ async function doBranch(task, settings) {
           for (const repo of repos) {
             const wtPath = path.join(wtParent, path.basename(repo.local_path));
             // 切點是 ai-dev（與 analysis 一致）：從 main 切會看不到已核准但尚未進 main 的成果
-            await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, AI_BRANCH, false);
+            await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, AI_BRANCH, false, gitEnv);
             // worktree 是 analysis 當下建的，任務在規格審核閘門可能停留數天，期間 ai-dev 已被別的
             // 任務與實體 main 推進。不跟上就是在過期的碼上開發，且下載 zip 會蓋掉期間的人工修正。
             const sync = await syncBranchWithAi(wtPath, gitEnv);
