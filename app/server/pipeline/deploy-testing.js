@@ -3,12 +3,42 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
 
 const DEPLOY_LIMIT = 3;
+// asset 失敗時要附多少 log 給 coding 看（QWeb 的 xpath 錯誤 traceback 通常十幾行）
+const ASSET_LOG_TAIL_BYTES = parseInt(process.env.ASSET_LOG_TAIL_BYTES || '4000', 10);
+
+// asset bundle 編不出來時，真正的原因（哪個 template、哪個 xpath 對不到什麼）只在 Odoo 的
+// runtime log 裡——assetSmokeCheck 只看得到 HTTP 狀態碼，reason 永遠是「bundle URL → HTTP 500」。
+// 不附這段，coding 拿到的等於一句「壞了」，只能猜：實測 task 109 猜了三輪都沒中，每輪燒完
+// 整條 pipeline。讀檔而已，零 token 成本。
+// 讀不到一律回空字串：log 缺檔／權限不足不該讓部署流程本身出錯（本函式永不拋出）。
+async function readAssetTraceback(projectId) {
+  try {
+    const { rows: [proj] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [projectId]);
+    if (!proj) return '';
+    // 每次讀 env 而非用載入時求值的 ENV_BASE：正式環境兩者等值（env var 啟動前就設好），
+    // 但測試要能在 runtime 指到暫存目錄，否則只能 jest.resetModules()——那會連帶重載 db module、
+    // 打掉 pg-mem 的測試 pool，症狀是測試突然去連真 DB（password authentication failed）。
+    const base = process.env.ODOO_ENV_BASE || ENV_BASE;
+    const logPath = runtimeLogPath(path.join(base, proj.folder_name || proj.name));
+    if (!fs.existsSync(logPath)) return '';
+    const { size } = fs.statSync(logPath);
+    const start = Math.max(0, size - ASSET_LOG_TAIL_BYTES);
+    const fd = fs.openSync(logPath, 'r');
+    try {
+      const buf = Buffer.alloc(Math.min(ASSET_LOG_TAIL_BYTES, size));
+      fs.readSync(fd, buf, 0, buf.length, start);
+      const tail = buf.toString('utf8').trim();
+      if (!tail) return '';
+      return `\n\n【測試環境 runtime log 尾端（真正的錯誤在這裡，不要只看上面的通用說明）】\n${tail}`;
+    } finally { fs.closeSync(fd); }
+  } catch { return ''; }
+}
 
 // 從 Odoo 完整 log 抽出「真正的錯誤」給人看：Python traceback 的原因在「結尾的例外行」
 // （如 odoo.exceptions.UserError: ...），開頭是無用的呼叫堆疊（server.py→decorator.py…）。
@@ -396,7 +426,8 @@ async function doDeploy(task, taskId, userId, signal) {
   try { assetRes = await assetSmokeCheck(task.project_id); } catch { /* 檢查本身出錯不阻斷部署 */ }
   if (assetRes.assetError) {
     const nextCount = (task.deploy_retry_count || 0) + 1;
-    const detail = `[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來（多為 OWL/QWeb template 的 xpath 對不到目標，模組安裝與 --stop-after-init 都驗不到、只在瀏覽器開後台才現形）：${assetRes.reason || ''}`;
+    const trace = await readAssetTraceback(task.project_id);
+    const detail = `[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來（多為 OWL/QWeb template 的 xpath 對不到目標，模組安裝與 --stop-after-init 都驗不到、只在瀏覽器開後台才現形）：${assetRes.reason || ''}${trace}`;
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, detail]);
     if (nextCount >= DEPLOY_LIMIT) {
       await emitDeployVerdict(userId, taskId, `asset 問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);

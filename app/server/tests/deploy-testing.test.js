@@ -10,7 +10,12 @@ jest.mock('../pipeline/env-agent', () => ({
   installPythonPackage: jest.fn(),
   runEnvSetup: jest.fn(),
   restartEnv: jest.fn().mockResolvedValue({ ok: true }),
-  assetSmokeCheck: jest.fn().mockResolvedValue({ ok: true })
+  assetSmokeCheck: jest.fn().mockResolvedValue({ ok: true }),
+  // 這兩個是純值／純函式，用真實行為（deploy 端要靠它們定位 odoo.log）。漏 mock 的話
+  // runtimeLogPath 會是 undefined，呼叫即 throw 並被 readAssetTraceback 的 catch 吞成空字串
+  // ——症狀是「traceback 就是沒帶上」，完全不指向 mock 缺項。
+  ENV_BASE: require('path').resolve(__dirname, '..', '..', '..', 'odoo-envs'),
+  runtimeLogPath: (envDir) => require('path').join(envDir, 'odoo.log')
 }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
 jest.mock('../pipeline/git', () => ({
@@ -699,4 +704,60 @@ test('extractOdooError：肇事點跳過 core 與 <decorator-gen> 偽路徑，�
   expect(out).toContain('idx_hj/models/sale_order.py:88');
   expect(out).not.toContain('decorator-gen');
   expect(out).not.toContain('odoo/api.py');
+});
+
+// --- asset 失敗要附 runtime log 的真 traceback ---
+// 意圖：assetSmokeCheck 只看得到 HTTP 狀態碼，reason 永遠是「bundle URL → HTTP 500」。真正的原因
+// （哪個 template、哪個 xpath 對不到什麼）只在 Odoo runtime log 裡。不附這段，coding 收到的等於
+// 一句「壞了」，只能猜——實測 task 109 猜了三輪都沒中，每輪燒完整條 pipeline。讀檔零 token 成本。
+test('asset 失敗 → retry_feedback 附上 odoo.log 尾端的真 traceback', async () => {
+  const fs = require('fs'); const path = require('path'); const os = require('os');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'aidev-envlog-'));
+  const dir = path.join(base, 'proj_folder');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'odoo.log'),
+    'ERROR odoo.addons.base.models.qweb Element "<xpath expr=\'//button[@id=\'add_to_cart_button\']\'>" cannot be located in parent view');
+
+  const prev = process.env.ODOO_ENV_BASE;
+  process.env.ODOO_ENV_BASE = base;
+  try {
+    await dbModule.query("UPDATE projects SET folder_name='proj_folder' WHERE id=$1", [projectId]);
+    const { rows: [pchk] } = await dbModule.query('SELECT folder_name FROM projects WHERE id=$1', [projectId]);
+    expect(pchk.folder_name).toBe('proj_folder');
+    expect(fs.existsSync(path.join(base, 'proj_folder', 'odoo.log'))).toBe(true);
+    await setEnvRunning();
+    envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+    envAgent.assetSmokeCheck.mockResolvedValue({ ok: false, assetError: true, reason: 'web.assets_web.min.js → 500' });
+    const id = await makeTask(0);
+    await runDeployTesting(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT retry_feedback FROM tasks WHERE id=$1', [id]);
+    expect(t.retry_feedback).toContain('web.assets_web.min.js → 500');   // 原本的通用說明還在
+    expect(t.retry_feedback).toContain('cannot be located in parent view'); // 真因也帶上了
+    expect(t.retry_feedback).toContain('add_to_cart_button');              // 具體到哪個 xpath
+  } finally {
+    if (prev == null) delete process.env.ODOO_ENV_BASE; else process.env.ODOO_ENV_BASE = prev;
+    await dbModule.query("UPDATE projects SET folder_name=NULL WHERE id=$1", [projectId]);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// log 讀不到（缺檔／權限）不得讓部署流程本身出錯——原本的失敗訊息照樣要落地。
+test('asset 失敗但 odoo.log 不存在 → 照常落 retry_feedback，不拋錯', async () => {
+  const prev = process.env.ODOO_ENV_BASE;
+  process.env.ODOO_ENV_BASE = '/nonexistent-env-base-for-test';
+  try {
+    await setEnvRunning();
+    envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+    envAgent.assetSmokeCheck.mockResolvedValue({ ok: false, assetError: true, reason: 'bundle → 500' });
+    const id = await makeTask(0);
+    await runDeployTesting(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('coding_running');
+    expect(t.retry_feedback).toContain('bundle → 500');
+    expect(t.retry_feedback).not.toContain('runtime log 尾端');
+  } finally {
+    if (prev == null) delete process.env.ODOO_ENV_BASE; else process.env.ODOO_ENV_BASE = prev;
+  }
 });
