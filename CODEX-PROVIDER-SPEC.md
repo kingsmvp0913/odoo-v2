@@ -273,6 +273,7 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 | `coding-project` | 實作主線 |
 | `respec-patch` | 增量改 analysis.yaml，產出直接餵 coding，屬規格層 |
 | `merge` / `merge-explain` / `merge-clarify` | 同一條職責鏈，判斷風格不一致會讓使用者困惑；且 `merge` 逐 hunk 寫檔、持鎖 |
+| `playwright` / `playwright-spec` | 見 §6.6：`playwright-spec` 綁 analysis session，`playwright` 在規格 tour 模式下不再被呼叫 |
 
 ### 6.3 批次一（本期實作目標）
 
@@ -315,13 +316,35 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 
 qa 是本案「分開監督」價值最高的一支（審的正是 claude 寫的 code），值得為它優先解這一題。
 
-### 6.6 不投資：E2E tour 兩支
+### 6.6 E2E tour 兩支：整條留 claude，不納入任何批次
 
-`playwright`（deploy 後跑 E2E）與 `playwright-spec`（分析關先寫 tour）**均不納入任何批次**。
+E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enabled = true`，目前預設 false）：tour 由分析關依 acceptance 先定稿，`playwright_running` 關不重產、只負責併入 testing 與執行。
 
-使用者已決定之後移除整個 E2E tour 機制——先寫的 tour 會被後續實作變更淘汰，維護成本高於價值；驗真意回歸既有的 `review_pending` 人工 gate 兜底。既然要退場，就不為它們做 provider 適配。
+該模式平台已完整實作，不需要新開發：
 
-在實際移除前，兩支維持 claude。`playwright-spec` 另受 §5.4 約束二鎖定（綁 `analysis-project` 的 session），配對校驗表仍須包含它，避免退場前有人手動改壞。
+| 段落 | `spec_tour_enabled=false`（現況） | `=true`（目標） |
+|---|---|---|
+| 產 tour | `playwright` agent 產（`playwright-agent.js:127`） | **整段跳過**（`:121`），改由分析關的 `playwright-spec` 產 |
+| 併入 testing → `odoo-bin --test-enable` | 執行 | 執行（不受開關影響） |
+
+兩支的 provider 歸屬：
+
+- `playwright-spec` — 綁 `analysis-project` 的 session（§5.4 約束二），**必須與 analysis 同 provider**，即 claude。
+- `playwright` — 開啟規格 tour 模式後**不會再被呼叫**，provider 設定形同無效。維持 claude，不做適配。
+
+因此 E2E 這條線整條不進 codex，tour 層沒有「分開監督」。這是可接受的取捨：**「先出考題」本身就是防止測試遷就實作的機制，比換供應商更直接**——`playwright-agent.js:116` 的註解已寫明重產 tour 會讓先定稿的意義整個消失。
+
+#### 已知缺陷（開啟開關前應評估，本案範圍外）
+
+`writeSpecTour`（`task-agent.js:367`）整段刻意 best-effort，失敗靜默吞掉。分析關沒寫成 tour 時的連鎖：
+
+1. playwright 關見 `specTourMode=true` → 跳過產 tour
+2. `--test-tags` 匹配 0 個測試
+3. `playwright-agent.js:219` 的防假綠燈攔下 → `bounceToCoding`，訊息寫「tour 測試檔未產出」
+
+防護本身是對的（不會變成假綠燈直達人工審核），但**歸因錯誤**：真因在分析關，卻退回 coding，且消耗一次 `reentry_count`（上限 2，跌兩次即停等人工）。
+
+修法方向（本案不做）：`writeSpecTour` 失敗時至少落一筆 `task_logs`；或 playwright 關在 `specTourMode` 為真但 worktree 內查無 tour 檔時，改成停等人工並指向分析關，而非退 coding。
 
 ### 6.7 「codex 比較快」的驗證方法
 
