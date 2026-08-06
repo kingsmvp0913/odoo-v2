@@ -39,23 +39,31 @@ function extractTaggedBlock(text, tag) {
   return { inner: stripFence(raw.slice(start + open.length, end)), cleaned };
 }
 
-const REPAIR_PROMPT = raw =>
+// 一定要把解析器的抱怨原樣轉述給補救 agent：只說「可能有格式錯誤」等於叫它盲修，它會把同一份
+// 壞資料原封抄回來（實測 task 110 的 analysis 只是把 `permissions: |` 吐了兩次＝duplicated
+// mapping key，其餘完全正確，haiku 卻花了 147 秒／7.8k tokens 產出一模一樣的錯，整輪 opus 報廢）。
+// 抽不出 <result> 時沒有錯誤可報，此段整段省略——編一個不存在的錯只會把它導去修錯地方。
+const REPAIR_PROMPT = (raw, err) =>
   '以下是某 agent 的輸出，可能夾雜多餘文字或格式錯誤。請只回傳其中的「結果資料」本身，' +
-  '完整包在 <result></result> 標籤內，標籤外不要有任何其他文字：\n\n' + raw;
+  '完整包在 <result></result> 標籤內，標籤外不要有任何其他文字。' +
+  (err ? `\n\n上一次解析失敗的錯誤訊息是「${err}」，請針對這個錯誤修正，其餘內容一字不改。` : '') +
+  '\n\n' + raw;
 
 // 解析 agent 輸出：先直接 extract+parse，失敗才用 haiku 補救一次（只修格式、不改語意），
 // 仍失敗回 null（呼叫端 stopped）。agent 已花完數十萬 token，不該因收尾格式抖動整輪報廢（健檢 F）。
 // ref/userId：補救那一次 haiku 呼叫的記帳歸屬（不帶則不記帳，僅測試允許）。
 // abort（手動暫停）必須 rethrow 而非吞成 null——吞掉會讓呼叫端把「暫停」誤標成 stopped。
 async function parseAgentResult(raw, { parse, signal, ref, userId } = {}) {
+  let parseErr = null; // 只留第一次（原始輸出）的錯誤：那才是要補救 agent 修的東西
   const doParse = s => {
     if (s == null) return null;
-    try { const v = parse(s); return v == null ? null : v; } catch { return null; }
+    try { const v = parse(s); return v == null ? null : v; }
+    catch (e) { parseErr = String((e && e.message) || '').split('\n')[0] || null; return null; }
   };
   let out = doParse(extractResult(raw));
   if (out != null) return out;
   try {
-    const repaired = await runClaude(REPAIR_PROMPT(raw), { model: 'haiku', signal, agentType: 'repair' });
+    const repaired = await runClaude(REPAIR_PROMPT(raw, parseErr), { model: 'haiku', signal, agentType: 'repair' });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
     out = doParse(extractResult(repaired.text));
   } catch (err) {

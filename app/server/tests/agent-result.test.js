@@ -92,3 +92,23 @@ test('parseAgentResult：analysis 最終輸出被截斷（無 </result>）→ �
   expect(mockRunClaude).toHaveBeenCalledTimes(1);
   expect(v.case_id).toBe('t9');
 });
+
+// 意圖：補救 agent 收不到解析器的抱怨就等於盲修。實測 task 110——analysis 的 YAML 只是把
+// `permissions: |` 吐了兩次（duplicated mapping key），其餘完全正確，但補救 prompt 只寫「可能夾雜
+// 多餘文字或格式錯誤」，haiku 花了 147 秒／7.8k tokens 把同一份壞 YAML 原封抄回來，整輪 opus
+// 分析報廢。錯誤訊息必須進到 prompt，補救才有東西可修。
+test('parseAgentResult：解析錯誤訊息要帶進補救 prompt（否則 haiku 只能原文照抄）', async () => {
+  const broken = '<result>\ncase_id: t10\npermissions: |\npermissions: |\nlow_confidence: false\n</result>';
+  mockRunClaude.mockResolvedValue({ text: '<result>\ncase_id: t10\npermissions: ""\nlow_confidence: false\n</result>' });
+  const v = await parseAgentResult(broken, { parse: s => yaml.load(s, { schema: yaml.CORE_SCHEMA }) });
+  expect(v.case_id).toBe('t10');
+  expect(mockRunClaude.mock.calls[0][0]).toContain('duplicated mapping key');
+});
+
+// 對照組：解析器沒抱怨過（根本抽不出 <result>）時不得憑空編一段錯誤訊息餵給補救 agent，
+// 那會把它導去修一個不存在的問題。
+test('parseAgentResult：抽不出 <result>（無解析錯誤可報）→ 補救 prompt 不帶錯誤段落', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>{"status":"fixed"}</result>' });
+  await parseAgentResult('完全沒有標記的一段話', { parse: JSON.parse });
+  expect(mockRunClaude.mock.calls[0][0]).not.toContain('上一次解析失敗');
+});
