@@ -146,6 +146,11 @@ function registerRoutes(app) {
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 
+  // content 裡的 [[slug]] 一併解出對方的 title/description。搜尋解決的是「我知道關鍵字，找得到嗎」，
+  // 這個解決的是「我根本不知道有這個東西存在」——排障結論常是成串的（同一個現象牽三四則），
+  // 靠關鍵字撞不出來。只回摘要不回對方全文：要不要真的去讀，由讀的人決定。
+  // 用動態 IN 而非 `slug = ANY($2::text[])`：pg-mem 對「有索引的欄位」跑 ANY(陣列) 會靜默回 0 列
+  //（wiki_pages 的 (project_id, slug) 正好有 unique index），測試會全綠但功能是死的。
   app.get('/ai/wiki/page', aiEndpointGuard, async (req, res) => {
     try {
       const { rows: [page] } = await query(
@@ -154,7 +159,23 @@ function registerRoutes(app) {
           WHERE (p.folder_name=$1 OR p.name=$1) AND w.slug=$2`,
         [req.query.project, req.query.slug]);
       if (!page) return res.json({ ok: false, error: '找不到該 wiki 頁' });
-      res.json({ ok: true, ...page });
+
+      const refs = [...new Set(
+        (String(page.content || '').match(/\[\[[a-zA-Z0-9_-]+\]\]/g) || []).map(m => m.slice(2, -2))
+      )].filter(s => s !== page.slug);
+      let links = [];
+      if (refs.length) {
+        const ph = refs.map((_, i) => `$${i + 2}`).join(',');
+        const { rows } = await query(
+          `SELECT w.slug, w.title, w.description, w.node_type
+             FROM wiki_pages w JOIN projects p ON p.id = w.project_id
+            WHERE (p.folder_name=$1 OR p.name=$1) AND w.slug IN (${ph})`,
+          [req.query.project, ...refs]);
+        links = rows;
+      }
+      // 連到還不存在的 slug 不是錯誤——那是「這裡該有一則但還沒寫」的記號，照樣回報讓人看得到缺口。
+      const missing = refs.filter(s => !links.some(l => l.slug === s));
+      res.json({ ok: true, ...page, links, missing_links: missing });
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 }

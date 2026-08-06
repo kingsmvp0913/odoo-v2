@@ -287,3 +287,44 @@ test('migrate 不再回填 projects.port', async () => {
   const { rows: [p] } = await dbModule.query("SELECT port FROM projects WHERE name='no-backfill'");
   expect(p.port).toBeNull();
 });
+
+// 意圖：專案備註（project-notes）是後來才加進 initProjectWiki 的保留節點，既有專案不會回頭補；
+// 而 UI 的「新增頁面」端點不收 node_type（一律建成 'function'），使用者沒有任何途徑能自己建出
+// 這一頁——症狀是「wiki 裡就是沒有專案備註」，而那頁本該被注入各開發關卡（實測鴻久 25 頁裡沒有，
+// 備註功能等同不存在）。這裡驗補建：已有 wiki 的專案補上，未初始化的專案不碰。
+test('migrate 補建 project-notes：已有 wiki 的專案補上，沒 wiki 的不動', async () => {
+  const { rows: [withWiki] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('已初始化', '17.0') RETURNING id");
+  const { rows: [noWiki] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('未初始化', '17.0') RETURNING id");
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id, slug, title, node_type, content) VALUES ($1,'overview','總覽','overview','x')",
+    [withWiki.id]);
+
+  await dbModule.migrate();
+
+  const { rows: added } = await dbModule.query(
+    "SELECT node_type, title FROM wiki_pages WHERE project_id=$1 AND slug='project-notes'", [withWiki.id]);
+  expect(added).toHaveLength(1);
+  expect(added[0].node_type).toBe('notes');
+  expect(added[0].title).toBe('專案備註');
+
+  // 一頁都沒有＝還沒初始化，交給 initProjectWiki 建才有正確骨架，backfill 不該插手
+  const { rows: skipped } = await dbModule.query(
+    "SELECT 1 FROM wiki_pages WHERE project_id=$1", [noWiki.id]);
+  expect(skipped).toHaveLength(0);
+});
+
+// 冪等：第二次 migrate 不得再插一筆（否則每次重啟都多一頁，且會撞 unique 約束）
+test('migrate 補建 project-notes 冪等 — 跑第二次不重複插入', async () => {
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('冪等測試', '17.0') RETURNING id");
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id, slug, title, node_type, content) VALUES ($1,'overview','總覽','overview','x')",
+    [p.id]);
+  await dbModule.migrate();
+  await dbModule.migrate();
+  const { rows } = await dbModule.query(
+    "SELECT id FROM wiki_pages WHERE project_id=$1 AND slug='project-notes'", [p.id]);
+  expect(rows).toHaveLength(1);
+});

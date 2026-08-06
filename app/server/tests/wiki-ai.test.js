@@ -110,3 +110,52 @@ test('GET /ai/wiki/pages 一併回 description', async () => {
   const ts = res.body.pages.find(p => p.slug === 'ts-nas');
   expect(ts.description).toBe('NAS 補寫判定缺檔的實際條件');
 });
+
+// --- [[slug]] 互連 ---
+// 意圖：搜尋解決「我知道關鍵字，找得到嗎」；連結解決「我根本不知道有這東西存在」。排障結論常是
+// 成串的（同一現象牽三四則），靠關鍵字撞不出彼此。取單頁時附上被連結那幾則的標題與 description，
+// 讓讀的人自己決定要不要追下去——只給摘要不給全文，否則一頁就把整串灌進 context。
+test('GET /ai/wiki/page 解出 content 裡的 [[slug]]，附上對方標題與 description', async () => {
+  await dbModule.query(
+    `INSERT INTO wiki_pages (project_id,slug,title,node_type,content,description)
+     VALUES ($1,'ts-a','A 結論','troubleshooting','起因見 [[ts-b]]，另可參考 [[ts-b]]','A 的一句話'),
+            ($1,'ts-b','B 結論','troubleshooting','B 的內容','B 的一句話')`,
+    [projectId]);
+  const res = await request(app).get('/ai/wiki/page?project=hungjou&slug=ts-a').set(AI_TOKEN_HEADER, aiToken());
+  expect(res.body.ok).toBe(true);
+  expect(res.body.links).toHaveLength(1);            // 同一 slug 出現兩次只算一則
+  expect(res.body.links[0].slug).toBe('ts-b');
+  expect(res.body.links[0].description).toBe('B 的一句話');
+  expect(res.body.links[0].content).toBeUndefined(); // 不回對方全文
+});
+
+// 連到不存在的 slug 是「這裡該有一則但還沒寫」的記號，不是錯誤——要照樣回報，缺口才看得見。
+test('GET /ai/wiki/page 連到不存在的 slug → 進 missing_links，不報錯', async () => {
+  await dbModule.query(
+    `INSERT INTO wiki_pages (project_id,slug,title,node_type,content)
+     VALUES ($1,'ts-c','C 結論','troubleshooting','待補：[[ts-not-written-yet]]')`,
+    [projectId]);
+  const res = await request(app).get('/ai/wiki/page?project=hungjou&slug=ts-c').set(AI_TOKEN_HEADER, aiToken());
+  expect(res.body.ok).toBe(true);
+  expect(res.body.links).toHaveLength(0);
+  expect(res.body.missing_links).toEqual(['ts-not-written-yet']);
+});
+
+// 自我連結不該出現在 links（否則每頁都連自己，純噪音）。
+test('GET /ai/wiki/page 自我連結被濾掉', async () => {
+  await dbModule.query(
+    `INSERT INTO wiki_pages (project_id,slug,title,node_type,content)
+     VALUES ($1,'ts-self','自連','troubleshooting','見 [[ts-self]]')`,
+    [projectId]);
+  const res = await request(app).get('/ai/wiki/page?project=hungjou&slug=ts-self').set(AI_TOKEN_HEADER, aiToken());
+  expect(res.body.links).toHaveLength(0);
+  expect(res.body.missing_links).toHaveLength(0);
+});
+
+// 無連結的頁面不得因此變形：links/missing_links 一律是陣列，呼叫端不必判斷 undefined。
+test('GET /ai/wiki/page 無 [[]] 的頁 → links 為空陣列而非 undefined', async () => {
+  const res = await request(app).get('/ai/wiki/page?project=hungjou&slug=sale').set(AI_TOKEN_HEADER, aiToken());
+  expect(res.body.content).toBe('銷售內容');
+  expect(res.body.links).toEqual([]);
+  expect(res.body.missing_links).toEqual([]);
+});

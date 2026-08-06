@@ -652,6 +652,24 @@ async function migrate() {
      END $$;`
   ).catch(() => {});
 
+  // Backfill：專案備註（project-notes）補建。這個保留節點是後來才加進 initProjectWiki 的，
+  // 既有專案不會回頭補；而 UI 的「新增頁面」端點不收 node_type（一律建成 'function'），
+  // 使用者**沒有任何途徑**能自己建出這一頁——症狀是「wiki 裡就是沒有專案備註」，
+  // 而那頁的內容本該被注入各開發關卡（實測鴻久 25 頁裡沒有，備註功能等同不存在）。
+  // 只補「已經有 wiki 的專案」：一頁都沒有的專案還沒初始化，交給 initProjectWiki 建才有正確骨架。
+  // 冪等：第二次跑時該 project_id 已在排除子查詢裡。NOT IN 而非相關子查詢是 pg-mem 相容需求，
+  // 子查詢的 IS NOT NULL 不可省——真 PG 裡清單含一個 NULL 會讓整個條件恆為 UNKNOWN、靜默全失效。
+  await query(
+    `INSERT INTO wiki_pages (project_id, node_type, slug, title, content)
+     SELECT DISTINCT project_id, 'notes', 'project-notes', '專案備註', ''
+       FROM wiki_pages
+      WHERE project_id IS NOT NULL
+        AND project_id NOT IN (
+          SELECT project_id FROM wiki_pages WHERE slug='project-notes' AND project_id IS NOT NULL
+        )
+     ON CONFLICT (project_id, slug) DO NOTHING`
+  ).catch(() => {});
+
   // One-time status migration: pipeline 改版移除的狀態 → stopped（冪等，只影響殘留舊任務）
   await query(
     `UPDATE tasks SET status='stopped',
