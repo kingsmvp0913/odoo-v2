@@ -167,6 +167,7 @@ async function runQaAgent(taskId, userId, signal) {
   }
 
   // 記下本輪實際審查的分支 HEAD：下輪 QA 若 HEAD 未變＝coding 未提交修正 → 上方死結熔斷提早轉人工。
+  // pass 分支會清掉它（見下方）——這欄位只在 QA↔coding 迴圈內有意義。
   if (headSha) await query('UPDATE tasks SET qa_reviewed_commit=$2 WHERE id=$1', [taskId, headSha]).catch(() => {});
 
   let result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
@@ -209,7 +210,12 @@ async function runQaAgent(taskId, userId, signal) {
   }
 
   if (verdict === 'pass') {
-    await query("UPDATE tasks SET status='merge_running', updated_at=NOW() WHERE id=$1", [taskId]);
+    // 同時清掉 qa_reviewed_commit：任務就此離開 QA↔coding 迴圈，該欄位的語意（上輪 QA 判 fail 時
+    // 審的是哪個 commit）已失效。不清的話，往後 deploy／E2E 失敗把任務踢回 coding、而 coding 判定
+    // 「程式沒錯、錯在別關」不提交任何 commit 時，HEAD 仍等於這次 pass 的 sha，上方熔斷會把它誤判成
+    // 「QA 僵局」——貼出的還是好幾輪前早已修掉的舊 QA 清單，人工看到的失敗原因與真因完全對不上，
+    // 且兩個裁決選項（補修法／跳過 QA）都解不了真正卡住的那一關。
+    await query("UPDATE tasks SET status='merge_running', qa_reviewed_commit=NULL, updated_at=NOW() WHERE id=$1", [taskId]);
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'merge_running' });
     return true;
   }

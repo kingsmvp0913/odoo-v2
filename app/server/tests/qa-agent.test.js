@@ -103,7 +103,22 @@ test('P6 死結：HEAD 未變＋已有前輪 fail → stopped(code) 轉裁決，
 });
 
 // 反向：HEAD 有變（coding 真的提交了修正）→ 照常審查，並記下本輪審過的新 commit。
+// 用 fail 情境驗「記下 commit」才有鑑別力——供下輪比對的前提是還有下輪 QA，而 pass 之後沒有。
 test('P6 非死結：HEAD 有變 → 照常審查、記錄新 reviewed_commit', async () => {
+  const git = require('../pipeline/git');
+  git.revParse.mockResolvedValue('sha-new');
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+  const id = await makeTask(1);
+  await dbModule.query("UPDATE tasks SET qa_reviewed_commit='sha-old' WHERE id=$1", [id]);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, qa_reviewed_commit FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.qa_reviewed_commit).toBe('sha-new'); // 記下本輪審過的 commit，供下輪比對
+  expect(runClaude).toHaveBeenCalled();
+});
+
+// pass＝離開 QA↔coding 迴圈 → 清掉 reviewed_commit，否則往後從別關回流時會被誤判成死結。
+test('P6 pass → 清掉 qa_reviewed_commit', async () => {
   const git = require('../pipeline/git');
   git.revParse.mockResolvedValue('sha-new');
   claudeReturns({ verdict: 'pass' });
@@ -112,8 +127,25 @@ test('P6 非死結：HEAD 有變 → 照常審查、記錄新 reviewed_commit', 
   await runQaAgent(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, qa_reviewed_commit FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('merge_running');
-  expect(t.qa_reviewed_commit).toBe('sha-new'); // 記下本輪審過的 commit，供下輪比對
-  expect(runClaude).toHaveBeenCalled();
+  expect(t.qa_reviewed_commit).toBeNull();
+});
+
+// 現場（task 109）的誤判路徑：QA pass → merge → deploy 失敗 → 退回 coding → coding 判定「程式沒錯、
+// 錯在 deploy 的 view 衝突」不提交任何 commit → 回 QA 時 HEAD 仍等於上次 pass 的 sha。這不是 QA 僵局
+// （上輪 QA 是 pass），不得熔斷——否則貼出的是好幾輪前早已修掉的舊 QA 清單，與真因完全對不上。
+test('P6 非死結：pass 後從別關回流、HEAD 未變 → 不熔斷、照常審查', async () => {
+  const git = require('../pipeline/git');
+  git.revParse.mockResolvedValue('sha-passed');
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(1); // qa_retry_count=1：歷史上曾退過一次，但那輪之後已 pass
+  // 上一輪 QA 判 pass 時清掉了 reviewed_commit；deploy 失敗把任務踢回 coding，coding 未提交修正
+  await dbModule.query("UPDATE tasks SET qa_reviewed_commit=NULL WHERE id=$1", [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\n早就修掉的舊問題')", [id]);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(runClaude).toHaveBeenCalled();          // 真的跑了 QA，不是 11ms 就熔斷
+  expect(t.status).toBe('merge_running');
+  expect(t.blocker_content || '').not.toContain('僵局'); // 不得貼出陳年 QA 清單
 });
 
 // 首輪（qa_retry_count=0）不得誤判死結（即使 reviewed_commit 恰等於 HEAD）。
