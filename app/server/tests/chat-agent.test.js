@@ -168,15 +168,30 @@ test('recoverInterruptedChats → 每個卡住的對話補中斷訊息並清 pen
 // 完整調查——實測一場九輪對話裡 AI 四次自我推翻，正是因為上一輪讀到的 code／DB／log 沒留在
 // context 裡。續接輪必須只送「使用者這輪的話」，先前的探索靠 session 帶，不重送也不重查。
 test('已有 session 且指紋相符 → 走續接輪，只送新發言、不重送 cs-capability 與 history', async () => {
-  const { promptVersion } = require('../pipeline/agent-loader');
-  const ver = `${promptVersion('chat')}.${promptVersion('chat-retry')}`;
+  // 指紋除了兩支 agent 的版本，還折進「專案備註＋repo 清單」的雜湊——那兩樣只出現在 fresh prompt，
+  // 不折進來的話備註改了也不會降級，同一場對話往後每輪都拿第一輪的快照回答。
+  // 測試不複製那段算式（複製了就變成「自己對自己」）：先跑一輪 fresh 把它實際存下來的指紋撈出來，
+  // 再拿同一個值驗續接，順帶把 round-trip 一起測到。
+  const rows = (sql) => {
+    if (/project_repos/.test(sql)) return { rows: [] };
+    if (/FROM wiki_pages/.test(sql)) return { rows: [] };
+    if (/FROM project_chat_messages/.test(sql)) return { rows: [{ role: 'user', content: '前一輪問題' }] };
+    if (/FROM projects/.test(sql)) return { rows: [{ name: '鴻久' }] };
+    return { rows: [] };
+  };
+  let storedVer = null;
+  mockRunClaude.mockResolvedValueOnce({ text: '回覆', usage: {}, durationMs: 1, sessionId: 'sess-abc' });
+  mockQuery.mockImplementation((sql, params) => {
+    if (/chat_prompt_ver=\$3/.test(sql)) { storedVer = params[2]; return Promise.resolve({ rows: [] }); }
+    return Promise.resolve(rows(sql));                      // 這一輪沒有 session → 走 fresh
+  });
+  await chatReply('1', '2', '第一輪問題', 99);
+  expect(storedVer).toBeTruthy();
+
+  mockRunClaude.mockClear();
   mockQuery.mockImplementation((sql) => {
-    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ chat_session_id: 'sess-abc', chat_prompt_ver: ver }] });
-    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
-    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
-    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [{ role: 'user', content: '前一輪問題' }] });
-    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
-    return Promise.resolve({ rows: [] });
+    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ chat_session_id: 'sess-abc', chat_prompt_ver: storedVer }] });
+    return Promise.resolve(rows(sql));
   });
   await chatReply('1', '2', '那 NAS 掛載斷過嗎', 99);
 
@@ -186,6 +201,38 @@ test('已有 session 且指紋相符 → 走續接輪，只送新發言、不重
   expect(prompt).toContain('不要重查已經查過的東西');   // 續接輪 prompt
   expect(prompt).not.toContain('/ai/wiki/pages');     // cs-capability 不重送（session 裡已有）
   expect(prompt).not.toContain('前一輪問題');          // history 不重送
+});
+
+// 意圖：專案備註只出現在 fresh prompt（chat-retry 只有 {{user_message}}）。續接輪不重讀的話，
+// 使用者補上「本專案已客製出庫流程」之後，同一場對話往後每輪還是照原生行為回答——而且無聲。
+// agent prompt 的版本指紋擋不住這種：備註變了，prompt 檔沒變。
+test('專案備註改過 → 指紋不符，降級 fresh 重讀（不得沿用第一輪的快照）', async () => {
+  const rows = (sql, notes) => {
+    if (/project_repos/.test(sql)) return { rows: [] };
+    if (/FROM wiki_pages/.test(sql)) return { rows: notes ? [{ content: notes }] : [] };
+    if (/FROM project_chat_messages/.test(sql)) return { rows: [] };
+    if (/FROM projects/.test(sql)) return { rows: [{ name: '鴻久' }] };
+    return { rows: [] };
+  };
+  let storedVer = null;
+  mockRunClaude.mockResolvedValueOnce({ text: '回覆', usage: {}, durationMs: 1, sessionId: 'sess-x' });
+  mockQuery.mockImplementation((sql, params) => {
+    if (/chat_prompt_ver=\$3/.test(sql)) { storedVer = params[2]; return Promise.resolve({ rows: [] }); }
+    return Promise.resolve(rows(sql, null));               // 第一輪：還沒有備註
+  });
+  await chatReply('1', '2', '第一輪', 99);
+
+  // 使用者這時候才補上專案備註
+  mockRunClaude.mockClear();
+  mockQuery.mockImplementation((sql) => {
+    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ chat_session_id: 'sess-x', chat_prompt_ver: storedVer }] });
+    return Promise.resolve(rows(sql, '本專案已客製出庫流程'));
+  });
+  await chatReply('1', '2', '出庫怎麼跑', 99);
+
+  const [prompt, opts] = mockRunClaude.mock.calls[0];
+  expect(opts.resumeSessionId).toBeUndefined();            // 不可續接舊 session
+  expect(prompt).toContain('本專案已客製出庫流程');          // 新備註真的被讀進去
 });
 
 // 指紋是唯一擋得住「prompt 改了卻續用舊 session」的護欄——不比對就會讓新規則整場對話都不生效。

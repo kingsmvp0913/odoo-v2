@@ -111,13 +111,28 @@ function registerRoutes(app) {
       if (!content) return res.status(400).json({ error: 'content required' });
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
-      const { chatReply } = require('./pipeline/chat-agent');
-      const reply = await chatReply(req.params.projectId, req.params.id, content, req.userId);
-      emitToUser(req.userId, 'chat:reply', {
-        projectId: Number(req.params.projectId),
-        chatId: Number(req.params.id)
-      });
-      res.json({ reply });
+      // 原子搶佔這一輪：回覆要跑數分鐘，期間 F5 或換分頁再送一則就會有兩個 claude 帶著同一個
+      // resumeSessionId 併發跑、各自覆寫 chat_session_id，transcript 交錯、token 白燒，而且無聲。
+      // 條件式 UPDATE 才擋得住——chatReply 內那次是無條件設定，沒有佔位語意。
+      const claim = await query(
+        'UPDATE project_chats SET reply_pending = true WHERE id = $1 AND reply_pending = false',
+        [req.params.id]
+      );
+      if (!claim.rowCount) return res.status(409).json({ error: '這則對話正在回覆中，請等它完成再送下一則' });
+      try {
+        const { chatReply } = require('./pipeline/chat-agent');
+        const reply = await chatReply(req.params.projectId, req.params.id, content, req.userId);
+        emitToUser(req.userId, 'chat:reply', {
+          projectId: Number(req.params.projectId),
+          chatId: Number(req.params.id)
+        });
+        res.json({ reply });
+      } catch (err) {
+        // 搶佔成功後才失敗的話得自己還回去，否則這場對話永遠送不出下一則
+        //（啟動時的 recoverInterruptedChats 只兜得到進程崩潰那種）
+        await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [req.params.id]).catch(() => {});
+        throw err;
+      }
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

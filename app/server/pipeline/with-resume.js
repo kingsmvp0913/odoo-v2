@@ -25,7 +25,9 @@ async function withResume(opts) {
     onRetryFailed
   } = opts;
 
-  const ver = combinedVersion(freshAgentName, retryAgentName);
+  // extraVersion：呼叫端把「每輪都該生效、但只寫在 fresh prompt 裡」的權威內容折進指紋。
+  // agent prompt 的版本擋不住這種：內容變了 prompt 檔沒變，續接輪於是永遠沿用第一輪的快照。
+  const ver = combinedVersion(freshAgentName, retryAgentName) + (opts.extraVersion ? `.${opts.extraVersion}` : '');
   const sess = await getSession().catch(() => null);
 
   if (sess && sess.sessionId && sess.promptVer === ver) {
@@ -46,7 +48,8 @@ async function withResume(opts) {
     }
   }
 
-  const result = await runClaude(renderFresh(), { ...runOpts, model });
+  // renderFresh 可回 promise：呼叫端常把「只有 fresh 才需要」的查詢與 render 延後到這裡才做
+  const result = await runClaude(await renderFresh(), { ...runOpts, model });
   if (result.sessionId) await Promise.resolve(setSession({ sessionId: result.sessionId, promptVer: ver })).catch(() => {});
   return result;
 }

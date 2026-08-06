@@ -145,3 +145,31 @@ test('repeat_calls 反映同一任務在同一關重跑幾次（failed_calls 測
   expect(s.repeat_calls.avg).toBe(2);
   expect(s.repeat_calls.tasks_over_2).toBe(1);
 });
+
+// 意圖：merge-clarify／merge-explain 的 stage 是 merge，但它們用自己的名字記帳。只比對 stage 的話
+// 這兩支的用量與失敗永遠是 0，健檢看它們「零呼叫」也就永遠不會檢討到——而且是靜默的。
+test('buildAgentSummary 把 merge 家族用自己名字記的帳一併算進來', async () => {
+  const now = new Date().toISOString();
+  // 表在測試間不清空（pg-mem），先清掉別支留下的 merge 列，否則計數會被污染
+  await dbModule.query("DELETE FROM token_usage WHERE agent_type IN ('merge','merge-explain','merge-clarify')");
+  for (const [tid, type] of [['m1', 'merge'], ['m2', 'merge-explain'], ['m3', 'merge-clarify']]) {
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens,
+                                cache_read_tokens, cache_create_tokens, duration_ms, status, recorded_at)
+       VALUES ($1,$2,'sonnet',100,10,0,0,1000,'completed',$3)`,
+      [tid, type, now]
+    );
+  }
+  const s = await buildAgentSummary({ name: 'merge-explain', stage: 'merge', label: '合併' }, { windowDays: 30 });
+  expect(s.token.calls).toBe(3);                    // 只比對 stage 的話會是 1
+  expect(s.repeat_calls.tasks_with_calls).toBe(3);
+});
+
+// 意圖：respec 這個 stage 底下是三個不同閘門的 agent（clarify-chat／spec-review／respec-patch），
+// 各跑一次就記成 3。不標註的話健檢會把它讀成「這一關空轉三輪」而開出錯誤的檢討。
+test('buildAgentSummary 對多閘門共用的 stage 標註「次數含跨閘門呼叫」', async () => {
+  const s = await buildAgentSummary({ name: 'respec-patch', stage: 'respec', label: '規格' }, { windowDays: 30 });
+  expect(s.repeat_calls.note).toMatch(/不等於本關重跑/);
+  const c = await buildAgentSummary({ name: 'coding-project', stage: 'coding', label: '開發' }, { windowDays: 30 });
+  expect(c.repeat_calls.note).toBeUndefined();      // 單一閘門的就不要加噪音
+});

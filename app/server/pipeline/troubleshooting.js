@@ -50,12 +50,16 @@ async function recordTroubleshooting(projectId, entry) {
   if (!slug.startsWith('ts-')) slug = 'ts-' + slug;
 
   const containerId = await _ensureContainer(projectId);
+  // 抽取層把 description 當選用（舊格式只有 title/content 仍合法），寫入層卻無條件覆寫——
+  // 沒帶 description 的那一輪會把既有摘要洗成 NULL，而清單／搜尋端點正是靠它讓 agent 判斷
+  // 「該不該打開這一頁」。COALESCE 讓「沒帶」等於「不動」，只有真的給了新值才覆蓋。
   const description = String(entry.description || '').trim() || null;
   await query(
     `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, description, updated_at)
      VALUES ($1,$2,'troubleshooting',$3,$4,$5,$6,NOW())
      ON CONFLICT (project_id, slug)
-     DO UPDATE SET parent_id=$2, node_type='troubleshooting', title=$4, content=$5, description=$6, updated_at=NOW()`,
+     DO UPDATE SET parent_id=$2, node_type='troubleshooting', title=$4, content=$5,
+                   description=COALESCE($6, wiki_pages.description), updated_at=NOW()`,
     [projectId, containerId, slug, entry.title, entry.content, description]
   );
   return slug;
