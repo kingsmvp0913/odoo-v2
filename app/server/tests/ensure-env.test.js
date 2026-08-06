@@ -7,7 +7,13 @@ jest.mock('../pipeline/env-agent', () => ({ runEnvSetup: jest.fn(), waitForPort:
 
 let dbModule, ensureEnvRunning, runEnvSetup, waitForPort, projectId;
 
+// 本檔驗的是「未覆寫時 envBindHost 走 loopbackHostForPort 推導」這條路徑，故斷言寫死 127.0.0.x。
+// 但部署容器 baked ENV_BIND_HOST=10.0.0.1（測試區實際綁它），而 envBindHost 是執行時讀 env——
+// 不隔離就會被部署環境的值蓋掉，同一份碼在開發機綠、在正式機恆紅。是測試不 hermetic，非產品錯。
+const savedBindHost = process.env.ENV_BIND_HOST;
+
 beforeAll(async () => {
+  delete process.env.ENV_BIND_HOST;
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule = require('../db');
@@ -24,7 +30,11 @@ beforeAll(async () => {
   ({ ensureEnvRunning } = require('../pipeline/ensure-env'));
 });
 
-afterAll(() => { dbModule._setPoolForTesting(null); });
+afterAll(() => {
+  dbModule._setPoolForTesting(null);
+  if (savedBindHost === undefined) delete process.env.ENV_BIND_HOST;
+  else process.env.ENV_BIND_HOST = savedBindHost; // 同進程後續測試檔仍可能依賴它
+});
 
 beforeEach(async () => {
   runEnvSetup.mockReset();
