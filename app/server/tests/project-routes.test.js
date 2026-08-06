@@ -245,6 +245,31 @@ test('DELETE /api/projects/:id/repos/:repoId → 200 (環境閒置、clone 完�
   expect(res.status).toBe(200);
 });
 
+// 意圖：任務工作樹住在主 clone 的 sibling（`.worktrees/<task_id>/<repo 目錄名>`），只刪 local_path
+// 會把它們留在磁碟上。同一個 repo 之後再加回來時，殘骸的 `.git` 指向已消失的 admin 目錄，pipeline
+// 會誤判成可用工作樹而讓任務永遠停住（正式站 task_service_3900 的來源）。別的 repo 的工作樹是
+// 同一層的鄰居，必須原封不動——所以測試放兩個目錄，只有一個該消失。
+test('DELETE repo → 連自己的任務工作樹一起清掉，但不動別的 repo 的', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-del-'));
+  const localPath = path.join(root, 'kangyue');
+  const mine = path.join(root, '.worktrees', 'task_1', 'kangyue');
+  const neighbour = path.join(root, '.worktrees', 'task_1', 'other');
+  for (const d of [localPath, mine, neighbour]) fs.mkdirSync(d, { recursive: true });
+
+  await dbModule.query("UPDATE odoo_envs SET status='idle' WHERE project_id=$1", [projectId]);
+  // 自建 repo 列：上面那支 DELETE 測試已經把共用的 repoId 刪掉了
+  const { rows: [own] } = await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, clone_status) VALUES ($1,'kangyue','https://example.com/r.git',$2,'done') RETURNING id",
+    [projectId, localPath]
+  );
+  const res = await request(app).delete(`/api/projects/${projectId}/repos/${own.id}`)
+    .set('Authorization', `Bearer ${token}`);
+
+  expect(res.status).toBe(200);
+  expect(fs.existsSync(mine)).toBe(false);
+  expect(fs.existsSync(neighbour)).toBe(true);
+});
+
 test('DELETE /api/projects/:id → 200 and cascades repos & env', async () => {
   await dbModule.query(
     "INSERT INTO odoo_envs (project_id, status) VALUES ($1,'running') ON CONFLICT (project_id) DO UPDATE SET status='running'",

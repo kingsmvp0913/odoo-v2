@@ -639,6 +639,20 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 任務工作樹住在主 clone 的 sibling：`<專案根>/.worktrees/<task_id>/<repo 目錄名>`（見
+  // task-agent.js 的 worktreeParent）。移除 repo 只刪 local_path 的話，它們會整批留在磁碟上
+  // （每份約 58MB），而且同一個 repo 再加回來時，殘骸的 `.git` 指向已消失的 admin 目錄——
+  // 那正是正式站 task_service_3900 卡死的來源。同一層還有別的 repo 的工作樹，只能逐一挑掉自己的。
+  function removeRepoWorktrees(localPath) {
+    const wtRoot = path.join(path.dirname(localPath), '.worktrees');
+    const subdir = path.basename(localPath);
+    let taskDirs;
+    try { taskDirs = fs.readdirSync(wtRoot); } catch { return; } // 沒有 .worktrees＝這 repo 沒跑過任務
+    for (const t of taskDirs) {
+      try { fs.rmSync(path.join(wtRoot, t, subdir), { recursive: true, force: true }); } catch { /* 刪不掉就留著，不擋移除 repo */ }
+    }
+  }
+
   app.delete('/api/projects/:id/repos/:repoId', verifyToken, async (req, res) => {
     try {
       const { rows: [repo] } = await query(
@@ -657,6 +671,7 @@ function registerRoutes(app) {
       }
       await query('DELETE FROM project_repos WHERE id = $1 AND project_id = $2', [req.params.repoId, req.params.id]);
       if (repo.local_path) {
+        removeRepoWorktrees(repo.local_path);
         fs.rm(repo.local_path, { recursive: true, force: true }, () => {});
       }
       res.json({ ok: true });

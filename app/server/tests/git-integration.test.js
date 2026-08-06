@@ -158,6 +158,25 @@ test('ensureWorktreeAtMain：領先 commit 與 base 衝突 → 保住實作且�
   expect(stdout.trim()).toBe('');                                                 // 無衝突標記殘留
 }, 30000);
 
+// 意圖：主 clone 被整個重建（移除 repo 再加回、換 URL 重 clone）後，`.git/worktrees/<name>` 這個
+// admin 目錄跟著消失，但 sibling 的 `.worktrees/` 底下仍留著工作樹目錄與指向它的 `.git` 檔。
+// 只看 `.git` 在不在的判準會把這具殘骸當成可用工作樹，之後每一道 git 指令都是 fatal，任務就
+// 永遠停在「分析前同步 ai-dev 失敗」（實測正式站 task_service_3900）。
+test('ensureWorktreeAtMain：主 clone 重建後的死工作樹殘骸 → 清掉重建而不是整包失敗', async () => {
+  const repo = await makeRepo();
+  const wt = path.join(base, 'wt-stale', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t14', 'main', true);
+
+  fs.rmSync(path.join(repo, '.git', 'worktrees'), { recursive: true, force: true }); // ＝主 clone 被重建
+  expect(fs.existsSync(path.join(wt, '.git'))).toBe(true);           // 殘骸「看起來」仍是工作樹
+  await expect(sh(wt, 'rev-parse', '--git-dir')).rejects.toThrow();  // 實際上 git 完全讀不動它
+
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t14', 'main', true);
+  const { stdout } = await sh(wt, 'rev-parse', '--abbrev-ref', 'HEAD');
+  expect(stdout.trim()).toBe('task/t14');
+  expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
+}, 30000);
+
 test('syncWithMain：與 main 衝突 → hasConflicts＋檔名（不假成功）', async () => {
   const repo = await makeRepo();
   await sh(repo, 'checkout', '-b', 'task/t4');

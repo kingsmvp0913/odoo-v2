@@ -729,9 +729,18 @@ async function removeWorktree(mainRepoPath, worktreePath) {
 // reset=false 則保留現有內容（branch_pending 沿用 analysis 已建好的，不動已有工作）。
 async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, reset, gitEnv) {
   ensureGitignorePyc(mainRepoPath);
-  const isWorktree = fs.existsSync(path.join(worktreePath, '.git'));
+  // 只看 `.git` 在不在會漏掉「死掉的工作樹」：主 clone 被整個重建（移除 repo 再加回、換 URL 重
+  // clone）後，`.git/worktrees/<name>` 這個 admin 目錄跟著消失，但 sibling 的 `.worktrees/` 底下
+  // 仍留著工作樹目錄與指向它的 `.git` 檔。舊判準會當它可用而往下跑，於是每一道 git 指令都是
+  // 「fatal: not a git repository」，任務永遠停在「分析前同步失敗」（實測 task_service_3900）。
+  const isWorktree = fs.existsSync(path.join(worktreePath, '.git')) &&
+    await execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: worktreePath }).then(() => true, () => false);
   if (!isWorktree) {
     await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath }).catch(() => {});
+    // 殘骸目錄留著會讓下面的 add 直接 fatal: '<path>' already exists，而 remove／prune 對「已與
+    // admin 資料失聯」的目錄都無效（兩者都只認得還登記在案的工作樹）。裡面的 commit 隨舊 clone 的
+    // object DB 一起沒了，救不回來，只能整包清掉重建。
+    fs.rmSync(worktreePath, { recursive: true, force: true });
     await execFileAsync('git', ['worktree', 'prune'], { cwd: mainRepoPath }).catch(() => {});
     await execFileAsync('git', ['worktree', 'add', '-B', branch, worktreePath, base], { cwd: mainRepoPath });
     return;
