@@ -10,6 +10,7 @@ window.ProjectDetailView = Vue.defineComponent({
       newRepo: { label: '', repo_url: '', is_primary: false, base_branch: '' },
       remoteBranches: [],  // 新增表單用：ls-remote 讀到的遠端分支（clone 前就要能選）
       probingBranches: false,
+      lastProbedUrl: null, // 已探測過的網址；沒變就不重探，免得把選好的主分支清掉（見 probeRemoteBranches）
       savingRepo: false,
       env: null,
       envWorking: false,
@@ -97,6 +98,7 @@ window.ProjectDetailView = Vue.defineComponent({
         await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo });
         this.newRepo = { label: '', repo_url: '', is_primary: false, base_branch: '' };
         this.remoteBranches = [];
+        this.lastProbedUrl = null;
         await this.load();
         showToast('Repo 已新增，正在 clone...', 'success');
       } catch (e) { showToast(e.message, 'error'); }
@@ -122,6 +124,12 @@ window.ProjectDetailView = Vue.defineComponent({
     // 讀不到就靜靜維持自動偵測：私有 repo 沒 PAT、網址打到一半都會失敗，那不該打斷填表。
     async probeRemoteBranches() {
       const url = (this.newRepo.repo_url || '').trim();
+      // 網址沒變就不要重探，更不要清掉已經選好的主分支。這掛在網址欄的 @blur 上，而「選完
+      // develop 之後回頭點一下網址欄再按新增」是很自然的操作——送出鈕的 mousedown 會先觸發 blur，
+      // base_branch 被清成空值，repo 就以「自動偵測」建立，ai-dev 長在錯的基底上。而主分支
+      // 只有新增這一次機會可選（PUT 已鎖死），只能刪掉 repo 重建。
+      if (url && url === this.lastProbedUrl) return;
+      this.lastProbedUrl = url;
       this.remoteBranches = [];
       this.newRepo.base_branch = '';
       if (!url) return;
@@ -262,7 +270,10 @@ window.ProjectDetailView = Vue.defineComponent({
         await Api.patch(`projects/${this.project.id}`, { e2e_disabled: this.editE2eDisabled });
         showToast(this.editE2eDisabled ? '已停用 E2E 測試' : '已啟用 E2E 測試', 'success');
         await this.load();
-      } catch (err) { showToast(err.message, 'error'); }
+      } catch (err) {
+        this.editE2eDisabled = !this.editE2eDisabled;   // 儲存失敗要撥回去，否則畫面說「啟用中」而 DB 是關的，直到重新整理才修正
+        showToast(err.message, 'error');
+      }
       finally { this.savingE2e = false; }
     },
     async saveSpecTourSetting() {
@@ -271,7 +282,10 @@ window.ProjectDetailView = Vue.defineComponent({
         await Api.patch(`projects/${this.project.id}`, { spec_tour_enabled: this.editSpecTour });
         showToast(this.editSpecTour ? '已啟用「依規格先寫測試」' : '已停用「依規格先寫測試」', 'success');
         await this.load();
-      } catch (err) { showToast(err.message, 'error'); }
+      } catch (err) {
+        this.editSpecTour = !this.editSpecTour;   // 儲存失敗要撥回去，否則畫面說「啟用中」而 DB 是關的，直到重新整理才修正
+        showToast(err.message, 'error');
+      }
       finally { this.savingSpecTour = false; }
     },
     async saveEdition() {
@@ -359,7 +373,9 @@ window.ProjectDetailView = Vue.defineComponent({
           <input v-model="newRepo.repo_url" placeholder="Git URL（自動 clone）" class="form-control" @blur="probeRemoteBranches" />
           <!-- 主分支只有這一刻能選（新增後即鎖死），故在還沒 clone 的當下就用 ls-remote 把遠端分支
                撈出來讓人挑。讀不到（私有 repo 無 PAT／網址還沒填完）就維持自動偵測，不擋新增。 -->
-          <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
+          <!-- 這裡刻意用 div 不用 label：label 會把內部點擊轉發給它關聯的控制項，
+               點下拉選項時等於又聚焦一次，選單自己收起來，選不到東西。 -->
+          <div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
             <span style="color:var(--text-muted);white-space:nowrap">主分支</span>
             <SearchableSelect v-if="remoteBranches.length"
               :model-value="newRepo.base_branch"
@@ -370,7 +386,7 @@ window.ProjectDetailView = Vue.defineComponent({
             <span v-else style="font-size:var(--fs-sm);color:var(--text-muted)">
               {{ probingBranches ? '讀取遠端分支中…' : '自動偵測（填入網址後可選）' }}
             </span>
-          </label>
+          </div>
           <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
             <input type="checkbox" v-model="newRepo.is_primary" /> 設為主要 repo
           </label>
@@ -378,7 +394,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <div v-if="newRepo.base_branch" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">
           AI 的 <code>ai-dev</code> 分支會從 <code>{{ newRepo.base_branch }}</code> 長出來，建立後不可變更。
         </div>
-        <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
+        <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="addRepo" :disabled="savingRepo || probingBranches">+ 新增 Repo</button>
         </div>
 
         <div data-tour="pd-mapping" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
@@ -400,19 +416,19 @@ window.ProjectDetailView = Vue.defineComponent({
           <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；停用後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
-              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
-                <input type="checkbox" v-model="editE2eDisabled" style="opacity:0;width:0;height:0;position:absolute" @change="saveE2eSetting" :disabled="savingE2e" />
-                <div :style="{background: editE2eDisabled ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
-                <div :style="{position:'absolute', top:'3px', left: editE2eDisabled ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              <div class="switch">
+                <input type="checkbox" v-model="editE2eDisabled" @change="saveE2eSetting" :disabled="savingE2e" />
+                <div class="switch-track"></div>
+                <div class="switch-knob"></div>
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eDisabled ? '已停用 E2E 測試' : 'E2E 測試啟用中' }}</span>
             </label>
             <span style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-2)">開啟後，E2E tour 會在「分析」關依驗收條件先寫好（實作之前定稿），開發關要讓它通過而不能改它；關閉則沿用舊流程，等實作完成後才產生 tour。</span>
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
-              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
-                <input type="checkbox" v-model="editSpecTour" style="opacity:0;width:0;height:0;position:absolute" @change="saveSpecTourSetting" :disabled="savingSpecTour" />
-                <div :style="{background: editSpecTour ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
-                <div :style="{position:'absolute', top:'3px', left: editSpecTour ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              <div class="switch">
+                <input type="checkbox" v-model="editSpecTour" @change="saveSpecTourSetting" :disabled="savingSpecTour" />
+                <div class="switch-track"></div>
+                <div class="switch-knob"></div>
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ editSpecTour ? '依規格先寫測試（啟用中）' : '依規格先寫測試（已停用）' }}</span>
             </label>
