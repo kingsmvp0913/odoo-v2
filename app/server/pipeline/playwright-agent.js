@@ -116,15 +116,29 @@ async function runTourStage(taskId, userId, signal) {
   // 規格 tour 模式：tour 已在分析關依 acceptance 定稿（實作之前），這裡不得重產——重產等於
   // 讓 agent 照著已完成的實作重寫考題，測試會遷就實作，先定稿的意義整個消失。
   // 直接跳到下方「併入 testing → 跑 --test-enable」。
+  //
+  // 但旗標只說「本專案打算走這個模式」，不代表 tour 真的在。分析關的 writeSpecTour 是 best-effort、
+  // 失敗靜默；而 spec_tour_enabled 是專案層開關又沒有 per-task 快照，開關打開當下所有已過分析關的
+  // 在途任務，到這裡必然是「模式開著、worktree 裡沒有 tour」——這條路不需要任何失敗就會發生。
+  // 只看旗標就跳過的話：模組裡有前一張任務留下的 tour 時，--test-tags /<module> 會跑到那些舊測試，
+  // log 出現 odoo.tests 命名空間，下方的防假綠燈守衛因此失效 → 本次功能零 E2E 覆蓋卻直達人工審核。
+  // 所以要看事實不看旗標：確認 tour 檔真的存在才跳過產生。
   const { rows: [tourCfg] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
-  const specTourMode = !!(tourCfg && tourCfg.spec_tour_enabled);
-  if (specTourMode) {
+  const hasSpecTour = !!(tourCfg && tourCfg.spec_tour_enabled) && await specTourExists(info, cwd, moduleName);
+  if (hasSpecTour) {
     await query(
       "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E tour 已於分析關依規格產出，本關直接執行、不重新產生')",
       [taskId]
     );
+  } else if (tourCfg && tourCfg.spec_tour_enabled) {
+    // 降級回本關產生：任務照樣走得完（等同關掉開關的既有行為），但必須留聲——否則「規格 tour
+    // 沒產出」這件事沒有任何人看得到，而分析關那邊已經吞掉了失敗。
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, `規格 tour 模式已啟用，但 worktree 內找不到 ${moduleName} 的 tour 測試檔（分析關可能未產出，或本任務在開關啟用前就已通過分析關）。本關改為自行產生 tour，先定稿的效果本次不生效。`]
+    );
   }
-  if (!specTourMode) try {
+  if (!hasSpecTour) try {
     const agent = loadAgent('playwright');
     // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
     // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
@@ -238,6 +252,19 @@ async function runTourStage(taskId, userId, signal) {
   }
   await bounceToCoding(task, taskId, userId, odooErr, logRef);
   return true;
+}
+
+// 規格 tour 是否真的躺在 worktree 裡。Odoo 的 tour 一律住 `<module>/static/tests/tours/`；
+// 逐個 repo 子目錄找，任何一個有 .js 就算數。探測失敗一律當「沒有」——寧可多產一次 tour，
+// 也不要在沒有測試的情況下跳過產生（那會變成假綠燈直達人工審核）。
+async function specTourExists(info, cwd, moduleName) {
+  const fsp = require('fs').promises;
+  for (const repo of (info.repos || [])) {
+    const dir = path.join(cwd, repo.subdir, moduleName, 'static', 'tests', 'tours');
+    const files = await fsp.readdir(dir).catch(() => []);
+    if (files.some(f => f.endsWith('.js'))) return true;
+  }
+  return false;
 }
 
 module.exports = { runTourStage };

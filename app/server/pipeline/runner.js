@@ -110,11 +110,11 @@ async function handleConfirmAnswered(task) {
 }
 
 // branch_pending：專案任務為每個 repo 建 worktree（並行隔離）；否則用 user 的 git_repo_path
-async function handleBranch(task, settings) {
-  await doBranch(task, settings);
+async function handleBranch(task, settings, signal) {
+  await doBranch(task, settings, signal);
 }
 
-async function doBranch(task, settings) {
+async function doBranch(task, settings, signal) {
   const taskId = task.id;
   const branchName = `task/${task.task_id}`;
   if (task.project_id) {
@@ -179,6 +179,12 @@ async function doBranch(task, settings) {
       return;
     }
   }
+  // 規格 tour：實作開始前、worktree 剛跟上 ai-dev 的此刻，依定稿的 acceptance 先出考題。
+  // 掛在這裡而不是分析關收尾，是因為這是所有「進入 branch_pending」路徑的共同出口——analysis 直接
+  // 判可開工、澄清答完重跑、規格審核核准（那條不重跑分析）三條都會經過，掛一處即全覆蓋，也就
+  // 不會有第二個寫入點疊出第二份 tour。專案層開關，預設關閉。
+  const { runSpecTourGate } = require('./task-agent');
+  await runSpecTourGate(taskId, task.user_id, signal);
   await query(
     "UPDATE tasks SET status = 'coding_running', git_branch = $2, updated_at = NOW() WHERE id = $1",
     [taskId, branchName]

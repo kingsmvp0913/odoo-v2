@@ -570,7 +570,11 @@ async function cleanupProjectEnv(projectId, snapshot = null) {
     const envDir = path.join(ENV_BASE, dirName);
     const resolved = path.resolve(envDir);
     if (resolved.startsWith(path.resolve(ENV_BASE) + path.sep) && fs.existsSync(envDir)) {
-      try { fs.rmSync(envDir, { recursive: true, force: true }); } catch {}
+      // 不能直接 fs.rmSync：filestore／sessions 是容器內的 odoo user 寫的，平台無權刪，
+      // 在正式機一律 EACCES。吞掉的話環境目錄永久留成孤兒佔著磁碟，而呼叫端還以為清乾淨了。
+      // env-routes 的 DELETE 早已改用 removeDirForce（root 容器退路），這裡是漏掉的第二個呼叫端。
+      const { removeDirForce } = require('../lib/docker-env');
+      await removeDirForce(envDir).catch(e => console.error(`[cleanupProjectEnv] 刪除環境目錄 ${envDir} 失敗：${e.message}`));
     }
   }
   const repos = snap.repoPaths.map(local_path => ({ local_path }));

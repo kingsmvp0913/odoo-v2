@@ -27,7 +27,9 @@ jest.mock('../pipeline/playwright-agent', () => ({ runTourStage: jest.fn().mockR
 // 會立刻串連派工到 coding_running，故需 mock task-agent 避免打到真的邏輯（非專案任務原本就會 return false）
 jest.mock('../pipeline/task-agent', () => ({
   runTaskAnalysis: jest.fn().mockResolvedValue(true),
-  runTaskCoding: jest.fn().mockResolvedValue(true)
+  runTaskCoding: jest.fn().mockResolvedValue(true),
+  // 規格 tour 的統一入口（doBranch 在轉 coding_running 前呼叫）；預設不做事，專屬案例另外覆寫
+  runSpecTourGate: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../pipeline/reject-triage', () => ({ runRejectTriage: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../pipeline/clarify-chat', () => ({ runClarifyChat: jest.fn().mockResolvedValue(undefined) }));
