@@ -135,6 +135,30 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   });
 }
 
+// 同一個遠端可以有好幾種寫法：https://h/o/r.git、https://h/o/r/、git@h:o/r.git、ssh://git@h/o/r。
+// 撞名守衛比對的是「是不是同一個 repo」，所以先收斂成 host/owner/name 再比。認不出來就回原字串
+// （至少維持原本的完全相等比對），不要為了正規化而把兩個不同的 repo 判成同一個。
+function normalizeRepoUrl(url) {
+  const s = String(url || '').trim().replace(/\/+$/, '').replace(/\.git$/i, '');
+  const m = s.match(/^(?:https?:\/\/|ssh:\/\/)?(?:[^@/]+@)?([^/:]+)[/:](.+)$/);
+  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}` : s.toLowerCase();
+}
+
+// 把 ensureAiBranch 實際決定的遠端 AI 分支名記進 DB。撞名守衛唯一能信的就是這個值——它拿
+// base_branch 現算會漏掉兩種真的會互相覆蓋的組合：(1) base_branch 為 null 時執行期改用偵測到的
+// 主分支，算出來的名字與守衛算的不同；(2) 遠端已有裸 origin/ai-dev 時 ensureAiBranch 走「裸名
+// 優先」完全無視 base_branch，於是所有既有 repo 一律同槽。best-effort：記不起來只是讓守衛退回
+// 舊的推算方式，不該擋住 clone 完成。
+async function recordRemoteAiBranch(repoId, repoPath) {
+  try {
+    const { remoteAiRef } = require('./pipeline/git');
+    const name = await remoteAiRef(repoPath);
+    if (name) await query('UPDATE project_repos SET remote_ai_branch=$2 WHERE id=$1', [repoId, name]);
+  } catch (e) {
+    console.warn(`[recordRemoteAiBranch] repo ${repoId} 記錄遠端 AI 分支失敗：${e.message}`);
+  }
+}
+
 // 把歪掉的 ai-dev 基底扶正。ai-dev 是 ensureAiBranch 在「建立當下的主分支」上長的，主分支之後
 // 才被改對也不會自己跟上，同步從此是兩條平行線硬合（詳見 git.js 的 aiBranchBase 註解）。
 // 零 AI 產出才重建；有產出就不動它，只回報——那些 commit 只存在於 ai-dev，重建即永久遺失。
@@ -149,20 +173,26 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
 // 本身也可能拋（背景回呼跑在任何時間點，模組狀態不保證還在），放進這裡的 try 才不會炸到外面。
 async function reconcileAiBranch(repoPath, base, gitEnv) {
   try {
-    const { aiBranchBase, aiOwnCommits, rebuildAiBranch, refExists, getMainBranch, remoteAiRef } = require('./pipeline/git');
+    const { aiBranchBase, aiBaseDrift, rebuildAiBranch, refExists, getMainBranch, remoteAiRef } = require('./pipeline/git');
     const effBase = base || await getMainBranch(repoPath);
     if (!effBase) return null;
     // 遠端的 ai 分支可能帶主分支後綴（多專案共用同一 repo），一律問 upstream，不可寫死 ai-dev
     const remoteAi = await remoteAiRef(repoPath);
     if (!await refExists(repoPath, `refs/remotes/origin/${remoteAi}`)) return null; // 還沒有＝之後自然長在對的分支上
-    const actual = await aiBranchBase(repoPath);
-    if (!actual || actual === effBase) return null;                                 // 基底正確（絕大多數）
-    const own = await aiOwnCommits(repoPath, effBase);
+    // 判「歪沒歪」一律走 aiBaseDrift 的正面驗證，不可用 aiBranchBase 反推——base 領先 ai-dev 時
+    // 後者取不到 base（詳見 git.js 該函式註解），基底正確卻會被判 blocked。
+    const { drifted, own } = await aiBaseDrift(repoPath, effBase);
+    if (drifted === null) return { level: 'warn', message: `ai-dev 基底檢查未完成：無法比對 ${effBase} 與 ${remoteAi}` };
+    if (!drifted) return null;                                                      // 基底正確（絕大多數）
+    // 確定歪了才推導「到底長在哪」：那段要對每條已合併分支各 spawn 一次，不放在常態路徑上
+    const actual = await aiBranchBase(repoPath, effBase);                           // 推導不出來就別寫成「從 null」
+    const origin = actual ? `是從 ${actual} 長出來的` : '夾帶了其他分支的歷史';
+    const from = actual ? `從 ${actual} ` : '';
     if (own !== 0) {
-      return { level: 'blocked', message: `ai-dev 是從 ${actual} 長出來的，但主分支是 ${effBase}；其上已有 ${own === null ? '無法判定數量的' : own} 個 AI 產出，未自動重建。請先在 GitHub 上把 ai-dev 合併回 ${effBase}` };
+      return { level: 'blocked', message: `ai-dev ${origin}，但主分支是 ${effBase}；其上已有 ${own} 個 AI 產出，未自動重建。請先在 GitHub 上把 ai-dev 合併回 ${effBase}` };
     }
     const { oldSha } = await rebuildAiBranch(repoPath, effBase, gitEnv);
-    return { level: 'fixed', message: `ai-dev 基底已從 ${actual} 重建到 ${effBase}（舊 HEAD ${String(oldSha || '').slice(0, 7)}）` };
+    return { level: 'fixed', message: `ai-dev 基底已${from}重建到 ${effBase}（舊 HEAD ${String(oldSha || '').slice(0, 7)}）` };
   } catch (e) {
     return { level: 'warn', message: `ai-dev 基底檢查未完成：${e.message}` };
   }
@@ -177,6 +207,7 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     const base = await ensureMainBranch(destPath, gitEnv); // checkout main/master（僅遠端則建本地追蹤分支）
     await pullBranch(destPath, base, gitEnv);              // git pull origin <base>
     await ensureAiBranch(destPath, gitEnv);
+    await recordRemoteAiBranch(repoId, destPath);
     // 扶正基底必須排在 syncMainIntoAi 之前：基底歪掉時那次 merge 就是「兩條平行線硬合」，
     // 會炸出一整包看似內容衝突的假象（實測 28 檔），而真因只是 ai-dev 長錯地方。
     const aiNotice = await reconcileAiBranch(destPath, base, gitEnv);
@@ -184,7 +215,19 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     if (aiNotice?.level === 'blocked') {
       // 扶不正就不要硬同步：那次 merge 注定衝突，還會把 ai-dev 弄成待解狀態。停在這裡讓人處理。
       // 只有 blocked 才擋——warn 代表「不確定」，不確定不足以中止使用者的更新。
-      throw new Error(aiNotice.message);
+      //
+      // 但**不可** throw：外層 catch 會把 repo 標成 clone_status='error'，而全平台撈 repo 一律
+      // WHERE clone_status='done'（規則 81），repo 一 error 就從 pipeline 消失——該專案所有任務
+      // 立刻撈不到 repo、approve 直接 400。這正是本函式註解列為要避免的後果：偵測到問題不等於
+      // 要讓 repo 從平台上消失。改成把原因寫進 clone_error 但維持 done：pull 與 ensureAiBranch
+      // 都已成功，這個 clone 本身是可用的，只是 main→ai-dev 這一步沒做。
+      await query(
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        [repoId, 'done', aiNotice.message.slice(0, 500)]
+      );
+      // ensureAiBranch 已把主 clone 切到 ai-dev，這裡要切回常駐分支，否則下次 deploy 會部署到錯分支
+      try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋 */ }
+      return;
     }
     const sync = await syncMainIntoAi(destPath, gitEnv);
     if (sync.hasConflicts) {
@@ -528,6 +571,11 @@ function registerRoutes(app) {
   app.get('/api/git/remote-branches', verifyToken, async (req, res) => {
     const url = String(req.query.url || '').trim();
     if (!url) return res.json({ branches: [], defaultBranch: null, ok: false, reason: '未提供網址' });
+    // 與 triggerClone 同一條白名單：少了它，`/path/to/repo` 或 `file://` 會讓這個端點變成
+    // 「列出平台主機上任意 git repo 的分支」的探測器，而它只要 verifyToken 就能打。
+    if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(url)) {
+      return res.json({ branches: [], defaultBranch: null, ok: false, reason: '不支援的 Git URL 格式' });
+    }
     try {
       const { listRemoteBranchesByUrl } = require('./pipeline/git');
       const r = await listRemoteBranchesByUrl(url, await optionalGitEnv(req.userId));
@@ -550,16 +598,31 @@ function registerRoutes(app) {
       // 決定，所以「同 repo_url ＋ 同主分支」就是撞名。比對算出來的分支名而非主分支原值，
       // 才能連 feature/x 與 feature-x 這種正規化後才撞的邊角一起擋掉。
       {
-        const { remoteAiBranchName } = require('./pipeline/git');
+        const { remoteAiBranchName, AI_BRANCH } = require('./pipeline/git');
         const mine = remoteAiBranchName(base_branch || '');
+        // repo_url 用正規化後的值比對：差一個 `.git`、一條尾斜線、或 https 與 git@ 寫法不同，
+        // 指的都是同一個遠端，但字串完全相等比對會全部放行。
         const { rows: siblings } = await query(
-          'SELECT project_id, base_branch FROM project_repos WHERE repo_url=$1 AND project_id<>$2',
-          [repo_url, req.params.id]
+          'SELECT project_id, base_branch, repo_url, remote_ai_branch FROM project_repos WHERE project_id<>$1',
+          [req.params.id]
         );
-        const clash = siblings.find(s => remoteAiBranchName(s.base_branch || '') === mine);
+        const mineUrl = normalizeRepoUrl(repo_url);
+        const sameRepo = siblings.filter(s => normalizeRepoUrl(s.repo_url) === mineUrl);
+        // 對方已經記下實際落點就比對它，否則才退回用 base_branch 推算（尚未 clone 完的新列）。
+        // 已經坐在裸 ai-dev 上的既有 repo 一律撞——那條分支不帶主分支後綴，誰進來都會共用它。
+        const clash = sameRepo.find(s => {
+          const theirs = s.remote_ai_branch || remoteAiBranchName(s.base_branch || '');
+          return theirs === mine || theirs === AI_BRANCH;
+        });
         if (clash) {
+          const theirs = clash.remote_ai_branch || remoteAiBranchName(clash.base_branch || '');
+          // 對方是「還沒記下落點的自動偵測」時，我們並不知道它最後會落在哪，只知道有機會撞上。
+          // 講白比假裝確定好：使用者看得懂該去把對方的主分支指定清楚，而不是以為自己選錯分支。
+          const unknown = !clash.remote_ai_branch && !clash.base_branch;
           return res.status(409).json({
-            error: `專案 #${clash.project_id} 已經以「${clash.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${mine}）而互相覆蓋。請改選其他主分支。`,
+            error: unknown
+              ? `專案 #${clash.project_id} 也在用這個 repo，且它的主分支是自動偵測、尚未確定會落在哪條遠端 AI 分支上，可能與本專案共用同一條而互相覆蓋。請先為該專案指定主分支（或等它 clone 完成）後再試。`
+              : `專案 #${clash.project_id} 已經以「${clash.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${theirs}）而互相覆蓋。請改選其他主分支。`,
           });
         }
       }
@@ -644,13 +707,16 @@ function registerRoutes(app) {
   // task-agent.js 的 worktreeParent）。移除 repo 只刪 local_path 的話，它們會整批留在磁碟上
   // （每份約 58MB），而且同一個 repo 再加回來時，殘骸的 `.git` 指向已消失的 admin 目錄——
   // 那正是正式站 task_service_3900 卡死的來源。同一層還有別的 repo 的工作樹，只能逐一挑掉自己的。
-  function removeRepoWorktrees(localPath) {
+  // 非同步刪：每份工作樹約 58MB，任務一多就是好幾 GB，同步版會把 event loop 卡住整段時間——
+  // 全平台的 API 與 socket 一起停擺。同一個 handler 隔二十行的主 clone 刪除本來就已是非同步。
+  async function removeRepoWorktrees(localPath) {
     const wtRoot = path.join(path.dirname(localPath), '.worktrees');
     const subdir = path.basename(localPath);
     let taskDirs;
-    try { taskDirs = fs.readdirSync(wtRoot); } catch { return; } // 沒有 .worktrees＝這 repo 沒跑過任務
+    try { taskDirs = await fs.promises.readdir(wtRoot); } catch { return; } // 沒有 .worktrees＝這 repo 沒跑過任務
     for (const t of taskDirs) {
-      try { fs.rmSync(path.join(wtRoot, t, subdir), { recursive: true, force: true }); } catch { /* 刪不掉就留著，不擋移除 repo */ }
+      await fs.promises.rm(path.join(wtRoot, t, subdir), { recursive: true, force: true })
+        .catch(() => { /* 刪不掉就留著，不擋移除 repo */ });
     }
   }
 
@@ -672,7 +738,7 @@ function registerRoutes(app) {
       }
       await query('DELETE FROM project_repos WHERE id = $1 AND project_id = $2', [req.params.repoId, req.params.id]);
       if (repo.local_path) {
-        removeRepoWorktrees(repo.local_path);
+        await removeRepoWorktrees(repo.local_path);   // 維持原本「回應前已刪完」的語意，只是不再卡住 event loop
         fs.rm(repo.local_path, { recursive: true, force: true }, () => {});
       }
       res.json({ ok: true });
