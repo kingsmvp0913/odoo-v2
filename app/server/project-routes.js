@@ -4,7 +4,11 @@ const { execFile } = require('child_process');
 const { query, withTransaction } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
-const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge, releaseAiToMain, getMainBranch, listRemoteBranches, setRemoteHead } = require('./pipeline/git');
+// 背景路徑（triggerClone → updateMainClone → reconcileAiBranch）用得到的一律在這裡取。
+// 那條路是 fire-and-forget，在測試裡會活過測試本身——延遲 require 會在 jest 環境拆掉之後才執行，
+// 拋「trying to import a file after the Jest environment has been torn down」，全套測試零失敗卻 exit 1。
+const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge, releaseAiToMain, getMainBranch, listRemoteBranches, setRemoteHead,
+  aiBranchBase, aiBaseDrift, rebuildAiBranch, refExists, remoteAiRef } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
 const { deleteTaskDir } = require('./lib/attachments');
@@ -151,7 +155,6 @@ function normalizeRepoUrl(url) {
 // 舊的推算方式，不該擋住 clone 完成。
 async function recordRemoteAiBranch(repoId, repoPath) {
   try {
-    const { remoteAiRef } = require('./pipeline/git');
     const name = await remoteAiRef(repoPath);
     if (name) await query('UPDATE project_repos SET remote_ai_branch=$2 WHERE id=$1', [repoId, name]);
   } catch (e) {
@@ -173,7 +176,6 @@ async function recordRemoteAiBranch(repoId, repoPath) {
 // 本身也可能拋（背景回呼跑在任何時間點，模組狀態不保證還在），放進這裡的 try 才不會炸到外面。
 async function reconcileAiBranch(repoPath, base, gitEnv) {
   try {
-    const { aiBranchBase, aiBaseDrift, rebuildAiBranch, refExists, getMainBranch, remoteAiRef } = require('./pipeline/git');
     const effBase = base || await getMainBranch(repoPath);
     if (!effBase) return null;
     // 遠端的 ai 分支可能帶主分支後綴（多專案共用同一 repo），一律問 upstream，不可寫死 ai-dev
