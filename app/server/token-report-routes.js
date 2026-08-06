@@ -1,5 +1,6 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { costSql } = require('./lib/token-cost');
 
 function registerRoutes(app) {
   app.get('/api/token-report', verifyToken, async (req, res) => {
@@ -46,15 +47,7 @@ function registerRoutes(app) {
       // 成本模型（對齊 ccusage）：每列依實際 model 單價算真實 USD。
       // 各 model 內比例一致（output=5×input、cache_read=0.1×、cache_create=1.25×），
       // 故成本 = input_1M_單價 × 加權 input 等效顆數 / 1e6。
-      const WEIGHTED = '(tu.input_tokens + tu.output_tokens * 5 + tu.cache_read_tokens * 0.1 + tu.cache_create_tokens * 1.25)';
-      // 每 1M input 的 USD 單價（未知/空 model 一律以 sonnet 計）。LOWER+LIKE 相容 pg-mem。
-      const RATE = `(CASE
-             WHEN LOWER(COALESCE(tu.model,'')) LIKE '%haiku%' THEN 1.0
-             WHEN LOWER(COALESCE(tu.model,'')) LIKE '%opus%'  THEN 5.0
-             WHEN LOWER(COALESCE(tu.model,'')) LIKE '%fable%' THEN 10.0
-             ELSE 3.0
-           END)`;
-      const COST = `(${RATE} * ${WEIGHTED} / 1000000.0)`;
+      const { weighted: WEIGHTED, cost: COST } = costSql('tu.');
 
       // Summary：總 Token（原始四項相加）＋ Cache 總數（原始）＋ 實際花費（USD）
       const { rows: [summary] } = await query(

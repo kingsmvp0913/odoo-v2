@@ -291,6 +291,29 @@ test('B-5 帶失敗回饋且有新 commit → 照常進 QA', async () => {
   expect(t.status).toBe('qa_running');
 });
 
+// 鑑別力：單一 repo 時 every 與 some 完全同義，全綠證明不了判準是哪一個（rules/testing.md 19）。
+// 多 repo 才分得出來，而誤判的方向正好是最傷的那個——把 every 寫成 some 的話，「只改了其中一個
+// repo」這種再正常不過的修正輪會被當成空轉擋成 stopped。
+test('B-5 多 repo 只改其中一個 → 不算「無變更」，照常進 QA', async () => {
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'plugin','u','/repos/tap/plugin',false,'done')",
+    [projectId]
+  );
+  try {
+    mockClaude({ onCall: (child) => { emitInit(child, 'sess-multi'); emitResult(child); child.emit('close', 0); } });
+    // main 前後同 SHA（沒動），plugin 每次不同（有新 commit）
+    git.revParse.mockImplementation((p) =>
+      Promise.resolve(String(p).includes('plugin') ? `sha-plugin-${Math.random()}` : 'sha-main-fixed'));
+    const id = await insertCodingTask('multirepo', { retry_feedback: '[QA 未通過]\n只需要改 plugin' });
+    await runTaskCoding(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('qa_running');   // every → 放行；改成 some 的話這裡會是 stopped
+  } finally {
+    await dbModule.query("DELETE FROM project_repos WHERE project_id=$1 AND label='plugin'", [projectId]);
+  }
+});
+
 // 不誤傷：分診判 resume 把任務放回 coding（無 retry_feedback）時，本來就可能無事可做。
 // 這種情況沒有「必然重現的失敗」在等著，照常放行——守衛只針對「帶著失敗回饋卻沒改東西」。
 test('B-5 無失敗回饋且無新 commit → 不誤判，照常進 QA', async () => {

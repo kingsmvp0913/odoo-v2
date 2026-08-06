@@ -784,7 +784,11 @@ describe('ai-dev 基底', () => {
     await write(a, 'ai.py', 'ai = 1\n');
     await sh(a, 'add', '-A');
     await sh(a, 'commit', '-m', 'A 的產出');
-    await sh(a, 'push', 'origin', 'ai-dev:refs/heads/ai-dev-main');
+    // 目的地要由 remoteAiRef 推導，不可寫死 'ai-dev-main'：寫死的話 upstream 綁錯也照樣推到對的
+    // 地方，這支永遠綠——而「upstream 綁對了沒」正是它宣稱要驗的事。
+    // （不能用裸 push：本地叫 ai-dev、遠端叫 ai-dev-main，push.default=simple 會直接拒絕；
+    //   平台實際的推送路徑也是帶 refspec 的，見 mergeToAiBranch。）
+    await sh(a, 'push', 'origin', `ai-dev:refs/heads/${await git.remoteAiRef(a)}`);
     const { stdout: heads } = await run('git', ['ls-remote', '--heads', origin]);
     const shaOf = (name) => (heads.split('\n').find(l => l.endsWith(`refs/heads/${name}`)) || '').split('\t')[0];
     expect(shaOf('ai-dev-main')).not.toBe(shaOf('ai-dev-kangyue'));

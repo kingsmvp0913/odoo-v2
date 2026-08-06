@@ -19,15 +19,18 @@ stage: wiki
 【輸出】（嚴格遵守）
 把結果 JSON 包在 <result></result> 標籤內回傳（標籤外不要任何其他文字或 markdown code block）：
 <result>
-{"slug":"<英文小寫加連字號>","title":"<標題>","content":"<Markdown>"}
+{"slug":"<英文小寫加連字號>","title":"<標題>","description":"<一句話摘要>","content":"<Markdown>"}
 </result>
 
 任務完成情境（且僅該情境）可額外附上 `parents`，用來「往上補」父頁——只在這次功能讓「模組頁」或「總覽」變得有誤或不完整時才附，且只放需要動的那幾頁：
 <result>
 {"slug":"...","title":"...","content":"...",
+ "description":"<一句話摘要>",
  "parents":[{"slug":"module-<模組>","content":"<修正後 Markdown>"},{"slug":"overview","content":"<修正後 Markdown>"}]}
 </result>
 `parents` 的 slug 僅限「本任務所屬模組頁」或 `overview`；父頁不需修改時**不要**附 parents。
+
+`description` 是一句話摘要（**60 字以內**），寫「這一頁在講什麼」。它是頁面清單與搜尋結果**唯一**會回傳的說明欄位（`content` 不會），別人就是靠它決定「要不要打開這一頁」——寫成「維修單的建立與派工流程，含跨部門轉單的限制」這種，不要寫成「維修模組說明」這種等於沒說的話。
 
 【撰寫原則】
 - 讀者是「使用這套系統的業務人員或管理者」，不是開發者。

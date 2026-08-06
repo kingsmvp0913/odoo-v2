@@ -1,4 +1,5 @@
 const { query } = require('../db');
+const { costSql } = require('../lib/token-cost');
 
 const SAMPLE = 5;                                   // 樣本上限，避免 prompt 過長
 const REJECT_STAGES = new Set(['coding', 'analysis']); // 人工退回對這兩類 agent 最可行動
@@ -27,13 +28,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
   // 成本用與 token-report 同一套加權（output=5×、cache_read=0.1×、cache_create=1.25× input），
   // 單價依 model 取（未知/空一律以 sonnet 計）。健檢原本完全看不到成本，於是 30 天最大單項支出
   // 的 agent 被判「表現正常」——成本是本平台最該被觀測的訊號，不能不在視野內。
-  const WEIGHTED = '(input_tokens + output_tokens * 5 + cache_read_tokens * 0.1 + cache_create_tokens * 1.25)';
-  const RATE = `(CASE
-         WHEN LOWER(COALESCE(model,'')) LIKE '%haiku%' THEN 1.0
-         WHEN LOWER(COALESCE(model,'')) LIKE '%opus%'  THEN 5.0
-         WHEN LOWER(COALESCE(model,'')) LIKE '%fable%' THEN 10.0
-         ELSE 3.0
-       END)`;
+  const { weighted: WEIGHTED, rate: RATE } = costSql();
   const { rows: [tk] } = await query(
     `SELECT COUNT(*)::int AS calls,
             COALESCE(SUM(input_tokens),0)::int  AS input_tokens,
