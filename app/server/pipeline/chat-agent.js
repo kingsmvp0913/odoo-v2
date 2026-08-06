@@ -1,4 +1,4 @@
-const { runClaude } = require('./claude-runner');
+const { withResume } = require('./with-resume');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
@@ -49,7 +49,30 @@ async function chatReply(projectId, chatId, userMessage, userId) {
   try {
     let chatResult;
     try {
-      chatResult = await runClaude(prompt, { model: agent.model, agentType: 'chat' });
+      // session 續接：前一輪讀過的 code／DB／log 都留在 session 裡，續接輪只送使用者這輪的話。
+      // chat 的成本 98.8% 在 agentic 調查（prompt 僅 0.9%），無狀態＝同一個問題被反覆完整調查。
+      // 刻意不改走「把證據塞回 history」：塞進 prompt 的內容付 cache_create（1.25×），留在 session
+      // 裡的下一輪是 cache_read（0.1×），差 12.5 倍；且 history 是 LIMIT 10 滑動視窗，塞大後最舊
+      // 那則被擠掉會讓 cache 前綴變動而全數失效，比不塞更貴。
+      // 護欄由 with-resume 提供：無 session／prompt 指紋不符／retry 失敗 → 一律降級 fresh，
+      // 使用者這輪仍拿得到回覆。
+      chatResult = await withResume({
+        freshAgentName: 'chat',
+        retryAgentName: 'chat-retry',
+        getSession: async () => {
+          const { rows: [r] } = await query('SELECT chat_session_id, chat_prompt_ver FROM project_chats WHERE id=$1', [chatId]);
+          return r && r.chat_session_id ? { sessionId: r.chat_session_id, promptVer: r.chat_prompt_ver } : null;
+        },
+        setSession: ({ sessionId, promptVer }) =>
+          query('UPDATE project_chats SET chat_session_id=$2, chat_prompt_ver=$3 WHERE id=$1', [chatId, sessionId, promptVer]),
+        clearSession: () =>
+          query('UPDATE project_chats SET chat_session_id=NULL, chat_prompt_ver=NULL WHERE id=$1', [chatId]),
+        renderFresh: () => prompt,
+        renderRetry: () => loadAgent('chat-retry').render({ user_message: userMessage }),
+        model: agent.model,
+        runOpts: { agentType: 'chat' },
+        onRetryFailed: (err) => logFailedUsage({ projectId, chatId }, userId, 'chat', err)
+      });
     } catch (err) {
       await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
       // 中斷也要讓 AI 方留一則訊息（role='ai' 自動計入未讀）：否則使用者的提問就這樣懸著、

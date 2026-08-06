@@ -536,6 +536,12 @@ async function migrate() {
     // 回覆進行中旗標：前端據此顯示持續動畫（server 狀態，離開對話再回來仍在）。唯一寫 true 的地方是
     // chatReply 開始跑 claude 前；成功／失敗／崩潰都會被清回 false（finally 或啟動時 recoverInterruptedChats）。
     { table: 'project_chats', col: 'reply_pending', sql: 'ALTER TABLE project_chats ADD COLUMN reply_pending BOOLEAN NOT NULL DEFAULT false' },
+    // chat 的 session 續接（with-resume）：續接輪不必重查上一輪已經查過的 code／DB／log。
+    // chat 的成本 98.8% 在 agentic 調查迴圈（prompt 只佔 0.9%），而無狀態讓同一個問題被反覆
+    // 完整調查——實測一場九輪對話裡 AI 四次自我推翻，就是因為原始證據沒留在 context 裡。
+    // prompt_ver 用來擋「agent prompt 改過卻續用舊 session」（見 with-resume.js 的護欄）。
+    { table: 'project_chats', col: 'chat_session_id', sql: 'ALTER TABLE project_chats ADD COLUMN chat_session_id TEXT' },
+    { table: 'project_chats', col: 'chat_prompt_ver', sql: 'ALTER TABLE project_chats ADD COLUMN chat_prompt_ver TEXT' },
     { table: 'db_connections', col: 'ssh_key_enc', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_key_enc TEXT' },
     // direct 連線模式（DBeaver 直連 TCP）：不經 SSH，pg 直連
     { table: 'db_connections', col: 'db_host',         sql: 'ALTER TABLE db_connections ADD COLUMN db_host TEXT' },

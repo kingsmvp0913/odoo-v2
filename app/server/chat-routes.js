@@ -56,13 +56,15 @@ function registerRoutes(app) {
   app.get('/api/projects/:projectId/chats', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(
-        `SELECT c.id, c.title, c.created_at, c.reply_pending,
+        // chat_session_id 一併吐出：那是 claude CLI 的 session，排障時可用 `claude --resume <id>`
+        // 直接接上該場對話，看 AI 實際查了什麼（回覆文字只留結論，工具呼叫過程只存在 session 裡）。
+        `SELECT c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id,
                 COUNT(m.id) AS unread
          FROM project_chats c
          LEFT JOIN project_chat_messages m
            ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
          WHERE c.project_id = $1 AND c.user_id = $2
-         GROUP BY c.id, c.title, c.created_at, c.reply_pending
+         GROUP BY c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id
          ORDER BY c.created_at DESC`,
         [req.params.projectId, req.userId]
       );

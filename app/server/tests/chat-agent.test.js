@@ -162,3 +162,55 @@ test('recoverInterruptedChats → 每個卡住的對話補中斷訊息並清 pen
   expect(aiInserts.length).toBe(2);
   expect(calls.filter(c => /reply_pending = false/.test(c[0])).length).toBe(2);
 });
+
+// --- session 續接（with-resume）---
+// 意圖：chat 的成本 98.8% 在 agentic 調查迴圈（prompt 僅佔 0.9%），而無狀態讓同一個問題被反覆
+// 完整調查——實測一場九輪對話裡 AI 四次自我推翻，正是因為上一輪讀到的 code／DB／log 沒留在
+// context 裡。續接輪必須只送「使用者這輪的話」，先前的探索靠 session 帶，不重送也不重查。
+test('已有 session 且指紋相符 → 走續接輪，只送新發言、不重送 cs-capability 與 history', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('chat')}.${promptVersion('chat-retry')}`;
+  mockQuery.mockImplementation((sql) => {
+    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ chat_session_id: 'sess-abc', chat_prompt_ver: ver }] });
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [{ role: 'user', content: '前一輪問題' }] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await chatReply('1', '2', '那 NAS 掛載斷過嗎', 99);
+
+  const [prompt, opts] = mockRunClaude.mock.calls[0];
+  expect(opts.resumeSessionId).toBe('sess-abc');      // 真的續接，不是 fresh
+  expect(prompt).toContain('那 NAS 掛載斷過嗎');       // 只送這輪的話
+  expect(prompt).toContain('不要重查已經查過的東西');   // 續接輪 prompt
+  expect(prompt).not.toContain('/ai/wiki/pages');     // cs-capability 不重送（session 裡已有）
+  expect(prompt).not.toContain('前一輪問題');          // history 不重送
+});
+
+// 指紋是唯一擋得住「prompt 改了卻續用舊 session」的護欄——不比對就會讓新規則整場對話都不生效。
+test('session 指紋不符（agent prompt 改過）→ 降級 fresh，不續接舊 session', async () => {
+  mockQuery.mockImplementation((sql) => {
+    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ chat_session_id: 'sess-old', chat_prompt_ver: 'stale-version' }] });
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await chatReply('1', '2', '問題', 99);
+
+  const [prompt, opts] = mockRunClaude.mock.calls[0];
+  expect(opts.resumeSessionId).toBeUndefined();  // 不續接
+  expect(prompt).toContain('/ai/wiki/pages');    // 走 fresh 完整 prompt
+});
+
+// session id 必須落地，否則下一則又是 fresh——整個機制等於沒接。
+test('首輪回覆帶 session_id → 寫回 project_chats 供下一則續接', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '回覆', usage: {}, durationMs: 1, sessionId: 'sess-new' });
+  await chatReply('1', '2', '第一個問題', 99);
+
+  const saved = mockQuery.mock.calls.find(c => /UPDATE project_chats SET chat_session_id/.test(c[0]));
+  expect(saved).toBeTruthy();
+  expect(saved[1]).toEqual(['2', 'sess-new', expect.any(String)]);
+});
