@@ -60,7 +60,7 @@ jest.mock('../pipeline/merge-agent', () => ({
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
-let dbModule, runTaskAnalysis, runTaskCoding, git, mergeAgent;
+let dbModule, runTaskAnalysis, runTaskCoding, runSpecTourGate, git, mergeAgent;
 let userId, projectId;
 
 beforeAll(async () => {
@@ -88,7 +88,7 @@ beforeAll(async () => {
 
   git = require('../pipeline/git');
   mergeAgent = require('../pipeline/merge-agent');
-  ({ runTaskAnalysis, runTaskCoding } = require('../pipeline/task-agent'));
+  ({ runTaskAnalysis, runTaskCoding, runSpecTourGate } = require('../pipeline/task-agent'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -289,6 +289,29 @@ test('B-5 帶失敗回饋且有新 commit → 照常進 QA', async () => {
 
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('qa_running');
+});
+
+// 鑑別力：單一 repo 時 every 與 some 完全同義，全綠證明不了判準是哪一個（rules/testing.md 19）。
+// 多 repo 才分得出來，而誤判的方向正好是最傷的那個——把 every 寫成 some 的話，「只改了其中一個
+// repo」這種再正常不過的修正輪會被當成空轉擋成 stopped。
+test('B-5 多 repo 只改其中一個 → 不算「無變更」，照常進 QA', async () => {
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'plugin','u','/repos/tap/plugin',false,'done')",
+    [projectId]
+  );
+  try {
+    mockClaude({ onCall: (child) => { emitInit(child, 'sess-multi'); emitResult(child); child.emit('close', 0); } });
+    // main 前後同 SHA（沒動），plugin 每次不同（有新 commit）
+    git.revParse.mockImplementation((p) =>
+      Promise.resolve(String(p).includes('plugin') ? `sha-plugin-${Math.random()}` : 'sha-main-fixed'));
+    const id = await insertCodingTask('multirepo', { retry_feedback: '[QA 未通過]\n只需要改 plugin' });
+    await runTaskCoding(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('qa_running');   // every → 放行；改成 some 的話這裡會是 stopped
+  } finally {
+    await dbModule.query("DELETE FROM project_repos WHERE project_id=$1 AND label='plugin'", [projectId]);
+  }
 });
 
 // 不誤傷：分診判 resume 把任務放回 coding（無 retry_feedback）時，本來就可能無事可做。
@@ -703,12 +726,12 @@ function analysisSpawn(onStdin) {
   const { spawn } = require('child_process');
   const { EventEmitter } = require('events');
   const calls = [];
-  spawn.mockImplementation((bin, args) => {
+  spawn.mockImplementation((bin, args, opts) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     child.kill = () => {};
-    const call = { args, stdin: '' };
+    const call = { args, stdin: '', cwd: (opts || {}).cwd };
     calls.push(call);
     child.stdin = {
       write: (d) => { call.stdin += d; if (onStdin) onStdin(d); },
@@ -728,71 +751,99 @@ function analysisSpawn(onStdin) {
   return calls;
 }
 
-test('spec_tour_enabled=false（預設）→ 分析後不產 tour，只跑一次 claude', async () => {
-  const calls = analysisSpawn();
+// 旗標一律 try/finally 復原：全檔共用同一個 projectId、沒有 beforeEach 重置，而旗標是 runtime
+// 現讀 DB。斷言失敗就洩漏給後面每一支，變成「一支真紅帶出一串假紅」。
+async function withSpecTour(fn) {
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
+  try { await fn(); }
+  finally { await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]); }
+}
+
+async function makeSpecTask(tid) {
   const { rows: [t] } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_notour','odoo','T','需求','analysis_running',$2) RETURNING id",
-    [userId, projectId]
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, analysis_yaml)
+     VALUES ($1,$2,'odoo','T','需求','branch_pending',$3,$4) RETURNING id`,
+    [userId, tid, projectId, 'module: "idx_x"\nsummary: "加跳頁"\nacceptance:\n  - "點「前往」後出現「共 N 頁」"\n']
   );
-  await runTaskAnalysis(t.id, userId);
-  expect(calls).toHaveLength(1);                    // 只有 analysis，沒有續寫 tour
-  expect(calls[0].args).not.toContain('--resume');
+  return t.id;
+}
+
+test('spec_tour_enabled=false（預設）→ runSpecTourGate 完全不呼叫 claude', async () => {
+  const calls = analysisSpawn();
+  await runSpecTourGate(await makeSpecTask('ta_notour'), userId);
+  expect(calls).toHaveLength(0);
 });
 
-test('spec_tour_enabled=true → 分析後用同一 session --resume 續寫 tour', async () => {
-  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
-  const calls = analysisSpawn();
-  const { rows: [t] } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_tour','odoo','T','需求','analysis_running',$2) RETURNING id",
-    [userId, projectId]
-  );
-  await runTaskAnalysis(t.id, userId);
+// 意圖：規格閘門可能隔數小時才被核准，那時 analysis session 的 prompt cache 早已過期，--resume
+// 等於全價重播整段分析對話。改成無狀態、直接讀定稿的 analysis.yaml（always.md 規則 74）。
+test('spec_tour_enabled=true → 無狀態 fresh 產 tour，prompt 帶定稿規格', async () => {
+  await withSpecTour(async () => {
+    const calls = analysisSpawn();
+    await runSpecTourGate(await makeSpecTask('ta_tour'), userId);
 
-  expect(calls).toHaveLength(2);                        // analysis + 續寫 tour
-  const tourCall = calls[1];
-  expect(tourCall.args).toContain('--resume');          // 真的續接，不是 fresh
-  expect(tourCall.args).toContain('sess-analysis');     // 續的是分析那個 session
-  expect(tourCall.stdin).toContain('acceptance');       // 依驗收條件寫
-  expect(tourCall.stdin).toContain('實作還不存在');      // 明確告知不要去找還沒寫的欄位
-  expect(tourCall.stdin).not.toContain('<result>');     // tour 類 agent 不得有 result 契約
-  await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]);
-});
-
-// tour 是加值產物：續寫失敗不得讓已經產出的規格或關卡推進跟著壞掉（Rule 12 的例外要明講）。
-test('spec tour 續寫失敗 → 規格照樣落地、任務照樣推進', async () => {
-  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
-  const { spawn } = require('child_process');
-  const { EventEmitter } = require('events');
-  let n = 0;
-  spawn.mockImplementation(() => {
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = () => {};
-    const isTour = ++n > 1;
-    child.stdin = {
-      write: () => {},
-      end: () => setImmediate(() => {
-        if (isTour) { child.emit('close', 1); return; }   // 續寫 tour 那次直接失敗
-        child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-analysis' }) + '\n');
-        child.stdout.emit('data', JSON.stringify({
-          type: 'result',
-          result: '<result>\ncase_id: "x"\nmodule: "idx_x"\nodoo_version: "17.0"\nexecution_mode: "direct"\nsummary: "加跳頁"\n</result>',
-          usage: null, duration_ms: 10
-        }) + '\n');
-        child.emit('close', 0);
-      })
-    };
-    return child;
+    expect(calls).toHaveLength(1);
+    const tourCall = calls[0];
+    expect(tourCall.args).not.toContain('--resume');       // 不再依賴 analysis session
+    expect(tourCall.stdin).toContain('acceptance');        // 依驗收條件寫
+    expect(tourCall.stdin).toContain('共 N 頁');            // 定稿規格真的被帶進 prompt
+    expect(tourCall.stdin).not.toContain('<result>');      // tour 類 agent 不得有 result 契約
+    // agent-loader 對未匹配的 placeholder 只 console.warn 就替成空字串——最難察覺的準確性殺手
+    expect(tourCall.stdin).not.toMatch(/\{\{\w+\}\}/);
+    // 帶 --dangerously-skip-permissions 跑，cwd 必須是任務 worktree，不能是平台自己的 repo
+    expect(tourCall.cwd).toContain(path.join('.worktrees', 'ta_tour'));
   });
-  const { rows: [t] } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_tourfail','odoo','T','需求','analysis_running',$2) RETURNING id",
-    [userId, projectId]
-  );
-  await runTaskAnalysis(t.id, userId);
+});
 
-  const { rows: [after] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [t.id]);
-  expect(after.status).not.toBe('stopped');       // 沒有被 tour 失敗拖垮
-  expect(after.analysis_yaml).toContain('idx_x'); // 規格照樣落地
-  await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]);
+// 意圖：歸帳掛到 playwright 名下的話，「這關重跑幾次、花多少」全部算錯，而健檢正是拿那些數字判
+// 該不該檢討——也就無從量測「規格 tour 模式到底省不省 token」。
+test('spec tour 的用量記在 spec_tour 名下，不混進 playwright 關', async () => {
+  await withSpecTour(async () => {
+    analysisSpawn();
+    const { logTokenUsage } = require('../pipeline/token-logger');
+    logTokenUsage.mockClear();
+    await runSpecTourGate(await makeSpecTask('ta_tour_acct'), userId);
+    const stages = logTokenUsage.mock.calls.map(c => c[2]);
+    expect(stages).toContain('spec_tour');
+    expect(stages).not.toContain('playwright');
+  });
+});
+
+// tour 是加值產物：產不出來不得讓關卡推進跟著壞掉。但也不能靜默——分析關吞掉的話，下游只能靠
+// 實測檔案存在與否去猜，而使用者完全看不到發生過什麼。
+test('spec tour 產出失敗 → 不拋例外，但要在時間軸留下原因', async () => {
+  await withSpecTour(async () => {
+    const { spawn } = require('child_process');
+    const { EventEmitter } = require('events');
+    spawn.mockImplementation(() => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 1)) };
+      return child;
+    });
+    const id = await makeSpecTask('ta_tourfail');
+    await expect(runSpecTourGate(id, userId)).resolves.toBeUndefined();  // 不得往外拋
+    const { rows } = await dbModule.query(
+      "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%規格 tour%'", [id]
+    );
+    expect(rows.length).toBeGreaterThan(0);
+  });
+});
+
+// C2 的迴歸防線：分析關算出的 nextStatus 可能是 confirm_pending（還有問題要問）或 spec_review
+// （要人看過），那兩種狀態下 acceptance 都還會變。在那裡出考題的話，使用者答完會重跑分析再產
+// 一份，而舊的那份因為 ensureWorktreeAtMain 對已領先 base 的分支走 merge 不 reset 而留在模組裡，
+// 最後 --test-tags /<module> 把新舊兩份一起跑，舊的必失敗 → 退 coding → coding 不准改測試檔 → stopped。
+test('即使旗標開著，分析關本身也不得產 tour（要等規格定稿）', async () => {
+  await withSpecTour(async () => {
+    const calls = analysisSpawn();
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_gate','odoo','T','需求','analysis_running',$2) RETURNING id",
+      [userId, projectId]
+    );
+    await runTaskAnalysis(t.id, userId);
+    expect(calls).toHaveLength(1);                       // 只有 analysis 那一次
+    expect(calls[0].stdin).not.toContain('規格已經定稿');  // 而且那一次不是 playwright-spec 的 prompt
+  });
 });

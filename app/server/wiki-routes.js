@@ -112,16 +112,28 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 專案參數可以是 folder_name 或 name，但「用 OR 直接 join」會出事：A 的 folder_name 撞到 B 的
+  // name 時（中文專案名＋英文資料夾名的慣例下很容易），一次查詢會同時撈到兩個專案的頁。先解成
+  // 唯一的 project_id 再查，各端點一律 w.project_id=$1，就不會混到別人的內容。
+  // 撞號時取 folder_name 命中的那個（比 name 精確，且它才是慣例上拿來當 slug 的欄位）。
+  async function resolveProjectId(project) {
+    const { rows } = await query(
+      `SELECT id FROM projects WHERE folder_name=$1 OR name=$1
+        ORDER BY (folder_name=$1) DESC, id ASC LIMIT 1`, [project]);
+    return rows.length ? rows[0].id : null;
+  }
+
   // description 一併回傳：只給 title 的話，agent 只能靠標題猜哪一頁相關，wiki 一多就必漏——
   // 而且漏掉沒有任何訊號（端點回 200＋清單，agent 當成「沒有相關記載」就不查了）。
   app.get('/ai/wiki/pages', aiEndpointGuard, async (req, res) => {
     try {
+      const pid = await resolveProjectId(req.query.project);
+      if (!pid) return res.json({ ok: true, pages: [] });
       const { rows } = await query(
-        `SELECT w.slug, w.title, w.node_type, w.description
-           FROM wiki_pages w JOIN projects p ON p.id = w.project_id
-          WHERE p.folder_name=$1 OR p.name=$1
-          ORDER BY (w.node_type <> 'overview'), w.node_type, w.title ASC`,
-        [req.query.project]);
+        `SELECT slug, title, node_type, description FROM wiki_pages
+          WHERE project_id=$1
+          ORDER BY (node_type <> 'overview'), node_type, title ASC`,
+        [pid]);
       res.json({ ok: true, pages: rows });
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
@@ -133,15 +145,21 @@ function registerRoutes(app) {
     try {
       const q = String(req.query.q || '').trim();
       if (!q) return res.json({ ok: false, error: '缺 q 參數（要搜尋的關鍵字）' });
-      const like = `%${q.toLowerCase()}%`;
+      const pid = await resolveProjectId(req.query.project);
+      if (!pid) return res.json({ ok: true, hits: [] });
+      // 逸脫 LIKE 萬用字元：agent 常直接把錯誤訊息或路徑丟進來搜，裡面的 _ 與 % 會被當成萬用字元
+      //（`_` 比對任一字元、`%` 比對任意長度），搜出一堆不相干的頁，或反過來把該中的搜不到。
+      // 不寫 ESCAPE 子句：反斜線本來就是 PostgreSQL 的 LIKE 預設逸脫字元，寫了反而讓 pg-mem 解析
+      // 不了整句（它不支援該子句），測試環境會整組炸掉。
+      const like = `%${q.toLowerCase().replace(/[\\%_]/g, c => `\\${c}`)}%`;
       const { rows } = await query(
-        `SELECT w.slug, w.title, w.node_type, w.description
-           FROM wiki_pages w JOIN projects p ON p.id = w.project_id
-          WHERE (p.folder_name=$1 OR p.name=$1)
-            AND (LOWER(w.title) LIKE $2 OR LOWER(w.content) LIKE $2 OR LOWER(COALESCE(w.description,'')) LIKE $2)
-          ORDER BY (w.node_type <> 'troubleshooting'), w.title ASC
+        `SELECT slug, title, node_type, description FROM wiki_pages
+          WHERE project_id=$1
+            AND (LOWER(title) LIKE $2 OR LOWER(content) LIKE $2
+                 OR LOWER(COALESCE(description,'')) LIKE $2)
+          ORDER BY (node_type <> 'troubleshooting'), title ASC
           LIMIT 20`,
-        [req.query.project, like]);
+        [pid, like]);
       res.json({ ok: true, hits: rows });
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
@@ -153,11 +171,11 @@ function registerRoutes(app) {
   //（wiki_pages 的 (project_id, slug) 正好有 unique index），測試會全綠但功能是死的。
   app.get('/ai/wiki/page', aiEndpointGuard, async (req, res) => {
     try {
+      const pid = await resolveProjectId(req.query.project);
+      if (!pid) return res.json({ ok: false, error: '找不到該 wiki 頁' });
       const { rows: [page] } = await query(
-        `SELECT w.slug, w.title, w.content
-           FROM wiki_pages w JOIN projects p ON p.id = w.project_id
-          WHERE (p.folder_name=$1 OR p.name=$1) AND w.slug=$2`,
-        [req.query.project, req.query.slug]);
+        'SELECT slug, title, content FROM wiki_pages WHERE project_id=$1 AND slug=$2',
+        [pid, req.query.slug]);
       if (!page) return res.json({ ok: false, error: '找不到該 wiki 頁' });
 
       const refs = [...new Set(
@@ -167,10 +185,9 @@ function registerRoutes(app) {
       if (refs.length) {
         const ph = refs.map((_, i) => `$${i + 2}`).join(',');
         const { rows } = await query(
-          `SELECT w.slug, w.title, w.description, w.node_type
-             FROM wiki_pages w JOIN projects p ON p.id = w.project_id
-            WHERE (p.folder_name=$1 OR p.name=$1) AND w.slug IN (${ph})`,
-          [req.query.project, ...refs]);
+          `SELECT slug, title, description, node_type FROM wiki_pages
+            WHERE project_id=$1 AND slug IN (${ph})`,
+          [pid, ...refs]);
         links = rows;
       }
       // 連到還不存在的 slug 不是錯誤——那是「這裡該有一則但還沒寫」的記號，照樣回報讓人看得到缺口。

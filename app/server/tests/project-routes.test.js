@@ -61,6 +61,8 @@ jest.mock('../pipeline/git', () => ({
   remoteAiBranchName: (b) => (b ? `ai-dev-${String(b).replace(/\//g, '-')}` : 'ai-dev'),
   remoteAiRef: jest.fn().mockResolvedValue('ai-dev'),
   refExists: jest.fn().mockResolvedValue(false),
+  // 判「歪沒歪」的真正入口（aiBranchBase 只用來產訊息）；預設不歪，既有案例照舊跳過扶正
+  aiBaseDrift: jest.fn().mockResolvedValue({ drifted: false, own: 0 }),
   aiBranchBase: jest.fn().mockResolvedValue(null),
   aiOwnCommits: jest.fn().mockResolvedValue(0),
   rebuildAiBranch: jest.fn().mockResolvedValue({ oldSha: 'oldsha1', newSha: 'newsha1' }),
@@ -393,6 +395,18 @@ async function waitReclone(rid) {
   throw new Error('reclone 逾時未完成（clone_status 卡在 cloning）');
 }
 
+// 等某個 mock 真的被「本案例的 destPath」呼叫到。不可只在 waitReclone 之後直接斷言：
+// updateMainClone 刻意先回寫 clone_status='done' 再重建 testing（順序不可倒，見該函式註解），
+// 所以 waitReclone 返回時重建還在飛——上一個案例的重建會落進下一個案例的斷言窗，
+// 斷言於是讀到別人的 destPath（實測本檔就因此恆紅一支）。
+async function waitCalledWith(mockFn, arg) {
+  for (let i = 0; i < 100; i++) {
+    if (mockFn.mock.calls.some(c => c[0] === arg)) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(`逾時：${arg} 從未被呼叫（實際呼叫：${JSON.stringify(mockFn.mock.calls.map(c => c[0]))}）`);
+}
+
 // 建一個「已 clone、已設 PAT」可觸發 updateMainClone 更新流程的 repo
 async function setupReclonableRepo(name) {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
@@ -449,7 +463,7 @@ test('POST reclone：更新完成後 testing 真的被重長到 ai-dev（不是�
 
   const row = await waitReclone(rid);
   expect(row.clone_status).toBe('done');
-  expect(gitMock.resetTestingToAiBranch).toHaveBeenCalledWith(dir);
+  await waitCalledWith(gitMock.resetTestingToAiBranch, dir);
 });
 
 // 意圖：這裡不綁任何任務，沒有裁決 UI 可用——撞衝突時必須 abort 讓 ai-dev 還原、不留半殘 merge，
@@ -488,6 +502,9 @@ function stubAiBase({ actual, own }) {
   gitMock.syncMainIntoAi.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
   gitMock.syncMainIntoAi.mockClear(); // 跨案例共用的 mock，不清會讀到別的案例留下的呼叫紀錄
   gitMock.refExists.mockResolvedValue(true);
+  // drifted 由 actual 是否就是主分支（ensureMainBranch mock 回 kangyue）推導，讓各案例的語意
+  // 維持在「ai-dev 實際長在哪」這一個變數上，不必兩處各設一次而有機會互相矛盾
+  gitMock.aiBaseDrift.mockResolvedValue({ drifted: actual !== 'kangyue', own });
   gitMock.aiBranchBase.mockResolvedValue(actual);
   gitMock.aiOwnCommits.mockResolvedValue(own);
   gitMock.rebuildAiBranch.mockClear();
@@ -518,7 +535,9 @@ test('reclone：基底歪掉但 ai-dev 上有 AI 產出 → 絕不重建，停�
   const row = await waitReclone(rid);
   expect(gitMock.rebuildAiBranch).not.toHaveBeenCalled(); // 那 3 個 commit 只存在於 ai-dev
   expect(gitMock.syncMainIntoAi).not.toHaveBeenCalled();  // 硬同步注定衝突，不要製造待解狀態
-  expect(row.clone_status).toBe('error');
+  // 停下同步，但 repo 必須留在 pipeline 裡：全平台撈 repo 一律 WHERE clone_status='done'（規則 81），
+  // 標成 error 等於讓該專案所有任務立刻撈不到 repo、approve 直接 400——偵測到問題不是讓 repo 消失的理由
+  expect(row.clone_status).toBe('done');
   expect(row.clone_error).toContain('main');              // 說清楚它現在長在哪
   expect(row.clone_error).toContain('kangyue');           // 以及應該長在哪
 });
@@ -598,6 +617,41 @@ test('POST repos：同 repo 但不同主分支 → 放行（這正是要支援�
   const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: url, base_branch: 'main' });
   expect(res.status).toBe(201);
+});
+
+// 意圖：守衛比對的是「是不是同一個 repo」，不是「網址字串一不一樣」。差一個 .git 就繞過的話，
+// 兩個專案照樣落在同一條遠端 AI 分支上互相 force push 覆蓋，而且是靜默的。
+test('POST repos：repo_url 只差 .git／尾斜線也算同一個 repo → 照樣 409', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const p1 = await mk('norm-first');
+  await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: 'https://example.com/o/norm.git', base_branch: 'kangyue' });
+
+  const p2 = await mk('norm-second');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: 'https://example.com/o/norm/', base_branch: 'kangyue' });
+  expect(res.status).toBe(409);
+  expect(res.body.error).toContain(`#${p1}`);
+});
+
+// 意圖：ensureAiBranch 遇到遠端已有裸 origin/ai-dev 時走「裸名優先」，完全無視 base_branch——
+// 此時不管第二個專案選哪條主分支，都會落到同一條裸分支上。守衛只比 base_branch 會全部放行。
+test('POST repos：對方實際落在裸 ai-dev 上 → 即使主分支不同也要 409', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const url = 'https://example.com/legacy-bare.git';
+  const p1 = await mk('bare-first');
+  const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
+  // 模擬既有專案：clone 完成後回寫的實際落點是裸 ai-dev（遠端本來就有那條分支）
+  await dbModule.query('UPDATE project_repos SET remote_ai_branch=$2 WHERE id=$1', [r1.body.id, 'ai-dev']);
+
+  const p2 = await mk('bare-second');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'main' }); // 刻意選不同主分支
+  expect(res.status).toBe(409);
+  expect(res.body.error).toContain('ai-dev');
 });
 
 test('POST repos：選定的主分支要寫進 DB（之後不能改，寫錯就永久錯）', async () => {

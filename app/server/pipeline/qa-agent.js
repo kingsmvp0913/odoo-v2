@@ -26,6 +26,16 @@ function specDecisionCount(analysisYaml) {
 // 續用上輪對話（已含規格、規則、上輪 diff 探索），只送短增量 prompt 省 token
 const QA_RESUME_LIMIT = 2;
 
+// 最近一筆 QA 未解清單，但**只看最近一次「QA 通過」之後的**。任務 pass 之後可能從 deploy／E2E
+// 失敗回流再進 QA，那時先前的清單早已作廢（pass 分支會寫下分界標記）——不設下界的話會撈到好幾輪前
+// 就修掉的舊清單，QA 對著不存在的問題重驗，而僵局熔斷貼給使用者的也是那份陳年清單，與真因對不上。
+const LATEST_QA_FINDINGS_SQL = `
+  SELECT content FROM task_logs
+   WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 未通過]%'
+     AND id > COALESCE((SELECT MAX(id) FROM task_logs
+                         WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 通過]%'), 0)
+   ORDER BY id DESC LIMIT 1`;
+
 // QA 審查：對照 SD 檢查任務 diff。pass→merge_running；fail→退 coding 並計數（滿 QA_LIMIT→stopped）。
 async function runQaAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
@@ -55,10 +65,7 @@ async function runQaAgent(taskId, userId, signal) {
     try { headSha = await revParse(info.repos[0].local_path, task.git_branch); } catch { /* 分支未建／無 commit：略過偵測 */ }
   }
   if (headSha && task.qa_reviewed_commit === headSha && (task.qa_retry_count || 0) > 0) {
-    const { rows: [prev] } = await query(
-      "SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 未通過]%' ORDER BY id DESC LIMIT 1",
-      [taskId]
-    );
+    const { rows: [prev] } = await query(LATEST_QA_FINDINGS_SQL, [taskId]);
     const findings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（見上輪 QA 清單）';
     await query(
       "UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1",
@@ -80,10 +87,7 @@ async function runQaAgent(taskId, userId, signal) {
     const baseBranch = AI_BRANCH;
     // 撈最近一筆 QA 未解清單餵給本輪：QA 逐項重驗（修好的掉、沒修的留、新的加），讓迴圈收斂而非每輪重新發散。
     // 新語意下每筆 [QA 未通過] 本身即「當下完整未解清單」，取最新一筆＝最完整，不必串接歷史。
-    const { rows: [prev] } = await query(
-      "SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 未通過]%' ORDER BY id DESC LIMIT 1",
-      [taskId]
-    );
+    const { rows: [prev] } = await query(LATEST_QA_FINDINGS_SQL, [taskId]);
     const priorFindings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（首輪，無上輪清單）';
     // 刻意不帶「使用者修正指示」進 QA：那是流程層的話（「已修正」「直接推進」），而放行與否是
     // triage 的 advance 分支在管，QA 沒有做這個決策的資訊（看不到彈跳次數與失敗歷史）。舊版 prompt
@@ -215,7 +219,20 @@ async function runQaAgent(taskId, userId, signal) {
     // 「程式沒錯、錯在別關」不提交任何 commit 時，HEAD 仍等於這次 pass 的 sha，上方熔斷會把它誤判成
     // 「QA 僵局」——貼出的還是好幾輪前早已修掉的舊 QA 清單，人工看到的失敗原因與真因完全對不上，
     // 且兩個裁決選項（補修法／跳過 QA）都解不了真正卡住的那一關。
-    await query("UPDATE tasks SET status='merge_running', qa_reviewed_commit=NULL, updated_at=NOW() WHERE id=$1", [taskId]);
+    // 整組計數器一起清，不只 qa_reviewed_commit：pass ＝這一輪 QA↔coding 迴圈結束，retry／resume
+    // 次數與續接 session 都只在那個迴圈內有意義。留著的話，任務日後從 deploy／E2E 回流再進 QA 時，
+    // 是帶著上一輪的次數起跳的——本來還有額度卻直接觸頂 stopped。
+    await query(
+      `UPDATE tasks SET status='merge_running', qa_reviewed_commit=NULL, qa_session_id=NULL,
+                       qa_retry_count=0, qa_resume_count=0, updated_at=NOW() WHERE id=$1`,
+      [taskId]
+    );
+    // 分界標記：下一輪 QA 取「未解清單」時只看這條線之後的紀錄。沒有它的話，回流重驗會撈到好幾輪
+    // 前早就修掉的舊清單當成待驗項，QA 對著已經不存在的問題重驗，永遠收斂不了。
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', '[QA 通過] 本輪審查通過，先前的未解清單就此作廢')",
+      [taskId]
+    );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'merge_running' });
     return true;
   }

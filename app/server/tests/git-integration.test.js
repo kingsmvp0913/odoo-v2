@@ -626,6 +626,48 @@ describe('ai-dev 基底', () => {
     expect(await git.aiBranchBase(repo)).toBe('main');
   }, 30000);
 
+  test('aiBaseDrift：基底真的歪掉時判 drifted', async () => {
+    const repo = await makeDivergedRepo();
+    expect(await git.aiBaseDrift(repo, 'kangyue')).toEqual({ drifted: true, own: 0 });
+  }, 30000);
+
+  // 這支是 P0 的迴歸防線。舊判準（aiBranchBase 取「距離最近的已合併分支」反推）在這個形狀下必錯：
+  // 主分支領先 ai-dev 時 `--merged origin/ai-dev` 不會列出它，只剩更早合進主分支的舊分支入選，
+  // 於是基底明明正確卻被判成歪掉 → blocked → repo 被標 error 從整個 pipeline 消失（規則 81）。
+  // 而「主分支領先 ai-dev」是常態不是邊角：syncMainIntoAi 的存在就是為了處理它，updateMainClone
+  // 每次的 pullBranch(base) 更是主動把 origin/main 拉到領先。舊的已合併分支未刪也很常見。
+  test('aiBaseDrift：主分支領先 ai-dev、且留有舊的已合併分支 → 不得判成歪掉', async () => {
+    const repo = await makeRepo();
+    // 一條早已合併進 main 且未刪除的舊分支——它會被 aiBranchBase 誤選為「基底」
+    await sh(repo, 'checkout', '-b', 'feature/old', 'main');
+    await write(repo, 'old.py', 'old = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'old feature');
+    await sh(repo, 'push', '-u', 'origin', 'feature/old');
+    await sh(repo, 'checkout', 'main');
+    await sh(repo, 'merge', '--no-ff', '-m', 'merge old feature', 'feature/old');
+    await sh(repo, 'push', 'origin', 'main');
+
+    // ai-dev 從（此刻正確的）main 長出來，帶一筆真正的 AI 產出
+    await sh(repo, 'checkout', '-b', 'ai-dev', 'main');
+    await write(repo, 'ai.py', 'ai = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'ai work');
+    await sh(repo, 'push', '-u', 'origin', 'ai-dev');
+
+    // 然後有人往 main 再推一筆＝main 領先 ai-dev（工程師平常就會這樣做）
+    await sh(repo, 'checkout', 'main');
+    await write(repo, 'later.py', 'later = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'main moves on');
+    await sh(repo, 'push', 'origin', 'main');
+
+    // 對照組：舊判準在這個 repo 上確實會挑到 feature/old（證明本測試分得出兩者）
+    expect(await git.aiBranchBase(repo)).toBe('feature/old');
+    // 正解：基底沒歪，ai-dev 多出來的就只有它自己那一筆產出
+    expect(await git.aiBaseDrift(repo, 'main')).toEqual({ drifted: false, own: 1 });
+  }, 30000);
+
   // 這支是整個功能的關鍵防線：早期用的天真判準 `origin/<base>..ai-dev` 會把「另一條分支的歷史」
   // 算成 AI 產出，於是守衛擋下重建、專案永遠修不好（實測該判準在真實案例回 120，真值是 0）。
   test('aiOwnCommits 只算真正的 AI 產出，不把別條分支的歷史算進來', async () => {
@@ -742,7 +784,11 @@ describe('ai-dev 基底', () => {
     await write(a, 'ai.py', 'ai = 1\n');
     await sh(a, 'add', '-A');
     await sh(a, 'commit', '-m', 'A 的產出');
-    await sh(a, 'push', 'origin', 'ai-dev:refs/heads/ai-dev-main');
+    // 目的地要由 remoteAiRef 推導，不可寫死 'ai-dev-main'：寫死的話 upstream 綁錯也照樣推到對的
+    // 地方，這支永遠綠——而「upstream 綁對了沒」正是它宣稱要驗的事。
+    // （不能用裸 push：本地叫 ai-dev、遠端叫 ai-dev-main，push.default=simple 會直接拒絕；
+    //   平台實際的推送路徑也是帶 refspec 的，見 mergeToAiBranch。）
+    await sh(a, 'push', 'origin', `ai-dev:refs/heads/${await git.remoteAiRef(a)}`);
     const { stdout: heads } = await run('git', ['ls-remote', '--heads', origin]);
     const shaOf = (name) => (heads.split('\n').find(l => l.endsWith(`refs/heads/${name}`)) || '').split('\t')[0];
     expect(shaOf('ai-dev-main')).not.toBe(shaOf('ai-dev-kangyue'));

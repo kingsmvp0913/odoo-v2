@@ -268,7 +268,9 @@ test('無 RESULT-JSON → stopped', async () => {
 // 意圖（比照 coding 健檢 U3）：QA 重驗走 --resume 續用上輪 session（已含規格＋規則＋diff 探索），
 // 只送短增量 prompt；fresh 才送全量規格。省 token 且讓重驗聚焦在未解清單。
 test('QA resume：有 qa_session_id＋上輪未解清單 → --resume 短 prompt、count+1', async () => {
-  claudeReturns({ verdict: 'pass' });
+  // 用 fail 而非 pass：resume 記帳與 verdict 無關，但 pass 分支會刻意把整組計數器歸零
+  //（任務就此離開 QA↔coding 迴圈），拿 pass 驗 count+1 等於驗到被清空後的值。
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
   const id = await makeTask();
   await dbModule.query("UPDATE tasks SET qa_session_id='qs-1', qa_resume_count=0 WHERE id=$1", [id]);
   await dbModule.query(
@@ -282,14 +284,13 @@ test('QA resume：有 qa_session_id＋上輪未解清單 → --resume 短 prompt
   expect(runClaude.mock.calls[0][0]).not.toContain('module: sale');  // 不重送全量規格
   // {{odoo_core_src}} 漏傳只會 console.warn，資料來源段會整段變空白（連禁止掃碟的警告都沒了）
   expect(runClaude.mock.calls[0][0]).toContain('（測試：核心來源守則）');
-  const { rows: [t] } = await dbModule.query('SELECT qa_resume_count, status FROM tasks WHERE id=$1', [id]);
+  const { rows: [t] } = await dbModule.query('SELECT qa_resume_count FROM tasks WHERE id=$1', [id]);
   expect(t.qa_resume_count).toBe(1);
-  expect(t.status).toBe('merge_running');
 });
 
 test('QA fresh：首輪（無 session）→ 全量 prompt、存 qa_session_id', async () => {
   runClaude.mockResolvedValue({
-    text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null, sessionId: 'qs-new'
+    text: '<result>{"verdict":"fail","issues":["x"],"summary":"s"}</result>', usage: null, durationMs: null, sessionId: 'qs-new'
   });
   const id = await makeTask();
   await runQaAgent(id, userId);
@@ -302,7 +303,7 @@ test('QA fresh：首輪（無 session）→ 全量 prompt、存 qa_session_id', 
 
 test('QA resume 額度用完（count=2）→ 強制 fresh 全量', async () => {
   runClaude.mockResolvedValue({
-    text: '<result>{"verdict":"pass"}</result>', usage: null, durationMs: null, sessionId: 'qs-gen2'
+    text: '<result>{"verdict":"fail","issues":["x"],"summary":"s"}</result>', usage: null, durationMs: null, sessionId: 'qs-gen2'
   });
   const id = await makeTask();
   await dbModule.query("UPDATE tasks SET qa_session_id='qs-old', qa_resume_count=2 WHERE id=$1", [id]);
@@ -592,4 +593,46 @@ test('resume：重驗輪同樣不得帶入使用者修正指示', async () => {
   const prompt = runClaude.mock.calls[0][0];
   expect(prompt).not.toContain('忽略該錯誤，直接繼續');
   expect(prompt).toContain('xmlid 不存在');            // 上輪未解清單仍在＝重驗輪本身正常
+});
+
+// 意圖：pass ＝這一輪 QA↔coding 迴圈結束。計數器與 session 只在那個迴圈內有意義，不清的話任務
+// 日後從 deploy／E2E 失敗回流再進 QA 時是「帶著上一輪的次數起跳」——本來還有額度卻直接觸頂 stopped。
+// 未解清單也必須就此作廢，否則回流重驗會撈到好幾輪前早就修掉的舊清單當待驗項，永遠收斂不了。
+test('QA pass → 整組計數器與 session 歸零，並寫下未解清單的分界', async () => {
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask();
+  await dbModule.query(
+    "UPDATE tasks SET qa_session_id='qs-1', qa_resume_count=1, qa_retry_count=3 WHERE id=$1", [id]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\n舊清單')", [id]);
+
+  await runQaAgent(id, userId);
+
+  const { rows: [t] } = await dbModule.query(
+    'SELECT status, qa_session_id, qa_resume_count, qa_retry_count, qa_reviewed_commit FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+  expect(t.qa_session_id).toBeNull();
+  expect(t.qa_resume_count).toBe(0);
+  expect(t.qa_retry_count).toBe(0);
+  expect(t.qa_reviewed_commit).toBeNull();
+  const { rows: marks } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '[QA 通過]%'", [id]);
+  expect(marks.length).toBe(1);
+});
+
+// 迴歸：回流重驗時不得撈到「上一次 pass 之前」的陳年清單
+test('QA pass 之後再進 QA → 不得把作廢的舊清單當成待驗項', async () => {
+  const id = await makeTask();
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[QA 未通過]\n陳年項目：備註欄位未加')", [id]);
+  claudeReturns({ verdict: 'pass' });
+  await runQaAgent(id, userId);                       // 第一輪通過 → 寫下分界
+
+  runClaude.mockClear();
+  claudeReturns({ verdict: 'pass' });
+  await dbModule.query("UPDATE tasks SET status='qa_running' WHERE id=$1", [id]);
+  await runQaAgent(id, userId);                       // 從別關回流再進 QA
+
+  expect(runClaude.mock.calls[0][0]).not.toContain('陳年項目：備註欄位未加');
+  expect(runClaude.mock.calls[0][0]).toContain('（首輪，無上輪清單）');
 });

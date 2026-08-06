@@ -241,7 +241,8 @@ test('S2 QA fail → coding 修正輪（不 --resume＋不升 opus＋帶 QA feed
 
   const task = await getTask(t.id);
   expect(task.status).toBe('review_pending');
-  expect(task.qa_retry_count).toBe(1);
+  // qa_retry_count 不在這裡驗：QA pass 會刻意把整組計數器歸零（任務就此離開 QA↔coding 迴圈，
+  // 留著會讓日後從 deploy／E2E 回流的那輪帶著舊次數起跳而提早觸頂）。「退回過一次」改看 reentry_count。
   expect(task.reentry_count).toBe(1);
   expect(task.retry_feedback).toBeNull(); // 成功消費後清空
 });
@@ -260,7 +261,7 @@ test('QA fail 帶分類 issues → 寫 task_rejections(source=qa)+rejection_item
   await run();
 
   const task = await getTask(t.id);
-  expect(task.qa_retry_count).toBe(1);                         // 退 coding 行為不變
+  expect(task.reentry_count).toBe(1);                          // 退 coding 行為不變（pass 會清 qa_retry_count）
   const { rows: [tr] } = await dbModule.query(
     "SELECT id, source, status FROM task_rejections WHERE task_id=$1", [t.task_id]);
   expect(tr.source).toBe('qa');

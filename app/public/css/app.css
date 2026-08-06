@@ -7,6 +7,8 @@
   --sidebar-active: #ffffff;
   --sidebar-accent: #6366f1;
   --card-bg: #ffffff;
+  --switch-knob: #ffffff;
+  --switch-knob-shadow: rgba(0,0,0,.25);
   --surface: #ffffff;
   --border: #e4e4e7;
   --border-strong: #d1d5db;
@@ -75,6 +77,10 @@
   --sidebar-text: rgba(255,255,255,0.55);
   --sidebar-active: #ffffff;
   --card-bg: #202020;
+  /* 深色底上白鈕仍是對的（要與軌道對比），但陰影得換掉——純黑陰影在深色底完全看不見，
+     圓鈕會失去立體感、看起來像貼在軌道上的一塊色塊。 */
+  --switch-knob: #f4f4f5;
+  --switch-knob-shadow: rgba(0,0,0,.6);
   --surface: #202020;
   --border: #2e2e2e;
   --border-strong: #3d3d3d;
@@ -635,3 +641,22 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 @media (max-width: 640px) {
   /* Block 1 起陸續填入 */
 }
+
+/* 開關（toggle switch）。原本兩顆開關各自 inline 寫死 #fff 與 rgba(0,0,0,.25)，違反配色一律走
+   CSS 變數的硬規則（深色模式下陰影完全看不見），而且逐字重複兩份。抽成共用 class，之後要再加
+   第三顆開關也不必再抄一次。 */
+.switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track {
+  width: 44px; height: 24px; border-radius: var(--radius-lg);
+  background: var(--border); transition: background .2s;
+}
+.switch input:checked + .switch-track { background: var(--primary); }
+.switch input:disabled ~ .switch-track,
+.switch input:disabled ~ .switch-knob { opacity: .6; }
+.switch-knob {
+  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--switch-knob); box-shadow: 0 1px 3px var(--switch-knob-shadow);
+  transition: left .2s;
+}
+.switch input:checked ~ .switch-knob { left: 23px; }

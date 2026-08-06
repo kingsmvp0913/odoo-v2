@@ -3,7 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, ENV_BASE, runtimeLogPath } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
@@ -17,26 +17,23 @@ const ASSET_LOG_TAIL_BYTES = parseInt(process.env.ASSET_LOG_TAIL_BYTES || '4000'
 // 不附這段，coding 拿到的等於一句「壞了」，只能猜：實測 task 109 猜了三輪都沒中，每輪燒完
 // 整條 pipeline。讀檔而已，零 token 成本。
 // 讀不到一律回空字串：log 缺檔／權限不足不該讓部署流程本身出錯（本函式永不拋出）。
+//
+// 一定要走 `docker logs`，不可讀 <envDir>/odoo.log：docker 模式的容器 CMD 沒有 --logfile，
+// 宿主上根本不會有那個檔（寫入端隨 venv 模式一起退場），existsSync 因此恆 false ＝整個功能是
+// no-op；更糟的是 venv 時代建的專案可能殘留陳年 odoo.log，會把兩週前的 traceback 冠上
+// 「真正的錯誤在這裡」餵進 coding 的 prompt。env-routes 的「查看 log」早就是這個寫法。
 async function readAssetTraceback(projectId) {
   try {
-    const { rows: [proj] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [projectId]);
-    if (!proj) return '';
-    // 每次讀 env 而非用載入時求值的 ENV_BASE：正式環境兩者等值（env var 啟動前就設好），
-    // 但測試要能在 runtime 指到暫存目錄，否則只能 jest.resetModules()——那會連帶重載 db module、
-    // 打掉 pg-mem 的測試 pool，症狀是測試突然去連真 DB（password authentication failed）。
-    const base = process.env.ODOO_ENV_BASE || ENV_BASE;
-    const logPath = runtimeLogPath(path.join(base, proj.folder_name || proj.name));
-    if (!fs.existsSync(logPath)) return '';
-    const { size } = fs.statSync(logPath);
-    const start = Math.max(0, size - ASSET_LOG_TAIL_BYTES);
-    const fd = fs.openSync(logPath, 'r');
-    try {
-      const buf = Buffer.alloc(Math.min(ASSET_LOG_TAIL_BYTES, size));
-      fs.readSync(fd, buf, 0, buf.length, start);
-      const tail = buf.toString('utf8').trim();
-      if (!tail) return '';
-      return `\n\n【測試環境 runtime log 尾端（真正的錯誤在這裡，不要只看上面的通用說明）】\n${tail}`;
-    } finally { fs.closeSync(fd); }
+    const { dockerCtxFor } = require('./env-agent');
+    const dockerEnv = require('../lib/docker-env');
+    const ctx = await dockerCtxFor(projectId);
+    if (!ctx || !(await dockerEnv.containerExists(ctx.container))) return '';
+    // tail 以行數取，再截尾端位元組：QWeb 的 xpath traceback 通常十幾行，200 行綽綽有餘，
+    // 且避免一次把整個容器 log 拉進記憶體。
+    const log = await dockerEnv.containerLogs(ctx.container, { tail: 200 }).catch(() => '');
+    const tail = String(log || '').slice(-ASSET_LOG_TAIL_BYTES).trim();
+    if (!tail) return '';
+    return `\n\n【測試環境 runtime log 尾端（真正的錯誤在這裡，不要只看上面的通用說明）】\n${tail}`;
   } catch { return ''; }
 }
 

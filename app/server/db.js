@@ -525,6 +525,10 @@ async function migrate() {
     // 主分支覆寫：NULL＝依 origin/HEAD 自動偵測（多數情況）。填值時以 git remote set-head 落到該
     // clone 的 origin/HEAD，getMainBranch 便自動吃到——DB 這欄只是 reclone 後要重新套用的真相來源。
     { table: 'project_repos', col: 'base_branch',     sql: 'ALTER TABLE project_repos ADD COLUMN base_branch TEXT' },
+    // 這個 repo 實際落在哪條遠端 AI 分支。由 ensureAiBranch 決定後回寫（見 project-routes 的
+    // recordRemoteAiBranch）——撞名守衛只能比對這個，不能拿 base_branch 現算：base_branch 為 null
+    // 時執行期會用偵測到的主分支，兩者算出來的名字不一樣，守衛因此放行真正會互相覆蓋的組合。
+    { table: 'project_repos', col: 'remote_ai_branch', sql: 'ALTER TABLE project_repos ADD COLUMN remote_ai_branch TEXT' },
     { table: 'projects', col: 'port', sql: 'ALTER TABLE projects ADD COLUMN port INTEGER' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },

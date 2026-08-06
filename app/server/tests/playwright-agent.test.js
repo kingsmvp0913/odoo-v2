@@ -12,7 +12,9 @@ jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn(), stopReason
 // var + mock 前綴：jest.mock 的 factory 被提升到宣告之前執行，const 會撞 TDZ、非 mock* 命名會被 jest 擋下
 var mockRenderSpy = jest.fn(() => 'PROMPT');
 jest.mock('../pipeline/agent-loader', () => ({ loadAgent: () => ({ model: 'sonnet', render: mockRenderSpy }) }));
-jest.mock('../pipeline/task-agent', () => ({ getProjectInfo: jest.fn(), worktreeParent: () => '/cwd', buildRepoPaths: () => '- /cwd/idx_x' }));
+// worktreeParent 可覆寫：規格 tour 那組案例要指到真的暫存目錄，才驗得到「有沒有實測 tour 檔存在」
+var mockWorktreeParent = jest.fn(() => '/cwd');
+jest.mock('../pipeline/task-agent', () => ({ getProjectInfo: jest.fn(), worktreeParent: (...a) => mockWorktreeParent(...a), buildRepoPaths: () => '- /cwd/idx_x' }));
 jest.mock('../pipeline/ensure-env', () => ({ ensureEnvRunning: jest.fn() }));
 jest.mock('../pipeline/env-agent', () => ({ runTourTests: jest.fn(), stopEnv: jest.fn() }));
 jest.mock('../pipeline/failure-classifier', () => ({ classifyFailureWithAgent: jest.fn() }));
@@ -62,6 +64,8 @@ beforeEach(async () => {
   classifier.classifyFailureWithAgent.mockReset(); classifier.classifyFailureWithAgent.mockResolvedValue('code');
   require('../pipeline/reentry').bumpReentryOrStop.mockResolvedValue(false);
   mockRenderSpy.mockClear();
+  mockWorktreeParent.mockReset().mockReturnValue('/cwd');
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]);
   await dbModule.query('DELETE FROM odoo_envs WHERE project_id=$1', [projectId]);
   await dbModule.query("INSERT INTO odoo_envs (project_id, status, url, port) VALUES ($1,'running','http://127.0.0.3:8070',21000)", [projectId]);
 });
@@ -75,6 +79,59 @@ async function makeTask(pwCount = 0) {
   return t.id;
 }
 const statusOf = async (id) => (await dbModule.query('SELECT status, blocker_type, pw_retry_count FROM tasks WHERE id=$1', [id])).rows[0];
+
+// ---- 規格 tour 模式（spec_tour_enabled）----
+// 意圖：這是本關唯一會改變「產不產 tour」判定的分支，原本零測試覆蓋。
+const PASS_LOG = 'INFO test_x odoo.tests.runner: idx_x: 1 tests 0.50s 0 failed, 0 error(s)';
+
+// 造一個帶（或不帶）tour 檔的假 worktree，回傳它的父目錄
+function makeWorktree(withTour) {
+  const fs = require('fs'); const path = require('path'); const os = require('os');
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-wt-'));
+  const modDir = path.join(parent, 'main', 'idx_x');
+  fs.mkdirSync(modDir, { recursive: true });
+  if (withTour) {
+    const tourDir = path.join(modDir, 'static', 'tests', 'tours');
+    fs.mkdirSync(tourDir, { recursive: true });
+    fs.writeFileSync(path.join(tourDir, 'idx_x_tour.js'), '// tour');
+  }
+  return parent;
+}
+
+test('規格 tour 模式＋worktree 內確有 tour → 不重產，直接執行', async () => {
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
+  mockWorktreeParent.mockReturnValue(makeWorktree(true));
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  // 重產等於讓 agent 照著已完成的實作重寫考題，先定稿的意義整個消失
+  expect(runClaude).not.toHaveBeenCalled();
+  expect((await statusOf(id)).status).toBe('review_pending');
+});
+
+// 意圖：spec_tour_enabled 是專案層開關、沒有 per-task 快照，所以「開關剛打開、任務早就過了分析關」
+// 這種狀態下 worktree 裡根本沒有 tour——不需要任何失敗就會發生。此時若只看旗標就跳過產生，
+// 模組裡只要有前一張任務留下的 tour，--test-tags /<module> 就會跑到那些舊測試，log 出現
+// odoo.tests，下方的防假綠燈守衛因此失效 → 本次功能零 E2E 覆蓋卻直達人工審核。
+test('規格 tour 模式但 worktree 內查無 tour → 必須自行產生，不得直接跳過', async () => {
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
+  mockWorktreeParent.mockReturnValue(makeWorktree(false));
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  expect(runClaude).toHaveBeenCalled();                       // 降級回本關產生
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%找不到%tour%'", [id]);
+  expect(rows.length).toBeGreaterThan(0);                     // 而且要留聲，不能靜默降級
+});
+
+test('旗標關閉（預設）→ 一律自行產生 tour', async () => {
+  mockWorktreeParent.mockReturnValue(makeWorktree(true));     // 就算有檔也照樣重產（既有行為）
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
+  const id = await makeTask();
+  await runTourStage(id, userId);
+  expect(runClaude).toHaveBeenCalled();
+});
 
 test('tour 全過（exit0）→ review_pending', async () => {
   // 真實通過的 log 含 odoo.tests 命名空間（HttpCase/tour 執行必經該 logger），代表確實跑了測試

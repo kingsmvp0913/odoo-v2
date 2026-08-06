@@ -352,40 +352,85 @@ async function runTaskAnalysis(taskId, userId, signal) {
     );
   }
   await logAnalysisGate(taskId, result, nextStatus);
-  // 規格 tour：趁 analysis session 還熱，用 --resume 續寫 E2E tour（見 writeSpecTour）。
-  // 排在 logAnalysisGate 與狀態更新之後：tour 是加值產物，失敗不得影響規格落地或關卡推進。
-  await writeSpecTour(task, info, taskId, userId, signal, analysisSessionId, result.module).catch(() => {});
+  // 規格 tour 不在這裡寫：nextStatus 可能是 confirm_pending／spec_review，acceptance 還會變。
+  // 一律等任務真正進入 branch_pending，由 runner 的 doBranch 統一呼叫 runSpecTourGate（單一寫入點）。
   notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   return true;
 }
 
-// 分析關收尾後續寫 E2E tour：同一個 session --resume，脈絡（讀過的碼、剛定稿的 acceptance）都還在，
-// 幾乎不用額外探索。刻意排在 coding **之前**——現行順序是 coding 完才產 tour，等於先寫答案再出考題，
-// 測試會遷就實作；先定稿則是開發者要讓考題通過，且 coding 進 worktree 時就看得到驗收 selector。
-// 專案層開關，預設關閉（行為與現況完全相同）。
-// 整段 best-effort：tour 是加值產物，任何失敗都不該讓已經產出的規格或關卡推進跟著壞掉。
-async function writeSpecTour(task, info, taskId, userId, signal, analysisSessionId, moduleName) {
-  if (!analysisSessionId) return;                       // CLI 沒回 sessionId → 無從 resume，靜默跳過
+// writeSpecTour 的統一入口：所有「任務進入 branch_pending」的路徑都走這裡，確保只有一個寫入點
+// （多個寫入點就會疊加出多份 tour，新舊一起被 --test-tags 跑到）。
+// best-effort，但失敗要留聲——分析關那邊靜默吞掉的話，「規格 tour 沒產出」就沒有任何人看得到，
+// 而下游的 playwright 關只能靠實測檔案存在與否去猜。
+async function runSpecTourGate(taskId, userId, signal) {
+  try {
+    await writeSpecTour(taskId, userId, signal);
+  } catch (e) {
+    console.warn(`[writeSpecTour] task ${taskId} 產出規格 tour 失敗：${e.message}`);
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, `[規格 tour] 產出失敗，本任務將由 E2E 關自行產生 tour（先定稿的效果本次不生效）：${String(e.message).slice(0, 300)}`]
+    ).catch(() => {});
+  }
+}
+
+// 依定稿規格寫 E2E tour，排在 coding **之前**——現行順序是 coding 完才產 tour，等於先寫答案再
+// 出考題，測試會遷就實作；先定稿則是開發者要讓考題通過，且 coding 進 worktree 時就看得到驗收
+// selector。專案層開關，預設關閉（行為與現況完全相同）。
+//
+// 呼叫時機是「任務真正進入 branch_pending」＝規格已定稿，**不是**分析關收尾。分析關算出的
+// nextStatus 可能是 confirm_pending（agent 還有問題要問）或 spec_review（要人看過規格），這兩種
+// 狀態下 acceptance 都還不是定稿：照著寫出來的 tour 會斷言「使用者答案推翻掉的行為」，而澄清
+// 答完後分析會完整重跑再產一份，舊的那份又因為 ensureWorktreeAtMain 對已領先 base 的分支走 merge
+// 不 reset 而留在模組裡，最後 --test-tags /<module> 把新舊兩份一起跑，舊的必失敗 → 退 coding，
+// 而 coding 被禁止改測試檔 → 三輪後 stopped。
+//
+// 也刻意**不** --resume 分析 session：規格閘門可能隔數小時才被核准，那時 prompt cache 早已過期，
+// resume 等於全價重播整段 analysis 對話（含它讀過的所有檔案），比 fresh 讀 analysis.yaml 又慢又貴；
+// 無狀態同時根治 drift（always.md 規則 74）。代價是放棄「session 熱度省 token」，但那個前提在
+// 隔著人工閘門的情境下本來就不成立。
+//
+// 整段 best-effort：tour 是加值產物，任何失敗都不該讓已經產出的規格或關卡推進跟著壞掉。失敗時
+// 會留一筆 task_logs（見呼叫端），且 playwright 關會實測 tour 檔是否存在、查無就自行產生。
+async function writeSpecTour(taskId, userId, signal) {
+  const { rows: [task] } = await query(
+    'SELECT id, task_id, project_id, analysis_yaml FROM tasks WHERE id=$1', [taskId]
+  );
+  if (!task) return;
   const { rows: [proj] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
   if (!proj || !proj.spec_tour_enabled) return;
+  if (!task.analysis_yaml) return;                      // 沒有規格就沒有 acceptance，無從出考題
+
+  let moduleName = '';
+  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; } catch { /* 解析失敗照樣往下，讓 agent 自己從規格找 */ }
+
+  const info = await getProjectInfo(task.project_id);
+  // 沒有已 clone 完成的 repo 就不能跑：agent 帶 --dangerously-skip-permissions，
+  // fallback 到 process.cwd() 會把測試檔寫進平台自身的 repo。
+  if (!info?.root) return;
 
   const agent = loadAgent('playwright-spec');
   const { E2E_LOGIN } = require('./e2e-account');
   const prompt = agent.render({
-    module: String(moduleName || '').trim() || '（見規格 module 欄位）',
+    analysis_yaml: task.analysis_yaml,
+    module: String(moduleName).trim() || '（見規格 module 欄位）',
     test_url: '（測試環境，由系統於部署後執行；此處不需連線）',
     login: E2E_LOGIN
   });
   const gitEnv = await buildGitEnv(userId).catch(() => ({}));
   const cwd = worktreeParent(info.root, task.task_id);
+  // agentType／stage 用獨立的 spec_tour，不可沿用 'playwright'：這一次發生在分析與 coding 之間，
+  // 掛到 playwright 名下會讓「這關重跑幾次、花多少」全部算錯，而健檢正是拿那些數字判該不該檢討，
+  // 也就無從量測「規格 tour 模式到底省不省」。
   const res = await runClaude(prompt, {
-    cwd, taskId, userId, signal, model: agent.model, agentType: 'playwright',
-    resumeSessionId: analysisSessionId, env: { ...gitEnv }
+    cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour', env: { ...gitEnv }
   });
-  await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', res.usage, res.durationMs);
+  await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'spec_tour', res.usage, res.durationMs);
+  // 只留一行摘要，不塞 agent 的整段輸出：task_logs 會被分診／respec 每輪讀進 prompt，
+  // 那是每輪都要付的固定 token 稅，而 tour 的內容看 worktree 裡的檔案才準。
   await query(
     "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-    [taskId, `[規格 tour] 已依 acceptance 產出 E2E 測試（實作前定稿）\n${String(res.text || '').slice(0, 1500)}`]
+    [taskId, `[規格 tour] 已依 acceptance 於實作前產出 ${moduleName || '模組'} 的 E2E tour 測試`]
   );
 }
 
@@ -523,4 +568,4 @@ async function runTaskCoding(taskId, userId, signal) {
   return true;
 }
 
-module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, buildRepoPaths, latestResolution };
+module.exports = { runTaskAnalysis, runTaskCoding, getProjectInfo, worktreeParent, buildRepoPaths, latestResolution, runSpecTourGate };

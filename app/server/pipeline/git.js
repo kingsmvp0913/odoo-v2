@@ -245,7 +245,14 @@ async function remoteAiRef(repoPath) {
     'git', ['rev-parse', '--abbrev-ref', `${AI_BRANCH}@{upstream}`], { cwd: repoPath }
   ).catch(() => ({ stdout: '' }));
   const s = stdout.trim();
-  return s.startsWith('origin/') ? s.slice('origin/'.length) : AI_BRANCH;
+  if (s.startsWith('origin/')) return s.slice('origin/'.length);
+  // 沒有 upstream：ensureAiBranch 首次 `push -u` 失敗過（origin 一時不通）就會永久落在這個狀態，
+  // 之後走「本地已存在」那條路徑直接 return，不會再有人補綁。此時不可直接退回裸名——那會讓同一
+  // repo 的多個專案又全部推到 origin/ai-dev 互相覆蓋，正是 remoteAiBranchName 要根治的問題。
+  // 既有專案（遠端真的有裸名分支）維持原行為，其餘一律由主分支推導出帶後綴的名字。
+  if (await refExists(repoPath, `refs/remotes/origin/${AI_BRANCH}`)) return AI_BRANCH;
+  const main = await getMainBranch(repoPath).catch(() => null);
+  return main ? remoteAiBranchName(main) : AI_BRANCH;
 }
 
 // 確保本地有 ai-dev 並 checkout；沒有就從實體 main 建立並 push -u。回傳 AI_BRANCH。
@@ -273,7 +280,10 @@ async function ensureAiBranch(repoPath, gitEnv) {
   }
   await execFileAsync('git', ['checkout', '-B', AI_BRANCH, main], gitOpts(repoPath, gitEnv));
   // refspec 形式：本地 ai-dev 推成遠端 <scoped>，-u 同時把 upstream 綁定，之後 remoteAiRef 讀得到。
-  await execFileAsync('git', ['push', '-u', 'origin', `${AI_BRANCH}:refs/heads/${scoped}`], gitOpts(repoPath, gitEnv)).catch(() => {});
+  // 失敗不擋，但要留聲：這一次是唯一會綁 upstream 的機會，靜默吞掉會讓 remoteAiRef 從此少一個
+  // 真相來源（改由主分支推導，見該函式），排查時沒有任何線索指向「當初 push 沒成功」。
+  await execFileAsync('git', ['push', '-u', 'origin', `${AI_BRANCH}:refs/heads/${scoped}`], gitOpts(repoPath, gitEnv))
+    .catch(e => console.warn(`[ensureAiBranch] ${repoPath} 首次 push ai-dev → ${scoped} 失敗（不擋，之後由主分支推導遠端名）：${e.stderr || e.message}`));
   return AI_BRANCH;
 }
 
@@ -292,10 +302,38 @@ async function setAiUpstream(repoPath, remoteBranch, gitEnv) {
 // 且其中一側把整個模組目錄改名），同步在 28 個檔案上衝突——真因是基底選錯，不是內容衝突，
 // 照著「去 GitHub 把 ai-dev 合併回主分支」處理只會把兩條線的差異全部搬進來。
 
+// ai-dev 的基底是否歪掉。**正面驗證**，不要用「找距離最近的已合併分支」反推——後者在 base 領先
+// ai-dev 時（工程師剛 push 過主分支，正是 syncMainIntoAi 存在的理由；updateMainClone 的
+// pullBranch(base) 更是每次都把 origin/base 拉到領先）根本取不到 base：`--merged origin/ai-dev`
+// 只列「已完整併入 ai-dev」的分支，領先者不在其中，於是只剩更早合進 base 的舊分支入選，基底明明
+// 正確卻被判成歪掉。實測（真 git 復現）：main→feature/old→合回 main→從 main 長 ai-dev→main 再推
+// 一筆，即得 aiBranchBase='feature/old'、判 blocked、repo 被標 error 從整個 pipeline 消失（規則 81）。
+//
+// 真正要問的是「ai-dev 身上有沒有夾帶別條分支的歷史」：ai-dev 相對 base 多出來的 commit，若**全部**
+// 都是 AI 產出（不存在於任何其他 origin 分支），那 ai-dev 就只是 base ＋ 自己的產出＝健康；多出來的
+// 比 AI 產出還多，代表它帶著另一條線的歷史＝基底歪了。只看 ai-dev 這一側，故 base 領先或落後都不影響。
+// 附帶效果：常態路徑固定兩次 spawn，不再對每條已合併分支各跑一次 rev-list（那段還握著專案鎖，
+// 期間 repo 停在 cloning、merge/deploy/analysis 一起卡住）。
+// 回 { drifted, own }；drifted 為 null＝探測失敗、無從判斷（呼叫端只記錄不中止）。
+async function aiBaseDrift(repoPath, base) {
+  const remoteAi = await remoteAiRef(repoPath);
+  const { stdout } = await execFileAsync(
+    'git', ['rev-list', '--count', `origin/${base}..origin/${remoteAi}`], { cwd: repoPath }
+  ).catch(() => ({ stdout: '' }));
+  const ahead = Number.parseInt(stdout.trim(), 10);
+  if (!Number.isFinite(ahead)) return { drifted: null, own: null };
+  const own = await aiOwnCommits(repoPath, base);
+  if (own === null) return { drifted: null, own: null };
+  return { drifted: ahead > own, own };
+}
+
 // ai-dev 實際長自哪條分支：取「已完整併入 ai-dev」的 origin 分支中，距離 ai-dev 最近的那條。
-// 基底正確時回傳的就是主分支本身（距離＝ai-dev 自己的產出數），故呼叫端用「回傳值 !== 主分支」
-// 即可判定歪掉。回 null＝無從判斷（ai-dev 不存在、或沒有任何分支併入其中）。
-async function aiBranchBase(repoPath) {
+// **只用來產生給人看的訊息**（「ai-dev 是從 X 長出來的」），判定歪沒歪一律走 aiBaseDrift——理由見上。
+// 因此這裡的 N 次 spawn 只發生在確定歪掉的路徑上，不在常態路徑。
+// preferred 用於平手時的決勝：兩條分支同 SHA（main/master 並存、ff 合併後未刪分支）時，原本靠
+// `d < bestDist` 保留的是字典序在前者，會挑出一條與 base 等價卻不同名的分支。
+// 回 null＝無從判斷（ai-dev 不存在、或沒有任何分支併入其中）。
+async function aiBranchBase(repoPath, preferred) {
   const remoteAi = await remoteAiRef(repoPath);
   const { stdout } = await execFileAsync(
     'git', ['branch', '-r', '--merged', `origin/${remoteAi}`, '--format=%(refname:short)'], { cwd: repoPath }
@@ -310,7 +348,8 @@ async function aiBranchBase(repoPath) {
       'git', ['rev-list', '--count', `origin/${b}..origin/${remoteAi}`], { cwd: repoPath }
     ).catch(() => ({ stdout: '' }));
     const d = Number.parseInt(c.trim(), 10);
-    if (Number.isFinite(d) && d < bestDist) { bestDist = d; best = b; }
+    if (!Number.isFinite(d)) continue;
+    if (d < bestDist || (d === bestDist && b === preferred)) { bestDist = d; best = b; }
   }
   return best;
 }
@@ -364,7 +403,10 @@ async function rebuildAiBranch(repoPath, base, gitEnv) {
 async function listRemoteBranchesByUrl(url, gitEnv) {
   const { stdout } = await execFileAsync(
     'git', ['ls-remote', '--symref', '--', url],
-    gitOpts(undefined, gitEnv, { timeout: 30000 })
+    // maxBuffer 必給：刻意不加 --heads（見上）代表 tags 與 refs/pull/* 全都會吐出來，Node 預設的
+    // 1MB 約 1.6 萬條 ref 就爆 ENOBUFS（實測 odoo/odoo 為 27.8 萬條、17MB，3.6 秒即失敗）。
+    // 呼叫端只會把它降級成「下拉空白」，而主分支只有新增 repo 這一次機會可選，等於永遠指定不了。
+    gitOpts(undefined, gitEnv, { timeout: 30000, maxBuffer: 16 * 1024 * 1024 })
   );
   const branches = [];
   let defaultBranch = null;
@@ -740,7 +782,9 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
     // 殘骸目錄留著會讓下面的 add 直接 fatal: '<path>' already exists，而 remove／prune 對「已與
     // admin 資料失聯」的目錄都無效（兩者都只認得還登記在案的工作樹）。裡面的 commit 隨舊 clone 的
     // object DB 一起沒了，救不回來，只能整包清掉重建。
-    fs.rmSync(worktreePath, { recursive: true, force: true });
+    // 非同步刪：工作樹是整包 addons（數千個檔），同步版會把 event loop 整個卡住——期間全平台的
+    // API 與 socket 一起停擺，而這裡已經在 await 的路徑上，改非同步不影響語意。
+    await fs.promises.rm(worktreePath, { recursive: true, force: true });
     await execFileAsync('git', ['worktree', 'prune'], { cwd: mainRepoPath }).catch(() => {});
     await execFileAsync('git', ['worktree', 'add', '-B', branch, worktreePath, base], { cwd: mainRepoPath });
     return;
@@ -808,4 +852,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
 }
 
 module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
-  aiBranchBase, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };
+  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };

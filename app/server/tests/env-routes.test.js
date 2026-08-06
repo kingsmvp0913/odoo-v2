@@ -15,6 +15,16 @@ jest.mock('../pipeline/env-agent', () => ({
   ENV_BASE: require('path').resolve(__dirname, '..', '..', '..', 'odoo-envs')
 }));
 
+// filestore／sessions 是容器內的 odoo user 寫的，平台直接 fs.rmSync 在正式機一律 EACCES，
+// 刪除環境因此永遠失敗。mock 起來才擋得住「有人改回 rmSync」——沒有它的話，DELETE 這支不論
+// 走哪個實作都會綠（真實 removeDirForce 對不存在的目錄直接 return，測試環境正好沒有那個目錄）。
+const mockRemoveDirForce = jest.fn().mockResolvedValue({ removed: true, viaDocker: false });
+jest.mock('../lib/docker-env', () => ({
+  removeDirForce: (...a) => mockRemoveDirForce(...a),
+  containerExists: jest.fn().mockResolvedValue(false),
+  containerLogs: jest.fn().mockResolvedValue(''),
+}));
+
 // 手動建立測試區的兩條入口（/env/setup、/env/sso 自動起）必須與 pipeline 的 deploy/E2E
 // 序列化——否則同時觸發 runEnvSetup 會爭埠、_failEnv 互蓋健康的 running（實測 project 2 埠 21000/21001 漂移）。
 // 這個 mock 保留「執行 fn」語意（讓 runEnvSetup 仍被呼叫），只用來斷言持鎖與 key 型別。
@@ -132,6 +142,7 @@ test('POST stop → calls stopEnv', async () => {
 });
 
 test('DELETE env → resets to idle', async () => {
+  mockRemoveDirForce.mockClear();
   const res = await request(app)
     .delete(`/api/projects/${projectId}/env`)
     .set(auth());
@@ -140,6 +151,8 @@ test('DELETE env → resets to idle', async () => {
     'SELECT status FROM odoo_envs WHERE project_id=$1', [projectId]
   );
   expect(env.status).toBe('idle');
+  // 環境目錄必須走 root 容器退路刪除，不可用 fs.rmSync——改回去這支就會紅
+  expect(mockRemoveDirForce).toHaveBeenCalledWith(expect.stringContaining('odoo-envs'));
 });
 
 test('401 without token', async () => {

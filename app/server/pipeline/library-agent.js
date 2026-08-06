@@ -28,14 +28,27 @@ function _collectManifests(dir, results, limit) {
   }
 }
 
-async function _upsertNode(projectId, parentId, nodeType, slug, title, content) {
+// description 是頁面清單與搜尋結果**唯一**會回傳的說明欄位（content 不會），agent 靠它決定
+// 「要不要打開這一頁」——wikiQuery/SKILL.md 與 cs-capability.md 都把它寫成這組端點省 token 的關鍵。
+// 但先前只有排障頁（troubleshooting.js）寫得進去，library agent 產的 overview／module／function
+// 三種頁一律是 NULL，等於那條省 token 的路對 95% 的內容根本沒生效，agent 只能退回逐頁抓全文。
+// 截斷到 200 字：不截的話清單端點會退化成「小一號的全文」，反而更耗 token。
+// 沒帶就不動既有值（COALESCE）：骨架節點與舊資料本來就沒有摘要，不該被洗掉。
+const DESC_MAX = 200;
+const trimDesc = (d) => {
+  const t = String(d || '').trim().replace(/\s+/g, ' ');
+  return t ? t.slice(0, DESC_MAX) : null;
+};
+
+async function _upsertNode(projectId, parentId, nodeType, slug, title, content, description) {
   const { rows: [row] } = await query(
-    `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,NOW())
+    `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, description, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
      ON CONFLICT (project_id, slug)
-     DO UPDATE SET parent_id=$2, node_type=$3, title=$5, content=$6, updated_at=NOW()
+     DO UPDATE SET parent_id=$2, node_type=$3, title=$5, content=$6,
+                   description=COALESCE($7, wiki_pages.description), updated_at=NOW()
      RETURNING id`,
-    [projectId, parentId, nodeType, slug, title, content]
+    [projectId, parentId, nodeType, slug, title, content, trimDesc(description)]
   );
   return row.id;
 }
@@ -144,14 +157,14 @@ ${node.content || '（空）'}
 ${src || '（無原始碼）'}`;
   }
 
-  let title = node.title, content = node.content;
+  let title = node.title, content = node.content, description = null;
   try {
     const agent = loadAgent('library');
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
     if (!p) throw new Error('agent 輸出無法解析為有效 JSON');
-    title = p.title || title; content = p.content ?? content;
+    title = p.title || title; content = p.content ?? content; description = p.description || null;
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] refresh error ${slug}:`, err.message);
@@ -159,8 +172,10 @@ ${src || '（無原始碼）'}`;
   }
 
   await query(
-    'UPDATE wiki_pages SET title=$3, content=$4, updated_at=NOW() WHERE project_id=$1 AND slug=$2',
-    [projectId, slug, title, content]
+    `UPDATE wiki_pages SET title=$3, content=$4,
+            description=COALESCE($5, description), updated_at=NOW()
+      WHERE project_id=$1 AND slug=$2`,
+    [projectId, slug, title, content, trimDesc(description)]
   );
   emit(100, '完成');
   return { ok: true, slug };
@@ -286,7 +301,7 @@ ${ovRow?.content || '（尚未建立）'}
       }
       await _upsertNode(
         task.project_id, moduleId, 'function',
-        fnSlug, wikiUpdate.title, wikiUpdate.content || ''
+        fnSlug, wikiUpdate.title, wikiUpdate.content || '', wikiUpdate.description
       );
 
       // 往上補：只允許改「總覽」與本任務模組頁，其餘 slug 忽略（防亂改無關頁）
@@ -351,22 +366,25 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
 
   let overviewTitle = '專案概論';
   let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
+  let overviewDesc = null;
   try {
     const { text, usage, durationMs } = await runClaude(agent.render({ context }), { signal, userId, model: agent.model, agentType: 'wiki' });
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
-    if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; }
+    if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; overviewDesc = p.description || overviewDesc; }
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] init overview error project ${projectId}:`, err.message);
   }
-  const overviewId = await _upsertNode(projectId, null, 'overview', 'overview', overviewTitle, overviewContent);
+  const overviewId = await _upsertNode(projectId, null, 'overview', 'overview', overviewTitle, overviewContent, overviewDesc);
 
   // 2) 模組分類骨架（無 AI）
   const total = manifests.length || 1;
   for (let i = 0; i < manifests.length; i++) {
     const mod = manifests[i];
-    await _upsertNode(projectId, overviewId, 'module', `module-${mod.module}`, mod.module, _manifestSummary(mod));
+    // 骨架頁沒有 AI 參與，用 manifest 抓到的摘要當 description——比 NULL 有用，之後 refresh 會蓋掉
+    await _upsertNode(projectId, overviewId, 'module', `module-${mod.module}`, mod.module,
+      _manifestSummary(mod), _manifestSummary(mod));
     emit('modules', 40 + Math.round(((i + 1) / total) * 55), `建立 ${mod.module}`);
   }
 

@@ -159,3 +159,59 @@ test('GET /ai/wiki/page 無 [[]] 的頁 → links 為空陣列而非 undefined',
   expect(res.body.links).toEqual([]);
   expect(res.body.missing_links).toEqual([]);
 });
+
+// 意圖：專案參數可以是 folder_name 或 name，原本用 `folder_name=$1 OR name=$1` 直接 join——
+// A 的 folder_name 撞到 B 的 name 時（中文專案名＋英文資料夾名的慣例下很容易發生），一次查詢會
+// 同時撈到兩個專案的頁。單頁的 rows[0] 因此不確定，而 links 會把別的專案的排障結論摘要一起餵給 agent。
+describe('跨專案隔離（folder_name 與 name 撞號）', () => {
+  let otherId;
+  beforeAll(async () => {
+    // 另一個專案，它的 name 正好等於本專案的 folder_name
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name,folder_name,odoo_version) VALUES ('hungjou','other-folder','17.0') RETURNING id");
+    otherId = p.id;
+    await dbModule.query(
+      `INSERT INTO wiki_pages (project_id,slug,title,node_type,content,description)
+       VALUES ($1,'ts-secret','別家的機密結論','troubleshooting','不該被看到','別家的摘要')`,
+      [otherId]);
+  });
+
+  test('pages 不得混入另一個專案的頁', async () => {
+    const res = await request(app).get('/ai/wiki/pages?project=hungjou').set(AI_TOKEN_HEADER, aiToken());
+    expect(res.body.pages.map(p => p.slug)).not.toContain('ts-secret');
+  });
+
+  test('search 不得搜到另一個專案的頁', async () => {
+    const res = await request(app).get('/ai/wiki/search?project=hungjou&q=機密').set(AI_TOKEN_HEADER, aiToken());
+    expect(res.body.hits.map(h => h.slug)).not.toContain('ts-secret');
+  });
+
+  test('page 的 links 不得解出另一個專案的同名 slug', async () => {
+    await dbModule.query(
+      `INSERT INTO wiki_pages (project_id,slug,title,node_type,content)
+       VALUES ($1,'ts-ref','引用','troubleshooting','見 [[ts-secret]]')`,
+      [projectId]);
+    const res = await request(app).get('/ai/wiki/page?project=hungjou&slug=ts-ref').set(AI_TOKEN_HEADER, aiToken());
+    expect(res.body.links).toEqual([]);              // 對方在別的專案 → 這裡查無
+    expect(res.body.missing_links).toContain('ts-secret'); // 但要回報「這裡該有一則卻沒有」
+  });
+});
+
+// 意圖：agent 常直接把錯誤訊息或檔案路徑丟進來搜，裡面的 _ 與 % 是 LIKE 的萬用字元。
+// 不逸脫的話 `a_c` 會比對到 abc，搜出一堆不相干的頁；反過來真的要找 `a_c` 也找不準。
+// pg-mem 不支援 LIKE 的逸脫（實測：pattern `%a\_c%` 回 0 列，真 PG 回 a_c 那列；而未逸脫的
+// `%a_c%` 在 pg-mem 兩列都中＝正是本修正要擋的行為）。也不支援 ESCAPE 子句，寫了整句解析不了。
+// 依既有慣例，pg-mem 的限制不改寫正式 SQL，跳過該測試並註解——正式環境用反斜線（PostgreSQL 的
+// LIKE 預設逸脫字元）是正確的。
+test.skip('GET /ai/wiki/search 的關鍵字含 _ 時當字面比對，不當萬用字元（pg-mem 不支援 LIKE 逸脫）', async () => {
+  // 兩頁分開放才有鑑別力：同一頁同時含 abc 與 a_c 的話，_ 當不當萬用字元結果都一樣
+  await dbModule.query(
+    `INSERT INTO wiki_pages (project_id,slug,title,node_type,content)
+     VALUES ($1,'ts-underscore','底線','troubleshooting','欄位 a_c 的定義'),
+            ($1,'ts-wildcard','非底線','troubleshooting','欄位 abc 的定義')`,
+    [projectId]);
+  const res = await request(app).get('/ai/wiki/search?project=hungjou&q=a_c').set(AI_TOKEN_HEADER, aiToken());
+  expect(res.body.ok).toBe(true);
+  expect(res.body.hits.map(h => h.slug)).toContain('ts-underscore');
+  expect(res.body.hits.map(h => h.slug)).not.toContain('ts-wildcard'); // _ 被當萬用字元的話這頁會一起中
+});

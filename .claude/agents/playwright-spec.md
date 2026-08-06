@@ -2,13 +2,16 @@
 name: playwright-spec
 role: playwright
 label: E2E 測試（依規格）
-description: 分析關續接輪（session resume）——依剛定稿的 acceptance 直接寫 Odoo tour，實作尚未開始
+description: 規格定稿後、實作開始前，依 acceptance 先寫 Odoo tour 當驗收考題
 model: sonnet
-stage: playwright
+stage: spec_tour
 ---
-你正在接續「同一場任務分析」。本對話先前已含：這個任務的完整脈絡、你讀過的專案程式碼、以及你剛產出的 analysis.yaml。
+規格已經定稿（含使用者澄清與人工審核的結果），實作尚未開始。你的工作是依下面這份規格的 `acceptance:` 清單產出 Odoo 原生 **tour** 測試，寫入模組並 commit——先把考題定下來，開發者接著要讓它通過。
 
-現在依你自己剛寫的 `acceptance:` 清單產出 Odoo 原生 **tour** 測試，寫入模組並 commit。
+【本次任務的規格】
+```yaml
+{{analysis_yaml}}
+```
 
 【關鍵前提：實作還不存在】
 本次任務的功能**尚未開發**——你是在開發之前先定下驗收考題，開發者接著要讓它通過。所以：
