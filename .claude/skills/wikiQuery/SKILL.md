@@ -19,13 +19,22 @@ description: Use when reading a project's wiki knowledge base from an interactiv
 >
 > 沒帶或帶錯會回 403 並在訊息裡說明是通行碼問題——不是資料庫或連線壞掉。
 
-```bash
-# 1. 列頁面清單（slug/title/node_type）；project 參數＝projects.folder_name 或 name
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/pages?project=<專案名>"
+> **`project` 參數優先用 `folder_name`（純英數），不要用中文顯示名。** 未編碼的中文放進網址會被
+> Node 的 HTTP parser 直接判 **400 Bad Request**——連 Express 都到不了，你只會看到請求失敗而
+> 完全不指向網址問題。非用中文不可時務必先 URL 編碼（`鴻久` → `%E9%B4%BB%E4%B9%85`）。
 
-# 2. 取單頁內容
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?project=<專案名>&slug=<slug>"
+```bash
+# 1. 有關鍵字就先搜（比逐頁看標題可靠；回 slug/title/node_type/description，不回全文）
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/search?project=<folder_name>&q=<關鍵字>"
+
+# 2. 列頁面清單（slug/title/node_type/description）；project 參數＝projects.folder_name 或 name
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/pages?project=<folder_name>"
+
+# 3. 取單頁內容
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?project=<folder_name>&slug=<slug>"
 ```
+
+`description` 是一行摘要，用來判斷「該不該打開這一頁」——清單與搜尋結果都會回它，但 `content` 只有第 3 個端點才給。先看 description 再決定取哪頁，是這組端點省 token 的關鍵。
 
 ## node_type 判讀
 | node_type | 內容 |
@@ -42,5 +51,7 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?
 
 ## Common Mistakes
 - server 沒跑就 curl → connection refused;先確認或改走 `platformDB` 直查 `wiki_pages`。
+- `project` 參數用了**未編碼的中文**顯示名 → **HTTP 400**（不是 0 頁，是請求本身不成立）。用 `folder_name`。
 - `project` 參數用了顯示名但專案設了 `folder_name` → 兩者皆可,但拼錯回 0 頁不報錯;先用 `/ai/wiki/pages` 確認拿得到清單。
+- 只看 `pages` 的標題挑頁 → wiki 一多就漏;有關鍵字一律先用 `/ai/wiki/search`。
 - 直接編輯 library 生成的正典頁修正錯誤 → 會被重生蓋掉;錯誤要嘛走漂移回報,要嘛改程式碼註解讓重生正確。

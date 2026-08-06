@@ -531,6 +531,10 @@ async function migrate() {
     { table: 'projects', col: 'e2e_disabled', sql: 'ALTER TABLE projects ADD COLUMN e2e_disabled BOOLEAN NOT NULL DEFAULT false' },
     { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
     { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" },
+    // description：一行摘要，隨頁面清單一起回給 agent，讓它「看目錄就能判斷該不該打開這一頁」。
+    // 舊行為只回 title，agent 只能靠標題猜哪頁相關——wiki 一多就必漏（而且漏了沒有任何訊號，
+    // 端點回 200＋空結果，agent 會當成「這專案沒有相關記載」）。
+    { table: 'wiki_pages', col: 'description', sql: 'ALTER TABLE wiki_pages ADD COLUMN description TEXT' },
     { table: 'project_chats', col: 'user_id', sql: 'ALTER TABLE project_chats ADD COLUMN user_id INTEGER REFERENCES users(id)' },
     { table: 'project_chats', col: 'last_read_message_id', sql: 'ALTER TABLE project_chats ADD COLUMN last_read_message_id INTEGER NOT NULL DEFAULT 0' },
     // 回覆進行中旗標：前端據此顯示持續動畫（server 狀態，離開對話再回來仍在）。唯一寫 true 的地方是

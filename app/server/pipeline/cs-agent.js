@@ -40,11 +40,14 @@ async function runCsAgent(taskId, userId, signal) {
   // 技術客服能力片段需要 repo 路徑與專案名：此關尚未建 worktree，讀主 clone（唯讀）。
   const { getProjectInfo } = require('./task-agent');
   let projectName = '（未綁定專案）';
+  let projectSlug = '';
   let repoPaths = '（無 repo，僅能查 wiki／正式區 DB／log）';
   if (task.project_id) {
     const info = await getProjectInfo(task.project_id).catch(() => null);
     if (info) {
       projectName = info.name;
+      // 見 chat-agent.js 同段註解：中文專案名未編碼會讓 /ai/wiki 的 curl 直接 400
+      projectSlug = encodeURIComponent(info.folder_name || info.name);
       if (info.repos.length) repoPaths = info.repos.map(r => `- ${r.local_path}`).join('\n');
     }
   }
@@ -56,6 +59,7 @@ async function runCsAgent(taskId, userId, signal) {
     answers,
     prior_reply: priorReply,
     project_name: projectName,
+    project_slug: projectSlug,
     repo_paths: repoPaths
   });
 

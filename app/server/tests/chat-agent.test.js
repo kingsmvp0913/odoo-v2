@@ -76,7 +76,7 @@ test('回覆含 <memory> → 結論寫回 wiki 疑難排解、且存檔的回覆
   // 寫回：ts- 前綴、掛容器、upsert
   const upsert = mockQuery.mock.calls.find(c => /INSERT INTO wiki_pages[\s\S]*DO UPDATE/.test(c[0]));
   expect(upsert).toBeTruthy();
-  expect(upsert[1]).toEqual(['1', 7, 'ts-tax-missing', '稅率漏帶', '# 原因\n稅率欄空']);
+  expect(upsert[1]).toEqual(['1', 7, 'ts-tax-missing', '稅率漏帶', '# 原因\n稅率欄空', null]);
 
   // 顯示／存檔的回覆不含機器側通道
   expect(reply).toBe('確認了：稅率沒帶到才算錯。');
@@ -213,4 +213,38 @@ test('首輪回覆帶 session_id → 寫回 project_chats 供下一則續接', a
   const saved = mockQuery.mock.calls.find(c => /UPDATE project_chats SET chat_session_id/.test(c[0]));
   expect(saved).toBeTruthy();
   expect(saved[1]).toEqual(['2', 'sess-new', expect.any(String)]);
+});
+
+// --- wiki 查法：中文專案名的 URL 編碼 ---
+// 意圖：cs-capability 教 agent 用 curl 打 /ai/wiki?project=<X>。若 X 是未編碼的中文，Node 的
+// HTTP parser 直接判 400——連 Express 都到不了，agent 只看到「wiki 查不到」，完全不指向網址問題。
+// 實測受害：鴻久／北群醫／慈雲寶塔（有中文 name 的專案）。修法是傳已編碼的 folder_name。
+test('中文專案名 → curl 指引用已編碼的 folder_name，不是原始中文', async () => {
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久', folder_name: 'odoo17_hungjou' }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await chatReply('1', '2', 'NAS 補寫沒在跑', 99);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('project=odoo17_hungjou');       // 用 folder_name
+  expect(prompt).not.toContain('/ai/wiki/pages?project=鴻久'); // 不得出現未編碼中文網址
+  expect(prompt).toContain('鴻久');                          // 顯示名仍在（對話正文要用）
+});
+
+// 沒設 folder_name 的專案會退回用 name。此時 name 若是中文，仍必須是編碼後的形式才不會 400。
+test('無 folder_name 且 name 是中文 → 退回 name 但仍經過 URL 編碼', async () => {
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '慈雲寶塔', folder_name: null }] });
+    return Promise.resolve({ rows: [] });
+  });
+  await chatReply('1', '2', 'q', 99);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain(`project=${encodeURIComponent('慈雲寶塔')}`);
+  expect(prompt).not.toContain('/ai/wiki/pages?project=慈雲寶塔');
 });

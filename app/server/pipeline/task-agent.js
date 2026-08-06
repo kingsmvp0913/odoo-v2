@@ -36,7 +36,7 @@ function buildCommitMessage(task) {
 // root = repos/<專案>/（所有 repo 主 clone 的父目錄）；供 analysis 讀全 repo、coding 衍生 worktree 父目錄。
 async function getProjectInfo(projectId) {
   const { rows } = await query(
-    `SELECT p.name, p.odoo_version, pr.local_path, pr.label
+    `SELECT p.name, p.folder_name, p.odoo_version, pr.local_path, pr.label
      FROM projects p
      JOIN project_repos pr ON pr.project_id = p.id
      WHERE p.id = $1 AND pr.clone_status = 'done' AND pr.local_path IS NOT NULL
@@ -47,6 +47,10 @@ async function getProjectInfo(projectId) {
   const repos = rows.map(r => ({ label: r.label, local_path: r.local_path, subdir: path.basename(r.local_path) }));
   return {
     name: rows[0].name,
+    // folder_name 供 /ai/wiki 的 project 參數用（端點是 folder_name=$1 OR name=$1）。
+    // 專案名可能是中文（鴻久／北群醫／慈雲寶塔），未編碼的中文放進 URL 會被 Node 的 HTTP
+    // parser 直接判 400——連 Express 都到不了，agent 只會看到「查不到 wiki」。
+    folder_name: rows[0].folder_name,
     odoo_version: rows[0].odoo_version,
     root: path.dirname(repos[0].local_path),
     repos

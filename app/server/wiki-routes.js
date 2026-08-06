@@ -112,15 +112,37 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // description 一併回傳：只給 title 的話，agent 只能靠標題猜哪一頁相關，wiki 一多就必漏——
+  // 而且漏掉沒有任何訊號（端點回 200＋清單，agent 當成「沒有相關記載」就不查了）。
   app.get('/ai/wiki/pages', aiEndpointGuard, async (req, res) => {
     try {
       const { rows } = await query(
-        `SELECT w.slug, w.title, w.node_type
+        `SELECT w.slug, w.title, w.node_type, w.description
            FROM wiki_pages w JOIN projects p ON p.id = w.project_id
           WHERE p.folder_name=$1 OR p.name=$1
           ORDER BY (w.node_type <> 'overview'), w.node_type, w.title ASC`,
         [req.query.project]);
       res.json({ ok: true, pages: rows });
+    } catch (err) { res.json({ ok: false, error: err.message }); }
+  });
+
+  // 全文搜尋：補掉「只能按標題挑頁」的缺口。回 slug/title/description（不回 content 全文，
+  // 否則一次搜尋就把整個 wiki 灌進 agent 的 context——分兩階段才是省 token 的關鍵）。
+  // 大小寫不敏感用 LOWER+LIKE（pg-mem 相容，ILIKE 在測試環境不保證可用）。
+  app.get('/ai/wiki/search', aiEndpointGuard, async (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim();
+      if (!q) return res.json({ ok: false, error: '缺 q 參數（要搜尋的關鍵字）' });
+      const like = `%${q.toLowerCase()}%`;
+      const { rows } = await query(
+        `SELECT w.slug, w.title, w.node_type, w.description
+           FROM wiki_pages w JOIN projects p ON p.id = w.project_id
+          WHERE (p.folder_name=$1 OR p.name=$1)
+            AND (LOWER(w.title) LIKE $2 OR LOWER(w.content) LIKE $2 OR LOWER(COALESCE(w.description,'')) LIKE $2)
+          ORDER BY (w.node_type <> 'troubleshooting'), w.title ASC
+          LIMIT 20`,
+        [req.query.project, like]);
+      res.json({ ok: true, hits: rows });
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 

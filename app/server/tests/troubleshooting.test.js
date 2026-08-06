@@ -51,9 +51,29 @@ describe('recordTroubleshooting', () => {
     expect(slug).toBe('ts-tax-rate');
     const insert = mockQuery.mock.calls.find(c => /INSERT INTO wiki_pages[\s\S]*ON CONFLICT/.test(c[0]) && /DO UPDATE/.test(c[0]));
     expect(insert).toBeTruthy();
-    // params: [projectId, containerId, slug, title, content]
-    expect(insert[1]).toEqual([3, 7, 'ts-tax-rate', 'T', 'C']);
+    // params: [projectId, containerId, slug, title, content, description]
+    expect(insert[1]).toEqual([3, 7, 'ts-tax-rate', 'T', 'C', null]); // 沒給 description → 存 null
     expect(insert[0]).toContain("node_type='troubleshooting'");
+  });
+
+  // 意圖：description 是「日後決定要不要打開這一則」的唯一依據——它會隨頁面清單／搜尋結果一起
+  // 回給 agent，content 不會。沒有它，agent 只能靠標題猜，wiki 一多就必漏且毫無訊號。
+  test('帶 description → 一併寫入（供頁面清單與搜尋結果判斷相關性）', async () => {
+    await recordTroubleshooting(3, {
+      slug: 'nas-refill', title: 'NAS 補寫', content: 'C',
+      description: 'NAS 補寫排程判定缺檔的實際條件與常見誤解'
+    });
+    const insert = mockQuery.mock.calls.find(c => /INSERT INTO wiki_pages[\s\S]*ON CONFLICT/.test(c[0]) && /DO UPDATE/.test(c[0]));
+    expect(insert[1][5]).toBe('NAS 補寫排程判定缺檔的實際條件與常見誤解');
+    expect(insert[0]).toContain('description');
+  });
+
+  // 側通道是「選用」的：舊格式（只有 title/content）仍須照常留存。為了缺一個新欄位就丟掉整則
+  // 結論，等於用「格式更完整」換掉「知識有留存」，方向相反。
+  test('舊格式（無 description）仍算有效結論，不因缺欄位被丟棄', () => {
+    const { entry } = extractMemoryBlock('x\n<memory>{"slug":"a","title":"T","content":"C"}</memory>');
+    expect(entry).toBeTruthy();
+    expect(entry.description).toBeUndefined();
   });
 
   test('slug 撞容器保留字 → 改名，不覆寫容器節點', async () => {

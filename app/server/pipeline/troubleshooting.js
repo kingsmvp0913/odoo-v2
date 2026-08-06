@@ -18,6 +18,8 @@ function extractMemoryBlock(text) {
   if (inner != null) {
     try {
       const obj = JSON.parse(inner);
+      // description 選用：舊格式（只有 title/content）仍合法，缺就存 null——這個側通道是選用的，
+      // 為了一個新欄位把整則結論丟掉，等於用「格式更完整」換掉「知識有留存」，方向相反。
       if (obj && obj.title && obj.content) entry = obj;
     } catch { /* 側通道格式壞掉不影響主回覆，當作沒帶 */ }
   }
@@ -48,12 +50,13 @@ async function recordTroubleshooting(projectId, entry) {
   if (!slug.startsWith('ts-')) slug = 'ts-' + slug;
 
   const containerId = await _ensureContainer(projectId);
+  const description = String(entry.description || '').trim() || null;
   await query(
-    `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, updated_at)
-     VALUES ($1,$2,'troubleshooting',$3,$4,$5,NOW())
+    `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, description, updated_at)
+     VALUES ($1,$2,'troubleshooting',$3,$4,$5,$6,NOW())
      ON CONFLICT (project_id, slug)
-     DO UPDATE SET parent_id=$2, node_type='troubleshooting', title=$4, content=$5, updated_at=NOW()`,
-    [projectId, containerId, slug, entry.title, entry.content]
+     DO UPDATE SET parent_id=$2, node_type='troubleshooting', title=$4, content=$5, description=$6, updated_at=NOW()`,
+    [projectId, containerId, slug, entry.title, entry.content, description]
   );
   return slug;
 }

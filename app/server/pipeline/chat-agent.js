@@ -19,8 +19,13 @@ async function chatReply(projectId, chatId, userMessage, userId) {
     .map(m => `${m.role === 'ai' ? '助理' : '用戶'}：${m.content}`)
     .join('\n\n');
 
-  const { rows: projRows } = await query('SELECT name FROM projects WHERE id = $1', [projectId]);
+  const { rows: projRows } = await query('SELECT name, folder_name FROM projects WHERE id = $1', [projectId]);
   const projectName = projRows[0]?.name || String(projectId);
+  // 給 /ai/wiki 的 project 參數用（端點是 folder_name=$1 OR name=$1）：優先 folder_name（純英數），
+  // 且一律 encodeURIComponent——中文專案名未編碼放進 URL 會被 Node 的 HTTP parser 判 400，
+  // 連 Express 都到不了，agent 只會看到「wiki 查不到」而完全不知道是 URL 的問題。
+  // folder_name 是英數時 encodeURIComponent 不改變它，可讀性不受影響。
+  const projectSlug = encodeURIComponent(projRows[0]?.folder_name || projectName);
 
   const { getProjectInfo } = require('./task-agent');
   const info = await getProjectInfo(projectId).catch(() => null);
@@ -32,6 +37,7 @@ async function chatReply(projectId, chatId, userMessage, userId) {
   const projectNotes = await getProjectNotes(projectId).catch(() => null);
   const prompt = agent.render({
     project_name: projectName,
+    project_slug: projectSlug,
     repo_paths: repoPaths,
     history: historyText ? '\n\n[對話歷史]\n' + historyText : '',
     user_message: userMessage,

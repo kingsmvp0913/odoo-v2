@@ -208,18 +208,33 @@ describe('SOURCE_ROUTING_AGENTS 注入資料來源守則（填入已解析真值
 });
 
 // 意圖：技術客服能力（cs-capability）是 chat 與 cs 的共用真相來源——兩者 render 都要注入，
-// 且 {{project_name}}／{{repo_paths}} 被真正填入（chat/cs 才查得到 repo、curl 得到 wiki）。
+// 且 {{project_slug}}／{{repo_paths}} 被真正填入（chat/cs 才查得到 repo、curl 得到 wiki）。
 describe('CS_CAPABILITY_AGENTS 注入技術客服能力片段', () => {
   const { loadAgent } = require('../pipeline/agent-loader');
 
-  test('chat render 含能力片段，且填入 project_name 與 repo 路徑', () => {
+  test('chat render 含能力片段，且填入 project_slug 與 repo 路徑', () => {
     const out = loadAgent('chat').render({
-      project_name: '鴻久', repo_paths: '- /repos/hj/idx_sale',
+      project_name: '鴻久', project_slug: 'odoo17_hungjou', repo_paths: '- /repos/hj/idx_sale',
       history: '', user_message: '預計售價權限在哪'
     });
-    expect(out).toContain('技術客服');                 // 片段 persona
-    expect(out).toContain('/ai/wiki/pages?project=鴻久'); // project_name 填入 curl 指引
-    expect(out).toContain('/repos/hj/idx_sale');        // repo 路徑填入
+    expect(out).toContain('技術客服');                            // 片段 persona
+    expect(out).toContain('/ai/wiki/search?project=odoo17_hungjou'); // 搜尋端點有教
+    expect(out).toContain('/ai/wiki/pages?project=odoo17_hungjou');  // slug 填入 curl 指引
+    expect(out).toContain('/repos/hj/idx_sale');                   // repo 路徑填入
+    expect(out).toContain('鴻久');                                 // 對話正文仍用得到顯示名
+  });
+
+  // 意圖：wiki 的 curl 指引一律吃 {{project_slug}}（已 URL 編碼的 folder_name），不得回頭用中文
+  // 顯示名——未編碼的中文放進網址會被 Node 的 HTTP parser 判 400，連 Express 都到不了，
+  // 症狀只是「agent 查不到 wiki」，完全不指向網址問題。實測鴻久／北群醫／慈雲寶塔三個專案全中招。
+  test('中文專案名走 project_slug（已編碼）→ curl 指引裡不得出現未編碼中文網址', () => {
+    const encoded = encodeURIComponent('鴻久');
+    const out = loadAgent('chat').render({
+      project_name: '鴻久', project_slug: encoded, repo_paths: '- /r',
+      history: '', user_message: 'q'
+    });
+    expect(out).toContain(`/ai/wiki/pages?project=${encoded}`);
+    expect(out).not.toContain('/ai/wiki/pages?project=鴻久'); // 未編碼中文網址＝必定 400
   });
 });
 
