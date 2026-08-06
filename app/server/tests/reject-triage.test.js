@@ -193,6 +193,33 @@ test('多次人工退回後，模型判 fix 仍走 coding_running（不再被降
   expect(t.coding_session_id).not.toBeNull();        // 不清 coding 痕跡＝不必從零重寫
 });
 
+// 意圖：分診查出的根因是「下一輪 coding 唯一的新資訊」，必須進 retry_feedback（coding 的輸入欄位），
+// 不能只 logAi 落時間軸——那只給人看。實測 task 109：deploy 觸頂 stopped 不寫 retry_feedback、
+// 上一輪 coding 推進時又已把它清成 NULL，於是 keepFeedback:true 保留到的是 NULL，分診整段診斷
+// （「殘留模組需 pre_init_hook 解除安裝，純重跑部署無效」）一個字都沒傳給 coding。coding 收到空
+// retry_feedback＋「修正」二字的流程指令，依 prompt 契約判定無事可做 → 空 diff → QA 判 same diff
+// 照 pass → 部署重現同一個失敗，整條 pipeline 白燒一輪還多吃一次彈跳計數。
+test('fix → 分診結論寫進 retry_feedback，不是只落 AI 泡泡', async () => {
+  claudeReturns({ decision: 'fix', summary: '殘留的 website_sale_stock_wishlist 要在 pre_init_hook 解除安裝，純重跑部署無效。' });
+  const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'deploy_testing' });
+  await dbModule.query('UPDATE tasks SET retry_feedback=NULL WHERE id=$1', [id]); // 觸頂 stopped 的實況：無失敗回饋可保留
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.retry_feedback).toContain('pre_init_hook'); // coding 讀得到根因，才不會空轉
+});
+
+// 意圖：既有失敗回饋（部署／QA 的原始錯誤）與分診結論是互補的兩份資訊，coding 兩份都要看得到——
+// 前者是「哪裡壞了」，後者是「為什麼上一輪的修法沒用」。任一方覆蓋另一方都會讓 coding 少一半線索。
+test('fix → 既有失敗回饋與分診結論併存，互不覆蓋', async () => {
+  claudeReturns({ decision: 'fix', summary: '上一輪移除 depends 無效，模組已裝且不會自行撤銷。' });
+  const id = await makeTask({ rejectCount: 1 });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.retry_feedback).toContain('備註型別錯');       // 原始失敗訊息
+  expect(t.retry_feedback).toContain('移除 depends 無效'); // 分診結論
+});
+
 // clarify → 統一問人閘門：退回原因含糊到 fix/respec 都說得通時停下問使用者，
 // 答完由 resume_status 導回原分診關續判；原退回原因不得被洗掉（carryFeedback 保留）。
 test('clarify（帶 questions）→ clarify_pending，resume_status 回 reject_triage，保留原退回原因', async () => {

@@ -198,6 +198,35 @@ test('升級+重啟成功但後台 asset bundle 404（前端 template xpath 錯�
   expect(envAgent.assetSmokeCheck).toHaveBeenCalledWith(projectId);
 });
 
+// 意圖：連續失敗觸頂改 stopped 時，失敗訊息一樣要落 retry_feedback。舊版只寫 blocker_content（給人看的
+// 停下原因），而 retry_feedback 在上一輪 coding 推進時已被清成 NULL——使用者填修正指示 → 分診判 fix →
+// 回 coding 時，coding 的【上一次執行的失敗訊息】欄位是空的，只能依 prompt 契約判定無事可做而空轉。
+// 未觸頂的退回分支一直都有寫，偏偏「停等人工後再繼續」這條人最可能走的路沒寫（實測 task 109）。
+test('asset 失敗觸頂 stopped → retry_feedback 仍帶失敗訊息，供分診／coding 讀', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+  envAgent.assetSmokeCheck.mockResolvedValue({ ok: false, assetError: true, reason: 'web.assets_web.min.js → 500' });
+  const id = await makeTask(2); // 本次為第 3 次＝觸頂
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('asset');   // 給人看的停下原因照舊
+  expect(t.retry_feedback).toContain('asset');    // 給 coding 讀的失敗訊息不得遺漏
+});
+
+// 同上，升級失敗（非 asset）那條路徑也一樣：觸頂 stopped 不能把失敗訊息只留在 blocker_content。
+test('升級失敗觸頂 stopped → retry_feedback 仍帶失敗訊息', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockRejectedValue(new Error(
+    'Traceback\nodoo.tools.convert.ParseError: External ID not found: website_sale_wishlist.product_wishlist'
+  ));
+  const id = await makeTask(2); // 本次為第 3 次＝觸頂
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.retry_feedback).toContain('External ID not found');
+});
+
 // 意圖：連不上／registry 未就緒／拿不到 bundle URL 一律 inconclusive，不得阻斷部署（比照重啟失敗不擋），
 // 避免暫態誤報把好任務打回 coding。
 test('asset 檢查 inconclusive（無法確認）→ 不阻斷，照常進 playwright_running', async () => {

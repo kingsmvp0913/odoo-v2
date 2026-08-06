@@ -348,9 +348,12 @@ async function doDeploy(task, taskId, userId, signal) {
       const feedback = `[部署測試區升級失敗]\n${odooErr}${codeHint}${logRef}`;
       if (nextCount >= DEPLOY_LIMIT) {
         await emitDeployVerdict(userId, taskId, `程式問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);
+        // retry_feedback 一併寫：blocker_content 是給人看的停下原因，coding 讀的是 retry_feedback。
+        // 只寫前者的話，使用者填修正指示 → 分診判 fix → 回 coding 時失敗訊息已遺失（上一輪推進時
+        // 消費成 NULL），coding 收到空輸入只能空轉（實測 task 109）。未觸頂的退回分支本來就有寫。
         await query(
-          "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
-          [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${codeHint}${logRef}`]
+          "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, retry_feedback=$4, updated_at=NOW() WHERE id=$1",
+          [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${codeHint}${logRef}`, feedback]
         );
         notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
       } else {
@@ -397,9 +400,10 @@ async function doDeploy(task, taskId, userId, signal) {
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, detail]);
     if (nextCount >= DEPLOY_LIMIT) {
       await emitDeployVerdict(userId, taskId, `asset 問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);
+      // 同升級失敗觸頂：blocker_content 給人看，retry_feedback 給 coding 讀，兩邊都要寫。
       await query(
-        "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, detail.slice(0, 500)]
+        "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, retry_feedback=$4, updated_at=NOW() WHERE id=$1",
+        [taskId, nextCount, detail.slice(0, 500), detail]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {

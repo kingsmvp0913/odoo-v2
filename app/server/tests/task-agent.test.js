@@ -37,17 +37,23 @@ function defaultScript(child) { emitResult(child); child.emit('close', 0); }
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
-jest.mock('../pipeline/git', () => ({
-  pullBranch: jest.fn(),
-  ensureMainBranch: jest.fn().mockResolvedValue('main'),
-  ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
-  getMainBranch: jest.fn().mockResolvedValue('main'),
-  AI_BRANCH: 'ai-dev',
-  ensureAiBranch: jest.fn().mockResolvedValue('ai-dev'),
-  syncMainIntoAi: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
-  commitResolved: jest.fn().mockResolvedValue(undefined),
-  abortMerge: jest.fn().mockResolvedValue(undefined)
-}));
+jest.mock('../pipeline/git', () => {
+  // revParse 預設每次回不同 SHA＝「本輪有新 commit」，讓既有測試維持原語意；
+  // 要測「無新 commit」的案例自行 mockResolvedValue 成固定值。
+  let sha = 0;
+  return {
+    pullBranch: jest.fn(),
+    ensureMainBranch: jest.fn().mockResolvedValue('main'),
+    ensureWorktreeAtMain: jest.fn().mockResolvedValue(undefined),
+    getMainBranch: jest.fn().mockResolvedValue('main'),
+    AI_BRANCH: 'ai-dev',
+    ensureAiBranch: jest.fn().mockResolvedValue('ai-dev'),
+    syncMainIntoAi: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
+    commitResolved: jest.fn().mockResolvedValue(undefined),
+    abortMerge: jest.fn().mockResolvedValue(undefined),
+    revParse: jest.fn(() => Promise.resolve(`sha-${++sha}`))
+  };
+});
 jest.mock('../pipeline/merge-agent', () => ({
   resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} }),
   SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
@@ -254,6 +260,60 @@ test('B-5 有 session＋feedback 的修正輪 → 仍 fresh（不 --resume）、
   expect(calls[0].stdin).toContain('note_t 型別錯誤');         // 帶 retry_feedback
   const { rows: [t] } = await dbModule.query('SELECT retry_feedback, status FROM tasks WHERE id=$1', [id]);
   expect(t.retry_feedback).toBeNull();                         // 成功推進即消費
+  expect(t.status).toBe('qa_running');
+});
+
+// 意圖：coding 帶著失敗回饋卻一個 commit 都沒產生 ⇒ 這輪什麼都沒改。放行進 QA 只會讓 QA 判
+// 「same diff、已審過」照樣 pass，再部署一次必然重現同一個失敗——白燒整條 pipeline 還多吃一次
+// 彈跳計數（實測 task 109）。推進與否由結構決定，不能靠 agent 自律（rules/pipeline.md 60）。
+// retry_feedback 刻意不消費：下一輪（或人工續跑）仍要讀得到原始失敗訊息，否則又退回空輸入。
+test('B-5 帶失敗回饋卻無新 commit → stopped，不放行進 QA', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-nodiff'); emitResult(child); child.emit('close', 0); } });
+  git.revParse.mockResolvedValue('sha-unchanged'); // 前後同 SHA＝本輪無 commit
+  const id = await insertCodingTask('nodiff1', { retry_feedback: '[部署測試區 asset 檢查失敗]\nbundle 500' });
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.retry_feedback).toContain('bundle 500');            // 不消費，續跑仍讀得到
+  expect(t.blocker_content).toContain('未產生任何程式變更');
+});
+
+// 鑑別力對照：同樣帶失敗回饋，但真的改了東西（HEAD 前進）→ 必須照常放行，不得誤擋。
+test('B-5 帶失敗回饋且有新 commit → 照常進 QA', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-hasdiff'); emitResult(child); child.emit('close', 0); } });
+  let n = 0;
+  git.revParse.mockImplementation(() => Promise.resolve(`sha-moved-${++n}`));
+  const id = await insertCodingTask('hasdiff1', { retry_feedback: '[QA 未通過]\n圖示 class 用錯' });
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+});
+
+// 不誤傷：分診判 resume 把任務放回 coding（無 retry_feedback）時，本來就可能無事可做。
+// 這種情況沒有「必然重現的失敗」在等著，照常放行——守衛只針對「帶著失敗回饋卻沒改東西」。
+test('B-5 無失敗回饋且無新 commit → 不誤判，照常進 QA', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-noresume'); emitResult(child); child.emit('close', 0); } });
+  git.revParse.mockResolvedValue('sha-unchanged');
+  const id = await insertCodingTask('nodiff2');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+});
+
+// 意圖：HEAD 快照讀不到（worktree 尚未建立／unborn HEAD／git 呼叫失敗）＝無法確認有沒有變更，
+// 不是「確認沒有變更」。若把讀不到當成無變更，快照一失敗就會把每一輪修正輪都誤判成空轉而卡死
+// ——空物件的 every() 恆為 true，這個坑實測讓 workflow-scenarios 的 S1/S2/S5a/S6 全滅。
+// 防呆只在有確證時才動手；沒有證據一律放行。
+test('B-5 HEAD 快照讀不到 → 視為無法確認，不得誤擋（照常進 QA）', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-nohead'); emitResult(child); child.emit('close', 0); } });
+  git.revParse.mockRejectedValue(new Error('not a git repository'));
+  const id = await insertCodingTask('nohead1', { retry_feedback: '[部署測試區升級失敗]\nParseError' });
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('qa_running');
 });
 

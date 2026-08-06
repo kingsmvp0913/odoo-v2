@@ -4,7 +4,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
-const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge } = require('./git');
+const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge, revParse } = require('./git');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
@@ -369,6 +369,21 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 
+// 本任務各 repo worktree 的 HEAD 快照：比對 coding 前後即知這輪有沒有真的 commit 東西。
+// 讀不到（worktree 尚未建立／unborn HEAD）該 repo 記 null，整段失敗則回空物件——兩者都代表
+// 「無法確認」，由呼叫端當作沒有證據、不得據以阻擋（見下方 unchanged 的判定）。
+// 本函式永不拋出：HEAD 快照只是防呆的輔助資訊，不該有能力弄掛整個 coding 關。
+async function readHeads(info, taskId) {
+  try {
+    const wt = worktreeParent(info.root, taskId);
+    const heads = {};
+    for (const r of info.repos || []) {
+      heads[r.subdir] = await revParse(path.join(wt, r.subdir), 'HEAD').catch(() => null);
+    }
+    return heads;
+  } catch { return {}; }
+}
+
 async function runTaskCoding(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback FROM tasks WHERE id = $1',
@@ -404,6 +419,7 @@ async function runTaskCoding(taskId, userId, signal) {
   }
 
   const ref = { taskId: task.task_id, projectId: task.project_id };
+  const headsBefore = await readHeads(info, task.task_id);
   let raw;
   try {
     const resolution = await latestResolution(taskId);
@@ -425,6 +441,31 @@ async function runTaskCoding(taskId, userId, signal) {
   }
 
   const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref, userId });
+
+  // 帶著失敗回饋進來、卻一個 commit 都沒產生 ⇒ 這輪什麼也沒改。放行進 QA 只會讓 QA 判「same diff、
+  // 已審過」照樣 pass，再部署一次必然重現同一個失敗，白燒整條 pipeline 還多吃一次彈跳計數
+  //（實測 task 109）。推進與否由結構決定，不靠 agent 自律。retry_feedback 刻意不消費：續跑時
+  // 仍要讀得到原始失敗訊息，否則又回到「空輸入→空轉」的原點。
+  // 只在有 retry_feedback 時才擋——分診判 resume 放回本關時本就可能無事可做，那沒有失敗在等著重現。
+  if (result?.status === 'qa_running' && task.retry_feedback) {
+    // 「無變更」必須是**確證**：每個 repo 都讀得到 HEAD 且前後相同。任一側讀不到（快照失敗／
+    // worktree 不存在／unborn HEAD）就是無法確認，一律放行——空物件的 every() 恆為 true，
+    // 若不擋這個空集合，快照一失敗就會把每一輪 coding 都誤判成沒改東西而卡死。
+    const headsAfter = await readHeads(info, task.task_id);
+    const repos = Object.keys(headsAfter);
+    const unchanged = repos.length > 0
+      && repos.every(k => headsAfter[k] && headsBefore[k] && headsAfter[k] === headsBefore[k]);
+    if (unchanged) {
+      await query(
+        `UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+        [taskId, '實作 Agent 本輪未產生任何程式變更，但上一關是失敗退回——直接推進會重現同一個失敗。' +
+                 '請確認失敗原因是否已在別處處理，或補充具體的修正方向後再繼續。']
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
+  }
+
   if (result?.status === 'qa_running') {
     // 走到「確定推進」才消費 retry_feedback；解析失敗轉 stopped 時保留，
     // 讓之後分診放回 coding 仍有上一輪失敗上下文可 resume（避免盲改，健檢止血 11）

@@ -155,12 +155,15 @@ async function runRejectTriage(taskId, userId, signal) {
   // reentry_count 一律歸零：分診＝人工已介入，總循環兜底（MAX_REENTRY）額度應重新起算——
   // 否則達上限被停過的任務，人工放回後只剩一次下游失敗額度就再度永久 stopped，人工介入實質失效。
   // （代價：前端顯示的循環次數變成「距上次人工介入」的次數，屬可接受語意。）
-  const goto = async (nextStatus, { keepFeedback = false, freshRespec = false, resetReentry = true } = {}) => {
+  // feedback：明確寫入 retry_feedback（與 keepFeedback 互斥，優先）。給 fix 分支把分診結論交棒下去用。
+  const goto = async (nextStatus, { keepFeedback = false, feedback = null, freshRespec = false, resetReentry = true } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
     // triage_home 一併清：本次分診已落地，暫存的原關用完即棄，留著會被下一次分診誤當原關
     const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'triage_home=NULL', 'respec_return_status=NULL', 'updated_at=NOW()'];
+    const params = [taskId, nextStatus];
     if (resetReentry) sets.push('reentry_count=0');
-    if (!keepFeedback) sets.push('retry_feedback=NULL');
+    if (feedback !== null) { params.push(feedback); sets.push(`retry_feedback=$${params.length}`); }
+    else if (!keepFeedback) sets.push('retry_feedback=NULL');
     // freshRespec＝交回分析重寫規格，coding 的痕跡要一併清乾淨。git_branch 必須跟 coding_session_id
     // 一起清：respec-agent 判「pre-coding」（＝規格審核閘門的對話式問答，該委派 spec-review）的條件是
     // 兩者皆空，只清一半會讓任務重產規格、停在 spec_review 後，使用者按「送出修改意見」時被判成
@@ -172,7 +175,7 @@ async function runRejectTriage(taskId, userId, signal) {
     // 萬一 analysis 那輪中途失敗、任務還沒走到那一刻就又被繞回 spec_review，也不會續接到舊 session。
     if (freshRespec) sets.push('coding_session_id=NULL', 'git_branch=NULL', 'spec_session_id=NULL', 'spec_prompt_ver=NULL');
     if (counter) sets.push(`${counter}=0`);
-    await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id=$1`, [taskId, nextStatus]);
+    await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id=$1`, params);
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   };
 
@@ -236,9 +239,14 @@ async function runRejectTriage(taskId, userId, signal) {
   // 之間無人監督地空轉燒 token（那三關仍各自呼叫它），而分診的每一輪都是人主動退回／填修正指示
   // 換來的，帶著新資訊，不是機器空轉。舊版讓人工退回也吃額度（MAX_REENTRY=2），結果是第二次退回
   // 直接 stopped，且填修正指示 → 又判 fix → 又觸頂 → 任務永久推不動（實測過的死迴圈）。
+  // 分診結論必須進 retry_feedback（coding 的輸入欄位），不能只 logAi 落時間軸——那只給人看。
+  // 觸頂 stopped 進來的任務 retry_feedback 常是 NULL（上一輪 coding 推進時已消費），只靠
+  // keepFeedback 保留到的是 NULL，整段診斷一個字都傳不到 coding，coding 只能空轉（實測 task 109）。
+  // 兩份併存：原始失敗訊息說「哪裡壞了」，分診結論說「為什麼上一輪的修法沒用」，缺一不可。
   if (decision === 'fix') {
     if (summary) await logAi(summary);
-    await goto('coding_running', { keepFeedback: true });
+    const carried = [task.retry_feedback, summary && `[分診結論]\n${summary}`].filter(Boolean).join('\n\n');
+    await goto('coding_running', carried ? { feedback: carried } : { keepFeedback: true });
     return true;
   }
 

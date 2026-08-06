@@ -5,7 +5,10 @@
 不分改哪個檔都該知道的。
 
 1. **全跑測試一律 `cd app && npm run test:quiet`（含 `--runInBand`），不要 `npx jest`** — 平行 worker 下 pg-mem 產生浮動假紅，每次紅的套件都不同。`npm test` 同樣正確但輸出 127K（實測 2026-08-01：色碼佔 27%、console 堆疊佔 25%、152 行 PASS，對判斷紅綠全無資訊量）；`test:quiet` 壓到 9K，接 `| grep -vE '^PASS |^$'` 再壓到 3K。**紅了之後**才對那一支單獨跑不帶 `--silent` 的完整輸出——console log 在全綠時是噪音，在除錯時是線索。
-2. **`git-integration.test.js:106` 的 CRLF 紅燈與 pgPass flake 是既有問題，乾淨 HEAD 也紅，不要 debug** — 真正結果看 `Tests: X passed` 那行。
+2. **下列紅燈是既有問題，乾淨 HEAD 也紅，不要 debug** — 真正結果看 `Tests: X passed` 那行。判定法一律是「stash 掉自己的改動、對那一支單獨再跑一次」，別靠記憶認定（2026-08-06 實測更新）：
+   - `git-integration.test.js` 的 `ensureWorktreeAtMain` **兩支**：CRLF 行尾差異（期望 `x = 1`、實得 `x = 1\n`），Windows checkout 必紅。
+   - `vpn-gateway-run.test.js` 的 `defaultTmpFilePath › 容器化（APP_DIR 已設）…`：測的是容器內落點，開發機非容器故必紅。
+   - `enterprise-routes.test.js`／`spec-review.test.js`：**flaky**（pgPass flake 家族）。全跑時每次紅的是不同支、單跑一律綠——所以「全跑紅了」本身不是證據，一定要單跑複驗。
 3. **改 `app/server/**.js` 後必須重啟 server；只改 agent `.md` prompt 靠 mtime 熱載免重啟** — 常駐進程載的是舊碼，不重啟會誤判修法無效。
 4. **commit 前一律 `git status --porcelain -uno` 逐檔挑選，禁用 `git add -A`** — 此 repo 常態是多股平行工作，盲目 commit 會夾帶或蓋掉他人未完成的變更。單一檔案混了他人 hunk 時，用 `git diff -U3` 定位後 `git apply --cached` 只暫存自己的。
 5. **多 session 平行工作各自開 git worktree，禁止共用同一個 checkout** — 對方切分支會讓你的 commit 落到錯的分支，甚至被連帶 push 到 origin（已實際發生過）。
