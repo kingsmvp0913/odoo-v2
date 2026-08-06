@@ -100,6 +100,36 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // --- Token 原始四欄拆解（判斷成本是「讀取快取」還是「寫入快取」）---
+  // token-report 只吐加權後的合計，看不出 cache 是命中還是重寫——但兩者差 12.5 倍
+  //（cache_read 0.1×／cache_create 1.25× input 單價），是決定「要不要把更多內容塞進 prompt」
+  // 的唯一依據。沒有這支端點就只能從 total 與加權值反推，而反推需要對 output 佔比做假設。
+  app.get('/api/admin/token-breakdown', auth, async (req, res) => {
+    try {
+      const start = req.query.start ? new Date(req.query.start) : new Date(Date.now() - 7 * 86400000);
+      // 日界：date-only 補到當日結束，否則查當天會拿到空的
+      const end = req.query.end
+        ? new Date(/T/.test(req.query.end) ? req.query.end : req.query.end + 'T23:59:59.999Z')
+        : new Date();
+      const params = [start, end];
+      let where = 'WHERE recorded_at >= $1 AND recorded_at <= $2';
+      if (req.query.agent_type) { params.push(req.query.agent_type); where += ` AND agent_type = $${params.length}`; }
+      const { rows } = await query(
+        `SELECT agent_type,
+                COUNT(*)                        AS calls,
+                SUM(input_tokens)               AS input_tokens,
+                SUM(output_tokens)              AS output_tokens,
+                SUM(cache_read_tokens)          AS cache_read_tokens,
+                SUM(cache_create_tokens)        AS cache_create_tokens
+           FROM token_usage ${where}
+          GROUP BY agent_type
+          ORDER BY SUM(cache_create_tokens) DESC`,
+        params
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // --- odoo_version_configs ---
 
   app.get('/api/admin/version-configs', auth, async (req, res) => {

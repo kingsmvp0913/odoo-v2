@@ -196,3 +196,42 @@ test('DELETE /api/admin/project-maps/:id → deletes map', async () => {
   expect(res.status).toBe(200);
   expect(res.body.ok).toBe(true);
 });
+
+// --- token-breakdown：原始四欄拆解 ---
+// 意圖：token-report 只吐加權合計，看不出 cache 是「命中」還是「重寫」——但兩者差 12.5 倍
+// （read 0.1× / create 1.25×），是判斷「該不該把更多內容塞進 prompt」的唯一依據。
+// 沒有這支端點就只能反推，而反推得對 output 佔比做假設，結論會隨假設漂移。
+test('GET /api/admin/token-breakdown → 依 agent 吐原始四欄，可區分 cache 命中與重寫', async () => {
+  await dbModule.query(
+    `INSERT INTO token_usage (agent_type, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, recorded_at)
+     VALUES ('chat','sonnet',100,50,9000,700,NOW()),
+            ('chat','sonnet',80,40,5000,300,NOW()),
+            ('coding','sonnet',200,60,3000,120,NOW())`
+  );
+  const res = await request(app).get('/api/admin/token-breakdown')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const chat = res.body.find(r => r.agent_type === 'chat');
+  expect(Number(chat.calls)).toBe(2);
+  expect(Number(chat.cache_read_tokens)).toBe(14000);   // 命中的部分
+  expect(Number(chat.cache_create_tokens)).toBe(1000);  // 重寫的部分，成本是前者的 12.5 倍
+  expect(Number(chat.input_tokens)).toBe(180);
+  expect(Number(chat.output_tokens)).toBe(90);
+  // 排序：cache_create 最多的排最前，因為那才是可下手的成本
+  expect(res.body[0].agent_type).toBe('chat');
+});
+
+test('GET /api/admin/token-breakdown?agent_type=coding → 只回該 agent', async () => {
+  const res = await request(app).get('/api/admin/token-breakdown?agent_type=coding')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body).toHaveLength(1);
+  expect(res.body[0].agent_type).toBe('coding');
+});
+
+// 用量資料是全平台成本，非 admin 不得看
+test('GET /api/admin/token-breakdown → 非 admin 403', async () => {
+  const res = await request(app).get('/api/admin/token-breakdown')
+    .set('Authorization', `Bearer ${userToken}`);
+  expect(res.status).toBe(403);
+});
