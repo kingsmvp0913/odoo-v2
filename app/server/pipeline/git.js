@@ -152,9 +152,38 @@ async function hasCommits(repoPath) {
   } catch { return false; }
 }
 
-// 偵測 repo 的主分支：依序查本地 main/master、origin/main/master；都沒有則預設 'main'
-// （不再盲目 fallback 'master'，避免對只有 main 或空 repo 的專案 checkout master 失敗）
+// 遠端預設分支（origin/HEAD）＝主分支的權威答案。clone 時由遠端 HEAD 決定，develop／trunk 這類
+// 非慣例命名只有它認得出來。未設時回 null（bare 端未指定、或 clone 當下遠端還是空的）。
+async function remoteDefaultBranch(repoPath) {
+  try {
+    const { stdout } = await execFileAsync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
+    return stdout.trim().replace(/^origin\//, '') || null;
+  } catch { return null; }
+}
+
+// 列出遠端分支供使用者挑主分支（去掉 origin/ 前綴；HEAD 指標本身不是分支，濾掉）
+async function listRemoteBranches(repoPath) {
+  const { stdout } = await execFileAsync('git', ['branch', '-r', '--format=%(refname:short)'], { cwd: repoPath });
+  return stdout.split('\n').map(s => s.trim()).filter(Boolean)
+    .map(s => s.replace(/^origin\//, ''))
+    .filter(s => s && s !== 'HEAD');
+}
+
+// 指定這個 clone 的主分支＝改寫 origin/HEAD。刻意用 git 原生的 set-head 而非自立平台專屬設定：
+// getMainBranch 本就以 origin/HEAD 為第一順位，落在這裡則 clone 內外（含人工下指令）看到同一個答案。
+// branch 傳 null／空＝改回自動（-a 讓 git 重問遠端的預設分支）。
+async function setRemoteHead(repoPath, branch) {
+  await execFileAsync('git', ['remote', 'set-head', 'origin', ...(branch ? [branch] : ['-a'])], { cwd: repoPath });
+}
+
+// 偵測 repo 的主分支：先問 origin/HEAD，再依序查本地 main/master、origin/main/master；都沒有則
+// 預設 'main'（不再盲目 fallback 'master'，避免對只有 main 或空 repo 的專案 checkout master 失敗）。
+// origin/HEAD 優先的理由：主分支叫 develop 時，硬清單會一路 fallback 到不存在的 'main'，後續
+// ensureMainBranch 便憑空建一條假 main——同步從此只跟著那條 origin 上不存在的分支跑（真主分支的
+// 新 commit 永遠進不了 ai-dev），approve 還會把假 main push 回客戶 repo。三種後果全靜默。
 async function getMainBranch(repoPath) {
+  const remoteHead = await remoteDefaultBranch(repoPath);
+  if (remoteHead) return remoteHead;
   const refs = ['refs/heads/main', 'refs/heads/master', 'refs/remotes/origin/main', 'refs/remotes/origin/master'];
   for (const ref of refs) {
     if (await refExists(repoPath, ref)) return ref.split('/').pop();
@@ -165,15 +194,18 @@ async function getMainBranch(repoPath) {
 // 確保本地有可用的主分支並 checkout；沒有就建立（空 repo 補一個初始 commit）。回傳分支名。
 // 供分析前使用：避免「repo 無 main」時整條流程卡死。
 async function ensureMainBranch(repoPath, gitEnv) {
-  // 1) 本地已有 main/master
-  for (const b of ['main', 'master']) {
+  // 遠端預設分支排在硬清單之前：主分支叫 develop 時，只認 main/master 會直接掉進 3) 憑空建假 main
+  const remoteHead = await remoteDefaultBranch(repoPath);
+  const candidates = remoteHead ? [remoteHead, 'main', 'master'] : ['main', 'master'];
+  // 1) 本地已有
+  for (const b of candidates) {
     if (await refExists(repoPath, `refs/heads/${b}`)) {
       await execFileAsync('git', ['checkout', b], gitOpts(repoPath, gitEnv));
       return b;
     }
   }
   // 2) 僅遠端有 → 建立本地追蹤分支
-  for (const b of ['main', 'master']) {
+  for (const b of candidates) {
     if (await refExists(repoPath, `refs/remotes/origin/${b}`)) {
       await execFileAsync('git', ['checkout', '-B', b, `origin/${b}`], gitOpts(repoPath, gitEnv));
       return b;
@@ -627,4 +659,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };

@@ -522,6 +522,9 @@ async function migrate() {
     { table: 'project_repos', col: 'clone_error',     sql: 'ALTER TABLE project_repos ADD COLUMN clone_error TEXT' },
     { table: 'project_repos', col: 'graphify_status', sql: "ALTER TABLE project_repos ADD COLUMN graphify_status TEXT DEFAULT 'idle'" },
     { table: 'project_repos', col: 'graphify_error',  sql: 'ALTER TABLE project_repos ADD COLUMN graphify_error TEXT' },
+    // 主分支覆寫：NULL＝依 origin/HEAD 自動偵測（多數情況）。填值時以 git remote set-head 落到該
+    // clone 的 origin/HEAD，getMainBranch 便自動吃到——DB 這欄只是 reclone 後要重新套用的真相來源。
+    { table: 'project_repos', col: 'base_branch',     sql: 'ALTER TABLE project_repos ADD COLUMN base_branch TEXT' },
     { table: 'projects', col: 'port', sql: 'ALTER TABLE projects ADD COLUMN port INTEGER' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },

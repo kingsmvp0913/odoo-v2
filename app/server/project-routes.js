@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 const { query, withTransaction } = require('./db');
 const { verifyToken } = require('./auth');
 const { runGraphify } = require('./pipeline/graphify-runner');
-const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge, releaseAiToMain } = require('./pipeline/git');
+const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncMainIntoAi, abortMerge, releaseAiToMain, getMainBranch, listRemoteBranches, setRemoteHead } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
 const { deleteTaskDir } = require('./lib/attachments');
@@ -105,6 +105,11 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
         [repoId, 'error', msg]
       ).catch(() => {});
     } else {
+      // 重新套用使用者指定的主分支：clone 一律照遠端 HEAD 設 origin/HEAD，不補這步，換 URL／重 clone
+      // 之後設定就被靜默洗掉（畫面仍顯示 develop，實際已回到 main）。排在 ensureTestingBranch 之前，
+      // 讓後續所有以主分支為基準的操作都吃到正確答案。
+      const { rows: [cfg] } = await query('SELECT base_branch FROM project_repos WHERE id=$1', [repoId]).catch(() => ({ rows: [] }));
+      if (cfg?.base_branch) await setRemoteHead(destPath, cfg.base_branch).catch(() => {});
       // 主 clone 常駐 testing 分支（GitLab Flow 環境分支，測試環境 addons 來源）
       try { await ensureTestingBranch(destPath); } catch { /* 不擋 clone 完成 */ }
       await query(
@@ -431,6 +436,24 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 主分支下拉的資料源：可選的遠端分支 + 目前生效的分支。clone 未完成時沒有 refs 可讀，回空清單
+  // 讓前端顯示「clone 完成後才能選」，而不是報錯。
+  app.get('/api/projects/:id/repos/:repoId/branches', verifyToken, async (req, res) => {
+    try {
+      const { rows: [repo] } = await query(
+        'SELECT local_path, clone_status, base_branch FROM project_repos WHERE id=$1 AND project_id=$2',
+        [req.params.repoId, req.params.id]
+      );
+      if (!repo) return res.status(404).json({ error: 'Not found' });
+      if (repo.clone_status !== 'done') {
+        return res.json({ branches: [], base_branch: repo.base_branch, effective: null, ready: false });
+      }
+      const branches = await listRemoteBranches(repo.local_path).catch(() => []);
+      const effective = await getMainBranch(repo.local_path).catch(() => null);
+      res.json({ branches, base_branch: repo.base_branch, effective, ready: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.post('/api/projects/:id/repos', verifyToken, async (req, res) => {
     try {
       const { label, repo_url, is_primary } = req.body;
@@ -459,13 +482,24 @@ function registerRoutes(app) {
 
   app.put('/api/projects/:id/repos/:repoId', verifyToken, async (req, res) => {
     try {
-      const { label, repo_url, is_primary } = req.body;
+      const { label, repo_url, is_primary, base_branch } = req.body;
 
       const { rows: [existing] } = await query(
         'SELECT * FROM project_repos WHERE id=$1 AND project_id=$2',
         [req.params.repoId, req.params.id]
       );
       if (!existing) return res.status(404).json({ error: 'Not found' });
+
+      // 主分支覆寫：空字串／null＝改回自動偵測。指定值必須真的存在於遠端，否則 set-head 會失敗、
+      // DB 與 origin/HEAD 從此不一致（畫面顯示已設定、實際仍用舊分支）——擋在寫入前才不會脫鉤。
+      const baseBranchGiven = base_branch !== undefined;
+      const nextBaseBranch = baseBranchGiven ? (base_branch || null) : existing.base_branch;
+      if (baseBranchGiven && nextBaseBranch && existing.clone_status === 'done') {
+        const avail = await listRemoteBranches(existing.local_path).catch(() => []);
+        if (!avail.includes(nextBaseBranch)) {
+          return res.status(400).json({ error: `遠端沒有分支 ${nextBaseBranch}` });
+        }
+      }
 
       if (is_primary) {
         await query('UPDATE project_repos SET is_primary = false WHERE project_id = $1', [req.params.id]);
@@ -487,11 +521,18 @@ function registerRoutes(app) {
            repo_url = COALESCE($4, repo_url),
            local_path = $5,
            clone_status = $6,
-           is_primary = COALESCE($7, is_primary)
+           is_primary = COALESCE($7, is_primary),
+           base_branch = $8
          WHERE id = $1 AND project_id = $2 RETURNING *`,
-        [req.params.repoId, req.params.id, label || null, repo_url || null, newLocalPath, newCloneStatus, is_primary ?? null]
+        [req.params.repoId, req.params.id, label || null, repo_url || null, newLocalPath, newCloneStatus, is_primary ?? null, nextBaseBranch]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+      // 落到 origin/HEAD＝真正生效（getMainBranch 的第一順位）。改回自動偵測則用 -a 讓 git 重問遠端。
+      // urlChanged 時跳過：clone 還沒跑完，等 triggerClone 完成後那段統一套用。
+      if (baseBranchGiven && !urlChanged && existing.clone_status === 'done') {
+        await setRemoteHead(existing.local_path, nextBaseBranch).catch(() => {});
+      }
 
       if (urlChanged) {
         triggerClone(req.params.id, rows[0].id, rows[0].repo_url, newLocalPath, await optionalGitEnv(req.userId), req.userId);

@@ -51,6 +51,9 @@ jest.mock('../pipeline/git', () => ({
   resetTestingTo: jest.fn().mockResolvedValue(undefined),
   mergeInto: jest.fn().mockResolvedValue({ hasConflicts: false, conflictFiles: [] }),
   commitAll: jest.fn().mockResolvedValue(undefined),
+  getMainBranch: jest.fn().mockResolvedValue('main'),
+  listRemoteBranches: jest.fn().mockResolvedValue(['main', 'develop', 'ai-dev']),
+  setRemoteHead: jest.fn().mockResolvedValue(undefined),
 }));
 
 process.env.JWT_SECRET = 'test-proj';
@@ -714,5 +717,78 @@ describe('DELETE /api/projects/:id 的資料完整性', () => {
       const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
       expect(src).not.toMatch(/\bquery\(\s*['"`](BEGIN|COMMIT|ROLLBACK)/i);
     }
+  });
+});
+
+// 意圖：主分支不一定叫 main／master（develop、trunk 都常見）。此設定的成敗關鍵在「有沒有落到該
+// clone 的 origin/HEAD」——getMainBranch 讀的是 origin/HEAD，只寫 DB 的話畫面顯示已設定、pipeline
+// 卻仍用舊分支，屬於最難察覺的那種脫鉤。故每個案例都同時斷言 DB 與 setRemoteHead。
+describe('repo 主分支覆寫', () => {
+  let pid, rid;
+
+  beforeAll(async () => {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ('bb-proj','17.0') RETURNING id"
+    );
+    pid = p.id;
+    const { rows: [r] } = await dbModule.query(
+      `INSERT INTO project_repos (project_id, label, repo_url, local_path, clone_status)
+       VALUES ($1,'main','https://x/y','/repos/bb/main','done') RETURNING id`,
+      [pid]
+    );
+    rid = r.id;
+  });
+
+  const put = (body) => request(app).put(`/api/projects/${pid}/repos/${rid}`)
+    .set('Authorization', `Bearer ${token}`).send(body);
+
+  test('GET branches：給得出可選分支與目前生效的分支', async () => {
+    const res = await request(app).get(`/api/projects/${pid}/repos/${rid}/branches`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.branches).toContain('develop');
+    expect(res.body.effective).toBe('main');
+    expect(res.body.ready).toBe(true);
+  });
+
+  test('clone 未完成 → 回空清單且 ready=false（不報錯，前端才好顯示提示）', async () => {
+    await dbModule.query("UPDATE project_repos SET clone_status='cloning' WHERE id=$1", [rid]);
+    const res = await request(app).get(`/api/projects/${pid}/repos/${rid}/branches`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.ready).toBe(false);
+    expect(res.body.branches).toEqual([]);
+    await dbModule.query("UPDATE project_repos SET clone_status='done' WHERE id=$1", [rid]);
+  });
+
+  test('指定 develop：寫進 DB，並落到 origin/HEAD 才算生效', async () => {
+    gitMock.setRemoteHead.mockClear();
+    const res = await put({ base_branch: 'develop' });
+    expect(res.status).toBe(200);
+    expect(res.body.base_branch).toBe('develop');
+    expect(gitMock.setRemoteHead).toHaveBeenCalledWith('/repos/bb/main', 'develop');
+  });
+
+  test('遠端沒有的分支 → 400，且不得寫進 DB（否則畫面與實際永久脫鉤）', async () => {
+    const res = await put({ base_branch: 'no-such-branch' });
+    expect(res.status).toBe(400);
+    const { rows } = await dbModule.query('SELECT base_branch FROM project_repos WHERE id=$1', [rid]);
+    expect(rows[0].base_branch).toBe('develop'); // 停在上一個有效值，不是被清掉
+  });
+
+  test('一般編輯（沒帶 base_branch）不得動到既有設定', async () => {
+    gitMock.setRemoteHead.mockClear();
+    const res = await put({ label: 'main-renamed' });
+    expect(res.status).toBe(200);
+    expect(res.body.base_branch).toBe('develop');
+    expect(gitMock.setRemoteHead).not.toHaveBeenCalled();
+  });
+
+  test('清空 → 改回自動偵測：DB 存 NULL，origin/HEAD 重問遠端', async () => {
+    gitMock.setRemoteHead.mockClear();
+    const res = await put({ base_branch: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.base_branch).toBeNull();
+    expect(gitMock.setRemoteHead).toHaveBeenCalledWith('/repos/bb/main', null);
   });
 });

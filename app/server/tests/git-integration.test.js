@@ -532,3 +532,45 @@ describe('ai-dev 隔離：端到端', () => {
     expect(t.trim()).toBe(a.trim());
   }, 60000);
 });
+
+// 意圖：客戶 repo 的主分支不一定叫 main／master（develop、trunk 都常見）。舊版硬清單找不到就
+// fallback 回字串 'main'，後果是三重且全靜默：ensureMainBranch 憑空 checkout -B main 建一條假
+// 主分支、syncMainIntoAi 之後同步的都是那條 origin 上不存在的假分支（工程師在真主分支的新
+// commit 永遠進不了 ai-dev，AI 一路在 clone 當下的快照上開發）、approve 還會 push 出一條假 main
+// 到客戶 GitHub。origin/HEAD 是「遠端預設分支」的權威答案，能認出任何命名。
+describe('主分支非 main／master', () => {
+  // 建一個遠端預設分支為 develop 的 repo（bare 端直接改 HEAD，不依賴 git init -b 的版本支援）
+  async function makeDevelopRepo() {
+    const origin = path.join(base, 'origin-dev.git');
+    const repo = path.join(base, 'repo-dev');
+    await run('git', ['init', '--bare', origin]);
+    await run('git', ['symbolic-ref', 'HEAD', 'refs/heads/develop'], { cwd: origin });
+    await run('git', ['clone', origin, repo]);
+    await sh(repo, 'checkout', '-b', 'develop');
+    await write(repo, 'a.py', 'x = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'init');
+    await sh(repo, 'push', '-u', 'origin', 'develop');
+    await sh(repo, 'remote', 'set-head', 'origin', '-a'); // clone 空 repo 時 origin/HEAD 還沒成形
+    return repo;
+  }
+
+  test('getMainBranch：認得出 develop，不硬回 main', async () => {
+    const repo = await makeDevelopRepo();
+    expect(await git.getMainBranch(repo)).toBe('develop');
+  }, 30000);
+
+  test('ensureMainBranch：不得憑空建一條假 main', async () => {
+    const repo = await makeDevelopRepo();
+    expect(await git.ensureMainBranch(repo, undefined)).toBe('develop');
+    expect(await git.refExists(repo, 'refs/heads/main')).toBe(false);
+  }, 30000);
+
+  // 有鑑別力的反例：origin/HEAD 未設（如平台自建、遠端只有 ai-dev 的 repo）時仍要走既有硬清單，
+  // 不能因為偵測不到就壞掉。
+  test('origin/HEAD 未設 → 沿用 main／master 硬清單', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'remote', 'set-head', 'origin', '-d').catch(() => {});
+    expect(await git.getMainBranch(repo)).toBe('main');
+  }, 30000);
+});

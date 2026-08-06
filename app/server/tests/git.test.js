@@ -141,6 +141,7 @@ test('mergeInto：target 分支不存在時從 main 建立再合併', async () =
     const done = (typeof opts === 'function') ? opts : cb;
     calls.push(args);
     if (args[0] === 'checkout' && args[1] === 'testing') return done(new Error("pathspec 'testing' did not match"));
+    if (args[0] === 'symbolic-ref') return done(new Error('not a symbolic ref')); // origin/HEAD 未設 → getMainBranch 退回 main/master 硬清單
     if (args[0] === 'show-ref') return args[args.length - 1] === 'refs/heads/main' ? done(null, 'ok', '') : done(new Error('no'));
     done(null, 'ok', '');
   });

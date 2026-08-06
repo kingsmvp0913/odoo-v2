@@ -1,9 +1,12 @@
 window.ProjectDetailView = Vue.defineComponent({
   name: 'ProjectDetailView',
+  components: { SearchableSelect: window.SearchableSelect },
   data() {
     return {
       project: null,
       repos: [],
+      branchInfo: {},      // repoId → { branches, base_branch, effective, ready }
+      savingBranch: null,  // 存檔中的 repoId
       loading: true,
       newRepo: { label: '', repo_url: '', is_primary: false },
       savingRepo: false,
@@ -78,6 +81,8 @@ window.ProjectDetailView = Vue.defineComponent({
         this.editServiceRespondentName = data.service_respondent_name || '';
         this.editE2eDisabled = !!data.e2e_disabled;
         this.editEdition = data.edition || 'community';
+        // 分支清單另外抓（要讀 clone 的 refs，跟專案主資料不同來源）；示範專案不打 API
+        if (!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id))) this.loadBranches();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -99,6 +104,28 @@ window.ProjectDetailView = Vue.defineComponent({
         await this.load();
         showToast('已移除 repo', 'success');
       } catch (e) { showToast(e.message, 'error'); }
+    },
+    // 主分支下拉的選項來源。clone 完成的 repo 才有 refs 可讀，未完成的略過（前端顯示提示字）。
+    async loadBranches() {
+      const id = this.$route.params.id;
+      for (const r of this.repos.filter(x => x.clone_status === 'done')) {
+        const d = await Api.get(`projects/${id}/repos/${r.id}/branches`).catch(() => null);
+        if (d) this.branchInfo[r.id] = d;
+      }
+    },
+    branchOptions(repoId) {
+      const info = this.branchInfo[repoId];
+      return info ? info.branches.map(b => ({ value: b, label: b })) : [];
+    },
+    // 空值＝改回自動偵測（origin/HEAD）。後端會一併把選擇落到該 clone 的 origin/HEAD 才算真的生效。
+    async saveBaseBranch(repoId, value) {
+      this.savingBranch = repoId;
+      try {
+        await Api.put(`projects/${this.$route.params.id}/repos/${repoId}`, { base_branch: value || '' });
+        showToast(value ? `主分支已設為 ${value}` : '主分支改回自動偵測', 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingBranch = null; }
     },
     async reclone(repoId) {
       try {
@@ -282,6 +309,21 @@ window.ProjectDetailView = Vue.defineComponent({
               </div>
               <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
               <div v-if="r.local_path" style="font-size:var(--fs-sm);color:var(--text-muted)">路徑：{{ r.local_path }}</div>
+              <!-- 主分支：多數 repo 靠 origin/HEAD 自動偵測即可，這裡是給「遠端預設分支不等於團隊
+                   主線」的例外覆寫。空值＝自動偵測，故 all-label 就是「自動偵測」。 -->
+              <div v-if="r.clone_status === 'done'" style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+                <span style="font-size:var(--fs-sm);color:var(--text-muted)">主分支</span>
+                <SearchableSelect
+                  :model-value="branchInfo[r.id] && branchInfo[r.id].base_branch ? branchInfo[r.id].base_branch : ''"
+                  :options="branchOptions(r.id)"
+                  all-label="自動偵測"
+                  placeholder="自動偵測"
+                  @update:modelValue="v => saveBaseBranch(r.id, v)" />
+                <span v-if="branchInfo[r.id] && branchInfo[r.id].effective" style="font-size:var(--fs-sm);color:var(--text-muted)">
+                  目前生效：<code>{{ branchInfo[r.id].effective }}</code>
+                </span>
+                <span v-if="savingBranch === r.id" style="font-size:var(--fs-sm);color:var(--text-muted)">儲存中…</span>
+              </div>
               <div v-if="r.clone_error" style="font-size:var(--fs-xs);color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
             </div>
             <div style="display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0">
