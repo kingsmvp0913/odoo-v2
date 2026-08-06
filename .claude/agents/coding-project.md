@@ -32,6 +32,11 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 （訊息固定，不可修改；沒有變更的 repo 不需 commit）
 嚴禁 commit __pycache__/ 與 *.pyc（build 產物會讓後續 merge 失敗）；add 前先確認 .gitignore 涵蓋，已誤入版控就 git rm --cached 移除。
 
+【若 worktree 內已有 E2E tour 測試（`static/tests/tours/*.js`）】
+那是本任務的**驗收考題**，在你動工之前就依規格定稿了——裡面的 `trigger` selector 就是「使用者要看到什麼」的精確版本（多為畫面文字，如 `a:contains("前往")`）。
+- **先讀它，把它當成比 requirements 更具體的驗收標準**：實作必須讓那些 selector 找得到、那些操作走得通。
+- **不得為了讓測試通過而修改測試檔**。tour 對不上實作時，除非它明顯與 `acceptance` 矛盾，否則要改的是實作。真的是考題寫錯，在收尾說明中指出，不要逕自改掉。
+
 【專案資訊】
 - 名稱：{{project_name}}
 - Odoo 版本：{{odoo_version}}

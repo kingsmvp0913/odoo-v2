@@ -14,7 +14,7 @@ const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '
 // 明列欄位，不用 SELECT */RETURNING *：projects 已存了 vpn_config_enc／vpn_username／vpn_password_enc
 // （VPN 憑證密文），這些路由給一般已登入使用者，密文外流一樣是機密外洩。VPN 狀態改走專屬的
 // GET /api/projects/:id/vpn（只回 has_config/vpn_username），這裡完全不帶三個 vpn_* 欄位。
-const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, e2e_disabled, edition';
+const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, e2e_disabled, spec_tour_enabled, edition';
 
 async function requireAdmin(req, res, next) {
   try {
@@ -383,7 +383,7 @@ function registerRoutes(app) {
 
   app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
-      const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name, e2e_disabled } = req.body;
+      const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name, e2e_disabled, spec_tour_enabled } = req.body;
       // 防重：來源對應名稱不可同時綁到多個專案
       const conflicts = [];
       if ('odoo_project_name' in req.body) {
@@ -410,6 +410,7 @@ function registerRoutes(app) {
       if ('odoo_project_name' in req.body) setDirect('odoo_project_name', odoo_project_name || null);
       if ('service_respondent_name' in req.body) setDirect('service_respondent_name', service_respondent_name || null);
       if ('e2e_disabled' in req.body) setDirect('e2e_disabled', !!e2e_disabled);
+      if ('spec_tour_enabled' in req.body) setDirect('spec_tour_enabled', !!spec_tour_enabled);
       if ('edition' in req.body) {
         if (!EDITIONS.includes(req.body.edition)) {
           return res.status(400).json({ error: 'edition 只能是 community 或 enterprise' });

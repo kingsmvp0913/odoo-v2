@@ -19,6 +19,8 @@ window.ProjectDetailView = Vue.defineComponent({
       editServiceRespondentName: '',
       editE2eDisabled: false,
       savingE2e: false,
+      editSpecTour: false,
+      savingSpecTour: false,
       editEdition: 'community',
       savingEdition: false,
       runtimeLog: null,
@@ -81,6 +83,7 @@ window.ProjectDetailView = Vue.defineComponent({
         this.editOdooProjectName = data.odoo_project_name || '';
         this.editServiceRespondentName = data.service_respondent_name || '';
         this.editE2eDisabled = !!data.e2e_disabled;
+        this.editSpecTour = !!data.spec_tour_enabled;
         this.editEdition = data.edition || 'community';
         // 分支清單另外抓（要讀 clone 的 refs，跟專案主資料不同來源）；示範專案不打 API
         if (!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id))) this.loadBranches();
@@ -262,6 +265,15 @@ window.ProjectDetailView = Vue.defineComponent({
       } catch (err) { showToast(err.message, 'error'); }
       finally { this.savingE2e = false; }
     },
+    async saveSpecTourSetting() {
+      this.savingSpecTour = true;
+      try {
+        await Api.patch(`projects/${this.project.id}`, { spec_tour_enabled: this.editSpecTour });
+        showToast(this.editSpecTour ? '已啟用「依規格先寫測試」' : '已停用「依規格先寫測試」', 'success');
+        await this.load();
+      } catch (err) { showToast(err.message, 'error'); }
+      finally { this.savingSpecTour = false; }
+    },
     async saveEdition() {
       this.savingEdition = true;
       try {
@@ -394,6 +406,15 @@ window.ProjectDetailView = Vue.defineComponent({
                 <div :style="{position:'absolute', top:'3px', left: editE2eDisabled ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eDisabled ? '已停用 E2E 測試' : 'E2E 測試啟用中' }}</span>
+            </label>
+            <span style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-2)">開啟後，E2E tour 會在「分析」關依驗收條件先寫好（實作之前定稿），開發關要讓它通過而不能改它；關閉則沿用舊流程，等實作完成後才產生 tour。</span>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
+                <input type="checkbox" v-model="editSpecTour" style="opacity:0;width:0;height:0;position:absolute" @change="saveSpecTourSetting" :disabled="savingSpecTour" />
+                <div :style="{background: editSpecTour ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{position:'absolute', top:'3px', left: editSpecTour ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              </div>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ editSpecTour ? '依規格先寫測試（啟用中）' : '依規格先寫測試（已停用）' }}</span>
             </label>
           </div>
         </div>

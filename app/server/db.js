@@ -529,6 +529,13 @@ async function migrate() {
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
     { table: 'projects', col: 'e2e_disabled', sql: 'ALTER TABLE projects ADD COLUMN e2e_disabled BOOLEAN NOT NULL DEFAULT false' },
+    // 規格 tour：分析關產出 analysis.yaml 後，用同一個 session 續寫 E2E tour（脈絡已在，幾乎零額外探索），
+    // 讓測試在 coding 之前定稿——現行順序是 coding 完才產 tour，等於先寫答案再出考題，測試會遷就實作。
+    // 預設 false＝行為與現況完全相同（比照 e2e_disabled 的保守預設，見規則「布林旗標用安全預設」）。
+    { table: 'projects', col: 'spec_tour_enabled', sql: 'ALTER TABLE projects ADD COLUMN spec_tour_enabled BOOLEAN NOT NULL DEFAULT false' },
+    // 分析關的 session：供續寫 tour 時 --resume（比照 spec_session_id 的用法）。
+    { table: 'tasks', col: 'analysis_session_id', sql: 'ALTER TABLE tasks ADD COLUMN analysis_session_id TEXT' },
+    { table: 'tasks', col: 'analysis_prompt_ver', sql: 'ALTER TABLE tasks ADD COLUMN analysis_prompt_ver TEXT' },
     { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
     { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" },
     // description：一行摘要，隨頁面清單一起回給 agent，讓它「看目錄就能判斷該不該打開這一頁」。

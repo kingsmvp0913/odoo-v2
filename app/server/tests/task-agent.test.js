@@ -695,3 +695,104 @@ test('analysis 沒產出有效規格（停在 stopped）→ 留言不得銷帳�
   const { rows: [m] } = await dbModule.query('SELECT applied_at FROM task_messages WHERE task_id=$1', [t.id]);
   expect(m.applied_at).toBeNull();                   // 需求還在待辦，不會人間蒸發
 });
+
+// --- 規格 tour：分析關續寫（session resume）---
+// 意圖：現行順序是 coding 完才產 tour，等於先寫答案再出考題——測試會遷就實作。改成分析關趁 session
+// 還熱就依剛定稿的 acceptance 續寫 tour，實作之前先定考題。專案層開關，**預設關閉＝行為完全同現況**。
+function analysisSpawn(onStdin) {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const calls = [];
+  spawn.mockImplementation((bin, args) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    const call = { args, stdin: '' };
+    calls.push(call);
+    child.stdin = {
+      write: (d) => { call.stdin += d; if (onStdin) onStdin(d); },
+      end: () => setImmediate(() => {
+        child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-analysis' }) + '\n');
+        child.stdout.emit('data', JSON.stringify({
+          // 必要欄位要齊（REQUIRED_FIELDS）：缺一就會在 writeSpecTour 之前被擋成 stopped
+          type: 'result',
+          result: '<result>\ncase_id: "x"\nmodule: "idx_x"\nodoo_version: "17.0"\nexecution_mode: "direct"\nsummary: "加跳頁"\n</result>',
+          usage: null, duration_ms: 10
+        }) + '\n');
+        child.emit('close', 0);
+      })
+    };
+    return child;
+  });
+  return calls;
+}
+
+test('spec_tour_enabled=false（預設）→ 分析後不產 tour，只跑一次 claude', async () => {
+  const calls = analysisSpawn();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_notour','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+  expect(calls).toHaveLength(1);                    // 只有 analysis，沒有續寫 tour
+  expect(calls[0].args).not.toContain('--resume');
+});
+
+test('spec_tour_enabled=true → 分析後用同一 session --resume 續寫 tour', async () => {
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
+  const calls = analysisSpawn();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_tour','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+
+  expect(calls).toHaveLength(2);                        // analysis + 續寫 tour
+  const tourCall = calls[1];
+  expect(tourCall.args).toContain('--resume');          // 真的續接，不是 fresh
+  expect(tourCall.args).toContain('sess-analysis');     // 續的是分析那個 session
+  expect(tourCall.stdin).toContain('acceptance');       // 依驗收條件寫
+  expect(tourCall.stdin).toContain('實作還不存在');      // 明確告知不要去找還沒寫的欄位
+  expect(tourCall.stdin).not.toContain('<result>');     // tour 類 agent 不得有 result 契約
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]);
+});
+
+// tour 是加值產物：續寫失敗不得讓已經產出的規格或關卡推進跟著壞掉（Rule 12 的例外要明講）。
+test('spec tour 續寫失敗 → 規格照樣落地、任務照樣推進', async () => {
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  let n = 0;
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    const isTour = ++n > 1;
+    child.stdin = {
+      write: () => {},
+      end: () => setImmediate(() => {
+        if (isTour) { child.emit('close', 1); return; }   // 續寫 tour 那次直接失敗
+        child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-analysis' }) + '\n');
+        child.stdout.emit('data', JSON.stringify({
+          type: 'result',
+          result: '<result>\ncase_id: "x"\nmodule: "idx_x"\nodoo_version: "17.0"\nexecution_mode: "direct"\nsummary: "加跳頁"\n</result>',
+          usage: null, duration_ms: 10
+        }) + '\n');
+        child.emit('close', 0);
+      })
+    };
+    return child;
+  });
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_tourfail','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+
+  const { rows: [after] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).not.toBe('stopped');       // 沒有被 tour 失敗拖垮
+  expect(after.analysis_yaml).toContain('idx_x'); // 規格照樣落地
+  await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]);
+});

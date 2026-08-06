@@ -113,7 +113,18 @@ async function runTourStage(taskId, userId, signal) {
     return true;
   }
   const cwd = worktreeParent(info.root, task.task_id);
-  try {
+  // 規格 tour 模式：tour 已在分析關依 acceptance 定稿（實作之前），這裡不得重產——重產等於
+  // 讓 agent 照著已完成的實作重寫考題，測試會遷就實作，先定稿的意義整個消失。
+  // 直接跳到下方「併入 testing → 跑 --test-enable」。
+  const { rows: [tourCfg] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
+  const specTourMode = !!(tourCfg && tourCfg.spec_tour_enabled);
+  if (specTourMode) {
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E tour 已於分析關依規格產出，本關直接執行、不重新產生')",
+      [taskId]
+    );
+  }
+  if (!specTourMode) try {
     const agent = loadAgent('playwright');
     // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
     // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。

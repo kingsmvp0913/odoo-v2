@@ -279,12 +279,15 @@ async function runTaskAnalysis(taskId, userId, signal) {
   const baseBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   let raw;
+  let analysisSessionId = null;
   try {
     const built = buildAnalysisPrompt(task, info, clarification, wtParent, baseBranch, projectNotes);
     // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
     const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
     raw = analysisResult.text;
+    // 記本輪 session：規格 tour 靠它 --resume 續寫（脈絡已在，不必重讀 code 也不必重述規格）
+    analysisSessionId = analysisResult.sessionId || null;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
@@ -349,8 +352,41 @@ async function runTaskAnalysis(taskId, userId, signal) {
     );
   }
   await logAnalysisGate(taskId, result, nextStatus);
+  // 規格 tour：趁 analysis session 還熱，用 --resume 續寫 E2E tour（見 writeSpecTour）。
+  // 排在 logAnalysisGate 與狀態更新之後：tour 是加值產物，失敗不得影響規格落地或關卡推進。
+  await writeSpecTour(task, info, taskId, userId, signal, analysisSessionId, result.module).catch(() => {});
   notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
   return true;
+}
+
+// 分析關收尾後續寫 E2E tour：同一個 session --resume，脈絡（讀過的碼、剛定稿的 acceptance）都還在，
+// 幾乎不用額外探索。刻意排在 coding **之前**——現行順序是 coding 完才產 tour，等於先寫答案再出考題，
+// 測試會遷就實作；先定稿則是開發者要讓考題通過，且 coding 進 worktree 時就看得到驗收 selector。
+// 專案層開關，預設關閉（行為與現況完全相同）。
+// 整段 best-effort：tour 是加值產物，任何失敗都不該讓已經產出的規格或關卡推進跟著壞掉。
+async function writeSpecTour(task, info, taskId, userId, signal, analysisSessionId, moduleName) {
+  if (!analysisSessionId) return;                       // CLI 沒回 sessionId → 無從 resume，靜默跳過
+  const { rows: [proj] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
+  if (!proj || !proj.spec_tour_enabled) return;
+
+  const agent = loadAgent('playwright-spec');
+  const { E2E_LOGIN } = require('./e2e-account');
+  const prompt = agent.render({
+    module: String(moduleName || '').trim() || '（見規格 module 欄位）',
+    test_url: '（測試環境，由系統於部署後執行；此處不需連線）',
+    login: E2E_LOGIN
+  });
+  const gitEnv = await buildGitEnv(userId).catch(() => ({}));
+  const cwd = worktreeParent(info.root, task.task_id);
+  const res = await runClaude(prompt, {
+    cwd, taskId, userId, signal, model: agent.model, agentType: 'playwright',
+    resumeSessionId: analysisSessionId, env: { ...gitEnv }
+  });
+  await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', res.usage, res.durationMs);
+  await query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+    [taskId, `[規格 tour] 已依 acceptance 產出 E2E 測試（實作前定稿）\n${String(res.text || '').slice(0, 1500)}`]
+  );
 }
 
 // coding 是最長的階段（探索＋實作＋逐檔驗證＋commit），共用預設 600s 常不夠；
