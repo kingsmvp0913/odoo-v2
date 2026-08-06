@@ -365,4 +365,61 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     expect(a).toContain('docxtpl');
     expect(a).toContain('htmldocx');
   });
+
+  // 刪除環境目錄：Odoo 在容器內以 image 的 odoo user（uid 101）寫 filestore，產出的樹平台無權刪。
+  // 正式機因此每個跑過的測試區都刪不掉——stopEnv 已收掉容器與 port、DB 標回 idle，卻在最後 500，
+  // 留下孤兒 filestore 佔磁碟且狀態不一致。以下把「退到 root 容器」與「不准靜默成功」鎖死。
+  function eaccesFs(gone = { yes: false }) {
+    return {
+      existsSync: () => !gone.yes,
+      rmSync: () => { throw Object.assign(new Error('permission denied, rmdir'), { code: 'EACCES' }); },
+    };
+  }
+  test('buildRootRmArgs：掛 parent 進容器（掛目錄本身只會清空內容、刪不掉掛載點）', () => {
+    expect(d.buildRootRmArgs('/envs/proj1', 'alpine:3'))
+      .toEqual(['run', '--rm', '-v', '/envs:/target', 'alpine:3', 'rm', '-rf', '/target/proj1']);
+  });
+  test('removeDirForce：一般情形直接 rmSync，不動用 docker', async () => {
+    let spawned = false;
+    const r = await d.removeDirForce('/envs/p', {
+      fs: { existsSync: () => true, rmSync: () => {} },
+      spawnFn: () => { spawned = true; return fakeSpawn({ code: 0 })(); },
+    });
+    expect(r).toEqual({ removed: true, viaDocker: false });
+    expect(spawned).toBe(false);
+  });
+  test('removeDirForce：EACCES 退到 root 容器刪，刪的是 /target/<basename>', async () => {
+    const gone = { yes: false };
+    const cap = {};
+    const r = await d.removeDirForce('/envs/p', {
+      fs: eaccesFs(gone),
+      spawnFn: (cmd, args) => { cap.cmd = cmd; cap.args = args; gone.yes = true; return fakeSpawn({ code: 0 })(); },
+    });
+    expect(r).toEqual({ removed: true, viaDocker: true });
+    expect(cap.cmd).toBe('docker');
+    expect(cap.args.slice(0, 4)).toEqual(['run', '--rm', '-v', '/envs:/target']);
+    expect(cap.args).toContain('/target/p');
+  });
+  test('removeDirForce：root 容器退路失敗 → throw（靜默吞掉會讓 DB 標 idle 但目錄還在）', async () => {
+    await expect(d.removeDirForce('/envs/p', {
+      fs: eaccesFs(), spawnFn: fakeSpawn({ code: 1, stderr: 'Unable to find image' }),
+    })).rejects.toThrow('Unable to find image');
+  });
+  test('removeDirForce：docker 回 0 但目錄仍在 → 一樣 throw，不當成刪掉', async () => {
+    await expect(d.removeDirForce('/envs/p', {
+      fs: eaccesFs(), spawnFn: fakeSpawn({ code: 0 }),
+    })).rejects.toThrow('目錄仍然存在');
+  });
+  test('removeDirForce：非權限錯誤原樣拋出，不被 root 容器掩蓋成另一種故障', async () => {
+    let spawned = false;
+    await expect(d.removeDirForce('/envs/p', {
+      fs: { existsSync: () => true, rmSync: () => { throw Object.assign(new Error('device busy'), { code: 'EBUSY' }); } },
+      spawnFn: () => { spawned = true; return fakeSpawn({ code: 0 })(); },
+    })).rejects.toThrow('device busy');
+    expect(spawned).toBe(false);
+  });
+  test('removeDirForce：目錄本來就不存在 → no-op', async () => {
+    expect(await d.removeDirForce('/envs/gone', { fs: { existsSync: () => false } }))
+      .toEqual({ removed: false, viaDocker: false });
+  });
 });

@@ -165,7 +165,6 @@ function registerRoutes(app) {
 
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (project) {
-        const fs = require('fs');
         const { ENV_BASE: base } = require('./pipeline/env-agent');
         const dirName = project.folder_name || project.name;
         const envDir = path.join(base, dirName);
@@ -173,7 +172,9 @@ function registerRoutes(app) {
         if (!resolved.startsWith(path.resolve(base) + path.sep)) {
           return res.status(400).json({ error: 'Invalid env path' });
         }
-        if (fs.existsSync(envDir)) fs.rmSync(envDir, { recursive: true, force: true });
+        // 不能直接 fs.rmSync：filestore／sessions 是容器內的 odoo user 寫的，平台無權刪（見 removeDirForce）。
+        const { removeDirForce } = require('./lib/docker-env');
+        await removeDirForce(envDir);
       }
 
       await query(
