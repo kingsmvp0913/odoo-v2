@@ -181,6 +181,8 @@ runAgent(prompt, opts)   // opts 多一個 provider，預設 'claude'
 
 19 個呼叫端逐一改為 `require('./agent-runner').runAgent`，並在既有的 `model: agent.model` 旁補 `provider: agent.provider`。`claude-runner.js` 本身除了移出 `abortError`／`stopReason` 外不動。
 
+**例外：`agent-result.js:66` 的 `repair` 呼叫**不走 agent-loader，model 硬寫 `'haiku'`（`<result>` 解析失敗時的補救呼叫）。本期**維持硬寫 claude/haiku**，不隨被修補的那關切換供應商——它只做「把散文修回契約格式」的文字整形，與原關的推理無關，跟著切換只是多一個變數。在該行補一行註解說明此為刻意決定，避免日後被當成漏改。
+
 ### 5.3 認證：`lib/codex-auth.js`（新增）
 
 完全比照 `lib/claude-auth.js`：
@@ -194,17 +196,39 @@ runAgent(prompt, opts)   // opts 多一個 provider，預設 'claude'
 
 端點比照 `admin-routes.js:45/53/81` 新增 `GET/POST/DELETE /api/admin/codex-token`，GET 一律**只回布林 `configured`**，不回明文也不回密文（`teams-routes.js:13-14` 已為此明列欄位而非 `SELECT *`，新欄位必須一併排除）。
 
-### 5.4 session / resume 的交叉污染（**必修，否則會靜默壞掉**）
+### 5.4 session / resume 的兩個硬約束（**必修，否則會靜默壞掉**）
+
+session id 不跨供應商通用。以下兩件事都會產生「不報錯、但每輪白燒一次失敗呼叫」的症狀。
+
+#### 約束一：切換 provider 必須讓指紋失效
 
 `with-resume.js:28` 的指紋 `combinedVersion()` 只 hash prompt 內容，**不含 provider 與 model**。後果：一支 agent 從 claude 改成 codex 後，`promptVer` 不變 → 護欄判定「可以續接」→ 拿 claude 的 session id 去 `codex exec resume` → 必定失敗。
 
-失敗後 `with-resume.js:39-46` 會清 session 並同輪降級 fresh，所以**不會讓使用者拿不到回覆**，但每次切換都會白燒一次失敗呼叫、並在報表留下一筆假的失敗。
+失敗後 `with-resume.js:39-46` 會清 session 並同輪降級 fresh，所以**不會讓使用者拿不到回覆**，但每次切換都白燒一次失敗呼叫、並在報表留下一筆假的失敗。
 
 修法（擇一，建議前者）：
 1. `promptVersion(name)` 的 hash 材料加入 `provider` 與 `model`。改一處，`with-resume` 與 `qa-agent`／`chat-agent` 等所有用指紋的地方同時生效。
 2. `updateAgent()` 偵測 provider 有變時，主動清掉所有帶該 agent session 的欄位。要動的欄位散在 `tasks.qa_session_id`、`merge_conflict_data` JSONB 等多處，遺漏風險高。
 
-受影響的 session 欄位（改法 1 不需逐一處理，此處僅供驗收時檢查）：`qa-retry`、`chat-retry`、`clarify-chat-retry`、`spec-review-retry`。
+#### 約束二：resume 配對的兩支必須同 provider
+
+比約束一更硬——約束一是「切換的那一瞬間」會白燒一次，約束二是**只要配對兩端 provider 不同就永遠壞著**。
+
+| fresh（產 session） | resume（用 session） | session 存放處 | 呼叫點 |
+|---|---|---|---|
+| `qa` | `qa-retry` | `tasks.qa_session_id` | `qa-agent.js:109` |
+| `chat` | `chat-retry` | JSONB | `chat-agent.js:66` |
+| `spec-review` | `spec-review-retry` | JSONB | `spec-review.js:66` |
+| `clarify-chat` | `clarify-chat-retry` | JSONB | `clarify-chat.js:131` |
+| **`analysis-project`** | **`playwright-spec`** | 直接傳遞（跨關卡） | `task-agent.js:383` |
+
+前四對是同名 retry，UI 上相鄰、整對一起改的機率高。**最後一條是跨關卡的**：`playwright-spec` resume 的是 analysis 的 session，名字上完全看不出來，是本表最容易被漏掉的一條。
+
+`writeSpecTour`（`task-agent.js:367`）整段刻意是 best-effort（註解：tour 是加值產物，任何失敗都不該讓已產出的規格或關卡推進跟著壞掉），所以配對破損時**失敗會被靜默吞掉**——症狀只有「tour 沒產出」，log 裡沒有任何指向 provider 的線索。
+
+**修法**：`updateAgent()` 增加配對校驗，兩端 provider 不一致直接 400，訊息點名是哪一對。校驗表與上表同一份常數，不得各自維護。
+
+不採「自動連動改另一端」：一次改兩支 agent 的設定而使用者只點了一支，屬於未經同意的隱式變更，且在 UI 上看不出來。擋下並要求使用者明確改兩次，比較誠實。
 
 ### 5.5 scan-guard 缺口
 
@@ -213,9 +237,10 @@ runAgent(prompt, opts)   // opts 多一個 provider，預設 'claude'
 **codex 沒有 hook 機制，這道守衛在 codex 端無法等價實作。**
 
 本期處置：
-- 第一梯 agent（§6）全部不碰檔案系統，用 `--sandbox read-only` 即可，缺口不構成實際風險。
-- 第三梯（coding／qa／analysis／playwright／merge）**在缺口有解之前不得開放 codex**。`PROVIDERS` 之外另立一份 `CODEX_ELIGIBLE` 白名單，`updateAgent()` 對不在名單內的 agent 拒絕 `provider: codex`（400，訊息點明原因）。
-- 待評估的替代方案（本期不做）：`--sandbox workspace-write` 只擋寫不擋讀，擋不住 `find /`；可行方向是包一層 wrapper script 限制 PATH 上的 `find`，或依賴 codex 自身的 sandbox 對讀取路徑的限制——**需先實測 codex sandbox 是否限制 workspace 外的讀取**。
+- 批次一 agent（§6.3）全部不碰檔案系統，用 `--sandbox read-only` 即可，缺口不構成實際風險。
+- `PROVIDERS` 之外另立一份 `CODEX_ELIGIBLE` 白名單，`updateAgent()` 對不在名單內的 agent 拒絕 `provider: codex`（400，訊息點明原因）。初始只含批次一那六支，每批驗收通過才擴充。
+- **`--sandbox workspace-write` 只擋寫、不擋讀，擋不住 `find /`。** 但 codex 的 sandbox 是 OS 層、claude 的 scan-guard 是 CLI 層 hook 自律——若 codex 的 read-only／workspace-write 同時限制了 workspace 外的**讀取**，這個缺口不只被補上，而且比現況更硬。**這題必須實測**（§9 第 6 題），它是批次三（qa）唯一的閘門。
+- 若實測結果是「擋不住讀取」，替代方向：包一層 wrapper script 限制 PATH 上的 `find`。本期不做。
 
 ### 5.6 用量閘門不隨 provider 分流（**明確的範圍外，但要知道**）
 
@@ -231,39 +256,78 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 
 ---
 
-## 6. 分梯導入
+## 6. 分批導入（24 支全數歸位）
 
-依「碰不碰檔案系統／要不要 MCP／要不要 resume」分梯。每梯驗收通過才開下一梯。
+### 6.1 決策依據
 
-### 第一梯（本期實作目標）
+主要動機是**分開監督**，不是加速：QA／驗證類關卡若與 coding 同源，模型的盲點會系統性重複——同一家模型看不出自己會犯的錯。因此「審查方」換供應商有實質價值，而規格與實作這條主線維持單一供應商以避免風格分裂。
+
+「codex 比較快」是**未經驗證的假設**，不得當作分批依據。`.claude/rules/infra.md` 規則 159 是實測結論：單關 2~9 分鐘來自工具迴圈與 1.5~1.8 萬 output tokens，不是冷啟動；換 CLI 不會自動變快。驗證方法見 §6.6。
+
+### 6.2 留在 claude（不動）
+
+| agent | 理由 |
+|---|---|
+| `analysis-project` | 規格主線，產出直接決定下游全部關卡 |
+| `analysis-reject` | 吃 CLAUDE.md full 注入、讀 worktree 判修法，與分析同質 |
+| `coding-project` | 實作主線 |
+| `respec-patch` | 增量改 analysis.yaml，產出直接餵 coding，屬規格層 |
+| `merge` / `merge-explain` / `merge-clarify` | 同一條職責鏈，判斷風格不一致會讓使用者困惑；且 `merge` 逐 hunk 寫檔、持鎖 |
+
+### 6.3 批次一（本期實作目標）
 
 純文字進、`<result>` 出，無 cwd 寫檔、無 MCP、無 resume、無 hook 需求：
 
-| agent | stage | 現行 model |
-|---|---|---|
-| `reject-classifier` | `reject_classify` | haiku |
-| `deploy-fix` | `deploy_fix` | — |
-| `wiki-drift-classifier` | — | — |
-| `chat-to-task` | — | — |
-| `workflow-health` | `workflow_health` | — |
+| agent | stage |
+|---|---|
+| `reject-classifier` | `reject_classify` |
+| `deploy-fix` | `deploy_fix` |
+| `wiki-drift-classifier` | — |
+| `chat-to-task` | — |
+| `workflow-health` | `workflow_health` |
+| `library` | `wiki`（寫 wiki 頁，不碰客戶程式碼） |
 
 驗收條件（每支都要過）：
-1. 在管理頁把 provider 切成 codex、存檔後 `.md` frontmatter 正確寫入
-2. 實跑一次任務，`<result>` 契約能被 `parseAgentResult` 解析
+1. 管理頁切 provider 存檔後，`.md` frontmatter 正確寫入
+2. 實跑一次，`<result>` 契約能被 `parseAgentResult` 解析
 3. `token_usage` 落一筆且 `provider='codex'`、token 數非零
-4. 終端串流（`task_events`）看得到內容，不是空白或整包 JSON
+4. 終端串流（`task_events`）看得到內容，不是空白也不是整包 JSON
 5. 手動暫停能中止（`signal` 生效）、逾時能被砍
 6. 切回 claude 後行為與改動前一致
 
-### 第二梯（不在本期）
+### 6.4 批次二
 
-要 context7 MCP、但不寫客戶檔：`chat`、`cs`、`spec-review`。
-前置：`MCP_PROFILES`（`claude-runner.js:16`）要有 codex 的 toml 對等物，且 `context7ConfigPath()` 那套「優先本地依賴、退回 npx」的策略要重做一份。
+要 context7 MCP、但不寫客戶檔。**四對 resume 配對必須整對一起改**（§5.4 約束二）：
 
-### 第三梯（不在本期，且有前置阻擋）
+`spec-review` ± `spec-review-retry`、`clarify-chat` ± `clarify-chat-retry`、`chat` ± `chat-retry`、`cs`
 
-寫客戶 worktree、要 resume、要 scan-guard：`coding-project`、`qa`、`analysis-project`、`playwright`、`merge`。
-前置：§5.5 的掃碟守衛缺口必須先有解。
+前置：`MCP_PROFILES`（`claude-runner.js:16`）要有 codex 的 toml 對等物，且 `context7ConfigPath()` 那套「優先本地依賴、退回 npx」的策略要重做一份（codex 走 `[mcp_servers.*]`，不吃 JSON）。
+
+`cs` 與 `chat` 額外注意：這兩支直接對客戶與使用者講話，換供應商會改變語氣與判斷風格。技術風險低，但排在本批最後，且上線後人工看過數輪輸出再定案。
+
+### 6.5 批次三
+
+`qa` ± `qa-retry`。
+
+前置：**先實測 codex sandbox 是否限制 workspace 外的讀取**（§9 第 6 題）。這題單獨決定 qa 能不能上：
+- 若 sandbox 擋得住 workspace 外讀取 → `find /` 被 OS 層擋死，比現行 CLI 層的 scan-guard hook **更硬**，qa 跑 codex 反而比現況安全，可直接上。
+- 若擋不住 → §5.5 的掃碟守衛缺口成立，qa 暫緩。
+
+qa 是本案「分開監督」價值最高的一支（審的正是 claude 寫的 code），值得為它優先解這一題。
+
+### 6.6 不投資：E2E tour 兩支
+
+`playwright`（deploy 後跑 E2E）與 `playwright-spec`（分析關先寫 tour）**均不納入任何批次**。
+
+使用者已決定之後移除整個 E2E tour 機制——先寫的 tour 會被後續實作變更淘汰，維護成本高於價值；驗真意回歸既有的 `review_pending` 人工 gate 兜底。既然要退場，就不為它們做 provider 適配。
+
+在實際移除前，兩支維持 claude。`playwright-spec` 另受 §5.4 約束二鎖定（綁 `analysis-project` 的 session），配對校驗表仍須包含它，避免退場前有人手動改壞。
+
+### 6.7 「codex 比較快」的驗證方法
+
+加了 `token_usage.provider` 之後，同一個 `agent_type` 按 provider 分組比 `duration_ms` 的**中位數**（不是平均——失敗重跑會把平均拉歪）。批次一上線滿兩週、每支累積 20 次以上呼叫再看，樣本不足時不下結論。
+
+這是決定要不要把 codex 推進批次二／三的**數據依據**，不是體感。若中位數沒有明顯改善，本案的價值就只剩「分開監督」——那也足以支撐批次三的 qa，但批次二的必要性要重新評估。
 
 ---
 
@@ -310,10 +374,10 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 3. **`--json` 完整的 item type 清單**（供 `formatEvent` 的 codex 版顯示工具呼叫）。
 4. **codex 事件是否回報 resolved model id**（決定成本歸屬用 opts.model 還是實際值）。
 5. **codex 認證失敗的原始字面**（決定 `auth-signature.js` 要加什麼 pattern）— 這題不解，codex 認證過期會被誤歸成一般失敗、停等人工。
-6. **codex sandbox 是否限制 workspace 外的「讀取」**（決定 §5.5 的缺口有沒有便宜解）。
-7. **`--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥**（後者會強制 `danger-full-access`，若互斥則第一梯的 read-only 要改用別的方式略過核可）。
+6. **codex sandbox 是否限制 workspace 外的「讀取」** — **批次三（qa）唯一的閘門**，見 §5.5、§6.5。測法：在 workspace 內以 `--sandbox read-only` 跑 `find / -name '*.py'`，看是被 sandbox 拒絕還是真的開始掃碟。
+7. **`--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥**（後者會強制 `danger-full-access`，若互斥則批次一的 read-only 要改用別的方式略過核可）。
 
-第 1～4 題靠一次 `codex exec --json` 實跑即可全部取得；第 5 題需刻意用錯誤憑證跑一次。
+第 1～4 題靠一次 `codex exec --json` 實跑即可全部取得；第 5 題需刻意用錯誤憑證跑一次；第 6、7 題各一次針對性實跑。
 
 ---
 
@@ -322,7 +386,8 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 | 風險 | 影響 | 緩解 |
 |---|---|---|
 | 成本記帳失真 | codex 花費被當 sonnet 計，健檢成本訊號錯誤且**不報錯** | §4.4 的 `token_usage.provider` 必做，`health-data.js` 的 RATE 同步改 |
-| session 交叉污染 | 切換 provider 後每輪白燒一次失敗呼叫 | §5.4 改法 1 |
+| session 交叉污染 | 切換 provider 的那一輪白燒一次失敗呼叫 | §5.4 約束一，改法 1 |
+| **resume 配對破損** | 配對兩端 provider 不同 → **永遠**每輪白燒一次；`playwright-spec` 那條還會被 best-effort 靜默吞掉，只剩「tour 沒產出」的症狀 | §5.4 約束二的 `updateAgent()` 硬校驗，**不可只靠文件提醒** |
 | 認證失敗誤歸類 | codex 憑證過期 → 判不出 transient → 任務停等人工 | §9 第 5 題 + `auth-signature.js` 補 pattern |
 | 靜默退回 claude | 拼錯 provider 的 agent 帳面顯示 codex、實際燒 claude 額度 | §4.2 未知 provider 直接 throw |
 | 掃碟守衛缺口 | codex 端 agent 全碟掃描 → 逾時 | §5.5 `CODEX_ELIGIBLE` 白名單，第三梯在缺口有解前不開放 |
