@@ -54,6 +54,14 @@ jest.mock('../pipeline/git', () => ({
   getMainBranch: jest.fn().mockResolvedValue('main'),
   listRemoteBranches: jest.fn().mockResolvedValue(['main', 'develop', 'ai-dev']),
   setRemoteHead: jest.fn().mockResolvedValue(undefined),
+  // ai-dev 基底扶正（reconcileAiBranch）用的一組。預設 refExists=false＝遠端還沒有 ai-dev，
+  // 扶正因此直接跳過，既有案例維持原本流程不被干擾；扶正本身另有專屬案例覆蓋。
+  AI_BRANCH: 'ai-dev',
+  refExists: jest.fn().mockResolvedValue(false),
+  aiBranchBase: jest.fn().mockResolvedValue(null),
+  aiOwnCommits: jest.fn().mockResolvedValue(0),
+  rebuildAiBranch: jest.fn().mockResolvedValue({ oldSha: 'oldsha1', newSha: 'newsha1' }),
+  listRemoteBranchesByUrl: jest.fn().mockResolvedValue({ branches: ['main', 'kangyue'], defaultBranch: 'kangyue' }),
 }));
 
 process.env.JWT_SECRET = 'test-proj';
@@ -440,6 +448,108 @@ test('POST reclone：同步衝突 → abort 還原並落 clone_error，不留半
   expect(row.clone_error).toContain('GitHub');
 });
 
+// ---- ai-dev 基底扶正 ----
+// 意圖：ai-dev 是建立當下從主分支長出來的，主分支之後才改對也不會跟著搬家。實測某專案 ai-dev
+// 長自 main、真主分支是 kangyue，同步炸出 28 個「內容衝突」，真因卻只是基底選錯。以下鎖住
+// 「什麼時候該自動扶正、什麼時候絕不能動手」——後者更重要：ai-dev 上的 AI 產出只存在於該分支，
+// 重建即永久遺失。
+function stubAiBase({ actual, own }) {
+  gitMock.ensureMainBranch.mockResolvedValue('kangyue');
+  gitMock.pullBranch.mockResolvedValue(undefined);
+  gitMock.ensureAiBranch.mockResolvedValue(undefined);
+  gitMock.syncMainIntoAi.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  gitMock.syncMainIntoAi.mockClear(); // 跨案例共用的 mock，不清會讀到別的案例留下的呼叫紀錄
+  gitMock.refExists.mockResolvedValue(true);
+  gitMock.aiBranchBase.mockResolvedValue(actual);
+  gitMock.aiOwnCommits.mockResolvedValue(own);
+  gitMock.rebuildAiBranch.mockClear();
+  gitMock.rebuildAiBranch.mockResolvedValue({ oldSha: 'aaaaaaa1', newSha: 'bbbbbbb2' });
+}
+afterEach(() => { gitMock.refExists.mockResolvedValue(false); }); // 別污染其他案例
+
+test('reclone：基底歪掉且零 AI 產出 → 自動重建，並照常完成同步', async () => {
+  stubAiBase({ actual: 'main', own: 0 });
+  const { pid, rid, dir } = await setupReclonableRepo('reclone-ai-rebuild');
+  await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+
+  const row = await waitReclone(rid);
+  // 第三參數是發起人的 git 身分／PAT env，內容不是本案例的重點，只確認有帶（無 PAT 會 push 失敗）
+  expect(gitMock.rebuildAiBranch).toHaveBeenCalledWith(dir, 'kangyue', expect.any(Object));
+  expect(gitMock.syncMainIntoAi).toHaveBeenCalled(); // 扶正後同步仍要跑，不是扶完就結束
+  expect(row.clone_status).toBe('done');
+  expect(row.clone_error).toBeNull();                // 已修好＝使用者無事可做，不該留紅字
+});
+
+test('reclone：基底歪掉但 ai-dev 上有 AI 產出 → 絕不重建，停下來讓人處理', async () => {
+  stubAiBase({ actual: 'main', own: 3 });
+  const { pid, rid } = await setupReclonableRepo('reclone-ai-has-work');
+  await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+
+  const row = await waitReclone(rid);
+  expect(gitMock.rebuildAiBranch).not.toHaveBeenCalled(); // 那 3 個 commit 只存在於 ai-dev
+  expect(gitMock.syncMainIntoAi).not.toHaveBeenCalled();  // 硬同步注定衝突，不要製造待解狀態
+  expect(row.clone_status).toBe('error');
+  expect(row.clone_error).toContain('main');              // 說清楚它現在長在哪
+  expect(row.clone_error).toContain('kangyue');           // 以及應該長在哪
+});
+
+test('reclone：基底偵測本身出錯 → 只記錄不阻斷（不確定不足以中止使用者的更新）', async () => {
+  stubAiBase({ actual: 'main', own: 0 });
+  gitMock.refExists.mockRejectedValue(new Error('git 探測失敗'));
+  const { pid, rid } = await setupReclonableRepo('reclone-ai-probe-fail');
+  await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+
+  const row = await waitReclone(rid);
+  expect(row.clone_status).toBe('done');           // 探測失敗不得讓 repo 掉出 pipeline（規則 81）
+  expect(gitMock.syncMainIntoAi).toHaveBeenCalled();
+  expect(gitMock.rebuildAiBranch).not.toHaveBeenCalled();
+});
+
+test('reclone：基底正確 → 完全不碰 ai-dev', async () => {
+  stubAiBase({ actual: 'kangyue', own: 0 });
+  const { pid, rid } = await setupReclonableRepo('reclone-ai-base-ok');
+  await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
+    .set('Authorization', `Bearer ${token}`).send({});
+
+  const row = await waitReclone(rid);
+  expect(gitMock.rebuildAiBranch).not.toHaveBeenCalled();
+  expect(row.clone_status).toBe('done');
+});
+
+// ---- 新增 repo 時選主分支 ----
+// 意圖：主分支只有「新增」這一次機會可選（PUT 已鎖死），所以列分支不能依賴本地 clone。
+test('GET remote-branches：clone 前就能列出遠端分支與預設分支', async () => {
+  const res = await request(app).get('/api/git/remote-branches?url=https://example.com/x.git')
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);
+  expect(res.body.branches).toContain('kangyue');
+  expect(res.body.defaultBranch).toBe('kangyue');
+});
+
+test('GET remote-branches：讀不到（私有 repo 無 PAT／網址錯）回 200 空清單，不得擋住新增流程', async () => {
+  gitMock.listRemoteBranchesByUrl.mockRejectedValueOnce(new Error('Authentication failed'));
+  const res = await request(app).get('/api/git/remote-branches?url=https://example.com/private.git')
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(200);        // 不是 4xx/5xx——前端要能降級成自動偵測
+  expect(res.body.ok).toBe(false);
+  expect(res.body.branches).toEqual([]);
+  expect(res.body.reason).toContain('Authentication');
+});
+
+test('POST repos：選定的主分支要寫進 DB（之後不能改，寫錯就永久錯）', async () => {
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+    .send({ name: 'base-branch-on-create', odoo_version: '17.0' });
+  const res = await request(app).post(`/api/projects/${p.body.id}/repos`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: 'https://example.com/y.git', base_branch: 'kangyue' });
+  expect(res.status).toBe(201);
+  expect(res.body.base_branch).toBe('kangyue');
+});
+
 // 意圖：埠改為租約制後，建立專案不該再佔用埠——否則專案數一多就把整池吃光，
 // 而那些專案的測試區可能根本沒開過。
 test('建立專案不配發 port（port 欄位維持 NULL）', async () => {
@@ -761,34 +871,45 @@ describe('repo 主分支覆寫', () => {
     await dbModule.query("UPDATE project_repos SET clone_status='done' WHERE id=$1", [rid]);
   });
 
-  test('指定 develop：寫進 DB，並落到 origin/HEAD 才算生效', async () => {
-    gitMock.setRemoteHead.mockClear();
+  // 主分支改為「只在新增 repo 時決定、之後鎖死」。原因：ai-dev 是建立當下從主分支長出來的，
+  // 事後改設定不會讓它跟著搬家，同步從此是兩條平行線硬合（實測某專案 28 檔衝突，真因只是基底
+  // 選錯）。以下案例的共同 intent 是「這個會造成不一致的入口確實被關掉了」。
+  test('指定別的分支 → 400，且 DB 不得被改動', async () => {
+    // 刻意用 develop（遠端確實存在的分支）：若改用不存在的分支，測試就分不出擋下的理由
+    // 是「不准改」還是「分支不存在」，等於沒測到鎖死本身。
+    await dbModule.query("UPDATE project_repos SET base_branch=NULL WHERE id=$1", [rid]);
     const res = await put({ base_branch: 'develop' });
-    expect(res.status).toBe(200);
-    expect(res.body.base_branch).toBe('develop');
-    expect(gitMock.setRemoteHead).toHaveBeenCalledWith('/repos/bb/main', 'develop');
-  });
-
-  test('遠端沒有的分支 → 400，且不得寫進 DB（否則畫面與實際永久脫鉤）', async () => {
-    const res = await put({ base_branch: 'no-such-branch' });
     expect(res.status).toBe(400);
     const { rows } = await dbModule.query('SELECT base_branch FROM project_repos WHERE id=$1', [rid]);
-    expect(rows[0].base_branch).toBe('develop'); // 停在上一個有效值，不是被清掉
+    expect(rows[0].base_branch).toBeNull();
   });
 
-  test('一般編輯（沒帶 base_branch）不得動到既有設定', async () => {
-    gitMock.setRemoteHead.mockClear();
+  test('400 訊息要給得出出路，否則使用者只能卡住', async () => {
+    const res = await put({ base_branch: 'develop' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/刪除.*重新新增/); // 指出唯一可行的替代路徑
+  });
+
+  test('清空（改回自動偵測）同樣擋下——它一樣會讓 ai-dev 與主分支脫鉤', async () => {
+    await dbModule.query("UPDATE project_repos SET base_branch='develop' WHERE id=$1", [rid]);
+    const res = await put({ base_branch: '' });
+    expect(res.status).toBe(400);
+    const { rows } = await dbModule.query('SELECT base_branch FROM project_repos WHERE id=$1', [rid]);
+    expect(rows[0].base_branch).toBe('develop');
+  });
+
+  test('送回相同的值不算改動 → 放行（前端整包 PUT 會原樣帶回來，擋掉會讓改名都失敗）', async () => {
+    await dbModule.query("UPDATE project_repos SET base_branch='develop' WHERE id=$1", [rid]);
+    const res = await put({ label: 'main', base_branch: 'develop' });
+    expect(res.status).toBe(200);
+    expect(res.body.base_branch).toBe('develop');
+  });
+
+  test('一般編輯（沒帶 base_branch）照常成功且不動既有設定', async () => {
+    // 直接以 SQL 設初始值，不經 PUT：PUT 這條路已經鎖死，靠它鋪路會讓本案例跟著壞掉。
+    await dbModule.query("UPDATE project_repos SET base_branch='develop' WHERE id=$1", [rid]);
     const res = await put({ label: 'main-renamed' });
     expect(res.status).toBe(200);
     expect(res.body.base_branch).toBe('develop');
-    expect(gitMock.setRemoteHead).not.toHaveBeenCalled();
-  });
-
-  test('清空 → 改回自動偵測：DB 存 NULL，origin/HEAD 重問遠端', async () => {
-    gitMock.setRemoteHead.mockClear();
-    const res = await put({ base_branch: '' });
-    expect(res.status).toBe(200);
-    expect(res.body.base_branch).toBeNull();
-    expect(gitMock.setRemoteHead).toHaveBeenCalledWith('/repos/bb/main', null);
   });
 });

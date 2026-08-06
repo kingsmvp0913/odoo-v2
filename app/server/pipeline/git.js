@@ -242,6 +242,95 @@ async function ensureAiBranch(repoPath, gitEnv) {
   return AI_BRANCH;
 }
 
+// —— ai-dev 基底診斷與重建 ——
+// ai-dev 是 ensureAiBranch 從「建立當下的主分支」長出來的，之後不會再變。主分支若在那之後才被
+// 改對（origin/HEAD 變了、或使用者指定了別條），ai-dev 仍掛在舊基底上，syncMainIntoAi 就成了
+// 兩條平行線硬合。實測某專案 ai-dev 長自 main、真主分支是 kangyue（分歧 120/142 個 commit，
+// 且其中一側把整個模組目錄改名），同步在 28 個檔案上衝突——真因是基底選錯，不是內容衝突，
+// 照著「去 GitHub 把 ai-dev 合併回主分支」處理只會把兩條線的差異全部搬進來。
+
+// ai-dev 實際長自哪條分支：取「已完整併入 ai-dev」的 origin 分支中，距離 ai-dev 最近的那條。
+// 基底正確時回傳的就是主分支本身（距離＝ai-dev 自己的產出數），故呼叫端用「回傳值 !== 主分支」
+// 即可判定歪掉。回 null＝無從判斷（ai-dev 不存在、或沒有任何分支併入其中）。
+async function aiBranchBase(repoPath) {
+  const { stdout } = await execFileAsync(
+    'git', ['branch', '-r', '--merged', `origin/${AI_BRANCH}`, '--format=%(refname:short)'], { cwd: repoPath }
+  ).catch(() => ({ stdout: '' }));
+  const merged = stdout.split('\n').map(s => s.trim()).filter(Boolean)
+    .filter(s => s.startsWith('origin/') && !s.endsWith('/HEAD') && s !== `origin/${AI_BRANCH}`)
+    .map(s => s.replace(/^origin\//, ''));
+  let best = null;
+  let bestDist = Infinity;
+  for (const b of merged) {
+    const { stdout: c } = await execFileAsync(
+      'git', ['rev-list', '--count', `origin/${b}..origin/${AI_BRANCH}`], { cwd: repoPath }
+    ).catch(() => ({ stdout: '' }));
+    const d = Number.parseInt(c.trim(), 10);
+    if (Number.isFinite(d) && d < bestDist) { bestDist = d; best = b; }
+  }
+  return best;
+}
+
+// ai-dev 上「真正屬於 AI 的產出」有幾個 commit：獨有、且不存在於任何其他 origin 分支。
+// 這個排除法是重建能否安全進行的唯一判準。不可簡化成 `origin/<base>..ai-dev`——那個數字在
+// 基底選錯時會把「另一條分支的歷史」也算成產出（實測該專案得 120，真值是 0），於是重建被自己
+// 的守衛擋掉，永遠修不好。
+async function aiOwnCommits(repoPath, base) {
+  const { stdout } = await execFileAsync(
+    'git', ['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin'], { cwd: repoPath }
+  ).catch(() => ({ stdout: '' }));
+  const others = stdout.split('\n').map(s => s.trim()).filter(Boolean)
+    .filter(s => s !== `origin/${AI_BRANCH}` && !s.endsWith('/HEAD'));
+  if (base && !others.includes(`origin/${base}`)) others.push(`origin/${base}`);
+  if (!others.length) return null; // 沒有可比對的分支＝無從判斷，呼叫端不得視為 0
+  const { stdout: c } = await execFileAsync(
+    'git', ['rev-list', '--count', `origin/${AI_BRANCH}`, '--not', ...others], { cwd: repoPath }
+  ).catch(() => ({ stdout: '' }));
+  const n = Number.parseInt(c.trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 把 ai-dev 重長到 base 上並覆蓋遠端。兩道守衛都在本函式內自驗，不信呼叫端。
+// --force-with-lease 而非 --force：多個平台實例共用同一遠端 ai-dev（見 reconcileAndPushAi），
+// 別的實例剛推進時要失敗而不是盲目覆蓋。
+async function rebuildAiBranch(repoPath, base, gitEnv) {
+  const own = await aiOwnCommits(repoPath, base);
+  if (own !== 0) throw new Error(`ai-dev 上有 ${own === null ? '無法判定數量的' : own} 個 AI 產出，不可重建`);
+  // 任務 worktree 是從 ai-dev 長出來的，抽掉基底會讓它們指向消失的 commit（coding 寫在舊碼上、
+  // 下載 zip 拿到不存在的 diff）。問 git 而不是查 DB 的任務狀態：worktree 的存在才是真正的風險，
+  // 且殘留未清的 worktree 同樣該擋——那些任務的 zip 仍可能被下載。
+  const { stdout: wt } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: repoPath });
+  const others = wt.split('\n').filter(l => l.startsWith('worktree ')).length - 1; // 第一筆是主 clone
+  if (others > 0) throw new Error(`還有 ${others} 個任務 worktree 掛在這個 repo 上，請待任務結束後再重建`);
+  const oldSha = await revParse(repoPath, AI_BRANCH).catch(() => null);
+  // 先離開 ai-dev：branch -f 動不了當前 checkout 的分支。
+  await execFileAsync('git', ['checkout', base], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', ['branch', '-f', AI_BRANCH, `origin/${base}`], gitOpts(repoPath, gitEnv));
+  await execFileAsync('git', ['push', '--force-with-lease', 'origin', AI_BRANCH], gitOpts(repoPath, gitEnv));
+  const newSha = await revParse(repoPath, AI_BRANCH).catch(() => null);
+  return { oldSha, newSha };
+}
+
+// clone 前就能讀遠端分支：新增 repo 時要讓使用者選主分支，但那時還沒有本地 clone，
+// listRemoteBranches（git branch -r）無從可用。--symref 讓 HEAD 一併回傳遠端預設分支。
+// 刻意不加 --heads：它會連 HEAD 一起濾掉，--symref 就永遠拿不到預設分支（defaultBranch 恆為
+// null、下拉不預選），而且不報錯。改由下面的 regex 只收 refs/heads/ 達成同樣過濾。
+async function listRemoteBranchesByUrl(url, gitEnv) {
+  const { stdout } = await execFileAsync(
+    'git', ['ls-remote', '--symref', '--', url],
+    gitOpts(undefined, gitEnv, { timeout: 30000 })
+  );
+  const branches = [];
+  let defaultBranch = null;
+  for (const line of stdout.split('\n')) {
+    const sym = line.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/);
+    if (sym) { defaultBranch = sym[1]; continue; }
+    const head = line.match(/^[0-9a-f]+\s+refs\/heads\/(\S+)$/);
+    if (head) branches.push(head[1]);
+  }
+  return { branches, defaultBranch };
+}
+
 // 把實體 main 的新 commit 帶進 ai-dev（初期仍有工程師直接改 main，不同步 AI 會拿過期的碼寫）。
 // 回傳形狀比照 mergeInto，讓上層沿用同一套衝突處理。呼叫端須先 ensureAiBranch。
 // 刻意不 push：ai-dev 只有平台會寫，累積到 approve 那次 push 一起送，減少網路往返。
@@ -659,4 +748,5 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
   }
 }
 
-module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };
+module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
+  aiBranchBase, aiOwnCommits, rebuildAiBranch, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };

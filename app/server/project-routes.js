@@ -97,7 +97,11 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   // 未設 PAT 時 gitEnv 為 undefined → 不注入 env、沿用機器憑證（public repo／機器帳號情境不變）。
   const cloneOpts = { timeout: 300000 };
   if (gitEnv) cloneOpts.env = { ...process.env, ...gitEnv };
+  // 整個回呼包 try/catch：這是 async callback，往外拋就是 unhandled rejection——Node 20 會直接
+  // 終止進程（實測一個同步 TypeError 就讓整個 server 掛掉）。內部每個 await 各自 .catch() 擋不住
+  // 同步階段拋出的錯，也擋不住日後新增的呼叫忘了掛 catch，故在最外層兜底。
   execFile('git', ['clone', '--', repoUrl, destPath], cloneOpts, async (err, _stdout, stderr) => {
+   try {
     if (err) {
       const msg = (stderr || err.message || 'clone failed').slice(0, 500);
       await query(
@@ -110,15 +114,56 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
       // 讓後續所有以主分支為基準的操作都吃到正確答案。
       const { rows: [cfg] } = await query('SELECT base_branch FROM project_repos WHERE id=$1', [repoId]).catch(() => ({ rows: [] }));
       if (cfg?.base_branch) await setRemoteHead(destPath, cfg.base_branch).catch(() => {});
+      // 遠端若已有 ai-dev（例：換 URL 重 clone、或這個 repo 先前就被平台用過），它可能還掛在舊基底上。
+      // 排在 ensureTestingBranch 之前：testing 是以 ai-dev 為基準重長的，先扶正才不會把歪的帶下去。
+      const notice = await reconcileAiBranch(destPath, null, gitEnv); // base 傳 null＝由它自己問主分支
+      if (notice) console.warn(`[clone] repo ${repoId} [${notice.level}] ${notice.message}`);
       // 主 clone 常駐 testing 分支（GitLab Flow 環境分支，測試環境 addons 來源）
       try { await ensureTestingBranch(destPath); } catch { /* 不擋 clone 完成 */ }
       await query(
-        'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
-        [repoId, 'done']
+        // 只有 blocked（確定歪掉且救不了）才寫進 clone_error——前端無論 status 都會紅字顯示，
+        // 語意是「需要你處理」。fixed 不必寫（沒事要做），warn 也不寫（只是沒查成功，寫了徒增雜訊）。
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        [repoId, 'done', notice?.level === 'blocked' ? notice.message : null]
       ).catch(() => {});
       runGraphify(repoId, destPath);
     }
+   } catch (e) {
+     // 走到這裡代表上面漏了某個 catch。至少讓它留下痕跡，而不是把整個 server 帶走。
+     console.error(`[clone] repo ${repoId} 回呼異常：${e && e.message}`);
+   }
   });
+}
+
+// 把歪掉的 ai-dev 基底扶正。ai-dev 是 ensureAiBranch 在「建立當下的主分支」上長的，主分支之後
+// 才被改對也不會自己跟上，同步從此是兩條平行線硬合（詳見 git.js 的 aiBranchBase 註解）。
+// 零 AI 產出才重建；有產出就不動它，只回報——那些 commit 只存在於 ai-dev，重建即永久遺失。
+// 回 null（無事）或 { level, message }，永不往外拋。level 必須分得夠細，因為呼叫端要據此決定
+// 要不要中止同步——早期版本用「訊息開頭是不是 ⚠️」判斷，把「確定歪掉」和「偵測本身出錯」混成
+// 一類，於是任何一個 git 探測失敗都會讓整個 reclone 變 error（規則 81：repo 一 error 就從
+// pipeline 消失）。三種語意分開：
+//   fixed   已扶正，無需任何人處理
+//   blocked 基底確定不符且有 AI 產出，硬同步注定衝突 → 呼叫端應停下
+//   warn    偵測不完整（git 探測失敗等），不知道歪沒歪 → 只記錄，照常往下走
+// base 傳 null＝由本函式自己問 getMainBranch。刻意讓呼叫端能省略：首次 clone 那條路上取主分支
+// 本身也可能拋（背景回呼跑在任何時間點，模組狀態不保證還在），放進這裡的 try 才不會炸到外面。
+async function reconcileAiBranch(repoPath, base, gitEnv) {
+  try {
+    const { aiBranchBase, aiOwnCommits, rebuildAiBranch, AI_BRANCH, refExists, getMainBranch } = require('./pipeline/git');
+    const effBase = base || await getMainBranch(repoPath);
+    if (!effBase) return null;
+    if (!await refExists(repoPath, `refs/remotes/origin/${AI_BRANCH}`)) return null; // 還沒有 ai-dev＝之後自然長在對的分支上
+    const actual = await aiBranchBase(repoPath);
+    if (!actual || actual === effBase) return null;                                 // 基底正確（絕大多數）
+    const own = await aiOwnCommits(repoPath, effBase);
+    if (own !== 0) {
+      return { level: 'blocked', message: `ai-dev 是從 ${actual} 長出來的，但主分支是 ${effBase}；其上已有 ${own === null ? '無法判定數量的' : own} 個 AI 產出，未自動重建。請先在 GitHub 上把 ai-dev 合併回 ${effBase}` };
+    }
+    const { oldSha } = await rebuildAiBranch(repoPath, effBase, gitEnv);
+    return { level: 'fixed', message: `ai-dev 基底已從 ${actual} 重建到 ${effBase}（舊 HEAD ${String(oldSha || '').slice(0, 7)}）` };
+  } catch (e) {
+    return { level: 'warn', message: `ai-dev 基底檢查未完成：${e.message}` };
+  }
 }
 
 // 更新既有主 clone：checkout 主分支 + git pull origin <main>，再把 main 的新 commit 帶進 ai-dev，
@@ -130,6 +175,15 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     const base = await ensureMainBranch(destPath, gitEnv); // checkout main/master（僅遠端則建本地追蹤分支）
     await pullBranch(destPath, base, gitEnv);              // git pull origin <base>
     await ensureAiBranch(destPath, gitEnv);
+    // 扶正基底必須排在 syncMainIntoAi 之前：基底歪掉時那次 merge 就是「兩條平行線硬合」，
+    // 會炸出一整包看似內容衝突的假象（實測 28 檔），而真因只是 ai-dev 長錯地方。
+    const aiNotice = await reconcileAiBranch(destPath, base, gitEnv);
+    if (aiNotice) console.warn(`[updateMainClone] repo ${repoId} [${aiNotice.level}] ${aiNotice.message}`);
+    if (aiNotice?.level === 'blocked') {
+      // 扶不正就不要硬同步：那次 merge 注定衝突，還會把 ai-dev 弄成待解狀態。停在這裡讓人處理。
+      // 只有 blocked 才擋——warn 代表「不確定」，不確定不足以中止使用者的更新。
+      throw new Error(aiNotice.message);
+    }
     const sync = await syncMainIntoAi(destPath, gitEnv);
     if (sync.hasConflicts) {
       // 此處不綁任何任務，沒有裁決 UI 可用。abort 還原讓 ai-dev 維持原狀並 fail loud。
@@ -137,7 +191,13 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
       // 撈 repo 一律 WHERE clone_status='done'——repo 一旦是 error 就從 pipeline 消失，「開一張任務
       // 處理」保證撈到 0 個 repo、approve 直接 400，那是條死路，不能寫進指示裡。
       await abortMerge(destPath);
-      throw new Error(`main → ai-dev 同步衝突（${sync.conflictFiles.join(', ')}），請先在 GitHub 上把 ai-dev 合併回 main 再更新`);
+      // 分支名一律用實際的 base，不可寫死 'main'：主分支叫別的名字時（origin/HEAD 指向它、或使用者
+      // 指定），訊息會把人指到一條根本不相干的分支上——實測某專案的訊息說「main → ai-dev 衝突、
+      // 請把 ai-dev 合併回 main」，但 main 合進 ai-dev 其實 0 衝突，真正在合的是 kangyue。
+      // 檔名也要截斷：28 個檔名全塞進 clone_error 會把畫面灌爆，看的人反而抓不到重點。
+      const shown = sync.conflictFiles.slice(0, 5).join(', ');
+      const more = sync.conflictFiles.length > 5 ? ` 等 ${sync.conflictFiles.length} 個檔案` : '';
+      throw new Error(`${base} → ai-dev 同步衝突（${shown}${more}），請先在 GitHub 上把 ai-dev 合併回 ${base} 再更新`);
     }
     // 先回寫 done 再重建 testing，順序不可倒：doRebuild 撈 repo 帶 `WHERE clone_status='done'`，
     // 而 reclone 端點進來就把本 repo 標成 'cloning'——先重建的話它撈到 0 個 repo、直接 return null
@@ -454,9 +514,25 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 新增 repo 前先讀遠端分支：主分支只有這一次機會可選（PUT 之後就鎖死），所以要在還沒 clone
+  // 的當下就能列給人挑。走 ls-remote 而非 listRemoteBranches（後者要有本地 clone 才行）。
+  // 失敗一律回 200 + 空清單：私有 repo 沒 PAT、網址打錯都會失敗，但那不該擋住新增流程
+  // （沿用首次 clone 的 best-effort 態度），前端降級成自動偵測即可。
+  app.get('/api/git/remote-branches', verifyToken, async (req, res) => {
+    const url = String(req.query.url || '').trim();
+    if (!url) return res.json({ branches: [], defaultBranch: null, ok: false, reason: '未提供網址' });
+    try {
+      const { listRemoteBranchesByUrl } = require('./pipeline/git');
+      const r = await listRemoteBranchesByUrl(url, await optionalGitEnv(req.userId));
+      res.json({ ...r, ok: true });
+    } catch (err) {
+      res.json({ branches: [], defaultBranch: null, ok: false, reason: (err.stderr || err.message || '').slice(0, 200) });
+    }
+  });
+
   app.post('/api/projects/:id/repos', verifyToken, async (req, res) => {
     try {
-      const { label, repo_url, is_primary } = req.body;
+      const { label, repo_url, is_primary, base_branch } = req.body;
       if (!label || !repo_url) return res.status(400).json({ error: 'label and repo_url required' });
 
       const { rows: [project] } = await query('SELECT folder_name, name FROM projects WHERE id=$1', [req.params.id]);
@@ -468,9 +544,10 @@ function registerRoutes(app) {
 
       const destPath = computeDestPath(project.folder_name || project.name, label);
       const { rows } = await query(
-        `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status)
-         VALUES ($1, $2, $3, $4, $5, 'cloning') RETURNING *`,
-        [req.params.id, label, repo_url, destPath, is_primary || false]
+        `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status, base_branch)
+         VALUES ($1, $2, $3, $4, $5, 'cloning', $6) RETURNING *`,
+        // 主分支在此刻定案（之後 PUT 會擋）。null＝沿用遠端 HEAD，triggerClone 那邊會照 origin/HEAD 走。
+        [req.params.id, label, repo_url, destPath, is_primary || false, base_branch || null]
       );
       triggerClone(req.params.id, rows[0].id, repo_url, destPath, await optionalGitEnv(req.userId), req.userId);
       res.status(201).json(rows[0]);
@@ -490,15 +567,15 @@ function registerRoutes(app) {
       );
       if (!existing) return res.status(404).json({ error: 'Not found' });
 
-      // 主分支覆寫：空字串／null＝改回自動偵測。指定值必須真的存在於遠端，否則 set-head 會失敗、
-      // DB 與 origin/HEAD 從此不一致（畫面顯示已設定、實際仍用舊分支）——擋在寫入前才不會脫鉤。
-      const baseBranchGiven = base_branch !== undefined;
-      const nextBaseBranch = baseBranchGiven ? (base_branch || null) : existing.base_branch;
-      if (baseBranchGiven && nextBaseBranch && existing.clone_status === 'done') {
-        const avail = await listRemoteBranches(existing.local_path).catch(() => []);
-        if (!avail.includes(nextBaseBranch)) {
-          return res.status(400).json({ error: `遠端沒有分支 ${nextBaseBranch}` });
-        }
+      // 主分支只能在新增 repo 時決定，之後不得修改：ai-dev 是建立當下從主分支長出來的，事後改
+      // 主分支並不會讓它跟著搬家，於是同步變成兩條平行線硬合（實測某專案因此在 28 檔衝突）。
+      // 與其容許一個必然造成不一致的入口再去偵測補救，不如關掉它——要換分支請刪掉 repo 重加。
+      // 送相同值不算改動（前端整包 PUT 會原樣帶回來），只有真的要改才擋。
+      const nextBaseBranch = existing.base_branch;
+      if (base_branch !== undefined && (base_branch || null) !== existing.base_branch) {
+        return res.status(400).json({
+          error: `主分支不能事後修改（目前：${existing.base_branch || '自動偵測'}）。ai-dev 已經長在它上面，改設定不會讓 ai-dev 跟著搬家。請刪除這個 repo 後重新新增並選擇正確的主分支。`,
+        });
       }
 
       if (is_primary) {
@@ -528,12 +605,8 @@ function registerRoutes(app) {
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
-      // 落到 origin/HEAD＝真正生效（getMainBranch 的第一順位）。改回自動偵測則用 -a 讓 git 重問遠端。
-      // urlChanged 時跳過：clone 還沒跑完，等 triggerClone 完成後那段統一套用。
-      if (baseBranchGiven && !urlChanged && existing.clone_status === 'done') {
-        await setRemoteHead(existing.local_path, nextBaseBranch).catch(() => {});
-      }
-
+      // base_branch 已不可變，故此處無需再套 origin/HEAD——新增時 triggerClone 那段已經設好，
+      // 換 URL 時下面的 triggerClone 會重新套用一次。
       if (urlChanged) {
         triggerClone(req.params.id, rows[0].id, rows[0].repo_url, newLocalPath, await optionalGitEnv(req.userId), req.userId);
       }

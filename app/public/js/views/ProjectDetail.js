@@ -5,10 +5,11 @@ window.ProjectDetailView = Vue.defineComponent({
     return {
       project: null,
       repos: [],
-      branchInfo: {},      // repoId → { branches, base_branch, effective, ready }
-      savingBranch: null,  // 存檔中的 repoId
+      branchInfo: {},      // repoId → { branches, base_branch, effective, ready }（唯讀顯示用）
       loading: true,
-      newRepo: { label: '', repo_url: '', is_primary: false },
+      newRepo: { label: '', repo_url: '', is_primary: false, base_branch: '' },
+      remoteBranches: [],  // 新增表單用：ls-remote 讀到的遠端分支（clone 前就要能選）
+      probingBranches: false,
       savingRepo: false,
       env: null,
       envWorking: false,
@@ -91,7 +92,8 @@ window.ProjectDetailView = Vue.defineComponent({
       this.savingRepo = true;
       try {
         await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo });
-        this.newRepo = { label: '', repo_url: '', is_primary: false };
+        this.newRepo = { label: '', repo_url: '', is_primary: false, base_branch: '' };
+        this.remoteBranches = [];
         await this.load();
         showToast('Repo 已新增，正在 clone...', 'success');
       } catch (e) { showToast(e.message, 'error'); }
@@ -105,7 +107,7 @@ window.ProjectDetailView = Vue.defineComponent({
         showToast('已移除 repo', 'success');
       } catch (e) { showToast(e.message, 'error'); }
     },
-    // 主分支下拉的選項來源。clone 完成的 repo 才有 refs 可讀，未完成的略過（前端顯示提示字）。
+    // 讀各 repo「目前生效的主分支」供唯讀顯示（主分支已不可事後修改，故不再需要選項清單）。
     async loadBranches() {
       const id = this.$route.params.id;
       for (const r of this.repos.filter(x => x.clone_status === 'done')) {
@@ -113,19 +115,23 @@ window.ProjectDetailView = Vue.defineComponent({
         if (d) this.branchInfo[r.id] = d;
       }
     },
-    branchOptions(repoId) {
-      const info = this.branchInfo[repoId];
-      return info ? info.branches.map(b => ({ value: b, label: b })) : [];
-    },
-    // 空值＝改回自動偵測（origin/HEAD）。後端會一併把選擇落到該 clone 的 origin/HEAD 才算真的生效。
-    async saveBaseBranch(repoId, value) {
-      this.savingBranch = repoId;
+    // 新增 repo 前先問遠端有哪些分支。clone 還沒發生，所以走 ls-remote 而非本地 refs。
+    // 讀不到就靜靜維持自動偵測：私有 repo 沒 PAT、網址打到一半都會失敗，那不該打斷填表。
+    async probeRemoteBranches() {
+      const url = (this.newRepo.repo_url || '').trim();
+      this.remoteBranches = [];
+      this.newRepo.base_branch = '';
+      if (!url) return;
+      this.probingBranches = true;
       try {
-        await Api.put(`projects/${this.$route.params.id}/repos/${repoId}`, { base_branch: value || '' });
-        showToast(value ? `主分支已設為 ${value}` : '主分支改回自動偵測', 'success');
-        await this.load();
-      } catch (e) { showToast(e.message, 'error'); }
-      finally { this.savingBranch = null; }
+        const d = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`);
+        if (d && d.ok) {
+          this.remoteBranches = d.branches || [];
+          // 預選遠端預設分支（origin/HEAD）：多數情況這就是對的，讓人確認而不是從頭挑。
+          if (d.defaultBranch) this.newRepo.base_branch = d.defaultBranch;
+        }
+      } catch { /* 降級成自動偵測 */ }
+      finally { this.probingBranches = false; }
     },
     async reclone(repoId) {
       try {
@@ -309,20 +315,15 @@ window.ProjectDetailView = Vue.defineComponent({
               </div>
               <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
               <div v-if="r.local_path" style="font-size:var(--fs-sm);color:var(--text-muted)">路徑：{{ r.local_path }}</div>
-              <!-- 主分支：多數 repo 靠 origin/HEAD 自動偵測即可，這裡是給「遠端預設分支不等於團隊
-                   主線」的例外覆寫。空值＝自動偵測，故 all-label 就是「自動偵測」。 -->
+              <!-- 主分支只讀：AI 的 ai-dev 分支是新增 repo 當下從主分支長出來的，事後改設定並不會
+                   讓它跟著搬家，同步從此變成兩條平行線硬合。與其留一個必然造成不一致的入口，
+                   不如關掉——要換主分支請移除 repo 後重新新增。 -->
               <div v-if="r.clone_status === 'done'" style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
                 <span style="font-size:var(--fs-sm);color:var(--text-muted)">主分支</span>
-                <SearchableSelect
-                  :model-value="branchInfo[r.id] && branchInfo[r.id].base_branch ? branchInfo[r.id].base_branch : ''"
-                  :options="branchOptions(r.id)"
-                  all-label="自動偵測"
-                  placeholder="自動偵測"
-                  @update:modelValue="v => saveBaseBranch(r.id, v)" />
-                <span v-if="branchInfo[r.id] && branchInfo[r.id].effective" style="font-size:var(--fs-sm);color:var(--text-muted)">
-                  目前生效：<code>{{ branchInfo[r.id].effective }}</code>
+                <code>{{ (branchInfo[r.id] && branchInfo[r.id].effective) || r.base_branch || '自動偵測' }}</code>
+                <span style="font-size:var(--fs-sm);color:var(--text-muted)" title="ai-dev 已經長在這條分支上，改設定不會讓它搬家">
+                  （建立後不可變更，需更換請移除 repo 重新新增）
                 </span>
-                <span v-if="savingBranch === r.id" style="font-size:var(--fs-sm);color:var(--text-muted)">儲存中…</span>
               </div>
               <div v-if="r.clone_error" style="font-size:var(--fs-xs);color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
             </div>
@@ -338,10 +339,27 @@ window.ProjectDetailView = Vue.defineComponent({
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--space-3)">
           <input v-model="newRepo.label" placeholder="標籤（如 main、plugin-hr）" class="form-control" />
-          <input v-model="newRepo.repo_url" placeholder="Git URL（自動 clone）" class="form-control" />
+          <input v-model="newRepo.repo_url" placeholder="Git URL（自動 clone）" class="form-control" @blur="probeRemoteBranches" />
+          <!-- 主分支只有這一刻能選（新增後即鎖死），故在還沒 clone 的當下就用 ls-remote 把遠端分支
+               撈出來讓人挑。讀不到（私有 repo 無 PAT／網址還沒填完）就維持自動偵測，不擋新增。 -->
+          <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
+            <span style="color:var(--text-muted);white-space:nowrap">主分支</span>
+            <SearchableSelect v-if="remoteBranches.length"
+              :model-value="newRepo.base_branch"
+              :options="remoteBranches.map(b => ({ value: b, label: b }))"
+              all-label="自動偵測"
+              placeholder="自動偵測"
+              @update:modelValue="v => newRepo.base_branch = v || ''" />
+            <span v-else style="font-size:var(--fs-sm);color:var(--text-muted)">
+              {{ probingBranches ? '讀取遠端分支中…' : '自動偵測（填入網址後可選）' }}
+            </span>
+          </label>
           <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
             <input type="checkbox" v-model="newRepo.is_primary" /> 設為主要 repo
           </label>
+        </div>
+        <div v-if="newRepo.base_branch" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">
+          AI 的 <code>ai-dev</code> 分支會從 <code>{{ newRepo.base_branch }}</code> 長出來，建立後不可變更。
         </div>
         <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2)" @click="addRepo" :disabled="savingRepo">+ 新增 Repo</button>
         </div>

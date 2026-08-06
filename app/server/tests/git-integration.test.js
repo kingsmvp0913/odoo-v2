@@ -574,3 +574,92 @@ describe('主分支非 main／master', () => {
     expect(await git.getMainBranch(repo)).toBe('main');
   }, 30000);
 });
+
+// ---- ai-dev 基底診斷與重建 ----
+// 意圖：重現實際壞掉的那個劇本——ai-dev 長自 main，但真正的主分支是 kangyue，兩者分家後各走
+// 自己的路。這種情況下同步會炸出一整包「內容衝突」，但真因是基底選錯。判斷「能不能安全重建」
+// 只能靠真 git 的分支包含關係，mock 不出來。
+describe('ai-dev 基底', () => {
+  // main 與 kangyue 從同一點分家後各走一個 commit；ai-dev 長在 main 上（＝基底選錯的樣子）
+  async function makeDivergedRepo() {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'kangyue', 'main');
+    await write(repo, 'k.py', 'k = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'kangyue work');
+    await sh(repo, 'push', '-u', 'origin', 'kangyue');
+
+    await sh(repo, 'checkout', 'main');
+    await write(repo, 'm.py', 'm = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'main work');
+    await sh(repo, 'push', 'origin', 'main');
+
+    await sh(repo, 'checkout', '-b', 'ai-dev', 'main');
+    await sh(repo, 'push', '-u', 'origin', 'ai-dev');
+    return repo;
+  }
+
+  test('aiBranchBase 認出 ai-dev 其實長在 main 上（而非設定中的主分支）', async () => {
+    const repo = await makeDivergedRepo();
+    expect(await git.aiBranchBase(repo)).toBe('main');
+  }, 30000);
+
+  // 這支是整個功能的關鍵防線：早期用的天真判準 `origin/<base>..ai-dev` 會把「另一條分支的歷史」
+  // 算成 AI 產出，於是守衛擋下重建、專案永遠修不好（實測該判準在真實案例回 120，真值是 0）。
+  test('aiOwnCommits 只算真正的 AI 產出，不把別條分支的歷史算進來', async () => {
+    const repo = await makeDivergedRepo();
+    expect(await git.aiOwnCommits(repo, 'kangyue')).toBe(0);
+
+    // 對照組：天真判準在同一個 repo 上會得到非 0（證明本測試分得出兩者，不是恰好都對）
+    const { stdout } = await sh(repo, 'rev-list', '--count', 'origin/kangyue..origin/ai-dev');
+    expect(Number(stdout.trim())).toBeGreaterThan(0);
+  }, 30000);
+
+  test('ai-dev 上有真產出時 aiOwnCommits > 0（那些 commit 只存在於 ai-dev，不可捨棄）', async () => {
+    const repo = await makeDivergedRepo();
+    await write(repo, 'ai.py', 'ai = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'AI 產出');
+    await sh(repo, 'push', 'origin', 'ai-dev');
+    expect(await git.aiOwnCommits(repo, 'kangyue')).toBe(1);
+  }, 30000);
+
+  test('rebuildAiBranch：把 ai-dev 重長到主分支上並推遠端', async () => {
+    const repo = await makeDivergedRepo();
+    const r = await git.rebuildAiBranch(repo, 'kangyue');
+    expect(r.oldSha).not.toBe(r.newSha);
+    const { stdout: aiSha } = await sh(repo, 'rev-parse', 'ai-dev');
+    const { stdout: kSha } = await sh(repo, 'rev-parse', 'origin/kangyue');
+    expect(aiSha.trim()).toBe(kSha.trim());
+    // 遠端也要跟著換掉，否則下次 pullBranch 會把舊的拉回來＝等於沒修
+    const { stdout: remoteSha } = await sh(repo, 'rev-parse', 'refs/remotes/origin/ai-dev');
+    expect(remoteSha.trim()).toBe(kSha.trim());
+  }, 30000);
+
+  test('rebuildAiBranch：有 AI 產出時拒絕（守衛自驗，不信呼叫端）', async () => {
+    const repo = await makeDivergedRepo();
+    await write(repo, 'ai.py', 'ai = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'AI 產出');
+    await sh(repo, 'push', 'origin', 'ai-dev');
+    await expect(git.rebuildAiBranch(repo, 'kangyue')).rejects.toThrow(/AI 產出/);
+  }, 30000);
+
+  test('rebuildAiBranch：還有任務 worktree 掛著時拒絕（否則它們指向消失的 commit）', async () => {
+    const repo = await makeDivergedRepo();
+    await sh(repo, 'worktree', 'add', path.join(base, 'wt-task1'), '-b', 'task/t1', 'ai-dev');
+    await expect(git.rebuildAiBranch(repo, 'kangyue')).rejects.toThrow(/worktree/);
+  }, 30000);
+
+  test('listRemoteBranchesByUrl：clone 前就讀得到分支與遠端預設分支', async () => {
+    const repo = await makeDivergedRepo();
+    await sh(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+    const origin = path.join(base, 'origin.git');
+    await run('git', ['-C', origin, 'symbolic-ref', 'HEAD', 'refs/heads/kangyue']);
+    const r = await git.listRemoteBranchesByUrl(origin);
+    expect(r.branches).toEqual(expect.arrayContaining(['main', 'kangyue', 'ai-dev']));
+    // 沒有這個值，「新增 repo 時預選主分支」就永遠預選不到（--heads 會把 HEAD 濾掉，故不能加）
+    expect(r.defaultBranch).toBe('kangyue');
+  }, 30000);
+});
