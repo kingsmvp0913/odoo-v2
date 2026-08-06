@@ -22,13 +22,16 @@ jest.mock('../pipeline/health-data', () => ({
   buildAgentSummary: jest.fn().mockResolvedValue({ token: {}, tasks: {}, rejections: null })
 }));
 
-let dbModule2, runHealthCheck;
+let dbModule2, runHealthCheck, hcUserId;
 beforeAll(async () => {
   const db = newDb();
   const { Pool } = db.adapters.createPg();
   dbModule2 = require('../db');
   dbModule2._setPoolForTesting(new Pool());
   await dbModule2.migrate();
+  const { rows: [u] } = await dbModule2.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hc','h','HC') RETURNING id");
+  hcUserId = u.id;   // tasks.user_id 是 NOT NULL，跨關卡彙整的 fixture 要用
   ({ runHealthCheck } = require('../pipeline/health-check-runner'));
 });
 afterAll(() => dbModule2._setPoolForTesting(null));
@@ -141,4 +144,83 @@ test('舊格式（suggested_prompt 在 JSON 內）仍接受', async () => {
     'SELECT severity, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
   expect(fs.every(f => f.severity === 'low')).toBe(true);
   expect(fs[0].suggested_prompt).toBe('新的提示詞 {{x}}');
+});
+
+// --- 跨關卡彙整 ---
+// 意圖：per-agent 健檢天生看不到「不屬於任何單一 agent」的問題。實測 run#1：同一個 blocker
+// （asset bundle 編不出來）出現在七個 agent 的摘要裡，每一則都正確判定「屬環境層、非本 agent 的
+// 提示詞可左右」——七個判斷都對，合起來沒有人負責，21 份 finding 沒有一則指向它。
+test('多張任務卡在同一類原因 → 落一筆跨關卡的系統層 finding', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"diagnosis":"正常","severity":"ok","has_prompt":false,"rationale":"r"}</result>',
+    usage: null, durationMs: 5
+  });
+  await dbModule2.query("DELETE FROM tasks");
+  for (const [tid, blocker] of [
+    ['s1', '[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來：/web/assets/a.js → HTTP 500'],
+    ['s2', '[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來：/web/assets/b.js → HTTP 500'],
+    ['s3', '[QA 未通過]\n欄位型別錯']
+  ]) {
+    await dbModule2.query(
+      "INSERT INTO tasks (user_id, task_id, source, status, blocker_content, updated_at) VALUES ($3,$1,'manual','stopped',$2,NOW())",
+      [tid, blocker, hcUserId]);
+  }
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: [sys] } = await dbModule2.query(
+    "SELECT agent_label, severity, diagnosis, suggested_prompt FROM health_check_findings WHERE run_id=$1 AND agent_name='__system__'", [runId]);
+  expect(sys).toBeTruthy();
+  expect(sys.agent_label).toBe('跨關卡彙整');
+  expect(sys.severity).toBe('high');                       // 2/3 = 67% ≥ 50%
+  expect(sys.diagnosis).toContain('部署測試區 asset 檢查失敗');
+  expect(sys.diagnosis).toContain('2 張');
+  expect(sys.suggested_prompt).toBeNull();                 // 這類問題改任何 agent 的 prompt 都沒用
+});
+
+// 不為報而報：沒有任何一類原因達到門檻時不得落 finding，否則每次健檢都多一筆噪音。
+test('停下原因分散（無主要群） → 不落系統層 finding', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"diagnosis":"正常","severity":"ok","has_prompt":false,"rationale":"r"}</result>',
+    usage: null, durationMs: 5
+  });
+  await dbModule2.query("DELETE FROM tasks");
+  for (const [tid, blocker] of [
+    ['d1', '[QA 未通過]\nA'], ['d2', '[部署失敗]\nB'], ['d3', '[E2E 失敗]\nC'], ['d4', '[環境問題]\nD']
+  ]) {
+    await dbModule2.query(
+      "INSERT INTO tasks (user_id, task_id, source, status, blocker_content, updated_at) VALUES ($3,$1,'manual','stopped',$2,NOW())",
+      [tid, blocker, hcUserId]);
+  }
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows } = await dbModule2.query(
+    "SELECT id FROM health_check_findings WHERE run_id=$1 AND agent_name='__system__'", [runId]);
+  expect(rows).toHaveLength(0);   // 每類各 25%，未達 30% 門檻
+});
+
+// 「循環 2 次」與「循環 3 次」是同一類問題，不該因為數字不同被拆成兩群而雙雙未達門檻。
+test('停下原因只差數字 → 正規化後視為同一類', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"diagnosis":"正常","severity":"ok","has_prompt":false,"rationale":"r"}</result>',
+    usage: null, durationMs: 5
+  });
+  await dbModule2.query("DELETE FROM tasks");
+  for (const [tid, blocker] of [
+    ['n1', '任務在各關卡間循環 2 次仍未通過，需人工介入'],
+    ['n2', '任務在各關卡間循環 3 次仍未通過，需人工介入'],
+    ['n3', '[QA 未通過]\n別的問題']
+  ]) {
+    await dbModule2.query(
+      "INSERT INTO tasks (user_id, task_id, source, status, blocker_content, updated_at) VALUES ($3,$1,'manual','stopped',$2,NOW())",
+      [tid, blocker, hcUserId]);
+  }
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: [sys] } = await dbModule2.query(
+    "SELECT diagnosis FROM health_check_findings WHERE run_id=$1 AND agent_name='__system__'", [runId]);
+  expect(sys).toBeTruthy();
+  expect(sys.diagnosis).toContain('2 張');   // 兩筆循環被算成同一群
 });

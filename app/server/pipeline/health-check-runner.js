@@ -7,6 +7,69 @@ const { buildAgentSummary } = require('./health-data');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 
+// 跨關卡彙整：per-agent 健檢天生看不到「不屬於任何單一 agent」的問題。實測 run#1，同一個
+// blocker（asset bundle 編不出來）出現在七個 agent 的摘要裡，每一則都正確判定「這屬環境層、
+// 非本 agent 的提示詞可左右」——七個判斷都對，合起來沒有人負責。
+// 統計單位刻意是「幾張**不同任務**卡在同一類原因」而不是「幾個 agent 提到它」：後者會被單一
+// 任務灌水（一張任務走過七個關卡，就會在七個 agent 的 blocker_samples 裡各出現一次，看起來
+// 像七個獨立證據，其實是同一件事）。
+const SYSTEM_AGENT = '__system__';
+const SYSTEM_MIN_TASKS = parseInt(process.env.HEALTH_SYSTEM_MIN_TASKS || '2', 10);
+const SYSTEM_MIN_RATIO = parseFloat(process.env.HEALTH_SYSTEM_MIN_RATIO || '0.3');
+
+// blocker_content 的分群鍵：平台的停下原因多半以 [方括號標籤] 開頭（[部署測試區 asset 檢查失敗]
+// 這種），直接當鍵最準。沒有標籤的取第一行前 40 字並把數字正規化成 N——「循環 2 次」與
+// 「循環 3 次」是同一類問題，不該分成兩群。
+function blockerKey(s) {
+  const t = String(s || '').trim();
+  const tagged = t.match(/^\[([^\]]{1,40})\]/);
+  if (tagged) return tagged[1];
+  return t.split('\n')[0].replace(/\d+/g, 'N').slice(0, 40) || '（無停下原因）';
+}
+
+// 落一筆跨關卡的系統層 finding（沒有達標的群就不落，不為報而報）。
+// 不給 suggested_prompt：這類問題改任何一支 agent 的 prompt 都沒用，硬給一份會把人導去改錯地方
+//（前端的「帶入編輯器」按鈕也只在有 suggested_prompt 時才出現，正好不會誤導）。
+async function aggregateSystemFinding(runId, windowDays) {
+  const cutoff = new Date(Date.now() - windowDays * 86400000).toISOString();
+  // 刻意不寫 `blocker_content IS NOT NULL`：pg-mem 對有索引欄位的 IS NOT NULL 加比較條件會靜默
+  // 回空集合（見 .claude/rules/testing.md 規則 15），在 JS 濾等價且不踩雷。
+  const { rows } = await query(
+    "SELECT id, blocker_content FROM tasks WHERE status='stopped' AND updated_at >= $1", [cutoff]
+  );
+  const stopped = rows.filter(r => r.blocker_content && String(r.blocker_content).trim());
+  if (stopped.length < SYSTEM_MIN_TASKS) return null;
+
+  const groups = new Map();
+  for (const r of stopped) {
+    const k = blockerKey(r.blocker_content);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  const [key, members] = [...groups.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+  const ratio = members.length / stopped.length;
+  if (members.length < SYSTEM_MIN_TASKS || ratio < SYSTEM_MIN_RATIO) return null;
+
+  const pct = Math.round(ratio * 100);
+  const sample = String(members[0].blocker_content).replace(/\s+/g, ' ').slice(0, 300);
+  const finding = {
+    severity: ratio >= 0.5 ? 'high' : 'medium',
+    diagnosis:
+      `近 ${windowDays} 天停下的 ${stopped.length} 張任務中，有 ${members.length} 張（${pct}%）卡在同一類原因：` +
+      `「${key}」。這類問題不屬於任何單一 agent 的提示詞——各關健檢會各自正確地判定「與本關無關」，` +
+      `於是沒有任何一則 finding 會指向它。範例：${sample}`,
+    rationale:
+      `統計單位是「幾張不同任務卡在同一類原因」而非「幾個 agent 提到它」：同一張任務會走過多個關卡，` +
+      `在每一關的 blocker 樣本裡各出現一次，用後者會把一件事誤算成多個獨立證據。`
+  };
+  await query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6)`,
+    [runId, SYSTEM_AGENT, '跨關卡彙整', finding.diagnosis, finding.severity, finding.rationale]
+  );
+  return finding;
+}
+
 // admin 一鍵健檢的背景執行（fire-and-forget）：對每個有 stage 的 pipeline agent（排除自己）
 // 聚合摘要 → 跑 opus 健檢 agent → 落一筆 finding。單一 agent 失敗不影響其他（best-effort）。
 async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {}) {
@@ -18,6 +81,12 @@ async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {})
     const ha = loadAgent('workflow-health');
     for (const agent of targets) {
       await checkOne(runId, agent, ha, windowDays, startedBy);
+    }
+    // 跨關卡彙整（零 token，純統計）。續跑時已落過就不重複；失敗不影響整輪收尾——
+    // 它是加值資訊，不該有能力讓已完成的 21 份 per-agent 診斷跟著作廢。
+    if (!doneSet.has(SYSTEM_AGENT)) {
+      try { await aggregateSystemFinding(runId, windowDays); }
+      catch (err) { console.error('[HEALTH-CHECK] system finding:', err.message); }
     }
     await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
   } catch (err) {
