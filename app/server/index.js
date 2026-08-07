@@ -6,6 +6,7 @@ const fs = require('fs');
 const { registerRoutes: registerAuthRoutes } = require('./auth');
 const { registerRoutes: registerSettingsRoutes } = require('./settings');
 const { registerRoutes: registerTasksRoutes } = require('./tasks-routes');
+const { registerRoutes: registerInboxRoutes } = require('./inbox-routes');
 const { registerRoutes: registerPipelineRoutes } = require('./pipeline-routes');
 const { registerRoutes: registerProjectRoutes } = require('./project-routes');
 const { registerRoutes: registerWikiRoutes } = require('./wiki-routes');
@@ -55,6 +56,7 @@ function createApp() {
   registerAuthRoutes(app);
   registerSettingsRoutes(app);
   registerTasksRoutes(app);
+  registerInboxRoutes(app);
   registerPipelineRoutes(app);
   registerProjectRoutes(app);
   registerWikiRoutes(app);

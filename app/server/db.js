@@ -117,6 +117,28 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 收件匣：「發生過什麼」的事件流，與導覽列「輪到你」badge（當前狀態快照）互補。
+    // 不複用 task_events／task_logs：前者存整段終端串流，一輪 coding 就數十到數百筆，全推進來
+    // 等於沒有收件匣；後者承載對話內容，粒度同樣不對。
+    // kind：'action'＝停在需人處理的閘門（要你動手）／'bounce'＝被退回重做（資訊性，看鬼打牆）
+    //
+    // ⚠ 這張表的兩個 FK 刻意帶 ON DELETE CASCADE，與本檔其他表不同。其他表靠呼叫端逐表手動
+    // DELETE（admin-routes 刪使用者、project-routes 刪專案、tasks-routes 刪單張任務三處各一份
+    // 清單，project-routes:494 的註解就是為了「DELETE FROM tasks 撞 FK」而寫的）。收件匣是純附屬
+    // 資料、沒有獨立生命週期（任務沒了那則「這張任務等你處理」也就沒有意義），走 CASCADE 才不必
+    // 在三份清單各補一行——漏補任何一處的症狀是「刪任務／刪專案／刪使用者直接失敗」。
+    `CREATE TABLE IF NOT EXISTS user_inbox (
+      id            SERIAL PRIMARY KEY,
+      user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      kind          TEXT NOT NULL,
+      status        TEXT,
+      summary       TEXT,
+      read_at       TIMESTAMPTZ,
+      snoozed_until TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     `CREATE TABLE IF NOT EXISTS loop_counter (
       id             SERIAL PRIMARY KEY,
       user_id        INTEGER NOT NULL REFERENCES users(id) UNIQUE,
@@ -717,6 +739,9 @@ async function migrate() {
 
   // 執行歷程：依 task_id 取全部事件、以 id 排序回放
   await query('CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events (task_id, id)').catch(() => {});
+
+  // 收件匣：查詢一律帶 user_id ＋未讀條件，再依時間新到舊排
+  await query('CREATE INDEX IF NOT EXISTS idx_inbox_user ON user_inbox (user_id, read_at, created_at DESC)').catch(() => {});
 
   // token_usage indexes
   await query('CREATE INDEX IF NOT EXISTS idx_tu_recorded_at ON token_usage (recorded_at DESC)').catch(() => {});

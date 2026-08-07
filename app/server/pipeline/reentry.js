@@ -12,6 +12,7 @@
  */
 const { query } = require('../db');
 const notify = require('../notify');
+const { addInboxEvent } = require('../lib/inbox');
 
 const MAX_REENTRY = parseInt(process.env.PIPELINE_MAX_REENTRY || '2', 10);
 
@@ -33,6 +34,14 @@ async function bumpReentryOrStop(taskId, userId, diag = {}) {
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return true;
   }
+  // 只有「還會繼續跑」的那幾次退回才寫 bounce。觸頂那次刻意不寫：上面轉 stopped 時 emitToUser
+  // 已觸發 _dispatchAction 落一筆 action，同一件事在收件匣出現兩次會讓「被退回幾次」的訊號失真。
+  // fire-and-forget：退回本身不該因為收件匣寫不進去而壞掉。
+  const why = (diag.blockerContent || '').trim();
+  addInboxEvent(userId, taskId, 'bounce', {
+    status: 'coding_running',
+    summary: why ? `第 ${n} 次退回：${why.slice(0, 120)}` : `第 ${n} 次退回重做`
+  }).catch(() => {});
   return false;
 }
 

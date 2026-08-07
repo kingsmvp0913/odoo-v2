@@ -1,5 +1,6 @@
 const { query } = require('./db');
 const { HUMAN_STATUSES } = require('../public/js/status-labels.js');
+const { addInboxEvent } = require('./lib/inbox');
 
 let _io = null;
 
@@ -41,6 +42,10 @@ async function _dispatchAction(userId, taskDbId, status) {
       if (rows[0]) { task_id = rows[0].task_id; title = rows[0].title; }
     }
   } catch { /* best-effort：查不到仍發送 */ }
+  // 收件匣＝「發生過什麼」的事件流，與導覽列 badge 的當前狀態快照互補（兩者刻意並存）。
+  // fire-and-forget：這裡走在 cron tick 的通知路徑上，寫入失敗不得擋住通知派送。
+  addInboxEvent(userId, taskDbId, 'action', { status, summary: title || task_id || null })
+    .catch(() => {});
   notifyAction(userId, { taskId: taskDbId, task_id, title, status });
 }
 

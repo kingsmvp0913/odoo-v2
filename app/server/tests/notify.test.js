@@ -57,6 +57,34 @@ test('emitToUser 對 clarify_pending 狀態補查 title 並派送 notify:action'
   expect(call[1]).toMatchObject({ status: 'clarify_pending', title: '測試任務', task_id: 'task_9' });
 });
 
+// 收件匣：即時通知會被錯過（人不在電腦前、分頁關了），收件匣是回來之後補看的那一份。
+// 兩者刻意並存——通知是「現在告訴你」，收件匣是「發生過什麼」。
+test('emitToUser 對 action 狀態同時寫一筆收件匣 action 事件', async () => {
+  const { query } = require('../db');
+  query.mockClear();
+  const { io } = fakeIo();
+  notify.setIo(io);
+
+  notify.emitToUser(3, 'task:updated', { taskId: 1, status: 'review_pending' });
+  await new Promise(r => setImmediate(r));
+
+  const insert = query.mock.calls.find(c => /INSERT INTO user_inbox/.test(c[0]));
+  expect(insert).toBeTruthy();
+  expect(insert[1]).toEqual([3, 1, 'action', 'review_pending', '測試任務']);
+});
+
+test('emitToUser 對非 action 狀態不寫收件匣（否則每次狀態變動都進收件匣＝沒有收件匣）', async () => {
+  const { query } = require('../db');
+  query.mockClear();
+  const { io } = fakeIo();
+  notify.setIo(io);
+
+  notify.emitToUser(3, 'task:updated', { taskId: 1, status: 'coding_running' });
+  await new Promise(r => setImmediate(r));
+
+  expect(query.mock.calls.find(c => /INSERT INTO user_inbox/.test(c[0]))).toBeFalsy();
+});
+
 test('emitToUser 對非 action 狀態不派送 notify:action', async () => {
   const { io, emit } = fakeIo();
   notify.setIo(io);

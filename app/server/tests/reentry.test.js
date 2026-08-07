@@ -52,6 +52,33 @@ test('達上限：回傳 true 並直接標 stopped（總循環兜底）', async 
   expect(t.blocker_content).toContain('循環');
 });
 
+// 收件匣的 bounce 事件：讓「這張任務在鬼打牆」在第二次退回就看得見，不必等撞熔斷才發現 token 燒完。
+// 寫入刻意是 fire-and-forget（退回本身不該因為收件匣寫不進去而壞掉），所以斷言前要等 microtask
+// 排空——直接查會在 INSERT resolve 之前就跑，變成不穩定的假紅。
+const flushWrites = () => new Promise((r) => setImmediate(r));
+
+test('未達上限：收件匣記一筆 bounce，摘要帶得出真因', async () => {
+  const id = await mkTask(0);
+  await bumpReentryOrStop(id, userId, { blockerContent: 'QA 判定不通過：欄位缺 required' });
+  await flushWrites();
+  const { rows } = await dbModule.query('SELECT kind, status, summary FROM user_inbox WHERE task_id=$1', [id]);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].kind).toBe('bounce');
+  expect(rows[0].summary).toContain('第 1 次退回');
+  expect(rows[0].summary).toContain('required');   // 帶得出在鬼打牆什麼，否則收件匣只是一排「又退回了」
+});
+
+// 觸頂那次刻意不記 bounce：轉 stopped 時 notify 會另外落一筆 action，同一件事在收件匣出現兩次
+// 會讓「被退回幾次」的訊號失真——而那個數字正是這個功能要凸顯的東西。
+test('達上限：不記 bounce（避免與轉 stopped 的 action 重複計數）', async () => {
+  const id = await mkTask(MAX_REENTRY - 1);
+  const stopped = await bumpReentryOrStop(id, userId);
+  await flushWrites();
+  expect(stopped).toBe(true);
+  const { rows } = await dbModule.query('SELECT kind FROM user_inbox WHERE task_id=$1', [id]);
+  expect(rows).toEqual([]);
+});
+
 // F10：觸頂停下時保留本次真診斷（ParseError／log 路徑／code 歸因），不再被通用「循環 N 次」訊息整包覆寫。
 test('達上限且帶 diag：保留真診斷與 blocker_type，不只留通用循環訊息', async () => {
   const id = await mkTask(MAX_REENTRY - 1);
