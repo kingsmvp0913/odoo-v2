@@ -298,7 +298,7 @@ window.AdminView = Vue.defineComponent({
             <div class="setting-block-desc">Claude 帳號用量達門檻時，自動停止 Pipeline 自動推進（手動「繼續」不受影響）。5 小時視窗或本週任一超標即暫停。全台共用同一帳號，此設定為全域。</div>
           </div>
           <div class="setting-block-body">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+            <label class="switch-label-row">
               <div style="position:relative;width:44px;height:24px;flex-shrink:0">
                 <input type="checkbox" v-model="usageGate.enabled" style="opacity:0;width:0;height:0;position:absolute" />
                 <div :style="{background: usageGate.enabled ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
@@ -378,7 +378,7 @@ window.AdminView = Vue.defineComponent({
             <div class="setting-block-desc">開啟後，排程停止自動推進 Pipeline，改為手動逐步執行，方便測試每個階段結果。</div>
           </div>
           <div class="setting-block-body">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+            <label class="switch-label-row">
               <div style="position:relative;width:44px;height:24px;flex-shrink:0">
                 <input type="checkbox" v-model="testMode" style="opacity:0;width:0;height:0;position:absolute" @change="saveTestMode" :disabled="savingTestMode" />
                 <div :style="{background: testMode ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
@@ -399,7 +399,7 @@ window.AdminView = Vue.defineComponent({
             <div class="setting-block-desc">開啟後，使用者在任務詳情頁新增的留言會以「記錄備註」寫回原單據（不發送給客戶、不建活動）。</div>
           </div>
           <div class="setting-block-body">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+            <label class="switch-label-row">
               <div style="position:relative;width:44px;height:24px;flex-shrink:0">
                 <input type="checkbox" v-model="writebackOdooNotes" style="opacity:0;width:0;height:0;position:absolute" @change="saveWriteback" :disabled="savingWriteback" />
                 <div :style="{background: writebackOdooNotes ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>

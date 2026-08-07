@@ -76,7 +76,7 @@ window.AdminAgentsView = Vue.defineComponent({
     </div>
     <div class="content">
       <div v-if="loading" class="loading">載入中...</div>
-      <div v-else style="display:grid;grid-template-columns:280px 1fr;gap:var(--space-4);align-items:start">
+      <div v-else class="aa-layout">
 
         <!-- 左：按角色分組列表 -->
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
@@ -88,7 +88,7 @@ window.AdminAgentsView = Vue.defineComponent({
               @click="select(a)"
               :style="{padding:'var(--space-2) var(--space-3)',cursor:'pointer',borderTop:'1px solid var(--border)',
                        background: selected && selected.name===a.name ? 'rgba(99,102,241,0.10)' : 'transparent'}">
-              <div style="font-size:var(--fs-base);display:flex;justify-content:space-between;align-items:center;gap:var(--space-2)">
+              <div class="aa-list-item-row">
                 <span style="font-family:monospace">{{ a.name }}</span>
                 <span v-if="a.model" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:4px;background:var(--border);color:var(--text-secondary)">{{ a.model }}</span>
               </div>
@@ -99,7 +99,7 @@ window.AdminAgentsView = Vue.defineComponent({
 
         <!-- 右：編輯 -->
         <div v-if="selected" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4)">
-          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-1)">
+          <div class="aa-detail-title-row">
             <h2 style="margin:0;font-size:16px">{{ selected.label }}</h2>
             <span style="font-family:monospace;font-size:var(--fs-sm);color:var(--text-muted)">{{ selected.name }}</span>
           </div>
@@ -107,7 +107,7 @@ window.AdminAgentsView = Vue.defineComponent({
 
           <template v-if="selected.model !== null">
             <label style="display:block;font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)">模型</label>
-            <select v-model="form.model" class="form-control" style="width:160px;height:32px;font-size:var(--fs-base);margin-bottom:var(--space-4)">
+            <select v-model="form.model" class="form-control aa-model-select">
               <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
             </select>
           </template>
@@ -116,7 +116,7 @@ window.AdminAgentsView = Vue.defineComponent({
           <textarea v-model="form.prompt" class="form-control"
             style="width:100%;min-height:420px;font-family:monospace;font-size:var(--fs-sm);line-height:1.5;resize:vertical"></textarea>
 
-          <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);align-items:center">
+          <div class="aa-save-row">
             <button class="btn btn-primary btn-sm" @click="save" :disabled="saving || !dirty">
               {{ saving ? '儲存中...' : '儲存' }}
             </button>

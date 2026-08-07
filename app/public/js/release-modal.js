@@ -38,7 +38,7 @@ window.ReleaseModal = {
   },
   template: `
     <div class="modal-overlay" @mousedown.self="$emit('close')" @keyup.esc="$emit('close')">
-      <div class="modal modal-elevated" role="dialog" aria-modal="true" style="width:600px">
+      <div class="modal modal-elevated release-modal-width" role="dialog" aria-modal="true">
         <div class="modal-title">合併到正式（main）</div>
         <div class="modal-body">
           <div v-if="loading" class="loading">載入中...</div>
@@ -52,7 +52,7 @@ window.ReleaseModal = {
               </div>
               <div style="max-height:280px;overflow-y:auto">
                 <div v-for="t in pending" :key="t.task_id"
-                  style="display:flex;gap:var(--space-2);align-items:baseline;padding:6px 0;border-bottom:1px solid var(--border)">
+                  class="release-task-row">
                   <span style="font-weight:var(--fw-semibold);flex-shrink:0">#{{ t.task_id }}</span>
                   <span style="flex:1;min-width:0">{{ t.title }}</span>
                   <span style="font-size:var(--fs-xs);color:var(--text-muted);flex-shrink:0">{{ t.status }}</span>

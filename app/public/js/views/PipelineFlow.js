@@ -788,8 +788,8 @@ window.PipelineFlowView = Vue.defineComponent({
     </div>
 
     <div class="page-body">
-      <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
-        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+      <div class="flow-toggle-bar">
+        <label class="switch-label-row">
           <div class="switch">
             <input type="checkbox" v-model="e2eEnabled" />
             <div class="switch-track"></div>
@@ -797,7 +797,7 @@ window.PipelineFlowView = Vue.defineComponent({
           </div>
           <span style="font-size:var(--fs-md);color:var(--text)">E2E 測試{{ e2eEnabled ? '啟用' : '停用' }}</span>
         </label>
-        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+        <label class="switch-label-row">
           <div class="switch">
             <input type="checkbox" v-model="specTour" />
             <div class="switch-track"></div>
@@ -806,7 +806,7 @@ window.PipelineFlowView = Vue.defineComponent({
           <span style="font-size:var(--fs-md);color:var(--text)">依規格先寫測試{{ specTour ? '（啟用）' : '（停用）' }}</span>
         </label>
         <label v-for="t in trackToggles" :key="t.id"
-               style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+               class="switch-label-row">
           <div class="switch">
             <input type="checkbox" v-model="$data[t.flag]" />
             <div class="switch-track"></div>
@@ -816,8 +816,8 @@ window.PipelineFlowView = Vue.defineComponent({
         </label>
       </div>
 
-      <div style="display:flex;gap:var(--space-4);align-items:flex-start;flex-wrap:wrap">
-        <div style="flex:1 1 620px;min-width:0;overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3)">
+      <div class="flow-main-row">
+        <div class="flow-diagram-panel">
           <svg :width="layout.w" :height="layout.h" :viewBox="'0 0 ' + layout.w + ' ' + layout.h"
                style="display:block;max-width:none">
             <defs>
@@ -897,7 +897,7 @@ window.PipelineFlowView = Vue.defineComponent({
             </g>
           </svg>
 
-          <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-top:var(--space-3);font-size:var(--fs-xs);color:var(--text-muted)">
+          <div class="flow-legend-bar">
             <span>—— 主線</span>
             <span>- - - 分支／條件</span>
             <span style="color:var(--danger)">- - - 回頭路（兩條主幹＝各關「退回開發」與「回分診」的匯流排）</span>
@@ -910,16 +910,16 @@ window.PipelineFlowView = Vue.defineComponent({
           </div>
         </div>
 
-        <div style="flex:0 1 340px;min-width:280px;position:sticky;top:var(--space-3)">
+        <div class="flow-side-panel">
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);min-height:220px">
             <template v-if="active">
               <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)">{{ active.label }}</h3>
               <div style="font-size:var(--fs-xs);color:var(--text-muted);font-family:var(--font-mono, monospace);margin-bottom:var(--space-2)">
                 {{ active.status || active.ref }}<template v-if="active.agent"> · agent: {{ active.agent }}</template>
               </div>
-              <dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px var(--space-2);font-size:var(--fs-sm)">
+              <dl class="flow-detail-grid">
                 <template v-for="(row, i) in active.detail.filter(Boolean)" :key="i">
-                  <dt style="color:var(--text-muted);white-space:nowrap">{{ row[0] }}</dt>
+                  <dt class="flow-detail-term">{{ row[0] }}</dt>
                   <dd style="margin:0;color:var(--text)">{{ row[1] }}</dd>
                 </template>
               </dl>

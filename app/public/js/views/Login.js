@@ -178,7 +178,7 @@ window.LoginView = Vue.defineComponent({
               <div class="form-group"><label>GitHub PAT</label><input v-model="git.pat" placeholder="ghp_xxxxxxxx" /></div>
               <button class="btn btn-primary" style="width:100%" :disabled="git.verifying" @click="verifyGit">{{ git.verifying ? '驗證中...' : '驗證並儲存' }}</button>
             </template>
-            <div style="display:flex;justify-content:space-between;margin-top:12px">
+            <div class="register-step-nav-row">
               <button class="btn btn-outline btn-sm" @click="goStep(1)">上一步</button>
               <button class="btn btn-primary btn-sm" v-if="git.done" @click="goStep(3)">下一步</button>
               <button class="btn btn-outline btn-sm" v-else @click="goStep(3)">略過，稍後設定</button>
@@ -193,7 +193,7 @@ window.LoginView = Vue.defineComponent({
             <div class="form-group"><label>Odoo 帳號</label><input v-model="creds.odoo_username" placeholder="你的 Odoo 登入帳號" /></div>
             <div class="form-group"><label>Odoo 密碼</label><input v-model="creds.odoo_password" type="password" placeholder="••••••" /></div>
             <button class="btn btn-primary" style="width:100%" :disabled="odoo.verifying" @click="verifyOdoo">{{ odoo.verifying ? '驗證中...' : '驗證並繼續' }}</button>
-            <div style="display:flex;justify-content:space-between;margin-top:12px">
+            <div class="register-step-nav-row">
               <button class="btn btn-outline btn-sm" @click="goStep(2)">上一步</button>
               <button class="btn btn-outline btn-sm" @click="goStep(4)">略過，稍後設定</button>
             </div>
@@ -207,7 +207,7 @@ window.LoginView = Vue.defineComponent({
             <div class="form-group"><label>eService 帳號</label><input v-model="creds.service_username" placeholder="你的 eService 登入帳號" /></div>
             <div class="form-group"><label>eService 密碼</label><input v-model="creds.service_password" type="password" placeholder="••••••" /></div>
             <button class="btn btn-primary" style="width:100%" :disabled="service.verifying" @click="verifyService">{{ service.verifying ? '驗證中...' : '驗證並繼續' }}</button>
-            <div style="display:flex;justify-content:space-between;margin-top:12px">
+            <div class="register-step-nav-row">
               <button class="btn btn-outline btn-sm" @click="goStep(3)">上一步</button>
               <button class="btn btn-outline btn-sm" @click="goStep(5)">略過，稍後設定</button>
             </div>
@@ -221,7 +221,7 @@ window.LoginView = Vue.defineComponent({
             <div v-if="!notify.supported" class="pill pill-warn" style="display:block;padding:8px 10px;margin-bottom:10px">此瀏覽器不支援桌面通知，可略過。</div>
             <div v-else-if="notify.done" class="pill pill-success" style="display:block;padding:8px 10px;margin-bottom:10px">✓ 桌面通知已開啟</div>
             <button v-else class="btn btn-primary" style="width:100%" @click="enableNotify">開啟桌面通知</button>
-            <div style="display:flex;justify-content:space-between;margin-top:12px">
+            <div class="register-step-nav-row">
               <button class="btn btn-outline btn-sm" @click="goStep(4)">上一步</button>
               <button class="btn btn-primary btn-sm" @click="goStep(6)">{{ notify.done ? '下一步' : '略過，完成' }}</button>
             </div>

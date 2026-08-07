@@ -33,7 +33,7 @@ window.AdminPromptLogsView = Vue.defineComponent({
     <div class="content">
       <div>
         <div class="settings-section">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3)">
+          <div class="apl-header-row">
             <h2 class="section-title" style="margin:0">最近送給 AI 的 prompt（最新 {{ limit }} 筆）</h2>
             <button class="btn btn-outline btn-sm" :disabled="loading" @click="load">
               {{ loading ? '載入中...' : '重新整理' }}
@@ -43,9 +43,9 @@ window.AdminPromptLogsView = Vue.defineComponent({
             <table class="data-table">
               <thead>
                 <tr>
-                  <th style="width:150px">時間</th>
-                  <th style="width:110px">Agent</th>
-                  <th style="width:110px">Model</th>
+                  <th class="apl-col-time">時間</th>
+                  <th class="apl-col-narrow">Agent</th>
+                  <th class="apl-col-narrow">Model</th>
                   <th style="width:90px">任務 ID</th>
                   <th style="width:70px">字數</th>
                   <th>Prompt 內容</th>
@@ -62,12 +62,12 @@ window.AdminPromptLogsView = Vue.defineComponent({
                   <td style="font-size:var(--fs-sm);text-align:right">{{ r.char_len }}</td>
                   <td style="font-size:var(--fs-sm)">
                     <pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-family:var(--font-mono, monospace)">{{ expanded[r.id] ? r.prompt : truncate(r.prompt) }}</pre>
-                    <div style="margin-top:4px;display:flex;gap:var(--space-3)">
+                    <div class="apl-prompt-actions">
                       <a v-if="(r.prompt || '').length > 200" @click="toggleExpand(r.id)"
-                        style="cursor:pointer;color:var(--sidebar-accent);white-space:nowrap">
+                        class="apl-action-link">
                         {{ expanded[r.id] ? '收合' : '展開全文' }}
                       </a>
-                      <a @click="copy(r.prompt)" style="cursor:pointer;color:var(--sidebar-accent);white-space:nowrap">複製</a>
+                      <a @click="copy(r.prompt)" class="apl-action-link">複製</a>
                     </div>
                   </td>
                 </tr>

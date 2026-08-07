@@ -142,7 +142,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
         <p style="color:var(--text-muted);font-size:var(--fs-sm);margin:0 0 var(--space-3)">
           一個專案共用一組 VPN：下方勾選「需要 VPN」的連線會共用同一條隧道，只撥號一次。
         </p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
+        <div class="pdq-vpn-grid">
           <div class="form-group" style="grid-column:1/-1;margin:0">
             <label>VPN 設定檔（.ovpn）{{ vpnForm.vpn_config_name ? '－已選擇：' + vpnForm.vpn_config_name : (vpn.has_config ? '（留空＝不變）' : '') }}</label>
             <input type="file" accept=".ovpn,.conf" class="form-control" @change="onVpnFileChange" />
@@ -168,7 +168,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
                 <td>{{ c.connect_mode === 'direct' ? (c.db_user + '@' + c.db_host + ':' + c.db_port) : (c.ssh_user + '@' + c.ssh_host + ':' + c.ssh_port) }}</td>
                 <td>{{ c.connect_mode }}</td>
                 <td>{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
-                <td><div style="display:flex;gap:6px">
+                <td><div class="pdq-row-actions">
                   <button class="btn btn-outline btn-sm" @click="editConn(c)">編輯</button>
                   <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteConn(c)">刪除</button>
                 </div></td>
@@ -181,7 +181,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
 
       <div class="settings-section" data-tour="db-form" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">{{ form.id ? '編輯連線' : '新增連線' }}</h2>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
+        <div class="pdq-form-grid">
           <div class="form-group" style="margin:0"><label>連線名稱</label><input v-model="form.name" class="form-control" placeholder="hj-鴻久-正式" /></div>
           <div class="form-group" style="margin:0"><label>連線模式</label><select v-model="form.connect_mode" class="form-control"><option value="docker">docker（SSH→容器）</option><option value="local">local（SSH→本機）</option><option value="direct">direct（直連 TCP）</option></select></div>
           <template v-if="form.connect_mode!=='direct'">
@@ -201,15 +201,15 @@ window.ProjectDbQueryView = Vue.defineComponent({
             <div class="form-group" style="margin:0"><label>DB 埠</label><input v-model.number="form.db_port" class="form-control" :placeholder="form.db_engine==='mssql'?'1433':form.db_engine==='mysql'?'3306':'5432'" /></div>
             <div class="form-group" style="margin:0"><label>DB 使用者</label><input v-model="form.db_user" class="form-control" placeholder="reader" /></div>
             <div class="form-group" style="margin:0"><label>DB 密碼（留空＝不變）</label><input v-model="form.db_password" type="password" class="form-control" placeholder="••••••" /></div>
-            <div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px"><label style="margin:0">SSL</label><input v-model="form.db_ssl" type="checkbox" style="width:auto" /></div>
+            <div class="form-group pdq-ssl-field"><label style="margin:0">SSL</label><input v-model="form.db_ssl" type="checkbox" style="width:auto" /></div>
           </template>
           <div class="form-group" style="margin:0"><label>資料庫名稱</label><input v-model="form.db_name" class="form-control" /></div>
         </div>
-        <div style="margin-bottom:var(--space-3);display:flex;align-items:center;gap:var(--space-2)">
+        <div class="pdq-vpn-checkbox-row">
           <input v-model="form.vpn_enabled" type="checkbox" id="vpnEnabled" style="width:auto" />
           <label for="vpnEnabled" style="margin:0">此連線需要 VPN（使用上方的專案 VPN 設定）</label>
         </div>
-        <div style="display:flex;gap:8px">
+        <div class="pdq-form-actions">
           <button class="btn btn-primary btn-sm" @click="saveConn" :disabled="saving">{{ saving ? '儲存中...' : (form.id ? '更新連線' : '+ 新增連線') }}</button>
           <button class="btn btn-outline btn-sm" @click="testConn" :disabled="testing">{{ testing ? '測試中...' : '測試連線' }}</button>
           <button v-if="form.id" class="btn btn-outline btn-sm" @click="resetForm">取消編輯</button>
@@ -218,8 +218,8 @@ window.ProjectDbQueryView = Vue.defineComponent({
 
       <div class="settings-section" data-tour="db-query">
         <h2 class="section-title">查詢（只允許 SELECT）</h2>
-        <div style="display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2)">
-          <select v-model="selectedId" class="form-control" style="max-width:280px">
+        <div class="pdq-query-bar">
+          <select v-model="selectedId" class="form-control pdq-conn-select">
             <option value="">選擇連線...</option>
             <option v-for="c in conns" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>

@@ -71,7 +71,7 @@ window.AdminUsersView = Vue.defineComponent({
       <h1>使用者管理</h1>
     </div>
     <div class="content">
-      <div v-if="loading" style="max-width:900px">
+      <div v-if="loading" class="admin-users-list">
         <div class="settings-section">
           <h2 class="section-title">使用者列表</h2>
           <div class="table-wrap">
@@ -90,11 +90,11 @@ window.AdminUsersView = Vue.defineComponent({
           </div>
         </div>
       </div>
-      <div v-else style="max-width:900px">
+      <div v-else class="admin-users-list">
 
         <!-- 搜尋 -->
         <div style="margin-bottom:var(--space-4)">
-          <input v-model="search" placeholder="搜尋帳號或顯示名稱..." class="form-control" style="max-width:320px" />
+          <input v-model="search" placeholder="搜尋帳號或顯示名稱..." class="form-control admin-users-search-input" />
         </div>
 
         <!-- 使用者列表 -->
@@ -125,7 +125,7 @@ window.AdminUsersView = Vue.defineComponent({
                     {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
                   </td>
                   <td>
-                    <div style="display:flex;gap:6px">
+                    <div class="admin-users-row-actions">
                       <button v-if="u.approved === false" class="btn btn-primary btn-sm" @click="approve(u)">核准</button>
                       <button class="btn btn-outline btn-sm" @click="toggleRole(u)">
                         {{ u.role === 'admin' ? '降為一般' : '升為管理員' }}
@@ -145,7 +145,7 @@ window.AdminUsersView = Vue.defineComponent({
         <!-- 新增使用者 -->
         <div class="settings-section">
           <h2 class="section-title">新增使用者</h2>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <div class="admin-users-form-grid">
             <div class="form-group" style="margin:0">
               <label>帳號</label>
               <input v-model="newUser.username" placeholder="username" class="form-control" />

@@ -61,7 +61,7 @@ window.AdminRejectionsView = Vue.defineComponent({
     <div class="content">
       <div>
         <div class="settings-section">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3)">
+          <div class="arj-header-row">
             <h2 class="section-title" style="margin:0">退回紀錄（共 {{ total }}）</h2>
             <button class="btn btn-outline btn-sm" style="color:var(--error)"
               :disabled="selectedIds.length === 0 || deleting" @click="deleteSelected">
@@ -73,7 +73,7 @@ window.AdminRejectionsView = Vue.defineComponent({
               <thead>
                 <tr>
                   <th style="width:32px"><input type="checkbox" :checked="allChecked" @change="toggleAll" /></th>
-                  <th style="width:150px">時間</th>
+                  <th class="arj-col-time">時間</th>
                   <th>專案</th>
                   <th>任務 ID</th>
                   <th>原因</th>
@@ -94,7 +94,7 @@ window.AdminRejectionsView = Vue.defineComponent({
                   <td style="font-size:var(--fs-sm)">
                     <span style="white-space:pre-wrap;word-break:break-word">{{ expanded[r.id] ? r.reason : truncate(r.reason) }}</span>
                     <a v-if="(r.reason || '').length > 120" @click="toggleExpand(r.id)"
-                      style="cursor:pointer;color:var(--sidebar-accent);margin-left:6px;white-space:nowrap">
+                      class="arj-reason-toggle">
                       {{ expanded[r.id] ? '收合' : '展開' }}
                     </a>
                   </td>
@@ -104,7 +104,7 @@ window.AdminRejectionsView = Vue.defineComponent({
                   <td style="font-size:var(--fs-sm)">
                     <span v-if="!(r.items && r.items.length)" style="color:var(--text-muted)">—</span>
                     <div v-for="(it, i) in r.items" :key="i"
-                      style="display:flex;gap:var(--space-2);align-items:baseline;padding:2px 0">
+                      class="arj-item-row">
                       <span class="pill pill-info" style="flex-shrink:0">{{ it.category }}</span>
                       <span style="white-space:pre-wrap;word-break:break-word">{{ it.description }}</span>
                     </div>
@@ -113,7 +113,7 @@ window.AdminRejectionsView = Vue.defineComponent({
               </tbody>
             </table>
           </div>
-          <div v-if="total > limit" style="display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-3)">
+          <div v-if="total > limit" class="arj-pagination-row">
             <button class="btn btn-outline btn-sm" :disabled="offset === 0" @click="prev">← 上一頁</button>
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">{{ offset + 1 }}–{{ Math.min(offset + limit, total) }} / {{ total }}</span>
             <button class="btn btn-outline btn-sm" :disabled="offset + limit >= total" @click="next">下一頁 →</button>

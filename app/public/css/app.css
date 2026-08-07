@@ -846,6 +846,217 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .field-inline-actions { display:flex;gap:var(--space-2); }
 
 
+
+/* ══ 從 inline style 遷出的版面 class（規格 RWD-C-SPEC.md §2.2，Block 3 第二批）══════
+   規則同上一批：與原 inline style 逐字相同，位置排在所有既有規則之後（.form-control／.modal／
+   .content／.form-group 都有元素靠 inline 壓過它們，改成 class 後只剩宣告順序能決定勝負）。 */
+
+/* ── PipelineFlow.js ── */
+
+/* 開關列（E2E／依規格先寫測試／泳道顯示切換）的外層容器 */
+.flow-toggle-bar { display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4) }
+
+/* 流程圖主體：左邊 SVG 面板＋右側詳情面板 並排的外層容器 */
+.flow-main-row { display:flex;gap:var(--space-4);align-items:flex-start;flex-wrap:wrap }
+
+/* 左側：SVG 流程圖所在的卡片面板 */
+.flow-diagram-panel { flex:1 1 620px;min-width:0;overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3) }
+
+/* SVG 下方的圖例列（主線／分支／回頭路…色塊說明） */
+.flow-legend-bar { display:flex;gap:var(--space-3);flex-wrap:wrap;margin-top:var(--space-3);font-size:var(--fs-xs);color:var(--text-muted) }
+
+/* 右側：hover 節點後顯示詳情的側邊面板容器（sticky） */
+.flow-side-panel { flex:0 1 340px;min-width:280px;position:sticky;top:var(--space-3) }
+
+/* 節點詳情的 dt/dd 兩欄 grid */
+.flow-detail-grid { margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px var(--space-2);font-size:var(--fs-sm) }
+
+/* 節點詳情 grid 的 dt（欄位名稱），避免長名稱換行 */
+.flow-detail-term { color:var(--text-muted);white-space:nowrap }
+
+/* ── SearchableSelect.js ── */
+
+/* 下拉觸發按鈕本身的版面與配色，疊加在既有 .form-control 之上 */
+/* 這條必須是 .form-control.ss-trigger-btn 兩個 class 疊寫，不能只寫 .ss-trigger-btn：
+   本檔 110 行的 `[data-theme="dark"] .form-control` 是 (0,2,0)，會贏過單一 class 的 (0,1,0)，
+   深色模式下這顆下拉會被改成白底黑字。原本靠 inline 優先權壓得過，抽成 class 就壓不過了
+   ——實測就是這樣紅的（task-list 深色 4855px，淺色全綠，只有深色破功）。 */
+.form-control.ss-trigger-btn { height:32px;font-size:var(--fs-base);padding:5px 10px;min-width:140px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--surface);color:var(--text);border:1px solid var(--border);cursor:pointer }
+
+/* ── ProjectDbQuery.js ── */
+/* VPN 設定卡：欄位兩欄格線 */
+.pdq-vpn-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3) }
+
+/* 連線清單：編輯／刪除按鈕列 */
+.pdq-row-actions { display:flex;gap:6px }
+
+/* 新增／編輯連線表單：欄位兩欄格線 */
+.pdq-form-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3) }
+
+/* 新增／編輯連線表單：SSL 勾選欄位（原 .form-group 內 inline flex） */
+.pdq-ssl-field { margin:0;display:flex;align-items:center;gap:8px }
+
+/* 新增／編輯連線表單：「此連線需要 VPN」勾選列 */
+.pdq-vpn-checkbox-row { margin-bottom:var(--space-3);display:flex;align-items:center;gap:var(--space-2) }
+
+/* 新增／編輯連線表單：儲存／測試／取消按鈕列 */
+.pdq-form-actions { display:flex;gap:8px }
+
+/* 查詢區：連線下拉＋執行按鈕列 */
+.pdq-query-bar { display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2) }
+
+/* 查詢區：連線下拉選單固定最大寬 */
+.pdq-conn-select { max-width:280px }
+
+/* ── AdminPortPool.js ── */
+/* 槽位狀態：單列（含 code / state / idle 文字） */
+.port-pool-slot-row { display:flex;align-items:center;gap:var(--space-4);padding:var(--space-2) 0;border-bottom:1px solid var(--border) }
+
+/* 槽位狀態：主機名／埠號欄固定最小寬 */
+.port-pool-slot-code { min-width:220px;color:var(--text);font-size:var(--fs-sm) }
+
+/* 槽位狀態：使用狀態欄固定最小寬 */
+.port-pool-slot-state { min-width:120px;font-size:var(--fs-sm);color:var(--text) }
+
+/* ── AdminPipelines.js ── */
+/* 進行中 Pipeline 頁：內容區固定最大寬（loading 骨架與正式清單共用） */
+.admin-pipelines-wrap { max-width:1000px }
+
+/* ── AdminPromptLogs.js ── */
+/* 表頭列：標題與重新整理按鈕左右對齊 */
+.apl-header-row { display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3) }
+/* 時間欄固定寬 */
+.apl-col-time { width:150px }
+/* Agent／Model 欄固定寬（同寬共用） */
+.apl-col-narrow { width:110px }
+/* Prompt 展開/複製操作列 */
+.apl-prompt-actions { margin-top:4px;display:flex;gap:var(--space-3) }
+/* 展開全文／複製 連結（同樣式共用） */
+.apl-action-link { cursor:pointer;color:var(--sidebar-accent);white-space:nowrap }
+
+/* ── AdminRejections.js ── */
+/* 表頭列：標題與刪除按鈕左右對齊 */
+.arj-header-row { display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3) }
+/* 時間欄固定寬 */
+.arj-col-time { width:150px }
+/* 原因展開/收合 連結 */
+.arj-reason-toggle { cursor:pointer;color:var(--sidebar-accent);margin-left:6px;white-space:nowrap }
+/* 分類明細單筆項目列 */
+.arj-item-row { display:flex;gap:var(--space-2);align-items:baseline;padding:2px 0 }
+/* 分頁列 */
+.arj-pagination-row { display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-3) }
+
+/* ── js/views/ProjectList.js ── */
+/* 新增專案表單：兩欄 grid */
+.proj-form-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3) }
+/* 新增專案表單：送出/取消按鈕列 */
+.proj-form-actions { display:flex;gap:var(--space-2) }
+/* 搜尋框寬度上限 */
+.proj-search-input { max-width:320px }
+/* 專案卡 skeleton 載入態：標籤列 */
+.proj-skeleton-row { margin-top:10px;display:flex;gap:6px }
+/* 專案卡：操作按鈕列（Chat／測試區／上正式…） */
+.proj-card-actions { margin-top:10px;display:flex;gap:6px;flex-wrap:wrap }
+/* 專案卡：右側愛心／刪除圖示列 */
+.proj-card-icons { display:flex;gap:var(--space-1);flex-shrink:0;align-self:flex-start }
+
+/* ── js/views/AdminClassifySamples.js ── */
+/* 頁面內容寬度上限 */
+.classify-wrap { max-width:1000px }
+/* 頂部工具列：說明文字 + 天數選擇器 */
+.classify-toolbar { display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3) }
+/* 表格欄寬 140px（判定分佈表：haiku 是否判出） */
+.classify-col-140 { width:140px }
+/* 表格欄寬 150px（高頻真因表「最近一次」／近期樣本表「時間」，逐字相同故共用） */
+.classify-col-150 { width:150px }
+/* 表格欄寬 110px（近期樣本表：任務） */
+.classify-col-110 { width:110px }
+
+/* ── js/release-modal.js ── */
+/* 彈窗寬度覆寫（需排在 .modal 之後才能贏過其 width:440px） */
+.release-modal-width { width:600px }
+/* 待上正式任務列表：單列 */
+.release-task-row { display:flex;gap:var(--space-2);align-items:baseline;padding:6px 0;border-bottom:1px solid var(--border) }
+
+/* ── WikiView.js ── */
+/* wiki-node: 節點列（flex 排版列） */
+.wiki-node-row { display:flex;align-items:center;gap:var(--space-1);padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-base) }
+/* wiki-node: 標題文字（單行截斷） */
+.wiki-node-title { flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+/* WikiView: 建立進度列（訊息＋百分比） */
+.wiki-progress-row { display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:var(--space-1) }
+/* WikiView: 主體（樹狀＋內容左右並排） */
+.wiki-body { display:flex;height:calc(100% - 56px);overflow:hidden }
+/* WikiView: 左側樹狀清單面板 */
+.wiki-tree-panel { width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:var(--space-2);flex-shrink:0 }
+/* WikiView: 內容區標題列（標題＋操作按鈕） */
+.wiki-content-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4) }
+
+/* ── AdminAgents.js ── */
+/* AdminAgents: 左右兩欄版面（清單＋編輯區） */
+.aa-layout { display:grid;grid-template-columns:280px 1fr;gap:var(--space-4);align-items:start }
+/* AdminAgents: 清單項目內一行（名稱＋model 標籤） */
+.aa-list-item-row { font-size:var(--fs-base);display:flex;justify-content:space-between;align-items:center;gap:var(--space-2) }
+/* AdminAgents: 右側詳情標題列 */
+.aa-detail-title-row { display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-1) }
+/* AdminAgents: 模型下拉選單尺寸（與 .form-control 併用，見下方 specificity 風險） */
+.aa-model-select { width:160px;height:32px;font-size:var(--fs-base);margin-bottom:var(--space-4) }
+/* AdminAgents: 儲存按鈕列 */
+.aa-save-row { margin-top:var(--space-3);display:flex;gap:var(--space-2);align-items:center }
+
+/* ── AdminHealthCheck.js ── */
+/* AdminHealthCheck: 頁面內容最大寬度 */
+.hc-page { max-width:1000px }
+/* AdminHealthCheck: 視窗天數設定列（與 .settings-section 併用） */
+.hc-window-row { display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-5) }
+/* AdminHealthCheck: 診斷卡片標題列 */
+.hc-finding-title-row { display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px }
+
+/* ── AdminUsers.js ── */
+
+/* 使用者列表容器（loading／載入完成兩處共用同一寬度限制） */
+.admin-users-list { max-width:900px }
+
+/* 搜尋框寬度限制 */
+.admin-users-search-input { max-width:320px }
+
+/* 每列使用者操作按鈕群 */
+.admin-users-row-actions { display:flex;gap:6px }
+
+/* 新增使用者表單雙欄 grid */
+.admin-users-form-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3) }
+
+/* ── AdminEnterprise.js ── */
+
+/* 「已登記版本」區塊標題列（標題＋重新整理按鈕左右對齊） */
+.ae-registered-head-row { display:flex;align-items:center;justify-content:space-between }
+
+/* 單一企業版來源列 */
+.ae-source-row { display:flex;align-items:center;gap:var(--space-4);padding:var(--space-3) 0;border-bottom:1px solid var(--border);flex-wrap:wrap }
+
+/* 來源列的狀態文字 */
+.ae-source-status { min-width:110px;font-size:var(--fs-sm);color:var(--text) }
+
+/* 來源列的 repo URL／同步時間資訊區 */
+.ae-source-repo-info { flex:1;min-width:220px;font-size:var(--fs-sm);color:var(--text-muted);word-break:break-all }
+
+/* ── Login.js ── */
+
+/* 註冊精靈各步驟底部「上一步／下一步」按鈕列（4 處逐字相同，共用一個 class） */
+.register-step-nav-row { display:flex;justify-content:space-between;margin-top:12px }
+
+/* ── Terminal.js ── */
+
+/* 主內容區：取消預設 padding，改直向 flex 排版供終端機全高顯示 */
+.terminal-content { padding:0;display:flex;flex-direction:column;overflow:hidden }
+
+/* 狀態列＋終端機容器的外層直向 flex */
+.terminal-body { flex:1;display:flex;flex-direction:column;min-height:0 }
+
+/* 頂部狀態列（執行中／成功／失敗文字列） */
+.terminal-status-bar { padding:var(--space-2) var(--space-4);background:var(--sidebar-bg);font-size:var(--fs-sm);color:var(--text-muted);display:flex;gap:var(--space-4);flex:none }
+
+
 /* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
    桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
    桌機路徑因此恆等於改造前，這是「不影響網站使用」的第一層保證。

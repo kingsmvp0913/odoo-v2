@@ -108,7 +108,7 @@ window.AdminEnterpriseView = Vue.defineComponent({
 
         <div class="setting-block">
           <div class="setting-block-head">
-            <div style="display:flex;align-items:center;justify-content:space-between">
+            <div class="ae-registered-head-row">
               <div class="setting-block-title">已登記版本</div>
               <button class="btn btn-outline btn-sm" :disabled="loading" @click="load">
                 {{ loading ? '載入中...' : '重新整理' }}
@@ -119,10 +119,10 @@ window.AdminEnterpriseView = Vue.defineComponent({
           <div class="setting-block-body">
             <div v-if="!sources.length" class="field-label-hint">尚未登記任何版本。</div>
             <div v-for="s in sources" :key="s.odoo_version"
-                 style="display:flex;align-items:center;gap:var(--space-4);padding:var(--space-3) 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+                 class="ae-source-row">
               <code style="min-width:48px;color:var(--text)">{{ s.odoo_version }}</code>
-              <span style="min-width:110px;font-size:var(--fs-sm);color:var(--text)">{{ statusLabel(s.clone_status) }}</span>
-              <span style="flex:1;min-width:220px;font-size:var(--fs-sm);color:var(--text-muted);word-break:break-all">
+              <span class="ae-source-status">{{ statusLabel(s.clone_status) }}</span>
+              <span class="ae-source-repo-info">
                 {{ s.repo_url }}<template v-if="s.branch"> （{{ s.branch }}）</template><br />
                 {{ syncedText(s) }}
               </span>

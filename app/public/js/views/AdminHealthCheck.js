@@ -54,8 +54,8 @@ window.AdminHealthCheckView = Vue.defineComponent({
       <h1>工作流程健檢</h1>
     </div>
     <div class="content">
-      <div style="max-width:1000px">
-        <div class="settings-section" style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-5)">
+      <div class="hc-page">
+        <div class="settings-section hc-window-row">
           <label style="font-size:var(--fs-base)">近
             <input type="number" v-model.number="windowDays" min="1" style="width:64px" class="form-control" /> 天
           </label>
@@ -69,7 +69,7 @@ window.AdminHealthCheckView = Vue.defineComponent({
 
         <div v-for="f in findings" :key="f.id"
           style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
-          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px">
+          <div class="hc-finding-title-row">
             <span style="font-family:monospace;font-weight:var(--fw-semibold)">{{ f.agent_label || f.agent_name }}</span>
             <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
               {{ sev(f.severity).label }}

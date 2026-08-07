@@ -30,8 +30,7 @@ window.SearchableSelect = Vue.defineComponent({
   },
   template: `
     <div class="ss-wrap" style="position:relative;display:inline-block" v-click-outside-ss="close">
-      <button type="button" class="form-control ss-trigger"
-        style="height:32px;font-size:var(--fs-base);padding:5px 10px;min-width:140px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--surface);color:var(--text);border:1px solid var(--border);cursor:pointer"
+      <button type="button" class="form-control ss-trigger ss-trigger-btn"
         @click="toggle">
         <span :style="{ color: selectedLabel ? 'var(--text)' : 'var(--text-muted)' }">{{ selectedLabel || placeholder }}</span>
         <span style="color:var(--text-muted);font-size:10px">▼</span>

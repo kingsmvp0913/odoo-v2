@@ -58,7 +58,7 @@ window.AdminPipelinesView = Vue.defineComponent({
       <h1>進行中 Pipeline</h1>
     </div>
     <div class="content">
-      <div v-if="loading" style="max-width:1000px">
+      <div v-if="loading" class="admin-pipelines-wrap">
         <div class="settings-section">
           <h2 class="section-title">真正執行中的任務</h2>
           <div class="table-wrap">
@@ -78,7 +78,7 @@ window.AdminPipelinesView = Vue.defineComponent({
           </div>
         </div>
       </div>
-      <div v-else style="max-width:1000px">
+      <div v-else class="admin-pipelines-wrap">
         <div class="settings-section">
           <h2 class="section-title">真正執行中的任務（{{ rows.length }}）</h2>
           <div class="table-wrap">

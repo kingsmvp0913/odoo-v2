@@ -119,7 +119,7 @@ window.ProjectListView = Vue.defineComponent({
     <div class="content">
       <div v-if="showAddForm" class="settings-section" data-tour="proj-form" style="margin-bottom:var(--space-5)">
         <h2 class="section-title">新增專案</h2>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3)">
+        <div class="proj-form-grid">
           <div class="form-group" style="margin:0">
             <label>專案名稱</label>
             <input v-model="newProject.name" placeholder="例：my-odoo" class="form-control" />
@@ -144,14 +144,14 @@ window.ProjectListView = Vue.defineComponent({
             <input v-model="newProject.description" placeholder="專案描述..." class="form-control" />
           </div>
         </div>
-        <div style="display:flex;gap:var(--space-2)">
+        <div class="proj-form-actions">
           <button class="btn btn-primary btn-sm" @click="add" :disabled="saving">{{ saving ? '建立中...' : '建立專案' }}</button>
           <button class="btn btn-outline btn-sm" @click="showAddForm = false">取消</button>
         </div>
       </div>
 
       <div style="margin-bottom:var(--space-4)">
-        <input v-model="search" placeholder="搜尋專案名稱或版本..." class="form-control" style="max-width:320px" />
+        <input v-model="search" placeholder="搜尋專案名稱或版本..." class="form-control proj-search-input" />
       </div>
 
       <div v-if="loading">
@@ -159,7 +159,7 @@ window.ProjectListView = Vue.defineComponent({
           <div style="flex:1;min-width:0">
             <Skeleton width="180px" height="16px" />
             <div style="margin-top:8px"><Skeleton width="240px" height="13px" /></div>
-            <div style="margin-top:10px;display:flex;gap:6px">
+            <div class="proj-skeleton-row">
               <Skeleton width="72px" height="26px" radius="6px" />
               <Skeleton width="72px" height="26px" radius="6px" />
             </div>
@@ -176,7 +176,7 @@ window.ProjectListView = Vue.defineComponent({
             <div v-if="p.folder_name" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">資料夾：{{ p.folder_name }}</div>
             <div style="font-size:var(--fs-base);color:var(--text-muted);margin-top:4px">Odoo {{ p.odoo_version }} · {{ p.repo_count }} 個 repo</div>
             <div v-if="p.description" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">{{ p.description }}</div>
-            <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" @click.stop>
+            <div class="proj-card-actions" @click.stop>
               <button class="btn btn-outline btn-sm" @click="goChat(p.id)">💬 Chat
                 <span v-if="unread(p.id)" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unread(p.id) }}</span>
               </button>
@@ -188,7 +188,7 @@ window.ProjectListView = Vue.defineComponent({
               <button v-if="!p.has_wiki" class="btn btn-outline btn-sm" @click="initWiki(p.id)">🔄 初始化 Wiki</button>
             </div>
           </div>
-          <div style="display:flex;gap:var(--space-1);flex-shrink:0;align-self:flex-start" @click.stop>
+          <div class="proj-card-icons" @click.stop>
             <button v-if="p.id !== 'demo'" class="btn btn-ghost btn-sm"
               :style="{ fontSize: 'var(--fs-lg)', lineHeight: 1, color: p.is_favorite ? 'var(--danger)' : 'var(--text-muted)' }"
               :title="p.is_favorite ? '取消我的最愛' : '加入我的最愛'"

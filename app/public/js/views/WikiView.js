@@ -5,11 +5,11 @@ window.WikiNode = Vue.defineComponent({
   template: `
     <div>
       <div :data-tour="'wiki-node-' + node.node_type"
-        style="display:flex;align-items:center;gap:var(--space-1);padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-base)"
+        class="wiki-node-row"
         :style="{ background: currentSlug === node.slug ? 'var(--border)' : 'transparent', paddingLeft: (8 + depth*14) + 'px' }"
         @click="$emit('open', node.slug)">
         <span style="opacity:.6">{{ node.node_type === 'module' ? '📁' : node.node_type === 'overview' ? '🏠' : node.node_type === 'notes' ? '📝' : node.node_type === 'troubleshooting' ? '🔧' : '📄' }}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ node.title }}</span>
+        <span class="wiki-node-title">{{ node.title }}</span>
         <template v-if="node.node_type !== 'notes'">
           <button v-if="node.node_type !== 'troubleshooting'" class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs)"
             :disabled="refreshing === node.slug"
@@ -224,15 +224,15 @@ window.WikiView = Vue.defineComponent({
       </div>
     </div>
     <div v-if="building" style="padding:var(--space-2) var(--space-4);background:var(--surface);border-bottom:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:var(--space-1)">
+      <div class="wiki-progress-row">
         <span>{{ progress.message || '建立中…' }}</span><span>{{ progress.percent }}%</span>
       </div>
       <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
         <div :style="{ width: progress.percent + '%', height: '100%', background: 'var(--primary)', transition: 'width .3s' }"></div>
       </div>
     </div>
-    <div style="display:flex;height:calc(100% - 56px);overflow:hidden">
-      <div data-tour="wiki-tree" style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:var(--space-2);flex-shrink:0">
+    <div class="wiki-body">
+      <div data-tour="wiki-tree" class="wiki-tree-panel">
         <div v-if="loading" style="color:var(--text-muted);font-size:var(--fs-base);padding:var(--space-2)">載入中...</div>
         <template v-else>
           <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
@@ -245,7 +245,7 @@ window.WikiView = Vue.defineComponent({
       <div data-tour="wiki-content" style="flex:1;overflow-y:auto;padding:var(--space-6)">
         <div v-if="!current" style="color:var(--text-muted)">選擇或新增頁面</div>
         <template v-else>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4)">
+          <div class="wiki-content-header">
             <h2 style="margin:0">{{ current.title }}</h2>
             <div v-if="current.node_type !== 'notes'">
               <button v-if="!editing" class="btn btn-outline btn-sm" @click="editing=true;editContent=current.content">編輯</button>

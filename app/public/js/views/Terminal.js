@@ -78,10 +78,10 @@ window.TerminalView = Vue.defineComponent({
       <h1>執行歷程 <span style="font-weight:var(--fw-normal);font-size:var(--fs-md)">{{ taskTitle }}</span></h1>
       <button class="btn btn-outline btn-sm" @click="goBack">← 返回</button>
     </div>
-    <div class="content" style="padding:0;display:flex;flex-direction:column;overflow:hidden">
+    <div class="content terminal-content">
       <div v-if="error" style="padding:var(--space-4);color:var(--error)">{{ error }}</div>
-      <div v-else style="flex:1;display:flex;flex-direction:column;min-height:0">
-        <div style="padding:var(--space-2) var(--space-4);background:var(--sidebar-bg);font-size:var(--fs-sm);color:var(--text-muted);display:flex;gap:var(--space-4);flex:none">
+      <div v-else class="terminal-body">
+        <div class="terminal-status-bar">
           <span>{{ running ? '⏳ 執行中...' : (exitCode === 0 ? '✅ 成功' : exitCode !== null ? '❌ 失敗 (code ' + exitCode + ')' : '⏸ 待機') }}</span>
           <span v-if="!running && exitCode === null" style="color:var(--text-muted)">等待 pipeline 啟動...</span>
         </div>

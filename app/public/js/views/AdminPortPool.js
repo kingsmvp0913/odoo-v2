@@ -90,12 +90,12 @@ window.AdminPortPoolView = Vue.defineComponent({
           </div>
           <div class="setting-block-body">
             <div v-for="s in slots" :key="s.port"
-                 style="display:flex;align-items:center;gap:var(--space-4);padding:var(--space-2) 0;border-bottom:1px solid var(--border)">
-              <code style="min-width:220px;color:var(--text);font-size:var(--fs-sm)">
+                 class="port-pool-slot-row">
+              <code class="port-pool-slot-code">
                 <template v-if="s.external_url">{{ hostOf(s.external_url) }}</template>
                 <template v-else>:{{ s.port }}</template>
               </code>
-              <span style="min-width:120px;font-size:var(--fs-sm);color:var(--text)">{{ stateLabel(s) }}</span>
+              <span class="port-pool-slot-state">{{ stateLabel(s) }}</span>
               <span style="flex:1;font-size:var(--fs-sm);color:var(--text-muted)">
                 <template v-if="s.state === 'leased'">
                   <span v-if="s.external_url" style="color:var(--success,#30a46c)">🌐 對外曝露</span>

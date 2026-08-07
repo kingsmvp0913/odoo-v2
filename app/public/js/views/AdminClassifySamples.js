@@ -32,9 +32,9 @@ window.AdminClassifySamplesView = Vue.defineComponent({
       <h1>失敗分類樣本</h1>
     </div>
     <div class="content">
-      <div style="max-width:1000px">
+      <div class="classify-wrap">
         <div class="settings-section">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3)">
+          <div class="classify-toolbar">
             <p style="margin:0;font-size:var(--fs-sm);color:var(--text-muted)">
               regex 判不出、交 haiku 分類的案例。看高頻 pattern → 補進 failure-classifier 的 regex，讓 haiku 呼叫量下降。
             </p>
@@ -56,7 +56,7 @@ window.AdminClassifySamplesView = Vue.defineComponent({
             <h2 class="section-title" style="margin:0 0 var(--space-2)">判定分佈（共 {{ total }}）</h2>
             <div class="table-wrap" style="margin-bottom:var(--space-5)">
               <table class="data-table">
-                <thead><tr><th>判定</th><th style="width:140px">haiku 是否判出</th><th style="width:80px">筆數</th></tr></thead>
+                <thead><tr><th>判定</th><th class="classify-col-140">haiku 是否判出</th><th style="width:80px">筆數</th></tr></thead>
                 <tbody>
                   <tr v-for="(r, i) in byVerdict" :key="i">
                     <td>{{ verdictLabel(r.verdict) }}</td>
@@ -74,7 +74,7 @@ window.AdminClassifySamplesView = Vue.defineComponent({
             <h2 class="section-title" style="margin:0 0 var(--space-2)">高頻真因（前 80 字）— 復發最多的優先補進 regex</h2>
             <div class="table-wrap" style="margin-bottom:var(--space-5)">
               <table class="data-table">
-                <thead><tr><th style="width:60px">次數</th><th>錯誤文字（前 80 字）</th><th style="width:150px">最近一次</th></tr></thead>
+                <thead><tr><th style="width:60px">次數</th><th>錯誤文字（前 80 字）</th><th class="classify-col-150">最近一次</th></tr></thead>
                 <tbody>
                   <tr v-for="(p, i) in topPatterns" :key="i">
                     <td style="text-align:center;font-weight:600">{{ p.n }}</td>
@@ -90,7 +90,7 @@ window.AdminClassifySamplesView = Vue.defineComponent({
             <div class="table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th style="width:150px">時間</th><th style="width:110px">任務</th><th style="width:70px">判定</th><th>錯誤文字</th></tr>
+                  <tr><th class="classify-col-150">時間</th><th class="classify-col-110">任務</th><th style="width:70px">判定</th><th>錯誤文字</th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="r in recent" :key="r.id">
