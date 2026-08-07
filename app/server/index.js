@@ -206,19 +206,12 @@ if (require.main === module) {
     await q(
       "UPDATE odoo_envs SET status='error', error_msg='伺服器重啟，建立程序中斷', updated_at=NOW() WHERE status='setting_up'"
     ).catch(() => {});
-    // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續、graphify 冪等重建），
+    // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續），
     // 不再一律標 error 作廢
     try {
       const { resumeInterruptedRuns } = require('./pipeline/health-check-runner');
       await resumeInterruptedRuns();
     } catch (e) { console.error('[STARTUP] health-check resume:', e.message); }
-    try {
-      const { rows: stuck } = await q(
-        "SELECT id, local_path FROM project_repos WHERE graphify_status='running' AND local_path IS NOT NULL"
-      );
-      const { runGraphify } = require('./pipeline/graphify-runner');
-      for (const r of stuck) runGraphify(r.id, r.local_path);
-    } catch (e) { console.error('[STARTUP] graphify resume:', e.message); }
     // 對話回覆若在 process 崩潰/重啟時執行到一半，reply_pending 會卡在 true、前端一直轉圈：
     // 補上一則中斷訊息（計入未讀）並清除旗標。
     try {

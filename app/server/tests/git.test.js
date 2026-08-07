@@ -337,7 +337,7 @@ test('untrackPyc 帶 gitEnv 時 commit 不再寫死 pipeline 身分', async () =
 });
 
 // 意圖：解衝突 commit 只能 stage「衝突檔本身」，絕不可 git add -A——否則工作樹裡未追蹤的
-// 產物（graphify 輸出等）會被一併掃進 testing、污染部署產物。此防線失效要立即翻紅。
+// 產物（deploy 輸出等）會被一併掃進 testing、污染部署產物。此防線失效要立即翻紅。
 test('commitResolved 只 stage 指定檔、不用 git add -A', async () => {
   const calls = [];
   childProcess.execFile.mockImplementation((cmd, args, o, cb) => {

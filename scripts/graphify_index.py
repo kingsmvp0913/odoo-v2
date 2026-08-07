@@ -1,12 +1,17 @@
 """
 graphify_index.py — headless code indexer for a cloned repo.
 
-Usage: python graphify_index.py <repo_path>
+手動工具：pipeline 不再自動觸發（產物無任何消費者、且只在 clone 當下產生一次永不更新）。
+報告裡的 God Nodes 與意外關聯對人偶爾有洞察力，需要時自己跑，一季一次即可。
+
+Usage:
+  pip install graphifyy networkx
+  python3 scripts/graphify_index.py <repo_path>
 
 Runs AST-only extraction (no LLM), builds graph, generates:
   <repo_path>/graphify-out/graph.json
   <repo_path>/graphify-out/GRAPH_REPORT.md
-  <repo_path>/graphify-out/wiki/index.md  (for Get-WikiCache)
+  <repo_path>/graphify-out/wiki/index.md
 """
 import sys
 import json

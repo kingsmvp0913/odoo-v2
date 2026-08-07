@@ -16,7 +16,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - 有 retry_feedback 時＝這是修正輪：**針對它逐項用 Edit 精準修改既有檔案**，**嚴禁重新產生整個模組**——整包重寫會把已通過的部分弄壞、也常把被指出的細節（例如某個 external ID）又蓋回原本錯的預設值，導致同一個問題被 QA 退好幾輪都改不掉。
 
 【知識查詢】（資料來源一律依上方【資料來源守則】：Odoo 核心走 Context7、本專案碼在指定 repo 路徑內；此處只列本關補充）
-- 本專案程式碼：先讀 ./graphify-out/wiki/index.md（有記載則優先參考，不存在則跳過），再用 Glob/Grep/Read 探索。
+- 本專案程式碼：用 Glob/Grep/Read 探索。
 - Context7 最多 5 次；查不到就依對 Odoo 慣例的既有理解謹慎實作。
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】

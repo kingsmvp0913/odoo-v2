@@ -3,7 +3,6 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const { query, withTransaction } = require('./db');
 const { verifyToken } = require('./auth');
-const { runGraphify } = require('./pipeline/graphify-runner');
 // 背景路徑（triggerClone → updateMainClone → reconcileAiBranch）用得到的一律在這裡取。
 // 那條路是 fire-and-forget，在測試裡會活過測試本身——延遲 require 會在 jest 環境拆掉之後才執行，
 // 拋「trying to import a file after the Jest environment has been torn down」，全套測試零失敗卻 exit 1。
@@ -130,7 +129,6 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
         'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
         [repoId, 'done', notice?.level === 'blocked' ? notice.message : null]
       ).catch(() => {});
-      runGraphify(repoId, destPath);
     }
    } catch (e) {
      // 走到這裡代表上面漏了某個 catch。至少讓它留下痕跡，而不是把整個 server 帶走。
@@ -265,7 +263,6 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     } else {
       try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋更新完成 */ }
     }
-    runGraphify(repoId, destPath);
   } catch (err) {
     const msg = (err.stderr || err.message || 'update failed').slice(0, 500);
     await query(

@@ -13,7 +13,7 @@ paths:
 113. **`scripts/` 目錄下的程式不得 `require` npm 套件，DB 操作改用系統 `psql` CLI** — Node 模組解析不跨目錄樹，`scripts/lib/` 往上找不到 `app/node_modules`。
 114. **平台的 runtime 相依要補在 `scripts/setup.js`，不是 `install.ps1/.sh`** — native bootstrap 只裝系統套件就交棒 setup.js，補在那裡才同時覆蓋 Windows 與 Linux。
 115. **用宿主 Python 跑腳本時 interpreter 一律取 `PYTHON_BIN || (win ? python : python3)`** — Linux 上 pip 裝進 `python3`，呼叫 `python` 會 ENOENT。
-115b. **graphify 索引的 pip 相依是 `graphifyy`（import 名是 `graphify`，兩者不同）＋`networkx`** — PEP 668 管制的環境要退 `--user --break-system-packages`，否則全新 Ubuntu 一鍵安裝會讓 repo 一建立就 `graphify_status='error'` 靜默失敗。
+115b. **〔2026-08-08 已移除自動索引〕graphify 索引的 pip 相依是 `graphifyy`（import 名是 `graphify`，兩者不同）＋`networkx`** — PEP 668 管制的環境要退 `--user --break-system-packages`，否則全新 Ubuntu 一鍵安裝會讓 repo 一建立就 `graphify_status='error'` 靜默失敗。**現況**：`setup.js` 不再安裝這兩個套件，腳本退居 `scripts/graphify_index.py` 手動工具；此條保留是因為手動跑仍會踩同一個 PEP 668 坑。
 116. **pip 安裝要準備 PEP 668 退路**：先普通裝，失敗改 `--user --break-system-packages` 重試，仍 import 不到就 throw（fail loud）。
 117. **任何含中文字面量的 `.ps1` 必須存成 UTF-8 with BOM** — PowerShell 5.1 讀無 BOM 檔用系統 ANSI codepage 解碼，與 `chcp` 無關。**此 repo 現有 .ps1 全都沒 BOM**。
 118. **平台不自行起 PostgreSQL 容器，用本機 PG——但 5432 可能被既存第三方容器佔走，apt 安裝會自動退到 5434** — 先 `pg_lsclusters` 確認實際 port。改密碼要同時改 role 與 `data/config.json` 的 `DATABASE_URL` 再重啟。

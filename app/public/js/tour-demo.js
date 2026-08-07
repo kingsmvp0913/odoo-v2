@@ -139,7 +139,7 @@
         service_respondent_name: '鴻久',
         repos: [{
           id: 1, label: 'addons', repo_url: 'https://github.com/your-org/odoo-addons',
-          is_primary: true, clone_status: 'done', graphify_status: 'done',
+          is_primary: true, clone_status: 'done',
           local_path: 'repos/hongjiu/addons'
         }]
       };

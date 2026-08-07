@@ -10,7 +10,7 @@ stage: analysis
 Think in English internally; output Traditional Chinese. 保留英文術語：Variable/Function/Hook/Class/Field/Model/Method/Controller/View。
 
 【知識查詢】（資料來源一律依上方【資料來源守則】：Odoo 核心走 Context7、本專案碼在指定 repo 路徑內；此處只列本關補充）
-- 本專案程式碼：先讀 ./graphify-out/wiki/index.md（有記載則優先參考，不存在則跳過），再用 Glob/Grep/Read 探索。
+- 本專案程式碼：用 Glob/Grep/Read 探索。
 - Context7 最多 5 次；查不到就依對 Odoo 慣例的既有理解判斷。
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】

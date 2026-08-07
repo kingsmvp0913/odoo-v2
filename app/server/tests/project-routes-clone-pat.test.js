@@ -27,7 +27,6 @@ jest.mock('../pipeline/git', () => ({
   remoteAiRef: jest.fn().mockResolvedValue('ai-dev'),
   getMainBranch: jest.fn().mockResolvedValue('main'),
 }));
-jest.mock('../pipeline/graphify-runner', () => ({ runGraphify: jest.fn() }));
 
 const request = require('supertest');
 const { newDb } = require('pg-mem');

@@ -31,7 +31,6 @@ window.ProjectDetailView = Vue.defineComponent({
   },
   computed: {
     hasCloning() { return this.repos.some(r => r.clone_status === 'cloning'); },
-    hasIndexing() { return this.repos.some(r => r.graphify_status === 'running'); },
     envActive() { return !!(this.env && (this.env.status === 'setting_up' || this.env.status === 'running' || this.env.built)); }
   },
   watch: {
@@ -40,11 +39,7 @@ window.ProjectDetailView = Vue.defineComponent({
       else this._stopPoll();
     },
     hasCloning(val) {
-      if (val || this.hasIndexing) this._startReposPoll();
-      else this._stopReposPoll();
-    },
-    hasIndexing(val) {
-      if (val || this.hasCloning) this._startReposPoll();
+      if (val) this._startReposPoll();
       else this._stopReposPoll();
     }
   },
@@ -335,9 +330,6 @@ window.ProjectDetailView = Vue.defineComponent({
                 <span v-if="r.clone_status === 'cloning'" class="pill pill-info">⟳ Clone 中...</span>
                 <span v-else-if="r.clone_status === 'done'" class="pill pill-success">✓ 已同步</span>
                 <span v-else-if="r.clone_status === 'error'" class="pill pill-danger">✕ Clone 失敗</span>
-                <span v-if="r.graphify_status === 'running'" class="pill pill-warn">⟳ 索引中...</span>
-                <span v-else-if="r.graphify_status === 'done'" class="pill pill-success">✓ 已索引</span>
-                <span v-else-if="r.graphify_status === 'error'" class="pill pill-danger" :title="r.graphify_error">✕ 索引失敗</span>
               </div>
               <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:2px">{{ r.repo_url }}</div>
               <div v-if="r.local_path" style="font-size:var(--fs-sm);color:var(--text-muted)">路徑：{{ r.local_path }}</div>
