@@ -100,7 +100,7 @@ window.AdminPortPoolView = Vue.defineComponent({
                 <template v-if="s.state === 'leased'">
                   <span v-if="s.external_url" style="color:var(--success,#30a46c)">🌐 對外曝露</span>
                   <span v-else>🔒 內網</span>
-                  · 內部埠 {{ s.port }} · {{ s.project_name }} — {{ idleText(s) }}
+                  · 內部埠 {{ s.port }} · {{ s.project_name }} — <span data-rwd-volatile>{{ idleText(s) }}</span>
                 </template>
               </span>
             </div>

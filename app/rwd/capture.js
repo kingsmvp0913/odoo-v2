@@ -14,6 +14,16 @@
 
 const fs = require('fs');
 const path = require('path');
+
+// 換一版 Chromium，同一份 HTML 的文字描邊就有 subpixel 差，42 張桌機基線會一次全紅
+// （2026-08-07 實測：原本裝在 /opt 的那份隨容器重建消失，重裝後版本不同，門禁全滅）。
+// 基線比的是像素，拍基線的瀏覽器必須跟著 repo 走。必須在 require('playwright') 之前設定
+// ——playwright 是在載入時就依這個變數決定去哪裡找執行檔的。
+const BROWSER_ROOT = path.join(__dirname, '.pw-browsers');
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSER_ROOT)) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSER_ROOT;
+}
+
 const { chromium } = require('playwright');
 const { STABILIZE_CSS, shotPlan, manualCheckList } = require('./routes');
 const { login, assertAdmin, sampleIds, resolveUrl } = require('./lib/session');

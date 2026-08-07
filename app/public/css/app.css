@@ -204,10 +204,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 
 #app { display: flex; height: 100%; }
+.app-shell { display: flex; height: 100%; flex: 1; min-width: 0; }
+
+/* 手機導覽（drawer）的兩個新元件在桌機一律不顯示：桌機的 DOM 多兩個節點，畫面等同改造前。
+   drawer 的實際樣式全部關在檔尾 ≤1023px 的 media query 內。 */
+.mobile-topbar, .drawer-overlay { display: none; }
 
 /* ── Sidebar ───────────────────────── */
 .sidebar { width: 220px; background: var(--sidebar-bg); color: var(--sidebar-text); display: flex; flex-direction: column; flex-shrink: 0; }
-.sidebar-header { padding: 18px 16px 10px; }
+.sidebar-header { padding: 18px 16px 10px; display: flex; align-items: center; gap: 6px; }
 .sidebar-header strong { display: block; font-size: 14px; font-weight: 700; color: #fff; letter-spacing: -0.2px; }
 .sidebar-header span { font-size: 11px; color: var(--sidebar-text); }
 .sidebar nav { flex: 1; padding: 6px 8px; min-height: 0; overflow-y: auto; }
@@ -216,6 +221,7 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .sidebar nav a.active { background: rgba(99,102,241,0.18); color: #fff; font-weight: 500; }
 .sidebar nav a .badge { margin-left: auto; background: var(--danger); color: #fff; border-radius: 9px; padding: 1px 7px; font-size: 11px; font-weight: 600; min-width: 18px; text-align: center; }
 .sidebar-footer { padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.06); }
+.sidebar-footer-actions { display: flex; align-items: center; gap: var(--space-3); }
 .sidebar-footer a { font-size: 12px; color: var(--sidebar-text); text-decoration: none; cursor: pointer; }
 .sidebar-footer a:hover { color: #fff; }
 .usage-mini { margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; padding: 6px 8px; margin-left: -8px; margin-right: -8px; border-radius: var(--radius-sm); transition: background 0.12s; }
@@ -634,7 +640,43 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 
 /* ── 平板 641–1023px ── */
 @media (max-width: 1023px) {
-  /* Block 1 起陸續填入 */
+  /* §3.2：桌機維持 1.1，小螢幕還原成 1。zoom 不影響 media query 的判定基準（仍按真實
+     viewport），但會把內容放大 1.1 倍，390px 的手機實際只剩約 355px 可用寬，且任何 100vw
+     元素會直接溢出。這條必須在其他 RWD 規則之前生效，否則後面每一塊的目測都被 1.1 倍污染。 */
+  :root { --ui-zoom: 1; }
+
+  /* §3.3：手機瀏覽器的動態網址列會讓 100vh 大於實際可視高，app-shell 的底部（sidebar footer、
+     內容最後一列）被裁掉且捲不到。dvh 跟著網址列伸縮，桌機不受影響（該處仍走 197 行的 calc）。 */
+  body { height: 100dvh; }
+
+  /* 橫向排不下 220px 側欄＋內容，改成「頂欄＋內容」直排，側欄抽離文件流變成 drawer。 */
+  .app-shell { flex-direction: column; }
+
+  .mobile-topbar {
+    display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0;
+    height: 44px; padding: 0 var(--space-3);
+    background: var(--sidebar-bg); color: var(--sidebar-active);
+  }
+  .mobile-topbar-title { font-size: var(--fs-base); font-weight: var(--fw-semibold); }
+  .drawer-toggle {
+    background: transparent; border: 0; padding: 4px 6px; line-height: 1;
+    font-size: 20px; color: var(--sidebar-active); cursor: pointer;
+  }
+
+  /* drawer 本體。寬度沿用桌機的 220px，只換定位方式——關閉時整片移出畫面左側，
+     transform 不觸發 reflow，開關不會讓內容跳動。 */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    z-index: calc(var(--z-modal) - 1);
+    transform: translateX(-100%); transition: transform 0.2s ease;
+  }
+  .sidebar.is-open { transform: translateX(0); }
+
+  /* 遮罩壓在 drawer 下、內容之上；兩者都低於 --z-modal，確認框／modal 仍蓋得住 drawer。 */
+  .drawer-overlay {
+    display: block; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: calc(var(--z-modal) - 2);
+  }
 }
 
 /* ── 手機 ≤640px ── */

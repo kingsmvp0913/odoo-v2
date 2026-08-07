@@ -5,22 +5,21 @@
 
 ## 總計
 
-**156 處 inline style / 23 檔**（分類命中 166 次——同一處可同時屬多類）
+**171 處 inline style / 24 檔**（分類命中 183 次——同一處可同時屬多類）
 
 | 類別 | 命中 |
 |---|---|
-| flex/grid | 106 |
-| 固定寬 | 37 |
-| nowrap | 15 |
-| grid-template | 8 |
+| flex/grid | 117 |
+| 固定寬 | 40 |
+| nowrap | 17 |
+| grid-template | 9 |
 
 ## 分批
 
 | 批次 | 處數 | 範圍 |
 |---|---|---|
-| Block 1 | 3 | shell template，由 drawer 改造一併處理 |
-| Block 2 | 83 | 高頻頁 6 檔 |
-| Block 3 | 70 | 其餘全部 |
+| Block 2 | 89 | 高頻頁 6 檔 |
+| Block 3 | 82 | 其餘全部 |
 
 依「處數平衡」分批，不是依檔案大小：`TaskDetail.js`／`TokenReport.js` 的 127 處是**全部** inline style，
 layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍。
@@ -33,113 +32,109 @@ layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍�
 
 ---
 
-## Block 1
-
-### `js/app.js` — 3 處
-
-| 行 | 類別 | inline style |
-|---|---|---|
-| 147 | flex/grid | `style="display:flex;height:100%;flex:1;min-width:0"` |
-| 149 | flex/grid | `style="display:flex;align-items:center;gap:6px"` |
-| 193 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-3)"` |
-
 ## Block 2
 
-### `js/views/TokenReport.js` — 17 處
+### `js/views/ProjectDetail.js` — 18 處
 
 | 行 | 類別 | inline style |
 |---|---|---|
-| 221 | flex/grid | `style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);align…` |
-| 222 | 固定寬 | `style="width:100px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
-| 228 | 固定寬 | `style="width:140px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
+| 309 | flex/grid | `style="display:flex;gap:6px;margin-left:var(--space-4)"` |
+| 330 | flex/grid | `style="display:flex;justify-content:space-between;align-items:flex-start"` |
+| 332 | flex/grid | `style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"` |
+| 347 | flex/grid | `style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap"` |
+| 361 | flex/grid | `style="display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0"` |
+| 371 | flex/grid, grid-template | `style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--sp…` |
+| 378 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)"` |
+| 379 | nowrap | `style="color:var(--text-muted);white-space:nowrap"` |
+| 390 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)"` |
+| 403 | flex/grid | `style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)"` |
+| 416 | flex/grid | `style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)"` |
+| 418 | flex/grid | `style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none"` |
+| 427 | flex/grid | `style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none"` |
+| 440 | flex/grid | `style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)"` |
+| 446 | 固定寬 | `style="max-width:280px"` |
+| 455 | flex/grid | `style="font-size:var(--fs-base);margin-bottom:10px;display:flex;align-items:center;gap:v…` |
+| 466 | flex/grid | `style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap"` |
+| 488 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px"` |
+
+### `js/views/TokenReport.js` — 18 處
+
+| 行 | 類別 | inline style |
+|---|---|---|
+| 223 | flex/grid | `style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);align…` |
+| 224 | 固定寬 | `style="width:100px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
 | 230 | 固定寬 | `style="width:140px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
-| 232 | 固定寬 | `style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
-| 237 | 固定寬 | `style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
-| 247 | flex/grid, grid-template | `style="display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-3);margin-bottom…` |
-| 279 | flex/grid, grid-template | `style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margi…` |
-| 291 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--s…` |
-| 307 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--s…` |
-| 323 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--s…` |
-| 330 | flex/grid | `style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radi…` |
-| 447 | nowrap | `style="padding:var(--space-2) var(--space-3);white-space:nowrap;overflow:hidden;text-ove…` |
-| 455 | nowrap | `style="padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;…` |
-| 458 | nowrap | `style="padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;…` |
-| 459 | nowrap | `style="padding:var(--space-2) var(--space-3);color:var(--text-muted);font-size:var(--fs-…` |
-| 516 | nowrap | `style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"` |
-
-### `js/views/ProjectDetail.js` — 14 處
-
-| 行 | 類別 | inline style |
-|---|---|---|
-| 250 | flex/grid | `style="display:flex;gap:6px;margin-left:var(--space-4)"` |
-| 271 | flex/grid | `style="display:flex;justify-content:space-between;align-items:flex-start"` |
-| 273 | flex/grid | `style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"` |
-| 287 | flex/grid | `style="display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0"` |
-| 297 | flex/grid, grid-template | `style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--sp…` |
-| 300 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)"` |
-| 310 | flex/grid | `style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)"` |
-| 323 | flex/grid | `style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)"` |
-| 325 | flex/grid | `style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none"` |
-| 338 | flex/grid | `style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)"` |
-| 344 | 固定寬 | `style="max-width:280px"` |
-| 353 | flex/grid | `style="font-size:var(--fs-base);margin-bottom:10px;display:flex;align-items:center;gap:v…` |
-| 364 | flex/grid | `style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap"` |
-| 386 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px"` |
+| 232 | 固定寬 | `style="width:140px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
+| 234 | 固定寬 | `style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
+| 239 | 固定寬 | `style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--spa…` |
+| 240 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-1);font-size:var(--fs-base);color…` |
+| 253 | flex/grid, grid-template | `style="display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-3);margin-bottom…` |
+| 285 | flex/grid, grid-template | `style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margi…` |
+| 297 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--s…` |
+| 313 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--s…` |
+| 329 | flex/grid | `style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--s…` |
+| 336 | flex/grid | `style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radi…` |
+| 453 | nowrap | `style="padding:var(--space-2) var(--space-3);white-space:nowrap;overflow:hidden;text-ove…` |
+| 461 | nowrap | `style="padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;…` |
+| 464 | nowrap | `style="padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;…` |
+| 465 | nowrap | `style="padding:var(--space-2) var(--space-3);color:var(--text-muted);font-size:var(--fs-…` |
+| 522 | nowrap | `style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"` |
 
 ### `js/views/TaskDetail.js` — 14 處
 
 | 行 | 類別 | inline style |
 |---|---|---|
-| 797 | flex/grid | `style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-…` |
-| 804 | flex/grid | `style="margin-top:var(--space-2);display:flex;gap:var(--space-2)"` |
-| 850 | flex/grid | `style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:var(--sp…` |
-| 865 | flex/grid | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display…` |
-| 958 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)"` |
-| 992 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)"` |
-| 1017 | flex/grid | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display…` |
-| 1027 | flex/grid | `style="display:flex;flex-wrap:wrap;gap:14px;margin-left:24px"` |
-| 1029 | flex/grid | `style="font-size:var(--fs-sm);display:flex;align-items:center;gap:5px;cursor:pointer"` |
-| 1092 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)"` |
-| 1107 | flex/grid | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display…` |
-| 1163 | flex/grid | `style="display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);margi…` |
-| 1164 | flex/grid | `style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-s…` |
-| 1175 | flex/grid | `style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-…` |
+| 798 | flex/grid | `style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-…` |
+| 805 | flex/grid | `style="margin-top:var(--space-2);display:flex;gap:var(--space-2)"` |
+| 851 | flex/grid | `style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:var(--sp…` |
+| 866 | flex/grid | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display…` |
+| 959 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)"` |
+| 993 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)"` |
+| 1018 | flex/grid | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display…` |
+| 1028 | flex/grid | `style="display:flex;flex-wrap:wrap;gap:14px;margin-left:24px"` |
+| 1030 | flex/grid | `style="font-size:var(--fs-sm);display:flex;align-items:center;gap:5px;cursor:pointer"` |
+| 1093 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)"` |
+| 1108 | flex/grid | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display…` |
+| 1164 | flex/grid | `style="display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);margi…` |
+| 1165 | flex/grid | `style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-s…` |
+| 1176 | flex/grid | `style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-…` |
+
+### `js/views/TaskList.js` — 14 處
+
+| 行 | 類別 | inline style |
+|---|---|---|
+| 461 | flex/grid | `style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align…` |
+| 477 | flex/grid | `style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align…` |
+| 499 | 固定寬 | `style="width:200px;font-size:var(--fs-base);padding:5px 10px;height:32px"` |
+| 511 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);p…` |
+| 521 | flex/grid | `style="display:flex;gap:6px"` |
+| 537 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2)"` |
+| 545 | flex/grid | `style="display:flex;align-items:center;gap:6px"` |
+| 571 | flex/grid | `style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"` |
+| 586 | flex/grid | `style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"` |
+| 587 | flex/grid | `style="display:flex;align-items:center;gap:6px"` |
+| 602 | flex/grid, nowrap | `style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align…` |
+| 621 | flex/grid | `style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:cente…` |
+| 622 | 固定寬 | `style="background:var(--surface);border:1px solid var(--border);border-radius:10px;paddi…` |
+| 644 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2)"` |
 
 ### `js/views/ProjectChat.js` — 13 處
 
 | 行 | 類別 | inline style |
 |---|---|---|
-| 144 | flex/grid | `style="flex:1;display:flex;overflow:hidden;min-width:0"` |
-| 145 | flex/grid, 固定寬 | `style="width:220px;min-width:220px;border-right:1px solid var(--border);display:flex;fle…` |
-| 152 | flex/grid | `style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:fl…` |
-| 155 | nowrap | `style="font-size:var(--fs-base);overflow:hidden;text-overflow:ellipsis;white-space:nowra…` |
-| 167 | flex/grid | `style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden"` |
-| 168 | flex/grid | `style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-mu…` |
-| 172 | flex/grid | `style="padding:8px var(--space-4);border-bottom:1px solid var(--border);display:flex;jus…` |
-| 173 | nowrap | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);overflow:hidden;text-over…` |
-| 178 | flex/grid | `style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;…` |
-| 193 | flex/grid | `style="display:flex;justify-content:flex-start"` |
-| 194 | flex/grid | `style="padding:8px 14px;border-radius:10px;background:var(--surface);border:1px solid va…` |
-| 201 | flex/grid | `style="padding:var(--space-3);border-top:1px solid var(--border);display:flex;gap:var(--…` |
-| 216 | 固定寬 | `style="width:600px"` |
-
-### `js/views/TaskList.js` — 13 處
-
-| 行 | 類別 | inline style |
-|---|---|---|
-| 437 | flex/grid | `style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align…` |
-| 452 | 固定寬 | `style="width:240px;font-size:var(--fs-base);padding:5px 10px;height:32px"` |
-| 470 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);p…` |
-| 480 | flex/grid | `style="display:flex;gap:6px"` |
-| 496 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2)"` |
-| 504 | flex/grid | `style="display:flex;align-items:center;gap:6px"` |
-| 530 | flex/grid | `style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"` |
-| 542 | flex/grid | `style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"` |
-| 543 | flex/grid | `style="display:flex;align-items:center;gap:6px"` |
-| 558 | flex/grid, nowrap | `style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align…` |
-| 577 | flex/grid | `style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:cente…` |
-| 578 | 固定寬 | `style="background:var(--surface);border:1px solid var(--border);border-radius:10px;paddi…` |
-| 600 | flex/grid | `style="display:flex;justify-content:flex-end;gap:var(--space-2)"` |
+| 177 | flex/grid | `style="flex:1;display:flex;overflow:hidden;min-width:0"` |
+| 178 | flex/grid, 固定寬 | `style="width:220px;min-width:220px;border-right:1px solid var(--border);display:flex;fle…` |
+| 185 | flex/grid | `style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:fl…` |
+| 188 | nowrap | `style="font-size:var(--fs-base);overflow:hidden;text-overflow:ellipsis;white-space:nowra…` |
+| 201 | flex/grid | `style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden"` |
+| 202 | flex/grid | `style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-mu…` |
+| 206 | flex/grid | `style="padding:8px var(--space-4);border-bottom:1px solid var(--border);display:flex;jus…` |
+| 207 | nowrap | `style="font-size:var(--fs-base);font-weight:var(--fw-semibold);overflow:hidden;text-over…` |
+| 212 | flex/grid | `style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;…` |
+| 227 | flex/grid | `style="display:flex;justify-content:flex-start"` |
+| 228 | flex/grid | `style="padding:8px 14px;border-radius:10px;background:var(--surface);border:1px solid va…` |
+| 235 | flex/grid | `style="padding:var(--space-3);border-top:1px solid var(--border);display:flex;gap:var(--…` |
+| 250 | 固定寬 | `style="width:600px"` |
 
 ### `js/views/Settings.js` — 12 處
 
@@ -159,6 +154,20 @@ layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍�
 | 354 | 固定寬 | `style="max-width:420px"` |
 
 ## Block 3
+
+### `js/views/PipelineFlow.js` — 9 處
+
+| 行 | 類別 | inline style |
+|---|---|---|
+| 791 | flex/grid | `style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center;margin-bottom:v…` |
+| 792 | flex/grid | `style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none"` |
+| 800 | flex/grid | `style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none"` |
+| 809 | flex/grid | `style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none"` |
+| 819 | flex/grid | `style="display:flex;gap:var(--space-4);align-items:flex-start;flex-wrap:wrap"` |
+| 900 | flex/grid | `style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-top:var(--space-3);font-siz…` |
+| 913 | 固定寬 | `style="flex:0 1 340px;min-width:280px;position:sticky;top:var(--space-3)"` |
+| 920 | flex/grid, grid-template | `style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px var(--space-2);font-…` |
+| 922 | nowrap | `style="color:var(--text-muted);white-space:nowrap"` |
 
 ### `js/views/ProjectDbQuery.js` — 8 處
 
@@ -195,6 +204,17 @@ layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍�
 | 77 | 固定寬 | `style="width:150px"` |
 | 93 | 固定寬 | `style="width:150px"` |
 | 93 | 固定寬 | `style="width:110px"` |
+
+### `js/views/ProjectList.js` — 6 處
+
+| 行 | 類別 | inline style |
+|---|---|---|
+| 122 | flex/grid, grid-template | `style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(-…` |
+| 147 | flex/grid | `style="display:flex;gap:var(--space-2)"` |
+| 154 | 固定寬 | `style="max-width:320px"` |
+| 162 | flex/grid | `style="margin-top:10px;display:flex;gap:6px"` |
+| 179 | flex/grid | `style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"` |
+| 191 | flex/grid | `style="display:flex;gap:var(--space-1);flex-shrink:0;align-self:flex-start"` |
 
 ### `js/views/WikiView.js` — 6 處
 
@@ -237,16 +257,6 @@ layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍�
 | 128 | flex/grid | `style="display:flex;gap:6px"` |
 | 148 | flex/grid, grid-template | `style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(-…` |
 
-### `js/views/ProjectList.js` — 5 處
-
-| 行 | 類別 | inline style |
-|---|---|---|
-| 94 | flex/grid, grid-template | `style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(-…` |
-| 119 | flex/grid | `style="display:flex;gap:var(--space-2)"` |
-| 126 | 固定寬 | `style="max-width:320px"` |
-| 134 | flex/grid | `style="margin-top:10px;display:flex;gap:6px"` |
-| 151 | flex/grid | `style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"` |
-
 ### `js/views/AdminEnterprise.js` — 4 處
 
 | 行 | 類別 | inline style |
@@ -281,6 +291,14 @@ layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍�
 | 58 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-5)"` |
 | 72 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px"` |
 
+### `js/views/AdminPortPool.js` — 3 處
+
+| 行 | 類別 | inline style |
+|---|---|---|
+| 93 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-4);padding:var(--space-2) 0;borde…` |
+| 94 | 固定寬 | `style="min-width:220px;color:var(--text);font-size:var(--fs-sm)"` |
+| 98 | 固定寬 | `style="min-width:120px;font-size:var(--fs-sm);color:var(--text)"` |
+
 ### `js/views/Terminal.js` — 3 處
 
 | 行 | 類別 | inline style |
@@ -303,10 +321,9 @@ layout 類其實只有 14／17 處，照檔案大小分會讓兩批相差三倍�
 | 61 | 固定寬 | `style="max-width:1000px"` |
 | 81 | 固定寬 | `style="max-width:1000px"` |
 
-### `js/views/AdminPortPool.js` — 2 處
+### `js/views/SearchableSelect.js` — 1 處
 
 | 行 | 類別 | inline style |
 |---|---|---|
-| 89 | flex/grid | `style="display:flex;align-items:center;gap:var(--space-4);padding:var(--space-2) 0;borde…` |
-| 91 | 固定寬 | `style="min-width:140px;font-size:var(--fs-sm);color:var(--text)"` |
+| 34 | flex/grid, 固定寬 | `style="height:32px;font-size:var(--fs-base);padding:5px 10px;min-width:140px;text-align:…` |
 

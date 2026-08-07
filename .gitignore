@@ -46,6 +46,8 @@ docker-compose.override.yml
 /app/rwd/baseline/
 # 截圖用的中文字型（32MB 二進位，不進版控；缺了就重抓，指令在 app/rwd/README.md）
 /app/rwd/.fontroot/
+# 截圖用的 Chromium（650MB，不進版控；缺了就重裝，指令在 app/rwd/README.md）
+/app/rwd/.pw-browsers/
 
 # ─── 編輯器 / 作業系統 ──────────────────────────────────
 .DS_Store

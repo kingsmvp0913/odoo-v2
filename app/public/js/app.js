@@ -99,7 +99,11 @@ setInterval(loadClaudeUsage, 60000);
 const App = defineComponent({
   name: 'App',
   setup() { return { toasts, needsActionCount, claudeUsage }; },
-  data() { return { _role: '', isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
+  data() { return { _role: '', drawerOpen: false, isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
+  watch: {
+    // 點了 drawer 裡的連結後，頁面換了但遮罩與側欄還蓋在上面，看起來像卡住 → 導覽即關。
+    '$route'() { this.drawerOpen = false; }
+  },
   computed: {
     isLoggedIn() { return Api.authState.loggedIn; },
     // 角色以 reactive 的 UserStore 為單一來源：每次導覽（含剛登入）由 afterEach 更新，
@@ -137,6 +141,8 @@ const App = defineComponent({
   async mounted() {
     this._onThemeChange = e => { this.isDark = e.detail === 'dark'; };
     window.addEventListener('themechange', this._onThemeChange);
+    this._onKeydown = e => { if (e.key === 'Escape') this.drawerOpen = false; };
+    window.addEventListener('keydown', this._onKeydown);
     if (Api.isLoggedIn()) {
       const me = await Api.get('auth/me').catch(() => ({}));
       this._role = me.role || '';
@@ -147,7 +153,10 @@ const App = defineComponent({
       loadUnread();
     }
   },
-  unmounted() { window.removeEventListener('themechange', this._onThemeChange); },
+  unmounted() {
+    window.removeEventListener('themechange', this._onThemeChange);
+    window.removeEventListener('keydown', this._onKeydown);
+  },
   methods: {
     fmtReset(iso) {
       return new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -161,9 +170,14 @@ const App = defineComponent({
       <router-view />
     </template>
     <template v-else>
-      <div style="display:flex;height:100%;flex:1;min-width:0">
-        <aside class="sidebar">
-          <div class="sidebar-header" style="display:flex;align-items:center;gap:6px">
+      <div class="app-shell">
+        <header class="mobile-topbar">
+          <button class="drawer-toggle" type="button" @click="drawerOpen = true" aria-label="開啟選單">☰</button>
+          <span class="mobile-topbar-title">AI Dev 工作台</span>
+        </header>
+        <div v-if="drawerOpen" class="drawer-overlay" @click="drawerOpen = false"></div>
+        <aside class="sidebar" :class="{ 'is-open': drawerOpen }">
+          <div class="sidebar-header">
             <div>AI Dev<span>工作台</span></div>
             <button @click="toggleTheme" :title="isDark ? '切換淺色模式' : '切換深色模式'"
               style="margin-left:auto;background:transparent;border:none;color:var(--sidebar-text);cursor:pointer;font-size:16px;padding:2px 4px;line-height:1">
@@ -213,7 +227,7 @@ const App = defineComponent({
                 <div v-if="bar.reset" class="usage-reset">重置 {{ bar.reset }}</div>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:var(--space-3)">
+            <div class="sidebar-footer-actions">
               <button class="tour-launch" type="button" @click="openTour" title="開啟新手教程">
                 🎓 新手教程<span v-if="tourRemaining" class="tour-launch-badge">{{ tourRemaining }}</span>
               </button>

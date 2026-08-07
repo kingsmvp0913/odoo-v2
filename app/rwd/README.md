@@ -17,6 +17,7 @@
 | `snapshots/` | ✗ | 每次執行的截圖 |
 | `diff/` | ✗ | 差異圖，只在門禁失敗時產出 |
 | `.fontroot/` | ✗ | 截圖用的中文／emoji 字型，43MB 二進位（見下） |
+| `.pw-browsers/` | ✗ | 截圖用的 Chromium，650MB（見下） |
 
 `baseline/`、`snapshots/`、`diff/`、`.fontroot/` 已在 repo 根 `.gitignore` 排除。
 
@@ -31,6 +32,14 @@ curl -sSLO https://github.com/googlefonts/noto-emoji/raw/main/fonts/NotoColorEmo
 ```
 
 沒放字型時 `capture.js` 不動 `XDG_DATA_HOME`，改用機器上的系統字型——但那樣拍出來的基線與別台不可比。
+
+**Chromium 為什麼也隨 repo 走**：原本裝在 `/opt/pw-browsers`，容器一重建就沒了（本容器只有 `odoo-v2`／`odoo-envs`／`.claude` 三處持久）。重裝拿到的是新版，而**換一版 Chromium，同一份 HTML 的文字描邊就有 subpixel 差異，42 張桌機基線會一次全紅**（2026-08-07 實際發生過，全部 42 組 diff 非零，但逐字比對版面與資料都沒動，純粹是描邊）。基線比的是像素，所以瀏覽器跟字型一樣得釘在 repo 內：
+
+```bash
+cd app && PLAYWRIGHT_BROWSERS_PATH=$PWD/rwd/.pw-browsers npx playwright install chromium
+```
+
+`capture.js` 在 `require('playwright')` **之前**把 `PLAYWRIGHT_BROWSERS_PATH` 指到 `.pw-browsers/`（該變數是載入時就決定去哪找執行檔的，設晚了無效）。已自行設好該變數則不覆蓋。若重裝後版本與基線不同 → 基線失效，只能在乾淨 HEAD 重產。
 
 **為什麼在 `app/` 底下**：`rules/infra.md` 113 —— Node 模組解析不跨目錄樹，放 repo 根的話 `require('playwright')` 找不到 `app/node_modules`。
 
