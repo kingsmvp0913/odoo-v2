@@ -30,6 +30,8 @@ function odooRpc(baseUrl, path, body) {
   });
 }
 
+const SAVED_VIEWS_MAX = 10;   // JSONB 無限膨脹的上限；前端也擋，但真正的防線在這裡
+
 function registerRoutes(app) {
   app.get('/api/settings', verifyToken, async (req, res) => {
     try {
@@ -77,6 +79,32 @@ function registerRoutes(app) {
       const merged = { ...current, theme };
       await query('UPDATE users SET odoo_settings = $2 WHERE id = $1', [req.userId, JSON.stringify(merged)]);
       res.json({ ok: true, theme });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 具名篩選 view：合併寫入 odoo_settings.saved_views（read-modify-write，不動其餘設定）。
+  // 不可圖省事改走 PUT /api/settings——那支是整包覆寫，會把 theme 一起從後端刪掉（Settings.js 的
+  // 註解記錄過這個事故：本機 localStorage 還在，要換裝置或開無痕才發現偏好永遠回淺色）。
+  app.put('/api/settings/views', verifyToken, async (req, res) => {
+    try {
+      const { saved_views } = req.body || {};
+      if (!Array.isArray(saved_views)) return res.status(400).json({ error: 'saved_views 需為陣列' });
+      if (saved_views.length > SAVED_VIEWS_MAX) {
+        return res.status(400).json({ error: `最多只能存 ${SAVED_VIEWS_MAX} 組` });
+      }
+      // 前端擋下只是提示，後端仍須擋：形狀壞掉的資料存進 JSONB，下次讀取時整排列表都會壞
+      const clean = saved_views.map((v) => ({
+        name: String((v && v.name) || '').trim(),
+        filters: (v && typeof v.filters === 'object' && v.filters) || {}
+      }));
+      if (clean.some((v) => !v.name)) return res.status(400).json({ error: '每組 view 都需要名稱' });
+      const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+      const current = rows[0]?.odoo_settings || {};
+      const merged = { ...current, saved_views: clean };
+      await query('UPDATE users SET odoo_settings = $2 WHERE id = $1', [req.userId, JSON.stringify(merged)]);
+      res.json({ ok: true, saved_views: clean });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

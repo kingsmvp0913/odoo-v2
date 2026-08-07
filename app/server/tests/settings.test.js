@@ -78,3 +78,47 @@ test('PUT /api/settings/theme → 非法值回 400', async () => {
     .send({ theme: 'blue' });
   expect(res.status).toBe(400);
 });
+
+// 這條是事故的迴歸測試，不是形式測試：PUT /api/settings 是**整包覆寫**，具名 view 若圖省事走那支，
+// 前面存好的 theme 與 odoo_url 會被靜默刪掉——本機 localStorage 還在，要換裝置或開無痕才發現。
+// 所以下面驗的重點不是「view 存進去了」，而是「除了 saved_views 以外什麼都沒動」。
+test('PUT /api/settings/views → 存 view 且不得洗掉 theme 與既有設定', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: [{ name: '我的待審核', filters: { filter: 'review_pending' } }] });
+  expect(res.status).toBe(200);
+
+  const get = await request(app).get('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(get.body.odoo_settings.saved_views).toHaveLength(1);
+  expect(get.body.odoo_settings.saved_views[0].name).toBe('我的待審核');
+  expect(get.body.odoo_settings.saved_views[0].filters.filter).toBe('review_pending');
+  expect(get.body.odoo_settings.theme).toBe('dark');                       // ← 本測試的重點
+  expect(get.body.odoo_settings.odoo_url).toBe('https://example.com');     // ← 本測試的重點
+});
+
+test('PUT /api/settings/views → 非陣列回 400', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: { name: '不是陣列' } });
+  expect(res.status).toBe(400);
+});
+
+test('PUT /api/settings/views → 名稱空白回 400（存進去會讓側欄整排壞掉）', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: [{ name: '   ', filters: {} }] });
+  expect(res.status).toBe(400);
+});
+
+test('PUT /api/settings/views → 超過上限回 400（前端擋下只是提示，真防線在後端）', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: Array.from({ length: 11 }, (_, i) => ({ name: `v${i}`, filters: {} })) });
+  expect(res.status).toBe(400);
+});
+
+test('PUT /api/settings/views → 401 without token', async () => {
+  const res = await request(app).put('/api/settings/views').send({ saved_views: [] });
+  expect(res.status).toBe(401);
+});

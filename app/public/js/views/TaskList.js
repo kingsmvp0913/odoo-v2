@@ -1,3 +1,31 @@
+// 篩選條件記在這台瀏覽器：重整或關掉分頁再回來不必重點四個下拉（手機上篩選列預設收起，重設成本更高）。
+// 只存 localStorage 不進 DB——語意是「我這台機器上次看到哪」，與 notify-client 的桌面通知旗標同理由。
+// search 刻意不存：每次要找的字串不同，記住它會讓下次開啟看到「空無一物的列表」而想不起原因。
+// filtersOpen／batchMode／selectedIds 也不存：前者是版面狀態且手機桌機行為不同，後兩者是操作中狀態。
+const FILTER_KEY = 'tasklist_filters';
+const FILTER_DEFAULTS = {
+  filter: 'needs_action', sort: 'updated_desc', projectFilter: '', ownerFilter: '',
+  statusFilter: '', sourceFilter: '', releaseFilter: 'all', showAllUsers: false
+};
+const FILTER_FIELDS = Object.keys(FILTER_DEFAULTS);
+// 具名 view 與「上次用的篩選」分開存：使用者刻意命名保存的東西換裝置該跟著走，所以進 DB
+// （users.odoo_settings.saved_views）而非 localStorage。上限與後端同值，但真正的防線在後端。
+const SAVED_VIEWS_MAX = 10;
+
+// 讀取一律包 try/catch：localStorage 可能被瀏覽器停用（無痕／隱私設定），壞掉時退回預設而非白畫面。
+// 只挑認得的鍵，舊版殘留或被手改壞的內容不會塞進 data()。
+function loadFilters() {
+  const out = { ...FILTER_DEFAULTS };
+  try {
+    const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || '{}');
+    for (const k of FILTER_FIELDS) if (saved[k] !== undefined && saved[k] !== null) out[k] = saved[k];
+  } catch (e) { /* 停用或內容壞掉：用預設 */ }
+  return out;
+}
+function saveFilters(v) {
+  try { localStorage.setItem(FILTER_KEY, JSON.stringify(v)); } catch (e) { /* 記不住不是錯誤，別打斷操作 */ }
+}
+
 // 部署（deploy_testing）與 E2E 測試（playwright_running）拆成兩格：部署一定跑，E2E 專案可停用
 // （e2e_disabled → deploy_testing 直接跳 review_pending）。停用時「測試」格會被 buildFlow 濾掉，
 // 不留幽靈步驟。
@@ -94,13 +122,14 @@ window.TaskListView = Vue.defineComponent({
   name: 'TaskListView',
   components: { StatusBar, SearchableSelect: window.SearchableSelect },
   data() {
+    const f = loadFilters();   // 上次用的篩選；讀不到就是 FILTER_DEFAULTS
     return {
       tasks: [],
       archivedTasks: [],
-      filter: 'needs_action',
-      releaseFilter: 'all',
+      filter: f.filter,
+      releaseFilter: f.releaseFilter,
       search: '',
-      sort: 'updated_desc',
+      sort: f.sort,
       loading: true,
       syncing: false,
       testMode: false,
@@ -117,15 +146,18 @@ window.TaskListView = Vue.defineComponent({
       newTask: { title: '', original_text: '', project_id: '' },
       newFiles: [],
       // 結構化篩選（client-side AND 疊加）
-      projectFilter: '',
-      ownerFilter: '',
-      statusFilter: '',
-      sourceFilter: '',
-      showAllUsers: false,   // 預設 false＝只看自己（管理者需手動開）
+      projectFilter: f.projectFilter,
+      ownerFilter: f.ownerFilter,
+      statusFilter: f.statusFilter,
+      sourceFilter: f.sourceFilter,
+      showAllUsers: f.showAllUsers,   // 預設 false＝只看自己（管理者需手動開）
       // 手機上這排結構化篩選有 8 個控制項、佔掉半個畫面，任務要捲很久才看得到 →
       // 手機預設收起（桌機不受影響，切換鈕在 ≥641px 是 display:none、篩選列恆常展開）
       filtersOpen: false,
       users: [],             // admin 全部使用者清單（/api/admin/users）
+      savedViews: [],        // 具名篩選組合（存 DB，換裝置跟著走）
+      namingView: false,     // 正在替目前篩選命名
+      newViewName: '',
     };
   },
   computed: {
@@ -165,10 +197,18 @@ window.TaskListView = Vue.defineComponent({
       return [this.projectFilter, this.ownerFilter, this.statusFilter, this.sourceFilter, this.search]
         .filter(v => v !== '' && v != null).length + (this.releaseFilter !== 'all' ? 1 : 0);
     },
+    // 要記住的篩選條件快照。用一份快照而不是 8 個 watcher：日後新增篩選欄位只要加進
+    // FILTER_DEFAULTS 就會自動被記住，不會出現「漏補一個 watcher，唯獨那項記不住」的靜默失效。
+    filterSnapshot() {
+      const o = {};
+      for (const k of FILTER_FIELDS) o[k] = this[k];
+      return o;
+    },
   },
   watch: {
     needsActionCount(v) { if (!this.showAllUsers) window.needsActionCount.value = v; },
-    filter() { this.selectedIds = []; this.batchMode = false; this.load(); }
+    filter() { this.selectedIds = []; this.batchMode = false; this.load(); },
+    filterSnapshot(v) { saveFilters(v); }
   },
   async created() {
     await this.load();
@@ -182,6 +222,8 @@ window.TaskListView = Vue.defineComponent({
       if (this.isAdmin) Api.get('admin/users').then(u => { this.users = u || []; }).catch(() => {});
     }).catch(() => {});
     Api.get('projects').then(r => { this.projects = r || []; }).catch(() => {});
+    // ?? 而非 ||：舊帳號的 odoo_settings 沒有 saved_views 這個 key
+    Api.get('settings').then(r => { this.savedViews = (r.odoo_settings || {}).saved_views ?? []; }).catch(() => {});
   },
   mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
   beforeUnmount() { SocketManager.setRefreshCallback(null); },
@@ -209,6 +251,35 @@ window.TaskListView = Vue.defineComponent({
     matchSource(t)  { return !this.sourceFilter  || t.source === this.sourceFilter; },
     matchAll(t) { return this.matchSearch(t) && this.matchRelease(t) && this.matchProject(t) && this.matchOwner(t) && this.matchStatus(t) && this.matchSource(t); },
     clearFilters() { this.search=''; this.releaseFilter='all'; this.projectFilter=''; this.ownerFilter=''; this.statusFilter=''; this.sourceFilter=''; },
+    // 具名 view 一律走專用端點：PUT /api/settings 是整包覆寫，會把深色模式偏好一起從後端洗掉
+    persistViews() {
+      return Api.put('settings/views', { saved_views: this.savedViews })
+        .catch(e => showToast(e.message || '篩選組合儲存失敗', 'error'));
+    },
+    applyView(i) {
+      const v = this.savedViews[i];
+      if (!v) return;
+      for (const k of FILTER_FIELDS) if (v.filters && v.filters[k] !== undefined) this[k] = v.filters[k];
+    },
+    async saveCurrentView() {
+      const name = this.newViewName.trim();
+      if (!name) return;
+      if (this.savedViews.length >= SAVED_VIEWS_MAX) {
+        return showToast(`最多只能存 ${SAVED_VIEWS_MAX} 組，請先刪掉不用的`, 'error');
+      }
+      this.savedViews.push({ name, filters: { ...this.filterSnapshot } });
+      this.newViewName = '';
+      this.namingView = false;
+      await this.persistViews();
+    },
+    async deleteView(i) {
+      const v = this.savedViews[i];
+      if (!v) return;
+      const ok = await confirmDialog({ title: '刪除篩選組合', message: `確定刪除「${v.name}」？`, danger: true });
+      if (!ok) return;
+      this.savedViews.splice(i, 1);
+      await this.persistViews();
+    },
     async toggleAllUsers() {
       this.showAllUsers = !this.showAllUsers;
       if (!this.showAllUsers) this.ownerFilter = '';
@@ -517,6 +588,19 @@ window.TaskListView = Vue.defineComponent({
           <option value="status_asc">依狀態</option>
         </select>
         <button class="btn btn-outline btn-sm" @click="clearFilters" title="清除所有篩選">✕ 清除篩選</button>
+        <button v-for="(v, i) in savedViews" :key="i" class="btn btn-sm btn-outline"
+          @click="applyView(i)" :title="'套用「' + v.name + '」'">
+          {{ v.name }}<span @click.stop="deleteView(i)" title="刪除這組"
+            style="margin-left:6px;color:var(--text-muted)">✕</span>
+        </button>
+        <template v-if="namingView">
+          <input v-model="newViewName" class="form-control tasklist-search-input" placeholder="這組篩選叫什麼？"
+            maxlength="20" @keyup.enter="saveCurrentView" />
+          <button class="btn btn-sm btn-primary" @click="saveCurrentView">存</button>
+          <button class="btn btn-sm btn-outline" @click="namingView=false; newViewName=''">取消</button>
+        </template>
+        <button v-else class="btn btn-sm btn-outline" @click="namingView=true"
+          title="把目前的篩選條件存成具名組合，換裝置登入也跟著走">＋ 存成組合</button>
       </div>
 
       <div v-if="batchMode" class="tasklist-batch-bar">
