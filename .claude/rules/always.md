@@ -5,10 +5,8 @@
 不分改哪個檔都該知道的。
 
 1. **全跑測試一律 `cd app && npm run test:quiet`（含 `--runInBand`），不要 `npx jest`** — 平行 worker 下 pg-mem 產生浮動假紅，每次紅的套件都不同。`npm test` 同樣正確但輸出 127K（實測 2026-08-01：色碼佔 27%、console 堆疊佔 25%、152 行 PASS，對判斷紅綠全無資訊量）；`test:quiet` 壓到 9K，接 `| grep -vE '^PASS |^$'` 再壓到 3K。**紅了之後**才對那一支單獨跑不帶 `--silent` 的完整輸出——console log 在全綠時是噪音，在除錯時是線索。
-2. **下列紅燈是既有問題，乾淨 HEAD 也紅，不要 debug** — 真正結果看 `Tests: X passed` 那行。判定法一律是「stash 掉自己的改動、對那一支單獨再跑一次」，別靠記憶認定（2026-08-06 實測更新）：
-   - `git-integration.test.js` 的 `ensureWorktreeAtMain` **兩支**：CRLF 行尾差異（期望 `x = 1`、實得 `x = 1\n`），Windows checkout 必紅。
-   - `vpn-gateway-run.test.js` 的 `defaultTmpFilePath › 容器化（APP_DIR 已設）…`：測的是容器內落點，開發機非容器故必紅。
-   - 除上述兩支之外的紅燈，**先假設是 flaky**（pgPass flake 家族）：連跑三輪全跑，紅的分別是 `enterprise-routes`／`spec-review`／`env-agent-sso-route`——**每輪都是不同支、且單跑一律綠**。所以別把它們記成固定清單，「全跑紅了」本身不構成證據，一律單跑複驗才算數。
+2. **基線自己量，新紅燈一律先當成自己造成的** — 真正結果看 `Tests: X passed` 那行。**動手改任何東西之前先跑一次全跑**，把 `Tests:` 與 `Test Suites:` 記下來，那就是你的基線。之後出現的紅燈都先假設是自己弄的；真的懷疑是 flaky（pgPass flake 家族）才「stash 掉自己的改動、對那一支單獨再跑一次」——**單跑綠了才算 flaky**，「全跑紅了」本身不構成證據，一律單跑複驗才算數（實測連跑三輪，紅的分別是 `enterprise-routes`／`spec-review`／`env-agent-sso-route`，每輪都是不同支）。
+   - ⚠ **不要在本條寫死任何「既有紅燈」清單或通過數字。** 本條原本列的三支（`git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支、`vpn-gateway-run.test.js` 的容器那支）在 2026-08-08 實測**都是綠的**：那份清單是在真因（無全域 git identity）修好**之前**量的，修好之後沒人回頭更新，結果變成教人把自己改壞的東西當既有問題放過去。通過數字同理會腐爛——`68ba5ed` 量到 2148，同一天稍後就是 2173。
 3. **改 `app/server/**.js` 後必須重啟 server；只改 agent `.md` prompt 靠 mtime 熱載免重啟** — 常駐進程載的是舊碼，不重啟會誤判修法無效。
 4. **commit 前一律 `git status --porcelain -uno` 逐檔挑選，禁用 `git add -A`** — 此 repo 常態是多股平行工作，盲目 commit 會夾帶或蓋掉他人未完成的變更。單一檔案混了他人 hunk 時，用 `git diff -U3` 定位後 `git apply --cached` 只暫存自己的。
 5. **多 session 平行工作各自開 git worktree，禁止共用同一個 checkout** — 對方切分支會讓你的 commit 落到錯的分支，甚至被連帶 push 到 origin（已實際發生過）。
