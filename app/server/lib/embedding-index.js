@@ -81,6 +81,19 @@ async function indexTask(taskId) {
   return replaceChunks({ projectId: task.project_id, taskId: task.id, chunks, hash });
 }
 
+// 九個觸發點（wiki 五處、analysis_yaml 四處）共用的入口，一律在來源寫入成功之後才呼叫。
+// 三個刻意的取捨：
+// 1) 未就緒就直接跳過，不排隊等模型載完——剛啟動的 server 與測試環境都屬這一類，在這裡排隊
+//    等於把 130 MB 的模型載入綁進 pipeline 的關鍵路徑（測試更是連載都不該載）。
+// 2) 不 await：索引是事後補得回來的東西，不該讓 wiki 寫入或 pipeline 因為它而失敗。
+// 3) 上面兩條漏掉的，夜間 sweepStale 會靠 source_hash 對不上重算補回——所以跳過是安全的，
+//    漏掉的代價只是「那頁到今晚為止搜不到」，不是永久失聯。
+function enqueue({ wikiPageId, taskId }) {
+  if (!emb.isReady()) return;
+  const p = wikiPageId ? indexWikiPage(wikiPageId) : indexTask(taskId);
+  p.catch(err => console.error('[EMBEDDING] 索引失敗：', err.message));
+}
+
 // 全量重建：管理頁那顆按鈕。內容沒變的來源會被 isUnchanged 擋掉，所以重跑第二次幾乎瞬間完成。
 async function rebuildAll() {
   if (progress && !progress.finishedAt) return progress;   // 已經在跑就不疊加
@@ -127,10 +140,14 @@ async function loadCache() {
 
 // 檢索：對該專案的塊算相似度。同一來源有多塊命中時取最好的那一塊——不累加，否則長頁面
 // 會因為塊多而灌票（規格 §2.6）。
-function searchProject(projectId, queryVec, limit = 30) {
+// kind 一定要分：wiki 與 analysis_yaml 的塊共用同一個 bucket，不過濾的話搜 wiki 會撈到任務規格
+// 的塊，而呼叫端拿 wikiPageId 去查頁只會得到 undefined——症狀是「命中數量對得上、內容卻少一半」。
+function searchProject(projectId, queryVec, { limit = 30, kind = null } = {}) {
   const bucket = cache.get(projectId) || [];
   const best = new Map();
   for (const c of bucket) {
+    if (kind === 'wiki' && !c.wikiPageId) continue;
+    if (kind === 'task' && !c.taskId) continue;
     const key = c.wikiPageId ? `w${c.wikiPageId}` : `t${c.taskId}`;
     const score = emb.similarity(queryVec, c.vec);
     const prev = best.get(key);
@@ -150,7 +167,7 @@ const getIndexStatus = () => ({
 function _resetForTesting() { cache.clear(); cacheLoaded = false; progress = null; }
 
 module.exports = {
-  indexWikiPage, indexTask, rebuildAll, sweepStale,
+  indexWikiPage, indexTask, enqueue, rebuildAll, sweepStale,
   loadCache, isCacheLoaded, searchProject, getIndexStatus, sourceHash,
   _resetForTesting,
 };

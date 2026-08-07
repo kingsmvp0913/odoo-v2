@@ -5,6 +5,7 @@ const { loadAgent } = require('./agent-loader');
 const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
+const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 const { safeReturnStatus } = require('./stations');
 
@@ -146,6 +147,7 @@ async function runRespecPatch(taskId, userId, signal) {
     "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', respec_return_status = NULL, qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
     [taskId, newYaml, `[追加需求]\n${requirements}`]
   );
+  enqueueEmbedding({ taskId });
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
 }
 

@@ -2,6 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
 const { aiEndpointGuard } = require('./lib/ai-token');
+const { resolveProjectId } = require('./lib/project-ref');
 
 function registerRoutes(app) {
   const base = '/api/projects/:projectId/wiki';
@@ -112,17 +113,6 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // 專案參數可以是 folder_name 或 name，但「用 OR 直接 join」會出事：A 的 folder_name 撞到 B 的
-  // name 時（中文專案名＋英文資料夾名的慣例下很容易），一次查詢會同時撈到兩個專案的頁。先解成
-  // 唯一的 project_id 再查，各端點一律 w.project_id=$1，就不會混到別人的內容。
-  // 撞號時取 folder_name 命中的那個（比 name 精確，且它才是慣例上拿來當 slug 的欄位）。
-  async function resolveProjectId(project) {
-    const { rows } = await query(
-      `SELECT id FROM projects WHERE folder_name=$1 OR name=$1
-        ORDER BY (folder_name=$1) DESC, id ASC LIMIT 1`, [project]);
-    return rows.length ? rows[0].id : null;
-  }
-
   // description 一併回傳：只給 title 的話，agent 只能靠標題猜哪一頁相關，wiki 一多就必漏——
   // 而且漏掉沒有任何訊號（端點回 200＋清單，agent 當成「沒有相關記載」就不查了）。
   app.get('/ai/wiki/pages', aiEndpointGuard, async (req, res) => {
@@ -152,15 +142,19 @@ function registerRoutes(app) {
       // 不寫 ESCAPE 子句：反斜線本來就是 PostgreSQL 的 LIKE 預設逸脫字元，寫了反而讓 pg-mem 解析
       // 不了整句（它不支援該子句），測試環境會整組炸掉。
       const like = `%${q.toLowerCase().replace(/[\\%_]/g, c => `\\${c}`)}%`;
+      // 兩條腿各取 30 名再合併，最終仍只回 20 筆。取 20 就合併會讓「LIKE 排 25、向量排 1」
+      // 這種頁根本進不了候選集——RRF 只能對它看得到的名次動作。
       const { rows } = await query(
         `SELECT slug, title, node_type, description FROM wiki_pages
           WHERE project_id=$1
             AND (LOWER(title) LIKE $2 OR LOWER(content) LIKE $2
                  OR LOWER(COALESCE(description,'')) LIKE $2)
           ORDER BY (node_type <> 'troubleshooting'), title ASC
-          LIMIT 20`,
+          LIMIT 30`,
         [pid, like]);
-      if (rows.length) return res.json({ ok: true, hits: rows });
+      const semantic = await semanticLeg(pid, q);
+      const hits = fuseRRF(rows, semantic).slice(0, 20);
+      if (hits.length) return res.json({ ok: true, hits });
 
       // 搜不到時不回空陣列。空 hits 沒有任何訊號，agent 會讀成「wiki 沒有記載這件事」就不再追，
       // 然後自己瞎猜——這比搜不到本身傷得更重。單一專案的目錄很小（實測最大的專案 28 頁、
@@ -176,6 +170,55 @@ function registerRoutes(app) {
       res.json({ ok: true, hits: all, fallback: 'all_pages' });
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
+
+  // 語意檢索那條腿。索引還沒載完、worker 沒就緒、算 embedding 途中出錯——一律回空陣列，
+  // 讓 LIKE 單獨作數。這是加法不是取代（規格 §2.1 決策③）：純語意對「確切的 model 名或錯誤碼」
+  // 反而不準，而 LIKE 對那類查詢精準無比。所以這條腿壞掉時，搜尋只是回到改動前的行為，不是失效。
+  async function semanticLeg(projectId, q) {
+    try {
+      const emb = require('./lib/embedding');
+      const idx = require('./lib/embedding-index');
+      if (!emb.isReady() || !idx.isCacheLoaded()) return [];
+      const qv = await emb.embedQuery(q);
+      const hits = idx.searchProject(projectId, qv, { limit: 30, kind: 'wiki' });
+      if (!hits.length) return [];
+      // 動態 IN 而非 `id = ANY($2::int[])`：pg-mem 對 SERIAL 主鍵跑 ANY(陣列) 永遠查不到列，
+      // 測試會全綠但這條腿是死的（見 .claude/rules/testing.md 第 12 條與本檔 /ai/wiki/page 的註解）。
+      const ids = hits.map(h => h.wikiPageId);
+      const ph = ids.map((_, i) => `$${i + 2}`).join(',');
+      const { rows } = await query(
+        `SELECT id, slug, title, node_type, description FROM wiki_pages
+          WHERE project_id=$1 AND id IN (${ph})`, [projectId, ...ids]);
+      const byId = new Map(rows.map(r => [r.id, r]));
+      // 依相似度名次還原順序：SQL 回來的順序無意義，而 RRF 吃的就是名次。
+      return hits.map(h => byId.get(h.wikiPageId)).filter(Boolean)
+        .map(({ slug, title, node_type, description }) => ({ slug, title, node_type, description }));
+    } catch (err) {
+      console.error('[wiki] 語意檢索失敗，退回純 LIKE：', err.message);
+      return [];
+    }
+  }
+
+  // Reciprocal Rank Fusion：兩條腿的分數不同量綱（LIKE 根本沒有分數，cosine 是 0–1），
+  // 直接加權相加沒有意義。RRF 只看名次：score = Σ 1/(k + rank)，k=60 是業界慣用值。
+  // ⚠ 這是刻意的行為改變：改動前 troubleshooting 是主要排序鍵（永遠排最前），現在 RRF 分數才是，
+  // troubleshooting 退成同分時的次要鍵。回傳欄位與筆數不變，但同一個查詢的排序會變。
+  const RRF_K = 60;
+  function fuseRRF(...lists) {
+    const score = new Map();
+    const page = new Map();
+    for (const list of lists) {
+      list.forEach((row, i) => {
+        score.set(row.slug, (score.get(row.slug) || 0) + 1 / (RRF_K + i + 1));
+        if (!page.has(row.slug)) page.set(row.slug, row);
+      });
+    }
+    return [...score.entries()]
+      .sort((a, b) => b[1] - a[1]
+        || (page.get(a[0]).node_type !== 'troubleshooting') - (page.get(b[0]).node_type !== 'troubleshooting')
+        || String(page.get(a[0]).title).localeCompare(String(page.get(b[0]).title)))
+      .map(([slug]) => page.get(slug));
+  }
 
   // 搜不到的查詢留樣本：這是事後分辨「關鍵字猜不中」與「wiki 根本沒寫」的唯一依據
   //（前者靠改進檢索能救，後者只能補內容），也是語意檢索上線後的對照組來源。

@@ -21,6 +21,9 @@ window.AdminView = Vue.defineComponent({
       savingWriteback: false,
       savingUsageGate: false,
       steppingPipeline: false,
+      embedding: null,
+      rebuildingEmbedding: false,
+      embeddingTimer: null,
       navTools: [
         { title: '使用者管理', desc: '新增、刪除帳號，調整角色與存取權限。', to: '/admin/users' },
         { title: 'Agent 管理', desc: '調整各 agent 的模型與提示詞。', to: '/admin/agents' },
@@ -34,7 +37,33 @@ window.AdminView = Vue.defineComponent({
     };
   },
   async created() { await this.loadAll(); },
+  // 離開頁面要停掉輪詢，否則 timer 會一直打 status 端點。
+  unmounted() { if (this.embeddingTimer) clearTimeout(this.embeddingTimer); },
   methods: {
+    async loadEmbedding() {
+      try { this.embedding = await Api.get('admin/embedding/status'); } catch (_) { this.embedding = null; }
+    },
+    // 進度只存在 server 記憶體（重建只要 10–20 秒，不值得為它多一張表），所以靠輪詢看。
+    // 排程下一次前先清掉舊 timer：重複按按鈕不該疊出多條輪詢。
+    pollEmbedding() {
+      if (this.embeddingTimer) clearTimeout(this.embeddingTimer);
+      this.embeddingTimer = setTimeout(async () => {
+        await this.loadEmbedding();
+        const p = this.embedding && this.embedding.progress;
+        if (p && !p.finishedAt) this.pollEmbedding();
+        else this.rebuildingEmbedding = false;
+      }, 2000);
+    },
+    async rebuildEmbedding() {
+      this.rebuildingEmbedding = true;
+      try {
+        this.embedding = await Api.post('admin/embedding/rebuild', {});
+        this.pollEmbedding();
+      } catch (e) {
+        showToast(e.message, 'error');
+        this.rebuildingEmbedding = false;
+      }
+    },
     async loadAll() {
       this.loading = true;
       try {
@@ -60,6 +89,7 @@ window.AdminView = Vue.defineComponent({
         }
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
         try { this.claudeToken = await Api.get('admin/claude-token'); } catch (_) { /* 顯示用 */ }
+        await this.loadEmbedding();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -407,6 +437,38 @@ window.AdminView = Vue.defineComponent({
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ writebackOdooNotes ? '留言回寫已啟用' : '留言回寫已關閉' }}</span>
             </label>
+          </div>
+        </div>
+
+        <!-- 語意檢索索引 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">語意檢索索引</div>
+            <div class="setting-block-desc">wiki 與歷史任務規格的語意索引，供 AI 用「意思相近」而非「字串相同」找資料。索引在內容變動時自動增量更新，夜間另有一輪補算；這裡的重建是換模型或懷疑索引不同步時才需要按。模型未就緒時檢索自動退回關鍵字比對，功能不會中斷。</div>
+          </div>
+          <div class="setting-block-body">
+            <div v-if="embedding" data-rwd-volatile style="font-size:var(--fs-sm)">
+              <div style="margin-bottom:var(--space-2)">
+                <span v-if="embedding.disabled" style="color:var(--danger)">✕ 已停用（連續失敗達上限）：{{ embedding.lastError || '原因不明' }}</span>
+                <span v-else-if="embedding.ready" style="color:var(--success)">✓ 模型就緒（{{ embedding.model }}）</span>
+                <span v-else style="color:var(--warning)">⏳ 模型未就緒，檢索退回關鍵字比對{{ embedding.lastError ? '：' + embedding.lastError : '（首次啟動需下載模型權重，約 130 MB）' }}</span>
+              </div>
+              <div style="color:var(--text-muted)">
+                已載入 {{ embedding.cachedChunks }} 個片段<span v-if="embedding.queued"> ・ 佇列中 {{ embedding.queued }} 批</span>
+                <span v-if="!embedding.cacheLoaded"> ・ 快取尚未載入</span>
+              </div>
+              <div v-if="embedding.progress" style="margin-top:var(--space-2)">
+                <span v-if="embedding.progress.error" style="color:var(--danger)">重建失敗：{{ embedding.progress.error }}</span>
+                <span v-else-if="!embedding.progress.finishedAt" style="color:var(--text)">重建中 {{ embedding.progress.done }} / {{ embedding.progress.total }}</span>
+                <span v-else style="color:var(--success)">上次重建完成，共處理 {{ embedding.progress.total }} 個來源</span>
+              </div>
+            </div>
+            <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">狀態讀取失敗</div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="rebuildEmbedding" :disabled="rebuildingEmbedding">
+              {{ rebuildingEmbedding ? '重建中...' : '重建索引' }}
+            </button>
           </div>
         </div>
 

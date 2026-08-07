@@ -18,6 +18,7 @@ const { buildGitEnv } = require('../lib/git-identity');
 const notify = require('../notify');
 const { runClarifyChat } = require('./clarify-chat');
 const { safeReturnStatus } = require('./stations');
+const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 
 // 執行歷程階段標記的中文顯示（僅影響顯示文字，status 值與流程判斷不變）
@@ -269,6 +270,7 @@ async function writeAnalysisYaml(taskId, spec) {
     + 'clarify_session_id=NULL, clarify_prompt_ver=NULL WHERE id=$1',
     [taskId, yaml.dump(spec, { lineWidth: -1 })]
   );
+  enqueueEmbedding({ taskId });
 }
 
 async function recordSpecDecision(taskId, analysisYaml, answer) {

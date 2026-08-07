@@ -7,6 +7,7 @@ const { taskWorkContext } = require('./work-context');
 const { stopReason } = require('./claude-runner');
 const { withResume } = require('./with-resume');
 const { parseAgentResult } = require('./agent-result');
+const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 
 // spec_review 對話式閘門（pre-coding）：讀 task_logs 對話＋現行 analysis_yaml，跑 spec-review agent。
@@ -119,6 +120,7 @@ async function runSpecReview(task, userId, signal) {
       "UPDATE tasks SET analysis_yaml=$2, status='spec_review', updated_at=NOW() WHERE id=$1",
       [taskId, parsed.analysis_yaml]
     );
+    enqueueEmbedding({ taskId });
   } else {
     await query("UPDATE tasks SET status='spec_review', updated_at=NOW() WHERE id=$1", [taskId]);
   }

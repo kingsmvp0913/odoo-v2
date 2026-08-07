@@ -448,6 +448,26 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // --- 語意檢索索引：admin 一鍵全量重建 ---
+
+  // fire-and-forget，比照上面的健檢：全量重建實測 10–20 秒，但那是在單一 worker 上排隊跑推論，
+  // 沒有理由讓 HTTP 連線掛著等。進度靠下面的 status 端點輪詢（只在記憶體，重啟即歸零——
+  // 20 秒的工作不需要撐過重啟，見 lib/embedding-index.js 的檔頭註解）。
+  app.post('/api/admin/embedding/rebuild', auth, async (_req, res) => {
+    try {
+      const { rebuildAll, getIndexStatus } = require('./lib/embedding-index');
+      rebuildAll().catch(err => console.error('[ADMIN] embedding-rebuild:', err.message));
+      res.json(getIndexStatus());
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/admin/embedding/status', auth, (_req, res) => {
+    try {
+      const { getIndexStatus } = require('./lib/embedding-index');
+      res.json(getIndexStatus());
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // 中文名稱對照表（stage → label），供用量報表等全站顯示；一般登入即可讀
   app.get('/api/agents/labels', verifyToken, (_req, res) => {
     try { res.json(getLabels()); }

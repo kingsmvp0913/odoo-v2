@@ -75,6 +75,10 @@ function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, pro
   return {
     prompt: agent.render({
       project_name: info.name,
+      // /ai/* 端點的 project 參數：端點是 folder_name=$1 OR name=$1，但中文專案名進網址要編碼，
+      // 所以一律給編過的 folder_name（比照 cs-agent）。placeholder 有值才不會渲染成空字串——
+      // 那會讓 agent 拿到 `project=` 的空網址，查無結果卻不會報錯。
+      project_slug: encodeURIComponent(info.folder_name || info.name),
       odoo_version: info.odoo_version,
       work_dir: workDir || info.root,
       repo_list: repoList,

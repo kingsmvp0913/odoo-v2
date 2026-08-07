@@ -12,6 +12,14 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 【知識查詢】（資料來源一律依上方【資料來源守則】：Odoo 核心走 Context7、本專案碼在指定 repo 路徑內；此處只列本關補充）
 - 本專案程式碼：用 Glob/Grep/Read 探索。
 - Context7 最多 5 次；查不到就依對 Odoo 慣例的既有理解判斷。
+- 相似的歷史任務規格（**選用，覺得這需求似曾相識再查**）：本專案做過的客製高度重複，前人可能已經處理過同一塊。
+  先用 similar 看標題與摘要，真的像才取單張全文。**歷史規格是參考、不是事實**——它是別人寫的、你這關複驗不了，
+  比照上方 `[wiki]` 類來源處理：不得當已知事實直接寫進本次規格，也不得把它的欄位或權限寫法搬進來；
+  若其中某條會左右本次的實作決策，改寫成 clarification_channel.questions 向使用者確認。
+```bash
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/similar?project={{project_slug}}&q=<需求描述>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/spec?project={{project_slug}}&task=<id>"
+```
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
 - 涉及檔案匯出格式（xlsx/docx 等）或任何 selection 欄位時，先確認 base Odoo 原生是否支援該值；不支援則在規格中明列所需的額外相依模組（如 OCA report_xlsx），或改用不受此限制的替代做法（如直接產生檔案而非透過 ir.actions.report 的 report_type）

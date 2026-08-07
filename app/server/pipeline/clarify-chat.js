@@ -7,6 +7,7 @@ const { taskWorkContext } = require('./work-context');
 const { stopReason } = require('./claude-runner');
 const { withResume } = require('./with-resume');
 const { parseAgentResult } = require('./agent-result');
+const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 
 // 澄清閘門的對話關（confirm_pending／clarify_pending 共用）：跑 clarify-chat agent。
@@ -199,6 +200,7 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
     const merged = mergeClarification(task.analysis_yaml, parsed.questions_yaml);
     if (merged) {
       await query("UPDATE tasks SET analysis_yaml=$2, updated_at=NOW() WHERE id=$1", [taskId, merged]);
+      enqueueEmbedding({ taskId });
     } else {
       // 規格或題目 YAML 壞掉：寧可留著舊題目也不覆蓋，並讓使用者看得到「這次沒更新」
       await query(

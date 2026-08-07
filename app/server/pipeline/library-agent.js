@@ -7,6 +7,7 @@ const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { query } = require('../db');
 const notify = require('../notify');
+const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 
 function _collectManifests(dir, results, limit) {
   if (results.length >= limit || !fs.existsSync(dir)) return;
@@ -50,6 +51,7 @@ async function _upsertNode(projectId, parentId, nodeType, slug, title, content, 
      RETURNING id`,
     [projectId, parentId, nodeType, slug, title, content, trimDesc(description)]
   );
+  enqueueEmbedding({ wikiPageId: row.id });
   return row.id;
 }
 
@@ -62,6 +64,9 @@ async function _ensureNode(projectId, parentId, nodeType, slug, title, content) 
   const { rows: [row] } = await query(
     'SELECT id FROM wiki_pages WHERE project_id=$1 AND slug=$2', [projectId, slug]
   );
+  // DO NOTHING 這條路徑上，頁可能是這次新建的、也可能是早就存在的。一律入佇列即可：
+  // 內容沒變時 source_hash 會對得上，indexWikiPage 直接跳過，不會白算一次推論。
+  enqueueEmbedding({ wikiPageId: row.id });
   return row.id;
 }
 
@@ -178,12 +183,14 @@ ${src || '（無原始碼）'}`;
     const e = new Error('重新生成失敗：' + err.message); e.status = 500; throw e;
   }
 
-  await query(
+  const { rows: [refreshed] } = await query(
     `UPDATE wiki_pages SET title=$3, content=$4,
             description=COALESCE($5, description), updated_at=NOW()
-      WHERE project_id=$1 AND slug=$2`,
+      WHERE project_id=$1 AND slug=$2
+      RETURNING id`,
     [projectId, slug, title, content, trimDesc(description)]
   );
+  if (refreshed) enqueueEmbedding({ wikiPageId: refreshed.id });
   emit(100, '完成');
   return { ok: true, slug };
 }

@@ -10,6 +10,7 @@ const { registerRoutes: registerInboxRoutes } = require('./inbox-routes');
 const { registerRoutes: registerPipelineRoutes } = require('./pipeline-routes');
 const { registerRoutes: registerProjectRoutes } = require('./project-routes');
 const { registerRoutes: registerWikiRoutes } = require('./wiki-routes');
+const { registerRoutes: registerAiTaskRoutes } = require('./ai-task-routes');
 const { registerRoutes: registerChatRoutes } = require('./chat-routes');
 const { registerRoutes: registerEnvRoutes } = require('./env-routes');
 const { registerRoutes: registerAdminRoutes } = require('./admin-routes');
@@ -60,6 +61,7 @@ function createApp() {
   registerPipelineRoutes(app);
   registerProjectRoutes(app);
   registerWikiRoutes(app);
+  registerAiTaskRoutes(app);
   registerChatRoutes(app);
   registerEnvRoutes(app);
   registerAdminRoutes(app);

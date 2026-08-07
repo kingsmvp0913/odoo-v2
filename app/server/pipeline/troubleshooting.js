@@ -1,5 +1,6 @@
 const { query } = require('../db');
 const { extractTaggedBlock } = require('./agent-result');
+const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 
 // 排障／客服「釐清後的結論」寫回 wiki 的共用模組。chat 與 cs 兩關會用到，抽出避免各寫一份。
 // 設計：這兩關是知識的破口——chat 純 Q&A 從不寫 wiki、cs 判 operation（只回覆不改程式）也不會進 library
@@ -36,6 +37,7 @@ async function _ensureContainer(projectId) {
   const { rows: [row] } = await query(
     'SELECT id FROM wiki_pages WHERE project_id=$1 AND slug=$2', [projectId, CONTAINER_SLUG]
   );
+  enqueueEmbedding({ wikiPageId: row.id });
   return row.id;
 }
 
@@ -54,14 +56,16 @@ async function recordTroubleshooting(projectId, entry) {
   // 沒帶 description 的那一輪會把既有摘要洗成 NULL，而清單／搜尋端點正是靠它讓 agent 判斷
   // 「該不該打開這一頁」。COALESCE 讓「沒帶」等於「不動」，只有真的給了新值才覆蓋。
   const description = String(entry.description || '').trim() || null;
-  await query(
+  const { rows } = await query(
     `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, description, updated_at)
      VALUES ($1,$2,'troubleshooting',$3,$4,$5,$6,NOW())
      ON CONFLICT (project_id, slug)
      DO UPDATE SET parent_id=$2, node_type='troubleshooting', title=$4, content=$5,
-                   description=COALESCE($6, wiki_pages.description), updated_at=NOW()`,
+                   description=COALESCE($6, wiki_pages.description), updated_at=NOW()
+     RETURNING id`,
     [projectId, containerId, slug, entry.title, entry.content, description]
   );
+  if (rows[0]) enqueueEmbedding({ wikiPageId: rows[0].id });
   return slug;
 }
 

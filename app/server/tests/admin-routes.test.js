@@ -235,3 +235,28 @@ test('GET /api/admin/token-breakdown → 非 admin 403', async () => {
     .set('Authorization', `Bearer ${userToken}`);
   expect(res.status).toBe(403);
 });
+
+// 語意檢索索引：重建端點是 fire-and-forget（重建要跑推論，掛著等 HTTP 沒有意義），
+// 所以它的回應就是「當下狀態」而不是「重建結果」——回應形狀必須跟 status 端點一致，
+// 前端才能拿同一份資料輪詢。索引是全平台資料，非 admin 不得碰。
+test('GET /api/admin/embedding/status → 回模型與快取狀態', async () => {
+  const res = await request(app).get('/api/admin/embedding/status')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.model).toBeTruthy();
+  expect(typeof res.body.ready).toBe('boolean');
+  expect(typeof res.body.cachedChunks).toBe('number');
+});
+
+test('POST /api/admin/embedding/rebuild → 立刻回狀態，不等重建完成', async () => {
+  const res = await request(app).post('/api/admin/embedding/rebuild')
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(res.status).toBe(200);
+  expect(res.body.model).toBeTruthy();
+});
+
+test('POST /api/admin/embedding/rebuild → 非 admin 403', async () => {
+  const res = await request(app).post('/api/admin/embedding/rebuild')
+    .set('Authorization', `Bearer ${userToken}`).send({});
+  expect(res.status).toBe(403);
+});
