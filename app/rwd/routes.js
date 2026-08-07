@@ -68,6 +68,18 @@ const STABILIZE_CSS = `
   }
   /* skeleton 的脈動 */
   .skeleton { animation: none !important; opacity: .6 !important; }
+
+  /* ── 讓 fullPage 真的拍到整頁 ──────────────────────────────────
+     app-shell 是「一屏高、內部捲動」的版型（body 100dvh + .main/.content 各自 overflow）。
+     Playwright 的 fullPage 看的是 document 的捲動高度，對這種內部捲動的容器無效——
+     所以在補上這段之前，**所有 app 頁面的基線都只有一個視窗高**，捲動線以下的內容
+     從來沒進過門禁（2026-08-07 發現：126 張基線裡唯一超過一屏的是 styleguide.html，
+     因為它是獨立頁面、沒有 app-shell）。門禁號稱「桌機 diff = 0」，其實只驗了第一屏。
+     解除高度與 overflow 限制，整份文件才會展開讓 fullPage 拍完。 */
+  html, body { height: auto !important; overflow: visible !important; }
+  .app-shell, .main, .content { height: auto !important; overflow: visible !important; }
+  /* sticky 頁首在展開後會跟著捲，長頁上會重複入鏡 */
+  .page-header, .topbar { position: static !important; }
 `;
 
 // 比對容差。抗字型次像素渲染的微小差異，但不足以蓋掉真正的版面位移。
