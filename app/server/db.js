@@ -351,6 +351,34 @@ async function migrate() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // embedding_chunks：wiki 頁與任務規格切塊後的向量索引（語意檢索用）。
+    // 刻意不用 pgvector：Windows 軌以 winget 裝 EDB PostgreSQL，pgvector 沒有能寫進 install.ps1
+    // 的一鍵路徑，容器軌卻 apt 一行搞定——兩軌做法不同且只有一軌會壞，是最難查的那類 bug。
+    // 資料量也用不到它：檢索一律 WHERE project_id=$1，單專案候選集是數十到數百個 chunk，
+    // 純 JS cosine 是微秒級。
+    //
+    // 兩個 nullable FK 而非泛型 source_type+source_id：這樣 CASCADE 會自動清孤兒。用泛型就得
+    // 自己寫清理，而刪除路徑散在三份手動清單裡（見上方 user_inbox 的註解），一定會漏。
+    // vector 存 base64 TEXT 而非 BYTEA：BYTEA 的 Buffer 往返在 pg-mem 下不保證一致，代價只是
+    // 33% 空間。model_id 是模型指紋，查詢必須過濾它——不同模型的座標系混著算，結果是垃圾且不報錯。
+    // source_hash 比對來源內容而非 updated_at：後者會因無關欄位變動而更新，造成無謂重算。
+    //
+    // ⚠ 增量重算一律「先刪該來源全部 chunk 再整批插入」，不能 upsert：本表兩個來源欄位必有一個
+    // 是 NULL，而 UNIQUE 對含 NULL 的列不去重（PG 標準行為，實測 pg-mem 一致），約束擋不住重複。
+    // 只覆寫不刪的話，內容改短後尾巴的舊 chunk 會永遠留著，讓搜尋撈出已刪掉的內容且不報錯。
+    `CREATE TABLE IF NOT EXISTS embedding_chunks (
+      id           SERIAL PRIMARY KEY,
+      project_id   INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+      wiki_page_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE,
+      task_id      INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+      chunk_index  INTEGER NOT NULL DEFAULT 0,
+      content      TEXT NOT NULL,
+      vector       TEXT NOT NULL,
+      model_id     TEXT NOT NULL,
+      source_hash  TEXT NOT NULL,
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
     // wiki_search_misses：`/ai/wiki/search` 回 0 筆時記下那次的查詢字串。
     // 「搜不到」本身沒有任何訊號——端點回 200＋空 hits，agent 讀成「wiki 沒有記載」就不再追。
     // 這張表是唯一能事後分辨「關鍵字猜不中」與「wiki 根本沒寫」的依據，也是語意檢索上線後

@@ -86,6 +86,13 @@ let _lastShutdownMinute = null; // 同一分鐘只觸發一次夜間關機（tic
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
+// 語意索引補算：觸發點共九處（wiki 五處、analysis_yaml 四處），漏掛任何一處的症狀是
+// 那條路徑寫進去的內容永遠搜不到，而且沒有任何訊號。這一輪掃過去就會補上，是那九處的安全網。
+// 只在夜間跑：補算要跑推論，而推論只有一個 worker，白天做會跟使用者的查詢搶。0 = 停用。
+let _lastEmbeddingSweepAt = 0;
+const EMBEDDING_SWEEP_INTERVAL_MS = parseInt(process.env.EMBEDDING_SWEEP_INTERVAL_MS || String(86400000), 10);
+const EMBEDDING_SWEEP_HOUR = parseInt(process.env.EMBEDDING_SWEEP_HOUR || '3', 10);
+
 // 工作流程健檢：原本只有 admin 手動觸發，而實際上線後從沒被按過一次（run#1 是平台史上第一次）。
 // 再好的診斷不跑就沒有價值，改為每週自動跑一次。0 = 停用。
 const HEALTH_CHECK_INTERVAL_MS = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS || String(7 * 86400000), 10);
@@ -219,6 +226,21 @@ function startCron() {
         // 同理：chat／cs 回報的「wiki 頁與程式碼漂移」慢慢分類，供健檢彙整
         const { classifyPendingWikiDrift } = require('./pipeline/wiki-drift');
         await classifyPendingWikiDrift().catch(err => console.error('[CRON] wiki-drift-classify:', err.message));
+      }
+
+      // 語意索引補算（見檔頭常數處的說明）。模型沒就緒就跳過——那代表向量腿本來就是關的，
+      // 硬跑只會把失敗計數推到停用門檻。
+      if (!testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0
+          && new Date().getHours() === EMBEDDING_SWEEP_HOUR
+          && Date.now() - _lastEmbeddingSweepAt >= EMBEDDING_SWEEP_INTERVAL_MS) {
+        _lastEmbeddingSweepAt = Date.now();
+        const embedding = require('./lib/embedding');
+        if (embedding.isReady()) {
+          const { sweepStale } = require('./lib/embedding-index');
+          await sweepStale()
+            .then(n => { if (n) console.log(`[CRON] 語意索引補算 ${n} 筆`); })
+            .catch(err => console.error('[CRON] embedding-sweep:', err.message));
+        }
       }
     } catch (err) {
       console.error('[CRON] tick error:', err.message);

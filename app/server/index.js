@@ -247,6 +247,15 @@ if (require.main === module) {
       console.log(`AI Dev http://localhost:${PORT}`);
       startCron();
       booted = true;
+      // 語意檢索的兩件啟動工作，一律背景做、絕不擋 listen：模型載入實測約 11 秒，快取要掃全表。
+      // 兩者任一失敗的後果都只是「檢索退回純 LIKE」——那是本來就有的行為，不值得讓所有人
+      // 多等十幾秒，更不值得讓 server 起不來。
+      require('./lib/embedding-index').loadCache()
+        .then(n => console.log(`[EMBEDDING] 快取載入 ${n} 個 chunk`))
+        .catch(e => console.error('[EMBEDDING] 快取載入失敗（檢索退回純 LIKE）：', e.message));
+      require('./lib/embedding').start()
+        .then(ok => console.log(`[EMBEDDING] 模型${ok ? '就緒' : '未就緒，檢索退回純 LIKE'}`))
+        .catch(e => console.error('[EMBEDDING] 預熱失敗（檢索退回純 LIKE）：', e.message));
     });
   }).catch(err => {
     console.error('DB migration failed:', err);
