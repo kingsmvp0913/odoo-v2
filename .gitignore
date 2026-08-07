@@ -38,10 +38,12 @@ docker-compose.override.yml
 .serena/project.local.yml
 
 # ─── RWD 截圖的執行期產物 ───────────────────────────
-# baseline/ 與 inventory/ 要進版控(門禁不可攜就等於沒有門禁),
-# 這兩個目錄則是每次執行重新產生的,不進版控。
+# 只有 inventory/ 進版控。baseline/ 會把正式區畫面上的真實資料
+# (任務標題、專案名稱、用量數字)拍進 git 歷史,刪不掉,故排除——
+# 代價是門禁不可攜,只在產基線的那台機器上有效。
 /app/rwd/snapshots/
 /app/rwd/diff/
+/app/rwd/baseline/
 
 # ─── 編輯器 / 作業系統 ──────────────────────────────────
 .DS_Store
