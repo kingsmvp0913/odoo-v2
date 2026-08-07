@@ -89,6 +89,32 @@ test('code_change_clear 帶 reason → 寫時間軸＋存 cs_findings，仍進�
   expect(logs.some(l => l.content.includes('[客服判定：需改程式]') && l.content.includes('資材主管'))).toBe(true);
 });
 
+// 意圖：reason 與 reason_plain 是「兩個受眾」不是「兩種措辭」。reason 依 cs.md 必須帶檔案路徑與
+// Model/Method 給分析關定位，那份原文貼給使用者就是他反映看不懂的主因。所以時間軸只能出現白話那份，
+// 技術那份只准進 cs_findings；兩者若又被寫成同一個字串，這個測試就會紅。
+test('code_change_clear 同時帶 reason_plain → 時間軸只放白話、技術定因只進 cs_findings', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reason":"idx_maintenance.py 的 Method action_confirm 缺冪等防護 [碼]","reason_plain":"按下確認時如果系統重試，單子會被重複建立一次。這是程式寫入資料的時機有問題，設定裡關不掉。"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: '重複建單', text: '按確認會產生兩張單' });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_findings FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('analysis_running');
+  expect(t.cs_findings).toContain('action_confirm'); // 分析關仍拿得到定位資訊
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  const shown = logs.find(l => l.content.includes('[客服判定：需改程式]'));
+  expect(shown.content).toContain('設定裡關不掉');
+  expect(shown.content).not.toContain('action_confirm'); // 技術名不得外洩到使用者眼前
+  expect(shown.content).not.toContain('[碼]');
+});
+
+// fail-safe：舊 prompt／偶發漏 reason_plain 時不得讓使用者完全看不到判定理由——退回貼技術版 reason
+test('code_change_clear 只有 reason、無 reason_plain → 時間軸退回貼 reason', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reason":"按鈕 groups 漏資材主管群組 [碼]"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: '權限', text: '看不到按鈕' });
+  await runCsAgent(taskId, userId);
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('[客服判定：需改程式]') && l.content.includes('資材主管'))).toBe(true);
+});
+
 // fail-safe：model 沒吐 reason 時不得中斷——照舊進分析，cs_findings 留空，分析退回獨立重查（現況）
 test('code_change_clear 無 reason → 進分析、cs_findings 留空、不寫時間軸', async () => {
   mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear"}</result>', usage: null, durationMs: null });

@@ -150,14 +150,19 @@ async function runCsAgent(taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
   } else {
-    // code_change_clear：cs 已實查、reason 是初步定因。
-    // (1) 寫進時間軸（role='ai'），否則使用者只看到任務憑空跳進分析、不知道客服為何判定要改程式。
-    // (2) 存 cs_findings 供分析關當「待驗證線索」，免得 cs 查過的根因被丟掉、分析從零重查（雙倍 token）。
+    // code_change_clear：cs 已實查、reason 是初步定因。兩個受眾各拿一份，刻意不共用同一字串——
+    // reason 依 cs.md 要求含檔案路徑／Model/Method／[碼] 來源標籤（分析關要靠它定位），原文貼進時間軸
+    // 就是使用者反映「看不懂」的主因（實測平均 906 字的技術文）。故：
+    // (1) 時間軸（role='ai'）寫 reason_plain——否則使用者只看到任務憑空跳進分析、不知道為何判定要改程式。
+    // (2) cs_findings 存 reason 供分析關當「待驗證線索」，免得 cs 查過的根因被丟掉、分析從零重查（雙倍 token）。
+    // 舊 prompt／偶發漏欄位時 reason_plain 會是空的，退回貼 reason（看不懂好過看不到，不阻斷分流）。
     const reason = typeof result.reason === 'string' ? result.reason.trim() : '';
-    if (reason) {
+    const reasonPlain = typeof result.reason_plain === 'string' ? result.reason_plain.trim() : '';
+    const shown = reasonPlain || reason;
+    if (shown) {
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-        [taskId, `[客服判定：需改程式]\n${reason}`]
+        [taskId, `[客服判定：需改程式]\n${shown}`]
       );
     }
     await query(
