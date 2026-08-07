@@ -174,18 +174,18 @@ window.ProjectChatView = Vue.defineComponent({
       <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:var(--space-3)">← 返回專案列表</button>
       <h1>專案對話</h1>
     </div>
-    <div style="flex:1;display:flex;overflow:hidden;min-width:0">
-      <div data-tour="chat-list" style="width:220px;min-width:220px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden">
+    <div class="chat-split">
+      <div data-tour="chat-list" class="chat-list-panel">
         <div style="padding:10px;border-bottom:1px solid var(--border)">
           <input v-model="newTitle" placeholder="對話標題（選填）" class="form-control" style="margin-bottom:6px;font-size:var(--fs-sm)" @keyup.enter="createChat" />
           <button class="btn btn-primary btn-sm" style="width:100%" @click="createChat">+ 新對話</button>
         </div>
         <div style="overflow-y:auto;flex:1">
           <div v-for="c in chats" :key="c.id"
-               style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"
+               class="chat-list-item"
                :style="{ background: activeChat && activeChat.id === c.id ? 'var(--primary-light,#ebf4ff)' : '' }"
                @click="selectChat(c)">
-            <span style="font-size:var(--fs-base);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">{{ c.title }}</span>
+            <span class="chat-list-item-title">{{ c.title }}</span>
             <span v-if="c.reply_pending" title="回覆進行中" style="margin-left:var(--space-1);flex-shrink:0;color:var(--text-muted);animation:pulse 1.2s ease-in-out infinite">●</span>
             <span v-if="c.unread" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center;flex-shrink:0">{{ c.unread }}</span>
             <button class="btn btn-outline btn-sm"
@@ -198,18 +198,18 @@ window.ProjectChatView = Vue.defineComponent({
         </div>
       </div>
 
-      <div style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden">
-        <div v-if="!activeChat" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:var(--fs-md)">
+      <div class="chat-main">
+        <div v-if="!activeChat" class="chat-empty-state">
           請選擇或建立對話
         </div>
         <template v-else>
-          <div style="padding:8px var(--space-4);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:var(--fs-base);font-weight:var(--fw-semibold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ activeChat.title }}</span>
+          <div class="chat-header">
+            <span class="chat-header-title">{{ activeChat.title }}</span>
             <button class="btn btn-outline btn-sm" data-tour="chat-totask" @click="toTask" :disabled="draftingTask || sending">
               {{ draftingTask ? '摘要中...' : '＋ 轉為任務' }}
             </button>
           </div>
-          <div class="chat-messages" data-tour="chat-messages" ref="messages" style="flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px">
+          <div class="chat-messages" data-tour="chat-messages" ref="messages">
             <div v-if="loadingMsgs" class="loading">載入中...</div>
             <div v-for="m in messages" :key="m.id">
               <div :style="{ display:'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }">
@@ -224,15 +224,15 @@ window.ProjectChatView = Vue.defineComponent({
                 {{ m.role === 'user' ? '你' : '🤖 AI' }} · {{ formatTime(m.created_at) }}
               </div>
             </div>
-            <div v-if="sending || replyPending" style="display:flex;justify-content:flex-start">
-              <div style="padding:8px 14px;border-radius:10px;background:var(--surface);border:1px solid var(--border);font-size:var(--fs-base);color:var(--text-muted);display:flex;align-items:center;gap:6px">
+            <div v-if="sending || replyPending" class="chat-typing-wrap">
+              <div class="chat-typing-bubble">
                 <span style="animation:pulse 1.2s ease-in-out infinite">●</span>
                 <span style="animation:pulse 1.2s ease-in-out infinite 0.3s">●</span>
                 <span style="animation:pulse 1.2s ease-in-out infinite 0.6s">●</span>
               </div>
             </div>
           </div>
-          <div data-tour="chat-input" style="padding:var(--space-3);border-top:1px solid var(--border);display:flex;gap:var(--space-2);align-items:flex-end">
+          <div data-tour="chat-input" class="chat-input-bar">
             <textarea v-model="newInput"
                       placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行)"
                       style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:none;height:60px"
@@ -247,7 +247,7 @@ window.ProjectChatView = Vue.defineComponent({
 
     <!-- 轉為任務：可編輯草稿，確認才建立（用標準 modal class，深色主題可讀）-->
     <div v-if="showTaskModal" class="modal-overlay" @mousedown.self="showTaskModal=false" @keyup.esc="showTaskModal=false">
-      <div class="modal modal-elevated" data-tour="chat-modal" role="dialog" aria-modal="true" style="width:600px">
+      <div class="modal modal-elevated chat-modal" data-tour="chat-modal" role="dialog" aria-modal="true">
         <div class="modal-title">轉為任務</div>
         <div class="modal-body">
           <div class="field-item" style="margin-bottom:var(--space-4)">

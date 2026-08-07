@@ -795,14 +795,14 @@ window.TaskDetailView = Vue.defineComponent({
             <span style="color:var(--text-muted);font-size:var(--fs-xs)">最後更新：{{ formatTime(task.updated_at) }}</span>
           </div>
 
-          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-4) 0 var(--space-2)">
+          <div class="form-section td-section-row">
             <span>需求內容</span>
             <button v-if="canEditContent && !editingContent" class="btn btn-outline btn-sm" @click="startEditContent">✎ 編輯</button>
           </div>
           <div v-if="!editingContent" data-tour="td-content" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-4)">{{ task.original_text || '（無內容）' }}</div>
           <div v-else style="margin-bottom:var(--space-4)">
             <textarea v-model="editText" style="width:100%;height:140px;padding:var(--space-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);line-height:1.6;resize:vertical;box-sizing:border-box"></textarea>
-            <div style="margin-top:var(--space-2);display:flex;gap:var(--space-2)">
+            <div class="td-save-actions">
               <button class="btn btn-primary btn-sm" @click="saveContent" :disabled="savingContent || !editText.trim()">
                 {{ savingContent ? '儲存中...' : '儲存' }}
               </button>
@@ -848,7 +848,7 @@ window.TaskDetailView = Vue.defineComponent({
             <template v-if="timelineActionMode === 'answer'">
               <!-- 分析澄清問題：頁籤拆「規格書 QA」與「提問」，依題型渲染 -->
               <template v-if="clarQuestions.length">
-                <div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:var(--space-3)">
+                <div class="td-clar-tabs">
                   <button class="btn btn-sm" :class="clarTab === 'qa' ? 'btn-primary' : 'btn-ghost'" @click="clarTab = 'qa'">規格書 QA</button>
                   <button class="btn btn-sm" :class="clarTab === 'ask' ? 'btn-primary' : 'btn-ghost'" @click="clarTab = 'ask'">提問</button>
                 </div>
@@ -863,7 +863,7 @@ window.TaskDetailView = Vue.defineComponent({
                   <template v-else>
                   <div v-if="clarIntro" style="background:var(--surface);color:var(--text-secondary);border-radius:6px;padding:var(--space-3);margin-bottom:var(--space-3);white-space:pre-wrap;font-size:var(--fs-sm)">{{ clarIntro }}</div>
                   <div v-for="(q, idx) in clarVisible()" :key="q.id" style="margin-bottom:14px">
-                    <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                    <div class="td-q-header">
                       <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
                       <span style="white-space:pre-wrap">{{ q.text }}</span>
                       <span v-if="!q.required" style="color:var(--text-muted);font-size:var(--fs-xs);flex-shrink:0">選填</span>
@@ -956,7 +956,7 @@ window.TaskDetailView = Vue.defineComponent({
               <textarea v-model="specFeedback" class="form-control" rows="3"
                 placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行、加一個匯出按鈕）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="specRevise"></textarea>
-              <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
+              <div class="td-form-actions">
                 <button class="btn btn-secondary btn-sm" @click="specRevise" :disabled="specRevising || specApproving || !specFeedback.trim()">
                   {{ specRevising ? '送出中...' : '送出' }}
                 </button>
@@ -990,7 +990,7 @@ window.TaskDetailView = Vue.defineComponent({
               <textarea v-model="rejectReason" class="form-control" rows="4"
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="reject"></textarea>
-              <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
+              <div class="td-form-actions">
                 <button class="btn btn-primary btn-sm" @click="reject" :disabled="rejecting || !rejectReason.trim()">
                   {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}
                 </button>
@@ -1015,7 +1015,7 @@ window.TaskDetailView = Vue.defineComponent({
                 </div>
                 <div v-for="(it, idx) in conflictItems" :key="it.key"
                   style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;background:var(--surface)">
-                  <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                  <div class="td-q-header">
                     <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px">{{ idx + 1 }}</span>
                     <span><code>{{ it.repo }} / {{ it.file }}</code></span>
                   </div>
@@ -1025,9 +1025,9 @@ window.TaskDetailView = Vue.defineComponent({
                     <div v-if="it.detail.rationale"><b>AI 建議：</b>{{ recLabel(it.detail.recommendation) }} — {{ it.detail.rationale }}</div>
                   </div>
                   <div v-else style="font-size:var(--fs-sm);color:var(--text-muted);margin:0 0 8px 24px">（無法自動分析此檔，請自行判斷或選「我自己手解」）</div>
-                  <div style="display:flex;flex-wrap:wrap;gap:14px;margin-left:24px">
+                  <div class="td-conflict-choices">
                     <label v-for="act in ['take_theirs','take_ours','manual']" :key="act"
-                      style="font-size:var(--fs-sm);display:flex;align-items:center;gap:5px;cursor:pointer">
+                      class="td-conflict-choice">
                       <input type="radio" :name="'conflict_' + idx" :value="act" v-model="conflictChoices[it.key]">
                       <span>{{ recLabel(act) }}<span v-if="it.detail && it.detail.recommendation === act" style="color:var(--primary)"> ★建議</span></span>
                     </label>
@@ -1090,7 +1090,7 @@ window.TaskDetailView = Vue.defineComponent({
               <textarea v-model="csFollowup" class="form-control" rows="3"
                 placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="csFollowupSubmit"></textarea>
-              <div style="display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2)">
+              <div class="td-form-actions">
                 <button class="btn btn-secondary btn-sm" @click="csFollowupSubmit" :disabled="csFollowingUp || csConfirming || !csFollowup.trim()">
                   {{ csFollowingUp ? '送出中...' : '送出' }}
                 </button>
@@ -1105,7 +1105,7 @@ window.TaskDetailView = Vue.defineComponent({
               <div class="form-section">需補充資料</div>
               <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:14px">請填寫以下所有問題後送出，AI 將重新分析。</p>
               <div v-for="(q, idx) in csQuestions" :key="idx" style="margin-bottom:14px">
-                <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start">
+                <div class="td-q-header">
                   <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
                   <span>{{ q }}</span>
                 </div>
@@ -1161,8 +1161,8 @@ window.TaskDetailView = Vue.defineComponent({
                 @keydown.enter.exact.prevent="sendTaskMessage"></textarea>
               <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected" style="display:block;margin-top:6px;font-size:var(--fs-xs)" />
               <div v-if="newMessageFiles.length" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">已選擇：{{ newMessageFiles.map(f => f.name).join('、') }}</div>
-              <div style="display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);margin-top:6px">
-                <label v-if="showWritebackOption" style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer">
+              <div class="td-msg-send-row">
+                <label v-if="showWritebackOption" class="td-writeback-label">
                   <input type="checkbox" v-model="messageWriteback"> 同時回寫 Odoo 備註
                 </label>
                 <button class="btn btn-primary btn-sm" @click="sendTaskMessage"
@@ -1173,7 +1173,7 @@ window.TaskDetailView = Vue.defineComponent({
             </template>
           </div>
 
-          <div class="form-section" style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-4) 0 var(--space-2)">
+          <div class="form-section td-section-row">
             <span>即時歷程記錄</span>
             <span v-if="eventsLoading" style="font-size:var(--fs-xs);color:var(--text-muted)">載入中…</span>
           </div>

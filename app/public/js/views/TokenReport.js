@@ -220,24 +220,23 @@ window.TokenReportView = Vue.defineComponent({
     <div class="content">
 
       <!-- 篩選列 -->
-      <div data-tour="tr-filters" style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);align-items:center">
-        <select v-model="filters.range" class="form-control" style="width:100px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)">
+      <div data-tour="tr-filters" class="tr-filter-bar">
+        <select v-model="filters.range" class="form-control tr-filter-select-sm">
           <option value="7">最近 7 天</option>
           <option value="30">最近 30 天</option>
           <option value="custom">自訂</option>
         </select>
         <template v-if="filters.range==='custom'">
-          <input v-model="filters.start" type="date" class="form-control" style="width:140px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)" />
+          <input v-model="filters.start" type="date" class="form-control tr-filter-input-date" />
           <span style="font-size:var(--fs-base);color:var(--text-muted)">至</span>
-          <input v-model="filters.end" type="date" class="form-control" style="width:140px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)" />
+          <input v-model="filters.end" type="date" class="form-control tr-filter-input-date" />
         </template>
-        <select v-model="filters.project_id" class="form-control" style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)">
+        <select v-model="filters.project_id" class="form-control tr-filter-input-md">
           <option value="">全部專案</option>
           <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
-        <input v-model="filters.task_id" placeholder="任務 ID" class="form-control"
-          style="width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2)" />
-        <label style="display:flex;align-items:center;gap:var(--space-1);font-size:var(--fs-base);color:var(--text);cursor:pointer;user-select:none">
+        <input v-model="filters.task_id" placeholder="任務 ID" class="form-control tr-filter-input-md" />
+        <label class="tr-filter-checkbox-label">
           <input type="checkbox" v-model="filters.showAll" @change="load" />
           全部使用者
         </label>
@@ -250,7 +249,7 @@ window.TokenReportView = Vue.defineComponent({
       <template v-else-if="report">
 
         <!-- 摘要卡片 -->
-        <div data-tour="tr-summary" style="display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-3);margin-bottom:var(--space-5)">
+        <div data-tour="tr-summary" class="tr-summary-grid">
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4);text-align:center">
             <div style="font-size:24px;font-weight:var(--fw-bold);color:var(--primary)" :title="fmtNum(report.summary.total_tokens)">{{ fmtShort(report.summary.total_tokens) }}</div>
             <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-1)">總 Token 數</div>
@@ -282,7 +281,7 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
         <!-- 圖表區 -->
-        <div data-tour="tr-charts" style="display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5)">
+        <div data-tour="tr-charts" class="tr-chart-grid">
 
           <!-- Agent 圓餅圖 -->
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);cursor:zoom-in" @click="openZoom('Agent 類型', agentSlices)">
@@ -294,7 +293,7 @@ window.TokenReportView = Vue.defineComponent({
               </path>
             </svg>
             <div v-for="r in report.by_agent" :key="r.agent_type"
-              style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1)">
+              class="tr-legend-row">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:agentColor(r.agent_type),display:'inline-block'}"></span>
               {{ agentLabel(r.agent_type) }}: {{ fmtShort(r.tokens) }}
             </div>
@@ -310,7 +309,7 @@ window.TokenReportView = Vue.defineComponent({
               </path>
             </svg>
             <div v-for="(r,i) in report.by_project" :key="r.project_id"
-              style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1)">
+              class="tr-legend-row">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:catColor(i),display:'inline-block'}"></span>
               {{ r.project_name }}: {{ fmtShort(r.tokens) }}
             </div>
@@ -326,14 +325,14 @@ window.TokenReportView = Vue.defineComponent({
               </path>
             </svg>
             <div v-for="(r,i) in report.by_user" :key="r.user_id"
-              style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1)">
+              class="tr-legend-row">
               <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:catColor(i),display:'inline-block'}"></span>
               {{ r.username }}: {{ fmtShort(r.tokens) }}
             </div>
           </div>
 
           <!-- 折線圖（填滿第四欄） -->
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);display:flex;flex-direction:column">
+          <div class="tr-trend-card">
             <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-2);color:var(--text-secondary)">每日趨勢</div>
             <!-- 繪圖區：flex:1 撐滿卡片剩餘高度；SVG 絕對定位填滿它，不反過來撐高容器（避免 ResizeObserver 循環） -->
             <div ref="trendBox" style="flex:1;min-height:180px;position:relative">
@@ -450,7 +449,7 @@ window.TokenReportView = Vue.defineComponent({
               <template v-for="t in visibleTasks" :key="t.ref_key">
                 <tr style="border-top:1px solid var(--border);cursor:pointer"
                   @click="toggleTask(t.ref_key)">
-                  <td style="padding:var(--space-2) var(--space-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="taskLabel(t)">
+                  <td class="tr-cell-task" :title="taskLabel(t)">
                     <span style="margin-right:6px;color:var(--text-muted)">
                       {{ expandedTasks[t.ref_key] ? '▾' : '▸' }}
                     </span>
@@ -458,11 +457,11 @@ window.TokenReportView = Vue.defineComponent({
                       style="color:var(--primary);text-decoration:none">{{ taskLabel(t) }}</router-link>
                     <span v-else>{{ taskLabel(t) }}</span>
                   </td>
-                  <td style="padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.project_name || '—'">{{ t.project_name || '—' }}</td>
+                  <td class="tr-cell-ellipsis" :title="t.project_name || '—'">{{ t.project_name || '—' }}</td>
                   <td style="padding:var(--space-2) var(--space-3);text-align:right" :title="fmtNum(t.total_tokens)">{{ fmtShort(t.total_tokens) }}</td>
                   <td style="padding:var(--space-2) var(--space-3);text-align:right;font-weight:var(--fw-semibold)" :title="'$'+Number(t.total_cost||0).toFixed(6)">{{ fmtUSD(t.total_cost) }}</td>
-                  <td style="padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="t.username || '—'">{{ t.username || '—' }}</td>
-                  <td style="padding:var(--space-2) var(--space-3);color:var(--text-muted);font-size:var(--fs-xs);white-space:nowrap">
+                  <td class="tr-cell-ellipsis" :title="t.username || '—'">{{ t.username || '—' }}</td>
+                  <td class="tr-cell-time">
                     {{ new Date(t.last_recorded_at).toLocaleString('zh-TW') }}
                   </td>
                 </tr>
@@ -519,7 +518,7 @@ window.TokenReportView = Vue.defineComponent({
                 :class="{'lg-active': hoverIdx===i}"
                 @mouseenter="hoverIdx=i" @mouseleave="hoverIdx=null">
                 <span :style="{width:'10px',height:'10px',borderRadius:'50%',background:s.color,display:'inline-block',flexShrink:0}"></span>
-                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.label }}</span>
+                <span class="pie-modal-legend-label">{{ s.label }}</span>
                 <span style="color:var(--text-muted)">{{ (s.frac*100).toFixed(1) }}%</span>
               </div>
             </div>

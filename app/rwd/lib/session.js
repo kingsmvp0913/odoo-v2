@@ -41,9 +41,12 @@ async function assertAdmin(token) {
   return me;
 }
 
+// 一定要拿 id 而不是 task_id：`task_id` 是客服來的外部單號（`manual_1785993215853` 這種字串），
+// 而 #/task/:id 路由吃的是 DB 整數主鍵。挑錯的那個不會報錯，只會讓 task-detail 這頁的基線
+// 一直是「invalid input syntax for type integer」錯誤頁——全站第二重要的頁面等於沒進門禁。
 function firstId(payload) {
   const list = Array.isArray(payload) ? payload : (payload.tasks || payload.projects || payload.rows || []);
-  return list.length ? (list[0].task_id || list[0].id) : null;
+  return list.length ? (list[0].id || list[0].task_id) : null;
 }
 
 // :taskId / :projectId 這類路由需要真實樣本。取不到就讓該路由跳過並在報告中列明，

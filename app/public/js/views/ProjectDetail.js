@@ -306,7 +306,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <button class="btn btn-outline btn-sm" @click="$router.push('/projects')" style="margin-right:var(--space-3)">← 返回</button>
         <h1>{{ project.name }}</h1>
         <span style="font-size:var(--fs-base);color:var(--text-muted);margin-left:var(--space-3)">Odoo {{ project.odoo_version }}</span>
-        <div data-tour="pd-tools" style="display:flex;gap:6px;margin-left:var(--space-4)">
+        <div data-tour="pd-tools" class="pd-tools-bar">
           <button class="btn btn-outline btn-sm" style="background:var(--primary);color:#fff">設定</button>
           <button class="btn btn-outline btn-sm" @click="showReleaseModal = true"
             :disabled="!repos.some(r => r.clone_status === 'done')"
@@ -327,9 +327,9 @@ window.ProjectDetailView = Vue.defineComponent({
         <div class="form-section">Git Repositories</div>
         <div v-if="repos.length === 0" style="color:var(--text-muted);font-size:var(--fs-base);margin-bottom:var(--space-4)">尚未綁定任何 repo</div>
         <div v-for="r in repos" :key="r.id" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-2)">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="repo-row-head">
             <div style="flex:1;min-width:0">
-              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <div class="repo-badges">
                 <span style="font-weight:var(--fw-semibold)">{{ r.label }}</span>
                 <span v-if="r.is_primary" style="font-size:var(--fs-xs);background:var(--primary);color:#fff;border-radius:4px;padding:1px 6px">主要</span>
                 <span v-if="r.clone_status === 'cloning'" class="pill pill-info">⟳ Clone 中...</span>
@@ -344,7 +344,7 @@ window.ProjectDetailView = Vue.defineComponent({
               <!-- 主分支只讀：AI 的 ai-dev 分支是新增 repo 當下從主分支長出來的，事後改設定並不會
                    讓它跟著搬家，同步從此變成兩條平行線硬合。與其留一個必然造成不一致的入口，
                    不如關掉——要換主分支請移除 repo 後重新新增。 -->
-              <div v-if="r.clone_status === 'done'" style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+              <div v-if="r.clone_status === 'done'" class="repo-branch-row">
                 <span style="font-size:var(--fs-sm);color:var(--text-muted)">主分支</span>
                 <code>{{ (branchInfo[r.id] && branchInfo[r.id].effective) || r.base_branch || '自動偵測' }}</code>
                 <span style="font-size:var(--fs-sm);color:var(--text-muted)" title="ai-dev 已經長在這條分支上，改設定不會讓它搬家">
@@ -358,7 +358,7 @@ window.ProjectDetailView = Vue.defineComponent({
               </div>
               <div v-if="r.clone_error" style="font-size:var(--fs-xs);color:#dc2626;margin-top:4px;white-space:pre-wrap">{{ r.clone_error }}</div>
             </div>
-            <div style="display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0">
+            <div class="repo-actions">
               <button v-if="r.clone_status === 'error'" class="btn btn-outline btn-sm" @click="reclone(r.id)" title="重新 clone">↺</button>
               <button v-if="r.clone_status === 'done'" class="btn btn-outline btn-sm" @click="updateRepo(r.id)" title="git pull 拉最新程式碼">↻ 更新</button>
               <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="removeRepo(r.id)"
@@ -368,15 +368,15 @@ window.ProjectDetailView = Vue.defineComponent({
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--space-3)">
+        <div class="repo-add-grid">
           <input v-model="newRepo.label" placeholder="標籤（如 main、plugin-hr）" class="form-control" />
           <input v-model="newRepo.repo_url" placeholder="Git URL（自動 clone）" class="form-control" @blur="probeRemoteBranches" />
           <!-- 主分支只有這一刻能選（新增後即鎖死），故在還沒 clone 的當下就用 ls-remote 把遠端分支
                撈出來讓人挑。讀不到（私有 repo 無 PAT／網址還沒填完）就維持自動偵測，不擋新增。 -->
           <!-- 這裡刻意用 div 不用 label：label 會把內部點擊轉發給它關聯的控制項，
                點下拉選項時等於又聚焦一次，選單自己收起來，選不到東西。 -->
-          <div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
-            <span style="color:var(--text-muted);white-space:nowrap">主分支</span>
+          <div class="branch-picker-row">
+            <span class="branch-picker-label">主分支</span>
             <SearchableSelect v-if="remoteBranches.length"
               :model-value="newRepo.base_branch"
               :options="remoteBranches.map(b => ({ value: b, label: b }))"
@@ -387,7 +387,7 @@ window.ProjectDetailView = Vue.defineComponent({
               {{ probingBranches ? '讀取遠端分支中…' : '自動偵測（填入網址後可選）' }}
             </span>
           </div>
-          <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-base)">
+          <label class="branch-picker-row">
             <input type="checkbox" v-model="newRepo.is_primary" /> 設為主要 repo
           </label>
         </div>
@@ -400,7 +400,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <div data-tour="pd-mapping" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">同步來源對應</h3>
           <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">一行一個名稱，可綁定多個來源。</div>
-          <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
+          <div class="settings-panel-body">
             <label>Odoo 專案名稱（同步時自動綁定）
               <textarea v-model="editOdooProjectName" class="form-control" rows="3" placeholder="與 Odoo ERP 的專案名稱完全一致，一行一個" style="margin-top:4px"></textarea>
             </label>
@@ -413,9 +413,9 @@ window.ProjectDetailView = Vue.defineComponent({
 
         <div v-if="isAdmin()" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">測試流程設定</h3>
-          <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
+          <div class="settings-panel-body">
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；停用後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+            <label class="switch-label-row">
               <div class="switch">
                 <input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e" />
                 <div class="switch-track"></div>
@@ -424,7 +424,7 @@ window.ProjectDetailView = Vue.defineComponent({
               <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eEnabled ? 'E2E 測試啟用中' : '已停用 E2E 測試' }}</span>
             </label>
             <span style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-2)">開啟後，E2E tour 會在「分析」關依驗收條件先寫好（實作之前定稿），開發關要讓它通過而不能改它；關閉則沿用舊流程，等實作完成後才產生 tour。</span>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+            <label class="switch-label-row">
               <div class="switch">
                 <input type="checkbox" v-model="editSpecTour" @change="saveSpecTourSetting" :disabled="savingSpecTour" />
                 <div class="switch-track"></div>
@@ -437,13 +437,13 @@ window.ProjectDetailView = Vue.defineComponent({
 
         <div v-if="isAdmin()" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">Odoo 版本類型</h3>
-          <div style="display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base)">
+          <div class="settings-panel-body">
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">
               企業版會在建置測試區時額外掛入該 Odoo 大版本的 enterprise addons（唯讀）。
               需先由管理員在「企業版來源」登記並同步該版本，否則建置會直接失敗。
               <strong>改動後需重新建置測試區才會生效。</strong>
             </span>
-            <select v-model="editEdition" class="form-control" style="max-width:280px" @change="saveEdition" :disabled="savingEdition">
+            <select v-model="editEdition" class="form-control edition-select" @change="saveEdition" :disabled="savingEdition">
               <option value="community">社群版（Community）</option>
               <option value="enterprise">企業版（Enterprise）</option>
             </select>
@@ -452,7 +452,7 @@ window.ProjectDetailView = Vue.defineComponent({
 
         <div v-if="env" data-tour="pd-env" style="margin-top:var(--space-6);padding-top:var(--space-4);border-top:1px solid var(--border)">
           <div class="form-section">Odoo 測試環境</div>
-          <div style="font-size:var(--fs-base);margin-bottom:10px;display:flex;align-items:center;gap:var(--space-2)">
+          <div class="env-status-row">
             <span>狀態：</span>
             <span :style="{ color: env.status === 'running' ? 'var(--success,#48bb78)' : env.status === 'error' ? 'var(--error)' : 'var(--text-muted)' }">
               {{ { idle:'● 閒置', setting_up:'⟳ 建立中（自動重新整理）', running:'● 運行中', error:'✕ 錯誤' }[env.status] || env.status }}
@@ -463,7 +463,7 @@ window.ProjectDetailView = Vue.defineComponent({
             <summary style="font-size:var(--fs-sm);color:var(--text-muted);cursor:pointer;user-select:none">▶ 查看建立記錄</summary>
             <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:var(--fs-xs);overflow-x:auto;margin-top:6px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{{ env.setup_log }}</pre>
           </details>
-          <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
+          <div class="env-actions-row">
             <template v-if="env.status === 'idle' || env.status === 'error'">
               <button class="btn btn-primary btn-sm" @click="setupEnv" :disabled="envWorking">
                 <span v-if="envWorking" class="spinner"></span>{{ envWorking ? '處理中…' : (env.built ? '重新啟動' : '一鍵建立環境') }}
@@ -485,7 +485,7 @@ window.ProjectDetailView = Vue.defineComponent({
             <button class="btn btn-outline btn-sm" @click="loadEnv" :disabled="envWorking">↺ 重新整理</button>
           </div>
           <div v-if="runtimeLog !== null" style="margin-top:var(--space-3)">
-            <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px">
+            <div class="env-log-header-row">
               <span style="font-size:var(--fs-sm);color:var(--text-muted)">Odoo 運行記錄（server log 尾端）</span>
               <button class="btn btn-outline btn-sm" @click="viewLog" :disabled="logLoading" title="重新抓取最新 log">↺</button>
               <button class="btn btn-outline btn-sm" @click="runtimeLog = null">關閉</button>

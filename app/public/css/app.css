@@ -627,6 +627,225 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .chat-md code { background: rgba(127,127,127,0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
 .chat-md pre code { background: none; padding: 0; }
 
+
+/* ══ 從 inline style 遷出的版面 class（規格 RWD-C-SPEC.md §2.2，Block 2 第一批）══════
+   內容與原 inline style 逐字相同——這批的唯一驗收是桌機截圖 diff = 0，不是「看起來對」。
+   位置刻意排在所有既有規則之後：多處元素（.form-control 的輸入框、.modal、.form-section）
+   原本是靠 inline 優先權壓過既有 class，改成 class 後同 specificity，只剩宣告順序能決定勝負。
+   後續 Block 要調小螢幕版面，一律在檔尾的 media query 內覆寫這些 class，不要回頭改這裡的值。 */
+
+/* ── ProjectDetail.js ── */
+/* 專案詳情頁：頂部設定工具列（設定／上正式／資料庫查詢…按鈕群） */
+.pd-tools-bar { display:flex;gap:6px;margin-left:var(--space-4) }
+
+/* 專案詳情頁：單一 repo 卡片的標頭列（標籤/徽章 在左、動作按鈕在右） */
+.repo-row-head { display:flex;justify-content:space-between;align-items:flex-start }
+
+/* 專案詳情頁：repo 標籤與狀態徽章（clone/索引狀態 pill）的橫向排列 */
+.repo-badges { display:flex;align-items:center;gap:6px;flex-wrap:wrap }
+
+/* 專案詳情頁：repo 主分支唯讀顯示列 */
+.repo-branch-row { display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap }
+
+/* 專案詳情頁：repo 卡片右側的動作按鈕群（重新clone/更新/移除） */
+.repo-actions { display:flex;gap:6px;margin-left:var(--space-3);flex-shrink:0 }
+
+/* 專案詳情頁：新增 repo 表單的雙欄 grid（標籤、URL、主分支、設為主要） */
+.repo-add-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--space-3) }
+
+/* 專案詳情頁：主分支選擇列（label + SearchableSelect），與「設為主要 repo」checkbox 列共用 */
+.branch-picker-row { display:flex;align-items:center;gap:6px;font-size:var(--fs-base) }
+
+/* 專案詳情頁：主分支選擇列的「主分支」文字標籤 */
+.branch-picker-label { color:var(--text-muted);white-space:nowrap }
+
+/* 專案詳情頁：設定面板內容區（同步來源對應／測試流程設定／Odoo版本類型 三個面板共用） */
+.settings-panel-body { display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--fs-base) }
+
+/* 專案詳情頁：開關（switch）旁的說明文字列，E2E 測試與依規格先寫測試 兩處共用 */
+.switch-label-row { display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none }
+
+/* 專案詳情頁：Odoo 版本類型下拉選單寬度限制 */
+.edition-select { max-width:280px }
+
+/* 專案詳情頁：測試環境狀態列（狀態文字＋顏色圓點） */
+.env-status-row { font-size:var(--fs-base);margin-bottom:10px;display:flex;align-items:center;gap:var(--space-2) }
+
+/* 專案詳情頁：測試環境動作按鈕列（建立/開啟/停止/刪除/重新整理） */
+.env-actions-row { display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap }
+
+/* 專案詳情頁：運行記錄（runtime log）面板的標頭列（標題＋重新整理／關閉按鈕） */
+.env-log-header-row { display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px }
+
+/* ── TokenReport.js ── */
+/* 篩選列（TokenReport 頁）：篩選控制項的外層 flex 容器 */
+.tr-filter-bar { display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);align-items:center }
+
+/* 篩選列：時間範圍下拉選單（7天/30天/自訂） */
+.tr-filter-select-sm { width:100px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2) }
+
+/* 篩選列：自訂日期區間的起訖 date input（共用，兩處逐字相同） */
+.tr-filter-input-date { width:140px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2) }
+
+/* 篩選列：專案下拉選單／任務 ID 輸入框（共用，兩處逐字相同） */
+.tr-filter-input-md { width:160px;font-size:var(--fs-base);height:32px;padding:var(--space-1) var(--space-2) }
+
+/* 篩選列：「全部使用者」checkbox 的 label */
+.tr-filter-checkbox-label { display:flex;align-items:center;gap:var(--space-1);font-size:var(--fs-base);color:var(--text);cursor:pointer;user-select:none }
+
+/* 摘要卡片區：7 張統計卡的 grid 容器 */
+.tr-summary-grid { display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-3);margin-bottom:var(--space-5) }
+
+/* 圖表區：3 個圓餅圖 + 1 個折線圖的 grid 容器 */
+.tr-chart-grid { display:grid;grid-template-columns:180px 180px 180px 1fr;gap:var(--space-4);margin-bottom:var(--space-5) }
+
+/* 圓餅圖下方的圖例列（Agent／專案／使用者三處共用，逐字相同） */
+.tr-legend-row { display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);margin-top:var(--space-1) }
+
+/* 每日趨勢折線圖卡片（第四欄，填滿高度用 flex column） */
+.tr-trend-card { background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);display:flex;flex-direction:column }
+
+/* 明細表：任務名稱欄位儲存格（含展開箭頭與連結，單行省略） */
+.tr-cell-task { padding:var(--space-2) var(--space-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
+
+/* 明細表：專案／用戶欄位儲存格（灰字、單行省略，共用，兩處逐字相同） */
+.tr-cell-ellipsis { padding:var(--space-2) var(--space-3);color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
+
+/* 明細表：記錄時間欄位儲存格 */
+.tr-cell-time { padding:var(--space-2) var(--space-3);color:var(--text-muted);font-size:var(--fs-xs);white-space:nowrap }
+
+/* 圓餅放大 modal：圖例文字（撐滿剩餘寬度，單行省略） */
+.pie-modal-legend-label { flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+
+/* ── TaskDetail.js ── */
+/* 需求內容／即時歷程記錄：section 標題列與右側動作鍵同列兩端對齊（原 form-section 的 inline 覆寫版本） */
+.td-section-row { display:flex;justify-content:space-between;align-items:center;margin:var(--space-4) 0 var(--space-2); }
+
+/* 編輯需求內容：儲存／取消按鈕列 */
+.td-save-actions { margin-top:var(--space-2);display:flex;gap:var(--space-2); }
+
+/* 規格書 QA／提問 頁籤列 */
+.td-clar-tabs { display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:var(--space-3); }
+
+/* 逐題編號＋題目文字的標題列（分析澄清問題／合併衝突逐檔裁決／cs_data 補充資料，三處共用） */
+.td-q-header { font-size:var(--fs-base);font-weight:var(--fw-semibold);margin-bottom:6px;display:flex;gap:6px;align-items:flex-start; }
+
+/* 表單送出動作列，靠右對齊（規格審核／最終審核退回／客服回覆追問，三處共用） */
+.td-form-actions { display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-2); }
+
+/* 合併衝突：take_theirs/take_ours/manual 選項列 */
+.td-conflict-choices { display:flex;flex-wrap:wrap;gap:14px;margin-left:24px; }
+
+/* 合併衝突：單一選項 label（radio + 文字） */
+.td-conflict-choice { font-size:var(--fs-sm);display:flex;align-items:center;gap:5px;cursor:pointer; }
+
+/* 留言區：送出列（回寫勾選 + 送出留言鍵） */
+.td-msg-send-row { display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);margin-top:6px; }
+
+/* 留言區：「同時回寫 Odoo 備註」checkbox label */
+.td-writeback-label { display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer; }
+
+/* ── TaskList.js ── */
+/* 任務列表：篩選 tab 列與結構化篩選列（共用同一組 flex 版型，兩處逐字相同） */
+.tasklist-filter-row { display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center }
+
+/* 任務列表：搜尋框固定寬度（原本靠 inline style 壓過 .form-control，見下方 specificity 風險） */
+.tasklist-search-input { width:200px;font-size:var(--fs-base);padding:5px 10px;height:32px }
+
+/* 任務列表：批次模式全選列 */
+.tasklist-batch-bar { display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base) }
+
+/* 任務列表：載入中骨架卡片的徽章列 */
+.task-skeleton-badges { display:flex;gap:6px }
+
+/* 任務列表：卡片標題內的 checkbox／spinner／文字排列 */
+.task-title-inner { display:flex;align-items:center;gap:var(--space-2) }
+
+/* 任務列表：卡片內小間距 flex 列（右側操作按鈕列、狀態徽章列共用，兩處逐字相同） */
+.inline-flex-row { display:flex;align-items:center;gap:6px }
+
+/* 任務列表：卡片來源／專案／使用者 chip 列 */
+.task-source-row { display:flex;align-items:center;gap:6px;flex-wrap:wrap }
+
+/* 任務列表：卡片狀態徽章與模組名稱的左右對齊列 */
+.task-status-row { display:flex;align-items:center;justify-content:space-between;margin-bottom:6px }
+
+/* 任務列表：批次操作浮動底部工具列 */
+.batch-action-bar { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:var(--space-2);background:#1e293b;color:#fff;border-radius:var(--radius-lg);padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:200;font-size:var(--fs-base);white-space:nowrap }
+
+/* 新增任務 modal：全螢幕遮罩。刻意不叫 .modal-overlay——那是全站共用的既有 class（app.css:485，
+   底色 0.45＋padding），同名會把所有 modal 的遮罩一起改掉，而截圖門禁看不到（基線裡沒有 modal 是開的） */
+.tasklist-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000 }
+
+/* 新增任務 modal：面板容器（寬度 640px） */
+.tasklist-modal-panel { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px;width:640px;max-width:94vw;max-height:90vh;overflow:auto;box-shadow:0 12px 48px rgba(0,0,0,0.4) }
+
+/* 新增任務 modal：底部取消／送出按鈕列 */
+.modal-footer-actions { display:flex;justify-content:flex-end;gap:var(--space-2) }
+
+/* ── ProjectChat.js ── */
+/* 專案對話頁：對話清單＋主聊天區的左右分欄容器 */
+.chat-split { flex:1;display:flex;overflow:hidden;min-width:0 }
+
+/* 專案對話頁：左側對話清單面板（固定寬） */
+.chat-list-panel { width:220px;min-width:220px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden }
+
+/* 專案對話頁：對話清單中單一對話列 */
+.chat-list-item { padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center }
+
+/* 專案對話頁：對話清單列的標題文字（截斷顯示） */
+.chat-list-item-title { font-size:var(--fs-base);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 }
+
+/* 專案對話頁：右側主聊天區（含標題列／訊息／輸入框） */
+.chat-main { flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden }
+
+/* 專案對話頁：未選對話時的置中提示文字 */
+.chat-empty-state { flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:var(--fs-md) }
+
+/* 專案對話頁：主聊天區上方的對話標題列 */
+.chat-header { padding:8px var(--space-4);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center }
+
+/* 專案對話頁：對話標題列中的標題文字（截斷顯示） */
+.chat-header-title { font-size:var(--fs-base);font-weight:var(--fw-semibold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+
+/* 專案對話頁：訊息捲動容器（原 .chat-messages 只是 hook class，補上版面樣式） */
+.chat-messages { flex:1;overflow-y:auto;padding:var(--space-4);display:flex;flex-direction:column;gap:10px }
+
+/* 專案對話頁：AI 回覆中的「打字中」外層容器 */
+.chat-typing-wrap { display:flex;justify-content:flex-start }
+
+/* 專案對話頁：「打字中」動畫氣泡本體 */
+.chat-typing-bubble { padding:8px 14px;border-radius:10px;background:var(--surface);border:1px solid var(--border);font-size:var(--fs-base);color:var(--text-muted);display:flex;align-items:center;gap:6px }
+
+/* 專案對話頁：底部輸入列（textarea＋傳送鈕） */
+.chat-input-bar { padding:var(--space-3);border-top:1px solid var(--border);display:flex;gap:var(--space-2);align-items:flex-end }
+
+/* 專案對話頁：「轉為任務」草稿 modal 寬度覆寫 */
+.chat-modal { width:600px }
+
+/* ── Settings.js ── */
+/* 外觀與通知：深色模式切換 label（checkbox+文字橫排，區塊間留白） */
+.setting-toggle-row-spaced { display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md);margin-bottom:var(--space-3); }
+
+/* 外觀與通知：桌面通知列（label + 測試按鈕橫排，可換行） */
+.setting-notify-row { display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap; }
+
+/* 外觀與通知：桌面通知 checkbox label（同 .setting-toggle-row-spaced 但無底部留白） */
+.setting-toggle-row { display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md); }
+
+/* 按鈕／標籤文字不換行（測試通知按鈕、驗證取得按鈕） */
+.nowrap { white-space:nowrap; }
+
+/* 表單欄位群組寬度上限 420px（GitHub PAT 輸入框、Teams 使用者 ID 欄） */
+.field-item-md { max-width:420px; }
+
+/* 表單欄位群組寬度上限 320px，頂部留白（Odoo／eService 使用者 ID 欄） */
+.field-item-sm { margin-top:10px;max-width:320px; }
+
+/* 輸入框＋驗證按鈕橫排（Odoo／eService 使用者 ID 欄內） */
+.field-inline-actions { display:flex;gap:var(--space-2); }
+
+
 /* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
    桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
    桌機路徑因此恆等於改造前，這是「不影響網站使用」的第一層保證。

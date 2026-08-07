@@ -185,16 +185,16 @@ window.SettingsView = Vue.defineComponent({
             <div class="setting-block-title">外觀與通知</div>
           </div>
           <div class="setting-block-body">
-            <label data-tour="set-dark" style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md);margin-bottom:var(--space-3)">
+            <label data-tour="set-dark" class="setting-toggle-row-spaced">
               <input type="checkbox" :checked="isDark" @change="toggleTheme" style="width:16px;height:16px;cursor:pointer" />
               <span>深色模式</span>
             </label>
-            <div data-tour="set-notify" style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap">
-              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-md)">
+            <div data-tour="set-notify" class="setting-notify-row">
+              <label class="setting-toggle-row">
                 <input type="checkbox" :checked="notifyOn" @change="toggleNotify" style="width:16px;height:16px;cursor:pointer" />
                 <span>桌面通知（有任務需要你處理時提醒）</span>
               </label>
-              <button v-if="notifyOn" class="btn btn-primary btn-sm" @click="testNotify" style="white-space:nowrap">🔔 測試通知</button>
+              <button v-if="notifyOn" class="btn btn-primary btn-sm nowrap" @click="testNotify">🔔 測試通知</button>
             </div>
             <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</div>
           </div>
@@ -253,7 +253,7 @@ window.SettingsView = Vue.defineComponent({
             <div v-else class="error-msg" style="margin-bottom:var(--space-2)">
               尚未設定個人 GitHub PAT——你的任務將被擋下，請先設定。
             </div>
-            <div class="field-item" style="max-width:420px">
+            <div class="field-item field-item-md">
               <input type="password" v-model="githubPat.input" placeholder="貼上 GitHub Personal Access Token" class="field-input" />
             </div>
             <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:var(--fs-sm);line-height:1.8;margin-top:var(--space-2)">
@@ -297,11 +297,11 @@ window.SettingsView = Vue.defineComponent({
                 <input v-model="creds.odoo_password" type="password" placeholder="••••••" class="field-input" />
               </div>
             </div>
-            <div class="field-item" style="margin-top:10px;max-width:320px">
+            <div class="field-item field-item-sm">
               <label class="field-label">使用者 ID <span class="field-label-hint">任務負責人篩選</span></label>
-              <div style="display:flex;gap:var(--space-2)">
+              <div class="field-inline-actions">
                 <input v-model="creds.odoo_user_id" placeholder="點擊驗證自動取得" class="field-input" />
-                <button class="btn btn-outline btn-sm" @click="verifyOdoo" :disabled="verifyingOdoo" style="white-space:nowrap">
+                <button class="btn btn-outline btn-sm nowrap" @click="verifyOdoo" :disabled="verifyingOdoo">
                   {{ verifyingOdoo ? '驗證中...' : '驗證取得' }}
                 </button>
               </div>
@@ -329,11 +329,11 @@ window.SettingsView = Vue.defineComponent({
                 <input v-model="creds.service_password" type="password" placeholder="••••••" class="field-input" />
               </div>
             </div>
-            <div class="field-item" style="margin-top:10px;max-width:320px">
+            <div class="field-item field-item-sm">
               <label class="field-label">使用者 ID <span class="field-label-hint">任務負責人篩選</span></label>
-              <div style="display:flex;gap:var(--space-2)">
+              <div class="field-inline-actions">
                 <input v-model="creds.service_user_id" placeholder="點擊驗證自動取得" class="field-input" />
-                <button class="btn btn-outline btn-sm" @click="verifyService" :disabled="verifyingService" style="white-space:nowrap">
+                <button class="btn btn-outline btn-sm nowrap" @click="verifyService" :disabled="verifyingService">
                   {{ verifyingService ? '驗證中...' : '驗證取得' }}
                 </button>
               </div>
@@ -351,7 +351,7 @@ window.SettingsView = Vue.defineComponent({
             <div class="setting-block-desc">填寫你的 Azure AD 物件識別碼，任務通知時系統會以你的顯示名稱 @mention。</div>
           </div>
           <div class="setting-block-body">
-            <div class="field-item" style="max-width:420px">
+            <div class="field-item field-item-md">
               <label class="field-label">Teams 使用者 ID（AAD Object ID）</label>
               <input v-model="teamsUserId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="field-input" />
               <div class="hint-text">Azure AD → 使用者 → 物件識別碼</div>
