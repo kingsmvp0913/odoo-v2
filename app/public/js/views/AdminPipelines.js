@@ -81,7 +81,7 @@ window.AdminPipelinesView = Vue.defineComponent({
       <div v-else class="admin-pipelines-wrap">
         <div class="settings-section">
           <h2 class="section-title">真正執行中的任務（{{ rows.length }}）</h2>
-          <div class="table-wrap">
+          <div class="table-wrap table-cards-sm">
             <table class="data-table">
               <thead>
                 <tr>
@@ -95,14 +95,14 @@ window.AdminPipelinesView = Vue.defineComponent({
               </thead>
               <tbody>
                 <tr v-for="r in rows" :key="r.id">
-                  <td>{{ r.project_name || '—' }}</td>
-                  <td style="font-weight:var(--fw-semibold)">
+                  <td data-label="專案">{{ r.project_name || '—' }}</td>
+                  <td data-label="任務" style="font-weight:var(--fw-semibold)">
                     <a style="cursor:pointer" @click="$router.push('/task/' + r.id)">{{ r.title || r.task_id }}</a>
                   </td>
-                  <td>{{ userName(r) }}</td>
-                  <td>{{ statusLabel(r.status) }}</td>
-                  <td style="font-variant-numeric:tabular-nums">{{ fmtElapsed(r.elapsed_ms) }}</td>
-                  <td>
+                  <td data-label="使用者">{{ userName(r) }}</td>
+                  <td data-label="目前階段">{{ statusLabel(r.status) }}</td>
+                  <td data-label="已執行時間" style="font-variant-numeric:tabular-nums">{{ fmtElapsed(r.elapsed_ms) }}</td>
+                  <td data-label="操作">
                     <button class="btn btn-outline btn-sm" style="color:var(--error)"
                       :disabled="pausingId === r.id" @click="pause(r)">
                       {{ pausingId === r.id ? '處理中...' : '暫停' }}

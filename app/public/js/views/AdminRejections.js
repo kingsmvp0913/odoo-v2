@@ -68,7 +68,7 @@ window.AdminRejectionsView = Vue.defineComponent({
               {{ deleting ? '刪除中...' : '刪除選取（' + selectedIds.length + '）' }}
             </button>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap table-cards-sm">
             <table class="data-table">
               <thead>
                 <tr>
@@ -87,21 +87,21 @@ window.AdminRejectionsView = Vue.defineComponent({
                 <tr v-if="loading"><td colspan="9" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
                 <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="9">目前沒有退回紀錄</td></tr>
                 <tr v-for="r in rows" :key="r.id">
-                  <td><input type="checkbox" :checked="!!selected[r.id]" @change="selected = { ...selected, [r.id]: $event.target.checked }" /></td>
-                  <td style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
-                  <td>{{ r.project_name || '—' }}</td>
-                  <td style="font-size:var(--fs-sm)">{{ r.task_id }}</td>
-                  <td style="font-size:var(--fs-sm)">
+                  <td data-label="" class="td-checkbox"><input type="checkbox" :checked="!!selected[r.id]" @change="selected = { ...selected, [r.id]: $event.target.checked }" /></td>
+                  <td data-label="時間" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
+                  <td data-label="專案">{{ r.project_name || '—' }}</td>
+                  <td data-label="任務 ID" style="font-size:var(--fs-sm)">{{ r.task_id }}</td>
+                  <td data-label="原因" style="font-size:var(--fs-sm)">
                     <span style="white-space:pre-wrap;word-break:break-word">{{ expanded[r.id] ? r.reason : truncate(r.reason) }}</span>
                     <a v-if="(r.reason || '').length > 120" @click="toggleExpand(r.id)"
                       class="arj-reason-toggle">
                       {{ expanded[r.id] ? '收合' : '展開' }}
                     </a>
                   </td>
-                  <td style="font-size:var(--fs-sm)">{{ statusLabel[r.status] || r.status }}</td>
-                  <td style="font-size:var(--fs-sm)">{{ r.source === 'qa' ? 'QA' : '人工' }}</td>
-                  <td style="text-align:center">{{ r.item_count }}</td>
-                  <td style="font-size:var(--fs-sm)">
+                  <td data-label="狀態" style="font-size:var(--fs-sm)">{{ statusLabel[r.status] || r.status }}</td>
+                  <td data-label="來源" style="font-size:var(--fs-sm)">{{ r.source === 'qa' ? 'QA' : '人工' }}</td>
+                  <td data-label="條目" class="arj-col-center">{{ r.item_count }}</td>
+                  <td data-label="分類明細" style="font-size:var(--fs-sm)">
                     <span v-if="!(r.items && r.items.length)" style="color:var(--text-muted)">—</span>
                     <div v-for="(it, i) in r.items" :key="i"
                       class="arj-item-row">

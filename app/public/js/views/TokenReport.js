@@ -358,9 +358,9 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
         <!-- 各關卡成本與失敗率：失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標 -->
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5)" v-if="report.by_agent.length">
+        <div class="tr-table-card" v-if="report.by_agent.length">
           <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);padding:var(--space-3) var(--space-3) 0;color:var(--text-secondary)">各關卡成本與失敗率</div>
-          <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+          <table class="tr-table">
             <thead>
               <tr style="font-weight:var(--fw-semibold);font-size:var(--fs-xs);color:var(--text-muted)">
                 <th style="padding:var(--space-2) var(--space-3);text-align:left">關卡</th>
@@ -396,11 +396,11 @@ window.TokenReportView = Vue.defineComponent({
 
         <!-- 專案品質統計：母體是本期間完成的任務。一次過關率＝四個 agent 關卡都沒重跑的比例，
              由 token_usage 列數推算（tasks 的 *_retry_count 會被分診歸零，不可用） -->
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5)" v-if="report.project_stats && report.project_stats.length">
+        <div class="tr-table-card" v-if="report.project_stats && report.project_stats.length">
           <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);padding:var(--space-3) var(--space-3) 0;color:var(--text-secondary)">
             專案品質統計 <span style="font-weight:var(--fw-normal);color:var(--text-muted);font-size:var(--fs-2xs)">（本期間完成的任務；一次過關＝分析／開發／QA／E2E 四關都沒重跑）</span>
           </div>
-          <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+          <table class="tr-table">
             <thead>
               <tr style="font-weight:var(--fw-semibold);font-size:var(--fs-xs);color:var(--text-muted)">
                 <th style="padding:var(--space-2) var(--space-3);text-align:left">專案</th>
@@ -432,9 +432,9 @@ window.TokenReportView = Vue.defineComponent({
         </div>
 
         <!-- 明細表 -->
-        <div data-tour="tr-tasks" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <div data-tour="tr-tasks" class="tr-table-card tr-table-card-last">
           <div style="max-height:520px;overflow-y:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:var(--fs-base);table-layout:fixed">
+          <table class="tr-table tr-table-tasks">
             <thead>
               <tr style="background:var(--border);font-weight:var(--fw-semibold);font-size:var(--fs-sm);position:sticky;top:0;z-index:1">
                 <th style="padding:var(--space-2) var(--space-3);text-align:left;background:var(--border);width:28%">任務</th>

@@ -172,7 +172,7 @@ const App = defineComponent({
     <template v-else>
       <div class="app-shell">
         <header class="mobile-topbar">
-          <button class="drawer-toggle" type="button" @click="drawerOpen = true" aria-label="開啟選單">☰</button>
+          <button class="drawer-toggle" type="button" @click="drawerOpen = true" aria-label="開啟選單"><span class="drawer-toggle-bars"></span></button>
           <span class="mobile-topbar-title">AI Dev 工作台</span>
         </header>
         <div v-if="drawerOpen" class="drawer-overlay" @click="drawerOpen = false"></div>

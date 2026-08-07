@@ -100,7 +100,7 @@ window.AdminUsersView = Vue.defineComponent({
         <!-- 使用者列表 -->
         <div class="settings-section" style="margin-bottom:var(--space-5)">
           <h2 class="section-title">使用者列表（{{ filteredUsers.length }}）</h2>
-          <div class="table-wrap">
+          <div class="table-wrap table-cards-sm">
             <table class="data-table">
               <thead>
                 <tr>
@@ -113,18 +113,18 @@ window.AdminUsersView = Vue.defineComponent({
               </thead>
               <tbody>
                 <tr v-for="u in filteredUsers" :key="u.id">
-                  <td style="font-weight:var(--fw-semibold)">{{ u.username }}</td>
-                  <td>{{ u.display_name }}</td>
-                  <td>
+                  <td data-label="帳號" style="font-weight:var(--fw-semibold)">{{ u.username }}</td>
+                  <td data-label="顯示名稱">{{ u.display_name }}</td>
+                  <td data-label="角色">
                     <span :style="{ color: u.role === 'admin' ? 'var(--sidebar-accent)' : 'var(--text-muted)', fontWeight: 'var(--fw-semibold)' }">
                       {{ u.role === 'admin' ? '管理員' : '一般' }}
                     </span>
                     <span v-if="u.approved === false" class="pill pill-warn" style="margin-left:6px">待審核</span>
                   </td>
-                  <td style="font-size:var(--fs-sm);color:var(--text-muted)">
+                  <td data-label="建立時間" style="font-size:var(--fs-sm);color:var(--text-muted)">
                     {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
                   </td>
-                  <td>
+                  <td data-label="操作">
                     <div class="admin-users-row-actions">
                       <button v-if="u.approved === false" class="btn btn-primary btn-sm" @click="approve(u)">核准</button>
                       <button class="btn btn-outline btn-sm" @click="toggleRole(u)">

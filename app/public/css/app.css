@@ -1057,6 +1057,20 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .terminal-status-bar { padding:var(--space-2) var(--space-4);background:var(--sidebar-bg);font-size:var(--fs-sm);color:var(--text-muted);display:flex;gap:var(--space-4);flex:none }
 
 
+/* ══ 用量報表的三張表（Block 4）══════════════════════════════════════
+   這三個容器的 inline style 裡有 `overflow:hidden`，media query 壓不過 inline，
+   不抽出來就沒辦法在手機改成橫向捲動。值與原 inline 逐字相同。
+   註：它們不能改包 .table-wrap——那條自帶 border 與 border-radius，而這裡的外層
+   本來就有一組，包上去會變雙層框，桌機當場破功。 */
+.tr-table-card { background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:var(--space-5) }
+/* 最後一張表下面沒有東西了，原本就沒有 margin-bottom */
+.tr-table-card-last { margin-bottom:0 }
+.tr-table { width:100%;border-collapse:collapse;font-size:var(--fs-sm) }
+.tr-table-tasks { font-size:var(--fs-base);table-layout:fixed }
+/* 退回紀錄的「條目」欄在桌機置中（原 inline style）；卡片化後要能改回靠左，
+   所以得先從 inline 抽出來——inline 是 media query 壓不過的。 */
+.arj-col-center { text-align:center }
+
 /* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
    桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
    桌機路徑因此恆等於改造前，這是「不影響網站使用」的第一層保證。
@@ -1088,10 +1102,24 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
     background: var(--sidebar-bg); color: var(--sidebar-active);
   }
   .mobile-topbar-title { font-size: var(--fs-base); font-weight: var(--fw-semibold); }
+  /* 三條線用 CSS 畫，不要用 ☰（U+2630）：本專案的字型集合（Noto Sans CJK＋Color Emoji）
+     沒有這個字，會渲染成豆腐框 □——而它是手機上唯一的導覽入口，變成空框等於整個選單消失。
+     真機多半有系統字型救得回來，但導覽入口不該賭在「使用者的裝置剛好有那個字」上。
+     尺寸取 44px 是觸控目標下限。 */
   .drawer-toggle {
-    background: transparent; border: 0; padding: 4px 6px; line-height: 1;
-    font-size: 20px; color: var(--sidebar-active); cursor: pointer;
+    background: transparent; border: 0; padding: 0; cursor: pointer;
+    position: relative; width: 44px; height: 44px; flex-shrink: 0;
+    color: var(--sidebar-active);
   }
+  .drawer-toggle-bars,
+  .drawer-toggle-bars::before,
+  .drawer-toggle-bars::after {
+    content: ''; position: absolute;
+    width: 18px; height: 2px; border-radius: 1px; background: currentColor;
+  }
+  .drawer-toggle-bars { left: 13px; top: 21px; }
+  .drawer-toggle-bars::before { left: 0; top: -6px; }
+  .drawer-toggle-bars::after { left: 0; top: 6px; }
 
   /* drawer 本體。寬度沿用桌機的 220px，只換定位方式——關閉時整片移出畫面左側，
      transform 不觸發 reflow，開關不會讓內容跳動。 */
@@ -1107,11 +1135,64 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
     display: block; position: fixed; inset: 0;
     background: rgba(0,0,0,0.5); z-index: calc(var(--z-modal) - 2);
   }
+
+  /* 表格改成自己橫捲（Block 4）。沒有這段，寬表會把整個頁面撐出橫向捲軸——
+     連側欄與頂欄都得跟著左右拉，那是最難用的破版型態。
+     .table-wrap 本來就有 overflow-x:auto（本檔 498 行），這裡只補用量報表那三張
+     沒走 .table-wrap 的表。 */
+  .tr-table-card { overflow-x: auto; }
+  /* 光有 overflow 不會捲：table 是 width:100%，永遠剛好塞滿容器，只會把欄位擠爛。
+     給一個最小寬度，它才會真的溢出、才捲得起來。 */
+  .tr-table { min-width: 520px; }
 }
 
 /* ── 手機 ≤640px ── */
 @media (max-width: 640px) {
-  /* Block 1 起陸續填入 */
+  /* 表格卡片化（Block 4）：掛 .table-cards-sm 的表在手機一列變一張卡，欄名靠 td 的
+     data-label 印在左邊當標籤。只有真的會在手機看的三張表這樣做（進行中 Pipeline／
+     退回紀錄／使用者列表）；其餘表格維持橫向捲動——欄位數不固定或純數字對照的表，
+     卡片化反而更難讀。 */
+  .table-cards-sm { border: 0; border-radius: 0; overflow: visible; }
+  .table-cards-sm thead { display: none; }
+  .table-cards-sm .data-table,
+  .table-cards-sm tbody,
+  .table-cards-sm tr,
+  .table-cards-sm td { display: block; width: auto; }
+  .table-cards-sm tr {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  /* 欄名用絕對定位擺左邊，不要用 flex：td 一旦變成 flex container，格子裡本來就有的
+     多個元素（例如「原因」欄的文字＋展開連結）會被一起攤成橫排，長文被擠成一條窄柱。
+     絕對定位只動標籤，格子內容維持原本的區塊流，多長的文字都正常換行。 */
+  /* 選擇器一定要帶 tbody：既有的 `.data-table tbody td`（本檔 501 行）是 (0,1,2)，
+     比 `.table-cards-sm td` 的 (0,1,1) 高，padding 與 border 會被它蓋回去
+     ——症狀是標籤壓在內容上、卡片裡還留著一條條表格橫線。 */
+  .table-cards-sm tbody td {
+    border: 0; position: relative;
+    padding: var(--space-1) 0 var(--space-1) 88px;
+    min-height: 22px;
+  }
+  .table-cards-sm tbody td::before {
+    content: attr(data-label);
+    position: absolute; left: 0; top: var(--space-1); width: 76px;
+    color: var(--text-muted); font-size: var(--fs-sm);
+    text-align: left;
+  }
+  /* 桌機靠右／置中的數字欄，在卡片裡一律改靠左——右邊沒有其他欄可以對齊了 */
+  .table-cards-sm tbody td.arj-col-center { text-align: left; }
+  /* 沒有欄名的格子（勾選框）不要留那條 88px 的空白 */
+  .table-cards-sm tbody td[data-label=""] { padding-left: 0; }
+  .table-cards-sm tbody td[data-label=""]::before { content: none; }
+  /* 「目前沒有資料」那列本來就是跨欄置中，不該被拆成卡片 */
+  .table-cards-sm tbody .empty-row td { display: block; text-align: center; padding-left: 0; }
+  .table-cards-sm tbody .empty-row td::before { content: none; }
+
+  /* 觸控目標 ≥44px。桌機的 .btn 約 33px、.btn-sm 約 29px，手指點得到但點不準，
+     尤其是卡片內並排的操作鍵。只在手機放大，桌機一律不動。 */
+  .btn { min-height: 44px; }
+  .btn-sm { min-height: 44px; padding-top: var(--space-2); padding-bottom: var(--space-2); }
 }
 
 /* 開關（toggle switch）。原本兩顆開關各自 inline 寫死 #fff 與 rgba(0,0,0,.25)，違反配色一律走
