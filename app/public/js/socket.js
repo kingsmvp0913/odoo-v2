@@ -34,6 +34,9 @@
     });
 
     _socket.on('notify:action', (data) => {
+      // 後端在派送這則通知時已同步寫了一筆收件匣 action 事件，badge 先樂觀 +1；
+      // 真正的數字在進收件匣頁時以後端筆數校正（通知可能沒收到、也可能已在別的分頁讀過）
+      if (window.inboxUnread) window.inboxUnread.value += 1;
       const label = (window.STATUS_LABELS || {})[data.status] || data.status;
       const name = data.title || data.task_id || `任務 ${data.taskId}`;
       window.NotifyManager && window.NotifyManager.show(

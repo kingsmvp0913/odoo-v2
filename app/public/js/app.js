@@ -16,6 +16,17 @@ window.showToast = showToast;
 const needsActionCount = ref(0);
 window.needsActionCount = needsActionCount;
 
+// 收件匣未讀數。與 needsActionCount 是兩回事：後者是「現在有幾張等你」的狀態快照，
+// 這個是「還沒看過的事件」筆數（含已經走掉的退回事件）。socket 收到 action 通知時 +1，
+// 進收件匣頁時以後端實際筆數校正。
+const inboxUnread = ref(0);
+window.inboxUnread = inboxUnread;
+async function loadInboxUnread() {
+  if (!Api.isLoggedIn || !Api.isLoggedIn()) return;
+  try { inboxUnread.value = ((await Api.get('inbox')) || []).length; } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
+}
+window.loadInboxUnread = loadInboxUnread;
+
 const claudeUsage = ref(null);
 async function loadClaudeUsage() {
   if (!Api.isLoggedIn()) return;
@@ -42,6 +53,7 @@ const router = createRouter({
     { path: '/login', component: window.LoginView },
     { path: '/', component: window.TaskListView, meta: { requiresAuth: true } },
     { path: '/task/:id', component: window.TaskDetailView, meta: { requiresAuth: true } },
+    { path: '/inbox', component: window.InboxView, meta: { requiresAuth: true } },
     { path: '/task/:id/terminal', component: window.TerminalView, meta: { requiresAuth: true } },
     { path: '/projects', component: window.ProjectListView, meta: { requiresAuth: true } },
     { path: '/projects/:id', component: window.ProjectDetailView, meta: { requiresAuth: true } },
@@ -89,6 +101,7 @@ router.afterEach((to) => {
       SocketManager.initSocket(me.id);
       loadClaudeUsage();
       loadUnread();
+      loadInboxUnread();
     }).catch(() => {});
   }
   if (to.path === '/login') { SocketManager.disconnectSocket(); window.UserStore.role = ''; }
@@ -98,7 +111,7 @@ setInterval(loadClaudeUsage, 60000);
 
 const App = defineComponent({
   name: 'App',
-  setup() { return { toasts, needsActionCount, claudeUsage }; },
+  setup() { return { toasts, needsActionCount, inboxUnread, claudeUsage }; },
   data() { return { _role: '', drawerOpen: false, isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
   watch: {
     // 點了 drawer 裡的連結後，頁面換了但遮罩與側欄還蓋在上面，看起來像卡住 → 導覽即關。
@@ -189,6 +202,12 @@ const App = defineComponent({
               <a data-tour="nav-tasks" :class="{ active: isActive }" @click="navigate">
                 📋 任務列表
                 <span v-if="needsActionCount > 0" class="badge">{{ needsActionCount }}</span>
+              </a>
+            </router-link>
+            <router-link to="/inbox" custom v-slot="{ navigate, isActive }">
+              <a :class="{ active: isActive }" @click="navigate">
+                📥 收件匣
+                <span v-if="inboxUnread > 0" class="badge">{{ inboxUnread }}</span>
               </a>
             </router-link>
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
