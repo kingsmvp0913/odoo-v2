@@ -87,7 +87,7 @@ window.TerminalView = Vue.defineComponent({
         </div>
         <!-- 終端機是固定字寬的 80 欄輸出，小螢幕塞不下也不該重排（重排會讓對齊的 log 全亂）。
              規格 §Block 6 的決定是明確降級：可橫向捲動＋告知在桌機看比較好，不做手機版終端機。 -->
-        <div class="terminal-mobile-hint">📱 終端輸出為固定寬度，手機需左右捲動；完整內容建議在桌機檢視</div>
+        <div class="terminal-mobile-hint">終端輸出為固定寬度，手機需左右捲動；完整內容建議在桌機檢視</div>
         <div ref="termContainer" style="flex:1;min-height:0;padding:var(--space-2)"></div>
       </div>
     </div>

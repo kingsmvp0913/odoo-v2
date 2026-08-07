@@ -1075,8 +1075,8 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
    桌機那排篩選本來就一列排得下，不需要收折 */
 .tasklist-filter-toggle { display: none; }
 
-/* 終端機的手機提示：桌機不顯示（規則在檔尾 ≤640px 區塊） */
-.terminal-mobile-hint { display: none; }
+/* 終端機／流程圖的手機提示：桌機不顯示（規則在檔尾 ≤640px 區塊） */
+.terminal-mobile-hint, .flow-mobile-hint { display: none; }
 
 /* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
    桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
@@ -1252,6 +1252,18 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
     font-size: var(--fs-sm); color: var(--text-muted);
   }
   .terminal-body > div:last-child { overflow-x: auto; }
+
+  /* 流程圖同理：SVG 是算好座標的固定尺寸圖，縮進 390px 會讓標籤全疊在一起。
+     讓它橫捲並明說可以捲——沒有提示的話，使用者只會看到左邊一小條。 */
+  .flow-mobile-hint {
+    display: block;
+    margin-bottom: var(--space-2);
+    font-size: var(--fs-sm); color: var(--text-muted);
+  }
+
+  /* 圓餅放大視窗：圖例原本是兩欄，390px 下每欄不到 160px，名稱全被 ellipsis 吃掉。 */
+  .pie-modal { max-width: 100%; padding: var(--space-3); }
+  .pie-modal-legend { grid-template-columns: 1fr; }
 }
 
 /* 開關（toggle switch）。原本兩顆開關各自 inline 寫死 #fff 與 rgba(0,0,0,.25)，違反配色一律走
