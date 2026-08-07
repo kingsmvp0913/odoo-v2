@@ -1,6 +1,6 @@
 window.WikiNode = Vue.defineComponent({
   name: 'wiki-node',
-  props: ['node', 'depth', 'currentSlug', 'refreshing'],
+  props: ['node', 'depth', 'currentSlug', 'refreshing', 'editingSlug'],
   emits: ['open', 'refresh', 'remove'],
   template: `
     <div>
@@ -12,8 +12,9 @@ window.WikiNode = Vue.defineComponent({
         <span class="wiki-node-title">{{ node.title }}</span>
         <template v-if="node.node_type !== 'notes'">
           <button v-if="node.node_type !== 'troubleshooting'" class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs)"
-            :disabled="refreshing === node.slug"
-            @click.stop="$emit('refresh', node.slug)" title="重新生成">
+            :disabled="refreshing === node.slug || editingSlug === node.slug"
+            @click.stop="$emit('refresh', node.slug)"
+            :title="editingSlug === node.slug ? '編輯中：請先儲存或取消，否則重新生成會蓋掉你正在打的內容' : '重新生成'">
             {{ refreshing === node.slug ? '…' : '⟳' }}
           </button>
           <button v-if="node.slug !== 'troubleshooting'" class="btn btn-outline btn-sm" style="padding:0 5px;font-size:var(--fs-xs);color:var(--error)"
@@ -21,7 +22,7 @@ window.WikiNode = Vue.defineComponent({
         </template>
       </div>
       <wiki-node v-for="c in node.children" :key="c.id" :node="c" :depth="depth+1"
-        :current-slug="currentSlug" :refreshing="refreshing"
+        :current-slug="currentSlug" :refreshing="refreshing" :editing-slug="editingSlug"
         @open="$emit('open', $event)" @refresh="$emit('refresh', $event)" @remove="$emit('remove', $event)"></wiki-node>
     </div>
   `
@@ -75,6 +76,11 @@ window.WikiView = Vue.defineComponent({
     renderedContent() {
       if (!this.current) return '';
       return renderMarkdown(this.current.content);
+    },
+    // 編輯中那一頁的 slug：重生完成後會 loadPage 覆寫 editContent，未儲存的內容會無聲消失，
+    // 故編輯期間把該頁的 ⟳ 停用。空字串＝沒有任何頁在編輯。
+    editingSlug() {
+      return this.editing && this.current ? this.current.slug : '';
     },
     tree() {
       const byId = {};
@@ -237,7 +243,7 @@ window.WikiView = Vue.defineComponent({
         <template v-else>
           <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
             :current-slug="current && current.slug"
-            :refreshing="refreshing"
+            :refreshing="refreshing" :editing-slug="editingSlug"
             @open="loadPage" @refresh="refreshNode" @remove="removePage"></wiki-node>
           <div v-if="pages.length === 0" style="color:var(--text-muted);font-size:var(--fs-sm);padding:var(--space-2)">尚無頁面</div>
         </template>
