@@ -410,7 +410,10 @@ function pipelineEdges(flags) {
       // 橫向對應：這一關在 Git 上做了什麼
       ['gitwt', 'branch', 'link'], ['gitcommit', 'coding', 'link'],
       ['gittesting', 'merge', 'link'], ['gitaidev', 'review', 'link'],
-      ['gitmain', 'release', 'link']
+      ['gitmain', 'release', 'link'],
+      // 併入 testing 這格會被踩兩次：併入測試關一次，E2E 產出 tour 檔後再一次。
+      // 只畫前者的話，圖上看不出 E2E 也會動到 testing 分支（兩端都在時才留，見下方 filter）。
+      ['gittesting', 'e2e', 'link']
     );
   }
   // 兩端都存在的線才留（關掉 E2E／Git 時對應的線一併消失）
