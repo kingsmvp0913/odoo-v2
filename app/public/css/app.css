@@ -1071,6 +1071,10 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
    所以得先從 inline 抽出來——inline 是 media query 壓不過的。 */
 .arj-col-center { text-align:center }
 
+/* 任務列表的「篩選」收折鈕：只在手機出現（規則見檔尾 ≤640px 區塊），
+   桌機那排篩選本來就一列排得下，不需要收折 */
+.tasklist-filter-toggle { display: none; }
+
 /* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
    桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
    桌機路徑因此恆等於改造前，這是「不影響網站使用」的第一層保證。
@@ -1193,6 +1197,27 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
      尤其是卡片內並排的操作鍵。只在手機放大，桌機一律不動。 */
   .btn { min-height: 44px; }
   .btn-sm { min-height: 44px; padding-top: var(--space-2); padding-bottom: var(--space-2); }
+
+  /* ── 任務列表（Block 5）────────────────────────────────
+     那排結構化篩選有 8 個控制項，在 390px 會排成 5 列、吃掉半個畫面，
+     使用者得先捲過一整片篩選器才看得到第一張任務卡。手機改成預設收起。 */
+  .tasklist-filter-toggle { display: inline-flex; }
+  .tasklist-filter-advanced { display: none; }
+  .tasklist-filter-advanced.is-open { display: flex; }
+
+  /* 卡片標題與右側操作鍵原本並排（.task-header 是 space-between），390px 下
+     操作鍵吃掉一半寬度，標題被擠成一行五個字的窄柱、一個標題要排七行。
+     改成直向：標題整行，操作鍵另起一行。 */
+  .task-card .task-header { flex-direction: column; gap: var(--space-2); }
+  .task-card .task-title { margin-right: 0; }
+
+  /* modal 在手機改全屏（規格 §Block 5）。440px 寬的視窗在 390px 螢幕上會貼邊，
+     圓角與陰影只是徒增邊界噪音。 */
+  .modal-overlay, .tasklist-modal-overlay { padding: 0; }
+  .modal, .tasklist-modal-panel {
+    width: 100%; max-width: 100%; border-radius: 0;
+    max-height: 100dvh; height: 100dvh;
+  }
 }
 
 /* 開關（toggle switch）。原本兩顆開關各自 inline 寫死 #fff 與 rgba(0,0,0,.25)，違反配色一律走

@@ -123,6 +123,9 @@ window.TaskListView = Vue.defineComponent({
       statusFilter: '',
       sourceFilter: '',
       showAllUsers: false,   // 預設 false＝只看自己（管理者需手動開）
+      // 手機上這排結構化篩選有 8 個控制項、佔掉半個畫面，任務要捲很久才看得到 →
+      // 手機預設收起（桌機不受影響，切換鈕在 ≥641px 是 display:none、篩選列恆常展開）
+      filtersOpen: false,
       users: [],             // admin 全部使用者清單（/api/admin/users）
     };
   },
@@ -158,6 +161,11 @@ window.TaskListView = Vue.defineComponent({
     projectOptions() { return this.projects.map(p => ({ value: p.id, label: p.name })); },
     ownerOptions() { return this.users.map(u => ({ value: u.id, label: u.display_name || u.username })); },
     statusOptions() { return Object.keys(STATUS_LABELS).map(s => ({ value: s, label: STATUS_LABELS[s] })); },
+    // 篩選收起來時，畫面上看不出「還有條件在生效」——沒有這個數字，使用者會以為任務不見了
+    activeFilterCount() {
+      return [this.projectFilter, this.ownerFilter, this.statusFilter, this.sourceFilter, this.search]
+        .filter(v => v !== '' && v != null).length + (this.releaseFilter !== 'all' ? 1 : 0);
+    },
   },
   watch: {
     needsActionCount(v) { if (!this.showAllUsers) window.needsActionCount.value = v; },
@@ -472,9 +480,13 @@ window.TaskListView = Vue.defineComponent({
           全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
+        <button class="btn btn-sm tasklist-filter-toggle" :class="filtersOpen ? 'btn-primary' : 'btn-outline'"
+          @click="filtersOpen = !filtersOpen" :title="filtersOpen ? '收起篩選' : '展開篩選'">
+          篩選<span v-if="activeFilterCount > 0" class="tab-badge" :class="filtersOpen ? 'tab-badge-active' : ''">{{ activeFilterCount }}</span>
+        </button>
       </div>
 
-      <div class="tasklist-filter-row">
+      <div class="tasklist-filter-row tasklist-filter-advanced" :class="{ 'is-open': filtersOpen }">
         <button v-if="isAdmin" class="btn btn-sm" :class="showAllUsers ? 'btn-primary' : 'btn-outline'" @click="toggleAllUsers"
           :title="showAllUsers ? '目前顯示全部使用者的任務，點一下改回只顯示自己的' : '目前只顯示自己的任務，點一下顯示全部使用者的'">
           👥 顯示全部使用者

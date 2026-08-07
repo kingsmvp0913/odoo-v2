@@ -78,8 +78,18 @@ const STABILIZE_CSS = `
      解除高度與 overflow 限制，整份文件才會展開讓 fullPage 拍完。 */
   html, body { height: auto !important; overflow: visible !important; }
   .app-shell, .main, .content { height: auto !important; overflow: visible !important; }
+  /* 內部還有一層用百分比撐高的容器（wiki 的 calc(100% - 56px)、chat 的 flex 欄）。
+     父層一旦變成 height:auto，百分比會解析成 0 → 整頁截成空白。連同解除。 */
+  .wiki-body, .wiki-tree-panel, .chat-split, .chat-main, .chat-messages, .terminal-body {
+    height: auto !important; min-height: 0 !important; overflow: visible !important;
+  }
   /* sticky 頁首在展開後會跟著捲，長頁上會重複入鏡 */
   .page-header, .topbar { position: static !important; }
+
+  /* port 池的槽位內容（主機名／租借狀態／綁定專案）每分鐘都在變——測試環境一啟停就不同。
+     遮內容、留佔位：欄寬與列高照樣驗得到，但不會每跑一次就假紅一次。 */
+  .port-pool-slot-code, .port-pool-slot-state,
+  .port-pool-slot-row > span { visibility: hidden !important; }
 `;
 
 // 比對容差。抗字型次像素渲染的微小差異，但不足以蓋掉真正的版面位移。

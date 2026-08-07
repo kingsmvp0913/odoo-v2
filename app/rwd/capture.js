@@ -96,7 +96,7 @@ async function main() {
       await page.goto(resolveUrl(route, ids), { waitUntil: 'networkidle', timeout: 30000 });
       await page.addStyleTag({ content: STABILIZE_CSS });
       // networkidle 之後 Vue 仍可能在渲染；等版面靜下來再截。
-      await page.waitForTimeout(600);
+      await page.waitForTimeout(1200);
       await page.screenshot({ path: path.join(OUT_DIR, `${shot.name}.png`), fullPage: true });
       done++;
     } catch (err) {
