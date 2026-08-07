@@ -15,7 +15,7 @@ paths:
 50. **路由端點不可 fire-and-forget 直接呼叫 agent，一律「改狀態＋`runPipeline()`」** — 直呼不經 `dispatchTask`、不登記 `_inFlight`，cron 掃到同一筆會重複派工。
 51. **`runPipeline` 的手動呼叫點散布在 tasks-routes、index.js、pipeline-routes 多處，自動推進閘門必須靠 `auto` 參數區分** — 無條件卡在開頭會把使用者手動點的「繼續」一併擋掉。
 52. **`goto(...)` 跳關預設會歸零 `reentry_count`，需要保留計數必須明確帶 `resetReentry:false`** — 忘了帶會讓斷路器修法變成 no-op。
-53. **`reentry` 斷路器會把「人工退回一次的乾淨任務」直接鎖死在 stopped** — 人工 `/reject` 本身就 +1，`fix` 分支刻意 `resetReentry:false` 且先過斷路器，兩次相加即撞 `MAX_REENTRY`。要修這種任務得把修正指示寫成「規格層級整段重做」導向 respec。
+53. **`reentry` 斷路器只計「無人監督的自動循環」，凡有人介入的那一輪一律不吃額度** — 累加點只有 QA／deploy／E2E 退 coding 那三處（各自呼叫 `bumpReentryOrStop`）。人工退回（`pipeline-routes.js` 的 reject）**刻意不 +1**；分診的 `fix`／`respec` 走 `goto(...)`、預設 `resetReentry=true` **歸零**且刻意不過斷路器（`reject-triage.js`）。理由：斷路器防的是機器空轉燒 token，而人填的修正指示帶著新資訊。**所以「任務 reentry 快撞頂、不敢退回」是錯誤顧慮，別據此改走 respec。**〔2026-08-07 更正：本條原記載的「人工退回也 +1、兩次相加即鎖死」是**已修掉的舊行為**，當時照舊文推論會得出錯誤結論。〕
 54. **各關失敗不得無條件退回 coding，必須先分類（code／env／transient／規格歧義）再路由** — 「不管什麼錯都跳回開發」是 token 長尾的真病根，單一任務可燒掉全平台 25% output。規格歧義退 coding 只會無限來回，該停下問人。
 55. **所有「停下來問人」的情境統一走同一個 clarify 閘門，不要各自開新狀態** — 各自造狀態會產生殭屍狀態與重複機制。泛化既有 `enterClarifyGate`（收 resumeStatus／fromStatus／carryFeedback）由 `resume_status` 導回原關。
 56. **讓某關能「對話」時，重用該關既有的 agent 重跑機制，不要新增狀態分支** — 追問＝帶新脈絡重判，既有分類分支完全不動即自然分流。
