@@ -318,3 +318,48 @@ DROP TABLE IF EXISTS embedding_chunks;
 - **不在檢索結果回 content 全文**：維持現有兩階段設計，否則一次搜尋就把整個 wiki 灌進 agent 的 context
 - **不做 re-ranking 模型**：多一個模型、多 300 MB，這個量級不值得
 - **不碰 `analysis-project` 以外的 agent**（階段 3）
+
+---
+
+## 7. 規格外的待辦：紅燈豁免清單的來源本身還沒修
+
+本節不屬於語意檢索的施工範圍，但**執行本規格時一定會撞到**，所以列在這裡。
+
+### 7.1 問題
+
+`68ba5ed`（2026-08-08）實測推翻了那份「既有紅燈、不要 debug」清單，但**只修了三份 SPEC，沒有回頭修規則來源**。`.claude/rules/always.md` 規則 2 至今仍寫著：
+
+```
+2. 下列紅燈是既有問題，乾淨 HEAD 也紅，不要 debug（2026-08-06 實測更新）：
+   - git-integration.test.js 的 ensureWorktreeAtMain 兩支：CRLF 行尾差異，Windows checkout 必紅
+   - vpn-gateway-run.test.js 的 defaultTmpFilePath › 容器化（APP_DIR 已設）…：開發機非容器故必紅
+```
+
+### 7.2 逐條對照
+
+| always.md 規則 2 說 | `68ba5ed` 實測 | 判定 |
+|---|---|---|
+| `ensureWorktreeAtMain` 兩支＝CRLF 行尾差異，Windows 必紅 | 真因是**無全域 git identity**，08-06 當天已修；Linux checkout 也不會有 CRLF 問題 | ❌ 錯 |
+| `vpn-gateway-run.test.js` 容器那支必紅 | 該機是綠的 | ❌ 錯 |
+| 判定法：stash 掉自己的改動、對那一支單獨再跑一次 | — | ✅ 對，唯一該留的 |
+| 其餘紅燈先假設 flaky（pgPass 家族），單跑複驗才算數 | — | ✅ 對 |
+
+**為什麼會錯**：規則 2 自己標注「2026-08-06 實測更新」，而 CRLF 的真因（git identity）也正是 08-06 修掉的。那份清單是在修好**之前**量的，修好之後沒有人回頭更新它。
+
+### 7.3 影響範圍（比清單過期本身嚴重）
+
+`always.md` 是**常駐規則，不是只有人在讀**——`CLAUDE.md` 與 `.claude/rules/` 由 agent-loader 注入 pipeline agent。所以每一支會跑測試的 agent 都可能拿到這份已被推翻的豁免清單。
+
+實害是 `68ba5ed` 的標題本身：**它會叫你把 `git-integration` 的紅燈當環境問題放過去，而在正式機上那代表你真的改壞了東西。**
+
+### 7.4 建議修法（一行的事，但需明確同意才動）
+
+改 `.claude/rules/always.md` 規則 2 為：
+
+- **刪掉**那兩條具體豁免（CRLF 兩支、vpn-gateway 容器那支）
+- **保留**判定法（stash 後單跑複驗）與 flaky 家族那段——這兩條實測仍成立
+- **改成**：正式機基線 `2148 passed / 0 failed / exit 0`，新紅燈一律先當成自己造成的
+
+⚠️ 本規格**不自己動它**：`CLAUDE.md` §0 硬規則寫明「不得在未經使用者明確同意下修改工作流程設定（hook、`settings.json`、CI、本檔）」，`.claude/rules/always.md` 屬於同一類。**請由人明確拍板後再改。**
+
+在那之前，執行本規格時以 §4.2 為準，不要以 `always.md` 規則 2 為準。
