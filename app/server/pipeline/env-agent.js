@@ -475,10 +475,19 @@ async function nightlyShutdown() {
 // 閒置回收：port 池能用一小段埠支撐大量專案的前提。每輪做兩件事——
 //   1. 從容器 log 更新 last_active_at（真實 HTTP 請求才算；輪詢類不算，見 lib/env-activity）
 //   2. 閒置逾時或壽命逾時的環境停機並歸還租約
-// 門檻刻意比「池滿徵收」（ENV_IDLE_TIMEOUT_PRESSURE_MIN，預設 15 分）寬鬆：沒人在等就別打擾使用者。
-// 壽命上限是保底——輪詢類請求若有漏擋，環境會永遠不閒置，靠這條收掉。
-const IDLE_TIMEOUT_MIN = parseInt(process.env.ENV_IDLE_TIMEOUT_MIN || '60', 10);
-const MAX_LIFETIME_HOURS = parseInt(process.env.ENV_MAX_LIFETIME_HOURS || '8', 10);
+//
+// 回收政策（2026-08-07 定案）：主動回收預設關閉，改成「有人排隊才徵收，否則等晚上統一關」。
+// 背景掃描每 10 分鐘無差別地量所有人的閒置時間，但埠池（20）與對外名額（10）都遠多於專案數（8），
+// 也就是根本沒人在等資源——為了一個不存在的短缺去踢正在用的人，代價全由使用者承擔。稀缺真的
+// 發生時有 port-reclaim（池滿徵收，ENV_IDLE_TIMEOUT_PRESSURE_MIN 預設 15 分）接手，那才是「有人
+// 在等」的當下；收尾則交給 nightlyShutdown（23:00）。專案數哪天長到超過池子，port-reclaim 會自動
+// 開始生效，不必回頭改設定。
+//
+// 0 = 停用該條件。IDLE_TIMEOUT_MIN 預設 0：閒置本身不再構成停機理由。
+// MAX_LIFETIME_HOURS 預設 20：純保底（卡住／資源洩漏），刻意排在 23:00 那一刀之後，
+// 避免早上開的環境在下班前被關掉——一整個工作天連續使用是正常情境，不是異常。
+const IDLE_TIMEOUT_MIN = parseInt(process.env.ENV_IDLE_TIMEOUT_MIN || '0', 10);
+const MAX_LIFETIME_HOURS = parseInt(process.env.ENV_MAX_LIFETIME_HOURS || '20', 10);
 
 async function sweepIdleEnvs(deps = {}) {
   const idleMin = deps.idleMin ?? IDLE_TIMEOUT_MIN;
@@ -518,19 +527,32 @@ async function sweepIdleEnvs(deps = {}) {
       }
     } catch { /* 抓不到活動時間就沿用既有值，交由下方逾時判定 */ }
 
+    // 兩個門檻各自可用 0 停用，故在 JS 端組條件——全停用時整段查詢要跳過，不是送一個恆真的
+    // WHERE 出去把所有環境收掉。條件也不寫成 SQL 內的 `$n > 0 AND ...`：pg-mem 對參數化型別的
+    // 調解不穩，而這段的失效方式是「靜默收掉所有人的測試區」，不值得冒險。
+    //
     // 壽命上限比的是 started_at（本次啟動）而非 created_at（該列首次建立）。odoo_envs 是
     // UNIQUE(project_id)、停機只改 status 不刪列，created_at 因此永遠停在「這專案第一次建環境」
     // 的時刻——拿它判壽命，任何建立逾 maxHours 的專案一開機就滿足條件，下一輪 sweep 立刻收掉，
     // 而且只打真人（pipeline 有 deploy/E2E 任務擋在上面）。started_at 為 NULL 時退回 created_at，
     // 維持「判不出來就從嚴」的保底語意。
-    const { rows: [expired] } = await query(
-      `SELECT 1 FROM odoo_envs
-        WHERE project_id=$1
-          AND ( COALESCE(last_active_at, updated_at) < NOW() - ($2 || ' minutes')::interval
-             OR COALESCE(started_at, created_at) < NOW() - ($3 || ' hours')::interval )`,
-      [projectId, String(idleMin), String(maxHours)]
-    );
-    if (expired) { await stopEnv(projectId); stopped++; }
+    const conds = [];
+    const params = [projectId];
+    if (idleMin > 0) {
+      params.push(String(idleMin));
+      conds.push(`COALESCE(last_active_at, updated_at) < NOW() - ($${params.length} || ' minutes')::interval`);
+    }
+    if (maxHours > 0) {
+      params.push(String(maxHours));
+      conds.push(`COALESCE(started_at, created_at) < NOW() - ($${params.length} || ' hours')::interval`);
+    }
+    if (conds.length) {
+      const { rows: [expired] } = await query(
+        `SELECT 1 FROM odoo_envs WHERE project_id=$1 AND (${conds.join(' OR ')})`,
+        params
+      );
+      if (expired) { await stopEnv(projectId); stopped++; }
+    }
   }
 
   // 對外名額回收。必須排在主迴圈「之後」——主迴圈才剛從容器 log 把 last_active_at 更新到最新，
@@ -538,12 +560,14 @@ async function sweepIdleEnvs(deps = {}) {
   //
   // 與環境去留分開判定：pipeline 可能還要用這個環境（不能停），但沒人在看就該把名額還回去。
   // 已被主迴圈停掉的環境其 external_slot 已由 stopEnv 清空，不會重複處理。
-  const { rows: staleSlots } = await query(
+  // 0 = 停用（預設）。名額不搶手時留給使用者續用，稀缺真的發生時由 acquireExternalSlot 當場
+  // 徵收最閒的那個，收尾交給 nightlyShutdown（其 UPDATE 已含 external_slot=NULL）。
+  const staleSlots = externalIdleMin > 0 ? (await query(
     `SELECT project_id FROM odoo_envs
       WHERE external_slot IS NOT NULL
         AND COALESCE(last_active_at, updated_at) < NOW() - ($1 || ' minutes')::interval`,
     [String(externalIdleMin)]
-  );
+  )).rows : [];
   for (const { project_id: pid } of staleSlots) {
     await releaseExternalSlot(pid);
     slotsReleased++;

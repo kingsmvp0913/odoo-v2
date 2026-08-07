@@ -91,7 +91,7 @@ test('log 只有輪詢 → 不更新 last_active_at，且不因此保住環境',
   dockerEnv.containerLogs.mockResolvedValue(
     '2026-07-28 23:59:59,000 1 INFO test werkzeug: 127.0.0.1 - - [x] "POST /longpolling/poll HTTP/1.1" 200 -'
   );
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ idleMin: 60 });
   const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('idle');
   expect(e.port).toBeNull();
@@ -99,7 +99,7 @@ test('log 只有輪詢 → 不更新 last_active_at，且不因此保住環境',
 
 test('閒置超過 60 分 → 停機並歸還租約', async () => {
   const pid = await mkEnv('a', 21000, { startedMinAgo: 90, lastActiveMinAgo: 75 });
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ idleMin: 60 });
   const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('idle');
   expect(e.port).toBeNull();
@@ -108,15 +108,15 @@ test('閒置超過 60 分 → 停機並歸還租約', async () => {
 // 意圖：門檻要真的分兩段。閒置 20 分的環境背景掃描不該碰它（那是 port-reclaim 在池滿時才做的事）。
 test('閒置 20 分（未達 60 分）→ 背景掃描不停它', async () => {
   const pid = await mkEnv('a', 21000, { startedMinAgo: 30, lastActiveMinAgo: 20 });
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ idleMin: 60 });
   const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('running');
   expect(e.port).toBe(21000);
 });
 
-test('未達閒置門檻但已啟動超過 8 小時 → 仍停機（保底）', async () => {
+test('未達閒置門檻但已啟動超過壽命上限 → 仍停機（保底）', async () => {
   const pid = await mkEnv('a', 21000, { startedMinAgo: 9 * 60, lastActiveMinAgo: 1 });
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ maxHours: 8 });
   const { rows: [e] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('idle');
 });
@@ -128,7 +128,7 @@ test('未達閒置門檻但已啟動超過 8 小時 → 仍停機（保底）', 
 // deploy/E2E 任務擋在上面，真人在畫面上點不會產生任何任務。這是使用者回報「一直中斷」的根因。
 test('列建立於 30 天前但本次剛啟動 5 分鐘 → 不得因壽命上限被收', async () => {
   const pid = await mkEnv('a', 21000, { createdMinAgo: 30 * 24 * 60, startedMinAgo: 5, lastActiveMinAgo: 1 });
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ maxHours: 8 });
   const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('running');
   expect(e.port).toBe(21000);
@@ -138,7 +138,7 @@ test('列建立於 30 天前但本次剛啟動 5 分鐘 → 不得因壽命上�
 // 保底條款寧可誤收一次也不能失效——輪詢類請求若有漏擋，環境會永遠不閒置。
 test('started_at 為 NULL → 退回 created_at 判壽命（保底不失效）', async () => {
   const pid = await mkEnv('a', 21000, { startedNull: true, createdMinAgo: 9 * 60, startedMinAgo: 5, lastActiveMinAgo: 1 });
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ maxHours: 8 });
   const { rows: [e] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('idle');
 });
@@ -149,7 +149,8 @@ test('有進行中 pipeline 任務 → 兩種條件都跳過', async () => {
     "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'is_busy','odoo','T','deploy_testing',$2)",
     [userId, pid]
   );
-  await sweepIdleEnvs();
+  // 明確給門檻讓兩條件都確實成立——否則「跳過」可能只是因為預設政策本來就不回收，測不到 busy 守衛
+  await sweepIdleEnvs({ idleMin: 60, maxHours: 8 });
   const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('running');
   expect(e.port).toBe(21000);
@@ -164,10 +165,45 @@ test('某個環境抓 log 失敗 → 不中斷整輪，其餘照常處理', asyn
     if (name.includes('bad')) throw new Error('no such container');
     return '';
   });
-  await sweepIdleEnvs();
+  await sweepIdleEnvs({ idleMin: 60 });
   const { rows } = await dbModule.query('SELECT project_id, status FROM odoo_envs ORDER BY project_id');
   expect(rows.find(r => r.project_id === good).status).toBe('idle');
   expect(rows.find(r => r.project_id === bad).status).toBe('idle'); // 抓不到 log 不影響「閒太久該收」的判定
+});
+
+// ── 回收政策（2026-08-07 定案）：主動回收預設關閉，改成「有人排隊才徵收，否則等晚上統一關」。
+// 以下三支釘的是「不帶參數呼叫」＝正式環境實際跑的那條路徑。上面的案例都明確傳門檻，測的是
+// 門檻機制本身；若沒有這幾支，預設值被改回去也不會有任何測試變紅。
+test('預設政策：閒置再久也不主動停機（交給池滿徵收與夜間關機）', async () => {
+  const pid = await mkEnv('a', 21000, { startedMinAgo: 10 * 60, lastActiveMinAgo: 8 * 60 });
+  await sweepIdleEnvs();
+  const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(e.status).toBe('running');   // 閒置 8 小時仍不動它——沒人在等資源就沒有理由踢人
+  expect(e.port).toBe(21000);
+});
+
+// 意圖：壽命上限退居為「卡住／資源洩漏」的保底，刻意排在 23:00 那一刀之後，
+// 免得早上開的環境在下班前被關掉——一整個工作天連續使用是正常情境。
+test('預設政策：壽命上限落在夜間關機之後（開機 12 小時仍在跑）', async () => {
+  const pid = await mkEnv('a', 21000, { startedMinAgo: 12 * 60, lastActiveMinAgo: 1 });
+  await sweepIdleEnvs();
+  const { rows: [e] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(e.status).toBe('running');
+});
+
+// 意圖：對外網址失效跟環境被停一樣是「中斷」。名額不搶手時就別收，
+// 留給 acquireExternalSlot 在池滿當下徵收、或 nightlyShutdown 收尾。
+test('預設政策：對外名額不再背景回收', async () => {
+  const pid = await mkEnv('a', 21000);
+  await dbModule.query(
+    "UPDATE odoo_envs SET external_slot=0, last_active_at=NOW() - interval '3 hours' WHERE project_id=$1",
+    [pid]
+  );
+  const r = await sweepIdleEnvs();
+  const { rows: [e] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(e.external_slot).toBe(0);
+  expect(r.slotsReleased).toBe(0);
+  expect(nginxMap.syncNginxMapDebounced).not.toHaveBeenCalled();  // 沒事就別去打擾共用 nginx
 });
 
 // 意圖：對外名額與環境本身的去留是兩件事。pipeline 可能還要用這個環境（不能停），
