@@ -1,5 +1,9 @@
 const fs = require('fs');
 const { execFile } = require('child_process');
+// db 必須在檔頭 require：syncNginxMap 會被 syncNginxMapDebounced 的 timer 叫到，而那個 timer
+// 是 unref 的背景路徑，可能在 jest 拆掉環境之後才觸發——延遲 require 到那時才執行會拋
+// 「import a file after the Jest environment has been torn down」，測試全綠卻讓 jest exit 1。
+const { query: dbQuery } = require('../db');
 
 // 測試區對外曝露（子網域模式）：把「running 且持有對外名額（external_slot）的測試區 → 內部埠」
 // 寫成共用 nginx 的 include 檔，每個持名額者產一段
@@ -108,7 +112,7 @@ async function syncNginxMap(deps = {}) {
   const confFile = process.env.NGINX_SYNC_CONF_FILE;
   if (!confFile) return { skipped: true }; // gate：未設 → 整段新流程不執行
 
-  const q = deps.query || require('../db').query;
+  const q = deps.query || dbQuery;
   const fsx = deps.fs || fs;
   const run = deps.run || defaultRun;
   const container = process.env.NGINX_CONTAINER; // 容器名以 env 設定，不寫死
