@@ -5,7 +5,7 @@ const mockRunClaude = jest.fn().mockResolvedValue({ text: '<result>{"slug":"test
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 
-let dbModule, runLibraryAgent, realPool;
+let dbModule, runLibraryAgent, refreshWikiNode, realPool;
 
 beforeAll(async () => {
   const db = newDb();
@@ -14,7 +14,7 @@ beforeAll(async () => {
   realPool = new Pool();
   dbModule._setPoolForTesting(realPool);
   await dbModule.migrate();
-  ({ runLibraryAgent } = require('../pipeline/library-agent'));
+  ({ runLibraryAgent, refreshWikiNode } = require('../pipeline/library-agent'));
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -296,4 +296,29 @@ test('同功能去重：同模組相同標題功能頁 → 沿用既有 slug 更
   expect(fnRows.length).toBe(1);           // 沒有重複新增
   expect(fnRows[0].slug).toBe('feat-a');   // 沿用既有 slug
   expect(fnRows[0].content).toBe('v2');    // 內容已更新
+});
+
+// 意圖：⟳ 重新生成不是「重寫」而是「精修」——library.md 明寫「保留既有正確內容，只補充與修正」，
+// 但概論／模組頁若不把現有內容送進 prompt，AI 手上根本沒有可保留的東西，這條指示無從執行，
+// 使用者手動潤過的字與歷次累積的內容會被整份沖掉且無警告。功能頁那支（else 分支）本來就有送，
+// 是這兩支的參照樣板。斷言只看「舊內容有沒有進到 prompt」，不驗整段 context 格式——那種測試
+// 改個換行就紅，卻抓不到真正的退化。
+test('重生概論頁：現有內容必須送進 AI（否則累積的知識會被沖掉）', async () => {
+  const { userId, projectId } = await createUserAndProject();
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id,parent_id,node_type,slug,title,content) VALUES ($1,null,'overview','overview','專案概論','OV-累積內容')",
+    [projectId]);
+  mockRunClaude.mockClear();
+  await refreshWikiNode(projectId, 'overview', userId);
+  expect(mockRunClaude.mock.calls[0][0]).toContain('OV-累積內容');
+});
+
+test('重生模組頁：現有內容必須送進 AI（否則累積的知識會被沖掉）', async () => {
+  const { userId, projectId } = await createUserAndProject();
+  await dbModule.query(
+    "INSERT INTO wiki_pages (project_id,parent_id,node_type,slug,title,content) VALUES ($1,null,'module','module-sale','sale','MOD-累積內容')",
+    [projectId]);
+  mockRunClaude.mockClear();
+  await refreshWikiNode(projectId, 'module-sale', userId);
+  expect(mockRunClaude.mock.calls[0][0]).toContain('MOD-累積內容');
 });

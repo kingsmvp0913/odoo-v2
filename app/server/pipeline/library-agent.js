@@ -132,16 +132,23 @@ async function refreshWikiNode(projectId, slug, userId, signal) {
   if (node.node_type === 'overview') {
     const manifests = [];
     for (const r of readyRepos) _collectManifests(r.local_path, manifests, 15);
-    context = `類型：重建專案概論（overview，200-400 字繁中）
+    context = `類型：精修專案概論（overview，200-400 字繁中），保留正確內容、補充與修正
 回傳 {"slug":"overview","title":"專案概論","content":"<Markdown>"}
 專案「${project.name}」
 
+現有內容：
+${node.content || '（空）'}
+
+各模組 manifest：
 ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   } else if (node.node_type === 'module') {
     const moduleName = node.slug.replace(/^module-/, '');
     const src = _collectModuleSource(readyRepos, moduleName);
-    context = `類型：重建模組頁（module，繁中 Markdown）
+    context = `類型：精修模組頁（module，繁中 Markdown），保留正確內容、補充與修正
 回傳 {"slug":"${node.slug}","title":"${moduleName}","content":"<Markdown>"}
+現有內容：
+${node.content || '（空）'}
+
 模組「${moduleName}」原始碼節錄：
 ${src || '（無原始碼）'}`;
   } else {
