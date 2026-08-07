@@ -226,7 +226,27 @@ async function installModuleRequirements(projectId, signal) {
   const declared = [...await getDeclaredPythonDeps(projectId)].filter(n => SAFE_PKG.test(n));
   if (!declared.length) return '';
   const { code, stdout, stderr } = await dockerEnv.execPipInstall(ctx.container, declared, { signal });
-  return `[pip-docker] ${code === 0 ? 'OK' : 'FAIL'} ${declared.join(' ')}\n${String(code === 0 ? stdout : stderr).slice(-200)}\n`;
+  const builtinNote = code === 0 ? imageBuiltinNote(stdout) : '';
+  return `[pip-docker] ${code === 0 ? 'OK' : 'FAIL'} ${declared.join(' ')}\n${builtinNote}${String(code === 0 ? stdout : stderr).slice(-200)}\n`;
+}
+
+// pip 對「已安裝」回 exit 0，於是「裝好了」與「一個字都沒動」在 log 上長得一模一樣，全是 [pip-docker] OK。
+// 套件版本太舊時這行 OK 是最誤導的線索：實測 task 114，PyPDF2 1.26 沒有 PdfReader、模組載入直接炸，
+// setup_log 上卻是漂亮的 OK。把 pip 自己印的既有版本與路徑抽出來標明，讓「宣告了也沒用」這件事在出事前就看得見。
+// pip 的字面：`Requirement already satisfied: PyPDF2 in ./usr/lib/python3/dist-packages (1.26.0)`
+const PIP_SATISFIED = /^Requirement already satisfied:\s*([\w.-]+)\s+in\s+(\S+)\s*\(([^)]+)\)/gm;
+// image 內建的 Debian 系統套件在 /usr/lib/python3/…；我方 pip 裝的落在 /usr/local/lib/python3.x/…。
+// 只有前者是死結——execPipInstall 只帶套件名（不帶版本、不加 --upgrade），pip 見已安裝即略過，
+// 於是 requirements.txt 的版本限定對它永遠是 no-op（deploy-testing 的版本不符診斷講的就是這個形狀）。
+const IMAGE_BUILTIN_PATH = /usr\/lib\/python3\//;
+
+function imageBuiltinNote(stdout) {
+  const builtin = [...String(stdout || '').matchAll(PIP_SATISFIED)]
+    .filter(m => IMAGE_BUILTIN_PATH.test(m[2]))
+    .map(m => `${m[1]}=${m[3]}`);
+  if (!builtin.length) return '';
+  return `[pip-docker] 註：${builtin.join(' ')} 為 image 內建系統套件，pip 未更動；`
+    + `只帶套件名的安裝升不了它，在 requirements.txt 釘版本對它無效\n`;
 }
 
 // 蒐集本專案「已宣告」的 Python 相依名（小寫集合），供缺套件時判斷是「真環境缺件」還是「漏宣告」

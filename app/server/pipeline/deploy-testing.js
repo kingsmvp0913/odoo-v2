@@ -170,6 +170,17 @@ function parseMissingModule(text) {
   return m ? m[1] : null;
 }
 
+// 從 "cannot import name 'X' from 'Y' (載入路徑)" 抽出符號、套件與實際載入路徑。ImportError 有兩種真相：
+// 套件根本沒裝（'No module named'，見 parseMissingModule）、與套件裝了但版本太舊沒有該符號。classifier
+// 對後者一律判 code（"模組在、名稱不對＝寫錯 import"）——對自家模組成立，對第三方套件則指錯方向。
+// 括號內的載入路徑是 Python 自己印的，正是分辨這兩者的唯一線索。找不到回 null（含循環 import 的
+// 'from partially initialized module'——那是真程式錯，不該被這裡收走）。
+function parseVersionMismatch(text) {
+  const m = String(text == null ? '' : text)
+    .match(/cannot import name ['"]([\w.]+)['"] from ['"]([\w.]+)['"]\s*\(([^)]+)\)/i);
+  return m ? { symbol: m[1], pkg: m[2], loadedFrom: m[3] } : null;
+}
+
 // 失敗診斷完整落地：blocker/feedback 只留摘要，exit code 與兩路輸出存檔供事後鑑識
 function saveDeployLog(taskId, count, err) {
   try {
@@ -347,6 +358,21 @@ async function doDeploy(task, taskId, userId, signal) {
           codeHint = `\n請在模組 __manifest__.py 的 external_dependencies['python'] 補上宣告：${topPkg}（缺套件但未宣告，人工手動 pip 後環境一重建就再次缺件）`;
         }
       }
+    }
+
+    // 版本不符（套件在、版本太舊沒有該符號）：cls 已由 classifier 判 code、路由不變，這裡只補事實。
+    // 只在載入路徑落在 dist-/site-packages 時出手——那是唯一「釘版本救不了」的形狀：
+    // installModuleRequirements 只以套件名安裝（不帶版本、不加 --upgrade），pip 見已安裝即略過，
+    // 於是 requirements.txt 的版本限定永遠是 no-op。缺了這個事實，coding 讀完錯誤只會確認「規格三項
+    // 都已滿足」然後零變更停擺（實測 task 114：PyPDF2 1.26 無 PdfReader，釘 >=2.0 後仍原地失敗兩輪）。
+    // 路徑落在 addons 內＝開發者自己 import 打錯，classifier 原本的判讀就對，不加這段以免指錯方向。
+    const verMismatch = (err && !codeHint) ? parseVersionMismatch(err.message) : null;
+    if (verMismatch && /dist-packages|site-packages/.test(verMismatch.loadedFrom)) {
+      const { symbol, pkg, loadedFrom } = verMismatch;
+      codeHint = `\n（缺的不是套件而是版本：${pkg} 已安裝於 ${loadedFrom}，但其中沒有 ${symbol}。`
+        + `平台補裝相依時只以套件名安裝、不帶版本也不加 --upgrade，故在 requirements.txt 釘版本對它無效，`
+        + `改宣告版本不會有任何效果。可行的修法有二：改用不同名稱的替代套件（同時在 requirements.txt 與`
+        + ` __manifest__.py 的 external_dependencies['python'] 宣告），或改寫程式以相容 ${pkg} 現有版本的 API）`;
     }
 
     if (err) {

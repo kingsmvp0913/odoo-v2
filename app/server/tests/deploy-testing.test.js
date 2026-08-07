@@ -635,6 +635,41 @@ test('F4 已宣告但 pip 裝不起來 → stopped(env)，blocker 帶 pip 補裝
   expect(envAgent.upgradeModules).toHaveBeenCalledTimes(1); // pip 失敗就不再重試升級
 });
 
+// 意圖：套件在、版本太舊沒有該符號時，coding 手上必須有「釘版本無效」這個事實才走得下去。
+// 實測 task 114：PyPDF2 1.26 無 PdfReader，agent 依規格在 requirements.txt 釘 >=2.0、QA 也放行，
+// 但補裝只以套件名安裝、pip 見已安裝即略過 → 同一個錯原地重現，第二輪 agent 判「規格都已滿足」
+// 零變更、撞無變更守衛停擺。斷言 feedback 帶「釘版本無效」與替代套件方向，正是那兩輪缺的東西。
+test('版本不符（系統套件內缺符號）→ 退 coding，feedback 說明釘版本無效並指出替代套件方向', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockRejectedValue(new Error(
+    "ImportError: cannot import name 'PdfReader' from 'PyPDF2' (/usr/lib/python3/dist-packages/PyPDF2/__init__.py)"
+  ));
+  const id = await makeTask(0);
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, deploy_retry_count, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(t.deploy_retry_count).toBe(1);
+  expect(t.retry_feedback).toContain('PyPDF2');
+  expect(t.retry_feedback).toContain('PdfReader');
+  expect(t.retry_feedback).toContain('釘版本對它無效'); // 沒這句 agent 會再釘一次版本
+  expect(t.retry_feedback).toContain('替代套件');       // 指出唯一在 repo 端可行的方向
+});
+
+// 邊界：同一句 ImportError 也可能是開發者自己 import 打錯（載入路徑在 addons 內），此時 classifier
+// 原本「模組在、名稱不對＝寫錯 import」的判讀就是對的。若不看載入路徑一律附上「換套件」指示，
+// 會把單純的筆誤導去換第三方套件——比不給提示更糟。故此案必須維持原樣、不得混入版本不符文案。
+test('版本不符 邊界：載入路徑在 addons 內（自家 import 筆誤）→ 不附加換套件指示', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockRejectedValue(new Error(
+    "ImportError: cannot import name 'compute_total' from 'odoo.addons.idx_x.models.helper' (/mnt/extra-addons/main/idx_x/models/helper.py)"
+  ));
+  const id = await makeTask(0);
+  await runDeployTesting(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');            // 仍是程式問題、仍退 coding
+  expect(t.retry_feedback).not.toContain('替代套件'); // 但不得指使它去換套件
+});
+
 // 意圖：三段以上的鏈不能假設「第一段＝根因」。Odoo 的 @ormcache（_xmlid_lookup）在 cache-miss 時
 // 於 except KeyError: 內重拋，於是「xmlid 指到不存在的 external id」——coding agent 最常犯、且只有
 // deploy 這一關會攔到的錯——其錯誤鏈第一段永遠是 lru.py 的 KeyError，零診斷價值。

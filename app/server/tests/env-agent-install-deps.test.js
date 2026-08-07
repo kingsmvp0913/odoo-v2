@@ -74,6 +74,34 @@ test('installModuleRequirements：容器內 pip 安裝宣告的相依（含 xlsx
   expect(log).toContain('[pip-docker] OK');
 });
 
+// 意圖：pip 對「已安裝」回 exit 0，於是「裝好了」與「什麼都沒動」在 log 上都是 [pip-docker] OK。
+// 版本太舊時這行 OK 最誤導：task 114 的 PyPDF2 1.26 沒有 PdfReader、模組載入直接炸，setup_log 卻是 OK。
+// image 內建的系統套件是唯一「宣告了也沒用」的形狀（只帶套件名升不動），必須在出事前就標出來。
+test('installModuleRequirements：已安裝的 image 內建系統套件 → log 標明版本與「釘版本無效」', async () => {
+  dockerEnv.execPipInstall.mockResolvedValueOnce({
+    code: 0,
+    stdout: 'Requirement already satisfied: PyPDF2 in ./usr/lib/python3/dist-packages (1.26.0)\n',
+    stderr: ''
+  });
+  const log = await envAgent.installModuleRequirements(projectId);
+  expect(log).toContain('[pip-docker] OK');       // 退出碼確實是 0，不謊報成 FAIL
+  expect(log).toContain('PyPDF2=1.26.0');         // 但要講出「它是這個版本、沒被動過」
+  expect(log).toContain('釘版本對它無效');        // 以及為什麼改宣告救不了
+});
+
+// 邊界：我方 pip 裝進 /usr/local 的套件同樣會印 already satisfied，但那不是死結（真要升版有路可走），
+// 標註它只會讓每次 deploy 的 log 多出一段無行動意義的雜訊。只有 image 內建那條路徑值得警告。
+test('installModuleRequirements：已安裝但在 /usr/local（我方 pip 裝的）→ 不加註記', async () => {
+  dockerEnv.execPipInstall.mockResolvedValueOnce({
+    code: 0,
+    stdout: 'Requirement already satisfied: et-xmlfile in ./usr/local/lib/python3.10/dist-packages (2.0.0)\n',
+    stderr: ''
+  });
+  const log = await envAgent.installModuleRequirements(projectId);
+  expect(log).toContain('[pip-docker] OK');
+  expect(log).not.toContain('釘版本對它無效');
+});
+
 test('installModuleRequirements：容器未運行 → 回空字串、不裝', async () => {
   dockerEnv.containerRunning.mockResolvedValueOnce(false);
   const log = await envAgent.installModuleRequirements(projectId);
