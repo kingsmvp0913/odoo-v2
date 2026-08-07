@@ -1,4 +1,13 @@
 const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
+// 時間軸上這幾種訊息，內容其實是寫給下一關 agent 讀的機器輸入，不能為了好讀而改寫內容：
+//   [QA 未通過]        同時是下一輪 QA 的「未解清單」來源（qa-agent.js 直接 LIKE 查這則 log 撈回去比對）
+//   [分診—需調整規格]  以 role='user' 寫入，偽裝成使用者澄清餵給重跑的 analysis
+// 但它們一樣會出現在使用者眼前（實測 QA 那則平均 725 字、最長 1060 字的純技術文）。
+// 折衷：內容原封不動，顯示端預設收合成一句人話，要看技術細節再展開。
+const MACHINE_LOG_HINTS = [
+  { prefix: '[QA 未通過]', hint: '程式碼審查發現問題，已自動退回開發修正' },
+  { prefix: '[分診—需調整規格]', hint: '判定為規格需要調整，已轉回分析階段重寫規格' }
+];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
@@ -536,6 +545,13 @@ window.TaskDetailView = Vue.defineComponent({
       if (c.length <= 400 && (c.match(/\n/g) || []).length + 1 <= 8) return false;
       return /Traceback \(most recent call last\)|File ".*", line \d+|^\s*at |\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}|\b(?:ERROR|WARNING|CRITICAL|Exception)\b|\bError:/m.test(c);
     },
+    // 命中 MACHINE_LOG_HINTS 的機器輸入型訊息 → 回傳該收合成的那句人話，否則 null（照常整段顯示）
+    machineLogHint(item) {
+      if (item.kind !== 'log') return null;
+      const c = String(item.content || '');
+      const hit = MACHINE_LOG_HINTS.find(h => c.startsWith(h.prefix));
+      return hit ? hit.hint : null;
+    },
     logLineCount(item) { return (String(item.content || '').match(/\n/g) || []).length + 1; },
     toggleLog(key) { this.expandedLogs[key] = !this.expandedLogs[key]; },
     formatTime(ts) {
@@ -826,6 +842,12 @@ window.TaskDetailView = Vue.defineComponent({
                 <template v-if="isErrorLog(item)">
                   <button type="button" class="conv-log-chip" @click="toggleLog(item._key)">
                     {{ expandedLogs[item._key] ? '▾' : '▸' }} [錯誤LOG · {{ logLineCount(item) }} 行]
+                  </button>
+                  <pre v-if="expandedLogs[item._key]" class="conv-log-pre">{{ item.content }}</pre>
+                </template>
+                <template v-else-if="machineLogHint(item)">
+                  <button type="button" class="conv-log-chip" @click="toggleLog(item._key)">
+                    {{ expandedLogs[item._key] ? '▾' : '▸' }} {{ machineLogHint(item) }}（技術細節 {{ logLineCount(item) }} 行）
                   </button>
                   <pre v-if="expandedLogs[item._key]" class="conv-log-pre">{{ item.content }}</pre>
                 </template>

@@ -472,6 +472,9 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 /* 使用者自己貼的長 LOG：預設收合成標籤，點開展開全文（dark-aware，勿寫死淺色底） */
 .conv-log-chip { align-self: flex-end; font-size: 12px; padding: 4px 10px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; font-family: inherit; }
 .conv-log-chip:hover { color: var(--text); border-color: var(--text-muted); }
+/* chip／pre 原本只服務靠右的使用者訊息，故上面寫死 flex-end；AI 側收合的機器輸入（[QA 未通過] 這類）
+   靠左，沿用會與泡泡方向相反，故只覆寫對齊、其餘樣式共用 */
+.conv-row.ai > .conv-log-chip, .conv-row.ai > .conv-log-pre { align-self: flex-start; }
 .conv-log-pre { align-self: flex-end; max-width: 85%; margin-top: 6px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 12px; line-height: 1.5; max-height: 320px; overflow: auto; white-space: pre; }
 /* 對話時間軸獨立面板：用 --bg（比 card 深一階，深色模式 surface 與 card 同色會糊在一起）做內凹面板＋邊框，和上下區塊明確區隔 */
 .conv-panel { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 var(--space-4); max-height: 420px; overflow-y: auto; }
