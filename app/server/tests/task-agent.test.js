@@ -279,6 +279,32 @@ test('B-5 帶失敗回饋卻無新 commit → stopped，不放行進 QA', async 
   expect(t.blocker_content).toContain('未產生任何程式變更');
 });
 
+// 意圖：守衛擋下來時，使用者看到的必須是 agent 對「為什麼沒改」的真實判斷，不是每張任務都長一樣
+// 的罐頭句。實測 task 114：agent 得出的是「三項規格都已滿足，剩下是部署環境有沒有真的裝上 PyPDF2」
+// （＝該往環境層查，不是回來重寫程式），但那段只活在 task_events 的終端串流裡，blocker_content 卻
+// 寫死固定字串，使用者當場問「為什麼原因寫得那麼模糊」。診斷被蓋掉＝這一輪的 token 白燒。
+test('B-5 無變更擋下時，blocker 要帶 agent 自述的原因，且進得了 task_logs', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-why');
+    child.stdout.emit('data', JSON.stringify({
+      type: 'result',
+      result: '<result>\n{"status":"qa_running","summary":"三項規格都已滿足，剩下是部署環境是否真的裝上 PyPDF2"}\n</result>',
+      usage: null, duration_ms: 10,
+    }) + '\n');
+    child.emit('close', 0);
+  } });
+  git.revParse.mockResolvedValue('sha-unchanged');
+  const id = await insertCodingTask('nodiff-why', { retry_feedback: '[部署測試區升級失敗]\nImportError: PyPDF2' });
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('PyPDF2');          // agent 的判斷有走到使用者看得到的地方
+  // rules/pipeline.md 77：只存欄位不寫 task_logs，任務一往前走那個面板就消失＝對使用者等同不存在
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [id]);
+  expect(logs.some(l => String(l.content).includes('PyPDF2'))).toBe(true);
+});
+
 // 鑑別力對照：同樣帶失敗回饋，但真的改了東西（HEAD 前進）→ 必須照常放行，不得誤擋。
 test('B-5 帶失敗回饋且有新 commit → 照常進 QA', async () => {
   mockClaude({ onCall: (child) => { emitInit(child, 'sess-hasdiff'); emitResult(child); child.emit('close', 0); } });

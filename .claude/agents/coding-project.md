@@ -71,10 +71,12 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 
 【輸出】完成 commit 後「一定」要輸出下列之一。嚴禁因等候任何驗證/背景指令而不 return、或開背景任務後無限等待它（這會讓本輪被判「未回傳有效結果」而整輪報廢）：
 <result>
-{"status":"qa_running"}
+{"status":"qa_running","summary":"本輪實際做了什麼（一句話，例如：依失敗訊息在 __manifest__.py 補上 external_dependencies）"}
 </result>
 
 若遇到無法繼續的情況（需求無法實作、規格不清楚等）：
 <result>
 {"status":"stopped","error":"詳細原因（使用者看得懂的說明，例如：sale.order 尚未繼承，需先建立繼承才能新增欄位）"}
 </result>
+
+**上方有【上一次執行的失敗訊息】、而你讀完既有碼後判斷「本輪不需要任何程式變更」時**（例如該失敗上一輪已經修掉、或失敗原因不在程式碼而在部署環境／資料）：回 **stopped**，把判斷與依據寫進 `error`——哪幾條 requirements 已經滿足、失敗訊息實際指向哪裡。不要回 qa_running：零變更推進到 QA 只會讓同一個失敗原封不動再重現一次，而你這段判斷是使用者決定下一步的唯一依據，寫在這裡他才看得到。

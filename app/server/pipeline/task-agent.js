@@ -541,11 +541,27 @@ async function runTaskCoding(taskId, userId, signal) {
     const unchanged = repos.length > 0
       && repos.every(k => headsAfter[k] && headsBefore[k] && headsAfter[k] === headsBefore[k]);
     if (unchanged) {
+      // agent 對「為什麼沒改」通常有精準判斷（實測 task 114：「三項規格都已滿足，剩下是部署環境
+      // 是否真的裝上 PyPDF2」＝該往環境層查），但它只活在 task_events 的終端串流裡。blocker 寫死
+      // 固定字串等於把那段診斷蓋掉，每張任務長得一模一樣，使用者無從判斷下一步（他的原話是
+      // 「為什麼原因寫得那麼模糊」）。擋不擋仍由結構決定（rules/pipeline.md 60），這裡只換訊息來源。
+      const agentSay = String(result.summary || '').trim();
       await query(
         `UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
-        [taskId, '實作 Agent 本輪未產生任何程式變更，但上一關是失敗退回——直接推進會重現同一個失敗。' +
-                 '請確認失敗原因是否已在別處處理，或補充具體的修正方向後再繼續。']
+        [taskId, agentSay
+          ? `實作 Agent 本輪未產生任何程式變更，但上一關是失敗退回。它自述的原因是：\n${agentSay}\n\n` +
+            '若這個判斷成立，請直接照它指的方向處理；否則補充具體的修正方向後再繼續。'
+          : '實作 Agent 本輪未產生任何程式變更，但上一關是失敗退回——直接推進會重現同一個失敗。' +
+            '請確認失敗原因是否已在別處處理，或補充具體的修正方向後再繼續。']
       );
+      // 只寫 blocker_content 的話，任務一往前走那個面板就消失＝對使用者等同不存在（rules/pipeline.md 77）。
+      // 截斷是因為 task_logs 會被分診／respec 每輪讀進 prompt，不能塞 agent 的整段輸出。
+      if (agentSay) {
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+          [taskId, `[實作] 本輪未產生程式變更，判斷是：${agentSay.slice(0, 300)}`]
+        ).catch(() => {});
+      }
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
       return true;
     }
