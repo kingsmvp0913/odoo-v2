@@ -142,6 +142,31 @@ test('池滿 + 對外都還活躍 → 拋錯，不徵收任何人', async () => 
   expect(old.external_slot).toBe(0);
 });
 
+// 意圖：背景回收（EXTERNAL_IDLE_MIN，2026-08-07 起預設 0＝停用）與池滿徵收是兩條路徑，
+// 門檻不可共用。共用的話，把背景回收設成 0 會讓徵收條件退化成「閒置 > 0 分鐘」＝幾乎恆真，
+// 池滿時連正在操作的人都被踢掉——想減少中斷反而製造更多中斷。徵收門檻獨立取自
+// ENV_IDLE_TIMEOUT_PRESSURE_MIN（預設 15），與內部埠的 port-reclaim 同步。
+// 這兩支刻意不傳 idleMin，走的正是正式環境的預設路徑。
+test('走預設門檻：池滿時不徵收 5 分鐘前還在操作的人', async () => {
+  const a = await mkEnv('a');
+  await acquireExternalSlot(a, { count: 1 });
+  await dbModule.query("UPDATE odoo_envs SET last_active_at=NOW() - interval '5 minutes' WHERE project_id=$1", [a]);
+
+  await expect(acquireExternalSlot(await mkEnv('b'), { count: 1 })).rejects.toThrow(/名額已滿/);
+  const { rows: [old] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [a]);
+  expect(old.external_slot).toBe(0);   // 沒被踢
+});
+
+test('走預設門檻：池滿時仍徵收閒置逾 15 分的（徵收沒有整個失效）', async () => {
+  const a = await mkEnv('a');
+  await acquireExternalSlot(a, { count: 1 });
+  await dbModule.query("UPDATE odoo_envs SET last_active_at=NOW() - interval '30 minutes' WHERE project_id=$1", [a]);
+
+  expect(await acquireExternalSlot(await mkEnv('b'), { count: 1 })).toBe(0);
+  const { rows: [old] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [a]);
+  expect(old.external_slot).toBeNull();
+});
+
 test('findReclaimableSlot 挑閒最久的那個', async () => {
   const a = await mkEnv('a'); await acquireExternalSlot(a, C3);
   const b = await mkEnv('b'); await acquireExternalSlot(b, C3);
