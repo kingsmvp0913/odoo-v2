@@ -316,7 +316,7 @@ window.AdminView = Vue.defineComponent({
                 <input v-model.number="usageGate.th7" type="number" min="1" max="100" class="field-input" />
               </div>
             </div>
-            <div v-if="gateStatus" style="margin-top:var(--space-4);font-size:var(--fs-sm)">
+            <div v-if="gateStatus" data-rwd-volatile style="margin-top:var(--space-4);font-size:var(--fs-sm)">
               <template v-if="gateStatus.blocked">
                 <span style="color:var(--warning)">
                   ⏸ 已暫停：{{ gateStatus.reason.window === '5h' ? '5 小時視窗' : '本週' }}用量 {{ gateStatus.reason.current }}% 已達門檻 {{ gateStatus.reason.threshold }}%{{ gateStatus.reason.stale ? '（快取資料）' : '' }}；重置：{{ gateStatus.reason.resets_at || '未知' }}

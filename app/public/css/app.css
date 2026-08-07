@@ -1075,6 +1075,9 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
    桌機那排篩選本來就一列排得下，不需要收折 */
 .tasklist-filter-toggle { display: none; }
 
+/* 終端機的手機提示：桌機不顯示（規則在檔尾 ≤640px 區塊） */
+.terminal-mobile-hint { display: none; }
+
 /* ══ RWD 斷點（規格 RWD-C-SPEC.md §3.1）══════════════════════════
    桌機 ≥1024px 不進任何規則：所有 RWD 樣式一律寫在以下兩個區塊內，
    桌機路徑因此恆等於改造前，這是「不影響網站使用」的第一層保證。
@@ -1148,6 +1151,16 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
   /* 光有 overflow 不會捲：table 是 width:100%，永遠剛好塞滿容器，只會把欄位擠爛。
      給一個最小寬度，它才會真的溢出、才捲得起來。 */
   .tr-table { min-width: 520px; }
+
+  /* ── 多欄 grid 降欄（Block 6）─────────────────────────────
+     這些 grid 的欄數是照桌機 1440px 訂的，直接搬到小螢幕會把內容區撐爆：
+     用量報表的 7 欄摘要卡＋4 欄圖表在 390px 下讓整頁寬到 945px。
+     grid 不像 flex 會自己換行，欄數是寫死的，只能在斷點內改。 */
+  .tr-summary-grid { grid-template-columns: repeat(4, 1fr); }
+  .tr-chart-grid { grid-template-columns: repeat(2, 1fr); }
+  /* Agent 管理是「左清單＋右編輯」的兩欄工作區，左欄寫死 280px，
+     小螢幕右欄會被壓到剩百來 px（提示文字變成一字一行）。改上下排。 */
+  .aa-layout { grid-template-columns: 1fr; }
 }
 
 /* ── 手機 ≤640px ── */
@@ -1218,6 +1231,27 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
     width: 100%; max-width: 100%; border-radius: 0;
     max-height: 100dvh; height: 100dvh;
   }
+
+  /* ── 多欄 grid 一律降成單欄（Block 6）───────────────────
+     390px 下兩欄各只剩約 175px，表單欄位擠到看不清標籤。
+     用量報表的統計卡數字短，留兩欄還讀得動。 */
+  .tr-summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .tr-chart-grid,
+  .repo-add-grid,
+  .pdq-vpn-grid, .pdq-form-grid,
+  .proj-form-grid,
+  .admin-users-form-grid { grid-template-columns: 1fr; }
+
+  /* ── 終端機明確降級（規格 §Block 6）──────────────────────
+     xterm 是固定字寬的 80 欄輸出，硬塞進 390px 只會讓對齊的 log 全亂。
+     決定是不做手機版終端機：讓它自己橫捲、並告知在桌機看比較完整。 */
+  .terminal-mobile-hint {
+    display: block; flex: none;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    font-size: var(--fs-sm); color: var(--text-muted);
+  }
+  .terminal-body > div:last-child { overflow-x: auto; }
 }
 
 /* 開關（toggle switch）。原本兩顆開關各自 inline 寫死 #fff 與 rgba(0,0,0,.25)，違反配色一律走
