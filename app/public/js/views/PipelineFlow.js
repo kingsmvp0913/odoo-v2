@@ -1204,13 +1204,17 @@ window.PipelineFlowView = Vue.defineComponent({
                @mouseenter="hovered = n.id" @mouseleave="hovered = null"
                :opacity="dim(n.id) ? 0.25 : 1"
                style="cursor:pointer;transition:opacity .15s">
+              <!-- hover 效果刻意**不動顏色**：框線顏色是這張圖表達「這是什麼性質的關」的
+                   唯一管道（見 PF_KIND_COLOR），原本 hover 會把框線與底色換成 primary，
+                   等於把「要人動手」的橘框臨時說成「AI agent」的藍框，指著問的當下最容易誤導。
+                   改用不帶語意的維度：框線加粗＋以**它自己的顏色**外暈。 -->
               <rect :x="layout.pos[n.id].x" :y="layout.pos[n.id].y"
                     :width="layout.pos[n.id].w" :height="layout.pos[n.id].h" rx="8"
-                    :fill="hovered === n.id ? 'var(--primary-light)' : 'var(--card-bg)'"
-                    :stroke="hovered === n.id ? 'var(--primary)' : kindColor(n)"
-                    :stroke-width="hovered === n.id ? 2.5 : 1.4"
+                    fill="var(--card-bg)" :stroke="kindColor(n)"
+                    :stroke-width="hovered === n.id ? 2.8 : 1.4"
                     :stroke-dasharray="n.kind === 'inline' || n.kind === 'ext' ? '5 3' : ''"
-                    style="transition:fill .15s, stroke .15s" />
+                    :style="{ transition: 'stroke-width .15s, filter .15s',
+                              filter: hovered === n.id ? 'drop-shadow(0 0 6px ' + kindColor(n) + ')' : 'none' }" />
               <text :x="layout.pos[n.id].x + layout.pos[n.id].w/2" :y="layout.pos[n.id].y + 23"
                     text-anchor="middle" fill="var(--text)"
                     style="font-size:13px;font-weight:600">{{ n.label }}</text>
