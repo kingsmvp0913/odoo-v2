@@ -518,11 +518,16 @@ async function sweepIdleEnvs(deps = {}) {
       }
     } catch { /* 抓不到活動時間就沿用既有值，交由下方逾時判定 */ }
 
+    // 壽命上限比的是 started_at（本次啟動）而非 created_at（該列首次建立）。odoo_envs 是
+    // UNIQUE(project_id)、停機只改 status 不刪列，created_at 因此永遠停在「這專案第一次建環境」
+    // 的時刻——拿它判壽命，任何建立逾 maxHours 的專案一開機就滿足條件，下一輪 sweep 立刻收掉，
+    // 而且只打真人（pipeline 有 deploy/E2E 任務擋在上面）。started_at 為 NULL 時退回 created_at，
+    // 維持「判不出來就從嚴」的保底語意。
     const { rows: [expired] } = await query(
       `SELECT 1 FROM odoo_envs
         WHERE project_id=$1
           AND ( COALESCE(last_active_at, updated_at) < NOW() - ($2 || ' minutes')::interval
-             OR created_at < NOW() - ($3 || ' hours')::interval )`,
+             OR COALESCE(started_at, created_at) < NOW() - ($3 || ' hours')::interval )`,
       [projectId, String(idleMin), String(maxHours)]
     );
     if (expired) { await stopEnv(projectId); stopped++; }
@@ -841,7 +846,7 @@ async function _runEnvSetupDocker(projectId) {
   // 舊 port 模式網址（內部埠已不對公網開）。未設子網域樣板時（本機／未反代機）逐字維持原行為。
   const bootUrl = process.env.ENV_EXTERNAL_URL_TEMPLATE ? null : envPublicUrl(port, ctx.dirName);
   await query(
-    "UPDATE odoo_envs SET status='running', pid=NULL, pid_started_at=NULL, port=$2, url=$3, setup_log=$4, updated_at=NOW() WHERE project_id=$1",
+    "UPDATE odoo_envs SET status='running', pid=NULL, pid_started_at=NULL, port=$2, url=$3, setup_log=$4, started_at=NOW(), updated_at=NOW() WHERE project_id=$1",
     [projectId, port, bootUrl, log]
   );
 

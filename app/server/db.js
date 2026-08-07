@@ -597,6 +597,11 @@ async function migrate() {
     // 對外子網域名額（0..count-1）。刻意獨立於 port：port 是 pipeline 也在佔的內部資源，
     // 由 port 推導對外網址等於「只要有環境在跑就佔一個對外名額」，正是本次要消除的問題。
     { table: 'odoo_envs', col: 'external_slot', sql: 'ALTER TABLE odoo_envs ADD COLUMN external_slot INTEGER' },
+    // 本次啟動時刻（壽命上限判定用）。不能拿 created_at 代替：odoo_envs 是 UNIQUE(project_id)，
+    // 一個專案永遠只有一列，停機只改 status、重啟走 ON CONFLICT DO UPDATE，created_at 自始至終
+    // 是「這專案第一次建環境」的時間。用它判壽命，會讓建立逾 8 小時的專案每次一開機就被下一輪
+    // sweep 收掉（實測真人操作 3~7 分鐘即中斷），且只打真人——pipeline 有 deploy/E2E 任務擋著。
+    { table: 'odoo_envs', col: 'started_at', sql: 'ALTER TABLE odoo_envs ADD COLUMN started_at TIMESTAMPTZ' },
     // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
     { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },
@@ -692,6 +697,11 @@ async function migrate() {
   // 這是迴圈跑多筆 UPDATE、沒包交易，中途失敗可能半套（部分連線埠改到 22000 系列、部分留在
   // 舊值）——不能吞得無聲無息，至少要印出來讓人知道要去查；遷移失敗不該擋住整個 server 起動，故不 throw。
   await require('./lib/vpn-migrate').migrateVpnToProjects(query).catch(e => console.error('[vpn-migrate]', e.message));
+
+  // started_at 上線前就在跑的環境沒有本次啟動時刻，留 NULL 會讓壽命判定 fallback 回 created_at
+  // （＝首次建環境的時間）而在下一輪 sweep 被誤收。updated_at 在轉 running 時剛被設過，是現有
+  // 資料裡最接近啟動時刻的值。idempotent：只補 NULL，跑幾次都一樣。
+  await query("UPDATE odoo_envs SET started_at=updated_at WHERE status='running' AND started_at IS NULL").catch(() => {});
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});

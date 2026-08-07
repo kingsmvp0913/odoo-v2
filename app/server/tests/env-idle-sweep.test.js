@@ -49,18 +49,24 @@ beforeEach(async () => {
   nginxMap.syncNginxMapDebounced.mockClear();
 });
 
-// startedMinAgo：環境已啟動多久（updated_at）；lastActiveMinAgo：null 表示 last_active_at 為 NULL
-async function mkEnv(name, port, { startedMinAgo = 5, lastActiveMinAgo = 0 } = {}) {
+// startedMinAgo：本次啟動多久前（started_at/updated_at）；lastActiveMinAgo：null 表示 last_active_at 為 NULL
+// createdMinAgo：這一列多久前首次建立（created_at）。odoo_envs 是 UNIQUE(project_id)、停機不刪列，
+//   所以真實資料裡 created_at 幾乎都遠早於 started_at（實測 1~14 天）。預設對齊 startedMinAgo 是為了
+//   讓既有案例語意不變；要測「舊列剛啟動」必須明確給值——兩者綁在一起就永遠測不出壽命上限誤殺。
+// startedNull：模擬 started_at 欄位上線前就存在的列（fallback 路徑）。
+async function mkEnv(name, port, { startedMinAgo = 5, lastActiveMinAgo = 0, createdMinAgo = null, startedNull = false } = {}) {
   const { rows: [p] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version, folder_name) VALUES ($1,'17.0',$1) RETURNING id", [name]
   );
   await dbModule.query(
-    `INSERT INTO odoo_envs (project_id, status, port, created_at, updated_at, last_active_at)
+    `INSERT INTO odoo_envs (project_id, status, port, created_at, started_at, updated_at, last_active_at)
      VALUES ($1,'running',$2,
-             NOW() - ($3 || ' minutes')::interval,
+             NOW() - ($5 || ' minutes')::interval,
+             CASE WHEN $6::text IS NULL THEN NULL ELSE NOW() - ($3 || ' minutes')::interval END,
              NOW() - ($3 || ' minutes')::interval,
              CASE WHEN $4::text IS NULL THEN NULL ELSE NOW() - ($4 || ' minutes')::interval END)`,
-    [p.id, port, String(startedMinAgo), lastActiveMinAgo === null ? null : String(lastActiveMinAgo)]
+    [p.id, port, String(startedMinAgo), lastActiveMinAgo === null ? null : String(lastActiveMinAgo),
+     String(createdMinAgo ?? startedMinAgo), startedNull ? null : '1']
   );
   return p.id;
 }
@@ -110,6 +116,28 @@ test('閒置 20 分（未達 60 分）→ 背景掃描不停它', async () => {
 
 test('未達閒置門檻但已啟動超過 8 小時 → 仍停機（保底）', async () => {
   const pid = await mkEnv('a', 21000, { startedMinAgo: 9 * 60, lastActiveMinAgo: 1 });
+  await sweepIdleEnvs();
+  const { rows: [e] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(e.status).toBe('idle');
+});
+
+// 意圖：壽命上限管的是「這次開機開多久了」，不是「這個專案第一次建環境是多久以前」。
+// odoo_envs 每個專案只有一列、停機只改 status 不刪列，created_at 因此永遠停在首次建立的時刻
+// （實測正式資料 1~14 天前）。若拿 created_at 判壽命，所有建立逾 8 小時的專案一開機就滿足條件，
+// 下一輪 sweep（每 10 分）立刻收掉——實測真人操作 3~7 分鐘就被踢，且只打真人：pipeline 有
+// deploy/E2E 任務擋在上面，真人在畫面上點不會產生任何任務。這是使用者回報「一直中斷」的根因。
+test('列建立於 30 天前但本次剛啟動 5 分鐘 → 不得因壽命上限被收', async () => {
+  const pid = await mkEnv('a', 21000, { createdMinAgo: 30 * 24 * 60, startedMinAgo: 5, lastActiveMinAgo: 1 });
+  await sweepIdleEnvs();
+  const { rows: [e] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [pid]);
+  expect(e.status).toBe('running');
+  expect(e.port).toBe(21000);
+});
+
+// 意圖：舊列（started_at 欄位上線前就在跑）沒有本次啟動時刻可比，此時退回 created_at 從嚴處理。
+// 保底條款寧可誤收一次也不能失效——輪詢類請求若有漏擋，環境會永遠不閒置。
+test('started_at 為 NULL → 退回 created_at 判壽命（保底不失效）', async () => {
+  const pid = await mkEnv('a', 21000, { startedNull: true, createdMinAgo: 9 * 60, startedMinAgo: 5, lastActiveMinAgo: 1 });
   await sweepIdleEnvs();
   const { rows: [e] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [pid]);
   expect(e.status).toBe('idle');
