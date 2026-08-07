@@ -351,6 +351,18 @@ async function migrate() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // wiki_search_misses：`/ai/wiki/search` 回 0 筆時記下那次的查詢字串。
+    // 「搜不到」本身沒有任何訊號——端點回 200＋空 hits，agent 讀成「wiki 沒有記載」就不再追。
+    // 這張表是唯一能事後分辨「關鍵字猜不中」與「wiki 根本沒寫」的依據，也是語意檢索上線後
+    // 判斷有沒有變好的對照組來源（wiki_drift 記的是「頁與碼矛盾」，不是這件事，別拿來當替代）。
+    // 純觀測資料、無獨立生命週期，故走 CASCADE 而非呼叫端手動清（比照 user_inbox）。
+    `CREATE TABLE IF NOT EXISTS wiki_search_misses (
+      id          SERIAL PRIMARY KEY,
+      project_id  INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+      q           TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
     // classify_samples：failure-classifier 的 regex 判不出（unknown）、交 haiku 分類的案例留樣本
     // （真因文字＋最終判定＋haiku 是否真的判出）。用途：定期看高頻 pattern → 升級成零 token 的 regex，
     // 讓 haiku fallback 呼叫量單調下降（健檢：deploy-fix haiku fallback 缺回饋迴圈）。
@@ -742,6 +754,9 @@ async function migrate() {
 
   // 收件匣：查詢一律帶 user_id ＋未讀條件，再依時間新到舊排
   await query('CREATE INDEX IF NOT EXISTS idx_inbox_user ON user_inbox (user_id, read_at, created_at DESC)').catch(() => {});
+
+  // 搜不到的查詢：一律「某專案最近一段時間」的撈法（效果驗收用）
+  await query('CREATE INDEX IF NOT EXISTS idx_wiki_miss_project ON wiki_search_misses (project_id, created_at DESC)').catch(() => {});
 
   // token_usage indexes
   await query('CREATE INDEX IF NOT EXISTS idx_tu_recorded_at ON token_usage (recorded_at DESC)').catch(() => {});

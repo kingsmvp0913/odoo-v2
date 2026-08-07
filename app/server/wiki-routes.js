@@ -160,9 +160,33 @@ function registerRoutes(app) {
           ORDER BY (node_type <> 'troubleshooting'), title ASC
           LIMIT 20`,
         [pid, like]);
-      res.json({ ok: true, hits: rows });
+      if (rows.length) return res.json({ ok: true, hits: rows });
+
+      // 搜不到時不回空陣列。空 hits 沒有任何訊號，agent 會讀成「wiki 沒有記載這件事」就不再追，
+      // 然後自己瞎猜——這比搜不到本身傷得更重。單一專案的目錄很小（實測最大的專案 28 頁、
+      // title＋description 合計 671 字），與其回空，不如把整份目錄交出去讓它自己挑。
+      // 刻意不加 LIMIT，與 /ai/wiki/pages 完全一致：回退的契約就是「等同呼叫 pages」，
+      // 截斷會讓 agent 以為看到的是全部。目錄真的大到不能整包給的時候，該做的是語意檢索。
+      await recordSearchMiss(pid, q);
+      const { rows: all } = await query(
+        `SELECT slug, title, node_type, description FROM wiki_pages
+          WHERE project_id=$1
+          ORDER BY (node_type <> 'overview'), node_type, title ASC`,
+        [pid]);
+      res.json({ ok: true, hits: all, fallback: 'all_pages' });
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
+
+  // 搜不到的查詢留樣本：這是事後分辨「關鍵字猜不中」與「wiki 根本沒寫」的唯一依據
+  //（前者靠改進檢索能救，後者只能補內容），也是語意檢索上線後的對照組來源。
+  // 寫失敗不影響搜尋結果——這是觀測資料，不該讓 agent 的查詢跟著失敗；但也不無聲吞掉。
+  async function recordSearchMiss(projectId, q) {
+    try {
+      await query('INSERT INTO wiki_search_misses (project_id, q) VALUES ($1, $2)', [projectId, q]);
+    } catch (err) {
+      console.error('[wiki] 記錄搜尋未命中失敗：', err.message);
+    }
+  }
 
   // content 裡的 [[slug]] 一併解出對方的 title/description。搜尋解決的是「我知道關鍵字，找得到嗎」，
   // 這個解決的是「我根本不知道有這個東西存在」——排障結論常是成串的（同一個現象牽三四則），

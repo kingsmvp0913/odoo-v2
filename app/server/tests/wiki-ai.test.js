@@ -195,6 +195,68 @@ describe('跨專案隔離（folder_name 與 name 撞號）', () => {
     expect(res.body.links).toEqual([]);              // 對方在別的專案 → 這裡查無
     expect(res.body.missing_links).toContain('ts-secret'); // 但要回報「這裡該有一則卻沒有」
   });
+
+  // 回退等於「把整個專案的目錄交出去」，跨專案邊界在這條路徑上一樣要守住。
+  test('搜不到而退回全目錄時，不得混入另一個專案的頁', async () => {
+    const res = await request(app).get('/ai/wiki/search?project=hungjou&q=絕無此詞xyz')
+      .set(AI_TOKEN_HEADER, aiToken());
+    expect(res.body.fallback).toBe('all_pages');
+    expect(res.body.hits.map(h => h.slug)).not.toContain('ts-secret');
+  });
+});
+
+// --- 階段 0：搜不到時的止血 ---
+// 意圖：漏掉沒有訊號才是真正的傷害——端點回 200＋空 hits，agent 讀成「wiki 沒有記載這件事」
+// 就不再追，然後自己瞎猜。單一專案的目錄很小（實測最大的專案 28 頁、title＋description 合計 671 字），
+// 與其回空，不如把全目錄交出去讓 agent 自己挑；同時把沒搜到的字記下來，日後才有依據分辨
+// 「是關鍵字猜不中（語意檢索能救）」還是「wiki 根本沒寫（救不了）」。
+describe('搜不到時的回退與記錄', () => {
+  test('搜不到 → 回退全目錄並標記 fallback，形狀與命中時一致', async () => {
+    const res = await request(app).get('/ai/wiki/search?project=hungjou&q=絕無此詞xyz')
+      .set(AI_TOKEN_HEADER, aiToken());
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.fallback).toBe('all_pages');           // 讓 agent 知道這不是命中
+    expect(res.body.hits.length).toBeGreaterThan(0);
+    expect(res.body.hits.map(h => h.slug)).toContain('sale');
+    expect(res.body.hits[0].content).toBeUndefined();      // 仍不回全文
+    expect(res.body.hits[0].description !== undefined).toBe(true); // 欄位形狀與命中時相同
+  });
+
+  // 命中時多送一份目錄純屬浪費，而且會讓 agent 分不清哪些是真的相關。
+  test('有命中 → 不回退、不標記 fallback', async () => {
+    const res = await request(app).get('/ai/wiki/search?project=hungjou&q=attachment')
+      .set(AI_TOKEN_HEADER, aiToken());
+    expect(res.body.hits.map(h => h.slug)).toContain('ts-nas');
+    expect(res.body.fallback).toBeUndefined();
+  });
+
+  // 這筆記錄是 §4.4 效果驗收的唯一資料來源：沒有它，「語意檢索有沒有變好」只能靠感覺。
+  test('搜不到 → 把查詢字串記進 wiki_search_misses', async () => {
+    await request(app).get('/ai/wiki/search?project=hungjou&q=獨一無二的沒中字串abc')
+      .set(AI_TOKEN_HEADER, aiToken());
+    const { rows } = await dbModule.query(
+      "SELECT q, project_id FROM wiki_search_misses WHERE q='獨一無二的沒中字串abc'");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].project_id).toBe(projectId);
+  });
+
+  // 有命中卻記一筆，會把「wiki 其實查得到」的查詢混進待分析清單，驗收就失真了。
+  test('有命中 → 不記錄', async () => {
+    await request(app).get('/ai/wiki/search?project=hungjou&q=attachment').set(AI_TOKEN_HEADER, aiToken());
+    const { rows } = await dbModule.query("SELECT q FROM wiki_search_misses WHERE q='attachment'");
+    expect(rows).toHaveLength(0);
+  });
+
+  // 專案名解不出來時本來就回空 hits；那不是「wiki 沒寫」，記下來只會汙染驗收資料。
+  test('專案不存在 → 不記錄、不回退', async () => {
+    const res = await request(app).get('/ai/wiki/search?project=no-such-project&q=whatever')
+      .set(AI_TOKEN_HEADER, aiToken());
+    expect(res.body.hits).toEqual([]);
+    expect(res.body.fallback).toBeUndefined();
+    const { rows } = await dbModule.query("SELECT q FROM wiki_search_misses WHERE q='whatever'");
+    expect(rows).toHaveLength(0);
+  });
 });
 
 // 意圖：agent 常直接把錯誤訊息或檔案路徑丟進來搜，裡面的 _ 與 % 是 LIKE 的萬用字元。
