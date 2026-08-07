@@ -1,5 +1,4 @@
 const fs = require('fs');
-const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
@@ -7,7 +6,6 @@ const { loadAgent } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { getProjectNotes } = require('./project-notes');
-const { ENV_BASE, runtimeLogPath } = require('./env-agent');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { safeReturnStatus } = require('./stations');
@@ -106,13 +104,6 @@ async function runRejectTriage(taskId, userId, signal) {
     userInstruction = `${userInstruction}\n---（尚未納入規格的使用者留言）---\n${pendingMsgs.map(m => String(m.content).trim()).join('\n')}`;
   }
 
-  // 測試環境 runtime log 路徑（供 agent 自行判斷是否 Bash 讀取實機證據；正斜線好給 Git Bash 用）
-  const { rows: [proj] } = await query('SELECT folder_name, name FROM projects WHERE id=$1', [task.project_id]);
-  const dirName = proj ? (proj.folder_name || proj.name) : null;
-  const runtimeLog = dirName
-    ? runtimeLogPath(path.join(ENV_BASE, dirName)).replace(/\\/g, '/')
-    : '（無法解析測試環境 log 路徑）';
-
   let raw;
   try {
     const agent = loadAgent('analysis-reject');
@@ -131,7 +122,6 @@ async function runRejectTriage(taskId, userId, signal) {
       stuck_stage: stuckStage,
       stop_context: stopContext,
       user_instruction: userInstruction,
-      runtime_log_path: runtimeLog,
       project_notes: projectNotes || ''
     }).trim();
     // 停在早期分析階段就被 resume 時 worktree 尚未建立；worktree 不存在 → 退回專案根（一定存在），
