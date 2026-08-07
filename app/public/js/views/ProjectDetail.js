@@ -18,7 +18,7 @@ window.ProjectDetailView = Vue.defineComponent({
       _reposPollTimer: null,
       editOdooProjectName: '',
       editServiceRespondentName: '',
-      editE2eDisabled: false,
+      editE2eEnabled: true,   // UI 一律用正向（開＝啟用）；DB 欄位是 e2e_disabled，在讀寫兩端反轉
       savingE2e: false,
       editSpecTour: false,
       savingSpecTour: false,
@@ -83,7 +83,7 @@ window.ProjectDetailView = Vue.defineComponent({
         this.repos = data.repos || [];
         this.editOdooProjectName = data.odoo_project_name || '';
         this.editServiceRespondentName = data.service_respondent_name || '';
-        this.editE2eDisabled = !!data.e2e_disabled;
+        this.editE2eEnabled = !data.e2e_disabled;
         this.editSpecTour = !!data.spec_tour_enabled;
         this.editEdition = data.edition || 'community';
         // 分支清單另外抓（要讀 clone 的 refs，跟專案主資料不同來源）；示範專案不打 API
@@ -267,11 +267,11 @@ window.ProjectDetailView = Vue.defineComponent({
     async saveE2eSetting() {
       this.savingE2e = true;
       try {
-        await Api.patch(`projects/${this.project.id}`, { e2e_disabled: this.editE2eDisabled });
-        showToast(this.editE2eDisabled ? '已停用 E2E 測試' : '已啟用 E2E 測試', 'success');
+        await Api.patch(`projects/${this.project.id}`, { e2e_disabled: !this.editE2eEnabled });
+        showToast(this.editE2eEnabled ? '已啟用 E2E 測試' : '已停用 E2E 測試', 'success');
         await this.load();
       } catch (err) {
-        this.editE2eDisabled = !this.editE2eDisabled;   // 儲存失敗要撥回去，否則畫面說「啟用中」而 DB 是關的，直到重新整理才修正
+        this.editE2eEnabled = !this.editE2eEnabled;   // 儲存失敗要撥回去，否則畫面說「啟用中」而 DB 是關的，直到重新整理才修正
         showToast(err.message, 'error');
       }
       finally { this.savingE2e = false; }
@@ -417,11 +417,11 @@ window.ProjectDetailView = Vue.defineComponent({
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；停用後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
               <div class="switch">
-                <input type="checkbox" v-model="editE2eDisabled" @change="saveE2eSetting" :disabled="savingE2e" />
+                <input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e" />
                 <div class="switch-track"></div>
                 <div class="switch-knob"></div>
               </div>
-              <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eDisabled ? '已停用 E2E 測試' : 'E2E 測試啟用中' }}</span>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eEnabled ? 'E2E 測試啟用中' : '已停用 E2E 測試' }}</span>
             </label>
             <span style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-2)">開啟後，E2E tour 會在「分析」關依驗收條件先寫好（實作之前定稿），開發關要讓它通過而不能改它；關閉則沿用舊流程，等實作完成後才產生 tour。</span>
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
