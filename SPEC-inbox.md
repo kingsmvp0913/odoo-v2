@@ -3,6 +3,20 @@
 > 目標讀者：在正式機執行本改動的人或 agent
 > 前置：**建議在「狀態 Registry」規格（`SPEC-status-registry.md`）階段 3 完成後再做**，理由見 §3.4。未做也能執行，屆時 §3.4 改用手寫名單。
 
+> ## ✅ 執行狀態：2026-08-08 已完成（後端 `de74e18`、前端 `2f55063`）
+>
+> 錨點複驗：本文引用的位置僅兩處 3 行偏移（`deploy-testing.js:465→468`、`playwright-agent.js:58→61`），
+> 13 條規則編號逐條正確。§3.1 的觸頂判斷（用 `bumpReentryOrStop` 回傳值排除重複）也正確。
+>
+> **本文未提到、但會直接炸掉的一個坑**：`user_inbox` 的 FK 若不帶 `ON DELETE CASCADE`，會讓
+> `admin-routes` 刪使用者、`project-routes` 刪專案、`tasks-routes` 刪單張任務**三處全部撞 FK 失敗**
+> ——本 repo 沒有 CASCADE 慣例，靠呼叫端逐表手動 DELETE，三處各維護一份清單（`project-routes.js:494`
+> 的註解就是為了這個坑而寫的）。全套測試當場 15 支紅燈抓到。已改為兩個 FK 都帶 CASCADE：收件匣是
+> 純附屬資料、沒有獨立生命週期，走 CASCADE 才不必在三份清單各補一行。**§7 風險表應補上這條。**
+>
+> §4 前端已實作為獨立頁面 `/inbox` ＋側欄入口（非浮層），符合本 repo 既有 10+ 個 view 的結構。
+> 前端無自動化測試，仍待人工實測（含深色模式）。
+
 ---
 
 ## 1. 要解決什麼
@@ -171,7 +185,7 @@ cd app && npm run test:quiet 2>&1 | grep -vE '^PASS |^$'
 - 第 17 條：**表在測試間不清空**，寫新測試要假設有殘留資料
 - 第 24 條：建關聯資料先建父列（`user_inbox` 有兩個 FK）
 
-**既有紅燈**（乾淨 HEAD 也紅，不要 debug）：`git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支（CRLF）、`vpn-gateway-run.test.js` 的容器那支。其餘紅燈先假設 flaky，單跑複驗才算數。
+**⚠ 2026-08-08 實測更正**：本機基線是**全綠**（2148 passed / 0 failed / exit 0）。原本列為「既有紅燈、不要 debug」的三支（`git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支＝CRLF、`vpn-gateway-run.test.js` 的容器那支）在此環境都是綠的。照舊清單判讀會讓你把自己改壞的東西當成既有紅燈放過去——拿 `2148 passed` 當基線比對，新紅燈一律先當成自己造成的。其餘紅燈才假設 flaky，單跑複驗才算數。
 
 ---
 

@@ -3,6 +3,23 @@
 > 目標讀者：在正式機執行本改動的人或 agent
 > 前置：本文件自包含，不需回頭查對話。所有現況引用皆附檔名與行號（基準：本文件產出時的 HEAD）。
 
+> ## ✅ 執行狀態：2026-08-08 已完成（commit `3b78a7f`）
+>
+> 錨點複驗：本文引用的 9 組位置全部準確。§2.2 的「三份名單是完美劃分」實測成立（8＋16＋1＝25，
+> 交集為空、與原手寫內容逐一相同）。實際執行時與本文有三處差異：
+>
+> 1. **§1 盤點漏了第四份手寫名單**：`tasks-routes.js:162` 的 `NEEDS_ACTION_STATUSES`（8 個，與
+>    `HUMAN_STATUSES` 完全相同）。它比另外三份更要緊——是 `/api/tasks?needs_action=true` 的 SQL
+>    查詢條件，漏補的後果是「前端照顯示、通知照發，只有 API 撈不到那張任務」。已一併收進 registry，
+>    配套把 `pipeline-flow.test.js` 那支掃 route 檔原始碼的 regex 改成直接讀 registry。
+> 2. **§4 階段 4（pipeline-spec 改引用）未做**：既有的 `test.each(declared)`（`pipeline-flow.test.js:57`）
+>    已逐一驗證圖上 status 是真狀態、拼錯當場紅——該階段宣稱的目的**已經達成**。改動 22 處 status
+>    反而是 §6 風險表裡最高的一項。改為在 `pipeline-spec.js` 檔頭註明守衛位置。
+> 3. **§5.2 的既有紅燈清單已過時**，見該節更正。
+>
+> §4 階段 5 的兩條新守衛已加並經破壞測試驗證（故意把 `review_pending` 的 actor 改成 `system`，
+> 矛盾守衛當場翻紅並指名節點）。
+
 ---
 
 ## 1. 為什麼要做
@@ -214,10 +231,17 @@ cd app && npm run test:quiet 2>&1 | grep -vE '^PASS |^$'
 
 **不要用 `npm test`**（輸出 127K，色碼佔 27%、console 堆疊佔 25%，對判斷紅綠零資訊量）。**不要用 `npx jest`**（平行 worker 下 pg-mem 產生浮動假紅）。
 
-### 5.2 已知的既有紅燈（乾淨 HEAD 也紅，不要 debug）
+### 5.2 已知的既有紅燈
 
-- `git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支 —— CRLF 行尾差異
-- `vpn-gateway-run.test.js` 的 `defaultTmpFilePath › 容器化（APP_DIR 已設）` —— 開發機非容器
+**⚠ 2026-08-08 實測更正：本機基線是全綠（2148 passed / 0 failed / exit 0，158 suites）。**
+下列三支在此環境**都是綠的**——`ensureWorktreeAtMain` 兩支的 CRLF 問題在 Linux checkout 不成立
+（且 git identity 那個真因已於 08-06 修掉），`vpn-gateway-run` 那支同理。
+
+照舊清單判讀有實害：它會叫你把 `git-integration.test.js` 的紅燈當 CRLF 放過去，而在這台上那代表
+**你真的改壞了東西**。正確做法是拿 `2148 passed` 當基線比對，任何新紅燈都先當成自己造成的。
+
+（原清單，僅供其他環境參考：`git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支＝CRLF 行尾差異；
+`vpn-gateway-run.test.js` 的 `defaultTmpFilePath › 容器化（APP_DIR 已設）`＝開發機非容器。）
 
 除上述外的紅燈**先假設是 flaky**（`pgPass` flake 家族，常見於 `enterprise-routes`／`spec-review`／`env-agent-sso-route`，每輪不同支且單跑一律綠）。判定法一律是「stash 掉改動、對那一支單獨再跑」，不要靠記憶認定。
 
