@@ -31,15 +31,23 @@ pipelineEdges(flags);   // [[from, to, 'main'|'alt'|'back'|'link'], ...]
 
 spec **不驅動執行**——它是一份人工謄本。真正在跑的狀態機在 `server/pipeline/*`，轉移是各關 inline 賦值，沒有集中的轉移表。
 
-1. 先改 `pipeline-spec.js`，把流程講清楚（這是討論與對焦的載體）
-2. 再改 `server/pipeline/` 對應的那幾支
-3. `cd app && npx jest server/tests/pipeline-flow.test.js` —— 測試會逼你兩邊同步
+1. 先改 `public/js/status-labels.js` 的 registry：新增狀態要同時給 `label` 與 `actor`（`human` 等人／
+   `agent` AI 在跑／`system` 系統自動／`terminal` 終態）。「誰要等人、誰能派工」那幾份名單全部由
+   `actor` 推導（`HUMAN_STATUSES`／`RUNNABLE_STATUSES`），**不要再去各處補手寫陣列**
+2. 再改 `pipeline-spec.js`，把流程講清楚（這是討論與對焦的載體）
+3. 再改 `server/pipeline/` 對應的那幾支
+4. `cd app && npx jest server/tests/pipeline-flow.test.js` —— 測試會逼三邊同步
+
+順序不能顛倒：registry 沒有的狀態，spec 裡寫了只會讓測試翻紅。
 
 ## 測試守住什麼（改完一定要跑）
 
-`app/server/tests/pipeline-flow.test.js`，102 支，八種 flag 組合全跑：
+`app/server/tests/pipeline-flow.test.js`，104 支，八種 flag 組合全跑：
 
-- 圖上畫的 status 都是真狀態；`NEEDS_ACTION_STATUSES` 全部畫得到
+- 圖上畫的 status 都是真狀態；registry 裡 `actor:'human'` 的狀態全部畫得到
+- **圖上的 `kind` 與 registry 的 `actor` 不得矛盾** —— 畫成 `gate`／`stop` 的格子，registry 必須真的標成
+  `human`。畫成閘門卻標成 `system`，畫面看起來正常，但那張任務會被 cron 自動推走
+- **派工清單不含等人的狀態**，且 `RUNNABLE + HUMAN + terminal` 必須等於 registry 全部筆數
 - **runner 實際會設定的任務狀態，圖上都畫得到**（或已具名列進 `PF_UNDRAWN_STATUSES` 並寫理由）—— 這條擋的是「加了新關卻忘了畫」
 - **每個節點都從入口走得到** —— 擋的是「拿掉一條轉移，整段變成走不到的半島」。孤兒檢查擋不住這個（實測過）
 - 同泳道不撞 step、id 不重複、連線兩端都存在、link 線一定 git→非 git、每個節點都有 detail

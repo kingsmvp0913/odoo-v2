@@ -8,7 +8,11 @@
 // 真正在跑的狀態機在 server/pipeline/runner.js、verdict-router.js、reject-triage.js，
 // 轉移邏輯散在各關的 inline 賦值，沒有集中的轉移表。所以**這份 spec 不驅動執行**，
 // 它是一份人工謄本，由 server/tests/pipeline-flow.test.js 守著不要跟狀態機漂移。
-// 改流程的順序：先改這裡談清楚 → 再改 runner 那幾支 → 測試會逼你兩邊同步。
+// 改流程的順序：先在 status-labels.js 的 registry 加狀態（label／actor）→ 再改這裡談清楚接法
+// → 再改 runner 那幾支 → 測試會逼三邊同步。順序不能顛倒：「誰要等人、誰能派工」那幾份名單全部
+// 由 registry 的 actor 推導，registry 沒有的狀態在這裡寫了也只會讓測試翻紅。
+// 本檔的 kind 另有一條反向守衛：畫成 gate／stop 的格子，registry 必須真的標成 actor:'human'
+// （畫成閘門卻標成 system，畫面看起來正常，但那張任務會被 cron 自動推走）。
 //
 // status 與 ref 分兩個欄位：status 只放**真的任務狀態**（測試逐一比對 STATUS_LABELS），
 // Git 分支名與「不是狀態」的說明一律放 ref。混用一個欄位的話，測試無從分辨 'testing'

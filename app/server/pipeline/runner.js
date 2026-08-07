@@ -32,7 +32,8 @@ const STAGE_LABELS = {
 // taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。
 const _inFlight = new Map();
 const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
-const RUNNABLE_STATUSES = ['new', 'cs_running', 'analysis_running', 'confirm_answered', 'branch_pending', 'coding_running', 'qa_running', 'merge_running', 'deploy_testing', 'playwright_running', 'wiki_updating', 'reject_triage', 'resolve_triage', 'respec_running', 'clarify_answered', 'clarify_chat_running'];
+// 可派工推進的狀態——由 status registry 的 actor:'system'／'agent' 推導（＝扣掉等人的與終態）
+const { RUNNABLE_STATUSES } = require('../../public/js/status-labels.js');
 
 // 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);

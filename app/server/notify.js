@@ -1,12 +1,10 @@
 const { query } = require('./db');
+const { HUMAN_STATUSES } = require('../public/js/status-labels.js');
 
 let _io = null;
 
-// 需要使用者動作的狀態（單一真相）——進入這些狀態時發出 action 通知
-const ACTION_STATUSES = new Set([
-  'confirm_pending', 'stopped', 'cs_data_needed', 'cs_reply_pending',
-  'merge_conflict', 'spec_review', 'review_pending', 'clarify_pending'
-]);
+// 需要使用者動作的狀態——由 status registry 的 actor:'human' 推導，新增閘門狀態不必回頭補這份名單
+const ACTION_STATUSES = new Set(HUMAN_STATUSES);
 
 // 可插拔通知 channel（供之後串接 Teams / Discord）：fn(userId, payload)
 const _channels = [];

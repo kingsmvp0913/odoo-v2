@@ -1,4 +1,3 @@
-const NEEDS_ACTION = ['confirm_pending', 'clarify_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
 // 部署（deploy_testing）與 E2E 測試（playwright_running）拆成兩格：部署一定跑，E2E 專案可停用
 // （e2e_disabled → deploy_testing 直接跳 review_pending）。停用時「測試」格會被 buildFlow 濾掉，
 // 不留幽靈步驟。
@@ -141,17 +140,17 @@ window.TaskListView = Vue.defineComponent({
       let list;
       if (this.filter === 'archived')          list = this.archivedTasks;
       else if (this.filter === 'paused')       list = this.tasks.filter(t => t.is_paused);
-      else if (this.filter === 'needs_action') list = this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused));
+      else if (this.filter === 'needs_action') list = this.tasks.filter(t => HUMAN_STATUSES.includes(t.status) && (t.status === 'stopped' || !t.is_paused));
       else if (this.filter === 'review_pending') list = this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused);
       else if (this.filter === 'pending')      list = this.tasks.filter(t => !t.is_paused && t.status !== 'done');
       else                                     list = this.tasks; // 全部 = 含暫停中
       return this.applySort(list.filter(t => this.matchAll(t)));
     },
     // 全域導覽 badge 用：不受列表搜尋影響（見 needsActionCount watcher）
-    needsActionCount() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
+    needsActionCount() { return this.tasks.filter(t => HUMAN_STATUSES.includes(t.status) && (t.status === 'stopped' || !t.is_paused)).length; },
     reviewPendingCount() { return this.tasks.filter(t => t.status === 'review_pending' && !t.is_paused).length; },
     // 標籤 badge 用：與 filteredTasks 一致套用搜尋關鍵字與上正式篩選，篩選後即時反映各分類命中數
-    needsActionShown() { return this.tasks.filter(t => NEEDS_ACTION.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchAll(t)).length; },
+    needsActionShown() { return this.tasks.filter(t => HUMAN_STATUSES.includes(t.status) && (t.status === 'stopped' || !t.is_paused) && this.matchAll(t)).length; },
     pendingShown() { return this.tasks.filter(t => !t.is_paused && t.status !== 'done' && this.matchAll(t)).length; },
     pausedShown()  { return this.tasks.filter(t => t.is_paused && this.matchAll(t)).length; },
     allShown()     { return this.tasks.filter(t => this.matchAll(t)).length; },
@@ -241,7 +240,7 @@ window.TaskListView = Vue.defineComponent({
         default:             return arr.sort((a, b) => ts(b.updated_at || b.created_at) - ts(a.updated_at || a.created_at)); // updated_desc
       }
     },
-    needsAction(t) { return NEEDS_ACTION.includes(t.status); },
+    needsAction(t) { return HUMAN_STATUSES.includes(t.status); },
     isProcessing(t) {
       return ['analysis_running','coding_running','qa_running','merge_running','deploy_testing','playwright_running','wiki_updating','cs_running','branch_pending','confirm_answered'].includes(t.status);
     },

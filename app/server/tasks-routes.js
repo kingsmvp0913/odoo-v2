@@ -3,6 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const multer = require('multer');
 const { query } = require('./db');
+const { HUMAN_STATUSES } = require('../public/js/status-labels.js');
 const { verifyToken } = require('./auth');
 const { abortTask, runPipeline } = require('./pipeline/runner');
 const { removeWorktree, deleteBranchLocal } = require('./pipeline/git');
@@ -159,7 +160,6 @@ async function uninstallTaskModule(task, excludeIds) {
   }
 }
 
-const NEEDS_ACTION_STATUSES = ['confirm_pending', 'clarify_pending', 'cs_data_needed', 'cs_reply_pending', 'merge_conflict', 'spec_review', 'review_pending', 'stopped'];
 const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'clarify_pending'];
 const SAFE_INLINE_MIMETYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
 
@@ -176,7 +176,7 @@ function registerRoutes(app) {
 
       if (needs_action === 'true') {
         conditions.push(`status = ANY($${params.length + 1}::text[])`);
-        params.push(NEEDS_ACTION_STATUSES);
+        params.push(HUMAN_STATUSES);
       } else if (status) {
         conditions.push(`status = $${params.length + 1}`);
         params.push(status);
@@ -784,4 +784,4 @@ function registerRoutes(app) {
   });
 }
 
-module.exports = { registerRoutes, NEEDS_ACTION_STATUSES };
+module.exports = { registerRoutes };

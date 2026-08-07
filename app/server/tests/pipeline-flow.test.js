@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { STATUS_LABELS } = require('../../public/js/status-labels.js');
+const {
+  STATUS_LABELS, TASK_STATUSES, HUMAN_STATUSES, RUNNABLE_STATUSES
+} = require('../../public/js/status-labels.js');
 const {
   PF_TRACKS, PF_UNDRAWN_STATUSES, pipelineTracks, pipelineNodes, pipelineEdges
 } = require('../../public/js/pipeline-spec.js');
@@ -60,12 +62,43 @@ describe('流程圖節點對得上狀態機', () => {
 
   // 反向：後端會停下來等人的狀態，圖上必須畫得到——這幾個正是「使用者卡住時想在圖上找的那一格」。
   // 缺了不會有任何訊號，只有人看著圖說「那我現在這張任務在哪裡？」時才會發現。
-  test('NEEDS_ACTION 狀態全部有畫在圖上', () => {
-    const routes = fs.readFileSync(path.join(__dirname, '../tasks-routes.js'), 'utf8');
-    const block = routes.match(/const NEEDS_ACTION_STATUSES = \[([^\]]+)\]/)[1];
-    const needsAction = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1]);
-    expect(needsAction.length).toBeGreaterThan(5);   // regex 失效防呆
-    expect(needsAction.filter((s) => !declared.includes(s))).toEqual([]);
+  // 來源是 status registry 的 actor:'human'——API 的 needs_action 查詢、通知派送、列表篩選現在都由它
+  // 推導，掃單一支 route 檔的字面陣列已經沒有意義（那份重複已收回 registry）。
+  test('等人動作的狀態全部有畫在圖上', () => {
+    expect(HUMAN_STATUSES.length).toBeGreaterThan(5);   // registry 被清空的防呆
+    expect(HUMAN_STATUSES.filter((s) => !declared.includes(s))).toEqual([]);
+  });
+
+  // 第三個方向：上面兩條守的是「兩邊都有這個 status」，守不住「兩邊對它的定性不一致」。
+  // 圖上畫成 gate（等人的閘門）、registry 卻標成 system，畫面看起來完全正常，但那張任務會被 cron
+  // 當成可推進的撈走——使用者根本沒機會決定，而且不會有任何錯誤訊息。
+  // start／end／git／ext／inline 不在此規則內：它們不是「由誰推進」的分類（終態、分支示意、平台外）。
+  const KIND_ACTOR = { gate: 'human', stop: 'human', agent: 'agent', sys: 'system' };
+  test('圖上的節點性質與 registry 的 actor 不得矛盾', () => {
+    const bad = [];
+    const seen = new Set();
+    for (const n of COMBOS.flatMap((f) => pipelineNodes(f))) {
+      const want = KIND_ACTOR[n.kind];
+      if (!want) continue;
+      for (const s of statusesOf(n)) {
+        if (seen.has(`${n.id}:${s}`)) continue;
+        seen.add(`${n.id}:${s}`);
+        const actor = (TASK_STATUSES[s] || {}).actor;
+        if (actor !== want) bad.push(`${n.id}(kind=${n.kind}) 的 ${s}：actor=${actor}，應為 ${want}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  // 派工清單混進等人的狀態，該閘門就會被 cron 自動推走。規格原文寫的是「runner.js 內不得存在自動
+  // 推進 human 狀態的賦值」，但掃原始碼分不出方向——runner 本來就必須能把任務推進「到」閘門。真正
+  // 該擋的是「停在閘門時還被撈去派工」，也就是這裡驗的 RUNNABLE ∩ HUMAN。
+  // 第二個斷言是牙齒所在：任何 actor 被改成無效值都會讓總數對不上，而不是靜默從某一份名單消失。
+  test('派工清單不得包含等人動作的狀態（閘門被自動跳過＝使用者的決定被略過）', () => {
+    expect(RUNNABLE_STATUSES.filter((s) => HUMAN_STATUSES.includes(s))).toEqual([]);
+    const terminal = Object.keys(TASK_STATUSES).filter((s) => TASK_STATUSES[s].actor === 'terminal');
+    expect(RUNNABLE_STATUSES.length + HUMAN_STATUSES.length + terminal.length)
+      .toBe(Object.keys(TASK_STATUSES).length);
   });
 
   // 最重要的一條：runner 那邊實際會寫進 tasks.status 的每一個狀態，圖上都要找得到。
