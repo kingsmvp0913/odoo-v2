@@ -912,9 +912,12 @@ window.PipelineFlowView = Vue.defineComponent({
       if (!q || !n) return [];
       return this.buses.filter(b => b.sources.includes(this.hovered)).map(b => {
         const tgt = this.nodeById[b.id];
+        // 高度必須跟接頭**用同一個算式**（見 buses）：跨泳道的接頭走 gapY（間隙 18px 起、
+        // 每讓一軌再 13px），這裡原本自己算成間隙正中間（29px），差 11px——標籤剛好落在
+        // 它要標示的那條線上，字被線穿過去。
         const y = n.track === tgt.track
           ? q.y + q.h / 2 + ((this.portOffsets[this.hovered + '>' + b.id] || {}).out || 0)
-          : q.y + q.h + (this.layout.STEP - q.h) / 2;
+          : this.gapY(q, this.hovered + '>' + b.id, true);
         return {
           key: b.id, x: b.x + (b.side === 'left' ? 6 : -6), y: y - 7,
           anchor: b.side === 'left' ? 'start' : 'end',
