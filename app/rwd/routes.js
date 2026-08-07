@@ -36,6 +36,7 @@ const ROUTES = [
   { key: 'admin-users', hash: '#/admin/users', auth: 'admin', covered: true },
   { key: 'admin-agents', hash: '#/admin/agents', auth: 'admin', covered: true },
   { key: 'admin-pipelines', hash: '#/admin/pipelines', auth: 'user', covered: true },
+  { key: 'pipeline-flow', hash: '#/pipeline-flow', auth: 'user', covered: true },
   { key: 'admin-health', hash: '#/admin/health', auth: 'admin', covered: true },
   { key: 'admin-rejections', hash: '#/admin/rejections', auth: 'admin', covered: true },
   { key: 'admin-classify-samples', hash: '#/admin/classify-samples', auth: 'admin', covered: true },
