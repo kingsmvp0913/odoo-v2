@@ -28,25 +28,42 @@
 //     return{x:+r.getAttribute('x'),y:+r.getAttribute('y'),w:+r.getAttribute('width'),h:+r.getAttribute('height'),l:g.querySelector('text').textContent}});
 //   [...S.querySelectorAll('g > path')].forEach((p,k)=>{const d=p.getAttribute('d')||'';
 //     if(d.startsWith('M'))seg(d).forEach(s=>A.push({...s,k,e:p.dataset.edge||'bus'}))});
-//   const ov=[],cr=[],th=[];
+//   const ov=[],cr=[],th=[],near=[];
 //   for(let i=0;i<A.length;i++)for(let j=i+1;j<A.length;j++){const a=A[i],b=A[j];if(a.k===b.k)continue;
-//     if(a.t===b.t){if((a.t==='h'?Math.abs(a.y-b.y):Math.abs(a.x-b.x))>=3)continue;
-//       const L=Math.min(a.b,b.b)-Math.max(a.a,b.a);if(L>8)ov.push(a.e+' ∥ '+b.e+' ('+Math.round(L)+'px)');continue}
+//     if(a.t===b.t){const g=a.t==='h'?Math.abs(a.y-b.y):Math.abs(a.x-b.x);
+//       const L=Math.min(a.b,b.b)-Math.max(a.a,b.a);
+//       if(g<3){if(L>8)ov.push(a.e+' ∥ '+b.e+' ('+Math.round(L)+'px)')}
+//       else if(g<12&&L>60)near.push(a.e+' ≈ '+b.e+' (間距'+Math.round(g)+'px, 並行'+Math.round(L)+'px)');continue}
 //     const[h,v]=a.t==='h'?[a,b]:[b,a];
 //     if(v.x>h.a+2&&v.x<h.b-2&&h.y>v.a+2&&h.y<v.b-2)cr.push(h.e+' × '+v.e)}
 //   for(const s of A)for(const n of N){const p=3;
 //     if(s.t==='h'){if(s.y<=n.y+p||s.y>=n.y+n.h-p)continue;if(Math.min(s.b,n.x+n.w)-Math.max(s.a,n.x)>12)th.push(s.e+' → '+n.l)}
 //     else{if(s.x<=n.x+p||s.x>=n.x+n.w-p)continue;if(Math.min(s.b,n.y+n.h)-Math.max(s.a,n.y)>12)th.push(s.e+' → '+n.l)}}
+//   const tight=[...S.querySelectorAll('g')].filter(g=>g.querySelectorAll('text').length>1).map(g=>{
+//     const r=g.querySelector('rect'),b=g.querySelectorAll('text')[1].getBBox();if(!r)return null;
+//     return g.querySelector('text').textContent+' 留白'+Math.round(Math.min(b.x-+r.getAttribute('x'),
+//       +r.getAttribute('x')+ +r.getAttribute('width')-(b.x+b.width)))+'px'}).filter(t=>t&&+t.match(/(-?\d+)px/)[1]<18);
 //   const HH=A.filter(s=>s.t==='h');
-//   console.log({交叉:cr.length,重疊:ov.length,穿過方塊:th.length,
-//     長線:HH.filter(s=>s.b-s.a>=250).length,總長:Math.round(A.reduce((n,s)=>n+s.b-s.a,0))},{cr,ov,th});
+//   console.log({交叉:cr.length,重疊:ov.length,貼線:near.length,穿過方塊:th.length,字貼框:tight.length,
+//     長線:HH.filter(s=>s.b-s.a>=250).length,總長:Math.round(A.reduce((n,s)=>n+s.b-s.a,0))},{cr,ov,near,th,tight});
+//
+// 量測前先把 hover 清掉：`[...S.querySelectorAll('g')].forEach(g=>g.dispatchEvent(new MouseEvent('mouseleave')))`。
+// 滑鼠指標只要停在圖上，切開關重繪時瀏覽器就會補發 mouseenter，打亮的主幹被算成額外線段——
+// 實際踩過：同一個版面量出 重疊 1／總長 9877，清掉 hover 後其實是 重疊 0／總長 9635。
 //
 // 每條線上有 data-edge（形如 `qa>stopped`），所以上面印出的是**哪兩條線**出事，不是一堆座標。
 // 這很重要：這頁的路由規則彼此牽動，改 A 常常連帶動到 B，只看總數會以為「數字變好了」而
 // 漏掉另一處壞掉。改完務必比對清單內容，不是只比數字。
 // 重疊門檻取 8px（不是 20）：客服處理↔需補資料 曾經疊成一個 13px 的 Z 字，用 20px 完全測不到。
 //
-// 重疊與穿過方塊期望恆為 0。交叉不可能歸零（匯流排接頭跨主線是拓樸必然）。
+// 重疊、貼線、穿過方塊、字貼框期望恆為 0。交叉不可能歸零（匯流排接頭跨主線是拓樸必然）。
+//
+// 「貼線」與「字貼框」是後來補的，補的理由都一樣：**掃描只驗得到我想得到的失敗方式**。
+//   貼線——重疊門檻 3px，兩條線相距 6.5px 並行 164px 完全測不到，畫面上卻是一條粗雙線
+//     （關掉 E2E 後 部署測試區→等待審核 就這樣夾在另外兩條之間）。
+//   字貼框——狀態名壓寬到只離框緣 9px，而線正好接在框緣，看起來就是字壓在線上（分診那格）。
+// 兩個都是使用者用肉眼指出來、而當下所有指標都是 0 的時候。加新規則前先想：這次的問題，
+// 現有的哪一項**應該**要抓到卻沒抓到？
 //
 // **不要只看交叉數**。實際踩過：為「失敗待確認」立匯流排讓交叉 6→5，看起來是進步，但兩條
 // 接頭因此變成 340px 的橫跨線，畫面明顯更亂。改版面後至少要一起看這三個：
@@ -116,8 +133,11 @@ window.PipelineFlowView = Vue.defineComponent({
   name: 'PipelineFlowView',
   data() {
     return {
-      e2eEnabled: true,      // 專案層 e2e_disabled 的反面（新專案 INSERT 時預設停用 E2E）
-      specTour: false,       // 專案層 spec_tour_enabled，預設 false
+      // 兩個開關的預設值都對齊「新專案剛建好時的實際樣子」：e2e_disabled 預設停用、
+      // spec_tour_enabled 預設 false。這頁一打開看到的就該是多數專案真正在跑的流程，
+      // 要看開啟後長怎樣再自己撥開關。
+      e2eEnabled: false,     // 專案層 e2e_disabled 的反面
+      specTour: false,       // 專案層 spec_tour_enabled
       showGit: true,         // 純顯示開關，與專案設定無關
       hovered: null
     };
@@ -242,7 +262,7 @@ window.PipelineFlowView = Vue.defineComponent({
         id: 'coding', track: 'task', step: 8, kind: 'agent', label: '開發',
         status: 'coding_running', agent: 'coding-project',
         detail: [
-          ['進入', '分支建好，或被 QA／部署／E2E／分診／裁決退回'],
+          ['進入', '分支建好，或被 QA／部署' + (this.e2eEnabled ? '／E2E' : '') + '／分診／裁決退回'],
           ['做什麼', '無狀態：每輪 fresh 重送規格，讀 worktree 既有碼做增量修'],
           ['往下', 'QA 審查'],
           ['守衛', '帶著失敗回饋卻一個 commit 都沒產生 → 直接停下（放行只會重現同一個失敗）'],
@@ -421,8 +441,8 @@ window.PipelineFlowView = Vue.defineComponent({
         detail: [
           ['對應', '併入測試這一關'],
           ['做什麼', 'mergeInto(testing, task/<taskId>)——testing 是測試區 addons 的來源分支'],
-          ['再一次', 'E2E 產出的 tour 檔會再併一次 testing'],
-          ['獨佔', 'merge → deploy → E2E 這條尾巴每專案獨佔：別的任務中途併進 testing 會打破一致性，讓正確的碼被判失敗']
+          this.e2eEnabled && ['再一次', 'E2E 產出的 tour 檔會再併一次 testing'],
+          ['獨佔', 'merge → deploy' + (this.e2eEnabled ? ' → E2E' : '') + ' 這條尾巴每專案獨佔：別的任務中途併進 testing 會打破一致性，讓正確的碼被判失敗']
         ]
       });
       push({
@@ -749,7 +769,12 @@ window.PipelineFlowView = Vue.defineComponent({
           // 回程的起點會被登記到節點的不同側，分軌就不會把這兩條算在一起（它們其實都接左側）。
           add(a, r.side, key, 'out', dOut);
         } else if (r.mode === 'over') {
-          continue;                           // 從底部出、進目標頂部，兩端都不佔側邊
+          // 目標端進頂部，不佔側邊；但起點端**不一定**從底部走——edgePath 會先試「從側邊
+          // 直接橫過去」的捷徑（原則 3：能直連就別繞），只有那條橫線會撞到別的關才改走間隙。
+          // 這裡原本整條跳過，於是走捷徑的線落在節點正中線、完全不參與該側分軌：關掉 E2E 後
+          // 部署測試區→等待審核 就這樣夾在 部署→失敗待確認 與 合併衝突→部署測試區 中間，
+          // 左右各差 6.5px，並行 164px——看起來是一條粗雙線，而重疊掃描（門檻 3px）測不到。
+          add(a, r.side, key, 'out', dOut);
         } else if (r.mode === 'sidestep') {
           add(a, r.side, key, 'out', dOut); add(b, r.side, key, 'in', dIn);
         } else {                                             // level／corridor
@@ -917,6 +942,16 @@ window.PipelineFlowView = Vue.defineComponent({
   },
   methods: {
     kindColor(n) { return PF_KIND_COLOR[n.kind] || 'var(--border-strong)'; },
+
+    // 狀態名太長時折成兩行。原本是壓成 134px 塞進 152px 的框，左右只剩 9px——而線正好接在
+    // 框的左右邊緣，字與線之間等於沒有留白，看起來就是字壓在線上（分診那格畫的是
+    // 「reject_triage / resolve_triage」兩個入口狀態）。折行後每行只剩十來個字元，
+    // 自然寬度約 80px、左右各留 35px，跟「開發」那種短狀態名的留白一致。
+    statusLines(n) {
+      const s = n.status || n.ref || '';
+      const i = s.indexOf(' / ');
+      return i > 0 && s.length > 24 ? [s.slice(0, i + 2), s.slice(i + 3)] : [s];
+    },
 
 
     // 一條水平線會不會壓過某個方塊的內部。用來決定「直接橫過去」還不還得通。
@@ -1215,16 +1250,20 @@ window.PipelineFlowView = Vue.defineComponent({
                     :stroke-dasharray="n.kind === 'inline' || n.kind === 'ext' ? '5 3' : ''"
                     :style="{ transition: 'stroke-width .15s, filter .15s',
                               filter: hovered === n.id ? 'drop-shadow(0 0 6px ' + kindColor(n) + ')' : 'none' }" />
-              <text :x="layout.pos[n.id].x + layout.pos[n.id].w/2" :y="layout.pos[n.id].y + 23"
+              <!-- 折成兩行的那一格，標題往上讓 4px，否則第二行會頂到下緣 -->
+              <text :x="layout.pos[n.id].x + layout.pos[n.id].w/2"
+                    :y="layout.pos[n.id].y + (statusLines(n).length > 1 ? 19 : 23)"
                     text-anchor="middle" fill="var(--text)"
                     style="font-size:13px;font-weight:600">{{ n.label }}</text>
-              <!-- 過長的狀態名壓進框內：分診那格是「reject_triage / resolve_triage」，
-                   原寬 157px 比方塊還寬，兩端會溢出去疊在旁邊的線上 -->
-              <text :x="layout.pos[n.id].x + layout.pos[n.id].w/2" :y="layout.pos[n.id].y + 40"
+              <!-- 過長的狀態名折行（見 statusLines）；折不了的（單一長字串）才退回壓寬度 -->
+              <text :x="layout.pos[n.id].x + layout.pos[n.id].w/2"
+                    :y="layout.pos[n.id].y + (statusLines(n).length > 1 ? 33 : 40)"
                     text-anchor="middle" fill="var(--text-muted)"
-                    :textLength="(n.status || n.ref || '').length > 24 ? layout.W - 18 : null"
+                    :textLength="statusLines(n).length === 1 && statusLines(n)[0].length > 24 ? layout.W - 18 : null"
                     lengthAdjust="spacingAndGlyphs"
-                    style="font-size:9.5px;font-family:var(--font-mono, monospace)">{{ n.status || n.ref }}</text>
+                    style="font-size:9.5px;font-family:var(--font-mono, monospace)"><tspan
+                      v-for="(s, i) in statusLines(n)" :key="i"
+                      :x="layout.pos[n.id].x + layout.pos[n.id].w/2" :dy="i ? 12 : 0">{{ s }}</tspan></text>
             </g>
           </svg>
 
