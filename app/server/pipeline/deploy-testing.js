@@ -451,7 +451,10 @@ async function doDeploy(task, taskId, userId, signal) {
     const nextCount = (task.deploy_retry_count || 0) + 1;
     const trace = await readAssetTraceback(task.project_id);
     const detail = `[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來（多為 OWL/QWeb template 的 xpath 對不到目標，模組安裝與 --stop-after-init 都驗不到、只在瀏覽器開後台才現形）：${assetRes.reason || ''}${trace}`;
-    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, detail]);
+    // 時間軸給人看，只寫現象與去哪看；detail 含原始 Python traceback（實測 1177 字），原文貼上去
+    // 使用者只會看到一整段 stack。完整內容仍走 retry_feedback 餵 coding、blocker_content 留給人工。
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId,
+      '[部署測試區 asset 檢查失敗]\n新版程式讓測試區的後台頁面載入不出來（開啟時會空白或一直轉圈）。這是程式問題，不是環境問題。\n完整錯誤訊息請看專案環境頁的「📄 查看 log」。']);
     if (nextCount >= DEPLOY_LIMIT) {
       await emitDeployVerdict(userId, taskId, `asset 問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);
       // 同升級失敗觸頂：blocker_content 給人看，retry_feedback 給 coding 讀，兩邊都要寫。

@@ -44,7 +44,10 @@ async function stopTask(taskId, userId, msg, blockerType = null) {
 
 // tour 失敗屬程式問題：把報告餵回 coding 並加計數，滿 PW_LIMIT→stopped（沿用原 E2E 失敗語意）。
 async function bounceToCoding(task, taskId, userId, report, logRef = '') {
-  await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, `[E2E tour 未通過]\n${report}${logRef}`]);
+  // 時間軸截短：report 可能整段夾著 tour 的 traceback／JS 堆疊，原文貼上去使用者讀不下去。
+  // 完整內容仍走 retry_feedback 給 coding（見下方），logRef 保留讓人工追得到落檔。
+  const brief = String(report).length > 300 ? `${String(report).slice(0, 300)}…（詳見完整 log）` : String(report);
+  await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, `[E2E tour 未通過]\n${brief}${logRef}`]);
   const nextCount = (task.pw_retry_count || 0) + 1;
   if (nextCount >= PW_LIMIT) {
     await query(
