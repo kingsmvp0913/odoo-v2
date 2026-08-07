@@ -56,6 +56,8 @@ const STABILIZE_CSS = `
   .usage-mini { visibility: hidden !important; }
   /* 待處理數字 badge：隨任務狀態變動 */
   .sidebar nav a .badge { visibility: hidden !important; }
+  /* 側欄底部教程剩餘步數：任何人走一次教程就變 */
+  .tour-launch-badge { visibility: hidden !important; }
   /* 相對時間、時間戳 */
   [data-rwd-volatile] { visibility: hidden !important; }
   /* 動畫與過場一律關閉，避免截到中間影格 */

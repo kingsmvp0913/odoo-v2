@@ -26,6 +26,13 @@ const OUT_DIR = path.join(__dirname, IS_BASELINE ? 'baseline' : 'snapshots');
 const TOKEN_KEY = 'aidev_token';   // api.js:1
 const THEME_KEY = 'theme';         // theme.js
 
+// 截圖機器不一定裝了中文字型（本專案的容器就沒有，中文會全變成豆腐框 □）。
+// 方框寬度不等於中文字寬，拿那種圖判斷手機版會不會擠爆是量錯的。
+// fonts.conf 有 <dir prefix="xdg">fonts</dir>，把 XDG_DATA_HOME 指到隨 repo 走的
+// 字型目錄，字型就跟著工具走、不依賴機器狀態；沒放字型時保持原樣不動。
+const FONT_ROOT = path.join(__dirname, '.fontroot');
+if (fs.existsSync(path.join(FONT_ROOT, 'fonts'))) process.env.XDG_DATA_HOME = FONT_ROOT;
+
 async function main() {
   const token = await login();
   const me = await assertAdmin(token);
@@ -61,6 +68,18 @@ async function main() {
       if (tk) localStorage.setItem(tokenKey, tk); else localStorage.removeItem(tokenKey);
       localStorage.setItem(themeKey, tv);
     }, [wantToken, theme, TOKEN_KEY, THEME_KEY]);
+
+    // 主題「以後端為準」（theme.js syncFromServer，由 app.js:88／:144 帶 auth/me 的值呼叫），
+    // 會把上面注入的 localStorage 蓋掉——不攔的話登入頁面的淺色基線拍出來全是帳號設定的深色。
+    // 只改這支請求的回應，不動產品碼、也不動帳號的真實設定。
+    await context.route('**/api/auth/me', async route => {
+      const res = await route.fetch();
+      const me = await res.json().catch(() => null);
+      // odoo_settings 不存在時不補：syncFromServer 收到 undefined 會直接 return，
+      // 注入值本來就不會被蓋；擅自補上反而可能改動畫面（有 view 以它的有無決定要不要提示）。
+      if (me && me.odoo_settings) me.odoo_settings.theme = theme;
+      await route.fulfill({ response: res, json: me });
+    });
 
     const page = await context.newPage();
     try {

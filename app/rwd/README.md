@@ -16,10 +16,21 @@
 | `inventory/` | ✓ | 盤點資料（待遷移清單等） |
 | `snapshots/` | ✗ | 每次執行的截圖 |
 | `diff/` | ✗ | 差異圖，只在門禁失敗時產出 |
+| `.fontroot/` | ✗ | 截圖用的中文／emoji 字型，43MB 二進位（見下） |
 
-`baseline/`、`snapshots/`、`diff/` 已在 repo 根 `.gitignore` 排除。
+`baseline/`、`snapshots/`、`diff/`、`.fontroot/` 已在 repo 根 `.gitignore` 排除。
 
 **基線圖為什麼不進版控**：基線拍的是正式區畫面，會把真實任務標題、專案名稱、用量數字寫進 git 歷史，刪不掉。取捨後選擇不進版控，代價是門禁不可攜——換機器或換 worktree 要自己重跑 `npm run rwd:baseline`，且**重產前務必確認是乾淨 HEAD**，否則會把未驗證的破版收進基線，門禁從此驗不出東西。
+
+**字型為什麼隨 repo 走**：本專案的容器沒裝中文字型（`fc-list :lang=zh` = 0），中文會全部渲染成豆腐框 □。方框寬度不等於中文字寬，拿那種圖判斷手機版會不會擠爆是量錯的——對 RWD 專案而言是致命的。容器內無 root、apt 索引也是空的，裝不進系統目錄，因此改放 repo 內、由 `capture.js` 指定 `XDG_DATA_HOME`（`/etc/fonts/fonts.conf` 的 `<dir prefix="xdg">fonts</dir>`）。字型檔不進版控，換機器時重抓：
+
+```bash
+mkdir -p app/rwd/.fontroot/fonts && cd app/rwd/.fontroot/fonts
+curl -sSLO https://github.com/notofonts/noto-cjk/raw/main/Sans/Variable/OTC/NotoSansCJK-VF.otf.ttc
+curl -sSLO https://github.com/googlefonts/noto-emoji/raw/main/fonts/NotoColorEmoji.ttf
+```
+
+沒放字型時 `capture.js` 不動 `XDG_DATA_HOME`，改用機器上的系統字型——但那樣拍出來的基線與別台不可比。
 
 **為什麼在 `app/` 底下**：`rules/infra.md` 113 —— Node 模組解析不跨目錄樹，放 repo 根的話 `require('playwright')` 找不到 `app/node_modules`。
 
