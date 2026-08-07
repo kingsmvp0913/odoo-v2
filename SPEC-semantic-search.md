@@ -3,6 +3,10 @@
 > 目標讀者：在正式機執行本改動的人或 agent
 > 規模：三階段，各自可獨立上線與回滾。階段 1 無使用者可見變化，階段 2 改既有端點行為，階段 3 動 pipeline。
 > 與其他規格無依賴，隨時可插。
+>
+> **收尾慣例**（見 commit `1697082`）：根目錄只留**尚未執行**的規格。本檔執行完畢後移進 `docs/`
+> （該目錄在 `.gitignore` 內，spec／plan 不進版控），並比照 `SPEC-inbox.md` 等在頂部補一段
+> 「執行狀態 ＋ 實際偏離」——寫下錨點複驗結果與本文沒提到、但真的會炸的坑，避免日後有人照著再做一次。
 
 ---
 
@@ -235,12 +239,20 @@ cd app && npm run test:quiet          # 全跑，含 --runInBand
 
 **不要用 `npx jest` 全跑**——平行 worker 下 pg-mem 會產生浮動假紅。紅了之後才對那一支單獨跑不帶 `--silent` 的完整輸出。
 
-### 4.2 既有紅燈（乾淨 HEAD 也紅，不要 debug）
+### 4.2 基線：全綠，新紅燈一律先當成自己造成的
 
-- `git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支：CRLF 行尾差異，Windows checkout 必紅
-- `vpn-gateway-run.test.js` 的 `defaultTmpFilePath › 容器化（APP_DIR 已設）`：測容器內落點，開發機非容器故必紅
+**正式機基線是 2148 passed / 0 failed / exit 0**（2026-08-08 實測，見 commit `68ba5ed`）。
 
-除上述之外的紅燈**先假設是 flaky**（pgPass flake 家族），一律單跑複驗才算數。
+⚠️ **不要沿用 `.claude/rules/always.md` 規則 2 的那份「既有紅燈」清單**——它已被 `68ba5ed` 推翻，而且照它判讀會有實害：
+
+| 舊清單說 | 實際 |
+|---|---|
+| `git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支是 CRLF 造成、必紅 | **真因是無全域 git identity，08-06 已修**。Linux checkout 也不會有 CRLF 問題 |
+| `vpn-gateway-run.test.js` 的容器那支必紅 | 在正式機上是綠的 |
+
+照舊清單判讀，等於「叫你把 `git-integration` 的紅燈當環境問題放過去，而在這台上那代表你真的改壞了東西」。
+
+**判定法**：拿 `2148 passed` 當基線比對，任何新紅燈先當成自己造成的。真的懷疑是 flaky（pgPass flake 家族）才單跑複驗，且必須單跑才算數。
 
 ### 4.3 本改動要新增的測試
 
