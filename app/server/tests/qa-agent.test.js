@@ -636,3 +636,73 @@ test('QA pass 之後再進 QA → 不得把作廢的舊清單當成待驗項', a
   expect(runClaude.mock.calls[0][0]).not.toContain('陳年項目：備註欄位未加');
   expect(runClaude.mock.calls[0][0]).toContain('（首輪，無上輪清單）');
 });
+
+// ── 未通過 log 的「去向」文案 ─────────────────────────────────────────────────
+// 意圖：這則 log 在畫面上被收合成一句人話，但它有三種去向——退回 coding、QA 連續未通過觸頂、
+// 總循環次數觸頂——後兩種其實是「任務停下等你處理」。一律寫成「已自動退回開發修正」在任務其實
+// 停住時是錯的，而那正是使用者最需要正確資訊的時刻（他會以為還在自動跑，就不去處理）。
+// 去向寫在標頭列，本體（未解清單）一字不動；剝除端連同去向一起剝掉，故不會污染下一輪待驗項。
+const { machineLogHint } = require('../../public/js/machine-logs.js');
+
+async function qaFailChip(id) {
+  const { rows: [r] } = await dbModule.query(
+    "SELECT role, content FROM task_logs WHERE task_id=$1 AND content LIKE '[QA 未通過]%' ORDER BY id DESC LIMIT 1", [id]
+  );
+  return r ? machineLogHint(r.role, r.content) : null;
+}
+
+test('去向文案：退回 coding → 收合文案說的是「已自動退回開發修正」', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['第1條未實作'] });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+  expect(await qaFailChip(id)).toContain('已自動退回開發修正');
+});
+
+test('去向文案：QA 觸頂 stopped → 不得說退回開發，要說任務停下等你處理', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['又錯'] });
+  const id = await makeTask(4);                        // 本次是第 5 次（QA_LIMIT=5）
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  const chip = await qaFailChip(id);
+  expect(chip).toContain('任務停下等你處理');
+  expect(chip).not.toContain('退回開發');
+});
+
+test('去向文案：循環斷路器觸頂 stopped → 同樣不得說退回開發，且本輪問題仍留得下來', async () => {
+  const { MAX_REENTRY } = require('../pipeline/reentry');
+  claudeReturns({ verdict: 'fail', issues: ['備註欄位仍未加'] });
+  const id = await makeTask(0);
+  await dbModule.query('UPDATE tasks SET reentry_count=$2 WHERE id=$1', [id, MAX_REENTRY - 1]);
+  await runQaAgent(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  const chip = await qaFailChip(id);
+  expect(chip).toContain('任務停下等你處理');
+  expect(chip).not.toContain('退回開發');
+  // 觸頂那一輪的 log 與 retry_feedback 都必須留下，否則畫面上只剩「循環 N 次仍未通過」，
+  // 使用者看不到 QA 到底說了什麼、事後推回 coding 也拿不到退回原因
+  const { rows: logs } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [id]);
+  expect(logs.some(l => l.content.includes('備註欄位仍未加'))).toBe(true);
+  expect(t.retry_feedback).toContain('備註欄位仍未加');
+});
+
+// strip 契約：去向只能活在標頭列。剝不乾淨的話它會混進下一輪 QA 的未解清單被當成待驗項，
+// QA 會對著「已自動退回開發修正」這句話重驗（永遠驗不掉，迴圈收斂不了）。
+test('去向後綴不得混進下一輪 QA 的未解清單', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['第1條未實作'] });
+  const id = await makeTask(0);
+  await runQaAgent(id, userId);                        // 第一輪 fail：寫下帶去向的 log
+
+  runClaude.mockClear();
+  claudeReturns({ verdict: 'pass' });
+  await dbModule.query("UPDATE tasks SET status='qa_running' WHERE id=$1", [id]);
+  await runQaAgent(id, userId);                        // 第二輪：把上輪清單帶進 prompt
+
+  const prompt = runClaude.mock.calls[0][0];
+  expect(prompt).toContain('第1條未實作');              // 清單本體有帶
+  expect(prompt).not.toContain('已自動退回開發修正');    // 去向是給人看的，不進待驗項
+  expect(prompt).not.toContain('[QA 未通過]');           // 標頭列整列剝除
+});

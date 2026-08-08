@@ -4,6 +4,7 @@
  */
 const { query } = require('../db');
 const notify = require('../notify');
+const { machineLogHeader } = require('../../public/js/machine-logs.js');
 
 // 進「待你裁決」gate：批次寫入所有疑點供使用者一次回答；答完後由 runner.handleClarifyAnswered
 // 依 resumeStatus 帶回饋導回原關（QA→coding、分診→reject_triage/resolve_triage）。不加該關計數（非自動失敗輪）。
@@ -16,7 +17,7 @@ async function enterClarifyGate(taskId, userId,
     "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
     [taskId, `[需要你裁決]\n${qList.join('\n')}`]
   );
-  const feedback = carryFeedback != null ? carryFeedback : (codeFeedback ? `[QA 未通過]\n${codeFeedback}` : null);
+  const feedback = carryFeedback != null ? carryFeedback : (codeFeedback ? `${machineLogHeader('qa_fail')}\n${codeFeedback}` : null);
   // 進閘門＝開一場全新對話：清 clarify_session_id／clarify_prompt_ver，理由與規格側 writeAnalysisYaml
   // 對稱（runner.js）——這是本閘門唯一的進入點，殘留的舊 session 會讓下一場問答續接到已無關的對話。
   await query(

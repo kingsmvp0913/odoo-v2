@@ -7,6 +7,7 @@ const notify = require('../notify');
 const { assembleTaskContext } = require('./sync');
 const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
 const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
+const { machineLogHeader } = require('../../public/js/machine-logs.js');
 
 async function runCsAgent(taskId, userId, signal) {
   const { rows: [task] } = await query(
@@ -156,13 +157,16 @@ async function runCsAgent(taskId, userId, signal) {
     // (1) 時間軸（role='ai'）寫 reason_plain——否則使用者只看到任務憑空跳進分析、不知道為何判定要改程式。
     // (2) cs_findings 存 reason 供分析關當「待驗證線索」，免得 cs 查過的根因被丟掉、分析從零重查（雙倍 token）。
     // 舊 prompt／偶發漏欄位時 reason_plain 會是空的，退回貼 reason（看不懂好過看不到，不阻斷分流）。
+    // 這條 fallback 貼的就是那份 906 字技術文，故本前綴也進 machine-logs registry 收合；
+    // 但只在「夠長」時收（collapseWhenLong）——正常路徑貼的 reason_plain 是白話短句，
+    // 把它折成一句 hint 等於藏掉唯一看得懂的說明，反而回到使用者反映「看不懂」的原點。
     const reason = typeof result.reason === 'string' ? result.reason.trim() : '';
     const reasonPlain = typeof result.reason_plain === 'string' ? result.reason_plain.trim() : '';
     const shown = reasonPlain || reason;
     if (shown) {
       await query(
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-        [taskId, `[客服判定：需改程式]\n${shown}`]
+        [taskId, `${machineLogHeader('cs_code_change')}\n${shown}`]
       );
     }
     await query(

@@ -9,6 +9,7 @@ const { parseAgentResult } = require('./agent-result');
 const { classifyFailure } = require('./failure-classifier');
 const { parseQaIssues, recordQaRejection } = require('./qa-rejection');
 const { getProjectNotes } = require('./project-notes');
+const { MACHINE_LOGS, machineLogHeader, stripMachineHeader } = require('../../public/js/machine-logs.js');
 const yaml = require('js-yaml');
 
 const QA_LIMIT = 5;
@@ -31,7 +32,7 @@ const QA_RESUME_LIMIT = 2;
 // 就修掉的舊清單，QA 對著不存在的問題重驗，而僵局熔斷貼給使用者的也是那份陳年清單，與真因對不上。
 const LATEST_QA_FINDINGS_SQL = `
   SELECT content FROM task_logs
-   WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 未通過]%'
+   WHERE task_id=$1 AND role='ai' AND content LIKE '${MACHINE_LOGS.qa_fail.prefix}%'
      AND id > COALESCE((SELECT MAX(id) FROM task_logs
                          WHERE task_id=$1 AND role='ai' AND content LIKE '[QA 通過]%'), 0)
    ORDER BY id DESC LIMIT 1`;
@@ -66,7 +67,7 @@ async function runQaAgent(taskId, userId, signal) {
   }
   if (headSha && task.qa_reviewed_commit === headSha && (task.qa_retry_count || 0) > 0) {
     const { rows: [prev] } = await query(LATEST_QA_FINDINGS_SQL, [taskId]);
-    const findings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（見上輪 QA 清單）';
+    const findings = prev ? stripMachineHeader('qa_fail', prev.content) : '（見上輪 QA 清單）';
     await query(
       "UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1",
       // 放行的措辭要寫死給使用者看：QA 這一關不再讀使用者的修正指示（那是流程層的話，放行與否
@@ -88,7 +89,7 @@ async function runQaAgent(taskId, userId, signal) {
     // 撈最近一筆 QA 未解清單餵給本輪：QA 逐項重驗（修好的掉、沒修的留、新的加），讓迴圈收斂而非每輪重新發散。
     // 新語意下每筆 [QA 未通過] 本身即「當下完整未解清單」，取最新一筆＝最完整，不必串接歷史。
     const { rows: [prev] } = await query(LATEST_QA_FINDINGS_SQL, [taskId]);
-    const priorFindings = prev ? prev.content.replace(/^\[QA 未通過\]\s*/, '').trim() : '（首輪，無上輪清單）';
+    const priorFindings = prev ? stripMachineHeader('qa_fail', prev.content) : '（首輪，無上輪清單）';
     // 刻意不帶「使用者修正指示」進 QA：那是流程層的話（「已修正」「直接推進」），而放行與否是
     // triage 的 advance 分支在管，QA 沒有做這個決策的資訊（看不到彈跳次數與失敗歷史）。舊版 prompt
     // 還寫著「例如使用者明確要求忽略某項」，等於明文教它把流程指令當放行依據。規格層級的決定不走
@@ -265,12 +266,14 @@ async function runQaAgent(taskId, userId, signal) {
     // summary 是 md 契約要求的「給實作 Agent 的修正指引」，要進 retry_feedback；
     // 但不進 [QA 未通過] log——那份是下一輪 QA 的未解清單，混入指引會被當成待驗項
     const feedback = (detail.list.length && detail.summary) ? `${issues}\n修正指引：${detail.summary}` : issues;
-    await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-      [taskId, `[QA 未通過]\n${issues}`]
-    );
     const nextCount = (task.qa_retry_count || 0) + 1;
+    // 這則 log 的標頭列同時是使用者在時間軸上看到的那句人話，所以要等去向定了才寫：三種去向裡有
+    // 兩種其實是「任務停下等人」，一律寫「已自動退回開發修正」在那兩種情況下是錯的——而那正是
+    // 使用者最需要正確資訊的時刻。去向只放在標頭列的全形括號內，本體一字不動，下一輪 QA 撈回去
+    // 由 stripMachineHeader 連同去向一起剝掉，不會混進未解清單被當成待驗項。
+    let outcome = '已自動退回開發修正';
     if (nextCount >= QA_LIMIT) {
+      outcome = '已連續未通過達上限，任務停下等你處理';
       await query(
         "UPDATE tasks SET status='stopped', qa_retry_count=$2, blocker_content=$3, updated_at=NOW() WHERE id=$1",
         [taskId, nextCount, `QA 連續 ${QA_LIMIT} 次未通過，需人工介入。最後問題：${issues.slice(0, 300)}`]
@@ -279,21 +282,27 @@ async function runQaAgent(taskId, userId, signal) {
     } else {
       const { bumpReentryOrStop } = require('./reentry');
       // retry_feedback／qa_retry_count 必須在斷路器之前落地：觸頂時 bumpReentryOrStop 會直接標
-      // stopped 並讓本函式提早 return，等到下面才寫的話，本輪 QA 找到的問題兩邊都留不下來——
-      // 畫面上只剩「循環 N 次仍未通過」（使用者看不到 QA 到底說了什麼），retry_feedback 也還是
-      // NULL，事後人工把任務推回 coding 時開發拿不到任何退回原因，只會空手重跑並被同樣的問題再退。
+      // stopped，等到下面才寫的話，本輪 QA 找到的問題就留不下來——retry_feedback 會還是 NULL，
+      // 事後人工把任務推回 coding 時開發拿不到任何退回原因，只會空手重跑並被同樣的問題再退。
       await query(
         'UPDATE tasks SET qa_retry_count=$2, retry_feedback=$3 WHERE id=$1',
-        [taskId, nextCount, `[QA 未通過]\n${feedback}`]
+        [taskId, nextCount, `${machineLogHeader('qa_fail')}\n${feedback}`]
       );
       // 帶 diag：觸頂停下時把本輪真正的問題寫進 blocker_content（reentry.js 早就支援，先前沒帶）
-      if (await bumpReentryOrStop(taskId, userId, { blockerContent: `本輪 QA 未通過：\n${issues.slice(0, 500)}` })) return true;
-      await query(
-        "UPDATE tasks SET status='coding_running', updated_at=NOW() WHERE id=$1",
-        [taskId]
-      );
-      notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+      if (await bumpReentryOrStop(taskId, userId, { blockerContent: `本輪 QA 未通過：\n${issues.slice(0, 500)}` })) {
+        outcome = '循環次數已達上限，任務停下等你處理';
+      } else {
+        await query(
+          "UPDATE tasks SET status='coding_running', updated_at=NOW() WHERE id=$1",
+          [taskId]
+        );
+        notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
+      }
     }
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, `${machineLogHeader('qa_fail', outcome)}\n${issues}`]
+    );
     return true;
   }
 

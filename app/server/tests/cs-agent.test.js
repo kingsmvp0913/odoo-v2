@@ -279,3 +279,33 @@ test('無前一版 [客服回覆]：仍照常三分類（operation → cs_reply_
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(t.status).toBe('cs_reply_pending');   // 無前一版不影響原分類流程
 });
+
+// ── 時間軸收合 ────────────────────────────────────────────────────────────────
+// 意圖：reason_plain 缺席時的 fallback 會把技術版 reason（實測平均 906 字）原樣放上時間軸——
+// 也就是 a143fc8 想解決的那個症狀，在這條路徑上原樣重現。fallback 本身要留（看不懂好過看不到），
+// 改成讓這則進收合：長的技術文折成一句人話、要看再展開；而正常路徑的 reason_plain 是白話短句、
+// 本來就是寫給人讀的，收合它等於藏掉唯一看得懂的說明，故必須維持整段直接顯示。
+const { machineLogHint, MACHINE_LOGS } = require('../../public/js/machine-logs.js');
+
+async function csLog(taskId) {
+  const { rows } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  return rows.find(l => l.content.startsWith(MACHINE_LOGS.cs_code_change.prefix));
+}
+
+test('收合：reason fallback 的長技術文 → 折成一句人話，不整段砸在時間軸上', async () => {
+  const long = 'idx_maintenance.py 的 Method action_confirm 缺冪等防護，stock.move 的 _action_done 未過濾退貨數量 [碼]。'.repeat(8);
+  mockRunClaude.mockResolvedValueOnce({ text: `<result>{"type":"code_change_clear","reason":"${long}"}</result>`, usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: '重複建單', text: '按確認會產生兩張單' });
+  await runCsAgent(taskId, userId);
+  const log = await csLog(taskId);
+  expect(log.content).toContain('action_confirm');                 // fallback 仍在：內容一字不動
+  expect(machineLogHint(log.role, log.content)).toBe(MACHINE_LOGS.cs_code_change.hint);
+});
+
+test('不收合：reason_plain 的白話短句 → 使用者直接看到，不必多點一下', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reason":"idx_maintenance.py 的 Method action_confirm 缺冪等防護 [碼]","reason_plain":"按下確認時如果系統重試，單子會被重複建立一次。這是程式寫入資料的時機有問題，設定裡關不掉。"}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: '重複建單2', text: '按確認會產生兩張單' });
+  await runCsAgent(taskId, userId);
+  const log = await csLog(taskId);
+  expect(machineLogHint(log.role, log.content)).toBeNull();
+});
