@@ -41,6 +41,25 @@ const trimDesc = (d) => {
   return t ? t.slice(0, DESC_MAX) : null;
 };
 
+// ⟳ 精修的長度規則。module／function 頁先前完全沒有閘：`${node.content}` 全文無截斷塞進 prompt、
+// 指令又是「保留正確內容、補充與修正」，於是頁面內容與每輪 input token 一起單調成長；撞到模型
+// 輸出上限時是靜默截斷，再整份寫回 DB（＝慢性刪內容，而 wiki 沒有版本表可還原）。
+// BUDGET：寫進 prompt 的目標長度。概論沿用 library.md 既有的 400 字；模組／功能頁要交代
+//   「使用者能做什麼、怎麼一步步操作」，寬一級取 1200 字，與同函式其他上下文同數量級
+//   （manifest slice(0,2000)、原始碼 8 檔×300 字）。
+// PAGE_MAX_CHARS：現有內容的硬上限，取預算的 5 倍當緩衝。到頂是擋下重生（丟 400 請人工精簡），
+//   **不是**截斷後照送——截斷等於把尾段交給 AI 重寫成「不存在」，那正是本次要修的資料流失。
+const OVERVIEW_BUDGET_CHARS = 400;
+const PAGE_BUDGET_CHARS = 1200;
+const PAGE_MAX_CHARS = 6000;
+
+// 「保留既有正確內容」與硬字數上限本質互斥：內容一旦超過上限，兩者不可能同時成立，模型只能自行
+// 取捨，而它的取捨是刪字——那一頁的「保留」指示在超過上限後等於無效（overview 原本正是「200-400 字」
+// 與「保留正確內容」並列）。故字數一律寫成「目標＋衝突時的裁決順序」而非硬上限。
+const lengthRule = (budget) =>
+  `長度：目標 ${budget} 字以內。若現有內容已超過，不得為了字數刪除仍然正確的資訊，`
+  + `改以合併重複敘述、刪去贅詞的方式收斂；收斂後仍超過就照實超出。`;
+
 async function _upsertNode(projectId, parentId, nodeType, slug, title, content, description) {
   const { rows: [row] } = await query(
     `INSERT INTO wiki_pages (project_id, parent_id, node_type, slug, title, content, description, updated_at)
@@ -122,6 +141,10 @@ async function refreshWikiNode(projectId, slug, userId, signal) {
   if (!node) { const e = new Error('Wiki node not found'); e.status = 404; throw e; }
   if (node.node_type === 'notes') { const e = new Error('專案備註為人工維護，不支援重新生成'); e.status = 400; throw e; }
   if (node.node_type === 'troubleshooting') { const e = new Error('疑難排解由排障／客服對話累積，無原始碼可重生'); e.status = 400; throw e; }
+  if ((node.content || '').length > PAGE_MAX_CHARS) {
+    const e = new Error(`本頁現有內容 ${node.content.length} 字，超過 ${PAGE_MAX_CHARS} 字上限，無法重新生成；請先人工精簡後再試`);
+    e.status = 400; throw e;
+  }
 
   const { rows: [project] } = await query('SELECT * FROM projects WHERE id=$1', [projectId]);
   const { rows: readyRepos } = await query(
@@ -137,7 +160,8 @@ async function refreshWikiNode(projectId, slug, userId, signal) {
   if (node.node_type === 'overview') {
     const manifests = [];
     for (const r of readyRepos) _collectManifests(r.local_path, manifests, 15);
-    context = `類型：精修專案概論（overview，200-400 字繁中），保留正確內容、補充與修正
+    context = `類型：精修專案概論（overview，繁中），保留正確內容、補充與修正
+${lengthRule(OVERVIEW_BUDGET_CHARS)}
 回傳 {"slug":"overview","title":"專案概論","content":"<Markdown>"}
 專案「${project.name}」
 
@@ -150,6 +174,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
     const moduleName = node.slug.replace(/^module-/, '');
     const src = _collectModuleSource(readyRepos, moduleName);
     context = `類型：精修模組頁（module，繁中 Markdown），保留正確內容、補充與修正
+${lengthRule(PAGE_BUDGET_CHARS)}
 回傳 {"slug":"${node.slug}","title":"${moduleName}","content":"<Markdown>"}
 現有內容：
 ${node.content || '（空）'}
@@ -161,6 +186,7 @@ ${src || '（無原始碼）'}`;
     const moduleName = (parent?.slug || '').replace(/^module-/, '') || 'unknown';
     const src = _collectModuleSource(readyRepos, moduleName);
     context = `類型：精修功能頁（function，繁中 Markdown），保留正確內容、補充與修正
+${lengthRule(PAGE_BUDGET_CHARS)}
 回傳 {"slug":"${node.slug}","title":"<標題>","content":"<Markdown>"}
 現有內容：
 ${node.content || '（空）'}
@@ -176,7 +202,13 @@ ${src || '（無原始碼）'}`;
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
     if (!p) throw new Error('agent 輸出無法解析為有效 JSON');
-    title = p.title || title; content = p.content ?? content; description = p.description || null;
+    // 空字串是合法 JSON，parseAgentResult 會放行；`??` 只擋 null/undefined，於是 agent 一句
+    // {"content":""} 就讓下面那條 UPDATE 把整頁寫空——wiki 沒有版本表也沒有備份，寫空即不可還原。
+    // 同檔 initProjectWiki 用的是安全寫法（`p.content || overviewContent`），這裡沿用其判斷並加 trim。
+    // 空白內容不是「使用者要清空這一頁」而是這次重生失敗，故 throw 而非默默保留舊內容：
+    // 靜默保留再回「已重新生成」，使用者會以為精修過了，下次也不會再按。
+    if (typeof p.content !== 'string' || !p.content.trim()) throw new Error('agent 未回有效 content，已保留原內容未覆蓋');
+    title = p.title || title; content = p.content; description = p.description || null;
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);
     console.error(`[LIBRARY-AGENT] refresh error ${slug}:`, err.message);

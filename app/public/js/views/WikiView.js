@@ -36,6 +36,7 @@ window.WikiView = Vue.defineComponent({
       pages: [],
       current: null,
       loading: true,
+      loadError: '',
       editing: false,
       editContent: '',
       saving: false,
@@ -82,6 +83,12 @@ window.WikiView = Vue.defineComponent({
     editingSlug() {
       return this.editing && this.current ? this.current.slug : '';
     },
+    // 「建立 wiki」按下去會走 initProjectWiki，以骨架 ON CONFLICT DO UPDATE 覆寫概論與每一頁模組頁。
+    // 清單載入失敗時 pages 停在 []，只看 !pages.length 會讓這顆按鈕在「其實有內容」的專案上冒出來，
+    // 使用者看到空樹自然會按——一次網路抖動就換來整份累積內容被骨架蓋掉。
+    canBuild() {
+      return !this.pages.length && !this.loadError;
+    },
     tree() {
       const byId = {};
       this.pages.forEach(p => { byId[p.id] = { ...p, children: [] }; });
@@ -104,14 +111,40 @@ window.WikiView = Vue.defineComponent({
   methods: {
     // 新手教程的示範專案：wiki 內容來自 tour-demo.js，不打 API
     isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
+    // 教程示範專案的 id 是字串 'demo'，送進 integer 型別的 project_id 一律 500。
+    // 讀取路徑走 TourDemo 假資料，寫入路徑（儲存／⟳／✕）一律擋在前端並說明原因。
+    tourDemoBlocked() {
+      if (!this.isTourDemo()) return false;
+      showToast('教程示範專案僅供瀏覽，不會實際變更', 'info');
+      return true;
+    },
+    // 編輯中且內容與伺服器版本不同＝有未儲存的修改。notes 頁的 textarea 永遠是活的，
+    // 靠 @input 把 editing 帶起來，否則 editing 永遠是 false、這裡永遠判不出髒。
+    isDirty() {
+      return !!(this.editing && this.current && this.editContent !== this.current.content);
+    },
     async loadPages() {
-      if (this.isTourDemo()) { this.pages = window.TourDemo.wikiPages(); this.loading = false; return; }
+      if (this.isTourDemo()) { this.pages = window.TourDemo.wikiPages(); this.loadError = ''; this.loading = false; return; }
       this.loading = true;
-      try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); }
-      catch (e) { showToast(e.message, 'error'); }
+      try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); this.loadError = ''; }
+      catch (e) { this.loadError = e.message; showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
     async loadPage(slug) {
+      // 切頁會直接覆寫 editContent 並把 editing 歸零，未儲存的內容無聲消失——點左樹任一節點或
+      // 直接改網址都會中。同一頁重載（⟳ 之後）不攔，那條路徑已由樹上 ⟳ 的停用擋住。
+      if (this.current && this.current.slug !== slug && this.isDirty()) {
+        const discard = await confirmDialog({
+          title: '尚未儲存', danger: true, confirmText: '放棄修改',
+          message: `「${this.current.title}」有未儲存的修改，切換頁面後會遺失。要放棄修改嗎？`
+        });
+        if (!discard) {
+          // 網址若已被帶到新 slug（改網址列／上一頁觸發 watcher），要導回原頁，否則畫面停在舊頁、
+          // 網址卻是新頁。replace 回同一 slug 不會再觸發 watcher（條件是 current.slug !== slug）。
+          this.$router.replace(`/projects/${this.$route.params.id}/wiki/${this.current.slug}`);
+          return;
+        }
+      }
       try {
         this.current = this.isTourDemo()
           ? window.TourDemo.wikiPage(slug)
@@ -123,6 +156,7 @@ window.WikiView = Vue.defineComponent({
     },
     async save() {
       if (!this.current) return;
+      if (this.tourDemoBlocked()) return;
       this.saving = true;
       try {
         this.current = await Api.put(`projects/${this.$route.params.id}/wiki/${this.current.slug}`, { content: this.editContent });
@@ -152,6 +186,7 @@ window.WikiView = Vue.defineComponent({
       const title = this.newPageTitle.trim();
       const slug = this.newPageSlug.trim();
       if (!title || !slug) return showToast('請填寫 slug 與標題', 'error');
+      if (this.tourDemoBlocked()) return;
       this.addingPage = true;
       try {
         await Api.post(`projects/${this.$route.params.id}/wiki`, { slug, title, content: `# ${title}\n\n` });
@@ -163,6 +198,7 @@ window.WikiView = Vue.defineComponent({
       finally { this.addingPage = false; }
     },
     async removePage(slug) {
+      if (this.tourDemoBlocked()) return;
       if (!await confirmDialog({ title: '刪除頁面', message: `確定刪除頁面「${slug}」？`, danger: true, confirmText: '刪除' })) return;
       try {
         await Api.delete(`projects/${this.$route.params.id}/wiki/${slug}`);
@@ -172,6 +208,7 @@ window.WikiView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
     },
     async refreshNode(slug) {
+      if (this.tourDemoBlocked()) return;
       this.refreshing = slug;
       try {
         await Api.post(`projects/${this.$route.params.id}/wiki/${slug}/refresh`);
@@ -182,6 +219,7 @@ window.WikiView = Vue.defineComponent({
       finally { this.refreshing = ''; }
     },
     async buildWiki() {
+      if (this.tourDemoBlocked()) return;   // 守衛要在 building 之前，否則會卡在轉圈
       this.building = true;
       this.progress = { percent: 0, message: '開始建立…', stage: 'scanning' };
       try {
@@ -201,10 +239,10 @@ window.WikiView = Vue.defineComponent({
     <div class="topbar">
       <button class="btn btn-outline btn-sm" @click="$router.push('/projects/' + $route.params.id)" style="margin-right:var(--space-3)">← 返回專案</button>
       <h1>Wiki</h1>
-      <button v-if="!pages.length" class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
+      <button v-if="canBuild" class="btn btn-primary btn-sm" style="margin-left:auto" @click="buildWiki" :disabled="building">
         {{ building ? '建立中…' : '建立 wiki' }}
       </button>
-      <button class="btn btn-outline btn-sm" :style="pages.length ? 'margin-left:auto' : 'margin-left:var(--space-2)'" @click="openAddPage">+ 新增頁面</button>
+      <button class="btn btn-outline btn-sm" :style="canBuild ? 'margin-left:var(--space-2)' : 'margin-left:auto'" @click="openAddPage">+ 新增頁面</button>
     </div>
     <div v-if="showAddModal" class="modal-overlay" @mousedown.self="showAddModal=false" @keyup.esc="showAddModal=false">
       <div class="modal" role="dialog" aria-modal="true">
@@ -240,6 +278,10 @@ window.WikiView = Vue.defineComponent({
     <div class="wiki-body">
       <div data-tour="wiki-tree" class="wiki-tree-panel">
         <div v-if="loading" style="color:var(--text-muted);font-size:var(--fs-base);padding:var(--space-2)">載入中...</div>
+        <div v-else-if="loadError" class="error-msg">
+          頁面清單載入失敗：{{ loadError }}
+          <div><button class="btn btn-outline btn-sm" style="margin-top:var(--space-2)" @click="loadPages">重試</button></div>
+        </div>
         <template v-else>
           <wiki-node v-for="n in tree" :key="n.id" :node="n" :depth="0"
             :current-slug="current && current.slug"
@@ -268,7 +310,7 @@ window.WikiView = Vue.defineComponent({
             <p style="color:var(--text-muted);font-size:var(--fs-sm);margin:0 0 var(--space-2)">
               在此記錄專案注意事項、部署環境、聯絡窗口等人工維護的資訊。此處內容會自動注入各開發關卡，供 AI 優先遵循。
             </p>
-            <textarea v-model="editContent" style="width:100%;height:70vh;font-family:monospace;font-size:var(--fs-base);padding:var(--space-2);border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
+            <textarea v-model="editContent" @input="editing = true" style="width:100%;height:70vh;font-family:monospace;font-size:var(--fs-base);padding:var(--space-2);border:1px solid var(--border);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>
           </template>
           <template v-else>
             <div v-if="!editing" v-html="renderedContent" style="line-height:1.7;font-size:var(--fs-md)"></div>
