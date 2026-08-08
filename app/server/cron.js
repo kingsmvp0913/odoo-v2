@@ -81,6 +81,15 @@ async function cleanupOldTokenUsage() {
   return query('DELETE FROM token_usage WHERE recorded_at < $1', [cutoff]);
 }
 
+// user_inbox 每個「輪到你」／「被退回」事件 INSERT 一列，過去 0 個 DELETE、無 TTL。
+// 只裁已讀的：未讀代表還沒被看到（不管多舊），延後中的 read_at 也是 NULL，兩者都不能動。
+// 以 read_at 而非 created_at 計期：一列若昨天才被讀到，它昨天才剛完成它的任務。
+const INBOX_RETENTION_DAYS = parseInt(process.env.INBOX_RETENTION_DAYS || '90', 10);
+async function cleanupOldInboxRows() {
+  const cutoff = new Date(Date.now() - INBOX_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  return query('DELETE FROM user_inbox WHERE read_at IS NOT NULL AND read_at < $1', [cutoff]);
+}
+
 let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
 let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
@@ -218,6 +227,7 @@ function startCron() {
         await cleanupOldTaskEvents().catch(err => console.error('[CRON] events-cleanup:', err.message));
         try { cleanupOldDeployLogs(); } catch (err) { console.error('[CRON] deploy-log-cleanup:', err.message); }
         await cleanupOldTokenUsage().catch(err => console.error('[CRON] token-usage-cleanup:', err.message));
+        await cleanupOldInboxRows().catch(err => console.error('[CRON] inbox-cleanup:', err.message));
         // 每小時把已分類的 wiki 漂移套用成「從程式碼重生該頁」的更新（獨立 runner；同頁去重不重複更新）
         if (!testMode) {
           const { applyPendingWikiDrift } = require('./pipeline/wiki-drift-runner');
@@ -265,4 +275,4 @@ function stopCron() {
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, _resetShutdownStateForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, _resetShutdownStateForTesting };

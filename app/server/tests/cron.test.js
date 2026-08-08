@@ -147,6 +147,30 @@ test('cleanupOldTokenUsage 裁掉超過保留期的列，保留較新的', async
   expect(newRows.length).toBe(1);
 });
 
+// user_inbox 過去 0 個 DELETE、無 TTL，只靠刪任務／刪使用者的 CASCADE 才會少。
+// 只裁已讀的：未讀不管多舊都代表「還沒被看到」，延後中的 read_at 同樣是 NULL——
+// 兩者都不能碰，否則使用者會有事情永遠不知道。
+test('cleanupOldInboxRows 只裁超過保留期的已讀列，未讀與延後中的一律留著', async () => {
+  const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString(); // 超過預設 90 天
+  const recent = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'inbox_ret','odoo','I','done') RETURNING id",
+    [userId]
+  );
+  const add = (kind, readAt, snoozed = null) => dbModule.query(
+    'INSERT INTO user_inbox (user_id, task_id, kind, read_at, snoozed_until) VALUES ($1,$2,$3,$4,$5)',
+    [userId, t.id, kind, readAt, snoozed]
+  );
+  await add('old_read', old);          // 該刪
+  await add('recent_read', recent);    // 讀了但還沒滿保留期
+  await add('old_unread', null);       // 很舊但沒讀過
+  await add('old_snoozed', null, old); // 延後中：read_at 是 NULL
+
+  await cronModule.cleanupOldInboxRows();
+  const { rows } = await dbModule.query('SELECT kind FROM user_inbox WHERE task_id=$1', [t.id]);
+  expect(rows.map(r => r.kind).sort()).toEqual(['old_snoozed', 'old_unread', 'recent_read']);
+});
+
 // 意圖：關閉 Odoo／eService 同步是「不要去撈單」，不該連帶停掉測試區的生命週期管理。
 // 埠只借不還會讓池子單向耗盡，症狀是「沒幾個測試區卻說併發已滿」，完全不指向同步設定。
 //
