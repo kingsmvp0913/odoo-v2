@@ -22,7 +22,10 @@ const ASSET_LOG_TAIL_BYTES = parseInt(process.env.ASSET_LOG_TAIL_BYTES || '4000'
 // 宿主上根本不會有那個檔（寫入端隨 venv 模式一起退場），existsSync 因此恆 false ＝整個功能是
 // no-op；更糟的是 venv 時代建的專案可能殘留陳年 odoo.log，會把兩週前的 traceback 冠上
 // 「真正的錯誤在這裡」餵進 coding 的 prompt。env-routes 的「查看 log」早就是這個寫法。
-async function readAssetTraceback(projectId) {
+// header 可換：升級失敗那條路也要附這段（分診 agent 的 stop_context 就是 blocker_content，
+// c8287fe 拿掉 {{runtime_log_path}} 後它已無法自己去讀 log），但那裡的「真正的錯誤」在 odoo-bin
+// 的輸出而不在常駐 server 的 log，沿用 asset 的措辭會把分診指錯地方。
+async function readAssetTraceback(projectId, header = '【測試環境 runtime log 尾端（真正的錯誤在這裡，不要只看上面的通用說明）】') {
   try {
     const { dockerCtxFor } = require('./env-agent');
     const dockerEnv = require('../lib/docker-env');
@@ -33,7 +36,7 @@ async function readAssetTraceback(projectId) {
     const log = await dockerEnv.containerLogs(ctx.container, { tail: 200 }).catch(() => '');
     const tail = String(log || '').slice(-ASSET_LOG_TAIL_BYTES).trim();
     if (!tail) return '';
-    return `\n\n【測試環境 runtime log 尾端（真正的錯誤在這裡，不要只看上面的通用說明）】\n${tail}`;
+    return `\n\n${header}\n${tail}`;
   } catch { return ''; }
 }
 
@@ -378,6 +381,12 @@ async function doDeploy(task, taskId, userId, signal) {
     if (err) {
       const odooErr = extractOdooError(err.message);
       const pipRef = /FAIL/.test(reqLog) ? `\npip 補裝紀錄：\n${reqLog.slice(-400)}` : '';
+      // 分診 agent 讀得到的只有 blocker_content（reject-triage 的 stop_context 就是它），而 c8287fe
+      // 已把 {{runtime_log_path}} 從 prompt 拿掉、改成「證據已附在上面」——不附等於告訴它「這次沒有
+      // 可用的 runtime log」，它就不再追。升級失敗是最常見的入口，卻從頭到尾沒附過任何 log
+      // （readAssetTraceback 原本只在 asset 分支被呼叫）。
+      const runtimeTail = await readAssetTraceback(task.project_id,
+        '【測試環境 runtime log 尾端（常駐 server 端；升級指令自己的完整輸出見上面的 log 檔）】');
 
       if (cls !== 'code') {
         // 環境/仍暫時性問題：停下等人工修環境，不動 coding 計數。
@@ -387,7 +396,7 @@ async function doDeploy(task, taskId, userId, signal) {
         const logRef = logFile ? `\n完整 log：${logFile}` : '';
         await query(
           "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
-          [taskId, `環境問題（非程式碼），請檢查測試環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}${pipRef}`]
+          [taskId, `環境問題（非程式碼），請檢查測試環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}${pipRef}${runtimeTail}`]
         );
         notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
         return;
@@ -406,7 +415,7 @@ async function doDeploy(task, taskId, userId, signal) {
         // 消費成 NULL），coding 收到空輸入只能空轉（實測 task 109）。未觸頂的退回分支本來就有寫。
         await query(
           "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, retry_feedback=$4, updated_at=NOW() WHERE id=$1",
-          [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${codeHint}${logRef}`, feedback]
+          [taskId, nextCount, `測試區升級連續 ${DEPLOY_LIMIT} 次失敗，需人工介入。最後錯誤：${odooErr.slice(0, 500)}${codeHint}${logRef}${runtimeTail}`, feedback]
         );
         notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
       } else {
@@ -414,7 +423,7 @@ async function doDeploy(task, taskId, userId, signal) {
         // emitDeployVerdict 移到確定會退開發之後才發，避免觸頂時仍留下「退開發第 1/3 次」的誤導事件。
         const { bumpReentryOrStop } = require('./reentry');
         if (await bumpReentryOrStop(taskId, userId, { blockerType: 'code',
-            blockerContent: `最後錯誤：${odooErr.slice(0, 500)}${logRef}` })) return;
+            blockerContent: `最後錯誤：${odooErr.slice(0, 500)}${logRef}${runtimeTail}` })) return;
         await emitDeployVerdict(userId, taskId, `程式問題 → 退開發修正（第 ${nextCount}/${DEPLOY_LIMIT} 次）`);
         await query(
           "UPDATE tasks SET status='coding_running', deploy_retry_count=$2, retry_feedback=$3, updated_at=NOW() WHERE id=$1",
@@ -450,17 +459,29 @@ async function doDeploy(task, taskId, userId, signal) {
   if (assetRes.assetError) {
     const nextCount = (task.deploy_retry_count || 0) + 1;
     const trace = await readAssetTraceback(task.project_id);
-    const detail = `[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來（多為 OWL/QWeb template 的 xpath 對不到目標，模組安裝與 --stop-after-init 都驗不到、只在瀏覽器開後台才現形）：${assetRes.reason || ''}${trace}`;
+    // 升級失敗有 saveDeployLog 落 data/logs，asset 失敗一次都沒呼叫過——於是這段 traceback（實測
+    // 1177 字）的三條退路全不成立：blocker_content 只切 500 字且只在觸頂那一輪才寫、retry_feedback
+    // 下一輪即被覆寫且前端零渲染、而時間軸指的「📄 查看 log」依 CLAUDE.md §6 是每次啟動清空的檔案。
+    // 落檔是唯一留得住的地方，也讓下面那句話有一個真的找得到的位置可指。
+    const logFile = saveDeployLog(taskId, `asset-${nextCount}`, {
+      exitCode: 'n/a',
+      stderr: `asset bundle 檢查失敗：${assetRes.reason || ''}`,
+      stdout: trace || '(容器 runtime log 讀不到)',
+    });
+    const logRef = logFile ? `\n完整 log：${logFile}` : '';
+    const detail = `[部署測試區 asset 檢查失敗]\n後台 JS bundle 編不出來（多為 OWL/QWeb template 的 xpath 對不到目標，模組安裝與 --stop-after-init 都驗不到、只在瀏覽器開後台才現形）：${assetRes.reason || ''}${trace}${logRef}`;
     // 時間軸給人看，只寫現象與去哪看；detail 含原始 Python traceback（實測 1177 字），原文貼上去
     // 使用者只會看到一整段 stack。完整內容仍走 retry_feedback 餵 coding、blocker_content 留給人工。
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId,
-      '[部署測試區 asset 檢查失敗]\n新版程式讓測試區的後台頁面載入不出來（開啟時會空白或一直轉圈）。這是程式問題，不是環境問題。\n完整錯誤訊息請看專案環境頁的「📄 查看 log」。']);
+      '[部署測試區 asset 檢查失敗]\n新版程式讓測試區的後台頁面載入不出來（開啟時會空白或一直轉圈）。這是程式問題，不是環境問題。'
+      + (logFile ? `\n完整錯誤訊息（含 traceback）已存檔：${logFile}` : '\n（完整錯誤訊息存檔失敗，請看下方停下原因）')]);
     if (nextCount >= DEPLOY_LIMIT) {
       await emitDeployVerdict(userId, taskId, `asset 問題 → 連續 ${DEPLOY_LIMIT} 次失敗、停等人工`);
       // 同升級失敗觸頂：blocker_content 給人看，retry_feedback 給 coding 讀，兩邊都要寫。
+      // 截斷後再補一次 logRef：500 字必然切在 traceback 中間，不補就連檔案路徑都留不住。
       await query(
         "UPDATE tasks SET status='stopped', blocker_type='code', deploy_retry_count=$2, blocker_content=$3, retry_feedback=$4, updated_at=NOW() WHERE id=$1",
-        [taskId, nextCount, detail.slice(0, 500), detail]
+        [taskId, nextCount, `${detail.slice(0, 500)}${logRef}`, detail]
       );
       notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     } else {

@@ -82,7 +82,7 @@ async function cleanupOldTokenUsage() {
 }
 
 let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
-let _lastShutdownMinute = null; // 同一分鐘只觸發一次夜間關機（tick 延遲時的重複防護）
+let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
@@ -144,15 +144,21 @@ function startCron() {
       const tz = process.env.ODOO_ENV_SHUTDOWN_TZ || '';
       const nowDate = new Date();
       let curH = nowDate.getHours(), curM = nowDate.getMinutes();
+      let dayKey = `${nowDate.getFullYear()}-${nowDate.getMonth()}-${nowDate.getDate()}`;
       if (tz) {
         try {
           const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(nowDate);
           [curH, curM] = parts.split(':').map(Number);
+          // 日界線也要用同一個時區算，否則跨午夜時「今天」的認定會與時／分不同源
+          dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(nowDate);
         } catch (e) { console.error('[CRON] 無效的 ODOO_ENV_SHUTDOWN_TZ，退回本機時區:', e.message); }
       }
-      const minuteKey = `${nowDate.getFullYear()}-${nowDate.getMonth()}-${nowDate.getDate()} ${curH}:${curM}`;
-      if (curH === sh && curM === sm && _lastShutdownMinute !== minuteKey) {
-        _lastShutdownMinute = minuteKey;
+      // 條件是「過了預定時刻且今天還沒關過」，不是「剛好落在那一分鐘」。同一個 tick 內
+      // classifyPendingRejections 每筆要跑一次 runClaude，有積壓時輕易超過 60 秒，下一個 tick 直接
+      // 撞 `if (_tickRunning) return`——被跳過的若正是 23:00 那一分鐘，當天就整天不關機而且沒有補跑
+      // （閒置回收已於 2026-08-07 預設關閉，兜底只剩 MAX_LIFETIME_HOURS=20）。
+      if (curH * 60 + curM >= sh * 60 + sm && _lastShutdownDay !== dayKey) {
+        _lastShutdownDay = dayKey;
         const { nightlyShutdown } = require('./pipeline/env-agent');
         nightlyShutdown().catch(err => console.error('[CRON] nightly shutdown:', err.message));
       }
@@ -255,4 +261,8 @@ function stopCron() {
   if (_job) { _job.stop(); _job = null; }
 }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage };
+// 測試用：「今天已經關過機」是模組層變數，跨 test 累積。補跑改成「過了預定時刻就跑」之後，
+// 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
+function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
+
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, _resetShutdownStateForTesting };

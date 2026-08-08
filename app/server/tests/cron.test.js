@@ -220,6 +220,73 @@ test('同步全關（間隔皆 0）仍要推進 pipeline，不得被同步的提
   expect(syncUser).not.toHaveBeenCalled();
 });
 
+// --- 23:00 統一關機 ---
+// 意圖：同一個 tick 內 classifyPendingRejections 每筆要跑一次 runClaude，有積壓時輕易超過 60 秒，
+// 下一個 tick 直接撞 `if (_tickRunning) return`。舊條件是「時與分都剛好吻合」，被跳過的若正是
+// 23:00 那一分鐘，當天就整天不關機、也沒有任何補跑（背景閒置回收已預設關閉，兜底只剩 20 小時
+// 壽命上限）。條件必須是「過了預定時刻且今天還沒關過」。
+// 取值有鑑別力：預定時刻設在「現在之前、且不是現在這一分鐘」——舊條件必定不觸發。
+function pastShutdownTime() {
+  const pad = n => String(n).padStart(2, '0');
+  const now = new Date();
+  const d = new Date(now.getTime() - 5 * 60000);
+  // 往前 5 分鐘若跨回昨天，改用 00:00（今天必定已過，且同樣不會等於現在這一分鐘）
+  if (d.getDate() !== now.getDate()) return '00:00';
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+test('tick 錯過預定關機的那一分鐘 → 下一個 tick 補跑（不是整天不關）', async () => {
+  const nodeCron = require('node-cron');
+  const envAgent = require('../pipeline/env-agent');
+  const prev = process.env.ODOO_ENV_SHUTDOWN_TIME;
+  process.env.ODOO_ENV_SHUTDOWN_TIME = pastShutdownTime();
+  cronModule._resetShutdownStateForTesting();
+  envAgent.nightlyShutdown.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally {
+    cronModule.stopCron();
+    if (prev == null) delete process.env.ODOO_ENV_SHUTDOWN_TIME; else process.env.ODOO_ENV_SHUTDOWN_TIME = prev;
+  }
+  expect(envAgent.nightlyShutdown).toHaveBeenCalled();
+});
+
+// 補跑不能變成「過了 23:00 之後每分鐘都關一次」——每 tick 重關會不斷打斷白天重開的環境。
+test('同一天已補跑過 → 後續 tick 不再重複關機', async () => {
+  const nodeCron = require('node-cron');
+  const envAgent = require('../pipeline/env-agent');
+  const prev = process.env.ODOO_ENV_SHUTDOWN_TIME;
+  process.env.ODOO_ENV_SHUTDOWN_TIME = pastShutdownTime();
+  cronModule._resetShutdownStateForTesting();
+  envAgent.nightlyShutdown.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); await tick(); } finally {
+    cronModule.stopCron();
+    if (prev == null) delete process.env.ODOO_ENV_SHUTDOWN_TIME; else process.env.ODOO_ENV_SHUTDOWN_TIME = prev;
+  }
+  expect(envAgent.nightlyShutdown).toHaveBeenCalledTimes(1);
+});
+
+// 還沒到預定時刻就不該關：補跑的條件是「過了」，不是「無條件關」。
+test('尚未到預定關機時刻 → 不關機', async () => {
+  const nodeCron = require('node-cron');
+  const envAgent = require('../pipeline/env-agent');
+  const prev = process.env.ODOO_ENV_SHUTDOWN_TIME;
+  process.env.ODOO_ENV_SHUTDOWN_TIME = '23:59';
+  cronModule._resetShutdownStateForTesting();
+  envAgent.nightlyShutdown.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally {
+    cronModule.stopCron();
+    if (prev == null) delete process.env.ODOO_ENV_SHUTDOWN_TIME; else process.env.ODOO_ENV_SHUTDOWN_TIME = prev;
+  }
+  const now = new Date();
+  if (now.getHours() * 60 + now.getMinutes() >= 23 * 60 + 59) return; // 23:59 之後跑本測試無鑑別力
+  expect(envAgent.nightlyShutdown).not.toHaveBeenCalled();
+});
+
 // --- 每週工作流程健檢 ---
 // 意圖：健檢原本只有 admin 手動觸發，而上線後從沒被按過一次（run#1 是平台史上第一次執行）。
 // 再好的診斷不跑就沒有價值。節流以 DB 的 started_at 為準而非行程內變數——server 常重啟，

@@ -467,13 +467,18 @@ test('POST reclone：更新完成後 testing 真的被重長到 ai-dev（不是�
 });
 
 // 意圖：這裡不綁任何任務，沒有裁決 UI 可用——撞衝突時必須 abort 讓 ai-dev 還原、不留半殘 merge，
-// 並 fail loud 落 clone_error；下一張任務的 analysis 會撞到同一衝突，屆時循正常管道掛上去裁決。
-test('POST reclone：同步衝突 → abort 還原並落 clone_error，不留半殘 merge', async () => {
+// 並 fail loud 落 clone_error。但**不可**把 repo 標成 error：全平台撈 repo 一律 WHERE
+// clone_status='done'（規則 81），一標 error 這個 repo 就從整個 pipeline 消失，該專案所有任務
+// 立刻撈不到 repo、approve 直接 400。570b8ee 已為隔壁的 blocked 分支修過同一件事，衝突這條路
+// 照舊 throw 到外層 catch，落入完全相同的後果。pull 與 ensureAiBranch 都已成功、merge 也已還原，
+// 這個 clone 本身可用，只是 main→ai-dev 這一步沒做。
+test('POST reclone：同步衝突 → abort 還原、落 clone_error，但 repo 必須留在 pipeline 裡', async () => {
   gitMock.ensureMainBranch.mockResolvedValue('main');
   gitMock.pullBranch.mockResolvedValue(undefined);
   gitMock.ensureAiBranch.mockResolvedValue(undefined);
   gitMock.syncMainIntoAi.mockResolvedValue({ hasConflicts: true, conflictFiles: ['a.py'] });
   gitMock.abortMerge.mockResolvedValue(undefined);
+  gitMock.ensureTestingBranch.mockClear();
 
   const { pid, rid, dir } = await setupReclonableRepo('reclone-sync-conflict');
   const res = await request(app).post(`/api/projects/${pid}/repos/${rid}/reclone`)
@@ -482,12 +487,14 @@ test('POST reclone：同步衝突 → abort 還原並落 clone_error，不留半
 
   const row = await waitReclone(rid);
   expect(gitMock.abortMerge).toHaveBeenCalledWith(dir);
-  expect(row.clone_status).toBe('error');
+  expect(row.clone_status).toBe('done');       // ← error 等於讓 repo 從整個平台消失
   expect(row.clone_error).toContain('a.py');
-  // I-2：clone_status='error' 之後這個 repo 就從 pipeline 消失（全平台撈 repo 一律 WHERE
-  // clone_status='done'），「開一張任務處理」會撈到 0 個 repo＝死路，不得出現在指示裡。
+  // 「開一張任務處理」會撈到 0 個 repo＝死路，不得出現在指示裡。
   expect(row.clone_error).not.toContain('開一張任務');
   expect(row.clone_error).toContain('GitHub');
+  // ensureAiBranch 已把主 clone 切到 ai-dev；不切回常駐分支的話，下次 deploy 會部署到錯的分支
+  // （always.md 規則 9）。blocked 分支已補過這一步，衝突分支原本從 throw 直接跳走。
+  await waitCalledWith(gitMock.ensureTestingBranch, dir);
 });
 
 // ---- ai-dev 基底扶正 ----
@@ -652,6 +659,85 @@ test('POST repos：對方實際落在裸 ai-dev 上 → 即使主分支不同也
     .send({ label: 'main', repo_url: url, base_branch: 'main' }); // 刻意選不同主分支
   expect(res.status).toBe(409);
   expect(res.body.error).toContain('ai-dev');
+});
+
+// 意圖：這是「第二個專案根本加不進同一個 repo」的真正成因。remoteAiBranchName('') 回的正是裸
+// AI_BRANCH，而舊守衛寫成 `theirs === mine || theirs === AI_BRANCH`——只要對方的 remote_ai_branch
+// 與 base_branch 都是 NULL（首次 clone 從不回寫落點，正式資料 7 筆有 5 筆如此），就會被當成
+// 「對方確定坐在裸 ai-dev 上」而無條件 409。更糟的是訊息叫人「先為該專案指定主分支」，但 PUT
+// 明文拒絕事後修改 base_branch——照著做只會撞到第二道拒絕，使用者被鎖死、無路可走。
+// 「不知道對方會落在哪」不等於「一定會撞」：對方沒指定主分支時落點由 clone 時偵測決定，
+// 而本專案明確選了另一條分支，兩者未必相同——擋下來的代價是完全加不了 repo。
+test('POST repos：對方落點未知（兩欄皆 NULL）而本專案已指定主分支 → 放行，不得誤判成必撞', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const url = 'https://example.com/unknown-landing.git';
+  const p1 = await mk('unknown-first');
+  const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url });                 // 不指定主分支＝自動偵測
+  // 首次 clone 尚未（或無法）回寫落點：這正是正式資料裡最常見的形狀
+  await dbModule.query(
+    'UPDATE project_repos SET remote_ai_branch=NULL, base_branch=NULL WHERE id=$1', [r1.body.id]);
+
+  const p2 = await mk('unknown-second');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
+  expect(res.status).toBe(201);
+});
+
+// 但「兩邊都自動偵測」是真的會撞：同一個 repo 偵測出來的主分支必然相同，落點也就相同。
+// 這一支與上一支的唯一差別就是本專案有沒有指定主分支——少了它，上面那支會退化成「無腦放行」。
+test('POST repos：兩邊都沒指定主分支 → 409，且訊息指的是本專案做得到的事', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const url = 'https://example.com/both-auto.git';
+  const p1 = await mk('bothauto-first');
+  const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url });
+  await dbModule.query(
+    'UPDATE project_repos SET remote_ai_branch=NULL, base_branch=NULL WHERE id=$1', [r1.body.id]);
+
+  const p2 = await mk('bothauto-second');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url });
+  expect(res.status).toBe(409);
+  expect(res.body.error).toContain(`#${p1}`);
+  // 舊訊息叫人去改「對方專案」的主分支，那條路被 PUT 擋死；能走的是本次新增時自己指定一條
+  expect(res.body.error).not.toContain('請先為該專案指定主分支');
+  expect(res.body.error).toContain('指定');
+});
+
+// 對方確定坐在裸 ai-dev 上時，「改選其他主分支」是假的出路——ensureAiBranch 一律裸名優先，
+// 選哪條都會落在同一條。訊息必須說出真正走得通的做法，否則使用者照做一次還是 409。
+test('POST repos：對方坐在裸 ai-dev → 409 且不得建議「改選其他主分支」（那條路走不通）', async () => {
+  const mk = async (name) => (await request(app).post('/api/projects')
+    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+  const url = 'https://example.com/bare-advice.git';
+  const p1 = await mk('bare-advice-first');
+  const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
+  await dbModule.query('UPDATE project_repos SET remote_ai_branch=$2 WHERE id=$1', [r1.body.id, 'ai-dev']);
+
+  const p2 = await mk('bare-advice-second');
+  const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
+    .send({ label: 'main', repo_url: url, base_branch: 'main' });
+  expect(res.status).toBe(409);
+  expect(res.body.error).not.toContain('請改選其他主分支');
+  expect(res.body.error).toContain('GitHub');   // 真正走得通的那條路
+});
+
+// 守衛能不能判得準，取決於「落點有沒有被記下來」。舊版只在 updateMainClone（已 clone 的更新
+// 路徑）回寫 remote_ai_branch，首次 clone 一路留 NULL——於是每個新加的 repo 對守衛而言永遠是
+// 「落點未知」，正式資料 7 筆有 5 筆是 NULL 就是這麼來的。
+// 這一條只能以原始碼靜態斷言鎖住：首次 clone 那條路要跑真的 `git clone`（execFile 在模組載入時
+// 就已解構，測試無從攔截），對著假網址一定失敗、根本走不到成功分支。
+test('首次 clone 成功的分支要回寫 remote_ai_branch（不是只有 reclone 才記）', () => {
+  const src = fs.readFileSync(require.resolve('../project-routes.js'), 'utf8');
+  const start = src.indexOf('const notice = await reconcileAiBranch');
+  const end = src.indexOf("[repoId, 'done', notice?.level");
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  expect(src.slice(start, end)).toContain('recordRemoteAiBranch(repoId, destPath)');
 });
 
 test('POST repos：選定的主分支要寫進 DB（之後不能改，寫錯就永久錯）', async () => {

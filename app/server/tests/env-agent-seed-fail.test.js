@@ -117,3 +117,25 @@ test('seed 失敗 → 移除容器（不留下 DB 標 error、容器卻還活著
   expect(dockerEnv.removeContainer.mock.calls.length).toBeGreaterThanOrEqual(2);
   expect(dockerEnv.removeContainer).toHaveBeenLastCalledWith('odoo-test-seedx');
 });
+
+// 意圖：埠是租約制的稀缺資源（池預設 20 個）。建置失敗的環境只把 status 改成 'error' 卻繼續握著
+// 租約，而三條回收路徑（sweepIdleEnvs／nightlyShutdown／port-reclaim 的 findReclaimable）的 WHERE
+// 全是 status='running'——沒有任何機制收得回它。2026-08-07 關掉背景回收後只剩「池滿才徵收」一條
+// 安全閥，而它偏偏徵收不到 error 列：每建置失敗一次，池子就永久少一格，症狀是「沒幾個測試區卻
+// 說併發已滿」，完全不指向建置失敗。
+test('建置失敗 → 當場歸還埠租約（否則 error 列會永久佔住池子的一格）', async () => {
+  dockerEnv.execOdoo.mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'boom' });
+  await envAgent.runEnvSetup(PID);
+  const { rows: [env] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [PID]);
+  expect(env.status).toBe('error');
+  expect(env.port).toBeNull();
+});
+
+// 對照組：成功的環境必須留著租約（否則下一個專案會借到同一個埠、直接撞埠）。
+// 少了這一支，「_failEnv 一律清 port」與「所有路徑都清 port」在測試上無從分辨。
+test('建置成功 → 埠租約保留（回收只針對失敗／閒置，不得誤傷正在跑的）', async () => {
+  await envAgent.runEnvSetup(PID);
+  const { rows: [env] } = await dbModule.query('SELECT status, port FROM odoo_envs WHERE project_id=$1', [PID]);
+  expect(env.status).toBe('running');
+  expect(env.port).toBe(leasedPort);
+});

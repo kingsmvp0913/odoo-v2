@@ -67,9 +67,22 @@ async function envContainerAlive(projectId) {
   return dockerEnv.containerRunning(ctx.container);
 }
 
+// 建置失敗＝這個測試區沒建起來，它借走的埠必須當場歸還。舊版只把 status 改成 'error' 就結束，
+// 而三條回收路徑（sweepIdleEnvs／nightlyShutdown／lib/port-reclaim 的 findReclaimable）的 WHERE
+// 全是 status='running'——error 列因此沒有任何路徑收得回，每建置失敗一次就永久吃掉埠池（預設 20）
+// 的一格；2026-08-07 關掉背景回收後只剩「池滿才徵收」一條安全閥，而它偏偏徵收不到 error 列。
+// 歸還前先移除容器：失敗點若落在「容器起來了但沒就緒」（重啟後未進入監聽／sso 仍 404），容器還綁著
+// 宿主的 host:port，只清 DB 的租約會讓下一個借到同一個埠的專案 docker run 當場撞埠。removeContainer
+// 冪等，對已經移除過的失敗路徑是 no-op。
 async function _failEnv(projectId, msg, log) {
+  try {
+    const ctx = await dockerCtxFor(projectId);
+    if (ctx) await dockerEnv.removeContainer(ctx.container);
+  } catch (e) {
+    console.error(`[env-agent] 專案 ${projectId} 建置失敗後移除容器失敗（仍照常歸還埠）：${e.message}`);
+  }
   await query(
-    "UPDATE odoo_envs SET status='error', error_msg=$2, setup_log=$3, updated_at=NOW() WHERE project_id=$1",
+    "UPDATE odoo_envs SET status='error', port=NULL, error_msg=$2, setup_log=$3, updated_at=NOW() WHERE project_id=$1",
     [projectId, msg, log]
   );
 }
@@ -486,8 +499,21 @@ async function nightlyShutdown() {
 // 0 = 停用該條件。IDLE_TIMEOUT_MIN 預設 0：閒置本身不再構成停機理由。
 // MAX_LIFETIME_HOURS 預設 20：純保底（卡住／資源洩漏），刻意排在 23:00 那一刀之後，
 // 避免早上開的環境在下班前被關掉——一整個工作天連續使用是正常情境，不是異常。
-const IDLE_TIMEOUT_MIN = parseInt(process.env.ENV_IDLE_TIMEOUT_MIN || '0', 10);
-const MAX_LIFETIME_HOURS = parseInt(process.env.ENV_MAX_LIFETIME_HOURS || '20', 10);
+//
+// 設定值一律走 _envInt：裸 parseInt 對打錯字的值（'20h'、'twenty'、'20 hours'）會回 NaN 或截半，
+// 而 `NaN > 0` 是 false → 兩個條件都不進 conds → 整段查詢被跳過、永不回收，且不留任何訊號。
+// 改動前 NaN 會被送進 SQL 當場報錯（fail loud），現在的靜默失效正好違反 Rule 12。
+function _envInt(name, def) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return def;
+  if (!/^\d+$/.test(raw.trim())) {
+    console.error(`[env-agent] ${name}='${raw}' 不是純數字，已退回預設值 ${def}——回收安全閥不得因設定打錯而靜默關閉`);
+    return def;
+  }
+  return parseInt(raw, 10);
+}
+const IDLE_TIMEOUT_MIN = _envInt('ENV_IDLE_TIMEOUT_MIN', 0);
+const MAX_LIFETIME_HOURS = _envInt('ENV_MAX_LIFETIME_HOURS', 20);
 
 async function sweepIdleEnvs(deps = {}) {
   const idleMin = deps.idleMin ?? IDLE_TIMEOUT_MIN;
@@ -575,7 +601,17 @@ async function sweepIdleEnvs(deps = {}) {
   }
   if (slotsReleased) syncNginxMapDebounced().catch(() => {});
 
-  return { updated, stopped, slotsReleased };
+  // 建置失敗的殘骸：_failEnv 現在會當場歸還埠，但那之前留下的 error 列仍握著租約，而三條回收路徑
+  // 的 WHERE 都是 status='running'，誰都碰不到它們。error 沒有容器要停（_failEnv／各失敗點都已
+  // removeContainer），把租約清掉即可。放在最後，與上面「停機」的統計分開回報。
+  const { rows: orphanPorts } = await query(
+    "UPDATE odoo_envs SET port=NULL, updated_at=NOW() WHERE status='error' AND port IS NOT NULL RETURNING project_id"
+  );
+  for (const { project_id: pid } of orphanPorts) {
+    console.log(`[env-sweep] 專案 ${pid} 的測試區建置失敗卻仍佔著埠，已歸還租約`);
+  }
+
+  return { updated, stopped, slotsReleased, orphanPortsReleased: orphanPorts.length };
 }
 
 // 該專案是否有「使用中」的測試環境：建立中／運行中，或容器仍在／已建置完成（.docker-ready 仍在）。
@@ -919,4 +955,4 @@ async function _seedOdooUsersDocker(ctx) {
   return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, restartEnv, ENV_BASE, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, ENV_BASE, dockerCtxFor };

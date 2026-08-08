@@ -123,6 +123,12 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
       if (notice) console.warn(`[clone] repo ${repoId} [${notice.level}] ${notice.message}`);
       // 主 clone 常駐 testing 分支（GitLab Flow 環境分支，測試環境 addons 來源）
       try { await ensureTestingBranch(destPath); } catch { /* 不擋 clone 完成 */ }
+      // 回寫這個 repo 的遠端 AI 分支落點。舊版只在 updateMainClone（已 clone 的「更新」路徑）記，
+      // 首次 clone 一律留 NULL——於是新加的 repo 永遠沒有落點可查，撞名守衛只能拿 base_branch 推算，
+      // 而 base_branch 也沒指定時就完全判不出來（正式資料 7 筆有 5 筆 remote_ai_branch 是 NULL）。
+      // 此刻本地 ai-dev 多半還沒建，但 remoteAiRef 用的是與 ensureAiBranch 相同的優先序（遠端有裸
+      // ai-dev 就沿用它，否則帶主分支後綴），推出來的正是之後真的會落腳的那條。
+      await recordRemoteAiBranch(repoId, destPath);
       await query(
         // 只有 blocked（確定歪掉且救不了）才寫進 clone_error——前端無論 status 都會紅字顯示，
         // 語意是「需要你處理」。fixed 不必寫（沒事要做），warn 也不寫（只是沒查成功，寫了徒增雜訊）。
@@ -232,9 +238,8 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     const sync = await syncMainIntoAi(destPath, gitEnv);
     if (sync.hasConflicts) {
       // 此處不綁任何任務，沒有裁決 UI 可用。abort 還原讓 ai-dev 維持原狀並 fail loud。
-      // 訊息只留「去 GitHub 合併」這條：外層 catch 會把 repo 標成 clone_status='error'，而全平台
-      // 撈 repo 一律 WHERE clone_status='done'——repo 一旦是 error 就從 pipeline 消失，「開一張任務
-      // 處理」保證撈到 0 個 repo、approve 直接 400，那是條死路，不能寫進指示裡。
+      // 訊息只留「去 GitHub 合併」這條：「開一張任務處理」在 repo 出狀況時保證撈到 0 個 repo、
+      // approve 直接 400，那是條死路，不能寫進指示裡。
       await abortMerge(destPath);
       // 分支名一律用實際的 base，不可寫死 'main'：主分支叫別的名字時（origin/HEAD 指向它、或使用者
       // 指定），訊息會把人指到一條根本不相干的分支上——實測某專案的訊息說「main → ai-dev 衝突、
@@ -242,7 +247,18 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
       // 檔名也要截斷：28 個檔名全塞進 clone_error 會把畫面灌爆，看的人反而抓不到重點。
       const shown = sync.conflictFiles.slice(0, 5).join(', ');
       const more = sync.conflictFiles.length > 5 ? ` 等 ${sync.conflictFiles.length} 個檔案` : '';
-      throw new Error(`${base} → ai-dev 同步衝突（${shown}${more}），請先在 GitHub 上把 ai-dev 合併回 ${base} 再更新`);
+      // 與上面的 blocked 分支同一個道理，**不可** throw：外層 catch 會把 repo 標成
+      // clone_status='error'，而全平台撈 repo 一律 WHERE clone_status='done'（規則 81）——repo 一
+      // error 就從 pipeline 消失，該專案所有任務立刻撈不到 repo、approve 直接 400。abortMerge 已把
+      // ai-dev 還原，pull 與 ensureAiBranch 也都成功，這個 clone 本身可用，只是 main→ai-dev 這一步
+      // 沒做；把原因寫進 clone_error（前端無論 status 都會紅字顯示）但維持 done。
+      await query(
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        [repoId, 'done', `${base} → ai-dev 同步衝突（${shown}${more}），請先在 GitHub 上把 ai-dev 合併回 ${base} 再更新`.slice(0, 500)]
+      );
+      // ensureAiBranch 已把主 clone 切到 ai-dev，這裡要切回常駐分支，否則下次 deploy 會部署到錯分支
+      try { await ensureTestingBranch(destPath); } catch { /* 回常駐分支失敗不擋 */ }
+      return;
     }
     // 先回寫 done 再重建 testing，順序不可倒：doRebuild 撈 repo 帶 `WHERE clone_status='done'`，
     // 而 reclone 端點進來就把本 repo 標成 'cloning'——先重建的話它撈到 0 個 repo、直接 return null
@@ -512,6 +528,8 @@ function registerRoutes(app) {
           e.status = 404;   // 交易由 withTransaction 回滾；用狀態碼帶出「不存在」與真錯誤區分
           throw e;
         }
+        // 交易成功才清快取：擺在 throw 之前的話，404／回滾也會把還在的專案從快取抹掉。
+        require('./lib/embedding-index').invalidate({ projectId: Number(req.params.id) });
         return ids;
       });
 
@@ -598,7 +616,10 @@ function registerRoutes(app) {
       // 才能連 feature/x 與 feature-x 這種正規化後才撞的邊角一起擋掉。
       {
         const { remoteAiBranchName, AI_BRANCH } = require('./pipeline/git');
-        const mine = remoteAiBranchName(base_branch || '');
+        // 「落點未知」必須用 null 表示，不能拿 remoteAiBranchName('') 充數——它回的正是裸
+        // AI_BRANCH，於是「對方 remote_ai_branch 與 base_branch 都還是 NULL」會被當成
+        // 「對方確定坐在裸 ai-dev 上」而無條件 409，第二個用同一 repo 的專案根本加不進來。
+        const mine = base_branch ? remoteAiBranchName(base_branch) : null;
         // repo_url 用正規化後的值比對：差一個 `.git`、一條尾斜線、或 https 與 git@ 寫法不同，
         // 指的都是同一個遠端，但字串完全相等比對會全部放行。
         const { rows: siblings } = await query(
@@ -607,22 +628,30 @@ function registerRoutes(app) {
         );
         const mineUrl = normalizeRepoUrl(repo_url);
         const sameRepo = siblings.filter(s => normalizeRepoUrl(s.repo_url) === mineUrl);
-        // 對方已經記下實際落點就比對它，否則才退回用 base_branch 推算（尚未 clone 完的新列）。
-        // 已經坐在裸 ai-dev 上的既有 repo 一律撞——那條分支不帶主分支後綴，誰進來都會共用它。
-        const clash = sameRepo.find(s => {
-          const theirs = s.remote_ai_branch || remoteAiBranchName(s.base_branch || '');
-          return theirs === mine || theirs === AI_BRANCH;
-        });
+        // 只擋「已經確定會共用同一條分支」的三種形狀，其餘（落點還不知道）一律放行——擋一個
+        // 未必會發生的撞名，代價是使用者完全加不了 repo，而且沒有任何補救入口。
+        const clash = sameRepo.map(s => {
+          // 對方已回寫實際落點就以它為準；否則才用 base_branch 推算（clone 尚未完成的新列）。
+          const theirs = s.remote_ai_branch || (s.base_branch ? remoteAiBranchName(s.base_branch) : null);
+          // (1) 對方確定坐在裸 ai-dev 上（只認回寫過的實際落點）：遠端只要有 ai-dev，
+          //     ensureAiBranch 一律「裸名優先」，本專案選哪個主分支都會落在同一條。
+          if (s.remote_ai_branch === AI_BRANCH) return { s, kind: 'bare', theirs: AI_BRANCH };
+          // (2) 兩邊都沒指定主分支＝都靠自動偵測，而這是同一個 repo，偵測結果必然相同。
+          if (!base_branch && !s.base_branch) return { s, kind: 'auto', theirs };
+          // (3) 兩邊落點都算得出來且相同。
+          if (mine && theirs && mine === theirs) return { s, kind: 'same', theirs };
+          return null;
+        }).find(Boolean);
         if (clash) {
-          const theirs = clash.remote_ai_branch || remoteAiBranchName(clash.base_branch || '');
-          // 對方是「還沒記下落點的自動偵測」時，我們並不知道它最後會落在哪，只知道有機會撞上。
-          // 講白比假裝確定好：使用者看得懂該去把對方的主分支指定清楚，而不是以為自己選錯分支。
-          const unknown = !clash.remote_ai_branch && !clash.base_branch;
-          return res.status(409).json({
-            error: unknown
-              ? `專案 #${clash.project_id} 也在用這個 repo，且它的主分支是自動偵測、尚未確定會落在哪條遠端 AI 分支上，可能與本專案共用同一條而互相覆蓋。請先為該專案指定主分支（或等它 clone 完成）後再試。`
-              : `專案 #${clash.project_id} 已經以「${clash.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${theirs}）而互相覆蓋。請改選其他主分支。`,
-          });
+          const { s, kind, theirs } = clash;
+          // 訊息要指一條真的走得通的路。舊版對「落點未知」叫人「先為該專案指定主分支」，但
+          // PUT 明文拒絕事後修改 base_branch（見下方端點），使用者照做只會撞到第二道拒絕。
+          const MSG = {
+            bare: `專案 #${s.project_id} 已經把這個 repo 的 AI 產出放在裸的 ai-dev 分支上。遠端只要存在 ai-dev，任何專案都會優先沿用它，改選主分支也躲不開，兩邊會互相覆蓋。可行的做法是先在 GitHub 上把 ai-dev 合併回主分支並刪除遠端 ai-dev，兩邊各自重新加入這個 repo，之後才會長出帶主分支後綴的 AI 分支。`,
+            auto: `專案 #${s.project_id} 也在用這個 repo，而兩邊都沒有指定主分支——同一個 repo 自動偵測出來的主分支必然相同，會落在同一條遠端 AI 分支（${theirs || `${AI_BRANCH}-<偵測到的主分支>`}）而互相覆蓋。請在本次新增時明確指定一個與它不同的主分支（主分支只有新增這一次可以選，之後不能修改）。`,
+            same: `專案 #${s.project_id} 已經以「${s.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${theirs}）而互相覆蓋。請改選其他主分支。`,
+          };
+          return res.status(409).json({ error: MSG[kind] });
         }
       }
 

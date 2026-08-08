@@ -765,6 +765,91 @@ test('asset 失敗 → retry_feedback 附上容器 log 尾端的真 traceback', 
   expect(dockerEnv.containerLogs).toHaveBeenCalledWith('odoo_test_proj', expect.objectContaining({ tail: expect.any(Number) }));
 });
 
+// --- asset 失敗的完整內容必須落檔 ---
+// 意圖：升級失敗有 saveDeployLog 落 data/logs（呼叫點四處），asset 失敗一次都沒呼叫過。於是那段
+// traceback（實測 1177 字）的三條退路全不成立：blocker_content 只切 500 字、且只有觸頂那一輪才寫；
+// retry_feedback 下一輪即被覆寫而且前端零渲染；時間軸指的「📄 查看 log」依 CLAUDE.md §6 是
+// 「每次啟動清空、只留當次執行」的檔案——重啟過就沒了。等於完整內容實質遺失。
+test('asset 失敗 → traceback 落檔到 data/logs，時間軸指向那個檔（不是會被清空的 runtime log）', async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const dockerEnv = require('../lib/docker-env');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aidev-assetlog-'));
+  const prev = process.env.DEPLOY_LOG_DIR;
+  process.env.DEPLOY_LOG_DIR = dir;
+  try {
+    dockerEnv.containerExists.mockResolvedValue(true);
+    dockerEnv.containerLogs.mockResolvedValue('ERROR odoo.addons.base.models.qweb TRACE-MARKER-9527 cannot be located in parent view');
+    await setEnvRunning();
+    envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+    envAgent.assetSmokeCheck.mockResolvedValue({ ok: false, assetError: true, reason: 'web.assets_web.min.js → 500' });
+    const id = await makeTask(0);
+    await runDeployTesting(id, userId);
+
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.log'));
+    expect(files).toHaveLength(1);
+    const body = fs.readFileSync(path.join(dir, files[0]), 'utf8');
+    expect(body).toContain('TRACE-MARKER-9527');           // 完整 traceback 真的留在磁碟上
+    expect(body).toContain('web.assets_web.min.js → 500');
+
+    // 時間軸那句「去哪看」必須指向真的找得到的位置
+    const { rows: logs } = await dbModule.query(
+      "SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' ORDER BY id DESC LIMIT 1", [id]);
+    expect(logs[0].content).toContain(files[0]);
+    expect(logs[0].content).not.toContain('查看 log');      // 那個檔每次啟動就被清空
+  } finally {
+    if (prev == null) delete process.env.DEPLOY_LOG_DIR; else process.env.DEPLOY_LOG_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 觸頂那一輪 blocker_content 只留 500 字，必然切在 traceback 中間——檔案路徑要在截斷之後補回去，
+// 否則人工看到的停下原因裡沒有任何線索能通往完整內容。
+test('asset 失敗觸頂 → blocker_content 截斷後仍保住 log 檔路徑', async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const dockerEnv = require('../lib/docker-env');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aidev-assetlog2-'));
+  const prev = process.env.DEPLOY_LOG_DIR;
+  process.env.DEPLOY_LOG_DIR = dir;
+  try {
+    dockerEnv.containerExists.mockResolvedValue(true);
+    dockerEnv.containerLogs.mockResolvedValue('X'.repeat(1200)); // 比 500 字的截斷長得多
+    await setEnvRunning();
+    envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+    envAgent.assetSmokeCheck.mockResolvedValue({ ok: false, assetError: true, reason: 'bundle → 500' });
+    const id = await makeTask(2); // 本次為第 3 次＝觸頂
+    await runDeployTesting(id, userId);
+
+    const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('stopped');
+    expect(t.blocker_content).toContain(dir);
+  } finally {
+    if (prev == null) delete process.env.DEPLOY_LOG_DIR; else process.env.DEPLOY_LOG_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- 升級失敗也要附 runtime log，分診才追得下去 ---
+// 意圖：c8287fe 把 {{runtime_log_path}} 從分診 prompt 拿掉、改成告訴 agent「證據已附在上面」，
+// 而分診讀得到的只有 blocker_content（reject-triage 的 stop_context 就是它）。升級失敗是最常見的
+// 入口，卻從頭到尾沒附過任何 log（readAssetTraceback 原本只在 asset 分支被呼叫）——agent 依新
+// prompt 判定「這次沒有可用的 runtime log」就不再追。
+test('升級失敗觸頂 → blocker_content 附上容器 runtime log 尾端（分診的唯一證據來源）', async () => {
+  const dockerEnv = require('../lib/docker-env');
+  dockerEnv.containerExists.mockResolvedValue(true);
+  dockerEnv.containerLogs.mockResolvedValue('CRITICAL test_proj odoo.modules RUNTIME-EVIDENCE-4711');
+  await setEnvRunning();
+  envAgent.upgradeModules.mockRejectedValue(new Error(
+    'Traceback\nodoo.tools.convert.ParseError: External ID not found: website_sale_wishlist.product_wishlist'
+  ));
+  const id = await makeTask(2); // 本次為第 3 次＝觸頂 stopped，blocker_content 即分診的 stop_context
+  await runDeployTesting(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('External ID not found');  // 原本就有的摘要不能被擠掉
+  expect(t.blocker_content).toContain('RUNTIME-EVIDENCE-4711');  // runtime log 真的附上了
+});
+
 // 容器不在／log 讀不到不得讓部署流程本身出錯——原本的失敗訊息照樣要落地。
 test('asset 失敗但容器不存在 → 照常落 retry_feedback，不拋錯', async () => {
   const dockerEnv = require('../lib/docker-env');

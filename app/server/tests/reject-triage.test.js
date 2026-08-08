@@ -453,6 +453,20 @@ test('待吸收留言必須進分診 prompt（分辨追加需求與流程指令�
   expect(runClaude.mock.calls[0][0]).toContain('（測試：核心來源守則）');
 });
 
+// 意圖：c8287fe 把 {{runtime_log_path}} 從分診 prompt 拿掉、改成告訴 agent「證據已附在上面」，
+// 於是 blocker_content 變成分診唯一的證據通道——deploy 那邊願意附多少 traceback，分診就只看得到
+// 多少。這支從消費端釘住那條通道：blocker_content 必須原封不動進 stop_context。少了它，
+// 生產端（deploy-testing 附 runtime log）與消費端的連結沒有任何測試覆蓋，其中一邊被改掉都不會紅。
+test('blocker_content 原封不動進分診 prompt（拿掉 runtime_log_path 後唯一的證據通道）', async () => {
+  claudeReturns({ decision: 'resume', summary: 's' });
+  const id = await makeTask({
+    rejectCount: 1, status: 'resolve_triage', resume_status: 'deploy_testing',
+    blocker: '最後錯誤：ParseError\n\n【測試環境 runtime log 尾端】\nRUNTIME-EVIDENCE-4711',
+  });
+  await runRejectTriage(id, userId);
+  expect(runClaude.mock.calls[0][0]).toContain('RUNTIME-EVIDENCE-4711');
+});
+
 // 反向守衛：clarify 是「還在問、尚未消費完」，此時銷帳會讓使用者答完後的真需求永遠不被吸收。
 test('clarify：尚未消費完 → 留言不得銷帳（否則答完後真需求會遺失）', async () => {
   claudeReturns({ decision: 'clarify', questions: ['是規格要改，還是程式寫錯？'], summary: 's' });
