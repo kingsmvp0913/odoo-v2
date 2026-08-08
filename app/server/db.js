@@ -763,7 +763,10 @@ async function migrate() {
   // started_at 上線前就在跑的環境沒有本次啟動時刻，留 NULL 會讓壽命判定 fallback 回 created_at
   // （＝首次建環境的時間）而在下一輪 sweep 被誤收。updated_at 在轉 running 時剛被設過，是現有
   // 資料裡最接近啟動時刻的值。idempotent：只補 NULL，跑幾次都一樣。
-  await query("UPDATE odoo_envs SET started_at=updated_at WHERE status='running' AND started_at IS NULL").catch(() => {});
+  // 靜默吞掉等於「壽命判定會誤收環境」這個病因永遠查不出來（沒補到值與沒跑過長得一模一樣）；
+  // 但它只是補值，失敗不該擋住 server 起動，故比照上面的 vpn-migrate 只印不 throw。
+  await query("UPDATE odoo_envs SET started_at=updated_at WHERE status='running' AND started_at IS NULL")
+    .catch(e => console.error('[migrate] odoo_envs.started_at 補值失敗：', e.message));
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
@@ -820,6 +823,20 @@ async function migrate() {
   // wiki_pages indexes
   await query('CREATE INDEX IF NOT EXISTS idx_wiki_parent ON wiki_pages (parent_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_wiki_project ON wiki_pages (project_id)').catch(() => {});
+
+  // embedding_chunks：三個 FK 全帶 CASCADE，沒有索引的話刪一頁 wiki／一張任務／一個專案都要
+  // 全表掃描這張表（它是全庫最會長的表之一：每頁數塊、每張任務數塊）。增量索引的先刪後插、
+  // isUnchanged 的比對也都以來源欄位為鍵；載入快取則一律 WHERE model_id=$1。
+  await query('CREATE INDEX IF NOT EXISTS idx_embchunk_wiki    ON embedding_chunks (wiki_page_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_embchunk_task    ON embedding_chunks (task_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_embchunk_project ON embedding_chunks (project_id, model_id)').catch(() => {});
+  // 同一來源的同一個 chunk_index 只能有一列。必須是 partial：兩個來源欄位必有一個是 NULL，
+  // 而 UNIQUE 對含 NULL 的列不去重（PG 標準行為），不加 WHERE 的話這個約束等於不存在——
+  // 那正是「並行 enqueue 同一頁 → 整頁的塊重複兩份」擋不住的原因（交易只擋得住半套，擋不住重複）。
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS embedding_chunks_wiki_uq
+               ON embedding_chunks (wiki_page_id, chunk_index) WHERE wiki_page_id IS NOT NULL`).catch(() => {});
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS embedding_chunks_task_uq
+               ON embedding_chunks (task_id, chunk_index) WHERE task_id IS NOT NULL`).catch(() => {});
 
   // One-time data migration: copy URL+DB from first admin user's odoo_settings into teams_settings
   try {

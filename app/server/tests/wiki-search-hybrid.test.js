@@ -51,7 +51,10 @@ beforeAll(async () => {
   require('../wiki-routes').registerRoutes(a);
   app = a;
 });
-afterAll(() => { emb._resetForTesting(); idx._resetForTesting(); dbModule._setPoolForTesting(null); });
+afterAll(() => {
+  emb._resetForTesting(); idx._resetForTesting(); dbModule._setPoolForTesting(null);
+  delete process.env.WIKI_SEMANTIC_MIN_SCORE;
+});
 
 const search = (q) => request(app).get('/ai/wiki/search').query({ project: 'hungjou', q }).set(AI_TOKEN_HEADER, aiToken());
 
@@ -78,6 +81,9 @@ describe('索引未就緒', () => {
 
 describe('語意腿就緒', () => {
   beforeAll(async () => {
+    // 這個假座標系的分數落點與 e5 不同（詞袋的弱相關約 0.5，e5 的噪音就有 0.80），
+    // 所以門檻在這裡另外指定；驗的是「門檻怎麼作用」，不是那個數字本身。
+    process.env.WIKI_SEMANTIC_MIN_SCORE = '0.3';
     emb._setEmbedderForTesting(texts => texts.map(t => bagOfWords(t)));
     idx._resetForTesting();
     await idx.indexWikiPage((await dbModule.query(
@@ -110,6 +116,29 @@ describe('語意腿就緒', () => {
     const res = await search('庫存 過帳 維修');
     const slugs = res.body.hits.map(h => h.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  // 沒有下限的話，searchProject 只排序取前 30、不看分數，於是「索引非空」就等於「必定有 hits」：
+  // 全目錄回退與 wiki_search_misses 這兩條訊號同時失效，agent 把語意噪音當成命中的頁去讀，
+  // 而「其實 wiki 沒寫這件事」從此沒有任何人看得到。實測 e5-small 連毫不相關的內容都有 0.80 分。
+  describe('分數低於門檻不算命中', () => {
+    // 'zzz' 讓 LIKE 一筆都不中，但詞袋仍算得出 0.5 上下的分數——正是「有分數但不夠好」那一類
+    const q = '維修zzz';
+    afterEach(() => { process.env.WIKI_SEMANTIC_MIN_SCORE = '0.3'; });
+
+    test('分數過得了門檻 → 照常命中，不回退', async () => {
+      const res = await search(q);
+      expect(res.body.hits.map(h => h.slug)).toContain('ts-stock');
+      expect(res.body.fallback).toBeUndefined();
+    });
+
+    test('分數全部低於門檻 → 視同搜不到：回退全目錄並記一筆 miss', async () => {
+      process.env.WIKI_SEMANTIC_MIN_SCORE = '0.99';
+      const res = await search(q);
+      expect(res.body.fallback).toBe('all_pages');
+      const { rows } = await dbModule.query('SELECT q FROM wiki_search_misses WHERE q=$1', [q]);
+      expect(rows.length).toBeGreaterThan(0);       // 沒記錄的話，事後分不出「檢索不好」還是「wiki 沒寫」
+    });
   });
 
   // analysis_yaml 的塊與 wiki 的塊住在同一個 bucket。不分 kind 的話，任務塊會佔掉名次，

@@ -32,17 +32,27 @@ const queue = [];
 let stub = null;            // 測試用的假 embedder
 
 function spawnWorker() {
-  worker = new Worker(path.join(__dirname, 'embedding-worker.js'), {
+  const w = new Worker(path.join(__dirname, 'embedding-worker.js'), {
     workerData: { modelId: MODEL_ID, modelsDir: modelsDir() },
   });
-  worker.on('message', onMessage);
+  worker = w;
+  w.on('message', onMessage);
   // error 與 exit 都可能發生（拋例外 vs 直接死掉），兩邊都要收，否則佇列會永遠停在那裡。
-  worker.on('error', (err) => teardown(err.message));
-  worker.on('exit', (code) => { if (code !== 0) teardown(`worker 結束，exit code ${code}`); });
-  return worker;
+  // 但同一次崩潰兩個事件都會發（Node 上 worker 拋未捕捉例外必定是 error 後接 exit:1），只能算一次：
+  // 算兩次會讓停用門檻實際變成 2 次；而且第一個事件已經起了替補 worker，第二個事件會把替補
+  // 誤判成失敗砍掉，留下一條沒人收訊息的孤兒 thread。
+  let down = false;
+  const fail = (reason) => { if (down) return; down = true; teardown(reason); };
+  w.on('error', (err) => fail(err.message));
+  w.on('exit', (code) => { if (code !== 0) fail(`worker 結束，exit code ${code}`); });
+  return w;
 }
 
 // worker 死掉時：手上與排隊中的工作一律標記失敗，不無聲吞掉——呼叫端才知道要退回純 LIKE。
+// 標記完就地重新預熱：ready 只有 start() 設得成 true，而 start() 全 server 只在啟動時呼叫一次，
+// 不自己復原的話，一次推論例外就等於把向量腿靜默關到下次重啟 server（isReady() 從此恆為 false，
+// 而 failures 只有 1、離停用門檻還很遠，管理頁看起來也不像壞掉）。
+// 不會變成無限重啟：failures 只在成功時歸零，連續失敗達 MAX_CONSECUTIVE_FAILURES 就停用。
 function teardown(reason) {
   lastError = reason;
   ready = false;
@@ -52,6 +62,7 @@ function teardown(reason) {
   const err = new Error(`embedding worker 失效：${reason}`);
   if (current) { current.reject(err); current = null; }
   while (queue.length) queue.shift().reject(err);
+  if (!disabled) start();   // 背景重載模型（實測約 11 秒），期間 isReady() 為 false，查詢照常退回純 LIKE
 }
 
 function onMessage(msg) {

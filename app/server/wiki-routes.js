@@ -3,6 +3,16 @@ const { verifyToken } = require('./auth');
 const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
 const { aiEndpointGuard } = require('./lib/ai-token');
 const { resolveProjectId } = require('./lib/project-ref');
+const { enqueue: enqueueEmbedding, invalidate: invalidateEmbedding } = require('./lib/embedding-index');
+
+// 語意腿的相似度下限。低於它的結果一律不算命中——不設下限的話 searchProject 只做排序取前 30，
+// 索引非空就必定回傳非空，於是「搜不到」這件事再也不會發生：全目錄回退與 wiki_search_misses
+// 兩條訊號同時失效，agent 把語意噪音當成命中的頁去讀。
+// 0.82：e5-small 的 cosine 分佈很窄，實測（2026-08-08，28 頁真實 wiki）毫不相關的內容也有 0.80，
+// 真正該中的落在 0.85–0.90。取 0.82 是「壓掉純噪音、留住弱相關」的落點。權宜值，故可用
+// WIKI_SEMANTIC_MIN_SCORE 覆寫並在執行期讀取（不在載入時 snapshot，比照 lib/embedding 的 modelsDir）。
+const SEMANTIC_MIN_SCORE = 0.82;
+const semanticMinScore = () => Number(process.env.WIKI_SEMANTIC_MIN_SCORE ?? SEMANTIC_MIN_SCORE);
 
 function registerRoutes(app) {
   const base = '/api/projects/:projectId/wiki';
@@ -21,6 +31,14 @@ function registerRoutes(app) {
 
   app.post(`${base}/init`, verifyToken, async (req, res) => {
     try {
+      // 已經有 wiki 就擋在這裡。initProjectWiki 走 _upsertNode 的 ON CONFLICT DO UPDATE，
+      // 誤觸一次就用骨架把累積下來的內容整個覆寫掉（排障結論、人工補的段落全沒，且無備份）。
+      // 這是防禦縱深：前端不該讓使用者按到，但這條路徑的破壞是不可逆的，值得在端點再擋一次。
+      const { rows: [{ n }] } = await query(
+        'SELECT COUNT(*) AS n FROM wiki_pages WHERE project_id=$1', [req.params.projectId]);
+      if (Number(n) > 0) {
+        return res.status(409).json({ error: '本專案已有 wiki，重新建立會覆蓋既有內容；如需更新請用單頁的「⟳ 更新」' });
+      }
       const { slug } = await initProjectWiki(req.params.projectId, req.userId);
       res.json({ ok: true, slug });
     } catch (err) {
@@ -51,6 +69,10 @@ function registerRoutes(app) {
         `INSERT INTO wiki_pages (project_id, slug, title, content) VALUES ($1, $2, $3, $4) RETURNING *`,
         [req.params.projectId, slug, title, content || '']
       );
+      // 人工在平台 UI 上新增／編輯的頁也要進語意索引：九個 enqueue 觸發點全在 pipeline 內，
+      // 這兩條人工路徑漏掛的話，手寫的內容只有等夜間 sweep 才搜得到（fire-and-forget，
+      // 比照 pipeline 的寫法——索引失敗不該讓存檔失敗）。
+      enqueueEmbedding({ wikiPageId: rows[0].id });
       res.status(201).json(rows[0]);
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'slug already exists in this project' });
@@ -92,6 +114,7 @@ function registerRoutes(app) {
         [req.params.projectId, req.params.slug, title || null, content ?? null]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      enqueueEmbedding({ wikiPageId: rows[0].id });
       res.json(rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -109,6 +132,9 @@ function registerRoutes(app) {
         [req.params.projectId, req.params.slug]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      // DB 那側靠 FK CASCADE 清乾淨，但記憶體快取沒有任何移除路徑——不清的話這頁的塊還在
+      // 參與排序、佔著語意腿的名額，而回頭查頁已經查無（見 invalidate 的註解）。
+      invalidateEmbedding({ wikiPageId: rows[0].id });
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -180,7 +206,9 @@ function registerRoutes(app) {
       const idx = require('./lib/embedding-index');
       if (!emb.isReady() || !idx.isCacheLoaded()) return [];
       const qv = await emb.embedQuery(q);
-      const hits = idx.searchProject(projectId, qv, { limit: 30, kind: 'wiki' });
+      const min = semanticMinScore();
+      const hits = idx.searchProject(projectId, qv, { limit: 30, kind: 'wiki' })
+        .filter(h => h.score >= min);
       if (!hits.length) return [];
       // 動態 IN 而非 `id = ANY($2::int[])`：pg-mem 對 SERIAL 主鍵跑 ANY(陣列) 永遠查不到列，
       // 測試會全綠但這條腿是死的（見 .claude/rules/testing.md 第 12 條與本檔 /ai/wiki/page 的註解）。

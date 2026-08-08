@@ -34,17 +34,59 @@ test('worker 崩潰時，手上與排隊中的工作全部標記失敗（不無�
   await expect(queued).rejects.toThrow(/模型載入失敗/);  // 排隊中的也要收到，否則搜尋永遠掛住
 });
 
-test('崩潰後自動重啟：下一次呼叫會起一個新的 worker', async () => {
-  const first = emb.embedQuery('甲');
+// 每一批回一個固定向量。自我復原之後 worker 手上會多一批 warmup，逐批回覆才不會把 warmup 的
+// 回應算到後面那批頭上（回覆會觸發下一批送出，故迴圈條件每輪重新取 length）。
+const respondAll = (w) => {
+  for (let i = 0; i < w.sent.length; i++) {
+    w.emit('message', { id: w.sent[i].id, ok: true, n: 1, dim: 3, flat: new Float32Array([1, 0, 0]) });
+  }
+};
+
+// 崩潰後必須自己站起來。isReady() 是搜尋端唯一的閘門（wiki-routes 的 semanticLeg 先問它才呼叫
+// embedQuery），所以「還能算向量」不算復原——ready 回不到 true，向量腿就是關著的。
+// 這條刻意不直接呼叫 embedQuery：那樣會繞過閘門，壞掉的實作也照樣綠。
+test('崩潰後自我復原：重新起 worker 並讓 isReady 回到 true', async () => {
+  const warm = emb.start();
+  await flush();
+  respondAll(Worker.instances[0]);
+  await expect(warm).resolves.toBe(true);
+  expect(emb.isReady()).toBe(true);
+
+  const inFlight = emb.embedQuery('甲');
   await flush();
   Worker.instances[0].emit('exit', 1);
-  await expect(first).rejects.toThrow();
+  await expect(inFlight).rejects.toThrow();
+  expect(emb.isReady()).toBe(false);                 // 崩潰當下確實該關掉，但不能關到重啟 server 為止
 
-  const second = emb.embedQuery('乙');
   await flush();
-  expect(Worker.instances).toHaveLength(2);
-  expect(Worker.instances[1].sent[0].texts).toEqual(['query: 乙']);
-  second.catch(() => {});                            // 這一筆不會有人回應它，測完即棄
+  expect(Worker.instances).toHaveLength(2);          // 不等下一次呼叫，當場重新預熱
+  respondAll(Worker.instances[1]);
+  await flush();
+  expect(emb.isReady()).toBe(true);                  // 模型載回來了，向量腿要跟著回來
+});
+
+// Node 上 worker 拋未捕捉例外會先發 'error'、緊接著再發 'exit:1'，是同一次崩潰的兩個事件。
+// 算兩次的後果有二：3 次的停用門檻實際變成 2 次；以及第一個事件已經起了替補 worker，
+// 第二個事件會把替補當成失敗砍掉——佇列被清空、替補 thread 沒人收訊息，變成孤兒。
+test('同一次崩潰只計一次失敗（error 與 exit 都會發）', async () => {
+  for (let i = 0; i < 2; i++) {
+    const p = emb.embedQuery(`第 ${i} 次`);
+    await flush();
+    const w = Worker.instances[Worker.instances.length - 1];
+    w.emit('error', new Error('boom'));
+    w.emit('exit', 1);
+    await expect(p).rejects.toThrow();
+    await flush();
+  }
+  expect(emb.getStatus().disabled).toBe(false);      // 只崩了兩次，門檻是 3
+  expect(Worker.instances).toHaveLength(3);          // 兩次崩潰各補一個，不是四個
+
+  // 替補沒被前一個 worker 的 exit 帶走：工作交得出去也收得回來（被誤判失效的話這筆會被拒絕）
+  const after = emb.embedQuery('復原後');
+  await flush();
+  respondAll(Worker.instances[2]);                   // 先回覆自我復原的 warmup，佇列才會往下送
+  expect(Array.from(await after)).toEqual([1, 0, 0]);
+  expect(Worker.instances).toHaveLength(3);
 });
 
 // 模型下載不到、記憶體不足這類問題重啟一百次也一樣。與其無限重啟拖垮 server，不如降級：
@@ -73,9 +115,7 @@ test('中間成功過就重置失敗計數', async () => {
 
   const good = emb.embedQuery('好的');
   await flush();
-  const w = Worker.instances[1];
-  const vec = new Float32Array([1, 0, 0]);
-  w.emit('message', { id: w.sent[0].id, ok: true, n: 1, dim: 3, flat: vec });
+  respondAll(Worker.instances[1]);                   // 這個 worker 手上還有自我復原的 warmup，逐批回覆
   expect(Array.from(await good)).toEqual([1, 0, 0]);
 
   // 再失敗兩次仍不該停用（計數已歸零，上限是 3）
