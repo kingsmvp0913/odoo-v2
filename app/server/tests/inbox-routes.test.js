@@ -150,3 +150,69 @@ test('POST /api/inbox/:id/snooze → 別人的項目回 404', async () => {
     .set('Authorization', `Bearer ${token}`).send({ until: new Date(Date.now() + 1000).toISOString() });
   expect(res.status).toBe(404);
 });
+
+// id 沒收斂就直接進 SQL：Postgres 拋型別錯 → catch 包成 500 並把 DB 的英文錯誤原樣回前端。
+// 使用者看到看不懂的訊息，內部細節也跟著外流。
+describe.each(['read', 'snooze'])('POST /api/inbox/:id/%s → 非數字 id', (action) => {
+  test('回 404 而非 500，且不得回傳 DB 錯誤訊息', async () => {
+    const res = await request(app).post(`/api/inbox/abc/${action}`)
+      .set('Authorization', `Bearer ${token}`).send({ until: new Date(Date.now() + 1000).toISOString() });
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).not.toMatch(/invalid input syntax|integer/i);
+  });
+});
+
+// 意圖：'action' 是「現在輪到你動手」的召喚，任務一離開等人的狀態就過期了。使用者直接在任務列表
+// 把 review_pending 審掉（不經收件匣）是正常工作流，而全 repo 對 user_inbox 沒有任何 DELETE、
+// 也沒有 TTL → 沒有這條消解，那筆事件永遠未讀，未讀數只增不減。
+describe('任務離開「等人」狀態後，action 事件自動消解', () => {
+  let taskId;
+  beforeAll(async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'IB-4','odoo','審核中的任務','review_pending') RETURNING id",
+      [myUserId]
+    );
+    taskId = t.id;
+  });
+
+  test('還停在等人的狀態時，事件留在未讀清單（沒有這條，下面那條可能是誤綠）', async () => {
+    await mkInbox(myUserId, taskId, 'action', { status: 'review_pending' });
+    const res = await request(app).get('/api/inbox').set('Authorization', `Bearer ${token}`);
+    expect(res.body.filter((r) => r.task_id === taskId)).toHaveLength(1);
+  });
+
+  test('任務被審掉（→ done）之後，那筆 action 不再是未讀', async () => {
+    const before = await request(app).get('/api/inbox/unread-count').set('Authorization', `Bearer ${token}`);
+    await dbModule.query("UPDATE tasks SET status='done' WHERE id=$1", [taskId]);
+
+    const res = await request(app).get('/api/inbox').set('Authorization', `Bearer ${token}`);
+    expect(res.body.filter((r) => r.task_id === taskId)).toHaveLength(0);
+
+    const after = await request(app).get('/api/inbox/unread-count').set('Authorization', `Bearer ${token}`);
+    expect(after.body.count).toBe(before.body.count - 1);   // 未讀數要真的減下來，不只是清單不顯示
+  });
+
+  test('bounce 不受影響：它是「發生過什麼」的紀錄，不因狀態改變而失效', async () => {
+    const id = await mkInbox(myUserId, taskId, 'bounce', { status: 'coding_running' });
+    const res = await request(app).get('/api/inbox').set('Authorization', `Bearer ${token}`);
+    expect(res.body.map((r) => r.id)).toContain(id);
+  });
+});
+
+// badge 原本是「取回清單算 length」，而清單有 LIMIT 100 → 未讀破百後數字靜默封頂。
+test('GET /api/inbox/unread-count → 未讀破百不被 LIMIT 100 封頂', async () => {
+  const before = await request(app).get('/api/inbox/unread-count').set('Authorization', `Bearer ${token}`);
+  for (let i = 0; i < 105; i++) await mkInbox(myUserId, myTaskId, 'bounce');
+
+  const list = await request(app).get('/api/inbox').set('Authorization', `Bearer ${token}`);
+  expect(list.body).toHaveLength(100);          // 清單本來就封頂，所以不能拿它算數量
+
+  const after = await request(app).get('/api/inbox/unread-count').set('Authorization', `Bearer ${token}`);
+  expect(after.body.count).toBe(before.body.count + 105);
+  expect(after.body.count).toBeGreaterThan(100);
+});
+
+test('GET /api/inbox/unread-count → 401 without token', async () => {
+  const res = await request(app).get('/api/inbox/unread-count');
+  expect(res.status).toBe(401);
+});

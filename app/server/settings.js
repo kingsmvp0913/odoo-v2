@@ -31,6 +31,10 @@ function odooRpc(baseUrl, path, body) {
 }
 
 const SAVED_VIEWS_MAX = 10;   // JSONB 無限膨脹的上限；前端也擋，但真正的防線在這裡
+// 筆數有上限、單筆大小沒有＝上限形同虛設：odoo_settings 每次 GET /api/settings 與 auth/me 都整包
+// 回前端（auth/me 每次導覽都打），單筆塞幾 MB 就足以拖垮每一個請求。前端的 maxlength 只是提示。
+const VIEW_NAME_MAX = 20;        // 與 TaskList 具名輸入框的 maxlength 同值
+const VIEW_FILTERS_MAX = 500;    // filters 序列化後的字元數；8 個篩選欄位遠遠用不到
 
 function registerRoutes(app) {
   app.get('/api/settings', verifyToken, async (req, res) => {
@@ -100,6 +104,12 @@ function registerRoutes(app) {
         filters: (v && typeof v.filters === 'object' && v.filters) || {}
       }));
       if (clean.some((v) => !v.name)) return res.status(400).json({ error: '每組 view 都需要名稱' });
+      if (clean.some((v) => v.name.length > VIEW_NAME_MAX)) {
+        return res.status(400).json({ error: `名稱最多 ${VIEW_NAME_MAX} 個字` });
+      }
+      if (clean.some((v) => JSON.stringify(v.filters).length > VIEW_FILTERS_MAX)) {
+        return res.status(400).json({ error: '篩選條件內容過長' });
+      }
       const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
       const current = rows[0]?.odoo_settings || {};
       const merged = { ...current, saved_views: clean };

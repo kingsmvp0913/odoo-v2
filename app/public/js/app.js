@@ -19,11 +19,13 @@ window.needsActionCount = needsActionCount;
 // 收件匣未讀數。與 needsActionCount 是兩回事：後者是「現在有幾張等你」的狀態快照，
 // 這個是「還沒看過的事件」筆數（含已經走掉的退回事件）。socket 收到 action 通知時 +1，
 // 進收件匣頁時以後端實際筆數校正。
+// 走專用 COUNT 端點而不是「抓清單算 length」：清單有 LIMIT 100，未讀破百後 badge 會靜默封頂在
+// 100，樂觀 +1 又把它推過 100 → 數字在 100 與 100+n 之間來回跳。
 const inboxUnread = ref(0);
 window.inboxUnread = inboxUnread;
 async function loadInboxUnread() {
   if (!Api.isLoggedIn || !Api.isLoggedIn()) return;
-  try { inboxUnread.value = ((await Api.get('inbox')) || []).length; } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
+  try { inboxUnread.value = ((await Api.get('inbox/unread-count')) || {}).count || 0; } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
 }
 window.loadInboxUnread = loadInboxUnread;
 

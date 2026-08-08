@@ -25,7 +25,10 @@ window.InboxView = Vue.defineComponent({
       }
       return out;
     },
-    unreadCount() { return this.items.filter(i => !i.read_at).length; },
+    // 篩選頁籤上的數字與側欄 badge 必須是同一個數，所以同樣只認後端的 COUNT 端點。
+    // 從本頁 items 數未讀會犯與 syncBadge 一樣的錯：showAll=true 時 items 是「最近 100 筆」
+    // 含已讀，切一下頁籤數字就變一個——而使用者正在比對的就是這兩個數字。
+    unreadTotal() { return window.inboxUnread ? window.inboxUnread.value : 0; },
   },
   async created() { await this.load(); },
   methods: {
@@ -41,7 +44,11 @@ window.InboxView = Vue.defineComponent({
       }
     },
     async toggleAll() { this.showAll = !this.showAll; await this.load(); },
-    syncBadge() { if (window.inboxUnread) window.inboxUnread.value = this.unreadCount; },
+    // 頁籤式篩選：點已選中的那個不該重打一次 API（任務列表的頁籤同樣是設值而非切換）。
+    async setShowAll(v) { if (this.showAll !== v) await this.toggleAll(); },
+    // badge 一律問後端的 COUNT 端點，不用本頁的 items 推算：showAll=true 時 items 是「最近 100 筆」
+    // （含已讀），從中數未讀等於換一種算法 → 按一下切換鈕 badge 就變一個數。
+    syncBadge() { if (window.loadInboxUnread) window.loadInboxUnread(); },
     statusLabel(s) { return (window.STATUS_LABELS || {})[s] || s || ''; },
     fmtTime(ts) {
       if (!ts) return '';
@@ -82,16 +89,16 @@ window.InboxView = Vue.defineComponent({
     },
   },
   template: `
-    <div>
-      <div class="page-header">
-        <h2>📥 收件匣</h2>
-        <div style="display:flex;gap:var(--space-2);align-items:center">
-          <button class="btn btn-sm" :class="showAll ? 'btn-primary' : 'btn-outline'" @click="toggleAll"
-            :title="showAll ? '目前顯示全部（含已讀與延後），點一下只看未處理的' : '目前只顯示未處理的，點一下顯示全部'">
-            {{ showAll ? '顯示全部' : '只看未處理' }}
-          </button>
-          <button v-if="unreadCount > 0" class="btn btn-sm btn-outline" @click="readAll">全部標記已讀</button>
-        </div>
+    <div class="topbar">
+      <h1>📥 收件匣</h1>
+      <button v-if="unreadTotal > 0" class="btn btn-outline btn-sm" @click="readAll">全部標記已讀</button>
+    </div>
+    <div class="content">
+      <div class="filter-row">
+        <button class="btn btn-sm" :class="!showAll ? 'btn-primary' : 'btn-outline'" @click="setShowAll(false)">
+          只看未處理<span v-if="unreadTotal > 0" class="tab-badge" :class="!showAll ? 'tab-badge-active' : ''">{{ unreadTotal }}</span>
+        </button>
+        <button class="btn btn-sm" :class="showAll ? 'btn-primary' : 'btn-outline'" @click="setShowAll(true)">全部</button>
       </div>
 
       <div v-if="loading" class="task-card">載入中…</div>

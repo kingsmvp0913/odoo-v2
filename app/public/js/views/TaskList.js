@@ -8,6 +8,12 @@ const FILTER_DEFAULTS = {
   statusFilter: '', sourceFilter: '', releaseFilter: 'all', showAllUsers: false
 };
 const FILTER_FIELDS = Object.keys(FILTER_DEFAULTS);
+// showAllUsers 例外：進得了具名 view（存 DB，使用者刻意保存的組合該跟著走），但**不進 localStorage**。
+// 它一旦被記住就會跨 session 存活，而三處寫側欄「輪到你」badge 的地方都被 `if (!this.showAllUsers)`
+// 擋掉（開著時列表是全體任務，數字會灌水）→ 管理員按過一次「顯示全部使用者」，badge 從此永遠停在
+// 舊值；同一台瀏覽器換成非管理員登入時切換鈕是 v-if="isAdmin"，那個人連關掉的 UI 都沒有。
+// 不記住它＝這個狀態只活到重整為止（原本的行為），badge 卡住最多撐到下次開頁。
+const PERSISTED_FIELDS = FILTER_FIELDS.filter(k => k !== 'showAllUsers');
 // 具名 view 與「上次用的篩選」分開存：使用者刻意命名保存的東西換裝置該跟著走，所以進 DB
 // （users.odoo_settings.saved_views）而非 localStorage。上限與後端同值，但真正的防線在後端。
 const SAVED_VIEWS_MAX = 10;
@@ -18,12 +24,14 @@ function loadFilters() {
   const out = { ...FILTER_DEFAULTS };
   try {
     const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || '{}');
-    for (const k of FILTER_FIELDS) if (saved[k] !== undefined && saved[k] !== null) out[k] = saved[k];
+    for (const k of PERSISTED_FIELDS) if (saved[k] !== undefined && saved[k] !== null) out[k] = saved[k];
   } catch (e) { /* 停用或內容壞掉：用預設 */ }
   return out;
 }
 function saveFilters(v) {
-  try { localStorage.setItem(FILTER_KEY, JSON.stringify(v)); } catch (e) { /* 記不住不是錯誤，別打斷操作 */ }
+  const keep = {};
+  for (const k of PERSISTED_FIELDS) keep[k] = v[k];
+  try { localStorage.setItem(FILTER_KEY, JSON.stringify(keep)); } catch (e) { /* 記不住不是錯誤，別打斷操作 */ }
 }
 
 // 部署（deploy_testing）與 E2E 測試（playwright_running）拆成兩格：部署一定跑，E2E 專案可停用
@@ -256,10 +264,14 @@ window.TaskListView = Vue.defineComponent({
       return Api.put('settings/views', { saved_views: this.savedViews })
         .catch(e => showToast(e.message || '篩選組合儲存失敗', 'error'));
     },
-    applyView(i) {
+    // 一定要重新取資料：showAllUsers 決定打的是 tasks 還是 tasks?all=true，而 filter 常常沒變
+    // （預設就是 needs_action）→ 只設欄位的話 watcher 不觸發，畫面留著上一次的結果集：套用
+    // 「全部使用者＋某人」會變空列表，反向套用則殘留別人的任務。對照 toggleAllUsers 同樣有 load。
+    async applyView(i) {
       const v = this.savedViews[i];
       if (!v) return;
       for (const k of FILTER_FIELDS) if (v.filters && v.filters[k] !== undefined) this[k] = v.filters[k];
+      await this.load();
     },
     async saveCurrentView() {
       const name = this.newViewName.trim();
@@ -312,8 +324,12 @@ window.TaskListView = Vue.defineComponent({
       }
     },
     needsAction(t) { return HUMAN_STATUSES.includes(t.status); },
+    // 「有沒有在動」＝pipeline 會自己推進它，也就是 registry 裡 actor 非 human／terminal 的狀態，
+    // 與 runner 派工用的 RUNNABLE_STATUSES 同一份。原本手寫 10 個狀態，已經漏掉 respec_running、
+    // reject_triage、resolve_triage、clarify_chat_running（都是 actor:'agent'，AI 正在跑卻沒 spinner，
+    // 看起來像沒在動）——這正是 3b78a7f 要消滅的「第 N 份手寫名單」。
     isProcessing(t) {
-      return ['analysis_running','coding_running','qa_running','merge_running','deploy_testing','playwright_running','wiki_updating','cs_running','branch_pending','confirm_answered'].includes(t.status);
+      return RUNNABLE_STATUSES.includes(t.status);
     },
     isStopped(t) { return ['stopped'].includes(t.status); },
     statusLabel,

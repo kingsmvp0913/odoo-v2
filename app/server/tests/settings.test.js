@@ -118,6 +118,31 @@ test('PUT /api/settings/views → 超過上限回 400（前端擋下只是提示
   expect(res.status).toBe(400);
 });
 
+// 筆數擋了、單筆大小沒擋＝上限形同虛設：odoo_settings 每次 GET /api/settings 與 auth/me 都整包回
+// 前端（auth/me 每次導覽都打），一筆塞爆就等於拖垮每一個請求。前端的 maxlength 只是提示。
+test('PUT /api/settings/views → 名稱超長回 400', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: [{ name: 'x'.repeat(21), filters: {} }] });
+  expect(res.status).toBe(400);
+});
+
+test('PUT /api/settings/views → filters 過大回 400', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: [{ name: '肥的', filters: { search: 'x'.repeat(600) } }] });
+  expect(res.status).toBe(400);
+});
+
+// 擋過頭同樣是 bug：正常長度的組合必須存得進去，且沒有把先前的設定弄壞
+test('PUT /api/settings/views → 正常長度照存（上限不得誤傷）', async () => {
+  const res = await request(app).put('/api/settings/views')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ saved_views: [{ name: '二十個字剛剛好的組合名稱共二十字', filters: { filter: 'all', search: '關鍵字' } }] });
+  expect(res.status).toBe(200);
+  expect(res.body.saved_views[0].filters.search).toBe('關鍵字');
+});
+
 test('PUT /api/settings/views → 401 without token', async () => {
   const res = await request(app).put('/api/settings/views').send({ saved_views: [] });
   expect(res.status).toBe(401);
