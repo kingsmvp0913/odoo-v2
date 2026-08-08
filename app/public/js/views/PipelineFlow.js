@@ -127,13 +127,21 @@ window.PipelineFlowView = Vue.defineComponent({
       // 要看開啟後長怎樣再自己撥開關。
       e2eEnabled: false,     // 專案層 e2e_disabled 的反面
       specTour: false,       // 專案層 spec_tour_enabled
-      showGit: true,         // 純顯示開關，與專案設定無關
-      hovered: null
+      hovered: null,
+      // 泳道顯示開關（目前只有 Git 一條，純顯示、與專案設定無關）由 PF_TRACKS 推導，預設全開。
+      // 不可寫死鍵名：照 pipeline-spec.js:25 的說明加一條新泳道時，那個 flag 不會存在於 data，
+      // v-model 寫不進去、flags 也永遠是 undefined——泳道與掛在它上面的節點一個都不出現，
+      // 而且不報錯。spec 檔頭教的擴充方式必須真的做得到，否則那段註解就是在騙人。
+      ...Object.fromEntries(PF_TRACKS.filter((t) => t.flag).map((t) => [t.flag, true]))
     };
   },
   computed: {
-    // 三個開關打包成一個物件傳給 spec，spec 不知道 Vue 的存在
-    flags() { return { e2eEnabled: this.e2eEnabled, specTour: this.specTour, showGit: this.showGit }; },
+    // 開關打包成一個物件傳給 spec，spec 不知道 Vue 的存在
+    flags() {
+      const f = { e2eEnabled: this.e2eEnabled, specTour: this.specTour };
+      for (const t of PF_TRACKS) if (t.flag) f[t.flag] = this[t.flag];
+      return f;
+    },
     tracks() { return pipelineTracks(this.flags); },
     trackToggles() { return PF_TRACKS.filter(t => t.flag); },
 
@@ -869,8 +877,13 @@ window.PipelineFlowView = Vue.defineComponent({
                   :x="s.x" :y="s.y" :text-anchor="s.anchor" fill="var(--danger)"
                   style="font-size:10px;font-weight:600;pointer-events:none">{{ s.text }}</text>
 
+            <!-- 觸控裝置沒有 hover：這頁的價值全在移上去帶出來的右側詳情，只綁 mouseenter
+                 等於手機上點下去沒反應。click 用**指定**而非切換：行動瀏覽器點一下會先補一次
+                 mouseenter 再送 click，寫成 toggle 會當場又關掉。鍵盤同理走 focus。 -->
             <g v-for="n in nodes" :key="n.id"
                @mouseenter="hovered = n.id" @mouseleave="hovered = null"
+               @click="hovered = n.id" @focus="hovered = n.id"
+               tabindex="0" role="button" :aria-label="n.label"
                :opacity="dim(n.id) ? 0.25 : 1"
                style="cursor:pointer;transition:opacity .15s">
               <!-- hover 效果刻意**不動顏色**：框線顏色是這張圖表達「這是什麼性質的關」的
@@ -929,7 +942,7 @@ window.PipelineFlowView = Vue.defineComponent({
               </dl>
             </template>
             <div v-else style="color:var(--text-muted);font-size:var(--fs-sm)">
-              把滑鼠移到左邊任一個節點上，這裡會顯示那一關的進入條件、做什麼、成功與失敗各往哪走。
+              把滑鼠移到任一個節點上（觸控裝置請點一下），這裡會顯示那一關的進入條件、做什麼、成功與失敗各往哪走。
             </div>
           </div>
         </div>

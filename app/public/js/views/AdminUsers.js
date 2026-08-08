@@ -74,16 +74,19 @@ window.AdminUsersView = Vue.defineComponent({
       <div v-if="loading" class="admin-users-list">
         <div class="settings-section">
           <h2 class="section-title">使用者列表</h2>
-          <div class="table-wrap">
+          <!-- 載入態與載入完的表要走同一種手機版型（table-cards-sm），否則骨架先排成
+               橫捲的五欄表、資料一到又整個跳成卡片。既然卡片化，每個 td 就得帶 data-label
+               ——屬性缺席時 ::before 仍佔位，那 88px 的欄名縮排會空在骨架左邊。 -->
+          <div class="table-wrap table-cards-sm">
             <table class="data-table">
               <thead><tr><th>帳號</th><th>顯示名稱</th><th>角色</th><th>建立時間</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="i in 4" :key="i">
-                  <td><Skeleton width="90px" /></td>
-                  <td><Skeleton width="110px" /></td>
-                  <td><Skeleton width="50px" /></td>
-                  <td><Skeleton width="80px" /></td>
-                  <td><Skeleton width="140px" /></td>
+                  <td data-label="帳號"><Skeleton width="90px" /></td>
+                  <td data-label="顯示名稱"><Skeleton width="110px" /></td>
+                  <td data-label="角色"><Skeleton width="50px" /></td>
+                  <td data-label="建立時間"><Skeleton width="80px" /></td>
+                  <td data-label="操作"><Skeleton width="140px" /></td>
                 </tr>
               </tbody>
             </table>

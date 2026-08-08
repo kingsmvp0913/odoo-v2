@@ -61,17 +61,20 @@ window.AdminPipelinesView = Vue.defineComponent({
       <div v-if="loading" class="admin-pipelines-wrap">
         <div class="settings-section">
           <h2 class="section-title">真正執行中的任務</h2>
-          <div class="table-wrap">
+          <!-- 載入態與載入完的表要走同一種手機版型（table-cards-sm），否則骨架先排成
+               橫捲的六欄表、資料一到又整個跳成卡片。既然卡片化，每個 td 就得帶 data-label
+               ——屬性缺席時 ::before 仍佔位，那 88px 的欄名縮排會空在骨架左邊。 -->
+          <div class="table-wrap table-cards-sm">
             <table class="data-table">
               <thead><tr><th>專案</th><th>任務</th><th>使用者</th><th>目前階段</th><th>已執行時間</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="i in 3" :key="i">
-                  <td><Skeleton width="80px" /></td>
-                  <td><Skeleton width="160px" /></td>
-                  <td><Skeleton width="70px" /></td>
-                  <td><Skeleton width="90px" /></td>
-                  <td><Skeleton width="60px" /></td>
-                  <td><Skeleton width="60px" /></td>
+                  <td data-label="專案"><Skeleton width="80px" /></td>
+                  <td data-label="任務"><Skeleton width="160px" /></td>
+                  <td data-label="使用者"><Skeleton width="70px" /></td>
+                  <td data-label="目前階段"><Skeleton width="90px" /></td>
+                  <td data-label="已執行時間"><Skeleton width="60px" /></td>
+                  <td data-label="操作"><Skeleton width="60px" /></td>
                 </tr>
               </tbody>
             </table>

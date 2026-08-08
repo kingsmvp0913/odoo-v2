@@ -84,7 +84,10 @@ window.AdminRejectionsView = Vue.defineComponent({
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="loading"><td colspan="9" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
+                <!-- empty-row：跨欄的單格列不該被卡片化拆開。少了它，手機上 .table-cards-sm
+                     的 ::before 會給這格留 88px 的欄名縮排（data-label 不存在時仍佔位），
+                     「載入中...」整條往右縮一截。空狀態那列本來就有，只有這列漏了。 -->
+                <tr v-if="loading" class="empty-row"><td colspan="9" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
                 <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="9">目前沒有退回紀錄</td></tr>
                 <tr v-for="r in rows" :key="r.id">
                   <td data-label="" class="td-checkbox"><input type="checkbox" :checked="!!selected[r.id]" @change="selected = { ...selected, [r.id]: $event.target.checked }" /></td>

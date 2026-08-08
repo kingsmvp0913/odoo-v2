@@ -31,7 +31,7 @@ curl -sSLO https://github.com/notofonts/noto-cjk/raw/main/Sans/Variable/OTC/Noto
 curl -sSLO https://github.com/googlefonts/noto-emoji/raw/main/fonts/NotoColorEmoji.ttf
 ```
 
-沒放字型時 `capture.js` 不動 `XDG_DATA_HOME`，改用機器上的系統字型——但那樣拍出來的基線與別台不可比。
+`.fontroot/fonts/` 裡**沒有任何字型檔**時 `capture.js` 直接停下（退出碼 1），不會默默改用系統字型：目錄還在、裡面空了是換機／容器重建後的常態，而那時重拍基線就是拿豆腐比豆腐——門禁照樣全綠，只是它量的已經不是中文版面。確定要用這台的系統字型拍（基線與別台不可比、只在本機有效）就設 `RWD_ALLOW_SYSTEM_FONTS=1`。
 
 **Chromium 為什麼也隨 repo 走**：原本裝在 `/opt/pw-browsers`，容器一重建就沒了（本容器只有 `odoo-v2`／`odoo-envs`／`.claude` 三處持久）。重裝拿到的是新版，而**換一版 Chromium，同一份 HTML 的文字描邊就有 subpixel 差異，42 張桌機基線會一次全紅**（2026-08-07 實際發生過，全部 42 組 diff 非零，但逐字比對版面與資料都沒動，純粹是描邊）。基線比的是像素，所以瀏覽器跟字型一樣得釘在 repo 內：
 

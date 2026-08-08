@@ -18,8 +18,12 @@ const THEMES = ['light', 'dark'];
 //   'admin' 需 admin（app.js:61 的 guard 會呼叫 auth/me，非 admin 會被導回首頁）
 //
 // covered: false = 無法穩定造資料，不進自動 diff，改列人工檢查清單（規格 §2.4 已列明）
+//
+// expect: 截圖前必須等到的選擇器＝「這一頁真的渲染出來了」的證據。預設值 DEFAULT_EXPECT
+// 涵蓋所有 app 頁（每個 view 自己提供 .content 或 .page-body，view 一炸就一個都不存在），
+// 未登入頁與獨立 HTML 頁各自指定。
 const ROUTES = [
-  { key: 'login', hash: '#/login', auth: 'none', covered: true },
+  { key: 'login', hash: '#/login', auth: 'none', covered: true, expect: '.login-wrap' },
   { key: 'task-list', hash: '#/', auth: 'user', covered: true },
   { key: 'task-detail', hash: '#/task/:taskId', auth: 'user', covered: true, needs: 'taskId' },
   { key: 'task-terminal', hash: '#/task/:taskId/terminal', auth: 'user', covered: false,
@@ -43,8 +47,13 @@ const ROUTES = [
   { key: 'admin-prompt-logs', hash: '#/admin/prompt-logs', auth: 'admin', covered: true },
   { key: 'admin-port-pool', hash: '#/admin/port-pool', auth: 'admin', covered: true },
   { key: 'admin-enterprise', hash: '#/admin/enterprise', auth: 'admin', covered: true },
-  { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true }
+  { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true, expect: '.sg-wrap' }
 ];
+
+// 每個 view 的模板自己帶 .content 或 .page-body（app.js 只提供外框與 router-view），
+// 所以「兩者都找不到」＝這一頁的 view 根本沒渲染出來。
+const DEFAULT_EXPECT = '.content, .page-body';
+function expectSelector(route) { return route.expect || DEFAULT_EXPECT; }
 
 // 會隨時間／資料變動的區塊。不遮掉的話門禁天天假紅，紅到沒人看——
 // 那比沒有門禁更糟，因為它會訓練人忽略紅燈。
@@ -75,9 +84,14 @@ const STABILIZE_CSS = `
      所以在補上這段之前，**所有 app 頁面的基線都只有一個視窗高**，捲動線以下的內容
      從來沒進過門禁（2026-08-07 發現：126 張基線裡唯一超過一屏的是 styleguide.html，
      因為它是獨立頁面、沒有 app-shell）。門禁號稱「桌機 diff = 0」，其實只驗了第一屏。
-     解除高度與 overflow 限制，整份文件才會展開讓 fullPage 拍完。 */
+     解除高度與 overflow 限制，整份文件才會展開讓 fullPage 拍完。
+
+     漏一個頁面級捲動容器的後果是「那幾頁的基線只有一屏高」，而且沒有任何訊號——
+     .page-body 就這樣漏了 Admin／Settings／AdminPortPool／AdminEnterprise／PipelineFlow
+     五頁（後者是 802173d 才剛納入門禁的）。判準：app.css 裡 flex:1 + overflow-y:auto
+     的單一 class 規則都要列進來（rwd-gate.test.js 守著）。 */
   html, body { height: auto !important; overflow: visible !important; }
-  .app-shell, .main, .content { height: auto !important; overflow: visible !important; }
+  .app-shell, .main, .content, .page-body { height: auto !important; overflow: visible !important; }
   /* 內部還有一層用百分比撐高的容器（wiki 的 calc(100% - 56px)、chat 的 flex 欄）。
      父層一旦變成 height:auto，百分比會解析成 0 → 整頁截成空白。連同解除。 */
   .wiki-body, .wiki-tree-panel, .chat-split, .chat-main, .chat-messages, .terminal-body {
@@ -119,6 +133,6 @@ function shotPlan({ gateOnly = false } = {}) {
 }
 
 module.exports = {
-  VIEWPORTS, THEMES, ROUTES, STABILIZE_CSS, DIFF,
-  activeRoutes, manualCheckList, shotPlan
+  VIEWPORTS, THEMES, ROUTES, STABILIZE_CSS, DIFF, DEFAULT_EXPECT,
+  activeRoutes, manualCheckList, shotPlan, expectSelector
 };

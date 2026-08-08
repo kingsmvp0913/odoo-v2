@@ -25,7 +25,7 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSER_ROOT)) {
 }
 
 const { chromium } = require('playwright');
-const { STABILIZE_CSS, shotPlan, manualCheckList } = require('./routes');
+const { STABILIZE_CSS, shotPlan, manualCheckList, expectSelector } = require('./routes');
 const { login, assertAdmin, sampleIds, resolveUrl } = require('./lib/session');
 
 const args = process.argv.slice(2);
@@ -40,8 +40,26 @@ const THEME_KEY = 'theme';         // theme.js
 // 方框寬度不等於中文字寬，拿那種圖判斷手機版會不會擠爆是量錯的。
 // fonts.conf 有 <dir prefix="xdg">fonts</dir>，把 XDG_DATA_HOME 指到隨 repo 走的
 // 字型目錄，字型就跟著工具走、不依賴機器狀態；沒放字型時保持原樣不動。
+// 只檢查「目錄在不在」是不夠的：`.fontroot/` 在 .gitignore 內，換機／容器重建後目錄可能
+// 還在、裡面卻空了。那時中文全變豆腐框，而**重拍基線就是拿豆腐比豆腐**——門禁照樣全綠，
+// 只是它量的東西已經不是中文版面了。缺字型一律停下（Rule 12 Fail Loud）。
 const FONT_ROOT = path.join(__dirname, '.fontroot');
-if (fs.existsSync(path.join(FONT_ROOT, 'fonts'))) process.env.XDG_DATA_HOME = FONT_ROOT;
+const FONT_DIR = path.join(FONT_ROOT, 'fonts');
+const fontFiles = fs.existsSync(FONT_DIR)
+  ? fs.readdirSync(FONT_DIR).filter((f) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(f))
+  : [];
+if (fontFiles.length) {
+  process.env.XDG_DATA_HOME = FONT_ROOT;
+} else if (!process.env.RWD_ALLOW_SYSTEM_FONTS) {
+  console.error(
+    `找不到截圖字型：${path.relative(process.cwd(), FONT_DIR)} 內沒有任何字型檔。\n` +
+    '本專案的容器沒裝中文字型，中文會全部渲染成豆腐框 □，方框寬度不等於中文字寬——\n' +
+    '拿那種圖判斷手機版會不會擠爆是量錯的，而且基線與別台不可比。\n' +
+    '重抓方式見 rwd/README.md「字型為什麼隨 repo 走」。\n' +
+    '確定要拿這台的系統字型拍（基線只在本機有效）→ 設 RWD_ALLOW_SYSTEM_FONTS=1。'
+  );
+  process.exit(1);
+}
 
 async function main() {
   const token = await login();
@@ -92,11 +110,19 @@ async function main() {
     });
 
     const page = await context.newPage();
+    // 未捕捉的例外只會讓 Vue 掛不上任何東西，畫面是全白的——而**白圖對白圖的 diff 恆為 0**。
+    // 不收這些訊號的話，一整頁炸掉在門禁上看起來與「完全沒改」一模一樣。
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
     try {
       await page.goto(resolveUrl(route, ids), { waitUntil: 'networkidle', timeout: 30000 });
       await page.addStyleTag({ content: STABILIZE_CSS });
       // networkidle 之後 Vue 仍可能在渲染；等版面靜下來再截。
       await page.waitForTimeout(1200);
+      // 「這一頁真的渲染出來了」的最低證據。view 在 render 中拋例外時 router-view 什麼都不掛，
+      // 連 .content／.page-body 都不會存在，所以這個等待就是空白頁的警報器。
+      await page.waitForSelector(expectSelector(route), { state: 'attached', timeout: 5000 });
+      if (pageErrors.length) throw new Error(`頁面有未捕捉的 JS 例外：${pageErrors[0]}`);
       await page.screenshot({ path: path.join(OUT_DIR, `${shot.name}.png`), fullPage: true });
       done++;
     } catch (err) {

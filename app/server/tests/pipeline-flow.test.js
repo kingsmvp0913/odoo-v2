@@ -38,6 +38,44 @@ test('PipelineFlow.js 語法有效（語法錯＝整頁白畫面，靜態比對�
   expect(() => new vm.Script(src, { filename: 'PipelineFlow.js' })).not.toThrow();
 });
 
+// pipeline-spec.js:25 教的擴充方式是「加一條泳道就是加一筆 {flag:'showXxx'}，版面與開關列
+// 會自動跟上」。view 曾把開關收窄成三個硬寫的鍵（flags() 直接回 {e2eEnabled, specTour, showGit}），
+// 於是照著註解加泳道會拿到 flags.showXxx === undefined：泳道與掛在它上面的節點一個都不出現，
+// 而且不報錯、不紅燈——文件教的做法做不到，這是最難查的一種。
+// view 沒有 window／Vue 就載不起來，所以在獨立 context 裡餵最小替身把它載進來，
+// 只取 data() 與 computed.flags 這兩個純函式來驗。
+const loadView = (extraTracks = []) => {
+  const vm = require('vm');
+  const src = fs.readFileSync(path.join(__dirname, '../../public/js/views/PipelineFlow.js'), 'utf8');
+  const sandbox = { Vue: { defineComponent: (d) => d }, PF_TRACKS: [...PF_TRACKS, ...extraTracks] };
+  sandbox.window = sandbox;
+  vm.runInNewContext(src, sandbox);
+  return sandbox.PipelineFlowView;
+};
+
+describe('泳道開關與 spec 的擴充方式一致', () => {
+  test('現有泳道：flag 是 data 上真實存在的鍵（v-model 寫不進不存在的鍵）', () => {
+    const flagged = PF_TRACKS.filter((t) => t.flag);
+    expect(flagged.length).toBeGreaterThan(0);            // registry 被清空的防呆
+    const data = loadView().data();
+    expect(flagged.filter((t) => !(t.flag in data))).toEqual([]);
+  });
+
+  test('照 spec 檔頭新增一條帶 flag 的泳道，開關與 flags 自動跟上', () => {
+    const def = loadView([{ id: 'eservice', label: 'eService', flag: 'showEservice', toggleLabel: '顯示 eService' }]);
+    const data = def.data();
+    expect(data).toHaveProperty('showEservice');          // 沒有這個鍵＝開關按了寫不進去
+    const flags = def.computed.flags.call({ ...data });
+    expect(flags.showEservice).toBe(true);                // undefined＝泳道與其上節點全部不出現
+  });
+
+  test('兩個專案設定開關仍原樣傳給 spec', () => {
+    const def = loadView();
+    const flags = def.computed.flags.call({ ...def.data(), e2eEnabled: true, specTour: true });
+    expect(flags).toMatchObject({ e2eEnabled: true, specTour: true, showGit: true });
+  });
+});
+
 // spec 是純資料檔，但 view 靠 <script> 全域載入——漏加 script tag 的症狀是整頁白畫面，
 // 而 jest 這邊 require 得到、照樣全綠。
 test('index.html 有載入 pipeline-spec.js 且排在 PipelineFlow.js 之前', () => {
@@ -158,9 +196,36 @@ describe('流程圖結構完整（八種開關組合）', () => {
   });
 
   // 連線指到不存在的節點不會報錯，只會靜默不畫——關掉某個開關後少一條線，肉眼很難發現。
+  //
+  // ⚠ 這條檢查一度是**恆真式**：pipelineEdges 回傳前自己就先 `filter(端點都在)`，這裡再拿
+  // 過濾後的結果驗「兩端都存在」，等於問它自己。實測三種單字元 typo（'gitt'／'codingg'／
+  // 'clarifyy'）各自讓一個節點或一條退回線整格消失，而八組結構檢查 0 紅燈。
+  // 已改成「線跟著節點的條件一起 push、不做事後過濾」，這條才咬得到；下面那支 mutation
+  // 測試是它的看門狗——誰把過濾加回去，那裡會紅。
   test.each(COMBOS.map((f) => [label(f), f]))('%s：每條連線的兩端都存在', (_, f) => {
     const ids = new Set(pipelineNodes(f).map((n) => n.id));
     expect(pipelineEdges(f).filter(([a, b]) => !ids.has(a) || !ids.has(b))).toEqual([]);
+  });
+
+  // 上面那條有沒有牙齒，只有真的把 id 打壞才驗得出來。這裡把 spec 原始碼的一個 id 改壞、
+  // 在獨立 context 重新載入一次，斷言結構檢查會紅——三個案例正是實測過會靜默通過的那三種。
+  describe.each([
+    ['連線端點打錯（gitwt→gitt）', "['gitwt', 'gitcommit', 'main']", "['gitt', 'gitcommit', 'main']"],
+    ['節點 id 打錯（coding→codingg）', "id: 'coding', track: 'task'", "id: 'codingg', track: 'task'"],
+    ['退回線端點打錯（clarify→clarifyy）', "['clarify', 'coding', 'back']", "['clarifyy', 'coding', 'back']"]
+  ])('%s 會被上面的結構檢查抓到', (_, from, to) => {
+    test('至少一種開關組合驗出端點不存在的連線', () => {
+      const vm = require('vm');
+      const src = fs.readFileSync(path.join(__dirname, '../../public/js/pipeline-spec.js'), 'utf8');
+      expect(src).toContain(from);            // 錨點漂掉時不得靜默通過（改不到＝什麼都沒驗）
+      const mod = { exports: {} };
+      vm.runInNewContext(src.replace(from, to), { module: mod, exports: mod.exports });
+      const broken = COMBOS.some((f) => {
+        const ids = new Set(mod.exports.pipelineNodes(f).map((n) => n.id));
+        return mod.exports.pipelineEdges(f).some(([a, b]) => !ids.has(a) || !ids.has(b));
+      });
+      expect(broken).toBe(true);
+    });
   });
 
   // 孤兒節點＝畫了一個框卻沒有任何線連到它，通常是改流程時只刪了線忘了刪節點。

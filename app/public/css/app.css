@@ -750,7 +750,9 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 
 /* ── TaskList.js ── */
 /* 任務列表：篩選 tab 列與結構化篩選列（共用同一組 flex 版型，兩處逐字相同） */
-.tasklist-filter-row { display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center }
+/* 列表頁的篩選列。收件匣沿用同一條而不是另刻一套：兩頁的篩選在畫面上就該長一樣，
+   各刻一份的下場是改了一邊忘了另一邊。`.tasklist-` 前綴留著是因為改名要動 TaskList 的多處標記。 */
+.tasklist-filter-row, .filter-row { display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center }
 
 /* 任務列表：搜尋框固定寬度（原本靠 inline style 壓過 .form-control，見下方 specificity 風險） */
 .tasklist-search-input { width:200px;font-size:var(--fs-base);padding:5px 10px;height:32px }
@@ -774,7 +776,9 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .task-status-row { display:flex;align-items:center;justify-content:space-between;margin-bottom:6px }
 
 /* 任務列表：批次操作浮動底部工具列 */
-.batch-action-bar { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:var(--space-2);background:#1e293b;color:#fff;border-radius:var(--radius-lg);padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:200;font-size:var(--fs-base);white-space:nowrap }
+/* 底色／文字色走變數（與 .mobile-topbar 同一組）：原本寫死 #1e293b／#fff，是這批唯一沒走
+   var() 的配色，深色模式下等於一塊固定的深藍板浮在頁面上，與其餘面板對不起來。 */
+.batch-action-bar { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:var(--space-2);background:var(--sidebar-bg);color:var(--sidebar-active);border-radius:var(--radius-lg);padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:200;font-size:var(--fs-base);white-space:nowrap }
 
 /* 新增任務 modal：全螢幕遮罩。刻意不叫 .modal-overlay——那是全站共用的既有 class（app.css:485，
    底色 0.45＋padding），同名會把所有 modal 的遮罩一起改掉，而截圖門禁看不到（基線裡沒有 modal 是開的） */
@@ -1227,13 +1231,18 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
   .task-card .task-header { flex-direction: column; gap: var(--space-2); }
   .task-card .task-title { margin-right: 0; }
 
-  /* modal 在手機改全屏（規格 §Block 5）。440px 寬的視窗在 390px 螢幕上會貼邊，
+  /* modal 在手機改全寬（規格 §Block 5）。440px 寬的視窗在 390px 螢幕上會貼邊，
      圓角與陰影只是徒增邊界噪音。 */
   .modal-overlay, .tasklist-modal-overlay { padding: 0; }
   .modal, .tasklist-modal-panel {
     width: 100%; max-width: 100%; border-radius: 0;
-    max-height: 100dvh; height: 100dvh;
+    max-height: 100dvh;
   }
+  /* 撐滿整屏高只給「內容本來就有一屏」的新增任務 modal——當初實測的也只有它。
+     `.modal` 是全站共用的（dialog.js:75 的確認框、release-modal.js:41、WikiView 新增頁面、
+     ProjectChat 轉為任務），一起套的話「確定要刪除嗎？」兩行字會撐成整屏、按鈕貼在最上方，
+     而截圖門禁看不到（基線裡沒有任何 modal 是開著的）。高度一律讓內容決定。 */
+  .tasklist-modal-panel { height: 100dvh; }
 
   /* ── 多欄 grid 一律降成單欄（Block 6）───────────────────
      390px 下兩欄各只剩約 175px，表單欄位擠到看不清標籤。
@@ -1257,9 +1266,13 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
   .terminal-body > div:last-child { overflow-x: auto; }
 
   /* 流程圖同理：SVG 是算好座標的固定尺寸圖，縮進 390px 會讓標籤全疊在一起。
-     讓它橫捲並明說可以捲——沒有提示的話，使用者只會看到左邊一小條。 */
+     讓它橫捲並明說可以捲——沒有提示的話，使用者只會看到左邊一小條。
+     sticky + left:0 是必要的：這行提示是 .flow-diagram-panel（overflow-x:auto）裡的一般
+     block，寬度等於可視寬，往右捲第一下它自己就先捲出畫面了——唯一會讀到它的時機正是
+     「使用者開始往右捲」的那一刻。 */
   .flow-mobile-hint {
     display: block;
+    position: sticky; left: 0;
     margin-bottom: var(--space-2);
     font-size: var(--fs-sm); color: var(--text-muted);
   }
@@ -1267,6 +1280,30 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
   /* 圓餅放大視窗：圖例原本是兩欄，390px 下每欄不到 160px，名稱全被 ellipsis 吃掉。 */
   .pie-modal { max-width: 100%; padding: var(--space-3); }
   .pie-modal-legend { grid-template-columns: 1fr; }
+
+  /* ── 專案對話（ProjectChat）────────────────────────────
+     對話清單寫死 220px，390px 下主聊天區只剩約 170px：訊息氣泡、輸入框、傳送鈕全擠成
+     一條窄柱，而 .chat-split 的 overflow:hidden 連橫捲的逃生口都沒有。
+     改上下堆疊——清單縮成頂部一條矮的可捲清單，主聊天區吃滿剩下的高度。
+     不做「選了對話就切換到聊天畫面」那種收合式：那要在 ProjectChat.js 加狀態，
+     而這一輪只動版面；堆疊已經讓兩邊都可用，收合是之後想再省高度時的事。
+     （cbe9135 把這幾條從 inline style 抽成 class 的理由就是「inline 擋著 media query」，
+     這裡是那次重構本來要接上的下半段。） */
+  .chat-split { flex-direction: column; }
+  .chat-list-panel {
+    width: auto; min-width: 0; flex: none; max-height: 34vh;
+    border-right: 0; border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Wiki（WikiView）──────────────────────────────────
+     同型破版：樹狀清單寫死 220px、.wiki-body overflow:hidden，390px 下內文欄只剩約 150px，
+     Markdown 表格與程式碼區塊被裁掉又捲不到。同樣改上下堆疊。
+     內文欄自己有 overflow-y:auto（overflow-x 因此隱含為 auto），寬表捲得動。 */
+  .wiki-body { flex-direction: column; }
+  .wiki-tree-panel {
+    width: auto; max-height: 30vh;
+    border-right: 0; border-bottom: 1px solid var(--border);
+  }
 }
 
 /* 開關（toggle switch）。原本兩顆開關各自 inline 寫死 #fff 與 rgba(0,0,0,.25)，違反配色一律走

@@ -414,15 +414,19 @@ function pipelineEdges(flags) {
       // 橫向對應：這一關在 Git 上做了什麼
       ['gitwt', 'branch', 'link'], ['gitcommit', 'coding', 'link'],
       ['gittesting', 'merge', 'link'], ['gitaidev', 'review', 'link'],
-      ['gitmain', 'release', 'link'],
-      // 併入 testing 這格會被踩兩次：併入測試關一次，E2E 產出 tour 檔後再一次。
-      // 只畫前者的話，圖上看不出 E2E 也會動到 testing 分支（兩端都在時才留，見下方 filter）。
-      ['gittesting', 'e2e', 'link']
+      ['gitmain', 'release', 'link']
     );
+    // 併入 testing 這格會被踩兩次：併入測試關一次，E2E 產出 tour 檔後再一次。
+    // 只畫前者的話，圖上看不出 E2E 也會動到 testing 分支。這是全圖唯一「兩個開關都要開」
+    // 才存在的線，所以在這裡就判掉。
+    if (flags.e2eEnabled) e.push(['gittesting', 'e2e', 'link']);
   }
-  // 兩端都存在的線才留（關掉 E2E／Git 時對應的線一併消失）
-  const ids = new Set(pipelineNodes(flags).map((n) => n.id));
-  return e.filter(([a, b]) => ids.has(a) && ids.has(b));
+  // 這裡刻意**不**做「兩端都存在才留」的過濾：那道過濾會把「開關關掉的節點」與「id 打錯字」
+  // 一起吃掉，而 pipeline-flow.test.js 再拿過濾後的結果驗「每條連線的兩端都存在」，就成了
+  // 恆真式——實測 'gitt'／'codingg'／'clarifyy' 三種單字元 typo 各自讓一個節點或一條退回線
+  // 整格消失，八種開關組合下的五項結構檢查全部 0 紅燈。改成「線跟著節點的條件一起 push」，
+  // 打錯字就會留下端點不存在的線，測試才咬得到。
+  return e;
 }
 
 const PF_API = { PF_TRACKS, PF_UNDRAWN_STATUSES, pipelineTracks, pipelineNodes, pipelineEdges };
