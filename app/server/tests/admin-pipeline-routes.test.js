@@ -112,6 +112,69 @@ describe('GET /api/admin/pipeline/active', () => {
   });
 });
 
+describe('GET /api/admin/chat/active', () => {
+  let chatA, chatB;
+
+  beforeAll(async () => {
+    // chatA＝admin 的，5 分鐘前提問；另補一則「更晚的 ai 訊息」——等待時間必須錨在 user 訊息，
+    // 若誤用 MAX(所有訊息) 會取到這則 ai 的時間，waited 縮成 10 秒、排序整個倒過來。
+    ({ rows: [{ id: chatA }] } = await dbModule.query(
+      "INSERT INTO project_chats (project_id, title, user_id, reply_pending) VALUES ($1,'出貨單報錯',$2,true) RETURNING id",
+      [projectId, adminId]
+    ));
+    await dbModule.query(
+      `INSERT INTO project_chat_messages (chat_id, role, content, created_at)
+       VALUES ($1,'user','怎麼會報錯', NOW() - INTERVAL '5 minutes'),
+              ($1,'ai','我看一下', NOW() - INTERVAL '10 seconds')`,
+      [chatA]
+    );
+
+    // chatB＝bob 的，1 分鐘前提問
+    ({ rows: [{ id: chatB }] } = await dbModule.query(
+      "INSERT INTO project_chats (project_id, title, user_id, reply_pending) VALUES ($1,'報表數字對不上',$2,true) RETURNING id",
+      [projectId, userId]
+    ));
+    await dbModule.query(
+      `INSERT INTO project_chat_messages (chat_id, role, content, created_at)
+       VALUES ($1,'user','數字怎麼算的', NOW() - INTERVAL '1 minute')`,
+      [chatB]
+    );
+
+    // 已回完的對話（reply_pending=false）不該出現在任何人的清單
+    await dbModule.query(
+      "INSERT INTO project_chats (project_id, title, user_id, reply_pending) VALUES ($1,'已回完的',$2,false)",
+      [projectId, adminId]
+    );
+  });
+
+  test('401 without token', async () => {
+    const res = await request(app).get('/api/admin/chat/active');
+    expect(res.status).toBe(401);
+  });
+
+  test('一般使用者只看自己等待中的對話（他人的不出現）', async () => {
+    const res = await request(app).get('/api/admin/chat/active').set('Authorization', `Bearer ${userToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.map(r => r.id)).toEqual([chatB]);
+  });
+
+  test('admin 跨使用者列出等待中的對話，含專案/發問者/等待時間，等最久在最上', async () => {
+    const res = await request(app).get('/api/admin/chat/active').set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    // chatA 等 5 分鐘 > chatB 等 1 分鐘；reply_pending=false 的第三場不在內
+    expect(res.body.map(r => r.id)).toEqual([chatA, chatB]);
+
+    const a = res.body[0];
+    expect(a.project_name).toBe('ProjA');
+    expect(a.title).toBe('出貨單報錯');
+    expect(a.username).toBe('admin1');
+    expect(a.project_id).toBe(projectId);
+    // 錨在 user 訊息（5 分鐘）而非那則 10 秒前的 ai 訊息
+    expect(a.waited_ms).toBeGreaterThanOrEqual(300000);
+    expect(res.body[1].username).toBe('bob'); // 確實跨使用者
+  });
+});
+
 describe('POST /api/admin/pipeline/tasks/:id/pause', () => {
   test('一般使用者暫停自己的任務 → 200 且觸發 abort', async () => {
     const res = await request(app).post(`/api/admin/pipeline/tasks/${taskB}/pause`).set('Authorization', `Bearer ${userToken}`);

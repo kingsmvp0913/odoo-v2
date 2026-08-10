@@ -521,6 +521,39 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 正在等 AI 回覆的排障對話。chat 不經 runner，沒有 _inFlight 可查——server 端唯一的進行中
+  // 訊號就是 reply_pending（chatReply 開頭設、finally 清、崩潰後由 recoverInterruptedChats 收）。
+  // 順帶效果：卡住的 pending 會以「等很久」的形式浮上來，否則只有進到那場對話才看得到。
+  // 等待時間錨在最後一則 user 訊息——chatReply 是先 INSERT 該訊息才跑 agent，故＝本輪提問時刻。
+  // （chat-routes 的原子搶佔比那次 INSERT 早幾毫秒，該瞬間會取到上一輪的時間而顯示偏長，無害。）
+  // 相關子查詢改 LEFT JOIN 是 pg-mem 相容需求，同 chat-routes.js:55。
+  app.get('/api/admin/chat/active', verifyToken, async (req, res) => {
+    try {
+      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
+      const isAdmin = me?.role === 'admin';
+      // 這頁的路由沒有 requiresAdmin（一般使用者進得來），故非 admin 一律限縮到自己的對話
+      const { rows } = await query(
+        `SELECT c.id, c.project_id, c.title, p.name AS project_name,
+                c.user_id, u.username, u.display_name,
+                MAX(m.created_at) AS asked_at
+         FROM project_chats c
+         LEFT JOIN projects p ON p.id = c.project_id
+         LEFT JOIN users u ON u.id = c.user_id
+         LEFT JOIN project_chat_messages m ON m.chat_id = c.id AND m.role = 'user'
+         WHERE c.reply_pending = true${isAdmin ? '' : ' AND c.user_id = $1'}
+         GROUP BY c.id, c.project_id, c.title, p.name, c.user_id, u.username, u.display_name`,
+        isAdmin ? [] : [req.userId]
+      );
+      const now = Date.now();
+      const list = rows.map(r => ({
+        ...r,
+        waited_ms: r.asked_at ? now - new Date(r.asked_at).getTime() : 0
+      }));
+      list.sort((a, b) => b.waited_ms - a.waited_ms); // 等最久的在最上，與上面的在飛任務同一個排法
+      res.json(list);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // --- 退回原因管理（task_rejections / rejection_items）---
 
   // 一列一筆退回，join 專案名＋聚合分類條目數，created_at DESC，分頁回傳 total
