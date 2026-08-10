@@ -12,7 +12,7 @@ function apFmtElapsed(ms) {
 window.AdminPipelinesView = Vue.defineComponent({
   name: 'AdminPipelinesView',
   data() {
-    return { rows: [], chats: [], loading: true, pausingId: null, _timer: null };
+    return { rows: [], chats: [], chatsError: false, loading: true, pausingId: null, _timer: null };
   },
   async mounted() {
     await this.load();
@@ -23,21 +23,24 @@ window.AdminPipelinesView = Vue.defineComponent({
   },
   methods: {
     async load() {
-      try {
-        // 兩區一起取：任一失敗就整批保留上一批（同下方 catch 的理由），不做只更新一半的中間態
-        const [list, chats] = await Promise.all([
-          Api.get('admin/pipeline/active'),
-          Api.get('admin/chat/active')
-        ]);
+      // 兩區各自吞自己的錯，不共用一個 try：常駐 server 若還沒載入 chat/active（部署到重啟之間
+      // 就是這個狀態），共用的話那支 404 會連帶讓上面的在飛任務表停止更新，而畫面上看不出來。
+      // 單次失敗一律保留上一批避免閃爍；只有首次載入才 toast，否則每 3 秒跳一次。
+      const [list, chats] = await Promise.all([
+        Api.get('admin/pipeline/active').catch(e => {
+          if (this.loading) showToast(e.message, 'error');
+          return null;
+        }),
+        Api.get('admin/chat/active').catch(() => null)
+      ]);
+      if (list) {
         list.sort((a, b) => b.elapsed_ms - a.elapsed_ms); // 保險：執行最久在最上
         this.rows = list;
-        this.chats = chats;
-      } catch (e) {
-        // 單次輪詢失敗保留上一批，避免閃爍；下次自動恢復
-        if (this.loading) showToast(e.message, 'error');
-      } finally {
-        this.loading = false;
       }
+      // 失敗與「真的沒人在問」要能分辨，否則端點壞掉會偽裝成一切正常（空狀態文案據此分岔）
+      this.chatsError = !chats;
+      if (chats) this.chats = chats;
+      this.loading = false;
     },
     statusLabel(s) { return STATUS_LABELS[s] || s; },
     fmtElapsed(ms) { return apFmtElapsed(ms); },
@@ -169,7 +172,7 @@ window.AdminPipelinesView = Vue.defineComponent({
                   </td>
                 </tr>
                 <tr v-if="chats.length === 0" class="empty-row">
-                  <td colspan="5">目前沒有進行中的排障對話</td>
+                  <td colspan="5">{{ chatsError ? '讀取失敗（server 可能尚未載入此端點）' : '目前沒有進行中的排障對話' }}</td>
                 </tr>
               </tbody>
             </table>
