@@ -1,4 +1,5 @@
-const { runClaude } = require('./claude-runner');
+const crypto = require('crypto');
+const { withResume } = require('./with-resume');
 const { parseAgentResult } = require('./agent-result');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
@@ -64,11 +65,47 @@ async function runCsAgent(taskId, userId, signal) {
     repo_paths: repoPaths
   });
 
+  // 續接輪只送「使用者這輪講的話」：追問（cs_reply_pending→cs_running）與補資料
+  // （cs_data_needed→cs-data-submit→cs_running）兩條重跑路徑，新發言都落在 task_logs 的
+  // 最後一則 role='user'，故共用同一份 retry prompt，由 cs-retry.md 自行判斷是哪一種。
+  const retryAgent = loadAgent('cs-retry');
+  const { rows: [lastUser] } = await query(
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'user' ORDER BY created_at DESC, id DESC LIMIT 1",
+    [taskId]
+  );
+  // 只寫在 fresh prompt 裡、但每輪都該生效的權威內容折進指紋（見 with-resume.js 的 extraVersion）：
+  // 任務原文／附件（assembleTaskContext）與 repo 路徑會中途變動——補了附件、或原本未綁專案後來綁了，
+  // session 內都還是舊快照。折進去才會在變動時自動退回 fresh，重讀新脈絡。
+  const ctxVersion = crypto.createHash('sha1')
+    .update(`${task.original_text || ''}\n${repoPaths}\n${projectSlug}`)
+    .digest('hex').slice(0, 12);
+
   let result = null;
   let rawText = '';
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
-    const { text, assistantText, usage, durationMs } = await runClaude(prompt, { signal, taskId, userId, model: agent.model, agentType: 'cs' });
+    const { text, assistantText, usage, durationMs } = await withResume({
+      freshAgentName: 'cs',
+      retryAgentName: 'cs-retry',
+      getSession: async () => {
+        const { rows: [r] } = await query('SELECT cs_session_id, cs_prompt_ver FROM tasks WHERE id=$1', [taskId]);
+        return r && r.cs_session_id ? { sessionId: r.cs_session_id, promptVer: r.cs_prompt_ver } : null;
+      },
+      setSession: ({ sessionId, promptVer }) =>
+        query('UPDATE tasks SET cs_session_id=$2, cs_prompt_ver=$3 WHERE id=$1', [taskId, sessionId, promptVer]),
+      clearSession: () =>
+        query('UPDATE tasks SET cs_session_id=NULL, cs_prompt_ver=NULL WHERE id=$1', [taskId]),
+      renderFresh: () => prompt,
+      renderRetry: () => retryAgent.render({
+        new_message: lastUser ? lastUser.content : '（無新發言）'
+      }).trim(),
+      // retry 失敗會靜默降級跑 fresh，使用者照樣拿到回覆——但失敗那次的 token／時間必須記帳，
+      // 否則「失敗重跑」這個最貴的情境在 token_usage 裡完全隱形（比照 spec-review.js）
+      onRetryFailed: err => logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err),
+      extraVersion: ctxVersion,
+      model: agent.model,
+      runOpts: { signal, taskId, userId, agentType: 'cs' }
+    });
     // cs 會實地查證、有時把 <result> 當中間步驟吐出後又補收尾散文／派子任務，末輪 ev.result（text）就不含契約標籤。
     // 用整段 assistant transcript（assistantText）解析，讓 extractResult 撈得回最後一組 <result>；退回 text 保底。
     rawText = assistantText || text || '';
@@ -99,8 +136,10 @@ async function runCsAgent(taskId, userId, signal) {
   }
 
   if (!result) {
+    // 一併清 session：解析失敗＝上一輪沒吐好契約，withResume 的降級只涵蓋 runClaude 拋錯（回 null 它看不到），
+    // 不清的話人工重跑會續接到同一場「不吐契約」的對話，原地重演。
     await query(
-      "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      "UPDATE tasks SET status='stopped', cs_session_id=NULL, cs_prompt_ver=NULL, blocker_content=$2, updated_at=NOW() WHERE id=$1",
       [taskId, blockerMsg]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
@@ -139,8 +178,9 @@ async function runCsAgent(taskId, userId, signal) {
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'cs_data_needed' });
   } else if (result.type !== 'code_change_clear') {
     // 契約只有三種 type；未知值靜默放行成 code_change_clear 會拿垃圾輸出繼續燒 analysis token（Rule 12）
+    // session 同上一段理由一併清掉，重跑才拿得到 fresh 脈絡
     await query(
-      "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      "UPDATE tasks SET status='stopped', cs_session_id=NULL, cs_prompt_ver=NULL, blocker_content=$2, updated_at=NOW() WHERE id=$1",
       [taskId, `CS agent 回傳未知分類 type：${JSON.stringify(result.type)}，請檢查 terminal 輸出`]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
@@ -169,8 +209,10 @@ async function runCsAgent(taskId, userId, signal) {
         [taskId, `${machineLogHeader('cs_code_change')}\n${shown}`]
       );
     }
+    // 離開 cs 關即清 session（不跨關累積，見 with-resume.js 設計說明）：分析關有自己的
+    // analysis_session_id，cs 這場對話到此為止，findings 已存欄位往下傳。
     await query(
-      "UPDATE tasks SET status='analysis_running', cs_findings=$2, updated_at=NOW() WHERE id=$1",
+      "UPDATE tasks SET status='analysis_running', cs_findings=$2, cs_session_id=NULL, cs_prompt_ver=NULL, updated_at=NOW() WHERE id=$1",
       [taskId, reason || null]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'analysis_running' });

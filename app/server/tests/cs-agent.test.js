@@ -280,6 +280,110 @@ test('無前一版 [客服回覆]：仍照常三分類（operation → cs_reply_
   expect(t.status).toBe('cs_reply_pending');   // 無前一版不影響原分類流程
 });
 
+// ── session 續接（省掉重查）──────────────────────────────────────────────────
+// 意圖：cs 的兩條重跑路徑（追問 cs_reply_pending→cs_running、補資料 cs_data_needed→cs_running）
+// 都要續接同一場 claude session。無狀態重跑時 agent 只拿得到一段草稿文字，會把上一輪查過的
+// 正式區 DB／程式碼整包重查一遍——實測 task_service_3907 的追問輪為此燒掉 2.4M cache_read／262 秒。
+// 這組測的是「第二輪帶著 session 回去、且不重送整包脈絡」，任一條斷言鬆掉都等於回到無狀態。
+
+async function firstRound(overrides = {}) {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"type":"operation","reply":"第一版回覆"}</result>',
+    usage: null, durationMs: null, sessionId: 'sess-cs-1'
+  });
+  const t = await makeTask(overrides);
+  await runCsAgent(t.taskId, t.userId);
+  return t;
+}
+
+test('首輪 fresh → 存下 cs_session_id 與指紋，供下一輪續接', async () => {
+  const { taskId } = await firstRound();
+  const { rows: [t] } = await dbModule.query('SELECT cs_session_id, cs_prompt_ver FROM tasks WHERE id=$1', [taskId]);
+  expect(t.cs_session_id).toBe('sess-cs-1');
+  expect(t.cs_prompt_ver).toBeTruthy();      // 指紋要一起存，否則下一輪無從判斷 prompt 有沒有改過
+  expect(mockRunClaude.mock.calls[0][1].resumeSessionId).toBeUndefined();
+});
+
+test('追問重跑 → resume 同一 session，且不重送能力片段與任務原文', async () => {
+  const { userId, taskId } = await firstRound({ text: '匯出報表時系統當掉' });
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+    [taskId, '有可能是叫修單後來才修改的嗎?']
+  );
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"type":"operation","reply":"不是事後被改過"}</result>',
+    usage: null, durationMs: null, sessionId: 'sess-cs-1'
+  });
+  await runCsAgent(taskId, userId);
+
+  const [freshPrompt] = mockRunClaude.mock.calls[0];
+  const [retryPrompt, retryOpts] = mockRunClaude.mock.calls[1];
+  expect(retryOpts.resumeSessionId).toBe('sess-cs-1');
+  expect(retryPrompt).toContain('有可能是叫修單後來才修改的嗎?');   // 新發言要送到
+  // 以下三條是「省掉重查」的實質內容：能力片段、任務原文都已在 session 裡，重送等於重複佔 context
+  expect(freshPrompt).toContain('你是本專案的技術客服');
+  expect(retryPrompt).not.toContain('你是本專案的技術客服');
+  expect(retryPrompt).not.toContain('匯出報表時系統當掉');
+});
+
+test('補資料迴圈 → 同樣 resume（兩條重跑路徑一致，不是只有追問那條）', async () => {
+  const { userId, taskId } = await firstRound();
+  await dbModule.query("UPDATE tasks SET status='cs_running' WHERE id=$1", [taskId]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+    [taskId, '補充：單號是 N50-20260724006']
+  );
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"type":"operation","reply":"已依單號確認"}</result>',
+    usage: null, durationMs: null, sessionId: 'sess-cs-1'
+  });
+  await runCsAgent(taskId, userId);
+  const [retryPrompt, retryOpts] = mockRunClaude.mock.calls[1];
+  expect(retryOpts.resumeSessionId).toBe('sess-cs-1');
+  expect(retryPrompt).toContain('N50-20260724006');
+});
+
+// 意圖：session 裡是第一輪的任務原文快照。使用者中途補了附件／原文被更新後仍續接，agent 會拿舊快照
+// 作答且毫無徵兆——extraVersion 把原文折進指紋就是為了讓這種情況自動退回 fresh。
+test('任務原文變動（如補附件）→ 指紋不符退回 fresh，不沿用舊快照', async () => {
+  const { userId, taskId } = await firstRound();
+  await dbModule.query("UPDATE tasks SET original_text=$2 WHERE id=$1", [taskId, '補充了錯誤截圖與完整重現步驟']);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+    [taskId, '我補了截圖']
+  );
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"type":"operation","reply":"看到截圖了"}</result>',
+    usage: null, durationMs: null, sessionId: 'sess-cs-2'
+  });
+  await runCsAgent(taskId, userId);
+  const [freshPrompt, opts] = mockRunClaude.mock.calls[1];
+  expect(opts.resumeSessionId).toBeUndefined();
+  expect(freshPrompt).toContain('補充了錯誤截圖與完整重現步驟');
+});
+
+test('判 code_change_clear 進分析 → 清掉 session（不跨關累積）', async () => {
+  const { userId, taskId } = await firstRound({ withProject: true });
+  mockRunClaude.mockResolvedValueOnce({
+    text: '<result>{"type":"code_change_clear","reason":"根因在 action_confirm [碼]","reason_plain":"送出後會重複建單，設定裡關不掉。"}</result>',
+    usage: null, durationMs: null, sessionId: 'sess-cs-1'
+  });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_session_id, cs_prompt_ver FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('analysis_running');
+  expect(t.cs_session_id).toBeNull();
+  expect(t.cs_prompt_ver).toBeNull();
+});
+
+test('回應無法解析 → stopped 並清 session，重跑不會續接到同一場壞對話', async () => {
+  const { userId, taskId } = await firstRound();
+  mockRunClaude.mockResolvedValueOnce({ text: '我先講一下我查到什麼……（沒有契約標籤）', usage: null, durationMs: null, sessionId: 'sess-cs-1' });
+  await runCsAgent(taskId, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, cs_session_id FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('stopped');
+  expect(t.cs_session_id).toBeNull();
+});
+
 // ── 時間軸收合 ────────────────────────────────────────────────────────────────
 // 意圖：reason_plain 缺席時的 fallback 會把技術版 reason（實測平均 906 字）原樣放上時間軸——
 // 也就是 a143fc8 想解決的那個症狀，在這條路徑上原樣重現。fallback 本身要留（看不懂好過看不到），
