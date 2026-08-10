@@ -6,7 +6,7 @@ window.TokenReportView = Vue.defineComponent({
       report: null,
       projects: [],
       filters: {
-        range: '30',     // '7' | '30' | 'custom'
+        range: '30',     // 'today' | '7' | '30' | 'custom'
         start: '',
         end: '',
         project_id: '',
@@ -52,6 +52,13 @@ window.TokenReportView = Vue.defineComponent({
     dateRange() {
       const now = new Date();
       const end = now.toISOString().slice(0, 10);
+      // 「今天」送帶時間的完整 ISO（後端 date-only 才補 23:59:59.999Z，帶 T 的直接採用），
+      // 因此區間是本機（＝台北）當日 00:00 到此刻。其餘選項維持既有的 date-only／UTC 切法：
+      // 那實際上以台北 08:00 為界，在跨多日的區間看不出來，但單日會整段錯位。
+      if (this.filters.range === 'today') {
+        const s = new Date(now); s.setHours(0, 0, 0, 0);
+        return { start: s.toISOString(), end: now.toISOString() };
+      }
       if (this.filters.range === '7') {
         const s = new Date(now); s.setDate(s.getDate() - 7);
         return { start: s.toISOString().slice(0, 10), end };
@@ -222,6 +229,7 @@ window.TokenReportView = Vue.defineComponent({
       <!-- 篩選列 -->
       <div data-tour="tr-filters" class="tr-filter-bar">
         <select v-model="filters.range" class="form-control tr-filter-select-sm">
+          <option value="today">今天</option>
           <option value="7">最近 7 天</option>
           <option value="30">最近 30 天</option>
           <option value="custom">自訂</option>

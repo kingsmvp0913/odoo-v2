@@ -278,6 +278,26 @@ test('end=今天（date-only）→ 含當天記錄（邊界補到當日結束）
   expect(hit.total_cost).toBeCloseTo(0.003, 8);
 });
 
+// 意圖：前端「今天」選項送的是帶時間的完整 ISO（本機當日 00:00 到此刻），不是 date-only。
+// 差別在本機當日 00:00 到 UTC 當日 00:00 之間那段——台北就是凌晨 0~8 點——那段用量必須算進
+// 今天，用 date-only 查則會落到前一天。這條守的是後端「帶 T 就照單全收、不補 23:59:59.999Z」。
+// 註：機器若跑在 UTC，兩種切法等價，本測試仍綠但失去鑑別力（本平台容器 TZ=Asia/Taipei）。
+test('start/end 帶完整 ISO（前端「今天」）→ 含本機當日凌晨的記錄', async () => {
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  const justAfterMidnight = new Date(startOfDay.getTime() + 1);
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source, recorded_at)
+     VALUES ('task_local_midnight', $1, 'coding', 500, 0, 0, 0, 'server', $2)`,
+    [regularUserId, justAfterMidnight.toISOString()]
+  );
+
+  const res = await request(app)
+    .get(`/api/token-report?all=true&start=${startOfDay.toISOString()}&end=${new Date().toISOString()}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.tasks.find(t => t.task_id === 'task_local_midnight')).toBeTruthy();
+});
+
 // 意圖：失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標；
 // by_agent 必須帶 per-stage 的成本與失敗率，讓「哪一關最燒」可視化。
 test('by_agent 帶成本與失敗率：失敗記錄（status≠completed）計入 fail_rate', async () => {
