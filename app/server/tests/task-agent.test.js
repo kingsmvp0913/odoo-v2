@@ -849,6 +849,28 @@ test('spec tour prompt 帶已解析的 repo 絕對路徑與資料來源守則（
   });
 });
 
+// 意圖：runner 只在派工時依 task.status 寫一次階段 marker，而本關的 status 是 branch_pending
+// ＝「建立分支」，於是這整段 AI 執行都被歸在那個標籤底下（實際成分是幾秒的 git ＋ 幾百秒的 agent）。
+// 這個混淆已經騙過兩次：流程圖曾把它畫成獨立 status、查 token 時 112 次工具呼叫被誤算在建分支頭上。
+test('spec tour 有自己的階段 marker，不被歸在「建立分支」底下', async () => {
+  await withSpecTour(async () => {
+    analysisSpawn();
+    const id = await makeSpecTask('ta_tour_marker');
+    await runSpecTourGate(id, userId, undefined, 'task/ta_tour_marker');
+    const { rows } = await dbModule.query('SELECT content FROM task_events WHERE task_id=$1', [id]);
+    expect(rows.some(r => r.content.includes('先寫 E2E 考題'))).toBe(true);
+  });
+});
+
+// 意圖：這正是「加自己的 marker」勝過「把 STAGE_LABELS 改成建立分支／出考題」的地方——
+// 旗標關掉的專案根本不跑這段，歷程就不該冒出這一行。marker 必須寫在所有 early return 之後。
+test('spec_tour_enabled=false → 歷程不留 marker（沒跑的事不該出現在歷程上）', async () => {
+  const id = await makeSpecTask('ta_tour_nomarker');
+  await runSpecTourGate(id, userId);
+  const { rows } = await dbModule.query('SELECT content FROM task_events WHERE task_id=$1', [id]);
+  expect(rows.some(r => r.content.includes('先寫 E2E 考題'))).toBe(false);
+});
+
 // 意圖：git_branch 要到 runner 的 doBranch 寫 UPDATE 時才進 DB，而本關跑在那之前——若改回讀
 // tasks.git_branch，這裡會拿到 NULL，source-routing 的 diff 基底就變成「（未設定）」。
 test('git_branch 尚未寫入 DB 時，用呼叫端傳進來的 branchName 而非 NULL', async () => {

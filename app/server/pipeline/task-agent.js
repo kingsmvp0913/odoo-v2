@@ -431,6 +431,18 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   });
   const gitEnv = await buildGitEnv(userId).catch(() => ({}));
   const cwd = worktreeParent(info.root, task.task_id);
+
+  // 自己的階段 marker：runner 只在派工時依 task.status 寫一次（runner.js:349），而本關的 status
+  // 是 branch_pending＝「建立分支」，於是這一整段 AI 執行都被歸在那個標籤底下。實際成分是
+  // 「幾秒的 git ＋ 幾百秒的 agent」，看歷程的人只會看到「建立分支跑了 8 分鐘」。
+  // 這個混淆已經騙過兩次：pipeline 流程圖曾把它畫成獨立 status（見 pipeline-flow.test.js:15），
+  // 2026-08-10 查 token 時也把 112 次工具呼叫誤算在建分支頭上。
+  // 修法刻意不是改 STAGE_LABELS 的字面——那在 spec_tour_enabled 關閉的專案反而變成另一種騙人。
+  // 寫在所有 early return 之後：旗標關掉、無規格、無 repo 時根本不會走到這裡，自然不留痕。
+  const marker = `\n\x1b[96m▶ 先寫 E2E 考題\x1b[0m\n`;
+  notify.emitToUser(userId, 'terminal:output', { taskId, data: marker });
+  await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [taskId, marker]).catch(() => {});
+
   // agentType／stage 用獨立的 spec_tour，不可沿用 'playwright'：這一次發生在分析與 coding 之間，
   // 掛到 playwright 名下會讓「這關重跑幾次、花多少」全部算錯，而健檢正是拿那些數字判該不該檢討，
   // 也就無從量測「規格 tour 模式到底省不省」。
