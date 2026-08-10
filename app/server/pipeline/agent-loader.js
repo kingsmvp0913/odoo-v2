@@ -35,6 +35,7 @@ const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 const CLAUDE_MD_AGENTS = new Map([
   ['analysis-project', 'full'], ['analysis-reject', 'full'],
   ['coding-project', 'full'], ['qa', 'qa'], ['playwright', 'full'],
+  ['playwright-spec', 'full'],
   ['spec-review', 'full'], ['clarify-chat', 'full']
 ]);
 
@@ -48,7 +49,11 @@ let _debugCache = null;
 // （猜 base 分支打成 main→fatal、pwd/ls 探路、猜子目錄名、掃硬碟找 Odoo 核心）。
 // 片段用 {{repo_paths}}／{{main_branch}}／{{git_branch}} 佔位，呼叫端須一併傳入這三個真值。
 const SOURCE_ROUTING_AGENTS = new Set([
-  'analysis-project', 'coding-project', 'qa', 'qa-retry', 'analysis-reject', 'playwright'
+  'analysis-project', 'coding-project', 'qa', 'qa-retry', 'analysis-reject', 'playwright',
+  // playwright-spec 原本兩張名單都漏掉（只有 E2E 關的 playwright 在內），它的 prompt 只拿得到
+  // 模組「名」拿不到路徑，於是實測跑出 `find / -maxdepth 6 -iname "idx_hj"` 全根掃碟——
+  // 它自己 prompt 裡那條「不要掃碟」的禁令攔不住，因為缺的是路徑真值不是禁令（rules/agent-prompt 100）。
+  'playwright-spec'
 ]);
 const SOURCE_ROUTING_MD_PATH = path.join(__dirname, 'source-routing.md');
 let _sourceRoutingCache = null;

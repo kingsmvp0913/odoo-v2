@@ -366,9 +366,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
 // （多個寫入點就會疊加出多份 tour，新舊一起被 --test-tags 跑到）。
 // best-effort，但失敗要留聲——分析關那邊靜默吞掉的話，「規格 tour 沒產出」就沒有任何人看得到，
 // 而下游的 playwright 關只能靠實測檔案存在與否去猜。
-async function runSpecTourGate(taskId, userId, signal) {
+async function runSpecTourGate(taskId, userId, signal, branchName) {
   try {
-    await writeSpecTour(taskId, userId, signal);
+    await writeSpecTour(taskId, userId, signal, branchName);
   } catch (e) {
     console.warn(`[writeSpecTour] task ${taskId} 產出規格 tour 失敗：${e.message}`);
     await query(
@@ -396,9 +396,9 @@ async function runSpecTourGate(taskId, userId, signal) {
 //
 // 整段 best-effort：tour 是加值產物，任何失敗都不該讓已經產出的規格或關卡推進跟著壞掉。失敗時
 // 會留一筆 task_logs（見呼叫端），且 playwright 關會實測 tour 檔是否存在、查無就自行產生。
-async function writeSpecTour(taskId, userId, signal) {
+async function writeSpecTour(taskId, userId, signal, branchName) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, analysis_yaml FROM tasks WHERE id=$1', [taskId]
+    'SELECT id, task_id, project_id, analysis_yaml, git_branch FROM tasks WHERE id=$1', [taskId]
   );
   if (!task) return;
   const { rows: [proj] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
@@ -419,16 +419,33 @@ async function writeSpecTour(taskId, userId, signal) {
     analysis_yaml: task.analysis_yaml,
     module: String(moduleName).trim() || '（見規格 module 欄位）',
     test_url: '（測試環境，由系統於部署後執行；此處不需連線）',
-    login: E2E_LOGIN
+    login: E2E_LOGIN,
+    // source-routing 片段的四個佔位（比照 playwright 關）。少了 repo_paths 它只拿得到模組名、
+    // 拿不到模組在哪，實測會 `find / -iname "<module>"` 掃整個檔案系統。
+    // git_branch：本關跑在 runner 寫入 tasks.git_branch **之前**（runner.js doBranch），
+    // DB 這時還是 NULL，故由呼叫端把已算好的 branchName 傳進來。
+    repo_paths: buildRepoPaths(info, task.task_id),
+    odoo_core_src: coreSourceGuidance(info.odoo_version),
+    main_branch: AI_BRANCH,
+    git_branch: branchName || task.git_branch || '（未設定）'
   });
   const gitEnv = await buildGitEnv(userId).catch(() => ({}));
   const cwd = worktreeParent(info.root, task.task_id);
   // agentType／stage 用獨立的 spec_tour，不可沿用 'playwright'：這一次發生在分析與 coding 之間，
   // 掛到 playwright 名下會讓「這關重跑幾次、花多少」全部算錯，而健檢正是拿那些數字判該不該檢討，
   // 也就無從量測「規格 tour 模式到底省不省」。
-  const res = await runClaude(prompt, {
-    cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour', env: { ...gitEnv }
-  });
+  // 失敗也要記帳：這關 best-effort（外層 runSpecTourGate 吞掉例外照樣推進），但不記的話最貴的
+  // 情境完全隱形——實測 task_service_3907 這關跑滿 600s 逾時被砍、126 個工具呼叫，token_usage
+  // 裡連一列都沒有，報表上等於沒發生過（比照 analysis／cs 的 logFailedUsage 慣例）。
+  let res;
+  try {
+    res = await runClaude(prompt, {
+      cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour', env: { ...gitEnv }
+    });
+  } catch (err) {
+    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'spec_tour', err);
+    throw err;   // 外層照舊寫「產出失敗」的 task_logs 並讓任務推進
+  }
   await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'spec_tour', res.usage, res.durationMs);
   // 只留一行摘要，不塞 agent 的整段輸出：task_logs 會被分診／respec 每輪讀進 prompt，
   // 那是每輪都要付的固定 token 稅，而 tour 的內容看 worktree 裡的檔案才準。

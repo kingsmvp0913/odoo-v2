@@ -834,6 +834,35 @@ test('spec tour 的用量記在 spec_tour 名下，不混進 playwright 關', as
   });
 });
 
+// 意圖：這關原本兩張注入名單都漏了（只有 E2E 關的 playwright 在內），prompt 只給得出模組「名」、
+// 給不出模組在「哪」，實測跑出 `find / -maxdepth 6 -iname "idx_hj"` 全根掃碟一輪上百次工具呼叫。
+// 光在 md 裡寫「不要掃碟」攔不住（它自己 prompt 早有那條）——缺的是路徑真值（rules/agent-prompt 100）。
+test('spec tour prompt 帶已解析的 repo 絕對路徑與資料來源守則（不必自己 find 模組在哪）', async () => {
+  await withSpecTour(async () => {
+    const calls = analysisSpawn();
+    await runSpecTourGate(await makeSpecTask('ta_tour_paths'), userId, undefined, 'task/ta_tour_paths');
+    const stdin = calls[0].stdin;
+    expect(stdin).toContain('資料來源守則');                       // SOURCE_ROUTING_AGENTS 有生效
+    expect(stdin).toContain(path.join('.worktrees', 'ta_tour_paths')); // repo_paths 是已解析的絕對路徑
+    expect(stdin).toContain('task/ta_tour_paths');                 // git_branch 用呼叫端傳的 branchName
+    expect(stdin).not.toMatch(/\{\{\w+\}\}/);                      // 四個佔位都真的有值（鐵則 1）
+  });
+});
+
+// 意圖：git_branch 要到 runner 的 doBranch 寫 UPDATE 時才進 DB，而本關跑在那之前——若改回讀
+// tasks.git_branch，這裡會拿到 NULL，source-routing 的 diff 基底就變成「（未設定）」。
+test('git_branch 尚未寫入 DB 時，用呼叫端傳進來的 branchName 而非 NULL', async () => {
+  await withSpecTour(async () => {
+    const calls = analysisSpawn();
+    const id = await makeSpecTask('ta_tour_nobranch');
+    const { rows: [t] } = await dbModule.query('SELECT git_branch FROM tasks WHERE id=$1', [id]);
+    expect(t.git_branch).toBeNull();                    // 前提：此刻 DB 真的還沒有分支名
+    await runSpecTourGate(id, userId, undefined, 'task/ta_tour_nobranch');
+    expect(calls[0].stdin).toContain('task/ta_tour_nobranch');
+    expect(calls[0].stdin).not.toContain('（未設定）');
+  });
+});
+
 // tour 是加值產物：產不出來不得讓關卡推進跟著壞掉。但也不能靜默——分析關吞掉的話，下游只能靠
 // 實測檔案存在與否去猜，而使用者完全看不到發生過什麼。
 test('spec tour 產出失敗 → 不拋例外，但要在時間軸留下原因', async () => {
@@ -854,6 +883,28 @@ test('spec tour 產出失敗 → 不拋例外，但要在時間軸留下原因',
       "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%規格 tour%'", [id]
     );
     expect(rows.length).toBeGreaterThan(0);
+  });
+});
+
+// 意圖：這關 best-effort、失敗會被 runSpecTourGate 吞掉照樣推進——但吞掉的必須是「流程中斷」，
+// 不是「帳」。實測 task_service_3907 這關跑滿 600s 逾時被砍（126 個工具呼叫、3 個子 agent），
+// token_usage 裡連一列都沒有：報表上等於沒發生過，於是最貴的情境反而最隱形，成本被系統性低估。
+test('spec tour 失敗 → 仍記一筆 spec_tour 失敗用量（最貴的情境不得在報表上隱形）', async () => {
+  await withSpecTour(async () => {
+    const { spawn } = require('child_process');
+    const { EventEmitter } = require('events');
+    spawn.mockImplementation(() => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 1)) };
+      return child;
+    });
+    const { logFailedUsage } = require('../pipeline/token-logger');
+    logFailedUsage.mockClear();
+    await runSpecTourGate(await makeSpecTask('ta_tourfail_acct'), userId);
+    expect(logFailedUsage.mock.calls.map(c => c[2])).toContain('spec_tour');
   });
 });
 

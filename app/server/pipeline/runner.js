@@ -185,8 +185,10 @@ async function doBranch(task, settings, signal) {
   // 掛在這裡而不是分析關收尾，是因為這是所有「進入 branch_pending」路徑的共同出口——analysis 直接
   // 判可開工、澄清答完重跑、規格審核核准（那條不重跑分析）三條都會經過，掛一處即全覆蓋，也就
   // 不會有第二個寫入點疊出第二份 tour。專案層開關，預設關閉。
+  // branchName 明傳：tasks.git_branch 要到下面那行 UPDATE 才寫入，此刻 DB 讀到的仍是 NULL，
+  // 而 source-routing 片段要靠它給出正確的 diff 基底。
   const { runSpecTourGate } = require('./task-agent');
-  await runSpecTourGate(taskId, task.user_id, signal);
+  await runSpecTourGate(taskId, task.user_id, signal, branchName);
   await query(
     "UPDATE tasks SET status = 'coding_running', git_branch = $2, updated_at = NOW() WHERE id = $1",
     [taskId, branchName]
