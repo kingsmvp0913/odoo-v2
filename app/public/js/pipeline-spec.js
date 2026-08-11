@@ -18,8 +18,13 @@
 // Git 分支名與「不是狀態」的說明一律放 ref。混用一個欄位的話，測試無從分辨 'testing'
 // （分支名）與 'cs_running'（狀態），也就擋不住把不存在的狀態畫成一關。
 //
-// flags = { e2eEnabled, specTour, showGit }：前兩個對應專案設定（e2e_disabled 的反面、
-// spec_tour_enabled），第三個純顯示。三個都會實際改變節點與連線，不只是隱藏。
+// flags = { e2eEnabled, showGit }：前者對應專案設定 e2e_disabled 的反面，後者純顯示。
+// 兩個都會實際改變節點與連線，不只是隱藏。
+//
+// 曾經有第三個 specTour（對應已移除的 projects.spec_tour_enabled）。兩個獨立旗標有四種組合，
+// 其中兩種是垃圾：「出考題但沒人考」（實測讓鴻久每張任務固定燒滿一個逾時寫永遠不會執行的 tour）
+// 與「後出考題」（tour 照著完成的實作寫，測試遷就實作）。合併成單一 e2eEnabled 之後，
+// 那兩種狀態在資料上就無法表達——這比在程式裡加守衛去擋它們更根本。
 
 // 泳道定義。順序＝由左到右；沒有 flag 的一律顯示，有 flag 的由對應的開關控制。
 // 擴充：加一條泳道就是加一筆（例：{ id: 'eservice', label: 'eService', flag: 'showEservice',
@@ -57,7 +62,7 @@ const PF_UNDRAWN_STATUSES = [
 // step 是手寫的且刻意留有空號——畫圖那端會把完全空的列收掉，所以搬動節點不必重編後面所有的號。
 // detail 是「進入條件／做什麼／成功往哪／失敗往哪」，每一列 [標題, 內容]。
 function pipelineNodes(flags) {
-  const { e2eEnabled, specTour } = flags;
+  const { e2eEnabled } = flags;
   const tracks = pipelineTracks(flags);
   const n = [];
   const push = (o) => { if (tracks.some((t) => t.id === o.track)) n.push(o); };
@@ -145,20 +150,19 @@ function pipelineNodes(flags) {
     detail: [
       ['進入', '規格已定稿（上面三條路的共同出口）'],
       ['做什麼', '每個 repo 建任務 worktree（切點 ai-dev）並跟上最新 ai-dev'],
-      ['往下', specTour && e2eEnabled ? '先寫 E2E 考題 → 開發' : '開發'],
+      ['往下', e2eEnabled ? '先寫 E2E 考題 → 開發' : '開發'],
       ['注意', '持專案鎖，與 merge／deploy／analysis 序列化']
     ]
   });
 
-  // 與 e2eEnabled 連動而非獨立：E2E 停用的專案，tour 寫了也永遠不會被執行（部署成功直接進
-  // 最終人工審核），出考題純粹是每張任務固定燒一個逾時。程式端的守衛在 writeSpecTour。
-  if (specTour && e2eEnabled) {
+  // 出考題與考試是同一個開關的兩半：E2E 停用就兩件都不做，啟用就兩件都做。
+  if (e2eEnabled) {
     push({
       id: 'spectour', track: 'task', step: 7, kind: 'inline', label: '先寫 E2E 考題',
       ref: '（不是獨立狀態）', agent: 'playwright-spec',
       detail: [
         ['注意', '**這不是一關**——沒有對應的任務狀態，任務不會停在這裡。它是建立分支關內部的一步（runSpecTourGate），只在記帳上獨立成 spec_tour'],
-        ['進入', '規格 tour 模式開啟、專案未停用 E2E，且任務剛進入建立分支'],
+        ['進入', '專案啟用 E2E，且任務剛進入建立分支'],
         ['做什麼', '依定稿的 acceptance 先寫 Odoo tour（實作之前定稿），續接分析關的 session（碼已讀過，不必重探）'],
         ['失敗', 'best-effort：產不出來不擋推進，但會在時間軸留下原因，E2E 關屆時自行產生。session 已被回收則降級 fresh 重跑']
       ]
@@ -173,8 +177,8 @@ function pipelineNodes(flags) {
       ['做什麼', '無狀態：每輪 fresh 重送規格，讀 worktree 既有碼做增量修'],
       ['往下', 'QA 審查'],
       ['守衛', '帶著失敗回饋卻一個 commit 都沒產生 → 直接停下（放行只會重現同一個失敗）'],
-      specTour
-        ? ['本模式', 'worktree 內已有 tour＝驗收標準；考題寫錯要指出，不得逕自改測試檔']
+      e2eEnabled
+        ? ['考題', 'worktree 內已有 tour＝驗收標準；考題寫錯要指出，不得逕自改測試檔']
         : ['注意', 'retry_feedback（上一輪失敗訊息）會餵進 prompt，推進成功才消費']
     ]
   });
@@ -264,19 +268,16 @@ function pipelineNodes(flags) {
 
   if (e2eEnabled) {
     push({
-      id: 'e2e', track: 'task', step: 15, kind: 'agent', label: 'E2E 測試',
-      status: 'playwright_running', agent: specTour ? '（不產生，只執行）' : 'playwright',
+      id: 'e2e', track: 'task', step: 15, kind: 'sys', label: 'E2E 測試',
+      status: 'playwright_running', ref: '（純程式關，無 agent）',
       detail: [
-        ['進入', '部署成功，且專案未停用 E2E'],
-        ['做什麼', specTour
-          ? '不重產 tour（重產等於照著完成的實作重寫考題），併入 testing 後直接跑 odoo-bin --test-enable'
-          : '產生 tour 測試檔 → 併入 testing → 跑 odoo-bin --test-enable'],
-        ['往下', '通過 → 等待審核'],
-        ['失敗', '退開發，pw_retry_count+1，滿 3 次停下'],
-        ['防假綠燈', 'log 內沒有 odoo.tests 命名空間＝匹配 0 個測試，一律當失敗'],
-        specTour
-          ? ['守衛', '模式開著但 worktree 內查無 tour 檔 → 降級由本關自行產生，並在時間軸留下原因']
-          : ['注意', 'tour 是照著已完成的實作寫的，測試容易遷就實作']
+        ['進入', '部署成功，且專案啟用 E2E'],
+        ['做什麼', '把任務分支再併一次 testing 帶入 tour → 跑 odoo-bin --test-enable，只跑本次 diff 內的 HttpCase class'],
+        ['往下', '通過 → 等待審核（時間軸留一行「N 支測試全數通過」）'],
+        ['失敗', '退開發，pw_retry_count+1，滿 3 次停下；摘要進時間軸、全文走 retry_feedback、原始 log 落檔'],
+        ['不重產 tour', '考題已在建立分支關依 acceptance 定稿。這裡重產等於照著完成的實作重寫考題，測試會遷就實作'],
+        ['防假綠燈', '解析 odoo 收尾行的題數：0 支＝沒考，判失敗。不能只看 log 有沒有 odoo.tests——0 個測試時它照樣印'],
+        ['收窄範圍', '只跑本次任務新增的 tour class，否則模組內既有的壞測試會把它拖成失敗（實測 48 支裡 25 支既有失敗）']
       ]
     });
   }
@@ -405,7 +406,7 @@ function pipelineEdges(flags) {
     ['review', 'wiki', 'main'], ['wiki', 'done', 'main'], ['done', 'release', 'alt']
   ];
   // 條件必須與 pipelineNodes 的 spectour 節點逐字一致，否則會生出指向不存在節點的連線
-  if (flags.specTour && flags.e2eEnabled) { e.push(['branch', 'spectour', 'main'], ['spectour', 'coding', 'main']); }
+  if (flags.e2eEnabled) { e.push(['branch', 'spectour', 'main'], ['spectour', 'coding', 'main']); }
   else { e.push(['branch', 'coding', 'main']); }
   if (flags.e2eEnabled) { e.push(['deploy', 'e2e', 'main'], ['e2e', 'review', 'main'], ['e2e', 'coding', 'back']); }
   else { e.push(['deploy', 'review', 'main']); }

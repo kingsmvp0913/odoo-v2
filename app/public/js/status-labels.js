@@ -29,7 +29,12 @@ const TASK_STATUSES = {
   merge_running:        { label: '併入測試中',          actor: 'system' },
   merge_conflict:       { label: '合併衝突',            actor: 'human' },
   deploy_testing:       { label: '部署測試區',          actor: 'system' },
-  playwright_running:   { label: 'E2E 測試中',          actor: 'agent',  agent: 'playwright' },
+  // 純程式關：E2E 不再有 agent。tour 一律在分析後由 spec_tour 依 acceptance 產出，本關只負責
+  // 「併分支 → odoo-bin --test-enable → 判題數與 exit code」，行為確定、無模型參與。
+  // actor 由 agent 改 system 後仍在 RUNNABLE_STATUSES 內（byActor('system','agent') 兩者都收），
+  // 派工不受影響——這是改這欄之前必須先確認的事，弄錯會讓任務永久凍在此狀態。
+  // status 代號刻意不改名：它散在 DB、resume_status 與歷史任務裡，改名風險遠大於名字不精確。
+  playwright_running:   { label: 'E2E 測試中',          actor: 'system' },
   spec_review:          { label: '等待規格確認',        actor: 'human' },
   review_pending:       { label: '等待審核',            actor: 'human' },
   reject_triage:        { label: '分診中',              actor: 'agent',  agent: 'analysis-reject' },

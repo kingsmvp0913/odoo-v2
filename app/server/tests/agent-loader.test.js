@@ -422,9 +422,9 @@ describe('PLAIN_LANGUAGE_AGENTS 注入說人話守則', () => {
     const PL_PATH = path.join(__dirname, '..', 'pipeline', 'plain-language.md');
     const orig = fs.readFileSync(PL_PATH, 'utf8');
     try {
-      const before = promptVersion('playwright');
+      const before = promptVersion('merge');
       fs.writeFileSync(PL_PATH, orig + '\n\n<!-- 指紋探針 -->\n');
-      expect(promptVersion('playwright')).toBe(before);
+      expect(promptVersion('merge')).toBe(before);
     } finally {
       fs.writeFileSync(PL_PATH, orig);
     }

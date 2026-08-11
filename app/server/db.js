@@ -599,9 +599,10 @@ async function migrate() {
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
     { table: 'projects', col: 'e2e_disabled', sql: 'ALTER TABLE projects ADD COLUMN e2e_disabled BOOLEAN NOT NULL DEFAULT false' },
-    // 規格 tour：分析關產出 analysis.yaml 後，用同一個 session 續寫 E2E tour（脈絡已在，幾乎零額外探索），
-    // 讓測試在 coding 之前定稿——現行順序是 coding 完才產 tour，等於先寫答案再出考題，測試會遷就實作。
-    // 預設 false＝行為與現況完全相同（比照 e2e_disabled 的保守預設，見規則「布林旗標用安全預設」）。
+    // ⚠ 已退役（2026-08-11）：已併入 e2e_disabled，程式各處不再讀寫。欄位保留是因為本框架
+    // 只有 add-if-missing、沒有 drop column（rules/db-schema 41）——別再新增讀取它的程式碼。
+    // 退役理由：它與 e2e_disabled 兩個獨立旗標有四種組合，其中「出考題但沒人考」實測讓鴻久
+    // 每張任務固定燒滿一個逾時去寫一份永遠不會被執行的 tour。合併後那個狀態無法表達。
     { table: 'projects', col: 'spec_tour_enabled', sql: 'ALTER TABLE projects ADD COLUMN spec_tour_enabled BOOLEAN NOT NULL DEFAULT false' },
     // 分析關的 session：供續寫 tour 時 --resume（比照 spec_session_id 的用法）。
     { table: 'tasks', col: 'analysis_session_id', sql: 'ALTER TABLE tasks ADD COLUMN analysis_session_id TEXT' },

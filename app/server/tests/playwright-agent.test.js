@@ -154,30 +154,6 @@ test('規格 tour 模式＋worktree 內確有 tour → 不重產，直接執行'
   expect((await statusOf(id)).status).toBe('review_pending');
 });
 
-// 意圖：spec_tour_enabled 是專案層開關、沒有 per-task 快照，所以「開關剛打開、任務早就過了分析關」
-// 這種狀態下 worktree 裡根本沒有 tour——不需要任何失敗就會發生。此時若只看旗標就跳過產生，
-// 模組裡只要有前一張任務留下的 tour，--test-tags /<module> 就會跑到那些舊測試，log 出現
-// odoo.tests，下方的防假綠燈守衛因此失效 → 本次功能零 E2E 覆蓋卻直達人工審核。
-test('規格 tour 模式但 worktree 內查無 tour → 必須自行產生，不得直接跳過', async () => {
-  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
-  mockWorktreeParent.mockReturnValue(makeWorktree(false));
-  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
-  const id = await makeTask();
-  await runTourStage(id, userId);
-  expect(runClaude).toHaveBeenCalled();                       // 降級回本關產生
-  const { rows } = await dbModule.query(
-    "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%找不到%tour%'", [id]);
-  expect(rows.length).toBeGreaterThan(0);                     // 而且要留聲，不能靜默降級
-});
-
-test('旗標關閉（預設）→ 一律自行產生 tour', async () => {
-  mockWorktreeParent.mockReturnValue(makeWorktree(true));     // 就算有檔也照樣重產（既有行為）
-  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
-  const id = await makeTask();
-  await runTourStage(id, userId);
-  expect(runClaude).toHaveBeenCalled();
-});
-
 test('tour 全過（exit0）→ review_pending', async () => {
   // 真實通過的 log 含 odoo.tests 命名空間（HttpCase/tour 執行必經該 logger），代表確實跑了測試
   envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
@@ -196,19 +172,6 @@ test('url 為 NULL 但持有內部埠（子網域模式）→ 照常執行，不
   const id = await makeTask();
   await runTourStage(id, userId);
   expect((await statusOf(id)).status).toBe('review_pending');
-});
-
-// 意圖：test_url 是餵給 tour-author agent 的環境位址（agents/playwright.md 明寫「測試環境已在
-// {{test_url}} 運行」）。子網域模式下不能塞空值或塞一個沒人持有名額時連不上的對外網址——
-// 必須是平台自己剛健檢過、agent 也連得到的內部綁定位址。
-test('test_url 用內部綁定位址現算，不讀 odoo_envs.url', async () => {
-  await dbModule.query('UPDATE odoo_envs SET url=NULL, port=21005 WHERE project_id=$1', [projectId]);
-  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
-  const id = await makeTask();
-  await runTourStage(id, userId);
-  const { envBindHost } = require('../port-alloc');
-  expect(mockRenderSpy).toHaveBeenCalled();
-  expect(mockRenderSpy.mock.calls[0][0].test_url).toBe(`http://${envBindHost(21005)}:21005`);
 });
 
 // 意圖：真正的前置條件是「借到內部埠」。沒埠代表環境沒真的起來，此時放行會讓 agent 拿到
@@ -304,17 +267,6 @@ test('P4 tour 進程猝死（非常規退出碼＋無錯誤）→ stopped/env，
   expect(s.blocker_type).toBe('env');
   expect(s.pw_retry_count).toBe(0);                          // infra 猝死不佔計數
   expect(classifier.classifyFailureWithAgent).not.toHaveBeenCalled(); // 猝死走確定性判定，不問 haiku
-});
-
-// P1：tour 產生放寬 timeout（比照 coding），別再像 106 那樣死在預設 600s。
-test('P1 tour-author runClaude 帶放寬的 timeoutMs（預設 1200s）', async () => {
-  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
-  const id = await makeTask();
-  await runTourStage(id, userId);
-  expect(runClaude).toHaveBeenCalled();
-  expect(runClaude.mock.calls[0][1].timeoutMs).toBe(1200000); // 20 分，非預設 600s
-  // {{odoo_core_src}} 漏傳只會 console.warn，資料來源段會整段變空白（連禁止掃碟的警告都沒了）
-  expect(mockRenderSpy.mock.calls[0][0].odoo_core_src).toBe('（測試：核心來源守則）');
 });
 
 // P3：容器必須在測試期間保持存活。這支原本斷言的是「先 stopEnv 再跑測試」——而 stopEnv 在 docker

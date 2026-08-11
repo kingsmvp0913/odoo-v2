@@ -3,13 +3,7 @@ const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const yaml = require('js-yaml');
-const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { loadAgent } = require('./agent-loader');
-const { E2E_LOGIN, E2E_PASSWORD } = require('./e2e-account');
-const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
-const { getProjectNotes } = require('./project-notes');
-const { coreSourceGuidance } = require('../lib/odoo-core-src');
-const { runClaude, stopReason } = require('./claude-runner');
+const { getProjectInfo, worktreeParent } = require('./task-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests, restartEnv } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
@@ -18,10 +12,6 @@ const { withProjectLock } = require('./project-lock');
 const { diffNameOnly, AI_BRANCH } = require('./git');
 
 const PW_LIMIT = 3;
-// tour 產生＝重探索＋讀範例＋寫 tour/HttpCase，與 coding 同屬長階段，預設 600s 常不夠
-//（106 事故：claude 執行逾時整整 600s、tour 沒寫完就被砍）。獨立放寬、可用 env 調整（比照 coding 的 CODING_TIMEOUT_MS）。
-const E2E_TIMEOUT_MS = parseInt(process.env.PIPELINE_E2E_TIMEOUT_MS || '1200000', 10);
-
 // 失敗診斷完整落地（比照 deploy-testing.js 的 saveDeployLog）：blocker/feedback 只留摘要，
 // 完整 stdout/stderr/exitCode 存檔供事後鑑識，避免 tour 斷言細節與 traceback 永久遺失。
 function saveTourLog(taskId, err) {
@@ -77,8 +67,9 @@ async function bounceToCoding(task, taskId, userId, report, logRef = '') {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
 }
 
-// E2E via Odoo 原生 tour（獨立階段）：agent 產 tour+HttpCase 寫入模組並 commit（副作用），
-// 再由 Node 跑 odoo-bin --test-enable 判 exit code；verdict 對映複用 deploy 的分類邏輯。
+// E2E via Odoo 原生 tour（純程式關，無 agent）：把任務分支再併一次 testing 帶入考題，
+// 跑 odoo-bin --test-enable，依「實際跑了幾支」與 exit code 判定；失敗分類複用 deploy 那套。
+// 考題本身在更早的建立分支關就依 acceptance 定稿了（task-agent.js 的 runSpecTourGate）。
 async function runTourStage(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, project_id, git_branch, analysis_yaml, pw_retry_count FROM tasks WHERE id = $1',
@@ -93,31 +84,26 @@ async function runTourStage(taskId, userId, signal) {
     await stopTask(taskId, userId, '測試環境未運行且無法自動啟動，請至專案環境頁檢查', 'env');
     return true;
   }
-  // 位址由內部埠現算，不讀 odoo_envs.url：子網域模式下開機時 url 一律存 NULL（對外網址是
-  // 真人借到檢視名額的當下才算得出來，而 pipeline 從不借名額）。tour 是 docker exec 進容器跑的、
-  // 不經對外網址，沿用 url 會讓正式機每張啟用 E2E 的任務都停在「未提供 URL」，本機重現不了。
-  // 用 envBindHost 而非對外網址：那正是 ensureEnvRunning 剛剛探通的位址，agent 也連得到。
+  // 持有埠＝這個環境真的被建起來過（ensureEnvRunning 探通的就是它），也是 finally 那次 restartEnv
+  // 等待監聽的目標。tour 本身是 docker exec 進容器跑、不經網址，故只驗埠在不在，不再組 test_url
+  //（那是給已移除的 tour-author agent 用的）。
   const { rows: [env] } = await query('SELECT port FROM odoo_envs WHERE project_id=$1', [task.project_id]);
   if (!env?.port) {
     await stopTask(taskId, userId, '測試環境未持有埠，無法執行 E2E 測試', 'env');
     return true;
   }
-  const { envBindHost } = require('../port-alloc');
-  const testUrl = `http://${envBindHost(env.port)}:${env.port}`;
 
   let moduleName = '';
   try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; } catch { /* SD 解析失敗 */ }
   if (!moduleName) {
-    await stopTask(taskId, userId, '無法從分析規格取得 module 名稱，無法產生 tour 測試', 'code');
+    await stopTask(taskId, userId, '無法從分析規格取得 module 名稱，無法決定要跑哪個模組的 tour', 'code');
     return true;
   }
 
-  // 1) tour-author agent：把 tour+HttpCase 寫進模組並 commit（結果由下方 exit code 判，不解析其文字）
   const info = await getProjectInfo(task.project_id);
-  // 防呆：無已 clone 完成的 repo 時不得 fallback 到 process.cwd()——
-  // agent 帶 --dangerously-skip-permissions，會把測試檔寫進平台自身的 repo
+  // 無已 clone 完成的 repo 就沒有 worktree，也就無從推導本次的 tour class
   if (!info?.root) {
-    await stopTask(taskId, userId, '專案未設定任何已完成 clone 的 Repo，無法產生 tour 測試', 'env');
+    await stopTask(taskId, userId, '專案未設定任何已完成 clone 的 Repo，無法執行 tour 測試', 'env');
     return true;
   }
   // 防結構性假綠燈：無任務分支＝tour 無法併入 testing，addons-path 收不到新 tour，
@@ -127,65 +113,13 @@ async function runTourStage(taskId, userId, signal) {
     return true;
   }
   const cwd = worktreeParent(info.root, task.task_id);
-  // 規格 tour 模式：tour 已在分析關依 acceptance 定稿（實作之前），這裡不得重產——重產等於
-  // 讓 agent 照著已完成的實作重寫考題，測試會遷就實作，先定稿的意義整個消失。
-  // 直接跳到下方「併入 testing → 跑 --test-enable」。
-  //
-  // 但旗標只說「本專案打算走這個模式」，不代表 tour 真的在。分析關的 writeSpecTour 是 best-effort、
-  // 失敗靜默；而 spec_tour_enabled 是專案層開關又沒有 per-task 快照，開關打開當下所有已過分析關的
-  // 在途任務，到這裡必然是「模式開著、worktree 裡沒有 tour」——這條路不需要任何失敗就會發生。
-  // 只看旗標就跳過的話：模組裡有前一張任務留下的 tour 時，--test-tags /<module> 會跑到那些舊測試，
-  // log 出現 odoo.tests 命名空間，下方的防假綠燈守衛因此失效 → 本次功能零 E2E 覆蓋卻直達人工審核。
-  // 所以要看事實不看旗標：確認 tour 檔真的存在才跳過產生。
-  const { rows: [tourCfg] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
-  const hasSpecTour = !!(tourCfg && tourCfg.spec_tour_enabled) && await specTourExists(info, cwd, moduleName);
-  if (hasSpecTour) {
-    await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E tour 已於分析關依規格產出，本關直接執行、不重新產生')",
-      [taskId]
-    );
-  } else if (tourCfg && tourCfg.spec_tour_enabled) {
-    // 降級回本關產生：任務照樣走得完（等同關掉開關的既有行為），但必須留聲——否則「規格 tour
-    // 沒產出」這件事沒有任何人看得到，而分析關那邊已經吞掉了失敗。
-    await query(
-      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-      [taskId, `規格 tour 模式已啟用，但 worktree 內找不到 ${moduleName} 的 tour 測試檔（分析關可能未產出，或本任務在開關啟用前就已通過分析關）。本關改為自行產生 tour，先定稿的效果本次不生效。`]
-    );
-  }
-  if (!hasSpecTour) try {
-    const agent = loadAgent('playwright');
-    // base 分支＝任務切點 ai-dev：供 source-routing 給出正確 diff 基底。
-    // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
-    const baseBranch = AI_BRANCH;
-    const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
-    const prompt = agent.render({
-      analysis_yaml: task.analysis_yaml || '（無規格）',
-      test_url: testUrl,
-      login: E2E_LOGIN,
-      module: moduleName,
-      repo_paths: buildRepoPaths(info, task.task_id),
-      odoo_core_src: coreSourceGuidance(info.odoo_version),
-      main_branch: baseBranch,
-      git_branch: task.git_branch || '（未設定）',
-      project_notes: projectNotes || ''
-    }).trim();
-    // 登入密碼改讀該環境隨機 E2E 密碼（每環境獨立、非原始碼公開後門）；舊環境（無值）退回固定值相容。
-    const { rows: [envCreds] } = await query('SELECT e2e_password FROM odoo_envs WHERE project_id=$1', [task.project_id]);
-    const e2ePassword = envCreds?.e2e_password || E2E_PASSWORD;
-    const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, env: { E2E_PASSWORD: e2ePassword }, agentType: 'playwright', timeoutMs: E2E_TIMEOUT_MS });
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', result.usage, result.durationMs);
-  } catch (err) {
-    await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'playwright', err);
-    if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
-    await stopTask(taskId, userId, stopReason('Tour 產生失敗', err));
-    return true;
-  }
-
-  // 2) tour commit 在任務分支（worktree），主 clone 的 testing 分支還沒有它——
-  //    不先併入 testing，odoo-bin 的 addons-path（指主 clone）收不到新 tour，
-  //    --test-tags 匹配不到任何測試就 exit 0＝結構性假綠燈。故先把 task 分支再併一次 testing
-  //    （功能碼已在 merge 關卡併過，這次只帶入 tour 測試檔；mergeInto 同時保證 testing 已檢出）。
-  //    動共用主 clone＋測試 DB → 全程持專案鎖，與同專案 merge/deploy/analysis 序列化。
+  // 考題不在這裡產。tour 一律在建立分支關依定稿的 acceptance 先寫（runSpecTourGate），
+  // 本關只負責執行。這一關原本還留著一條「自己產 tour」的降級路徑，2026-08-11 移除：
+  //   * 那條路是「先寫答案再出考題」——照著已完成的實作重寫考題，測試會遷就實作而靜默通過；
+  //   * 它與先寫模式兩條路都從未被執行過（token_usage 裡 playwright 一筆都沒有），
+  //     留著等於維護兩條沒人走過的路，而降級路徑天生最少被走、最容易爛掉；
+  //   * 留著它也讓「考題沒產出」有地方遁形——現在沒有備援，缺 tour 會直接被下方的題數守衛判 0 支。
+  // 於是本關成為純程式關（無 agent），status_labels 的 playwright_running 也隨之改標 actor:'system'。
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
   let log = '', err = null, mergeStop = null, cls = null, tourClasses = [];
   await withProjectLock(task.project_id, async () => {
@@ -205,7 +139,7 @@ async function runTourStage(taskId, userId, signal) {
       }
     }
 
-    // 3) 這裡曾經先 `stopEnv` 再跑測試，理由是「測試進程 -u <module> 與 live server 同顆 DB 併跑會
+    // 這裡曾經先 `stopEnv` 再跑測試，理由是「測試進程 -u <module> 與 live server 同顆 DB 併跑會
     //    registry 走鏽」。那是 venv 時代的寫法：當時停 server＝砍一個 process、DB 仍在。
     //    docker 化之後 server 就是容器本身，而 stopEnv = stopContainer + **removeContainer**
     //    （env-agent.js:454），下一行的 runTourTests 卻是 `docker exec` 進同一個容器、開頭就檢查
@@ -321,19 +255,6 @@ async function tourTestClasses(info, cwd, moduleName, baseBranch, taskBranch) {
     }
   }
   return [...classes];
-}
-
-// 規格 tour 是否真的躺在 worktree 裡。Odoo 的 tour 一律住 `<module>/static/tests/tours/`；
-// 逐個 repo 子目錄找，任何一個有 .js 就算數。探測失敗一律當「沒有」——寧可多產一次 tour，
-// 也不要在沒有測試的情況下跳過產生（那會變成假綠燈直達人工審核）。
-async function specTourExists(info, cwd, moduleName) {
-  const fsp = require('fs').promises;
-  for (const repo of (info.repos || [])) {
-    const dir = path.join(cwd, repo.subdir, moduleName, 'static', 'tests', 'tours');
-    const files = await fsp.readdir(dir).catch(() => []);
-    if (files.some(f => f.endsWith('.js'))) return true;
-  }
-  return false;
 }
 
 module.exports = { runTourStage };

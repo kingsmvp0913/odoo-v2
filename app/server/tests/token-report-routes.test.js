@@ -375,8 +375,10 @@ test('project_stats：一次過關率由 token_usage 列數推算，某關跑第
       );
     }
   };
-  await seed('task_fp_clean',  '一次過',   ['analysis', 'coding', 'qa', 'playwright']);
-  await seed('task_fp_bounce', '有彈跳',   ['analysis', 'coding', 'coding', 'qa', 'playwright', 'playwright']);
+  // 關卡清單隨「E2E 變成純程式關」調整：playwright 不再花 token（該關已無 agent），
+  // 真正在花錢的是出考題的 spec_tour。fixture 跟著換，否則測的是一個沒有執行者的關卡。
+  await seed('task_fp_clean',  '一次過',   ['analysis', 'coding', 'qa', 'spec_tour']);
+  await seed('task_fp_bounce', '有彈跳',   ['analysis', 'coding', 'coding', 'qa', 'spec_tour', 'spec_tour']);
   // 沒有 tour 的任務：該關 0 次呼叫，不該被當成失敗
   await seed('task_fp_notour', '無 tour', ['analysis', 'coding', 'qa']);
 
@@ -389,7 +391,7 @@ test('project_stats：一次過關率由 token_usage 列數推算，某關跑第
   expect(row.done_tasks).toBe(3);
   expect(row.first_pass_rate).toBeCloseTo(2 / 3);            // 只有 bounce 那張不算
   expect(row.avg_stage_calls.coding).toBeCloseTo(4 / 3);     // (1+2+1)/3
-  expect(row.avg_stage_calls.playwright).toBeCloseTo(1);     // (1+2+0)/3，沒跑的計 0
+  expect(row.avg_stage_calls.spec_tour).toBeCloseTo(1);      // (1+2+0)/3，沒跑的計 0
 });
 
 // 意圖：人工退回是「規格沒對齊」的最終訊號，退回原因分類 cron 早就在算，報表要看得到；
@@ -455,12 +457,12 @@ test('summary.avg_cost_per_task 分母是完成任務數，不是 token_usage �
 
 // 意圖：各關的重跑要看得到——fail_rate 只算 timeout/error，漏掉「跑完但被打回重來」，
 // 而後者才是重跑成本的主要來源。avg_calls_per_task = 1.0 代表該關從不重跑。
-// 用 playwright 斷言：全檔只有上面的 fixture 寫過這個 agent_type，不受其他測試的資料干擾。
+// 用 spec_tour 斷言：全檔只有上面的 fixture 寫過這個 agent_type，不受其他測試的資料干擾。
 test('by_agent.avg_calls_per_task：同任務同關卡跑兩次 → 平均呼叫數 > 1', async () => {
   const res = await request(app)
     .get('/api/token-report?all=true')
     .set('Authorization', `Bearer ${adminToken}`);
-  const pw = res.body.by_agent.find(r => r.agent_type === 'playwright');
+  const pw = res.body.by_agent.find(r => r.agent_type === 'spec_tour');
   expect(pw).toBeTruthy();
   expect(pw.calls).toBe(3);                          // clean 1 次 + bounce 2 次
   expect(pw.avg_calls_per_task).toBeCloseTo(1.5);    // 3 次呼叫 / 2 個任務

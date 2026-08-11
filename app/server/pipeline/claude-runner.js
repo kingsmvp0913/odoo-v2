@@ -10,7 +10,7 @@ const { aiTokenEnv } = require('../lib/ai-token');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
-// playwright（tour selector/導航 URL）、qa（判 base Odoo 是否合法）、reject_triage（判是否不符 Odoo 標準）、chat（技術問答）。
+// spec_tour（tour selector/導航 URL）、qa（判 base Odoo 是否合法）、reject_triage（判是否不符 Odoo 標準）、chat（技術問答）。
 // 缺 context7 的關卡會退而 grep/find 本機 Odoo core（odoo-envs），曾滾成 `find /` 全碟掃描 → 逾時。
 // 掃碟守衛掛上之後，缺 context7 的症狀改換一種樣子：agent 改用 WebSearch/WebFetch 去 raw.githubusercontent.com
 // 抓 Odoo core（實測 spec_tour 一輪 38 次工具呼叫裡 7 次 WebSearch＋7 次 WebFetch＋3 次 ToolSearch 找不到 context7，
@@ -19,7 +19,7 @@ const { aiTokenEnv } = require('../lib/ai-token');
 // 實測 serena 即使在場也不被用（Grep/Read 已覆蓋 repo 內 symbol 查詢），故全 pipeline 不掛 serena，省下冷啟動 indexing 與空找 schema。
 const MCP_PROFILES = {
   analysis: 'context7.json', coding: 'context7.json',
-  playwright: 'context7.json', spec_tour: 'context7.json', qa: 'context7.json',
+  spec_tour: 'context7.json', qa: 'context7.json',
   reject_triage: 'context7.json', chat: 'context7.json',
   cs: 'context7.json',
 };

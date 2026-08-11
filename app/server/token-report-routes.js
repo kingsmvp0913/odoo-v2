@@ -126,7 +126,7 @@ function registerRoutes(app) {
       const taskWhere = 'WHERE ' + taskConditions.join(' AND ');
 
       // 拆多段查再於 JS 合併：相關子查詢與 LATERAL 在 pg-mem（測試用）不保證可用
-      const PIPELINE_STAGES = ['analysis', 'coding', 'qa', 'playwright'];
+      const PIPELINE_STAGES = ['analysis', 'coding', 'qa', 'spec_tour'];
       const [{ rows: doneTaskRows }, { rows: stageCallRows }, { rows: rejectRows }, { rows: rejectCatRows }] = await Promise.all([
         query(
           `SELECT t.task_id, t.project_id, p.name AS project_name

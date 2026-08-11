@@ -16,14 +16,17 @@ describe('SD acceptance 驗收點導入', () => {
     }
   );
 
-  // 意圖（Rule 9）：playwright 必須把每條 acceptance 變成一個斷言（缺一不可），
-  // 否則「弱 tour」（只驗某元素存在、不驗值/數字）會重現；同時舊 SD 無 acceptance
-  // 時要能優雅退回現行行為，不硬性失敗而卡住既有任務。
-  test('playwright 要求逐條覆蓋 acceptance 且有無 acceptance 的 fallback', () => {
-    const body = loadAgent('playwright').body;
+  // 意圖（Rule 9）：出考題的 agent 必須把每條 acceptance 變成一個斷言（缺一不可），
+  // 否則「弱 tour」（只驗某元素存在、不驗值/數字）會重現。
+  // 對象從 playwright 改為 playwright-spec：2026-08-11 砍掉「實作完才產 tour」那條路之後，
+  // 全平台只剩這一支在出考題。原本還斷言「無 acceptance 時的 fallback」，那條隨之失效——
+  // writeSpecTour 在 `if (!task.analysis_yaml) return` 就擋掉了，這支 agent 不可能拿到無規格的輸入。
+  test('playwright-spec 要求逐條覆蓋 acceptance（不得只驗元素存在）', () => {
+    const body = loadAgent('playwright-spec').body;
     expect(body).toMatch(/acceptance/);        // 有引用 acceptance
     expect(body).toContain('缺一不可');          // 強制逐條覆蓋
-    expect(body).toContain('退回自行判斷');       // 無 acceptance 時的 fallback
+    // 涵蓋不到的必須明講，不能假裝測了——這才是「弱 tour」真正的防線
+    expect(body).toContain('不要假裝測了');
   });
 });
 

@@ -814,10 +814,11 @@ function analysisSpawn(onStdin) {
 
 // 旗標一律 try/finally 復原：全檔共用同一個 projectId、沒有 beforeEach 重置，而旗標是 runtime
 // 現讀 DB。斷言失敗就洩漏給後面每一支，變成「一支真紅帶出一串假紅」。
+// 出考題與考試已併成同一個開關：啟用 E2E ＝ 會先出考題。
 async function withSpecTour(fn) {
-  await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
+  await dbModule.query('UPDATE projects SET e2e_disabled=false WHERE id=$1', [projectId]);
   try { await fn(); }
-  finally { await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]); }
+  finally { await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]); }
 }
 
 async function makeSpecTask(tid, analysisSessionId = null) {
@@ -829,7 +830,8 @@ async function makeSpecTask(tid, analysisSessionId = null) {
   return t.id;
 }
 
-test('spec_tour_enabled=false（預設）→ runSpecTourGate 完全不呼叫 claude', async () => {
+test('專案停用 E2E → runSpecTourGate 完全不呼叫 claude', async () => {
+  await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
   const calls = analysisSpawn();
   await runSpecTourGate(await makeSpecTask('ta_notour'), userId);
   expect(calls).toHaveLength(0);
@@ -838,7 +840,7 @@ test('spec_tour_enabled=false（預設）→ runSpecTourGate 完全不呼叫 cla
 // 意圖：本關要寫的是「這個模組的 tour」，而分析關剛把同一個 worktree 的碼讀過一遍。曾一度改成
 // 無狀態（理由：閘門隔數小時後 cache 已過期，resume 等於全價重播），但實測 task 106 打臉——fresh
 // 版把十分鐘裡的前七分鐘花在重讀 idx_hj 的模組結構，那正是 analysis session 裡現成的東西。
-test('spec_tour_enabled=true → resume 分析 session 續寫，prompt 仍帶定稿規格', async () => {
+test('專案啟用 E2E → resume 分析 session 續寫，prompt 仍帶定稿規格', async () => {
   await withSpecTour(async () => {
     const calls = analysisSpawn();
     await runSpecTourGate(await makeSpecTask('ta_tour', 'sess-analysis'), userId);
@@ -873,17 +875,11 @@ test('沒有 analysis session → 照樣 fresh 產 tour（不得因缺 session �
 // 意圖：出考題的唯一意義是之後有人考。E2E 停用的專案 deploy 成功後直接進 review_pending，tour
 // 永遠不會被執行——兩旗標同開＝每張任務固定燒滿一個逾時寫一份沒人跑的考題（鴻久實測 600s 零產出，
 // 而該專案 playwright 關歷來執行 0 次）。
-test('e2e_disabled=true → 即使 spec_tour_enabled 也不出考題（沒人會考的卷不用出）', async () => {
-  await withSpecTour(async () => {
-    await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
-    try {
-      const calls = analysisSpawn();
-      await runSpecTourGate(await makeSpecTask('ta_tour_noe2e'), userId);
-      expect(calls).toHaveLength(0);
-    } finally {
-      await dbModule.query('UPDATE projects SET e2e_disabled=false WHERE id=$1', [projectId]);
-    }
-  });
+test('停用 E2E 的專案不出考題（沒人會考的卷不用出）', async () => {
+  await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
+  const calls = analysisSpawn();
+  await runSpecTourGate(await makeSpecTask('ta_tour_noe2e'), userId);
+  expect(calls).toHaveLength(0);
 });
 
 // 意圖：session 是 CLI 自己管的，隔了人工閘門可能已被回收。resume 失敗若直接放棄，就是拿「省時間」
@@ -967,7 +963,8 @@ test('spec tour 有自己的階段 marker，不被歸在「建立分支」底下
 
 // 意圖：這正是「加自己的 marker」勝過「把 STAGE_LABELS 改成建立分支／出考題」的地方——
 // 旗標關掉的專案根本不跑這段，歷程就不該冒出這一行。marker 必須寫在所有 early return 之後。
-test('spec_tour_enabled=false → 歷程不留 marker（沒跑的事不該出現在歷程上）', async () => {
+test('專案停用 E2E → 歷程不留 marker（沒跑的事不該出現在歷程上）', async () => {
+  await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
   const id = await makeSpecTask('ta_tour_nomarker');
   await runSpecTourGate(id, userId);
   const { rows } = await dbModule.query('SELECT content FROM task_events WHERE task_id=$1', [id]);

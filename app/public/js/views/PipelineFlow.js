@@ -122,11 +122,9 @@ window.PipelineFlowView = Vue.defineComponent({
   name: 'PipelineFlowView',
   data() {
     return {
-      // 兩個開關的預設值都對齊「新專案剛建好時的實際樣子」：e2e_disabled 預設停用、
-      // spec_tour_enabled 預設 false。這頁一打開看到的就該是多數專案真正在跑的流程，
-      // 要看開啟後長怎樣再自己撥開關。
-      e2eEnabled: false,     // 專案層 e2e_disabled 的反面
-      specTour: false,       // 專案層 spec_tour_enabled
+      // 預設對齊「新專案剛建好時的實際樣子」：e2e_disabled 預設停用。這頁一打開看到的就該是
+      // 多數專案真正在跑的流程，要看開啟後長怎樣再自己撥開關。
+      e2eEnabled: false,     // 專案層 e2e_disabled 的反面（出考題與考試同一個開關）
       hovered: null,
       // 泳道顯示開關（目前只有 Git 一條，純顯示、與專案設定無關）由 PF_TRACKS 推導，預設全開。
       // 不可寫死鍵名：照 pipeline-spec.js:25 的說明加一條新泳道時，那個 flag 不會存在於 data，
@@ -138,7 +136,7 @@ window.PipelineFlowView = Vue.defineComponent({
   computed: {
     // 開關打包成一個物件傳給 spec，spec 不知道 Vue 的存在
     flags() {
-      const f = { e2eEnabled: this.e2eEnabled, specTour: this.specTour };
+      const f = { e2eEnabled: this.e2eEnabled };
       for (const t of PF_TRACKS) if (t.flag) f[t.flag] = this[t.flag];
       return f;
     },
@@ -804,14 +802,6 @@ window.PipelineFlowView = Vue.defineComponent({
             <div class="switch-knob"></div>
           </div>
           <span style="font-size:var(--fs-md);color:var(--text)">E2E 測試{{ e2eEnabled ? '啟用' : '停用' }}</span>
-        </label>
-        <label class="switch-label-row">
-          <div class="switch">
-            <input type="checkbox" v-model="specTour" />
-            <div class="switch-track"></div>
-            <div class="switch-knob"></div>
-          </div>
-          <span style="font-size:var(--fs-md);color:var(--text)">依規格先寫測試{{ specTour ? '（啟用）' : '（停用）' }}</span>
         </label>
         <label v-for="t in trackToggles" :key="t.id"
                class="switch-label-row">

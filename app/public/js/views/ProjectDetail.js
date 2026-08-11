@@ -20,8 +20,6 @@ window.ProjectDetailView = Vue.defineComponent({
       editServiceRespondentName: '',
       editE2eEnabled: true,   // UI 一律用正向（開＝啟用）；DB 欄位是 e2e_disabled，在讀寫兩端反轉
       savingE2e: false,
-      editSpecTour: false,
-      savingSpecTour: false,
       editEdition: 'community',
       savingEdition: false,
       runtimeLog: null,
@@ -79,7 +77,6 @@ window.ProjectDetailView = Vue.defineComponent({
         this.editOdooProjectName = data.odoo_project_name || '';
         this.editServiceRespondentName = data.service_respondent_name || '';
         this.editE2eEnabled = !data.e2e_disabled;
-        this.editSpecTour = !!data.spec_tour_enabled;
         this.editEdition = data.edition || 'community';
         // 分支清單另外抓（要讀 clone 的 refs，跟專案主資料不同來源）；示範專案不打 API
         if (!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id))) this.loadBranches();
@@ -271,18 +268,6 @@ window.ProjectDetailView = Vue.defineComponent({
       }
       finally { this.savingE2e = false; }
     },
-    async saveSpecTourSetting() {
-      this.savingSpecTour = true;
-      try {
-        await Api.patch(`projects/${this.project.id}`, { spec_tour_enabled: this.editSpecTour });
-        showToast(this.editSpecTour ? '已啟用「依規格先寫測試」' : '已停用「依規格先寫測試」', 'success');
-        await this.load();
-      } catch (err) {
-        this.editSpecTour = !this.editSpecTour;   // 儲存失敗要撥回去，否則畫面說「啟用中」而 DB 是關的，直到重新整理才修正
-        showToast(err.message, 'error');
-      }
-      finally { this.savingSpecTour = false; }
-    },
     async saveEdition() {
       this.savingEdition = true;
       try {
@@ -406,7 +391,7 @@ window.ProjectDetailView = Vue.defineComponent({
         <div v-if="isAdmin()" style="margin-top:var(--space-4);padding:var(--space-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
           <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)">測試流程設定</h3>
           <div class="settings-panel-body">
-            <span style="font-size:var(--fs-sm);color:var(--text-muted)">此專案串接外部系統，無法在測試區實測；停用後任務將跳過 E2E，部署測試區成功後直接進最終人工審核。</span>
+            <span style="font-size:var(--fs-sm);color:var(--text-muted)">啟用後：E2E tour 會在「建立分支」關依驗收條件先寫好（實作之前定稿），開發關要讓它通過而不能改它，部署成功後再實際執行。停用後（例如此專案串接外部系統、無法在測試區實測）：兩件都不做，部署測試區成功即進最終人工審核。</span>
             <label class="switch-label-row">
               <div class="switch">
                 <input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e" />
@@ -414,15 +399,6 @@ window.ProjectDetailView = Vue.defineComponent({
                 <div class="switch-knob"></div>
               </div>
               <span style="font-size:var(--fs-md);color:var(--text)">{{ editE2eEnabled ? 'E2E 測試啟用中' : '已停用 E2E 測試' }}</span>
-            </label>
-            <span style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-2)">開啟後，E2E tour 會在「分析」關依驗收條件先寫好（實作之前定稿），開發關要讓它通過而不能改它；關閉則沿用舊流程，等實作完成後才產生 tour。</span>
-            <label class="switch-label-row">
-              <div class="switch">
-                <input type="checkbox" v-model="editSpecTour" @change="saveSpecTourSetting" :disabled="savingSpecTour" />
-                <div class="switch-track"></div>
-                <div class="switch-knob"></div>
-              </div>
-              <span style="font-size:var(--fs-md);color:var(--text)">{{ editSpecTour ? '依規格先寫測試（啟用中）' : '依規格先寫測試（已停用）' }}</span>
             </label>
           </div>
         </div>

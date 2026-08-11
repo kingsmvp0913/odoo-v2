@@ -416,14 +416,11 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
     'SELECT id, task_id, project_id, analysis_yaml, git_branch, analysis_session_id FROM tasks WHERE id=$1', [taskId]
   );
   if (!task) return;
-  // e2e_disabled 一併看：出考題的唯一意義是之後有人考。E2E 停用的專案，deploy 成功後直接進
-  // review_pending（deploy-testing.js 的 e2e_disabled 分支），tour 永遠不會被執行——兩個旗標同時
-  // 開著就是每張任務固定燒滿一個逾時去寫一份沒人跑的考題（鴻久實測：spec_tour 600s、零產出，
-  // 而該專案 playwright 關歷來執行 0 次）。守衛放在這裡而非關掉旗標，是因為旗標是使用者可改的設定。
-  const { rows: [proj] } = await query(
-    'SELECT spec_tour_enabled, e2e_disabled FROM projects WHERE id=$1', [task.project_id]
-  );
-  if (!proj || !proj.spec_tour_enabled || proj.e2e_disabled) return;
+  // 出考題與考試是同一個開關的兩半（原本是 spec_tour_enabled／e2e_disabled 兩個獨立旗標，
+  // 四種組合裡有兩種是垃圾——「出考題但沒人考」實測讓鴻久每張任務固定燒滿一個逾時寫永遠不會
+  // 執行的 tour）。合併之後那個狀態在資料上就無法表達，不再需要程式守衛去擋。
+  const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
+  if (!proj || proj.e2e_disabled) return;
   if (!task.analysis_yaml) return;                      // 沒有規格就沒有 acceptance，無從出考題
 
   let moduleName = '';
@@ -458,7 +455,7 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   // 「幾秒的 git ＋ 幾百秒的 agent」，看歷程的人只會看到「建立分支跑了 8 分鐘」。
   // 這個混淆已經騙過兩次：pipeline 流程圖曾把它畫成獨立 status（見 pipeline-flow.test.js:15），
   // 2026-08-10 查 token 時也把 112 次工具呼叫誤算在建分支頭上。
-  // 修法刻意不是改 STAGE_LABELS 的字面——那在 spec_tour_enabled 關閉的專案反而變成另一種騙人。
+  // 修法刻意不是改 STAGE_LABELS 的字面——那在停用 E2E 的專案反而變成另一種騙人。
   // 寫在所有 early return 之後：旗標關掉、無規格、無 repo 時根本不會走到這裡，自然不留痕。
   const marker = `\n\x1b[96m▶ 先寫 E2E 考題\x1b[0m\n`;
   notify.emitToUser(userId, 'terminal:output', { taskId, data: marker });

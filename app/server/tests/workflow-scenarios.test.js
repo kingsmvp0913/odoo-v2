@@ -172,7 +172,7 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
   scriptAgent('analysis', () => ({ text: resultYaml(SD_YAML) }));
   scriptAgent('coding', () => ({ text: resultJson({ status: 'qa_running' }), sessionId: 'sess-1' }));
   scriptAgent('qa', () => ({ text: resultJson({ verdict: 'pass' }) }));
-  scriptAgent('playwright', () => ({ text: '已新增 tour 測試' }));
+  scriptAgent('spec_tour', () => ({ text: '已依 acceptance 新增 tour 測試' }));
 
   const t = await insertTask('new');
   await run();
@@ -183,7 +183,7 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
   expect(task.blocker_content).toBeNull();
 
   // 部署／E2E 的分支正確性：升級前主 clone 歸位 testing；tour commit 併入 testing 後才跑測試
-  // （merge 關卡＋playwright 關卡各併一次 testing，缺 playwright 那次＝新 tour 不會被執行的假綠燈）
+  // （merge 關卡＋E2E 關各併一次 testing，缺 E2E 那次＝新 tour 不會被執行的假綠燈）
   const git = require('../pipeline/git');
   expect(git.ensureTestingBranch).toHaveBeenCalledWith(REPO_PATH);
   const testingMerges = git.mergeInto.mock.calls.filter(c => c[1] === 'testing' && c[2] === `task/${t.task_id}`);
@@ -196,11 +196,10 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
   expect(coding.prompt).toContain('module: idx_demo');    // SD 帶入
   const cs = calls.find(c => c.agentType === 'cs');
   expect(cs.prompt).not.toContain('Hard Rules');          // 分類 agent 不注入開發規則
-  const pw = calls.find(c => c.agentType === 'playwright');
+  // 出考題的關卡（E2E 關本身已無 agent）：登入帳號進 prompt、密碼一律走環境變數不落 prompt
+  const pw = calls.find(c => c.agentType === 'spec_tour');
   expect(pw.prompt).toContain('auto_test_user');
   expect(pw.prompt).not.toContain('E2E 密碼明文');
-  expect(pw.opts.env.E2E_PASSWORD).toBeTruthy();          // 密碼走環境變數，不進 prompt
-  expect(pw.prompt).not.toContain(pw.opts.env.E2E_PASSWORD + '」');
 
   // 模擬人工審核通過（pipeline-routes approve 的狀態轉移）→ wiki → done
   scriptAgent('wiki', () => ({ text: resultJson({ slug: 'sale-note', title: '報價單備註', content: '# 說明' }) }));
@@ -213,7 +212,7 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
 
   // 每個用到 claude 的關卡都有 token 記帳
   const { rows: usage } = await dbModule.query('SELECT DISTINCT agent_type FROM token_usage');
-  expect(usage.map(r => r.agent_type).sort()).toEqual(expect.arrayContaining(['analysis', 'coding', 'cs', 'playwright', 'qa', 'wiki']));
+  expect(usage.map(r => r.agent_type).sort()).toEqual(expect.arrayContaining(['analysis', 'coding', 'cs', 'qa', 'spec_tour', 'wiki']));
 });
 
 // ---------- S2 QA 退回 → 無狀態修正輪（不 resume、讀既有碼增量修）→ 通過 ----------
@@ -234,7 +233,7 @@ test('S2 QA fail → coding 修正輪（不 --resume＋不升 opus＋帶 QA feed
     expect(prompt).toContain('備註欄位未加進 form view');
     return { text: resultJson({ verdict: 'pass' }) };
   });
-  scriptAgent('playwright', () => ({ text: 'tour ok' }));
+  scriptAgent('spec_tour', () => ({ text: 'tour ok' }));
 
   const t = await insertTask('coding_running', { analysis_yaml: SD_YAML, git_branch: 'task/x' });
   await run();
@@ -255,7 +254,7 @@ test('QA fail 帶分類 issues → 寫 task_rejections(source=qa)+rejection_item
     summary: '補 view 與幣別' }) }));
   scriptAgent('coding', () => ({ text: resultJson({ status: 'qa_running' }), sessionId: 'sess-Q' }));
   scriptAgent('qa', () => ({ text: resultJson({ verdict: 'pass' }) }));
-  scriptAgent('playwright', () => ({ text: 'tour ok' }));
+  scriptAgent('spec_tour', () => ({ text: 'tour ok' }));
 
   const t = await insertTask('coding_running', { analysis_yaml: SD_YAML, git_branch: 'task/x' });
   await run();
@@ -314,7 +313,7 @@ test('S3c 部署暫時性失敗（ECONNRESET）→ 自動重試一次即過 → 
   env.upgradeModules
     .mockRejectedValueOnce(new Error('read ECONNRESET'))
     .mockResolvedValueOnce({ ok: true, log: '' });
-  scriptAgent('playwright', () => ({ text: 'tour ok' }));
+  scriptAgent('spec_tour', () => ({ text: 'tour ok' }));
   const t = await insertTask('deploy_testing', { analysis_yaml: SD_YAML, git_branch: 'task/x' });
   await run();
   const task = await getTask(t.id);

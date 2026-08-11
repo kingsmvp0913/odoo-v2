@@ -69,10 +69,14 @@ describe('泳道開關與 spec 的擴充方式一致', () => {
     expect(flags.showEservice).toBe(true);                // undefined＝泳道與其上節點全部不出現
   });
 
-  test('兩個專案設定開關仍原樣傳給 spec', () => {
+  // 出考題與考試併成同一個 e2eEnabled 之後，這裡只剩一個專案設定開關。
+  // 仍要斷言它「原樣傳給 spec」：view 與 spec 的 flag 名稱對不上時，畫面不會報錯，
+  // 只會安靜地永遠畫成停用的樣子。
+  test('專案設定開關原樣傳給 spec', () => {
     const def = loadView();
-    const flags = def.computed.flags.call({ ...def.data(), e2eEnabled: true, specTour: true });
-    expect(flags).toMatchObject({ e2eEnabled: true, specTour: true, showGit: true });
+    const flags = def.computed.flags.call({ ...def.data(), e2eEnabled: true });
+    expect(flags).toMatchObject({ e2eEnabled: true, showGit: true });
+    expect(flags).not.toHaveProperty('specTour');   // 舊旗標必須真的消失，不是留著沒人讀
   });
 });
 
