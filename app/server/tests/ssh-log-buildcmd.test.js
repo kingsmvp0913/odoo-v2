@@ -68,3 +68,19 @@ test('sudo 需求沿用既有 ssh_password 慣例', () => {
   const cmd = buildLogCmd({ log_mode: 'docker', log_container: 'c', ssh_password: 'pw' }, FROM, TO);
   expect(cmd).toContain('sudo -S');
 });
+
+// I1：docker 指令尾端帶 2>&1，sudo 的預設提示「[sudo] password for x: 」會被併入 stdout
+// 且不帶換行，黏在第一行 log 前面，splitEntries 會把它當孤兒續行丟棄——第一筆記錄因此消失
+// （已實測：2 筆記錄 + sudo 前綴，splitEntries 只切出 1 筆）。-p '' 把提示置空即可從源頭避免。
+test('sudo -S 帶 -p 空字串置空提示，避免吃掉第一筆 log', () => {
+  const cmd = buildLogCmd({ log_mode: 'docker', log_container: 'c', ssh_password: 'pw' }, FROM, TO);
+  expect(cmd).toContain("sudo -S -p ''");
+});
+
+// I7：Debian/Ubuntu 預設 awk 是 mawk，較舊版本不支援 POSIX interval expression（{4}），
+// 會把它當字面量比對、永遠不匹配 → 零輸出、exit 0 → 空結果被誤讀成「沒有異常」。
+test('file 模式的 awk 不用 {4} 這種 interval expression（舊版 mawk 不支援）', () => {
+  const cmd = buildLogCmd({ log_mode: 'file', log_path: '/x.log', log_tz_offset: 0 }, FROM, TO);
+  expect(cmd).not.toMatch(/\{4\}/);
+  expect(cmd).toContain('[0-9][0-9][0-9][0-9]-');
+});
