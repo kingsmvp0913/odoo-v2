@@ -37,4 +37,65 @@ function validateLogParams({ at, window, level, keyword } = {}) {
   return { ok: true, atMs, windowMin, level: lv, keyword: keyword == null ? '' : String(keyword) };
 }
 
-module.exports = { validateLogParams, WINDOWS, LEVELS, WINDOW_CAP };
+const IDENT_RE = /^[A-Za-z0-9_.\-]+$/;
+const PATH_RE = /^\/[A-Za-z0-9_.\-\/]+$/;
+
+function validateLogPath(p) {
+  const s = String(p || '');
+  return PATH_RE.test(s) && !s.includes('..');
+}
+
+function requireIdent(val, name) {
+  if (!val) throw new Error(`連線缺少 ${name}，請先執行 log 來源偵測`);
+  if (!IDENT_RE.test(String(val))) throw new Error(`連線欄位 ${name} 含不允許的字元`);
+  return String(val);
+}
+
+// 兩位數補零的 UTC 分解，避免依賴執行機時區。
+function partsUtc(ms) {
+  const d = new Date(ms);
+  const p = n => String(n).padStart(2, '0');
+  return {
+    date: `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`,
+    time: `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`,
+  };
+}
+function isoUtc(ms) { const { date, time } = partsUtc(ms); return `${date}T${time}Z`; }
+function spaceUtc(ms) { const { date, time } = partsUtc(ms); return `${date} ${time}`; }
+
+// sudo 前綴：沿用 ssh-sql 的慣例，有密碼走 sudo -S，沒有就直接 sudo。
+function sudoPrefix(conn) {
+  const pw = conn.ssh_password || '';
+  if (!pw) return 'sudo ';
+  return `echo '${pw.replace(/'/g, "'\\''")}' | sudo -S `;
+}
+
+// 時間基準三者不同，見計畫「對 spec 未定處的明確化」第 3 點。
+function buildLogCmd(conn, fromMs, toMs) {
+  const mode = conn.log_mode;
+  if (!mode) throw new Error('此連線尚未偵測 log 來源，請先至連線設定執行偵測');
+
+  if (mode === 'docker') {
+    const c = requireIdent(conn.log_container, 'log_container');
+    return `${sudoPrefix(conn)}docker logs --since ${isoUtc(fromMs)} --until ${isoUtc(toMs)} ${c} 2>&1`;
+  }
+
+  if (mode === 'journald') {
+    const u = requireIdent(conn.log_unit, 'log_unit');
+    return `${sudoPrefix(conn)}journalctl -u ${u} --since "${spaceUtc(fromMs)} UTC" --until "${spaceUtc(toMs)} UTC" -o cat`;
+  }
+
+  if (mode === 'file') {
+    if (!validateLogPath(conn.log_path)) throw new Error('log_path 不是合法的絕對路徑');
+    const off = Number(conn.log_tz_offset || 0) * 60000;
+    const s = spaceUtc(fromMs + off);
+    const e = spaceUtc(toMs + off);
+    // 利用 Odoo 時間戳字典序即時間序的特性；inrange 讓 traceback 續行跟隨所屬記錄。
+    const awk = `/^[0-9]{4}-/ { inrange = ($0 >= s && $0 <= e) } inrange`;
+    return `${sudoPrefix(conn)}awk -v s="${s}" -v e="${e}" '${awk}' ${conn.log_path}`;
+  }
+
+  throw new Error(`未知的 log_mode：${mode}`);
+}
+
+module.exports = { validateLogParams, WINDOWS, LEVELS, WINDOW_CAP, buildLogCmd, validateLogPath };
