@@ -6,7 +6,7 @@ const { aiEndpointGuard } = require('./lib/ai-token');
 const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn, loadProjectVpn } = require('./lib/db-connections');
 
-const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled';
+const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_type, connect_mode, docker_container, db_user, sudo_user, db_name, db_host, db_port, db_ssl, db_engine, description, created_at, vpn_enabled, log_mode, log_container, log_unit, log_path, log_tz_offset';
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 function validateIdentifiers(b) {

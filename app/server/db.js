@@ -642,6 +642,11 @@ async function migrate() {
     { table: 'db_connections', col: 'vpn_password_enc',  sql: 'ALTER TABLE db_connections ADD COLUMN vpn_password_enc TEXT' },
     { table: 'db_connections', col: 'vpn_forward_port',  sql: 'ALTER TABLE db_connections ADD COLUMN vpn_forward_port INTEGER' },
     { table: 'db_connections', col: 'vpn_container_name', sql: 'ALTER TABLE db_connections ADD COLUMN vpn_container_name TEXT' },
+    { table: 'db_connections', col: 'log_mode',      sql: 'ALTER TABLE db_connections ADD COLUMN log_mode TEXT' },
+    { table: 'db_connections', col: 'log_container', sql: 'ALTER TABLE db_connections ADD COLUMN log_container TEXT' },
+    { table: 'db_connections', col: 'log_unit',      sql: 'ALTER TABLE db_connections ADD COLUMN log_unit TEXT' },
+    { table: 'db_connections', col: 'log_path',      sql: 'ALTER TABLE db_connections ADD COLUMN log_path TEXT' },
+    { table: 'db_connections', col: 'log_tz_offset', sql: 'ALTER TABLE db_connections ADD COLUMN log_tz_offset INTEGER' },
     // VPN 憑證上移專案層：一個專案＝一個客戶站點＝一組 VPN，同專案所有連線共用一條隧道。
     // db_connections 的同名欄位自此為死欄（不清空、不 drop，留作遷移出錯時的回頭路）。
     { table: 'projects', col: 'vpn_config_enc',   sql: 'ALTER TABLE projects ADD COLUMN vpn_config_enc TEXT' },
