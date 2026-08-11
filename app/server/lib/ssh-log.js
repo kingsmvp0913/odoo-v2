@@ -181,7 +181,68 @@ async function probeLogSource(conn, execFn) {
   return { ok: true, log_tz_offset: offset, ...found };
 }
 
+const MAX_ENTRIES = 200;
+const MAX_BYTES = 65536;
+
+// file 模式讀不到已輪替的檔案。空結果在此情境下會被誤讀成「該時段無異常」，
+// 故先確認檔案第一筆記錄的時間，早於它就明講查不到，不回空。
+// execFn 失敗（如 SSH 連線在探測輪替時中斷）不視為「已輪替」——這只是輔助判斷，
+// 不該因為它自己失敗就中止整個查詢，讓主查詢自己去撞真正的錯誤並回報 [SSH]/[LOG]。
+async function rotatedOut(conn, fromMs, execFn) {
+  if (conn.log_mode !== 'file') return false;
+  let head;
+  try { head = await execFn(conn, `${sudoPrefix(conn)}head -n 50 ${conn.log_path}`); }
+  catch { return false; }
+  if (head.code !== 0) return false;
+  const first = lastTsOf(String(head.stdout).split('\n').reverse().join('\n'));
+  if (!first) return false;
+  const off = Number(conn.log_tz_offset || 0) * 60000;
+  const firstUtcMs = Date.parse(first.replace(',', '.').replace(' ', 'T') + 'Z') - off;
+  return fromMs < firstUtcMs;
+}
+
+async function runLogTail(conn, params, execFn) {
+  const v = validateLogParams(params);
+  if (!v.ok) return { ok: false, error: `[LOG] ${v.error}` };
+
+  const half = v.windowMin * 60000;
+  const fromMs = v.atMs - half;
+  const toMs = v.atMs + half;
+
+  let cmd;
+  try { cmd = buildLogCmd(conn, fromMs, toMs); }
+  catch (e) { return { ok: false, error: `[LOG] ${e.message}` }; }
+
+  if (await rotatedOut(conn, fromMs, execFn)) {
+    return { ok: false, error: '[LOG] 請求時段早於目前 log 檔的第一筆記錄，該時段可能已被輪替（本功能不讀 .1／.gz）' };
+  }
+
+  let res;
+  try { res = await execFn(conn, cmd); }
+  catch (e) { return { ok: false, error: `[SSH] ${e.message}` }; }
+
+  if (res.code !== 0) {
+    return { ok: false, error: `[LOG] ${String(res.stderr || res.stdout || `exit ${res.code}`).trim().slice(0, 2000)}` };
+  }
+
+  const matched = filterByKeyword(filterByLevel(splitEntries(res.stdout), v.level), v.keyword);
+  const { entries, truncated } = truncate(matched, MAX_ENTRIES, MAX_BYTES);
+
+  const out = {
+    ok: true,
+    log_mode: conn.log_mode,
+    range: { from: isoUtc(fromMs), to: isoUtc(toMs) },
+    entries: entries.map(e => ({ ts: e.ts, level: e.level, logger: e.logger, text: maskSecrets(e.raw) })),
+    total_matched: matched.length,
+    returned: entries.length,
+    truncated,
+  };
+  if (truncated) out.note = `已截斷（符合 ${matched.length} 筆，回傳 ${entries.length} 筆）。請縮小 window 或加關鍵字`;
+  return out;
+}
+
 module.exports = {
   validateLogParams, WINDOWS, LEVELS, WINDOW_CAP, buildLogCmd, validateLogPath,
   looksLikeOdooLog, deriveTzOffset, probeLogSource,
+  runLogTail, MAX_ENTRIES, MAX_BYTES,
 };
