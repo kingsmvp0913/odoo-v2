@@ -10,7 +10,7 @@
 //     execFileSync 會凍住整個 Node 事件迴圈＝全平台一起卡死（見 1e721aa7 對 lib/vpn-gateway.js 的同一課）。
 // 代價：某大版本第一次遇到的那一關拿不到核心路徑（照舊走 Context7），下一關起才有。
 // 任何失敗都不 throw、只記冷卻時間，避免 docker 沒開／image 未建時每關 prompt build 都重敲一次。
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const dockerEnv = require('./docker-env');
@@ -54,6 +54,48 @@ function docker(args, timeout) {
   });
 }
 
+// docker cp 直接寫檔案系統時，會在「指向複製範圍外的 symlink」上整個中止：實測 odoo-idx:17 的
+// point_of_sale/static/src/fonts/Inconsolata.otf 指到 image 的 /share/fonts/…，cp 回
+// `invalid symlink` 並 exit 1（2 秒就死，不是逾時），已複製的 387/643 個模組留在暫存目錄、
+// rename 永遠等不到，於是每一關都退回「只用 Context7」——這功能從上線起沒成功過一次。
+// 改讓 cp 吐 tar 串流（dest 用 `-`）再由本機 tar 解開：tar 原樣保存 symlink、不驗證目標，
+// 實測 643/643 全數解出、20 秒。
+// 自己用 spawn 接管道而不是 sh -c 'a | b'：管道的 exit code 只反映最後一段，cp 的失敗會被
+// tar 的 0 蓋掉讀成成功（rules/always #12 已因此誤判三次）。
+function cpTarStream(cid, srcPath, destDir, timeout) {
+  return new Promise((resolve, reject) => {
+    const errs = [];
+    let settled = false, cpCode = null, tarCode = null;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err); else resolve();
+    };
+    const dock = spawn('docker', ['cp', `${cid}:${srcPath}`, '-']);
+    const untar = spawn('tar', ['-xf', '-', '-C', destDir]);
+    const timer = setTimeout(() => {
+      dock.kill('SIGKILL'); untar.kill('SIGKILL');
+      finish(new Error(`docker cp 逾時（${timeout}ms）`));
+    }, timeout);
+    // 任一端提早死掉時，對已關閉的管道寫入會發 EPIPE；歸因由下面的 close code 負責，這裡吞掉即可
+    dock.stdout.on('error', () => {});
+    untar.stdin.on('error', () => {});
+    dock.stderr.on('data', (d) => errs.push(String(d)));
+    untar.stderr.on('data', (d) => errs.push(String(d)));
+    dock.on('error', finish);
+    untar.on('error', finish);
+    const check = () => {
+      if (cpCode === null || tarCode === null) return;
+      if (cpCode === 0 && tarCode === 0) return finish();
+      finish(new Error(`docker cp/tar 失敗（cp=${cpCode} tar=${tarCode}）：${errs.join('').trim().slice(0, 300)}`));
+    };
+    dock.on('close', (c) => { cpCode = c; check(); });
+    untar.on('close', (c) => { tarCode = c; check(); });
+    dock.stdout.pipe(untar.stdin);
+  });
+}
+
 async function extract(major) {
   const { destDir, addonsDir, marker } = pathsFor(major);
   const image = dockerEnv.imageTagFor(major);   // 與 env-agent 建/用的 image 同一個 tag 來源
@@ -65,11 +107,13 @@ async function extract(major) {
     // 先解到暫存再原子 rename——半途失敗不會留下殘缺目錄被下一輪當成「已完成」。
     const tmp = path.join(destDir, '.addons.tmp');
     fs.rmSync(tmp, { recursive: true, force: true });
+    fs.mkdirSync(tmp, { recursive: true });      // tar -C 要求目錄先存在
     // image 內核心 addons 路徑取自 docker-env（可用 ODOO_IMAGE_CORE_ADDONS 覆寫），不另存一份會漂移的副本。
-    // docker cp <src 目錄> <不存在的 dest> → dest 直接成為該目錄的內容（模組平鋪在 dest 下）。
-    await docker(['cp', `${cid}:${dockerEnv.CORE_ADDONS}`, tmp], 180000);
+    // tar 串流以來源目錄名為根 → 解出來是 <tmp>/addons，取它去 rename。
+    await cpTarStream(cid, dockerEnv.CORE_ADDONS, tmp, 180000);
     fs.rmSync(addonsDir, { recursive: true, force: true });
-    fs.renameSync(tmp, addonsDir);
+    fs.renameSync(path.join(tmp, path.posix.basename(dockerEnv.CORE_ADDONS)), addonsDir);
+    fs.rmSync(tmp, { recursive: true, force: true });   // 只剩空殼，留著會讓下一輪誤以為有殘留
     fs.writeFileSync(marker, `${image}\n${new Date().toISOString()}\n`);
     return addonsDir;
   } catch (e) {

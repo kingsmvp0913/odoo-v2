@@ -2,8 +2,9 @@
 jest.mock('child_process');
 jest.mock('fs');
 
+const { EventEmitter } = require('events');
 const fs = require('fs');
-const { execFile, execFileSync } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 const { ensureOdooCoreSrc, coreSourceGuidance, majorOf } = require('../lib/odoo-core-src');
 
 // callback 式 execFile 的腳本：依 args 回 stdout，impl 丟錯即等同 docker 失敗
@@ -13,6 +14,23 @@ function mockDocker(impl) {
   });
 }
 
+// 解壓那段走 spawn（docker cp 吐 tar → 本機 tar 解），需要能收 close 事件的假行程。
+// codes 給非 0 即模擬該端失敗。
+function mockSpawn(codes = {}) {
+  spawn.mockImplementation((cmd) => {
+    const p = new EventEmitter();
+    p.stdout = Object.assign(new EventEmitter(), { pipe: jest.fn() });
+    p.stderr = new EventEmitter();
+    p.stdin = new EventEmitter();
+    p.kill = jest.fn();
+    setImmediate(() => p.emit('close', codes[cmd] ?? 0));
+    return p;
+  });
+}
+
+// 取出某個指令的 spawn 參數（docker / tar）
+const spawnArgs = (cmd) => (spawn.mock.calls.find((c) => c[0] === cmd) || [])[1];
+
 beforeEach(() => {
   jest.clearAllMocks();
   // fs 寫入類一律 no-op（回 undefined 即可）
@@ -20,6 +38,7 @@ beforeEach(() => {
   fs.rmSync.mockReturnValue(undefined);
   fs.renameSync.mockReturnValue(undefined);
   fs.writeFileSync.mockReturnValue(undefined);
+  mockSpawn();
 });
 
 describe('majorOf（複用 docker-env.majorDigits，與 env-agent 同一套，不寫死 17）', () => {
@@ -57,6 +76,23 @@ describe('ensureOdooCoreSrc', () => {
     expect(execFile).toHaveBeenCalledWith('docker', ['rm', '-f', 'container-abc'], expect.anything(), expect.any(Function));
   });
 
+  // 意圖（這一條是踩過才有的）：`docker cp` 直接寫檔案系統，會在「指向複製範圍外的 symlink」
+  // 上整個中止——實測 odoo-idx:17 的 point_of_sale/static/src/fonts/Inconsolata.otf 指到 image 的
+  // /share/fonts/…，cp 回 `invalid symlink` 並 exit 1，已複製的 387/643 個模組留在暫存目錄，
+  // rename 永遠等不到，於是每一關都退回「只用 Context7」。改成 dest=`-`（吐 tar 串流）後 tar
+  // 原樣保存 symlink、不驗證目標，643/643 全數解出。dest 一旦被「優化」回檔案系統路徑就會復發。
+  test('docker cp 的目的地必須是 `-`（tar 串流），不得直接寫檔案系統', async () => {
+    fs.existsSync.mockReturnValue(false);
+    mockDocker(args => (args[0] === 'create' ? 'cid-tar' : ''));
+    await ensureOdooCoreSrc('19.1');
+    const args = spawnArgs('docker');
+    expect(args[0]).toBe('cp');
+    expect(args[args.length - 1]).toBe('-');
+    // 串流要有人接：本機 tar 解到暫存目錄（旗標寫法不拘，-xf 或 -x -f 都算）
+    expect(spawnArgs('tar').join(' ')).toMatch(/-x/);
+    expect(spawnArgs('tar')).toContain('-C');
+  });
+
   // 意圖：image 內核心 addons 的路徑只有 docker-env 一份真相（可用 ODOO_IMAGE_CORE_ADDONS 覆寫）。
   // 這裡另抄一份字面值的話，改了那個 env var 會變成 env-agent 正常、解壓卻靜默失敗回退。
   // 用 env 覆寫成非預設值才有鑑別力：比對「與 docker-env 相同」的話，抄一份字面值也會通過（testing.md #18）
@@ -67,13 +103,33 @@ describe('ensureOdooCoreSrc', () => {
       let core, cp;   // docker-env 在載入時讀 env → 要連 odoo-core-src 一起重載才吃得到覆寫
       jest.isolateModules(() => { core = require('../lib/odoo-core-src'); cp = require('child_process'); });
       cp.execFile.mockImplementation((cmd, args, opts, cb) => cb(null, args[0] === 'create' ? 'cid-1' : '', ''));
+      cp.spawn.mockImplementation(() => {
+        const p = new EventEmitter();
+        p.stdout = Object.assign(new EventEmitter(), { pipe: jest.fn() });
+        p.stderr = new EventEmitter();
+        p.stdin = new EventEmitter();
+        p.kill = jest.fn();
+        setImmediate(() => p.emit('close', 0));
+        return p;
+      });
       await core.ensureOdooCoreSrc('16.0');
-      const cpCall = cp.execFile.mock.calls.find(c => c[1][0] === 'cp');
-      expect(cpCall[1][1]).toBe('cid-1:/custom/core/addons');
+      const cpCall = cp.spawn.mock.calls.find(c => c[0] === 'docker');
+      expect(cpCall[1]).toContain('cid-1:/custom/core/addons');
     } finally {
       if (prev === undefined) delete process.env.ODOO_IMAGE_CORE_ADDONS;
       else process.env.ODOO_IMAGE_CORE_ADDONS = prev;
     }
+  });
+
+  // 意圖：cp 失敗（如上述 invalid symlink）必須讓整輪解壓算失敗、不得寫 marker——
+  // 寫了 marker 就等於把「半套的 387 個模組」標成已完成，之後永遠不再重試，而 agent 會拿到
+  // 一個看似可用、實則缺一半模組的核心路徑：比完全沒有更糟（找不到就以為原生沒這東西）。
+  test('cp 端非 0 → 不寫 marker、回空字串', async () => {
+    fs.existsSync.mockReturnValue(false);
+    mockDocker(args => (args[0] === 'create' ? 'cid-fail' : ''));
+    mockSpawn({ docker: 1 });
+    await expect(ensureOdooCoreSrc('19.2')).resolves.toBe('');
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
   test('docker create 失敗 → 回空字串，不 throw（不擋 pipeline）', async () => {
