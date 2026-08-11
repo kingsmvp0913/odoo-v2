@@ -36,6 +36,22 @@ test('未儲存的連線不可觸發偵測', () => {
   expect(SRC).toMatch(/probeLog[\s\S]{0,400}form\.id/);
 });
 
+// I6：direct 模式不經 SSH，log 功能一律走 SSH，偵測按鈕必須同步停用，否則使用者點了
+// 只會撞牆（後端已擋，但前端沒有訊號告知「這條連線用不了這功能」）。
+test('偵測按鈕在 connect_mode 為 direct 時停用', () => {
+  const m = /<button[^>]*@click="probeLog"[^>]*>/.exec(SRC);
+  expect(m).not.toBeNull();
+  expect(m[0]).toMatch(/connect_mode\s*===\s*'direct'/);
+});
+
+// C1：探測失敗或探到錯的候選值時，log_tz_offset 過去完全無法人工修正——
+// 唯一補救管道必須是一個可編輯的數字輸入框，而不只是唯讀文字。
+test('log_tz_offset 有可編輯的數字輸入框', () => {
+  const inputMatch = /<input[^>]*form\.log_tz_offset[^>]*>/.exec(SRC);
+  expect(inputMatch).not.toBeNull();
+  expect(inputMatch[0]).toContain('type="number"');
+});
+
 // dark-mode 硬規則：寫死淺色背景而未同時寫死文字色，深色模式下文字吃 var(--text) 翻白＝隱形。
 // 掃全檔而非只掃新增段落——既有碼目前無違規，任何命中都是本次帶進來的。
 test('全檔沒有「寫死淺色背景卻未寫死文字色」的樣式', () => {

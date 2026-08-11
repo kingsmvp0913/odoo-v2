@@ -230,10 +230,11 @@ window.ProjectDbQueryView = Vue.defineComponent({
         <div class="form-group" style="margin-top:var(--space-4)">
           <label>log 來源（供 AI 排障讀取 Odoo log）</label>
           <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
-            <button class="btn btn-outline btn-sm" :disabled="probing || !form.id" @click="probeLog">
+            <button class="btn btn-outline btn-sm" :disabled="probing || !form.id || form.connect_mode === 'direct'" @click="probeLog">
               {{ probing ? '偵測中…' : '偵測 log 來源' }}
             </button>
-            <span v-if="form.log_mode" style="font-size:var(--fs-xs);color:var(--text-muted)">
+            <span v-if="form.connect_mode === 'direct'" style="font-size:var(--fs-xs);color:var(--text-muted)">direct 模式不經 SSH，無法讀取主機 log</span>
+            <span v-else-if="form.log_mode" style="font-size:var(--fs-xs);color:var(--text-muted)">
               {{ form.log_mode }}
               <template v-if="form.log_mode==='docker'">／容器 {{ form.log_container }}</template>
               <template v-else-if="form.log_mode==='journald'">／unit {{ form.log_unit }}</template>
@@ -253,6 +254,10 @@ window.ProjectDbQueryView = Vue.defineComponent({
           </div>
           <div class="form-group" style="margin:0" v-if="form.log_mode==='file'">
             <label>log 檔路徑</label><input v-model="form.log_path" class="form-control" />
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>時區偏移（分鐘，如 UTC+8 為 480；推算錯誤時可在此手動修正）</label>
+            <input v-model.number="form.log_tz_offset" type="number" class="form-control" />
           </div>
         </div>
         <div class="pdq-form-actions">
