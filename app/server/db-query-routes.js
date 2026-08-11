@@ -2,7 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
-const { runLogTail, probeLogSource } = require('./lib/ssh-log');
+const { runLogTail, probeLogSource, validateLogPath } = require('./lib/ssh-log');
 const { aiEndpointGuard } = require('./lib/ai-token');
 const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn, loadProjectVpn } = require('./lib/db-connections');
@@ -11,10 +11,26 @@ const PUBLIC_COLS = 'id, project_id, name, ssh_host, ssh_port, ssh_user, auth_ty
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 function validateIdentifiers(b) {
-  const checks = { docker_container: b.docker_container, db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name };
+  const checks = {
+    docker_container: b.docker_container, db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name,
+    log_container: b.log_container, log_unit: b.log_unit,
+  };
   for (const [k, v] of Object.entries(checks)) {
     if (v !== undefined && v !== null && v !== '' && !SAFE_ID_RE.test(String(v)))
       throw Object.assign(new Error(`欄位「${k}」包含不允許的字元（只允許英數、底線、點、連字號）`), { statusCode: 400 });
+  }
+}
+
+// log_path／log_tz_offset 不是「合不合法字元」而是各自有型別意義的檢查，獨立成一個函式：
+// log_path 錯了會讓 buildLogCmd 直接丟明確錯誤（尚可接受），但 log_tz_offset 若收非數字，
+// file 模式的 awk 字串比較會恆為 false（靜默回零筆，不是可見的錯誤），故此欄不可靜默存入。
+function validateLogFields(b) {
+  if (b.log_path !== undefined && b.log_path !== null && b.log_path !== '' && !validateLogPath(b.log_path))
+    throw Object.assign(new Error('log_path 不是合法的絕對路徑'), { statusCode: 400 });
+  if (b.log_tz_offset !== undefined && b.log_tz_offset !== null && b.log_tz_offset !== '') {
+    const n = Number(b.log_tz_offset);
+    if (!Number.isInteger(n) || n < -840 || n > 840)
+      throw Object.assign(new Error('log_tz_offset 必須是 -840~840 之間的整數（分鐘），超出範圍即拒絕存入而非靜默接受'), { statusCode: 400 });
   }
 }
 
@@ -94,6 +110,7 @@ function registerRoutes(app) {
     try {
       const b = req.body || {};
       validateIdentifiers(b);
+      validateLogFields(b);
       // 改前的目標(host:port)與 vpn_enabled 先存起來：改完若目標變了，舊轉發埠不能留著沿用；
       // vpn_enabled 從 false 變 true 也要重配，見下方判斷。
       const { rows: beforeRows } = await query(
@@ -108,7 +125,10 @@ function registerRoutes(app) {
         name: b.name, ssh_host: b.ssh_host, ssh_port: b.ssh_port, ssh_user: b.ssh_user, auth_type: b.auth_type,
         connect_mode: b.connect_mode, docker_container: b.docker_container,
         db_user: b.db_user, sudo_user: b.sudo_user, db_name: b.db_name,
-        db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, db_engine: b.db_engine, description: b.description
+        db_host: b.db_host, db_port: b.db_port, db_ssl: b.db_ssl, db_engine: b.db_engine, description: b.description,
+        // 手動修正 log 來源的逃生路：探測失敗或探到錯的候選值時，這是唯一補救管道。
+        log_mode: b.log_mode, log_container: b.log_container, log_unit: b.log_unit,
+        log_path: b.log_path, log_tz_offset: b.log_tz_offset,
       })) {
         if (val !== undefined) { set.push(`${col}=$${idx++}`); params.push(val); }
       }

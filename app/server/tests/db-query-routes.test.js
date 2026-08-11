@@ -165,6 +165,76 @@ test('/test 端點：一般使用者也能測（不再限管理員），但未�
   expect(anon.status).toBe(401);
 });
 
+// C1：PUT 白名單過去不含 log_mode/log_container/log_unit/log_path/log_tz_offset 五欄，
+// 手動修正 log 來源（探測失敗或探到錯的候選值時唯一的逃生路）UI 顯示「已儲存」但實際被
+// 靜默丟棄。斷言必須「PUT 後重讀 DB」——只驗 HTTP 200 測不出「有沒有真的寫進去」。
+describe('C1：PUT 可修正 log 來源五欄', () => {
+  test('PUT 後重讀 DB 確認五欄真的變了', async () => {
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'logfix1', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
+    });
+    const id = create.body.id;
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${id}`).set(auth()).send({
+      log_mode: 'file', log_path: '/var/log/odoo/odoo.log', log_tz_offset: 480,
+    });
+    expect(put.status).toBe(200);
+    const { rows: [row] } = await dbModule.query(
+      'SELECT log_mode, log_path, log_tz_offset FROM db_connections WHERE id=$1', [id]);
+    expect(row.log_mode).toBe('file');
+    expect(row.log_path).toBe('/var/log/odoo/odoo.log');
+    expect(row.log_tz_offset).toBe(480);
+  });
+
+  test('PUT log_container/log_unit 也真的寫入', async () => {
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'logfix2', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
+    });
+    const id = create.body.id;
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${id}`).set(auth()).send({
+      log_mode: 'docker', log_container: 'odoo-app',
+    });
+    expect(put.status).toBe(200);
+    const { rows: [row] } = await dbModule.query(
+      'SELECT log_mode, log_container FROM db_connections WHERE id=$1', [id]);
+    expect(row.log_mode).toBe('docker');
+    expect(row.log_container).toBe('odoo-app');
+  });
+
+  test('log_tz_offset 超出 -840~840 範圍 → 400，不靜默存入', async () => {
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'logfix3', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
+    });
+    const id = create.body.id;
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${id}`).set(auth())
+      .send({ log_tz_offset: 999 });
+    expect(put.status).toBe(400);
+    expect(put.body.error).toMatch(/log_tz_offset/);
+    const { rows: [row] } = await dbModule.query('SELECT log_tz_offset FROM db_connections WHERE id=$1', [id]);
+    expect(row.log_tz_offset).toBeNull();
+  });
+
+  test('log_tz_offset 非數字 → 400', async () => {
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'logfix4', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
+    });
+    const id = create.body.id;
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${id}`).set(auth())
+      .send({ log_tz_offset: 'abc' });
+    expect(put.status).toBe(400);
+  });
+
+  test('log_path 含 .. 或元字元 → 400，不靜默存入', async () => {
+    const create = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+      name: 'logfix5', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
+    });
+    const id = create.body.id;
+    const put = await request(app).put(`/api/projects/${projectId}/db-connections/${id}`).set(auth())
+      .send({ log_path: '/var/log/../../etc/shadow' });
+    expect(put.status).toBe(400);
+    expect(put.body.error).toMatch(/log_path/);
+  });
+});
+
 // 舊版「VPN 欄位 CRUD」描述區塊（連線層存憑證、DELETE 呼叫 removeGateway）已隨本次改動
 // 整段作廢，改由下方「專案層 VPN 設定」與「連線的 VPN 開關與配埠」取代。
 

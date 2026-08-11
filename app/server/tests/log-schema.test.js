@@ -26,11 +26,6 @@ test('db_connections 具備 log 來源五欄', async () => {
   expect(c.log_tz_offset).toBe(480);
 });
 
-test('PUBLIC_COLS 含 log 欄位（前端讀得到）', () => {
-  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'db-query-routes.js'), 'utf8');
-  const m = /const PUBLIC_COLS = '([^']+)'/.exec(src);
-  expect(m).not.toBeNull();
-  for (const col of ['log_mode', 'log_container', 'log_unit', 'log_path', 'log_tz_offset']) {
-    expect(m[1]).toContain(col);
-  }
-});
+// 舊測試（只用 regex 掃 PUBLIC_COLS 原始碼字串）已移除：那只證明字串含子字串，證明不了
+// 「前端真的讀得到」或「PUT 真的能寫回」。取代它的是 db-query-routes.test.js 的
+// 「PUT 可修正 log 來源五欄，且真的寫入 DB」——PUT 後重讀 DB 才是有鑑別力的斷言（C1）。
