@@ -191,7 +191,7 @@
         conns: [{
           id: 1, name: 'hj-鴻久-正式', connect_mode: 'docker', ssh_host: '10.0.3.21', ssh_port: 22,
           ssh_user: 'root', docker_container: 'odoo-db', db_user: 'odoo', db_name: 'odoo_prd',
-          db_port: 5432, vpn_enabled: true
+          db_port: 5432, vpn_enabled: true, log_mode: 'docker'
         }],
         sql: 'SELECT id, name, state FROM repair_order ORDER BY id DESC LIMIT 3',
         result: {

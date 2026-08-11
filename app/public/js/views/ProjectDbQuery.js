@@ -2,8 +2,8 @@ window.ProjectDbQueryView = Vue.defineComponent({
   name: 'ProjectDbQueryView',
   data() {
     return {
-      conns: [], loading: true, saving: false, running: false, testing: false,
-      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false },
+      conns: [], loading: true, saving: false, running: false, testing: false, probing: false,
+      form: { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false, log_mode: '', log_container: '', log_unit: '', log_path: '', log_tz_offset: null },
       vpn: { has_config: false, vpn_username: '' },
       vpnForm: { vpn_config: '', vpn_config_name: '', vpn_username: '', vpn_password: '' },
       vpnSaving: false,
@@ -28,7 +28,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
-    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false }; },
+    resetForm() { this.form = { id: null, name: '', ssh_host: '', ssh_port: 22, ssh_user: '', auth_type: 'password', ssh_password: '', ssh_key_content: '', connect_mode: 'docker', docker_container: 'odoo-db', db_user: 'odoo', sudo_user: 'odoo', db_name: 'odoo_prd', db_host: '', db_port: 5432, db_password: '', db_ssl: false, db_engine: 'postgres', description: '', vpn_enabled: false, log_mode: '', log_container: '', log_unit: '', log_path: '', log_tz_offset: null }; },
     editConn(c) { this.form = { ...c, ssh_password: '', db_password: '' }; },
     validForm() {
       if (this.form.connect_mode === 'direct')
@@ -92,6 +92,24 @@ window.ProjectDbQueryView = Vue.defineComponent({
         this.resetForm(); await this.load(); showToast('已儲存連線', 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.saving = false; }
+    },
+    async probeLog() {
+      // 探測端點吃 :cid，未存過的連線沒有 id
+      if (!this.form.id) return showToast('請先儲存連線，再偵測 log 來源', 'error');
+      this.probing = true;
+      try {
+        const r = await Api.post(`projects/${this.pid()}/db-connections/${this.form.id}/probe-log`, {});
+        if (!r.ok) return showToast(r.error || '偵測失敗', 'error');
+        // 探測成功已寫回 DB，同步更新表單與清單
+        this.form.log_mode = r.log_mode || '';
+        this.form.log_container = r.log_container || '';
+        this.form.log_unit = r.log_unit || '';
+        this.form.log_path = r.log_path || '';
+        this.form.log_tz_offset = r.log_tz_offset;
+        showToast(`偵測成功：${r.log_mode}`, 'success');
+        await this.load();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.probing = false; }
     },
     async deleteConn(c) {
       if (!await confirmDialog({ title: '刪除連線', message: `確定刪除連線「${c.name}」？`, danger: true, confirmText: '刪除' })) return;
@@ -167,7 +185,7 @@ window.ProjectDbQueryView = Vue.defineComponent({
                 <td style="font-weight:var(--fw-semibold)">{{ c.name }}</td>
                 <td>{{ c.connect_mode === 'direct' ? (c.db_user + '@' + c.db_host + ':' + c.db_port) : (c.ssh_user + '@' + c.ssh_host + ':' + c.ssh_port) }}</td>
                 <td>{{ c.connect_mode }}</td>
-                <td>{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span></td>
+                <td>{{ c.db_name }} <span v-if="c.vpn_enabled" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">VPN</span> <span v-if="c.log_mode" class="env-chip">log</span></td>
                 <td><div class="pdq-row-actions">
                   <button class="btn btn-outline btn-sm" @click="editConn(c)">編輯</button>
                   <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteConn(c)">刪除</button>
@@ -208,6 +226,34 @@ window.ProjectDbQueryView = Vue.defineComponent({
         <div class="pdq-vpn-checkbox-row">
           <input v-model="form.vpn_enabled" type="checkbox" id="vpnEnabled" style="width:auto" />
           <label for="vpnEnabled" style="margin:0">此連線需要 VPN（使用上方的專案 VPN 設定）</label>
+        </div>
+        <div class="form-group" style="margin-top:var(--space-4)">
+          <label>log 來源（供 AI 排障讀取 Odoo log）</label>
+          <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
+            <button class="btn btn-outline btn-sm" :disabled="probing || !form.id" @click="probeLog">
+              {{ probing ? '偵測中…' : '偵測 log 來源' }}
+            </button>
+            <span v-if="form.log_mode" style="font-size:var(--fs-xs);color:var(--text-muted)">
+              {{ form.log_mode }}
+              <template v-if="form.log_mode==='docker'">／容器 {{ form.log_container }}</template>
+              <template v-else-if="form.log_mode==='journald'">／unit {{ form.log_unit }}</template>
+              <template v-else>／{{ form.log_path }}</template>
+              ／時區偏移 {{ form.log_tz_offset }} 分
+            </span>
+            <span v-else style="font-size:var(--fs-xs);color:var(--text-muted)">尚未偵測</span>
+          </div>
+        </div>
+        <div class="pdq-form-grid" v-if="form.log_mode">
+          <div class="form-group" style="margin:0" v-if="form.log_mode==='docker'">
+            <label>Odoo 容器（非資料庫容器）</label>
+            <input v-model="form.log_container" class="form-control" />
+          </div>
+          <div class="form-group" style="margin:0" v-if="form.log_mode==='journald'">
+            <label>systemd unit</label><input v-model="form.log_unit" class="form-control" />
+          </div>
+          <div class="form-group" style="margin:0" v-if="form.log_mode==='file'">
+            <label>log 檔路徑</label><input v-model="form.log_path" class="form-control" />
+          </div>
         </div>
         <div class="pdq-form-actions">
           <button class="btn btn-primary btn-sm" @click="saveConn" :disabled="saving">{{ saving ? '儲存中...' : (form.id ? '更新連線' : '+ 新增連線') }}</button>
