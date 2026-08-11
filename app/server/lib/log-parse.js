@@ -56,14 +56,36 @@ function truncate(entries, maxEntries, maxBytes) {
 }
 
 // 只遮憑證，不遮業務資料。長字串門檻取 32：Odoo 的路徑與 model 名都遠短於此，
-// 而 session id / API key 通常 32 起跳。含 `.` `/` 的不視為 token（那是路徑或 model 名）。
-const CRED_RE = /\b(password|passwd|pwd|token|api[_-]?key|secret|authorization)\s*[=:]\s*\S+/gi;
+// 而 session id / API key 通常 32 起跳。
+// 處理三種格式：
+// 1. Authorization: Bearer <token> — token 可含 dots（JWT format）
+// 2. 'key': 'value' 或 "key": "value" — Python/JSON dict 形式
+// 3. key=value 或 key: value — 裸露形式（含 underscore 欄位名如 access_token）
+const BEARER_RE = /Authorization\s*:\s*Bearer\s+[\w.-]+/gi;
+const QUOTED_CRED_RE = /(['"]?)(?:password|passwd|pwd|token|api[_-]?key|access_token|auth_token|csrf_token|secret|authorization)\1?\s*[:=]\s*(['"])([^'"]*)\2/gi;
+const UNQUOTED_CRED_RE = /(?:password|passwd|pwd|token|api[_-]?key|access_token|auth_token|csrf_token|secret|authorization)\s*[:=]\s*(?!Bearer\s)([^\s,'";}\]]+)/gi;
 const LONG_TOKEN_RE = /\b[A-Za-z0-9]{32,}\b/g;
 
 function maskSecrets(text) {
-  return String(text == null ? '' : text)
-    .replace(CRED_RE, (m) => m.replace(/([=:]\s*)\S+$/, '$1***'))
-    .replace(LONG_TOKEN_RE, '***');
+  text = String(text == null ? '' : text);
+  // Authorization: Bearer tokens first (handle full pattern to avoid conflicts with field name regex)
+  text = text.replace(BEARER_RE, 'Authorization: Bearer ***');
+  // Quoted credential values: 'password': 'value' or "api_key": "secret"
+  text = text.replace(QUOTED_CRED_RE, (m, q1, q2) => {
+    const start = m.substring(0, m.length - m.match(/(['"])[^'"]*\1$/)[0].length);
+    return start + q2 + '***' + q2;
+  });
+  // Unquoted credential values: password=value or token: xyz (negative lookahead excludes Authorization: Bearer)
+  text = text.replace(UNQUOTED_CRED_RE, (m) => {
+    const sep = m.includes(':') ? ':' : '=';
+    const idx = m.indexOf(sep);
+    const prefix = m.substring(0, idx + sep.length);
+    const spaceSuffix = m[idx + sep.length] === ' ' ? ' ' : '';
+    return prefix + spaceSuffix + '***';
+  });
+  // Long alphanumeric strings (32+ chars)
+  text = text.replace(LONG_TOKEN_RE, '***');
+  return text;
 }
 
 module.exports = { TS_RE, splitEntries, filterByLevel, filterByKeyword, truncate, maskSecrets, LEVEL_ORDER, LEVEL_THRESHOLD };

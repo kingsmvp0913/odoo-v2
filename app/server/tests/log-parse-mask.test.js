@@ -31,3 +31,42 @@ test('不誤遮一般路徑與 traceback 內容', () => {
   const line = '  File "/opt/odoo/addons/sale/models/sale_order.py", line 1234, in _compute_amount';
   expect(maskSecrets(line)).toBe(line);
 });
+
+// 審查發現的缺口 1：Authorization: Bearer 形式的 token 整個外洩（CRED_RE 的 \S+ 停在空白）
+test('遮罩 Authorization: Bearer 之後的完整 token', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const masked = maskSecrets(`Authorization: Bearer ${jwt}`);
+  expect(masked).not.toContain(jwt);
+  expect(masked).toContain('Bearer ***');
+});
+
+// 審查發現的缺口 2：Python dict 形式 {'password': 'value'} 完全不遮（CRED_RE 不處理引號）
+test('遮罩 Python dict 形式的引號值', () => {
+  const masked = maskSecrets("{'password': 'hunter2'}");
+  expect(masked).not.toContain('hunter2');
+  expect(masked).toContain('password');
+});
+
+// 同樣是引號值的 JSON 形式
+test('遮罩 JSON dict 形式的引號值', () => {
+  const masked = maskSecrets('{"api_key": "sk-live-abc123"}');
+  expect(masked).not.toContain('sk-live-abc123');
+  expect(masked).toContain('api_key');
+});
+
+// 審查發現的缺口 3：underscore 欄位名（access_token、auth_token、csrf_token）不遮
+// 原因：\b 是單詞邊界，而 _ 視為 word char，所以 `_token` 之間無邊界可言
+test('遮罩 underscore 欄位名', () => {
+  const fields = ['access_token', 'auth_token', 'csrf_token'];
+  for (const field of fields) {
+    const masked = maskSecrets(`${field}=ya29.a0AfH6SMB`);
+    expect(masked).not.toContain('ya29.a0AfH6SMB');
+  }
+});
+
+// Underscore 欄位的冒號形式
+test('遮罩 underscore 欄位名（冒號分隔）', () => {
+  const masked = maskSecrets('auth_token: abc123def456xyz');
+  expect(masked).not.toContain('abc123def456xyz');
+  expect(masked).toContain('auth_token:');
+});
