@@ -3,7 +3,7 @@
 // 安全模型與 runSelect 相反且更嚴：runSelect 讓呼叫端自由撰寫 SQL、靠黑名單攔截危險語句；
 // 本模組所有進入指令的參數都是型別受控（時間戳由程式重新序列化、window/level 是 enum、
 // 連線設定來自 DB），唯一的自由文字 keyword 根本不進指令，在平台側比對。
-const { splitEntries, filterByLevel, filterByKeyword, truncate, maskSecrets } = require('./log-parse');
+const { splitEntries, filterByLevel, filterByKeyword, truncate, maskSecrets, TS_RE } = require('./log-parse');
 
 const WINDOWS = [10, 30, 60];
 const LEVELS = ['ERROR', 'WARNING', 'INFO', 'ALL'];
@@ -98,4 +98,90 @@ function buildLogCmd(conn, fromMs, toMs) {
   throw new Error(`未知的 log_mode：${mode}`);
 }
 
-module.exports = { validateLogParams, WINDOWS, LEVELS, WINDOW_CAP, buildLogCmd, validateLogPath };
+const UNIT_CANDIDATES = ['odoo', 'odoo-server', 'odoo14', 'odoo15', 'odoo16', 'odoo17'];
+const PATH_CANDIDATES = [
+  '/var/log/odoo/odoo-server.log',
+  '/var/log/odoo/odoo.log',
+  '/var/log/odoo/openerp-server.log',
+  '/opt/odoo/odoo.log',
+];
+
+function looksLikeOdooLog(text) {
+  return String(text || '').split('\n').some(l => TS_RE.test(l));
+}
+
+// log 最後一行必然是近期寫入，與當下 UTC 的差距即為 log 的時區偏移。
+// 誤差來自「最後一行不是剛剛寫的」，故吸收到 30 分鐘級距；超過 14 小時視為推算失敗。
+function deriveTzOffset(lastLogTs, remoteUtcNow) {
+  const logMs = Date.parse(String(lastLogTs).replace(',', '.').replace(' ', 'T') + 'Z');
+  const nowMs = Date.parse(String(remoteUtcNow).trim().replace(' ', 'T') + 'Z');
+  if (Number.isNaN(logMs) || Number.isNaN(nowMs)) return null;
+  const diffMin = (logMs - nowMs) / 60000;
+  if (Math.abs(diffMin) > 14 * 60) return null;
+  return Math.round(diffMin / 30) * 30 || 0; // 吸收 Math.round 在極小負值產生的 -0
+}
+
+function lastTsOf(text) {
+  const lines = String(text || '').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = TS_RE.exec(lines[i]);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// 逐一嘗試三種來源，第一個「輸出符合 Odoo log 格式」者勝出。
+// 只看容器／unit 名稱不足以判定——資料庫容器也叫 odoo-*，其 log 格式正常但完全不相干。
+async function probeLogSource(conn, execFn) {
+  let found = null;
+
+  const ps = await execFn(conn, `${sudoPrefix(conn)}docker ps --format '{{.Names}}'`);
+  if (ps.code === 0) {
+    for (const name of String(ps.stdout).split('\n').map(s => s.trim()).filter(Boolean)) {
+      if (!/odoo/i.test(name) || !IDENT_RE.test(name)) continue;
+      const out = await execFn(conn, `${sudoPrefix(conn)}docker logs --tail 20 ${name} 2>&1`);
+      if (out.code === 0 && looksLikeOdooLog(out.stdout)) {
+        found = { log_mode: 'docker', log_container: name, sample: out.stdout };
+        break;
+      }
+    }
+  }
+
+  if (!found) {
+    for (const unit of UNIT_CANDIDATES) {
+      const out = await execFn(conn, `${sudoPrefix(conn)}journalctl -u ${unit} -n 20 -o cat`);
+      if (out.code === 0 && looksLikeOdooLog(out.stdout)) {
+        found = { log_mode: 'journald', log_unit: unit, sample: out.stdout };
+        break;
+      }
+    }
+  }
+
+  if (!found) {
+    for (const p of PATH_CANDIDATES) {
+      const out = await execFn(conn, `${sudoPrefix(conn)}tail -n 20 ${p}`);
+      if (out.code === 0 && looksLikeOdooLog(out.stdout)) {
+        found = { log_mode: 'file', log_path: p, sample: out.stdout };
+        break;
+      }
+    }
+  }
+
+  if (!found) {
+    return { ok: false, error: '三種來源（docker / journald / 檔案）都偵測不到 Odoo log，請手動指定 log_mode 與對應欄位' };
+  }
+
+  const now = await execFn(conn, `date -u +'%Y-%m-%d %H:%M:%S'`);
+  const offset = now.code === 0 ? deriveTzOffset(lastTsOf(found.sample), now.stdout) : null;
+  if (offset === null) {
+    return { ok: false, error: '已找到 log 來源，但時區偏移推算失敗（差距超出合理範圍），請手動確認 log_tz_offset' };
+  }
+
+  delete found.sample;
+  return { ok: true, log_tz_offset: offset, ...found };
+}
+
+module.exports = {
+  validateLogParams, WINDOWS, LEVELS, WINDOW_CAP, buildLogCmd, validateLogPath,
+  looksLikeOdooLog, deriveTzOffset, probeLogSource,
+};
