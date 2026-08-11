@@ -51,7 +51,7 @@ async function dockerCtxFor(projectId) {
     project, dirName, major, enterpriseError,
     dbName: `test_${dirName}`,
     image: dockerEnv.imageTagFor(major),
-    container: dockerEnv.containerNameFor(dirName),
+    container: dockerEnv.containerNameFor(dirName, project.id),
     mounts,
     dbArgs: odooDbArgs(),
     envDir: path.join(ENV_BASE, dirName),

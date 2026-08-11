@@ -19,6 +19,21 @@ const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '
 // GET /api/projects/:id/vpn（只回 has_config/vpn_username），這裡完全不帶三個 vpn_* 欄位。
 const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, e2e_disabled, edition';
 
+// folder_name 同時決定三個外部識別：測試容器名 odoo-test-<folder>、環境目錄 odoo-envs/<folder>、
+// 測試資料庫 test_<folder>。容器名只吃 [a-zA-Z0-9_.-]，過去這裡不驗格式，填中文會被靜默清成一串
+// `-` 再被剝光 → 所有純中文專案共用同一個容器名而互相砍掉（見 lib/docker-env.containerNameFor）。
+// 「填了卻無效且沒人告訴你」是最糟的形式，所以當場擋下並說明。
+// 不允許 `.`：目錄名以點開頭會變隱藏檔。上限 40——Postgres 資料庫名上限 63 bytes，`test_` 前綴另計。
+const FOLDER_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+const FOLDER_NAME_MAX = 40;
+function validateFolderName(value, { required } = {}) {
+  const v = String(value || '').trim();
+  if (!v) return required ? '請填寫資料夾名稱（測試環境的容器、目錄與資料庫都用它命名）' : null;
+  if (!FOLDER_NAME_RE.test(v)) return '資料夾名稱只能使用英文、數字、底線與連字號（例：lingyue-bio）——中文會讓測試環境無法正確建立';
+  if (v.length > FOLDER_NAME_MAX) return `資料夾名稱最多 ${FOLDER_NAME_MAX} 個字元`;
+  return null;
+}
+
 async function requireAdmin(req, res, next) {
   try {
     const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
@@ -350,6 +365,8 @@ function registerRoutes(app) {
       if (edition !== undefined && !EDITIONS.includes(edition)) {
         return res.status(400).json({ error: 'edition 只能是 community 或 enterprise' });
       }
+      const folderErr = validateFolderName(folder_name, { required: true });
+      if (folderErr) return res.status(400).json({ error: folderErr });
       // 測試埠不在此配發：已改為租約制，由 env-agent 於「啟動測試區」時向池借、停止時歸還
       // （見 port-alloc.js leasePort）。建立時就佔埠會讓沒開過測試區的專案白白吃掉併發槽。
       const { rows } = await query(
@@ -454,6 +471,10 @@ function registerRoutes(app) {
         const msg = conflicts.map(c => `「${c.name}」已被專案「${c.project}」使用`).join('；');
         return res.status(409).json({ error: `來源對應名稱衝突：${msg}` });
       }
+      // 這裡刻意不 required：既有專案有 folder_name 為 NULL 的（本規則上線前建立的三個），
+      // 強制必填會讓他們連改別的欄位都被擋住。帶了才驗格式。
+      const folderErr = validateFolderName(folder_name, { required: false });
+      if (folderErr) return res.status(400).json({ error: folderErr });
       // 動態組 SET／params，佔位號永遠對齊實際引用（勿塞未被引用的參數——真・PostgreSQL 會報 bind 參數數不符）。
       const sets = [];
       const params = [req.params.id];

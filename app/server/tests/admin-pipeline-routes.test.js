@@ -41,7 +41,7 @@ beforeAll(async () => {
   ({ rows: [{ id: userId }] } = await dbModule.query("SELECT id FROM users WHERE username='bob'"));
 
   const proj = await request(app).post('/api/projects').set('Authorization', `Bearer ${adminToken}`)
-    .send({ name: 'ProjA', odoo_version: '17.0', description: 'p' });
+    .send({ name: 'ProjA', folder_name: 'proja', odoo_version: '17.0', description: 'p' });
   projectId = proj.body.id;
 
   // 兩位使用者各一個任務（跨使用者）

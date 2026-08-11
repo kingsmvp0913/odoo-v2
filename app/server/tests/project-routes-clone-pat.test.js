@@ -55,7 +55,7 @@ function lastClone() {
 
 async function newProject(name) {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name, odoo_version: '17.0' });
+    .send({ name, folder_name: name, odoo_version: '17.0' });
   return p.body.id;
 }
 

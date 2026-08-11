@@ -29,21 +29,21 @@ const admin = () => ({ Authorization: `Bearer ${adminToken}` });
 
 test('建立專案未指定 edition → community（既有行為不變）', async () => {
   const res = await request(app).post('/api/projects').set(admin())
-    .send({ name: 'e-default', odoo_version: '17.0' });
+    .send({ name: 'e-default', folder_name: 'e-default', odoo_version: '17.0' });
   expect(res.status).toBe(201);
   expect(res.body.edition).toBe('community');
 });
 
 test('建立專案可指定 enterprise', async () => {
   const res = await request(app).post('/api/projects').set(admin())
-    .send({ name: 'e-ent', odoo_version: '17.0', edition: 'enterprise' });
+    .send({ name: 'e-ent', folder_name: 'e-ent', odoo_version: '17.0', edition: 'enterprise' });
   expect(res.status).toBe(201);
   expect(res.body.edition).toBe('enterprise');
 });
 
 test('建立專案帶非法 edition → 400 且不建立', async () => {
   const res = await request(app).post('/api/projects').set(admin())
-    .send({ name: 'e-bad', odoo_version: '17.0', edition: 'ultimate' });
+    .send({ name: 'e-bad', folder_name: 'e-bad', odoo_version: '17.0', edition: 'ultimate' });
   expect(res.status).toBe(400);
   const { rows } = await dbModule.query("SELECT 1 FROM projects WHERE name='e-bad'");
   expect(rows).toHaveLength(0);
@@ -51,7 +51,7 @@ test('建立專案帶非法 edition → 400 且不建立', async () => {
 
 test('PATCH 可切換 edition', async () => {
   const created = await request(app).post('/api/projects').set(admin())
-    .send({ name: 'e-switch', odoo_version: '17.0' });
+    .send({ name: 'e-switch', folder_name: 'e-switch', odoo_version: '17.0' });
   const res = await request(app).patch(`/api/projects/${created.body.id}`).set(admin())
     .send({ edition: 'enterprise' });
   expect(res.status).toBe(200);
@@ -60,7 +60,7 @@ test('PATCH 可切換 edition', async () => {
 
 test('PATCH 帶非法 edition → 400 且原值不變', async () => {
   const created = await request(app).post('/api/projects').set(admin())
-    .send({ name: 'e-keep', odoo_version: '17.0', edition: 'enterprise' });
+    .send({ name: 'e-keep', folder_name: 'e-keep', odoo_version: '17.0', edition: 'enterprise' });
   const res = await request(app).patch(`/api/projects/${created.body.id}`).set(admin())
     .send({ edition: '' });
   expect(res.status).toBe(400);
@@ -71,7 +71,7 @@ test('PATCH 帶非法 edition → 400 且原值不變', async () => {
 // 意圖：切 edition 會改變測試區掛什麼 addons，屬於環境層級決定，沿用既有 PATCH 的管理員限定。
 test('一般使用者 PATCH edition → 403', async () => {
   const created = await request(app).post('/api/projects').set(admin())
-    .send({ name: 'e-perm', odoo_version: '17.0' });
+    .send({ name: 'e-perm', folder_name: 'e-perm', odoo_version: '17.0' });
   const res = await request(app).patch(`/api/projects/${created.body.id}`)
     .set({ Authorization: `Bearer ${userToken}` }).send({ edition: 'enterprise' });
   expect(res.status).toBe(403);

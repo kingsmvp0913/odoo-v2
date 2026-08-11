@@ -20,7 +20,7 @@ beforeAll(async () => {
   token = userRes.body.token;
   const projRes = await request(app).post('/api/projects')
     .set('Authorization', `Bearer ${token}`)
-    .send({ name: 'WikiProj', odoo_version: '17.0' });
+    .send({ name: 'WikiProj', folder_name: 'wikiproj', odoo_version: '17.0' });
   projectId = projRes.body.id;
 }, 30000);
 
@@ -92,7 +92,7 @@ test('GET /api/projects/:id/wiki/:slug → 404 after delete', async () => {
 
 test('GET /wiki returns node_type and parent_id fields', async () => {
   const pr = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'WikiFieldsProj', odoo_version: '17.0' });
+    .send({ name: 'WikiFieldsProj', folder_name: 'wikifieldsproj', odoo_version: '17.0' });
   const pid = pr.body.id;
   await request(app).post(`/api/projects/${pid}/wiki`).set('Authorization', `Bearer ${token}`)
     .send({ slug: 'overview', title: '專案概論', content: '# x' });
@@ -104,7 +104,7 @@ test('GET /wiki returns node_type and parent_id fields', async () => {
 
 test('POST /wiki/:slug/refresh → 404 for missing slug', async () => {
   const pr = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'RefreshProj', odoo_version: '17.0' });
+    .send({ name: 'RefreshProj', folder_name: 'refreshproj', odoo_version: '17.0' });
   const res = await request(app).post(`/api/projects/${pr.body.id}/wiki/nope/refresh`)
     .set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(404);

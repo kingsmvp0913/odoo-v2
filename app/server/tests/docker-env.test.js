@@ -16,6 +16,24 @@ describe('image 標籤 / 容器名清洗', () => {
     expect(d.containerNameFor('.hidden')).toBe('odoo-test-hidden');
     expect(d.containerNameFor('')).toBe('odoo-test-env');
   });
+
+  // 意圖（實際踩到的）：folder_name 是選填，留空時 dirName 拿專案 name。純中文名稱（「凌越生醫」）
+  // 每個字都被換成 `-`、前導 `-` 再被剝光 → 空字串 → 舊版一律回固定的 'env'，**所有純中文專案
+  // 共用同一個容器名**。而建立環境的第一步是 removeContainer(同名)，第二個中文專案一啟動就會
+  // 砍掉第一個正在跑的容器，DB 仍記 running，使用者只看到「測試區突然變空白」。
+  test('純非 ASCII 名稱：不同專案不得塌縮成同一個容器名', () => {
+    const a = d.containerNameFor('凌越生醫', 8);
+    const b = d.containerNameFor('慈雲寶塔', 2);
+    expect(a).not.toBe(b);
+    expect(a).toBe('odoo-test-p8');
+    expect(a).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/);   // 仍須是 docker 合法名稱
+  });
+
+  // 有可用名稱時不得改名——既有容器全靠這個名字被找到，改了等於全部變孤兒
+  test('可用的 ASCII 名稱不受 projectId 影響（既有容器名不得漂移）', () => {
+    expect(d.containerNameFor('odoo19_ciyun', 2)).toBe('odoo-test-odoo19_ciyun');
+    expect(d.containerNameFor('odoo19_ciyun')).toBe('odoo-test-odoo19_ciyun');
+  });
 });
 
 describe('remapDbHostForContainer：容器連宿主 Postgres', () => {

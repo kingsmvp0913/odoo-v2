@@ -100,14 +100,64 @@ test('GET /api/projects → 401 without token', async () => {
 test('POST /api/projects → 400 missing fields', async () => {
   const res = await request(app).post('/api/projects')
     .set('Authorization', `Bearer ${token}`)
-    .send({ name: 'Proj' });
+    .send({ name: 'Proj', folder_name: 'proj' });   // 只缺 odoo_version，才測得到這一條
   expect(res.status).toBe(400);
+});
+
+// 意圖：folder_name 同時決定測試容器名 odoo-test-<folder>、環境目錄與資料庫 test_<folder>。
+// 容器名只吃 [a-zA-Z0-9_.-]，過去不驗格式：填中文會被靜默清成空字串，於是**所有純中文專案
+// 共用同一個容器名**，而建環境的第一步是 removeContainer(同名) → 第二個中文專案一啟動就砍掉
+// 第一個正在跑的容器，DB 仍記 running，使用者只看到「測試區突然變空白」。
+// 「填了卻無效、而且沒人告訴你」是最糟的形式，所以必須當場擋下。
+describe('folder_name 驗證', () => {
+  test('POST 未帶 → 400（留空會讓容器名退回 project id，人看不懂是哪個專案）', async () => {
+    const res = await request(app).post('/api/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'NoFolder', odoo_version: '17.0' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('資料夾名稱');
+  });
+
+  test('POST 帶中文 → 400，且訊息要說得出「只能用英文數字底線連字號」', async () => {
+    const res = await request(app).post('/api/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'ChineseFolder', folder_name: '凌越生醫', odoo_version: '17.0' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/英文|數字/);
+  });
+
+  test('POST 帶空白／斜線等非法字元 → 400', async () => {
+    for (const bad of ['my proj', 'a/b', '.hidden', 'x'.repeat(41)]) {
+      const res = await request(app).post('/api/projects')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: `bad-${bad.slice(0, 5)}`, folder_name: bad, odoo_version: '17.0' });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test('PATCH 帶中文 → 400', async () => {
+    const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+      .send({ name: 'PatchFolder', folder_name: 'patchfolder', odoo_version: '17.0' });
+    const res = await request(app).patch(`/api/projects/${p.body.id}`)
+      .set('Authorization', `Bearer ${token}`).send({ folder_name: '中文資料夾' });
+    expect(res.status).toBe(400);
+  });
+
+  // 既有專案有 folder_name 為 NULL 的（本規則上線前建立）。PATCH 若也強制必填，
+  // 他們連改個描述都會被擋住——修一個問題不該把另一群人鎖在門外。
+  test('PATCH 未帶 folder_name → 照常更新其他欄位（既有 NULL 專案不得被鎖死）', async () => {
+    const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+      .send({ name: 'PatchOther', folder_name: 'patchother', odoo_version: '17.0' });
+    const res = await request(app).patch(`/api/projects/${p.body.id}`)
+      .set('Authorization', `Bearer ${token}`).send({ description: '只改描述' });
+    expect(res.status).toBe(200);
+  });
 });
 
 test('POST /api/projects → 201 creates', async () => {
   const res = await request(app).post('/api/projects')
     .set('Authorization', `Bearer ${token}`)
-    .send({ name: 'TestProj', odoo_version: '17.0', description: 'A test project' });
+    .send({ name: 'TestProj', folder_name: 'testproj', odoo_version: '17.0', description: 'A test project' });
   expect(res.status).toBe(201);
   expect(res.body.name).toBe('TestProj');
   projectId = res.body.id;
@@ -294,9 +344,9 @@ test('GET /api/projects/:id → 404 after delete', async () => {
 
 test('PATCH mapping → 409 when a source name is already used by another project', async () => {
   const a = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'MapA', odoo_version: '17.0' });
+    .send({ name: 'MapA', folder_name: 'mapa', odoo_version: '17.0' });
   const b = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'MapB', odoo_version: '17.0' });
+    .send({ name: 'MapB', folder_name: 'mapb', odoo_version: '17.0' });
 
   // A 綁定「共用名」（多行）
   const r1 = await request(app).patch(`/api/projects/${a.body.id}`).set('Authorization', `Bearer ${token}`)
@@ -317,7 +367,7 @@ test('PATCH mapping → 409 when a source name is already used by another projec
 
 test('PATCH e2e_disabled → round-trip 存取，且不影響其他欄位', async () => {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'E2eProj', odoo_version: '17.0', description: '保留描述' });
+    .send({ name: 'E2eProj', folder_name: 'e2eproj', odoo_version: '17.0', description: '保留描述' });
   const pid = p.body.id;
   expect(p.body.e2e_disabled).toBe(true);   // 預設 true（新建專案預設關閉 E2E）
 
@@ -342,7 +392,7 @@ test('PATCH e2e_disabled → round-trip 存取，且不影響其他欄位', asyn
 test('GET /api/projects → 含 unread_count', async () => {
   const pRes = await request(app).post('/api/projects')
     .set('Authorization', `Bearer ${token}`)
-    .send({ name: 'UnreadProj', odoo_version: '17.0' });
+    .send({ name: 'UnreadProj', folder_name: 'unreadproj', odoo_version: '17.0' });
   const pid = pRes.body.id;
 
   const { rows: [chat] } = await dbModule.query(
@@ -360,7 +410,7 @@ test('GET /api/projects → 含 unread_count', async () => {
 
 test('POST reclone：發起 user 未設 PAT、repo 已 clone（.git 存在）→ 400', async () => {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'RecloneProj', odoo_version: '17.0' });
+    .send({ name: 'RecloneProj', folder_name: 'recloneproj', odoo_version: '17.0' });
   const pid = p.body.id;
 
   const r = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
@@ -410,7 +460,7 @@ async function waitCalledWith(mockFn, arg) {
 // 建一個「已 clone、已設 PAT」可觸發 updateMainClone 更新流程的 repo
 async function setupReclonableRepo(name) {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name, odoo_version: '17.0' });
+    .send({ name, folder_name: name, odoo_version: '17.0' });
   const pid = p.body.id;
   const r = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: `https://github.com/test/${name}` });
@@ -598,7 +648,7 @@ test('GET remote-branches：讀不到（私有 repo 無 PAT／網址錯）回 20
 // ai 分支上就會互相 force push 覆蓋，而且完全靜默。這道守衛把它變成新增當下就看得到的錯誤。
 test('POST repos：同 repo 同主分支的第二個專案 → 409，並指名是誰佔用', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const url = 'https://example.com/shared.git';
   const p1 = await mk('clash-first');
   await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
@@ -614,7 +664,7 @@ test('POST repos：同 repo 同主分支的第二個專案 → 409，並指名�
 
 test('POST repos：同 repo 但不同主分支 → 放行（這正是要支援的平行開發）', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const url = 'https://example.com/parallel.git';
   const p1 = await mk('parallel-a');
   await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
@@ -630,7 +680,7 @@ test('POST repos：同 repo 但不同主分支 → 放行（這正是要支援�
 // 兩個專案照樣落在同一條遠端 AI 分支上互相 force push 覆蓋，而且是靜默的。
 test('POST repos：repo_url 只差 .git／尾斜線也算同一個 repo → 照樣 409', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const p1 = await mk('norm-first');
   await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: 'https://example.com/o/norm.git', base_branch: 'kangyue' });
@@ -646,7 +696,7 @@ test('POST repos：repo_url 只差 .git／尾斜線也算同一個 repo → 照�
 // 此時不管第二個專案選哪條主分支，都會落到同一條裸分支上。守衛只比 base_branch 會全部放行。
 test('POST repos：對方實際落在裸 ai-dev 上 → 即使主分支不同也要 409', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const url = 'https://example.com/legacy-bare.git';
   const p1 = await mk('bare-first');
   const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
@@ -670,7 +720,7 @@ test('POST repos：對方實際落在裸 ai-dev 上 → 即使主分支不同也
 // 而本專案明確選了另一條分支，兩者未必相同——擋下來的代價是完全加不了 repo。
 test('POST repos：對方落點未知（兩欄皆 NULL）而本專案已指定主分支 → 放行，不得誤判成必撞', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const url = 'https://example.com/unknown-landing.git';
   const p1 = await mk('unknown-first');
   const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
@@ -689,7 +739,7 @@ test('POST repos：對方落點未知（兩欄皆 NULL）而本專案已指定�
 // 這一支與上一支的唯一差別就是本專案有沒有指定主分支——少了它，上面那支會退化成「無腦放行」。
 test('POST repos：兩邊都沒指定主分支 → 409，且訊息指的是本專案做得到的事', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const url = 'https://example.com/both-auto.git';
   const p1 = await mk('bothauto-first');
   const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
@@ -711,7 +761,7 @@ test('POST repos：兩邊都沒指定主分支 → 409，且訊息指的是本�
 // 選哪條都會落在同一條。訊息必須說出真正走得通的做法，否則使用者照做一次還是 409。
 test('POST repos：對方坐在裸 ai-dev → 409 且不得建議「改選其他主分支」（那條路走不通）', async () => {
   const mk = async (name) => (await request(app).post('/api/projects')
-    .set('Authorization', `Bearer ${token}`).send({ name, odoo_version: '17.0' })).body.id;
+    .set('Authorization', `Bearer ${token}`).send({ name, folder_name: name, odoo_version: '17.0' })).body.id;
   const url = 'https://example.com/bare-advice.git';
   const p1 = await mk('bare-advice-first');
   const r1 = await request(app).post(`/api/projects/${p1}/repos`).set('Authorization', `Bearer ${token}`)
@@ -742,7 +792,7 @@ test('首次 clone 成功的分支要回寫 remote_ai_branch（不是只有 recl
 
 test('POST repos：選定的主分支要寫進 DB（之後不能改，寫錯就永久錯）', async () => {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'base-branch-on-create', odoo_version: '17.0' });
+    .send({ name: 'base-branch-on-create', folder_name: 'base-branch-on-create', odoo_version: '17.0' });
   const res = await request(app).post(`/api/projects/${p.body.id}/repos`)
     .set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: 'https://example.com/y.git', base_branch: 'kangyue' });
@@ -756,7 +806,7 @@ test('建立專案不配發 port（port 欄位維持 NULL）', async () => {
   const res = await request(app)
     .post('/api/projects')
     .set('Authorization', `Bearer ${token}`)
-    .send({ name: 'no-port-proj', odoo_version: '17.0' });
+    .send({ name: 'no-port-proj', folder_name: 'no-port-proj', odoo_version: '17.0' });
   expect(res.status).toBe(201);
   expect(res.body.port).toBeNull();
 });
@@ -768,7 +818,7 @@ test('建立專案不配發 port（port 欄位維持 NULL）', async () => {
 // 直接 INSERT 建 repo，避開 POST /repos 會觸發的背景 clone（會與測試的狀態改寫競態）
 async function makeReleaseProject(name, labels = ['main']) {
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name, odoo_version: '17.0' });
+    .send({ name, folder_name: name, odoo_version: '17.0' });
   const pid = p.body.id;
   const dirs = [];
   for (const label of labels) {
@@ -908,7 +958,7 @@ test('POST release：git 執行期間新核准的任務也一併標記', async (
 test('POST release：專案沒有 clone 完成的 repo → 400', async () => {
   gitMock.releaseAiToMain.mockReset().mockResolvedValue(okRelease);
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
-    .send({ name: 'rel-norepo', odoo_version: '17.0' });
+    .send({ name: 'rel-norepo', folder_name: 'rel-norepo', odoo_version: '17.0' });
 
   const res = await request(app).post(`/api/projects/${p.body.id}/release`)
     .set('Authorization', `Bearer ${token}`).send({});

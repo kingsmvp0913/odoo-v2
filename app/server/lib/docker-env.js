@@ -69,9 +69,15 @@ function normalizePkgs(pkgs) {
 }
 
 // 容器名：固定前綴 + 專案目錄名（清成 docker 允許的字元 [a-zA-Z0-9_.-]）。
-function containerNameFor(dirName) {
-  const safe = String(dirName || '').replace(/[^a-zA-Z0-9_.-]/g, '-').replace(/^[-.]+/, '') || 'env';
-  return `odoo-test-${safe}`;
+// 純非 ASCII 的名稱（如「凌越生醫」——folder_name 留空時 dirName 會拿 name 當值）整串被換成 `-`
+// 再被剝光成空字串，舊版一律 fallback 到固定的 'env'，於是**所有純中文專案塌縮成同一個
+// odoo-test-env**。而建立環境的第一步就是 removeContainer(同名)，第二個中文專案一啟動就會直接
+// 砍掉第一個正在跑的容器，DB 卻仍記 running——症狀是「測試區突然變空白」，完全不指向命名。
+// fallback 改用 project id 保證唯一；未帶 projectId 的呼叫端維持原本的 'env'，語意不變。
+function containerNameFor(dirName, projectId) {
+  const safe = String(dirName || '').replace(/[^a-zA-Z0-9_.-]/g, '-').replace(/^[-.]+/, '');
+  if (safe) return `odoo-test-${safe}`;
+  return `odoo-test-${projectId ? `p${projectId}` : 'env'}`;
 }
 
 // 把「宿主 localhost 的 Postgres」改寫成容器可達位址：容器內的 localhost 是容器自己，

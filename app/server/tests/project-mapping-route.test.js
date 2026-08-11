@@ -31,10 +31,10 @@ beforeAll(async () => {
   userToken = login.body.token;
 
   const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${userToken}`)
-    .send({ name: 'MapMain', odoo_version: '17.0', description: '原描述' });
+    .send({ name: 'MapMain', folder_name: 'mapmain', odoo_version: '17.0', description: '原描述' });
   projectId = p.body.id;
   const o = await request(app).post('/api/projects').set('Authorization', `Bearer ${userToken}`)
-    .send({ name: 'MapOther', odoo_version: '17.0' });
+    .send({ name: 'MapOther', folder_name: 'mapother', odoo_version: '17.0' });
   otherId = o.body.id;
 }, 30000);
 

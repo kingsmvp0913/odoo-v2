@@ -45,6 +45,11 @@ window.ProjectListView = Vue.defineComponent({
     },
     async add() {
       if (!this.newProject.name || !this.newProject.odoo_version) return showToast('請填寫專案名稱和版本', 'error');
+      // 前端擋只是提示，真防線在後端（見 project-routes 的 validateFolderName）：這個值同時決定
+      // 測試容器名、環境目錄與資料庫名，填中文會被清成空字串、所有中文專案共用同一個容器而互砍
+      if (!/^[a-zA-Z0-9_-]+$/.test((this.newProject.folder_name || '').trim())) {
+        return showToast('請填寫英文資料夾名稱（只能用英文、數字、底線、連字號）', 'error');
+      }
       this.saving = true;
       try {
         await Api.post('projects', { ...this.newProject });
@@ -129,8 +134,8 @@ window.ProjectListView = Vue.defineComponent({
             <input v-model="newProject.odoo_version" placeholder="例：17.0" class="form-control" />
           </div>
           <div class="form-group" style="margin:0">
-            <label>英文資料夾名稱 <span style="font-size:var(--fs-xs);color:var(--text-muted)">中文名稱必填此欄</span></label>
-            <input v-model="newProject.folder_name" placeholder="例：hong-jiu（留空則用專案名稱）" class="form-control" />
+            <label>英文資料夾名稱 <span style="color:var(--danger)">*</span> <span style="font-size:var(--fs-xs);color:var(--text-muted)">測試環境的容器、目錄與資料庫都用它命名</span></label>
+            <input v-model="newProject.folder_name" placeholder="例：hong-jiu（限英文、數字、底線、連字號）" class="form-control" />
           </div>
           <div class="form-group" style="margin:0">
             <label>版本類型</label>

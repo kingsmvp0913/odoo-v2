@@ -35,7 +35,7 @@ beforeAll(async () => {
   token = userRes.body.token;
   const projRes = await request(app).post('/api/projects')
     .set('Authorization', `Bearer ${token}`)
-    .send({ name: 'EmbProj', odoo_version: '17.0' });
+    .send({ name: 'EmbProj', folder_name: 'embproj', odoo_version: '17.0' });
   projectId = projRes.body.id;
   emb._setEmbedderForTesting(texts => texts.map(fakeVec));
 }, 30000);
