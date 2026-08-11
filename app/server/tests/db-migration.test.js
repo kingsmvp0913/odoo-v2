@@ -328,3 +328,42 @@ test('migrate 補建 project-notes 冪等 — 跑第二次不重複插入', asyn
     "SELECT id FROM wiki_pages WHERE project_id=$1 AND slug='project-notes'", [p.id]);
   expect(rows).toHaveLength(1);
 });
+
+// 意圖：users.odoo_settings 的密碼欄位原本明碼存放。只靠「寫入時加密」的話，既有資料要等使用者
+// 哪天重存一次設定才會轉——實務上多數人不會，等於這個修正對現有帳號完全沒效果。所以 migrate()
+// 要主動把既有明碼轉密文；而它每次啟動都會跑，重複執行必須不能把密文再包一層（rules/db-schema #44）。
+describe('一次性遷移：odoo_settings 密碼欄位加密', () => {
+  const APP_SECRET_BACKUP = process.env.APP_SECRET;
+  beforeAll(() => { process.env.APP_SECRET = process.env.APP_SECRET || 'test-migration-secret'; });
+  afterAll(() => {
+    if (APP_SECRET_BACKUP === undefined) delete process.env.APP_SECRET;
+    else process.env.APP_SECRET = APP_SECRET_BACKUP;
+  });
+
+  test('既有明碼被轉成密文，且重跑 migrate 不會二次加密', async () => {
+    const bcrypt = require('bcryptjs');
+    const hash = await bcrypt.hash('x', 4);
+    const { rows: [u] } = await dbModule.query(
+      `INSERT INTO users (username, password_hash, display_name, odoo_settings)
+       VALUES ('legacy-plain-pw', $1, 'Legacy', $2) RETURNING id`,
+      [hash, JSON.stringify({ odoo_url: 'https://erp.test', odoo_username: 'alice', odoo_password: 'plain-pw' })]
+    );
+
+    await dbModule.migrate();
+    const read = async () => {
+      const { rows } = await dbModule.query('SELECT odoo_settings FROM users WHERE id = $1', [u.id]);
+      return typeof rows[0].odoo_settings === 'string' ? JSON.parse(rows[0].odoo_settings) : rows[0].odoo_settings;
+    };
+    const afterFirst = await read();
+    expect(afterFirst.odoo_password).not.toBe('plain-pw');          // 已轉密文
+    expect(afterFirst.odoo_username).toBe('alice');                 // 非祕密欄位不動
+    const { decryptSettings } = require('../lib/user-settings');
+    expect(decryptSettings(afterFirst).odoo_password).toBe('plain-pw');
+
+    // 冪等：再跑一次不得改變密文（二次加密的話解一次只會解回上一層密文，同步會靜默拿密文去登入）
+    await dbModule.migrate();
+    const afterSecond = await read();
+    expect(afterSecond.odoo_password).toBe(afterFirst.odoo_password);
+    expect(decryptSettings(afterSecond).odoo_password).toBe('plain-pw');
+  });
+});

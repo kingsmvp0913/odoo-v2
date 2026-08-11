@@ -2,6 +2,8 @@ const request = require('supertest');
 const { newDb } = require('pg-mem');
 
 process.env.JWT_SECRET = 'test-settings-secret';
+// 明確設定：密碼欄位的加解密靠它，跑在別支測試之後才「剛好有值」會讓本檔行為不確定
+process.env.APP_SECRET = process.env.APP_SECRET || 'test-settings-app-secret';
 
 let app, dbModule, adminToken;
 
@@ -146,4 +148,36 @@ test('PUT /api/settings/views → 正常長度照存（上限不得誤傷）', a
 test('PUT /api/settings/views → 401 without token', async () => {
   const res = await request(app).put('/api/settings/views').send({ saved_views: [] });
   expect(res.status).toBe(401);
+});
+
+// 意圖：odoo_password／service_password 原本明碼存 DB，與同一張表已加密的 github_pat_enc 兩套標準。
+// 收斂成加密存放，但**只在進出 DB 那一刻轉換**——settings 頁是「載入整包→存檔時原樣鋪回」，
+// GET 一旦不回密碼，使用者存一次設定就會把自己的密碼清空。所以這條要同時鎖住兩件事：
+// DB 裡不是明碼、而 API 仍回明碼。
+test('密碼欄位：DB 存密文，GET /api/settings 與 /api/auth/me 仍回明碼', async () => {
+  await request(app).put('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ odoo_settings: { odoo_url: 'https://erp.test', odoo_username: 'alice', odoo_password: 'secret-pw', service_password: 'svc-pw' } });
+
+  const { rows } = await dbModule.query("SELECT odoo_settings FROM users WHERE username = 'admin'");
+  const stored = typeof rows[0].odoo_settings === 'string' ? JSON.parse(rows[0].odoo_settings) : rows[0].odoo_settings;
+  expect(stored.odoo_password).not.toBe('secret-pw');      // DB 不得留明碼
+  expect(stored.service_password).not.toBe('svc-pw');
+  expect(stored.odoo_username).toBe('alice');              // 非祕密欄位不得被動到（誤加密 username 會讓同步連不上）
+
+  const res = await request(app).get('/api/settings').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.odoo_settings.odoo_password).toBe('secret-pw');
+  const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${adminToken}`);
+  expect(me.body.odoo_settings.odoo_password).toBe('secret-pw');
+});
+
+// theme／views 是 read-modify-write：直接從 DB 讀出整包（密文）再寫回。若寫入端不認得「已是密文」
+// 而再加密一層，解密端只解一次 → 拿到的仍是密文，同步會靜默失敗且看起來像密碼填錯。
+test('改 theme 後密碼仍解得回來（read-modify-write 不得把密文再加密一層）', async () => {
+  await request(app).put('/api/settings/theme')
+    .set('Authorization', `Bearer ${adminToken}`).send({ theme: 'dark' });
+
+  const res = await request(app).get('/api/settings').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.body.odoo_settings.theme).toBe('dark');
+  expect(res.body.odoo_settings.odoo_password).toBe('secret-pw');
 });

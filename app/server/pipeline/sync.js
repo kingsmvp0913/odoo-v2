@@ -1,6 +1,7 @@
 const path = require('path');
 const { query } = require('../db');
 const { saveAttachmentFile, readAttachmentFile, uploadRoot, deleteAttachmentFile } = require('../lib/attachments');
+const { decryptSettings } = require('../lib/user-settings');
 
 // 對外 HTTP 一律帶逾時：來源 Odoo/eService 無回應（hang 而非報錯）時，
 // 裸 fetch 會讓 syncUser 無限等待、拖住整輪 cron 同步；錯誤路徑呼叫端已有 catch。
@@ -446,7 +447,8 @@ async function resolveUserOdooSettings(userId) {
   if (!userRows.length) return null;
 
   const rawSettings = userRows[0].odoo_settings;
-  const userSettings = typeof rawSettings === 'string' ? JSON.parse(rawSettings) : (rawSettings || {});
+  // 密碼欄位在 DB 是密文，這裡是 sync 取用憑證的單一出口 → 在此解回明碼（見 lib/user-settings）
+  const userSettings = decryptSettings(typeof rawSettings === 'string' ? JSON.parse(rawSettings) : (rawSettings || {}));
   const sys = sysRows[0] || {};
 
   // Global URL+DB from Admin; personal credentials from user settings

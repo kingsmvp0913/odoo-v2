@@ -8,6 +8,7 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('./db');
 const { hashPassword, checkPassword } = require('./password');
+const { decryptSettings } = require('./lib/user-settings');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
@@ -150,7 +151,8 @@ function registerRoutes(app) {
         [req.userId]
       );
       if (!rows[0]) return res.status(404).json({ error: 'User not found' });
-      res.json(rows[0]);
+      // odoo_settings 的密碼欄位在 DB 是密文；回前端維持明碼（見 lib/user-settings）
+      res.json({ ...rows[0], odoo_settings: decryptSettings(rows[0].odoo_settings) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

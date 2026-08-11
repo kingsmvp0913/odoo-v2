@@ -877,6 +877,26 @@ async function migrate() {
     }
   } catch { /* non-blocking, skip if tables not ready */ }
 
+  // One-time data migration：users.odoo_settings 裡的 odoo_password／service_password 原本是明碼，
+  // 與同一張表已加密的 github_pat_enc 兩套標準。這裡把既有明碼轉成密文——只靠「寫入時加密」的話，
+  // 舊資料要等使用者哪天重存一次設定才會轉，等於沒改到。
+  // idempotent：encryptSettings 對已是密文的欄位不重複加密，內容沒變就不寫（不會每次啟動 UPDATE 全表）。
+  // 無 APP_SECRET 時整段跳過（crypto 會 throw），等設定好後的下一次啟動再跑。
+  if (process.env.APP_SECRET) {
+    try {
+      const { encryptSettings } = require('./lib/user-settings');
+      const { rows } = await query('SELECT id, odoo_settings FROM users WHERE odoo_settings IS NOT NULL');
+      for (const r of rows) {
+        const s = typeof r.odoo_settings === 'string' ? JSON.parse(r.odoo_settings) : r.odoo_settings;
+        if (!s || typeof s !== 'object') continue;
+        const enc = encryptSettings(s);
+        if (JSON.stringify(enc) !== JSON.stringify(s)) {
+          await query('UPDATE users SET odoo_settings = $2 WHERE id = $1', [r.id, JSON.stringify(enc)]);
+        }
+      }
+    } catch { /* non-blocking：加密不了就維持現況，不擋啟動 */ }
+  }
+
   // One-time normalization: 舊專案的 project-notes 頁都寫著出廠樣板文字（非空），會被 getProjectNotes
   // 誤判「有內容」而注入無意義樣板到各關卡 prompt。樣板由 _ensureNode verbatim 寫入，故以精確比對命中、
   // 清成空字串；使用者已改的內容不相等→保留。idempotent（清成空後不再命中）。

@@ -4,6 +4,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { fetchGitHubIdentity } = require('./lib/github-api');
 const { encrypt } = require('./lib/crypto');
+const { encryptSettings, decryptSettings } = require('./lib/user-settings');
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -44,7 +45,8 @@ function registerRoutes(app) {
         [req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'User not found' });
-      res.json(rows[0]);
+      // 密碼欄位在 DB 是密文，回前端維持明碼（API 形狀不變，見 lib/user-settings 的說明）
+      res.json({ ...rows[0], odoo_settings: decryptSettings(rows[0].odoo_settings) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -62,7 +64,7 @@ function registerRoutes(app) {
            sync_interval = COALESCE($3, sync_interval)
          WHERE id = $1`,
         [req.userId,
-         odoo_settings ? JSON.stringify(odoo_settings) : null,
+         odoo_settings ? JSON.stringify(encryptSettings(odoo_settings)) : null,
          sync_interval ?? null]
       );
       res.json({ ok: true });
