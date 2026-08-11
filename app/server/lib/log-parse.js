@@ -41,6 +41,21 @@ function filterByKeyword(entries, keyword) {
   return entries.filter(e => e.raw.toLowerCase().includes(k));
 }
 
+const TRUNC_NOTE = '（單筆過長，已截斷）';
+
+// 把 raw 裁到「含提示文字後總長不超過 maxBytes」，且不切在多位元組 UTF-8 字元中間。
+// 先從 maxBytes 扣掉提示文字的 byte 長度算出內容可用的預算，裁到該位置後，再從裁切點
+// 往前掃到第一個不是 UTF-8 continuation byte（10xxxxxx，即 byte & 0xC0 === 0x80）的位置——
+// 那裡才是完整字元的邊界，往前找到的字元一律整個排除，不留半個字元造成 toString 產生 U+FFFD。
+function clipToBytes(raw, maxBytes) {
+  const noteBytes = Buffer.byteLength(TRUNC_NOTE, 'utf8');
+  const budget = Math.max(0, maxBytes - noteBytes);
+  const buf = Buffer.from(raw, 'utf8');
+  let end = Math.min(budget, buf.length);
+  while (end > 0 && (buf[end] & 0xC0) === 0x80) end--;
+  return buf.subarray(0, end).toString('utf8') + TRUNC_NOTE;
+}
+
 // 雙重上限，先到者停，且一律以整筆記錄為單位。
 // 例外：第一筆本身就超過 maxBytes（如 QWeb/ORM 例外把整個 context 傾印進單一 message）——
 // 若無條件放行，MAX_BYTES 存在的理由（防止爆 agent context）就形同虛設，且 truncated 仍是
@@ -53,8 +68,7 @@ function truncate(entries, maxEntries, maxBytes) {
     const size = Buffer.byteLength(e.raw, 'utf8') + 1;
     if (out.length && bytes + size > maxBytes) return { entries: out, truncated: true };
     if (out.length === 0 && size > maxBytes) {
-      const clipped = Buffer.from(e.raw, 'utf8').subarray(0, maxBytes).toString('utf8');
-      out.push({ ...e, raw: `${clipped}（單筆過長，已截斷）` });
+      out.push({ ...e, raw: clipToBytes(e.raw, maxBytes) });
       return { entries: out, truncated: true };
     }
     out.push(e);

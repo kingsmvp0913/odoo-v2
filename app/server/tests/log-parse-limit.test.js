@@ -69,4 +69,30 @@ test('單筆本身就超過 maxBytes 時仍要截斷，不可無條件放行', (
   expect(r.entries).toHaveLength(1);
   expect(Buffer.byteLength(r.entries[0].raw, 'utf8')).toBeLessThan(500000);
   expect(r.entries[0].raw).toContain('已截斷');
+  // 純 ASCII 迴歸：每個字元恆 1 byte，裁切點不可能落在字元中間，含提示文字後的總長度
+  // 必須不超過宣稱的上限——這是 I2 修復本身要驗證的核心承諾，複審發現舊實作會超標。
+  expect(Buffer.byteLength(r.entries[0].raw, 'utf8')).toBeLessThanOrEqual(65536);
+});
+
+// 複審發現的 Important：I2 的裁切用固定 byte 位置切 Buffer，若剛好切在多位元組 UTF-8
+// 字元中間，toString('utf8') 會把殘缺 byte 序列轉成替代字元 U+FFFD——中文業務資料（客戶名、
+// 商品名、Odoo traceback）常見。maxBytes=100 刻意挑成「扣掉提示文字（30 bytes）後的預算
+// 70 不是 3 的倍數」，確保裁切點必然落在某個中文字（3 bytes）中間，而不是幸運對齊邊界。
+test('多位元組安全：裁切不落在字元中間，輸出不含替代字元 U+FFFD', () => {
+  const raw = '中'.repeat(200); // 600 bytes，遠超過 maxBytes
+  const big = { ts: 't', level: 'ERROR', logger: 'x', message: 'm', raw };
+  const maxBytes = 100;
+  const r = truncate([big], 200, maxBytes);
+  expect(r.truncated).toBe(true);
+  expect(r.entries[0].raw).not.toContain('�');
+});
+
+// 複審發現的 Minor：截斷提示文字（約 30 bytes）附加在裁到 maxBytes 的內容後面，
+// 會讓總 bytes 超過宣稱的上限，與這支 finding 本身要驗證的「bytes ≤ maxBytes」矛盾。
+test('多位元組情境下，含提示文字的總 bytes 仍不超過 maxBytes', () => {
+  const raw = '中'.repeat(200);
+  const big = { ts: 't', level: 'ERROR', logger: 'x', message: 'm', raw };
+  const maxBytes = 100;
+  const r = truncate([big], 200, maxBytes);
+  expect(Buffer.byteLength(r.entries[0].raw, 'utf8')).toBeLessThanOrEqual(maxBytes);
 });
