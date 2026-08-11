@@ -58,30 +58,32 @@ function truncate(entries, maxEntries, maxBytes) {
 // 只遮憑證，不遮業務資料。長字串門檻取 32：Odoo 的路徑與 model 名都遠短於此，
 // 而 session id / API key 通常 32 起跳。
 // 處理三種格式：
-// 1. Authorization: Bearer <token> — token 可含 dots（JWT format）
+// 1. Authorization: Bearer 或 Authorization=Bearer — 兩種分隔符都要支援
 // 2. 'key': 'value' 或 "key": "value" — Python/JSON dict 形式
 // 3. key=value 或 key: value — 裸露形式（含 underscore 欄位名如 access_token）
-const BEARER_RE = /Authorization\s*:\s*Bearer\s+[\w.-]+/gi;
-const QUOTED_CRED_RE = /(['"]?)(?:password|passwd|pwd|token|api[_-]?key|access_token|auth_token|csrf_token|secret|authorization)\1?\s*[:=]\s*(['"])([^'"]*)\2/gi;
-const UNQUOTED_CRED_RE = /(?:password|passwd|pwd|token|api[_-]?key|access_token|auth_token|csrf_token|secret|authorization)\s*[:=]\s*(?!Bearer\s)([^\s,'";}\]]+)/gi;
+// 關鍵修正：
+// - 用 capture group 明確捕捉分隔符，不靠事後猜測（避免值含冒號導致誤判）
+// - 長欄位名先在 alternation 前面（access_token 要在 token 前，防止被短名吃掉）
+// - 用 negative lookbehind (?<![\w-]) 代替 \b（underscore 是 word char，\b 無法判界）
+const BEARER_RE_COLON = /Authorization\s*:\s*Bearer\s+[\w.-]+/gi;
+const BEARER_RE_EQUAL = /Authorization\s*=\s*Bearer\s+[\w.-]+/gi;
+const QUOTED_CRED_RE = /(?<![\w-])(['"]?)(?:access_token|auth_token|csrf_token|api[_-]?key|password|passwd|pwd|token|secret|authorization)\1?\s*([:=])\s*(['"])([^'"]*)\3/gi;
+const UNQUOTED_CRED_RE = /(?<![\w-])((?:access_token|auth_token|csrf_token|api[_-]?key|password|passwd|pwd|token|secret|authorization))\s*([:=])\s*(?!Bearer\s)([^\s,'";}\]]+)/gi;
 const LONG_TOKEN_RE = /\b[A-Za-z0-9]{32,}\b/g;
 
 function maskSecrets(text) {
   text = String(text == null ? '' : text);
-  // Authorization: Bearer tokens first (handle full pattern to avoid conflicts with field name regex)
-  text = text.replace(BEARER_RE, 'Authorization: Bearer ***');
-  // Quoted credential values: 'password': 'value' or "api_key": "secret"
-  text = text.replace(QUOTED_CRED_RE, (m, q1, q2) => {
-    const start = m.substring(0, m.length - m.match(/(['"])[^'"]*\1$/)[0].length);
-    return start + q2 + '***' + q2;
+  // Authorization: Bearer tokens (both : and = separators)
+  text = text.replace(BEARER_RE_COLON, 'Authorization: Bearer ***');
+  text = text.replace(BEARER_RE_EQUAL, 'Authorization=Bearer ***');
+  // Quoted credential values: replace value part with *** (e.g., 'password': 'hunter2' → 'password': '***')
+  text = text.replace(QUOTED_CRED_RE, (m) => {
+    return m.replace(/(['"])([^'"]*)\1$/, '$1***$1');
   });
-  // Unquoted credential values: password=value or token: xyz (negative lookahead excludes Authorization: Bearer)
-  text = text.replace(UNQUOTED_CRED_RE, (m) => {
-    const sep = m.includes(':') ? ':' : '=';
-    const idx = m.indexOf(sep);
-    const prefix = m.substring(0, idx + sep.length);
-    const spaceSuffix = m[idx + sep.length] === ' ' ? ' ' : '';
-    return prefix + spaceSuffix + '***';
+  // Unquoted credential values: replace value with *** using capture group to find actual separator
+  // Captures: (key) (sep) (value) — no need to guess separator location
+  text = text.replace(UNQUOTED_CRED_RE, (m, key, sep, value) => {
+    return m.substring(0, m.length - value.length) + '***';
   });
   // Long alphanumeric strings (32+ chars)
   text = text.replace(LONG_TOKEN_RE, '***');

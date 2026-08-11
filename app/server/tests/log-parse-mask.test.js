@@ -70,3 +70,31 @@ test('遮罩 underscore 欄位名（冒號分隔）', () => {
   expect(masked).not.toContain('abc123def456xyz');
   expect(masked).toContain('auth_token:');
 });
+
+// 二次審查發現的三個新缺口
+
+// Important: 值含冒號時分隔符偵測失敗，導致前綴洩漏
+test('等號分隔符下值含冒號不洩漏前綴', () => {
+  const input = 'api_key=abc:def123456789012345678901234567';
+  const masked = maskSecrets(input);
+  expect(masked).not.toContain('abc');
+  expect(masked).not.toContain('def123456789012345678901234567');
+  // 值的任何部分都不應該出現
+  expect(masked).toContain('api_key=***');
+});
+
+// Minor 1: `mytoken=` 形式被誤遮（缺 word boundary）
+test('不誤遮類似憑證但無關的欄位名', () => {
+  const line = 'mytoken=notasecretvalue';
+  const masked = maskSecrets(line);
+  expect(masked).toBe(line);
+  // 應該完全不變，而非 mytoken=***
+});
+
+// Minor 2: Authorization=Bearer 形式完全不遮
+test('遮罩 Authorization=Bearer 格式（等號分隔）', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const masked = maskSecrets(`Authorization=Bearer ${jwt}`);
+  expect(masked).not.toContain(jwt);
+  expect(masked).toContain('Authorization=Bearer ***');
+});
