@@ -581,3 +581,50 @@ describe('ASKING_WELL_AGENTS 注入發問守則', () => {
     }
   });
 });
+
+// 意圖：MCP 名單漏登記與「刻意不掛」在程式上長得一樣（都是查不到 key → none.json），
+// 沒有守衛就分不出來。實際代價：playwright-spec 的 prompt 明寫「走 context7 查證、不要掃碟找
+// Odoo 核心原始碼」，但 spec_tour 沒進 MCP_PROFILES，agent 於是改用 WebSearch/WebFetch 去抓
+// Odoo core，跑滿逾時零產出。這組測試逼「新增 stage 必須在兩張表之一做出決定」。
+describe('MCP_PROFILES 覆蓋所有 agent stage', () => {
+  const path = require('path');
+  const { MCP_PROFILES, NO_MCP_STAGES, mcpConfigPath } = require('../pipeline/claude-runner');
+
+  // agent 定義是 stage 的唯一來源；直接掃目錄而非寫死清單，新增 agent 才擋得住
+  const stages = [...new Set(L.listNames()
+    .map(n => L.loadAgent(n).stage)
+    .filter(Boolean))];
+
+  test('每個 stage 都做過明確決定（掛 MCP 或具名不掛）', () => {
+    expect(stages.length).toBeGreaterThan(10);   // 掃空了就不是「全過」而是沒測到
+    const undecided = stages.filter(s => !(s in MCP_PROFILES) && !NO_MCP_STAGES.has(s));
+    expect(undecided).toEqual([]);
+  });
+
+  test('兩張表不得重疊（同一個 stage 不能又掛又不掛）', () => {
+    const both = Object.keys(MCP_PROFILES).filter(s => NO_MCP_STAGES.has(s));
+    expect(both).toEqual([]);
+  });
+
+  test('NO_MCP_STAGES 不得列入已不存在的 stage', () => {
+    const stale = [...NO_MCP_STAGES].filter(s => !stages.includes(s));
+    expect(stale).toEqual([]);
+  });
+
+  // 上面三條只驗名單自洽；這條驗名單真的接到子行程參數上——spec_tour 當初正是「prompt 寫了、
+  // 表沒填」，若只比對名單而不看 mcpConfigPath 的實際回傳，補完名單仍可能接錯檔。
+  test('prompt 叫 agent 查 context7 的關卡，實際拿到的是 context7 設定檔', () => {
+    const asked = L.listNames()
+      .map(n => ({ name: n, agent: L.loadAgent(n) }))
+      .filter(({ agent }) => agent.stage && /context7/.test(agent.render({})))
+      // spec-lookup.md 那幾關明寫「你這一關也沒有 context7」，是否定句、不算要求
+      .filter(({ agent }) => !NO_MCP_STAGES.has(agent.stage));
+    // 不寫死清單（注入片段會讓成員變動，例如 cs-capability 讓 chat／cs 也入列），
+    // 但 playwright-spec 必須在內：它就是本組測試要擋的那個回歸
+    expect(asked.map(a => a.name)).toContain('playwright-spec');
+    for (const { name, agent } of asked) {
+      expect(`${name}:${path.basename(mcpConfigPath(agent.stage))}`)
+        .toMatch(new RegExp(`^${name}:context7(\\.local)?\\.json$`));
+    }
+  });
+});

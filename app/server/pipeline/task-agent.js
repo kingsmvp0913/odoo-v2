@@ -290,7 +290,8 @@ async function runTaskAnalysis(taskId, userId, signal) {
     // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
     const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
     raw = analysisResult.text;
-    // 記本輪 session：規格 tour 靠它 --resume 續寫（脈絡已在，不必重讀 code 也不必重述規格）
+    // 記本輪 session：規格 tour 靠它 --resume 續寫（脈絡已在，不必重讀 code 也不必重述規格）。
+    // 落地在下方與 status 同一次 UPDATE——writeSpecTour 已搬到 runner 的 doBranch，那裡讀不到這個區域變數。
     analysisSessionId = analysisResult.sessionId || null;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
@@ -347,7 +348,15 @@ async function runTaskAnalysis(taskId, userId, signal) {
   // status／updated_at 不屬於它的語意範圍，另開一次 UPDATE 補上。
   const { writeAnalysisYaml } = require('./runner');
   await writeAnalysisYaml(taskId, result);
-  await query(`UPDATE tasks SET status=$2, updated_at=NOW() WHERE id=$1`, [taskId, nextStatus]);
+  // analysis_session_id 只由這裡寫入——它的語意是「最後一個**讀過本任務程式碼**的 session」，
+  // 而規格關卡（respec／spec-review）刻意不重讀整包 code（見 respec-patch.md 的 description），
+  // 讓它們也寫進來的話，凡是經過澄清或規格問答的任務，欄位裡就會換成一個沒有 code 記憶的 session，
+  // writeSpecTour resume 到它等於白 resume（仍得重讀模組，實測那是 spec_tour 十分鐘裡的前七分鐘）。
+  // 直接指派而非 COALESCE：分析重跑代表規格已換一份，殘留的舊 session 比沒有更糟。
+  await query(
+    `UPDATE tasks SET status=$2, analysis_session_id=$3, updated_at=NOW() WHERE id=$1`,
+    [taskId, nextStatus, analysisSessionId]
+  );
   // 規格已成功寫出＝這批留言真的被吸收了，此時才銷帳（理由見上方 absorbUpTo）
   if (absorbUpTo) {
     await query(
@@ -378,6 +387,10 @@ async function runSpecTourGate(taskId, userId, signal, branchName) {
   }
 }
 
+// 寫 tour 與 E2E 關產 tour 是同一件事，卻曾各拿一半時間：playwright 關明寫 1200s，本關漏帶
+// timeoutMs 於是吃 runClaude 的 600s 預設，實測就是在寫檔前一刻被砍（task 106）。對齊上限，可用 env 調整。
+const SPEC_TOUR_TIMEOUT_MS = parseInt(process.env.PIPELINE_SPEC_TOUR_TIMEOUT_MS || '1200000', 10);
+
 // 依定稿規格寫 E2E tour，排在 coding **之前**——現行順序是 coding 完才產 tour，等於先寫答案再
 // 出考題，測試會遷就實作；先定稿則是開發者要讓考題通過，且 coding 進 worktree 時就看得到驗收
 // selector。專案層開關，預設關閉（行為與現況完全相同）。
@@ -389,20 +402,28 @@ async function runSpecTourGate(taskId, userId, signal, branchName) {
 // 不 reset 而留在模組裡，最後 --test-tags /<module> 把新舊兩份一起跑，舊的必失敗 → 退 coding，
 // 而 coding 被禁止改測試檔 → 三輪後 stopped。
 //
-// 也刻意**不** --resume 分析 session：規格閘門可能隔數小時才被核准，那時 prompt cache 早已過期，
-// resume 等於全價重播整段 analysis 對話（含它讀過的所有檔案），比 fresh 讀 analysis.yaml 又慢又貴；
-// 無狀態同時根治 drift（always.md 規則 74）。代價是放棄「session 熱度省 token」，但那個前提在
-// 隔著人工閘門的情境下本來就不成立。
+// --resume 分析 session（analysis_session_id）：本關要寫的是「這個模組的 tour」，而分析關剛剛才把
+// 同一個 worktree 的碼讀過一遍。曾一度改成無狀態，理由是「規格閘門可能隔數小時才被核准，cache 早過期，
+// resume 等於全價重播整段 analysis 對話」——但實測（task 106）打臉了這個取捨：fresh 版把十分鐘裡的
+// 前七分鐘花在重讀 idx_hj 的模組結構，正是 analysis session 裡現成的東西，最後跑滿逾時零產出。
+// 重播 input token 貴但快，重新探索是慢又貴。resume 失敗（session 已被 CLI 回收）時降級 fresh，
+// 不讓 tour 因此整份消失。
 //
 // 整段 best-effort：tour 是加值產物，任何失敗都不該讓已經產出的規格或關卡推進跟著壞掉。失敗時
 // 會留一筆 task_logs（見呼叫端），且 playwright 關會實測 tour 檔是否存在、查無就自行產生。
 async function writeSpecTour(taskId, userId, signal, branchName) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, analysis_yaml, git_branch FROM tasks WHERE id=$1', [taskId]
+    'SELECT id, task_id, project_id, analysis_yaml, git_branch, analysis_session_id FROM tasks WHERE id=$1', [taskId]
   );
   if (!task) return;
-  const { rows: [proj] } = await query('SELECT spec_tour_enabled FROM projects WHERE id=$1', [task.project_id]);
-  if (!proj || !proj.spec_tour_enabled) return;
+  // e2e_disabled 一併看：出考題的唯一意義是之後有人考。E2E 停用的專案，deploy 成功後直接進
+  // review_pending（deploy-testing.js 的 e2e_disabled 分支），tour 永遠不會被執行——兩個旗標同時
+  // 開著就是每張任務固定燒滿一個逾時去寫一份沒人跑的考題（鴻久實測：spec_tour 600s、零產出，
+  // 而該專案 playwright 關歷來執行 0 次）。守衛放在這裡而非關掉旗標，是因為旗標是使用者可改的設定。
+  const { rows: [proj] } = await query(
+    'SELECT spec_tour_enabled, e2e_disabled FROM projects WHERE id=$1', [task.project_id]
+  );
+  if (!proj || !proj.spec_tour_enabled || proj.e2e_disabled) return;
   if (!task.analysis_yaml) return;                      // 沒有規格就沒有 acceptance，無從出考題
 
   let moduleName = '';
@@ -449,14 +470,31 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   // 失敗也要記帳：這關 best-effort（外層 runSpecTourGate 吞掉例外照樣推進），但不記的話最貴的
   // 情境完全隱形——實測 task_service_3907 這關跑滿 600s 逾時被砍、126 個工具呼叫，token_usage
   // 裡連一列都沒有，報表上等於沒發生過（比照 analysis／cs 的 logFailedUsage 慣例）。
+  const runOpts = {
+    cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour',
+    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: { ...gitEnv }
+  };
   let res;
   try {
-    res = await runClaude(prompt, {
-      cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour', env: { ...gitEnv }
-    });
+    res = await runClaude(prompt, { ...runOpts, resumeSessionId: task.analysis_session_id || undefined });
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'spec_tour', err);
-    throw err;   // 外層照舊寫「產出失敗」的 task_logs 並讓任務推進
+    // resume 專屬的降級：session 被 CLI 回收／失效時，fresh 仍然寫得出 tour（只是要自己重讀模組）。
+    // 排除 aborted（使用者暫停，狀態原地不動）與 timeout（同一份輸入再跑一次極可能再逾時，只是讓
+    // 使用者多等一輪；比照 with-resume.js:39-44）。沒有 session 可接時不重跑——那就是純失敗。
+    if (!task.analysis_session_id || err.aborted || err.claudeStatus === 'timeout') {
+      throw err;   // 外層照舊寫「產出失敗」的 task_logs 並讓任務推進
+    }
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, `[規格 tour] 續接分析對話失敗（${String(err.message).slice(0, 120)}），改以完整規格重跑`]
+    ).catch(() => {});
+    try {
+      res = await runClaude(prompt, runOpts);
+    } catch (err2) {
+      await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'spec_tour', err2);
+      throw err2;
+    }
   }
   await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'spec_tour', res.usage, res.durationMs);
   // 只留一行摘要，不塞 agent 的整段輸出：task_logs 會被分診／respec 每輪讀進 prompt，

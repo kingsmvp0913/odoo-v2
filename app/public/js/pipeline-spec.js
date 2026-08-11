@@ -145,20 +145,22 @@ function pipelineNodes(flags) {
     detail: [
       ['進入', '規格已定稿（上面三條路的共同出口）'],
       ['做什麼', '每個 repo 建任務 worktree（切點 ai-dev）並跟上最新 ai-dev'],
-      ['往下', specTour ? '先寫 E2E 考題 → 開發' : '開發'],
+      ['往下', specTour && e2eEnabled ? '先寫 E2E 考題 → 開發' : '開發'],
       ['注意', '持專案鎖，與 merge／deploy／analysis 序列化']
     ]
   });
 
-  if (specTour) {
+  // 與 e2eEnabled 連動而非獨立：E2E 停用的專案，tour 寫了也永遠不會被執行（部署成功直接進
+  // 最終人工審核），出考題純粹是每張任務固定燒一個逾時。程式端的守衛在 writeSpecTour。
+  if (specTour && e2eEnabled) {
     push({
       id: 'spectour', track: 'task', step: 7, kind: 'inline', label: '先寫 E2E 考題',
       ref: '（不是獨立狀態）', agent: 'playwright-spec',
       detail: [
         ['注意', '**這不是一關**——沒有對應的任務狀態，任務不會停在這裡。它是建立分支關內部的一步（runSpecTourGate），只在記帳上獨立成 spec_tour'],
-        ['進入', '規格 tour 模式開啟，且任務剛進入建立分支'],
-        ['做什麼', '依定稿的 acceptance 先寫 Odoo tour（實作之前定稿），無狀態、不續接分析 session'],
-        ['失敗', 'best-effort：產不出來不擋推進，但會在時間軸留下原因，E2E 關屆時自行產生']
+        ['進入', '規格 tour 模式開啟、專案未停用 E2E，且任務剛進入建立分支'],
+        ['做什麼', '依定稿的 acceptance 先寫 Odoo tour（實作之前定稿），續接分析關的 session（碼已讀過，不必重探）'],
+        ['失敗', 'best-effort：產不出來不擋推進，但會在時間軸留下原因，E2E 關屆時自行產生。session 已被回收則降級 fresh 重跑']
       ]
     });
   }
@@ -402,7 +404,8 @@ function pipelineEdges(flags) {
     ['respec', 'coding', 'main'],
     ['review', 'wiki', 'main'], ['wiki', 'done', 'main'], ['done', 'release', 'alt']
   ];
-  if (flags.specTour) { e.push(['branch', 'spectour', 'main'], ['spectour', 'coding', 'main']); }
+  // 條件必須與 pipelineNodes 的 spectour 節點逐字一致，否則會生出指向不存在節點的連線
+  if (flags.specTour && flags.e2eEnabled) { e.push(['branch', 'spectour', 'main'], ['spectour', 'coding', 'main']); }
   else { e.push(['branch', 'coding', 'main']); }
   if (flags.e2eEnabled) { e.push(['deploy', 'e2e', 'main'], ['e2e', 'review', 'main'], ['e2e', 'coding', 'back']); }
   else { e.push(['deploy', 'review', 'main']); }

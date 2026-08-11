@@ -729,6 +729,41 @@ test('analysis 成功寫出新規格 → 清掉舊的 spec_session_id／spec_pro
   expect(after.spec_prompt_ver).toBeNull();
 });
 
+// 意圖：writeSpecTour 已搬到 runner 的 doBranch，讀不到分析關的區域變數——session 沒落地就等於
+// 沒有。欄位早在 db.js 加好（註解就寫著「供續寫 tour 時 --resume」），但寫入端從頭到尾沒做過，
+// 實測 33 張任務全是 NULL，於是 resume 這件事在程式上長得像有、跑起來永遠是 fresh。
+test('analysis 產出規格 → 把本輪 session 存進 analysis_session_id（供 spec tour resume）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = {
+      write: () => {},
+      end: () => setImmediate(() => {
+        child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-A1' }) + '\n');
+        child.stdout.emit('data', JSON.stringify({
+          type: 'result',
+          result: '<result>\ncase_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"\n</result>',
+          usage: null, duration_ms: 10
+        }) + '\n');
+        child.emit('close', 0);
+      })
+    };
+    return child;
+  });
+  const { rows: [t] } = await dbModule.query(
+    // 帶一個舊值：直接指派而非 COALESCE——規格重產後殘留的舊 session 比沒有更糟
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, analysis_session_id) VALUES ($1,'ta_sesskeep','odoo','T','需求','analysis_running',$2,'sess-OLD') RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const { rows: [after] } = await dbModule.query('SELECT analysis_session_id FROM tasks WHERE id=$1', [t.id]);
+  expect(after.analysis_session_id).toBe('sess-A1');
+});
+
 test('analysis 沒產出有效規格（停在 stopped）→ 留言不得銷帳，留給下一輪', async () => {
   mockAnalysisResult('這不是有效的規格物件');   // 缺必要欄位 → 走 stopped，不寫 analysis_yaml
   const { rows: [t] } = await dbModule.query(
@@ -785,11 +820,11 @@ async function withSpecTour(fn) {
   finally { await dbModule.query('UPDATE projects SET spec_tour_enabled=false WHERE id=$1', [projectId]); }
 }
 
-async function makeSpecTask(tid) {
+async function makeSpecTask(tid, analysisSessionId = null) {
   const { rows: [t] } = await dbModule.query(
-    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, analysis_yaml)
-     VALUES ($1,$2,'odoo','T','需求','branch_pending',$3,$4) RETURNING id`,
-    [userId, tid, projectId, 'module: "idx_x"\nsummary: "加跳頁"\nacceptance:\n  - "點「前往」後出現「共 N 頁」"\n']
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, analysis_yaml, analysis_session_id)
+     VALUES ($1,$2,'odoo','T','需求','branch_pending',$3,$4,$5) RETURNING id`,
+    [userId, tid, projectId, 'module: "idx_x"\nsummary: "加跳頁"\nacceptance:\n  - "點「前往」後出現「共 N 頁」"\n', analysisSessionId]
   );
   return t.id;
 }
@@ -800,16 +835,19 @@ test('spec_tour_enabled=false（預設）→ runSpecTourGate 完全不呼叫 cla
   expect(calls).toHaveLength(0);
 });
 
-// 意圖：規格閘門可能隔數小時才被核准，那時 analysis session 的 prompt cache 早已過期，--resume
-// 等於全價重播整段分析對話。改成無狀態、直接讀定稿的 analysis.yaml（always.md 規則 74）。
-test('spec_tour_enabled=true → 無狀態 fresh 產 tour，prompt 帶定稿規格', async () => {
+// 意圖：本關要寫的是「這個模組的 tour」，而分析關剛把同一個 worktree 的碼讀過一遍。曾一度改成
+// 無狀態（理由：閘門隔數小時後 cache 已過期，resume 等於全價重播），但實測 task 106 打臉——fresh
+// 版把十分鐘裡的前七分鐘花在重讀 idx_hj 的模組結構，那正是 analysis session 裡現成的東西。
+test('spec_tour_enabled=true → resume 分析 session 續寫，prompt 仍帶定稿規格', async () => {
   await withSpecTour(async () => {
     const calls = analysisSpawn();
-    await runSpecTourGate(await makeSpecTask('ta_tour'), userId);
+    await runSpecTourGate(await makeSpecTask('ta_tour', 'sess-analysis'), userId);
 
     expect(calls).toHaveLength(1);
     const tourCall = calls[0];
-    expect(tourCall.args).not.toContain('--resume');       // 不再依賴 analysis session
+    // 接的是分析關留下的那一個，不是隨便一個 session
+    expect(tourCall.args).toContain('--resume');
+    expect(tourCall.args[tourCall.args.indexOf('--resume') + 1]).toBe('sess-analysis');
     expect(tourCall.stdin).toContain('acceptance');        // 依驗收條件寫
     expect(tourCall.stdin).toContain('共 N 頁');            // 定稿規格真的被帶進 prompt
     expect(tourCall.stdin).not.toContain('<result>');      // tour 類 agent 不得有 result 契約
@@ -817,6 +855,71 @@ test('spec_tour_enabled=true → 無狀態 fresh 產 tour，prompt 帶定稿規�
     expect(tourCall.stdin).not.toMatch(/\{\{\w+\}\}/);
     // 帶 --dangerously-skip-permissions 跑，cwd 必須是任務 worktree，不能是平台自己的 repo
     expect(tourCall.cwd).toContain(path.join('.worktrees', 'ta_tour'));
+  });
+});
+
+// 意圖：analysis_session_id 是 2026-08-11 才補上的寫入端，先前 33 張任務全是 NULL。既有在途任務
+// 與「CLI 沒回 sessionId」那輪都會走到這裡，不得因為沒 session 就整份 tour 產不出來。
+test('沒有 analysis session → 照樣 fresh 產 tour（不得因缺 session 就跳過）', async () => {
+  await withSpecTour(async () => {
+    const calls = analysisSpawn();
+    await runSpecTourGate(await makeSpecTask('ta_tour_nosess'), userId);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).not.toContain('--resume');
+    expect(calls[0].stdin).toContain('共 N 頁');   // fresh 版靠 prompt 裡的定稿規格
+  });
+});
+
+// 意圖：出考題的唯一意義是之後有人考。E2E 停用的專案 deploy 成功後直接進 review_pending，tour
+// 永遠不會被執行——兩旗標同開＝每張任務固定燒滿一個逾時寫一份沒人跑的考題（鴻久實測 600s 零產出，
+// 而該專案 playwright 關歷來執行 0 次）。
+test('e2e_disabled=true → 即使 spec_tour_enabled 也不出考題（沒人會考的卷不用出）', async () => {
+  await withSpecTour(async () => {
+    await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
+    try {
+      const calls = analysisSpawn();
+      await runSpecTourGate(await makeSpecTask('ta_tour_noe2e'), userId);
+      expect(calls).toHaveLength(0);
+    } finally {
+      await dbModule.query('UPDATE projects SET e2e_disabled=false WHERE id=$1', [projectId]);
+    }
+  });
+});
+
+// 意圖：session 是 CLI 自己管的，隔了人工閘門可能已被回收。resume 失敗若直接放棄，就是拿「省時間」
+// 換掉「產得出 tour」——比無狀態版還糟。降級要留聲，否則沒人知道這輪其實沒省到。
+test('resume 失敗（session 已被回收）→ 降級 fresh 重跑並留聲，tour 仍產得出來', async () => {
+  await withSpecTour(async () => {
+    const { spawn } = require('child_process');
+    const { EventEmitter } = require('events');
+    const calls = [];
+    spawn.mockImplementation((cmd, args) => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      const resumed = args.includes('--resume');
+      calls.push({ resumed });
+      child.stdin = {
+        write: () => {},
+        end: () => setImmediate(() => {
+          if (resumed) return child.emit('close', 1);         // session 不存在
+          child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'done', usage: null, duration_ms: 5 }) + '\n');
+          child.emit('close', 0);
+        })
+      };
+      return child;
+    });
+    const id = await makeSpecTask('ta_tour_stale', 'sess-gone');
+    await runSpecTourGate(id, userId);
+
+    expect(calls.map(c => c.resumed)).toEqual([true, false]);   // 先試 resume，再 fresh
+    const { rows } = await dbModule.query(
+      "SELECT content FROM task_logs WHERE task_id=$1 ORDER BY id", [id]
+    );
+    // 降級留聲 ＋ 最終仍產出，兩者都要有
+    expect(rows.some(r => r.content.includes('續接分析對話失敗'))).toBe(true);
+    expect(rows.some(r => r.content.includes('已依 acceptance'))).toBe(true);
   });
 });
 

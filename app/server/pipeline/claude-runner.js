@@ -12,12 +12,25 @@ const { aiTokenEnv } = require('../lib/ai-token');
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
 // playwright（tour selector/導航 URL）、qa（判 base Odoo 是否合法）、reject_triage（判是否不符 Odoo 標準）、chat（技術問答）。
 // 缺 context7 的關卡會退而 grep/find 本機 Odoo core（odoo-envs），曾滾成 `find /` 全碟掃描 → 逾時。
+// 掃碟守衛掛上之後，缺 context7 的症狀改換一種樣子：agent 改用 WebSearch/WebFetch 去 raw.githubusercontent.com
+// 抓 Odoo core（實測 spec_tour 一輪 38 次工具呼叫裡 7 次 WebSearch＋7 次 WebFetch＋3 次 ToolSearch 找不到 context7，
+// 跑滿逾時零產出）。prompt 裡「走 context7 查證、不要掃碟找核心原始碼」這種禁令，缺了這張表就是只禁不給
+// （rules/agent-prompt 107）——凡 prompt 提到 context7 的關卡都必須在此登記，agent-loader.test.js 有守衛。
 // 實測 serena 即使在場也不被用（Grep/Read 已覆蓋 repo 內 symbol 查詢），故全 pipeline 不掛 serena，省下冷啟動 indexing 與空找 schema。
 const MCP_PROFILES = {
   analysis: 'context7.json', coding: 'context7.json',
-  playwright: 'context7.json', qa: 'context7.json', reject_triage: 'context7.json', chat: 'context7.json',
+  playwright: 'context7.json', spec_tour: 'context7.json', qa: 'context7.json',
+  reject_triage: 'context7.json', chat: 'context7.json',
   cs: 'context7.json',
 };
+// 「刻意不掛」也要具名：漏登記與決定不掛在程式上長得一模一樣（都是查不到 key → none.json），
+// 分不出來就沒有東西擋得住下一個新關卡重蹈 spec_tour 的覆轍。新增 stage 時兩張表挑一張填，
+// 測試會逼你做這個決定。respec 這幾關的 spec-lookup.md 已明寫「你這一關也沒有 context7」，
+// 屬於文字與設定一致的刻意設計，不是漏。
+const NO_MCP_STAGES = new Set([
+  'respec', 'merge', 'chat-to-task', 'deploy_fix', 'reject_classify',
+  'wiki', 'wiki_drift_classify', 'workflow_health',
+]);
 // context7 啟動策略：優先用本地依賴（node ＋ 執行期解析的絕對路徑）——npx -y 每次 spawn 都可能
 // 重新下載套件（冷啟動慢、離線直接失敗）。未安裝時退回原 npx 版 context7.json。
 let _context7Path = null;
@@ -290,4 +303,4 @@ function stopReason(prefix, err) {
   return err && err.aborted ? '手動暫停' : `${prefix}：${err.message}`;
 }
 
-module.exports = { runClaude, abortError, stopReason, mcpConfigPath };
+module.exports = { runClaude, abortError, stopReason, mcpConfigPath, MCP_PROFILES, NO_MCP_STAGES };
