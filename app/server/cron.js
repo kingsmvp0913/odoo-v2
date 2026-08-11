@@ -109,15 +109,35 @@ const HEALTH_CHECK_WINDOW_DAYS = parseInt(process.env.HEALTH_CHECK_WINDOW_DAYS |
 
 // 距上次健檢是否已滿一週。以 DB 的 created_at 為準而非行程內變數：server 常重啟，
 // 用記憶體節流會變成「每次重啟後不久就再跑一次」，一次健檢要跑 20+ 個 opus。
-async function shouldRunHealthCheck() {
-  if (HEALTH_CHECK_INTERVAL_MS <= 0) return false;
+// 健檢頁要顯示「下次執行時間」，而那個時間就是這裡的判斷結果——兩邊各算一份必然漂移
+// （改了 interval 只改到一邊，畫面寫的時間就是假的），故排程判斷與時間推算共用此函式。
+async function getHealthCheckSchedule() {
+  const intervalMs = HEALTH_CHECK_INTERVAL_MS;
+  if (intervalMs <= 0) return { enabled: false, intervalMs, lastRunAt: null, nextRunAt: null, running: false, due: false };
   const { rows } = await query(
     "SELECT status, created_at FROM health_check_runs ORDER BY id DESC LIMIT 1"
   );
   const last = rows[0];
-  if (!last) return true;                                   // 從沒跑過 → 跑
-  if (last.status === 'running') return false;              // 上一輪還在跑 → 不疊加
-  return Date.now() - new Date(last.created_at).getTime() >= HEALTH_CHECK_INTERVAL_MS;
+  // 從沒跑過 → 下一個 tick 就跑，沒有「上次」可推算下次時刻
+  if (!last) return { enabled: true, intervalMs, lastRunAt: null, nextRunAt: null, running: false, due: true };
+  const lastRunAt = new Date(last.created_at);
+  // 上一輪還在跑 → 不疊加；下次時刻要等這輪落地才算得準，故不給 nextRunAt
+  if (last.status === 'running') {
+    return { enabled: true, intervalMs, lastRunAt: lastRunAt.toISOString(), nextRunAt: null, running: true, due: false };
+  }
+  const nextRunAt = new Date(lastRunAt.getTime() + intervalMs);
+  return {
+    enabled: true, intervalMs,
+    lastRunAt: lastRunAt.toISOString(),
+    nextRunAt: nextRunAt.toISOString(),
+    running: false,
+    due: Date.now() >= nextRunAt.getTime(),
+  };
+}
+
+async function shouldRunHealthCheck() {
+  const s = await getHealthCheckSchedule();
+  return s.due;
 }
 
 function startCron() {
@@ -275,4 +295,4 @@ function stopCron() {
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, _resetShutdownStateForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, _resetShutdownStateForTesting };

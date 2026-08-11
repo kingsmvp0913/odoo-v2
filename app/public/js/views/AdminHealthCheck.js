@@ -11,14 +11,28 @@ const HC_SEV = {
 window.AdminHealthCheckView = Vue.defineComponent({
   name: 'AdminHealthCheckView',
   data() {
-    return { runId: null, run: null, findings: [], history: [], running: false, windowDays: 30, _timer: null };
+    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, windowDays: 30, _timer: null };
   },
   async mounted() { await this.loadHistory(); },
   unmounted() { if (this._timer) clearInterval(this._timer); },
+  computed: {
+    // 排程是每週自動跑（cron 每分鐘一 tick），所以顯示的是「最早會被執行的時刻」
+    nextRunText() {
+      const s = this.schedule;
+      if (!s) return '';
+      if (!s.enabled) return '已停用';
+      if (s.running) return '本輪執行中';
+      if (s.due) return '即將執行';
+      return new Date(s.nextRunAt).toLocaleString();
+    }
+  },
   methods: {
     async loadHistory() {
       try { this.history = await Api.get('admin/health-check'); }
       catch (e) { showToast(e.message, 'error'); }
+      // 排程資訊失敗不擋歷史清單：它只是附註，沒有它整頁照樣可用
+      try { this.schedule = await Api.get('admin/health-check-schedule'); }
+      catch (e) { this.schedule = null; }
     },
     async start() {
       this.running = true; this.findings = []; this.run = null;
@@ -64,6 +78,9 @@ window.AdminHealthCheckView = Vue.defineComponent({
           </button>
           <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
             狀態：{{ run.status }}（{{ findings.length }} 個 agent 已診斷）
+          </span>
+          <span v-if="nextRunText" style="font-size:var(--fs-sm);color:var(--text-muted);margin-left:auto">
+            下次自動健檢：{{ nextRunText }}
           </span>
         </div>
 

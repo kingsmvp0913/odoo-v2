@@ -14,6 +14,7 @@ const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runHealthCheck } = require('./pipeline/health-check-runner');
+const { getHealthCheckSchedule } = require('./cron');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -486,6 +487,13 @@ function registerRoutes(app) {
       );
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 下次自動健檢時刻。刻意不掛在 /health-check/ 底下：那層已有吃任意字串的 :runId，
+  // 排在它後面會被當成 runId 吞掉，得靠路由順序才正確——換成獨立路徑就不必依賴順序。
+  app.get('/api/admin/health-check-schedule', auth, async (_req, res) => {
+    try { res.json(await getHealthCheckSchedule()); }
+    catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/admin/health-check/:runId', auth, async (req, res) => {
