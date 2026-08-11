@@ -15,6 +15,7 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?
 ```
 - 執行／部署／測試異常 → 讀對應 log（位置見專案規範第 6 節）。
 - 正式區資料問題 → 用 getSQL 查該專案連線的資料庫（唯讀 SELECT，禁寫入）。
+- 正式區程式錯誤／traceback → 用 getLog 撈事發時段的 Odoo log（**必須先問出事發時間點**，沒有時間點撈不了）。這是客戶主機上的 log，與上面「執行／部署／測試異常」讀的平台自身 log 不同。
 - 正式區 bug → 先系統化初步定因（讀錯誤／log → 立單一假設 → 查證），不亂猜、不臆造修復。
 - Odoo 原生 API／版本行為 → 用 context7 查證，勿憑記憶臆測。
 
