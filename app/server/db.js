@@ -582,6 +582,10 @@ async function migrate() {
     // 由 lib/claude-auth 解密後注入每個 claude 子行程的 CLAUDE_CODE_OAUTH_TOKEN，
     // 取代共用互動式憑證檔（併發 spawn 撞刷新會印 Not logged in）
     { table: 'teams_settings', col: 'claude_oauth_token_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN claude_oauth_token_enc TEXT' },
+    // context7 MCP 的 API key：加密存放，由 lib/context7-auth 解密後寫進 pipeline 的 MCP 設定檔。
+    // 未設定則走匿名額度（依 IP 計），配額用盡時 MCP 不報錯、只回一段 quota 訊息，
+    // 各關於是靜默改用 WebSearch 抓 Odoo 原始碼（2026-08-11 實測）
+    { table: 'teams_settings', col: 'context7_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN context7_api_key_enc TEXT' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },

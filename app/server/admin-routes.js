@@ -8,6 +8,7 @@ const { hashPassword } = require('./password');
 const { encrypt } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
+const { resetContext7KeyCache } = require('./lib/context7-auth');
 const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
@@ -82,6 +83,55 @@ function registerRoutes(app) {
     try {
       await query('UPDATE teams_settings SET claude_oauth_token_enc = NULL, updated_at = NOW() WHERE id = 1');
       await resetClaudeTokenCache(); // 退回本機憑證檔行為
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // --- context7 API key（全平台一把）---
+  // 未設定時走匿名額度，配額用盡不會報錯、只會讓各關靜默改用 WebSearch 抓 Odoo 原始碼
+  //（見 lib/context7-auth 的說明）。同樣走專屬端點而非 teams-settings 的全量 upsert。
+
+  app.get('/api/admin/context7-key', auth, async (req, res) => {
+    try {
+      const { rows } = await query('SELECT context7_api_key_enc FROM teams_settings WHERE id = 1');
+      // 只回布林：key 不論明文密文都不得回流前端
+      res.json({ configured: !!rows[0]?.context7_api_key_enc });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/context7-key', auth, async (req, res) => {
+    const key = String(req.body?.key || '').trim();
+    if (!key) return res.status(400).json({ error: '請貼上 context7 API key' });
+    if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 key' });
+    // 先驗證再存（比照 Claude token）：貼錯當場擋下，不必等下一張任務靜默退回匿名額度。
+    // 打的是 MCP server 自己會打的那支搜尋端點（dist/lib/api.js），認證同為 Bearer。
+    let warning = null;
+    try {
+      const r = await fetch('https://context7.com/api/v2/libs/search?query=odoo', {
+        headers: { Authorization: `Bearer ${key}`, 'X-Context7-Source': 'mcp-server' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (r.status === 401 || r.status === 403) return res.status(400).json({ error: 'key 無效或已被停用，未儲存' });
+      if (!r.ok) warning = `已儲存，但驗證未能完成：context7 回 ${r.status}`;
+    } catch (err) {
+      // 網路不通／逾時仍然存：換 key 的時機往往正是服務不穩的時候，把管理員鎖在外面是更糟的失敗模式
+      warning = `已儲存，但驗證未能完成：${err.message}`;
+    }
+    try {
+      await query(
+        `INSERT INTO teams_settings (id, context7_api_key_enc, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET context7_api_key_enc = $1, updated_at = NOW()`,
+        [encrypt(key)]
+      );
+      await resetContext7KeyCache(); // 下一個 spawn 重寫 MCP 設定檔即生效，不必重啟 server
+      res.json(warning ? { ok: true, warning } : { ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/admin/context7-key', auth, async (req, res) => {
+    try {
+      await query('UPDATE teams_settings SET context7_api_key_enc = NULL, updated_at = NOW() WHERE id = 1');
+      await resetContext7KeyCache(); // 退回匿名額度
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

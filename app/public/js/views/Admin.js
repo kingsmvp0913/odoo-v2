@@ -13,6 +13,10 @@ window.AdminView = Vue.defineComponent({
       claudeTokenInput: '',
       savingClaudeToken: false,
       clearingClaudeToken: false,
+      context7Key: { configured: false },
+      context7KeyInput: '',
+      savingContext7Key: false,
+      clearingContext7Key: false,
       loading: true,
       savingConn: false,
       savingTeams: false,
@@ -89,6 +93,7 @@ window.AdminView = Vue.defineComponent({
         }
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
         try { this.claudeToken = await Api.get('admin/claude-token'); } catch (_) { /* 顯示用 */ }
+        try { this.context7Key = await Api.get('admin/context7-key'); } catch (_) { /* 顯示用 */ }
         await this.loadEmbedding();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
@@ -119,6 +124,33 @@ window.AdminView = Vue.defineComponent({
         this.claudeToken = await Api.get('admin/claude-token');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.clearingClaudeToken = false; }
+    },
+    async saveContext7Key() {
+      const key = (this.context7KeyInput || '').trim();
+      if (!key) { showToast('請貼上 API key', 'error'); return; }
+      this.savingContext7Key = true;
+      try {
+        // 後端會先打一次 context7 搜尋端點驗證才存
+        const r = await Api.post('admin/context7-key', { key });
+        this.context7KeyInput = '';
+        showToast(r.warning || 'API key 已儲存並驗證通過', r.warning ? 'error' : 'success');
+        this.context7Key = await Api.get('admin/context7-key');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingContext7Key = false; }
+    },
+    async clearContext7Key() {
+      if (!await confirmDialog({
+        title: '清除 context7 API key',
+        message: '清除後查 Odoo 官方寫法會退回匿名額度，配額用盡時各關會靜默改用網路搜尋（慢且不準）。確定要清除嗎？',
+        danger: true, confirmText: '清除'
+      })) return;
+      this.clearingContext7Key = true;
+      try {
+        await Api.delete('admin/context7-key');
+        showToast('API key 已清除', 'success');
+        this.context7Key = await Api.get('admin/context7-key');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.clearingContext7Key = false; }
     },
     async saveConn() {
       this.savingConn = true;
@@ -397,6 +429,34 @@ window.AdminView = Vue.defineComponent({
             </button>
             <button v-if="claudeToken.configured" class="btn btn-ghost btn-sm" @click="clearClaudeToken" :disabled="clearingClaudeToken">
               {{ clearingClaudeToken ? '清除中...' : '清除憑證' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- context7 API key -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">context7 API key</div>
+            <div class="setting-block-desc">AI 寫 Odoo 程式碼時靠 context7 查官方寫法。未設定則使用匿名額度，配額用盡時<strong>不會有任何錯誤</strong>——各關會靜默改用網路搜尋去抓 Odoo 原始碼，慢、不準，且那段消耗不會出現在用量報表上。在 <code>context7.com/dashboard</code> 註冊可取得免費 key（額度遠高於匿名）。貼上後下一張任務即生效，不必重啟伺服器。</div>
+          </div>
+          <div class="setting-block-body">
+            <div style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">
+              <span v-if="context7Key.configured" style="color:var(--success)">✓ 已設定 API key</span>
+              <span v-else style="color:var(--text-muted)">尚未設定，目前使用匿名額度</span>
+            </div>
+            <div class="conn-fields">
+              <div class="field-item">
+                <label class="field-label">貼上 API key</label>
+                <input v-model="context7KeyInput" type="password" class="field-input" placeholder="context7.com/dashboard 取得的 key" autocomplete="off" />
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="saveContext7Key" :disabled="savingContext7Key">
+              {{ savingContext7Key ? '驗證中...' : '儲存並驗證' }}
+            </button>
+            <button v-if="context7Key.configured" class="btn btn-ghost btn-sm" @click="clearContext7Key" :disabled="clearingContext7Key">
+              {{ clearingContext7Key ? '清除中...' : '清除 key' }}
             </button>
           </div>
         </div>

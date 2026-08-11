@@ -6,6 +6,7 @@ const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { looksLikeAuthFailure } = require('./auth-signature');
 const { getClaudeAuthEnv } = require('../lib/claude-auth');
+const { getContext7ApiKey } = require('../lib/context7-auth');
 const { aiTokenEnv } = require('../lib/ai-token');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
@@ -32,19 +33,33 @@ const NO_MCP_STAGES = new Set([
   'wiki', 'wiki_drift_classify', 'workflow_health',
 ]);
 // context7 啟動策略：優先用本地依賴（node ＋ 執行期解析的絕對路徑）——npx -y 每次 spawn 都可能
-// 重新下載套件（冷啟動慢、離線直接失敗）。未安裝時退回原 npx 版 context7.json。
+// 重新下載套件（冷啟動慢、離線直接失敗）。未安裝時退回 npx。
+// API key（lib/context7-auth，管理員在後台設定）寫進生成檔的 env：MCP server 由 claude CLI 另行
+// spawn，不保證繼承平台行程的環境變數，故顯式帶。生成檔已在 .gitignore，key 不會進版控。
+// 快取連 key 一起比對——管理員換 key 後下一個 spawn 就要用新的，不必重啟（存檔端會 reset 快取，
+// 但兩者都比對才擋得住「先 spawn 過再換 key」這種順序）。
 let _context7Path = null;
+let _context7Key = null;
 function context7ConfigPath() {
-  if (_context7Path) return _context7Path;
-  const fallback = path.join(__dirname, 'mcp', 'context7.json');
+  const apiKey = getContext7ApiKey();
+  if (_context7Path && _context7Key === apiKey) return _context7Path;
+  let server;
   try {
     const pkgDir = path.dirname(require.resolve('@upstash/context7-mcp/package.json'));
     const entry = path.join(pkgDir, 'dist', 'index.js');
     if (!fs.existsSync(entry)) throw new Error('entry missing');
+    server = { command: process.execPath, args: [entry] };
+  } catch { server = { command: 'npx', args: ['-y', '@upstash/context7-mcp'] }; }
+  if (apiKey) server.env = { CONTEXT7_API_KEY: apiKey };
+  try {
     const gen = path.join(__dirname, 'mcp', 'context7.local.json');
-    fs.writeFileSync(gen, JSON.stringify({ mcpServers: { context7: { command: process.execPath, args: [entry] } } }, null, 2));
+    fs.writeFileSync(gen, JSON.stringify({ mcpServers: { context7: server } }, null, 2));
     _context7Path = gen;
-  } catch { _context7Path = fallback; }
+  } catch {
+    // 寫不出生成檔（唯讀掛載等）才退版控裡的靜態檔——那份沒有 key，等於回到匿名額度
+    _context7Path = path.join(__dirname, 'mcp', 'context7.json');
+  }
+  _context7Key = apiKey;
   return _context7Path;
 }
 function mcpConfigPath(agentType) {
