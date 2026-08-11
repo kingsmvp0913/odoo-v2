@@ -32,4 +32,27 @@ function filterByLevel(entries, level) {
   return entries.filter(e => (LEVEL_ORDER[e.level] ?? 0) >= min);
 }
 
-module.exports = { TS_RE, splitEntries, filterByLevel, LEVEL_ORDER, LEVEL_THRESHOLD };
+// 關鍵字比對整筆 raw（含 traceback 內文），純字串 includes——不是 regex。
+// 這是刻意的：關鍵字是唯一的自由文字參數，用 includes 既無 ReDoS 風險，
+// 也不會讓 `.*` 之類的輸入意外放行全部。
+function filterByKeyword(entries, keyword) {
+  const k = String(keyword || '').trim().toLowerCase();
+  if (!k) return entries;
+  return entries.filter(e => e.raw.toLowerCase().includes(k));
+}
+
+// 雙重上限，先到者停，且一律以整筆記錄為單位。
+function truncate(entries, maxEntries, maxBytes) {
+  const out = [];
+  let bytes = 0;
+  for (const e of entries) {
+    if (out.length >= maxEntries) return { entries: out, truncated: true };
+    const size = Buffer.byteLength(e.raw, 'utf8') + 1;
+    if (out.length && bytes + size > maxBytes) return { entries: out, truncated: true };
+    out.push(e);
+    bytes += size;
+  }
+  return { entries: out, truncated: false };
+}
+
+module.exports = { TS_RE, splitEntries, filterByLevel, filterByKeyword, truncate, LEVEL_ORDER, LEVEL_THRESHOLD };
