@@ -394,9 +394,13 @@ async function restartEnv(projectId) {
   return { ok: true };
 }
 
-// E2E via tour：與升級同一條 odoo-bin 指令，加 --test-enable 觸發 tour、--test-tags 只跑本模組測試。
+// E2E via tour：與升級同一條 odoo-bin 指令，加 --test-enable 觸發 tour。
 // exit 非 0（tour/斷言失敗或載入錯）在容器內 execOdoo 回非 0、由本函式 throw，供上層依 deploy 同套邏輯分類。
-async function runTourTests(projectId, moduleName, signal) {
+//
+// testClasses：本次任務產出的 HttpCase class 名（由呼叫端從 git diff 推導）。有值就收窄成
+// `/<module>:ClassA,/<module>:ClassB`，只跑本次的考題。給空陣列則退回整個模組——那會連模組內
+// 既有的壞測試一起跑（鴻久實測 48 支裡 25 支既有失敗），呼叫端應自行避免走到那條路。
+async function runTourTests(projectId, moduleName, signal, testClasses = []) {
   if (!moduleName) throw new Error('未指定 module，無法執行 tour 測試');
   const ctx = await dockerCtxFor(projectId);
   if (!ctx) throw new Error('project not found');
@@ -404,12 +408,24 @@ async function runTourTests(projectId, moduleName, signal) {
   // 避免以「模組相依缺失」的面貌出現而被誤判成 code 問題退回 coding。
   if (ctx.enterpriseError) throw new Error(ctx.enterpriseError);
   if (!(await dockerEnv.containerRunning(ctx.container))) throw new Error('測試容器未運行，請先建立/啟動測試環境');
+  // E2E_PASSWORD 注入容器：playwright-spec.md／playwright.md 都要求產出的 HttpCase 用
+  // `os.environ.get("E2E_PASSWORD")` 建測試使用者並 start_tour(login=...)，但這裡歷來沒帶 env
+  // （execOdoo 早就支援），密碼在容器內是 None → 帳號建不出來／登不進去。
+  // 沒人發現是因為這一關歷來執行 0 次。來源同 playwright-agent.js 的取法：每環境獨立的隨機密碼，
+  // 舊環境（無值）退回固定值相容。
+  const { rows: [creds] } = await query('SELECT e2e_password FROM odoo_envs WHERE project_id=$1', [projectId]);
+  const { E2E_PASSWORD } = require('./e2e-account');
+  // 收窄到本次的 tour class；空清單退回整個模組（見函式註解）
+  const tags = testClasses.length
+    ? testClasses.map(c => `/${moduleName}:${c}`).join(',')
+    : `/${moduleName}`;
   // chromium 已在 image 內；HttpCase 於容器內自起 http server（用 DOCKER_TEST_HTTP_PORT 與常駐 8069 錯開）
   const { code, timedOut, stdout, stderr } = await dockerEnv.execOdoo({
     container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
+    env: { E2E_PASSWORD: creds?.e2e_password || E2E_PASSWORD },
     odooArgs: [
       '-i', moduleName, '-u', moduleName, '--stop-after-init',
-      '--test-enable', '--test-tags', `/${moduleName}`, '--http-port', String(DOCKER_TEST_HTTP_PORT),
+      '--test-enable', '--test-tags', tags, '--http-port', String(DOCKER_TEST_HTTP_PORT),
     ],
   }, { signal });
   if (code !== 0) { throw _execError(stderr || stdout || 'docker tour failed', { code, timedOut, stdout, stderr }); }

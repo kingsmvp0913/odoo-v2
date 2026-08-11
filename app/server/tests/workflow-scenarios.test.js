@@ -45,8 +45,8 @@ jest.mock('../pipeline/git', () => ({
 }));
 jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn().mockResolvedValue({ ok: true, log: '' }),
-  runTourTests: jest.fn().mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests, 0 failed, 0 error(s)' }),
-  stopEnv: jest.fn().mockResolvedValue(undefined),
+  runTourTests: jest.fn().mockResolvedValue({ ok: true, log: "2026-08-11 02:15:05,382 38 INFO test_x odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'test_x'" }),
+  restartEnv: jest.fn().mockResolvedValue({ ok: true }),
   ENV_BASE: '/envs',
   runtimeLogPath: dir => dir + '/odoo.log'
 }));
@@ -156,8 +156,8 @@ beforeEach(async () => {
   git.ensureTestingBranch.mockReset().mockResolvedValue(undefined);
   const env = require('../pipeline/env-agent');
   env.upgradeModules.mockReset().mockResolvedValue({ ok: true, log: '' });
-  env.runTourTests.mockReset().mockResolvedValue({ ok: true, log: 'odoo.tests.runner: 1 tests, 0 failed, 0 error(s)' });
-  env.stopEnv.mockReset().mockResolvedValue(undefined);
+  env.runTourTests.mockReset().mockResolvedValue({ ok: true, log: "2026-08-11 02:15:05,382 38 INFO test_x odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'test_x'" });
+  env.restartEnv.mockReset().mockResolvedValue({ ok: true });
   require('../pipeline/ensure-env').ensureEnvRunning.mockReset().mockResolvedValue(true);
   await dbModule.query('DELETE FROM token_usage');
   await dbModule.query('DELETE FROM task_events');

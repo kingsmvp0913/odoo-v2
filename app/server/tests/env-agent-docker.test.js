@@ -118,6 +118,26 @@ test('runTourTests（docker）：exec -i/-u <mod> --test-enable，chromium 在 i
   expect(arg.odooArgs).toContain('/mod_x');
 });
 
+// 意圖：`--test-tags /<module>` 會跑到模組內所有測試。鴻久實測 48 支裡 25 支是早就壞掉的既有
+// 測試，tour 全對也會被它們拖成 exit 非 0 → 退 coding → coding 禁改測試檔 → 三輪 stopped。
+// 收窄語法在真環境驗過：48 → 4，既有壞測試全數排除。
+test('runTourTests 帶 test class → --test-tags 收窄成 /<mod>:Class（不跑模組內其他測試）', async () => {
+  await envAgent.runTourTests(PID, 'mod_x', undefined, ['TourA', 'TourB']);
+  const arg = dockerEnv.execOdoo.mock.calls[0][0];
+  const tags = arg.odooArgs[arg.odooArgs.indexOf('--test-tags') + 1];
+  expect(tags).toBe('/mod_x:TourA,/mod_x:TourB');
+  expect(tags).not.toBe('/mod_x');   // 沒收窄的話等於沒修
+});
+
+// 意圖：兩份 tour agent 的 prompt 都叫產出的 HttpCase 讀 os.environ["E2E_PASSWORD"] 建使用者並
+// start_tour(login=...)，但這裡歷來沒帶 env → 容器內是 None → 帳號建不出來／登不進去。
+// 沒被發現是因為這一關歷來執行 0 次。
+test('runTourTests 把 E2E_PASSWORD 注入容器（不注入的話 tour 一律登入失敗）', async () => {
+  await envAgent.runTourTests(PID, 'mod_x');
+  const arg = dockerEnv.execOdoo.mock.calls[0][0];
+  expect(arg.env && arg.env.E2E_PASSWORD).toBeTruthy();
+});
+
 test('uninstallModule（docker）：解析 RESULT: 行、傳 UNINSTALL_MODULE', async () => {
   dockerEnv.execOdoo.mockResolvedValueOnce({ code: 0, stdout: 'noise\nRESULT:uninstalled\n', stderr: '' });
   const r = await envAgent.uninstallModule(PID, 'mod_x');
