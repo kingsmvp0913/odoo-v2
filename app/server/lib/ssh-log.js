@@ -14,7 +14,8 @@ function validateLogParams({ at, window, level, keyword } = {}) {
   if (!at) return { ok: false, error: '必須指定事發時間點 at（ISO 8601，含時區）' };
 
   // 檢查時區偏移。Date.parse 沒偏移會用伺服器本機時區解讀，跨機器會產生 8 小時錯誤。
-  const hasTimezoneOffset = /Z$|[+-]\d{2}:?\d{2}$/.test(String(at).trim());
+  // 接受 Z/z（UTC）或 ±HH:MM/±HHMM 格式。
+  const hasTimezoneOffset = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(String(at).trim());
   if (!hasTimezoneOffset) {
     return { ok: false, error: '`at` 必須帶時區偏移（如 `+08:00` 或 `Z`），否則會被當成伺服器本機時間解讀' };
   }

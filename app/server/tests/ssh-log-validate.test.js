@@ -22,6 +22,12 @@ test('at 接受 Z（UTC）時區', () => {
   expect(r.ok).toBe(true);
 });
 
+test('at 接受小寫 z（UTC）時區', () => {
+  const r = validateLogParams({ at: '2026-08-10T06:23:00z' });
+  expect(r.ok).toBe(true);
+  expect(r.atMs).toBe(Date.parse('2026-08-10T06:23:00Z'));
+});
+
 test('at 接受 ±HH:MM 時區格式', () => {
   const r = validateLogParams({ at: '2026-08-10T14:23:00+08:00' });
   expect(r.ok).toBe(true);
