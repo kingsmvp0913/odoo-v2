@@ -42,6 +42,9 @@ function filterByKeyword(entries, keyword) {
 }
 
 // 雙重上限，先到者停，且一律以整筆記錄為單位。
+// 例外：第一筆本身就超過 maxBytes（如 QWeb/ORM 例外把整個 context 傾印進單一 message）——
+// 若無條件放行，MAX_BYTES 存在的理由（防止爆 agent context）就形同虛設，且 truncated 仍是
+// false 會讓 agent 誤以為內容完整。此時把該筆 raw 裁到 maxBytes 並標記，一併回報 truncated。
 function truncate(entries, maxEntries, maxBytes) {
   const out = [];
   let bytes = 0;
@@ -49,6 +52,11 @@ function truncate(entries, maxEntries, maxBytes) {
     if (out.length >= maxEntries) return { entries: out, truncated: true };
     const size = Buffer.byteLength(e.raw, 'utf8') + 1;
     if (out.length && bytes + size > maxBytes) return { entries: out, truncated: true };
+    if (out.length === 0 && size > maxBytes) {
+      const clipped = Buffer.from(e.raw, 'utf8').subarray(0, maxBytes).toString('utf8');
+      out.push({ ...e, raw: `${clipped}（單筆過長，已截斷）` });
+      return { entries: out, truncated: true };
+    }
     out.push(e);
     bytes += size;
   }
