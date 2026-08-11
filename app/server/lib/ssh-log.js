@@ -3,6 +3,8 @@
 // 安全模型與 runSelect 相反且更嚴：runSelect 讓呼叫端自由撰寫 SQL、靠黑名單攔截危險語句；
 // 本模組所有進入指令的參數都是型別受控（時間戳由程式重新序列化、window/level 是 enum、
 // 連線設定來自 DB），唯一的自由文字 keyword 根本不進指令，在平台側比對。
+const { Client } = require('ssh2');
+const { ensureGatewayRunning } = require('./vpn-gateway');
 const { splitEntries, filterByLevel, filterByKeyword, truncate, maskSecrets, TS_RE } = require('./log-parse');
 
 const WINDOWS = [10, 30, 60];
@@ -130,16 +132,50 @@ function lastTsOf(text) {
   return null;
 }
 
+// 與 ssh-sql.js 的 sshExec 同構。獨立一份而非共用，是因為此處要在 VPN 轉發後
+// 才決定連線目標，且回傳需保留 stderr 供 [LOG] 錯誤訊息使用。
+function sshExecLog(conn, command) {
+  return new Promise((resolve, reject) => {
+    const c = new Client();
+    let stdout = '', stderr = '';
+    c.on('ready', () => {
+      c.exec(command, (err, stream) => {
+        if (err) { c.end(); return reject(err); }
+        stream.on('close', (code) => { c.end(); resolve({ stdout, stderr, code }); })
+          .on('data', d => { stdout += d; })
+          .stderr.on('data', d => { stderr += d; });
+      });
+    }).on('error', reject);
+    const cfg = { host: conn.ssh_host, port: conn.ssh_port || 22, username: conn.ssh_user, readyTimeout: 15000 };
+    if (conn.auth_type === 'key' && conn.ssh_key) cfg.privateKey = Buffer.from(conn.ssh_key, 'utf8');
+    else cfg.password = conn.ssh_password;
+    c.connect(cfg);
+  });
+}
+
+// VPN 專案的連線在執行前需先確保閘道就緒並改指轉發埠（比照 runSelect）。
+async function withVpn(conn) {
+  if (!conn.vpn_enabled) return conn;
+  if (!conn.vpn) throw new Error('[VPN] 專案尚未設定 VPN，請先到專案 VPN 設定上傳 .ovpn');
+  if (!conn.vpn_forward_port) throw new Error('[VPN] 此連線尚未配置轉發埠，請重新儲存一次連線設定');
+  await ensureGatewayRunning(conn.vpn);
+  return { ...conn, ssh_host: '127.0.0.1', ssh_port: conn.vpn_forward_port };
+}
+
 // 逐一嘗試三種來源，第一個「輸出符合 Odoo log 格式」者勝出。
 // 只看容器／unit 名稱不足以判定——資料庫容器也叫 odoo-*，其 log 格式正常但完全不相干。
-async function probeLogSource(conn, execFn) {
+async function probeLogSource(conn, execFn = sshExecLog) {
+  let target;
+  try { target = await withVpn(conn); }
+  catch (e) { return { ok: false, error: e.message }; }
+
   let found = null;
 
-  const ps = await execFn(conn, `${sudoPrefix(conn)}docker ps --format '{{.Names}}'`);
+  const ps = await execFn(target, `${sudoPrefix(target)}docker ps --format '{{.Names}}'`);
   if (ps.code === 0) {
     for (const name of String(ps.stdout).split('\n').map(s => s.trim()).filter(Boolean)) {
       if (!/odoo/i.test(name) || !IDENT_RE.test(name)) continue;
-      const out = await execFn(conn, `${sudoPrefix(conn)}docker logs --tail 20 ${name} 2>&1`);
+      const out = await execFn(target, `${sudoPrefix(target)}docker logs --tail 20 ${name} 2>&1`);
       if (out.code === 0 && looksLikeOdooLog(out.stdout)) {
         found = { log_mode: 'docker', log_container: name, sample: out.stdout };
         break;
@@ -149,7 +185,7 @@ async function probeLogSource(conn, execFn) {
 
   if (!found) {
     for (const unit of UNIT_CANDIDATES) {
-      const out = await execFn(conn, `${sudoPrefix(conn)}journalctl -u ${unit} -n 20 -o cat`);
+      const out = await execFn(target, `${sudoPrefix(target)}journalctl -u ${unit} -n 20 -o cat`);
       if (out.code === 0 && looksLikeOdooLog(out.stdout)) {
         found = { log_mode: 'journald', log_unit: unit, sample: out.stdout };
         break;
@@ -159,7 +195,7 @@ async function probeLogSource(conn, execFn) {
 
   if (!found) {
     for (const p of PATH_CANDIDATES) {
-      const out = await execFn(conn, `${sudoPrefix(conn)}tail -n 20 ${p}`);
+      const out = await execFn(target, `${sudoPrefix(target)}tail -n 20 ${p}`);
       if (out.code === 0 && looksLikeOdooLog(out.stdout)) {
         found = { log_mode: 'file', log_path: p, sample: out.stdout };
         break;
@@ -171,7 +207,7 @@ async function probeLogSource(conn, execFn) {
     return { ok: false, error: '三種來源（docker / journald / 檔案）都偵測不到 Odoo log，請手動指定 log_mode 與對應欄位' };
   }
 
-  const now = await execFn(conn, `date -u +'%Y-%m-%d %H:%M:%S'`);
+  const now = await execFn(target, `date -u +'%Y-%m-%d %H:%M:%S'`);
   const offset = now.code === 0 ? deriveTzOffset(lastTsOf(found.sample), now.stdout) : null;
   if (offset === null) {
     return { ok: false, error: '已找到 log 來源，但時區偏移推算失敗（差距超出合理範圍），請手動確認 log_tz_offset' };
@@ -201,24 +237,28 @@ async function rotatedOut(conn, fromMs, execFn) {
   return fromMs < firstUtcMs;
 }
 
-async function runLogTail(conn, params, execFn) {
+async function runLogTail(conn, params, execFn = sshExecLog) {
   const v = validateLogParams(params);
   if (!v.ok) return { ok: false, error: `[LOG] ${v.error}` };
+
+  let target;
+  try { target = await withVpn(conn); }
+  catch (e) { return { ok: false, error: e.message }; }
 
   const half = v.windowMin * 60000;
   const fromMs = v.atMs - half;
   const toMs = v.atMs + half;
 
   let cmd;
-  try { cmd = buildLogCmd(conn, fromMs, toMs); }
+  try { cmd = buildLogCmd(target, fromMs, toMs); }
   catch (e) { return { ok: false, error: `[LOG] ${e.message}` }; }
 
-  if (await rotatedOut(conn, fromMs, execFn)) {
+  if (await rotatedOut(target, fromMs, execFn)) {
     return { ok: false, error: '[LOG] 請求時段早於目前 log 檔的第一筆記錄，該時段可能已被輪替（本功能不讀 .1／.gz）' };
   }
 
   let res;
-  try { res = await execFn(conn, cmd); }
+  try { res = await execFn(target, cmd); }
   catch (e) { return { ok: false, error: `[SSH] ${e.message}` }; }
 
   if (res.code !== 0) {
@@ -230,7 +270,7 @@ async function runLogTail(conn, params, execFn) {
 
   const out = {
     ok: true,
-    log_mode: conn.log_mode,
+    log_mode: target.log_mode,
     range: { from: isoUtc(fromMs), to: isoUtc(toMs) },
     entries: entries.map(e => ({ ts: e.ts, level: e.level, logger: e.logger, text: maskSecrets(e.raw) })),
     total_matched: matched.length,
@@ -244,5 +284,5 @@ async function runLogTail(conn, params, execFn) {
 module.exports = {
   validateLogParams, WINDOWS, LEVELS, WINDOW_CAP, buildLogCmd, validateLogPath,
   looksLikeOdooLog, deriveTzOffset, probeLogSource,
-  runLogTail, MAX_ENTRIES, MAX_BYTES,
+  runLogTail, sshExecLog, MAX_ENTRIES, MAX_BYTES,
 };

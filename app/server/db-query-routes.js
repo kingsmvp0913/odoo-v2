@@ -2,6 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
+const { runLogTail, probeLogSource } = require('./lib/ssh-log');
 const { aiEndpointGuard } = require('./lib/ai-token');
 const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn, loadProjectVpn } = require('./lib/db-connections');
@@ -274,6 +275,32 @@ function registerRoutes(app) {
       const conn = await loadDecryptedConn(connection_id, c.project_id);
       res.json(await runSelect(conn, sql || ''));
     } catch (err) { res.json({ ok: false, error: err.message }); }
+  });
+
+  app.post('/ai/db/log', aiEndpointGuard, async (req, res) => {
+    try {
+      const { connection_id, at, window, level, keyword } = req.body || {};
+      const { rows: [c] } = await query('SELECT project_id FROM db_connections WHERE id=$1', [connection_id]);
+      if (!c) return res.json({ ok: false, error: '找不到連線' });
+      const conn = await loadDecryptedConn(connection_id, c.project_id);
+      res.json(await runLogTail(conn, { at, window, level, keyword }));
+    } catch (err) { res.json({ ok: false, error: err.message }); }
+  });
+
+  app.post('/api/projects/:id/db-connections/:cid/probe-log', verifyToken, async (req, res) => {
+    try {
+      const conn = await loadDecryptedConn(req.params.cid, req.params.id);
+      if (!conn) return res.status(404).json({ error: 'Not found' });
+      const r = await probeLogSource(conn);
+      // 探測失敗一律不寫入：留下半套設定會讓之後的查詢用錯來源卻不自知。
+      if (!r.ok) return res.json(r);
+      await query(
+        `UPDATE db_connections SET log_mode=$1, log_container=$2, log_unit=$3, log_path=$4, log_tz_offset=$5
+         WHERE id=$6 AND project_id=$7`,
+        [r.log_mode, r.log_container || null, r.log_unit || null, r.log_path || null, r.log_tz_offset,
+         req.params.cid, req.params.id]);
+      res.json(r);
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 }
 
