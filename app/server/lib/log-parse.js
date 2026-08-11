@@ -55,4 +55,15 @@ function truncate(entries, maxEntries, maxBytes) {
   return { entries: out, truncated: false };
 }
 
-module.exports = { TS_RE, splitEntries, filterByLevel, filterByKeyword, truncate, LEVEL_ORDER, LEVEL_THRESHOLD };
+// 只遮憑證，不遮業務資料。長字串門檻取 32：Odoo 的路徑與 model 名都遠短於此，
+// 而 session id / API key 通常 32 起跳。含 `.` `/` 的不視為 token（那是路徑或 model 名）。
+const CRED_RE = /\b(password|passwd|pwd|token|api[_-]?key|secret|authorization)\s*[=:]\s*\S+/gi;
+const LONG_TOKEN_RE = /\b[A-Za-z0-9]{32,}\b/g;
+
+function maskSecrets(text) {
+  return String(text == null ? '' : text)
+    .replace(CRED_RE, (m) => m.replace(/([=:]\s*)\S+$/, '$1***'))
+    .replace(LONG_TOKEN_RE, '***');
+}
+
+module.exports = { TS_RE, splitEntries, filterByLevel, filterByKeyword, truncate, maskSecrets, LEVEL_ORDER, LEVEL_THRESHOLD };
