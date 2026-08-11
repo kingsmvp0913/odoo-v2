@@ -623,6 +623,10 @@ async function migrate() {
     // prompt_ver 用來擋「agent prompt 改過卻續用舊 session」（見 with-resume.js 的護欄）。
     { table: 'project_chats', col: 'chat_session_id', sql: 'ALTER TABLE project_chats ADD COLUMN chat_session_id TEXT' },
     { table: 'project_chats', col: 'chat_prompt_ver', sql: 'ALTER TABLE project_chats ADD COLUMN chat_prompt_ver TEXT' },
+    // 最後一次由這場對話轉出的 tasks.id（數字主鍵，非 task_id 文字欄）——對話列據此顯示「已轉任務」。
+    // 刻意不宣告 FK：比照 token_usage.chat_id 的既有寫法，且帶 FK 卻漏 ON DELETE SET NULL 會反過來
+    // 擋死刪任務。殘留的死 id 由列表 SQL 的 LEFT JOIN tasks 吸收（任務不在就回 null，徽章自動消失）。
+    { table: 'project_chats', col: 'converted_task_id', sql: 'ALTER TABLE project_chats ADD COLUMN converted_task_id INTEGER' },
     { table: 'db_connections', col: 'ssh_key_enc', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_key_enc TEXT' },
     // direct 連線模式（DBeaver 直連 TCP）：不經 SSH，pg 直連
     { table: 'db_connections', col: 'db_host',         sql: 'ALTER TABLE db_connections ADD COLUMN db_host TEXT' },

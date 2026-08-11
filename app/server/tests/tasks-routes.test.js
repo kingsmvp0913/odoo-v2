@@ -439,6 +439,68 @@ test('POST /api/tasks → 401 無 token', async () => {
   expect(res.status).toBe(401);
 });
 
+// 由排障對話「轉為任務」而來的任務會回頭標記來源對話，對話清單據此顯示「已轉任務」徽章。
+// 每個案例自建專案，避開「表在測試間不清空」造成的互相污染。
+describe('POST /api/tasks 帶 chat_id → 標記來源對話', () => {
+  let chatProjectId, chatId, seq = 0;
+
+  beforeEach(async () => {
+    // 專案名唯一，每個案例各自建一個（表在測試間不清空）
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ($1, '17.0') RETURNING id",
+      [`ChatBadgeProj${++seq}`]
+    );
+    chatProjectId = p.id;
+    const { rows: [c] } = await dbModule.query(
+      "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '排障對話', $2) RETURNING id",
+      [chatProjectId, userId]
+    );
+    chatId = c.id;
+  });
+
+  const listChats = () => request(app)
+    .get(`/api/projects/${chatProjectId}/chats`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  const createTask = (body) => request(app).post('/api/tasks')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ title: '對話轉來的任務', original_text: '需求描述', project_id: chatProjectId, ...body });
+
+  test('轉出的任務 id 回在對話清單上（徽章的資料來源）', async () => {
+    const task = await createTask({ chat_id: chatId });
+    expect(task.status).toBe(201);
+
+    const { body } = await listChats();
+    expect(body.find(c => c.id === chatId).converted_task_id).toBe(task.body.id);
+  });
+
+  test('該任務被刪除後回 null——欄位無 FK，殘留的死 id 必須由 LEFT JOIN 收掉', async () => {
+    const task = await createTask({ chat_id: chatId });
+    await dbModule.query('DELETE FROM tasks WHERE id = $1', [task.body.id]);
+
+    const { body } = await listChats();
+    expect(body.find(c => c.id === chatId).converted_task_id).toBeNull();
+  });
+
+  test('不帶 chat_id 建的任務不得標記任何對話', async () => {
+    await createTask({});
+
+    const { body } = await listChats();
+    expect(body.find(c => c.id === chatId).converted_task_id).toBeNull();
+  });
+
+  test('標記後未讀數不變——新增的 JOIN 不得放大既有的 COUNT', async () => {
+    await dbModule.query(
+      "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, 'ai', 'a'), ($1, 'ai', 'b')",
+      [chatId]
+    );
+    await createTask({ chat_id: chatId });
+
+    const { body } = await listChats();
+    expect(body.find(c => c.id === chatId).unread).toBe(2);
+  });
+});
+
 test('POST /api/tasks 夾帶附件 → 建立 manual 附件並設 has_attachment', async () => {
   const res = await request(app).post('/api/tasks')
     .set('Authorization', `Bearer ${adminToken}`)

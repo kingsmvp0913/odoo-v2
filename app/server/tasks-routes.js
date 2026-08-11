@@ -209,7 +209,7 @@ function registerRoutes(app) {
   // 掛 uploadMessageFiles：新增任務可夾帶附件（origin='manual'），純 JSON 呼叫仍相容（multer 放行、req.files 空）
   app.post('/api/tasks', verifyToken, uploadMessageFiles, async (req, res) => {
     try {
-      const { title, original_text, project_id } = req.body || {};
+      const { title, original_text, project_id, chat_id } = req.body || {};
       if (!title || !String(title).trim()) {
         return res.status(400).json({ error: '請填寫標題' });
       }
@@ -232,6 +232,15 @@ function registerRoutes(app) {
       }
       if ((req.files || []).length) {
         await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [newId]);
+      }
+      // 由排障對話轉來的任務：回頭在對話上標記，列表才顯示「已轉任務」徽章。
+      // 帶 user_id 條件擋偽造的 chat_id；對不到列就靜默略過——任務已經建好了，
+      // 不該為了標記不成而讓整個建立失敗。
+      if (chat_id) {
+        await query(
+          'UPDATE project_chats SET converted_task_id = $1 WHERE id = $2 AND user_id = $3',
+          [newId, chat_id, req.userId]
+        );
       }
       runPipeline(req.userId).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.status(201).json(rows[0]);

@@ -147,12 +147,16 @@ window.ProjectChatView = Vue.defineComponent({
       if (!this.taskDraft.original_text.trim()) return showToast('請填寫內容', 'error');
       this.creatingTask = true;
       try {
-        await Api.post('tasks', {
+        const task = await Api.post('tasks', {
           title: this.taskDraft.title.trim(),
           original_text: this.taskDraft.original_text,
-          project_id: this.$route.params.id
+          project_id: this.$route.params.id,
+          chat_id: this.activeChat && this.activeChat.id
         });
         this.showTaskModal = false;
+        // activeChat 就是 chats 陣列裡的那個物件（selectChat 直接指過來），改它列上的徽章即刻出現，
+        // 不必為了一個欄位重抓整份清單。
+        if (this.activeChat && task && task.id) this.activeChat.converted_task_id = task.id;
         showToast('已建立任務，將於下輪 pipeline 自動分診', 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.creatingTask = false; }
@@ -188,6 +192,10 @@ window.ProjectChatView = Vue.defineComponent({
             <span class="chat-list-item-title">{{ c.title }}</span>
             <span v-if="c.reply_pending" title="回覆進行中" style="margin-left:var(--space-1);flex-shrink:0;color:var(--text-muted);animation:pulse 1.2s ease-in-out infinite">●</span>
             <span v-if="c.unread" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center;flex-shrink:0">{{ c.unread }}</span>
+            <span v-if="c.converted_task_id" class="pill pill-info"
+                  style="margin-left:var(--space-1);flex-shrink:0;cursor:pointer"
+                  title="已轉為任務，點擊開啟"
+                  @click.stop="$router.push('/task/' + c.converted_task_id)">已轉任務</span>
             <button class="btn btn-outline btn-sm"
                     style="font-size:var(--fs-2xs);padding:1px 5px;margin-left:var(--space-1);color:var(--error);flex-shrink:0"
                     @click.stop="deleteChat(c)">✕</button>

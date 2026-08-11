@@ -58,11 +58,18 @@ function registerRoutes(app) {
       const { rows } = await query(
         // chat_session_id 一併吐出：那是 claude CLI 的 session，排障時可用 `claude --resume <id>`
         // 直接接上該場對話，看 AI 實際查了什麼（回覆文字只留結論，工具呼叫過程只存在 session 裡）。
+        // converted_task_id 取自 JOIN 後的 t.id 而非 c.converted_task_id：任務被刪除後該欄仍留著死 id
+        // （欄位無 FK，見 db.js），JOIN 不到就回 null，前端徽章自動消失、不會產生點不開的連結。
+        // MAX(t.id) 而非裸選 t.id：JOIN 打在主鍵上最多配一列，兩者在 PostgreSQL 語意等價，但裸選就得把
+        // t.id 放進 GROUP BY，而 pg-mem 一旦 GROUP BY 含 t.id 就會把同名的 c.id 一起解析成 t.id
+        //（實測 chat id 被吐成 task id，整份清單的 id 全錯）。聚合掉可讓 GROUP BY 不含 t.id，繞開該缺陷。
         `SELECT c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id,
+                MAX(t.id) AS converted_task_id,
                 COUNT(m.id) AS unread
          FROM project_chats c
          LEFT JOIN project_chat_messages m
            ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
+         LEFT JOIN tasks t ON t.id = c.converted_task_id
          WHERE c.project_id = $1 AND c.user_id = $2
          GROUP BY c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id
          ORDER BY c.created_at DESC`,
