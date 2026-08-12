@@ -54,4 +54,39 @@ function decryptSettings(settings) {
   return out;
 }
 
-module.exports = { encryptSettings, decryptSettings, isEncrypted, SECRET_KEYS };
+// 回前端前：拿掉密碼本身，只留「有沒有設定過」的旗標（`odoo_password_set` / `service_password_set`）。
+// 密碼在 DB 已是密文，但只要 GET 還原樣吐明碼，任何 XSS／瀏覽器外掛／存到硬碟的 HAR 都拿得到，
+// 加密等於只擋住「翻 DB 的人」。旗標讓前端仍能顯示「已設定／未設定」而不需要知道內容。
+function redactSettings(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  const out = { ...settings };
+  for (const key of SECRET_KEYS) {
+    const v = out[key];
+    delete out[key];
+    out[`${key}_set`] = typeof v === 'string' && v !== '';
+  }
+  return out;
+}
+
+// 寫入 DB 前：incoming 沒帶、或帶空字串的密碼欄位，一律沿用 current（DB 現值）。
+// 這是「GET 不再回密碼」的必要配套：前端已經拿不到舊密碼，就不可能像以前那樣原樣鋪回整包；
+// 若仍維持整包覆寫語意，使用者只改個顯示名稱按下同一顆儲存鈕，就會把密碼覆蓋成空字串。
+// 代價是「清空密碼」這個動作沒辦法從這支 API 做到——那是刻意的取捨：誤清空的代價
+// （sync 靜默失敗、要人重填）遠高於清空密碼這個近乎不存在的需求。
+// current 的值是密文，直接沿用；encryptSettings 對已是密文的欄位不重複加密。
+function preserveSecrets(incoming, current) {
+  if (!incoming || typeof incoming !== 'object') return incoming;
+  const out = { ...incoming };
+  const cur = (current && typeof current === 'object') ? current : {};
+  for (const key of SECRET_KEYS) {
+    // redactSettings 產生的旗標會隨前端整包鋪回送上來，不能讓它寫進 DB
+    delete out[`${key}_set`];
+    const v = out[key];
+    if (typeof v === 'string' && v !== '') continue;   // 使用者真的輸入了新密碼
+    if (typeof cur[key] === 'string' && cur[key] !== '') out[key] = cur[key];
+    else delete out[key];
+  }
+  return out;
+}
+
+module.exports = { encryptSettings, decryptSettings, redactSettings, preserveSecrets, isEncrypted, SECRET_KEYS };

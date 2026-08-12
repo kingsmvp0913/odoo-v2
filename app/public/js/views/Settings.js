@@ -6,11 +6,14 @@ window.SettingsView = Vue.defineComponent({
       teamsUserId: '',
       // 載入當下的整包 odoo_settings。PUT /api/settings 是整包覆寫，儲存時得原樣帶回去，
       // 否則不在這張表單上的偏好（theme…）會被這次儲存抹掉。
+      // 例外：密碼欄位不在這包裡（GET 只回 *_set 旗標），由後端 preserveSecrets 沿用舊值。
       savedSettings: {},
       creds: {
         odoo_username: '', odoo_password: '', odoo_user_id: '',
         service_username: '', service_password: '', service_user_id: ''
       },
+      // 密碼本身拿不到了，只知道「有沒有設定過」——輸入框的提示文字靠這兩個旗標
+      pwSet: { odoo: false, service: false },
       pw: { current: '', next: '', confirm: '' },
       pwError: '',
       loading: true,
@@ -63,11 +66,14 @@ window.SettingsView = Vue.defineComponent({
         this.savedSettings          = s;
         this.teamsUserId            = s.teams_user_id   || '';
         this.creds.odoo_username    = s.odoo_username   || '';
-        this.creds.odoo_password    = s.odoo_password   || '';
         this.creds.odoo_user_id     = s.odoo_user_id    || '';
         this.creds.service_username = s.service_username || '';
-        this.creds.service_password = s.service_password || '';
         this.creds.service_user_id  = s.service_user_id  || '';
+        // 密碼不再由 API 回傳（只回 *_set 旗標），輸入框一律留空＝不變更。
+        this.creds.odoo_password    = '';
+        this.creds.service_password = '';
+        this.pwSet.odoo    = !!s.odoo_password_set;
+        this.pwSet.service = !!s.service_password_set;
         this.githubPat.configured = !!pat.configured;
         this.githubPat.login = pat.login || '';
       } catch (e) { showToast(e.message, 'error'); }
@@ -102,7 +108,8 @@ window.SettingsView = Vue.defineComponent({
       finally { this.savingPw = false; }
     },
     async verifyOdoo() {
-      if (!this.creds.odoo_username || !this.creds.odoo_password) {
+      // 密碼欄空著但先前已設定過＝沿用已存的（後端從 DB 取），不逼使用者重打一次
+      if (!this.creds.odoo_username || (!this.creds.odoo_password && !this.pwSet.odoo)) {
         return showToast('請先填寫 Odoo 帳號和密碼', 'error');
       }
       this.verifyingOdoo = true;
@@ -134,7 +141,8 @@ window.SettingsView = Vue.defineComponent({
       showToast('測試通知已發送', 'success');
     },
     async verifyService() {
-      if (!this.creds.service_username || !this.creds.service_password) {
+      // 同 verifyOdoo：空著＝沿用已存的
+      if (!this.creds.service_username || (!this.creds.service_password && !this.pwSet.service)) {
         return showToast('請先填寫 eService 帳號和密碼', 'error');
       }
       this.verifyingService = true;
@@ -293,8 +301,8 @@ window.SettingsView = Vue.defineComponent({
                 <input v-model="creds.odoo_username" placeholder="admin" class="field-input" />
               </div>
               <div class="field-item">
-                <label class="field-label">密碼</label>
-                <input v-model="creds.odoo_password" type="password" placeholder="••••••" class="field-input" />
+                <label class="field-label">密碼 <span class="field-label-hint">{{ pwSet.odoo ? '已設定，留空表示不變更' : '尚未設定' }}</span></label>
+                <input v-model="creds.odoo_password" type="password" :placeholder="pwSet.odoo ? '不變更' : '請輸入密碼'" class="field-input" />
               </div>
             </div>
             <div class="field-item field-item-sm">
@@ -325,8 +333,8 @@ window.SettingsView = Vue.defineComponent({
                 <input v-model="creds.service_username" placeholder="admin" class="field-input" />
               </div>
               <div class="field-item">
-                <label class="field-label">密碼</label>
-                <input v-model="creds.service_password" type="password" placeholder="••••••" class="field-input" />
+                <label class="field-label">密碼 <span class="field-label-hint">{{ pwSet.service ? '已設定，留空表示不變更' : '尚未設定' }}</span></label>
+                <input v-model="creds.service_password" type="password" :placeholder="pwSet.service ? '不變更' : '請輸入密碼'" class="field-input" />
               </div>
             </div>
             <div class="field-item field-item-sm">

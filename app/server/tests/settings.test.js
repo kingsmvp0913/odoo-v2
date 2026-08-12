@@ -6,6 +6,8 @@ process.env.JWT_SECRET = 'test-settings-secret';
 process.env.APP_SECRET = process.env.APP_SECRET || 'test-settings-app-secret';
 
 let app, dbModule, adminToken;
+// 密碼不再由 API 回傳，驗「有沒有被清空」只能從 DB 讀密文再解回來
+const { decryptSettings } = require('../lib/user-settings');
 
 beforeAll(async () => {
   const db = newDb();
@@ -151,10 +153,9 @@ test('PUT /api/settings/views → 401 without token', async () => {
 });
 
 // 意圖：odoo_password／service_password 原本明碼存 DB，與同一張表已加密的 github_pat_enc 兩套標準。
-// 收斂成加密存放，但**只在進出 DB 那一刻轉換**——settings 頁是「載入整包→存檔時原樣鋪回」，
-// GET 一旦不回密碼，使用者存一次設定就會把自己的密碼清空。所以這條要同時鎖住兩件事：
-// DB 裡不是明碼、而 API 仍回明碼。
-test('密碼欄位：DB 存密文，GET /api/settings 與 /api/auth/me 仍回明碼', async () => {
+// 已收斂成加密存放，並且**不再回流到瀏覽器**——只回 *_set 旗標。加密卻照樣把明碼吐給前端的話，
+// 任何 XSS／外掛／存下來的 HAR 都拿得到，等於只擋住「翻 DB 的人」。
+test('密碼欄位：DB 存密文，且 GET /api/settings 與 /api/auth/me 都不得回明碼', async () => {
   await request(app).put('/api/settings')
     .set('Authorization', `Bearer ${adminToken}`)
     .send({ odoo_settings: { odoo_url: 'https://erp.test', odoo_username: 'alice', odoo_password: 'secret-pw', service_password: 'svc-pw' } });
@@ -166,18 +167,67 @@ test('密碼欄位：DB 存密文，GET /api/settings 與 /api/auth/me 仍回明
   expect(stored.odoo_username).toBe('alice');              // 非祕密欄位不得被動到（誤加密 username 會讓同步連不上）
 
   const res = await request(app).get('/api/settings').set('Authorization', `Bearer ${adminToken}`);
-  expect(res.body.odoo_settings.odoo_password).toBe('secret-pw');
+  expect(res.body.odoo_settings.odoo_password).toBeUndefined();
+  expect(res.body.odoo_settings.service_password).toBeUndefined();
+  expect(res.body.odoo_settings.odoo_password_set).toBe(true);      // 前端仍要能顯示「已設定」
+  expect(res.body.odoo_settings.service_password_set).toBe(true);
+  expect(res.body.odoo_settings.odoo_username).toBe('alice');       // 非祕密欄位照常回
+
   const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${adminToken}`);
-  expect(me.body.odoo_settings.odoo_password).toBe('secret-pw');
+  expect(me.body.odoo_settings.odoo_password).toBeUndefined();
+  expect(me.body.odoo_settings.service_password).toBeUndefined();
+  expect(me.body.odoo_settings.odoo_password_set).toBe(true);
+});
+
+// 這是整組改動裡最容易出事的一條：settings 頁四個區塊共用同一顆儲存鈕，GET 又不再回密碼，
+// 所以「只改顯示名稱就按儲存」送上來的整包必然不含密碼。若 PUT 維持整包覆寫語意，
+// 使用者每存一次設定就把自己的密碼清空一次，而且要等到下次同步失敗才會發現。
+test('PUT 未帶密碼時沿用 DB 舊值（只改別的欄位不得清空密碼）', async () => {
+  await request(app).put('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ odoo_settings: { odoo_username: 'alice', odoo_password: 'secret-pw', service_password: 'svc-pw' } });
+
+  // 模擬前端「載入整包（無密碼、帶 *_set 旗標）→ 改一個欄位 → 原樣鋪回」
+  const loaded = (await request(app).get('/api/settings').set('Authorization', `Bearer ${adminToken}`)).body.odoo_settings;
+  await request(app).put('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ odoo_settings: { ...loaded, teams_user_id: 'T-123' } });
+
+  const { rows } = await dbModule.query("SELECT odoo_settings FROM users WHERE username = 'admin'");
+  const stored = typeof rows[0].odoo_settings === 'string' ? JSON.parse(rows[0].odoo_settings) : rows[0].odoo_settings;
+  expect(decryptSettings(stored).odoo_password).toBe('secret-pw');     // 密碼還在
+  expect(decryptSettings(stored).service_password).toBe('svc-pw');
+  expect(stored.teams_user_id).toBe('T-123');                          // 這次真正要改的欄位有生效
+  expect(stored.odoo_password_set).toBeUndefined();                    // 旗標不得被寫進 DB
+  expect(stored.service_password_set).toBeUndefined();
+});
+
+test('PUT 帶了新密碼時要真的換掉（沿用舊值不能蓋過使用者的修改）', async () => {
+  await request(app).put('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ odoo_settings: { odoo_username: 'alice', odoo_password: 'secret-pw' } });
+  await request(app).put('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ odoo_settings: { odoo_username: 'alice', odoo_password: 'brand-new-pw' } });
+
+  const { rows } = await dbModule.query("SELECT odoo_settings FROM users WHERE username = 'admin'");
+  const stored = typeof rows[0].odoo_settings === 'string' ? JSON.parse(rows[0].odoo_settings) : rows[0].odoo_settings;
+  expect(decryptSettings(stored).odoo_password).toBe('brand-new-pw');
 });
 
 // theme／views 是 read-modify-write：直接從 DB 讀出整包（密文）再寫回。若寫入端不認得「已是密文」
 // 而再加密一層，解密端只解一次 → 拿到的仍是密文，同步會靜默失敗且看起來像密碼填錯。
 test('改 theme 後密碼仍解得回來（read-modify-write 不得把密文再加密一層）', async () => {
+  await request(app).put('/api/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ odoo_settings: { odoo_username: 'alice', odoo_password: 'secret-pw' } });
   await request(app).put('/api/settings/theme')
     .set('Authorization', `Bearer ${adminToken}`).send({ theme: 'dark' });
 
   const res = await request(app).get('/api/settings').set('Authorization', `Bearer ${adminToken}`);
   expect(res.body.odoo_settings.theme).toBe('dark');
-  expect(res.body.odoo_settings.odoo_password).toBe('secret-pw');
+  // 密碼不再回前端，改從 DB 直接驗它仍解得回來
+  const { rows } = await dbModule.query("SELECT odoo_settings FROM users WHERE username = 'admin'");
+  const stored = typeof rows[0].odoo_settings === 'string' ? JSON.parse(rows[0].odoo_settings) : rows[0].odoo_settings;
+  expect(decryptSettings(stored).odoo_password).toBe('secret-pw');
 });

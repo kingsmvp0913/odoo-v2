@@ -4,7 +4,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { fetchGitHubIdentity } = require('./lib/github-api');
 const { encrypt } = require('./lib/crypto');
-const { encryptSettings, decryptSettings } = require('./lib/user-settings');
+const { encryptSettings, decryptSettings, redactSettings, preserveSecrets } = require('./lib/user-settings');
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -45,8 +45,8 @@ function registerRoutes(app) {
         [req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'User not found' });
-      // 密碼欄位在 DB 是密文，回前端維持明碼（API 形狀不變，見 lib/user-settings 的說明）
-      res.json({ ...rows[0], odoo_settings: decryptSettings(rows[0].odoo_settings) });
+      // 密碼不回前端，只回 *_set 旗標（見 lib/user-settings 的 redactSettings）
+      res.json({ ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -58,14 +58,19 @@ function registerRoutes(app) {
       if (sync_interval !== undefined && sync_interval < 5) {
         return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
       }
+      // 這支仍是整包覆寫（theme／saved_views 靠前端鋪回，見下方兩支端點的註解），唯獨密碼欄位
+      // 例外：GET 已不再回密碼，前端鋪不回來，故未提供者一律沿用 DB 現值（preserveSecrets）。
+      let toStore = null;
+      if (odoo_settings) {
+        const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+        toStore = JSON.stringify(encryptSettings(preserveSecrets(odoo_settings, rows[0]?.odoo_settings)));
+      }
       await query(
         `UPDATE users SET
            odoo_settings = COALESCE($2, odoo_settings),
            sync_interval = COALESCE($3, sync_interval)
          WHERE id = $1`,
-        [req.userId,
-         odoo_settings ? JSON.stringify(encryptSettings(odoo_settings)) : null,
-         sync_interval ?? null]
+        [req.userId, toStore, sync_interval ?? null]
       );
       res.json({ ok: true });
     } catch (err) {
@@ -124,7 +129,14 @@ function registerRoutes(app) {
 
   // Auto-fetch Odoo user_id — reads system URL+DB from teams_settings
   app.post('/api/settings/verify-odoo', verifyToken, async (req, res) => {
-    const { odoo_username, odoo_password } = req.body;
+    const { odoo_username } = req.body;
+    // 密碼留空＝沿用已存的（GET 不再回密碼，使用者沒改密碼時輸入框本來就是空的，
+    // 不補這條的話「只改帳號按驗證」會逼人把密碼重打一次）。
+    let { odoo_password } = req.body;
+    if (!odoo_password) {
+      const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+      odoo_password = decryptSettings(rows[0]?.odoo_settings)?.odoo_password || '';
+    }
     if (!odoo_username || !odoo_password) {
       return res.status(400).json({ error: '請填寫 Odoo 帳號和密碼' });
     }
@@ -148,7 +160,12 @@ function registerRoutes(app) {
 
   // Auto-fetch eService user_id — reads system URL+DB from teams_settings
   app.post('/api/settings/verify-service', verifyToken, async (req, res) => {
-    const { service_username, service_password } = req.body;
+    const { service_username } = req.body;
+    let { service_password } = req.body;   // 留空＝沿用已存的，同 verify-odoo
+    if (!service_password) {
+      const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+      service_password = decryptSettings(rows[0]?.odoo_settings)?.service_password || '';
+    }
     if (!service_username || !service_password) {
       return res.status(400).json({ error: '請填寫 eService 帳號和密碼' });
     }
