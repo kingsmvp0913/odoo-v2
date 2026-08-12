@@ -349,9 +349,7 @@ function pipelineNodes(flags) {
     detail: [
       ['對應', '併入測試這一關'],
       ['做什麼', 'mergeInto(testing, task/<taskId>)——testing 是測試區 addons 的來源分支'],
-      // tour 早在建立分支關就寫好並 commit 進任務分支，這一關就一起併進來了。E2E 關另有一次
-      // mergeInto(testing)，但那是 b5c1acb（E2E 不再自己產 tour）之後留下的殘留，實質是 no-op。
-      e2eEnabled && ['再一次', 'E2E 關還會再併一次 testing（殘留動作，內容早已併入）'],
+      // tour 早在建立分支關就寫好並 commit 進任務分支，故這一關併進來時就一起帶了，E2E 關不再動 testing。
       ['獨佔', 'merge → deploy' + (e2eEnabled ? ' → E2E' : '') + ' 這條尾巴每專案獨佔：別的任務中途併進 testing 會打破一致性，讓正確的碼被判失敗']
     ]
   });
@@ -422,10 +420,9 @@ function pipelineEdges(flags) {
       ['gittesting', 'merge', 'link'], ['gitaidev', 'review', 'link'],
       ['gitmain', 'release', 'link']
     );
-    // 併入 testing 這格會被踩兩次：併入測試關一次，E2E 產出 tour 檔後再一次。
-    // 只畫前者的話，圖上看不出 E2E 也會動到 testing 分支。這是全圖唯一「兩個開關都要開」
-    // 才存在的線，所以在這裡就判掉。
-    if (flags.e2eEnabled) e.push(['gittesting', 'e2e', 'link']);
+    // 併入 testing 這格只被踩一次（併入測試關）。這裡原本還有一條到 e2e 的線，因為 E2E 關當年
+    // 自己產 tour、需要再併一次；b5c1acb 之後 tour 改在建立分支關先寫好，那次 merge 成了 no-op
+    // （2026-08-12 任務 124 的 testing reflog 只有一筆為證），連同該段程式碼一併移除。
   }
   // 這裡刻意**不**做「兩端都存在才留」的過濾：那道過濾會把「開關關掉的節點」與「id 打錯字」
   // 一起吃掉，而 pipeline-flow.test.js 再拿過濾後的結果驗「每條連線的兩端都存在」，就成了

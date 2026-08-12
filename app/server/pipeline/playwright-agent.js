@@ -121,24 +121,14 @@ async function runTourStage(taskId, userId, signal) {
   //   * 留著它也讓「考題沒產出」有地方遁形——現在沒有備援，缺 tour 會直接被下方的題數守衛判 0 支。
   // 於是本關成為純程式關（無 agent），status_labels 的 playwright_running 也隨之改標 actor:'system'。
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
-  let log = '', err = null, mergeStop = null, cls = null, tourClasses = [];
+  // 這裡曾經再 mergeInto(testing, task 分支) 一次，理由是「tour 檔是本關才產出的，要再併一次才進得了
+  // testing」。b5c1acb 把「本關自己產 tour」那條路砍掉之後（tour 改在建立分支關就寫好並 commit 進
+  // 任務分支），那個理由就不存在了：狀態機是線性的（coding→qa→merge→deploy→e2e，退回 coding 後也
+  // 重走 merge），而本關不改任何碼 → 執行到這裡時任務分支自 merge 關以來不可能有新 commit。
+  // 2026-08-12 首次實跑證實：任務 124 在 testing 的 reflog 只有 merge 關那一筆，本關這次沒留下任何
+  // 痕跡（no-op merge 不寫 reflog、不產 commit）。留著只是讓讀碼的人以為 E2E 會帶新東西進 testing。
+  let log = '', err = null, cls = null, tourClasses = [];
   await withProjectLock(task.project_id, async () => {
-    for (const repo of (info.repos || [])) {
-      try {
-        const { mergeInto } = require('./git');
-        const m = await mergeInto(repo.local_path, 'testing', task.git_branch);
-        if (m.hasConflicts) {
-          const { abortMerge } = require('./git');
-          await abortMerge(repo.local_path).catch(() => {});
-          mergeStop = `tour 測試檔併入 testing 發生衝突（${repo.subdir}: ${m.conflictFiles.join(', ')}），需人工處理`;
-          return;
-        }
-      } catch (e) {
-        mergeStop = `tour 測試檔併入 testing 失敗（${repo.subdir}）：${e.message}`;
-        return;
-      }
-    }
-
     // 這裡曾經先 `stopEnv` 再跑測試，理由是「測試進程 -u <module> 與 live server 同顆 DB 併跑會
     //    registry 走鏽」。那是 venv 時代的寫法：當時停 server＝砍一個 process、DB 仍在。
     //    docker 化之後 server 就是容器本身，而 stopEnv = stopContainer + **removeContainer**
@@ -148,7 +138,7 @@ async function runTourStage(taskId, userId, signal) {
     //    2026-08-11 首航實測證實：不停容器可正常執行，停了則 log 只有 19 bytes 的那句錯誤。
     //    原本要解決的 registry 走鏽仍然真實，改在**跑完之後**重啟容器處理（見 finally）。
     //    同類殘留 629e733 才修過一個（readAssetTraceback 讀 venv 時代才存在的 odoo.log）。
-    // 併入 testing 之後才算 class：tour 檔此刻才在 worktree 裡是最終狀態。
+    // tour 檔在建立分支關就已 commit 進任務分支、並由 merge 關併入 testing，此刻在 worktree 裡是最終狀態。
     tourClasses = await tourTestClasses(info, cwd, moduleName, AI_BRANCH, task.git_branch).catch(() => []);
     try {
       // Node 跑 tour（odoo-bin --test-enable），依 exit code 判定
@@ -173,10 +163,6 @@ async function runTourStage(taskId, userId, signal) {
   });
   // 手動暫停中止子行程：非失敗，狀態原地不動，解除暫停後從這一關重跑
   if (signal?.aborted) return true;
-  if (mergeStop) {
-    await stopTask(taskId, userId, mergeStop, 'tech');
-    return true;
-  }
 
   if (!err) {
     // 防假綠燈：chrome 消失時 Odoo raise SkipTest（exit 0），log 會有此字樣＝tour 沒真的跑

@@ -182,12 +182,13 @@ test('S1 全流程順跑：分類→分析→分支→實作→QA→併版→部
   expect(task.git_branch).toBe(`task/${t.task_id}`);
   expect(task.blocker_content).toBeNull();
 
-  // 部署／E2E 的分支正確性：升級前主 clone 歸位 testing；tour commit 併入 testing 後才跑測試
-  // （merge 關卡＋E2E 關各併一次 testing，缺 E2E 那次＝新 tour 不會被執行的假綠燈）
+  // 部署／E2E 的分支正確性：升級前主 clone 歸位 testing；tour 早在建立分支關就 commit 進任務分支，
+  // 故 merge 關那一次就把 tour 一起帶進 testing。E2E 關本身不再 merge（那次是 b5c1acb 之後的 no-op
+  // 殘留，2026-08-12 實跑證實後移除），所以整條流程對 testing 只有一次 merge。
   const git = require('../pipeline/git');
   expect(git.ensureTestingBranch).toHaveBeenCalledWith(REPO_PATH);
   const testingMerges = git.mergeInto.mock.calls.filter(c => c[1] === 'testing' && c[2] === `task/${t.task_id}`);
-  expect(testingMerges.length).toBe(2);
+  expect(testingMerges.length).toBe(1);
 
   // prompt 組裝正確性：placeholder 全數替換、規則注入、密碼不落 prompt
   for (const c of calls) expect(c.prompt).not.toContain('{{');

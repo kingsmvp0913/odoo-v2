@@ -318,7 +318,12 @@ async function makeBranchTask() {
   return t.id;
 }
 
-test('tour 檔先併入 testing（逐 repo）、之後才跑 runTourTests', async () => {
+// 本關曾經自己再 mergeInto(testing) 一次，因為當年 tour 是本關才產出的。b5c1acb 之後 tour 改在
+// 建立分支關就寫好並 commit 進任務分支，merge 關已經一起併進 testing；狀態機又是線性的（退回
+// coding 後也重走 merge），本關也不改碼 → 那次 merge 恆為 no-op。2026-08-12 任務 124 首次實跑
+// 證實（testing 的 reflog 只有 merge 關那一筆）後移除，連同它的衝突處理分支。
+// 這條測試是防止它被重新加回來：多做一次 merge 不會報錯，只會靜默多一個對 testing 的寫入點。
+test('E2E 關不得再自行併入 testing（tour 早在 merge 關就進去了）', async () => {
   const git = require('../pipeline/git');
   taskAgent.getProjectInfo.mockResolvedValue({
     root: '/repos/pwp',
@@ -328,28 +333,10 @@ test('tour 檔先併入 testing（逐 repo）、之後才跑 runTourTests', asyn
   const id = await makeBranchTask();
   await runTourStage(id, userId);
 
-  const { rows: [t] } = await dbModule.query('SELECT status, git_branch FROM tasks WHERE id=$1', [id]);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('review_pending');
-  expect(git.mergeInto).toHaveBeenCalledWith('/repos/pwp/main', 'testing', t.git_branch);
-  expect(git.mergeInto.mock.invocationCallOrder[0]).toBeLessThan(envAgent.runTourTests.mock.invocationCallOrder[0]);
-});
-
-test('tour 檔併入 testing 衝突 → abortMerge 清半套、stopped(tech)、不跑測試', async () => {
-  const git = require('../pipeline/git');
-  taskAgent.getProjectInfo.mockResolvedValue({
-    root: '/repos/pwp',
-    repos: [{ label: 'main', local_path: '/repos/pwp/main', subdir: 'main' }]
-  });
-  git.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['idx_x/tests/test_tour.py'] });
-  const id = await makeBranchTask();
-  await runTourStage(id, userId);
-
-  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('stopped');
-  expect(t.blocker_type).toBe('tech');
-  expect(t.blocker_content).toContain('test_tour.py');
-  expect(git.abortMerge).toHaveBeenCalledWith('/repos/pwp/main');
-  expect(envAgent.runTourTests).not.toHaveBeenCalled();
+  expect(git.mergeInto).not.toHaveBeenCalled();
+  expect(envAgent.runTourTests).toHaveBeenCalled();
 });
 
 // --- 健檢：tour 失敗完整輸出不得永久遺失（比照 deploy-testing 的 saveDeployLog）---
