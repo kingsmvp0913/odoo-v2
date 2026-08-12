@@ -349,7 +349,9 @@ function pipelineNodes(flags) {
     detail: [
       ['對應', '併入測試這一關'],
       ['做什麼', 'mergeInto(testing, task/<taskId>)——testing 是測試區 addons 的來源分支'],
-      e2eEnabled && ['再一次', 'E2E 產出的 tour 檔會再併一次 testing'],
+      // tour 早在建立分支關就寫好並 commit 進任務分支，這一關就一起併進來了。E2E 關另有一次
+      // mergeInto(testing)，但那是 b5c1acb（E2E 不再自己產 tour）之後留下的殘留，實質是 no-op。
+      e2eEnabled && ['再一次', 'E2E 關還會再併一次 testing（殘留動作，內容早已併入）'],
       ['獨佔', 'merge → deploy' + (e2eEnabled ? ' → E2E' : '') + ' 這條尾巴每專案獨佔：別的任務中途併進 testing 會打破一致性，讓正確的碼被判失敗']
     ]
   });
