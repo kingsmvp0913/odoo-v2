@@ -27,7 +27,7 @@ const STAGE_LABELS = {
   confirm_answered: '已回覆澄清', branch_pending: '建立分支', coding_running: '開發中',
   qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki',
-  reject_triage: '分診中', resolve_triage: '分診中', respec_running: '追加需求更新規格中',
+  reject_triage: '分診中', resolve_triage: '分診中', respec_running: '檢查規格是否需調整',
   clarify_pending: '待你裁決', clarify_answered: '已裁決', clarify_chat_running: 'AI 回覆中'
 };
 // taskId (number) → { ctrl:AbortController, userId, promise }。派工時同步佔位，完成時移除。

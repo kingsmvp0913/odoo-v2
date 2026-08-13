@@ -25,7 +25,9 @@ const TASK_STATUSES = {
   confirm_answered:     { label: '已回覆',              actor: 'system' },
   coding_running:       { label: '開發中',              actor: 'agent',  agent: 'coding-project' },
   qa_running:           { label: 'QA 審查中',           actor: 'agent',  agent: 'qa' },
-  respec_running:       { label: '追加需求更新規格中',  actor: 'agent',  agent: 'respec-patch' },
+  // 文案要對兩種來源都成立：途中留言（追加需求）與人工審核退回意見（多數是實作缺陷、規格不會動）。
+  // 寫死「追加需求」會讓剛退回一個 bug 的使用者以為系統把他的話當成新需求。
+  respec_running:       { label: '檢查規格是否需調整',  actor: 'agent',  agent: 'respec-patch' },
   merge_running:        { label: '併入測試中',          actor: 'system' },
   merge_conflict:       { label: '合併衝突',            actor: 'human' },
   deploy_testing:       { label: '部署測試區',          actor: 'system' },

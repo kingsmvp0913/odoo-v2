@@ -61,11 +61,14 @@ async function runRejectTriage(taskId, userId, signal) {
   // （分界線寫在 analysis-reject.md）。把關的是人：每一輪 fix 都是人主動退回換來的（見下方 fix 分支）。
 
   // 情境輸入：停在哪關、停下原因、使用者最新的話、以及 resume 的「原關」——依入口組不同來源
-  let stuckStage, stopContext, userInstruction, homeStatus;
+  // rejectReason 另存乾淨的退回原文（userInstruction 下面會被接上近期對話與待吸收留言，不能複用）：
+  // fix 分支要把它原樣送進規格檢查點，混入其他脈絡會讓 respec-patch 把對話內容也當成需求。
+  let stuckStage, stopContext, userInstruction, homeStatus, rejectReason = null;
   if (isReject) {
     stuckStage = STAGE_LABEL.review_pending;
     stopContext = '任務已通過所有自動關卡（QA／E2E），在最終人工審核被審核者退回。';
-    userInstruction = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（無退回原因）';
+    rejectReason = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || null;
+    userInstruction = rejectReason || '（無退回原因）';
     homeStatus = 'review_pending';
   } else {
     // resume_status 指向分診關本身＝走過 clarify 往返（閘門把回程寫在該欄），真正的原關在 triage_home。
@@ -151,11 +154,15 @@ async function runRejectTriage(taskId, userId, signal) {
   // 否則達上限被停過的任務，人工放回後只剩一次下游失敗額度就再度永久 stopped，人工介入實質失效。
   // （代價：前端顯示的循環次數變成「距上次人工介入」的次數，屬可接受語意。）
   // feedback：明確寫入 retry_feedback（與 keepFeedback 互斥，優先）。給 fix 分支把分診結論交棒下去用。
-  const goto = async (nextStatus, { keepFeedback = false, feedback = null, freshRespec = false, resetReentry = true } = {}) => {
+  // returnStatus：落到 respec_running 這種「中繼關」時，把它跑完要去的那一關記進 respec_return_status
+  // （respec-agent 讀這欄決定回哪）。不帶就照舊清成 NULL——用完即棄，留著會被之後的路徑誤讀。
+  const goto = async (nextStatus, { keepFeedback = false, feedback = null, freshRespec = false, resetReentry = true, returnStatus = null } = {}) => {
     const counter = RESUME_COUNTER[nextStatus];
     // triage_home 一併清：本次分診已落地，暫存的原關用完即棄，留著會被下一次分診誤當原關
-    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'triage_home=NULL', 'respec_return_status=NULL', 'updated_at=NOW()'];
+    const sets = ['status=$2', 'blocker_content=NULL', 'blocker_type=NULL', 'resume_status=NULL', 'triage_home=NULL', 'updated_at=NOW()'];
     const params = [taskId, nextStatus];
+    if (returnStatus) { params.push(returnStatus); sets.push(`respec_return_status=$${params.length}`); }
+    else sets.push('respec_return_status=NULL');
     if (resetReentry) sets.push('reentry_count=0');
     if (feedback !== null) { params.push(feedback); sets.push(`retry_feedback=$${params.length}`); }
     else if (!keepFeedback) sets.push('retry_feedback=NULL');
@@ -169,7 +176,8 @@ async function runRejectTriage(taskId, userId, signal) {
     // 那一刻（writeAnalysisYaml，主防線），這裡只是提早在交回 analysis 之前先清一次的備援——
     // 萬一 analysis 那輪中途失敗、任務還沒走到那一刻就又被繞回 spec_review，也不會續接到舊 session。
     if (freshRespec) sets.push('coding_session_id=NULL', 'git_branch=NULL', 'spec_session_id=NULL', 'spec_prompt_ver=NULL');
-    if (nextStatus === 'coding_running') sets.push(...CODING_RESET_COUNTERS.map(c => `${c}=0`));
+    // 「終點是 coding」就歸零下游計數器，中間有沒有繞經 respec_running 不影響這個理由（下游計數算的是舊碼）。
+    if (nextStatus === 'coding_running' || returnStatus === 'coding_running') sets.push(...CODING_RESET_COUNTERS.map(c => `${c}=0`));
     else if (counter) sets.push(`${counter}=0`);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id=$1`, params);
     notify.emitToUser(userId, 'task:updated', { taskId, status: nextStatus });
@@ -242,7 +250,30 @@ async function runRejectTriage(taskId, userId, signal) {
   if (decision === 'fix') {
     if (summary) await logAi(summary);
     const carried = [task.retry_feedback, summary && `[分診結論]\n${summary}`].filter(Boolean).join('\n\n');
-    await goto('coding_running', carried ? { feedback: carried } : { keepFeedback: true });
+    const opts = carried ? { feedback: carried } : { keepFeedback: true };
+    // 人工退回一律先過規格檢查點，再進 coding。理由是 fix 這條路是唯一「使用者的話不經規格就直接
+    // 落到 coding」的入口：退回意見若改變了「什麼算正確」，QA 手上仍只有舊 SD，會把「照使用者說的做」
+    // 判成超出規格而退回，coding 再照 QA 的話改回去——使用者的要求被靜默抹掉，任務最後還顯示綠燈
+    // （實測 task 126：選單改名要求連頁面標題一起改，來回兩輪後改動被完全還原）。分診 prompt 早已
+    // 寫明這個後果（analysis-reject.md 的 fix／respec 分界線）卻仍判錯，故改由結構把關而非 prompt 自律。
+    // 走的是既有的追加需求佇列：respec-patch 判有規格變更就 patch 進 analysis_yaml、判沒有（純 bug）
+    // 就原樣放行，兩種結果最後都落到 coding，所以純實作性退回的行為與過去一致，只多一次規格比對。
+    // 限 isReject：卡關修正指示（resolve）多為技術性修法，不走這條。限已開工（git_branch 有值）：
+    // 未開工時 respec-agent 會判 pre-coding 改委派 spec-review，那是規格審核閘門、不是這裡要的路徑。
+    // 代價（已知並接受）：respec-patch 判有變更時會用 `[追加需求]` 覆寫 retry_feedback，分診結論不會
+    // 傳到 coding——但此時「什麼算正確」已寫進規格，且結論本身已 logAi 落在時間軸給人看。
+    if (isReject && rejectReason && task.git_branch) {
+      // 標明來源：respec-patch 的判準對「途中留言」刻意保守（多數留言是流程指示，誤判成需求會讓
+      // 跑到後段的任務整條白跑），但審核退回意見的先驗完全相反——它幾乎都在講成品哪裡不對。
+      // 不標來源它會拿閒聊的標準去看退回意見、一律判無變更，整道檢查點就成了 no-op。
+      await query(
+        "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1, 'manual', '人工退回', $2, NOW())",
+        [taskId, `[人工審核退回意見]\n${rejectReason}`]
+      );
+      await goto('respec_running', { ...opts, returnStatus: 'coding_running' });
+      return true;
+    }
+    await goto('coding_running', opts);
     return true;
   }
 

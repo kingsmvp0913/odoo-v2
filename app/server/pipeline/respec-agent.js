@@ -134,8 +134,10 @@ async function runRespecPatch(taskId, userId, signal) {
       "UPDATE tasks SET status = $2, respec_return_status = NULL, updated_at = NOW() WHERE id = $1",
       [taskId, returnTo]
     );
+    // 文案要對兩種來源都成立：途中留言（多為流程指示）與人工審核退回意見（多為實作缺陷）。
+    // 原文寫死「多為流程指示」，使用者剛退回一個 bug 卻讀到這句，會以為系統把他的話當閒聊丟掉了。
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId,
-      '留言不含規格變更（多為流程指示），規格維持原樣，任務照原流程繼續。']).catch(() => {});
+      '已比對規格：這次的內容不涉及規格變更，規格維持原樣，任務照原流程繼續。']).catch(() => {});
     notify.emitToUser(userId, 'task:updated', { taskId, status: returnTo });
     return;
   }
