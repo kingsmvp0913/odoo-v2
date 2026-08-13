@@ -236,9 +236,17 @@ function registerRoutes(app) {
       // 由排障對話轉來的任務：回頭在對話上標記，列表才顯示「已轉任務」徽章。
       // 帶 user_id 條件擋偽造的 chat_id；對不到列就靜默略過——任務已經建好了，
       // 不該為了標記不成而讓整個建立失敗。
+      // 一併記下「轉到第幾則訊息為止」：下次同一場對話再轉任務時，這條線之前的內容只當背景，
+      // 不會被再摘一次成需求。寫在建立任務這一刻而非產草稿那一刻——草稿可能被使用者取消，
+      // 提早推進分界線會讓那段對話再也進不了任何任務。
       if (chat_id) {
         await query(
-          'UPDATE project_chats SET converted_task_id = $1 WHERE id = $2 AND user_id = $3',
+          `UPDATE project_chats
+              SET converted_task_id = $1,
+                  converted_upto_message_id = COALESCE(
+                    (SELECT MAX(id) FROM project_chat_messages WHERE chat_id = $2),
+                    converted_upto_message_id)
+            WHERE id = $2 AND user_id = $3`,
           [newId, chat_id, req.userId]
         );
       }

@@ -1,6 +1,7 @@
-// 意圖：draftTaskFromChat 把整串排障對話摘要成「任務草稿」，但只回草稿、不落地建任務
+// 意圖：draftTaskFromChat 把排障對話摘要成「任務草稿」，但只回草稿、不落地建任務
 // （human-in-the-loop：前端拿草稿讓使用者編輯確認後才走既有 POST /api/tasks）。
-// 鎖定三件事：①用整串對話（非只最後 N 筆）②回傳解析後 {title, original_text} ③絕不 INSERT 任務。
+// 鎖定：①第一次轉任務用整串對話（非只最後 N 筆）②回傳解析後 {title, original_text}
+// ③絕不 INSERT 任務 ④第二次轉任務時，上次已轉過的內容只當背景、不再被摘進需求。
 const mockRunClaude = jest.fn();
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: (...a) => mockRunClaude(...a) }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
@@ -22,18 +23,23 @@ beforeEach(() => {
   mockQuery.mockReset();
 });
 
-// 便利：mock 對話訊息回傳
-function withMessages(rows) {
+// 便利：mock 對話訊息回傳。upto＝project_chats.converted_upto_message_id（上次轉任務的分界線）。
+function withMessages(rows, upto = null) {
   mockQuery.mockImplementation((sql) => {
     if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows });
+    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ converted_upto_message_id: upto }] });
     return Promise.resolve({ rows: [] });
   });
 }
 
+// id 必須是遞增實值：分界線比對的是訊息 id，fixture 缺 id 會讓每則都落在「分界線之後」的反面，
+// 測試靠 fallback 巧合變綠，實際上什麼都沒驗到。
+function msg(i) { return { id: i, role: i % 2 ? 'user' : 'ai', content: `第${i}句` }; }
+
 test('回傳解析後的 {title, original_text}，且整串對話（非只最後 10 筆）都進 prompt', async () => {
   // 12 則訊息，最早一則必須出現在 prompt（證明沒有 LIMIT 10）
   const rows = [];
-  for (let i = 1; i <= 12; i++) rows.push({ role: i % 2 ? 'user' : 'ai', content: `第${i}句` });
+  for (let i = 1; i <= 12; i++) rows.push(msg(i));
   withMessages(rows);
   mockRunClaude.mockResolvedValue({
     text: '好的，我整理成任務：\n<result>{"title":"金額計算錯誤","original_text":"正式區某張單金額算錯，需檢查稅額計算"}</result>',
@@ -46,10 +52,49 @@ test('回傳解析後的 {title, original_text}，且整串對話（非只最後
   const prompt = mockRender.mock.calls[0][0].history;
   expect(prompt).toContain('第1句');   // 最早訊息在內
   expect(prompt).toContain('第12句');  // 最後訊息也在
+  expect(mockRender.mock.calls[0][0].prior_history).toContain('無'); // 首次轉任務：沒有舊議題
+});
+
+// 同一場對話談完一件事轉成任務後，繼續談下一件事再轉一次——舊議題已經有任務在處理，
+// 再摘一次會把兩件事混成同一張單（實測 chat 31：安庫請購綁定＋報價品用料，兩個不同的 bug）。
+test('第二次轉任務：分界線之前只當背景，只有之後的內容進本次需求', async () => {
+  const rows = [];
+  for (let i = 1; i <= 6; i++) rows.push(msg(i));
+  withMessages(rows, 4); // 前四則上次已轉成任務
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"title":"t","original_text":"o"}</result>', usage: {}, durationMs: 1
+  });
+
+  await draftTaskFromChat(1, 2, 99);
+
+  const { history, prior_history } = mockRender.mock.calls[0][0];
+  expect(history).toContain('第5句');       // 分界線之後＝本次要轉的
+  expect(history).toContain('第6句');
+  expect(history).not.toContain('第4句');   // 已轉過的不得混進本次需求
+  expect(history).not.toContain('第1句');
+  expect(prior_history).toContain('第1句'); // 但仍給得到背景（新議題常回指舊的）
+  expect(prior_history).toContain('第4句');
+});
+
+// 分界線之後一則都沒有＝使用者想重轉同一件事。此時若照切，history 會是空字串，
+// agent 拿不到任何內容只能憑空編一張需求出來——退回整串重摘才是安全的降級。
+test('分界線之後沒有新訊息 → 退回整串重摘，不拿空白去問 agent', async () => {
+  const rows = [msg(1), msg(2)];
+  withMessages(rows, 2); // 分界線就在最後一則
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"title":"t","original_text":"o"}</result>', usage: {}, durationMs: 1
+  });
+
+  await draftTaskFromChat(1, 2, 99);
+
+  const { history, prior_history } = mockRender.mock.calls[0][0];
+  expect(history).toContain('第1句');
+  expect(history).toContain('第2句');
+  expect(prior_history).toContain('無'); // 不重複塞一份到背景區
 });
 
 test('絕不 INSERT 任務（只回草稿）', async () => {
-  withMessages([{ role: 'user', content: '有問題' }]);
+  withMessages([{ id: 1, role: 'user', content: '有問題' }]);
   mockRunClaude.mockResolvedValue({
     text: '<result>{"title":"t","original_text":"o"}</result>', usage: {}, durationMs: 1
   });

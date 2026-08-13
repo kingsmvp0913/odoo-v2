@@ -489,6 +489,34 @@ describe('POST /api/tasks 帶 chat_id → 標記來源對話', () => {
     expect(body.find(c => c.id === chatId).converted_task_id).toBeNull();
   });
 
+  // 分界線：下次同一場對話再轉任務時，chat-to-task 只摘這條線之後的內容。不記的話，
+  // 談完一件事轉任務、接著談下一件事再轉一次，兩件事會被摘成同一張單（實測 chat 31）。
+  test('一併記下轉到第幾則訊息為止（下次轉任務的分界線）', async () => {
+    const { rows } = await dbModule.query(
+      "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'user','a'), ($1,'ai','b') RETURNING id",
+      [chatId]
+    );
+    const lastId = Math.max(...rows.map(r => r.id));
+    await createTask({ chat_id: chatId });
+
+    const { rows: [c] } = await dbModule.query(
+      'SELECT converted_upto_message_id FROM project_chats WHERE id = $1', [chatId]
+    );
+    expect(c.converted_upto_message_id).toBe(lastId);
+  });
+
+  // 空對話也能被轉任務（使用者可自行填草稿內容）。此時沒有訊息可當分界線，
+  // COALESCE 必須讓它維持原值而不是被 MAX() 的 NULL 洗掉——否則舊分界線會遺失、下次又全帶。
+  test('對話無訊息時不覆蓋既有分界線', async () => {
+    await dbModule.query('UPDATE project_chats SET converted_upto_message_id = 42 WHERE id = $1', [chatId]);
+    await createTask({ chat_id: chatId });
+
+    const { rows: [c] } = await dbModule.query(
+      'SELECT converted_upto_message_id FROM project_chats WHERE id = $1', [chatId]
+    );
+    expect(c.converted_upto_message_id).toBe(42);
+  });
+
   test('標記後未讀數不變——新增的 JOIN 不得放大既有的 COUNT', async () => {
     await dbModule.query(
       "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, 'ai', 'a'), ($1, 'ai', 'b')",

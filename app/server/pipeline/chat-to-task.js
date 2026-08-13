@@ -9,7 +9,7 @@ const { query } = require('../db');
 // 前端拿去讓使用者編輯確認後才走既有 POST /api/tasks（human-in-the-loop）。
 async function draftTaskFromChat(projectId, chatId, userId) {
   const { rows: msgs } = await query(
-    'SELECT role, content FROM project_chat_messages WHERE chat_id = $1 ORDER BY created_at ASC',
+    'SELECT id, role, content FROM project_chat_messages WHERE chat_id = $1 ORDER BY created_at ASC',
     [chatId]
   );
   if (!msgs.length) {
@@ -18,13 +18,26 @@ async function draftTaskFromChat(projectId, chatId, userId) {
     throw e;
   }
 
-  const history = msgs
-    .map(m => `${m.role === 'ai' ? '助理' : '用戶'}：${m.content}`)
-    .join('\n\n');
+  // 上次轉任務的分界線：之前的只當背景、之後的才是本次要轉的內容。一場排障對話常談完一件事、
+  // 轉成任務，接著在同一場繼續談下一件事——不分段的話第二次轉任務會把兩件事混成一張單。
+  const { rows: [chat] } = await query(
+    'SELECT converted_upto_message_id FROM project_chats WHERE id = $1', [chatId]
+  );
+  const upto = chat?.converted_upto_message_id || 0;
+  const fmt = list => list.map(m => `${m.role === 'ai' ? '助理' : '用戶'}：${m.content}`).join('\n\n');
+  let prior = msgs.filter(m => m.id <= upto);
+  let current = msgs.filter(m => m.id > upto);
+  // 分界線之後一則都不剩＝這場對話自上次轉任務後沒有新內容，使用者仍按了轉任務（多半是想重轉
+  // 同一件事）。此時退回舊行為整串重摘，而不是拿空白去問 agent——它只會憑空編一張需求出來。
+  if (!current.length) { prior = []; current = msgs; }
 
   const agent = loadAgent('chat-to-task');
   const projectNotes = await getProjectNotes(projectId).catch(() => null);
-  const prompt = agent.render({ history, project_notes: projectNotes || '' });
+  const prompt = agent.render({
+    history: fmt(current),
+    prior_history: prior.length ? fmt(prior) : '（無：這是本場對話第一次轉任務）',
+    project_notes: projectNotes || ''
+  });
 
   const ref = { projectId, chatId };
   let result;

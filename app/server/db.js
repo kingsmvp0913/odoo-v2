@@ -712,6 +712,32 @@ async function migrate() {
     }
   }
 
+  // 對話轉任務的分界線：project_chats.converted_upto_message_id＝上次轉任務時對話進行到哪一則。
+  // 沒有它，同一場對話第二次轉任務會把已經轉過的舊議題連同新議題整串再摘一次（實測 chat 31：
+  // 08-12 的安庫請購議題已轉成任務 125，08-13 又談了報價品的另一個 bug，第二次轉任務時兩件事
+  // 被混成同一張單）。converted_task_id 記得到「轉成哪張任務」卻記不到「轉到第幾則」，故另立此欄。
+  // 同樣只在「欄位初次建立」時回填既有列：拿已轉出那張任務的建立時間，回推當時的最後一則訊息。
+  // 任務已被刪除（死 id）的對話回填不到，退化成全帶，與加這個欄位之前的行為相同。
+  {
+    const { rows } = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name='project_chats' AND column_name='converted_upto_message_id'`
+    );
+    if (!rows.length) {
+      await query('ALTER TABLE project_chats ADD COLUMN converted_upto_message_id INTEGER');
+      const { rows: converted } = await query(
+        `SELECT c.id AS chat_id, t.created_at FROM project_chats c
+           JOIN tasks t ON t.id = c.converted_task_id`
+      );
+      for (const c of converted) {
+        const { rows: [m] } = await query(
+          'SELECT MAX(id) AS mx FROM project_chat_messages WHERE chat_id = $1 AND created_at <= $2',
+          [c.chat_id, c.created_at]
+        );
+        if (m?.mx) await query('UPDATE project_chats SET converted_upto_message_id = $2 WHERE id = $1', [c.chat_id, m.mx]);
+      }
+    }
+  }
+
   // （原 projects.port 一次性回填已移除：埠改為租約制，載體是 odoo_envs.port；
   //   projects.port 欄位因 db.js 無 drop column 機制而保留，但不再讀寫。）
 
