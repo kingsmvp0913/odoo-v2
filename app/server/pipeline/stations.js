@@ -21,6 +21,7 @@ const RETURNABLE_STATUSES = new Set([
   'coding_running',
   'qa_running',
   'merge_running',
+  'push_ai_running',
   'deploy_testing',
   'playwright_running',
   'wiki_updating',

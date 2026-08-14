@@ -8,7 +8,9 @@ const { resolveConflict, verifyResolvedSyntax } = require('./merge-agent');
 
 // 「在飛且已部署過 testing」的任務狀態：碼已在 testing、尚未 approve，重建時要重併回去。
 // approved 任務碼已在 ai-dev（reset 到 ai-dev 自動含入）、其分支已砍，故不列入。
-const INFLIGHT_DEPLOYED = ['deploy_testing', 'playwright_running', 'review_pending'];
+// push_ai_running＝已按核准、正在併入 ai-dev（撞衝突時可能停在 AI 解衝突上數分鐘）：approved_at
+// 要併成功才寫、任務分支也還在，這段期間仍算在飛，漏掉它等於把測試區的碼默默抽掉一張任務的份量。
+const INFLIGHT_DEPLOYED = ['deploy_testing', 'playwright_running', 'review_pending', 'push_ai_running'];
 
 // 把該任務記錄的衝突解法寫回工作樹對應檔（清掉衝突標記）。有寫入回 true，無記錄回 false。
 function applyRecordedResolution(repo, task, file) {

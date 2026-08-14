@@ -104,8 +104,13 @@ test('POST /api/tasks/:id/approve → 404 for non-existent task', async () => {
   expect(res.status).toBe(404);
 });
 
-test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉 wiki_updating', async () => {
-  const { mergeToAiBranch, deleteBranchLocal } = require('../pipeline/git');
+// 意圖：併入 ai-dev 改由 pipeline 的 push_ai_running 關執行（衝突要跑 AI 解，數分鐘，不能塞在 HTTP
+// 請求裡等）。路由只負責「驗得過就轉關卡＋記下核准者」，git 操作本身由 push-ai.test.js 覆蓋。
+test('POST /api/tasks/:id/approve → review_pending 轉 push_ai_running、記 approved_by 並派工', async () => {
+  const { runPipeline } = require('../pipeline/runner');
+  const { mergeToAiBranch } = require('../pipeline/git');
+  mergeToAiBranch.mockClear();
+  runPipeline.mockClear();
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('AP','17.0') RETURNING id"
   );
@@ -122,53 +127,23 @@ test('POST /api/tasks/:id/approve → review_pending 併主線、刪分支、轉
   const res = await request(app).post(`/api/tasks/${taskId}/approve`)
     .set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
-  expect(mergeToAiBranch).toHaveBeenCalledWith('/repos/ap/main', 'task/task_review_ok',
-    expect.objectContaining({ GIT_PAT: 'test-pat-token' }));
-  expect(deleteBranchLocal).toHaveBeenCalled();
+  // 路由不再自己動 git——阻塞的合併是這次事故的根源
+  expect(mergeToAiBranch).not.toHaveBeenCalled();
+  expect(runPipeline).toHaveBeenCalledWith(userId);
 
-  const { rows: updated } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [taskId]);
-  expect(updated[0].status).toBe('wiki_updating');
+  const { rows: updated } = await dbModule.query('SELECT status, approved_by, approved_at FROM tasks WHERE id = $1', [taskId]);
+  expect(updated[0].status).toBe('push_ai_running');
+  expect(updated[0].approved_by).toBe(userId);
+  // 併進 ai-dev 成功才算核准完成，此刻還不能寫（待上正式清單是靠 approved_at 撈的）
+  expect(updated[0].approved_at).toBeNull();
 
   await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
-test('POST /api/tasks/:id/approve → 併遠端 ai-dev 撞 AiPushConflictError → 轉 merge_conflict（push_ai 變體），不 500', async () => {
-  const { mergeToAiBranch, AiPushConflictError } = require('../pipeline/git');
-  mergeToAiBranch.mockReset();
-  mergeToAiBranch.mockRejectedValueOnce(new AiPushConflictError(['idx_hj/static/docx/維修領料單.docx']));
-  const { rows: [proj] } = await dbModule.query(
-    "INSERT INTO projects (name, odoo_version) VALUES ('APc','17.0') RETURNING id"
-  );
-  await dbModule.query(
-    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/apc/main',true,'done')",
-    [proj.id]
-  );
-  const { rows } = await dbModule.query(
-    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch) VALUES ($1,'task_review_conflict','odoo','Test','review_pending',$2,'task/task_review_conflict') RETURNING id",
-    [userId, proj.id]
-  );
-  const taskId = rows[0].id;
-
-  const res = await request(app).post(`/api/tasks/${taskId}/approve`)
-    .set('Authorization', `Bearer ${adminToken}`);
-  // 關鍵 intent：衝突不再是死錯（500），而是導進人工裁決閘門
-  expect(res.status).toBe(200);
-  expect(res.body.conflict).toBe(true);
-
-  const { rows: updated } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id = $1', [taskId]);
-  expect(updated[0].status).toBe('merge_conflict');
-  const cd = JSON.parse(updated[0].merge_conflict_data);
-  expect(cd.push_ai).toBe(true);
-  expect(cd.prior_status).toBe('review_pending');
-  expect(cd.repos[0]).toMatchObject({ repo: 'main', files: ['idx_hj/static/docx/維修領料單.docx'] });
-
-  mergeToAiBranch.mockResolvedValue(undefined); // 還原給後續測試
-  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
-  await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
-});
-
-test('POST /api/tasks/:id/mark-conflict-resolved → push_ai 變體解完 → 回 review_pending（供重按審核冪等續推）', async () => {
+test('POST /api/tasks/:id/mark-conflict-resolved → push_ai 變體解完 → 回 push_ai_running 自動續推', async () => {
+  const { runPipeline } = require('../pipeline/runner');
+  runPipeline.mockClear();
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('APr','17.0') RETURNING id"
   );
@@ -176,7 +151,7 @@ test('POST /api/tasks/:id/mark-conflict-resolved → push_ai 變體解完 → �
     "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/apr/main',true,'done')",
     [proj.id]
   );
-  const cd = JSON.stringify({ push_ai: true, prior_status: 'review_pending', repos: [{ repo: 'main', files: ['x.docx'] }] });
+  const cd = JSON.stringify({ push_ai: true, prior_status: 'push_ai_running', repos: [{ repo: 'main', files: ['x.docx'] }] });
   const { rows } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, git_branch, merge_conflict_data) VALUES ($1,'task_pushai_resolved','odoo','Test','merge_conflict',$2,'task/t',$3) RETURNING id",
     [userId, proj.id, cd]
@@ -188,17 +163,18 @@ test('POST /api/tasks/:id/mark-conflict-resolved → push_ai 變體解完 → �
   expect(res.status).toBe(200);
 
   const { rows: updated } = await dbModule.query('SELECT status, merge_conflict_data FROM tasks WHERE id = $1', [taskId]);
-  expect(updated[0].status).toBe('review_pending'); // 不是 deploy_testing（那會跳過重推）
+  // 不是 deploy_testing（那會跳過重推），也不再是 review_pending 讓人重按一次審核
+  expect(updated[0].status).toBe('push_ai_running');
   expect(updated[0].merge_conflict_data).toBeNull();
+  expect(runPipeline).toHaveBeenCalled(); // 續推要真的被觸發，否則任務停在無人派工的狀態
 
   await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
-test('POST /api/tasks/:id/approve → review_pending 但發起 user 無 PAT → 400，且不呼叫 mergeToAiBranch', async () => {
-  const { mergeToAiBranch } = require('../pipeline/git');
-  mergeToAiBranch.mockClear();
-
+// 憑證要在路由這關就驗：等進了 push_ai_running 才發現沒 PAT，使用者看到的是一張跑到一半失敗的
+// 任務，而不是「請先填 PAT」——按鈕當下就該擋下來。
+test('POST /api/tasks/:id/approve → 核准者無 PAT → 400，任務留在 review_pending', async () => {
   const { rows: [nopatUser] } = await dbModule.query(
     "INSERT INTO users (username, password_hash, display_name) VALUES ('nopat', 'x', 'NoPAT') RETURNING id"
   );
@@ -221,7 +197,8 @@ test('POST /api/tasks/:id/approve → review_pending 但發起 user 無 PAT → 
 
   expect(res.status).toBe(400);
   expect(res.body.error).toMatch(/PAT/);
-  expect(mergeToAiBranch).not.toHaveBeenCalled();
+  const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id = $1', [t.id]);
+  expect(after.status).toBe('review_pending');
 
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });

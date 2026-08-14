@@ -153,7 +153,8 @@
 [data-theme="dark"] .status-badge.triage_blocked,
 [data-theme="dark"] .status-badge.merge_conflict { background: rgba(239,68,68,0.16); color: #fca5a5; }
 [data-theme="dark"] .status-badge.branch_pending { background: rgba(14,165,233,0.16); color: #7dd3fc; }
-[data-theme="dark"] .status-badge.merge_running { background: rgba(168,85,247,0.16); color: #d8b4fe; }
+[data-theme="dark"] .status-badge.merge_running,
+[data-theme="dark"] .status-badge.push_ai_running { background: rgba(168,85,247,0.16); color: #d8b4fe; }
 [data-theme="dark"] .status-badge.cs_running,
 [data-theme="dark"] .status-badge.cs_reply_pending { background: rgba(217,70,239,0.16); color: #f0abfc; }
 [data-theme="dark"] .status-badge.respec_running,
@@ -410,7 +411,8 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .status-badge.done { background: #f0fdf4; color: #166534; }
 .status-badge.stopped, .status-badge.triage_blocked { background: #fef2f2; color: #991b1b; }
 .status-badge.branch_pending { background: #f0f9ff; color: #0369a1; }
-.status-badge.merge_running { background: #fdf4ff; color: #7e22ce; }
+.status-badge.merge_running,
+.status-badge.push_ai_running { background: #fdf4ff; color: #7e22ce; }
 .status-badge.merge_conflict { background: #fef2f2; color: #b91c1c; }
 .status-badge.deploy_ready { background: #f0fdf4; color: #15803d; }
 .status-badge.deploy_fixing { background: #fff7ed; color: #c2410c; }

@@ -575,6 +575,17 @@ class AiPushConflictError extends Error {
   }
 }
 
+// 本機把任務分支併進 ai-dev 就撞衝突（前一張任務已核准進 ai-dev、兩張改到同一行）。
+// 與上面那個的差別只在發生階段（此處尚未 push），對呼叫端的意義相同：帶 conflictFiles ＝
+// 可解可裁決，別當成死錯。兩者都留 MERGE_HEAD 給 merge agent／裁決端點收尾。
+class AiMergeConflictError extends Error {
+  constructor(conflictFiles) {
+    super('併入 ai-dev 時發生衝突，需解衝突後才能完成合併');
+    this.name = 'AiMergeConflictError';
+    this.conflictFiles = conflictFiles;
+  }
+}
+
 // 把本機 ai-dev 推上遠端；被 non-fast-forward 打回時 fetch＋把 origin/ai-dev 併回本機再重推，
 // bounded retry 吸收「多個平台實例共用同一遠端 ai-dev、各自本機 clone」夾在中間的競態。
 // 常見情況（另一實例推的是不同任務／不同檔）可自動對齊；真撞同一檔（binary docx 等無法自動合）
@@ -623,6 +634,12 @@ async function reconcileAndPushAi(repoPath, gitEnv) {
 async function mergeToAiBranch(repoPath, branchName, gitEnv) {
   ensureGitignorePyc(repoPath);
   await discardPyc(repoPath); // 避免 testing 工作樹上 tracked pyc 的改動擋住 checkout
+  // 主 clone 還留著上一次沒了結的 merge（前一次併入撞衝突留下的 MERGE_HEAD）：index 裡有未解檔時
+  // 連 checkout 都會被 git 擋（"you need to resolve your current index first"），接著就掉進下面那條
+  // 「checkout -B ai-dev <main>」的防禦分支——那會把 ai-dev 重設到 main，丟掉所有已核准的成果。
+  // 先認出這個狀態並帶著未解檔名交呼叫端接續解，不往下走。
+  const pending = await listUnmerged(repoPath).catch(() => []);
+  if (pending.length) throw new AiMergeConflictError(pending);
   try {
     await execFileAsync('git', ['checkout', AI_BRANCH], gitOpts(repoPath, gitEnv));
   } catch {
@@ -638,9 +655,23 @@ async function mergeToAiBranch(repoPath, branchName, gitEnv) {
   } catch (err) {
     // 併遠端 ai-dev 撞真衝突：留 MERGE_HEAD＋衝突標記給裁決端點，不可 checkout/abort（會毀掉待解狀態）
     if (err instanceof AiPushConflictError) throw err;
+    // 本機這一步就撞衝突（前一張任務已進 ai-dev、改到同一行）：同樣留待解狀態並帶出檔名，
+    // 呼叫端才有辦法交 merge agent 自動解／導進裁決閘門。拋裸的 git 錯會讓它變成無從處理的 500。
+    const unmerged = await listUnmerged(repoPath).catch(() => []);
+    if (unmerged.length) throw new AiMergeConflictError(unmerged);
     await execFileAsync('git', ['checkout', branchName], gitOpts(repoPath, gitEnv)).catch(() => {});
     throw err;
   }
+}
+
+// 衝突解完後接續 mergeToAiBranch 沒做完的收尾：commit 了結這次 merge，再推上遠端 ai-dev。
+// 兩種衝突（本機併任務分支／併回遠端 ai-dev）解完都走這裡——留著 MERGE_HEAD 不了結，等於
+// AI 解的結果只活在本機工作樹，遠端看不到而且會擋住同專案下一張任務。
+// push 階段仍可能再撞遠端競態（AiPushConflictError），維持原樣往外拋交呼叫端裁決。
+async function concludeAiMerge(repoPath, files, message, gitEnv) {
+  await commitResolved(repoPath, files, message, gitEnv);
+  await untrackPyc(repoPath, gitEnv);
+  await reconcileAndPushAi(repoPath, gitEnv);
 }
 
 // 把主 clone 切回常駐的 testing 分支（測試環境 addons 來源）。停在 main 會讓下一次 deploy
@@ -852,4 +883,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
 }
 
 module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
-  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, AiPushConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };
+  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };

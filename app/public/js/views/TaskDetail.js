@@ -422,7 +422,7 @@ window.TaskDetailView = Vue.defineComponent({
       this.approving = true;
       try {
         await Api.post(`tasks/${this.task.id}/approve`, {});
-        showToast('已審核通過，納入待上正式並更新文件', 'success');
+        showToast('已審核通過，正在併入 ai-dev', 'success');
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }

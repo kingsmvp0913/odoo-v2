@@ -53,69 +53,29 @@ function registerRoutes(app) {
       );
       if (!repos.length) return res.status(400).json({ error: '專案未設定任何已完成 clone 的 Repo' });
 
-      const path = require('path');
-      const { mergeToAiBranch, AiPushConflictError, deleteBranchLocal, removeWorktree } = require('./pipeline/git');
-      const { withProjectLock } = require('./pipeline/project-lock');
       const { buildGitEnv } = require('./lib/git-identity');
-      const wtParent = path.join(path.dirname(repos[0].local_path), '.worktrees', task.task_id);
-
-      // push 回 ai-dev 要歸屬到審核者（任務發起人）本人，非平台服務帳號
-      let gitEnv;
+      // 憑證在按鈕當下就驗：等進了 push_ai_running 才發現沒 PAT，使用者看到的是一張跑到一半失敗的任務。
+      // push 回 ai-dev 要歸屬到按下審核通過的人本人，非平台服務帳號——故把他記進 approved_by。
       try {
-        gitEnv = await buildGitEnv(req.userId);
+        await buildGitEnv(req.userId);
       } catch (e) {
         if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: '請先到設定填個人 GitHub PAT' });
         throw e;
       }
 
-      // 併主線＋清理 worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）
-      const conflict = await withProjectLock(task.project_id, async () => {
-        // 逐 repo 併入 ai-dev（任一失敗即中止，狀態不變）
-        for (const repo of repos) {
-          try {
-            await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
-          } catch (err) {
-            // 遠端 ai-dev 被其他平台實例推進、且撞同一檔無法自動合 → 交既有 merge_conflict 閘門人工裁決。
-            // 留 MERGE_HEAD 不清；未併的 repo 與 worktree 也不動，解完重按審核即冪等續推。
-            if (err instanceof AiPushConflictError) return { repo: repo.label, files: err.conflictFiles };
-            throw err;
-          }
-        }
-        // 清理各 repo 的 worktree 與任務分支（best-effort，不阻斷）
-        for (const repo of repos) {
-          const wtPath = path.join(wtParent, path.basename(repo.local_path));
-          await removeWorktree(repo.local_path, wtPath).catch(() => {});
-          await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
-        }
-        return null;
-      });
-
-      if (conflict) {
-        // 轉 merge_conflict：push_ai 變體標明「解完回審核站重推」，與 sync／rebuild 變體並列（見裁決端點）
-        const { rowCount } = await query(
-          "UPDATE tasks SET status='merge_conflict', merge_conflict_data=$2, updated_at=NOW() WHERE id=$1 AND status='review_pending'",
-          [req.params.id, JSON.stringify({ push_ai: true, prior_status: 'review_pending', repos: [conflict] })]
-        );
-        if (rowCount) {
-          await query(
-            "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', $2)",
-            [req.params.id, `[合併衝突] 遠端 ai-dev 已被其他變更推進，${conflict.repo}：${conflict.files.join(', ')} 需選擇保留哪一版`]
-          );
-          require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'merge_conflict' });
-        }
-        return res.json({ ok: true, conflict: true });
-      }
-
+      // 實際的併入 ai-dev 交 push_ai_running 關做（見 pipeline/push-ai.js）：撞衝突要呼叫 AI 逐 hunk
+      // 解，實測數分鐘，塞在這個 HTTP 請求裡等會逾時，且解不掉時的裁決閘門也需要非同步的狀態機。
       // 條件更新（WHERE status）：佔位之外的第二道防線，狀態已被他處改動就不再覆寫
       const { rowCount } = await query(
-        "UPDATE tasks SET status = 'wiki_updating', approved_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'review_pending'",
-        [req.params.id]
+        "UPDATE tasks SET status = 'push_ai_running', approved_by = $2, updated_at = NOW() WHERE id = $1 AND status = 'review_pending'",
+        [req.params.id, req.userId]
       );
       if (rowCount) {
         await query(
-          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，已納入待上正式清單，正在更新文件')",
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '審核通過，正在併入 ai-dev')",
           [req.params.id]
         );
+        require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'push_ai_running' });
       }
       runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });
@@ -460,16 +420,21 @@ function registerRoutes(app) {
       }
 
       if (cd && cd.push_ai) {
-        // 併遠端 ai-dev 的衝突已了結（concludeMerge 已把併回的 origin/ai-dev commit）→ 回審核站。
-        // 重按「審核通過」即由 mergeToAiBranch 冪等續推：此時本機 ai-dev 已領先遠端，push 直接過。
+        // 併入 ai-dev 的衝突已了結（concludeMerge 已 commit）→ 回 push_ai_running 自動續推：
+        // 此時本機 ai-dev 已領先遠端，push 直接過。
+        // 舊資料的 prior_status 是 review_pending（併入 ai-dev 還寫在 approve 路由裡的年代），
+        // 那條路仍得靠人重按「審核通過」——故依回程狀態決定是否派工與文案。
+        const back = safeReturnStatus(cd.prior_status, 'review_pending');
+        const auto = back === 'push_ai_running';
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [task.id, safeReturnStatus(cd.prior_status, 'review_pending')]
+          [task.id, back]
         );
         await query(
-          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev')",
-          [task.id]
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+          [task.id, auto ? '合併衝突已解決，繼續併入 ai-dev' : '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev']
         );
+        if (auto) runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
         return res.json({ ok: true });
       }
 
@@ -582,15 +547,19 @@ function registerRoutes(app) {
       }
 
       if (cd && cd.push_ai) {
-        // 併遠端 ai-dev 的衝突逐檔裁決完＋concludeMerge 已 commit → 回審核站，重按審核即冪等續推
+        // 逐檔裁決完＋concludeMerge 已 commit → 回 push_ai_running 續推（舊資料回審核站等人重按，
+        // 見 mark-conflict-resolved 同段註解）
+        const back = safeReturnStatus(cd.prior_status, 'review_pending');
+        const auto = back === 'push_ai_running';
         await query(
           "UPDATE tasks SET status = $2, merge_conflict_data = NULL, updated_at = NOW() WHERE id = $1",
-          [task.id, safeReturnStatus(cd.prior_status, 'review_pending')]
+          [task.id, back]
         );
         await query(
-          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev')",
-          [task.id]
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+          [task.id, auto ? '合併衝突已解決，繼續併入 ai-dev' : '合併衝突已解決，請再次點「審核通過」完成併入 ai-dev']
         );
+        if (auto) runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
         return res.json({ ok: true, done: true });
       }
 

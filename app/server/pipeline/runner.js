@@ -25,7 +25,8 @@ const yaml = require('js-yaml');
 const STAGE_LABELS = {
   new: '待分類', cs_running: '客服處理中', analysis_running: '分析中',
   confirm_answered: '已回覆澄清', branch_pending: '建立分支', coding_running: '開發中',
-  qa_running: 'QA 審查中', merge_running: '併入測試中', deploy_testing: '部署測試區',
+  qa_running: 'QA 審查中', merge_running: '併入測試中', push_ai_running: '併入 ai-dev',
+  deploy_testing: '部署測試區',
   playwright_running: 'E2E 測試中', wiki_updating: '更新 Wiki',
   reject_triage: '分診中', resolve_triage: '分診中', respec_running: '檢查規格是否需調整',
   clarify_pending: '待你裁決', clarify_answered: '已裁決', clarify_chat_running: 'AI 回覆中'
@@ -221,6 +222,12 @@ async function handleMerge(task, settings, signal) {
   await runMergeAgent(task.id, task.user_id, signal);
 }
 
+// push_ai_running：人工審核通過後把任務分支併入 ai-dev 並推遠端（衝突交 merge agent 自動解）
+async function handlePushAi(task, settings, signal) {
+  const { runPushAi } = require('./push-ai');
+  await runPushAi(task.id, task.user_id, signal);
+}
+
 // deploy_testing：純程式部署到測試區 + odoo-bin -u 升級
 async function handleDeployTesting(task, settings, signal) {
   const { runDeployTesting } = require('./deploy-testing');
@@ -321,6 +328,7 @@ const HANDLERS = {
   coding_running: handleCoding,
   qa_running: handleQa,
   merge_running: handleMerge,
+  push_ai_running: handlePushAi,
   deploy_testing: handleDeployTesting,
   playwright_running: handlePlaywright,
   wiki_updating: handleWiki,

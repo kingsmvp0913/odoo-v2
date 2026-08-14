@@ -100,6 +100,19 @@ test('重建 → 排除 approved / 非在飛 / 隱藏 / 無分支 的任務', as
   expect(gitMock.mergeInto.mock.calls[0][2]).toBe('task/keep');
 });
 
+// 意圖：核准後正在併入 ai-dev 的任務（push_ai_running）也要重併回 testing——它的碼已經部署在測試區、
+// approved_at 還沒寫（要併成功才寫），漏掉它就是把測試區的碼默默抽掉一張任務的份量。
+test('重建 → push_ai_running（核准後併入 ai-dev 中）的任務要重併回 testing', async () => {
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  const projectId = await makeProject(['main']);
+  await addTask(projectId, { status: 'push_ai_running', branch: 'task/pushing', taskId: 'pushing' });
+
+  await rebuildMod.rebuildTesting(projectId, userId, undefined);
+
+  expect(gitMock.mergeInto).toHaveBeenCalledTimes(1);
+  expect(gitMock.mergeInto.mock.calls[0][2]).toBe('task/pushing');
+});
+
 // 意圖：重併撞衝突且無記錄解法、agent 也解不掉 → 該任務置 merge_conflict 且標記 rebuild 來源與原狀態，停下
 test('重建 → 衝突且無解法時該任務置 merge_conflict(rebuild=true,prior_status)，停止並回警告', async () => {
   gitMock.mergeInto.mockResolvedValue({ hasConflicts: true, conflictFiles: ['models/x.py'] });

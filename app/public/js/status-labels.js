@@ -29,6 +29,9 @@ const TASK_STATUSES = {
   // 寫死「追加需求」會讓剛退回一個 bug 的使用者以為系統把他的話當成新需求。
   respec_running:       { label: '檢查規格是否需調整',  actor: 'agent',  agent: 'respec-patch' },
   merge_running:        { label: '併入測試中',          actor: 'system' },
+  // 審核通過後把任務分支併進 ai-dev。掛 merge agent 是因為撞衝突時本關會叫它逐 hunk 自動解
+  // （解不掉才轉 merge_conflict 交人工），不是純 git 操作。
+  push_ai_running:      { label: '併入 ai-dev',          actor: 'agent',  agent: 'merge' },
   merge_conflict:       { label: '合併衝突',            actor: 'human' },
   deploy_testing:       { label: '部署測試區',          actor: 'system' },
   // 純程式關：E2E 不再有 agent。tour 一律在分析後由 spec_tour 依 acceptance 產出，本關只負責

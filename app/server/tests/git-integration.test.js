@@ -485,6 +485,86 @@ test('mergeToAiBranch：遠端 ai-dev 與本任務改同一檔且衝突 → 拋 
   expect(remoteAi.trim()).toBe(otherHead.trim());
 }, 30000);
 
+// 意圖：task 132 的實況——前一張任務已核准進 ai-dev、兩張任務改到同一行（manifest 的 asset 清單），
+// 於是 approve 的第一步（本機 ai-dev ← task 分支）就撞衝突，還沒走到 push。這條路原本拋的是裸的
+// execFile 錯（沒有 conflictFiles），呼叫端認不出是衝突 → 回 500、任務留在 review_pending，
+// 既不自動解也不進裁決畫面，主 clone 還被留在 ai-dev 的半殘 merge 上。
+test('mergeToAiBranch：本機 ai-dev 已被前一任務推進且改同一行 → 拋 AiMergeConflictError（帶檔名）並留 MERGE_HEAD', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  // 前一張任務：已核准進 ai-dev，改了 shared.txt
+  await sh(repo, 'checkout', '-b', 'task/prev', 'ai-dev');
+  await write(repo, 'shared.txt', 'PREV VERSION\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'prev task');
+  await git.mergeToAiBranch(repo, 'task/prev');
+  // 本任務從「更舊的 ai-dev」長出來（沒看過前一張的改動），改同一行
+  await sh(repo, 'checkout', '-b', 'task/mine', 'main');
+  await write(repo, 'shared.txt', 'MY VERSION\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'my task');
+
+  await expect(git.mergeToAiBranch(repo, 'task/mine')).rejects.toMatchObject({
+    name: 'AiMergeConflictError',
+    conflictFiles: expect.arrayContaining(['shared.txt']),
+  });
+  // 待解狀態必須留在原地（供解衝突／裁決端點收尾），不可被 checkout 走或 abort
+  expect(fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD'))).toBe(true);
+  const { stdout: head } = await sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  expect(head.trim()).toBe('ai-dev');
+}, 30000);
+
+// 意圖：主 clone 已經留著上一次失敗的半殘 merge（task 132 現況）時再跑一次——git 會用
+// 「You have not concluded your merge」擋下，錯誤裡沒有任何衝突檔名。若照字面當成未知錯誤，
+// 任務就永遠卡在那顆 MERGE_HEAD 上；未解檔仍在 index 裡，要認出來才能接續解掉。
+test('mergeToAiBranch：主 clone 殘留未了結的 merge → 仍認得出是衝突（帶未解檔名），不是未知錯誤', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  await sh(repo, 'checkout', '-b', 'task/prev', 'ai-dev');
+  await write(repo, 'shared.txt', 'PREV\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'prev task');
+  await git.mergeToAiBranch(repo, 'task/prev');
+  await sh(repo, 'checkout', '-b', 'task/mine', 'main');
+  await write(repo, 'shared.txt', 'MINE\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'my task');
+  await git.mergeToAiBranch(repo, 'task/mine').catch(() => {}); // 第一次：撞衝突，留下 MERGE_HEAD
+
+  await expect(git.mergeToAiBranch(repo, 'task/mine')).rejects.toMatchObject({
+    name: 'AiMergeConflictError',
+    conflictFiles: expect.arrayContaining(['shared.txt']),
+  });
+}, 30000);
+
+// 意圖：衝突解完之後，那半套 merge 必須真的被了結並推上遠端——否則「AI 解好了」只存在於本機工作樹，
+// 遠端 ai-dev 看不到，主 clone 還留著 MERGE_HEAD 汙染同專案後續任務。
+test('concludeAiMerge：衝突解完 → commit 了結 merge 並推上遠端 ai-dev', async () => {
+  const repo = await makeRepo();
+  await git.ensureAiBranch(repo);
+  await sh(repo, 'checkout', '-b', 'task/prev', 'ai-dev');
+  await write(repo, 'shared.txt', 'PREV\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'prev task');
+  await git.mergeToAiBranch(repo, 'task/prev');
+  await sh(repo, 'checkout', '-b', 'task/mine', 'main');
+  await write(repo, 'shared.txt', 'MINE\n');
+  await sh(repo, 'add', '-A');
+  await sh(repo, 'commit', '-m', 'my task');
+  const files = await git.mergeToAiBranch(repo, 'task/mine').catch(e => e.conflictFiles);
+  // 模擬 merge agent 解衝突：兩邊都保留（asset 清單這類衝突的正解）
+  await write(repo, 'shared.txt', 'PREV\nMINE\n');
+
+  await git.concludeAiMerge(repo, files, '[merge] task/mine → ai-dev (resolve conflicts)');
+
+  expect(fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD'))).toBe(false); // merge 已了結
+  const { stdout: remoteAi } = await sh(repo, 'rev-parse', 'origin/ai-dev-main');
+  const { stdout: localAi } = await sh(repo, 'rev-parse', 'ai-dev');
+  expect(remoteAi.trim()).toBe(localAi.trim());                             // 已推上遠端
+  const { stdout: content } = await sh(repo, 'show', 'ai-dev:shared.txt');
+  expect(content).toBe('PREV\nMINE\n');                                     // 解法真的進了 ai-dev
+}, 30000);
+
 describe('ai-dev 隔離：端到端', () => {
   test('全新專案 → 建 ai-dev → 任務從 ai-dev 切 → approve 後 ai-dev 前進而 main 不動', async () => {
     const repo = await makeRepo();

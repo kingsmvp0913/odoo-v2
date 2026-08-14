@@ -248,9 +248,9 @@ function pipelineNodes(flags) {
     id: 'conflict', track: 'human', step: 13, kind: 'gate', label: '合併衝突',
     status: 'merge_conflict',
     detail: [
-      ['進入', '併入 testing 時兩段碼撞同幾行'],
+      ['進入', '併入 testing、或核准後併入 ai-dev 時兩段碼撞同幾行，且 AI 自動解不掉'],
       ['做什麼', 'merge → merge-explain → merge-clarify 三支各司其職，人做最後裁決'],
-      ['往下', '解完 → 部署測試區'],
+      ['往下', '解完回原本那一關續跑（併入測試來的 → 部署測試區；併入 ai-dev 來的 → 繼續併入 ai-dev）'],
       ['注意', '流程刻意不分叉：退回重做不會消除衝突，所以全程停在這個狀態']
     ]
   });
@@ -291,6 +291,17 @@ function pipelineNodes(flags) {
       ['往下', '核准 → 併進 ai-dev → 更新 Wiki → 完成'],
       ['分支', '退回 → 分診'],
       ['注意', '核准只是「排進待上正式」，東西還在測試區——真正上線要另外按「🚀 上正式」']
+    ]
+  });
+  push({
+    id: 'pushai', track: 'task', step: 16, kind: 'agent', label: '併入 ai-dev',
+    status: 'push_ai_running', agent: 'merge',
+    detail: [
+      ['進入', '人工審核按下「核准」'],
+      ['做什麼', '把任務分支併進 ai-dev 並推遠端，成功才寫 approved_at、清掉 worktree 與分支'],
+      ['分支', '撞衝突 → 先叫 merge agent 逐 hunk 自動解，解不掉才轉「合併衝突」交人工裁決'],
+      ['為什麼是一關', '解衝突要呼叫 AI（實測數分鐘），塞在「核准」那個 HTTP 請求裡會逾時；獨立成關才有辦法自動解、也才進得了裁決閘門'],
+      ['往下', '更新 Wiki']
     ]
   });
   push({
@@ -357,7 +368,7 @@ function pipelineNodes(flags) {
     id: 'gitaidev', track: 'git', step: 16, kind: 'git', label: '併入 ai-dev',
     ref: 'ai-dev',
     detail: [
-      ['對應', '等待審核關的「核准」'],
+      ['對應', '併入 ai-dev 這一關（核准後由 pipeline 執行）'],
       ['做什麼', 'mergeToAiBranch 把任務分支併進 ai-dev 並推遠端，接著刪掉本機分支與 worktree'],
       ['隔離', 'AI 只推 ai-dev，永遠不直接推 main'],
       ['注意', '此時只寫 approved_at；released_at 要等上正式才寫，兩者的差集＝待上正式']
@@ -403,7 +414,8 @@ function pipelineEdges(flags) {
     ['triage', 'coding', 'back'], ['triage', 'respec', 'back'], ['triage', 'clarify', 'alt'],
     ['clarify', 'triage', 'back'],
     ['respec', 'coding', 'main'],
-    ['review', 'wiki', 'main'], ['wiki', 'done', 'main'], ['done', 'release', 'alt']
+    ['review', 'pushai', 'main'], ['pushai', 'conflict', 'alt'], ['conflict', 'pushai', 'main'],
+    ['pushai', 'wiki', 'main'], ['wiki', 'done', 'main'], ['done', 'release', 'alt']
   ];
   // 條件必須與 pipelineNodes 的 spectour 節點逐字一致，否則會生出指向不存在節點的連線
   if (flags.e2eEnabled) { e.push(['branch', 'spectour', 'main'], ['spectour', 'coding', 'main']); }
@@ -417,7 +429,7 @@ function pipelineEdges(flags) {
       ['gitmain', 'gitgh', 'alt'],
       // 橫向對應：這一關在 Git 上做了什麼
       ['gitwt', 'branch', 'link'], ['gitcommit', 'coding', 'link'],
-      ['gittesting', 'merge', 'link'], ['gitaidev', 'review', 'link'],
+      ['gittesting', 'merge', 'link'], ['gitaidev', 'pushai', 'link'],
       ['gitmain', 'release', 'link']
     );
     // 併入 testing 這格只被踩一次（併入測試關）。這裡原本還有一條到 e2e 的線，因為 E2E 關當年
