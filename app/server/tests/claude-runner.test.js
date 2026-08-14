@@ -278,6 +278,21 @@ describe('Claude 長效憑證注入 spawn env', () => {
     } finally { if (saved === undefined) delete process.env.APP_SECRET; else process.env.APP_SECRET = saved; }
   });
 
+  // base URL 必須跟著執行期 PORT 走：prompt 曾寫死 3939（index.js 的預設值），正式機 PORT=8771，
+  // agent 的 curl 全部 connection refused——server 側一句 fail loud 都送不出來，症狀只剩
+  // 「讀不到設計稿」，看起來像 Figma token 沒設（實際發生：task 134，2026-08-14）。
+  test('spawn env 帶 AIDEV_AI_BASE，埠號取自執行期 PORT 而非寫死預設值', async () => {
+    const { spawn } = require('child_process');
+    const { runClaude } = require('../pipeline/claude-runner');
+    const saved = process.env.PORT;
+    process.env.PORT = '8771'; // 刻意不用 3939：與預設值相同就驗不出「有沒有真的讀 PORT」
+    try {
+      spawn.mockReturnValueOnce(mkChild());
+      await runClaude('p', {});
+      expect(lastEnv().AIDEV_AI_BASE).toBe('http://localhost:8771');
+    } finally { if (saved === undefined) delete process.env.PORT; else process.env.PORT = saved; }
+  });
+
   // 未設定時必須「完全不碰」這個 key，否則會蓋掉手動 export 的環境變數（方案 1 手動版仍須可用）
   test('未設定 → 不塞該 key，繼承自 process.env 的值原樣通過', async () => {
     const { spawn } = require('child_process');

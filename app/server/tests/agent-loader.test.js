@@ -260,7 +260,7 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
     const offenders = [];
     for (const { name, body } of bodies) {
       for (const line of body.split('\n')) {
-        if (!/localhost:3939\/ai\//.test(line)) continue;
+        if (!/\$AIDEV_AI_BASE\/ai\//.test(line)) continue;
         if (!new RegExp(AI_TOKEN_HEADER, 'i').test(line)) offenders.push(`${name}: ${line.trim()}`);
       }
     }
@@ -285,11 +285,34 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
       .filter(l => l.route).map(l => l.route.path).filter(p => p.startsWith('/ai/'));
     const taught = new Set();
     for (const { body } of bodies) {
-      for (const m of body.matchAll(/localhost:3939(\/ai\/[a-z0-9/_-]+)/gi)) taught.add(m[1]);
+      for (const m of body.matchAll(/\$AIDEV_AI_BASE(\/ai\/[a-z0-9/_-]+)/gi)) taught.add(m[1]);
     }
     expect(taught.size).toBeGreaterThanOrEqual(6); // 掃空／只掃到一半都不是「全過」而是沒測到
     expect([...taught]).toEqual(expect.arrayContaining(['/ai/figma', '/ai/wiki/pages'])); // agents/ 與共用片段各要有代表
     expect([...taught].filter(p => !registered.includes(p))).toEqual([]);
+  });
+
+  // 埠號寫死是上一版的實際故障：prompt 寫 localhost:3939（index.js 的預設值），正式機 PORT=8771，
+  // 於是每一支 /ai/* curl 都是 connection refused。這種失敗連 server 都沒碰到，403/503 那些
+  // 指得出真因的訊息一句都送不出來，agent 只會回報「讀不到」——上一版守衛全綠，因為它自己也寫死 3939。
+  test('prompt 一律用 $AIDEV_AI_BASE，不得寫死 host:port', () => {
+    const offenders = [];
+    for (const { name, body } of bodies) {
+      for (const line of body.split('\n')) {
+        if (/localhost:\d+/.test(line)) offenders.push(`${name}: ${line.trim().slice(0, 120)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // 變數名兩邊分開改就會脫鉤：prompt 展開成空字串後 curl 打 `/ai/figma`（相對路徑）直接失敗，
+  // 而 spawn env 那側照樣綠。名稱釘在 lib/ai-token 的實作上，改一邊就紅。
+  test('prompt 用的變數名＝claude-runner 實際注入的 key', () => {
+    const { aiBaseEnv } = require('../lib/ai-token');
+    const keys = Object.keys(aiBaseEnv());
+    expect(keys).toEqual(['AIDEV_AI_BASE']);
+    const users = bodies.filter(b => b.body.includes(`$${keys[0]}/ai/`));
+    expect(users.length).toBeGreaterThanOrEqual(4); // analysis／spec-review／respec-patch／cs-capability
   });
 
   // 這一條是本次 figma 端點的回歸守衛：能力與 prompt 是同一張工單的兩半，只做一半＝沒有任何一關會用到

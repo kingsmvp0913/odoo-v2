@@ -1,11 +1,11 @@
 ---
 name: getSQL
-description: Use when querying remote PostgreSQL databases via v2 platform AI endpoint at localhost:3939, running SELECT statements, listing project connections, or inspecting table structures.
+description: Use when querying remote PostgreSQL databases via the v2 platform AI endpoint, running SELECT statements, listing project connections, or inspecting table structures.
 ---
 
 # 資料庫查詢 Skill（v2）
 
-透過 v2 工作平台查遠端資料庫（唯讀 SELECT）。支援 PostgreSQL / MSSQL / MySQL——連線清單會回 `db_engine`，**務必依它寫對應方言**。v2 需運行於 `http://localhost:3939`，不需另外啟動桌面服務。
+透過 v2 工作平台查遠端資料庫（唯讀 SELECT）。支援 PostgreSQL / MSSQL / MySQL——連線清單會回 `db_engine`，**務必依它寫對應方言**。v2 需在本機運行（埠號見下方 `AIDEV_AI_BASE`，別假設是預設值），不需另外啟動桌面服務。
 
 ## 流程
 
@@ -13,19 +13,22 @@ description: Use when querying remote PostgreSQL databases via v2 platform AI en
 
 依當前處理中的專案、開啟檔案路徑（如 `online_addons/<專案>/`）、對話主題，推斷對應的 v2 專案名稱（folder_name 或 name）。
 
-> **互動式 session 要先自己取通行碼**（pipeline 派出去的 agent 由平台自動注入，你自己敲的沒有）。
+> **互動式 session 要先自己取通行碼與 base URL**（pipeline 派出去的 agent 由平台自動注入，你自己敲的沒有）。
 > 在 repo 根目錄執行一次即可：
 >
 > ```bash
 > export AIDEV_AI_TOKEN=$(node -e "process.env.APP_SECRET=require('./data/config.json').APP_SECRET;console.log(require('./app/server/lib/ai-token').aiToken())")
+> export AIDEV_AI_BASE=$(node -e "console.log('http://localhost:'+(require('./data/config.json').PORT||3939))")
 > ```
 >
-> 沒帶或帶錯會回 403 並在訊息裡說明是通行碼問題——不是資料庫或連線壞掉。
+> 沒帶通行碼或帶錯會回 403 並在訊息裡說明是通行碼問題——不是資料庫或連線壞掉。
+> **埠號一律照上面推導，不要寫死**：3939 只是原始碼預設值，本機實際跑的是 `data/config.json` 的 `PORT`。
+> 兩者不符時 curl 是 connection refused（`HTTP_CODE:000`），server 側任何說明訊息都送不出來。
 
 ### 第二步：列出該專案連線
 
 ```bash
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/db/connections?project=<專案名>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/db/connections?project=<專案名>"
 ```
 
 回傳範例：
@@ -41,12 +44,12 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/db/connect
 
 - **回傳 1 筆**：直接使用其 `id`；記下 `db_engine` 決定方言。
 - **回傳多筆**：列給使用者選擇。
-- **回傳 0 筆**：提示使用者到該專案「資料庫查詢」分頁新增連線（`http://localhost:3939/projects/<id>/db`）。
+- **回傳 0 筆**：提示使用者到該專案「資料庫查詢」分頁新增連線（`$AIDEV_AI_BASE/projects/<id>/db`）。
 
 ### 第三步：執行 SELECT 查詢
 
 ```bash
-curl -X POST http://localhost:3939/ai/db/query \
+curl -X POST $AIDEV_AI_BASE/ai/db/query \
   -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"connection_id": 1, "sql": "SELECT id, login FROM res_users LIMIT 5"}'

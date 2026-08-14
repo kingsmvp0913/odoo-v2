@@ -17,8 +17,8 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
   比照上方 `[wiki]` 類來源處理：不得當已知事實直接寫進本次規格，也不得把它的欄位或權限寫法搬進來；
   若其中某條會左右本次的實作決策，改寫成 clarification_channel.questions 向使用者確認。
 ```bash
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/similar?project={{project_slug}}&q=<需求描述>"
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/spec?project={{project_slug}}&task=<id>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/tasks/similar?project={{project_slug}}&q=<需求描述>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/tasks/spec?project={{project_slug}}&task=<id>"
 ```
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
@@ -36,7 +36,7 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/spec
 【Figma／FigJam 設計稿：需求或附件裡出現 figma.com 連結時】
 設計稿的數值是量出來的，不是目測的——**有 Figma 連結就以它為準，截圖只用來對照**。
 ```bash
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/figma?url=<把整條 figma 連結做 URL 編碼>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/figma?url=<把整條 figma 連結做 URL 編碼>"
 ```
 - 回的是扁平節點清單，每筆有 `type`／`text`／`x`／`y`／`w`／`h`，以及有才給的 `fill`(#RRGGBB)／`font`("Inter 40px 500")／`radius`／`name`。連結若帶 `node-id` 就只回該節點，不帶則整份。
 - **版面靠座標自己判讀**：端點刻意不分群（同一畫面的元素在 Figma 裡未必同屬一個 group，猜錯會系統性誤導規格）。用 `x`／`y`／`w`／`h` 判斷誰在誰裡面、誰跟誰對齊、間距多少，再寫成規格。
