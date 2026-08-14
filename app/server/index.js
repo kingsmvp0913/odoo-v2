@@ -11,6 +11,7 @@ const { registerRoutes: registerPipelineRoutes } = require('./pipeline-routes');
 const { registerRoutes: registerProjectRoutes } = require('./project-routes');
 const { registerRoutes: registerWikiRoutes } = require('./wiki-routes');
 const { registerRoutes: registerAiTaskRoutes } = require('./ai-task-routes');
+const { registerRoutes: registerFigmaRoutes } = require('./figma-routes');
 const { registerRoutes: registerChatRoutes } = require('./chat-routes');
 const { registerRoutes: registerEnvRoutes } = require('./env-routes');
 const { registerRoutes: registerAdminRoutes } = require('./admin-routes');
@@ -62,6 +63,7 @@ function createApp() {
   registerProjectRoutes(app);
   registerWikiRoutes(app);
   registerAiTaskRoutes(app);
+  registerFigmaRoutes(app);
   registerChatRoutes(app);
   registerEnvRoutes(app);
   registerAdminRoutes(app);
@@ -228,6 +230,8 @@ if (require.main === module) {
     await require('./lib/claude-auth').loadClaudeToken();
     // context7 API key 同理：組 MCP 設定檔時同步取用（未設定則走匿名額度）
     await require('./lib/context7-auth').loadContext7Key();
+    // Figma PAT 同理：/ai/figma 同步取用（未設定則該端點回 503，不退化成空結果）
+    await require('./lib/figma-auth').loadFigmaKey();
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
     require('./notify-webhook').registerWebhookChannel();
     // 綁埠失敗必須讓行程結束，且 cron 只在綁到埠之後才起。

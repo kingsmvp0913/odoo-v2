@@ -9,6 +9,7 @@ const { encrypt } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
 const { resetContext7KeyCache } = require('./lib/context7-auth');
+const { resetFigmaKeyCache } = require('./lib/figma-auth');
 const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
@@ -133,6 +134,55 @@ function registerRoutes(app) {
     try {
       await query('UPDATE teams_settings SET context7_api_key_enc = NULL, updated_at = NOW() WHERE id = 1');
       await resetContext7KeyCache(); // 退回匿名額度
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // --- Figma API token（全平台一把）---
+  // 未設定時 /ai/figma 直接 503：Figma 沒有匿名額度，回空結果會讓 agent 以為設計稿是空的
+  //（見 lib/figma-auth 的說明）。同樣走專屬端點而非 teams-settings 的全量 upsert。
+
+  app.get('/api/admin/figma-key', auth, async (req, res) => {
+    try {
+      const { rows } = await query('SELECT figma_api_key_enc FROM teams_settings WHERE id = 1');
+      // 只回布林：token 不論明文密文都不得回流前端
+      res.json({ configured: !!rows[0]?.figma_api_key_enc });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/figma-key', auth, async (req, res) => {
+    const key = String(req.body?.key || '').trim();
+    if (!key) return res.status(400).json({ error: '請貼上 Figma personal access token' });
+    if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 token' });
+    // 先驗證再存（比照 context7）：/v1/me 是最便宜的認證探針，不需要任何檔案權限。
+    // 注意它驗不到 scope——token 少勾 file_content:read 仍會過，真正的失敗要等第一次讀檔才看得到。
+    let warning = null;
+    try {
+      const r = await fetch('https://api.figma.com/v1/me', {
+        headers: { 'X-Figma-Token': key },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (r.status === 401 || r.status === 403) return res.status(400).json({ error: 'token 無效或已被撤銷，未儲存' });
+      if (!r.ok) warning = `已儲存，但驗證未能完成：Figma 回 ${r.status}`;
+    } catch (err) {
+      // 網路不通／逾時仍然存：理由同 context7——換 token 的時機往往正是服務不穩的時候
+      warning = `已儲存，但驗證未能完成：${err.message}`;
+    }
+    try {
+      await query(
+        `INSERT INTO teams_settings (id, figma_api_key_enc, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET figma_api_key_enc = $1, updated_at = NOW()`,
+        [encrypt(key)]
+      );
+      await resetFigmaKeyCache(); // 下一次 /ai/figma 即生效，不必重啟 server
+      res.json(warning ? { ok: true, warning } : { ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/admin/figma-key', auth, async (req, res) => {
+    try {
+      await query('UPDATE teams_settings SET figma_api_key_enc = NULL, updated_at = NOW() WHERE id = 1');
+      await resetFigmaKeyCache(); // /ai/figma 回到 503
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
