@@ -5,6 +5,8 @@ const HC_SEV = {
   low:    { label: '輕微', color: 'var(--warning, #d97706)' },
   medium: { label: '中等', color: 'var(--warning, #d97706)' },
   high:   { label: '嚴重', color: 'var(--error)' },
+  // 零樣本：後端依 token.calls 覆寫，避免「沒被呼叫過」在畫面上長得跟「檢查過沒問題」一樣
+  'n/a':  { label: '未取樣', color: '#64748b' },
   error:  { label: '健檢失敗', color: '#6b7280' }
 };
 

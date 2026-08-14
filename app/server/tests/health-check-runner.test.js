@@ -1,5 +1,9 @@
 // 意圖：健檢 runner 遍歷有 stage 的 agent（排除 workflow_health 自己）落 findings，best-effort，run 收尾（工作流程健檢子專案 2）。
 const { newDb } = require('pg-mem');
+// 檔內多處把查詢結果解構成 `fs`，故 node 的 fs 另取名避免遮蔽
+const nodeFs = require('fs');
+const os = require('os');
+const path = require('path');
 const mockRunClaude = jest.fn();
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
@@ -21,6 +25,8 @@ jest.mock('../pipeline/agent-loader', () => {
 jest.mock('../pipeline/health-data', () => ({
   buildAgentSummary: jest.fn().mockResolvedValue({ token: {}, tasks: {}, rejections: null })
 }));
+
+const { buildAgentSummary } = require('../pipeline/health-data');   // 零樣本測試要逐次覆寫
 
 let dbModule2, runHealthCheck, hcUserId;
 beforeAll(async () => {
@@ -144,6 +150,118 @@ test('舊格式（suggested_prompt 在 JSON 內）仍接受', async () => {
     'SELECT severity, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
   expect(fs.every(f => f.severity === 'low')).toBe(true);
   expect(fs[0].suggested_prompt).toBe('新的提示詞 {{x}}');
+});
+
+// --- 長文字全部移出 JSON（run#2 的真實故障）---
+// 意圖：run#1 只把 suggested_prompt 移出 JSON，治了一半——run#2 的 23 份仍有 7 份首解析失敗、
+// 4 份連 haiku 補救都失敗整份報廢，而死的全是輸出量大的那幾份。根因是 diagnosis／rationale
+// 這兩段數百字的中文還留在 JSON 字串裡：只要有一個沒逸出的引號或換行就切出破碎 JSON。
+// 現在 JSON 只剩 severity 與 has_prompt 兩個短值。
+test('診斷／理由走獨立標籤區塊，JSON 只剩短欄位 → 正確落 finding', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>\nrepeat_calls.avg 2.4，反覆重跑\n</diagnosis>\n' +
+          '<rationale>\n加強驗收條件複述\n</rationale>\n' +
+          '<result>{"severity":"medium","has_prompt":false}</result>',
+    usage: null, durationMs: 5
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: fs } = await dbModule2.query(
+    'SELECT severity, diagnosis, rationale, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(fs).toHaveLength(2);
+  expect(fs.every(f => f.severity === 'medium')).toBe(true);
+  expect(fs[0].diagnosis).toBe('repeat_calls.avg 2.4，反覆重跑');
+  expect(fs[0].rationale).toBe('加強驗收條件複述');
+  expect(fs[0].suggested_prompt).toBeNull();
+});
+
+// 這是整條鏈真正要擋的東西：診斷正文本來就會逐字引用被分析 agent 的契約與訊息，內含 </result>
+// 與成對引號。舊格式（塞進 JSON 字串）遇到這種內容必定報廢；走標籤區塊則原樣存活。
+test('診斷正文含 </result> 與未逸出引號 → 仍完整解析，不再報廢', async () => {
+  const diag = '該 agent 的契約要求輸出 <result>{"a":1}</result>，但它回了「表現正常」這種散文。';
+  mockRunClaude.mockResolvedValue({
+    text: `<diagnosis>\n${diag}\n</diagnosis>\n<result>{"severity":"high","has_prompt":false}</result>`,
+    usage: null, durationMs: 5
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: fs } = await dbModule2.query(
+    'SELECT severity, diagnosis FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(fs.every(f => f.severity === 'high')).toBe(true);   // 不是 error
+  expect(fs[0].diagnosis).toBe(diag);                        // 一字不缺
+});
+
+// severity 對不上的代價是整份診斷被丟掉，不值得為大小寫或尾隨空白付這個價（rules/pipeline.md §72）。
+test('severity 帶大寫與空白 → 正規化後接受', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>d</diagnosis><result>{"severity":" OK ","has_prompt":false}</result>',
+    usage: null, durationMs: 5
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: fs } = await dbModule2.query('SELECT severity FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(fs.every(f => f.severity === 'ok')).toBe(true);
+});
+
+// 止血：解析失敗時 opus 早就把診斷寫出來了（run#2 失敗的四份各 5–7k output tokens），
+// 舊行為整份丟掉且不留存，於是「為什麼解析不過」永遠無從查起。
+test('解析失敗 → 模型原始輸出落檔，且 diagnosis 指得出檔名', async () => {
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'hc-'));
+  const prev = process.env.HEALTH_LOG_DIR;
+  process.env.HEALTH_LOG_DIR = dir;
+  try {
+    mockRunClaude.mockResolvedValue({ text: '這是一段解析不出來的散文', usage: null, durationMs: 5 });
+    const runId = await newRun();
+    await runHealthCheck(runId, { windowDays: 30 });
+
+    const { rows: fs } = await dbModule2.query(
+      'SELECT severity, diagnosis FROM health_check_findings WHERE run_id=$1 ORDER BY agent_name', [runId]);
+    expect(fs.every(f => f.severity === 'error')).toBe(true);
+    expect(fs[0].diagnosis).toContain(`health-run${runId}-coding-project.log`);
+    expect(nodeFs.readFileSync(path.join(dir, `health-run${runId}-coding-project.log`), 'utf8'))
+      .toBe('這是一段解析不出來的散文');
+  } finally {
+    if (prev === undefined) delete process.env.HEALTH_LOG_DIR; else process.env.HEALTH_LOG_DIR = prev;
+  }
+});
+
+// 零樣本不記 ok：實測 run#2 的 14 個 ok 裡，deploy-fix 與 wiki-drift-classifier 都是 0 次呼叫。
+// 存成 ok 到前端就是一顆綠燈，整頁綠得虛胖反而蓋掉真正該看的那幾則。
+test('該關近期零呼叫 → severity 覆寫為未取樣，不採信模型判的 ok', async () => {
+  buildAgentSummary
+    .mockResolvedValueOnce({ token: { calls: 0 }, tasks: {}, rejections: null })
+    .mockResolvedValueOnce({ token: { calls: 0 }, tasks: {}, rejections: null });
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>零執行樣本，無訊號可判</diagnosis><result>{"severity":"ok","has_prompt":false}</result>',
+    usage: null, durationMs: 5
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: fs } = await dbModule2.query(
+    "SELECT severity FROM health_check_findings WHERE run_id=$1 AND agent_name <> '__system__'", [runId]);
+  expect(fs).toHaveLength(2);
+  expect(fs.every(f => f.severity === 'n/a')).toBe(true);   // 不是 ok
+});
+
+// 有樣本時不得誤判成未取樣，否則上一條的覆寫會把整頁洗成未取樣、同樣失去鑑別力。
+test('該關有呼叫紀錄 → 維持模型判定的 severity', async () => {
+  buildAgentSummary
+    .mockResolvedValueOnce({ token: { calls: 12 }, tasks: {}, rejections: null })
+    .mockResolvedValueOnce({ token: { calls: 12 }, tasks: {}, rejections: null });
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>各項正常</diagnosis><result>{"severity":"ok","has_prompt":false}</result>',
+    usage: null, durationMs: 5
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: fs } = await dbModule2.query(
+    "SELECT severity FROM health_check_findings WHERE run_id=$1 AND agent_name <> '__system__'", [runId]);
+  expect(fs.every(f => f.severity === 'ok')).toBe(true);
 });
 
 // --- 跨關卡彙整 ---

@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { query } = require('../db');
 const { listAgents, loadAgent } = require('./agent-loader');
 const { runClaude } = require('./claude-runner');
@@ -6,6 +8,12 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { buildAgentSummary } = require('./health-data');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
+
+// 近期完全沒被呼叫的關卡不可記成 ok：健檢 agent 自己在診斷正文裡都寫明「零執行樣本，這不是
+// 健康證明」，但存成 ok 到前端就是一顆綠燈。實測 run#2 的 14 個 ok 裡，deploy-fix 與
+// wiki-drift-classifier 都是 0 次呼叫——整頁綠得虛胖，反而蓋掉真正該看的那幾則。
+// 刻意不放進 SEVERITIES：那是「模型可以回傳什麼」，這是我們依樣本數覆寫上去的。
+const SEV_NO_SAMPLE = 'n/a';
 
 // 跨關卡彙整：per-agent 健檢天生看不到「不屬於任何單一 agent」的問題。實測 run#1，同一個
 // blocker（asset bundle 編不出來）出現在七個 agent 的摘要裡，每一則都正確判定「這屬環境層、
@@ -95,13 +103,32 @@ async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {})
   }
 }
 
+// 解析失敗時把模型原始輸出落檔。opus 早就把診斷寫出來了（run#2 失敗的四份各 5–7k output
+// tokens、跑了 84–125 秒），只因收尾格式不合就整份丟掉，而且沒有任何地方留存——下次同樣的
+// 失敗依舊無從查起。落檔後至少「為什麼解析不過」變成可回答的問題。
+// 預設與 deploy／E2E 共用 data/logs，故一併吃 cron 的過期清理。
+function saveRawOutput(runId, agentName, raw) {
+  if (!raw) return '';                                      // 連呼叫都沒成功，沒有東西可存
+  const file = `health-run${runId}-${agentName}.log`;
+  try {
+    const dir = process.env.HEALTH_LOG_DIR || path.join(__dirname, '..', '..', '..', 'data', 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, file), raw);
+    return `（模型有回應但結果解析不過；原始輸出已存 ${file}）`;
+  } catch (err) {
+    console.error('[HEALTH-CHECK] raw dump:', err.message);
+    return '';
+  }
+}
+
 async function checkOne(runId, agent, ha, windowDays, startedBy) {
   let finding = null;
   // 摘要聚合失敗＝根本沒呼叫 claude，不可落失敗帳（否則 calls/failed_calls 統計灌水）
   let prompt = null;
+  let summary = null;
   try {
     const full = loadAgent(agent.name);                     // 取現行 prompt body
-    const summary = await buildAgentSummary(agent, { windowDays });
+    summary = await buildAgentSummary(agent, { windowDays });
     prompt = ha.render({
       agent_label: agent.label,
       agent_role: full.role || '',
@@ -111,31 +138,47 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
   } catch (err) {
     console.error('[HEALTH-CHECK] summary error:', err.message);
   }
+  let raw = null;
   if (prompt) try {
     const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health' });
+    raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
-    // 建議的新提示詞走獨立 <prompt> 區塊，**先剝掉再解析 <result>**：被分析的 agent prompt 本身
-    // 常含 <result> 契約範例，把它塞進 JSON 字串會讓 extractResult 的 lastIndexOf('</result>')
-    // 抓到 prompt body 裡的那一個，切出破碎 JSON。實測 run#1：21 個 agent 有 5 個因此全滅，
-    // 而且全是「有話要說」（要附新提示詞）的那幾個——判正常的因為不附而都活了下來，
-    // 形成「結果永遠偏向一切正常」的存活者偏差。
-    // 相容舊格式：agent 若仍把 suggested_prompt 放 JSON 裡（能解析成功的情況）照樣接受。
-    const { inner: promptBlock, cleaned } = extractTaggedBlock(text, 'prompt');
+    // 三個長文字（建議提示詞／診斷正文／理由）全部走獨立標籤區塊，剝乾淨後 <result> 的 JSON
+    // 只剩 severity 與 has_prompt 兩個短值，幾乎壞不掉。run#1 只把 suggested_prompt 移出 JSON，
+    // 治了一半：run#2 的 23 份仍有 7 份首解析失敗（haiku 補救救回 3、另 4 份連補救都失敗整份報廢），
+    // 死的全是輸出量大的那幾份——判正常的因為輸出短反而都活著，存活者偏差原封不動地留著。
+    // 剝除順序 prompt 必須在最前：被分析的 agent prompt body 可能含任何標籤，先整塊拿掉，
+    // 後面三個 lastIndexOf 才不會抓到它裡面的假邊界。
+    // 相容舊格式：agent 若仍把 diagnosis／rationale／suggested_prompt 放 JSON 裡（能解析成功的
+    // 情況）照樣接受——prompt 改版與 server 部署之間的空窗期不該整批落 error。
+    const { inner: promptBlock, cleaned: afterPrompt } = extractTaggedBlock(text, 'prompt');
+    const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(afterPrompt, 'diagnosis');
+    const { inner: ratBlock, cleaned } = extractTaggedBlock(afterDiag, 'rationale');
     const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
-    if (parsed && typeof parsed.diagnosis === 'string' && parsed.diagnosis.trim() && SEVERITIES.has(parsed.severity)) {
-      const sp = (promptBlock && promptBlock.trim()) || parsed.suggested_prompt || null;
+    // 列舉值先 trim+lowercase 再比對：模型輸出的大小寫與尾隨空白不穩定，而 severity 對不上
+    // 的代價是整份診斷被丟掉（見 rules/pipeline.md §72）。
+    const severity = String((parsed && parsed.severity) || '').trim().toLowerCase();
+    const diagnosis = String((diagBlock || (parsed && parsed.diagnosis)) || '').trim();
+    if (diagnosis && SEVERITIES.has(severity)) {
       finding = {
-        severity: parsed.severity,
-        diagnosis: parsed.diagnosis,
-        suggested_prompt: sp,
-        rationale: parsed.rationale || null
+        severity,
+        diagnosis,
+        suggested_prompt: (promptBlock && promptBlock.trim()) || (parsed && parsed.suggested_prompt) || null,
+        rationale: (ratBlock && ratBlock.trim()) || (parsed && parsed.rationale) || null
       };
     }
   } catch (err) {
     await logFailedUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', err);
   }
   if (!finding) {
-    finding = { severity: 'error', diagnosis: '健檢失敗：無法取得有效診斷', suggested_prompt: null, rationale: null };
+    finding = {
+      severity: 'error',
+      diagnosis: '健檢失敗：無法取得有效診斷' + saveRawOutput(runId, agent.name, raw),
+      suggested_prompt: null,
+      rationale: null
+    };
+  } else if (summary && summary.token && summary.token.calls === 0) {
+    finding.severity = SEV_NO_SAMPLE;                       // 零樣本不記 ok（見 SEV_NO_SAMPLE）
   }
   try {
     await query(
