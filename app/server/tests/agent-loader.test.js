@@ -316,10 +316,14 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
   });
 
   // 這一條是本次 figma 端點的回歸守衛：能力與 prompt 是同一張工單的兩半，只做一半＝沒有任何一關會用到。
-  // cs 是後來補的，且是最貴的一個漏網：它是任務進 pipeline 的第一道閘門，讀不到設計稿就把任務打成
-  // 「資料不足」退回要截圖（task 136 實際發生），下游那三關再會讀也永遠等不到任務。
-  test('cs 與分析／規格三關都教得到 /ai/figma（少一關就會用猜的覆蓋量出來的數值）', () => {
-    for (const name of ['analysis-project', 'spec-review', 'respec-patch', 'pipeline/cs-capability.md']) {
+  // 清單補過兩次，兩次漏的都是「會跟使用者對話」的關卡，症狀相同——讀不到就把球丟回給使用者要截圖：
+  //   cs：任務進 pipeline 的第一道閘門，讀不到就打成「資料不足」退回（task 136 實際發生），
+  //       下游那三關再會讀也永遠等不到任務。
+  //   clarify-chat：使用者追問「設計稿就在連結裡／現在讀得到了嗎」時，手上沒有這支 curl，
+  //       只能複述分析關寫在規格裡的舊結論「讀不到設計稿」（task 134 實際發生）。
+  // 所以新增會對話的關卡時，這份清單要一起想。
+  test('cs／clarify 與分析／規格三關都教得到 /ai/figma（少一關就會用猜的覆蓋量出來的數值）', () => {
+    for (const name of ['analysis-project', 'spec-review', 'respec-patch', 'clarify-chat', 'pipeline/cs-capability.md']) {
       const { body } = bodies.find(b => b.name === name);
       expect(`${name}:${/\/ai\/figma/.test(body)}`).toBe(`${name}:true`);
     }
