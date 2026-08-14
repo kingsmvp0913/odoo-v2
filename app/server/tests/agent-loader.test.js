@@ -315,9 +315,11 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
     expect(users.length).toBeGreaterThanOrEqual(4); // analysis／spec-review／respec-patch／cs-capability
   });
 
-  // 這一條是本次 figma 端點的回歸守衛：能力與 prompt 是同一張工單的兩半，只做一半＝沒有任何一關會用到
-  test('分析／規格三關都教得到 /ai/figma（少一關就會用猜的覆蓋量出來的數值）', () => {
-    for (const name of ['analysis-project', 'spec-review', 'respec-patch']) {
+  // 這一條是本次 figma 端點的回歸守衛：能力與 prompt 是同一張工單的兩半，只做一半＝沒有任何一關會用到。
+  // cs 是後來補的，且是最貴的一個漏網：它是任務進 pipeline 的第一道閘門，讀不到設計稿就把任務打成
+  // 「資料不足」退回要截圖（task 136 實際發生），下游那三關再會讀也永遠等不到任務。
+  test('cs 與分析／規格三關都教得到 /ai/figma（少一關就會用猜的覆蓋量出來的數值）', () => {
+    for (const name of ['analysis-project', 'spec-review', 'respec-patch', 'pipeline/cs-capability.md']) {
       const { body } = bodies.find(b => b.name === name);
       expect(`${name}:${/\/ai\/figma/.test(body)}`).toBe(`${name}:true`);
     }

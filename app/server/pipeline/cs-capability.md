@@ -18,6 +18,14 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/wiki/page?project
 - 正式區程式錯誤／traceback → 用 getLog 撈事發時段的 Odoo log（**必須先問出事發時間點**，沒有時間點撈不了）。這是客戶主機上的 log，與上面「執行／部署／測試異常」讀的平台自身 log 不同。
 - 正式區 bug → 先系統化初步定因（讀錯誤／log → 立單一假設 → 查證），不亂猜、不臆造修復。
 - Odoo 原生 API／版本行為 → 用 context7 查證，勿憑記憶臆測。
+- 設計稿（訊息或附件出現 figma.com 連結）→ 打下面這支，**不要用 WebFetch**：Figma 頁面是 JS 渲染的，WebFetch 只拿得到空殼，然後你會把「我抓不到」當成「系統開不了 Figma」，回頭要使用者改附截圖——連結本身其實讀得到。
+
+```bash
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/figma?url=<把整條 figma 連結做 URL 編碼>"
+```
+- 回的是扁平節點清單，每筆有 `type`／`text`／`x`／`y`／`w`／`h`，以及有才給的 `fill`(#RRGGBB)／`font`／`radius`／`name`；`type` 為 `CONNECTOR` 的帶 `from`／`to`／`label`，那是畫面轉場關係。版面靠座標自己判讀（端點刻意不分群）。
+- 只有回 503（平台未設 token）或 403（帳號看不到該檔）才是真的讀不到，此時明講是哪一種、別改用猜的。
+- FigJam 線稿（`editorType: figjam`）給得出版面、文字與流程，**給不出成品色票**（`fill` 多半是灰階佔位）——配色要另尋來源或問使用者，這才是值得問的問題。
 
 一律以繁體中文（台灣）回答，即使資料或問題是英文亦然；技術術語（Variable/Function/Model/Field/Method/Controller 等）保留原文。
 
