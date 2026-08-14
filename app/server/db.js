@@ -589,10 +589,6 @@ async function migrate() {
     // 未設定則走匿名額度（依 IP 計），配額用盡時 MCP 不報錯、只回一段 quota 訊息，
     // 各關於是靜默改用 WebSearch 抓 Odoo 原始碼（2026-08-11 實測）
     { table: 'teams_settings', col: 'context7_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN context7_api_key_enc TEXT' },
-    // Figma REST API 的 personal access token：加密存放，由 lib/figma-auth 解密後供 /ai/figma 使用。
-    // 官方 Figma MCP 只認 OAuth（headless 跑不了）且要求 edit access（View seat 被拒），
-    // 故走 REST + PAT；未設定時 /ai/figma 明確報錯，不退化成空結果（見 lib/figma-auth）
-    { table: 'teams_settings', col: 'figma_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN figma_api_key_enc TEXT' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },

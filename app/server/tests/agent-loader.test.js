@@ -275,7 +275,7 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
     const prevJwt = process.env.JWT_SECRET;
     process.env.JWT_SECRET = prevJwt || 'test-agent-loader-ai-paths';
     try {
-      for (const mod of ['../wiki-routes', '../ai-task-routes', '../db-query-routes', '../figma-routes']) {
+      for (const mod of ['../wiki-routes', '../ai-task-routes', '../db-query-routes']) {
         require(mod).registerRoutes(app);
       }
     } finally {
@@ -287,8 +287,8 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
     for (const { body } of bodies) {
       for (const m of body.matchAll(/\$AIDEV_AI_BASE(\/ai\/[a-z0-9/_-]+)/gi)) taught.add(m[1]);
     }
-    expect(taught.size).toBeGreaterThanOrEqual(6); // 掃空／只掃到一半都不是「全過」而是沒測到
-    expect([...taught]).toEqual(expect.arrayContaining(['/ai/figma', '/ai/wiki/pages'])); // agents/ 與共用片段各要有代表
+    expect(taught.size).toBeGreaterThanOrEqual(5); // 掃空／只掃到一半都不是「全過」而是沒測到
+    expect([...taught]).toEqual(expect.arrayContaining(['/ai/tasks/spec', '/ai/wiki/pages'])); // agents/ 與共用片段各要有代表
     expect([...taught].filter(p => !registered.includes(p))).toEqual([]);
   });
 
@@ -312,21 +312,16 @@ describe('/ai/* 的 curl 指引與實作綁在一起', () => {
     const keys = Object.keys(aiBaseEnv());
     expect(keys).toEqual(['AIDEV_AI_BASE']);
     const users = bodies.filter(b => b.body.includes(`$${keys[0]}/ai/`));
-    expect(users.length).toBeGreaterThanOrEqual(4); // analysis／spec-review／respec-patch／cs-capability
+    expect(users.length).toBeGreaterThanOrEqual(2); // analysis（相似任務／既有規格）／cs-capability（wiki 三支）
   });
 
-  // 這一條是本次 figma 端點的回歸守衛：能力與 prompt 是同一張工單的兩半，只做一半＝沒有任何一關會用到。
-  // 清單補過兩次，兩次漏的都是「會跟使用者對話」的關卡，症狀相同——讀不到就把球丟回給使用者要截圖：
-  //   cs：任務進 pipeline 的第一道閘門，讀不到就打成「資料不足」退回（task 136 實際發生），
-  //       下游那三關再會讀也永遠等不到任務。
-  //   clarify-chat：使用者追問「設計稿就在連結裡／現在讀得到了嗎」時，手上沒有這支 curl，
-  //       只能複述分析關寫在規格裡的舊結論「讀不到設計稿」（task 134 實際發生）。
-  // 所以新增會對話的關卡時，這份清單要一起想。
-  test('cs／clarify 與分析／規格三關都教得到 /ai/figma（少一關就會用猜的覆蓋量出來的數值）', () => {
-    for (const name of ['analysis-project', 'spec-review', 'respec-patch', 'clarify-chat', 'pipeline/cs-capability.md']) {
-      const { body } = bodies.find(b => b.name === name);
-      expect(`${name}:${/\/ai\/figma/.test(body)}`).toBe(`${name}:true`);
-    }
+  // Figma 能力已於 2026-08-14 整組移除。原因不是實作壞掉，是額度：Figma 的 Tier 1（讀檔案／讀節點）
+  // 對 View／Collab seat 是 **6 次／月**，而一張任務光是 cs→分析→respec→分析 就會抓上八次。
+  // task 136 實際打了約 30 次，把當月配額一次燒光（Retry-After 指到 4.4 天後），分析關空轉到死。
+  // 端點、token 管理、後台設定都拔了，所以 prompt 只能教「讀不到，請使用者用文字或截圖描述」。
+  // 誰把 curl 加回來這條就紅——連同上面「教的 /ai/ 路徑都真的有註冊」，兩道一起擋。
+  test('沒有任何 prompt 還在教 /ai/figma（端點已移除，教了就是叫 agent 去打 404）', () => {
+    expect(bodies.filter(b => /\/ai\/figma/.test(b.body)).map(b => b.name)).toEqual([]);
   });
 });
 

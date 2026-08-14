@@ -17,10 +17,6 @@ window.AdminView = Vue.defineComponent({
       context7KeyInput: '',
       savingContext7Key: false,
       clearingContext7Key: false,
-      figmaKey: { configured: false },
-      figmaKeyInput: '',
-      savingFigmaKey: false,
-      clearingFigmaKey: false,
       loading: true,
       savingConn: false,
       savingTeams: false,
@@ -98,7 +94,6 @@ window.AdminView = Vue.defineComponent({
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
         try { this.claudeToken = await Api.get('admin/claude-token'); } catch (_) { /* 顯示用 */ }
         try { this.context7Key = await Api.get('admin/context7-key'); } catch (_) { /* 顯示用 */ }
-        try { this.figmaKey = await Api.get('admin/figma-key'); } catch (_) { /* 顯示用 */ }
         await this.loadEmbedding();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
@@ -156,33 +151,6 @@ window.AdminView = Vue.defineComponent({
         this.context7Key = await Api.get('admin/context7-key');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.clearingContext7Key = false; }
-    },
-    async saveFigmaKey() {
-      const key = (this.figmaKeyInput || '').trim();
-      if (!key) { showToast('請貼上 personal access token', 'error'); return; }
-      this.savingFigmaKey = true;
-      try {
-        // 後端會先打一次 Figma /v1/me 驗證才存（驗得到 token 有效，驗不到 scope 夠不夠）
-        const r = await Api.post('admin/figma-key', { key });
-        this.figmaKeyInput = '';
-        showToast(r.warning || 'Token 已儲存並驗證通過', r.warning ? 'error' : 'success');
-        this.figmaKey = await Api.get('admin/figma-key');
-      } catch (e) { showToast(e.message, 'error'); }
-      finally { this.savingFigmaKey = false; }
-    },
-    async clearFigmaKey() {
-      if (!await confirmDialog({
-        title: '清除 Figma token',
-        message: '清除後 AI 將完全讀不到 Figma 設計稿（Figma 沒有匿名額度），查詢會直接回錯誤。確定要清除嗎？',
-        danger: true, confirmText: '清除'
-      })) return;
-      this.clearingFigmaKey = true;
-      try {
-        await Api.delete('admin/figma-key');
-        showToast('Token 已清除', 'success');
-        this.figmaKey = await Api.get('admin/figma-key');
-      } catch (e) { showToast(e.message, 'error'); }
-      finally { this.clearingFigmaKey = false; }
     },
     async saveConn() {
       this.savingConn = true;
@@ -489,34 +457,6 @@ window.AdminView = Vue.defineComponent({
             </button>
             <button v-if="context7Key.configured" class="btn btn-ghost btn-sm" @click="clearContext7Key" :disabled="clearingContext7Key">
               {{ clearingContext7Key ? '清除中...' : '清除 key' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Figma API token -->
-        <div class="setting-block">
-          <div class="setting-block-head">
-            <div class="setting-block-title">Figma API token</div>
-            <div class="setting-block-desc">讓 AI 讀得到 Figma 設計稿與 FigJam 線稿（畫面元素、座標尺寸、色碼、字型、流程連線），供分析關把版面寫成具體規格。走 REST API 而非官方 Figma MCP，因為 MCP 只認 OAuth（headless 的 pipeline 授權不了）且讀取需要 <strong>edit access</strong>，View seat 一律被拒；REST 只要看得到檔案就讀得到。在 Figma 的 Settings → Security → Personal access tokens 產生，scope 勾 <code>file_content:read</code>。<strong>未設定則完全讀不到</strong>（Figma 沒有匿名額度）。貼上後即生效，不必重啟伺服器。</div>
-          </div>
-          <div class="setting-block-body">
-            <div style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">
-              <span v-if="figmaKey.configured" style="color:var(--success)">✓ 已設定 token</span>
-              <span v-else style="color:var(--text-muted)">尚未設定，AI 無法讀取 Figma 設計稿</span>
-            </div>
-            <div class="conn-fields">
-              <div class="field-item">
-                <label class="field-label">貼上 personal access token</label>
-                <input v-model="figmaKeyInput" type="password" class="field-input" placeholder="figd_ 開頭的 token" autocomplete="off" />
-              </div>
-            </div>
-          </div>
-          <div class="setting-block-footer">
-            <button class="btn btn-primary btn-sm" @click="saveFigmaKey" :disabled="savingFigmaKey">
-              {{ savingFigmaKey ? '驗證中...' : '儲存並驗證' }}
-            </button>
-            <button v-if="figmaKey.configured" class="btn btn-ghost btn-sm" @click="clearFigmaKey" :disabled="clearingFigmaKey">
-              {{ clearingFigmaKey ? '清除中...' : '清除 token' }}
             </button>
           </div>
         </div>
