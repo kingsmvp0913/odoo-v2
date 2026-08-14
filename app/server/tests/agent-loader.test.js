@@ -238,6 +238,69 @@ describe('CS_CAPABILITY_AGENTS 注入技術客服能力片段', () => {
   });
 });
 
+// 意圖：agent 打 /ai/* 的 curl 指引寫死在 prompt 裡，通行碼 header 名稱卻是 lib/ai-token 的常數——
+// 兩邊分開改就會脫鉤，而症狀是 403「通行碼不正確或未帶」，看起來像認證壞了，完全不指向 prompt。
+// 這組把「prompt 教的寫法」釘死在實作上：新增任何 /ai/* 指引都自動受檢，不必記得回來補測試。
+describe('/ai/* 的 curl 指引與實作綁在一起', () => {
+  const L = require('../pipeline/agent-loader');
+  const { AI_TOKEN_HEADER } = require('../lib/ai-token');
+
+  // 每個 agent 都給齊 placeholder 太脆弱；直接讀檔比對，反正 curl 指引不含動態值以外的變數。
+  // 共用片段（pipeline/*.md）也要掃——wiki 的 curl 指引就住在 cs-capability.md，只掃 agents/ 會漏掉。
+  const fs = require('fs'), path = require('path');
+  const agentsDir = path.join(__dirname, '..', '..', '..', '.claude', 'agents');
+  const fragDir = path.join(__dirname, '..', 'pipeline');
+  const bodies = [
+    ...L.listNames().map(n => ({ name: n, body: fs.readFileSync(path.join(agentsDir, `${n}.md`), 'utf8') })),
+    ...fs.readdirSync(fragDir).filter(f => f.endsWith('.md'))
+      .map(f => ({ name: `pipeline/${f}`, body: fs.readFileSync(path.join(fragDir, f), 'utf8') })),
+  ];
+
+  test('凡教 agent 打 /ai/*，header 一律用現行的通行碼名稱（大小寫不拘）', () => {
+    const offenders = [];
+    for (const { name, body } of bodies) {
+      for (const line of body.split('\n')) {
+        if (!/localhost:3939\/ai\//.test(line)) continue;
+        if (!new RegExp(AI_TOKEN_HEADER, 'i').test(line)) offenders.push(`${name}: ${line.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // 教了一支不存在的端點＝agent 白打一次拿 404，然後照自己的猜測往下寫，全程無訊號
+  test('prompt 教的 /ai/ 路徑都真的有註冊', () => {
+    const express = require('express');
+    const app = express();
+    // route 檔 require 進來會連帶拉 auth，載入時就要 JWT_SECRET（見 rules/pipeline 89）
+    const prevJwt = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = prevJwt || 'test-agent-loader-ai-paths';
+    try {
+      for (const mod of ['../wiki-routes', '../ai-task-routes', '../db-query-routes', '../figma-routes']) {
+        require(mod).registerRoutes(app);
+      }
+    } finally {
+      if (prevJwt === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = prevJwt;
+    }
+    const registered = app._router.stack
+      .filter(l => l.route).map(l => l.route.path).filter(p => p.startsWith('/ai/'));
+    const taught = new Set();
+    for (const { body } of bodies) {
+      for (const m of body.matchAll(/localhost:3939(\/ai\/[a-z0-9/_-]+)/gi)) taught.add(m[1]);
+    }
+    expect(taught.size).toBeGreaterThanOrEqual(6); // 掃空／只掃到一半都不是「全過」而是沒測到
+    expect([...taught]).toEqual(expect.arrayContaining(['/ai/figma', '/ai/wiki/pages'])); // agents/ 與共用片段各要有代表
+    expect([...taught].filter(p => !registered.includes(p))).toEqual([]);
+  });
+
+  // 這一條是本次 figma 端點的回歸守衛：能力與 prompt 是同一張工單的兩半，只做一半＝沒有任何一關會用到
+  test('分析／規格三關都教得到 /ai/figma（少一關就會用猜的覆蓋量出來的數值）', () => {
+    for (const name of ['analysis-project', 'spec-review', 'respec-patch']) {
+      const { body } = bodies.find(b => b.name === name);
+      expect(`${name}:${/\/ai\/figma/.test(body)}`).toBe(`${name}:true`);
+    }
+  });
+});
+
 // 意圖（token 效率）：QA 是唯讀審查者——只注入審查相關段落（§1 Odoo Constraints＋§2 Python Constraints＋Rule 12），
 // Hard Rules 的寫入規範／前端配色／log 路徑對它無作用卻每輪照付 token。
 // Python 規則（round()→台灣四捨五入）是財務正確性把關，拆成獨立 §2 後仍須進 QA。

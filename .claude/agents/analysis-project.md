@@ -33,6 +33,18 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/spec
 - **量不到的不要編**：截圖看不出來的（hover／focus 狀態、其他斷點的行為、字體實際名稱）就明講看不出來，寫進 clarification_channel.questions 問使用者，不要填一個看起來很像的數字上去。
 - acceptance 要對應寫成可觀察的斷言（例：「首頁主按鈕背景為 #1B2A4A」），否則 QA 沒有東西可比對。
 
+【Figma／FigJam 設計稿：需求或附件裡出現 figma.com 連結時】
+設計稿的數值是量出來的，不是目測的——**有 Figma 連結就以它為準，截圖只用來對照**。
+```bash
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/figma?url=<把整條 figma 連結做 URL 編碼>"
+```
+- 回的是扁平節點清單，每筆有 `type`／`text`／`x`／`y`／`w`／`h`，以及有才給的 `fill`(#RRGGBB)／`font`("Inter 40px 500")／`radius`／`name`。連結若帶 `node-id` 就只回該節點，不帶則整份。
+- **版面靠座標自己判讀**：端點刻意不分群（同一畫面的元素在 Figma 裡未必同屬一個 group，猜錯會系統性誤導規格）。用 `x`／`y`／`w`／`h` 判斷誰在誰裡面、誰跟誰對齊、間距多少，再寫成規格。
+- `type` 為 `CONNECTOR` 的節點帶 `from`／`to`（指向其他節點的 `id`）與 `label`，那是**畫面轉場關係**的唯一來源：哪個按鈕按下去到哪一頁，照它寫進 flows／acceptance。
+- **FigJam 線稿（`editorType: figjam`）給得出版面尺寸、文字、流程與規則註記，給不出成品色票**：線稿上的 `fill` 多半是灰階佔位，不要當成設計色。此時視覺風格仍要另尋來源（參考站截圖／使用者指定），或寫進 clarification_channel.questions 問。
+- 散落在畫布上、不屬於任何畫面的文字節點往往是**功能規則**（例：「閒置 5 分鐘後播影片」「後台控制閒置時間」「手機版不進入閒置」），這些最容易漏，要逐條收進規格。
+- 端點回 503（平台未設 Figma token）或 403（帳號看不到該檔）→ **明講讀不到並寫進 clarification_channel.questions**，不要改用猜的把版面編出來。
+
 【專案資訊】
 - 名稱：{{project_name}}
 - Odoo 版本：{{odoo_version}}
