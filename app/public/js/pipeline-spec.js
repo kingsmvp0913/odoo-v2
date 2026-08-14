@@ -198,9 +198,9 @@ function pipelineNodes(flags) {
     id: 'clarify', track: 'human', step: 9, kind: 'gate', label: '待你裁決',
     status: 'clarify_pending',
     detail: [
-      ['進入', '**所有「停下來問人」的統一閘門**（enterClarifyGate）：QA 判規格歧義、分診判退回原因含糊都走這裡'],
-      ['做什麼', '批次列出全部疑點供一次回答；使用者也可以反問，由 clarify-chat 判 answer／proceed／revise'],
-      ['往下', '答完 → 依 resume_status 導回原關（QA 來的回開發、分診來的回分診）'],
+      ['進入', '**所有「停下來問人」的統一閘門**（enterClarifyGate）：QA 判規格歧義、分診判退回原因含糊、規格層重做問「該怎麼改」，都走這裡'],
+      ['做什麼', '批次列出全部疑點供一次回答（推導得出答案的題目附上建議與依據）；使用者也可以反問，由 clarify-chat 判 answer／proceed／revise'],
+      ['往下', '答完 → 依 resume_status 導回原關（QA 來的回開發、分診來的回分診、規格層重做來的回規格層重做）'],
       ['注意', '不加該關的失敗計數——這不是自動失敗輪。進閘門會清掉舊 session，每次都是全新對話']
     ]
   });
@@ -208,9 +208,12 @@ function pipelineNodes(flags) {
     id: 'respec', track: 'aside', step: 7, kind: 'agent', label: '規格層重做',
     status: 'respec_running', agent: 'respec-patch',
     detail: [
-      ['進入', '途中追加需求，或分診判定要動規格'],
+      ['進入', '**兩個入口**：途中追加需求；或人工審核退回、分診判 fix、且任務已開工——後者是規格檢查點，擋的是「使用者的話不經規格就直接落到 coding」（實測 task 126：退回意見被 QA 判成超出規格，來回兩輪後改動被完全還原）'],
       ['做什麼', '增量 patch 進 analysis.yaml（不重讀整包碼），維持單一規格來源'],
-      ['往下', '開發（需求同時寫進 retry_feedback，coding 每輪都讀）']
+      ['往下', '規格有實質變更 → 開發（需求同時寫進 retry_feedback，coding 每輪都讀）'],
+      ['分支', '規格一字未動 → **回原本要去的那一關**，不退開發（目標不固定故圖上不畫線）。少了這條，一句「已修好，直接推進到部署」會讓 coding→QA→merge→deploy 整條白跑一遍'],
+      ['提問', '認定要改規格、但「該怎麼改」取決於使用者 → 待你裁決，答完回本關帶著答覆續判。判斷「算不算需求」是本關自己的職責，不得外包'],
+      ['注意', '分診判 respec **不會**走到這裡——那條回的是分析關完整重跑']
     ]
   });
   push({
@@ -219,7 +222,8 @@ function pipelineNodes(flags) {
     detail: [
       ['進入', '**兩個入口**：reject_triage＝人工審核退回；resolve_triage＝任務停下後人填了修正指示'],
       ['做什麼', '把原因拆成獨立錯誤項並分類，讀 diff／log 決定往哪走'],
-      ['往下', 'fix → 開發（帶著分診結論）／resume → 回原關／advance → 放行推進／respec → 規格層重做'],
+      ['往下', 'fix → 開發（帶著分診結論）；**人工審核退回且已開工時先過規格層重做那一格**再進開發／resume → 回原關／advance → 放行推進'],
+      ['判 respec', '**回分析關完整重跑**，分診結論當成「使用者澄清」餵進去——不是走「規格層重做」那一格（分診員不自己改規格）'],
       ['分支', '判退回原因太含糊 → 待你裁決，答完回到本關'],
       ['注意', '這一關刻意不吃彈跳額度——每一輪都是人主動退回換來的，帶著新資訊']
     ]
@@ -411,9 +415,14 @@ function pipelineEdges(flags) {
     ['merge', 'deploy', 'main'], ['merge', 'conflict', 'alt'], ['conflict', 'deploy', 'main'],
     ['deploy', 'coding', 'back'], ['deploy', 'stopped', 'back'],
     ['review', 'triage', 'back'], ['stopped', 'triage', 'back'],
-    ['triage', 'coding', 'back'], ['triage', 'respec', 'back'], ['triage', 'clarify', 'alt'],
+    // triage→respec 走的是 **fix**（人工退回且已開工＝先過規格檢查點），不是判 respec；
+    // 判 respec 回的是分析關完整重跑（reject-triage.js 的 goto('analysis_running')）——那是下一條。
+    ['triage', 'coding', 'back'], ['triage', 'respec', 'back'], ['triage', 'analysis', 'back'],
+    ['triage', 'clarify', 'alt'],
     ['clarify', 'triage', 'back'],
     ['respec', 'coding', 'main'],
+    // 規格層重做也會停下來問人（該怎麼改取決於使用者），答完回本關帶著答覆續判。
+    ['respec', 'clarify', 'alt'], ['clarify', 'respec', 'back'],
     ['review', 'pushai', 'main'], ['pushai', 'conflict', 'alt'], ['conflict', 'pushai', 'main'],
     ['pushai', 'wiki', 'main'], ['wiki', 'done', 'main'], ['done', 'release', 'alt']
   ];

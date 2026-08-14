@@ -258,6 +258,17 @@ window.TaskDetailView = Vue.defineComponent({
         return String(this.answerFields[dep.question] ?? '') === String(dep.equals);
       });
     },
+    // AI 對這題建議的答案。choice 題的 recommended 存的是 option 的 key，畫面要換成 label——
+    // 顯示「建議：A」等於沒講。找不到對應 option（text 題，或 key 打錯）就原樣顯示。
+    // 選用欄位：純屬「使用者要什麼」的題目 AI 刻意不填（它沒有依據），回空字串＝那一行不渲染。
+    clarRecommend(q) {
+      const rec = String(q.recommended ?? '').trim();
+      if (!rec) return '';
+      const opt = (q.options || []).find(o => o.key === rec);
+      const label = (opt && opt.label) ? opt.label : rec;
+      const why = String(q.recommended_why ?? '').trim();
+      return why ? `${label}（${why}）` : label;
+    },
     // 一題最終送出的答案字串。選擇題除了選項外還有一個補充框（可寫選項以外的答案）：
     // 兩邊都填就併成「A（補充：…）」，只填補充就直接當答案 → 必答判定也吃這個結果。
     clarAnswerText(q) {
@@ -882,11 +893,16 @@ window.TaskDetailView = Vue.defineComponent({
                       <span style="white-space:pre-wrap">{{ q.text }}</span>
                       <span v-if="!q.required" style="color:var(--text-muted);font-size:var(--fs-xs);flex-shrink:0">選填</span>
                     </div>
+                    <!-- AI 的建議答案：只有它推導得出依據的題目才有，純偏好題刻意留空＝這一行不渲染 -->
+                    <div v-if="clarRecommend(q)" style="margin:2px 0 8px 26px;font-size:var(--fs-sm);color:var(--text-secondary)">
+                      <span style="color:var(--primary);font-weight:var(--fw-semibold)">建議</span>：{{ clarRecommend(q) }}
+                    </div>
                     <div v-if="q.type === 'choice'" class="opt-list" style="margin-bottom:6px">
                       <label v-for="opt in q.options" :key="opt.key" class="opt-card" :class="{ selected: answerFields[q.id] === opt.key }">
                         <input type="radio" :name="'clar_' + q.id" :value="opt.key" v-model="answerFields[q.id]">
                         <span class="opt-card-dot"></span>
                         <span>{{ opt.label }}</span>
+                        <span v-if="q.recommended === opt.key" style="color:var(--primary);font-size:var(--fs-xs);margin-left:6px;flex-shrink:0">建議</span>
                       </label>
                       <textarea v-model="answerExtra[q.id]" class="form-control" rows="2"
                         placeholder="以上選項都不合適？也可以直接寫你的答案或補充說明"></textarea>

@@ -260,6 +260,48 @@ test('GET /api/tasks/:id → confirm_pending 解析 analysis_yaml 回傳 clarifi
   expect(res.body.clarification.summary).toBe('改動摘要');
 });
 
+// normalizeQuestion 是白名單：欄位沒列進去就被靜默丟掉，而且完全沒有訊號——畫面只是少一個提示，
+// 不會報錯、不會有測試紅。answer 欄當初就踩過這個坑（使用者被要求重答自己剛講過的事）。
+// recommended／recommended_why 是 agent 讀完整包 code 才推導出來的東西，漏放行等於那段工白做。
+test('GET /api/tasks/:id → 題目的建議答案與依據要通過白名單傳到前端', async () => {
+  const yamlText = [
+    'summary: "改動摘要"',
+    'clarification_channel:',
+    '  questions:',
+    '    - id: q1',
+    '      text: 已確認的訂單要不要一起重編？',
+    '      type: choice',
+    '      required: true',
+    '      options:',
+    '        - key: A',
+    '          label: 只重編草稿單',
+    '        - key: B',
+    '          label: 全部重編',
+    '      recommended: A',
+    '      recommended_why: 既有 write() 對 state=sale 有寫入保護',
+    '    - id: q2',
+    '      text: 這個欄位要叫什麼名字？',
+    '      type: text',
+    '      required: true',
+    ''
+  ].join('\n');
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, analysis_yaml)
+     VALUES ($1,'task_clarify_rec','odoo','C','confirm_pending',$2) RETURNING id`,
+    [userId, yamlText]
+  );
+  const res = await request(app).get(`/api/tasks/${t.id}`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const [q1, q2] = res.body.clarification.questions;
+  expect(q1.recommended).toBe('A');
+  expect(q1.recommended_why).toBe('既有 write() 對 state=sale 有寫入保護');
+  // 純屬「使用者要什麼」的題目 agent 刻意不填建議（它沒有依據）。這裡不得憑空生出空字串——
+  // 前端是用 v-if 判斷要不要渲染那一行，空字串與不存在都不渲染，但填了會讓「有沒有建議」變得不可辨識。
+  expect(q2).not.toHaveProperty('recommended');
+  expect(q2).not.toHaveProperty('recommended_why');
+});
+
 // clarify_pending 共用 answer 區但走時間軸對話，analysis_yaml 常殘留當初分析的問題 → 不可冒出來。
 test('GET /api/tasks/:id → clarify_pending 不回傳殘留的分析問題', async () => {
   const { rows: [t] } = await dbModule.query(

@@ -676,7 +676,28 @@ test.each(['resolve_triage', 'reject_triage'])(
   }
 );
 
-// 反向守衛：豁免只給這兩個中繼關，其餘非法值仍要被收斂掉，不能因此開了大門。
+// respec 的 clarify 出口：同一個機制、不同理由。規格層重做認定要改規格、但「該怎麼改」取決於使用者時
+// 走 clarify 閘門，答完要回 respec_running 帶著答覆重新 patch。兩個斷言各擋一個坑：
+//   status        少了 MIDWAY_RESUME 豁免會被 safeReturnStatus 收斂成 coding_running ＝帶著沒答完的規格
+//                 疑問直接開工；而 respec 那批待吸收留言此時還沒銷帳（刻意的），下一輪回來又問一次。
+//   analysis_yaml 答案要交給 respec-patch 併進規格（只有它知道該改哪一段），在這裡先寫進 spec_decisions
+//                 等於繞過那個 agent，且 respec 重跑時會再寫一次＝同一句話雙寫進規格本體。
+// stations.test.js 釘住「respec_running 不在 RETURNABLE_STATUSES」——那支綠燈不保證這條路走得通，
+// 沒有本測試的話，把豁免拿掉是零訊號的（該檔 42-50 行的註解正是在講這個歷史教訓）。
+test('clarify 答完回規格層重做續判：不得被值域收斂改道到 coding，答覆也不得逕自寫進規格', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status, analysis_yaml)
+     VALUES ($1,'rs_back_respec','odoo','T','clarify_answered','respec_running','module: sale') RETURNING id`,
+    [userId]
+  );
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','折扣算稅前')", [t.id]);
+  await run();
+  const { rows: [after] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [t.id]);
+  expect(after.status).toBe('respec_running');       // 回規格層重做，不是 coding_running
+  expect(after.analysis_yaml).toBe('module: sale');   // 答覆交給 respec-patch 處理，不在這裡落地
+});
+
+// 反向守衛：豁免只給這三個中繼關，其餘非法值仍要被收斂掉，不能因此開了大門。
 test('clarify 回程是認不得的狀態 → 仍收斂到 coding_running（不製造殭屍）', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, status, resume_status)

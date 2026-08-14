@@ -49,6 +49,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
   - target 對照（選錯會讓任務重跑不必要的關卡）：`qa`＝重新審查實作；`merge`＝略過 QA 直接併入測試分支；`deploy`＝重新部署測試區；`e2e`＝重跑 E2E；`review`＝直接送最終人工審核。
   - **「QA 與開發僵局」的裁決走這裡**：停下原因是這個、而使用者表示 QA 指出的問題不成立／要放行 → `advance` + `target=merge`（跳過 QA 這一關）。此時**不要**判 `resume`——回 QA 只會得到同一個判定，原地打轉。
 - `clarify`：**退回原因含糊到 `fix` 與 `respec` 都說得通、且使用者的答案會決定去哪一邊**時 → 停下批次問使用者，**必須帶 questions**（1–3 個具體、二選一式的問題）。這是「問清楚勝過亂猜」的出口。**別濫用**：只要查程式／實機證據能判定是 bug 還是需求，就直接 fix／respec，不要問；純環境／首次再跑一次不要問（走 resume）。**但復發型硬卡關屬例外**（見【指令快速通道】的 ⚠）：同一環境／權限根因已 resume 過又出現時，該用 clarify 請使用者先到源頭修好，別再空轉——這種 clarify 不是「拿不準」，而是「再重跑必然重錯」。
+  - **每題後面接上你建議的答案與一句依據**，寫成「問題？（建議：X；依據：diff 裡看到 Y）」。你讀過退回原因、diff 與 log，使用者沒有；只丟問題回去等於要他重做你已經做過的功課。純屬「他要什麼」的題目（需求本身該不該改）你沒有依據，只問不建議——判準是「這個建議說得出依據嗎」。
 - `resume`：純環境／transient／單純再跑一次 → 回原關（{{stuck_stage}}）重跑。**確定是暫時狀態時用；「fix/respec 二選一但拿不準」該走 `clarify` 問人，不是用 resume 拖。同一個硬卡關已經 resume 過又復發時也不要再 resume**（那不是暫時狀態，走 clarify 請使用者先清根因）。
 - `answer`：**僅限最終人工審核退回**情境——使用者填的是**純提問**（想理解為什麼這樣做、確認某個設計意圖、問影響範圍），不牽涉回報 bug、也沒要求改什麼 → 回 `summary`（給使用者的回答），**不路由、不動規格、不動任何狀態**。只要牽涉「哪裡不對／要改什麼」就走 `fix`／`respec`，不要用 `answer`；卡關修正指示（resolve）情境不要用 `answer`。
 
@@ -66,7 +67,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 {"decision":"advance","target":"e2e","summary":"…；結論：環境已排除，依指示推進到 E2E 重測。"}
 </result>
 <result>
-{"decision":"clarify","summary":"退回原因僅寫『備註不對』，無法判定是型別 bug 還是要改需求。","questions":["備註欄目前顯示型別錯誤，是要修正成正確型別（bug），還是改變備註的呈現需求（規格調整）？"]}
+{"decision":"clarify","summary":"退回原因僅寫『備註不對』，無法判定是型別 bug 還是要改需求。","questions":["備註欄目前顯示型別錯誤，是要修正成正確型別（bug），還是改變備註的呈現需求（規格調整）？（建議：修正型別；依據：規格寫的是顯示文字，diff 裡的 widget 設定與它不符，看起來是實作寫錯而非需求改變）"]}
 </result>
 <result>
 {"decision":"answer","summary":"備註欄目前唯讀，是因為它同步自來源工單、由系統寫入以避免兩邊不一致——這是規格的既定設計，不是 bug。若想讓它可手動編輯，請直接說要調整需求。"}

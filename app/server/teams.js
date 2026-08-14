@@ -7,6 +7,9 @@
  */
 const https = require('https');
 const { query } = require('./db');
+// 建議答案的呈現與時間軸共用同一份（analysis.js）：choice 題的 recommended 是 option key，
+// 兩邊各寫一份就會漂移成「平台顯示 label、推播顯示 A」。
+const { recommendedLine } = require('./pipeline/analysis');
 
 const STATUS_DISPLAY = {
   new: '⚪ 新任務', analysis_running: '🔵 分析中', confirm_pending: '🟡 等待確認',
@@ -232,8 +235,13 @@ function selectQuestions(status, analysisYaml, clarifyLogContent) {
       // 題目有兩代：新版是物件（取 .text）、舊版是純字串（取自身）——取不到文字的項目略過。
       if (Array.isArray(parsed.clarification_channel?.questions)) {
         return parsed.clarification_channel.questions
-          .map(q => (typeof q === 'string' ? q : q?.text))
-          .filter(t => typeof t === 'string' && t.trim());
+          .map(q => (typeof q === 'string' ? { text: q } : q))
+          .filter(q => typeof q?.text === 'string' && q.text.trim())
+          // 推播卡片上只有這一段文字：建議答案沒帶上，使用者在 Teams 看到的就是不完整的問題。
+          .map(q => {
+            const rec = recommendedLine(q);
+            return rec ? `${q.text}（建議：${rec}）` : q.text;
+          });
       // Flat array format (legacy)
       } else if (Array.isArray(parsed.clarification_channel)) {
         return parsed.clarification_channel.filter(q => typeof q === 'string');

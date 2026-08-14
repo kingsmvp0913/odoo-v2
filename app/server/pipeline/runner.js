@@ -262,6 +262,15 @@ async function handleRespec(task, settings, signal) {
 // 分診關：它的 clarify 問的是「這算 bug 還是規格」＝路由問題，答案交回分診員判，不是規格條文。
 const TRIAGE_RESUME = new Set(['reject_triage', 'resolve_triage']);
 
+// 中繼關的 clarify 回程白名單。這些狀態刻意不在 RETURNABLE_STATUSES（那份是「主線各關的回程」），
+// 但它們在 RUNNABLE_STATUSES 內、HANDLERS 查得到，回去跑得動。少了這層豁免，safeReturnStatus 會把
+// 它們收斂成 coding_running ＝該關的 clarify 出口整條失效，而 stations.test.js 那支「respec_running
+// 不在回程白名單」的綠燈會把失效狀態釘死，沒有任何測試會紅（該檔 42-50 行的註解就是在講這件事）。
+// 兩者也都不寫 spec_decisions（見下方 recordSpecDecision 的呼叫條件）：它們的答案是要交給該關 agent
+// 處理的**輸入**，不是已定案的規格條文——分診的答案是路由判斷，respec 的答案要由 respec-patch 併進
+// 規格，在這裡先寫等於繞過那個 agent 並造成雙寫。
+const MIDWAY_RESUME = new Set([...TRIAGE_RESUME, 'respec_running']);
+
 // 把使用者的規格裁決追加進 analysis_yaml 的 spec_decisions。只寫進 retry_feedback 等於只有
 // 「這一輪 coding」看得到；下一輪 QA 讀的是規格本體，看不到裁決就會拿同一份有歧義的規格原題
 // 再問——QA 規格歧義的無限來回正是這樣長出來的。解析不出物件就整個不寫：既有 spec 是資產，
@@ -304,7 +313,7 @@ async function handleClarifyAnswered(task) {
   // 條件當成 fix 丟進 coding 帶著未解歧義開工，而下面那行的 TRIAGE_RESUME 守衛也會因為 resume 已被
   // 改寫而永遠命中不了 → 路由問題的答覆被誤寫進 analysis_yaml 的 spec_decisions，永久污染規格本體。
   const rawResume = row?.resume_status;
-  const resume = TRIAGE_RESUME.has(rawResume) ? rawResume : safeReturnStatus(rawResume);
+  const resume = MIDWAY_RESUME.has(rawResume) ? rawResume : safeReturnStatus(rawResume);
   const { rows: [ans] } = await query(
     "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id DESC LIMIT 1", [task.id]
   );
@@ -315,7 +324,7 @@ async function handleClarifyAnswered(task) {
     [task.id, resume, `[已裁決規格]\n${answer}${carried}`]
   );
   // 條件更新沒搶到就不落地裁決：避免重複派工把同一則答覆追加兩次進規格
-  if (rowCount && !TRIAGE_RESUME.has(resume)) await recordSpecDecision(task.id, row?.analysis_yaml, answer);
+  if (rowCount && !MIDWAY_RESUME.has(resume)) await recordSpecDecision(task.id, row?.analysis_yaml, answer);
   notify.emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: resume });
 }
 

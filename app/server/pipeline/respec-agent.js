@@ -9,6 +9,9 @@ const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 const { safeReturnStatus } = require('./stations');
 const { taskAttachmentNote } = require('./sync');
+// 建議答案的呈現與分析關、Teams 推播共用同一份：choice 題的 recommended 是 option key，
+// 各寫一份就會漂移成「這裡顯示 A、那裡顯示 label」。
+const { recommendedLine } = require('./analysis');
 
 // 遞迴排序物件鍵並 trim 字串，讓「同一份規格的不同寫法」收斂成同一個字串。
 // 陣列順序保留（規格的 requirements 是有序的，重排屬實質變更）。
@@ -37,12 +40,25 @@ function specUnchanged(oldYaml, newYaml) {
   return norm(oldYaml) === norm(newYaml);
 }
 
+// 這一輪 respec 新提出、還沒有答案的問題。判準是「patch 前後的題目清單有變，且其中有未答的題」：
+// - 原樣保留的舊題（分析關問過、使用者答過，帶著 answer）與 patch 前逐字相同 → 比對相等，不觸發
+// - respec 自己新增的題目沒有 answer → 觸發
+// 少了「與舊題比對」這一半，每一輪都會把原封不動搬過來的舊題當成新問題，任務永遠出不了閘門。
+function askedQuestions(oldYaml, newYaml) {
+  const load = (s) => { try { return yaml.load(String(s || ''), { schema: yaml.CORE_SCHEMA }); } catch { return null; } };
+  const listOf = (v) => { const q = v?.clarification_channel?.questions; return Array.isArray(q) ? q : []; };
+  const oldQs = listOf(load(oldYaml));
+  const newQs = listOf(load(newYaml));
+  if (JSON.stringify(stableKey(newQs)) === JSON.stringify(stableKey(oldQs))) return [];
+  return newQs.filter(q => q && typeof q.text === 'string' && q.text.trim() && !String(q.answer ?? '').trim());
+}
+
 // respec_running：使用者途中留言＝追加需求。把待吸收的 manual 留言增量 patch 進 analysis_yaml
 // （維持單一規格來源，QA 重驗吃得到），並把需求也塞進 retry_feedback（coding 每輪都帶 retry_feedback，
 // 確保新需求一定被看到），退回 coding_running 增量補實作。留言標 applied_at＝已吸收（防反覆觸發）。
 async function runRespecPatch(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, analysis_yaml, coding_session_id, git_branch, respec_return_status FROM tasks WHERE id = $1', [taskId]
+    'SELECT id, task_id, project_id, analysis_yaml, coding_session_id, git_branch, respec_return_status, retry_feedback FROM tasks WHERE id = $1', [taskId]
   );
   if (!task) return;
 
@@ -72,7 +88,15 @@ async function runRespecPatch(taskId, userId, signal) {
   // maxId＝這批最後一則的 id（SERIAL 單調遞增）：patch 期間新進的留言 id 必更大，用 id <= maxId
   // 精準標記「這批」而不誤標之後才進來的（留到下一個檢查點）。
   const maxId = pending[pending.length - 1].id;
-  const requirements = pending.map((p, i) => `${i + 1}. ${String(p.content).trim()}`).join('\n');
+  const baseRequirements = pending.map((p, i) => `${i + 1}. ${String(p.content).trim()}`).join('\n');
+  // 從 clarify 閘門回來的那一輪：使用者的答覆由 handleClarifyAnswered 寫進 retry_feedback。不附進來的話
+  // agent 看不到自己上一輪問過什麼、也看不到答案，只會拿同一批留言把同一件事再問一次——分析關踩過這個坑
+  // （正式站 task 5 連問三輪都在問「項次要不要自動重編」），修法就是把 AI 自己的提問一起回帶。
+  // 分診 fix 路徑帶進來的 [分診結論] 也在這個欄位，同屬有用脈絡，一併附上不做過濾。
+  const carried = String(task.retry_feedback || '').trim();
+  const requirements = carried
+    ? `${baseRequirements}\n\n【先前的回饋與你上一輪提問的答覆】\n${carried}`
+    : baseRequirements;
 
   const ref = { taskId: task.task_id, projectId: task.project_id };
   const agent = loadAgent('respec-patch');
@@ -118,6 +142,30 @@ async function runRespecPatch(taskId, userId, signal) {
       [taskId]
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return;
+  }
+
+  // 規格要怎麼改取決於使用者的決定時，不硬猜——走與 QA／分診同一條統一 clarify 閘門（所有「停下來
+  // 問人」的情境共用 enterClarifyGate，不各自開新狀態）。答完由 resume_status 導回本關帶著答案續判，
+  // 回程豁免寫在 runner.js 的 MIDWAY_RESUME（少了它會被收斂成 coding_running＝這條出口整條失效）。
+  //
+  // 這一段的位置是關鍵，兩件事都不能提前做：
+  //   1. **必須在下面「標記留言已吸收」之前**——先銷帳再提問的話，使用者答完回到本關時 pending 是空的，
+  //      走上面那條「競態」early return 直接回 returnTo，這批需求連同他剛給的答案一起永久消失。
+  //   2. **不寫 analysis_yaml**——規格還沒定案，此時落地等於把半成品當定稿覆蓋掉既有規格
+  //      （比照「AI 產出的 YAML 解析失敗時絕不覆蓋既有 spec」的同一個理由）。
+  const asked = askedQuestions(task.analysis_yaml, newYaml);
+  if (asked.length) {
+    const lines = asked.map(q => {
+      const rec = recommendedLine(q);
+      return rec ? `${q.text.trim()}（建議：${rec}）` : q.text.trim();
+    });
+    const { enterClarifyGate } = require('./verdict-router');
+    await enterClarifyGate(taskId, userId, {
+      questions: lines,
+      resumeStatus: 'respec_running',
+      fromStatus: 'respec_running'
+    });
     return;
   }
 

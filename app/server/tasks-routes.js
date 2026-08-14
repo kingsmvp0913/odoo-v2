@@ -90,6 +90,11 @@ function normalizeQuestion(q, idx) {
   // 預填答案：clarify-chat 在 revise 時把對話中已確定的答案填進來，前端拿它當答案框初值。
   // 不在白名單裡就會被這個函式丟掉，使用者會被要求重答自己剛講過的事。
   if (q.answer !== undefined && q.answer !== null && String(q.answer).trim()) out.answer = String(q.answer);
+  // 建議答案（choice 題填 option 的 key、text 題填一句話）與其依據。同樣是白名單成員：
+  // 漏放行的話 agent 推導出的建議在畫面上完全不存在，而且沒有任何錯誤訊息，只是使用者少了一個提示。
+  // 這是選用欄位——純屬「使用者要什麼」的題目 agent 刻意不填，前端沒有就不顯示那一行。
+  if (typeof q.recommended === 'string' && q.recommended.trim()) out.recommended = q.recommended.trim();
+  if (typeof q.recommended_why === 'string' && q.recommended_why.trim()) out.recommended_why = q.recommended_why.trim();
   if (out.type === 'choice') {
     out.options = (Array.isArray(q.options) ? q.options : [])
       .filter(o => o && typeof o.key === 'string' && typeof o.label === 'string')

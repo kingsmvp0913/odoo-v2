@@ -53,6 +53,9 @@ beforeEach(async () => {
   // respec 判「無規格變更」時會寫一行 task_logs 交代原因（否則使用者看不到任務為何轉了一圈），
   // 不一併清會讓下一個 test 的 DELETE tasks 撞 task_logs 的 FK。
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
+  // 附件那支測試會插 task_attachments，同理不清會撞 FK。這個缺口一直沒被觸發是因為它原本是檔內
+  // 最後一支、後面沒有 test 再 DELETE tasks——在它後面新增任何 test 都會踩到。
+  await dbModule.query('DELETE FROM task_attachments WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id=$1', [userId]);
 });
 
@@ -275,4 +278,73 @@ test('prompt 帶【任務附件】絕對路徑（無附件則整個區塊不出�
   await addMsg(noAtt, '按鈕再大一點');
   await runRespecPatch(noAtt, userId, undefined);
   expect(runClaude.mock.calls[0][0]).not.toContain('【任務附件】');
+});
+
+// ── 提問通道 ──────────────────────────────────────────────
+// respec 是「使用者的話不經規格就直接落到 coding」這條路上唯一的規格關卡（實測 task 126：退回意見
+// 被 QA 判成超出規格，來回兩輪後改動被完全還原）。它認定要改規格、但「該怎麼改」取決於使用者時，
+// 走與 QA／分診同一條 clarify 閘門，而不是挑一個看起來合理的填進規格。
+
+test('提出新問題 → 進 clarify 閘門；此時規格不得落地、留言不得銷帳', async () => {
+  const taskId = await insertTask('module: sale');
+  const msgId = await addMsg(taskId, '折扣欄位要能改');
+  runClaude.mockResolvedValue({
+    text: [
+      '<result>',
+      'module: sale',
+      'clarification_channel:',
+      '  questions:',
+      '    - id: q1',
+      '      text: 折扣算稅前還是稅後？',
+      '      type: choice',
+      '      required: true',
+      '      options:',
+      '        - key: A',
+      '          label: 稅前',
+      '        - key: B',
+      '          label: 稅後',
+      '      recommended: A',
+      '      recommended_why: 既有 _compute_amount 是先折後稅',
+      '</result>'
+    ].join('\n'),
+    usage: null, durationMs: null
+  });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('clarify_pending');
+  // 規格還沒定案：此時落地等於把半成品當定稿覆蓋掉既有規格（同「解析失敗不覆蓋既有 spec」的理由）
+  expect(t.analysis_yaml).toBe('module: sale');
+  // 銷帳必須留到答完之後。先銷帳再提問的話，使用者答完回到本關時 pending 是空的，會走「競態」
+  // early return 直接回原關——這批需求連同他剛給的答案一起永久消失，而且完全無聲。
+  const { rows: [m] } = await dbModule.query('SELECT applied_at FROM task_messages WHERE id=$1', [msgId]);
+  expect(m.applied_at).toBeNull();
+});
+
+// 這支守的是 askedQuestions 裡「與 patch 前的題目比對」那一半。少了它，規格裡任何一則未答的舊題
+// 都會被當成「這輪新問的」→ 每一輪都進閘門，使用者答完回到本關又問同一題，任務永遠出不去。
+// 鑑別力要靠**未答**的舊題：帶著 answer 的舊題會先被「未答」那道 filter 濾掉，用它測等於沒測。
+test('原樣保留未答的舊題 → 不算這輪新問的，照常 patch 推進（防問答無限迴圈）', async () => {
+  const oldYaml = [
+    'module: sale',
+    'clarification_channel:',
+    '  questions:',
+    '    - id: q1',
+    '      text: 折扣算稅前還是稅後？',
+    '      type: text',
+    '      required: true'
+  ].join('\n');
+  const taskId = await insertTask(oldYaml);
+  await addMsg(taskId, '再加一個匯出按鈕');
+  runClaude.mockResolvedValue({
+    text: `<result>\n${oldYaml}\nfeatures:\n  - 匯出按鈕\n</result>`,
+    usage: null, durationMs: null
+  });
+
+  await runRespecPatch(taskId, userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [taskId]);
+  expect(t.status).toBe('coding_running');        // 不是 clarify_pending
+  expect(t.analysis_yaml).toContain('匯出按鈕');   // 規格照常落地
 });
