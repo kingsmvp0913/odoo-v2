@@ -234,3 +234,43 @@ test('analysis 重產規格 → 一併清掉 clarify session（舊 clarify 對�
   expect(t.clarify_session_id).toBeNull();
   expect(t.clarify_prompt_ver).toBeNull();
 });
+
+// 這一關 revise 時整份重產 analysis_yaml。規格裡的視覺數值（色碼／px／選擇器）是分析關看著截圖
+// 量出來的，prompt 不帶附件就只能憑文字猜，猜錯即靜默覆蓋。續接輪同樣要帶——session 只記得
+// fresh 那輪當下的附件，使用者中途才補傳的截圖不在裡面。
+test('首輪與續接輪的 prompt 都帶【任務附件】絕對路徑（無附件則不出現）', async () => {
+  const path = require('path');
+  const { uploadRoot } = require('../lib/attachments');
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const answer = { text: '<result>\nDECISION: answer\nREPLY:\n好。\n</result>', usage: null, durationMs: null, sessionId: 'sa-1' };
+
+  const id = await insertTask('module: sale\nrequirements:\n  - 首頁主按鈕背景 #1B2A4A');
+  await addLog(id, 'user', '照這張圖改');
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, '參考站首頁.png', 'image/png', $2, 'manual')`,
+    [id, `task_${id}/1_參考站首頁.png`]
+  );
+  const absPath = path.resolve(uploadRoot(), `task_${id}/1_參考站首頁.png`);
+
+  runClaude.mockResolvedValue(answer);
+  await runSpecReview(await loadTask(id), userId, undefined);
+  expect(runClaude.mock.calls[0][0]).toContain(absPath);        // 首輪
+
+  runClaude.mockClear();
+  const ver = `${promptVersion('spec-review')}.${promptVersion('spec-review-retry')}`;
+  await dbModule.query('UPDATE tasks SET spec_session_id=$2, spec_prompt_ver=$3 WHERE id=$1', [id, 'sa-1', ver]);
+  await addLog(id, 'user', '再深一點');
+  runClaude.mockResolvedValue(answer);
+  await runSpecReview(await loadTask(id), userId, undefined);
+  const [retryPrompt, retryOpts] = runClaude.mock.calls[0];
+  expect(retryOpts.resumeSessionId).toBe('sa-1');               // 確認走的是續接輪而非降級 fresh
+  expect(retryPrompt).toContain(absPath);
+
+  runClaude.mockClear();
+  const noAtt = await insertTask('module: sale');
+  await addLog(noAtt, 'user', '這樣可以嗎？');
+  runClaude.mockResolvedValue(answer);
+  await runSpecReview(await loadTask(noAtt), userId, undefined);
+  expect(runClaude.mock.calls[0][0]).not.toContain('【任務附件】');
+});

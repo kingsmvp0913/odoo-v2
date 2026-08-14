@@ -6,6 +6,7 @@ const { getProjectNotes } = require('./project-notes');
 const { taskWorkContext } = require('./work-context');
 const { stopReason } = require('./claude-runner');
 const { withResume } = require('./with-resume');
+const { taskAttachmentNote } = require('./sync');
 const { parseAgentResult } = require('./agent-result');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
@@ -63,6 +64,10 @@ async function runSpecReview(task, userId, signal) {
     // 續接輪只送「使用者這輪講的話」＋當前規格全文；先前的探索與回覆都在 session 裡。
     // 規格一律重送 DB 版本：revise 輪會改寫 analysis_yaml，session 內殘留的舊版不可信。
     const lastUser = [...dlg].reverse().find(l => l.role === 'user');
+    // 附件（多為參考站／現況截圖）連續接輪也要送：規格裡的視覺數值是分析關看著圖量出來的，
+    // 這一關 revise 時重產整份 YAML，看不到圖就只能猜、猜錯即靜默覆蓋。續接輪同樣要帶——
+    // session 只記得 fresh 那輪當下的附件，使用者中途補傳的圖不在裡面。
+    const attachments = await taskAttachmentNote(taskId);
     const result = await withResume({
       freshAgentName: 'spec-review',
       retryAgentName: 'spec-review-retry',
@@ -77,11 +82,13 @@ async function runSpecReview(task, userId, signal) {
       renderFresh: () => agent.render({
         analysis_yaml: task.analysis_yaml || '（無規格）',
         conversation,
+        attachments,
         project_notes: projectNotes || '',
         repo_paths: work ? work.repoPaths : ''
       }).trim(),
       renderRetry: () => retryAgent.render({
         analysis_yaml: task.analysis_yaml || '（無規格）',
+        attachments,
         new_message: lastUser ? lastUser.content : '（無新發言）'
       }).trim(),
       // retry 失敗會靜默降級跑 fresh，使用者照樣拿到回覆——但失敗那次的 token／時間必須記帳，

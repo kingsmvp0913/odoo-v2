@@ -247,3 +247,32 @@ test('舊規格不是合法 YAML → 退回位元組比對，內容不同仍判�
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(t.status).toBe('coding_running');
 });
+
+// 規格裡的視覺數值（色碼／px／選擇器）是分析關看著附件截圖量出來的，而這一關會整份重產規格。
+// prompt 不帶附件路徑＝重產時只能憑既有 YAML 的文字猜，猜錯就把量出來的值靜默覆蓋掉——
+// 測試不紅、QA 只有新規格可比，完全無訊號。同「人工退回的規格層要求被靜默抹掉」的 bug 家族。
+test('prompt 帶【任務附件】絕對路徑（無附件則整個區塊不出現）', async () => {
+  const path = require('path');
+  const { uploadRoot } = require('../lib/attachments');
+  const spec = 'module: sale\nrequirements:\n  - 首頁主按鈕背景 #1B2A4A';
+
+  const withAtt = await insertTask(spec);
+  await addMsg(withAtt, '按鈕再大一點');
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, '參考站首頁.png', 'image/png', $2, 'manual')`,
+    [withAtt, `task_${withAtt}/1_參考站首頁.png`]
+  );
+  runClaude.mockResolvedValue({ text: `<result>\n${spec}\n</result>`, usage: null, durationMs: null });
+  await runRespecPatch(withAtt, userId, undefined);
+
+  const prompt = runClaude.mock.calls[0][0];
+  expect(prompt).toContain('【任務附件】');
+  expect(prompt).toContain(path.resolve(uploadRoot(), `task_${withAtt}/1_參考站首頁.png`));
+
+  runClaude.mockClear();
+  const noAtt = await insertTask(spec);
+  await addMsg(noAtt, '按鈕再大一點');
+  await runRespecPatch(noAtt, userId, undefined);
+  expect(runClaude.mock.calls[0][0]).not.toContain('【任務附件】');
+});

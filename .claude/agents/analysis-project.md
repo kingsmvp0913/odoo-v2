@@ -24,6 +24,15 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/tasks/spec
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
 - 涉及檔案匯出格式（xlsx/docx 等）或任何 selection 欄位時，先確認 base Odoo 原生是否支援該值；不支援則在規格中明列所需的額外相依模組（如 OCA report_xlsx），或改用不受此限制的替代做法（如直接產生檔案而非透過 ir.actions.report 的 report_type）
 
+【視覺需求：附件含截圖，且需求涉及版面／配色／字體時】
+截圖是需求本體，不是佐證。**你是整條 pipeline 唯一看得到渲染結果的關卡**——開發關盲寫 CSS、QA 關讀的是純文字 diff、E2E 驗的是功能。你這裡沒量出來的東西，後面沒有任何一關補得回來。
+- 用 Read 直接檢視截圖（【任務附件】區塊已明確授權讀取）。同時有「參考樣式」與「現況」兩張時，逐項比對差異再寫。
+- 結論一律寫成**開發關可直接照抄的具體值**：套用對象（CSS 選擇器，或 Odoo 樣板的 `t-name`／class）＋屬性＋數值。色碼寫 `#RRGGBB`、尺寸寫 `px`／`rem`、字體寫完整 font-family、圓角與陰影寫完整 CSS 值。
+  例：`.o_header .navbar 背景改為 #1B2A4A、高度 72px、下緣陰影 0 2px 8px rgba(0,0,0,.08)`。
+- **禁止把形容詞當規格**：「更美觀」「風格更協調」「間距舒適一點」「配色接近參考站」這類句子到了開發關等於沒有指示，它只能猜，於是每輪猜一個樣子、永遠不收斂。
+- **量不到的不要編**：截圖看不出來的（hover／focus 狀態、其他斷點的行為、字體實際名稱）就明講看不出來，寫進 clarification_channel.questions 問使用者，不要填一個看起來很像的數字上去。
+- acceptance 要對應寫成可觀察的斷言（例：「首頁主按鈕背景為 #1B2A4A」），否則 QA 沒有東西可比對。
+
 【專案資訊】
 - 名稱：{{project_name}}
 - Odoo 版本：{{odoo_version}}

@@ -426,17 +426,22 @@ async function assembleTaskContext(taskId) {
     `狀態: ${task.stage_label || '（無）'}`,
     `分類: ${task.classification_label || '（無）'}`
   ].join('\n');
-  // 附件（客戶截圖等）是需求描述的主要載體之一，agent 有 Read 工具可直接檢視——
-  // 列出絕對路徑並明確授權唯讀，否則 agent 會因「禁止存取工作目錄外路徑」規則跳過不讀。
+  return `${header}\n\n${task.original_text || ''}${await taskAttachmentNote(taskId)}\n\n---message---\n${msgLines || '無訊息內容'}`;
+}
+
+// 附件（客戶截圖等）是需求描述的主要載體之一，agent 有 Read 工具可直接檢視——
+// 列出絕對路徑並明確授權唯讀，否則 agent 會因「禁止存取工作目錄外路徑」規則跳過不讀。
+// 獨立成 function 而非留在 assembleTaskContext 內：寫 analysis_yaml 的關卡有三個
+// （分析／追加需求／規格問答），三者看到的附件清單必須是同一份。這段措辭本身帶著授權宣告，
+// 抄第二份就會漂移成「有的關能讀圖、有的關不能」，而那是完全無訊號的。
+async function taskAttachmentNote(taskId) {
   const { rows: atts } = await query(
     'SELECT filename, mimetype, file_path FROM task_attachments WHERE task_id = $1 ORDER BY id',
     [taskId]
   );
-  const attachmentNote = atts.length
-    ? '\n\n【任務附件】以下檔案可用 Read 工具讀取（圖片可直接檢視）。明確授權：讀取這些附件屬唯讀，不受「不得存取工作目錄外路徑」限制；僅可讀取，不得修改。\n' +
-      atts.map(a => `- ${a.filename}${a.mimetype ? `（${a.mimetype}）` : ''}：${path.resolve(uploadRoot(), a.file_path)}`).join('\n')
-    : '';
-  return `${header}\n\n${task.original_text || ''}${attachmentNote}\n\n---message---\n${msgLines || '無訊息內容'}`;
+  if (!atts.length) return '';
+  return '\n\n【任務附件】以下檔案可用 Read 工具讀取（圖片可直接檢視）。明確授權：讀取這些附件屬唯讀，不受「不得存取工作目錄外路徑」限制；僅可讀取，不得修改。\n' +
+    atts.map(a => `- ${a.filename}${a.mimetype ? `（${a.mimetype}）` : ''}：${path.resolve(uploadRoot(), a.file_path)}`).join('\n');
 }
 
 async function resolveUserOdooSettings(userId) {
@@ -486,4 +491,4 @@ async function syncUser(userId) {
   return { odoo, service };
 }
 
-module.exports = { syncUser, stripHtml, resolveUserOdooSettings, assembleTaskContext, writebackTaskMessage };
+module.exports = { syncUser, stripHtml, resolveUserOdooSettings, assembleTaskContext, taskAttachmentNote, writebackTaskMessage };

@@ -8,6 +8,7 @@ const { parseAgentResult } = require('./agent-result');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 const { safeReturnStatus } = require('./stations');
+const { taskAttachmentNote } = require('./sync');
 
 // 遞迴排序物件鍵並 trim 字串，讓「同一份規格的不同寫法」收斂成同一個字串。
 // 陣列順序保留（規格的 requirements 是有序的，重排屬實質變更）。
@@ -80,9 +81,12 @@ async function runRespecPatch(taskId, userId, signal) {
     // 分析關建好的 worktree：追加需求要落成 requirements 給開發關照做，憑印象寫錯欄位名下游就照著錯，
     // 有 worktree 就讓它先查證再寫；沒有就照舊只看 analysis_yaml
     const work = await taskWorkContext(task);
+    // 附件要帶：規格裡的視覺數值（色碼／px／選擇器）是分析關看著截圖量出來的，這一關重產規格時
+    // 若看不到那些圖，只能憑既有 YAML 的文字猜，猜錯就靜默覆蓋掉量出來的值。
     const prompt = agent.render({
       analysis_yaml: task.analysis_yaml || '（無規格）',
       requirements,
+      attachments: await taskAttachmentNote(taskId),
       repo_paths: work ? work.repoPaths : ''
     }).trim();
     const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
