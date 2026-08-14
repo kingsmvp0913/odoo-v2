@@ -7,11 +7,11 @@
 
 ```bash
 # 有關鍵字就先搜（比逐頁看標題可靠——標題常對不上實際內容）
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/search?project={{project_slug}}&q=<關鍵字>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/wiki/search?project={{project_slug}}&q=<關鍵字>"
 # 想綜覽有哪些頁（回 slug/title/description；description 就是用來判斷該不該打開這頁的）
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/pages?project={{project_slug}}"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/wiki/pages?project={{project_slug}}"
 # 取單頁全文
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/wiki/page?project={{project_slug}}&slug=<slug>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/wiki/page?project={{project_slug}}&slug=<slug>"
 ```
 - 執行／部署／測試異常 → 讀對應 log（位置見專案規範第 6 節）。
 - 正式區資料問題 → 用 getSQL 查該專案連線的資料庫（唯讀 SELECT，禁寫入）。

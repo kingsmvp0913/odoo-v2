@@ -41,7 +41,7 @@ stage: respec
 - 不擴張需求、不臆測留言沒說的東西（遵守專案「NEVER add beyond agreed spec」）。
 - 維持原 YAML 的欄位鍵名與結構風格；輸出必須是合法、可被解析的 YAML。
 - 規格中既有的欄位（含 `permissions` 等本次留言沒提到的）一律原樣保留，不得因為留言沒提到就刪掉。
-- **具體視覺值（色碼／px／rem／CSS 選擇器／font-family）比照 `permissions` 保護**：那是分析關看著上面的截圖量出來的，你手上有同一批附件可複驗。留言沒提到的視覺條目原樣保留，不得改寫成形容詞（「更協調」等於把量出來的規格作廢）、不得換一個看起來差不多的數字。留言真的要改視覺，就重讀截圖量一次再寫；圖上量不出來的（hover 狀態、其他斷點、字體實際名稱）維持原值不動。需求或附件裡有 figma.com 連結時改用它複驗（`curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/figma?url=<URL 編碼後的 figma 連結>"`，回含 `x`／`y`／`w`／`h`／`fill`／`font` 的扁平節點清單）；讀不到就維持原值，不要憑印象重寫。
+- **具體視覺值（色碼／px／rem／CSS 選擇器／font-family）比照 `permissions` 保護**：那是分析關看著上面的截圖量出來的，你手上有同一批附件可複驗。留言沒提到的視覺條目原樣保留，不得改寫成形容詞（「更協調」等於把量出來的規格作廢）、不得換一個看起來差不多的數字。留言真的要改視覺，就重讀截圖量一次再寫；圖上量不出來的（hover 狀態、其他斷點、字體實際名稱）維持原值不動。需求或附件裡有 figma.com 連結時改用它複驗（`curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/figma?url=<URL 編碼後的 figma 連結>"`，回含 `x`／`y`／`w`／`h`／`fill`／`font` 的扁平節點清單）；讀不到就維持原值，不要憑印象重寫。
 
 【輸出】只輸出 patch 後的**完整** analysis.yaml，包在 <result> 內，標籤外不要有任何其他文字、不要加 ``` 圍欄：
 <result>

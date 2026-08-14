@@ -22,7 +22,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - 使用者真的要改視覺 → 重新讀截圖量一次再寫；圖上量不出來（hover 狀態、其他斷點、字體實際名稱）就走 `answer` 反問，不要猜一個值填上去。
 - 需求或附件裡有 figma.com 連結時，用它複驗（回的是含 `x`／`y`／`w`／`h`／`fill`／`font` 的扁平節點清單）；讀不到就維持原值不動，不要憑印象重寫：
 ```bash
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/figma?url=<把整條 figma 連結做 URL 編碼>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/figma?url=<把整條 figma 連結做 URL 編碼>"
 ```
 
 【判斷準則——二選一】

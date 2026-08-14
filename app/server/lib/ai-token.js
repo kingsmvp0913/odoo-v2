@@ -42,6 +42,21 @@ function aiTokenEnv() {
   return token ? { AIDEV_AI_TOKEN: token } : {};
 }
 
+// agent 打 /ai/* 的 base URL。這個值必須從執行期的 PORT 推導，不可寫死在 prompt 裡：
+// index.js 的 `PORT || 3939` 只是預設值，正式機的 env 給的是別的埠（現行 8771）。埠一旦對不上，
+// curl 拿到的是 connection refused（HTTP 000），而 /ai/* 的所有 fail loud 訊息都在 server 這一側，
+// 一句都送不出來——症狀是 agent 回報「讀不到設計稿」，看起來像 Figma 權限或 token 沒設，
+// 完全不指向 prompt 裡的埠號。實際發生過：task 134 的 /ai/figma 全程沒碰到端點（2026-08-14）。
+function aiBaseUrl() {
+  return `http://localhost:${process.env.PORT || 3939}`;
+}
+
+// 與 token 分開注入：沒有通行碼時 base 仍要給，這樣 agent 打過去至少拿得到 403 的指引訊息，
+// 而不是無從歸因的連線失敗。
+function aiBaseEnv() {
+  return { AIDEV_AI_BASE: aiBaseUrl() };
+}
+
 function timingSafeEqualStr(a, b) {
   const ba = Buffer.from(String(a), 'utf8');
   const bb = Buffer.from(String(b), 'utf8');
@@ -73,4 +88,4 @@ function aiEndpointGuard(req, res, next) {
   return next();
 }
 
-module.exports = { aiToken, aiTokenEnv, AI_TOKEN_HEADER, aiEndpointGuard };
+module.exports = { aiToken, aiTokenEnv, aiBaseUrl, aiBaseEnv, AI_TOKEN_HEADER, aiEndpointGuard };
