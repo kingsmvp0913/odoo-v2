@@ -182,6 +182,28 @@ test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含'
   expect(spawn.mock.calls[spawn.mock.calls.length - 1][1]).not.toContain('--resume');
 });
 
+// 意圖：釘住「不採用 --exclude-dynamic-system-prompt-sections」這個決定（2026-08-17 實測後裁決）。
+// 該旗標把 cwd／git status 移出 system prompt 換取跨任務快取命中，實測有效但只值約 1.2% 成本；
+// 代價是那些資訊被降格到 user message，而 user message 會被 auto-compact 壓縮、system prompt 不會。
+// 依 rules/always.md 第 10 條「穩定 > 準確 > 省 token」不採用。
+// 這支測試存在的理由：下一個做成本優化的人會再次翻到這個旗標（它看起來就是白撿的），
+// 紅燈會把他導向 claude-runner.js 裡那段寫明實測數字與裁決理由的註解，而不是重跑一次相同的實驗。
+test('runClaude：不帶 --exclude-dynamic-system-prompt-sections（實測僅省 1.2%，不值準確率風險）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)), on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  await runClaude('p', {});
+  const args = spawn.mock.calls[spawn.mock.calls.length - 1][1];
+  expect(args).not.toContain('--exclude-dynamic-system-prompt-sections');
+});
+
 // 暫停時序缺口：signal 在 runClaude 被呼叫「之前」就已 abort（使用者在前置 DB 查詢／
 // 同關前一次 runClaude 期間按暫停）——addEventListener 對已 abort 的 signal 不會觸發，
 // 不前置檢查的話整段 claude 會照跑白燒 token。

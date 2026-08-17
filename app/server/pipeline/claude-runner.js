@@ -141,6 +141,14 @@ function runClaude(prompt, opts = {}) {
     // headless pipeline agent：略過權限提示，否則子行程要 Write/Bash 會卡在無法互動批准
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
+    // 刻意不加 --exclude-dynamic-system-prompt-sections（2026-08-17 實測後決定不採用）：
+    // 它把 cwd／git status 等每台機不同的區段移出 system prompt 以提升跨任務快取命中，實測換目錄跑
+    // 同一 prompt，cache_create 8884→6879（−22.6%）、cache_read 20614→22325，總 token 不變——
+    // 換算全平台僅約 1.2% 成本，佔 cache_create 總量的 4%（其餘 96% 是各 agent prompt body 不同、
+    // 每張任務規格不同造成的結構性寫入，無旗標可解）。
+    // 不採用的理由：它把那些資訊降格到 user message，而 user message 會被 auto-compact 壓縮、
+    // system prompt 不會——長 coding session 中途的注意力衰減無法用短測驗證。
+    // 依 rules/always.md 第 10 條「穩定 > 準確 > 省 token」，1.2% 不值得換一個排除不掉的準確率風險。
     // 每關只載入指定的 MCP，剝掉繼承的 serena 等（見 MCP_PROFILES）
     args.push('--strict-mcp-config', '--mcp-config', mcpConfigPath(agentType));
     // 每關都掛掃碟守衛：攔全域 find／遞迴廣掃，避免滾成全碟掃描逾時（見 scanGuardSettingsPath）
