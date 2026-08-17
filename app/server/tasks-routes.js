@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
-const multer = require('multer');
 const { query } = require('./db');
 const { HUMAN_STATUSES } = require('../public/js/status-labels.js');
 const { verifyToken } = require('./auth');
@@ -12,19 +11,12 @@ const { uninstallModule } = require('./pipeline/env-agent');
 const { rebuildTesting } = require('./pipeline/rebuild-testing');
 const { invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 const { withProjectLock } = require('./pipeline/project-lock');
-const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize } = require('./lib/attachments');
+const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles } = require('./lib/attachments');
 const { loadTaskForActor } = require('./lib/task-access');
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 5 }
-});
-function uploadMessageFiles(req, res, next) {
-  upload.array('files', 5)(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message });
-    next();
-  });
-}
+// multer 設定已移到 lib/attachments 當單一來源：新增任務／留言／人工退回三個入口共用同一組限制，
+// 各持一份會漂移成「有的入口能傳、有的不能」且完全無訊號。此處保留舊名，呼叫端不動。
+const uploadMessageFiles = uploadAttachmentFiles;
 
 // 刪除任務時清掉該任務的 worktree 與分支（task/<task_id>）。best-effort，不阻斷刪除；
 // 比照 uninstallTaskModule 回警告字串陣列（永不 throw），由呼叫端併進 res.warnings。

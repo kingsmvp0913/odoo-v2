@@ -3,7 +3,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -478,12 +478,22 @@ window.TaskDetailView = Vue.defineComponent({
       if (!this.rejectReason.trim()) return;
       this.rejecting = true;
       try {
-        await Api.post(`tasks/${this.task.id}/reject`, { reason: this.rejectReason.trim() });
+        // 走 FormData 夾帶截圖：視覺類退回（本站佔 22%）用文字描述不清楚，而截圖是下游三關
+        // （分診／respec／coding）唯一能看到「審核者實際看到什麼」的管道——它們讀的是 diff，看不到畫面。
+        const fd = new FormData();
+        fd.append('reason', this.rejectReason.trim());
+        this.rejectFiles.forEach(f => fd.append('files', f));
+        await Api.postForm(`tasks/${this.task.id}/reject`, fd);
         showToast('已退回，任務回到開發依原因修正', 'success');
         this.rejectReason = '';
+        this.rejectFiles = [];
+        if (this.$refs.rejectFileInput) this.$refs.rejectFileInput.value = '';
         await this.load();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.rejecting = false; }
+    },
+    onRejectFilesSelected(e) {
+      this.rejectFiles = Array.from(e.target.files || []);
     },
     // MODE_B 規格審核閘門——確認規格沒問題，開始實作
     async specApprove() {
@@ -1020,6 +1030,10 @@ window.TaskDetailView = Vue.defineComponent({
               <textarea v-model="rejectReason" class="form-control" rows="4"
                 placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔供工作流程健檢）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="reject"></textarea>
+              <div style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:8px">畫面類問題請附截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面</div>
+              <input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected"
+                style="display:block;margin-top:4px;font-size:var(--fs-xs)" />
+              <div v-if="rejectFiles.length" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">已選擇：{{ rejectFiles.map(f => f.name).join('、') }}</div>
               <div class="td-form-actions">
                 <button class="btn btn-primary btn-sm" @click="reject" :disabled="rejecting || !rejectReason.trim()">
                   {{ rejecting ? '退回中...' : '確認退回，回開發依原因修正' }}

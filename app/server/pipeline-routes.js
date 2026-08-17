@@ -6,6 +6,7 @@ const { verifyToken } = require('./auth');
 const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 const { loadTaskForActor } = require('./lib/task-access');
+const { saveAttachmentFile, uploadAttachmentFiles } = require('./lib/attachments');
 
 // approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToAiBranch
 // （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
@@ -87,7 +88,8 @@ function registerRoutes(app) {
   });
 
   // 最終人工審核退回：填原因 → 任務進 reject_triage 分診（不再直進 coding），原因落 task_rejections（健檢子專案 1）
-  app.post('/api/tasks/:id/reject', verifyToken, async (req, res) => {
+  // 掛 uploadAttachmentFiles：退回可夾帶截圖（origin='manual'），純 JSON 呼叫仍相容（multer 放行、req.files 空）
+  app.post('/api/tasks/:id/reject', verifyToken, uploadAttachmentFiles, async (req, res) => {
     try {
       const reason = ((req.body && req.body.reason) || '').trim();
       if (!reason) return res.status(400).json({ error: '請填寫退回原因' });
@@ -117,6 +119,19 @@ function registerRoutes(app) {
         "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,$4,'new')",
         [task.task_id, task.project_id, req.userId, reason]
       );
+      // 退回附截圖：視覺類問題文字描述不清楚，而下游三關（分診／respec／coding）讀的是程式碼 diff、
+      // 看不到畫面——圖是它們唯一能看到「審核者實際看到什麼」的管道。
+      // 必須早於 runPipeline 寫入：assembleTaskContext 是在 agent 起跑時才查 task_attachments，
+      // 寫晚了這輪就讀不到（比照 tasks-routes.js 新增任務同段時序）。
+      // 寫在 rowCount 檢查之後：輸掉雙擊競態的請求不該落附件。
+      for (const file of req.files || []) {
+        const relPath = saveAttachmentFile(task.id, file.originalname, file.buffer);
+        await query(
+          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, 'manual')`,
+          [task.id, file.originalname, file.mimetype, relPath]
+        );
+      }
       require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'reject_triage' });
       runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });

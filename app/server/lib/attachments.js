@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 
 // 相對於專案目錄；UPLOAD_DIR 環境變數可覆寫（不寫死絕對路徑）
 function uploadRoot() {
@@ -79,4 +80,20 @@ function sniffFile(buf) {
   return { ext: '', mime: 'application/octet-stream' };
 }
 
-module.exports = { uploadRoot, taskDir, saveAttachmentFile, deleteTaskDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize };
+// 附件上傳 middleware：memoryStorage 讓呼叫端自己決定何時落地——附件必須早於 runPipeline 寫入，
+// 否則該輪 agent 讀不到（assembleTaskContext 是在 agent 起跑時才查 task_attachments）。
+// 放這裡是為了單一來源：新增任務（tasks-routes）與人工退回（pipeline-routes）共用同一組限制，
+// 各持一份 multer 設定會漂移成「有的入口能傳、有的不能」且完全無訊號。
+// 純 JSON 呼叫仍相容：multer 遇非 multipart 直接放行、req.files 為空。
+const attachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 }
+});
+function uploadAttachmentFiles(req, res, next) {
+  attachmentUpload.array('files', 5)(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}
+
+module.exports = { uploadRoot, taskDir, saveAttachmentFile, deleteTaskDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles };
