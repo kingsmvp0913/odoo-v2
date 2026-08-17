@@ -17,6 +17,9 @@ env/
 # 各專案的 clone 與虛擬環境,由 pipeline 動態產生
 /odoo-envs/
 /repos/
+# 企業版 addons 共用來源(ENTERPRISE_BASE_DIR 預設位置,各大版本一個子目錄)。
+# 是有授權的專有碼且動輒數百 MB,無論由平台 clone 或管理員自行放入都不進版控。
+/enterprise/
 
 # ─── 附件磁碟儲存(runtime,非原始碼)────────────────
 # 使用者上傳/同步下來的附件本體,測試與正式環境都會實際寫入這裡

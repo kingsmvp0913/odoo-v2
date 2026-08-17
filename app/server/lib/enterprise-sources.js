@@ -30,28 +30,97 @@ function runGit(args, opts) {
 async function resolveEnterprisePath(odooVersion) {
   const major = majorDigits(odooVersion);
   const { rows: [src] } = await query(
-    'SELECT clone_status, local_path FROM enterprise_sources WHERE odoo_version=$1', [major]
+    'SELECT clone_status, local_path, source_type FROM enterprise_sources WHERE odoo_version=$1', [major]
   );
   if (!src) {
     return { ok: false, error: `Odoo ${major} 的企業版來源尚未設定，請管理員先到「企業版來源」設定並同步` };
   }
+  // 指路的動詞要對得上該型態在畫面上的按鈕，否則管理員照著訊息去找一個不存在的「同步」鍵
+  const verb = src.source_type === 'local' ? '檢查' : '同步';
   if (src.clone_status !== 'done') {
-    return { ok: false, error: `Odoo ${major} 的企業版來源尚未同步成功（目前狀態：${src.clone_status}），請管理員到「企業版來源」重新同步` };
+    return { ok: false, error: `Odoo ${major} 的企業版來源尚未${verb}成功（目前狀態：${src.clone_status}），請管理員到「企業版來源」重新${verb}` };
   }
   const dir = src.local_path || localPathFor(major);
   if (!fs.existsSync(dir)) {
-    return { ok: false, error: `Odoo ${major} 的企業版目錄不存在（${dir}），請管理員到「企業版來源」重新同步` };
+    return { ok: false, error: `Odoo ${major} 的企業版目錄不存在（${dir}），請管理員到「企業版來源」重新${verb}` };
   }
   return { ok: true, path: dir };
 }
 
-// 同步（clone 或更新）某大版本的 enterprise repo。gitEnv 為 lib/git-identity 產出的 PAT 注入 env
-// （私有 repo 必需），未帶則沿用機器憑證。更新走 fetch + reset --hard 而非 pull：此目錄是唯讀來源，
-// 只需收斂到遠端狀態，reset 可避開 shallow clone 的 pull 行為差異與本地殘留造成的衝突。
+const MANIFEST = '__manifest__.py';
+
+// 目錄下有幾個 Odoo 模組（＝有 __manifest__.py 的子目錄）。純資訊，給管理員確認「這包看起來對不對」。
+function countModules(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(e => e.isDirectory() && fs.existsSync(path.join(dir, e.name, MANIFEST))).length;
+}
+
+// 檢查 mode 位元而非用 fs.access：要問的是「容器內那個 odoo uid 讀不讀得到」，不是「平台這個
+// 行程讀不讀得到」。兩者不同 uid，且平台若以 root 跑，access 對任何檔案都回可讀——這個檢查會
+// 整個失效，然後掛進容器變成一個空 addons 目錄（又是一次靜默降級）。
+function lacksMode(p, bits) {
+  return (fs.statSync(p).mode & bits) !== bits;
+}
+
+// 本地目錄來源的「同步」＝驗證。這裡擋的是三種放錯法，共同點是 Odoo 都不會報錯，只會安靜地
+// 用社群版 web 啟動——沒有任何跡象能讓人發現自己測的不是企業版。故一律在登記當下擋掉。
+function verifyLocalDir(major) {
+  const dir = localPathFor(major);
+  if (!fs.existsSync(dir)) {
+    return { ok: false, error: `目錄不存在：${dir}。請先建立該目錄並把企業版 addons 放進去` };
+  }
+  const weDir = path.join(dir, 'web_enterprise');
+  const weManifest = path.join(weDir, MANIFEST);
+  if (!fs.existsSync(weManifest)) {
+    const subs = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
+    // 解壓 tarball 最常見的結果是 <dir>/enterprise-17.0/web_enterprise。此時 addons-path 指到的
+    // 那層一個模組都沒有。只有「恰好一個子目錄」時這個推斷才成立——目錄裡本來就散著多個模組卻
+    // 缺 web_enterprise 是另一回事（放成社群版 addons／只放了部分模組），不可套同一句話誤導。
+    if (subs.length === 1) {
+      return { ok: false, error: `${dir} 底下找不到 web_enterprise，只有單一子目錄 ${subs[0]}／——是不是多包了一層？請把 ${subs[0]} 裡的內容直接移到 ${dir} 底下` };
+    }
+    return { ok: false, error: `${dir} 底下找不到 web_enterprise/${MANIFEST}——這包不是企業版 addons，或版本目錄放錯了` };
+  }
+  // 目錄要 o+rx（進得去、列得出），檔案要 o+r
+  for (const [p, bits, hint] of [[dir, 0o005, 'o+rx'], [weDir, 0o005, 'o+rx'], [weManifest, 0o004, 'o+r']]) {
+    if (lacksMode(p, bits)) {
+      return { ok: false, error: `${p} 權限不足（需 ${hint}）：容器內的 odoo 是另一個 uid，讀不到就等於掛了一個空目錄。請執行 chmod -R o+rX ${dir}` };
+    }
+  }
+  // manifest 的 version 是現成的判準。抓不到就不擋——manifest 格式各版本略有出入，寧可放行也
+  // 不要因為解析不出來就攔住一包其實正確的 addons。
+  const m = fs.readFileSync(weManifest, 'utf8').match(/["']version["']\s*:\s*["']([^"']+)["']/);
+  if (m && majorDigits(m[1]) !== String(major)) {
+    return { ok: false, error: `web_enterprise 的版本是 ${m[1]}，與登記的 Odoo ${major} 不符——放進 ${major} 目錄的必須是 ${major} 的企業版 addons` };
+  }
+  return { ok: true, path: dir, moduleCount: countModules(dir) };
+}
+
+// 同步某大版本的企業版來源。git 型態走 clone／fetch（gitEnv 為 lib/git-identity 產出的 PAT 注入
+// env，私有 repo 必需，未帶則沿用機器憑證）；local 型態不碰 git，改為驗證管理員放進去的目錄。
+// git 的更新走 fetch + reset --hard 而非 pull：此目錄是唯讀來源，只需收斂到遠端狀態，reset 可
+// 避開 shallow clone 的 pull 行為差異與本地殘留造成的衝突。
 async function syncSource(major, gitEnv) {
   major = String(major);
-  const { rows: [src] } = await query('SELECT repo_url, branch FROM enterprise_sources WHERE odoo_version=$1', [major]);
+  const { rows: [src] } = await query('SELECT repo_url, branch, source_type FROM enterprise_sources WHERE odoo_version=$1', [major]);
   if (!src) return { ok: false, error: `Odoo ${major} 的企業版來源尚未設定` };
+
+  if (src.source_type === 'local') {
+    const r = verifyLocalDir(major);
+    if (r.ok) {
+      await query(
+        `UPDATE enterprise_sources SET clone_status='done', local_path=$2, error_msg=NULL,
+                last_synced_at=NOW(), updated_at=NOW() WHERE odoo_version=$1`,
+        [major, r.path]
+      );
+    } else {
+      await query(
+        "UPDATE enterprise_sources SET clone_status='error', error_msg=$2, updated_at=NOW() WHERE odoo_version=$1",
+        [major, r.error.slice(0, 500)]
+      );
+    }
+    return r;
+  }
 
   const dest = localPathFor(major);
   const opts = { timeout: 900000 };
@@ -92,4 +161,4 @@ async function syncSource(major, gitEnv) {
   }
 }
 
-module.exports = { ENTERPRISE_BASE_DIR, localPathFor, resolveEnterprisePath, syncSource };
+module.exports = { ENTERPRISE_BASE_DIR, localPathFor, resolveEnterprisePath, syncSource, verifyLocalDir };

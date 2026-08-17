@@ -689,7 +689,11 @@ async function migrate() {
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
     { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },
     // 企業版：預設 community，既有專案升級後行為不變（不會突然要求 enterprise 來源）
-    { table: 'projects', col: 'edition', sql: "ALTER TABLE projects ADD COLUMN edition TEXT NOT NULL DEFAULT 'community'" }
+    { table: 'projects', col: 'edition', sql: "ALTER TABLE projects ADD COLUMN edition TEXT NOT NULL DEFAULT 'community'" },
+    // 企業版來源型態：'git'（clone 遠端 repo）或 'local'（管理員自行把 addons 放進共用目錄）。
+    // 預設 git 讓既有列行為不變。local 型態不填 repo_url——該欄是 NOT NULL 且本框架只有
+    // add-if-missing、沒有改約束的 migration（見上方 spec_tour_enabled 註解），故存空字串而非 NULL。
+    { table: 'enterprise_sources', col: 'source_type', sql: "ALTER TABLE enterprise_sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

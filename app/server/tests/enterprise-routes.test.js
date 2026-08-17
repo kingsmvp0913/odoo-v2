@@ -159,6 +159,77 @@ test('DELETE 版本格式不正確 → 400，不誤回假成功', async () => {
   expect(res.status).toBe(400);
 });
 
+// ── 本地目錄來源 ──────────────────────────────────────────────────────────
+// 意圖：企業版整包上百 MB，git 型態要求先把有授權的專有碼推上遠端。本地型態讓管理員直接把
+// addons 放進共用目錄，故這條路徑不該要求 repo URL、不該要求 PAT，也不該走背景＋輪詢
+// ——驗證是毫秒級的檔案檢查，按下去就該當場看到結果。
+
+test('PUT 本地型態不帶 repo_url → 200（URL 是 git 型態才要的）', async () => {
+  const res = await request(app).put('/api/admin/enterprise-sources/17').set(auth())
+    .send({ source_type: 'local' });
+  expect(res.status).toBe(200);
+  const { rows } = await dbModule.query("SELECT source_type, repo_url FROM enterprise_sources WHERE odoo_version='17'");
+  expect(rows[0].source_type).toBe('local');
+  expect(rows[0].repo_url).toBe('');
+});
+
+// 意圖（鑑別力）：本地型態放行不帶 URL，不代表 git 型態也可以——那條防線要維持。
+test('PUT 未指定型態（＝git）仍要求 repo_url → 400', async () => {
+  const res = await request(app).put('/api/admin/enterprise-sources/17').set(auth()).send({ branch: '17.0' });
+  expect(res.status).toBe(400);
+});
+
+// 意圖：git 型態改本地型態後，舊的 repo_url 若留著，前端會顯示一個早已不適用的 URL，
+// 而 syncSource 的分流只看 source_type——畫面與實際行為不一致是最難查的那種錯。
+test('PUT 由 git 型態改為本地型態 → 清掉舊 repo_url 與 branch', async () => {
+  await request(app).put('/api/admin/enterprise-sources/17').set(auth())
+    .send({ repo_url: 'https://x/e.git', branch: '17.0' });
+  await request(app).put('/api/admin/enterprise-sources/17').set(auth()).send({ source_type: 'local' });
+  const { rows } = await dbModule.query("SELECT source_type, repo_url, branch FROM enterprise_sources WHERE odoo_version='17'");
+  expect(rows[0].source_type).toBe('local');
+  expect(rows[0].repo_url).toBe('');
+  expect(rows[0].branch).toBeNull();
+});
+
+test('POST sync 本地型態 → 同步回結果（200 帶模組數），不要 PAT 也不背景跑', async () => {
+  await dbModule.query("INSERT INTO enterprise_sources (odoo_version, repo_url, source_type) VALUES ('17','','local')");
+  ent.syncSource.mockResolvedValue({ ok: true, path: '/e/17', moduleCount: 1284 });
+  const res = await request(app).post('/api/admin/enterprise-sources/17/sync').set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.moduleCount).toBe(1284);
+  expect(gitIdentity.buildGitEnv).not.toHaveBeenCalled();
+  expect(ent.syncSource).toHaveBeenCalledWith('17');   // 不帶 gitEnv
+});
+
+// 意圖：驗證失敗要當場回錯誤原文。若比照 git 型態回 202，管理員只會看到「已開始」，
+// 得再手動重整一次才知道自己放錯了——而那正是他最需要立刻知道的時刻。
+test('POST sync 本地型態驗證失敗 → 400 並帶回原因，不回假成功', async () => {
+  await dbModule.query("INSERT INTO enterprise_sources (odoo_version, repo_url, source_type) VALUES ('17','','local')");
+  ent.syncSource.mockResolvedValue({ ok: false, error: '找不到 web_enterprise' });
+  const res = await request(app).post('/api/admin/enterprise-sources/17/sync').set(auth());
+  expect(res.status).toBe(400);
+  expect(res.body.error).toContain('web_enterprise');
+});
+
+// 意圖：那個 30 分鐘併發鎖是為了「兩個 git clone 撞同一個目錄」而存在的。本地驗證不寫檔案、
+// 毫秒級結束，不需要鎖；而殘留的 syncing 狀態（例如型態切換前留下的）若也擋著，
+// 會變成再也按不動「檢查」的死結。
+test('POST sync 本地型態不受 syncing 併發鎖影響（驗證不寫檔，無競態可言）', async () => {
+  await dbModule.query(
+    "INSERT INTO enterprise_sources (odoo_version, repo_url, source_type, clone_status, updated_at) VALUES ('17','','local','syncing',NOW())"
+  );
+  ent.syncSource.mockResolvedValue({ ok: true, path: '/e/17', moduleCount: 3 });
+  const res = await request(app).post('/api/admin/enterprise-sources/17/sync').set(auth());
+  expect(res.status).toBe(200);
+  expect(ent.syncSource).toHaveBeenCalled();
+});
+
+test('GET 回傳 source_type（前端據此顯示「檢查」而非「同步」）', async () => {
+  await dbModule.query("INSERT INTO enterprise_sources (odoo_version, repo_url, source_type) VALUES ('17','','local')");
+  const res = await request(app).get('/api/admin/enterprise-sources').set(auth());
+  expect(res.body.sources[0].source_type).toBe('local');
+});
+
 test('非管理員 → 403', async () => {
   const { hashPassword } = require('../password');
   await dbModule.query(

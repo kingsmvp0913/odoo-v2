@@ -18,7 +18,7 @@ function registerRoutes(app) {
   app.get('/api/admin/enterprise-sources', auth, async (req, res) => {
     try {
       const { rows } = await query(
-        `SELECT odoo_version, repo_url, branch, local_path, clone_status, error_msg, last_synced_at
+        `SELECT odoo_version, source_type, repo_url, branch, local_path, clone_status, error_msg, last_synced_at
            FROM enterprise_sources ORDER BY odoo_version`
       );
       res.json({ sources: rows, base_dir: enterpriseSources.ENTERPRISE_BASE_DIR });
@@ -31,18 +31,27 @@ function registerRoutes(app) {
     try {
       const major = majorDigits(req.params.version);
       if (!major) return res.status(400).json({ error: '版本格式不正確（例：17 或 17.0）' });
-      const repoUrl = (req.body?.repo_url || '').trim();
-      if (!repoUrl) return res.status(400).json({ error: '請填 Git repo URL' });
-      // 與 project-routes triggerClone 相同的 URL scheme 白名單：擋掉會讓 git 讀本機檔案的輸入
-      if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
-        return res.status(400).json({ error: '不支援的 Git URL 格式' });
+      // 本地型態不填 URL 與分支：來源就是共用目錄底下的 <大版本>／，路徑固定不可指定——可自填
+      // 會讓人指到非同構掛載的位置（如 /tmp），掛進 sibling 容器會變成空目錄而毫無跡象。
+      // repo_url 一律覆寫成空字串而非留著舊值：畫面顯示一個早已不適用的 URL，而 syncSource
+      // 的分流只看 source_type，是最難查的那種不一致。
+      const sourceType = req.body?.source_type === 'local' ? 'local' : 'git';
+      let repoUrl = '';
+      let branch = null;
+      if (sourceType === 'git') {
+        repoUrl = (req.body?.repo_url || '').trim();
+        if (!repoUrl) return res.status(400).json({ error: '請填 Git repo URL' });
+        // 與 project-routes triggerClone 相同的 URL scheme 白名單：擋掉會讓 git 讀本機檔案的輸入
+        if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
+          return res.status(400).json({ error: '不支援的 Git URL 格式' });
+        }
+        branch = (req.body?.branch || '').trim() || null;
       }
-      const branch = (req.body?.branch || '').trim() || null;
       await query(
-        `INSERT INTO enterprise_sources (odoo_version, repo_url, branch, updated_at)
-         VALUES ($1,$2,$3,NOW())
-         ON CONFLICT (odoo_version) DO UPDATE SET repo_url=$2, branch=$3, updated_at=NOW()`,
-        [major, repoUrl, branch]
+        `INSERT INTO enterprise_sources (odoo_version, repo_url, branch, source_type, updated_at)
+         VALUES ($1,$2,$3,$4,NOW())
+         ON CONFLICT (odoo_version) DO UPDATE SET repo_url=$2, branch=$3, source_type=$4, updated_at=NOW()`,
+        [major, repoUrl, branch, sourceType]
       );
       res.json({ ok: true, odoo_version: major });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -54,8 +63,15 @@ function registerRoutes(app) {
     try {
       const major = majorDigits(req.params.version);
       if (!major) return res.status(400).json({ error: '版本格式不正確（例：17 或 17.0）' });
-      const { rows } = await query('SELECT clone_status, updated_at FROM enterprise_sources WHERE odoo_version=$1', [major]);
+      const { rows } = await query('SELECT clone_status, updated_at, source_type FROM enterprise_sources WHERE odoo_version=$1', [major]);
       if (!rows.length) return res.status(404).json({ error: `Odoo ${major} 的企業版來源尚未設定` });
+      // 本地型態：驗證是毫秒級的檔案檢查，不寫檔、無競態，故不走背景＋輪詢、也不需要下面那個
+      // 併發鎖與 PAT。當場回結果，管理員按下去立刻知道自己放對了沒有——那正是他最需要知道的時刻。
+      if (rows[0].source_type === 'local') {
+        const r = await enterpriseSources.syncSource(major);
+        if (!r.ok) return res.status(400).json({ error: r.error });
+        return res.json({ ok: true, moduleCount: r.moduleCount });
+      }
       // 併發保護：前端按鈕在 202 回應後立刻恢復可按，畫面要等 3 秒後那次輪詢才顯示「同步中」，
       // 空窗期很容易被按第二次；同一目錄兩個 git 同時操作可能撞 index.lock，最終由後完成者
       // 決定 clone_status，可能出現「狀態 done、目錄其實半套」。逾時條件必要：server 若在

@@ -45,3 +45,20 @@ test('enterprise_sources 新登記的預設狀態是 pending——沒同步過�
   expect(s.clone_status).toBe('pending');
   expect(s.last_synced_at).toBeNull();
 });
+
+// 意圖：source_type 決定 syncSource 走 git clone 還是驗證本地目錄。預設必須是 git——既有列
+// 是升級前登記的 git 來源，若預設成 local，它們下次同步會改去檢查一個根本沒人放東西的目錄。
+test('enterprise_sources.source_type 預設 git——既有的 git 來源升級後行為不變', async () => {
+  const { rows: [s] } = await dbModule.query(
+    "INSERT INTO enterprise_sources (odoo_version, repo_url) VALUES ('19','https://example.com/e19.git') RETURNING source_type"
+  );
+  expect(s.source_type).toBe('git');
+});
+
+test('enterprise_sources.source_type 可寫入 local，且該型態不需要 repo_url（存空字串）', async () => {
+  const { rows: [s] } = await dbModule.query(
+    "INSERT INTO enterprise_sources (odoo_version, repo_url, source_type) VALUES ('20','','local') RETURNING source_type, repo_url"
+  );
+  expect(s.source_type).toBe('local');
+  expect(s.repo_url).toBe('');
+});

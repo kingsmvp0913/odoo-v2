@@ -1040,6 +1040,10 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 /* 「已登記版本」區塊標題列（標題＋重新整理按鈕左右對齊） */
 .ae-registered-head-row { display:flex;align-items:center;justify-content:space-between }
 
+/* 來源型態選擇（Git repo／本地目錄）：兩張 .opt-card 橫排 */
+.ae-type-choices { display:flex;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-4) }
+.ae-type-choices .opt-card { flex:1;min-width:240px }
+
 /* 單一企業版來源列 */
 .ae-source-row { display:flex;align-items:center;gap:var(--space-4);padding:var(--space-3) 0;border-bottom:1px solid var(--border);flex-wrap:wrap }
 
