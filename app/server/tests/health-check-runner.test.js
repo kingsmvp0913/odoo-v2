@@ -58,7 +58,8 @@ test('runHealthCheck：遍歷有 stage 的 agent（排除 workflow_health），�
   await runHealthCheck(runId, { windowDays: 30, startedBy: null });
 
   const { rows: fs } = await dbModule2.query('SELECT agent_name, severity FROM health_check_findings WHERE run_id=$1 ORDER BY agent_name', [runId]);
-  expect(fs.map(f => f.agent_name)).toEqual(['coding-project', 'qa']); // 排除 workflow-health
+  // __summary__＝per-agent 診斷跑完後追加的全域總結（見 summarizeRun）；workflow-health 自己仍被排除
+  expect(fs.map(f => f.agent_name)).toEqual(['__summary__', 'coding-project', 'qa']);
   const { rows: [run] } = await dbModule2.query('SELECT status, finished_at FROM health_check_runs WHERE id=$1', [runId]);
   expect(run.status).toBe('done');
   expect(run.finished_at).not.toBeNull();
@@ -113,7 +114,7 @@ test('建議提示詞內含 </result> → 走 <prompt> 區塊仍正確解析，�
   await runHealthCheck(runId, { windowDays: 30 });
 
   const { rows: fs } = await dbModule2.query(
-    'SELECT severity, diagnosis, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
+    "SELECT severity, diagnosis, suggested_prompt FROM health_check_findings WHERE run_id=$1 AND agent_name NOT IN ('__summary__','__system__')", [runId]);
   expect(fs.length).toBe(2);
   expect(fs.every(f => f.severity === 'medium')).toBe(true);   // 不再是 error
   expect(fs[0].diagnosis).toBe('重跑偏高');
@@ -168,7 +169,7 @@ test('診斷／理由走獨立標籤區塊，JSON 只剩短欄位 → 正確落 
   await runHealthCheck(runId, { windowDays: 30 });
 
   const { rows: fs } = await dbModule2.query(
-    'SELECT severity, diagnosis, rationale, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
+    "SELECT severity, diagnosis, rationale, suggested_prompt FROM health_check_findings WHERE run_id=$1 AND agent_name NOT IN ('__summary__','__system__')", [runId]);
   expect(fs).toHaveLength(2);
   expect(fs.every(f => f.severity === 'medium')).toBe(true);
   expect(fs[0].diagnosis).toBe('repeat_calls.avg 2.4，反覆重跑');
@@ -242,7 +243,7 @@ test('該關近期零呼叫 → severity 覆寫為未取樣，不採信模型判
   await runHealthCheck(runId, { windowDays: 30 });
 
   const { rows: fs } = await dbModule2.query(
-    "SELECT severity FROM health_check_findings WHERE run_id=$1 AND agent_name <> '__system__'", [runId]);
+    "SELECT severity FROM health_check_findings WHERE run_id=$1 AND agent_name NOT IN ('__summary__','__system__')", [runId]);
   expect(fs).toHaveLength(2);
   expect(fs.every(f => f.severity === 'n/a')).toBe(true);   // 不是 ok
 });
@@ -260,7 +261,7 @@ test('該關有呼叫紀錄 → 維持模型判定的 severity', async () => {
   await runHealthCheck(runId, { windowDays: 30 });
 
   const { rows: fs } = await dbModule2.query(
-    "SELECT severity FROM health_check_findings WHERE run_id=$1 AND agent_name <> '__system__'", [runId]);
+    "SELECT severity FROM health_check_findings WHERE run_id=$1 AND agent_name NOT IN ('__summary__','__system__')", [runId]);
   expect(fs.every(f => f.severity === 'ok')).toBe(true);
 });
 
@@ -341,4 +342,72 @@ test('停下原因只差數字 → 正規化後視為同一類', async () => {
     "SELECT diagnosis FROM health_check_findings WHERE run_id=$1 AND agent_name='__system__'", [runId]);
   expect(sys).toBeTruthy();
   expect(sys.diagnosis).toContain('2 張');   // 兩筆循環被算成同一群
+});
+
+// --- 全域總結（跨關卡推理）---
+// 意圖：per-agent 診斷各自為政，跨關問題會被每一關正確地判成「與本關無關」——每個判斷都對，
+// 合起來沒有人負責。aggregateSystemFinding 只補了客觀統計（分組計數），做不了因果推理。
+// 這組測試釘的是：總結真的讀到各關診斷（而非重新去讀原始數據）、與客觀統計分開存、失敗不拖垮整輪。
+test('全域總結：讀本輪各關診斷 → 落一筆 __summary__，與 __system__ 分開', async () => {
+  await dbModule2.query('DELETE FROM tasks');           // 清掉上一題的 stopped fixture，避免混入統計
+  const seen = [];
+  mockRunClaude.mockImplementation(async (prompt) => {
+    seen.push(prompt);
+    return {
+      text: '<diagnosis>各關都把規格歧義丟給下一關</diagnosis><rationale>依客觀統計 2 張不同任務</rationale><result>{"severity":"medium"}</result>',
+      usage: null, durationMs: 5
+    };
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: [sum] } = await dbModule2.query(
+    "SELECT diagnosis, severity, rationale, suggested_prompt FROM health_check_findings WHERE run_id=$1 AND agent_name='__summary__'", [runId]);
+  expect(sum).toBeTruthy();
+  expect(sum.severity).toBe('medium');
+  expect(sum.diagnosis).toContain('丟給下一關');
+  expect(sum.rationale).toContain('2 張不同任務');
+  // 跨關問題改任何單一 agent 的 prompt 都沒用，硬給一份會把人導去改錯地方（比照 aggregateSystemFinding）
+  expect(sum.suggested_prompt).toBeNull();
+  // 總結的輸入必須是「已濃縮的各關診斷」而不是重新撈原始數據——否則它就只是第 22 個 per-agent 健檢
+  const summaryPrompt = seen[seen.length - 1];
+  expect(summaryPrompt).toContain('開發');   // agent_label 出現在餵給總結的 findings 區塊
+  expect(summaryPrompt).toContain('QA');
+});
+
+test('全域總結解析不過 → 不落假 finding，run 仍 done', async () => {
+  await dbModule2.query('DELETE FROM tasks');
+  let n = 0;
+  mockRunClaude.mockImplementation(async () => {
+    n++;
+    // 前兩次（per-agent）正常，第三次（總結）吐不合契約的東西
+    return n <= 2
+      ? { text: '<result>{"diagnosis":"ok","severity":"low"}</result>', usage: null, durationMs: 5 }
+      : { text: '這是一段沒有任何契約標籤的散文', usage: null, durationMs: 5 };
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: sum } = await dbModule2.query(
+    "SELECT id FROM health_check_findings WHERE run_id=$1 AND agent_name='__summary__'", [runId]);
+  expect(sum.length).toBe(0);                       // 寧可沒有，也不落一筆假的擠掉真正該看的
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('done');                  // best-effort：不拖垮已完成的 per-agent 診斷
+});
+
+test('續跑：本輪已有 __summary__ → 不重跑總結', async () => {
+  await dbModule2.query('DELETE FROM tasks');
+  const runId = await newRun();
+  await dbModule2.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity)
+     VALUES ($1,'__summary__','全域總結','上一輪就總結過了','low')`, [runId]);
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"diagnosis":"ok","severity":"low"}</result>', usage: null, durationMs: 5
+  });
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows: sums } = await dbModule2.query(
+    "SELECT diagnosis FROM health_check_findings WHERE run_id=$1 AND agent_name='__summary__'", [runId]);
+  expect(sums.length).toBe(1);                      // 沒有被追加第二筆
+  expect(sums[0].diagnosis).toBe('上一輪就總結過了');
 });

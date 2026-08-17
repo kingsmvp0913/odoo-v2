@@ -22,6 +22,9 @@ const SEV_NO_SAMPLE = 'n/a';
 // 任務灌水（一張任務走過七個關卡，就會在七個 agent 的 blocker_samples 裡各出現一次，看起來
 // 像七個獨立證據，其實是同一件事）。
 const SYSTEM_AGENT = '__system__';
+// 全域總結那一筆的 agent_name（見 summarizeRun）。與 SYSTEM_AGENT 分開存：一個是程式算的客觀
+// 統計、一個是模型的跨關推理，混在同一筆會讓「哪句話有數據撐、哪句是推論」再也分不出來。
+const SUMMARY_AGENT = '__summary__';
 const SYSTEM_MIN_TASKS = parseInt(process.env.HEALTH_SYSTEM_MIN_TASKS || '2', 10);
 const SYSTEM_MIN_RATIO = parseFloat(process.env.HEALTH_SYSTEM_MIN_RATIO || '0.3');
 
@@ -78,6 +81,51 @@ async function aggregateSystemFinding(runId, windowDays) {
   return finding;
 }
 
+// 全域總結：per-agent 診斷各自為政，跨關卡的問題會被每一關各自正確地判成「與本關無關」——
+// 每個判斷都對，合起來沒有人負責。aggregateSystemFinding 補的是客觀統計那一半（同類 blocker 分組
+// 計數），但統計做不了因果推理：「前一關的產出不合後一關的預期」「某關的健康是把問題丟給下一關
+// 換來的」這種只有讀過全部診斷的推理者看得出來。這一段補的是推理那一半。
+// 輸入是已濃縮的各關診斷（每份幾百字）而非原始數據，所以 context 小、一次呼叫就夠。
+// 刻意不合併成「21 關共用一個 session」：那會省更多 token，但會毀掉 doneSet 的中斷續跑，
+// 且 context 長到後段時模型對前幾關的注意力會下降。
+async function summarizeRun(runId, startedBy) {
+  const { rows } = await query(
+    `SELECT agent_name, agent_label, severity, diagnosis, rationale FROM health_check_findings
+     WHERE run_id=$1 AND agent_name <> $2 ORDER BY id`,
+    [runId, SUMMARY_AGENT]
+  );
+  if (!rows.length) return null;                              // 一份診斷都沒有＝沒東西可總結
+  // 從 DB 撈統計而非靠參數傳入：續跑時 aggregateSystemFinding 已在上一輪落過、這輪不會重跑，
+  // 傳參數會拿到 null，總結就少掉唯一的客觀規模依據。
+  const sys = rows.find(r => r.agent_name === SYSTEM_AGENT);
+  const perAgent = rows.filter(r => r.agent_name !== SYSTEM_AGENT);
+  if (!perAgent.length) return null;
+  const agent = loadAgent('health-summary');
+  const prompt = agent.render({
+    findings: perAgent.map(r =>
+      `### ${r.agent_label || r.agent_name}（severity: ${r.severity}）\n${String(r.diagnosis || '').trim()}`
+    ).join('\n\n'),
+    system_stat: sys ? `${sys.diagnosis}\n\n（依據：${sys.rationale || ''}）`.trim() : '（無）'
+  });
+  const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health' });
+  await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
+  // 比照 checkOne：長文字走獨立標籤，<result> 的 JSON 只剩一個短值，幾乎壞不掉。
+  const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(text, 'diagnosis');
+  const { inner: ratBlock, cleaned } = extractTaggedBlock(afterDiag, 'rationale');
+  const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
+  const severity = String((parsed && parsed.severity) || '').trim().toLowerCase();
+  const diagnosis = String((diagBlock || (parsed && parsed.diagnosis)) || '').trim();
+  // 解析不過就不落：這是加值資訊，落一筆「總結失敗」的紅字只會擠掉真正該看的那幾則
+  // （比照 aggregateSystemFinding 的「沒有達標的群就不落，不為報而報」）。
+  if (!diagnosis || !SEVERITIES.has(severity)) return null;
+  await query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6)`,
+    [runId, SUMMARY_AGENT, '全域總結', diagnosis, severity, (ratBlock && ratBlock.trim()) || null]
+  );
+  return { severity, diagnosis };
+}
+
 // admin 一鍵健檢的背景執行（fire-and-forget）：對每個有 stage 的 pipeline agent（排除自己）
 // 聚合摘要 → 跑 opus 健檢 agent → 落一筆 finding。單一 agent 失敗不影響其他（best-effort）。
 async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {}) {
@@ -95,6 +143,12 @@ async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {})
     if (!doneSet.has(SYSTEM_AGENT)) {
       try { await aggregateSystemFinding(runId, windowDays); }
       catch (err) { console.error('[HEALTH-CHECK] system finding:', err.message); }
+    }
+    // 全域總結排最後：它要讀本輪所有 per-agent 診斷＋上面剛落的客觀統計。
+    // 同樣 best-effort——總結失敗不該讓已完成的 21 份診斷跟著作廢。
+    if (!doneSet.has(SUMMARY_AGENT)) {
+      try { await summarizeRun(runId, startedBy); }
+      catch (err) { console.error('[HEALTH-CHECK] summary:', err.message); }
     }
     await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
   } catch (err) {
