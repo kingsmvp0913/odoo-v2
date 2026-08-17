@@ -219,7 +219,12 @@ window.PipelineFlowView = Vue.defineComponent({
           return y === b && x !== a && nx && nx.track !== nb.track
             && nx.step === nb.step && enterSide(x, b) === myEnter;
         });
-        if (enterTaken) out[a + '>' + b] = 'over';
+        // 但「橫到正上方再往下」的前提是**掉下去那一段是空的**。目標的泳道在中間夾著別的關時，
+        // 從頂部進來就是從那幾關身上直直穿過去——合併衝突→併入 ai-dev 正好落在「部署測試區」的
+        // 中心線上，看起來像是合併衝突有第二條線接進部署。這種只能退回走廊，擠在被佔住的那側旁。
+        const dropBlocked = this.nodes.some((n) => n.track === nb.track
+          && n.step > na.step && n.step < nb.step);
+        if (enterTaken && !dropBlocked) out[a + '>' + b] = 'over';
       }
       return out;
     },
@@ -313,6 +318,9 @@ window.PipelineFlowView = Vue.defineComponent({
         else if (r.mode === 'innerUp') add(a, 'T', k, false, xdir(a, b));
         else if (r.mode === 'innerBack') add(b, 'B', k, false, xdir(b, a));
         else if (r.mode === 'over') { add(a, 'B', k, false, xdir(a, b)); add(b, 'T', k, false, xdir(b, a)); }
+        // 繞外側的線只有目標端接上／下緣（起點端從側邊出去，佔的是 portOffsets 那邊的位）。
+        // 讓位的方向要指向**它是從哪邊繞過來的**，否則會被排到另一側，一落下來就得往回橫。
+        else if (r.mode === 'outer') add(b, nb.step < na.step ? 'T' : 'B', k, false, xdir(b, a));
         else if (r.mode === 'bus' && !r.sameTrack) {
           const tp = this.layout.pos[r.bus.target];
           add(a, 'B', k, false, Math.sign(this.busXOf(r.bus) - (this.layout.pos[a].x + this.layout.pos[a].w / 2)));
@@ -351,10 +359,12 @@ window.PipelineFlowView = Vue.defineComponent({
       // dir＝這條線在這個接口是往上還是往下延伸。排序時往上的擺上面、往下的擺下面，
       // 去程與回程就天生不會打叉——回程從上面橫走時，去程的垂直段還沒開始往下。
       let seq = 0;
-      const add = (nodeId, side, key, end, dir, isLevel) => {
+      const add = (nodeId, side, key, end, dir, isLevel, dist) => {
         if (!side) return;
         const gk = nodeId + ':' + side;
-        (byPort[gk] = byPort[gk] || []).push({ key, end, dir: dir || 0, isLevel: !!isLevel, idx: seq });
+        (byPort[gk] = byPort[gk] || []).push({
+          key, end, dir: dir || 0, isLevel: !!isLevel, idx: seq, dist: dist == null ? null : dist
+        });
       };
       const lastTrack = this.tracks[this.tracks.length - 1].id;
       // 匯流排主幹先在目標節點的接口佔一個位——它的路徑是獨立畫的，不在下面的 edges 迴圈裡，
@@ -387,6 +397,11 @@ window.PipelineFlowView = Vue.defineComponent({
         // 因此自然一上一下，不再互相交錯。
         const dOut = Math.sign(nb.step - na.step);   // 出去：往上的關在上面 → -1
         const dIn = -dOut;                           // 進來：從上面來 → -1
+        // 這條線的垂直段離某一端多遠（走上／下緣或匯流排的沒有這一段 → null）。走廊線的兩端
+        // 共用同一條垂直段，但各自量到自己的中線——排接口順序時要用的是「離**這一關**多遠」。
+        const vx = this.entryVertX(a, b, r);
+        const distTo = (p) => (vx == null ? null : Math.abs(vx - (p.x + p.w / 2)));
+        const dist = distTo(pb);
         if (r.mode === 'bus') {
           // 接頭的另一端落在主幹上，不佔目標節點的接口；跨泳道的接頭從底部出發也不佔側邊
           // 主幹在正下方時，接頭一律從節點底部走，不佔側邊接口
@@ -394,9 +409,11 @@ window.PipelineFlowView = Vue.defineComponent({
         } else if (r.mode === 'inner') {
           // 起點端在自己泳道底下用固定偏移錯開；目標端仍是側邊接口，要分軌——
           // 去程的終點與回程的起點都落在目標同一側，不分軌就整段疊在一起。
-          add(b, r.side === 'R' ? 'L' : 'R', key, 'in', dIn);
+          add(b, r.side === 'R' ? 'L' : 'R', key, 'in', dIn, false, dist);
         } else if (r.mode === 'innerUp') {
-          add(b, r.side === 'R' ? 'L' : 'R', key, 'in', dIn);
+          add(b, r.side === 'R' ? 'L' : 'R', key, 'in', dIn, false, dist);
+        } else if (r.mode === 'outer') {
+          add(a, r.side, key, 'out', dOut);          // 目標端接上／下緣，不佔側邊
         } else if (r.mode === 'innerBack') {
           // r.side 就是「往哪一邊走」，所以線從同名的那一側出去。寫成反的話，去程的終點與
           // 回程的起點會被登記到節點的不同側，分軌就不會把這兩條算在一起（它們其實都接左側）。
@@ -412,8 +429,8 @@ window.PipelineFlowView = Vue.defineComponent({
           add(a, r.side, key, 'out', dOut); add(b, r.side, key, 'in', dIn);
         } else {                                             // level／corridor
           const isLevel = r.mode === 'level';
-          add(a, r.side, key, 'out', dOut, isLevel);
-          add(b, r.side === 'R' ? 'L' : 'R', key, 'in', dIn, isLevel);
+          add(a, r.side, key, 'out', dOut, isLevel, distTo(pa));
+          add(b, r.side === 'R' ? 'L' : 'R', key, 'in', dIn, isLevel, dist);
         }
       }
       const out = {};
@@ -428,7 +445,16 @@ window.PipelineFlowView = Vue.defineComponent({
         //   當排序鍵的話，同一對節點的往返會在兩端都拿到對稱位置，兩條疊成 Z 字（客服處理↔需補資料）。
         //   其他 → **出去的擺上面**：「從上面下來進入某關」與「從該關往上出去」在接口處都算「上」，
         //   不再分就會擠成一點（合併衝突→部署測試區 撞 部署→失敗待確認）。
+        // 兩條線都要在這一側轉彎時，順序由**垂直段離這一關多遠**決定，不看進出：
+        // 垂直段往上長的（從上面下來的線）→ 近的接在上面；往下長的 → 遠的接在上面。
+        // 反過來排的話，外側那條的橫段必然穿過內側那條的垂直段——
+        //   分診→待你裁決（垂直段在 x=844）壓過 規格層重做→待你裁決（x=740）、
+        //   合併衝突↔併入 ai-dev 這對來回線在兩端各打一個叉，都是這樣來的。
+        // 只有一端量得到距離時（另一端走頂／底緣或匯流排）才退回舊規則「出去的擺上面」。
         list.sort((p, q) => (p.dir - q.dir)
+          || (p.dist != null && q.dist != null
+            ? (p.dir < 0 ? p.dist - q.dist : q.dist - p.dist)
+            : 0)
           || (p.isLevel && q.isLevel
             ? p.idx - q.idx
             : (p.end === 'out' ? 0 : 1) - (q.end === 'out' ? 0 : 1))
@@ -437,6 +463,18 @@ window.PipelineFlowView = Vue.defineComponent({
           const dy = (i - (list.length - 1) / 2) * 13;
           (out[it.key] = out[it.key] || {})[it.end] = dy;
         });
+      }
+      // 同 step 的橫線：只要有一端沒有別的線在搶（那一端本來就走中線），就跟著另一端的高度，
+      // 整條畫成一條直線。兩端各自讓開會在中間折一小段 6～13px 的垂直，而那截 Z 字常常正好
+      // 落在別條線上——併入測試→合併衝突 就這樣和 併入 ai-dev→合併衝突 疊了 15px。
+      // 兩端都有別的線在搶時不動：那種折是真的擠不下（客服處理↔需補資料）。
+      for (const [a, b] of this.edges) {
+        const r = this.routeKind(a, b);
+        if (!r || r.mode !== 'level') continue;
+        const o = out[a + '>' + b];
+        if (!o) continue;                                 // 兩端都沒人搶＝本來就是直線
+        if (o.out == null) o.out = o.in;
+        else if (o.in == null) o.in = o.out;
       }
       return out;
     },
@@ -495,12 +533,9 @@ window.PipelineFlowView = Vue.defineComponent({
         if (!r || r.mode === 'straight' || r.mode === 'level') continue;        // 這兩種不佔走廊
         if (r.mode.startsWith('inner') || r.mode === 'over') continue;         // 各有專屬通道
         let gk;
-        if (r.mode === 'sidestep') gk = 'side:' + na.track;
-        // 必須與 edgePath 算出**同一個值**，否則同一條走廊的來回線會被分到兩組、各自以為
-        // 自己獨佔那條走廊，然後疊在一起（客服處理↔等待確認回覆 疊了 99px）。
-        else gk = 'gap:' + (pb.x > pa.x
-          ? pa.x + pa.w + this.layout.GAP / 2
-          : pa.x - this.layout.GAP / 2);
+        // 繞外側的線與 sidestep 走同一條外側通道，分在同一組才會一內一外讓開
+        if (r.mode === 'sidestep' || r.mode === 'outer') gk = 'side:' + na.track;
+        else gk = 'gap:' + this.corridorMidX(a, b);
         (groups[gk] = groups[gk] || []).push({ k, y0, y1 });
       }
       const out = {};
@@ -643,7 +678,39 @@ window.PipelineFlowView = Vue.defineComponent({
       // 曾經讓「跨兩格以上」的線繞外側，想解掉 部署→失敗待確認 撞 併入測試↔合併衝突 那兩個
       // 交叉。實測反而從 11 個變成 13 個：繞外側要橫跨整條人工泳道與分診匯流排，沿途製造的
       // 交叉比省下的多。那兩個交叉在目前的節點排列下無解，留著。
+      //
+      // 但走廊的最後一段是「橫進目標」，跨兩條泳道以上時它可能正好從中間那條泳道的某一關身上
+      // 輾過去（分診→分析 壓過「等待確認」）。這種才繞外側。與上面那次的差別是**有沒有先問過**：
+      // 那次是無差別繞，這裡只在真的壓到方塊時繞，而且限來源就在最外側泳道——外面是空的，
+      // 整段路上一個交叉都不生。
+      const away = pb.x > pa.x ? 'L' : 'R';
+      const outerLane = this.tracks[away === 'R' ? this.tracks.length - 1 : 0].id;
+      if (na.track === outerLane
+        && this.horizontalHitsNode(pb.y + pb.h / 2, this.corridorMidX(from, to),
+          pb.x > pa.x ? pb.x : pb.x + pb.w)) {
+        return { mode: 'outer', side: away };
+      }
       return { mode: 'corridor', side: pb.x > pa.x ? 'R' : 'L' };
+    },
+
+    // 走廊的 x（起點泳道旁邊那條，不是起訖的幾何中點）。routeTracks 分組、edgePath 畫線、
+    // entryVertX 排接口順序三處都要拿到**同一個值**：各算各的就會被分到不同組、各自以為獨佔
+    // 那條走廊，然後疊在一起（客服處理↔等待確認回覆 疊過 99px）。
+    corridorMidX(from, to) {
+      const a = this.layout.pos[from], b = this.layout.pos[to];
+      return b.x > a.x ? a.x + a.w + this.layout.GAP / 2 : a.x - this.layout.GAP / 2;
+    },
+
+    // 一條線在「橫進目標」之前那段垂直線落在哪個 x。接口分軌要靠它排上下順序（見 portOffsets）。
+    // 走上／下緣或匯流排的線沒有這一段，回 null。
+    entryVertX(from, to, r) {
+      const a = this.layout.pos[from], key = from + '>' + to;
+      const acx = a.x + a.w / 2;
+      if (r.mode === 'inner') return acx + (this.vertPortSlots[key + '@' + from + ':B'] || 0);
+      if (r.mode === 'innerUp') return acx + (this.vertPortSlots[key + '@' + from + ':T'] || 0);
+      if (r.mode !== 'corridor') return null;
+      const t = this.routeTracks[key] || 0;
+      return this.corridorMidX(from, to) + (t === 0 ? 0 : (t % 2 ? 1 : -1) * Math.ceil(t / 2) * 15);
     },
 
     // 匯流排主幹的 x——buses（算幾何）與 gapTracks／edgePath（算接頭）都問這裡，各自重算就會
@@ -740,6 +807,16 @@ window.PipelineFlowView = Vue.defineComponent({
         if (!this.horizontalHitsNode(acy, ax0, tx)) return `M ${ax0} ${acy} H ${tx} V ${b.y}`;
         return `M ${acx + vOff(from, 'B')} ${a.y + a.h} V ${this.gapY(a, key, true)} H ${tx} V ${b.y}`;
       }
+      // 繞外側（見 routeKind）：從**背對目標**的那一側出去，貼著最外泳道外面走到目標那一列的
+      // 上／下方間隙，再橫回目標正上／正下方接進頂／底緣。外側那條通道與 sidestep 共用
+      // （routeTracks 分在同一組），兩者同時出現時會自動一內一外，不會疊在一起。
+      if (r.mode === 'outer') {
+        const isR = r.side === 'R';
+        const up = nb.step < na.step;
+        const ox = acx + (isR ? 1 : -1) * (a.w / 2 + 16 + t * 15);
+        const tx = bcx + vOff(to, up ? 'T' : 'B');
+        return `M ${isR ? a.x + a.w : a.x} ${acy} H ${ox} V ${this.gapY(b, key, !up)} H ${tx} V ${up ? b.y : b.y + b.h}`;
+      }
       const goRight = b.x > a.x;
       // 同一 step 的橫線：兩端都照接口分軌讓開，高度一致就是直線，不一致就在起點旁折一小段。
       // 一度改成「往右走上方、往左走下方」的固定偏移，但那樣它不參與分軌，會和同一個接口上
@@ -754,8 +831,7 @@ window.PipelineFlowView = Vue.defineComponent({
       }
       // 走廊取「起點泳道旁邊那條」，不是起訖的幾何中點——跨兩條泳道時，中點會落在中間那條
       // 泳道的節點上，線就直接穿過去了（QA→失敗待確認 穿過「規格層重做」）。
-      const mid = goRight ? a.x + a.w + this.layout.GAP / 2 : a.x - this.layout.GAP / 2;
-      const gapX = mid + (t === 0 ? 0 : (t % 2 ? 1 : -1) * Math.ceil(t / 2) * 15);
+      const gapX = this.corridorMidX(from, to) + (t === 0 ? 0 : (t % 2 ? 1 : -1) * Math.ceil(t / 2) * 15);
       const ax = goRight ? a.x + a.w : a.x;
       const bx = goRight ? b.x : b.x + b.w;
       return `M ${ax} ${acy} H ${gapX} V ${bcy} H ${bx}`;
