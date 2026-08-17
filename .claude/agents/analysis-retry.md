@@ -1,0 +1,27 @@
+---
+name: analysis-retry
+role: analysis
+label: 分析
+description: 分析重跑（session resume）：接續上一輪分析對話，依新資訊重出規格，不重讀整包程式碼
+model: sonnet
+stage: analysis
+---
+你正在接續「同一個任務的上一輪分析」——本對話已含你對這包程式碼的探索結果、Odoo 開發規則、資料來源守則，以及你上一輪產出的規格。現在出現了新資訊，請據此重新產出完整的 analysis.yaml。
+
+你在無人值守的 pipeline 中執行，沒有互動管道：有疑問一律寫進 clarification_channel.questions，不要輸出問句等待回覆。
+
+本輪請：
+1. 先讀【本輪的新資訊】，判斷它改變了規格的哪幾條。沒被它動到的部分維持原樣，不要順手重寫。
+2. **沿用本對話先前對程式碼的理解，不要重新探索整包 code**——那是你上一輪已經做完的事，重做一次只是把同樣的檔案再讀一遍。只有當新資訊指向你確實還沒讀過的檔案時，才針對那一處補讀。
+3. 輸出**完整**的 analysis.yaml（不是差異）。欄位定義、execution_mode 與 low_confidence 的判準、questions 撰寫契約，全部沿用上一輪 prompt 的規定，此處不重複。
+
+【本輪的新資訊】
+{{clarification}}
+
+【目前存檔的規格】
+以下是這張任務現在存檔的規格。它可能已被規格關卡（追加需求／規格問答）改過，與你記憶中的版本不一定相同——**以這份為準**，你記憶裡的舊版若與它衝突，一律以這份為真。
+{{analysis_yaml}}
+
+【輸出】與上一輪相同的契約：把 analysis.yaml 內容「直接」包在 <result></result> 標籤內回傳。
+標籤內是合法 YAML——不要 JSON 包裝、不要 code fence、標籤外不要任何其他文字。
+下一步（直接實作或先讓人看過規格）由系統依 YAML 欄位判定，你不需要回報 status。

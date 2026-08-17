@@ -614,6 +614,9 @@ async function migrate() {
     // 分析關的 session：供續寫 tour 時 --resume（比照 spec_session_id 的用法）。
     { table: 'tasks', col: 'analysis_session_id', sql: 'ALTER TABLE tasks ADD COLUMN analysis_session_id TEXT' },
     { table: 'tasks', col: 'analysis_prompt_ver', sql: 'ALTER TABLE tasks ADD COLUMN analysis_prompt_ver TEXT' },
+    // 分析關重跑改走 --resume（退回／澄清後不必重讀整包 code）。計數上限比照 QA：同一條 session 續接太多輪
+    // 會讓規格累積漂移，撞頂就強制 fresh 重讀一次。既有列為 NULL → COALESCE 視為 0。
+    { table: 'tasks', col: 'analysis_resume_count', sql: 'ALTER TABLE tasks ADD COLUMN analysis_resume_count INTEGER DEFAULT 0' },
     { table: 'wiki_pages', col: 'parent_id', sql: 'ALTER TABLE wiki_pages ADD COLUMN parent_id INTEGER REFERENCES wiki_pages(id) ON DELETE CASCADE' },
     { table: 'wiki_pages', col: 'node_type', sql: "ALTER TABLE wiki_pages ADD COLUMN node_type TEXT NOT NULL DEFAULT 'function'" },
     // description：一行摘要，隨頁面清單一起回給 agent，讓它「看目錄就能判斷該不該打開這一頁」。

@@ -3,7 +3,7 @@ const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { loadAgent } = require('./agent-loader');
+const { loadAgent, promptVersion } = require('./agent-loader');
 const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge, revParse } = require('./git');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
@@ -134,9 +134,18 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, pr
   };
 }
 
+// 分析 session 每個世代最多續接幾次（比照 QA_RESUME_LIMIT）：同一條 session 續太多輪，規格會在裡面
+// 累積漂移而沒有任何一輪回頭核對過原始程式碼；撞頂就強制 fresh 重讀一次。
+const ANALYSIS_RESUME_LIMIT = 2;
+// 指紋綁 fresh＋retry 兩支 agent：resume 輪生效的規則同時來自 session 內的 fresh prompt 與本輪的
+// retry prompt，只綁一個會讓另一個改了不重來（比照 with-resume.js:11-12，那裡點名 qa-agent 的既有缺口）。
+function analysisPromptVersion() {
+  return `${promptVersion('analysis-project')}.${promptVersion('analysis-retry')}`;
+}
+
 async function runTaskAnalysis(taskId, userId, signal) {
   const { rows: [task] } = await query(
-    'SELECT id, task_id, project_id, cs_findings FROM tasks WHERE id = $1',
+    'SELECT id, task_id, project_id, cs_findings, analysis_yaml, analysis_session_id, analysis_prompt_ver, analysis_resume_count FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
@@ -284,15 +293,59 @@ async function runTaskAnalysis(taskId, userId, signal) {
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   let raw;
   let analysisSessionId = null;
+  let resumed = false;
+  const anaVer = analysisPromptVersion();
+  // 重跑（退回改規格／澄清答覆／衝突裁決後回來）走 --resume：上輪 session 已含這包 code 的探索結果
+  // 與 Odoo 規則，本輪只送「新資訊＋現行規格」的短 prompt。省的不是 prompt 長度，是「把整包 code
+  // 再讀一遍」那段工具迴圈——spec_tour resume 同一個 session 的實測是十分鐘裡省掉前七分鐘。
+  // 首輪（無 session）／prompt 改版／額度用完 → 一律 fresh。
+  const canResume = !!task.analysis_session_id
+    && (task.analysis_resume_count || 0) < ANALYSIS_RESUME_LIMIT
+    && task.analysis_prompt_ver === anaVer;
   try {
-    const built = buildAnalysisPrompt(task, info, clarification, wtParent, baseBranch, projectNotes);
-    // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
-    // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
-    const analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
+    let analysisResult = null;
+    if (canResume) {
+      const retryAgent = loadAgent('analysis-retry');
+      // 只送增量：規格全文仍要帶，因為 analysis_yaml 可能已被規格關卡（respec-patch／spec-review）
+      // 在**別的 session** 改過，session 記憶裡的版本會是舊的。
+      const retryPrompt = retryAgent.render({
+        clarification: clarification || '（無）',
+        analysis_yaml: task.analysis_yaml || '（無既有規格）'
+      }).trim();
+      try {
+        analysisResult = await runClaude(retryPrompt, {
+          cwd: wtParent, taskId, userId, signal,
+          resumeSessionId: task.analysis_session_id, model: retryAgent.model, agentType: 'analysis'
+        });
+        resumed = true;
+        await query('UPDATE tasks SET analysis_resume_count = COALESCE(analysis_resume_count,0) + 1 WHERE id=$1', [taskId]).catch(() => {});
+      } catch (err) {
+        if (err.aborted) throw err;  // 手動暫停：交下方既有 catch 原樣處理，session 留著解除後續用
+        // session 遺失／CLI 壞掉／逾時都先清掉 stale session 並歸零計數，下次進來自然 fresh 重讀。
+        await query('UPDATE tasks SET analysis_session_id=NULL, analysis_resume_count=0 WHERE id=$1', [taskId]).catch(() => {});
+        // 逾時不在同輪重跑：同一份輸入再跑一次極可能再逾時，只是讓使用者多等一輪（比照 qa-agent.js:120）
+        if (err.claudeStatus === 'timeout') throw err;
+        // 其餘：記帳後這輪改跑 fresh，使用者仍拿得到規格
+        await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+          [taskId, `[分析] 續接上一輪分析失敗（${String(err.message).slice(0, 120)}），改以完整規格重跑`]
+        ).catch(() => {});
+        analysisResult = null;
+      }
+    }
+    if (!analysisResult) {
+      const built = buildAnalysisPrompt(task, info, clarification, wtParent, baseBranch, projectNotes);
+      // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
+      // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
+      analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
+    }
     raw = analysisResult.text;
     // 記本輪 session：規格 tour 靠它 --resume 續寫（脈絡已在，不必重讀 code 也不必重述規格）。
     // 落地在下方與 status 同一次 UPDATE——writeSpecTour 已搬到 runner 的 doBranch，那裡讀不到這個區域變數。
-    analysisSessionId = analysisResult.sessionId || null;
+    // resume 輪回不出 sessionId 時退回舊值（CLI 偶爾不吐；此時對話仍延續在同一條 session 上），
+    // 否則會把還活著的 session 清成 NULL、下一輪白白重讀整包 code。fresh 輪維持直接指派，理由見下方 UPDATE。
+    analysisSessionId = analysisResult.sessionId || (resumed ? task.analysis_session_id : null);
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
@@ -352,10 +405,14 @@ async function runTaskAnalysis(taskId, userId, signal) {
   // 而規格關卡（respec／spec-review）刻意不重讀整包 code（見 respec-patch.md 的 description），
   // 讓它們也寫進來的話，凡是經過澄清或規格問答的任務，欄位裡就會換成一個沒有 code 記憶的 session，
   // writeSpecTour resume 到它等於白 resume（仍得重讀模組，實測那是 spec_tour 十分鐘裡的前七分鐘）。
-  // 直接指派而非 COALESCE：分析重跑代表規格已換一份，殘留的舊 session 比沒有更糟。
+  // fresh 輪直接指派而非 COALESCE：那代表規格已換一份、也換了一條沒有舊包袱的 session，
+  // 殘留的舊 session 比沒有更糟（resume 輪的取值另有處置，見上方 analysisSessionId 賦值處）。
+  // 一併記 prompt 版本指紋供下輪 resume 前比對；fresh＝新世代，resume 計數歸零重新起算。
+  const sessionSets = ['status=$2', 'analysis_session_id=$3', 'analysis_prompt_ver=$4', 'updated_at=NOW()'];
+  if (!resumed) sessionSets.push('analysis_resume_count=0');
   await query(
-    `UPDATE tasks SET status=$2, analysis_session_id=$3, updated_at=NOW() WHERE id=$1`,
-    [taskId, nextStatus, analysisSessionId]
+    `UPDATE tasks SET ${sessionSets.join(', ')} WHERE id=$1`,
+    [taskId, nextStatus, analysisSessionId, anaVer]
   );
   // 規格已成功寫出＝這批留言真的被吸收了，此時才銷帳（理由見上方 absorbUpTo）
   if (absorbUpTo) {

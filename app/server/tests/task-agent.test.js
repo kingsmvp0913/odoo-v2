@@ -764,6 +764,97 @@ test('analysis 產出規格 → 把本輪 session 存進 analysis_session_id（�
   expect(after.analysis_session_id).toBe('sess-A1');
 });
 
+// --- 分析重跑走 session resume（退回改規格／澄清答覆／衝突裁決後回到這一關）---
+// 意圖：重跑最貴的不是 prompt 長度，是「把整包 code 再讀一遍」那段工具迴圈（spec_tour resume 同一條
+// session 的實測是十分鐘裡省掉前七分鐘）。這組測試釘的是三件事：真的帶了 --resume、計數會推進
+// （不推進的話 ANALYSIS_RESUME_LIMIT 永遠碰不到，規格會在同一條 session 裡無限漂移）、以及
+// resume 壞掉時使用者這輪仍拿得到規格。
+const analysisVer = () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  return `${promptVersion('analysis-project')}.${promptVersion('analysis-retry')}`;
+};
+const spawnArgLines = () => {
+  const { spawn } = require('child_process');
+  return spawn.mock.calls.map(c => (c[1] || []).join(' '));
+};
+
+test('analysis resume：有 session＋版本相符＋額度未滿 → 帶 --resume 跑 analysis-retry，計數 +1', async () => {
+  const { spawn } = require('child_process');
+  spawn.mockClear();
+  mockAnalysisResult('case_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"');
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id,
+      analysis_session_id, analysis_prompt_ver, analysis_resume_count)
+     VALUES ($1,'ta_ana_resume','odoo','T','需求','analysis_running',$2,'sess-PREV',$3,0) RETURNING id`,
+    [userId, projectId, analysisVer()]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  expect(spawnArgLines().some(a => a.includes('--resume') && a.includes('sess-PREV'))).toBe(true);
+  // 重跑輪刻意降 sonnet：它的工作是「讀新資訊、局部改規格」，不是從零理解一個模組——
+  // 首輪維持 opus 才是需要判斷力的那一步。
+  expect(spawnArgLines().some(a => a.includes('--resume') && a.includes('sonnet'))).toBe(true);
+  const { rows: [after] } = await dbModule.query('SELECT analysis_resume_count FROM tasks WHERE id=$1', [t.id]);
+  expect(after.analysis_resume_count).toBe(1);
+});
+
+test('analysis resume 額度用完 → 降級 fresh（不帶 --resume），計數歸零重新起算', async () => {
+  const { spawn } = require('child_process');
+  spawn.mockClear();
+  mockAnalysisResult('case_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"');
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id,
+      analysis_session_id, analysis_prompt_ver, analysis_resume_count)
+     VALUES ($1,'ta_ana_limit','odoo','T','需求','analysis_running',$2,'sess-OLD2',$3,2) RETURNING id`,
+    [userId, projectId, analysisVer()]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  expect(spawnArgLines().some(a => a.includes('--resume'))).toBe(false);
+  const { rows: [after] } = await dbModule.query('SELECT analysis_resume_count FROM tasks WHERE id=$1', [t.id]);
+  expect(after.analysis_resume_count).toBe(0);   // fresh＝新世代
+});
+
+// 意圖：session 被 CLI 回收後 resume 必失敗。此時若整輪報廢，使用者等了一輪卻什麼都沒拿到——
+// 而 fresh 明明跑得出規格（只是要自己重讀）。這條保證降級發生在**同一輪**內。
+test('analysis resume 失敗（session 已失效）→ 同輪降級 fresh，規格仍寫得出來', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  spawn.mockClear();
+  spawn.mockImplementation((cmd, args) => {
+    const isResume = (args || []).includes('--resume');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = {
+      write: () => {},
+      end: () => setImmediate(() => {
+        if (isResume) { child.stderr.emit('data', 'No conversation found'); child.emit('close', 1); return; }
+        child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-FRESH' }) + '\n');
+        child.stdout.emit('data', JSON.stringify({
+          type: 'result',
+          result: '<result>\ncase_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"\n</result>',
+          usage: null, duration_ms: 10
+        }) + '\n');
+        child.emit('close', 0);
+      })
+    };
+    return child;
+  });
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id,
+      analysis_session_id, analysis_prompt_ver, analysis_resume_count)
+     VALUES ($1,'ta_ana_lost','odoo','T','需求','analysis_running',$2,'sess-GONE',$3,0) RETURNING id`,
+    [userId, projectId, analysisVer()]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const { rows: [after] } = await dbModule.query(
+    'SELECT analysis_yaml, analysis_session_id, analysis_resume_count FROM tasks WHERE id=$1', [t.id]
+  );
+  expect(after.analysis_yaml).toContain('idx_x');       // 規格照樣產出＝這輪沒白跑
+  expect(after.analysis_session_id).toBe('sess-FRESH'); // 換成 fresh 那條新 session
+  expect(after.analysis_resume_count).toBe(0);
+});
+
 test('analysis 沒產出有效規格（停在 stopped）→ 留言不得銷帳，留給下一輪', async () => {
   mockAnalysisResult('這不是有效的規格物件');   // 缺必要欄位 → 走 stopped，不寫 analysis_yaml
   const { rows: [t] } = await dbModule.query(
