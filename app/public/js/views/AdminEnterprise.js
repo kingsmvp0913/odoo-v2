@@ -137,7 +137,7 @@ window.AdminEnterpriseView = Vue.defineComponent({
               <template v-if="form.source_type === 'local'">
                 把該版本的 addons 直接放進 <code>{{ baseDir }}/{{ form.odoo_version || '&lt;版本&gt;' }}</code>——
                 底下應該要直接看得到 <code>web_enterprise/</code>。路徑固定不可指定。
-                登記後按「檢查」會驗證目錄內容、版本與檔案權限。
+                登記後按「檢查」會驗證目錄內容與檔案權限。版本以你放進哪個目錄為準，平台不另行判定。
               </template>
               <template v-else>
                 下載位置：<code>{{ baseDir }}</code>／&lt;版本&gt;。私有 repo 會用你在「設定」填的個人 GitHub PAT 認證。

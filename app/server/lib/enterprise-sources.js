@@ -87,12 +87,9 @@ function verifyLocalDir(major) {
       return { ok: false, error: `${p} 權限不足（需 ${hint}）：容器內的 odoo 是另一個 uid，讀不到就等於掛了一個空目錄。請執行 chmod -R o+rX ${dir}` };
     }
   }
-  // manifest 的 version 是現成的判準。抓不到就不擋——manifest 格式各版本略有出入，寧可放行也
-  // 不要因為解析不出來就攔住一包其實正確的 addons。
-  const m = fs.readFileSync(weManifest, 'utf8').match(/["']version["']\s*:\s*["']([^"']+)["']/);
-  if (m && majorDigits(m[1]) !== String(major)) {
-    return { ok: false, error: `web_enterprise 的版本是 ${m[1]}，與登記的 Odoo ${major} 不符——放進 ${major} 目錄的必須是 ${major} 的企業版 addons` };
-  }
+  // 刻意不驗「這包是不是該大版本」：官方 addons 的 manifest version 是模組自身版本（實測 Odoo 17
+  // 企業版 585 個模組全是 1.0／1.1，社群版核心同樣），series 前綴是 Odoo 載入時才補的，包裡也沒有
+  // release.py。版本以「管理員把它放進哪個目錄」為準，平台不猜。
   return { ok: true, path: dir, moduleCount: countModules(dir) };
 }
 

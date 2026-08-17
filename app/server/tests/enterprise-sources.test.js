@@ -152,7 +152,7 @@ test('同步未登記的版本 → 回錯誤，不去碰 git', async () => {
 // 錯東西時 Odoo 不會報錯，只是安靜地用社群版 web 啟動。故登記時就要把三種放錯法擋在門口。
 
 // 造一個本地 enterprise 目錄；預設合格，參數用來製造各種放錯法
-function makeLocalDir(major, { version = `${major}.0.1.0`, mode = 0o644, siblings = [] } = {}) {
+function makeLocalDir(major, { version = '1.0', mode = 0o644, siblings = [] } = {}) {
   const dir = path.join(tmpBase, String(major));
   const we = path.join(dir, 'web_enterprise');
   fs.mkdirSync(we, { recursive: true });
@@ -211,15 +211,16 @@ test('缺 web_enterprise 但底下有多個子目錄 → 一般錯誤，不亂�
   expect(r.error).not.toContain('多包');
 });
 
-// 意圖：17 的目錄放進 18 的包，掛起來 Odoo 會裝到版本不符的模組，錯誤在建置很後期才浮現且
-// 訊息不指向這裡。manifest 的 version 是現成的判準，登記當下就能擋。
-test('manifest 版本與登記的大版本不符 → 錯誤指名兩個版本', async () => {
-  makeLocalDir(14, { version: '18.0.1.0' });
+// 意圖：曾有一版拿 manifest 的 version 比對大版本，結果一整包正確的 Odoo 17 企業版被判成
+// 「版本是 1.0，與登記的 17 不符」。官方 addons 的 version 是模組自身版本——實測 Odoo 17 企業版
+// 585 個模組全是 1.0／1.1，社群版核心 17 也是（316 個 1.0）——series 前綴是 Odoo 載入時才補上的，
+// 寫成 17.0.1.0 的是第三方模組慣例。企業版包裡也沒有 release.py 可查。版本以管理員放進哪個
+// 目錄為準，平台不猜。這個測試守著「不要再把它加回來」。
+test('manifest version 是模組版本（1.0）→ 不據此判版本不符', async () => {
+  makeLocalDir(14, { version: '1.0' });
   await insertLocal(14);
   const r = await ent.syncSource('14');
-  expect(r.ok).toBe(false);
-  expect(r.error).toContain('18.0.1.0');
-  expect(r.error).toContain('14');
+  expect(r.ok).toBe(true);
 });
 
 // 意圖：容器內的 odoo 是另一個 uid，掛載是唯讀但仍要讀得到。scp／unzip 進來的檔案若是 600，
