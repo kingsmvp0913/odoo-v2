@@ -260,8 +260,10 @@ async function runRejectTriage(taskId, userId, signal) {
     // 就原樣放行，兩種結果最後都落到 coding，所以純實作性退回的行為與過去一致，只多一次規格比對。
     // 限 isReject：卡關修正指示（resolve）多為技術性修法，不走這條。限已開工（git_branch 有值）：
     // 未開工時 respec-agent 會判 pre-coding 改委派 spec-review，那是規格審核閘門、不是這裡要的路徑。
-    // 代價（已知並接受）：respec-patch 判有變更時會用 `[追加需求]` 覆寫 retry_feedback，分診結論不會
-    // 傳到 coding——但此時「什麼算正確」已寫進規格，且結論本身已 logAi 落在時間軸給人看。
+    // 分診結論在這條路上不會遺失：respec-agent 會先把 retry_feedback（含上面塞的 `[分診結論]`）讀成
+    // carried、附進送給 respec-patch 的 requirements，再一起寫回 retry_feedback（見 respec-agent.js 的
+    // carried 段）。本註解原本寫的是「會被 `[追加需求]` 覆寫掉、傳不到 coding」，那是 d0262da0
+    // （2026-08-14 引入 carried）之前的行為，已不成立。
     if (isReject && rejectReason && task.git_branch) {
       // 標明來源：respec-patch 的判準對「途中留言」刻意保守（多數留言是流程指示，誤判成需求會讓
       // 跑到後段的任務整條白跑），但審核退回意見的先驗完全相反——它幾乎都在講成品哪裡不對。
