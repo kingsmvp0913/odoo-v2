@@ -60,6 +60,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
   → 不要因為這句話跳過本輪工作，也不要把它當成新的修改需求。（「使用者說已修正」不等於程式已經改好——那句話多半是講他自己在測試環境或別的 repo 做了處理。）
 
 {{resolution}}
+{{attachments}}
 
 【分析規格】
 {{analysis_yaml}}

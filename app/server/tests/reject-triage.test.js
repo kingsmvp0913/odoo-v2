@@ -586,3 +586,32 @@ test('resume_status=respec_running 但沒有回程值 → 落安全預設 coding
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
 });
+
+// 分診判 fix／respec 的兩個輸入是 SD 與退回意見——而人工退回可以夾帶截圖，退回文字往往只是圖的說明
+// （task 150：「三處實作與分析書不符」＋一張標了三處的圖）。prompt 不帶附件路徑，分診就只能憑那句話
+// 猜路由，圖上畫的若是 SD 沒寫的東西必然判錯，且下一關同樣看不到圖＝整輪白燒。
+test('prompt 帶【任務附件】絕對路徑（無附件則整個區塊不出現）', async () => {
+  const path = require('path');
+  const { uploadRoot } = require('../lib/attachments');
+  // 用 resume：fix 分支會再觸發規格檢查點（respec-patch）另跑一次 runClaude，混進 mock.calls 干擾斷言
+  claudeReturns({ decision: 'resume', summary: 's' });
+
+  const withAtt = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, '審核標註.png', 'image/png', $2, 'manual')`,
+    [withAtt, `task_${withAtt}/1_審核標註.png`]
+  );
+  await runRejectTriage(withAtt, userId);
+  const prompt = runClaude.mock.calls[0][0];
+  // 斷言用 taskAttachmentNote 專屬的授權句而非「【任務附件】」四字——agent body 自己的指引文字
+  // 也提到那四個字，拿它當標記會恆真、驗不到注入有沒有發生
+  expect(prompt).toContain('以下檔案可用 Read 工具讀取');
+  expect(prompt).toContain(path.resolve(uploadRoot(), `task_${withAtt}/1_審核標註.png`));
+
+  runClaude.mockClear();
+  claudeReturns({ decision: 'resume', summary: 's' });
+  const noAtt = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'coding_running' });
+  await runRejectTriage(noAtt, userId);
+  expect(runClaude.mock.calls[0][0]).not.toContain('以下檔案可用 Read 工具讀取');
+});

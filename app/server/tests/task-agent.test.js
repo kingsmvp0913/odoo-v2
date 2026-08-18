@@ -263,6 +263,28 @@ test('B-5 有 session＋feedback 的修正輪 → 仍 fresh（不 --resume）、
   expect(t.status).toBe('qa_running');
 });
 
+// 意圖：人工審核退回可以夾帶截圖，而退回文字往往只是圖的說明（task 150：「三處實作與分析書不符」＋
+// 一張標了三處的圖）。coding 讀的是規格與 retry_feedback，看不到畫面——圖是它唯一能知道「審核者
+// 實際看到什麼」的管道。不帶路徑，這一關只能照原規格再做一次，退回意見等於沒送到。
+test('B-5 coding prompt 帶【任務附件】絕對路徑（無附件則不出現）', async () => {
+  const path = require('path');
+  const { uploadRoot } = require('../lib/attachments');
+  const calls = mockClaude({ onCall: (child) => { emitInit(child, 'sess-att'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('att1');
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, '審核標註.png', 'image/png', $2, 'manual')`,
+    [id, `task_${id}/1_審核標註.png`]
+  );
+  await runTaskCoding(id, userId);
+  expect(calls[0].stdin).toContain('以下檔案可用 Read 工具讀取');
+  expect(calls[0].stdin).toContain(path.resolve(uploadRoot(), `task_${id}/1_審核標註.png`));
+
+  const calls2 = mockClaude({ onCall: (child) => { emitInit(child, 'sess-att2'); emitResult(child); child.emit('close', 0); } });
+  await runTaskCoding(await insertCodingTask('att2'), userId);
+  expect(calls2[0].stdin).not.toContain('以下檔案可用 Read 工具讀取');
+});
+
 // 意圖：coding 帶著失敗回饋卻一個 commit 都沒產生 ⇒ 這輪什麼都沒改。放行進 QA 只會讓 QA 判
 // 「same diff、已審過」照樣 pass，再部署一次必然重現同一個失敗——白燒整條 pipeline 還多吃一次
 // 彈跳計數（實測 task 109）。推進與否由結構決定，不能靠 agent 自律（rules/pipeline.md 60）。
@@ -795,6 +817,31 @@ test('analysis resume：有 session＋版本相符＋額度未滿 → 帶 --resu
   expect(spawnArgLines().some(a => a.includes('--resume') && a.includes('sonnet'))).toBe(true);
   const { rows: [after] } = await dbModule.query('SELECT analysis_resume_count FROM tasks WHERE id=$1', [t.id]);
   expect(after.analysis_resume_count).toBe(1);
+});
+
+// 意圖：resume 輪只送「新資訊＋現行規格」的短 prompt，附件清單必須每輪重算——fresh 輪之後才補上的
+// 截圖（人工退回夾帶的最多）只存在於 DB，session 記憶裡沒有。task 150 就是這樣卡死的：分析關收到
+// 「請使用主附件的圖片」，prompt 裡卻沒有任何附件路徑，只能回報讀不到圖然後整輪失敗。
+test('analysis resume：prompt 帶【任務附件】絕對路徑（fresh 輪之後才上傳的附件也要看得到）', async () => {
+  const path = require('path');
+  const { uploadRoot } = require('../lib/attachments');
+  const calls = analysisSpawn();
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id,
+      analysis_session_id, analysis_prompt_ver, analysis_resume_count)
+     VALUES ($1,'ta_ana_att','odoo','T','需求','analysis_running',$2,'sess-ATT',$3,0) RETURNING id`,
+    [userId, projectId, analysisVer()]
+  );
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+     VALUES ($1, '審核標註.png', 'image/png', $2, 'manual')`,
+    [t.id, `task_${t.id}/1_審核標註.png`]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const resumeCall = calls.find(c => (c.args || []).includes('--resume'));
+  expect(resumeCall).toBeTruthy();
+  expect(resumeCall.stdin).toContain('以下檔案可用 Read 工具讀取');
+  expect(resumeCall.stdin).toContain(path.resolve(uploadRoot(), `task_${t.id}/1_審核標註.png`));
 });
 
 test('analysis resume 額度用完 → 降級 fresh（不帶 --resume），計數歸零重新起算', async () => {

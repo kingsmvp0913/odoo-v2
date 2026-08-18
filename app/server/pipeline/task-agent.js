@@ -11,7 +11,7 @@ const { buildGitEnv } = require('../lib/git-identity');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
-const { assembleTaskContext } = require('./sync');
+const { assembleTaskContext, taskAttachmentNote } = require('./sync');
 const yaml = require('js-yaml');
 const { determineNextStatus, REQUIRED_FIELDS, logAnalysisGate } = require('./analysis');
 const { getProjectNotes } = require('./project-notes');
@@ -111,7 +111,7 @@ async function latestResolution(taskId) {
   return `（送出時間：${at}）\n${text}`;
 }
 
-function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, projectNotes) {
+function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, projectNotes, attachments) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -128,6 +128,8 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, pr
       repo_list: repoList,
       resolution: resolution || '（無）',
       retry_feedback: retryFeedback || '（無）',
+      // 審核者退回時夾帶的截圖：規格與退回意見都只是圖的說明文字，真正要改什麼畫在圖上
+      attachments: attachments || '',
       project_notes: projectNotes || ''
     }).trim(),
     model: agent.model
@@ -310,7 +312,10 @@ async function runTaskAnalysis(taskId, userId, signal) {
       // 在**別的 session** 改過，session 記憶裡的版本會是舊的。
       const retryPrompt = retryAgent.render({
         clarification: clarification || '（無）',
-        analysis_yaml: task.analysis_yaml || '（無既有規格）'
+        analysis_yaml: task.analysis_yaml || '（無既有規格）',
+        // 附件清單每輪重算：fresh 輪之後才補上的截圖（人工退回夾帶的最多）只存在於 DB，
+        // session 記憶裡沒有。不重帶，這一輪就會像 task 150 那樣回報「沒有【任務附件】區塊」而失敗。
+        attachments: await taskAttachmentNote(taskId)
       }).trim();
       try {
         analysisResult = await runClaude(retryPrompt, {
@@ -575,7 +580,7 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
   const baseBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
-  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes);
+  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes, await taskAttachmentNote(task.id));
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 

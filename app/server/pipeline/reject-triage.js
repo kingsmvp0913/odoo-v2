@@ -9,6 +9,7 @@ const { getProjectNotes } = require('./project-notes');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { safeReturnStatus } = require('./stations');
+const { taskAttachmentNote } = require('./sync');
 
 // 卡在哪一關的中文顯示（stuck_stage 用）
 const STAGE_LABEL = {
@@ -125,6 +126,9 @@ async function runRejectTriage(taskId, userId, signal) {
       stuck_stage: stuckStage,
       stop_context: stopContext,
       user_instruction: userInstruction,
+      // 退回意見的主要載體常是截圖（人工退回可夾帶附件）：不帶這段，分診就只能憑退回文字猜
+      // fix／respec，而圖上畫的若是 SD 沒寫的東西，判出來的路由必錯（task 150 即如此）。
+      attachments: await taskAttachmentNote(taskId),
       project_notes: projectNotes || ''
     }).trim();
     // 停在早期分析階段就被 resume 時 worktree 尚未建立；worktree 不存在 → 退回專案根（一定存在），
