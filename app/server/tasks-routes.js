@@ -680,7 +680,9 @@ function registerRoutes(app) {
   // User answer to clarification question
   // 送出回答不再直接推進：先轉 clarify_chat_running 交給 clarify-chat agent 判斷使用者是答完了還是在反問。
   // （舊行為讓「我還是不懂，怎麼重現？」被當成有效答案直接開工——正式站 task 5。）
-  app.post('/api/tasks/:id/answer', verifyToken, async (req, res) => {
+  // 掛 uploadAttachmentFiles：回覆 AI 的提問時可夾帶截圖（純 JSON 呼叫仍相容，multer 放行、req.files 空）。
+  // 這是 clarify 閘門唯一的附件入口——停在這個狀態時，畫面上的留言框與退回框都被閘門面板取代了。
+  app.post('/api/tasks/:id/answer', verifyToken, uploadAttachmentFiles, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req);
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -689,6 +691,10 @@ function registerRoutes(app) {
       }
 
       // 兩種輸入：新版逐題 answers 物件；舊版單一 user_answer 字串（clarify_pending 的自由文字框仍用）
+      // multipart 送出時所有欄位都是字串，answers 需先還原成物件才走得到逐題分支。
+      if (req.body && typeof req.body.answers === 'string') {
+        try { req.body.answers = JSON.parse(req.body.answers); } catch { /* 非 JSON 就當沒帶，落到 user_answer 分支 */ }
+      }
       const answers = req.body && typeof req.body.answers === 'object' && req.body.answers ? req.body.answers : null;
       let user_answer = (req.body && req.body.user_answer) || '';
       if (answers) {
@@ -716,6 +722,18 @@ function registerRoutes(app) {
         "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
         [req.params.id, user_answer]
       );
+      // 附件必須早於 runPipeline 寫入：taskAttachmentNote 是在 agent 起跑時才查 task_attachments，
+      // 寫晚了這輪就讀不到（比照 pipeline-routes 人工退回同段時序）。寫在 rowCount 檢查之後，
+      // 輸掉雙擊競態的請求不該落附件。
+      for (const file of req.files || []) {
+        const relPath = saveAttachmentFile(task.id, file.originalname, file.buffer);
+        await query(
+          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, 'manual')`,
+          [task.id, file.originalname, file.mimetype, relPath]
+        );
+      }
+      if ((req.files || []).length) await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [task.id]);
       require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
       runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });

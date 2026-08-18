@@ -1140,6 +1140,52 @@ test('POST /api/tasks/:id/answer → clarify_pending 可答覆並落 user log，
   expect(logs.some(l => l.role === 'user' && l.content.includes('用小計、含稅'))).toBe(true);
 });
 
+// 意圖：clarify 閘門是唯一沒有附件入口的狀態——留言框與人工退回框都被閘門面板取代了，使用者要補圖
+// 只能等任務離開這個狀態（task 150 就卡在這裡，AI 說「請提供圖片」但畫面上沒有地方可傳）。
+// 附件必須早於 runPipeline 落地：taskAttachmentNote 是在 agent 起跑時才查 task_attachments。
+test('POST /api/tasks/:id/answer → multipart 可夾帶附件，落 task_attachments 並標 has_attachment', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'cp_att','odoo','T','c','clarify_pending') RETURNING id`,
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('user_answer', '如附圖三處')
+    .attach('files', Buffer.from('PNGDATA'), '審核標註.png');
+  expect(res.status).toBe(200);
+  const { rows: atts } = await dbModule.query('SELECT filename, origin FROM task_attachments WHERE task_id=$1', [t.id]);
+  expect(atts).toHaveLength(1);
+  expect(atts[0].filename).toBe('審核標註.png');
+  const { rows: [row] } = await dbModule.query('SELECT status, has_attachment FROM tasks WHERE id=$1', [t.id]);
+  expect(row.status).toBe('clarify_chat_running');
+  expect(row.has_attachment).toBe(true);
+});
+
+// 逐題模式改走 multipart 時 answers 會變成字串，不還原成物件就會落到 user_answer 分支＝必答檢查
+// 整個被繞過，使用者少答的題目靜默放行。
+test('POST /api/tasks/:id/answer → multipart 的 answers 以 JSON 字串送出仍走逐題分支（必答檢查生效）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, blocker_content)
+     VALUES ($1,'cp_att2','odoo','T','c','clarify_pending',NULL) RETURNING id`,
+    [userId]
+  );
+  await dbModule.query(
+    "UPDATE tasks SET analysis_yaml=$2 WHERE id=$1",
+    [t.id, 'summary: s\nclarification_channel:\n  questions:\n    - id: q1\n      text: 要含稅嗎\n      required: true\n']
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/answer`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('answers', JSON.stringify({ q1: '' }))
+    .attach('files', Buffer.from('PNGDATA'), 'x.png');
+  expect(res.status).toBe(400);
+  // 訊息要分辨得出走的是哪條路：answers 沒被還原成物件時會落到 user_answer 分支，那裡也回 400
+  // （'user_answer required'），只斷言狀態碼等於沒測到還原這件事
+  expect(res.body.error).toContain('還有必答的問題沒回答');
+  const { rows: atts } = await dbModule.query('SELECT id FROM task_attachments WHERE task_id=$1', [t.id]);
+  expect(atts).toHaveLength(0);   // 被擋下的請求不該留下附件
+});
+
 
 // 項11 意圖：刪除／封存執行中任務必須先中止在飛 agent，否則子行程續跑到逾時（最長 30 分鐘）、
 // 甚至邊清 worktree 邊寫檔。四個入口（單筆/批次 × 刪除/封存）都要呼叫 abortTask。

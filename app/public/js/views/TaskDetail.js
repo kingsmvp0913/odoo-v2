@@ -3,7 +3,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -307,8 +307,19 @@ window.TaskDetailView = Vue.defineComponent({
       }
       this.submitting = true;
       try {
-        await Api.post(`tasks/${this.task.id}/answer`, payload);
+        // 有夾帶檔案才改走 multipart：後端兩種都吃，但 JSON 路徑是既有行為，沒必要為沒附件的回覆換掉
+        if (this.answerFiles.length) {
+          const fd = new FormData();
+          if (payload.answers) fd.append('answers', JSON.stringify(payload.answers));
+          else fd.append('user_answer', payload.user_answer);
+          this.answerFiles.forEach(f => fd.append('files', f));
+          await Api.postForm(`tasks/${this.task.id}/answer`, fd);
+        } else {
+          await Api.post(`tasks/${this.task.id}/answer`, payload);
+        }
         this.newMessageText = '';
+        this.answerFiles = [];
+        if (this.$refs.answerFileInput) this.$refs.answerFileInput.value = '';
         this.answerFields = {};
         this.answerExtra = {};
         showToast('回覆已送出，AI 正在確認', 'success');
@@ -383,6 +394,9 @@ window.TaskDetailView = Vue.defineComponent({
     },
     onMessageFilesSelected(e) {
       this.newMessageFiles = Array.from(e.target.files || []);
+    },
+    onAnswerFilesSelected(e) {
+      this.answerFiles = Array.from(e.target.files || []);
     },
     formatSize(bytes) {
       if (!bytes) return '0 B';
@@ -961,6 +975,12 @@ window.TaskDetailView = Vue.defineComponent({
                 <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">AI 有問題等待你回覆</div>
                 <textarea v-model="newMessageText" class="form-control" placeholder="輸入你的回覆...（Enter 送出，Shift+Enter 換行）" rows="4"
                   @keydown.enter.exact.prevent="submitAnswer"></textarea>
+                <!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
+                <div style="margin-top:6px;font-size:var(--fs-xs);color:var(--text-secondary)">
+                  可附圖說明（截圖上標註比打字快，AI 這一關讀得到）
+                  <input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"
+                    style="display:block;margin-top:4px;font-size:var(--fs-xs)" />
+                </div>
                 <div style="margin-top:6px;text-align:right">
                   <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="submitting || !newMessageText.trim()">
                     {{ submitting ? '送出中...' : '送出回覆並繼續' }}

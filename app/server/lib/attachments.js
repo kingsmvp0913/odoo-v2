@@ -85,9 +85,13 @@ function sniffFile(buf) {
 // 放這裡是為了單一來源：新增任務（tasks-routes）與人工退回（pipeline-routes）共用同一組限制，
 // 各持一份 multer 設定會漂移成「有的入口能傳、有的不能」且完全無訊號。
 // 純 JSON 呼叫仍相容：multer 遇非 multipart 直接放行、req.files 為空。
+// defParamCharset：busboy 預設用 latin1 解 multipart header 裡的 filename，中文檔名會存成
+// 「2026-08-18 16_47_18-æªå…」這種 mojibake（task 150 的主附件即是）。檔案內容不受影響，
+// 但清單／下載檔名全是亂碼。既有壞檔名不會被回溯修正，只影響顯示。
 const attachmentUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 5 }
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 },
+  defParamCharset: 'utf8'
 });
 function uploadAttachmentFiles(req, res, next) {
   attachmentUpload.array('files', 5)(req, res, (err) => {
