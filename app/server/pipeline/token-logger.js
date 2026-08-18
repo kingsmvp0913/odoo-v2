@@ -5,7 +5,9 @@ const { query } = require('../db');
 // 用量報表把它們排除在呼叫數／失敗數之外（見 claude-runner.js 外部終止分支、token-report-routes.js by_agent）。
 // 失敗/中斷的執行也要記帳（usage 為零、留 status 與耗時），
 // 否則最貴的情境（失敗重跑）在帳面上隱形（健檢 U12）。
-async function logTokenUsage(ref, userId, agentType, usage, durationMs, status = 'completed') {
+// resumed：這一輪是續用上輪 session（true）還是全量重讀（false）。未傳＝該關卡沒有 resume 概念
+// 或還沒接上，一律留 NULL，不可退成 false——兩者混在一起，「fresh 佔比」就再也算不準。
+async function logTokenUsage(ref, userId, agentType, usage, durationMs, status = 'completed', resumed = null) {
   if (!usage && status === 'completed') return;
   const u = usage || {};
   try {
@@ -13,8 +15,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
       `INSERT INTO token_usage
          (task_id, project_id, chat_id, user_id, agent_type, model,
           input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
-          duration_ms, status, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'server')`,
+          duration_ms, status, source, resumed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'server',$13)`,
       [
         ref.taskId    || null,
         ref.projectId || null,
@@ -28,7 +30,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
         u.cache_read_input_tokens     || 0,
         u.cache_creation_input_tokens || 0,
         durationMs || null,
-        status
+        status,
+        resumed
       ]
     );
   } catch (err) {

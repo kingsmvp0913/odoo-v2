@@ -299,6 +299,7 @@ async function migrate() {
       cache_create_tokens  INTEGER NOT NULL DEFAULT 0,
       duration_ms          INTEGER,
       source               TEXT NOT NULL DEFAULT 'server' CHECK (source IN ('server','ps1')),
+      resumed              BOOLEAN,
       recorded_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
@@ -670,6 +671,9 @@ async function migrate() {
     { table: 'token_usage', col: 'status',  sql: "ALTER TABLE token_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'" },
     // 每列記錄實際使用的 model（供報表按 model 單價算真實 USD 成本，對齊 ccusage 做法）
     { table: 'token_usage', col: 'model',   sql: 'ALTER TABLE token_usage ADD COLUMN model TEXT' },
+    // 這一輪是續用上輪 session（true）還是全量重讀（false）。刻意可為 NULL＝「沒有 resume 概念或還沒接」，
+    // 與 false 分開：混成 false 會讓「fresh 佔比」這個判讀準確率的統計從一開始就是錯的。目前只有 qa 填。
+    { table: 'token_usage', col: 'resumed', sql: 'ALTER TABLE token_usage ADD COLUMN resumed BOOLEAN' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
     { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },

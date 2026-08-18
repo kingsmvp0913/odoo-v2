@@ -89,7 +89,13 @@ async function runQaAgent(taskId, userId, signal) {
     // 撈最近一筆 QA 未解清單餵給本輪：QA 逐項重驗（修好的掉、沒修的留、新的加），讓迴圈收斂而非每輪重新發散。
     // 新語意下每筆 [QA 未通過] 本身即「當下完整未解清單」，取最新一筆＝最完整，不必串接歷史。
     const { rows: [prev] } = await query(LATEST_QA_FINDINGS_SQL, [taskId]);
-    const priorFindings = prev ? stripMachineHeader('qa_fail', prev.content) : '（首輪，無上輪清單）';
+    // session 還在、卻撈不到未解清單＝上一輪判了 pass（pass 會寫下分界標記讓這個查詢落空），任務是從
+    // deploy／E2E／merge 失敗回流才又進 QA 的。這條路上要驗的是「載入錯誤的修正」，不是推翻自己的舊
+    // 結論，而 session 裡的規格與 repo 探索並不因 pass 失效——照樣 resume，只是 prompt 要換一套說法。
+    const afterPass = !!task.qa_session_id && !prev;
+    const priorFindings = prev ? stripMachineHeader('qa_fail', prev.content)
+      : afterPass ? '（上輪審查已通過、清單就此作廢；本輪對最新 diff 重新檢查）'
+      : '（首輪，無上輪清單）';
     // 刻意不帶「使用者修正指示」進 QA：那是流程層的話（「已修正」「直接推進」），而放行與否是
     // triage 的 advance 分支在管，QA 沒有做這個決策的資訊（看不到彈跳次數與失敗歷史）。舊版 prompt
     // 還寫著「例如使用者明確要求忽略某項」，等於明文教它把流程指令當放行依據。規格層級的決定不走
@@ -99,8 +105,11 @@ async function runQaAgent(taskId, userId, signal) {
 
     // 重驗走 --resume：上輪 session 已含規格＋審查規則＋repo 探索，本輪只送「重取 diff＋逐項重驗」
     // 的短增量 prompt（比照 coding 的省 token 設計）。首輪／無上輪清單／resume 額度用完 → fresh。
-    const canResume = !!task.qa_session_id && (task.qa_resume_count || 0) < QA_RESUME_LIMIT && !!prev && task.qa_prompt_ver === qaVer;
+    // 刻意不要求「有上輪未解清單」：pass 後回流時它必為空（見 afterPass），拿它當條件等於把回流那條
+    // 路上的 resume 整個擋掉——實測那是每次 8~10 分鐘、$3 的全量重讀，對照 resume 的 19 秒、$0.27。
+    const canResume = !!task.qa_session_id && (task.qa_resume_count || 0) < QA_RESUME_LIMIT && task.qa_prompt_ver === qaVer;
     let callResult = null;
+    let usedResume = false;
     if (canResume) {
       const retryAgent = loadAgent('qa-retry');
       const prompt = retryAgent.render({
@@ -108,10 +117,18 @@ async function runQaAgent(taskId, userId, signal) {
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
         odoo_core_src: coreSourceGuidance(info.odoo_version),
-        prior_findings: priorFindings
+        prior_findings: priorFindings,
+        // 放寬 resume 後唯一真正的準確率風險：同一段對話裡它剛說過 pass，要它推翻自己比讓白紙判斷難。
+        // 明講「那次判定可能有誤」來對沖，比清掉整個 session 便宜得多。非回流輪必須留空——每輪都印
+        // 等於在 fail 重驗輪謊稱上輪判過。
+        return_note: afterPass
+          ? '⚠ 上一輪你判定通過，但這個任務在下游關卡（部署／合併／E2E）失敗被退回，實作 Agent 已再次修改。\n'
+            + '請把那次「通過」當成可能有誤：不要因為自己上輪說過通過就傾向再次通過，本輪重新獨立判斷。\n'
+          : ''
       }).trim();
       try {
         callResult = await runClaude(prompt, { cwd, taskId, userId, signal, resumeSessionId: task.qa_session_id, model: retryAgent.model, agentType: 'qa' });
+        usedResume = true;
         await query('UPDATE tasks SET qa_resume_count = qa_resume_count + 1, qa_session_id = COALESCE($2, qa_session_id) WHERE id=$1', [taskId, callResult.sessionId]).catch(() => {});
       } catch (err) {
         if (err.aborted) throw err; // 手動暫停：交外層原樣處理，session 留著解除後續用
@@ -144,7 +161,9 @@ async function runQaAgent(taskId, userId, signal) {
       callResult = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'qa' });
       await query('UPDATE tasks SET qa_session_id=$2, qa_resume_count=0, qa_prompt_ver=$3 WHERE id=$1', [taskId, callResult.sessionId || null, qaVer]).catch(() => {});
     }
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', callResult.usage, callResult.durationMs);
+    // resumed 一起記帳：fresh 與 resume 的耗時／成本差一個量級，事後要判斷「放寬 resume 之後 QA 準不準」
+    // 就得先分得出哪一輪是哪種——不記的話只能靠比對 task_events 的 session id 反推。
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', callResult.usage, callResult.durationMs, 'completed', usedResume);
     return callResult.text;
   };
 
@@ -221,10 +240,14 @@ async function runQaAgent(taskId, userId, signal) {
     // 「QA 僵局」——貼出的還是好幾輪前早已修掉的舊 QA 清單，人工看到的失敗原因與真因完全對不上，
     // 且兩個裁決選項（補修法／跳過 QA）都解不了真正卡住的那一關。
     // 整組計數器一起清，不只 qa_reviewed_commit：pass ＝這一輪 QA↔coding 迴圈結束，retry／resume
-    // 次數與續接 session 都只在那個迴圈內有意義。留著的話，任務日後從 deploy／E2E 回流再進 QA 時，
-    // 是帶著上一輪的次數起跳的——本來還有額度卻直接觸頂 stopped。
+    // 次數都只在那個迴圈內有意義。留著的話，任務日後從 deploy／E2E 回流再進 QA 時，是帶著上一輪的
+    // 次數起跳的——本來還有額度卻直接觸頂 stopped。
+    // 但 qa_session_id 刻意留著：它承載的是規格與 repo 探索，不因這輪判 pass 而失效。清掉的話，回流
+    // 重驗必然 fresh 全量重讀（實測 8~10 分鐘、$3，對照 resume 的 19 秒、$0.27），而回流輪要驗的是
+    // 「下游失敗的修正」不是推翻舊結論。自我一致偏誤改用 qa-retry 的 return_note 明講來對沖。
+    // session 若因久放被 CLI 清掉，resume 會失敗並自動降級 fresh（見上方 session 遺失分支），不必預先清。
     await query(
-      `UPDATE tasks SET status='merge_running', qa_reviewed_commit=NULL, qa_session_id=NULL,
+      `UPDATE tasks SET status='merge_running', qa_reviewed_commit=NULL,
                        qa_retry_count=0, qa_resume_count=0, updated_at=NOW() WHERE id=$1`,
       [taskId]
     );

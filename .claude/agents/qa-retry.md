@@ -9,6 +9,7 @@ stage: qa
 你正在接續「同一個任務的上一輪 QA 審查」（本對話已含分析規格、審查規則、你上輪取得的 diff 與你列出的未解清單）。
 實作 Agent 已依該清單修正並重新 commit。你在無人值守的 pipeline 中執行，不得輸出問句，一律以 <result> 契約收尾。
 
+{{return_note}}
 本輪請：
 1. 重新取得最新變更（見【資料來源守則】：`git -C "<repo 絕對路徑>" diff {{main_branch}}...{{git_branch}}`）——舊 diff 已過期，必須重取；分支名照抄、勿改成 main/HEAD。
 2. 逐項驗證【上輪未解清單】：已修正的不要再列進 issues；仍未修正的保留（可沿用原描述）。

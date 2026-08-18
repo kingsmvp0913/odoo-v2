@@ -341,6 +341,64 @@ test('QA prompt 版本相符 → 照常 resume', async () => {
   expect(runClaude.mock.calls[0][1].resumeSessionId).toBe('qs-keep');   // 版本相符 → resume
 });
 
+// 意圖：fresh 與 resume 的成本差 12 倍（實測 $3 vs $0.27），但「哪一輪是哪種」事後查不到——
+// 記帳時就標，否則放寬 resume 之後準確率是升是降都無從判讀。落地由 token-logger.test.js 顧。
+test('記帳帶 resumed 旗標：fresh 記 false、resume 記 true', async () => {
+  const { logTokenUsage } = require('../pipeline/token-logger');
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+
+  logTokenUsage.mockClear();
+  await runQaAgent(await makeTask(), userId);
+  expect(logTokenUsage.mock.calls[0][6]).toBe(false);
+
+  logTokenUsage.mockClear();
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-a' WHERE id=$1", [id]);
+  await dbModule.query("INSERT INTO task_logs (task_id,role,content) VALUES ($1,'ai','[QA 未通過]\n舊項')", [id]);
+  await runQaAgent(id, userId);
+  expect(logTokenUsage.mock.calls[0][6]).toBe(true);
+});
+
+// 意圖：pass 之後任務可能因 deploy／E2E／merge 失敗回流再進 QA。那條路上要驗的是「載入錯誤的修正」，
+// 不是推翻自己上一輪的結論，而舊 session 裡的規格與 repo 探索仍然有效——清掉等於每次回流都重跑一輪
+// 全量探索。注意 pass 會寫下未解清單的分界，故此時 prev 必為空：光靠 `!!prev` 當條件就會擋掉 resume，
+// 兩道門要一起拆才有效果。
+test('pass 後回流（有 session、無未解清單）→ 仍走 resume，不重跑全量', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-passed', qa_resume_count=0 WHERE id=$1", [id]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id,role,content) VALUES ($1,'ai','[QA 通過] 本輪審查通過，先前的未解清單就此作廢')", [id]
+  );
+  await runQaAgent(id, userId);
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBe('qs-passed');
+  expect(runClaude.mock.calls[0][0]).not.toContain('module: sale'); // 沒重送全量規格＝真的走了短 prompt
+});
+
+// 意圖：這是放寬 resume 唯一真正的準確率風險——同一段對話裡它剛說過 pass，要它推翻自己比讓白紙判斷難。
+// 用 prompt 明講來對沖，比清掉整個 session 便宜得多。兩個方向都斷言：只驗「有出現」的話，把警語寫死
+// 在 body 裡（每輪都印）也會綠，那等於在 fail 重驗輪謊稱上輪判過。
+test('pass 後回流的 resume prompt 明講上輪判過；一般 fail 重驗輪不得出現該警語', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+
+  const afterPass = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-p' WHERE id=$1", [afterPass]);
+  await dbModule.query(
+    "INSERT INTO task_logs (task_id,role,content) VALUES ($1,'ai','[QA 通過] 本輪審查通過，先前的未解清單就此作廢')", [afterPass]
+  );
+  await runQaAgent(afterPass, userId);
+  expect(runClaude.mock.calls[0][0]).toContain('上一輪你判定通過');
+
+  runClaude.mockReset();
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+  const inLoop = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-l' WHERE id=$1", [inLoop]);
+  await dbModule.query("INSERT INTO task_logs (task_id,role,content) VALUES ($1,'ai','[QA 未通過]\n欄位沒加')", [inLoop]);
+  await runQaAgent(inLoop, userId);
+  expect(runClaude.mock.calls[0][0]).not.toContain('上一輪你判定通過');
+  expect(runClaude.mock.calls[0][0]).toContain('欄位沒加'); // 未解清單照常帶＝重驗輪本身正常
+});
+
 // F11 意圖：QA 執行失敗不再一律 status=stopped/blocker_type=null 黑箱；比照 deploy 接 failure-classifier——
 // transient 自動重試一次（不佔計數），非 transient 把分類寫進 blocker_type，判不出才留 null 交人工。
 test('F11 transient 失敗 → 自動重試一次（不計數），成功後照常判定', async () => {
@@ -595,10 +653,11 @@ test('resume：重驗輪同樣不得帶入使用者修正指示', async () => {
   expect(prompt).toContain('xmlid 不存在');            // 上輪未解清單仍在＝重驗輪本身正常
 });
 
-// 意圖：pass ＝這一輪 QA↔coding 迴圈結束。計數器與 session 只在那個迴圈內有意義，不清的話任務
-// 日後從 deploy／E2E 失敗回流再進 QA 時是「帶著上一輪的次數起跳」——本來還有額度卻直接觸頂 stopped。
+// 意圖：pass ＝這一輪 QA↔coding 迴圈結束。計數器只在那個迴圈內有意義，不清的話任務日後從 deploy／
+// E2E 失敗回流再進 QA 時是「帶著上一輪的次數起跳」——本來還有額度卻直接觸頂 stopped。
 // 未解清單也必須就此作廢，否則回流重驗會撈到好幾輪前早就修掉的舊清單當待驗項，永遠收斂不了。
-test('QA pass → 整組計數器與 session 歸零，並寫下未解清單的分界', async () => {
+// 但 session 刻意留著：它承載的規格與 repo 探索不因 pass 失效，回流時 resume 得回來（見上方回流測試）。
+test('QA pass → 計數器歸零並寫下未解清單分界，但 session 留給回流重驗', async () => {
   claudeReturns({ verdict: 'pass' });
   const id = await makeTask();
   await dbModule.query(
@@ -611,7 +670,7 @@ test('QA pass → 整組計數器與 session 歸零，並寫下未解清單的�
   const { rows: [t] } = await dbModule.query(
     'SELECT status, qa_session_id, qa_resume_count, qa_retry_count, qa_reviewed_commit FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('merge_running');
-  expect(t.qa_session_id).toBeNull();
+  expect(t.qa_session_id).toBe('qs-1'); // 留著＝回流時不必重跑全量探索
   expect(t.qa_resume_count).toBe(0);
   expect(t.qa_retry_count).toBe(0);
   expect(t.qa_reviewed_commit).toBeNull();

@@ -189,6 +189,7 @@ function registerRoutes(app) {
            ${WEIGHTED} AS tokens,
            ${COST} AS cost,
            tu.duration_ms,
+           tu.resumed,
            tu.recorded_at
          FROM token_usage tu
          LEFT JOIN tasks t ON t.task_id = tu.task_id
@@ -257,7 +258,10 @@ function registerRoutes(app) {
           model:       row.model || null,
           tokens:      rowTokens,
           cost:        rowCost,
-          duration_ms: row.duration_ms
+          duration_ms: row.duration_ms,
+          // 續用上輪 session（true）／全量重讀（false）／該關沒這概念（null）。fresh 與 resume 的耗時
+          // 差一個量級，不帶出來的話遠端只能靠比對 task_events 的 session id 反推。
+          resumed:     row.resumed
         });
         if (new Date(row.recorded_at) > new Date(taskMap[key].last_recorded_at)) {
           taskMap[key].last_recorded_at = row.recorded_at;

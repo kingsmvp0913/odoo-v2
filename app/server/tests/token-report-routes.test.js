@@ -189,6 +189,25 @@ test('依 model 單價計 USD：opus 記錄用 $5/1M、model 一併回傳', asyn
   expect(res.body.tasks[0].agents[0].model).toBe('claude-opus-4-8');
 });
 
+// 意圖：QA 每輪是 fresh 還是 resume，是判斷「放寬 resume 之後準確率有沒有退步」的唯一依據，而正式區
+// 只能經這支 API 讀。null（該關沒有 resume 概念）要與 false（跑了 fresh）分得開，否則統計從頭就是錯的。
+// agent_type 用本檔獨有值隔離（比照下方 aborted/interrupted 那支）：借真實關卡名會灌爆別支的 by_agent 計數。
+test('agents[] 帶出 resumed：true／false／null 三態要分得出來', async () => {
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, user_id, agent_type, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, source, resumed)
+     VALUES ('task_resumed_1', $1, 'qa_probe', 'claude-sonnet-4-5', 10, 0, 0, 0, 'server', true),
+            ('task_resumed_1', $1, 'qa_probe', 'claude-sonnet-4-5', 10, 0, 0, 0, 'server', false),
+            ('task_resumed_1', $1, 'qa_probe', 'claude-sonnet-4-5', 10, 0, 0, 0, 'server', NULL)`,
+    [adminUserId]
+  );
+  const res = await request(app)
+    .get('/api/token-report?all=true&task_id=task_resumed_1')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const flags = res.body.tasks[0].agents.map(a => a.resumed).sort();
+  expect(flags).toEqual([false, null, true].sort());
+});
+
 test('chat token_usage groups per chat_id with chat title; orphan task/chat marked deleted', async () => {
   // 建一個專案與對話，chat token 記錄帶 chat_id → 應以對話標題呈現、可連結
   const { rows: [proj] } = await dbModule.query(
