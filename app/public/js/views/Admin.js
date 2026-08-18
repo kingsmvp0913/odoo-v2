@@ -9,10 +9,14 @@ window.AdminView = Vue.defineComponent({
       writebackOdooNotes: false,
       usageGate: { enabled: true, th5: 90, th7: 95 },
       gateStatus: null,
-      claudeToken: { configured: false, shadowed_by: null },
+      claudeToken: { configured: false, backup_configured: false, fallback_enabled: false, shadowed_by: null },
       claudeTokenInput: '',
       savingClaudeToken: false,
       clearingClaudeToken: false,
+      claudeBackupInput: '',
+      savingBackupToken: false,
+      clearingBackupToken: false,
+      savingFallback: false,
       context7Key: { configured: false },
       context7KeyInput: '',
       savingContext7Key: false,
@@ -124,6 +128,43 @@ window.AdminView = Vue.defineComponent({
         this.claudeToken = await Api.get('admin/claude-token');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.clearingClaudeToken = false; }
+    },
+    async saveBackupToken() {
+      const token = (this.claudeBackupInput || '').trim();
+      if (!token) { showToast('請貼上備用 token', 'error'); return; }
+      this.savingBackupToken = true;
+      try {
+        // 同主憑證：後端會先實際跑一次 claude 驗證才存，等待數秒屬正常
+        const r = await Api.post('admin/claude-token/backup', { token });
+        this.claudeBackupInput = '';
+        showToast(r.warning || '備用憑證已儲存並驗證通過', r.warning ? 'error' : 'success');
+        this.claudeToken = await Api.get('admin/claude-token');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingBackupToken = false; }
+    },
+    async clearBackupToken() {
+      if (!await confirmDialog({
+        title: '清除備用憑證',
+        message: '清除後主帳號用量撞到門檻時，會回到「暫停自動推進」的行為。確定要清除嗎？',
+        danger: true, confirmText: '清除'
+      })) return;
+      this.clearingBackupToken = true;
+      try {
+        await Api.delete('admin/claude-token/backup');
+        showToast('備用憑證已清除', 'success');
+        this.claudeToken = await Api.get('admin/claude-token');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.clearingBackupToken = false; }
+    },
+    async toggleFallback(enabled) {
+      this.savingFallback = true;
+      try {
+        await Api.put('admin/claude-fallback', { enabled });
+        this.claudeToken = await Api.get('admin/claude-token');
+        this.gateStatus = await Api.get('usage-gate/status');
+        showToast(enabled ? '已啟用備用憑證接手' : '已停用備用憑證接手', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingFallback = false; }
     },
     async saveContext7Key() {
       const key = (this.context7KeyInput || '').trim();
@@ -384,6 +425,13 @@ window.AdminView = Vue.defineComponent({
                   ⏸ 已暫停：{{ gateStatus.reason.window === '5h' ? '5 小時視窗' : '本週' }}用量 {{ gateStatus.reason.current }}% 已達門檻 {{ gateStatus.reason.threshold }}%{{ gateStatus.reason.stale ? '（快取資料）' : '' }}；重置：{{ gateStatus.reason.resets_at || '未知' }}
                 </span>
               </template>
+              <template v-else-if="gateStatus.active_credential === 'backup'">
+                <span style="color:var(--warning)">
+                  🔄 主憑證用量 {{ gateStatus.primary_reason ? gateStatus.primary_reason.current : '—' }}% 已達門檻，改用<strong>備用憑證</strong>運行中；備用用量
+                  {{ gateStatus.backup && gateStatus.backup.available && gateStatus.backup.five_hour ? gateStatus.backup.five_hour.utilization + '%' : '不可得' }}
+                  <template v-if="gateStatus.primary_reason"> · 主帳號重置：{{ gateStatus.primary_reason.resets_at || '未知' }}</template>
+                </span>
+              </template>
               <template v-else-if="gateStatus.enabled === false">
                 <span style="color:var(--text-muted)">閘門已停用</span>
               </template>
@@ -429,6 +477,43 @@ window.AdminView = Vue.defineComponent({
             </button>
             <button v-if="claudeToken.configured" class="btn btn-ghost btn-sm" @click="clearClaudeToken" :disabled="clearingClaudeToken">
               {{ clearingClaudeToken ? '清除中...' : '清除憑證' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 備用憑證（用量撞閘門時接手） -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">備用 Claude 憑證</div>
+            <div class="setting-block-desc">主憑證的用量撞到上方閘門門檻時，整條 pipeline 會停下等視窗重置。貼一把<strong>另一份訂閱</strong>的 <code>claude setup-token</code>，並開啟下方開關，撞門檻時就改用它繼續推進，主帳號用量降回門檻下自動切回。<strong>務必用不同帳號產生</strong>——同一個帳號的第二把 token 共用同一份用量，切過去照樣是超標狀態。備用帳號的用量能不能讀到取決於該 token 的權限，讀不到時顯示「不可得」，屆時只有跑失敗才會知道它也用完了。</div>
+          </div>
+          <div class="setting-block-body">
+            <div style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">
+              <span v-if="claudeToken.backup_configured" style="color:var(--success)">✓ 已設定備用憑證</span>
+              <span v-else style="color:var(--text-muted)">尚未設定，主帳號撞門檻時會暫停推進任務</span>
+            </div>
+            <label class="switch-label-row">
+              <div style="position:relative;width:44px;height:24px;flex-shrink:0">
+                <input type="checkbox" :checked="claudeToken.fallback_enabled" :disabled="savingFallback"
+                       @change="toggleFallback($event.target.checked)" style="opacity:0;width:0;height:0;position:absolute" />
+                <div :style="{background: claudeToken.fallback_enabled ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
+                <div :style="{position:'absolute', top:'3px', left: claudeToken.fallback_enabled ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
+              </div>
+              <span style="font-size:var(--fs-md);color:var(--text)">{{ claudeToken.fallback_enabled ? '撞門檻時改用備用憑證繼續跑' : '撞門檻時暫停推進（不使用備用憑證）' }}</span>
+            </label>
+            <div class="conn-fields" style="margin-top:var(--space-4)">
+              <div class="field-item">
+                <label class="field-label">貼上備用 token</label>
+                <input v-model="claudeBackupInput" type="password" class="field-input" placeholder="另一個帳號的 claude setup-token" autocomplete="off" />
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="saveBackupToken" :disabled="savingBackupToken">
+              {{ savingBackupToken ? '驗證中...' : '儲存並驗證' }}
+            </button>
+            <button v-if="claudeToken.backup_configured" class="btn btn-ghost btn-sm" @click="clearBackupToken" :disabled="clearingBackupToken">
+              {{ clearingBackupToken ? '清除中...' : '清除備用憑證' }}
             </button>
           </div>
         </div>

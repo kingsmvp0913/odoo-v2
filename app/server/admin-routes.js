@@ -46,14 +46,24 @@ function registerRoutes(app) {
 
   app.get('/api/admin/claude-token', auth, async (req, res) => {
     try {
-      const { rows } = await query('SELECT claude_oauth_token_enc FROM teams_settings WHERE id = 1');
-      // 只回布林：token 不論明文密文都不得回流前端
-      res.json({ configured: !!rows[0]?.claude_oauth_token_enc, shadowed_by: shadowingEnvVar() });
+      const { rows } = await query(
+        `SELECT claude_oauth_token_enc, claude_oauth_token_backup_enc, usage_gate_fallback_enabled
+         FROM teams_settings WHERE id = 1`
+      );
+      // 只回布林：token 不論明文密文都不得回流前端。兩把憑證與備援開關一次回齊，前端只打一支。
+      res.json({
+        configured: !!rows[0]?.claude_oauth_token_enc,
+        backup_configured: !!rows[0]?.claude_oauth_token_backup_enc,
+        fallback_enabled: !!rows[0]?.usage_gate_fallback_enabled,
+        shadowed_by: shadowingEnvVar()
+      });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/admin/claude-token', auth, async (req, res) => {
-    const token = String(req.body?.token || '').trim();
+  // 主／備兩把憑證的存放欄位。備用憑證是「另一份訂閱」，主帳號撞用量閘門時由 usage-gate 切過去用。
+  const TOKEN_COLS = { primary: 'claude_oauth_token_enc', backup: 'claude_oauth_token_backup_enc' };
+
+  async function saveClaudeToken(col, token, res) {
     if (!token) return res.status(400).json({ error: '請貼上 Claude token' });
     if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 token' });
     // 先驗證再存（比照 GitHub PAT）：貼錯或過期當場擋下，不必等下一張任務炸掉。
@@ -71,20 +81,44 @@ function registerRoutes(app) {
     }
     try {
       await query(
-        `INSERT INTO teams_settings (id, claude_oauth_token_enc, updated_at) VALUES (1, $1, NOW())
-         ON CONFLICT (id) DO UPDATE SET claude_oauth_token_enc = $1, updated_at = NOW()`,
+        `INSERT INTO teams_settings (id, ${col}, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET ${col} = $1, updated_at = NOW()`,
         [encrypt(token)]
       );
       await resetClaudeTokenCache(); // 下一個 spawn 即生效，不必重啟 server
       res.json(warning ? { ok: true, warning } : { ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
-  });
+  }
 
-  app.delete('/api/admin/claude-token', auth, async (req, res) => {
+  async function clearClaudeToken(col, res) {
     try {
-      await query('UPDATE teams_settings SET claude_oauth_token_enc = NULL, updated_at = NOW() WHERE id = 1');
-      await resetClaudeTokenCache(); // 退回本機憑證檔行為
+      await query(`UPDATE teams_settings SET ${col} = NULL, updated_at = NOW() WHERE id = 1`);
+      await resetClaudeTokenCache(); // 主憑證清掉即退回本機憑證檔行為
       res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  }
+
+  app.post('/api/admin/claude-token', auth, (req, res) =>
+    saveClaudeToken(TOKEN_COLS.primary, String(req.body?.token || '').trim(), res));
+
+  app.post('/api/admin/claude-token/backup', auth, (req, res) =>
+    saveClaudeToken(TOKEN_COLS.backup, String(req.body?.token || '').trim(), res));
+
+  app.delete('/api/admin/claude-token', auth, (req, res) => clearClaudeToken(TOKEN_COLS.primary, res));
+
+  app.delete('/api/admin/claude-token/backup', auth, (req, res) => clearClaudeToken(TOKEN_COLS.backup, res));
+
+  // 備援總開關。關閉（預設）時主帳號撞門檻就暫停推進，與備用憑證存不存在無關——
+  // 管理員要能在不刪掉憑證的前提下停用第二份訂閱。
+  app.put('/api/admin/claude-fallback', auth, async (req, res) => {
+    const enabled = !!req.body?.enabled;
+    try {
+      await query(
+        `INSERT INTO teams_settings (id, usage_gate_fallback_enabled, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET usage_gate_fallback_enabled = $1, updated_at = NOW()`,
+        [enabled]
+      );
+      res.json({ ok: true, enabled });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

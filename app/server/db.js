@@ -585,6 +585,10 @@ async function migrate() {
     // 由 lib/claude-auth 解密後注入每個 claude 子行程的 CLAUDE_CODE_OAUTH_TOKEN，
     // 取代共用互動式憑證檔（併發 spawn 撞刷新會印 Not logged in）
     { table: 'teams_settings', col: 'claude_oauth_token_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN claude_oauth_token_enc TEXT' },
+    // 備用憑證（另一份訂閱的 setup-token）：主帳號用量撞閘門時改用它繼續跑，主帳號降回門檻下自動切回。
+    // 預設關閉——沒貼備用憑證、或管理員不想用第二份訂閱時，行為與過去完全相同（撞門檻即暫停推進）。
+    { table: 'teams_settings', col: 'claude_oauth_token_backup_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN claude_oauth_token_backup_enc TEXT' },
+    { table: 'teams_settings', col: 'usage_gate_fallback_enabled', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_fallback_enabled BOOLEAN DEFAULT false' },
     // context7 MCP 的 API key：加密存放，由 lib/context7-auth 解密後寫進 pipeline 的 MCP 設定檔。
     // 未設定則走匿名額度（依 IP 計），配額用盡時 MCP 不報錯、只回一段 quota 訊息，
     // 各關於是靜默改用 WebSearch 抓 Odoo 原始碼（2026-08-11 實測）

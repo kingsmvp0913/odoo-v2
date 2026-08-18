@@ -83,3 +83,56 @@ describe('shadowingEnvVar：偵測蓋過本設定的環境變數', () => {
     expect(claudeAuth.shadowingEnvVar()).toBe(null);
   });
 });
+
+// ── 備用憑證（另一份訂閱）──────────────────────────────────────────────
+// 意圖：主帳號用量撞閘門時，pipeline 改用備用憑證繼續跑，而不是整條停下等視窗重置。
+// 「目前該用哪一把」由 usage-gate 評估後設定；本模組只負責照旗標交出對應的 token，
+// 且必須維持同步（runClaude 在 spawn 當下呼叫，改 async 會讓既有測試整片失效）。
+describe('備用憑證切換', () => {
+  beforeEach(async () => {
+    await dbModule.query('UPDATE teams_settings SET claude_oauth_token_backup_enc = NULL WHERE id = 1');
+    claudeAuth._setForTesting(null, null, 'primary');
+  });
+
+  test('預設用主憑證——沒人切換過就不該動到備用', async () => {
+    await dbModule.query('UPDATE teams_settings SET claude_oauth_token_enc = $1, claude_oauth_token_backup_enc = $2 WHERE id = 1',
+      [encrypt('primary-tok'), encrypt('backup-tok')]);
+    await claudeAuth.loadClaudeToken();
+    expect(claudeAuth.getActiveCredential()).toBe('primary');
+    expect(claudeAuth.getClaudeAuthEnv()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'primary-tok' });
+  });
+
+  test('切到 backup → 注入備用 token', async () => {
+    await dbModule.query('UPDATE teams_settings SET claude_oauth_token_enc = $1, claude_oauth_token_backup_enc = $2 WHERE id = 1',
+      [encrypt('primary-tok'), encrypt('backup-tok')]);
+    await claudeAuth.loadClaudeToken();
+    claudeAuth.setActiveCredential('backup');
+    expect(claudeAuth.getActiveCredential()).toBe('backup');
+    expect(claudeAuth.getClaudeAuthEnv()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'backup-tok' });
+  });
+
+  // 沒貼備用卻被切過去（設定被清掉、或閘門判斷與存檔競態）時若回空物件，
+  // 等於讓所有 pipeline 子行程失去憑證——比「繼續用已超標的主憑證」嚴重得多。
+  test('切到 backup 但沒設備用憑證 → 退回主憑證，不得交出空物件', async () => {
+    await dbModule.query('UPDATE teams_settings SET claude_oauth_token_enc = $1 WHERE id = 1', [encrypt('primary-tok')]);
+    await claudeAuth.loadClaudeToken();
+    claudeAuth.setActiveCredential('backup');
+    expect(claudeAuth.getClaudeAuthEnv()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'primary-tok' });
+  });
+
+  test('備用密文壞掉 → 當成沒有備用，主憑證不受影響', async () => {
+    await dbModule.query("UPDATE teams_settings SET claude_oauth_token_enc = $1, claude_oauth_token_backup_enc = 'broken-blob' WHERE id = 1",
+      [encrypt('primary-tok')]);
+    await expect(claudeAuth.loadClaudeToken()).resolves.toBeUndefined();
+    expect(claudeAuth.getClaudeAuthEnv()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'primary-tok' });
+    expect(claudeAuth.hasBackupToken()).toBe(false);
+  });
+
+  // 用量量測要拿「那一把」去打 API（不是永遠打本機憑證檔），故需要具名取用出口。
+  test('getTokenFor 依名稱交出對應 token，未設定回 null', async () => {
+    await dbModule.query('UPDATE teams_settings SET claude_oauth_token_enc = $1 WHERE id = 1', [encrypt('primary-tok')]);
+    await claudeAuth.loadClaudeToken();
+    expect(claudeAuth.getTokenFor('primary')).toBe('primary-tok');
+    expect(claudeAuth.getTokenFor('backup')).toBe(null);
+  });
+});
