@@ -104,6 +104,7 @@ window.TaskDetailView = Vue.defineComponent({
     this.checkInflight();
     this.loadEvents();
     this.loadTaskMessages();
+    this.markInboxRead();
   },
   mounted() {
     // 訂閱狀態更新：pipeline 推 task:updated 時靜默重抓，讓狀態/阻塞原因即時更新（免手動重整）
@@ -160,6 +161,16 @@ window.TaskDetailView = Vue.defineComponent({
         if (w) w.close();
         showToast(e.message || '無法開啟測試區', 'error');
       }
+    },
+    // 打開任務頁＝這件事已經看到了，不該還掛在收件匣等你回去點。後端的自動消解只涵蓋
+    // kind='action' 且任務已離開等人狀態的那部分，退回事件（bounce）完全不在其中——不從這裡
+    // 清，沒經收件匣進來的人就永遠清不掉。清完要順手校正 badge，否則數字要等下次換頁才更新。
+    // 靜默失敗：收件匣不是本頁的關鍵路徑（教程的假任務 id 也會走到這裡並被後端擋成 404）。
+    async markInboxRead() {
+      try {
+        await Api.post(`inbox/task/${this.$route.params.id}/read`);
+        if (window.loadInboxUnread) window.loadInboxUnread();
+      } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
     },
     async load() {
       this._convPinBottom = true; this.convVisible = 5;

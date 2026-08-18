@@ -216,3 +216,75 @@ test('GET /api/inbox/unread-count → 401 without token', async () => {
   const res = await request(app).get('/api/inbox/unread-count');
   expect(res.status).toBe(401);
 });
+
+// 意圖：不是每個人都經收件匣進任務——從任務列表、從通知、從別人給的連結進來都是常態。
+// 那些路徑上原本沒有任何東西會清收件匣：resolveInboxActions 只管 kind='action'，而且只在任務
+// 已經離開等人狀態時才消解，'bounce' 完全不在射程內 → 同一張任務永遠掛在未讀清單上。
+describe('POST /api/inbox/task/:taskId/read → 進到任務頁就清掉該任務的未讀', () => {
+  let taskId, otherTaskOfMine;
+  beforeAll(async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'IB-5','odoo','直接點進去的任務','stopped') RETURNING id",
+      [myUserId]
+    );
+    taskId = t.id;
+    const { rows: [t2] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'IB-6','odoo','沒被打開的任務','stopped') RETURNING id",
+      [myUserId]
+    );
+    otherTaskOfMine = t2.id;
+  });
+
+  test('該任務的 action 與 bounce 一併已讀（bounce 沒有別的機制會清它）', async () => {
+    const a = await mkInbox(myUserId, taskId, 'action', { status: 'stopped' });
+    const b1 = await mkInbox(myUserId, taskId, 'bounce');
+    const b2 = await mkInbox(myUserId, taskId, 'bounce');
+
+    const res = await request(app).post(`/api/inbox/task/${taskId}/read`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+
+    // 逐筆問而不是 `id = ANY($1::int[])`：pg-mem 對有索引的欄位會靜默回 0 列（testing 規則 12），
+    // 那樣的空結果會讓下面的迴圈一次都沒跑到，變成永遠綠的假測試。
+    for (const id of [a, b1, b2]) {
+      const { rows: [r] } = await dbModule.query('SELECT read_at FROM user_inbox WHERE id=$1', [id]);
+      expect(r.read_at).not.toBeNull();
+    }
+  });
+
+  test('只清這一張任務的，別張任務的未讀不受影響', async () => {
+    const untouched = await mkInbox(myUserId, otherTaskOfMine, 'bounce');
+    await request(app).post(`/api/inbox/task/${taskId}/read`).set('Authorization', `Bearer ${token}`);
+
+    const { rows: [row] } = await dbModule.query('SELECT read_at FROM user_inbox WHERE id=$1', [untouched]);
+    expect(row.read_at).toBeNull();
+  });
+
+  // 鑑別力：故意用「同一張任務、但屬於別人」的列——只比對 task_id 而漏掉 user_id 的實作
+  // 會把別人的收件匣一起標掉，而那種寫法在上面那些案例裡全都是綠的。
+  test('別人在同一張任務上的未讀不得被動到', async () => {
+    const foreign = await mkInbox(otherUserId, taskId, 'action');
+    await request(app).post(`/api/inbox/task/${taskId}/read`).set('Authorization', `Bearer ${token}`);
+
+    const { rows: [row] } = await dbModule.query('SELECT read_at FROM user_inbox WHERE id=$1', [foreign]);
+    expect(row.read_at).toBeNull();
+  });
+
+  // 任務頁每次載入都會打這支，沒東西可清是常態而不是錯誤——回 404 會讓前端天天吞例外。
+  test('沒有未讀列也回 200', async () => {
+    const res = await request(app).post(`/api/inbox/task/${otherTaskOfMine}/read`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const again = await request(app).post(`/api/inbox/task/${otherTaskOfMine}/read`).set('Authorization', `Bearer ${token}`);
+    expect(again.status).toBe(200);
+  });
+
+  test('非數字 taskId 回 404 而非 500，且不得回傳 DB 錯誤訊息（教程的假任務 id 會走到這裡）', async () => {
+    const res = await request(app).post('/api/inbox/task/demo/read').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).not.toMatch(/invalid input syntax|integer/i);
+  });
+
+  test('401 without token', async () => {
+    const res = await request(app).post(`/api/inbox/task/${taskId}/read`);
+    expect(res.status).toBe(401);
+  });
+});

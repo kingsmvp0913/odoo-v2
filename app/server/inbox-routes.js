@@ -65,6 +65,25 @@ function registerRoutes(app) {
     }
   });
 
+  // 進到任務詳情頁＝這件事已經看到了，把該任務底下的未讀一併清掉。
+  // 為什麼不能靠 resolveInboxActions 代勞：它只管 kind='action'，且只在任務已經離開等人狀態時
+  // 才消解。'bounce' 完全不在它的射程內 → 沒有這支的話，不經收件匣直接進任務的人永遠清不掉那幾則，
+  // 未讀數只增不減（正是使用者回報的症狀）。
+  // 沒有未讀列也回 200：任務頁每次載入都會打這支，多數時候本來就沒東西可清，回 404 會變成常態噪音。
+  app.post('/api/inbox/task/:taskId/read', verifyToken, async (req, res) => {
+    try {
+      const taskId = parseId(req.params.taskId);
+      if (taskId === null) return res.status(404).json({ error: '找不到這個任務' });
+      await query(
+        'UPDATE user_inbox SET read_at = NOW() WHERE user_id = $1 AND task_id = $2 AND read_at IS NULL',
+        [req.userId, taskId]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // COALESCE 而非 `AND read_at IS NULL`：重複點同一則不該回 404，否則點兩下就跳錯誤。
   app.post('/api/inbox/:id/read', verifyToken, async (req, res) => {
     try {

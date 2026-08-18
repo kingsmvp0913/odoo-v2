@@ -9,16 +9,24 @@ window.InboxView = Vue.defineComponent({
     return { items: [], loading: true, showAll: false };
   },
   computed: {
-    // 同一任務連續的 bounce 收合成一則並顯示次數。不收合的話，鬼打牆的任務會用重複訊息洗版
-    // 整個收件匣——而「它到底退了幾次」正是要凸顯的訊號，不是要被自己的噪音淹掉。
-    // 只收合「連續」的：中間夾了別的事件就分開，時間順序才不會被壓扁。
+    // 同一任務連續的事件收合成一則並顯示則數。不收合的話，鬼打牆的任務會用重複訊息洗版
+    // 整個收件匣——而「它到底來回幾次」正是要凸顯的訊號，不是要被自己的噪音淹掉。
+    //
+    // 收合鍵是 task_id 而已，刻意不再要求兩則的 kind 相同：同任務的 'action' 一樣會重複堆疊
+    // （'stopped' 是等人狀態，pipeline 裡二十幾個派送點各停一次就各寫一筆），而 action 與 bounce
+    // 又常交錯出現。只收 bounce 等於漏掉最常見的那種重複，使用者得為同一件事按好幾次已讀。
+    // 收合後的卡片顯示最新那則的 kind／狀態（items 是 created_at DESC，第一筆即最新）。
+    // 只收合「連續」的：中間夾了別的任務就分開，時間順序才不會被壓扁。
     grouped() {
       const out = [];
       for (const it of this.items) {
         const prev = out[out.length - 1];
-        if (prev && prev.kind === 'bounce' && it.kind === 'bounce' && prev.task_id === it.task_id) {
+        if (prev && prev.task_id === it.task_id) {
           prev.count += 1;
           prev.ids.push(it.id);
+          // 群組只要有一則未讀就算未讀：否則 ?all=1 下「新的已讀、舊的未讀」會被當成整組已讀，
+          // 「標記已讀」鈕（v-if="!row.read_at"）跟著消失，那幾則就再也點不到了。
+          if (!it.read_at) prev.read_at = null;
           continue;
         }
         out.push({ ...it, count: 1, ids: [it.id] });
@@ -114,7 +122,7 @@ window.InboxView = Vue.defineComponent({
             <span class="pill" :class="row.kind === 'action' ? 'pill-warn' : 'pill-danger'">
               {{ row.kind === 'action' ? '要你處理' : '被退回' }}
             </span>
-            <span v-if="row.count > 1" class="badge" :title="'連續 ' + row.count + ' 次'">×{{ row.count }}</span>
+            <span v-if="row.count > 1" class="badge" :title="'這個任務連續 ' + row.count + ' 則事件'">×{{ row.count }}</span>
             <a href="javascript:void(0)" @click="open(row)" style="font-weight:600">
               {{ row.title || row.task_ref || ('任務 ' + row.task_id) }}
             </a>
