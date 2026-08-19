@@ -776,7 +776,9 @@ function registerRoutes(app) {
   });
 
   // 澄清關主動提問：只回答、永不推進（mode='ask' 在結構上就不允許 proceed）
-  app.post('/api/tasks/:id/clarify-ask', verifyToken, async (req, res) => {
+  // 同樣掛 uploadAttachmentFiles：「我不懂，你指的是哪裡？」這種反問最需要配一張截圖，
+  // 而提問與送出回答走的是兩個端點——只補其中一個，另一條路徑照樣傳不了東西。
+  app.post('/api/tasks/:id/clarify-ask', verifyToken, uploadAttachmentFiles, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req);
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -792,6 +794,17 @@ function registerRoutes(app) {
       );
       if (!rowCount) return res.json({ ok: true });
       await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [req.params.id, question]);
+      // 與 /answer 同一段時序：附件必須早於 runPipeline 落地（taskAttachmentNote 在 agent 起跑時才查），
+      // 且寫在 rowCount 檢查之後——輸掉雙擊競態的請求不該落附件。
+      for (const file of req.files || []) {
+        const relPath = saveAttachmentFile(task.id, file.originalname, file.buffer);
+        await query(
+          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, 'manual')`,
+          [task.id, file.originalname, file.mimetype, relPath]
+        );
+      }
+      if ((req.files || []).length) await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [task.id]);
       require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'clarify_chat_running' });
       runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
       res.json({ ok: true });

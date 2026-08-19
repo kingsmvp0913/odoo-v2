@@ -296,6 +296,50 @@ test('續接輪：有 clarify_session_id ＋指紋相符 → 帶 --resume，prom
   expect(prompt).toContain('目前這版');       // 權威規格重送
 });
 
+// 這一關正是「AI 開口要圖」的地方。使用者傳得上來、檔案也落了地，但 prompt 裡沒有路徑，
+// agent 一樣讀不到——task 150 在分析關就是這樣失敗的，那時只補了分析關，clarify 這關漏了。
+// 斷言用 taskAttachmentNote 專屬的授權句而非「【任務附件】」四字：後者也可能寫在 agent body 的
+// 指引裡，拿它當標記會恆真、驗不到注入有沒有發生。
+const AUTH_SENTENCE = '明確授權：讀取這些附件屬唯讀';
+
+test('fresh 輪：任務附件的路徑與授權句進得了 prompt', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query(
+    "INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin) VALUES ($1,'我看到的畫面.png','image/png','task_9/x.png','manual')",
+    [task.id]
+  );
+  runClaude.mockResolvedValueOnce({ text: '<result>\nDECISION: answer\nREPLY:\n好\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat({ id: task.id }, 1, null, 'ask');
+  const prompt = runClaude.mock.calls.at(-1)[0];
+  expect(prompt).toContain(AUTH_SENTENCE);
+  expect(prompt).toContain('我看到的畫面.png');
+});
+
+// 續接輪必須每輪重算：AI 要圖 → 使用者補圖，這個順序保證了圖一定是 fresh 輪之後才進 DB，
+// session 記憶裡沒有。不重帶的症狀是「它要圖、他傳了、它說沒收到」。
+test('續接輪：fresh 之後才補的附件仍會重新帶進 prompt', async () => {
+  const { promptVersion } = require('../pipeline/agent-loader');
+  const ver = `${promptVersion('clarify-chat')}.${promptVersion('clarify-chat-retry')}`;
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query(
+    "UPDATE tasks SET clarify_session_id=$2, clarify_prompt_ver=$3 WHERE id=$1",
+    [task.id, 'cl-2', ver]
+  );
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','圖傳了')", [task.id]);
+  await dbModule.query(
+    "INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin) VALUES ($1,'補傳的截圖.png','image/png','task_9/y.png','manual')",
+    [task.id]
+  );
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: answer\nREPLY:\n收到圖了\n</result>', usage: {}, durationMs: 1, sessionId: 'cl-2'
+  });
+  await runClarifyChat({ id: task.id }, 1, null, 'ask');
+  const [prompt, opts] = runClaude.mock.calls.at(-1);
+  expect(opts.resumeSessionId).toBe('cl-2');
+  expect(prompt).toContain(AUTH_SENTENCE);
+  expect(prompt).toContain('補傳的截圖.png');
+});
+
 // mode 每輪重算：clarify_mode 可能與 session 開場時不同，retry prompt 必須送本輪的 mode_rule，
 // 不能沿用 session 裡開場時的舊 mode——否則 AI 會誤以為自己還在舊 mode 下，
 // JS 端卻已用新 mode 的 allow 清單悄悄降級決策，AI 講的話（例如「這就開始實作」）與實際不符。

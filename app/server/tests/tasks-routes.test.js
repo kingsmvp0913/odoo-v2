@@ -1486,6 +1486,29 @@ test('POST /clarify-ask → 提問寫進 task_logs，狀態轉 clarify_chat_runn
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
 });
 
+// 提問與送出回答是兩個端點，附件入口得各補各的：/answer 補了不代表 /clarify-ask 也能傳。
+// 「我不懂，你指的是哪裡？」這種反問正是最需要配截圖的一種，卻走在沒補的那條路上。
+test('POST /clarify-ask → multipart 可夾帶附件，落 task_attachments 並標 has_attachment', async () => {
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_clar_ask_att','odoo','T','clarify_pending') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/clarify-ask`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('question', '你說的那個欄位是這個嗎？')
+    .attach('files', Buffer.from('PNGDATA'), '我看到的畫面.png');
+  expect(res.status).toBe(200);
+  const { rows: atts } = await dbModule.query('SELECT filename, origin FROM task_attachments WHERE task_id=$1', [t.id]);
+  expect(atts).toHaveLength(1);
+  expect(atts[0].filename).toBe('我看到的畫面.png');
+  const { rows: [row] } = await dbModule.query('SELECT status, has_attachment FROM tasks WHERE id=$1', [t.id]);
+  expect(row.status).toBe('clarify_chat_running');
+  expect(row.has_attachment).toBe(true);
+  await dbModule.query('DELETE FROM task_attachments WHERE task_id = $1', [t.id]);
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [t.id]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
+});
+
 test('POST /clarify-ask → 空內容 400', async () => {
   const { rows } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_clar_ask_empty','odoo','T','confirm_pending') RETURNING id",

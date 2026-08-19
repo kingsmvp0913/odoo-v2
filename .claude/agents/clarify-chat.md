@@ -106,6 +106,7 @@ user_answer: ""
 
 【近期對話（時間軸，由舊到新；最後一則使用者發言＝你要回應的對象）】
 {{conversation}}
+{{attachments}}
 
 【本次允許的決策】
 {{mode_rule}}
