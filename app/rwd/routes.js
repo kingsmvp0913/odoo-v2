@@ -34,6 +34,8 @@ const ROUTES = [
   { key: 'project-chat', hash: '#/projects/:projectId/chat', auth: 'user', covered: true, needs: 'projectId' },
   { key: 'project-db', hash: '#/projects/:projectId/db', auth: 'user', covered: false,
     why: '需要可用的遠端資料庫連線，無法穩定造資料' },
+  // 與 project-db 不同：這頁沒有連線時顯示的是引導卡，畫面照樣穩定，進得了門禁
+  { key: 'project-deploy-sop', hash: '#/projects/:projectId/deploy-sop', auth: 'user', covered: true, needs: 'projectId' },
   { key: 'token-report', hash: '#/token-report', auth: 'admin', covered: true },
   { key: 'settings', hash: '#/settings', auth: 'user', covered: true },
   { key: 'admin', hash: '#/admin', auth: 'admin', covered: true },

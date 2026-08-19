@@ -63,6 +63,9 @@
   --transition-slow: 0.3s;
   /* 整站放大倍率（1 = 原始大小）。改這一個值即可整站等比縮放 */
   --ui-zoom: 1.1;
+  /* 終端指令區塊：兩種模式都是深底，但深色模式要比 --bg 更沉一階才分得出來 */
+  --code-bg: #1e1e1e;
+  --code-text: #d4d4d4;
   /* 圖表類別配色（20 色）：10 色相×2 明度階、相鄰色差夠大（任兩色最小 RGB 距≈67）；圓餅／圖例依序取用不循環 */
   --cat-1: #b62020; --cat-2: #3e20b6; --cat-3: #49df85; --cat-4: #b67a20; --cat-5: #9820b6;
   --cat-6: #49dfdf; --cat-7: #98b620; --cat-8: #b6207a; --cat-9: #4985df; --cat-10: #3eb620;
@@ -93,6 +96,8 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow: 0 2px 8px rgba(0,0,0,0.4);
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.55);
+  --code-bg: #141414;
+  --code-text: rgba(255,255,255,0.80);
   /* 同一組 20 色類別配色的深色階（對深色面板調亮，非直接翻色）*/
   --cat-1: #dd4b4b; --cat-2: #684bdd; --cat-3: #90eab4; --cat-4: #dda24b; --cat-5: #c04bdd;
   --cat-6: #90eaea; --cat-7: #c0dd4b; --cat-8: #dd4ba2; --cat-9: #90b4ea; --cat-10: #68dd4b;
@@ -1330,3 +1335,47 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
   transition: left .2s;
 }
 .switch input:checked ~ .switch-knob { left: 23px; }
+
+/* 自動部署 SOP（DeploySop.js）。這頁是教學文件而非操作介面，所以有一組別處沒有的
+   排版件：編號步驟、可複製的指令區塊、兩種語氣的提示框（note = 補充、warn = 不照做會出事）。 */
+.sop-step { margin-bottom: var(--space-5); }
+.sop-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-right: var(--space-2); border-radius: 50%;
+  background: var(--primary); color: #fff;
+  font-size: var(--fs-sm); font-weight: var(--fw-semibold); flex-shrink: 0;
+}
+.sop-desc { color: var(--text-secondary); font-size: var(--fs-base); line-height: 1.9; margin: 0 0 var(--space-3); }
+.sop-code {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 1px 5px; font-size: var(--fs-sm); color: var(--text); word-break: break-all;
+}
+/* 指令本身可能很長（路徑＋分支名），一律讓它自己橫捲，不要把頁面撐寬 */
+.sop-cmd-box { position: relative; margin-bottom: var(--space-3); }
+.sop-cmd {
+  background: var(--code-bg); color: var(--code-text);
+  border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4);
+  padding-right: 84px;
+  font-size: var(--fs-sm); line-height: 1.75; margin: 0;
+  overflow-x: auto; white-space: pre;
+}
+.sop-copy { position: absolute; top: var(--space-2); right: var(--space-2); }
+.sop-note, .sop-warn {
+  font-size: var(--fs-base); line-height: 1.85;
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border-strong); background: var(--bg); color: var(--text-secondary);
+}
+.sop-warn { border-left-color: var(--warning); color: var(--text); }
+.sop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.sop-env-card {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--space-4); background: var(--surface);
+}
+.sop-env-title { font-size: var(--fs-md); font-weight: var(--fw-semibold); color: var(--text); margin-bottom: var(--space-3); }
+.sop-facts { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--space-3); font-size: var(--fs-sm); }
+.sop-facts > div { display: flex; align-items: center; gap: var(--space-2); }
+.sop-facts span { color: var(--text-muted); flex-shrink: 0; width: 44px; }
+
+@media (max-width: 760px) {
+  .sop-grid { grid-template-columns: 1fr; }
+}

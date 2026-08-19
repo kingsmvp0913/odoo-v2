@@ -64,6 +64,7 @@ const router = createRouter({
     { path: '/projects/:id/chat', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/chat/:chatId', component: window.ProjectChatView, meta: { requiresAuth: true } },
     { path: '/projects/:id/db', component: window.ProjectDbQueryView, meta: { requiresAuth: true } },
+    { path: '/projects/:id/deploy-sop', component: window.DeploySopView, meta: { requiresAuth: true } },
     { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
     { path: '/pipeline-flow', component: window.PipelineFlowView, meta: { requiresAuth: true } },
