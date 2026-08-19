@@ -404,6 +404,40 @@ test('升級失敗（banner-only）→ 判 env、完整 log 落地成檔，block
   }
 });
 
+// 意圖：log 檔名不得由 deploy_retry_count 單獨決定——那個計數會被分診歸零（reject-triage.js:184，
+// 終點是 coding 就清空下游計數器），於是「失敗→人工填修正指示→再失敗」這條最常走的路上，第二份
+// log 會用同一個編號寫回去，把第一次的完整 traceback 靜默蓋掉。事後鑑識拿到的是最後一次，前面的
+// 診斷線索全沒了。同樣的問題 env 路徑早就用時間戳解掉（:394 註解），code 路徑沒跟上。
+// 佐證：正式 data/logs 裡 -1 有 21 份、-3 有 5 份，-2 一份都沒有——遞增編號不可能長這樣。
+test('人工介入把 deploy 計數歸零後再次失敗 → 兩次的 log 並存，不覆蓋前一份', async () => {
+  const os = require('os'); const fs = require('fs'); const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deploylog-dup-'));
+  const prev = process.env.DEPLOY_LOG_DIR;
+  process.env.DEPLOY_LOG_DIR = dir;
+  try {
+    await setEnvRunning();
+    const id = await makeTask(0);
+
+    envAgent.upgradeModules.mockRejectedValue(new Error('Traceback\nodoo.tools.convert.ParseError: FIRST-FAILURE-MARKER'));
+    await runDeployTesting(id, userId);
+
+    // 分診：使用者填修正指示 → 回 coding，下游計數器一併歸零，任務再走一次部署
+    await dbModule.query("UPDATE tasks SET deploy_retry_count=0, status='deploy_testing' WHERE id=$1", [id]);
+
+    envAgent.upgradeModules.mockRejectedValue(new Error('Traceback\nodoo.tools.convert.ParseError: SECOND-FAILURE-MARKER'));
+    await runDeployTesting(id, userId);
+
+    const bodies = fs.readdirSync(dir).filter(f => f.endsWith('.log'))
+      .map(f => fs.readFileSync(path.join(dir, f), 'utf8'));
+    expect(bodies).toHaveLength(2);
+    expect(bodies.some(b => b.includes('FIRST-FAILURE-MARKER'))).toBe(true);
+    expect(bodies.some(b => b.includes('SECOND-FAILURE-MARKER'))).toBe(true);
+  } finally {
+    if (prev == null) delete process.env.DEPLOY_LOG_DIR; else process.env.DEPLOY_LOG_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ===== 主題 A：部署失敗依分類分流（根因 B）=====
 
 test('A-3 env 類失敗（DB 連不上）→ stopped、blocker_type=env、deploy 計數不變、不退 coding', async () => {

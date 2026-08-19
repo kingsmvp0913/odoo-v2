@@ -189,7 +189,11 @@ function saveDeployLog(taskId, count, err) {
   try {
     const dir = process.env.DEPLOY_LOG_DIR || path.join(__dirname, '..', '..', '..', 'data', 'logs');
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `deploy-task${taskId}-${count}.log`);
+    // count 撞名就往後接 _2、_3：code 路徑的 count 是 deploy_retry_count+1，而分診每次人工介入都把
+    // 該計數歸零（reject-triage.js:184），於是「失敗→填修正指示→再失敗」這條最常走的路上編號會重覆，
+    // 直接寫就把前一次的完整 traceback 靜默蓋掉。實測正式 data/logs：-1 有 21 份、-3 有 5 份、-2 掛零。
+    let file = path.join(dir, `deploy-task${taskId}-${count}.log`);
+    for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `deploy-task${taskId}-${count}_${n}.log`);
     fs.writeFileSync(file, [
       `exitCode: ${err.exitCode ?? '?'}｜killed: ${err.killed ? 'yes' : 'no'}`,
       '--- stderr ---', err.stderr || err.message || '(空)',
