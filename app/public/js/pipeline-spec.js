@@ -72,9 +72,10 @@ function pipelineNodes(flags) {
     id: 'new', track: 'task', step: 0, kind: 'start', label: '待分類',
     status: 'new',
     detail: [
-      ['進入', '任務建立（手動、eService／Odoo 同步）'],
-      ['做什麼', '判斷要不要先走客服分流'],
-      ['往下', '需釐清 → 客服處理；否則直接進分析']
+      ['進入', '任務建立：手動與 Odoo 同步落在 new，eService 同步直接落在 cs_running'],
+      ['做什麼', '**不做分流判斷**——runner 把 new 與 cs_running 掛在同一支 handler（客服關）上'],
+      ['往下', '客服處理。沒有繞過客服直接進分析的路：手動建的任務同樣會實跑一輪客服 agent（含讀碼／查 DB／查 wiki）'],
+      ['注意', '「直接進分析」是客服判 code_change_clear 的結果，屬下一格的事，不是這一格的分支']
     ]
   });
   push({
@@ -120,7 +121,8 @@ function pipelineNodes(flags) {
     detail: [
       ['進入', '待分類直接進，或客服判定需要改程式'],
       ['做什麼', '讀專案碼產出 analysis.yaml（含 acceptance 與 permissions）'],
-      ['往下', 'determineNextStatus 三選一：夠有信心 → 建立分支；有問題要問 → 等待確認；要人看過 → 等待規格確認'],
+      ['往下', 'determineNextStatus 三選一：有待答問題或 low_confidence → 等待確認；否則**只有 execution_mode 明確是 MODE_A（純新增、不動既有行為）才直接建立分支**，其餘一律進等待規格確認'],
+      ['分支', '開跑前會先把 main 併進 ai-dev（不併就是對著過期的碼分析）：撞衝突且 merge agent 自動解不掉 → 合併衝突，裁決完回本關重跑（**圖上不畫這條線**，理由見合併衝突那一格）'],
       ['注意', '澄清答完會「完整重跑」這一關，不是接著上次跑']
     ]
   });
@@ -141,7 +143,7 @@ function pipelineNodes(flags) {
       ['進入', '規格需人工過目才開工'],
       ['做什麼', '人看規格：核准、或提修改意見'],
       ['往下', '核准 → 建立分支（**不重跑分析**）'],
-      ['分支', '提意見 → spec-review agent 就地改 analysis.yaml，不重入分析關']
+      ['分支', '提意見 → 狀態先轉「檢查規格是否需調整」（respec_running），由 spec-review 處理器讀對話判回答或就地改 analysis.yaml，再回本關——不重入分析關']
     ]
   });
   push({
@@ -208,8 +210,9 @@ function pipelineNodes(flags) {
     id: 'respec', track: 'aside', step: 7, kind: 'agent', label: '規格層重做',
     status: 'respec_running', agent: 'respec-patch',
     detail: [
-      ['進入', '**兩個入口**：途中追加需求；或人工審核退回、分診判 fix、且任務已開工——後者是規格檢查點，擋的是「使用者的話不經規格就直接落到 coding」（實測 task 126：退回意見被 QA 判成超出規格，來回兩輪後改動被完全還原）'],
+      ['進入', '**三個入口**：規格審核閘門送出修改意見（尚未開工）；途中追加需求；人工審核退回、分診判 fix、且任務已開工——第三種是規格檢查點，擋的是「使用者的話不經規格就直接落到 coding」（實測 task 126：退回意見被 QA 判成超出規格，來回兩輪後改動被完全還原）'],
       ['做什麼', '增量 patch 進 analysis.yaml（不重讀整包碼），維持單一規格來源'],
+      ['尚未開工', 'coding_session_id 與 git_branch 皆空＝規格審核閘門的對話式問答：本關整輪委派 spec-review 處理器，跑完回等待規格確認。這也是這一格最常被踩到的入口，卻最不像「重做規格」'],
       ['往下', '規格有實質變更 → 開發（需求同時寫進 retry_feedback，coding 每輪都讀）'],
       ['分支', '規格一字未動 → **回原本要去的那一關**，不退開發（目標不固定故圖上不畫線）。少了這條，一句「已修好，直接推進到部署」會讓 coding→QA→merge→deploy 整條白跑一遍'],
       ['提問', '認定要改規格、但「該怎麼改」取決於使用者 → 待你裁決，答完回本關帶著答覆續判。判斷「算不算需求」是本關自己的職責，不得外包'],
@@ -224,8 +227,10 @@ function pipelineNodes(flags) {
       ['做什麼', '把原因拆成獨立錯誤項並分類，讀 diff／log 決定往哪走'],
       ['往下', 'fix → 開發（帶著分診結論）；**人工審核退回且已開工時先過規格層重做那一格**再進開發／resume → 回原關／advance → 放行推進'],
       ['判 respec', '**回分析關完整重跑**，分診結論當成「使用者澄清」餵進去——不是走「規格層重做」那一格（分診員不自己改規格）'],
+      ['判提問', '**人工審核退回填的其實是問句、不是缺陷** → 就地在時間軸回答，並回滾這次退回（刪掉 task_rejections 那筆與 [人工退回] 標記、清 retry_feedback），任務放回等待審核。退回統計刻意不算這一次'],
       ['分支', '判退回原因太含糊 → 待你裁決，答完回到本關'],
-      ['注意', '這一關刻意不吃彈跳額度——每一輪都是人主動退回換來的，帶著新資訊']
+      ['注意', '這一關刻意不吃彈跳額度——每一輪都是人主動退回換來的，帶著新資訊'],
+      ['注意', 'resume／advance 的落點隨任務原本停在哪一關而定（advance 最遠到等待審核，且 target=部署時會先繞回併入測試），目標不固定故圖上不畫線']
     ]
   });
   push({
@@ -252,9 +257,10 @@ function pipelineNodes(flags) {
     id: 'conflict', track: 'human', step: 13, kind: 'gate', label: '合併衝突',
     status: 'merge_conflict',
     detail: [
-      ['進入', '併入 testing、或核准後併入 ai-dev 時兩段碼撞同幾行，且 AI 自動解不掉'],
+      ['進入', '**三個入口**：分析關開跑前同步 main→ai-dev、併入 testing、核准後併入 ai-dev——三處撞同幾行且 AI 自動解不掉都停在這裡'],
       ['做什麼', 'merge → merge-explain → merge-clarify 三支各司其職，人做最後裁決'],
-      ['往下', '解完回原本那一關續跑（併入測試來的 → 部署測試區；併入 ai-dev 來的 → 繼續併入 ai-dev）'],
+      ['往下', '解完依 merge_conflict_data.prior_status 回原本那一關續跑（分析來的 → 分析；併入測試來的 → 部署測試區；併入 ai-dev 來的 → 繼續併入 ai-dev）'],
+      ['反直覺', '分析關那條最容易被當成系統壞掉：一張還沒寫半行碼的任務也會停在合併衝突——撞的是工程師直接改 main 的碼與 AI 先前改過的地方。**這個入口與它的回程刻意不畫線**（縱跨 9 格、版面實測過於雜亂），只寫在這裡'],
       ['注意', '流程刻意不分叉：退回重做不會消除衝突，所以全程停在這個狀態']
     ]
   });
@@ -342,10 +348,10 @@ function pipelineNodes(flags) {
     id: 'gitwt', track: 'git', step: 6, kind: 'git', label: '建 worktree',
     ref: 'task/<taskId>',
     detail: [
-      ['對應', '建立分支這一關'],
+      ['對應', '建立分支這一關。但**真正建出來的時點在分析關**（分析要在隔離的樹上讀碼），這一關是冪等沿用、不重建'],
       ['做什麼', '每個 repo 開一個 worktree，分支名 task/<taskId>'],
       ['切點', '**ai-dev**，不是 main——AI 的成果全部長在 ai-dev 這條線上'],
-      ['注意', '建完會先跟上最新的 ai-dev，避免基底落後']
+      ['注意', '這一關會讓 worktree 跟上最新的 ai-dev：任務可能在規格審核閘門停了好幾天，期間 ai-dev 已被別的任務推進']
     ]
   });
   push({
@@ -404,11 +410,21 @@ function pipelineNodes(flags) {
 // 連線：[from, to, 類型]。main＝主線／alt＝條件分支／back＝退回失敗／link＝Git 對應（不是流程轉移）
 function pipelineEdges(flags) {
   const e = [
-    ['new', 'cs', 'alt'], ['new', 'analysis', 'main'], ['cs', 'analysis', 'main'],
+    // new 的唯一出口是客服關：runner 的 HANDLERS 把 new 與 cs_running 掛同一支 handler，
+    // cs-agent 沒有任何跳過分支，任務建立時的狀態也只有 new／cs_running 兩種。曾經畫成
+    // 「new→analysis 主線＋new→cs 旁支」，方向剛好與實際相反，且藏掉「每張任務都先燒一輪客服」。
+    ['new', 'cs', 'main'], ['cs', 'analysis', 'main'],
     ['cs', 'csdata', 'alt'], ['csdata', 'cs', 'back'],
     ['cs', 'csreply', 'alt'], ['csreply', 'cs', 'back'], ['csreply', 'csdone', 'main'],
     ['analysis', 'confirm', 'alt'], ['analysis', 'specreview', 'alt'], ['analysis', 'branch', 'main'],
     ['confirm', 'analysis', 'back'], ['specreview', 'branch', 'main'],
+    // 分析關開跑前的 main→ai-dev 同步撞衝突也會停到合併衝突（task-agent.js 的 syncConflict），
+    // 但**刻意不畫這兩條線**：分析在主線第 4 格、合併衝突在人工介入第 13 格，縱跨 9 格的來回線要走
+    // 主線與人工介入之間那條走道，而那條走道已經擠著等待確認／規格確認／裁決／審核的來回線——
+    // 實際畫出來看過，亂到讓其他線都難讀。改寫在合併衝突與分析兩格的說明裡（同 respec 那條的處置）。
+    // 規格審核閘門送出修改意見：先轉 respec_running（畫面顯示「檢查規格是否需調整」），
+    // 由 respec-agent 判 pre-coding 委派 spec-review 處理器，跑完回本關
+    ['specreview', 'respec', 'alt'], ['respec', 'specreview', 'back'],
     ['coding', 'qa', 'main'], ['qa', 'merge', 'main'], ['qa', 'coding', 'back'],
     ['qa', 'clarify', 'alt'], ['clarify', 'coding', 'back'],
     ['qa', 'stopped', 'back'],
@@ -419,6 +435,8 @@ function pipelineEdges(flags) {
     // 判 respec 回的是分析關完整重跑（reject-triage.js 的 goto('analysis_running')）——那是下一條。
     ['triage', 'coding', 'back'], ['triage', 'respec', 'back'], ['triage', 'analysis', 'back'],
     ['triage', 'clarify', 'alt'],
+    // 退回意見其實是問句：分診就地回答並回滾這次退回，任務放回等待審核
+    ['triage', 'review', 'back'],
     ['clarify', 'triage', 'back'],
     ['respec', 'coding', 'main'],
     // 規格層重做也會停下來問人（該怎麼改取決於使用者），答完回本關帶著答覆續判。

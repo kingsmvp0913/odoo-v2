@@ -4,6 +4,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectNotes } = require('./project-notes');
 const { taskWorkContext } = require('./work-context');
+const { taskAttachmentNote } = require('./sync');
 const { stopReason } = require('./claude-runner');
 const { withResume } = require('./with-resume');
 const { parseAgentResult } = require('./agent-result');
@@ -128,6 +129,7 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
       "SELECT content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY created_at DESC, id DESC LIMIT 1",
       [taskId]
     );
+    const attachments = await taskAttachmentNote(taskId);
     const result = await withResume({
       freshAgentName: 'clarify-chat',
       retryAgentName: 'clarify-chat-retry',
@@ -144,14 +146,18 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
         conversation,
         mode_rule: modeCfg.rule,
         project_notes: projectNotes || '',
-        repo_paths: work ? work.repoPaths : ''
+        repo_paths: work ? work.repoPaths : '',
+        attachments
       }).trim(),
       // mode 每輪重算：clarify_mode 可能與 session 開場時不同，retry prompt 一律送本輪 modeCfg.rule，
       // 不可用 session 內殘留的舊 mode（見 clarify-chat.js 上方 modeCfg 降級邏輯）。
+      // 附件同理每輪重算：這一關正是「AI 開口要圖」的地方，使用者補的圖必然是在 fresh 輪之後才進 DB，
+      // session 記憶裡沒有——不重帶就會出現「它要圖、他傳了、它說沒收到」（task 150 在分析關的翻版）。
       renderRetry: () => retryAgent.render({
         analysis_yaml: task.analysis_yaml || '（無規格）',
         mode_rule: modeCfg.rule,
-        new_message: lastU ? lastU.content : '（無新發言）'
+        new_message: lastU ? lastU.content : '（無新發言）',
+        attachments
       }).trim(),
       onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err),
       model: agent.model,

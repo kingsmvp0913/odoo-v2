@@ -7,28 +7,48 @@ function uploadRoot() {
   return process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads');
 }
 
-function taskDir(taskId) {
-  const safeId = String(taskId).replace(/\.\./g, '_').replace(/[^\w.\-]/g, '_');
-  const dir = path.join(uploadRoot(), `task_${safeId}`);
+function safeSeg(x) {
+  return String(x).replace(/\.\./g, '_').replace(/[^\w.\-]/g, '_');
+}
+
+// 上傳目錄以「擁有者種類_id」分艙：task_<id>（任務附件）與 chat_<id>（對話圖片）。
+// 抽成參數而非各寫一份，是因為底下三個 function 的路徑組法必須逐字相同——一邊改了另一邊沒改，
+// 會變成「存得進去但刪不掉」的孤兒檔，而那完全沒有訊號。
+function scopedDir(scope, ownerId) {
+  const dir = path.join(uploadRoot(), `${scope}_${safeSeg(ownerId)}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
+function saveScopedFile(scope, ownerId, filename, buffer) {
+  const safeName = `${Date.now()}_${safeSeg(filename)}`;
+  fs.writeFileSync(path.join(scopedDir(scope, ownerId), safeName), buffer);
+  return path.join(`${scope}_${safeSeg(ownerId)}`, safeName);
+}
+
+function deleteScopedDir(scope, ownerId) {
+  const dir = path.join(uploadRoot(), `${scope}_${safeSeg(ownerId)}`);
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 已不存在／權限：忽略 */ }
+}
+
+function taskDir(taskId) { return scopedDir('task', taskId); }
+
 // 存檔，回傳「相對於 uploadRoot() 的相對路徑」——DB 只存這個相對路徑
 function saveAttachmentFile(taskId, filename, buffer) {
-  const safeId = String(taskId).replace(/\.\./g, '_').replace(/[^\w.\-]/g, '_');
-  const safeName = `${Date.now()}_${String(filename).replace(/\.\./g, '_').replace(/[^\w.\-]/g, '_')}`;
-  fs.writeFileSync(path.join(taskDir(taskId), safeName), buffer);
-  return path.join(`task_${safeId}`, safeName);
+  return saveScopedFile('task', taskId, filename, buffer);
+}
+
+// 對話圖片：落在 chat_<chatId>/，DB 存相對路徑（同 task 附件）
+function saveChatAttachmentFile(chatId, filename, buffer) {
+  return saveScopedFile('chat', chatId, filename, buffer);
 }
 
 // 刪任務時連帶清掉整個 task_<id> 上傳目錄——過去只刪 DB 的 task_attachments 列，磁碟實體檔變孤兒永不回收。
 // best-effort：目錄不存在或刪除失敗都不擋刪任務流程。
-function deleteTaskDir(taskId) {
-  const safeId = String(taskId).replace(/\.\./g, '_').replace(/[^\w.\-]/g, '_');
-  const dir = path.join(uploadRoot(), `task_${safeId}`);
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 已不存在／權限：忽略 */ }
-}
+function deleteTaskDir(taskId) { deleteScopedDir('task', taskId); }
+
+// 刪對話時同理：project_chat_attachments 靠 ON DELETE CASCADE 自己清掉，實體檔沒人管。
+function deleteChatDir(chatId) { deleteScopedDir('chat', chatId); }
 
 // 刪單一附件實體檔（相對 uploadRoot），best-effort。用於汰換舊版壞檔列時連磁碟一起收，避免留孤兒檔。
 function deleteAttachmentFile(relativePath) {
@@ -100,4 +120,28 @@ function uploadAttachmentFiles(req, res, next) {
   });
 }
 
-module.exports = { uploadRoot, taskDir, saveAttachmentFile, deleteTaskDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles };
+// 對話只收圖片。fileFilter 擋的是「宣告的」mimetype，可被偽造，所以真正的把關在呼叫端：
+// 落地前一律用 sniffFile 驗 magic bytes，並以嗅測結果當存進 DB 的 mimetype——client 送什麼一概不信。
+// fileFilter 仍留著，作用是別為了一個 10MB 的影片先把它整包吃進記憶體才發現不能用。
+const chatImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 },
+  defParamCharset: 'utf8',
+  fileFilter: (req, file, cb) => {
+    if (!/^image\//i.test(file.mimetype || '')) return cb(new Error('只能上傳圖片檔'));
+    cb(null, true);
+  }
+});
+function uploadChatImages(req, res, next) {
+  chatImageUpload.array('files', 5)(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}
+
+// magic bytes 判定是否為圖片（sniffFile 認不出會回 application/octet-stream）
+function isImageBuffer(buf) {
+  return /^image\//.test(sniffFile(buf).mime);
+}
+
+module.exports = { uploadRoot, taskDir, saveAttachmentFile, saveChatAttachmentFile, deleteTaskDir, deleteChatDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles, uploadChatImages, isImageBuffer };

@@ -4,6 +4,8 @@ const { parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
 const { query } = require('../db');
+const path = require('path');
+const { uploadRoot } = require('../lib/attachments');
 
 // 排障對話 → 任務草稿。摘要整串對話成 {title, original_text}，只回草稿、不建任務——
 // 前端拿去讓使用者編輯確認後才走既有 POST /api/tasks（human-in-the-loop）。
@@ -31,11 +33,25 @@ async function draftTaskFromChat(projectId, chatId, userId) {
   // 同一件事）。此時退回舊行為整串重摘，而不是拿空白去問 agent——它只會憑空編一張需求出來。
   if (!current.length) { prior = []; current = msgs; }
 
+  // 只列「本次要轉」那段訊息的附圖：舊議題的圖已經跟著上一張任務走了，再列一次只會讓 agent
+  // 把它挑進來，等於把已處理的事又夾帶進新任務。
+  const currentIds = new Set(current.map(m => m.id));
+  const { rows: allAtts } = await query(
+    'SELECT id, message_id, filename, mimetype, file_path FROM project_chat_attachments WHERE chat_id = $1 ORDER BY id',
+    [chatId]
+  );
+  const atts = allAtts.filter(a => currentIds.has(a.message_id));
+
   const agent = loadAgent('chat-to-task');
   const projectNotes = await getProjectNotes(projectId).catch(() => null);
   const prompt = agent.render({
     history: fmt(current),
     prior_history: prior.length ? fmt(prior) : '（無：這是本場對話第一次轉任務）',
+    // 編號直接用 DB 主鍵，免去一層對照表——agent 回傳的就是可以直接拿去比對的 id。
+    // 帶絕對路徑＋唯讀授權（同 sync.js 的 taskAttachmentNote）：語境判不出來時它才有辦法自己開來看。
+    attachments: atts.length
+      ? atts.map(a => `- id=${a.id}｜${a.filename}${a.mimetype ? `（${a.mimetype}）` : ''}｜${path.resolve(uploadRoot(), a.file_path)}`).join('\n')
+      : '（無：這段對話沒有附圖）',
     project_notes: projectNotes || ''
   });
 
@@ -55,9 +71,16 @@ async function draftTaskFromChat(projectId, chatId, userId) {
     e.status = 500;
     throw e;
   }
+  // 挑圖交給 agent，但它回的編號一概不信：只保留真的在本次清單裡的 id（模型編號、重複、
+  // 把舊議題的圖挑回來，全在這一行被擋掉）。回傳含 filename 供前端顯示縮圖與勾選。
+  const picked = Array.isArray(draft.attachments) ? draft.attachments.map(Number) : [];
+
   return {
     title: String(draft.title).trim(),
-    original_text: String(draft.original_text || '').trim()
+    original_text: String(draft.original_text || '').trim(),
+    // 全部候選都吐回去、被挑中的標 chosen：agent 沒挑的也要讓使用者看得到並能勾回來（這個 modal
+    // 的既有精神就是草稿可人工修改，圖沒理由是唯一不能改的）
+    attachments: atts.map(a => ({ id: a.id, filename: a.filename, chosen: picked.includes(a.id) }))
   };
 }
 

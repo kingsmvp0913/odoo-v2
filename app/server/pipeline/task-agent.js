@@ -599,12 +599,65 @@ async function readHeads(info, taskId) {
   } catch { return {}; }
 }
 
+// 「這張單繞了幾輪」的總計數上限。既有的 reentry／deploy_retry 都會被歸零——分診 advance 主動歸零
+// deploy_retry（reject-triage.js:300）、goto 預設歸零 reentry、人工介入那輪刻意不吃額度——三條各自
+// 都有道理，疊起來卻讓使用者每按一次「先修正」就把計數清空：實測 task 152 跑了 6 輪 coding、$19.4，
+// 畫面上的計數器全是 0/1，沒有任何機制察覺它在鬼打牆。token_usage 是唯一不被任何歸零邏輯碰到的
+// 記帳來源，拿它當「跨人工介入的總輪次」。
+const MAX_CODING_RUNS = parseInt(process.env.PIPELINE_MAX_CODING_RUNS || '4', 10);
+
+// 累計輪次熔斷：擋的目的不是攔住使用者（他本來就會再按繼續），是讓他在**知道累計數字**的前提下
+// 決定要不要繼續——現在按「先修正」時畫面上看不到任何累計量。
+// 逃生路徑靠 task_logs 裡自己留下的熔斷紀錄筆數推導額度（上限 = MAX × (已熔斷次數 + 1)）：不加欄位、
+// 不需要任何恢復路徑主動清旗標，而且天生沒有死鎖——被擋一次就自動放行下一批 MAX 輪。
+// 只加欄位不寫 task_logs 的話任務一往前走那個面板就消失（rules/pipeline.md 77），而這裡剛好兩者同源。
+async function codingRunwayCheck(taskId, businessTaskId) {
+  const { cost } = require('../lib/token-cost').costSql('');
+  const { rows: [u] } = await query(
+    `SELECT SUM(CASE WHEN agent_type='coding' THEN 1 ELSE 0 END) AS coding_runs,
+            COUNT(*) AS total_calls,
+            COALESCE(SUM(${cost}), 0) AS cost_usd,
+            COALESCE(SUM(duration_ms), 0) AS ms
+       FROM token_usage WHERE task_id = $1`,
+    [businessTaskId]
+  );
+  const runs = Number(u?.coding_runs) || 0;
+  const { rows: [b] } = await query(
+    "SELECT COUNT(*) AS n FROM task_logs WHERE task_id = $1 AND content LIKE '[輪次熔斷]%'",
+    [taskId]
+  );
+  const limit = MAX_CODING_RUNS * ((Number(b?.n) || 0) + 1);
+  if (runs < limit) return null;
+  return {
+    runs,
+    limit,
+    calls: Number(u?.total_calls) || 0,
+    usd: Math.round((Number(u?.cost_usd) || 0) * 100) / 100,
+    minutes: Math.round((Number(u?.ms) || 0) / 60000)
+  };
+}
+
 async function runTaskCoding(taskId, userId, signal) {
   const { rows: [task] } = await query(
     'SELECT id, task_id, title, source, analysis_yaml, git_branch, project_id, retry_feedback FROM tasks WHERE id = $1',
     [taskId]
   );
   if (!task || !task.project_id) return false;
+
+  const runaway = await codingRunwayCheck(taskId, task.task_id).catch(() => null);
+  if (runaway) {
+    const msg = `[輪次熔斷] 這張任務已累計跑了 ${runaway.runs} 輪實作、共 ${runaway.calls} 次 AI 呼叫，`
+      + `約 $${runaway.usd}、機器時間 ${runaway.minutes} 分鐘，仍未收斂。`;
+    await query(
+      `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
+      [taskId, msg + '\n\n反覆退回同一個地方，多半代表規格本身還有沒講清楚的部分，'
+        + '或這個做法在 Odoo 上有繞不過的限制——繼續前先看一下前幾輪的退回理由是不是同一件事。\n'
+        + `若確認要繼續，照常填修正指示即可（下次會在累計 ${runaway.limit + MAX_CODING_RUNS} 輪時再提醒一次）。`]
+    );
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, msg]).catch(() => {});
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return true;
+  }
 
   const info = await getProjectInfo(task.project_id);
   if (!info?.root) {
@@ -655,7 +708,39 @@ async function runTaskCoding(taskId, userId, signal) {
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref, userId });
+  // schemaHint 與 coding-project.md 的輸出契約同字面：raw 整段沒有 <result> 時（agent 收尾漏掉），
+  // 補救 agent 不知道要產什麼鍵名就只能亂猜，等於白跑一次 haiku（實測 task 152）。
+  let result = await parseAgentResult(raw, {
+    parse: JSON.parse,
+    schemaHint: '{"status":"qa_running","summary":"本輪實際做了什麼"} '
+      + '或（做不下去時）{"status":"stopped","error":"停下的原因"}',
+    signal, ref, userId
+  });
+
+  // 補救仍解析不出結果時，不能讓整輪報廢：commit 在不在是客觀事實，比 agent 的收尾自述可靠得多。
+  // 有新 commit ⇒ 本輪確實做出東西，照樣進 QA——QA 本來就審 diff 對規格，格式抖動造成的誤放行由
+  // 它擋；反過來把 18 分鐘／1M tokens 的成果丟掉、還要人工介入才推得動，代價大得多（實測 task 152：
+  // 已 commit 6 個檔，只因最後吐的是中文摘要而非 <result> 就 stopped）。
+  // 只兜「解析不出來」這一種：agent 明講 {"status":"stopped"} 是它的判斷，必須照辦，不得覆蓋。
+  if (result == null) {
+    const headsAfterParseFail = await readHeads(info, task.task_id);
+    const repos = Object.keys(headsAfterParseFail);
+    const advanced = repos.length > 0
+      && repos.some(k => headsAfterParseFail[k] && headsAfterParseFail[k] !== headsBefore[k]);
+    if (advanced) {
+      result = { status: 'qa_running', summary: '' };
+      // agent 的收尾自述常帶著 QA／使用者需要知道的取捨（task 152 就在這段講了「管理者會看到兩個
+      // 同名選單」的已知副作用）。它沒進 <result>，只活在 task_events 的終端串流裡——這裡補一份到
+      // task_logs，任務往前走之後仍看得到。截斷比照下方：task_logs 會被分診／respec 讀進 prompt。
+      const tail = String(raw || '').trim().slice(-300);
+      if (tail) {
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+          [taskId, `[實作] 收尾格式不符契約，已依實際 commit 推進。它最後的說明是：${tail}`]
+        ).catch(() => {});
+      }
+    }
+  }
 
   // 帶著失敗回饋進來、卻一個 commit 都沒產生 ⇒ 這輪什麼也沒改。放行進 QA 只會讓 QA 判「same diff、
   // 已審過」照樣 pass，再部署一次必然重現同一個失敗，白燒整條 pipeline 還多吃一次彈跳計數

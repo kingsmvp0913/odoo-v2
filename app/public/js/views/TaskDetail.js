@@ -3,7 +3,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -347,8 +347,18 @@ window.TaskDetailView = Vue.defineComponent({
       if (!question || this.clarBusy) return;
       this.askSubmitting = true;
       try {
-        await Api.post(`tasks/${this.task.id}/clarify-ask`, { question });
+        // 同 submitAnswer：有夾帶檔案才改走 multipart，沒附件時沿用既有 JSON 路徑
+        if (this.askFiles.length) {
+          const fd = new FormData();
+          fd.append('question', question);
+          this.askFiles.forEach(f => fd.append('files', f));
+          await Api.postForm(`tasks/${this.task.id}/clarify-ask`, fd);
+        } else {
+          await Api.post(`tasks/${this.task.id}/clarify-ask`, { question });
+        }
         this.askText = '';
+        this.askFiles = [];
+        if (this.$refs.askFileInput) this.$refs.askFileInput.value = '';
         showToast('已送出提問，任務不會往下跑', 'success');
         this._convPinBottom = true;   // 同 submitAnswer：靜默重抓，不整頁閃「載入中」
         await this.refresh();
@@ -408,6 +418,9 @@ window.TaskDetailView = Vue.defineComponent({
     },
     onAnswerFilesSelected(e) {
       this.answerFiles = Array.from(e.target.files || []);
+    },
+    onAskFilesSelected(e) {
+      this.askFiles = Array.from(e.target.files || []);
     },
     formatSize(bytes) {
       if (!bytes) return '0 B';
@@ -966,6 +979,14 @@ window.TaskDetailView = Vue.defineComponent({
                       :class="{ 'form-control-error': q.required && !String(answerFields[q.id] || '').trim() }"
                       placeholder="請輸入你的回答..."></textarea>
                   </div>
+                  <!-- 題目型也要能附圖：AI 要圖時多半是出成一道題（task 150 即是），
+                       而下面那個單一回覆框只在「沒有解析出題目」時才渲染，補了也用不到。
+                       兩個分支互斥，共用同一個 ref 與 answerFiles，送出後的清空邏輯照樣適用。 -->
+                  <div style="margin-bottom:10px;font-size:var(--fs-xs);color:var(--text-secondary)">
+                    可附圖說明（截圖上標註比打字快，AI 這一關讀得到）
+                    <input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"
+                      style="display:block;margin-top:4px;font-size:var(--fs-xs)" />
+                  </div>
                   <div v-if="!clarAllAnswered" style="font-size:var(--fs-sm);color:var(--danger);margin-bottom:10px">⚠ 還有必答的問題沒回答</div>
                   <div style="text-align:right">
                     <button class="btn btn-primary btn-sm" @click="submitAnswer" :disabled="clarBusy || submitting || !clarAllAnswered">
@@ -982,6 +1003,11 @@ window.TaskDetailView = Vue.defineComponent({
                   <textarea v-model="askText" class="form-control" rows="3" :disabled="clarBusy"
                     placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）"
                     @keydown.enter.exact.prevent="submitAsk"></textarea>
+                  <div style="margin-top:6px;font-size:var(--fs-xs);color:var(--text-secondary)">
+                    可附圖說明（截圖上標註比打字快，AI 這一關讀得到）
+                    <input ref="askFileInput" type="file" multiple @change="onAskFilesSelected"
+                      style="display:block;margin-top:4px;font-size:var(--fs-xs)" />
+                  </div>
                   <div style="margin-top:6px;text-align:right">
                     <button class="btn btn-primary btn-sm" @click="submitAsk" :disabled="clarBusy || askSubmitting || !askText.trim()">
                       {{ askSubmitting ? '送出中...' : '送出提問' }}

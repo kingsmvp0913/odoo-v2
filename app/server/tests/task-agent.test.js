@@ -388,6 +388,138 @@ test('B-5 HEAD 快照讀不到 → 視為無法確認，不得誤擋（照常進
   expect(t.status).toBe('qa_running');
 });
 
+// ---- 累計輪次熔斷（跨人工介入）----
+// 意圖：既有的 reentry／deploy_retry 每條歸零規則各自都有道理，疊起來卻讓使用者每按一次「先修正」
+// 就把計數清空——實測 task 152 跑了 6 輪 coding、$19.4，畫面上計數器全是 0/1，沒有任何機制察覺它在
+// 鬼打牆。token_usage 是唯一不被歸零邏輯碰到的來源，用它當跨人工介入的總輪次。
+async function seedCodingRuns(businessTaskId, n, model = 'claude-sonnet-5') {
+  for (let i = 0; i < n; i++) {
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens, duration_ms)
+       VALUES ($1, 'coding', $2, 1000, 200, 60000)`,
+      [businessTaskId, model]
+    );
+  }
+}
+
+test('累計 coding 未達上限 → 照常跑', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-under'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('runway-under');
+  await seedCodingRuns('ta_runway-under', 3);          // 上限 4，還差一輪
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+});
+
+// 擋下來的目的不是攔住人（他本來就會再按繼續），是讓他在知道累計數字的前提下決定——所以
+// blocker 必須帶真實數字，不能是罐頭句。
+test('累計 coding 達上限 → 停下，blocker 攤開累計輪次與成本', async () => {
+  const calls = mockClaude({ onCall: (child) => { emitInit(child, 'sess-over'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('runway-over');
+  await seedCodingRuns('ta_runway-over', 4);
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('4 輪');
+  expect(t.blocker_content).toMatch(/\$\d/);                 // 成本有算出來，不是佔位字串
+  expect(calls.length).toBe(0);                              // 關鍵：擋在花錢之前，不是跑完才說
+  // rules/pipeline.md 77：只寫欄位、任務一往前走面板就消失。這筆同時是下次額度的推導來源
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1", [id]);
+  expect(logs.some(l => String(l.content).startsWith('[輪次熔斷]'))).toBe(true);
+});
+
+// 最傷的誤判方向：擋完之後使用者填修正指示回到本關，若守衛照樣擋，任務就永久死鎖（reentry 斷路器
+// 曾實際發生過這種鎖死）。額度靠已熔斷筆數遞增，被擋一次就自動放行下一批。
+test('熔斷後使用者續跑 → 額度自動抬高一批，不得死鎖', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-again'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('runway-again');
+  await seedCodingRuns('ta_runway-again', 5);
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'ai','[輪次熔斷] 前一次已擋過')", [id]);
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');   // 上限抬到 8，累計 5 輪照樣放行
+});
+
+// 鑑別力：計數必須來自 token_usage（不會被歸零），不是 reentry_count。把 reentry 歸零仍要擋得住，
+// 否則這個守衛就只是既有斷路器的複製品，一樣會被人工介入清掉。
+test('reentry_count 為 0（剛被 goto 歸零）仍照累計輪次擋下', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-zeroed'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('runway-zeroed', { reentry_count: 0 });
+  await seedCodingRuns('ta_runway-zeroed', 4);
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+});
+
+// 意圖：agent 把活幹完、commit 也推了，卻在收尾漏掉 <result>（實測 task 152：18 分鐘／1.09M
+// tokens、6 個檔已 commit，最後吐的是一段中文摘要），整輪就被判 stopped 報廢、還要人工才推得動。
+// commit 在不在是客觀事實，比 agent 的收尾自述可靠——有新 commit 就照 git 事實推進，誤放行由 QA 擋。
+test('B-5 收尾漏 <result> 但有新 commit → 依 git 事實推進 QA', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-noresult');
+    // 補救那次 haiku 呼叫走同一個 mock，同樣拿不到 <result> ⇒ parseAgentResult 回 null
+    child.stdout.emit('data', JSON.stringify({
+      type: 'result',
+      result: '實作完成並 commit。已知取捨：管理者會看到兩個同名「卑親查詢」選單。',
+      usage: null, duration_ms: 10,
+    }) + '\n');
+    child.emit('close', 0);
+  } });
+  let n = 0;
+  git.revParse.mockImplementation(() => Promise.resolve(`sha-moved-${++n}`));
+  const id = await insertCodingTask('noresult1');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+  // 它的收尾自述常帶著 QA／使用者需要知道的取捨，沒進 <result> 就只活在終端串流裡 → 補一份到 task_logs
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [id]);
+  expect(logs.some(l => String(l.content).includes('兩個同名'))).toBe(true);
+});
+
+// 鑑別力：兜底的依據只有「有沒有新 commit」。沒 commit 又解析不出結果＝這輪什麼證據都沒有，
+// 必須維持原本的 stopped——否則兜底會退化成「解析失敗一律放行」，把空轉輪也送進 QA。
+test('B-5 收尾漏 <result> 且無新 commit → 維持 stopped', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-noresult2');
+    child.stdout.emit('data', JSON.stringify({ type: 'result', result: '我看了一下，沒有動任何檔案。', usage: null, duration_ms: 10 }) + '\n');
+    child.emit('close', 0);
+  } });
+  git.revParse.mockResolvedValue('sha-unchanged');
+  const id = await insertCodingTask('noresult2');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('未回傳有效結果');
+});
+
+// 鑑別力（最傷的誤判方向）：agent 明講 stopped 是它的判斷，不是格式抖動。兜底若連這個一起覆蓋，
+// 「做不下去」會被 commit 的存在蓋過去、硬送進 QA——只兜「解析不出來」這一種。
+test('B-5 agent 明講 stopped → 即使有新 commit 也不得被兜底覆蓋', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-said-stop');
+    child.stdout.emit('data', JSON.stringify({
+      type: 'result',
+      result: '<result>\n{"status":"stopped","error":"sale.order 尚未繼承，需先建立繼承"}\n</result>',
+      usage: null, duration_ms: 10,
+    }) + '\n');
+    child.emit('close', 0);
+  } });
+  let n = 0;
+  git.revParse.mockImplementation(() => Promise.resolve(`sha-partial-${++n}`));
+  const id = await insertCodingTask('saidstop1');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('尚未繼承');   // 它自己的理由，不是罐頭句
+});
+
 test('B-5 coding 遇手動暫停（aborted）→ 狀態原地不動、不列入 blocker', async () => {
   const { spawn } = require('child_process');
   const ctrl = new AbortController();

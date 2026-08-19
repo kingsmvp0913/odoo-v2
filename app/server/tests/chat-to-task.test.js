@@ -24,8 +24,9 @@ beforeEach(() => {
 });
 
 // 便利：mock 對話訊息回傳。upto＝project_chats.converted_upto_message_id（上次轉任務的分界線）。
-function withMessages(rows, upto = null) {
+function withMessages(rows, upto = null, attachments = []) {
   mockQuery.mockImplementation((sql) => {
+    if (/FROM project_chat_attachments/.test(sql)) return Promise.resolve({ rows: attachments });
     if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows });
     if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ converted_upto_message_id: upto }] });
     return Promise.resolve({ rows: [] });
@@ -48,7 +49,7 @@ test('回傳解析後的 {title, original_text}，且整串對話（非只最後
 
   const draft = await draftTaskFromChat(1, 2, 99);
 
-  expect(draft).toEqual({ title: '金額計算錯誤', original_text: '正式區某張單金額算錯，需檢查稅額計算' });
+  expect(draft).toEqual({ title: '金額計算錯誤', original_text: '正式區某張單金額算錯，需檢查稅額計算', attachments: [] });
   const prompt = mockRender.mock.calls[0][0].history;
   expect(prompt).toContain('第1句');   // 最早訊息在內
   expect(prompt).toContain('第12句');  // 最後訊息也在
@@ -109,4 +110,61 @@ test('空對話 → throw 且 status 400', async () => {
   withMessages([]);
   await expect(draftTaskFromChat(1, 2, 99)).rejects.toMatchObject({ status: 400 });
   expect(mockRunClaude).not.toHaveBeenCalled(); // 空對話不該白燒 token
+});
+
+// ── 挑圖 ────────────────────────────────────────────────────────────────────
+// 「有需要的圖才進任務」是刻意的設計：全部照搬會讓分診／分析／開發帶著一堆只佐證當下一句話的
+// 截圖跑，反而稀釋真正該看的那張。挑選交給 agent，但它回的編號一概不信——下面三支守的就是
+// 「agent 說了算」與「agent 說什麼都照做」之間的那條線。
+const att = (id, message_id, filename) => ({ id, message_id, filename, mimetype: 'image/png', file_path: `chat_9/${filename}` });
+
+function resultWith(attachments) {
+  return {
+    text: `<result>{"title":"T","original_text":"O","attachments":${JSON.stringify(attachments)}}</result>`,
+    usage: {}, durationMs: 1
+  };
+}
+
+test('agent 挑中的標 chosen，沒挑中的也一併回傳（使用者要能勾回來）', async () => {
+  withMessages([msg(1), msg(2)], null, [att(11, 1, 'a.png'), att(12, 2, 'b.png')]);
+  mockRunClaude.mockResolvedValue(resultWith([11]));
+
+  const draft = await draftTaskFromChat(1, 9, 99);
+
+  expect(draft.attachments).toEqual([
+    { id: 11, filename: 'a.png', chosen: true },
+    { id: 12, filename: 'b.png', chosen: false }
+  ]);
+});
+
+test('agent 回了清單上沒有的編號一律濾掉（模型編號是常態，不是例外）', async () => {
+  withMessages([msg(1)], null, [att(11, 1, 'a.png')]);
+  mockRunClaude.mockResolvedValue(resultWith([11, 999]));
+
+  const draft = await draftTaskFromChat(1, 9, 99);
+
+  expect(draft.attachments.map(a => a.id)).toEqual([11]);
+  expect(draft.attachments[0].chosen).toBe(true);
+});
+
+test('分界線之前（已轉過任務）的圖不進候選——那些圖已跟著上一張任務走了', async () => {
+  // msg 1~2 已轉過，msg 3 是本次；att 11 掛在舊訊息上、att 13 掛在本次訊息上
+  withMessages([msg(1), msg(2), msg(3)], 2, [att(11, 1, 'old.png'), att(13, 3, 'new.png')]);
+  mockRunClaude.mockResolvedValue(resultWith([11, 13]));
+
+  const draft = await draftTaskFromChat(1, 9, 99);
+
+  expect(draft.attachments.map(a => a.filename)).toEqual(['new.png']);
+  // 連 prompt 都不該看到舊圖，否則 agent 每次都會想把它挑回來
+  expect(mockRender.mock.calls[0][0].attachments).not.toContain('old.png');
+  expect(mockRender.mock.calls[0][0].attachments).toContain('new.png');
+});
+
+test('沒有附圖時 prompt 明說「無」，不是留空洞', async () => {
+  withMessages([msg(1)], null, []);
+  mockRunClaude.mockResolvedValue(resultWith([]));
+
+  await draftTaskFromChat(1, 9, 99);
+
+  expect(mockRender.mock.calls[0][0].attachments).toContain('無');
 });

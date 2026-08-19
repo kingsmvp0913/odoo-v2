@@ -35,6 +35,9 @@ jest.mock('../pipeline/git', () => ({
 const gitMod = require('../pipeline/git');
 
 process.env.JWT_SECRET = 'test-tasks-secret';
+// 附件會真的落地——不導開的話測試會往 repo 內的 app/uploads/ 寫檔
+const tmpUploadRoot = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'aidev-task-upload-'));
+process.env.UPLOAD_DIR = tmpUploadRoot;
 
 let app, dbModule, adminToken, userId, bobToken, bobUserId, bobTaskId;
 
@@ -101,7 +104,11 @@ beforeAll(async () => {
   bobTaskId = bt.id;
 }, 30000);
 
-afterAll(() => { dbModule._setPoolForTesting(null); });
+afterAll(() => {
+  dbModule._setPoolForTesting(null);
+  delete process.env.UPLOAD_DIR;
+  try { require('fs').rmSync(tmpUploadRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+});
 
 test('GET /api/tasks → 401 without token', async () => {
   const res = await request(app).get('/api/tasks');
@@ -523,6 +530,72 @@ describe('POST /api/tasks 帶 chat_id → 標記來源對話', () => {
 
     const { body } = await listChats();
     expect(body.find(c => c.id === chatId).converted_task_id).toBeNull();
+  });
+
+  // 「有需要的圖才進任務」：chat-to-task agent 挑、使用者在草稿視窗確認，最後只有被指名的那幾張
+  // 被複製進 task_attachments。複製而非共用路徑——刪對話會清掉整個 chat_<id>/ 目錄。
+  describe('帶 chat_attachment_ids → 只複製被指名的對話圖片', () => {
+    const fsMod = require('fs');
+    const pathMod = require('path');
+
+    async function seedChatImages(ownerId = userId, targetChatId = null) {
+      const cid = targetChatId || chatId;
+      const { rows: [m] } = await dbModule.query(
+        "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'user','看圖') RETURNING id",
+        [cid]
+      );
+      const made = [];
+      for (const name of ['wanted.png', 'unwanted.png']) {
+        const rel = pathMod.join(`chat_${cid}`, `${Date.now()}_${name}`);
+        fsMod.mkdirSync(pathMod.join(tmpUploadRoot, `chat_${cid}`), { recursive: true });
+        fsMod.writeFileSync(pathMod.join(tmpUploadRoot, rel), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+        const { rows: [a] } = await dbModule.query(
+          `INSERT INTO project_chat_attachments (chat_id, message_id, filename, mimetype, file_path)
+           VALUES ($1, $2, $3, 'image/png', $4) RETURNING id`,
+          [cid, m.id, name, rel]
+        );
+        made.push({ id: a.id, filename: name });
+      }
+      return made;
+    }
+
+    test('只有被指名的那張進任務，實體檔另存一份到 task_<id>/', async () => {
+      const [wanted, unwanted] = await seedChatImages();
+      const res = await createTask({ chat_id: chatId, chat_attachment_ids: [wanted.id] });
+      expect(res.status).toBe(201);
+
+      const { rows } = await dbModule.query(
+        'SELECT filename, file_path, origin FROM task_attachments WHERE task_id = $1', [res.body.id]
+      );
+      expect(rows.map(r => r.filename)).toEqual(['wanted.png']);
+      expect(rows[0].origin).toBe('chat');
+      // 複製而非參照：路徑必須落在任務自己的目錄下，否則刪對話會把任務的圖一起帶走
+      expect(rows[0].file_path).toContain(`task_${res.body.id}`);
+      expect(fsMod.existsSync(pathMod.join(tmpUploadRoot, rows[0].file_path))).toBe(true);
+      expect(unwanted).toBeTruthy();
+
+      const { rows: [t] } = await dbModule.query('SELECT has_attachment FROM tasks WHERE id = $1', [res.body.id]);
+      expect(t.has_attachment).toBe(true);
+    });
+
+    test('沒帶 chat_attachment_ids → 一張都不複製（預設不是全帶）', async () => {
+      await seedChatImages();
+      const res = await createTask({ chat_id: chatId });
+      const { rows } = await dbModule.query('SELECT id FROM task_attachments WHERE task_id = $1', [res.body.id]);
+      expect(rows).toHaveLength(0);
+    });
+
+    test('別人對話裡的圖 id 帶進來一律不複製（少了 user_id 條件就是任意讀他人附件）', async () => {
+      const { rows: [c] } = await dbModule.query(
+        "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '別人的對話', $2) RETURNING id",
+        [chatProjectId, bobUserId]
+      );
+      const [victim] = await seedChatImages(bobUserId, c.id);
+      const res = await createTask({ chat_id: c.id, chat_attachment_ids: [victim.id] });
+      expect(res.status).toBe(201);
+      const { rows } = await dbModule.query('SELECT id FROM task_attachments WHERE task_id = $1', [res.body.id]);
+      expect(rows).toHaveLength(0);
+    });
   });
 
   test('不帶 chat_id 建的任務不得標記任何對話', async () => {
@@ -1484,6 +1557,29 @@ test('POST /clarify-ask → 提問寫進 task_logs，狀態轉 clarify_chat_runn
   expect(logs[0].content).toContain('怎麼重現');
   await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [taskId]);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+});
+
+// 提問與送出回答是兩個端點，附件入口得各補各的：/answer 補了不代表 /clarify-ask 也能傳。
+// 「我不懂，你指的是哪裡？」這種反問正是最需要配截圖的一種，卻走在沒補的那條路上。
+test('POST /clarify-ask → multipart 可夾帶附件，落 task_attachments 並標 has_attachment', async () => {
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_clar_ask_att','odoo','T','clarify_pending') RETURNING id",
+    [userId]
+  );
+  const res = await request(app).post(`/api/tasks/${t.id}/clarify-ask`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .field('question', '你說的那個欄位是這個嗎？')
+    .attach('files', Buffer.from('PNGDATA'), '我看到的畫面.png');
+  expect(res.status).toBe(200);
+  const { rows: atts } = await dbModule.query('SELECT filename, origin FROM task_attachments WHERE task_id=$1', [t.id]);
+  expect(atts).toHaveLength(1);
+  expect(atts[0].filename).toBe('我看到的畫面.png');
+  const { rows: [row] } = await dbModule.query('SELECT status, has_attachment FROM tasks WHERE id=$1', [t.id]);
+  expect(row.status).toBe('clarify_chat_running');
+  expect(row.has_attachment).toBe(true);
+  await dbModule.query('DELETE FROM task_attachments WHERE task_id = $1', [t.id]);
+  await dbModule.query('DELETE FROM task_logs WHERE task_id = $1', [t.id]);
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
 
 test('POST /clarify-ask → 空內容 400', async () => {

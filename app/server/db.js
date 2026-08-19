@@ -217,6 +217,22 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 對話裡使用者上傳的圖片。不共用 task_attachments——那張表的 task_id 是 NOT NULL 外鍵，
+    // 對話的圖在「轉為任務」之前根本沒有 task 可掛。轉任務時由 chat-to-task agent 挑出需要的幾張，
+    // 複製一份實體檔進 task_<id>/ 並另寫 task_attachments 列（兩邊各自獨立，刪任務不影響對話）。
+    `CREATE TABLE IF NOT EXISTS project_chat_attachments (
+      id         SERIAL PRIMARY KEY,
+      chat_id    INTEGER NOT NULL REFERENCES project_chats(id) ON DELETE CASCADE,
+      -- 兩個 FK 都要 CASCADE：刪專案時 project_chats 的 CASCADE 會一路帶走 messages，
+      -- message_id 若是裸 REFERENCES，那條 FK 會擋住整個 DELETE（實測 500，不是理論風險）。
+      -- task_attachments 是靠呼叫端按順序手動刪來繞開同一件事，這裡改用 CASCADE，呼叫端不必知道。
+      message_id INTEGER REFERENCES project_chat_messages(id) ON DELETE CASCADE,
+      filename   TEXT NOT NULL,
+      mimetype   TEXT,
+      file_path  TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     // 每人各自一份的「我的最愛」專案（專案列表置頂用）。無 project_members 表、專案共享是既有設計，
     // 故最愛只能是 per-user；複合主鍵即天然去重、同一人同一專案不會重複收藏。
     `CREATE TABLE IF NOT EXISTS project_favorites (
@@ -878,6 +894,10 @@ async function migrate() {
   // task_attachments：依 task_id／message_id 查詢附件清單
   await query('CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments (task_id)').catch(() => {});
   await query('CREATE INDEX IF NOT EXISTS idx_task_attachments_message ON task_attachments (message_id)').catch(() => {});
+
+  // project_chat_attachments：訊息清單逐則帶附件（依 chat_id 撈一次後在記憶體分組）
+  await query('CREATE INDEX IF NOT EXISTS idx_chat_attachments_chat ON project_chat_attachments (chat_id)').catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON project_chat_attachments (message_id)').catch(() => {});
 
   // health_check_runs / health_check_findings（工作流程健檢）
   await query('CREATE INDEX IF NOT EXISTS idx_hcf_run ON health_check_findings (run_id)').catch(() => {});
