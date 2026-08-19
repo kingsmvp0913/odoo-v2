@@ -21,6 +21,7 @@ stage: qa
    - 同一 Model 是否只有一個 view 檔、同一原生 view 是否只繼承一次
    - 原生 SQL 前後是否 `flush_model()` / `invalidate_model()`
    - 是否新增了規格以外的欄位／Model／邏輯
+   - `__manifest__.py` 的 `data` 載入順序：新增的 XML 檔若引用了別的檔案定義的 external ID（`ref=`、`action=`、`inherit_id=`、`parent=`），該檔必須排在定義者**之後**。這類錯只有安裝／升級時才會炸，diff 上看起來完全正常（實測 task 152：view 檔被插在定義 action 的 menus.xml 之前，QA 連兩輪判 pass、部署連兩次失敗）
 
 若判定 fail 的依據與已知的環境/部署限制衝突（例如規格要求的做法在 base Odoo 不合法），summary 要明確指出這是規格與環境的衝突本身，而非只重複規格字面要求。
 
