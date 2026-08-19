@@ -388,6 +388,71 @@ test('B-5 HEAD 快照讀不到 → 視為無法確認，不得誤擋（照常進
   expect(t.status).toBe('qa_running');
 });
 
+// 意圖：agent 把活幹完、commit 也推了，卻在收尾漏掉 <result>（實測 task 152：18 分鐘／1.09M
+// tokens、6 個檔已 commit，最後吐的是一段中文摘要），整輪就被判 stopped 報廢、還要人工才推得動。
+// commit 在不在是客觀事實，比 agent 的收尾自述可靠——有新 commit 就照 git 事實推進，誤放行由 QA 擋。
+test('B-5 收尾漏 <result> 但有新 commit → 依 git 事實推進 QA', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-noresult');
+    // 補救那次 haiku 呼叫走同一個 mock，同樣拿不到 <result> ⇒ parseAgentResult 回 null
+    child.stdout.emit('data', JSON.stringify({
+      type: 'result',
+      result: '實作完成並 commit。已知取捨：管理者會看到兩個同名「卑親查詢」選單。',
+      usage: null, duration_ms: 10,
+    }) + '\n');
+    child.emit('close', 0);
+  } });
+  let n = 0;
+  git.revParse.mockImplementation(() => Promise.resolve(`sha-moved-${++n}`));
+  const id = await insertCodingTask('noresult1');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+  // 它的收尾自述常帶著 QA／使用者需要知道的取捨，沒進 <result> 就只活在終端串流裡 → 補一份到 task_logs
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [id]);
+  expect(logs.some(l => String(l.content).includes('兩個同名'))).toBe(true);
+});
+
+// 鑑別力：兜底的依據只有「有沒有新 commit」。沒 commit 又解析不出結果＝這輪什麼證據都沒有，
+// 必須維持原本的 stopped——否則兜底會退化成「解析失敗一律放行」，把空轉輪也送進 QA。
+test('B-5 收尾漏 <result> 且無新 commit → 維持 stopped', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-noresult2');
+    child.stdout.emit('data', JSON.stringify({ type: 'result', result: '我看了一下，沒有動任何檔案。', usage: null, duration_ms: 10 }) + '\n');
+    child.emit('close', 0);
+  } });
+  git.revParse.mockResolvedValue('sha-unchanged');
+  const id = await insertCodingTask('noresult2');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('未回傳有效結果');
+});
+
+// 鑑別力（最傷的誤判方向）：agent 明講 stopped 是它的判斷，不是格式抖動。兜底若連這個一起覆蓋，
+// 「做不下去」會被 commit 的存在蓋過去、硬送進 QA——只兜「解析不出來」這一種。
+test('B-5 agent 明講 stopped → 即使有新 commit 也不得被兜底覆蓋', async () => {
+  mockClaude({ onCall: (child) => {
+    emitInit(child, 'sess-said-stop');
+    child.stdout.emit('data', JSON.stringify({
+      type: 'result',
+      result: '<result>\n{"status":"stopped","error":"sale.order 尚未繼承，需先建立繼承"}\n</result>',
+      usage: null, duration_ms: 10,
+    }) + '\n');
+    child.emit('close', 0);
+  } });
+  let n = 0;
+  git.revParse.mockImplementation(() => Promise.resolve(`sha-partial-${++n}`));
+  const id = await insertCodingTask('saidstop1');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('尚未繼承');   // 它自己的理由，不是罐頭句
+});
+
 test('B-5 coding 遇手動暫停（aborted）→ 狀態原地不動、不列入 blocker', async () => {
   const { spawn } = require('child_process');
   const ctrl = new AbortController();

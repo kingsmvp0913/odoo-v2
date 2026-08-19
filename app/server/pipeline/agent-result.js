@@ -43,17 +43,22 @@ function extractTaggedBlock(text, tag) {
 // 壞資料原封抄回來（實測 task 110 的 analysis 只是把 `permissions: |` 吐了兩次＝duplicated
 // mapping key，其餘完全正確，haiku 卻花了 147 秒／7.8k tokens 產出一模一樣的錯，整輪 opus 報廢）。
 // 抽不出 <result> 時沒有錯誤可報，此段整段省略——編一個不存在的錯只會把它導去修錯地方。
-const REPAIR_PROMPT = (raw, err) =>
+// 但「整段沒有 <result>」正是最需要指引的情況：raw 裡連一個 JSON 都沒有時（實測 task 152 的
+// coding 只吐了一段中文摘要），補救 agent 沒有目標結構就只能亂猜鍵名，必然再失敗一次。
+// schemaHint 由呼叫端給（它才知道自己的 parse 期望什麼），不給則行為與原本完全相同。
+const REPAIR_PROMPT = (raw, err, schemaHint) =>
   '以下是某 agent 的輸出，可能夾雜多餘文字或格式錯誤。請只回傳其中的「結果資料」本身，' +
   '完整包在 <result></result> 標籤內，標籤外不要有任何其他文字。' +
   (err ? `\n\n上一次解析失敗的錯誤訊息是「${err}」，請針對這個錯誤修正，其餘內容一字不改。` : '') +
+  (schemaHint ? `\n\n結果資料必須是這個結構：\n${schemaHint}\n請依上方輸出的實際內容填值，不要自行增刪語意；` +
+    '輸出若沒有明說對應的值，就依它實際做了什麼如實填，不要編造。' : '') +
   '\n\n' + raw;
 
 // 解析 agent 輸出：先直接 extract+parse，失敗才用 haiku 補救一次（只修格式、不改語意），
 // 仍失敗回 null（呼叫端 stopped）。agent 已花完數十萬 token，不該因收尾格式抖動整輪報廢（健檢 F）。
 // ref/userId：補救那一次 haiku 呼叫的記帳歸屬（不帶則不記帳，僅測試允許）。
 // abort（手動暫停）必須 rethrow 而非吞成 null——吞掉會讓呼叫端把「暫停」誤標成 stopped。
-async function parseAgentResult(raw, { parse, signal, ref, userId } = {}) {
+async function parseAgentResult(raw, { parse, schemaHint, signal, ref, userId } = {}) {
   let parseErr = null; // 只留第一次（原始輸出）的錯誤：那才是要補救 agent 修的東西
   const doParse = s => {
     if (s == null) return null;
@@ -63,7 +68,7 @@ async function parseAgentResult(raw, { parse, signal, ref, userId } = {}) {
   let out = doParse(extractResult(raw));
   if (out != null) return out;
   try {
-    const repaired = await runClaude(REPAIR_PROMPT(raw, parseErr), { model: 'haiku', signal, agentType: 'repair' });
+    const repaired = await runClaude(REPAIR_PROMPT(raw, parseErr, schemaHint), { model: 'haiku', signal, agentType: 'repair' });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
     out = doParse(extractResult(repaired.text));
   } catch (err) {

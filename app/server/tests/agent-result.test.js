@@ -39,6 +39,27 @@ test('parseAgentResult：首次失敗 → haiku 補救一次 → 可 parse', asy
   expect(mockRunClaude.mock.calls[0][1].model).toBe('haiku'); // 補救用最便宜的 haiku
 });
 
+// 意圖：raw 整段沒有 <result> 時（實測 task 152 的 coding 只吐中文摘要），補救 agent 連一個 JSON
+// 都看不到，沒有目標結構就只能亂猜鍵名＝必然再失敗一次，那次 haiku 呼叫等於白花。
+test('parseAgentResult：帶 schemaHint → 補救 prompt 要把目標結構講給 haiku 聽', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>{"status":"qa_running","summary":"加了欄位"}</result>' });
+  const v = await parseAgentResult('我已經加好欄位並 commit 了。', {
+    parse: JSON.parse,
+    schemaHint: '{"status":"qa_running","summary":"本輪實際做了什麼"}',
+  });
+  expect(v.status).toBe('qa_running');
+  expect(mockRunClaude.mock.calls[0][0]).toContain('"status":"qa_running"');
+  expect(mockRunClaude.mock.calls[0][0]).toContain('我已經加好欄位並 commit 了。'); // 原文仍要附上
+});
+
+// 鑑別力：schemaHint 是呼叫端選用的（只有它知道自己的 parse 期望什麼）。沒帶的呼叫端不得被塞進
+// 憑空捏造的結構——那會把補救 agent 導去產一份根本不屬於它的 JSON。
+test('parseAgentResult：未帶 schemaHint → 補救 prompt 不得出現結構段', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>{"a":1}</result>' });
+  await parseAgentResult('壞掉的輸出', { parse: JSON.parse });
+  expect(mockRunClaude.mock.calls[0][0]).not.toContain('結果資料必須是這個結構');
+});
+
 test('parseAgentResult：haiku 補救也失敗 → null（呼叫端據此 stopped）', async () => {
   mockRunClaude.mockResolvedValue({ text: '還是壞的' });
   const v = await parseAgentResult('壞', { parse: JSON.parse });

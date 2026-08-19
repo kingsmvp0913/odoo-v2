@@ -655,7 +655,39 @@ async function runTaskCoding(taskId, userId, signal) {
     return true;
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref, userId });
+  // schemaHint 與 coding-project.md 的輸出契約同字面：raw 整段沒有 <result> 時（agent 收尾漏掉），
+  // 補救 agent 不知道要產什麼鍵名就只能亂猜，等於白跑一次 haiku（實測 task 152）。
+  let result = await parseAgentResult(raw, {
+    parse: JSON.parse,
+    schemaHint: '{"status":"qa_running","summary":"本輪實際做了什麼"} '
+      + '或（做不下去時）{"status":"stopped","error":"停下的原因"}',
+    signal, ref, userId
+  });
+
+  // 補救仍解析不出結果時，不能讓整輪報廢：commit 在不在是客觀事實，比 agent 的收尾自述可靠得多。
+  // 有新 commit ⇒ 本輪確實做出東西，照樣進 QA——QA 本來就審 diff 對規格，格式抖動造成的誤放行由
+  // 它擋；反過來把 18 分鐘／1M tokens 的成果丟掉、還要人工介入才推得動，代價大得多（實測 task 152：
+  // 已 commit 6 個檔，只因最後吐的是中文摘要而非 <result> 就 stopped）。
+  // 只兜「解析不出來」這一種：agent 明講 {"status":"stopped"} 是它的判斷，必須照辦，不得覆蓋。
+  if (result == null) {
+    const headsAfterParseFail = await readHeads(info, task.task_id);
+    const repos = Object.keys(headsAfterParseFail);
+    const advanced = repos.length > 0
+      && repos.some(k => headsAfterParseFail[k] && headsAfterParseFail[k] !== headsBefore[k]);
+    if (advanced) {
+      result = { status: 'qa_running', summary: '' };
+      // agent 的收尾自述常帶著 QA／使用者需要知道的取捨（task 152 就在這段講了「管理者會看到兩個
+      // 同名選單」的已知副作用）。它沒進 <result>，只活在 task_events 的終端串流裡——這裡補一份到
+      // task_logs，任務往前走之後仍看得到。截斷比照下方：task_logs 會被分診／respec 讀進 prompt。
+      const tail = String(raw || '').trim().slice(-300);
+      if (tail) {
+        await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+          [taskId, `[實作] 收尾格式不符契約，已依實際 commit 推進。它最後的說明是：${tail}`]
+        ).catch(() => {});
+      }
+    }
+  }
 
   // 帶著失敗回饋進來、卻一個 commit 都沒產生 ⇒ 這輪什麼也沒改。放行進 QA 只會讓 QA 判「same diff、
   // 已審過」照樣 pass，再部署一次必然重現同一個失敗，白燒整條 pipeline 還多吃一次彈跳計數
