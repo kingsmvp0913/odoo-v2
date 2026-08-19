@@ -11,14 +11,17 @@ window.ProjectChatView = Vue.defineComponent({
       newTitle: '',
       draftingTask: false,
       showTaskModal: false,
-      taskDraft: { title: '', original_text: '' },
+      taskDraft: { title: '', original_text: '', attachments: [] },
       creatingTask: false,
       replyPending: false,   // 後端 reply_pending：離開對話再回來仍能看到「回覆進行中」動畫
+      pendingFiles: [],      // 這則訊息要一起送出的圖（尚未送出）
+      pendingPreviews: [],   // 與 pendingFiles 同索引的 objectURL，送出／移除時要 revoke
+      attachUrls: {},        // 已送出訊息的附圖：attId → objectURL（認證走 header，不能直接 <img src>）
       _pollTimer: null
     };
   },
   async created() { await this.loadChats(); },
-  beforeUnmount() { this._gone = true; this.stopReplyPoll(); },
+  beforeUnmount() { this._gone = true; this.stopReplyPoll(); this.revokeAllUrls(); },
   methods: {
     // 新手教程的示範專案：對話內容來自 tour-demo.js，不打 API
     isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
@@ -44,7 +47,9 @@ window.ProjectChatView = Vue.defineComponent({
       this.stopReplyPoll();   // 切換／重載前先停掉舊對話的輪詢
       this.loadingMsgs = true;
       try {
+        this.revokeMessageUrls();   // 換對話／重載前先收掉舊圖，否則 objectURL 一路累積到離開頁面
         this.messages = await Api.get(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`);
+        this.loadAttachmentThumbs();
         this.replyPending = !!this.activeChat.reply_pending;
         this.$nextTick(() => this.scrollToBottom());
         await this.markRead(this.activeChat);
@@ -106,6 +111,67 @@ window.ProjectChatView = Vue.defineComponent({
         }
       } catch (e) { showToast(e.message, 'error'); }
     },
+    // 已送出訊息的附圖：端點認證走 Authorization header，把下載端點的網址直接綁進 img 的 src
+    // 只會拿到 401，所以逐張 fetch 成 blob 再轉 objectURL。失敗的那張不畫，不影響其餘訊息。
+    async loadAttachmentThumbs() {
+      const pid = this.$route.params.id, cid = this.activeChat && this.activeChat.id;
+      if (!cid) return;
+      for (const m of this.messages) {
+        for (const a of (m.attachments || [])) {
+          if (this.attachUrls[a.id]) continue;
+          try {
+            const { blob } = await Api.getBlob(`projects/${pid}/chats/${cid}/attachments/${a.id}/download`);
+            // 抓的期間可能已經換了對話（或離開頁面）：這裡寫進去的 URL 會沒有人回收，
+            // 因為 revokeMessageUrls 已經把當時那份 attachUrls 換掉了
+            if (this._gone || !this.activeChat || this.activeChat.id !== cid) return;
+            this.attachUrls[a.id] = URL.createObjectURL(blob);
+          } catch (e) { /* 單張載不出來就不畫這張 */ }
+        }
+      }
+    },
+    revokeMessageUrls() {
+      Object.values(this.attachUrls).forEach(u => URL.revokeObjectURL(u));
+      this.attachUrls = {};
+      // 樂觀顯示用的預覽 URL：送出成功那條路徑已自己收掉，但送出失敗時那則訊息會留在畫面上，
+      // 它的 URL 沒有別人管——一併在這裡收，否則每失敗一次就漏一份。
+      this.messages.forEach(m => (m.pending_previews || []).forEach(u => URL.revokeObjectURL(u)));
+    },
+    revokePendingUrls() {
+      this.pendingPreviews.forEach(u => URL.revokeObjectURL(u));
+      this.pendingPreviews = [];
+    },
+    revokeAllUrls() { this.revokeMessageUrls(); this.revokePendingUrls(); },
+    // 選檔與貼上共用的入口：型別與張數的把關只有這一處，兩條路徑不會漂移成「貼上能過、選檔不能」
+    addPendingFiles(files) {
+      for (const f of files) {
+        if (!/^image\//.test(f.type || '')) { showToast(`「${f.name || '檔案'}」不是圖片，已略過`, 'error'); continue; }
+        if (f.size > 10 * 1024 * 1024) { showToast(`「${f.name || '圖片'}」超過 10MB`, 'error'); continue; }
+        if (this.pendingFiles.length >= 5) { showToast('一次最多 5 張圖', 'error'); break; }
+        this.pendingFiles.push(f);
+        this.pendingPreviews.push(URL.createObjectURL(f));
+      }
+    },
+    onFilesSelected(e) {
+      this.addPendingFiles(Array.from(e.target.files || []));
+      e.target.value = '';   // 清掉才能連續選同一個檔
+    },
+    // 截圖後 Ctrl+V 直接貼——這是對話裡傳圖最常走的路徑，比開檔案總管找檔快得多
+    onPaste(e) {
+      const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+      const imgs = files.filter(f => /^image\//.test(f.type || ''));
+      if (!imgs.length) return;   // 純文字貼上照原生行為走
+      e.preventDefault();
+      this.addPendingFiles(imgs);
+    },
+    removePendingFile(i) {
+      URL.revokeObjectURL(this.pendingPreviews[i]);
+      this.pendingFiles.splice(i, 1);
+      this.pendingPreviews.splice(i, 1);
+    },
+    openImage(attId) {
+      const url = this.attachUrls[attId];
+      if (url) window.open(url, '_blank');
+    },
     handleEnter(e) {
       if (e.isComposing || e.keyCode === 229) return; // IME 組字中，Enter 用於選字，不送出
       if (e.shiftKey) return; // Shift+Enter = newline
@@ -113,20 +179,40 @@ window.ProjectChatView = Vue.defineComponent({
       this.send();
     },
     async send() {
-      if (!this.newInput.trim() || !this.activeChat || this.sending) return;
+      // 只貼一張截圖不打字也算一則訊息（後端同樣認），所以送出條件是「有字或有圖」
+      if ((!this.newInput.trim() && !this.pendingFiles.length) || !this.activeChat || this.sending) return;
       const content = this.newInput.trim();
+      const files = this.pendingFiles;
+      const previews = this.pendingPreviews;
       this.newInput = '';
+      // 先從 state 摘下來再清空：送出中使用者可以繼續選下一批圖，不會被這次的清空掃掉。
+      // previews 的 objectURL 交給樂觀顯示的那則訊息續用，成功後由 revokeMessageUrls 統一回收。
+      this.pendingFiles = [];
+      this.pendingPreviews = [];
       this.sending = true;
-      this.messages.push({ id: Date.now(), role: 'user', content, created_at: new Date().toISOString() });
+      this.messages.push({
+        id: Date.now(), role: 'user', content, created_at: new Date().toISOString(),
+        pending_previews: previews   // 樂觀顯示：真正的 attachments 要等下一次 loadMessages 才有 id
+      });
       this.$nextTick(() => this.scrollToBottom());
       try {
-        const { reply } = await Api.post(
-          `projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`,
-          { content }
-        );
+        const path = `projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`;
+        let reply;
+        if (files.length) {
+          const fd = new FormData();
+          fd.append('content', content);
+          files.forEach(f => fd.append('files', f));
+          ({ reply } = await Api.postForm(path, fd));
+        } else {
+          ({ reply } = await Api.post(path, { content }));
+        }
         this.messages.push({ id: Date.now() + 1, role: 'ai', content: reply, created_at: new Date().toISOString() });
         this.$nextTick(() => this.scrollToBottom());
         if (!this._gone) await this.markRead(this.activeChat);
+        // 重載一次讓剛送出的圖換成正式的 attachments（帶 id，之後重進對話仍看得到）。
+        // previews 不在這裡 revoke——loadMessages 開頭的 revokeMessageUrls 會掃到樂觀那則並收掉；
+        // 先收的話畫面會閃一下破圖再被換掉。
+        if (!this._gone && files.length) await this.loadMessages();
       } catch (e) {
         showToast(e.message, 'error');
       } finally { this.sending = false; }
@@ -137,7 +223,11 @@ window.ProjectChatView = Vue.defineComponent({
       this.draftingTask = true;
       try {
         const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {});
-        this.taskDraft = { title: draft.title || '', original_text: draft.original_text || '' };
+        // agent 挑出的圖預設勾選；使用者可取消，也可把它沒挑的勾回來
+        this.taskDraft = {
+          title: draft.title || '', original_text: draft.original_text || '',
+          attachments: (draft.attachments || []).map(a => ({ ...a, chosen: !!a.chosen }))
+        };
         this.showTaskModal = true;
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.draftingTask = false; }
@@ -151,7 +241,8 @@ window.ProjectChatView = Vue.defineComponent({
           title: this.taskDraft.title.trim(),
           original_text: this.taskDraft.original_text,
           project_id: this.$route.params.id,
-          chat_id: this.activeChat && this.activeChat.id
+          chat_id: this.activeChat && this.activeChat.id,
+          chat_attachment_ids: (this.taskDraft.attachments || []).filter(a => a.chosen).map(a => a.id)
         });
         this.showTaskModal = false;
         // activeChat 就是 chats 陣列裡的那個物件（selectChat 直接指過來），改它列上的徽章即刻出現，
@@ -226,7 +317,18 @@ window.ProjectChatView = Vue.defineComponent({
                   background: m.role === 'user' ? 'var(--primary)' : 'var(--surface)',
                   color: m.role === 'user' ? '#fff' : 'var(--text)',
                   border: m.role === 'ai' ? '1px solid var(--border)' : 'none'
-                }" v-html="renderMd(m.content)"></div>
+                }" v-html="renderMd(m.content)" v-show="m.content"></div>
+              </div>
+              <!-- 附圖：objectURL 由 loadAttachmentThumbs 逐張抓（端點要 Authorization header，
+                   直接把 URL 塞進 src 只會拿到 401）。pending_previews 是剛送出那則的樂觀顯示。 -->
+              <div v-if="(m.attachments && m.attachments.length) || (m.pending_previews && m.pending_previews.length)"
+                   :style="{ display:'flex', flexWrap:'wrap', gap:'6px', marginTop:'4px', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }">
+                <img v-for="a in (m.attachments || [])" :key="a.id" v-show="attachUrls[a.id]"
+                     :src="attachUrls[a.id]" :alt="a.filename" :title="a.filename"
+                     @click="openImage(a.id)"
+                     style="max-width:200px;max-height:160px;border-radius:8px;border:1px solid var(--border);cursor:pointer;display:block" />
+                <img v-for="(u, i) in (m.pending_previews || [])" :key="'p' + i" :src="u"
+                     style="max-width:200px;max-height:160px;border-radius:8px;border:1px solid var(--border);opacity:.7;display:block" />
               </div>
               <div :style="{ textAlign: m.role === 'user' ? 'right' : 'left', fontSize:'var(--fs-xs)', color:'var(--text-muted)', marginTop:'2px' }">
                 {{ m.role === 'user' ? '你' : '🤖 AI' }} · {{ formatTime(m.created_at) }}
@@ -240,12 +342,25 @@ window.ProjectChatView = Vue.defineComponent({
               </div>
             </div>
           </div>
+          <!-- 待送出的圖：送出前可逐張移除 -->
+          <div v-if="pendingPreviews.length" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0">
+            <div v-for="(u, i) in pendingPreviews" :key="i" style="position:relative">
+              <img :src="u" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--border);display:block" />
+              <button class="btn btn-outline btn-sm" title="移除"
+                      style="position:absolute;top:-6px;right:-6px;padding:0 5px;font-size:var(--fs-2xs);line-height:16px;color:var(--error);background:var(--surface)"
+                      @click="removePendingFile(i)">✕</button>
+            </div>
+          </div>
           <div data-tour="chat-input" class="chat-input-bar">
+            <input ref="chatFileInput" type="file" accept="image/*" multiple @change="onFilesSelected" style="display:none" />
+            <button class="btn btn-outline" title="附加圖片（也可直接 Ctrl+V 貼上截圖）"
+                    style="align-self:flex-end" @click="$refs.chatFileInput.click()" :disabled="sending">📎</button>
             <textarea v-model="newInput"
-                      placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行)"
+                      placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行，可貼上截圖)"
                       style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:none;height:60px"
+                      @paste="onPaste"
                       @keydown.enter="handleEnter"></textarea>
-            <button class="btn btn-primary" @click="send" :disabled="sending || !newInput.trim()">
+            <button class="btn btn-primary" @click="send" :disabled="sending || (!newInput.trim() && !pendingFiles.length)">
               {{ sending ? '傳送中...' : '傳送' }}
             </button>
           </div>
@@ -266,6 +381,22 @@ window.ProjectChatView = Vue.defineComponent({
             <label class="field-label">內容 <span style="color:var(--danger)">*</span></label>
             <textarea class="form-control" v-model="taskDraft.original_text" placeholder="需求描述（給分診/分析 Agent 參考）"
               style="min-height:180px;line-height:1.6;resize:vertical"></textarea>
+          </div>
+          <!-- 挑圖是 AI 判的，但這個視窗的既有精神就是草稿可人工修改，圖沒理由是唯一不能改的 -->
+          <div class="field-item" v-if="taskDraft.attachments && taskDraft.attachments.length" style="margin-top:var(--space-4)">
+            <label class="field-label">帶進任務的圖片</label>
+            <div style="font-size:var(--fs-xs);color:var(--text-secondary);margin-bottom:6px">
+              已勾選的是 AI 判斷後續開發需要看的；可自行增減。
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px">
+              <label v-for="a in taskDraft.attachments" :key="a.id"
+                     style="display:flex;align-items:center;gap:6px;font-size:var(--fs-sm);cursor:pointer">
+                <input type="checkbox" v-model="a.chosen" />
+                <img v-show="attachUrls[a.id]" :src="attachUrls[a.id]" :alt="a.filename"
+                     style="width:48px;height:48px;object-fit:cover;border-radius:4px;border:1px solid var(--border)" />
+                <span>{{ a.filename }}</span>
+              </label>
+            </div>
           </div>
         </div>
         <div class="modal-actions">

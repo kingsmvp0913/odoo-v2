@@ -187,6 +187,18 @@ async function reclaimTestingFrom(tasks, userId) {
 const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'clarify_pending'];
 const SAFE_INLINE_MIMETYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
 
+// 建立任務時要一併帶進來的對話圖片 id。走 multipart 時整個 body 都是字串（FormData 送 JSON 字串），
+// 走純 JSON 時是陣列——兩種都要吃得下，否則「有附檔＋從對話轉」的組合會靜默漏掉圖。
+function parseChatAttachmentIds(raw) {
+  if (!raw) return [];
+  let list = raw;
+  if (typeof raw === 'string') {
+    try { list = JSON.parse(raw); } catch { list = raw.split(','); }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.map(Number).filter(Number.isInteger);
+}
+
 function registerRoutes(app) {
   // List tasks with optional filters
   app.get('/api/tasks', verifyToken, async (req, res) => {
@@ -253,7 +265,42 @@ function registerRoutes(app) {
           [newId, file.originalname, file.mimetype, relPath]
         );
       }
-      if ((req.files || []).length) {
+      let attachmentCount = (req.files || []).length;
+      // 由對話轉來時，把 chat-to-task 挑出、使用者在草稿視窗確認過的那幾張圖複製進任務。
+      // 複製實體檔而非共用路徑：刪對話會把整個 chat_<id>/ 目錄清掉，共用的話任務附件會跟著消失。
+      // 同樣要早於 runPipeline（見 pipeline 規則 86：assembleTaskContext 是 agent 起跑時才查）。
+      const wantIds = parseChatAttachmentIds(req.body.chat_attachment_ids);
+      if (chat_id && wantIds.length) {
+        // JOIN project_chats 帶 user_id 條件：少了它，隨便帶一組別人的 chat_id／附件 id
+        // 就能把別人對話裡的圖複製進自己的任務
+        const { rows: srcAtts } = await query(
+          `SELECT a.id, a.filename, a.mimetype, a.file_path
+             FROM project_chat_attachments a
+             JOIN project_chats c ON c.id = a.chat_id
+            WHERE a.chat_id = $1 AND c.user_id = $2`,
+          [chat_id, req.userId]
+        );
+        for (const a of srcAtts) {
+          if (!wantIds.includes(a.id)) continue;
+          try {
+            const relPath = saveAttachmentFile(newId, a.filename, readAttachmentFile(a.file_path));
+            await query(
+              `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
+               VALUES ($1, $2, $3, $4, 'chat')`,
+              [newId, a.filename, a.mimetype, relPath]
+            );
+            attachmentCount++;
+          } catch (err) {
+            // 實體檔不見了（手動清過 uploads 之類）。任務已經建好，不因此整包失敗，但也不能無聲——
+            // 使用者以為圖帶進來了，後面每一關都會照著「有圖」的假設做（Rule 12）。
+            await query(
+              "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+              [newId, `[附件] 對話圖片「${a.filename}」複製失敗（${String(err.message).slice(0, 120)}），本任務沒有這張圖`]
+            ).catch(() => {});
+          }
+        }
+      }
+      if (attachmentCount) {
         await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [newId]);
       }
       // 由排障對話轉來的任務：回頭在對話上標記，列表才顯示「已轉任務」徽章。

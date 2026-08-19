@@ -989,6 +989,34 @@ describe('DELETE /api/projects/:id 的資料完整性', () => {
   });
   afterEach(() => { cleanupSpy.mockRestore(); stopEnvSpy.mockRestore(); });
 
+  // 對話圖片：附件列參照 project_chat_messages(id)，而那張表是被 project_chats 的 CASCADE 帶走的。
+  // 兩條 cascade 誰先誰後，是刪整個專案時會不會撞 FK 的分水嶺——這支就是為了把它釘死。
+  test('專案硬刪除：帶附圖的對話一起消失，不撞 FK', async () => {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ('ChatAttDel', '17') RETURNING id"
+    );
+    const { rows: [c] } = await dbModule.query(
+      "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, 'C', $2) RETURNING id",
+      [p.id, userId]
+    );
+    const { rows: [m] } = await dbModule.query(
+      "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, 'user', 'hi') RETURNING id",
+      [c.id]
+    );
+    await dbModule.query(
+      `INSERT INTO project_chat_attachments (chat_id, message_id, filename, mimetype, file_path)
+       VALUES ($1, $2, 'a.png', 'image/png', 'chat_1/a.png')`,
+      [c.id, m.id]
+    );
+
+    const res = await request(app).delete(`/api/projects/${p.id}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+
+    const { rows } = await dbModule.query('SELECT id FROM project_chat_attachments WHERE chat_id = $1', [c.id]);
+    expect(rows).toHaveLength(0);
+  });
+
   async function mkProjectWithTask(name, opts = {}) {
     const { rows: [p] } = await dbModule.query(
       "INSERT INTO projects (name, odoo_version) VALUES ($1, '17') RETURNING id", [name]

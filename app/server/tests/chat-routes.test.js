@@ -117,7 +117,7 @@ test('POST messages → calls chatReply and returns reply', async () => {
     .set(auth()).send({ content: '你好' });
   expect(res.status).toBe(200);
   expect(res.body.reply).toBe('AI 的回覆');
-  expect(mockChatReply).toHaveBeenCalledWith(String(projectId), String(chat.id), '你好', userId);
+  expect(mockChatReply).toHaveBeenCalledWith(String(projectId), String(chat.id), '你好', userId, []);
 });
 
 test('POST messages → emits chat:reply socket event to owner', async () => {

@@ -10,7 +10,7 @@ const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncM
   aiBranchBase, aiBaseDrift, rebuildAiBranch, refExists, remoteAiRef } = require('./pipeline/git');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
-const { deleteTaskDir } = require('./lib/attachments');
+const { deleteTaskDir, deleteChatDir } = require('./lib/attachments');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
@@ -519,11 +519,16 @@ function registerRoutes(app) {
       const envSnapshot = await snapshotProjectPaths(req.params.id);
       await stopEnv(req.params.id).catch(() => {});
 
-      const taskDbIds = await withTransaction(async (client) => {
+      const { taskDbIds, chatIds } = await withTransaction(async (client) => {
         const { rows: taskRows } = await client.query(
           'SELECT id FROM tasks WHERE project_id = $1', [req.params.id]
         );
         const ids = taskRows.map(r => r.id);
+        // 對話列本身由 project_chats 的 ON DELETE CASCADE 收掉，但磁碟上的 uploads/chat_<id>
+        // 沒人管——要在刪掉之前先把 id 記下來（同 taskDbIds 的理由）
+        const { rows: chatRows } = await client.query(
+          'SELECT id FROM project_chats WHERE project_id = $1', [req.params.id]
+        );
         if (ids.length) {
           // 參照 tasks(id) 的 4 張子表全是裸的 REFERENCES、**沒有任何 ON DELETE CASCADE**
           // （原本的註解宣稱有，那是錯的），所以每一張都必須顯式刪：漏掉任一張都會讓下面
@@ -550,7 +555,7 @@ function registerRoutes(app) {
         }
         // 交易成功才清快取：擺在 throw 之前的話，404／回滾也會把還在的專案從快取抹掉。
         require('./lib/embedding-index').invalidate({ projectId: Number(req.params.id) });
-        return ids;
+        return { taskDbIds: ids, chatIds: chatRows.map(r => r.id) };
       });
 
       // ── 以下皆不可逆，只在 COMMIT 成功後執行 ──
@@ -558,6 +563,7 @@ function registerRoutes(app) {
       // 不傳的話 cleanupProjectEnv 會查到空的、什麼都不刪。
       await cleanupProjectEnv(req.params.id, envSnapshot); // 移除 env 目錄、各 repo clone 與整棵 .worktrees
       taskDbIds.forEach(id => deleteTaskDir(id));   // 各任務磁碟上的 uploads/task_<id>
+      chatIds.forEach(id => deleteChatDir(id));     // 各對話磁碟上的 uploads/chat_<id>
       // 專案硬刪除後 port 釋放：同步 nginx map 移除該子網域（fire-and-forget；gate 未設＝no-op）。
       require('./lib/nginx-map').syncNginxMap().catch(() => {});
       res.json({ ok: true });

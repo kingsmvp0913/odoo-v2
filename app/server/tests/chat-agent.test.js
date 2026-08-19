@@ -295,3 +295,88 @@ test('無 folder_name 且 name 是中文 → 退回 name 但仍經過 URL 編碼
   expect(prompt).toContain(`project=${encodeURIComponent('慈雲寶塔')}`);
   expect(prompt).not.toContain('/ai/wiki/pages?project=慈雲寶塔');
 });
+
+// --- 訊息附圖 ---
+// 意圖：附圖註記必須同時出現在 fresh 與續接兩條 render 路徑。chat-retry.md 只有 {{user_message}}
+// 這一個變數，所以註記若另開 placeholder 或只接在 fresh，續接的那些輪就完全看不到圖——
+// 而那是零訊號的：畫面上圖好好的、對話照常回，只是 AI 沒看過那張圖。
+const IMG = [{ id: 5, filename: 'err.png', mimetype: 'image/png', file_path: 'chat_2/err.png' }];
+
+function withUserMsgInsert(base) {
+  return (sql, params) => {
+    if (/INSERT INTO project_chat_messages/.test(sql)) return Promise.resolve({ rows: [{ id: 77 }] });
+    return base(sql, params);
+  };
+}
+
+test('附圖 → fresh prompt 帶路徑與唯讀授權（少了授權那句 agent 會照規則跳過不讀）', async () => {
+  const prev = mockQuery.getMockImplementation();
+  mockQuery.mockImplementation(withUserMsgInsert(prev));
+
+  await chatReply('1', '2', '這畫面怎麼了', 99, IMG);
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('err.png');
+  expect(prompt).toContain('明確授權');
+});
+
+test('附圖 → 續接輪同樣帶得到（chat-retry 只有 {{user_message}}，接錯地方這裡就會紅）', async () => {
+  const rows = (sql) => {
+    if (/project_repos/.test(sql)) return { rows: [] };
+    if (/FROM wiki_pages/.test(sql)) return { rows: [] };
+    if (/FROM project_chat_messages/.test(sql)) return { rows: [] };
+    if (/FROM projects/.test(sql)) return { rows: [{ name: '鴻久' }] };
+    return { rows: [] };
+  };
+  let storedVer = null;
+  mockRunClaude.mockResolvedValueOnce({ text: '回覆', usage: {}, durationMs: 1, sessionId: 'sess-img' });
+  mockQuery.mockImplementation(withUserMsgInsert((sql, params) => {
+    if (/chat_prompt_ver=\$3/.test(sql)) { storedVer = params[2]; return Promise.resolve({ rows: [] }); }
+    return Promise.resolve(rows(sql));
+  }));
+  await chatReply('1', '2', '第一輪', 99);
+
+  mockRunClaude.mockClear();
+  mockQuery.mockImplementation(withUserMsgInsert((sql) => {
+    if (/FROM project_chats/.test(sql)) return Promise.resolve({ rows: [{ chat_session_id: 'sess-img', chat_prompt_ver: storedVer }] });
+    return Promise.resolve(rows(sql));
+  }));
+  await chatReply('1', '2', '看這張', 99, IMG);
+
+  const [prompt, opts] = mockRunClaude.mock.calls[0];
+  expect(opts.resumeSessionId).toBe('sess-img');   // 確認真的是續接輪，否則這支測不到東西
+  expect(prompt).toContain('err.png');
+  expect(prompt).toContain('明確授權');
+});
+
+test('附圖路徑只進 prompt，不進存進 DB 的訊息內容（畫面上不該冒出一串本機路徑）', async () => {
+  const prev = mockQuery.getMockImplementation();
+  const inserts = [];
+  mockQuery.mockImplementation((sql, params) => {
+    if (/INSERT INTO project_chat_messages/.test(sql)) {
+      inserts.push(params);
+      return Promise.resolve({ rows: [{ id: 77 }] });
+    }
+    return prev(sql, params);
+  });
+
+  await chatReply('1', '2', '這畫面怎麼了', 99, IMG);
+
+  const userInsert = inserts.find(p => p[1] === 'user');
+  expect(userInsert[2]).toBe('這畫面怎麼了');
+  expect(userInsert[2]).not.toContain('err.png');
+});
+
+test('附圖 → message_id 回填到剛插入的那則使用者訊息（不回填的話圖永遠不會出現在畫面上）', async () => {
+  const prev = mockQuery.getMockImplementation();
+  const binds = [];
+  mockQuery.mockImplementation((sql, params) => {
+    if (/INSERT INTO project_chat_messages/.test(sql)) return Promise.resolve({ rows: [{ id: 77 }] });
+    if (/UPDATE project_chat_attachments SET message_id/.test(sql)) { binds.push(params); return Promise.resolve({ rows: [] }); }
+    return prev(sql, params);
+  });
+
+  await chatReply('1', '2', 'x', 99, IMG);
+
+  expect(binds).toEqual([[5, 77]]);
+});

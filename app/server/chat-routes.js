@@ -1,6 +1,9 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { emitToUser } = require('./notify');
+const {
+  saveChatAttachmentFile, deleteChatDir, readAttachmentFile, sniffFile, uploadChatImages, isImageBuffer
+} = require('./lib/attachments');
 
 async function getOwnedChat(chatId, projectId, userId) {
   const { rows } = await query(
@@ -92,10 +95,12 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:projectId/chats/:id', verifyToken, async (req, res) => {
     try {
-      await query(
+      const { rowCount } = await query(
         'DELETE FROM project_chats WHERE id = $1 AND project_id = $2 AND user_id = $3',
         [req.params.id, req.params.projectId, req.userId]
       );
+      // 附件列靠 ON DELETE CASCADE 自己清掉，磁碟上的實體檔沒人管——不刪就是永久孤兒
+      if (rowCount) deleteChatDir(req.params.id);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -108,14 +113,27 @@ function registerRoutes(app) {
         'SELECT id, role, content, created_at FROM project_chat_messages WHERE chat_id = $1 ORDER BY created_at ASC',
         [req.params.id]
       );
-      res.json(rows);
+      // 附件另撈一次後在記憶體分組（不用相關子查詢，pg-mem 吃不下；比照 tasks-routes 的 byMessage）
+      const { rows: atts } = await query(
+        'SELECT id, message_id, filename, mimetype FROM project_chat_attachments WHERE chat_id = $1 AND message_id IS NOT NULL ORDER BY id',
+        [req.params.id]
+      );
+      const byMessage = {};
+      atts.forEach(a => { (byMessage[a.message_id] = byMessage[a.message_id] || []).push(a); });
+      res.json(rows.map(m => ({ ...m, attachments: byMessage[m.id] || [] })));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:projectId/chats/:id/messages', verifyToken, async (req, res) => {
+  // uploadChatImages：multer 遇非 multipart 直接放行、req.files 為空，既有純 JSON 呼叫零影響。
+  app.post('/api/projects/:projectId/chats/:id/messages', verifyToken, uploadChatImages, async (req, res) => {
     try {
       const content = (req.body.content || '').trim();
-      if (!content) return res.status(400).json({ error: 'content required' });
+      const files = req.files || [];
+      // 只貼一張截圖不打字是對話裡很自然的行為，所以圖也算內容；兩者皆空才是空訊息。
+      if (!content && !files.length) return res.status(400).json({ error: 'content required' });
+      // client 宣告的 mimetype 可偽造，以 magic bytes 為準（multer 的 fileFilter 只是省下先吃進記憶體）
+      const bad = files.find(f => !isImageBuffer(f.buffer));
+      if (bad) return res.status(400).json({ error: `「${bad.originalname}」不是圖片檔` });
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       // 原子搶佔這一輪：回覆要跑數分鐘，期間 F5 或換分頁再送一則就會有兩個 claude 帶著同一個
@@ -127,8 +145,21 @@ function registerRoutes(app) {
       );
       if (!claim.rowCount) return res.status(409).json({ error: '這則對話正在回覆中，請等它完成再送下一則' });
       try {
+        // 落地必須在搶佔之後：搶不到就 409 回頭，先寫檔會留下一批沒有訊息可掛的孤兒檔。
+        // message_id 這裡留空，由 chatReply 插完使用者訊息後回填（它才知道那則的 id）。
+        const attachments = [];
+        for (const f of files) {
+          const mimetype = sniffFile(f.buffer).mime;
+          const filePath = saveChatAttachmentFile(req.params.id, f.originalname, f.buffer);
+          const { rows: [att] } = await query(
+            `INSERT INTO project_chat_attachments (chat_id, filename, mimetype, file_path)
+             VALUES ($1, $2, $3, $4) RETURNING id, filename, mimetype, file_path`,
+            [req.params.id, f.originalname, mimetype, filePath]
+          );
+          attachments.push(att);
+        }
         const { chatReply } = require('./pipeline/chat-agent');
-        const reply = await chatReply(req.params.projectId, req.params.id, content, req.userId);
+        const reply = await chatReply(req.params.projectId, req.params.id, content, req.userId, attachments);
         emitToUser(req.userId, 'chat:reply', {
           projectId: Number(req.params.projectId),
           chatId: Number(req.params.id)
@@ -140,6 +171,31 @@ function registerRoutes(app) {
         await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [req.params.id]).catch(() => {});
         throw err;
       }
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 對話圖片下載／inline 顯示。前端不能直接把這個 URL 塞進 <img src>——認證走 Authorization
+  // header，瀏覽器原生載圖不會帶上，只會拿到 401；前端是 fetch 成 blob 再轉 objectURL。
+  app.get('/api/projects/:projectId/chats/:id/attachments/:attId/download', verifyToken, async (req, res) => {
+    try {
+      const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
+      if (!chat) return res.status(404).json({ error: 'Not found' });
+      const { rows } = await query(
+        // 不取存下來的 mimetype：一律以當下嗅測的結果為準（下面那行），取了也是死欄位
+        'SELECT filename, file_path FROM project_chat_attachments WHERE id = $1 AND chat_id = $2',
+        [req.params.attId, req.params.id]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
+      const att = rows[0];
+      const buffer = readAttachmentFile(att.file_path);
+      const sniff = sniffFile(buffer);
+      // 落地前已驗過 magic bytes，這裡再擋一次純屬防禦：非圖片一律不 inline，避免變成 XSS 載體
+      const safeMimetype = /^image\//.test(sniff.mime) ? sniff.mime : 'application/octet-stream';
+      const fname = /\.[a-z0-9]+$/i.test(att.filename) ? att.filename : att.filename + sniff.ext;
+      res.setHeader('Content-Type', safeMimetype);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fname)}"`);
+      res.send(buffer);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
