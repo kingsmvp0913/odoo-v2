@@ -610,7 +610,10 @@ window.TaskDetailView = Vue.defineComponent({
     async archive() {
       this.archiving = true;
       try {
-        await Api.post(`tasks/${this.task.id}/archive`, {});
+        const r = await Api.post(`tasks/${this.task.id}/archive`, {});
+        // 封存會順帶把這張任務的碼從 testing 收回去（best-effort）。收不回來一定要講：
+        // 靜默失敗的話，下一張任務併 testing 時才撞衝突，那時已經看不出是這次封存留下的
+        (r && r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
         showToast('任務已封存', 'success');
         this.$router.push('/');
       } catch (e) { showToast(e.message, 'error'); }

@@ -442,9 +442,11 @@ window.TaskListView = Vue.defineComponent({
       e.stopPropagation();
       if (!await confirmDialog({ title: '封存任務', message: `確定要封存任務「${t.title || t.task_id}」？封存後可在「已封存」分頁查看。`, confirmText: '封存' })) return;
       try {
-        await Api.post(`tasks/${t.id}/archive`, {});
+        const r = await Api.post(`tasks/${t.id}/archive`, {});
         this.tasks = this.tasks.filter(x => x.id !== t.id);
         showToast('任務已封存', 'warn');
+        // 封存會順帶把碼從 testing 收回；收不回來要講出來，否則下一張任務併 testing 才撞衝突
+        (r && r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
       } catch (err) { showToast(err.message, 'error'); }
     },
     async unarchiveTask(t, e) {
@@ -510,6 +512,7 @@ window.TaskListView = Vue.defineComponent({
       try {
         const r = await Api.post('tasks/batch/archive', { ids: this.selectedIds });
         showToast(`已封存 ${r.affected} 筆任務`, 'warn');
+        (r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
         this.selectedIds = [];
         await this.load();
       } catch (err) { showToast(err.message, 'error'); }

@@ -100,6 +100,15 @@ async function refExists(repoPath, ref) {
   } catch { return false; }
 }
 
+// 分支的 commit 是否已經在 target 裡（封存任務時判斷它的碼還留不留在部署來源）。
+// 任一方不存在都回 false——沒得比就當作沒併入，寧可不重建，也不要對著不存在的 ref 去動 testing。
+async function branchMergedInto(repoPath, branch, target) {
+  try {
+    await execFileAsync('git', ['merge-base', '--is-ancestor', branch, target], { cwd: repoPath });
+    return true;
+  } catch { return false; }
+}
+
 // 任務分支相對主分支的完整 diff（三點語法＝只看分支自己的變更），供人工審核檢視
 async function diffBranch(repoPath, baseBranch, branch) {
   const { stdout } = await execFileAsync(
@@ -883,4 +892,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
 }
 
 module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
-  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, findAiMergeCommit, showBlob };
+  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, branchMergedInto, findAiMergeCommit, showBlob };

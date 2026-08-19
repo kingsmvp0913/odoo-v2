@@ -5,7 +5,7 @@ const { query } = require('./db');
 const { HUMAN_STATUSES } = require('../public/js/status-labels.js');
 const { verifyToken } = require('./auth');
 const { abortTask, runPipeline } = require('./pipeline/runner');
-const { removeWorktree, deleteBranchLocal } = require('./pipeline/git');
+const { removeWorktree, deleteBranchLocal, branchMergedInto } = require('./pipeline/git');
 const { writebackTaskMessage } = require('./pipeline/sync');
 const { uninstallModule } = require('./pipeline/env-agent');
 const { rebuildTesting } = require('./pipeline/rebuild-testing');
@@ -156,6 +156,32 @@ async function uninstallTaskModule(task, excludeIds) {
   } catch (err) {
     return `模組 ${moduleName} 卸載失敗（已略過，不影響刪除）：${err.message}`;
   }
+}
+
+// 封存只設 is_hidden，但任務一過 QA 就已經 merge 進 testing 了——那些 commit 會留在部署來源，
+// 下一張任務併進來就撞 merge_conflict（實測 #147 封存後 #149 併 testing 撞 UU／AA，只能人工重置）。
+// rebuildTesting 會 reset 回 ai-dev 再重併「未封存且在飛」的任務，剛好把已封存的排除掉——所以
+// 呼叫端必須排在 is_hidden 寫入「之後」，否則這些任務會被自己重併回去。
+// 只對「碼真的還在 testing」的專案動手：rebuildTesting 是 reset --hard，而正常的 done→封存
+// （碼早已在 ai-dev）不該白跑一次。回傳 best-effort 的警告字串陣列。
+async function reclaimTestingFrom(tasks, userId) {
+  const dirty = new Set();
+  for (const t of tasks) {
+    if (!t.project_id || !t.git_branch || dirty.has(t.project_id)) continue;
+    const { rows: repos } = await query(
+      "SELECT local_path FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL",
+      [t.project_id]
+    );
+    for (const r of repos) {
+      if (await branchMergedInto(r.local_path, t.git_branch, 'testing')) { dirty.add(t.project_id); break; }
+    }
+  }
+  const warnings = [];
+  for (const pid of dirty) {
+    const rw = await rebuildTesting(pid, userId).catch(e => `testing 重建異常（已略過）：${e.message}`);
+    if (rw) warnings.push(rw);
+  }
+  return warnings;
 }
 
 const ANSWER_ALLOWED_STATUSES = ['confirm_pending', 'clarify_pending'];
@@ -525,11 +551,17 @@ function registerRoutes(app) {
       const ids = (req.body.ids || []).map(Number).filter(Boolean);
       if (!ids.length) return res.json({ ok: true, affected: 0 });
       ids.forEach(id => abortTask(id)); // 封存執行中任務：中止在飛 agent（健檢項11）
+      // 先撈出實際會被封存的那幾張（同樣受 user_id 限制），封存後才有依據判斷要不要把碼從 testing 收回
+      const { rows: archiving } = await query(
+        'SELECT id, project_id, git_branch FROM tasks WHERE id = ANY($1::int[]) AND (user_id = $2 OR $3 = true)',
+        [ids, req.userId, !!req.isAdmin]
+      );
       const { rowCount } = await query(
         'UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = ANY($1::int[]) AND (user_id = $2 OR $3 = true)',
         [ids, req.userId, !!req.isAdmin]
       );
-      res.json({ ok: true, affected: rowCount });
+      const warnings = await reclaimTestingFrom(archiving, req.userId);
+      res.json({ ok: true, affected: rowCount, warnings });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/tasks/batch/unarchive', verifyToken, async (req, res) => {
@@ -548,14 +580,15 @@ function registerRoutes(app) {
     try {
       const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
       if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
-      const { rows } = await query('SELECT id FROM tasks WHERE id = $1', [req.params.id]);
+      const { rows } = await query('SELECT id, project_id, git_branch FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       abortTask(req.params.id); // 封存執行中任務：中止在飛 agent，否則子行程續跑到逾時（健檢項11）
       await query(
         "UPDATE tasks SET is_hidden = true, is_paused = false, updated_at = NOW() WHERE id = $1",
         [req.params.id]
       );
-      res.json({ ok: true });
+      const warnings = await reclaimTestingFrom(rows, req.userId);
+      res.json({ ok: true, warnings });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

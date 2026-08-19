@@ -29,7 +29,8 @@ jest.mock('../pipeline/runner', () => ({
 jest.mock('../pipeline/git', () => ({
   ...jest.requireActual('../pipeline/git'),
   removeWorktree: jest.fn(),
-  deleteBranchLocal: jest.fn()
+  deleteBranchLocal: jest.fn(),
+  branchMergedInto: jest.fn().mockResolvedValue(false)
 }));
 const gitMod = require('../pipeline/git');
 
@@ -1211,6 +1212,85 @@ test('POST /api/tasks/:id/archive → 先 abortTask（項11）', async () => {
   const res = await request(app).post(`/api/tasks/${t.id}/archive`).set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
   expect(abortTask).toHaveBeenCalledWith(String(t.id));
+});
+
+// 意圖：封存只設 is_hidden，但任務一過 QA 就已經 merge 進 testing 了——那些 commit 會留在部署來源，
+// 下一張任務併進來就撞 merge_conflict（實測 #147 封存後 #149 併 testing 撞 UU／AA，只能人工重置）。
+// rebuildTesting 會 reset 回 ai-dev 再重併「未封存且在飛」的任務，剛好把這張排除掉。
+// 兩個方向都要驗：只驗「有觸發」的話，無條件呼叫也會綠，證明不了這是條件式的——而它必須是條件式，
+// 因為 rebuildTesting 是 reset --hard，正常的 done→封存（碼早在 ai-dev）不該白跑一次。
+describe('封存已併入 testing 的任務 → 把它的碼從部署來源收回去', () => {
+  let pjId;
+  async function makeArchivable(sfx, status = 'review_pending') {
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, git_branch)
+       VALUES ($1, $2, 'odoo', 'T', 'c', $3, $4, 'task/x') RETURNING id`,
+      [userId, `task_arc_${sfx}`, status, pjId]
+    );
+    return t.id;
+  }
+  beforeAll(async () => {
+    const { rows: [pj] } = await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('ArcRb','17.0') RETURNING id");
+    pjId = pj.id;
+    await dbModule.query(
+      "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','git@x/y.git','/tmp/arc-repo',true,'done')",
+      [pjId]
+    );
+  });
+  beforeEach(() => { rebuildMod.rebuildTesting.mockClear(); gitMod.branchMergedInto.mockReset(); });
+
+  test('碼還在 testing → 觸發重建', async () => {
+    gitMod.branchMergedInto.mockResolvedValue(true);
+    const id = await makeArchivable('in');
+    const res = await request(app).post(`/api/tasks/${id}/archive`).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(rebuildMod.rebuildTesting).toHaveBeenCalledWith(pjId, userId);
+    // 重建要在 is_hidden 寫入之後才跑，否則這張任務會被自己重併回 testing（篩選條件是 is_hidden=false）
+    const { rows: [after] } = await dbModule.query('SELECT is_hidden FROM tasks WHERE id=$1', [id]);
+    expect(after.is_hidden).toBe(true);
+  });
+
+  test('碼不在 testing → 不重建（不為了封存已完成任務白跑一次 reset --hard）', async () => {
+    gitMod.branchMergedInto.mockResolvedValue(false);
+    const id = await makeArchivable('out');
+    const res = await request(app).post(`/api/tasks/${id}/archive`).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(rebuildMod.rebuildTesting).not.toHaveBeenCalled();
+  });
+
+  // 批次封存是另一條 route、另一個呼叫點——單筆修好不代表它跟著好，而使用者清任務多半就是用批次的
+  test('批次封存 → 同一專案只重建一次，且碼不在 testing 的專案不動', async () => {
+    const { rows: [pj2] } = await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('ArcRb2','17.0') RETURNING id");
+    await dbModule.query(
+      "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','git@x/y.git','/tmp/arc-repo2',true,'done')",
+      [pj2.id]
+    );
+    // 髒專案（pjId）兩張、乾淨專案（pj2）一張：驗去重，也驗不是無條件全部重建
+    const a = await makeArchivable('b1'), b = await makeArchivable('b2');
+    const { rows: [c] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id, git_branch)
+       VALUES ($1, 'task_arc_b3', 'odoo', 'T', 'c', 'review_pending', $2, 'task/x') RETURNING id`,
+      [userId, pj2.id]
+    );
+    gitMod.branchMergedInto.mockImplementation(async (repoPath) => repoPath === '/tmp/arc-repo');
+    const res = await request(app).post('/api/tasks/batch/archive')
+      .set('Authorization', `Bearer ${adminToken}`).send({ ids: [a, b, c.id] });
+    expect(res.status).toBe(200);
+    expect(rebuildMod.rebuildTesting).toHaveBeenCalledTimes(1);
+    expect(rebuildMod.rebuildTesting).toHaveBeenCalledWith(pjId, userId);
+  });
+
+  test('沒有任務分支（連 coding 都還沒跑）→ 連問都不用問 git', async () => {
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id)
+       VALUES ($1, 'task_arc_nobranch', 'odoo', 'T', 'c', 'analysis_running', $2) RETURNING id`,
+      [userId, pjId]
+    );
+    const res = await request(app).post(`/api/tasks/${t.id}/archive`).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(gitMod.branchMergedInto).not.toHaveBeenCalled();
+    expect(rebuildMod.rebuildTesting).not.toHaveBeenCalled();
+  });
 });
 
 test('批次刪除／批次封存 → 每筆先 abortTask（項11）', async () => {
