@@ -89,6 +89,7 @@ window.ProjectListView = Vue.defineComponent({
     unread(id) { return UnreadStore.byProject[String(id)] || 0; },
     go(id) { this.$router.push(`/projects/${id}`); },
     goWiki(id) { this.$router.push(`/projects/${id}/wiki`); },
+    goDeploySop(id) { this.$router.push(`/projects/${id}/deploy-sop`); },
     goChat(id) { this.$router.push(`/projects/${id}/chat`); },
     goDb(id) { this.$router.push(`/projects/${id}/db`); },
     async openEnv(id) {
@@ -190,6 +191,7 @@ window.ProjectListView = Vue.defineComponent({
                 title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
               <button class="btn btn-outline btn-sm" @click="goDb(p.id)">資料庫查詢</button>
               <button class="btn btn-outline btn-sm" @click="goWiki(p.id)">📖 Wiki</button>
+              <button class="btn btn-outline btn-sm" @click="goDeploySop(p.id)" title="把 push 接成自動部署的步驟說明">🛠 自動部署 SOP</button>
               <button v-if="!p.has_wiki" class="btn btn-outline btn-sm" @click="initWiki(p.id)">🔄 初始化 Wiki</button>
             </div>
           </div>

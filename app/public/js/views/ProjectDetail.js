@@ -162,6 +162,7 @@ window.ProjectDetailView = Vue.defineComponent({
     },
     unreadCount() { return this.project ? (UnreadStore.byProject[String(this.project.id)] || 0) : 0; },
     goWiki() { this.$router.push(`/projects/${this.$route.params.id}/wiki`); },
+    goDeploySop() { this.$router.push(`/projects/${this.$route.params.id}/deploy-sop`); },
     goChat() { this.$router.push(`/projects/${this.$route.params.id}/chat`); },
     async loadEnv() {
       if (window.TourDemo && window.TourDemo.isProject(this.$route.params.id)) { this.env = window.TourDemo.env(); return; }
@@ -293,6 +294,7 @@ window.ProjectDetailView = Vue.defineComponent({
             title="把 ai-dev 上已核准的任務合併到 main">🚀 上正式</button>
           <button class="btn btn-outline btn-sm" @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
           <button class="btn btn-outline btn-sm" @click="goWiki">📖 Wiki</button>
+          <button class="btn btn-outline btn-sm" @click="goDeploySop" title="把 push 接成自動部署的步驟說明">🛠 自動部署 SOP</button>
           <button class="btn btn-outline btn-sm" @click="goChat">💬 Chat
             <span v-if="unreadCount()" style="display:inline-block;min-width:16px;padding:0 5px;margin-left:var(--space-1);border-radius:var(--radius);background:var(--error,#e5484d);color:#fff;font-size:var(--fs-xs);line-height:16px;text-align:center">{{ unreadCount() }}</span>
           </button>
