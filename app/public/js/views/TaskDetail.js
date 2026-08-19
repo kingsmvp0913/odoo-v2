@@ -30,6 +30,17 @@ window.TaskDetailView = Vue.defineComponent({
       return 'message';
     },
     statusLabel() { return this.task ? (STATUS_LABELS[this.task.status] || this.task.status) : ''; },
+    // 這個輸入框是自由文字，但它餵的分診 agent 要產出的是 {decision, target} 結構化決策，
+    // 而畫面上從來沒有一處提示過這件事。散文「推進到 QA」會被判成 fix，coding 進去無事可做就 stop，
+    // 使用者再填一次又繞回來（實測連續五輪白跑）。這幾顆把契約詞彙填成可照抄的句子——填入而非
+    // 直接送出，使用者仍能接著補自己的上下文。
+    blockerShortcuts() {
+      return [
+        { label: '碼我自己改好了，重新審查', text: '程式碼我已經自行修正完成，請回傳 decision="advance"、target="qa"。' },
+        { label: '環境已排除，重跑部署', text: '環境問題已排除，程式碼未變動，請回傳 decision="advance"、target="deploy"。' },
+        { label: '這是誤判，直接送人工審核', text: '這是誤判，不需再修改，請回傳 decision="advance"、target="review"。' }
+      ];
+    },
     // merge_conflict 的結構化衝突資料（後端 merge_conflict_data，可能為 JSON 字串）
     conflictData() {
       if (!this.task?.merge_conflict_data) return null;
@@ -715,6 +726,11 @@ window.TaskDetailView = Vue.defineComponent({
         this.submitAnswer();
       }
     },
+    // 接在既有內容後面而不是覆蓋：使用者常是先打完自己的說明，才想到要指定回哪一關
+    applyResolutionShortcut(text) {
+      const cur = this.resolution.trim();
+      this.resolution = cur ? `${cur}\n${text}` : text;
+    },
     async resolveBlocker() {
       if (!this.resolution.trim()) return;
       this.resolving = true;
@@ -1205,6 +1221,10 @@ window.TaskDetailView = Vue.defineComponent({
               <div class="form-section">處理失敗 — 需人工介入</div>
               <div class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</div>
               <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">說明你的修正方向，任務將回到失敗的那一關重試</div>
+              <div style="display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)">
+                <button v-for="s in blockerShortcuts" :key="s.label" class="btn btn-outline btn-sm"
+                  @click="applyResolutionShortcut(s.text)">{{ s.label }}</button>
+              </div>
               <textarea v-model="resolution" class="form-control" rows="4"
                 placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續...（Enter 送出，Shift+Enter 換行）"
                 @keydown.enter.exact.prevent="resolveBlocker">
