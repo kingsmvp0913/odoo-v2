@@ -122,7 +122,7 @@ function pipelineNodes(flags) {
       ['進入', '待分類直接進，或客服判定需要改程式'],
       ['做什麼', '讀專案碼產出 analysis.yaml（含 acceptance 與 permissions）'],
       ['往下', 'determineNextStatus 三選一：有待答問題或 low_confidence → 等待確認；否則**只有 execution_mode 明確是 MODE_A（純新增、不動既有行為）才直接建立分支**，其餘一律進等待規格確認'],
-      ['分支', '開跑前會先把 main 併進 ai-dev（不併就是對著過期的碼分析）：撞衝突且 merge agent 自動解不掉 → 合併衝突，裁決完回本關重跑'],
+      ['分支', '開跑前會先把 main 併進 ai-dev（不併就是對著過期的碼分析）：撞衝突且 merge agent 自動解不掉 → 合併衝突，裁決完回本關重跑（**圖上不畫這條線**，理由見合併衝突那一格）'],
       ['注意', '澄清答完會「完整重跑」這一關，不是接著上次跑']
     ]
   });
@@ -260,7 +260,7 @@ function pipelineNodes(flags) {
       ['進入', '**三個入口**：分析關開跑前同步 main→ai-dev、併入 testing、核准後併入 ai-dev——三處撞同幾行且 AI 自動解不掉都停在這裡'],
       ['做什麼', 'merge → merge-explain → merge-clarify 三支各司其職，人做最後裁決'],
       ['往下', '解完依 merge_conflict_data.prior_status 回原本那一關續跑（分析來的 → 分析；併入測試來的 → 部署測試區；併入 ai-dev 來的 → 繼續併入 ai-dev）'],
-      ['反直覺', '分析關那條最容易被當成系統壞掉：一張還沒寫半行碼的任務也會停在合併衝突——撞的是工程師直接改 main 的碼與 AI 先前改過的地方'],
+      ['反直覺', '分析關那條最容易被當成系統壞掉：一張還沒寫半行碼的任務也會停在合併衝突——撞的是工程師直接改 main 的碼與 AI 先前改過的地方。**這個入口與它的回程刻意不畫線**（縱跨 9 格、版面實測過於雜亂），只寫在這裡'],
       ['注意', '流程刻意不分叉：退回重做不會消除衝突，所以全程停在這個狀態']
     ]
   });
@@ -418,8 +418,10 @@ function pipelineEdges(flags) {
     ['cs', 'csreply', 'alt'], ['csreply', 'cs', 'back'], ['csreply', 'csdone', 'main'],
     ['analysis', 'confirm', 'alt'], ['analysis', 'specreview', 'alt'], ['analysis', 'branch', 'main'],
     ['confirm', 'analysis', 'back'], ['specreview', 'branch', 'main'],
-    // 分析關開跑前的 main→ai-dev 同步撞衝突：任務一行碼都還沒寫就會停到合併衝突，解完回本關重跑
-    ['analysis', 'conflict', 'alt'], ['conflict', 'analysis', 'back'],
+    // 分析關開跑前的 main→ai-dev 同步撞衝突也會停到合併衝突（task-agent.js 的 syncConflict），
+    // 但**刻意不畫這兩條線**：分析在主線第 4 格、合併衝突在人工介入第 13 格，縱跨 9 格的來回線要走
+    // 主線與人工介入之間那條走道，而那條走道已經擠著等待確認／規格確認／裁決／審核的來回線——
+    // 實際畫出來看過，亂到讓其他線都難讀。改寫在合併衝突與分析兩格的說明裡（同 respec 那條的處置）。
     // 規格審核閘門送出修改意見：先轉 respec_running（畫面顯示「檢查規格是否需調整」），
     // 由 respec-agent 判 pre-coding 委派 spec-review 處理器，跑完回本關
     ['specreview', 'respec', 'alt'], ['respec', 'specreview', 'back'],
