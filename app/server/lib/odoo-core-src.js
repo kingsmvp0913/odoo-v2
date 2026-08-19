@@ -153,6 +153,8 @@ function coreSourceGuidance(odooVersion) {
     '本專案 Odoo 版本的核心 addons 已解壓到**唯讀**路徑，內部結構問題一律**先在這裡 Grep／Read**（這是真相來源，比 Context7 準）：',
     `  ${dir}`,
     '- 查原生 template／view 長怎樣、某個 xpath 對不對得到目標節點、原生 module 的 class／method 怎麼實作、原生 selector／class 名 → 直接 Grep 這條路徑，別只靠 Context7 猜結構。',
+    '- **具名任何原生欄位／方法／群組屬性之前，先在這條路徑 Grep 一次確認它在本版本真的存在**。Odoo 改版會整個移除或改名（實例：`res.groups.category_id` 到 19 換成 `privilege_id`），而參照舊版寫法不會報錯、只會在部署那一刻才爆。',
+    '- **規格與這裡的原始碼衝突時，以原始碼為準**：規格具名的東西在本版本查無 → 依此版本的等價做法實作，不要為了照規格而把不存在的欄位寫回去。（否則會卡死：部署關要求刪掉、審查關要求補上，兩關各自都判對，碼怎麼改都被打回。）',
     '- 這裡只有 addons（原生模組）；ORM 本體（`models.py`／`fields.py`／`http.py`／`tools/`）不在，那類問題仍走 Context7。',
     '- 這裡**唯讀不可改、也不要 `cd` 進去跑 git**；要改的碼永遠在上面本任務的 repo。',
     '- 抽象的 API 概念、版本差異、decorator 慣例，或這條路徑裡確實找不到時，才用 Context7 MCP 補。',

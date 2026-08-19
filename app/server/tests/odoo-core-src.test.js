@@ -174,6 +174,17 @@ describe('coreSourceGuidance', () => {
     expect(g).toContain('Context7');               // 仍保留為補充
   });
 
+  // 意圖：規格參照了目標版本根本不存在的欄位時，pipeline 會鎖死——部署關照著錯規格做會失敗、要求刪掉，
+  // 審查關對照規格發現少了東西、要求補上，兩關各自都判對，碼怎麼改都被打回（raifong T1 實測，最後
+  // 只能人工改規格解套）。守則要同時做到兩件事才解得開：落筆前先驗存在性（堵源頭），以及衝突時以
+  // 原始碼為準（讓下游敢推翻錯規格）。這段守則六個關卡共用，所以審查關也讀得到後者。
+  test('取得核心 → 要求具名欄位先驗存在性，且規格與原始碼衝突時以原始碼為準', () => {
+    fs.existsSync.mockReturnValue(true);
+    const g = coreSourceGuidance('19.0');
+    expect(g).toContain('確認它在本版本真的存在');
+    expect(g).toContain('以原始碼為準');
+  });
+
   test('取不到核心 → 退回既有安全行為（只用 Context7＋嚴禁掃碟）', () => {
     const g = coreSourceGuidance('');              // 版本空 → 快取查不到
     expect(g).toContain('只用 Context7 MCP');

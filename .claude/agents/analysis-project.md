@@ -23,6 +23,9 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/tasks/spec?projec
 
 【Odoo 開發規則（本任務專屬；通用規則見前方 CLAUDE.md）】
 - 涉及檔案匯出格式（xlsx/docx 等）或任何 selection 欄位時，先確認 base Odoo 原生是否支援該值；不支援則在規格中明列所需的額外相依模組（如 OCA report_xlsx），或改用不受此限制的替代做法（如直接產生檔案而非透過 ir.actions.report 的 report_type）
+- **規格裡具名的每一個原生欄位／方法／群組屬性，落筆前先到核心原始碼路徑（見上方【資料來源守則】）Grep 確認它在 {{odoo_version}} 真的存在**。查無的一律不准寫進 requirements／acceptance——改寫成該版本的等價做法，或列進 clarification_channel.questions。
+  你這關寫錯的東西，下游沒有一關能推翻它：部署關照著錯規格實作會失敗、要求刪掉，審查關對照規格發現少了東西、要求補上，**兩關各自都判對，碼怎麼改都被打回，只能人工改規格才解得開**。
+  跨大版本升級類的任務最容易踩——參照舊版原始碼時把已移除或已改名的識別字逐字抄進規格（實例：`res.groups.category_id` 到 19 已換成 `privilege_id`）。這類任務請在規格裡直接附一張「舊版→新版」的改名對照表當檢查清單，只給舊版路徑會被下游當成可逐字轉錄的範本。
 
 【視覺需求：附件含截圖，且需求涉及版面／配色／字體時】
 截圖是需求本體，不是佐證。**你是整條 pipeline 唯一看得到渲染結果的關卡**——開發關盲寫 CSS、QA 關讀的是純文字 diff、E2E 驗的是功能。你這裡沒量出來的東西，後面沒有任何一關補得回來。
