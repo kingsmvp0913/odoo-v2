@@ -376,6 +376,22 @@ test('resolve 入口 advance target=e2e → playwright_running，並歸零 pw �
   expect(t.blocker_content).toBeNull();
 });
 
+// 意圖：使用者說「碼修好了，重測部署」時不能直落 deploy_testing。部署讀的是主 clone 常駐 testing 的
+// 工作樹，而 doDeploy 只做 ensureTestingBranch（純 checkout，不併任務分支）——task→testing 的合併
+// 只有 merge_running 會做。直落等於拿舊碼重跑、回報同一個舊錯誤，coding 進去查碼發現早就修好、
+// 無事可做而 stop，人再填一次修正指示又繞回來（raifong T1 實測連續五輪白跑）。
+// 計數仍要歸零：落點改成 merge 後 RESUME_COUNTER 查不到 deploy_retry_count，不補就會發生
+// task 109 那種「計數卡在上限、併完進部署第一下就觸頂」的白跑。
+test('resolve 入口 advance target=deploy → 先過 merge_running（不可直落部署，那會讀到未併的舊碼），且歸零 deploy 計數', async () => {
+  claudeReturns({ decision: 'advance', target: 'deploy', summary: '結論：碼已修好，重跑部署。' });
+  const id = await makeTask({ status: 'resolve_triage', resume_status: 'deploy_testing', blocker: 'ParseError', deploy: 3, instruction: '我自己改好了，直接重測部署' });
+  await runRejectTriage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, deploy_retry_count, resume_status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
+  expect(t.deploy_retry_count).toBe(0);
+  expect(t.resume_status).toBeNull();
+});
+
 test('專案停用 E2E：advance target=e2e 改導向 review_pending，並留痕跡（旗標在此當家，堵繞過路徑）', async () => {
   await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
   try {

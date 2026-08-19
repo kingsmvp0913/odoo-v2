@@ -287,6 +287,19 @@ async function runRejectTriage(taskId, userId, signal) {
   if (decision === 'advance' && TARGET_STATUS[target]) {
     if (summary) await logAi(summary);
     let advanceTo = TARGET_STATUS[target];
+    // target=deploy 不直落部署：部署讀的是主 clone 常駐 testing 的工作樹，而 doDeploy 只做
+    // ensureTestingBranch（純 checkout，不併任務分支）——task→testing 的合併只有 merge_running 會做。
+    // 直落等於拿未併的舊碼重跑、回報同一個舊錯誤，coding 進去查碼發現早已修好、無事可做而 stop，
+    // 人再填一次修正指示又繞回來（raifong T1 實測連續五輪白跑）。改先過 merge：merge 成功本來就轉
+    // deploy_testing，分支已併時走 Already up to date 的快速路徑，等於只多一個冪等步驟。
+    // deploy 計數要自己補歸零：落點改成 merge 後 RESUME_COUNTER 查不到它，而使用者說「已修好、重測
+    // 部署」本就該重取完整額度（實測 task 109：計數卡在上限，之後每輪都在部署第一下觸頂白跑）。
+    if (advanceTo === 'deploy_testing') {
+      advanceTo = 'merge_running';
+      await query('UPDATE tasks SET deploy_retry_count=0 WHERE id=$1', [taskId]);
+      // 不留痕的話，使用者要的是「重測部署」、看到的卻是狀態變成「併入測試」，像被判去了別的地方
+      await logAi('先併入測試分支再部署——部署讀的是 testing 分支，未併入會跑到舊碼、回報同一個舊錯誤');
+    }
     // 專案停用 E2E：advance 推進到 E2E 時改導向最終人工審核（旗標在此處也當家，堵住繞過主推進點的路徑）
     if (advanceTo === 'playwright_running') {
       const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
