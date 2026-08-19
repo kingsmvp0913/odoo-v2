@@ -29,8 +29,44 @@ tour 是驗收測試，測的是使用者看得到的行為。用 `[name='技術
 
 【產出三件】
 - `{{module}}/static/tests/tours/<name>.js`：標準 tour steps（`trigger`／`run`／`content`），以 tour 內建等待，**不得自行 sleep**。
-- `{{module}}/tests/test_<name>.py`：`HttpCase` 子類；需要前置資料時在 Python `setUp` 以 ORM 建立，再 `self.start_tour(起始 url, 'tour_name', login='{{login}}')`。
+- `{{module}}/tests/test_<name>.py`：測試類別（基底怎麼選見下一段）；需要前置資料時以 ORM 建立，再 `self.start_tour(起始 url, 'tour_name', login='{{login}}')`。
 - `{{module}}/tests/__init__.py`：`from . import test_<name>`（若無則建）。
+
+【基底類別：前置資料碰到會計主檔時不能用 HttpCase】
+預設 `HttpCase` 即可。但只要前置資料會建立或依賴**會計主檔**（`account.tax`、`account.move`／發票、日記帳、會計科目），就必須改用會計專用基底，照抄這個骨架：
+
+```python
+from odoo.addons.account.tests.common import AccountTestInvoicingHttpCommon
+
+@tagged('post_install', '-at_install')
+class TestXxx(AccountTestInvoicingHttpCommon):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # 前置資料寫這裡：注意是 class 層的 cls，不是 setUp 的 self
+```
+
+理由（已實際發生）：測試環境的公司**沒有安裝會計科目表**，`account.tax.group` 表是空的。用 `HttpCase` 直接 `create` 一筆 `account.tax`，required 的 `tax_group_id` 算不出值 → `null value in column "tax_group_id" violates not-null constraint` → 整個檔案的測試在 setUp 全數 error，一個都跑不到，實作根本沒被驗到。`AccountTestInvoicingHttpCommon` 會在測試交易內自備公司與科目表，不依賴環境現況。
+
+⚠ **這個基底是以一個「只有會計權限」的獨立使用者身分執行的。** 前置資料若還要建**銷售單／採購單**，會直接撞
+`AccessError: 您並無權限建立 'Sales Order' (sale.order) 記錄`。這時照 Odoo 核心自己的寫法多重繼承
+（核心範例：`sale/tests/test_sale_order.py:822` 的 `class TestSaleOrderInvoicing(AccountTestInvoicingCommon, SaleCommon)`）：
+
+```python
+from odoo.addons.account.tests.common import AccountTestInvoicingHttpCommon
+from odoo.addons.sale.tests.common import SaleCommon
+
+class TestXxx(AccountTestInvoicingHttpCommon, SaleCommon):
+```
+
+或在 `setUpClass` 裡補權限（19 的欄位名是 `group_ids`，**不是 17 的 `groups_id`**）：
+`cls.env.user.group_ids |= cls.env.ref('sales_team.group_sale_salesman')`
+
+它已備好可直接取用的資料，**優先沿用、不要從零建**：
+`cls.partner_a`／`cls.partner_b`（客戶）、`cls.product_a`／`cls.product_b`（商品）、
+`cls.tax_sale_a`／`cls.tax_sale_b`（銷項稅）、`cls.tax_purchase_a`／`cls.tax_purchase_b`（進項稅）、
+`cls.company_data['default_account_revenue']` 等科目。
+需要特定稅率、內含／外加、或統一編號時，用 `cls.tax_sale_a.copy({...})`／`cls.partner_a.copy({'vat': ...})` 衍生，不要 `create` 全新的。
 
 於 `{{module}}/__manifest__.py` 的 `assets['web.assets_tests']` 註冊 tour JS，然後 `git add` 上述檔案與 manifest，`git commit -m "[{{module}}]: 依規格新增 tour E2E 測試"`。
 

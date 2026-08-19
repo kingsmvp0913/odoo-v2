@@ -253,6 +253,41 @@ test('tour 失敗且分類 env → stopped/env（不退 coding）', async () => 
   expect(s.blocker_type).toBe('env');
 });
 
+// 停等訊息的措辭本身就是防線：使用者只讀得到這一句就決定下一步怎麼做。
+// 分類器判不出時的安全預設是 env（見 failure-classifier 的反轉舉證），所以這裡的 env
+// 常常只代表「需要人看一眼」。訊息若斷言「這是環境問題、請恢復環境後重試」，
+// 就會把人送去重啟一個根本沒壞的環境，真因反而沒人看。
+test('E2E 全部測試都在 setUp error → 訊息要指出「一支都沒執行到」且不得叫人重啟環境', async () => {
+  envAgent.runTourTests.mockRejectedValue(Object.assign(
+    new Error("odoo.tests.result: 0 failed, 6 error(s) of 6 tests when loading database 'test_x'\n"
+      + 'ERROR: null value in column "tax_group_id" of relation "account_tax" violates not-null constraint'),
+    { exitCode: 1 }
+  ));
+  classifier.classifyFailureWithAgent.mockResolvedValue('env');
+  const id = await makeTask(0);
+  await runTourStage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('6 支測試全部在載入／setUp 階段 error');
+  expect(t.blocker_content).toContain('一支都沒真正執行到');
+  expect(t.blocker_content).not.toContain('請恢復環境後重試');
+});
+
+test('E2E 失敗但不是全數 error → 訊息不得斷言「屬環境問題」（分類器只是判不出）', async () => {
+  envAgent.runTourTests.mockRejectedValue(Object.assign(
+    new Error('odoo.tests.result: 2 failed, 0 error(s) of 6 tests\nAssertionError: element not found'),
+    { exitCode: 1 }
+  ));
+  classifier.classifyFailureWithAgent.mockResolvedValue('env');
+  const id = await makeTask(0);
+  await runTourStage(id, userId);
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).not.toContain('屬環境問題');
+  expect(t.blocker_content).not.toContain('請恢復環境後重試');
+  expect(t.blocker_content).toContain('無法歸因為程式碼問題');
+});
+
 // P4：tour 進程猝死（非常規退出碼＋無 Odoo 錯誤）→ 直接 env，不叫 classifier 瞎猜成 code 退 coding。
 test('P4 tour 進程猝死（非常規退出碼＋無錯誤）→ stopped/env，不呼叫 classifier、不退 coding', async () => {
   envAgent.runTourTests.mockRejectedValue(Object.assign(

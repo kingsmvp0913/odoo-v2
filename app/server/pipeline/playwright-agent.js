@@ -38,6 +38,21 @@ function parseTestCount(log) {
   return all.length ? parseInt(all[all.length - 1][1], 10) : null;
 }
 
+// 「N failed, M error(s) of T tests」全部都是 error（M===T、failed 0、T>0）＝測試在載入／setUp 階段
+// 就整組死掉，一支都沒真正執行到。這幾乎一定是測試檔自身的前置資料建不起來（基底類別選錯、缺主檔），
+// 不是環境故障。回傳題數供訊息使用，不符這個形狀回 null。
+//
+// 為什麼要特別認它：分類器的安全預設是 env（見 failure-classifier.js 的反轉舉證），
+// 而原本的停等訊息會斷言「屬環境問題，請恢復環境後重試」。raifong #157 實測就是這樣——
+// tour 用 HttpCase 直接建 account.tax 撞 tax_group_id NOT NULL、6 支全 error，
+// 照那句話去重啟環境會一模一樣再失敗一次，真因（考題寫錯）完全沒被指出來。
+function allTestsErrored(log) {
+  const m = [...String(log || '').matchAll(/(\d+) failed, (\d+) error\(s\) of (\d+) tests/g)].pop();
+  if (!m) return null;
+  const failed = Number(m[1]), errors = Number(m[2]), total = Number(m[3]);
+  return total > 0 && failed === 0 && errors === total ? total : null;
+}
+
 async function stopTask(taskId, userId, msg, blockerType = null) {
   await query("UPDATE tasks SET status='stopped', blocker_type=$3, blocker_content=$2, updated_at=NOW() WHERE id=$1", [taskId, msg, blockerType]);
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
@@ -205,7 +220,16 @@ async function runTourStage(taskId, userId, signal) {
   const logRef = logFile ? `\n完整 log：${logFile}` : '';
   const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [task.project_id]);
   if (cls !== 'code' || !env2 || env2.status !== 'running') {
-    await stopTask(taskId, userId, `E2E tour 期間屬環境問題（非程式碼），請恢復環境後重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}`, 'env');
+    // 訊息不得斷言「這是環境問題」——落到這裡的原因包含「分類器判不出、安全預設成 env」，
+    // 那只代表「需要人看一眼」，不代表環境真的壞了。說死了會把人送去重啟一個沒壞的環境。
+    const erroredAll = allTestsErrored(err.message);
+    const msg = erroredAll
+      ? `E2E 的 ${erroredAll} 支測試全部在載入／setUp 階段 error，一支都沒真正執行到——本次實作等於完全沒被驗證。`
+        + `這種形狀通常是測試檔自身的前置資料建不起來（基底類別選錯、缺必要的主檔資料），不是環境故障；`
+        + `請先讀完整 log 的例外行，不要直接重啟環境重試。最後錯誤：${odooErr.slice(0, 500)}${logRef}`
+      : `E2E tour 失敗，且無法歸因為程式碼問題（可能是環境，也可能是測試本身跑不起來）。`
+        + `請讀完整 log 判讀後再決定處置。最後錯誤：${odooErr.slice(0, 500)}${logRef}`;
+    await stopTask(taskId, userId, msg, 'env');
     return true;
   }
   await bounceToCoding(task, taskId, userId, odooErr, logRef);
