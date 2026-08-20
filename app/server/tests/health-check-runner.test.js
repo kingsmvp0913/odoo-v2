@@ -38,6 +38,9 @@ beforeAll(async () => {
   const { rows: [u] } = await dbModule2.query(
     "INSERT INTO users (username,password_hash,display_name) VALUES ('hc','h','HC') RETURNING id");
   hcUserId = u.id;   // tasks.user_id 是 NOT NULL，跨關卡彙整的 fixture 要用
+  // 深診上限在 module load 時讀 env，故必須在 require 之前設。設成 1 是為了讓「截斷要寫進
+  // finding、不得靜默」那條測得到——本檔的 fixture 只有兩個 agent，用預設的 8 永遠碰不到上限。
+  process.env.HEALTH_MAX_FOCUS = '1';
   ({ runHealthCheck } = require('../pipeline/health-check-runner'));
 });
 afterAll(() => dbModule2._setPoolForTesting(null));
@@ -251,9 +254,9 @@ test('解析失敗 → 模型原始輸出落檔，且 diagnosis 指得出檔名'
 // 零樣本不記 ok：實測 run#2 的 14 個 ok 裡，deploy-fix 與 wiki-drift-classifier 都是 0 次呼叫。
 // 存成 ok 到前端就是一顆綠燈，整頁綠得虛胖反而蓋掉真正該看的那幾則。
 test('該關近期零呼叫 → severity 覆寫為未取樣，不採信模型判的 ok', async () => {
-  buildAgentSummary
-    .mockResolvedValueOnce({ token: { calls: 0 }, tasks: {}, rejections: null })
-    .mockResolvedValueOnce({ token: { calls: 0 }, tasks: {}, rejections: null });
+  // 用 mockResolvedValue 而非 Once：分流階段也會為每個 agent 算一次摘要，Once 會被分流先吃掉，
+  // 深診拿到的就變成預設值，測試會以「severity 是 ok」的形式假失敗（與零樣本邏輯本身無關）。
+  buildAgentSummary.mockResolvedValue({ token: { calls: 0 }, tasks: {}, rejections: null });
   mockRunClaude.mockResolvedValue({
     text: '<diagnosis>零執行樣本，無訊號可判</diagnosis><result>{"severity":"ok","has_prompt":false}</result>',
     usage: null, durationMs: 5
@@ -269,9 +272,8 @@ test('該關近期零呼叫 → severity 覆寫為未取樣，不採信模型判
 
 // 有樣本時不得誤判成未取樣，否則上一條的覆寫會把整頁洗成未取樣、同樣失去鑑別力。
 test('該關有呼叫紀錄 → 維持模型判定的 severity', async () => {
-  buildAgentSummary
-    .mockResolvedValueOnce({ token: { calls: 12 }, tasks: {}, rejections: null })
-    .mockResolvedValueOnce({ token: { calls: 12 }, tasks: {}, rejections: null });
+  // 同上：分流也會為每個 agent 算一次摘要，用 Once 會被它先吃掉（見零樣本那條的註解）
+  buildAgentSummary.mockResolvedValue({ token: { calls: 12 }, tasks: {}, rejections: null });
   mockRunClaude.mockResolvedValue({
     text: '<diagnosis>各項正常</diagnosis><result>{"severity":"ok","has_prompt":false}</result>',
     usage: null, durationMs: 5
@@ -429,4 +431,63 @@ test('續跑：本輪已有 __summary__ → 不重跑總結', async () => {
     "SELECT diagnosis FROM health_check_findings WHERE run_id=$1 AND agent_name='__summary__'", [runId]);
   expect(sums.length).toBe(1);                      // 沒有被追加第二筆
   expect(sums[0].diagnosis).toBe('上一輪就總結過了');
+});
+
+
+// ── 兩階段分流（先用指標點名、再對被點名的關拉提示詞深診）─────────────────────────
+// 意圖：原本 21 關各跑一次 opus、每關只看得到自己，跨關問題於是每關都正確判成「與本關無關」，
+// 合起來沒有人負責。改成先跑一次全平台分流再深診：省錢是附帶效果，主因是要有一個能看到全局的視角。
+const TRIAGE_MARK = '工作流程健檢分流員';
+const triageText = (focus, sev = 'medium') =>
+  `<diagnosis>全平台看起來有一類跨關問題</diagnosis><rationale>理由</rationale>` +
+  `<result>{"focus":${JSON.stringify(focus)},"severity":"${sev}"}</result>`;
+const deepText = '<diagnosis>深診結果</diagnosis><rationale>理由</rationale><result>{"severity":"high","has_prompt":false}</result>';
+
+test('分流點名 → 只有被點名的關跑深診，其餘零 token 落 ok', async () => {
+  buildAgentSummary.mockResolvedValue({ token: { calls: 5, cost_usd: 1 }, repeat_calls: { avg: 1 }, tasks: { stopped_rate: 0 }, rejections: null });
+  mockRunClaude.mockImplementation(async (prompt) =>
+    ({ text: prompt.includes(TRIAGE_MARK) ? triageText(['qa']) : deepText, usage: null, durationMs: 5 }));
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows } = await dbModule2.query(
+    'SELECT agent_name, severity FROM health_check_findings WHERE run_id=$1 ORDER BY agent_name', [runId]);
+  const byName = Object.fromEntries(rows.map(r => [r.agent_name, r.severity]));
+  expect(byName['__triage__']).toBe('medium');
+  expect(byName['qa']).toBe('high');                    // 被點名 → 深診結果
+  expect(byName['coding-project']).toBe('ok');          // 未點名 → 零 token 落 ok，仍留一筆紀錄
+  // 深診只跑被點名的那一關：分流 1 次 + qa 1 次 + 總結 1 次（coding-project 不該再呼叫）
+  const deepCalls = mockRunClaude.mock.calls.filter(([p]) => !p.includes(TRIAGE_MARK)).length;
+  expect(deepCalls).toBeLessThan(3);
+});
+
+// 意圖：分流是新加的單點依賴。它壞掉時若「什麼都不檢查」，健檢會安靜地變成空殼——頁面照樣
+// 顯示跑完了。故必須退回舊行為（逐關全檢）：貴，但不會靜默漏掉整輪。
+test('分流解析失敗 → 退回逐關全檢，不得靜默跳過', async () => {
+  buildAgentSummary.mockResolvedValue({ token: { calls: 5 }, tasks: {}, rejections: null });
+  mockRunClaude.mockImplementation(async (prompt) =>
+    ({ text: prompt.includes(TRIAGE_MARK) ? '<diagnosis>壞掉</diagnosis><result>{"severity":"medium"}</result>' : deepText,
+       usage: null, durationMs: 5 }));   // 分流缺 focus 欄位 → 視為失敗
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });
+
+  const { rows } = await dbModule2.query(
+    "SELECT agent_name, severity FROM health_check_findings WHERE run_id=$1 AND agent_name NOT IN ('__summary__','__system__','__triage__')", [runId]);
+  expect(rows).toHaveLength(2);                          // 兩關都有被檢查
+  expect(rows.every(r => r.severity === 'high')).toBe(true);   // 走的是深診那條路
+});
+
+// 意圖：分流若把全部都點名就等於沒篩，成本回到改版前。截斷是必要的，但**不能靜默**——
+// 被丟掉的關要寫進 finding，否則報告看起來像「全部都檢查過了」。
+test('focus 超過上限 → 截斷並把未深診的關寫進 finding', async () => {
+  buildAgentSummary.mockResolvedValue({ token: { calls: 5 }, tasks: {}, rejections: null });
+  mockRunClaude.mockImplementation(async (prompt) =>
+    ({ text: prompt.includes(TRIAGE_MARK) ? triageText(['qa', 'coding-project']) : deepText, usage: null, durationMs: 5 }));
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30 });   // 上限已在 beforeAll 設為 1
+
+  const { rows: [t] } = await dbModule2.query(
+    "SELECT rationale FROM health_check_findings WHERE run_id=$1 AND agent_name='__triage__'", [runId]);
+  expect(t.rationale).toContain('未深診');
+  expect(t.rationale).toContain('coding-project');
 });

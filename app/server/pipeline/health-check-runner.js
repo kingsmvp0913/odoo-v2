@@ -32,6 +32,12 @@ const SYSTEM_AGENT = '__system__';
 // 全域總結那一筆的 agent_name（見 summarizeRun）。與 SYSTEM_AGENT 分開存：一個是程式算的客觀
 // 統計、一個是模型的跨關推理，混在同一筆會讓「哪句話有數據撐、哪句是推論」再也分不出來。
 const SUMMARY_AGENT = '__summary__';
+// 分流那一筆（見 triageRun）。健檢改成兩階段：先用「全平台指標、不含任何提示詞」跑一次分流，
+// 點名值得深看的關，才對那幾關拉提示詞深診。原本是 21 關各跑一次 opus 再把結論拼起來——
+// 每一關只看得到自己，跨關問題於是每一關都正確地判成「與本關無關」，合起來沒有人負責。
+const TRIAGE_AGENT = '__triage__';
+// 深診上限：分流若把全部都點名就等於沒篩，成本回到改版前。截斷一律寫進 finding，不靜默丟掉。
+const MAX_FOCUS = parseInt(process.env.HEALTH_MAX_FOCUS || '8', 10);
 const SYSTEM_MIN_TASKS = parseInt(process.env.HEALTH_SYSTEM_MIN_TASKS || '2', 10);
 const SYSTEM_MIN_RATIO = parseFloat(process.env.HEALTH_SYSTEM_MIN_RATIO || '0.3');
 
@@ -133,6 +139,72 @@ async function summarizeRun(runId, startedBy) {
   return { severity, diagnosis };
 }
 
+// 分流未點名的關：直接落一筆 ok，零 token。刻意仍落一筆而不是整個略過——健檢頁少掉一半的關
+// 會讓人以為那些沒被檢查，而且下次續跑時 doneSet 也認不出它們已經處理過。
+async function recordSkipped(runId, agent, summary) {
+  const t = (summary && summary.token) || {};
+  const rc = (summary && summary.repeat_calls) || {};
+  const tk = (summary && summary.tasks) || {};
+  const severity = t.calls === 0 ? SEV_NO_SAMPLE : 'ok';
+  const diagnosis =
+    `分流階段未點名，未拉出提示詞深入診斷。近期指標：呼叫 ${t.calls || 0} 次、` +
+    `每張任務平均 ${rc.avg != null ? rc.avg : '—'} 次、卡死率 ${tk.stopped_rate != null ? tk.stopped_rate : '—'}、` +
+    `成本 $${t.cost_usd != null ? t.cost_usd : '—'}。`;
+  await query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
+     VALUES ($1,$2,$3,$4,$5,NULL,NULL)`,
+    [runId, agent.name, agent.label, diagnosis, severity]
+  ).catch(err => console.error('[HEALTH-CHECK] skipped finding:', err.message));
+}
+
+// 第一階段：一次看完全平台的指標（不含任何 agent 的提示詞），輸出跨關診斷＋值得深看的關。
+// 不給提示詞是刻意的——看了就會忍不住開始改它，而這一階段要決定的是「花錢深看誰」。
+// 失敗一律回 null，由呼叫端退回「逐關全檢」的舊行為：分流壞掉不可以變成「什麼都沒檢查」。
+async function triageRun(runId, targets, windowDays, startedBy) {
+  const summaries = new Map();
+  for (const a of targets) {
+    try { summaries.set(a.name, await buildAgentSummary(a, { windowDays })); }
+    catch (err) { console.error('[HEALTH-CHECK] summary error:', a.name, err.message); }
+  }
+  if (!summaries.size) return null;
+
+  let raw = null;
+  try {
+    const agent = loadAgent('health-triage');
+    const prompt = agent.render({ summaries: JSON.stringify([...summaries.values()], null, 1) });
+    const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+    raw = text;
+    await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
+    const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(text, 'diagnosis');
+    const { inner: ratBlock, cleaned } = extractTaggedBlock(afterDiag, 'rationale');
+    const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
+    const severity = String((parsed && parsed.severity) || '').trim().toLowerCase();
+    const diagnosis = String(diagBlock || '').trim();
+    if (!diagnosis || !SEVERITIES.has(severity) || !parsed || !Array.isArray(parsed.focus)) return null;
+
+    // 只認得出來的名字：模型可能回中文標籤或拼錯，濾掉才不會讓深診階段跑空
+    let focus = parsed.focus.map(x => String(x).trim()).filter(n => summaries.has(n));
+    let note = (ratBlock && ratBlock.trim()) || null;
+    if (focus.length > MAX_FOCUS) {
+      const dropped = focus.slice(MAX_FOCUS);
+      focus = focus.slice(0, MAX_FOCUS);
+      note = `${note || ''}
+（超過深診上限 ${MAX_FOCUS}，未深診：${dropped.join('、')}）`.trim();
+      console.warn(`[HEALTH-CHECK] focus 超過上限，未深診：${dropped.join(',')}`);
+    }
+    await query(
+      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
+       VALUES ($1,$2,$3,$4,$5,NULL,$6)`,
+      [runId, TRIAGE_AGENT, '健檢分流', diagnosis, severity, note]
+    );
+    return { focus, summaries };
+  } catch (err) {
+    await logFailedUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', err);
+    saveRawOutput(runId, TRIAGE_AGENT, raw);
+    return null;
+  }
+}
+
 // admin 一鍵健檢的背景執行（fire-and-forget）：對每個有 stage 的 pipeline agent（排除自己）
 // 聚合摘要 → 跑 opus 健檢 agent → 落一筆 finding。單一 agent 失敗不影響其他（best-effort）。
 async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {}) {
@@ -142,8 +214,26 @@ async function runHealthCheck(runId, { windowDays = 30, startedBy = null } = {})
     const doneSet = new Set(doneRows.map(r => r.agent_name));
     const targets = listAgents().filter(a => a.stage && a.stage !== 'workflow_health' && !doneSet.has(a.name));
     const ha = loadAgent('workflow-health');
-    for (const agent of targets) {
-      await checkOne(runId, agent, ha, windowDays, startedBy);
+
+    // 第一階段分流。續跑時若上一輪已落過分流就不重跑（deep 退回 targets，而 targets 本身
+    // 已排除有 finding 的關，等於只補完剩下的）。
+    let deep = targets;
+    let pre = null;
+    if (targets.length && !doneSet.has(TRIAGE_AGENT)) {
+      const tri = await triageRun(runId, targets, windowDays, startedBy)
+        .catch(err => { console.error('[HEALTH-CHECK] triage:', err.message); return null; });
+      if (tri) {
+        pre = tri.summaries;
+        const set = new Set(tri.focus);
+        deep = targets.filter(t => set.has(t.name));
+        for (const a of targets.filter(t => !set.has(t.name))) await recordSkipped(runId, a, pre.get(a.name));
+      } else {
+        // 分流壞掉退回舊行為（逐關全檢）而不是什麼都不檢：貴，但不會靜默漏掉整輪健檢
+        console.error('[HEALTH-CHECK] 分流失敗 → 退回逐關全檢');
+      }
+    }
+    for (const agent of deep) {
+      await checkOne(runId, agent, ha, windowDays, startedBy, pre && pre.get(agent.name));
     }
     // 跨關卡彙整（零 token，純統計）。續跑時已落過就不重複；失敗不影響整輪收尾——
     // 它是加值資訊，不該有能力讓已完成的 21 份 per-agent 診斷跟著作廢。
@@ -182,14 +272,14 @@ function saveRawOutput(runId, agentName, raw) {
   }
 }
 
-async function checkOne(runId, agent, ha, windowDays, startedBy) {
+async function checkOne(runId, agent, ha, windowDays, startedBy, preSummary = null) {
   let finding = null;
   // 摘要聚合失敗＝根本沒呼叫 claude，不可落失敗帳（否則 calls/failed_calls 統計灌水）
   let prompt = null;
   let summary = null;
   try {
     const full = loadAgent(agent.name);                     // 取現行 prompt body
-    summary = await buildAgentSummary(agent, { windowDays });
+    summary = preSummary || await buildAgentSummary(agent, { windowDays });   // 分流階段已算過就不重算
     prompt = ha.render({
       agent_label: agent.label,
       agent_role: full.role || '',

@@ -474,6 +474,16 @@ async function migrate() {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // agent 提示詞版本的出現時間。promptVersion() 本身只是內容 hash、不帶時間，健檢因此無從
+    // 分辨「這 30 天的指標是哪一版 prompt 產生的」——改完 prompt 隔天看到的數字，29 天來自舊版。
+    // 只在健檢掃到「現值與最後一列不同」時補一列，故也涵蓋直接改檔案（沒走 updateAgent）的情況。
+    `CREATE TABLE IF NOT EXISTS agent_prompt_versions (
+      id            SERIAL PRIMARY KEY,
+      agent_name    TEXT NOT NULL,
+      version       TEXT NOT NULL,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
     // 企業版來源：Odoo 企業版只是一包額外的 addons 目錄，故不分 image、只按「大版本」各備一份。
     // odoo_version 存大版本數字字串（'17'）：17 的 enterprise addons 不能給 18 用，一版一列。
     `CREATE TABLE IF NOT EXISTS enterprise_sources (

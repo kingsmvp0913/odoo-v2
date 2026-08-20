@@ -26,7 +26,7 @@ test('migrate 建立 health_check_runs / health_check_findings 兩表', async ()
   expect(f[0].severity).toBe('ok');
 });
 
-const { buildAgentSummary } = require('../pipeline/health-data');
+const { buildAgentSummary, buildTaskSummary } = require('../pipeline/health-data');
 
 test('buildAgentSummary 聚合 token / tasks / rejections（僅視窗內）', async () => {
   // 準備：coding 階段兩筆 token_usage（1 成功 1 失敗）＋窗外 1 筆不計
@@ -82,7 +82,7 @@ test('buildAgentSummary：coding 只看 QA impl_miss + env_flaky_count；human b
   await dbModule.query(
     "INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1,'d','實作錯誤')", [hr.id]);
 
-  const { buildAgentSummary } = require('../pipeline/health-data');
+  const { buildAgentSummary, buildTaskSummary } = require('../pipeline/health-data');
   const coding = await buildAgentSummary({ name: 'coding-project', stage: 'coding' });
   expect(coding.qa_rejections).toEqual({ relevant_category: 'impl_miss', count: 2, env_flaky_count: 1 });
   expect(coding.rejections.by_category).toEqual({ '實作錯誤': 2 }); // 不含 qa 的分類（累加前一個既有案例的 1 筆 human）
@@ -172,4 +172,114 @@ test('buildAgentSummary 對多閘門共用的 stage 標註「次數含跨閘門�
   expect(s.repeat_calls.note).toMatch(/不等於本關重跑/);
   const c = await buildAgentSummary({ name: 'coding-project', stage: 'coding', label: '開發' }, { windowDays: 30 });
   expect(c.repeat_calls.note).toBeUndefined();      // 單一閘門的就不要加噪音
+});
+
+
+// 意圖：wall-clock 只能對已完成的任務算。tasks 沒有 completed_at，只有隨狀態變更寫入的 updated_at；
+// 把進行中的任務混進來，updated_at 是「最後一次動」而非完成時刻，數字會失去意義。
+// 另外用 p50/p90 而非 avg：一張卡很久的任務會把平均整個洗掉，而那正是最該被看見的尾巴。
+test('wall_clock 只算 done 的任務，且以 p50/p90 呈現分佈尾巴', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hdw','h','HDW') RETURNING id");
+  // 三張 done：1h / 2h / 100h（第三張是卡很久那種），一張進行中（不該被算）
+  const mk = async (tid, status, hours) => {
+    await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, status, created_at, updated_at)
+       VALUES ($1,$2,'manual',$3, NOW() - ($4 || ' hours')::interval, NOW())`,
+      [u.id, tid, status, String(hours)]);
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id,user_id,agent_type,input_tokens,status,recorded_at)
+       VALUES ($1,$2,'wiki',1,'completed',NOW())`, [tid, u.id]);
+  };
+  await mk('W1', 'done', 1); await mk('W2', 'done', 2); await mk('W3', 'done', 100);
+  await mk('W4', 'coding_running', 500);
+
+  const s = await buildAgentSummary({ name: 'wiki', stage: 'wiki', label: 'Wiki' }, { windowDays: 30 });
+  expect(s.tasks.wall_clock.done_tasks).toBe(3);            // 進行中那張沒混進來
+  expect(s.tasks.wall_clock.p90_hours).toBeGreaterThan(50); // 尾巴看得見
+  expect(s.tasks.wall_clock.p50_hours).toBeLessThan(5);     // 中位數沒被尾巴拉走
+});
+
+// 意圖：repeat_calls 只是個數字，看不出重跑的「形狀」。coding↔qa 來回震盪與 qa 自己空轉，
+// 在 repeat_calls 上長得一模一樣，但成因與處置完全不同——序列是唯一能分辨的東西。
+test('sequences 呈現關卡間的震盪形狀，repeat_calls 的數字看不出來', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hds','h','HDS') RETURNING id");
+  await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, status) VALUES ($1,'S1','manual','stopped')", [u.id]);
+  const stages = ['analysis', 'cs', 'cs', 'analysis', 'cs'];   // cs↔analysis 之間來回
+  for (let i = 0; i < stages.length; i++) {
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id,user_id,agent_type,input_tokens,status,recorded_at)
+       VALUES ('S1',$1,$2,1,'completed', NOW() - ($3 || ' minutes')::interval)`,
+      [u.id, stages[i], String(100 - i * 10)]);
+  }
+
+  const s = await buildAgentSummary({ name: 'cs', stage: 'cs', label: '客服' }, { windowDays: 30 });
+  const seq = s.tasks.sequences.find(x => x.task_id === 'S1');
+  expect(seq).toBeTruthy();
+  // 連續同關折疊成一格：看的是關卡之間的來回，不是同關重跑幾次
+  expect(seq.seq).toBe('analysis→cs→analysis→cs');
+});
+
+// 意圖：scope=task 與 scope=platform 是同一批資料的兩個投影。單張任務要看得到「走過哪些關、
+// 每關花多少」，否則「拉一張任務出來按健檢」根本沒有素材，只剩最終 blocker 文字。
+test('buildTaskSummary 把單張任務展開成序列與每關花費', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hdt','h','HDT') RETURNING id");
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, status, reentry_count, qa_retry_count, blocker_content)
+     VALUES ($1,'X1','manual','stopped',2,3,'升級失敗') RETURNING id`, [u.id]);
+  for (const [stage, ms] of [['analysis', 1000], ['coding', 5000], ['qa', 2000], ['coding', 4000]]) {
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id,user_id,agent_type,input_tokens,output_tokens,duration_ms,status,recorded_at)
+       VALUES ('X1',$1,$2,10,20,$3,'completed',NOW())`, [u.id, stage, ms]);
+  }
+
+  const s = await buildTaskSummary(t.id);
+  expect(s.scope).toBe(`task:${t.id}`);
+  expect(s.task.qa_retry_count).toBe(3);
+  expect(s.task.blocker).toBe('升級失敗');
+  expect(s.sequence).toContain('coding');
+  expect(s.per_stage.coding.calls).toBe(2);            // 這關在這張任務上重跑了
+  expect(s.per_stage.coding.duration_ms).toBe(9000);
+  expect(s.per_stage.qa.calls).toBe(1);
+});
+
+test('buildTaskSummary 對不存在的任務回 null（不得丟例外中斷健檢）', async () => {
+  expect(await buildTaskSummary(999999)).toBeNull();
+});
+
+
+// 意圖：健檢看到的 30 天指標，多數可能是舊版 prompt 產生的——改完 prompt 隔天就分析，29 天的
+// 資料都與現版無關。prompt_version 給出「這版何時上線／上線後累積幾筆」，讓判準能擋掉
+// 「拿舊版資料判新版好壞」。刻意不篩掉舊資料：改完當天必然 0 筆，硬篩健檢就整個瞎掉。
+test('prompt_version 記錄本版上線時間與上線後樣本數（真 agent 才追）', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('hdp','h','HDP') RETURNING id");
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id,user_id,agent_type,input_tokens,status,recorded_at)
+     VALUES ('P1',$1,'reject_classify',1,'completed',NOW())`, [u.id]);
+
+  const s1 = await buildAgentSummary(
+    { name: 'reject-classifier', stage: 'reject_classify', label: '退回分類' }, { windowDays: 30 });
+  expect(s1.prompt_version).toBeTruthy();
+  expect(typeof s1.prompt_version.version).toBe('string');
+  expect(s1.prompt_version.calls_since).toBe(1);
+  // 首次記錄用 .md mtime 回填而非 NOW()——用 NOW() 的話首輪每一關都是 0 筆，判準會全面判「樣本不足」
+  expect(s1.prompt_version.seeded).toBe(true);
+
+  // 版本沒變就不該再插一列，否則窗口起點每跑一次健檢就被重設成「剛剛」
+  await buildAgentSummary(
+    { name: 'reject-classifier', stage: 'reject_classify', label: '退回分類' }, { windowDays: 30 });
+  const { rows } = await dbModule.query(
+    "SELECT COUNT(*)::int AS n FROM agent_prompt_versions WHERE agent_name='reject-classifier'");
+  expect(rows[0].n).toBe(1);
+});
+
+// 意圖：測試與健檢都會傳進不存在的 agent 名（假 agent、被刪掉的 .md）。追不到版本必須靜靜略過，
+// 不能讓整份摘要連帶失敗——健檢是 best-effort，一個 agent 追不到不該拖垮其他 20 個。
+test('prompt_version：載不到該 agent 檔時回 null，不丟例外', async () => {
+  const s2 = await buildAgentSummary({ name: '不存在的agent', stage: 'wiki', label: 'X' }, { windowDays: 30 });
+  expect(s2.prompt_version).toBeNull();
 });

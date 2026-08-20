@@ -39,6 +39,7 @@ per-agent 指標與 per-task 歷程是同一批資料的兩個投影，不是兩
 | `qa_rejections.env_flaky_count` | 環境／暫時性雜訊 | **不是 prompt 問題，不得據此改 prompt**；高則屬 pipeline／環境層 |
 | `wiki_drift`（chat／cs） | 文件與程式碼矛盾的回報 | 反映知識庫品質，非該 agent 的推理品質 |
 | `repeat_calls` 的 multi-gate note | 該 stage 底下有多個不同閘門 | 有 note 時次數**不等於**本關重跑，別讀成空轉 |
+| `prompt_version.calls_since` | 現行這版 prompt 上線後累積的樣本數 | 遠小於 `token.calls` ＝ 指標多數由**舊版** prompt 產生，**不得據此判斷本版好壞**；`seeded: true` 表示上線時間是用檔案 mtime 估的，更要打折 |
 | `token.calls` = 0 | 沒被呼叫過 | **不是健康**。照實寫零樣本，不得憑空編問題或改 prompt |
 
 ## 裁決：證據強度決定能動哪一層
