@@ -54,5 +54,31 @@ secret = os.environ.get('AIDEV_SSO_SECRET')
 if secret:
     env['ir.config_parameter'].sudo().set_param('aidev.sso_secret', secret)
 
+# 企業版到期日：Odoo 建 DB 時把 database.expiration_date 設成一個月後的試用期，期滿後企業版後台
+# 就開始擋操作，得有人手動來改。測試區不是正式訂閱，故建置時直接推到 50 年後（值由平台端算好
+# 傳入；社群版不傳，也就不寫）。
+#
+# 順帶停用「更新通知」cron（mail.ir_cron_module_update_notification）：它每週去 odoo.com 驗訂閱，
+# 回應帶 enterprise_info 時就把上面這行寫的到期日覆寫回試用期（mail/models/update.py）——症狀是
+# 「明明設過了，過陣子又到期」，而且完全不指向這支排程。測試區本來就不需要回報用量給 odoo.com。
+#
+# 首次建置時多半停不到：那時只裝了 base／web／idx_aidev_sso，mail 還沒進來、cron 也就還不存在，
+# 會走到底下那行警告。這不是 bug——seed 每次啟動測試區都會重跑（見 env-agent 的 _runEnvSetupDocker），
+# 等專案模組把 mail 帶進來之後的下一次啟動就會停用它；而到期日本身每次啟動都重寫成 50 年後，
+# 就算中間真的被 cron 改回試用期也會被蓋回來，不會累積漂移。
+# xmlid 隨版本搬過家，找不到就用它的 model 兜底；兩條都撲空只印警告不中斷（到期日已寫成功，
+# 不該讓整支 seed 失敗、連帶讓環境建不起來）。
+expiration = os.environ.get('AIDEV_EXPIRATION_DATE')
+if expiration:
+    env['ir.config_parameter'].sudo().set_param('database.expiration_date', expiration)
+    cron = env.ref('mail.ir_cron_module_update_notification', raise_if_not_found=False)
+    if not cron:
+        cron = env['ir.cron'].sudo().with_context(active_test=False).search(
+            [('model_id.model', '=', 'publisher_warranty.contract')])
+    if cron:
+        cron.sudo().write({'active': False})
+    else:
+        print('SEED_CRON_WARN 更新通知 cron 尚不存在（mail 未安裝），待下次啟動再停用')
+
 env.cr.commit()
 print('SEED_DONE', seeded)

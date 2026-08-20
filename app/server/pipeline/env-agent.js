@@ -969,20 +969,41 @@ async function _ensureEnvCredentials(projectId) {
   return { ssoSecret, e2ePassword };
 }
 
+// 企業版測試區的訂閱到期日。Odoo 建 DB 時把 database.expiration_date 預設成一個月後（試用期），
+// 期滿後企業版後台會擋操作、要人工去 ir.config_parameter 改一次——測試區既非正式訂閱，這個到期
+// 日對它沒有任何意義，只是每個月固定來討一次工。故 seed 時一律推到 50 年後。
+// 只企業版寫：社群版沒有到期鎖，寫了是憑空多一個沒人看得懂的參數。
+// 格式固定 '%Y-%m-%d %H:%M:%S'（Odoo 的 DEFAULT_SERVER_DATETIME_FORMAT，前後端解析到期日都認它）。
+const ENTERPRISE_EXPIRATION_YEARS = 50;
+function enterpriseExpirationDate(now = new Date()) {
+  const d = new Date(now.getTime());
+  d.setFullYear(d.getFullYear() + ENTERPRISE_EXPIRATION_YEARS);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // seed users（docker）：odoo shell + stdin 腳本。不再撈全平台 users＋password_hash 灌進測試區（憑證外洩），
 // 只 seed E2E 帳號一筆（每環境隨機密碼），並把該環境 SSO secret 透過 AIDEV_SSO_SECRET 傳入，由腳本寫進
 // ir.config_parameter('aidev.sso_secret') 供 idx_aidev_sso 驗章。其餘平台使用者改由 SSO JIT 首登時建立。
 async function _seedOdooUsersDocker(ctx) {
   const users = [{ login: E2E_LOGIN, name: 'E2E 自動測試', password_plain: ctx.e2ePassword }];
   const script = fs.readFileSync(path.join(__dirname, 'seed_odoo_users.py'), 'utf8');
+  const isEnterprise = ctx.project && ctx.project.edition === 'enterprise';
+  // 到期日在迴圈外算一次：重試各輪寫進去的值必須是同一個，否則重試前後的到期日會差幾秒，
+  // 徒增「同一次建置寫了兩個不同值」的疑惑。
+  const seedEnv = {
+    SEED_USERS: JSON.stringify(users), AIDEV_SSO_SECRET: ctx.ssoSecret,
+    ...(isEnterprise ? { AIDEV_EXPIRATION_DATE: enterpriseExpirationDate() } : {}),
+    PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
+  };
   let last = '';
   for (let attempt = 1; attempt <= SEED_MAX_ATTEMPTS; attempt++) {
     const { code, stdout, stderr } = await dockerEnv.execOdoo({
       container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
       odooArgs: ['shell', '--no-http'], interactive: true,
-      env: { SEED_USERS: JSON.stringify(users), AIDEV_SSO_SECRET: ctx.ssoSecret, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+      env: seedEnv,
     }, { input: script });
-    if (code === 0) return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
+    if (code === 0) return `[seed] E2E + sso secret${isEnterprise ? ' + 企業版到期日' : ''} → ${String(stdout).trim().slice(-200)}\n`;
     last = (stderr || stdout || '').slice(-300);
     // 序列化失敗／死鎖是暫態，重試即可：waitForModulesInstalled 只保證「-i 的模組已 commit」，常駐
     // server 之後還在跑收尾（_register_hook、ir.cron 排程），而 seed 是另一個進程，兩邊撞同幾張表就
@@ -996,4 +1017,4 @@ async function _seedOdooUsersDocker(ctx) {
   throw new Error(last);
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, ENV_BASE, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor };
