@@ -17,6 +17,8 @@ When the user types `/debugTask`, invoke the Skill tool with `skill: "debugTask"
 When the user types `/platformDev`, invoke the Skill tool with `skill: "platformDev"` before doing anything else.
 - **wikiQuery** (`.claude/skills/wikiQuery/SKILL.md`) - 查專案 wiki 知識庫（頁面清單／內容／troubleshooting 排障結論）與漂移修正流向。觸發：`/wikiQuery`
 When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"` before doing anything else.
+- **healthCheck** (`.claude/skills/healthCheck/SKILL.md`) - 平台健檢判準：指標判讀、裁決的證據門檻、什麼才配列入修改、已知盲區。跑健檢、看健檢結果、或判斷某關要不要改 prompt 之前必讀。觸發：`/healthCheck`
+When the user types `/healthCheck`, invoke the Skill tool with `skill: "healthCheck"` before doing anything else.
 <!-- /platform-only -->
 
 ## 0. Hard Rules

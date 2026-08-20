@@ -65,6 +65,25 @@ test('runHealthCheck：遍歷有 stage 的 agent（排除 workflow_health），�
   expect(run.finished_at).not.toBeNull();
 });
 
+test('每次呼叫 claude 都帶 repo 根當 cwd → 判準 skill 載得到', async () => {
+  // headless claude 只認 cwd 的 project skill、不會往上層找，而 server 是 npm start（cwd=app/）起的。
+  // 不帶 cwd 時 .claude/skills/healthCheck 載不到，agent 會在沒有判準的情況下照常產出診斷——
+  // 測試全綠、健檢照跑，只是判讀規則沒生效。這條把 cwd 釘住，別再退回零訊號的狀態。
+  mockRunClaude.mockResolvedValue({
+    text: '<result>{"diagnosis":"ok","severity":"low","suggested_prompt":null,"rationale":"r"}</result>',
+    usage: { input_tokens: 1 }, durationMs: 10
+  });
+  const runId = await newRun();
+  await runHealthCheck(runId, { windowDays: 30, startedBy: null });
+
+  expect(mockRunClaude).toHaveBeenCalled();
+  const repoRoot = path.join(__dirname, '..', '..', '..');
+  for (const [, opts] of mockRunClaude.mock.calls) {
+    expect(opts.cwd).toBe(repoRoot);
+  }
+  expect(nodeFs.existsSync(path.join(repoRoot, '.claude', 'skills', 'healthCheck', 'SKILL.md'))).toBe(true);
+});
+
 test('某 agent 解析失敗 → 落 severity=error finding，其他 agent 照跑，run 仍 done', async () => {
   // 兩個 agent × (主呼叫 + haiku 補救) 都回壞資料 → parseAgentResult 回 null
   mockRunClaude.mockResolvedValue({ text: '不是結果', usage: null, durationMs: 5 });

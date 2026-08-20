@@ -9,6 +9,13 @@ const { buildAgentSummary } = require('./health-data');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 
+// 健檢子行程一律在 repo 根執行：judging 用的判準寫在 .claude/skills/healthCheck，而 headless
+// claude 只認 cwd 的 project skill、不會往上層目錄找。server 是 `npm start`（cwd=app/）起的，
+// 不指定 cwd 就落在 app/ 而載不到——實測從 app/ 問「有沒有 healthCheck skill」回 NONE、從 repo
+// 根回 FOUND。這種缺失完全沒有訊號：agent 照跑、測試全綠，只是判準沒生效。
+const REPO_ROOT = path.join(__dirname, '..', '..', '..');
+
+
 // 近期完全沒被呼叫的關卡不可記成 ok：健檢 agent 自己在診斷正文裡都寫明「零執行樣本，這不是
 // 健康證明」，但存成 ok 到前端就是一顆綠燈。實測 run#2 的 14 個 ok 裡，deploy-fix 與
 // wiki-drift-classifier 都是 0 次呼叫——整頁綠得虛胖，反而蓋掉真正該看的那幾則。
@@ -107,7 +114,7 @@ async function summarizeRun(runId, startedBy) {
     ).join('\n\n'),
     system_stat: sys ? `${sys.diagnosis}\n\n（依據：${sys.rationale || ''}）`.trim() : '（無）'
   });
-  const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health' });
+  const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
   await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
   // 比照 checkOne：長文字走獨立標籤，<result> 的 JSON 只剩一個短值，幾乎壞不掉。
   const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(text, 'diagnosis');
@@ -194,7 +201,7 @@ async function checkOne(runId, agent, ha, windowDays, startedBy) {
   }
   let raw = null;
   if (prompt) try {
-    const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health' });
+    const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health', cwd: REPO_ROOT });
     raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
     // 三個長文字（建議提示詞／診斷正文／理由）全部走獨立標籤區塊，剝乾淨後 <result> 的 JSON
