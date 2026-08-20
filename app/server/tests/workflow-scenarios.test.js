@@ -51,6 +51,16 @@ jest.mock('../pipeline/env-agent', () => ({
   runtimeLogPath: dir => dir + '/odoo.log'
 }));
 jest.mock('../pipeline/ensure-env', () => ({ ensureEnvRunning: jest.fn().mockResolvedValue(true) }));
+// 這支跑完整 pipeline，會經過六個關卡的組 prompt；coreSourceGuidance 在核心快取沒命中時會
+// fire-and-forget 去跑真 docker 解壓核心原始碼（1.2G／版本）。本機因為 data/odoo-core 常年是熱的
+// 看不出來，CI／新機器上跑一次測試就會下載解壓好幾 GB（rules/testing.md #23 的 hermetic 要求）。
+// 守則文字對本檔要驗的流程語意毫無影響，直接給固定字串。
+jest.mock('../lib/odoo-core-src', () => ({
+  coreSourceGuidance: jest.fn().mockReturnValue('（測試用核心資料來源守則）'),
+  ensureOdooCoreSrc: jest.fn().mockResolvedValue(''),
+  majorOf: jest.fn().mockReturnValue(''),
+  CORE_SRC_ROOT: '/core-src'
+}));
 // 只 mock runClaude 本體；abortError/stopReason 用真品，確保上層錯誤語意與正式碼一致
 jest.mock('../pipeline/claude-runner', () => {
   const actual = jest.requireActual('../pipeline/claude-runner');

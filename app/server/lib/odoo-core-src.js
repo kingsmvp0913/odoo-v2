@@ -1,6 +1,15 @@
-// Odoo 核心原始碼供給：把 odoo-idx:<major> image 內的核心 addons 解壓到 host 唯讀快取，
+// Odoo 核心原始碼供給：把 odoo-idx:<major> image 內的核心原始碼解壓到 host 唯讀快取，
 // 讓在 worktree 內作業的 pipeline agent（coding／qa／analysis…）能直接 Grep／Read 原生 template／
 // class／xpath 目標——取代「worktree 沒核心碼、只能盲查 Context7 猜結構」的長尾亂跑。
+//
+// 解兩段，分開落地成 <root>/<major>/addons 與 <root>/<major>/odoo：
+//   addons（1.4G）：原生模組，view／template／business logic 的真相。
+//   框架本體（3M）：ORM 與工具層（`tools/convert.py`／`models`／`fields`／`http.py`…）。
+//     原本刻意不解，實測是錯的決定——慈雲 task #173：`<menuitem groups="...">` 的排除前綴由
+//     `odoo/tools/convert.py` 的 `_tag_menuitem` 決定（只認 `-`，`!` 是 view arch 的語義），
+//     該檔不在解出範圍內，於是分析關編出「`!` 已於核心文件確認支援」寫進規格、部署炸掉；
+//     coding 改對了，QA 卻拿 addons 內的 res_users.py 判它錯，兩關互斥撞 reentry 上限 stopped。
+//     兩邊都「有原始碼佐證」，只因真相檔不在手上。多解 3M（addons 的 0.2%）即根治。
 //
 // 兩層分工，刻意不讓 docker 進到「組 prompt」這條同步路徑：
 //   coreSourceGuidance()：純同步、只做 fs.existsSync。快取有就把路徑寫進 prompt；沒有就回既有的
@@ -31,16 +40,34 @@ function majorOf(odooVersion) {
   return dockerEnv.majorDigits(odooVersion || '');
 }
 
-function pathsFor(major) {
-  const destDir = path.join(CORE_SRC_ROOT, major);
-  return { destDir, addonsDir: path.join(destDir, 'addons'), marker: path.join(destDir, '.extracted') };
+// image 內的 odoo 套件根＝核心 addons 的父目錄。只有 docker-env.CORE_ADDONS 一份真相
+//（可用 ODOO_IMAGE_CORE_ADDONS 覆寫），這裡一律推導，不另抄字面值。
+function frameworkSrc() {
+  const pkgDir = path.posix.dirname(dockerEnv.CORE_ADDONS);   // …/dist-packages/odoo
+  return {
+    parent: path.posix.dirname(pkgDir),                       // …/dist-packages
+    name: path.posix.basename(pkgDir),                        // odoo
+    addonsName: path.posix.basename(dockerEnv.CORE_ADDONS)    // addons
+  };
 }
 
-// 快取查詢（同步、只碰檔案系統）：marker＋addons 都在才算解壓完成，否則回空字串。
+function pathsFor(major) {
+  const destDir = path.join(CORE_SRC_ROOT, major);
+  return {
+    destDir,
+    addonsDir: path.join(destDir, 'addons'),
+    frameworkDir: path.join(destDir, frameworkSrc().name),
+    marker: path.join(destDir, '.extracted')
+  };
+}
+
+// 快取查詢（同步、只碰檔案系統）：marker＋addons＋框架本體都在才算解壓完成，否則回空字串。
+// 框架本體也要查：本功能上線前解出的快取只有 marker＋addons，不查就會被永遠當成已完成，
+// 對既有的 17／18／19 三份快取等於改動沒生效。
 function cachedCoreSrc(major) {
   if (!major) return '';
-  const { addonsDir, marker } = pathsFor(major);
-  return (fs.existsSync(marker) && fs.existsSync(addonsDir)) ? addonsDir : '';
+  const { addonsDir, frameworkDir, marker } = pathsFor(major);
+  return (fs.existsSync(marker) && fs.existsSync(addonsDir) && fs.existsSync(frameworkDir)) ? addonsDir : '';
 }
 
 // 單一 docker IO 出口。刻意用 callback 式而非 util.promisify：真的 execFile 帶 promisify.custom
@@ -62,7 +89,9 @@ function docker(args, timeout) {
 // 實測 643/643 全數解出、20 秒。
 // 自己用 spawn 接管道而不是 sh -c 'a | b'：管道的 exit code 只反映最後一段，cp 的失敗會被
 // tar 的 0 蓋掉讀成成功（rules/always #12 已因此誤判三次）。
-function cpTarStream(cid, srcPath, destDir, timeout) {
+// 兩段解壓共用這支：addons 段的產生者是 `docker cp …  -`，框架本體段是 `docker run --entrypoint tar`
+//（讓 tar 在容器內就把 addons 濾掉，只有 3M 過管道；用 docker cp 拉整個套件根會再串一次 1.4G）。
+function dockerTarStream(dockerArgs, destDir, timeout) {
   return new Promise((resolve, reject) => {
     const errs = [];
     let settled = false, cpCode = null, tarCode = null;
@@ -72,11 +101,11 @@ function cpTarStream(cid, srcPath, destDir, timeout) {
       clearTimeout(timer);
       if (err) reject(err); else resolve();
     };
-    const dock = spawn('docker', ['cp', `${cid}:${srcPath}`, '-']);
+    const dock = spawn('docker', dockerArgs);
     const untar = spawn('tar', ['-xf', '-', '-C', destDir]);
     const timer = setTimeout(() => {
       dock.kill('SIGKILL'); untar.kill('SIGKILL');
-      finish(new Error(`docker cp 逾時（${timeout}ms）`));
+      finish(new Error(`docker ${dockerArgs[0]} 逾時（${timeout}ms）`));
     }, timeout);
     // 任一端提早死掉時，對已關閉的管道寫入會發 EPIPE；歸因由下面的 close code 負責，這裡吞掉即可
     dock.stdout.on('error', () => {});
@@ -88,7 +117,7 @@ function cpTarStream(cid, srcPath, destDir, timeout) {
     const check = () => {
       if (cpCode === null || tarCode === null) return;
       if (cpCode === 0 && tarCode === 0) return finish();
-      finish(new Error(`docker cp/tar 失敗（cp=${cpCode} tar=${tarCode}）：${errs.join('').trim().slice(0, 300)}`));
+      finish(new Error(`docker/tar 失敗（docker=${cpCode} tar=${tarCode}）：${errs.join('').trim().slice(0, 300)}`));
     };
     dock.on('close', (c) => { cpCode = c; check(); });
     untar.on('close', (c) => { tarCode = c; check(); });
@@ -97,28 +126,44 @@ function cpTarStream(cid, srcPath, destDir, timeout) {
 }
 
 async function extract(major) {
-  const { destDir, addonsDir, marker } = pathsFor(major);
+  const { destDir, addonsDir, frameworkDir, marker } = pathsFor(major);
   const image = dockerEnv.imageTagFor(major);   // 與 env-agent 建/用的 image 同一個 tag 來源
+  const src = frameworkSrc();
   let cid = '';
   try {
     fs.mkdirSync(destDir, { recursive: true });
     cid = await docker(['create', image], 60000);
     if (!cid) return '';
     // 先解到暫存再原子 rename——半途失敗不會留下殘缺目錄被下一輪當成「已完成」。
+    // 兩段都走同一個暫存目錄，各自 rename 完就清掉。
     const tmp = path.join(destDir, '.addons.tmp');
-    fs.rmSync(tmp, { recursive: true, force: true });
-    fs.mkdirSync(tmp, { recursive: true });      // tar -C 要求目錄先存在
-    // image 內核心 addons 路徑取自 docker-env（可用 ODOO_IMAGE_CORE_ADDONS 覆寫），不另存一份會漂移的副本。
-    // tar 串流以來源目錄名為根 → 解出來是 <tmp>/addons，取它去 rename。
-    await cpTarStream(cid, dockerEnv.CORE_ADDONS, tmp, 180000);
+    const freshTmp = () => {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.mkdirSync(tmp, { recursive: true });    // tar -C 要求目錄先存在
+    };
+    // ① 核心 addons。image 內路徑取自 docker-env（可用 ODOO_IMAGE_CORE_ADDONS 覆寫），
+    // 不另存一份會漂移的副本。tar 串流以來源目錄名為根 → 解出來是 <tmp>/addons，取它去 rename。
+    freshTmp();
+    await dockerTarStream(['cp', `${cid}:${dockerEnv.CORE_ADDONS}`, '-'], tmp, 180000);
     fs.rmSync(addonsDir, { recursive: true, force: true });
-    fs.renameSync(path.join(tmp, path.posix.basename(dockerEnv.CORE_ADDONS)), addonsDir);
+    fs.renameSync(path.join(tmp, src.addonsName), addonsDir);
+    // ② 框架本體（ORM／tools）。讓 tar 在容器內就排除 addons，只有 3M 過管道；
+    // 用 docker cp 拉整個套件根會把 1.4G 再串一次。--entrypoint tar 而非 sh -c，
+    // 這樣 docker run 的 exit code 就是 tar 的 exit code，不會被 shell 蓋掉。
+    freshTmp();
+    await dockerTarStream([
+      'run', '--rm', '--entrypoint', 'tar', image,
+      '-cf', '-', `--exclude=${src.name}/${src.addonsName}`, '--exclude=__pycache__',
+      '-C', src.parent, src.name
+    ], tmp, 120000);
+    fs.rmSync(frameworkDir, { recursive: true, force: true });
+    fs.renameSync(path.join(tmp, src.name), frameworkDir);
     fs.rmSync(tmp, { recursive: true, force: true });   // 只剩空殼，留著會讓下一輪誤以為有殘留
     fs.writeFileSync(marker, `${image}\n${new Date().toISOString()}\n`);
     return addonsDir;
   } catch (e) {
     _failedAt.set(major, Date.now());
-    console.warn(`[ODOO-CORE-SRC] 解壓核心 addons 失敗（image=${image}）：${e.message}`);
+    console.warn(`[ODOO-CORE-SRC] 解壓核心原始碼失敗（image=${image}）：${e.message}`);
     return '';
   } finally {
     if (cid) { try { await docker(['rm', '-f', cid], 30000); } catch { /* 清不掉不影響結果 */ } }
@@ -149,16 +194,18 @@ function coreSourceGuidance(odooVersion) {
     if (major) ensureOdooCoreSrc(odooVersion).catch(() => {});   // 背景解壓，不阻塞本次組 prompt
     return '**只用 Context7 MCP**。Odoo 核心原始碼不在你的 worktree（本次快取取不到），**嚴禁**用 `find`／`ls`／`Get-ChildItem` 掃硬碟找 odoo 核心／odoo-bin／odoo-envs／venv（`find /`、掃 `C:\\`、`/c/odoo` 這類廣掃會被平台掃碟守衛中止、白燒整回合）。Context7 查不到就依 Odoo 慣例謹慎判斷，**不要掃碟**。';
   }
+  const { frameworkDir } = pathsFor(major);
   return [
-    '本專案 Odoo 版本的核心 addons 已解壓到**唯讀**路徑，內部結構問題一律**先在這裡 Grep／Read**（這是真相來源，比 Context7 準）：',
-    `  ${dir}`,
-    '- 查原生 template／view 長怎樣、某個 xpath 對不對得到目標節點、原生 module 的 class／method 怎麼實作、原生 selector／class 名 → 直接 Grep 這條路徑，別只靠 Context7 猜結構。',
+    '本專案 Odoo 版本的核心原始碼已解壓到**唯讀**路徑，內部結構問題一律**先在這裡 Grep／Read**（這是真相來源，比 Context7 準）：',
+    `  原生模組（addons）：${dir}`,
+    `  框架本體（ORM／tools）：${frameworkDir}`,
+    '- 查原生 template／view 長怎樣、某個 xpath 對不對得到目標節點、原生 module 的 class／method 怎麼實作、原生 selector／class 名 → 直接 Grep 上面的 addons 路徑，別只靠 Context7 猜結構。',
+    '- **XML data file 的欄位怎麼被解析**（`<menuitem>`／`<record>`／`<field eval>` 的屬性語法、群組排除前綴、`ref`／`Command` 語意）→ 真相在框架本體的 `tools/convert.py`，**不在 addons 也不在任何 view 相關的碼**。這兩處語意不同、會互相誤導：`menuitem` 的 `groups` 由 `_tag_menuitem` 解析（排除前綴是 `-`），而 view arch 的 `groups="!..."` 走 `has_groups()`——拿其中一邊的證據去判另一邊，兩關會各自「有原始碼佐證」卻結論相反，把任務卡到彈跳上限。ORM 行為（`models`／`fields`／`api`）與 controller／routing（`http.py`）同理，一律先查框架本體。',
     '- **具名任何原生欄位／方法／群組屬性之前，先在這條路徑 Grep 一次確認它在本版本真的存在**。Odoo 改版會整個移除或改名（實例：`res.groups.category_id` 到 19 換成 `privilege_id`），而參照舊版寫法不會報錯、只會在部署那一刻才爆。',
     '- **規格與這裡的原始碼衝突時，以原始碼為準**：規格具名的東西在本版本查無 → 依此版本的等價做法實作，不要為了照規格而把不存在的欄位寫回去。（否則會卡死：部署關要求刪掉、審查關要求補上，兩關各自都判對，碼怎麼改都被打回。）',
-    '- 這裡只有 addons（原生模組）；ORM 本體（`models.py`／`fields.py`／`http.py`／`tools/`）不在，那類問題仍走 Context7。',
-    '- 這裡**唯讀不可改、也不要 `cd` 進去跑 git**；要改的碼永遠在上面本任務的 repo。',
-    '- 抽象的 API 概念、版本差異、decorator 慣例，或這條路徑裡確實找不到時，才用 Context7 MCP 補。',
-    '- 一樣**嚴禁** `find /`／掃整顆硬碟找核心（會被掃碟守衛中止、白燒整輪）——核心就在上面這條路徑，不要去別處找。'
+    '- 這兩條路徑**唯讀不可改、也不要 `cd` 進去跑 git**；要改的碼永遠在上面本任務的 repo。',
+    '- 抽象的 API 概念、版本差異、decorator 慣例，或這兩條路徑裡確實找不到時，才用 Context7 MCP 補。',
+    '- 一樣**嚴禁** `find /`／掃整顆硬碟找核心（會被掃碟守衛中止、白燒整輪）——核心就在上面這兩條路徑，不要去別處找。'
   ].join('\n');
 }
 

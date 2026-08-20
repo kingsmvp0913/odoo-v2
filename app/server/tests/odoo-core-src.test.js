@@ -14,22 +14,26 @@ function mockDocker(impl) {
   });
 }
 
-// 解壓那段走 spawn（docker cp 吐 tar → 本機 tar 解），需要能收 close 事件的假行程。
-// codes 給非 0 即模擬該端失敗。
+// 解壓那段走 spawn（docker 吐 tar → 本機 tar 解），需要能收 close 事件的假行程。
+// codes 給非 0 即模擬該端失敗；給 function 則以 (cmd, args) 決定 code——解壓分兩段
+// （addons 走 `cp`、框架本體走 `run`）都是 docker，要靠 args 才分得開。
 function mockSpawn(codes = {}) {
-  spawn.mockImplementation((cmd) => {
+  const codeOf = typeof codes === 'function' ? codes : (cmd) => codes[cmd] ?? 0;
+  spawn.mockImplementation((cmd, args) => {
     const p = new EventEmitter();
     p.stdout = Object.assign(new EventEmitter(), { pipe: jest.fn() });
     p.stderr = new EventEmitter();
     p.stdin = new EventEmitter();
     p.kill = jest.fn();
-    setImmediate(() => p.emit('close', codes[cmd] ?? 0));
+    setImmediate(() => p.emit('close', codeOf(cmd, args) ?? 0));
     return p;
   });
 }
 
-// 取出某個指令的 spawn 參數（docker / tar）
+// 取出某個指令的 spawn 參數（docker / tar）——docker 有多段時取第一段（addons）
 const spawnArgs = (cmd) => (spawn.mock.calls.find((c) => c[0] === cmd) || [])[1];
+// 取出所有該指令的 spawn 參數，用來分辨 addons 段與框架本體段
+const allSpawnArgs = (cmd) => spawn.mock.calls.filter((c) => c[0] === cmd).map((c) => c[1]);
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -121,6 +125,74 @@ describe('ensureOdooCoreSrc', () => {
     }
   });
 
+  // 意圖（這一條是踩過才有的，慈雲 task #173）：只解 addons 時，`odoo/tools/convert.py` 這類
+  // 框架本體不在 agent 手上。該檔的 `_tag_menuitem` 決定了 `<menuitem groups="...">` 的排除前綴是
+  // `-` 而非 view arch 的 `!`——分析關查不到卻寫了「已於核心文件確認支援 `!`」，部署炸掉；
+  // coding 改對成 `-`，QA 拿 addons 內的 res_users.py（那是 view arch 語義）判它錯，兩關互斥
+  // 撞 reentry 上限而 stopped。兩邊都「有原始碼佐證」，因為真相檔根本不在解出來的範圍內。
+  test('解壓要同時取框架本體（tools／models／fields／http.py），不是只有 addons', async () => {
+    fs.existsSync.mockReturnValue(false);
+    mockDocker(args => (args[0] === 'create' ? 'cid-fw' : ''));
+    await ensureOdooCoreSrc('19.3');
+    const dockerCalls = allSpawnArgs('docker');
+    expect(dockerCalls).toHaveLength(2);                     // addons 一段、框架本體一段
+    const fw = dockerCalls[1].join(' ');
+    expect(fw).toMatch(/\bodoo-idx:19\b/);                   // 對到本版本 image
+    expect(fw).toMatch(/--exclude[= ]odoo\/addons/);         // 不再拉一次 1.4GB 的 addons
+    // 框架本體 rename 到 <root>/19/odoo，與 addons 分開落地
+    expect(fs.renameSync).toHaveBeenCalledWith(expect.stringMatching(/odoo$/), expect.stringMatching(/[\\/]19[\\/]odoo$/));
+  });
+
+  // 意圖：框架本體的來源同樣只有 docker-env.CORE_ADDONS 一份真相（其父目錄即 odoo 套件根）。
+  // 另抄一份字面值的話，改 ODOO_IMAGE_CORE_ADDONS 會變成 addons 解得到、框架本體靜默解錯地方。
+  // 用 env 覆寫成非預設值才有鑑別力（testing.md #18）。
+  test('框架本體的來源路徑由 docker-env.CORE_ADDONS 推導，不是自己抄一份', async () => {
+    const prev = process.env.ODOO_IMAGE_CORE_ADDONS;
+    process.env.ODOO_IMAGE_CORE_ADDONS = '/custom/core/addons';
+    try {
+      let core, cp;
+      jest.isolateModules(() => { core = require('../lib/odoo-core-src'); cp = require('child_process'); });
+      cp.execFile.mockImplementation((cmd, args, opts, cb) => cb(null, args[0] === 'create' ? 'cid-2' : '', ''));
+      cp.spawn.mockImplementation(() => {
+        const p = new EventEmitter();
+        p.stdout = Object.assign(new EventEmitter(), { pipe: jest.fn() });
+        p.stderr = new EventEmitter();
+        p.stdin = new EventEmitter();
+        p.kill = jest.fn();
+        setImmediate(() => p.emit('close', 0));
+        return p;
+      });
+      await core.ensureOdooCoreSrc('16.1');
+      // /custom/core/addons ⇒ 套件根 /custom/core：tar 的 -C 是它的父目錄、成員名是套件名
+      const fw = cp.spawn.mock.calls.filter(c => c[0] === 'docker')[1][1];
+      expect(fw.join(' ')).toContain('-C /custom core');
+      expect(fw.join(' ')).toMatch(/--exclude[= ]core\/addons/);     // 套件名與 addons 名皆由該路徑推導
+      expect(fw.join(' ')).not.toContain('dist-packages');           // 沒有殘留的字面值預設路徑
+    } finally {
+      if (prev === undefined) delete process.env.ODOO_IMAGE_CORE_ADDONS;
+      else process.env.ODOO_IMAGE_CORE_ADDONS = prev;
+    }
+  });
+
+  // 意圖：本功能上線前解出的快取（marker＋addons 齊、無框架本體）必須被判為未完成並重解。
+  // 只看 marker＋addons 的話，那三份既有快取會被永遠當成已完成，改動對現存版本等於沒生效。
+  test('舊快取只有 addons、缺框架本體 → 視為未完成，重新解壓', async () => {
+    fs.existsSync.mockImplementation(p => !String(p).endsWith(`${require('path').sep}odoo`));
+    mockDocker(args => (args[0] === 'create' ? 'cid-stale' : ''));
+    await ensureOdooCoreSrc('18.1');
+    expect(execFile).toHaveBeenCalledWith('docker', ['create', 'odoo-idx:18'], expect.anything(), expect.any(Function));
+  });
+
+  // 意圖：與 addons 段同理——框架本體只解一半就寫 marker，等於把殘缺快取標成已完成，
+  // 之後永遠不再重試，而 agent 會拿到一個「找不到就以為原生沒這東西」的路徑，比沒有更糟。
+  test('框架本體段非 0 → 不寫 marker、回空字串', async () => {
+    fs.existsSync.mockReturnValue(false);
+    mockDocker(args => (args[0] === 'create' ? 'cid-fwfail' : ''));
+    mockSpawn((cmd, args) => (cmd === 'docker' && args[0] !== 'cp' ? 1 : 0));   // cp 成功、框架段失敗
+    await expect(ensureOdooCoreSrc('19.4')).resolves.toBe('');
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
   // 意圖：cp 失敗（如上述 invalid symlink）必須讓整輪解壓算失敗、不得寫 marker——
   // 寫了 marker 就等於把「半套的 387 個模組」標成已完成，之後永遠不再重試，而 agent 會拿到
   // 一個看似可用、實則缺一半模組的核心路徑：比完全沒有更糟（找不到就以為原生沒這東西）。
@@ -183,6 +255,17 @@ describe('coreSourceGuidance', () => {
     const g = coreSourceGuidance('19.0');
     expect(g).toContain('確認它在本版本真的存在');
     expect(g).toContain('以原始碼為準');
+  });
+
+  // 意圖：守則若只列 addons 路徑，agent 就不知道框架本體也在本機——task #173 的 coding 正是
+  // 因此改去 `find / -name convert.py`，被掃碟守衛中止（守衛沒錯，錯在平台沒給替代來源）。
+  // 同時舊守則那句「ORM 本體不在，那類問題仍走 Context7」現在是假的，留著會主動勸退 agent。
+  test('取得核心 → 守則同時給框架本體路徑，且不再宣稱本體不在', () => {
+    fs.existsSync.mockReturnValue(true);
+    const g = coreSourceGuidance('19.0');
+    expect(g).toMatch(/[\\/]19[\\/]odoo\b/);        // 框架本體路徑要寫出來
+    expect(g).toMatch(/convert\.py|tools/);         // 指名 data file 解析器那類真相檔
+    expect(g).not.toContain('ORM 本體');            // 舊的勸退句必須移除
   });
 
   test('取不到核心 → 退回既有安全行為（只用 Context7＋嚴禁掃碟）', () => {
