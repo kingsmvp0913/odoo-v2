@@ -8,6 +8,7 @@ const notify = require('../notify');
 const { assembleTaskContext } = require('./sync');
 const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
 const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
+const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { machineLogHeader } = require('../../public/js/machine-logs.js');
 
 async function runCsAgent(taskId, userId, signal) {
@@ -44,10 +45,12 @@ async function runCsAgent(taskId, userId, signal) {
   let projectName = '（未綁定專案）';
   let projectSlug = '';
   let repoPaths = '（無 repo，僅能查 wiki／正式區 DB／log）';
+  let odooVersion = '';
   if (task.project_id) {
     const info = await getProjectInfo(task.project_id).catch(() => null);
     if (info) {
       projectName = info.name;
+      odooVersion = info.odoo_version || '';
       // 見 chat-agent.js 同段註解：中文專案名未編碼會讓 /ai/wiki 的 curl 直接 400
       projectSlug = encodeURIComponent(info.folder_name || info.name);
       if (info.repos.length) repoPaths = info.repos.map(r => `- ${r.local_path}`).join('\n');
@@ -62,7 +65,10 @@ async function runCsAgent(taskId, userId, signal) {
     prior_reply: priorReply,
     project_name: projectName,
     project_slug: projectSlug,
-    repo_paths: repoPaths
+    repo_paths: repoPaths,
+    // 未綁專案時 odooVersion 為 undefined → coreSourceGuidance 回「只用 Context7＋嚴禁掃碟」那版，
+    // 永遠不會是空字串，故不需另外守衛（空字串會讓 placeholder 靜默塌成空洞）。
+    odoo_core_src: coreSourceGuidance(odooVersion)
   });
 
   // 續接輪只送「使用者這輪講的話」：追問（cs_reply_pending→cs_running）與補資料
@@ -76,8 +82,10 @@ async function runCsAgent(taskId, userId, signal) {
   // 只寫在 fresh prompt 裡、但每輪都該生效的權威內容折進指紋（見 with-resume.js 的 extraVersion）：
   // 任務原文／附件（assembleTaskContext）與 repo 路徑會中途變動——補了附件、或原本未綁專案後來綁了，
   // session 內都還是舊快照。折進去才會在變動時自動退回 fresh，重讀新脈絡。
+  // 核心守則同理：某版本第一次遇到時快取還沒解好，回的是「只用 Context7」那版；解完之後
+  // 續接中的 session 若不折進指紋，就會一直停在舊快照、永遠不知道核心路徑已經有了。
   const ctxVersion = crypto.createHash('sha1')
-    .update(`${task.original_text || ''}\n${repoPaths}\n${projectSlug}`)
+    .update(`${task.original_text || ''}\n${repoPaths}\n${projectSlug}\n${coreSourceGuidance(odooVersion)}`)
     .digest('hex').slice(0, 12);
 
   let result = null;

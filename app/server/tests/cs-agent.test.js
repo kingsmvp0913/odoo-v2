@@ -6,6 +6,14 @@ jest.mock('../pipeline/claude-runner', () => ({
   runClaude: mockRunClaude
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
+// 核心原始碼守則：mock 掉真實實作，否則快取沒命中時 coreSourceGuidance 會 fire-and-forget
+// 去跑真 docker 解壓 1.2G（rules/testing.md #23 的 hermetic 要求）。回傳哨兵字串，好驗它有被帶進 prompt。
+jest.mock('../lib/odoo-core-src', () => ({
+  coreSourceGuidance: jest.fn().mockReturnValue('【核心原始碼守則哨兵】/core-src/19/odoo'),
+  ensureOdooCoreSrc: jest.fn().mockResolvedValue(''),
+  majorOf: jest.fn().mockReturnValue(''),
+  CORE_SRC_ROOT: '/core-src'
+}));
 
 let dbModule, runCsAgent;
 let userSeq = 0;
@@ -197,6 +205,21 @@ test('重跑時把先前輪次的答案帶入 prompt（修復 cs_data_needed↔c
   // 資訊已足夠 → 判 clear → 有專案 → 進分析（不再卡 cs_data_needed）
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(t.status).toBe('analysis_running');
+});
+
+// 意圖（慈雲 task #174 實測）：cs 的 prompt 原本只寫「Odoo 原生 API → 用 context7 查證」，
+// 沒給核心原始碼路徑。實跑時它先 `find` 找 convert.py 被掃碟守衛擋下，再連打 7 次以上 Context7，
+// 在 2 分 22 秒的關卡裡燒掉約 1 分鐘——而下一關（分析）拿到路徑後 37 秒就讀到同一份檔案。
+// rules/agent-prompt #107：「引用 Odoo 原生行為的關卡」要成對配置，只禁不給等於逼 agent 亂跑。
+test('cs 的 prompt 要帶核心原始碼路徑守則，不能只叫它查 Context7', async () => {
+  mockRunClaude.mockResolvedValueOnce({ text: '<result>{"type":"code_change_clear","reply":null,"question":null}</result>', usage: null, durationMs: null });
+  const { userId, taskId } = await makeTask({ withProject: true, title: '選單重複', text: '管理者看到兩個一樣的選單' });
+  await runCsAgent(taskId, userId);
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('【核心原始碼守則哨兵】');   // 有真的把守則帶進去
+  // placeholder 沒對應到 var 時 agent-loader 會渲染成空字串、只留 console 告警（最難察覺的失敗）
+  expect(prompt).not.toContain('{{odoo_core_src}}');
 });
 
 // 意圖（Rule 12）：契約只有三種 type，未知值以前會靜默放行成 code_change_clear → 拿垃圾輸出繼續燒 analysis token

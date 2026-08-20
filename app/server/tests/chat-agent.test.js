@@ -4,6 +4,14 @@
 const mockRunClaude = jest.fn().mockResolvedValue({ text: '回覆', usage: {}, durationMs: 1 });
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: (...a) => mockRunClaude(...a) }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
+// chat 與 cs 共用 cs-capability.md，同樣要帶核心原始碼守則。mock 掉真實實作：快取沒命中時
+// coreSourceGuidance 會 fire-and-forget 去跑真 docker 解壓 1.2G（rules/testing.md #23）。
+jest.mock('../lib/odoo-core-src', () => ({
+  coreSourceGuidance: jest.fn().mockReturnValue('【核心原始碼守則哨兵】/core-src/19/odoo'),
+  ensureOdooCoreSrc: jest.fn().mockResolvedValue(''),
+  majorOf: jest.fn().mockReturnValue(''),
+  CORE_SRC_ROOT: '/core-src'
+}));
 
 const mockQuery = jest.fn();
 jest.mock('../db', () => ({ query: (...a) => mockQuery(...a) }));
@@ -33,6 +41,16 @@ test('prompt 帶入專案名、指示按需查 wiki，不預載 wiki 內容', as
   expect(prompt).not.toContain('請根據以下 Wiki 資料回答'); // 無舊 wiki 優先框架
   expect(prompt).not.toContain('# 專案備註（人工維護，優先遵循）'); // 未寫備註 → 不注入備註區塊
   expect(prompt).toContain('無 repo');   // 未 clone repo → 走 fallback 文案
+});
+
+// 意圖：與 cs 共用同一份 cs-capability.md，核心守則必須兩邊都真的渲染得出來。
+// 只在 cs-agent.js 補傳值、忘了 chat-agent.js 的話，chat 這邊會靜默渲染成空字串
+// （agent-loader 只留 console 告警）——skill 明列的 Common Mistake：「改 cs-capability.md 只想著 cs」。
+test('chat 也要拿到核心原始碼路徑守則（共用片段，兩個呼叫端都要傳值）', async () => {
+  await chatReply('1', '2', 'menuitem 的 groups 可以排除群組嗎', 99);
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('【核心原始碼守則哨兵】');
+  expect(prompt).not.toContain('{{odoo_core_src}}');
 });
 
 test('專案有備註 → 注入 prompt（供 chat 優先遵循，免再 curl）', async () => {
