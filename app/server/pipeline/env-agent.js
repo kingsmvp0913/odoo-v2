@@ -530,6 +530,9 @@ function _envInt(name, def) {
 }
 const IDLE_TIMEOUT_MIN = _envInt('ENV_IDLE_TIMEOUT_MIN', 0);
 const MAX_LIFETIME_HOURS = _envInt('ENV_MAX_LIFETIME_HOURS', 20);
+// seed 撞上併發寫入時的重試（見 _seedOdooUsersDocker）。延遲可設 0 供測試。
+const SEED_MAX_ATTEMPTS = _envInt('ENV_SEED_MAX_ATTEMPTS', 3);
+const SEED_RETRY_DELAY_MS = _envInt('ENV_SEED_RETRY_DELAY_MS', 2000);
 
 async function sweepIdleEnvs(deps = {}) {
   const idleMin = deps.idleMin ?? IDLE_TIMEOUT_MIN;
@@ -962,13 +965,25 @@ async function _ensureEnvCredentials(projectId) {
 async function _seedOdooUsersDocker(ctx) {
   const users = [{ login: E2E_LOGIN, name: 'E2E 自動測試', password_plain: ctx.e2ePassword }];
   const script = fs.readFileSync(path.join(__dirname, 'seed_odoo_users.py'), 'utf8');
-  const { code, stdout, stderr } = await dockerEnv.execOdoo({
-    container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
-    odooArgs: ['shell', '--no-http'], interactive: true,
-    env: { SEED_USERS: JSON.stringify(users), AIDEV_SSO_SECRET: ctx.ssoSecret, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
-  }, { input: script });
-  if (code !== 0) throw new Error((stderr || stdout || '').slice(-300));
-  return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
+  let last = '';
+  for (let attempt = 1; attempt <= SEED_MAX_ATTEMPTS; attempt++) {
+    const { code, stdout, stderr } = await dockerEnv.execOdoo({
+      container: ctx.container, dbName: ctx.dbName, dbArgs: ctx.dbArgs, mounts: ctx.mounts,
+      odooArgs: ['shell', '--no-http'], interactive: true,
+      env: { SEED_USERS: JSON.stringify(users), AIDEV_SSO_SECRET: ctx.ssoSecret, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+    }, { input: script });
+    if (code === 0) return `[seed] E2E + sso secret → ${String(stdout).trim().slice(-200)}\n`;
+    last = (stderr || stdout || '').slice(-300);
+    // 序列化失敗／死鎖是暫態，重試即可：waitForModulesInstalled 只保證「-i 的模組已 commit」，常駐
+    // server 之後還在跑收尾（_register_hook、ir.cron 排程），而 seed 是另一個進程，兩邊撞同幾張表就
+    // 吃到 REPEATABLE READ 的 40001。這是 PostgreSQL 對該隔離層級的正常契約（「重試我」），但這裡
+    // 一次失敗就往外拋、呼叫端隨即移除容器整個建置失敗——使用者看到的是「seed 失敗（SSO／E2E 憑證
+    // 未寫入）」＋一段 psycopg2 traceback，得手動重建一次才會好，且訊息完全指不到真正的原因。
+    // 腳本本身是 search-then-write（seed_odoo_users.py），重跑安全。非暫態錯誤不重試，立刻拋。
+    if (!/could not serialize access|deadlock detected|SerializationFailure/i.test(last)) break;
+    if (attempt < SEED_MAX_ATTEMPTS) await new Promise(r => setTimeout(r, SEED_RETRY_DELAY_MS * attempt));
+  }
+  throw new Error(last);
 }
 
 module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, ENV_BASE, dockerCtxFor };

@@ -49,10 +49,12 @@ beforeAll(async () => {
     ODOO_ENV_BASE: process.env.ODOO_ENV_BASE,
     ENV_BIND_HOST: process.env.ENV_BIND_HOST,
     ENV_HEALTH_TIMEOUT_MS: process.env.ENV_HEALTH_TIMEOUT_MS,
+    ENV_SEED_RETRY_DELAY_MS: process.env.ENV_SEED_RETRY_DELAY_MS,
   };
   process.env.ODOO_ENV_BASE = tmpBase;   // 否則會寫進真實 repo 樹下的 odoo-envs/
   process.env.ENV_BIND_HOST = '127.0.0.1';
   process.env.ENV_HEALTH_TIMEOUT_MS = '2000';
+  process.env.ENV_SEED_RETRY_DELAY_MS = '0';  // 重試間隔在測試裡沒有意義，只會拖慢
 
   // 真的開一個 listener 當「容器已在監聽」：健康檢查是真函式（waitForPort），探不到就走不到 seed。
   listener = net.createServer(sock => sock.destroy());
@@ -106,6 +108,33 @@ test('seed 失敗 → 落 error 且 error_msg 指名 seed，絕不可標 running
   expect(env.status).toBe('error');
   expect(env.error_msg).toContain('seed');
   expect(env.setup_log).toContain('[seed] FAIL');
+});
+
+// 意圖：seed 是獨立進程，與剛啟動的常駐 Odoo 併發寫同幾張表（模組 installed 已 commit ≠ server 收尾
+// 完成——_register_hook／ir.cron 排程仍在寫 DB），撞上 REPEATABLE READ 就吃到 40001。這是 PostgreSQL
+// 對該隔離層級的正常契約（「重試我」），一次失敗就整個建置失敗的話，使用者每次第一次啟動測試區都會
+// 看到「seed 失敗（SSO／E2E 憑證未寫入）」＋psycopg2 traceback，得手動再建一次才會好（實測回報）。
+test('seed 撞序列化失敗 → 自動重試而非整包失敗（使用者不必手動重建一次）', async () => {
+  dockerEnv.execOdoo.mockResolvedValueOnce({
+    code: 1, stdout: '',
+    stderr: 'psycopg2.errors.SerializationFailure: could not serialize access due to concurrent update',
+  }); // 第二次落回預設的 code 0
+  await envAgent.runEnvSetup(PID);
+  const { rows: [env] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [PID]);
+  expect(env.status).toBe('running');
+  expect(dockerEnv.execOdoo.mock.calls.length).toBe(2); // 真的重試了，不是碰巧第一次就成功
+});
+
+// 有鑑別力的反例：證明上面那條不是「所有錯誤都重試」。程式錯（如模組欄位不存在）重試幾次都一樣，
+// 只會把建置時間乘上重試次數，還讓真正的錯誤訊息晚幾輪才浮上來。
+test('seed 撞非暫態錯誤 → 不重試，立刻落 error', async () => {
+  dockerEnv.execOdoo.mockResolvedValueOnce({
+    code: 1, stdout: '', stderr: "ValueError: Invalid field 'show' on model 'ir.module.category'",
+  });
+  await envAgent.runEnvSetup(PID);
+  const { rows: [env] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [PID]);
+  expect(env.status).toBe('error');
+  expect(dockerEnv.execOdoo.mock.calls.length).toBe(1);
 });
 
 // 意圖：狀態說 error、容器卻還在跑＝閒置回收（只掃 status='running'）永遠不會收它，那個容器
