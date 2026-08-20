@@ -593,7 +593,9 @@ describe('SPEC_LOOKUP_AGENTS 注入查碼守則', () => {
 // 意圖（Rule 9）：發問守則要進「會產出要使用者回答的問題」的四關。三條規則各自針對一個實測過的病症：
 // Q1 決策樹＝規格只寫了「一次列齊所有阻斷性模糊點」卻沒給窮盡的方法；Q2＝把該自己讀 code 的事拿去問人
 // （cs 已有此規則、成效實證，這裡泛化到其他三關）；Q3＝丟白卷讓非工程師面對空白提示詞。
-// 名單刻意不含 spec-review／respec-patch（只回答與改規格、自己不提問）與 qa（低頻出口，且每輪必跑＝最貴注入點）。
+// 名單刻意不含 spec-review／respec-patch 與 qa，但兩者理由不同：qa 是低頻出口且每輪必跑＝最貴注入點；
+// spec-review／respec-patch 則是 body 各自寫了完整的「什麼情況一定要反問」規則（2026-08-20 更正：
+// 原註解寫它們「自己不提問」是錯的），它們吃的是 QUESTIONS_CONTRACT_AGENTS 的格式契約。
 describe('ASKING_WELL_AGENTS 注入發問守則', () => {
   const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
   const AW_HEADER = '# 發問守則';
@@ -608,9 +610,9 @@ describe('ASKING_WELL_AGENTS 注入發問守則', () => {
     } finally { spy.mockRestore(); }
   });
 
-  // 這條鎖住的是「誰該收到」這個判斷本身：spec-review／respec-patch 讀對話後只回答或重產規格，
-  // 自己不提問；qa 的 spec_questions 是低頻出口而它每輪必跑。日後要加人進來必須先讓這條紅。
-  test('不產題目的關不注入（spec-review／respec-patch／qa／coding-project）', () => {
+  // 這條鎖住的是「誰該收到」這個判斷本身：qa 的 spec_questions 是低頻出口而它每輪必跑；
+  // spec-review／respec-patch 的反問規則寫在各自 body。日後要加人進來必須先讓這條紅。
+  test('不吃發問守則的關（spec-review／respec-patch／qa／coding-project）', () => {
     const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       for (const n of ['spec-review', 'respec-patch', 'qa', 'coding-project']) {
@@ -665,6 +667,180 @@ describe('ASKING_WELL_AGENTS 注入發問守則', () => {
       expect(promptVersion('qa')).toBe(beforeQa); // 未注入的關不受影響
     } finally {
       fs.writeFileSync(AW_PATH, orig);
+    }
+  });
+});
+
+// 意圖（Rule 9）：三關原本各自手抄一份「題目撰寫契約」，且已經漂移——analysis-project 寫了
+// `depends_on: { question: q1, equals: A }` 的完整語法，clarify-chat 只寫「用 depends_on 欄位表達」，
+// 於是同一份畫面規格在兩關有兩種寫法。抽成片段後三關共用同一份真相；這組測試鎖住「誰吃、順序、
+// 內容完整、進指紋」四件事，因為漏注入與內容被截斷都是靜默失敗（agent 照跑，只是格式錯到畫面上）。
+describe('QUESTIONS_CONTRACT_AGENTS 注入題目撰寫契約', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const QC_HEADER = '# 題目撰寫契約';
+
+  test('三關全數注入（防未來改名或打錯字靜默失效）', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const n of ['analysis-project', 'clarify-chat', 'respec-patch']) {
+        expect(loadAgent(n).render({})).toContain(QC_HEADER);
+      }
+    } finally { spy.mockRestore(); }
+  });
+
+  // clarify-chat-retry 走 --resume 繼承上一輪對話，重送共用片段等於重複佔 context
+  // （rules/agent-prompt 104）。它 body 裡只留一句指回，不吃這片段——日後要加它必須先讓這條紅。
+  test('retry 關與不產題目的關不注入（clarify-chat-retry／qa／coding-project／chat）', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const n of ['clarify-chat-retry', 'qa', 'coding-project', 'chat']) {
+        expect(loadAgent(n).render({})).not.toContain(QC_HEADER);
+      }
+    } finally { spy.mockRestore(); }
+  });
+
+  // 契約規範的是 body 的輸出格式，故排在所有共用片段之後、最貼近 body
+  test('順序：發問守則 → 專案備註 → 題目撰寫契約 → body', () => {
+    const out = loadAgent('analysis-project').render({
+      project_name: 'P', odoo_version: '17.0', work_dir: '/w', repo_list: '- sale/',
+      task_id: 'task_1', original_text: 'x', clarification: '（無）', cs_findings: '（無）',
+      main_branch: 'main', git_branch: 'task/x', repo_paths: '- /w/sale',
+      project_notes: '窗口 Amy'
+    });
+    const iAsk = out.indexOf('# 發問守則');
+    const iNotes = out.indexOf('# 專案備註（人工維護，優先遵循）');
+    const iQc = out.indexOf(QC_HEADER);
+    const iBody = out.indexOf('你是 Odoo 開發需求分析師');
+    expect(iAsk).toBeGreaterThanOrEqual(0);
+    expect(iNotes).toBeGreaterThan(iAsk);
+    expect(iQc).toBeGreaterThan(iNotes);
+    expect(iBody).toBeGreaterThan(iQc);
+  });
+
+  // 這七條是片段的全部價值；被截斷或改寫掉任一條，注入照樣「成功」而不會有紅燈。
+  // 每條都對應一個實際壞掉的樣子：雙重編號、條件敘述寫進 text 逼使用者自己判斷該不該答、
+  // 選項寫成 (A)(B)(C) 讓他打字、丟白卷沒有建議、把定義題也附上建議而誘導他按預設。
+  test('七條規則都在片段裡（片段被截斷時要紅）', () => {
+    const out = loadAgent('clarify-chat').render({ analysis_yaml: 'module: sale', conversation: 'x', mode_rule: 'answer' });
+    expect(out).toContain('不得放進 `questions`');
+    expect(out).toContain('`id`／`text`／`type`');
+    expect(out).toContain('雙重編號');
+    expect(out).toContain('depends_on: { question: q1, equals: A }');
+    expect(out).toContain('(A)(B)(C)');
+    expect(out).toContain('recommended_why');
+    expect(out).toContain('不得換個說法再問一次');
+  });
+
+  // 同 asking-well／plain-language 的教訓：片段沒進指紋 → 綁定的 resume session 不 fresh，
+  // 新規則永遠不生效且無錯誤訊息
+  test('promptVersion 把題目撰寫契約算進靜態指紋（改片段就換版）', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const QC_PATH = path.join(__dirname, '..', 'pipeline', 'questions-contract.md');
+    const orig = fs.readFileSync(QC_PATH, 'utf8');
+    try {
+      const before = promptVersion('analysis-project');
+      const beforeChat = promptVersion('chat');
+      fs.writeFileSync(QC_PATH, `${orig}\n\n<!-- 指紋探針 -->\n`);
+      expect(promptVersion('analysis-project')).not.toBe(before);
+      expect(promptVersion('chat')).toBe(beforeChat); // 未注入的關不受影響
+    } finally {
+      fs.writeFileSync(QC_PATH, orig);
+    }
+  });
+});
+
+// 意圖（Rule 9）：第二輪去重的三個片段。抽取判準是「會不會漂移」而非「重複幾次」——這三組在各 body
+// 的措辭都已各自演化（figma 有五份、每份的後續動作不同；必問三種有四份、只有兩份帶「不是可以嗎」的
+// 問法提示；視覺值有三份、只有一份提到 figma）。反之「Think in English…」那句雖也重複五份卻逐字相同、
+// 內容穩定，刻意不抽（抽了只是多一個檔要維護）。這組測試鎖住「誰吃、內容完整、方位詞指得到、進指紋」。
+describe('第二輪共用片段（must-ask／figma／visual-values）', () => {
+  const { loadAgent, promptVersion } = require('../pipeline/agent-loader');
+  const MA = '# 這三種一律要問';
+  const FG = '# 需求、對話或附件裡出現 figma.com 連結時';
+  const VV = '# 規格裡既有的視覺值不准憑印象改';
+  const quiet = fn => { const spy = jest.spyOn(console, 'warn').mockImplementation(() => {}); try { fn(); } finally { spy.mockRestore(); } };
+
+  test('must-ask 進四關、不進其他關', () => {
+    quiet(() => {
+      for (const n of ['analysis-project', 'clarify-chat', 'respec-patch', 'spec-review']) {
+        expect(loadAgent(n).render({})).toContain(MA);
+      }
+      // qa 的 spec_questions 是低頻出口；coding／chat 不產規格題目
+      for (const n of ['qa', 'coding-project', 'chat', 'clarify-chat-retry']) {
+        expect(loadAgent(n).render({})).not.toContain(MA);
+      }
+    });
+  });
+
+  // chat／cs 原本從 cs-capability.md 拿到 figma 段，改由本片段供應——漏掉它們等於這兩關靜默失去該規則
+  test('figma 進六關（含 chat／cs：從 cs-capability 搬家而來）', () => {
+    quiet(() => {
+      for (const n of ['analysis-project', 'clarify-chat', 'respec-patch', 'spec-review', 'chat', 'cs']) {
+        expect(loadAgent(n).render({})).toContain(FG);
+      }
+      for (const n of ['qa', 'coding-project', 'merge']) {
+        expect(loadAgent(n).render({})).not.toContain(FG);
+      }
+    });
+  });
+
+  // 產生端（analysis-project 看截圖量值）與保護端（不准憑印象改）規則不同，刻意只給保護端
+  test('visual-values 只進保護端兩關，不進產生端', () => {
+    quiet(() => {
+      for (const n of ['spec-review', 'respec-patch']) expect(loadAgent(n).render({})).toContain(VV);
+      for (const n of ['analysis-project', 'spec-review-retry', 'clarify-chat']) {
+        expect(loadAgent(n).render({})).not.toContain(VV);
+      }
+    });
+  });
+
+  // 片段內互相引用時寫了方位詞（visual-values 說「理由見上方【figma】」、cs-capability 說「見下方【figma】」）。
+  // 注入順序一改，這些方位詞就指向錯的地方，而且不會有任何紅燈——這條把順序釘死。
+  test('方位詞指得到：spec-review 是 must-ask → figma → visual-values → body', () => {
+    const out = loadAgent('spec-review').render({ analysis_yaml: 'module: sale', conversation: 'x', repo_paths: '- /w/sale' });
+    const iMa = out.indexOf(MA), iFg = out.indexOf(FG), iVv = out.indexOf(VV);
+    const iBody = out.indexOf('你是 Odoo 開發任務「規格審核閘門」的對話夥伴');
+    expect(iMa).toBeGreaterThanOrEqual(0);
+    expect(iFg).toBeGreaterThan(iMa);
+    expect(iVv).toBeGreaterThan(iFg);   // visual-values 說「理由見上方【figma】」
+    expect(iBody).toBeGreaterThan(iVv); // 各 body 說「見上方【…】」
+  });
+
+  test('cs-capability 在 figma 之上（它寫的是「見下方【figma】」）', () => {
+    const out = loadAgent('cs').render({ project_name: 'P', project_slug: 'p', repo_paths: '- /w/sale', title: 't', original_text: 'x' });
+    expect(out.indexOf('你是本專案的技術客服')).toBeLessThan(out.indexOf(FG));
+  });
+
+  test('三份片段的核心條款都在（被截斷時要紅）', () => {
+    const out = loadAgent('respec-patch').render({ analysis_yaml: 'module: sale', requirements: 'x', repo_paths: '- /w/sale' });
+    expect(out).toContain('兩種以上合理做法');       // must-ask 條一
+    expect(out).toContain('已過帳的單據還能不能改');  // must-ask 條二
+    expect(out).toContain('**不是**「可以嗎」');       // must-ask 條三的問法提示
+    expect(out).toContain('只拿得到空殼');            // figma
+    expect(out).toContain('更協調');                  // visual-values：形容詞化＝把規格作廢
+    expect(out).toContain('hover');                   // visual-values：量不出來的項目
+  });
+
+  test('promptVersion 把三份片段都算進靜態指紋', () => {
+    const fs = require('fs');
+    const path = require('path');
+    for (const [file, agent, unaffected] of [
+      ['must-ask.md', 'analysis-project', 'chat'],
+      ['figma-unavailable.md', 'chat', 'qa'],
+      ['visual-values.md', 'spec-review', 'analysis-project']
+    ]) {
+      const P = path.join(__dirname, '..', 'pipeline', file);
+      const orig = fs.readFileSync(P, 'utf8');
+      try {
+        const before = promptVersion(agent);
+        const beforeUn = promptVersion(unaffected);
+        fs.writeFileSync(P, `${orig}\n\n<!-- 指紋探針 -->\n`);
+        expect(promptVersion(agent)).not.toBe(before);
+        expect(promptVersion(unaffected)).toBe(beforeUn);
+      } finally {
+        fs.writeFileSync(P, orig);
+      }
     }
   });
 });

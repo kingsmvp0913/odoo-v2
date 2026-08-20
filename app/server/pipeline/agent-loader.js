@@ -82,6 +82,67 @@ function loadSpecLookup() {
   return text;
 }
 
+// 以下三個片段是 2026-08-20 第二輪去重的產物。抽取判準不是「重複幾次」而是「會不會漂移」：
+// 這三組在各 body 的措辭都已各自演化（例外條款有的有有的沒有、例子不同、第三條的問法提示只有兩份有），
+// 於是同一件事在不同關拿到不同強度的指示。反之「Think in English…保留英文術語」那句雖然也重複 5 份，
+// 卻是逐字相同且內容穩定到不會漂移，抽出來只是多一個檔要維護——刻意不抽。
+
+// 「這三種一律要問」：走完發問守則的決策樹後不准剪掉的底線。四關共用。
+const MUST_ASK_AGENTS = new Set(['analysis-project', 'clarify-chat', 'respec-patch', 'spec-review']);
+const MUST_ASK_MD_PATH = path.join(__dirname, 'must-ask.md');
+let _mustAskCache = null;
+
+function loadMustAsk() {
+  const stat = fs.statSync(MUST_ASK_MD_PATH);
+  if (_mustAskCache && _mustAskCache.mtimeMs === stat.mtimeMs) return _mustAskCache.text;
+  const text = fs.readFileSync(MUST_ASK_MD_PATH, 'utf8').trim();
+  _mustAskCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
+// 「平台讀不到 Figma」：共同核心抽出來，各關拿到細節後走哪個出口仍留在自己 body。
+// 含 chat／cs——這兩關原本從 cs-capability.md 拿到同一段，改由本片段供應（搬家，非新增）。
+const FIGMA_AGENTS = new Set(['analysis-project', 'clarify-chat', 'respec-patch', 'spec-review', 'chat', 'cs']);
+const FIGMA_MD_PATH = path.join(__dirname, 'figma-unavailable.md');
+let _figmaCache = null;
+
+function loadFigma() {
+  const stat = fs.statSync(FIGMA_MD_PATH);
+  if (_figmaCache && _figmaCache.mtimeMs === stat.mtimeMs) return _figmaCache.text;
+  const text = fs.readFileSync(FIGMA_MD_PATH, 'utf8').trim();
+  _figmaCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
+// 「既有視覺值不准憑印象改」：規格的保護端兩關。產生端（analysis-project 量截圖）規則不同，不吃這片段；
+// spec-review-retry 走 --resume 繼承上一輪，body 只留一句摘要（rules/agent-prompt 104）。
+const VISUAL_VALUES_AGENTS = new Set(['spec-review', 'respec-patch']);
+const VISUAL_VALUES_MD_PATH = path.join(__dirname, 'visual-values.md');
+let _visualValuesCache = null;
+
+function loadVisualValues() {
+  const stat = fs.statSync(VISUAL_VALUES_MD_PATH);
+  if (_visualValuesCache && _visualValuesCache.mtimeMs === stat.mtimeMs) return _visualValuesCache.text;
+  const text = fs.readFileSync(VISUAL_VALUES_MD_PATH, 'utf8').trim();
+  _visualValuesCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
+// 會輸出 clarification_channel.questions 結構化題目的三關共用的「題目撰寫契約」（questions-contract.md）。
+// 原本三份各自手抄、且已經漂移（analysis-project 有 `depends_on` 的完整語法，clarify-chat 只寫「用 depends_on 表達」）。
+// clarify-chat-retry 刻意不注入：它靠 --resume 繼承上一輪對話，重送等於重複佔 context（rules/agent-prompt 104）。
+const QUESTIONS_CONTRACT_AGENTS = new Set(['analysis-project', 'clarify-chat', 'respec-patch']);
+const QUESTIONS_CONTRACT_MD_PATH = path.join(__dirname, 'questions-contract.md');
+let _questionsContractCache = null;
+
+function loadQuestionsContract() {
+  const stat = fs.statSync(QUESTIONS_CONTRACT_MD_PATH);
+  if (_questionsContractCache && _questionsContractCache.mtimeMs === stat.mtimeMs) return _questionsContractCache.text;
+  const text = fs.readFileSync(QUESTIONS_CONTRACT_MD_PATH, 'utf8').trim();
+  _questionsContractCache = { mtimeMs: stat.mtimeMs, text };
+  return text;
+}
+
 // chat 與 cs 共用的「技術客服調查能力」片段（cs-capability.md）：唯一真相來源，改一處兩邊生效。
 // 片段用 {{project_name}}／{{repo_paths}} 佔位，呼叫端 render 時須一併傳入這兩個真值。
 const CS_CAPABILITY_AGENTS = new Set(['chat', 'cs']);
@@ -118,8 +179,11 @@ function loadPlainLanguage() {
 
 // 會產出「要使用者回答的問題」的四關：注入發問守則（asking-well.md）。同樣刻意不走 CLAUDE.md——
 // CLAUDE.md `full` 那 7 關裡 coding-project／playwright 根本不產題目，注入是每輪固定浪費；
-// 反過來 cs 拿不到 CLAUDE.md，卻是最常直接問客戶問題的關。spec-review／respec-patch 只回答與改規格、
-// 自己不提問，故不在此列。qa 的 spec_questions 屬低頻出口，暫不納入（它每輪必跑，是最貴的注入點）。
+// 反過來 cs 拿不到 CLAUDE.md，卻是最常直接問客戶問題的關。qa 的 spec_questions 屬低頻出口，
+// 暫不納入（它每輪必跑，是最貴的注入點）。
+// spec-review／respec-patch 也不在此列，但**理由與上面那句不同**：兩者 body 都有完整的「什麼情況一定要反問」
+// 規則（不是「不提問」——那個說法是錯的，2026-08-20 更正），只是各自寫在 body 裡；它們吃的是
+// QUESTIONS_CONTRACT_AGENTS 的格式契約。要不要連發問守則也一併注入，取決於願不願意為兩個低頻關各加 2.4KB。
 // 片段無 placeholder（全平台不變的靜態文字），排在說人話之後、專案備註之前——靜態的排前面保 prompt cache 前綴。
 const ASKING_WELL_AGENTS = new Set([
   'analysis-project', 'clarify-chat', 'analysis-reject', 'cs'
@@ -209,9 +273,16 @@ function fillPlaceholders(text, vars) {
   });
 }
 
-function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability, includePlainLanguage, includeSpecLookup, includeAskingWell) {
+function makeRender(body, rulesMode, includeDebug, includeSourceRouting, includeNotes, includeCsCapability, includePlainLanguage, includeSpecLookup, includeAskingWell, includeQuestionsContract, includeMustAsk, includeFigma, includeVisualValues) {
   return vars => {
     let out = fillPlaceholders(body, vars);
+    // 題目撰寫契約：最貼近 body（它規範的是 body 的輸出格式），且無 placeholder、內容全平台固定
+    if (includeQuestionsContract) out = `${loadQuestionsContract()}\n\n${out}`;
+    // 視覺值 → figma → 必問三種：全靜態、無 placeholder。順序讓 visual-values 的「理由見上方【figma】」
+    // 指得到東西（prepend 順序相反，故 figma 要後 prepend 才會排在 visual-values 上方）
+    if (includeVisualValues) out = `${loadVisualValues()}\n\n${out}`;
+    if (includeFigma) out = `${loadFigma()}\n\n${out}`;
+    if (includeMustAsk) out = `${loadMustAsk()}\n\n${out}`;
     // 查碼守則：與 sourceRouting 同層級（含已解析的 repo 路徑），緊貼 body 上方最顯眼。
     // 沒有 repo_paths（任務尚無 worktree）就整段不注入——給了路徑卻是空的只會讓 agent 亂找。
     if (includeSpecLookup && vars && String(vars.repo_paths || '').trim()) {
@@ -256,7 +327,7 @@ function loadAgent(name) {
     model: meta.model || 'sonnet',
     stage: meta.stage || '',
     body,
-    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name), PLAIN_LANGUAGE_AGENTS.has(meta.name || name), SPEC_LOOKUP_AGENTS.has(meta.name || name), ASKING_WELL_AGENTS.has(meta.name || name))
+    render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name), PLAIN_LANGUAGE_AGENTS.has(meta.name || name), SPEC_LOOKUP_AGENTS.has(meta.name || name), ASKING_WELL_AGENTS.has(meta.name || name), QUESTIONS_CONTRACT_AGENTS.has(meta.name || name), MUST_ASK_AGENTS.has(meta.name || name), FIGMA_AGENTS.has(meta.name || name), VISUAL_VALUES_AGENTS.has(meta.name || name))
   };
   _cache.set(name, { mtimeMs: stat.mtimeMs, agent });
   return agent;
@@ -295,6 +366,10 @@ function promptVersion(name) {
   const agent = loadAgent(name);
   const mode = CLAUDE_MD_AGENTS.get(name) || false;
   let s = agent.body;
+  if (QUESTIONS_CONTRACT_AGENTS.has(name)) s = `${loadQuestionsContract()}\n\n${s}`;
+  if (VISUAL_VALUES_AGENTS.has(name)) s = `${loadVisualValues()}\n\n${s}`;
+  if (FIGMA_AGENTS.has(name)) s = `${loadFigma()}\n\n${s}`;
+  if (MUST_ASK_AGENTS.has(name)) s = `${loadMustAsk()}\n\n${s}`;
   if (SPEC_LOOKUP_AGENTS.has(name)) s = `${loadSpecLookup()}\n\n${s}`;
   if (CS_CAPABILITY_AGENTS.has(name)) s = `${loadCsCapability()}\n\n${s}`;
   if (SOURCE_ROUTING_AGENTS.has(name)) s = `${loadSourceRouting()}\n\n${s}`;
