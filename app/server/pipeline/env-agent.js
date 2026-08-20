@@ -265,6 +265,12 @@ function imageBuiltinNote(stdout) {
 // 蒐集本專案「已宣告」的 Python 相依名（小寫集合），供缺套件時判斷是「真環境缺件」還是「漏宣告」
 //（健檢 F6）。來源同 installModuleRequirements：各模組 __manifest__ 的 external_dependencies.python
 // ＋各層 requirements.txt 的頂層套件名（去掉版本限定與 extras）。
+// 兩種檔名都收：Python 慣例是複數的 requirements.txt，但既有客戶 repo 有寫成單數的（超淨 UCPT_UiCS
+// 根目錄就是 requirement.txt，裡面有 line-bot-sdk）。只認複數會把整份相依靜默漏掉——pip 那步照樣印
+// [pip-docker] OK（它根本不知道有東西沒讀到），一路到模組載入才炸 ModuleNotFoundError，而那個
+// traceback 指的是 addons 裡的 import 行，完全看不出「平台漏讀了一個檔案」。
+const REQ_FILENAMES = ['requirements.txt', 'requirement.txt'];
+
 async function getDeclaredPythonDeps(projectId) {
   const declared = new Set();
   const repos = await projectAddonsPaths(projectId);
@@ -277,15 +283,19 @@ async function getDeclaredPythonDeps(projectId) {
     catch { /* 讀不到就略過 */ }
   };
   for (const repo of repos) {
-    const rootReq = path.join(repo, 'requirements.txt');
-    if (fs.existsSync(rootReq)) readReq(rootReq);
+    for (const f of REQ_FILENAMES) {
+      const rootReq = path.join(repo, f);
+      if (fs.existsSync(rootReq)) readReq(rootReq);
+    }
     let entries = [];
     try { entries = fs.readdirSync(repo, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       const modDir = path.join(repo, e.name);
-      const req = path.join(modDir, 'requirements.txt');
-      if (fs.existsSync(req)) readReq(req);
+      for (const f of REQ_FILENAMES) {
+        const req = path.join(modDir, f);
+        if (fs.existsSync(req)) readReq(req);
+      }
       const manifest = path.join(modDir, '__manifest__.py');
       if (fs.existsSync(manifest)) {
         try { for (const p of pythonExternalDeps(fs.readFileSync(manifest, 'utf8'))) addName(p); }

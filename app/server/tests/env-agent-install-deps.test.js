@@ -40,6 +40,9 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(modDir, '__manifest__.py'),
     `{ "name": "idx_x", "external_dependencies": { "python": ["xlsxtpl", "smbprotocol"] } }`);
   fs.writeFileSync(path.join(addonsRoot, 'requirements.txt'), 'qrcode==7.0\n# comment\nPillow\n');
+  // 單數檔名：非 Python 慣例，但既有客戶 repo 就是這樣寫的（超淨 UCPT_UiCS）。根層與模組層各放一份。
+  fs.writeFileSync(path.join(addonsRoot, 'requirement.txt'), 'line-bot-sdk == 2.3.0\n');
+  fs.writeFileSync(path.join(modDir, 'requirement.txt'), 'openpyxl\n');
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u',$2,true,'done')",
     [projectId, addonsRoot]
@@ -63,6 +66,16 @@ test('getDeclaredPythonDeps：蒐齊 manifest 與 requirements 的宣告名（�
   expect(declared.has('qrcode')).toBe(true);        // requirements.txt，版本被去掉
   expect(declared.has('pillow')).toBe(true);        // 小寫正規化
   expect(declared.has('# comment')).toBe(false);    // 註解不算
+});
+
+// 意圖：只認複數的 requirements.txt 會把單數檔名的整份相依靜默漏掉，而且漏得毫無痕跡——pip 那步
+// 照樣印 [pip-docker] OK（它不知道有檔案沒被讀到），一路到模組載入才炸 ModuleNotFoundError，
+// traceback 指的是 addons 裡的 import 行，完全看不出是平台漏讀。實測：超淨 UCPT_UiCS 的
+// requirement.txt 裡有 line-bot-sdk，idx_lib/line_notify.py 一 import linebot 就整個安裝失敗。
+test('getDeclaredPythonDeps：單數檔名 requirement.txt 也要收（根層與模組層）', async () => {
+  const declared = await envAgent.getDeclaredPythonDeps(projectId);
+  expect(declared.has('line-bot-sdk')).toBe(true);  // repo 根的 requirement.txt
+  expect(declared.has('openpyxl')).toBe(true);      // 模組層的 requirement.txt
 });
 
 // docker：把「宣告的」相依（過 SAFE_PKG 白名單）在容器內以 pip 安裝
