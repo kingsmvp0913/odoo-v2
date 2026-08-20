@@ -193,7 +193,10 @@ test('ensureTestingBranch creates testing branch when checkout fails', async () 
     done(null, 'ok', '');
   });
   await gitModule.ensureTestingBranch('/repo');
-  expect(calls).toContainEqual(['checkout', '-b', 'testing']);
+  // 必須帶基底：不帶的話會從 clone 檢出的分支長，使用者指定的主分支形同無效（真 repo 的重現與後果
+  // 見 git-integration.test.js「以指定的主分支為基底」那支）。mock 下每個 git 呼叫的 stdout 都是
+  // 'ok'，故 getMainBranch 取到的主分支名是 ok。
+  expect(calls).toContainEqual(['checkout', '-b', 'testing', 'origin/ok']);
 });
 
 test('mergeInto returns no conflicts on clean merge into testing', async () => {

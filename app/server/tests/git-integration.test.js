@@ -674,6 +674,37 @@ describe('主分支非 main／master', () => {
     await sh(repo, 'remote', 'set-head', 'origin', '-d').catch(() => {});
     expect(await git.getMainBranch(repo)).toBe('main');
   }, 30000);
+
+  // 使用者在平台上為 repo 指定主分支後，clone 的流程是「clone → setRemoteHead → ensureTestingBranch」
+  // （project-routes.js:134-140）。clone 檢出的是遠端「當下」的預設分支，setRemoteHead 只改 origin/HEAD
+  // 這個指標、不動工作樹；testing 若從當前 HEAD 長出去，使用者選的主分支就完全沒生效。實測後果：專案
+  // 選了 odoo15 分支，testing 仍等於 origin/main，Odoo 15 的測試環境整包載到 14 的碼（模組一裝就
+  // ParseError），而畫面上主分支顯示的正是選好的 odoo15——設定看起來對、錯誤訊息完全指不到這裡。
+  test('ensureTestingBranch：新建的 testing 以指定的主分支為基底，不是 clone 檢出的那條', async () => {
+    const origin = path.join(base, 'origin-two.git');
+    const repo = path.join(base, 'repo-two');
+    await run('git', ['init', '--bare', origin]);
+    await run('git', ['clone', origin, repo]);
+    await sh(repo, 'checkout', '-b', 'main');
+    await write(repo, 'old.py', 'x = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'main');
+    await sh(repo, 'push', '-u', 'origin', 'main');
+    await sh(repo, 'checkout', '-b', 'ported');
+    await write(repo, 'ported.py', 'y = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'ported');
+    await sh(repo, 'push', '-u', 'origin', 'ported');
+    await sh(repo, 'checkout', 'main');       // clone 完停在遠端預設分支
+    await git.setRemoteHead(repo, 'ported');  // 使用者指定的主分支
+
+    await git.ensureTestingBranch(repo);
+
+    expect((await sh(repo, 'branch', '--show-current')).stdout.trim()).toBe('testing');
+    // 關鍵斷言：工作樹要是 ported 分支的內容。從 main 長的話這個檔不存在，而分支名一樣叫 testing——
+    // 只驗分支名的話這支永遠綠，正好漏掉真正壞掉的那件事。
+    expect(fs.existsSync(path.join(repo, 'ported.py'))).toBe(true);
+  }, 30000);
 });
 
 // ---- ai-dev 基底診斷與重建 ----

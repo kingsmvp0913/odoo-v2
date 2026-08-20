@@ -734,7 +734,14 @@ async function ensureTestingBranch(repoPath) {
   try {
     await execFileAsync('git', ['checkout', 'testing'], { cwd: repoPath });
   } catch {
-    await execFileAsync('git', ['checkout', '-b', 'testing'], { cwd: repoPath });
+    // 首次 clone 走這裡。基底必須明確指定成主分支：clone 檢出的是遠端「當下」的預設分支，而使用者
+    // 指定的主分支是 clone 之後才由 setRemoteHead 寫進 origin/HEAD 的（project-routes.js:134），那一步
+    // 只改指標、不動工作樹。裸的 checkout -b 從當前 HEAD 長，於是選了 odoo15 卻拿到 main 的碼，測試
+    // 環境整包載到錯版本，而畫面上主分支顯示的正是選好的那條——沒有任何錯誤訊息指得到這裡。
+    // 偵測不到主分支、或遠端沒有對應 ref（平台自建、尚未 push 的 repo）時退回原行為，不讓建分支失敗。
+    const base = await getMainBranch(repoPath).catch(() => null);
+    const from = base && await refExists(repoPath, `refs/remotes/origin/${base}`) ? [`origin/${base}`] : [];
+    await execFileAsync('git', ['checkout', '-b', 'testing', ...from], { cwd: repoPath });
   }
 }
 
