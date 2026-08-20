@@ -5,6 +5,7 @@ import json
 import time
 from datetime import datetime
 
+import werkzeug.utils
 from psycopg2 import IntegrityError
 
 from odoo import fields, http
@@ -19,6 +20,15 @@ _PLACEHOLDER_AVATAR = (
 
 def _b64url_decode(s):
     return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+
+
+# 帶狀態碼的純文字回應。不用 make_response(..., status=)：那個參數 17.0 起才有，14/15 傳了會
+# TypeError，把每一條「拒絕」都變成 500——使用者看到的不是「token 過期」而是一頁 traceback，
+# 且 traceback 指向 http.py 完全看不出真因。改為拿回應物件再設 status_code（13→19 皆可）。
+def _err(msg, code):
+    resp = request.make_response(msg)
+    resp.status_code = code
+    return resp
 
 
 # 免密建立目前 request 的已認證 web session（跨 Odoo 13→19/master）。
@@ -45,28 +55,28 @@ class AidevSso(http.Controller):
     @http.route('/aidev/sso', type='http', auth='public', csrf=False)
     def sso(self, token=None, **kw):
         if not token or token.count('.') != 1:
-            return request.make_response('bad token', status=403)
+            return _err('bad token', 403)
         payload_b64, sig_b64 = token.split('.')
 
         # fail-closed：secret 未設定或過短即拒（平台端 secret = randomBytes(32).hex = 64 字元）。
         # 若放行空/短金鑰，空金鑰 HMAC 可被任意偽造 → 驗證繞過；故在做任何 HMAC 比對之前擋掉。
         secret = request.env['ir.config_parameter'].sudo().get_param('aidev.sso_secret') or ''
         if not secret or len(secret) < 32:
-            return request.make_response('sso not configured', status=503)
+            return _err('sso not configured', 503)
 
         # 畸形 base64／JSON 一律當壞 token（403），不要讓 binascii/json 例外冒成 500。
         try:
             sig = _b64url_decode(sig_b64)
             data = json.loads(_b64url_decode(payload_b64))
         except Exception:
-            return request.make_response('bad token', status=403)
+            return _err('bad token', 403)
 
         # 簽章對象是 payload_b64url 字串本身（非原始 JSON），與平台 Task 5 mintSsoToken 逐字一致。
         expected = hmac.new(secret.encode(), payload_b64.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(expected, sig):
-            return request.make_response('bad sig', status=403)
+            return _err('bad sig', 403)
         if data.get('exp', 0) < time.time():
-            return request.make_response('expired', status=403)
+            return _err('expired', 403)
 
         # 一次性 jti 防重放：驗章（sig+exp）通過後、建立 session 之前強制佔用 jti。
         # 先 prune 過期紀錄，再以 unique(jti) 約束原子性地佔用（savepoint 隔離 create，撞約束
@@ -74,14 +84,14 @@ class AidevSso(http.Controller):
         # 確定 jti 已佔用成功。
         jti = data.get('jti')
         if not jti:
-            return request.make_response('bad token', status=403)
+            return _err('bad token', 403)
         UsedToken = request.env['aidev.sso.used_token'].sudo()
         UsedToken.search([('expires_at', '<', fields.Datetime.now())]).unlink()
         try:
             with request.env.cr.savepoint():
                 UsedToken.create({'jti': jti, 'expires_at': datetime.utcfromtimestamp(data['exp'])})
         except IntegrityError:
-            return request.make_response('replay', status=403)
+            return _err('replay', 403)
 
         Users = request.env['res.users'].sudo()
         gfield = 'group_ids' if 'group_ids' in Users._fields else 'groups_id'  # 19+ 改名，比照 seed
@@ -108,4 +118,7 @@ class AidevSso(http.Controller):
                 gfield: [(4, g) for g in gids],
             })
         _login_as(user)
-        return request.redirect('/web')
+        # werkzeug 的 redirect，不是 request.redirect：後者 15.0 起才有，14 會 AttributeError
+        # （'HttpRequest' object has no attribute 'redirect'）——SSO 在 14 環境連成功路徑都當場 500，
+        # 整個測試區進不去。session cookie 由 Odoo 的 root.dispatch 統一寫回，回裸 Response 一樣帶得到。
+        return werkzeug.utils.redirect('/web', code=303)
