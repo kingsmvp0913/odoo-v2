@@ -87,7 +87,13 @@ class AidevSso(http.Controller):
         gfield = 'group_ids' if 'group_ids' in Users._fields else 'groups_id'  # 19+ 改名，比照 seed
         user = Users.search([('login', '=', data['login'])], limit=1)
         if not user:
-            gid = request.env.ref('base.group_system').id
+            # group_user（內部使用者）必須明確給，不能只給 group_system 靠隱含群組推導：15/16 的隱含鏈
+            # 到 base.group_erp_manager 就停了，不含 group_user（17+ 才補上這一段），JIT 建出來的帳號
+            # 於是 share=True ＝外部使用者。後果是 web 的 session_info 只在 has_group('base.group_user')
+            # 成立時才塞 load_menus／qweb／user_companies（web/models/ir_http.py），三者皆缺 → webclient
+            # 開機讀不到 user_companies 即死、抓 template 的網址變成 /web/webclient/qweb/undefined →
+            # 後台整片空白，且畫面與 log 都沒有任何錯誤訊息可循。
+            gids = [request.env.ref('base.group_user').id, request.env.ref('base.group_system').id]
             # image_1920 必須在 create 當下就給值：內部使用者若無頭像，base res_users.create 會在
             # create 後自動補一張 initials 頭像（`user.image_1920 = ...`），這個「後寫」會打進
             # hr.res_users.write 的 image 分支，對「此新 user 還沒有的 hr.employee 空集合」做 write，
@@ -99,7 +105,7 @@ class AidevSso(http.Controller):
                 'login': data['login'],
                 'name': data.get('name') or data['login'],
                 'image_1920': _PLACEHOLDER_AVATAR,
-                gfield: [(4, gid)],
+                gfield: [(4, g) for g in gids],
             })
         _login_as(user)
         return request.redirect('/web')
