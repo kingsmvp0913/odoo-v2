@@ -1,13 +1,24 @@
 const fs = require('fs');
 
+// 只攔 lib 自己會讀的兩個路徑：本機 creds（避免真的讀開發機憑證）與磁碟 snapshot
+//（讓每支測試都從「沒有 lastGood」起跑）。其餘一律放行到真實實作——
+// 全攔會讓 jest/babel 讀自己的檔案時也吃到這份假 JSON，改動 lib 使 transform 快取失效後，
+// 整支套件會以 SyntaxError: Unexpected token ':' 全滅，且錯誤完全不指向成因。
+const realReadFileSync = fs.readFileSync;
+function mockReadFileSync(token) {
+  return (p, ...rest) => {
+    const s = String(p);
+    if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: token } });
+    if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    return realReadFileSync(p, ...rest);
+  };
+}
+
 describe('lib/claude-usage getUsage', () => {
   let lib;
   beforeEach(() => {
     jest.resetModules();
-    // 讓 fetchUsage 讀得到 token（避免真的讀開發機 creds）
-    jest.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ claudeAiOauth: { accessToken: 'test-token' } })
-    );
+    jest.spyOn(fs, 'readFileSync').mockImplementation(mockReadFileSync('test-token'));
     jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
     jest.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
     lib = require('../lib/claude-usage');
@@ -32,12 +43,54 @@ describe('lib/claude-usage getUsage', () => {
   test('抓取失敗但有前一筆好資料 → 回 stale 舊值', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ five_hour: { utilization: 55, resets_at: 'x' } }) })
-      .mockResolvedValueOnce({ ok: false, status: 429 });
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => null } });
     await lib.getUsage();            // 建立 lastGood
     lib._resetCacheForTesting();     // 清 TTL cache，強制再抓
     const u = await lib.getUsage();  // 第二次 429
     expect(u.stale).toBe(true);
     expect(u.five_hour.utilization).toBe(55);
+  });
+
+  // /api/oauth/usage 限流很兇：每分鐘打一次會把配額燒光，之後整整半小時全是 429，
+  // 畫面就卡在 stale 不動。快取拉長是止血的主手段，不是最佳化。
+  test('數分鐘內重複呼叫只打一次 API', async () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true, json: async () => ({ five_hour: { utilization: 5, resets_at: 'x' } })
+    });
+    await lib.getUsage();
+    now += 5 * 60 * 1000;
+    await lib.getUsage();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // 429 的 Retry-After 是分鐘級，且窗口會自然倒數、不因重打而延長 → 冷卻期間再送請求
+  // 只是白白耗掉配額。實測 Retry-After=1877s，而平台原本每 60s 硬打一次。
+  test('429 帶 Retry-After → 冷卻窗內不再打 API，仍回 stale 舊值', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ five_hour: { utilization: 55, resets_at: 'x' } }) })
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => '1800' } });
+    await lib.getUsage();            // 建立 lastGood
+    lib._resetCacheForTesting();
+    await lib.getUsage();            // 429 → 記下冷卻到期
+    lib._resetCacheForTesting();     // 就算 TTL 過了
+    const u = await lib.getUsage();  // 也不該再打
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(u.stale).toBe(true);
+    expect(u.five_hour.utilization).toBe(55);
+  });
+
+  // 冷卻只綁在被限流的那把憑證上；連坐會讓「主帳號滿了就切備用」的閘門看不到備用的真實用量。
+  test('主憑證被限流不影響備用憑證量測', async () => {
+    const auth = require('../lib/claude-auth');
+    auth._setForTesting('primary-tok', 'backup-tok', 'primary');
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => '1800' } })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ five_hour: { utilization: 3, resets_at: 'y' } }) });
+    await lib.getUsage('primary');
+    const b = await lib.getUsage('backup');
+    expect(b.five_hour.utilization).toBe(3);
   });
 
   test('從未成功抓過 → available:false', async () => {
@@ -53,9 +106,7 @@ describe('lib/claude-usage 依憑證分別量用量', () => {
   let lib, auth;
   beforeEach(() => {
     jest.resetModules();
-    jest.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ claudeAiOauth: { accessToken: 'local-creds-token' } })
-    );
+    jest.spyOn(fs, 'readFileSync').mockImplementation(mockReadFileSync('local-creds-token'));
     jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
     jest.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
     auth = require('../lib/claude-auth');

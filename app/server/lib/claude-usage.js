@@ -5,7 +5,10 @@ const fs = require('fs');
 // 本機互動式登入憑證：管理員沒在網頁設主憑證時的退路（既有行為）
 const CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const CACHE_TTL_MS = 60 * 1000;
+// /api/oauth/usage 是非官方端點且限流很兇（實測 429 帶 Retry-After 1877s）。原本 60s TTL
+// 配上前端 60s 輪詢＝24/7 每分鐘一次真實請求，配額很快燒光，接著半小時全 429，畫面卡在 stale
+// 不動。用量是分鐘級才有意義的數字，拉到 10 分鐘足夠。改這裡要連同前端 app.js 的輪詢間隔一起改。
+const CACHE_TTL_MS = 10 * 60 * 1000;
 // 磁碟 snapshot：server 重啟後 usage API 若當機仍能靠它判閘門／顯示。lib 在 app/server/lib/，
 // 三個 .. 才回到 repo 根（app/server/lib → app/server → app → <repo>）。
 // 只存主憑證的用量——備用是「撞閘門才用」的旁路，沒有跨重啟保存的必要。
@@ -13,9 +16,10 @@ const SNAPSHOT_PATH = process.env.CLAUDE_USAGE_CACHE
   || path.join(__dirname, '..', '..', '..', 'data', 'claude-usage.json');
 
 // 主／備各一份快取：共用一份會讓「量過主帳號」的數字被當成備用帳號的回報
+// blockedUntil 逐把憑證各記各的：限流是綁在 token 上的，連坐會讓閘門看不到備用的真實用量。
 const _state = {
-  primary: { cache: { at: 0, data: null }, lastGood: null },
-  backup: { cache: { at: 0, data: null }, lastGood: null }
+  primary: { cache: { at: 0, data: null }, lastGood: null, blockedUntil: 0 },
+  backup: { cache: { at: 0, data: null }, lastGood: null, blockedUntil: 0 }
 };
 
 try {
@@ -62,15 +66,31 @@ async function fetchUsage(which) {
     },
     signal: AbortSignal.timeout(10000)
   });
-  if (!res.ok) throw new Error(`usage api ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(`usage api ${res.status}`);
+    if (res.status === 429) {
+      // Retry-After 缺漏或不是秒數就退 5 分鐘（別退回「每 TTL 再打一次」）；
+      // 上限 1 小時，避免異常大的值把用量顯示凍住好幾天。
+      const ra = Number(res.headers.get('retry-after'));
+      err.retryAfterMs = Math.min(Number.isFinite(ra) && ra > 0 ? ra : 300, 3600) * 1000;
+    }
+    throw err;
+  }
   return res.json();
 }
 
 // route 與閘門共用：60s TTL cache 內只打一次 API。抓失敗回上一筆 snapshot（標 stale）；
 // 從未成功則 available:false（閘門據此 fail-open）。
+// 抓不到時的降級結果：有 snapshot 就標 stale 交出去，從未成功則 available:false（閘門 fail-open）
+function _degraded(st, reason) {
+  return st.lastGood ? { ...st.lastGood, stale: true } : { available: false, error: reason };
+}
+
 async function getUsage(which = 'primary') {
   const st = _state[which === 'backup' ? 'backup' : 'primary'];
   if (st.cache.data && Date.now() - st.cache.at < CACHE_TTL_MS) return st.cache.data;
+  // 冷卻窗內不再送請求：實測 Retry-After 是逐秒倒數的，窗口不因重打而延長，硬打只是白燒配額。
+  if (Date.now() < st.blockedUntil) return _degraded(st, 'rate limited');
   try {
     const u = await fetchUsage(which);
     const data = {
@@ -86,19 +106,15 @@ async function getUsage(which = 'primary') {
     if (which !== 'backup') saveSnapshot(data);
     return data;
   } catch (err) {
-    if (st.lastGood) {
-      const stale = { ...st.lastGood, stale: true };
-      st.cache = { at: Date.now(), data: stale };
-      return stale;
-    }
-    const data = { available: false, error: err.message };
+    if (err.retryAfterMs) st.blockedUntil = Date.now() + err.retryAfterMs;
+    const data = _degraded(st, err.message);
     st.cache = { at: Date.now(), data };
     return data;
   }
 }
 
-// 只清 60s TTL cache，強制下一次呼叫重新打 API；lastGood（stale fallback 用）保留，
-// 讓「抓取失敗但有前一筆好資料」的情境可測。
+// 只清 TTL cache，強制下一次呼叫重新打 API；lastGood（stale fallback 用）與 blockedUntil
+// （限流冷卻）保留，讓「抓取失敗但有前一筆好資料」與「冷卻窗內不再打」兩個情境可測。
 function _resetCacheForTesting() {
   _state.primary.cache = { at: 0, data: null };
   _state.backup.cache = { at: 0, data: null };
