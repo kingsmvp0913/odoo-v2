@@ -102,7 +102,7 @@ window.InboxView = Vue.defineComponent({
       <button v-if="unreadTotal > 0" class="btn btn-outline btn-sm" @click="readAll">全部標記已讀</button>
     </div>
     <div class="content">
-      <div class="filter-row">
+      <div data-tour="inbox-filters" class="filter-row">
         <button class="btn btn-sm" :class="!showAll ? 'btn-primary' : 'btn-outline'" @click="setShowAll(false)">
           只看未處理<span v-if="unreadTotal > 0" class="tab-badge" :class="!showAll ? 'tab-badge-active' : ''">{{ unreadTotal }}</span>
         </button>

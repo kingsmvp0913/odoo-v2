@@ -891,7 +891,7 @@ window.PipelineFlowView = Vue.defineComponent({
       </div>
 
       <div class="flow-main-row">
-        <div class="flow-diagram-panel">
+        <div data-tour="flow-diagram" class="flow-diagram-panel">
           <!-- 圖是固定尺寸的曼哈頓路由（節點座標全部算好），縮到 390px 會讓標籤疊在一起。
                與 Terminal 同一種降級：讓它自己橫捲，並明說可以捲——沒有這行，手機使用者
                只會看到左邊一小條，不會知道右邊還有東西。 -->

@@ -53,7 +53,7 @@
     state.courseId = courseId || null;
     state.stepIdx = 0;
     state.open = true;
-    if (window.TourDemo) window.TourDemo.active = true;
+    if (window.TourDemo) { window.TourDemo.active = true; window.TourDemo.reset(); }
   }
   function close() { state.open = false; state.courseId = null; }
 
@@ -289,8 +289,8 @@
 
         <!-- 課程選單 -->
         <div v-if="!course" class="tour-menu">
-          <div class="tour-menu-title">新手教程</div>
-          <div class="tour-menu-sub">{{ courses.length }} 門短課，不用照順序，隨時可以關掉。教程會直接帶你走真的畫面。</div>
+          <div class="tour-menu-title">新手教學</div>
+          <div class="tour-menu-sub">{{ courses.length }} 門短課，不用照順序，隨時可以關掉。教學會直接帶你走真的畫面。</div>
           <div class="tour-menu-list">
             <button v-for="(c, i) in courses" :key="c.id" type="button"
               class="tour-menu-item" :class="{ 'is-done': isDone(c.id) }"

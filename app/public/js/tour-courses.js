@@ -47,7 +47,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="set-notify"]',
         interactive: true,
         title: '桌面通知 — 最值得開的一個',
-        text: '任務走到<strong>要你回答、要你審核</strong>的關卡會停下來等你。沒開通知，你只能自己回來看輪到你沒。<br><br><strong>現在就可以直接勾勾看</strong>，這一步沒有擋你的點擊。',
+        text: '任務走到<strong>要你回答、要你審核</strong>的關卡會停下來等你。沒開通知，你只能自己回來看輪到你沒。<br><br><strong>現在就可以直接勾勾看</strong>，這一步沒有擋你的點擊。勾起來之後旁邊會出現<strong>「🔔 測試通知」</strong>，按一下就知道有沒有被系統或瀏覽器擋掉。',
         warn: '分頁要留著（整個瀏覽器關掉就收不到），而且這設定只記在這台電腦的這個瀏覽器，換一台要再開一次。'
       },
       {
@@ -83,7 +83,8 @@ window.TOUR_COURSES = [
         route: '/projects/demo',
         target: '[data-tour="pd-repos"]',
         title: '接上程式碼來源',
-        text: '貼上 Git URL 後平台會去 clone，<strong>要等狀態變成「✓ 已同步」</strong>才算好。<br><br>這一步是硬前置：沒同步完成，初始化 Wiki 和「上正式」都會是灰的。'
+        text: '貼上 Git URL 後平台會去 clone，<strong>要等狀態變成「✓ 已同步」</strong>才算好。<br><br>網址填完會自動去讀遠端分支，讓你挑<strong>主分支</strong>（讀不到就維持自動偵測）。AI 的 <code>ai-dev</code> 分支就是從這條長出來的。<br><br>這一步是硬前置：沒同步完成，初始化 Wiki 和「上正式」都會是灰的。',
+        warn: '主分支「建立後不能再改」——ai-dev 已經長在那條分支上，改設定不會讓它搬家。選錯只能把 repo 移除後重新新增。'
       },
       {
         route: '/projects/demo',
@@ -102,8 +103,8 @@ window.TOUR_COURSES = [
         route: '/projects/demo',
         target: '[data-tour="pd-tools"]',
         placement: 'bottom',
-        title: '專案頁上的三個工具',
-        text: '<strong>📖 Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><strong>💬 Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>🚀 上正式</strong>：把已核准的任務真的送上正式區。<br><br>Wiki 和 Chat 各有一課，接下來就是。'
+        title: '專案頁上的工具列',
+        text: '<strong>📖 Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><strong>💬 Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>資料庫查詢</strong>：正式區的唯讀連線，設好之後 AI 也會用它去查。<br><strong>🚀 上正式</strong>：把已核准的任務真的送上正式區。<br><strong>🛠 自動部署 SOP</strong>：想把「上正式」接成推上去就自動部署時照著這頁做，指令已經幫你填好值。<br><br>Wiki、Chat、資料庫查詢各有一課，接下來就是。'
       }
     ]
   },
@@ -176,8 +177,8 @@ window.TOUR_COURSES = [
         route: '/projects/demo/chat/demo',
         target: '[data-tour="chat-input"]',
         placement: 'top',
-        title: '用講的就好',
-        text: '描述<strong>症狀和情境</strong>，不用先想好是哪個模組的問題。<br><br>例如「維修單的成本沒有帶出來，只有部分單有」——它會自己去比對哪幾張不一樣。'
+        title: '用講的就好，畫面問題就貼圖',
+        text: '描述<strong>症狀和情境</strong>，不用先想好是哪個模組的問題。<br><br>例如「維修單的成本沒有帶出來，只有部分單有」——它會自己去比對哪幾張不一樣。<br><br>畫面上看到的東西<strong>直接 Ctrl+V 貼上截圖</strong>（或按 📎），一次最多 5 張。在圖上圈起來，比用文字描述位置快得多。'
       },
       {
         route: '/projects/demo/chat/demo',
@@ -190,7 +191,7 @@ window.TOUR_COURSES = [
         click: '[data-tour="chat-totask"]',
         target: '[data-tour="chat-modal"]',
         title: '草稿是可以改的，確認才建立',
-        text: '摘要出來的<strong>標題和內容都能直接編輯</strong>，按下「建立」之前不會有任何任務產生。<br><br>建好的任務會自動掛在這個專案底下，下一輪 pipeline 就會開始分診。'
+        text: '摘要出來的<strong>標題和內容都能直接編輯</strong>，按下「建立」之前不會有任何任務產生。<br><br>對話裡貼過的圖也會列在下面，<strong>已勾選的是 AI 判斷後續開發需要看的</strong>，可以自己增減。<br><br>建好的任務會自動掛在這個專案底下，下一輪 pipeline 就會開始分診。'
       }
     ]
   },
@@ -211,7 +212,15 @@ window.TOUR_COURSES = [
         route: '/',
         target: '[data-tour="task-filters"]',
         title: '預設就幫你篩好了',
-        text: '一進來停在<strong>「需回覆」</strong>分頁，列出來的都是<strong>在等你的</strong>。<br><br>數字就是還有幾件事等你處理。想看全部再切「全部」。'
+        text: '第一次進來停在<strong>「需回覆」</strong>分頁，列出來的都是<strong>在等你的</strong>，數字就是還有幾件。<br><br>另外四個分頁是<strong>待處理</strong>（AI 正在跑）、<strong>暫停中</strong>、<strong>全部</strong>、<strong>已封存</strong>。',
+        warn: '分頁與下一步那排篩選都會記在這台瀏覽器，下次打開停在你上次看的地方——不是每次都回到「需回覆」。覺得列表空空的，先看一眼篩選還開著什麼。'
+      },
+      {
+        route: '/',
+        target: '[data-tour="task-filters-more"]',
+        title: '找特定一張時用這排',
+        text: '專案、狀態、來源、是否已上正式，加上搜尋與排序。<strong>幾個條件是疊加的</strong>，找不到東西通常是這裡還開著上次的條件。<br><br>常用的組合按<strong>「＋ 存成組合」</strong>取個名字存起來，之後一鍵套用；這個是存在帳號上的，換一台電腦登入也還在。',
+        warn: '手機上這一排收在分頁列最右邊的「篩選」鈕後面，鈕上的數字是目前生效幾個條件。'
       },
       {
         route: '/',
@@ -236,14 +245,6 @@ window.TOUR_COURSES = [
         target: '[data-tour="task-chips"]',
         title: '卡片上的其他標記',
         text: '<strong>來源</strong>（從 Odoo 或客服系統來的，點了開原單）、<strong>專案</strong>（點了跳專案頁）、<strong>🖥 測試機</strong>（點了直接開測試環境，驗收時最常用）。'
-      },
-      {
-        route: '/',
-        target: '[data-tour="nav-pipeline"]',
-        placement: 'right',
-        title: '🚦 想知道現在跑到哪',
-        text: '「進行中 Pipeline」列出<strong>你自己</strong>正在跑的任務，看得到目前在哪一關、已經跑多久，每三秒更新。<br><br>某張卡太久沒動時，可以在這裡按「暫停」把它停下來。',
-        warn: '只看得到也只能暫停自己的任務，不會影響別人。'
       }
     ]
   },
@@ -273,7 +274,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="td-action"]',
         placement: 'left',
         title: '③ 回答 AI 的問題',
-        text: '分析完有不確定的地方，它會停下來問你，多半是選擇題。<br><br>選項都不對就用下面那格自己補充。反過來你也可以切到<strong>「提問」</strong>先問它，問問題不會讓任務往下跑。<br><br><strong>要你動手的事永遠出現在這一段</strong>——上面是需求與對話，下面是執行紀錄。'
+        text: '分析完有不確定的地方，它會停下來問你，多半是選擇題。推導得出依據的題目會標上<strong>「建議」</strong>；標了 <strong>⚠ 選錯難改</strong> 的那幾題請多看一眼，選錯要退回重寫規格與程式。<br><br>選項都不對就用下面那格自己補充，<strong>也可以直接附圖</strong>。反過來你也可以切到<strong>「提問」</strong>先問它，問問題不會讓任務往下跑。<br><br><strong>要你動手的事永遠出現在這一段</strong>——上面是需求與對話，下面是執行紀錄。'
       },
       {
         route: '/task/demo',
@@ -297,7 +298,8 @@ window.TOUR_COURSES = [
         target: '[data-tour="td-action"]',
         placement: 'left',
         title: '⑥ 一定要實際點過再核准',
-        text: '東西做好了，裝在測試環境等你看。先點上面的 <strong>🖥 測試機</strong> 進去真的操作看看，別只看程式碼變更。<br><br>不滿意就填原因退回，它會照你寫的去修；滿意才按核准。'
+        text: '東西做好了，裝在測試環境等你看。先點上面的 <strong>🖥 測試機</strong> 進去真的操作看看，別只看程式碼變更。<br><br>不滿意就填原因退回，它會照你寫的去修；滿意才按核准。',
+        warn: '版面、顏色、位置這類畫面問題請附截圖（退回框下方可選，最多 5 張）——下游那幾關只讀得到程式碼 diff，看不到畫面，光用文字描述位置常常修錯地方。'
       },
       {
         route: '/projects',
@@ -312,7 +314,8 @@ window.TOUR_COURSES = [
         target: '[data-tour="td-action"]',
         placement: 'left',
         title: '⑧ 卡住了怎麼辦',
-        text: '連續失敗它會停下來，把卡在哪裡寫給你看。<br><br>你不用會修程式，<strong>把你知道的補充上去</strong>（例如「那個欄位其實叫別的名字」），送出後它會從中斷的地方接著跑。'
+        text: '連續失敗它會停下來，把卡在哪裡寫給你看。<br><br>你不用會修程式，<strong>把你知道的補充上去</strong>（例如「那個欄位其實叫別的名字」），送出後它會從中斷的地方接著跑。<br><br>若情況剛好是<strong>「碼我自己改好了」「環境已排除」「這是誤判」</strong>這三種，直接按上面對應的按鈕——它會把話填成系統聽得懂的句子，你再接著補自己的說明。',
+        warn: '這一格不要寫散文。自己打「推進到 QA」會被判成「還要再修」，繞回來白跑一輪。用按鈕填好再補充最省事。'
       },
       {
         route: '/task/demo',
@@ -321,6 +324,43 @@ window.TOUR_COURSES = [
         placement: 'left',
         title: '⑨ 合併衝突（不常遇到）',
         text: '同一個檔案，這張任務和別人都改到同一段，系統不敢自己決定。<br><br>每個檔案挑一邊即可，預設已經停在 AI 的建議上。<strong>看不懂就先用下面的追問問清楚再選</strong>，不用硬猜。'
+      }
+    ]
+  },
+
+  {
+    id: 'track',
+    name: '進度與通知',
+    desc: '不在電腦前的那段時間，發生過什麼',
+    steps: [
+      {
+        route: '/inbox',
+        target: '[data-tour="nav-inbox"]',
+        placement: 'right',
+        title: '📥 收件匣 — 和上面那個數字不是同一回事',
+        text: '「任務列表」旁邊的數字是<strong>當下的快照</strong>（現在有幾張在等你）；收件匣是<strong>事件流</strong>（這段時間發生過什麼）。<br><br>離開兩小時回來，任務停在「開發中」看起來很正常——但這兩小時它可能被 QA 退一次、重跑、又被部署退一次。那些只有這裡看得到。'
+      },
+      {
+        route: '/inbox',
+        target: '[data-tour="inbox-filters"]',
+        title: '同一張任務會收合成一則',
+        text: '一直在關卡之間來回的任務會收合成一則，標上「×3」這種次數，不會洗版——<strong>而「它到底來回幾次」正是這裡要讓你看見的訊號</strong>。<br><br>預設只看未處理。處理完按「標記已讀」，現在沒空就用旁邊的下拉「稍後再提醒我」。'
+      },
+      {
+        route: '/admin/pipelines',
+        target: '[data-tour="nav-pipeline"]',
+        placement: 'right',
+        title: '🚦 想知道此刻跑到哪',
+        text: '「進行中 Pipeline」列出<strong>你自己</strong>正在跑的任務，看得到目前在哪一關、已經跑多久，每三秒更新。<br><br>某張卡太久沒動時，可以在這裡按「暫停」把它停下來。',
+        warn: '只看得到也只能暫停自己的任務，不會影響別人。'
+      },
+      {
+        route: '/pipeline-flow',
+        target: '[data-tour="flow-diagram"]',
+        placement: 'top',
+        title: '🗺️ 流程圖 — 一張任務總共會經過哪些關',
+        text: '想知道「等待審核」後面還有什麼、被退回會退到哪一關，來這頁看。<strong>滑鼠移到任一關會打亮它與相鄰的路徑</strong>，右側顯示那一關在做什麼。<br><br>下面那排開關是<strong>推演用</strong>的，只改這張圖，不會動到任何專案的設定。',
+        warn: '旁邊的「🏗️ 架構圖」畫的是另一件事——哪個東西跑在哪台機器、哪個容器裡，對外介紹時用得到。'
       }
     ]
   },
@@ -348,7 +388,8 @@ window.TOUR_COURSES = [
         route: '/projects/demo/db',
         target: '[data-tour="db-form"]',
         title: '三種連線模式，挑一個',
-        text: '<strong>docker</strong>：SSH 進主機、再進 DB 容器下指令（最常見，Odoo 多半這樣裝）。<br><strong>local</strong>：SSH 進主機、用 sudo 切成 DB 使用者。<br><strong>direct</strong>：直接連 TCP 埠（要對方開放，支援 PostgreSQL／MSSQL／MySQL）。<br><br>填完先按<strong>「測試連線」</strong>再存——存了才發現連不上，AI 那邊也會跟著查不到。'
+        text: '<strong>docker</strong>：SSH 進主機、再進 DB 容器下指令（最常見，Odoo 多半這樣裝）。<br><strong>local</strong>：SSH 進主機、用 sudo 切成 DB 使用者。<br><strong>direct</strong>：直接連 TCP 埠（要對方開放，支援 PostgreSQL／MSSQL／MySQL）。<br><br>填完先按<strong>「測試連線」</strong>再存——存了才發現連不上，AI 那邊也會跟著查不到。<br><br>存好之後再按一次<strong>「偵測 log 來源」</strong>：AI 排障時就讀得到那台機器的 Odoo log，錯誤訊息不必你自己貼。',
+        warn: 'direct 模式不經 SSH，讀不到主機上的 log，這一項會是空的。'
       },
       {
         route: '/projects/demo/db',
@@ -415,7 +456,8 @@ window.TOUR_COURSES = [
         route: '/admin',
         target: '[data-tour="admin-token"]',
         title: 'Claude 憑證 — 建議一定要設',
-        text: '在任一台裝有 Claude Code 的機器跑 <code>claude setup-token</code>，把產生的長效 token 貼進來即可（綁訂閱、不另計費，效期一年）。<br><br><strong>不設的話會用伺服器本機的登入憑證，多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。</strong>換帳號只要貼新的 token，不必重啟伺服器。'
+        text: '在任一台裝有 Claude Code 的機器跑 <code>claude setup-token</code>，把產生的長效 token 貼進來即可（綁訂閱、不另計費，效期一年）。<br><br><strong>不設的話會用伺服器本機的登入憑證，多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。</strong>換帳號只要貼新的 token，不必重啟伺服器。<br><br>下面還有一格<strong>備用憑證</strong>：主帳號用量撞到上面那道閘門時，開啟開關就改用它繼續跑，主帳號降回門檻下自動切回。',
+        warn: '備用 token 務必用另一個帳號產生。同一個帳號的第二把 token 共用同一份用量，切過去照樣是超標狀態。'
       },
       {
         route: '/admin',

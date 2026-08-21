@@ -50,7 +50,8 @@ describe('data-tour 錨點與課程定義對得上', () => {
     'js/app.js', 'js/views/Settings.js', 'js/views/TaskList.js',
     'js/views/TaskDetail.js', 'js/views/ProjectList.js', 'js/views/ProjectDetail.js',
     'js/views/WikiView.js', 'js/views/ProjectChat.js', 'js/views/ProjectDbQuery.js',
-    'js/views/TokenReport.js', 'js/views/Admin.js'
+    'js/views/TokenReport.js', 'js/views/Admin.js', 'js/views/Inbox.js',
+    'js/views/PipelineFlow.js'
   ];
   const anchors = new Set();
   for (const f of VIEW_FILES) {
@@ -74,6 +75,24 @@ describe('data-tour 錨點與課程定義對得上', () => {
 
   test.each(wanted)('課程用到的 %s 在 view 裡存在', (name) => {
     expect(anchors.has(name)).toBe(true);
+  });
+});
+
+// step.text 走 v-html，step.warn 走 {{ }} 文字插值——兩者長得很像，很容易在 warn 裡順手寫 <strong>，
+// 結果畫面上直接印出標籤原文。這不會紅、不會噴錯，只有肉眼看得出來，所以在這裡守住。
+describe('warn 是純文字，不得含 HTML 標籤', () => {
+  test('tour.js 的 warn 仍以文字插值渲染（改成 v-html 就要改本測試）', () => {
+    expect(read('js/tour.js')).toContain('{{ step.warn }}');
+  });
+
+  const warns = [...read('js/tour-courses.js').matchAll(/warn: '([^']*)'/g)].map(m => m[1]);
+
+  test('掃得到 warn（regex 失效時不得靜默通過）', () => {
+    expect(warns.length).toBeGreaterThanOrEqual(8);
+  });
+
+  test.each(warns)('「%s」不含標籤', (w) => {
+    expect(w).not.toMatch(/<[a-z/]/i);
   });
 });
 
