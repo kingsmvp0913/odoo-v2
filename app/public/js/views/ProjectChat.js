@@ -41,14 +41,21 @@ window.ProjectChatView = Vue.defineComponent({
       this.$router.replace(`/projects/${this.$route.params.id}/chat/${chat.id}`);
       await this.loadMessages();
     },
+    // 這頁所有 await 回來後寫回 this.messages 的地方，都必須先確認使用者還停在送出／請求當下
+    // 的那個對話——否則慢回來的那份會寫進「現在這個」對話的畫面，看起來就是訊息跑到別的對話去。
+    isStillOn(cid) { return !this._gone && !!this.activeChat && this.activeChat.id === cid; },
     async loadMessages() {
       if (!this.activeChat) return;
       if (this.isTourDemo()) { this.messages = window.TourDemo.chatMessages(); return; }
+      const cid = this.activeChat.id;   // 這一輪抓的是哪個對話；await 回來時 activeChat 可能已經換人
       this.stopReplyPoll();   // 切換／重載前先停掉舊對話的輪詢
       this.loadingMsgs = true;
       try {
         this.revokeMessageUrls();   // 換對話／重載前先收掉舊圖，否則 objectURL 一路累積到離開頁面
-        this.messages = await Api.get(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`);
+        const msgs = await Api.get(`projects/${this.$route.params.id}/chats/${cid}/messages`);
+        // 快速連點兩個對話時，先發的那個可能後回來——晚到的舊訊息會整包蓋掉現在這個對話
+        if (!this.isStillOn(cid)) return;
+        this.messages = msgs;
         this.loadAttachmentThumbs();
         this.replyPending = !!this.activeChat.reply_pending;
         this.$nextTick(() => this.scrollToBottom());
@@ -62,12 +69,15 @@ window.ProjectChatView = Vue.defineComponent({
     // （或中斷訊息）已落地，重載訊息顯示出來並收掉輪詢。
     startReplyPoll() {
       if (this._pollTimer || this.isTourDemo()) return;
+      const cid = this.activeChat && this.activeChat.id;   // 這輪輪詢綁定的對話
       this._pollTimer = setInterval(async () => {
-        if (this._gone || !this.activeChat) return this.stopReplyPoll();
+        if (!this.isStillOn(cid)) return this.stopReplyPoll();
         const pid = this.$route.params.id;
         let chats;
         try { chats = await Api.get(`projects/${pid}/chats`); }
         catch (e) { return; }   // 暫時抓不到就下一輪再試，不中斷輪詢
+        // 抓清單的期間可能已經切走：再判一次，否則會把別的對話的 replyPending 清掉並多重載一次
+        if (!this.isStillOn(cid)) return this.stopReplyPoll();
         this.chats = chats;
         const ac = chats.find(c => String(c.id) === String(this.activeChat.id));
         if (ac) this.activeChat = ac;
@@ -181,6 +191,7 @@ window.ProjectChatView = Vue.defineComponent({
     async send() {
       // 只貼一張截圖不打字也算一則訊息（後端同樣認），所以送出條件是「有字或有圖」
       if ((!this.newInput.trim() && !this.pendingFiles.length) || !this.activeChat || this.sending) return;
+      const cid = this.activeChat.id;   // 這則是送去哪個對話；等回覆期間使用者可能已經切走
       const content = this.newInput.trim();
       const files = this.pendingFiles;
       const previews = this.pendingPreviews;
@@ -196,7 +207,7 @@ window.ProjectChatView = Vue.defineComponent({
       });
       this.$nextTick(() => this.scrollToBottom());
       try {
-        const path = `projects/${this.$route.params.id}/chats/${this.activeChat.id}/messages`;
+        const path = `projects/${this.$route.params.id}/chats/${cid}/messages`;
         let reply;
         if (files.length) {
           const fd = new FormData();
@@ -206,13 +217,17 @@ window.ProjectChatView = Vue.defineComponent({
         } else {
           ({ reply } = await Api.post(path, { content }));
         }
+        // 回覆常要跑數分鐘，這期間使用者可以自由切到別的對話：這份回覆屬於 cid，切走了就不能塞
+        // 進畫面上那個對話（會變成別人的訊息），也不能拿現在的 activeChat 去標已讀。回到 cid 時
+        // loadMessages 會從後端把它讀回來，訊息不會掉。
+        if (!this.isStillOn(cid)) return;
         this.messages.push({ id: Date.now() + 1, role: 'ai', content: reply, created_at: new Date().toISOString() });
         this.$nextTick(() => this.scrollToBottom());
-        if (!this._gone) await this.markRead(this.activeChat);
+        await this.markRead(this.activeChat);
         // 重載一次讓剛送出的圖換成正式的 attachments（帶 id，之後重進對話仍看得到）。
         // previews 不在這裡 revoke——loadMessages 開頭的 revokeMessageUrls 會掃到樂觀那則並收掉；
         // 先收的話畫面會閃一下破圖再被換掉。
-        if (!this._gone && files.length) await this.loadMessages();
+        if (files.length) await this.loadMessages();
       } catch (e) {
         showToast(e.message, 'error');
       } finally { this.sending = false; }
