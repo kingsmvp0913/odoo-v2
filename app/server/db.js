@@ -480,7 +480,7 @@ async function migrate() {
     `CREATE TABLE IF NOT EXISTS finding_fixes (
       id           SERIAL PRIMARY KEY,
       finding_id   INTEGER NOT NULL REFERENCES health_check_findings(id) ON DELETE CASCADE,
-      status       TEXT NOT NULL DEFAULT 'running',  -- running | ready | no_change | rejected | failed | adopted | pushed
+      status       TEXT NOT NULL DEFAULT 'running',  -- running | ready | no_change | rejected | failed | adopted | pushed | merged
       branch       TEXT,
       worktree     TEXT,
       diff         TEXT,

@@ -13,8 +13,9 @@ const mockRunFix = jest.fn().mockResolvedValue(undefined);
 const mockAdopt = jest.fn().mockResolvedValue({ branch: 'fix/finding-1-1', commit: 'abc123' });
 const mockPush = jest.fn().mockResolvedValue({ branch: 'fix/finding-1-1' });
 const mockDiscard = jest.fn().mockResolvedValue(undefined);
+const mockApply = jest.fn().mockResolvedValue({ branch: 'fix/finding-1-1', merged: true, restarted: true });
 jest.mock('../pipeline/finding-fix', () => ({
-  runFix: mockRunFix, adoptFix: mockAdopt, pushFix: mockPush, discardFix: mockDiscard,
+  runFix: mockRunFix, adoptFix: mockAdopt, pushFix: mockPush, discardFix: mockDiscard, applyFix: mockApply,
   classifyChanges: jest.requireActual('../pipeline/finding-fix').classifyChanges
 }));
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
@@ -283,4 +284,15 @@ test('修正相關路由一律 admin only', async () => {
   expect((await request(app).post('/api/admin/fixes/1/adopt')
     .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
   expect((await request(app).post('/api/admin/fixes/1/push')).status).toBe(401);
+  // 套用會重啟整個平台，是全站破壞力最大的一顆按鈕
+  expect((await request(app).post('/api/admin/fixes/1/apply')
+    .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
+  expect((await request(app).post('/api/admin/fixes/1/apply')).status).toBe(401);
+});
+
+test('套用要把在飛任務清單傳進去：重不重啟由 runner 的實際狀態決定，不是由前端說了算', async () => {
+  const r = await request(app).post('/api/admin/fixes/7/apply')
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(r.status).toBe(200);
+  expect(mockApply).toHaveBeenCalledWith(7, expect.any(Number), []);
 });

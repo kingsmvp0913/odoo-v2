@@ -29,7 +29,8 @@ const HC_FIX = {
   rejected:  { label: '超出可修改範圍，已作廢', color: 'var(--error)' },
   failed:    { label: '失敗', color: 'var(--error)' },
   adopted:   { label: '已採用（在分支上）', color: 'var(--success, #059669)' },
-  pushed:    { label: '已推上 GitHub', color: 'var(--success, #059669)' }
+  pushed:    { label: '已推上 GitHub', color: 'var(--success, #059669)' },
+  merged:    { label: '已合併進主分支，待重啟', color: 'var(--warning, #d97706)' }
 };
 
 const HC_STATUS = [
@@ -145,7 +146,16 @@ window.AdminHealthCheckView = Vue.defineComponent({
       this.fixBusy = f.id;
       try {
         const r = await Api.post('admin/fixes/' + fx.id + '/' + action, {});
-        showToast(action === 'adopt' ? ('已提交到分支 ' + (r.branch || '')) : action === 'push' ? ('已推上 ' + (r.branch || '')) : '已捨棄', 'success');
+        if (action === 'apply') {
+          // 擋下時碼已經進主分支了，只差重啟——訊息要說清楚，否則人會以為整件事沒發生而重按
+          showToast(r.restarted
+            ? '已合併並推送，平台重啟中（約 30 秒後重新整理）'
+            : ('已合併並推送，但還有 ' + r.inflight.length + ' 張任務在跑，暫不重啟：'
+               + r.inflight.map(function (t) { return '#' + t.taskId; }).join('、')),
+            r.restarted ? 'success' : 'warning');
+        } else {
+          showToast(action === 'adopt' ? ('已提交到分支 ' + (r.branch || '')) : action === 'push' ? ('已推上 ' + (r.branch || '')) : '已捨棄', 'success');
+        }
         await this.loadFixes();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.fixBusy = null; }
@@ -252,6 +262,9 @@ window.AdminHealthCheckView = Vue.defineComponent({
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'adopt')">採用（提交到分支）</button>
               <button v-if="fixState(f.id).status === 'adopted'" class="btn btn-primary btn-sm"
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'push')">推上 GitHub</button>
+              <button v-if="['adopted','pushed','merged'].includes(fixState(f.id).status)" class="btn btn-primary btn-sm"
+                :disabled="fixBusy === f.id" @click="fixAction(f, 'apply')">
+                {{ fixState(f.id).status === 'merged' ? '重啟平台（碼已合併）' : '合併並套用（會重啟平台）' }}</button>
               <button v-if="['ready','adopted'].includes(fixState(f.id).status)" class="btn btn-outline btn-sm"
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'discard')">捨棄</button>
             </div>

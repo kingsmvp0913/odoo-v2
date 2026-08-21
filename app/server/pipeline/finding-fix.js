@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
@@ -30,6 +31,9 @@ const REPO_ROOT = path.join(__dirname, '..', '..', '..');
 const WORKTREE_ROOT = process.env.FIX_WORKTREE_DIR || path.join(REPO_ROOT, '.claude', 'worktrees');
 // 光是跑一次全套測試就要數分鐘，改完紅了還要自己修到綠——預設的 600s 必然逾時。比照 coding。
 const FIX_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TIMEOUT_MS || '2400000', 10);
+// 平台自己的主分支（不是客戶專案的 testing）
+const MAIN_BRANCH = process.env.PLATFORM_MAIN_BRANCH || 'master';
+const RESTART_DELAY_MS = parseInt(process.env.PLATFORM_RESTART_DELAY_MS || '1500', 10);
 
 // 可以動的路徑（POSIX 斜線比對）
 const ALLOW = [
@@ -243,4 +247,87 @@ async function discardFix(fixId) {
   await setStatus(fixId, 'failed', { reject_reason: '已由人工捨棄', worktree: null });
 }
 
-module.exports = { runFix, adoptFix, pushFix, discardFix, classifyChanges };
+/**
+ * `docker inspect --format '{{.Name}}\t{{.Config.Hostname}}'` 的輸出 → 本機所在容器的名字。
+ * 平台跑在容器內，而容器名沒有任何管道傳進來（env 只有 hostname，且 hostname ≠ 容器名）。
+ * 唯一可靠的對應是反查：哪個容器的 Config.Hostname 等於本機 hostname。
+ * 命中不唯一時寧可失敗——重啟錯的容器會停掉別人的服務。
+ */
+function pickSelfContainer(inspectStdout, hostname) {
+  const hits = String(inspectStdout || '').split('\n')
+    .map(l => l.split('\t'))
+    .filter(([, h]) => (h || '').trim() === hostname)
+    .map(([n]) => n.trim().replace(/^\//, ''));
+  if (hits.length !== 1) {
+    throw new Error(`無法唯一辨識平台容器（hostname=${hostname}，命中 ${hits.length} 個）；請設 PLATFORM_CONTAINER`);
+  }
+  return hits[0];
+}
+
+async function selfContainerName() {
+  if (process.env.PLATFORM_CONTAINER) return process.env.PLATFORM_CONTAINER;
+  const { stdout: names } = await execFileAsync('docker', ['ps', '--format', '{{.Names}}']);
+  const list = names.split('\n').map(s => s.trim()).filter(Boolean);
+  if (!list.length) throw new Error('docker 沒有回報任何容器（socket 不可用？）');
+  const { stdout } = await execFileAsync(
+    'docker', ['inspect', '--format', '{{.Name}}\t{{.Config.Hostname}}', ...list], { maxBuffer: 8 * 1024 * 1024 });
+  return pickSelfContainer(stdout, os.hostname());
+}
+
+/**
+ * 一鍵套用：合併進主分支 → 推 origin → 重啟平台。
+ *
+ * 重啟走 `docker restart`（交給 host 的 daemon）而不是自殺讓 policy 撿回來：容器內 kill node 會
+ * 連 entrypoint 帶 postgres 一起收掉，能不能回來得看容器外的 restart policy——那是這裡看不見的設定。
+ *
+ * 先查得到容器名才動手合併：名字查不到就重啟不了，此時合併完等於把碼推上去卻停在「跑著舊碼」，
+ * 而人剛按的按鈕上寫著「會重啟」。
+ */
+async function applyFix(fixId, userId, inflight = []) {
+  const { rows: [fix] } = await query('SELECT * FROM finding_fixes WHERE id=$1', [fixId]);
+  if (!fix) throw new Error('修正紀錄不存在');
+  if (!['adopted', 'pushed', 'merged'].includes(fix.status)) {
+    throw new Error(`此狀態不能套用：${fix.status}`);
+  }
+  const container = await selfContainerName();
+
+  // status='merged'＝上一次按下時碼已經進 master、只差重啟（被在飛任務擋掉）。這裡不重複合併。
+  if (fix.status !== 'merged') {
+    const { stdout: br } = await git(REPO_ROOT, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (br.trim() !== MAIN_BRANCH) {
+      throw new Error(`主 clone 目前在 ${br.trim()} 分支（預期 ${MAIN_BRANCH}），不代為切換`);
+    }
+    // 此 repo 常態是多股平行工作：在別人未提交的變更上合併，會把他們的東西一起帶進 commit
+    const { stdout: dirty } = await git(REPO_ROOT, ['status', '--porcelain', '-uno']);
+    if (dirty.trim()) {
+      throw new Error(`主 clone 有未提交的變更，先處理再套用：\n${dirty.trim()}`);
+    }
+    const gitEnv = await buildGitEnv(userId);
+    const env = { ...process.env, ...gitEnv };
+    try {
+      // 訊息帶提案編號：只寫分支名的話，分支一刪就再也回推不出這個 merge 是為了什麼
+      await git(REPO_ROOT, ['merge', '--no-ff', fix.branch, '-m',
+        `Merge ${fix.branch}\n\n依系統健檢提案 #${fix.finding_id} 修正。`], { env });
+    } catch (err) {
+      // 衝突留在工作區會讓主 clone 卡在 MERGING、之後每個 git 動作都失敗
+      await git(REPO_ROOT, ['merge', '--abort']).catch(() => {});
+      throw new Error(`合併失敗（已回復）：${err.message}`);
+    }
+    await git(REPO_ROOT, ['push', 'origin', MAIN_BRANCH], { env });
+    await setStatus(fixId, 'merged');
+  }
+
+  // 重啟會當場砍掉在飛的 agent，任務留在 *_running 的孤兒狀態。碼已經在 master 上，晚點再按即可。
+  if (inflight.length) {
+    return { branch: fix.branch, merged: true, restarted: false, inflight };
+  }
+  // 延遲讓 HTTP 回應先送出去——這道指令會把自己這個行程一起帶走
+  setTimeout(() => {
+    execFile('docker', ['restart', container], err => {
+      if (err) console.error('[FIX] restart:', err.message);
+    });
+  }, RESTART_DELAY_MS);
+  return { branch: fix.branch, merged: true, restarted: true, container };
+}
+
+module.exports = { runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer };

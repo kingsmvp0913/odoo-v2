@@ -14,7 +14,7 @@ const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
-const { runFix, adoptFix, pushFix, discardFix } = require('./pipeline/finding-fix');
+const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
 const { getHealthCheckSchedule } = require('./cron');
 
 function getSshPubKey() {
@@ -636,6 +636,13 @@ function registerRoutes(app) {
 
   app.post('/api/admin/fixes/:fixId/adopt', auth, async (req, res) => {
     try { res.json(await adoptFix(parseInt(req.params.fixId, 10), req.userId)); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  // 套用＝合併進主分支＋推 origin＋重啟平台。在飛任務由這裡查（pipeline 不得反向 require route，
+  // 但 runner 的在飛清單本來就在 route 層可得）並傳進去，applyFix 只負責依它決定重不重啟。
+  app.post('/api/admin/fixes/:fixId/apply', auth, async (req, res) => {
+    try { res.json(await applyFix(parseInt(req.params.fixId, 10), req.userId, getInflightInfo())); }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
 
