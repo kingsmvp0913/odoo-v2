@@ -936,10 +936,12 @@ test('analysis resume：有 session＋版本相符＋額度未滿 → 帶 --resu
   const { spawn } = require('child_process');
   spawn.mockClear();
   mockAnalysisResult('case_id: "x"\nmodule: "idx_x"\nexecution_mode: "MODE_A"\nsummary: "s"\nodoo_version: "17.0"');
+  // analysis_yaml 必填：正常 resume 的前提就是「上一輪已產出規格、本輪只做增量」，缺了它代表
+  // 上一輪是被時限砍斷的，那會改走 analysis-timeout-resume（見下方逾時續跑那支測試）。
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id,
-      analysis_session_id, analysis_prompt_ver, analysis_resume_count)
-     VALUES ($1,'ta_ana_resume','odoo','T','需求','analysis_running',$2,'sess-PREV',$3,0) RETURNING id`,
+      analysis_session_id, analysis_prompt_ver, analysis_resume_count, analysis_yaml)
+     VALUES ($1,'ta_ana_resume','odoo','T','需求','analysis_running',$2,'sess-PREV',$3,0,'case_id: "old"') RETURNING id`,
     [userId, projectId, analysisVer()]
   );
   await runTaskAnalysis(t.id, userId).catch(() => {});
@@ -974,6 +976,69 @@ test('analysis resume：prompt 帶【任務附件】絕對路徑（fresh 輪之�
   expect(resumeCall).toBeTruthy();
   expect(resumeCall.stdin).toContain('以下檔案可用 Read 工具讀取');
   expect(resumeCall.stdin).toContain(path.resolve(uploadRoot(), `task_${t.id}/1_審核標註.png`));
+});
+
+// 意圖：分析關失敗（逾時被砍最典型）時，那一輪讀過的整包 code 就在 session 裡。不存下來，
+// 使用者按「繼續」就是從零重讀一次、然後再撞同一個上限——task 180 的 600 秒正是這樣白燒的。
+// 計數同時要 +1：只在成功輪累加的話，逾時→續跑→再逾時 永遠碰不到 ANALYSIS_RESUME_LIMIT，
+// 同一個卡點可以無限重演（健檢 U2 的教訓）。
+test('analysis 失敗但 session 已建立 → 存下 session 供續跑，且 resume 計數 +1（不無限重演）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  spawn.mockClear();
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = {
+      write: () => {},
+      end: () => { setImmediate(() => {
+        child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-DIED' }) + '\n');
+        child.stderr.emit('data', 'boom');
+        child.emit('close', 1);   // 讀了碼、還沒吐規格就死掉
+      }); }
+    };
+    return child;
+  });
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id)
+     VALUES ($1,'ta_ana_keepsess','odoo','T','需求','analysis_running',$2) RETURNING id`,
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const { rows: [after] } = await dbModule.query(
+    'SELECT status, analysis_session_id, analysis_resume_count, analysis_prompt_ver FROM tasks WHERE id=$1', [t.id]
+  );
+  expect(after.status).toBe('stopped');
+  expect(after.analysis_session_id).toBe('sess-DIED');
+  expect(after.analysis_resume_count).toBe(1);
+  expect(after.analysis_prompt_ver).toBe(analysisVer());  // 沒寫版本指紋 → canResume 恆為 false ＝ 白存
+});
+
+// 意圖：上一輪讀過碼卻沒留下規格＝被時限砍斷的，這一輪要的是「收斂」不是「增量改」。
+// analysis-retry 的 body 通篇假設上一輪產出過規格（「沒被新資訊動到的部分維持原樣」），
+// 餵給逾時輪只會拿到「新資訊(無)＋既有規格(無)」的空洞指令，於是它照樣從頭探索、照樣再逾時。
+test('analysis 續跑：有 session 但無既有規格 → 走 analysis-timeout-resume（收斂版），非 analysis-retry', async () => {
+  const calls = analysisSpawn();
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id,
+      analysis_session_id, analysis_prompt_ver, analysis_resume_count)
+     VALUES ($1,'ta_ana_tmo_resume','odoo','T','需求','analysis_running',$2,'sess-TMO',$3,1) RETURNING id`,
+    [userId, projectId, analysisVer()]
+  );
+  await runTaskAnalysis(t.id, userId).catch(() => {});
+  const resumeCall = calls.find(c => (c.args || []).includes('--resume'));
+  expect(resumeCall).toBeTruthy();
+  expect((resumeCall.args || []).join(' ')).toContain('sess-TMO');
+  // 收斂版特有的兩條指令：不准再擴大探索、矛盾要停下來問（analysis-retry 沒有這兩句）
+  expect(resumeCall.stdin).toContain('不能再擴大探索');
+  expect(resumeCall.stdin).toContain('那不是查得到答案的問題');
+  // 收斂要從零寫出完整規格，與首輪同級用 opus（analysis-retry 才是降 sonnet 的增量改）
+  expect((resumeCall.args || []).join(' ')).toContain('opus');
+  // 新 agent 自帶三個 {{}}，呼叫端漏傳哪個都只會 console 告警然後渲染成空字串，agent 照樣拿空洞
+  // prompt 跑完（agent-loader 鐵則 1）——這裡把「渲染真的完成」釘死，別靠告警被人看見。
+  expect(resumeCall.stdin).not.toContain('{{');
 });
 
 test('analysis resume 額度用完 → 降級 fresh（不帶 --resume），計數歸零重新起算', async () => {
