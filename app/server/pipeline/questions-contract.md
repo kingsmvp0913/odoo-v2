@@ -6,6 +6,9 @@
 - 白話說明、背景、「這部分不用您決定」這類**不是問題的內容一律放 `intro`**，不得放進 `questions`。
 - `questions` 每一筆是一個**獨立問題**的物件：`id`／`text`／`type`（`choice`｜`text`）／`required`，
   `choice` 另附 `options`（每項 `key`＋`label`）。
+- **每題附 `impact`**：`costly`＝選錯要退回重寫規格與程式；`reversible`＝之後隨時能改。
+  畫面會把 `costly` 渲染成一個小標記，讓使用者一眼看出哪幾題要多看一眼——**所以絕對不要再把這件事
+  寫進 `text` 或 `recommended_why`**，寫了只會讓題目越來越長，標記已經講完了。判不出來就填 `reversible`。
 - `text` 內**不得自帶「Q1：」「問題1：」之類的編號**——畫面會自己編號，自帶會變成雙重編號。
 - `text` 內**不得寫「只有第 1 題選 A 才需要回答」**這類條件敘述——條件用
   `depends_on: { question: q1, equals: A }` 欄位表達。

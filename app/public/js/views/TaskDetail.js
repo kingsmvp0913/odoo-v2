@@ -976,6 +976,10 @@ window.TaskDetailView = Vue.defineComponent({
                       <span style="background:var(--primary);color:#fff;border-radius:50%;width:18px;height:18px;font-size:var(--fs-xs);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">{{ idx + 1 }}</span>
                       <span style="white-space:pre-wrap">{{ q.text }}</span>
                       <span v-if="!q.required" style="color:var(--text-muted);font-size:var(--fs-xs);flex-shrink:0">選填</span>
+                      <!-- 選錯的代價用標記呈現，不寫進題目文字：AI 原本被要求在每題後面補一句「這題選錯要重做」，
+                           每題都長一截。只標 costly，reversible 不渲染——沒有標記＝不必特別小心，比兩種都畫更省視覺。 -->
+                      <span v-if="q.impact === 'costly'" class="pill pill-warn" style="flex-shrink:0;margin-top:1px"
+                            title="這題選錯要退回重寫規格與程式，請多看一眼">⚠ 選錯難改</span>
                     </div>
                     <!-- AI 的建議答案：只有它推導得出依據的題目才有，純偏好題刻意留空＝這一行不渲染 -->
                     <div v-if="clarRecommend(q)" style="margin:2px 0 8px 26px;font-size:var(--fs-sm);color:var(--text-secondary)">
