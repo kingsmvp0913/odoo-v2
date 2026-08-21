@@ -205,11 +205,16 @@ if (require.main === module) {
   });
 
   migrate().then(async () => {
-    // Reset any envs stuck in setting_up from a previous crashed/restarted process
-    const { query: q } = require('./db');
-    await q(
-      "UPDATE odoo_envs SET status='error', error_msg='伺服器重啟，建立程序中斷', updated_at=NOW() WHERE status='setting_up'"
-    ).catch(() => {});
+    // 建立到一半被重啟打斷的測試環境：收乾淨並回到可重建的 idle。舊版一律標 error，而 error 在
+    // /env/sso 是死路（刻意不自動重試），使用者只能自己回專案頁重按；且舊版只改 status、不收容器
+    // 與埠租約，會讓下一個借到同埠的專案莫名撞埠（見 pipeline/startup-recovery.js 的完整說明）。
+    try {
+      const { releaseInterruptedSetups } = require('./pipeline/startup-recovery');
+      const r = await releaseInterruptedSetups();
+      if (r.released || r.failed) {
+        console.log(`[STARTUP] 中斷建立清理：收回 ${r.released}／失敗 ${r.failed}`);
+      }
+    } catch (e) { console.error('[STARTUP] 中斷建立清理:', e.message); }
     // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續），
     // 不再一律標 error 作廢
     try {
@@ -222,6 +227,17 @@ if (require.main === module) {
       const { recoverInterruptedChats } = require('./pipeline/chat-agent');
       await recoverInterruptedChats();
     } catch (e) { console.error('[STARTUP] chat recover:', e.message); }
+    // 被中斷在 deploy／E2E 的任務：容器內那支 odoo 進程不會隨平台一起死（docker exec 無 TTY，
+    // 父死子活），而 cron 待會就會重派 → 兩個 odoo -u 併行寫同一個 DB → 兩個都死在
+    // SerializationFailure，還會被分類器誤歸因成環境或程式問題。重啟該專案容器可清掉殘留。
+    // 必須排在 startCron() 之前：晚一步就是已經重派了（見 pipeline/startup-recovery.js）。
+    try {
+      const { clearInterruptedUpgrades } = require('./pipeline/startup-recovery');
+      const s = await clearInterruptedUpgrades();
+      if (s.restarted || s.failed || s.overBudget) {
+        console.log(`[STARTUP] 中斷升級清理：重啟 ${s.restarted}／略過 ${s.skipped}／失敗 ${s.failed}／超預算 ${s.overBudget}`);
+      }
+    } catch (e) { console.error('[STARTUP] 中斷升級清理:', e.message); }
 
     setIo(io);
     // Claude 長效憑證載入快取：runClaude 同步取用，故必須在派工開始前備妥（未設定則沿用本機憑證檔）
