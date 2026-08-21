@@ -409,6 +409,9 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
 // 現在改成一支審計 agent 自己主導：程式只給一份增量視窗的輪廓，它自己下 SQL 深挖、自己讀提示詞、
 // 自己回溯到更早的資料找同類案例湊證據，最後輸出「提案清單」而不是「逐關診斷」。
 const AUDIT_AGENT = '__audit__';
+// 主導型健檢會自己反覆下 SQL 回溯查證，比舊的「程式餵好摘要、一問一答」慢得多——實測 2026-08-21
+// 用預設的 600s 直接逾時、整輪報廢。比照 coding 給它獨立的上限。
+const AUDIT_TIMEOUT_MS = parseInt(process.env.HEALTH_AUDIT_TIMEOUT_MS || '2400000', 10);
 
 const STATUS_TEXT = { pending: '待處理', no_change: '不須調整', done: '處理完成' };
 
@@ -462,7 +465,9 @@ async function runAudit(runId, { sinceAt, startedBy = null } = {}) {
       previous: await previousProposals(),
       summary: JSON.stringify(summary)
     });
-    const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+    const { text, usage, durationMs } = await runClaude(prompt, {
+      model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT, timeoutMs: AUDIT_TIMEOUT_MS
+    });
     raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
 

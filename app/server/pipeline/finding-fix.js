@@ -28,6 +28,8 @@ const execFileAsync = promisify(execFile);
 
 const REPO_ROOT = path.join(__dirname, '..', '..', '..');
 const WORKTREE_ROOT = process.env.FIX_WORKTREE_DIR || path.join(REPO_ROOT, '.claude', 'worktrees');
+// 光是跑一次全套測試就要數分鐘，改完紅了還要自己修到綠——預設的 600s 必然逾時。比照 coding。
+const FIX_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TIMEOUT_MS || '2400000', 10);
 
 // 可以動的路徑（POSIX 斜線比對）
 const ALLOW = [
@@ -107,11 +109,21 @@ function unlinkNodeModules(worktree) {
   }
 }
 
+// 收工作區。Windows 上 `worktree remove` 常在最後刪目錄那一步吃到 Permission denied（有殘留的
+// 檔案 handle），實測會留下一個空目錄、git 那邊卻已經移除登記。所以失敗要 prune ＋ 自己刪，
+// 否則下次 `worktree add` 到同一路徑會撞牆。
+// ⚠ 順序不可調換：一定要先移除 node_modules 的 junction 再刪目錄，否則遞迴刪會沿著連結刪到主 repo。
 async function removeWorktree(worktree) {
   if (!worktree) return;
   unlinkNodeModules(worktree);
-  await git(REPO_ROOT, ['worktree', 'remove', '--force', worktree]).catch(err =>
-    console.error('[FIX] worktree remove:', err.message));
+  try {
+    await git(REPO_ROOT, ['worktree', 'remove', '--force', worktree]);
+  } catch (err) {
+    console.error('[FIX] worktree remove:', err.message);
+    await git(REPO_ROOT, ['worktree', 'prune']).catch(() => {});
+    try { fs.rmSync(worktree, { recursive: true, force: true }); }
+    catch (e) { console.error('[FIX] rm worktree dir:', e.message); }
+  }
 }
 
 /**
@@ -146,7 +158,9 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
 
     let text = '';
     try {
-      const r = await runClaude(prompt, { model: agent.model, agentType: 'platform_fix', cwd: worktree });
+      const r = await runClaude(prompt, {
+        model: agent.model, agentType: 'platform_fix', cwd: worktree, timeoutMs: FIX_TIMEOUT_MS
+      });
       text = r.text;
       await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'platform_fix', r.usage, r.durationMs);
     } catch (err) {
