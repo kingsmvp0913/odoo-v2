@@ -67,6 +67,7 @@ const router = createRouter({
     { path: '/projects/:id/deploy-sop', component: window.DeploySopView, meta: { requiresAuth: true } },
     { path: '/token-report', component: window.TokenReportView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
+    { path: '/architecture', component: window.ArchitectureView, meta: { requiresAuth: true } },
     { path: '/pipeline-flow', component: window.PipelineFlowView, meta: { requiresAuth: true } },
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
@@ -230,11 +231,15 @@ const App = defineComponent({
             <router-link to="/settings" custom v-slot="{ navigate, isActive }">
               <a data-tour="nav-settings" :class="{ active: isActive }" @click="navigate">⚙️ 設定</a>
             </router-link>
-            <router-link to="/pipeline-flow" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">🗺️ 流程圖</a>
-            </router-link>
             <router-link v-if="isAdmin" to="/admin" custom v-slot="{ navigate, isActive }">
               <a :class="{ active: isActive }" @click="navigate">🔧 管理員</a>
+            </router-link>
+            <!-- 地景圖與流程圖是「查資料」的兩頁，不是日常操作，故排在所有操作項目之後 -->
+            <router-link to="/architecture" custom v-slot="{ navigate, isActive }">
+              <a :class="{ active: isActive }" @click="navigate">🏗️ 架構圖</a>
+            </router-link>
+            <router-link to="/pipeline-flow" custom v-slot="{ navigate, isActive }">
+              <a :class="{ active: isActive }" @click="navigate">🗺️ 流程圖</a>
             </router-link>
           </nav>
           <div class="sidebar-footer">
