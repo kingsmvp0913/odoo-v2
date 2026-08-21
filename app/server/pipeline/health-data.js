@@ -340,7 +340,7 @@ async function buildWindowSummary(sinceAt) {
   const { weighted: WEIGHTED, rate: RATE } = costSql();
 
   const { rows: usage } = await query(
-    `SELECT task_id, agent_type, model, duration_ms, status, recorded_at,
+    `SELECT task_id, chat_id, agent_type, model, duration_ms, status, recorded_at,
             input_tokens, output_tokens, cache_read_tokens, cache_create_tokens
        FROM token_usage WHERE recorded_at >= $1 ORDER BY recorded_at, id`, [since]
   );
@@ -352,6 +352,7 @@ async function buildWindowSummary(sinceAt) {
   // 每關：呼叫數、失敗數、平均耗時、經手幾張任務。細節（哪一張、為什麼）由 agent 自己查。
   const byStage = new Map();
   const tasksOfStage = new Map();
+  const chatsOfStage = new Map();
   for (const u of usage) {
     const k = u.agent_type || '(未知)';
     const acc = byStage.get(k) || { calls: 0, failed: 0, duration_ms: 0 };
@@ -363,13 +364,30 @@ async function buildWindowSummary(sinceAt) {
       if (!tasksOfStage.has(k)) tasksOfStage.set(k, new Set());
       tasksOfStage.get(k).add(u.task_id);
     }
+    if (u.chat_id) {
+      if (!chatsOfStage.has(k)) chatsOfStage.set(k, new Set());
+      chatsOfStage.get(k).add(u.chat_id);
+    }
   }
-  const per_stage = Object.fromEntries([...byStage.entries()].map(([k, v]) => [k, {
-    calls: v.calls, failed_calls: v.failed,
-    avg_duration_ms: Math.round(v.duration_ms / Math.max(1, v.calls)),
-    tasks: (tasksOfStage.get(k) || new Set()).size,
-    repeat_avg: Math.round((v.calls / Math.max(1, (tasksOfStage.get(k) || new Set()).size)) * 100) / 100
-  }]));
+  const per_stage = Object.fromEntries([...byStage.entries()].map(([k, v]) => {
+    const tasks = (tasksOfStage.get(k) || new Set()).size;
+    const chats = (chatsOfStage.get(k) || new Set()).size;
+    // repeat_avg＝calls÷「獨立會話數」。task-bound 關用 distinct task 當分母，讀作「同一任務重跑幾次」。
+    // 但 chat／chat-to-task 這類非 task-bound 關 task_id 恆 null，用 max(1,tasks) 會讓分母塌成 1、
+    // repeat_avg 直接等於 calls——把 N 場獨立對話偽裝成「同一任務重跑 N 次」，正是最強失敗訊號的形狀。
+    // 這些關有 chat_id 可當正確分母；tasks 為 0 時改用 distinct chat，兩者皆無（如 workflow_health）
+    // 就回 null 標 N/A，不與「重跑」同形。
+    const denom = tasks || chats;
+    const entry = {
+      calls: v.calls, failed_calls: v.failed,
+      avg_duration_ms: Math.round(v.duration_ms / Math.max(1, v.calls)),
+      tasks,
+      repeat_avg: denom ? Math.round((v.calls / denom) * 100) / 100 : null
+    };
+    // 分母來自對話而非任務時明講，免得「tasks:0 卻有 repeat_avg」自己又變成另一種誤導
+    if (!tasks && chats) entry.chats = chats;
+    return [k, entry];
+  }));
 
   // 窗內有動作的任務：帶關卡序列，讓 agent 一眼看得到震盪形狀（coding→qa→coding→qa）。
   const { rows: tasks } = await query(
