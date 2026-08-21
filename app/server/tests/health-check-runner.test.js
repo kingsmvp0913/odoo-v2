@@ -23,12 +23,13 @@ jest.mock('../pipeline/agent-loader', () => {
   };
 });
 jest.mock('../pipeline/health-data', () => ({
-  buildAgentSummary: jest.fn().mockResolvedValue({ token: {}, tasks: {}, rejections: null })
+  buildAgentSummary: jest.fn().mockResolvedValue({ token: {}, tasks: {}, rejections: null }),
+  buildTaskSummary: jest.fn().mockResolvedValue({ scope: 'task:1', task: {}, sequence: [], per_stage: {} })
 }));
 
-const { buildAgentSummary } = require('../pipeline/health-data');   // 零樣本測試要逐次覆寫
+const { buildAgentSummary, buildTaskSummary } = require('../pipeline/health-data');   // 零樣本測試要逐次覆寫
 
-let dbModule2, runHealthCheck, hcUserId;
+let dbModule2, runHealthCheck, runTaskHealthCheck, resumeInterruptedRuns, hcUserId;
 beforeAll(async () => {
   const db = newDb();
   const { Pool } = db.adapters.createPg();
@@ -41,7 +42,7 @@ beforeAll(async () => {
   // 深診上限在 module load 時讀 env，故必須在 require 之前設。設成 1 是為了讓「截斷要寫進
   // finding、不得靜默」那條測得到——本檔的 fixture 只有兩個 agent，用預設的 8 永遠碰不到上限。
   process.env.HEALTH_MAX_FOCUS = '1';
-  ({ runHealthCheck } = require('../pipeline/health-check-runner'));
+  ({ runHealthCheck, runTaskHealthCheck, resumeInterruptedRuns } = require('../pipeline/health-check-runner'));
 });
 afterAll(() => dbModule2._setPoolForTesting(null));
 beforeEach(() => mockRunClaude.mockReset());
@@ -490,4 +491,87 @@ test('focus 超過上限 → 截斷並把未深診的關寫進 finding', async (
     "SELECT rationale FROM health_check_findings WHERE run_id=$1 AND agent_name='__triage__'", [runId]);
   expect(t.rationale).toContain('未深診');
   expect(t.rationale).toContain('coding-project');
+});
+
+// --- scope=task：單張任務的健檢（入口在任務詳情頁）---
+// 意圖：與全平台健檢共用 runs／findings 表，但只跑一次呼叫、只落一筆 __task__ finding，
+// 且**永遠不給 suggested_prompt**——單張任務的證據不得產生提示詞改動（判準的紅旗之一）。
+
+async function newTaskRun(taskDbId) {
+  const { rows: [r] } = await dbModule2.query(
+    "INSERT INTO health_check_runs (status, task_db_id) VALUES ('running',$1) RETURNING id", [taskDbId]);
+  return r.id;
+}
+
+test('runTaskHealthCheck：落一筆 __task__ finding（suggested_prompt 為 NULL）、run 設 done', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>處置：重跑 QA。</diagnosis><rationale>依 per_stage</rationale><result>{"severity":"medium"}</result>',
+    usage: { input_tokens: 1 }, durationMs: 10
+  });
+  const runId = await newTaskRun(1);
+  await runTaskHealthCheck(runId, { taskDbId: 1, startedBy: null });
+
+  const { rows } = await dbModule2.query(
+    'SELECT agent_name, agent_label, severity, diagnosis, suggested_prompt, rationale FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(rows).toHaveLength(1);                       // 不做分流／深診，就這一筆
+  expect(rows[0].agent_name).toBe('__task__');
+  expect(rows[0].agent_label).toBe('任務健檢');
+  expect(rows[0].severity).toBe('medium');
+  expect(rows[0].diagnosis).toContain('處置：重跑 QA');
+  expect(rows[0].suggested_prompt).toBeNull();
+  expect(rows[0].rationale).toBe('依 per_stage');
+  expect(mockRunClaude).toHaveBeenCalledTimes(1);
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('done');
+});
+
+test('runTaskHealthCheck：模型就算給了 <prompt> 也不落進 suggested_prompt', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<prompt>改壞的提示詞</prompt><diagnosis>處置：無需處置。</diagnosis><result>{"severity":"ok"}</result>',
+    usage: {}, durationMs: 5
+  });
+  const runId = await newTaskRun(1);
+  await runTaskHealthCheck(runId, { taskDbId: 1, startedBy: null });
+  const { rows: [f] } = await dbModule2.query('SELECT severity, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.severity).toBe('ok');
+  expect(f.suggested_prompt).toBeNull();              // 前端的「帶入編輯器」按鈕因此不會出現
+});
+
+test('runTaskHealthCheck：任務不存在→落 error finding 並把 run 標 error（不可留在 running）', async () => {
+  buildTaskSummary.mockResolvedValueOnce(null);
+  const runId = await newTaskRun(9999);
+  await runTaskHealthCheck(runId, { taskDbId: 9999, startedBy: null });
+  const { rows: [f] } = await dbModule2.query('SELECT severity, diagnosis FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.severity).toBe('error');
+  expect(f.diagnosis).toContain('找不到任務');
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('error');                   // 停在 running 在畫面上與「還在跑」無從分辨
+  expect(mockRunClaude).not.toHaveBeenCalled();       // 連呼叫都不該發生
+});
+
+test('runTaskHealthCheck：解析不出有效診斷→落 error finding，不靜默略過', async () => {
+  mockRunClaude.mockResolvedValue({ text: '模型講了一堆但沒有任何標籤', usage: {}, durationMs: 5 });
+  const runId = await newTaskRun(1);
+  await runTaskHealthCheck(runId, { taskDbId: 1, startedBy: null });
+  const { rows: [f] } = await dbModule2.query('SELECT severity, diagnosis FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.severity).toBe('error');
+  expect(f.diagnosis).toContain('健檢失敗');
+});
+
+test('resumeInterruptedRuns：scope=task 的中斷 run 續跑成任務健檢，不會變成全平台健檢', async () => {
+  // 這是「拿 task run 去跑 runHealthCheck」的護欄：錯了不會報錯，只會在同一個 run 底下混進
+  // 各關的 findings，畫面上再也分不出這是哪一張任務的診斷——零訊號的靜默失敗。
+  await dbModule2.query("UPDATE health_check_runs SET status='done' WHERE status='running'");
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>處置：補充資訊。</diagnosis><result>{"severity":"low"}</result>', usage: {}, durationMs: 5
+  });
+  const runId = await newTaskRun(1);
+  expect(await resumeInterruptedRuns()).toBe(1);
+  for (let i = 0; i < 40; i++) {                       // fire-and-forget，等它自己收尾
+    const { rows: [r] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+    if (r.status !== 'running') break;
+    await new Promise(r2 => setTimeout(r2, 25));
+  }
+  const { rows } = await dbModule2.query('SELECT agent_name FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(rows.map(r => r.agent_name)).toEqual(['__task__']);   // 沒有 coding-project／qa／__summary__
 });

@@ -114,8 +114,11 @@ const HEALTH_CHECK_WINDOW_DAYS = parseInt(process.env.HEALTH_CHECK_WINDOW_DAYS |
 async function getHealthCheckSchedule() {
   const intervalMs = HEALTH_CHECK_INTERVAL_MS;
   if (intervalMs <= 0) return { enabled: false, intervalMs, lastRunAt: null, nextRunAt: null, running: false, due: false };
+  // 只認全平台健檢（task_db_id IS NULL）：單張任務健檢是人工隨手按的，一天可能按好幾次，
+  // 讓它算進來會把每週排程往後推一整週，而且畫面上的「下次自動健檢」也跟著變成假的。
+  // 兩者共用 runs 表是刻意的（同一份判準、同一個結果頁），但排程的節流只該看平台那一種。
   const { rows } = await query(
-    "SELECT status, created_at FROM health_check_runs ORDER BY id DESC LIMIT 1"
+    "SELECT status, created_at FROM health_check_runs WHERE task_db_id IS NULL ORDER BY id DESC LIMIT 1"
   );
   const last = rows[0];
   // 從沒跑過 → 下一個 tick 就跑，沒有「上次」可推算下次時刻

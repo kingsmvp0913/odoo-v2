@@ -5,7 +5,7 @@ const { listAgents, loadAgent } = require('./agent-loader');
 const { runClaude } = require('./claude-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { buildAgentSummary } = require('./health-data');
+const { buildAgentSummary, buildTaskSummary } = require('./health-data');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 
@@ -36,6 +36,10 @@ const SUMMARY_AGENT = '__summary__';
 // 點名值得深看的關，才對那幾關拉提示詞深診。原本是 21 關各跑一次 opus 再把結論拼起來——
 // 每一關只看得到自己，跨關問題於是每一關都正確地判成「與本關無關」，合起來沒有人負責。
 const TRIAGE_AGENT = '__triage__';
+// 單張任務健檢那一筆（見 runTaskHealthCheck）。與上面三個一樣用底線包起來的假 agent_name：
+// findings 表的 agent_name 同時承載「哪一關」與「哪一種非 per-agent 的診斷」，真 agent 名不可能撞。
+const TASK_AGENT = '__task__';
+const TASK_LABEL = '任務健檢';
 // 深診上限：分流若把全部都點名就等於沒篩，成本回到改版前。截斷一律寫進 finding，不靜默丟掉。
 const MAX_FOCUS = parseInt(process.env.HEALTH_MAX_FOCUS || '8', 10);
 const SYSTEM_MIN_TASKS = parseInt(process.env.HEALTH_SYSTEM_MIN_TASKS || '2', 10);
@@ -342,15 +346,75 @@ async function checkOne(runId, agent, ha, windowDays, startedBy, preSummary = nu
   }
 }
 
+// scope=task：把一張任務跨關卡展開跑一次診斷。與全平台健檢共用同一張 findings 表與同一份判準
+//（.claude/skills/healthCheck）——兩者是同一批資料的兩個投影，不是兩套分析：前者跨任務聚合看
+// 某一關，後者跨關卡展開看某一張。
+// 刻意只跑一次呼叫、不套用「分流→深診」：分流存在的理由是決定「花錢深看哪幾關」，單張任務沒有
+// 這個取捨；而依判準，單張任務的證據本來就不得產生提示詞改動（一張任務走過七關會在七處各出現
+// 一次，用次數算會把一件事誤算成七個獨立證據），深診那半段在這裡沒有出口。
+async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
+  const insert =
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6)`;
+  try {
+    const summary = await buildTaskSummary(taskDbId);
+    // 任務不存在要落成看得見的失敗：run 停在 running 或空白收尾，畫面上跟「還在跑」長得一樣。
+    if (!summary) {
+      await query(insert, [runId, TASK_AGENT, TASK_LABEL, `找不到任務（tasks.id=${taskDbId}）`, 'error', null]);
+      await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]);
+      return;
+    }
+    const agent = loadAgent('health-task');
+    const prompt = agent.render({ summary: JSON.stringify(summary) });
+
+    let finding = null;
+    let raw = null;
+    try {
+      const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+      raw = text;
+      // taskId 一律給 null（不是漏填）：健檢自己的花費若記進被診斷的那張任務，下次再健檢同一張，
+      // 它就會在自己的 per_stage 與關卡序列裡看到 workflow_health——診斷工具污染被診斷的對象。
+      await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
+      const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(text, 'diagnosis');
+      const { inner: ratBlock, cleaned } = extractTaggedBlock(afterDiag, 'rationale');
+      const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
+      const severity = String((parsed && parsed.severity) || '').trim().toLowerCase();
+      const diagnosis = String((diagBlock || (parsed && parsed.diagnosis)) || '').trim();
+      if (diagnosis && SEVERITIES.has(severity)) {
+        finding = { severity, diagnosis, rationale: (ratBlock && ratBlock.trim()) || (parsed && parsed.rationale) || null };
+      }
+    } catch (err) {
+      await logFailedUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', err);
+    }
+    if (!finding) {
+      finding = {
+        severity: 'error',
+        diagnosis: '健檢失敗：無法取得有效診斷' + saveRawOutput(runId, TASK_AGENT, raw),
+        rationale: null
+      };
+    }
+    // suggested_prompt 永遠是 NULL：單張任務的證據不足以改全平台的提示詞（判準的紅旗之一）。
+    // 前端的「帶入編輯器」按鈕只在有 suggested_prompt 時才出現，所以這一關自然不會把人導去改 prompt。
+    await query(insert, [runId, TASK_AGENT, TASK_LABEL, finding.diagnosis, finding.severity, finding.rationale]);
+    await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
+  } catch (err) {
+    console.error('[HEALTH-CHECK] task:', err.message);
+    await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]).catch(() => {});
+  }
+}
+
 // 啟動續跑：上次 server 重啟時跑到一半的健檢（status='running'）從中斷點接續，
 // 而非永遠停在 running 或一律標 error 作廢。fire-and-forget，比照原觸發路徑。
+// 依 task_db_id 分流：拿 scope=task 的 run 去跑全平台健檢，會在同一個 run 底下混進 21 關的
+// findings，畫面上再也分不出這是哪一張任務的診斷。
 async function resumeInterruptedRuns() {
-  const { rows } = await query("SELECT id FROM health_check_runs WHERE status='running'");
+  const { rows } = await query("SELECT id, task_db_id FROM health_check_runs WHERE status='running'");
   for (const r of rows) {
     console.log(`[HEALTH-CHECK] resume interrupted run ${r.id}`);
-    runHealthCheck(r.id).catch(() => {});
+    if (r.task_db_id) runTaskHealthCheck(r.id, { taskDbId: r.task_db_id }).catch(() => {});
+    else runHealthCheck(r.id).catch(() => {});
   }
   return rows.length;
 }
 
-module.exports = { runHealthCheck, resumeInterruptedRuns };
+module.exports = { runHealthCheck, runTaskHealthCheck, resumeInterruptedRuns };

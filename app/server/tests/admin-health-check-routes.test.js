@@ -3,7 +3,8 @@ const request = require('supertest');
 const { newDb } = require('pg-mem');
 
 const mockRun = jest.fn().mockResolvedValue(undefined);
-jest.mock('../pipeline/health-check-runner', () => ({ runHealthCheck: mockRun }));
+const mockRunTask = jest.fn().mockResolvedValue(undefined);
+jest.mock('../pipeline/health-check-runner', () => ({ runHealthCheck: mockRun, runTaskHealthCheck: mockRunTask }));
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({
   runPipeline: jest.fn(), getInflightTaskIds: () => [], getInflightInfo: () => [], abortTask: jest.fn(), whenIdle: jest.fn()
@@ -28,7 +29,7 @@ beforeAll(async () => {
   userToken = login.body.token;
 }, 30000);
 afterAll(() => dbModule._setPoolForTesting(null));
-beforeEach(() => mockRun.mockClear());
+beforeEach(() => { mockRun.mockClear(); mockRunTask.mockClear(); });
 
 test('401 未帶 token / 403 非 admin', async () => {
   expect((await request(app).post('/api/admin/health-check')).status).toBe(401);
@@ -102,4 +103,56 @@ describe('GET /api/admin/health-check-schedule', () => {
     const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
     expect(res.body).toMatchObject({ running: true, due: false, nextRunAt: null });
   });
+});
+
+// --- scope=task：單張任務健檢（入口在任務詳情頁的 admin 按鈕）---
+
+let taskSeq = 0;
+async function newTask() {
+  const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username='admin1'");
+  const bizId = `T-HC-${++taskSeq}`;
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, title, original_text, status, source) VALUES ($1,$2,'健檢用','x','new','web') RETURNING id",
+    [u.id, bizId]);
+  return { id: t.id, bizId };
+}
+
+test('POST task 健檢：401 未帶 token / 403 非 admin', async () => {
+  expect((await request(app).post('/api/admin/health-check/task').send({ taskDbId: 1 })).status).toBe(401);
+  expect((await request(app).post('/api/admin/health-check/task')
+    .set('Authorization', `Bearer ${userToken}`).send({ taskDbId: 1 })).status).toBe(403);
+});
+
+test('POST task 健檢：建帶 task_db_id 的 run、背景觸發 runTaskHealthCheck', async () => {
+  const { id: taskDbId } = await newTask();
+  const res = await request(app).post('/api/admin/health-check/task')
+    .set('Authorization', `Bearer ${adminToken}`).send({ taskDbId });
+  expect(res.status).toBe(200);
+  const { rows: [r] } = await dbModule.query('SELECT status, task_db_id FROM health_check_runs WHERE id=$1', [res.body.runId]);
+  expect(r.status).toBe('running');
+  expect(r.task_db_id).toBe(taskDbId);
+  expect(mockRunTask).toHaveBeenCalledWith(res.body.runId, expect.objectContaining({ taskDbId }));
+  expect(mockRun).not.toHaveBeenCalled();            // 不可誤觸全平台健檢
+});
+
+test('POST task 健檢：任務不存在回 404，且不建 run', async () => {
+  const { rows: [before] } = await dbModule.query('SELECT COUNT(*)::int AS n FROM health_check_runs');
+  const res = await request(app).post('/api/admin/health-check/task')
+    .set('Authorization', `Bearer ${adminToken}`).send({ taskDbId: 999999 });
+  expect(res.status).toBe(404);
+  const { rows: [after] } = await dbModule.query('SELECT COUNT(*)::int AS n FROM health_check_runs');
+  expect(after.n).toBe(before.n);                    // 不留下註定 error 的殭屍 run
+  expect(mockRunTask).not.toHaveBeenCalled();
+});
+
+test('GET list／detail 帶出這是哪一張任務（沒有就分不出診斷的對象）', async () => {
+  const { id: taskDbId, bizId } = await newTask();
+  const { rows: [run] } = await dbModule.query(
+    "INSERT INTO health_check_runs (status, task_db_id) VALUES ('done',$1) RETURNING id", [taskDbId]);
+  const list = await request(app).get('/api/admin/health-check').set('Authorization', `Bearer ${adminToken}`);
+  const row = list.body.find(r => r.id === run.id);
+  expect(row.task_db_id).toBe(taskDbId);
+  expect(row.task_id).toBe(bizId);
+  const detail = await request(app).get('/api/admin/health-check/' + run.id).set('Authorization', `Bearer ${adminToken}`);
+  expect(detail.body.run.task.task_id).toBe(bizId);
 });

@@ -350,6 +350,24 @@ test('cron tick：上一輪健檢仍在 running → 不重複啟動', async () =
   expect(rows).toHaveLength(1);   // 沒有多建一筆
 });
 
+// 單張任務健檢不參與週期節流：它是人工隨手按的（一天可能好幾次），算進來會把每週的平台健檢
+// 一路往後推，而且完全沒有訊號——畫面上的「下次自動健檢」照樣顯示一個看起來合理的時間。
+test('cron tick：最後一筆是單張任務健檢 → 平台健檢照樣依平台那筆的時間判斷', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '9 days',NOW() - INTERVAL '9 days')");
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, task_db_id) VALUES ('running',30,NOW(),12345)");
+  runner.runHealthCheck.mockClear();
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); }
+
+  expect(runner.runHealthCheck).toHaveBeenCalled();   // 平台那筆已超過一週，不因剛按過任務健檢而跳過
+});
+
 // 週期未到不跑：否則每分鐘一 tick 就是每分鐘一次健檢。
 test('cron tick：上次健檢在一週內 → 不跑', async () => {
   const nodeCron = require('node-cron');

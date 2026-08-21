@@ -15,7 +15,7 @@ window.AdminHealthCheckView = Vue.defineComponent({
   data() {
     return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, windowDays: 30, _timer: null };
   },
-  async mounted() { await this.loadHistory(); },
+  async mounted() { await this.loadHistory(); await this.openFromQuery(); },
   unmounted() { if (this._timer) clearInterval(this._timer); },
   computed: {
     // 排程是每週自動跑（cron 每分鐘一 tick），所以顯示的是「最早會被執行的時刻」
@@ -56,6 +56,17 @@ window.AdminHealthCheckView = Vue.defineComponent({
       } catch (e) { /* 單次輪詢失敗保留上批，下次恢復 */ }
     },
     async openRun(id) { this.runId = id; await this.poll(); },
+    // 由任務詳情頁的「健檢這張任務」導過來（?run=N）：那支 run 已經在背景跑了，這裡直接盯著它，
+    // 不必也不能再按一次「開始健檢」——按下去建的是另一支全平台健檢。
+    async openFromQuery() {
+      const id = parseInt(this.$route.query.run, 10);
+      if (!id) return;
+      this.runId = id;
+      this.running = true;
+      await this.poll();
+      if (this.running) this._timer = setInterval(() => this.poll(), 3000);
+    },
+    scopeText(r) { return r && r.task_db_id ? ('任務 ' + (r.task_id || r.task_db_id)) : '全平台'; },
     sev(s) { return HC_SEV[s] || HC_SEV.error; },
     applyToEditor(f) {
       if (!f.suggested_prompt) return;
@@ -79,7 +90,8 @@ window.AdminHealthCheckView = Vue.defineComponent({
             {{ running ? '健檢中...' : '開始健檢' }}
           </button>
           <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
-            狀態：{{ run.status }}（{{ findings.length }} 個 agent 已診斷）
+            範圍：{{ run.task_db_id ? ('任務 ' + ((run.task && run.task.task_id) || run.task_db_id)) : '全平台' }}　
+            狀態：{{ run.status }}（{{ findings.length }} 份診斷）
           </span>
           <span v-if="nextRunText" style="font-size:var(--fs-sm);color:var(--text-muted);margin-left:auto">
             下次自動健檢：{{ nextRunText }}
@@ -103,15 +115,16 @@ window.AdminHealthCheckView = Vue.defineComponent({
           <h2 class="section-title">歷史健檢</h2>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>時間</th><th>視窗</th><th>狀態</th><th>診斷數</th></tr></thead>
+              <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>診斷數</th></tr></thead>
               <tbody>
                 <tr v-for="h in history" :key="h.id" class="clickable" @click="openRun(h.id)">
                   <td>{{ new Date(h.created_at).toLocaleString() }}</td>
-                  <td>{{ h.window_days }} 天</td>
+                  <td>{{ scopeText(h) }}</td>
+                  <td>{{ h.task_db_id ? '—' : h.window_days + ' 天' }}</td>
                   <td>{{ h.status }}</td>
                   <td>{{ h.findings_count }}</td>
                 </tr>
-                <tr v-if="history.length === 0" class="empty-row"><td colspan="4">尚無健檢紀錄</td></tr>
+                <tr v-if="history.length === 0" class="empty-row"><td colspan="5">尚無健檢紀錄</td></tr>
               </tbody>
             </table>
           </div>

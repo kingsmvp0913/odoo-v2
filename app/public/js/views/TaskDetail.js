@@ -3,7 +3,7 @@ const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
 window.TaskDetailView = Vue.defineComponent({
   name: 'TaskDetailView',
   data() {
-    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+    return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
   },
   computed: {
     isAdmin() { return window.UserStore.role === 'admin'; },
@@ -487,6 +487,18 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.approving = false; }
     },
+    // 單張任務健檢（admin）：建 run 後直接導去 /admin/health 盯它。結果的呈現刻意只留在健檢頁
+    // 一處——同一份 finding 在兩個地方各畫一次，改判準時必然只有一邊跟上。
+    async startHealthCheck() {
+      this.healthChecking = true;
+      try {
+        const { runId } = await Api.post('admin/health-check/task', { taskDbId: this.task.id });
+        this.$router.push('/admin/health?run=' + runId);
+      } catch (e) {
+        showToast(e.message, 'error');
+        this.healthChecking = false;
+      }
+    },
     async downloadCodeZip() {
       this.downloadingZip = true;
       let url = null;
@@ -854,7 +866,12 @@ window.TaskDetailView = Vue.defineComponent({
         {{ task.is_paused ? '▐▐ 已暫停' : '⏸ 暫停' }}
       </button>
       <a v-if="task && task.env_status" href="#" @click.prevent="openEnv" class="env-chip" style="margin-left:var(--space-2)">🖥 測試機</a>
-      <button v-if="isAdmin && task && task.git_branch" class="btn btn-outline btn-sm" style="margin-left:auto"
+      <button v-if="isAdmin && task && !isTourDemo" class="btn btn-outline btn-sm" style="margin-left:auto"
+        @click="startHealthCheck" :disabled="healthChecking"
+        title="用平台健檢的同一套判準跨關卡展開看這一張任務：該重跑哪一關、缺什麼資訊、還是該走 respec">
+        {{ healthChecking ? '健檢中...' : '🩺 健檢這張任務' }}
+      </button>
+      <button v-if="isAdmin && task && task.git_branch" class="btn btn-outline btn-sm" style="margin-left:var(--space-2)"
         @click="downloadCodeZip" :disabled="downloadingZip" title="下載本任務改動檔的 zip（內含 <repo>/<原路徑> 結構，可直接覆蓋到正式區 addons）">
         {{ downloadingZip ? '打包中...' : '📦 下載程式碼 zip' }}
       </button>

@@ -13,7 +13,7 @@ const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
-const { runHealthCheck } = require('./pipeline/health-check-runner');
+const { runHealthCheck, runTaskHealthCheck } = require('./pipeline/health-check-runner');
 const { getHealthCheckSchedule } = require('./cron');
 
 function getSshPubKey() {
@@ -509,14 +509,38 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // scope=task：只健檢一張任務（入口在任務詳情頁）。與上面那支共用 runs／findings 表，
+  // 差別只在餵進 runner 的資料範圍——判準是同一份（.claude/skills/healthCheck）。
+  // window_days 對單張任務無意義（它的歷程就是全部），留欄位預設值不填。
+  app.post('/api/admin/health-check/task', auth, async (req, res) => {
+    try {
+      const taskDbId = parseInt(req.body?.taskDbId, 10);
+      if (!taskDbId) return res.status(400).json({ error: '缺少 taskDbId' });
+      // 先擋不存在的任務：不擋的話會建出一個註定 error 的 run，使用者得等它跑完才看得到「找不到」
+      const { rows: [t] } = await query('SELECT id FROM tasks WHERE id=$1', [taskDbId]);
+      if (!t) return res.status(404).json({ error: '任務不存在' });
+      const { rows: [r] } = await query(
+        "INSERT INTO health_check_runs (status, started_by, task_db_id) VALUES ('running',$1,$2) RETURNING id",
+        [req.userId, taskDbId]
+      );
+      runTaskHealthCheck(r.id, { taskDbId, startedBy: req.userId }).catch(() => {});
+      res.json({ runId: r.id });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.get('/api/admin/health-check', auth, async (_req, res) => {
     try {
+      // LEFT JOIN tasks：task_db_id 刻意不帶 FK（見 db.js），任務被刪掉時這裡回 null，
+      // 前端就顯示成「全平台」以外的一般列而不是壞掉的連結。
       const { rows } = await query(
         `SELECT r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
+                r.task_db_id, t.task_id, t.title,
                 COUNT(f.id)::int AS findings_count
            FROM health_check_runs r
            LEFT JOIN health_check_findings f ON f.run_id = r.id
-          GROUP BY r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at
+           LEFT JOIN tasks t ON t.id = r.task_db_id
+          GROUP BY r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
+                   r.task_db_id, t.task_id, t.title
           ORDER BY r.id DESC LIMIT 20`
       );
       res.json(rows);
@@ -534,6 +558,12 @@ function registerRoutes(app) {
     try {
       const { rows: [run] } = await query('SELECT * FROM health_check_runs WHERE id=$1', [req.params.runId]);
       if (!run) return res.status(404).json({ error: 'run 不存在' });
+      // scope=task 的 run 要帶出是哪一張任務，否則畫面上一份診斷認不出診斷的是誰。
+      // 分開查而不是 JOIN：這支只回一列，JOIN 進來反而要處理任務已刪的欄位命名衝突。
+      if (run.task_db_id) {
+        const { rows: [t] } = await query('SELECT task_id, title FROM tasks WHERE id=$1', [run.task_db_id]);
+        run.task = t || null;
+      }
       const { rows: findings } = await query(
         'SELECT * FROM health_check_findings WHERE run_id=$1 ORDER BY id', [req.params.runId]);
       res.json({ run, findings });

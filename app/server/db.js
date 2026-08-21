@@ -730,7 +730,11 @@ async function migrate() {
     // 企業版來源型態：'git'（clone 遠端 repo）或 'local'（管理員自行把 addons 放進共用目錄）。
     // 預設 git 讓既有列行為不變。local 型態不填 repo_url——該欄是 NOT NULL 且本框架只有
     // add-if-missing、沒有改約束的 migration（見上方 spec_tour_enabled 註解），故存空字串而非 NULL。
-    { table: 'enterprise_sources', col: 'source_type', sql: "ALTER TABLE enterprise_sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'" }
+    { table: 'enterprise_sources', col: 'source_type', sql: "ALTER TABLE enterprise_sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'" },
+    // 健檢的 scope：NULL＝全平台（既有列與排程都是這種），有值＝只健檢這一張任務（tasks.id）。
+    // 刻意不宣告 FK，比照上面 project_chats.converted_task_id：帶 FK 卻漏 ON DELETE 會反過來擋死
+    // 刪任務，而殘留的死 id 由列表 SQL 的 LEFT JOIN tasks 吸收（任務不在就回 null）。
+    { table: 'health_check_runs', col: 'task_db_id', sql: 'ALTER TABLE health_check_runs ADD COLUMN task_db_id INTEGER' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
