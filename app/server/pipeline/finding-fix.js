@@ -174,6 +174,10 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     const notes = (notesBlock || '').trim() || (parsed && parsed.notes) || '';
     const tests = String((parsed && parsed.tests) || '').trim().toLowerCase();
 
+    // 先拆掉 node_modules 的連結再看變更：`.gitignore` 的 `node_modules/` 帶尾斜線只匹配目錄，
+    // 而這裡掛的是 symlink（git 視為檔案）＝不被忽略，會以 `?? app/node_modules` 現身而被判超出
+    // 可修改範圍，整份修正無條件作廢。測試此時已跑完，相依不再需要。
+    unlinkNodeModules(worktree);
     const { stdout: porcelain } = await git(worktree, ['status', '--porcelain', '-uall']);
     const { files, violations } = classifyChanges(porcelain);
 
