@@ -28,6 +28,12 @@ async function makeRepo() {
   const repo = path.join(base, 'repo');
   await run('git', ['init', '--bare', origin]);
   await run('git', ['clone', origin, repo]);
+  // Git for Windows 的 **system** 層預設 core.autocrlf=true，checkout 會把 LF 換成 CRLF，
+  // 而本檔多處斷言比對的是寫進去的原文（LF）——症狀是 `- x = 1` / `+ x = 1` 這種看起來
+  // 一模一樣的 diff，完全不指向換行符。設在 repo local 而非改機器設定：worktree 共用主 clone
+  // 的 .git/config，故 pipeline/git.js 內部呼叫的 git 也吃得到。理由同上面固定 user.email/name
+  // ——測試不該依賴機器的 git 設定。Linux 上 autocrlf 本來就關著，這行在那裡是 no-op。
+  await sh(repo, 'config', 'core.autocrlf', 'false');
   await sh(repo, 'checkout', '-b', 'main');
   await write(repo, 'a.py', 'x = 1\n');
   await sh(repo, 'add', '-A');
