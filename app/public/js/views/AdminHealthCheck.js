@@ -21,6 +21,17 @@ const HC_LAYER = {
   observability: { label: '觀測缺口', color: '#64748b' }
 };
 
+// 「修這條」的狀態機（見 server/pipeline/finding-fix.js）。ready 才有 diff 可審、adopted 才能推。
+const HC_FIX = {
+  running:   { label: '修正中…', color: 'var(--text-muted)' },
+  ready:     { label: '待你審核', color: 'var(--warning, #d97706)' },
+  no_change: { label: '判定不需修改', color: 'var(--text-muted)' },
+  rejected:  { label: '超出可修改範圍，已作廢', color: 'var(--error)' },
+  failed:    { label: '失敗', color: 'var(--error)' },
+  adopted:   { label: '已採用（在分支上）', color: 'var(--success, #059669)' },
+  pushed:    { label: '已推上 GitHub', color: 'var(--success, #059669)' }
+};
+
 const HC_STATUS = [
   { value: 'pending',   label: '待處理' },
   { value: 'no_change', label: '不須調整' },
@@ -30,10 +41,10 @@ const HC_STATUS = [
 window.AdminHealthCheckView = Vue.defineComponent({
   name: 'AdminHealthCheckView',
   data() {
-    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, _timer: null };
+    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, _timer: null, _fixTimer: null };
   },
   async mounted() { await this.loadHistory(); await this.openFromQuery(); },
-  unmounted() { if (this._timer) clearInterval(this._timer); },
+  unmounted() { if (this._timer) clearInterval(this._timer); if (this._fixTimer) clearInterval(this._fixTimer); },
   computed: {
     // 排程是每週自動跑（cron 每分鐘一 tick），所以顯示的是「最早會被執行的時刻」
     nextRunText() {
@@ -70,10 +81,11 @@ window.AdminHealthCheckView = Vue.defineComponent({
         if (run.status !== 'running') {
           clearInterval(this._timer); this._timer = null; this.running = false;
           await this.loadHistory();
+          await this.loadFixes();
         }
       } catch (e) { /* 單次輪詢失敗保留上批，下次恢復 */ }
     },
-    async openRun(id) { this.runId = id; await this.poll(); },
+    async openRun(id) { this.runId = id; await this.poll(); await this.loadFixes(); },
     // 由任務詳情頁的「健檢這張任務」導過來（?run=N）：那支 run 已經在背景跑了，這裡直接盯著它，
     // 不必也不能再按一次「開始健檢」——按下去建的是另一支全平台健檢。
     async openFromQuery() {
@@ -100,6 +112,43 @@ window.AdminHealthCheckView = Vue.defineComponent({
         showToast('已記錄：' + this.statusLabel(status), 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.savingId = null; }
+    },
+    fixState(id) { return this.fixes[id] || null; },
+    fixLabel(st) { return HC_FIX[st] || { label: st, color: 'var(--text-muted)' }; },
+    // 每次打開一輪就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
+    // 會有人再按一次而在同一條上開第二個工作區。
+    async loadFixes() {
+      for (const f of this.ofKind('proposal')) {
+        try {
+          const fx = await Api.get('admin/health-check/findings/' + f.id + '/fix');
+          if (fx) this.fixes[f.id] = fx;
+        } catch (e) { /* 單條失敗不擋整頁 */ }
+      }
+      this.watchRunningFixes();
+    },
+    watchRunningFixes() {
+      const anyRunning = Object.values(this.fixes).some(x => x && x.status === 'running');
+      if (anyRunning && !this._fixTimer) this._fixTimer = setInterval(() => this.loadFixes(), 4000);
+      if (!anyRunning && this._fixTimer) { clearInterval(this._fixTimer); this._fixTimer = null; }
+    },
+    async startFix(f) {
+      this.fixBusy = f.id;
+      try {
+        await Api.post('admin/health-check/findings/' + f.id + '/fix', {});
+        await this.loadFixes();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.fixBusy = null; }
+    },
+    async fixAction(f, action) {
+      const fx = this.fixes[f.id];
+      if (!fx) return;
+      this.fixBusy = f.id;
+      try {
+        const r = await Api.post('admin/fixes/' + fx.id + '/' + action, {});
+        showToast(action === 'adopt' ? ('已提交到分支 ' + (r.branch || '')) : action === 'push' ? ('已推上 ' + (r.branch || '')) : '已捨棄', 'success');
+        await this.loadFixes();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.fixBusy = null; }
     },
     sev(s) { return HC_SEV[s] || HC_SEV.error; },
     applyToEditor(f) {
@@ -168,6 +217,8 @@ window.AdminHealthCheckView = Vue.defineComponent({
 
           <div class="hc-window-row" style="margin-top:6px">
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">處置：</span>
+            <button class="btn btn-outline btn-sm" :disabled="fixBusy === f.id || (fixState(f.id) && ['running','ready','adopted'].includes(fixState(f.id).status))"
+              @click="startFix(f)" title="在獨立工作區改碼並自己跑測試，改完給你看 diff，你點頭才提交">🔧 修這條</button>
             <button v-for="s in statuses" :key="s.value" class="btn btn-sm"
               :class="f.status === s.value ? 'btn-primary' : 'btn-outline'"
               :disabled="savingId === f.id" @click="setStatus(f, s.value)">{{ s.label }}</button>
@@ -177,6 +228,33 @@ window.AdminHealthCheckView = Vue.defineComponent({
           </div>
           <div v-if="f.decided_at" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">
             已裁決 {{ new Date(f.decided_at).toLocaleString() }}<span v-if="f.applied_at">，套用於 {{ new Date(f.applied_at).toLocaleDateString() }}</span>
+          </div>
+
+          <div v-if="fixState(f.id)" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+            <div class="hc-finding-title-row">
+              <span style="font-size:var(--fs-sm);font-weight:var(--fw-semibold)">修正</span>
+              <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:fixLabel(fixState(f.id).status).color}">
+                {{ fixLabel(fixState(f.id).status).label }}
+              </span>
+              <span v-if="fixState(f.id).test_result" style="font-size:var(--fs-xs);color:var(--text-muted)">測試：{{ fixState(f.id).test_result }}</span>
+              <span v-if="fixState(f.id).branch" style="font-size:var(--fs-xs);color:var(--text-muted);font-family:monospace">{{ fixState(f.id).branch }}</span>
+            </div>
+            <div v-if="fixState(f.id).reject_reason" class="error-msg" style="white-space:pre-wrap;margin:6px 0">{{ fixState(f.id).reject_reason }}</div>
+            <div v-if="fixState(f.id).notes" style="font-size:var(--fs-sm);color:var(--text);white-space:pre-wrap;margin-bottom:6px">{{ fixState(f.id).notes }}</div>
+            <div v-if="fixState(f.id).diff">
+              <button class="btn btn-ghost btn-sm" @click="diffOpen[f.id] = !diffOpen[f.id]">
+                {{ diffOpen[f.id] ? '▾ 收合改動' : '▸ 看改了什麼' }}
+              </button>
+              <pre v-if="diffOpen[f.id]" style="max-height:360px;overflow:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-2);font-size:var(--fs-xs)">{{ fixState(f.id).diff }}</pre>
+            </div>
+            <div class="hc-window-row" style="margin-top:6px">
+              <button v-if="fixState(f.id).status === 'ready'" class="btn btn-primary btn-sm"
+                :disabled="fixBusy === f.id" @click="fixAction(f, 'adopt')">採用（提交到分支）</button>
+              <button v-if="fixState(f.id).status === 'adopted'" class="btn btn-primary btn-sm"
+                :disabled="fixBusy === f.id" @click="fixAction(f, 'push')">推上 GitHub</button>
+              <button v-if="['ready','adopted'].includes(fixState(f.id).status)" class="btn btn-outline btn-sm"
+                :disabled="fixBusy === f.id" @click="fixAction(f, 'discard')">捨棄</button>
+            </div>
           </div>
         </div>
 

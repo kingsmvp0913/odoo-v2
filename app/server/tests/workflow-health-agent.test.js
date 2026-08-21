@@ -38,3 +38,19 @@ test('health-auditor agent：opus + 兩個 placeholder + 指名查詢工具與�
   expect(out).toContain('回溯');                  // 窗內命中 → 回頭找同類案例湊證據
   expect(out).toContain('<result>');
 });
+
+// 修正 agent 的契約：範圍規則同時寫在提示詞（讓它知道）與程式（讓它做不到）。這裡只驗提示詞那半，
+// 程式那半在 finding-fix.test.js。兩半都要有——只有提示詞是請求，只有程式檢查則它會一直白做工。
+test('platform-fix agent：placeholder 齊、載入平台開發慣例、寫明兩條禁區', () => {
+  const a = loadAgent('platform-fix');
+  expect(a.model).toBe('opus');
+  const out = a.render({
+    title: 'T', layer: 'platform', detail: 'D', evidence: 'E', action: 'A',
+    target_metric: 'M', metric_baseline: '1'
+  });
+  expect(out).not.toContain('{{');
+  expect(out).toContain('Skill(platformDev)');
+  expect(out).toContain('不得修改或刪除');     // 既有測試
+  expect(out).toContain('health-');            // 健檢自己
+  expect(out).toContain('不要 commit');        // 提交由人決定
+});

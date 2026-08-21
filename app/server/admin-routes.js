@@ -14,6 +14,7 @@ const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
+const { runFix, adoptFix, pushFix, discardFix } = require('./pipeline/finding-fix');
 const { getHealthCheckSchedule } = require('./cron');
 
 function getSshPubKey() {
@@ -598,6 +599,54 @@ function registerRoutes(app) {
         'SELECT * FROM health_check_findings WHERE run_id=$1 ORDER BY id', [req.params.runId]);
       res.json({ run, findings });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // --- 健檢提案的「修這條」：獨立工作區改碼 → 自己跑測試 → 人審 diff → 採用 → 再按一次才推 ---
+  // 三段刻意分開，任何一段都可以停在那裡不往前。平台自己的修正不走客戶任務的 pipeline，
+  // 理由見 pipeline/finding-fix.js 檔頭。
+
+  app.post('/api/admin/health-check/findings/:id/fix', auth, async (req, res) => {
+    try {
+      const { rows: [f] } = await query('SELECT id, kind FROM health_check_findings WHERE id=$1', [req.params.id]);
+      if (!f) return res.status(404).json({ error: '提案不存在' });
+      // 只有提案能修：候選訊號證據還不夠、總結不是可動手的東西，對它們開修正等於在沒有結論時動手。
+      if (f.kind !== 'proposal') return res.status(400).json({ error: '只有提案可以修正' });
+      // 同一條提案不並發：兩個工作區同時改同一件事，最後兩份 diff 都是半套。
+      const { rows: running } = await query(
+        "SELECT id FROM finding_fixes WHERE finding_id=$1 AND status IN ('running','ready','adopted')", [f.id]);
+      if (running.length) return res.status(409).json({ error: '這條已有進行中或待審的修正', fixId: running[0].id });
+
+      const { rows: [fix] } = await query(
+        "INSERT INTO finding_fixes (finding_id, status, created_by) VALUES ($1,'running',$2) RETURNING id",
+        [f.id, req.userId]
+      );
+      runFix(fix.id, { findingId: f.id, startedBy: req.userId }).catch(() => {});
+      res.json({ fixId: fix.id });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/admin/health-check/findings/:id/fix', auth, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT id, finding_id, status, branch, notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at
+           FROM finding_fixes WHERE finding_id=$1 ORDER BY id DESC LIMIT 1`, [req.params.id]);
+      res.json(rows[0] || null);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/fixes/:fixId/adopt', auth, async (req, res) => {
+    try { res.json(await adoptFix(parseInt(req.params.fixId, 10), req.userId)); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/fixes/:fixId/push', auth, async (req, res) => {
+    try { res.json(await pushFix(parseInt(req.params.fixId, 10), req.userId)); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/fixes/:fixId/discard', auth, async (req, res) => {
+    try { await discardFix(parseInt(req.params.fixId, 10)); res.json({ ok: true }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
   });
 
   // --- 語意檢索索引：admin 一鍵全量重建 ---

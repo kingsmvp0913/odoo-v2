@@ -474,6 +474,25 @@ async function migrate() {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
+    // 健檢提案的「修這條」：一次修正嘗試的狀態機（見 pipeline/finding-fix.js）。
+    // 刻意不與 health_check_findings 合併：一條提案可以被試修多次（第一次判失敗、改了做法再試），
+    // 合併會讓「上一次試了什麼、為什麼失敗」被覆蓋掉。
+    `CREATE TABLE IF NOT EXISTS finding_fixes (
+      id           SERIAL PRIMARY KEY,
+      finding_id   INTEGER NOT NULL REFERENCES health_check_findings(id) ON DELETE CASCADE,
+      status       TEXT NOT NULL DEFAULT 'running',  -- running | ready | no_change | rejected | failed | adopted | pushed
+      branch       TEXT,
+      worktree     TEXT,
+      diff         TEXT,
+      notes        TEXT,
+      test_result  TEXT,
+      reject_reason TEXT,
+      commit_sha   TEXT,
+      created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at  TIMESTAMPTZ
+    )`,
+
     // agent 提示詞版本的出現時間。promptVersion() 本身只是內容 hash、不帶時間，健檢因此無從
     // 分辨「這 30 天的指標是哪一版 prompt 產生的」——改完 prompt 隔天看到的數字，29 天來自舊版。
     // 只在健檢掃到「現值與最後一列不同」時補一列，故也涵蓋直接改檔案（沒走 updateAgent）的情況。

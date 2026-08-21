@@ -8,6 +8,15 @@ const mockWindowStart = jest.fn().mockResolvedValue(new Date(Date.now() - 3 * 86
 jest.mock('../pipeline/health-check-runner', () => ({
   runAudit: mockRun, runTaskHealthCheck: mockRunTask, auditWindowStart: mockWindowStart
 }));
+// 「修這條」會真的開 git worktree 並 spawn claude，測試只驗路由與狀態機
+const mockRunFix = jest.fn().mockResolvedValue(undefined);
+const mockAdopt = jest.fn().mockResolvedValue({ branch: 'fix/finding-1-1', commit: 'abc123' });
+const mockPush = jest.fn().mockResolvedValue({ branch: 'fix/finding-1-1' });
+const mockDiscard = jest.fn().mockResolvedValue(undefined);
+jest.mock('../pipeline/finding-fix', () => ({
+  runFix: mockRunFix, adoptFix: mockAdopt, pushFix: mockPush, discardFix: mockDiscard,
+  classifyChanges: jest.requireActual('../pipeline/finding-fix').classifyChanges
+}));
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({
   runPipeline: jest.fn(), getInflightTaskIds: () => [], getInflightInfo: () => [], abortTask: jest.fn(), whenIdle: jest.fn()
@@ -208,4 +217,70 @@ test('GET list／detail 帶出這是哪一張任務（沒有就分不出診斷�
   expect(row.task_id).toBe(bizId);
   const detail = await request(app).get('/api/admin/health-check/' + run.id).set('Authorization', `Bearer ${adminToken}`);
   expect(detail.body.run.task.task_id).toBe(bizId);
+});
+
+// --- 「修這條」：只有提案能修、同一條不並發、三段動作各自獨立 ---
+
+async function newProposal(kind = 'proposal') {
+  const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+  const { rows: [f] } = await dbModule.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, kind)
+     VALUES ($1,'__audit__','某條提案','細節','medium',$2) RETURNING id`, [run.id, kind]);
+  return f.id;
+}
+
+test('POST 修這條：建 fix 紀錄（running）並背景觸發', async () => {
+  const id = await newProposal();
+  const res = await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(res.status).toBe(200);
+  const { rows: [fix] } = await dbModule.query('SELECT status, finding_id FROM finding_fixes WHERE id=$1', [res.body.fixId]);
+  expect(fix.status).toBe('running');
+  expect(fix.finding_id).toBe(id);
+  expect(mockRunFix).toHaveBeenCalledWith(res.body.fixId, expect.objectContaining({ findingId: id }));
+});
+
+test('候選訊號不能修：證據還不夠就動手，等於在沒有結論時改碼', async () => {
+  const id = await newProposal('signal');
+  const res = await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(res.status).toBe(400);
+});
+
+test('同一條提案不並發：兩個工作區同時改同一件事，兩份 diff 都會是半套', async () => {
+  const id = await newProposal();
+  const first = await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  const second = await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(second.status).toBe(409);
+  expect(second.body.fixId).toBe(first.body.fixId);       // 指回進行中的那一個，不是再開一個
+});
+
+test('GET 回最新一次修正；採用與推送是兩顆分開的按鈕', async () => {
+  const id = await newProposal();
+  const started = await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  const got = await request(app).get(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(got.body.id).toBe(started.body.fixId);
+
+  const adopt = await request(app).post(`/api/admin/fixes/${started.body.fixId}/adopt`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(adopt.status).toBe(200);
+  expect(mockAdopt).toHaveBeenCalledWith(started.body.fixId, expect.any(Number));
+  expect(mockPush).not.toHaveBeenCalled();                // 採用不會順手推上去
+
+  await request(app).post(`/api/admin/fixes/${started.body.fixId}/push`)
+    .set('Authorization', `Bearer ${adminToken}`).send({});
+  expect(mockPush).toHaveBeenCalled();
+});
+
+test('修正相關路由一律 admin only', async () => {
+  const id = await newProposal();
+  expect((await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
+  expect((await request(app).post('/api/admin/fixes/1/adopt')
+    .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
+  expect((await request(app).post('/api/admin/fixes/1/push')).status).toBe(401);
 });
