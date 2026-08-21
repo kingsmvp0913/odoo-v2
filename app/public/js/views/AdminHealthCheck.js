@@ -233,7 +233,7 @@ window.AdminHealthCheckView = Vue.defineComponent({
 
           <div class="hc-window-row" style="margin-top:6px">
             <span style="font-size:var(--fs-sm);color:var(--text-muted)">處置：</span>
-            <button class="btn btn-outline btn-sm" :disabled="fixBusy === f.id || (fixState(f.id) && ['running','ready','adopted'].includes(fixState(f.id).status))"
+            <button v-if="f.status !== 'done'" class="btn btn-outline btn-sm" :disabled="fixBusy === f.id || (fixState(f.id) && ['running','ready','adopted'].includes(fixState(f.id).status))"
               @click="startFix(f)" title="在獨立工作區改碼並自己跑測試，改完給你看 diff，你點頭才提交">🔧 修這條</button>
             <button v-for="s in statuses" :key="s.value" class="btn btn-sm"
               :class="f.status === s.value ? 'btn-primary' : 'btn-outline'"
@@ -263,7 +263,9 @@ window.AdminHealthCheckView = Vue.defineComponent({
               </button>
               <pre v-if="diffOpen[f.id]" style="max-height:360px;overflow:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-2);font-size:var(--fs-xs)">{{ fixState(f.id).diff }}</pre>
             </div>
-            <div class="hc-window-row" style="margin-top:6px">
+            <!-- 標成「處理完成」之後就不再給動作，只留紀錄（狀態、測試結果、diff）。狀態按鈕不藏，
+                 才回得去。真的還差重啟時提案不會是 done（見 applyFix），所以那顆按鈕不會被藏掉。 -->
+            <div v-if="f.status !== 'done'" class="hc-window-row" style="margin-top:6px">
               <button v-if="fixState(f.id).status === 'ready'" class="btn btn-primary btn-sm"
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'adopt')">採用（提交到分支）</button>
               <button v-if="fixState(f.id).status === 'adopted'" class="btn btn-primary btn-sm"

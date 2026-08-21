@@ -381,18 +381,19 @@ async function applyFix(fixId, userId, inflight = []) {
       throw new Error(`推送失敗（本地合併已回復）：${err.message}`);
     }
     await setStatus(fixId, 'merged');
-    // 提案本身也要記。碼都進主分支了還留在 pending，下一輪健檢的 previousProposals() 會讀到
-    // 「還沒處置」而把同一件事再提一次；applied_at 則是之後回頭驗這個修正有沒有效的起算點。
-    await query(
-      `UPDATE health_check_findings
-          SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
-        WHERE id=$1 AND status<>'done'`, [fix.finding_id, userId]);
   }
 
   // 重啟會當場砍掉在飛的 agent，任務留在 *_running 的孤兒狀態。碼已經在 master 上，晚點再按即可。
   if (inflight.length) {
     return { branch: fix.branch, merged: true, restarted: false, inflight };
   }
+  // 提案標 done 只在真的要重啟這條路上做——「合併了但還在等在飛任務」不算處置完成：畫面靠這個
+  // 狀態決定還要不要給按鈕，提早標會把「還差重啟」那顆按鈕一起藏掉，人就再也按不到了。
+  // 下一輪健檢的 previousProposals() 讀的也是這裡，applied_at 則是回頭驗成效的起算點。
+  await query(
+    `UPDATE health_check_findings
+        SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+      WHERE id=$1 AND status<>'done'`, [fix.finding_id, userId]);
   // 延遲讓 HTTP 回應先送出去——這道指令會把自己這個行程一起帶走
   setTimeout(() => {
     execFile('docker', ['restart', container], err => {

@@ -64,6 +64,8 @@ test('有任務在飛就不重啟，但碼照樣合併推送——狀態記 merg
   expect(r.inflight).toHaveLength(1);
   expect(calls().some(c => c.startsWith('docker restart'))).toBe(false);
   expect(mockQuery.mock.calls.some(([sql, p]) => /UPDATE finding_fixes/.test(sql) && p[1] === 'merged')).toBe(true);
+  // 提案此時**不能**標 done：畫面靠它決定還要不要給按鈕，提早標會把「還差重啟」那顆一起藏掉
+  expect(mockQuery.mock.calls.some(([sql]) => /UPDATE health_check_findings/.test(sql))).toBe(false);
 });
 
 test('沒有任務在飛：合併→推 origin→重啟自己所在的容器', async () => {
@@ -105,7 +107,7 @@ test('合併前必須先跟遠端對齊：遠端被別股工作推進過的話�
   } finally { jest.useRealTimers(); }
 });
 
-test('推上去之後提案要標 done：留在 pending 的話，下一輪健檢會把同一件事再提一次', async () => {
+test('整套做完（含重啟）才把提案標 done：留在 pending 的話，下一輪健檢會把同一件事再提一次', async () => {
   jest.useFakeTimers();
   try {
     await applyFix(1, 2, []);
