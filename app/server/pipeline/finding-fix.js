@@ -305,6 +305,17 @@ async function applyFix(fixId, userId, inflight = []) {
     }
     const gitEnv = await buildGitEnv(userId);
     const env = { ...process.env, ...gitEnv };
+    // 先跟遠端對齊再合併：此 repo 常態多股平行工作，遠端隨時可能已被別人推進（實測 2026-08-21：
+    // 按下前 13 分鐘有人推了一顆）。少了這步就會停在「本地多了合併節點、push 被拒」——碼進了主
+    // 分支卻沒上遠端、狀態也沒記，而再按一次 merge 只會回 Already up to date、push 依然被拒。
+    await git(REPO_ROOT, ['fetch', 'origin', MAIN_BRANCH], { env });
+    try {
+      await git(REPO_ROOT, ['merge', '--ff-only', `origin/${MAIN_BRANCH}`], { env });
+    } catch (err) {
+      // 分岔＝本地有還沒推上去的東西。那是誰放的、要不要留只有人知道，不代為裁決。
+      throw new Error(`主 clone 與 origin/${MAIN_BRANCH} 已分岔，不代為裁決：${err.message}`);
+    }
+    const { stdout: preSha } = await git(REPO_ROOT, ['rev-parse', 'HEAD']);
     try {
       // 訊息帶提案編號：只寫分支名的話，分支一刪就再也回推不出這個 merge 是為了什麼
       await git(REPO_ROOT, ['merge', '--no-ff', fix.branch, '-m',
@@ -314,8 +325,21 @@ async function applyFix(fixId, userId, inflight = []) {
       await git(REPO_ROOT, ['merge', '--abort']).catch(() => {});
       throw new Error(`合併失敗（已回復）：${err.message}`);
     }
-    await git(REPO_ROOT, ['push', 'origin', MAIN_BRANCH], { env });
+    try {
+      await git(REPO_ROOT, ['push', 'origin', MAIN_BRANCH], { env });
+    } catch (err) {
+      // 推不上去就把合併節點收回來。留著等於主分支上有一顆只有本機看得到的 commit，下次按時
+      // merge 會回 Already up to date、push 照樣被拒，人得自己進 shell 才解得開。
+      await git(REPO_ROOT, ['reset', '--hard', preSha.trim()], { env }).catch(() => {});
+      throw new Error(`推送失敗（本地合併已回復）：${err.message}`);
+    }
     await setStatus(fixId, 'merged');
+    // 提案本身也要記。碼都進主分支了還留在 pending，下一輪健檢的 previousProposals() 會讀到
+    // 「還沒處置」而把同一件事再提一次；applied_at 則是之後回頭驗這個修正有沒有效的起算點。
+    await query(
+      `UPDATE health_check_findings
+          SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+        WHERE id=$1 AND status<>'done'`, [fix.finding_id, userId]);
   }
 
   // 重啟會當場砍掉在飛的 agent，任務留在 *_running 的孤兒狀態。碼已經在 master 上，晚點再按即可。

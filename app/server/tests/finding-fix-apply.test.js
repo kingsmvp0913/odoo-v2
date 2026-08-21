@@ -13,11 +13,11 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messa
 const { applyFix, pickSelfContainer } = require('../pipeline/finding-fix');
 
 // execFile 的 promisify 版走 (cmd, args, opts, cb)；這裡照 cmd+args 決定回什麼
-let gitBranch, gitDirty, mergeFails;
+let gitBranch, gitDirty, mergeFails, ffFails, pushFails;
 const calls = () => mockExecFile.mock.calls.map(c => [c[0], ...c[1]].join(' '));
 
 beforeEach(() => {
-  gitBranch = 'master'; gitDirty = ''; mergeFails = false;
+  gitBranch = 'master'; gitDirty = ''; mergeFails = false; ffFails = false; pushFails = false;
   mockExecFile.mockReset();
   mockExecFile.mockImplementation((cmd, args, opts, cb) => {
     const done = typeof opts === 'function' ? opts : cb;
@@ -28,8 +28,11 @@ beforeEach(() => {
     }
     if (cmd === 'docker' && line.startsWith('restart')) return done(null, { stdout: '', stderr: '' });
     if (line.startsWith('rev-parse --abbrev-ref')) return done(null, { stdout: gitBranch + '\n', stderr: '' });
+    if (line === 'rev-parse HEAD') return done(null, { stdout: 'abc1234\n', stderr: '' });
     if (line.startsWith('status --porcelain')) return done(null, { stdout: gitDirty, stderr: '' });
+    if (line.startsWith('merge --ff-only') && ffFails) return done(new Error('Not possible to fast-forward'));
     if (line.startsWith('merge --no-ff') && mergeFails) return done(new Error('CONFLICT (content)'));
+    if (line.startsWith('push') && pushFails) return done(new Error('! [rejected] master -> master (fetch first)'));
     return done(null, { stdout: '', stderr: '' });
   });
   mockQuery.mockReset();
@@ -86,6 +89,49 @@ test('status=merged 不重複合併，只補重啟：上一次已經推上去了
     jest.runAllTimers();
     expect(calls()).toContain('docker restart odoo-v2');
   } finally { jest.useRealTimers(); }
+});
+
+test('合併前必須先跟遠端對齊：遠端被別股工作推進過的話，直接合併只會換來 push 被拒', async () => {
+  jest.useFakeTimers();
+  try {
+    await applyFix(1, 2, []);
+    const seq = calls();
+    const fetched = seq.findIndex(c => c.startsWith('git fetch origin master'));
+    const ff = seq.findIndex(c => c.startsWith('git merge --ff-only origin/master'));
+    const merged = seq.findIndex(c => c.includes('merge --no-ff'));
+    expect(fetched).toBeGreaterThanOrEqual(0);
+    expect(ff).toBeGreaterThan(fetched);
+    expect(merged).toBeGreaterThan(ff);
+  } finally { jest.useRealTimers(); }
+});
+
+test('推上去之後提案要標 done：留在 pending 的話，下一輪健檢會把同一件事再提一次', async () => {
+  jest.useFakeTimers();
+  try {
+    await applyFix(1, 2, []);
+    const marked = mockQuery.mock.calls.find(([sql]) => /UPDATE health_check_findings/.test(sql));
+    expect(marked).toBeDefined();
+    expect(marked[0]).toMatch(/status='done'/);
+    // applied_at 是回頭驗成效的起算點，重按不該把它往後推
+    expect(marked[0]).toMatch(/COALESCE\(applied_at/);
+    expect(marked[1]).toEqual([9, 2]);
+  } finally { jest.useRealTimers(); }
+});
+
+test('與遠端分岔就停手：本地那些沒推上去的東西是誰放的、要不要留，只有人知道', async () => {
+  ffFails = true;
+  await expect(applyFix(1, 2, [])).rejects.toThrow(/分岔/);
+  expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
+  expect(calls().some(c => c.startsWith('git push'))).toBe(false);
+});
+
+test('push 失敗要把合併節點收回去：留著會讓主分支多一顆只有本機看得到的 commit，重按也解不開', async () => {
+  pushFails = true;
+  await expect(applyFix(1, 2, [])).rejects.toThrow(/推送失敗/);
+  // 回到合併前那一顆；沒有這步，下次按 merge 會回 Already up to date、push 依然被拒
+  expect(calls()).toContain('git reset --hard abc1234');
+  expect(mockQuery.mock.calls.some(([sql, p]) => /UPDATE finding_fixes/.test(sql) && p[1] === 'merged')).toBe(false);
+  expect(calls().some(c => c.startsWith('docker restart'))).toBe(false);
 });
 
 test('ready（還沒採用）不能套用：diff 都還沒進 commit，合併過去是空的', async () => {
