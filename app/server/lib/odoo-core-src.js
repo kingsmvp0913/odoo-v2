@@ -187,12 +187,34 @@ function ensureOdooCoreSrc(odooVersion) {
 // 給 source-routing.md 的 {{odoo_core_src}}：依核心 source 取得與否，回不同的資料來源守則整段。
 // 取得到 → 教它先 Grep 唯讀核心路徑（真相來源）、Context7 退為補充；取不到 → 維持既有安全行為
 //（只用 Context7、嚴禁掃碟），避免逼 agent 掃硬碟被守衛中止，同時在背景把快取備好給下一關。
-function coreSourceGuidance(odooVersion) {
+// 企業版 addons 的那一段守則。企業版與社群版的差別**只在多一包 addons**（見 lib/enterprise-sources.js），
+// 而那包是掛進測試區的同一份目錄、本來就在本機——但在這段守則寫出來之前，agent 完全不知道它在哪，
+// 於是企業版模組的 view／xpath 只能靠 Context7 猜（掃碟又被守衛擋）。這正是核心碼曾經踩過的坑：
+// 真相檔不在手上時，分析關會編出不存在的寫法、QA 拿別的檔判它錯，兩關互鎖到彈跳上限（見檔頭）。
+//
+// 覆蓋順序不是可有可無的一句話：容器的 addons-path 是「專案自訂 → enterprise → 核心」
+// （docker-env.containerAddonsPath），所以同名模組以企業版為準。查反了會拿到被覆蓋掉的社群版當結論。
+function enterpriseGuidance(entDir) {
+  if (!entDir || !fs.existsSync(entDir)) return '';
+  return [
+    '',
+    '本專案是**企業版**，企業版 addons 也在本機的**唯讀**路徑（測試區啟動時唯讀掛入的就是這一包）：',
+    `  企業版模組：${entDir}`,
+    '- 企業版模組會**覆蓋**同名的社群版模組（例：`web_enterprise` 覆蓋 `web`）。查某個畫面／view／xpath 的真相時**先看這裡、再看核心 addons**——順序反了會拿到被覆蓋掉的那一版當結論。',
+    '- 企業版才有的模組（訂閱、會計進階、簽核…）在核心 addons 裡**查不到**，那不代表它不存在，是你查錯地方。',
+    '- 一樣唯讀不可改、不要 `cd` 進去跑 git、一樣不要掃碟。'
+  ].join('\n');
+}
+
+// entDir：企業版 addons 目錄（社群版專案不傳／傳空即整段不出現）。呼叫端是 getProjectInfo
+// 解好的 enterprise_src——這裡刻意只做 existsSync，不查 DB，本函式必須維持同步（見檔頭）。
+function coreSourceGuidance(odooVersion, entDir) {
   const major = majorOf(odooVersion);
   const dir = cachedCoreSrc(major);
+  const ent = enterpriseGuidance(entDir);
   if (!dir) {
     if (major) ensureOdooCoreSrc(odooVersion).catch(() => {});   // 背景解壓，不阻塞本次組 prompt
-    return '**只用 Context7 MCP**。Odoo 核心原始碼不在你的 worktree（本次快取取不到），**嚴禁**用 `find`／`ls`／`Get-ChildItem` 掃硬碟找 odoo 核心／odoo-bin／odoo-envs／venv（`find /`、掃 `C:\\`、`/c/odoo` 這類廣掃會被平台掃碟守衛中止、白燒整回合）。Context7 查不到就依 Odoo 慣例謹慎判斷，**不要掃碟**。';
+    return ent + '**只用 Context7 MCP**。Odoo 核心原始碼不在你的 worktree（本次快取取不到），**嚴禁**用 `find`／`ls`／`Get-ChildItem` 掃硬碟找 odoo 核心／odoo-bin／odoo-envs／venv（`find /`、掃 `C:\\`、`/c/odoo` 這類廣掃會被平台掃碟守衛中止、白燒整回合）。Context7 查不到就依 Odoo 慣例謹慎判斷，**不要掃碟**。';
   }
   const { frameworkDir } = pathsFor(major);
   return [
@@ -206,7 +228,7 @@ function coreSourceGuidance(odooVersion) {
     '- 這兩條路徑**唯讀不可改、也不要 `cd` 進去跑 git**；要改的碼永遠在上面本任務的 repo。',
     '- 抽象的 API 概念、版本差異、decorator 慣例，或這兩條路徑裡確實找不到時，才用 Context7 MCP 補。',
     '- 一樣**嚴禁** `find /`／掃整顆硬碟找核心（會被掃碟守衛中止、白燒整輪）——核心就在上面這兩條路徑，不要去別處找。'
-  ].join('\n');
+  ].join('\n') + ent;
 }
 
 module.exports = { ensureOdooCoreSrc, coreSourceGuidance, majorOf, CORE_SRC_ROOT };

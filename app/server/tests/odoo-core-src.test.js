@@ -268,6 +268,35 @@ describe('coreSourceGuidance', () => {
     expect(g).not.toContain('ORM 本體');            // 舊的勸退句必須移除
   });
 
+  // 意圖：企業版與社群版的差別只在多一包 addons，而那包一直都在本機（測試區唯讀掛入的就是它）。
+  // 守則沒寫出路徑之前，agent 查企業版模組只能靠 Context7 猜——prompt 又明文禁止掃碟，等於沒有
+  // 任何管道。覆蓋順序必須一起講：容器的 addons-path 是「專案自訂 → enterprise → 核心」，
+  // 查反了會拿到被企業版覆蓋掉的社群版當結論，而那種錯誤在部署前完全看不出來。
+  test('企業版專案 → 守則多給企業版路徑，並講明它覆蓋核心', () => {
+    fs.existsSync.mockReturnValue(true);
+    const g = coreSourceGuidance('17.0', '/srv/enterprise/17');
+    expect(g).toContain('/srv/enterprise/17');
+    expect(g).toContain('覆蓋');
+    expect(g).toMatch(/先看這裡/);
+    expect(g).toContain('查不到');            // 「核心裡查無」≠「這功能不存在」
+  });
+
+  test('社群版專案（沒傳企業版目錄）→ 守則不得出現企業版那段', () => {
+    fs.existsSync.mockReturnValue(true);
+    const g = coreSourceGuidance('17.0');
+    expect(g).not.toContain('企業版');
+  });
+
+  // 意圖：管理員還沒同步、或目錄被清掉時，寫一條指向空氣的路徑比不寫更糟——agent 會照著去
+  // Grep、查無結果，然後把「查無」當成事實下結論。組 prompt 這條路徑不 fail loud（那是建測試區
+  // 的責任），所以這裡只能靜靜不寫。
+  test('企業版目錄不存在 → 不寫進守則（不給指向空氣的路徑）', () => {
+    fs.existsSync.mockImplementation((p) => !String(p).includes('gone'));
+    const g = coreSourceGuidance('17.0', '/srv/enterprise/gone');
+    expect(g).not.toContain('/srv/enterprise/gone');
+    expect(g).not.toContain('企業版');
+  });
+
   test('取不到核心 → 退回既有安全行為（只用 Context7＋嚴禁掃碟）', () => {
     const g = coreSourceGuidance('');              // 版本空 → 快取查不到
     expect(g).toContain('只用 Context7 MCP');

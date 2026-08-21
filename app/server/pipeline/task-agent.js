@@ -10,6 +10,7 @@ const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
+const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { assembleTaskContext, taskAttachmentNote } = require('./sync');
@@ -37,7 +38,7 @@ function buildCommitMessage(task) {
 // root = repos/<專案>/（所有 repo 主 clone 的父目錄）；供 analysis 讀全 repo、coding 衍生 worktree 父目錄。
 async function getProjectInfo(projectId) {
   const { rows } = await query(
-    `SELECT p.name, p.folder_name, p.odoo_version, pr.local_path, pr.label
+    `SELECT p.name, p.folder_name, p.odoo_version, p.edition, pr.local_path, pr.label
      FROM projects p
      JOIN project_repos pr ON pr.project_id = p.id
      WHERE p.id = $1 AND pr.clone_status = 'done' AND pr.local_path IS NOT NULL
@@ -46,6 +47,14 @@ async function getProjectInfo(projectId) {
   );
   if (!rows.length) return null;
   const repos = rows.map(r => ({ label: r.label, local_path: r.local_path, subdir: path.basename(r.local_path) }));
+  // 企業版專案才解企業版 addons 目錄，交給 coreSourceGuidance 寫進 prompt。
+  // 解不到（管理員還沒設定／目錄不見了）就當沒有：這裡只影響「agent 查不查得到企業版原始碼」，
+  // 不該讓組 prompt 失敗——真正必須 fail loud 的是建測試區那條路徑（env-agent 的 enterpriseError）。
+  let enterpriseSrc = null;
+  if (rows[0].edition === 'enterprise') {
+    const ent = await resolveEnterprisePath(rows[0].odoo_version).catch(() => null);
+    if (ent && ent.ok) enterpriseSrc = ent.path;
+  }
   return {
     name: rows[0].name,
     // folder_name 供 /ai/wiki 的 project 參數用（端點是 folder_name=$1 OR name=$1）。
@@ -53,6 +62,8 @@ async function getProjectInfo(projectId) {
     // parser 直接判 400——連 Express 都到不了，agent 只會看到「查不到 wiki」。
     folder_name: rows[0].folder_name,
     odoo_version: rows[0].odoo_version,
+    edition: rows[0].edition,
+    enterprise_src: enterpriseSrc,
     root: path.dirname(repos[0].local_path),
     repos
   };
@@ -84,7 +95,7 @@ function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, pro
       work_dir: workDir || info.root,
       repo_list: repoList,
       repo_paths: buildRepoPaths(info, task.task_id),
-      odoo_core_src: coreSourceGuidance(info.odoo_version),
+      odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
       main_branch: baseBranch || 'main',
       git_branch: task.git_branch || `task/${task.task_id}`,
       original_text: task.original_text || '（無內容）',
@@ -123,7 +134,7 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, pr
       git_branch: task.git_branch || '（未設定）',
       main_branch: baseBranch || 'main',
       repo_paths: buildRepoPaths(info, task.task_id),
-      odoo_core_src: coreSourceGuidance(info.odoo_version),
+      odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
       analysis_yaml: task.analysis_yaml || '（無規格）',
       commit_message: buildCommitMessage(task),
       repo_list: repoList,
@@ -507,7 +518,7 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
     // git_branch：本關跑在 runner 寫入 tasks.git_branch **之前**（runner.js doBranch），
     // DB 這時還是 NULL，故由呼叫端把已算好的 branchName 傳進來。
     repo_paths: buildRepoPaths(info, task.task_id),
-    odoo_core_src: coreSourceGuidance(info.odoo_version),
+    odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
     main_branch: AI_BRANCH,
     git_branch: branchName || task.git_branch || '（未設定）'
   });

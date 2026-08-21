@@ -118,7 +118,7 @@ async function runQaAgent(taskId, userId, signal) {
         main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
-        odoo_core_src: coreSourceGuidance(info.odoo_version),
+        odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
         prior_findings: priorFindings,
         // 放寬 resume 後唯一真正的準確率風險：同一段對話裡它剛說過 pass，要它推翻自己比讓白紙判斷難。
         // 明講「那次判定可能有誤」來對沖，比清掉整個 session 便宜得多。非回流輪必須留空——每輪都印
@@ -155,7 +155,7 @@ async function runQaAgent(taskId, userId, signal) {
         main_branch: baseBranch,
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
-        odoo_core_src: coreSourceGuidance(info.odoo_version),
+        odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
         analysis_yaml: task.analysis_yaml || '（無規格）',
         prior_findings: priorFindings,
         project_notes: projectNotes || ''
