@@ -12,5 +12,8 @@
   git -C "<repo 絕對路徑>" diff {{main_branch}}...{{git_branch}}
 base 主分支＝`{{main_branch}}`；任務分支＝`{{git_branch}}`。提交也在對應 repo 內：`git -C "<絕對路徑>" add -A && git -C "<絕對路徑>" commit`。
 
+■ Odoo 開發的參考知識（查證順序、已驗證的核心行為陷阱、造測試資料的陷阱）
+你的工作目錄裡有一支 `odooDev` skill。**要判斷「這是 bug 還是原生行為」、或要自己造測試資料之前，先呼叫 `Skill(odooDev)`。** 它不重複你已經有的硬規則，只放需要時才查的東西；載不到就照常進行，不要為此停下來。
+
 ■ Odoo 核心原始碼／原生 API（欄位型別、decorator、method 行為、原生 template／view 結構、xpath 目標節點、selector／class 名／URL 慣例）
 {{odoo_core_src}}

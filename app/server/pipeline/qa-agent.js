@@ -3,6 +3,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
+const { ensureWorktreeSkills } = require('./worktree-skills');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
@@ -102,6 +103,7 @@ async function runQaAgent(taskId, userId, signal) {
     // 這條路——那本來就會經 respec／analysis 進 analysis_yaml，維持單一規格來源。
     // QA 在任務 worktree 父目錄操作（可跨 repo 子目錄讀 diff），只讀不改
     const cwd = worktreeParent(info.root, task.task_id);
+    ensureWorktreeSkills(cwd);
 
     // 重驗走 --resume：上輪 session 已含規格＋審查規則＋repo 探索，本輪只送「重取 diff＋逐項重驗」
     // 的短增量 prompt（比照 coding 的省 token 設計）。首輪／無上輪清單／resume 額度用完 → fresh。

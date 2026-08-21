@@ -4,6 +4,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const yaml = require('js-yaml');
 const { getProjectInfo, worktreeParent } = require('./task-agent');
+const { ensureWorktreeSkills } = require('./worktree-skills');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests, restartEnv } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
@@ -128,6 +129,7 @@ async function runTourStage(taskId, userId, signal) {
     return true;
   }
   const cwd = worktreeParent(info.root, task.task_id);
+  ensureWorktreeSkills(cwd);
   // 考題不在這裡產。tour 一律在建立分支關依定稿的 acceptance 先寫（runSpecTourGate），
   // 本關只負責執行。這一關原本還留著一條「自己產 tour」的降級路徑，2026-08-11 移除：
   //   * 那條路是「先寫答案再出考題」——照著已完成的實作重寫考題，測試會遷就實作而靜默通過；

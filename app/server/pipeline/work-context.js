@@ -17,6 +17,7 @@ async function taskWorkContext(task) {
     if (!info) return null;
     const cwd = worktreeParent(info.root, task.task_id);
     if (!fs.existsSync(cwd)) return null;
+    require('./worktree-skills').ensureWorktreeSkills(cwd);   // 與開發各關同一份參考知識
     return { cwd, repoPaths: buildRepoPaths(info, task.task_id) };
   } catch { return null; }
 }

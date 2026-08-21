@@ -5,6 +5,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
 const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge, revParse } = require('./git');
+const { ensureWorktreeSkills } = require('./worktree-skills');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { buildGitEnv } = require('../lib/git-identity');
@@ -340,6 +341,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
       }
     }
     if (!analysisResult) {
+      ensureWorktreeSkills(wtParent);   // Odoo 參考知識按需載入（見 worktree-skills.js）
       const built = buildAnalysisPrompt(task, info, clarification, wtParent, baseBranch, projectNotes);
       // analysis 讀任務自己的 worktree（cwd=wtParent，內容＝乾淨 main），不持鎖 → 與別任務 merge/deploy 平行。
       // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
@@ -511,6 +513,7 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   });
   const gitEnv = await buildGitEnv(userId).catch(() => ({}));
   const cwd = worktreeParent(info.root, task.task_id);
+  ensureWorktreeSkills(cwd);
 
   // 自己的階段 marker：runner 只在派工時依 task.status 寫一次（runner.js:349），而本關的 status
   // 是 branch_pending＝「建立分支」，於是這一整段 AI 執行都被歸在那個標籤底下。實際成分是
@@ -580,6 +583,7 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   // 用 main 會讓 agent 把其他已核准任務的變更誤認為自己的 diff。
   const baseBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
+  ensureWorktreeSkills(cwd);
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes, await taskAttachmentNote(task.id));
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }

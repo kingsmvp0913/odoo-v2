@@ -4,6 +4,7 @@ const notify = require('../notify');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent } = require('./agent-loader');
 const { getProjectInfo, worktreeParent, buildRepoPaths } = require('./task-agent');
+const { ensureWorktreeSkills } = require('./worktree-skills');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { getProjectNotes } = require('./project-notes');
 const { runClaude, stopReason } = require('./claude-runner');
@@ -135,6 +136,7 @@ async function runRejectTriage(taskId, userId, signal) {
     // 否則 spawn 會拿不存在的 cwd 直接 ENOENT。分診不需任務 worktree（判 resume 後回 analysis 會重建）。
     const wt = worktreeParent(info.root, task.task_id);
     const cwd = fs.existsSync(wt) ? wt : info.root;
+    if (cwd === wt) ensureWorktreeSkills(cwd);      // 退回專案根時不佈：那是主 clone，不是任務工作區
     const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'reject_triage' });
     raw = result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'reject_triage', result.usage, result.durationMs);
