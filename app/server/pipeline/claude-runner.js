@@ -131,10 +131,17 @@ function formatEvent(ev) {
   return null;
 }
 
+// 共用上限：逾時＝整輪報廢重跑（沒寫出產物、session 也不留存），比讓它多跑一會兒貴得多。
+// 原為 600s，但那對「要讀完既有模組再產出」的關卡（analysis／qa／merge）系統性不夠——實測 task 180
+// 的分析關在 3000+ 行的 idx_maintenance 裡查證退料語意，600s 到時仍在讀碼階段就被砍。
+// 各關原本逐一放寬（coding 1800s／spec_tour 1200s／platform_fix・health audit 2400s）留下的落差
+// 本身就是失敗來源，故統一對齊到 2400s；掛死的防線仍在（有上限就不會永久卡在 *_running）。
+const DEFAULT_TIMEOUT_MS = parseInt(process.env.CLAUDE_AGENT_TIMEOUT_MS || '2400000', 10);
+
 // 統一 runner（合併原 callClaude/spawnClaude，健檢 U13）：所有階段共用一份子行程實作，
 // 事件流同時寫 socket 與 task_events；支援 cwd（worktree 隔離）、session 捕捉、--resume（主題 B）。
 function runClaude(prompt, opts = {}) {
-  const { signal, cwd, taskId, userId, model, timeoutMs = 600000, resumeSessionId, env, agentType } = opts;
+  const { signal, cwd, taskId, userId, model, timeoutMs = DEFAULT_TIMEOUT_MS, resumeSessionId, env, agentType } = opts;
   return new Promise((resolve, reject) => {
     // signal 已 abort（使用者在前置 DB 查詢／組 prompt 期間、或同關前一次 runClaude 進行中按暫停）：
     // addEventListener 對已 abort 的 signal 永遠不會觸發 → 不檢查的話這一整段 claude 會照跑燒 token

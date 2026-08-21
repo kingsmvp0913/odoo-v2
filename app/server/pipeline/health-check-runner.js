@@ -410,7 +410,7 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
 // 自己回溯到更早的資料找同類案例湊證據，最後輸出「提案清單」而不是「逐關診斷」。
 const AUDIT_AGENT = '__audit__';
 // 主導型健檢會自己反覆下 SQL 回溯查證，比舊的「程式餵好摘要、一問一答」慢得多——實測 2026-08-21
-// 用預設的 600s 直接逾時、整輪報廢。比照 coding 給它獨立的上限。
+// 用當年的 600s 預設直接逾時、整輪報廢。現在與共用上限同值，旋鈕保留供本關單獨再放寬。
 const AUDIT_TIMEOUT_MS = parseInt(process.env.HEALTH_AUDIT_TIMEOUT_MS || '2400000', 10);
 
 const STATUS_TEXT = { pending: '待處理', no_change: '不須調整', done: '處理完成' };

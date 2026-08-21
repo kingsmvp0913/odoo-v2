@@ -29,7 +29,8 @@ const execFileAsync = promisify(execFile);
 
 const REPO_ROOT = path.join(__dirname, '..', '..', '..');
 const WORKTREE_ROOT = process.env.FIX_WORKTREE_DIR || path.join(REPO_ROOT, '.claude', 'worktrees');
-// 光是跑一次全套測試就要數分鐘，改完紅了還要自己修到綠——預設的 600s 必然逾時。比照 coding。
+// 光是跑一次全套測試就要數分鐘，改完紅了還要自己修到綠——當年的 600s 預設必然逾時。
+// 現在與共用上限同值，旋鈕保留供本關單獨再放寬。
 const FIX_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TIMEOUT_MS || '2400000', 10);
 // 平台自己的主分支（不是客戶專案的 testing）
 const MAIN_BRANCH = process.env.PLATFORM_MAIN_BRANCH || 'master';

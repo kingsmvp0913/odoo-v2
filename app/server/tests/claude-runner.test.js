@@ -87,6 +87,30 @@ test('runClaude 逾時 → kill 子行程樹並以逾時錯誤 reject', async ()
   }
 });
 
+// 逾時上限的落差本身就是失敗來源：analysis／qa／merge／cs 都沒帶 timeoutMs，共用預設一低，
+// 「要讀完既有模組才產得出東西」的關卡就會在讀碼階段被砍、整輪報廢（task 180 的分析關即此）。
+// 這裡鎖的是「沒帶 timeoutMs 時拿到的是放寬後的共用上限」，不是某個實作細節。
+test('runClaude 未指定 timeoutMs → 用 2400s 共用上限（不是舊的 600s）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)), on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+
+  const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+  try {
+    const { runClaude } = require('../pipeline/claude-runner');
+    await runClaude('p', {});
+    const delays = setTimeoutSpy.mock.calls.map(c => c[1]);
+    expect(delays).toContain(2400000);
+  } finally {
+    setTimeoutSpy.mockRestore();
+  }
+});
+
 // Prompt 稽核：runClaude 送出前把完整 prompt 落 prompt_logs（含 agent_type/model/task_id/字數），
 // 供管理員頁確認「實際送出了什麼」。落地為 best-effort（fire-and-forget），故輪詢等待。
 test('runClaude：送出前把完整 prompt 落 prompt_logs', async () => {

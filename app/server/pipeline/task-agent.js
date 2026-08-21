@@ -463,8 +463,8 @@ async function runSpecTourGate(taskId, userId, signal, branchName) {
 }
 
 // 寫 tour 與 E2E 關產 tour 是同一件事，卻曾各拿一半時間：playwright 關明寫 1200s，本關漏帶
-// timeoutMs 於是吃 runClaude 的 600s 預設，實測就是在寫檔前一刻被砍（task 106）。對齊上限，可用 env 調整。
-const SPEC_TOUR_TIMEOUT_MS = parseInt(process.env.PIPELINE_SPEC_TOUR_TIMEOUT_MS || '1200000', 10);
+// timeoutMs 於是吃 runClaude 的預設，實測就是在寫檔前一刻被砍（task 106）。對齊上限，可用 env 調整。
+const SPEC_TOUR_TIMEOUT_MS = parseInt(process.env.PIPELINE_SPEC_TOUR_TIMEOUT_MS || '2400000', 10);
 
 // 依定稿規格寫 E2E tour，排在 coding **之前**——現行順序是 coding 完才產 tour，等於先寫答案再
 // 出考題，測試會遷就實作；先定稿則是開發者要讓考題通過，且 coding 進 worktree 時就看得到驗收
@@ -578,9 +578,9 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   );
 }
 
-// coding 是最長的階段（探索＋實作＋逐檔驗證＋commit），共用預設 600s 常不夠；
-// 逾時＝整輪報廢重跑（比放寬上限更貴），故獨立放寬、可用 env 調整
-const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '1800000', 10);
+// coding 是最長的階段（探索＋實作＋逐檔驗證＋commit）；逾時＝整輪報廢重跑（比放寬上限更貴），
+// 故保留獨立的 env 旋鈕，但數值與共用上限對齊（曾為 1800s）
+const CODING_TIMEOUT_MS = parseInt(process.env.PIPELINE_CODING_TIMEOUT_MS || '2400000', 10);
 
 // 跑一輪 coding：無狀態，一律用 coding-project 統一 prompt（不 --resume）。
 // 省 token 靠 prompt cache（實測 coding 全價 input 僅佔 0.28%，重送規則/spec 幾乎免費），
