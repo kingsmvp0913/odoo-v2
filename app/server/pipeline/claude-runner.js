@@ -213,8 +213,11 @@ function runClaude(prompt, opts = {}) {
     };
     // settle 前先 flush 殘餘事件，確保尾段落地且排在下一關 marker 之前
     const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); Promise.resolve(flushEvents()).finally(fn); } };
-    // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）
-    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt });
+    // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）。
+    // sessionId 一併帶出（init 事件早在第一則就到手，失敗時必定已有值）：逾時的那一輪已經把整包 code
+    // 讀進 session，呼叫端存下來就能 --resume 續跑；不帶的話重跑從零讀起、極可能再逾時一次
+    // （task 180 分析關 600s 的探索全數作廢即此）。
+    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt, sessionId });
     // CLI 掛死時若無 timeout，任務會永久卡在 *_running、merge 鎖永不釋放，只能重啟 server（健檢 U9）
     timer = setTimeout(() => {
       killChild();

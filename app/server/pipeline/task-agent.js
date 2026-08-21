@@ -319,7 +319,13 @@ async function runTaskAnalysis(taskId, userId, signal) {
   try {
     let analysisResult = null;
     if (canResume) {
-      const retryAgent = loadAgent('analysis-retry');
+      // 上一輪讀過碼卻沒留下規格＝它是被執行時限砍斷的（成功輪必定連同 analysis_yaml 一起落地），
+      // 此時要的是「收斂」不是「增量改」：analysis-retry 的 body 通篇假設上一輪產出過規格
+      // （「沒被新資訊動到的部分維持原樣」），餵給逾時輪會拿到「新資訊(無)＋既有規格(無)」的空洞指令。
+      // 註：舊規格已存在、之後某輪才逾時的情形仍走 analysis-retry——它的「不要重新探索整包 code」
+      // 已涵蓋主要痛點，只少了「矛盾要停下來問」那段強調，不值得為此另立旗標欄位。
+      const timedOutMidway = !task.analysis_yaml;
+      const retryAgent = loadAgent(timedOutMidway ? 'analysis-timeout-resume' : 'analysis-retry');
       // 只送增量：規格全文仍要帶，因為 analysis_yaml 可能已被規格關卡（respec-patch／spec-review）
       // 在**別的 session** 改過，session 記憶裡的版本會是舊的。
       const retryPrompt = retryAgent.render({
@@ -338,8 +344,12 @@ async function runTaskAnalysis(taskId, userId, signal) {
         await query('UPDATE tasks SET analysis_resume_count = COALESCE(analysis_resume_count,0) + 1 WHERE id=$1', [taskId]).catch(() => {});
       } catch (err) {
         if (err.aborted) throw err;  // 手動暫停：交下方既有 catch 原樣處理，session 留著解除後續用
-        // session 遺失／CLI 壞掉／逾時都先清掉 stale session 並歸零計數，下次進來自然 fresh 重讀。
-        await query('UPDATE tasks SET analysis_session_id=NULL, analysis_resume_count=0 WHERE id=$1', [taskId]).catch(() => {});
+        // session 遺失／CLI 壞掉：清掉 stale session 並歸零計數，下次進來自然 fresh 重讀。
+        // 逾時是例外——那條 session 是活的（只是這一輪沒做完），清掉等於逼下一輪從零重讀整包 code、
+        // 再逾時一次。留著交下方 catch 依 err.sessionId 續存並累加計數。
+        if (!(err.claudeStatus === 'timeout' && err.sessionId)) {
+          await query('UPDATE tasks SET analysis_session_id=NULL, analysis_resume_count=0 WHERE id=$1', [taskId]).catch(() => {});
+        }
         // 逾時不在同輪重跑：同一份輸入再跑一次極可能再逾時，只是讓使用者多等一輪（比照 qa-agent.js:120）
         if (err.claudeStatus === 'timeout') throw err;
         // 其餘：記帳後這輪改跑 fresh，使用者仍拿得到規格
@@ -368,6 +378,19 @@ async function runTaskAnalysis(taskId, userId, signal) {
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
     if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑
+    // 逾時／崩潰的那一輪已經把整包 code 讀進 session（runClaude 失敗時一併帶出 sessionId）。存下來，
+    // 下次進來就能 --resume 接著收斂，不必從零重讀——task 180 的分析關正是讀到一半被 600s 砍掉、
+    // 600 秒探索全數作廢，重跑必然再逾時一次。語意與下方成功路徑一致：它記的是「最後一個**讀過本任務
+    // 程式碼**的 session」，逾時輪完全符合。
+    // 計數在此累加（成功輪的 +1 在 resume 分支內）：逾時輪不累加的話，人每按一次「繼續」就無條件再
+    // resume 一輪、永遠撞不到 ANALYSIS_RESUME_LIMIT，同一個卡點可無限重演（健檢 U2 的教訓）。
+    if (err.sessionId) {
+      await query(
+        `UPDATE tasks SET analysis_session_id=$2, analysis_prompt_ver=$3,
+         analysis_resume_count = COALESCE(analysis_resume_count,0) + 1 WHERE id=$1`,
+        [taskId, err.sessionId, anaVer]
+      ).catch(() => {});
+    }
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
       [taskId, stopReason('分析 Agent 執行失敗', err)]

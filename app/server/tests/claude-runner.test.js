@@ -60,6 +60,34 @@ test('stopReason：手動暫停顯示「手動暫停」，真正失敗才帶階�
   expect(stopReason('QA Agent 執行失敗', new Error('boom'))).toBe('QA Agent 執行失敗：boom');
 });
 
+// 意圖：逾時被砍的那一輪，已經把整包 code 讀進 session 了。err 不帶 sessionId 出來，呼叫端就無從
+// --resume 續跑，只能從零重讀、然後再逾時一次（task 180 的分析關 600s 探索全數作廢就是這樣來的）。
+// session_id 在第一則 init 事件就到手，失敗當下必定已有值——這條驗它真的被帶出去。
+test('runClaude 逾時 → err 帶出 sessionId（供呼叫端 --resume 續跑，不必從零重讀）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.pid = 4243;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = {
+    write: () => {},
+    // init 事件先到（真實 CLI 的第一則就是它），然後什麼都不做——讓 timeoutMs 到期砍掉這一輪
+    end: () => setImmediate(() => child.stdout.emit('data',
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-TIMEDOUT' }) + '\n')),
+    on: () => {}
+  };
+  child.kill = jest.fn(() => { setImmediate(() => child.emit('close', 143)); });
+  child.unref = () => {};
+  spawn.mockReturnValue(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const err = await runClaude('p', { timeoutMs: 30 }).then(() => null, e => e);
+  expect(err).toBeTruthy();
+  expect(err.claudeStatus).toBe('timeout');
+  expect(err.sessionId).toBe('sess-TIMEDOUT');
+});
+
 // 健檢 U9：runClaude 逾時——CLI 掛死＝任務永久卡在 *_running、
 // merge 鎖鏈永不釋放，只能重啟 server。逾時必須主動 kill 並 reject。
 // Windows 上 signal 殺不到子孫（claude Bash 出去的 find.exe 會變孤兒），故改走 taskkill /T 連根收；
