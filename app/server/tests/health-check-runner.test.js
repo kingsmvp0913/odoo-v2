@@ -24,12 +24,17 @@ jest.mock('../pipeline/agent-loader', () => {
 });
 jest.mock('../pipeline/health-data', () => ({
   buildAgentSummary: jest.fn().mockResolvedValue({ token: {}, tasks: {}, rejections: null }),
-  buildTaskSummary: jest.fn().mockResolvedValue({ scope: 'task:1', task: {}, sequence: [], per_stage: {} })
+  buildTaskSummary: jest.fn().mockResolvedValue({ scope: 'task:1', task: {}, sequence: [], per_stage: {} }),
+  buildWindowSummary: jest.fn().mockResolvedValue({
+    window: { since: '2026-08-20T00:00:00.000Z', until: '2026-08-21T00:00:00.000Z' },
+    volume: { agent_calls: 12, tasks_touched: 4, cost_usd: 1.2, wall_clock: {} },
+    per_stage: {}, tasks: [], rejections: []
+  })
 }));
 
-const { buildAgentSummary, buildTaskSummary } = require('../pipeline/health-data');   // 零樣本測試要逐次覆寫
+const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('../pipeline/health-data');   // 零樣本測試要逐次覆寫
 
-let dbModule2, runHealthCheck, runTaskHealthCheck, resumeInterruptedRuns, hcUserId;
+let dbModule2, runHealthCheck, runTaskHealthCheck, runAudit, resumeInterruptedRuns, hcUserId;
 beforeAll(async () => {
   const db = newDb();
   const { Pool } = db.adapters.createPg();
@@ -42,7 +47,7 @@ beforeAll(async () => {
   // 深診上限在 module load 時讀 env，故必須在 require 之前設。設成 1 是為了讓「截斷要寫進
   // finding、不得靜默」那條測得到——本檔的 fixture 只有兩個 agent，用預設的 8 永遠碰不到上限。
   process.env.HEALTH_MAX_FOCUS = '1';
-  ({ runHealthCheck, runTaskHealthCheck, resumeInterruptedRuns } = require('../pipeline/health-check-runner'));
+  ({ runHealthCheck, runTaskHealthCheck, runAudit, resumeInterruptedRuns } = require('../pipeline/health-check-runner'));
 });
 afterAll(() => dbModule2._setPoolForTesting(null));
 beforeEach(() => mockRunClaude.mockReset());
@@ -574,4 +579,117 @@ test('resumeInterruptedRuns：scope=task 的中斷 run 續跑成任務健檢，�
   }
   const { rows } = await dbModule2.query('SELECT agent_name FROM health_check_findings WHERE run_id=$1', [runId]);
   expect(rows.map(r => r.agent_name)).toEqual(['__task__']);   // 沒有 coding-project／qa／__summary__
+});
+
+// --- 主導型健檢（runAudit）：產出是「系統優化提案」而不是逐關診斷 ---
+// 意圖：舊做法逐關切片，答得出「每關健不健康」卻答不出「系統下一步該優化什麼」——跨關的問題
+// 每一關都會正確判成「與本關無關」。這裡釘住新格式的三件事：提案要能追蹤成效（指標＋現值必填）、
+// 沒有新資料就不准燒錢、上一輪的裁決要餵回去（跨輪記憶）。
+
+async function newAuditRun() {
+  const { rows: [r] } = await dbModule2.query(
+    "INSERT INTO health_check_runs (status, since_at) VALUES ('running', NOW() - INTERVAL '1 day') RETURNING id");
+  return r.id;
+}
+
+const AUDIT_OK = {
+  text: '<summary>本輪看到 QA 與實作之間反覆震盪。</summary><result>' +
+    JSON.stringify({
+      severity: 'medium',
+      proposals: [
+        { kind: 'proposal', title: '退回顆粒度不足', layer: 'platform', detail: '退回沒有欄位可判斷是否精準',
+          evidence: '3 張不同任務：#101 #102 #103', action: '加一個退回原因欄位',
+          target_metric: 'qa_rejections.impl_miss', metric_baseline: '15' },
+        { kind: 'signal', title: '疑似分診誤判', layer: 'prompt', detail: '只有一張任務',
+          evidence: '#101', action: '再觀察', target_metric: 'repeat_calls.avg', metric_baseline: '2.1' }
+      ]
+    }) + '</result>',
+  usage: { input_tokens: 1 }, durationMs: 10
+};
+
+test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／證據／指標，狀態預設待處理', async () => {
+  mockRunClaude.mockResolvedValue(AUDIT_OK);
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+
+  const { rows } = await dbModule2.query(
+    'SELECT kind, agent_label, layer, evidence, target_metric, metric_baseline, status FROM health_check_findings WHERE run_id=$1 ORDER BY id',
+    [runId]);
+  expect(rows.map(r => r.kind)).toEqual(['summary', 'proposal', 'signal']);
+  const proposal = rows[1];
+  expect(proposal.agent_label).toBe('退回顆粒度不足');
+  expect(proposal.layer).toBe('platform');
+  expect(proposal.evidence).toContain('3 張不同任務');
+  expect(proposal.target_metric).toBe('qa_rejections.impl_miss');
+  expect(proposal.metric_baseline).toBe('15');
+  expect(proposal.status).toBe('pending');
+  // 候選訊號與提案分開存：證據不夠的不該長得像可以動手的
+  expect(rows[2].kind).toBe('signal');
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('done');
+  expect(mockRunClaude).toHaveBeenCalledTimes(1);          // 一輪一次呼叫，不再逐關各跑一次
+});
+
+test('runAudit：說不出「動哪個指標、現值多少」的提案一律丟棄', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>x</summary><result>' + JSON.stringify({
+      severity: 'low',
+      proposals: [
+        { kind: 'proposal', title: '有指標的', layer: 'prompt', detail: 'd', target_metric: 'm', metric_baseline: '1' },
+        { kind: 'proposal', title: '沒指標的', layer: 'prompt', detail: 'd' }
+      ]
+    }) + '</result>', usage: {}, durationMs: 5
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(), startedBy: null });
+  const { rows } = await dbModule2.query(
+    "SELECT agent_label FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
+  expect(rows.map(r => r.agent_label)).toEqual(['有指標的']);   // 沒有驗收條件的提案不成立
+});
+
+test('runAudit：視窗內沒有新資料 → 不呼叫模型，照實記一筆', async () => {
+  buildWindowSummary.mockResolvedValueOnce({
+    window: { since: '2026-08-20T00:00:00.000Z', until: '2026-08-21T00:00:00.000Z' },
+    volume: { agent_calls: 0, tasks_touched: 0, cost_usd: 0, wall_clock: {} },
+    per_stage: {}, tasks: [], rejections: []
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(), startedBy: null });
+  expect(mockRunClaude).not.toHaveBeenCalled();            // 沒資料還叫模型＝逼它硬生問題出來
+  const { rows: [f] } = await dbModule2.query('SELECT kind, severity, diagnosis FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.kind).toBe('note');
+  expect(f.severity).toBe('ok');
+  expect(f.diagnosis).toContain('沒有任何 agent 呼叫');
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('done');
+});
+
+test('runAudit：解析不出結果 → 落 error 並把 run 標 error（不可靜默收尾成 done）', async () => {
+  mockRunClaude.mockResolvedValue({ text: '模型講了一堆但沒有 result', usage: {}, durationMs: 5 });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(), startedBy: null });
+  const { rows: [f] } = await dbModule2.query('SELECT kind, severity FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.severity).toBe('error');
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('error');
+});
+
+test('runAudit：上一輪的提案與裁決會餵回下一輪（跨輪記憶，視窗縮短後的關鍵配套）', async () => {
+  // 先造一筆「已裁決為不須調整」的舊提案
+  const prevRun = await newAuditRun();
+  await dbModule2.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, kind, layer,
+                                        status, verdict_note, target_metric, metric_baseline)
+     VALUES ($1,'__audit__','舊提案','舊提案：某某問題','low','proposal','prompt','no_change','證據只有一張任務','repeat_calls.avg','2.1')`,
+    [prevRun]);
+
+  mockRunClaude.mockResolvedValue(AUDIT_OK);
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+
+  const prompt = mockRunClaude.mock.calls.at(-1)[0];
+  expect(prompt).toContain('舊提案：某某問題');
+  expect(prompt).toContain('不須調整');
+  expect(prompt).toContain('證據只有一張任務');           // 沒有這句，下一輪會把同一件事再提一次
+  expect(prompt).toContain('repeat_calls.avg');           // 指標要帶回去才驗得到成效
 });

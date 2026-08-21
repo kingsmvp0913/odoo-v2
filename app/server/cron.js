@@ -103,11 +103,12 @@ const EMBEDDING_SWEEP_INTERVAL_MS = parseInt(process.env.EMBEDDING_SWEEP_INTERVA
 const EMBEDDING_SWEEP_HOUR = parseInt(process.env.EMBEDDING_SWEEP_HOUR || '3', 10);
 
 // 工作流程健檢：原本只有 admin 手動觸發，而實際上線後從沒被按過一次（run#1 是平台史上第一次）。
-// 再好的診斷不跑就沒有價值，改為每週自動跑一次。0 = 停用。
-const HEALTH_CHECK_INTERVAL_MS = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS || String(7 * 86400000), 10);
-const HEALTH_CHECK_WINDOW_DAYS = parseInt(process.env.HEALTH_CHECK_WINDOW_DAYS || '30', 10);
+// 再好的診斷不跑就沒有價值，改為自動跑。
+// 每天一次（原本每週）：視窗改成「上一輪之後」的增量後，跑得越密每輪要看的資料越少、越好判讀；
+// 拉長反而讓一輪要吞一大批資料。0 = 停用。
+const HEALTH_CHECK_INTERVAL_MS = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS || String(86400000), 10);
 
-// 距上次健檢是否已滿一週。以 DB 的 created_at 為準而非行程內變數：server 常重啟，
+// 距上次健檢是否已滿一個週期。以 DB 的 created_at 為準而非行程內變數：server 常重啟，
 // 用記憶體節流會變成「每次重啟後不久就再跑一次」，一次健檢要跑 20+ 個 opus。
 // 健檢頁要顯示「下次執行時間」，而那個時間就是這裡的判斷結果——兩邊各算一份必然漂移
 // （改了 interval 只改到一邊，畫面寫的時間就是假的），故排程判斷與時間推算共用此函式。
@@ -203,17 +204,19 @@ function startCron() {
         sweepIdleEnvs().catch(err => console.error('[CRON] idle sweep:', err.message));
       }
 
-      // 每週工作流程健檢（fire-and-forget，比照 admin 手動觸發那條路徑）。
+      // 每日系統健檢（fire-and-forget，比照 admin 手動觸發那條路徑）。
       // 獨立 try：健檢排程壞掉不得連坐同步／關機／回收——本檔刻意不共用 early return。
       try {
         if (await shouldRunHealthCheck()) {
+          const { runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
+          const sinceAt = await auditWindowStart();
+          const windowDays = Math.max(1, Math.round((Date.now() - sinceAt.getTime()) / 86400000));
           const { rows: [run] } = await query(
-            "INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,NULL) RETURNING id",
-            [HEALTH_CHECK_WINDOW_DAYS]
+            "INSERT INTO health_check_runs (status, window_days, started_by, since_at) VALUES ('running',$1,NULL,$2) RETURNING id",
+            [windowDays, sinceAt]
           );
-          console.log(`[CRON] 啟動每週工作流程健檢 run ${run.id}`);
-          const { runHealthCheck } = require('./pipeline/health-check-runner');
-          runHealthCheck(run.id, { windowDays: HEALTH_CHECK_WINDOW_DAYS })
+          console.log(`[CRON] 啟動每日系統健檢 run ${run.id}（視窗自 ${sinceAt.toISOString()}）`);
+          runAudit(run.id, { sinceAt })
             .catch(err => console.error('[CRON] health check:', err.message));
         }
       } catch (err) { console.error('[CRON] health check schedule:', err.message); }

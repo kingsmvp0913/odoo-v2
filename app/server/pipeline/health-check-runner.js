@@ -5,7 +5,7 @@ const { listAgents, loadAgent } = require('./agent-loader');
 const { runClaude } = require('./claude-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { buildAgentSummary, buildTaskSummary } = require('./health-data');
+const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('./health-data');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 
@@ -403,18 +403,144 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
   }
 }
 
+// ── 主導型健檢（scope=platform 的現行做法）────────────────────────────────────────
+// 舊做法是「程式把 21 關的摘要算好 → 每關各跑一次 opus → 再把結論拼起來」。它答的是「每一關健不
+// 健康」，但真正要的是「這個系統下一步該做什麼優化」——那是跨關的問題，逐關切片天生答不出來。
+// 現在改成一支審計 agent 自己主導：程式只給一份增量視窗的輪廓，它自己下 SQL 深挖、自己讀提示詞、
+// 自己回溯到更早的資料找同類案例湊證據，最後輸出「提案清單」而不是「逐關診斷」。
+const AUDIT_AGENT = '__audit__';
+
+const STATUS_TEXT = { pending: '待處理', no_change: '不須調整', done: '處理完成' };
+
+// 上一輪留下的提案與人的裁決。餵回去有兩個作用：判「不須調整」的不會被重講第二次；判「處理完成」
+// 的要回頭查那個指標有沒有往預期方向走。這是把健檢從「每輪重寫一份報告」變成「有記憶的優化迴圈」
+// 的關鍵——尤其視窗改成增量之後，沒有它每輪都會從零開始。
+async function previousProposals(limit = 20) {
+  const { rows } = await query(
+    `SELECT diagnosis, layer, status, verdict_note, target_metric, metric_baseline, applied_at, kind
+       FROM health_check_findings
+      WHERE kind IN ('proposal','signal') ORDER BY id DESC LIMIT $1`, [limit]
+  );
+  if (!rows.length) return '（這是第一輪，沒有上一輪的提案）';
+  return rows.reverse().map(r => {
+    const head = String(r.diagnosis || '').split('\n')[0].slice(0, 200);
+    const applied = r.applied_at ? `；於 ${new Date(r.applied_at).toISOString().slice(0, 10)} 套用` : '';
+    const verdict = r.verdict_note ? `\n  你的裁決：${r.verdict_note}` : '';
+    return `- [${r.kind === 'signal' ? '候選訊號' : '提案'}｜${r.layer || '未分類'}｜${STATUS_TEXT[r.status] || r.status}] ${head}\n` +
+           `  指標：${r.target_metric || '（未填）'}（當時 ${r.metric_baseline || '—'}）${applied}${verdict}`;
+  }).join('\n');
+}
+
+async function insertFinding(runId, row) {
+  await query(
+    `INSERT INTO health_check_findings
+       (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
+        kind, layer, evidence, target_metric, metric_baseline)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11)`,
+    [runId, AUDIT_AGENT, row.label || '系統健檢', row.diagnosis, row.severity, row.rationale || null,
+     row.kind, row.layer || null, row.evidence || null, row.target_metric || null, row.metric_baseline || null]
+  );
+}
+
+async function runAudit(runId, { sinceAt, startedBy = null } = {}) {
+  let raw = null;
+  try {
+    const summary = await buildWindowSummary(sinceAt);
+    // 零樣本早退：視窗內沒有任何 agent 呼叫也沒有任務異動（例如週末），此時呼叫模型只會逼它為了
+    // 交差硬生問題出來——判準明列「指標都正常還硬生一份改動」是紅旗。不燒錢，照實記一筆。
+    if (!summary.volume.agent_calls && !summary.volume.tasks_touched) {
+      await insertFinding(runId, {
+        kind: 'note', severity: 'ok',
+        diagnosis: `本輪視窗（${summary.window.since} 起）內沒有任何 agent 呼叫或任務異動，未進行診斷。`
+      });
+      await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
+      return;
+    }
+
+    const agent = loadAgent('health-auditor');
+    const prompt = agent.render({
+      previous: await previousProposals(),
+      summary: JSON.stringify(summary)
+    });
+    const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+    raw = text;
+    await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
+
+    const { inner: sumBlock, cleaned } = extractTaggedBlock(text, 'summary');
+    const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
+    const severity = String((parsed && parsed.severity) || '').trim().toLowerCase();
+    const proposals = (parsed && Array.isArray(parsed.proposals)) ? parsed.proposals : null;
+    if (!SEVERITIES.has(severity) || !proposals) {
+      await insertFinding(runId, {
+        kind: 'note', severity: 'error',
+        diagnosis: '健檢失敗：無法取得有效結果' + saveRawOutput(runId, AUDIT_AGENT, raw)
+      });
+      await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]);
+      return;
+    }
+
+    // 總結與提案分開存：一個是給人讀的敘述，一個是可動手、可追蹤成效的條目。混在一起就再也分不出
+    // 「哪句話有數據撐、哪句是推論」。
+    const sum = (sumBlock || '').trim();
+    if (sum) await insertFinding(runId, { kind: 'summary', severity, label: '本輪總結', diagnosis: sum });
+
+    for (const p of proposals) {
+      const title = String(p.title || '').trim();
+      const metric = String(p.target_metric || '').trim();
+      const baseline = String(p.metric_baseline || '').trim();
+      // 說不出「動哪個指標、現值多少」的提案一律丟掉（判準：三者缺一不成立）。丟掉要留痕，
+      // 否則下次會誤以為模型什麼都沒提。
+      if (!title || !metric || !baseline) {
+        console.warn('[HEALTH-CHECK] 提案缺標題或指標，已丟棄：', title || '(無標題)');
+        continue;
+      }
+      await insertFinding(runId, {
+        kind: p.kind === 'signal' ? 'signal' : 'proposal',
+        severity,
+        label: title,
+        layer: String(p.layer || '').trim() || null,
+        evidence: p.evidence ? String(p.evidence) : null,
+        target_metric: metric,
+        metric_baseline: baseline,
+        diagnosis: [title, String(p.detail || '').trim()].filter(Boolean).join('\n\n'),
+        rationale: p.action ? String(p.action) : null
+      });
+    }
+    await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
+  } catch (err) {
+    console.error('[HEALTH-CHECK] audit:', err.message);
+    await logFailedUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', err).catch(() => {});
+    await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]).catch(() => {});
+  }
+}
+
+// 本輪視窗的起點＝上一輪全平台健檢的完成時刻。刻意不是「上次套用改動的時刻」：被判「不須調整」
+// 的輪次也要把視窗往前推，否則視窗永遠停在原地、每輪重看同一批資料。
+// 從沒跑過 → 退回 7 天，給第一輪一點基礎樣本。
+async function auditWindowStart() {
+  const { rows } = await query(
+    "SELECT finished_at, created_at FROM health_check_runs WHERE task_db_id IS NULL AND status='done' ORDER BY id DESC LIMIT 1"
+  );
+  const last = rows[0];
+  if (!last) return new Date(Date.now() - 7 * 86400000);
+  return new Date(last.finished_at || last.created_at);
+}
+
 // 啟動續跑：上次 server 重啟時跑到一半的健檢（status='running'）從中斷點接續，
 // 而非永遠停在 running 或一律標 error 作廢。fire-and-forget，比照原觸發路徑。
 // 依 task_db_id 分流：拿 scope=task 的 run 去跑全平台健檢，會在同一個 run 底下混進 21 關的
 // findings，畫面上再也分不出這是哪一張任務的診斷。
 async function resumeInterruptedRuns() {
-  const { rows } = await query("SELECT id, task_db_id FROM health_check_runs WHERE status='running'");
+  const { rows } = await query("SELECT id, task_db_id, since_at FROM health_check_runs WHERE status='running'");
   for (const r of rows) {
     console.log(`[HEALTH-CHECK] resume interrupted run ${r.id}`);
+    // 三種 scope 各自續跑：單張任務／主導型審計（有 since_at）／舊的逐關健檢（歷史列）。
+    // 走錯會在同一個 run 底下混進另一種格式的 findings，畫面上再也分不出這一輪是什麼。
     if (r.task_db_id) runTaskHealthCheck(r.id, { taskDbId: r.task_db_id }).catch(() => {});
+    else if (r.since_at) runAudit(r.id, { sinceAt: r.since_at }).catch(() => {});
     else runHealthCheck(r.id).catch(() => {});
   }
   return rows.length;
 }
 
-module.exports = { runHealthCheck, runTaskHealthCheck, resumeInterruptedRuns };
+module.exports = { runHealthCheck, runTaskHealthCheck, runAudit, auditWindowStart, resumeInterruptedRuns };

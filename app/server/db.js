@@ -731,6 +731,29 @@ async function migrate() {
     // 預設 git 讓既有列行為不變。local 型態不填 repo_url——該欄是 NOT NULL 且本框架只有
     // add-if-missing、沒有改約束的 migration（見上方 spec_tour_enabled 註解），故存空字串而非 NULL。
     { table: 'enterprise_sources', col: 'source_type', sql: "ALTER TABLE enterprise_sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'" },
+    // 健檢視窗的起點（增量健檢）：只看「上一輪健檢完成之後」發生的事。固定 30 天視窗的問題是
+    // 指標多半由已被取代的舊版提示詞產生，判讀時整批要打折；改成增量後，量到的正好是「上次改動
+    // 之後的表現」。NULL＝舊的固定視窗（沿用 window_days），既有列行為不變。
+    { table: 'health_check_runs', col: 'since_at', sql: 'ALTER TABLE health_check_runs ADD COLUMN since_at TIMESTAMPTZ' },
+    // --- 提案化的 finding（見 health_check_findings 的 kind）---
+    // 處置狀態：pending 待處理 / no_change 不須調整 / done 處理完成。預設 pending。
+    // 沒有這個欄位時，健檢每輪都會把同一件事重講一次，而你上輪的裁決沒有任何地方記得住。
+    { table: 'health_check_findings', col: 'status',       sql: "ALTER TABLE health_check_findings ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'" },
+    { table: 'health_check_findings', col: 'verdict_note', sql: 'ALTER TABLE health_check_findings ADD COLUMN verdict_note TEXT' },
+    { table: 'health_check_findings', col: 'decided_by',   sql: 'ALTER TABLE health_check_findings ADD COLUMN decided_by INTEGER' },
+    { table: 'health_check_findings', col: 'decided_at',   sql: 'ALTER TABLE health_check_findings ADD COLUMN decided_at TIMESTAMPTZ' },
+    // 成效回看：下一輪健檢要回頭查「上次說要降的那個數字降了沒」。刻意與 decided_at 分開——
+    // 起算點是「改動真的套用」的那一刻，不是「你按下不須調整」的那一刻。
+    { table: 'health_check_findings', col: 'applied_at',     sql: 'ALTER TABLE health_check_findings ADD COLUMN applied_at TIMESTAMPTZ' },
+    { table: 'health_check_findings', col: 'target_metric',  sql: 'ALTER TABLE health_check_findings ADD COLUMN target_metric TEXT' },
+    { table: 'health_check_findings', col: 'metric_baseline', sql: 'ALTER TABLE health_check_findings ADD COLUMN metric_baseline TEXT' },
+    // 根因層：prompt / platform / env / observability。決定這條該走哪個出口，也擋住「判定非
+    // 提示詞可解卻仍附一份新提示詞」那個紅旗。
+    { table: 'health_check_findings', col: 'layer',    sql: 'ALTER TABLE health_check_findings ADD COLUMN layer TEXT' },
+    { table: 'health_check_findings', col: 'evidence', sql: 'ALTER TABLE health_check_findings ADD COLUMN evidence TEXT' },
+    // kind：agent＝舊的逐關診斷（歷史列）／proposal＝優化提案／signal＝候選訊號（證據還不夠，
+    // 存著等下一輪累積）。舊列一律是 agent，故 DEFAULT 就是它。
+    { table: 'health_check_findings', col: 'kind', sql: "ALTER TABLE health_check_findings ADD COLUMN kind TEXT NOT NULL DEFAULT 'agent'" },
     // 健檢的 scope：NULL＝全平台（既有列與排程都是這種），有值＝只健檢這一張任務（tasks.id）。
     // 刻意不宣告 FK，比照上面 project_chats.converted_task_id：帶 FK 卻漏 ON DELETE 會反過來擋死
     // 刪任務，而殘留的死 id 由列表 SQL 的 LEFT JOIN tasks 吸收（任務不在就回 null）。

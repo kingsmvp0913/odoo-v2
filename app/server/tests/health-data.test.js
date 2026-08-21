@@ -26,7 +26,7 @@ test('migrate 建立 health_check_runs / health_check_findings 兩表', async ()
   expect(f[0].severity).toBe('ok');
 });
 
-const { buildAgentSummary, buildTaskSummary } = require('../pipeline/health-data');
+const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('../pipeline/health-data');
 
 test('buildAgentSummary 聚合 token / tasks / rejections（僅視窗內）', async () => {
   // 準備：coding 階段兩筆 token_usage（1 成功 1 失敗）＋窗外 1 筆不計
@@ -82,7 +82,7 @@ test('buildAgentSummary：coding 只看 QA impl_miss + env_flaky_count；human b
   await dbModule.query(
     "INSERT INTO rejection_items (rejection_id, description, category) VALUES ($1,'d','實作錯誤')", [hr.id]);
 
-  const { buildAgentSummary, buildTaskSummary } = require('../pipeline/health-data');
+  const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('../pipeline/health-data');
   const coding = await buildAgentSummary({ name: 'coding-project', stage: 'coding' });
   expect(coding.qa_rejections).toEqual({ relevant_category: 'impl_miss', count: 2, env_flaky_count: 1 });
   expect(coding.rejections.by_category).toEqual({ '實作錯誤': 2 }); // 不含 qa 的分類（累加前一個既有案例的 1 筆 human）
@@ -282,4 +282,43 @@ test('prompt_version 記錄本版上線時間與上線後樣本數（真 agent �
 test('prompt_version：載不到該 agent 檔時回 null，不丟例外', async () => {
   const s2 = await buildAgentSummary({ name: '不存在的agent', stage: 'wiki', label: 'X' }, { windowDays: 30 });
   expect(s2.prompt_version).toBeNull();
+});
+
+// --- 增量視窗的起手包（主導型健檢用）---
+// 意圖：固定 30 天視窗量到的指標多半由已被取代的舊版提示詞產生，判讀時整批要打折；改成
+// 「上一輪之後」的增量，量到的正好是上次改動之後的表現。這裡釘住「窗外的資料不得混進來」——
+// 混進來的症狀是「改動看起來沒效果」，而那是最會誤導人的一種假訊號。
+test('buildWindowSummary：只涵蓋視窗內的呼叫與任務，窗外的不計', async () => {
+  // 本檔前面的測試已在同一個 DB 塞過 token_usage（recorded_at=NOW()），會落在本測試的視窗內。
+  // 這一支要驗的是「窗內／窗外」的界線，故先清空用量表——它是本檔最後一支測試，清掉不影響其他人。
+  await dbModule.query('DELETE FROM token_usage');
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('wnd','h','W') RETURNING id");
+  await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, title, original_text, status, source, updated_at)
+     VALUES ($1,'T-WND-新','窗內','x','done','web',NOW())`, [u.id]);
+  await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, title, original_text, status, source, updated_at)
+     VALUES ($1,'T-WND-舊','窗外','x','done','web',NOW() - INTERVAL '10 days')`, [u.id]);
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens, duration_ms, status, recorded_at)
+     VALUES ('T-WND-新','coding','claude-opus-5',1,1,1000,'completed',NOW())`);
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens, duration_ms, status, recorded_at)
+     VALUES ('T-WND-新','qa','claude-opus-5',1,1,2000,'error',NOW())`);
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens, duration_ms, status, recorded_at)
+     VALUES ('T-WND-舊','coding','claude-opus-5',1,1,1000,'completed',NOW() - INTERVAL '10 days')`);
+
+  const since = new Date(Date.now() - 86400000);
+  const w = await buildWindowSummary(since);
+
+  expect(w.volume.agent_calls).toBe(2);                       // 窗外那筆不計
+  expect(w.per_stage.coding.calls).toBe(1);
+  expect(w.per_stage.qa.failed_calls).toBe(1);                // 失敗要看得見，否則崩潰會被當成沒事
+  const ids = w.tasks.map(t => t.task_id);
+  expect(ids).toContain('T-WND-新');
+  expect(ids).not.toContain('T-WND-舊');
+  // 關卡序列是判斷震盪（coding→qa→coding→qa）的依據，純次數看不出形狀
+  expect(w.tasks.find(t => t.task_id === 'T-WND-新').sequence).toBe('coding→qa');
 });

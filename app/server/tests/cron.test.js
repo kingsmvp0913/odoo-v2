@@ -15,9 +15,10 @@ jest.mock('../pipeline/env-agent', () => ({
   nightlyShutdown: jest.fn().mockResolvedValue(undefined),
   sweepIdleEnvs: jest.fn().mockResolvedValue(undefined)
 }));
-// 健檢是 20+ 個 opus 的長工，測試只驗「有沒有被啟動」，不真的跑
+// 健檢會呼叫 opus 並自己下 SQL 深挖，測試只驗「有沒有被啟動」，不真的跑
 jest.mock('../pipeline/health-check-runner', () => ({
-  runHealthCheck: jest.fn().mockResolvedValue(undefined),
+  runAudit: jest.fn().mockResolvedValue(undefined),
+  auditWindowStart: jest.fn().mockResolvedValue(new Date(Date.now() - 86400000)),
   resumeInterruptedRuns: jest.fn().mockResolvedValue(0)
 }));
 
@@ -323,7 +324,7 @@ test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
     'INSERT INTO teams_settings (id, odoo_sync_interval, service_sync_interval) VALUES (1, 0, 0) ' +
     'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
   );
-  runner.runHealthCheck.mockClear();
+  runner.runAudit.mockClear();
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); }
@@ -331,7 +332,7 @@ test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
   const { rows } = await dbModule.query('SELECT status, window_days FROM health_check_runs');
   expect(rows).toHaveLength(1);
   expect(rows[0].status).toBe('running');
-  expect(runner.runHealthCheck).toHaveBeenCalled();
+  expect(runner.runAudit).toHaveBeenCalled();
 });
 
 // 不疊加：上一輪還在跑就跳過。健檢是 20+ 個 opus 的長工，重複啟動會讓同一份診斷跑兩遍。
@@ -340,12 +341,12 @@ test('cron tick：上一輪健檢仍在 running → 不重複啟動', async () =
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('running',30,NOW())");
-  runner.runHealthCheck.mockClear();
+  runner.runAudit.mockClear();
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); }
 
-  expect(runner.runHealthCheck).not.toHaveBeenCalled();
+  expect(runner.runAudit).not.toHaveBeenCalled();
   const { rows } = await dbModule.query('SELECT id FROM health_check_runs');
   expect(rows).toHaveLength(1);   // 沒有多建一筆
 });
@@ -360,42 +361,42 @@ test('cron tick：最後一筆是單張任務健檢 → 平台健檢照樣依平
     "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '9 days',NOW() - INTERVAL '9 days')");
   await dbModule.query(
     "INSERT INTO health_check_runs (status, window_days, created_at, task_db_id) VALUES ('running',30,NOW(),12345)");
-  runner.runHealthCheck.mockClear();
+  runner.runAudit.mockClear();
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); }
 
-  expect(runner.runHealthCheck).toHaveBeenCalled();   // 平台那筆已超過一週，不因剛按過任務健檢而跳過
+  expect(runner.runAudit).toHaveBeenCalled();   // 平台那筆已超過一週，不因剛按過任務健檢而跳過
 });
 
-// 週期未到不跑：否則每分鐘一 tick 就是每分鐘一次健檢。
-test('cron tick：上次健檢在一週內 → 不跑', async () => {
+// 週期未到不跑：否則每分鐘一 tick 就是每分鐘一次健檢。（週期已由每週改為每天）
+test('cron tick：上次健檢在一個週期內 → 不跑', async () => {
   const nodeCron = require('node-cron');
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '2 days',NOW())");
-  runner.runHealthCheck.mockClear();
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '2 hours',NOW())");
+  runner.runAudit.mockClear();
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); }
 
-  expect(runner.runHealthCheck).not.toHaveBeenCalled();
+  expect(runner.runAudit).not.toHaveBeenCalled();
 });
 
 // 超過一週就跑：這是這個排程存在的理由，不能只驗「不跑」的三種情況。
-test('cron tick：上次健檢超過一週 → 再跑一次', async () => {
+test('cron tick：上次健檢超過一個週期 → 再跑一次', async () => {
   const nodeCron = require('node-cron');
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
     "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '8 days',NOW())");
-  runner.runHealthCheck.mockClear();
+  runner.runAudit.mockClear();
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); }
 
-  expect(runner.runHealthCheck).toHaveBeenCalled();
+  expect(runner.runAudit).toHaveBeenCalled();
   const { rows } = await dbModule.query('SELECT id FROM health_check_runs');
   expect(rows).toHaveLength(2);   // 舊的保留、新的建立
 });

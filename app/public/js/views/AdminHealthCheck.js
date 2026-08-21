@@ -1,4 +1,7 @@
-// 工作流程健檢（子專案 2）：admin 一鍵，對每個 pipeline agent 出診斷＋建議 prompt。
+// 系統健檢：一輪產出的是「這個系統該怎麼優化」的提案清單，不是逐關成績單。
+// 每條提案帶處置狀態（待處理／不須調整／處理完成）——那個狀態不是給人管理用的，是下一輪健檢的
+// 輸入：判「不須調整」的不會被重講第二次，判「處理完成」的會被回頭查指標有沒有往預期方向走。
+// kind='agent' 是改版前的逐關診斷（歷史列），沿用舊的顯示方式。
 // 配色一律走 app.css CSS 變數／dark-aware，禁寫死淺色底。
 const HC_SEV = {
   ok:     { label: '正常', color: 'var(--success, #059669)' },
@@ -10,10 +13,24 @@ const HC_SEV = {
   error:  { label: '健檢失敗', color: '#6b7280' }
 };
 
+// 根因層：決定這條該走哪個出口。提示詞可解的才有「帶入編輯器」，其餘要走開單修碼／修環境。
+const HC_LAYER = {
+  prompt:        { label: '提示詞', color: 'var(--primary)' },
+  platform:      { label: '平台程式', color: 'var(--error)' },
+  env:           { label: '環境', color: 'var(--warning, #d97706)' },
+  observability: { label: '觀測缺口', color: '#64748b' }
+};
+
+const HC_STATUS = [
+  { value: 'pending',   label: '待處理' },
+  { value: 'no_change', label: '不須調整' },
+  { value: 'done',      label: '處理完成' }
+];
+
 window.AdminHealthCheckView = Vue.defineComponent({
   name: 'AdminHealthCheckView',
   data() {
-    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, windowDays: 30, _timer: null };
+    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, _timer: null };
   },
   async mounted() { await this.loadHistory(); await this.openFromQuery(); },
   unmounted() { if (this._timer) clearInterval(this._timer); },
@@ -39,7 +56,8 @@ window.AdminHealthCheckView = Vue.defineComponent({
     async start() {
       this.running = true; this.findings = []; this.run = null;
       try {
-        const { runId } = await Api.post('admin/health-check', { windowDays: this.windowDays });
+        // 不帶 sinceDays＝用預設的增量視窗（上一輪之後）；填了才是「回頭重掃這麼多天」。
+        const { runId } = await Api.post('admin/health-check', this.sinceDays ? { sinceDays: this.sinceDays } : {});
         this.runId = runId;
         this._timer = setInterval(() => this.poll(), 3000);
         await this.poll();
@@ -67,6 +85,22 @@ window.AdminHealthCheckView = Vue.defineComponent({
       if (this.running) this._timer = setInterval(() => this.poll(), 3000);
     },
     scopeText(r) { return r && r.task_db_id ? ('任務 ' + (r.task_id || r.task_db_id)) : '全平台'; },
+    layer(l) { return HC_LAYER[l] || null; },
+    kindOf(f) { return f.kind || 'agent'; },
+    ofKind(k) { return this.findings.filter(f => this.kindOf(f) === k); },
+    statusLabel(v) { return (HC_STATUS.find(s => s.value === v) || {}).label || v; },
+    // 裁決：狀態一律連同備註一起送，備註是下一輪健檢會讀到的東西（「為什麼判不須調整」）。
+    async setStatus(f, status) {
+      this.savingId = f.id;
+      try {
+        const r = await Api.patch('admin/health-check/findings/' + f.id, {
+          status, verdict_note: this.noteDraft[f.id] !== undefined ? this.noteDraft[f.id] : f.verdict_note
+        });
+        Object.assign(f, r);
+        showToast('已記錄：' + this.statusLabel(status), 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingId = null; }
+    },
     sev(s) { return HC_SEV[s] || HC_SEV.error; },
     applyToEditor(f) {
       if (!f.suggested_prompt) return;
@@ -78,27 +112,82 @@ window.AdminHealthCheckView = Vue.defineComponent({
   template: `
     <div class="topbar">
       <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
-      <h1>工作流程健檢</h1>
+      <h1>系統健檢</h1>
     </div>
     <div class="content">
       <div class="hc-page">
         <div class="settings-section hc-window-row">
-          <label style="font-size:var(--fs-base)">近
-            <input type="number" v-model.number="windowDays" min="1" style="width:64px" class="form-control" /> 天
+          <label style="font-size:var(--fs-base)" title="留空＝只看上一輪健檢之後的新資料（預設）。填數字＝回頭重掃這麼多天。">
+            回溯
+            <input type="number" v-model.number="sinceDays" min="1" placeholder="增量" style="width:72px" class="form-control" /> 天
           </label>
           <button class="btn btn-primary btn-sm" :disabled="running" @click="start">
             {{ running ? '健檢中...' : '開始健檢' }}
           </button>
           <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
             範圍：{{ run.task_db_id ? ('任務 ' + ((run.task && run.task.task_id) || run.task_db_id)) : '全平台' }}　
-            狀態：{{ run.status }}（{{ findings.length }} 份診斷）
+            狀態：{{ run.status }}（{{ ofKind('proposal').length }} 條提案）
+            <span v-if="run.since_at">　視窗：{{ new Date(run.since_at).toLocaleString() }} 起</span>
           </span>
           <span v-if="nextRunText" style="font-size:var(--fs-sm);color:var(--text-muted);margin-left:auto">
             下次自動健檢：{{ nextRunText }}
           </span>
         </div>
 
-        <div v-for="f in findings" :key="f.id"
+        <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
+
+        <div v-for="f in ofKind('summary')" :key="f.id"
+          style="border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
+          <div class="hc-finding-title-row">
+            <span style="font-weight:var(--fw-semibold)">本輪總結</span>
+            <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
+              {{ sev(f.severity).label }}
+            </span>
+          </div>
+          <div style="font-size:var(--fs-base);color:var(--text);white-space:pre-wrap">{{ f.diagnosis }}</div>
+        </div>
+
+        <div v-for="f in ofKind('proposal')" :key="f.id"
+          style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
+          <div class="hc-finding-title-row">
+            <span style="font-weight:var(--fw-semibold)">{{ f.agent_label }}</span>
+            <span v-if="layer(f.layer)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:layer(f.layer).color}">
+              {{ layer(f.layer).label }}
+            </span>
+            <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
+              {{ sev(f.severity).label }}
+            </span>
+          </div>
+          <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px;white-space:pre-wrap">{{ f.diagnosis }}</div>
+          <div v-if="f.evidence" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
+          <div v-if="f.rationale" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">建議做法：{{ f.rationale }}</div>
+          <div v-if="f.target_metric" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">
+            要動的指標：{{ f.target_metric }}（現值 {{ f.metric_baseline }}）
+          </div>
+          <button v-if="f.suggested_prompt" class="btn btn-outline btn-sm" style="margin-bottom:6px" @click="applyToEditor(f)">帶入編輯器 →</button>
+
+          <div class="hc-window-row" style="margin-top:6px">
+            <span style="font-size:var(--fs-sm);color:var(--text-muted)">處置：</span>
+            <button v-for="s in statuses" :key="s.value" class="btn btn-sm"
+              :class="f.status === s.value ? 'btn-primary' : 'btn-outline'"
+              :disabled="savingId === f.id" @click="setStatus(f, s.value)">{{ s.label }}</button>
+            <input class="form-control" style="flex:1;min-width:180px" placeholder="裁決理由（下一輪健檢會讀到）"
+              :value="noteDraft[f.id] !== undefined ? noteDraft[f.id] : (f.verdict_note || '')"
+              @input="noteDraft[f.id] = $event.target.value" />
+          </div>
+          <div v-if="f.decided_at" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">
+            已裁決 {{ new Date(f.decided_at).toLocaleString() }}<span v-if="f.applied_at">，套用於 {{ new Date(f.applied_at).toLocaleDateString() }}</span>
+          </div>
+        </div>
+
+        <div v-if="ofKind('signal').length" class="settings-section">
+          <h2 class="section-title">候選訊號（證據還不夠，累積中）</h2>
+          <div v-for="f in ofKind('signal')" :key="f.id" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px;white-space:pre-wrap">
+            ・{{ f.diagnosis }}<span v-if="f.evidence">（{{ f.evidence }}）</span>
+          </div>
+        </div>
+
+        <div v-for="f in ofKind('agent')" :key="f.id"
           style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
           <div class="hc-finding-title-row">
             <span style="font-family:monospace;font-weight:var(--fw-semibold)">{{ f.agent_label || f.agent_name }}</span>
@@ -115,7 +204,7 @@ window.AdminHealthCheckView = Vue.defineComponent({
           <h2 class="section-title">歷史健檢</h2>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>診斷數</th></tr></thead>
+              <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>提案／診斷</th></tr></thead>
               <tbody>
                 <tr v-for="h in history" :key="h.id" class="clickable" @click="openRun(h.id)">
                   <td>{{ new Date(h.created_at).toLocaleString() }}</td>

@@ -13,7 +13,7 @@ const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
-const { runHealthCheck, runTaskHealthCheck } = require('./pipeline/health-check-runner');
+const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
 const { getHealthCheckSchedule } = require('./cron');
 
 function getSshPubKey() {
@@ -496,16 +496,46 @@ function registerRoutes(app) {
 
   // --- 工作流程健檢（子專案 2）：admin 一鍵，背景對每個 pipeline agent 出診斷 ---
 
+  // 全平台健檢＝主導型審計，視窗是「上一輪健檢完成之後到現在」的增量。
+  // 不再收 windowDays 當主要參數：固定視窗量到的指標多半由已被取代的舊版提示詞產生，判讀時整批
+  // 要打折；增量視窗量到的正好是「上次改動之後的表現」。sinceDays 是例外出口——想重掃更久以前
+  // （例如剛接手、或想回頭補一段）時才用。
   app.post('/api/admin/health-check', auth, async (req, res) => {
     try {
-      const windowDays = Math.max(1, parseInt(req.body?.windowDays, 10) || 30);
+      const sinceDays = parseInt(req.body?.sinceDays, 10);
+      const sinceAt = sinceDays > 0
+        ? new Date(Date.now() - sinceDays * 86400000)
+        : await auditWindowStart();
+      const windowDays = Math.max(1, Math.round((Date.now() - sinceAt.getTime()) / 86400000));
       const { rows: [r] } = await query(
-        "INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,$2) RETURNING id",
-        [windowDays, req.userId]
+        "INSERT INTO health_check_runs (status, window_days, started_by, since_at) VALUES ('running',$1,$2,$3) RETURNING id",
+        [windowDays, req.userId, sinceAt]
       );
       // fire-and-forget：不 await，runner 自行落 status='done'/'error'
-      runHealthCheck(r.id, { windowDays, startedBy: req.userId }).catch(() => {});
-      res.json({ runId: r.id });
+      runAudit(r.id, { sinceAt, startedBy: req.userId }).catch(() => {});
+      res.json({ runId: r.id, sinceAt });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 提案的處置狀態。這支存在的理由是「跨輪記憶」：沒有它，健檢每輪都會把同一件事重講一次，
+  // 而你上輪的裁決沒有任何地方記得住；下一輪的 previousProposals() 就是讀這裡。
+  const FINDING_STATUS = new Set(['pending', 'no_change', 'done']);
+  app.patch('/api/admin/health-check/findings/:id', auth, async (req, res) => {
+    try {
+      const status = String(req.body?.status || '').trim();
+      if (!FINDING_STATUS.has(status)) return res.status(400).json({ error: '狀態不合法' });
+      const note = req.body?.verdict_note ? String(req.body.verdict_note) : null;
+      // applied_at 只在「處理完成」時補上，且只補一次：它是下一輪回頭驗成效的起算點，
+      // 反覆改狀態不該把它往後推（否則成效永遠「還沒累積到樣本」）。
+      const { rows } = await query(
+        `UPDATE health_check_findings
+            SET status=$2, verdict_note=$3, decided_by=$4, decided_at=NOW(),
+                applied_at = CASE WHEN $2='done' AND applied_at IS NULL THEN NOW() ELSE applied_at END
+          WHERE id=$1 RETURNING id, status, verdict_note, decided_at, applied_at`,
+        [req.params.id, status, note, req.userId]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'finding 不存在' });
+      res.json(rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

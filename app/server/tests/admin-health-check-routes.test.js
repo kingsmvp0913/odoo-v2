@@ -4,7 +4,10 @@ const { newDb } = require('pg-mem');
 
 const mockRun = jest.fn().mockResolvedValue(undefined);
 const mockRunTask = jest.fn().mockResolvedValue(undefined);
-jest.mock('../pipeline/health-check-runner', () => ({ runHealthCheck: mockRun, runTaskHealthCheck: mockRunTask }));
+const mockWindowStart = jest.fn().mockResolvedValue(new Date(Date.now() - 3 * 86400000));
+jest.mock('../pipeline/health-check-runner', () => ({
+  runAudit: mockRun, runTaskHealthCheck: mockRunTask, auditWindowStart: mockWindowStart
+}));
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({
   runPipeline: jest.fn(), getInflightTaskIds: () => [], getInflightInfo: () => [], abortTask: jest.fn(), whenIdle: jest.fn()
@@ -43,14 +46,63 @@ test('GET 健檢路由 401 未帶 token / 403 非 admin', async () => {
   expect((await request(app).get('/api/admin/health-check/1').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
 });
 
-test('POST → 建 run(running)、回 runId、背景觸發 runHealthCheck', async () => {
-  const res = await request(app).post('/api/admin/health-check').set('Authorization', `Bearer ${adminToken}`).send({ windowDays: 14 });
+test('POST → 建 run(running)、回 runId、背景觸發主導型健檢（視窗＝上一輪之後的增量）', async () => {
+  const res = await request(app).post('/api/admin/health-check').set('Authorization', `Bearer ${adminToken}`).send({});
   expect(res.status).toBe(200);
   expect(typeof res.body.runId).toBe('number');
-  const { rows: [r] } = await dbModule.query('SELECT status, window_days FROM health_check_runs WHERE id=$1', [res.body.runId]);
+  const { rows: [r] } = await dbModule.query('SELECT status, since_at FROM health_check_runs WHERE id=$1', [res.body.runId]);
   expect(r.status).toBe('running');
-  expect(r.window_days).toBe(14);
-  expect(mockRun).toHaveBeenCalledWith(res.body.runId, expect.objectContaining({ windowDays: 14 }));
+  expect(r.since_at).not.toBeNull();                    // 增量視窗的起點一定要落地，否則續跑會走錯 scope
+  expect(mockRun).toHaveBeenCalledWith(res.body.runId, expect.objectContaining({ sinceAt: expect.anything() }));
+});
+
+// sinceDays 是例外出口：想回頭重掃更久以前（剛接手、或補一段）時才用。
+test('POST 帶 sinceDays → 視窗改成回溯那麼多天，而不是增量', async () => {
+  const res = await request(app).post('/api/admin/health-check')
+    .set('Authorization', `Bearer ${adminToken}`).send({ sinceDays: 30 });
+  expect(res.status).toBe(200);
+  const { rows: [r] } = await dbModule.query('SELECT window_days, since_at FROM health_check_runs WHERE id=$1', [res.body.runId]);
+  expect(r.window_days).toBe(30);
+  expect(Date.now() - new Date(r.since_at).getTime()).toBeGreaterThan(29 * 86400000);
+});
+
+// 處置狀態就是「跨輪記憶」：沒有它，健檢每輪把同一件事重講一次，而上輪的裁決無處可存。
+test('PATCH finding 狀態：落狀態＋裁決理由；判「處理完成」才補成效回看的起算點', async () => {
+  const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+  const { rows: [f] } = await dbModule.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind)
+     VALUES ($1,'__audit__','某條提案','medium','proposal') RETURNING id, status, applied_at`, [run.id]);
+  expect(f.status).toBe('pending');                     // 預設待處理
+  expect(f.applied_at).toBeNull();
+
+  const noChange = await request(app).patch('/api/admin/health-check/findings/' + f.id)
+    .set('Authorization', `Bearer ${adminToken}`).send({ status: 'no_change', verdict_note: '證據只有一張任務' });
+  expect(noChange.status).toBe(200);
+  expect(noChange.body.status).toBe('no_change');
+  expect(noChange.body.verdict_note).toBe('證據只有一張任務');
+  expect(noChange.body.applied_at).toBeNull();          // 不須調整不是「套用」，不該起算成效
+
+  const done = await request(app).patch('/api/admin/health-check/findings/' + f.id)
+    .set('Authorization', `Bearer ${adminToken}`).send({ status: 'done' });
+  expect(done.body.applied_at).not.toBeNull();
+  const applied = done.body.applied_at;
+  // 再改一次狀態不得把起算點往後推，否則成效永遠「還沒累積到樣本」
+  const again = await request(app).patch('/api/admin/health-check/findings/' + f.id)
+    .set('Authorization', `Bearer ${adminToken}`).send({ status: 'done', verdict_note: '補一句' });
+  expect(again.body.applied_at).toBe(applied);
+});
+
+test('PATCH finding：狀態不合法回 400 / 非 admin 403 / 不存在回 404', async () => {
+  const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+  const { rows: [f] } = await dbModule.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind)
+     VALUES ($1,'__audit__','x','ok','proposal') RETURNING id`, [run.id]);
+  expect((await request(app).patch('/api/admin/health-check/findings/' + f.id)
+    .set('Authorization', `Bearer ${adminToken}`).send({ status: '亂填' })).status).toBe(400);
+  expect((await request(app).patch('/api/admin/health-check/findings/' + f.id)
+    .set('Authorization', `Bearer ${userToken}`).send({ status: 'done' })).status).toBe(403);
+  expect((await request(app).patch('/api/admin/health-check/findings/999999')
+    .set('Authorization', `Bearer ${adminToken}`).send({ status: 'done' })).status).toBe(404);
 });
 
 test('GET list 回近筆含 findings_count；GET :id 回 run+findings', async () => {
@@ -84,7 +136,8 @@ describe('GET /api/admin/health-check-schedule', () => {
   });
 
   test('上次已完成 → 下次＝上次起算滿一個週期', async () => {
-    await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',30,NOW() - INTERVAL '2 days')");
+    // 週期已由每週改為每天，所以「還沒到」的 fixture 要用小時，不能再用 2 天
+    await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',30,NOW() - INTERVAL '2 hours')");
     const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
     expect(res.body.due).toBe(false);
     const gap = new Date(res.body.nextRunAt) - new Date(res.body.lastRunAt);
@@ -93,7 +146,7 @@ describe('GET /api/admin/health-check-schedule', () => {
   });
 
   test('上次超過一個週期 → due（畫面顯示即將執行，而非過去的時刻）', async () => {
-    await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',30,NOW() - INTERVAL '8 days')");
+    await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',30,NOW() - INTERVAL '2 days')");
     const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
     expect(res.body.due).toBe(true);
   });

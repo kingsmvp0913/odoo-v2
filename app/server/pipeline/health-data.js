@@ -328,4 +328,85 @@ async function buildTaskSummary(taskDbId) {
   };
 }
 
-module.exports = { buildAgentSummary, buildTaskSummary };
+// 增量視窗的起手包（scope=platform 的主導型健檢用）。
+// 為什麼是增量而不是固定 30 天：固定視窗量到的指標多半由**已被取代的舊版提示詞**產生，判讀時
+// 整批要打折（run#5 幾乎每一關的 calls_since 都是 0）。改成「上一輪健檢之後」，量到的正好是
+// 「上次改動之後的表現」。
+// 這份刻意只給輪廓、不給細節：審計 agent 拿到它之後會自己下 SQL 深挖（platformDB skill，唯讀），
+// 尤其是「窗內看到疑似問題 → 回頭到更早的資料找同類單號」那一步——那才是湊得到「多張不同任務」
+// 證據門檻的方式，短視窗自己是湊不到的。
+async function buildWindowSummary(sinceAt) {
+  const since = new Date(sinceAt).toISOString();
+  const { weighted: WEIGHTED, rate: RATE } = costSql();
+
+  const { rows: usage } = await query(
+    `SELECT task_id, agent_type, model, duration_ms, status, recorded_at,
+            input_tokens, output_tokens, cache_read_tokens, cache_create_tokens
+       FROM token_usage WHERE recorded_at >= $1 ORDER BY recorded_at, id`, [since]
+  );
+  const { rows: [cost] } = await query(
+    `SELECT COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd FROM token_usage WHERE recorded_at >= $1`,
+    [since]
+  );
+
+  // 每關：呼叫數、失敗數、平均耗時、經手幾張任務。細節（哪一張、為什麼）由 agent 自己查。
+  const byStage = new Map();
+  const tasksOfStage = new Map();
+  for (const u of usage) {
+    const k = u.agent_type || '(未知)';
+    const acc = byStage.get(k) || { calls: 0, failed: 0, duration_ms: 0 };
+    acc.calls += 1;
+    acc.duration_ms += u.duration_ms || 0;
+    if (u.status && u.status !== 'completed') acc.failed += 1;
+    byStage.set(k, acc);
+    if (u.task_id) {
+      if (!tasksOfStage.has(k)) tasksOfStage.set(k, new Set());
+      tasksOfStage.get(k).add(u.task_id);
+    }
+  }
+  const per_stage = Object.fromEntries([...byStage.entries()].map(([k, v]) => [k, {
+    calls: v.calls, failed_calls: v.failed,
+    avg_duration_ms: Math.round(v.duration_ms / Math.max(1, v.calls)),
+    tasks: (tasksOfStage.get(k) || new Set()).size,
+    repeat_avg: Math.round((v.calls / Math.max(1, (tasksOfStage.get(k) || new Set()).size)) * 100) / 100
+  }]));
+
+  // 窗內有動作的任務：帶關卡序列，讓 agent 一眼看得到震盪形狀（coding→qa→coding→qa）。
+  const { rows: tasks } = await query(
+    `SELECT id, task_id, title, status, reentry_count, blocker_content, created_at, updated_at, done_at
+       FROM tasks WHERE updated_at >= $1 ORDER BY id`, [since]
+  );
+  const seqOf = new Map();
+  for (const u of usage) {
+    if (!u.task_id) continue;
+    if (!seqOf.has(u.task_id)) seqOf.set(u.task_id, []);
+    seqOf.get(u.task_id).push(u);
+  }
+  const task_rows = tasks.map(t => ({
+    id: t.id, task_id: t.task_id, title: t.title, status: t.status,
+    reentry: t.reentry_count || 0,
+    sequence: toSequence(seqOf.get(t.task_id) || []),
+    blocker: t.blocker_content ? String(t.blocker_content).replace(/\s+/g, ' ').slice(0, 200) : null
+  }));
+
+  const { rows: rej } = await query(
+    `SELECT tr.task_id, tr.source, ri.category, ri.description
+       FROM rejection_items ri JOIN task_rejections tr ON tr.id = ri.rejection_id
+      WHERE tr.created_at >= $1 ORDER BY ri.id`, [since]
+  ).catch(() => ({ rows: [] }));
+
+  return {
+    window: { since, until: new Date().toISOString() },
+    volume: {
+      agent_calls: usage.length,
+      tasks_touched: tasks.length,
+      cost_usd: Math.round((Number(cost.cost_usd) || 0) * 100) / 100,
+      wall_clock: wallClock(tasks)
+    },
+    per_stage,
+    tasks: task_rows,
+    rejections: rej.map(r => ({ task_id: r.task_id, source: r.source, category: r.category, description: r.description }))
+  };
+}
+
+module.exports = { buildAgentSummary, buildTaskSummary, buildWindowSummary };
