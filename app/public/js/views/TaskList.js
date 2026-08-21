@@ -569,7 +569,7 @@ window.TaskListView = Vue.defineComponent({
           全部<span class="tab-badge" :class="filter==='all' ? 'tab-badge-active' : ''">{{ allShown }}</span>
         </button>
         <button class="btn btn-sm" :class="filter==='archived' ? 'btn-primary' : 'btn-outline'" @click="filter='archived'">已封存</button>
-        <button class="btn btn-sm tasklist-filter-toggle" :class="filtersOpen ? 'btn-primary' : 'btn-outline'"
+        <button data-tour="task-filters-toggle" class="btn btn-sm tasklist-filter-toggle" :class="filtersOpen ? 'btn-primary' : 'btn-outline'"
           @click="filtersOpen = !filtersOpen" :title="filtersOpen ? '收起篩選' : '展開篩選'">
           篩選<span v-if="activeFilterCount > 0" class="tab-badge" :class="filtersOpen ? 'tab-badge-active' : ''">{{ activeFilterCount }}</span>
         </button>
