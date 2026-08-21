@@ -30,6 +30,11 @@
     status: 'confirm_pending',
     ID: 'demo',
 
+    // 每次進一門課都要把示範任務撥回開場狀態。跑完「實際流程」會停在 merge_conflict，
+    // 接著開「任務介面」時那一課沒有任何 demoStatus，卡片就還是紅的合併衝突——
+    // 而那一課正要教「黃色＝輪到你」，畫面上一個黃點也沒有。
+    reset() { this.status = 'confirm_pending'; },
+
     // 教程開著、且看的正好是示範 id 時才接管；其餘一律走真的 API
     isTask(id) { return this.active && String(id) === this.ID; },
     isProject(id) { return this.active && String(id) === this.ID; },
@@ -130,7 +135,7 @@
         folder_name: 'hongjiu',
         odoo_version: '17.0',
         edition: 'community',
-        description: '示範專案，教程用。',
+        description: '示範專案，教學用。',
         repo_count: 1,
         has_wiki: true,
         unread_count: 0,

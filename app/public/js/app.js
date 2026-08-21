@@ -211,7 +211,7 @@ const App = defineComponent({
               </a>
             </router-link>
             <router-link to="/inbox" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">
+              <a data-tour="nav-inbox" :class="{ active: isActive }" @click="navigate">
                 📥 收件匣
                 <span v-if="inboxUnread > 0" class="badge">{{ inboxUnread }}</span>
               </a>
@@ -257,8 +257,8 @@ const App = defineComponent({
               </div>
             </div>
             <div class="sidebar-footer-actions">
-              <button class="tour-launch" type="button" @click="openTour" title="開啟新手教程">
-                🎓 新手教程<span v-if="tourRemaining" class="tour-launch-badge">{{ tourRemaining }}</span>
+              <button class="tour-launch" type="button" @click="openTour" title="開啟新手教學">
+                🎓 新手教學<span v-if="tourRemaining" class="tour-launch-badge">{{ tourRemaining }}</span>
               </button>
               <a @click="logout" style="cursor:pointer">登出</a>
             </div>

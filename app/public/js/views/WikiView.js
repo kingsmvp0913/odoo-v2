@@ -115,7 +115,7 @@ window.WikiView = Vue.defineComponent({
     // 讀取路徑走 TourDemo 假資料，寫入路徑（儲存／⟳／✕）一律擋在前端並說明原因。
     tourDemoBlocked() {
       if (!this.isTourDemo()) return false;
-      showToast('教程示範專案僅供瀏覽，不會實際變更', 'info');
+      showToast('教學示範專案僅供瀏覽，不會實際變更', 'info');
       return true;
     },
     // 編輯中且內容與伺服器版本不同＝有未儲存的修改。notes 頁的 textarea 永遠是活的，

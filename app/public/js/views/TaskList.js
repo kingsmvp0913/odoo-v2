@@ -575,7 +575,7 @@ window.TaskListView = Vue.defineComponent({
         </button>
       </div>
 
-      <div class="tasklist-filter-row tasklist-filter-advanced" :class="{ 'is-open': filtersOpen }">
+      <div data-tour="task-filters-more" class="tasklist-filter-row tasklist-filter-advanced" :class="{ 'is-open': filtersOpen }">
         <button v-if="isAdmin" class="btn btn-sm" :class="showAllUsers ? 'btn-primary' : 'btn-outline'" @click="toggleAllUsers"
           :title="showAllUsers ? '目前顯示全部使用者的任務，點一下改回只顯示自己的' : '目前只顯示自己的任務，點一下顯示全部使用者的'">
           👥 顯示全部使用者
