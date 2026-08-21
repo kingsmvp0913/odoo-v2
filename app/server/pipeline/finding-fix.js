@@ -35,6 +35,8 @@ const FIX_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TIMEOUT_MS || '2400000'
 // 平台自己的主分支（不是客戶專案的 testing）
 const MAIN_BRANCH = process.env.PLATFORM_MAIN_BRANCH || 'master';
 const RESTART_DELAY_MS = parseInt(process.env.PLATFORM_RESTART_DELAY_MS || '1500', 10);
+// 平台自己複驗一次測試的上限。全套實測 3~4 分鐘，留餘裕但不能沒有上限——卡住會讓修正永遠停在 running。
+const FIX_TEST_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TEST_TIMEOUT_MS || '900000', 10);
 
 // 可以動的路徑（POSIX 斜線比對）
 const ALLOW = [
@@ -112,6 +114,45 @@ function unlinkNodeModules(worktree) {
   } catch {
     try { fs.unlinkSync(link); } catch (err) { console.error('[FIX] unlink node_modules:', err.message); }
   }
+}
+
+// jest 的總結行（`Tests: 3 skipped, 3122 passed, 3125 total`）印在 stderr，兩股都收。
+function jestSummary(stdout, stderr) {
+  const m = /^Tests:\s+(.+)$/m.exec(`${stdout || ''}\n${stderr || ''}`);
+  return m ? m[1].trim() : '';
+}
+
+/**
+ * 平台自己在工作區跑一次測試——**實測結果為準，不採信 agent 自報**。
+ *
+ * 理由是實測出來的：2026-08-21 那次修正在 `<result>` 裡填 `pass`，同一份 notes 的最後一段卻寫著
+ * 「9 failed」，而人在畫面上只看得到那個綠字。自報等於沒有把關。
+ */
+async function measureTests(worktree) {
+  const cwd = path.join(worktree, 'app');
+  try {
+    const { stdout, stderr } = await execFileAsync('npm', ['run', 'test:quiet'],
+      { cwd, timeout: FIX_TEST_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 });
+    return { ok: true, summary: jestSummary(stdout, stderr) };
+  } catch (err) {
+    // 有紅燈時 jest exit≠0 也走這裡，跟「測試根本沒跑起來」要分得開——靠解不解析得到總結行判定
+    const summary = jestSummary(err.stdout, err.stderr);
+    return summary
+      ? { ok: false, summary }
+      : { ok: false, summary: '', error: String(err.message || '').split('\n')[0] };
+  }
+}
+
+// 存進 test_result 的字串＝人在畫面上看到的那一行，所以自報與實測不一致必須寫在同一行裡。
+function formatTestResult(measured, selfReported) {
+  const self = (selfReported || '').trim();
+  if (!measured.summary) {
+    return `unknown（測試沒跑起來：${measured.error || '無輸出'}${self ? `；agent 自報 ${self}` : ''}）`;
+  }
+  const verdict = measured.ok ? 'pass' : 'fail';
+  const line = `${verdict}（實測 ${measured.summary}）`;
+  // 自報跟實測對不上，代表這份修正的其他自述也不能信——這句話要跟結果黏在一起
+  return self && self !== verdict ? `${line} ⚠ agent 自報 ${self}` : line;
 }
 
 // 收工作區。Windows 上 `worktree remove` 常在最後刪目錄那一步吃到 Permission denied（有殘留的
@@ -200,11 +241,17 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
       });
     }
 
+    // 確定這份修正值得看了，才由平台自己複驗測試——沒改東西或超出範圍的那兩條路上，工作區都
+    // 要收掉，跑一次全套是白花四分鐘。相依剛才拆掉了，跑之前先接回來，跑完立刻再拆（下面要 add）。
+    linkNodeModules(worktree);
+    const measured = await measureTests(worktree);
+    unlinkNodeModules(worktree);
+
     // 全部收進索引再取 diff：未追蹤的新檔（新增的測試、新模組）不進索引就不會出現在 diff 裡，
     // 人會以為那些檔案不存在。commit 也用同一批。
     await git(worktree, ['add', '-A']);
     const { stdout: diff } = await git(worktree, ['diff', '--cached']);
-    await setStatus(fixId, 'ready', { notes, test_result: tests || 'unknown', diff });
+    await setStatus(fixId, 'ready', { notes, test_result: formatTestResult(measured, tests), diff });
   } catch (err) {
     console.error('[FIX]', err.message);
     await removeWorktree(worktree).catch(() => {});

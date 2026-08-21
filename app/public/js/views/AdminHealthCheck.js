@@ -116,6 +116,12 @@ window.AdminHealthCheckView = Vue.defineComponent({
     },
     fixState(id) { return this.fixes[id] || null; },
     fixLabel(st) { return HC_FIX[st] || { label: st, color: 'var(--text-muted)' }; },
+    // 測試結果不能全部一個灰色：紅燈跟「沒跑起來」都得跳出來，否則跟一堆灰字擠在同一行等於沒寫
+    testTone(tr) {
+      if (/^fail/.test(tr || '')) return 'var(--error)';
+      if (/^unknown/.test(tr || '')) return 'var(--warning, #d97706)';
+      return 'var(--text-muted)';
+    },
     // 每次打開一輪就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
     // 會有人再按一次而在同一條上開第二個工作區。
     async loadFixes() {
@@ -246,7 +252,7 @@ window.AdminHealthCheckView = Vue.defineComponent({
               <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:fixLabel(fixState(f.id).status).color}">
                 {{ fixLabel(fixState(f.id).status).label }}
               </span>
-              <span v-if="fixState(f.id).test_result" style="font-size:var(--fs-xs);color:var(--text-muted)">測試：{{ fixState(f.id).test_result }}</span>
+              <span v-if="fixState(f.id).test_result" :style="{fontSize:'var(--fs-xs)',color:testTone(fixState(f.id).test_result)}">測試：{{ fixState(f.id).test_result }}</span>
               <span v-if="fixState(f.id).branch" style="font-size:var(--fs-xs);color:var(--text-muted);font-family:monospace">{{ fixState(f.id).branch }}</span>
             </div>
             <div v-if="fixState(f.id).reject_reason" class="error-msg" style="white-space:pre-wrap;margin:6px 0">{{ fixState(f.id).reject_reason }}</div>
