@@ -87,7 +87,9 @@ function loadSpecLookup() {
 // 於是同一件事在不同關拿到不同強度的指示。反之「Think in English…保留英文術語」那句雖然也重複 5 份，
 // 卻是逐字相同且內容穩定到不會漂移，抽出來只是多一個檔要維護——刻意不抽。
 
-// 「這三種一律要問」：走完發問守則的決策樹後不准剪掉的底線。四關共用。
+// 「這三種一律要問」：走發問守則的決策樹時最容易整個漏掉的三個節點。四關共用。
+// 2026-08-21 放寬：命中類別不再等於一定要問，判準改為「說得出有依據的預設就自己決定＋告知」。
+// 原本寫成「不准剪掉的底線」，結果查得到答案的題目也會擋住整張任務（questions 非空即轉人工確認）。
 const MUST_ASK_AGENTS = new Set(['analysis-project', 'clarify-chat', 'respec-patch', 'spec-review']);
 const MUST_ASK_MD_PATH = path.join(__dirname, 'must-ask.md');
 let _mustAskCache = null;
