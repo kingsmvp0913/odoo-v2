@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import datetime
 
@@ -10,6 +11,8 @@ from psycopg2 import IntegrityError
 
 from odoo import fields, http
 from odoo.http import request
+
+_logger = logging.getLogger(__name__)
 
 
 # 16x16 灰底 PNG，作為 JIT 建帳號的佔位頭像（見 sso() 內註解：避開 hr_attendance 空集合核心 bug）。
@@ -46,6 +49,38 @@ def _login_as(user):
         session.should_rotate = True
     else:
         session.rotate = True
+
+
+# 免密登入的帳號一律把群組同步成「與 admin 相同」。base.group_system 只是「設定」的管理權，不隱含
+# 任何應用群組（銷售／庫存／會計的 user／manager 都是各模組自己的 res.groups），只給它的話使用者
+# 登進測試區後每個 App 都得先回設定頁替自己勾一次；而核心模組安裝時多半會把自己的 manager 群組
+# 指派給 admin，跟著 admin 走就自動有，也自動跟著日後裝進來的模組長。
+#
+# 對照組是「全部群組全開」：那會連 admin 自己都沒開的功能開關（多公司、多幣別、多倉位置…）一起
+# 打開，畫面跟著換成進階版，還會讓 groups="!xxx" 的簡化欄位消失。跟 admin 對齊是使用者實際在別處
+# 熟悉的那個權限樣貌，落差只剩「admin 自己也要手動勾的那些」。
+#
+# 用覆寫（6,0）而非只加（4）：語意就是「跟 admin 一樣」——多的要收得回來，否則換過作法的環境會
+# 各自累積出不同權限，且沒有任何地方看得出來。admin 找不到就整個不動（維持既有群組），不是清空。
+#
+# 只動這條真人 SSO 路徑，seed_odoo_users.py 維持 group_system 不變：E2E playwright 帳號走密碼登入，
+# 權限變動會讓 tour 的畫面基線跟著變，那是另一回事。
+def _sync_admin_groups(user, gfield):
+    admin = request.env.ref('base.user_admin', raise_if_not_found=False)
+    if not admin or admin.id == user.id:
+        return
+    target = set(admin.sudo()[gfield].ids)
+    if not target or target == set(user[gfield].ids):
+        return
+
+    # 同步失敗（模組自訂 constraint／髒資料）不該讓整個登入 500：放棄同步、照舊登入。savepoint 隔離
+    # 失敗的 write，避免污染外層 transaction（同上面 jti 佔用的作法）。靜默會讓「權限沒同步到」完全
+    # 無跡可循，故落一行 warning 到 odoo.log。
+    try:
+        with request.env.cr.savepoint():
+            user.write({gfield: [(6, 0, sorted(target))]})
+    except Exception as e:
+        _logger.warning('aidev sso: 同步 %s 的群組至 admin 失敗，沿用既有權限：%s', user.login, e)
 
 
 class AidevSso(http.Controller):
@@ -117,6 +152,9 @@ class AidevSso(http.Controller):
                 'image_1920': _PLACEHOLDER_AVATAR,
                 gfield: [(4, g) for g in gids],
             })
+        # 每次登入都補（不是只在 JIT 建帳號時）：deploy 裝進新模組後才出現的群組，靠使用者下次點
+        # 「開啟測試區」就補齊，不必等閒置回收後重建環境重跑 seed。
+        _sync_admin_groups(user, gfield)
         _login_as(user)
         # werkzeug 的 redirect，不是 request.redirect：後者 15.0 起才有，14 會 AttributeError
         # （'HttpRequest' object has no attribute 'redirect'）——SSO 在 14 環境連成功路徑都當場 500，
