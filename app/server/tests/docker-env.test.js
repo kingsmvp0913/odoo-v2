@@ -440,4 +440,28 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     expect(await d.removeDirForce('/envs/gone', { fs: { existsSync: () => false } }))
       .toEqual({ removed: false, viaDocker: false });
   });
+
+  // 「刪除環境」不得砍掉 filestore：平台從不 drop Odoo DB（全 repo 查無 DROP DATABASE），DB 裡的
+  // ir_attachment 記錄一定留著。filestore 一旦被連帶刪掉，重建後每一筆 attachment 都指向不存在的
+  // 檔案——asset bundle 與所有圖片一律 500，而 DB 資料看起來完好，完全指不向真因。
+  // 2026-08-24 萊峰19 就是這樣不可回復地丟掉 634 個檔。
+  test('removeEnvDir：刪掉標記檔但保留 filestore', async () => {
+    const removed = [];
+    const r = await d.removeEnvDir('/envs/p', {
+      fs: {
+        existsSync: () => true,
+        readdirSync: () => ['filestore', '.docker-ready', 'sessions'],
+        rmSync: (p) => { removed.push(p); },
+      },
+    });
+    expect(r.kept).toEqual(['filestore']);
+    // 兩個非保留項都要真的被刪掉，filestore 一個都不能碰
+    expect(removed).toEqual([path.join('/envs/p', '.docker-ready'), path.join('/envs/p', 'sessions')]);
+    expect(removed.some(p => p.includes('filestore'))).toBe(false);
+  });
+  test('removeEnvDir：目錄不存在 → no-op，不去 readdir', async () => {
+    expect(await d.removeEnvDir('/envs/gone', {
+      fs: { existsSync: () => false, readdirSync: () => { throw new Error('不該被呼叫'); } },
+    })).toEqual({ removed: false, kept: [] });
+  });
 });

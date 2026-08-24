@@ -417,6 +417,27 @@ async function removeDirForce(dir, deps = {}) {
   }
 }
 
+// 「刪除環境」時要保住的子項：filestore 是 ir.attachment 的二進位本體，與宿主 DB 裡的 attachment
+// 記錄是同一份資料的兩半。平台從不 drop 任何 Odoo DB（全 repo 查無 DROP DATABASE），所以 DB 一定
+// 留著——filestore 一旦跟著目錄被砍，重建後每一筆 attachment 都指向不存在的檔案：asset bundle 與
+// 使用者頭像全數 500，而 DB 資料看起來好好的，完全指不向「是刪除環境造成的」。
+// 2026-08-24 萊峰19 就是這樣丟掉 634 個檔（不可回復）。要改成「連 DB 一起刪」是另一個產品決策，
+// 在那之前這兩者必須同生共死。
+const ENV_DIR_KEEP = ['filestore'];
+
+// 刪除環境目錄的內容，但保留 ENV_DIR_KEEP。逐項刪而非整棵刪：標記檔（.docker-ready／.ready）要清掉
+// 才會重新走建置流程，filestore 則必須原地留著。
+async function removeEnvDir(dir, deps = {}) {
+  const fsMod = deps.fs || fs;
+  if (!fsMod.existsSync(dir)) return { removed: false, kept: [] };
+  const kept = [];
+  for (const entry of fsMod.readdirSync(dir)) {
+    if (ENV_DIR_KEEP.includes(entry)) { kept.push(entry); continue; }
+    await removeDirForce(path.join(dir, entry), deps);
+  }
+  return { removed: true, kept };
+}
+
 // 抓容器 log（供前端「查看 log」）。tail 限制行數避免無上限。
 async function containerLogs(name, { tail = 2000 } = {}, deps = {}) {
   const { stdout, stderr } = await runDocker(['logs', '--tail', String(tail), name], deps);
@@ -431,7 +452,7 @@ module.exports = {
   runDocker, dockerAvailable, ensureDockerRunning,
   imageExists, containerExists, containerRunning,
   // 生命週期
-  ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, restartContainer, containerLogs,
+  ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, restartContainer, containerLogs, removeEnvDir,
   removeDirForce,
   // 常數
   CORE_ADDONS, EXTRA_ADDONS_ROOT, PLATFORM_ADDONS_HOST, PLATFORM_ADDONS_CONTAINER,

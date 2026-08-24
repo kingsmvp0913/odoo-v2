@@ -38,6 +38,20 @@ async function dockerCtxFor(projectId) {
   const major = (project.odoo_version || '17.0').split('.')[0];
   const hostPaths = await projectAddonsPaths(projectId);
   const mounts = dockerEnv.addonsMounts(hostPaths);
+  // 專案自己的 addons 掛不到，比企業版掛不到更嚴重，卻歷來沒有對應的 fail loud（見下方 enterpriseError）。
+  // projectAddonsPaths 帶 `WHERE clone_status='done'`（規則 81），repo 一離開 done 就從這裡消失——
+  // 容器照起、健康檢查照過、狀態照標 running，但容器內一個客製模組都沒有，畫面上所有客製欄位全不存在。
+  // 2026-08-24 萊峰19 就是這樣：四個 idx_* 模組全被 Odoo 判 not installable，客戶開銷售訂單直接 JS 崩潰，
+  // 而平台顯示一切正常。判準用「repo 列存在但沒全部就緒」而非「一個都沒掛到」：多 repo 專案缺一個
+  // 同樣是碼不全，靜默跑等於拿殘缺的環境給人驗收。
+  const { rows: repoRows } = await query(
+    'SELECT label, clone_status FROM project_repos WHERE project_id=$1 ORDER BY is_primary DESC, id', [projectId]
+  );
+  const notReady = repoRows.filter(r => r.clone_status !== 'done');
+  const addonsError = notReady.length
+    ? `專案程式碼尚未就緒，無法建立測試環境：${notReady.map(r => `${r.label}（${r.clone_status}）`).join('、')}。`
+      + '請到專案設定確認該 repo 的 clone 狀態，必要時重新 clone。'
+    : null;
   // 企業版：把該大版本的 enterprise addons 以唯讀掛入，且排在專案 repos「之後」、核心「之前」——
   // 順序即覆蓋權（專案自訂可蓋 enterprise，enterprise 的 web_enterprise 要能蓋核心 web）。
   // 解析不到來源時不掛、改記 enterpriseError，由 setup 據此 fail loud（不可默默跑成社群版）。
@@ -48,7 +62,7 @@ async function dockerCtxFor(projectId) {
     else enterpriseError = ent.error;
   }
   return {
-    project, dirName, major, enterpriseError,
+    project, dirName, major, enterpriseError, addonsError,
     dbName: `test_${dirName}`,
     image: dockerEnv.imageTagFor(major),
     container: dockerEnv.containerNameFor(dirName, project.id),
@@ -786,14 +800,16 @@ async function assetSmokeCheck(projectId, deps = {}) {
 async function _runEnvSetupDocker(projectId) {
   const ctx = await dockerCtxFor(projectId);
   if (!ctx) return;
-  // 企業版缺件一律 fail loud：靜默降級成社群版會讓人以為在測企業版，而且毫無跡象。
-  // 擺在借埠之前——建不起來的環境不該先白佔一個併發槽。
-  if (ctx.enterpriseError) {
+  // 缺件一律 fail loud：企業版靜默降級成社群版會讓人以為在測企業版；專案 addons 掛不到則會建出
+  // 一個「看起來 running、實際沒有任何客製模組」的空殼（見 dockerCtxFor 的 addonsError）。
+  // 兩者都毫無跡象，只能從客戶回報的畫面崩潰反推。擺在借埠之前——建不起來的環境不該先白佔一個併發槽。
+  const setupBlocker = ctx.enterpriseError || ctx.addonsError;
+  if (setupBlocker) {
     await query(
       `INSERT INTO odoo_envs (project_id, status, error_msg, setup_log, updated_at)
        VALUES ($1,'error',$2,$3,NOW())
        ON CONFLICT (project_id) DO UPDATE SET status='error', error_msg=$2, setup_log=$3, updated_at=NOW()`,
-      [projectId, ctx.enterpriseError, `[docker] ${ctx.enterpriseError}\n`]
+      [projectId, setupBlocker, `[docker] ${setupBlocker}\n`]
     );
     return;
   }
@@ -839,6 +855,22 @@ async function _runEnvSetupDocker(projectId) {
 
   let log = `[docker] mode=docker image=${ctx.image} container=${ctx.container} port=${port}\n`;
   const firstBuild = !fs.existsSync(readyMarker);
+
+  // 不一致偵測：DB 已經存在（平台從不 drop 任何 Odoo DB）而 filestore 卻是空的——代表這些 attachment
+  // 的實體檔已經不在了。照建只會交出一個壞環境：asset bundle 與所有圖片一律 500，而 DB 資料看起來
+  // 完好，沒有人查得到病根在 filestore。寧可停在這裡把話講清楚（2026-08-24 萊峰19 的第二次事故）。
+  // 查詢失敗一律放行：這是防呆而不是授權檢查，不該因為查不到而擋住正常建置。
+  if (fs.readdirSync(filestoreDir).length === 0) {
+    const dbExists = await query('SELECT 1 FROM pg_database WHERE datname=$1', [ctx.dbName])
+      .then(r => r.rows.length > 0).catch(() => false);
+    if (dbExists) {
+      return _failEnv(projectId,
+        `資料庫 ${ctx.dbName} 已存在，但 filestore 是空的——附件實體檔（含 asset bundle）已經遺失，`
+        + '直接建置只會得到一個每張圖都 500 的環境。請確認要沿用這個資料庫（需先清掉失效的 attachment '
+        + '記錄）還是整個重建。',
+        log + `[docker] filestore 空但 DB ${ctx.dbName} 已存在，中止建置\n`);
+    }
+  }
 
   // 0) 確保 Docker daemon 在跑（Windows 自動啟動 Docker Desktop 並等待就緒）。
   // 沒這道 preflight，daemon 沒起時會直接落到 build 拿到一串 npipe 連線亂碼、誤報「image build 失敗」。

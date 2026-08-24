@@ -215,6 +215,13 @@ if (require.main === module) {
         console.log(`[STARTUP] 中斷建立清理：收回 ${r.released}／失敗 ${r.failed}`);
       }
     } catch (e) { console.error('[STARTUP] 中斷建立清理:', e.message); }
+    // 被重啟打斷的 repo clone：卡在 cloning 等同讓該 repo 從整個 pipeline 消失（規則 81），
+    // 且測試環境會被建成沒有客製模組的空殼。標成 error 讓它在畫面上現形。
+    try {
+      const { failInterruptedClones } = require('./pipeline/startup-recovery');
+      const c = await failInterruptedClones();
+      if (c.failed) console.log(`[STARTUP] 中斷 clone 清理：${c.failed} 個 repo 標記為 error`);
+    } catch (e) { console.error('[STARTUP] 中斷 clone 清理:', e.message); }
     // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續），
     // 不再一律標 error 作廢
     try {

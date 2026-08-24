@@ -173,8 +173,10 @@ function registerRoutes(app) {
           return res.status(400).json({ error: 'Invalid env path' });
         }
         // 不能直接 fs.rmSync：filestore／sessions 是容器內的 odoo user 寫的，平台無權刪（見 removeDirForce）。
-        const { removeDirForce } = require('./lib/docker-env');
-        await removeDirForce(envDir);
+        // 也不能整棵刪：filestore 必須留著陪 DB（平台不 drop Odoo DB），砍掉會讓重建後的環境每一筆
+        // attachment 都指向不存在的檔案——見 removeEnvDir 的註解。
+        const { removeEnvDir } = require('./lib/docker-env');
+        await removeEnvDir(envDir);
       }
 
       await query(

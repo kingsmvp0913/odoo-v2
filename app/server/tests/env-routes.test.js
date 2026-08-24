@@ -18,9 +18,14 @@ jest.mock('../pipeline/env-agent', () => ({
 // filestore／sessions 是容器內的 odoo user 寫的，平台直接 fs.rmSync 在正式機一律 EACCES，
 // 刪除環境因此永遠失敗。mock 起來才擋得住「有人改回 rmSync」——沒有它的話，DELETE 這支不論
 // 走哪個實作都會綠（真實 removeDirForce 對不存在的目錄直接 return，測試環境正好沒有那個目錄）。
+// removeEnvDir（保留 filestore）與 removeDirForce（整棵刪）分開 mock：DELETE 走的必須是前者，
+// 走後者會連 filestore 一起砍掉，而平台從不 drop Odoo DB → 重建後每筆 attachment 都指向不存在
+// 的檔案（2026-08-24 萊峰19 丟掉 634 個檔）。兩個都留著才驗得出「有沒有改回整棵刪」。
 const mockRemoveDirForce = jest.fn().mockResolvedValue({ removed: true, viaDocker: false });
+const mockRemoveEnvDir = jest.fn().mockResolvedValue({ removed: true, kept: ['filestore'] });
 jest.mock('../lib/docker-env', () => ({
   removeDirForce: (...a) => mockRemoveDirForce(...a),
+  removeEnvDir: (...a) => mockRemoveEnvDir(...a),
   containerExists: jest.fn().mockResolvedValue(false),
   containerLogs: jest.fn().mockResolvedValue(''),
 }));
@@ -143,6 +148,7 @@ test('POST stop → calls stopEnv', async () => {
 
 test('DELETE env → resets to idle', async () => {
   mockRemoveDirForce.mockClear();
+  mockRemoveEnvDir.mockClear();
   const res = await request(app)
     .delete(`/api/projects/${projectId}/env`)
     .set(auth());
@@ -152,7 +158,10 @@ test('DELETE env → resets to idle', async () => {
   );
   expect(env.status).toBe('idle');
   // 環境目錄必須走 root 容器退路刪除，不可用 fs.rmSync——改回去這支就會紅
-  expect(mockRemoveDirForce).toHaveBeenCalledWith(expect.stringContaining('odoo-envs'));
+  expect(mockRemoveEnvDir).toHaveBeenCalledWith(expect.stringContaining('odoo-envs'));
+  // 且必須是「保留 filestore」的那支。直接對整個 envDir 呼叫 removeDirForce 會把 filestore 一起砍掉，
+  // 而平台從不 drop Odoo DB → 重建後 attachment 全指向不存在的檔案，asset bundle 與圖片一律 500。
+  expect(mockRemoveDirForce).not.toHaveBeenCalledWith(expect.stringContaining('odoo-envs'));
 });
 
 test('401 without token', async () => {

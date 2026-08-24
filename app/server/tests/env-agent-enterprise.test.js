@@ -160,6 +160,28 @@ test('企業版但來源未登記 → setup 直接失敗、訊息指名版本，
   expect(dockerEnv.runContainer).not.toHaveBeenCalled();
 });
 
+// 意圖：專案自己的 addons 掛不到，比企業版掛不到更嚴重，卻歷來沒有對應的 fail loud。
+// projectAddonsPaths 帶 `WHERE clone_status='done'`（規則 81），repo 一離開 done 就從 mounts 消失，
+// 而 setup 照跑到底：容器起來、健康檢查過、狀態標 running，但容器內一個客製模組都沒有。
+// 2026-08-24 萊峰19 就是這樣——四個 idx_* 模組全被 Odoo 判 not installable，客戶開銷售訂單直接
+// JS 崩潰，平台卻顯示一切正常。fixture 用 'cloning'（reclone 被重啟打斷的真實殘留態）而非 'error'：
+// 兩者都不是 done，但 cloning 才是那次事故的形狀，且能一併驗證判準不是只認 'error'。
+test('repo 未就緒（卡在 cloning）→ setup 直接失敗，不借埠也不起容器', async () => {
+  await dbModule.query("UPDATE project_repos SET clone_status='cloning' WHERE project_id=$1", [PID]);
+  try {
+    await envAgent.runEnvSetup(PID);
+    const { rows: [env] } = await dbModule.query('SELECT status, error_msg FROM odoo_envs WHERE project_id=$1', [PID]);
+    expect(env.status).toBe('error');
+    expect(env.error_msg).toContain('程式碼尚未就緒');
+    expect(env.error_msg).toContain('cloning');
+    // 建不起來的環境不該白佔一個併發槽，更不該生出一個沒有客製模組的空殼容器
+    expect(portAlloc.leasePort).not.toHaveBeenCalled();
+    expect(dockerEnv.runContainer).not.toHaveBeenCalled();
+  } finally {
+    await dbModule.query("UPDATE project_repos SET clone_status='done' WHERE project_id=$1", [PID]);
+  }
+});
+
 // 意圖：enterprise 是唯讀共用來源，絕不能被當成專案 repo 去開／切 testing 分支——但排除邏輯要跟
 // 「迴圈根本沒跑」區分開，故同時正面驗證一般專案 repo（repoDir）仍會被呼叫 ensureTestingBranch。
 test('啟動時不對 enterprise 目錄呼叫 ensureTestingBranch，但一般專案 repo 仍會', async () => {

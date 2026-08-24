@@ -7,7 +7,7 @@
 // （正式機還同機跑著其他服務）。以及「清理再重要也不能擋住平台啟動」。
 const { newDb } = require('pg-mem');
 
-let dbModule, clearInterruptedUpgrades, releaseInterruptedSetups, restartEnv, stopEnv;
+let dbModule, clearInterruptedUpgrades, releaseInterruptedSetups, failInterruptedClones, restartEnv, stopEnv;
 
 beforeAll(async () => {
   const db = newDb();
@@ -15,7 +15,7 @@ beforeAll(async () => {
   dbModule = require('../db');
   dbModule._setPoolForTesting(new Pool());
   await dbModule.migrate();
-  ({ clearInterruptedUpgrades, releaseInterruptedSetups } = require('../pipeline/startup-recovery'));
+  ({ clearInterruptedUpgrades, releaseInterruptedSetups, failInterruptedClones } = require('../pipeline/startup-recovery'));
 
   await dbModule.query(
     "INSERT INTO users (username, password_hash, display_name, role) VALUES ('u','h','U','user')"
@@ -174,4 +174,43 @@ test('沒有建立中的環境時完全不碰 docker', async () => {
   const stats = await releaseInterruptedSetups({ stopEnv });
   expect(stopEnv).not.toHaveBeenCalled();
   expect(stats).toMatchObject({ released: 0, failed: 0 });
+});
+
+// reclone／新增 repo 都是「先標 cloning，再背景 triggerClone」，而背景那段隨進程死。重啟後沒有任何
+// catch 會執行，狀態就永久卡在 cloning——而全平台撈 repo 一律 WHERE clone_status='done'（規則 81），
+// 卡住的 repo 等同從平台消失：該專案的測試環境會被建成「沒有任何客製模組」的空殼，容器照起、健康
+// 檢查照過、狀態照標 running。2026-08-24 萊峰19 的第一次事故就是這個形狀，且事後查不出何時壞的。
+describe('failInterruptedClones', () => {
+  beforeEach(() => dbModule.query('DELETE FROM project_repos'));
+
+  async function mkRepo(projectId, label, status) {
+    const { rows: [r] } = await dbModule.query(
+      `INSERT INTO project_repos (project_id, label, repo_url, local_path, clone_status)
+       VALUES ($1,$2,'https://x/y.git',$3,$4) RETURNING id`,
+      [projectId, label, `/repos/${label}`, status]
+    );
+    return r.id;
+  }
+
+  test('卡在 cloning 的 repo → 標成 error 並寫明原因，done 的不受影響', async () => {
+    const stuck = await mkRepo(1, 'main', 'cloning');
+    const healthy = await mkRepo(2, 'main', 'done');
+
+    const stats = await failInterruptedClones();
+    expect(stats).toMatchObject({ failed: 1 });
+
+    const { rows: [a] } = await dbModule.query('SELECT clone_status, clone_error, clone_status_at FROM project_repos WHERE id=$1', [stuck]);
+    expect(a.clone_status).toBe('error');
+    expect(a.clone_error).toContain('重新 clone');
+    // 時間戳是這次事故查不下去的主因，必須跟著寫
+    expect(a.clone_status_at).not.toBeNull();
+
+    const { rows: [b] } = await dbModule.query('SELECT clone_status FROM project_repos WHERE id=$1', [healthy]);
+    expect(b.clone_status).toBe('done');
+  });
+
+  test('沒有卡住的 clone 時不動任何列', async () => {
+    await mkRepo(1, 'main', 'done');
+    expect(await failInterruptedClones()).toMatchObject({ failed: 0 });
+  });
 });

@@ -96,7 +96,7 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
   // Security: validate URL scheme to prevent injection
   if (!/^(https?:\/\/|ssh:\/\/|git@)/.test(repoUrl)) {
     query(
-      'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+      'UPDATE project_repos SET clone_status=$2, clone_error=$3, clone_status_at=NOW() WHERE id=$1',
       [repoId, 'error', '不支援的 Git URL 格式']
     ).catch(() => {});
     return;
@@ -123,7 +123,7 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
     if (err) {
       const msg = (stderr || err.message || 'clone failed').slice(0, 500);
       await query(
-        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3, clone_status_at=NOW() WHERE id=$1',
         [repoId, 'error', msg]
       ).catch(() => {});
     } else {
@@ -147,7 +147,7 @@ function triggerClone(projectId, repoId, repoUrl, destPath, gitEnv, userId) {
       await query(
         // 只有 blocked（確定歪掉且救不了）才寫進 clone_error——前端無論 status 都會紅字顯示，
         // 語意是「需要你處理」。fixed 不必寫（沒事要做），warn 也不寫（只是沒查成功，寫了徒增雜訊）。
-        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3, clone_status_at=NOW() WHERE id=$1',
         [repoId, 'done', notice?.level === 'blocked' ? notice.message : null]
       ).catch(() => {});
     }
@@ -243,7 +243,7 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
       // 要讓 repo 從平台上消失。改成把原因寫進 clone_error 但維持 done：pull 與 ensureAiBranch
       // 都已成功，這個 clone 本身是可用的，只是 main→ai-dev 這一步沒做。
       await query(
-        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3, clone_status_at=NOW() WHERE id=$1',
         [repoId, 'done', aiNotice.message.slice(0, 500)]
       );
       // ensureAiBranch 已把主 clone 切到 ai-dev，這裡要切回常駐分支，否則下次 deploy 會部署到錯分支
@@ -268,7 +268,7 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
       // ai-dev 還原，pull 與 ensureAiBranch 也都成功，這個 clone 本身可用，只是 main→ai-dev 這一步
       // 沒做；把原因寫進 clone_error（前端無論 status 都會紅字顯示）但維持 done。
       await query(
-        'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+        'UPDATE project_repos SET clone_status=$2, clone_error=$3, clone_status_at=NOW() WHERE id=$1',
         [repoId, 'done', `${base} → ai-dev 同步衝突（${shown}${more}），請先在 GitHub 上把 ai-dev 合併回 ${base} 再更新`.slice(0, 500)]
       );
       // ensureAiBranch 已把主 clone 切到 ai-dev，這裡要切回常駐分支，否則下次 deploy 會部署到錯分支
@@ -281,7 +281,7 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
     // 提早回寫不會讓 pipeline 插隊：整段仍在 triggerClone 的 withProjectLock 內，pipeline 的
     // git 操作拿不到鎖。此刻 pull 與 main→ai-dev 同步都已成功，這個 clone 本來就已經是 done。
     await query(
-      'UPDATE project_repos SET clone_status=$2, clone_error=NULL WHERE id=$1',
+      'UPDATE project_repos SET clone_status=$2, clone_error=NULL, clone_status_at=NOW() WHERE id=$1',
       [repoId, 'done']
     );
     // 已在 triggerClone 的 withProjectLock 內 → 用無鎖版避免重入死鎖。
@@ -297,7 +297,7 @@ async function updateMainClone(repoId, destPath, gitEnv, projectId, userId) {
   } catch (err) {
     const msg = (err.stderr || err.message || 'update failed').slice(0, 500);
     await query(
-      'UPDATE project_repos SET clone_status=$2, clone_error=$3 WHERE id=$1',
+      'UPDATE project_repos SET clone_status=$2, clone_error=$3, clone_status_at=NOW() WHERE id=$1',
       [repoId, 'error', msg]
     ).catch(() => {});
   }
@@ -687,8 +687,8 @@ function registerRoutes(app) {
 
       const destPath = computeDestPath(project.folder_name || project.name, label);
       const { rows } = await query(
-        `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status, base_branch)
-         VALUES ($1, $2, $3, $4, $5, 'cloning', $6) RETURNING *`,
+        `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status, base_branch, clone_status_at)
+         VALUES ($1, $2, $3, $4, $5, 'cloning', $6, NOW()) RETURNING *`,
         // 主分支在此刻定案（之後 PUT 會擋）。null＝沿用遠端 HEAD，triggerClone 那邊會照 origin/HEAD 走。
         [req.params.id, label, repo_url, destPath, is_primary || false, base_branch || null]
       );
@@ -751,6 +751,10 @@ function registerRoutes(app) {
       // base_branch 已不可變，故此處無需再套 origin/HEAD——新增時 triggerClone 那段已經設好，
       // 換 URL 時下面的 triggerClone 會重新套用一次。
       if (urlChanged) {
+        // 換 URL 是唯一會動 clone_status 的分支（否則 newCloneStatus 沿用原值），時間戳只在真的
+        // 變動時更新，否則「上次何時離開 done」會被無關的改名編輯洗掉。
+        await query('UPDATE project_repos SET clone_status_at=NOW() WHERE id=$1', [rows[0].id]);
+        console.warn(`[repo ${rows[0].id}] 換 URL → clone_status ${existing.clone_status} → cloning，此期間該專案無法建立測試環境`);
         triggerClone(req.params.id, rows[0].id, rows[0].repo_url, newLocalPath, await optionalGitEnv(req.userId), req.userId);
       }
       res.json(rows[0]);
@@ -823,10 +827,16 @@ function registerRoutes(app) {
         gitEnv = await optionalGitEnv(req.userId);
       }
 
+      // 這一步把 repo 移出 done，等同讓它從整個 pipeline 消失（規則 81）——測試環境會被建成沒有任何
+      // 客製模組的空殼、任務也撈不到 repo。而 triggerClone 是背景執行：平台若在它跑完前重啟，沒有任何
+      // catch 會執行，狀態就永久卡在 cloning，clone_error 又剛被清成 NULL，事後查不到一點痕跡
+      //（2026-08-24 萊峰19 的第一次事故）。落一行 log 與時間戳，至少讓「從什麼時候開始不是 done」查得到。
       await query(
-        "UPDATE project_repos SET clone_status='cloning', clone_error=NULL WHERE id=$1",
+        "UPDATE project_repos SET clone_status='cloning', clone_error=NULL, clone_status_at=NOW() WHERE id=$1",
         [repo.id]
       );
+      console.warn(`[reclone] repo ${repo.id}（${repo.label}）clone_status ${repo.clone_status} → cloning，`
+        + '此期間該專案無法建立測試環境');
       triggerClone(req.params.id, repo.id, repo.repo_url, repo.local_path, gitEnv, req.userId);
       res.json({ ok: true, cloning: true });
     } catch (err) { res.status(500).json({ error: err.message }); }

@@ -652,6 +652,12 @@ async function migrate() {
     // recordRemoteAiBranch）——撞名守衛只能比對這個，不能拿 base_branch 現算：base_branch 為 null
     // 時執行期會用偵測到的主分支，兩者算出來的名字不一樣，守衛因此放行真正會互相覆蓋的組合。
     { table: 'project_repos', col: 'remote_ai_branch', sql: 'ALTER TABLE project_repos ADD COLUMN remote_ai_branch TEXT' },
+    // clone_status 的最後異動時間。這張表是全平台的樞紐（撈 repo 一律 WHERE clone_status='done'，見
+    // 規則 81）：狀態一離開 done，該專案的測試環境就會被建成沒有任何客製模組的空殼、pipeline 也撈不到
+    // repo。但這張表歷來沒有任何時間戳，事後無從判斷「它是什麼時候壞的」——2026-08-24 萊峰19 的事故
+    // 正是卡在這裡：能證明建置當下它不是 done，卻永遠查不出何時、因何變的（clone_error 還會在下一次
+    // 成功時被清成 NULL，連原因都一併抹掉）。
+    { table: 'project_repos', col: 'clone_status_at', sql: 'ALTER TABLE project_repos ADD COLUMN clone_status_at TIMESTAMPTZ' },
     { table: 'projects', col: 'port', sql: 'ALTER TABLE projects ADD COLUMN port INTEGER' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },

@@ -133,4 +133,31 @@ async function releaseInterruptedSetups(deps = {}) {
   return stats;
 }
 
-module.exports = { clearInterruptedUpgrades, releaseInterruptedSetups, INTERRUPTED_STATUSES };
+/**
+ * 被重啟打斷的 repo clone／更新。
+ *
+ * reclone 與新增 repo 都是「先把 clone_status 標成 cloning，再背景 triggerClone」。背景那段是
+ * execFile／git 操作，隨進程一起死——平台重啟時沒有任何 catch 會執行，狀態就永久卡在 cloning。
+ *
+ * 而 cloning 不是無害的中間態：全平台撈 repo 一律 `WHERE clone_status='done'`（規則 81），所以
+ * 卡住的 repo 等同從平台上消失——該專案的測試環境會被建成「沒有任何客製模組」的空殼（容器照起、
+ * 健康檢查照過、狀態照標 running），pipeline 也撈不到 repo。2026-08-24 萊峰19 的第一次事故就是
+ * 這個形狀：客戶開銷售訂單直接 JS 崩潰，而平台顯示一切正常，事後也查不出它是何時壞的。
+ *
+ * 標成 error 而不是自動重跑 clone：clone 可能很久、也可能需要 PAT（reclone 端點會擋沒 PAT 的人），
+ * 啟動時批次拉是拿不到發起人憑證的。error 至少會在專案頁紅字現形，一鍵重新 clone 即可。
+ */
+async function failInterruptedClones() {
+  const { rows } = await query(
+    `UPDATE project_repos SET clone_status='error',
+       clone_error='clone／更新被平台重啟中斷，請重新 clone（此期間該專案無法建立測試環境）',
+       clone_status_at=NOW()
+     WHERE clone_status='cloning' RETURNING id, label, project_id`
+  );
+  for (const r of rows) {
+    console.warn(`[STARTUP] repo ${r.id}（${r.label}，專案 ${r.project_id}）的 clone 被重啟打斷，已標記 error 待人工重新 clone`);
+  }
+  return { failed: rows.length };
+}
+
+module.exports = { clearInterruptedUpgrades, releaseInterruptedSetups, failInterruptedClones, INTERRUPTED_STATUSES };
