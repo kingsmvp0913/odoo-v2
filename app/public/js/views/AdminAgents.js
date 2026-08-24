@@ -4,10 +4,10 @@ window.AdminAgentsView = Vue.defineComponent({
     return {
       agents: [],
       loading: true,
-      selected: null,        // { name, label, description, model, stage, prompt }
-      form: { model: '', prompt: '' },
+      selected: null,        // { name, label, description, provider, model, effort, stage, prompt }
+      form: { provider: '', model: '', effort: '', prompt: '' },
       saving: false,
-      models: ['haiku', 'sonnet', 'opus', 'fable']
+      providers: {}
     };
   },
   computed: {
@@ -19,8 +19,13 @@ window.AdminAgentsView = Vue.defineComponent({
     },
     dirty() {
       return this.selected &&
-        (this.form.model !== this.selected.model || this.form.prompt !== this.selected.prompt);
-    }
+        (this.form.provider !== this.selected.provider || this.form.model !== this.selected.model ||
+         this.form.effort !== (this.selected.effort || '') || this.form.prompt !== this.selected.prompt);
+    },
+    providerSpec() { return this.providers[this.form.provider] || null; },
+    models() { return this.providerSpec?.models || []; },
+    modelSpec() { return this.models.find(m => m.id === this.form.model) || null; },
+    efforts() { return this.modelSpec?.efforts || []; }
   },
   async created() {
     await this.load();
@@ -41,7 +46,11 @@ window.AdminAgentsView = Vue.defineComponent({
   methods: {
     async load() {
       this.loading = true;
-      try { this.agents = await Api.get('admin/agents'); }
+      try {
+        const [agents, providers] = await Promise.all([Api.get('admin/agents'), Api.get('admin/providers')]);
+        this.agents = agents;
+        this.providers = providers;
+      }
       catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -49,7 +58,7 @@ window.AdminAgentsView = Vue.defineComponent({
       try {
         const full = await Api.get('admin/agents/' + a.name);
         this.selected = full;
-        this.form = { model: full.model, prompt: full.prompt };
+        this.form = { provider: full.provider || 'claude', model: full.model, effort: full.effort || '', prompt: full.prompt };
       } catch (e) { showToast(e.message, 'error'); }
     },
     async save() {
@@ -57,16 +66,26 @@ window.AdminAgentsView = Vue.defineComponent({
       this.saving = true;
       try {
         const updated = await Api.put('admin/agents/' + this.selected.name, {
+          provider: this.form.provider,
           model: this.form.model,
+          effort: this.form.effort || undefined,
           prompt: this.form.prompt
         });
         this.selected = updated;
-        this.form = { model: updated.model, prompt: updated.prompt };
+        this.form = { provider: updated.provider || 'claude', model: updated.model, effort: updated.effort || '', prompt: updated.prompt };
         const item = this.agents.find(x => x.name === updated.name);
-        if (item) item.model = updated.model;
+        if (item) Object.assign(item, { model: updated.model, provider: updated.provider, effort: updated.effort });
         showToast('已儲存「' + updated.label + '」', 'success');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.saving = false; }
+    },
+    changeProvider() {
+      const first = this.models[0];
+      this.form.model = first ? first.id : '';
+      this.form.effort = first?.efforts?.includes('medium') ? 'medium' : (first?.efforts?.[0] || '');
+    },
+    changeModel() {
+      if (!this.efforts.includes(this.form.effort)) this.form.effort = this.efforts.includes('medium') ? 'medium' : (this.efforts[0] || '');
     }
   },
   template: `
@@ -90,7 +109,7 @@ window.AdminAgentsView = Vue.defineComponent({
                        background: selected && selected.name===a.name ? 'rgba(99,102,241,0.10)' : 'transparent'}">
               <div class="aa-list-item-row">
                 <span style="font-family:monospace">{{ a.name }}</span>
-                <span v-if="a.model" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:4px;background:var(--border);color:var(--text-secondary)">{{ a.model }}</span>
+                <span v-if="a.model" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:4px;background:var(--border);color:var(--text-secondary)">{{ a.provider === 'codex' ? a.provider + '/' + a.model + ':' + a.effort : a.model }}</span>
               </div>
               <div style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:2px">{{ a.description }}</div>
             </div>
@@ -98,7 +117,7 @@ window.AdminAgentsView = Vue.defineComponent({
         </div>
 
         <!-- 右：編輯 -->
-        <div v-if="selected" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4)">
+        <div v-if="selected" class="aa-editor" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4)">
           <div class="aa-detail-title-row">
             <h2 style="margin:0;font-size:16px">{{ selected.label }}</h2>
             <span style="font-family:monospace;font-size:var(--fs-sm);color:var(--text-muted)">{{ selected.name }}</span>
@@ -106,10 +125,26 @@ window.AdminAgentsView = Vue.defineComponent({
           <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-4)">{{ selected.description }}</div>
 
           <template v-if="selected.model !== null">
-            <label style="display:block;font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)">模型</label>
-            <select v-model="form.model" class="form-control aa-model-select">
-              <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
-            </select>
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap">
+              <label style="font-size:var(--fs-sm);font-weight:var(--fw-semibold)">AI
+                <select v-model="form.provider" @change="changeProvider" class="form-control aa-model-select">
+                  <option v-for="(p, id) in providers" :key="id" :value="id" :disabled="id === 'codex' && !selected.codexEligible">{{ p.label }}</option>
+                </select>
+              </label>
+              <label style="font-size:var(--fs-sm);font-weight:var(--fw-semibold)">模型
+                <select v-model="form.model" @change="changeModel" class="form-control aa-model-select">
+                  <option v-for="m in models" :key="m.id" :value="m.id">{{ m.id }}</option>
+                </select>
+              </label>
+              <label v-if="efforts.length" style="font-size:var(--fs-sm);font-weight:var(--fw-semibold)">推理強度
+                <select v-model="form.effort" class="form-control aa-model-select">
+                  <option v-for="e in efforts" :key="e" :value="e">{{ e }}</option>
+                </select>
+              </label>
+            </div>
+            <div v-if="!selected.codexEligible" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:calc(-1 * var(--space-2));margin-bottom:var(--space-3)">
+              Codex 尚未開放：此 agent 尚未具備對等的掃碟守衛與執行前提。
+            </div>
           </template>
 
           <label style="display:block;font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)">提示詞（雙大括號包住的佔位符為動態資料，請勿刪改）</label>

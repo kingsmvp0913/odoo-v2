@@ -41,7 +41,6 @@ if ! command -v google-chrome &>/dev/null && ! command -v google-chrome-stable &
     install_apt google-chrome-stable || install_apt chromium-browser
   ) || echo "警告：Chrome 自動安裝失敗，請手動安裝 Google Chrome 後重跑 node scripts/setup.js"
 fi
-command -v uvx &>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 command -v psql &>/dev/null || install_apt postgresql postgresql-contrib
 command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sudo sh; sudo usermod -aG docker "$USER" || true; }
 

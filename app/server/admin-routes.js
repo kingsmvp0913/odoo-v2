@@ -8,10 +8,11 @@ const { hashPassword } = require('./password');
 const { encrypt } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
+const codexSubscription = require('./lib/codex-app-server');
 const { resetContext7KeyCache } = require('./lib/context7-auth');
 const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
-const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
+const { listAgents, loadAgent, updateAgent, getLabels, refreshCodexModels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
 const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
@@ -108,6 +109,20 @@ function registerRoutes(app) {
   app.delete('/api/admin/claude-token', auth, (req, res) => clearClaudeToken(TOKEN_COLS.primary, res));
 
   app.delete('/api/admin/claude-token/backup', auth, (req, res) => clearClaudeToken(TOKEN_COLS.backup, res));
+
+  // Codex 訂閱登入：官方 app-server 管理 OAuth／refresh token，平台永遠不接觸 token 明文。
+  app.get('/api/admin/codex-subscription', auth, async (_req, res) => {
+    try { res.json(await codexSubscription.accountStatus()); }
+    catch (err) { res.status(503).json({ error: err.message }); }
+  });
+  app.post('/api/admin/codex-subscription/device-login', auth, async (_req, res) => {
+    try { res.json(await codexSubscription.startDeviceLogin()); }
+    catch (err) { res.status(503).json({ error: err.message }); }
+  });
+  app.delete('/api/admin/codex-subscription', auth, async (_req, res) => {
+    try { await codexSubscription.logout(); res.json({ ok: true }); }
+    catch (err) { res.status(503).json({ error: err.message }); }
+  });
 
   // 備援總開關。關閉（預設）時主帳號撞門檻就暫停推進，與備用憑證存不存在無關——
   // 管理員要能在不刪掉憑證的前提下停用第二份訂閱。
@@ -270,7 +285,13 @@ function registerRoutes(app) {
 
   app.get('/api/admin/users', auth, async (req, res) => {
     try {
-      const { rows } = await query('SELECT id, username, display_name, role, approved, created_at FROM users ORDER BY id ASC');
+      // has_pat 只回布林不回密文（比照 claude-token 端點）——「CLI 推送身分」下拉要據此
+      // 標出誰選了會失敗，選人當下就看得出來，而不是 push 到一半才拿到 NoGitCredentialError。
+      const { rows } = await query(
+        `SELECT id, username, display_name, role, approved, created_at,
+                (github_pat_enc IS NOT NULL AND github_pat_enc <> '') AS has_pat
+         FROM users ORDER BY id ASC`
+      );
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -353,6 +374,38 @@ function registerRoutes(app) {
       if (err.status === 404) return res.status(404).json({ error: 'Not found' });
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // CLI 推送身分：人在終端機跑 pushRepo/push.js 且沒帶 --user 時，用誰的 PAT。
+  // 平台自己的推送不看這欄（push-ai／runner／merge-agent／finding-fix／enterprise-routes
+  // 一律帶任務或請求的 user_id），所以改這裡不影響任何自動流程。
+  // 走專屬端點而非 teams-settings 的全量 upsert：那支 PUT 漏帶欄位就清空（見 teams-routes.js
+  // 裡 test_mode 被靜默關掉的註解）。
+  app.put('/api/admin/cli-push-user', auth, async (req, res) => {
+    try {
+      const raw = req.body.cli_push_user_id;
+      const userId = (raw === null || raw === undefined || raw === '') ? null : parseInt(raw, 10);
+      if (userId !== null && !Number.isInteger(userId)) {
+        return res.status(400).json({ error: 'cli_push_user_id 必須是整數或空值' });
+      }
+      if (userId !== null) {
+        // 存的時候就擋掉沒 PAT 的人。否則失敗會延到 push 當下，而 NoGitCredentialError 讀起來
+        // 像「這個人沒設 PAT」，實際上也可能是「這個 id 不存在」——兩種真因同一句話。
+        const { rows } = await query(
+          `SELECT (github_pat_enc IS NOT NULL AND github_pat_enc <> '') AS has_pat
+           FROM users WHERE id = $1`,
+          [userId]
+        );
+        if (!rows.length) return res.status(400).json({ error: `使用者 ${userId} 不存在` });
+        if (!rows[0].has_pat) return res.status(400).json({ error: '該使用者尚未設定 GitHub PAT' });
+      }
+      await query(
+        `INSERT INTO teams_settings (id, cli_push_user_id, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET cli_push_user_id = $1, updated_at = NOW()`,
+        [userId]
+      );
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // --- project_maps ---
@@ -463,6 +516,13 @@ function registerRoutes(app) {
     return e;
   }
 
+  // 供應商與模型清單。前端不得自帶——`AdminAgents.js` 原本硬寫一份 models 陣列，
+  // 與後端白名單是雙來源，改一邊忘另一邊就會給出後端會擋掉的選項。
+  // efforts 逐模型附在該模型上（codex 各模型可選值不同），前端第三段下拉才能跟著換。
+  app.get('/api/admin/providers', auth, (_req, res) => {
+    res.json(refreshCodexModels());
+  });
+
   // 列出所有 agent（不含 prompt body）；置頂全域規則
   app.get('/api/admin/agents', auth, (_req, res) => {
     try { res.json([claudeEntry(false), ...listAgents()]); }
@@ -474,7 +534,7 @@ function registerRoutes(app) {
     try {
       if (req.params.name === 'CLAUDE') return res.json(claudeEntry(true));
       const a = loadAgent(req.params.name);
-      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage, prompt: a.body });
+      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, provider: a.provider, effort: a.effort, stage: a.stage, codexEligible: require('./pipeline/agent-loader').CODEX_ELIGIBLE.has(a.name), prompt: a.body });
     } catch (err) {
       res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: err.message });
     }
@@ -483,13 +543,13 @@ function registerRoutes(app) {
   // 更新 model 與 prompt（僅此兩者可改）；CLAUDE 只寫內容
   app.put('/api/admin/agents/:name', auth, (req, res) => {
     try {
-      const { model, prompt } = req.body || {};
+      const { model, prompt, provider, effort } = req.body || {};
       if (req.params.name === 'CLAUDE') {
         if (typeof prompt === 'string') fs.writeFileSync(CLAUDE_MD, prompt);
         return res.json(claudeEntry(true));
       }
-      const a = updateAgent(req.params.name, { model, prompt });
-      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage, prompt: a.body });
+      const a = updateAgent(req.params.name, { model, prompt, provider, effort });
+      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, provider: a.provider, effort: a.effort, stage: a.stage, codexEligible: require('./pipeline/agent-loader').CODEX_ELIGIBLE.has(a.name), prompt: a.body });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message });
     }

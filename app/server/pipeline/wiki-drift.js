@@ -1,6 +1,6 @@
 const { query } = require('../db');
 const { loadAgent } = require('./agent-loader');
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 
@@ -53,9 +53,9 @@ async function classifyOne(d) {
   const agent = loadAgent('wiki-drift-classifier');
   let category = null;
   try {
-    const { text, usage, durationMs } = await runClaude(
+    const { text, usage, durationMs } = await runAgent(
       agent.render({ slug: d.slug || '（未指定）', reason: d.reason }),
-      { model: agent.model, agentType: 'wiki_drift_classify' }
+      { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki_drift_classify' }
     );
     await logTokenUsage({ taskId: d.task_id, projectId: d.project_id }, d.user_id, 'wiki_drift_classify', usage, durationMs);
     const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: { taskId: d.task_id, projectId: d.project_id }, userId: d.user_id });

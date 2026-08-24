@@ -1,6 +1,6 @@
 const { query } = require('../db');
 const { loadAgent } = require('./agent-loader');
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 
@@ -23,7 +23,7 @@ async function classifyOne(rej) {
   const agent = loadAgent('reject-classifier');
   let items = null;
   try {
-    const { text, usage, durationMs } = await runClaude(agent.render({ reason: rej.reason }), { model: agent.model, agentType: 'reject_classify' });
+    const { text, usage, durationMs } = await runAgent(agent.render({ reason: rej.reason }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'reject_classify' });
     await logTokenUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.user_id, 'reject_classify', usage, durationMs);
     const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: { taskId: rej.task_id, projectId: rej.project_id }, userId: rej.user_id });
     // 空陣列是合法結果（agent 判定無可拆項目）→ 視為已分類（零項目），不落 error

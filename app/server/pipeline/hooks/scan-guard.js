@@ -121,6 +121,8 @@ if (require.main === module) {
     const { blocked, reason } = detectBroadScan(cmd);
     if (blocked) {
       process.stderr.write(`${DENY_MESSAGE}\n（觸發原因：${reason}）\n`);
+      // Codex 只認 stdout 的 permissionDecision；Claude 仍認 exit 2＋stderr，兩者並存。
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `${DENY_MESSAGE}\n（觸發原因：${reason}）` } }) + '\n');
       process.exit(2); // PreToolUse：exit 2 = 阻擋工具呼叫，stderr 回饋給 model
     }
     process.exit(0);

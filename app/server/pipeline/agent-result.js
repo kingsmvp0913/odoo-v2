@@ -1,4 +1,4 @@
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 
 // 統一 agent 輸出契約解析（健檢主題 F）：需要結構化結果的 agent 走同一份，取代逐個修的貪婪 regex／裸 YAML。
@@ -68,7 +68,8 @@ async function parseAgentResult(raw, { parse, schemaHint, signal, ref, userId } 
   let out = doParse(extractResult(raw));
   if (out != null) return out;
   try {
-    const repaired = await runClaude(REPAIR_PROMPT(raw, parseErr, schemaHint), { model: 'haiku', signal, agentType: 'repair' });
+    // 契約補救固定 Claude/haiku：只做文字整形，不隨原 agent 改 provider 以免多一個變數。
+    const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair' });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
     out = doParse(extractResult(repaired.text));
   } catch (err) {

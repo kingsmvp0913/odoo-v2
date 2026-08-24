@@ -11,6 +11,11 @@ jest.mock('../pipeline/runner', () => ({
 jest.mock('../pipeline/git', () => ({
   createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn()
 }));
+jest.mock('../lib/codex-app-server', () => ({
+  rateLimits: jest.fn().mockResolvedValue({
+    rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: 1760000000 }, secondary: { usedPercent: 25, windowDurationMins: 10080, resetsAt: 1760500000 } }
+  })
+}));
 
 process.env.JWT_SECRET = 'test-token-report';
 
@@ -75,6 +80,14 @@ test('GET /api/claude-usage → 一般使用者 403、admin 非 403', async () =
   expect(u.status).toBe(403);
   const a = await request(app).get('/api/claude-usage').set('Authorization', `Bearer ${adminToken}`);
   expect(a.status).not.toBe(403); // admin 放行（實際 200／503 視環境，但不得是權限 403）
+});
+
+test('GET /api/codex-usage → 回官方訂閱剩餘額度，非 admin 不可讀', async () => {
+  const denied = await request(app).get('/api/codex-usage').set('Authorization', `Bearer ${userToken}`);
+  expect(denied.status).toBe(403);
+  const ok = await request(app).get('/api/codex-usage').set('Authorization', `Bearer ${adminToken}`);
+  expect(ok.status).toBe(200);
+  expect(ok.body).toMatchObject({ available: true, primary: { remaining_percent: 60, window_minutes: 300 }, secondary: { remaining_percent: 75, window_minutes: 10080 } });
 });
 
 // 意圖：用量報表僅管理員可見——一般使用者一律 403（不再回傳自己的用量）。

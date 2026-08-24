@@ -18,7 +18,8 @@ const TEAMS_PUBLIC_COLS = 'id, tenant_id, client_id, client_secret, team_id, cha
   + 'odoo_base_url, eservice_base_url, mention_users, webhook_url, notify_webhook_url, '
   + 'odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, '
   + 'test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, '
-  + 'usage_gate_5h_threshold, usage_gate_7d_threshold, port_pool_min, port_pool_max, updated_at';
+  + 'usage_gate_5h_threshold, usage_gate_7d_threshold, port_pool_min, port_pool_max, '
+  + 'cli_push_user_id, updated_at';
 
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];

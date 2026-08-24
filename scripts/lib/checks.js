@@ -44,9 +44,6 @@ function verifyRuntimeDeps(deps = {}) {
   if (!commandExistsFn(pythonBin)) {
     missing.push({ name: 'python', hint: '請安裝 Python 3：https://www.python.org/downloads/（或設定 PYTHON_BIN 指向既有安裝）' });
   }
-  if (!commandExistsFn('uvx')) {
-    missing.push({ name: 'uv', hint: '請安裝 uv：https://astral.sh/uv/install' });
-  }
   if (!commandExistsFn('psql')) {
     missing.push({ name: 'psql', hint: '請安裝 PostgreSQL（含 psql CLI）：https://www.postgresql.org/download/' });
   }

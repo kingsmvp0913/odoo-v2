@@ -22,7 +22,6 @@ $chromeCandidates = @(
     (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe")
 )
 if (-not ($chromeCandidates | Where-Object { Test-Path $_ })) { Install-WingetPackage "Google.Chrome" "Google Chrome" }
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { Install-WingetPackage "astral-sh.uv" "uv" }
 if (-not (Get-Command psql -ErrorAction SilentlyContinue)) { Install-WingetPackage "PostgreSQL.PostgreSQL.17" "PostgreSQL" }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Install-WingetPackage "Docker.DockerDesktop" "Docker Desktop" }
 

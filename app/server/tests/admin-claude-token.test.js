@@ -11,6 +11,11 @@ jest.mock('../pipeline/runner', () => ({
 }));
 jest.mock('../pipeline/git', () => ({ createBranch: jest.fn(), runDeploy: jest.fn(), checkoutDefault: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn().mockResolvedValue({ text: 'ok' }) }));
+jest.mock('../lib/codex-app-server', () => ({
+  accountStatus: jest.fn().mockResolvedValue({ configured: false, auth_mode: null, pending_login: null }),
+  startDeviceLogin: jest.fn().mockResolvedValue({ login_id: 'login-1', verification_url: 'https://auth.openai.com/codex/device', user_code: 'ABCD-1234', state: 'pending' }),
+  logout: jest.fn().mockResolvedValue(undefined)
+}));
 
 process.env.JWT_SECRET = 'test-admin-token';
 process.env.APP_SECRET = 'test-app-secret';
@@ -60,6 +65,19 @@ test('GET 一次回兩把憑證的設定狀態與備援開關（前端只打一�
   expect(res.body.configured).toBe(false);
   expect(res.body.backup_configured).toBe(false);
   expect(res.body.fallback_enabled).toBe(false);
+});
+
+test('Codex 訂閱登入端點只限管理員，裝置碼不含任何長效憑證', async () => {
+  const subscription = require('../lib/codex-app-server');
+  const status = await asAdmin(request(app).get('/api/admin/codex-subscription'));
+  expect(status.body).toMatchObject({ configured: false });
+  const login = await asAdmin(request(app).post('/api/admin/codex-subscription/device-login')).send({});
+  expect(login.body).toMatchObject({ verification_url: 'https://auth.openai.com/codex/device', user_code: 'ABCD-1234' });
+  expect(JSON.stringify(login.body)).not.toContain('token');
+  expect(subscription.startDeviceLogin).toHaveBeenCalled();
+  expect((await request(app).get('/api/admin/codex-subscription').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
+  expect((await asAdmin(request(app).delete('/api/admin/codex-subscription'))).status).toBe(200);
+  expect(subscription.logout).toHaveBeenCalled();
 });
 
 test('存備用憑證 → 先驗證再存，狀態轉為已設定，且回應不得帶出 token', async () => {

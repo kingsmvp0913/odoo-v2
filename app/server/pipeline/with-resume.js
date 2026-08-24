@@ -1,4 +1,4 @@
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { promptVersion } = require('./agent-loader');
 
 // 對話式閘門（spec_review／clarify_pending）的 session 續接。
@@ -32,7 +32,7 @@ async function withResume(opts) {
 
   if (sess && sess.sessionId && sess.promptVer === ver) {
     try {
-      const result = await runClaude(renderRetry(), { ...runOpts, resumeSessionId: sess.sessionId, model });
+      const result = await runAgent(renderRetry(), { ...runOpts, resumeSessionId: sess.sessionId, model });
       if (result.sessionId) await Promise.resolve(setSession({ sessionId: result.sessionId, promptVer: ver })).catch(() => {});
       return result;
     } catch (err) {
@@ -49,7 +49,7 @@ async function withResume(opts) {
   }
 
   // renderFresh 可回 promise：呼叫端常把「只有 fresh 才需要」的查詢與 render 延後到這裡才做
-  const result = await runClaude(await renderFresh(), { ...runOpts, model });
+  const result = await runAgent(await renderFresh(), { ...runOpts, model });
   if (result.sessionId) await Promise.resolve(setSession({ sessionId: result.sessionId, promptVer: ver })).catch(() => {});
   return result;
 }

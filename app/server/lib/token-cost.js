@@ -11,16 +11,33 @@
 // LOWER + LIKE 而非 ILIKE：pg-mem（測試用）不保證支援 ILIKE。
 //
 // prefix 是資料表別名（含點），例如 'tu.'；沒有別名時傳空字串。
+// 相對單價倍率。數字是「相對於基準的倍數」，不是美元——實際金額由 weighted × rate / 1e6 得出。
+//
+// claude 這幾支是本檔既有的值，沿用未動。
+// ⚠ **codex 的倍率是尚未查證的暫定值**：本次改動要解決的是結構性問題——原本的 CASE 只看 model
+// 字串，codex 的 model 名（gpt-5.6-*）會全數落到 ELSE 3.0 被當 sonnet 計，而且**不會報錯**。
+// 結構修好了，但填什麼數字需要 OpenAI 的實際計價，還沒有人查。在查證之前，codex 的成本數字
+// 只能當「量級參考」，不可拿來做成本比較或寫進健檢結論。
+// 查證後請直接改這裡——這是單一來源，health-data.js 兩處都經由 costSql() 取用。
+const RATES = {
+  claude: { haiku: 1.0, opus: 5.0, fable: 10.0, _default: 3.0 },
+  codex:  { _default: 3.0, _verified: false }   // TODO(未查證)：填入實際倍率後把 _verified 改 true
+};
+
 function costSql(prefix = '') {
   const p = prefix;
   const weighted = `(${p}input_tokens + ${p}output_tokens * 5 + ${p}cache_read_tokens * 0.1 + ${p}cache_create_tokens * 1.25)`;
+  // 先分 provider 再分 model：不先分的話 codex 的 model 名會落到 claude 的 ELSE 分支。
+  // provider 為 NULL＝本欄上線前的既有列，一律當 claude。
+  const isCodex = `LOWER(COALESCE(${p}provider,'claude')) = 'codex'`;
   const rate = `(CASE
-         WHEN LOWER(COALESCE(${p}model,'')) LIKE '%haiku%' THEN 1.0
-         WHEN LOWER(COALESCE(${p}model,'')) LIKE '%opus%'  THEN 5.0
-         WHEN LOWER(COALESCE(${p}model,'')) LIKE '%fable%' THEN 10.0
-         ELSE 3.0
+         WHEN ${isCodex} THEN ${RATES.codex._default}
+         WHEN LOWER(COALESCE(${p}model,'')) LIKE '%haiku%' THEN ${RATES.claude.haiku}
+         WHEN LOWER(COALESCE(${p}model,'')) LIKE '%opus%'  THEN ${RATES.claude.opus}
+         WHEN LOWER(COALESCE(${p}model,'')) LIKE '%fable%' THEN ${RATES.claude.fable}
+         ELSE ${RATES.claude._default}
        END)`;
   return { weighted, rate, cost: `(${rate} * ${weighted} / 1000000.0)` };
 }
 
-module.exports = { costSql };
+module.exports = { costSql, RATES };

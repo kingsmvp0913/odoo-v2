@@ -217,6 +217,9 @@ window.TOUR_COURSES = [
       },
       {
         route: '/',
+        // 手機上這排是 display:none（收在「篩選」鈕後面），不先點開就找不到目標；
+        // 桌機恆為可見，引擎的 click 只在目標不可見時才動，故兩邊共用同一步。
+        click: '[data-tour="task-filters-toggle"]',
         target: '[data-tour="task-filters-more"]',
         title: '找特定一張時用這排',
         text: '專案、狀態、來源、是否已上正式，加上搜尋與排序。<strong>幾個條件是疊加的</strong>，找不到東西通常是這裡還開著上次的條件。<br><br>常用的組合按<strong>「＋ 存成組合」</strong>取個名字存起來，之後一鍵套用；這個是存在帳號上的，換一台電腦登入也還在。',

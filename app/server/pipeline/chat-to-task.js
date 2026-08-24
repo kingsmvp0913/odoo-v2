@@ -1,4 +1,4 @@
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { loadAgent } = require('./agent-loader');
 const { parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
@@ -58,7 +58,7 @@ async function draftTaskFromChat(projectId, chatId, userId) {
   const ref = { projectId, chatId };
   let result;
   try {
-    result = await runClaude(prompt, { model: agent.model, agentType: 'chat-to-task' });
+    result = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'chat-to-task' });
   } catch (err) {
     await logFailedUsage(ref, userId, 'chat-to-task', err);
     throw err;

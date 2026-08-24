@@ -20,10 +20,76 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
 const AGENTS_DIR = path.join(__dirname, '..', '..', '..', '.claude', 'agents');
 const CLAUDE_MD_PATH = path.join(__dirname, '..', '..', '..', '.claude', 'CLAUDE.md');
-const ALLOWED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
+// 每個 AI 供應商可選的模型。codex 另有 per-model 的 reasoning effort——claude 沒有這個維度，
+// 而且 codex 的可選 effort **逐模型不同**（5.6 系列有 max/ultra，5.4 系列只到 xhigh），
+// 所以 efforts 掛在各模型上，不能用一份全域清單校驗：那會放行 gpt-5.4+max 這種必定 spawn 失敗的組合。
+// codex 的清單是 2026-08-24 以 `codex debug models` 取得的快照（已過濾 visibility!=='list' 的
+// codex-auto-review，它是 `codex review` 專用）。模型會換代，長期應改為開機時動態取；本期用快照，
+// 因為動態取要處理「主機沒裝 codex／取不到」的退路，那是另一個決定。
+const PROVIDERS = {
+  claude: {
+    label: 'Claude Code',
+    bin: 'claude',
+    models: [{ id: 'haiku' }, { id: 'sonnet' }, { id: 'opus' }, { id: 'fable' }]
+  },
+  codex: {
+    label: 'OpenAI Codex',
+    bin: 'codex',
+    models: [
+      { id: 'gpt-5.6-sol',   efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+      { id: 'gpt-5.6-terra', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+      { id: 'gpt-5.6-luna',  efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'gpt-5.5',       efforts: ['low', 'medium', 'high', 'xhigh'] },
+      { id: 'gpt-5.4',       efforts: ['low', 'medium', 'high', 'xhigh'] },
+      { id: 'gpt-5.4-mini',  efforts: ['low', 'medium', 'high', 'xhigh'] }
+    ]
+  }
+};
+const DEFAULT_PROVIDER = 'claude';
+const DEFAULT_EFFORT = 'medium';
+let codexModelsLoadedAt = 0;
+
+// CLI 模型會換代；優先從本機 Codex 取得，失敗時保留上一次／內建快照讓管理頁不會整個失效。
+function refreshCodexModels(force = false) {
+  if (!force && Date.now() - codexModelsLoadedAt < 6 * 60 * 60 * 1000) return PROVIDERS;
+  codexModelsLoadedAt = Date.now();
+  try {
+    const raw = execFileSync('codex', ['debug', 'models'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const parsed = JSON.parse(raw);
+    const rows = Array.isArray(parsed) ? parsed : (parsed.models || []);
+    const models = rows.filter(m => m.visibility === 'list')
+      .sort((a, b) => (a.priority || 999) - (b.priority || 999))
+      .map(m => ({ id: m.id || m.slug, efforts: (m.supported_reasoning_levels || m.supported_reasoning_efforts || []).map(e => typeof e === 'string' ? e : e.effort) }))
+      .filter(m => m.id && m.efforts.length);
+    if (models.length) PROVIDERS.codex.models = models;
+  } catch { /* 無 Codex CLI／暫時失敗：用最近一次成功值或已驗證快照 */ }
+  return PROVIDERS;
+}
+
+// 允許切到 codex 的 agent（分批導入的第一梯）：純文字進、<result> 出，不碰檔案系統。
+// 為什麼要白名單：claude 端的掃碟守衛是 PreToolUse hook（hooks/scan-guard.js），codex 端要另外
+// 移植；在移植完成並驗證之前，會讀寫 worktree 的 agent 不開放切換。
+const CODEX_ELIGIBLE = new Set([
+  'reject-classifier', 'deploy-fix', 'wiki-drift-classifier', 'chat-to-task', 'workflow-health', 'library'
+]);
+
+// 向後相容：對外仍 export ALLOWED_MODELS（既有 require 有用到）。
+const ALLOWED_MODELS = PROVIDERS.claude.models.map(m => m.id);
+
+function providerModelIds(provider) {
+  if (provider === 'codex') refreshCodexModels();
+  return (PROVIDERS[provider] ? PROVIDERS[provider].models : []).map(m => m.id);
+}
+
+function modelEfforts(provider, model) {
+  if (provider === 'codex') refreshCodexModels();
+  const spec = (PROVIDERS[provider] ? PROVIDERS[provider].models : []).find(m => m.id === model);
+  return spec && spec.efforts ? spec.efforts : null;
+}
 
 // 會實際碰客戶 Odoo repo（讀/寫程式碼、審查 diff）的 agent：CLAUDE.md 的 Odoo 開發規則對它們是唯一真相來源，
 // 呼叫時自動 prepend；其餘 agent（分類器、merge、wiki、chat...）跟 Odoo 開發規範無關，不注入。
@@ -327,6 +393,10 @@ function loadAgent(name) {
     label: meta.label || meta.name || name,
     description: meta.description || '',
     model: meta.model || 'sonnet',
+    // provider 省略時＝claude，既有 agent 檔一律不必改。effort 只有 codex 用得到，
+    // provider 是 claude 時一律不帶——留著會讓人以為調它有作用。
+    provider: meta.provider || DEFAULT_PROVIDER,
+    effort: (meta.provider === 'codex') ? (meta.effort || DEFAULT_EFFORT) : undefined,
     stage: meta.stage || '',
     body,
     render: makeRender(body, CLAUDE_MD_AGENTS.get(meta.name || name) || false, DEBUG_AGENTS.has(meta.name || name), SOURCE_ROUTING_AGENTS.has(meta.name || name), NOTES_AGENTS.has(meta.name || name), CS_CAPABILITY_AGENTS.has(meta.name || name), PLAIN_LANGUAGE_AGENTS.has(meta.name || name), SPEC_LOOKUP_AGENTS.has(meta.name || name), ASKING_WELL_AGENTS.has(meta.name || name), QUESTIONS_CONTRACT_AGENTS.has(meta.name || name), MUST_ASK_AGENTS.has(meta.name || name), FIGMA_AGENTS.has(meta.name || name), VISUAL_VALUES_AGENTS.has(meta.name || name))
@@ -342,9 +412,10 @@ function listNames() {
 }
 
 function listAgents() {
+  refreshCodexModels();
   return listNames().map(name => {
     const a = loadAgent(name);
-    return { name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage };
+    return { name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, provider: a.provider, effort: a.effort, stage: a.stage, codexEligible: CODEX_ELIGIBLE.has(a.name) };
   });
 }
 
@@ -380,19 +451,79 @@ function promptVersion(name) {
   if (PLAIN_LANGUAGE_AGENTS.has(name)) s = `${loadPlainLanguage()}\n\n${s}`;
   if (mode === 'full') s = `${loadPipelineRules()}\n\n${s}`;
   else if (mode === 'qa') s = `${loadQaRules()}\n\n${s}`;
+  // provider 與 model 要進指紋：session id 不跨供應商通用，切換後若指紋不變，護欄會判定「可以續接」，
+  // 拿 claude 的 session id 去 codex resume，每輪白燒一次必定失敗的呼叫。
+  // **effort 刻意不進指紋**：它不改變 prompt 內容、也不會讓 session id 失效，納入只會在調 effort
+  // 時無謂作廢所有 resume session 並掉 prompt cache。
+  s = agent.provider + '|' + agent.model + '|' + s;
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
+}
+
+
+// frontmatter 單欄的寫入／移除。沿用既有 model 那段的作法（正則就地換行，其餘欄位原樣保留），
+// 不用 YAML 序列化——那會重排欄位順序與註解，讓 diff 變成整份 frontmatter 都動過。
+function fmSet(fmBlock, key, value) {
+  const re = new RegExp('^' + key + ':.*$', 'm');
+  return re.test(fmBlock)
+    ? fmBlock.replace(re, key + ': ' + value)
+    : fmBlock.replace(/\r?\n---(\r?\n?)$/, '\n' + key + ': ' + value + '\n---$1');
+}
+
+function fmDelete(fmBlock, key) {
+  return fmBlock.replace(new RegExp('^' + key + ':.*\\r?\\n', 'm'), '');
 }
 
 /**
  * 更新 agent 的 model 與 prompt body，寫回 .md（保留其餘 frontmatter 原樣）。
  * 錯誤以 err.status 標記（404 未知 name / 400 非法 model）。
  */
-function updateAgent(name, { model, prompt } = {}) {
+function updateAgent(name, { model, prompt, provider, effort } = {}) {
   if (!listNames().includes(name)) {
     const e = new Error(`未知的 agent：${name}`); e.status = 404; throw e;
   }
-  if (model != null && !ALLOWED_MODELS.includes(model)) {
-    const e = new Error(`不支援的 model：${model}（僅允許 ${ALLOWED_MODELS.join(' / ')}）`); e.status = 400; throw e;
+  const current = loadAgent(name);
+  const bad = (msg) => { const e = new Error(msg); e.status = 400; throw e; };
+
+  // provider：未指定＝沿用現況。未知 provider 直接擋，不得靜默退回 claude——
+  // 靜默退回會讓拼錯字的 agent 在管理頁顯示 codex、實際卻燒 claude 額度，帳面與事實不符且無訊號。
+  const nextProvider = provider != null ? provider : current.provider;
+  if (!PROVIDERS[nextProvider]) {
+    bad(`不支援的 provider：${provider}（僅允許 ${Object.keys(PROVIDERS).join(' / ')}）`);
+  }
+
+  // model：provider 有換而未一併指定 model 時直接擋，不自動挑一支。
+  // 自動挑等於替使用者做了他沒點的決定，而且在 UI 上看不出來。
+  const providerChanged = nextProvider !== current.provider;
+  if (providerChanged && model == null) {
+    bad(`切換 provider 到 ${nextProvider} 時必須同時指定 model（原 model「${current.model}」不屬於這個 provider）`);
+  }
+  const nextModel = model != null ? model : current.model;
+  const allowed = providerModelIds(nextProvider);
+  if (!allowed.includes(nextModel)) {
+    bad(`provider ${nextProvider} 不支援 model：${nextModel}（僅允許 ${allowed.join(' / ')}）`);
+  }
+
+  if (nextProvider === 'codex') {
+    if (!CODEX_ELIGIBLE.has(name)) {
+      bad(`${name} 尚未開放切換到 codex：claude 端的掃碟守衛是 PreToolUse hook，codex 端要另外移植；` +
+          `在移植完成前，會讀寫工作區的 agent 不開放。`);
+    }
+    // 自我強制的守衛：prompt 若還寫著 Claude Code 專屬的 Skill(...) 呼叫語法，切到 codex 會讓
+    // 那些「載不到 skill 就停下來、severity 給 ok」的 agent 安靜地回報一切正常——不報錯、不重試。
+    // 用檢查取代文件提醒：清單會忘記更新，這個檢查不會。
+    if (/Skill\(/.test(current.body)) {
+      bad(`${name} 的 prompt 仍含 Claude Code 專屬的 Skill(...) 呼叫語法，切到 codex 會靜默失效。` +
+          `請先把該處改成 provider 無關的講法（讀 .agents/skills/<name>/SKILL.md）。`);
+    }
+    // effort 的可選值逐模型不同，必須拿該 model 自己的清單校驗。
+    // 用全域清單會放行 gpt-5.4 + max —— codex 在設定載入階段不校驗這個值，spawn 之後才失敗。
+    const nextEffort = effort != null ? effort : (current.effort || DEFAULT_EFFORT);
+    const efforts = modelEfforts(nextProvider, nextModel) || [];
+    if (!efforts.includes(nextEffort)) {
+      bad(`model ${nextModel} 不支援 effort：${nextEffort}（僅允許 ${efforts.join(' / ')}）`);
+    }
+  } else if (effort != null) {
+    bad(`provider ${nextProvider} 沒有 effort 這個維度，不接受此欄`);
   }
 
   const raw = fs.readFileSync(agentPath(name), 'utf8');
@@ -402,10 +533,15 @@ function updateAgent(name, { model, prompt } = {}) {
   let fmBlock = m[1];
   let body = m[2];
 
-  if (model != null) {
-    fmBlock = /^model:.*$/m.test(fmBlock)
-      ? fmBlock.replace(/^model:.*$/m, `model: ${model}`)
-      : fmBlock.replace(/\r?\n---(\r?\n?)$/, `\nmodel: ${model}\n---$1`);
+  if (model != null) fmBlock = fmSet(fmBlock, 'model', model);
+  if (provider != null) {
+    fmBlock = fmSet(fmBlock, 'provider', nextProvider);
+    // 切回 claude 時把 effort 欄整個拿掉：claude 沒有這個維度，留著會讓人以為調它有用。
+    if (nextProvider !== 'codex') fmBlock = fmDelete(fmBlock, 'effort');
+  }
+  if (nextProvider === 'codex') {
+    const e2 = effort != null ? effort : (current.effort || DEFAULT_EFFORT);
+    fmBlock = fmSet(fmBlock, 'effort', e2);
   }
   if (prompt != null) {
     // 防 UI 編輯改壞輸出契約（健檢 F）：舊 body 有 <result> 則新 prompt 也必須有；舊有的 {{placeholder}} 不得被移除
@@ -426,4 +562,4 @@ function updateAgent(name, { model, prompt } = {}) {
   return loadAgent(name);
 }
 
-module.exports = { loadAgent, listAgents, listNames, getLabels, agentPath, invalidate, updateAgent, promptVersion, AGENTS_DIR, ALLOWED_MODELS };
+module.exports = { loadAgent, listAgents, listNames, getLabels, agentPath, invalidate, updateAgent, promptVersion, AGENTS_DIR, ALLOWED_MODELS, PROVIDERS, CODEX_ELIGIBLE, DEFAULT_PROVIDER, DEFAULT_EFFORT, providerModelIds, modelEfforts, refreshCodexModels };

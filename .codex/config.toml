@@ -1,0 +1,14 @@
+approval_policy = "never"
+developer_instructions = "請一律以繁體中文（臺灣）回覆，除非使用者明確要求其他語言。"
+
+[mcp_servers.shadcn]
+command = "npx"
+args = [
+    "shadcn@latest",
+    "mcp",
+]
+
+[mcp_servers.firecrawl]
+command = "npx"
+args = ["-y", "firecrawl-mcp"]
+env_vars = ["FIRECRAWL_API_KEY"]

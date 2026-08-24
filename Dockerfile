@@ -73,11 +73,9 @@ RUN mkdir -p /home/odoo/.claude && chown odoo:odoo /home/odoo/.claude
 
 USER odoo
 
-# uv/uvx（serena MCP 用）。裝在使用者家目錄，故須在 USER 切換之後。
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/home/odoo/.local/bin:/home/odoo/.cargo/bin:${PATH}"
 
-# rtk（token 節流 CLI proxy，見 ~/.claude/RTK.md）。install.sh 亦裝進 ~/.local/bin，故與 uv 同放在
+# rtk（token 節流 CLI proxy，見 ~/.claude/RTK.md）。install.sh 亦裝進 ~/.local/bin，故放在
 # USER 切換之後。僅烘 binary，hook（rtk init -g）不在此啟用——那會改 Claude Code settings，另行決定。
 RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
 

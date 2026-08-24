@@ -16,7 +16,8 @@ description: Use when pushing this platform repo (odoo-v2) or any per-user PAT r
 ```bash
 node .claude/skills/pushRepo/push.js [--repo <path>] [--branch <name>] [--remote origin] [--user <id>]
 ```
-預設：`repo=$APP_DIR` 或 `/home/odoo/odoo-v2`；`branch`=當前；`remote=origin`；`user=2`（kingsmvp2）。
+預設：`repo=$APP_DIR` 或 `/home/odoo/odoo-v2`；`branch`=當前；`remote=origin`。
+`--user` 未帶時取管理頁「CLI 推送身分」（`teams_settings.cli_push_user_id`，設定頁可選）；那也沒設就列出可用帳號並中止——**刻意不猜 id**：本機與正式機各有各的 users 表，寫死任何一個數字都會在另一邊指到不存在的人。
 `DATABASE_URL`／`APP_SECRET` 依序取自 `env → <repo>/data/config.json → 平台 server 進程`。
 
 落 exit code 別經管線（此 repo 已因此誤判過）：
@@ -25,10 +26,10 @@ node .claude/skills/pushRepo/push.js > out 2>&1; echo "EXIT=$?" >> out
 ```
 
 ## Notes
-- **只 push，不 commit**。commit 走一般 `git commit`（git user 已是 Claude Code）。
+- **只 push，不 commit**。commit 走一般 `git commit`。
 - **commit 前逐檔挑選、禁 `git add -A`**——此 repo 常態多股平行工作，盲目 add 會夾帶別人未完成的變更。
 - push 前若在非預期分支，先確認：平台主 clone 常駐 `testing`，切分支後要切回。
 
 ## Common Mistakes
 - 缺 `DATABASE_URL` → `no PostgreSQL user name`：`--repo` 沒指到含 `data/config.json` 的 repo，且平台 server 沒在跑。
-- 使用者無 PAT → `NoGitCredentialError`：該 `--user` 的 `users.github_pat_enc` 是空的。
+- 使用者無 PAT → `NoGitCredentialError`：該 `--user` 的 `users.github_pat_enc` 是空的。**這個 id 根本不存在時也是同一句話**——不確定就別帶 `--user`，讓它把可用帳號列出來。

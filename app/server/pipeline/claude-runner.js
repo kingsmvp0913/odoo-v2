@@ -17,7 +17,6 @@ const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
 // 抓 Odoo core（實測 spec_tour 一輪 38 次工具呼叫裡 7 次 WebSearch＋7 次 WebFetch＋3 次 ToolSearch 找不到 context7，
 // 跑滿逾時零產出）。prompt 裡「走 context7 查證、不要掃碟找核心原始碼」這種禁令，缺了這張表就是只禁不給
 // （rules/agent-prompt 107）——凡 prompt 提到 context7 的關卡都必須在此登記，agent-loader.test.js 有守衛。
-// 實測 serena 即使在場也不被用（Grep/Read 已覆蓋 repo 內 symbol 查詢），故全 pipeline 不掛 serena，省下冷啟動 indexing 與空找 schema。
 const MCP_PROFILES = {
   analysis: 'context7.json', coding: 'context7.json',
   spec_tour: 'context7.json', qa: 'context7.json',
@@ -159,7 +158,7 @@ function runClaude(prompt, opts = {}) {
     // 不採用的理由：它把那些資訊降格到 user message，而 user message 會被 auto-compact 壓縮、
     // system prompt 不會——長 coding session 中途的注意力衰減無法用短測驗證。
     // 依 rules/always.md 第 10 條「穩定 > 準確 > 省 token」，1.2% 不值得換一個排除不掉的準確率風險。
-    // 每關只載入指定的 MCP，剝掉繼承的 serena 等（見 MCP_PROFILES）
+    // 每關只載入指定的 MCP，剝掉使用者層繼承來的其他 server（見 MCP_PROFILES）
     args.push('--strict-mcp-config', '--mcp-config', mcpConfigPath(agentType));
     // 每關都掛掃碟守衛：攔全域 find／遞迴廣掃，避免滾成全碟掃描逾時（見 scanGuardSettingsPath）
     args.push('--settings', scanGuardSettingsPath());

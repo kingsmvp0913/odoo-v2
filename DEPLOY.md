@@ -12,7 +12,6 @@
 | Git | clone/worktree/merge Odoo 原始碼 | https://git-scm.com/downloads |
 | Python 3 | Odoo venv | https://www.python.org/downloads/ |
 | Google Chrome | tour E2E 測試 | https://www.google.com/chrome/ |
-| uv / uvx | 啟動 serena MCP | https://astral.sh/uv/install |
 | PostgreSQL（含 psql） | App 與 Odoo 共用資料庫 | https://www.postgresql.org/download/ |
 | xmllint（libxml2） | XML view 格式驗證（`xmllint --noout`） | Linux 由 `install.sh` 自動裝 `libxml2-utils`；Windows 選用 |
 

@@ -103,6 +103,9 @@ test('runClaude 逾時 → kill 子行程樹並以逾時錯誤 reject', async ()
   child.kill = jest.fn(() => { setImmediate(() => child.emit('close', 143)); });
   child.unref = () => {};
   spawn.mockReturnValue(child);
+  // 上一條逾時測試（pid 4243）也會打一次 taskkill，而 spawn 的呼叫紀錄是跨測試累積的。
+  // 不清掉的話下面的 find 會撈到那一次，斷言就變成在驗別人的 pid。
+  spawn.mockClear();
 
   const { runClaude } = require('../pipeline/claude-runner');
   await expect(runClaude('p', { timeoutMs: 30 })).rejects.toThrow(/逾時/);

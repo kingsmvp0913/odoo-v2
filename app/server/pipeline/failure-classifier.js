@@ -8,7 +8,7 @@
  * 反轉舉證：只有「明確是開發者寫錯」才判 code 退 coding；env/transient 或任何模糊 → 丟人工。
  * timeout 由呼叫端先攔（不進此分類）。
  */
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage } = require('./token-logger');
 const { AUTH_FAIL } = require('./auth-signature');
@@ -90,7 +90,7 @@ async function classifyFailureWithAgent(text, opts = {}) {
   let verdict = 'env', agentOk = false;
   try {
     const agent = loadAgent('deploy-fix');
-    const { text: out, usage, durationMs } = await runClaude(agent.render({ error_text: errText }), { model: agent.model, agentType: 'deploy_fix' });
+    const { text: out, usage, durationMs } = await runAgent(agent.render({ error_text: errText }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'deploy_fix' });
     // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
     if (opts.taskId || opts.projectId) {
       await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);

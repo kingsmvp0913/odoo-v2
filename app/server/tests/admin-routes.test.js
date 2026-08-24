@@ -260,3 +260,97 @@ test('POST /api/admin/embedding/rebuild → 非 admin 403', async () => {
     .set('Authorization', `Bearer ${userToken}`).send({});
   expect(res.status).toBe(403);
 });
+
+// --- CLI 推送身分（teams_settings.cli_push_user_id）---
+// 意圖（Rule 9）：這個設定只服務「人在終端機跑 pushRepo/push.js 且沒帶 --user」。
+// 原本 push.js 寫死預設 user=2，而本機與正式機的 users 表各自獨立——寫死的數字在另一邊
+// 指到不存在的人，拿到的卻是 NoGitCredentialError（讀起來像「這個人沒設 PAT」），真因
+// 指不出來。所以存的當下就要擋：id 不存在、或該人沒 PAT，都不准存進去。
+describe('PUT /api/admin/cli-push-user', () => {
+  test('id 不存在 → 400，不寫進設定', async () => {
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: 99999 });
+    expect(res.status).toBe(400);
+    const { rows } = await dbModule.query('SELECT cli_push_user_id FROM teams_settings WHERE id = 1');
+    expect(rows[0] && rows[0].cli_push_user_id).toBeFalsy();
+  });
+
+  test('該使用者沒有 PAT → 400（否則失敗會延到 push 當下）', async () => {
+    const { rows } = await dbModule.query("SELECT id FROM users WHERE username = 'regular'");
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: rows[0].id });
+    expect(res.status).toBe(400);
+  });
+
+  test('有 PAT 的使用者 → 存得起來且從 teams-settings 讀得回', async () => {
+    const { rows } = await dbModule.query("SELECT id FROM users WHERE username = 'regular'");
+    const uid = rows[0].id;
+    await dbModule.query("UPDATE users SET github_pat_enc = 'enc-blob' WHERE id = $1", [uid]);
+
+    const put = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: uid });
+    expect(put.status).toBe(200);
+
+    // 讀得回才有意義——下拉是靠 GET teams-settings 回填當前選擇的
+    const get = await request(app).get('/api/admin/teams-settings')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(get.body.cli_push_user_id).toBe(uid);
+  });
+
+  test('送 null → 清成未設定（push.js 會改為列出可用帳號）', async () => {
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: null });
+    expect(res.status).toBe(200);
+    const { rows } = await dbModule.query('SELECT cli_push_user_id FROM teams_settings WHERE id = 1');
+    expect(rows[0].cli_push_user_id).toBeNull();
+  });
+
+  test('非 admin → 403', async () => {
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${userToken}`).send({ cli_push_user_id: null });
+    expect(res.status).toBe(403);
+  });
+});
+
+// 意圖：下拉要標出「誰選了會失敗」，靠的是 users 列表的 has_pat。這欄只能是布林——
+// 同一支端點若把 github_pat_enc 一起吐出去，PAT 密文就外洩到前端了。
+test('GET /api/admin/users → 有 has_pat 布林，且不含 PAT 密文', async () => {
+  const res = await request(app).get('/api/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.length).toBeGreaterThan(0);
+  for (const u of res.body) {
+    expect(typeof u.has_pat).toBe('boolean');
+    expect(u.github_pat_enc).toBeUndefined();
+  }
+});
+
+// GET /api/admin/providers —— 供前端取供應商／模型／effort 清單。
+// 意圖：前端原本硬寫一份 models 陣列，與後端白名單是雙來源。這一組鎖的是「單一來源」與
+// 「efforts 必須逐模型附著」——回傳扁平的全域 effort 清單，UI 就會給出後端一定會擋掉的組合。
+test('GET /api/admin/providers → 403 for non-admin', async () => {
+  const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + userToken);
+  expect(res.status).toBe(403);
+});
+
+test('GET /api/admin/providers → 兩家供應商，claude 無 effort 維度', async () => {
+  const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + adminToken);
+  expect(res.status).toBe(200);
+  expect(Object.keys(res.body).sort()).toEqual(['claude', 'codex']);
+  expect(res.body.claude.models.map(m => m.id)).toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+  // claude 沒有 effort 這個維度：前端據此決定第三段下拉整個隱藏（而不是留一個永遠灰掉的）
+  expect(res.body.claude.models.every(m => m.efforts === undefined)).toBe(true);
+});
+
+test('GET /api/admin/providers → codex 的 efforts 逐模型不同，且不含 codex-auto-review', async () => {
+  const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + adminToken);
+  const byId = Object.fromEntries(res.body.codex.models.map(m => [m.id, m.efforts]));
+
+  // 這是本組最關鍵的斷言：若回傳的是同一份全域清單，前端會讓使用者選到 gpt-5.4 + max，
+  // 而 codex 在設定載入階段不校驗 effort，要 spawn 之後才失敗。
+  expect(byId['gpt-5.6-terra']).toContain('max');
+  expect(byId['gpt-5.4']).not.toContain('max');
+
+  // codex-auto-review 是 visibility: hide（codex review 專用），不得出現在使用者可選清單
+  expect(Object.keys(byId)).not.toContain('codex-auto-review');
+});

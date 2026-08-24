@@ -639,6 +639,7 @@ async function migrate() {
     // 未設定則走匿名額度（依 IP 計），配額用盡時 MCP 不報錯、只回一段 quota 訊息，
     // 各關於是靜默改用 WebSearch 抓 Odoo 原始碼（2026-08-11 實測）
     { table: 'teams_settings', col: 'context7_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN context7_api_key_enc TEXT' },
+    { table: 'teams_settings', col: 'openai_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN openai_api_key_enc TEXT' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },
@@ -725,6 +726,10 @@ async function migrate() {
     // 這一輪是續用上輪 session（true）還是全量重讀（false）。刻意可為 NULL＝「沒有 resume 概念或還沒接」，
     // 與 false 分開：混成 false 會讓「fresh 佔比」這個判讀準確率的統計從一開始就是錯的。目前只有 qa 填。
     { table: 'token_usage', col: 'resumed', sql: 'ALTER TABLE token_usage ADD COLUMN resumed BOOLEAN' },
+    // provider：NULL 代表 claude（本欄上線前的既有列一律是 claude），不設 DEFAULT 以免誤導成
+    // 「這些列被明確標記過」。計價需要它——lib/token-cost.js 原本只看 model 字串，codex 的
+    // model 名會全數落到 ELSE 分支被當 sonnet 計，而且不會報錯。
+    { table: 'token_usage', col: 'provider', sql: 'ALTER TABLE token_usage ADD COLUMN provider TEXT' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
     { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },
@@ -750,6 +755,10 @@ async function migrate() {
     // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
     { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },
+    // 人在終端機手動跑 scripts/../pushRepo/push.js 時，沒帶 --user 要用誰的 PAT。
+    // 平台自己的推送不看這欄（push-ai／runner／merge-agent／finding-fix 都帶任務的 user_id），
+    // 只服務互動式 CLI。NULL＝未設定，push.js 會列出可用 user 而不是猜一個。
+    { table: 'teams_settings', col: 'cli_push_user_id', sql: 'ALTER TABLE teams_settings ADD COLUMN cli_push_user_id INTEGER' },
     // 企業版：預設 community，既有專案升級後行為不變（不會突然要求 enterprise 來源）
     { table: 'projects', col: 'edition', sql: "ALTER TABLE projects ADD COLUMN edition TEXT NOT NULL DEFAULT 'community'" },
     // 企業版來源型態：'git'（clone 遠端 repo）或 'local'（管理員自行把 addons 放進共用目錄）。
