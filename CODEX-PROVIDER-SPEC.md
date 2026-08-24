@@ -3,7 +3,7 @@
 > 狀態：**規格草案，尚未實作**。本文件只描述「要做什麼、為什麼、怎麼驗」，不含程式碼變更。
 > 目標分支：`claude/codex-workflow-integration-jeer01`
 >
-> **2026-08-24 實測校正**（分支 `claude/codex-env-repair`）：以 **codex-cli 0.149.1** 在平台主機實跑，校正 §3.1／§3.2，改寫 §5.5（scan-guard 從「無對等物」改為「可移植，已實測擋得住」），新增 §5.8～§5.10，更新 §6.3／§6.5／§9／§10。
+> **2026-08-24 實測校正**（分支 `claude/codex-env-repair`）：以 **codex-cli 0.149.1** 在平台主機實跑，**§9 的 7 題全部有答案**。校正 §3.1／§3.2，改寫 §5.5（scan-guard 從「無對等物」改為「可移植，已實測擋得住」），新增 §5.8～§5.10，更新 §4／§6.3／§6.5／§7／§8／§9／§10。
 > **標示「實測」的結論有實跑依據；未標示的仍是推斷，不要當成已驗證。**
 
 ---
@@ -208,7 +208,8 @@ codex 專屬：
 - **stderr 必須一起收**：工具執行失敗只出現在 stderr，不進事件流（§5.9）。不收的話工具全掛的那一輪在平台上看起來是成功的。
 - **逾時要涵蓋 codex 自己的重試**：認證失敗時 codex 會 `Reconnecting... N/5` 重試五次（先 `wss://` 後退 `https://`），實測約 12 秒才放棄。
 - **推理強度**：`opts.effort` 存在時附 `-c model_reasoning_effort="<effort>"`。值的合法性由 `updateAgent()` 把關（§4.2）——codex 端不擋，傳錯不會在設定階段報錯。
-- **sandbox**：原訂「`opts.cwd` 存在時用 `--sandbox workspace-write`，否則 `--sandbox read-only`」。⚠ **`--sandbox read-only` 在平台主機（Windows）實測連工具都 spawn 不起來**（§9 第 6 題，疑似 Defender 未加排除項）。在該題解決前只能用 `--dangerously-bypass-approvals-and-sandbox`，防線改由 scan-guard hook 承擔（§5.5）。
+- **sandbox**：原訂「`opts.cwd` 存在時用 `--sandbox workspace-write`，否則 `--sandbox read-only`」**維持有效**——兩種模式實測都正常，且行為符合預期（見 §9 第 6 題的矩陣）。但要知道 **sandbox 只管寫、不管讀**，擋不住 `find /`，掃碟防線只能靠 scan-guard hook（§5.5）。
+- ⚠ **Windows 上的 shell 陷阱**：sandbox 起不了 **Store 包裝版**的 PowerShell（`C:\Program Files\WindowsApps\...\pwsh.exe`），錯誤是 `CreateProcessAsUserW failed: 5`——restricted token 進不去 WindowsApps 的 ACL。同一個 sandbox 起 `C:\Windows\System32\WindowsPowerShell1.0\powershell.exe` 或 `cmd.exe` 完全正常。<br>**症狀極具誤導性**：工具全部 spawn 失敗，但 exit code 是 0、事件流乾淨（§5.9），看起來像 agent 自己決定不用工具。<br>處置未定，兩個候選：① 在平台主機裝**非 Store 版**的 PowerShell 7（`C:\Program Files\PowerShell\pwsh.exe`，本機目前**沒有**）；② 由 `codex-runner.js` 控制子行程的 PATH，讓非 Store 版排在前面。**兩者都還沒驗證有效**，實作前要先確認 codex 是怎麼挑 shell 的（`shell_type`／`shell`／`windows_shell` 都不是合法設定鍵，已排除）。
 - **hook**：無人值守需 `--dangerously-bypass-hook-trust`，否則專案層 `.codex/hooks.json` 不會執行。
 
 ### 5.2 `pipeline/agent-runner.js`（新增）
@@ -289,7 +290,7 @@ session id 不跨供應商通用。以下兩件事都會產生「不報錯、但
 - ⚠ **hook 自己壞掉是 fail-open 且靜默**。實測放一支語法錯誤的 hook：codex 直接放行執行指令，事件流沒有任何訊息、exit code 仍是 0。因此 scan-guard 移植後**不能假設「hook 檔存在＝守衛生效」**，要有可觀測的證明（例如 hook 每次執行都留一筆記錄，或在 codex-runner 啟動時先跑一次自我測試）。
 - 無人值守下需要 `--dangerously-bypass-hook-trust`，否則未經人工信任的 hook 不會執行。
 
-**本期處置**：`CODEX_ELIGIBLE` 白名單照做（批次一那幾支本來就不碰檔案系統）。但**批次三（qa）的閘門改變了**——原本綁在「sandbox 能不能擋 workspace 外的讀取」（§9 第 6 題，目前測不到），現在改綁「scan-guard 移植後能不能擋住 `find /`」，而後者已實測可行。qa 不必再等 sandbox 那題。
+**本期處置**：`CODEX_ELIGIBLE` 白名單照做（批次一那幾支本來就不碰檔案系統）。**批次三（qa）的閘門改綁「scan-guard 移植後能不能擋住 `find /`」**，而後者已實測可行。原本寄望的「sandbox 或許擋得更硬」已被 §9 第 6 題否決——**sandbox 只管寫、不管讀**，對掃碟完全沒有幫助。scan-guard 是唯一的解，不是備案。
 
 ### 5.6 用量閘門不隨 provider 分流（**明確的範圍外，但要知道**）
 
@@ -394,7 +395,9 @@ codex 沒有 `Skill()` 這個工具呼叫語法，這三支會**照 prompt 的�
 
 > ⚠ **前置**：`workflow-health` 帶 `Skill(healthCheck)` 硬呼叫且寫著「載不到就停下來、severity 給 ok」（§5.10）。**該支 prompt 措辭沒改完之前不得切 codex**，否則它會安靜地回報「一切正常」。
 >
-> ⚠ **`--sandbox read-only` 在平台主機（Windows 11）跑不起來**：工具全部 spawn 失敗（`CreateProcessAsUserW: 5`），詳見 §9 第 6 題。本批目前只能用 `--dangerously-bypass-approvals-and-sandbox`。這幾支不碰檔案系統，實際風險不變，但「用 read-only 當防線」這個說法不成立。
+> ⚠ **`--sandbox read-only` 本身可用**（§9 第 6 題實測），但它**只擋寫、不擋讀**——「用 read-only 當防線」若指的是防掃碟，那個說法不成立；防掃碟只能靠 scan-guard hook（§5.5）。這幾支不碰檔案系統，實際風險不變。
+>
+> ⚠ **Windows shell 陷阱**：sandbox 起不了 Store 版 pwsh，且失敗時 exit 0、事件流乾淨（§5.1 最後一條）。本批上線前必須確認平台主機用的是哪一支 shell，否則會看到「agent 都不用工具」這種假象。
 
 | agent | stage |
 |---|---|
@@ -435,7 +438,7 @@ codex 沒有 `Skill()` 這個工具呼叫語法，這三支會**照 prompt 的�
 1. `scan-guard.js` 移植到 codex 的 hook 形式，並實測擋得住 `find /`。
 2. 解決 §5.5 的 fail-open 問題——hook 壞掉時 codex 靜默放行，必須有「守衛確實生效」的可觀測證明。
 
-sandbox 那題（§9 第 6 題）降級為**加分項**：能用的話多一層 OS 級防線，但不再是 qa 的閘門。
+sandbox 那題（§9 第 6 題）**已實測，對本議題沒有幫助**：`read-only` 與 `workspace-write` 都**不限制 workspace 外的讀取**，只擋寫入。它仍值得開（多一層防寫的 OS 級防線），但**擋不住掃碟**，不能算 qa 的防線之一。
 
 qa 是本案「分開監督」價值最高的一支（審的正是 claude 寫的 code），值得為它優先解這一題。
 
@@ -531,14 +534,14 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 | 4 | 事件是否回報 resolved model id | **否**，事件流沒有這個欄位 → 成本歸屬一律用 `opts.model`。 |
 | 5 | codex 認證失敗的原始字面 | **已取得**（測法：把 `CODEX_HOME` 指到一個空目錄跑一次，**不必動到真的 `auth.json`**）。字面：<br>`unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses`<br>`auth-signature.js` 建議比對 `401 Unauthorized` 與 `Missing bearer or basic authentication`。<br>**行為與 claude 不同的三點**：<br>① 認證失敗**會**進事件流（`{"type":"error"}`），不像工具失敗只在 stderr；<br>② codex 會自己重試 **5 次**（`Reconnecting... N/5`，先 `wss://` 後退回 `https://`）才放棄——一次認證失敗會空燒約 12 秒與 11 則 error 事件，逾時設定要涵蓋；<br>③ 收尾事件是 **`turn.failed`**（帶 `error.message`），**不是** `turn.completed`——`turn.failed` **沒有 `usage` 欄位**，token 記帳必須容許這種情形，否則會拋錯或記成 0。exit code 為 1。 |
 
-### 未解答（第 6、7 題）
+### 已解答（第 6、7 題，2026-08-24 補測）
 
 | # | 題目 | 現況與測法 |
 |---|---|---|
-| 6 | sandbox 是否限制 workspace 外的讀取 | **測不到**：`--sandbox read-only` 在本機連工具都 spawn 不起來（`CreateProcessAsUserW: 5 存取被拒`）。但 `codex doctor` 顯示 `sandbox provisioning complete`，同時警告 **Microsoft Defender 未加 Codex 排除項**——所以這很可能是 Defender/ASR 擋的，不是 codex 在 Windows 上沒有 sandbox。**先加排除項再測，不得據現況下結論。** 已由 §6.5 降級為加分項（qa 的閘門改走 scan-guard 移植）。 |
-| 7 | `--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥 | 未直接測；bypass 單獨可用。§6.3 既已改用 bypass，本題優先度下降。 |
+| 6 | sandbox 是否限制 workspace 外的讀取 | **否，兩種模式都不擋讀取。** 用 `codex sandbox`（不打 API）跑探針批次檔實測：<br><br>操作 / `read-only` / `workspace-write`：<br>讀 workspace 外的檔 → OK / OK<br>列 workspace 外的目錄 → OK / OK<br>寫 workspace 外 → DENIED / DENIED<br>寫 workspace 內 → DENIED / **OK**<br><br>（基準組：不套 sandbox 時四項全 OK，確認探針有效。）<br><br>**結論：sandbox 只管寫、不管讀，`find /` 不會被它擋住。** §5.5 的掃碟守衛缺口確實成立，sandbox 補不上——§6.5 把 qa 的閘門改綁 scan-guard 移植是對的，那條是唯一的解。 |
+| 7 | `--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥 | **參數解析階段不互斥**（兩個一起下不報錯）。依說明文件語意 bypass 應該勝出，但**哪個實際生效未驗證**——不要同時下這兩個旗標，避免依賴未驗證的優先順序。 |
 
-### 新增待決：codex 的 reasoning effort 維度（**規格沒設想到**）
+### 新增並已裁決：codex 的 reasoning effort 維度（**原草案沒設想到**）
 
 `codex debug models` 顯示每支模型另有一組 `supported_reasoning_levels`，而且**各模型不同**：
 
@@ -585,3 +588,6 @@ claude 端沒有這個維度（`haiku`／`sonnet`／`opus`／`fable` 就是全�
 | **`Skill(...)` 硬呼叫** | `workflow-health`（批次一）等三支寫著「載不到 skill 就回報 severity=ok」，切 codex 後會安靜地回報「一切正常」 | §5.10：6 支 agent 改 prompt 措辭；改完記得跑 `node scripts/sync-skills.js` |
 | **hook fail-open** | scan-guard 移植後，hook 腳本自己壞掉會讓 codex 靜默放行、事件流無訊息 | §5.5：需要「守衛確實生效」的可觀測證明，不能只看 hook 檔在不在 |
 | model 清單用猜的 | `PROVIDERS.codex.models` 填錯 → 使用者在管理頁選到不存在的模型，spawn 才失敗 | §9 第 1 題：先跑 `codex debug models` |
+| **Windows 的 Store 版 pwsh** | sandbox 起不了 WindowsApps 底下的 pwsh（`CreateProcessAsUserW: 5`）→ **工具全部 spawn 失敗，但 exit 0、事件流乾淨**，看起來像 agent 自己決定不用工具 | §5.1 最後一條：上線前確認平台主機實際用哪支 shell；兩個候選解都還沒驗證 |
+| **誤以為 sandbox 擋得住掃碟** | `read-only`／`workspace-write` 都**只擋寫、不擋讀**，`find /` 照跑 | §9 第 6 題已實測否決；掃碟只能靠 scan-guard hook（§5.5） |
+| effort 用全域清單校驗 | 放行 `gpt-5.4` + `max` 這種必定 spawn 失敗的組合；codex 設定載入階段**不校驗** effort 值 | §4.2：逐模型校驗，`updateAgent()` 是唯一防線 |
