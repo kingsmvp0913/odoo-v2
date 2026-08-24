@@ -19,6 +19,8 @@ const AUTH_FAIL = [
   /\bauthentication_error\b/i,
   /API Error:? 401\b/,
   /OAuth token (?:has )?expired/i,
+  /401 Unauthorized/i,
+  /Missing bearer or basic authentication/i,
 ];
 
 function looksLikeAuthFailure(text) {

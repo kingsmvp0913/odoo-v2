@@ -10,7 +10,7 @@ stage: platform_fix
 
 ## 先讀開發慣例（強制）
 
-**動手之前先呼叫 `Skill(platformDev)`**：測試怎麼跑、後端與前端的結構、配色與深色模式的硬規則，全在那裡。載不到就照現有程式碼的風格走，不要自創。
+**動手之前先載入 platformDev 判準**：文件在 `.agents/skills/platformDev/SKILL.md`（Claude Code 為 `.claude/skills/platformDev/SKILL.md`），測試怎麼跑、後端與前端的結構、配色與深色模式的硬規則全在那裡。載不到就照現有程式碼的風格走，不要自創。
 
 ## 這次要修的（來自系統健檢的提案）
 

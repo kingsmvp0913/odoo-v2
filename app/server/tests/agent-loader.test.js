@@ -891,3 +891,133 @@ describe('MCP_PROFILES 覆蓋所有 agent stage', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// provider / effort（pipeline agent 可選 AI 供應商）
+//
+// 意圖：這一組鎖的不是「欄位存不存在」，而是四種**靜默**失效——每一種都不會報錯、
+// 測試不寫就永遠沒有訊號：
+//   1. 未知 provider 若靜默退回 claude → 管理頁顯示 codex、實際燒 claude 額度。
+//   2. effort 用全域清單校驗 → 放行 gpt-5.4+max，codex 在設定載入階段不擋，spawn 才失敗。
+//   3. promptVersion 不含 provider → 切換後護欄以為可續接，拿 claude 的 session 去 codex resume。
+//   4. prompt 還寫著 Skill(...) 就切 codex → 那幾支會照指示回報「一切正常」。
+// ---------------------------------------------------------------------------
+
+describe('provider / effort', () => {
+  const ELIGIBLE = 'reject-classifier';   // 在 CODEX_ELIGIBLE 內、prompt 無 Skill(
+  let original;
+  beforeAll(() => { original = fs.readFileSync(L.agentPath(ELIGIBLE), 'utf8'); });
+  afterAll(() => { fs.writeFileSync(L.agentPath(ELIGIBLE), original); L.invalidate(ELIGIBLE); });
+
+  const expect400 = (fn) => {
+    try { fn(); throw new Error('應該要被擋下卻通過了'); }
+    catch (e) { expect(e.status).toBe(400); return e.message; }
+  };
+
+  test('未指定 provider 的既有 agent＝claude，且不帶 effort', () => {
+    const a = L.loadAgent('qa');
+    expect(a.provider).toBe('claude');
+    expect(a.effort).toBeUndefined();   // claude 沒有這個維度，帶了會讓人以為調它有用
+  });
+
+  test('未知 provider 直接擋，不得靜默退回 claude', () => {
+    const msg = expect400(() => L.updateAgent(ELIGIBLE, { provider: 'gemini' }));
+    // 必須斷言是「provider 這道守衛」擋的。只驗 status 400 是假綠：拿掉這道檢查後，
+    // 下一道「model 不屬於該 provider」照樣丟 400、訊息也含 gemini，測試會因為錯的理由通過。
+    expect(msg).toContain('不支援的 provider');
+    expect(msg).toContain('gemini');
+  });
+
+  test('換 provider 未一併給 model 就擋（不替使用者自動挑一支）', () => {
+    expect400(() => L.updateAgent(ELIGIBLE, { provider: 'codex' }));
+  });
+
+  test('model 不屬於該 provider 就擋', () => {
+    expect400(() => L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'sonnet' }));
+  });
+
+  test('effort 逐模型校驗：gpt-5.4 不支援 max（用全域清單會放行）', () => {
+    // gpt-5.6-terra 有 max，gpt-5.4 只到 xhigh。這一條是本組最關鍵的斷言：
+    // codex 在設定載入階段不校驗 effort 值，平台這裡是唯一防線。
+    expect(L.modelEfforts('codex', 'gpt-5.6-terra')).toContain('max');
+    expect(L.modelEfforts('codex', 'gpt-5.4')).not.toContain('max');
+    const msg = expect400(() => L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'gpt-5.4', effort: 'max' }));
+    expect(msg).toContain('max');
+  });
+
+  test('不在 CODEX_ELIGIBLE 的 agent 不得切 codex（掃碟守衛尚未移植）', () => {
+    expect(L.CODEX_ELIGIBLE.has('qa')).toBe(false);
+    expect400(() => L.updateAgent('qa', { provider: 'codex', model: 'gpt-5.6-terra' }));
+  });
+
+  test('批次一的 workflow-health 已改成 provider 無關的 skill 載入措辭', () => {
+    // Codex 會自動發現 .agents/skills；Skill(...) 是 Claude 專屬語法，留下會讓它安靜地放棄診斷。
+    expect(L.CODEX_ELIGIBLE.has('workflow-health')).toBe(true);
+    expect(L.loadAgent('workflow-health').body).not.toContain('Skill(');
+  });
+
+  test('provider 為 claude 時不接受 effort', () => {
+    expect400(() => L.updateAgent(ELIGIBLE, { effort: 'high' }));
+  });
+
+  test('切 codex 寫入三欄；切回 claude 會移除 effort 欄', () => {
+    const on = L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'gpt-5.6-terra', effort: 'high' });
+    expect(on.provider).toBe('codex');
+    expect(on.model).toBe('gpt-5.6-terra');
+    expect(on.effort).toBe('high');
+    expect(fs.readFileSync(L.agentPath(ELIGIBLE), 'utf8')).toMatch(/^effort: high$/m);
+
+    const off = L.updateAgent(ELIGIBLE, { provider: 'claude', model: 'haiku' });
+    expect(off.provider).toBe('claude');
+    expect(off.effort).toBeUndefined();
+    // 欄位要真的從檔案消失，不是只在物件上不見——留著下次切回 codex 會沿用一個沒人選過的值
+    expect(fs.readFileSync(L.agentPath(ELIGIBLE), 'utf8')).not.toMatch(/^effort:/m);
+  });
+
+  test('promptVersion：provider 與 model 會變動指紋，effort 不會', () => {
+    L.updateAgent(ELIGIBLE, { provider: 'claude', model: 'haiku' });
+    const base = L.promptVersion(ELIGIBLE);
+
+    // 換 model → 必須變（同一 provider 內換模型也不該續用同一 session 的判斷基礎）
+    L.updateAgent(ELIGIBLE, { model: 'sonnet' });
+    expect(L.promptVersion(ELIGIBLE)).not.toBe(base);
+
+    // 換 provider → 必須變。不變的話護欄會判定可續接，拿 claude 的 session id 去 codex resume，
+    // 每輪白燒一次必定失敗的呼叫。
+    L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'gpt-5.6-terra', effort: 'low' });
+    const codexVer = L.promptVersion(ELIGIBLE);
+    expect(codexVer).not.toBe(base);
+
+    // 只換 effort → **必須不變**。effort 不改變 prompt、也不會讓 session id 失效；
+    // 納入指紋只會在調 effort 時無謂作廢所有 resume session 並掉 prompt cache。
+    L.updateAgent(ELIGIBLE, { effort: 'high' });
+    expect(L.loadAgent(ELIGIBLE).effort).toBe('high');
+    expect(L.promptVersion(ELIGIBLE)).toBe(codexVer);
+  });
+
+  test('promptVersion：provider 單獨變動也要改指紋（model 固定）', () => {
+    // 為什麼要特地寫這一支：兩家的模型名不重疊，走 updateAgent 就不可能「只換 provider」，
+    // 上一支測試切 provider 時 model 也跟著換了，**測不出 provider 對指紋的貢獻**。
+    // 這裡直接寫 frontmatter 繞過校驗，才問得到「hash 有沒有把 provider 算進去」。
+    // 不這樣測的話，把 provider 從 hash 材料裡拿掉，整組測試依然全綠。
+    const raw = fs.readFileSync(L.agentPath(ELIGIBLE), 'utf8');
+    const withModelOnly = raw.replace(/^provider:.*\r?\n/m, '').replace(/^effort:.*\r?\n/m, '');
+
+    fs.writeFileSync(L.agentPath(ELIGIBLE), withModelOnly.replace(/^model:.*$/m, 'model: X-SAME'));
+    L.invalidate(ELIGIBLE);
+    const asClaude = L.promptVersion(ELIGIBLE);
+
+    fs.writeFileSync(L.agentPath(ELIGIBLE),
+      withModelOnly.replace(/^model:.*$/m, 'model: X-SAME\nprovider: codex'));
+    L.invalidate(ELIGIBLE);
+    const asCodex = L.promptVersion(ELIGIBLE);
+
+    expect(L.loadAgent(ELIGIBLE).model).toBe('X-SAME');   // 同一個 model
+    expect(asCodex).not.toBe(asClaude);                    // 只有 provider 不同 → 指紋必須不同
+  });
+
+  test('PROVIDERS 不含 codex-auto-review（visibility: hide，codex review 專用）', () => {
+    expect(L.providerModelIds('codex')).not.toContain('codex-auto-review');
+    expect(L.providerModelIds('claude')).toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+  });
+});

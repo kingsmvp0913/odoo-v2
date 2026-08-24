@@ -8,10 +8,11 @@ const { hashPassword } = require('./password');
 const { encrypt } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
+const { shadowingEnvVar: codexShadowingEnvVar, resetCodexTokenCache } = require('./lib/codex-auth');
 const { resetContext7KeyCache } = require('./lib/context7-auth');
 const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
-const { listAgents, loadAgent, updateAgent, getLabels } = require('./pipeline/agent-loader');
+const { listAgents, loadAgent, updateAgent, getLabels, refreshCodexModels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
 const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
@@ -108,6 +109,31 @@ function registerRoutes(app) {
   app.delete('/api/admin/claude-token', auth, (req, res) => clearClaudeToken(TOKEN_COLS.primary, res));
 
   app.delete('/api/admin/claude-token/backup', auth, (req, res) => clearClaudeToken(TOKEN_COLS.backup, res));
+
+  app.get('/api/admin/codex-token', auth, async (_req, res) => {
+    try {
+      const { rows } = await query('SELECT openai_api_key_enc FROM teams_settings WHERE id=1');
+      res.json({ configured: !!rows[0]?.openai_api_key_enc, shadowed_by: codexShadowingEnvVar() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/admin/codex-token', auth, async (req, res) => {
+    const token = String(req.body?.token || '').trim();
+    if (!token) return res.status(400).json({ error: '請貼上 OpenAI API key' });
+    if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 token' });
+    try {
+      await query(`INSERT INTO teams_settings (id, openai_api_key_enc, updated_at) VALUES (1,$1,NOW())
+        ON CONFLICT (id) DO UPDATE SET openai_api_key_enc=$1, updated_at=NOW()`, [encrypt(token)]);
+      await resetCodexTokenCache();
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/admin/codex-token', auth, async (_req, res) => {
+    try {
+      await query('UPDATE teams_settings SET openai_api_key_enc=NULL, updated_at=NOW() WHERE id=1');
+      await resetCodexTokenCache();
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
   // 備援總開關。關閉（預設）時主帳號撞門檻就暫停推進，與備用憑證存不存在無關——
   // 管理員要能在不刪掉憑證的前提下停用第二份訂閱。
@@ -501,6 +527,13 @@ function registerRoutes(app) {
     return e;
   }
 
+  // 供應商與模型清單。前端不得自帶——`AdminAgents.js` 原本硬寫一份 models 陣列，
+  // 與後端白名單是雙來源，改一邊忘另一邊就會給出後端會擋掉的選項。
+  // efforts 逐模型附在該模型上（codex 各模型可選值不同），前端第三段下拉才能跟著換。
+  app.get('/api/admin/providers', auth, (_req, res) => {
+    res.json(refreshCodexModels());
+  });
+
   // 列出所有 agent（不含 prompt body）；置頂全域規則
   app.get('/api/admin/agents', auth, (_req, res) => {
     try { res.json([claudeEntry(false), ...listAgents()]); }
@@ -512,7 +545,7 @@ function registerRoutes(app) {
     try {
       if (req.params.name === 'CLAUDE') return res.json(claudeEntry(true));
       const a = loadAgent(req.params.name);
-      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage, prompt: a.body });
+      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, provider: a.provider, effort: a.effort, stage: a.stage, codexEligible: require('./pipeline/agent-loader').CODEX_ELIGIBLE.has(a.name), prompt: a.body });
     } catch (err) {
       res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: err.message });
     }
@@ -521,13 +554,13 @@ function registerRoutes(app) {
   // 更新 model 與 prompt（僅此兩者可改）；CLAUDE 只寫內容
   app.put('/api/admin/agents/:name', auth, (req, res) => {
     try {
-      const { model, prompt } = req.body || {};
+      const { model, prompt, provider, effort } = req.body || {};
       if (req.params.name === 'CLAUDE') {
         if (typeof prompt === 'string') fs.writeFileSync(CLAUDE_MD, prompt);
         return res.json(claudeEntry(true));
       }
-      const a = updateAgent(req.params.name, { model, prompt });
-      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, stage: a.stage, prompt: a.body });
+      const a = updateAgent(req.params.name, { model, prompt, provider, effort });
+      res.json({ name: a.name, role: a.role, label: a.label, description: a.description, model: a.model, provider: a.provider, effort: a.effort, stage: a.stage, codexEligible: require('./pipeline/agent-loader').CODEX_ELIGIBLE.has(a.name), prompt: a.body });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message });
     }

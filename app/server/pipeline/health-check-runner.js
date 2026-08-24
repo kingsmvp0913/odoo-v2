@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const { listAgents, loadAgent } = require('./agent-loader');
-const { runClaude } = require('./claude-runner');
+const { runAgent } = require('./agent-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('./health-data');
@@ -124,7 +124,7 @@ async function summarizeRun(runId, startedBy) {
     ).join('\n\n'),
     system_stat: sys ? `${sys.diagnosis}\n\n（依據：${sys.rationale || ''}）`.trim() : '（無）'
   });
-  const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+  const { text, usage, durationMs } = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT });
   await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
   // 比照 checkOne：長文字走獨立標籤，<result> 的 JSON 只剩一個短值，幾乎壞不掉。
   const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(text, 'diagnosis');
@@ -176,7 +176,7 @@ async function triageRun(runId, targets, windowDays, startedBy) {
   try {
     const agent = loadAgent('health-triage');
     const prompt = agent.render({ summaries: JSON.stringify([...summaries.values()], null, 1) });
-    const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+    const { text, usage, durationMs } = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT });
     raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
     const { inner: diagBlock, cleaned: afterDiag } = extractTaggedBlock(text, 'diagnosis');
@@ -295,7 +295,7 @@ async function checkOne(runId, agent, ha, windowDays, startedBy, preSummary = nu
   }
   let raw = null;
   if (prompt) try {
-    const { text, usage, durationMs } = await runClaude(prompt, { model: ha.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+    const { text, usage, durationMs } = await runAgent(prompt, { model: ha.model, provider: ha.provider, effort: ha.effort, agentType: 'workflow_health', cwd: REPO_ROOT });
     raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
     // 三個長文字（建議提示詞／診斷正文／理由）全部走獨立標籤區塊，剝乾淨後 <result> 的 JSON
@@ -370,7 +370,7 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
     let finding = null;
     let raw = null;
     try {
-      const { text, usage, durationMs } = await runClaude(prompt, { model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT });
+      const { text, usage, durationMs } = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT });
       raw = text;
       // taskId 一律給 null（不是漏填）：健檢自己的花費若記進被診斷的那張任務，下次再健檢同一張，
       // 它就會在自己的 per_stage 與關卡序列裡看到 workflow_health——診斷工具污染被診斷的對象。
@@ -465,8 +465,8 @@ async function runAudit(runId, { sinceAt, startedBy = null } = {}) {
       previous: await previousProposals(),
       summary: JSON.stringify(summary)
     });
-    const { text, usage, durationMs } = await runClaude(prompt, {
-      model: agent.model, agentType: 'workflow_health', cwd: REPO_ROOT, timeoutMs: AUDIT_TIMEOUT_MS
+    const { text, usage, durationMs } = await runAgent(prompt, {
+      model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT, timeoutMs: AUDIT_TIMEOUT_MS
     });
     raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);

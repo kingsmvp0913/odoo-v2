@@ -639,6 +639,7 @@ async function migrate() {
     // 未設定則走匿名額度（依 IP 計），配額用盡時 MCP 不報錯、只回一段 quota 訊息，
     // 各關於是靜默改用 WebSearch 抓 Odoo 原始碼（2026-08-11 實測）
     { table: 'teams_settings', col: 'context7_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN context7_api_key_enc TEXT' },
+    { table: 'teams_settings', col: 'openai_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN openai_api_key_enc TEXT' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },
@@ -719,6 +720,10 @@ async function migrate() {
     // 這一輪是續用上輪 session（true）還是全量重讀（false）。刻意可為 NULL＝「沒有 resume 概念或還沒接」，
     // 與 false 分開：混成 false 會讓「fresh 佔比」這個判讀準確率的統計從一開始就是錯的。目前只有 qa 填。
     { table: 'token_usage', col: 'resumed', sql: 'ALTER TABLE token_usage ADD COLUMN resumed BOOLEAN' },
+    // provider：NULL 代表 claude（本欄上線前的既有列一律是 claude），不設 DEFAULT 以免誤導成
+    // 「這些列被明確標記過」。計價需要它——lib/token-cost.js 原本只看 model 字串，codex 的
+    // model 名會全數落到 ELSE 分支被當 sonnet 計，而且不會報錯。
+    { table: 'token_usage', col: 'provider', sql: 'ALTER TABLE token_usage ADD COLUMN provider TEXT' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
     { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },

@@ -10,7 +10,7 @@ stage: workflow_health
 
 ## 第一步：載入判準（強制）
 
-**開始診斷前，必須先呼叫 `Skill(healthCheck)`。** 指標怎麼讀、證據門檻、已知盲區，全部在那份 skill 裡，本文不重複。你手上的資料是「跨關卡展開看這一張」，與平台健檢是**同一批資料的另一個投影**，判準完全相同。
+**開始診斷前，必須先載入 healthCheck 判準。** 文件位於 `.agents/skills/healthCheck/SKILL.md`（Claude Code 為 `.claude/skills/healthCheck/SKILL.md`）；指標怎麼讀、證據門檻、已知盲區都在那裡。你手上的資料是「跨關卡展開看這一張」，與平台健檢是**同一批資料的另一個投影**，判準完全相同。
 
 **載不到 skill 就停下來**：在 `<diagnosis>` 寫明「無法載入 healthCheck 判準」、`severity` 給 `ok`。不要憑記憶硬判——沒有判準的診斷會系統性偏向「一切正常」。
 

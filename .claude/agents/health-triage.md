@@ -13,7 +13,7 @@ stage: workflow_health
 
 ## 第一步：載入判準（強制）
 
-**開始之前，必須先呼叫 `Skill(healthCheck)`。** 指標怎麼讀、證據門檻、什麼才配列入修改、已知盲區，全部在那份 skill 裡，本文不重複。
+**開始之前，必須先載入 healthCheck 判準。** 文件位於 `.agents/skills/healthCheck/SKILL.md`（Claude Code 為 `.claude/skills/healthCheck/SKILL.md`）；指標怎麼讀、證據門檻、什麼才配列入修改、已知盲區都在那裡。
 
 **載不到 skill 就停下來**：在 `<diagnosis>` 寫明「無法載入 healthCheck 判準」、`severity` 給 `ok`、`focus` 給空陣列。不要憑記憶硬判。
 

@@ -10,7 +10,7 @@ stage: workflow_health
 
 ## 第一步：載入判準（強制）
 
-**開始之前，必須先呼叫 `Skill(healthCheck)`。** 指標怎麼讀、證據門檻、什麼才配列入修改、已知盲區，全部在那份 skill 裡，本文不重複。
+**開始之前，必須先載入 healthCheck 判準。** 指標怎麼讀、證據門檻、什麼才配列入修改、已知盲區都在 `.agents/skills/healthCheck/SKILL.md`（Claude Code 為 `.claude/skills/healthCheck/SKILL.md`），本文不重複。
 
 **載不到就停下來**：輸出一則 `layer` 為 `observability`、標題寫明「無法載入 healthCheck 判準」的提案，不要憑記憶硬判。
 
@@ -18,7 +18,7 @@ stage: workflow_health
 
 1. **本輪視窗的起手包**（本文最後）——只涵蓋「上一輪健檢之後」發生的事，是輪廓不是全部。
 2. **上一輪的提案與裁決**（本文最後）——已被判「不須調整」的**不要再提第二次**；已「處理完成」的要回頭查那個指標有沒有往預期方向走。
-3. **自己查資料的能力**：`Skill(platformDB)` 可以對平台資料庫下 SQL（唯讀，只能 SELECT）。表：`tasks`、`token_usage`、`task_events`、`task_rejections`／`rejection_items`、`health_check_findings`。
+3. **自己查資料的能力**：載入 platformDB skill 後可以對平台資料庫下 SQL（唯讀，只能 SELECT）。表：`tasks`、`token_usage`、`task_events`、`task_rejections`／`rejection_items`、`health_check_findings`。
 4. **讀提示詞的能力**：各關的提示詞在 `.claude/agents/*.md`，共用片段在 `app/server/pipeline/*.md`。要判斷某關的問題是不是提示詞造成的，自己去讀。
 
 ## 怎麼查（這一段是本關的核心作法）

@@ -324,3 +324,33 @@ test('GET /api/admin/users → 有 has_pat 布林，且不含 PAT 密文', async
     expect(u.github_pat_enc).toBeUndefined();
   }
 });
+
+// GET /api/admin/providers —— 供前端取供應商／模型／effort 清單。
+// 意圖：前端原本硬寫一份 models 陣列，與後端白名單是雙來源。這一組鎖的是「單一來源」與
+// 「efforts 必須逐模型附著」——回傳扁平的全域 effort 清單，UI 就會給出後端一定會擋掉的組合。
+test('GET /api/admin/providers → 403 for non-admin', async () => {
+  const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + userToken);
+  expect(res.status).toBe(403);
+});
+
+test('GET /api/admin/providers → 兩家供應商，claude 無 effort 維度', async () => {
+  const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + adminToken);
+  expect(res.status).toBe(200);
+  expect(Object.keys(res.body).sort()).toEqual(['claude', 'codex']);
+  expect(res.body.claude.models.map(m => m.id)).toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+  // claude 沒有 effort 這個維度：前端據此決定第三段下拉整個隱藏（而不是留一個永遠灰掉的）
+  expect(res.body.claude.models.every(m => m.efforts === undefined)).toBe(true);
+});
+
+test('GET /api/admin/providers → codex 的 efforts 逐模型不同，且不含 codex-auto-review', async () => {
+  const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + adminToken);
+  const byId = Object.fromEntries(res.body.codex.models.map(m => [m.id, m.efforts]));
+
+  // 這是本組最關鍵的斷言：若回傳的是同一份全域清單，前端會讓使用者選到 gpt-5.4 + max，
+  // 而 codex 在設定載入階段不校驗 effort，要 spawn 之後才失敗。
+  expect(byId['gpt-5.6-terra']).toContain('max');
+  expect(byId['gpt-5.4']).not.toContain('max');
+
+  // codex-auto-review 是 visibility: hide（codex review 專用），不得出現在使用者可選清單
+  expect(Object.keys(byId)).not.toContain('codex-auto-review');
+});

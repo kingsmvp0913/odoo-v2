@@ -1,9 +1,10 @@
 // 意圖：健檢 agent 檔契約正確、runner 遍歷落 findings（工作流程健檢子專案 2）。
 const { loadAgent } = require('../pipeline/agent-loader');
 
-test('workflow-health agent：opus + workflow_health stage + 4 placeholder 可 render', () => {
+test('workflow-health agent：批次一可用 Codex + workflow_health stage + 4 placeholder 可 render', () => {
   const a = loadAgent('workflow-health');
-  expect(a.model).toBe('opus');
+  expect(a.provider).toBe('codex');
+  expect(a.model).toBe('gpt-5.6-terra');
   expect(a.stage).toBe('workflow_health');
   const out = a.render({ agent_label: 'X 標籤', agent_role: '角色', agent_prompt: 'PROMPT-BODY', summary: '{"token":{}}' });
   expect(out).toContain('X 標籤');
@@ -21,7 +22,7 @@ test('health-task agent：opus + workflow_health stage + 只吃 summary placehol
   const out = a.render({ summary: '{"scope":"task:7"}' });
   expect(out).toContain('{"scope":"task:7"}');
   expect(out).not.toContain('{{');           // 無漏填 placeholder
-  expect(out).toContain('Skill(healthCheck)'); // 判準強制載入（載不到就停下來）
+  expect(out).toContain('.agents/skills/healthCheck/SKILL.md'); // provider 無關的判準載入
   expect(out).toContain('<result>');
 });
 
@@ -33,8 +34,8 @@ test('health-auditor agent：opus + 兩個 placeholder + 指名查詢工具與�
   expect(a.stage).toBe('workflow_health');
   const out = a.render({ previous: '（無）', summary: '{"volume":{}}' });
   expect(out).not.toContain('{{');
-  expect(out).toContain('Skill(healthCheck)');   // 判準強制載入
-  expect(out).toContain('Skill(platformDB)');    // 自己下 SQL 的能力
+  expect(out).toContain('.agents/skills/healthCheck/SKILL.md'); // provider 無關的判準載入
+  expect(out).toContain('platformDB skill');     // 自己下 SQL 的能力
   expect(out).toContain('回溯');                  // 窗內命中 → 回頭找同類案例湊證據
   expect(out).toContain('<result>');
 });
@@ -49,7 +50,7 @@ test('platform-fix agent：placeholder 齊、載入平台開發慣例、寫明�
     target_metric: 'M', metric_baseline: '1'
   });
   expect(out).not.toContain('{{');
-  expect(out).toContain('Skill(platformDev)');
+  expect(out).toContain('.agents/skills/platformDev/SKILL.md');
   expect(out).toContain('不得修改或刪除');     // 既有測試
   expect(out).toContain('health-');            // 健檢自己
   expect(out).toContain('不要 commit');        // 提交由人決定
