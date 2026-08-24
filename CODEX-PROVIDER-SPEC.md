@@ -65,6 +65,7 @@ prompt 走 stdin，cwd 由 `opts.cwd` 指定，認證與 `/ai/*` 通行碼由 `g
 | prompt 走 stdin | 直接寫 stdin | 需帶 `-` 佔位參數 |
 | 結構化事件流 | `--output-format stream-json --verbose` | `--json`（JSONL） |
 | 指定模型 | `--model <alias>` | `-m` / `--model` |
+| 指定推理強度 | 無此維度 | `-c model_reasoning_effort="high"`（**實測**為正確鍵名；`model_reasoning_level` 是未知欄位）。⚠ 設定載入階段**不校驗值**，`="bogus"` 照樣放行 |
 | 工作目錄 | spawn 的 `cwd` | spawn 的 `cwd`（或 `-C` / `--cd`） |
 | 略過權限提示 | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox`（別名 `--yolo`） |
 | 限制寫入範圍 | 無對等（靠 hook） | `--sandbox read-only` / `workspace-write` / `danger-full-access` |
@@ -114,31 +115,55 @@ role: classifier
 label: 退回分類
 model: haiku
 provider: claude      # 新增；省略時 = claude
+effort: medium        # 新增；僅 provider=codex 時有意義，省略時 = medium
 stage: reject_classify
 ---
 ```
 
-**採「平行欄位」而非 `model: codex:gpt-5-codex` 前綴形式**，理由：`updateAgent()` 既有的白名單校驗、`listAgents()` 的回傳形狀、`promptVersion()` 的 hash 組成都不必改解析邏輯；前綴形式則要在每個讀 model 的地方加剝離。
+`effort` 是 codex 專屬維度（claude 沒有），**provider 為 claude 時此欄應不存在**；`updateAgent()` 切到 claude 時要主動移除該欄，留著會讓人以為它有作用。
+
+**採「平行欄位」而非 `model: codex:gpt-5.6-terra` 前綴形式**，理由：`updateAgent()` 既有的白名單校驗、`listAgents()` 的回傳形狀、`promptVersion()` 的 hash 組成都不必改解析邏輯；前綴形式則要在每個讀 model 的地方加剝離。
 
 ### 4.2 白名單改二維
 
 `agent-loader.js:26` 的 `ALLOWED_MODELS` 陣列改為：
 
 ```js
+// codex 的 models 由 `codex debug models` 動態取得後快取，不硬寫——模型會換代（§9 第 1 題）。
+// 取用規則：過濾 visibility === 'list'、依 priority 排序、每支帶自己的 efforts。
 const PROVIDERS = {
-  claude: { label: 'Claude Code', bin: 'claude', models: ['haiku', 'sonnet', 'opus', 'fable'] },
-  codex:  { label: 'OpenAI Codex', bin: 'codex',  models: [ /* 實跑 codex 後填 */ ] },
+  claude: {
+    label: 'Claude Code', bin: 'claude',
+    models: [{ id: 'haiku' }, { id: 'sonnet' }, { id: 'opus' }, { id: 'fable' }],
+    // claude 沒有 effort 維度
+  },
+  codex: {
+    label: 'OpenAI Codex', bin: 'codex',
+    // 2026-08-24 實測快照，正式實作應動態取：
+    models: [
+      { id: 'gpt-5.6-sol',   efforts: ['low','medium','high','xhigh','max','ultra'] },
+      { id: 'gpt-5.6-terra', efforts: ['low','medium','high','xhigh','max','ultra'] },
+      { id: 'gpt-5.6-luna',  efforts: ['low','medium','high','xhigh','max'] },
+      { id: 'gpt-5.5',       efforts: ['low','medium','high','xhigh'] },
+      { id: 'gpt-5.4',       efforts: ['low','medium','high','xhigh'] },
+      { id: 'gpt-5.4-mini',  efforts: ['low','medium','high','xhigh'] },
+    ],
+  },
 };
 ```
 
+⚠ **`codex-auto-review` 是 `visibility: hide`（`codex review` 專用），不得進清單。** 動態取得時務必過濾，否則使用者選得到一支不該用的模型。
+
 - `ALLOWED_MODELS` 保留為 `PROVIDERS.claude.models` 的別名並標為 deprecated，避免既有 require 斷掉（`agent-loader.js` 的 exports 有對外）。
-- `updateAgent()` 的校驗改為「provider 必須存在 ∧ model 必須在該 provider 的清單內」。
-- 校驗失敗一律 400 且訊息要指出是 provider 錯還是 model 錯（現行訊息只講 model）。
+- `updateAgent()` 的校驗改為三段：**provider 必須存在 ∧ model 必須在該 provider 的清單內 ∧（provider 為 codex 時）effort 必須在該 model 的 `efforts` 內**。effort 的可選值**逐模型不同**（`gpt-5.4` 系列沒有 `max`／`ultra`），不可用一份全域清單校驗——那會放行 `gpt-5.4` + `ultra` 這種必定 spawn 失敗的組合。
+- 校驗失敗一律 400 且訊息要指出是 provider、model 還是 effort 錯（現行訊息只講 model）。
 - **fallback 指向最嚴格選項**（pipeline 規則 59）：`PROVIDERS[p] || ` 不得退到任意 provider，未知 provider 直接 throw，不得靜默退回 claude——靜默退回會讓拼錯字的 agent 帳面上顯示 codex、實際燒 claude 額度。
 
 ### 4.3 新增端點供前端取清單
 
-`GET /api/admin/providers` → `{ claude: {label, models}, codex: {label, models} }`
+`GET /api/admin/providers` → `{ claude: {label, models:[{id}]}, codex: {label, models:[{id, efforts:[...]}]} }`
+
+**`efforts` 必須逐模型附在該模型上**，前端第三段下拉才能依所選模型動態換選項。回傳扁平的全域 effort 清單會讓 UI 給出後端會擋掉的組合。
 
 消除 `AdminAgents.js:10` 硬寫清單與後端白名單的雙來源。前端 `models` 陣列改由此端點取得。
 
@@ -178,17 +203,22 @@ export `runCodex(prompt, opts)`，**回傳形狀必須與 `runClaude` 完全一�
 | ENOENT 依 cwd 是否存在分流歸因 | `:273-277` | 否則「worktree 未建立」會誤報成「找不到執行檔」 |
 
 codex 專屬：
-- 認證失效偵測：`auth-signature.js` 的 `looksLikeAuthFailure()` 目前只認 Claude 的字面（如 `Not logged in`）。**必須補 codex 的認證失敗字面**，否則 codex 認證過期會被歸成泛用 `exited with code N`，分類器判不出 transient → 直接停等人工。實際字面待實跑取得。
-- sandbox：`opts.cwd` 存在時用 `--sandbox workspace-write`，否則 `--sandbox read-only`（見 §5.5）。
+- **認證失效偵測**：`auth-signature.js` 的 `looksLikeAuthFailure()` 目前只認 Claude 的字面（如 `Not logged in`）。補 codex 的字面（§9 第 5 題已取得）：比對 `401 Unauthorized` 與 `Missing bearer or basic authentication`。不補的話 codex 憑證過期會被歸成泛用 `exited with code N`，分類器判不出 transient → 直接停等人工。
+- **收尾事件有兩種**：`turn.completed`（帶 `usage`）與 `turn.failed`（帶 `error.message`、**無 `usage`**）。記帳路徑必須容許沒有 usage 的情形，否則認證失敗那輪會拋錯或被記成 0。
+- **stderr 必須一起收**：工具執行失敗只出現在 stderr，不進事件流（§5.9）。不收的話工具全掛的那一輪在平台上看起來是成功的。
+- **逾時要涵蓋 codex 自己的重試**：認證失敗時 codex 會 `Reconnecting... N/5` 重試五次（先 `wss://` 後退 `https://`），實測約 12 秒才放棄。
+- **推理強度**：`opts.effort` 存在時附 `-c model_reasoning_effort="<effort>"`。值的合法性由 `updateAgent()` 把關（§4.2）——codex 端不擋，傳錯不會在設定階段報錯。
+- **sandbox**：原訂「`opts.cwd` 存在時用 `--sandbox workspace-write`，否則 `--sandbox read-only`」。⚠ **`--sandbox read-only` 在平台主機（Windows）實測連工具都 spawn 不起來**（§9 第 6 題，疑似 Defender 未加排除項）。在該題解決前只能用 `--dangerously-bypass-approvals-and-sandbox`，防線改由 scan-guard hook 承擔（§5.5）。
+- **hook**：無人值守需 `--dangerously-bypass-hook-trust`，否則專案層 `.codex/hooks.json` 不會執行。
 
 ### 5.2 `pipeline/agent-runner.js`（新增）
 
 ```js
-runAgent(prompt, opts)   // opts 多一個 provider，預設 'claude'
+runAgent(prompt, opts)   // opts 多 provider（預設 'claude'）與 effort（僅 codex 用）
 ```
 依 provider 分派到 `runClaude` / `runCodex`，並 re-export `abortError`、`stopReason`（現由 claude-runner 提供，與供應商無關）。
 
-19 個呼叫端逐一改為 `require('./agent-runner').runAgent`，並在既有的 `model: agent.model` 旁補 `provider: agent.provider`。`claude-runner.js` 本身除了移出 `abortError`／`stopReason` 外不動。
+19 個呼叫端逐一改為 `require('./agent-runner').runAgent`，並在既有的 `model: agent.model` 旁補 `provider: agent.provider` 與 `effort: agent.effort`。`claude-runner.js` 本身除了移出 `abortError`／`stopReason` 外不動。
 
 **例外：`agent-result.js:66` 的 `repair` 呼叫**不走 agent-loader，model 硬寫 `'haiku'`（`<result>` 解析失敗時的補救呼叫）。本期**維持硬寫 claude/haiku**，不隨被修補的那關切換供應商——它只做「把散文修回契約格式」的文字整形，與原關的推理無關，跟著切換只是多一個變數。在該行補一行註解說明此為刻意決定，避免日後被當成漏改。
 
@@ -453,11 +483,14 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 
 改為：
 
-1. **兩段連動下拉**：「AI」（provider）在左、「模型」在右，同一列。切換 provider 時 model 自動重設為該 provider 的第一個模型（不可留下跨供應商的無效組合）。
+1. **三段連動下拉**：「AI」（provider）→「模型」→「推理強度」（effort），同一列。
+   - 切換 provider 時 model 自動重設為該 provider 的第一個模型（不可留下跨供應商的無效組合）。
+   - **切換 model 時 effort 要重新驗一次**：可選值逐模型不同，從 `gpt-5.6-terra`(max) 切到 `gpt-5.4` 時 `max` 不存在，必須自動退到該模型有的值（建議 `medium`），不能留著一個後端會擋掉的組合。
+   - **provider 為 claude 時，第三段整個隱藏**（不是 disabled）——claude 沒有這個維度，留一個永遠灰掉的下拉只會讓人以為是壞的。
 2. 選項來源改為 `GET /api/admin/providers`，移除 `AdminAgents.js:10` 的硬寫清單。
-3. 左側清單的藥丸改顯示 `provider/model`（如 `codex/gpt-5-codex`）；provider 為 claude 時維持只顯示 model，避免既有畫面全部變長。
+3. 左側清單的藥丸改顯示 `provider/model:effort`（如 `codex/gpt-5.6-terra:high`）；provider 為 claude 時維持只顯示 model，避免既有畫面全部變長。
 4. 不在 `CODEX_ELIGIBLE` 名單內的 agent，provider 下拉的 codex 選項 `disabled`，並在下拉旁以 `var(--text-muted)` 註明原因（掃碟守衛缺口）。**前端 disabled 只是提示，後端仍須擋**（前端隱藏 admin 功能要三處齊做的同一個道理）。
-5. `dirty` 判定（`:22`）要一併比對 provider，否則只改 provider 不改 model 時「儲存」鈕不會亮。
+5. `dirty` 判定（`:22`）要一併比對 provider **與 effort**，否則只改其中之一時「儲存」鈕不會亮。
 
 配色硬規則：不得寫死顏色，一律走 `app.css` 的 CSS 變數／共用 class；新增樣式前先從 `app/public/styleguide.html` 挑 token。**前端無自動化測試，這頁改完必須人工實測，含深色模式。**
 
@@ -469,15 +502,18 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 
 | 檔案 | 覆蓋 |
 |---|---|
-| `tests/codex-runner.test.js`（新增） | mock `child_process.spawn`，餵 codex JSONL 事件驗證：thread_id → sessionId、agent_message → assistantText、turn.completed → usage 對應正確、cached_input_tokens 落 cache_read_tokens、cache_create 為 0；非零 exit 分流（auth／error）、`code===null` 判 interrupted、timeout 觸發 kill、abort 前置檢查早退 |
+| `tests/codex-runner.test.js`（新增） | mock `child_process.spawn`，餵 codex JSONL 事件驗證：thread_id → sessionId、agent_message → assistantText、turn.completed → usage 對應正確、`cached_input_tokens` 落 `cache_read_tokens`、**`cache_write_input_tokens` 落 `cache_create_tokens`**（不是記 0）；**`turn.failed` 沒有 usage 時不拋錯、不記成 0**；**stderr 的 ERROR 行併入事件流**（§5.9）；非零 exit 分流（auth／error）、`code===null` 判 interrupted、timeout 觸發 kill、abort 前置檢查早退 |
 | `tests/agent-runner.test.js`（新增） | provider 分派正確；未知 provider throw 而非靜默退回 claude；預設值為 claude |
-| `tests/agent-loader.test.js`（既有，擴充） | provider 白名單二維校驗、未知 provider／跨供應商組合回 400、`CODEX_ELIGIBLE` 之外拒絕 codex、frontmatter 寫入與讀回、`promptVersion` 含 provider/model（§5.4 改法 1 的迴歸測試） |
+| `tests/agent-loader.test.js`（既有，擴充） | provider 白名單校驗、未知 provider／跨供應商組合回 400、`CODEX_ELIGIBLE` 之外拒絕 codex、frontmatter 寫入與讀回、`promptVersion` 含 provider/model **但不含 effort**（§9 已決那段的迴歸測試） |
+| 同上（effort 專項） | **`gpt-5.4` + `max` 必須被擋**——effort 可選值逐模型不同，用全域清單校驗會放行這種必定 spawn 失敗的組合。切 provider 到 claude 時 `effort` 欄要被移除。 |
 | `tests/admin-routes.test.js`（既有，擴充） | `GET /api/admin/providers`；codex-token 三個端點；GET 不外洩明文 |
 | `tests/token-logger.test.js`（既有，擴充） | provider 欄落地 |
 
-**紅燈判定**：`git-integration.test.js` 的 `ensureWorktreeAtMain` 兩支與 `vpn-gateway-run.test.js` 的容器化那支是既有紅燈，乾淨 HEAD 也紅，不要 debug。其餘紅燈先假設是 pgPass flake 家族，一律單跑複驗才算數。
+**紅燈判定**：**動手前先跑一次全跑，把 `Tests:` 與 `Test Suites:` 記下來當基線**，之後的紅燈一律先假設是自己造成的。懷疑是 flaky（pgPass flake 家族）才 stash 掉自己的改動、對那一支單獨再跑——**單跑綠了才算 flaky**。
 
-**端到端無法在開發容器驗證**：本容器未安裝 codex CLI。§6 的驗收條件必須在平台主機執行。
+> ⚠ 本節原本寫死了一份「既有紅燈」清單（`git-integration.test.js` 兩支、`vpn-gateway-run.test.js` 一支）。那份清單是在真因修好**之前**量的，2026-08-08 實測三支都是綠的。`.claude/rules/always.md` 規則 2 明文禁止在文件裡寫死既有紅燈清單與通過數字——會教人把自己弄壞的東西當既有問題放過去。已移除，不要再加回來。
+
+**端到端要在平台主機驗**：平台主機已安裝 codex（實測 0.149.1）。§6 的驗收條件在該機執行；開發容器若沒有 codex 則只能跑到 mock 層。
 
 ---
 
@@ -516,12 +552,12 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 
 claude 端沒有這個維度（`haiku`／`sonnet`／`opus`／`fable` 就是全部），所以 §4.2 的「白名單改二維」與 §7 的「供應商 → 模型」兩段連動**對 codex 是不夠的**——同一支模型配 `low` 與配 `max`，成本與品質差距可能比換模型還大。
 
-**這題未決**，三個方向：
-1. 本期不做：codex 一律用 config 的預設 effort，UI 不出現這個維度。最省，但等於放棄一個影響很大的旋鈕。
-2. UI 加第三段下拉（供應商 → 模型 → effort），依所選模型動態給可選值。最完整，UI 與 `updateAgent()` 校驗都要改。
-3. 把 effort 展平進模型清單（`gpt-5.6-terra:high` 當成一個「模型」），沿用現有兩段 UI。改動最小，但白名單會膨脹成 6×4~6 項，且 `.md` frontmatter 的 `model` 值變得不像模型名。
+**已決（2026-08-24）：UI 加第三段下拉**，供應商 → 模型 → 推理強度，依所選模型動態給可選值。§4.1／§4.2／§4.3／§7 已依此更新。
 
-**決定之前不要動 §4.2 與 §7。**
+未採「展平成 `gpt-5.6-terra:high`」：白名單會膨脹成 6×4~6 項，且 frontmatter 的 `model` 值變得不像模型名、模型換代時舊值全部失效。
+未採「本期不做」：effort 的成本與品質影響可能大過換模型，而且設定會落在使用者家目錄、不進版控也不 per-agent。
+
+⚠ **`promptVersion()` 的 hash 材料要加 provider 與 model（§5.4 約束一），但*不要*加 effort**：effort 不改變 prompt 內容、也不會讓 session id 失效，加進去只會在調 effort 時無謂地作廢所有 resume session、白掉 prompt cache。
 
 ### 實測新增（原草案沒有的題目）
 
