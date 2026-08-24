@@ -86,6 +86,7 @@ claude 的 `stream-json` 與 codex 的 `--json` 是兩套完全不同的 schema�
 | 助理文字 | `{type:'assistant',message:{content:[{type:'text',text}]}}` | `{type:'item.completed',item:{type:'agent_message',text}}` |
 | 工具呼叫顯示 | `content[].type='tool_use'` | **實測**：`command_execution`（帶 `status`＝`in_progress`／`completed`、`aggregated_output`）、`error`（設定／hook 類錯誤）。`file_change` 等尚未觀測到 |
 | 事件序 | — | **實測**：`thread.started` → `item.completed`(error，若有) → `turn.started` → `item.started`／`item.completed`(重複) → `turn.completed`。`turn.started`／`item.started` 是原草案沒列的 |
+| 失敗收尾 | `{type:'result',subtype:'error...'}` | **實測**：`turn.failed`，帶 `error.message`、**無 `usage`**（見 §9 第 5 題） |
 | 收尾與用量 | `{type:'result',usage,duration_ms}` | `{type:'turn.completed',usage:{input_tokens,cached_input_tokens,output_tokens}}` |
 | 實際 model id | 第一則 assistant 事件的 `message.model` | **實測：事件流中不存在此欄位** → 一律用 `opts.model` 記帳 |
 
@@ -484,22 +485,43 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 
 實測環境：平台主機 Windows 11、**codex-cli 0.149.1**、認證為 ChatGPT OAuth（`~/.codex/auth.json`，`stored API key: false`）。
 
-### 已解答
+### 已解答（第 1～5 題）
 
 | # | 題目 | 答案 |
 |---|---|---|
-| 1 | codex model 識別字 | 預設 `gpt-5.6-terra`（provider `openai`）。**完整清單尚未取得**——`codex models` 需要 TTY；`codex debug models` 可輸出原始 model catalog JSON，還沒跑。**`PROVIDERS.codex.models` 填值前必須先跑它，不要用預設值硬湊。** |
+| 1 | codex model 識別字 | **已取得**（`codex debug models`，2026-08-24）。7 支，其中 6 支 `visibility: list`（可選）、1 支 `hide`。全部 `context_window` 272000、`supported_in_api: true`。依 `priority` 排序：<br>`gpt-5.6-sol`(1)、`gpt-5.6-terra`(2，目前預設)、`gpt-5.6-luna`(3)、`gpt-5.5`(7)、`gpt-5.4`(16)、`gpt-5.4-mini`(23)；`codex-auto-review`(43) 是 `codex review` 專用，**`visibility: hide`，不得放進使用者可選清單**。<br>取值方式寫進實作：`PROVIDERS.codex.models` 應由 `codex debug models` 取、過濾 `visibility === 'list'`、依 `priority` 排序，**不要在程式裡硬寫這份清單**（模型會換代）。 |
 | 2 | `codex exec` 參數順序 | `codex exec - --json [其他旗標]`。prompt 走 stdin 時 `-` 是必要的佔位參數，旗標放後面。 |
 | 3 | `--json` 的 item type 清單 | 已觀測：`agent_message`、`command_execution`（帶 `status`／`aggregated_output`）、`error`。完整事件序見 §3.2。寫檔類（`file_change`）尚未觀測到——批次一不寫檔，暫不阻塞，批次二之前要補。 |
 | 4 | 事件是否回報 resolved model id | **否**，事件流沒有這個欄位 → 成本歸屬一律用 `opts.model`。 |
+| 5 | codex 認證失敗的原始字面 | **已取得**（測法：把 `CODEX_HOME` 指到一個空目錄跑一次，**不必動到真的 `auth.json`**）。字面：<br>`unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses`<br>`auth-signature.js` 建議比對 `401 Unauthorized` 與 `Missing bearer or basic authentication`。<br>**行為與 claude 不同的三點**：<br>① 認證失敗**會**進事件流（`{"type":"error"}`），不像工具失敗只在 stderr；<br>② codex 會自己重試 **5 次**（`Reconnecting... N/5`，先 `wss://` 後退回 `https://`）才放棄——一次認證失敗會空燒約 12 秒與 11 則 error 事件，逾時設定要涵蓋；<br>③ 收尾事件是 **`turn.failed`**（帶 `error.message`），**不是** `turn.completed`——`turn.failed` **沒有 `usage` 欄位**，token 記帳必須容許這種情形，否則會拋錯或記成 0。exit code 為 1。 |
 
-### 未解答
+### 未解答（第 6、7 題）
 
 | # | 題目 | 現況與測法 |
 |---|---|---|
-| 5 | codex 認證失敗的原始字面 | **未測。優先度最高的一題。** 已知認證是 ChatGPT OAuth token，與平台踩過的 `claude-auth-not-logged-in`（並發 spawn 撞 OAuth 刷新）屬同一風險家族——平台會併發 spawn，這題幾乎一定會踩到。測法：暫時搬走 `~/.codex/auth.json` 跑一次，記下字面，補進 `auth-signature.js`。不解的話 codex 憑證過期會被誤歸成一般失敗、停等人工。 |
 | 6 | sandbox 是否限制 workspace 外的讀取 | **測不到**：`--sandbox read-only` 在本機連工具都 spawn 不起來（`CreateProcessAsUserW: 5 存取被拒`）。但 `codex doctor` 顯示 `sandbox provisioning complete`，同時警告 **Microsoft Defender 未加 Codex 排除項**——所以這很可能是 Defender/ASR 擋的，不是 codex 在 Windows 上沒有 sandbox。**先加排除項再測，不得據現況下結論。** 已由 §6.5 降級為加分項（qa 的閘門改走 scan-guard 移植）。 |
 | 7 | `--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥 | 未直接測；bypass 單獨可用。§6.3 既已改用 bypass，本題優先度下降。 |
+
+### 新增待決：codex 的 reasoning effort 維度（**規格沒設想到**）
+
+`codex debug models` 顯示每支模型另有一組 `supported_reasoning_levels`，而且**各模型不同**：
+
+| 模型 | 可選 effort |
+|---|---|
+| `gpt-5.6-sol` / `gpt-5.6-terra` | low / medium / high / xhigh / max / **ultra** |
+| `gpt-5.6-luna` | low / medium / high / xhigh / max |
+| `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` | low / medium / high / xhigh |
+
+使用者層 `~/.codex/config.toml` 目前是 `model_reasoning_effort = "medium"`。
+
+claude 端沒有這個維度（`haiku`／`sonnet`／`opus`／`fable` 就是全部），所以 §4.2 的「白名單改二維」與 §7 的「供應商 → 模型」兩段連動**對 codex 是不夠的**——同一支模型配 `low` 與配 `max`，成本與品質差距可能比換模型還大。
+
+**這題未決**，三個方向：
+1. 本期不做：codex 一律用 config 的預設 effort，UI 不出現這個維度。最省，但等於放棄一個影響很大的旋鈕。
+2. UI 加第三段下拉（供應商 → 模型 → effort），依所選模型動態給可選值。最完整，UI 與 `updateAgent()` 校驗都要改。
+3. 把 effort 展平進模型清單（`gpt-5.6-terra:high` 當成一個「模型」），沿用現有兩段 UI。改動最小，但白名單會膨脹成 6×4~6 項，且 `.md` frontmatter 的 `model` 值變得不像模型名。
+
+**決定之前不要動 §4.2 與 §7。**
 
 ### 實測新增（原草案沒有的題目）
 
