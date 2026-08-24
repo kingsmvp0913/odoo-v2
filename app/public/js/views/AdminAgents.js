@@ -26,7 +26,6 @@ window.AdminAgentsView = Vue.defineComponent({
     models() { return this.providerSpec?.models || []; },
     modelSpec() { return this.models.find(m => m.id === this.form.model) || null; },
     efforts() { return this.modelSpec?.efforts || []; }
-    }
   },
   async created() {
     await this.load();
@@ -118,7 +117,7 @@ window.AdminAgentsView = Vue.defineComponent({
         </div>
 
         <!-- 右：編輯 -->
-        <div v-if="selected" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4)">
+        <div v-if="selected" class="aa-editor" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4)">
           <div class="aa-detail-title-row">
             <h2 style="margin:0;font-size:16px">{{ selected.label }}</h2>
             <span style="font-family:monospace;font-size:var(--fs-sm);color:var(--text-muted)">{{ selected.name }}</span>

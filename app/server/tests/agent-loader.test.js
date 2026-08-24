@@ -950,10 +950,10 @@ describe('provider / effort', () => {
     expect400(() => L.updateAgent('qa', { provider: 'codex', model: 'gpt-5.6-terra' }));
   });
 
-  test('批次一的 workflow-health 已改成 provider 無關的 skill 載入措辭', () => {
-    // Codex 會自動發現 .agents/skills；Skill(...) 是 Claude 專屬語法，留下會讓它安靜地放棄診斷。
-    expect(L.CODEX_ELIGIBLE.has('workflow-health')).toBe(true);
-    expect(L.loadAgent('workflow-health').body).not.toContain('Skill(');
+  test('workflow-health 還原 Claude 預設後保留 Claude Skill 契約', () => {
+    const agent = L.loadAgent('workflow-health');
+    expect(agent.provider).toBe('claude');
+    expect(agent.body).toContain('Skill(healthCheck)');
   });
 
   test('provider 為 claude 時不接受 effort', () => {

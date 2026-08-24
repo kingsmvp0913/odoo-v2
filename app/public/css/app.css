@@ -1009,6 +1009,8 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 /* ── AdminAgents.js ── */
 /* AdminAgents: 左右兩欄版面（清單＋編輯區） */
 .aa-layout { display:grid;grid-template-columns:280px 1fr;gap:var(--space-4);align-items:start }
+/* AdminAgents: 選較後面的 agent 時，右側設定仍留在視窗內，免回到頁首才能編輯。 */
+.aa-editor { position:sticky;top:var(--space-4);align-self:start }
 /* AdminAgents: 清單項目內一行（名稱＋model 標籤） */
 .aa-list-item-row { font-size:var(--fs-base);display:flex;justify-content:space-between;align-items:center;gap:var(--space-2) }
 /* AdminAgents: 右側詳情標題列 */
@@ -1179,6 +1181,8 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
   /* Agent 管理是「左清單＋右編輯」的兩欄工作區，左欄寫死 280px，
      小螢幕右欄會被壓到剩百來 px（提示文字變成一字一行）。改上下排。 */
   .aa-layout { grid-template-columns: 1fr; }
+  /* 單欄後設定區排在清單下方，不能 sticky，否則會遮住後續內容。 */
+  .aa-editor { position:static; }
 }
 
 /* ── 手機 ≤640px ── */

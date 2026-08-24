@@ -1,10 +1,10 @@
 // 意圖：健檢 agent 檔契約正確、runner 遍歷落 findings（工作流程健檢子專案 2）。
 const { loadAgent } = require('../pipeline/agent-loader');
 
-test('workflow-health agent：批次一可用 Codex + workflow_health stage + 4 placeholder 可 render', () => {
+test('workflow-health agent：預設 Claude Opus + workflow_health stage + 4 placeholder 可 render', () => {
   const a = loadAgent('workflow-health');
-  expect(a.provider).toBe('codex');
-  expect(a.model).toBe('gpt-5.6-terra');
+  expect(a.provider).toBe('claude');
+  expect(a.model).toBe('opus');
   expect(a.stage).toBe('workflow_health');
   const out = a.render({ agent_label: 'X 標籤', agent_role: '角色', agent_prompt: 'PROMPT-BODY', summary: '{"token":{}}' });
   expect(out).toContain('X 標籤');
