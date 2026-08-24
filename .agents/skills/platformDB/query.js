@@ -7,9 +7,9 @@
  *   2. <repo>/data/config.json 的 DATABASE_URL 欄位
  *
  * 用法：
- *   node .claude/skills/platformDB/query.js "SELECT status, COUNT(*) FROM tasks GROUP BY status"
- *   node .claude/skills/platformDB/query.js --file some.sql
- *   node .claude/skills/platformDB/query.js --json "SELECT ..."   # 輸出 JSON 而非表格
+ *   node .agents/skills/platformDB/query.js "SELECT status, COUNT(*) FROM tasks GROUP BY status"
+ *   node .agents/skills/platformDB/query.js --file some.sql
+ *   node .agents/skills/platformDB/query.js --json "SELECT ..."   # 輸出 JSON 而非表格
  *
  * 安全：預設只做唯讀查詢。這是正式營運資料，勿在此跑 UPDATE/DELETE/DROP（工具會擋非 SELECT/WITH）。
  */

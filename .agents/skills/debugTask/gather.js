@@ -3,7 +3,7 @@
  * gather.js — 一鍵拉齊單一任務的除錯資訊（唯讀，不寫入任何東西）。
  *
  * 用法：
- *   node .claude/skills/debugTask/gather.js <taskId> [--events N] [--json]
+ *   node .agents/skills/debugTask/gather.js <taskId> [--events N] [--json]
  *   <taskId> 可為 tasks.id（整數）或業務 task_id（TEXT）。
  *
  * 輸出區塊：任務狀態與彈跳計數 → 專案/環境（含 setup_log 尾端）→ token_usage 最近執行

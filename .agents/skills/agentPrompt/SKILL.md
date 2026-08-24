@@ -1,12 +1,12 @@
 ---
 name: agentPrompt
-description: Use when editing pipeline agent prompts (.Codex/agents/*.md), shared prompt fragments (source-routing.md / systematic-debugging.md / cs-capability.md), AGENTS.md injected sections, or agent-loader injection config — covers placeholder contracts, result-tag output contracts, memory/wiki-drift side channels, injection order, prompt-version/session-binding effects, and how to verify with jest.
+description: Use when editing pipeline agent prompts (.claude/agents/*.md), shared prompt fragments (source-routing.md / systematic-debugging.md / cs-capability.md), CLAUDE.md injected sections, or agent-loader injection config — covers placeholder contracts, result-tag output contracts, memory/wiki-drift side channels, injection order, prompt-version/session-binding effects, and how to verify with jest.
 ---
 
 # agentPrompt — pipeline prompt 維運守則
 
 ## Overview
-`.Codex/agents/*.md` 是 17 個 pipeline agent 的 prompt。它們**不是普通文件**——每份都掛著機器契約（placeholder、輸出標籤、注入片段），改壞任何一個都是**靜默失敗**：解析不到 → 該關整輪報廢。改 prompt 前先讀本 skill；程式真相在 `app/server/pipeline/agent-loader.js`。
+`.claude/agents/*.md` 是 17 個 pipeline agent 的 prompt。它們**不是普通文件**——每份都掛著機器契約（placeholder、輸出標籤、注入片段），改壞任何一個都是**靜默失敗**：解析不到 → 該關整輪報廢。改 prompt 前先讀本 skill；程式真相在 `app/server/pipeline/agent-loader.js`。
 
 ## 鐵則 1：`{{placeholder}}` 逐一原樣保留
 - JS 端 `render(vars)` 會傳入對應資料；移除 placeholder＝資料沒地方放，新增 placeholder＝渲染成空字串（只留 console 告警，agent 拿到空洞 prompt 照跑——最難察覺的準確性殺手）。
@@ -24,7 +24,7 @@ description: Use when editing pipeline agent prompts (.Codex/agents/*.md), share
 - 對應落地：`<memory>` → `troubleshooting.js` 寫 wiki 疑難排解區；`<wiki-drift>` → `wiki-drift.js` 入佇列背景分類。
 
 ## 注入架構（agent-loader.js 的十一張名單）
-最終 prompt 由上而下：**AGENTS.md 規則 → plain-language → asking-well → 專案備註 → systematic-debugging
+最終 prompt 由上而下：**CLAUDE.md 規則 → plain-language → asking-well → 專案備註 → systematic-debugging
 → source-routing → cs-capability → spec-lookup → must-ask → figma → visual-values → questions-contract
 → agent body**。**這個順序不能隨手改**：片段之間有方位詞互相引用（visual-values 寫「理由見上方【figma】」、
 cs-capability 寫「見下方【figma】」、各 body 寫「見上方【…】」），順序一動就指向錯的地方且零紅燈——
@@ -33,8 +33,8 @@ cs-capability 寫「見下方【figma】」、各 body 寫「見上方【…】�
 
 | 片段 | 注入對象 | 備註 |
 |---|---|---|
-| AGENTS.md `full`（過濾 `<!-- platform-only -->` 後整份） | analysis-project、analysis-reject、coding-project、playwright-spec、spec-review | platform-only 段（Skills 清單等）不會進 pipeline |
-| AGENTS.md `qa`（只 §1＋§2＋Rule 12） | qa | qa-retry 不注入（--resume 已含 fresh 輪規則） |
+| CLAUDE.md `full`（過濾 `<!-- platform-only -->` 後整份） | analysis-project、analysis-reject、coding-project、playwright-spec、spec-review | platform-only 段（Skills 清單等）不會進 pipeline |
+| CLAUDE.md `qa`（只 §1＋§2＋Rule 12） | qa | qa-retry 不注入（--resume 已含 fresh 輪規則） |
 | `systematic-debugging.md` | analysis-reject、coding-project | 診斷／修復型關卡 |
 | `source-routing.md` | analysis-project、coding-project、qa、qa-retry、analysis-reject、playwright-spec | 在客戶 worktree 內作業的關卡 |
 | 專案備註（`project_notes` var） | 開發五關＋chat、chat-to-task、spec-review | 空備註不注入（保 cache 前綴） |
@@ -48,8 +48,8 @@ cs-capability 寫「見下方【figma】」、各 body 寫「見上方【…】�
 | `questions-contract.md` | analysis-project、clarify-chat、respec-patch | 輸出 `clarification_channel.questions` 的關。**2026-08-20 新增**，取代三份各自手抄（原已漂移）。clarify-chat-retry 刻意不吃（走 --resume，見下） |
 
 ## 改動的連鎖效應（promptVersion／session 綁定）
-- `promptVersion()` 對「注入片段＋agent body」做 hash，供 session 綁定：**改 agent body、共用片段、或 AGENTS.md 被注入的段落 → 版本變 → 綁定的 resume session（qa-retry、coding resume）強制 fresh**。這是設計行為（讓新指令生效），但代價是掉 prompt cache；批次修改一次改完，別零星多次改。
-- 只改 AGENTS.md 的 `<!-- platform-only -->` 段落**不會**變動 promptVersion，對 pipeline 零影響。
+- `promptVersion()` 對「注入片段＋agent body」做 hash，供 session 綁定：**改 agent body、共用片段、或 CLAUDE.md 被注入的段落 → 版本變 → 綁定的 resume session（qa-retry、coding resume）強制 fresh**。這是設計行為（讓新指令生效），但代價是掉 prompt cache；批次修改一次改完，別零星多次改。
+- 只改 CLAUDE.md 的 `<!-- platform-only -->` 段落**不會**變動 promptVersion，對 pipeline 零影響。
 - frontmatter：`model` 只允許 haiku/sonnet/opus/fable；frontmatter 邊界只認「裸 `---` 行」，body 內的 `---XXX---` 標記安全。
 
 ## 改完怎麼驗

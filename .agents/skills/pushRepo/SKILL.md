@@ -14,18 +14,18 @@ description: Use when pushing this platform repo (odoo-v2) or any per-user PAT r
 
 ## Usage
 ```bash
-node .Codex/skills/pushRepo/push.js [--repo <path>] [--branch <name>] [--remote origin] [--user <id>]
+node .agents/skills/pushRepo/push.js [--repo <path>] [--branch <name>] [--remote origin] [--user <id>]
 ```
 預設：`repo=$APP_DIR` 或 `/home/odoo/odoo-v2`；`branch`=當前；`remote=origin`；`user=2`（kingsmvp2）。
 `DATABASE_URL`／`APP_SECRET` 依序取自 `env → <repo>/data/config.json → 平台 server 進程`。
 
 落 exit code 別經管線（此 repo 已因此誤判過）：
 ```bash
-node .Codex/skills/pushRepo/push.js > out 2>&1; echo "EXIT=$?" >> out
+node .agents/skills/pushRepo/push.js > out 2>&1; echo "EXIT=$?" >> out
 ```
 
 ## Notes
-- **只 push，不 commit**。commit 走一般 `git commit`（git user 已是 Codex）。
+- **只 push，不 commit**。commit 走一般 `git commit`。
 - **commit 前逐檔挑選、禁 `git add -A`**——此 repo 常態多股平行工作，盲目 add 會夾帶別人未完成的變更。
 - push 前若在非預期分支，先確認：平台主 clone 常駐 `testing`，切分支後要切回。
 

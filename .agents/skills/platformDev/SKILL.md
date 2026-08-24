@@ -1,12 +1,12 @@
 ---
 name: platformDev
-description: Use when developing the platform app itself — app/server Node backend (routes, pipeline, tests) or app/public frontend (views, CSS). Covers jest/pg-mem/supertest conventions, test pairing rules, frontend structure, and the CSS variable / dark-mode color rules (moved here from AGENTS.md §3).
+description: Use when developing the platform app itself — app/server Node backend (routes, pipeline, tests) or app/public frontend (views, CSS). Covers jest/pg-mem/supertest conventions, test pairing rules, frontend structure, and the CSS variable / dark-mode color rules (moved here from CLAUDE.md §3).
 ---
 
 # platformDev — 平台本體（app/）開發慣例
 
 ## Overview
-這是開發**平台自己**（`app/` 的 Node server 與 `app/public` 前端）時的慣例。客戶 Odoo 模組開發規則不在此——那在 AGENTS.md §0–§2（由 agent-loader 注入 pipeline）。
+這是開發**平台自己**（`app/` 的 Node server 與 `app/public` 前端）時的慣例。客戶 Odoo 模組開發規則不在此——那在 CLAUDE.md §0–§2（由 agent-loader 注入 pipeline）。
 
 ## 跑測試
 ```bash
@@ -19,7 +19,7 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 
 ## 後端結構速覽
 - `app/server/*-routes.js`：HTTP API（`index.js` 掛載）；`/ai/*` 端點掛 `loopbackOnly`（只准本機，供 agent curl）。
-- `app/server/pipeline/`：pipeline 各關 runner 與共用件——agent 定義載入（`agent-loader.js`，改 prompt 先看 **agentPrompt** skill）、`Codex-runner.js`（spawn Codex CLI）、`runner.js`/`task-agent.js`(流程編排)。
+- `app/server/pipeline/`：pipeline 各關 runner 與共用件——agent 定義載入（`agent-loader.js`，改 prompt 先看 **agentPrompt** skill）、`claude-runner.js`（spawn claude CLI）、`runner.js`/`task-agent.js`(流程編排)。
 - `app/server/lib/`:跨模組工具(git、crypto、attachments、ssh-sql…)。
 - `app/server/db.js`:schema 唯一真相(`migrate()` idempotent;加欄位走 ALTER 清單模式)。
 - `app/server/cron.js`:背景批次(退回分類、wiki-drift 分類與套用…)。
@@ -29,7 +29,7 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 - 元件外觀對照 `styleguide.html`；新 UI 先看有沒有現成 class。
 - 任務狀態的中文標籤只有 `js/status-labels.js` 一份（`window.STATUS_LABELS`），view 不得自帶——`frontend-status-labels.test.js` 會擋。後端 `runner.js` 的 `STAGE_LABELS` 是「執行歷程」另一套文案，刻意不共用，但**新增流程狀態要兩邊都補**（該測試斷言前端涵蓋後端 key）。
 
-## 配色／dark-mode 硬規則（原 AGENTS.md §3 條文，真相在此）
+## 配色／dark-mode 硬規則（原 CLAUDE.md §3 條文，真相在此）
 - 配色一律走 `app.css` 的 CSS 變數／dark-aware class（如錯誤框套 `.error-msg`）。
 - **禁止**在 inline style 寫死淺色 `background`（`#fff`/`#fef2f2`/`#f8fafc` 等）而不同時寫死可讀文字色——否則深色模式文字色吃 `var(--text)` 翻白＝隱形。
 - 底色需區隔時用 `var(--bg)`/`var(--surface)` 等變數,勿寫死。

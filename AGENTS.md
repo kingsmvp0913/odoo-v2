@@ -4,21 +4,27 @@
 > 註：舊的 PS1「開工」pipeline 已退役，全部改走網頁模式（`app/` 內的 Node pipeline）。
 > 本檔僅保留仍適用的通用開發規則。
 
-## Skills
-- **getSQL** (`.Codex/skills/getSQL/SKILL.md`) - 透過 SSH-SQLM API 查詢遠端 PostgreSQL。觸發：`/getSQL`
-When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` before doing anything else.
-- **platformDB** (`.Codex/skills/platformDB/SKILL.md`) - 查平台自己的本地 PostgreSQL（`Codex` DB／port 5416）：tasks、token_usage、彈跳計數、pipeline 指標、wiki 漂移觀測。觸發：`/platformDB`
-When the user types `/platformDB`, invoke the Skill tool with `skill: "platformDB"` before doing anything else.
-- **agentPrompt** (`.Codex/skills/agentPrompt/SKILL.md`) - 改 `.Codex/agents/*.md`、共用 prompt 片段（source-routing／systematic-debugging／cs-capability）或 agent-loader 注入設定**之前必讀**：placeholder／`<result>`／側通道契約與驗證方式。觸發：`/agentPrompt`
-When the user types `/agentPrompt`, invoke the Skill tool with `skill: "agentPrompt"` before doing anything else.
-- **debugTask** (`.Codex/skills/debugTask/SKILL.md`) - 依 taskId 一鍵拉齊失敗任務的全部除錯資訊（狀態、彈跳計數、task_events、deploy/E2E/odoo log、setup_log）＋「症狀→看哪裡」判讀表。觸發：`/debugTask`
-When the user types `/debugTask`, invoke the Skill tool with `skill: "debugTask"` before doing anything else.
-- **platformDev** (`.Codex/skills/platformDev/SKILL.md`) - 開發平台本體（`app/server`／`app/public`）的慣例：jest/pg-mem/supertest、測試配對、前端結構與**配色 dark-mode 硬規則**（動 `app/public` 前先載入）。觸發：`/platformDev`
-When the user types `/platformDev`, invoke the Skill tool with `skill: "platformDev"` before doing anything else.
-- **wikiQuery** (`.Codex/skills/wikiQuery/SKILL.md`) - 查專案 wiki 知識庫（頁面清單／內容／troubleshooting 排障結論）與漂移修正流向。觸發：`/wikiQuery`
-When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"` before doing anything else.
-- **healthCheck** (`.Codex/skills/healthCheck/SKILL.md`) - 平台健檢判準：指標判讀、裁決的證據門檻、什麼才配列入修改、已知盲區。跑健檢、看健檢結果、或判斷某關要不要改 prompt 之前必讀。觸發：`/healthCheck`
-When the user types `/healthCheck`, invoke the Skill tool with `skill: "healthCheck"` before doing anything else.
+## Skills（本專案的參考文件）
+
+⚠ **本檔（AGENTS.md）沒有任何程式在讀**，它只給互動式 Codex 看。pipeline 各關收到的規則是 `agent-loader.js` 的 `loadPipelineRules()` 從 **`.claude/CLAUDE.md`** 讀進去的（會先濾掉 `<!-- platform-only -->` 段落）。**想影響 pipeline 就得改 `.claude/CLAUDE.md`；改本檔對 pipeline 零效果，而且不會有任何警訊。**
+
+下列是這個 repo 累積的排障／開發知識，放在 `.agents/skills/`。**符合情境時直接讀對應的 `SKILL.md`，不必等使用者開口**；使用者打 `/<名稱>` 就是要你讀那一份。
+
+| Skill | 什麼時候讀 |
+|---|---|
+| `.agents/skills/agentPrompt/SKILL.md` | **改 `.claude/agents/*.md`、`app/server/pipeline/*.md` 共用片段、或 agent-loader 注入設定之前必讀**——那些檔掛著機器契約（placeholder／`<result>`／側通道），改壞是靜默失敗：解析不到就整輪報廢 |
+| `.agents/skills/platformDev/SKILL.md` | **動 `app/server`／`app/public` 之前必讀**——jest／pg-mem／supertest 慣例、測試配對規則、前端結構與配色 dark-mode 硬規則 |
+| `.agents/skills/healthCheck/SKILL.md` | 跑健檢、看健檢結果、或判斷某關要不要改 prompt 之前必讀——指標怎麼讀、證據門檻、什麼才配列入修改、已知盲區 |
+| `.agents/skills/pipelineFlow/SKILL.md` | 要搞懂或修改任務 pipeline：有哪些關、怎麼接、進出各關的東西、重試上限、哪支 agent 跑哪關 |
+| `.agents/skills/platformDB/SKILL.md` | 查平台自己的本地 Postgres（DB 名 `claude`／port 5416）：tasks、token_usage、彈跳計數、pipeline 指標、wiki 漂移觀測 |
+| `.agents/skills/debugTask/SKILL.md` | 依 taskId 一鍵拉齊失敗任務的全部除錯資訊（狀態、彈跳計數、task_events、deploy／E2E／odoo log、setup_log）＋「症狀→看哪裡」判讀表 |
+| `.agents/skills/getSQL/SKILL.md` | 查客戶遠端 Odoo 專案的 PostgreSQL（透過 SSH-SQLM API）。**不是平台 DB**——那個用 platformDB |
+| `.agents/skills/getLog/SKILL.md` | 讀客戶正式機的 Odoo 應用 log 追某個回報的錯誤（需要事發時間） |
+| `.agents/skills/odooDev/SKILL.md` | 改 Odoo 模組（model／view／權限／報表）、或判讀「這是 bug 還是原生行為」之前 |
+| `.agents/skills/wikiQuery/SKILL.md` | 查專案 wiki 知識庫：頁面清單／內容、troubleshooting 排障結論、漂移修正流向 |
+| `.agents/skills/pushRepo/SKILL.md` | 要 push 這個平台 repo 或使用者 PAT repo 到 GitHub 之前 |
+
+> 這 11 支是 `.claude/skills/` 的副本，內容應逐字一致；唯一的合法差異是執行指令的路徑（`node .agents/skills/...`）。兩邊不一致時**以 `.claude/skills/` 為準**。
 <!-- /platform-only -->
 
 ## 0. Hard Rules

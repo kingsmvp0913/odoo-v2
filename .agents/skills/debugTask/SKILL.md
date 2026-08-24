@@ -6,13 +6,13 @@ description: Use when debugging a failed, stuck, or bounced pipeline task by tas
 # debugTask — 任務失敗一站式除錯
 
 ## Overview
-任務在 pipeline 卡住／失敗／反覆彈跳時，除錯資訊散在 DB 三張表＋三種檔案 log。這個 skill 一道指令拉齊全部，再依「症狀→看哪裡」表定位。**路徑真相來源是 AGENTS.md §6**——本 skill 只固化「怎麼查」的流程，路徑規則若有變動以 §6 為準。
+任務在 pipeline 卡住／失敗／反覆彈跳時，除錯資訊散在 DB 三張表＋三種檔案 log。這個 skill 一道指令拉齊全部，再依「症狀→看哪裡」表定位。**路徑真相來源是 CLAUDE.md §6**——本 skill 只固化「怎麼查」的流程，路徑規則若有變動以 §6 為準。
 
 ## 一鍵拉齊
 
 ```bash
-node .Codex/skills/debugTask/gather.js <taskId>            # tasks.id 整數或業務 task_id 皆可
-node .Codex/skills/debugTask/gather.js <taskId> --events 60 # task_events 多看幾筆
+node .agents/skills/debugTask/gather.js <taskId>            # tasks.id 整數或業務 task_id 皆可
+node .agents/skills/debugTask/gather.js <taskId> --events 60 # task_events 多看幾筆
 ```
 
 輸出依序：任務狀態與彈跳計數 → 專案/環境（含 `setup_log` 尾端）→ 各關最近執行（`token_usage`）→ `task_events` 尾端 → deploy log → e2e log → `odoo.log` 尾端。唯讀，單一來源缺漏不影響其餘區塊。
