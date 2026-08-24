@@ -25,7 +25,7 @@ node .claude/skills/pushRepo/push.js > out 2>&1; echo "EXIT=$?" >> out
 ```
 
 ## Notes
-- **只 push，不 commit**。commit 走一般 `git commit`（git user 已是 Claude Code）。
+- **只 push，不 commit**。commit 走一般 `git commit`。
 - **commit 前逐檔挑選、禁 `git add -A`**——此 repo 常態多股平行工作，盲目 add 會夾帶別人未完成的變更。
 - push 前若在非預期分支，先確認：平台主 clone 常駐 `testing`，切分支後要切回。
 

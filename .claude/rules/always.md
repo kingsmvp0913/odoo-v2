@@ -17,4 +17,4 @@
 10. **平台目標優先序固定：穩定 > 準確 > 省 token** — 取捨衝突時據此裁決。實測為省 token 而犧牲穩定，反而在失敗迴圈上多花更多。
 11. **此 repo 沒有 `project_members` 表，12 個 project 端點裡 11 個只有 `verifyToken`——專案共享是既有設計** — 新增 project 端點不能假設有專案層級授權；高風險動作必須自行加權限檢查。
 12. **取指令的 exit code 不要經過管線或尾隨指令** — `cmd | tail`、`cmd; echo "exit=$?"` 拿到的都不是 `cmd` 的碼（背景任務通知回報的也是整串的碼）。此 repo 已因此誤判三次：把失敗的 `docker build` 報成成功、把有紅燈的 `npm test` 讀成 exit 0。**先落檔再統計**，要 exit code 就 `cmd > out 2>&1; echo "EXITCODE=$?" >> out`。
-
+13. **改 `.claude/skills/` 之後必須跑 `node scripts/sync-skills.js`** — Codex 讀的是 `.agents/skills/` 的**實體副本**（symlink 在此 repo 存不進版控，`core.symlinks=false`，別台 clone 會拿到空目錄，而 skill 靜默消失最難察覺）。兩份不同步時沒有任何徵狀：測試綠、畫面正常，Codex 照著舊版 `SKILL.md` 辦事。**來源永遠是 `.claude/skills/`，不要手改 `.agents/skills/`**（下次同步會覆蓋）。`app/server/tests/skills-sync.test.js` 會在全跑時紅燈，但別等它——改完就同步。

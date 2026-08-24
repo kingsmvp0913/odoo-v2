@@ -24,7 +24,7 @@
 | `.agents/skills/wikiQuery/SKILL.md` | 查專案 wiki 知識庫：頁面清單／內容、troubleshooting 排障結論、漂移修正流向 |
 | `.agents/skills/pushRepo/SKILL.md` | 要 push 這個平台 repo 或使用者 PAT repo 到 GitHub 之前 |
 
-> 這 11 支是 `.claude/skills/` 的副本，內容應逐字一致；唯一的合法差異是執行指令的路徑（`node .agents/skills/...`）。兩邊不一致時**以 `.claude/skills/` 為準**。
+> 這 11 支是 `.claude/skills/` 的副本，由 `node scripts/sync-skills.js` 產生：內容逐字一致，唯一的自動差異是執行指令的路徑（`node .agents/skills/...`）。**不要手改本目錄**——下次同步會覆蓋掉；要改請改 `.claude/skills/` 再跑同步。漂移由 `app/server/tests/skills-sync.test.js` 把關。
 <!-- /platform-only -->
 
 ## 0. Hard Rules
