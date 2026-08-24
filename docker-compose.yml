@@ -14,8 +14,9 @@ services:
       # 同構掛載（宿主路徑 === 容器路徑），見 .env.example 的說明。
       - ${HOST_REPO_DIR}:${HOST_REPO_DIR}
       - ${HOST_ENV_BASE}:${HOST_ENV_BASE}
-      # claude 訂閱登入憑證與 PG 資料：不得隨容器重建而消失。
+      # Claude／Codex 訂閱登入憑證與 PG 資料：不得隨容器重建而消失。
       - claude-home:/home/odoo/.claude
+      - codex-home:/home/odoo/.codex
       - pgdata:/var/lib/postgresql/data
     working_dir: ${HOST_REPO_DIR}
     environment:
@@ -39,4 +40,5 @@ services:
 
 volumes:
   claude-home:
+  codex-home:
   pgdata:

@@ -32,6 +32,12 @@ fi
 if command -v docker >/dev/null 2>&1 && [ -n "$(docker ps -q -f name='^odoo-v2$' 2>/dev/null)" ]; then
   echo "偵測到 Docker 模式（容器 odoo-v2 執行中）。"
 
+  # Codex CLI 是平台訂閱登入與 Codex agent 的共同前提；舊 image 尚未內建時在升級補裝。
+  if ! docker exec odoo-v2 sh -c 'command -v codex >/dev/null 2>&1'; then
+    echo "未偵測到 Codex CLI，於容器內補裝..."
+    docker exec odoo-v2 npm i -g @openai/codex
+  fi
+
   # 相依變動：在容器內裝，宿主的 node 版本與原生 binding 未必與 image 一致。
   if ! git diff --quiet "$BEFORE" "$AFTER" -- app/package.json app/package-lock.json; then
     echo "相依有更動，於容器內執行 npm install..."
@@ -62,6 +68,12 @@ fi
 if ! git diff --quiet "$BEFORE" "$AFTER" -- app/package.json app/package-lock.json; then
   echo "相依有更動，執行 npm install..."
   (cd app && npm install)
+fi
+
+# 舊環境可能早於 Codex 導入；只在缺少時補裝，避免每次升級都改動全域 CLI 版本。
+if ! command -v codex >/dev/null 2>&1; then
+  echo "未偵測到 Codex CLI，補裝..."
+  npm i -g @openai/codex
 fi
 
 # 4. 只停「server 行程」、不砍整個 tmux session。

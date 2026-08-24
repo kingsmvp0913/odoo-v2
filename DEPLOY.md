@@ -14,6 +14,7 @@
 | Google Chrome | tour E2E 測試 | https://www.google.com/chrome/ |
 | PostgreSQL（含 psql） | App 與 Odoo 共用資料庫 | https://www.postgresql.org/download/ |
 | xmllint（libxml2） | XML view 格式驗證（`xmllint --noout`） | Linux 由 `install.sh` 自動裝 `libxml2-utils`；Windows 選用 |
+| Claude Code／Codex CLI | Pipeline AI agent 與訂閱登入 | 一鍵安裝／升級時自動補裝 |
 
 選用：`ssh-keygen`/`ssh-keyscan`（Git SSH 金鑰功能，多數作業系統內建）。
 
@@ -315,7 +316,7 @@ docker exec -it odoo-v2 node scripts/setup.js --skip-start   # 重建容器會�
 
 ## 重跑安裝
 
-`install.ps1`/`install.sh` 與 `scripts/setup.js` 皆為 idempotent：已安裝的系統套件、已存在的 `data/config.json`、已就緒的 PostgreSQL role/db、已登入的 Claude、已裝的 MCP/plugin 都會跳過，不會覆蓋既有資料。
+`install.ps1`/`install.sh` 與 `scripts/setup.js` 皆為 idempotent：已安裝的系統套件、已存在的 `data/config.json`、已就緒的 PostgreSQL role/db、已登入的 Claude、已裝的 Claude/Codex CLI 與 MCP/plugin 都會跳過，不會覆蓋既有資料。
 
 只想重跑「Claude Code 環境／PostgreSQL／相依檢查」而不重開瀏覽器，可用：
 ```bash

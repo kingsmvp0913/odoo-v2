@@ -8,6 +8,7 @@ const { execSync, execFileSync } = require('child_process');
 const { ensureConfig } = require('./lib/config');
 const { ensurePostgres } = require('./lib/postgres');
 const { ensureClaudeEnv } = require('./lib/claude-env');
+const { ensureCodexCli } = require('./lib/codex-env');
 const { verifyRuntimeDeps } = require('./lib/checks');
 const { verifyDocker, ensureGatewayImage } = require('./lib/docker');
 
@@ -61,6 +62,9 @@ async function main() {
 
   await ensureClaudeEnv();
   console.log('[OK] Claude Code 環境已就緒');
+
+  ensureCodexCli();
+  console.log('[OK] Codex CLI 已就緒');
 
   if (skipStart) {
     console.log('已略過啟動（--skip-start）。可自行執行 node app/server/index.js 或 ./start.ps1 / ./start.sh。');

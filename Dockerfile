@@ -39,8 +39,8 @@ RUN curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chro
     && rm -f /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# claude CLI（scripts/lib/claude-env.js 的 checkCli 也會補裝，此處預先裝好省首跑時間）。
-RUN npm i -g @anthropic-ai/claude-code
+# Claude／Codex CLI（setup.js 也會補裝，此處預先裝好省首跑時間）。
+RUN npm i -g @anthropic-ai/claude-code @openai/codex
 
 # 使用者身分：uid/gid 必須對齊宿主的 odoo（1004:1004），否則 bind mount 進來的 repo 權限錯亂。
 # 另加入 gid 999 的群組——宿主 /var/run/docker.sock 是 root:docker 660，gid 999；
@@ -67,9 +67,9 @@ ENV PGADMIN_USER=odoo
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
-# claude 設定目錄：compose 掛 named volume 於此保存登入憑證。volume 首次掛載會沿用 image 內
-# 該路徑的擁有者，image 內若不存在則 docker 建成 root:root，claude 寫 plugins/ 會 EACCES。
-RUN mkdir -p /home/odoo/.claude && chown odoo:odoo /home/odoo/.claude
+# Claude／Codex 設定目錄：compose 掛 named volume 於此保存登入憑證。volume 首次掛載會沿用 image 內
+# 該路徑的擁有者，image 內若不存在則 docker 建成 root:root，CLI 寫設定會 EACCES。
+RUN mkdir -p /home/odoo/.claude /home/odoo/.codex && chown -R odoo:odoo /home/odoo/.claude /home/odoo/.codex
 
 USER odoo
 
