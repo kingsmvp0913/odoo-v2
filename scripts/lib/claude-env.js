@@ -35,18 +35,6 @@ function ensureLogin(deps = {}) {
   }
 }
 
-function ensureMcpServer(deps = {}) {
-  const execFileSync = deps.execFileSync || realExecFileSync;
-  const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8' });
-  if (list.includes('serena')) return { name: 'mcp-serena', status: 'skipped' };
-  execFileSync('claude', [
-    'mcp', 'add', '--scope', 'user', 'serena', '--',
-    'uvx', '--from', 'git+https://github.com/oraios/serena', 'serena',
-    'start-mcp-server', '--context', 'claude-code', '--project-from-cwd',
-  ], { stdio: 'inherit' });
-  return { name: 'mcp-serena', status: 'done' };
-}
-
 function ensurePlugins(deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
   const installed = execFileSync('claude', ['plugin', 'list'], { encoding: 'utf8' });
@@ -67,10 +55,9 @@ async function ensureClaudeEnv(deps = {}) {
   const steps = [
     checkCli(deps),
     ensureLogin(deps),
-    ensureMcpServer(deps),
     ...ensurePlugins(deps),
   ];
   return { steps };
 }
 
-module.exports = { checkCli, ensureLogin, ensureMcpServer, ensurePlugins, ensureClaudeEnv };
+module.exports = { checkCli, ensureLogin, ensurePlugins, ensureClaudeEnv };

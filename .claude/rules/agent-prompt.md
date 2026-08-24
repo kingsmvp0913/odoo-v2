@@ -17,7 +17,7 @@ paths:
 105. **多個 agent 共用的 persona／規則抽成 `.md` 片段，經 agent-loader 具名集合注入**（比照 `SOURCE_ROUTING_AGENTS`／`CS_CAPABILITY_AGENTS`）— 改一處兩邊生效；新增片段記得納入 `promptVersion`。
 106. **agent prompt 必須明令「核心 API 只能查 context7、嚴禁掃碟找 Odoo 核心原始碼、探索範圍限縮 worktree」** — worktree 內沒有 Odoo 核心，agent 會 `find /`／`Get-ChildItem C:\` 掃整個檔案系統，被守衛中止並白燒一整個 turn。
 107. **「引用 Odoo 原生行為的關卡」要成對配置：給 context7 ＋ 禁讀／禁掃 core** — 只禁不給等於逼 agent 亂跑。不碰 core 的關卡（merge／wiki）維持 none。
-108. **不要在 pipeline 塞 serena；每關 MCP 一律由 `claude-runner.js` 的 `MCP_PROFILES` map 依 agentType 指定** — 生產數據 825 次 tool_use 中 serena 近乎 0。
+108. **每關 MCP 一律由 `claude-runner.js` 的 `MCP_PROFILES` map 依 agentType 指定，不要靠使用者層繼承** — 繼承來的 server 各關都吃冷啟動與 schema 成本卻不見得會用（serena 即為此例：生產數據 825 次 tool_use 中近乎 0，已於 2026-08-24 整個移除）。
 109. **coding agent 每輪必須先讀 worktree 既有碼、修正輪只做外科式修改、禁止整包重寫** — 不加這條，coding 會反覆整包重生（14k→21k→15k），把 QA 指出的細節蓋回錯誤預設。
 110. **澄清類 agent 一律「一次列齊所有阻斷性模糊點、禁止分批追問」** — 分批會讓同一件事問三輪。
 111. **分流／客服類 agent 若要負責回答技術問題，必須給 cwd／repo 路徑與 context7，不能用 haiku 零調查分流器**。

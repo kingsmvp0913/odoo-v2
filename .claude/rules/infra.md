@@ -37,7 +37,7 @@ paths:
 132. **`claude` CLI 的 `Not logged in` 走 stdout 而非 stderr** — 只掃 stderr 會漏掉，錯誤被吞成泛用 `exited with code 1`。認證失敗應歸類為 transient。
 133. **`/api/oauth/usage` 是非官方逆向端點且限流很兇，60s TTL 快取是必需品不是最佳化** — 官方 Admin/Analytics API 給的是 API 花費而非訂閱視窗。抓取失敗必須 fail loud，否則會靜靜卡在 stale snapshot 上。
 134. **Claude 用量是全平台單一帳號共用（`~/.claude/.credentials.json`），用量閘門必須是全域的**。
-135. **Serena MCP 已用 `--context claude-code` 註冊，不要再調整，也不要從 `/plugins` 另裝** — 該 context 會 strip 掉與 Claude Code 內建重複的工具。Claude Code v2.0.74+ 已內建 LSP。
+135. **Serena MCP 已於 2026-08-24 全面移除（Claude Code user scope、Codex、本 repo 的 setup 與 Dockerfile），不要再裝回來** — 三個月零工具呼叫（transcript 與 serena 自身 log 雙向查證），Grep/Read 已覆蓋 repo 內 symbol 查詢，Claude Code v2.0.74+ 亦已內建 LSP。連帶：`uv/uvx` 在本 repo 只為 serena 而存在，已一併從 `checks.js`／`install.sh`／`install.ps1`／`Dockerfile`／`DEPLOY.md` 移除。
 136. **範圍窄、有明確答案的驗證類 subagent 一律指定 `model: 'sonnet'`** — 數量多，用高階模型會撞 session limit 全數失敗；失敗的 agent 呼叫不會進 Workflow 的 resume 快取。
 
 ### VPN（若新主機要用）

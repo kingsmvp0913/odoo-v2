@@ -1,5 +1,5 @@
 const {
-  checkCli, ensureLogin, ensureMcpServer, ensurePlugins, ensureClaudeEnv,
+  checkCli, ensureLogin, ensurePlugins, ensureClaudeEnv,
 } = require('../../../scripts/lib/claude-env');
 
 describe('checkCli', () => {
@@ -49,22 +49,6 @@ describe('ensureLogin', () => {
   });
 });
 
-describe('ensureMcpServer', () => {
-  test('serena 已在 claude mcp list 中時跳過註冊', () => {
-    const execFileSync = jest.fn(() => 'serena  connected');
-    const result = ensureMcpServer({ execFileSync });
-    expect(result).toEqual({ name: 'mcp-serena', status: 'skipped' });
-    expect(execFileSync).toHaveBeenCalledTimes(1);
-  });
-
-  test('serena 不在清單中時執行 claude mcp add', () => {
-    const execFileSync = jest.fn((cmd, args) => (args[0] === 'mcp' && args[1] === 'list') ? '' : '');
-    const result = ensureMcpServer({ execFileSync });
-    expect(result).toEqual({ name: 'mcp-serena', status: 'done' });
-    expect(execFileSync).toHaveBeenCalledWith('claude', expect.arrayContaining(['mcp', 'add', '--scope', 'user', 'serena']), expect.any(Object));
-  });
-});
-
 describe('ensurePlugins', () => {
   test('marketplace 與全部 plugin 都已安裝時全部 skipped', () => {
     const installed = [
@@ -98,7 +82,7 @@ describe('ensureClaudeEnv', () => {
   test('全部條件已就緒時依序回報四個 skipped 步驟', async () => {
     const execFileSync = jest.fn((cmd, args) => {
       if (cmd === 'claude' && args[0] === '--version') return 'claude 1.0.0';
-      if (args[0] === 'mcp' && args[1] === 'list') return 'serena  connected';
+      if (args[0] === 'mcp' && args[1] === 'list') return '';
       if (args[0] === 'plugin' && args[1] === 'list') {
         return [
           'claude-plugins-official',
@@ -113,7 +97,7 @@ describe('ensureClaudeEnv', () => {
     });
     const spawnSync = jest.fn();
     const result = await ensureClaudeEnv({ execFileSync, spawnSync });
-    expect(result.steps.map(s => s.name)).toEqual(['cli', 'login', 'mcp-serena', 'superpowers@claude-plugins-official', 'hookify@claude-plugins-official', 'code-review@claude-plugins-official', 'context7@claude-plugins-official', 'security-guidance@claude-plugins-official']);
+    expect(result.steps.map(s => s.name)).toEqual(['cli', 'login', 'superpowers@claude-plugins-official', 'hookify@claude-plugins-official', 'code-review@claude-plugins-official', 'context7@claude-plugins-official', 'security-guidance@claude-plugins-official']);
     expect(result.steps.every(s => s.status === 'skipped')).toBe(true);
   });
 });

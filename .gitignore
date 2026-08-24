@@ -39,8 +39,6 @@ env/
 docker-compose.override.yml
 
 # ─── 工具快取 ───────────────────────────────────────────
-.serena/cache/
-.serena/project.local.yml
 
 # ─── RWD 截圖的執行期產物 ───────────────────────────
 # 只有 inventory/ 進版控。baseline/ 會把正式區畫面上的真實資料
