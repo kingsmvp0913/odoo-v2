@@ -270,7 +270,13 @@ function registerRoutes(app) {
 
   app.get('/api/admin/users', auth, async (req, res) => {
     try {
-      const { rows } = await query('SELECT id, username, display_name, role, approved, created_at FROM users ORDER BY id ASC');
+      // has_pat 只回布林不回密文（比照 claude-token 端點）——「CLI 推送身分」下拉要據此
+      // 標出誰選了會失敗，選人當下就看得出來，而不是 push 到一半才拿到 NoGitCredentialError。
+      const { rows } = await query(
+        `SELECT id, username, display_name, role, approved, created_at,
+                (github_pat_enc IS NOT NULL AND github_pat_enc <> '') AS has_pat
+         FROM users ORDER BY id ASC`
+      );
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -353,6 +359,38 @@ function registerRoutes(app) {
       if (err.status === 404) return res.status(404).json({ error: 'Not found' });
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // CLI 推送身分：人在終端機跑 pushRepo/push.js 且沒帶 --user 時，用誰的 PAT。
+  // 平台自己的推送不看這欄（push-ai／runner／merge-agent／finding-fix／enterprise-routes
+  // 一律帶任務或請求的 user_id），所以改這裡不影響任何自動流程。
+  // 走專屬端點而非 teams-settings 的全量 upsert：那支 PUT 漏帶欄位就清空（見 teams-routes.js
+  // 裡 test_mode 被靜默關掉的註解）。
+  app.put('/api/admin/cli-push-user', auth, async (req, res) => {
+    try {
+      const raw = req.body.cli_push_user_id;
+      const userId = (raw === null || raw === undefined || raw === '') ? null : parseInt(raw, 10);
+      if (userId !== null && !Number.isInteger(userId)) {
+        return res.status(400).json({ error: 'cli_push_user_id 必須是整數或空值' });
+      }
+      if (userId !== null) {
+        // 存的時候就擋掉沒 PAT 的人。否則失敗會延到 push 當下，而 NoGitCredentialError 讀起來
+        // 像「這個人沒設 PAT」，實際上也可能是「這個 id 不存在」——兩種真因同一句話。
+        const { rows } = await query(
+          `SELECT (github_pat_enc IS NOT NULL AND github_pat_enc <> '') AS has_pat
+           FROM users WHERE id = $1`,
+          [userId]
+        );
+        if (!rows.length) return res.status(400).json({ error: `使用者 ${userId} 不存在` });
+        if (!rows[0].has_pat) return res.status(400).json({ error: '該使用者尚未設定 GitHub PAT' });
+      }
+      await query(
+        `INSERT INTO teams_settings (id, cli_push_user_id, updated_at) VALUES (1, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET cli_push_user_id = $1, updated_at = NOW()`,
+        [userId]
+      );
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // --- project_maps ---

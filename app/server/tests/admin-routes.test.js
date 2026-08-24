@@ -260,3 +260,67 @@ test('POST /api/admin/embedding/rebuild → 非 admin 403', async () => {
     .set('Authorization', `Bearer ${userToken}`).send({});
   expect(res.status).toBe(403);
 });
+
+// --- CLI 推送身分（teams_settings.cli_push_user_id）---
+// 意圖（Rule 9）：這個設定只服務「人在終端機跑 pushRepo/push.js 且沒帶 --user」。
+// 原本 push.js 寫死預設 user=2，而本機與正式機的 users 表各自獨立——寫死的數字在另一邊
+// 指到不存在的人，拿到的卻是 NoGitCredentialError（讀起來像「這個人沒設 PAT」），真因
+// 指不出來。所以存的當下就要擋：id 不存在、或該人沒 PAT，都不准存進去。
+describe('PUT /api/admin/cli-push-user', () => {
+  test('id 不存在 → 400，不寫進設定', async () => {
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: 99999 });
+    expect(res.status).toBe(400);
+    const { rows } = await dbModule.query('SELECT cli_push_user_id FROM teams_settings WHERE id = 1');
+    expect(rows[0] && rows[0].cli_push_user_id).toBeFalsy();
+  });
+
+  test('該使用者沒有 PAT → 400（否則失敗會延到 push 當下）', async () => {
+    const { rows } = await dbModule.query("SELECT id FROM users WHERE username = 'regular'");
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: rows[0].id });
+    expect(res.status).toBe(400);
+  });
+
+  test('有 PAT 的使用者 → 存得起來且從 teams-settings 讀得回', async () => {
+    const { rows } = await dbModule.query("SELECT id FROM users WHERE username = 'regular'");
+    const uid = rows[0].id;
+    await dbModule.query("UPDATE users SET github_pat_enc = 'enc-blob' WHERE id = $1", [uid]);
+
+    const put = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: uid });
+    expect(put.status).toBe(200);
+
+    // 讀得回才有意義——下拉是靠 GET teams-settings 回填當前選擇的
+    const get = await request(app).get('/api/admin/teams-settings')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(get.body.cli_push_user_id).toBe(uid);
+  });
+
+  test('送 null → 清成未設定（push.js 會改為列出可用帳號）', async () => {
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${adminToken}`).send({ cli_push_user_id: null });
+    expect(res.status).toBe(200);
+    const { rows } = await dbModule.query('SELECT cli_push_user_id FROM teams_settings WHERE id = 1');
+    expect(rows[0].cli_push_user_id).toBeNull();
+  });
+
+  test('非 admin → 403', async () => {
+    const res = await request(app).put('/api/admin/cli-push-user')
+      .set('Authorization', `Bearer ${userToken}`).send({ cli_push_user_id: null });
+    expect(res.status).toBe(403);
+  });
+});
+
+// 意圖：下拉要標出「誰選了會失敗」，靠的是 users 列表的 has_pat。這欄只能是布林——
+// 同一支端點若把 github_pat_enc 一起吐出去，PAT 密文就外洩到前端了。
+test('GET /api/admin/users → 有 has_pat 布林，且不含 PAT 密文', async () => {
+  const res = await request(app).get('/api/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body.length).toBeGreaterThan(0);
+  for (const u of res.body) {
+    expect(typeof u.has_pat).toBe('boolean');
+    expect(u.github_pat_enc).toBeUndefined();
+  }
+});

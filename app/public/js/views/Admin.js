@@ -21,6 +21,9 @@ window.AdminView = Vue.defineComponent({
       context7KeyInput: '',
       savingContext7Key: false,
       clearingContext7Key: false,
+      users: [],
+      cliPushUserId: null,
+      savingCliPushUser: false,
       loading: true,
       savingConn: false,
       savingTeams: false,
@@ -88,6 +91,7 @@ window.AdminView = Vue.defineComponent({
           this.usageGate.enabled = d.usage_gate_enabled != null ? !!d.usage_gate_enabled : true;
           this.usageGate.th5     = d.usage_gate_5h_threshold ?? 90;
           this.usageGate.th7     = d.usage_gate_7d_threshold ?? 95;
+          this.cliPushUserId     = d.cli_push_user_id ?? null;
           Object.assign(this.teams, {
             tenant_id: d.tenant_id || '', client_id: d.client_id || '',
             client_secret: d.client_secret || '', team_id: d.team_id || '',
@@ -98,6 +102,7 @@ window.AdminView = Vue.defineComponent({
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
         try { this.claudeToken = await Api.get('admin/claude-token'); } catch (_) { /* 顯示用 */ }
         try { this.context7Key = await Api.get('admin/context7-key'); } catch (_) { /* 顯示用 */ }
+        try { this.users = await Api.get('admin/users'); } catch (_) { this.users = []; }
         await this.loadEmbedding();
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.loading = false; }
@@ -178,6 +183,15 @@ window.AdminView = Vue.defineComponent({
         this.context7Key = await Api.get('admin/context7-key');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.savingContext7Key = false; }
+    },
+    async saveCliPushUser() {
+      this.savingCliPushUser = true;
+      try {
+        // 後端會擋掉不存在或沒 PAT 的 id，錯誤訊息直接回顯
+        await Api.put('admin/cli-push-user', { cli_push_user_id: this.cliPushUserId });
+        showToast('已儲存 CLI 推送身分', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.savingCliPushUser = false; }
     },
     async clearContext7Key() {
       if (!await confirmDialog({
@@ -542,6 +556,32 @@ window.AdminView = Vue.defineComponent({
             </button>
             <button v-if="context7Key.configured" class="btn btn-ghost btn-sm" @click="clearContext7Key" :disabled="clearingContext7Key">
               {{ clearingContext7Key ? '清除中...' : '清除 key' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- CLI 推送身分 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">CLI 推送身分</div>
+            <div class="setting-block-desc">有人在終端機手動跑 <code>pushRepo/push.js</code> 推 GitHub、又沒指定 <code>--user</code> 時，要用誰的 GitHub PAT。<strong>只影響手動操作</strong>——平台自己的推送（任務完成推 code、合併、企業版 clone）一律用該任務擁有者的 PAT，不看這個設定。未設定時腳本會列出可用帳號要求指定，不會自己猜一個。</div>
+          </div>
+          <div class="setting-block-body">
+            <div class="conn-fields">
+              <div class="field-item">
+                <label class="field-label">預設推送帳號</label>
+                <select v-model="cliPushUserId" class="field-input">
+                  <option :value="null">未設定（每次都要帶 --user）</option>
+                  <option v-for="u in users" :key="u.id" :value="u.id" :disabled="!u.has_pat">
+                    {{ u.display_name || u.username }}（id={{ u.id }}）{{ u.has_pat ? '' : '－未設 PAT' }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="saveCliPushUser" :disabled="savingCliPushUser">
+              {{ savingCliPushUser ? '儲存中...' : '儲存' }}
             </button>
           </div>
         </div>

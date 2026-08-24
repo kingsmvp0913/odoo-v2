@@ -744,6 +744,10 @@ async function migrate() {
     // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
     { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },
+    // 人在終端機手動跑 scripts/../pushRepo/push.js 時，沒帶 --user 要用誰的 PAT。
+    // 平台自己的推送不看這欄（push-ai／runner／merge-agent／finding-fix 都帶任務的 user_id），
+    // 只服務互動式 CLI。NULL＝未設定，push.js 會列出可用 user 而不是猜一個。
+    { table: 'teams_settings', col: 'cli_push_user_id', sql: 'ALTER TABLE teams_settings ADD COLUMN cli_push_user_id INTEGER' },
     // 企業版：預設 community，既有專案升級後行為不變（不會突然要求 enterprise 來源）
     { table: 'projects', col: 'edition', sql: "ALTER TABLE projects ADD COLUMN edition TEXT NOT NULL DEFAULT 'community'" },
     // 企業版來源型態：'git'（clone 遠端 repo）或 'local'（管理員自行把 addons 放進共用目錄）。
