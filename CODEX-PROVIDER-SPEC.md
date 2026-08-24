@@ -2,6 +2,9 @@
 
 > 狀態：**規格草案，尚未實作**。本文件只描述「要做什麼、為什麼、怎麼驗」，不含程式碼變更。
 > 目標分支：`claude/codex-workflow-integration-jeer01`
+>
+> **2026-08-24 實測校正**（分支 `claude/codex-env-repair`）：以 **codex-cli 0.149.1** 在平台主機實跑，校正 §3.1／§3.2，改寫 §5.5（scan-guard 從「無對等物」改為「可移植，已實測擋得住」），新增 §5.8～§5.10，更新 §6.3／§6.5／§9／§10。
+> **標示「實測」的結論有實跑依據；未標示的仍是推斷，不要當成已驗證。**
 
 ---
 
@@ -52,7 +55,7 @@ prompt 走 stdin，cwd 由 `opts.cwd` 指定，認證與 `/ai/*` 通行碼由 `g
 
 ## 3. codex CLI 介面對照
 
-以 2026-08 的 `codex exec` 為準。**本容器未安裝 codex（`which codex` 為空），下表未經實跑驗證；實作第一步必須在平台主機跑一次 `codex exec --json` 並以實際輸出校正 §3.2。**
+以 **codex-cli 0.149.1**（2026-08-24 於平台主機 Windows 11 實跑）為準。原草案寫「本容器未安裝 codex、下表未經驗證」，該前提已解除：§3.1／§3.2 標註「實測」的列都跑過，未標註的仍是推斷。
 
 ### 3.1 旗標對照
 
@@ -67,7 +70,11 @@ prompt 走 stdin，cwd 由 `opts.cwd` 指定，認證與 `/ai/*` 通行碼由 `g
 | 限制寫入範圍 | 無對等（靠 hook） | `--sandbox read-only` / `workspace-write` / `danger-full-access` |
 | 續接 session | `--resume <id>` | `codex exec resume <SESSION_ID>` |
 | MCP 設定 | `--strict-mcp-config --mcp-config <json>` | config.toml 的 `[mcp_servers.*]`（`-c` 可覆寫） |
-| Hook | `--settings`（PreToolUse 等） | **無對等物** |
+| Hook | `--settings`（PreToolUse 等） | **有對等物**：`~/.codex/hooks.json`，專案層 `.codex/hooks.json` 亦會被讀。payload 與決策 schema 與 Claude Code 相同——**實測**，見 §5.5 |
+| 最終回覆強制結構 | 無 | `--output-schema <FILE>`（JSON Schema）。**本期不採用**，見 §5.8 |
+| 最後訊息落檔 | 無 | `-o` / `--output-last-message <FILE>` |
+| 不繼承使用者層設定 | `--strict-mcp-config` | `--ignore-user-config`（auth 仍走 CODEX_HOME） |
+| 每關不同的設定組 | 每關一份 mcp-config JSON | `-p` / `--profile <name>` 疊 `$CODEX_HOME/<name>.config.toml` |
 
 ### 3.2 事件流差異
 
@@ -77,9 +84,10 @@ claude 的 `stream-json` 與 codex 的 `--json` 是兩套完全不同的 schema�
 |---|---|---|
 | session 起始 | `{type:'system',subtype:'init',session_id}` | `{type:'thread.started', thread_id}` |
 | 助理文字 | `{type:'assistant',message:{content:[{type:'text',text}]}}` | `{type:'item.completed',item:{type:'agent_message',text}}` |
-| 工具呼叫顯示 | `content[].type='tool_use'` | `item.completed` 的其他 item type（command_execution／file_change 等，**清單待實跑確認**） |
+| 工具呼叫顯示 | `content[].type='tool_use'` | **實測**：`command_execution`（帶 `status`＝`in_progress`／`completed`、`aggregated_output`）、`error`（設定／hook 類錯誤）。`file_change` 等尚未觀測到 |
+| 事件序 | — | **實測**：`thread.started` → `item.completed`(error，若有) → `turn.started` → `item.started`／`item.completed`(重複) → `turn.completed`。`turn.started`／`item.started` 是原草案沒列的 |
 | 收尾與用量 | `{type:'result',usage,duration_ms}` | `{type:'turn.completed',usage:{input_tokens,cached_input_tokens,output_tokens}}` |
-| 實際 model id | 第一則 assistant 事件的 `message.model` | **待確認**；查不到時退回 opts 的 model |
+| 實際 model id | 第一則 assistant 事件的 `message.model` | **實測：事件流中不存在此欄位** → 一律用 `opts.model` 記帳 |
 
 usage 欄位對應（寫進 `token_usage` 時）：
 
@@ -88,7 +96,7 @@ usage 欄位對應（寫進 `token_usage` 時）：
 | `input_tokens` | `usage.input_tokens` | `usage.input_tokens` |
 | `output_tokens` | `usage.output_tokens` | `usage.output_tokens` |
 | `cache_read_tokens` | `usage.cache_read_input_tokens` | `usage.cached_input_tokens` |
-| `cache_create_tokens` | `usage.cache_creation_input_tokens` | **無對等欄位 → 記 0** |
+| `cache_create_tokens` | `usage.cache_creation_input_tokens` | `usage.cache_write_input_tokens`（**實測欄位存在**，原草案寫「無對等欄位」是錯的；四次實跑觀測值皆為 0，尚未見到非零） |
 
 ---
 
@@ -230,17 +238,27 @@ session id 不跨供應商通用。以下兩件事都會產生「不報錯、但
 
 不採「自動連動改另一端」：一次改兩支 agent 的設定而使用者只點了一支，屬於未經同意的隱式變更，且在 UI 上看不出來。擋下並要求使用者明確改兩次，比較誠實。
 
-### 5.5 scan-guard 缺口
+### 5.5 scan-guard：**可移植**（原草案寫「無對等物」是錯的）
 
-`claude-runner.js:44-59` 掛的 PreToolUse hook（`hooks/scan-guard.js`）攔的是「從磁碟根／worktree 外」的 `find` 與遞迴廣掃——註解寫明這是實際踩過的坑（滾成全碟掃描 → 逾時），而且 agent prompt 裡就向 agent 保證「會被平台掃碟守衛中止」。
+2026-08-24 於平台主機（Windows 11、codex-cli 0.149.1）實測結論：
 
-**codex 沒有 hook 機制，這道守衛在 codex 端無法等價實作。**
+- **專案層 `.codex/hooks.json` 會被讀**（codex 的錯誤訊息直接點名該檔的絕對路徑）→ 不必動使用者層設定，也不必污染開發機。
+- 格式與 Claude Code 的 hooks 相同：`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"..."}]}]}}`
+- **PreToolUse 的 payload 與 Claude Code 逐欄相同**：`session_id`／`turn_id`／`transcript_path`／`cwd`／`hook_event_name`／`model`／`permission_mode`／`tool_name`／`tool_input`／`tool_use_id`。codex 的 shell 工具對 hook **就叫 `Bash`**，指令在 `tool_input.command`。
+  → `hooks/scan-guard.js` 的判斷邏輯（攔 workspace 外的 `find` 與遞迴廣掃）**可原樣沿用**，不需重寫。
+- **拒絕的表達方式只有一種有效**：
 
-本期處置：
-- 批次一 agent（§6.3）全部不碰檔案系統，用 `--sandbox read-only` 即可，缺口不構成實際風險。
-- `PROVIDERS` 之外另立一份 `CODEX_ELIGIBLE` 白名單，`updateAgent()` 對不在名單內的 agent 拒絕 `provider: codex`（400，訊息點明原因）。初始只含批次一那六支，每批驗收通過才擴充。
-- **`--sandbox workspace-write` 只擋寫、不擋讀，擋不住 `find /`。** 但 codex 的 sandbox 是 OS 層、claude 的 scan-guard 是 CLI 層 hook 自律——若 codex 的 read-only／workspace-write 同時限制了 workspace 外的**讀取**，這個缺口不只被補上，而且比現況更硬。**這題必須實測**（§9 第 6 題），它是批次三（qa）唯一的閘門。
-- 若實測結果是「擋不住讀取」，替代方向：包一層 wrapper script 限制 PATH 上的 `find`。本期不做。
+| 方式 | 實測結果 |
+|---|---|
+| `exit 2` ＋ stderr（Claude Code 的舊慣例） | ❌ **不擋**，指令照常執行 |
+| stdout 輸出 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}` | ✅ **擋下**：事件流完全沒有 `command_execution` 項目，agent 收到「指令被安全機制阻擋」 |
+
+移植時必須確認 `scan-guard.js` 目前用哪一種；若是 exit 2，要改成輸出 JSON decision（兩種都輸出最保險，claude 端不受影響）。
+
+- ⚠ **hook 自己壞掉是 fail-open 且靜默**。實測放一支語法錯誤的 hook：codex 直接放行執行指令，事件流沒有任何訊息、exit code 仍是 0。因此 scan-guard 移植後**不能假設「hook 檔存在＝守衛生效」**，要有可觀測的證明（例如 hook 每次執行都留一筆記錄，或在 codex-runner 啟動時先跑一次自我測試）。
+- 無人值守下需要 `--dangerously-bypass-hook-trust`，否則未經人工信任的 hook 不會執行。
+
+**本期處置**：`CODEX_ELIGIBLE` 白名單照做（批次一那幾支本來就不碰檔案系統）。但**批次三（qa）的閘門改變了**——原本綁在「sandbox 能不能擋 workspace 外的讀取」（§9 第 6 題，目前測不到），現在改綁「scan-guard 移植後能不能擋住 `find /`」，而後者已實測可行。qa 不必再等 sandbox 那題。
 
 ### 5.6 用量閘門不隨 provider 分流（**明確的範圍外，但要知道**）
 
@@ -253,6 +271,70 @@ session id 不跨供應商通用。以下兩件事都會產生「不報錯、但
 ### 5.7 命名：`claudeStatus` 不改名
 
 err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.js`、`qa-agent.js:114`、`with-resume.js:42` 等多處讀取，語意是「執行狀態」而非「Claude 的狀態」。本期**刻意不改名**——改名要動的消費端散佈太廣，收益只有可讀性。在 `agent-runner.js` 加一行註解說明即可。
+
+---
+
+### 5.8 `--output-schema`：**本期不採用**（已評估）
+
+codex 有 `--output-schema <FILE>`，可強制最終回覆符合 JSON Schema——比現行的 `<result>` 文字標籤更硬，模型不可能「忘了包標籤」而導致整輪報廢。
+
+**仍決定兩邊統一用 `<result>`**，理由：
+
+- `parseAgentResult` 維持一份程式吃兩家，切換 provider 時行為一致、回滾容易。
+- 採用的代價是每支 agent 要另備一份 schema 檔（目前契約只寫在 prompt 裡），且 `agent-runner` 要維護兩條解析路徑。
+- 本期目標是「可選供應商」，不是「改造輸出契約」。
+
+留作未來選項：若實測顯示 codex 端漏標籤的比率明顯高於 claude，再回頭採用。**採用與否要有數據，不要憑感覺**。
+
+### 5.9 codex 的失敗有一半不進事件流（**必修**）
+
+實測第一次跑：`--sandbox read-only` 下兩次 `exec_command` 全部失敗（`CreateProcessAsUserW: 5`），但——
+
+```
+exit code = 0
+--json 事件流 = thread.started / turn.started / item.completed(agent_message) / turn.completed
+agent 的回答 = "DONE 0"     （目錄裡實際有 2 個檔）
+```
+
+**工具全掛、答案是錯的、事件流乾乾淨淨、退出碼 0。** 錯誤只出現在 stderr。
+
+進一步實測後可以分清界線：
+
+| 錯誤種類 | 去處 |
+|---|---|
+| 設定／hook 類錯誤（如 hooks.json 解析失敗、hook trust 警告） | **會**進事件流，`item.completed` 的 `type: "error"` |
+| **工具執行失敗**（spawn 失敗、權限拒絕） | **只在 stderr** |
+
+平台的 `task_events` 與終端串流只吃事件流，因此這類失敗在平台上是**零訊號**——比 claude 端的任何已知失敗模式都難察覺。
+
+**修法**：`codex-runner.js` 必須同時收 stderr，將其中的 `ERROR` 行併入事件流輸出（比照 claude 端的錯誤呈現）。這也是批次一驗收條件第 4 項（「終端串流看得到內容」）能不能算數的前提——不做的話，工具全掛的那一輪在驗收時看起來是綠的。
+
+### 5.10 prompt 裡的 `Skill(...)` 硬呼叫（**批次一就會踩到**）
+
+6 支 agent 的 prompt 直接寫了 Claude Code 的工具呼叫語法：
+
+| 檔案 | 內容 |
+|---|---|
+| `health-auditor.md:13,21` | `Skill(healthCheck)`、`Skill(platformDB)` |
+| `health-task.md:13,15` | `Skill(healthCheck)` |
+| `health-triage.md:16,18` | `Skill(healthCheck)` |
+| `workflow-health.md:13,15` | `Skill(healthCheck)` ← **在批次一** |
+| `platform-fix.md:13` | `Skill(platformDev)` |
+| `source-routing.md:16`（共用注入片段） | `Skill(odooDev)` |
+
+其中 `health-task`／`health-triage`／`workflow-health` 三支明文寫著：
+
+> **載不到 skill 就停下來**：在 `<diagnosis>` 寫明「無法載入判準」、`severity` 給 `ok`
+
+codex 沒有 `Skill()` 這個工具呼叫語法，這三支會**照 prompt 的指示放棄診斷並回報 `ok`**——不報錯、不重試，指標上只看得出「健檢變安靜了」。
+
+**但實測顯示問題比想像小**：codex **會自動載入** `.agents/skills/` 底下的 skill（含專案層），與 Claude Code 的自動探索行為等價。壞的只是「`Skill(x)` 這個呼叫語法」的措辭。
+
+**修法（本期採用）**：改 prompt 措辭，不動程式。把 `呼叫 Skill(healthCheck)` 改成 provider 無關的講法，例如「依 healthCheck 判準……該判準在 `.agents/skills/healthCheck/SKILL.md`（Claude Code 為 `.claude/skills/`），載不到就停下來」。6 支各改一兩句。
+
+不採「在 `agent-loader` 加 provider-aware 注入」：實測兩家的 skill 探索行為其實一致，為了一句措辭多加一層機制不划算。若未來出現真正因 provider 而異的內容，再開該機制。
+
+> ⚠ 改 `.claude/skills/` 之後要跑 `node scripts/sync-skills.js` 同步到 `.agents/skills/`，否則 codex 讀到舊版且**沒有任何徵狀**。
 
 ---
 
@@ -278,6 +360,10 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 ### 6.3 批次一（本期實作目標）
 
 純文字進、`<result>` 出，無 cwd 寫檔、無 MCP、無 resume、無 hook 需求：
+
+> ⚠ **前置**：`workflow-health` 帶 `Skill(healthCheck)` 硬呼叫且寫著「載不到就停下來、severity 給 ok」（§5.10）。**該支 prompt 措辭沒改完之前不得切 codex**，否則它會安靜地回報「一切正常」。
+>
+> ⚠ **`--sandbox read-only` 在平台主機（Windows 11）跑不起來**：工具全部 spawn 失敗（`CreateProcessAsUserW: 5`），詳見 §9 第 6 題。本批目前只能用 `--dangerously-bypass-approvals-and-sandbox`。這幾支不碰檔案系統，實際風險不變，但「用 read-only 當防線」這個說法不成立。
 
 | agent | stage |
 |---|---|
@@ -310,9 +396,15 @@ err 上的 `claudeStatus` 欄位被 `token-logger.js:41`、`failure-classifier.j
 
 `qa` ± `qa-retry`。
 
-前置：**先實測 codex sandbox 是否限制 workspace 外的讀取**（§9 第 6 題）。這題單獨決定 qa 能不能上：
-- 若 sandbox 擋得住 workspace 外讀取 → `find /` 被 OS 層擋死，比現行 CLI 層的 scan-guard hook **更硬**，qa 跑 codex 反而比現況安全，可直接上。
-- 若擋不住 → §5.5 的掃碟守衛缺口成立，qa 暫緩。
+前置**已改變**（原本綁 sandbox，見下）：
+
+原草案把 qa 的閘門綁在「codex sandbox 是否限制 workspace 外的讀取」。§5.5 實測後這條路不必走了——**codex 有 hook，且 PreToolUse 的 payload 與 Claude Code 逐欄相同，`scan-guard.js` 可原樣沿用**，拒絕改用 JSON `permissionDecision` 形式即可（實測擋得下來）。
+
+因此 qa 的前置改為：
+1. `scan-guard.js` 移植到 codex 的 hook 形式，並實測擋得住 `find /`。
+2. 解決 §5.5 的 fail-open 問題——hook 壞掉時 codex 靜默放行，必須有「守衛確實生效」的可觀測證明。
+
+sandbox 那題（§9 第 6 題）降級為**加分項**：能用的話多一層 OS 級防線，但不再是 qa 的閘門。
 
 qa 是本案「分開監督」價值最高的一支（審的正是 claude 寫的 code），值得為它優先解這一題。
 
@@ -388,19 +480,35 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 
 ---
 
-## 9. 未決事項
+## 9. 未決事項（2026-08-24 實測後更新）
 
-實作前必須拿到答案，**不得靠猜**：
+實測環境：平台主機 Windows 11、**codex-cli 0.149.1**、認證為 ChatGPT OAuth（`~/.codex/auth.json`，`stored API key: false`）。
 
-1. **codex 的 model 識別字**（`PROVIDERS.codex.models` 要填什麼）— 平台主機跑 `codex --help` / 查帳號可用模型後填入。
-2. **`codex exec` 的參數順序**：`codex exec - --json` 還是 `codex exec --json -`。
-3. **`--json` 完整的 item type 清單**（供 `formatEvent` 的 codex 版顯示工具呼叫）。
-4. **codex 事件是否回報 resolved model id**（決定成本歸屬用 opts.model 還是實際值）。
-5. **codex 認證失敗的原始字面**（決定 `auth-signature.js` 要加什麼 pattern）— 這題不解，codex 認證過期會被誤歸成一般失敗、停等人工。
-6. **codex sandbox 是否限制 workspace 外的「讀取」** — **批次三（qa）唯一的閘門**，見 §5.5、§6.5。測法：在 workspace 內以 `--sandbox read-only` 跑 `find / -name '*.py'`，看是被 sandbox 拒絕還是真的開始掃碟。
-7. **`--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥**（後者會強制 `danger-full-access`，若互斥則批次一的 read-only 要改用別的方式略過核可）。
+### 已解答
 
-第 1～4 題靠一次 `codex exec --json` 實跑即可全部取得；第 5 題需刻意用錯誤憑證跑一次；第 6、7 題各一次針對性實跑。
+| # | 題目 | 答案 |
+|---|---|---|
+| 1 | codex model 識別字 | 預設 `gpt-5.6-terra`（provider `openai`）。**完整清單尚未取得**——`codex models` 需要 TTY；`codex debug models` 可輸出原始 model catalog JSON，還沒跑。**`PROVIDERS.codex.models` 填值前必須先跑它，不要用預設值硬湊。** |
+| 2 | `codex exec` 參數順序 | `codex exec - --json [其他旗標]`。prompt 走 stdin 時 `-` 是必要的佔位參數，旗標放後面。 |
+| 3 | `--json` 的 item type 清單 | 已觀測：`agent_message`、`command_execution`（帶 `status`／`aggregated_output`）、`error`。完整事件序見 §3.2。寫檔類（`file_change`）尚未觀測到——批次一不寫檔，暫不阻塞，批次二之前要補。 |
+| 4 | 事件是否回報 resolved model id | **否**，事件流沒有這個欄位 → 成本歸屬一律用 `opts.model`。 |
+
+### 未解答
+
+| # | 題目 | 現況與測法 |
+|---|---|---|
+| 5 | codex 認證失敗的原始字面 | **未測。優先度最高的一題。** 已知認證是 ChatGPT OAuth token，與平台踩過的 `claude-auth-not-logged-in`（並發 spawn 撞 OAuth 刷新）屬同一風險家族——平台會併發 spawn，這題幾乎一定會踩到。測法：暫時搬走 `~/.codex/auth.json` 跑一次，記下字面，補進 `auth-signature.js`。不解的話 codex 憑證過期會被誤歸成一般失敗、停等人工。 |
+| 6 | sandbox 是否限制 workspace 外的讀取 | **測不到**：`--sandbox read-only` 在本機連工具都 spawn 不起來（`CreateProcessAsUserW: 5 存取被拒`）。但 `codex doctor` 顯示 `sandbox provisioning complete`，同時警告 **Microsoft Defender 未加 Codex 排除項**——所以這很可能是 Defender/ASR 擋的，不是 codex 在 Windows 上沒有 sandbox。**先加排除項再測，不得據現況下結論。** 已由 §6.5 降級為加分項（qa 的閘門改走 scan-guard 移植）。 |
+| 7 | `--sandbox` 與 `--dangerously-bypass-approvals-and-sandbox` 是否互斥 | 未直接測；bypass 單獨可用。§6.3 既已改用 bypass，本題優先度下降。 |
+
+### 實測新增（原草案沒有的題目）
+
+| 題目 | 答案 |
+|---|---|
+| 專案層 `.codex/config.toml` 會不會生效 | **會**，疊在使用者層之上（同一台機器：repo 內 4 個 MCP server、repo 外 2 個，差額正好是 repo config 的兩支）。 |
+| 專案層 `.agents/skills/` 會不會被載入 | **會**（放一支缺 YAML frontmatter 的探針，codex 直接報出該檔的絕對路徑）。這是 §5.10 改用「改措辭」而非「加注入機制」的依據。 |
+| 專案層 `.codex/hooks.json` 會不會生效 | **會**，見 §5.5。 |
+| codex 有沒有 hook 機制 | **有**，payload 與決策 schema 與 Claude Code 相同，見 §5.5。原草案的「無對等物」是錯的。 |
 
 ---
 
@@ -415,3 +523,7 @@ E2E 不退場。方向是改走**規格 tour 模式**（`projects.spec_tour_enab
 | 靜默退回 claude | 拼錯 provider 的 agent 帳面顯示 codex、實際燒 claude 額度 | §4.2 未知 provider 直接 throw |
 | 掃碟守衛缺口 | codex 端 agent 全碟掃描 → 逾時 | §5.5 `CODEX_ELIGIBLE` 白名單，第三梯在缺口有解前不開放 |
 | 用量閘門仍以 Claude 為準 | 誤以為改 codex 就能繞開額度上限 | §5.6 已記錄為範圍外 |
+| **工具失敗不進事件流** | codex 工具全部 spawn 失敗時：exit 0、事件流乾淨、agent 給出錯誤答案。平台上**零訊號**，且會讓批次一驗收條件第 4 項變成假綠 | §5.9 必修：codex-runner 收 stderr 併入事件流 |
+| **`Skill(...)` 硬呼叫** | `workflow-health`（批次一）等三支寫著「載不到 skill 就回報 severity=ok」，切 codex 後會安靜地回報「一切正常」 | §5.10：6 支 agent 改 prompt 措辭；改完記得跑 `node scripts/sync-skills.js` |
+| **hook fail-open** | scan-guard 移植後，hook 腳本自己壞掉會讓 codex 靜默放行、事件流無訊息 | §5.5：需要「守衛確實生效」的可觀測證明，不能只看 hook 檔在不在 |
+| model 清單用猜的 | `PROVIDERS.codex.models` 填錯 → 使用者在管理頁選到不存在的模型，spawn 才失敗 | §9 第 1 題：先跑 `codex debug models` |
