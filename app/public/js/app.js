@@ -30,6 +30,7 @@ async function loadInboxUnread() {
 window.loadInboxUnread = loadInboxUnread;
 
 const claudeUsage = ref(null);
+const codexUsage = ref(null);
 async function loadClaudeUsage() {
   if (!Api.isLoggedIn()) return;
   // 用量僅管理員可見；非 admin 不打（避免 403 噪音）
@@ -37,6 +38,11 @@ async function loadClaudeUsage() {
   try { claudeUsage.value = await Api.get('claude-usage'); } catch { /* keep stale */ }
 }
 window.loadClaudeUsage = loadClaudeUsage;
+async function loadCodexUsage() {
+  if (window.UserStore.role !== 'admin') return;
+  try { codexUsage.value = await Api.get('codex-usage'); } catch { /* keep stale */ }
+}
+window.loadCodexUsage = loadCodexUsage;
 
 // 登入後即抓一次跨專案未讀，填入 UnreadStore → 左側 menu 專案 badge 首屏就準確；
 // 之後靠 socket chat:reply 遞增、ProjectChat 標記已讀清零維持即時。
@@ -104,6 +110,7 @@ router.afterEach((to) => {
       ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
       SocketManager.initSocket(me.id);
       loadClaudeUsage();
+      loadCodexUsage();
       loadUnread();
       loadInboxUnread();
     }).catch(() => {});
@@ -114,10 +121,11 @@ router.afterEach((to) => {
 // 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊：原本 60s 輪詢配 60s TTL＝每次都 miss，
 // 等於 24/7 每分鐘打一次限流很兇的 /api/oauth/usage，配額燒光後畫面反而長時間卡在 stale。
 setInterval(loadClaudeUsage, 10 * 60 * 1000);
+setInterval(loadCodexUsage, 10 * 60 * 1000);
 
 const App = defineComponent({
   name: 'App',
-  setup() { return { toasts, needsActionCount, inboxUnread, claudeUsage }; },
+  setup() { return { toasts, needsActionCount, inboxUnread, claudeUsage, codexUsage }; },
   data() { return { _role: '', drawerOpen: false, isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
   watch: {
     // 點了 drawer 裡的連結後，頁面換了但遮罩與側欄還蓋在上面，看起來像卡住 → 導覽即關。
@@ -152,6 +160,20 @@ const App = defineComponent({
       const iso = this.claudeUsage && this.claudeUsage.updated_at;
       return iso ? this.fmtReset(iso) : '';
     },
+    codexUsageRows() {
+      const u = this.codexUsage;
+      if (!u || !u.available) return [];
+      const rows = [];
+      const add = (key, label, window) => {
+        if (!window) return;
+        rows.push({ key, label, pct: Math.round(window.used_percent), remaining: Math.round(window.remaining_percent),
+          level: window.used_percent >= 90 ? 'crit' : window.used_percent >= 70 ? 'warn' : 'ok',
+          reset: window.resets_at ? this.fmtReset(window.resets_at) : '' });
+      };
+      add('primary', '主要額度', u.primary);
+      add('secondary', '週額度', u.secondary);
+      return rows;
+    },
     tourRemaining() { return window.TourManager ? TourManager.remainingCount() : 0; },
     projectUnreadTotal() {
       return Object.values(window.UnreadStore.byProject).reduce((a, b) => a + (b || 0), 0);
@@ -169,6 +191,7 @@ const App = defineComponent({
       ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
       this.isDark = ThemeManager.current() === 'dark';
       loadClaudeUsage();
+      loadCodexUsage();
       loadUnread();
     }
   },
@@ -244,7 +267,11 @@ const App = defineComponent({
           </nav>
           <div class="sidebar-footer">
             <div v-if="isAdmin && usageBars.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
-              <div class="usage-title">Claude 用量<span v-if="usageStale && usageUpdatedLabel" class="usage-stale">· 最後更新 {{ usageUpdatedLabel }}</span></div>
+              <div class="usage-title">
+                <span class="usage-provider-logo claude" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"></path></svg></span>
+                <span>Claude 用量</span>
+              </div>
+              <div v-if="usageStale && usageUpdatedLabel" class="usage-stale">最後更新 {{ usageUpdatedLabel }}</div>
               <div v-for="bar in usageBars" :key="bar.key" class="usage-row">
                 <div class="usage-row-top">
                   <span>{{ bar.label }}</span>
@@ -254,6 +281,14 @@ const App = defineComponent({
                   <div class="usage-fill" :class="bar.level" :style="{ width: bar.pct + '%' }"></div>
                 </div>
                 <div v-if="bar.reset" class="usage-reset">重置 {{ bar.reset }}</div>
+              </div>
+            </div>
+            <div v-if="isAdmin && codexUsageRows.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
+              <div class="usage-title"><span class="usage-provider-logo codex" aria-hidden="true"><img src="https://images.ctfassets.net/kftzwdyauwt9/77tJ5U1tgxHMZflZ5m4Z24/ace4d8b6ad200d87ebcb69c466344343/Blossom_4k_Icon_1.png?w=1920&amp;q=90&amp;fm=webp" alt="" /></span><span>Codex 用量</span></div>
+              <div v-for="row in codexUsageRows" :key="row.key" class="usage-row">
+                <div class="usage-row-top"><span>{{ row.label }}</span><span>剩 {{ row.remaining }}%</span></div>
+                <div class="usage-track"><div class="usage-fill" :class="row.level" :style="{ width: row.pct + '%' }"></div></div>
+                <div v-if="row.reset" class="usage-reset">重置 {{ row.reset }}</div>
               </div>
             </div>
             <div class="sidebar-footer-actions">

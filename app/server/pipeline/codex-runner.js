@@ -2,7 +2,6 @@ const { spawn } = require('child_process');
 const { query } = require('../db');
 const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
-const { getCodexAuthEnv } = require('../lib/codex-auth');
 const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
 const { looksLikeAuthFailure } = require('./auth-signature');
 
@@ -39,9 +38,15 @@ function runCodex(prompt, opts = {}) {
     const startedAt = Date.now();
     let sessionId = null, resultText = '', assistantText = '', usage = null, stderr = '', settled = false, timer;
     let lineBuffer = '';
+    // 訂閱模式使用 `codex app-server` 所保存、會自動刷新的 ChatGPT 登入；絕不把
+    // OPENAI_API_KEY 繼承進子行程，避免同一台正式機意外退回 API 按量計費。
+    const childEnv = { ...process.env, ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) };
+    delete childEnv.OPENAI_API_KEY;
+    delete childEnv.CODEX_API_KEY;
+    delete childEnv.CODEX_ACCESS_TOKEN;
     const child = spawn('codex', args, {
       stdio: ['pipe', 'pipe', 'pipe'], cwd,
-      env: { ...process.env, ...getCodexAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) }
+      env: childEnv
     });
     child.stdin.on?.('error', () => {});
     const emit = text => {

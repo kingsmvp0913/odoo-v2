@@ -13,6 +13,10 @@ window.AdminView = Vue.defineComponent({
       claudeTokenInput: '',
       savingClaudeToken: false,
       clearingClaudeToken: false,
+      codexSubscription: { configured: false, pending_login: null },
+      startingCodexLogin: false,
+      clearingCodexSubscription: false,
+      codexLoginTimer: null,
       claudeBackupInput: '',
       savingBackupToken: false,
       clearingBackupToken: false,
@@ -49,7 +53,7 @@ window.AdminView = Vue.defineComponent({
   },
   async created() { await this.loadAll(); },
   // 離開頁面要停掉輪詢，否則 timer 會一直打 status 端點。
-  unmounted() { if (this.embeddingTimer) clearTimeout(this.embeddingTimer); },
+  unmounted() { if (this.embeddingTimer) clearTimeout(this.embeddingTimer); if (this.codexLoginTimer) clearTimeout(this.codexLoginTimer); },
   methods: {
     async loadEmbedding() {
       try { this.embedding = await Api.get('admin/embedding/status'); } catch (_) { this.embedding = null; }
@@ -101,6 +105,7 @@ window.AdminView = Vue.defineComponent({
         }
         try { this.gateStatus = await Api.get('usage-gate/status'); } catch (_) { this.gateStatus = null; }
         try { this.claudeToken = await Api.get('admin/claude-token'); } catch (_) { /* 顯示用 */ }
+        try { this.codexSubscription = await Api.get('admin/codex-subscription'); } catch (_) { /* 顯示用 */ }
         try { this.context7Key = await Api.get('admin/context7-key'); } catch (_) { /* 顯示用 */ }
         try { this.users = await Api.get('admin/users'); } catch (_) { this.users = []; }
         await this.loadEmbedding();
@@ -133,6 +138,39 @@ window.AdminView = Vue.defineComponent({
         this.claudeToken = await Api.get('admin/claude-token');
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.clearingClaudeToken = false; }
+    },
+    pollCodexLogin() {
+      if (this.codexLoginTimer) clearTimeout(this.codexLoginTimer);
+      this.codexLoginTimer = setTimeout(async () => {
+        try {
+          this.codexSubscription = await Api.get('admin/codex-subscription');
+          if (this.codexSubscription.pending_login) this.pollCodexLogin();
+          else if (this.codexSubscription.configured) showToast('Codex 訂閱已連線', 'success');
+        } catch (_) { /* 由管理員手動重試即可 */ }
+      }, 2000);
+    },
+    async startCodexDeviceLogin() {
+      this.startingCodexLogin = true;
+      try {
+        const login = await Api.post('admin/codex-subscription/device-login', {});
+        this.codexSubscription = { ...this.codexSubscription, pending_login: login };
+        this.pollCodexLogin();
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.startingCodexLogin = false; }
+    },
+    async clearCodexSubscription() {
+      if (!await confirmDialog({
+        title: '中斷 Codex 訂閱連線',
+        message: '中斷後 Codex agent 無法執行，直到再次完成訂閱登入。確定要中斷嗎？',
+        danger: true, confirmText: '清除'
+      })) return;
+      this.clearingCodexSubscription = true;
+      try {
+        await Api.delete('admin/codex-subscription');
+        showToast('Codex 訂閱連線已中斷', 'success');
+        this.codexSubscription = await Api.get('admin/codex-subscription');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.clearingCodexSubscription = false; }
     },
     async saveBackupToken() {
       const token = (this.claudeBackupInput || '').trim();
@@ -492,6 +530,29 @@ window.AdminView = Vue.defineComponent({
             <button v-if="claudeToken.configured" class="btn btn-ghost btn-sm" @click="clearClaudeToken" :disabled="clearingClaudeToken">
               {{ clearingClaudeToken ? '清除中...' : '清除憑證' }}
             </button>
+          </div>
+        </div>
+
+        <!-- Codex 訂閱登入 -->
+        <div class="setting-block">
+          <div class="setting-block-head">
+            <div class="setting-block-title">Codex 訂閱連線</div>
+            <div class="setting-block-desc">使用 ChatGPT 的 Codex 訂閱，不會走 OpenAI API 按量計費。按下連線後，在自己的瀏覽器開啟一次性網址並輸入代碼；正式機只由 Codex CLI 保存與自動刷新登入，平台不會接觸或保存 token 明文。</div>
+          </div>
+          <div class="setting-block-body">
+            <div style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">
+              <span v-if="codexSubscription.configured" style="color:var(--success)">✓ 已連線 {{ codexSubscription.email || '' }}{{ codexSubscription.plan_type ? '（' + codexSubscription.plan_type + '）' : '' }}</span>
+              <span v-else style="color:var(--text-muted)">尚未連線，Codex agent 無法執行</span>
+            </div>
+            <div v-if="codexSubscription.pending_login" class="notice-box" style="margin:0">
+              <div style="margin-bottom:var(--space-2)">請開啟 <a :href="codexSubscription.pending_login.verification_url" target="_blank" rel="noopener">{{ codexSubscription.pending_login.verification_url }}</a>，登入後輸入以下一次性代碼：</div>
+              <code style="font-size:var(--fs-lg);letter-spacing:.08em">{{ codexSubscription.pending_login.user_code }}</code>
+              <div style="margin-top:var(--space-2);color:var(--text-secondary)">正在等待授權完成…</div>
+            </div>
+          </div>
+          <div class="setting-block-footer">
+            <button class="btn btn-primary btn-sm" @click="startCodexDeviceLogin" :disabled="startingCodexLogin || !!codexSubscription.pending_login">{{ startingCodexLogin ? '取得代碼中...' : codexSubscription.configured ? '重新連線' : '以 ChatGPT 訂閱連線' }}</button>
+            <button v-if="codexSubscription.configured" class="btn btn-ghost btn-sm" @click="clearCodexSubscription" :disabled="clearingCodexSubscription">{{ clearingCodexSubscription ? '中斷中...' : '中斷連線' }}</button>
           </div>
         </div>
 

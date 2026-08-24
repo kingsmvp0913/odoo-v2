@@ -8,7 +8,7 @@ const { hashPassword } = require('./password');
 const { encrypt } = require('./lib/crypto');
 const { verifyToken } = require('./auth');
 const { shadowingEnvVar, resetClaudeTokenCache } = require('./lib/claude-auth');
-const { shadowingEnvVar: codexShadowingEnvVar, resetCodexTokenCache } = require('./lib/codex-auth');
+const codexSubscription = require('./lib/codex-app-server');
 const { resetContext7KeyCache } = require('./lib/context7-auth');
 const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
 const { runClaude } = require('./pipeline/claude-runner');
@@ -110,29 +110,18 @@ function registerRoutes(app) {
 
   app.delete('/api/admin/claude-token/backup', auth, (req, res) => clearClaudeToken(TOKEN_COLS.backup, res));
 
-  app.get('/api/admin/codex-token', auth, async (_req, res) => {
-    try {
-      const { rows } = await query('SELECT openai_api_key_enc FROM teams_settings WHERE id=1');
-      res.json({ configured: !!rows[0]?.openai_api_key_enc, shadowed_by: codexShadowingEnvVar() });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+  // Codex 訂閱登入：官方 app-server 管理 OAuth／refresh token，平台永遠不接觸 token 明文。
+  app.get('/api/admin/codex-subscription', auth, async (_req, res) => {
+    try { res.json(await codexSubscription.accountStatus()); }
+    catch (err) { res.status(503).json({ error: err.message }); }
   });
-  app.post('/api/admin/codex-token', auth, async (req, res) => {
-    const token = String(req.body?.token || '').trim();
-    if (!token) return res.status(400).json({ error: '請貼上 OpenAI API key' });
-    if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 token' });
-    try {
-      await query(`INSERT INTO teams_settings (id, openai_api_key_enc, updated_at) VALUES (1,$1,NOW())
-        ON CONFLICT (id) DO UPDATE SET openai_api_key_enc=$1, updated_at=NOW()`, [encrypt(token)]);
-      await resetCodexTokenCache();
-      res.json({ ok: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+  app.post('/api/admin/codex-subscription/device-login', auth, async (_req, res) => {
+    try { res.json(await codexSubscription.startDeviceLogin()); }
+    catch (err) { res.status(503).json({ error: err.message }); }
   });
-  app.delete('/api/admin/codex-token', auth, async (_req, res) => {
-    try {
-      await query('UPDATE teams_settings SET openai_api_key_enc=NULL, updated_at=NOW() WHERE id=1');
-      await resetCodexTokenCache();
-      res.json({ ok: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+  app.delete('/api/admin/codex-subscription', auth, async (_req, res) => {
+    try { await codexSubscription.logout(); res.json({ ok: true }); }
+    catch (err) { res.status(503).json({ error: err.message }); }
   });
 
   // 備援總開關。關閉（預設）時主帳號撞門檻就暫停推進，與備用憑證存不存在無關——

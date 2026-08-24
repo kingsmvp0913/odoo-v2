@@ -29,6 +29,9 @@ test('runCodex：JSONL 事件轉成共用回傳形狀，並傳遞 model/effort',
 
   const out = await p;
   expect(spawn).toHaveBeenCalledWith('codex', expect.arrayContaining(['exec', '-', '--json', '--model', 'gpt-5.6-terra', '-c', 'model_reasoning_effort="high"']), expect.any(Object));
+  // 訂閱模式不得因正式機殘留的 API key 靜默轉成按量計費。
+  expect(spawn.mock.calls[0][2].env.OPENAI_API_KEY).toBeUndefined();
+  expect(spawn.mock.calls[0][2].env.CODEX_API_KEY).toBeUndefined();
   expect(out.sessionId).toBe('thread-1');
   expect(out.assistantText).toContain('<result>');
   expect(out.usage).toMatchObject({ model: 'gpt-5.6-terra', provider: 'codex', cache_read_input_tokens: 3, cache_creation_input_tokens: 2 });
