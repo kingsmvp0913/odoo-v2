@@ -7,7 +7,8 @@ jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn(),
   commitResolved: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined),
-  restoreConflictMarkers: jest.fn().mockResolvedValue(undefined)
+  restoreConflictMarkers: jest.fn().mockResolvedValue(undefined),
+  refExists: jest.fn().mockResolvedValue(true)
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 // 預設「未設 PAT」（buildGitEnv 拋 NoGitCredentialError），與多數既有案例的情境一致
@@ -37,6 +38,7 @@ beforeEach(async () => {
   gitMock.mergeInto.mockReset();
   gitMock.commitResolved.mockReset().mockResolvedValue(undefined);
   gitMock.abortMerge.mockReset().mockResolvedValue(undefined);
+  gitMock.refExists.mockReset().mockResolvedValue(true);
   require('../notify').emitToUser.mockReset();
   identMock.buildGitEnv.mockReset().mockRejectedValue(new Error('未設 PAT'));
   await dbModule.query('DELETE FROM tasks');
@@ -76,6 +78,21 @@ test('merges task branch into testing for every repo, then deploy_testing', asyn
   }
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(rows[0].status).toBe('deploy_testing');
+});
+
+// 意圖：任務開跑後才被加進專案的 repo 沒有任務分支（worktree 當初沒幫它建），併它只會拿到
+// 「not something we can merge」被判成真失敗 → 整張任務 stopped 卡在這關。跳過而非硬併。
+test('任務開跑後才加入的 repo（無任務分支）→ 跳過該 repo，其餘照常併入 testing', async () => {
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  gitMock.refExists.mockImplementation(async (repoPath) => repoPath !== '/repos/mp/late');
+  const taskId = await setupProjectTask(['main', 'late']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(gitMock.mergeInto).toHaveBeenCalledTimes(1);
+  expect(gitMock.mergeInto.mock.calls[0][0]).toBe('/repos/mp/main');
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('deploy_testing'); // 不得因此 stopped
 });
 
 // 意圖：併入 testing 產生的 merge commit 要記在發起人名下。不傳 gitEnv 的話，正式機上所有

@@ -11,6 +11,7 @@ jest.mock('../pipeline/env-agent', () => ({
   runEnvSetup: jest.fn(),
   restartEnv: jest.fn().mockResolvedValue({ ok: true }),
   assetSmokeCheck: jest.fn().mockResolvedValue({ ok: true }),
+  addonsMountDrift: jest.fn().mockResolvedValue([]),
   // asset traceback 走 `docker logs`（容器 CMD 沒有 --logfile，宿主上不存在 odoo.log）
   dockerCtxFor: jest.fn().mockResolvedValue({ container: 'odoo_test_proj' })
 }));
@@ -154,6 +155,7 @@ beforeEach(async () => {
   envAgent.runEnvSetup.mockReset();
   envAgent.restartEnv.mockReset().mockResolvedValue({ ok: true });
   envAgent.assetSmokeCheck.mockReset().mockResolvedValue({ ok: true });
+  envAgent.addonsMountDrift.mockReset().mockResolvedValue([]);
   require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   const git = require('../pipeline/git');
   git.discardPyc.mockReset().mockResolvedValue(undefined);
@@ -186,6 +188,24 @@ test('env 運行 + 升級成功 → playwright_running', async () => {
   expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale'], undefined);
   // 升級成功必須重啟常駐容器，否則常駐 server 仍持舊 controllers，新路由開測試區報錯（手動重啟才好）
   expect(envAgent.restartEnv).toHaveBeenCalledWith(projectId);
+});
+
+// 意圖：容器掛載在 docker run 那一刻定型，環境建好之後才加進專案的 repo 補掛不進去，其模組在測試區
+// 根本不存在。放行只會對著殘缺的環境升級並判綠燈（實測萊峰19：容器只掛 main，純水的碼從不在測試區），
+// 錯誤訊息也完全指不到成因。擋在升級之前，且不得自動重建——那會中斷使用者正在用的測試區。
+test('容器缺掛新加入的 repo → stopped(env)，不升級', async () => {
+  await setEnvRunning();
+  envAgent.addonsMountDrift.mockResolvedValue(['純水']);
+  const id = await makeTask();
+
+  await runDeployTesting(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+  expect(t.blocker_content).toContain('純水');       // 要指名是哪個 repo，否則沒人知道該修什麼
+  expect(t.blocker_content).toContain('重建測試環境'); // 以及該做什麼
+  expect(envAgent.upgradeModules).not.toHaveBeenCalled();
 });
 
 // 意圖：OWL/QWeb template（static/src/xml）的 xpath 錯誤只在瀏覽器首次請求 bundle 時 lazy 編譯才現形，

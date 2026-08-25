@@ -5,7 +5,7 @@ const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { stripFence, parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { AI_BRANCH, mergeInto, commitResolved, abortMerge, restoreConflictMarkers } = require('./git');
+const { AI_BRANCH, mergeInto, commitResolved, abortMerge, restoreConflictMarkers, refExists } = require('./git');
 const { buildGitEnv } = require('../lib/git-identity');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -372,6 +372,12 @@ async function doMerge(task, taskId, userId, signal) {
   }
 
   for (const repo of repos) {
+    // 任務開跑後才加進專案的 repo 也在這份清單裡，但它沒有 worktree 也沒有任務分支——併一條不存在
+    // 的分支會被判成真失敗（stopped），整張任務卡在這關。沒有任務分支＝沒參與這張任務，跳過。
+    if (!await refExists(repo.local_path, `refs/heads/${branch}`)) {
+      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：本張任務未在此 repo 產生變更，跳過\n` });
+      continue;
+    }
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[MERGE] ${repo.label}：併入 testing...\n` });
 
     let mergeResult;

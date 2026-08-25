@@ -41,12 +41,18 @@ jest.mock('../pipeline/git', () => ({
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   discardPyc: jest.fn().mockResolvedValue(undefined),
-  ensureTestingBranch: jest.fn().mockResolvedValue(undefined)
+  ensureTestingBranch: jest.fn().mockResolvedValue(undefined),
+  // 併版／approve 逐 repo 前會確認「這個 repo 有沒有本張任務的分支」（中途加入的 repo 沒有 →
+  // 跳過）。這裡的情境都是任務一開始就有 repo，一律回 true。
+  refExists: jest.fn().mockResolvedValue(true)
 }));
 jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn().mockResolvedValue({ ok: true, log: '' }),
   runTourTests: jest.fn().mockResolvedValue({ ok: true, log: "2026-08-11 02:15:05,382 38 INFO test_x odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'test_x'" }),
   restartEnv: jest.fn().mockResolvedValue({ ok: true }),
+  // 部署關會先問「容器掛載是否還等於專案當下的 repo 清單」；不 mock 會 TypeError，
+  // 讓每個走到部署的情境全數 stopped。空陣列＝無漂移，流程照走。
+  addonsMountDrift: jest.fn().mockResolvedValue([]),
   ENV_BASE: '/envs',
   runtimeLogPath: dir => dir + '/odoo.log'
 }));

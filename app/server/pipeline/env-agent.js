@@ -72,6 +72,24 @@ async function dockerCtxFor(projectId) {
   };
 }
 
+// 執行中的容器與「專案現在該掛哪些 addons」對不對得起來。容器的掛載在 docker run 那一刻定型，
+// 事後加 repo 無從補掛，而新增 repo 不會（也不該）自動重建環境——於是碼進不了測試區，卻是全靜默的：
+// 容器照跑、部署照綠、畫面沒有任何異常，只是那個 repo 的模組一個都不存在（實測萊峰19 加入第二個
+// repo 後，容器仍只掛著 main）。回缺少的 repo label 清單；沒有環境／inspect 不到就回空陣列——
+// 那是「還沒建」不是「缺件」，硬報缺件會擋掉第一次部署。
+async function addonsMountDrift(projectId) {
+  const ctx = await dockerCtxFor(projectId);
+  if (!ctx) return [];
+  const sources = await dockerEnv.containerMountSources(ctx.container);
+  if (!sources) return [];
+  const mounted = new Set(sources.map(s => path.resolve(s)));
+  const { rows } = await query(
+    "SELECT label, local_path FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+    [projectId]
+  );
+  return rows.filter(r => !mounted.has(path.resolve(r.local_path))).map(r => r.label);
+}
+
 // docker 是唯一模式、odoo_envs.pid 恆為 NULL，所以「running 是否還活著」不能靠 process.kill(pid)
 // （打不到任何東西、恆判活）。一律問容器在不在跑：容器被外部 kill／OOM／重建中斷後繞過 stopEnv
 // 消失時，DB 會殘留 running，唯有這個檢查揪得出來。專案已不存在（dockerCtxFor 回 null）視為不活。
@@ -1049,4 +1067,4 @@ async function _seedOdooUsersDocker(ctx) {
   throw new Error(last);
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor };
+module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor, addonsMountDrift };

@@ -291,6 +291,18 @@ async function containerRunning(name, deps = {}) {
   return code === 0 && stdout.trim() === 'true';
 }
 
+// 容器「當下實際掛著」的 host 路徑清單。容器是 run 的那一刻定型的，之後專案新增 repo 不會反映
+// 進去（docker 無法對執行中的容器加掛載）——要判斷「容器內的碼是不是還等於專案設定」只能問它。
+// 容器不存在／inspect 失敗回 null，與「掛著但一個都沒有」（回 []）區分：前者是無從得知，
+// 拿它當「什麼都沒掛」會讓呼叫端對著沒建過的環境報缺件。
+async function containerMountSources(name, deps = {}) {
+  const { code, stdout } = await runDocker(
+    ['inspect', '-f', '{{range .Mounts}}{{.Source}}{{"\\n"}}{{end}}', name], deps
+  );
+  if (code !== 0) return null;
+  return String(stdout).split('\n').map(s => s.trim()).filter(Boolean);
+}
+
 // 讀 image 上的相依 label。image 不存在或沒有 label 都回空字串（→ 視為需要 build）。
 async function imageDepsLabels(tag, deps = {}) {
   const fmt = `{{index .Config.Labels "${DEPS_LABEL}"}}|{{index .Config.Labels "${PIP_LABEL}"}}`;
@@ -450,7 +462,7 @@ module.exports = {
   containerAddonsPath, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs, buildRootRmArgs,
   // 低階 IO
   runDocker, dockerAvailable, ensureDockerRunning,
-  imageExists, containerExists, containerRunning,
+  imageExists, containerExists, containerRunning, containerMountSources,
   // 生命週期
   ensureImage, runContainer, execOdoo, execPipInstall, stopContainer, removeContainer, restartContainer, containerLogs, removeEnvDir,
   removeDirForce,

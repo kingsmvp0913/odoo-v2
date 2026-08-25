@@ -3,7 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, addonsMountDrift } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
@@ -253,6 +253,21 @@ async function doDeploy(task, taskId, userId, signal) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_content='測試環境無法啟動，請至專案環境頁檢查', updated_at=NOW() WHERE id=$1",
       [taskId]
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return;
+  }
+
+  // 容器的 addons 掛載在 docker run 那一刻定型，專案事後新增的 repo 補掛不進去。放它過去的話，
+  // 部署會對著「少一個 repo 的環境」升級：模組不存在、或依賴它的模組整包 not installable，而
+  // 錯誤訊息完全指不到這裡（實測萊峰19：容器只掛 main，純水的碼在測試區根本不存在）。
+  // 擋下來要求重建，而不是自動重建——重建會直接中斷使用者正在用的測試區。
+  const drift = await addonsMountDrift(task.project_id).catch(() => []);
+  if (drift.length) {
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, `測試環境建立之後才加入的 repo（${drift.join('、')}）尚未掛進容器，其程式碼不在測試區內。`
+        + '請到專案環境頁重建測試環境後再重試部署。']
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
     return;

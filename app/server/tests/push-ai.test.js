@@ -9,6 +9,7 @@ jest.mock('../pipeline/git', () => ({
   concludeAiMerge: jest.fn().mockResolvedValue(undefined),
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
+  refExists: jest.fn().mockResolvedValue(true),
   AiPushConflictError: class AiPushConflictError extends Error {
     constructor(files) { super('push conflict'); this.name = 'AiPushConflictError'; this.conflictFiles = files; }
   },
@@ -48,6 +49,7 @@ beforeEach(async () => {
   gitMock.concludeAiMerge.mockReset().mockResolvedValue(undefined);
   gitMock.deleteBranchLocal.mockReset().mockResolvedValue(undefined);
   gitMock.removeWorktree.mockReset().mockResolvedValue(undefined);
+  gitMock.refExists.mockReset().mockResolvedValue(true);
   mergeMock.resolveConflicts.mockReset();
   identMock.buildGitEnv.mockReset().mockResolvedValue({ GIT_PAT: 'pat' });
   require('../notify').emitToUser.mockReset();
@@ -93,6 +95,20 @@ test('無衝突 → 逐 repo 併入 ai-dev、清理分支、轉 wiki_updating �
   expect(await statusOf(taskId)).toBe('wiki_updating');
   const { rows: [t] } = await dbModule.query('SELECT approved_at FROM tasks WHERE id=$1', [taskId]);
   expect(t.approved_at).not.toBeNull();
+});
+
+// 意圖：repo 清單是核准當下才查的，任務開跑後才被加進專案的 repo 也在裡面——它沒有任務分支，
+// 硬併會拿到「not something we can merge」這種不帶 conflictFiles 的錯，整張已核准的任務就卡死在
+// 最後一關（實測萊峰19 加入第二個 repo 後 task 186 即如此）。沒有任務分支＝沒參與這張任務，跳過。
+test('任務開跑後才加入的 repo（無任務分支）→ 跳過該 repo，其餘照常完成', async () => {
+  const taskId = await setupTask(['main', 'late']);
+  gitMock.refExists.mockImplementation(async (repoPath) => repoPath !== '/repos/pa/late');
+
+  await pushAi.runPushAi(taskId, userId, undefined);
+
+  expect(gitMock.mergeToAiBranch).toHaveBeenCalledTimes(1);
+  expect(gitMock.mergeToAiBranch).toHaveBeenCalledWith('/repos/pa/main', 'task/task_pa_1', { GIT_PAT: 'pat' });
+  expect(await statusOf(taskId)).toBe('wiki_updating'); // 不得因此 stopped
 });
 
 // 意圖：本次事故的正題——本機併 ai-dev 撞衝突不是死路，先交 merge agent 自動解，解掉就照常完成合併。
