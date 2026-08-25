@@ -46,8 +46,13 @@ async function requireAdmin(req, res, next) {
   }
 }
 
+// 可能回空字串——「slug 不出東西」是呼叫端要分辨的資訊（見 repoDirName），不可在這裡吞掉。
+function slug(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 function slugify(s) {
-  return (s || 'repo').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
+  return slug(s) || 'repo';
 }
 
 // 企業版與社群版差在「測試區掛不掛 enterprise addons」。值域在 API 邊界擋，否則怪值要到建置測試區
@@ -77,8 +82,30 @@ async function findMappingConflicts(column, text, excludeId) {
   return conflicts;
 }
 
-function computeDestPath(projectFolder, label) {
-  return path.join(REPOS_BASE, slugify(projectFolder), slugify(label));
+// repo 的目錄名。label 是使用者取的顯示名，中文居多——slug 出來是空字串，舊版一律退成 'repo'，
+// 於是同一專案下**每個**純中文 label 的 repo 都算出同一個路徑：第二個 repo 的 destPath 已存在
+// `.git`，triggerClone 會判成「已 clone」轉去 updateMainClone，等於拿新 URL 去更新別人的 clone
+// （project_repos 只有 label 唯一約束，local_path 沒有，擋不住）。退回 URL 上的 repo 名比 'repo'
+// 有意義，再撞就綴序號——目錄名同時是 worktree 的子目錄名與容器內的 addons 掛載點，必須唯一。
+// taken：同專案已被佔用的目錄名集合（呼叫端查 project_repos 給）。
+function repoDirName(label, repoUrl, taken = new Set()) {
+  const fromUrl = slug(String(repoUrl || '').replace(/\.git$/i, '').split(/[/:]/).filter(Boolean).pop());
+  const base = slug(label) || fromUrl || 'repo';
+  let name = base;
+  for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+  return name;
+}
+
+// 同專案已被佔用的 repo 目錄名（excludeId＝正在編輯的那筆，它自己的舊路徑不算佔用）
+async function takenRepoDirs(projectId, excludeId = null) {
+  const { rows } = await query(
+    'SELECT id, local_path FROM project_repos WHERE project_id=$1 AND local_path IS NOT NULL', [projectId]
+  );
+  return new Set(rows.filter(r => r.id !== excludeId).map(r => path.basename(r.local_path)).filter(Boolean));
+}
+
+function computeDestPath(projectFolder, label, repoUrl, taken) {
+  return path.join(REPOS_BASE, slugify(projectFolder), repoDirName(label, repoUrl, taken));
 }
 
 // 全新 clone 取發起人 gitEnv：有設 PAT 就帶（私有 repo 靠它認證），沒設就回 undefined 退機器憑證。
@@ -685,7 +712,9 @@ function registerRoutes(app) {
         await query('UPDATE project_repos SET is_primary = false WHERE project_id = $1', [req.params.id]);
       }
 
-      const destPath = computeDestPath(project.folder_name || project.name, label);
+      const destPath = computeDestPath(
+        project.folder_name || project.name, label, repo_url, await takenRepoDirs(req.params.id)
+      );
       const { rows } = await query(
         `INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status, base_branch, clone_status_at)
          VALUES ($1, $2, $3, $4, $5, 'cloning', $6, NOW()) RETURNING *`,
@@ -731,7 +760,10 @@ function registerRoutes(app) {
 
       if (urlChanged) {
         const { rows: [project] } = await query('SELECT folder_name, name FROM projects WHERE id=$1', [req.params.id]);
-        newLocalPath = computeDestPath(project.folder_name || project.name, label || existing.label);
+        newLocalPath = computeDestPath(
+          project.folder_name || project.name, label || existing.label, repo_url,
+          await takenRepoDirs(req.params.id, existing.id)
+        );
         newCloneStatus = 'cloning';
       }
 

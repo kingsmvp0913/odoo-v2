@@ -1191,3 +1191,45 @@ describe('repo 主分支覆寫', () => {
     expect(res.body.base_branch).toBe('develop');
   });
 });
+
+// 意圖：label 是使用者取的顯示名，中文居多。舊版 slug 不出東西就一律退成 'repo'，於是同一專案下
+// 每個純中文 label 的 repo 都算出同一個 local_path——第二個 repo 的目錄已存在 .git，triggerClone
+// 判成「已 clone」轉去 updateMainClone，等於拿新 URL 去更新別人的 clone；目錄名同時是 worktree
+// 子目錄與容器內 addons 掛載點，撞名還會讓兩個 repo 在測試環境裡互相覆蓋。
+describe('repo 目錄命名', () => {
+  async function newProject(name) {
+    const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+      .send({ name, folder_name: name.toLowerCase(), odoo_version: '19.0' });
+    return p.body.id;
+  }
+
+  test('純中文 label → 目錄名取自 repo URL，而非一律 repo', async () => {
+    const pid = await newProject('DirNameA');
+    const r = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
+      .send({ label: '純水', repo_url: 'https://github.com/x/odoo19_taipure.git' });
+
+    expect(r.status).toBe(201);
+    expect(path.basename(r.body.local_path)).toBe('odoo19-taipure');
+  });
+
+  test('目錄名撞到同專案既有 repo → 綴序號，不共用同一個 clone 目錄', async () => {
+    const pid = await newProject('DirNameB');
+    const a = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
+      .send({ label: '主庫', repo_url: 'https://github.com/x/shared.git' });
+    const b = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
+      .send({ label: '副庫', repo_url: 'https://gitlab.com/y/shared.git' });
+
+    expect(path.basename(a.body.local_path)).toBe('shared');
+    expect(path.basename(b.body.local_path)).toBe('shared-2');
+    expect(b.body.local_path).not.toBe(a.body.local_path);
+  });
+
+  // 有鑑別力的反例：ASCII label 照舊用 label，不得因為這次改動改掉既有專案的目錄命名。
+  test('一般 label → 仍用 label 當目錄名', async () => {
+    const pid = await newProject('DirNameC');
+    const r = await request(app).post(`/api/projects/${pid}/repos`).set('Authorization', `Bearer ${token}`)
+      .send({ label: 'main', repo_url: 'https://github.com/x/whatever.git' });
+
+    expect(path.basename(r.body.local_path)).toBe('main');
+  });
+});
