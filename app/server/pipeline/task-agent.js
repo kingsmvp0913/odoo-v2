@@ -644,6 +644,15 @@ async function readHeads(info, taskId) {
 // 記帳來源，拿它當「跨人工介入的總輪次」。
 const MAX_CODING_RUNS = parseInt(process.env.PIPELINE_MAX_CODING_RUNS || '4', 10);
 
+// 只有「真的又寫了一輪碼」才佔額度。QA 挑出一個小問題、coding 花 39 秒改 7 行——那是收斂的徵狀，
+// 不是鬼打牆，可是舊算法把它跟一輪 875 秒的實作記成同一件事，等於門檻被腰斬：實測 task 183／184
+// 各只有 2 輪真開發卻雙雙被擋（183 當時離完成只差刪 7 行 XML），全平台 99 張任務有 20 張會撞到，
+// 熔斷變成使用者要學會忽略的雜訊，也就失去了它唯一的作用。
+// 門檻取 5000：正式庫 199 筆 coding 裡 <1 分鐘那段平均 output 2114、3~10 分鐘那段平均 27883，
+// 兩群分得很開，落在中間的值怎麼挑都不影響分類結果。改用 output_tokens 而非 duration_ms，是因為
+// 耗時會被環境／排隊干擾，產出量才直接反映「這輪改了多少東西」。
+const SUBSTANTIVE_OUTPUT_TOKENS = parseInt(process.env.PIPELINE_SUBSTANTIVE_OUTPUT_TOKENS || '5000', 10);
+
 // 累計輪次熔斷：擋的目的不是攔住使用者（他本來就會再按繼續），是讓他在**知道累計數字**的前提下
 // 決定要不要繼續——現在按「先修正」時畫面上看不到任何累計量。
 // 逃生路徑靠 task_logs 裡自己留下的熔斷紀錄筆數推導額度（上限 = MAX × (已熔斷次數 + 1)）：不加欄位、
@@ -652,12 +661,12 @@ const MAX_CODING_RUNS = parseInt(process.env.PIPELINE_MAX_CODING_RUNS || '4', 10
 async function codingRunwayCheck(taskId, businessTaskId) {
   const { cost } = require('../lib/token-cost').costSql('');
   const { rows: [u] } = await query(
-    `SELECT SUM(CASE WHEN agent_type='coding' THEN 1 ELSE 0 END) AS coding_runs,
+    `SELECT SUM(CASE WHEN agent_type='coding' AND output_tokens >= $2 THEN 1 ELSE 0 END) AS coding_runs,
             COUNT(*) AS total_calls,
             COALESCE(SUM(${cost}), 0) AS cost_usd,
             COALESCE(SUM(duration_ms), 0) AS ms
        FROM token_usage WHERE task_id = $1`,
-    [businessTaskId]
+    [businessTaskId, SUBSTANTIVE_OUTPUT_TOKENS]
   );
   const runs = Number(u?.coding_runs) || 0;
   const { rows: [b] } = await query(
@@ -684,7 +693,7 @@ async function runTaskCoding(taskId, userId, signal) {
 
   const runaway = await codingRunwayCheck(taskId, task.task_id).catch(() => null);
   if (runaway) {
-    const msg = `[輪次熔斷] 這張任務已累計跑了 ${runaway.runs} 輪實作、共 ${runaway.calls} 次 AI 呼叫，`
+    const msg = `[輪次熔斷] 這張任務已累計跑了 ${runaway.runs} 輪實作（不含小修）、共 ${runaway.calls} 次 AI 呼叫，`
       + `約 $${runaway.usd}、機器時間 ${runaway.minutes} 分鐘，仍未收斂。`;
     await query(
       `UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1`,
