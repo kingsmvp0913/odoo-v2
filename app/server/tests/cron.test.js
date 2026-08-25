@@ -312,10 +312,28 @@ test('尚未到預定關機時刻 → 不關機', async () => {
   expect(envAgent.nightlyShutdown).not.toHaveBeenCalled();
 });
 
-// --- 每週工作流程健檢 ---
+// --- 每日工作流程健檢 ---
 // 意圖：健檢原本只有 admin 手動觸發，而上線後從沒被按過一次（run#1 是平台史上第一次執行）。
 // 再好的診斷不跑就沒有價值。節流以 DB 的 started_at 為準而非行程內變數——server 常重啟，
 // 用記憶體節流會變成「每次重啟後不久又跑一次」，而一次健檢要燒 20+ 個 opus。
+test('健檢固定臺灣時間 23:00，手動全平台健檢不會帶偏排程', async () => {
+  await dbModule.query('DELETE FROM health_check_runs');
+  const beforeTarget = new Date('2026-08-25T14:00:00.000Z'); // 臺灣時間 22:00
+  let schedule = await cronModule.getHealthCheckSchedule(beforeTarget);
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T15:00:00.000Z' });
+
+  // started_by 有值是 admin 手動執行，必須忽略，否則每次人工健檢又會重設排程。
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, started_by, created_at) VALUES ('done',1,$1,'2026-08-25T14:30:00.000Z')", [userId]);
+  schedule = await cronModule.getHealthCheckSchedule(beforeTarget);
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T15:00:00.000Z', lastRunAt: null });
+
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',1,'2026-08-25T15:01:00.000Z')");
+  schedule = await cronModule.getHealthCheckSchedule(new Date('2026-08-26T14:00:00.000Z'));
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-26T15:00:00.000Z' });
+});
+
 test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
   const nodeCron = require('node-cron');
   const runner = require('../pipeline/health-check-runner');
@@ -325,9 +343,10 @@ test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
     'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
   );
   runner.runAudit.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z')); // 臺灣時間 23:00
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
-  try { await tick(); } finally { cronModule.stopCron(); }
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
 
   const { rows } = await dbModule.query('SELECT status, window_days FROM health_check_runs');
   expect(rows).toHaveLength(1);
@@ -362,14 +381,15 @@ test('cron tick：最後一筆是單張任務健檢 → 平台健檢照樣依平
   await dbModule.query(
     "INSERT INTO health_check_runs (status, window_days, created_at, task_db_id) VALUES ('running',30,NOW(),12345)");
   runner.runAudit.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z'));
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
-  try { await tick(); } finally { cronModule.stopCron(); }
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
 
   expect(runner.runAudit).toHaveBeenCalled();   // 平台那筆已超過一週，不因剛按過任務健檢而跳過
 });
 
-// 週期未到不跑：否則每分鐘一 tick 就是每分鐘一次健檢。（週期已由每週改為每天）
+// 已在本次晚間時段跑過就不重跑：否則每分鐘一 tick 就是每分鐘一次健檢。
 test('cron tick：上次健檢在一個週期內 → 不跑', async () => {
   const nodeCron = require('node-cron');
   const runner = require('../pipeline/health-check-runner');
@@ -392,9 +412,10 @@ test('cron tick：上次健檢超過一個週期 → 再跑一次', async () => 
   await dbModule.query(
     "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '8 days',NOW())");
   runner.runAudit.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z'));
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
-  try { await tick(); } finally { cronModule.stopCron(); }
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
 
   expect(runner.runAudit).toHaveBeenCalled();
   const { rows } = await dbModule.query('SELECT id FROM health_check_runs');

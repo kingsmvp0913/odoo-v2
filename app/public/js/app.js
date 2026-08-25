@@ -78,6 +78,7 @@ const router = createRouter({
     { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/agents', component: window.AdminAgentsView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/admin/schedules', component: window.AdminSchedulesView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/pipelines', component: window.AdminPipelinesView, meta: { requiresAuth: true } },
     { path: '/admin/health', component: window.AdminHealthCheckView, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/rejections', component: window.AdminRejectionsView, meta: { requiresAuth: true, requiresAdmin: true } },

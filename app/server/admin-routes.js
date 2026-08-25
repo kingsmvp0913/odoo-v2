@@ -16,7 +16,7 @@ const { listAgents, loadAgent, updateAgent, getLabels, refreshCodexModels } = re
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
 const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
-const { getHealthCheckSchedule } = require('./cron');
+const { getHealthCheckSchedule, getCronSchedules } = require('./cron');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -642,6 +642,12 @@ function registerRoutes(app) {
   // 排在它後面會被當成 runId 吞掉，得靠路由順序才正確——換成獨立路徑就不必依賴順序。
   app.get('/api/admin/health-check-schedule', auth, async (_req, res) => {
     try { res.json(await getHealthCheckSchedule()); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 管理工具的排程總覽：由 cron 集中產生，避免前端另列一套而漏掉背景工作。
+  app.get('/api/admin/schedules', auth, async (_req, res) => {
+    try { res.json(await getCronSchedules()); }
     catch (err) { res.status(500).json({ error: err.message }); }
   });
 

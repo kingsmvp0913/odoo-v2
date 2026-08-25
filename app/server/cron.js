@@ -91,6 +91,7 @@ async function cleanupOldInboxRows() {
 }
 
 let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
+let _clockForTesting = null;
 let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
@@ -102,46 +103,94 @@ let _lastEmbeddingSweepAt = 0;
 const EMBEDDING_SWEEP_INTERVAL_MS = parseInt(process.env.EMBEDDING_SWEEP_INTERVAL_MS || String(86400000), 10);
 const EMBEDDING_SWEEP_HOUR = parseInt(process.env.EMBEDDING_SWEEP_HOUR || '3', 10);
 
-// 工作流程健檢：原本只有 admin 手動觸發，而實際上線後從沒被按過一次（run#1 是平台史上第一次）。
-// 再好的診斷不跑就沒有價值，改為自動跑。
-// 每天一次（原本每週）：視窗改成「上一輪之後」的增量後，跑得越密每輪要看的資料越少、越好判讀；
-// 拉長反而讓一輪要吞一大批資料。0 = 停用。
+// 工作流程健檢固定在臺灣時間每日 23:00 跑。不能用「上一輪 + 24 小時」：手動健檢或第一次
+// 啟動的時刻會把排程永久帶到下午等非預期時段。0 = 停用。
 const HEALTH_CHECK_INTERVAL_MS = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS || String(86400000), 10);
+const HEALTH_CHECK_TIME_ZONE = 'Asia/Taipei';
+const HEALTH_CHECK_HOUR = 23;
 
-// 距上次健檢是否已滿一個週期。以 DB 的 created_at 為準而非行程內變數：server 常重啟，
-// 用記憶體節流會變成「每次重啟後不久就再跑一次」，一次健檢要跑 20+ 個 opus。
-// 健檢頁要顯示「下次執行時間」，而那個時間就是這裡的判斷結果——兩邊各算一份必然漂移
-// （改了 interval 只改到一邊，畫面寫的時間就是假的），故排程判斷與時間推算共用此函式。
-async function getHealthCheckSchedule() {
+function taipeiDateParts(now) {
+  const values = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: HEALTH_CHECK_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(now).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  return { year: Number(values.year), month: Number(values.month), day: Number(values.day) };
+}
+
+function healthCheckTargetAt(now, dayOffset = 0) {
+  const { year, month, day } = taipeiDateParts(now);
+  const targetDay = new Date(Date.UTC(year, month - 1, day + dayOffset));
+  const date = targetDay.toISOString().slice(0, 10);
+  return new Date(`${date}T${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00:00+08:00`);
+}
+
+// 排程判斷與健檢頁的「下次執行時間」共用，避免兩邊各算而漂移。晚於 23:00 但尚未跑過
+// 當日自動健檢時，下一個 tick 會補跑；server 重啟或前一 tick 被略過也不會漏掉整天。
+async function getHealthCheckSchedule(now = _clockForTesting ? _clockForTesting() : new Date()) {
   const intervalMs = HEALTH_CHECK_INTERVAL_MS;
   if (intervalMs <= 0) return { enabled: false, intervalMs, lastRunAt: null, nextRunAt: null, running: false, due: false };
-  // 只認全平台健檢（task_db_id IS NULL）：單張任務健檢是人工隨手按的，一天可能按好幾次，
-  // 讓它算進來會把每週排程往後推一整週，而且畫面上的「下次自動健檢」也跟著變成假的。
-  // 兩者共用 runs 表是刻意的（同一份判準、同一個結果頁），但排程的節流只該看平台那一種。
+  // 只認 cron 建的全平台健檢。task_db_id 排除單張任務健檢；started_by 排除 admin 手動全平台健檢，
+  // 所以人工診斷不會重設晚上 23:00 的自動排程。
   const { rows } = await query(
-    "SELECT status, created_at FROM health_check_runs WHERE task_db_id IS NULL ORDER BY id DESC LIMIT 1"
+    'SELECT status, created_at FROM health_check_runs WHERE task_db_id IS NULL AND started_by IS NULL ORDER BY id DESC LIMIT 1'
   );
   const last = rows[0];
-  // 從沒跑過 → 下一個 tick 就跑，沒有「上次」可推算下次時刻
-  if (!last) return { enabled: true, intervalMs, lastRunAt: null, nextRunAt: null, running: false, due: true };
-  const lastRunAt = new Date(last.created_at);
-  // 上一輪還在跑 → 不疊加；下次時刻要等這輪落地才算得準，故不給 nextRunAt
-  if (last.status === 'running') {
+  const lastRunAt = last && new Date(last.created_at);
+  if (last && last.status === 'running') {
     return { enabled: true, intervalMs, lastRunAt: lastRunAt.toISOString(), nextRunAt: null, running: true, due: false };
   }
-  const nextRunAt = new Date(lastRunAt.getTime() + intervalMs);
+
+  const todayTarget = healthCheckTargetAt(now);
+  const due = now.getTime() >= todayTarget.getTime() && (!lastRunAt || lastRunAt.getTime() < todayTarget.getTime());
+  const nextRunAt = due ? null : (now.getTime() < todayTarget.getTime() ? todayTarget : healthCheckTargetAt(now, 1));
   return {
     enabled: true, intervalMs,
-    lastRunAt: lastRunAt.toISOString(),
-    nextRunAt: nextRunAt.toISOString(),
+    lastRunAt: lastRunAt ? lastRunAt.toISOString() : null,
+    nextRunAt: nextRunAt ? nextRunAt.toISOString() : null,
     running: false,
-    due: Date.now() >= nextRunAt.getTime(),
+    due,
   };
 }
 
 async function shouldRunHealthCheck() {
   const s = await getHealthCheckSchedule();
   return s.due;
+}
+
+function nextMinuteAt(now) {
+  return new Date(Math.floor(now.getTime() / 60000 + 1) * 60000).toISOString();
+}
+
+function minuteLabel(ms) {
+  const minutes = Math.round(ms / 60000);
+  return minutes % 60 === 0 ? `每 ${minutes / 60} 小時` : `每 ${minutes} 分鐘`;
+}
+
+// 管理工具的排程清單：cron 內的行為才列入，不把 API 的人工觸發誤寫成排程。
+// 各使用者同步與閒置回收的精確下次時間只存在記憶體且各自不同，因此明確標示無單一時刻。
+async function getCronSchedules(now = new Date()) {
+  const settings = await getGlobalSettings();
+  const testMode = !!settings.test_mode;
+  const health = await getHealthCheckSchedule(now);
+  const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
+  const shutdownTz = process.env.ODOO_ENV_SHUTDOWN_TZ || '伺服器本機時區';
+  const hourlyAt = new Date(now);
+  hourlyAt.setMinutes(0, 0, 0);
+  hourlyAt.setHours(hourlyAt.getHours() + 1);
+  return [
+    { id: 'cron-tick', name: '排程主迴圈', timing: '每分鐘', enabled: true, nextRunAt: nextMinuteAt(now), note: '所有背景工作的派送入口。' },
+    { id: 'usage-gate', name: '用量閘門檢查', timing: '每分鐘', enabled: true, nextRunAt: nextMinuteAt(now), note: '跨過用量門檻時發出通知。' },
+    { id: 'odoo-sync', name: 'Odoo 任務同步', timing: settings.odoo_sync_interval > 0 ? minuteLabel(settings.odoo_sync_interval * 60000) : '已停用', enabled: settings.odoo_sync_interval > 0, nextRunAt: null, note: '依每位使用者上次同步時間分別計算。' },
+    { id: 'service-sync', name: 'Service 任務同步', timing: settings.service_sync_interval > 0 ? minuteLabel(settings.service_sync_interval * 60000) : '已停用', enabled: settings.service_sync_interval > 0, nextRunAt: null, note: '依每位使用者上次同步時間分別計算。' },
+    { id: 'pipeline', name: 'Pipeline 自動推進', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用自動推進。' : '同步未執行時仍會推進可執行任務。' },
+    { id: 'health-check', name: '工作流程健檢', timing: '每日 23:00（臺灣時間）', enabled: health.enabled, nextRunAt: health.nextRunAt, note: health.running ? '本輪執行中。' : (health.due ? '已到排程時刻，下一個 cron tick 會補跑。' : '手動健檢不影響此排程。') },
+    { id: 'nightly-shutdown', name: '測試區夜間關機', timing: `每日 ${shutdownTime}（${shutdownTz}）`, enabled: true, nextRunAt: null, note: '每天只執行一次；若錯過整點，之後的 tick 會補跑。' },
+    { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
+    { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },
+    { id: 'classification', name: '退回與 wiki 漂移分類', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用分類。' : '每次僅處理小批待分類資料。' },
+    { id: 'auto-archive', name: '完成任務自動封存', timing: '每分鐘', enabled: true, nextRunAt: nextMinuteAt(now), note: '封存完成已滿 30 天的任務。' },
+    { id: 'embedding-sweep', name: '語意索引補算', timing: `每日 ${String(EMBEDDING_SWEEP_HOUR).padStart(2, '0')}:00（伺服器本機時區）`, enabled: !testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: !testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0 ? '僅在向量模型可用時執行。' : '測試模式或設定已停用。' }
+  ];
 }
 
 function startCron() {
@@ -300,5 +349,6 @@ function stopCron() {
 // 測試用：「今天已經關過機」是模組層變數，跨 test 累積。補跑改成「過了預定時刻就跑」之後，
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
+function _setClockForTesting(clock) { _clockForTesting = clock; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, _resetShutdownStateForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, getCronSchedules, _resetShutdownStateForTesting, _setClockForTesting };

@@ -129,8 +129,8 @@ test('GET list 回近筆含 findings_count；GET :id 回 run+findings', async ()
   expect(detail.body.findings[0].agent_name).toBe('qa');
 });
 
-// 意圖：健檢改成每週自動跑之後，admin 無從得知下一次是什麼時候（畫面只有歷史）。
-// 這條端點就是那個答案，且必須與 cron 的排程判斷同源——各算一份的話，改了間隔只會改到一邊。
+// 意圖：admin 必須看得到固定晚間健檢的狀態；不能再用「上一輪 + 24 小時」，否則手動執行會把
+// 排程帶到下午。這條端點與 cron 共用判斷，避免兩邊漂移。
 describe('GET /api/admin/health-check-schedule', () => {
   beforeEach(() => dbModule.query('DELETE FROM health_check_runs'));
 
@@ -139,26 +139,10 @@ describe('GET /api/admin/health-check-schedule', () => {
     expect((await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
   });
 
-  test('從沒跑過 → due，沒有可推算的下次時刻', async () => {
+  test('從沒跑過 → 回傳排程狀態', async () => {
     const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ enabled: true, running: false, due: true, lastRunAt: null, nextRunAt: null });
-  });
-
-  test('上次已完成 → 下次＝上次起算滿一個週期', async () => {
-    // 週期已由每週改為每天，所以「還沒到」的 fixture 要用小時，不能再用 2 天
-    await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',30,NOW() - INTERVAL '2 hours')");
-    const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
-    expect(res.body.due).toBe(false);
-    const gap = new Date(res.body.nextRunAt) - new Date(res.body.lastRunAt);
-    expect(gap).toBe(res.body.intervalMs);
-    expect(new Date(res.body.nextRunAt).getTime()).toBeGreaterThan(Date.now());
-  });
-
-  test('上次超過一個週期 → due（畫面顯示即將執行，而非過去的時刻）', async () => {
-    await dbModule.query("INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',30,NOW() - INTERVAL '2 days')");
-    const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
-    expect(res.body.due).toBe(true);
+    expect(res.body).toMatchObject({ enabled: true, running: false, lastRunAt: null });
   });
 
   test('上一輪還在跑 → running，不給下次時刻（等這輪落地才算得準）', async () => {
@@ -166,6 +150,17 @@ describe('GET /api/admin/health-check-schedule', () => {
     const res = await request(app).get('/api/admin/health-check-schedule').set('Authorization', `Bearer ${adminToken}`);
     expect(res.body).toMatchObject({ running: true, due: false, nextRunAt: null });
   });
+});
+
+test('GET 排程總覽：僅 admin 可讀，包含臺灣時間 23:00 的健檢', async () => {
+  expect((await request(app).get('/api/admin/schedules')).status).toBe(401);
+  expect((await request(app).get('/api/admin/schedules').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
+  const res = await request(app).get('/api/admin/schedules').set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'health-check', timing: '每日 23:00（臺灣時間）' }),
+    expect.objectContaining({ id: 'cron-tick', timing: '每分鐘' })
+  ]));
 });
 
 // --- scope=task：單張任務健檢（入口在任務詳情頁的 admin 按鈕）---
