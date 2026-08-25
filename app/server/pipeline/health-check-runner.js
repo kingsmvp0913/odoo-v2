@@ -354,13 +354,13 @@ async function checkOne(runId, agent, ha, windowDays, startedBy, preSummary = nu
 // 一次，用次數算會把一件事誤算成七個獨立證據），深診那半段在這裡沒有出口。
 async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
   const insert =
-    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6)`;
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, kind, layer)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8)`;
   try {
     const summary = await buildTaskSummary(taskDbId);
     // 任務不存在要落成看得見的失敗：run 停在 running 或空白收尾，畫面上跟「還在跑」長得一樣。
     if (!summary) {
-      await query(insert, [runId, TASK_AGENT, TASK_LABEL, `找不到任務（tasks.id=${taskDbId}）`, 'error', null]);
+      await query(insert, [runId, TASK_AGENT, TASK_LABEL, `找不到任務（tasks.id=${taskDbId}）`, 'error', null, 'agent', null]);
       await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]);
       return;
     }
@@ -381,7 +381,11 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
       const severity = String((parsed && parsed.severity) || '').trim().toLowerCase();
       const diagnosis = String((diagBlock || (parsed && parsed.diagnosis)) || '').trim();
       if (diagnosis && SEVERITIES.has(severity)) {
-        finding = { severity, diagnosis, rationale: (ratBlock && ratBlock.trim()) || (parsed && parsed.rationale) || null };
+        finding = {
+          severity, diagnosis,
+          rationale: (ratBlock && ratBlock.trim()) || (parsed && parsed.rationale) || null,
+          layer: String((parsed && parsed.layer) || '').trim().toLowerCase() === 'platform' ? 'platform' : null
+        };
       }
     } catch (err) {
       await logFailedUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', err);
@@ -390,12 +394,20 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
       finding = {
         severity: 'error',
         diagnosis: '健檢失敗：無法取得有效診斷' + saveRawOutput(runId, TASK_AGENT, raw),
-        rationale: null
+        rationale: null, layer: null
       };
     }
     // suggested_prompt 永遠是 NULL：單張任務的證據不足以改全平台的提示詞（判準的紅旗之一）。
     // 前端的「帶入編輯器」按鈕只在有 suggested_prompt 時才出現，所以這一關自然不會把人導去改 prompt。
-    await query(insert, [runId, TASK_AGENT, TASK_LABEL, finding.diagnosis, finding.severity, finding.rationale]);
+    //
+    // layer='platform' 是唯一的例外出口，落 kind='proposal'（＝畫面上出得來「🔧 修這條」、後端 fix
+    // 端點也才收）。判準對「一張任務不算證據」的限制是**針對提示詞**的：一關的 prompt 改動會影響
+    // 所有任務，而一張任務走過七關會在七處各出現一次，用次數算會把一件事誤算成七個獨立證據。平台
+    // 程式的 bug 不吃這個折扣——它是決定性的，一次重現就成立，判準自己也寫「平台程式碼 bug 一律列入，
+    // 走獨立出口」。原本這裡一律落 kind='agent'，等於連那條出口一起堵死：任務健檢挖到平台 bug 也
+    // 只能寫成一段字給人自己去改（task 184 的 QA 拿舊規格審查即是一例）。
+    const kind = finding.layer === 'platform' ? 'proposal' : 'agent';
+    await query(insert, [runId, TASK_AGENT, TASK_LABEL, finding.diagnosis, finding.severity, finding.rationale, kind, finding.layer]);
     await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
   } catch (err) {
     console.error('[HEALTH-CHECK] task:', err.message);

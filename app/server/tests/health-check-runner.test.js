@@ -530,6 +530,42 @@ test('runTaskHealthCheck：落一筆 __task__ finding（suggested_prompt 為 NUL
   expect(run.status).toBe('done');
 });
 
+// 意圖：判成平台程式 bug 時要落 kind='proposal'——那是「🔧 修這條」出得來的唯一條件（前端只渲染
+// proposal，後端 fix 端點也擋掉其餘 kind）。原本一律落 'agent'，等於單張任務挖到的平台 bug 沒有任何
+// 出口，只能寫成一段字給人自己去改；而判準明寫平台程式碼 bug 一律列入、走獨立出口。
+// 「一張任務不算證據」限制的是提示詞（會影響全平台），不是決定性的程式缺陷——所以 suggested_prompt
+// 在這條路上仍必須是 NULL，兩件事不可混為一談。
+test('runTaskHealthCheck：layer=platform → 落 kind=proposal（「修這條」才出得來），但仍不給 suggested_prompt', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>處置：修平台程式。qa-agent.js 的 resume 沒比對規格。</diagnosis>'
+        + '<rationale>與任務內容無關</rationale><result>{"severity":"high","layer":"platform"}</result>',
+    usage: {}, durationMs: 5
+  });
+  const runId = await newTaskRun(1);
+  await runTaskHealthCheck(runId, { taskDbId: 1, startedBy: null });
+  const { rows: [f] } = await dbModule2.query(
+    'SELECT kind, layer, severity, suggested_prompt FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.kind).toBe('proposal');
+  expect(f.layer).toBe('platform');
+  expect(f.severity).toBe('high');
+  expect(f.suggested_prompt).toBeNull();
+});
+
+// 意圖：platform 是唯一被認的值。模型很容易順手填 'prompt'／'env'——那兩者在這一關都沒有出口
+// （提示詞不得由單張任務改；環境問題不是改碼能解），放進 proposal 會生出一顆按鈕去派 agent 改碼。
+test('runTaskHealthCheck：layer 填 platform 以外的值一律當沒填，維持 kind=agent', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>處置：補充資訊。</diagnosis><result>{"severity":"low","layer":"prompt"}</result>',
+    usage: {}, durationMs: 5
+  });
+  const runId = await newTaskRun(1);
+  await runTaskHealthCheck(runId, { taskDbId: 1, startedBy: null });
+  const { rows: [f] } = await dbModule2.query(
+    'SELECT kind, layer FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.kind).toBe('agent');
+  expect(f.layer).toBeNull();
+});
+
 test('runTaskHealthCheck：模型就算給了 <prompt> 也不落進 suggested_prompt', async () => {
   mockRunClaude.mockResolvedValue({
     text: '<prompt>改壞的提示詞</prompt><diagnosis>處置：無需處置。</diagnosis><result>{"severity":"ok"}</result>',
