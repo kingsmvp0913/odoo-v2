@@ -12,6 +12,7 @@ const { parseQaIssues, recordQaRejection } = require('./qa-rejection');
 const { getProjectNotes } = require('./project-notes');
 const { MACHINE_LOGS, machineLogHeader, stripMachineHeader } = require('../../public/js/machine-logs.js');
 const yaml = require('js-yaml');
+const crypto = require('crypto');
 
 const QA_LIMIT = 5;
 // 規格歧義 clarify 迴圈的上限。使用者的裁決由 runner.handleClarifyAnswered 追加進 analysis_yaml
@@ -23,6 +24,17 @@ function specDecisionCount(analysisYaml) {
   let spec;
   try { spec = yaml.load(analysisYaml || '', { schema: yaml.CORE_SCHEMA }); } catch { return 0; }
   return Array.isArray(spec?.spec_decisions) ? spec.spec_decisions.length : 0;
+}
+// 規格指紋。折進 qa_prompt_ver 當 resume 的續用條件（比照 with-resume 的 extraVersion／cs-agent 的
+// ctxVersion）：規格只出現在 fresh prompt，qa-retry 一個字都不帶（那是它省 token 的前提），所以規格
+// 中途被換掉時，resume 到的 session 仍嵌著舊規格＝拿舊規格審新實作，判 fail 的理由永遠與現行規格
+// 相反，coding 怎麼改都不對，直到熔斷。（task 184：coding 依新規格做「附件及報告＋訊息附件」，QA 依
+// 舊規格退「應為維修報告下載、不含訊息附件」，四輪卡在同一點。）
+// 折進指紋而不是在寫入端各自清 qa_session_id：analysis_yaml 有四個寫入點（respec-agent、
+// runner.writeAnalysisYaml、clarify-chat、spec-review），只有 respec-agent 記得清，靠每個寫入端自律
+// 必然再漏一個——這次就是這樣漏的。守門條件放在讀取端才涵蓋得到未來新增的寫入點。
+function specVersion(analysisYaml) {
+  return crypto.createHash('sha1').update(analysisYaml || '').digest('hex').slice(0, 12);
 }
 // 每個 QA session 世代最多 resume 幾次（比照 coding 的 RESUME_LIMIT）：重驗走 --resume
 // 續用上輪對話（已含規格、規則、上輪 diff 探索），只送短增量 prompt 省 token
@@ -46,7 +58,9 @@ async function runQaAgent(taskId, userId, signal) {
   );
   if (!task || !task.project_id) return false;
   // prompt 版本綁定：qa prompt 改過（版本不符）或舊任務（NULL）→ resume 前判為不可續用，走 fresh 吃新指令。
-  const qaVer = promptVersion('qa');
+  // 一併折進規格指紋，理由見 specVersion。既有任務的 qa_prompt_ver 沒有這一截，一律會判不符而降級
+  // 跑一次 fresh——那正是它們該有的行為（誰的 session 嵌著哪一版規格已不可考）。
+  const qaVer = `${promptVersion('qa')}.${specVersion(task.analysis_yaml)}`;
 
   const info = await getProjectInfo(task.project_id);
   if (!info?.root) {
