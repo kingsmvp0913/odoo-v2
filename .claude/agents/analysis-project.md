@@ -70,7 +70,7 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/tasks/spec?projec
 
 【analysis.yaml 格式】
 case_id: "{{task_id}}"
-module: ""
+module: ""         # 這張任務會動到的**所有**模組，跨模組用逗號分隔（見下方【module 撰寫規則】）
 odoo_version: "{{odoo_version}}"
 project_name: "{{project_name}}"
 execution_mode: "MODE_A"
@@ -85,6 +85,15 @@ clarification_channel:
   intro: ""        # 白話說明段（可留空）；不是問題的內容一律放這裡
   questions: []
   user_answer: ""
+
+【module 撰寫規則】
+- 填「這張任務會動到程式碼的**所有**模組」，不是「主要模組」。部署只升級這一欄列出的模組。
+- 動到兩個以上就用逗號分隔全部列出，**主模組放第一個**（tour 與 wiki 頁會歸在第一個底下）。
+  例：把採購客製從 idx_project 拆到新模組 idx_purchase，兩邊都要改 → `module: idx_purchase,idx_project`
+  例：只在既有模組加欄位 → `module: idx_project`
+- 漏列的模組不會被升級：它的 view 改動與 migration 完全不會執行，而部署照樣顯示成功。
+  真出錯時訊息還會指向「有被升級的那個模組」，完全看不出真因（task 195 因此連兩輪部署失敗）。
+- 只動一個模組就照常填一個，不要為了保險多列無關模組（每個都會被 -i/-u，拖長升級時間）。
 
 【acceptance 撰寫規則】
 - 每條寫一個「使用者在跑起來的畫面上能觀察到的結果」，不是實作步驟。
