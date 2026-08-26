@@ -1,10 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const yaml = require('js-yaml');
 const { runAgent } = require('./agent-runner');
 const { parseAgentResult } = require('./agent-result');
 const { loadAgent } = require('./agent-loader');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
+const { primaryModule } = require('./spec-modules');
 const { query } = require('../db');
 const notify = require('../notify');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
@@ -251,9 +251,9 @@ async function runLibraryAgent(taskId, userId, signal) {
   const logText = logs.reverse().map(l => `[${l.role}] ${l.content}`).join('\n');
 
   // parse moduleName 前移：往上補需它定位模組頁、並作為 parents 白名單
-  let moduleName = 'uncategorized';
-  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || 'uncategorized'; }
-  catch { /* keep default */ }
+  // 規格 module 可能列多個（拆模組類任務），但 wiki 一頁只能歸一個模組 → 取主模組。
+  // 帶逗號還會讓 _collectModuleSource 的 /^[A-Za-z0-9_]+$/ 白名單擋掉、抓不到任何原始碼。
+  const moduleName = primaryModule(task.analysis_yaml) || 'uncategorized';
   const moduleSlug = `module-${moduleName}`;
 
   // 撈現有總覽＋該模組頁內容，供 agent 判斷是否需往上補

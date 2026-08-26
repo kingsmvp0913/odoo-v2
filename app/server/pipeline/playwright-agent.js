@@ -2,13 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
-const yaml = require('js-yaml');
 const { getProjectInfo, worktreeParent } = require('./task-agent');
 const { ensureWorktreeSkills } = require('./worktree-skills');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests, restartEnv } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { extractOdooError, looksLikeInfraDeath } = require('./deploy-testing');
+const { primaryModule } = require('./spec-modules');
 const { withProjectLock } = require('./project-lock');
 const { diffNameOnly, AI_BRANCH } = require('./git');
 
@@ -109,8 +109,9 @@ async function runTourStage(taskId, userId, signal) {
     return true;
   }
 
-  let moduleName = '';
-  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; } catch { /* SD 解析失敗 */ }
+  // 規格 module 可能列多個（拆模組類任務），但 tour 只能跑一個模組：下面用它組 regex 比對
+  // <module>/tests/*.py 的檔案路徑，帶逗號一律比對不到。取主模組＝清單第一個。
+  const moduleName = primaryModule(task.analysis_yaml);
   if (!moduleName) {
     await stopTask(taskId, userId, '無法從分析規格取得 module 名稱，無法決定要跑哪個模組的 tour', 'code');
     return true;

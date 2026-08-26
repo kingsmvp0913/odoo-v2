@@ -8,6 +8,7 @@ const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitR
 const { ensureWorktreeSkills } = require('./worktree-skills');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
+const { primaryModule } = require('./spec-modules');
 const { buildGitEnv } = require('../lib/git-identity');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { resolveEnterprisePath } = require('../lib/enterprise-sources');
@@ -521,8 +522,9 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   if (!proj || proj.e2e_disabled) return;
   if (!task.analysis_yaml) return;                      // 沒有規格就沒有 acceptance，無從出考題
 
-  let moduleName = '';
-  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; } catch { /* 解析失敗照樣往下，讓 agent 自己從規格找 */ }
+  // 規格 module 可能列多個（拆模組類任務），tour 檔只會落在一個模組底下 → 取主模組。
+  // 解析失敗回空字串，照樣往下讓 agent 自己從規格找。
+  const moduleName = primaryModule(task.analysis_yaml);
 
   const info = await getProjectInfo(task.project_id);
   // 沒有已 clone 完成的 repo 就不能跑：agent 帶 --dangerously-skip-permissions，

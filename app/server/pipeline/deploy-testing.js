@@ -1,12 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const yaml = require('js-yaml');
 const { query } = require('../db');
 const notify = require('../notify');
 const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, addonsMountDrift } = require('./env-agent');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
+const { specModules } = require('./spec-modules');
 
 const DEPLOY_LIMIT = 3;
 // asset 失敗時要附多少 log 給 coding 看（QWeb 的 xpath 錯誤 traceback 通常十幾行）
@@ -295,11 +295,11 @@ async function doDeploy(task, taskId, userId, signal) {
     }
   }
 
-  let moduleName = '';
-  try { moduleName = (yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {}).module || ''; }
-  catch { /* SD 解析失敗則升級全部 */ }
-
-  const mods = moduleName ? [moduleName] : [];
+  // 規格的 module 可列多個（逗號分隔）——拆模組／搬檔案的任務同時動兩個模組，只升級其中一個時，
+  // 另一個的 view 改動與 migration 完全不會執行，而升級照樣 exit 0（見 spec-modules.js 的實測案例）。
+  // 解析失敗回空陣列＝升級全部，維持原本的降級行為。
+  const mods = specModules(task.analysis_yaml);
+  const moduleName = mods.join(',');
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
 
   // 升級前自動補裝各自訂模組宣告的 Python 相依（env 建置只裝 Odoo 核心 requirements，模組自帶的漏裝）。

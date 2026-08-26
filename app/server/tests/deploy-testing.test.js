@@ -165,12 +165,12 @@ beforeEach(async () => {
 });
 
 let seq = 0;
-async function makeTask(deployCount = 0) {
+async function makeTask(deployCount = 0, analysisYaml = 'module: sale') {
   seq++;
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, analysis_yaml, deploy_retry_count)
-     VALUES ($1,$2,'odoo','T','deploy_testing',$3,'module: sale',$4) RETURNING id`,
-    [userId, `dt_${seq}`, projectId, deployCount]
+     VALUES ($1,$2,'odoo','T','deploy_testing',$3,$5,$4) RETURNING id`,
+    [userId, `dt_${seq}`, projectId, deployCount, analysisYaml]
   );
   return t.id;
 }
@@ -188,6 +188,18 @@ test('env 運行 + 升級成功 → playwright_running', async () => {
   expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['sale'], undefined);
   // 升級成功必須重啟常駐容器，否則常駐 server 仍持舊 controllers，新路由開測試區報錯（手動重啟才好）
   expect(envAgent.restartEnv).toHaveBeenCalledWith(projectId);
+});
+
+// 拆模組／搬檔案的任務同時動兩個模組，只升級其中一個時：另一個的 view 改動與 migration 完全不會
+// 執行，而升級照樣 exit 0＝假成功。實測 task 195：規格只寫 idx_purchase，idx_project 的 pre-migrate
+// 一次都沒被執行，錯誤卻指向新模組的 xpath，真因完全看不出來。
+// 用兩個模組＋逗號後帶空白，同時驗「有拆開」與「有 trim」——舊碼會原封不動傳成單一元素的陣列。
+test('規格 module 列多個模組 → 一次全部升級', async () => {
+  await setEnvRunning();
+  envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+  const id = await makeTask(0, 'module: idx_project, idx_purchase');
+  await runDeployTesting(id, userId);
+  expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['idx_project', 'idx_purchase'], undefined);
 });
 
 // 意圖：容器掛載在 docker run 那一刻定型，環境建好之後才加進專案的 repo 補掛不進去，其模組在測試區
