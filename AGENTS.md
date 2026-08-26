@@ -29,7 +29,7 @@
 
 ## 0. Hard Rules
 - NEVER modify core Odoo files or `custom_addons/`. 自訂程式一律寫在「當前任務所在的 repo／addons 目錄」內——實際路徑由執行時的 agent prompt 指定；不得寫死或存取工作目錄以外的絕對路徑（如 `online_addons`）。
-- NEVER guess intent. Surface 2–3 interpretations when ambiguous; state one core assumption before complex tasks. When still uncertain after surfacing interpretations, ask — do not proceed on a guess.
+- 實作前明確列出核心假設。需求有歧義或存在多種合理解法時，停止實作，提出 2–3 種解讀或方案及其利弊，取得使用者確認後再決定；不得默默猜測。
 - Stop when confused. Name what's unclear before continuing.
 - NEVER add fields/models/logic beyond the task's agreed spec.
 - 寫入專案檔案時一律使用相對路徑或環境變數，**禁止寫死任何絕對路徑**（包括 `C:\` 或 `/home/...`）。
@@ -68,9 +68,9 @@
 
 ## 3. Edit Protocol
 - Commit: `[Module]: Why (not what)`. File edit: `@Path | Anchor | Action`.
-- **Minimum code that solves the problem.** No speculative features. No abstractions for single-use code. (Test: would a senior engineer call this overcomplicated?)
-- Touch only what you must. Don't clean up adjacent code, comments, or formatting that isn't yours.
-- Match existing code style exactly. Zero drive-by refactoring.
+- **只寫解決需求且可驗證的最少程式碼。** 不做投機性功能，不為未提出的彈性、擴充性或假設性錯誤情境建立抽象。（檢驗：資深工程師會不會覺得這過度設計？）
+- 只動你必須動的地方；不得順手清理相鄰、無關的程式、註解或格式。每一項修改都必須直接對應需求。
+- 完全比照既有程式碼風格。零順手重構。
 - Before adding code, read exports, immediate callers, and shared utilities. "Looks orthogonal" is dangerous — if unsure why code is structured a certain way, ask.
 - Conformance > personal taste inside the codebase. Follow conventions even when you disagree.
 - If a codebase convention seems harmful, surface it explicitly. Don't fork silently.
@@ -84,7 +84,7 @@
 
 ## 5. General Engineering Rules
 
-**Rule 4 — Goal-Driven Execution**: Define success criteria before starting. Iterate until verified. Don't follow steps mechanically; define success and drive to it. Strong success criteria enable independent looping.
+**Rule 4 — Goal-Driven Execution**：開始前將需求轉為可驗證的成功條件與驗證方式，迭代至驗證通過。修復 Bug 時，優先以能重現問題的測試或步驟建立基線，再修正並驗證相關行為未受影響；不要機械式照步驟走。
 
 **Rule 6 — Token Budgets (not advisory)**: If approaching context limits, summarize and start fresh. Surface the breach explicitly — do not silently overrun.
 
