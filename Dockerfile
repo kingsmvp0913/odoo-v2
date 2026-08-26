@@ -73,7 +73,9 @@ RUN mkdir -p /home/odoo/.claude /home/odoo/.codex && chown -R odoo:odoo /home/od
 
 USER odoo
 
-ENV PATH="/home/odoo/.local/bin:/home/odoo/.cargo/bin:${PATH}"
+# npm 在非 root 的 odoo 使用者下會把全域 CLI 裝到 ~/.npm-global/bin。
+# 必須納入 PATH，否則 npm 雖已安裝 Codex，平台子行程仍會得到 ENOENT。
+ENV PATH="/home/odoo/.local/bin:/home/odoo/.npm-global/bin:/home/odoo/.cargo/bin:${PATH}"
 
 # rtk（token 節流 CLI proxy，見 ~/.claude/RTK.md）。install.sh 亦裝進 ~/.local/bin，故放在
 # USER 切換之後。僅烘 binary，hook（rtk init -g）不在此啟用——那會改 Claude Code settings，另行決定。
