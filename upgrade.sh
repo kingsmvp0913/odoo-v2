@@ -35,15 +35,13 @@ if command -v docker >/dev/null 2>&1 && [ -n "$(docker ps -q -f name='^odoo-v2$'
   # Codex CLI 是平台訂閱登入與 Codex agent 的共同前提；舊 image 尚未內建時在升級補裝。
   if ! docker exec odoo-v2 sh -c 'command -v codex >/dev/null 2>&1'; then
     echo "未偵測到 Codex CLI，於容器內補裝..."
-    # 舊 image 的 PATH 未含 odoo 使用者 npm 的全域 bin。補裝後建立
-    # ~/.local/bin 的連結（此目錄已在 image PATH），讓本次 restart 立刻可用；
-    # 新 image 則由 Dockerfile 直接納入 ~/.npm-global/bin。
-    docker exec odoo-v2 sh -lc '
+    # 以 root 裝進 /usr/local/bin——此目錄在所有 image 的預設 PATH 中。
+    # 不能用 odoo 使用者的 npm prefix（~/.npm-global/bin），舊 image 未把它納入
+    # PATH，會形成「npm 顯示已裝、平台仍找不到 codex」的假安裝。
+    docker exec -u 0 odoo-v2 sh -lc '
       npm i -g @openai/codex
-      npm_bin="$(npm prefix -g)/bin"
-      mkdir -p "$HOME/.local/bin"
-      ln -sf "$npm_bin/codex" "$HOME/.local/bin/codex"
-      "$HOME/.local/bin/codex" --version
+      command -v codex
+      codex --version
     '
   fi
 
