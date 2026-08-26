@@ -950,6 +950,11 @@ describe('provider / effort', () => {
     expect400(() => L.updateAgent('qa', { provider: 'codex', model: 'gpt-5.6-terra' }));
   });
 
+  test('chat is eligible for Codex in Agent management', () => {
+    expect(L.CODEX_ELIGIBLE.has('chat')).toBe(true);
+    expect(L.loadAgent('chat').body).not.toContain('Skill(');
+  });
+
   test('workflow-health 還原 Claude 預設後保留 Claude Skill 契約', () => {
     const agent = L.loadAgent('workflow-health');
     expect(agent.provider).toBe('claude');

@@ -74,7 +74,7 @@ function refreshCodexModels(force = false) {
 // 為什麼要白名單：claude 端的掃碟守衛是 PreToolUse hook（hooks/scan-guard.js），codex 端要另外
 // 移植；在移植完成並驗證之前，會讀寫 worktree 的 agent 不開放切換。
 const CODEX_ELIGIBLE = new Set([
-  'reject-classifier', 'deploy-fix', 'wiki-drift-classifier', 'chat-to-task', 'workflow-health', 'library'
+  'reject-classifier', 'deploy-fix', 'wiki-drift-classifier', 'chat-to-task', 'workflow-health', 'library', 'chat'
 ]);
 
 // 向後相容：對外仍 export ALLOWED_MODELS（既有 require 有用到）。
