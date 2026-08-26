@@ -42,7 +42,7 @@ beforeAll(async () => {
   userToken = login.body.token;
 }, 30000);
 afterAll(() => dbModule._setPoolForTesting(null));
-beforeEach(() => { mockRun.mockClear(); mockRunTask.mockClear(); });
+beforeEach(() => { mockRun.mockClear(); mockRunTask.mockClear(); mockWindowStart.mockClear(); });
 
 test('401 未帶 token / 403 非 admin', async () => {
   expect((await request(app).post('/api/admin/health-check')).status).toBe(401);
@@ -74,6 +74,27 @@ test('POST 帶 sinceDays → 視窗改成回溯那麼多天，而不是增量', 
   const { rows: [r] } = await dbModule.query('SELECT window_days, since_at FROM health_check_runs WHERE id=$1', [res.body.runId]);
   expect(r.window_days).toBe(30);
   expect(Date.now() - new Date(r.since_at).getTime()).toBeGreaterThan(29 * 86400000);
+});
+
+// 大健檢不只是「換一個天數」：monthly 還會多帶一份上一期資料給 agent 做趨勢比對，所以 cadence
+// 必須原樣落地並傳進 runner——只存 window_days 的話，續跑時那半段會靜默消失。
+test.each([['weekly', 7], ['monthly', 30]])('POST 帶 cadence=%s → 固定回看 %s 天，且節奏傳進 runner', async (cadence, days) => {
+  const res = await request(app).post('/api/admin/health-check')
+    .set('Authorization', `Bearer ${adminToken}`).send({ cadence });
+  expect(res.status).toBe(200);
+  const { rows: [r] } = await dbModule.query('SELECT window_days, cadence FROM health_check_runs WHERE id=$1', [res.body.runId]);
+  expect(r.window_days).toBe(days);
+  expect(r.cadence).toBe(cadence);
+  expect(mockRun).toHaveBeenCalledWith(res.body.runId, expect.objectContaining({ cadence }));
+  expect(mockWindowStart).not.toHaveBeenCalled();     // 固定視窗不該再去問增量起點
+});
+
+test('POST 不帶 cadence／亂填 → 退回 daily 增量，不會靜默跑成大健檢', async () => {
+  const res = await request(app).post('/api/admin/health-check')
+    .set('Authorization', `Bearer ${adminToken}`).send({ cadence: '大健檢' });
+  const { rows: [r] } = await dbModule.query('SELECT cadence FROM health_check_runs WHERE id=$1', [res.body.runId]);
+  expect(r.cadence).toBe('daily');
+  expect(mockRun).toHaveBeenCalledWith(res.body.runId, expect.objectContaining({ cadence: 'daily' }));
 });
 
 // 處置狀態就是「跨輪記憶」：沒有它，健檢每輪把同一件事重講一次，而上輪的裁決無處可存。
@@ -129,6 +150,51 @@ test('GET list 回近筆含 findings_count；GET :id 回 run+findings', async ()
   expect(detail.body.findings[0].agent_name).toBe('qa');
 });
 
+// 歷史列表要一眼看得出「這一輪嚴不嚴重、還有沒有事沒處理」。沒有這兩個聚合，得逐輪點進去才知道，
+// 而點進去之前每一列長得一模一樣。
+describe('GET list 的嚴重度與處理狀態聚合', () => {
+  async function runWith(findings) {
+    const { rows: [run] } = await dbModule.query(
+      "INSERT INTO health_check_runs (status, window_days) VALUES ('done',7) RETURNING id");
+    for (const [severity, kind, status] of findings) {
+      await dbModule.query(
+        `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+         VALUES ($1,'__audit__','d',$2,$3,$4)`, [run.id, severity, kind, status]);
+    }
+    const list = await request(app).get('/api/admin/health-check').set('Authorization', `Bearer ${adminToken}`);
+    return list.body.find(x => x.id === run.id);
+  }
+
+  test('嚴重度取本輪最嚴重的那一條，不是最後一條也不是字串序', async () => {
+    // 刻意把 high 放在中間：取最大值才會過，取首／末筆或字串排序都會拿到別的值
+    const row = await runWith([['low', 'proposal', 'pending'], ['high', 'proposal', 'pending'], ['ok', 'summary', 'pending']]);
+    expect(row.severity_rank).toBe(3);
+  });
+
+  test('健檢自己失敗要蓋過一切：那一輪的「最嚴重只有 low」是假的，它根本沒檢查完', async () => {
+    const row = await runWith([['low', 'proposal', 'pending'], ['error', 'note', 'pending']]);
+    expect(row.error_count).toBe(1);
+  });
+
+  test('待辦只算 medium 以上：輕微的放著不管是允許的，不該讓整列長年掛紅字', async () => {
+    const row = await runWith([['low', 'proposal', 'pending'], ['medium', 'proposal', 'done'], ['high', 'proposal', 'pending']]);
+    expect(row.proposal_count).toBe(3);
+    expect(row.open_count).toBe(1);          // low 不算、已處理的 medium 也不算，只剩那條 high
+  });
+
+  test('提案全部處理完 → 待辦歸零（而不是沿用提案總數）', async () => {
+    const row = await runWith([['high', 'proposal', 'done'], ['medium', 'proposal', 'no_change']]);
+    expect(row.proposal_count).toBe(2);
+    expect(row.open_count).toBe(0);
+  });
+
+  test('一則 finding 都沒有 → 嚴重度為 NULL，前端才顯示得出「—」而不是誤報正常', async () => {
+    const row = await runWith([]);
+    expect(row.severity_rank).toBeNull();
+    expect(row.proposal_count).toBe(0);
+  });
+});
+
 // 意圖：admin 必須看得到固定晚間健檢的狀態；不能再用「上一輪 + 24 小時」，否則手動執行會把
 // 排程帶到下午。這條端點與 cron 共用判斷，避免兩邊漂移。
 describe('GET /api/admin/health-check-schedule', () => {
@@ -158,7 +224,7 @@ test('GET 排程總覽：僅 admin 可讀，包含臺灣時間 23:00 的健檢',
   const res = await request(app).get('/api/admin/schedules').set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
   expect(res.body).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: 'health-check', timing: '每日 23:00（臺灣時間）' }),
+    expect.objectContaining({ id: 'health-check', timing: expect.stringContaining('每日 23:00（臺灣時間）') }),
     expect.objectContaining({ id: 'cron-tick', timing: '每分鐘' })
   ]));
 });

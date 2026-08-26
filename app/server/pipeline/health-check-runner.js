@@ -457,7 +457,18 @@ async function insertFinding(runId, row) {
   );
 }
 
-async function runAudit(runId, { sinceAt, startedBy = null } = {}) {
+// 趨勢比對的資料塊：把「上一期同長度視窗」的量體與各關指標一起餵進去，讓 agent 回答得了
+// 「上一期標成處理完成的提案，指標有沒有真的往預期方向走」。只給每月的 30 天大健檢——日／週視窗
+// 太短，兩期之間的差多半是樣本雜訊，硬要比只會生出沒有證據的提案。
+// 只取 volume 與 per_stage，不帶 tasks／rejections 明細：這是拿來對照數字的，帶明細會把上一期的
+// 個案原封不動再講一次（而那些多半已在上一輪提過、也已被裁決）。
+async function buildTrendBlock(sinceAt) {
+  const start = new Date(sinceAt);
+  const prev = await buildWindowSummary(new Date(start.getTime() - (Date.now() - start.getTime())), start);
+  return JSON.stringify({ window: prev.window, volume: prev.volume, per_stage: prev.per_stage });
+}
+
+async function runAudit(runId, { sinceAt, cadence = 'daily', startedBy = null } = {}) {
   let raw = null;
   try {
     const summary = await buildWindowSummary(sinceAt);
@@ -473,8 +484,13 @@ async function runAudit(runId, { sinceAt, startedBy = null } = {}) {
     }
 
     const agent = loadAgent('health-auditor');
+    // trend 一律要給值：placeholder 沒對應資料時 render 只會靜默填空字串（見 agentPrompt skill 鐵則 1），
+    // 不做趨勢比對時明講「不做」，比留一段空洞的標題安全。
     const prompt = agent.render({
       previous: await previousProposals(),
+      trend: cadence === 'monthly'
+        ? await buildTrendBlock(sinceAt)
+        : '本輪不做趨勢比對（只有每月 1 號的 30 天大健檢會帶上一期資料）。',
       summary: JSON.stringify(summary)
     });
     const { text, usage, durationMs } = await runAgent(prompt, {
@@ -511,9 +527,13 @@ async function runAudit(runId, { sinceAt, startedBy = null } = {}) {
         console.warn('[HEALTH-CHECK] 提案缺標題或指標，已丟棄：', title || '(無標題)');
         continue;
       }
+      // 每條提案帶自己的嚴重度。整輪共用一個值時，「輕微的可以不處理」的粒度只到整輪——五條提案
+      // 一律同色、同待辦，分不出哪條可以放著。對不上列舉值（舊版提示詞、拼錯）就退回整輪的值，
+      // 讓舊資料與新舊版本交接期照樣顯示得出來。
+      const psev = String(p.severity || '').trim().toLowerCase();
       await insertFinding(runId, {
         kind: p.kind === 'signal' ? 'signal' : 'proposal',
-        severity,
+        severity: SEVERITIES.has(psev) ? psev : severity,
         label: title,
         layer: String(p.layer || '').trim() || null,
         evidence: p.evidence ? String(p.evidence) : null,
@@ -548,13 +568,14 @@ async function auditWindowStart() {
 // 依 task_db_id 分流：拿 scope=task 的 run 去跑全平台健檢，會在同一個 run 底下混進 21 關的
 // findings，畫面上再也分不出這是哪一張任務的診斷。
 async function resumeInterruptedRuns() {
-  const { rows } = await query("SELECT id, task_db_id, since_at FROM health_check_runs WHERE status='running'");
+  const { rows } = await query("SELECT id, task_db_id, since_at, cadence FROM health_check_runs WHERE status='running'");
   for (const r of rows) {
     console.log(`[HEALTH-CHECK] resume interrupted run ${r.id}`);
     // 三種 scope 各自續跑：單張任務／主導型審計（有 since_at）／舊的逐關健檢（歷史列）。
     // 走錯會在同一個 run 底下混進另一種格式的 findings，畫面上再也分不出這一輪是什麼。
+    // cadence 要一併帶回：不帶會退回 daily，續跑的月健檢就靜默少掉趨勢比對那一段。
     if (r.task_db_id) runTaskHealthCheck(r.id, { taskDbId: r.task_db_id }).catch(() => {});
-    else if (r.since_at) runAudit(r.id, { sinceAt: r.since_at }).catch(() => {});
+    else if (r.since_at) runAudit(r.id, { sinceAt: r.since_at, cadence: r.cadence || 'daily' }).catch(() => {});
     else runHealthCheck(r.id).catch(() => {});
   }
   return rows.length;

@@ -335,18 +335,23 @@ async function buildTaskSummary(taskDbId) {
 // 這份刻意只給輪廓、不給細節：審計 agent 拿到它之後會自己下 SQL 深挖（platformDB skill，唯讀），
 // 尤其是「窗內看到疑似問題 → 回頭到更早的資料找同類單號」那一步——那才是湊得到「多張不同任務」
 // 證據門檻的方式，短視窗自己是湊不到的。
-async function buildWindowSummary(sinceAt) {
+// untilAt 只有趨勢比對會帶（30 天大健檢要另算一份「上一期」來對照）：一般健檢的視窗一律開到現在，
+// 帶了上界反而會漏掉「起手包算出來到 agent 真正讀到」之間發生的事。
+async function buildWindowSummary(sinceAt, untilAt = null) {
   const since = new Date(sinceAt).toISOString();
+  const until = untilAt ? new Date(untilAt).toISOString() : null;
+  const upTo = col => (until ? ` AND ${col} < $2` : '');
+  const args = until ? [since, until] : [since];
   const { weighted: WEIGHTED, rate: RATE } = costSql();
 
   const { rows: usage } = await query(
     `SELECT task_id, chat_id, agent_type, model, duration_ms, status, recorded_at,
             input_tokens, output_tokens, cache_read_tokens, cache_create_tokens
-       FROM token_usage WHERE recorded_at >= $1 ORDER BY recorded_at, id`, [since]
+       FROM token_usage WHERE recorded_at >= $1${upTo('recorded_at')} ORDER BY recorded_at, id`, args
   );
   const { rows: [cost] } = await query(
-    `SELECT COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd FROM token_usage WHERE recorded_at >= $1`,
-    [since]
+    `SELECT COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd FROM token_usage WHERE recorded_at >= $1${upTo('recorded_at')}`,
+    args
   );
 
   // 每關：呼叫數、失敗數、平均耗時、經手幾張任務。細節（哪一張、為什麼）由 agent 自己查。
@@ -392,7 +397,7 @@ async function buildWindowSummary(sinceAt) {
   // 窗內有動作的任務：帶關卡序列，讓 agent 一眼看得到震盪形狀（coding→qa→coding→qa）。
   const { rows: tasks } = await query(
     `SELECT id, task_id, title, status, reentry_count, blocker_content, created_at, updated_at, done_at
-       FROM tasks WHERE updated_at >= $1 ORDER BY id`, [since]
+       FROM tasks WHERE updated_at >= $1${upTo('updated_at')} ORDER BY id`, args
   );
   const seqOf = new Map();
   for (const u of usage) {
@@ -410,11 +415,11 @@ async function buildWindowSummary(sinceAt) {
   const { rows: rej } = await query(
     `SELECT tr.task_id, tr.source, ri.category, ri.description
        FROM rejection_items ri JOIN task_rejections tr ON tr.id = ri.rejection_id
-      WHERE tr.created_at >= $1 ORDER BY ri.id`, [since]
+      WHERE tr.created_at >= $1${upTo('tr.created_at')} ORDER BY ri.id`, args
   ).catch(() => ({ rows: [] }));
 
   return {
-    window: { since, until: new Date().toISOString() },
+    window: { since, until: until || new Date().toISOString() },
     volume: {
       agent_calls: usage.length,
       tasks_touched: tasks.length,

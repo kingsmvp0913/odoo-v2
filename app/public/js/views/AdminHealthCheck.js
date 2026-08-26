@@ -3,10 +3,12 @@
 // 輸入：判「不須調整」的不會被重講第二次，判「處理完成」的會被回頭查指標有沒有往預期方向走。
 // kind='agent' 是改版前的逐關診斷（歷史列），沿用舊的顯示方式。
 // 配色一律走 app.css CSS 變數／dark-aware，禁寫死淺色底。
+// 四階顏色刻意拉開：low 與 medium 原本都吃 --warning，畫面上是同一個黃色，等於分級只有三階，
+// 而「哪幾條可以放著不管」正好卡在這兩階之間。medium 改用比黃更重一階的橘（--warning-strong）。
 const HC_SEV = {
   ok:     { label: '正常', color: 'var(--success, #059669)' },
   low:    { label: '輕微', color: 'var(--warning, #d97706)' },
-  medium: { label: '中等', color: 'var(--warning, #d97706)' },
+  medium: { label: '中等', color: 'var(--warning-strong)' },
   high:   { label: '嚴重', color: 'var(--error)' },
   // 零樣本：後端依 token.calls 覆寫，避免「沒被呼叫過」在畫面上長得跟「檢查過沒問題」一樣
   'n/a':  { label: '未取樣', color: '#64748b' },
@@ -33,6 +35,12 @@ const HC_FIX = {
   merged:    { label: '已合併進主分支，待重啟', color: 'var(--warning, #d97706)' }
 };
 
+// 後端 severity_rank（-1 未取樣 … 3 嚴重）反查回 HC_SEV 的鍵；索引＝rank + 1。
+const SEV_BY_RANK = ['n/a', 'ok', 'low', 'medium', 'high'];
+
+// 健檢節奏：daily 是增量視窗（多數列），只有大健檢才標出來——每一列都掛個「（日）」等於沒標。
+const HC_CADENCE = { weekly: '（週）', monthly: '（月）' };
+
 const HC_STATUS = [
   { value: 'pending',   label: '待處理' },
   { value: 'no_change', label: '不須調整' },
@@ -42,7 +50,7 @@ const HC_STATUS = [
 window.AdminHealthCheckView = Vue.defineComponent({
   name: 'AdminHealthCheckView',
   data() {
-    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, _timer: null, _fixTimer: null };
+    return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, _timer: null, _fixTimer: null };
   },
   async mounted() { await this.loadHistory(); await this.openFromQuery(); },
   unmounted() { if (this._timer) clearInterval(this._timer); if (this._fixTimer) clearInterval(this._fixTimer); },
@@ -69,7 +77,12 @@ window.AdminHealthCheckView = Vue.defineComponent({
       this.running = true; this.findings = []; this.run = null;
       try {
         // 不帶 sinceDays＝用預設的增量視窗（上一輪之後）；填了才是「回頭重掃這麼多天」。
-        const { runId } = await Api.post('admin/health-check', this.sinceDays ? { sinceDays: this.sinceDays } : {});
+        // 大健檢走 cadence：它不只是換個天數，30 天那份還會多帶一份上一期資料做趨勢比對，
+        // 所以手動填 sinceDays=30 與選「30 天大健檢」是兩件不同的事。
+        const body = this.cadence === 'daily'
+          ? (this.sinceDays ? { sinceDays: this.sinceDays } : {})
+          : { cadence: this.cadence };
+        const { runId } = await Api.post('admin/health-check', body);
         this.runId = runId;
         this._timer = setInterval(() => this.poll(), 3000);
         await this.poll();
@@ -167,6 +180,22 @@ window.AdminHealthCheckView = Vue.defineComponent({
       finally { this.fixBusy = null; }
     },
     sev(s) { return HC_SEV[s] || HC_SEV.error; },
+    // 歷史列的嚴重度＝本輪最嚴重的那一條（後端算的 severity_rank）。健檢自己失敗優先蓋過一切：
+    // 那一輪的「最嚴重只有 low」是假的，它根本沒檢查完。
+    histSev(h) {
+      if (h.error_count > 0) return HC_SEV.error;
+      if (h.severity_rank === null || h.severity_rank === undefined) return null;
+      return HC_SEV[SEV_BY_RANK[Number(h.severity_rank) + 1]] || null;
+    },
+    // 處理狀態只看 medium 以上的待處理提案（後端的 open_count 已濾過）：輕微的放著不管是允許的，
+    // 把它算進待辦會讓每一輪都掛著紅字，真正該處理的反而看不見。
+    histTodo(h) {
+      if (!h.proposal_count) return null;
+      return h.open_count > 0
+        ? { label: '待處理 ' + h.open_count, color: 'var(--warning-strong)' }
+        : { label: '已處理完', color: 'var(--text-muted)' };
+    },
+    cadenceText(h) { return HC_CADENCE[h.cadence] || ''; },
     applyToEditor(f) {
       if (!f.suggested_prompt) return;
       // 帶入既有 agent 編輯器：以 sessionStorage 暫存建議 prompt，導到 /admin/agents 由該頁預填
@@ -182,7 +211,15 @@ window.AdminHealthCheckView = Vue.defineComponent({
     <div class="content">
       <div class="hc-page">
         <div class="settings-section hc-window-row">
-          <label style="font-size:var(--fs-base)" title="留空＝只看上一輪健檢之後的新資料（預設）。填數字＝回頭重掃這麼多天。">
+          <label style="font-size:var(--fs-base)" title="增量＝只看上一輪健檢之後的新資料。大健檢固定回看 7／30 天，30 天那份還會多帶上一期資料做趨勢比對。">
+            節奏
+            <select v-model="cadence" class="form-control" style="width:auto">
+              <option value="daily">增量</option>
+              <option value="weekly">7 天大健檢</option>
+              <option value="monthly">30 天大健檢（含趨勢比對）</option>
+            </select>
+          </label>
+          <label v-if="cadence === 'daily'" style="font-size:var(--fs-base)" title="留空＝只看上一輪健檢之後的新資料（預設）。填數字＝回頭重掃這麼多天。">
             回溯
             <input type="number" v-model.number="sinceDays" min="1" placeholder="增量" style="width:72px" class="form-control" /> 天
           </label>
@@ -303,16 +340,26 @@ window.AdminHealthCheckView = Vue.defineComponent({
           <h2 class="section-title">歷史健檢</h2>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>提案／診斷</th></tr></thead>
+              <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>嚴重度</th><th>處理狀態</th><th>提案／診斷</th></tr></thead>
               <tbody>
                 <tr v-for="h in history" :key="h.id" class="clickable" @click="openRun(h.id)">
                   <td>{{ new Date(h.created_at).toLocaleString() }}</td>
                   <td>{{ scopeText(h) }}</td>
-                  <td>{{ h.task_db_id ? '—' : h.window_days + ' 天' }}</td>
+                  <td>{{ h.task_db_id ? '—' : h.window_days + ' 天' + cadenceText(h) }}</td>
                   <td>{{ h.status }}</td>
+                  <td>
+                    <span v-if="histSev(h)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:histSev(h).color}">
+                      {{ histSev(h).label }}
+                    </span>
+                    <span v-else style="color:var(--text-muted)">—</span>
+                  </td>
+                  <td>
+                    <span v-if="histTodo(h)" :style="{fontSize:'var(--fs-sm)',color:histTodo(h).color}">{{ histTodo(h).label }}</span>
+                    <span v-else style="color:var(--text-muted)">—</span>
+                  </td>
                   <td>{{ h.findings_count }}</td>
                 </tr>
-                <tr v-if="history.length === 0" class="empty-row"><td colspan="5">尚無健檢紀錄</td></tr>
+                <tr v-if="history.length === 0" class="empty-row"><td colspan="7">尚無健檢紀錄</td></tr>
               </tbody>
             </table>
           </div>

@@ -561,20 +561,26 @@ function registerRoutes(app) {
   // 不再收 windowDays 當主要參數：固定視窗量到的指標多半由已被取代的舊版提示詞產生，判讀時整批
   // 要打折；增量視窗量到的正好是「上次改動之後的表現」。sinceDays 是例外出口——想重掃更久以前
   // （例如剛接手、或想回頭補一段）時才用。
+  // cadence 是節奏，不是視窗長度的別名：weekly／monthly 除了固定回看天數，monthly 還會多帶一份
+  // 「上一期」給 agent 做趨勢比對。所以手動填 sinceDays=30 不等於跑月健檢——要跑得明講 cadence。
+  const HEALTH_CADENCE_DAYS = { weekly: 7, monthly: 30 };
   app.post('/api/admin/health-check', auth, async (req, res) => {
     try {
+      const requested = String(req.body?.cadence || '').trim();
+      const cadence = HEALTH_CADENCE_DAYS[requested] ? requested : 'daily';
+      const fixedDays = HEALTH_CADENCE_DAYS[cadence];
       const sinceDays = parseInt(req.body?.sinceDays, 10);
-      const sinceAt = sinceDays > 0
-        ? new Date(Date.now() - sinceDays * 86400000)
-        : await auditWindowStart();
+      const sinceAt = fixedDays
+        ? new Date(Date.now() - fixedDays * 86400000)
+        : (sinceDays > 0 ? new Date(Date.now() - sinceDays * 86400000) : await auditWindowStart());
       const windowDays = Math.max(1, Math.round((Date.now() - sinceAt.getTime()) / 86400000));
       const { rows: [r] } = await query(
-        "INSERT INTO health_check_runs (status, window_days, started_by, since_at) VALUES ('running',$1,$2,$3) RETURNING id",
-        [windowDays, req.userId, sinceAt]
+        "INSERT INTO health_check_runs (status, window_days, started_by, since_at, cadence) VALUES ('running',$1,$2,$3,$4) RETURNING id",
+        [windowDays, req.userId, sinceAt, cadence]
       );
       // fire-and-forget：不 await，runner 自行落 status='done'/'error'
-      runAudit(r.id, { sinceAt, startedBy: req.userId }).catch(() => {});
-      res.json({ runId: r.id, sinceAt });
+      runAudit(r.id, { sinceAt, cadence, startedBy: req.userId }).catch(() => {});
+      res.json({ runId: r.id, sinceAt, cadence });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -623,15 +629,26 @@ function registerRoutes(app) {
     try {
       // LEFT JOIN tasks：task_db_id 刻意不帶 FK（見 db.js），任務被刪掉時這裡回 null，
       // 前端就顯示成「全平台」以外的一般列而不是壞掉的連結。
+      // severity_rank：本輪最嚴重的那一條（3 high／2 medium／1 low／0 ok／-1 未取樣，一則 finding
+      // 都沒有時是 NULL）。用排名而不是直接 MAX(severity) 是因為字串序會把 'ok' 排到 'medium' 後面。
+      // open_count 刻意只算 medium 以上的待處理提案：low 是「放著不管也不會怎樣」，把它算進待辦
+      // 會讓整份清單長年掛著紅字，真正該處理的那幾條反而淹沒其中。low 在明細裡照樣列得出來。
       const { rows } = await query(
         `SELECT r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
-                r.task_db_id, t.task_id, t.title,
-                COUNT(f.id)::int AS findings_count
+                r.task_db_id, r.cadence, t.task_id, t.title,
+                COUNT(f.id)::int AS findings_count,
+                MAX(CASE WHEN f.severity IS NULL THEN NULL   -- LEFT JOIN 落空＝這輪一則 finding 都沒有
+                         WHEN f.severity='high' THEN 3 WHEN f.severity='medium' THEN 2
+                         WHEN f.severity='low' THEN 1 WHEN f.severity='ok' THEN 0 ELSE -1 END) AS severity_rank,
+                SUM(CASE WHEN f.severity='error' THEN 1 ELSE 0 END)::int AS error_count,
+                SUM(CASE WHEN f.kind IN ('proposal','signal') THEN 1 ELSE 0 END)::int AS proposal_count,
+                SUM(CASE WHEN f.kind IN ('proposal','signal') AND f.status='pending'
+                          AND f.severity IN ('medium','high') THEN 1 ELSE 0 END)::int AS open_count
            FROM health_check_runs r
            LEFT JOIN health_check_findings f ON f.run_id = r.id
            LEFT JOIN tasks t ON t.id = r.task_db_id
           GROUP BY r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
-                   r.task_db_id, t.task_id, t.title
+                   r.task_db_id, r.cadence, t.task_id, t.title
           ORDER BY r.id DESC LIMIT 20`
       );
       res.json(rows);

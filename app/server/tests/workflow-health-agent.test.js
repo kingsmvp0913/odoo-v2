@@ -26,14 +26,16 @@ test('health-task agent：opus + workflow_health stage + 只吃 summary placehol
   expect(out).toContain('<result>');
 });
 
-// 主導型健檢的契約：它自己查資料、自己回溯，所以 prompt 只有兩個 placeholder（上一輪裁決＋起手包），
-// 且必須指名可用的查詢工具——沒指名它就只能就著起手包判，回溯查證那一步會整個消失。
-test('health-auditor agent：opus + 兩個 placeholder + 指名查詢工具與判準', () => {
+// 主導型健檢的契約：它自己查資料、自己回溯，所以 prompt 只有三個 placeholder（上一輪裁決＋起手包＋
+// 趨勢比對），且必須指名可用的查詢工具——沒指名它就只能就著起手包判，回溯查證那一步會整個消失。
+test('health-auditor agent：opus + 三個 placeholder + 指名查詢工具與判準', () => {
   const a = loadAgent('health-auditor');
   expect(a.model).toBe('opus');
   expect(a.stage).toBe('workflow_health');
-  const out = a.render({ previous: '（無）', summary: '{"volume":{}}' });
+  const out = a.render({ previous: '（無）', trend: '（不做）', summary: '{"volume":{}}' });
   expect(out).not.toContain('{{');
+  // 每條提案要能各自帶嚴重度：整輪共用一個值時，「輕微的可不處理」的粒度只到整輪
+  expect(out).toContain('每條提案的 `severity`');
   expect(out).toContain('.agents/skills/healthCheck/SKILL.md'); // provider 無關的判準載入
   expect(out).toContain('platformDB skill');     // 自己下 SQL 的能力
   expect(out).toContain('回溯');                  // 窗內命中 → 回頭找同類案例湊證據

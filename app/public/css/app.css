@@ -19,6 +19,9 @@
   --danger: #ef4444;
   --error: #ef4444;
   --warning: #f59e0b;
+  /* 比 --warning 重一階、又還沒到 --error 的橘。用在需要三階以上的嚴重度分級（如健檢的
+     輕微→中等→嚴重），避免中間兩階撞成同一個黃色而分不出來 */
+  --warning-strong: #ea580c;
   --success: #10b981;
   --info: #3b82f6;
   --primary: #6366f1;

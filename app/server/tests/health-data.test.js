@@ -322,3 +322,23 @@ test('buildWindowSummary：只涵蓋視窗內的呼叫與任務，窗外的不�
   // 關卡序列是判斷震盪（coding→qa→coding→qa）的依據，純次數看不出形狀
   expect(w.tasks.find(t => t.task_id === 'T-WND-新').sequence).toBe('coding→qa');
 });
+
+// 30 天大健檢要拿「上一期」跟本期對照。沒有上界的話上一期會一路涵蓋到現在、把本期整段吃進去，
+// 兩期的差恆為 0——比出來像「指標非常穩定」，正好是最會誤導人的那種假訊號。
+test('buildWindowSummary：帶上界時只取那一段，且 window.until 回上界而不是「現在」', async () => {
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name) VALUES ('wnd2','h','W2') RETURNING id");
+  await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, title, original_text, status, source, updated_at)
+     VALUES ($1,'T-WND-上期','上一期','x','done','web',NOW() - INTERVAL '15 days')`, [u.id]);
+  await dbModule.query(
+    `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens, duration_ms, status, recorded_at)
+     VALUES ('T-WND-上期','coding','claude-opus-5',1,1,1000,'completed',NOW() - INTERVAL '15 days')`);
+
+  const untilAt = new Date(Date.now() - 14 * 86400000);
+  const prev = await buildWindowSummary(new Date(Date.now() - 16 * 86400000), untilAt);
+
+  expect(prev.volume.agent_calls).toBe(1);                    // 上界之後的呼叫（含本期那些）不得混進來
+  expect(prev.tasks.map(t => t.task_id)).toEqual(['T-WND-上期']);
+  expect(prev.window.until).toBe(untilAt.toISOString());
+});
