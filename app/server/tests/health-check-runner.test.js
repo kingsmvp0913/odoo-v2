@@ -710,6 +710,52 @@ test('runAudit：解析不出結果 → 落 error 並把 run 標 error（不可�
   expect(run.status).toBe('error');
 });
 
+// 整輪共用一個 severity 時，五條提案一律同色同待辦，「哪幾條可以放著不管」就分不出來——而那正是
+// 處理狀態要回答的問題。
+test('runAudit：每條提案帶自己的嚴重度；沒帶的才退回整輪的值', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>x</summary><result>' + JSON.stringify({
+      severity: 'high',
+      proposals: [
+        { kind: 'proposal', title: '這條輕微', severity: 'low', layer: 'prompt', detail: 'd', target_metric: 'm1', metric_baseline: '1' },
+        { kind: 'proposal', title: '這條沒帶', layer: 'prompt', detail: 'd', target_metric: 'm2', metric_baseline: '2' },
+        { kind: 'proposal', title: '這條亂填', severity: '很嚴重', layer: 'prompt', detail: 'd', target_metric: 'm3', metric_baseline: '3' }
+      ]
+    }) + '</result>', usage: {}, durationMs: 5
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+  const { rows } = await dbModule2.query(
+    "SELECT agent_label, severity FROM health_check_findings WHERE run_id=$1 AND kind='proposal' ORDER BY id", [runId]);
+  // 整輪是 high，這條仍該是 low——否則「輕微的可不處理」的粒度只到整輪
+  expect(rows).toEqual([
+    { agent_label: '這條輕微', severity: 'low' },
+    { agent_label: '這條沒帶', severity: 'high' },
+    { agent_label: '這條亂填', severity: 'high' }   // 對不上列舉值不能整條丟掉，退回整輪的值
+  ]);
+});
+
+// 趨勢比對是月健檢唯一與週／日不同的地方。少了它畫面上完全看不出來：一樣跑完、一樣落提案，
+// 只是 agent 手上沒有上一期可比，「上次說要降的數字降了沒」永遠答不出來。
+test('runAudit：monthly 才另算上一期並餵進 prompt；daily 明講不做趨勢比對', async () => {
+  mockRunClaude.mockResolvedValue(AUDIT_OK);
+  const sinceAt = new Date(Date.now() - 30 * 86400000);
+
+  buildWindowSummary.mockClear();
+  await runAudit(await newAuditRun(), { sinceAt, cadence: 'monthly', startedBy: null });
+  expect(buildWindowSummary).toHaveBeenCalledTimes(2);
+  // 第二次是「上一期」：同長度、以本期起點為上界，兩期才不會重疊
+  const [prevStart, prevUntil] = buildWindowSummary.mock.calls[1];
+  expect(prevUntil.getTime()).toBe(sinceAt.getTime());
+  expect(sinceAt.getTime() - prevStart.getTime()).toBeGreaterThan(29 * 86400000);
+  expect(mockRunClaude.mock.calls.at(-1)[0]).not.toContain('本輪不做趨勢比對');
+
+  buildWindowSummary.mockClear();
+  await runAudit(await newAuditRun(), { sinceAt, cadence: 'daily', startedBy: null });
+  expect(buildWindowSummary).toHaveBeenCalledTimes(1);       // 日健檢不該為了比對多跑一次聚合
+  expect(mockRunClaude.mock.calls.at(-1)[0]).toContain('本輪不做趨勢比對');
+});
+
 test('runAudit：上一輪的提案與裁決會餵回下一輪（跨輪記憶，視窗縮短後的關鍵配套）', async () => {
   // 先造一筆「已裁決為不須調整」的舊提案
   const prevRun = await newAuditRun();

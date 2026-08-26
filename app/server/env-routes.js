@@ -44,6 +44,15 @@ function registerRoutes(app) {
           fs.existsSync(path.join(base, dirName, '.docker-ready'))
         ));
       } catch { env.built = false; }
+      // addons_drift = 環境建好之後才加進專案的 repo（容器掛載無法事後補），其模組在測試區並不存在。
+      // 這件事本身零徵狀：容器照跑、狀態照 running，只有這裡問得出來，所以要主動端到畫面上。
+      // 只在跑著的環境才問（docker inspect 一次），停著的環境重開時本來就會重掛。
+      try {
+        if (env.status === 'running') {
+          const { addonsMountDrift } = require('./pipeline/env-agent');
+          env.addons_drift = await addonsMountDrift(req.params.id);
+        } else env.addons_drift = [];
+      } catch { env.addons_drift = []; }
       res.json(env);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

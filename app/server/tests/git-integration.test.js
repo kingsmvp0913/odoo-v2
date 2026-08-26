@@ -711,6 +711,57 @@ describe('主分支非 main／master', () => {
     // 只驗分支名的話這支永遠綠，正好漏掉真正壞掉的那件事。
     expect(fs.existsSync(path.join(repo, 'ported.py'))).toBe(true);
   }, 30000);
+
+  // 上面那支的姊妹情境，也是萊峰19 第二個 repo（主分支 mainForRaifong）實際壞掉的樣子：clone 會
+  // 留下一條本地 main，使用者指定的主分支則**只存在於 origin**。候選清單若是 [origin/HEAD, main,
+  // master] 且「先掃本地、再掃遠端」，那條碰巧存在的本地 main 永遠先命中，origin/HEAD 形同虛設。
+  async function makeRemoteOnlyMainRepo() {
+    const origin = path.join(base, 'origin-ro.git');
+    const repo = path.join(base, 'repo-ro');
+    await run('git', ['init', '--bare', origin]);
+    await run('git', ['clone', origin, repo]);
+    await sh(repo, 'checkout', '-b', 'main');
+    await write(repo, 'a.py', 'x = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'init');
+    await sh(repo, 'push', '-u', 'origin', 'main');
+    await sh(repo, 'checkout', '-b', 'mainForX');
+    await write(repo, 'x.py', 'only_on_main_for_x = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'x branch');
+    await sh(repo, 'push', '-u', 'origin', 'mainForX');
+    await sh(repo, 'checkout', 'main');
+    await sh(repo, 'branch', '-D', 'mainForX');  // 本地只剩 main，指定的主分支僅在 origin
+    await git.setRemoteHead(repo, 'mainForX');
+    return repo;
+  }
+
+  test('ensureMainBranch：本地碰巧有 main 也不得蓋過 origin/HEAD 指定的主分支', async () => {
+    const repo = await makeRemoteOnlyMainRepo();
+
+    expect(await git.ensureMainBranch(repo, undefined)).toBe('mainForX');
+    // 只驗回傳值不夠：回對名字卻沒切過去的話，pullBranch 之後照樣拉錯內容。
+    expect(fs.existsSync(path.join(repo, 'x.py'))).toBe(true);
+  }, 30000);
+
+  // 意圖：任務跑到一半才被加進專案的 repo 從沒經過 analysis，本地沒有 ai-dev，approve 就掉進
+  // mergeToAiBranch 的防禦分支。舊碼在那裡 `checkout -B ai-dev <裸分支名>`，而主分支只在 origin
+  // 時 git 不做 DWIM → fatal「is not a commit」，已核准的任務永遠併不進去（實測 task 186）。
+  test('mergeToAiBranch：ai-dev 不存在且主分支只在 origin → 仍能建出 ai-dev，且基底是主分支', async () => {
+    const repo = await makeRemoteOnlyMainRepo();
+    await sh(repo, 'checkout', '-b', 'task/t11', 'main');
+    await write(repo, 'feat.py', 'f = 1\n');
+    await sh(repo, 'add', '-A');
+    await sh(repo, 'commit', '-m', 'feature');
+
+    await git.mergeToAiBranch(repo, 'task/t11');
+
+    const files = (await sh(repo, 'ls-tree', '-r', '--name-only', 'ai-dev')).stdout.split('\n');
+    expect(files).toContain('feat.py');
+    // 關鍵斷言：ai-dev 必須長在指定的主分支上。長到本地 main 也會有 feat.py（照樣「成功」），
+    // 但少了這個只在 mainForX 上的檔——基底歪掉是靜默的，只有這個斷言抓得到。
+    expect(files).toContain('x.py');
+  }, 30000);
 });
 
 // ---- ai-dev 基底診斷與重建 ----

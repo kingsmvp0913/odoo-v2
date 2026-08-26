@@ -196,8 +196,13 @@ async function runRejectTriage(taskId, userId, signal) {
     const question = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（提問）';
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, question]);
     await logAi(summary || '（無回答）');
+    // 認 source='human' 而非 status='new'：classify 的 cron 撈 new 只花 5~13 秒、本關要跑 60~190 秒，
+    // 實測每次都是 classify 先把 new 改成 classified，於是這行刪除從上線起一次都沒命中過
+    // （正式庫 52 筆人工退回，status='new' 0 筆），使用者的提問被永久記成退回、灌進健檢的退回率。
+    // 本分支只在 isReject（狀態 reject_triage）成立，而該狀態唯一入口就是剛插入這筆的 /reject，
+    // 所以「最近一筆 human」必然是本次；source 過濾則保住 QA 自動退回那些真實統計來源。
     const { rows: [rej] } = await query(
-      "SELECT id FROM task_rejections WHERE task_id=$1 AND status='new' ORDER BY created_at DESC, id DESC LIMIT 1",
+      "SELECT id FROM task_rejections WHERE task_id=$1 AND source='human' ORDER BY created_at DESC, id DESC LIMIT 1",
       [task.task_id]
     );
     if (rej) await query('DELETE FROM task_rejections WHERE id=$1', [rej.id]);

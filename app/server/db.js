@@ -791,7 +791,11 @@ async function migrate() {
     // 健檢的 scope：NULL＝全平台（既有列與排程都是這種），有值＝只健檢這一張任務（tasks.id）。
     // 刻意不宣告 FK，比照上面 project_chats.converted_task_id：帶 FK 卻漏 ON DELETE 會反過來擋死
     // 刪任務，而殘留的死 id 由列表 SQL 的 LEFT JOIN tasks 吸收（任務不在就回 null）。
-    { table: 'health_check_runs', col: 'task_db_id', sql: 'ALTER TABLE health_check_runs ADD COLUMN task_db_id INTEGER' }
+    { table: 'health_check_runs', col: 'task_db_id', sql: 'ALTER TABLE health_check_runs ADD COLUMN task_db_id INTEGER' },
+    // 健檢節奏：daily＝增量視窗（既有行為，故 DEFAULT）／weekly＝固定回看 7 天／monthly＝固定回看
+    // 30 天且額外做趨勢比對。刻意不叫 kind：findings 已有同名欄位（提案／訊號／診斷），混用會讓
+    // 「這一輪是什麼節奏」與「這一條是什麼類型」在查詢與畫面上再也分不出來。
+    { table: 'health_check_runs', col: 'cadence', sql: "ALTER TABLE health_check_runs ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

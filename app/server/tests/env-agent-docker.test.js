@@ -17,6 +17,7 @@ jest.mock('../lib/docker-env', () => {
     containerRunning: jest.fn().mockResolvedValue(true),
     containerExists: jest.fn().mockResolvedValue(true),
     containerLogs: jest.fn().mockResolvedValue('log'),
+    containerMountSources: jest.fn().mockResolvedValue(null),
     execOdoo: jest.fn().mockResolvedValue({ code: 0, stdout: 'ok', stderr: '' }),
     execPipInstall: jest.fn().mockResolvedValue({ code: 0, stdout: 'ok', stderr: '' }),
   };
@@ -155,4 +156,43 @@ test('stopEnv（docker）：stop+rm 容器並標 idle', async () => {
   expect(dockerEnv.removeContainer).toHaveBeenCalled();
   const { rows: [env] } = await dbModule.query('SELECT status FROM odoo_envs WHERE project_id=$1', [PID]);
   expect(env.status).toBe('idle');
+});
+
+// 意圖：容器的 addons 掛載在 docker run 那一刻定型，之後專案新增 repo 是補掛不進去的（docker 無此
+// 能力），而新增 repo 不會自動重建環境——結果是那個 repo 的模組在測試區完全不存在，卻毫無徵狀：
+// 容器照跑、部署照綠。addonsMountDrift 是唯一問得出這件事的地方（實測萊峰19 加入第二個 repo 後，
+// 容器仍只掛著 main）。
+describe('addonsMountDrift', () => {
+  async function setRepos(paths) {
+    await dbModule.query('DELETE FROM project_repos WHERE project_id=$1', [PID]);
+    for (const [label, p] of paths) {
+      await dbModule.query(
+        "INSERT INTO project_repos (project_id, label, repo_url, local_path, clone_status) VALUES ($1,$2,'u',$3,'done')",
+        [PID, label, p]
+      );
+    }
+  }
+
+  test('容器少掛一個 repo → 回報該 repo 的 label', async () => {
+    await setRepos([['main', '/repos/p/main'], ['純水', '/repos/p/repo']]);
+    dockerEnv.containerMountSources.mockResolvedValueOnce(['/repos/p/main', '/var/lib/odoo/filestore']);
+
+    expect(await envAgent.addonsMountDrift(PID)).toEqual(['純水']);
+  });
+
+  test('全部掛齊 → 無漂移（含尾斜線等路徑寫法差異不得誤判）', async () => {
+    await setRepos([['main', '/repos/p/main'], ['純水', '/repos/p/repo']]);
+    dockerEnv.containerMountSources.mockResolvedValueOnce(['/repos/p/main/', '/repos/p/repo']);
+
+    expect(await envAgent.addonsMountDrift(PID)).toEqual([]);
+  });
+
+  // 有鑑別力的反例：環境還沒建（inspect 不到容器）時一律視為「無從得知」而非「什麼都沒掛」——
+  // 後者會讓每個專案的第一次部署都被自己擋下來。
+  test('容器不存在（inspect 回 null）→ 不報漂移', async () => {
+    await setRepos([['main', '/repos/p/main']]);
+    dockerEnv.containerMountSources.mockResolvedValueOnce(null);
+
+    expect(await envAgent.addonsMountDrift(PID)).toEqual([]);
+  });
 });

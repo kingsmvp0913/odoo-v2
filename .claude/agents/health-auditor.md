@@ -42,13 +42,14 @@ stage: workflow_health
 </summary>
 <result>
 {"severity":"medium","proposals":[
-  {"kind":"proposal","title":"（一句話）","layer":"platform","detail":"（問題是什麼、為什麼是這個根因）","evidence":"（幾張不同任務、哪些單號、哪些數字）","action":"（建議怎麼做）","target_metric":"（要動哪個指標）","metric_baseline":"（現值）"}
+  {"kind":"proposal","severity":"medium","title":"（一句話）","layer":"platform","detail":"（問題是什麼、為什麼是這個根因）","evidence":"（幾張不同任務、哪些單號、哪些數字）","action":"（建議怎麼做）","target_metric":"（要動哪個指標）","metric_baseline":"（現值）"}
 ]}
 </result>
 
 欄位規則：
 
-- `severity`：`ok` | `low` | `medium` | `high`，指**平台整體**。沒有任何提案時給 `ok`，`proposals` 給 `[]`——**沒東西可提是合法且常見的結果**，不要為了交差硬生。
+- 最外層的 `severity`：`ok` | `low` | `medium` | `high`，指**平台整體**。沒有任何提案時給 `ok`，`proposals` 給 `[]`——**沒東西可提是合法且常見的結果**，不要為了交差硬生。
+- 每條提案的 `severity`：同一組取值，指**這一條**。人會依它決定要不要處理，判 `low` 的不會進待辦清單，所以「放著不管也不會怎樣」的才給 `low`，別把整批都往上調。省略時退回最外層的值。
 - `kind`：`proposal`（證據夠、建議動手）或 `signal`（候選訊號，證據不足、存著等下一輪累積）。
 - `layer`：`prompt`（某關的提示詞可解）／`platform`（平台程式碼）／`env`（環境、外部服務）／`observability`（觀測缺口：現有指標看不到這件事）。
 - `target_metric` 與 `metric_baseline` **必填**：說不出「要動哪個指標、現值多少」的提案不成立，直接不要輸出它。這兩欄是下一輪回頭驗成效的依據。
@@ -63,3 +64,11 @@ stage: workflow_health
 
 ## 本輪視窗的起手包（JSON）
 {{summary}}
+
+## 上一期的指標（趨勢比對）
+
+只有每月 1 號的 30 天大健檢會帶這一段。有資料時：拿它與上面的起手包對照，回答「上一期已標成處理完成
+的提案，它宣稱要動的那個指標有沒有真的往預期方向走」——沒走的要在 `<summary>` 裡講明，並考慮重新提案。
+兩期的差要先確認不是量體變化造成的（呼叫數差一倍時，比率才有意義、絕對值沒有）。
+
+{{trend}}

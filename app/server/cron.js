@@ -124,6 +124,20 @@ function healthCheckTargetAt(now, dayOffset = 0) {
   return new Date(`${date}T${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00:00+08:00`);
 }
 
+// 大健檢的節奏：每月 1 號回看 30 天（並額外做趨勢比對）、每週日回看 7 天，其餘日子維持增量視窗。
+// 每天只有一個 23:00 slot、due 每天也只會成立一次，所以「跑大健檢的那天就不跑當天的日健檢」
+// 是天然互斥，不需要另外的抑制旗標。1 號剛好是週日時只跑 30 天那一份（大的吃掉小的）：同一個
+// slot 連跑兩輪的話，先完成的那一輪會把 auditWindowStart 推到現在，後一輪等於掃到空視窗。
+const HEALTH_CADENCE_DAYS = { weekly: 7, monthly: 30 };
+
+function healthCheckCadence(now = _clockForTesting ? _clockForTesting() : new Date()) {
+  const { year, month, day } = taipeiDateParts(now);
+  if (day === 1) return 'monthly';
+  // 用 UTC 建當天零點再取星期：taipeiDateParts 已把日期轉成臺灣當地的年月日，再套本機時區會漂掉一天
+  if (new Date(Date.UTC(year, month - 1, day)).getUTCDay() === 0) return 'weekly';
+  return 'daily';
+}
+
 // 排程判斷與健檢頁的「下次執行時間」共用，避免兩邊各算而漂移。晚於 23:00 但尚未跑過
 // 當日自動健檢時，下一個 tick 會補跑；server 重啟或前一 tick 被略過也不會漏掉整天。
 async function getHealthCheckSchedule(now = _clockForTesting ? _clockForTesting() : new Date()) {
@@ -183,7 +197,7 @@ async function getCronSchedules(now = new Date()) {
     { id: 'odoo-sync', name: 'Odoo 任務同步', timing: settings.odoo_sync_interval > 0 ? minuteLabel(settings.odoo_sync_interval * 60000) : '已停用', enabled: settings.odoo_sync_interval > 0, nextRunAt: null, note: '依每位使用者上次同步時間分別計算。' },
     { id: 'service-sync', name: 'Service 任務同步', timing: settings.service_sync_interval > 0 ? minuteLabel(settings.service_sync_interval * 60000) : '已停用', enabled: settings.service_sync_interval > 0, nextRunAt: null, note: '依每位使用者上次同步時間分別計算。' },
     { id: 'pipeline', name: 'Pipeline 自動推進', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用自動推進。' : '同步未執行時仍會推進可執行任務。' },
-    { id: 'health-check', name: '工作流程健檢', timing: '每日 23:00（臺灣時間）', enabled: health.enabled, nextRunAt: health.nextRunAt, note: health.running ? '本輪執行中。' : (health.due ? '已到排程時刻，下一個 cron tick 會補跑。' : '手動健檢不影響此排程。') },
+    { id: 'health-check', name: '工作流程健檢', timing: '每日 23:00（臺灣時間）；週日回看 7 天、每月 1 號回看 30 天', enabled: health.enabled, nextRunAt: health.nextRunAt, note: health.running ? '本輪執行中。' : (health.due ? '已到排程時刻，下一個 cron tick 會補跑。' : '大健檢當天不另跑當日健檢；手動健檢不影響此排程。') },
     { id: 'nightly-shutdown', name: '測試區夜間關機', timing: `每日 ${shutdownTime}（${shutdownTz}）`, enabled: true, nextRunAt: null, note: '每天只執行一次；若錯過整點，之後的 tick 會補跑。' },
     { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
     { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },
@@ -258,14 +272,16 @@ function startCron() {
       try {
         if (await shouldRunHealthCheck()) {
           const { runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
-          const sinceAt = await auditWindowStart();
+          const cadence = healthCheckCadence();
+          const fixedDays = HEALTH_CADENCE_DAYS[cadence];
+          const sinceAt = fixedDays ? new Date(Date.now() - fixedDays * 86400000) : await auditWindowStart();
           const windowDays = Math.max(1, Math.round((Date.now() - sinceAt.getTime()) / 86400000));
           const { rows: [run] } = await query(
-            "INSERT INTO health_check_runs (status, window_days, started_by, since_at) VALUES ('running',$1,NULL,$2) RETURNING id",
-            [windowDays, sinceAt]
+            "INSERT INTO health_check_runs (status, window_days, started_by, since_at, cadence) VALUES ('running',$1,NULL,$2,$3) RETURNING id",
+            [windowDays, sinceAt, cadence]
           );
-          console.log(`[CRON] 啟動每日系統健檢 run ${run.id}（視窗自 ${sinceAt.toISOString()}）`);
-          runAudit(run.id, { sinceAt })
+          console.log(`[CRON] 啟動系統健檢 run ${run.id}（${cadence}，視窗自 ${sinceAt.toISOString()}）`);
+          runAudit(run.id, { sinceAt, cadence })
             .catch(err => console.error('[CRON] health check:', err.message));
         }
       } catch (err) { console.error('[CRON] health check schedule:', err.message); }
@@ -351,4 +367,4 @@ function stopCron() {
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
 function _setClockForTesting(clock) { _clockForTesting = clock; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, getCronSchedules, _resetShutdownStateForTesting, _setClockForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _setClockForTesting };

@@ -203,21 +203,28 @@ async function getMainBranch(repoPath) {
 // 確保本地有可用的主分支並 checkout；沒有就建立（空 repo 補一個初始 commit）。回傳分支名。
 // 供分析前使用：避免「repo 無 main」時整條流程卡死。
 async function ensureMainBranch(repoPath, gitEnv) {
-  // 遠端預設分支排在硬清單之前：主分支叫 develop 時，只認 main/master 會直接掉進 3) 憑空建假 main
+  // origin/HEAD 有答案時它就是**唯一**候選，不可把 main/master 併進同一張清單當備胎：下面 1) 是
+  // 「本地已有就用」，而 clone 一定會留下一條本地預設分支，於是備胎永遠先命中——主分支是
+  // mainForRaifong、本地卻有一條 main 時（實測萊峰19 的第二個 repo），會被判成主分支＝main：
+  // updateMainClone 從此 `pull origin main` 拉錯分支，ensureAiBranch 也把 ai-dev 長在錯的基底上，
+  // 兩者都靜默。改成分層：先把 origin/HEAD 試到底（本地→遠端），完全落空才退回硬清單——origin/HEAD
+  // 指向一條已被刪掉的分支時，本地現成的 main 仍比 3) 憑空建一條假 main 好。
   const remoteHead = await remoteDefaultBranch(repoPath);
-  const candidates = remoteHead ? [remoteHead, 'main', 'master'] : ['main', 'master'];
-  // 1) 本地已有
-  for (const b of candidates) {
-    if (await refExists(repoPath, `refs/heads/${b}`)) {
-      await execFileAsync('git', ['checkout', b], gitOpts(repoPath, gitEnv));
-      return b;
+  const tiers = remoteHead ? [[remoteHead], ['main', 'master']] : [['main', 'master']];
+  for (const candidates of tiers) {
+    // 1) 本地已有
+    for (const b of candidates) {
+      if (await refExists(repoPath, `refs/heads/${b}`)) {
+        await execFileAsync('git', ['checkout', b], gitOpts(repoPath, gitEnv));
+        return b;
+      }
     }
-  }
-  // 2) 僅遠端有 → 建立本地追蹤分支
-  for (const b of candidates) {
-    if (await refExists(repoPath, `refs/remotes/origin/${b}`)) {
-      await execFileAsync('git', ['checkout', '-B', b, `origin/${b}`], gitOpts(repoPath, gitEnv));
-      return b;
+    // 2) 僅遠端有 → 建立本地追蹤分支
+    for (const b of candidates) {
+      if (await refExists(repoPath, `refs/remotes/origin/${b}`)) {
+        await execFileAsync('git', ['checkout', '-B', b, `origin/${b}`], gitOpts(repoPath, gitEnv));
+        return b;
+      }
     }
   }
   // 3) 完全沒有（空 repo / 未初始化）→ 本地建立 main；無 commit 則補一個空初始 commit
@@ -652,9 +659,13 @@ async function mergeToAiBranch(repoPath, branchName, gitEnv) {
   try {
     await execFileAsync('git', ['checkout', AI_BRANCH], gitOpts(repoPath, gitEnv));
   } catch {
-    // 防禦：正常流程 analysis 已建好 ai-dev，此處僅涵蓋異常狀態
-    const main = await getMainBranch(repoPath);
-    await execFileAsync('git', ['checkout', '-B', AI_BRANCH, main], gitOpts(repoPath, gitEnv));
+    // 防禦：正常流程 analysis 已建好 ai-dev，此處僅涵蓋異常狀態（例：這個 repo 是任務跑到一半才加進
+    // 專案的，從沒經過 analysis）。交給 ensureAiBranch 而非自己 `checkout -B ai-dev <getMainBranch()>`：
+    // 後者拿到的是**裸分支名**，主分支只存在於 origin（clone 只做 set-head、不建本地分支）時
+    // 直接 fatal「is not a commit」——實測萊峰19 加入第二個 repo 後整條 approve 卡死。
+    // ensureAiBranch 涵蓋本地有／遠端裸 ai-dev／遠端 ai-dev-<base>／都沒有（ensureMainBranch 會用
+    // origin/<base> 建本地分支）四種情況，並順帶綁好 upstream。
+    await ensureAiBranch(repoPath, gitEnv);
   }
   try {
     await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-ff', branchName, '-m', `Merge branch '${branchName}'`], gitOpts(repoPath, gitEnv));

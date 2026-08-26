@@ -392,12 +392,14 @@ test('B-5 HEAD 快照讀不到 → 視為無法確認，不得誤擋（照常進
 // 意圖：既有的 reentry／deploy_retry 每條歸零規則各自都有道理，疊起來卻讓使用者每按一次「先修正」
 // 就把計數清空——實測 task 152 跑了 6 輪 coding、$19.4，畫面上計數器全是 0/1，沒有任何機制察覺它在
 // 鬼打牆。token_usage 是唯一不被歸零邏輯碰到的來源，用它當跨人工介入的總輪次。
-async function seedCodingRuns(businessTaskId, n, model = 'claude-sonnet-5') {
+// out 預設 30000＝一輪真的在寫碼的 coding（正式庫 3~10 分鐘那段的平均 output 是 27883）。
+// 低於 SUBSTANTIVE_OUTPUT_TOKENS 的視為微修，不佔額度——用 out 明確帶入以保留鑑別力。
+async function seedCodingRuns(businessTaskId, n, model = 'claude-sonnet-5', out = 30000) {
   for (let i = 0; i < n; i++) {
     await dbModule.query(
       `INSERT INTO token_usage (task_id, agent_type, model, input_tokens, output_tokens, duration_ms)
-       VALUES ($1, 'coding', $2, 1000, 200, 60000)`,
-      [businessTaskId, model]
+       VALUES ($1, 'coding', $2, 1000, $3, 60000)`,
+      [businessTaskId, model, out]
     );
   }
 }
@@ -428,6 +430,34 @@ test('累計 coding 達上限 → 停下，blocker 攤開累計輪次與成本',
   // rules/pipeline.md 77：只寫欄位、任務一往前走面板就消失。這筆同時是下次額度的推導來源
   const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1", [id]);
   expect(logs.some(l => String(l.content).startsWith('[輪次熔斷]'))).toBe(true);
+});
+
+// 誤判方向二：把「幾十秒、改幾行」的微修算成一輪沒收斂的實作。實測 task 183／184 各只有 2 輪真開發，
+// 其餘是 QA 指出一個小問題後 39s／52s 的補刀，卻雙雙撞上限被擋；正式庫 199 筆 coding 有 98 筆
+// output < 5000（平均 2114），照舊算法等於門檻被腰斬——20% 的任務會撞到，熔斷淪為雜訊。
+test('微修輪（output 極小）不佔額度：4 筆 coding 但只有 2 輪實質 → 照常跑', async () => {
+  mockClaude({ onCall: (child) => { emitInit(child, 'sess-micro'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('runway-micro');
+  await seedCodingRuns('ta_runway-micro', 2);          // 2 輪真開發
+  await seedCodingRuns('ta_runway-micro', 2, 'claude-sonnet-5', 2000);   // 2 筆微修，不該計入
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+});
+
+// 反向鑑別力：微修不計輪不能變成「永遠擋不下來」。真的跑滿 4 輪實質開發還是要停。
+test('微修之外仍有 4 輪實質開發 → 照樣擋下', async () => {
+  const calls = mockClaude({ onCall: (child) => { emitInit(child, 'sess-micro2'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('runway-micro2');
+  await seedCodingRuns('ta_runway-micro2', 4);
+  await seedCodingRuns('ta_runway-micro2', 3, 'claude-sonnet-5', 2000);
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toContain('4 輪');   // 報的是實質輪數，不是 7
+  expect(calls.length).toBe(0);
 });
 
 // 最傷的誤判方向：擋完之後使用者填修正指示回到本關，若守衛照樣擋，任務就永久死鎖（reentry 斷路器

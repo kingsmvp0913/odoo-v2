@@ -334,6 +334,48 @@ test('健檢固定臺灣時間 23:00，手動全平台健檢不會帶偏排程',
   expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-26T15:00:00.000Z' });
 });
 
+// 大健檢的節奏判斷。每天只有一個 23:00 slot，所以「這一天跑哪一種」就等於「大健檢當天不跑日健檢」——
+// 判斷錯不會有任何徵狀：畫面上照樣是一輪健檢，只是視窗與趨勢比對靜默變成另一種。
+describe('healthCheckCadence', () => {
+  test('平日 → 增量（daily）', () => {
+    expect(cronModule.healthCheckCadence(new Date('2026-08-25T15:00:00.000Z'))).toBe('daily'); // 臺灣週二 23:00
+  });
+
+  test('週日 → 回看 7 天的週健檢', () => {
+    expect(cronModule.healthCheckCadence(new Date('2026-08-30T15:00:00.000Z'))).toBe('weekly'); // 臺灣週日 23:00
+  });
+
+  // 同時驗時區：這個時刻在 UTC 還是 8/31，只有換算到臺灣才是 9/1。用本機時區判會整整差一天，
+  // 月健檢就會固定跑在錯的日子。
+  test('每月 1 號（依臺灣日期，非 UTC）→ 回看 30 天的月健檢', () => {
+    expect(cronModule.healthCheckCadence(new Date('2026-08-31T16:00:00.000Z'))).toBe('monthly'); // 臺灣 9/1 週二
+  });
+
+  test('1 號剛好是週日 → 只跑月健檢，大的吃掉小的', () => {
+    expect(cronModule.healthCheckCadence(new Date('2026-11-01T15:00:00.000Z'))).toBe('monthly'); // 臺灣 11/1 週日
+  });
+});
+
+// 大健檢的視窗是固定回看，不能沿用增量：增量起點是「上一輪完成時刻」，昨天才跑過的話 7 天視窗
+// 會塌成一天，畫面上仍寫著「7 天大健檢」。
+test('cron tick：週日 → 建 weekly run，視窗固定回看 7 天且節奏傳進 runner', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',1,NOW() - INTERVAL '1 day',NOW() - INTERVAL '1 day')");
+  runner.runAudit.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-08-30T15:00:00.000Z')); // 臺灣週日 23:00
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+
+  const { rows } = await dbModule.query("SELECT window_days, cadence FROM health_check_runs WHERE status='running'");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ window_days: 7, cadence: 'weekly' });
+  expect(runner.runAudit).toHaveBeenCalledWith(expect.any(Number), expect.objectContaining({ cadence: 'weekly' }));
+});
+
 test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
   const nodeCron = require('node-cron');
   const runner = require('../pipeline/health-check-runner');

@@ -48,11 +48,19 @@ async function doPushAi(task, taskId, userId, signal) {
   }
 
   const path = require('path');
-  const { mergeToAiBranch, concludeAiMerge, deleteBranchLocal, removeWorktree } = require('./git');
+  const { mergeToAiBranch, concludeAiMerge, deleteBranchLocal, removeWorktree, refExists } = require('./git');
   const { resolveConflicts } = require('./merge-agent');
   const conflictByRepo = [];
 
   for (const repo of repos) {
+    // repo 清單是「此刻」查的，任務開跑後才加進專案的 repo 也在裡面，但它沒有 worktree 也沒有任務
+    // 分支——硬 merge 一條不存在的分支只會拿到 "not something we can merge"，且不帶 conflictFiles
+    // → 直接 stop，整張任務卡死在最後一關。沒有任務分支＝這個 repo 沒參與這張任務，跳過即可
+    // （它要真的參與，得等下一張任務的 analysis 幫它建 worktree）。留聲不靜默。
+    if (!await refExists(repo.local_path, `refs/heads/${task.git_branch}`)) {
+      notify.emitToUser(userId, 'terminal:output', { taskId, data: `[PUSH-AI] ${repo.label}：本張任務未在此 repo 產生變更，跳過\n` });
+      continue;
+    }
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[PUSH-AI] ${repo.label}：併入 ai-dev...\n` });
     let conflictFiles;
     try {

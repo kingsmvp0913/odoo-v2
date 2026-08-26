@@ -363,6 +363,36 @@ test('answer（純提問）→ review_pending：Q&A 落時間軸、刪最近 tas
   expect(logs.some(l => l.role === 'system' && l.content === '[人工退回]')).toBe(false);       // 系統退回標記回滾
 });
 
+// 鑑別力：上面那支用預設的 status='new' fixture，測不到正式環境唯一會發生的時序。classify 的 cron
+// 撈 new 只花 5~13 秒、reject-triage 要跑 60~190 秒，實測 classify 每次都先把 new 改成 classified，
+// 所以原本 `WHERE status='new'` 的刪除從上線起就沒命中過一次（正式庫 52 筆人工退回，status='new' 0 筆）。
+// 症狀是靜默的：使用者只是問問題，卻被永久記成一次人工退回，污染退回統計與健檢的退回率。
+test('answer：classify 已搶先把退回標成 classified，仍要刪掉（正式環境的實際時序）', async () => {
+  claudeReturns({ decision: 'answer', summary: '因為它同步自來源工單。' });
+  const id = await makeTask({ rejectCount: 1 });
+  const bizId = (await dbModule.query('SELECT task_id FROM tasks WHERE id=$1', [id])).rows[0].task_id;
+  await dbModule.query("UPDATE task_rejections SET status='classified' WHERE task_id=$1", [bizId]);
+
+  await runRejectTriage(id, userId);
+
+  const { rows: rej } = await dbModule.query('SELECT id FROM task_rejections WHERE task_id=$1', [bizId]);
+  expect(rej.length).toBe(0);
+});
+
+// 刪除範圍必須限本次人工退回：QA 自動退回（source='qa'）是真實的退回統計來源，
+// 不能因為使用者問了一句話就被連帶清掉。
+test('answer：只刪本次人工退回，QA 自動退回的記錄不得被連帶刪除', async () => {
+  claudeReturns({ decision: 'answer', summary: '回答。' });
+  const id = await makeTask({ rejectCount: 1, qaRejects: 2 });
+  const bizId = (await dbModule.query('SELECT task_id FROM tasks WHERE id=$1', [id])).rows[0].task_id;
+  await dbModule.query("UPDATE task_rejections SET status='classified' WHERE task_id=$1 AND source='human'", [bizId]);
+
+  await runRejectTriage(id, userId);
+
+  const { rows } = await dbModule.query('SELECT source FROM task_rejections WHERE task_id=$1', [bizId]);
+  expect(rows.map(r => r.source)).toEqual(['qa', 'qa']);
+});
+
 // ---- 卡關修正指示入口（resolve_triage）----
 
 test('resolve 入口 advance target=e2e → playwright_running，並歸零 pw 計數器', async () => {

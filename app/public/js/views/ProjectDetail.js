@@ -429,6 +429,10 @@ window.ProjectDetailView = Vue.defineComponent({
             </span>
           </div>
           <div v-if="env.error_msg" class="error-msg" style="margin-bottom:10px;white-space:pre-wrap">{{ env.error_msg }}</div>
+          <div v-if="env.addons_drift && env.addons_drift.length" class="error-msg" style="margin-bottom:10px">
+            ⚠ 這些 Repo 是在測試環境建立之後才加入的，程式碼還沒掛進容器：{{ env.addons_drift.join('、') }}。
+            容器的掛載無法事後補，其模組在測試區並不存在（部署會被擋下）。請按「停止」再按「重新啟動」讓它重新掛載。
+          </div>
           <details v-if="env.setup_log" style="margin-bottom:10px">
             <summary style="font-size:var(--fs-sm);color:var(--text-muted);cursor:pointer;user-select:none">▶ 查看建立記錄</summary>
             <pre style="background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:var(--fs-xs);overflow-x:auto;margin-top:6px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{{ env.setup_log }}</pre>
