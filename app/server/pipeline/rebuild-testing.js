@@ -60,6 +60,12 @@ async function doRebuild(projectId, userId, signal) {
     }
 
     for (const task of tasks) {
+      // 多 repo 專案：一張任務常只在其中一個 repo 有變更，別的 repo 根本沒建出這條任務分支。
+      // 不篩就對每個 repo 併同一個分支名，git 直接以「not something we can merge」失敗 → 落到下面
+      // 的 fail-open，把這個 repo 的 testing 整包還原回重建前的 SHA，剛同步進來的 main 新 commit
+      // 就此不見（實測萊峰19 的「純水」repo）。判準比照 merge-agent 併入 testing 時的同一道守衛。
+      if (!await git.refExists(repo.local_path, `refs/heads/${task.git_branch}`)) continue;
+
       let mergeResult;
       try {
         mergeResult = await git.mergeInto(repo.local_path, 'testing', task.git_branch);

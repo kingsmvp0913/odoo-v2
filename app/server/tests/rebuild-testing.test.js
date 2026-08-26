@@ -11,6 +11,7 @@ jest.mock('../pipeline/git', () => ({
   mergeInto: jest.fn(),
   commitAll: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined),
+  refExists: jest.fn().mockResolvedValue(true),
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 
@@ -33,9 +34,10 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
-  for (const k of ['revParse', 'resetTestingToAiBranch', 'resetTestingTo', 'mergeInto', 'commitAll', 'abortMerge']) {
+  for (const k of ['revParse', 'resetTestingToAiBranch', 'resetTestingTo', 'mergeInto', 'commitAll', 'abortMerge', 'refExists']) {
     gitMock[k].mockReset();
   }
+  gitMock.refExists.mockResolvedValue(true);
   gitMock.revParse.mockResolvedValue('oldsha');
   gitMock.resetTestingToAiBranch.mockResolvedValue(undefined);
   gitMock.resetTestingTo.mockResolvedValue(undefined);
@@ -82,6 +84,25 @@ test('重建 → 每 repo reset 到 main，並重併在飛任務，無衝突不�
   expect(gitMock.mergeInto).toHaveBeenCalledTimes(4);          // 2 repo × 2 task
   for (const c of gitMock.mergeInto.mock.calls) expect(c[1]).toBe('testing');
   expect(warning).toBeNull();
+});
+
+// 意圖（本次事故守線）：多 repo 專案裡一張任務往往只在其中一個 repo 有變更，另一個 repo 根本沒有
+// 那條任務分支。無條件對每個 repo 併同一個分支名 → git 以「not something we can merge」失敗 →
+// doRebuild 走非衝突類 fail-open，把該 repo 的 testing 整個還原回重建前的 SHA，剛同步進來的
+// main 新 commit 就此消失（實測萊峰19 的「純水」repo：ai-dev 有該 commit、testing 沒有）。
+// 沒有任務分支＝沒參與這張任務，跳過即可（判準比照 merge-agent 的併入 testing）。
+test('重建 → 任務分支不存在的 repo 直接跳過，不併也不還原 testing', async () => {
+  gitMock.refExists.mockImplementation(async repoPath => repoPath === '/repos/mp/main');
+  gitMock.mergeInto.mockResolvedValue({ hasConflicts: false, conflictFiles: [] });
+  const projectId = await makeProject(['main', 'sub']);
+  await addTask(projectId, { status: 'review_pending', branch: 'task/a', taskId: 'a' });
+
+  const warning = await rebuildMod.rebuildTesting(projectId, userId, undefined);
+
+  expect(warning).toBeNull();
+  expect(gitMock.mergeInto).toHaveBeenCalledTimes(1);
+  expect(gitMock.mergeInto).toHaveBeenCalledWith('/repos/mp/main', 'testing', 'task/a');
+  expect(gitMock.resetTestingTo).not.toHaveBeenCalled(); // 未還原＝sub 的 testing 保住剛 reset 的最新 ai-dev
 });
 
 // 意圖：approved（碼已在 main）、非在飛、隱藏、無分支的任務都不該被重併，避免把不該上的碼推回 testing
