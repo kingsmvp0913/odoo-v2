@@ -7,7 +7,9 @@ describe('ui-next 平行介面', () => {
   const index = read('index.html');
   const app = read('js/app.js');
   const uiNext = read('js/ui-next/UiNextApp.js');
+  const uiNextPages = read('js/ui-next/UiNextPages.js');
   const css = read('css/ui-next.css');
+  const pagesCss = read('css/ui-next-pages.css');
 
   test('只在網址帶 ui=next 時選用新版根介面', () => {
     expect(uiNext).toContain("query.get('ui') === 'next'");
@@ -16,8 +18,24 @@ describe('ui-next 平行介面', () => {
 
   test('新版資產獨立載入，且所有 CSS 規則皆有 ui-next 範圍', () => {
     expect(index).toContain('css/ui-next.css');
+    expect(index).toContain('css/ui-next-pages.css');
     expect(index).toContain('js/ui-next/UiNextApp.js');
+    expect(index).toContain('js/ui-next/UiNextPages.js');
     expect(css).toContain('.ui-next-shell');
+    expect(pagesCss).toContain('.ui-next-chat-page');
+  });
+
+  test('Pipeline 與用量報表使用新版 View，而非沿用舊版 DOM', () => {
+    expect(app).toContain('window.UiNextEnabled ? window.UiNextTokenReportView : window.TokenReportView');
+    expect(app).toContain('window.UiNextEnabled ? window.UiNextPipelineView : window.AdminPipelinesView');
+    expect(app).toContain('window.UiNextEnabled ? window.UiNextProjectChatView : window.ProjectChatView');
+    expect(app).toContain('window.UiNextEnabled ? window.UiNextTaskListView : window.TaskListView');
+    expect(app).toContain('window.UiNextEnabled ? window.UiNextProjectListView : window.ProjectListView');
+    expect(uiNextPages).toContain("name: 'UiNextTokenReportView'");
+    expect(uiNextPages).toContain("name: 'UiNextPipelineView'");
+    expect(uiNextPages).toContain("name: 'UiNextProjectChatView'");
+    expect(uiNextPages).toContain("name: 'UiNextTaskListView'");
+    expect(uiNextPages).toContain("name: 'UiNextProjectListView'");
   });
 
   test('新版入口保留既有 Chat API、附件與自動標題流程', () => {
@@ -32,6 +50,8 @@ describe('ui-next 平行介面', () => {
     expect(uiNext).not.toMatch(/go\('\/inbox'\)/);
     expect(uiNext).toContain('新手教學');
     expect(uiNext).toContain('window.TourManager.open()');
+    expect(uiNext).toContain("go('/admin/pipelines')");
+    expect(uiNext).toContain("go('/token-report')");
   });
 
   test('既有 View 的通知、確認視窗、教學與主題切換在新版殼層仍可用', () => {
