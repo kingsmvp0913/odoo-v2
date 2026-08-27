@@ -35,7 +35,9 @@ beforeEach(() => {
 test('prompt 帶入專案名、指示按需查 wiki，不預載 wiki 內容', async () => {
   await chatReply('1', '2', '正式區某張單金額算錯', 99);
   expect(mockRunClaude).toHaveBeenCalledTimes(1);
-  const prompt = mockRunClaude.mock.calls[0][0];
+  const [prompt, opts] = mockRunClaude.mock.calls[0];
+  // 聊天 agent 的 provider 必須真的傳到 runner；否則切成 Codex 時仍會落到 Claude 的預設路徑。
+  expect(opts.provider).toBe('claude');
   expect(prompt).toContain('鴻久');                 // 專案名帶入
   expect(prompt).toContain('/ai/wiki/pages');       // 按需查 wiki 指引
   expect(prompt).not.toContain('請根據以下 Wiki 資料回答'); // 無舊 wiki 優先框架
