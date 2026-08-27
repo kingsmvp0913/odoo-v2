@@ -31,4 +31,10 @@ describe('收件匣未讀 badge 只認 COUNT 端點', () => {
     const routes = fs.readFileSync(path.join(__dirname, '../inbox-routes.js'), 'utf8');
     expect(routes).toContain("app.get('/api/inbox/unread-count'");
   });
+
+  test('收件匣暫不顯示於側欄，但保留路由與未讀同步供既有連結使用', () => {
+    expect(appJs).not.toContain('data-tour="nav-inbox"');
+    expect(appJs).toContain("{ path: '/inbox', component: window.InboxView");
+    expect(appJs).toContain("Api.get('inbox/unread-count')");
+  });
 });

@@ -234,12 +234,7 @@ const App = defineComponent({
                 <span v-if="needsActionCount > 0" class="badge">{{ needsActionCount }}</span>
               </a>
             </router-link>
-            <router-link to="/inbox" custom v-slot="{ navigate, isActive }">
-              <a data-tour="nav-inbox" :class="{ active: isActive }" @click="navigate">
-                📥 收件匣
-                <span v-if="inboxUnread > 0" class="badge">{{ inboxUnread }}</span>
-              </a>
-            </router-link>
+            <!-- 收件匣路由保留供既有連結使用，暫不放在日常導覽。 -->
             <router-link to="/projects" custom v-slot="{ navigate, isActive }">
               <a data-tour="nav-projects" :class="{ active: isActive }" @click="navigate">
                 📁 專案

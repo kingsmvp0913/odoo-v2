@@ -337,19 +337,6 @@ window.TOUR_COURSES = [
     desc: '不在電腦前的那段時間，發生過什麼',
     steps: [
       {
-        route: '/inbox',
-        target: '[data-tour="nav-inbox"]',
-        placement: 'right',
-        title: '📥 收件匣 — 和上面那個數字不是同一回事',
-        text: '「任務列表」旁邊的數字是<strong>當下的快照</strong>（現在有幾張在等你）；收件匣是<strong>事件流</strong>（這段時間發生過什麼）。<br><br>離開兩小時回來，任務停在「開發中」看起來很正常——但這兩小時它可能被 QA 退一次、重跑、又被部署退一次。那些只有這裡看得到。'
-      },
-      {
-        route: '/inbox',
-        target: '[data-tour="inbox-filters"]',
-        title: '同一張任務會收合成一則',
-        text: '一直在關卡之間來回的任務會收合成一則，標上「×3」這種次數，不會洗版——<strong>而「它到底來回幾次」正是這裡要讓你看見的訊號</strong>。<br><br>預設只看未處理。處理完按「標記已讀」，現在沒空就用旁邊的下拉「稍後再提醒我」。'
-      },
-      {
         route: '/admin/pipelines',
         target: '[data-tour="nav-pipeline"]',
         placement: 'right',
