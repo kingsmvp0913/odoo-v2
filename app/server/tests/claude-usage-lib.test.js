@@ -10,6 +10,7 @@ function mockReadFileSync(token) {
     const s = String(p);
     if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: token } });
     if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    if (s.endsWith('plan-usage-history.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     return realReadFileSync(p, ...rest);
   };
 }
@@ -38,6 +39,46 @@ describe('lib/claude-usage getUsage', () => {
     expect(u.available).toBe(true);
     expect(u.five_hour.utilization).toBe(42);
     expect(u.seven_day.utilization).toBe(71);
+  });
+
+  // Desktop 呼叫後會更新 plan-usage-history.json；主憑證必須優先使用最新取樣，
+  // 否則畫面與閘門會被受限流影響的 OAuth API 舊值誤導。
+  test('桌面 JSON 有新取樣 → 優先採用 fh/sd，且不打 API', async () => {
+    const now = 1_800_000_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(now);
+    fs.readFileSync.mockImplementation((p, ...rest) => {
+      const s = String(p);
+      if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: 'test-token' } });
+      if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      if (s.endsWith('plan-usage-history.json')) return JSON.stringify({
+        version: 2,
+        samples: [{ t: now - 60_000, org: 'org-1', u: { fh: 12, sd: 54 } }]
+      });
+      return realReadFileSync(p, ...rest);
+    });
+    global.fetch = jest.fn();
+    const u = await lib.getUsage();
+    expect(u).toMatchObject({ source: 'desktop_json', five_hour: { utilization: 12 }, seven_day: { utilization: 54 } });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test('桌面 JSON 超過 45 分鐘未更新 → 回退 OAuth API', async () => {
+    const now = 1_800_000_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(now);
+    fs.readFileSync.mockImplementation((p, ...rest) => {
+      const s = String(p);
+      if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: 'test-token' } });
+      if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      if (s.endsWith('plan-usage-history.json')) return JSON.stringify({
+        version: 2,
+        samples: [{ t: now - 46 * 60 * 1000, u: { fh: 12, sd: 54 } }]
+      });
+      return realReadFileSync(p, ...rest);
+    });
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ five_hour: { utilization: 21 }, seven_day: { utilization: 65 } }) });
+    const u = await lib.getUsage();
+    expect(u.five_hour.utilization).toBe(21);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
   test('抓取失敗但有前一筆好資料 → 回 stale 舊值', async () => {

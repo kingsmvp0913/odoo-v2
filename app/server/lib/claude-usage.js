@@ -5,6 +5,15 @@ const fs = require('fs');
 // 本機互動式登入憑證：管理員沒在網頁設主憑證時的退路（既有行為）
 const CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+// Claude Desktop 在每次用量更新後寫入的歷史取樣。這比外部 OAuth usage endpoint
+// 更貼近桌面端實際顯示的額度，而且不會額外消耗那支限流很嚴的 endpoint 配額。
+// 正式機若 Desktop profile 不在預設 Windows 位置，可用環境變數指定；不可把個人絕對路徑寫進設定。
+const PLAN_USAGE_PATH = process.env.CLAUDE_PLAN_USAGE_HISTORY_PATH
+  || (process.env.LOCALAPPDATA && path.join(
+    process.env.LOCALAPPDATA, 'Packages', 'Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude', 'plan-usage-history.json'
+  ));
+// Desktop 正常約每 30 分鐘留下取樣。超過 45 分鐘代表桌面端未更新，此時才讓 API 接手。
+const PLAN_USAGE_FRESH_MS = 45 * 60 * 1000;
 // /api/oauth/usage 是非官方端點且限流很兇（實測 429 帶 Retry-After 1877s）。原本 60s TTL
 // 配上前端 60s 輪詢＝24/7 每分鐘一次真實請求，配額很快燒光，接著半小時全 429，畫面卡在 stale
 // 不動。用量是分鐘級才有意義的數字，拉到 10 分鐘足夠。改這裡要連同前端 app.js 的輪詢間隔一起改。
@@ -40,6 +49,29 @@ function saveSnapshot(data) {
     fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
     fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(data));
   } catch { /* best-effort */ }
+}
+
+// 桌面檔的 samples 是歷史陣列；最新一筆的 u.fh / u.sd 才是當前方案額度百分比。
+// 只採用可驗證的 0~100 數字，損毀、舊版或半寫入 JSON 都視為不可用，交由 API fallback。
+function readDesktopPlanUsage() {
+  if (!PLAN_USAGE_PATH) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(PLAN_USAGE_PATH, 'utf8'));
+    if (!Array.isArray(raw?.samples)) return null;
+    const latest = raw.samples.reduce((best, sample) =>
+      Number.isFinite(sample?.t) && (!best || sample.t > best.t) ? sample : best, null);
+    if (!latest || Date.now() - latest.t > PLAN_USAGE_FRESH_MS) return null;
+    const fh = latest.u?.fh;
+    const sd = latest.u?.sd;
+    if (![fh, sd].every(v => Number.isFinite(v) && v >= 0 && v <= 100)) return null;
+    return {
+      available: true,
+      updated_at: new Date(latest.t).toISOString(),
+      five_hour: { utilization: fh },
+      seven_day: { utilization: sd },
+      source: 'desktop_json'
+    };
+  } catch { return null; }
 }
 
 // 量哪一把憑證的用量，就拿那一把去打 API——跑任務用的是管理員設定的 token，
@@ -88,6 +120,16 @@ function _degraded(st, reason) {
 
 async function getUsage(which = 'primary') {
   const st = _state[which === 'backup' ? 'backup' : 'primary'];
+  // plan-usage-history.json 沒有「這筆屬於哪把 backup token」的對照，不能拿它冒充備用帳號。
+  // 主憑證每次直接重讀檔案，才會在 Desktop 剛寫入後立即反映，不受 API TTL 影響。
+  if (which !== 'backup') {
+    const desktop = readDesktopPlanUsage();
+    if (desktop) {
+      st.lastGood = desktop;
+      if (which !== 'backup') saveSnapshot(desktop);
+      return desktop;
+    }
+  }
   if (st.cache.data && Date.now() - st.cache.at < CACHE_TTL_MS) return st.cache.data;
   // 冷卻窗內不再送請求：實測 Retry-After 是逐秒倒數的，窗口不因重打而延長，硬打只是白燒配額。
   if (Date.now() < st.blockedUntil) return _degraded(st, 'rate limited');
@@ -120,4 +162,4 @@ function _resetCacheForTesting() {
   _state.backup.cache = { at: 0, data: null };
 }
 
-module.exports = { getUsage, _resetCacheForTesting };
+module.exports = { getUsage, _resetCacheForTesting, _readDesktopPlanUsageForTesting: readDesktopPlanUsage };
