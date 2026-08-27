@@ -248,6 +248,11 @@ function runClaude(prompt, opts = {}) {
           if (!usedModel && ev.type === 'assistant' && ev.message && ev.message.model) {
             usedModel = ev.message.model;
           }
+          // 用量狀態：串流本來就帶這則，攔下來等於免費拿到「跑任務這把憑證」的即時額度狀態，
+          // 不必再打那支限流很兇的 usage endpoint（見 lib/claude-usage 的 recordRateLimitEvent）。
+          if (ev.type === 'rate_limit_event' && ev.rate_limit_info) {
+            try { require('../lib/claude-usage').recordRateLimitEvent(ev.rate_limit_info); } catch { /* 不影響任務 */ }
+          }
           // 累積所有 assistant text block（見 assistantText 宣告處）
           if (ev.type === 'assistant' && ev.message?.content) {
             for (const blk of ev.message.content) {

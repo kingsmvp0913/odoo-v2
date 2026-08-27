@@ -1,3 +1,7 @@
+// 把用量狀態的落檔導去暫存區，避免測試污染 repo 的 data/。必須在任何 require 之前設定：
+// lib/claude-usage 在載入當下就把路徑算好了。
+process.env.CLAUDE_RATE_LIMIT_CACHE = require('path').join(require('os').tmpdir(), 'test-claude-rate-limit.json');
+
 const { newDb } = require('pg-mem');
 
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
@@ -189,6 +193,34 @@ test('runClaude：從 init 事件抓到 session_id 並回傳', async () => {
   child.emit('close', 0);
   const r = await p;
   expect(r.sessionId).toBe('sess-abc');
+});
+
+// 用量顯示的救命索：usage endpoint 被 429 擋住時，串流裡的 rate_limit_event 是唯一還會更新、
+// 且量的正是「跑任務這把憑證」的來源。漏接它 = 限流期間完全沒有任何新鮮的用量訊號。
+test('runClaude：攔下 rate_limit_event 並記進用量狀態', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValue(child);
+
+  const usage = require('../lib/claude-usage');
+  usage._resetCacheForTesting();
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', JSON.stringify({
+    type: 'rate_limit_event',
+    rate_limit_info: { status: 'allowed', resetsAt: 1787809200, rateLimitType: 'five_hour' }
+  }) + '\n');
+  child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'done', usage: null, duration_ms: 5 }) + '\n');
+  child.emit('close', 0);
+  await p;
+  expect(usage.getRateLimitState()).toMatchObject({
+    status: 'allowed', rate_limit_type: 'five_hour', resets_at: '2026-08-27T05:40:00.000Z'
+  });
 });
 
 // result-contract 關卡的救命索：assistantText 累積「整段」assistant 文字，即使 <result> 出現在中間輪、

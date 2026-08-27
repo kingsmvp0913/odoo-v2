@@ -5,12 +5,13 @@ const fs = require('fs');
 // 全攔會讓 jest/babel 讀自己的檔案時也吃到這份假 JSON，改動 lib 使 transform 快取失效後，
 // 整支套件會以 SyntaxError: Unexpected token ':' 全滅，且錯誤完全不指向成因。
 const realReadFileSync = fs.readFileSync;
+const realStatSync = fs.statSync;
 function mockReadFileSync(token) {
   return (p, ...rest) => {
     const s = String(p);
     if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: token } });
     if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-    if (s.endsWith('plan-usage-history.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    if (s.endsWith('claude-rate-limit.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     return realReadFileSync(p, ...rest);
   };
 }
@@ -22,6 +23,11 @@ describe('lib/claude-usage getUsage', () => {
     jest.spyOn(fs, 'readFileSync').mockImplementation(mockReadFileSync('test-token'));
     jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
     jest.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+    jest.spyOn(fs, 'appendFileSync').mockImplementation(() => {});
+    // 同上：statSync 只攔校準檔，全攔會讓 jest 自己的 transform cache 壞掉
+    //（實測 TypeError: The "uid" argument must be of type number）。
+    jest.spyOn(fs, 'statSync').mockImplementation((p, ...rest) =>
+      String(p).endsWith('claude-usage-calibration.jsonl') ? { size: 1 } : realStatSync(p, ...rest));
     lib = require('../lib/claude-usage');
     lib._resetCacheForTesting();
   });
@@ -41,44 +47,34 @@ describe('lib/claude-usage getUsage', () => {
     expect(u.seven_day.utilization).toBe(71);
   });
 
-  // Desktop 呼叫後會更新 plan-usage-history.json；主憑證必須優先使用最新取樣，
-  // 否則畫面與閘門會被受限流影響的 OAuth API 舊值誤導。
-  test('桌面 JSON 有新取樣 → 優先採用 fh/sd，且不打 API', async () => {
-    const now = 1_800_000_000_000;
-    jest.spyOn(Date, 'now').mockReturnValue(now);
-    fs.readFileSync.mockImplementation((p, ...rest) => {
-      const s = String(p);
-      if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: 'test-token' } });
-      if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      if (s.endsWith('plan-usage-history.json')) return JSON.stringify({
-        version: 2,
-        samples: [{ t: now - 60_000, org: 'org-1', u: { fh: 12, sd: 54 } }]
-      });
-      return realReadFileSync(p, ...rest);
+  // 校準樣本是日後「API 抓不到時自行推估百分比」的唯一依據；只有真值可以入樣本，
+  // 拿 stale／推估值回填會讓係數愈校愈偏。
+  test('API 回真值 → 追加一筆校準樣本', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 42, resets_at: '2026-07-22T10:00:00Z' },
+        seven_day: { utilization: 71, resets_at: '2026-07-28T00:00:00Z' }
+      })
     });
-    global.fetch = jest.fn();
-    const u = await lib.getUsage();
-    expect(u).toMatchObject({ source: 'desktop_json', five_hour: { utilization: 12 }, seven_day: { utilization: 54 } });
-    expect(global.fetch).not.toHaveBeenCalled();
+    await lib.getUsage();
+    expect(fs.appendFileSync).toHaveBeenCalledTimes(1);
+    const [p, line] = fs.appendFileSync.mock.calls[0];
+    expect(String(p)).toMatch(/claude-usage-calibration\.jsonl$/);
+    expect(JSON.parse(line)).toMatchObject({
+      five_hour: 42, seven_day: 71, five_hour_resets_at: '2026-07-22T10:00:00Z'
+    });
   });
 
-  test('桌面 JSON 超過 45 分鐘未更新 → 回退 OAuth API', async () => {
-    const now = 1_800_000_000_000;
-    jest.spyOn(Date, 'now').mockReturnValue(now);
-    fs.readFileSync.mockImplementation((p, ...rest) => {
-      const s = String(p);
-      if (s.endsWith('.credentials.json')) return JSON.stringify({ claudeAiOauth: { accessToken: 'test-token' } });
-      if (s.endsWith('claude-usage.json')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      if (s.endsWith('plan-usage-history.json')) return JSON.stringify({
-        version: 2,
-        samples: [{ t: now - 46 * 60 * 1000, u: { fh: 12, sd: 54 } }]
-      });
-      return realReadFileSync(p, ...rest);
-    });
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ five_hour: { utilization: 21 }, seven_day: { utilization: 65 } }) });
+  test('抓取失敗回 stale → 不得寫入校準樣本', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ five_hour: { utilization: 55 } }) });
+    await lib.getUsage();
+    lib._resetCacheForTesting();
+    fs.appendFileSync.mockClear();
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 429, headers: { get: () => null } });
     const u = await lib.getUsage();
-    expect(u.five_hour.utilization).toBe(21);
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(u.stale).toBe(true);
+    expect(fs.appendFileSync).not.toHaveBeenCalled();
   });
 
   test('抓取失敗但有前一筆好資料 → 回 stale 舊值', async () => {
@@ -203,5 +199,51 @@ describe('lib/claude-usage 依憑證分別量用量', () => {
     const b = await lib.getUsage('backup');
     expect(p.five_hour.utilization).toBe(91);
     expect(b.five_hour.utilization).toBe(3);
+  });
+});
+
+// pipeline 的 stream-json 本來就帶 rate_limit_event，攔下來等於不花任何 API 配額就知道
+// 「跑任務那把憑證」的額度狀態——usage endpoint 被 429 擋住時，這是唯一還會更新的來源。
+describe('lib/claude-usage rate_limit_event', () => {
+  let lib;
+  beforeEach(() => {
+    jest.resetModules();
+    jest.spyOn(fs, 'readFileSync').mockImplementation(mockReadFileSync('test-token'));
+    jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+    jest.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+    lib = require('../lib/claude-usage');
+    lib._resetCacheForTesting();
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  test('沒有事件進來 → 狀態為 null，呼叫端才分得出「沒資料」與「正常」', () => {
+    expect(lib.getRateLimitState()).toBeNull();
+  });
+
+  test('記錄事件 → resetsAt 由 epoch 秒換成 ISO 並落檔', () => {
+    // 實測值：1787809200 對應 2026-08-27T05:40:00Z，與同時間 API 回的 five_hour.resets_at 一致。
+    const state = lib.recordRateLimitEvent({
+      status: 'allowed', resetsAt: 1787809200, rateLimitType: 'five_hour',
+      overageStatus: 'allowed', overageResetsAt: 1788220800, isUsingOverage: false
+    });
+    expect(state).toMatchObject({
+      status: 'allowed', rate_limit_type: 'five_hour',
+      resets_at: '2026-08-27T05:40:00.000Z', is_using_overage: false
+    });
+    expect(lib.getRateLimitState()).toEqual(state);
+    const [p] = fs.writeFileSync.mock.calls.at(-1);
+    expect(String(p)).toMatch(/claude-rate-limit\.json$/);
+  });
+
+  test('status 缺漏 → 整筆不留，不得寫入半筆殘值', () => {
+    expect(lib.recordRateLimitEvent({ resetsAt: 1787809200 })).toBeNull();
+    expect(lib.recordRateLimitEvent(null)).toBeNull();
+    expect(lib.getRateLimitState()).toBeNull();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  test('resetsAt 不是有效數字 → 該欄位留 null，其餘照收', () => {
+    const state = lib.recordRateLimitEvent({ status: 'rejected', resetsAt: null });
+    expect(state).toMatchObject({ status: 'rejected', resets_at: null });
   });
 });

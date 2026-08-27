@@ -5,15 +5,6 @@ const fs = require('fs');
 // 本機互動式登入憑證：管理員沒在網頁設主憑證時的退路（既有行為）
 const CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-// Claude Desktop 在每次用量更新後寫入的歷史取樣。這比外部 OAuth usage endpoint
-// 更貼近桌面端實際顯示的額度，而且不會額外消耗那支限流很嚴的 endpoint 配額。
-// 正式機若 Desktop profile 不在預設 Windows 位置，可用環境變數指定；不可把個人絕對路徑寫進設定。
-const PLAN_USAGE_PATH = process.env.CLAUDE_PLAN_USAGE_HISTORY_PATH
-  || (process.env.LOCALAPPDATA && path.join(
-    process.env.LOCALAPPDATA, 'Packages', 'Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude', 'plan-usage-history.json'
-  ));
-// Desktop 正常約每 30 分鐘留下取樣。超過 45 分鐘代表桌面端未更新，此時才讓 API 接手。
-const PLAN_USAGE_FRESH_MS = 45 * 60 * 1000;
 // /api/oauth/usage 是非官方端點且限流很兇（實測 429 帶 Retry-After 1877s）。原本 60s TTL
 // 配上前端 60s 輪詢＝24/7 每分鐘一次真實請求，配額很快燒光，接著半小時全 429，畫面卡在 stale
 // 不動。用量是分鐘級才有意義的數字，拉到 10 分鐘足夠。改這裡要連同前端 app.js 的輪詢間隔一起改。
@@ -23,6 +14,19 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // 只存主憑證的用量——備用是「撞閘門才用」的旁路，沒有跨重啟保存的必要。
 const SNAPSHOT_PATH = process.env.CLAUDE_USAGE_CACHE
   || path.join(__dirname, '..', '..', '..', 'data', 'claude-usage.json');
+// pipeline 每次 spawn claude 都跑 `--output-format stream-json --verbose`，串流裡本來就帶
+// rate_limit_event（實測欄位：status／resetsAt／rateLimitType／overageStatus）。那是跑任務用的
+// 那把憑證當下的狀態，不必額外打限流端點就拿得到，且 429 期間照樣有效——usage API 卡住時
+// 這是唯一還會更新的真相來源。缺點是它不帶百分比，故只補狀態、不取代 utilization。
+const RATE_LIMIT_PATH = process.env.CLAUDE_RATE_LIMIT_CACHE
+  || path.join(__dirname, '..', '..', '..', 'data', 'claude-rate-limit.json');
+// API 成功時留下 (時間, utilization, 視窗重置時間) 樣本，供日後回推「1% 值多少 token」。
+// 刻意不在此刻統計 token：token_usage 表一直在記且 recorded_at 有索引，任何時候都能依這裡的
+// 時間戳回溯配對，現在算反而讓 lib 綁上 DB。
+const CALIBRATION_PATH = process.env.CLAUDE_USAGE_CALIBRATION
+  || path.join(__dirname, '..', '..', '..', 'data', 'claude-usage-calibration.jsonl');
+// 每筆約 200 bytes；256KB 約可存兩週（10 分鐘一筆）。超過就只留後半，避免無上限成長。
+const CALIBRATION_MAX_BYTES = 256 * 1024;
 
 // 主／備各一份快取：共用一份會讓「量過主帳號」的數字被當成備用帳號的回報
 // blockedUntil 逐把憑證各記各的：限流是綁在 token 上的，連坐會讓閘門看不到備用的真實用量。
@@ -31,12 +35,21 @@ const _state = {
   backup: { cache: { at: 0, data: null }, lastGood: null, blockedUntil: 0 }
 };
 
+// 最近一次 rate_limit_event。跨重啟保留：任務不是隨時在跑，重啟後若清空，
+// 到下一張任務跑完之前都會誤判成「從來沒有狀態」。
+let _rateLimit = null;
+
 try {
   const snap = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, 'utf8'));
   // 只接受真正的 usage snapshot（saveSnapshot 存的一定帶 available:true），
   // 避免讀到格式不符的檔案內容時誤當成好資料。
   if (snap && snap.available) _state.primary.lastGood = snap;
 } catch { /* 尚無 snapshot */ }
+
+try {
+  const rl = JSON.parse(fs.readFileSync(RATE_LIMIT_PATH, 'utf8'));
+  if (rl && typeof rl.status === 'string') _rateLimit = rl;
+} catch { /* 尚無 rate limit 記錄 */ }
 
 function pick(w) {
   return w && w.utilization != null
@@ -51,27 +64,52 @@ function saveSnapshot(data) {
   } catch { /* best-effort */ }
 }
 
-// 桌面檔的 samples 是歷史陣列；最新一筆的 u.fh / u.sd 才是當前方案額度百分比。
-// 只採用可驗證的 0~100 數字，損毀、舊版或半寫入 JSON 都視為不可用，交由 API fallback。
-function readDesktopPlanUsage() {
-  if (!PLAN_USAGE_PATH) return null;
+// claude CLI 的 rate_limit_event。resetsAt／overageResetsAt 是「秒」為單位的 epoch
+//（實測 1787809200 → 2026-08-27T05:40:00Z，與同時間 API 回的 five_hour.resets_at 只差 1 秒）。
+// status 認不出來就整筆不留：寧可沒有狀態，也不要拿半筆殘值去驅動判斷。
+function recordRateLimitEvent(info) {
+  if (!info || typeof info !== 'object') return null;
+  if (typeof info.status !== 'string' || !info.status) return null;
+  const epochToIso = v => (Number.isFinite(v) && v > 0 ? new Date(v * 1000).toISOString() : null);
+  const state = {
+    status: info.status,
+    rate_limit_type: typeof info.rateLimitType === 'string' ? info.rateLimitType : null,
+    resets_at: epochToIso(info.resetsAt),
+    overage_status: typeof info.overageStatus === 'string' ? info.overageStatus : null,
+    overage_resets_at: epochToIso(info.overageResetsAt),
+    is_using_overage: info.isUsingOverage === true,
+    observed_at: new Date().toISOString()
+  };
+  _rateLimit = state;
   try {
-    const raw = JSON.parse(fs.readFileSync(PLAN_USAGE_PATH, 'utf8'));
-    if (!Array.isArray(raw?.samples)) return null;
-    const latest = raw.samples.reduce((best, sample) =>
-      Number.isFinite(sample?.t) && (!best || sample.t > best.t) ? sample : best, null);
-    if (!latest || Date.now() - latest.t > PLAN_USAGE_FRESH_MS) return null;
-    const fh = latest.u?.fh;
-    const sd = latest.u?.sd;
-    if (![fh, sd].every(v => Number.isFinite(v) && v >= 0 && v <= 100)) return null;
-    return {
-      available: true,
-      updated_at: new Date(latest.t).toISOString(),
-      five_hour: { utilization: fh },
-      seven_day: { utilization: sd },
-      source: 'desktop_json'
-    };
-  } catch { return null; }
+    fs.mkdirSync(path.dirname(RATE_LIMIT_PATH), { recursive: true });
+    fs.writeFileSync(RATE_LIMIT_PATH, JSON.stringify(state));
+  } catch { /* best-effort：落檔失敗不影響 pipeline */ }
+  return state;
+}
+
+// 只回記憶體那份（啟動時已從檔案載入）。沒有任務跑過就是 null，呼叫端自行判斷。
+function getRateLimitState() {
+  return _rateLimit;
+}
+
+// 校準樣本：只在 API 回真值時追加，抓不到／stale 一律不記，否則樣本會被推估值汙染。
+function _appendCalibration(data) {
+  try {
+    const line = JSON.stringify({
+      at: data.updated_at,
+      five_hour: data.five_hour?.utilization ?? null,
+      seven_day: data.seven_day?.utilization ?? null,
+      five_hour_resets_at: data.five_hour?.resets_at ?? null,
+      seven_day_resets_at: data.seven_day?.resets_at ?? null
+    }) + '\n';
+    fs.mkdirSync(path.dirname(CALIBRATION_PATH), { recursive: true });
+    fs.appendFileSync(CALIBRATION_PATH, line);
+    if (fs.statSync(CALIBRATION_PATH).size > CALIBRATION_MAX_BYTES) {
+      const lines = fs.readFileSync(CALIBRATION_PATH, 'utf8').split('\n').filter(Boolean);
+      fs.writeFileSync(CALIBRATION_PATH, lines.slice(Math.floor(lines.length / 2)).join('\n') + '\n');
+    }
+  } catch { /* best-effort */ }
 }
 
 // 量哪一把憑證的用量，就拿那一把去打 API——跑任務用的是管理員設定的 token，
@@ -120,16 +158,6 @@ function _degraded(st, reason) {
 
 async function getUsage(which = 'primary') {
   const st = _state[which === 'backup' ? 'backup' : 'primary'];
-  // plan-usage-history.json 沒有「這筆屬於哪把 backup token」的對照，不能拿它冒充備用帳號。
-  // 主憑證每次直接重讀檔案，才會在 Desktop 剛寫入後立即反映，不受 API TTL 影響。
-  if (which !== 'backup') {
-    const desktop = readDesktopPlanUsage();
-    if (desktop) {
-      st.lastGood = desktop;
-      if (which !== 'backup') saveSnapshot(desktop);
-      return desktop;
-    }
-  }
   if (st.cache.data && Date.now() - st.cache.at < CACHE_TTL_MS) return st.cache.data;
   // 冷卻窗內不再送請求：實測 Retry-After 是逐秒倒數的，窗口不因重打而延長，硬打只是白燒配額。
   if (Date.now() < st.blockedUntil) return _degraded(st, 'rate limited');
@@ -145,7 +173,10 @@ async function getUsage(which = 'primary') {
     };
     st.cache = { at: Date.now(), data };
     st.lastGood = data;
-    if (which !== 'backup') saveSnapshot(data);
+    if (which !== 'backup') {
+      saveSnapshot(data);
+      _appendCalibration(data); // 只有主憑證的真值才是校準樣本
+    }
     return data;
   } catch (err) {
     if (err.retryAfterMs) st.blockedUntil = Date.now() + err.retryAfterMs;
@@ -160,6 +191,7 @@ async function getUsage(which = 'primary') {
 function _resetCacheForTesting() {
   _state.primary.cache = { at: 0, data: null };
   _state.backup.cache = { at: 0, data: null };
+  _rateLimit = null;
 }
 
-module.exports = { getUsage, _resetCacheForTesting, _readDesktopPlanUsageForTesting: readDesktopPlanUsage };
+module.exports = { getUsage, recordRateLimitEvent, getRateLimitState, _resetCacheForTesting };
