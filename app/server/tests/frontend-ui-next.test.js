@@ -24,6 +24,8 @@ describe('ui-next 平行介面', () => {
     expect(uiNext).toContain('projects/${this.projectId}/chats');
     expect(uiNext).toContain('Api.postForm');
     expect(uiNext).toContain('chatTitle(this.prompt)');
+    expect(uiNext).toContain('projects/${id}/chats');
+    expect(uiNext).toContain("chat.title || '新對話'");
   });
 
   test('收件匣不進新版日常導覽，新手教學位於更多工具', () => {
@@ -42,9 +44,12 @@ describe('ui-next 平行介面', () => {
 
   test('除收件匣外，既有功能路由仍由同一個 router 提供給新版殼層', () => {
     [
-      "'/tasks'", "'/task/:id'", "'/projects'", "'/projects/:id'", "'/projects/:id/chat/:chatId'",
-      "'/projects/:id/wiki'", "'/projects/:id/db'", "'/projects/:id/deploy-sop'", "'/settings'",
-      "'/token-report'", "'/architecture'", "'/pipeline-flow'", "'/admin'", "'/admin/pipelines'"
+      "'/tasks'", "'/task/:id'", "'/task/:id/terminal'", "'/projects'", "'/projects/:id'",
+      "'/projects/:id/chat'", "'/projects/:id/chat/:chatId'", "'/projects/:id/wiki'", "'/projects/:id/wiki/:slug'",
+      "'/projects/:id/db'", "'/projects/:id/deploy-sop'", "'/settings'", "'/token-report'", "'/architecture'",
+      "'/pipeline-flow'", "'/admin'", "'/admin/users'", "'/admin/agents'", "'/admin/schedules'", "'/admin/pipelines'",
+      "'/admin/health'", "'/admin/rejections'", "'/admin/classify-samples'", "'/admin/prompt-logs'", "'/admin/port-pool'",
+      "'/admin/enterprise'"
     ].forEach(route => expect(app).toContain(route));
     expect(uiNext).toContain('<router-view />');
   });

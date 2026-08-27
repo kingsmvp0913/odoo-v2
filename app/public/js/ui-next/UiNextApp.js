@@ -95,7 +95,7 @@
   window.UiNextApp = Vue.defineComponent({
     name: 'UiNextApp', components: { UiNextIcon },
     setup() { return { toasts: window.appToasts, needsActionCount: window.needsActionCount, inboxUnread: window.inboxUnread, claudeUsage: window.claudeUsage, codexUsage: window.codexUsage }; },
-    data() { return { accountOpen: false, toolsOpen: false, commandOpen: false, commandQuery: '', projects: [], expandedProjects: {}, isAdmin: false, userName: '使用者' }; },
+    data() { return { accountOpen: false, toolsOpen: false, commandOpen: false, commandQuery: '', projects: [], projectChats: {}, expandedProjects: {}, isAdmin: false, userName: '使用者' }; },
     computed: {
       isLoggedIn() { return Api.authState.loggedIn; },
       projectUnreadTotal() { return Object.values(window.UnreadStore.byProject).reduce((total, count) => total + (count || 0), 0); },
@@ -139,7 +139,16 @@
     },
     beforeUnmount() { window.removeEventListener('keydown', this._onCommandKey); },
     methods: {
-      toggleProject(id) { this.expandedProjects[id] = !this.expandedProjects[id]; },
+      async toggleProject(project) {
+        const id = project.id;
+        const opening = !this.expandedProjects[id];
+        this.expandedProjects[id] = opening;
+        // 對話僅在展開專案時才讀，避免登入就對每個專案發請求；標題由既有 Chat API 回傳。
+        if (opening && !Object.prototype.hasOwnProperty.call(this.projectChats, id)) {
+          try { this.projectChats[id] = await Api.get(`projects/${id}/chats`); }
+          catch (e) { this.projectChats[id] = []; showToast('無法載入專案對話', 'error'); }
+        }
+      },
       showSearch() { this.commandOpen = true; },
       selectCommand(item) { this.commandOpen = false; this.commandQuery = ''; this.go(item.path); },
       openTour() { this.toolsOpen = false; window.TourManager.open(); },
@@ -162,7 +171,7 @@
           <button class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" @click="go('/projects')"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></button>
           <button class="ui-next-nav" :class="{ 'is-active': $route.path === '/admin/pipelines' }" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button>
           <button class="ui-next-nav" :class="{ 'is-active': $route.path === '/token-report' }" @click="go('/token-report')" v-if="isAdmin"><ui-next-icon name="chart"/>用量報表</button>
-          <div class="ui-next-projects" v-if="projects.length"><span class="ui-next-section-label">專案 Chat</span><div v-for="project in projects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}</button><button @click="toggleProject(project.id)">{{ expandedProjects[project.id] ? '⌃' : '⌄' }}</button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button @click="go('/projects/' + project.id + '/chat')">查看對話</button></div></div></div>
+          <div class="ui-next-projects" v-if="projects.length"><span class="ui-next-section-label">專案 Chat</span><div v-for="project in projects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}</button><button @click="toggleProject(project)">{{ expandedProjects[project.id] ? '⌃' : '⌄' }}</button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button v-for="chat in projectChats[project.id] || []" :key="chat.id" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button v-if="!(projectChats[project.id] || []).length" @click="go('/projects/' + project.id + '/chat')">尚無對話</button><button class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
           <div class="ui-next-bottom"><div v-if="isAdmin && usageRows.length" class="ui-next-usage" @click="go('/token-report')"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></div><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><button @click="openTour">新手教學</button><button @click="go('/architecture')">架構圖</button><button @click="go('/pipeline-flow')">流程圖</button><button v-if="isAdmin" @click="go('/token-report')">用量報表</button></div><button class="ui-next-tools" @click="toolsOpen = !toolsOpen">⊞　更多工具</button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button class="ui-next-account" @click="accountOpen = !accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><b>⌃</b></button></div></div>
         </aside>
         <main class="ui-next-main"><router-view /></main>
