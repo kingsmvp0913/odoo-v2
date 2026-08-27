@@ -31,6 +31,9 @@ window.loadInboxUnread = loadInboxUnread;
 
 const claudeUsage = ref(null);
 const codexUsage = ref(null);
+// ui-next 是另一個根介面，但讀取同一份已登入使用者的用量資料；明確掛出 ref，避免各自輪詢。
+window.claudeUsage = claudeUsage;
+window.codexUsage = codexUsage;
 async function loadClaudeUsage() {
   if (!Api.isLoggedIn()) return;
   // 用量僅管理員可見；非 admin 不打（避免 403 噪音）
@@ -59,7 +62,8 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/login', component: window.LoginView },
-    { path: '/', component: window.TaskListView, meta: { requiresAuth: true } },
+    { path: '/', component: window.UiNextEnabled ? window.UiNextQuestionView : window.TaskListView, meta: { requiresAuth: true } },
+    { path: '/tasks', component: window.TaskListView, meta: { requiresAuth: true } },
     { path: '/task/:id', component: window.TaskDetailView, meta: { requiresAuth: true } },
     { path: '/inbox', component: window.InboxView, meta: { requiresAuth: true } },
     { path: '/task/:id/terminal', component: window.TerminalView, meta: { requiresAuth: true } },
@@ -92,6 +96,15 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   if (to.meta.requiresAuth && !Api.isLoggedIn()) return '/login';
+  if (window.UiNextEnabled && to.meta.requiresAuth) {
+    try {
+      const me = await Api.get('auth/me');
+      if (me.role !== 'admin') {
+        window.location.replace(`${window.location.pathname}${window.location.hash}`);
+        return false;
+      }
+    } catch { return '/login'; }
+  }
   if (to.path === '/login' && Api.isLoggedIn()) return '/';
   if (to.meta.requiresAdmin) {
     try {
@@ -309,7 +322,9 @@ const App = defineComponent({
   `
 });
 
-const app = createApp(App);
+// ui-next 是可隨時移除 query string 回到現有介面的平行入口；兩套 shell 不共用 CSS class 或元件。
+const RootApp = window.UiNextEnabled ? window.UiNextApp : App;
+const app = createApp(RootApp);
 app.component('ConfirmDialogHost', window.ConfirmDialogHost);
 app.component('Skeleton', window.Skeleton);
 app.component('ReleaseModal', window.ReleaseModal);
