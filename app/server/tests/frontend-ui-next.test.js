@@ -40,4 +40,11 @@ describe('ui-next 平行介面', () => {
     ].forEach(route => expect(app).toContain(route));
     expect(uiNext).toContain('<router-view />');
   });
+
+  test('日常頁面與工具頁都有 ui-next 範圍內的視覺覆寫', () => {
+    [
+      '.task-card', '.project-card', '.chat-main', '.settings-section', '.wiki-body',
+      '.terminal-body', '.flow-diagram-panel', '.tr-table-card', '.nav-card'
+    ].forEach(selector => expect(css).toContain(`.ui-next-main ${selector}`));
+  });
 });
