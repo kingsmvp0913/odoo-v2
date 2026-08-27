@@ -94,7 +94,7 @@
 
   window.UiNextApp = Vue.defineComponent({
     name: 'UiNextApp', components: { UiNextIcon },
-    setup() { return { needsActionCount: window.needsActionCount, inboxUnread: window.inboxUnread, claudeUsage: window.claudeUsage, codexUsage: window.codexUsage }; },
+    setup() { return { toasts: window.appToasts, needsActionCount: window.needsActionCount, inboxUnread: window.inboxUnread, claudeUsage: window.claudeUsage, codexUsage: window.codexUsage }; },
     data() { return { accountOpen: false, toolsOpen: false, commandOpen: false, commandQuery: '', projects: [], expandedProjects: {}, isAdmin: false, userName: '使用者' }; },
     computed: {
       isLoggedIn() { return Api.authState.loggedIn; },
@@ -145,7 +145,8 @@
       openTour() { this.toolsOpen = false; window.TourManager.open(); },
       toProject(project) { this.$router.push(`/projects/${project.id}`); },
       go(path) { this.accountOpen = false; this.$router.push(path); },
-      logout() { Api.clearToken(); window.UserStore.role = ''; SocketManager.disconnectSocket(); this.$router.push('/login'); }
+      logout() { Api.clearToken(); window.UserStore.role = ''; SocketManager.disconnectSocket(); this.$router.push('/login'); },
+      toggleTheme() { window.ThemeManager.toggle(); }
     },
     template: `
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
@@ -162,7 +163,7 @@
           <button class="ui-next-nav" :class="{ 'is-active': $route.path === '/admin/pipelines' }" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button>
           <button class="ui-next-nav" :class="{ 'is-active': $route.path === '/token-report' }" @click="go('/token-report')" v-if="isAdmin"><ui-next-icon name="chart"/>用量報表</button>
           <div class="ui-next-projects" v-if="projects.length"><span class="ui-next-section-label">專案 Chat</span><div v-for="project in projects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}</button><button @click="toggleProject(project.id)">{{ expandedProjects[project.id] ? '⌃' : '⌄' }}</button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button @click="go('/projects/' + project.id + '/chat')">查看對話</button></div></div></div>
-          <div class="ui-next-bottom"><div v-if="isAdmin && usageRows.length" class="ui-next-usage" @click="go('/token-report')"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></div><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><button @click="openTour">新手教學</button><button @click="go('/architecture')">架構圖</button><button @click="go('/pipeline-flow')">流程圖</button><button v-if="isAdmin" @click="go('/token-report')">用量報表</button></div><button class="ui-next-tools" @click="toolsOpen = !toolsOpen">⊞　更多工具</button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button class="ui-next-account" @click="accountOpen = !accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><b>⌃</b></button></div></div>
+          <div class="ui-next-bottom"><div v-if="isAdmin && usageRows.length" class="ui-next-usage" @click="go('/token-report')"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></div><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><button @click="openTour">新手教學</button><button @click="go('/architecture')">架構圖</button><button @click="go('/pipeline-flow')">流程圖</button><button v-if="isAdmin" @click="go('/token-report')">用量報表</button></div><button class="ui-next-tools" @click="toolsOpen = !toolsOpen">⊞　更多工具</button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button class="ui-next-account" @click="accountOpen = !accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><b>⌃</b></button></div></div>
         </aside>
         <main class="ui-next-main"><router-view /></main>
         <div v-if="commandOpen" class="ui-next-command-backdrop" @click.self="commandOpen = false">
@@ -172,6 +173,11 @@
             <p v-if="!commandItems.length">找不到符合的項目</p>
           </section>
         </div>
+        <div class="toast-container">
+          <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}</div>
+        </div>
+        <confirm-dialog-host />
+        <tour-host />
       </div>
     `
   });

@@ -32,6 +32,14 @@ describe('ui-next 平行介面', () => {
     expect(uiNext).toContain('window.TourManager.open()');
   });
 
+  test('既有 View 的通知、確認視窗、教學與主題切換在新版殼層仍可用', () => {
+    expect(app).toContain('window.appToasts = toasts');
+    expect(uiNext).toContain('toasts: window.appToasts');
+    expect(uiNext).toContain('<confirm-dialog-host />');
+    expect(uiNext).toContain('<tour-host />');
+    expect(uiNext).toContain('window.ThemeManager.toggle()');
+  });
+
   test('除收件匣外，既有功能路由仍由同一個 router 提供給新版殼層', () => {
     [
       "'/tasks'", "'/task/:id'", "'/projects'", "'/projects/:id'", "'/projects/:id/chat/:chatId'",
