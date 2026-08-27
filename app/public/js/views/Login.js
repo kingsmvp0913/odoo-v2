@@ -101,7 +101,8 @@ window.LoginView = Vue.defineComponent({
     <div class="login-wrap">
       <!-- 登入 / 首次設定 -->
       <div class="login-box" v-if="mode !== 'register'">
-        <div class="login-title">AI Dev</div>
+        <img class="login-brand-mark" src="favicon.svg" alt="OAA">
+        <div class="login-title">Odoo AI 自動開發平台</div>
         <div class="login-sub">{{ mode === 'setup' ? '首次設定管理帳號' : '登入工作台' }}</div>
           <div v-if="error" class="error-msg">{{ error }}</div>
           <form @submit.prevent="submit">
@@ -130,7 +131,8 @@ window.LoginView = Vue.defineComponent({
         <div class="login-box register-box" v-else>
           <div class="register-split">
             <aside class="register-aside">
-              <div class="login-title">AI Dev</div>
+              <img class="login-brand-mark" src="favicon.svg" alt="OAA">
+              <div class="login-title">Odoo AI 自動開發平台</div>
               <div class="login-sub">註冊新帳號</div>
               <ul class="register-steps">
                 <li v-for="(s, i) in steps" :key="i" class="register-step" :class="{ 'is-active': step === i+1, 'is-done': step > i+1 }">

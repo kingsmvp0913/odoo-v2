@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="16" fill="#18181b"/>
+  <g fill="none" stroke="#f4f4f5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- O = Odoo；兩個 A 分別代表 AI 與 Auto。 -->
+    <circle cx="12" cy="32" r="8.5"/>
+    <path d="m22 43 8-22 8 22m-12-9h8"/>
+    <path d="m39 43 8-22 8 22m-12-9h8"/>
+  </g>
+</svg>

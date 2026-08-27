@@ -216,12 +216,13 @@ const App = defineComponent({
       <div class="app-shell">
         <header class="mobile-topbar">
           <button class="drawer-toggle" type="button" @click="drawerOpen = true" aria-label="開啟選單"><span class="drawer-toggle-bars"></span></button>
-          <span class="mobile-topbar-title">AI Dev 工作台</span>
+          <span class="mobile-topbar-title">Odoo AI 自動開發平台</span>
         </header>
         <div v-if="drawerOpen" class="drawer-overlay" @click="drawerOpen = false"></div>
         <aside class="sidebar" :class="{ 'is-open': drawerOpen }">
           <div class="sidebar-header">
-            <div>AI Dev<span>工作台</span></div>
+            <img class="sidebar-brand-mark" src="favicon.svg" alt="OAA">
+            <div class="sidebar-brand-copy"><strong>Odoo AI</strong><span>自動開發平台</span></div>
             <button @click="toggleTheme" :title="isDark ? '切換淺色模式' : '切換深色模式'"
               style="margin-left:auto;background:transparent;border:none;color:var(--sidebar-text);cursor:pointer;font-size:16px;padding:2px 4px;line-height:1">
               {{ isDark ? '☀️' : '🌙' }}
