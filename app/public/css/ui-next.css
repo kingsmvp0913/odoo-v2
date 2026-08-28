@@ -27,6 +27,14 @@
 
 /* Pipeline 是監控工具而非一般設定頁：兩個即時區塊以相同層級呈現，讓空狀態也乾淨可讀。 */
 .ui-next-main .admin-pipelines-wrap{max-width:1180px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ui-next-main .admin-pipelines-wrap .settings-section{margin:0;padding:0;overflow:hidden}.ui-next-main .admin-pipelines-wrap .section-title{margin:0;padding:17px 18px 13px;border-bottom:1px solid var(--border);font-size:16px}.ui-next-main .admin-pipelines-wrap .table-wrap{border:0;border-radius:0;box-shadow:none}.ui-next-main .admin-pipelines-wrap .data-table th{background:var(--bg)}.ui-next-main .admin-pipelines-wrap .empty-row td{padding:42px 18px;color:var(--text-muted);text-align:center}
+
+/* 新版導覽採單色、分層與明確留白；避免把每個入口都做成彩色按鈕。 */
+.ui-next-sidebar{padding:16px 10px 12px;box-shadow:12px 0 34px color-mix(in srgb,var(--text) 3%,transparent)}
+.ui-next-brand{padding:4px 10px 20px}.ui-next-brand img{filter:drop-shadow(0 3px 6px color-mix(in srgb,var(--text) 18%,transparent))}
+.ui-next-new{border:1px solid var(--border);border-radius:11px;box-shadow:0 8px 20px color-mix(in srgb,var(--text) 8%,transparent),var(--shadow-sm)}
+.ui-next-nav{position:relative;min-height:38px}.ui-next-nav.is-active{background:var(--surface);box-shadow:var(--shadow-sm)}.ui-next-nav.is-active::before{position:absolute;left:0;width:3px;height:17px;border-radius:99px;background:currentColor;content:""}
+.ui-next-sidebar-rule{margin:13px 4px 8px}.ui-next-section-label{padding-top:9px}.ui-next-projects{padding:2px 2px 0}.ui-next-project-head button:first-child{font-size:13px}.ui-next-project-chats{margin-left:19px;padding:3px 0}.ui-next-project-chats button{border-radius:6px;font-size:12px}
+.ui-next-tools,.ui-next-account{min-height:37px}.ui-next-usage{border-radius:12px;box-shadow:var(--shadow-sm)}.ui-next-account-menu{border-radius:12px;box-shadow:var(--shadow-lg)}
 @media(max-width:1080px){.ui-next-main .tr-chart-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ui-next-main .admin-pipelines-wrap{grid-template-columns:1fr}}@media(max-width:720px){.ui-next-main .tr-summary-grid,.ui-next-main .tr-chart-grid{grid-template-columns:1fr}.ui-next-main .content,.ui-next-main .page-body{padding:18px}.ui-next-main .topbar,.ui-next-main .page-header{padding:15px 18px}}
 
 /* 真正的 ui-next 頁面：獨立資料排版，不再依賴既有 View 的 class 或 DOM。 */

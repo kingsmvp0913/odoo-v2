@@ -8,10 +8,12 @@ window.appToasts = toasts;
 // 原本取 Date.now()：同一輪同步程式碼連發的多則會拿到相同毫秒值，先到期的那則會把同 id 的
 // 其他則一起濾掉——訊息互相吃掉且不報錯（socket 事件批次抵達時就是這個情境）。
 let _toastSeq = 0;
-function showToast(message, level = 'info', duration = 4000) {
+function showToast(message, level = "info", duration = 4000) {
   const id = ++_toastSeq;
   toasts.value.push({ id, message, level });
-  setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, duration);
+  setTimeout(() => {
+    toasts.value = toasts.value.filter((t) => t.id !== id);
+  }, duration);
 }
 window.showToast = showToast;
 
@@ -27,7 +29,12 @@ const inboxUnread = ref(0);
 window.inboxUnread = inboxUnread;
 async function loadInboxUnread() {
   if (!Api.isLoggedIn || !Api.isLoggedIn()) return;
-  try { inboxUnread.value = ((await Api.get('inbox/unread-count')) || {}).count || 0; } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
+  try {
+    inboxUnread.value =
+      ((await Api.get("inbox/unread-count")) || {}).count || 0;
+  } catch (e) {
+    /* 靜默：badge 不是關鍵路徑 */
+  }
 }
 window.loadInboxUnread = loadInboxUnread;
 
@@ -39,13 +46,21 @@ window.codexUsage = codexUsage;
 async function loadClaudeUsage() {
   if (!Api.isLoggedIn()) return;
   // 用量僅管理員可見；非 admin 不打（避免 403 噪音）
-  if (window.UserStore.role !== 'admin') return;
-  try { claudeUsage.value = await Api.get('claude-usage'); } catch { /* keep stale */ }
+  if (window.UserStore.role !== "admin") return;
+  try {
+    claudeUsage.value = await Api.get("claude-usage");
+  } catch {
+    /* keep stale */
+  }
 }
 window.loadClaudeUsage = loadClaudeUsage;
 async function loadCodexUsage() {
-  if (window.UserStore.role !== 'admin') return;
-  try { codexUsage.value = await Api.get('codex-usage'); } catch { /* keep stale */ }
+  if (window.UserStore.role !== "admin") return;
+  try {
+    codexUsage.value = await Api.get("codex-usage");
+  } catch {
+    /* keep stale */
+  }
 }
 window.loadCodexUsage = loadCodexUsage;
 
@@ -54,84 +69,313 @@ window.loadCodexUsage = loadCodexUsage;
 async function loadUnread() {
   if (!Api.isLoggedIn()) return;
   try {
-    const { byProject } = await Api.get('chats/unread');
+    const { byProject } = await Api.get("chats/unread");
     window.UnreadStore.byProject = byProject || {};
-  } catch { /* keep stale */ }
+  } catch {
+    /* keep stale */
+  }
 }
 window.loadUnread = loadUnread;
+
+const nextAdminTool = (view, title, description) =>
+  window.UiNextEnabled
+    ? {
+        ...window.UiNextAdminToolView,
+        props: {
+          title: { default: title },
+          description: { default: description },
+          view: { default: view },
+        },
+      }
+    : view;
+const nextTool = (view, title, description, back) =>
+  window.UiNextEnabled
+    ? {
+        ...window.UiNextToolFrame,
+        props: {
+          title: { default: title },
+          description: { default: description },
+          back: { default: back },
+          view: { default: view },
+        },
+      }
+    : view;
 
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: '/login', component: window.LoginView },
-    { path: '/', component: window.UiNextEnabled ? window.UiNextQuestionView : window.TaskListView, meta: { requiresAuth: true } },
-    { path: '/tasks', component: window.UiNextEnabled ? window.UiNextTaskListView : window.TaskListView, meta: { requiresAuth: true } },
-    { path: '/task/:id', component: window.TaskDetailView, meta: { requiresAuth: true } },
-    { path: '/inbox', component: window.InboxView, meta: { requiresAuth: true } },
-    { path: '/task/:id/terminal', component: window.TerminalView, meta: { requiresAuth: true } },
-    { path: '/projects', component: window.UiNextEnabled ? window.UiNextProjectListView : window.ProjectListView, meta: { requiresAuth: true } },
-    { path: '/projects/:id', component: window.ProjectDetailView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/wiki', component: window.WikiView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/wiki/:slug', component: window.WikiView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/chat', component: window.UiNextEnabled ? window.UiNextProjectChatView : window.ProjectChatView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/chat/:chatId', component: window.UiNextEnabled ? window.UiNextProjectChatView : window.ProjectChatView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/db', component: window.ProjectDbQueryView, meta: { requiresAuth: true } },
-    { path: '/projects/:id/deploy-sop', component: window.DeploySopView, meta: { requiresAuth: true } },
-    { path: '/token-report', component: window.UiNextEnabled ? window.UiNextTokenReportView : window.TokenReportView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/settings', component: window.SettingsView, meta: { requiresAuth: true } },
-    { path: '/architecture', component: window.ArchitectureView, meta: { requiresAuth: true } },
-    { path: '/pipeline-flow', component: window.PipelineFlowView, meta: { requiresAuth: true } },
-    { path: '/admin', component: window.AdminView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/users', component: window.AdminUsersView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/agents', component: window.AdminAgentsView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/schedules', component: window.AdminSchedulesView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/pipelines', component: window.UiNextEnabled ? window.UiNextPipelineView : window.AdminPipelinesView, meta: { requiresAuth: true } },
-    { path: '/admin/health', component: window.AdminHealthCheckView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/rejections', component: window.AdminRejectionsView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/classify-samples', component: window.AdminClassifySamplesView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/prompt-logs', component: window.AdminPromptLogsView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/port-pool', component: window.AdminPortPoolView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/admin/enterprise', component: window.AdminEnterpriseView, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/:pathMatch(.*)*', redirect: '/' }
-  ]
+    { path: "/login", component: window.LoginView },
+    {
+      path: "/",
+      component: window.UiNextEnabled
+        ? window.UiNextQuestionView
+        : window.TaskListView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/tasks",
+      component: window.UiNextEnabled
+        ? window.UiNextTaskListView
+        : window.TaskListView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/task/:id",
+      component: window.UiNextEnabled
+        ? window.UiNextTaskDetailView
+        : window.TaskDetailView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/inbox",
+      component: window.InboxView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/task/:id/terminal",
+      component: nextTool(
+        window.TerminalView,
+        "完整終端機",
+        "查看任務執行輸出與即時終端機紀錄。",
+        "/tasks",
+      ),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects",
+      component: window.UiNextEnabled
+        ? window.UiNextProjectListView
+        : window.ProjectListView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id",
+      component: window.UiNextEnabled
+        ? window.UiNextProjectDetailView
+        : window.ProjectDetailView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id/wiki",
+      component: window.UiNextEnabled ? window.UiNextWikiView : window.WikiView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id/wiki/:slug",
+      component: window.UiNextEnabled ? window.UiNextWikiView : window.WikiView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id/chat",
+      component: window.UiNextEnabled
+        ? window.UiNextProjectChatView
+        : window.ProjectChatView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id/chat/:chatId",
+      component: window.UiNextEnabled
+        ? window.UiNextProjectChatView
+        : window.ProjectChatView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id/db",
+      component: nextTool(
+        window.ProjectDbQueryView,
+        "資料庫查詢",
+        "管理連線並以受控方式查詢專案資料庫。",
+        "project",
+      ),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/projects/:id/deploy-sop",
+      component: window.UiNextEnabled
+        ? window.UiNextDeploySopView
+        : window.DeploySopView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/token-report",
+      component: window.UiNextEnabled
+        ? window.UiNextTokenReportView
+        : window.TokenReportView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/settings",
+      component: window.UiNextEnabled
+        ? window.UiNextSettingsView
+        : window.SettingsView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/architecture",
+      component: window.UiNextEnabled
+        ? {
+            ...window.UiNextDiagramView,
+            props: { type: { default: "architecture" } },
+          }
+        : window.ArchitectureView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/pipeline-flow",
+      component: window.UiNextEnabled
+        ? {
+            ...window.UiNextDiagramView,
+            props: { type: { default: "pipeline" } },
+          }
+        : window.PipelineFlowView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/admin",
+      component: window.UiNextEnabled
+        ? window.UiNextAdminView
+        : window.AdminView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/users",
+      component: nextAdminTool(
+        window.AdminUsersView,
+        "使用者管理",
+        "管理帳號、角色與平台存取權限。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/agents",
+      component: nextAdminTool(
+        window.AdminAgentsView,
+        "Agent 管理",
+        "調整各 Agent 的模型、提示詞與執行設定。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/schedules",
+      component: nextAdminTool(
+        window.AdminSchedulesView,
+        "排程",
+        "檢視背景工作的狀態、週期與下次執行時間。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/pipelines",
+      component: window.UiNextEnabled
+        ? window.UiNextPipelineView
+        : window.AdminPipelinesView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/admin/health",
+      component: nextAdminTool(
+        window.AdminHealthCheckView,
+        "工作流程健檢",
+        "檢視 Pipeline 健康度與可追蹤的改善建議。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/rejections",
+      component: nextAdminTool(
+        window.AdminRejectionsView,
+        "退回原因管理",
+        "檢視與整理人工退回的原因及分類。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/classify-samples",
+      component: nextAdminTool(
+        window.AdminClassifySamplesView,
+        "失敗分類樣本",
+        "檢視需要人工歸納的失敗案例。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/prompt-logs",
+      component: nextAdminTool(
+        window.AdminPromptLogsView,
+        "Prompt 送出記錄",
+        "檢視實際送往 AI 的提示詞紀錄。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/port-pool",
+      component: nextAdminTool(
+        window.AdminPortPoolView,
+        "測試區 Port 池",
+        "管理測試環境可使用的 Port 與租用狀態。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: "/admin/enterprise",
+      component: nextAdminTool(
+        window.AdminEnterpriseView,
+        "企業版來源",
+        "管理 Enterprise addons 原始碼與同步狀態。",
+      ),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    { path: "/:pathMatch(.*)*", redirect: "/" },
+  ],
 });
 
 router.beforeEach(async (to) => {
-  if (to.meta.requiresAuth && !Api.isLoggedIn()) return '/login';
+  if (to.meta.requiresAuth && !Api.isLoggedIn()) return "/login";
   if (window.UiNextEnabled && to.meta.requiresAuth) {
     try {
-      const me = await Api.get('auth/me');
-      if (me.role !== 'admin') {
-        window.location.replace(`${window.location.pathname}${window.location.hash}`);
+      const me = await Api.get("auth/me");
+      if (me.role !== "admin") {
+        window.location.replace(
+          `${window.location.pathname}${window.location.hash}`,
+        );
         return false;
       }
-    } catch { return '/login'; }
+    } catch {
+      return "/login";
+    }
   }
-  if (to.path === '/login' && Api.isLoggedIn()) return '/';
+  if (to.path === "/login" && Api.isLoggedIn()) return "/";
   if (to.meta.requiresAdmin) {
     try {
-      const me = await Api.get('auth/me');
-      if (me.role !== 'admin') return '/';
-    } catch { return '/login'; }
+      const me = await Api.get("auth/me");
+      if (me.role !== "admin") return "/";
+    } catch {
+      return "/login";
+    }
   }
 });
 
 router.afterEach((to) => {
-  if (Api.isLoggedIn() && to.path !== '/login') {
+  if (Api.isLoggedIn() && to.path !== "/login") {
     // 每次導覽刷新角色（登入後第一次導覽即設好 role）→ 再依角色載入用量小工具
-    Api.get('auth/me').then(me => {
-      window.UserStore.role = me.role || '';
-      // 深色偏好也在此同步：表單登入只走 afterEach（不經 mounted 的已登入分支），
-      // 漏了會讓無痕登入永遠停在預設淺色（localStorage 空、又沒讀 DB 偏好）。
-      ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
-      SocketManager.initSocket(me.id);
-      loadClaudeUsage();
-      loadCodexUsage();
-      loadUnread();
-      loadInboxUnread();
-    }).catch(() => {});
+    Api.get("auth/me")
+      .then((me) => {
+        window.UserStore.role = me.role || "";
+        // 深色偏好也在此同步：表單登入只走 afterEach（不經 mounted 的已登入分支），
+        // 漏了會讓無痕登入永遠停在預設淺色（localStorage 空、又沒讀 DB 偏好）。
+        ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
+        SocketManager.initSocket(me.id);
+        loadClaudeUsage();
+        loadCodexUsage();
+        loadUnread();
+        loadInboxUnread();
+      })
+      .catch(() => {});
   }
-  if (to.path === '/login') { SocketManager.disconnectSocket(); window.UserStore.role = ''; }
+  if (to.path === "/login") {
+    SocketManager.disconnectSocket();
+    window.UserStore.role = "";
+  }
 });
 
 // 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊：原本 60s 輪詢配 60s TTL＝每次都 miss，
@@ -140,18 +384,32 @@ setInterval(loadClaudeUsage, 10 * 60 * 1000);
 setInterval(loadCodexUsage, 10 * 60 * 1000);
 
 const App = defineComponent({
-  name: 'App',
-  setup() { return { toasts, needsActionCount, inboxUnread, claudeUsage, codexUsage }; },
-  data() { return { _role: '', drawerOpen: false, isDark: (window.ThemeManager && ThemeManager.current() === 'dark') }; },
+  name: "App",
+  setup() {
+    return { toasts, needsActionCount, inboxUnread, claudeUsage, codexUsage };
+  },
+  data() {
+    return {
+      _role: "",
+      drawerOpen: false,
+      isDark: window.ThemeManager && ThemeManager.current() === "dark",
+    };
+  },
   watch: {
     // 點了 drawer 裡的連結後，頁面換了但遮罩與側欄還蓋在上面，看起來像卡住 → 導覽即關。
-    '$route'() { this.drawerOpen = false; }
+    $route() {
+      this.drawerOpen = false;
+    },
   },
   computed: {
-    isLoggedIn() { return Api.authState.loggedIn; },
+    isLoggedIn() {
+      return Api.authState.loggedIn;
+    },
     // 角色以 reactive 的 UserStore 為單一來源：每次導覽（含剛登入）由 afterEach 更新，
     // 不再只靠 mounted 一次性載入 → 表單登入後 isAdmin 立即正確，免重新整理
-    isAdmin() { return window.UserStore.role === 'admin'; },
+    isAdmin() {
+      return window.UserStore.role === "admin";
+    },
     usageBars() {
       const u = this.claudeUsage;
       if (!u || !u.available) return [];
@@ -160,21 +418,25 @@ const App = defineComponent({
         if (!w || w.utilization == null) return;
         const pct = Math.round(w.utilization);
         rows.push({
-          key, label, pct,
-          level: pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok',
-          reset: w.resets_at ? this.fmtReset(w.resets_at) : ''
+          key,
+          label,
+          pct,
+          level: pct >= 90 ? "crit" : pct >= 70 ? "warn" : "ok",
+          reset: w.resets_at ? this.fmtReset(w.resets_at) : "",
         });
       };
-      add('5h', '5 小時', u.five_hour);
-      add('7d', '本週', u.seven_day);
-      add('opus', 'Opus 週', u.seven_day_opus);
-      add('sonnet', 'Sonnet 週', u.seven_day_sonnet);
+      add("5h", "5 小時", u.five_hour);
+      add("7d", "本週", u.seven_day);
+      add("opus", "Opus 週", u.seven_day_opus);
+      add("sonnet", "Sonnet 週", u.seven_day_sonnet);
       return rows;
     },
-    usageStale() { return !!(this.claudeUsage && this.claudeUsage.stale); },
+    usageStale() {
+      return !!(this.claudeUsage && this.claudeUsage.stale);
+    },
     usageUpdatedLabel() {
       const iso = this.claudeUsage && this.claudeUsage.updated_at;
-      return iso ? this.fmtReset(iso) : '';
+      return iso ? this.fmtReset(iso) : "";
     },
     codexUsageRows() {
       const u = this.codexUsage;
@@ -182,46 +444,79 @@ const App = defineComponent({
       const rows = [];
       const add = (key, label, window) => {
         if (!window) return;
-        rows.push({ key, label, pct: Math.round(window.used_percent), remaining: Math.round(window.remaining_percent),
-          level: window.used_percent >= 90 ? 'crit' : window.used_percent >= 70 ? 'warn' : 'ok',
-          reset: window.resets_at ? this.fmtReset(window.resets_at) : '' });
+        rows.push({
+          key,
+          label,
+          pct: Math.round(window.used_percent),
+          remaining: Math.round(window.remaining_percent),
+          level:
+            window.used_percent >= 90
+              ? "crit"
+              : window.used_percent >= 70
+                ? "warn"
+                : "ok",
+          reset: window.resets_at ? this.fmtReset(window.resets_at) : "",
+        });
       };
-      add('primary', '主要額度', u.primary);
-      add('secondary', '週額度', u.secondary);
+      add("primary", "主要額度", u.primary);
+      add("secondary", "週額度", u.secondary);
       return rows;
     },
-    tourRemaining() { return window.TourManager ? TourManager.remainingCount() : 0; },
+    tourRemaining() {
+      return window.TourManager ? TourManager.remainingCount() : 0;
+    },
     projectUnreadTotal() {
-      return Object.values(window.UnreadStore.byProject).reduce((a, b) => a + (b || 0), 0);
+      return Object.values(window.UnreadStore.byProject).reduce(
+        (a, b) => a + (b || 0),
+        0,
+      );
     },
   },
   async mounted() {
-    this._onThemeChange = e => { this.isDark = e.detail === 'dark'; };
-    window.addEventListener('themechange', this._onThemeChange);
-    this._onKeydown = e => { if (e.key === 'Escape') this.drawerOpen = false; };
-    window.addEventListener('keydown', this._onKeydown);
+    this._onThemeChange = (e) => {
+      this.isDark = e.detail === "dark";
+    };
+    window.addEventListener("themechange", this._onThemeChange);
+    this._onKeydown = (e) => {
+      if (e.key === "Escape") this.drawerOpen = false;
+    };
+    window.addEventListener("keydown", this._onKeydown);
     if (Api.isLoggedIn()) {
-      const me = await Api.get('auth/me').catch(() => ({}));
-      this._role = me.role || '';
-      window.UserStore.role = me.role || '';
+      const me = await Api.get("auth/me").catch(() => ({}));
+      this._role = me.role || "";
+      window.UserStore.role = me.role || "";
       ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
-      this.isDark = ThemeManager.current() === 'dark';
+      this.isDark = ThemeManager.current() === "dark";
       loadClaudeUsage();
       loadCodexUsage();
       loadUnread();
     }
   },
   unmounted() {
-    window.removeEventListener('themechange', this._onThemeChange);
-    window.removeEventListener('keydown', this._onKeydown);
+    window.removeEventListener("themechange", this._onThemeChange);
+    window.removeEventListener("keydown", this._onKeydown);
   },
   methods: {
     fmtReset(iso) {
-      return new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return new Date(iso).toLocaleString("zh-TW", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     },
-    toggleTheme() { ThemeManager.toggle(); },
-    logout() { Api.clearToken(); window.UserStore.role = ''; SocketManager.disconnectSocket(); this.$router.push('/login'); },
-    openTour() { TourManager.open(); }
+    toggleTheme() {
+      ThemeManager.toggle();
+    },
+    logout() {
+      Api.clearToken();
+      window.UserStore.role = "";
+      SocketManager.disconnectSocket();
+      this.$router.push("/login");
+    },
+    openTour() {
+      TourManager.open();
+    },
   },
   template: `
     <template v-if="!isLoggedIn || $route.path === '/login'">
@@ -321,15 +616,15 @@ const App = defineComponent({
     </div>
     <confirm-dialog-host />
     <tour-host />
-  `
+  `,
 });
 
 // ui-next 是可隨時移除 query string 回到現有介面的平行入口；兩套 shell 不共用 CSS class 或元件。
 const RootApp = window.UiNextEnabled ? window.UiNextApp : App;
 const app = createApp(RootApp);
-app.component('ConfirmDialogHost', window.ConfirmDialogHost);
-app.component('Skeleton', window.Skeleton);
-app.component('ReleaseModal', window.ReleaseModal);
-app.component('TourHost', window.TourHost);
+app.component("ConfirmDialogHost", window.ConfirmDialogHost);
+app.component("Skeleton", window.Skeleton);
+app.component("ReleaseModal", window.ReleaseModal);
+app.component("TourHost", window.TourHost);
 app.use(router);
-app.mount('#app');
+app.mount("#app");
