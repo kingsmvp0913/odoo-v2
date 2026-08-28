@@ -473,8 +473,7 @@
 <div ref="messages" class="ui-next-thread-messages">
 <div v-if="loadingMsgs" class="ui-next-empty-state">載入訊息中…</div>
 <article v-for="message in messages" :key="message.id" :class="message.role">
-<div class="ui-next-message" v-html="renderMd(message.content)" v-show="message.content">
-</div>
+<div class="ui-next-message" v-html="renderMd(message.content)" v-show="message.content"></div>
 <div v-if="(message.attachments&&message.attachments.length)||(message.pending_previews&&message.pending_previews.length)" class="ui-next-message-files">
 <img v-for="attachment in (message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id)">
 <img v-for="(url,index) in (message.pending_previews||[])" :key="'pending'+index" :src="url">
@@ -901,8 +900,7 @@
 <section class="ui-next-panel ui-next-events">
 <h2>執行輸出</h2>
 <div ref="eventsBox" @scroll="onEventsScroll">
-<pre v-for="event in events" :key="event.id||event.content" v-html="ansiToHtml(event.content)">
-</pre>
+<pre v-for="event in events" :key="event.id||event.content" v-html="ansiToHtml(event.content)"></pre>
 <p v-if="!events.length">尚無執行輸出。</p>
 </div>
 <router-link :to="'/task/'+task.id+'/terminal'">開啟完整終端機</router-link>
@@ -1110,6 +1108,10 @@
     watch: window.TaskListView.watch,
     async created() {
       await window.TaskListView.created.call(this);
+      const tab = this.$route.query.tab;
+      if (["needs_action", "pending", "paused", "all", "archived"].includes(tab)) {
+        this.filter = tab;
+      }
     },
     mounted() {
       window.TaskListView.mounted.call(this);

@@ -129,6 +129,7 @@ const router = createRouter({
     {
       path: "/inbox",
       component: window.InboxView,
+      redirect: window.UiNextEnabled ? "/tasks?tab=needs_action" : undefined,
       meta: { requiresAuth: true },
     },
     {

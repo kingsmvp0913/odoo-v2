@@ -78,6 +78,8 @@ describe("ui-next 平行介面", () => {
 
   test("收件匣不進新版日常導覽，新手教學位於更多工具", () => {
     expect(uiNext).not.toMatch(/go\(["']\/inbox["']\)/);
+    expect(app).toContain('redirect: window.UiNextEnabled ? "/tasks?tab=needs_action" : undefined');
+    expect(uiNextPages).toContain("this.$route.query.tab");
     expect(uiNext).toContain("新手教學");
     expect(uiNext).toContain("window.TourManager.open()");
     expect(uiNext).toMatch(/go\(["']\/admin\/pipelines["']\)/);
@@ -153,5 +155,23 @@ describe("ui-next 平行介面", () => {
     expect(app).toMatch(/nextTool\(\s*window\.TerminalView/);
     expect(pagesCss).toContain(".ui-next-wiki-layout");
     expect(pagesCss).toContain(".ui-next-sop-page");
+  });
+  test("Next Shell 具有獨立 token、深色模式、鍵盤命令面板與減少動態效果的隔離契約", () => {
+    expect(uiNext).toContain('data-ui="next"');
+    expect(uiNext).toContain('ref="commandPalette"');
+    expect(uiNext).toContain('aria-modal="true"');
+    expect(uiNext).toContain('ref="commandInput"');
+    expect(uiNext).toContain("this.focusCommand();");
+    expect(uiNext).toContain("trapCommandFocus(event)");
+    expect(css).toContain('[data-ui="next"]{--next-bg:');
+    expect(css).toContain('html[data-theme="dark"] [data-ui="next"]');
+    expect(css).toContain('@media(prefers-reduced-motion:reduce)');
+    expect(css).toContain('@media(min-width:768px) and (max-width:1199px)');
+    expect(css).toContain('@media(max-width:767px)');
+  });
+
+  test("動態 HTML 容器不保留子節點，避免 Vue 在進入詳情頁時拒絕編譯", () => {
+    expect(uiNextPages).toContain('v-html="renderMd(message.content)" v-show="message.content"></div>');
+    expect(uiNextPages).toContain('v-html="ansiToHtml(event.content)"></pre>');
   });
 });

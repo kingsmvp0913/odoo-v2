@@ -148,6 +148,7 @@
         projects: [],
         projectChats: {},
         expandedProjects: {},
+        mobileSidebarOpen: false,
         isAdmin: false,
         userName: "使用者",
       };
@@ -230,6 +231,7 @@
           ) {
             event.preventDefault();
             this.commandOpen = true;
+            this.focusCommand();
           }
           if (event.key === "Escape") this.commandOpen = false;
         };
@@ -261,6 +263,7 @@
       },
       showSearch() {
         this.commandOpen = true;
+        this.focusCommand();
       },
       selectCommand(item) {
         this.commandOpen = false;
@@ -287,11 +290,35 @@
       toggleTheme() {
         window.ThemeManager.toggle();
       },
+      focusCommand() {
+        this.$nextTick(() => {
+          const input = this.$refs.commandPalette && this.$refs.commandPalette.querySelector("input");
+          if (input) input.focus();
+        });
+      },
+      trapCommandFocus(event) {
+        if (event.key !== "Tab") return;
+        const focusable = this.$refs.commandPalette
+          ? Array.from(this.$refs.commandPalette.querySelectorAll("input, button:not([disabled])"))
+          : [];
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      },
     },
     template: `
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
-      <div v-else class="ui-next-shell">
-        <aside class="ui-next-sidebar">
+      <div v-else class="ui-next-shell" data-ui="next">
+        <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" @click="mobileSidebarOpen = true"><ui-next-icon name="grid"/></button>
+        <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="mobileSidebarOpen = false"></div>
+        <aside class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }">
           <div class="ui-next-brand"><img src="favicon.svg" alt="OAA"><span><b>Odoo AI</b><small>自動開發平台</small></span></div>
           <button class="ui-next-new" @click="go('/')"><ui-next-icon name="plus"/>新對話</button>
           <button class="ui-next-search" @click="showSearch"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
@@ -304,9 +331,9 @@
           <div class="ui-next-bottom"><div v-if="isAdmin && usageRows.length" class="ui-next-usage" @click="go('/token-report')"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></div><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><small>其他功能</small><button @click="openTour"><ui-next-icon name="book"/>新手教學</button><button v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button class="ui-next-tools" @click="toolsOpen = !toolsOpen"><ui-next-icon name="grid"/>更多工具 <b>{{ toolsOpen ? '⌃' : '⌄' }}</b></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button class="ui-next-account" @click="accountOpen = !accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><b>⌃</b></button></div></div>
         </aside>
         <main class="ui-next-main"><router-view /></main>
-        <div v-if="commandOpen" class="ui-next-command-backdrop" @click.self="commandOpen = false">
-          <section class="ui-next-command" role="dialog" aria-label="快速切換">
-            <input v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…">
+        <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="commandOpen = false" @keydown.esc="commandOpen = false" @keydown="trapCommandFocus">
+          <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
+            <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…">
             <button v-for="item in commandItems" :key="item.path" @click="selectCommand(item)">{{ item.label }}<span>↵</span></button>
             <p v-if="!commandItems.length">找不到符合的項目</p>
           </section>
