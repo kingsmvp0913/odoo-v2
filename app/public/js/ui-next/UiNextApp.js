@@ -249,6 +249,7 @@
         toolsOpen: false,
         commandOpen: false,
         commandQuery: "",
+        commandIndex: 0,
         commandTrigger: null,
         toolsTrigger: null,
         accountTrigger: null,
@@ -355,8 +356,7 @@
             event.key.toLowerCase() === "k"
           ) {
             event.preventDefault();
-            this.commandOpen = true;
-            this.focusCommand();
+            this.openCommand();
           }
           if (event.key === "Escape") {
             this.closeCommand();
@@ -413,14 +413,40 @@
         this.accountOpen = false;
         if (restoreFocus) this.$nextTick(() => (hadTools ? this.toolsTrigger : hadAccount ? this.accountTrigger : null)?.focus());
       },
-      showSearch(event) {
-        this.commandTrigger = event && event.currentTarget;
+      // 開啟 palette 的唯一入口。搜尋鈕與 ⌘K 兩條路徑都走這裡——
+      // 原本 ⌘K 是直接設 commandOpen=true，於是鎖捲動與索引重設只在點按鈕時生效。
+      openCommand(trigger) {
+        this.commandTrigger = trigger || null;
         this.commandOpen = true;
+        this.commandIndex = 0;
+        this.lockBodyScroll(true);
         this.focusCommand();
       },
+      showSearch(event) {
+        this.openCommand(event && event.currentTarget);
+      },
       closeCommand() {
+        // Escape 是全域監聽，palette 沒開時也會呼叫到這裡；
+        // 不擋的話會把別人鎖的背景捲動一起解掉。
+        if (!this.commandOpen) return;
         this.commandOpen = false;
+        this.lockBodyScroll(false);
         this.$nextTick(() => this.commandTrigger && this.commandTrigger.focus());
+      },
+      // overlay 開啟時背景不該跟著捲動：不鎖的話在 palette 內滾到底會穿透到後面的頁面。
+      lockBodyScroll(on) {
+        document.body.style.overflow = on ? "hidden" : "";
+      },
+      // ⌘K 的使用者幾乎都在用鍵盤，沒有方向鍵等於只能改用滑鼠點。
+      // 循環（%）而不是夾在兩端：清單短時從最後一項往下回到第一項比較順手。
+      moveCommand(step) {
+        const total = this.commandItems.length;
+        if (!total) return;
+        this.commandIndex = (this.commandIndex + step + total) % total;
+      },
+      chooseCommand() {
+        const item = this.commandItems[this.commandIndex];
+        if (item) this.selectCommand(item);
       },
       selectCommand(item) {
         this.closeCommand();
@@ -493,10 +519,14 @@
           <div class="ui-next-bottom"><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><small>其他功能</small><button @click="openTour"><ui-next-icon name="book"/>新手教學</button><button v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button ref="accountTrigger" class="ui-next-account" @click="toggleAccount($event)" :aria-expanded="accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div><router-link v-if="isAdmin && usageRows.length" class="ui-next-usage" to="/token-report"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></router-link></div>
         </aside>
         <main id="ui-next-main" class="ui-next-main" tabindex="-1"><router-view :key="$route.fullPath" /></main>
-        <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown="trapCommandFocus">
+        <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown.down.prevent="moveCommand(1)" @keydown.up.prevent="moveCommand(-1)" @keydown="trapCommandFocus">
           <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
-            <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…">
-            <button v-for="item in commandItems" :key="item.path" @click="selectCommand(item)">{{ item.label }}<span><ui-next-icon name="enter"/></span></button>
+            <!-- Enter 綁在 input 而不是 backdrop：焦點若在某個選項上，backdrop 的 Enter
+                 會和該按鈕的原生 click 同時觸發,等於導航兩次。 -->
+            <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…" role="combobox" aria-expanded="true" aria-controls="ui-next-command-list" :aria-activedescendant="commandItems.length ? 'ui-next-command-item-' + commandIndex : null" @input="commandIndex = 0" @keydown.enter.prevent="chooseCommand()">
+            <div id="ui-next-command-list" role="listbox" aria-label="搜尋結果">
+              <button v-for="(item, index) in commandItems" :key="item.path" :id="'ui-next-command-item-' + index" role="option" :aria-selected="index === commandIndex" :class="{ 'is-active': index === commandIndex }" @click="selectCommand(item)" @mousemove="commandIndex = index">{{ item.label }}<span><ui-next-icon name="enter"/></span></button>
+            </div>
             <p v-if="!commandItems.length">找不到符合的項目</p>
           </section>
         </div>
@@ -505,7 +535,7 @@
            原本掛在 shell 這個 v-else 裡面，於是未登入與 /login 頁走 v-if 分支時三者都不存在：
            登入失敗的 toast、確認視窗、新手教學在那些頁面上全部靜默不出現。
            它們都是 position:fixed 的 overlay，放在哪一層不影響定位。 -->
-      <div class="toast-container">
+      <div class="toast-container" role="status" aria-live="polite" aria-atomic="false">
         <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)"><ui-next-icon name="close"/></button></div>
       </div>
       <confirm-dialog-host />

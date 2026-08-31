@@ -65,7 +65,7 @@
 | **toast duration=0 讓 30 幾處錯誤訊息 0ms 消失** | ✅ 已修 | 本輪新發現，見 §5.7 |
 | **Next 登入頁沒有 toast／確認視窗／教學** | ✅ 已修 | 三個全域 overlay 都掛在 shell 的 v-else 內 |
 | **截圖清單漏 7 條路由** | ✅ 已修 | 含 Next 的 `/tasks`；另加守衛防止再漏 |
-| **§9 GodUI 全面校準** | ⬜ **未做（唯一剩下的）** | 使用者已拍板要做。缺 16/20 個無障礙／鍵盤契約，見 §9 |
+| **§9 GodUI 全面校準** | ⚠ 部分 | 2026-08-31 夜班：§9.5（AI 訊息改連續閱讀）✅ 已做；§9.3 契約補了 3 項（Toast `aria-live`、Command Palette ↑↓ 導航與鎖捲動）並新增守衛 `frontend-ui-next-a11y.test.js`。**尚缺 8 項**，見 §9.3 |
 | §4.2 狀態矩陣缺口 | ⚠ 部分 | ProjectChat 五個錯誤路徑仍只有 toast |
 | §7 四項待裁決 | ⬜ 已裁決 3 項 | 見下方 |
 
@@ -614,7 +614,11 @@ Next template 有 168 處以上使用 Legacy class，靠 93 個 `.ui-next-main <
 
 ### 9.5 AskMe 風格仍未達成的一項
 
-規格 §5.3 點名：**Chat 的 AI 訊息用大型 bordered card，與 AskMe 的連續閱讀層級不符**，應改成主要內容欄。本輪未動。這項會明顯改變 Chat 頁外觀，需要人眼驗收。
+規格 §5.3 點名：**Chat 的 AI 訊息用大型 bordered card，與 AskMe 的連續閱讀層級不符**，應改成主要內容欄。
+
+**✅ 2026-08-31 夜班已做**（commit `254bfd06`）。AI 訊息去掉 border／背景／卡片陰影改為連續閱讀欄，使用者訊息維持 bubble；訊息欄與 Composer 對齊等寬（實測 computed 皆為 811.989px）。同批也把對話頁的 Composer 改成與首頁問答同一套兩層排法（原本是兩套，違反「不可使用兩套版型或 Composer」的契約）。
+
+⚠ 這項明顯改變 Chat 頁外觀，**RWD 46 張桌機截圖基線需要重建**，且仍待人眼驗收。
 
 ### 9.6 取 GodUI 規格的方法（不必重啟 session）
 
