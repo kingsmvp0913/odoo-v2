@@ -53,6 +53,23 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Sidebar 專案清單只需判斷「哪些專案最近有實際對話」，不可為每個專案各打
+  // /chats 而形成 N+1。這個端點不回傳訊息內容，且空 Chat 不會被列入。
+  app.get('/api/chats/sidebar-projects', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT c.project_id, c.id AS chat_id, c.title, MAX(m.created_at) AS last_message_at
+         FROM project_chats c
+         JOIN project_chat_messages m ON m.chat_id = c.id
+         WHERE c.user_id = $1
+         GROUP BY c.project_id, c.id, c.title
+         ORDER BY last_message_at DESC`,
+        [req.userId]
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // GET /api/projects/:projectId/chats
   // Returns only chats owned by req.userId; each row includes unread count.
   // Uses LEFT JOIN instead of correlated subquery for pg-mem compatibility.

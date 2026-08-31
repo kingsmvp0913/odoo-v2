@@ -4,6 +4,43 @@ const { verifyToken } = require('./auth');
 const { mintSsoToken } = require('./sso');
 
 function registerRoutes(app) {
+  app.get('/api/projects/env-summaries', verifyToken, async (_req, res) => {
+    try {
+      const { rows } = await query('SELECT project_id, status FROM odoo_envs');
+      const summaries = rows.map((env) => ({
+        project_id: env.project_id,
+        status: env.status,
+        database_status: env.status === 'running' ? 'connected'
+          : env.status === 'error' ? 'error'
+            : env.status === 'setting_up' ? 'connecting' : 'not_available',
+      }));
+      res.json(summaries);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 首頁 Project combobox 只需呈現可安全揭露的狀態，不能為了第二層資訊把 url、port、log 或錯誤內容送到前端。
+  // 這支端點刻意不共用完整 /env payload；status 來自同一筆真實 odoo_envs 記錄，資料庫狀態只反映測試環境是否可連。
+  app.get('/api/projects/:id/env/summary', verifyToken, async (req, res) => {
+    try {
+      const { rows: [env] } = await query(
+        'SELECT status FROM odoo_envs WHERE project_id = $1', [req.params.id]
+      );
+      const status = env?.status || 'idle';
+      const database_status = status === 'running' ? 'connected'
+        : status === 'error' ? 'error'
+          : status === 'setting_up' ? 'connecting' : 'not_available';
+      let built = false;
+      try {
+        const fs = require('fs');
+        const { ENV_BASE: base } = require('./pipeline/env-agent');
+        const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
+        const folder = project && (project.folder_name || project.name);
+        built = !!(folder && (fs.existsSync(path.join(base, folder, '.ready')) || fs.existsSync(path.join(base, folder, '.docker-ready'))));
+      } catch { built = false; }
+      res.json({ status, database_status, built });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.get('/api/projects/:id/env', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(

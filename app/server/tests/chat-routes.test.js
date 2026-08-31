@@ -59,6 +59,21 @@ test('GET chats → empty list initially', async () => {
   expect(Array.isArray(res.body)).toBe(true);
 });
 
+test('GET chats/sidebar-projects → 只回傳有訊息的 Chat metadata，不回傳內容', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '有訊息', $2) RETURNING id",
+    [projectId, userId]
+  );
+  await dbModule.query(
+    "INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, 'user', '不能外洩')",
+    [chat.id]
+  );
+  const res = await request(app).get('/api/chats/sidebar-projects').set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual(expect.arrayContaining([expect.objectContaining({ project_id: projectId, chat_id: chat.id, title: '有訊息' })]));
+  expect(res.body[0]).not.toHaveProperty('content');
+});
+
 test('POST chats → creates with title', async () => {
   const res = await request(app)
     .post(`/api/projects/${projectId}/chats`)

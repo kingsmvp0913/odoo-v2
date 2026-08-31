@@ -185,7 +185,7 @@
       },
     },
     template: `
-      <main class="ui-next-login" aria-labelledby="ui-next-login-title">
+      <main class="ui-next-login" data-ui="next" aria-labelledby="ui-next-login-title">
         <section class="ui-next-login-card" :aria-busy="loading">
           <header>
             <img src="favicon.svg" alt="OAA">
@@ -284,6 +284,7 @@
 
   window.UiNextTokenReportView = Vue.defineComponent({
     name: "UiNextTokenReportView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
         loading: true,
@@ -521,7 +522,7 @@
 <span>{{ report.tasks.length }} 筆</span>
 </div>
 <div class="ui-next-data-list">
-<article v-for="task in report.tasks.slice(0,100)" :key="task.ref_key" @click="toggle(task.ref_key)">
+<article v-for="task in report.tasks.slice(0,100)" :key="task.ref_key" role="button" tabindex="0" :aria-expanded="!!expanded[task.ref_key]" @click="toggle(task.ref_key)" @keydown.enter.prevent="toggle(task.ref_key)" @keydown.space.prevent="toggle(task.ref_key)">
 <div>
 <b>{{ task.title || task.task_id || '未命名項目' }}</b>
 <span>{{ task.project_name || '未分類專案' }} · {{ task.username || '—' }}</span>
@@ -530,7 +531,7 @@
 <strong>{{ fmtUSD(task.total_cost) }}</strong>
 <span>{{ fmtCompact(task.total_tokens) }} Token</span>
 </div>
-<button type="button">{{ expanded[task.ref_key] ? '⌃' : '⌄' }}</button>
+<span class="ui-next-disclosure"><ui-next-icon :name="expanded[task.ref_key] ? 'chevron-up' : 'chevron-down'"/></span>
 <div v-if="expanded[task.ref_key]" class="ui-next-detail-row">
 <router-link v-if="taskLink(task)" :to="taskLink(task)" @click.stop>前往來源</router-link>
 <span v-for="agent in task.agents" :key="agent.agent_type + agent.model">{{ agentLabel(agent.agent_type) }}<template v-if="agent.model"> · {{ agent.model }}</template>：{{ fmtCompact(agent.tokens) }} / {{ fmtUSD(agent.cost) }}</span>
@@ -692,9 +693,12 @@
     data() {
       return { chats: [], activeChat: null, messages: [], newInput: "", newTitle: "",
         sending: false, loadingMsgs: false, draftingTask: false, creatingTask: false,
-        showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] },
+        showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] }, taskError: "", taskModalTrigger: null,
         replyPending: false, pendingFiles: [], pendingPreviews: [], attachUrls: {},
-        projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, requestId: 0, replyTimer: null };
+        projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, historyQuery: "", historyMenuId: null, chatError: "", chatsError: "", creatingChat: false, requestId: 0, replyTimer: null };
+    },
+    computed: {
+      filteredChats() { const query = this.historyQuery.trim().toLocaleLowerCase("zh-TW"); return query ? this.chats.filter((chat) => (chat.title || "新對話").toLocaleLowerCase("zh-TW").includes(query)) : this.chats; },
     },
     async created() {
       await this.loadChats();
@@ -709,10 +713,28 @@
       routePath(chat) { return `/projects/${this.$route.params.id}/chat/${chat.id}`; },
       toggleHistory(event) { this.historyTrigger = event.currentTarget; this.showHistory = !this.showHistory; if (this.showHistory) this.$nextTick(() => this.$refs.historyClose?.focus()); },
       closeHistory() { this.showHistory = false; this.$nextTick(() => this.historyTrigger?.focus()); },
-      onHistoryKeydown(event) { if (event.key === "Escape") { event.preventDefault(); this.closeHistory(); } },
+      onHistoryKeydown(event) {
+        if (event.key === "Escape") { event.preventDefault(); this.closeHistory(); return; }
+        if (event.key !== "Tab") return;
+        const focusable = this.$refs.historyDrawer ? Array.from(this.$refs.historyDrawer.querySelectorAll("button:not([disabled]), [href], input:not([disabled])")) : [];
+        if (!focusable.length) return;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      },
+      closeTaskModal() { this.showTaskModal = false; this.$nextTick(() => this.taskModalTrigger?.focus()); },
+      onTaskModalKeydown(event) {
+        if (event.key === "Escape") { event.preventDefault(); this.closeTaskModal(); return; }
+        if (event.key !== "Tab") return;
+        const focusable = this.$refs.chatTaskModal ? Array.from(this.$refs.chatTaskModal.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled])")) : [];
+        if (!focusable.length) return;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      },
       async loadChats() {
         const requestId = ++this.requestId;
-        this.activeChat = null; this.messages = []; this.loadingMsgs = true;
+        this.activeChat = null; this.messages = []; this.loadingMsgs = true; this.chatsError = "";
         try {
           const chats = await Api.get(`projects/${this.$route.params.id}/chats`);
           if (requestId !== this.requestId) return;
@@ -720,7 +742,7 @@
           const chatId = this.$route.params.chatId;
           this.activeChat = this.chats.find((chat) => String(chat.id) === String(chatId)) || null;
           if (this.activeChat) await this.loadMessages(requestId);
-        } catch (error) { showToast(error.message || "無法載入對話", "error"); }
+        } catch (error) { if (requestId === this.requestId) this.chatsError = error.message || "無法載入對話"; }
         finally { if (requestId === this.requestId) this.loadingMsgs = false; }
       },
       async selectChat(chat) { await this.$router.push(this.routePath(chat)); },
@@ -743,9 +765,12 @@
       },
       stopReplyPolling() { if (this.replyTimer) clearInterval(this.replyTimer); this.replyTimer = null; },
       async createChat() {
+        if (this.creatingChat) return;
+        this.creatingChat = true; this.chatError = "";
         try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: this.newTitle.trim() || "新對話" });
           this.newTitle = ""; this.showNewChat = false; await this.$router.push(this.routePath(chat));
-        } catch (error) { showToast(error.message || "無法建立對話", "error"); }
+        } catch (error) { this.chatError = error.message || "無法建立對話，請重試。"; }
+        finally { this.creatingChat = false; }
       },
       async deleteChat(chat) {
         if (!await confirmDialog({ title: "刪除對話", message: `確定刪除「${chat.title || "新對話"}」？`, danger: true, confirmText: "刪除" })) return;
@@ -765,11 +790,13 @@
           if (this.activeChat && this.activeChat.id === chatId) { this.messages.push({ id: Date.now(), role: "user", content, created_at: new Date().toISOString() }); if (result.reply) this.messages.push({ id: Date.now() + 1, role: "ai", content: result.reply, created_at: new Date().toISOString() }); else { this.replyPending = true; this.startReplyPolling(); } this.$nextTick(() => this.scrollToBottom()); }
         } catch (error) { this.newInput = content; showToast(error.message || "訊息送出失敗", "error"); } finally { this.sending = false; }
       },
-      async toTask() { if (!this.activeChat || this.draftingTask) return; this.draftingTask = true; try { const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {}); this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) }; this.showTaskModal = true; } catch (error) { showToast(error.message || "無法建立草稿", "error"); } finally { this.draftingTask = false; } },
-      async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) return showToast("請填寫標題與內容", "error"); this.creatingTask = true; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.showTaskModal = false; showToast("已建立任務", "success"); } catch (error) { showToast(error.message || "建立任務失敗", "error"); } finally { this.creatingTask = false; } },
+      async toTask(event) { if (!this.activeChat || this.draftingTask) return; this.draftingTask = true; this.taskError = ""; this.taskModalTrigger = event?.currentTarget || null; try { const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {}); this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) }; this.showTaskModal = true; this.$nextTick(() => this.$refs.chatTaskTitle?.focus()); } catch (error) { showToast(error.message || "無法建立草稿", "error"); } finally { this.draftingTask = false; } },
+      async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) { this.taskError = "請填寫標題與內容。"; return; } this.creatingTask = true; this.taskError = ""; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.closeTaskModal(); showToast("已建立任務", "success"); } catch (error) { this.taskError = error.message || "建立任務失敗，請重試。"; } finally { this.creatingTask = false; } },
       scrollToBottom() { const element = this.$refs.messages; if (element) element.scrollTop = element.scrollHeight; },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
-      renderMd(value) { return renderMarkdown(value); }, openImage() {},
+      renderMd(value) { return window.renderNextMarkdown(value); },
+      handleMessageClick(event) { return window.copyNextCode(event); },
+      openImage() {},
     },
     watch: { "$route.fullPath"() { this.loadChats(); } },
     template: `
@@ -784,26 +811,28 @@
 <div class="ui-next-thread-actions">
 <button ref="historyTrigger" type="button" @click="toggleHistory"><ui-next-icon name="chat"/> 對話紀錄<span v-if="chats.length">{{ chats.length }}</span></button>
 <button type="button" @click="showNewChat=!showNewChat"><ui-next-icon name="plus"/> 新對話</button>
-<button type="button" class="ui-next-task-action" @click="toTask" :disabled="draftingTask||sending">{{ draftingTask ? '摘要中…' : '建立任務' }}</button>
+<button type="button" class="ui-next-task-action" @click="toTask($event)" :disabled="draftingTask||sending">{{ draftingTask ? '摘要中…' : '建立任務' }}</button>
 </div>
 </header>
 <div v-if="showNewChat" class="ui-next-new-chat ui-next-new-chat-popover">
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
-<button @click="createChat">開始對話</button>
+<p v-if="chatError" class="ui-next-inline-error" role="alert">{{ chatError }}</p>
+<button @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'開始對話' }}</button>
 </div>
-<aside v-if="showHistory" class="ui-next-chat-history" role="dialog" aria-modal="true" aria-label="對話紀錄" @keydown="onHistoryKeydown">
+<aside v-if="showHistory" ref="historyDrawer" class="ui-next-chat-history" role="dialog" aria-modal="true" aria-label="對話紀錄" @keydown="onHistoryKeydown">
 <div class="ui-next-chat-history-head"><strong>對話紀錄</strong><button ref="historyClose" type="button" @click="closeHistory">關閉</button></div>
+<div class="ui-next-chat-history-tools"><label><span class="sr-only">搜尋對話</span><ui-next-icon name="search"/><input v-model="historyQuery" type="search" placeholder="搜尋對話"></label><button type="button" class="ui-next-primary" @click="showNewChat=true;closeHistory()"><ui-next-icon name="plus"/> 新對話</button></div>
 <div class="ui-next-chat-list">
-<article v-for="chat in chats" :key="chat.id" :class="{active:activeChat&&activeChat.id===chat.id}" @click="selectChat(chat);closeHistory()">
-<div><b>{{ chat.title || '新對話' }}</b><small v-if="chat.reply_pending">AI 回覆中</small></div>
+<article v-for="chat in filteredChats" :key="chat.id" :class="{active:activeChat&&activeChat.id===chat.id}">
+<button type="button" class="ui-next-chat-select" :aria-current="activeChat&&activeChat.id===chat.id?'page':null" @click="selectChat(chat);closeHistory()"><b>{{ chat.title || '新對話' }}</b><small v-if="chat.reply_pending">AI 回覆中</small></button>
 <i v-if="chat.unread">{{ chat.unread }}</i>
 <em v-if="chat.converted_task_id" @click.stop="$router.push('/task/'+chat.converted_task_id)">任務</em>
-<button type="button" @click.stop="deleteChat(chat)" aria-label="刪除對話">×</button>
+<div class="ui-next-chat-menu"><button type="button" :aria-expanded="historyMenuId===chat.id" :aria-label="'對話「'+(chat.title||'新對話')+'」更多操作'" @click="historyMenuId=historyMenuId===chat.id?null:chat.id"><ui-next-icon name="dots"/></button><div v-if="historyMenuId===chat.id" class="ui-next-chat-menu-popover"><button type="button" @click="deleteChat(chat);historyMenuId=null">刪除對話</button></div></div>
 </article>
-<p v-if="!chats.length">尚無對話，建立一段新的討論開始。</p>
+<p v-if="!chats.length">尚無對話，建立一段新的討論開始。</p><p v-else-if="!filteredChats.length">找不到符合的對話。</p>
 </div>
 </aside>
-<div ref="messages" class="ui-next-thread-messages">
+<div ref="messages" class="ui-next-thread-messages" @click="handleMessageClick">
 <div v-if="loadingMsgs" class="ui-next-empty-state">載入訊息中…</div>
 <article v-for="message in messages" :key="message.id" :class="message.role">
 <div class="ui-next-message" v-html="renderMd(message.content)" v-show="message.content"></div>
@@ -824,7 +853,7 @@
 <div v-if="pendingPreviews.length" class="ui-next-pending-files">
 <span v-for="(url,index) in pendingPreviews" :key="url">
 <img :src="url">
-<button @click="removePendingFile(index)">×</button>
+<button @click="removePendingFile(index)" aria-label="移除附件"><ui-next-icon name="close"/></button>
 </span>
 </div>
 <form class="ui-next-thread-composer" @submit.prevent="send">
@@ -832,27 +861,29 @@
 <button type="button" @click="$refs.chatFileInput.click()" title="上傳圖片" aria-label="上傳圖片"><ui-next-icon name="paperclip"/></button>
 <textarea v-model="newInput" placeholder="輸入你的需求或追問… Enter 送出，Shift + Enter 換行；也可直接貼上截圖。" @paste="onPaste" @keydown.enter="handleEnter">
 </textarea>
-<button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)">{{ sending ? '…' : '↑' }}</button>
+<button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)" :aria-label="sending?'送出中':'送出'"><span v-if="sending">送出中</span><ui-next-icon v-else name="send"/></button>
 </form>
 </template>
 <div v-else class="ui-next-thread-empty">
-<div>✦</div>
-<h2>選擇一段對話</h2>
-<p>或建立新對話，討論會保留在「{{ projectName }}」專案中。</p>
+<h2>{{ chatsError ? '無法載入對話' : chats.length ? '選擇一段對話' : '尚無對話' }}</h2>
+<p v-if="chatsError">{{ chatsError }} <button type="button" @click="loadChats">重試</button></p>
+<p v-else>{{ chats.length ? '從完整對話清單選取，或建立新對話。' : '建立新對話，討論會保留在「'+projectName+'」專案中。' }}</p>
+<div v-if="chats.length" class="ui-next-chat-full-list"><button v-for="chat in chats" :key="chat.id" type="button" @click="selectChat(chat)"><b>{{ chat.title || '新對話' }}</b><small v-if="chat.reply_pending">AI 回覆中</small></button></div>
 <button type="button" class="ui-next-primary" @click="showNewChat=true">開始新對話</button>
 <div v-if="showNewChat" class="ui-next-new-chat">
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
-<button type="button" @click="createChat">開始</button>
+<p v-if="chatError" class="ui-next-inline-error" role="alert">{{ chatError }}</p>
+<button type="button" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'開始' }}</button>
 </div>
 </div>
 </div>
-        <div v-if="showTaskModal" class="ui-next-task-modal-backdrop" @mousedown.self="showTaskModal=false">
-<section class="ui-next-task-modal">
+        <div v-if="showTaskModal" class="ui-next-task-modal-backdrop" @mousedown.self="closeTaskModal" @keydown="onTaskModalKeydown">
+<section ref="chatTaskModal" class="ui-next-task-modal" role="dialog" aria-modal="true" aria-labelledby="chat-task-modal-title">
 <header>
-<h2>建立任務</h2>
-<button @click="showTaskModal=false">×</button>
+<h2 id="chat-task-modal-title">建立任務</h2>
+<button @click="closeTaskModal" aria-label="關閉建立任務視窗"><ui-next-icon name="close"/></button>
 </header>
-<label>標題<input v-model="taskDraft.title" placeholder="任務標題">
+<label>標題<input ref="chatTaskTitle" v-model="taskDraft.title" placeholder="任務標題">
 </label>
 <label>需求內容<textarea v-model="taskDraft.original_text" placeholder="需求描述">
 </textarea>
@@ -861,8 +892,9 @@
 <label v-for="attachment in taskDraft.attachments" :key="attachment.id">
 <input type="checkbox" v-model="attachment.chosen"> {{ attachment.filename }}</label>
 </div>
+<p v-if="taskError" class="ui-next-inline-error" role="alert">{{ taskError }}</p>
 <footer>
-<button @click="showTaskModal=false">取消</button>
+<button @click="closeTaskModal">取消</button>
 <button class="ui-next-primary" @click="submitTask" :disabled="creatingTask">{{ creatingTask?'建立中…':'建立任務' }}</button>
 </footer>
 </section>
@@ -876,6 +908,7 @@
     components: {
       SearchableSelect: window.SearchableSelect,
       ReleaseModal: window.ReleaseModal,
+      UiNextIcon: window.UiNextIcon,
     },
     data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: "overview" }; },
     computed: { envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
@@ -897,7 +930,7 @@
       <section v-else-if="project" class="ui-next-page ui-next-project-detail">
         <header class="ui-next-page-head ui-next-detail-head">
 <div>
-<button class="ui-next-back" @click="$router.push('/projects')">← 所有專案</button>
+<button class="ui-next-back" @click="$router.push('/projects')"><ui-next-icon name="arrow-left"/> 所有專案</button>
 <p class="ui-next-eyebrow">專案工作區</p>
 <h1>{{ project.name }}</h1>
 <p>{{ project.description || '集中管理 Repo、測試環境與專案設定。' }}</p>
@@ -1044,7 +1077,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements', taskTabAutoFocused: false };
     },
     computed: {
       isAdmin() { return window.UserStore.role === 'admin'; },
@@ -1069,6 +1102,11 @@
         if (s === 'stopped')          return 'blocker';
         if (s === 'done')             return 'archive';
         return 'message';
+      },
+      actionModeLabel() {
+        return { answer:'等待回答', spec:'規格審核', review:'人工審核', conflict:'合併衝突', csReply:'客服回覆', csData:'補充資料', blocker:'需要介入', archive:'任務完成', message:'新增留言' }[
+          ({ spec_review:'spec', cs_reply:'csReply', cs_data:'csData' }[this.timelineActionMode] || this.timelineActionMode)
+        ];
       },
       statusLabel() { return this.task ? (STATUS_LABELS[this.task.status] || this.task.status) : ''; },
       // 這個輸入框是自由文字，但它餵的分診 agent 要產出的是 {decision, target} 結構化決策，
@@ -1147,6 +1185,10 @@
     },
     async created() {
       await this.load();
+      const requestedTab = this.$route.query.tab;
+      this.taskTab = ['requirements', 'conversation', 'history'].includes(requestedTab)
+        ? requestedTab
+        : ((window.HUMAN_STATUSES || []).includes(this.task?.status) ? 'conversation' : 'requirements');
       Api.get('system/config').then(r => {
         this.odooUrl = r.odoo_url || '';
         this.serviceUrl = r.service_url || '';
@@ -1194,7 +1236,20 @@
       },
       tourDemoStatus() { if (this.isTourDemo) this.refresh(); }
     },
+    watch: {
+      '$route.query.tab'(tab) {
+        if (['requirements', 'conversation', 'history'].includes(tab) && tab !== this.taskTab) this.taskTab = tab;
+      },
+    },
     methods: {
+      setTaskTab(tab) {
+        this.taskTab = tab;
+        if (this.$route.query.tab !== tab) this.$router.replace({ query: { ...this.$route.query, tab } });
+        this.$nextTick(() => {
+          const heading = this.$refs.taskTabHeading;
+          (Array.isArray(heading) ? heading.find((item) => item.offsetParent !== null) : heading)?.focus();
+        });
+      },
       async openEnv() {
         // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
         // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
@@ -1641,7 +1696,7 @@
         return 'src-badge src-default';
       },
       roleClass(role) { return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
-      roleLabel(role) { return role === 'ai' ? '🤖 AI' : role === 'user' ? '👤 你' : '⚙️ 系統'; },
+      roleLabel(role) { return role === 'ai' ? 'AI' : role === 'user' ? '你' : '系統'; },
       // 時間軸項目來自 task_logs 沿用 roleClass；來自 task_messages 用 source 對應到既有 ai/user 泡泡樣式
       // （sync=外部進來的訊息，靠左走 ai 樣式；manual=你自己留言，靠右走 user 樣式，不新增 CSS class）
       timelineClass(item) {
@@ -1673,6 +1728,8 @@
         if (!ts) return '';
         return new Date(ts).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
       },
+      renderTaskMessage(value) { return window.renderNextMarkdown(value); },
+      handleTaskMessageClick(event) { return window.copyNextCode(event); },
       async archive() {
         this.archiving = true;
         try {
@@ -1852,6 +1909,9 @@
         return out;
       },
       scrollEventsToBottom() { const c = this.$refs.eventsBox; if (c) c.scrollTop = c.scrollHeight; },
+      eventSummary(event) { const text = String(event.content || '').replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '執行輸出'; return text.length > 160 ? `${text.slice(0, 160)}…` : text; },
+      eventKind(event) { const text = String(event.content || ''); return /(?:❌|error|failed|失敗|錯誤)/i.test(text) ? 'error' : /(?:▶|start|開始|執行)/i.test(text) ? 'stage' : 'output'; },
+      toggleEvent(event) { const key = event.id || event.content; this.expandedEvents[key] = !this.expandedEvents[key]; },
       scrollConvToBottom() { const c = this.$refs.convPanel; if (c) c.scrollTop = c.scrollHeight; },
       // 捲到頂→載入更早，並補回捲動位移讓畫面不跳（新內容撐高後維持原本閱讀點）
       loadMoreConv() {
@@ -1868,12 +1928,13 @@
       },
       async loadEvents() {
         if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
+        this.eventsError = '';
         try {
           const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10`);
           this.events = Array.isArray(rows) ? rows : [];
           this.eventsHasMore = this.events.length >= 10;
           this.$nextTick(() => this.scrollEventsToBottom());
-        } catch { /* best-effort */ }
+        } catch (error) { this.eventsError = error.message || '無法載入執行歷程'; }
       },
       async loadOlderEvents() {
         if (this.eventsLoading || !this.eventsHasMore) return;
@@ -1888,7 +1949,7 @@
           this.eventsHasMore = older.length >= 10;
           this.events = [...older, ...this.events];
           this.$nextTick(() => { if (c) c.scrollTop = c.scrollHeight - prevHeight; }); // 維持捲動位置
-        } catch { /* best-effort */ }
+        } catch (error) { this.eventsError = error.message || '無法載入更早的執行歷程'; }
         finally { this.eventsLoading = false; }
       },
       onEventsScroll(e) { if (e.target.scrollTop <= 4) this.loadOlderEvents(); }
@@ -1913,9 +1974,14 @@
 <button v-if="isAdmin&&task.git_branch" @click="downloadCodeZip" :disabled="downloadingZip">{{ downloadingZip?'打包中…':'下載程式碼' }}</button>
 </div>
 </header>
-<div class="ui-next-task-detail-grid">
+<div class="ui-next-task-tabs" role="tablist" aria-label="任務詳情">
+<button id="ui-next-task-tab-requirements" role="tab" :aria-selected="taskTab==='requirements'" :tabindex="taskTab==='requirements'?0:-1" @click="setTaskTab('requirements')">需求內容</button>
+<button id="ui-next-task-tab-conversation" role="tab" :aria-selected="taskTab==='conversation'" :tabindex="taskTab==='conversation'?0:-1" @click="setTaskTab('conversation')">對話</button>
+<button id="ui-next-task-tab-history" role="tab" :aria-selected="taskTab==='history'" :tabindex="taskTab==='history'?0:-1" @click="setTaskTab('history')">執行歷程</button>
+</div>
+<div class="ui-next-task-detail-grid" :class="'is-tab-'+taskTab">
 <div class="ui-next-task-content-column">
-<section class="ui-next-panel ui-next-task-summary">
+<section v-show="taskTab==='requirements'" class="ui-next-panel ui-next-task-summary" role="tabpanel" aria-labelledby="ui-next-task-tab-requirements">
 <div class="ui-next-task-badges">
 <span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
@@ -1925,7 +1991,7 @@
 <span v-if="task.module">{{ task.module }}</span>
 </div>
 <div class="ui-next-card-title">
-<h2>需求內容</h2>
+<h2 ref="taskTabHeading" tabindex="-1">需求內容</h2>
 <button v-if="canEditContent&&!editingContent" @click="startEditContent">編輯</button>
 </div>
 <p v-if="!editingContent" class="ui-next-task-content">{{ task.original_text || '（無內容）' }}</p>
@@ -1939,18 +2005,18 @@
 </div>
 <div v-if="ticketAttachments.length" class="ui-next-ticket-files">
 <b>主附件</b>
-<button v-for="file in ticketAttachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)">⌕ {{ file.filename }} <small v-if="file.size">{{ formatSize(file.size) }}</small>
+<button v-for="file in ticketAttachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }} <small v-if="file.size">{{ formatSize(file.size) }}</small>
 </button>
 </div>
 </section>
-<section class="ui-next-panel ui-next-conversation">
+<section v-show="taskTab==='conversation'" class="ui-next-panel ui-next-conversation" role="tabpanel" aria-labelledby="ui-next-task-tab-conversation">
 <div class="ui-next-card-title">
 <div>
-<h2>對話與執行歷程</h2>
-<p>保留完整溝通與系統紀錄。</p>
+<h2 ref="taskTabHeading" tabindex="-1">對話</h2>
+<p>保留完整溝通紀錄與下一步操作。</p>
 </div>
 </div>
-<div ref="convPanel" class="ui-next-conv-list" @scroll="onConvScroll">
+<div ref="convPanel" class="ui-next-conv-list" @scroll="onConvScroll" @click="handleTaskMessageClick">
 <button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
 <article v-for="item in visibleTimeline" :key="item._key" :class="timelineClass(item)">
 <template v-if="isErrorLog(item)||machineLogHint(item)">
@@ -1958,9 +2024,9 @@
 <pre v-if="expandedLogs[item._key]">{{ item.content }}</pre>
 </template>
 <template v-else>
-<p>{{ item.content }}</p>
+<div v-html="renderTaskMessage(item.content)"></div>
 <div v-if="item.attachments&&item.attachments.length">
-<button v-for="file in item.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)">⌕ {{ file.filename }}</button>
+<button v-for="file in item.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}</button>
 </div>
 </template>
 <small>{{ timelineMeta(item) }} · {{ formatTime(item.ts) }}</small>
@@ -1968,19 +2034,24 @@
 <p v-if="!timeline.length" class="ui-next-empty-state">尚無對話記錄。</p>
 </div>
 </section>
-<section class="ui-next-panel ui-next-events">
-<h2>執行輸出</h2>
+<section v-show="taskTab==='history'" class="ui-next-panel ui-next-events" role="tabpanel" aria-labelledby="ui-next-task-tab-history">
+<h2 ref="taskTabHeading" tabindex="-1">執行歷程</h2>
 <div ref="eventsBox" @scroll="onEventsScroll">
-<pre v-for="event in events" :key="event.id||event.content" v-html="ansiToHtml(event.content)"></pre>
-<p v-if="!events.length">尚無執行輸出。</p>
+<button v-if="eventsLoading" type="button" disabled>載入較早紀錄中…</button>
+<article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event)]">
+<button type="button" :aria-expanded="!!expandedEvents[event.id||event.content]" @click="toggleEvent(event)"><span>{{ eventKind(event)==='error' ? '錯誤' : eventKind(event)==='stage' ? '階段' : '輸出' }}</span><b>{{ eventSummary(event) }}</b><time v-if="event.created_at">{{ formatTime(event.created_at) }}</time></button>
+<pre v-if="expandedEvents[event.id||event.content]" v-html="ansiToHtml(event.content)"></pre>
+</article>
+<p v-if="eventsError" class="ui-next-inline-error" role="alert">{{ eventsError }} <button type="button" @click="loadEvents">重試</button></p>
+<p v-else-if="!events.length">尚無執行輸出。</p>
 </div>
 <router-link :to="'/task/'+task.id+'/terminal'">開啟完整終端機</router-link>
 </section>
 </div>
-<aside class="ui-next-task-side">
+<aside v-show="taskTab==='conversation'" class="ui-next-task-side">
 <section class="ui-next-panel ui-next-task-action">
 <p class="ui-next-eyebrow">下一步</p>
-<h2>{{ {answer:'等待回答',spec_review:'規格審核',review:'人工審核',conflict:'合併衝突',cs_reply:'客服回覆',cs_data:'補充資料',blocker:'需要介入',archive:'任務完成',message:'新增留言'}[timelineActionMode] }}</h2>
+<h2>{{ actionModeLabel }}</h2>
 <template v-if="timelineActionMode==='answer'">
 <p v-if="clarIntro">{{ clarIntro }}</p>
 <template v-if="clarQuestions.length">
@@ -2188,17 +2259,22 @@
   window.UiNextProjectListView = Vue.defineComponent({
     name: "UiNextProjectListView",
     components: { ReleaseModal: window.ReleaseModal, UiNextIcon: window.UiNextIcon },
-    data() { return { projects: [], loading: true, loadError: "", search: "", showAddForm: false, newProject: { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }, saving: false, releaseId: null }; },
+    data() { return { projects: [], loading: true, loadError: "", search: "", showAddForm: false, newProject: { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }, formError: "", saving: false, releaseId: null, moreProjectId: null }; },
     computed: {
       allProjects() { return [...this.projects].sort((a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0)); },
       filteredProjects() { const query = this.search.toLowerCase(); return !query ? this.allProjects : this.allProjects.filter((project) => project.name.toLowerCase().includes(query) || (project.description || "").toLowerCase().includes(query) || (project.odoo_version || "").toLowerCase().includes(query)); },
+      folderNameError() { const folder = this.newProject.folder_name.trim(); return !folder ? "請填寫英文資料夾名稱。" : !/^[a-zA-Z0-9_-]+$/.test(folder) ? "只能使用英文、數字、底線或連字號。" : ""; },
     },
     async created() { await this.load(); },
+    mounted() { this._onProjectMoreOutside = (event) => { if (!event.target.closest('.ui-next-project-more')) this.moreProjectId = null; }; document.addEventListener('pointerdown', this._onProjectMoreOutside); },
+    beforeUnmount() { document.removeEventListener('pointerdown', this._onProjectMoreOutside); },
     methods: {
       async load() { this.loading = true; this.loadError = ""; try { this.projects = await Api.get("projects"); this.projects.forEach((project) => { window.UnreadStore.byProject[String(project.id)] = project.unread_count || 0; }); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
-      async add() { if (!this.newProject.name || !this.newProject.odoo_version) return showToast("請填寫專案名稱和版本", "error"); if (!/^[a-zA-Z0-9_-]+$/.test((this.newProject.folder_name || "").trim())) return showToast("請填寫英文資料夾名稱（只能用英文、數字、底線、連字號）", "error"); this.saving = true; try { await Api.post("projects", { ...this.newProject }); this.newProject = { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }; this.showAddForm = false; await this.load(); showToast("已新增專案", "success"); } catch (error) { showToast(error.message || "無法新增專案", "error", 0); } finally { this.saving = false; } },
+      openAddForm() { this.formError = ""; this.showAddForm = true; this.$nextTick(() => this.$refs.projectNameInput?.focus()); },
+      closeAddForm() { this.showAddForm = false; this.formError = ""; this.newProject = { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }; },
+      async add() { if (!this.newProject.name.trim() || !this.newProject.odoo_version.trim()) { this.formError = "請填寫專案名稱和 Odoo 版本。"; return; } if (this.folderNameError) { this.formError = this.folderNameError; return; } this.saving = true; this.formError = ""; try { await Api.post("projects", { ...this.newProject, name: this.newProject.name.trim(), folder_name: this.newProject.folder_name.trim(), odoo_version: this.newProject.odoo_version.trim() }); this.closeAddForm(); await this.load(); showToast("已新增專案", "success"); } catch (error) { this.formError = error.message || "無法新增專案，請重試。"; } finally { this.saving = false; } },
       async toggleFavorite(project) { const next = !project.is_favorite; project.is_favorite = next; try { if (next) await Api.post(`projects/${project.id}/favorite`, {}); else await Api.delete(`projects/${project.id}/favorite`); } catch (error) { project.is_favorite = !next; showToast(error.message || "更新我的最愛失敗", "error", 0); } },
-      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goWiki(id) { this.$router.push(`/projects/${id}/wiki`); }, goChat(id) { this.$router.push(`/projects/${id}/chat`); },
+      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goWiki(id) { this.$router.push(`/projects/${id}/wiki`); }, goChat(id) { this.$router.push(`/projects/${id}/chat`); }, goDb(id) { this.$router.push(`/projects/${id}/db`); }, goDeploySop(id) { this.$router.push(`/projects/${id}/deploy-sop`); }, openRelease(id) { this.moreProjectId = null; this.releaseId = id; },
       async openEnv(id) { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } },
     },
     template: `
@@ -2209,19 +2285,21 @@
 <h1>專案</h1>
 <p>管理程式庫、測試環境、對話與交付流程。</p>
 </div>
-<button class="ui-next-primary" @click="showAddForm=!showAddForm">{{ showAddForm?'取消':'新增專案' }}</button>
+<button v-if="!showAddForm" class="ui-next-primary" @click="openAddForm">新增專案</button>
 </header>
-<section v-if="showAddForm" class="ui-next-project-create">
-<input v-model="newProject.name" placeholder="專案名稱">
-<input v-model="newProject.folder_name" placeholder="英文資料夾名稱">
-<input v-model="newProject.odoo_version" placeholder="Odoo 版本，例如 17.0">
-<textarea v-model="newProject.description" placeholder="專案描述（選填）">
-</textarea>
-<select v-model="newProject.edition">
+<section v-if="showAddForm" class="ui-next-project-create" aria-labelledby="project-create-title">
+<h2 id="project-create-title">新增專案</h2>
+<label>專案名稱<input ref="projectNameInput" v-model="newProject.name" autocomplete="off"></label>
+<label>英文資料夾名稱<input v-model="newProject.folder_name" autocomplete="off" aria-describedby="project-folder-help"></label>
+<small id="project-folder-help" :class="{error:folderNameError}">{{ folderNameError || '只能使用英文、數字、底線或連字號。' }}</small>
+<label>Odoo 版本<input v-model="newProject.odoo_version" placeholder="例如 17.0"></label>
+<label>專案描述（選填）<textarea v-model="newProject.description"></textarea></label>
+<label>版本類型<select v-model="newProject.edition">
 <option value="community">Community</option>
 <option value="enterprise">Enterprise</option>
-</select>
-<button class="ui-next-primary" @click="add" :disabled="saving">{{ saving?'建立中…':'建立專案' }}</button>
+</select></label>
+<p v-if="formError" class="ui-next-inline-error" role="alert">{{ formError }}</p>
+<footer><button type="button" @click="closeAddForm">取消</button><button class="ui-next-primary" @click="add" :disabled="saving">{{ saving?'建立中…':'建立專案' }}</button></footer>
 </section>
 <div class="ui-next-project-search">
 <input v-model="search" placeholder="搜尋專案名稱、版本或說明…">
@@ -2232,14 +2310,12 @@
 <template v-else>
 <div class="ui-next-project-grid ui-next-project-grid-rich">
 <article v-for="project in filteredProjects" :key="project.id">
-<header>
-<button @click="toggleFavorite(project)" :class="{active:project.is_favorite}" :aria-label="project.is_favorite?'取消我的最愛':'加入我的最愛'"><ui-next-icon name="star"/></button>
-<span>Odoo {{ project.odoo_version }} · {{ project.edition==='enterprise'?'企業版':'社群版' }}</span>
+<header class="ui-next-project-card-title">
+<button class="ui-next-project-title-open" @click="go(project.id)"><h2>{{ project.name }} <small>Odoo {{ project.odoo_version }} · {{ project.edition==='enterprise'?'企業版':'社群版' }}</small></h2></button>
+<button @click="toggleFavorite(project)" :class="{active:project.is_favorite}" :aria-label="project.is_favorite?'取消我的最愛':'加入我的最愛'"><ui-next-icon :name="project.is_favorite?'star-filled':'star'"/></button>
 </header>
-<button class="ui-next-project-open" @click="go(project.id)">
-<span class="ui-next-project-folder"><ui-next-icon name="project"/></span>
-<h2>{{ project.name }}</h2>
-<p>{{ project.description || '尚未填寫專案描述。' }}</p>
+<button v-if="project.description" class="ui-next-project-open" @click="go(project.id)">
+<p v-if="project.description">{{ project.description }}</p>
 </button>
 <div class="ui-next-project-facts">
 <span>{{ project.repo_count || 0 }} 個 Repo</span>
@@ -2250,24 +2326,11 @@
 <button @click="goChat(project.id)">問答</button>
 <button @click="openEnv(project.id)">測試區</button>
 <button @click="goWiki(project.id)">Wiki</button>
-<button @click="go(project.id)">管理</button>
+<div class="ui-next-project-more"><button type="button" :aria-expanded="moreProjectId===project.id" :aria-label="'專案「'+project.name+'」更多操作'" @click="moreProjectId=moreProjectId===project.id?null:project.id"><ui-next-icon name="dots"/> 更多</button><div v-if="moreProjectId===project.id" class="ui-next-project-more-menu"><button type="button" @click="goDb(project.id);moreProjectId=null">資料庫工具</button><button type="button" @click="goDeploySop(project.id);moreProjectId=null">部署 SOP</button><button type="button" @click="openRelease(project.id)" :disabled="!project.repo_count">上正式</button><button type="button" @click="go(project.id);moreProjectId=null">管理專案</button></div></div>
 </footer>
 </article>
-<p v-if="!filteredProjects.length" class="ui-next-empty-state">找不到符合的專案。</p>
+<p v-if="!filteredProjects.length" class="ui-next-empty-state">{{ search ? '找不到符合的專案。' : '尚無專案。' }} <button v-if="search" type="button" @click="search=''">清除搜尋</button></p>
 </div>
-<section class="ui-next-project-context">
-<article class="ui-next-panel">
-<h2>專案工作原則</h2>
-<p>對話、任務、Repo 與測試環境都歸屬於同一個專案；用專案取代傳統資料夾，才能讓開發脈絡連續。</p>
-</article>
-<article class="ui-next-panel">
-<h2>快捷操作</h2>
-<div>
-<button @click="showAddForm=true">新增專案</button>
-<button @click="$router.push('/tasks')">查看所有任務</button>
-</div>
-</article>
-</section>
 </template>
 <ReleaseModal v-if="releaseId" :key="releaseId" :project-id="releaseId" @close="releaseId=null" />
 </section>`,
@@ -2283,27 +2346,13 @@
   });
   window.UiNextTaskListView = Vue.defineComponent({
     name: "UiNextTaskListView",
-    components: { StatusBar: UiNextStatusBar },
-    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null }; },
+    components: { StatusBar: UiNextStatusBar, UiNextIcon: window.UiNextIcon },
+    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, addError: "", addTrigger: null, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null }; },
     computed: {
       // Vue template 不會把全域 window 暴露到 component scope；在此注入 registry，
       // 避免開啟篩選時讀取 undefined 而卸載整個任務頁。
       statusOptions() {
         return Object.entries(window.STATUS_LABELS || {}).map(([value, label]) => ({ value, label }));
-      },
-      doneCount() {
-        return this.tasks.filter((t) => t.status === "done").length;
-      },
-      activeCount() {
-        return this.tasks.filter(
-          (t) => !t.is_paused && t.status !== "done" && !this.needsAction(t),
-        ).length;
-      },
-      reviewCount() {
-        return this.tasks.filter((task) => /review|qa|approve/.test(task.status || "")).length;
-      },
-      failedCount() {
-        return this.tasks.filter((task) => this.isStopped(task)).length;
       },
       realFilteredTasks() { let list = this.filter === "archived" ? this.archivedTasks : this.filter === "paused" ? this.tasks.filter((task) => task.is_paused) : this.filter === "needs_action" ? this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused)) : this.filter === "pending" ? this.tasks.filter((task) => !task.is_paused && task.status !== "done") : this.tasks; return this.applySort(list.filter((task) => this.matchAll(task))); },
       filteredTasks() { return this.realFilteredTasks; },
@@ -2349,7 +2398,7 @@
       needsAction(task) { return (window.HUMAN_STATUSES || []).includes(task.status); }, isStopped(task) { return task.status === "stopped" || task.status === "merge_conflict"; }, statusLabel(status) { return (window.STATUS_LABELS || {})[status] || status; }, sourceLabel(source) { return source === "odoo" ? "Odoo" : source === "service" ? "eService" : source === "manual" ? "手動增加" : source; }, timeAgo(value) { const delta = Date.now() - new Date(value).getTime(); return delta < 60000 ? "剛剛" : delta < 3600000 ? `${Math.floor(delta / 60000)} 分鐘前` : delta < 86400000 ? `${Math.floor(delta / 3600000)} 小時前` : `${Math.floor(delta / 86400000)} 天前`; },
       async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(this.filter === "archived" ? "tasks?archived=true" : "tasks"); if (this.filter === "archived") this.archivedTasks = data.tasks || data; else { this.tasks = data.tasks || data; window.needsActionCount.value = this.needsActionCount; } } catch (error) { this.loadError = error.message || "無法載入任務"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       taskPath(task) { return `/task/${task.id}`; }, openTask(task) { this.$router.push(this.taskPath(task)); }, onTaskKeydown(task, event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openTask(task); } }, toggleBatchMode() { this.batchMode = !this.batchMode; if (!this.batchMode) this.selectedIds = []; }, toggleSelect(id, event) { event.stopPropagation(); const index = this.selectedIds.indexOf(id); if (index < 0) this.selectedIds.push(id); else this.selectedIds.splice(index, 1); }, toggleSelectAll() { this.selectedIds = this.allSelected ? [] : this.filteredTasks.map((task) => task.id); },
-      openAdd() { this.newTask = { title: "", original_text: "", project_id: "" }; this.newFiles = []; this.showAdd = true; }, onAddFilesSelected(event) { this.newFiles = Array.from(event.target.files || []); }, async submitAdd() { if (!this.newTask.project_id || !this.newTask.title.trim() || !this.newTask.original_text.trim()) return showToast("請完整填寫專案、標題與內容", "error"); if (this.newFiles.length > 5) return showToast("最多上傳 5 個附件", "error"); this.adding = true; try { const form = new FormData(); form.append("title", this.newTask.title.trim()); form.append("original_text", this.newTask.original_text); form.append("project_id", this.newTask.project_id); this.newFiles.forEach((file) => form.append("files", file)); await Api.postForm("tasks", form); this.showAdd = false; this.filter = "all"; showToast("已新增任務", "success"); } catch (error) { showToast(error.message || "新增任務失敗", "error", 0); } finally { this.adding = false; } },
+      openAdd(event) { this.newTask = { title: "", original_text: "", project_id: "" }; this.newFiles = []; this.addError = ""; this.addTrigger = event?.currentTarget || null; this.showAdd = true; this.$nextTick(() => this.$refs.newTaskTitle?.focus()); }, closeAdd() { this.showAdd = false; this.$nextTick(() => this.addTrigger?.focus()); }, onAddFilesSelected(event) { const files = Array.from(event.target.files || []); this.addError = files.length > 5 ? "最多上傳 5 個附件，請重新選擇。" : ""; this.newFiles = files.slice(0, 5); event.target.value = ""; }, removeAddFile(index) { this.newFiles.splice(index, 1); }, trapAddFocus(event) { if (event.key === "Escape") return this.closeAdd(); if (event.key !== "Tab") return; const items = Array.from(this.$refs.taskCreateModal?.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])") || []); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } }, async submitAdd() { if (!this.newTask.project_id || !this.newTask.title.trim() || !this.newTask.original_text.trim()) { this.addError = "請完整填寫專案、標題與內容。"; return; } this.adding = true; this.addError = ""; try { const form = new FormData(); form.append("title", this.newTask.title.trim()); form.append("original_text", this.newTask.original_text); form.append("project_id", this.newTask.project_id); this.newFiles.forEach((file) => form.append("files", file)); await Api.postForm("tasks", form); this.showAdd = false; this.filter = "all"; showToast("已新增任務", "success"); } catch (error) { this.addError = error.message || "新增任務失敗"; showToast(this.addError, "error", 0); } finally { this.adding = false; } },
       async syncNow() { this.syncing = true; try { await Api.post("sync/now", {}); await this.load(); showToast("同步完成", "success"); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } finally { this.syncing = false; } }, async togglePause(task, event) { event.stopPropagation(); try { const result = await Api.put(`tasks/${task.id}/pause`, {}); task.is_paused = result.is_paused; showToast(result.is_paused ? "任務已暫停" : "任務已恢復", "success"); } catch (error) { showToast(error.message || "更新失敗", "error", 0); } },
       async batchPause() { await this.batch("pause"); }, async batchArchive() { await this.batch("archive"); }, async batchUnarchive() { await this.batch("unarchive"); }, async batchDelete() { if (!this.selectedIds.length || !await confirmDialog({ title: "永久刪除任務", message: `確定永久刪除選取的 ${this.selectedIds.length} 筆任務？`, danger: true, confirmText: "刪除" })) return; await this.batch("delete"); }, async batch(action) { if (!this.selectedIds.length) return; this.batchWorking = true; try { await Api.post(`tasks/batch/${action}`, action === "pause" ? { ids: this.selectedIds, paused: true } : { ids: this.selectedIds }); this.selectedIds = []; await this.load(); showToast("批次操作完成", "success"); } catch (error) { showToast(error.message || "批次操作失敗", "error", 0); } finally { this.batchWorking = false; } },
       async archiveTask(task) { if (!await confirmDialog({ title: "封存任務", message: `確定要封存任務「${task.title || task.task_id}」？`, confirmText: "封存" })) return; try { await Api.post(`tasks/${task.id}/archive`, {}); this.tasks = this.tasks.filter((item) => item.id !== task.id); this.moreTaskId = null; showToast("任務已封存", "success"); } catch (error) { showToast(error.message || "封存失敗", "error", 0); } },
@@ -2367,45 +2416,24 @@
 <div class="ui-next-head-tools">
 <button @click="toggleBatchMode">{{ batchMode?'取消批次':'批次' }}</button>
 <button @click="syncNow" :disabled="syncing">{{ syncing?'同步中…':'同步' }}</button>
-<button class="ui-next-primary" @click="openAdd">建立任務</button>
+<button class="ui-next-primary" @click="openAdd($event)">建立任務</button>
 </div>
 </header>
-<div v-if="showAdd" class="ui-next-task-modal-backdrop" @click.self="showAdd=false" @keydown.esc="showAdd=false">
-<section class="ui-next-task-create" role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title">
-<header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" aria-label="關閉建立任務視窗" @click="showAdd=false">關閉</button></header>
+<div v-if="showAdd" class="ui-next-task-modal-backdrop" @click.self="closeAdd" @keydown="trapAddFocus">
+<section ref="taskCreateModal" class="ui-next-task-create" role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title">
+<header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" aria-label="關閉建立任務視窗" @click="closeAdd">關閉</button></header>
 <label>專案
 <select v-model="newTask.project_id">
 <option value="">選擇專案</option>
 <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
 </select></label>
-<label>任務標題<input v-model="newTask.title" required></label>
+<label>任務標題<input ref="newTaskTitle" v-model="newTask.title" required></label>
 <label>需求描述<textarea v-model="newTask.original_text" required></textarea></label>
-<label>附件（最多 5 個）<input type="file" multiple @change="onAddFilesSelected"><small v-if="newFiles.length">已選 {{ newFiles.length }} 個附件</small>
+<label>附件（最多 5 個）<input type="file" multiple @change="onAddFilesSelected"><small v-if="newFiles.length">已選 {{ newFiles.length }} 個附件</small><span v-for="(file,index) in newFiles" :key="file.name+file.size+index" class="ui-next-file-preview">{{ file.name }} <button type="button" :aria-label="'移除附件：'+file.name" @click="removeAddFile(index)"><ui-next-icon name="close"/></button></span>
 </label>
-<footer><button type="button" @click="showAdd=false">取消</button><button class="ui-next-primary" @click="submitAdd" :disabled="adding">{{ adding?'建立中…':'建立任務' }}</button></footer>
+<p v-if="addError" class="ui-next-inline-error" role="alert">{{ addError }}</p>
+<footer><button type="button" @click="closeAdd">取消</button><button class="ui-next-primary" @click="submitAdd" :disabled="adding">{{ adding?'建立中…':'建立任務' }}</button></footer>
 </section></div>
-<div class="ui-next-task-summary-grid">
-<article>
-<small>需回覆</small>
-<b>{{ needsActionCount }}</b>
-<span>全部未封存任務</span>
-</article>
-<article>
-<small>進行中</small>
-<b>{{ activeCount }}</b>
-<span>全部未封存任務</span>
-</article>
-<article>
-<small>等待審核</small>
-<b>{{ reviewCount }}</b>
-<span>全部未封存任務</span>
-</article>
-<article>
-<small>失敗待確認</small>
-<b>{{ failedCount }}</b>
-<span>全部未封存任務</span>
-</article>
-</div>
 <div class="ui-next-task-tabs">
 <button v-for="item in [['needs_action','需回覆',needsActionShown],['pending','待處理',pendingShown],['paused','暫停中',pausedShown],['all','全部',allShown],['archived','已封存','']]" :key="item[0]" :class="{active:filter===item[0]}" @click="filter=item[0]">{{ item[1] }} <b v-if="item[2]!==''">{{ item[2] }}</b>
 </button>
@@ -2490,8 +2518,8 @@
   });
   window.UiNextWikiView = Vue.defineComponent({
     name: "UiNextWikiView",
-    components: { "wiki-node": UiNextWikiNode },
-    data() { return { pages: [], current: null, loading: true, loadError: "", editing: false, editContent: "", saving: false, refreshing: "", building: false, progress: { percent: 0, message: "" }, showAddModal: false, newPageTitle: "", newPageSlug: "", slugTouched: false, addingPage: false, requestId: 0 }; },
+    components: { "wiki-node": UiNextWikiNode, UiNextIcon: window.UiNextIcon },
+    data() { return { pages: [], current: null, loading: true, loadError: "", editing: false, editContent: "", saving: false, refreshing: "", building: false, progress: { percent: 0, message: "" }, showAddModal: false, newPageTitle: "", newPageSlug: "", slugTouched: false, addingPage: false, addPageError: "", addPageTrigger: null, requestId: 0 }; },
     computed: { renderedContent() { return this.current ? renderMarkdown(this.current.content || "") : ""; }, editingSlug() { return this.editing && this.current ? this.current.slug : ""; }, canBuild() { return !this.pages.length && !this.loadError; }, tree() { const byId = {}; this.pages.forEach((page) => { byId[page.id] = { ...page, children: [] }; }); const roots = []; this.pages.forEach((page) => { const node = byId[page.id]; if (page.parent_id && byId[page.parent_id]) byId[page.parent_id].children.push(node); else roots.push(node); }); return roots.sort((a, b) => (a.node_type === "overview" ? -1 : b.node_type === "overview" ? 1 : 0)); } },
     async created() { await this.loadPages(); const slug = this.$route.params.slug; if (slug) await this.loadPage(slug); else if (this.tree.length) await this.loadPage(this.tree[0].slug); },
     beforeUnmount() { this.requestId++; const socket = window._socket; if (socket?.off && this._onProgress) socket.off("wiki:progress", this._onProgress); },
@@ -2501,22 +2529,23 @@
       async loadPages() { this.loading = true; this.loadError = ""; try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); } catch (error) { this.loadError = error.message || "無法載入 Wiki"; } finally { this.loading = false; } },
       async loadPage(slug) { const requestId = ++this.requestId; if (this.editing && this.current && this.current.slug !== slug && !await confirmDialog({ title: "尚未儲存", message: "切換頁面會放棄未儲存的修改。", danger: true, confirmText: "放棄修改" })) { this.$router.replace(`/projects/${this.$route.params.id}/wiki/${this.current.slug}`); return; } try { const page = await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`); if (requestId !== this.requestId) return; this.current = page; this.editContent = page.content || ""; this.editing = false; if (this.$route.params.slug !== slug) this.$router.replace(`/projects/${this.$route.params.id}/wiki/${slug}`); } catch (error) { showToast(error.message || "無法載入頁面", "error", 0); } },
       async save() { if (!this.current || this.saving) return; this.saving = true; try { this.current = await Api.put(`projects/${this.$route.params.id}/wiki/${this.current.slug}`, { content: this.editContent }); this.editing = false; await this.loadPages(); showToast("已儲存", "success"); } catch (error) { showToast(error.message || "儲存失敗", "error", 0); } finally { this.saving = false; } },
-      openAddPage() { this.newPageTitle = ""; this.newPageSlug = ""; this.slugTouched = false; this.showAddModal = true; this.$nextTick(() => this.$refs.newTitleInput?.focus()); }, onTitleInput() { if (!this.slugTouched) this.newPageSlug = this.newPageTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }, onSlugInput() { this.slugTouched = true; },
-      async submitAddPage() { const title = this.newPageTitle.trim(), slug = this.newPageSlug.trim(); if (!title || !slug) return; this.addingPage = true; try { await Api.post(`projects/${this.$route.params.id}/wiki`, { title, slug, content: `# ${title}\n\n` }); this.showAddModal = false; await this.loadPages(); await this.loadPage(slug); } catch (error) { showToast(error.message || "新增失敗", "error", 0); } finally { this.addingPage = false; } },
+      openAddPage(event) { this.newPageTitle = ""; this.newPageSlug = ""; this.slugTouched = false; this.addPageError = ""; this.addPageTrigger = event?.currentTarget || null; this.showAddModal = true; this.$nextTick(() => this.$refs.newTitleInput?.focus()); }, closeAddPage() { this.showAddModal = false; this.$nextTick(() => this.addPageTrigger?.focus()); }, trapAddPageFocus(event) { if (event.key === "Escape") return this.closeAddPage(); if (event.key !== "Tab") return; const items = Array.from(this.$refs.wikiAddModal?.querySelectorAll("button:not([disabled]), input:not([disabled])") || []); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } }, onTitleInput() { if (!this.slugTouched) this.newPageSlug = this.newPageTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }, onSlugInput() { this.slugTouched = true; },
+      async submitAddPage() { const title = this.newPageTitle.trim(), slug = this.newPageSlug.trim(); if (!title || !slug) { this.addPageError = "請填寫頁面標題與 Slug。"; return; } this.addingPage = true; this.addPageError = ""; try { await Api.post(`projects/${this.$route.params.id}/wiki`, { title, slug, content: `# ${title}\n\n` }); this.showAddModal = false; await this.loadPages(); await this.loadPage(slug); } catch (error) { this.addPageError = error.message || "新增失敗"; showToast(this.addPageError, "error", 0); } finally { this.addingPage = false; } },
       async removePage(slug) { if (!await confirmDialog({ title: "刪除頁面", message: `確定刪除「${slug}」？`, danger: true, confirmText: "刪除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/wiki/${slug}`); if (this.current?.slug === slug) this.current = null; await this.loadPages(); } catch (error) { showToast(error.message || "刪除失敗", "error", 0); } },
       async refreshNode(slug) { this.refreshing = slug; try { await Api.post(`projects/${this.$route.params.id}/wiki/${slug}/refresh`); await this.loadPages(); if (this.current?.slug === slug) await this.loadPage(slug); } catch (error) { showToast(error.message || "重新生成失敗", "error", 0); } finally { this.refreshing = ""; } },
       async buildWiki() { this.building = true; try { await Api.post(`projects/${this.$route.params.id}/wiki/init`, {}); await this.loadPages(); if (this.tree.length) await this.loadPage(this.tree[0].slug); } catch (error) { showToast(error.message || "建立 Wiki 失敗", "error", 0); } finally { this.building = false; } },
     },
     template: `
       <section class="ui-next-page ui-next-wiki-page">
-        <header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+$route.params.id)">← 返回專案</button><p class="ui-next-eyebrow">專案知識庫</p><h1>Wiki</h1><p>集中人工備註、模組文件與 AI 產生的排障結論。</p></div><div class="ui-next-detail-actions"><button v-if="canBuild" class="ui-next-primary" @click="buildWiki" :disabled="building">{{ building?'建立中…':'建立 Wiki' }}</button><button @click="openAddPage">新增頁面</button></div></header>
+        <header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+$route.params.id)"><ui-next-icon name="arrow-left"/> 返回專案</button><p class="ui-next-eyebrow">專案知識庫</p><h1>Wiki</h1><p>集中人工備註、模組文件與 AI 產生的排障結論。</p></div><div class="ui-next-detail-actions"><button v-if="canBuild" class="ui-next-primary" @click="buildWiki" :disabled="building">{{ building?'建立中…':'建立 Wiki' }}</button><button @click="openAddPage($event)">新增頁面</button></div></header>
         <section v-if="building" class="ui-next-panel ui-next-wiki-progress"><div><b>{{ progress.message||'建立中…' }}</b><span>{{ progress.percent }}%</span></div><i><em :style="{width:progress.percent+'%'}"></em></i></section>
         <div class="ui-next-wiki-layout"><aside class="ui-next-panel ui-next-wiki-tree"><div class="ui-next-card-title"><h2>頁面</h2><span>{{ pages.length }}</span></div><p v-if="loading" class="ui-next-empty-inline">載入中…</p><div v-else-if="loadError" class="ui-next-error-text">頁面清單載入失敗：{{ loadError }}<button @click="loadPages">重試</button></div><template v-else><wiki-node v-for="node in tree" :key="node.id" :node="node" :depth="0" :current-slug="current&&current.slug" :refreshing="refreshing" :editing-slug="editingSlug" @open="loadPage" @refresh="refreshNode" @remove="removePage"/><p v-if="!pages.length" class="ui-next-empty-inline">尚無頁面。</p></template></aside><main class="ui-next-panel ui-next-wiki-content"><template v-if="current"><header><div><p class="ui-next-eyebrow">{{ current.node_type==='notes'?'人工維護':'文件頁' }}</p><h2>{{ current.title }}</h2></div><div><button v-if="current.node_type!=='notes'&&!editing" @click="editing=true;editContent=current.content">編輯</button><button v-if="editing||current.node_type==='notes'" class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存' }}</button><button v-if="editing&&current.node_type!=='notes'" @click="editing=false">取消</button></div></header><p v-if="current.node_type==='notes'" class="ui-next-field-note">這裡的內容會提供給 AI 作為專案優先脈絡。</p><textarea v-if="editing||current.node_type==='notes'" v-model="editContent" @input="editing=true"></textarea><article v-else class="ui-next-wiki-markdown" v-html="renderedContent"></article></template><div v-else class="ui-next-empty-state">選擇或建立一個頁面開始。</div></main></div>
-        <div v-if="showAddModal" class="ui-next-task-modal-backdrop" @mousedown.self="showAddModal=false"><section class="ui-next-task-modal"><header><h2>新增頁面</h2><button @click="showAddModal=false">×</button></header><label>標題<input ref="newTitleInput" v-model="newPageTitle" @input="onTitleInput" @keyup.enter="submitAddPage" placeholder="例如：銷售訂單模組"></label><label>Slug<input v-model="newPageSlug" @input="onSlugInput" @keyup.enter="submitAddPage" placeholder="例如：sale-order"></label><footer><button @click="showAddModal=false">取消</button><button class="ui-next-primary" @click="submitAddPage" :disabled="addingPage||!newPageTitle.trim()||!newPageSlug.trim()">{{ addingPage?'新增中…':'新增' }}</button></footer></section></div>
+        <div v-if="showAddModal" class="ui-next-task-modal-backdrop" @mousedown.self="closeAddPage" @keydown="trapAddPageFocus"><section ref="wikiAddModal" class="ui-next-task-modal" role="dialog" aria-modal="true" aria-labelledby="wiki-add-title"><header><h2 id="wiki-add-title">新增頁面</h2><button aria-label="關閉新增頁面視窗" @click="closeAddPage"><ui-next-icon name="close"/></button></header><label>標題<input ref="newTitleInput" v-model="newPageTitle" @input="onTitleInput" @keyup.enter="submitAddPage" placeholder="例如：銷售訂單模組"></label><label>Slug<input v-model="newPageSlug" @input="onSlugInput" @keyup.enter="submitAddPage" placeholder="例如：sale-order"></label><p v-if="addPageError" class="ui-next-inline-error" role="alert">{{ addPageError }}</p><footer><button @click="closeAddPage">取消</button><button class="ui-next-primary" @click="submitAddPage" :disabled="addingPage||!newPageTitle.trim()||!newPageSlug.trim()">{{ addingPage?'新增中…':'新增' }}</button></footer></section></div>
       </section>`,
   });
   window.UiNextDeploySopView = Vue.defineComponent({
     name: "UiNextDeploySopView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
         loading: true,
@@ -2755,15 +2784,16 @@
         catch (_) { showToast('複製失敗，請手動選取', 'error'); }
       }
     },
-    template: `<section class="ui-next-page ui-next-sop-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())">← 返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header><div v-if="loading" class="ui-next-loading-card">載入專案設定中…</div><template v-else><section class="ui-next-panel"><h2>環境對應</h2><p class="ui-next-field-note">這些資料只用來生成下方指令，不會儲存；每次部署前都應重新確認。</p><div class="ui-next-sop-grid"><article v-for="side in sides" :key="side.key"><h3>{{ side.label }}</h3><label>連線<select v-model="side.d.connId" @change="onConnPick(side.key)"><option value="">— 請指認 —</option><option v-for="conn in conns" :key="conn.id" :value="conn.id">{{ conn.name }}（{{ conn.db_name }}）</option></select></label><p v-if="side.conn">資料庫：{{ dbOf(side.conn) }}</p><label>systemd 服務名<input v-model="side.d.service" placeholder="odoo.service"></label><label>設定檔路徑<input v-model="side.d.conf" placeholder="/etc/odoo.conf"></label><label>目前 addons 路徑<input v-model="side.d.addons" placeholder="/odoo/custom/addons"></label><label>HTTP port<input v-model="side.d.port"></label></article></div><p v-if="sameConn" class="ui-next-error-text">正式區與測試區不能使用同一個連線，請先分開指認。</p></section><section class="ui-next-panel"><h2>Repo 與分支</h2><div class="ui-next-sop-fields"><label>Repo URL<input v-model="repoUrl"></label><label>自訂模組名稱<input v-model="addon"></label><label>測試分支<input v-model="branchTest"></label><label>正式分支<input v-model="branchProd"></label></div></section><section class="ui-next-panel ui-next-sop-steps"><article v-for="step in [['1','查出伺服器現況',cmdInspect],['2','備份與比對既有 addons',cmdBackup],['3','建立 Git 部署目錄',cmdAttachGit],['4','設定 GitHub Runner',cmdRunner],['5','最小權限 sudo',cmdSudoers],['6','部署 workflow',deployYaml],['7','驗證測試區',cmdVerify]]" :key="step[0]"><header><span>{{ step[0] }}</span><h2>{{ step[1] }}</h2><button @click="copy(step[2])" :disabled="!copyReady(step[2])">複製</button></header><pre>{{ step[2] }}</pre></article></section></template></section>`,
+    template: `<section class="ui-next-page ui-next-sop-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())"><ui-next-icon name="arrow-left"/> 返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header><div v-if="loading" class="ui-next-loading-card">載入專案設定中…</div><template v-else><section class="ui-next-panel"><h2>環境對應</h2><p class="ui-next-field-note">這些資料只用來生成下方指令，不會儲存；每次部署前都應重新確認。</p><div class="ui-next-sop-grid"><article v-for="side in sides" :key="side.key"><h3>{{ side.label }}</h3><label>連線<select v-model="side.d.connId" @change="onConnPick(side.key)"><option value="">— 請指認 —</option><option v-for="conn in conns" :key="conn.id" :value="conn.id">{{ conn.name }}（{{ conn.db_name }}）</option></select></label><p v-if="side.conn">資料庫：{{ dbOf(side.conn) }}</p><label>systemd 服務名<input v-model="side.d.service" placeholder="odoo.service"></label><label>設定檔路徑<input v-model="side.d.conf" placeholder="/etc/odoo.conf"></label><label>目前 addons 路徑<input v-model="side.d.addons" placeholder="/odoo/custom/addons"></label><label>HTTP port<input v-model="side.d.port"></label></article></div><p v-if="sameConn" class="ui-next-error-text">正式區與測試區不能使用同一個連線，請先分開指認。</p></section><section class="ui-next-panel"><h2>Repo 與分支</h2><div class="ui-next-sop-fields"><label>Repo URL<input v-model="repoUrl"></label><label>自訂模組名稱<input v-model="addon"></label><label>測試分支<input v-model="branchTest"></label><label>正式分支<input v-model="branchProd"></label></div></section><section class="ui-next-panel ui-next-sop-steps"><article v-for="step in [['1','查出伺服器現況',cmdInspect],['2','備份與比對既有 addons',cmdBackup],['3','建立 Git 部署目錄',cmdAttachGit],['4','設定 GitHub Runner',cmdRunner],['5','最小權限 sudo',cmdSudoers],['6','部署 workflow',deployYaml],['7','驗證測試區',cmdVerify]]" :key="step[0]"><header><span>{{ step[0] }}</span><h2>{{ step[1] }}</h2><button @click="copy(step[2])" :disabled="!copyReady(step[2])">複製</button></header><pre>{{ step[2] }}</pre></article></section></template></section>`,
   });
   window.UiNextTerminalView = Vue.defineComponent({
     name: "UiNextTerminalView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() { return { taskId: null, taskTitle: "", exitCode: null, running: false, error: "" }; },
     async created() { this.taskId = Number(this.$route.params.id); try { const data = await Api.get(`tasks/${this.taskId}`), task = data.task || data; this.taskTitle = task.title || task.task_id || `Task ${this.taskId}`; this.running = ["analysis_running", "cs_running", "coding_running", "qa_running", "merge_running", "deploy_testing", "playwright_running", "wiki_updating"].includes(task.status); } catch (error) { this.error = error.message || "無法載入任務"; } },
     async mounted() { if (this.error || !window.Terminal) return; const term = new Terminal({ theme: { background: "#1a1a1a", foreground: "#f0f0f0" }, fontSize: 13, fontFamily: "Consolas, monospace", convertEol: true, scrollback: 5000 }); term.open(this.$refs.termContainer); this._term = term; try { const events = await Api.get(`tasks/${this.taskId}/events`); if (Array.isArray(events) && events.length) events.forEach((event) => term.write(event.content)); else term.writeln("\x1b[90m（尚無執行紀錄）\x1b[0m"); } catch {} this._outputHandler = (data) => { if (data.taskId === this.taskId) term.write(data.data); }; this._doneHandler = (data) => { if (data.taskId === this.taskId) { this.exitCode = data.exitCode; this.running = false; term.writeln(`\r\n\x1b[${data.exitCode === 0 ? "32" : "31"}m[Process exited with code ${data.exitCode}]\x1b[0m`); } }; window._socket?.on("terminal:output", this._outputHandler); window._socket?.on("terminal:done", this._doneHandler); },
     beforeUnmount() { window._socket?.off("terminal:output", this._outputHandler); window._socket?.off("terminal:done", this._doneHandler); this._term?.dispose(); },
-    template: `<section class="ui-next-page ui-next-terminal-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/task/'+taskId)">← 返回任務</button><p class="ui-next-eyebrow">執行歷程</p><h1>{{ taskTitle }}</h1><p>{{ running ? '等待新輸出' : exitCode === null ? '任務尚未開始或已等待輸出' : exitCode === 0 ? '任務已成功結束' : '任務已結束，請查看錯誤輸出' }}</p></div></header><p v-if="error" class="ui-next-error-text">{{ error }}</p><section v-else class="ui-next-panel ui-next-terminal-panel"><div class="ui-next-terminal-status">{{ running ? '連線中' : '已結束' }}</div><p class="ui-next-field-note">終端內容固定寬度；小螢幕僅在此區域可左右捲動。</p><div ref="termContainer" class="ui-next-terminal-output"></div></section></section>`,
+    template: `<section class="ui-next-page ui-next-terminal-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/task/'+taskId)"><ui-next-icon name="arrow-left"/> 返回任務</button><p class="ui-next-eyebrow">執行歷程</p><h1>{{ taskTitle }}</h1><p>{{ running ? '等待新輸出' : exitCode === null ? '任務尚未開始或已等待輸出' : exitCode === 0 ? '任務已成功結束' : '任務已結束，請查看錯誤輸出' }}</p></div></header><p v-if="error" class="ui-next-error-text">{{ error }}</p><section v-else class="ui-next-panel ui-next-terminal-panel"><div class="ui-next-terminal-status">{{ running ? '連線中' : '已結束' }}</div><p class="ui-next-field-note">終端內容固定寬度；小螢幕僅在此區域可左右捲動。</p><div ref="termContainer" class="ui-next-terminal-output"></div></section></section>`,
   });
   window.UiNextAdminView = Vue.defineComponent({
     name: "UiNextAdminView",

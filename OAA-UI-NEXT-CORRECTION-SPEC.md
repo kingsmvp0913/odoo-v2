@@ -1,13 +1,14 @@
-# OAA UI Next 修正規格書（稽核檢查點）
+# OAA UI Next 規格書（唯一執行版本）
 
 | 欄位 | 內容 |
 |---|---|
-| 文件版本 | 0.9.1（2026-08-31 實作進度檢查點） |
-| 基準文件 | `OAA-UI-NEXT-SPEC.md` v1.0 |
-| 文件狀態 | 已完成第一輪現況稽核；已開始 P0 修正。下列「本次實作進度」為目前唯一有效進度，不代表整份規格驗收完成。 |
+| 文件版本 | 0.11.0（2026-08-31 換機續作檢查點） |
+| 文件地位 | 本檔為唯一可執行規格；已整併舊版基準與其後續修正決策。 |
+| 文件狀態 | 已完成第一輪現況稽核；已開始 P0／P1 修正。下列「本次實作進度」為目前唯一有效進度，不代表整份規格驗收完成。 |
 | 稽核目標 | 確認原站既有功能在對應 Next UI 中可正常操作、顯示，且 Next UI 符合原規格的獨立介面要求 |
 | 視覺參考 | AskMe 僅作資訊層級、側欄與對話輸入體驗參考，不照搬 OAA 沒有的產品功能 |
-| 本文件限制 | 本輪只產出規格，不修改產品程式、不提交正式資料、不執行刪除或佈署等破壞性操作 |
+| 本文件限制 | 此為執行中規格：可修改本機 Next UI 與測試；不得提交正式資料，亦不得以正式資料試錯、刪除或佈署。 |
+| 追加需求效力 | 本文件第 5.17 節 `NEXT-UX-001`～`NEXT-UX-009` 為最新產品決策；與本文件較早段落衝突時，以第 5.17 節為準 |
 
 ---
 
@@ -34,6 +35,9 @@
 - 狀態顯示以共用 `status-labels.js` 為唯一來源，不得在頁面另建互相矛盾的 mapping。
 - Deploy SOP 統一為七步：檢查、備份與差異、Git 目錄、Runner、sudoers、deploy workflow、驗證。原規格的「六步」應在定稿時改正。
 - AskMe 的價值是「問題優先、安靜的版面層級、清楚的對話入口」；資料夾、模型選擇、分類推薦等 OAA 後端未支援的能力不納入。
+- 「舊對話」指已存在且可由 Sidebar、對話歷程或 deep link 開啟的 Chat；「新對話」指尚未有訊息或剛建立的 Chat。兩者只可有資料狀態差異，不可使用兩套版型或 Composer。
+- 「兩個按鈕區塊」依現行 Sidebar 結構明確指「更多工具」與「帳號與設定」。
+- 本次追加不改變現有 route、API 權限或 Token report 的 admin gate；若產品要讓一般使用者查看 Usage，需另行確認權限規格。
 
 ### 1.2 不在本輪範圍
 
@@ -217,6 +221,7 @@ app/public/js/ui-next/
 - 關閉後焦點回到觸發按鈕。
 - Drawer 開啟時鎖定背景，route change 自動關閉。
 - Popover 支援 Escape、outside click 與正確 `aria-expanded`。
+- Sidebar「更多工具」與「帳號與設定」視為 Popover：點擊選單以外的 Sidebar 或主內容即關閉；點擊選單內部不得誤關；兩者互斥，同一時間只能展開一個；route change、Escape 與行動版 Sidebar 關閉時一併收合。
 
 第一輪已發現：Command Palette 關閉後焦點掉到 `body`；Release Modal、Wiki Modal 與 mobile sidebar 不支援 Escape／focus trap；mobile sidebar 導航後仍可能遮住新頁面。
 
@@ -224,7 +229,7 @@ app/public/js/ui-next/
 
 - 可導向頁面的項目使用 link/router-link，保留開新分頁與 deep link 能力。
 - 當前頁使用 `aria-current="page"`。
-- Sidebar 專案展開狀態存入 `oaa.next.sidebar.projects`；每專案只列最近五個 Chat，另有「查看全部」。
+- Sidebar 專案展開狀態存入 `oaa.next.sidebar.projects`；「專案 Chat」區只列符合 `NEXT-UX-001` 的專案，每專案最多列最近五個 Chat。沒有 Chat 時不得顯示「查看全部對話」；有 Chat 時該入口必須開啟實際含資料的完整對話清單，詳見 `NEXT-UX-002`。
 - Account caret 必須反映實際展開狀態。
 - 禁止用 `↑`、`×`、`←`、`⌄`、`⌃`、`★`、emoji 當正式圖示；全部經過可主題化的 SVG icon registry。
 - 純裝飾 icon 設 `aria-hidden`；icon-only button 必須有可理解的 accessible name。
@@ -284,6 +289,8 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 - 記錄最後成功使用的 project id；不存在或無權限時才回退第一筆。
 - 選定專案後讀取真實 env 狀態，以「未建立／已停止／運行中／錯誤」顯示；不得用模糊占位文案。
 - Project option 顯示專案名稱與 Odoo 版本。
+- 原生單列 `<select>` 改為 AskMe 式 Project combobox：Trigger 與 option 都要清楚分開「專案識別」及「連線資訊」兩層；專案識別至少含名稱與 Odoo 版本，連線資訊使用既有真實資料顯示測試環境與資料庫連線狀態，不顯示密碼、Token、完整連線字串等 Secret。
+- Combobox 支援 Keyboard 開啟、方向鍵移動、Enter 選取、Escape 關閉與 outside click；loading、無權限、狀態未知、無專案必須可區分。資料來源與詳細顯示依 `NEXT-UX-007`。
 - Composer 支援文字自動增高、選檔、貼圖、預覽、移除、大小與數量限制；Enter 換行，Ctrl/Cmd+Enter 送出。
 - 建立流程拆成 create chat 與 send first message 兩階段；第二階段失敗保留已建立 chat id，只重試訊息或安全清理，不得重複建立。
 - 無專案 Empty state 對 admin 提供「建立專案」，對一般使用者說明需聯絡管理員。
@@ -306,6 +313,9 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 - Chat history 使用 380px 右 Drawer；包含搜尋、新 Chat、選取、刪除 dropdown，手機改全寬。
 - 使用者訊息可有 bubble；AI 訊息採主要內容欄，不使用大面積 bordered card。
 - Markdown code block 顯示語言與 Copy；附件列顯示檔名、大小、下載與圖片預覽。
+- 已存在 Chat 與新 Chat 共用同一個 Thread component、訊息 renderer、附件顯示與 Composer；不得因是否有歷史訊息切換成 Legacy 版型或另一套操作。
+- Composer 採 AskMe 式底部浮起／sticky 佈局，在 Thread 可捲動時仍固定可見於 viewport 底部；需保留 safe-area、不得遮住最後一則訊息，手機鍵盤開啟時仍可輸入與送出。
+- Code block 的 Copy 必須複製未經裝飾的原始 code，不包含語言標籤、行號或按鈕文字；成功與失敗都有可感知回饋，並可用 Keyboard 操作。
 - Pending 顯示已耗時；失敗提供 retry，並保留使用者輸入。
 - 新訊息只在使用者接近底部時 auto-scroll；否則顯示「回到最新」。
 - 建立任務流程：摘要 pending → draft Modal → 可編輯標題／描述／專案／附件 → 建立 success。任一步驟失敗均顯示 inline retry，不得靜默重置。
@@ -325,12 +335,12 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 
 **修正要求**
 
-- Summary 固定為「需回覆、進行中、等待審核、失敗待確認」；必須標明是全 tab 或目前 filter 的數量，不能稱「本頁」卻用不同資料集。
+- 移除 `/tasks` 頁面最上方所有統計／Summary 區塊，包括「需回覆、進行中、等待審核、失敗待確認」；不得換成另一組指標卡。任務數量只可作為 tab、filter 或清單結果的輔助文字，不得形成頁首統計區。
 - Task title 為可聚焦 link；次要操作放 More，破壞性操作需確認。
 - 批次模式顯示 sticky/floating toolbar，支援 pause/resume/archive/unarchive；每個 checkbox 以 task title 命名。
 - `tab/project/status/q/sort` 與 route query 雙向同步，上一頁可還原。
 - 建立任務改共用 Modal，使用可見 label、必填、最多五檔、預覽／移除與 per-file error。
-- 手機 header 保留一個主要 CTA，其餘收進 More；tab 可橫向捲動或改 select；summary 使用緊湊 2x2，不阻擋任務內容。
+- 手機 header 保留一個主要 CTA，其餘收進 More；tab 可橫向捲動或改 select。移除統計後，第一屏應直接進入 filter／任務清單。
 - 無資料與 filter 無結果分開；filter 無結果提供「清除篩選」。
 
 ### 5.5 任務詳情與九種 Action Mode
@@ -350,7 +360,10 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 **修正要求**
 
 - 完整支援九種 action mode，逐一建立 normal/pending/success/error/double-submit 測試。
-- 技術 events 移到主欄「執行歷程」，預設收合；action sidebar 只顯示當下需要人決定的資訊。
+- 任務詳情主內容改為三個頁籤，固定順序為「需求內容／對話／執行歷程」；選中頁籤同步至 route query，重新整理、上一頁與下一頁可還原。小螢幕允許頁籤列自身橫向捲動，不得造成頁面級橫向捲動。
+- 「需求內容」包含原始需求、主附件及可用時的規格內容；「對話」包含人工／AI 溝通與九種 action mode；「執行歷程」只放 Pipeline event、技術 log、終端輸出與完整終端機入口，不得把機器 log 混進對話。
+- 技術 events 移到「執行歷程」，預設以結構化摘要呈現並可展開原始內容；Action sidebar 不再作為永久第二欄，當下需要人決定的 action 以 AskMe 式對話卡／Composer 放在「對話」頁籤中。
+- 「對話」頁籤共用 Chat 的訊息 renderer、Code Copy、附件列、auto-scroll／回到最新與底部 sticky Composer；不得維護第二套 Markdown 或 Code block 行為。
 - Question 顯示推薦、原因、備註、成本警示與附件限制；相依題在選擇後即時更新。
 - Spec review 顯示 module、requirements、acceptance、permissions，長內容以 accordion 管理。
 - Review diff 依 repo/file 分段，長內容內部捲動；標示是否截斷並提供附件 chip。
@@ -475,14 +488,15 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 - 報表基本內容已顯示，但 filter/custom date 的 query 同步與錯誤流程仍待補。
 - API 資料不足時 trend 標題可能空白；per-user breakdown 未呈現。
 - quota 一處偏「已用」、一處偏「剩餘」，語意不一致。
-- Sidebar 目前只呈現 Codex 類 quota，未完整反映 Claude/Codex。
+- Sidebar 目前只呈現 Codex 類 quota，未完整反映 Claude/Codex，且 Usage 位於「更多工具／帳號」上方。
 
 **修正要求**
 
 - 日期、專案、Agent、使用者 filter 同步 query；custom range 有 validation。
 - 無資料、API 不支援與真正的零必須分開顯示。
-- Claude/Codex 都統一呈現已用、剩餘與 reset 時間；Sidebar 使用同一 normalized source。
-- 可展開明細使用 SVG caret、`aria-expanded` 與 Keyboard 操作。
+- Sidebar 只顯示 Claude 與 Codex 各自的 5 小時用量，不顯示週用量；兩列都統一呈現 Provider、已用或剩餘百分比及 reset 時間，並使用同一 normalized source。
+- Sidebar 底部順序改為「更多工具」→「帳號與設定」→「Usage」；Usage 是最下方區塊，前兩個按鈕區塊整體上移，不得被 Usage 或 viewport 裁切。
+- 點擊 Usage 進入 `/token-report` 後才顯示週用量與其他明細；週用量不得在 Sidebar 以展開列或第二條 quota 出現。
 
 ### 5.13 Pipeline Monitor
 
@@ -542,6 +556,78 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 - Secret 類設定只顯示 configured/not configured。
 - Desktop table、mobile card、批次與 destructive confirm 都需獨立驗收。
 
+### 5.17 使用者追加 UX 契約（2026-08-31）
+
+本節將本次九項需求編成可追蹤的實作單位。實作者不得只改文字或 CSS 截圖，必須完成對應資料狀態與互動驗收。
+
+#### NEXT-UX-001：Sidebar 專案只保留近期有 Chat 或我的最愛
+
+- 「專案 Chat」不再列出所有有權限的專案；顯示集合固定為「依 Chat 最後互動時間排序的前 5 個不同專案」與「我的最愛專案」的聯集。
+- 最近互動專案與我的最愛以 Project ID 去重；同一專案同時符合兩者時只顯示一次，仍保留最愛標記，不得因分組而產生兩列。
+- 最愛專案即使沒有 Chat 仍顯示；非最愛且不在最近互動前 5 名者只從 Sidebar 隱藏，不影響 `/projects` 清單、deep link、權限或資料。
+- 篩選必須由可批次取得的 metadata 完成；不得為每個專案各打一次 Chat API 造成 N+1。
+- Loading、真正無符合專案、API error 必須分開；error 不得被當成「沒有近期 Chat」。
+- 「最後互動時間」以該 Chat 最新一則訊息時間為準；尚無訊息的空 Chat 不計入最近互動，但其專案若為我的最愛仍照常顯示。
+
+#### NEXT-UX-002：專案展開與「查看全部對話」
+
+- 展開後 Chat 數量為 0：不顯示「查看全部對話」，也不得用可點擊的「尚無對話」冒充 Chat row；建立對話由既有「新對話」或專案 Chat Empty CTA 負責。
+- Chat 數量大於 0：顯示最近 Chat 與「查看全部對話」。點擊後開啟該專案的完整對話歷程，至少能看到剛才 Sidebar 已列出的同一筆 Chat，不能進到空白主畫面。
+- 完整清單須有 loading、empty、error、retry；刪除或建立 Chat 後 Sidebar 與完整清單一致更新。
+
+#### NEXT-UX-003：舊／新對話一致與 Composer 永遠置底
+
+- 從 Sidebar、完整歷程、重新整理或 deep link 打開舊 Chat，與剛建立的新 Chat 使用同一版型與操作。
+- Composer 固定在 Chat viewport 最底部並有浮起層級；訊息區獨立捲動，底部 padding 至少等於 Composer 實際高度加 safe-area。
+- 短對話、長對話、等待 AI、錯誤重試、手機虛擬鍵盤與 360px viewport 都不能讓 Composer 離開畫面或遮住最新訊息。
+
+#### NEXT-UX-004：AskMe 式訊息閱讀與 Code Copy
+
+- AI 內容採單欄、低邊框、以字體與留白建立層級的 AskMe 式閱讀；使用者訊息可保留 bubble，但不得讓 AI 長回答變成巢狀大卡片。
+- Heading、list、quote、table、inline code、code block、link 與附件在深淺色都可讀；table/code 只在自身容器橫向捲動。
+- 每個 code block 右上提供 Copy 與語言標籤；複製內容是原始 code，成功狀態可見且不只靠顏色，失敗提供可持續錯誤。
+- 對話頁與任務詳情的「對話」頁籤共用同一 renderer 與 Copy 行為。
+
+#### NEXT-UX-005：更多工具與帳號 Popover 可點外部關閉
+
+- 點擊 Popover 以外任意可見區域會關閉；點擊內容內部不會因事件冒泡提早關閉。
+- 開啟其中一個會關閉另一個；再次點 Trigger、Escape、route change、登出或關閉行動 Sidebar 也會關閉。
+- 關閉後焦點回 Trigger，`aria-expanded` 與實際狀態一致。
+
+#### NEXT-UX-006：移除任務頁首統計
+
+- `/tasks` 的頁首統計卡／Summary 完整移除，桌機與手機都不保留空白高度。
+- 搜尋、tab、filter、sort、建立任務與任務卡本身不受影響；原本統計 API 若沒有其他 consumer，實作時才評估移除請求，不得在本需求順手改後端統計語意。
+
+#### NEXT-UX-007：首頁問答 Project combobox
+
+- 參考 AskMe 的緊湊、兩層資訊選單，不直接照搬其資料夾或模型功能。
+- Trigger 顯示目前專案；option 第一層顯示專案名稱與 Odoo 版本，第二層另列既有可取得的連線狀態，最少區分「測試環境」與「資料庫連線」。
+- 連線狀態只能來自真實 API；未載入、未設定、已連線、錯誤需使用不同文字，不得以「—」把未知與未設定混為一談。
+- 不顯示 Secret、帳密、Token 或完整 DSN。選取後仍保存最後成功使用的 Project，並更新 Composer context 與環境狀態。
+
+#### NEXT-UX-008：Sidebar Usage 順序與內容
+
+- Sidebar 自上而下為「更多工具」「帳號與設定」「Usage」；Usage 貼齊 Sidebar 最下方並納入 safe-area。
+- Usage 只顯示 `Claude 5hr` 與 `Codex 5hr`，不混入週用量、專案 Token 花費或其他 Provider。
+- 任一 Provider unavailable 時保留另一列；不可因 Claude 失敗而隱藏 Codex，反之亦然。Stale／無權限／API error 不得冒充 0%。
+- 點擊整個 Usage 區塊進用量報表查看週用量；Keyboard 可操作並具 link 語意。
+
+#### NEXT-UX-009：任務詳情三頁籤
+
+- 頁籤固定為「需求內容」「對話」「執行歷程」，各自只有一個清楚的 H2／panel 起點；不得在三頁籤外再重複完整內容。
+- 「對話」採 `NEXT-UX-003`、`NEXT-UX-004` 的 Thread／Composer，並承載九種 action mode；需要回答、審核或裁決時不能只藏在另一個永久側欄。
+- 「執行歷程」保留時間、stage、狀態、技術 log、終端輸出與完整終端機入口；預設先顯示人可讀摘要，原始輸出按需展開。
+- 頁籤寫入 `?tab=requirements|conversation|history`；無效值安全回預設頁籤，瀏覽器歷程可還原。
+- 預設頁籤依共用的「需要使用者處理」判定：任務需要回答、審核、裁決或補充資料時進「對話」；其他狀態進「需求內容」。不得在頁面另列一份 status mapping，避免與 Sidebar／任務列表的 needs-action 判定漂移。
+- 使用者仍可手動切換頁籤；已有合法 `tab` query 時尊重使用者選擇。任務在頁面開啟期間新轉為需要處理時，顯示明確提示並將首次自動焦點導向「對話」，不得每次即時更新都強制搶回頁籤。
+
+### 5.18 已確認決策與安全邊界
+
+1. `NEXT-UX-001` 已定案為最近互動的 5 個不同專案加上我的最愛，以 Project ID 取聯集並去重。
+2. `NEXT-UX-009` 已定案為：需要使用者處理時預設「對話」，其餘預設「需求內容」。
+3. `NEXT-UX-007` 的「資料庫連線」若一般使用者依現有權限無法讀取，不得為了顯示狀態放寬 Secret 或 DB API 權限；此時只顯示其可讀的測試環境狀態，或使用不含敏感資料的布林 metadata API。
+
 ---
 
 ## 6. 原站功能對應驗收矩陣
@@ -556,12 +642,12 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 | Task Detail | 九種 action mode、歷程、附件 | 部分完成 | 完整模式與 pending/error/double-submit |
 | Projects | 搜尋、最愛、新增、工具入口 | 部分完成 | env、三欄、More、CRUD 安全驗證 |
 | Project Detail | Repo、Env、E2E、設定、Release | 顯示但語意錯誤 | env matrix、rollback、release overlay |
-| Chat | CRUD、訊息、附件、建立任務 | 阻斷 | route reuse、empty CTA、draft error、Drawer |
+| Chat | CRUD、訊息、附件、建立任務 | 阻斷 | route reuse、empty CTA、舊／新版型一致、sticky Composer、Code Copy、Drawer |
 | Wiki | Tree、Notes/Page CRUD | Legacy 包裝 | Next 獨立改寫、dirty guard、mobile Drawer |
 | Terminal | 即時輸出、重連、歷史 | Legacy 包裝 | Next controller、單一 header、狀態語意 |
 | DB | VPN、連線、probe、query | Legacy 包裝 | 功能 parity、secret、RWD、深色 |
 | SOP | 七步與 Copy | 部分完成 | 去 Legacy methods、placeholder safety |
-| Token | quota、filter、breakdown | 大致可顯示 | query、空值、Claude/Codex normalization |
+| Token | quota、filter、breakdown | 大致可顯示 | Sidebar 僅 Claude/Codex 5hr、週用量移至報表、順序、query、空值與 normalization |
 | Pipeline | 即時區塊、對話入口 | 大致可顯示 | timestamp、visibility、error isolation |
 | Diagrams | Architecture、Pipeline Flow | Legacy 包裝 | 獨立 canvas、控制、Keyboard |
 | Settings | 帳號、密碼、GitHub、外部連線 | 部分完成 | 分區表單、validation、通知狀態 |
@@ -623,6 +709,10 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 - Composer create-chat/send-message 分段重試。
 - Optimistic mutation failure rollback。
 - Overlay open/close/focus restore 狀態機。
+- Sidebar 專案 metadata 篩選、空 Chat 不顯示「查看全部」、有 Chat 的完整歷程一致性。
+- Project combobox 的兩層資訊、Keyboard 與連線狀態矩陣。
+- 任務三頁籤 query 還原，以及對話／技術事件不混流。
+- Claude/Codex 5hr 正規化、單一 Provider 失敗與週用量不進 Sidebar。
 
 ### 8.3 Browser E2E
 
@@ -638,6 +728,11 @@ Error toast 預設不可自動消失；使用者需能手動關閉與複製必�
 8. Direct URL reload、上一頁／下一頁與 query 還原。
 9. API 401/403/404/409/500、offline、Socket reconnect。
 10. Double click 不得產生兩次 mutation。
+11. Sidebar「更多工具／帳號」可由 outside click 關閉、互斥，並正確還原焦點。
+12. 空／有 Chat 專案展開結果正確，「查看全部」開啟非空完整歷程。
+13. 舊 Chat、新 Chat 與任務對話頁籤的 Composer 在 360／768／1440 viewport 置底且不遮訊息。
+14. 任務列表首屏沒有統計區塊；任務詳情三頁籤可由 query、reload、back/forward 還原。
+15. Sidebar 只出現 Claude/Codex 5hr，Usage 位於最下方，點入報表後才看到週用量。
 
 E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；除明確 allowlist 外全部失敗。
 
@@ -750,18 +845,20 @@ E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；�
 | Next 路由權限 | NEXT-P0-001 | 已移除全域 admin gate；登入使用者可進一般 Next 路由，僅 admin route 受 `requiresAdmin` 保護；新增 403 頁與登入後返回原 route。 | 尚未完成匿名、session expired、一般使用者與 admin 的完整 browser route matrix。 |
 | Next asset 載入 | 4.5 | 已改為只有 `?ui=next` 時載入 Next CSS/JS。 | 尚未以 Network/完整 route matrix 驗證所有 Legacy 情境。 |
 | 任務篩選白屏 | NEXT-P0-002 | 任務列表已改為獨立 Next component，篩選選項不再由 Vue template 直接讀取 `window.STATUS_LABELS`。 | 已有靜態回歸測試；尚未完成規格要求的 browser filter／URL query E2E。 |
-| 任務列表狀態流程 | 5.4 | 已將卡片流程列改為獨立元件，依既有狀態流程呈現客服、補資料、分析、確認、開發、QA、部署、測試、審核、完成等步驟；完成／錯誤改用 SVG registry，不再以 Unicode glyph 顯示。摘要改為需回覆、進行中、等待審核、失敗待確認，並明示範圍是全部未封存任務。 | 已在登入中的本機頁面確認 5 張任務卡、9 個 SVG 狀態圖示，且狀態列沒有 `✓`／`✕`；尚未完成各狀態與響應式視覺矩陣。 |
-| 任務新增與 More 操作 | 5.4、4.6 | 建立任務改用含標題、取消、可見 label 與附件數量提示的 Next Modal；卡片 More 已提供封存、解除封存、永久刪除，刪除操作經確認 dialog。 | 已在登入中的實頁驗證卡片與統計；尚未在隔離資料實作 mutation、focus trap 與 mobile toolbar 驗收。 |
+| 任務列表狀態流程 | 5.4、NEXT-UX-006 | 已將卡片流程列改為獨立元件，並移除頁首四格 Summary；完成／錯誤改用 SVG registry。 | 靜態回歸已覆蓋；各狀態與響應式 browser 矩陣尚未完成。 |
+| 任務新增與 More 操作 | 5.4、4.6 | 建立任務 Modal 已有 title、取消、可見 label、附件預覽／移除、焦點圈限、Escape、焦點回復及 inline error；卡片 More 提供封存、解除封存、永久刪除。 | 尚未在隔離資料完成全部 mutation、double-submit 與 mobile toolbar 驗收。 |
 | Chat／專案／設定等頁面 | 4.1、5.3、5.7、5.15 | Chat、任務列表、專案列表、專案詳情與設定已改用 Next component；直接委派 Legacy View lifecycle/options/component wrapper 的模式已移除。 | 部分功能仍沿用從舊頁面搬入的 markup/class，尚未完成第 4.5 節所要求的視覺與 CSS 獨立；不可宣告 Next parity。 |
 | 登入與註冊 | 5.1 | `/login` 在 Next 模式已改用 `UiNextLoginView`，自行處理首次設定、登入、註冊六步流程、返回目標與 pending/error。 | 已確認已登入進入 `/login` 會安全回到首頁；因不得登出使用者既有 session，匿名登入、註冊與各外部憑證驗證仍需隔離帳號驗收。 |
-| 首頁問答 | 5.2 | 已補 project 記憶、環境狀態、附件限制／預覽、重試與 composer 操作。 | 尚未在隔離資料或 mock 完整驗證 create-chat/send-message 的所有失敗分支。 |
+| 首頁問答 | 5.2、NEXT-UX-007 | 已補 project 記憶、附件限制／預覽、重試與 AskMe 式 combobox；新增安全 env summary API，option 顯示真實測試環境與資料庫連線狀態，不回傳 URL、port、log 或 Secret。 | 尚未在隔離資料或 mock 完整驗證 create-chat/send-message 的所有失敗分支。 |
 | 行動版任務詳情 | NEXT-P0-005 | 已加入小螢幕單欄與 action panel 寬度限制 CSS。 | 尚未在 360px 實際 browser 驗收所有可互動元素 rect。 |
-| Chat empty state | NEXT-P0-004 | 無既有 Chat 的 Next 專案頁已提供「開始新對話」CTA。 | 已在登入中的 project 23 實頁確認；建立與第一則訊息的成功／失敗流程尚未在隔離資料驗收。 |
+| Chat empty state／Drawer | NEXT-P0-004、NEXT-UX-002～004 | 無既有 Chat 的 Next 專案頁提供「開始新對話」CTA；完整清單有 loading/error retry、搜尋、新對話、刪除 More；新舊 Chat 共用 Thread、sticky Composer、Markdown／Code Copy。 | 建立、刪除與第一則訊息的隔離 mutation／360px 實機驗收尚未完成。 |
 | Chat route lifecycle | NEXT-P0-003 | Chat component 在 `$route.fullPath` 變更時重新載入，並以 request id 忽略舊回應。 | 尚缺兩個有資料的專案／對話之間的實機慢回應 race-condition 測試。 |
+| Sidebar／Usage／Popover | NEXT-UX-001、005、008 | Sidebar 僅列最近互動五個不同專案加上我的最愛；metadata API 不含訊息內容；More／帳號可點外部關閉、Escape、互斥與焦點回復；Usage 固定置底且僅顯示 Claude／Codex 5hr。 | 尚待完整 browser interaction 驗收。 |
+| 專案卡 | 5.7 | 已移除底部說明／快捷區、空描述佔位與資料夾 icon；標題、版本與右上實心我的最愛同行。卡片 More 提供 DB、Deploy SOP、Release、管理與點外關閉。 | 尚待 browser RWD 與 Release mutation 驗收。 |
 | 任務 URL 與 Keyboard | 5.4、7.2 | `tab/project/status/source/q/sort/release` 會同步至 query；任務標題改為 router link，卡片可用 Enter／Space 開啟，批次 checkbox 具任務名稱。 | 已於實頁載入 query、變更排序後確認網址同步；尚未完成全 filter matrix 與讀屏驗收。 |
 | 任務 Filter 白屏 | NEXT-P0-002 | 實頁開啟篩選、呈現狀態／專案／來源選項後，任務清單仍保留且未出現 inline error；不再重現白屏。 | 尚未建立規格要求的自動 browser console/pageerror regression gate。 |
-| Wiki 獨立生命週期 | 4.1、5.9 | `UiNextWikiView` 已改為自身的資料、route watcher、API request id、Socket progress 訂閱與 CRUD 方法，不再委派 `window.WikiView` lifecycle 或 methods。 | 已在登入中的空 Wiki 實頁驗證載入與 empty state；有資料樹、dirty guard、CRUD mutation 與 mobile Drawer 仍待隔離資料驗收。 |
-| 任務詳情獨立生命週期 | 4.1、5.5 | `UiNextTaskDetailView` 已內聚完整 data、computed、route/socket lifecycle 與 action methods，不再委派 `window.TaskDetailView`。 | 已在登入中的 task 184 實頁驗證載入；九種 action mode 的隔離 mutation、RWD 與 error path 尚待驗收。 |
+| Wiki 獨立生命週期 | 4.1、5.9 | `UiNextWikiView` 已改為自身的資料、route watcher、API request id、Socket progress 訂閱與 CRUD 方法；新增頁面 Modal 已補焦點圈限、Escape、回復焦點與 inline error。 | 有資料樹、dirty guard、CRUD mutation 與 mobile Drawer 仍待隔離資料驗收。 |
+| 任務詳情獨立生命週期 | 4.1、5.5、NEXT-UX-009 | `UiNextTaskDetailView` 已內聚 data、route/socket lifecycle；需求／對話／執行歷程三頁籤同步 query；技術歷程改為摘要、分類、展開原始輸出與 retry；對話操作在單欄頁籤內。 | 九種 action mode 的隔離 mutation、RWD 與 error path 尚待驗收。 |
 | Deploy SOP 獨立生命週期 | 4.1、5.11 | `UiNextDeploySopView` 已內聚專案／連線資料載入、七步指令產生、placeholder 與複製邏輯，不再委派 `window.DeploySopView`。 | 已在登入中的 project 23 實頁驗證七步顯示；未解析 placeholder 的 Copy disabled 與錯誤路徑尚待補齊。 |
 | Terminal 獨立頁 | 4.1、5.6 | `/task/:id/terminal` 在 Next 模式已改用 `UiNextTerminalView`，獨立處理歷史事件、Socket output/done 與 xterm dispose。 | 已在登入中的 task 184 實頁驗證為單一 Next header；斷線／reconnect 與手機內部捲動待補 browser 驗收。 |
 | DB 工具獨立生命週期 | 4.1、5.10 | `/projects/:id/db` 在 Next 模式已改用 `UiNextDbView`，內聚 VPN、連線 CRUD/test/probe 與 query 操作，不再經過通用 Legacy frame。 | 已在登入中的 project 23 實頁驗證單一頁首；各連線型態、query 與 mobile table/card 尚待隔離資料驗收。 |
@@ -769,8 +866,9 @@ E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；�
 
 ### 11.2 已驗證測試
 
-- `app/server/tests/frontend-ui-next.test.js`：最近一次執行為 **22/22 通過**。
-- 此測試目前主要為靜態回歸保護，**不等同**第 8 節要求的 mount/browser E2E、console error、pageerror 或未處理 rejection 驗收。
+- 最近一次目標測試指令：`cd app && npm test -- --runInBand --silent --noStackTrace --no-color server/tests/frontend-ui-next.test.js server/tests/frontend-markdown-xss.test.js server/tests/frontend-status-labels.test.js server/tests/chat-routes.test.js server/tests/env-routes.test.js`。
+- 結果：**5 suites、283 tests 通過**（2026-08-31）。其中涵蓋 Next UI 靜態回歸、Markdown XSS、狀態標籤、Chat metadata API 與 env summary API。
+- 此測試目前仍以靜態與 API 回歸為主，**不等同**第 8 節要求的 mount/browser E2E、console error、pageerror 或未處理 rejection 驗收。
 - 完整測試套件尚未綠燈；已觀察到與本輪 UI 修改無直接關係的既有失敗（enterprise-sources、VPN gateway 暫存路徑、frontend toast 在非 browser 環境讀取 `window`）。在逐支重跑並確認前，不得將其標示為本次修正已通過或既有基線。
 
 ### 11.3 目前已知未解決／回歸問題
@@ -784,10 +882,18 @@ E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；�
 
 ### 11.4 尚未開始或未完成的主要範圍
 
+- `NEXT-UX-001`～`NEXT-UX-009` 已有部分實作：Sidebar 集合／Chat Drawer／Code Copy／Popover／任務 Summary 移除／首頁 combobox／Usage／三頁籤均已落地；其 browser、RWD、權限與 mutation 證據仍未完成，不得宣告整組驗收通過。
 - NEXT-P0-003 Chat route 切換 race condition、NEXT-P0-004 無 Chat empty CTA 的完整實機驗收。
 - NEXT-P0-006 規格要求的 selector parser、mount/browser interaction test 與 runtime error gate。
 - Task Detail 九種 action mode、Wiki、Terminal、DB、SOP、Token、Pipeline、Settings、Diagram、Admin 的完整獨立頁與 parity。
 - 第 7、8、10 節列出的 viewport、深淺色、Keyboard/focus、身分矩陣、mutation 隔離驗證與效能驗收。
+
+### 11.5 換機續作交接
+
+- 唯一規格文件：本檔 `OAA-UI-NEXT-CORRECTION-SPEC.md`。
+- 目前工作樹修改集中於 `app/public/js/ui-next/UiNextApp.js`、`app/public/js/ui-next/UiNextPages.js`、`app/public/css/ui-next.css`、`app/public/css/ui-next-pages.css`、`app/server/chat-routes.js`、`app/server/env-routes.js` 與相對應 tests；不得覆蓋或還原其中變更。
+- 下一優先：補 Next browser route／interaction matrix（含 console error、pageerror、unhandled rejection），再依第 10 節做隔離 mutation、RWD 與權限矩陣。既有 `app/rwd/capture.js` 有 runtime error gate，但目前基線路由不是 Next 專用，不能當作 Next 驗收證據。
+- 已知測試環境注意：`project-routes.test.js` 曾在測試案例通過後嘗試連外部 PostgreSQL 而使 Jest 非零結束；此問題尚未建立乾淨 HEAD 基線，不得標記為本輪既有紅燈或修正完成。
 
 ## 12. Definition of Done
 
@@ -803,4 +909,4 @@ E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；�
 - Mutation 已在隔離環境或可靠 mock 驗證，不以正式資料試錯。
 - `?ui=next` 灰度使用期間沒有 route 資料錯置、白屏或權限退化。
 
-本文件 v0.9 是今日檢查點：P0 與多數跨頁問題已具備可實作規格；第 10 節完成並回填證據後，才升版為最終 v1.0。
+本文件 v0.10 是今日檢查點：P0、多數跨頁問題與 `NEXT-UX-001`～`NEXT-UX-009` 已具備追蹤規格，第 5.18 節產品決策已確認；接續依第 8 節補實作與驗收證據。第 10 節完成並回填證據後，才升版為最終 v1.0。

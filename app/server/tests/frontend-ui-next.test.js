@@ -194,6 +194,11 @@ describe("ui-next 平行介面", () => {
     expect(css).toContain('@media(prefers-reduced-motion:reduce)');
     expect(css).toContain('@media(min-width:768px) and (max-width:1199px)');
     expect(css).toContain('@media(max-width:767px)');
+    expect(uiNext).toContain('href="#ui-next-main"');
+    expect(uiNext).toContain('<main id="ui-next-main"');
+    expect(css).toContain('--next-brand:#93C5FD');
+    expect(css).not.toContain('#C5A3BB');
+    expect(css).toContain('.ui-next-task-rich-head h2 a{color:#fff}');
   });
 
   test("動態 HTML 容器不保留子節點，避免 Vue 在進入詳情頁時拒絕編譯", () => {
@@ -209,8 +214,26 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain("statusOptions()");
     expect(uiNextPages).not.toContain("window.STATUS_LABELS\" :key");
     expect(uiNextPages).toContain("開始新對話");
+    expect(uiNextPages).toContain('filteredChats()');
+    expect(uiNextPages).toContain('搜尋對話');
+    expect(uiNextPages).toContain('historyMenuId===chat.id');
+    expect(uiNextPages).toContain('無法建立對話，請重試。');
+    expect(uiNextPages).toContain('chatsError');
+    expect(uiNextPages).toContain('ui-next-chat-full-list');
     expect(uiNextPages).not.toMatch(/window\.ProjectChatView\.(?:data|computed|watch|methods|created)/);
     expect(uiNextPages).toContain('requestId !== this.requestId');
+  });
+
+  test("首頁 Project combobox 顯示安全且真實的兩層環境資訊", () => {
+    const question = uiNext.slice(
+      uiNext.indexOf('name: "UiNextQuestionView"'),
+      uiNext.indexOf('name: "UiNextApp"'),
+    );
+    expect(question).toContain('Api.get("projects/env-summaries")');
+    expect(question).toContain('projects/${this.projectId}/env/summary');
+    expect(question).toContain('environmentOptionLabel(project)');
+    expect(question).toContain('資料庫連線：${database}');
+    expect(question).not.toContain('資料庫連線依你的權限顯示');
   });
 
   test("已移轉的專案清單與設定頁不再委派 Legacy View", () => {
@@ -226,6 +249,18 @@ describe("ui-next 平行介面", () => {
     expect(projectDetail).not.toMatch(
       /window\.ProjectDetailView\.(?:data|computed|watch|methods|created|mounted|beforeUnmount|unmounted)/,
     );
+  });
+
+  test("Wiki 新增頁面視窗保留焦點、取消與失敗回饋", () => {
+    const wiki = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextWikiView"'),
+      uiNextPages.indexOf('name: "UiNextDeploySopView"'),
+    );
+    expect(wiki).toContain('trapAddPageFocus(event)');
+    expect(wiki).toContain('ref="wikiAddModal"');
+    expect(wiki).toContain('role="dialog"');
+    expect(wiki).toContain('role="alert"');
+    expect(wiki).toContain('@click="closeAddPage"');
   });
 
   test("P0：手機任務詳情 action panel 不會維持超出容器的最小寬度", () => {
@@ -270,15 +305,121 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain('name: "UiNextLoginView"');
     expect(uiNextPages).not.toMatch(/window\.LoginView\.(?:data|computed|watch|methods|created|mounted|beforeUnmount)/);
     expect(css).toContain(".ui-next-login{");
+    expect(uiNextPages).toContain('class="ui-next-login" data-ui="next"');
+    expect(css).toContain('[data-ui="next"].ui-next-login{box-sizing:border-box;width:100%');
   });
 
-  test("Next 任務列表使用清楚統計、Modal 與破壞性操作確認", () => {
-    ["需回覆", "進行中", "等待審核", "失敗待確認"].forEach((label) =>
-      expect(uiNextPages).toContain(label),
-    );
+  test("Next 任務列表移除頁首統計，仍保留 Modal 與破壞性操作確認", () => {
+    expect(uiNextPages).not.toContain('class="ui-next-task-summary-grid"');
+    expect(uiNextPages).not.toContain("failedCount()");
     expect(uiNextPages).toContain('role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title"');
     expect(uiNextPages).toContain("async deleteTask(task)");
     expect(uiNextPages).toContain('title: "永久刪除任務"');
     expect(pagesCss).toContain(".ui-next-task-modal-backdrop{");
+  });
+
+  test("建立任務 Modal 會保留失敗內容、限制附件並管理焦點", () => {
+    expect(uiNextPages).toContain("trapAddFocus(event)");
+    expect(uiNextPages).toContain("this.addTrigger?.focus()");
+    expect(uiNextPages).toContain("最多上傳 5 個附件，請重新選擇。");
+    expect(uiNextPages).toContain("removeAddFile(index)");
+    expect(uiNextPages).toContain('ref="taskCreateModal"');
+    expect(uiNextPages).toContain('class="ui-next-file-preview"');
+    expect(uiNextPages).toContain('components: { StatusBar: UiNextStatusBar, UiNextIcon: window.UiNextIcon }');
+  });
+
+  test("Sidebar 只用批次 Chat metadata 篩選近期專案，Usage 與 Popover 遵循 Next UX", () => {
+    expect(uiNext).toContain('Api.get("chats/sidebar-projects")');
+    expect(uiNext).toContain("sidebarChatProjects.slice(0, 5)");
+    expect(uiNext).toContain("project.is_favorite");
+    expect(uiNext).not.toContain('>尚無對話</button>');
+    expect(uiNext).toContain('v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats"');
+    expect(uiNext).toContain("document.addEventListener(\"pointerdown\", this._onOutsidePointer)");
+    expect(uiNext).toContain("closePopovers(true)");
+    expect(uiNext).toContain('label: "Claude 5hr"');
+    expect(uiNext).toContain('label: "Codex 5hr"');
+    expect(uiNext).toContain('to="/tasks"');
+    expect(uiNext).toContain('to="/projects"');
+  });
+
+  test("首頁專案選擇器保留最後專案，並區分載入、錯誤與真實測試環境狀態", () => {
+    expect(uiNext).toContain("oaa.next.last-project-id");
+    expect(uiNext).toContain('class="ui-next-project-picker"');
+    expect(uiNext).toContain('role="listbox"');
+    expect(uiNext).toContain("onProjectPickerKeydown(event)");
+    expect(uiNext).toContain("測試環境狀態讀取失敗");
+    expect(uiNext).toContain('Api.get(`projects/${this.projectId}/env/summary`)');
+  });
+
+  test("任務詳情以三個可還原 query 的頁籤分離需求、對話與執行歷程", () => {
+    expect(uiNextPages).toContain("taskTab: 'requirements'");
+    expect(uiNextPages).toContain("['requirements', 'conversation', 'history']");
+    expect(uiNextPages).toContain("setTaskTab(tab)");
+    expect(uiNextPages).toContain("@click=\"setTaskTab('requirements')\"");
+    expect(uiNextPages).toContain("@click=\"setTaskTab('conversation')\"");
+    expect(uiNextPages).toContain("@click=\"setTaskTab('history')\"");
+    expect(uiNextPages).toContain("is-tab-'+taskTab");
+    expect(uiNextPages).toContain('eventSummary(event)');
+    expect(uiNextPages).toContain('toggleEvent(event)');
+    expect(uiNextPages).toContain('eventsError');
+    expect(uiNextPages).toContain('ui-next-event-summary');
+    expect(pagesCss).toContain('.ui-next-task-detail-grid.is-tab-conversation{grid-template-columns:minmax(0,1fr)}');
+    expect(pagesCss).toContain('.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{grid-column:1}');
+  });
+
+  test("Chat Thread 使用單一 Composer 並提供原始程式碼複製", () => {
+    expect(uiNext).toContain("window.renderNextMarkdown");
+    expect(uiNext).toContain("navigator.clipboard.writeText(code)");
+    expect(uiNext).toContain('data-copy-code="true"');
+    expect(uiNextPages).toContain('@click="handleMessageClick"');
+    expect(uiNextPages).toContain('@click="handleTaskMessageClick"');
+    expect(pagesCss).toContain(".ui-next-code-block{");
+    expect(pagesCss).toContain(".ui-next-thread-messages{min-height:0;flex:1;overflow:auto");
+  });
+
+  test("對話歷程是可 Escape 與 focus trap 的右側 Drawer", () => {
+    expect(uiNextPages).toContain('ref="historyDrawer"');
+    expect(uiNextPages).toContain("onHistoryKeydown(event)");
+    expect(uiNextPages).toContain("this.closeHistory(); return;");
+    expect(pagesCss).toContain("inset: 0 0 0 auto;");
+    expect(pagesCss).toContain("width: min(380px, 100vw);");
+  });
+
+  test("Chat 建立任務 Overlay 可關閉、圈限焦點並保留失敗內容", () => {
+    const chat = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextProjectChatView"'),
+      uiNextPages.indexOf('name: "UiNextProjectDetailView"'),
+    );
+    expect(chat).toContain('onTaskModalKeydown(event)');
+    expect(chat).toContain('ref="chatTaskModal"');
+    expect(chat).toContain('closeTaskModal()');
+    expect(chat).toContain('建立任務失敗，請重試。');
+    expect(chat).toContain('role="alert"');
+  });
+
+  test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {
+    const projects = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextProjectListView"'),
+      uiNextPages.indexOf('name: "UiNextWikiView"'),
+    );
+    expect(projects).toContain('folderNameError()');
+    expect(projects).toContain('openAddForm()');
+    expect(projects).toContain('closeAddForm()');
+    expect(projects).toContain('id="project-folder-help"');
+    expect(projects).toContain('清除搜尋');
+    expect(projects).toContain("project.is_favorite?'star-filled':'star'");
+    expect(projects).toContain('<p v-if="project.description">');
+    expect(projects).not.toContain('尚未填寫專案描述。');
+    expect(projects).not.toContain('專案工作原則');
+    expect(projects).not.toContain('快捷操作');
+    expect(projects).toContain('<header class="ui-next-project-card-title">');
+    expect(projects).toContain('<button class="ui-next-project-title-open"');
+    expect(projects).toContain("{{ project.name }} <small>Odoo {{ project.odoo_version }}");
+    expect(projects).not.toContain('ui-next-project-card-meta');
+    expect(projects).toContain('ui-next-project-more-menu');
+    expect(projects).toContain('goDb(id)');
+    expect(projects).toContain('goDeploySop(id)');
+    expect(projects).toContain('openRelease(id)');
+    expect(projects).toContain('_onProjectMoreOutside');
   });
 });

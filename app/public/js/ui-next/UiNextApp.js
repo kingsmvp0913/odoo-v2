@@ -7,6 +7,23 @@
     return text.length > 28 ? `${text.slice(0, 28)}…` : text || "新對話";
   }
 
+  window.renderNextMarkdown = function renderNextMarkdown(value) {
+    return renderMarkdown(value)
+      .replace(/<pre><code(?: class="language-([^\"]+)")?>/g, (_, language) => `<div class="ui-next-code-block"><div class="ui-next-code-head"><span>${language || "text"}</span><button type="button" data-copy-code="true">複製程式碼</button></div><pre><code>`)
+      .replace(/<\/code><\/pre>/g, "</code></pre></div>");
+  };
+
+  window.copyNextCode = async function copyNextCode(event) {
+    const trigger = event.target.closest("[data-copy-code]");
+    if (!trigger) return;
+    const code = trigger.closest(".ui-next-code-block")?.querySelector("code")?.textContent || "";
+    try {
+      await navigator.clipboard.writeText(code);
+      trigger.textContent = "已複製";
+      setTimeout(() => { trigger.textContent = "複製程式碼"; }, 1800);
+    } catch (error) { showToast("無法複製程式碼，請確認瀏覽器權限", "error", 0); }
+  };
+
   const UiNextIcon = Vue.defineComponent({
     name: "UiNextIcon",
     props: { name: { type: String, required: true } },
@@ -20,7 +37,8 @@
       <path v-else-if="name==='chevron-down'" d="m6 9 6 6 6-6"/><path v-else-if="name==='chevron-up'" d="m6 15 6-6 6 6"/>
       <path v-else-if="name==='close'" d="M6 6l12 12M18 6 6 18"/><path v-else-if="name==='send'" d="m4 4 16 8-16 8 3-8-3-8Zm3 8h13"/>
       <path v-else-if="name==='check'" d="m5 12 4.2 4.2L19 6.5"/><path v-else-if="name==='alert'" d="M12 7v6m0 4h.01M10.2 3.9 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.8 3.9a2.1 2.1 0 0 0-3.6 0Z"/>
-      <path v-else-if="name==='star'" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>
+      <path v-else-if="name==='star'" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/><path v-else-if="name==='star-filled'" fill="currentColor" stroke="none" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>
+      <path v-else-if="name==='download'" d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>
     </svg>`,
   });
   window.UiNextIcon = UiNextIcon;
@@ -35,6 +53,9 @@
         prompt: "",
         files: [],
         environment: null,
+        environmentSummaries: {},
+        environmentError: "",
+        projectPickerOpen: false,
         createdChatId: "",
         sendError: "",
         userName: "使用者",
@@ -44,12 +65,14 @@
     },
     async created() {
       try {
-        const [projects, me] = await Promise.all([
+        const [projects, me, summaries] = await Promise.all([
           Api.get("projects"),
           Api.get("auth/me"),
+          Api.get("projects/env-summaries").catch(() => []),
         ]);
         this.projects = projects || [];
         this.userName = me.display_name || me.username || "使用者";
+        this.environmentSummaries = (summaries || []).reduce((result, summary) => { result[String(summary.project_id)] = summary; return result; }, {});
         const lastProjectId = localStorage.getItem("oaa.next.last-project-id");
         this.projectId = this.projects.some((project) => String(project.id) === lastProjectId)
           ? lastProjectId
@@ -61,22 +84,62 @@
         this.loading = false;
       }
     },
+    mounted() {
+      this._onProjectPickerOutside = (event) => {
+        if (!event.target.closest(".ui-next-project-picker")) this.projectPickerOpen = false;
+      };
+      document.addEventListener("pointerdown", this._onProjectPickerOutside);
+    },
+    beforeUnmount() {
+      document.removeEventListener("pointerdown", this._onProjectPickerOutside);
+    },
     computed: {
       selectedProject() {
         return this.projects.find(
           (p) => String(p.id) === String(this.projectId),
         );
       },
+      environmentLabel() {
+        if (!this.projectId) return "請先選擇專案";
+        if (this.environmentError) return "測試環境狀態讀取失敗";
+        if (!this.environment) return "測試環境狀態載入中";
+        return ({ idle: this.environment.built ? "測試環境已停止" : "測試環境未建立", setting_up: "測試環境建立中", running: "測試環境運行中", error: "測試環境錯誤" }[this.environment.status] || "測試環境狀態未知");
+      },
     },
     methods: {
       async loadEnvironment() {
-        if (!this.projectId) { this.environment = null; return; }
-        this.environment = await Api.get(`projects/${this.projectId}/env`).catch(() => null);
+        if (!this.projectId) { this.environment = null; this.environmentError = ""; return; }
+        this.environment = null;
+        this.environmentError = "";
+        try { this.environment = await Api.get(`projects/${this.projectId}/env/summary`); this.environmentSummaries[String(this.projectId)] = this.environment; }
+        catch (error) { this.environmentError = error.message || "無法讀取測試環境"; }
+      },
+      environmentOptionLabel(project) {
+        const summary = this.environmentSummaries[String(project.id)];
+        if (!summary) return "測試環境：狀態未知 · 資料庫連線：狀態未知";
+        const environment = ({ idle: "未建立或已停止", setting_up: "建立中", running: "運行中", error: "錯誤" }[summary.status] || "狀態未知");
+        const database = ({ connected: "已連線", connecting: "連線中", not_available: "未啟動", error: "錯誤" }[summary.database_status] || "狀態未知");
+        return `測試環境：${environment} · 資料庫連線：${database}`;
       },
       onProjectChange() {
         localStorage.setItem("oaa.next.last-project-id", this.projectId);
         this.createdChatId = "";
         this.loadEnvironment();
+      },
+      selectProject(project) {
+        this.projectId = String(project.id);
+        this.projectPickerOpen = false;
+        this.onProjectChange();
+      },
+      onProjectPickerKeydown(event) {
+        const options = this.$refs.projectOptions ? Array.from(this.$refs.projectOptions.querySelectorAll("button:not([disabled])")) : [];
+        if (event.key === "Escape") { this.projectPickerOpen = false; this.$nextTick(() => this.$refs.projectTrigger?.focus()); return; }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!this.projectPickerOpen) { this.projectPickerOpen = true; return; }
+          const index = options.indexOf(document.activeElement);
+          (options[index + (event.key === "ArrowDown" ? 1 : -1)] || options[event.key === "ArrowDown" ? 0 : options.length - 1])?.focus();
+        }
       },
       chooseFiles(e) {
         const selected = Array.from(e.target.files || []);
@@ -146,11 +209,13 @@
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
                 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple @change="chooseFiles"></label>
-                <select v-model="projectId" @change="onProjectChange" :disabled="loading || !projects.length" aria-label="專案">
-                  <option v-if="!projects.length" value="">沒有可用專案</option>
-                  <option v-for="project in projects" :key="project.id" :value="String(project.id)">{{ project.name }} · Odoo {{ project.odoo_version || '—' }}</option>
-                </select>
-                <span class="ui-next-environment">{{ environment ? ({ idle: environment.built ? '已停止' : '未建立', setting_up: '建立中', running: '運行中', error: '錯誤' }[environment.status] || environment.status) : '環境狀態無法取得' }}</span>
+                <div class="ui-next-project-picker" @keydown="onProjectPickerKeydown">
+                  <button ref="projectTrigger" type="button" class="ui-next-project-picker-trigger" :aria-expanded="projectPickerOpen" aria-haspopup="listbox" @click="projectPickerOpen=!projectPickerOpen" @keydown.enter.prevent="projectPickerOpen=!projectPickerOpen" :disabled="loading || !projects.length">{{ selectedProject ? selectedProject.name + ' · Odoo ' + (selectedProject.odoo_version || '未設定') : '沒有可用專案' }}</button>
+                  <div v-if="projectPickerOpen" ref="projectOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇專案">
+                    <button v-for="project in projects" :key="project.id" type="button" role="option" :aria-selected="String(project.id)===String(projectId)" @click="selectProject(project)"><b>{{ project.name }} · Odoo {{ project.odoo_version || '未設定' }}</b><small>{{ environmentOptionLabel(project) }}</small></button>
+                  </div>
+                </div>
+                <span class="ui-next-environment" :class="{error:environmentError}">{{ environmentLabel }}</span>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><span v-if="sending">處理中</span><ui-next-icon v-else name="send"/></button>
             </div>
@@ -180,7 +245,11 @@
         commandOpen: false,
         commandQuery: "",
         commandTrigger: null,
+        toolsTrigger: null,
+        accountTrigger: null,
         projects: [],
+        sidebarChatProjects: [],
+        sidebarProjectsError: "",
         projectChats: {},
         expandedProjects: {},
         mobileSidebarOpen: false,
@@ -199,24 +268,35 @@
         );
       },
       usageRows() {
+        const rows = [];
+        const claude = this.claudeUsage;
+        if (claude && claude.available && claude.five_hour && claude.five_hour.utilization != null) {
+          rows.push({ label: "Claude 5hr", used: Math.round(claude.five_hour.utilization) });
+        }
         const codex = this.codexUsage;
-        if (!codex || !codex.available) return [];
-        return [
-          ["主要額度", codex.primary],
-          ["週額度", codex.secondary],
-        ]
-          .filter(([, row]) => row)
-          .map(([label, row]) => ({
-            label,
-            used: Math.round(row.used_percent),
-            remaining: Math.round(row.remaining_percent),
+        if (codex && codex.available && codex.primary) {
+          rows.push({ label: "Codex 5hr", used: Math.round(codex.primary.used_percent) });
+        }
+        return rows.map((row) => ({
+          ...row,
+          remaining: Math.max(0, 100 - row.used),
             level:
-              row.used_percent >= 90
+              row.used >= 90
                 ? "critical"
-                : row.used_percent >= 70
+                : row.used >= 70
                   ? "warning"
                   : "healthy",
-          }));
+        }));
+      },
+      sidebarProjects() {
+        const projectById = new Map(this.projects.map((project) => [String(project.id), project]));
+        const selected = new Map();
+        this.sidebarChatProjects.slice(0, 5).forEach((item) => {
+          const project = projectById.get(String(item.project_id));
+          if (project) selected.set(String(project.id), project);
+        });
+        this.projects.filter((project) => project.is_favorite).forEach((project) => selected.set(String(project.id), project));
+        return [...selected.values()].sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name, "zh-Hant"));
       },
       commandItems() {
         const common = [
@@ -247,14 +327,19 @@
     async mounted() {
       if (!Api.isLoggedIn()) return;
       try {
-        const [me, projects] = await Promise.all([
+        const [me, projects, sidebarChatProjects] = await Promise.all([
           Api.get("auth/me"),
           Api.get("projects"),
+          Api.get("chats/sidebar-projects").catch((error) => {
+            this.sidebarProjectsError = error.message || "無法載入近期對話專案";
+            return [];
+          }),
         ]);
         this.isAdmin = me.role === "admin";
         this.userName = me.display_name || me.username || "使用者";
         window.UserStore.role = me.role || "";
         this.projects = projects || [];
+        this.sidebarChatProjects = sidebarChatProjects || [];
         window.loadClaudeUsage && window.loadClaudeUsage();
         window.loadCodexUsage && window.loadCodexUsage();
         window.loadUnread && window.loadUnread();
@@ -268,15 +353,24 @@
             this.commandOpen = true;
             this.focusCommand();
           }
-          if (event.key === "Escape") this.closeCommand();
+          if (event.key === "Escape") {
+            this.closeCommand();
+            this.closePopovers(true);
+            this.mobileSidebarOpen = false;
+          }
         };
         window.addEventListener("keydown", this._onCommandKey);
+        this._onOutsidePointer = (event) => {
+          if (!event.target.closest(".ui-next-tools-wrap") && !event.target.closest(".ui-next-account-wrap")) this.closePopovers();
+        };
+        document.addEventListener("pointerdown", this._onOutsidePointer);
       } catch (e) {
         /* router 的登入守衛處理失效憑證 */
       }
     },
     beforeUnmount() {
       window.removeEventListener("keydown", this._onCommandKey);
+      document.removeEventListener("pointerdown", this._onOutsidePointer);
     },
     methods: {
       async toggleProject(project) {
@@ -295,6 +389,24 @@
             showToast("無法載入專案對話", "error");
           }
         }
+      },
+      toggleTools(event) {
+        const opening = !this.toolsOpen;
+        this.accountOpen = false;
+        this.toolsOpen = opening;
+        if (opening) this.toolsTrigger = event.currentTarget;
+      },
+      toggleAccount(event) {
+        const opening = !this.accountOpen;
+        this.toolsOpen = false;
+        this.accountOpen = opening;
+        if (opening) this.accountTrigger = event.currentTarget;
+      },
+      closePopovers(restoreFocus = false) {
+        const hadTools = this.toolsOpen, hadAccount = this.accountOpen;
+        this.toolsOpen = false;
+        this.accountOpen = false;
+        if (restoreFocus) this.$nextTick(() => (hadTools ? this.toolsTrigger : hadAccount ? this.accountTrigger : null)?.focus());
       },
       showSearch(event) {
         this.commandTrigger = event && event.currentTarget;
@@ -318,11 +430,12 @@
         this.$router.push(`/projects/${project.id}`);
       },
       go(path) {
-        this.accountOpen = false;
+        this.closePopovers();
         this.mobileSidebarOpen = false;
         this.$router.push(path);
       },
       logout() {
+        this.closePopovers();
         Api.clearToken();
         window.UserStore.role = "";
         SocketManager.disconnectSocket();
@@ -357,8 +470,9 @@
     template: `
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
       <div v-else class="ui-next-shell" data-ui="next">
+        <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
         <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" @click="mobileSidebarOpen = true"><ui-next-icon name="grid"/></button>
-        <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="mobileSidebarOpen = false"></div>
+        <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="mobileSidebarOpen = false; closePopovers()"></div>
         <aside class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }">
           <div class="ui-next-brand"><img src="favicon.svg" alt="OAA"><span><b>Odoo AI</b><small>自動開發平台</small></span></div>
           <button class="ui-next-new" @click="go('/')"><ui-next-icon name="plus"/>新對話</button>
@@ -367,13 +481,13 @@
           <div class="ui-next-sidebar-rule"></div>
           <span class="ui-next-section-label">工作區</span>
           <router-link class="ui-next-nav" to="/" exact-active-class="is-active"><ui-next-icon name="chat"/>問答</router-link>
-          <button class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" @click="go('/tasks')"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></button>
-          <button class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" @click="go('/projects')"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></button>
-          <div class="ui-next-projects" v-if="projects.length"><span class="ui-next-section-label">專案 Chat</span><div v-for="project in projects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}</button><button @click="toggleProject(project)" :aria-label="(expandedProjects[project.id] ? '收合' : '展開') + ' ' + project.name" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon :name="expandedProjects[project.id] ? 'chevron-up' : 'chevron-down'"/></button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button v-for="chat in projectChats[project.id] || []" :key="chat.id" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button v-if="!(projectChats[project.id] || []).length" @click="go('/projects/' + project.id + '/chat')">尚無對話</button><button class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
+          <router-link class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" to="/tasks" @click="mobileSidebarOpen=false"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></router-link>
+          <router-link class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" to="/projects" @click="mobileSidebarOpen=false"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></router-link>
+          <div class="ui-next-projects"><span class="ui-next-section-label">專案 Chat</span><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}<ui-next-icon v-if="project.is_favorite" name="star"/></button><button @click="toggleProject(project)" :aria-label="(expandedProjects[project.id] ? '收合' : '展開') + ' ' + project.name" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon :name="expandedProjects[project.id] ? 'chevron-up' : 'chevron-down'"/></button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button v-for="chat in (projectChats[project.id] || []).slice(0, 5)" :key="chat.id" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
           </div>
-          <div class="ui-next-bottom"><div v-if="isAdmin && usageRows.length" class="ui-next-usage" @click="go('/token-report')"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></div><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><small>其他功能</small><button @click="openTour"><ui-next-icon name="book"/>新手教學</button><button v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button class="ui-next-tools" @click="toolsOpen = !toolsOpen" :aria-expanded="toolsOpen"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button class="ui-next-account" @click="accountOpen = !accountOpen" :aria-expanded="accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div></div>
+          <div class="ui-next-bottom"><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><small>其他功能</small><button @click="openTour"><ui-next-icon name="book"/>新手教學</button><button v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button ref="accountTrigger" class="ui-next-account" @click="toggleAccount($event)" :aria-expanded="accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div><router-link v-if="isAdmin && usageRows.length" class="ui-next-usage" to="/token-report"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></router-link></div>
         </aside>
-        <main class="ui-next-main"><router-view :key="$route.fullPath" /></main>
+        <main id="ui-next-main" class="ui-next-main" tabindex="-1"><router-view :key="$route.fullPath" /></main>
         <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown="trapCommandFocus">
           <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
             <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…">

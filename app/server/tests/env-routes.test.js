@@ -86,6 +86,30 @@ test('GET env → idle if no record', async () => {
   expect(res.body.status).toBe('idle');
 });
 
+test('GET env summary → 僅回傳首頁可安全顯示的真實環境與資料庫狀態', async () => {
+  const res = await request(app).get(`/api/projects/${projectId}/env/summary`).set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual({ status: 'idle', database_status: 'not_available', built: false });
+  expect(res.body).not.toHaveProperty('url');
+  expect(res.body).not.toHaveProperty('port');
+  expect(res.body).not.toHaveProperty('setup_log');
+  await dbModule.query(
+    "INSERT INTO odoo_envs (project_id, status) VALUES ($1, 'running') ON CONFLICT (project_id) DO UPDATE SET status='running'",
+    [projectId]
+  );
+  const running = await request(app).get(`/api/projects/${projectId}/env/summary`).set(auth());
+  expect(running.body).toEqual({ status: 'running', database_status: 'connected', built: false });
+});
+
+test('GET env summaries → 供 Project combobox 一次讀取每個 option 的安全狀態', async () => {
+  const res = await request(app).get('/api/projects/env-summaries').set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual(expect.arrayContaining([
+    { project_id: projectId, status: 'running', database_status: 'connected' },
+  ]));
+  expect(JSON.stringify(res.body)).not.toContain('setup_log');
+});
+
 test('POST setup → triggers runEnvSetup and returns ok', async () => {
   mockRunEnvSetup.mockResolvedValueOnce(undefined);
   const res = await request(app)
