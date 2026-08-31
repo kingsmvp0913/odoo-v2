@@ -2572,3 +2572,156 @@
   font-size: 12px;
   line-height: 1.7;
 }
+
+/* 個人設定：Legacy 有、Next 先前漏掉的取得 PAT 教學、必填提示與密碼即時驗證回饋。
+   顏色一律走變數——這裡寫死淺色底會在深色模式吃掉文字。 */
+.ui-next-settings-grid input.is-invalid {
+  border-color: var(--danger);
+}
+.ui-next-help-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.ui-next-help-box ol {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.ui-next-help-box code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 11px;
+}
+.ui-next-settings-grid .ui-next-help-box p {
+  margin-top: 8px;
+}
+
+/* 專案清單：新增表單改為每欄帶 label 與說明。folder_name 的警語是硬需求，不可省。 */
+.ui-next-project-create label {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-project-create label small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ui-next-required {
+  color: var(--danger);
+}
+.ui-next-project-create .ui-next-create-wide {
+  grid-column: 1 / -1;
+}
+.ui-next-project-create .ui-next-create-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ui-next-project-create .ui-next-create-actions button:not(.ui-next-primary) {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 13px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.ui-next-unread-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+.ui-next-project-skeleton {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+.ui-next-project-skeleton header,
+.ui-next-project-skeleton footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 執行歷程：狀態列要能同時放狀態與「等待 pipeline 啟動」的補充說明。 */
+.ui-next-terminal-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.ui-next-terminal-wait {
+  color: var(--text-muted);
+}
+
+/* Pipeline 監控：連線狀態、最後更新時間與手動重試；任務／對話標題本身可點。 */
+.ui-next-pipeline-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ui-next-live i.is-down {
+  background: var(--danger);
+}
+.ui-next-live em {
+  margin-left: 5px;
+  color: var(--text-muted);
+  font-style: normal;
+}
+.ui-next-pipeline-retry {
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 11px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-pipeline-retry:disabled {
+  opacity: 0.55;
+}
+.ui-next-run-list a.ui-next-run-title {
+  display: block;
+  height: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 650;
+}
+.ui-next-run-list a.ui-next-run-title:hover {
+  text-decoration: underline;
+}
+.ui-next-project-create label small {
+  display: inline;
+}
+/* 卡片動作列補回「上正式／資料庫查詢／自動部署 SOP／初始化 Wiki」後變成 8 顆，
+   不換行會把按鈕壓到字中間斷行（「上正／式」）。 */
+.ui-next-project-grid-rich footer {
+  flex-wrap: wrap;
+}
+.ui-next-project-grid-rich footer button {
+  white-space: nowrap;
+}
+.ui-next-project-grid-rich footer button:last-child {
+  margin-left: 0;
+}
