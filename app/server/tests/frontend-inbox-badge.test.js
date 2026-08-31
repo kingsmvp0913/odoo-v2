@@ -15,8 +15,9 @@ describe('收件匣未讀 badge 只認 COUNT 端點', () => {
 
   test('loadInboxUnread 打 inbox/unread-count', () => {
     const body = appJs.match(/async function loadInboxUnread\(\)\s*\{[\s\S]*?\n\}/)[0];
-    expect(body).toContain("Api.get('inbox/unread-count')");
-    expect(body).not.toMatch(/Api\.get\('inbox'\)/);   // 清單有 LIMIT 100，不可拿來算數量
+    // 引號風格不敏感：app.js 過 prettier 後單引號變雙引號，呼叫本身沒變。
+    expect(body).toMatch(/Api\.get\(\s*['"]inbox\/unread-count['"]\s*\)/);
+    expect(body).not.toMatch(/Api\.get\(\s*['"]inbox['"]\s*\)/);   // 清單有 LIMIT 100，不可拿來算數量
     expect(body).not.toMatch(/\.length/);
   });
 
@@ -34,7 +35,11 @@ describe('收件匣未讀 badge 只認 COUNT 端點', () => {
 
   test('收件匣暫不顯示於側欄，但保留路由與未讀同步供既有連結使用', () => {
     expect(appJs).not.toContain('data-tour="nav-inbox"');
-    expect(appJs).toContain("{ path: '/inbox', component: window.InboxView");
-    expect(appJs).toContain("Api.get('inbox/unread-count')");
+    // route 定義過 prettier 後拆成多行、引號也換了；斷言的是「這條 route 仍指向 InboxView」，
+    // 不是它排版長什麼樣。
+    expect(appJs).toMatch(
+      /path:\s*['"]\/inbox['"]\s*,\s*component:\s*window\.InboxView/,
+    );
+    expect(appJs).toMatch(/Api\.get\(\s*['"]inbox\/unread-count['"]\s*\)/);
   });
 });

@@ -2,8 +2,6 @@ const { createApp, defineComponent, ref, onMounted } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
 
 const toasts = ref([]);
-// ui-next 也是同一個應用程式，只替換殼層；通知必須共用，否則舊 View 在新版會靜默失去回饋。
-window.appToasts = toasts;
 // id 同時是 v-for 的 :key 與「時間到移除自己」那段 filter 的依據，必須逐則唯一。
 // 原本取 Date.now()：同一輪同步程式碼連發的多則會拿到相同毫秒值，先到期的那則會把同 id 的
 // 其他則一起濾掉——訊息互相吃掉且不報錯（socket 事件批次抵達時就是這個情境）。
@@ -16,6 +14,11 @@ function showToast(message, level = "info", duration = 4000) {
   }, duration);
 }
 window.showToast = showToast;
+// ui-next 也是同一個應用程式，只替換殼層；通知必須共用，否則舊 View 在新版會靜默失去回饋。
+// 放在 showToast 導出之後而非 toasts 宣告處：frontend-toast-id.test.js 會把
+// 「toasts 宣告 → window.showToast 導出」這一段切出來在 node 環境單獨 eval，
+// 區間內出現 window 就會 ReferenceError。所有 window.* 導出集中在區間外。
+window.appToasts = toasts;
 
 const needsActionCount = ref(0);
 window.needsActionCount = needsActionCount;

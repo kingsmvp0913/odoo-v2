@@ -31,6 +31,10 @@ describe('登入狀態必須 reactive（表單登入後版面立即切殼層，�
   // 漏同步 theme 會讓無痕登入永遠卡在預設淺色。此測守 afterEach 的 auth/me
   // handler 內必須套用 DB 的深色偏好。
   test('表單登入路徑（afterEach 的 auth/me）同步深色偏好', () => {
-    expect(app).toMatch(/auth\/me'\)\.then\(me\s*=>\s*{[\s\S]*?ThemeManager\.syncFromServer\(me\.odoo_settings[\s\S]*?}\)/);
+    // 引號與 arrow function 括號都放寬：prettier 會把 `me =>` 補成 `(me) =>`、單引號換雙引號，
+    // 同步行為原封不動卻讓這條紅。要守的是「auth/me 的 then 裡有 syncFromServer」。
+    expect(app).toMatch(
+      /auth\/me['"]\)\s*\.then\(\s*\(?me\)?\s*=>\s*{[\s\S]*?ThemeManager\.syncFromServer\(me\.odoo_settings[\s\S]*?}\)/,
+    );
   });
 });
