@@ -2848,8 +2848,8 @@
 <p v-if="addError" class="ui-next-inline-error" role="alert">{{ addError }}</p>
 <footer><button type="button" @click="closeAdd">取消</button><button class="ui-next-primary" @click="submitAdd" :disabled="adding">{{ adding?'建立中…':'建立任務' }}</button></footer>
 </section></div>
-<div class="ui-next-task-tabs">
-<button v-for="item in [['needs_action','需回覆',needsActionShown],['pending','待處理',pendingShown],['paused','暫停中',pausedShown],['all','全部',allShown],['archived','已封存','']]" :key="item[0]" :class="{active:filter===item[0]}" @click="filter=item[0]">{{ item[1] }} <b v-if="item[2]!==''">{{ item[2] }}</b>
+<div class="ui-next-task-tabs" role="group" aria-label="任務篩選">
+<button v-for="item in [['needs_action','需回覆',needsActionShown],['pending','待處理',pendingShown],['paused','暫停中',pausedShown],['all','全部',allShown],['archived','已封存','']]" :key="item[0]" :class="{active:filter===item[0]}" :aria-pressed="filter===item[0] ? 'true' : 'false'" @click="filter=item[0]">{{ item[1] }} <b v-if="item[2]!==''">{{ item[2] }}</b>
 </button>
 </div>
 <div class="ui-next-task-toolbar">

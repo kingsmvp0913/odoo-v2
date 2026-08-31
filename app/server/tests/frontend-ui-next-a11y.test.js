@@ -121,6 +121,27 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
     expect(PAGES).toMatch(/:aria-current="[^"]*!isStopped&&index===activeIdx[^"]*'step'[^"]*"/);
   });
 
+  // 任務列表的篩選（需回覆／待處理／暫停中／全部／已封存）。
+  //
+  // §9.3 寫的是補 role="listbox"／role="option"／aria-selected，這裡刻意不照做：
+  //   1. listbox 的鍵盤模型要容器可聚焦＋方向鍵＋aria-activedescendant，
+  //      而這組是本來就能 Tab、能 Enter 的原生 button——改成 listbox 是把可用的東西拆掉重做。
+  //   2. 只加 role 不做鍵盤模型，就是宣告了卻做不到，跟「role=dialog 但焦點不 trap」同一種錯。
+  //   3. aria-selected 只在 option／tab／row 上有效，掛在 button 上不會被輔助技術採納。
+  // 這組是互斥的切換按鈕，正確語意是 aria-pressed；容器用 group＋aria-label 說明用途。
+  // ⚠ class="ui-next-task-tabs" 被兩處共用：TaskDetail（role="tablist"，切換同頁面板）
+  // 與 TaskList（篩選清單內容）。兩者用途不同所以語意不同，靠 role 區分：
+  // 前者 tablist/tab，後者 group + aria-pressed。
+  test('任務篩選用 aria-pressed 表達啟用中，而不是掛無效的 aria-selected', () => {
+    expect(PAGES).toMatch(/class="ui-next-task-tabs" role="group" aria-label="任務篩選"/);
+    expect(PAGES).toMatch(/:aria-pressed="filter===item\[0\] \? 'true' : 'false'"/);
+    // TaskDetail 那組必須維持 tablist，不能被一起改掉
+    expect(PAGES).toMatch(/class="ui-next-task-tabs" role="tablist" aria-label="任務詳情"/);
+    // 反向斷言：篩選那組不要掛 aria-selected（在 button 上是無效屬性）
+    const at = PAGES.indexOf('class="ui-next-task-tabs" role="group"');
+    expect(PAGES.slice(at, at + 700)).not.toMatch(/aria-selected/);
+  });
+
   // 兩個 overlay 共用 document.body.style.overflow，若各自在開關處自行加解鎖，
   // 「開 A → 開 B → 關 A」就會在 B 還開著時把捲動解掉。改由狀態集中推導。
   test('背景捲動由 watch 集中同步，不散落在各個開關處', () => {
