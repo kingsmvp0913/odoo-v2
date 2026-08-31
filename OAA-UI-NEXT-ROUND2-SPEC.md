@@ -2,7 +2,7 @@
 
 | 欄位 | 內容 |
 |---|---|
-| 文件版本 | 1.1（2026-08-31 第二輪稽核＋第一批修正執行完成） |
+| 文件版本 | 1.2（2026-08-31 第二輪稽核＋兩批修正執行完成；GodUI 校準待續） |
 | 基準文件 | `OAA-UI-NEXT-CORRECTION-SPEC.md` v0.9.1、`OAA-UI-NEXT-SPEC.md` v1.0 |
 | 文件狀態 | 稽核完成。第 1 節為本輪已實作並通過測試的項目；第 3~6 節為尚未修正、需排入下一輪的缺陷 |
 | 稽核方式 | 靜態程式碼稽核（三份獨立掃描）＋ 全套 jest 測試基線量測。**未執行瀏覽器實測、未提交任何 mutation** |
@@ -10,9 +10,32 @@
 
 ---
 
-## 執行狀態總表（v1.1）
+## 換台接手須知（v1.2 新增，先讀這段）
 
-測試：改動前 **3257 passed / 10 failed** → 現在 **3331 passed / 1 failed**。唯一殘留紅燈 `frontend-status-labels.test.js` 是 §5.2 的結構性假陽性，**刻意不修**（修它等於放寬門檻）。
+這一輪在單一 checkout 上做完，**尚未 push**。換機器繼續前需要知道：
+
+1. **GodUI MCP 是 local scope，換台要重裝**：
+   ```bash
+   claude mcp add godui -- npx -y @godui/mcp@0.1.0
+   ```
+   寫在 `~/.claude.json` 的 project 區，不進版控。裝完**要重啟 session** 工具才會出現在工具列；不想重啟可以用 stdio 直接呼叫（本輪就是這樣做的，見下）。
+   註：repo 根目錄本來就有一個 `.mcp.json`（shadcn MCP，2026-07-22 就在），與此無關。
+
+2. **截圖需要登入態**。已支援 `RWD_TOKEN` 環境變數（從瀏覽器 localStorage 的 `aidev_token` 複製），或原本的 `RWD_USER`／`RWD_PASS`。**token 不要寫進任何版控檔案**。本輪用的 token 2026-09-02 到期。
+   ```bash
+   RWD_BASE_URL=http://localhost:8771/ RWD_TOKEN=<token> npm run rwd:capture
+   ```
+   注意 server 實際埠是 **8771**，不是 rwd 預設的 3939。
+
+3. **未完成的工作只有一項**：GodUI 全面校準（§9）。使用者已拍板要做，做法與差異清單都在 §9。
+
+4. **這一輪所有修正都沒有登入後的實機驗證**。全部只到「程式碼已改、jest 通過、template 能 `Vue.compile`、隔離掛載能 render」。拿到登入態後第一件事應該是跑一次完整截圖，對照 §9 的差異清單。
+
+---
+
+## 執行狀態總表（v1.2）
+
+測試：改動前 **3257 passed / 10 failed** → 現在 **3395 passed / 1 failed**。唯一殘留紅燈 `frontend-status-labels.test.js` 是 §5.2 的結構性假陽性，**刻意不修**（修它等於放寬門檻）。
 
 | 項目 | 狀態 | 備註 |
 |---|---|---|
@@ -35,12 +58,16 @@
 | §5.3 12 個複製 View 的漂移守衛 | ✅ 已補 | 現為 13 組（含 `/admin/settings`） |
 | §5.5 CSS 語法守衛 | ✅ 已補 | 鑑別力已驗證 |
 | §6.2 admin 路由權限守衛 | ✅ 已補 | 鑑別力已驗證 |
-| **§4.5 P1 內容缺漏** | ⬜ 未做 | TokenReport 兩張分析表、SOP 風險告知、Settings PAT 更新等 |
-| **§4.4 27 個 unicode 操作圖示** | ⬜ 未做 | |
-| **§6.2 其餘靜態 gate** | ⬜ 未做 | emoji 圖示、自建 label mapping、死碼守衛 |
-| **§4.1 九種 action mode 內容補完** | ⬜ 未做 | |
-| **§4.2 狀態矩陣缺口** | ⬜ 未做 | ProjectChat 五個錯誤路徑只有 toast |
-| **§7 四項待裁決** | ⬜ 已裁決 3 項 | 見下方 |
+| §4.5 P1 內容缺漏 | ✅ 已修 | TokenReport 兩張分析表＋by_user、SOP 風險告知與安全提示、Settings PAT 更新／使用者 ID／通知診斷、ProjectList 表單 label 與上正式鈕、Terminal exit code、Pipeline 靜默失敗 |
+| §4.1 action mode 內容補完 | ✅ 已修 | 含 spec.permissions（QA 比對權限的依據）與 sync_wait 阻塞原因；鍵盤送出捷徑 0 → 9 處 |
+| §4.4 unicode 操作圖示 | ⚠ 部分 | 換掉 14 處；**13 處卡在凍結 View**，要換得先決定是否分家（見 §7.4） |
+| §6.2 死碼守衛 | ✅ 已補 | 鑑別力已驗證 |
+| **toast duration=0 讓 30 幾處錯誤訊息 0ms 消失** | ✅ 已修 | 本輪新發現，見 §5.7 |
+| **Next 登入頁沒有 toast／確認視窗／教學** | ✅ 已修 | 三個全域 overlay 都掛在 shell 的 v-else 內 |
+| **截圖清單漏 7 條路由** | ✅ 已修 | 含 Next 的 `/tasks`；另加守衛防止再漏 |
+| **§9 GodUI 全面校準** | ⬜ **未做（唯一剩下的）** | 使用者已拍板要做。缺 16/20 個無障礙／鍵盤契約，見 §9 |
+| §4.2 狀態矩陣缺口 | ⚠ 部分 | ProjectChat 五個錯誤路徑仍只有 toast |
+| §7 四項待裁決 | ⬜ 已裁決 3 項 | 見下方 |
 
 **已裁決**：不動大重構（不拆檔、不清 Legacy class）；12 個複製 View 走「凍結＋比對測試」。§7.3 九種 action mode 補到什麼程度尚未拍板。
 
@@ -401,7 +428,19 @@ Next 自己**沒有**寫死白底（該區段只有兩個徽章的 `color:#fff`�
 
 > ⚠ **這 82 條規則一次生效會改變畫面**，尤其 Chat 頁與各斷點下的版面。這是本輪唯一一個「修正本身需要人眼複驗」的改動。
 
-### 5.6 靜態字串守衛對 formatter 沒有抵抗力
+### 5.7 一個參數值把行為反轉：30 幾處錯誤訊息 0ms 就消失（已修）
+
+`showToast(message, level, duration)` 把 `duration` 無條件丟進 `setTimeout`。於是 `showToast(msg, "error", 0)` 變成「0ms 後移除」——而呼叫端的意圖正好相反，`0` 是「這則不要自己消失」（規格 §4.6：錯誤訊息預設不可自動消失）。
+
+ui-next 有 **32 處**錯誤路徑這樣寫，全部靜默失效：使用者只看到操作沒反應，看不到原因。
+
+只改「`duration<=0` 就不設 timer」是不夠的——toast 從來沒有關閉鈕，那會讓訊息永遠卡在畫面上，比自動消失更糟。所以同時補了 `dismissToast` 與關閉鈕，並用 `sticky` 旗標決定要不要畫那顆鈕。
+
+**同源的第二個缺陷**：Next 的 `toast-container`、`confirm-dialog-host`、`tour-host` 三個全域 overlay 都掛在 shell 那個 `v-else` 裡面，於是未登入與 `/login` 頁走 `v-if` 分支時三者都不存在——**登入失敗的 toast、確認視窗、新手教學在那些頁面上全部靜默不出現**。已移到兩個分支之外。
+
+> ⚠ 尚缺 `aria-live`，見 §9.3。沒有它的話，對螢幕閱讀器使用者仍是看不到也聽不到。
+
+### 5.8 靜態字串守衛對 formatter 沒有抵抗力
 
 見 §1.1。四支測試因一次 prettier 執行同時變紅，且錯誤訊息全部指向「功能被拔掉」這個錯誤方向。
 
@@ -505,7 +544,87 @@ Next template 有 168 處以上使用 Legacy class，靠 93 個 `.ui-next-main <
 
 ---
 
-## 9. Definition of Done（沿用並補充）
+## 9. GodUI 全面校準（未做，使用者已拍板）
+
+原規格 `OAA-UI-NEXT-SPEC.md` §0 明訂兩個視覺參考來源：
+
+- **AskME**（askme.ideaxpress.biz）— 問答優先、單欄閱讀、收斂導覽、克制單色、大留白、細邊框
+- **GodUI**（godui.design）— Command Palette、Filter Bar、Dropdown、Drawer、Conversation Thread、Prompt Composer、Agent Timeline、Stepper、Tooltip、Toast、Card 的交互與視覺原則。**只轉譯原則，不引入 React runtime**（GodUI 是 React/TS/Tailwind/framer-motion，本專案是 Vue 3 Global Build + Vanilla CSS）。
+
+### 9.1 元件落地盤點
+
+11 個裡有 10 個存在，缺 **Tooltip**（全站用 26 個原生 `title=""` 代替——原生 tooltip 樣式無法控制、深色模式下是系統白底、手機完全不出現、螢幕閱讀器行為也不一致）。
+
+| GodUI 元件 | 我們的對應 |
+|---|---|
+| Command Palette | `.ui-next-command`（⌘K） |
+| Filter Bar | `.ui-next-filterbar` |
+| Dropdown | `.ui-next-account-menu` |
+| Drawer | Chat 側欄、手機側欄 |
+| Conversation Thread | `.ui-next-thread` |
+| Prompt Composer | 首頁問答輸入區 |
+| Agent Timeline | `.ui-next-run-list`／執行歷程 |
+| Stepper | `.ui-next-status-flow`、SOP 七步、註冊六步 |
+| Toast | `.toast-container` |
+| Card | `.ui-next-panel` |
+| **Tooltip** | **無** |
+
+### 9.2 從 MCP 抽到的動效規律
+
+照文字描述絕對猜不到，必須從源碼取：
+
+- 主要 spring 幾乎都是 **`stiffness 320, damping 32, mass 0.9`**（面板、訊息、抽屜、時間軸、toast 全部同一組）
+- 快速回饋用 **`stiffness 520, damping 32`**（dropdown、filter chip、composer）
+- Tooltip 例外，很軟：**`stiffness 170, damping 12, mass 0.1`**
+- 每個元件都有 `{ duration: 0 }` 分支 —— 那是 `prefers-reduced-motion` 的處理
+
+⚠ **我們沒有 framer-motion**，spring 只能用 CSS `transition`／`@keyframes` 近似。規格 §7 本來就要求支援 `prefers-reduced-motion`，所以動效收斂不算違規，但不會跟 GodUI 一模一樣。
+
+### 9.3 缺的無障礙／鍵盤契約（實測 16/20 未達成）
+
+這份是靜態掃描 `UiNextApp.js` + `UiNextPages.js` 的結果，可直接當工作清單：
+
+| 元件 | 契約 | 現況 |
+|---|---|---|
+| Command Palette | `role="dialog"` `aria-modal` Escape | ✅ 有 |
+| Command Palette | **↑↓ 導航** | ❌ 缺 |
+| Command Palette | **開啟時鎖背景捲動** | ❌ 缺 |
+| Dropdown | `aria-expanded` | ✅ 有 |
+| Dropdown | **`role="menu"` `role="menuitem"` `aria-haspopup`** | ❌ 缺 |
+| Dropdown | **方向鍵導航** | ❌ 缺 |
+| Filter Bar | **`role="listbox"` `role="option"` `aria-selected"`** | ❌ 缺 |
+| Drawer | **`role="dialog"` `aria-modal`** | ❌ 缺 |
+| Drawer | **Escape 關閉** | ❌ 缺 |
+| Drawer | **開啟時鎖背景捲動** | ❌ 缺 |
+| Toast | **`aria-live="polite"`** | ❌ 缺 |
+| Stepper | **`aria-current`** | ❌ 缺 |
+| Tooltip | **`role="tooltip"`** | ❌ 缺（元件本身就沒有） |
+| 共用 | JS 端的 `prefers-reduced-motion` 分支 | ❌ 缺（CSS 端有） |
+
+> **Toast 的 `aria-live` 特別值得先補**：本輪剛修好「錯誤訊息 0ms 就消失」（§5.7），但沒有 `aria-live` 的話對螢幕閱讀器使用者仍是**看不到也聽不到**。
+
+### 9.4 建議做法
+
+拆**兩個平行 agent，用檔案分工避免互相覆蓋**（同一檔案兩個 agent 同時寫會蓋掉彼此）：
+
+- **A** → `app/public/js/ui-next/UiNextApp.js` + `app/public/css/ui-next.css`：Command Palette、Drawer／側欄、Toast
+- **B** → `app/public/js/ui-next/UiNextPages.js` + `app/public/css/ui-next-pages.css`：Conversation Thread、Prompt Composer、Agent Timeline、Stepper、Filter Bar、Dropdown、Tooltip（新建）
+
+⚠ **B 要避開 `FROZEN_COPIES` 的 13 個 View**（`frontend-ui-next-frozen-copies.test.js`），動了會紅。
+
+### 9.5 AskMe 風格仍未達成的一項
+
+規格 §5.3 點名：**Chat 的 AI 訊息用大型 bordered card，與 AskMe 的連續閱讀層級不符**，應改成主要內容欄。本輪未動。這項會明顯改變 Chat 頁外觀，需要人眼驗收。
+
+### 9.6 取 GodUI 規格的方法（不必重啟 session）
+
+MCP 剛加時工具不在工具列，可用 stdio 直接呼叫。本輪用的腳本邏輯：spawn `npx -y @godui/mcp@0.1.0`，走 `initialize` → `notifications/initialized` → `tools/call`。三個工具：`list_components`、`search_components`、`get_component`。
+
+⚠ `get_component` 一次回 4–16KB 的 React 源碼，11 個會吃掉大量 context。本輪的作法是寫一個抽取器只留四類資訊（動效參數、`role`/`aria-*`、鍵盤處理、尺寸與層級的 Tailwind token），96KB 壓成 4.9KB。**建議照做，不要整包讀進來。**
+
+---
+
+## 10. Definition of Done（沿用並補充）
 
 沿用 `OAA-UI-NEXT-CORRECTION-SPEC.md` §12 全部條件，另補三條：
 
@@ -523,5 +642,18 @@ Next template 有 168 處以上使用 Legacy class，靠 93 個 `.ui-next-main <
 - 未提交任何 mutation（建立／編輯／刪除任務、專案、Chat、Wiki、環境、Release、DB query、Settings 儲存、Admin CRUD）。
 - 未驗證匿名、session expired、一般使用者三種身分的實際行為（僅靜態確認 router guard 邏輯）。
 - 未量測 RWD（360／768／1024／1440）、未驗證 Keyboard-only 流程、focus trap、screen reader landmark。
-- §4.6 的深色模式結論有明確 CSS 特異度佐證，但**實際渲染色未經人眼確認**。
-- 測試最終狀態：**3266 passed / 1 failed**（改動前為 3257 passed / 10 failed）。唯一殘留紅燈 `frontend-status-labels.test.js` 是 §5.2 的結構性假陽性，**刻意不修** —— 修它就等於放寬門檻，會讓真正的狀態表複製一起被放行。拆檔（§7.2）後它會自然轉綠。
+- §4.6 的深色模式結論有明確 CSS 特異度佐證，實際渲染色已用瀏覽器 computed style 複驗（深淺各一輪），但**整頁外觀未經人眼確認**。
+- 測試最終狀態：**3395 passed / 1 failed**（改動前為 3257 passed / 10 failed）。唯一殘留紅燈 `frontend-status-labels.test.js` 是 §5.2 的結構性假陽性，**刻意不修** —— 修它就等於放寬門檻，會讓真正的狀態表複製一起被放行。拆檔（§7.2）後它會自然轉綠。
+
+### 本輪新增的守衛（都做過鑑別力驗證）
+
+「鑑別力驗證」＝把被修掉的 bug 放回去，確認測試真的會紅。這個 repo 有過「測試全綠但其實什麼都沒測到」的教訓，所以每支新守衛都做了這一步：
+
+| 守衛 | 擋什麼 | 鑑別力驗證方式 |
+|---|---|---|
+| `frontend-ui-next-frozen-copies` | 13 個逐字複製的 View 靜默漂移 | 在 Legacy 檔注入一行，確認點名該組 |
+| `frontend-css-syntax` | CSS 語法錯誤吞掉檔案後段 | 把少括號的 bug 放回去，確認指出行號 |
+| `frontend-admin-route-guard` | admin 路由漏旗標、全域 admin gate 復辟 | 記憶體內改造內容跑同一套解析，兩種錯都抓到 |
+| `frontend-ui-next-deadcode` | 宣告了卻用不到的 method／data | 把 `specReqOpen` 從 template 拿掉，確認點名 |
+| `rwd-gate`（擴充） | 新增 route 卻忘了加進截圖清單 | 拿掉 `#/tasks`，確認點名 |
+| `frontend-toast-id`（擴充） | `duration=0` 被當成 0ms | 把 `setTimeout` 改回無條件，確認變紅 |
