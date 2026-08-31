@@ -65,7 +65,7 @@
 | **toast duration=0 讓 30 幾處錯誤訊息 0ms 消失** | ✅ 已修 | 本輪新發現，見 §5.7 |
 | **Next 登入頁沒有 toast／確認視窗／教學** | ✅ 已修 | 三個全域 overlay 都掛在 shell 的 v-else 內 |
 | **截圖清單漏 7 條路由** | ✅ 已修 | 含 Next 的 `/tasks`；另加守衛防止再漏 |
-| **§9 GodUI 全面校準** | ⚠ 部分 | 2026-08-31 夜班：§9.5（AI 訊息改連續閱讀）✅ 已做；§9.3 契約補了 5 項（Toast `aria-live`、Command Palette ↑↓ 導航與鎖捲動、Drawer 的 `role="dialog"`／`aria-modal` 與鎖捲動）並新增守衛 `frontend-ui-next-a11y.test.js`，另補 Drawer 的焦點管理（trap＋開啟移入＋關閉還原，實測 Tab 25 次零逸出、桌機不誤 trap），Dropdown 的 menu 語意與方向鍵亦已補。**尚缺 4 項**（Filter Bar listbox、Stepper `aria-current`、Tooltip **元件不存在需新建**、JS 端 reduced-motion），見 §9.3 |
+| **§9 GodUI 全面校準** | ⚠ 部分 | 2026-08-31 夜班：§9.5（AI 訊息改連續閱讀）✅ 已做；§9.3 契約補了 5 項（Toast `aria-live`、Command Palette ↑↓ 導航與鎖捲動、Drawer 的 `role="dialog"`／`aria-modal` 與鎖捲動）並新增守衛 `frontend-ui-next-a11y.test.js`，另補 Drawer 的焦點管理（trap＋開啟移入＋關閉還原，實測 Tab 25 次零逸出、桌機不誤 trap），另補 Dropdown menu 語意與方向鍵、Stepper `aria-current`、任務篩選 `aria-pressed`。**§9.3 實質完成**：13 項中 10 項已補或本來就有、**2 項查證為偽缺失**（JS 端 reduced-motion、Filter Bar listbox，理由見 §9.3 附註）、**1 項待使用者決定**（Tooltip 元件不存在，要新建而非補屬性）|
 | §4.2 狀態矩陣缺口 | ⚠ 部分 | ProjectChat 五個錯誤路徑仍只有 toast |
 | §7 四項待裁決 | ⬜ 已裁決 3 項 | 見下方 |
 
@@ -599,7 +599,14 @@ Next template 有 168 處以上使用 Legacy class，靠 93 個 `.ui-next-main <
 | Toast | **`aria-live="polite"`** | ❌ 缺 |
 | Stepper | **`aria-current`** | ❌ 缺 |
 | Tooltip | **`role="tooltip"`** | ❌ 缺（元件本身就沒有） |
-| 共用 | JS 端的 `prefers-reduced-motion` 分支 | ❌ 缺（CSS 端有） |
+| 共用 | JS 端的 `prefers-reduced-motion` 分支 | ⛔ **不適用**（2026-08-31 夜班查證） |
+
+> **§9.3 兩項經查證為偽缺失，不要照字面補**（靜態掃描看得到屬性缺席，看不到「有沒有東西需要那個屬性」）：
+>
+> 1. **JS 端 reduced-motion**：ui-next 的 JS 完全沒有動畫。捲動一律用 `scrollTop =` 直接賦值（即時，無過渡），6 個 `setTimeout` 分別是複製按鈕文字還原、兩處 `URL.revokeObjectURL` 資源清理、embedding／codex 輪詢、失敗後重載——**沒有要停的動畫，就不需要分支**。
+>    CSS 端的規則實測有效：`ui-next.css:16` 的 `[data-ui="next"] *`（`data-ui` 掛在 `.ui-next-shell`），在 `reducedMotion: 'reduce'` 下實測卡片 `transitionDuration` = `1e-05s`。
+> 2. **Filter Bar 的 `role="listbox"`／`aria-selected`**：見下方 §9.3 附註。任務列表那組是互斥的原生 button，`aria-selected` 掛在 button 上是無效屬性；已改用 `role="group"`＋`aria-pressed`（commit `d9f8ead2`）。
+>    用量報表頁的 `.ui-next-filterbar` 是原生 `<select>`，本來就有 listbox 語意，加 role 反而破壞它。
 
 > **Toast 的 `aria-live` 特別值得先補**：本輪剛修好「錯誤訊息 0ms 就消失」（§5.7），但沒有 `aria-live` 的話對螢幕閱讀器使用者仍是**看不到也聽不到**。
 
