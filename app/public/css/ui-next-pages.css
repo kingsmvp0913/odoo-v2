@@ -1,4 +1,5 @@
 /* 重產頁面的獨立樣式：不依賴舊 View 的結構。 */
+.ui-next-page{padding-bottom:max(96px,calc(56px + env(safe-area-inset-bottom)))}
 .ui-next-pipeline-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -626,7 +627,7 @@
   gap: 14px;
   align-items: start;
 }
-.ui-next-task-detail-grid main,
+.ui-next-task-content-column,
 .ui-next-task-side {
   display: grid;
   gap: 14px;
@@ -884,6 +885,20 @@
   }
 }
 @media (max-width: 650px) {
+  .ui-next-task-detail-grid,
+  .ui-next-task-content-column,
+  .ui-next-task-side {
+    min-width: 0;
+    width: 100%;
+  }
+  .ui-next-task-side > *,
+  .ui-next-task-detail-grid input,
+  .ui-next-task-detail-grid select,
+  .ui-next-task-detail-grid textarea,
+  .ui-next-task-detail-grid button {
+    max-width: 100%;
+    min-width: 0;
+  }
   .ui-next-conv-list article {
     max-width: 95%;
   }
@@ -1627,7 +1642,7 @@
   top: 73px;
   right: max(20px, calc((100vw - 1120px) / 2));
   display: flex;
-  width: min(360px, calc(100vw - 32px));
+  width: min(380px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 96px));
   flex-direction: column;
   overflow: hidden;
@@ -2016,6 +2031,54 @@
 .ui-next-task-rich-list .stepper {
   margin-top: 15px;
 }
+.ui-next-status-flow {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-top: 13px;
+}
+.ui-next-status-flow span {
+  position: relative;
+  display: grid;
+  min-width: 58px;
+  flex: 1;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: center;
+}
+.ui-next-status-flow span::before {
+  position: absolute;
+  top: 7px;
+  left: calc(-50% + 8px);
+  width: calc(100% - 16px);
+  height: 1px;
+  background: var(--border-strong);
+  content: "";
+}
+.ui-next-status-flow span:first-child::before { display: none; }
+.ui-next-status-flow i {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-self: center;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 8px;
+  font-style: normal;
+}
+.ui-next-status-flow span.done { color: var(--text-secondary); }
+.ui-next-status-flow span.done::before,
+.ui-next-status-flow span.active::before { background: var(--text); }
+.ui-next-status-flow span.done i,
+.ui-next-status-flow span.active i { border-color: var(--text); background: var(--text); color: var(--surface); }
+.ui-next-status-flow span.error i { border-color: var(--danger); background: var(--danger); color: var(--surface); }
 @media (max-width: 850px) {
   .ui-next-task-summary-grid {
     grid-template-columns: repeat(2, 1fr);

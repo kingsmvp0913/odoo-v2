@@ -37,6 +37,7 @@ env/
 .env.*
 !.env.example
 docker-compose.override.yml
+.firecrawl/
 
 # ─── 工具快取 ───────────────────────────────────────────
 

@@ -101,10 +101,16 @@ const nextTool = (view, title, description, back) =>
       }
     : view;
 
+const ForbiddenView = {
+  name: "ForbiddenView",
+  template: `<main class="auth-container" aria-labelledby="forbidden-title"><section class="auth-card"><h1 id="forbidden-title">403：沒有存取權限</h1><p>你的帳號沒有權限使用此頁面。</p><router-link to="/">返回首頁</router-link></section></main>`,
+};
+
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: "/login", component: window.LoginView },
+    { path: "/forbidden", component: ForbiddenView },
     {
       path: "/",
       component: window.UiNextEnabled
@@ -270,7 +276,7 @@ const router = createRouter({
       component: window.UiNextEnabled
         ? window.UiNextPipelineView
         : window.AdminPipelinesView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/health",
@@ -331,27 +337,15 @@ const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
-  if (to.meta.requiresAuth && !Api.isLoggedIn()) return "/login";
-  if (window.UiNextEnabled && to.meta.requiresAuth) {
-    try {
-      const me = await Api.get("auth/me");
-      if (me.role !== "admin") {
-        window.location.replace(
-          `${window.location.pathname}${window.location.hash}`,
-        );
-        return false;
-      }
-    } catch {
-      return "/login";
-    }
-  }
+  if (to.meta.requiresAuth && !Api.isLoggedIn())
+    return { path: "/login", query: { redirect: to.fullPath } };
   if (to.path === "/login" && Api.isLoggedIn()) return "/";
   if (to.meta.requiresAdmin) {
     try {
       const me = await Api.get("auth/me");
-      if (me.role !== "admin") return "/";
+      if (me.role !== "admin") return "/forbidden";
     } catch {
-      return "/login";
+      return { path: "/login", query: { redirect: to.fullPath } };
     }
   }
 });

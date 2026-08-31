@@ -6,8 +6,12 @@
   <title>Odoo AI 自動開發平台</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="css/app.css" />
-  <link rel="stylesheet" href="css/ui-next.css" />
-  <link rel="stylesheet" href="css/ui-next-pages.css" />
+  <script>
+    // Next assets 僅在明確選擇 ?ui=next 時載入，Legacy 不承擔其下載與 selector 成本。
+    if (new URLSearchParams(location.search).get('ui') === 'next') {
+      document.write('<link rel="stylesheet" href="css/ui-next.css"><link rel="stylesheet" href="css/ui-next-pages.css">');
+    }
+  </script>
   <link rel="stylesheet" href="css/vendor/xterm.css" />
   <link rel="stylesheet" href="css/tour.css" />
 </head>
@@ -74,9 +78,12 @@
   <script src="js/views/AdminPortPool.js"></script>
   <script src="js/views/AdminEnterprise.js"></script>
   <script src="js/views/TokenReport.js"></script>
-  <!-- ui-next 與既有 View 分離；只有 ?ui=next 才會被 app.js 選為根介面。 -->
-  <script src="js/ui-next/UiNextApp.js"></script>
-  <script src="js/ui-next/UiNextPages.js"></script>
+  <!-- ui-next 與既有 View 分離；只有 ?ui=next 才載入資產與選為根介面。 -->
+  <script>
+    if (new URLSearchParams(location.search).get('ui') === 'next') {
+      document.write('<script src="js/ui-next/UiNextApp.js"><\/script><script src="js/ui-next/UiNextPages.js"><\/script>');
+    }
+  </script>
   <script src="js/socket.js"></script>
   <script src="js/app.js"></script>
 </body>

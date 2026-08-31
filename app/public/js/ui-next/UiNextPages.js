@@ -300,15 +300,28 @@
     },
     async mounted() {
       await this.load();
-      this.timer = setInterval(() => this.load(), 3000);
+      this._onVisibility = () => {
+        if (document.hidden) this.stopPolling();
+        else { this.load(); this.startPolling(); }
+      };
+      document.addEventListener("visibilitychange", this._onVisibility);
+      this.startPolling();
     },
     beforeUnmount() {
-      if (this.timer) clearInterval(this.timer);
+      this.stopPolling();
+      document.removeEventListener("visibilitychange", this._onVisibility);
     },
     methods: {
       elapsed,
       statusLabel(status) {
         return window.STATUS_LABELS[status] || status;
+      },
+      startPolling() {
+        if (!document.hidden && !this.timer) this.timer = setInterval(() => this.load(), 3000);
+      },
+      stopPolling() {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = null;
       },
       async load() {
         const [rows, chats] = await Promise.all([
@@ -415,33 +428,96 @@
 </section>`,
   });
 
-  // Chat 的資料操作完全沿用既有、已驗證的 methods（附件、貼上、未讀、轉任務、輪詢），只替換畫面結構。
+  // Next Chat 自行管理 route identity 與 request sequence，避免同一 component 實例在換專案時寫回舊資料。
   window.UiNextProjectChatView = Vue.defineComponent({
     name: "UiNextProjectChatView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return {
-        ...window.ProjectChatView.data(),
-        projectName: "專案",
-        showNewChat: false,
-        showHistory: false,
-      };
+      return { chats: [], activeChat: null, messages: [], newInput: "", newTitle: "",
+        sending: false, loadingMsgs: false, draftingTask: false, creatingTask: false,
+        showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] },
+        replyPending: false, pendingFiles: [], pendingPreviews: [], attachUrls: {},
+        projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, requestId: 0, replyTimer: null };
     },
     async created() {
-      await window.ProjectChatView.created.call(this);
+      await this.loadChats();
       const projects = await Api.get("projects").catch(() => []);
       const project = projects.find(
         (item) => String(item.id) === String(this.$route.params.id),
       );
       this.projectName = project ? project.name : "專案";
     },
-    beforeUnmount() {
-      window.ProjectChatView.beforeUnmount.call(this);
+    beforeUnmount() { this.requestId++; this.stopReplyPolling(); this.revokePendingUrls(); },
+    methods: {
+      routePath(chat) { return `/projects/${this.$route.params.id}/chat/${chat.id}`; },
+      toggleHistory(event) { this.historyTrigger = event.currentTarget; this.showHistory = !this.showHistory; if (this.showHistory) this.$nextTick(() => this.$refs.historyClose?.focus()); },
+      closeHistory() { this.showHistory = false; this.$nextTick(() => this.historyTrigger?.focus()); },
+      onHistoryKeydown(event) { if (event.key === "Escape") { event.preventDefault(); this.closeHistory(); } },
+      async loadChats() {
+        const requestId = ++this.requestId;
+        this.activeChat = null; this.messages = []; this.loadingMsgs = true;
+        try {
+          const chats = await Api.get(`projects/${this.$route.params.id}/chats`);
+          if (requestId !== this.requestId) return;
+          this.chats = chats || [];
+          const chatId = this.$route.params.chatId;
+          this.activeChat = this.chats.find((chat) => String(chat.id) === String(chatId)) || null;
+          if (this.activeChat) await this.loadMessages(requestId);
+        } catch (error) { showToast(error.message || "無法載入對話", "error"); }
+        finally { if (requestId === this.requestId) this.loadingMsgs = false; }
+      },
+      async selectChat(chat) { await this.$router.push(this.routePath(chat)); },
+      async loadMessages(requestId = this.requestId) {
+        if (!this.activeChat) return;
+        const chatId = this.activeChat.id;
+        this.loadingMsgs = true;
+        try {
+          const messages = await Api.get(`projects/${this.$route.params.id}/chats/${chatId}/messages`);
+          if (requestId !== this.requestId || !this.activeChat || this.activeChat.id !== chatId) return;
+          this.messages = messages || []; this.replyPending = !!this.activeChat.reply_pending;
+          if (this.replyPending) this.startReplyPolling(); else this.stopReplyPolling();
+          this.$nextTick(() => this.scrollToBottom());
+        } catch (error) { showToast(error.message || "無法載入訊息", "error"); }
+        finally { if (requestId === this.requestId) this.loadingMsgs = false; }
+      },
+      startReplyPolling() {
+        if (this.replyTimer || !this.activeChat) return;
+        this.replyTimer = setInterval(() => this.loadMessages(), 3000);
+      },
+      stopReplyPolling() { if (this.replyTimer) clearInterval(this.replyTimer); this.replyTimer = null; },
+      async createChat() {
+        try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: this.newTitle.trim() || "新對話" });
+          this.newTitle = ""; this.showNewChat = false; await this.$router.push(this.routePath(chat));
+        } catch (error) { showToast(error.message || "無法建立對話", "error"); }
+      },
+      async deleteChat(chat) {
+        if (!await confirmDialog({ title: "刪除對話", message: `確定刪除「${chat.title || "新對話"}」？`, danger: true, confirmText: "刪除" })) return;
+        try { await Api.delete(`projects/${this.$route.params.id}/chats/${chat.id}`); if (this.activeChat && this.activeChat.id === chat.id) await this.$router.push(`/projects/${this.$route.params.id}/chat`); else this.chats = this.chats.filter((item) => item.id !== chat.id); }
+        catch (error) { showToast(error.message || "無法刪除對話", "error"); }
+      },
+      onFilesSelected(event) { this.addPendingFiles(Array.from(event.target.files || [])); event.target.value = ""; },
+      onPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => /^image\//.test(file.type)); if (files.length) { event.preventDefault(); this.addPendingFiles(files); } },
+      addPendingFiles(files) { files.forEach((file) => { if (!/^image\//.test(file.type) || file.size > 10 * 1024 * 1024 || this.pendingFiles.length >= 5) return; this.pendingFiles.push(file); this.pendingPreviews.push(URL.createObjectURL(file)); }); },
+      removePendingFile(index) { URL.revokeObjectURL(this.pendingPreviews[index]); this.pendingFiles.splice(index, 1); this.pendingPreviews.splice(index, 1); },
+      revokePendingUrls() { this.pendingPreviews.forEach((url) => URL.revokeObjectURL(url)); },
+      handleEnter(event) { if (!event.isComposing && !event.shiftKey) { event.preventDefault(); this.send(); } },
+      async send() {
+        if (this.sending || !this.activeChat || (!this.newInput.trim() && !this.pendingFiles.length)) return;
+        const chatId = this.activeChat.id, content = this.newInput.trim(), files = this.pendingFiles; this.newInput = ""; this.pendingFiles = []; this.pendingPreviews = []; this.sending = true;
+        try { let result; if (files.length) { const form = new FormData(); form.append("content", content); files.forEach((file) => form.append("files", file)); result = await Api.postForm(`projects/${this.$route.params.id}/chats/${chatId}/messages`, form); } else result = await Api.post(`projects/${this.$route.params.id}/chats/${chatId}/messages`, { content });
+          if (this.activeChat && this.activeChat.id === chatId) { this.messages.push({ id: Date.now(), role: "user", content, created_at: new Date().toISOString() }); if (result.reply) this.messages.push({ id: Date.now() + 1, role: "ai", content: result.reply, created_at: new Date().toISOString() }); else { this.replyPending = true; this.startReplyPolling(); } this.$nextTick(() => this.scrollToBottom()); }
+        } catch (error) { this.newInput = content; showToast(error.message || "訊息送出失敗", "error"); } finally { this.sending = false; }
+      },
+      async toTask() { if (!this.activeChat || this.draftingTask) return; this.draftingTask = true; try { const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {}); this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) }; this.showTaskModal = true; } catch (error) { showToast(error.message || "無法建立草稿", "error"); } finally { this.draftingTask = false; } },
+      async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) return showToast("請填寫標題與內容", "error"); this.creatingTask = true; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.showTaskModal = false; showToast("已建立任務", "success"); } catch (error) { showToast(error.message || "建立任務失敗", "error"); } finally { this.creatingTask = false; } },
+      scrollToBottom() { const element = this.$refs.messages; if (element) element.scrollTop = element.scrollHeight; },
+      formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
+      renderMd(value) { return renderMarkdown(value); }, openImage() {},
     },
-    methods: window.ProjectChatView.methods,
+    watch: { "$route.fullPath"() { this.loadChats(); } },
     template: `
       <section class="ui-next-chat-page">
-        <main class="ui-next-thread">
+        <div class="ui-next-thread">
 <template v-if="activeChat">
 <header class="ui-next-thread-head">
 <div>
@@ -449,7 +525,7 @@
 <h2>{{ activeChat.title || '新對話' }}</h2>
 </div>
 <div class="ui-next-thread-actions">
-<button type="button" @click="showHistory=!showHistory"><ui-next-icon name="chat"/> 對話紀錄<span v-if="chats.length">{{ chats.length }}</span></button>
+<button ref="historyTrigger" type="button" @click="toggleHistory"><ui-next-icon name="chat"/> 對話紀錄<span v-if="chats.length">{{ chats.length }}</span></button>
 <button type="button" @click="showNewChat=!showNewChat"><ui-next-icon name="plus"/> 新對話</button>
 <button type="button" class="ui-next-task-action" @click="toTask" :disabled="draftingTask||sending">{{ draftingTask ? '摘要中…' : '建立任務' }}</button>
 </div>
@@ -458,10 +534,10 @@
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
 <button @click="createChat">開始對話</button>
 </div>
-<aside v-if="showHistory" class="ui-next-chat-history" aria-label="對話紀錄">
-<div class="ui-next-chat-history-head"><strong>對話紀錄</strong><button type="button" @click="showHistory=false" aria-label="關閉對話紀錄">×</button></div>
+<aside v-if="showHistory" class="ui-next-chat-history" role="dialog" aria-modal="true" aria-label="對話紀錄" @keydown="onHistoryKeydown">
+<div class="ui-next-chat-history-head"><strong>對話紀錄</strong><button ref="historyClose" type="button" @click="closeHistory">關閉</button></div>
 <div class="ui-next-chat-list">
-<article v-for="chat in chats" :key="chat.id" :class="{active:activeChat&&activeChat.id===chat.id}" @click="selectChat(chat);showHistory=false">
+<article v-for="chat in chats" :key="chat.id" :class="{active:activeChat&&activeChat.id===chat.id}" @click="selectChat(chat);closeHistory()">
 <div><b>{{ chat.title || '新對話' }}</b><small v-if="chat.reply_pending">AI 回覆中</small></div>
 <i v-if="chat.unread">{{ chat.unread }}</i>
 <em v-if="chat.converted_task_id" @click.stop="$router.push('/task/'+chat.converted_task_id)">任務</em>
@@ -506,8 +582,13 @@
 <div>✦</div>
 <h2>選擇一段對話</h2>
 <p>或建立新對話，討論會保留在「{{ projectName }}」專案中。</p>
+<button type="button" class="ui-next-primary" @click="showNewChat=true">開始新對話</button>
+<div v-if="showNewChat" class="ui-next-new-chat">
+<input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
+<button type="button" @click="createChat">開始</button>
 </div>
-</main>
+</div>
+</div>
         <div v-if="showTaskModal" class="ui-next-task-modal-backdrop" @mousedown.self="showTaskModal=false">
 <section class="ui-next-task-modal">
 <header>
@@ -539,18 +620,19 @@
       SearchableSelect: window.SearchableSelect,
       ReleaseModal: window.ReleaseModal,
     },
-    data() {
-      return { ...window.ProjectDetailView.data(), detailTab: "overview" };
+    data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: "overview" }; },
+    computed: { envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
+    async created() { await Promise.all([this.load(), this.loadEnv()]); },
+    methods: {
+      async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(`projects/${this.$route.params.id}`); this.project = data; this.repos = data.repos || []; this.editOdooProjectName = data.odoo_project_name || ""; this.editServiceRespondentName = data.service_respondent_name || ""; this.editE2eEnabled = !data.e2e_disabled; this.editEdition = data.edition || "community"; await Promise.all(this.repos.filter((repo) => repo.clone_status === "done").map(async (repo) => { const info = await Api.get(`projects/${data.id}/repos/${repo.id}/branches`).catch(() => null); if (info) this.branchInfo[repo.id] = info; })); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
+      async loadEnv() { this.env = await Api.get(`projects/${this.$route.params.id}/env`).catch(() => this.env || { status: "idle" }); },
+      async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
+      async probeRemoteBranches() { const url = this.newRepo.repo_url.trim(); if (!url || url === this.lastProbedUrl) return; this.lastProbedUrl = url; this.probingBranches = true; try { const data = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`); this.remoteBranches = data.ok ? data.branches || [] : []; this.newRepo.base_branch = data.defaultBranch || ""; } catch { this.remoteBranches = []; } finally { this.probingBranches = false; } },
+      async removeRepo(id) { if (!await confirmDialog({ title: "移除 Repo", message: "確定移除此 repo？本機 clone 的程式碼將一併刪除，且無法復原。", danger: true, confirmText: "移除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/repos/${id}`); await this.load(); } catch (error) { showToast(error.message || "移除失敗", "error", 0); } }, async reclone(id) { try { await Api.post(`projects/${this.$route.params.id}/repos/${id}/reclone`, {}); await this.load(); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } }, updateRepo(id) { return this.reclone(id); },
+      unreadCount() { return this.project ? (window.UnreadStore.byProject[String(this.project.id)] || this.project.unread_count || 0) : 0; }, goWiki() { this.$router.push(`/projects/${this.$route.params.id}/wiki`); }, goDeploySop() { this.$router.push(`/projects/${this.$route.params.id}/deploy-sop`); }, goChat() { this.$router.push(`/projects/${this.$route.params.id}/chat`); }, async initWiki() { try { await Api.post(`projects/${this.$route.params.id}/wiki/init`, {}); showToast("Wiki 初始化完成", "success"); } catch (error) { showToast(error.message || "初始化失敗", "error", 0); } },
+      async setupEnv() { this.envWorking = true; try { await Api.post(`projects/${this.$route.params.id}/env/setup`, {}); this.env = { ...(this.env || {}), status: "setting_up" }; showToast("環境建立已開始", "success"); } catch (error) { showToast(error.message || "建立環境失敗", "error", 0); } finally { this.envWorking = false; } }, async stopEnv() { this.envWorking = true; try { await Api.post(`projects/${this.$route.params.id}/env/stop`, {}); await this.loadEnv(); } finally { this.envWorking = false; } }, async releaseExternal() { await Api.post(`projects/${this.$route.params.id}/env/external/release`, {}); await this.loadEnv(); }, async openEnv() { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(this.$route.params.id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } }, async viewLog() { this.logLoading = true; try { const data = await Api.get(`projects/${this.$route.params.id}/env/log`); this.runtimeLog = data.exists ? data.log || "（log 為空）" : "（尚無 log 檔）"; } finally { this.logLoading = false; } }, async deleteEnv() { if (!await confirmDialog({ title: "刪除測試環境", message: "確定刪除整個測試環境？", danger: true, confirmText: "刪除" })) return; await Api.delete(`projects/${this.$route.params.id}/env`); await this.loadEnv(); },
+      async saveProjectMapping() { await Api.patch(`projects/${this.project.id}/mapping`, { odoo_project_name: this.editOdooProjectName || null, service_respondent_name: this.editServiceRespondentName || null }); showToast("已儲存", "success"); }, async saveE2eSetting() { this.savingE2e = true; try { await Api.patch(`projects/${this.project.id}`, { e2e_disabled: !this.editE2eEnabled }); } finally { this.savingE2e = false; } }, async saveEdition() { this.savingEdition = true; try { await Api.patch(`projects/${this.project.id}`, { edition: this.editEdition }); } finally { this.savingEdition = false; } }, isAdmin() { return window.UserStore.role === "admin"; },
     },
-    computed: window.ProjectDetailView.computed,
-    watch: window.ProjectDetailView.watch,
-    async created() {
-      await window.ProjectDetailView.created.call(this);
-    },
-    beforeUnmount() {
-      window.ProjectDetailView.beforeUnmount.call(this);
-    },
-    methods: window.ProjectDetailView.methods,
     template: `
       <section v-if="loading" class="ui-next-page">
 <div class="ui-next-loading-card">載入專案中…</div>
@@ -730,7 +812,7 @@
 <template v-else-if="task">
 <header class="ui-next-page-head ui-next-detail-head">
 <div>
-<button class="ui-next-back" @click="back">← 任務列表</button>
+<button class="ui-next-back" @click="back"><ui-next-icon name="arrow-left"/> 任務列表</button>
 <p class="ui-next-eyebrow">{{ task.project_name || '專案任務' }}</p>
 <h1>{{ task.title || task.task_id }}</h1>
 <p>{{ task.task_id }} · 最後更新 {{ formatTime(task.updated_at) }}</p>
@@ -744,7 +826,7 @@
 </div>
 </header>
 <div class="ui-next-task-detail-grid">
-<main>
+<div class="ui-next-task-content-column">
 <section class="ui-next-panel ui-next-task-summary">
 <div class="ui-next-task-badges">
 <span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
@@ -798,7 +880,15 @@
 <p v-if="!timeline.length" class="ui-next-empty-state">尚無對話記錄。</p>
 </div>
 </section>
-</main>
+<section class="ui-next-panel ui-next-events">
+<h2>執行輸出</h2>
+<div ref="eventsBox" @scroll="onEventsScroll">
+<pre v-for="event in events" :key="event.id||event.content" v-html="ansiToHtml(event.content)"></pre>
+<p v-if="!events.length">尚無執行輸出。</p>
+</div>
+<router-link :to="'/task/'+task.id+'/terminal'">開啟完整終端機</router-link>
+</section>
+</div>
 <aside class="ui-next-task-side">
 <section class="ui-next-panel ui-next-task-action">
 <p class="ui-next-eyebrow">下一步</p>
@@ -897,14 +987,6 @@
 <button class="ui-next-primary" @click="sendTaskMessage" :disabled="sendingMessage||(!newMessageText.trim()&&!newMessageFiles.length)">{{ sendingMessage?'送出中…':'送出留言' }}</button>
 </template>
 </section>
-<section class="ui-next-panel ui-next-events">
-<h2>執行輸出</h2>
-<div ref="eventsBox" @scroll="onEventsScroll">
-<pre v-for="event in events" :key="event.id||event.content" v-html="ansiToHtml(event.content)"></pre>
-<p v-if="!events.length">尚無執行輸出。</p>
-</div>
-<router-link :to="'/task/'+task.id+'/terminal'">開啟完整終端機</router-link>
-</section>
 </aside>
 </div>
 </template>
@@ -913,18 +995,23 @@
 
   window.UiNextSettingsView = Vue.defineComponent({
     name: "UiNextSettingsView",
-    data: window.SettingsView.data,
-    computed: window.SettingsView.computed,
-    async created() {
-      await window.SettingsView.created.call(this);
+    data() { return { me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
+    computed: { patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
+    async created() { await this.load(); },
+    mounted() { this._onThemeChange = (event) => { this.isDark = event.detail === "dark"; }; window.addEventListener("themechange", this._onThemeChange); },
+    unmounted() { window.removeEventListener("themechange", this._onThemeChange); },
+    methods: {
+      toggleTheme() { window.ThemeManager?.toggle(); },
+      async toggleNotify(event) { if (event.target.checked) { const result = await window.NotifyManager?.enable(); this.notifyOn = !!result?.ok; if (!this.notifyOn) showToast(result?.reason === "denied" ? "瀏覽器已封鎖通知權限" : "此瀏覽器不支援通知", "error", 0); } else { window.NotifyManager?.disable(); this.notifyOn = false; } },
+      async load() { this.loading = true; this.loadError = ""; try { const [me, settings, pat] = await Promise.all([Api.get("auth/me"), Api.get("settings"), Api.get("settings/github-pat")]); this.me = { username: me.username || "", display_name: me.display_name || "" }; const saved = settings.odoo_settings || {}; this.savedSettings = saved; this.teamsUserId = saved.teams_user_id || ""; Object.assign(this.creds, { odoo_username: saved.odoo_username || "", odoo_user_id: saved.odoo_user_id || "", odoo_password: "", service_username: saved.service_username || "", service_user_id: saved.service_user_id || "", service_password: "" }); this.pwSet = { odoo: !!saved.odoo_password_set, service: !!saved.service_password_set }; this.githubPat.configured = !!pat.configured; this.githubPat.login = pat.login || ""; } catch (error) { this.loadError = error.message || "無法載入設定"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
+      async save() { this.saving = true; try { const odoo_settings = { ...this.savedSettings, teams_user_id: this.teamsUserId, ...this.creds, theme: window.ThemeManager?.current() }; await Promise.all([Api.put("auth/me", { display_name: this.me.display_name }), Api.put("settings", { odoo_settings })]); showToast("設定已儲存", "success"); } catch (error) { showToast(error.message || "儲存設定失敗", "error", 0); } finally { this.saving = false; } },
+      async savePw() { this.pwError = this.pwValidation; if (this.pwError) return; this.savingPw = true; try { await Api.put("auth/me", { current_password: this.pw.current, new_password: this.pw.next }); this.pw = { current: "", next: "", confirm: "" }; showToast("密碼已更新", "success"); } catch (error) { showToast(error.message || "密碼更新失敗", "error", 0); } finally { this.savingPw = false; } },
+      async verifyOdoo() { if (!this.creds.odoo_username || (!this.creds.odoo_password && !this.pwSet.odoo)) return showToast("請先填寫 Odoo 帳號和密碼", "error"); this.verifyingOdoo = true; try { const { uid } = await Api.post("settings/verify-odoo", { odoo_username: this.creds.odoo_username, odoo_password: this.creds.odoo_password }); this.creds.odoo_user_id = String(uid); showToast(`驗證成功，使用者 ID：${uid}`, "success"); } catch (error) { showToast(error.message || "驗證失敗", "error", 0); } finally { this.verifyingOdoo = false; } },
+      async verifyService() { if (!this.creds.service_username || (!this.creds.service_password && !this.pwSet.service)) return showToast("請先填寫 eService 帳號和密碼", "error"); this.verifyingService = true; try { const { uid } = await Api.post("settings/verify-service", { service_username: this.creds.service_username, service_password: this.creds.service_password }); this.creds.service_user_id = String(uid); showToast(`驗證成功，使用者 ID：${uid}`, "success"); } catch (error) { showToast(error.message || "驗證失敗", "error", 0); } finally { this.verifyingService = false; } },
+      testNotify() { window.NotifyManager?.show("測試通知", "桌面通知運作正常", "test"); },
+      async saveGithubPat() { if (!this.githubPat.input.trim()) return showToast("請貼上 PAT", "error"); this.githubPat.saving = true; try { const result = await Api.post("settings/github-pat", { pat: this.githubPat.input.trim() }); this.githubPat.configured = true; this.githubPat.login = result.login; this.githubPat.input = ""; showToast(`已連結 GitHub 帳號 ${result.login}`, "success"); } catch (error) { showToast(error.message || "PAT 驗證失敗", "error", 0); } finally { this.githubPat.saving = false; } },
+      async removeGithubPat() { if (!await confirmDialog({ title: "移除 GitHub PAT", message: "移除後你的任務將無法 push，直到重新設定。", danger: true, confirmText: "移除" })) return; try { await Api.delete("settings/github-pat"); this.githubPat.configured = false; this.githubPat.login = ""; showToast("已移除 GitHub PAT", "success"); } catch (error) { showToast(error.message || "移除失敗", "error", 0); } },
     },
-    mounted() {
-      window.SettingsView.mounted.call(this);
-    },
-    unmounted() {
-      window.SettingsView.unmounted.call(this);
-    },
-    methods: window.SettingsView.methods,
     template: `
       <section class="ui-next-page ui-next-settings-page">
 <header class="ui-next-page-head">
@@ -935,6 +1022,7 @@
 </div>
 </header>
 <div v-if="loading" class="ui-next-loading-card">載入設定中…</div>
+<div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 <div v-else class="ui-next-settings-grid">
 <section class="ui-next-panel">
 <h2>外觀與通知</h2>
@@ -1008,16 +1096,23 @@
 </section>`,
   });
 
-  // 以已核可預覽的資訊密度重做專案清單；所有既有專案操作仍直接使用 ProjectListView methods。
+  // 專案清單只共用 API、UnreadStore 與確認視窗；不再委派 Legacy View 的生命週期或方法。
   window.UiNextProjectListView = Vue.defineComponent({
     name: "UiNextProjectListView",
     components: { ReleaseModal: window.ReleaseModal, UiNextIcon: window.UiNextIcon },
-    data: window.ProjectListView.data,
-    computed: window.ProjectListView.computed,
-    async created() {
-      await window.ProjectListView.created.call(this);
+    data() { return { projects: [], loading: true, loadError: "", search: "", showAddForm: false, newProject: { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }, saving: false, releaseId: null }; },
+    computed: {
+      allProjects() { return [...this.projects].sort((a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0)); },
+      filteredProjects() { const query = this.search.toLowerCase(); return !query ? this.allProjects : this.allProjects.filter((project) => project.name.toLowerCase().includes(query) || (project.description || "").toLowerCase().includes(query) || (project.odoo_version || "").toLowerCase().includes(query)); },
     },
-    methods: window.ProjectListView.methods,
+    async created() { await this.load(); },
+    methods: {
+      async load() { this.loading = true; this.loadError = ""; try { this.projects = await Api.get("projects"); this.projects.forEach((project) => { window.UnreadStore.byProject[String(project.id)] = project.unread_count || 0; }); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
+      async add() { if (!this.newProject.name || !this.newProject.odoo_version) return showToast("請填寫專案名稱和版本", "error"); if (!/^[a-zA-Z0-9_-]+$/.test((this.newProject.folder_name || "").trim())) return showToast("請填寫英文資料夾名稱（只能用英文、數字、底線、連字號）", "error"); this.saving = true; try { await Api.post("projects", { ...this.newProject }); this.newProject = { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }; this.showAddForm = false; await this.load(); showToast("已新增專案", "success"); } catch (error) { showToast(error.message || "無法新增專案", "error", 0); } finally { this.saving = false; } },
+      async toggleFavorite(project) { const next = !project.is_favorite; project.is_favorite = next; try { if (next) await Api.post(`projects/${project.id}/favorite`, {}); else await Api.delete(`projects/${project.id}/favorite`); } catch (error) { project.is_favorite = !next; showToast(error.message || "更新我的最愛失敗", "error", 0); } },
+      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goWiki(id) { this.$router.push(`/projects/${id}/wiki`); }, goChat(id) { this.$router.push(`/projects/${id}/chat`); },
+      async openEnv(id) { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } },
+    },
     template: `
       <section class="ui-next-page ui-next-project-page">
 <header class="ui-next-page-head">
@@ -1045,11 +1140,12 @@
 <span>{{ filteredProjects.length }} 個專案</span>
 </div>
 <div v-if="loading" class="ui-next-loading-card">載入專案中…</div>
+<div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 <template v-else>
 <div class="ui-next-project-grid ui-next-project-grid-rich">
 <article v-for="project in filteredProjects" :key="project.id">
 <header>
-<button @click="toggleFavorite(project)" :class="{active:project.is_favorite}" :title="project.is_favorite?'取消我的最愛':'加入我的最愛'">★</button>
+<button @click="toggleFavorite(project)" :class="{active:project.is_favorite}" :aria-label="project.is_favorite?'取消我的最愛':'加入我的最愛'"><ui-next-icon name="star"/></button>
 <span>Odoo {{ project.odoo_version }} · {{ project.edition==='enterprise'?'企業版':'社群版' }}</span>
 </header>
 <button class="ui-next-project-open" @click="go(project.id)">
@@ -1090,12 +1186,22 @@
   });
 
   // 任務清單恢復預覽中的摘要、篩選、批次與流程列，操作直接沿用原始 View。
+  const UiNextStatusBar = Vue.defineComponent({
+    name: "UiNextStatusBar",
+    props: { status: String, source: String, gitBranch: String, e2eDisabled: Boolean },
+    computed: { isNew() { return this.status === "new"; }, isStopped() { return ["stopped", "merge_conflict"].includes(this.status); }, flow() { const dev = [{ label: "分析", statuses: ["analysis_running", "branch_pending"] }, { label: "確認", statuses: ["confirm_pending", "confirm_answered", "clarify_pending", "clarify_answered", "spec_review"] }, { label: "開發", statuses: ["coding_running"] }, { label: "QA", statuses: ["qa_running", "merge_running"] }, { label: "部署", statuses: ["deploy_testing"] }, { label: "測試", statuses: ["playwright_running"] }, { label: "審核", statuses: ["review_pending", "wiki_updating"] }, { label: "完成", statuses: ["done"] }]; const customer = [{ label: "客服", statuses: ["cs_running"] }, { label: "確認", statuses: ["cs_reply_pending"] }, { label: "完成", statuses: ["done"] }]; const customerData = [{ label: "客服", statuses: ["cs_running"] }, { label: "補資料", statuses: ["cs_data_needed"] }, { label: "確認", statuses: ["cs_reply_pending"] }, { label: "完成", statuses: ["done"] }]; if (this.status === "cs_data_needed") return customerData; if (["cs_running", "cs_reply_pending"].includes(this.status)) return customer; if (this.status === "done" && this.source === "service" && !this.gitBranch) return customer; const steps = this.source === "service" ? [{ label: "客服", statuses: ["cs_running"] }, ...dev] : dev; return this.e2eDisabled ? steps.filter((step) => step.label !== "測試") : steps; }, activeIdx() { if (this.status === "done") return this.flow.length; const index = this.flow.findIndex((step) => step.statuses.includes(this.status)); return index === -1 ? 0 : index; } },
+    template: `<div v-if="!isNew" class="stepper" :aria-label="'任務進度：'+status"><template v-for="(step,index) in flow" :key="step.label"><div class="step-node" :class="{'sn-done':!isStopped&&index<activeIdx,'sn-active':!isStopped&&index===activeIdx,'sn-error':isStopped,'sn-future':!isStopped&&index>activeIdx}"><div class="step-circle"><span v-if="isStopped">✕</span><span v-else-if="index<activeIdx">✓</span><span v-else>{{ index + 1 }}</span></div><div class="step-label">{{ step.label }}</div></div><div v-if="index<flow.length-1" class="step-connector" :class="{'sc-done':!isStopped&&index<activeIdx,'sc-error':isStopped}"></div></template></div>`,
+  });
   window.UiNextTaskListView = Vue.defineComponent({
     name: "UiNextTaskListView",
-    components: window.TaskListView.components,
-    data: window.TaskListView.data,
+    components: { StatusBar: UiNextStatusBar },
+    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false }; },
     computed: {
-      ...window.TaskListView.computed,
+      // Vue template 不會把全域 window 暴露到 component scope；在此注入 registry，
+      // 避免開啟篩選時讀取 undefined 而卸載整個任務頁。
+      statusOptions() {
+        return Object.entries(window.STATUS_LABELS || {}).map(([value, label]) => ({ value, label }));
+      },
       doneCount() {
         return this.tasks.filter((t) => t.status === "done").length;
       },
@@ -1104,22 +1210,29 @@
           (t) => !t.is_paused && t.status !== "done" && !this.needsAction(t),
         ).length;
       },
+      realFilteredTasks() { let list = this.filter === "archived" ? this.archivedTasks : this.filter === "paused" ? this.tasks.filter((task) => task.is_paused) : this.filter === "needs_action" ? this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused)) : this.filter === "pending" ? this.tasks.filter((task) => !task.is_paused && task.status !== "done") : this.tasks; return this.applySort(list.filter((task) => this.matchAll(task))); },
+      filteredTasks() { return this.realFilteredTasks; },
+      needsActionCount() { return this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused)).length; },
+      needsActionShown() { return this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused) && this.matchAll(task)).length; },
+      pendingShown() { return this.tasks.filter((task) => !task.is_paused && task.status !== "done" && this.matchAll(task)).length; },
+      pausedShown() { return this.tasks.filter((task) => task.is_paused && this.matchAll(task)).length; },
+      allShown() { return this.tasks.filter((task) => this.matchAll(task)).length; },
+      allSelected() { return this.filteredTasks.length > 0 && this.filteredTasks.every((task) => this.selectedIds.includes(task.id)); },
+      activeFilterCount() { return [this.projectFilter, this.statusFilter, this.sourceFilter, this.search].filter(Boolean).length + (this.releaseFilter !== "all" ? 1 : 0); },
     },
-    watch: window.TaskListView.watch,
-    async created() {
-      await window.TaskListView.created.call(this);
-      const tab = this.$route.query.tab;
-      if (["needs_action", "pending", "paused", "all", "archived"].includes(tab)) {
-        this.filter = tab;
-      }
+    watch: { filter() { this.selectedIds = []; this.batchMode = false; this.load(); } },
+    async created() { const tab = this.$route.query.tab; if (["needs_action", "pending", "paused", "all", "archived"].includes(tab)) this.filter = tab; await Promise.all([this.load(), Api.get("projects").then((projects) => { this.projects = projects || []; }).catch(() => {})]); },
+    methods: {
+      matchAll(task) { const query = this.search.toLowerCase().trim(); const matchesSearch = !query || [task.title, task.task_id, task.source, task.module, task.project_name].some((value) => (value || "").toLowerCase().includes(query)); const matchesRelease = this.releaseFilter === "released" ? !!task.merged_to_main_at : this.releaseFilter === "pending_release" ? !!task.approved_at && !task.merged_to_main_at : true; return matchesSearch && matchesRelease && (!this.projectFilter || String(task.project_id) === String(this.projectFilter)) && (!this.statusFilter || task.status === this.statusFilter) && (!this.sourceFilter || task.source === this.sourceFilter); },
+      clearFilters() { this.search = ""; this.releaseFilter = "all"; this.projectFilter = ""; this.statusFilter = ""; this.sourceFilter = ""; },
+      applySort(list) { const timestamp = (value) => new Date(value || 0).getTime(); return list.slice().sort((a, b) => this.sort === "created_desc" ? timestamp(b.created_at) - timestamp(a.created_at) : this.sort === "title_asc" ? (a.title || a.task_id || "").localeCompare(b.title || b.task_id || "", "zh-Hant") : this.sort === "status_asc" ? (a.status || "").localeCompare(b.status || "") : timestamp(b.updated_at || b.created_at) - timestamp(a.updated_at || a.created_at)); },
+      needsAction(task) { return (window.HUMAN_STATUSES || []).includes(task.status); }, isStopped(task) { return task.status === "stopped" || task.status === "merge_conflict"; }, statusLabel(status) { return (window.STATUS_LABELS || {})[status] || status; }, sourceLabel(source) { return source === "odoo" ? "Odoo" : source === "service" ? "eService" : source === "manual" ? "手動增加" : source; }, timeAgo(value) { const delta = Date.now() - new Date(value).getTime(); return delta < 60000 ? "剛剛" : delta < 3600000 ? `${Math.floor(delta / 60000)} 分鐘前` : delta < 86400000 ? `${Math.floor(delta / 3600000)} 小時前` : `${Math.floor(delta / 86400000)} 天前`; },
+      async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(this.filter === "archived" ? "tasks?archived=true" : "tasks"); if (this.filter === "archived") this.archivedTasks = data.tasks || data; else { this.tasks = data.tasks || data; window.needsActionCount.value = this.needsActionCount; } } catch (error) { this.loadError = error.message || "無法載入任務"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
+      openTask(task) { this.$router.push(`/task/${task.id}`); }, toggleBatchMode() { this.batchMode = !this.batchMode; if (!this.batchMode) this.selectedIds = []; }, toggleSelect(id, event) { event.stopPropagation(); const index = this.selectedIds.indexOf(id); if (index < 0) this.selectedIds.push(id); else this.selectedIds.splice(index, 1); }, toggleSelectAll() { this.selectedIds = this.allSelected ? [] : this.filteredTasks.map((task) => task.id); },
+      openAdd() { this.newTask = { title: "", original_text: "", project_id: "" }; this.newFiles = []; this.showAdd = true; }, onAddFilesSelected(event) { this.newFiles = Array.from(event.target.files || []); }, async submitAdd() { if (!this.newTask.project_id || !this.newTask.title.trim() || !this.newTask.original_text.trim()) return showToast("請完整填寫專案、標題與內容", "error"); if (this.newFiles.length > 5) return showToast("最多上傳 5 個附件", "error"); this.adding = true; try { const form = new FormData(); form.append("title", this.newTask.title.trim()); form.append("original_text", this.newTask.original_text); form.append("project_id", this.newTask.project_id); this.newFiles.forEach((file) => form.append("files", file)); await Api.postForm("tasks", form); this.showAdd = false; this.filter = "all"; showToast("已新增任務", "success"); } catch (error) { showToast(error.message || "新增任務失敗", "error", 0); } finally { this.adding = false; } },
+      async syncNow() { this.syncing = true; try { await Api.post("sync/now", {}); await this.load(); showToast("同步完成", "success"); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } finally { this.syncing = false; } }, async togglePause(task, event) { event.stopPropagation(); try { const result = await Api.put(`tasks/${task.id}/pause`, {}); task.is_paused = result.is_paused; showToast(result.is_paused ? "任務已暫停" : "任務已恢復", "success"); } catch (error) { showToast(error.message || "更新失敗", "error", 0); } },
+      async batchPause() { await this.batch("pause"); }, async batchArchive() { await this.batch("archive"); }, async batchDelete() { await this.batch("delete"); }, async batch(action) { if (!this.selectedIds.length) return; this.batchWorking = true; try { await Api.post(`tasks/batch/${action}`, action === "pause" ? { ids: this.selectedIds, paused: true } : { ids: this.selectedIds }); this.selectedIds = []; await this.load(); showToast("批次操作完成", "success"); } catch (error) { showToast(error.message || "批次操作失敗", "error", 0); } finally { this.batchWorking = false; } },
     },
-    mounted() {
-      window.TaskListView.mounted.call(this);
-    },
-    beforeUnmount() {
-      window.TaskListView.beforeUnmount.call(this);
-    },
-    methods: window.TaskListView.methods,
     template: `
       <section class="ui-next-page ui-next-task-page ui-next-task-page-rich">
 <header class="ui-next-page-head">
@@ -1190,7 +1303,7 @@
 </select>
 <select v-model="statusFilter">
 <option value="">全部狀態</option>
-<option v-for="(label,status) in window.STATUS_LABELS" :key="status" :value="status">{{ label }}</option>
+<option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
 </select>
 <select v-model="sourceFilter">
 <option value="">全部來源</option>

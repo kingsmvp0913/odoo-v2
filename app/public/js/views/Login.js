@@ -33,7 +33,9 @@ window.LoginView = Vue.defineComponent({
           : { username: this.form.username, password: this.form.password };
         const res = await Api.post(endpoint, payload);
         Api.setToken(res.token);
-        this.$router.push('/');
+        // session 過期後回到原本的 Next route；只接受站內 hash route，避免 open redirect。
+        const redirect = this.$route.query.redirect;
+        this.$router.push(typeof redirect === 'string' && redirect.startsWith('/') ? redirect : '/');
       } catch (e) { this.error = e.message; }
       finally { this.loading = false; }
     },

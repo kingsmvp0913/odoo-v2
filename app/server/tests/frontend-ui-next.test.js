@@ -26,9 +26,30 @@ describe("ui-next 平行介面", () => {
     expect(index).toContain("js/ui-next/UiNextPages.js");
     expect(css).toContain(".ui-next-shell");
     expect(pagesCss).toContain(".ui-next-chat-page");
+    expect(index).toContain("get('ui') === 'next'");
+    expect(index).toContain("document.write('<link rel=\"stylesheet\" href=\"css/ui-next.css\">");
   });
 
-  test("Pipeline 與用量報表使用新版 View，而非沿用舊版 DOM", () => {
+  test("Next CSS 的每個 selector 都有專用 scope，不會污染 Legacy DOM", () => {
+    const selectors = (source) => {
+      const out = [], clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
+      let buffer = "";
+      for (const char of clean) {
+        if (char === "{") {
+          const selector = buffer.trim();
+          if (selector && !selector.startsWith("@")) out.push(...selector.split(",").map((item) => item.trim()));
+          buffer = "";
+        } else if (char === "}") buffer = "";
+        else buffer += char;
+      }
+      return out;
+    };
+    for (const selector of selectors(`${css}\n${pagesCss}`)) {
+      expect(selector).toMatch(/^(?:\.ui-next|\[data-ui="next"\]|html\[data-theme=)/);
+    }
+  });
+
+  test("Next 入口使用對應的新版 View", () => {
     [
       ["UiNextTokenReportView", "TokenReportView"],
       ["UiNextPipelineView", "AdminPipelinesView"],
@@ -46,7 +67,6 @@ describe("ui-next 平行介面", () => {
       );
       expect(uiNextPages).toMatch(new RegExp(`name:\\s*["']${next}["']`));
     });
-    expect(uiNextPages).toContain("methods: window.ProjectDetailView.methods");
       expect(
         (uiNextPages.match(/name:\s*["']UiNextProjectDetailView["']/g) || [])
           .length,
@@ -65,6 +85,10 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain("chatTitle(this.prompt)");
     expect(uiNext).toContain("projects/${id}/chats");
     expect(uiNext).toMatch(/chat\.title \|\| ["']新對話["']/);
+    expect(uiNext).toContain("oaa.next.last-project-id");
+    expect(uiNext).toContain("projects/${this.projectId}/env");
+    expect(uiNext).toContain("this.createdChatId");
+    expect(uiNext).toContain("@keydown.meta.enter.prevent");
   });
 
   test("Chat 採用問答主畫面，對話紀錄改為按需展開", () => {
@@ -163,6 +187,8 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain('ref="commandInput"');
     expect(uiNext).toContain("this.focusCommand();");
     expect(uiNext).toContain("trapCommandFocus(event)");
+    expect(uiNext).toContain("closeCommand()");
+    expect(uiNext).toContain("commandTrigger.focus()");
     expect(css).toContain('[data-ui="next"]{--next-bg:');
     expect(css).toContain('html[data-theme="dark"] [data-ui="next"]');
     expect(css).toContain('@media(prefers-reduced-motion:reduce)');
@@ -173,5 +199,53 @@ describe("ui-next 平行介面", () => {
   test("動態 HTML 容器不保留子節點，避免 Vue 在進入詳情頁時拒絕編譯", () => {
     expect(uiNextPages).toContain('v-html="renderMd(message.content)" v-show="message.content"></div>');
     expect(uiNextPages).toContain('v-html="ansiToHtml(event.content)"></pre>');
+  });
+
+  test("P0：Next 權限、篩選與 Chat route 不會退回 Legacy 或白屏", () => {
+    expect(app).not.toContain("window.location.replace(");
+    expect(app).toContain('query: { redirect: to.fullPath }');
+    expect(app).toContain('return "/forbidden"');
+    expect(uiNext).toContain('<router-view :key="$route.fullPath" />');
+    expect(uiNextPages).toContain("statusOptions()");
+    expect(uiNextPages).not.toContain("window.STATUS_LABELS\" :key");
+    expect(uiNextPages).toContain("開始新對話");
+    expect(uiNextPages).not.toMatch(/window\.ProjectChatView\.(?:data|computed|watch|methods|created)/);
+    expect(uiNextPages).toContain('requestId !== this.requestId');
+  });
+
+  test("已移轉的專案清單與設定頁不再委派 Legacy View", () => {
+    ["ProjectListView", "SettingsView", "ProjectChatView", "TaskListView"].forEach((name) => {
+      expect(uiNextPages).not.toMatch(
+        new RegExp(`window\\.${name}\\.(?:data|computed|watch|methods|created|mounted|beforeUnmount|unmounted)`),
+      );
+    });
+    const projectDetail = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextProjectDetailView"'),
+      uiNextPages.indexOf('name: "UiNextTaskDetailView"'),
+    );
+    expect(projectDetail).not.toMatch(
+      /window\.ProjectDetailView\.(?:data|computed|watch|methods|created|mounted|beforeUnmount|unmounted)/,
+    );
+  });
+
+  test("P0：手機任務詳情 action panel 不會維持超出容器的最小寬度", () => {
+    expect(pagesCss).toContain(".ui-next-task-detail-grid,");
+    expect(pagesCss).toContain(".ui-next-task-side > *");
+    expect(pagesCss).toContain("max-width: 100%");
+  });
+
+  test("任務清單保留可辨識的流程列與可捲動主內容", () => {
+    expect(uiNextPages).toContain('name: "UiNextStatusBar"');
+    expect(uiNextPages).toContain('class="stepper"');
+    expect(uiNextPages).toContain('class="step-circle"');
+    expect(css).toContain(".ui-next-shell{height:100vh;min-height:100vh;overflow:hidden}");
+    expect(css).toContain(".ui-next-sidebar-scroll{min-height:0;flex:1;overflow:auto}");
+    expect(pagesCss).toContain("safe-area-inset-bottom");
+  });
+
+  test("Pipeline Monitor 在背景頁籤停止輪詢，回到前景立即更新", () => {
+    expect(uiNextPages).toContain('document.addEventListener("visibilitychange", this._onVisibility)');
+    expect(uiNextPages).toContain("if (document.hidden) this.stopPolling()");
+    expect(uiNextPages).toContain("else { this.load(); this.startPolling(); }");
   });
 });

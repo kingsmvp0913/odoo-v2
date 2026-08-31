@@ -16,6 +16,8 @@
       <path v-else-if="name==='project'" d="M3 7h7l2 2h9v10H3z"/><path v-else-if="name==='flow'" d="M6 5h12M6 12h12M6 19h12"/><circle v-else-if="name==='dots'" cx="6" cy="12" r="1" fill="currentColor"/><path v-else-if="name==='grid'" d="M5 5h5v5H5zm9 0h5v5h-5zM5 14h5v5H5zm9 0h5v5h-5z"/>
       <path v-else-if="name==='book'" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 5.5v16"/><path v-else-if="name==='chart'" d="M5 20v-8m7 8V4m7 16v-5"/>
       <path v-else-if="name==='paperclip'" d="m21 11.5-8.7 8.7a5 5 0 0 1-7.1-7.1l8.8-8.8a3.5 3.5 0 0 1 5 5l-8.8 8.8a2 2 0 0 1-2.8-2.8l8.1-8.1"/>
+      <path v-else-if="name==='arrow-left'" d="m14 5-7 7 7 7M7 12h12"/>
+      <path v-else-if="name==='star'" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>
     </svg>`,
   });
   window.UiNextIcon = UiNextIcon;
@@ -29,6 +31,9 @@
         projectId: "",
         prompt: "",
         files: [],
+        environment: null,
+        createdChatId: "",
+        sendError: "",
         userName: "使用者",
         sending: false,
         loading: true,
@@ -42,7 +47,11 @@
         ]);
         this.projects = projects || [];
         this.userName = me.display_name || me.username || "使用者";
-        this.projectId = this.projects[0] ? String(this.projects[0].id) : "";
+        const lastProjectId = localStorage.getItem("oaa.next.last-project-id");
+        this.projectId = this.projects.some((project) => String(project.id) === lastProjectId)
+          ? lastProjectId
+          : this.projects[0] ? String(this.projects[0].id) : "";
+        await this.loadEnvironment();
       } catch (e) {
         showToast("無法載入專案清單", "error");
       } finally {
@@ -57,8 +66,25 @@
       },
     },
     methods: {
+      async loadEnvironment() {
+        if (!this.projectId) { this.environment = null; return; }
+        this.environment = await Api.get(`projects/${this.projectId}/env`).catch(() => null);
+      },
+      onProjectChange() {
+        localStorage.setItem("oaa.next.last-project-id", this.projectId);
+        this.createdChatId = "";
+        this.loadEnvironment();
+      },
       chooseFiles(e) {
-        this.files = Array.from(e.target.files || []);
+        const selected = Array.from(e.target.files || []);
+        this.files = selected.filter((file) => /^image\//.test(file.type) && file.size <= 10 * 1024 * 1024).slice(0, 5);
+        if (this.files.length !== selected.length) showToast("附件限圖片、單檔 10MB、最多 5 個", "error");
+        e.target.value = "";
+      },
+      autoResize(event) {
+        const textarea = event.currentTarget;
+        textarea.style.height = "auto";
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`;
       },
       removeFile(index) {
         this.files.splice(index, 1);
@@ -71,10 +97,12 @@
         )
           return;
         this.sending = true;
+        this.sendError = "";
         try {
-          const chat = await Api.post(`projects/${this.projectId}/chats`, {
-            title: chatTitle(this.prompt),
-          });
+          const chat = this.createdChatId
+            ? { id: this.createdChatId }
+            : await Api.post(`projects/${this.projectId}/chats`, { title: chatTitle(this.prompt) });
+          this.createdChatId = String(chat.id);
           const content = this.prompt.trim();
           if (this.files.length) {
             const form = new FormData();
@@ -91,8 +119,10 @@
             );
           }
           this.$router.push(`/projects/${this.projectId}/chat/${chat.id}`);
+          this.createdChatId = "";
         } catch (e) {
-          showToast(e.message || "無法建立對話", "error");
+          this.sendError = e.message || "無法送出訊息";
+          showToast(this.sendError, "error", 0);
         } finally {
           this.sending = false;
         }
@@ -108,15 +138,16 @@
             <div v-if="files.length" class="ui-next-attachments">
               <span v-for="(file, index) in files" :key="file.name + index"><ui-next-icon name="paperclip"/>{{ file.name }} <button type="button" @click="removeFile(index)" aria-label="移除附件">×</button></span>
             </div>
-            <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @keydown.ctrl.enter.prevent="send"></textarea>
+            <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @input="autoResize" @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send"></textarea>
+            <p v-if="sendError" class="ui-next-inline-error">{{ sendError }} <button type="button" @click="send">重試</button></p>
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
                 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple @change="chooseFiles"></label>
-                <select v-model="projectId" :disabled="loading || !projects.length" aria-label="專案">
+                <select v-model="projectId" @change="onProjectChange" :disabled="loading || !projects.length" aria-label="專案">
                   <option v-if="!projects.length" value="">沒有可用專案</option>
-                  <option v-for="project in projects" :key="project.id" :value="String(project.id)">{{ project.name }}</option>
+                  <option v-for="project in projects" :key="project.id" :value="String(project.id)">{{ project.name }} · Odoo {{ project.odoo_version || '—' }}</option>
                 </select>
-                <span class="ui-next-environment">正式 / 測試依專案設定</span>
+                <span class="ui-next-environment">{{ environment ? ({ idle: environment.built ? '已停止' : '未建立', setting_up: '建立中', running: '運行中', error: '錯誤' }[environment.status] || environment.status) : '環境狀態無法取得' }}</span>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'">{{ sending ? '…' : '↑' }}</button>
             </div>
@@ -145,6 +176,7 @@
         toolsOpen: false,
         commandOpen: false,
         commandQuery: "",
+        commandTrigger: null,
         projects: [],
         projectChats: {},
         expandedProjects: {},
@@ -233,7 +265,7 @@
             this.commandOpen = true;
             this.focusCommand();
           }
-          if (event.key === "Escape") this.commandOpen = false;
+          if (event.key === "Escape") this.closeCommand();
         };
         window.addEventListener("keydown", this._onCommandKey);
       } catch (e) {
@@ -261,12 +293,17 @@
           }
         }
       },
-      showSearch() {
+      showSearch(event) {
+        this.commandTrigger = event && event.currentTarget;
         this.commandOpen = true;
         this.focusCommand();
       },
-      selectCommand(item) {
+      closeCommand() {
         this.commandOpen = false;
+        this.$nextTick(() => this.commandTrigger && this.commandTrigger.focus());
+      },
+      selectCommand(item) {
+        this.closeCommand();
         this.commandQuery = "";
         this.go(item.path);
       },
@@ -279,6 +316,7 @@
       },
       go(path) {
         this.accountOpen = false;
+        this.mobileSidebarOpen = false;
         this.$router.push(path);
       },
       logout() {
@@ -321,17 +359,19 @@
         <aside class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }">
           <div class="ui-next-brand"><img src="favicon.svg" alt="OAA"><span><b>Odoo AI</b><small>自動開發平台</small></span></div>
           <button class="ui-next-new" @click="go('/')"><ui-next-icon name="plus"/>新對話</button>
-          <button class="ui-next-search" @click="showSearch"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
+          <button class="ui-next-search" @click="showSearch($event)"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
+          <div class="ui-next-sidebar-scroll">
           <div class="ui-next-sidebar-rule"></div>
           <span class="ui-next-section-label">工作區</span>
           <router-link class="ui-next-nav" to="/" exact-active-class="is-active"><ui-next-icon name="chat"/>問答</router-link>
           <button class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" @click="go('/tasks')"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></button>
           <button class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" @click="go('/projects')"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></button>
           <div class="ui-next-projects" v-if="projects.length"><span class="ui-next-section-label">專案 Chat</span><div v-for="project in projects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}</button><button @click="toggleProject(project)">{{ expandedProjects[project.id] ? '⌃' : '⌄' }}</button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button v-for="chat in projectChats[project.id] || []" :key="chat.id" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button v-if="!(projectChats[project.id] || []).length" @click="go('/projects/' + project.id + '/chat')">尚無對話</button><button class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
+          </div>
           <div class="ui-next-bottom"><div v-if="isAdmin && usageRows.length" class="ui-next-usage" @click="go('/token-report')"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></div><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><small>其他功能</small><button @click="openTour"><ui-next-icon name="book"/>新手教學</button><button v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button class="ui-next-tools" @click="toolsOpen = !toolsOpen"><ui-next-icon name="grid"/>更多工具 <b>{{ toolsOpen ? '⌃' : '⌄' }}</b></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button class="ui-next-account" @click="accountOpen = !accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><b>⌃</b></button></div></div>
         </aside>
-        <main class="ui-next-main"><router-view /></main>
-        <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="commandOpen = false" @keydown.esc="commandOpen = false" @keydown="trapCommandFocus">
+        <main class="ui-next-main"><router-view :key="$route.fullPath" /></main>
+        <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown="trapCommandFocus">
           <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
             <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…">
             <button v-for="item in commandItems" :key="item.path" @click="selectCommand(item)">{{ item.label }}<span>↵</span></button>
