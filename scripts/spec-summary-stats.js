@@ -29,6 +29,17 @@ const TECH = [
 ];
 
 // 以行首鍵切頂層 section：規格常有未跳脫的冒號，走 YAML parser 會炸在無關的地方
+//
+// 切完要剝掉 YAML 語法再算長度。實測規格的 summary 一律寫成 `summary: |` 多行區塊，
+// 於是那個 `|` 與每行前的縮排都會被算成字——10 行的 summary 虛胖 20 字以上。長度是本腳本
+// 判「超過觀察線」的唯一依據，量錯就會把及格的筆數推過線，而這把尺正是用來驗契約有沒有生效的。
+const dedent = (s) => {
+  const lines = s.split('\n');
+  const pads = lines.filter(l => l.trim()).map(l => l.match(/^ */)[0].length);
+  const pad = pads.length ? Math.min(...pads) : 0;
+  return lines.map(l => l.slice(pad)).join('\n');
+};
+
 function sections(yaml) {
   const out = {};
   let cur = null;
@@ -37,7 +48,12 @@ function sections(yaml) {
     if (m) { cur = m[1]; out[cur] = [m[2]]; }
     else if (cur) out[cur].push(ln);
   }
-  for (const k of Object.keys(out)) out[k] = out[k].join('\n').trim();
+  for (const k of Object.keys(out)) {
+    // 鍵那一行只剩 block scalar 標記（`|`／`>`／`|-`…）時整行丟掉：那是語法不是內容
+    const [head, ...rest] = out[k];
+    const kept = /^\s*[|>][-+]?\d*\s*$/.test(head) ? rest : out[k];
+    out[k] = dedent(kept.join('\n')).trim();
+  }
   return out;
 }
 
