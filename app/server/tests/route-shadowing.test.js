@@ -35,11 +35,14 @@ function registrationOrder() {
   return order;
 }
 
+// 分動詞收集：Express 的遮蔽只發生在同一個 HTTP 動詞內，
+// GET /a/:id 不會擋住 POST /a/xxx。只查 GET 會漏掉 114 條非 GET 路由。
 function routesOf(file) {
   const full = path.join(SERVER, `${file}.js`);
   if (!fs.existsSync(full)) return [];
   const src = fs.readFileSync(full, 'utf8');
-  return [...src.matchAll(/app\.get\(\s*'([^']+)'/g)].map((m) => m[1]);
+  return [...src.matchAll(/app\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)]
+    .map((m) => ({ verb: m[1], route: m[2] }));
 }
 
 const isParam = (seg) => seg.startsWith(':');
@@ -48,14 +51,18 @@ const isUnconstrainedParam = (seg) => isParam(seg) && !seg.includes('(');
 
 const ordered = [];
 for (const file of registrationOrder()) {
-  for (const route of routesOf(file)) ordered.push({ file, route });
+  for (const r of routesOf(file)) ordered.push({ file, ...r });
 }
 
 test('解析得到路由（index.js 或 route 檔寫法變動時不得靜默略過）', () => {
-  expect(ordered.length).toBeGreaterThan(30);
-  expect(ordered.some((r) => r.route === '/api/projects')).toBe(true);
+  expect(ordered.length).toBeGreaterThan(100);
+  expect(ordered.some((r) => r.route === '/api/projects' && r.verb === 'get')).toBe(true);
   // 反向自驗：解析器真的看得到 env-summaries 這條，否則下面的檢查等於沒跑
   expect(ordered.some((r) => r.route === '/api/projects/env-summaries')).toBe(true);
+  // 非 GET 也要進來——只查 GET 會漏掉超過一百條路由
+  for (const verb of ['post', 'put', 'delete']) {
+    expect(ordered.filter((r) => r.verb === verb).length).toBeGreaterThan(10);
+  }
 });
 
 test('沒有字面路徑被更早註冊的參數路徑遮蔽', () => {
@@ -63,6 +70,8 @@ test('沒有字面路徑被更早註冊的參數路徑遮蔽', () => {
   for (let i = 0; i < ordered.length; i += 1) {
     const later = ordered[i].route.split('/');
     for (let j = 0; j < i; j += 1) {
+      // 遮蔽只發生在同一個動詞內
+      if (ordered[j].verb !== ordered[i].verb) continue;
       const earlier = ordered[j].route.split('/');
       if (earlier.length !== later.length) continue;
       let blocking = null;
@@ -80,7 +89,7 @@ test('沒有字面路徑被更早註冊的參數路徑遮蔽', () => {
       }
       if (ok && blocking) {
         shadowed.push(
-          `${ordered[i].route}（${ordered[i].file}）被 ${ordered[j].route}（${ordered[j].file}）遮蔽`,
+          `[${ordered[i].verb.toUpperCase()}] ${ordered[i].route}（${ordered[i].file}）被 ${ordered[j].route}（${ordered[j].file}）遮蔽`,
         );
       }
     }
