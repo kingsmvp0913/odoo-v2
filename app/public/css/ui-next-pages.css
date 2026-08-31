@@ -1092,9 +1092,6 @@
 .ui-next-project-grid-rich {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.ui-next-project-grid-rich > article {
-  min-height: 250px;
-}
 .ui-next-project-folder {
   display: block;
   color: var(--text-muted);
@@ -1247,7 +1244,6 @@
 }
 .ui-next-project-grid > article {
   display: flex;
-  min-height: 210px;
   flex-direction: column;
   padding: 17px;
   border: 1px solid var(--border);
@@ -1268,6 +1264,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 9px;
+}
+/* 操作列貼底:同列卡片會被 grid 拉成等高,內容行數不同時(例如有「範例」標記的專案)
+   按鈕列若不貼底就會左右錯開。 */
+.ui-next-project-grid footer {
+  margin-top: auto;
 }
 .ui-next-project-grid header > button {
   border: 0;
