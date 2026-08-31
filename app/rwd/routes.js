@@ -24,14 +24,26 @@ const THEMES = ['light', 'dark'];
 // 未登入頁與獨立 HTML 頁各自指定。
 const ROUTES = [
   { key: 'login', hash: '#/login', auth: 'none', covered: true, expect: '.login-wrap' },
-  { key: 'task-list', hash: '#/', auth: 'user', covered: true },
+  // '#/' 與 '#/tasks' 在兩個介面下是不同的頁：Legacy 兩者都是 TaskListView，
+  // 但 Next 的 '#/' 是問答首頁、'#/tasks' 才是任務列表。只拍 '#/' 會讓 Next 的任務列表
+  // 完全不進門禁。
+  { key: 'home', hash: '#/', auth: 'user', covered: true },
+  { key: 'task-list', hash: '#/tasks', auth: 'user', covered: true },
   { key: 'task-detail', hash: '#/task/:taskId', auth: 'user', covered: true, needs: 'taskId' },
+  // 403 頁在兩個介面共用同一個 ForbiddenView，Legacy 沒有 .content/.page-body，另指定 expect。
+  { key: 'forbidden', hash: '#/forbidden', auth: 'user', covered: true, expect: '.auth-container' },
+  // Next 下會 redirect 到 '/tasks?tab=needs_action'，拍到的是導向後的畫面——那正是要驗的行為。
+  { key: 'inbox', hash: '#/inbox', auth: 'user', covered: true },
   { key: 'task-terminal', hash: '#/task/:taskId/terminal', auth: 'user', covered: false,
     why: '需要執行中的任務才有終端輸出，無法穩定造資料' },
   { key: 'project-list', hash: '#/projects', auth: 'user', covered: true },
   { key: 'project-detail', hash: '#/projects/:projectId', auth: 'user', covered: true, needs: 'projectId' },
   { key: 'project-wiki', hash: '#/projects/:projectId/wiki', auth: 'user', covered: true, needs: 'projectId' },
+  { key: 'project-wiki-page', hash: '#/projects/:projectId/wiki/:slug', auth: 'user', covered: false,
+    why: 'slug 依專案 wiki 內容而定，無法穩定造資料' },
   { key: 'project-chat', hash: '#/projects/:projectId/chat', auth: 'user', covered: true, needs: 'projectId' },
+  { key: 'project-chat-one', hash: '#/projects/:projectId/chat/:chatId', auth: 'user', covered: false,
+    why: '需要既有對話 id，無法穩定造資料' },
   { key: 'project-db', hash: '#/projects/:projectId/db', auth: 'user', covered: false,
     why: '需要可用的遠端資料庫連線，無法穩定造資料' },
   // 與 project-db 不同：這頁沒有連線時顯示的是引導卡，畫面照樣穩定，進得了門禁
@@ -41,6 +53,9 @@ const ROUTES = [
   { key: 'admin', hash: '#/admin', auth: 'admin', covered: true },
   { key: 'admin-users', hash: '#/admin/users', auth: 'admin', covered: true },
   { key: 'admin-agents', hash: '#/admin/agents', auth: 'admin', covered: true },
+  // Next 專用的子頁：Legacy 的 /admin 本身就是這些設定表單，Next 把它們拆到這裡。
+  { key: 'admin-settings', hash: '#/admin/settings', auth: 'admin', covered: true },
+  { key: 'admin-schedules', hash: '#/admin/schedules', auth: 'admin', covered: true },
   { key: 'admin-pipelines', hash: '#/admin/pipelines', auth: 'user', covered: true },
   { key: 'pipeline-flow', hash: '#/pipeline-flow', auth: 'user', covered: true },
   { key: 'architecture', hash: '#/architecture', auth: 'user', covered: true },
