@@ -88,11 +88,15 @@ spec 內已知待拍板：§7.3 九種 action mode 補到什麼程度、§4.4 �
 
 ### 改 ui-next 的 CSS 前必讀（2026-08-31 兩次踩到）
 
-**同一條 selector 會被定義好幾次，改了不一定生效。** `.ui-next-thread-composer` 在
-`ui-next-pages.css` 出現 9 次、`.ui-next-message` 3 次，兩個 CSS 檔之間還有逐字重複的規則
+**同一條 selector 會被定義好幾次，改了不一定生效。** `.ui-next-thread-composer` 與
+`.ui-next-message` 在 `ui-next-pages.css` 都被定義多次，兩個 CSS 檔之間還有逐字重複的規則
 （載入序 `ui-next.css` → `ui-next-pages.css`，同 specificity 後者贏）。
 更陰險的是**移除一條之後，原本被它蓋住的另一條會浮上來**：移掉卡片的 `min-height:210px`，
 `min-height` 反而變成 250px（另一條規則），看起來像沒改到。
+
+（**這裡刻意不寫「幾次」**：2026-08-31 夜班期間這個數字從 11 變 9 再變 8，
+寫死的數字會腐爛成假事實——`always.md` 規則 2 講的就是這件事。
+要知道現況就自己 `grep -c`。）
 
 ⇒ **改完一定要用瀏覽器 computed style 反查真正生效的值**，不要看原始碼就當作生效：
 
