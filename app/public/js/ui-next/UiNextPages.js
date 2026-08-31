@@ -265,12 +265,24 @@
       return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "")}K`;
     return String(Math.round(n));
   };
+  // 小額多留精度：對話成本常落在 cent 以下，一律 4 位會把 $0.00003 印成 $0.0000（看起來像沒花錢）
   const fmtUSD = (value) => {
     const n = Number(value || 0);
     if (n >= 1000) return `$${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
     if (n >= 1) return `$${n.toFixed(2)}`;
-    return n ? `$${n.toFixed(4)}` : "$0";
+    if (n >= 0.01) return `$${n.toFixed(3)}`;
+    return n ? `$${n.toFixed(5)}` : "$0";
   };
+  // agent 語意固定色：用量報表的占比清單、關卡表與展開列共用同一份，跨區塊顏色一致
+  const AGENT_COLOR = {
+    analysis: "#2a78d6", coding: "#1baf7a", qa: "#eda100", cs: "#4a3aa7",
+    merge: "#e87ba4", deploy_fix: "#e34948", wiki: "#0891b2", chat: "#eb6834",
+    triage: "#6b7280", workflow_health: "#008300",
+  };
+  const agentColor = (type) => AGENT_COLOR[type] || "#94a3b8";
+  // 專案／使用者無語意色：依序取 20 色類別盤（隨主題切換深淺），超過 20 筆才用黃金角補色
+  const catColor = (index) =>
+    index < 20 ? `var(--cat-${index + 1})` : `hsl(${Math.round((index * 137.508) % 360)}, 65%, 55%)`;
   const elapsed = (value) => {
     const seconds = Math.max(0, Math.floor(Number(value || 0) / 1000));
     if (seconds >= 3600)
@@ -287,6 +299,7 @@
     data() {
       return {
         loading: true,
+        loadError: "",
         report: null,
         projects: [],
         labels: {},
@@ -352,15 +365,35 @@
         });
         return rows;
       },
+      // title＝未縮寫的完整數字。卡片顯示的是 K/M 縮寫與四捨五入後的金額，沒有 title 就再也查不到原值。
       summaryCards() {
         const s = this.report && this.report.summary;
         if (!s) return [];
         return [
-          ["實際花費", fmtUSD(s.cost_usd), "本期間累計"],
-          ["完成任務", fmtNumber(s.done_tasks), "已完成交付"],
-          ["每張交付成本", fmtUSD(s.avg_cost_per_task), "平均成本"],
-          ["實際 Token", fmtCompact(s.actual_tokens), "扣除 Cache 後"],
+          { label: "總 Token 數", value: fmtCompact(s.total_tokens), note: "含 Cache", title: fmtNumber(s.total_tokens) },
+          { label: "Cache 總數", value: fmtCompact(s.cache_tokens), note: "重複讀取部分", title: fmtNumber(s.cache_tokens) },
+          { label: "實際 Token", value: fmtCompact(s.actual_tokens), note: "扣除 Cache 後", title: fmtNumber(s.actual_tokens) },
+          { label: "平均每任務", value: fmtCompact(s.avg_tokens_per_task), note: "實際 Token ÷ 任務數", title: fmtNumber(Math.round(s.avg_tokens_per_task || 0)) },
+          { label: "任務數", value: fmtNumber(s.total_tasks), note: "本期間有記錄", title: fmtNumber(s.total_tasks) },
+          { label: "完成任務", value: fmtNumber(s.done_tasks), note: "已完成交付", title: fmtNumber(s.done_tasks) },
+          { label: "實際花費", value: fmtUSD(s.cost_usd), note: "本期間累計", title: `$${Number(s.cost_usd || 0).toFixed(6)}` },
+          { label: "每張交付成本", value: fmtUSD(s.avg_cost_per_task), note: `期間總花費 ÷ 完成任務數 ${s.done_tasks}`, title: `$${Number(s.avg_cost_per_task || 0).toFixed(6)}` },
         ];
+      },
+      // 明細表最多顯示 100 筆；下方另有「共 N 筆」提示，否則看不出被截斷
+      visibleTasks() {
+        return ((this.report && this.report.tasks) || []).slice(0, 100);
+      },
+      // Legacy 用三張 SVG 圓餅呈現 Agent／專案／使用者的占比。這裡改成「百分比＋顏色」清單版：
+      // 資訊等價（顏色沿用同一份對照），少一套繪圖與放大 modal 的碼。
+      agentShares() {
+        return this.shareRows(this.report && this.report.by_agent, (row) => this.agentLabel(row.agent_type), (row) => agentColor(row.agent_type));
+      },
+      projectShares() {
+        return this.shareRows(this.report && this.report.by_project, (row) => row.project_name, (row, index) => catColor(index));
+      },
+      userShares() {
+        return this.shareRows(this.report && this.report.by_user, (row) => row.username, (row, index) => catColor(index));
       },
       trendPoints() {
         const rows = (this.report && this.report.daily) || [];
@@ -392,8 +425,31 @@
       fmtCompact,
       fmtUSD,
       usageLevel,
+      agentColor,
       agentLabel(type) {
         return this.labels[type] || type;
+      },
+      shareRows(rows, labelOf, colorOf) {
+        const list = rows || [];
+        const total = list.reduce((sum, row) => sum + Number(row.tokens || 0), 0);
+        return list.map((row, index) => ({
+          key: `${labelOf(row, index)}#${index}`,
+          label: labelOf(row, index),
+          tokens: Number(row.tokens || 0),
+          color: colorOf(row, index),
+          pct: total ? (Number(row.tokens || 0) / total) * 100 : 0,
+        }));
+      },
+      // 明細列顯示名稱：不能只用 title——chat 要看得出是對話、已刪除的要講清楚，
+      // 而 wiki／workflow_health 這種專案層級記錄根本沒有 title，只有關卡代號。
+      taskLabel(task) {
+        if (task.kind === "chat") return `chat > ${task.deleted ? "(已刪除)" : task.title || "(舊對話)"}`;
+        if (task.kind === "task") return task.title || (task.deleted ? "(已刪除任務)" : task.task_id || "（無標題）");
+        const label = this.agentLabel(task.kind);
+        return task.project_name ? `${task.project_name} > ${label}` : label;
+      },
+      fmtTime(value) {
+        return value ? new Date(value).toLocaleString("zh-TW") : "—";
       },
       toggle(key) {
         this.expanded[key] = !this.expanded[key];
@@ -408,6 +464,7 @@
       },
       async load() {
         this.loading = true;
+        this.loadError = "";
         try {
           const p = new URLSearchParams(),
             range = this.dateRange;
@@ -419,7 +476,9 @@
           if (this.filters.showAll) p.set("all", "true");
           this.report = await Api.get(`token-report?${p}`);
         } catch (error) {
-          showToast(error.message || "無法載入用量報表", "error");
+          // 只發 toast 的話 toast 消失後畫面只剩篩選列，看起來像「這期間沒資料」
+          this.loadError = error.message || "無法載入用量報表";
+          showToast(this.loadError, "error", 0);
         } finally {
           this.loading = false;
         }
@@ -452,7 +511,7 @@
 </select>
 <input v-model="filters.task_id" placeholder="任務 ID">
 <label>
-<input v-model="filters.showAll" type="checkbox"> 全部使用者</label>
+<input v-model="filters.showAll" type="checkbox" @change="load"> 全部使用者</label>
 <button class="ui-next-primary" @click="load" :disabled="loading">{{ loading ? '更新中…' : '更新報表' }}</button>
 </div>
         <div class="ui-next-quota-card">
@@ -479,12 +538,13 @@
         <template v-if="loading">
 <div class="ui-next-loading-card">載入報表中…</div>
 </template>
+<div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 <template v-else-if="report">
 <div class="ui-next-metric-grid">
-<article v-for="card in summaryCards" :key="card[0]">
-<span>{{ card[0] }}</span>
-<strong>{{ card[1] }}</strong>
-<small>{{ card[2] }}</small>
+<article v-for="card in summaryCards" :key="card.label">
+<span>{{ card.label }}</span>
+<strong :title="card.title">{{ card.value }}</strong>
+<small>{{ card.note }}</small>
 </article>
 </div>
 <div class="ui-next-usage-grid">
@@ -497,20 +557,70 @@
 </article>
 <article class="ui-next-panel">
 <h2>依專案</h2>
-<div class="ui-next-breakdown" v-for="row in report.by_project" :key="row.project_id">
-<span>{{ row.project_name }}</span>
-<b>{{ fmtCompact(row.tokens) }}</b>
+<div class="ui-next-share-row" v-for="row in projectShares" :key="row.key">
+<i :style="{background:row.color}"></i>
+<span :title="row.label">{{ row.label }}</span>
+<b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
+<em>{{ row.pct.toFixed(1) }}%</em>
 </div>
-<p v-if="!report.by_project.length" class="ui-next-empty-inline">尚無專案資料。</p>
+<p v-if="!projectShares.length" class="ui-next-empty-inline">尚無專案資料。</p>
 </article>
 <article class="ui-next-panel">
 <h2>依 Agent</h2>
-<div class="ui-next-breakdown" v-for="row in report.by_agent" :key="row.agent_type">
-<span>{{ agentLabel(row.agent_type) }}</span>
-<b>{{ fmtCompact(row.tokens) }}</b>
+<div class="ui-next-share-row" v-for="row in agentShares" :key="row.key">
+<i :style="{background:row.color}"></i>
+<span :title="row.label">{{ row.label }}</span>
+<b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
+<em>{{ row.pct.toFixed(1) }}%</em>
 </div>
-<p v-if="!report.by_agent.length" class="ui-next-empty-inline">尚無 Agent 資料。</p>
+<p v-if="!agentShares.length" class="ui-next-empty-inline">尚無 Agent 資料。</p>
 </article>
+<article class="ui-next-panel">
+<h2>依使用者</h2>
+<div class="ui-next-share-row" v-for="row in userShares" :key="row.key">
+<i :style="{background:row.color}"></i>
+<span :title="row.label">{{ row.label }}</span>
+<b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
+<em>{{ row.pct.toFixed(1) }}%</em>
+</div>
+<p v-if="!userShares.length" class="ui-next-empty-inline">尚無使用者資料（未勾「全部使用者」時只會有你自己）。</p>
+</article>
+</div>
+<div class="tr-table-card" v-if="report.by_agent.length">
+<h2 class="ui-next-table-title">各關卡成本與失敗率<small>失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標</small></h2>
+<table class="tr-table">
+<thead>
+<tr><th>關卡</th><th class="ui-next-num">實際 Token 數</th><th class="ui-next-num">花費</th><th class="ui-next-num">呼叫數</th><th class="ui-next-num">平均每任務呼叫</th><th class="ui-next-num">失敗數</th><th class="ui-next-num">失敗率</th></tr>
+</thead>
+<tbody>
+<tr v-for="row in report.by_agent" :key="'ag-'+row.agent_type">
+<td><i class="ui-next-dot" :style="{background:agentColor(row.agent_type)}"></i>{{ agentLabel(row.agent_type) }}</td>
+<td class="ui-next-num" :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</td>
+<td class="ui-next-num">{{ fmtUSD(row.cost_usd) }}</td>
+<td class="ui-next-num">{{ row.calls }}</td>
+<td class="ui-next-num" :style="{color: row.avg_calls_per_task >= 2 ? 'var(--danger)' : (row.avg_calls_per_task > 1.2 ? 'var(--warning)' : 'var(--text-muted)')}">{{ row.avg_calls_per_task.toFixed(2) }}</td>
+<td class="ui-next-num">{{ row.failed_calls }}</td>
+<td class="ui-next-num" :style="{color: row.fail_rate >= 0.2 ? 'var(--danger)' : (row.fail_rate > 0 ? 'var(--warning)' : 'var(--text-muted)')}">{{ (row.fail_rate * 100).toFixed(0) }}%</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="tr-table-card" v-if="report.project_stats && report.project_stats.length">
+<h2 class="ui-next-table-title">專案品質統計<small>本期間完成的任務；一次過關＝分析／開發／QA／E2E 四關都沒重跑</small></h2>
+<table class="tr-table">
+<thead>
+<tr><th>專案</th><th class="ui-next-num">完成任務</th><th class="ui-next-num">一次過關率</th><th class="ui-next-num">人工退回率</th><th>主要退回原因</th></tr>
+</thead>
+<tbody>
+<tr v-for="row in report.project_stats" :key="'ps-'+(row.project_id||'none')">
+<td>{{ row.project_name }}</td>
+<td class="ui-next-num">{{ row.done_tasks }}</td>
+<td class="ui-next-num" :style="{color: row.first_pass_rate < 0.5 ? 'var(--danger)' : (row.first_pass_rate < 0.8 ? 'var(--warning)' : 'var(--success)')}">{{ (row.first_pass_rate * 100).toFixed(0) }}%</td>
+<td class="ui-next-num" :style="{color: row.reject_rate >= 0.3 ? 'var(--danger)' : (row.reject_rate > 0 ? 'var(--warning)' : 'var(--text-muted)')}">{{ (row.reject_rate * 100).toFixed(0) }}%</td>
+<td>{{ row.top_reject_category ? row.top_reject_category + '（' + row.top_reject_count + '）' : '—' }}</td>
+</tr>
+</tbody>
+</table>
 </div>
 <section class="ui-next-panel ui-next-usage-detail">
 <div class="ui-next-card-title">
@@ -518,26 +628,27 @@
 <h2>使用明細</h2>
 <p>點選列可展開各 Agent 的模型、用量與耗時。</p>
 </div>
-<span>{{ report.tasks.length }} 筆</span>
+<span>共 {{ report.tasks.length }} 筆</span>
 </div>
 <div class="ui-next-data-list">
-<article v-for="task in report.tasks.slice(0,100)" :key="task.ref_key" @click="toggle(task.ref_key)">
+<article v-for="task in visibleTasks" :key="task.ref_key" @click="toggle(task.ref_key)">
 <div>
-<b>{{ task.title || task.task_id || '未命名項目' }}</b>
-<span>{{ task.project_name || '未分類專案' }} · {{ task.username || '—' }}</span>
+<b :title="taskLabel(task)">{{ taskLabel(task) }}</b>
+<span>{{ task.project_name || '未分類專案' }} · {{ task.username || '—' }} · {{ fmtTime(task.last_recorded_at) }}</span>
 </div>
 <div>
-<strong>{{ fmtUSD(task.total_cost) }}</strong>
-<span>{{ fmtCompact(task.total_tokens) }} Token</span>
+<strong :title="'$'+Number(task.total_cost||0).toFixed(6)">{{ fmtUSD(task.total_cost) }}</strong>
+<span :title="fmtNumber(task.total_tokens)">{{ fmtCompact(task.total_tokens) }} Token</span>
 </div>
 <button type="button">{{ expanded[task.ref_key] ? '⌃' : '⌄' }}</button>
 <div v-if="expanded[task.ref_key]" class="ui-next-detail-row">
 <router-link v-if="taskLink(task)" :to="taskLink(task)" @click.stop>前往來源</router-link>
-<span v-for="agent in task.agents" :key="agent.agent_type + agent.model">{{ agentLabel(agent.agent_type) }}<template v-if="agent.model"> · {{ agent.model }}</template>：{{ fmtCompact(agent.tokens) }} / {{ fmtUSD(agent.cost) }}</span>
+<span v-for="agent in task.agents" :key="agent.agent_type + agent.model">{{ agentLabel(agent.agent_type) }}<template v-if="agent.model"> · {{ agent.model }}</template>：{{ fmtCompact(agent.tokens) }} / {{ fmtUSD(agent.cost) }}<template v-if="agent.duration_ms">（{{ (agent.duration_ms / 1000).toFixed(1) }}s）</template></span>
 </div>
 </article>
 <p v-if="!report.tasks.length" class="ui-next-empty-inline">本期間無 Token 使用記錄。</p>
 </div>
+<p v-if="report.tasks.length > 100" class="ui-next-more-hint">僅顯示前 100 筆（共 {{ report.tasks.length }} 筆）</p>
 </section>
 </template>
       </section>`,
@@ -2653,6 +2764,32 @@
         <div v-if="showAddModal" class="ui-next-task-modal-backdrop" @mousedown.self="showAddModal=false"><section class="ui-next-task-modal"><header><h2>新增頁面</h2><button @click="showAddModal=false">×</button></header><label>標題<input ref="newTitleInput" v-model="newPageTitle" @input="onTitleInput" @keyup.enter="submitAddPage" placeholder="例如：銷售訂單模組"></label><label>Slug<input v-model="newPageSlug" @input="onSlugInput" @keyup.enter="submitAddPage" placeholder="例如：sale-order"></label><footer><button @click="showAddModal=false">取消</button><button class="ui-next-primary" @click="submitAddPage" :disabled="addingPage||!newPageTitle.trim()||!newPageSlug.trim()">{{ addingPage?'新增中…':'新增' }}</button></footer></section></div>
       </section>`,
   });
+  // 複製鈕守衛的判準：只擋「頁面上有對應輸入欄、使用者填了就會消失」的佔位。
+  //
+  // 認定方式＝這個字串是不是 v()／dbOf()／newAddonsDir() 在欄位留空時填進去的預設值。是的話
+  // 就有欄位能消掉它，擋住才有意義——Legacy 完全無守衛，會讓人複製出
+  // `sudo sed -i "s#<舊 addons 路徑>#…"` 這種跑下去會改錯檔的指令。
+  //
+  // 反之，步驟 1 的 <服務名>／<設定檔路徑>／<addons 路徑> 與步驟 4 的 <repo 網址>／
+  // <該頁給的 token>／<該頁給的下載網址> 是硬寫死在指令裡的操作指示：本來就要人自己看著填，
+  // 沒有任何欄位能讓它消失。用通用的 /<[^>]+>/ 去擋，那兩顆鈕就永久按不下去。
+  //
+  // 第二欄是 disabled 時要告訴使用者去填哪一欄——按不下去卻不說原因，跟壞掉沒兩樣。
+  const SOP_FILLABLE_PLACEHOLDERS = [
+    ["<正式 addons 路徑>", "正式區的「目前 addons 路徑」"],
+    ["<舊 addons 路徑>", "測試區的「目前 addons 路徑」"],
+    ["<新的 addons 路徑>", "正式／測試區的「目前 addons 路徑」"],
+    ["<正式設定檔>", "正式區的「設定檔路徑」"],
+    ["<測試設定檔>", "測試區的「設定檔路徑」"],
+    ["<測試設定檔路徑>", "測試區的「設定檔路徑」"],
+    ["<正式服務名>", "正式區的「systemd 服務名」"],
+    ["<測試服務名>", "測試區的「systemd 服務名」"],
+    ["<資料庫名稱>", "兩區的「連線」"],
+    ["<登入帳號>", "正式區的「連線」"],
+    ["<repo URL>", "「Repo URL」"],
+    ["<模組名>", "「自訂模組名稱」"],
+  ];
+
   window.UiNextDeploySopView = Vue.defineComponent({
     name: "UiNextDeploySopView",
     data() {
@@ -2887,13 +3024,114 @@
         // log_unit 存的就是 journalctl 要跟的那個 systemd unit——同一個值，不必再問一次
         if (conn.log_unit && !this[side].service) this[side].service = conn.log_unit;
       },
-      copyReady(text) { return !!text && !/<[^>]+>/.test(text); },
+      copyBlockers(text) {
+        const seen = SOP_FILLABLE_PLACEHOLDERS.filter(([token]) => (text || '').includes(token)).map(([, field]) => field);
+        return [...new Set(seen)];
+      },
+      copyReady(text) { return !!text && !this.copyBlockers(text).length; },
+      copyHint(text) {
+        const blockers = this.copyBlockers(text);
+        return blockers.length ? `還有欄位沒填，複製出去的指令會帶著佔位符：${blockers.join('、')}` : '複製整段指令';
+      },
       async copy(text) {
         try { await navigator.clipboard.writeText(text || ''); showToast('已複製', 'success'); }
         catch (_) { showToast('複製失敗，請手動選取', 'error'); }
       }
     },
-    template: `<section class="ui-next-page ui-next-sop-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())">← 返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header><div v-if="loading" class="ui-next-loading-card">載入專案設定中…</div><template v-else><section class="ui-next-panel"><h2>環境對應</h2><p class="ui-next-field-note">這些資料只用來生成下方指令，不會儲存；每次部署前都應重新確認。</p><div class="ui-next-sop-grid"><article v-for="side in sides" :key="side.key"><h3>{{ side.label }}</h3><label>連線<select v-model="side.d.connId" @change="onConnPick(side.key)"><option value="">— 請指認 —</option><option v-for="conn in conns" :key="conn.id" :value="conn.id">{{ conn.name }}（{{ conn.db_name }}）</option></select></label><p v-if="side.conn">資料庫：{{ dbOf(side.conn) }}</p><label>systemd 服務名<input v-model="side.d.service" placeholder="odoo.service"></label><label>設定檔路徑<input v-model="side.d.conf" placeholder="/etc/odoo.conf"></label><label>目前 addons 路徑<input v-model="side.d.addons" placeholder="/odoo/custom/addons"></label><label>HTTP port<input v-model="side.d.port"></label></article></div><p v-if="sameConn" class="ui-next-error-text">正式區與測試區不能使用同一個連線，請先分開指認。</p></section><section class="ui-next-panel"><h2>Repo 與分支</h2><div class="ui-next-sop-fields"><label>Repo URL<input v-model="repoUrl"></label><label>自訂模組名稱<input v-model="addon"></label><label>測試分支<input v-model="branchTest"></label><label>正式分支<input v-model="branchProd"></label></div></section><section class="ui-next-panel ui-next-sop-steps"><article v-for="step in [['1','查出伺服器現況',cmdInspect],['2','備份與比對既有 addons',cmdBackup],['3','建立 Git 部署目錄',cmdAttachGit],['4','設定 GitHub Runner',cmdRunner],['5','最小權限 sudo',cmdSudoers],['6','部署 workflow',deployYaml],['7','驗證測試區',cmdVerify]]" :key="step[0]"><header><span>{{ step[0] }}</span><h2>{{ step[1] }}</h2><button @click="copy(step[2])" :disabled="!copyReady(step[2])">複製</button></header><pre>{{ step[2] }}</pre></article></section></template></section>`,
+    template: `<section class="ui-next-page ui-next-sop-page">
+<header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())">← 返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p><template v-if="project">專案：<b>{{ project.name }}</b> · </template>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header>
+<div v-if="loading" class="ui-next-loading-card">載入專案設定中…</div>
+<template v-else>
+<section class="ui-next-panel">
+<h2>這頁在做什麼</h2>
+<p class="sop-desc">做完之後，程式碼推上 <code class="sop-code">{{ branchTest }}</code> 會自動部署到測試區、推上 <code class="sop-code">{{ branchProd }}</code> 會自動部署到正式區——拉最新碼、升級有改動的模組、重啟服務、確認起得來。觸發走 GitHub self-hosted runner（伺服器主動連外，不必開任何對外埠），部署歷史留在 repo 的 Actions 頁。</p>
+<div class="sop-warn"><b>先知道代價：</b>正式區是全自動、沒有人工關卡。任何人把東西併進 <code class="sop-code">{{ branchProd }}</code>，正式區就會在數十秒內重啟一次，不分上下班時段。不接受這件事就別接正式區那條，只接測試區。</div>
+</section>
+<section v-if="!conns.length" class="ui-next-panel">
+<h2>先設定這個專案的資料庫連線</h2>
+<p class="sop-desc">這頁要用到 SSH 位址與資料庫名稱，都放在「資料庫查詢」的連線設定裡。設好之後回到這頁，下面的指令就會自動填入真值。</p>
+<button class="ui-next-primary" @click="$router.push('/projects/'+pid()+'/db')">前往設定連線</button>
+</section>
+<section class="ui-next-panel">
+<h2>你的環境</h2>
+<p class="ui-next-field-note">填在這裡的值只會用來把下面的指令填成真值，<b>不會存起來</b>——重新整理就沒了。伺服器上的路徑會隨時間變動，存下來反而會讓人照著過期的指令跑。</p>
+<div class="ui-next-sop-grid">
+<article v-for="side in sides" :key="side.key">
+<h3>{{ side.label }}</h3>
+<label>對應的連線<select v-model="side.d.connId" @change="onConnPick(side.key)"><option value="">— 請指認 —</option><option v-for="conn in conns" :key="conn.id" :value="conn.id">{{ conn.name }}（{{ conn.db_name }}）</option></select></label>
+<div v-if="side.conn" class="ui-next-sop-facts">
+<div v-if="side.ssh">SSH：<code class="sop-code">{{ side.ssh }}</code></div>
+<div v-else class="ui-next-warn-text">這個連線是直連模式、沒有 SSH 資訊，下面的指令要自己找機器登入</div>
+<div>資料庫：<code class="sop-code">{{ dbOf(side.conn) }}</code></div>
+</div>
+<label>systemd 服務名<input v-model="side.d.service" placeholder="例：odoo-server.service"></label>
+<label>設定檔路徑<input v-model="side.d.conf" placeholder="例：/etc/odoo-server.conf"></label>
+<label>目前的 addons 路徑<input v-model="side.d.addons" placeholder="例：/odoo/custom/addons"></label>
+<label>HTTP port<input v-model="side.d.port" placeholder="例：8069"></label>
+</article>
+</div>
+<p v-if="sameConn" class="ui-next-error-text">正式區與測試區指到同一個連線。下面每一段指令都會把同一個資料庫名稱填進兩區——先分開指認再往下做。</p>
+</section>
+<section class="ui-next-panel">
+<h2>Repo 與分支</h2>
+<div class="ui-next-sop-fields">
+<label>repo URL<input v-model="repoUrl" placeholder="git@github.com:org/repo.git"></label>
+<label>自訂模組名（用來跟伺服器現況比對）<input v-model="addon" placeholder="例：idx_xxx"></label>
+<label>測試區對應分支<input v-model="branchTest"></label>
+<label>正式區對應分支<input v-model="branchProd"></label>
+</div>
+</section>
+<section class="ui-next-panel ui-next-sop-steps">
+<article>
+<header><span>1</span><h2>查出伺服器現況</h2><button @click="copy(cmdInspect)" :disabled="!copyReady(cmdInspect)" :title="copyHint(cmdInspect)" :aria-label="copyHint(cmdInspect)">複製</button></header>
+<p class="sop-desc">SSH 進伺服器，把上面那四欄查出來填好。正式與測試常在同一台機器上、只是不同 service 與不同設定檔，所以每一項都要分別確認，不要用一區的值推另一區。</p>
+<pre>{{ cmdInspect }}</pre>
+<p v-if="!copyReady(cmdInspect)" class="ui-next-sop-blocked">{{ copyHint(cmdInspect) }}</p>
+<div class="sop-note">設定檔裡若<b>沒有</b> <code class="sop-code">db_name</code>，代表是多資料庫模式——後面的升級指令一定要明確帶 <code class="sop-code">-d</code>，否則 Odoo 不知道要升級哪個庫。</div>
+</article>
+<article>
+<header><span>2</span><h2>備份與比對既有 addons</h2><button @click="copy(cmdBackup)" :disabled="!copyReady(cmdBackup)" :title="copyHint(cmdBackup)" :aria-label="copyHint(cmdBackup)">複製</button></header>
+<p class="sop-desc">自動部署會用 repo 的內容覆蓋伺服器上的模組。若伺服器上曾有人直接改檔而沒進 repo，切換過去的那一刻就會靜默弄丟。<b>比對出差異就先停下來，把它補進 repo 再繼續。</b></p>
+<pre>{{ cmdBackup }}</pre>
+<p v-if="!copyReady(cmdBackup)" class="ui-next-sop-blocked">{{ copyHint(cmdBackup) }}</p>
+</article>
+<article>
+<header><span>3</span><h2>建立 Git 部署目錄</h2><button @click="copy(cmdAttachGit)" :disabled="!copyReady(cmdAttachGit)" :title="copyHint(cmdAttachGit)" :aria-label="copyHint(cmdAttachGit)">複製</button></header>
+<p class="sop-desc">伺服器上的 addons 目錄通常不是 git repo，這是整件事真正的工作量。作法是<b>另 clone 一份到隔壁</b>、把設定檔的 <code class="sop-code">addons_path</code> 指過去，舊目錄原封不動留著——要復原只要把設定檔改回來、重啟即可。先做測試區，確認服務起得來、頁面正常，再對正式區做同一件事。</p>
+<pre>{{ cmdAttachGit }}</pre>
+<p v-if="!copyReady(cmdAttachGit)" class="ui-next-sop-blocked">{{ copyHint(cmdAttachGit) }}</p>
+<div class="sop-note">新目錄的擁有者要讓 runner 的執行帳號寫得進去（<code class="sop-code">chown</code> 給登入帳號、群組留給 odoo），否則自動部署會停在 <code class="sop-code">Permission denied</code>。</div>
+</article>
+<article>
+<header><span>4</span><h2>設定 GitHub Runner</h2><button @click="copy(cmdRunner)" :disabled="!copyReady(cmdRunner)" :title="copyHint(cmdRunner)" :aria-label="copyHint(cmdRunner)">複製</button></header>
+<p class="sop-desc">runner 由伺服器主動連去 GitHub 取工作，不需要對外開任何埠，也不必讓 GitHub 連得到你的機器。指令裡的尖括號（下載網址、repo 網址、token）要照 GitHub 那頁給的值自己換掉。</p>
+<pre>{{ cmdRunner }}</pre>
+<p v-if="!copyReady(cmdRunner)" class="ui-next-sop-blocked">{{ copyHint(cmdRunner) }}</p>
+</article>
+<article>
+<header><span>5</span><h2>最小權限 sudo</h2><button @click="copy(cmdSudoers)" :disabled="!copyReady(cmdSudoers)" :title="copyHint(cmdSudoers)" :aria-label="copyHint(cmdSudoers)">複製</button></header>
+<p class="sop-desc">runner 是非互動執行，<code class="sop-code">sudo</code> 停下來問密碼就等於卡死。只開需要的那幾條，不要給整個 <code class="sop-code">NOPASSWD:ALL</code>。</p>
+<pre>{{ cmdSudoers }}</pre>
+<p v-if="!copyReady(cmdSudoers)" class="ui-next-sop-blocked">{{ copyHint(cmdSudoers) }}</p>
+<div class="sop-warn">重啟服務時若出現 <code class="sop-code">unit file changed on disk</code> 警告，代表有人改過 unit 檔但沒 reload——<b>先看清楚被改了什麼</b>再 <code class="sop-code">sudo systemctl daemon-reload</code>。放著不管的話，之後每次自動部署都會套用舊定義。</div>
+</article>
+<article>
+<header><span>6</span><h2>部署 workflow</h2><button @click="copy(deployYaml)" :disabled="!copyReady(deployYaml)" :title="copyHint(deployYaml)" :aria-label="copyHint(deployYaml)">複製</button></header>
+<p class="sop-desc">存成 repo 的 <code class="sop-code">.github/workflows/deploy.yml</code>（放在客戶的 addons repo，不是平台 repo）。兩個分支各對應一區，流程是<b>停服務 → 升級 → 起服務 → curl 驗證</b>：不在服務運行中對同一個資料庫再跑第二個 odoo-bin。</p>
+<pre>{{ deployYaml }}</pre>
+<p v-if="!copyReady(deployYaml)" class="ui-next-sop-blocked">{{ copyHint(deployYaml) }}</p>
+<div class="sop-warn"><b>刻意不做的兩件事：</b><br />1. <b>不自動 <code class="sop-code">pip install</code></b>——正式與測試若共用同一份 site-packages，這是唯一「動測試區會弄壞正式區」的路徑。缺套件就讓它紅燈，人工處理。<br />2. <b>失敗不自動回滾</b>——回滾一個已經改過 schema 的升級比停在壞掉的狀態更危險。失敗就讓 workflow 紅燈，人去看。</div>
+</article>
+<article>
+<header><span>7</span><h2>驗證測試區</h2><button @click="copy(cmdVerify)" :disabled="!copyReady(cmdVerify)" :title="copyHint(cmdVerify)" :aria-label="copyHint(cmdVerify)">複製</button></header>
+<p class="sop-desc">workflow 綠燈只代表指令沒有回傳錯誤，不代表碼換了、模組升級了。三件事都確認過才算接完。</p>
+<pre>{{ cmdVerify }}</pre>
+<p v-if="!copyReady(cmdVerify)" class="ui-next-sop-blocked">{{ copyHint(cmdVerify) }}</p>
+<div class="sop-note">測試區跑順了再把正式區接上去。正式區第一次上線建議挑離峰時段，並在旁邊看完整輪。</div>
+</article>
+</section>
+</template>
+</section>`,
   });
   window.UiNextTerminalView = Vue.defineComponent({
     name: "UiNextTerminalView",
