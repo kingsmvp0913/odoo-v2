@@ -77,29 +77,6 @@ async function loadUnread() {
 }
 window.loadUnread = loadUnread;
 
-const nextAdminTool = (view, title, description) =>
-  window.UiNextEnabled
-    ? {
-        ...window.UiNextAdminToolView,
-        props: {
-          title: { default: title },
-          description: { default: description },
-          view: { default: view },
-        },
-      }
-    : view;
-const nextTool = (view, title, description, back) =>
-  window.UiNextEnabled
-    ? {
-        ...window.UiNextToolFrame,
-        props: {
-          title: { default: title },
-          description: { default: description },
-          back: { default: back },
-          view: { default: view },
-        },
-      }
-    : view;
 
 const ForbiddenView = {
   name: "ForbiddenView",
@@ -109,7 +86,10 @@ const ForbiddenView = {
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: "/login", component: window.LoginView },
+    {
+      path: "/login",
+      component: window.UiNextEnabled ? window.UiNextLoginView : window.LoginView,
+    },
     { path: "/forbidden", component: ForbiddenView },
     {
       path: "/",
@@ -140,12 +120,7 @@ const router = createRouter({
     },
     {
       path: "/task/:id/terminal",
-      component: nextTool(
-        window.TerminalView,
-        "完整終端機",
-        "查看任務執行輸出與即時終端機紀錄。",
-        "/tasks",
-      ),
+      component: window.UiNextEnabled ? window.UiNextTerminalView : window.TerminalView,
       meta: { requiresAuth: true },
     },
     {
@@ -188,12 +163,7 @@ const router = createRouter({
     },
     {
       path: "/projects/:id/db",
-      component: nextTool(
-        window.ProjectDbQueryView,
-        "資料庫查詢",
-        "管理連線並以受控方式查詢專案資料庫。",
-        "project",
-      ),
+      component: window.UiNextEnabled ? window.UiNextDbView : window.ProjectDbQueryView,
       meta: { requiresAuth: true },
     },
     {
@@ -219,22 +189,12 @@ const router = createRouter({
     },
     {
       path: "/architecture",
-      component: window.UiNextEnabled
-        ? {
-            ...window.UiNextDiagramView,
-            props: { type: { default: "architecture" } },
-          }
-        : window.ArchitectureView,
+      component: window.UiNextEnabled ? window.UiNextArchitectureView : window.ArchitectureView,
       meta: { requiresAuth: true },
     },
     {
       path: "/pipeline-flow",
-      component: window.UiNextEnabled
-        ? {
-            ...window.UiNextDiagramView,
-            props: { type: { default: "pipeline" } },
-          }
-        : window.PipelineFlowView,
+      component: window.UiNextEnabled ? window.UiNextPipelineFlowView : window.PipelineFlowView,
       meta: { requiresAuth: true },
     },
     {
@@ -246,29 +206,17 @@ const router = createRouter({
     },
     {
       path: "/admin/users",
-      component: nextAdminTool(
-        window.AdminUsersView,
-        "使用者管理",
-        "管理帳號、角色與平台存取權限。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminUsersView : window.AdminUsersView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/agents",
-      component: nextAdminTool(
-        window.AdminAgentsView,
-        "Agent 管理",
-        "調整各 Agent 的模型、提示詞與執行設定。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminAgentsView : window.AdminAgentsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/schedules",
-      component: nextAdminTool(
-        window.AdminSchedulesView,
-        "排程",
-        "檢視背景工作的狀態、週期與下次執行時間。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminSchedulesView : window.AdminSchedulesView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
@@ -280,56 +228,32 @@ const router = createRouter({
     },
     {
       path: "/admin/health",
-      component: nextAdminTool(
-        window.AdminHealthCheckView,
-        "工作流程健檢",
-        "檢視 Pipeline 健康度與可追蹤的改善建議。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminHealthCheckView : window.AdminHealthCheckView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/rejections",
-      component: nextAdminTool(
-        window.AdminRejectionsView,
-        "退回原因管理",
-        "檢視與整理人工退回的原因及分類。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminRejectionsView : window.AdminRejectionsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/classify-samples",
-      component: nextAdminTool(
-        window.AdminClassifySamplesView,
-        "失敗分類樣本",
-        "檢視需要人工歸納的失敗案例。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminClassifySamplesView : window.AdminClassifySamplesView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/prompt-logs",
-      component: nextAdminTool(
-        window.AdminPromptLogsView,
-        "Prompt 送出記錄",
-        "檢視實際送往 AI 的提示詞紀錄。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminPromptLogsView : window.AdminPromptLogsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/port-pool",
-      component: nextAdminTool(
-        window.AdminPortPoolView,
-        "測試區 Port 池",
-        "管理測試環境可使用的 Port 與租用狀態。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminPortPoolView : window.AdminPortPoolView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/enterprise",
-      component: nextAdminTool(
-        window.AdminEnterpriseView,
-        "企業版來源",
-        "管理 Enterprise addons 原始碼與同步狀態。",
-      ),
+      component: window.UiNextEnabled ? window.UiNextAdminEnterpriseView : window.AdminEnterpriseView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     { path: "/:pathMatch(.*)*", redirect: "/" },

@@ -167,16 +167,16 @@ describe("ui-next 平行介面", () => {
   test("新版工具與管理頁保留原始 View 的資料操作，並有新版框架", () => {
     [
       "UiNextDeploySopView",
-      "UiNextDiagramView",
       "UiNextAdminView",
-      "UiNextAdminToolView",
-      "UiNextToolFrame",
     ].forEach((name) =>
       expect(uiNextPages).toMatch(new RegExp(`name:\\s*["']${name}["']`)),
     );
-    expect(app).toMatch(/nextAdminTool\(\s*window\.AdminUsersView/);
-    expect(app).toMatch(/nextTool\(\s*window\.ProjectDbQueryView/);
-    expect(app).toMatch(/nextTool\(\s*window\.TerminalView/);
+    expect(app).toContain("window.UiNextEnabled ? window.UiNextAdminUsersView : window.AdminUsersView");
+    expect(uiNextPages).toContain('name: "UiNextAdminUsersView"');
+    expect(app).toContain("window.UiNextEnabled ? window.UiNextDbView : window.ProjectDbQueryView");
+    expect(uiNextPages).toContain('name: "UiNextDbView"');
+    expect(app).toContain("window.UiNextEnabled ? window.UiNextTerminalView : window.TerminalView");
+    expect(uiNextPages).toContain('name: "UiNextTerminalView"');
     expect(pagesCss).toContain(".ui-next-wiki-layout");
     expect(pagesCss).toContain(".ui-next-sop-page");
   });
@@ -214,7 +214,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("已移轉的專案清單與設定頁不再委派 Legacy View", () => {
-    ["ProjectListView", "SettingsView", "ProjectChatView", "TaskListView"].forEach((name) => {
+    ["ProjectListView", "SettingsView", "ProjectChatView", "TaskListView", "TaskDetailView", "WikiView"].forEach((name) => {
       expect(uiNextPages).not.toMatch(
         new RegExp(`window\\.${name}\\.(?:data|computed|watch|methods|created|mounted|beforeUnmount|unmounted)`),
       );
@@ -238,14 +238,47 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain('name: "UiNextStatusBar"');
     expect(uiNextPages).toContain('class="stepper"');
     expect(uiNextPages).toContain('class="step-circle"');
-    expect(css).toContain(".ui-next-shell{height:100vh;min-height:100vh;overflow:hidden}");
+    expect(css).toContain(".ui-next-shell{height:calc(100vh / var(--ui-zoom, 1));min-height:calc(100vh / var(--ui-zoom, 1));overflow:hidden}");
     expect(css).toContain(".ui-next-sidebar-scroll{min-height:0;flex:1;overflow:auto}");
     expect(pagesCss).toContain("safe-area-inset-bottom");
+    expect(css).toContain(".ui-next-main{box-sizing:border-box;scroll-padding-bottom:max(32px,env(safe-area-inset-bottom));padding-bottom:max(32px,env(safe-area-inset-bottom))}");
   });
 
   test("Pipeline Monitor 在背景頁籤停止輪詢，回到前景立即更新", () => {
     expect(uiNextPages).toContain('document.addEventListener("visibilitychange", this._onVisibility)');
     expect(uiNextPages).toContain("if (document.hidden) this.stopPolling()");
     expect(uiNextPages).toContain("else { this.load(); this.startPolling(); }");
+  });
+
+  test("任務列表將可分享篩選同步到 query，並提供鍵盤可達的任務連結", () => {
+    expect(uiNextPages).toContain("syncQuery()");
+    expect(uiNextPages).toContain("this.$router.replace({ query })");
+    expect(uiNextPages).toContain("@keydown=\"!batchMode&&onTaskKeydown(task,$event)\"");
+    expect(uiNextPages).toContain("<router-link :to=\"taskPath(task)\"");
+    expect(uiNextPages).toContain("選取任務：");
+  });
+
+  test("Next 頁面不得委派 Legacy View 的 lifecycle、options 或 component wrapper", () => {
+    expect(uiNextPages).not.toMatch(/window\.[A-Za-z]+View\.(?:data|computed|watch|methods|created|mounted|beforeUnmount)/);
+    expect(uiNextPages).not.toMatch(/components:\s*\{\s*[A-Za-z]+View:\s*window\./);
+    expect(app).not.toContain("nextAdminTool(");
+    expect(app).not.toContain("nextTool(");
+  });
+
+  test("Next 登入頁是獨立元件，不載入 Legacy Login DOM", () => {
+    expect(app).toContain("window.UiNextEnabled ? window.UiNextLoginView : window.LoginView");
+    expect(uiNextPages).toContain('name: "UiNextLoginView"');
+    expect(uiNextPages).not.toMatch(/window\.LoginView\.(?:data|computed|watch|methods|created|mounted|beforeUnmount)/);
+    expect(css).toContain(".ui-next-login{");
+  });
+
+  test("Next 任務列表使用清楚統計、Modal 與破壞性操作確認", () => {
+    ["需回覆", "進行中", "等待審核", "失敗待確認"].forEach((label) =>
+      expect(uiNextPages).toContain(label),
+    );
+    expect(uiNextPages).toContain('role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title"');
+    expect(uiNextPages).toContain("async deleteTask(task)");
+    expect(uiNextPages).toContain('title: "永久刪除任務"');
+    expect(pagesCss).toContain(".ui-next-task-modal-backdrop{");
   });
 });

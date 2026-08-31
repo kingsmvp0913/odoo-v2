@@ -750,14 +750,26 @@ E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；�
 | Next 路由權限 | NEXT-P0-001 | 已移除全域 admin gate；登入使用者可進一般 Next 路由，僅 admin route 受 `requiresAdmin` 保護；新增 403 頁與登入後返回原 route。 | 尚未完成匿名、session expired、一般使用者與 admin 的完整 browser route matrix。 |
 | Next asset 載入 | 4.5 | 已改為只有 `?ui=next` 時載入 Next CSS/JS。 | 尚未以 Network/完整 route matrix 驗證所有 Legacy 情境。 |
 | 任務篩選白屏 | NEXT-P0-002 | 任務列表已改為獨立 Next component，篩選選項不再由 Vue template 直接讀取 `window.STATUS_LABELS`。 | 已有靜態回歸測試；尚未完成規格要求的 browser filter／URL query E2E。 |
-| 任務列表狀態流程 | 5.4 | 已將卡片流程列改為獨立元件，依既有狀態流程呈現客服、補資料、分析、確認、開發、QA、部署、測試、審核、完成等步驟，而非只保留少數視覺節點。 | 已在登入中的本機頁面讀取 `confirm_pending` 與 `cs_data_needed` 的 DOM 流程；尚未完成各狀態與響應式視覺矩陣。 |
-| Chat／專案／設定等頁面 | 4.1、5.3、5.7、5.15 | Chat、任務列表、專案列表、專案詳情與設定已開始改為獨立 Next component。 | `UiNextPages.js` 仍有多個 Legacy View bridge，尤其 Task Detail、Wiki、Terminal、DB、Diagram、Admin 工具；不可宣告 Next parity。 |
+| 任務列表狀態流程 | 5.4 | 已將卡片流程列改為獨立元件，依既有狀態流程呈現客服、補資料、分析、確認、開發、QA、部署、測試、審核、完成等步驟；完成／錯誤改用 SVG registry，不再以 Unicode glyph 顯示。摘要改為需回覆、進行中、等待審核、失敗待確認，並明示範圍是全部未封存任務。 | 已在登入中的本機頁面確認 5 張任務卡、9 個 SVG 狀態圖示，且狀態列沒有 `✓`／`✕`；尚未完成各狀態與響應式視覺矩陣。 |
+| 任務新增與 More 操作 | 5.4、4.6 | 建立任務改用含標題、取消、可見 label 與附件數量提示的 Next Modal；卡片 More 已提供封存、解除封存、永久刪除，刪除操作經確認 dialog。 | 已在登入中的實頁驗證卡片與統計；尚未在隔離資料實作 mutation、focus trap 與 mobile toolbar 驗收。 |
+| Chat／專案／設定等頁面 | 4.1、5.3、5.7、5.15 | Chat、任務列表、專案列表、專案詳情與設定已改用 Next component；直接委派 Legacy View lifecycle/options/component wrapper 的模式已移除。 | 部分功能仍沿用從舊頁面搬入的 markup/class，尚未完成第 4.5 節所要求的視覺與 CSS 獨立；不可宣告 Next parity。 |
+| 登入與註冊 | 5.1 | `/login` 在 Next 模式已改用 `UiNextLoginView`，自行處理首次設定、登入、註冊六步流程、返回目標與 pending/error。 | 已確認已登入進入 `/login` 會安全回到首頁；因不得登出使用者既有 session，匿名登入、註冊與各外部憑證驗證仍需隔離帳號驗收。 |
 | 首頁問答 | 5.2 | 已補 project 記憶、環境狀態、附件限制／預覽、重試與 composer 操作。 | 尚未在隔離資料或 mock 完整驗證 create-chat/send-message 的所有失敗分支。 |
 | 行動版任務詳情 | NEXT-P0-005 | 已加入小螢幕單欄與 action panel 寬度限制 CSS。 | 尚未在 360px 實際 browser 驗收所有可互動元素 rect。 |
+| Chat empty state | NEXT-P0-004 | 無既有 Chat 的 Next 專案頁已提供「開始新對話」CTA。 | 已在登入中的 project 23 實頁確認；建立與第一則訊息的成功／失敗流程尚未在隔離資料驗收。 |
+| Chat route lifecycle | NEXT-P0-003 | Chat component 在 `$route.fullPath` 變更時重新載入，並以 request id 忽略舊回應。 | 尚缺兩個有資料的專案／對話之間的實機慢回應 race-condition 測試。 |
+| 任務 URL 與 Keyboard | 5.4、7.2 | `tab/project/status/source/q/sort/release` 會同步至 query；任務標題改為 router link，卡片可用 Enter／Space 開啟，批次 checkbox 具任務名稱。 | 已於實頁載入 query、變更排序後確認網址同步；尚未完成全 filter matrix 與讀屏驗收。 |
+| 任務 Filter 白屏 | NEXT-P0-002 | 實頁開啟篩選、呈現狀態／專案／來源選項後，任務清單仍保留且未出現 inline error；不再重現白屏。 | 尚未建立規格要求的自動 browser console/pageerror regression gate。 |
+| Wiki 獨立生命週期 | 4.1、5.9 | `UiNextWikiView` 已改為自身的資料、route watcher、API request id、Socket progress 訂閱與 CRUD 方法，不再委派 `window.WikiView` lifecycle 或 methods。 | 已在登入中的空 Wiki 實頁驗證載入與 empty state；有資料樹、dirty guard、CRUD mutation 與 mobile Drawer 仍待隔離資料驗收。 |
+| 任務詳情獨立生命週期 | 4.1、5.5 | `UiNextTaskDetailView` 已內聚完整 data、computed、route/socket lifecycle 與 action methods，不再委派 `window.TaskDetailView`。 | 已在登入中的 task 184 實頁驗證載入；九種 action mode 的隔離 mutation、RWD 與 error path 尚待驗收。 |
+| Deploy SOP 獨立生命週期 | 4.1、5.11 | `UiNextDeploySopView` 已內聚專案／連線資料載入、七步指令產生、placeholder 與複製邏輯，不再委派 `window.DeploySopView`。 | 已在登入中的 project 23 實頁驗證七步顯示；未解析 placeholder 的 Copy disabled 與錯誤路徑尚待補齊。 |
+| Terminal 獨立頁 | 4.1、5.6 | `/task/:id/terminal` 在 Next 模式已改用 `UiNextTerminalView`，獨立處理歷史事件、Socket output/done 與 xterm dispose。 | 已在登入中的 task 184 實頁驗證為單一 Next header；斷線／reconnect 與手機內部捲動待補 browser 驗收。 |
+| DB 工具獨立生命週期 | 4.1、5.10 | `/projects/:id/db` 在 Next 模式已改用 `UiNextDbView`，內聚 VPN、連線 CRUD/test/probe 與 query 操作，不再經過通用 Legacy frame。 | 已在登入中的 project 23 實頁驗證單一頁首；各連線型態、query 與 mobile table/card 尚待隔離資料驗收。 |
+| Admin 使用者工具 | 4.1、5.16 | `/admin/users` 在 Next 模式已改用 `UiNextAdminUsersView`，內聚使用者清單、角色、啟用與帳號操作。 | 已在登入中的 admin 實頁驗證單一頁首與現有使用者資料；CRUD mutation、手機 card 與 destructive confirm 尚待隔離驗收。 |
 
 ### 11.2 已驗證測試
 
-- `app/server/tests/frontend-ui-next.test.js`：最近一次執行為 **18/18 通過**。
+- `app/server/tests/frontend-ui-next.test.js`：最近一次執行為 **22/22 通過**。
 - 此測試目前主要為靜態回歸保護，**不等同**第 8 節要求的 mount/browser E2E、console error、pageerror 或未處理 rejection 驗收。
 - 完整測試套件尚未綠燈；已觀察到與本輪 UI 修改無直接關係的既有失敗（enterprise-sources、VPN gateway 暫存路徑、frontend toast 在非 browser 環境讀取 `window`）。在逐支重跑並確認前，不得將其標示為本次修正已通過或既有基線。
 
@@ -765,10 +777,10 @@ E2E runner 必須監聽 `console.error`、`pageerror`、unhandled rejection；�
 
 | 優先級 | 問題 | 已確認事實 | 下一步驗收條件 |
 |---|---|---|---|
-| P0 | Sidebar 的「更多工具」仍被底部裁切 | 在登入中的本機 `/tasks` 頁，按鈕 DOM 存在但 rect 底部為 868.5px，viewport 高度為 855px；因此使用者無法看見／操作。原因是全站 `body` 使用 `zoom: 1.1`，Next shell 仍以未補償的 `100vh` 計算高度。 | 調整 shell 高度以現有 `--ui-zoom` 補償後，重新載入實頁，確認按鈕與彈出選單都完整落在 viewport 內。 |
-| P1 | 頁面底部可能仍遭裁切 | 主內容已加入 bottom safe-area padding，但尚未完成 360/768/1024/1440 全頁逐一測量。 | 每頁最後一個主要操作可見，且無非預期頁面級裁切或水平溢位。 |
-| P1 | Next 獨立化尚未完成 | `UiNextPages.js` 仍存在多個 Legacy View bridge；與第 4.1、6 節及 DoD 衝突。 | 每個功能域移除對應 bridge，並有功能 parity 證據。 |
-| P1 | 測試層級不足 | 現有 18 項測試未涵蓋規格要求的實際互動與 runtime error gate。 | 補 mount 與 browser E2E，舊碼可重現紅燈、修正後綠燈。 |
+| 已修正待擴大驗收 | Sidebar 的「更多工具」底部裁切 | Next shell 高度已改為以 `--ui-zoom` 補償。登入中的本機 Next 專案頁重載後，按鈕 rect 為 798.3–839.0px、viewport 高度 911px；點開後選單 rect 為 562.1–797.2px，兩者皆完整可見。 | 尚待在任務頁及 360/768/1024/1440 viewport 重複驗收。 |
+| P1 | 頁面底部可能仍遭裁切 | 除各獨立頁的 safe-area padding 外，`ui-next-main` 已統一加入 32px／safe-area 的 scroll 與 padding 保護；登入中的任務頁量測主內容為 `clientHeight 777px`、`scrollHeight 1416px`，底部 padding 為 32px。 | 尚待在 360/768/1024/1440 全頁逐一測量；每頁最後一個主要操作必須可見，且無非預期頁面級裁切或水平溢位。 |
+| P1 | Next 獨立化尚未完成 | 直接委派 Legacy View lifecycle/options/component wrapper 的模式已移除；但部分搬入的功能仍沿用舊版 markup 與 class，尚未成為符合第 4.5 節的獨立 Next 視覺。 | 逐頁替換殘留舊 markup/class，並以功能 parity 與 RWD 證據驗收。 |
+| P1 | 測試層級不足 | 現有 22 項測試仍以靜態回歸為主，未涵蓋規格要求的實際互動與 runtime error gate。 | 補 mount 與 browser E2E，舊碼可重現紅燈、修正後綠燈。 |
 
 ### 11.4 尚未開始或未完成的主要範圍
 
