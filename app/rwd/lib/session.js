@@ -59,11 +59,15 @@ async function sampleIds(token) {
 }
 
 function resolveUrl(route, ids) {
-  if (route.path) return `${BASE_URL}${route.path}`;
+  // ui=next 是 query 而不是 hash 的一部分（index.html 讀 location.search 決定要不要載 Next 資產），
+  // 所以必須插在 # 之前：<base>?ui=next#/tasks。順序寫反的話 query 會被當成 hash 內容，
+  // 旗標讀不到、Next 資產不載入，截到的其實是 Legacy 畫面——而且不會有任何錯誤。
+  const query = route.ui === 'next' ? '?ui=next' : '';
+  if (route.path) return `${BASE_URL}${route.path}${query}`;
   const hash = route.hash
     .replace(':taskId', ids.taskId)
     .replace(':projectId', ids.projectId);
-  return `${BASE_URL}${hash}`;
+  return `${BASE_URL}${query}${hash}`;
 }
 
 module.exports = { BASE_URL, apiUrl, login, getJson, assertAdmin, sampleIds, resolveUrl };

@@ -56,7 +56,36 @@ const ROUTES = [
 // 每個 view 的模板自己帶 .content 或 .page-body（app.js 只提供外框與 router-view），
 // 所以「兩者都找不到」＝這一頁的 view 根本沒渲染出來。
 const DEFAULT_EXPECT = '.content, .page-body';
-function expectSelector(route) { return route.expect || DEFAULT_EXPECT; }
+
+// Next 的等價證據。斷言 .ui-next-main 底下**有子節點**而不是 .ui-next-shell 存在：
+// shell 是 UiNextApp 畫的，router-view 內的 view 在 render 中拋例外時 shell 照樣在，
+// 只驗 shell 等於把白屏當成通過。
+const DEFAULT_NEXT_EXPECT = '.ui-next-main > *';
+
+function expectSelector(route) {
+  if (route.expect) return route.expect;
+  return route.ui === 'next' ? DEFAULT_NEXT_EXPECT : DEFAULT_EXPECT;
+}
+
+// Next 路由由 Legacy 清單衍生，不手抄第二份——手抄的下場是新增 Legacy 路由時
+// Next 那半靜默漏掉，而且沒有任何訊號。
+//
+// 排除的兩類：
+//   - 獨立 HTML 頁（styleguide）：不走 Vue router，沒有 ui=next 的概念。
+//   - login：Next 有自己的 UiNextLoginView，根元素是 .ui-next-login 而不是 shell，
+//     另行指定 expect（見下方 NEXT_EXPECT_OVERRIDE）。
+function nextRoutes() {
+  return ROUTES.filter((r) => r.hash).map((r) => ({
+    ...r,
+    key: `next-${r.key}`,
+    ui: 'next',
+    expect: NEXT_EXPECT_OVERRIDE[r.key],   // undefined 時 expectSelector 落回 DEFAULT_NEXT_EXPECT
+  }));
+}
+
+const NEXT_EXPECT_OVERRIDE = {
+  login: '.ui-next-login',
+};
 
 // 會隨時間／資料變動的區塊。不遮掉的話門禁天天假紅，紅到沒人看——
 // 那比沒有門禁更糟，因為它會訓練人忽略紅燈。
@@ -107,7 +136,33 @@ const STABILIZE_CSS = `
      遮內容、留佔位：欄寬與列高照樣驗得到，但不會每跑一次就假紅一次。 */
   .port-pool-slot-code, .port-pool-slot-state,
   .port-pool-slot-row > span { visibility: hidden !important; }
+
+  /* ── Next 殼層的同一件事 ─────────────────────────────────────
+     .ui-next-shell 是 height:100vh + overflow:hidden、.ui-next-main 是 overflow:auto，
+     與 Legacy 的 .app-shell/.content 完全同形狀。不解除的話 fullPage 只會拍到一屏，
+     捲動線以下的內容永遠不進門禁——Legacy 那邊就是這樣讓五個頁面的基線只有一屏高，
+     而且沒有任何訊號（門禁號稱 diff=0，其實只驗了第一屏）。 */
+  .ui-next-shell, .ui-next-main {
+    height: auto !important; min-height: 0 !important; overflow: visible !important;
+  }
+  /* 內部還有幾層自己捲動或設了 max-height 的容器；父層變成 height:auto 後，
+     百分比與 vh 會解析成 0 或維持截斷，該區塊就整塊拍不到。 */
+  .ui-next-sidebar, .ui-next-sidebar-scroll, .ui-next-projects,
+  .ui-next-panel, .ui-next-chat-list, .ui-next-thread-messages {
+    height: auto !important; max-height: none !important;
+    min-height: 0 !important; overflow: visible !important;
+  }
+
+  /* Next 側欄底部的 Claude 用量條：與 Legacy 的 .usage-mini 同性質，每次執行都不同 */
+  .ui-next-usage { visibility: hidden !important; }
 `;
+
+// console.error 的豁免清單。刻意留空起步：先讓門禁把現況全部吼出來，再逐條決定哪些是
+// 「截圖環境造成、與產品無關」的雜訊而值得豁免。反過來先塞一堆萬用 pattern 的話，
+// 真正的 runtime 錯誤會從第一天就被吃掉，而且沒人會發現。
+//
+// ⚠️ 加任何一條都要寫清楚「為什麼這不是產品問題」，不接受 /.*/ 或只寫「雜訊」。
+const CONSOLE_ALLOWLIST = [];
 
 // 比對容差。抗字型次像素渲染的微小差異，但不足以蓋掉真正的版面位移。
 const DIFF = {
@@ -115,7 +170,9 @@ const DIFF = {
   maxDiffPixels: 100   // 全圖可容忍的差異點數；超過即判定為回歸
 };
 
-function activeRoutes() { return ROUTES.filter(r => r.covered); }
+// Next 的覆蓋與 Legacy 同進退：Legacy 那條因為造不出穩定資料而 covered:false 的，
+// Next 版一樣造不出來。
+function activeRoutes() { return [...ROUTES, ...nextRoutes()].filter(r => r.covered); }
 
 function manualCheckList() {
   return ROUTES.filter(r => !r.covered).map(r => ({ key: r.key, why: r.why }));
@@ -136,6 +193,6 @@ function shotPlan({ gateOnly = false } = {}) {
 }
 
 module.exports = {
-  VIEWPORTS, THEMES, ROUTES, STABILIZE_CSS, DIFF, DEFAULT_EXPECT,
-  activeRoutes, manualCheckList, shotPlan, expectSelector
+  VIEWPORTS, THEMES, ROUTES, STABILIZE_CSS, DIFF, DEFAULT_EXPECT, DEFAULT_NEXT_EXPECT,
+  CONSOLE_ALLOWLIST, activeRoutes, nextRoutes, manualCheckList, shotPlan, expectSelector
 };
