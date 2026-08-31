@@ -208,6 +208,13 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
+      // Legacy 的 /admin 本身就是全部設定表單，這條子路由是 Next 專用的入口；
+      // Legacy 走到這裡一樣給 AdminView，內容相同不會白屏。
+      path: "/admin/settings",
+      component: window.UiNextEnabled ? window.UiNextAdminSettingsView : window.AdminView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: "/admin/users",
       component: window.UiNextEnabled ? window.UiNextAdminUsersView : window.AdminUsersView,
       meta: { requiresAuth: true, requiresAdmin: true },

@@ -4,12 +4,12 @@ const path = require("path");
 // ---------------------------------------------------------------------------
 // 為什麼要有這一支
 //
-// `app/public/js/ui-next/UiNextPages.js` 裡有 12 個 View 是從 Legacy 的
+// `app/public/js/ui-next/UiNextPages.js` 裡有 13 個 View 是從 Legacy 的
 // `app/public/js/views/*.js` **逐字複製**過來的，兩邊唯一允許的差異就是元件名稱那一行
 // （`window.XxxView = Vue.defineComponent({` 與其下的 `name:`）。這是刻意的：Next 介面要能
 // 跟 Legacy 平行存在、各自獨立演進，所以不共用同一個元件物件。
 //
-// 代價是近三千行重複碼（12 段合計約 3,100 行）。重複碼本身不是問題，**靜默漂移**才是：
+// 代價是近四千行重複碼（13 段合計約 3,800 行）。重複碼本身不是問題，**靜默漂移**才是：
 // 有人改了 Legacy 的 AdminUsers.js 修一個 bug，Next 那份沒跟上，於是同一個畫面在
 // `?ui=next` 下還是壞的——而且沒有任何訊號。程式跑得起來、測試全綠、畫面看起來正常。
 //
@@ -18,7 +18,7 @@ const path = require("path");
 // 它守的是「Next 不可以偷改 Legacy 的行為」。**逐字複製完全不觸發那個 pattern**，複製品
 // 漂移多遠它都不會紅。所以才需要這一支：直接比對兩份的內容是否仍然一致。
 //
-// 這一支只管「凍結清單裡的 12 組」。若哪天決定某一組要分家（Next 版要長出 Legacy 沒有的
+// 這一支只管「凍結清單裡的 13 組」。若哪天決定某一組要分家（Next 版要長出 Legacy 沒有的
 // 行為），做法是把它從 FROZEN_COPIES 移除並在該處註明理由，而不是放寬比對。
 // ---------------------------------------------------------------------------
 
@@ -35,6 +35,7 @@ const NEXT_PAGES = "js/ui-next/UiNextPages.js";
 // `window.<名稱> = Vue.defineComponent({ … })` 這個賦值本身。
 const FROZEN_COPIES = [
   ["UiNextDbView", "js/views/ProjectDbQuery.js", "ProjectDbQueryView"],
+  ["UiNextAdminSettingsView", "js/views/Admin.js", "AdminView"],
   ["UiNextAdminUsersView", "js/views/AdminUsers.js", "AdminUsersView"],
   ["UiNextAdminAgentsView", "js/views/AdminAgents.js", "AdminAgentsView"],
   ["UiNextAdminSchedulesView", "js/views/AdminSchedules.js", "AdminSchedulesView"],
@@ -186,15 +187,15 @@ describe("ui-next 逐字複製的 View 必須與 Legacy 保持一致", () => {
 
   // -------------------------------------------------------------------------
   // 解析健全性：括號配對解析器一旦失效（元件改名、賦值寫法改寫、字串跳脫沒處理好），
-  // extractComponent 會回 null 或抓到一小截，接著 12 組「都相等」而全數變綠——測試看起來
+  // extractComponent 會回 null 或抓到一小截，接著 13 組「都相等」而全數變綠——測試看起來
   // 沒事，實際上什麼都沒測到。這一支就是那道防線，跟 frontend-markdown-xss.test.js
   // 的「掃得到 v-html」同一個用意：先證明工具真的抓到東西，再談比對結果。
   // -------------------------------------------------------------------------
   describe("解析健全性", () => {
-    test("凍結清單就是 12 組，且沒有重複登錄", () => {
-      expect(FROZEN_COPIES).toHaveLength(12);
-      expect(new Set(FROZEN_COPIES.map(([n]) => n)).size).toBe(12);
-      expect(new Set(FROZEN_COPIES.map(([, , l]) => l)).size).toBe(12);
+    test("凍結清單就是 13 組，且沒有重複登錄", () => {
+      expect(FROZEN_COPIES).toHaveLength(13);
+      expect(new Set(FROZEN_COPIES.map(([n]) => n)).size).toBe(13);
+      expect(new Set(FROZEN_COPIES.map(([, , l]) => l)).size).toBe(13);
     });
 
     test.each(FROZEN_COPIES.map((pair, i) => [pair[0], i]))(
