@@ -2783,3 +2783,32 @@
 .ui-next-project-grid-rich footer button:last-child {
   margin-left: 0;
 }
+/* 按鈕裡的 unicode 操作圖示（← × ↑ ⌕ ⌃⌄）換成 <ui-next-icon> 之後的尺寸校正。
+   字元的大小會自動跟著 font-size 走，SVG 不會——.ui-next-icon 固定 17px。
+   於是 18px 的圓形移除鈕塞不下（圖示直接滿出圓形外），而 11–12px 的文字按鈕
+   旁邊的圖示會比字還大。這裡逐處把尺寸接回該處的字級。 */
+.ui-next-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ui-next-back .ui-next-icon,
+.ui-next-ticket-files button .ui-next-icon,
+.ui-next-conv-list article .ui-next-icon,
+.ui-next-chat-list article > button .ui-next-icon {
+  width: 14px;
+  height: 14px;
+}
+/* 對話紀錄的刪除鈕沒有自己的 flex 容器（.ui-next-chat-list 的規則只吃 > button，
+   這份清單用的是 article），inline 的 svg 會多出一段 baseline 下墜空間。 */
+.ui-next-chat-list article > button .ui-next-icon {
+  display: block;
+}
+.ui-next-pending-files button {
+  display: grid;
+  place-items: center;
+}
+.ui-next-pending-files button .ui-next-icon {
+  width: 11px;
+  height: 11px;
+}

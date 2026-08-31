@@ -296,6 +296,7 @@
 
   window.UiNextTokenReportView = Vue.defineComponent({
     name: "UiNextTokenReportView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
         loading: true,
@@ -640,7 +641,7 @@
 <strong :title="'$'+Number(task.total_cost||0).toFixed(6)">{{ fmtUSD(task.total_cost) }}</strong>
 <span :title="fmtNumber(task.total_tokens)">{{ fmtCompact(task.total_tokens) }} Token</span>
 </div>
-<button type="button">{{ expanded[task.ref_key] ? '⌃' : '⌄' }}</button>
+<button type="button" :aria-expanded="!!expanded[task.ref_key]" :aria-label="(expanded[task.ref_key] ? '收合' : '展開') + '明細'"><ui-next-icon :name="expanded[task.ref_key] ? 'chevron-up' : 'chevron-down'"/></button>
 <div v-if="expanded[task.ref_key]" class="ui-next-detail-row">
 <router-link v-if="taskLink(task)" :to="taskLink(task)" @click.stop>前往來源</router-link>
 <span v-for="agent in task.agents" :key="agent.agent_type + agent.model">{{ agentLabel(agent.agent_type) }}<template v-if="agent.model"> · {{ agent.model }}</template>：{{ fmtCompact(agent.tokens) }} / {{ fmtUSD(agent.cost) }}<template v-if="agent.duration_ms">（{{ (agent.duration_ms / 1000).toFixed(1) }}s）</template></span>
@@ -656,6 +657,7 @@
 
   window.UiNextPipelineView = Vue.defineComponent({
     name: "UiNextPipelineView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
         rows: [],
@@ -742,7 +744,7 @@
       <section class="ui-next-page ui-next-pipeline-page">
 <header class="ui-next-page-head">
 <div>
-<button class="ui-next-back" @click="$router.push('/admin')">← 返回</button>
+<button class="ui-next-back" @click="$router.push('/admin')"><ui-next-icon name="arrow-left"/>返回</button>
 <p class="ui-next-eyebrow">即時監控</p>
 <h1>進行中 Pipeline</h1>
 <p>僅顯示真正執行中的任務與等待 AI 回覆的問答；每 3 秒更新一次。</p>
@@ -995,7 +997,7 @@
 <div><b>{{ chat.title || '新對話' }}</b><small v-if="chat.reply_pending">AI 回覆中</small></div>
 <i v-if="chat.unread">{{ chat.unread }}</i>
 <em v-if="chat.converted_task_id" @click.stop="$router.push('/task/'+chat.converted_task_id)">任務</em>
-<button type="button" @click.stop="deleteChat(chat)" aria-label="刪除對話">×</button>
+<button type="button" @click.stop="deleteChat(chat)" aria-label="刪除對話"><ui-next-icon name="close"/></button>
 </article>
 <p v-if="!chats.length">尚無對話，建立一段新的討論開始。</p>
 </div>
@@ -1021,7 +1023,7 @@
 <div v-if="pendingPreviews.length" class="ui-next-pending-files">
 <span v-for="(url,index) in pendingPreviews" :key="url">
 <img :src="url">
-<button @click="removePendingFile(index)">×</button>
+<button type="button" @click="removePendingFile(index)" aria-label="移除待傳圖片"><ui-next-icon name="close"/></button>
 </span>
 </div>
 <form class="ui-next-thread-composer" @submit.prevent="send">
@@ -1029,7 +1031,7 @@
 <button type="button" @click="$refs.chatFileInput.click()" title="上傳圖片" aria-label="上傳圖片"><ui-next-icon name="paperclip"/></button>
 <textarea v-model="newInput" placeholder="輸入你的需求或追問… Enter 送出，Shift + Enter 換行；也可直接貼上截圖。" @paste="onPaste" @keydown.enter="handleEnter">
 </textarea>
-<button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)">{{ sending ? '…' : '↑' }}</button>
+<button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)" :aria-label="sending ? '送出中' : '送出'"><span v-if="sending">…</span><ui-next-icon v-else name="send"/></button>
 </form>
 </template>
 <div v-else class="ui-next-thread-empty">
@@ -1047,7 +1049,7 @@
 <section class="ui-next-task-modal">
 <header>
 <h2>建立任務</h2>
-<button @click="showTaskModal=false">×</button>
+<button type="button" @click="showTaskModal=false" aria-label="關閉建立任務視窗"><ui-next-icon name="close"/></button>
 </header>
 <label>標題<input v-model="taskDraft.title" placeholder="任務標題">
 </label>
@@ -1073,6 +1075,7 @@
     components: {
       SearchableSelect: window.SearchableSelect,
       ReleaseModal: window.ReleaseModal,
+      UiNextIcon: window.UiNextIcon,
     },
     data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: "overview", _pollTimer: null, _reposPollTimer: null }; },
     computed: { hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
@@ -1110,7 +1113,7 @@
       <section v-else-if="project" class="ui-next-page ui-next-project-detail">
         <header class="ui-next-page-head ui-next-detail-head">
 <div>
-<button class="ui-next-back" @click="$router.push('/projects')">← 所有專案</button>
+<button class="ui-next-back" @click="$router.push('/projects')"><ui-next-icon name="arrow-left"/>所有專案</button>
 <p class="ui-next-eyebrow">專案工作區</p>
 <h1>{{ project.name }}</h1>
 <p>{{ project.description || '集中管理 Repo、測試環境與專案設定。' }}</p>
@@ -2049,7 +2052,11 @@
         const wrapDim = chunk => {
           if (!chunk) return '';
           const lines = chunk.split('\n').length;
-          return `<details style="display:inline"><summary style="cursor:pointer;user-select:none;color:#888;display:inline">▶ 次要內容（${lines} 行）</summary><span style="opacity:.7">${esc(chunk)}</span></details>`;
+          // ▶ 保留：它是 <details> 的 disclosure 標記（summary 設 display:inline 會拿掉瀏覽器原生三角），
+          // 不是操作按鈕；而且這裡是 JS 產生的 HTML 字串，塞不進 <ui-next-icon>，硬改成 inline SVG
+          // 只是在一段有 XSS escape 契約的字串裡多埋一段標籤，換不到任何東西。
+          // color 不可寫死 #888：深色模式下與 --code-bg 對比不足，改吃主題變數。
+          return `<details style="display:inline"><summary style="cursor:pointer;user-select:none;color:var(--text-muted);display:inline">▶ 次要內容（${lines} 行）</summary><span style="opacity:.7">${esc(chunk)}</span></details>`;
         };
         let out = '', dim = false, last = 0, m;
         const re = /\x1b\[(\d+)m/g;
@@ -2155,7 +2162,7 @@
 </div>
 <div v-if="ticketAttachments.length" class="ui-next-ticket-files">
 <b>主附件</b>
-<button v-for="file in ticketAttachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)">⌕ {{ file.filename }} <small v-if="file.size">{{ formatSize(file.size) }}</small>
+<button v-for="file in ticketAttachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }} <small v-if="file.size">{{ formatSize(file.size) }}</small>
 </button>
 </div>
 </section>
@@ -2182,7 +2189,7 @@
 <template v-else>
 <p>{{ item.content }}</p>
 <div v-if="item.attachments&&item.attachments.length">
-<button v-for="file in item.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)">⌕ {{ file.filename }}</button>
+<button v-for="file in item.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}</button>
 </div>
 </template>
 <small>{{ timelineMeta(item) }} · {{ formatTime(item.ts) }}</small>
@@ -2428,6 +2435,7 @@
 
   window.UiNextSettingsView = Vue.defineComponent({
     name: "UiNextSettingsView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() { return { me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
     computed: { patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
     async created() { await this.load(); },
@@ -2469,7 +2477,7 @@
 <input type="checkbox" :checked="notifyOn" @change="toggleNotify">
 <span>
 </span>桌面通知（有任務需要你處理時提醒）</label>
-<button v-if="notifyOn" @click="testNotify">🔔 測試通知</button>
+<button v-if="notifyOn" @click="testNotify"><ui-next-icon name="alert"/> 測試通知</button>
 <p>開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</p>
 </section>
 <section class="ui-next-panel">
@@ -2922,7 +2930,7 @@
   });
   window.UiNextWikiView = Vue.defineComponent({
     name: "UiNextWikiView",
-    components: { "wiki-node": UiNextWikiNode },
+    components: { "wiki-node": UiNextWikiNode, UiNextIcon: window.UiNextIcon },
     data() { return { pages: [], current: null, loading: true, loadError: "", editing: false, editContent: "", saving: false, refreshing: "", building: false, progress: { percent: 0, message: "" }, showAddModal: false, newPageTitle: "", newPageSlug: "", slugTouched: false, addingPage: false, requestId: 0 }; },
     computed: { renderedContent() { return this.current ? renderMarkdown(this.current.content || "") : ""; }, editingSlug() { return this.editing && this.current ? this.current.slug : ""; }, canBuild() { return !this.pages.length && !this.loadError; }, tree() { const byId = {}; this.pages.forEach((page) => { byId[page.id] = { ...page, children: [] }; }); const roots = []; this.pages.forEach((page) => { const node = byId[page.id]; if (page.parent_id && byId[page.parent_id]) byId[page.parent_id].children.push(node); else roots.push(node); }); return roots.sort((a, b) => (a.node_type === "overview" ? -1 : b.node_type === "overview" ? 1 : 0)); } },
     async created() { await this.loadPages(); const slug = this.$route.params.slug; if (slug) await this.loadPage(slug); else if (this.tree.length) await this.loadPage(this.tree[0].slug); },
@@ -2946,10 +2954,10 @@
     },
     template: `
       <section class="ui-next-page ui-next-wiki-page">
-        <header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+$route.params.id)">← 返回專案</button><p class="ui-next-eyebrow">專案知識庫</p><h1>Wiki</h1><p>集中人工備註、模組文件與 AI 產生的排障結論。</p></div><div class="ui-next-detail-actions"><button v-if="canBuild" class="ui-next-primary" @click="buildWiki" :disabled="building">{{ building?'建立中…':'建立 Wiki' }}</button><button @click="openAddPage">新增頁面</button></div></header>
+        <header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+$route.params.id)"><ui-next-icon name="arrow-left"/>返回專案</button><p class="ui-next-eyebrow">專案知識庫</p><h1>Wiki</h1><p>集中人工備註、模組文件與 AI 產生的排障結論。</p></div><div class="ui-next-detail-actions"><button v-if="canBuild" class="ui-next-primary" @click="buildWiki" :disabled="building">{{ building?'建立中…':'建立 Wiki' }}</button><button @click="openAddPage">新增頁面</button></div></header>
         <section v-if="building" class="ui-next-panel ui-next-wiki-progress"><div><b>{{ progress.message||'建立中…' }}</b><span>{{ progress.percent }}%</span></div><i><em :style="{width:progress.percent+'%'}"></em></i></section>
         <div class="ui-next-wiki-layout"><aside class="ui-next-panel ui-next-wiki-tree"><div class="ui-next-card-title"><h2>頁面</h2><span>{{ pages.length }}</span></div><p v-if="loading" class="ui-next-empty-inline">載入中…</p><div v-else-if="loadError" class="ui-next-error-text">頁面清單載入失敗：{{ loadError }}<button @click="loadPages">重試</button></div><template v-else><wiki-node v-for="node in tree" :key="node.id" :node="node" :depth="0" :current-slug="current&&current.slug" :refreshing="refreshing" :editing-slug="editingSlug" @open="loadPage" @refresh="refreshNode" @remove="removePage"/><p v-if="!pages.length" class="ui-next-empty-inline">尚無頁面。</p></template></aside><main class="ui-next-panel ui-next-wiki-content"><template v-if="current"><header><div><p class="ui-next-eyebrow">{{ current.node_type==='notes'?'人工維護':'文件頁' }}</p><h2>{{ current.title }}</h2></div><div><button v-if="current.node_type!=='notes'&&!editing" @click="editing=true;editContent=current.content">編輯</button><button v-if="editing||current.node_type==='notes'" class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存' }}</button><button v-if="editing&&current.node_type!=='notes'" @click="editing=false">取消</button></div></header><p v-if="current.node_type==='notes'" class="ui-next-field-note">這裡的內容會提供給 AI 作為專案優先脈絡。</p><textarea v-if="editing||current.node_type==='notes'" v-model="editContent" @input="editing=true"></textarea><article v-else class="ui-next-wiki-markdown" v-html="renderedContent"></article></template><div v-else class="ui-next-empty-state">選擇或建立一個頁面開始。</div></main></div>
-        <div v-if="showAddModal" class="ui-next-task-modal-backdrop" @mousedown.self="showAddModal=false"><section class="ui-next-task-modal"><header><h2>新增頁面</h2><button @click="showAddModal=false">×</button></header><label>標題<input ref="newTitleInput" v-model="newPageTitle" @input="onTitleInput" @keyup.enter="submitAddPage" placeholder="例如：銷售訂單模組"></label><label>Slug<input v-model="newPageSlug" @input="onSlugInput" @keyup.enter="submitAddPage" placeholder="例如：sale-order"></label><footer><button @click="showAddModal=false">取消</button><button class="ui-next-primary" @click="submitAddPage" :disabled="addingPage||!newPageTitle.trim()||!newPageSlug.trim()">{{ addingPage?'新增中…':'新增' }}</button></footer></section></div>
+        <div v-if="showAddModal" class="ui-next-task-modal-backdrop" @mousedown.self="showAddModal=false"><section class="ui-next-task-modal"><header><h2>新增頁面</h2><button type="button" @click="showAddModal=false" aria-label="關閉新增頁面視窗"><ui-next-icon name="close"/></button></header><label>標題<input ref="newTitleInput" v-model="newPageTitle" @input="onTitleInput" @keyup.enter="submitAddPage" placeholder="例如：銷售訂單模組"></label><label>Slug<input v-model="newPageSlug" @input="onSlugInput" @keyup.enter="submitAddPage" placeholder="例如：sale-order"></label><footer><button @click="showAddModal=false">取消</button><button class="ui-next-primary" @click="submitAddPage" :disabled="addingPage||!newPageTitle.trim()||!newPageSlug.trim()">{{ addingPage?'新增中…':'新增' }}</button></footer></section></div>
       </section>`,
   });
   // 複製鈕守衛的判準：只擋「頁面上有對應輸入欄、使用者填了就會消失」的佔位。
@@ -2980,6 +2988,7 @@
 
   window.UiNextDeploySopView = Vue.defineComponent({
     name: "UiNextDeploySopView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
         loading: true,
@@ -3227,7 +3236,7 @@
       }
     },
     template: `<section class="ui-next-page ui-next-sop-page">
-<header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())">← 返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p><template v-if="project">專案：<b>{{ project.name }}</b> · </template>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header>
+<header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())"><ui-next-icon name="arrow-left"/>返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p><template v-if="project">專案：<b>{{ project.name }}</b> · </template>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header>
 <div v-if="loading" class="ui-next-loading-card">載入專案設定中…</div>
 <template v-else>
 <section class="ui-next-panel">
@@ -3323,11 +3332,12 @@
   });
   window.UiNextTerminalView = Vue.defineComponent({
     name: "UiNextTerminalView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() { return { taskId: null, taskTitle: "", exitCode: null, running: false, error: "" }; },
     async created() { this.taskId = Number(this.$route.params.id); try { const data = await Api.get(`tasks/${this.taskId}`), task = data.task || data; this.taskTitle = task.title || task.task_id || `Task ${this.taskId}`; this.running = ["analysis_running", "cs_running", "coding_running", "qa_running", "merge_running", "deploy_testing", "playwright_running", "wiki_updating"].includes(task.status); } catch (error) { this.error = error.message || "無法載入任務"; } },
     async mounted() { if (this.error || !window.Terminal) return; const term = new Terminal({ theme: { background: "#1a1a1a", foreground: "#f0f0f0" }, fontSize: 13, fontFamily: "Consolas, monospace", convertEol: true, scrollback: 5000 }); term.open(this.$refs.termContainer); this._term = term; try { const events = await Api.get(`tasks/${this.taskId}/events`); if (Array.isArray(events) && events.length) events.forEach((event) => term.write(event.content)); else term.writeln("\x1b[90m（尚無執行紀錄）\x1b[0m"); } catch {} this._outputHandler = (data) => { if (data.taskId === this.taskId) term.write(data.data); }; this._doneHandler = (data) => { if (data.taskId === this.taskId) { this.exitCode = data.exitCode; this.running = false; term.writeln(`\r\n\x1b[${data.exitCode === 0 ? "32" : "31"}m[Process exited with code ${data.exitCode}]\x1b[0m`); } }; window._socket?.on("terminal:output", this._outputHandler); window._socket?.on("terminal:done", this._doneHandler); },
     beforeUnmount() { window._socket?.off("terminal:output", this._outputHandler); window._socket?.off("terminal:done", this._doneHandler); this._term?.dispose(); },
-    template: `<section class="ui-next-page ui-next-terminal-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/task/'+taskId)">← 返回任務</button><p class="ui-next-eyebrow">執行歷程</p><h1>{{ taskTitle }}</h1><p>{{ running ? '執行中，等待新輸出' : exitCode === null ? '任務尚未啟動' : exitCode === 0 ? '任務已成功結束' : '任務已結束，請查看錯誤輸出' }}</p></div></header><p v-if="error" class="ui-next-error-text">{{ error }}</p><section v-else class="ui-next-panel ui-next-terminal-panel"><!-- 四態不能壓成「連線中／已結束」：尚未啟動被講成已結束會與上方標題互相矛盾，
+    template: `<section class="ui-next-page ui-next-terminal-page"><header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/task/'+taskId)"><ui-next-icon name="arrow-left"/>返回任務</button><p class="ui-next-eyebrow">執行歷程</p><h1>{{ taskTitle }}</h1><p>{{ running ? '執行中，等待新輸出' : exitCode === null ? '任務尚未啟動' : exitCode === 0 ? '任務已成功結束' : '任務已結束，請查看錯誤輸出' }}</p></div></header><p v-if="error" class="ui-next-error-text">{{ error }}</p><section v-else class="ui-next-panel ui-next-terminal-panel"><!-- 四態不能壓成「連線中／已結束」：尚未啟動被講成已結束會與上方標題互相矛盾，
      而 exit code 的數值是分辨「程式自己回報失敗(1)」與「被 OOM/訊號砍掉(137)」的唯一線索。 --><div class="ui-next-terminal-status"><span>{{ running ? '⏳ 執行中…' : exitCode === 0 ? '✅ 成功' : exitCode !== null ? '❌ 失敗 (code ' + exitCode + ')' : '⏸ 待機' }}</span><span v-if="!running && exitCode === null" class="ui-next-terminal-wait">等待 pipeline 啟動…</span></div><p class="ui-next-field-note">終端內容固定寬度；小螢幕僅在此區域可左右捲動。</p><div ref="termContainer" class="ui-next-terminal-output"></div></section></section>`,
   });
   window.UiNextAdminView = Vue.defineComponent({

@@ -21,6 +21,10 @@
       <path v-else-if="name==='close'" d="M6 6l12 12M18 6 6 18"/><path v-else-if="name==='send'" d="m4 4 16 8-16 8 3-8-3-8Zm3 8h13"/>
       <path v-else-if="name==='check'" d="m5 12 4.2 4.2L19 6.5"/><path v-else-if="name==='alert'" d="M12 7v6m0 4h.01M10.2 3.9 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.8 3.9a2.1 2.1 0 0 0-3.6 0Z"/>
       <path v-else-if="name==='star'" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>
+      <path v-else-if="name==='chevron-right'" d="m9 6 6 6-6 6"/><path v-else-if="name==='arrow-right'" d="m14 5 7 7-7 7M21 12H9"/>
+      <path v-else-if="name==='download'" d="M12 3v12m0 0 4.2-4.2M12 15l-4.2-4.2M4 19h16"/>
+      <path v-else-if="name==='wrench'" d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/>
+      <path v-else-if="name==='enter'" d="m9 10-4 4 4 4M5 14h9a4 4 0 0 0 4-4V6"/>
     </svg>`,
   });
   window.UiNextIcon = UiNextIcon;
@@ -378,7 +382,7 @@
         <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown="trapCommandFocus">
           <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
             <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…">
-            <button v-for="item in commandItems" :key="item.path" @click="selectCommand(item)">{{ item.label }}<span>↵</span></button>
+            <button v-for="item in commandItems" :key="item.path" @click="selectCommand(item)">{{ item.label }}<span><ui-next-icon name="enter"/></span></button>
             <p v-if="!commandItems.length">找不到符合的項目</p>
           </section>
         </div>
