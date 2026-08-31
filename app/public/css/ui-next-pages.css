@@ -847,11 +847,15 @@
   max-width: 100%;
   font-size: 11px;
 }
-.ui-next-question {
+.ui-next-task-action .ui-next-question {
   display: grid;
-  /* ui-next.css 有一個同名的 .ui-next-question（UiNextApp 首頁那塊大提問區），帶 place-items:center，
-     同特異度且先載入 → 這裡沒覆寫到的 place-items 會漏進來，把卡片內每一行都置中。
-     題目文字、AI 建議、選項全部置中的畫面不是刻意的，回到 grid 預設值。 */
+  /* ⚠ .ui-next-question 這個 class 名被兩個語意完全不同的區塊共用：
+       ui-next.css       → UiNextApp 首頁那塊「大提問區」（置中、padding 36px、無框）
+       這裡（pages.css） → 任務詳情的「題目卡」（靠左、padding 10px、有框）
+     兩邊特異度相同，而 pages.css 後載入 ⇒ 本檔整組蓋掉首頁那塊，
+     首頁提問區因此變成靠左、padding 縮成 10px、還多一圈框。
+     所以本檔這一組全部收窄到 .ui-next-task-action 底下，兩者不再互相干擾。
+     根治做法是把其中一個改名，那要動 template，留到下一輪。 */
   justify-items: stretch;
   gap: 6px;
   padding: 10px;
@@ -860,22 +864,22 @@
   background: var(--bg);
   font-size: 12px;
 }
-.ui-next-question label {
+.ui-next-task-action .ui-next-question label {
   color: var(--text-secondary);
   font-size: 12px;
 }
-.ui-next-question textarea {
+.ui-next-task-action .ui-next-question textarea {
   min-height: 58px;
   margin-top: 0;
 }
-/* 衝突卡的說明列與追問對答。巢狀在 .ui-next-question 內，吃不到 .ui-next-task-action > button
+/* 衝突卡的說明列與追問對答。巢狀在題目卡內，吃不到 .ui-next-task-action > button
    那條「直接子代」規則，不補這裡就是一顆瀏覽器預設的裸按鈕。 */
-.ui-next-question span {
+.ui-next-task-action .ui-next-question span {
   color: var(--text-muted);
   line-height: 1.5;
   white-space: pre-wrap;
 }
-.ui-next-question button {
+.ui-next-task-action .ui-next-question button {
   justify-self: end;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -886,10 +890,10 @@
   font-size: 12px;
   cursor: pointer;
 }
-.ui-next-question button:disabled {
+.ui-next-task-action .ui-next-question button:disabled {
   opacity: 0.55;
 }
-/* 語意色要贏過動作區的通用灰。`.ui-next-task-action > p` 與 `.ui-next-question span` 都是
+/* 語意色要贏過動作區的通用灰。`.ui-next-task-action > p` 與 `.ui-next-task-action .ui-next-question span` 都是
    (0,1,1)，比 `.ui-next-error-text` 的 (0,1,0) 高——不寫這兩條，「還有必答的問題沒回答」與
    中斷原因會跟旁邊的說明文字一樣灰，等於沒有警示。 */
 .ui-next-task-action .ui-next-error-text {
