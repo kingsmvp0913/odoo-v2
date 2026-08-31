@@ -38,10 +38,16 @@ const ROUTES = [
     why: '需要執行中的任務才有終端輸出，無法穩定造資料' },
   { key: 'project-list', hash: '#/projects', auth: 'user', covered: true },
   { key: 'project-detail', hash: '#/projects/:projectId', auth: 'user', covered: true, needs: 'projectId' },
-  { key: 'project-wiki', hash: '#/projects/:projectId/wiki', auth: 'user', covered: true, needs: 'projectId' },
+  // Legacy 的 wiki 與 chat 兩頁沒有 .content／.page-body,容器分別是 .wiki-body 與 <main>。
+  // 不覆寫的話 waitForSelector 必定 timeout,這兩條路由的 12 張圖等於永遠是壞的,
+  // 而門禁只會報「timeout」不會說「這條的等待條件從一開始就對不上」。
+  // 實測 2026-08-31:兩頁都正常渲染(顯示「尚無頁面」「尚無對話」的空狀態),不是 view 沒出來。
+  { key: 'project-wiki', hash: '#/projects/:projectId/wiki', auth: 'user', covered: true, needs: 'projectId',
+    expect: '.wiki-body, .content, .page-body' },
   { key: 'project-wiki-page', hash: '#/projects/:projectId/wiki/:slug', auth: 'user', covered: false,
     why: 'slug 依專案 wiki 內容而定，無法穩定造資料' },
-  { key: 'project-chat', hash: '#/projects/:projectId/chat', auth: 'user', covered: true, needs: 'projectId' },
+  { key: 'project-chat', hash: '#/projects/:projectId/chat', auth: 'user', covered: true, needs: 'projectId',
+    expect: '.chat-split, .content, .page-body' },
   { key: 'project-chat-one', hash: '#/projects/:projectId/chat/:chatId', auth: 'user', covered: false,
     why: '需要既有對話 id，無法穩定造資料' },
   { key: 'project-db', hash: '#/projects/:projectId/db', auth: 'user', covered: false,
