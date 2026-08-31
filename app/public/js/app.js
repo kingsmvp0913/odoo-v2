@@ -6,14 +6,21 @@ const toasts = ref([]);
 // 原本取 Date.now()：同一輪同步程式碼連發的多則會拿到相同毫秒值，先到期的那則會把同 id 的
 // 其他則一起濾掉——訊息互相吃掉且不報錯（socket 事件批次抵達時就是這個情境）。
 let _toastSeq = 0;
+function dismissToast(id) {
+  toasts.value = toasts.value.filter((t) => t.id !== id);
+}
+// duration <= 0 代表「不自動關閉」，由使用者自己關。
+// 原本無條件 setTimeout(…, duration)，於是 showToast(msg, "error", 0) 會在 0ms 後立刻移除
+// ——訊息等於沒出現過。ui-next 有 30 幾處錯誤路徑是這樣寫的（意圖正是「錯誤不要自己消失」，
+// 見規格 §4.6），全部靜默失效：使用者只看到操作沒反應，看不到原因。
 function showToast(message, level = "info", duration = 4000) {
   const id = ++_toastSeq;
-  toasts.value.push({ id, message, level });
-  setTimeout(() => {
-    toasts.value = toasts.value.filter((t) => t.id !== id);
-  }, duration);
+  toasts.value.push({ id, message, level, sticky: !(duration > 0) });
+  if (duration > 0) setTimeout(() => dismissToast(id), duration);
+  return id;
 }
 window.showToast = showToast;
+window.dismissToast = dismissToast;
 // ui-next 也是同一個應用程式，只替換殼層；通知必須共用，否則舊 View 在新版會靜默失去回饋。
 // 放在 showToast 導出之後而非 toasts 宣告處：frontend-toast-id.test.js 會把
 // 「toasts 宣告 → window.showToast 導出」這一段切出來在 node 環境單獨 eval，
@@ -316,7 +323,7 @@ setInterval(loadCodexUsage, 10 * 60 * 1000);
 const App = defineComponent({
   name: "App",
   setup() {
-    return { toasts, needsActionCount, inboxUnread, claudeUsage, codexUsage };
+    return { toasts, dismissToast, needsActionCount, inboxUnread, claudeUsage, codexUsage };
   },
   data() {
     return {
@@ -542,7 +549,7 @@ const App = defineComponent({
       </div>
     </template>
     <div class="toast-container">
-      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}</div>
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)">×</button></div>
     </div>
     <confirm-dialog-host />
     <tour-host />

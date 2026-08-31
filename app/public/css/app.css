@@ -530,6 +530,14 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 /* ── Toasts ───────────────────────── */
 .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; }
 .toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.18); animation: toastIn 0.2s ease; max-width: 340px; }
+/* 不會自動消失的 toast(duration<=0)才有的關閉鈕。沒有它的話「錯誤訊息不要自己消失」
+   就變成「訊息永遠卡在畫面上關不掉」,比自動消失更糟。
+   色彩吃 currentColor:.toast 依 level 換底色、文字固定白色,寫死顏色會在某個 level 上消失。 */
+.toast-close { margin-left: 10px; border: 0; padding: 0 2px; background: transparent;
+  color: currentColor; font: inherit; font-size: 15px; line-height: 1; opacity: .75; cursor: pointer;
+  vertical-align: middle; }
+.toast-close:hover { opacity: 1; }
+.toast-close .ui-next-icon { width: 14px; height: 14px; display: block; }
 .toast.info { background: var(--info); }
 .toast.success { background: var(--success); }
 .toast.warn { background: var(--warning); }

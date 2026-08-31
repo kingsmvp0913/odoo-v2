@@ -20,14 +20,44 @@ function loadToast() {
 
   const timers = [];
   const factory = new Function('ref', 'setTimeout', 'Date',
-    `${src.slice(from, to)}\nreturn { showToast, toasts };`);
-  const { showToast, toasts } = factory(
+    `${src.slice(from, to)}\nreturn { showToast, toasts, dismissToast };`);
+  const { showToast, toasts, dismissToast } = factory(
     (v) => ({ value: v }),
     (fn) => { timers.push(fn); },
     { now: () => 1700000000000 } // 凍結：模擬「同一毫秒內連發」
   );
-  return { showToast, toasts, timers };
+  return { showToast, toasts, timers, dismissToast };
 }
+
+// duration 傳 0 的意圖是「這則不要自己消失」（規格 §4.6：錯誤訊息預設不可自動消失）。
+// 原本的 showToast 無條件 setTimeout(…, duration)，於是 0 變成「0ms 後移除」——
+// 訊息等於沒出現過。ui-next 有 30 幾處錯誤路徑是 showToast(msg, "error", 0)，全部靜默失效，
+// 使用者只看到操作沒反應、看不到原因。這是「參數值剛好把行為反轉」的那種 bug，
+// 靜態檢查與截圖都看不到。
+test('duration 傳 0 代表不自動關閉，不得排定移除', () => {
+  const { showToast, toasts, timers } = loadToast();
+  showToast('這是錯誤訊息', 'error', 0);
+  expect(toasts.value).toHaveLength(1);
+  expect(timers).toHaveLength(0);   // 沒有任何排定的移除
+  expect(toasts.value[0].sticky).toBe(true);   // 由它決定要不要畫關閉鈕
+});
+
+test('一般 toast 仍然會自動關閉（不可為了修上面那條就全部改成不消失）', () => {
+  const { showToast, toasts, timers } = loadToast();
+  showToast('一般訊息');
+  expect(timers).toHaveLength(1);
+  expect(toasts.value[0].sticky).toBe(false);
+  timers[0]();
+  expect(toasts.value).toHaveLength(0);
+});
+
+test('dismissToast 只關掉指定的那一則', () => {
+  const { showToast, toasts, dismissToast } = loadToast();
+  const first = showToast('第一則錯誤', 'error', 0);
+  showToast('第二則錯誤', 'error', 0);
+  dismissToast(first);
+  expect(toasts.value.map((t) => t.message)).toEqual(['第二則錯誤']);
+});
 
 test('同一毫秒連發的 toast 拿到不同 id（id 也是 Vue 的 :key，重複會渲染錯亂）', () => {
   const { showToast, toasts } = loadToast();

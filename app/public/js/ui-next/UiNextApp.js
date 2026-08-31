@@ -167,6 +167,7 @@
     setup() {
       return {
         toasts: window.appToasts,
+        dismissToast: window.dismissToast,
         needsActionCount: window.needsActionCount,
         inboxUnread: window.inboxUnread,
         claudeUsage: window.claudeUsage,
@@ -381,12 +382,16 @@
             <p v-if="!commandItems.length">找不到符合的項目</p>
           </section>
         </div>
-        <div class="toast-container">
-          <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}</div>
-        </div>
-        <confirm-dialog-host />
-        <tour-host />
       </div>
+      <!-- 這三個全域 overlay 必須在 v-if/v-else 兩個分支之外。
+           原本掛在 shell 這個 v-else 裡面，於是未登入與 /login 頁走 v-if 分支時三者都不存在：
+           登入失敗的 toast、確認視窗、新手教學在那些頁面上全部靜默不出現。
+           它們都是 position:fixed 的 overlay，放在哪一層不影響定位。 -->
+      <div class="toast-container">
+        <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)"><ui-next-icon name="close"/></button></div>
+      </div>
+      <confirm-dialog-host />
+      <tour-host />
     `,
   });
 })();
