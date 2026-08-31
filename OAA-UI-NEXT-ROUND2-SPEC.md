@@ -65,7 +65,7 @@
 | **toast duration=0 讓 30 幾處錯誤訊息 0ms 消失** | ✅ 已修 | 本輪新發現，見 §5.7 |
 | **Next 登入頁沒有 toast／確認視窗／教學** | ✅ 已修 | 三個全域 overlay 都掛在 shell 的 v-else 內 |
 | **截圖清單漏 7 條路由** | ✅ 已修 | 含 Next 的 `/tasks`；另加守衛防止再漏 |
-| **§9 GodUI 全面校準** | ⚠ 部分 | 2026-08-31 夜班：§9.5（AI 訊息改連續閱讀）✅ 已做；§9.3 契約補了 5 項（Toast `aria-live`、Command Palette ↑↓ 導航與鎖捲動、Drawer 的 `role="dialog"`／`aria-modal` 與鎖捲動）並新增守衛 `frontend-ui-next-a11y.test.js`。**尚缺 6 項**（Dropdown ×2、Filter Bar、Stepper、Tooltip、JS 端 reduced-motion），見 §9.3。⚠ Drawer 的**焦點管理未做**，`role="dialog"` 但焦點未 trap，嚴格說是半套 |
+| **§9 GodUI 全面校準** | ⚠ 部分 | 2026-08-31 夜班：§9.5（AI 訊息改連續閱讀）✅ 已做；§9.3 契約補了 5 項（Toast `aria-live`、Command Palette ↑↓ 導航與鎖捲動、Drawer 的 `role="dialog"`／`aria-modal` 與鎖捲動）並新增守衛 `frontend-ui-next-a11y.test.js`，另補 Drawer 的焦點管理（trap＋開啟移入＋關閉還原，實測 Tab 25 次零逸出、桌機不誤 trap）。**尚缺 6 項**（Dropdown ×2、Filter Bar、Stepper、Tooltip、JS 端 reduced-motion），見 §9.3 |
 | §4.2 狀態矩陣缺口 | ⚠ 部分 | ProjectChat 五個錯誤路徑仍只有 toast |
 | §7 四項待裁決 | ⬜ 已裁決 3 項 | 見下方 |
 

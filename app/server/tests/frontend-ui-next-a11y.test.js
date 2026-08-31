@@ -76,6 +76,19 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
     expect(aside.slice(0, aside.indexOf('>'))).not.toMatch(/\srole="dialog"/);
   });
 
+  // role="dialog" 卻不 trap 焦點是半套，而且比不加還糟：輔助技術宣告「這是對話框」，
+  // 使用者一按 Tab 卻跑到背景內容去，完全對不上。
+  test('行動版抽屜有焦點管理（trap＋開啟移入＋關閉還原）', () => {
+    // 共用的 trap，palette 與抽屜都用它
+    expect(APP).toMatch(/trapFocus\(event,\s*container\)/);
+    expect(APP).toMatch(/ref="mobileSidebar"/);
+    expect(APP).toMatch(/@keydown="trapSidebarFocus"/);
+    // 開啟時焦點要移進抽屜，否則螢幕閱讀器仍停在背景
+    expect(APP).toMatch(/openMobileSidebar\(/);
+    // 關閉後焦點還原到觸發鈕（Escape／點遮罩這種「取消」動作）
+    expect(APP).toMatch(/mobileSidebarTrigger/);
+  });
+
   // 兩個 overlay 共用 document.body.style.overflow，若各自在開關處自行加解鎖，
   // 「開 A → 開 B → 關 A」就會在 B 還開著時把捲動解掉。改由狀態集中推導。
   test('背景捲動由 watch 集中同步，不散落在各個開關處', () => {

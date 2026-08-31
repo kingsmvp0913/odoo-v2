@@ -361,7 +361,7 @@
           if (event.key === "Escape") {
             this.closeCommand();
             this.closePopovers(true);
-            this.mobileSidebarOpen = false;
+            this.closeMobileSidebar();
           }
         };
         window.addEventListener("keydown", this._onCommandKey);
@@ -489,11 +489,14 @@
           if (input) input.focus();
         });
       },
-      trapCommandFocus(event) {
-        if (event.key !== "Tab") return;
-        const focusable = this.$refs.commandPalette
-          ? Array.from(this.$refs.commandPalette.querySelectorAll("input, button:not([disabled])"))
-          : [];
+      // palette 與行動版抽屜共用。選擇器含 a[href]：抽屜裡的導覽項是 router-link（<a>），
+      // 只找 input/button 會漏掉整份選單。offsetParent 過濾掉收合起來的區塊——
+      // 把焦點送進看不見的元素，使用者會以為 Tab 壞了。
+      trapFocus(event, container) {
+        if (event.key !== "Tab" || !container) return;
+        const focusable = Array.from(
+          container.querySelectorAll('a[href], input, button:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+        ).filter((el) => el.offsetParent !== null);
         if (!focusable.length) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
@@ -505,16 +508,40 @@
           first.focus();
         }
       },
+      trapCommandFocus(event) {
+        this.trapFocus(event, this.$refs.commandPalette);
+      },
+      // 桌機時 aside 是永久導覽，不該 trap——否則使用者 Tab 不出側欄。
+      trapSidebarFocus(event) {
+        if (this.mobileSidebarOpen) this.trapFocus(event, this.$refs.mobileSidebar);
+      },
+      openMobileSidebar(event) {
+        this.mobileSidebarTrigger = event && event.currentTarget;
+        this.mobileSidebarOpen = true;
+        // 焦點要移進抽屜，否則螢幕閱讀器仍停在背景，role="dialog" 等於白宣告。
+        this.$nextTick(() => {
+          const box = this.$refs.mobileSidebar;
+          const first = box && box.querySelector('a[href], button:not([disabled])');
+          (first || box)?.focus();
+        });
+      },
+      // 只給「取消」類的關閉用（Escape、點遮罩）：焦點還原到當初開啟的按鈕。
+      // 點選單項導航不走這裡——那時頁面已經換了，把焦點丟回選單鈕反而不對。
+      closeMobileSidebar() {
+        if (!this.mobileSidebarOpen) return;
+        this.mobileSidebarOpen = false;
+        this.$nextTick(() => this.mobileSidebarTrigger && this.mobileSidebarTrigger.focus());
+      },
     },
     template: `
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
       <div v-else class="ui-next-shell" data-ui="next">
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
-        <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" @click="mobileSidebarOpen = true"><ui-next-icon name="grid"/></button>
-        <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="mobileSidebarOpen = false; closePopovers()"></div>
+        <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" :aria-expanded="mobileSidebarOpen ? 'true' : 'false'" @click="openMobileSidebar($event)"><ui-next-icon name="grid"/></button>
+        <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="closeMobileSidebar(); closePopovers()"></div>
         <!-- role/aria-modal 只在行動版抽屜開啟時掛上：桌機的同一個 aside 是永久導覽，
              無條件標成 dialog 會讓輔助技術把整個側欄誤報成對話框。 -->
-        <aside class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }" :role="mobileSidebarOpen ? 'dialog' : null" :aria-modal="mobileSidebarOpen ? 'true' : null" :aria-label="mobileSidebarOpen ? '主選單' : null">
+        <aside ref="mobileSidebar" class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }" :role="mobileSidebarOpen ? 'dialog' : null" :aria-modal="mobileSidebarOpen ? 'true' : null" :aria-label="mobileSidebarOpen ? '主選單' : null" :tabindex="mobileSidebarOpen ? '-1' : null" @keydown="trapSidebarFocus">
           <div class="ui-next-brand"><img src="favicon.svg" alt="OAA"><span><b>Odoo AI</b><small>自動開發平台</small></span></div>
           <button class="ui-next-new" @click="go('/')"><ui-next-icon name="plus"/>新對話</button>
           <button class="ui-next-search" @click="showSearch($event)"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
