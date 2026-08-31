@@ -227,16 +227,6 @@
   text-align: center;
 }
 
-.ui-next-thread-composer > button:first-of-type {
-  font-size: 0;
-  background-color: var(--text-muted);
-  color: transparent;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='m21 11.5-8.7 8.7a5 5 0 0 1-7.1-7.1l8.8-8.8a3.5 3.5 0 0 1 5 5l-8.8 8.8a2 2 0 0 1-2.8-2.8l8.1-8.1'/%3E%3C/svg%3E")
-    center/18px no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='m21 11.5-8.7 8.7a5 5 0 0 1-7.1-7.1l8.8-8.8a3.5 3.5 0 0 1 5 5l-8.8 8.8a2 2 0 0 1-2.8-2.8l8.1-8.1'/%3E%3C/svg%3E")
-    center/18px no-repeat;
-}
-
 /* 專案詳情 */
 .ui-next-detail-head {
   align-items: flex-end;
@@ -1508,28 +1498,31 @@
 .ui-next-thread-messages {
   flex: 1;
   overflow: auto;
-  padding: 30px max(32px, 10%);
+  /* 24px 對應 Composer 的 calc(100% - 48px),讓訊息欄與 Composer 等寬且同中線 */
+  padding: 30px 24px;
 }
 .ui-next-thread-messages > article {
   display: flex;
+  width: 100%;
+  max-width: min(812px, 100%);
   flex-direction: column;
   align-items: flex-start;
-  margin: 0 0 24px;
+  margin: 0 auto 24px;
 }
 .ui-next-thread-messages > article.user {
   align-items: flex-end;
 }
+/* AI 訊息走「主要內容欄」而非卡片：ROUND2-SPEC §5.3／§9.5 點名「大型 bordered card
+   與 AskMe 的連續閱讀層級不符，應改成主要內容欄」。使用者訊息維持 bubble（AskMe 同）。
+   行長由 article 的 760px 統一控制，與 Composer 同寬對齊。 */
 .ui-next-message {
-  max-width: min(720px, 82%);
-  border: 1px solid var(--border);
-  border-radius: 15px 15px 15px 4px;
-  padding: 11px 14px;
-  background: var(--surface);
+  max-width: 100%;
   line-height: 1.65;
 }
 .ui-next-thread-messages > article.user .ui-next-message {
-  border: 0;
+  max-width: 82%;
   border-radius: 15px 15px 4px 15px;
+  padding: 11px 14px;
   background: var(--text);
   color: var(--surface);
 }
@@ -1612,42 +1605,38 @@
   color: var(--surface);
   cursor: pointer;
 }
+/* 與首頁問答的 .ui-next-composer 同一套排法（textarea 在上、-foot 一排工具在下）：
+   CORRECTION-SPEC 要求新舊對話「不可使用兩套版型或 Composer」，而首頁那套已是正確方向。
+   760px 是本檔既有最常用的內容欄寬（7 處），與訊息欄對齊後 Composer 才不會比內容寬。 */
 .ui-next-thread-composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 9px;
-  margin: 0 24px 23px;
-  padding: 9px 11px;
+  padding: 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 19px;
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
 }
 .ui-next-thread-composer input {
   display: none;
 }
-.ui-next-thread-composer > button:first-of-type {
-  display: grid;
-  width: 31px;
-  height: 31px;
-  place-items: center;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 19px;
-  cursor: pointer;
-}
 .ui-next-thread-composer textarea {
+  display: block;
+  width: 100%;
   min-height: 48px;
   max-height: 160px;
-  flex: 1;
   border: 0;
   outline: 0;
-  resize: vertical;
+  /* none 而非 vertical：兩層排法下拖把手會壓在 -foot 上，且 AskMe 沒有可拖曳的把手 */
+  resize: none;
   background: transparent;
   color: var(--text);
   font: inherit;
   line-height: 1.5;
+}
+.ui-next-composer-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ui-next-thread-send {
   display: grid;
@@ -1822,19 +1811,19 @@
 .ui-next-chat-full-list button:hover,.ui-next-chat-full-list button:focus-visible { border-color:var(--border-strong); background:var(--bg); }
 .ui-next-chat-full-list small { color:var(--text-muted); font-size:11px; }
 .ui-next-thread-messages {
-  width: min(100%, 860px);
+  width: min(100%, 876px);
   box-sizing: border-box;
   margin: 0 auto;
   padding: 42px 32px;
 }
 .ui-next-thread-messages > article { margin-bottom: 29px; }
 .ui-next-message {
-  max-width: min(720px, 90%);
-  border-radius: 14px;
-  box-shadow: var(--shadow-sm);
+  max-width: 100%;
 }
 .ui-next-thread-messages > article.user .ui-next-message {
+  max-width: 82%;
   border-radius: 14px 14px 5px 14px;
+  box-shadow: var(--shadow-sm);
 }
 .ui-next-pending-files {
   width: min(812px, calc(100% - 48px));
@@ -1971,15 +1960,6 @@
   }
 }
 
-.ui-next-thread-composer > button:first-of-type {
-  font-size: 0;
-  background-color: var(--text-muted);
-  color: transparent;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='m21 11.5-8.7 8.7a5 5 0 0 1-7.1-7.1l8.8-8.8a3.5 3.5 0 0 1 5 5l-8.8 8.8a2 2 0 0 1-2.8-2.8l8.1-8.1'/%3E%3C/svg%3E")
-    center/18px no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='m21 11.5-8.7 8.7a5 5 0 0 1-7.1-7.1l8.8-8.8a3.5 3.5 0 0 1 5 5l-8.8 8.8a2 2 0 0 1-2.8-2.8l8.1-8.1'/%3E%3C/svg%3E")
-    center/18px no-repeat;
-}
 .ui-next-project-grid.ui-next-project-grid-rich {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

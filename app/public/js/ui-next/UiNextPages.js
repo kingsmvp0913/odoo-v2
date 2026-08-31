@@ -1054,11 +1054,15 @@
 </span>
 </div>
 <form class="ui-next-thread-composer" @submit.prevent="send">
-<input ref="chatFileInput" type="file" accept="image/*" multiple @change="onFilesSelected">
-<button type="button" @click="$refs.chatFileInput.click()" title="上傳圖片" aria-label="上傳圖片"><ui-next-icon name="paperclip"/></button>
-<textarea v-model="newInput" placeholder="輸入你的需求或追問… Enter 送出，Shift + Enter 換行；也可直接貼上截圖。" @paste="onPaste" @keydown.enter="handleEnter">
+<textarea v-model="newInput" placeholder="輸入你的需求或追問…" @paste="onPaste" @keydown.enter="handleEnter">
 </textarea>
+<div class="ui-next-composer-foot">
+<div class="ui-next-composer-options">
+<label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
+<span class="ui-next-composer-hint">Enter 送出 · Shift + Enter 換行 · 可直接貼上截圖</span>
+</div>
 <button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)" :aria-label="sending?'送出中':'送出'"><span v-if="sending">送出中</span><ui-next-icon v-else name="send"/></button>
+</div>
 </form>
 </template>
 <div v-else class="ui-next-thread-empty">
