@@ -86,6 +86,24 @@ spec 內已知待拍板：§7.3 九種 action mode 補到什麼程度、§4.4 �
 
 **不動核心與別人的碼。** 只碰 `app/public`（前端）與必要的 `app/server`。改 `app/public` 前先載入 `platformDev` skill（配色 dark-mode 硬規則在那）。
 
+### 改 ui-next 的 CSS 前必讀（2026-08-31 兩次踩到）
+
+**同一條 selector 會被定義好幾次，改了不一定生效。** `.ui-next-thread-composer` 在
+`ui-next-pages.css` 出現 9 次、`.ui-next-message` 3 次，兩個 CSS 檔之間還有逐字重複的規則
+（載入序 `ui-next.css` → `ui-next-pages.css`，同 specificity 後者贏）。
+更陰險的是**移除一條之後，原本被它蓋住的另一條會浮上來**：移掉卡片的 `min-height:210px`，
+`min-height` 反而變成 250px（另一條規則），看起來像沒改到。
+
+⇒ **改完一定要用瀏覽器 computed style 反查真正生效的值**，不要看原始碼就當作生效：
+
+```js
+getComputedStyle(document.querySelector('.ui-next-thread-composer')).width
+```
+
+**`--ui-zoom: 1.1`**：`getBoundingClientRect()` 量到的是**縮放後**的視覺尺寸，
+`getComputedStyle().width` 是縮放前的值，兩者差 10%（893 vs 812）不是 bug。
+**驗 CSS 值看 computed，驗視覺位置才看 rect。**
+
 **改完 `.claude/skills/` 要跑** `node scripts/sync-skills.js`（Codex 讀的是 `.agents/skills/` 的實體副本，不同步時完全沒有徵狀）。
 
 ---
