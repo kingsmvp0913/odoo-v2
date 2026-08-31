@@ -38,6 +38,10 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - 第一行 `DECISION: answer` 或 `DECISION: revise`。
 - 接著 `REPLY:` 後面接回覆文字（可多行）。
 - 若 DECISION 是 revise，再接一行 `---SPEC---`，其後放完整 analysis.yaml；answer 則**不要**有 `---SPEC---`。
+- 重產規格時守住 `summary` 與 `findings` 的分工：`summary` **給使用者看**（寫「哪裡壞了 → 改完會怎樣」，
+  專有名詞第一次出現要補一句白話，見上方【說人話守則】L5；不出現識別字／檔名／行號／Model 技術名），
+  查證依據與技術脈絡一律放 `findings`（給下游 AI 看、不顯示給使用者）。**判準是讀不讀得懂，不是字數。**
+  規格原有的 `findings` 若本次沒有新查證就原樣保留，不要清空。
 
 範例（純提問）：
 <result>
@@ -57,6 +61,8 @@ module: idx_sale_note
 odoo_version: "17.0"
 execution_mode: MODE_B
 summary: 銷售訂單備註可編輯
+findings: |
+  報價單的備註欄目前是 readonly；來源工單以 origin_id 反查，儲存時不會回寫。
 requirements:
   - 備註欄改為可編輯多行文字
 acceptance:

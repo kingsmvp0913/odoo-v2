@@ -18,7 +18,11 @@ const MACHINE_LOGS = {
   respec_handoff: { prefix: '[分診—需調整規格]', role: 'user', hint: '判定為規格需要調整，已轉回分析階段重寫規格' },
   // cs 的 reason_plain 是白話短句、本來就是寫給人讀的，收合它等於藏掉唯一看得懂的說明；
   // 只有模型漏吐 reason_plain、退回貼技術版 reason（實測平均 906 字）那條 fallback 才需要收合。
-  cs_code_change: { prefix: '[客服判定：需改程式]', role: 'ai', hint: '客服判定需要修改程式', collapseWhenLong: true }
+  cs_code_change: { prefix: '[客服判定：需改程式]', role: 'ai', hint: '客服判定需要修改程式', collapseWhenLong: true },
+  // 分診結論寫給開發／審核看（實測是「`search()` 未帶 `active_test=False`」這種純技術文，平均 247~433 字），
+  // 卻與客服回覆並排在同一條時間軸上。不設 collapseWhenLong：它幾乎都在 400 字以下，但短不代表看得懂。
+  // 去向（fix／advance／…）由寫入端帶進標頭列，收合後那句人話才講得出「所以接下來會怎樣」。
+  triage_summary: { prefix: '[審核分診]', role: 'ai', hint: '已判斷這次退回要怎麼處理' }
 };
 
 // 標頭列格式：`<prefix>（<去向>）\n<本體>`。去向是給人看的一句話（顯示端接在 hint 後面），可省略。

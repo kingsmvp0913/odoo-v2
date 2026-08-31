@@ -10,6 +10,7 @@ const { getProjectNotes } = require('./project-notes');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { safeReturnStatus } = require('./stations');
+const { machineLogHeader } = require('../../public/js/machine-logs.js');
 const { taskAttachmentNote } = require('./sync');
 
 // 卡在哪一關的中文顯示（stuck_stage 用）
@@ -149,6 +150,10 @@ async function runRejectTriage(taskId, userId, signal) {
   const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
   const summary = (result?.summary || '').trim();
   const logAi = (content) => query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, content]);
+  // 分診結論是工程訊息（講 Model／檔名／根因，寫給開發與審核看），走 machine-logs registry 的
+  // `[審核分診]` 前綴讓時間軸收合成一句人話。outcome＝這次判去哪，收合後使用者才知道接下來會怎樣。
+  // answer 分支（回答使用者提問）刻意不用它——那則是講給人聽的，要整段展開。
+  const logTriage = (outcome, content) => logAi(`${machineLogHeader('triage_summary', outcome)}\n${content}`);
 
   // 列舉值先正規化再比對（大小寫／前後空白）：模型輸出不穩定，' FIX ' 這種飄動會一路掉到
   // 「未回傳有效結果」，整包分診結論被丟掉、任務白白 stopped。target 同理（不合法會靜默降級成 resume）。
@@ -225,7 +230,7 @@ async function runRejectTriage(taskId, userId, signal) {
   const clarifyQs = Array.isArray(result?.questions)
     ? result.questions.map(q => String(q).trim()).filter(Boolean) : [];
   if (decision === 'clarify' && clarifyQs.length) {
-    if (summary) await logAi(summary);
+    if (summary) await logTriage('需要你回答問題', summary);
     // 閘門會把 resume_status 寫成分診關自己（答完的回程）——原關先搬進 triage_home，否則永久遺失。
     // 只有 resolve 入口有原關可保（reject 入口的原關固定是 review_pending，不需暫存）。
     if (!isReject) await query('UPDATE tasks SET triage_home=$2 WHERE id=$1', [taskId, homeStatus]);
@@ -242,7 +247,7 @@ async function runRejectTriage(taskId, userId, signal) {
   // respec → 交回分析：分診員不自己改 SD，把結論當「使用者澄清」餵給重跑的 analysis（clarification 讀 role='user'）
   if (decision === 'respec') {
     const handoff = summary || '判定為規格問題，請依停下原因重新分析並調整規格。';
-    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, `[分診—需調整規格]\n${handoff}`]);
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, `${machineLogHeader('respec_handoff')}\n${handoff}`]);
     // 留言的銷帳不在這裡：analysis 這輪可能失敗或被中止，跳關前先銷帳會讓第二輪分診改判 fix／
     // advance 時需求已消失。改由 task-agent.js 在「成功寫出新規格」的同一段落地（見該處註解）。
     await goto('analysis_running', { freshRespec: true });
@@ -259,7 +264,7 @@ async function runRejectTriage(taskId, userId, signal) {
   // keepFeedback 保留到的是 NULL，整段診斷一個字都傳不到 coding，coding 只能空轉（實測 task 109）。
   // 兩份併存：原始失敗訊息說「哪裡壞了」，分診結論說「為什麼上一輪的修法沒用」，缺一不可。
   if (decision === 'fix') {
-    if (summary) await logAi(summary);
+    if (summary) await logTriage('轉回開發修正', summary);
     const carried = [task.retry_feedback, summary && `[分診結論]\n${summary}`].filter(Boolean).join('\n\n');
     const opts = carried ? { feedback: carried } : { keepFeedback: true };
     // 人工退回一律先過規格檢查點，再進 coding。理由是 fix 這條路是唯一「使用者的話不經規格就直接
@@ -292,7 +297,7 @@ async function runRejectTriage(taskId, userId, signal) {
 
   // advance → 放行推進到 target（白名單，最遠 review）；target 不合法則保守退回 resume
   if (decision === 'advance' && TARGET_STATUS[target]) {
-    if (summary) await logAi(summary);
+    if (summary) await logTriage('放行往下一關', summary);
     let advanceTo = TARGET_STATUS[target];
     // target=deploy 不直落部署：部署讀的是主 clone 常駐 testing 的工作樹，而 doDeploy 只做
     // ensureTestingBranch（純 checkout，不併任務分支）——task→testing 的合併只有 merge_running 會做。
@@ -321,7 +326,7 @@ async function runRejectTriage(taskId, userId, signal) {
 
   // resume（含 advance 但 target 不合法）→ 回原關重跑，保留 retry_feedback 給該關當回饋
   if (decision === 'resume' || decision === 'advance') {
-    if (summary) await logAi(summary);
+    if (summary) await logTriage('回到原本那一關重跑', summary);
     await goto(homeStatus, { keepFeedback: true });
     return true;
   }

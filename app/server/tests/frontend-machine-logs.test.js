@@ -84,6 +84,32 @@ describe('cs 判定：只收合 fallback 的技術文，不收合白話說明', 
   });
 });
 
+// 分診結論與客服回覆並排在同一條時間軸上，但讀者完全不同：前者講 Model／檔名／根因（寫給開發），
+// 後者是講給客戶聽的白話。收錯邊的代價不對稱——漏收只是畫面吵，錯收會把唯一看得懂的說明藏起來。
+describe('分診結論：技術文收合，但回答使用者的那則不收', () => {
+  test('帶去向 → chip 講得出「接下來會怎樣」，不只是「有東西被收起來」', () => {
+    const c = `${machineLogHeader('triage_summary', '轉回開發修正')}\n審核者複審退回三項技術缺陷：批次工具的 search() 未帶 active_test=False`;
+    expect(machineLogHint('ai', c)).toBe('已判斷這次退回要怎麼處理，轉回開發修正');
+  });
+
+  // 刻意不設 collapseWhenLong：實測分診結論平均 247~433 字，比照 cs 設門檻的話幾乎永遠不會觸發，
+  // 而「短」跟「看得懂」是兩回事——247 字的純技術文一樣沒人讀得下去。
+  test('短的分診結論一樣要收（設了長度門檻就會靜默失效）', () => {
+    const c = `${machineLogHeader('triage_summary', '放行往下一關')}\n審核者確認寫法正確，予以保留。`;
+    expect(machineLogHint('ai', c)).toBeTruthy();
+  });
+
+  // reject-triage.js 的 answer 分支（使用者在最終審核關單純發問）刻意不帶前綴：那則是回答本人的話。
+  test('回答使用者提問的那則不帶前綴 → 整段顯示', () => {
+    expect(machineLogHint('ai', '好，兩個都做，理由成立：批次工具負責清掉已經卡住、按鈕已隱藏的舊單。')).toBeNull();
+  });
+
+  test('使用者把分診結論整段複製貼回提問框（role=user）→ 不得收合', () => {
+    const c = `${machineLogHeader('triage_summary', '轉回開發修正')}\n審核者複審退回三項技術缺陷`;
+    expect(machineLogHint('user', c)).toBeNull();
+  });
+});
+
 describe('前綴單一來源（改了後端卻沒改前端＝靜默失效）', () => {
   const root = path.join(__dirname, '../..');
   const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -100,9 +126,9 @@ describe('前綴單一來源（改了後端卻沒改前端＝靜默失效）', (
   const scanned = [...walk(path.join(root, 'public')), ...walk(path.join(root, 'server'))]
     .map((f) => path.relative(root, f))
     .filter((f) => f.endsWith('.js'))
-    .filter((f) => f !== path.join('public', 'js', 'machine-logs.js'))
-    // reject-triage.js 是別人的檔、尚未接上 registry：改由下方反向守衛盯著它的字面值
-    .filter((f) => f !== path.join('server', 'pipeline', 'reject-triage.js'));
+    .filter((f) => f !== path.join('public', 'js', 'machine-logs.js'));
+  // reject-triage.js 原本因「尚未接上 registry」被豁免、改用反向守衛盯字面值。2026-08-31 它兩處寫入
+  // （respec 交棒、分診結論）都改走 machineLogHeader 了，豁免與反向守衛一併移除——正向掃描本來就更強。
 
   test('掃到合理數量的檔案（walk 失效時測試不得靜默通過）', () => {
     expect(scanned.length).toBeGreaterThan(50);
@@ -111,12 +137,6 @@ describe('前綴單一來源（改了後端卻沒改前端＝靜默失效）', (
   test.each(scanned)('%s 不得自帶機器 log 前綴字面值', (file) => {
     const src = stripComments(read(file));
     expect(PREFIXES.filter((p) => src.includes(p))).toEqual([]);
-  });
-
-  // reject-triage.js 未接 registry（本次不動別人的檔）。它改了前綴 → 前端收合對不上、靜默失效，
-  // 所以反過來斷言它寫的仍是 registry 認得的那一個。
-  test('reject-triage.js 寫入的前綴仍與 registry 一致', () => {
-    expect(read(path.join('server', 'pipeline', 'reject-triage.js'))).toContain(TRIAGE.prefix);
   });
 
   test('index.html 載入 machine-logs.js（漏載入＝TaskDetail 呼叫時整頁白畫面）', () => {

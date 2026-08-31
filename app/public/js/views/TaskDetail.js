@@ -1227,7 +1227,7 @@ window.TaskDetailView = Vue.defineComponent({
             <template v-else-if="timelineActionMode === 'cs_reply'">
               <div class="form-section">客服回覆草稿</div>
               <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:var(--fs-base);white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.cs_reply }}</div>
-              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">AI 已生成操作問題的回覆草稿，確認內容後送出結案；若要調整或有疑問，於下方追問，客服會依此重新處理（釐清後若需改程式會自動轉開發）。</p>
+              <p style="font-size:var(--fs-base);color:var(--text-muted);margin-bottom:var(--space-3)">這題判定為「操作問題」——用現有功能就能解決，不需要改程式，所以這裡要你確認的是回覆內容，不是程式改動。確認後送出即結案；若要調整或有疑問，於下方追問，客服會依此重新處理（釐清後若真的需要改程式，會自動轉開發）。</p>
               <textarea v-model="csFollowup" class="form-control" rows="3"
                 placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行"
                 @keydown.enter.exact.prevent="csFollowupSubmit"></textarea>
@@ -1271,6 +1271,10 @@ window.TaskDetailView = Vue.defineComponent({
               <div class="form-section">處理失敗 — 需人工介入</div>
               <div class="error-msg" style="white-space:pre-wrap;margin-bottom:var(--space-3)">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</div>
               <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-2)">說明你的修正方向，任務將回到失敗的那一關重試</div>
+              <!-- 快捷句子的內文帶有 decision／target 等分診要吃的字串（見上方 blockerShortcuts），
+                   使用者只看得到人話那一面。不講清楚會有人把填進去的句子改寫成自己的說法，
+                   關鍵字一掉分診就判成 fix、coding 進去無事可做又 stop。 -->
+              <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">常見情況可直接按下面的按鈕，句子會填進輸入框（裡面已帶好系統要的判斷，建議只加內容、不要改寫原句）。</div>
               <div style="display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)">
                 <button v-for="s in blockerShortcuts" :key="s.label" class="btn btn-outline btn-sm"
                   @click="applyResolutionShortcut(s.text)">{{ s.label }}</button>
