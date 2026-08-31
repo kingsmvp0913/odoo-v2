@@ -297,9 +297,10 @@ router.afterEach((to) => {
   }
 });
 
-// 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊：原本 60s 輪詢配 60s TTL＝每次都 miss，
-// 等於 24/7 每分鐘打一次限流很兇的 /api/oauth/usage，配額燒光後畫面反而長時間卡在 stale。
-setInterval(loadClaudeUsage, 10 * 60 * 1000);
+// 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊（改一邊必須改另一邊）。2026-08-31 實測
+// /api/oauth/usage 的門檻約「5 分鐘 6 次」，60s 輪詢＝5 分鐘 5 次，安全。原本的 10 分鐘
+// 反而讓數字落後半小時以上。Codex 端點的門檻沒量過，維持 10 分鐘不動。
+setInterval(loadClaudeUsage, 60 * 1000);
 setInterval(loadCodexUsage, 10 * 60 * 1000);
 
 const App = defineComponent({
