@@ -17,6 +17,10 @@ const APP = fs.readFileSync(
   path.join(__dirname, '../../public/js/ui-next/UiNextApp.js'),
   'utf8',
 );
+const PAGES = fs.readFileSync(
+  path.join(__dirname, '../../public/js/ui-next/UiNextPages.js'),
+  'utf8',
+);
 
 // 取出某個 class 起始的那個開標籤（含全部屬性），用於檢查屬性有沒有掛上。
 function openTagWithClass(src, className) {
@@ -106,6 +110,15 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
     // 項目數會隨 isAdmin 動態增減，所以用 DOM 查詢而不是維護索引
     expect(APP).toMatch(/focusMenuItem\(menu, step\)/);
     expect(APP).toMatch(/querySelectorAll\('\[role="menuitem"\]'\)/);
+  });
+
+  // 任務進度列（UiNextStatusBar）。只有 aria-label 說得出「這是進度」，
+  // 但說不出「現在走到哪一步」——那正是這個元件唯一要傳達的資訊。
+  // UiNextStatusBar 不在 FROZEN_COPIES 的 13 個 View 內，所以動它不會踩到凍結比對。
+  test('Stepper 標出目前步驟（aria-current）', () => {
+    expect(PAGES).toMatch(/class="stepper"/);
+    // 停止／衝突時沒有「目前步驟」（整列都是錯誤態），所以要連 isStopped 一起判斷
+    expect(PAGES).toMatch(/:aria-current="[^"]*!isStopped&&index===activeIdx[^"]*'step'[^"]*"/);
   });
 
   // 兩個 overlay 共用 document.body.style.overflow，若各自在開關處自行加解鎖，
