@@ -23,6 +23,7 @@
     "superpowers@claude-plugins-official": true
   },
   "language": "Taiwan",
+  "outputStyle": "eli5-tw",
   "autoUpdatesChannel": "stable",
   "theme": "dark",
   "skipDangerousModePermissionPrompt": true
