@@ -62,6 +62,27 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
 
   test('Command Palette 開啟時鎖背景捲動', () => {
     // 不鎖的話，在 palette 內捲動會穿透到背後的頁面（overlay 的典型缺陷）。
-    expect(APP).toMatch(/lockBodyScroll|document\.body\.style\.overflow/);
+    expect(APP).toMatch(/document\.body\.style\.overflow/);
+  });
+
+  // §9.3 的 Drawer 就是行動版側欄（§9.4 分工寫「Drawer／側欄」）。
+  test('行動版側欄開啟時才是 dialog，桌機的永久導覽不是', () => {
+    // 無條件加 role="dialog" 會讓桌機使用者的永久側欄被輔助技術誤報成對話框，
+    // 所以必須是條件綁定而不是靜態屬性。
+    expect(APP).toMatch(/:role="mobileSidebarOpen \? 'dialog' : null"/);
+    expect(APP).toMatch(/:aria-modal="mobileSidebarOpen \? 'true' : null"/);
+    // 靜態的 role="dialog" 不該出現在 sidebar 上
+    const aside = APP.slice(APP.indexOf('<aside class="ui-next-sidebar"'));
+    expect(aside.slice(0, aside.indexOf('>'))).not.toMatch(/\srole="dialog"/);
+  });
+
+  // 兩個 overlay 共用 document.body.style.overflow，若各自在開關處自行加解鎖，
+  // 「開 A → 開 B → 關 A」就會在 B 還開著時把捲動解掉。改由狀態集中推導。
+  test('背景捲動由 watch 集中同步，不散落在各個開關處', () => {
+    expect(APP).toMatch(/watch:\s*\{/);
+    expect(APP).toMatch(/commandOpen\(\)\s*\{\s*this\.syncBodyScroll\(\)/);
+    expect(APP).toMatch(/mobileSidebarOpen\(\)\s*\{\s*this\.syncBodyScroll\(\)/);
+    // 推導自「有沒有任何 overlay 開著」，而不是各自 true/false
+    expect(APP).toMatch(/syncBodyScroll\(\)\s*\{[\s\S]{0,200}commandOpen \|\| this\.mobileSidebarOpen/);
   });
 });

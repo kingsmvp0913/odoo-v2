@@ -377,6 +377,12 @@
       window.removeEventListener("keydown", this._onCommandKey);
       document.removeEventListener("pointerdown", this._onOutsidePointer);
     },
+    // 背景捲動鎖定集中在這裡：這兩個狀態各有好幾處會改（按鈕、⌘K、Escape、
+    // 點遮罩、切換路由），在每個地方各自加解鎖遲早會漏掉一處。
+    watch: {
+      commandOpen() { this.syncBodyScroll(); },
+      mobileSidebarOpen() { this.syncBodyScroll(); },
+    },
     methods: {
       async toggleProject(project) {
         const id = project.id;
@@ -419,7 +425,6 @@
         this.commandTrigger = trigger || null;
         this.commandOpen = true;
         this.commandIndex = 0;
-        this.lockBodyScroll(true);
         this.focusCommand();
       },
       showSearch(event) {
@@ -430,12 +435,15 @@
         // 不擋的話會把別人鎖的背景捲動一起解掉。
         if (!this.commandOpen) return;
         this.commandOpen = false;
-        this.lockBodyScroll(false);
         this.$nextTick(() => this.commandTrigger && this.commandTrigger.focus());
       },
       // overlay 開啟時背景不該跟著捲動：不鎖的話在 palette 內滾到底會穿透到後面的頁面。
-      lockBodyScroll(on) {
-        document.body.style.overflow = on ? "hidden" : "";
+      // 由「有沒有任何 overlay 開著」推導，而不是在每個開關處各自加解鎖——
+      // 後者在「開 palette → 開側欄 → 關 palette」時，會在側欄還開著的情況下把捲動解掉。
+      // 呼叫點集中在 watch，狀態從哪裡被改都會同步。
+      syncBodyScroll() {
+        const anyOpen = this.commandOpen || this.mobileSidebarOpen;
+        document.body.style.overflow = anyOpen ? "hidden" : "";
       },
       // ⌘K 的使用者幾乎都在用鍵盤，沒有方向鍵等於只能改用滑鼠點。
       // 循環（%）而不是夾在兩端：清單短時從最後一項往下回到第一項比較順手。
@@ -504,7 +512,9 @@
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
         <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" @click="mobileSidebarOpen = true"><ui-next-icon name="grid"/></button>
         <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="mobileSidebarOpen = false; closePopovers()"></div>
-        <aside class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }">
+        <!-- role/aria-modal 只在行動版抽屜開啟時掛上：桌機的同一個 aside 是永久導覽，
+             無條件標成 dialog 會讓輔助技術把整個側欄誤報成對話框。 -->
+        <aside class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }" :role="mobileSidebarOpen ? 'dialog' : null" :aria-modal="mobileSidebarOpen ? 'true' : null" :aria-label="mobileSidebarOpen ? '主選單' : null">
           <div class="ui-next-brand"><img src="favicon.svg" alt="OAA"><span><b>Odoo AI</b><small>自動開發平台</small></span></div>
           <button class="ui-next-new" @click="go('/')"><ui-next-icon name="plus"/>新對話</button>
           <button class="ui-next-search" @click="showSearch($event)"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
