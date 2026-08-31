@@ -2132,10 +2132,13 @@
 <div class="ui-next-task-badges">
 <span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
-<a v-if="sourceUrl()" :href="sourceUrl()" target="_blank">{{ sourceLabel() }}</a>
-<span v-else>{{ sourceLabel() }}</span>
+<a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
+<span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
 <span v-if="task.stage_label">{{ task.stage_label }}</span>
+<span v-if="task.classification_label">分類：{{ task.classification_label }}</span>
+<span v-if="task.has_attachment">含附件</span>
 <span v-if="task.module">{{ task.module }}</span>
+<span v-if="task.created_at">建立 {{ formatTime(task.created_at) }}</span>
 </div>
 <div class="ui-next-card-title">
 <h2>需求內容</h2>
@@ -2166,8 +2169,14 @@
 <div ref="convPanel" class="ui-next-conv-list" @scroll="onConvScroll">
 <button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
 <article v-for="item in visibleTimeline" :key="item._key" :class="timelineClass(item)">
-<template v-if="isErrorLog(item)||machineLogHint(item)">
-<button @click="toggleLog(item._key)">{{ expandedLogs[item._key]?'收合':'展開' }} 技術紀錄（{{ logLineCount(item) }} 行）</button>
+<!-- 錯誤 LOG 與機器 log 分開標示：兩者合併成一句「技術紀錄」時，畫面上看不出這則是不是錯誤，
+     而使用者貼的錯誤訊息正是最需要一眼認出來的那種。 -->
+<template v-if="isErrorLog(item)">
+<button @click="toggleLog(item._key)">{{ expandedLogs[item._key]?'收合':'展開' }} 錯誤 LOG（{{ logLineCount(item) }} 行）</button>
+<pre v-if="expandedLogs[item._key]">{{ item.content }}</pre>
+</template>
+<template v-else-if="machineLogHint(item)">
+<button @click="toggleLog(item._key)">{{ expandedLogs[item._key]?'收合':'展開' }} {{ machineLogHint(item) }}（技術細節 {{ logLineCount(item) }} 行）</button>
 <pre v-if="expandedLogs[item._key]">{{ item.content }}</pre>
 </template>
 <template v-else>
@@ -2182,8 +2191,14 @@
 </div>
 </section>
 <section class="ui-next-panel ui-next-events">
+<div class="ui-next-card-title">
 <h2>執行輸出</h2>
+<span v-if="eventsLoading">載入中…</span>
+</div>
 <div ref="eventsBox" @scroll="onEventsScroll">
+<!-- 往上捲會增量載入更早的 events；沒有這兩行的話「還在載」與「已經沒有了」在畫面上長得一樣，
+     使用者只會一直往上捲。 -->
+<p v-if="events.length&&!eventsHasMore">— 已到最前 —</p>
 <pre v-for="event in events" :key="event.id||event.content" v-html="ansiToHtml(event.content)"></pre>
 <p v-if="!events.length">尚無執行輸出。</p>
 </div>
@@ -2204,19 +2219,33 @@
 </div>
 <p v-if="clarBusy" class="ui-next-field-note">AI 正在回覆，稍候一下…</p>
 <template v-if="clarTab==='qa'">
+<!-- 送出後任務轉 clarify_chat_running：整組題目收起來換成這張卡。只把按鈕 disable 的話，
+     空白的答案框留在原地，看起來像根本沒送出去。 -->
+<div v-if="clarBusy" class="ui-next-help-box">
+<b>回覆已送出，AI 正在確認…</b>
+<p>AI 判斷後會回到這裡：可能直接往下跑，或把問題更新後再請你補答。</p>
+</div>
+<template v-else>
 <div v-for="(q,index) in clarVisible()" :key="q.id" class="ui-next-question">
-<b>{{ index+1 }}. {{ q.text }}</b>
+<b>{{ index+1 }}. {{ q.text }}<template v-if="!q.required"> · 選填</template></b>
+<!-- 選錯的代價用標記呈現，不寫進題目文字。只標 costly，reversible 不渲染——沒有標記＝不必特別小心。 -->
+<span v-if="q.impact==='costly'" class="ui-next-warning-text" title="這題選錯要退回重寫規格與程式，請多看一眼">選錯難改</span>
+<!-- AI 的建議答案：只有它推導得出依據的題目才有，純偏好題刻意留空＝這一行不渲染 -->
+<span v-if="clarRecommend(q)">建議：{{ clarRecommend(q) }}</span>
 <template v-if="q.type==='choice'">
 <label v-for="opt in q.options" :key="opt.key">
-<input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"> {{ opt.label }}</label>
-<textarea v-model="answerExtra[q.id]" placeholder="補充說明">
+<input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"> {{ opt.label }}<template v-if="q.recommended===opt.key"> ★建議</template></label>
+<textarea v-model="answerExtra[q.id]" placeholder="以上選項都不合適？也可以直接寫你的答案或補充說明">
 </textarea>
 </template>
-<textarea v-else v-model="answerFields[q.id]" placeholder="輸入回答">
+<textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)">
 </textarea>
 </div>
+<p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
 <input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected">
+<p v-if="!clarAllAnswered" class="ui-next-error-text">還有必答的問題沒回答</p>
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
+</template>
 </template>
 <template v-else>
 <p class="ui-next-field-note">看不懂、要補充、或方向要改都在這裡講。問問題不會讓任務往下跑；談出結論時 AI 會順手把「規格書 QA」那頁的題目改成最新的。</p>
@@ -2231,18 +2260,47 @@
      （見本檔 submitAnswer 的 else 分支），resolution 是 blocker mode 的 resolveBlocker 在用。
      綁錯的後果是靜默失效——打字讓按鈕亮起，點下去在那個 "沒文字就 return" 的早退直接返回，
      沒有 toast、沒有錯誤，而 clarify_pending 狀態下這是唯一的回覆入口。 -->
-<textarea v-model="newMessageText" placeholder="輸入給 AI 的回答或補充">
+<p class="ui-next-field-note">AI 有問題等待你回覆。</p>
+<textarea v-model="newMessageText" placeholder="輸入給 AI 的回答或補充…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAnswer">
 </textarea>
+<!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
+<p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
 <input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected">
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||!newMessageText.trim()">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>
 </template>
 <template v-else-if="timelineActionMode==='spec_review'">
-<p>{{ spec&&spec.summary || '請確認規格後開始實作。' }}</p>
-<ul v-if="spec&&spec.acceptance">
-<li v-for="(item,index) in spec.acceptance" :key="index">{{ item }}</li>
+<p>以下是 AI 分析出的規格，請確認沒問題後開始實作。下方可提問或要求調整規格：提問時 AI 會直接在時間軸回答、規格不變；判定要改時才重產規格再回到這裡。</p>
+<div v-if="spec" class="ui-next-help-box ui-next-spec-box">
+<template v-if="spec.summary">
+<b>摘要</b>
+<p>{{ spec.summary }}</p>
+</template>
+<template v-if="spec.module">
+<b>模組</b>
+<p><code>{{ spec.module }}</code></p>
+</template>
+<template v-if="spec.requirements&&spec.requirements.length">
+<b class="ui-next-spec-toggle" @click="specReqOpen=!specReqOpen">{{ specReqOpen?'▾':'▸' }} 實作項（給 AI 的施工細節，共 {{ spec.requirements.length }} 項）</b>
+<ul v-if="specReqOpen">
+<li v-for="(item,index) in spec.requirements" :key="'req'+index">{{ item }}</li>
 </ul>
-<textarea v-model="specFeedback" placeholder="補充或要求調整規格">
+</template>
+<template v-if="spec.acceptance&&spec.acceptance.length">
+<b>驗收項</b>
+<ul>
+<li v-for="(item,index) in spec.acceptance" :key="'acc'+index">{{ item }}</li>
+</ul>
+</template>
+<!-- 權限是審核者唯一能看到「誰能用、能做什麼」的地方：不渲染就等於這一關沒得審，
+     而下游 QA 的判準正是拿實作去比對這一段。 -->
+<template v-if="spec.permissions&&spec.permissions.trim()">
+<b>權限</b>
+<p>{{ spec.permissions }}</p>
+</template>
+</div>
+<p v-else>請確認規格後開始實作。</p>
+<textarea v-model="specFeedback" placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="specRevise">
 </textarea>
 <div class="ui-next-inline-actions">
 <button @click="specRevise" :disabled="specRevising||!specFeedback.trim()">{{ specRevising?'送出中…':'要求調整' }}</button>
@@ -2250,11 +2308,25 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='review'">
+<p>已通過 QA、測試區部署與 E2E 測試。確認後這張任務即完成驗收，會納入待上正式清單並更新文件；要真正在正式區生效，再到專案頁按「上正式」。</p>
 <button @click="toggleDiff" :disabled="diffLoading">{{ diffLoading?'讀取中…':(diffOpen?'收合程式變更':'查看程式變更') }}</button>
-<pre v-if="diffOpen&&diffData">{{ diffData.repos.map(r=>r.label+' — '+(r.diff||'無變更')).join(' | ') }}</pre>
-<textarea v-model="rejectReason" placeholder="退回原因">
+<p v-if="diffError" class="ui-next-error-text">{{ diffError }}</p>
+<!-- 逐行著色而非把所有 repo 併成一行：join(' | ') 的版本讀不出哪幾行是加、哪幾行是刪，
+     而這一關要人決定的就是「這些改動能不能上」。 -->
+<div v-if="diffOpen&&diffData">
+<div v-for="repo in diffData.repos" :key="repo.label" class="ui-next-diff-repo">
+<b>{{ repo.label }}</b>
+<span v-if="repo.missing">分支已清理，無法取得 diff</span>
+<span v-else-if="!repo.diff">此 repo 無變更</span>
+<div v-else class="diff-view"><div v-for="(line,index) in diffLines(repo.diff)" :key="index" :class="['diff-line',line.cls]">{{ line.text }}</div></div>
+<span v-if="repo.truncated">（diff 過大已截斷，完整內容請至 repo 檢視）</span>
+</div>
+</div>
+<textarea v-model="rejectReason" placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="reject">
 </textarea>
+<p class="ui-next-field-note">畫面類問題請附截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面</p>
 <input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected">
+<p v-if="rejectFiles.length" class="ui-next-field-note">已選擇：{{ rejectFiles.map(f=>f.name).join('、') }}</p>
 <div class="ui-next-inline-actions">
 <button @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
 <button class="ui-next-primary" @click="approve" :disabled="approving">{{ approving?'處理中…':'審核通過' }}</button>
@@ -2299,8 +2371,9 @@
 <button v-if="conflictItems.length&&!isRebuildConflict" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已在 Repo 手動解完剩餘檔，收尾繼續' }}</button>
 </template>
 <template v-else-if="timelineActionMode==='cs_reply'">
-<p>{{ task.cs_reply }}</p>
-<textarea v-model="csFollowup" placeholder="要求調整客服回覆">
+<div class="ui-next-help-box">{{ task.cs_reply }}</div>
+<p>這題判定為「操作問題」——用現有功能就能解決，不需要改程式，所以這裡要你確認的是回覆內容，不是程式改動。確認後送出即結案；若要調整或有疑問，於下方追問，客服會依此重新處理（釐清後若真的需要改程式，會自動轉開發）。</p>
+<textarea v-model="csFollowup" placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="csFollowupSubmit">
 </textarea>
 <div class="ui-next-inline-actions">
 <button @click="csFollowupSubmit" :disabled="csFollowingUp||!csFollowup.trim()">送出</button>
@@ -2308,17 +2381,21 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='cs_data'">
+<p>請填寫以下所有問題後送出，AI 將重新分析。</p>
 <div v-for="(question,index) in csQuestions" :key="index" class="ui-next-question">
-<b>{{ question }}</b>
-<textarea v-model="csAnswers[question]" placeholder="輸入補充資料">
+<b>{{ index+1 }}. {{ question }}</b>
+<!-- ref 與 handleCsEnter 成對：少了 ref，Enter 找不到下一題的元素就靜默什麼都不做 -->
+<textarea v-model="csAnswers[question]" :ref="'csInput_'+index" :placeholder="'請填寫第 '+(index+1)+' 題…（Enter 跳下題'+(index===csQuestions.length-1?'／送出':'')+'，Shift+Enter 換行）'" @keydown.enter.exact.prevent="handleCsEnter(index)">
 </textarea>
 </div>
-<button class="ui-next-primary" @click="csDataSubmit" :disabled="csRetrying||!csAllAnswered">送出補充資料</button>
+<p v-if="!csAllAnswered" class="ui-next-error-text">請填寫所有問題才能送出</p>
+<button class="ui-next-primary" @click="csDataSubmit" :disabled="csRetrying||!csAllAnswered">{{ csRetrying?'處理中…':'送出補充資料，重新分析' }}</button>
 </template>
 <template v-else-if="timelineActionMode==='blocker'">
-<p class="ui-next-error-text">{{ task.blocker_content || '任務執行中斷' }}</p>
+<p class="ui-next-error-text">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</p>
+<p>說明你的修正方向，任務將回到失敗的那一關重試。常見情況可直接按下面的按鈕，句子會填進輸入框（裡面已帶好系統要的判斷，建議只加內容、不要改寫原句）。</p>
 <button v-for="shortcut in blockerShortcuts" :key="shortcut.label" @click="applyResolutionShortcut(shortcut.text)">{{ shortcut.label }}</button>
-<textarea v-model="resolution" placeholder="說明修正方向">
+<textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="resolveBlocker">
 </textarea>
 <button class="ui-next-primary" @click="resolveBlocker" :disabled="resolving||!resolution.trim()">{{ resolving?'處理中…':'從中斷處繼續' }}</button>
 </template>
@@ -2327,9 +2404,15 @@
 <button @click="archive" :disabled="archiving">{{ archiving?'封存中…':'封存任務' }}</button>
 </template>
 <template v-else>
-<textarea v-model="newMessageText" placeholder="新增留言">
+<!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因不秀出來就會靜默卡好幾天。
+     只認 sync_wait，避免把「分診中」等狀態殘留的上次停下原因也當成當前錯誤秀出來。 -->
+<p v-if="task.blocker_type==='sync_wait'&&task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
+<textarea v-model="newMessageText" placeholder="新增留言…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="sendTaskMessage">
 </textarea>
-<input type="file" multiple @change="onMessageFilesSelected">
+<!-- ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
+     檔名會留在欄位裡看起來像又要再送一次。 -->
+<input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected">
+<p v-if="newMessageFiles.length" class="ui-next-field-note">已選擇：{{ newMessageFiles.map(f=>f.name).join('、') }}</p>
 <label v-if="showWritebackOption">
 <input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
 <!-- disabled 只看文字，與 sendTaskMessage 第一行那個 "沒文字就 return" 的早退對齊。

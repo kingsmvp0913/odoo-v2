@@ -658,8 +658,11 @@
   gap: 6px;
   margin-bottom: 16px;
 }
-.ui-next-task-badges span,
-.ui-next-task-badges a {
+/* 來源徽章（.src-badge，Odoo／eService 各有配色，深色模式在 app.css 已備好）要讓位：
+   `.ui-next-task-badges span` 是 (0,1,1)，會壓過 `.src-odoo` 的 (0,1,0)，只剩底色被套上、
+   文字色仍是灰的。用 :not() 排除，特異度不變。 */
+.ui-next-task-badges span:not(.src-badge),
+.ui-next-task-badges a:not(.src-badge) {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 7px;
@@ -846,6 +849,10 @@
 }
 .ui-next-question {
   display: grid;
+  /* ui-next.css 有一個同名的 .ui-next-question（UiNextApp 首頁那塊大提問區），帶 place-items:center，
+     同特異度且先載入 → 這裡沒覆寫到的 place-items 會漏進來，把卡片內每一行都置中。
+     題目文字、AI 建議、選項全部置中的畫面不是刻意的，回到 grid 預設值。 */
+  justify-items: stretch;
   gap: 6px;
   padding: 10px;
   border: 1px solid var(--border);
@@ -881,6 +888,57 @@
 }
 .ui-next-question button:disabled {
   opacity: 0.55;
+}
+/* 語意色要贏過動作區的通用灰。`.ui-next-task-action > p` 與 `.ui-next-question span` 都是
+   (0,1,1)，比 `.ui-next-error-text` 的 (0,1,0) 高——不寫這兩條，「還有必答的問題沒回答」與
+   中斷原因會跟旁邊的說明文字一樣灰，等於沒有警示。 */
+.ui-next-task-action .ui-next-error-text {
+  color: var(--danger);
+}
+.ui-next-task-action .ui-next-warning-text {
+  color: var(--warning);
+}
+.ui-next-task-action .ui-next-help-box p {
+  margin: 4px 0 10px;
+  white-space: pre-wrap;
+}
+.ui-next-task-action .ui-next-help-box > *:last-child {
+  margin-bottom: 0;
+}
+.ui-next-spec-box b {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ui-next-spec-box > b:first-child {
+  margin-top: 0;
+}
+.ui-next-spec-box .ui-next-spec-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.ui-next-spec-box ul {
+  margin: 4px 0 10px;
+  padding-left: 17px;
+}
+.ui-next-spec-box li {
+  white-space: pre-wrap;
+}
+.ui-next-diff-repo {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.ui-next-diff-repo b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ui-next-diff-repo span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
 }
 .ui-next-events > div {
   max-height: 240px;
