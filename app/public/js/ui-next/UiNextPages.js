@@ -704,7 +704,8 @@
       );
       this.projectName = project ? project.name : "專案";
     },
-    beforeUnmount() { this.requestId++; this.stopReplyPolling(); this.revokePendingUrls(); },
+    // revokeMessageUrls 一起收：離開頁面時已載入的附件 objectURL 也要放掉，只收 pending 會漏掉全部訊息圖。
+    beforeUnmount() { this.requestId++; this.stopReplyPolling(); this.revokePendingUrls(); this.revokeMessageUrls(); },
     methods: {
       routePath(chat) { return `/projects/${this.$route.params.id}/chat/${chat.id}`; },
       toggleHistory(event) { this.historyTrigger = event.currentTarget; this.showHistory = !this.showHistory; if (this.showHistory) this.$nextTick(() => this.$refs.historyClose?.focus()); },
@@ -731,9 +732,12 @@
         try {
           const messages = await Api.get(`projects/${this.$route.params.id}/chats/${chatId}/messages`);
           if (requestId !== this.requestId || !this.activeChat || this.activeChat.id !== chatId) return;
+          this.revokeMessageUrls();   // 換對話／重載前先收掉舊圖，否則 objectURL 一路累積到離開頁面
           this.messages = messages || []; this.replyPending = !!this.activeChat.reply_pending;
           if (this.replyPending) this.startReplyPolling(); else this.stopReplyPolling();
           this.$nextTick(() => this.scrollToBottom());
+          this.loadAttachmentThumbs(requestId);
+          this.markRead(this.activeChat);
         } catch (error) { showToast(error.message || "無法載入訊息", "error"); }
         finally { if (requestId === this.requestId) this.loadingMsgs = false; }
       },
@@ -757,6 +761,45 @@
       addPendingFiles(files) { files.forEach((file) => { if (!/^image\//.test(file.type) || file.size > 10 * 1024 * 1024 || this.pendingFiles.length >= 5) return; this.pendingFiles.push(file); this.pendingPreviews.push(URL.createObjectURL(file)); }); },
       removePendingFile(index) { URL.revokeObjectURL(this.pendingPreviews[index]); this.pendingFiles.splice(index, 1); this.pendingPreviews.splice(index, 1); },
       revokePendingUrls() { this.pendingPreviews.forEach((url) => URL.revokeObjectURL(url)); },
+      // 附件端點要帶 Authorization header，<img src> 直連拿不到，只能逐張 fetch 成 objectURL。
+      // 少了這一步，attachUrls 永遠是空物件、模板那個 v-show 恆為 false ⇒ 所有已送出的圖都不顯示。
+      async loadAttachmentThumbs(requestId = this.requestId) {
+        const projectId = this.$route.params.id;
+        const chatId = this.activeChat && this.activeChat.id;
+        if (!chatId) return;
+        for (const message of this.messages) {
+          for (const attachment of message.attachments || []) {
+            if (this.attachUrls[attachment.id]) continue;
+            try {
+              const { blob } = await Api.getBlob(
+                `projects/${projectId}/chats/${chatId}/attachments/${attachment.id}/download`,
+              );
+              // 抓的期間可能已換對話或離開頁面：此時寫進去的 URL 沒有人回收，
+              // 因為 revokeMessageUrls 已經把當時那份 attachUrls 換掉了。
+              if (requestId !== this.requestId || !this.activeChat || this.activeChat.id !== chatId) return;
+              this.attachUrls[attachment.id] = URL.createObjectURL(blob);
+            } catch (error) { /* 單張載不出來就不畫這張 */ }
+          }
+        }
+      },
+      // 沒有這一步，側欄與專案卡上的未讀數字看完對話仍不會歸零，而且不回寫伺服器——
+      // 換裝置／重整後照樣是未讀。
+      async markRead(chat) {
+        if (!chat) return;
+        const projectId = this.$route.params.id;
+        try {
+          const { projectUnread } = await Api.post(`projects/${projectId}/chats/${chat.id}/read`, {});
+          window.UnreadStore.byProject[String(projectId)] = projectUnread;
+          chat.unread = 0;
+        } catch (error) { /* 標記已讀失敗不影響閱讀 */ }
+      },
+      revokeMessageUrls() {
+        Object.values(this.attachUrls).forEach((url) => URL.revokeObjectURL(url));
+        this.attachUrls = {};
+        // 樂觀顯示用的預覽 URL：送出成功那條路徑會自己收掉，但送出失敗時那則訊息留在畫面上，
+        // 它的 URL 沒有別人管——一併在這裡收，否則每失敗一次就漏一份。
+        this.messages.forEach((message) => (message.pending_previews || []).forEach((url) => URL.revokeObjectURL(url)));
+      },
       handleEnter(event) { if (!event.isComposing && !event.shiftKey) { event.preventDefault(); this.send(); } },
       async send() {
         if (this.sending || !this.activeChat || (!this.newInput.trim() && !this.pendingFiles.length)) return;
@@ -769,7 +812,11 @@
       async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) return showToast("請填寫標題與內容", "error"); this.creatingTask = true; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.showTaskModal = false; showToast("已建立任務", "success"); } catch (error) { showToast(error.message || "建立任務失敗", "error"); } finally { this.creatingTask = false; } },
       scrollToBottom() { const element = this.$refs.messages; if (element) element.scrollTop = element.scrollHeight; },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
-      renderMd(value) { return renderMarkdown(value); }, openImage() {},
+      renderMd(value) { return renderMarkdown(value); },
+      openImage(attachmentId) {
+        const url = this.attachUrls[attachmentId];
+        if (url) window.open(url, "_blank");
+      },
     },
     watch: { "$route.fullPath"() { this.loadChats(); } },
     template: `
@@ -893,6 +940,11 @@
     template: `
       <section v-if="loading" class="ui-next-page">
 <div class="ui-next-loading-card">載入專案中…</div>
+</section>
+      <!-- loadError 一定要排在 project 之前判：載入失敗時 project 仍是 null，會掉進最後那個
+           「專案不存在」的 v-else——把網路／權限錯誤誤報成資料不存在，使用者會去找根本沒消失的專案。 -->
+      <section v-else-if="loadError" class="ui-next-page">
+<div class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 </section>
       <section v-else-if="project" class="ui-next-page ui-next-project-detail">
         <header class="ui-next-page-head ui-next-detail-head">
@@ -1999,10 +2051,14 @@
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>
 <template v-else>
-<textarea v-model="resolution" placeholder="輸入給 AI 的回答或補充">
+<!-- 綁 newMessageText 而非 resolution：submitAnswer 的無解析題目分支讀的是 newMessageText
+     （見本檔 submitAnswer 的 else 分支），resolution 是 blocker mode 的 resolveBlocker 在用。
+     綁錯的後果是靜默失效——打字讓按鈕亮起，點下去在那個 "沒文字就 return" 的早退直接返回，
+     沒有 toast、沒有錯誤，而 clarify_pending 狀態下這是唯一的回覆入口。 -->
+<textarea v-model="newMessageText" placeholder="輸入給 AI 的回答或補充">
 </textarea>
 <input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected">
-<button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||!resolution.trim()">{{ submitting?'送出中…':'送出回答' }}</button>
+<button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||!newMessageText.trim()">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>
 </template>
 <template v-else-if="timelineActionMode==='spec_review'">
@@ -2072,7 +2128,9 @@
 <input type="file" multiple @change="onMessageFilesSelected">
 <label v-if="showWritebackOption">
 <input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
-<button class="ui-next-primary" @click="sendTaskMessage" :disabled="sendingMessage||(!newMessageText.trim()&&!newMessageFiles.length)">{{ sendingMessage?'送出中…':'送出留言' }}</button>
+<!-- disabled 只看文字，與 sendTaskMessage 第一行那個 "沒文字就 return" 的早退對齊。
+     原本額外放行「只選了檔案」的情況，按鈕會亮但點下去被那行擋掉，靜默什麼都不發生。 -->
+<button class="ui-next-primary" @click="sendTaskMessage" :disabled="sendingMessage||!newMessageText.trim()">{{ sendingMessage?'送出中…':'送出留言' }}</button>
 </template>
 </section>
 </aside>
