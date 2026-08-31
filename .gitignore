@@ -29,6 +29,9 @@ env/
 /data/config.json
 /data/config.json.host-backup
 /data/claude-usage.json
+# 用量小工具的執行期快照與校準樣本(每台機器各自累積,無交付價值)
+/data/claude-rate-limit.json
+/data/claude-usage-calibration.jsonl
 # VPN 撥號時解密後的暫存 .ovpn(含憑證),用後即刪,絕不進版控
 /data/vpn-tmp/
 # embedding 模型權重(約 130 MB,首次啟動自動下載;離線環境可事先放進來)
