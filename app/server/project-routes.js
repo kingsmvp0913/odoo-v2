@@ -410,7 +410,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.get('/api/projects/:id', verifyToken, async (req, res) => {
+  app.get('/api/projects/:id(\\d+)', verifyToken, async (req, res) => {
     try {
       const { rows: [project] } = await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects WHERE id = $1`, [req.params.id]);
       if (!project) return res.status(404).json({ error: 'Not found' });
