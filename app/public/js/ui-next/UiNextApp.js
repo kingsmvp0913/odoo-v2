@@ -405,13 +405,35 @@
         const opening = !this.toolsOpen;
         this.accountOpen = false;
         this.toolsOpen = opening;
-        if (opening) this.toolsTrigger = event.currentTarget;
+        if (opening) {
+          this.toolsTrigger = event.currentTarget;
+          this.$nextTick(() => this.focusMenuItem(this.$refs.toolsMenu, 0));
+        }
       },
       toggleAccount(event) {
         const opening = !this.accountOpen;
         this.toolsOpen = false;
         this.accountOpen = opening;
-        if (opening) this.accountTrigger = event.currentTarget;
+        if (opening) {
+          this.accountTrigger = event.currentTarget;
+          this.$nextTick(() => this.focusMenuItem(this.$refs.accountMenu, 0));
+        }
+      },
+      // 用 DOM 查詢而不是維護索引：選單項會隨 isAdmin 動態增減（v-if），
+      // 維護索引就得跟著條件渲染同步，遲早對不上。
+      // step 0 = 移到第一項（開啟時用），±1 = 相對移動並循環。
+      focusMenuItem(menu, step) {
+        if (!menu) return;
+        const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).filter(
+          (el) => el.offsetParent !== null,
+        );
+        if (!items.length) return;
+        if (step === 0) { items[0].focus(); return; }
+        const at = items.indexOf(document.activeElement);
+        items[(at + step + items.length) % items.length].focus();
+      },
+      moveMenu(event, step) {
+        this.focusMenuItem(event.currentTarget, step);
       },
       closePopovers(restoreFocus = false) {
         const hadTools = this.toolsOpen, hadAccount = this.accountOpen;
@@ -553,7 +575,7 @@
           <router-link class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" to="/projects" @click="mobileSidebarOpen=false"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></router-link>
           <div class="ui-next-projects"><span class="ui-next-section-label">專案 Chat</span><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}<ui-next-icon v-if="project.is_favorite" name="star"/></button><button @click="toggleProject(project)" :aria-label="(expandedProjects[project.id] ? '收合' : '展開') + ' ' + project.name" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon :name="expandedProjects[project.id] ? 'chevron-up' : 'chevron-down'"/></button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button v-for="chat in (projectChats[project.id] || []).slice(0, 5)" :key="chat.id" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
           </div>
-          <div class="ui-next-bottom"><div class="ui-next-tools-wrap"><div v-if="toolsOpen" class="ui-next-account-menu"><small>其他功能</small><button @click="openTour"><ui-next-icon name="book"/>新手教學</button><button v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" class="ui-next-account-menu"><button @click="go('/settings')">設定</button><button @click="toggleTheme">切換深淺色</button><button v-if="isAdmin" @click="go('/admin')">管理員</button><button @click="logout">登出</button></div><button ref="accountTrigger" class="ui-next-account" @click="toggleAccount($event)" :aria-expanded="accountOpen"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div><router-link v-if="isAdmin && usageRows.length" class="ui-next-usage" to="/token-report"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></router-link></div>
+          <div class="ui-next-bottom"><div class="ui-next-tools-wrap"><div v-if="toolsOpen" ref="toolsMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><small>其他功能</small><button role="menuitem" @click="openTour"><ui-next-icon name="book"/>新手教學</button><button role="menuitem" v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button role="menuitem" v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button role="menuitem" @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button role="menuitem" @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen" aria-haspopup="menu"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div><div class="ui-next-account-wrap"><div v-if="accountOpen" ref="accountMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><button role="menuitem" @click="go('/settings')">設定</button><button role="menuitem" @click="toggleTheme">切換深淺色</button><button role="menuitem" v-if="isAdmin" @click="go('/admin')">管理員</button><button role="menuitem" @click="logout">登出</button></div><button ref="accountTrigger" class="ui-next-account" @click="toggleAccount($event)" :aria-expanded="accountOpen" aria-haspopup="menu"><strong>{{ userName.slice(0, 1) }}</strong><span>{{ userName }}<br><small>帳號與設定</small></span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div><router-link v-if="isAdmin && usageRows.length" class="ui-next-usage" to="/token-report"><b>Usage</b><div v-for="row in usageRows" :key="row.label"><span>{{ row.label }} · 剩 {{ row.remaining }}%</span><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></router-link></div>
         </aside>
         <main id="ui-next-main" class="ui-next-main" tabindex="-1"><router-view :key="$route.fullPath" /></main>
         <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown.down.prevent="moveCommand(1)" @keydown.up.prevent="moveCommand(-1)" @keydown="trapCommandFocus">

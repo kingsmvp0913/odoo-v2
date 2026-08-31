@@ -89,6 +89,25 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
     expect(APP).toMatch(/mobileSidebarTrigger/);
   });
 
+  // 側欄底部兩個下拉（更多工具／帳號）。原本只有 aria-expanded，
+  // 對輔助技術而言那只說明「展開了」，沒說明「展開的是一份選單」。
+  test('下拉選單有 menu 語意', () => {
+    // 兩個 trigger 都要宣告它會開出選單
+    expect(APP.match(/aria-haspopup="menu"/g) || []).toHaveLength(2);
+    expect(APP.match(/class="ui-next-account-menu" role="menu"/g) || []).toHaveLength(2);
+    // 選單項要是 menuitem，不能只是裸 button
+    expect(APP).toMatch(/role="menuitem"/);
+  });
+
+  test('下拉選單有方向鍵導航', () => {
+    expect(APP).toMatch(/@keydown\.down\.prevent="moveMenu\(\$event, 1\)"/);
+    expect(APP).toMatch(/@keydown\.up\.prevent="moveMenu\(\$event, -1\)"/);
+    expect(APP).toMatch(/moveMenu\(event, step\)/);
+    // 項目數會隨 isAdmin 動態增減，所以用 DOM 查詢而不是維護索引
+    expect(APP).toMatch(/focusMenuItem\(menu, step\)/);
+    expect(APP).toMatch(/querySelectorAll\('\[role="menuitem"\]'\)/);
+  });
+
   // 兩個 overlay 共用 document.body.style.overflow，若各自在開關處自行加解鎖，
   // 「開 A → 開 B → 關 A」就會在 B 還開著時把捲動解掉。改由狀態集中推導。
   test('背景捲動由 watch 集中同步，不散落在各個開關處', () => {
