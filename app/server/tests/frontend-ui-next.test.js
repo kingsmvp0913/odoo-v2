@@ -96,7 +96,7 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain('對話紀錄');
     expect(uiNextPages).toContain('ui-next-chat-history');
     expect(uiNextPages).toContain('ui-next-thread-composer');
-    expect(pagesCss).toContain('.ui-next-chat-page {\n  display: block;');
+    expect(pagesCss).toMatch(/\.ui-next-chat-page \{\r?\n  display: block;/);
     expect(pagesCss).toContain('.ui-next-chat-history {');
   });
 

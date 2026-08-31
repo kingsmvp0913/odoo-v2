@@ -668,8 +668,11 @@
   gap: 6px;
   margin-bottom: 16px;
 }
-.ui-next-task-badges span,
-.ui-next-task-badges a {
+/* 來源徽章（.src-badge，Odoo／eService 各有配色，深色模式在 app.css 已備好）要讓位：
+   `.ui-next-task-badges span` 是 (0,1,1)，會壓過 `.src-odoo` 的 (0,1,0)，只剩底色被套上、
+   文字色仍是灰的。用 :not() 排除，特異度不變。 */
+.ui-next-task-badges span:not(.src-badge),
+.ui-next-task-badges a:not(.src-badge) {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 7px;
@@ -854,8 +857,16 @@
   max-width: 100%;
   font-size: 11px;
 }
-.ui-next-question {
+.ui-next-task-action .ui-next-question {
   display: grid;
+  /* ⚠ .ui-next-question 這個 class 名被兩個語意完全不同的區塊共用：
+       ui-next.css       → UiNextApp 首頁那塊「大提問區」（置中、padding 36px、無框）
+       這裡（pages.css） → 任務詳情的「題目卡」（靠左、padding 10px、有框）
+     兩邊特異度相同，而 pages.css 後載入 ⇒ 本檔整組蓋掉首頁那塊，
+     首頁提問區因此變成靠左、padding 縮成 10px、還多一圈框。
+     所以本檔這一組全部收窄到 .ui-next-task-action 底下，兩者不再互相干擾。
+     根治做法是把其中一個改名，那要動 template，留到下一輪。 */
+  justify-items: stretch;
   gap: 6px;
   padding: 10px;
   border: 1px solid var(--border);
@@ -863,13 +874,85 @@
   background: var(--bg);
   font-size: 12px;
 }
-.ui-next-question label {
+.ui-next-task-action .ui-next-question label {
   color: var(--text-secondary);
   font-size: 12px;
 }
-.ui-next-question textarea {
+.ui-next-task-action .ui-next-question textarea {
   min-height: 58px;
   margin-top: 0;
+}
+/* 衝突卡的說明列與追問對答。巢狀在題目卡內，吃不到 .ui-next-task-action > button
+   那條「直接子代」規則，不補這裡就是一顆瀏覽器預設的裸按鈕。 */
+.ui-next-task-action .ui-next-question span {
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.ui-next-task-action .ui-next-question button {
+  justify-self: end;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-task-action .ui-next-question button:disabled {
+  opacity: 0.55;
+}
+/* 語意色要贏過動作區的通用灰。`.ui-next-task-action > p` 與 `.ui-next-task-action .ui-next-question span` 都是
+   (0,1,1)，比 `.ui-next-error-text` 的 (0,1,0) 高——不寫這兩條，「還有必答的問題沒回答」與
+   中斷原因會跟旁邊的說明文字一樣灰，等於沒有警示。 */
+.ui-next-task-action .ui-next-error-text {
+  color: var(--danger);
+}
+.ui-next-task-action .ui-next-warning-text {
+  color: var(--warning);
+}
+.ui-next-task-action .ui-next-help-box p {
+  margin: 4px 0 10px;
+  white-space: pre-wrap;
+}
+.ui-next-task-action .ui-next-help-box > *:last-child {
+  margin-bottom: 0;
+}
+.ui-next-spec-box b {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ui-next-spec-box > b:first-child {
+  margin-top: 0;
+}
+.ui-next-spec-box .ui-next-spec-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.ui-next-spec-box ul {
+  margin: 4px 0 10px;
+  padding-left: 17px;
+}
+.ui-next-spec-box li {
+  white-space: pre-wrap;
+}
+.ui-next-diff-repo {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.ui-next-diff-repo b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ui-next-diff-repo span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
 }
 .ui-next-events > div {
   max-height: 240px;
@@ -1997,6 +2080,12 @@
   min-width: 260px;
   flex: 1;
 }
+/* 「顯示全部使用者」是切換鈕不是動作鈕：沒有這條，開跟關長得一模一樣，
+   使用者只能靠列表變長猜自己現在看的是誰的任務。 */
+.ui-next-task-filters button.active {
+  border-color: var(--text);
+  color: var(--text);
+}
 .ui-next-task-filters {
   display: flex;
   flex-wrap: wrap;
@@ -2462,4 +2551,315 @@
     align-items: stretch;
     flex-direction: column;
   }
+}
+
+/* 用量報表：Legacy 的兩張分析表與三個維度的占比在 Next 缺席，補回時沿用 app.css 的
+   .tr-table-card／.tr-table（ui-next.css 已有對應的 .ui-next-main 覆寫），這裡只補
+   Next 需要的間距、數字靠右與占比清單樣式。 */
+.ui-next-usage-page .ui-next-usage-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ui-next-usage-page .ui-next-table-title {
+  margin: 0;
+  padding: 16px 13px 4px;
+  font-size: 14px;
+}
+.ui-next-usage-page .ui-next-table-title small {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.ui-next-usage-page .tr-table th,
+.ui-next-usage-page .tr-table td {
+  padding: 8px 13px;
+  text-align: left;
+}
+.ui-next-usage-page .tr-table thead th {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ui-next-usage-page .tr-table tbody tr {
+  border-top: 1px solid var(--border);
+}
+.ui-next-usage-page .ui-next-num {
+  text-align: right;
+  white-space: nowrap;
+}
+.ui-next-usage-page .ui-next-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+.ui-next-usage-page .ui-next-more-hint {
+  margin: 0;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.ui-next-share-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.ui-next-share-row:last-of-type {
+  border-bottom: 0;
+}
+.ui-next-share-row i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.ui-next-share-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-next-share-row em {
+  min-width: 44px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+  text-align: right;
+}
+/* ui-next.css 的 900px 斷點把 usage-grid 壓成單欄，上面那條專用規則特異性較高會蓋掉它 */
+@media (max-width: 900px) {
+  .ui-next-usage-page .ui-next-usage-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 部署 SOP：步驟內的說明與安全提示沿用 app.css 的 .sop-desc／.sop-note／.sop-warn
+   （已走 CSS 變數，深色模式安全），這裡只補它們在 Next 步驟卡內的間距，
+   以及「複製鈕被擋住」時的可見說明——按不下去卻不說原因，跟壞掉沒兩樣。 */
+.ui-next-sop-page .ui-next-sop-facts {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-warn-text {
+  color: var(--warning);
+}
+.ui-next-sop-page .sop-desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.85;
+}
+.ui-next-sop-page .sop-note,
+.ui-next-sop-page .sop-warn {
+  font-size: 13px;
+}
+.ui-next-sop-steps .sop-desc {
+  margin: 12px 13px;
+}
+.ui-next-sop-steps .sop-note,
+.ui-next-sop-steps .sop-warn {
+  margin: 12px 13px;
+}
+.ui-next-sop-steps button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ui-next-sop-blocked {
+  margin: 0;
+  padding: 9px 13px;
+  border-top: 1px solid var(--border);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* 個人設定：Legacy 有、Next 先前漏掉的取得 PAT 教學、必填提示與密碼即時驗證回饋。
+   顏色一律走變數——這裡寫死淺色底會在深色模式吃掉文字。 */
+.ui-next-settings-grid input.is-invalid {
+  border-color: var(--danger);
+}
+.ui-next-help-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.ui-next-help-box ol {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.ui-next-help-box code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 11px;
+}
+.ui-next-settings-grid .ui-next-help-box p {
+  margin-top: 8px;
+}
+
+/* 專案清單：新增表單改為每欄帶 label 與說明。folder_name 的警語是硬需求，不可省。 */
+.ui-next-project-create label {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-project-create label small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ui-next-required {
+  color: var(--danger);
+}
+.ui-next-project-create .ui-next-create-wide {
+  grid-column: 1 / -1;
+}
+.ui-next-project-create .ui-next-create-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ui-next-project-create .ui-next-create-actions button:not(.ui-next-primary) {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 13px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.ui-next-unread-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+.ui-next-project-skeleton {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+.ui-next-project-skeleton header,
+.ui-next-project-skeleton footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 執行歷程：狀態列要能同時放狀態與「等待 pipeline 啟動」的補充說明。 */
+.ui-next-terminal-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.ui-next-terminal-wait {
+  color: var(--text-muted);
+}
+
+/* Pipeline 監控：連線狀態、最後更新時間與手動重試；任務／對話標題本身可點。 */
+.ui-next-pipeline-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ui-next-live i.is-down {
+  background: var(--danger);
+}
+.ui-next-live em {
+  margin-left: 5px;
+  color: var(--text-muted);
+  font-style: normal;
+}
+.ui-next-pipeline-retry {
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 11px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-pipeline-retry:disabled {
+  opacity: 0.55;
+}
+.ui-next-run-list a.ui-next-run-title {
+  display: block;
+  height: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 650;
+}
+.ui-next-run-list a.ui-next-run-title:hover {
+  text-decoration: underline;
+}
+.ui-next-project-create label small {
+  display: inline;
+}
+/* 卡片動作列補回「上正式／資料庫查詢／自動部署 SOP／初始化 Wiki」後變成 8 顆，
+   不換行會把按鈕壓到字中間斷行（「上正／式」）。 */
+.ui-next-project-grid-rich footer {
+  flex-wrap: wrap;
+}
+.ui-next-project-grid-rich footer button {
+  white-space: nowrap;
+}
+.ui-next-project-grid-rich footer button:last-child {
+  margin-left: 0;
+}
+/* 按鈕裡的 unicode 操作圖示（← × ↑ ⌕ ⌃⌄）換成 <ui-next-icon> 之後的尺寸校正。
+   字元的大小會自動跟著 font-size 走，SVG 不會——.ui-next-icon 固定 17px。
+   於是 18px 的圓形移除鈕塞不下（圖示直接滿出圓形外），而 11–12px 的文字按鈕
+   旁邊的圖示會比字還大。這裡逐處把尺寸接回該處的字級。 */
+.ui-next-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ui-next-back .ui-next-icon,
+.ui-next-ticket-files button .ui-next-icon,
+.ui-next-conv-list article .ui-next-icon,
+.ui-next-chat-list article > button .ui-next-icon {
+  width: 14px;
+  height: 14px;
+}
+/* 對話紀錄的刪除鈕沒有自己的 flex 容器（.ui-next-chat-list 的規則只吃 > button，
+   這份清單用的是 article），inline 的 svg 會多出一段 baseline 下墜空間。 */
+.ui-next-chat-list article > button .ui-next-icon {
+  display: block;
+}
+.ui-next-pending-files button {
+  display: grid;
+  place-items: center;
+}
+.ui-next-pending-files button .ui-next-icon {
+  width: 11px;
+  height: 11px;
 }

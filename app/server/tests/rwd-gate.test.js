@@ -64,6 +64,42 @@ describe('每張截圖都要有「頁面真的渲染出來了」的斷言', () =
   });
 });
 
+// 新增一條 route 到 app.js 卻忘了加進截圖清單，是「門禁靜默縮水」最常見的一種：
+// 測試全綠、gate 也全綠，只是那一頁從此沒人拍過。2026-08-31 實際盤點時 rwd 清單漏了 7 條，
+// 其中 '#/tasks' 是 Next 的任務列表——那一輪剛大改完的頁面，一張圖都沒有。
+//
+// 特別容易漏的是「同一個 path 在兩個介面下是不同的頁」：'#/' 在 Legacy 是 TaskListView，
+// 在 Next 是問答首頁，只拍 '#/' 會讓 Next 的任務列表整頁不進門禁。
+describe('app.js 的每條路由都在截圖清單裡', () => {
+  const appJs = fs.readFileSync(path.join(__dirname, '../../public/js/app.js'), 'utf8');
+
+  // catch-all 不是一個真的頁面，沒有東西可拍。
+  const NOT_A_PAGE = ['/:pathMatch(.*)*'];
+
+  const appPaths = [...appJs.matchAll(/path:\s*["'`]([^"'`]+)["'`]/g)]
+    .map((m) => m[1])
+    .filter((p) => !NOT_A_PAGE.includes(p));
+
+  // rwd 清單用 :taskId／:projectId，app.js 用 :id／:chatId／:slug——只比較「有幾段、
+  // 哪幾段是參數」，不比參數名字。
+  const shape = (p) => p.replace(/^#/, '').replace(/:[A-Za-z]\w*/g, ':x');
+
+  test('解析得到路由（寫法變動時不得靜默略過）', () => {
+    expect(appPaths.length).toBeGreaterThanOrEqual(25);
+    expect(ROUTES.filter((r) => r.hash).length).toBeGreaterThanOrEqual(25);
+  });
+
+  test.each(appPaths)('%s 有對應的截圖路由（或明確標為不涵蓋）', (p) => {
+    const hit = ROUTES.some((r) => r.hash && shape(r.hash) === shape(p));
+    expect(`${p}: ${hit}`).toBe(`${p}: true`);
+  });
+
+  test('標為不涵蓋的都寫了理由', () => {
+    const noWhy = ROUTES.filter((r) => !r.covered && !r.why).map((r) => r.key);
+    expect(noWhy).toEqual([]);
+  });
+});
+
 describe('缺中文字型時要停下，不能默默拿系統字型拍', () => {
   // `.fontroot/` 在 .gitignore 內：換機／容器重建後目錄常在、裡面空了。此時中文全變豆腐框 □，
   // 而重拍基線就是拿豆腐比豆腐——門禁照樣全綠，只是量的已經不是中文版面。

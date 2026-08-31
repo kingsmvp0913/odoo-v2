@@ -24,14 +24,26 @@ const THEMES = ['light', 'dark'];
 // 未登入頁與獨立 HTML 頁各自指定。
 const ROUTES = [
   { key: 'login', hash: '#/login', auth: 'none', covered: true, expect: '.login-wrap' },
-  { key: 'task-list', hash: '#/', auth: 'user', covered: true },
+  // '#/' 與 '#/tasks' 在兩個介面下是不同的頁：Legacy 兩者都是 TaskListView，
+  // 但 Next 的 '#/' 是問答首頁、'#/tasks' 才是任務列表。只拍 '#/' 會讓 Next 的任務列表
+  // 完全不進門禁。
+  { key: 'home', hash: '#/', auth: 'user', covered: true },
+  { key: 'task-list', hash: '#/tasks', auth: 'user', covered: true },
   { key: 'task-detail', hash: '#/task/:taskId', auth: 'user', covered: true, needs: 'taskId' },
+  // 403 頁在兩個介面共用同一個 ForbiddenView，Legacy 沒有 .content/.page-body，另指定 expect。
+  { key: 'forbidden', hash: '#/forbidden', auth: 'user', covered: true, expect: '.auth-container' },
+  // Next 下會 redirect 到 '/tasks?tab=needs_action'，拍到的是導向後的畫面——那正是要驗的行為。
+  { key: 'inbox', hash: '#/inbox', auth: 'user', covered: true },
   { key: 'task-terminal', hash: '#/task/:taskId/terminal', auth: 'user', covered: false,
     why: '需要執行中的任務才有終端輸出，無法穩定造資料' },
   { key: 'project-list', hash: '#/projects', auth: 'user', covered: true },
   { key: 'project-detail', hash: '#/projects/:projectId', auth: 'user', covered: true, needs: 'projectId' },
   { key: 'project-wiki', hash: '#/projects/:projectId/wiki', auth: 'user', covered: true, needs: 'projectId' },
+  { key: 'project-wiki-page', hash: '#/projects/:projectId/wiki/:slug', auth: 'user', covered: false,
+    why: 'slug 依專案 wiki 內容而定，無法穩定造資料' },
   { key: 'project-chat', hash: '#/projects/:projectId/chat', auth: 'user', covered: true, needs: 'projectId' },
+  { key: 'project-chat-one', hash: '#/projects/:projectId/chat/:chatId', auth: 'user', covered: false,
+    why: '需要既有對話 id，無法穩定造資料' },
   { key: 'project-db', hash: '#/projects/:projectId/db', auth: 'user', covered: false,
     why: '需要可用的遠端資料庫連線，無法穩定造資料' },
   // 與 project-db 不同：這頁沒有連線時顯示的是引導卡，畫面照樣穩定，進得了門禁
@@ -41,6 +53,9 @@ const ROUTES = [
   { key: 'admin', hash: '#/admin', auth: 'admin', covered: true },
   { key: 'admin-users', hash: '#/admin/users', auth: 'admin', covered: true },
   { key: 'admin-agents', hash: '#/admin/agents', auth: 'admin', covered: true },
+  // Next 專用的子頁：Legacy 的 /admin 本身就是這些設定表單，Next 把它們拆到這裡。
+  { key: 'admin-settings', hash: '#/admin/settings', auth: 'admin', covered: true },
+  { key: 'admin-schedules', hash: '#/admin/schedules', auth: 'admin', covered: true },
   { key: 'admin-pipelines', hash: '#/admin/pipelines', auth: 'user', covered: true },
   { key: 'pipeline-flow', hash: '#/pipeline-flow', auth: 'user', covered: true },
   { key: 'architecture', hash: '#/architecture', auth: 'user', covered: true },
@@ -56,7 +71,36 @@ const ROUTES = [
 // 每個 view 的模板自己帶 .content 或 .page-body（app.js 只提供外框與 router-view），
 // 所以「兩者都找不到」＝這一頁的 view 根本沒渲染出來。
 const DEFAULT_EXPECT = '.content, .page-body';
-function expectSelector(route) { return route.expect || DEFAULT_EXPECT; }
+
+// Next 的等價證據。斷言 .ui-next-main 底下**有子節點**而不是 .ui-next-shell 存在：
+// shell 是 UiNextApp 畫的，router-view 內的 view 在 render 中拋例外時 shell 照樣在，
+// 只驗 shell 等於把白屏當成通過。
+const DEFAULT_NEXT_EXPECT = '.ui-next-main > *';
+
+function expectSelector(route) {
+  if (route.expect) return route.expect;
+  return route.ui === 'next' ? DEFAULT_NEXT_EXPECT : DEFAULT_EXPECT;
+}
+
+// Next 路由由 Legacy 清單衍生，不手抄第二份——手抄的下場是新增 Legacy 路由時
+// Next 那半靜默漏掉，而且沒有任何訊號。
+//
+// 排除的兩類：
+//   - 獨立 HTML 頁（styleguide）：不走 Vue router，沒有 ui=next 的概念。
+//   - login：Next 有自己的 UiNextLoginView，根元素是 .ui-next-login 而不是 shell，
+//     另行指定 expect（見下方 NEXT_EXPECT_OVERRIDE）。
+function nextRoutes() {
+  return ROUTES.filter((r) => r.hash).map((r) => ({
+    ...r,
+    key: `next-${r.key}`,
+    ui: 'next',
+    expect: NEXT_EXPECT_OVERRIDE[r.key],   // undefined 時 expectSelector 落回 DEFAULT_NEXT_EXPECT
+  }));
+}
+
+const NEXT_EXPECT_OVERRIDE = {
+  login: '.ui-next-login',
+};
 
 // 會隨時間／資料變動的區塊。不遮掉的話門禁天天假紅，紅到沒人看——
 // 那比沒有門禁更糟，因為它會訓練人忽略紅燈。
@@ -107,7 +151,33 @@ const STABILIZE_CSS = `
      遮內容、留佔位：欄寬與列高照樣驗得到，但不會每跑一次就假紅一次。 */
   .port-pool-slot-code, .port-pool-slot-state,
   .port-pool-slot-row > span { visibility: hidden !important; }
+
+  /* ── Next 殼層的同一件事 ─────────────────────────────────────
+     .ui-next-shell 是 height:100vh + overflow:hidden、.ui-next-main 是 overflow:auto，
+     與 Legacy 的 .app-shell/.content 完全同形狀。不解除的話 fullPage 只會拍到一屏，
+     捲動線以下的內容永遠不進門禁——Legacy 那邊就是這樣讓五個頁面的基線只有一屏高，
+     而且沒有任何訊號（門禁號稱 diff=0，其實只驗了第一屏）。 */
+  .ui-next-shell, .ui-next-main {
+    height: auto !important; min-height: 0 !important; overflow: visible !important;
+  }
+  /* 內部還有幾層自己捲動或設了 max-height 的容器；父層變成 height:auto 後，
+     百分比與 vh 會解析成 0 或維持截斷，該區塊就整塊拍不到。 */
+  .ui-next-sidebar, .ui-next-sidebar-scroll, .ui-next-projects,
+  .ui-next-panel, .ui-next-chat-list, .ui-next-thread-messages {
+    height: auto !important; max-height: none !important;
+    min-height: 0 !important; overflow: visible !important;
+  }
+
+  /* Next 側欄底部的 Claude 用量條：與 Legacy 的 .usage-mini 同性質，每次執行都不同 */
+  .ui-next-usage { visibility: hidden !important; }
 `;
+
+// console.error 的豁免清單。刻意留空起步：先讓門禁把現況全部吼出來，再逐條決定哪些是
+// 「截圖環境造成、與產品無關」的雜訊而值得豁免。反過來先塞一堆萬用 pattern 的話，
+// 真正的 runtime 錯誤會從第一天就被吃掉，而且沒人會發現。
+//
+// ⚠️ 加任何一條都要寫清楚「為什麼這不是產品問題」，不接受 /.*/ 或只寫「雜訊」。
+const CONSOLE_ALLOWLIST = [];
 
 // 比對容差。抗字型次像素渲染的微小差異，但不足以蓋掉真正的版面位移。
 const DIFF = {
@@ -115,7 +185,9 @@ const DIFF = {
   maxDiffPixels: 100   // 全圖可容忍的差異點數；超過即判定為回歸
 };
 
-function activeRoutes() { return ROUTES.filter(r => r.covered); }
+// Next 的覆蓋與 Legacy 同進退：Legacy 那條因為造不出穩定資料而 covered:false 的，
+// Next 版一樣造不出來。
+function activeRoutes() { return [...ROUTES, ...nextRoutes()].filter(r => r.covered); }
 
 function manualCheckList() {
   return ROUTES.filter(r => !r.covered).map(r => ({ key: r.key, why: r.why }));
@@ -136,6 +208,6 @@ function shotPlan({ gateOnly = false } = {}) {
 }
 
 module.exports = {
-  VIEWPORTS, THEMES, ROUTES, STABILIZE_CSS, DIFF, DEFAULT_EXPECT,
-  activeRoutes, manualCheckList, shotPlan, expectSelector
+  VIEWPORTS, THEMES, ROUTES, STABILIZE_CSS, DIFF, DEFAULT_EXPECT, DEFAULT_NEXT_EXPECT,
+  CONSOLE_ALLOWLIST, activeRoutes, nextRoutes, manualCheckList, shotPlan, expectSelector
 };

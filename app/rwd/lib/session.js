@@ -6,10 +6,15 @@ const BASE_URL = (process.env.RWD_BASE_URL || 'http://localhost:3939/').replace(
 function apiUrl(path) { return `${BASE_URL}api/${path}`; }
 
 async function login() {
+  // RWD_TOKEN 讓人不必交出密碼就能借出登入態（從瀏覽器 localStorage 的 aidev_token 複製即可）。
+  // 代價是會過期——過期的症狀是所有頁面都截到登入畫面，而 expect selector 剛好也可能通過，
+  // 所以下面 assertAdmin 那一關要留著，它會先炸。
+  if (process.env.RWD_TOKEN) return process.env.RWD_TOKEN.trim();
+
   const username = process.env.RWD_USER;
   const password = process.env.RWD_PASS;
   if (!username || !password) {
-    throw new Error('請設定 RWD_USER / RWD_PASS 環境變數（截圖帳號必須是 admin，否則 admin 頁會被導回首頁）');
+    throw new Error('請設定 RWD_TOKEN，或 RWD_USER / RWD_PASS 環境變數（截圖帳號必須是 admin，否則 admin 頁會被導回首頁）');
   }
   const res = await fetch(apiUrl('auth/login'), {
     method: 'POST',
@@ -59,11 +64,15 @@ async function sampleIds(token) {
 }
 
 function resolveUrl(route, ids) {
-  if (route.path) return `${BASE_URL}${route.path}`;
+  // ui=next 是 query 而不是 hash 的一部分（index.html 讀 location.search 決定要不要載 Next 資產），
+  // 所以必須插在 # 之前：<base>?ui=next#/tasks。順序寫反的話 query 會被當成 hash 內容，
+  // 旗標讀不到、Next 資產不載入，截到的其實是 Legacy 畫面——而且不會有任何錯誤。
+  const query = route.ui === 'next' ? '?ui=next' : '';
+  if (route.path) return `${BASE_URL}${route.path}${query}`;
   const hash = route.hash
     .replace(':taskId', ids.taskId)
     .replace(':projectId', ids.projectId);
-  return `${BASE_URL}${hash}`;
+  return `${BASE_URL}${query}${hash}`;
 }
 
 module.exports = { BASE_URL, apiUrl, login, getJson, assertAdmin, sampleIds, resolveUrl };

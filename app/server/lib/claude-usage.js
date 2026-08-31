@@ -5,10 +5,15 @@ const fs = require('fs');
 // 本機互動式登入憑證：管理員沒在網頁設主憑證時的退路（既有行為）
 const CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-// /api/oauth/usage 是非官方端點且限流很兇（實測 429 帶 Retry-After 1877s）。原本 60s TTL
-// 配上前端 60s 輪詢＝24/7 每分鐘一次真實請求，配額很快燒光，接著半小時全 429，畫面卡在 stale
-// 不動。用量是分鐘級才有意義的數字，拉到 10 分鐘足夠。改這裡要連同前端 app.js 的輪詢間隔一起改。
-const CACHE_TTL_MS = 10 * 60 * 1000;
+// /api/oauth/usage 是非官方端點，限流分兩層。2026-08-31 實測量出門檻：
+//   短窗——2 秒間隔連打，第 7 次才 429（Retry-After=300）⇒ 約「5 分鐘 6 次」。
+//   60 秒間隔連打 10 次（跨 10 分鐘）全數 200，一次都沒被擋。
+// 先前設 10 分鐘是把「曾經撞過 429」誤讀成「這端點不准頻繁問」，反而讓畫面在冷卻期
+// 卡上 40 分鐘的 stale。60s 換算＝5 分鐘 5 次，仍在短窗門檻下。
+// ⚠ 只實測了 10 分鐘，24/7 長跑會不會累積撞到更深一層（平台憑證曾被罰 Retry-After 2476s）
+// 未經驗證；下方的 blockedUntil 退避是安全網，最壞退回原本的行為。
+// 改這裡要連同前端 app.js 的輪詢間隔一起改。
+const CACHE_TTL_MS = 60 * 1000;
 // 磁碟 snapshot：server 重啟後 usage API 若當機仍能靠它判閘門／顯示。lib 在 app/server/lib/，
 // 三個 .. 才回到 repo 根（app/server/lib → app/server → app → <repo>）。
 // 只存主憑證的用量——備用是「撞閘門才用」的旁路，沒有跨重啟保存的必要。

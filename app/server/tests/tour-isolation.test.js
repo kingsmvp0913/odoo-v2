@@ -158,7 +158,9 @@ describe('教程接線', () => {
 
   test('TourHost 有被註冊且掛進 template', () => {
     const src = appJs();
-    expect(src).toContain("app.component('TourHost', window.TourHost)");
+    // 比對放寬到引號風格不敏感：app.js 走過 prettier 後字面值從單引號變雙引號，
+    // 註冊行原封不動卻讓這條紅——那是格式假紅，會誘人以為 TourHost 真的被拔掉。
+    expect(src).toMatch(/app\.component\(\s*['"]TourHost['"]\s*,\s*window\.TourHost\s*\)/);
     expect(src).toContain('<tour-host />');
   });
 });

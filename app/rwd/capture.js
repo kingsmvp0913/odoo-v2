@@ -25,7 +25,7 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSER_ROOT)) {
 }
 
 const { chromium } = require('playwright');
-const { STABILIZE_CSS, shotPlan, manualCheckList, expectSelector } = require('./routes');
+const { STABILIZE_CSS, shotPlan, manualCheckList, expectSelector, CONSOLE_ALLOWLIST } = require('./routes');
 const { login, assertAdmin, sampleIds, resolveUrl } = require('./lib/session');
 
 const args = process.argv.slice(2);
@@ -112,8 +112,24 @@ async function main() {
     const page = await context.newPage();
     // 未捕捉的例外只會讓 Vue 掛不上任何東西，畫面是全白的——而**白圖對白圖的 diff 恆為 0**。
     // 不收這些訊號的話，一整頁炸掉在門禁上看起來與「完全沒改」一模一樣。
+    // pageerror 只收「拋到頂層而沒人接」的例外。Vue 的 render 錯誤與 component 內被 catch 起來的
+    // 失敗走的是 console.error；被 .catch 漏掉的 Promise 走的是 unhandledrejection。三者都不收的話，
+    // 「篩選一點就白屏」（NEXT-P0-002 那種 TypeError）在門禁上只是一張少了篩選面板的圖，diff 容易
+    // 落在容差內而靜默放行。
     const pageErrors = [];
-    page.on('pageerror', (e) => pageErrors.push(e.message));
+    page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() !== 'error') return;
+      const text = msg.text();
+      if (CONSOLE_ALLOWLIST.some((re) => re.test(text))) return;
+      pageErrors.push(`console.error: ${text}`);
+    });
+    await page.addInitScript(() => {
+      window.addEventListener('unhandledrejection', (e) => {
+        // 轉成 console.error 讓上面同一條管線收走，避免再開一條各自為政的通報路徑。
+        console.error(`unhandledrejection: ${(e.reason && e.reason.message) || e.reason}`);
+      });
+    });
     try {
       await page.goto(resolveUrl(route, ids), { waitUntil: 'networkidle', timeout: 30000 });
       await page.addStyleTag({ content: STABILIZE_CSS });
@@ -122,7 +138,7 @@ async function main() {
       // 「這一頁真的渲染出來了」的最低證據。view 在 render 中拋例外時 router-view 什麼都不掛，
       // 連 .content／.page-body 都不會存在，所以這個等待就是空白頁的警報器。
       await page.waitForSelector(expectSelector(route), { state: 'attached', timeout: 5000 });
-      if (pageErrors.length) throw new Error(`頁面有未捕捉的 JS 例外：${pageErrors[0]}`);
+      if (pageErrors.length) throw new Error(`頁面有 runtime 錯誤：${pageErrors[0]}`);
       await page.screenshot({ path: path.join(OUT_DIR, `${shot.name}.png`), fullPage: true });
       done++;
     } catch (err) {

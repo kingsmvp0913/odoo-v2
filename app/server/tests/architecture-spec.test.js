@@ -283,7 +283,7 @@ describe('這一頁真的接進站台了', () => {
 
   test('app.js 有註冊路由與側欄入口', () => {
     const app = read('public/js/app.js');
-    expect(app).toContain("path: '/architecture'");
+    expect(app).toMatch(/path:\s*['"]\/architecture['"]/);   // 引號風格不敏感（prettier 會換）
     expect(app).toContain('ArchitectureView');
     expect(app).toContain("to=\"/architecture\"");
   });

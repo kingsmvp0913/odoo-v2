@@ -88,18 +88,23 @@ describe('lib/claude-usage getUsage', () => {
     expect(u.five_hour.utilization).toBe(55);
   });
 
-  // /api/oauth/usage 限流很兇：每分鐘打一次會把配額燒光，之後整整半小時全是 429，
-  // 畫面就卡在 stale 不動。快取拉長是止血的主手段，不是最佳化。
-  test('數分鐘內重複呼叫只打一次 API', async () => {
+  // 前端多個分頁＋usage-gate 每關評估都會呼叫，沒有快取就是每次都真打。TTL 是 60 秒
+  //（2026-08-31 實測端點門檻約「5 分鐘 6 次」，見 lib/claude-usage.js 的註解），
+  // 兩個斷言夾住它：窗內不得重打、窗外必須重打——只驗前者的話 TTL 被改成任意大值都不會紅。
+  test('TTL 窗內重複呼叫只打一次 API，窗外才重打', async () => {
     let now = 1_000_000;
     jest.spyOn(Date, 'now').mockImplementation(() => now);
     global.fetch = jest.fn().mockResolvedValue({
       ok: true, json: async () => ({ five_hour: { utilization: 5, resets_at: 'x' } })
     });
     await lib.getUsage();
-    now += 5 * 60 * 1000;
+    now += 30 * 1000;
     await lib.getUsage();
     expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    now += 60 * 1000;
+    await lib.getUsage();
+    expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
   // 429 的 Retry-After 是分鐘級，且窗口會自然倒數、不因重打而延長 → 冷卻期間再送請求

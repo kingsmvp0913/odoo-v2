@@ -154,7 +154,11 @@ describe('v-html 綁定白名單', () => {
     'renderMd(message.content)', // UiNextProjectChat：同一個 renderMarkdown 薄封裝
     'renderTaskMessage(item.content)', // UiNextTaskDetail：同一個 renderMarkdown 薄封裝
     'ansiToHtml(ev.content)', // TaskDetail：函式內自行 escape 後才組 HTML（TaskDetail.js 的 esc()）
-    'ansiToHtml(event.content)', // UiNextTaskDetail：函式內 escape 後才組 HTML
+    // Next UI 是同樣這兩個綁定的重寫，消毒入口相同、只有 v-for 變數名不同：
+    // UiNextPages.js 的 renderMd() 直接轉呼 renderMarkdown()；ansiToHtml() 內含自己的 esc()。
+    // 白名單比對的是表達式「字面值」，所以改個變數名就落到清單外——那是刻意的，
+    // 逼人重新確認新綁定的字串來源，不是可以隨手照抄補進來的形式差異。
+    'ansiToHtml(event.content)',  // UiNextTaskDetailView：同 ansiToHtml(ev.content)
     // tour.js：step.text 的字串來源全部是 tour-courses.js 裡硬編的靜態字面值；
     // 教程刻意不打任何 API（tour-isolation.test.js 守「不得出現 fetch/Api. 呼叫」），
     // 進度只存 localStorage，沒有 DB 資料、API 回應或使用者輸入會流進這個綁定。

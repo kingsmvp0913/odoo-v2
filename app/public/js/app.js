@@ -2,20 +2,30 @@ const { createApp, defineComponent, ref, onMounted } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
 
 const toasts = ref([]);
-// ui-next 也是同一個應用程式，只替換殼層；通知必須共用，否則舊 View 在新版會靜默失去回饋。
-window.appToasts = toasts;
 // id 同時是 v-for 的 :key 與「時間到移除自己」那段 filter 的依據，必須逐則唯一。
 // 原本取 Date.now()：同一輪同步程式碼連發的多則會拿到相同毫秒值，先到期的那則會把同 id 的
 // 其他則一起濾掉——訊息互相吃掉且不報錯（socket 事件批次抵達時就是這個情境）。
 let _toastSeq = 0;
+function dismissToast(id) {
+  toasts.value = toasts.value.filter((t) => t.id !== id);
+}
+// duration <= 0 代表「不自動關閉」，由使用者自己關。
+// 原本無條件 setTimeout(…, duration)，於是 showToast(msg, "error", 0) 會在 0ms 後立刻移除
+// ——訊息等於沒出現過。ui-next 有 30 幾處錯誤路徑是這樣寫的（意圖正是「錯誤不要自己消失」，
+// 見規格 §4.6），全部靜默失效：使用者只看到操作沒反應，看不到原因。
 function showToast(message, level = "info", duration = 4000) {
   const id = ++_toastSeq;
-  toasts.value.push({ id, message, level });
-  setTimeout(() => {
-    toasts.value = toasts.value.filter((t) => t.id !== id);
-  }, duration);
+  toasts.value.push({ id, message, level, sticky: !(duration > 0) });
+  if (duration > 0) setTimeout(() => dismissToast(id), duration);
+  return id;
 }
 window.showToast = showToast;
+window.dismissToast = dismissToast;
+// ui-next 也是同一個應用程式，只替換殼層；通知必須共用，否則舊 View 在新版會靜默失去回饋。
+// 放在 showToast 導出之後而非 toasts 宣告處：frontend-toast-id.test.js 會把
+// 「toasts 宣告 → window.showToast 導出」這一段切出來在 node 環境單獨 eval，
+// 區間內出現 window 就會 ReferenceError。所有 window.* 導出集中在區間外。
+window.appToasts = toasts;
 
 const needsActionCount = ref(0);
 window.needsActionCount = needsActionCount;
@@ -205,6 +215,13 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
+      // Legacy 的 /admin 本身就是全部設定表單，這條子路由是 Next 專用的入口；
+      // Legacy 走到這裡一樣給 AdminView，內容相同不會白屏。
+      path: "/admin/settings",
+      component: window.UiNextEnabled ? window.UiNextAdminSettingsView : window.AdminView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: "/admin/users",
       component: window.UiNextEnabled ? window.UiNextAdminUsersView : window.AdminUsersView,
       meta: { requiresAuth: true, requiresAdmin: true },
@@ -297,15 +314,16 @@ router.afterEach((to) => {
   }
 });
 
-// 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊：原本 60s 輪詢配 60s TTL＝每次都 miss，
-// 等於 24/7 每分鐘打一次限流很兇的 /api/oauth/usage，配額燒光後畫面反而長時間卡在 stale。
-setInterval(loadClaudeUsage, 10 * 60 * 1000);
+// 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊（改一邊必須改另一邊）。2026-08-31 實測
+// /api/oauth/usage 的門檻約「5 分鐘 6 次」，60s 輪詢＝5 分鐘 5 次，安全。原本的 10 分鐘
+// 反而讓數字落後半小時以上。Codex 端點的門檻沒量過，維持 10 分鐘不動。
+setInterval(loadClaudeUsage, 60 * 1000);
 setInterval(loadCodexUsage, 10 * 60 * 1000);
 
 const App = defineComponent({
   name: "App",
   setup() {
-    return { toasts, needsActionCount, inboxUnread, claudeUsage, codexUsage };
+    return { toasts, dismissToast, needsActionCount, inboxUnread, claudeUsage, codexUsage };
   },
   data() {
     return {
@@ -531,7 +549,7 @@ const App = defineComponent({
       </div>
     </template>
     <div class="toast-container">
-      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}</div>
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)">×</button></div>
     </div>
     <confirm-dialog-host />
     <tour-host />
