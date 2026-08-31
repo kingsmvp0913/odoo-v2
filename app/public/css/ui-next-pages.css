@@ -861,6 +861,27 @@
   min-height: 58px;
   margin-top: 0;
 }
+/* 衝突卡的說明列與追問對答。巢狀在 .ui-next-question 內，吃不到 .ui-next-task-action > button
+   那條「直接子代」規則，不補這裡就是一顆瀏覽器預設的裸按鈕。 */
+.ui-next-question span {
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.ui-next-question button {
+  justify-self: end;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-question button:disabled {
+  opacity: 0.55;
+}
 .ui-next-events > div {
   max-height: 240px;
   overflow: auto;
@@ -1949,6 +1970,12 @@
 .ui-next-task-toolbar input {
   min-width: 260px;
   flex: 1;
+}
+/* 「顯示全部使用者」是切換鈕不是動作鈕：沒有這條，開跟關長得一模一樣，
+   使用者只能靠列表變長猜自己現在看的是誰的任務。 */
+.ui-next-task-filters button.active {
+  border-color: var(--text);
+  color: var(--text);
 }
 .ui-next-task-filters {
   display: flex;

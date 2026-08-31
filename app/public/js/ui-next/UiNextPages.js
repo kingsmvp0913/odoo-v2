@@ -924,10 +924,21 @@
       SearchableSelect: window.SearchableSelect,
       ReleaseModal: window.ReleaseModal,
     },
-    data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: "overview" }; },
-    computed: { envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
+    data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: "overview", _pollTimer: null, _reposPollTimer: null }; },
+    computed: { hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
+    watch: {
+      "env.status"(value) { if (value === "setting_up") this._startPoll(); else this._stopPoll(); },
+      hasCloning(value) { if (value) this._startReposPoll(); else this._stopReposPoll(); },
+    },
     async created() { await Promise.all([this.load(), this.loadEnv()]); },
+    // 沒有這行，離開專案頁之後那兩個 timer 還會繼續打 API（元件早就卸載，畫面也不會更新）。
+    beforeUnmount() { this._stopPoll(); this._stopReposPoll(); },
     methods: {
+      // 環境建立／repo clone 都是背景長工，後端不推事件；不輪詢的話「建立中」「同步中」會永遠停在原地。
+      _startPoll() { if (this._pollTimer) return; this._pollTimer = setInterval(() => this.loadEnv(), 5000); },
+      _stopPoll() { if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; } },
+      _startReposPoll() { if (this._reposPollTimer) return; this._reposPollTimer = setInterval(async () => { const data = await Api.get(`projects/${this.$route.params.id}`).catch(() => null); if (data) this.repos = data.repos || []; }, 3000); },
+      _stopReposPoll() { if (this._reposPollTimer) { clearInterval(this._reposPollTimer); this._reposPollTimer = null; } },
       async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(`projects/${this.$route.params.id}`); this.project = data; this.repos = data.repos || []; this.editOdooProjectName = data.odoo_project_name || ""; this.editServiceRespondentName = data.service_respondent_name || ""; this.editE2eEnabled = !data.e2e_disabled; this.editEdition = data.edition || "community"; await Promise.all(this.repos.filter((repo) => repo.clone_status === "done").map(async (repo) => { const info = await Api.get(`projects/${data.id}/repos/${repo.id}/branches`).catch(() => null); if (info) this.branchInfo[repo.id] = info; })); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       async loadEnv() { this.env = await Api.get(`projects/${this.$route.params.id}/env`).catch(() => this.env || { status: "idle" }); },
       async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
@@ -2036,6 +2047,13 @@
 <template v-if="timelineActionMode==='answer'">
 <p v-if="clarIntro">{{ clarIntro }}</p>
 <template v-if="clarQuestions.length">
+<!-- 「提問」頁籤是問清楚再答的唯一入口：少了它，看不懂題目的人只能硬答或把任務卡在這一關。 -->
+<div class="ui-next-detail-tabs">
+<button :class="{active:clarTab==='qa'}" @click="clarTab='qa'">規格書 QA</button>
+<button :class="{active:clarTab==='ask'}" @click="clarTab='ask'">提問</button>
+</div>
+<p v-if="clarBusy" class="ui-next-field-note">AI 正在回覆，稍候一下…</p>
+<template v-if="clarTab==='qa'">
 <div v-for="(q,index) in clarVisible()" :key="q.id" class="ui-next-question">
 <b>{{ index+1 }}. {{ q.text }}</b>
 <template v-if="q.type==='choice'">
@@ -2049,6 +2067,14 @@
 </div>
 <input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected">
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
+</template>
+<template v-else>
+<p class="ui-next-field-note">看不懂、要補充、或方向要改都在這裡講。問問題不會讓任務往下跑；談出結論時 AI 會順手把「規格書 QA」那頁的題目改成最新的。</p>
+<textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAsk">
+</textarea>
+<input ref="askFileInput" type="file" multiple @change="onAskFilesSelected">
+<button class="ui-next-primary" @click="submitAsk" :disabled="clarBusy||askSubmitting||!askText.trim()">{{ askSubmitting?'送出中…':'送出提問' }}</button>
+</template>
 </template>
 <template v-else>
 <!-- 綁 newMessageText 而非 resolution：submitAnswer 的無解析題目分支讀的是 newMessageText
@@ -2085,14 +2111,42 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='conflict'">
-<p v-if="task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
+<!-- 重建 testing 造成的衝突沒有逐檔資料可裁決，硬導進裁決流程會讓人對著空清單無事可做 → 分流到手解收尾。 -->
+<template v-if="conflictItems.length&&!isRebuildConflict">
+<p>自動合併有 {{ conflictItems.length }} 個檔需要你決定。每個檔已附原因與 AI 建議（預設已選建議），確認後送出即可。</p>
+<p v-if="isSyncConflict" class="ui-next-field-note">這張任務開工前要把 main 上工程師改的程式拉進來，但和 AI 已改過的地方撞到了。裁決完會回到分析重跑，不會直接進部署。</p>
 <div v-for="(item,index) in conflictItems" :key="item.key" class="ui-next-question">
-<b>{{ item.repo }} / {{ item.file }}</b>
+<b>{{ index+1 }}. {{ item.repo }} / {{ item.file }}</b>
+<template v-if="item.detail">
+<span>衝突型態：{{ item.detail.classification }}</span>
+<span v-if="item.detail.reason">原因：{{ item.detail.reason }}</span>
+<span v-if="item.detail.rationale">AI 建議：{{ recLabel(item.detail.recommendation) }} — {{ item.detail.rationale }}</span>
+</template>
+<span v-else>（無法自動分析此檔，請自行判斷或選「我自己手解」）</span>
 <label v-for="choice in ['take_theirs','take_ours','manual']" :key="choice">
-<input type="radio" :name="'conflict_'+index" :value="choice" v-model="conflictChoices[item.key]"> {{ recLabel(choice) }}</label>
+<input type="radio" :name="'conflict_'+index" :value="choice" v-model="conflictChoices[item.key]"> {{ recLabel(choice) }}<template v-if="item.detail&&item.detail.recommendation===choice"> ★建議</template>
+</label>
+<!-- 追問區：非工程師看不懂衝突時先問 AI，問清楚再裁決（有結構化 detail 才問得出東西） -->
+<template v-if="item.detail">
+<div v-for="(qa,qi) in (item.detail.qa||[])" :key="qi">
+<b>你：{{ qa.q }}</b>
+<span>AI：{{ qa.a }}</span>
 </div>
-<button v-if="conflictItems.length" class="ui-next-primary" @click="submitConflictResolutions" :disabled="submittingConflicts||!conflictAllChosen">送出裁決</button>
-<button v-else class="ui-next-primary" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已手動解決衝突' }}</button>
+<span>不確定怎麼選？可以先問 AI，問清楚再決定。</span>
+<textarea v-model="clarifyText[item.key]" placeholder="看不懂這個衝突？問問看，例如：這兩個版本差在哪？我選「取新版」會失去什麼？">
+</textarea>
+<button @click="submitClarify(item)" :disabled="clarifying[item.key]||!(clarifyText[item.key]||'').trim()">{{ clarifying[item.key]?'思考中…':'送出追問' }}</button>
+</template>
+</div>
+<button class="ui-next-primary" @click="submitConflictResolutions" :disabled="submittingConflicts||!conflictAllChosen">{{ submittingConflicts?'處理中…':'送出裁決，繼續' }}</button>
+</template>
+<template v-else>
+<p v-if="task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
+<p>自動合併失敗，請手動在 Repo 解決 Git 衝突後，點擊下方按鈕繼續。</p>
+<button class="ui-next-primary" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已手動解決衝突，繼續' }}</button>
+</template>
+<!-- 與裁決卡片並存而非互斥：選了「我自己手解」的檔沒有這顆按鈕就沒有任何收尾入口。 -->
+<button v-if="conflictItems.length&&!isRebuildConflict" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已在 Repo 手動解完剩餘檔，收尾繼續' }}</button>
 </template>
 <template v-else-if="timelineActionMode==='cs_reply'">
 <p>{{ task.cs_reply }}</p>
@@ -2255,8 +2309,10 @@
     methods: {
       async load() { this.loading = true; this.loadError = ""; try { this.projects = await Api.get("projects"); this.projects.forEach((project) => { window.UnreadStore.byProject[String(project.id)] = project.unread_count || 0; }); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       async add() { if (!this.newProject.name || !this.newProject.odoo_version) return showToast("請填寫專案名稱和版本", "error"); if (!/^[a-zA-Z0-9_-]+$/.test((this.newProject.folder_name || "").trim())) return showToast("請填寫英文資料夾名稱（只能用英文、數字、底線、連字號）", "error"); this.saving = true; try { await Api.post("projects", { ...this.newProject }); this.newProject = { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }; this.showAddForm = false; await this.load(); showToast("已新增專案", "success"); } catch (error) { showToast(error.message || "無法新增專案", "error", 0); } finally { this.saving = false; } },
+      // requireText 打字確認是刻意的：這個動作會連本機 clone 的程式碼一起刪掉且無法復原。
+      async remove(project) { if (!await confirmDialog({ title: "刪除專案", message: `此動作會連帶刪除「${project.name}」下所有 repo 的本機程式碼，且無法復原。`, danger: true, requireText: project.name, confirmText: "刪除專案" })) return; try { await Api.delete(`projects/${project.id}`); await this.load(); showToast("已刪除", "success"); } catch (error) { showToast(error.message || "刪除專案失敗", "error", 0); } },
       async toggleFavorite(project) { const next = !project.is_favorite; project.is_favorite = next; try { if (next) await Api.post(`projects/${project.id}/favorite`, {}); else await Api.delete(`projects/${project.id}/favorite`); } catch (error) { project.is_favorite = !next; showToast(error.message || "更新我的最愛失敗", "error", 0); } },
-      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goWiki(id) { this.$router.push(`/projects/${id}/wiki`); }, goChat(id) { this.$router.push(`/projects/${id}/chat`); },
+      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goWiki(id) { this.$router.push(`/projects/${id}/wiki`); }, goChat(id) { this.$router.push(`/projects/${id}/chat`); }, isAdmin() { return window.UserStore.role === "admin"; },
       async openEnv(id) { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } },
     },
     template: `
@@ -2309,6 +2365,7 @@
 <button @click="openEnv(project.id)">測試區</button>
 <button @click="goWiki(project.id)">Wiki</button>
 <button @click="go(project.id)">管理</button>
+<button v-if="isAdmin()" style="color:var(--danger)" @click="remove(project)">刪除專案</button>
 </footer>
 </article>
 <p v-if="!filteredProjects.length" class="ui-next-empty-state">找不到符合的專案。</p>
@@ -2342,8 +2399,12 @@
   window.UiNextTaskListView = Vue.defineComponent({
     name: "UiNextTaskListView",
     components: { StatusBar: UiNextStatusBar },
-    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null }; },
+    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null, showAllUsers: false, ownerFilter: "", users: [] }; },
     computed: {
+      isAdmin() { return window.UserStore.role === "admin"; },
+      // ownerFilter 與 showAllUsers 都刻意不進網址列：它們是「這次看別人任務」的臨時狀態，
+      // 一旦被記住，下次進來會是「showAllUsers 關著、ownerFilter 還開著」＝看不見的篩選把列表清空。
+      ownerOptions() { return this.users.map((user) => ({ value: user.id, label: user.display_name || user.username })); },
       // Vue template 不會把全域 window 暴露到 component scope；在此注入 registry，
       // 避免開啟篩選時讀取 undefined 而卸載整個任務頁。
       statusOptions() {
@@ -2371,7 +2432,7 @@
       pausedShown() { return this.tasks.filter((task) => task.is_paused && this.matchAll(task)).length; },
       allShown() { return this.tasks.filter((task) => this.matchAll(task)).length; },
       allSelected() { return this.filteredTasks.length > 0 && this.filteredTasks.every((task) => this.selectedIds.includes(task.id)); },
-      activeFilterCount() { return [this.projectFilter, this.statusFilter, this.sourceFilter, this.search].filter(Boolean).length + (this.releaseFilter !== "all" ? 1 : 0); },
+      activeFilterCount() { return [this.projectFilter, this.ownerFilter, this.statusFilter, this.sourceFilter, this.search].filter(Boolean).length + (this.releaseFilter !== "all" ? 1 : 0); },
     },
     watch: {
       filter() { this.selectedIds = []; this.batchMode = false; this.syncQuery(); this.load(); },
@@ -2394,18 +2455,26 @@
       this.search = query.q || ""; this.sort = query.sort || "updated_desc"; this.releaseFilter = query.release || "all";
       await Promise.all([this.load(), Api.get("projects").then((projects) => { this.projects = projects || []; }).catch(() => {})]);
     },
+    // SocketManager 只留得住一個 callback：離開頁面沒解除的話，下一頁的即時事件仍會打這一頁的 refresh。
+    mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
+    beforeUnmount() { SocketManager.setRefreshCallback(null); },
     methods: {
-      matchAll(task) { const query = this.search.toLowerCase().trim(); const matchesSearch = !query || [task.title, task.task_id, task.source, task.module, task.project_name].some((value) => (value || "").toLowerCase().includes(query)); const matchesRelease = this.releaseFilter === "released" ? !!task.merged_to_main_at : this.releaseFilter === "pending_release" ? !!task.approved_at && !task.merged_to_main_at : true; return matchesSearch && matchesRelease && (!this.projectFilter || String(task.project_id) === String(this.projectFilter)) && (!this.statusFilter || task.status === this.statusFilter) && (!this.sourceFilter || task.source === this.sourceFilter); },
+      matchAll(task) { const query = this.search.toLowerCase().trim(); const matchesSearch = !query || [task.title, task.task_id, task.source, task.module, task.project_name].some((value) => (value || "").toLowerCase().includes(query)); const matchesRelease = this.releaseFilter === "released" ? !!task.merged_to_main_at : this.releaseFilter === "pending_release" ? !!task.approved_at && !task.merged_to_main_at : true; return matchesSearch && matchesRelease && (!this.projectFilter || String(task.project_id) === String(this.projectFilter)) && (!this.ownerFilter || String(task.owner_id) === String(this.ownerFilter)) && (!this.statusFilter || task.status === this.statusFilter) && (!this.sourceFilter || task.source === this.sourceFilter); },
+      // 一定要重新取資料：showAllUsers 決定打的是 tasks 還是 tasks?all=true。
+      // users 在這裡才抓不在 created()：UserStore.role 由 router.afterEach 非同步填，
+      // created() 當下 isAdmin 還是 false，那時抓就永遠抓不到，使用者下拉會是空的。
+      async toggleAllUsers() { this.showAllUsers = !this.showAllUsers; if (!this.showAllUsers) this.ownerFilter = ""; else if (!this.users.length) Api.get("admin/users").then((users) => { this.users = users || []; }).catch(() => {}); await this.load(); },
+      refresh() { Api.get(this.showAllUsers ? "tasks?all=true" : "tasks").then((data) => { this.tasks = data.tasks || data; if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount; }).catch(() => {}); if (this.filter === "archived") Api.get("tasks?archived=true").then((data) => { this.archivedTasks = data.tasks || data; }).catch(() => {}); },
       syncQuery() {
         const query = { ...this.$route.query, tab: this.filter };
         const values = { project: this.projectFilter, status: this.statusFilter, source: this.sourceFilter, q: this.search, sort: this.sort === "updated_desc" ? "" : this.sort, release: this.releaseFilter === "all" ? "" : this.releaseFilter };
         Object.entries(values).forEach(([key, value]) => { if (value) query[key] = value; else delete query[key]; });
         if (JSON.stringify(query) !== JSON.stringify(this.$route.query)) this.$router.replace({ query });
       },
-      clearFilters() { this.search = ""; this.releaseFilter = "all"; this.projectFilter = ""; this.statusFilter = ""; this.sourceFilter = ""; },
+      clearFilters() { this.search = ""; this.releaseFilter = "all"; this.projectFilter = ""; this.ownerFilter = ""; this.statusFilter = ""; this.sourceFilter = ""; },
       applySort(list) { const timestamp = (value) => new Date(value || 0).getTime(); return list.slice().sort((a, b) => this.sort === "created_desc" ? timestamp(b.created_at) - timestamp(a.created_at) : this.sort === "title_asc" ? (a.title || a.task_id || "").localeCompare(b.title || b.task_id || "", "zh-Hant") : this.sort === "status_asc" ? (a.status || "").localeCompare(b.status || "") : timestamp(b.updated_at || b.created_at) - timestamp(a.updated_at || a.created_at)); },
       needsAction(task) { return (window.HUMAN_STATUSES || []).includes(task.status); }, isStopped(task) { return task.status === "stopped" || task.status === "merge_conflict"; }, statusLabel(status) { return (window.STATUS_LABELS || {})[status] || status; }, sourceLabel(source) { return source === "odoo" ? "Odoo" : source === "service" ? "eService" : source === "manual" ? "手動增加" : source; }, timeAgo(value) { const delta = Date.now() - new Date(value).getTime(); return delta < 60000 ? "剛剛" : delta < 3600000 ? `${Math.floor(delta / 60000)} 分鐘前` : delta < 86400000 ? `${Math.floor(delta / 3600000)} 小時前` : `${Math.floor(delta / 86400000)} 天前`; },
-      async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(this.filter === "archived" ? "tasks?archived=true" : "tasks"); if (this.filter === "archived") this.archivedTasks = data.tasks || data; else { this.tasks = data.tasks || data; window.needsActionCount.value = this.needsActionCount; } } catch (error) { this.loadError = error.message || "無法載入任務"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
+      async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(this.filter === "archived" ? "tasks?archived=true" : this.showAllUsers ? "tasks?all=true" : "tasks"); if (this.filter === "archived") this.archivedTasks = data.tasks || data; else { this.tasks = data.tasks || data; if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount; } } catch (error) { this.loadError = error.message || "無法載入任務"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       taskPath(task) { return `/task/${task.id}`; }, openTask(task) { this.$router.push(this.taskPath(task)); }, onTaskKeydown(task, event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openTask(task); } }, toggleBatchMode() { this.batchMode = !this.batchMode; if (!this.batchMode) this.selectedIds = []; }, toggleSelect(id, event) { event.stopPropagation(); const index = this.selectedIds.indexOf(id); if (index < 0) this.selectedIds.push(id); else this.selectedIds.splice(index, 1); }, toggleSelectAll() { this.selectedIds = this.allSelected ? [] : this.filteredTasks.map((task) => task.id); },
       openAdd() { this.newTask = { title: "", original_text: "", project_id: "" }; this.newFiles = []; this.showAdd = true; }, onAddFilesSelected(event) { this.newFiles = Array.from(event.target.files || []); }, async submitAdd() { if (!this.newTask.project_id || !this.newTask.title.trim() || !this.newTask.original_text.trim()) return showToast("請完整填寫專案、標題與內容", "error"); if (this.newFiles.length > 5) return showToast("最多上傳 5 個附件", "error"); this.adding = true; try { const form = new FormData(); form.append("title", this.newTask.title.trim()); form.append("original_text", this.newTask.original_text); form.append("project_id", this.newTask.project_id); this.newFiles.forEach((file) => form.append("files", file)); await Api.postForm("tasks", form); this.showAdd = false; this.filter = "all"; showToast("已新增任務", "success"); } catch (error) { showToast(error.message || "新增任務失敗", "error", 0); } finally { this.adding = false; } },
       async syncNow() { this.syncing = true; try { await Api.post("sync/now", {}); await this.load(); showToast("同步完成", "success"); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } finally { this.syncing = false; } }, async togglePause(task, event) { event.stopPropagation(); try { const result = await Api.put(`tasks/${task.id}/pause`, {}); task.is_paused = result.is_paused; showToast(result.is_paused ? "任務已暫停" : "任務已恢復", "success"); } catch (error) { showToast(error.message || "更新失敗", "error", 0); } },
@@ -2480,6 +2549,11 @@
 </select>
 </div>
 <div v-if="filtersOpen" class="ui-next-task-filters">
+<button v-if="isAdmin" :class="{active:showAllUsers}" @click="toggleAllUsers" :title="showAllUsers?'目前顯示全部使用者的任務，點一下改回只顯示自己的':'目前只顯示自己的任務，點一下顯示全部使用者的'">顯示全部使用者</button>
+<select v-if="isAdmin&&showAllUsers" v-model="ownerFilter">
+<option value="">全部使用者</option>
+<option v-for="owner in ownerOptions" :key="owner.value" :value="owner.value">{{ owner.label }}</option>
+</select>
 <select v-model="projectFilter">
 <option value="">全部專案</option>
 <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
@@ -2533,6 +2607,7 @@
 <span>{{ sourceLabel(task.source) }}</span>
 <span v-if="task.env_status">測試機</span>
 <span v-if="task.merged_to_main_at">已上正式</span>
+<span v-if="showAllUsers&&task.owner_name">{{ task.owner_name }}</span>
 <span v-if="task.module">{{ task.module }}</span>
 </div>
 <StatusBar :status="task.status" :source="task.source" :git-branch="task.git_branch" :e2e-disabled="task.e2e_disabled" />
@@ -2556,14 +2631,19 @@
     mounted() { this._onProgress = (data) => { if (String(data.projectId) === String(this.$route.params.id)) this.progress = { percent: data.percent || 0, message: data.message || "" }; }; window._socket?.on("wiki:progress", this._onProgress); },
     watch: { "$route.params.slug"(slug) { if (slug && (!this.current || this.current.slug !== slug)) this.loadPage(slug); } },
     methods: {
-      async loadPages() { this.loading = true; this.loadError = ""; try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); } catch (error) { this.loadError = error.message || "無法載入 Wiki"; } finally { this.loading = false; } },
-      async loadPage(slug) { const requestId = ++this.requestId; if (this.editing && this.current && this.current.slug !== slug && !await confirmDialog({ title: "尚未儲存", message: "切換頁面會放棄未儲存的修改。", danger: true, confirmText: "放棄修改" })) { this.$router.replace(`/projects/${this.$route.params.id}/wiki/${this.current.slug}`); return; } try { const page = await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`); if (requestId !== this.requestId) return; this.current = page; this.editContent = page.content || ""; this.editing = false; if (this.$route.params.slug !== slug) this.$router.replace(`/projects/${this.$route.params.id}/wiki/${slug}`); } catch (error) { showToast(error.message || "無法載入頁面", "error", 0); } },
-      async save() { if (!this.current || this.saving) return; this.saving = true; try { this.current = await Api.put(`projects/${this.$route.params.id}/wiki/${this.current.slug}`, { content: this.editContent }); this.editing = false; await this.loadPages(); showToast("已儲存", "success"); } catch (error) { showToast(error.message || "儲存失敗", "error", 0); } finally { this.saving = false; } },
+      // 新手教程的示範專案：wiki 內容來自 tour-demo.js，不打 API
+      isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
+      // 教程示範專案的 id 是字串 'demo'，送進 integer 型別的 project_id 一律 500。
+      // 讀取路徑走 TourDemo 假資料，寫入路徑（儲存／重新生成／刪除／新增／建立）一律擋在前端並說明原因。
+      tourDemoBlocked() { if (!this.isTourDemo()) return false; showToast("教學示範專案僅供瀏覽，不會實際變更", "info"); return true; },
+      async loadPages() { if (this.isTourDemo()) { this.pages = window.TourDemo.wikiPages(); this.loadError = ""; this.loading = false; return; } this.loading = true; this.loadError = ""; try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); } catch (error) { this.loadError = error.message || "無法載入 Wiki"; } finally { this.loading = false; } },
+      async loadPage(slug) { const requestId = ++this.requestId; if (this.editing && this.current && this.current.slug !== slug && !await confirmDialog({ title: "尚未儲存", message: "切換頁面會放棄未儲存的修改。", danger: true, confirmText: "放棄修改" })) { this.$router.replace(`/projects/${this.$route.params.id}/wiki/${this.current.slug}`); return; } try { const page = this.isTourDemo() ? window.TourDemo.wikiPage(slug) : await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`); if (requestId !== this.requestId) return; this.current = page; this.editContent = page.content || ""; this.editing = false; if (this.$route.params.slug !== slug) this.$router.replace(`/projects/${this.$route.params.id}/wiki/${slug}`); } catch (error) { showToast(error.message || "無法載入頁面", "error", 0); } },
+      async save() { if (!this.current || this.saving) return; if (this.tourDemoBlocked()) return; this.saving = true; try { this.current = await Api.put(`projects/${this.$route.params.id}/wiki/${this.current.slug}`, { content: this.editContent }); this.editing = false; await this.loadPages(); showToast("已儲存", "success"); } catch (error) { showToast(error.message || "儲存失敗", "error", 0); } finally { this.saving = false; } },
       openAddPage() { this.newPageTitle = ""; this.newPageSlug = ""; this.slugTouched = false; this.showAddModal = true; this.$nextTick(() => this.$refs.newTitleInput?.focus()); }, onTitleInput() { if (!this.slugTouched) this.newPageSlug = this.newPageTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }, onSlugInput() { this.slugTouched = true; },
-      async submitAddPage() { const title = this.newPageTitle.trim(), slug = this.newPageSlug.trim(); if (!title || !slug) return; this.addingPage = true; try { await Api.post(`projects/${this.$route.params.id}/wiki`, { title, slug, content: `# ${title}\n\n` }); this.showAddModal = false; await this.loadPages(); await this.loadPage(slug); } catch (error) { showToast(error.message || "新增失敗", "error", 0); } finally { this.addingPage = false; } },
-      async removePage(slug) { if (!await confirmDialog({ title: "刪除頁面", message: `確定刪除「${slug}」？`, danger: true, confirmText: "刪除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/wiki/${slug}`); if (this.current?.slug === slug) this.current = null; await this.loadPages(); } catch (error) { showToast(error.message || "刪除失敗", "error", 0); } },
-      async refreshNode(slug) { this.refreshing = slug; try { await Api.post(`projects/${this.$route.params.id}/wiki/${slug}/refresh`); await this.loadPages(); if (this.current?.slug === slug) await this.loadPage(slug); } catch (error) { showToast(error.message || "重新生成失敗", "error", 0); } finally { this.refreshing = ""; } },
-      async buildWiki() { this.building = true; try { await Api.post(`projects/${this.$route.params.id}/wiki/init`, {}); await this.loadPages(); if (this.tree.length) await this.loadPage(this.tree[0].slug); } catch (error) { showToast(error.message || "建立 Wiki 失敗", "error", 0); } finally { this.building = false; } },
+      async submitAddPage() { const title = this.newPageTitle.trim(), slug = this.newPageSlug.trim(); if (!title || !slug) return; if (this.tourDemoBlocked()) return; this.addingPage = true; try { await Api.post(`projects/${this.$route.params.id}/wiki`, { title, slug, content: `# ${title}\n\n` }); this.showAddModal = false; await this.loadPages(); await this.loadPage(slug); } catch (error) { showToast(error.message || "新增失敗", "error", 0); } finally { this.addingPage = false; } },
+      async removePage(slug) { if (this.tourDemoBlocked()) return; if (!await confirmDialog({ title: "刪除頁面", message: `確定刪除「${slug}」？`, danger: true, confirmText: "刪除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/wiki/${slug}`); if (this.current?.slug === slug) this.current = null; await this.loadPages(); } catch (error) { showToast(error.message || "刪除失敗", "error", 0); } },
+      async refreshNode(slug) { if (this.tourDemoBlocked()) return; this.refreshing = slug; try { await Api.post(`projects/${this.$route.params.id}/wiki/${slug}/refresh`); await this.loadPages(); if (this.current?.slug === slug) await this.loadPage(slug); } catch (error) { showToast(error.message || "重新生成失敗", "error", 0); } finally { this.refreshing = ""; } },
+      async buildWiki() { if (this.tourDemoBlocked()) return; this.building = true; try { await Api.post(`projects/${this.$route.params.id}/wiki/init`, {}); await this.loadPages(); if (this.tree.length) await this.loadPage(this.tree[0].slug); } catch (error) { showToast(error.message || "建立 Wiki 失敗", "error", 0); } finally { this.building = false; } },
     },
     template: `
       <section class="ui-next-page ui-next-wiki-page">
