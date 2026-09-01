@@ -662,6 +662,7 @@ async function migrate() {
     { table: 'projects', col: 'port', sql: 'ALTER TABLE projects ADD COLUMN port INTEGER' },
     { table: 'projects', col: 'odoo_project_name',      sql: 'ALTER TABLE projects ADD COLUMN odoo_project_name TEXT' },
     { table: 'projects', col: 'service_respondent_name', sql: 'ALTER TABLE projects ADD COLUMN service_respondent_name TEXT' },
+    { table: 'projects', col: 'service_contact_name', sql: 'ALTER TABLE projects ADD COLUMN service_contact_name TEXT' },
     { table: 'projects', col: 'e2e_disabled', sql: 'ALTER TABLE projects ADD COLUMN e2e_disabled BOOLEAN NOT NULL DEFAULT false' },
     // ⚠ 已退役（2026-08-11）：已併入 e2e_disabled，程式各處不再讀寫。欄位保留是因為本框架
     // 只有 add-if-missing、沒有 drop column（rules/db-schema 41）——別再新增讀取它的程式碼。

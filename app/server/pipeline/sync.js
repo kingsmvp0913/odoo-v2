@@ -353,7 +353,7 @@ async function syncServiceUser(userId, settings) {
     // 工單一被接手轉 open，下一輪同步就會自動補拉，不會漏。
     // 驗收完成／結案／作廢本來就不在此白名單內（原 domain 亦然），維持不進來。
     [['processing_staff', 'in', [service_user_id || 1]], ['state', '=', 'open']],
-    ['id', 'name_seq', 'subject', 'system', 'state', 'question_description', 'classification', 'respondent', 'file'],
+    ['id', 'name_seq', 'subject', 'system', 'state', 'question_description', 'classification', 'respondent', 'main_contact', 'file'],
     cookies
   );
 
@@ -374,7 +374,9 @@ async function syncServiceUser(userId, settings) {
     const taskKey = `task_service_${task.id}`;
     // 依 respondent 名對應平台專案：綁不到的新工單不入庫（對應建好後下次 sync 自動補拉）
     const respondentName = task.respondent ? task.respondent[1] : null;
-    const projId = await findProjectBySourceName('service_respondent_name', respondentName);
+    const contactName = task.main_contact ? task.main_contact[1] : null;
+    const projId = await findProjectBySourceName('service_respondent_name', respondentName)
+      || await findProjectBySourceName('service_contact_name', contactName);
     const existing = await query(
       'SELECT id, status, is_hidden FROM tasks WHERE user_id = $1 AND task_id = $2',
       [userId, taskKey]

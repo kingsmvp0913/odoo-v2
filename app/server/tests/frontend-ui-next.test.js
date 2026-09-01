@@ -601,7 +601,10 @@ describe("ui-next 平行介面", () => {
     expect(projects).toContain('id="project-folder-help"');
     expect(projects).toContain('清除搜尋');
     expect(projects).toContain("project.is_favorite?'star-filled':'star'");
-    expect(projects).toContain('<p v-if="project.description">');
+    expect(projects).toMatch(/<button v-if="project\.description"[^>]*class="ui-next-project-open ui-next-project-note"/);
+    expect(projects).toContain('<div v-else class="ui-next-project-note is-empty" aria-hidden="true">');
+    // 備註排在標籤（facts）之後
+    expect(projects.indexOf('ui-next-project-note')).toBeGreaterThan(projects.indexOf('ui-next-project-facts'));
     expect(projects).not.toContain('尚未填寫專案描述。');
     expect(projects).not.toContain('專案工作原則');
     expect(projects).not.toContain('快捷操作');

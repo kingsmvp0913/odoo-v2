@@ -59,6 +59,29 @@ test('一般使用者可儲存對應 → 200 且值真的寫進去', async () =>
   expect(row.service_respondent_name).toBe('客服甲');
 });
 
+// 有些客戶的工單只填主要聯絡人、回饋帳號是共用帳號，只比 respondent 會整批綁不到。
+test('主要聯絡人也能存成對應來源', async () => {
+  const res = await request(app).patch(`/api/projects/${projectId}/mapping`)
+    .set('Authorization', `Bearer ${userToken}`)
+    .send({ service_contact_name: '聯絡人甲' });
+  expect(res.status).toBe(200);
+  const { rows: [row] } = await dbModule.query(
+    'SELECT service_contact_name FROM projects WHERE id = $1', [projectId]);
+  expect(row.service_contact_name).toBe('聯絡人甲');
+});
+
+// 衝突檢查若漏掉新欄位，兩個專案會綁到同一個聯絡人，同步時看誰先被查到就歸給誰。
+test('主要聯絡人被別的專案綁走 → 409，且原值不被覆寫', async () => {
+  await request(app).patch(`/api/projects/${projectId}/mapping`)
+    .set('Authorization', `Bearer ${userToken}`).send({ service_contact_name: '聯絡人乙' });
+  const res = await request(app).patch(`/api/projects/${otherId}/mapping`)
+    .set('Authorization', `Bearer ${userToken}`).send({ service_contact_name: '聯絡人乙' });
+  expect(res.status).toBe(409);
+  const { rows: [row] } = await dbModule.query(
+    'SELECT service_contact_name FROM projects WHERE id = $1', [otherId]);
+  expect(row.service_contact_name).toBeNull();
+});
+
 test('來源名稱已被別的專案綁走 → 409，且原值不被覆寫', async () => {
   const res = await request(app).patch(`/api/projects/${otherId}/mapping`)
     .set('Authorization', `Bearer ${userToken}`)

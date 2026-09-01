@@ -1119,7 +1119,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 0 0 13px;
+  margin: 0 0 10px;
 }
 .ui-next-project-facts span {
   border: 1px solid var(--border);
@@ -1306,7 +1306,7 @@
   margin: 0;
   font-size: 20px;
 }
-.ui-next-project-title-open h2 small { color:var(--text-muted); font-size:12px; font-weight:500; white-space:nowrap; }
+.ui-next-project-title-open h2 small { display:block; margin-top:3px; color:var(--text-muted); font-size:12px; font-weight:500; white-space:nowrap; }
 .ui-next-project-open { flex:initial; margin-top:7px; }
 .ui-next-project-open p {
   margin: 0;
@@ -3053,3 +3053,20 @@
 .ui-next-task-rich-list article.need.running{border-left-color:var(--warning)}
 .ui-next-task-rich-list article.need.running::before{display:none}
 @media(prefers-reduced-motion:reduce){.ui-next-task-rich-list article.running::before{animation:none;background:var(--info)}}
+
+/* 專案備註：固定佔兩行的高度，超出用 … 截斷。
+   有描述才長高的話，同一排卡片會參差不齊——沒有描述時放一個同高的空區塊補位。 */
+.ui-next-project-note{display:block;width:100%;height:36px;margin:0;padding:0;overflow:hidden}
+.ui-next-project-note p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin:0;color:var(--text-muted);font-size:12px;line-height:18px}
+.ui-next-project-note.is-empty{pointer-events:none}
+
+/* Wiki 還沒建立時，「尚無頁面。」那一行小字看起來像載入失敗；改成明確的行動指引。 */
+.ui-next-wiki-empty{display:grid;justify-items:center;gap:8px;padding:28px 16px;text-align:center}
+.ui-next-wiki-empty h3{margin:0;font-size:15px}
+.ui-next-wiki-empty p{margin:0;color:var(--text-muted);font-size:12px;line-height:1.6}
+.ui-next-wiki-empty button{margin-top:4px}
+/* 專案設定的基本資料欄位比照其他設定卡 */
+.ui-next-project-settings label{display:grid;gap:5px;margin-top:10px;color:var(--text-secondary);font-size:13px}
+.ui-next-project-settings label input,.ui-next-project-settings label textarea{box-sizing:border-box;width:100%;border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.ui-next-project-settings label textarea{min-height:76px;resize:vertical}
+.ui-next-project-settings label input:focus,.ui-next-project-settings label textarea:focus{outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:1px}
