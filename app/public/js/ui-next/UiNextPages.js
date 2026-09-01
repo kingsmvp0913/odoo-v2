@@ -1439,7 +1439,10 @@
         const logs = (this.logs || []).map(l => ({
           _key: 'log-' + l.id, ts: l.created_at, kind: 'log', role: l.role, content: l.content
         }));
-        return [...msgs, ...logs].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+        const blocker = (this.task && this.task.status === 'stopped' && this.task.blocker_content)
+          ? [{ _key: 'blocker', ts: this.task.updated_at, kind: 'log', role: 'blocker', content: this.task.blocker_content }]
+          : [];
+        return [...msgs, ...logs, ...blocker].sort((a, b) => new Date(a.ts) - new Date(b.ts));
       },
       // 只渲染末 N 筆（最新）；往上捲再增量載入更早的，避免整條歷史撐開版面
       visibleTimeline() { return this.timeline.slice(-this.convVisible); },
@@ -1977,8 +1980,8 @@
         if (this.task.source === 'service') return 'src-badge src-service';
         return 'src-badge src-default';
       },
-      roleClass(role) { return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
-      roleLabel(role) { return role === 'ai' ? 'AI' : role === 'user' ? '你' : '系統'; },
+      roleClass(role) { if (role === 'blocker') return 'system is-blocker'; return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
+      roleLabel(role) { if (role === 'blocker') return '執行中斷'; return role === 'ai' ? 'AI' : role === 'user' ? '你' : '系統'; },
       // 時間軸項目來自 task_logs 沿用 roleClass；來自 task_messages 用 source 對應到既有 ai/user 泡泡樣式
       // （sync=外部進來的訊息，靠左走 ai 樣式；manual=你自己留言，靠右走 user 樣式，不新增 CSS class）
       timelineClass(item) {
@@ -2135,9 +2138,13 @@
         }
       },
       // 接在既有內容後面而不是覆蓋：使用者常是先打完自己的說明，才想到要指定回哪一關
-      applyResolutionShortcut(text) {
+      // 直接送出：這三句已經帶好分診 agent 要的判斷詞彙，填進框裡再讓人按一次沒有意義。
+      // 若輸入框已有內容就併進去一起送（使用者可能想補充上下文）。
+      async submitResolutionShortcut(text) {
+        if (this.resolving) return;
         const cur = this.resolution.trim();
         this.resolution = cur ? `${cur}\n${text}` : text;
+        await this.resolveBlocker();
       },
       async resolveBlocker() {
         if (!this.resolution.trim()) return;
@@ -2542,12 +2549,16 @@
 <button class="ui-next-primary" @click="csDataSubmit" :disabled="csRetrying||!csAllAnswered">{{ csRetrying?'處理中…':'送出補充資料，重新分析' }}</button>
 </template>
 <template v-else-if="timelineActionMode==='blocker'">
-<p class="ui-next-error-text">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</p>
-<div class="ui-next-shortcut-row"><button v-for="shortcut in blockerShortcuts" :key="shortcut.label" :title="shortcut.text" @click="applyResolutionShortcut(shortcut.text)">{{ shortcut.label }}</button></div>
+<p v-if="!task.blocker_content" class="ui-next-error-text">任務分診失敗或執行中斷</p>
 <textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="resolveBlocker">
 </textarea>
+<div class="ui-next-action-foot">
+<div class="ui-next-inline-actions ui-next-shortcut-row">
+<button v-for="shortcut in blockerShortcuts" :key="shortcut.label" :title="shortcut.text" :disabled="resolving" @click="submitResolutionShortcut(shortcut.text)">{{ shortcut.label }}</button>
+</div>
 <div class="ui-next-inline-actions">
 <button class="ui-next-primary" @click="resolveBlocker" :disabled="resolving||!resolution.trim()">{{ resolving?'處理中…':'從中斷處繼續' }}</button>
+</div>
 </div>
 </template>
 <template v-else>

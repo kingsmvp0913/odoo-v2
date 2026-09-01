@@ -3160,6 +3160,8 @@
 .ui-next-stop .ui-next-icon{width:14px;height:14px}
 /* 系統寫的「已取消／已繼續」記錄：和 AI／自己的訊息區分開，不做成氣泡 */
 .ui-next-conv-list article.system > div:first-child{border:1px dashed var(--border-strong);background:transparent;color:var(--text-muted);font-size:12px}
+.ui-next-conv-list article.system.is-blocker > div:first-child{border-color:var(--danger);color:var(--danger)}
+.ui-next-conv-list article.system.is-blocker small{color:var(--danger)}
 
 /* 專案對話的訊息區原本自己開一條捲軸（.ui-next-thread-messages{overflow:auto}），
    捲軸出現在版面中間而不是視窗右緣。統一改由整頁捲：訊息區不限高、輸入區改用 sticky
@@ -3197,12 +3199,25 @@
 .ui-next-task-action textarea{min-height:56px}
 .ui-next-task-action > p,.ui-next-task-action > .ui-next-field-note{margin:0 0 8px}
 /* 失敗待確認的三個快捷句原本各佔一整行 */
-.ui-next-shortcut-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-.ui-next-shortcut-row button{border:1px solid var(--border);border-radius:99px;padding:5px 11px;background:transparent;color:var(--text-secondary);font:inherit;font-size:12px;cursor:pointer;transition:background-color .125s ease}
-.ui-next-shortcut-row button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+.ui-next-shortcut-row{flex-wrap:wrap;margin:0}
 /* 對話頁不需要頁面底部那段大留白（輸入區已經 sticky 在底） */
-.ui-next-task-detail{padding-bottom:20px}
+.ui-next-task-detail{padding-bottom:10px}
+.ui-next-task-detail:has(.is-tab-conversation){margin-bottom:-18px}
 
 /* 訊息不多時 sticky 不會貼底（它只在內容超出視窗時才生效），輸入區就停在半空中、
    下面一大片空白。讓對話頁的內容區至少撐滿一個畫面高，輸入區自然落到底部。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{margin-top:2px}
+.ui-next-task-detail-grid.is-tab-conversation{min-height:calc((100vh - 204px) / var(--ui-zoom, 1));grid-template-rows:1fr auto}
+.ui-next-task-detail-grid.is-tab-conversation{align-items:stretch}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:end}
+
+/* 動作面板比照 AskMe 的 composer：整塊就是一個輸入區。
+   原本是「面板有框、裡面的 textarea 又有一個框」——雙層框是它最不像的地方。
+   textarea 去邊框去底色、融進面板；面板本身用 composer 那組圓角與邊框。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 12%,var(--surface));box-shadow:none;padding:14px 16px 12px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:color-mix(in srgb,var(--text) 22%,var(--surface))}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea{border:0;border-radius:0;padding:0;margin:0;background:transparent;min-height:44px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea:focus{outline:0}
+/* 標題只是說明現在停在哪一關，不需要跟頁面標題一樣大 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action h2{margin:0 0 8px;color:var(--text-muted);font-size:12px;font-weight:500;letter-spacing:.02em}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-action-foot{margin-top:8px}
