@@ -26,6 +26,31 @@ const PORT = process.env.PORT || 3939;
 function createApp() {
   const app = express();
   app.use(express.json());
+
+  // index.html 的資產版本號原本是寫死的 ?v=20260910：改了 CSS／JS 卻沒動那串數字，
+  // 使用者的瀏覽器就一直吃快取的舊檔——實測對外網址載到的是舊版面，要硬重整才會變，
+  // 而「改了但畫面沒變」最難察覺。改用資產的最新 mtime 當版本號，改完自動失效。
+  const PUBLIC_DIR = path.join(__dirname, '../public');
+  const VERSIONED_ASSETS = [
+    'css/app.css', 'css/ui-next.css', 'css/ui-next-pages.css',
+    'js/app.js', 'js/ui-next/UiNextApp.js', 'js/ui-next/UiNextPages.js',
+  ];
+  const sendIndex = (req, res) => {
+    try {
+      let newest = 0;
+      for (const file of VERSIONED_ASSETS) {
+        try { newest = Math.max(newest, fs.statSync(path.join(PUBLIC_DIR, file)).mtimeMs); } catch { /* 檔案不存在就跳過 */ }
+      }
+      const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8')
+        .replace(/\?v=\d+/g, `?v=${Math.round(newest)}`);
+      res.type('html').send(html);
+    } catch {
+      // 讀檔或取代失敗時退回原本行為，寧可拿到舊快取也不要整站白畫面
+      res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+    }
+  };
+  app.get(['/', '/index.html'], sendIndex);
+
   app.use(express.static(path.join(__dirname, '../public')));
 
   // 未核准閘門：擋「已登入但 approved=false」的自助註冊帳號碰工作台 API。
@@ -132,7 +157,7 @@ function createApp() {
   });
 
   app.use('/api/', (req, res) => res.status(404).json({ error: 'Not found' }));
-  app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+  app.get('*', sendIndex);
   return app;
 }
 

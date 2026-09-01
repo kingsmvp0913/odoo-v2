@@ -146,3 +146,13 @@ html[data-theme="dark"] [data-ui="next"]{--sidebar-bg:#18181B;--sidebar-text:#C4
    清單本身沒有捲動。改成彈窗限高、清單自己捲。位置維持畫面正中。 */
 .ui-next-command{display:flex;flex-direction:column;max-height:calc((100vh - 240px) / var(--ui-zoom, 1))}
 .ui-next-command [role="listbox"]{min-height:0;flex:1;overflow:auto}
+
+/* 全站捲軸比照側欄：極細、軌道透明、hover 才明顯。掛在 [data-ui="next"] 上，
+   scrollbar-width/color 會往下繼承到所有捲動容器；::-webkit-* 給不吃標準屬性的舊版 Chromium。
+   顏色走 --text 而不是寫死，深淺色各自成立。 */
+[data-ui="next"],[data-ui="next"] *{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--text) 22%,transparent) transparent}
+[data-ui="next"] ::-webkit-scrollbar{width:6px;height:6px}
+[data-ui="next"] ::-webkit-scrollbar-track{background:transparent}
+[data-ui="next"] ::-webkit-scrollbar-thumb{border-radius:99px;background:color-mix(in srgb,var(--text) 22%,transparent)}
+[data-ui="next"] ::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--text) 38%,transparent)}
+[data-ui="next"] ::-webkit-scrollbar-corner{background:transparent}

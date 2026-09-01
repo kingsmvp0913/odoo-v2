@@ -180,3 +180,18 @@ describe('v-html 綁定白名單', () => {
     expect(VETTED.has(expr.trim())).toBe(true);
   });
 });
+
+// 單一換行要斷行：這裡的內容多半是人在輸入框打的字與 AI 回覆，按了 Enter 就是要換行。
+// CommonMark 標準不這樣解（要行尾兩空格或空行），整段會黏成一行——實測任務對話全糊在一起。
+describe('breaks：單一換行要變成 <br>', () => {
+  test('人打的單一換行會斷行', () => {
+    const out = renderMarkdown('第一行\n第二行');
+    expect(out).toMatch(/<br\s*\/?>/);
+  });
+
+  test('清單與粗體等既有語法不受影響', () => {
+    const out = renderMarkdown('- 項目A\n- 項目B\n\n**粗體**');
+    expect(out).toContain('<li>');
+    expect(out).toContain('<strong>');
+  });
+});

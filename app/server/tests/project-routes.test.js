@@ -1233,3 +1233,28 @@ describe('repo 目錄命名', () => {
     expect(path.basename(r.body.local_path)).toBe('main');
   });
 });
+
+// 備註是可以「清空」的欄位。原本 description || null 把空字串變成 null，
+// 而 SQL 是 COALESCE($4, description)——於是清空等於不動，填過一次就再也拿不掉。
+describe('PUT /api/projects/:id 的 description 清空語意', () => {
+  test('送空字串 → 真的清成空的', async () => {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version, description) VALUES ('清空測試','17.0','原本的備註') RETURNING id");
+    const res = await request(app).put(`/api/projects/${p.id}`)
+      .set('Authorization', `Bearer ${token}`).send({ name: '清空測試', description: '' });
+    expect(res.status).toBe(200);
+    const { rows: [row] } = await dbModule.query('SELECT description FROM projects WHERE id = $1', [p.id]);
+    expect(row.description).toBe('');
+  });
+
+  test('完全不送 description → 舊值保留（不是被清掉）', async () => {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version, description) VALUES ('保留測試','17.0','要保留的備註') RETURNING id");
+    const res = await request(app).put(`/api/projects/${p.id}`)
+      .set('Authorization', `Bearer ${token}`).send({ name: '保留測試改名' });
+    expect(res.status).toBe(200);
+    const { rows: [row] } = await dbModule.query('SELECT name, description FROM projects WHERE id = $1', [p.id]);
+    expect(row.name).toBe('保留測試改名');
+    expect(row.description).toBe('要保留的備註');
+  });
+});

@@ -443,7 +443,12 @@ function registerRoutes(app) {
            description = COALESCE($4, description),
            updated_at = NOW()
          WHERE id = $1 RETURNING ${PROJECT_PUBLIC_COLS}`,
-        [req.params.id, name || null, odoo_version || null, description || null]
+        [
+          req.params.id,
+          name || null,
+          odoo_version || null,
+          Object.prototype.hasOwnProperty.call(req.body, 'description') ? (description ?? '') : null,
+        ]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(rows[0]);

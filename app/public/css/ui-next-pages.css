@@ -3070,3 +3070,63 @@
 .ui-next-project-settings label input,.ui-next-project-settings label textarea{box-sizing:border-box;width:100%;border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
 .ui-next-project-settings label textarea{min-height:76px;resize:vertical}
 .ui-next-project-settings label input:focus,.ui-next-project-settings label textarea:focus{outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:1px}
+
+/* 執行歷程：原本卡在 240px，下面一大片空白卻要在小框裡捲。 */
+.ui-next-events > div{max-height:min(62vh,720px)}
+/* 展開後摘要和內容是同一段文字（上面截斷、下面完整），留著只是重複一次。
+   類型與時間保留，那顆按鈕還要負責收合。 */
+.ui-next-event-summary.is-open > button b{display:none}
+.ui-next-event-summary.is-open > button{grid-template-columns:auto minmax(0,1fr) auto;background:var(--bg)}
+
+/* 對話訊息裡的段落間距被清成 0，於是原文空行分出來的段落全部黏在一起
+   （實測 4 個 <p> 之間距離是 0px），看起來就像「空行不見了」。 */
+.ui-next-conv-list article > div:first-child p{margin:0 0 11px}
+.ui-next-conv-list article > div:first-child p:last-child{margin-bottom:0}
+.ui-next-conv-list article > div:first-child ul,.ui-next-conv-list article > div:first-child ol{margin:0 0 11px;padding-left:22px}
+.ui-next-conv-list article > div:first-child ul:last-child,.ui-next-conv-list article > div:first-child ol:last-child{margin-bottom:0}
+.ui-next-conv-list article > div:first-child li{margin:2px 0}
+.ui-next-conv-list article > div:first-child h1,.ui-next-conv-list article > div:first-child h2,.ui-next-conv-list article > div:first-child h3{margin:14px 0 6px;font-size:14px}
+.ui-next-conv-list article > div:first-child h1:first-child,.ui-next-conv-list article > div:first-child h2:first-child,.ui-next-conv-list article > div:first-child h3:first-child{margin-top:0}
+
+/* 對話的輸入區比照問答首頁：釘在畫面底部，捲對話紀錄時它一直在，不用捲到最下面才找得到。
+   對話很長時原本要一路捲到底才看得到輸入框。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{position:sticky;bottom:0;z-index:2;padding-bottom:8px;background:linear-gradient(180deg,transparent,var(--bg) 18%)}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border:1px solid var(--border-strong);box-shadow:var(--shadow-lg)}
+/* 對焦時邊框跟著亮，和問答首頁的 composer 一致 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:var(--text-muted)}
+/* 留言的附加檔案：同一組放置區樣式，但這裡是次要動作，做成一條窄的 */
+.ui-next-upload-inline .ui-next-upload-drop{min-height:0;justify-content:flex-start;padding:7px 10px;border-radius:9px;font-size:12px}
+.ui-next-upload-inline .ui-next-upload-drop b{font-size:12px;font-weight:400}
+.ui-next-task-action .ui-next-upload-list{margin-top:6px}
+.ui-next-task-action .ui-next-file-preview{display:flex;align-items:center;gap:6px;margin:0 0 4px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;color:var(--text-secondary);font-size:12px}
+.ui-next-task-action .ui-next-file-preview em{flex:1;min-width:0;overflow:hidden;font-style:normal;white-space:nowrap;text-overflow:ellipsis}
+.ui-next-task-action .ui-next-file-preview .ui-next-icon{flex:none;width:13px;height:13px;color:var(--text-muted)}
+
+/* 動作面板原本只有 893 寬（側欄 1031）又佔掉 48% 畫面高。拉齊寬度、收斂內距，
+   工具收成底部一排（比照問答的 composer-foot），不再每個各佔一整行。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-width:none;margin:0;padding:14px 16px}
+.ui-next-task-action textarea{min-height:74px}
+.ui-next-action-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
+.ui-next-action-tools{display:flex;align-items:center;gap:6px;min-width:0}
+.ui-next-action-tools small{color:var(--text-muted);font-size:12px;white-space:nowrap}
+.ui-next-action-tools .ui-next-icon-button{display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--text-secondary);cursor:pointer;transition:background-color .125s ease,color .125s ease}
+.ui-next-action-tools .ui-next-icon-button:hover{background:var(--bg);color:var(--text)}
+.ui-next-action-tools .ui-next-icon-button.active{border-color:var(--primary);color:var(--primary)}
+.ui-next-action-tools .ui-next-icon-button:disabled{opacity:.5;cursor:not-allowed}
+.ui-next-action-tools .ui-next-icon-button input[type=file]{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%)}
+.ui-next-action-foot .ui-next-inline-actions{margin:0;flex:none}
+
+/* 對話清單自己捲：既有程式碼（onConvScroll 捲到頂載入更早、scrollConvToBottom 釘底）
+   本來就假設這個容器會捲，但 CSS 是 overflow:visible + max-height:none——整頁在捲，
+   那些邏輯一次都沒被觸發過。輸入區已 sticky 在底部，這裡自己捲才對得起來。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conversation{display:flex;flex-direction:column;max-height:calc((100vh - 330px) / var(--ui-zoom, 1))}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list{min-height:0;flex:1;overflow:auto;padding:16px 0}
+
+/* 任務編號用等寬字：它是要拿去比對／搜尋的識別碼，比例字型下容易看錯字元。 */
+.ui-next-task-badges .is-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+
+/* 任務頁首留白收斂：標題到標籤 35px、頁首下方再 24px，兩行標題時整個頁首吃掉 220px，
+   對話還沒開始就先用掉四分之一畫面。 */
+.ui-next-task-detail .ui-next-detail-head{margin-bottom:10px}
+.ui-next-task-detail .ui-next-detail-head h1{margin:0 0 2px;line-height:1.25}
+.ui-next-task-detail .ui-next-task-badges{margin-bottom:10px}

@@ -1141,8 +1141,6 @@
         if (!name || this.savingBasics) return;
         this.savingBasics = true;
         try {
-          // description 送空字串時後端的 COALESCE 會保留舊值，所以清空要送空白字元才存得掉——
-          // 這裡照實送，清空的語意由後端沿用既有行為，不在前端另做特例。
           const updated = await Api.put(`projects/${this.$route.params.id}`, { name, description: this.editDescription });
           this.project = { ...this.project, name: updated.name, description: updated.description };
           showToast("已儲存", "success");
@@ -2232,7 +2230,6 @@
 <header class="ui-next-page-head ui-next-detail-head">
 <div>
 <h1>{{ task.title || task.task_id }}</h1>
-<p>{{ task.task_id }} · 最後更新 {{ formatTime(task.updated_at) }}</p>
 </div>
 <div class="ui-next-detail-actions">
 <button v-if="testMode" @click="stepPipeline" :disabled="stepping">{{ stepping?'執行中…':'推進 Pipeline' }}</button>
@@ -2244,15 +2241,9 @@
 <button class="ui-next-back" @click="back"><ui-next-icon name="arrow-left"/> 返回</button>
 </div>
 </header>
-<div class="ui-next-task-tabs" role="tablist" aria-label="任務詳情">
-<button id="ui-next-task-tab-requirements" role="tab" :aria-selected="taskTab==='requirements'" :tabindex="taskTab==='requirements'?0:-1" @click="setTaskTab('requirements')">需求內容</button>
-<button id="ui-next-task-tab-conversation" role="tab" :aria-selected="taskTab==='conversation'" :tabindex="taskTab==='conversation'?0:-1" @click="setTaskTab('conversation')">對話</button>
-<button id="ui-next-task-tab-history" role="tab" :aria-selected="taskTab==='history'" :tabindex="taskTab==='history'?0:-1" @click="setTaskTab('history')">執行歷程</button>
-</div>
-<div class="ui-next-task-detail-grid" :class="'is-tab-'+taskTab">
-<div class="ui-next-task-content-column">
-<section v-show="taskTab==='requirements'" tabindex="-1" class="ui-next-panel ui-next-task-summary" role="tabpanel" aria-labelledby="ui-next-task-tab-requirements">
 <div class="ui-next-task-badges">
+<span class="is-id">{{ task.task_id }}</span>
+<span>最後更新 {{ formatTime(task.updated_at) }}</span>
 <span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
 <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
@@ -2263,6 +2254,15 @@
 <span v-if="task.module">{{ task.module }}</span>
 <span v-if="task.created_at">建立 {{ formatTime(task.created_at) }}</span>
 </div>
+<div class="ui-next-task-tabs" role="tablist" aria-label="任務詳情">
+<button id="ui-next-task-tab-requirements" role="tab" :aria-selected="taskTab==='requirements'" :tabindex="taskTab==='requirements'?0:-1" @click="setTaskTab('requirements')">需求內容</button>
+<button id="ui-next-task-tab-conversation" role="tab" :aria-selected="taskTab==='conversation'" :tabindex="taskTab==='conversation'?0:-1" @click="setTaskTab('conversation')">對話</button>
+<button id="ui-next-task-tab-history" role="tab" :aria-selected="taskTab==='history'" :tabindex="taskTab==='history'?0:-1" @click="setTaskTab('history')">執行歷程</button>
+</div>
+<div class="ui-next-task-detail-grid" :class="'is-tab-'+taskTab">
+<div class="ui-next-task-content-column">
+<section v-show="taskTab==='requirements'" tabindex="-1" class="ui-next-panel ui-next-task-summary" role="tabpanel" aria-labelledby="ui-next-task-tab-requirements">
+
 <div class="ui-next-card-title">
 <button v-if="canEditContent&&!editingContent" @click="startEditContent">編輯</button>
 </div>
@@ -2310,7 +2310,7 @@
 <div ref="eventsBox" @scroll="onEventsScroll">
 <button v-if="eventsLoading" type="button" disabled>載入較早紀錄中…</button>
 <p v-if="events.length&&!eventsHasMore">— 已到最前 —</p>
-<article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event)]">
+<article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event),{'is-open':!!expandedEvents[event.id||event.content]}]">
 <button type="button" :aria-expanded="!!expandedEvents[event.id||event.content]" @click="toggleEvent(event)"><span>{{ eventKind(event)==='error' ? '錯誤' : eventKind(event)==='stage' ? '階段' : '輸出' }}</span><b>{{ eventSummary(event) }}</b><time v-if="event.created_at">{{ formatTime(event.created_at) }}</time></button>
 <pre v-if="expandedEvents[event.id||event.content]" v-html="ansiToHtml(event.content)"></pre>
 </article>
@@ -2321,7 +2321,6 @@
 </div>
 <aside v-show="taskTab==='conversation'&&timelineActionMode!=='archive'" class="ui-next-task-side">
 <section class="ui-next-panel ui-next-task-action">
-<p class="ui-next-eyebrow">下一步</p>
 <h2>{{ actionModeLabel }}</h2>
 <template v-if="timelineActionMode==='answer'">
 <p v-if="clarIntro">{{ clarIntro }}</p>
@@ -2356,7 +2355,7 @@
 </textarea>
 </div>
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
-<input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected">
+<label class="ui-next-upload ui-next-upload-inline"><input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
 <p v-if="!clarAllAnswered" class="ui-next-error-text">還有必答的問題沒回答</p>
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>
@@ -2365,7 +2364,7 @@
 <p class="ui-next-field-note">看不懂、要補充、或方向要改都在這裡講。問問題不會讓任務往下跑；談出結論時 AI 會順手把「規格書 QA」那頁的題目改成最新的。</p>
 <textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAsk">
 </textarea>
-<input ref="askFileInput" type="file" multiple @change="onAskFilesSelected">
+<label class="ui-next-upload ui-next-upload-inline"><input ref="askFileInput" type="file" multiple @change="onAskFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
 <button class="ui-next-primary" @click="submitAsk" :disabled="clarBusy||askSubmitting||!askText.trim()">{{ askSubmitting?'送出中…':'送出提問' }}</button>
 </template>
 </template>
@@ -2379,7 +2378,7 @@
 </textarea>
 <!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
-<input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected">
+<label class="ui-next-upload ui-next-upload-inline"><input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||!newMessageText.trim()">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>
 </template>
@@ -2422,8 +2421,6 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='review'">
-<p>已通過 QA、測試區部署與 E2E 測試。確認後這張任務即完成驗收，會納入待上正式清單並更新文件；要真正在正式區生效，再到專案頁按「上正式」。</p>
-<button @click="toggleDiff" :disabled="diffLoading">{{ diffLoading?'讀取中…':(diffOpen?'收合程式變更':'查看程式變更') }}</button>
 <p v-if="diffError" class="ui-next-error-text">{{ diffError }}</p>
 <!-- 逐行著色而非把所有 repo 併成一行：join(' | ') 的版本讀不出哪幾行是加、哪幾行是刪，
      而這一關要人決定的就是「這些改動能不能上」。 -->
@@ -2438,12 +2435,16 @@
 </div>
 <textarea v-model="rejectReason" placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="reject">
 </textarea>
-<p class="ui-next-field-note">畫面類問題請附截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面</p>
-<input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected">
-<p v-if="rejectFiles.length" class="ui-next-field-note">已選擇：{{ rejectFiles.map(f=>f.name).join('、') }}</p>
+<div class="ui-next-action-foot">
+<div class="ui-next-action-tools">
+<label class="ui-next-icon-button" :title="'附加截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面'"><ui-next-icon name="paperclip"/><input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected"></label>
+<button type="button" class="ui-next-icon-button" :class="{active:diffOpen}" :disabled="diffLoading" :aria-label="diffOpen?'收合程式變更':'查看程式變更'" :title="diffOpen?'收合程式變更':'查看程式變更'" @click="toggleDiff"><ui-next-icon name="flow"/></button>
+<small v-if="rejectFiles.length">已選 {{ rejectFiles.length }} 個附件</small>
+</div>
 <div class="ui-next-inline-actions">
 <button @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
 <button class="ui-next-primary" @click="approve" :disabled="approving">{{ approving?'處理中…':'審核通過' }}</button>
+</div>
 </div>
 </template>
 <template v-else-if="timelineActionMode==='conflict'">
@@ -2521,8 +2522,13 @@
 </textarea>
 <!-- ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
      檔名會留在欄位裡看起來像又要再送一次。 -->
+<label class="ui-next-upload ui-next-upload-inline">
 <input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected">
-<p v-if="newMessageFiles.length" class="ui-next-field-note">已選擇：{{ newMessageFiles.map(f=>f.name).join('、') }}</p>
+<span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加檔案</b></span>
+</label>
+<div v-if="newMessageFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in newMessageFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><ui-next-icon name="paperclip"/><em>{{ file.name }}</em></span>
+</div>
 <label v-if="showWritebackOption">
 <input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
 <!-- disabled 只看文字，與 sendTaskMessage 第一行那個 "沒文字就 return" 的早退對齊。

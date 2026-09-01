@@ -31,6 +31,9 @@
   const configure = (marked) => {
     if (configured) return;
     marked.use({
+      // 單一換行就斷行。CommonMark 標準要「行尾兩個空格」或空行才斷，但這裡的內容多半是
+      // 人在輸入框裡打的字與 AI 回覆——他們按了 Enter 就是要換行，照標準解析會整段黏成一行。
+      breaks: true,
       // 原始 HTML 一律當文字：轉義而非丟棄——wiki 內文常直接寫標籤名，整段吃掉等於弄壞頁面。
       renderer: { html: (html) => escapeHtml(html) },
       walkTokens: (token) => {
