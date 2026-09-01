@@ -132,7 +132,9 @@ test('POST messages → calls chatReply and returns reply', async () => {
     .set(auth()).send({ content: '你好' });
   expect(res.status).toBe(200);
   expect(res.body.reply).toBe('AI 的回覆');
-  expect(mockChatReply).toHaveBeenCalledWith(String(projectId), String(chat.id), '你好', userId, []);
+  // 第 6 個參數是中止句柄：沒有它「停止回覆」就砍不到正在跑的 agent 行程，
+  // 停止鈕只會關掉前端動畫、token 照燒。
+  expect(mockChatReply).toHaveBeenCalledWith(String(projectId), String(chat.id), '你好', userId, [], expect.any(AbortSignal));
 });
 
 test('POST messages → emits chat:reply socket event to owner', async () => {
@@ -354,4 +356,59 @@ test('unread：AI 訊息未讀計入，read 後歸零', async () => {
 
   res = await request(app).get(`/api/projects/${projectId}/chats`).set(auth());
   expect(Number(res.body.find(c => c.id === chat.id).unread)).toBe(0);
+});
+
+// 「停止回覆」的價值全在於它真的砍得到跑在 agent 那頭的行程。只清 reply_pending 而不 abort，
+// 畫面會回到可輸入狀態、被取消的那輪卻繼續跑到底照燒 token，而且沒有任何徵狀。
+test('POST stop → aborts the in-flight reply signal', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'可取消',$2) RETURNING id",
+    [projectId, userId]
+  );
+  let captured = null;
+  mockChatReply.mockImplementationOnce((...args) => {
+    captured = args[5];
+    return new Promise((resolve) => captured.addEventListener('abort', () => resolve('已中止')));
+  });
+
+  // ⚠ 一定要接 .then() 才會真的發出去——supertest 的 Test 是 lazy 的，只 build 不 await
+  // 會讓下面等 captured 的迴圈永遠轉不出來（整支測試 timeout，而且錯誤完全不指向這裡）。
+  const inFlight = request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
+    .set(auth()).send({ content: '會被取消的提問' }).then((r) => r);
+  for (let i = 0; i < 200 && !captured; i++) await new Promise((r) => setTimeout(r, 5));
+  expect(captured).toBeTruthy();
+
+  const stop = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/stop`).set(auth());
+  expect(stop.status).toBe(200);
+  expect(stop.body.stopped).toBe(true);
+  expect(captured.aborted).toBe(true);
+  await inFlight;
+});
+
+// 沒有正在跑的回覆時不能假裝成功——前端據此判斷要不要把畫面切回可輸入。
+test('POST stop → stopped:false when nothing is running', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'閒置',$2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/stop`).set(auth());
+  expect(res.status).toBe(200);
+  expect(res.body.stopped).toBe(false);
+});
+
+// 別人的對話不得停：chats 是 per-user 資料，端點一律用 getOwnedChat 限縮。
+test('POST stop → 404 for a chat owned by someone else', async () => {
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('chatstopper', 'x', 'Other') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'別人的',$2) RETURNING id",
+    [projectId, other.id]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/stop`).set(auth());
+  expect(res.status).toBe(404);
 });

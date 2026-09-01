@@ -846,6 +846,7 @@
         sending: false, loadingMsgs: false, draftingTask: false, creatingTask: false,
         showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] }, taskError: "", taskModalTrigger: null,
         replyPending: false, pendingFiles: [], pendingPreviews: [], attachUrls: {},
+        pendingHint: false, pollTicks: 0, stopping: false,
         projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, historyQuery: "", historyMenuId: null, chatError: "", chatsError: "", creatingChat: false, requestId: 0, replyTimer: null };
     },
     computed: {
@@ -897,7 +898,12 @@
           this.chats = chats || [];
           const chatId = this.$route.params.chatId;
           this.activeChat = this.chats.find((chat) => String(chat.id) === String(chatId)) || null;
+          // ?pending=1 是「新對話」把人送過來時帶的旗標：那邊的訊息 POST 是不等待就換頁的，
+          // 這一刻伺服器可能還沒把 reply_pending 寫進去，只信 DB 會有幾秒空窗顯示成「沒事發生」。
+          this.pendingHint = this.$route.query.pending === "1";
+          this.pollTicks = 0;
           if (this.activeChat) await this.loadMessages(requestId);
+          if (this.pendingHint) this.startReplyPolling();
         } catch (error) { if (requestId === this.requestId) this.chatsError = error.message || "無法載入對話"; }
         finally { if (requestId === this.requestId) this.loadingMsgs = false; }
       },
@@ -910,7 +916,7 @@
           const messages = await Api.get(`projects/${this.$route.params.id}/chats/${chatId}/messages`);
           if (requestId !== this.requestId || !this.activeChat || this.activeChat.id !== chatId) return;
           this.revokeMessageUrls();   // 換對話／重載前先收掉舊圖，否則 objectURL 一路累積到離開頁面
-          this.messages = messages || []; this.replyPending = !!this.activeChat.reply_pending;
+          this.messages = messages || []; this.replyPending = !!this.activeChat.reply_pending || this.pendingHint;
           if (this.replyPending) this.startReplyPolling(); else this.stopReplyPolling();
           this.$nextTick(() => this.scrollToBottom());
           this.loadAttachmentThumbs(requestId);
@@ -920,7 +926,34 @@
       },
       startReplyPolling() {
         if (this.replyTimer || !this.activeChat) return;
-        this.replyTimer = setInterval(() => this.loadMessages(), 3000);
+        this.replyTimer = setInterval(() => this.pollReply(), 3000);
+      },
+      // ⚠ 每 tick 必須重讀 chat 列，不能只 loadMessages：loadMessages 是拿
+      // `this.activeChat.reply_pending` 判斷要不要繼續輪詢，而 activeChat 是進頁面時 loadChats
+      // 抓的那份快照，永遠不會變。只 loadMessages 的話「回覆中」不是永遠停著就是第一 tick 就自己關掉。
+      async pollReply() {
+        if (!this.activeChat) return;
+        const chatId = this.activeChat.id;
+        const chats = await Api.get(`projects/${this.$route.params.id}/chats`).catch(() => null);
+        if (!chats || !this.activeChat || this.activeChat.id !== chatId) return;
+        const fresh = chats.find((chat) => String(chat.id) === String(chatId));
+        if (fresh) this.activeChat.reply_pending = fresh.reply_pending;
+        // 兩 tick（約 6 秒）後一律拿掉樂觀旗標，改由 DB 說了算。不設期限的話「AI 比輪詢還快回完」
+        // 那種情形會讓畫面永遠停在回覆中。
+        if (++this.pollTicks >= 2) this.pendingHint = false;
+        await this.loadMessages();
+      },
+      // 取消這一輪回覆。伺服器端會 abort 正在跑的 agent 行程並在對話裡補一則「已取消」，
+      // 所以紀錄看得到，不是只把前端的動畫關掉。
+      async stopReply() {
+        if (!this.activeChat || this.stopping) return;
+        this.stopping = true;
+        try {
+          await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/stop`, {});
+          this.pendingHint = false;
+          await this.pollReply();
+        } catch (error) { showToast(error.message || "無法取消回覆", "error"); }
+        finally { this.stopping = false; }
       },
       stopReplyPolling() { if (this.replyTimer) clearInterval(this.replyTimer); this.replyTimer = null; },
       async createChat() {
@@ -986,16 +1019,31 @@
         this.messages.forEach((message) => (message.pending_previews || []).forEach((url) => URL.revokeObjectURL(url)));
       },
       handleEnter(event) { if (!event.isComposing && !event.shiftKey) { event.preventDefault(); this.send(); } },
+      // ⚠ 訊息端點會 await 整輪 AI 回覆（chat-agent，動輒數分鐘）。原本 await 它才更新畫面，
+      // 等於送出後好幾分鐘畫面完全沒動靜、自己那則也看不到。改成不等待：先樂觀畫上自己那則、
+      // 立刻進入「回覆中」並開始輪詢，回覆由輪詢帶回來（伺服器在 handler 開頭就寫好 reply_pending）。
       async send() {
-        if (this.sending || !this.activeChat || (!this.newInput.trim() && !this.pendingFiles.length)) return;
-        const chatId = this.activeChat.id, content = this.newInput.trim(), files = this.pendingFiles; this.newInput = ""; this.pendingFiles = []; this.pendingPreviews = []; this.sending = true;
-        try { let result; if (files.length) { const form = new FormData(); form.append("content", content); files.forEach((file) => form.append("files", file)); result = await Api.postForm(`projects/${this.$route.params.id}/chats/${chatId}/messages`, form); } else result = await Api.post(`projects/${this.$route.params.id}/chats/${chatId}/messages`, { content });
-          if (this.activeChat && this.activeChat.id === chatId) { this.messages.push({ id: Date.now(), role: "user", content, created_at: new Date().toISOString() }); if (result.reply) this.messages.push({ id: Date.now() + 1, role: "ai", content: result.reply, created_at: new Date().toISOString() }); else { this.replyPending = true; this.startReplyPolling(); } this.$nextTick(() => this.scrollToBottom()); }
-        } catch (error) { this.newInput = content; showToast(error.message || "訊息送出失敗", "error"); } finally { this.sending = false; }
+        if (this.replyPending || !this.activeChat || (!this.newInput.trim() && !this.pendingFiles.length)) return;
+        const chatId = this.activeChat.id, content = this.newInput.trim(), files = this.pendingFiles;
+        this.newInput = ""; this.pendingFiles = []; this.pendingPreviews = [];
+        this.messages.push({ id: Date.now(), role: "user", content, created_at: new Date().toISOString() });
+        this.pendingHint = true; this.pollTicks = 0; this.replyPending = true; this.startReplyPolling();
+        this.$nextTick(() => this.scrollToBottom());
+        let request;
+        if (files.length) { const form = new FormData(); form.append("content", content); files.forEach((file) => form.append("files", file)); request = Api.postForm(`projects/${this.$route.params.id}/chats/${chatId}/messages`, form); }
+        else request = Api.post(`projects/${this.$route.params.id}/chats/${chatId}/messages`, { content });
+        request.catch((error) => {
+          if (!this.activeChat || this.activeChat.id !== chatId) return;
+          this.newInput = content; this.pendingHint = false; this.replyPending = false; this.stopReplyPolling();
+          showToast(error.message || "訊息送出失敗", "error");
+        });
       },
       async toTask(event) { if (!this.activeChat || this.draftingTask) return; this.draftingTask = true; this.taskError = ""; this.taskModalTrigger = event?.currentTarget || null; try { const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {}); this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) }; this.showTaskModal = true; this.$nextTick(() => this.$refs.chatTaskTitle?.focus()); } catch (error) { showToast(error.message || "無法建立草稿", "error"); } finally { this.draftingTask = false; } },
       async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) { this.taskError = "請填寫標題與內容。"; return; } this.creatingTask = true; this.taskError = ""; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.closeTaskModal(); showToast("已建立任務", "success"); } catch (error) { this.taskError = error.message || "建立任務失敗，請重試。"; } finally { this.creatingTask = false; } },
-      scrollToBottom() { const element = this.$refs.messages; if (element) element.scrollTop = element.scrollHeight; },
+      // 捲軸統一到最外面（見 ui-next-pages.css 的 .ui-next-thread-messages{overflow:visible}）之後，
+      // 真正在捲的是 .ui-next-main；沿用 $refs.messages 會捲一個 overflow:visible 的容器＝什麼都沒發生，
+      // 症狀是「進對話要自己往下滾才看得到最新訊息」。
+      scrollToBottom() { const element = document.querySelector(".ui-next-main") || this.$refs.messages; if (element) element.scrollTop = element.scrollHeight; },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
       renderMd(value) { return window.renderNextMarkdown(value); },
       handleMessageClick(event) { return window.copyNextCode(event); },
@@ -1060,7 +1108,8 @@
 <button type="button" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
 <span class="ui-next-composer-hint">Enter 送出 · Shift + Enter 換行 · 可直接貼上截圖</span>
 </div>
-<button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)" :aria-label="sending?'送出中':'送出'"><span v-if="sending">送出中</span><ui-next-icon v-else name="send"/></button>
+<button v-if="sending||replyPending" type="button" class="ui-next-thread-send" :disabled="stopping" aria-label="停止回覆" title="停止回覆" @click="stopReply"><ui-next-icon name="square"/></button>
+<button v-else class="ui-next-thread-send" :disabled="!newInput.trim()&&!pendingFiles.length" aria-label="送出"><ui-next-icon name="send"/></button>
 </div>
 </form>
 </template>

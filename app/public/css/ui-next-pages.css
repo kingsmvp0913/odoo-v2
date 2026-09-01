@@ -3221,3 +3221,27 @@
 /* 標題只是說明現在停在哪一關，不需要跟頁面標題一樣大 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action h2{margin:0 0 8px;color:var(--text-muted);font-size:12px;font-weight:500;letter-spacing:.02em}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-action-foot{margin-top:8px}
+
+/* 對話框的邊界要看得見。原本 12%／22% 是照 AskMe 深色底取樣的值，但我們的 --surface 與
+   --bg 幾乎同色（#1B1B1E vs #232326），同一個百分比在這裡等於沒有邊——尤其下緣，
+   下方沒有任何內容可對比，整條線消失。改用固定不透明度的 --text 疊色拉開對比。 */
+.ui-next-composer,.ui-next-thread-composer{border-color:color-mix(in srgb,var(--text) 22%,var(--surface))}
+.ui-next-composer:focus-within,.ui-next-thread-composer:focus-within{border-color:color-mix(in srgb,var(--text) 36%,var(--surface))}
+
+/* 專案對話：最後一則訊息與輸入框之間原本疊了三層空白（訊息區 padding-bottom 42px、
+   最後一則的 margin-bottom 29px、輸入框上方漸層 22px），加起來快 100px。 */
+.ui-next-thread-messages{padding-bottom:10px}
+.ui-next-thread-messages > article:last-of-type{margin-bottom:6px}
+.ui-next-thread-composer{margin-bottom:max(10px,env(safe-area-inset-bottom))}
+.ui-next-thread-composer::before{top:-14px;bottom:-24px}
+
+/* ⚠ app.css 第一行的 `*{margin:0;padding:0}` 把 ol/ul 的縮排也歸零了。任務對話那邊補過
+   （見 .ui-next-conv-list article > div:first-child ul,ol），專案對話的氣泡沒有——
+   數字／項目符號畫在內容框外面被截掉，第二行也不會對齊，看起來就是整段跑版。 */
+.ui-next-message ul,.ui-next-message ol{margin:0 0 11px;padding-left:22px}
+.ui-next-message ul:last-child,.ui-next-message ol:last-child{margin-bottom:0}
+.ui-next-message li{margin-bottom:3px}
+.ui-next-message li > ul,.ui-next-message li > ol{margin:3px 0 0}
+/* .ui-next-main 有 32px 的底部 padding，對話頁的輸入框釘在底部時會被它墊高一截。
+   用負 margin 把這一頁的內容盒縮回去（選不到父層，只能從子層拉）。 */
+.ui-next-chat-page{margin-bottom:-24px}

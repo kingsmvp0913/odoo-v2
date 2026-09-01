@@ -43,6 +43,7 @@
       <path v-else-if="name==='download'" d="M12 3v12m0 0 4.2-4.2M12 15l-4.2-4.2M4 19h16"/>
       <path v-else-if="name==='wrench'" d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/>
       <path v-else-if="name==='enter'" d="m9 10-4 4 4 4M5 14h9a4 4 0 0 0 4-4V6"/>
+      <rect v-else-if="name==='square'" x="7.5" y="7.5" width="9" height="9" rx="1.6" fill="currentColor" stroke="none"/>
     </svg>`,
   });
   window.UiNextIcon = UiNextIcon;
@@ -65,6 +66,7 @@
         userName: "使用者",
         sending: false,
         loading: true,
+        launching: false,
       };
     },
     async created() {
@@ -182,36 +184,65 @@
             : await Api.post(`projects/${this.projectId}/chats`, { title: chatTitle(this.prompt) });
           this.createdChatId = String(chat.id);
           const content = this.prompt.trim();
-          if (this.files.length) {
-            const form = new FormData();
-            form.append("content", content);
-            this.files.forEach((file) => form.append("files", file));
-            await Api.postForm(
-              `projects/${this.projectId}/chats/${chat.id}/messages`,
-              form,
-            );
-          } else {
-            await Api.post(
-              `projects/${this.projectId}/chats/${chat.id}/messages`,
-              { content },
-            );
-          }
-          this.$router.push(`/projects/${this.projectId}/chat/${chat.id}`);
+          // ⚠ 訊息端點會 await 整輪 AI 回覆（chat-agent 的 chatReply，動輒數分鐘）。等它回來才換頁
+          // ＝使用者盯著這一頁的「處理中」卡好幾分鐘，然後畫面毫無預警整頁抽換。改成送出即不等待：
+          // 伺服器在 handler 開頭就把 reply_pending 設起來，接手的對話頁靠 ?pending=1 立刻進入
+          // 「回覆中」並開始輪詢。失敗只能事後 toast（那時人已經在對話頁了）。
+          const request = this.files.length
+            ? (() => {
+                const form = new FormData();
+                form.append("content", content);
+                this.files.forEach((file) => form.append("files", file));
+                return Api.postForm(`projects/${this.projectId}/chats/${chat.id}/messages`, form);
+              })()
+            : Api.post(`projects/${this.projectId}/chats/${chat.id}/messages`, { content });
+          request.catch((e) => showToast(e.message || "訊息送出失敗", "error", 0));
+          await this.slideToChat();
+          this.$router.replace(`/projects/${this.projectId}/chat/${chat.id}?pending=1`);
           this.createdChatId = "";
         } catch (e) {
+          this.launching = false;
           this.sendError = e.message || "無法送出訊息";
           showToast(this.sendError, "error", 0);
         } finally {
           this.sending = false;
         }
       },
+      // 把輸入框從畫面中央滑到對話頁輸入框所在的底部，滑完才換路由——換過去之後同一個位置
+      // 就是對話頁的輸入框，看起來是同一個框留在原地、上面長出對話，而不是「跳頁」。
+      // 只淡出上方文案、不收合它的高度：兩者同時做的話位移量會互相抵銷，落點不可預測。
+      slideToChat() {
+        return new Promise((resolve) => {
+          const form = this.$el && this.$el.querySelector(".ui-next-composer");
+          const inner = this.$refs.questionInner;
+          if (!form || !inner || !window.matchMedia("(prefers-reduced-motion: no-preference)").matches) { resolve(); return; }
+          // FLIP：先量、套上最終狀態、再量、用差值把它「拉回」原位，然後放掉讓 CSS 過渡走完。
+          // ⚠ 不要改成「自己算要移多少 px」——實測一直差 35px，因為這個 section 是垂直置中的，
+          //   內容一變高（is-launching 會動到版面）位移量就跟著變，先量後套永遠對不上。
+          //   FLIP 兩端都是實測值，天生免疫這種版面變化。
+          const first = form.getBoundingClientRect().top;
+          this.launching = true;
+          requestAnimationFrame(() => {
+            const delta = first - form.getBoundingClientRect().top;
+            inner.style.transition = "none";
+            inner.style.transform = `translateY(${delta}px)`;
+            requestAnimationFrame(() => {
+              inner.style.transition = "";
+              inner.style.transform = "";
+              setTimeout(resolve, 300);
+            });
+          });
+        });
+      },
     },
     template: `
-      <section class="ui-next-question">
-        <div class="ui-next-question-inner">
-          <div class="ui-next-greeting">嗨，{{ userName }}</div>
-          <h1>今天想從哪裡開始？</h1>
-          <p>選擇專案後開始對話；系統會依內容自動建立標題並保留在該專案內。</p>
+      <section class="ui-next-question" :class="{'is-launching':launching}">
+        <div ref="questionInner" class="ui-next-question-inner">
+          <div class="ui-next-question-intro">
+            <div class="ui-next-greeting">嗨，{{ userName }}</div>
+            <h1>今天想從哪裡開始？</h1>
+            <p>選擇專案後開始對話；系統會依內容自動建立標題並保留在該專案內。</p>
+          </div>
           <form class="ui-next-composer" @submit.prevent="send">
             <div v-if="files.length" class="ui-next-attachments">
               <span v-for="(file, index) in files" :key="file.name + index"><ui-next-icon name="paperclip"/>{{ file.name }} <button type="button" @click="removeFile(index)" aria-label="移除附件"><ui-next-icon name="close"/></button></span>
@@ -229,7 +260,7 @@
                 </div>
                 <span class="ui-next-environment" :class="{error:environmentError}">{{ environmentLabel }}</span>
               </div>
-              <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><span v-if="sending">處理中</span><ui-next-icon v-else name="send"/></button>
+              <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
             </div>
           </form>
           <small>Ctrl + Enter 送出。附件沿用既有 Chat 的圖片上傳限制。</small>

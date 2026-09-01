@@ -5,6 +5,10 @@ const {
   saveChatAttachmentFile, deleteChatDir, readAttachmentFile, sniffFile, uploadChatImages, isImageBuffer
 } = require('./lib/attachments');
 
+// chatId(string) → AbortController，只在該輪回覆進行中存在。單一平台實例假設下不需跨進程
+// （見 deployment-topology）；進程重啟後殘留的 reply_pending 由 recoverInterruptedChats 兜底。
+const _replyAborts = new Map();
+
 async function getOwnedChat(chatId, projectId, userId) {
   const { rows } = await query(
     'SELECT id, last_read_message_id FROM project_chats WHERE id = $1 AND project_id = $2 AND user_id = $3',
@@ -192,7 +196,12 @@ function registerRoutes(app) {
           attachments.push(att);
         }
         const { chatReply } = require('./pipeline/chat-agent');
-        const reply = await chatReply(req.params.projectId, req.params.id, content, req.userId, attachments);
+        // 登記可中止句柄，讓「停止回覆」砍得到正在跑的 agent 行程（見下方 /stop）。
+        const ctrl = new AbortController();
+        _replyAborts.set(String(req.params.id), ctrl);
+        let reply;
+        try { reply = await chatReply(req.params.projectId, req.params.id, content, req.userId, attachments, ctrl.signal); }
+        finally { _replyAborts.delete(String(req.params.id)); }
         emitToUser(req.userId, 'chat:reply', {
           projectId: Number(req.params.projectId),
           chatId: Number(req.params.id)
@@ -204,6 +213,19 @@ function registerRoutes(app) {
         await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [req.params.id]).catch(() => {});
         throw err;
       }
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 取消正在跑的那輪回覆。abort 之後 chatReply 自己的 catch 會補上「你取消了這則回覆」並在
+  // finally 清掉 reply_pending，所以這裡不需要（也不該）自己動那兩件事。
+  app.post('/api/projects/:projectId/chats/:id/stop', verifyToken, async (req, res) => {
+    try {
+      const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
+      if (!chat) return res.status(404).json({ error: 'Not found' });
+      const ctrl = _replyAborts.get(String(req.params.id));
+      if (!ctrl) return res.json({ stopped: false });
+      ctrl.abort();
+      res.json({ stopped: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
