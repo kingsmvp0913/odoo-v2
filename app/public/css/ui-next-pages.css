@@ -1,7 +1,7 @@
 /* 重產頁面的獨立樣式：不依賴舊 View 的結構。 */
 .ui-next-page{padding-bottom:max(96px,calc(56px + env(safe-area-inset-bottom)))}
 .ui-next-task-modal-backdrop{position:fixed;z-index:var(--z-modal);inset:0;display:grid;place-items:center;padding:20px;background:color-mix(in srgb,#000 48%,transparent)}.ui-next-task-create{width:min(560px,100%);max-height:min(720px,calc(100vh - 40px));overflow:auto;border:1px solid var(--border);border-radius:15px;background:var(--surface);box-shadow:var(--shadow-lg)}.ui-next-task-create header,.ui-next-task-create footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;border-bottom:1px solid var(--border)}.ui-next-task-create footer{border-top:1px solid var(--border);border-bottom:0}.ui-next-task-create h2{margin:0;font-size:18px}.ui-next-task-create header button,.ui-next-task-create footer>button:not(.ui-next-primary){border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;background:var(--surface);color:var(--text);font:inherit;cursor:pointer}.ui-next-task-create>label{display:block;padding:13px 18px 0;color:var(--text-secondary);font-size:13px;font-weight:650}.ui-next-task-create input,.ui-next-task-create select,.ui-next-task-create textarea{display:block;box-sizing:border-box;width:100%;margin-top:6px;border:1px solid var(--border-strong);border-radius:8px;padding:8px;background:var(--bg);color:var(--text);font:inherit}.ui-next-task-create textarea{min-height:130px;resize:vertical}.ui-next-task-create small{display:block;margin-top:6px;color:var(--text-muted);font-size:12px}.ui-next-task-card-actions{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px}.ui-next-task-card-actions>button{border:1px solid var(--border-strong);border-radius:7px;padding:6px 8px;background:var(--surface);color:var(--text-secondary);font:inherit;font-size:12px;cursor:pointer}.ui-next-task-more{position:absolute;z-index:2;top:calc(100% + 5px);right:0;width:112px;padding:5px;border:1px solid var(--border-strong);border-radius:9px;background:var(--surface);box-shadow:var(--shadow-lg)}.ui-next-task-more button{display:block;width:100%;border:0;border-radius:6px;padding:8px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.ui-next-task-more button:hover{background:var(--bg)}.ui-next-task-more button.danger{color:var(--danger)}.ui-next-empty-state button{border:0;background:transparent;color:var(--primary);font:inherit;font-weight:700;text-decoration:underline;cursor:pointer}
-.ui-next-admin-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}.ui-next-admin-cards>a{display:block;color:inherit;text-decoration:none}.ui-next-admin-cards h2{margin:0 0 7px;font-size:16px}.ui-next-admin-cards p{min-height:38px;margin:0;color:var(--text-muted);font-size:13px;line-height:1.45}.ui-next-admin-cards span{display:inline-block;margin-top:12px;color:var(--primary);font-size:13px;font-weight:700}
+.ui-next-admin-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}.ui-next-admin-cards>a{display:block;color:inherit;text-decoration:none}.ui-next-admin-cards h2{margin:0 0 7px;font-size:16px}.ui-next-admin-cards p{min-height:38px;margin:0 0 2px;color:var(--text-muted);font-size:13px;line-height:1.45}
 .ui-next-terminal-output{min-height:420px;overflow:auto;background:#1a1a1a;border-radius:8px;padding:8px}.ui-next-terminal-status{margin-bottom:8px;color:var(--text-secondary);font-size:13px}
 .ui-next-pipeline-grid {
   display: grid;
@@ -1128,12 +1128,8 @@
   color: var(--text-muted);
   font-size: 11px;
 }
-.ui-next-project-grid-rich footer {
-  justify-content: flex-start;
-}
-.ui-next-project-grid-rich footer button:last-child {
-  margin-left: auto;
-}
+
+
 .ui-next-project-context {
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
@@ -2901,14 +2897,8 @@
 .ui-next-project-create label small {
   display: inline;
 }
-/* 卡片動作列補回「上正式／資料庫查詢／自動部署 SOP／初始化 Wiki」後變成 8 顆，
-   不換行會把按鈕壓到字中間斷行（「上正／式」）。 */
-.ui-next-project-grid-rich footer {
-  flex-wrap: wrap;
-}
-.ui-next-project-grid-rich footer button {
-  white-space: nowrap;
-}
+
+
 .ui-next-project-grid-rich footer button:last-child {
   margin-left: 0;
 }
@@ -2941,3 +2931,59 @@
   width: 11px;
   height: 11px;
 }
+
+/* 專案頁的「Chat」頁籤＝對話清單。原本的空狀態把標題當成主視覺（32px 字塞進窄卡片、
+   第五筆還被裁掉），這裡改成一般的清單列：標題正常字級，時間與未讀各就各位。 */
+.ui-next-chat-tab .ui-next-card-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.ui-next-chat-tab .ui-next-card-title h2{margin:0;font-size:16px}
+.ui-next-chat-tab .ui-next-card-title p{margin:4px 0 0;color:var(--text-muted);font-size:13px}
+.ui-next-chat-tab-search{box-sizing:border-box;width:100%;height:34px;margin:14px 0 0;border:1px solid var(--border-strong);border-radius:9px;padding:0 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.ui-next-chat-tab-search:focus{outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:1px}
+.ui-next-chat-tab-empty{margin:16px 0 0;color:var(--text-muted);font-size:13px}
+.ui-next-chat-tab-list{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:4px}
+.ui-next-chat-tab-list button{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;width:100%;border:0;border-radius:10px;padding:10px 12px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background-color .125s ease}
+.ui-next-chat-tab-list button:hover{background:color-mix(in srgb,var(--text) 6%,transparent)}
+.ui-next-chat-tab-list button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+.ui-next-chat-tab-list b{min-width:0;overflow:hidden;font-size:14px;font-weight:500;white-space:nowrap;text-overflow:ellipsis}
+.ui-next-chat-tab-list small{color:var(--text-muted);font-size:12px;white-space:nowrap}
+.ui-next-chat-tab-list em{padding:2px 7px;border-radius:99px;background:color-mix(in srgb,var(--info) 16%,transparent);color:var(--info);font-size:11px;font-style:normal;white-space:nowrap}
+.ui-next-chat-tab-unread{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:99px;background:var(--primary);color:var(--surface);font-size:11px;font-weight:700}
+@media(max-width:700px){.ui-next-chat-tab-list button{grid-template-columns:1fr auto}.ui-next-chat-tab-list small{grid-column:1/-1}}
+
+/* 內嵌的頁籤內容（連線設定／部署 SOP）本來是獨立頁面，各自帶著「返回專案」與大標題。
+   嵌進專案頁後那些東西會和上面的頁首重複一次，所以在內嵌情境下收起來。 */
+.ui-next-embedded-tab > .ui-next-page,
+.ui-next-embedded-tab > section{padding:0}
+.ui-next-embedded-tab .ui-next-page-head,
+.ui-next-embedded-tab > .topbar{display:none}
+.ui-next-embedded-tab .content{padding:0}
+
+/* 新增專案改成彈窗：原本是頁面頂端的 inline 表單，展開時把整份清單往下推，
+   欄位又被塞進不等高的兩欄（Odoo 版本和專案描述並排，一個 34px 一個 96px）。 */
+.ui-next-form-modal{width:min(620px,100%);padding:0}
+.ui-next-form-modal-grid{padding:16px 18px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin-top:4px}
+.ui-next-form-modal-grid label{display:grid;align-content:start;gap:5px;min-width:0;color:var(--text-secondary);font-size:13px}
+.ui-next-form-modal-wide{grid-column:1/-1}
+.ui-next-form-modal-grid input,.ui-next-form-modal-grid select,.ui-next-form-modal-grid textarea{box-sizing:border-box;width:100%;border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.ui-next-form-modal-grid input,.ui-next-form-modal-grid select{height:36px}
+.ui-next-form-modal-grid textarea{min-height:78px;resize:vertical}
+.ui-next-form-modal-grid input:focus,.ui-next-form-modal-grid select:focus,.ui-next-form-modal-grid textarea:focus{outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:1px}
+.ui-next-form-modal-grid small{color:var(--text-muted);font-size:12px}
+.ui-next-form-modal-grid small.error{color:var(--danger)}
+
+@media(max-width:640px){.ui-next-form-modal-grid{grid-template-columns:1fr}}
+
+.ui-next-form-modal .ui-next-inline-error{margin:0 18px 12px}
+.ui-next-form-modal .ui-next-file-preview{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:3px 7px;border-radius:7px;background:var(--bg);font-size:12px}
+.ui-next-form-modal footer{justify-content:flex-end;gap:8px}
+
+/* 卡片動作全部收進 ⋮ 之後，卡片矮了一截，1440 寬放得下三欄。 */
+.ui-next-project-grid.ui-next-project-grid-rich{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:1200px){.ui-next-project-grid.ui-next-project-grid-rich{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.ui-next-project-grid.ui-next-project-grid-rich{grid-template-columns:1fr}}
+.ui-next-project-card-title .ui-next-project-more{position:relative;flex:none;margin-left:auto}
+.ui-next-project-card-title .ui-next-project-more > button{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:8px;padding:0;background:transparent;color:var(--text-muted);cursor:pointer}
+.ui-next-project-card-title .ui-next-project-more > button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+.ui-next-project-card-title .ui-next-project-more .ui-next-icon{width:16px;height:16px}
+/* ⋮ 從卡片底部移到標題列之後，選單要往下開；沿用舊的 bottom 定位會蓋到卡片上方的頁面標題。 */
+.ui-next-project-card-title .ui-next-project-more-menu{top:calc(100% + 5px);bottom:auto}

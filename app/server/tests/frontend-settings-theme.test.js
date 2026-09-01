@@ -97,3 +97,49 @@ describe('個人設定「儲存」不得抹掉不在這張表單上的偏好', (
     expect(payload.teams_user_id).toBe('edited-by-user');
   });
 });
+
+// 意圖：syncFromServer 在 router.afterEach 每次導覽都會被叫到，而 set() 寫回後端是
+// fire-and-forget。若這支「一律以後端為準」，切換深淺色後馬上換頁就會被舊快照打回去
+// ——實測：切成 light、連續換三個頁面，畫面又變回 dark。
+// 這裡把 theme.js 真的載進來跑，而不是比對原始碼字串。
+describe('ThemeManager.syncFromServer 不得覆蓋本機剛選好的偏好', () => {
+  const THEME_SRC = require('path').join(__dirname, '../../public/js/theme.js');
+
+  function loadThemeManager(stored) {
+    const store = { ...stored };
+    const win = {
+      localStorage: {
+        getItem: (k) => (k in store ? store[k] : null),
+        setItem: (k, v) => { store[k] = String(v); },
+      },
+      dispatchEvent() {},
+      CustomEvent: function () {},
+      document: { documentElement: { setAttribute() {}, removeAttribute() {} } },
+    };
+    win.window = win;
+    const code = require('fs').readFileSync(THEME_SRC, 'utf8');
+    new Function('window', 'document', 'localStorage', `${code}`)(win, win.document, win.localStorage);
+    return { tm: win.ThemeManager, store };
+  }
+
+  test('本機已有偏好時，後端值不覆蓋（切換後換頁不會被打回）', () => {
+    const { tm, store } = loadThemeManager({ theme: 'light' });
+    tm.syncFromServer('dark');            // 後端還是切換前的舊值
+    expect(tm.current()).toBe('light');   // 使用者剛選的 light 必須留著
+    expect(store.theme).toBe('light');
+  });
+
+  test('本機沒有偏好時才採用後端（換裝置／無痕）', () => {
+    const { tm, store } = loadThemeManager({});
+    tm.syncFromServer('dark');
+    expect(tm.current()).toBe('dark');
+    expect(store.theme).toBe('dark');
+  });
+
+  test('後端沒存或值不合法時不動本機', () => {
+    const { tm } = loadThemeManager({ theme: 'dark' });
+    tm.syncFromServer(undefined);
+    tm.syncFromServer('purple');
+    expect(tm.current()).toBe('dark');
+  });
+});

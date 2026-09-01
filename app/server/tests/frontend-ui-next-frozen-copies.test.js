@@ -18,7 +18,7 @@ const path = require("path");
 // 它守的是「Next 不可以偷改 Legacy 的行為」。**逐字複製完全不觸發那個 pattern**，複製品
 // 漂移多遠它都不會紅。所以才需要這一支：直接比對兩份的內容是否仍然一致。
 //
-// 這一支只管「凍結清單裡的 13 組」。若哪天決定某一組要分家（Next 版要長出 Legacy 沒有的
+// 這一支只管「凍結清單裡的那幾組」。若哪天決定某一組要分家（Next 版要長出 Legacy 沒有的
 // 行為），做法是把它從 FROZEN_COPIES 移除並在該處註明理由，而不是放寬比對。
 // ---------------------------------------------------------------------------
 
@@ -34,8 +34,13 @@ const NEXT_PAGES = "js/ui-next/UiNextPages.js";
 // Next——Next 直接吃全域。所以這裡比對的範圍嚴格限定在
 // `window.<名稱> = Vue.defineComponent({ … })` 這個賦值本身。
 const FROZEN_COPIES = [
-  ["UiNextDbView", "js/views/ProjectDbQuery.js", "ProjectDbQueryView"],
-  ["UiNextAdminSettingsView", "js/views/Admin.js", "AdminView"],
+  // UiNextDbView 已於 2026-09-01 與 Legacy 分家：Next 把它內嵌成專案頁的「連線設定」頁籤，
+  // 因此多了一個 embedded prop（內嵌時不轉址、不畫自己的頁首）。Legacy 沒有頁籤這回事，
+  // 那邊仍是獨立頁面，兩邊本來就不該再逐字相同。
+  // UiNextAdminSettingsView 已於 2026-09-01 與 Legacy 分家：Next 的 /admin 首頁本來就有
+  // 一整組管理工具卡片，這一頁底部又放了同一批（navTools），同樣的十個入口在同一條動線上
+  // 出現兩次。Next 這邊移除該區塊，Legacy 的 AdminView 是唯一入口所以保留——兩邊本來就
+  // 不該再逐字相同。
   ["UiNextAdminUsersView", "js/views/AdminUsers.js", "AdminUsersView"],
   ["UiNextAdminAgentsView", "js/views/AdminAgents.js", "AdminAgentsView"],
   ["UiNextAdminSchedulesView", "js/views/AdminSchedules.js", "AdminSchedulesView"],
@@ -187,15 +192,18 @@ describe("ui-next 逐字複製的 View 必須與 Legacy 保持一致", () => {
 
   // -------------------------------------------------------------------------
   // 解析健全性：括號配對解析器一旦失效（元件改名、賦值寫法改寫、字串跳脫沒處理好），
-  // extractComponent 會回 null 或抓到一小截，接著 13 組「都相等」而全數變綠——測試看起來
+  // extractComponent 會回 null 或抓到一小截，接著每一組都「相等」而全數變綠——測試看起來
   // 沒事，實際上什麼都沒測到。這一支就是那道防線，跟 frontend-markdown-xss.test.js
   // 的「掃得到 v-html」同一個用意：先證明工具真的抓到東西，再談比對結果。
   // -------------------------------------------------------------------------
   describe("解析健全性", () => {
-    test("凍結清單就是 13 組，且沒有重複登錄", () => {
-      expect(FROZEN_COPIES).toHaveLength(13);
-      expect(new Set(FROZEN_COPIES.map(([n]) => n)).size).toBe(13);
-      expect(new Set(FROZEN_COPIES.map(([, , l]) => l)).size).toBe(13);
+    // ⚠ 不寫死組數：分家是這個檔案自己認可的正常操作（見檔頭），每分一組就要回頭改
+    // 這裡的數字和上面的註解，改漏了就是假紅——而假紅久了就沒人看。真正要守的是
+    // 「清單沒被清空」與「沒有重複登錄」，解析有沒有失效由下面 test.each 負責。
+    test("凍結清單沒有被清空，也沒有重複登錄", () => {
+      expect(FROZEN_COPIES.length).toBeGreaterThan(0);
+      expect(new Set(FROZEN_COPIES.map(([n]) => n)).size).toBe(FROZEN_COPIES.length);
+      expect(new Set(FROZEN_COPIES.map(([, , l]) => l)).size).toBe(FROZEN_COPIES.length);
     });
 
     test.each(FROZEN_COPIES.map((pair, i) => [pair[0], i]))(

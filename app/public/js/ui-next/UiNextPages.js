@@ -852,6 +852,10 @@
       filteredChats() { const query = this.historyQuery.trim().toLocaleLowerCase("zh-TW"); return query ? this.chats.filter((chat) => (chat.title || "新對話").toLocaleLowerCase("zh-TW").includes(query)) : this.chats; },
     },
     async created() {
+      // 沒帶對話 id 就沒有「這一頁」要顯示的東西——完整清單已經是專案頁的 Chat 頁籤，
+      // 這裡再放一份空狀態清單只會有兩個長得不一樣的入口。
+      if (!this.$route.params.chatId) { this.$router.replace(`/projects/${this.$route.params.id}?tab=chat`); return; }
+
       await this.loadChats();
       const projects = await Api.get("projects").catch(() => []);
       const project = projects.find(
@@ -1101,13 +1105,19 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["overview","repos","env","settings"].includes(this.$route.query.tab) ? this.$route.query.tab : "overview", _pollTimer: null, _reposPollTimer: null }; },
-    computed: { hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
+    data() { return { project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "repos", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, tabs: [["repos","Repo"],["db","連線設定"],["env","測試環境"],["chat","Chat"],["wiki","Wiki"],["sop","部署 SOP"],["settings","設定"]], _pollTimer: null, _reposPollTimer: null }; },
+    computed: { embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
     watch: {
+      "$route.query.tab"(tab) {
+        const next = ["repos","env","settings","chat","db","sop","wiki"].includes(tab) ? tab : "repos";
+        if (next === this.detailTab) return;
+        this.detailTab = next;
+        if (next === "chat") this.loadChats();
+      },
       "env.status"(value) { if (value === "setting_up") this._startPoll(); else this._stopPoll(); },
       hasCloning(value) { if (value) this._startReposPoll(); else this._stopReposPoll(); },
     },
-    async created() { await Promise.all([this.load(), this.loadEnv()]); },
+    async created() { await Promise.all([this.load(), this.loadEnv()]); if (this.detailTab === "chat") this.loadChats(); },
     // 沒有這行，離開專案頁之後那兩個 timer 還會繼續打 API（元件早就卸載，畫面也不會更新）。
     beforeUnmount() { this._stopPoll(); this._stopReposPoll(); },
     methods: {
@@ -1121,7 +1131,29 @@
       async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
       async probeRemoteBranches() { const url = this.newRepo.repo_url.trim(); if (!url || url === this.lastProbedUrl) return; this.lastProbedUrl = url; this.probingBranches = true; try { const data = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`); this.remoteBranches = data.ok ? data.branches || [] : []; this.newRepo.base_branch = data.defaultBranch || ""; } catch { this.remoteBranches = []; } finally { this.probingBranches = false; } },
       async removeRepo(id) { if (!await confirmDialog({ title: "移除 Repo", message: "確定移除此 repo？本機 clone 的程式碼將一併刪除，且無法復原。", danger: true, confirmText: "移除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/repos/${id}`); await this.load(); } catch (error) { showToast(error.message || "移除失敗", "error", 0); } }, async reclone(id) { try { await Api.post(`projects/${this.$route.params.id}/repos/${id}/reclone`, {}); await this.load(); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } }, updateRepo(id) { return this.reclone(id); },
-      unreadCount() { return this.project ? (window.UnreadStore.byProject[String(this.project.id)] || this.project.unread_count || 0) : 0; }, goWiki() { this.$router.push(`/projects/${this.$route.params.id}/wiki`); }, goDeploySop() { this.$router.push(`/projects/${this.$route.params.id}/deploy-sop`); }, goChat() { this.$router.push(`/projects/${this.$route.params.id}/chat`); }, async initWiki() { try { await Api.post(`projects/${this.$route.params.id}/wiki/init`, {}); showToast("Wiki 初始化完成", "success"); } catch (error) { showToast(error.message || "初始化失敗", "error", 0); } },
+      unreadCount() { return this.project ? (window.UnreadStore.byProject[String(this.project.id)] || this.project.unread_count || 0) : 0; },  // 七個頁籤裡只有三個是同一頁的區塊，其餘四個是獨立路由；切同頁的頁籤要同步寫進 ?tab=，否則重整會跳回第一個。
+      selectTab(key) { 
+        this.detailTab = key; this.$router.replace({ query: { ...this.$route.query, tab: key } });
+        if (key === "chat") this.loadChats(); },
+      // 對話清單只在切到該頁籤時才讀，進專案頁不必先打這支 API。
+      async loadChats() {
+        this.chatsLoading = true; this.chatsError = "";
+        try { this.chats = await Api.get(`projects/${this.$route.params.id}/chats`); }
+        catch (error) { this.chatsError = error.message || "無法載入對話清單"; }
+        finally { this.chatsLoading = false; }
+      },
+      async createChat() {
+        if (this.creatingChat) return;
+        this.creatingChat = true;
+        try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: "新對話" });
+          this.$router.push(`/projects/${this.$route.params.id}/chat/${chat.id}`); }
+        catch (error) { showToast(error.message || "無法建立對話", "error"); }
+        finally { this.creatingChat = false; }
+      },
+      openChat(chat) { this.$router.push(`/projects/${this.$route.params.id}/chat/${chat.id}`); },
+      chatDate(value) { return value ? new Date(value).toLocaleString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"; },
+      
+        async initWiki() { try { await Api.post(`projects/${this.$route.params.id}/wiki/init`, {}); showToast("Wiki 初始化完成", "success"); } catch (error) { showToast(error.message || "初始化失敗", "error", 0); } },
       async setupEnv() { this.envWorking = true; try { await Api.post(`projects/${this.$route.params.id}/env/setup`, {}); this.env = { ...(this.env || {}), status: "setting_up" }; showToast("環境建立已開始", "success"); } catch (error) { showToast(error.message || "建立環境失敗", "error", 0); } finally { this.envWorking = false; } }, async stopEnv() { this.envWorking = true; try { await Api.post(`projects/${this.$route.params.id}/env/stop`, {}); await this.loadEnv(); } finally { this.envWorking = false; } }, async releaseExternal() { await Api.post(`projects/${this.$route.params.id}/env/external/release`, {}); await this.loadEnv(); }, async openEnv() { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(this.$route.params.id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } }, async viewLog() { this.logLoading = true; try { const data = await Api.get(`projects/${this.$route.params.id}/env/log`); this.runtimeLog = data.exists ? data.log || "（log 為空）" : "（尚無 log 檔）"; } finally { this.logLoading = false; } }, async deleteEnv() { if (!await confirmDialog({ title: "刪除測試環境", message: "確定刪除整個測試環境？", danger: true, confirmText: "刪除" })) return; await Api.delete(`projects/${this.$route.params.id}/env`); await this.loadEnv(); },
       async saveProjectMapping() { await Api.patch(`projects/${this.project.id}/mapping`, { odoo_project_name: this.editOdooProjectName || null, service_respondent_name: this.editServiceRespondentName || null }); showToast("已儲存", "success"); }, async saveE2eSetting() { this.savingE2e = true; try { await Api.patch(`projects/${this.project.id}`, { e2e_disabled: !this.editE2eEnabled }); } finally { this.savingE2e = false; } }, async saveEdition() { this.savingEdition = true; try { await Api.patch(`projects/${this.project.id}`, { edition: this.editEdition }); } finally { this.savingEdition = false; } }, isAdmin() { return window.UserStore.role === "admin"; },
     },
@@ -1137,17 +1169,13 @@
       <section v-else-if="project" class="ui-next-page ui-next-project-detail">
         <header class="ui-next-page-head ui-next-detail-head">
 <div>
-<button class="ui-next-back" @click="$router.push('/projects')"><ui-next-icon name="arrow-left"/> 所有專案</button>
-<p class="ui-next-eyebrow">專案工作區</p>
 <h1>{{ project.name }}</h1>
 <p>{{ project.description || '集中管理 Repo、測試環境與專案設定。' }}</p>
 </div>
 <div class="ui-next-detail-actions">
-<button @click="goChat">Chat<span v-if="unreadCount()">{{ unreadCount() }}</span>
-</button>
-<button @click="goWiki">Wiki</button>
-<button @click="goDeploySop">部署 SOP</button>
+<button @click="openEnv" :disabled="!envActive">測試區</button>
 <button @click="showReleaseModal=true" :disabled="!repos.some(r=>r.clone_status==='done')">上正式</button>
+<button class="ui-next-back" @click="$router.push('/projects')"><ui-next-icon name="arrow-left"/> 所有專案</button>
 </div>
 </header>
         <div class="ui-next-project-statbar">
@@ -1157,25 +1185,8 @@
 <span :class="['is-'+(env&&env.status||'idle')]">{{ {idle:'環境未建立',setting_up:'環境建立中',running:'環境運行中',error:'環境發生錯誤'}[env&&env.status] || '環境未建立' }}</span>
 </div>
         <nav class="ui-next-detail-tabs">
-<button v-for="tab in [['overview','總覽'],['repos','Repo'],['env','測試環境'],['settings','設定']]" :key="tab[0]" :class="{active:detailTab===tab[0]}" @click="detailTab=tab[0]">{{ tab[1] }}</button>
+<button v-for="tab in tabs" :key="tab[0]" :class="{active:detailTab===tab[0]}" @click="selectTab(tab[0])">{{ tab[1] }}<span v-if="tab[0]==='chat'&&unreadCount()">{{ unreadCount() }}</span></button>
 </nav>
-        <section v-if="detailTab==='overview'" class="ui-next-detail-overview">
-<article class="ui-next-panel">
-<h2>Repo 概況</h2>
-<p>{{ repos.length }} 個程式庫；{{ repos.filter(r=>r.clone_status==='done').length }} 個已同步。</p>
-<button @click="detailTab='repos'">管理 Repo</button>
-</article>
-<article class="ui-next-panel">
-<h2>測試環境</h2>
-<p>{{ {idle:'尚未建立',setting_up:'建立中',running:'運行中',error:'發生錯誤'}[env&&env.status]||'尚未建立' }}</p>
-<button @click="detailTab='env'">管理測試環境</button>
-</article>
-<article class="ui-next-panel">
-<h2>專案工具</h2>
-<button @click="$router.push('/projects/'+project.id+'/db')">資料庫查詢</button>
-<button v-if="!project.has_wiki" @click="initWiki">初始化 Wiki</button>
-</article>
-</section>
         <div v-if="detailTab==='repos'" class="ui-next-project-detail-grid">
 <section class="ui-next-panel ui-next-repos">
 <div class="ui-next-card-title">
@@ -1245,7 +1256,34 @@
 <pre>{{ runtimeLog }}</pre>
 </div>
 </section>
-        <section v-if="detailTab==='settings'" class="ui-next-project-settings">
+        <section v-if="embeddedTab" class="ui-next-embedded-tab"><component :is="embeddedTab" :embedded="true"/></section>
+<section v-if="detailTab==='chat'" class="ui-next-panel ui-next-chat-tab">
+<div class="ui-next-card-title">
+<div><h2>對話</h2><p>{{ chats.length }} 則對話；點一則進入專心模式。</p></div>
+<button class="ui-next-primary" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'新對話' }}</button>
+</div>
+<input v-if="chats.length" v-model="chatSearch" class="ui-next-chat-tab-search" type="search" placeholder="搜尋對話標題" aria-label="搜尋對話">
+<p v-if="chatsError" class="ui-next-inline-error" role="alert">{{ chatsError }} <button type="button" @click="loadChats">重試</button></p>
+<p v-else-if="chatsLoading" class="ui-next-chat-tab-empty">載入中…</p>
+<p v-else-if="!chats.length" class="ui-next-chat-tab-empty">還沒有對話。建立一則，討論會保留在這個專案裡。</p>
+<p v-else-if="!filteredChats.length" class="ui-next-chat-tab-empty">沒有符合「{{ chatSearch }}」的對話。</p>
+<ul v-else class="ui-next-chat-tab-list">
+<li v-for="chat in filteredChats" :key="chat.id">
+<button type="button" @click="openChat(chat)">
+<b>{{ chat.title || '新對話' }}</b>
+<span v-if="chat.unread" class="ui-next-chat-tab-unread">{{ chat.unread }}</span>
+<em v-if="chat.reply_pending">AI 回覆中</em>
+<small>{{ chatDate(chat.created_at) }}</small>
+</button>
+</li>
+</ul>
+</section>
+<section v-if="detailTab==='settings'" class="ui-next-project-settings">
+<div v-if="!project.has_wiki" class="ui-next-panel">
+<h2>Wiki</h2>
+<p>這個專案還沒有 Wiki，初始化後可由 AI 依程式碼產生頁面。</p>
+<button class="ui-next-primary" @click="initWiki">初始化 Wiki</button>
+</div>
 <div class="ui-next-panel">
 <h2>同步來源對應</h2>
 <p>一行一個名稱，可自動綁定 Odoo 與客服同步來源。</p>
@@ -2080,7 +2118,13 @@
           this.serverConfirmedRunning = (data.inflight || []).includes(this.task.id);
         } catch { this.serverConfirmedRunning = false; }
       },
-      back() { this.$router.push('/'); },
+      back() {
+        // 原本一律回首頁——從任務列表點進來的人按「返回」會跑到問答頁，等於找不到路。
+        // 帶回來時的頁籤；深連結（通知、分享網址）沒有 from，就退回預設清單。
+        const from = this.$route.query.from;
+        const tabs = ["needs_action", "pending", "paused", "all", "archived"];
+        this.$router.push(tabs.includes(from) ? `/tasks?tab=${from}` : "/tasks");
+      },
       async stepPipeline() {
         this.stepping = true;
         try {
@@ -2620,7 +2664,7 @@
   window.UiNextProjectListView = Vue.defineComponent({
     name: "UiNextProjectListView",
     components: { ReleaseModal: window.ReleaseModal, UiNextIcon: window.UiNextIcon },
-    data() { return { projects: [], loading: true, loadError: "", search: "", showAddForm: false, newProject: { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }, formError: "", saving: false, releaseId: null, moreProjectId: null }; },
+    data() { return { projects: [], loading: true, loadError: "", search: "", showAddForm: false, newProject: { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }, folderNameTouched: false, formError: "", saving: false, releaseId: null, moreProjectId: null }; },
     computed: {
       // 新手教程要有一張專案卡可以指，但新帳號一個專案都沒有 → 教程開著時插一張示範專案
       // （只在畫面上，不進 this.projects，也不會被送出或刪除）。刪掉 tour-demo.js 即自動消失。
@@ -2633,13 +2677,24 @@
     beforeUnmount() { document.removeEventListener('pointerdown', this._onProjectMoreOutside); },
     methods: {
       async load() { this.loading = true; this.loadError = ""; try { this.projects = await Api.get("projects"); this.projects.forEach((project) => { window.UnreadStore.byProject[String(project.id)] = project.unread_count || 0; }); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
-      openAddForm() { this.formError = ""; this.showAddForm = true; this.$nextTick(() => this.$refs.projectNameInput?.focus()); },
+      onAddFormKeydown(event) {
+        if (event.key === "Escape") { this.closeAddForm(); return; }
+        if (event.key !== "Tab") return;
+        const box = this.$refs.projectCreateModal;
+        const items = box ? [...box.querySelectorAll('a[href], input, select, textarea, button:not([disabled])')].filter((el) => el.offsetParent !== null) : [];
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      },
+      openAddForm() { this.formError = ""; this.folderNameTouched = false; this.showAddForm = true; this.$nextTick(() => this.$refs.projectNameInput?.focus()); },
       closeAddForm() { this.showAddForm = false; this.formError = ""; this.newProject = { name: "", folder_name: "", odoo_version: "", description: "", edition: "community" }; },
       async add() { if (!this.newProject.name.trim() || !this.newProject.odoo_version.trim()) { this.formError = "請填寫專案名稱和 Odoo 版本。"; return; } if (this.folderNameError) { this.formError = this.folderNameError; return; } this.saving = true; this.formError = ""; try { await Api.post("projects", { ...this.newProject, name: this.newProject.name.trim(), folder_name: this.newProject.folder_name.trim(), odoo_version: this.newProject.odoo_version.trim() }); this.closeAddForm(); await this.load(); showToast("已新增專案", "success"); } catch (error) { this.formError = error.message || "無法新增專案，請重試。"; } finally { this.saving = false; } },
       // requireText 打字確認是刻意的：這個動作會連本機 clone 的程式碼一起刪掉且無法復原。
       async remove(project) { if (!await confirmDialog({ title: "刪除專案", message: `此動作會連帶刪除「${project.name}」下所有 repo 的本機程式碼，且無法復原。`, danger: true, requireText: project.name, confirmText: "刪除專案" })) return; try { await Api.delete(`projects/${project.id}`); await this.load(); showToast("已刪除", "success"); } catch (error) { showToast(error.message || "刪除專案失敗", "error", 0); } },
       async toggleFavorite(project) { const next = !project.is_favorite; project.is_favorite = next; try { if (next) await Api.post(`projects/${project.id}/favorite`, {}); else await Api.delete(`projects/${project.id}/favorite`); } catch (error) { project.is_favorite = !next; showToast(error.message || "更新我的最愛失敗", "error", 0); } },
-      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goWiki(id) { this.$router.push(`/projects/${id}/wiki`); }, goChat(id) { this.$router.push(`/projects/${id}/chat`); }, goDb(id) { this.$router.push(`/projects/${id}/db`); }, goDeploySop(id) { this.$router.push(`/projects/${id}/deploy-sop`); }, openRelease(id) { this.moreProjectId = null; this.releaseId = id; }, isAdmin() { return window.UserStore.role === "admin"; },
+      unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goTab(id, tab) { this.moreProjectId = null; this.$router.push(`/projects/${id}?tab=${tab}`); },
+      isAdmin() { return window.UserStore.role === "admin"; },
       async initWiki(id) { try { await Api.post(`projects/${id}/wiki/init`, {}); await this.load(); showToast("Wiki 初始化完成", "success"); } catch (error) { showToast(error.message || "Wiki 初始化失敗", "error", 6000); } },
       async openEnv(id) { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } },
     },
@@ -2647,26 +2702,33 @@
       <section class="ui-next-page ui-next-project-page">
 <header class="ui-next-page-head">
 <div>
-<p class="ui-next-eyebrow">工作區</p>
 <h1>專案</h1>
 <p>管理程式庫、測試環境、對話與交付流程。</p>
 </div>
 <button v-if="!showAddForm" class="ui-next-primary" data-tour="proj-add" @click="openAddForm">新增專案</button>
 </header>
-<section v-if="showAddForm" class="ui-next-project-create" data-tour="proj-form" aria-labelledby="project-create-title">
+<div v-if="showAddForm" class="ui-next-task-modal-backdrop" @mousedown.self="closeAddForm" @keydown="onAddFormKeydown">
+<section ref="projectCreateModal" class="ui-next-task-modal ui-next-form-modal" data-tour="proj-form" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
+<header>
 <h2 id="project-create-title">新增專案</h2>
+<button type="button" class="ui-next-modal-close" @click="closeAddForm" aria-label="關閉"><ui-next-icon name="close"/></button>
+</header>
+<div class="ui-next-form-modal-grid">
 <label>專案名稱<input ref="projectNameInput" v-model="newProject.name" autocomplete="off"></label>
-<label>英文資料夾名稱<input v-model="newProject.folder_name" autocomplete="off" aria-describedby="project-folder-help"></label>
-<small id="project-folder-help" :class="{error:folderNameError}">{{ folderNameError || '只能使用英文、數字、底線或連字號。' }}</small>
 <label>Odoo 版本<input v-model="newProject.odoo_version" placeholder="例如 17.0"></label>
-<label>專案描述（選填）<textarea v-model="newProject.description"></textarea></label>
+<label>英文資料夾名稱<input v-model="newProject.folder_name" autocomplete="off" aria-describedby="project-folder-help" @blur="folderNameTouched=true">
+<small id="project-folder-help" :class="{error:folderNameTouched&&folderNameError}">{{ (folderNameTouched&&folderNameError) || '只能使用英文、數字、底線或連字號。' }}</small>
+</label>
 <label>版本類型<select v-model="newProject.edition">
 <option value="community">Community</option>
 <option value="enterprise">Enterprise</option>
 </select></label>
+<label class="ui-next-form-modal-wide">專案描述（選填）<textarea v-model="newProject.description"></textarea></label>
+</div>
 <p v-if="formError" class="ui-next-inline-error" role="alert">{{ formError }}</p>
 <footer><button type="button" @click="closeAddForm">取消</button><button class="ui-next-primary" @click="add" :disabled="saving">{{ saving?'建立中…':'建立專案' }}</button></footer>
 </section>
+</div>
 <div class="ui-next-project-search">
 <input v-model="search" placeholder="搜尋專案名稱、版本或說明…">
 <span>{{ filteredProjects.length }} 個專案</span>
@@ -2697,6 +2759,7 @@
 <article v-for="project in filteredProjects" :key="project.id">
 <header class="ui-next-project-card-title">
 <button class="ui-next-project-title-open" @click="go(project.id)"><h2>{{ project.name }} <small>Odoo {{ project.odoo_version }} · {{ project.edition==='enterprise'?'企業版':'社群版' }}</small></h2></button>
+<div class="ui-next-project-more"><button type="button" :aria-expanded="moreProjectId===project.id" :aria-label="'專案「'+project.name+'」更多操作'" @click="moreProjectId=moreProjectId===project.id?null:project.id"><ui-next-icon name="dots"/></button><div v-if="moreProjectId===project.id" class="ui-next-project-more-menu"><button type="button" @click="openEnv(project.id);moreProjectId=null">測試區</button><button type="button" @click="releaseId=project.id;moreProjectId=null" :disabled="!project.repo_count">上正式</button><button type="button" @click="goTab(project.id,'repos')">REPO</button><button type="button" @click="goTab(project.id,'db')">連線設定</button><button type="button" @click="go(project.id);moreProjectId=null">專案設定</button><button type="button" @click="goTab(project.id,'chat')">問答</button><button type="button" @click="goTab(project.id,'wiki')">Wiki</button><button type="button" @click="goTab(project.id,'sop')">部署 SOP</button><button v-if="!project.has_wiki" type="button" @click="initWiki(project.id);moreProjectId=null">初始化 Wiki</button><button v-if="isAdmin()" type="button" class="danger" @click="remove(project);moreProjectId=null">刪除專案</button></div></div>
 <button v-if="project.id!=='demo'" @click="toggleFavorite(project)" :class="{active:project.is_favorite}" :aria-label="project.is_favorite?'取消我的最愛':'加入我的最愛'"><ui-next-icon :name="project.is_favorite?'star-filled':'star'"/></button>
 </header>
 <button v-if="project.description" class="ui-next-project-open" @click="go(project.id)">
@@ -2707,14 +2770,7 @@
 <span>未讀 Chat <b v-if="unread(project.id)" class="ui-next-unread-badge">{{ unread(project.id) }}</b><template v-else>：無</template></span>
 <span>{{ project.folder_name || '尚未設定資料夾' }}</span>
 </div>
-<footer>
-<button @click="goChat(project.id)">問答</button>
-<button @click="openEnv(project.id)">測試區</button>
-<button data-tour="proj-release" :disabled="!project.repo_count" title="把 ai-dev 上已核准的任務合併到 main" @click="releaseId=project.id">上正式</button>
-<button @click="goDb(project.id)">資料庫查詢</button>
-<button @click="goWiki(project.id)">Wiki</button>
-<div class="ui-next-project-more"><button type="button" :aria-expanded="moreProjectId===project.id" :aria-label="'專案「'+project.name+'」更多操作'" @click="moreProjectId=moreProjectId===project.id?null:project.id"><ui-next-icon name="dots"/> 更多</button><div v-if="moreProjectId===project.id" class="ui-next-project-more-menu"><button type="button" @click="goDb(project.id);moreProjectId=null">資料庫工具</button><button type="button" @click="goDeploySop(project.id);moreProjectId=null">部署 SOP</button><button v-if="!project.has_wiki" type="button" @click="initWiki(project.id);moreProjectId=null">初始化 Wiki</button><button type="button" @click="openRelease(project.id)" :disabled="!project.repo_count">上正式</button><button type="button" @click="go(project.id);moreProjectId=null">管理專案</button><button v-if="isAdmin()" type="button" class="danger" @click="remove(project);moreProjectId=null">刪除專案</button></div></div>
-</footer>
+
 </article>
 <p v-if="!filteredProjects.length" class="ui-next-empty-state">{{ search ? '找不到符合的專案。' : '尚無專案。' }} <button v-if="search" type="button" @click="search=''">清除搜尋</button></p>
 </div>
@@ -2796,7 +2852,7 @@
       applySort(list) { const timestamp = (value) => new Date(value || 0).getTime(); return list.slice().sort((a, b) => this.sort === "created_desc" ? timestamp(b.created_at) - timestamp(a.created_at) : this.sort === "title_asc" ? (a.title || a.task_id || "").localeCompare(b.title || b.task_id || "", "zh-Hant") : this.sort === "status_asc" ? (a.status || "").localeCompare(b.status || "") : timestamp(b.updated_at || b.created_at) - timestamp(a.updated_at || a.created_at)); },
       needsAction(task) { return (window.HUMAN_STATUSES || []).includes(task.status); }, isStopped(task) { return task.status === "stopped" || task.status === "merge_conflict"; }, statusLabel(status) { return (window.STATUS_LABELS || {})[status] || status; }, sourceLabel(source) { return source === "odoo" ? "Odoo" : source === "service" ? "eService" : source === "manual" ? "手動增加" : source; }, timeAgo(value) { const delta = Date.now() - new Date(value).getTime(); return delta < 60000 ? "剛剛" : delta < 3600000 ? `${Math.floor(delta / 60000)} 分鐘前` : delta < 86400000 ? `${Math.floor(delta / 3600000)} 小時前` : `${Math.floor(delta / 86400000)} 天前`; },
       async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(this.filter === "archived" ? "tasks?archived=true" : this.showAllUsers ? "tasks?all=true" : "tasks"); if (this.filter === "archived") this.archivedTasks = data.tasks || data; else { this.tasks = data.tasks || data; if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount; } } catch (error) { this.loadError = error.message || "無法載入任務"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
-      taskPath(task) { return `/task/${task.id}`; }, openTask(task) { this.$router.push(this.taskPath(task)); }, onTaskKeydown(task, event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openTask(task); } }, toggleBatchMode() { this.batchMode = !this.batchMode; if (!this.batchMode) this.selectedIds = []; }, toggleSelect(id, event) { event.stopPropagation(); const index = this.selectedIds.indexOf(id); if (index < 0) this.selectedIds.push(id); else this.selectedIds.splice(index, 1); }, toggleSelectAll() { this.selectedIds = this.allSelected ? [] : this.filteredTasks.map((task) => task.id); },
+      taskPath(task) { return { path: `/task/${task.id}`, query: { from: this.filter } }; }, openTask(task) { this.$router.push(this.taskPath(task)); }, onTaskKeydown(task, event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openTask(task); } }, toggleBatchMode() { this.batchMode = !this.batchMode; if (!this.batchMode) this.selectedIds = []; }, toggleSelect(id, event) { event.stopPropagation(); const index = this.selectedIds.indexOf(id); if (index < 0) this.selectedIds.push(id); else this.selectedIds.splice(index, 1); }, toggleSelectAll() { this.selectedIds = this.allSelected ? [] : this.filteredTasks.map((task) => task.id); },
       openAdd(event) { this.newTask = { title: "", original_text: "", project_id: "" }; this.newFiles = []; this.addError = ""; this.addTrigger = event?.currentTarget || null; this.showAdd = true; this.$nextTick(() => this.$refs.newTaskTitle?.focus()); }, closeAdd() { this.showAdd = false; this.$nextTick(() => this.addTrigger?.focus()); }, onAddFilesSelected(event) { const files = Array.from(event.target.files || []); this.addError = files.length > 5 ? "最多上傳 5 個附件，請重新選擇。" : ""; this.newFiles = files.slice(0, 5); event.target.value = ""; }, removeAddFile(index) { this.newFiles.splice(index, 1); }, trapAddFocus(event) { if (event.key === "Escape") return this.closeAdd(); if (event.key !== "Tab") return; const items = Array.from(this.$refs.taskCreateModal?.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])") || []); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } }, async submitAdd() { if (!this.newTask.project_id || !this.newTask.title.trim() || !this.newTask.original_text.trim()) { this.addError = "請完整填寫專案、標題與內容。"; return; } this.adding = true; this.addError = ""; try { const form = new FormData(); form.append("title", this.newTask.title.trim()); form.append("original_text", this.newTask.original_text); form.append("project_id", this.newTask.project_id); this.newFiles.forEach((file) => form.append("files", file)); await Api.postForm("tasks", form); this.showAdd = false; this.filter = "all"; showToast("已新增任務", "success"); } catch (error) { this.addError = error.message || "新增任務失敗"; showToast(this.addError, "error", 0); } finally { this.adding = false; } },
       async syncNow() { this.syncing = true; try { await Api.post("sync/now", {}); await this.load(); showToast("同步完成", "success"); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } finally { this.syncing = false; } }, async togglePause(task, event) { event.stopPropagation(); try { const result = await Api.put(`tasks/${task.id}/pause`, {}); task.is_paused = result.is_paused; showToast(result.is_paused ? "任務已暫停" : "任務已恢復", "success"); } catch (error) { showToast(error.message || "更新失敗", "error", 0); } },
       async batchPause() { await this.batch("pause"); }, async batchArchive() { await this.batch("archive"); }, async batchUnarchive() { await this.batch("unarchive"); }, async batchDelete() { if (!this.selectedIds.length || !await confirmDialog({ title: "永久刪除任務", message: `確定永久刪除選取的 ${this.selectedIds.length} 筆任務？`, danger: true, confirmText: "刪除" })) return; await this.batch("delete"); }, async batch(action) { if (!this.selectedIds.length) return; this.batchWorking = true; try { await Api.post(`tasks/batch/${action}`, action === "pause" ? { ids: this.selectedIds, paused: true } : { ids: this.selectedIds }); this.selectedIds = []; await this.load(); showToast("批次操作完成", "success"); } catch (error) { showToast(error.message || "批次操作失敗", "error", 0); } finally { this.batchWorking = false; } },
@@ -2818,17 +2874,19 @@
 </div>
 </header>
 <div v-if="showAdd" class="ui-next-task-modal-backdrop" @click.self="closeAdd" @keydown="trapAddFocus">
-<section ref="taskCreateModal" class="ui-next-task-create" role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title">
-<header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" aria-label="關閉建立任務視窗" @click="closeAdd">關閉</button></header>
+<section ref="taskCreateModal" class="ui-next-task-modal ui-next-form-modal" role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title">
+<header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" class="ui-next-modal-close" aria-label="關閉建立任務視窗" @click="closeAdd"><ui-next-icon name="close"/></button></header>
+<div class="ui-next-form-modal-grid">
 <label>專案
 <select v-model="newTask.project_id">
 <option value="">選擇專案</option>
 <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
 </select></label>
-<label>任務標題<input ref="newTaskTitle" v-model="newTask.title" required></label>
-<label>需求描述<textarea v-model="newTask.original_text" required></textarea></label>
-<label>附件（最多 5 個）<input type="file" multiple @change="onAddFilesSelected"><small v-if="newFiles.length">已選 {{ newFiles.length }} 個附件</small><span v-for="(file,index) in newFiles" :key="file.name+file.size+index" class="ui-next-file-preview">{{ file.name }} <button type="button" :aria-label="'移除附件：'+file.name" @click="removeAddFile(index)"><ui-next-icon name="close"/></button></span>
+<label class="ui-next-form-modal-wide">任務標題<input ref="newTaskTitle" v-model="newTask.title" required></label>
+<label class="ui-next-form-modal-wide">需求描述<textarea v-model="newTask.original_text" required></textarea></label>
+<label class="ui-next-form-modal-wide">附件（最多 5 個）<input type="file" multiple @change="onAddFilesSelected"><small v-if="newFiles.length">已選 {{ newFiles.length }} 個附件</small><span v-for="(file,index) in newFiles" :key="file.name+file.size+index" class="ui-next-file-preview">{{ file.name }} <button type="button" :aria-label="'移除附件：'+file.name" @click="removeAddFile(index)"><ui-next-icon name="close"/></button></span>
 </label>
+</div>
 <p v-if="addError" class="ui-next-inline-error" role="alert">{{ addError }}</p>
 <footer><button type="button" @click="closeAdd">取消</button><button class="ui-next-primary" @click="submitAdd" :disabled="adding">{{ adding?'建立中…':'建立任務' }}</button></footer>
 </section></div>
@@ -2922,6 +2980,8 @@
   });
   window.UiNextWikiView = Vue.defineComponent({
     name: "UiNextWikiView",
+    // 內嵌進專案頁的 Wiki 頁籤時不動網址：那裡的網址是 ?tab=wiki，一改就跳出頁籤。
+    props: { embedded: { type: Boolean, default: false } },
     components: { "wiki-node": UiNextWikiNode, UiNextIcon: window.UiNextIcon },
     data() { return { pages: [], current: null, loading: true, loadError: "", editing: false, editContent: "", saving: false, refreshing: "", building: false, progress: { percent: 0, message: "" }, showAddModal: false, newPageTitle: "", newPageSlug: "", slugTouched: false, addingPage: false, addPageError: "", addPageTrigger: null, requestId: 0 }; },
     computed: { renderedContent() { return this.current ? renderMarkdown(this.current.content || "") : ""; }, editingSlug() { return this.editing && this.current ? this.current.slug : ""; }, canBuild() { return !this.pages.length && !this.loadError; }, tree() { const byId = {}; this.pages.forEach((page) => { byId[page.id] = { ...page, children: [] }; }); const roots = []; this.pages.forEach((page) => { const node = byId[page.id]; if (page.parent_id && byId[page.parent_id]) byId[page.parent_id].children.push(node); else roots.push(node); }); return roots.sort((a, b) => (a.node_type === "overview" ? -1 : b.node_type === "overview" ? 1 : 0)); } },
@@ -2936,7 +2996,7 @@
       // 讀取路徑走 TourDemo 假資料，寫入路徑（儲存／重新生成／刪除／新增／建立）一律擋在前端並說明原因。
       tourDemoBlocked() { if (!this.isTourDemo()) return false; showToast("教學示範專案僅供瀏覽，不會實際變更", "info"); return true; },
       async loadPages() { if (this.isTourDemo()) { this.pages = window.TourDemo.wikiPages(); this.loadError = ""; this.loading = false; return; } this.loading = true; this.loadError = ""; try { this.pages = await Api.get(`projects/${this.$route.params.id}/wiki`); } catch (error) { this.loadError = error.message || "無法載入 Wiki"; } finally { this.loading = false; } },
-      async loadPage(slug) { const requestId = ++this.requestId; if (this.editing && this.current && this.current.slug !== slug && !await confirmDialog({ title: "尚未儲存", message: "切換頁面會放棄未儲存的修改。", danger: true, confirmText: "放棄修改" })) { this.$router.replace(`/projects/${this.$route.params.id}/wiki/${this.current.slug}`); return; } try { const page = this.isTourDemo() ? window.TourDemo.wikiPage(slug) : await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`); if (requestId !== this.requestId) return; this.current = page; this.editContent = page.content || ""; this.editing = false; if (this.$route.params.slug !== slug) this.$router.replace(`/projects/${this.$route.params.id}/wiki/${slug}`); } catch (error) { showToast(error.message || "無法載入頁面", "error", 0); } },
+      async loadPage(slug) { const requestId = ++this.requestId; if (this.editing && this.current && this.current.slug !== slug && !await confirmDialog({ title: "尚未儲存", message: "切換頁面會放棄未儲存的修改。", danger: true, confirmText: "放棄修改" })) { if (!this.embedded) this.$router.replace(`/projects/${this.$route.params.id}/wiki/${this.current.slug}`); return; } try { const page = this.isTourDemo() ? window.TourDemo.wikiPage(slug) : await Api.get(`projects/${this.$route.params.id}/wiki/${slug}`); if (requestId !== this.requestId) return; this.current = page; this.editContent = page.content || ""; this.editing = false; if (!this.embedded && this.$route.params.slug !== slug) this.$router.replace(`/projects/${this.$route.params.id}/wiki/${slug}`); } catch (error) { showToast(error.message || "無法載入頁面", "error", 0); } },
       async save() { if (!this.current || this.saving) return; if (this.tourDemoBlocked()) return; this.saving = true; try { this.current = await Api.put(`projects/${this.$route.params.id}/wiki/${this.current.slug}`, { content: this.editContent }); this.editing = false; await this.loadPages(); showToast("已儲存", "success"); } catch (error) { showToast(error.message || "儲存失敗", "error", 0); } finally { this.saving = false; } },
       openAddPage(event) { this.newPageTitle = ""; this.newPageSlug = ""; this.slugTouched = false; this.addPageError = ""; this.addPageTrigger = event?.currentTarget || null; this.showAddModal = true; this.$nextTick(() => this.$refs.newTitleInput?.focus()); }, closeAddPage() { this.showAddModal = false; this.$nextTick(() => this.addPageTrigger?.focus()); }, trapAddPageFocus(event) { if (event.key === "Escape") return this.closeAddPage(); if (event.key !== "Tab") return; const items = Array.from(this.$refs.wikiAddModal?.querySelectorAll("button:not([disabled]), input:not([disabled])") || []); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } }, onTitleInput() { if (!this.slugTouched) this.newPageSlug = this.newPageTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }, onSlugInput() { this.slugTouched = true; },
       async submitAddPage() { const title = this.newPageTitle.trim(), slug = this.newPageSlug.trim(); if (!title || !slug) { this.addPageError = "請填寫頁面標題與 Slug。"; return; } if (this.tourDemoBlocked()) return; this.addingPage = true; this.addPageError = ""; try { await Api.post(`projects/${this.$route.params.id}/wiki`, { title, slug, content: `# ${title}\n\n` }); this.closeAddPage(); await this.loadPages(); await this.loadPage(slug); } catch (error) { this.addPageError = error.message || "新增失敗"; showToast(this.addPageError, "error", 0); } finally { this.addingPage = false; } },
@@ -2980,6 +3040,8 @@
 
   window.UiNextDeploySopView = Vue.defineComponent({
     name: "UiNextDeploySopView",
+    // 內嵌成專案頁的「部署 SOP」頁籤時不轉址；直接開舊網址才轉。
+    props: { embedded: { type: Boolean, default: false } },
     components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
@@ -2996,7 +3058,10 @@
         branchProd: 'main'
       };
     },
-    async created() { await this.load(); },
+    async created() {
+      // 這一頁已內嵌成專案頁的「部署 SOP」頁籤，舊網址轉過去即可。
+      if (!this.embedded) { this.$router.replace(`/projects/${this.$route.params.id}?tab=sop`); return; }
+ await this.load(); },
     computed: {
       // 兩區的表單長得一樣，用同一段 template 跑兩次；帶的是 data 物件本身的參照，
       // 不是 'prod'／'test' 字串——template 裡沒有 this，用字串索引取不到東西。
@@ -3345,10 +3410,12 @@
       { to: "/admin/port-pool", title: "測試區 Port 池", detail: "Port 租用與狀態" },
       { to: "/admin/enterprise", title: "企業版來源", detail: "Enterprise addons 同步" },
     ] }; },
-    template: `<section class="ui-next-page ui-next-admin-page"><header class="ui-next-page-head"><div><p class="ui-next-eyebrow">系統維運</p><h1>管理員設定</h1><p>從工具卡進入特定維運工作，避免在首頁同時載入互不相關的設定表單。</p></div></header><section class="ui-next-admin-cards"><router-link v-for="card in cards" :key="card.to" :to="card.to" class="ui-next-panel"><h2>{{ card.title }}</h2><p>{{ card.detail }}</p><span>開啟工具</span></router-link></section></section>`,
+    template: `<section class="ui-next-page ui-next-admin-page"><header class="ui-next-page-head"><div><h1>管理員設定</h1><p>從工具卡進入特定維運工作，避免在首頁同時載入互不相關的設定表單。</p></div></header><section class="ui-next-admin-cards"><router-link v-for="card in cards" :key="card.to" :to="card.to" class="ui-next-panel"><h2>{{ card.title }}</h2><p>{{ card.detail }}</p></router-link></section></section>`,
   });
   window.UiNextDbView = Vue.defineComponent({
     name: "UiNextDbView",
+    // 內嵌成專案頁的「連線設定」頁籤時不轉址；直接開舊網址才轉。
+    props: { embedded: { type: Boolean, default: false } },
     data() {
       return {
         conns: [], loading: true, saving: false, running: false, testing: false, probing: false,
@@ -3359,7 +3426,10 @@
         selectedId: '', sql: '', result: null, error: ''
       };
     },
-    async created() { await Promise.all([this.load(), this.loadVpn()]); },
+    async created() {
+      // 這一頁已內嵌成專案頁的「連線設定」頁籤，舊網址轉過去即可。
+      if (!this.embedded) { this.$router.replace(`/projects/${this.$route.params.id}?tab=db`); return; }
+ await Promise.all([this.load(), this.loadVpn()]); },
     methods: {
       pid() { return this.$route.params.id; },
       // 新手教程的示範專案：連線與查詢結果來自 tour-demo.js，不打 API
@@ -3870,17 +3940,6 @@
         embedding: null,
         rebuildingEmbedding: false,
         embeddingTimer: null,
-        navTools: [
-          { title: '使用者管理', desc: '新增、刪除帳號，調整角色與存取權限。', to: '/admin/users' },
-          { title: 'Agent 管理', desc: '調整各 agent 的模型與提示詞。', to: '/admin/agents' },
-          { title: '排程', desc: '檢視所有背景排程的週期、狀態與下次執行時間。', to: '/admin/schedules' },
-          { title: '工作流程健檢', desc: '分析各 pipeline agent 近期表現，提出提示詞改進建議。', to: '/admin/health' },
-          { title: '退回原因管理', desc: '檢視所有人工退回原因與分類，可批次刪除。', to: '/admin/rejections' },
-          { title: '失敗分類樣本', desc: 'regex 判不出、交 haiku 分類的案例。看高頻 pattern，把復發的補進 regex 降低呼叫量。', to: '/admin/classify-samples' },
-          { title: 'Prompt 送出記錄', desc: '檢視最近送給 AI 的 prompt 完整內容，確認實際送出了什麼。', to: '/admin/prompt-logs' },
-          { title: '測試區 port 池', desc: '設定測試區可用的埠段範圍，檢視每個槽位由誰租用、閒置多久。', to: '/admin/port-pool' },
-          { title: '企業版來源', desc: '按 Odoo 大版本登記 enterprise addons repo 並同步，供企業版專案的測試區掛載。', to: '/admin/enterprise' }
-        ]
       };
     },
     async created() { await this.loadAll(); },
@@ -4551,14 +4610,7 @@
             </div>
           </div>
 
-          <!-- 管理工具 -->
-          <div class="settings-section-label">管理工具</div>
-          <div class="nav-card-grid" data-tour="admin-tools">
-            <div v-for="t in navTools" :key="t.to" class="nav-card" @click="$router.push(t.to)">
-              <div class="nav-card-title">{{ t.title }}<span class="nav-card-arrow">→</span></div>
-              <div class="nav-card-desc">{{ t.desc }}</div>
-            </div>
-          </div>
+          
 
         </div>
       </div>

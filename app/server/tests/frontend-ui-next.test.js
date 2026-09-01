@@ -199,7 +199,8 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain('<main id="ui-next-main"');
     expect(css).toContain('--next-brand:#93C5FD');
     expect(css).not.toContain('#C5A3BB');
-    expect(css).toContain('.ui-next-task-rich-head h2 a{color:#fff}');
+    expect(css).toContain('.ui-next-task-rich-head h2 a{color:var(--text);text-decoration:none}');
+    expect(css).not.toMatch(/task-rich-head h2 a\{color:#fff\}/);
   });
 
   test("動態 HTML 容器不保留子節點，避免 Vue 在進入詳情頁時拒絕編譯", () => {
@@ -211,7 +212,13 @@ describe("ui-next 平行介面", () => {
     expect(app).not.toContain("window.location.replace(");
     expect(app).toContain('query: { redirect: to.fullPath }');
     expect(app).toContain('return "/forbidden"');
-    expect(uiNext).toContain('<router-view :key="$route.fullPath" />');
+    // ⚠ key 綁 path 而不是 fullPath：fullPath 含 query，專案頁切頁籤只改 ?tab= 就會換掉 key，
+    // 整個 view 被銷毀重建（實測重打三支 API、捲動歸零、畫面閃一下）。換 path／換對話仍會重建，
+    // 純 query 變動由各頁自己 watch。改回 fullPath 就會重現那個「跳頁」。
+    expect(uiNext).toContain('<router-view :key="$route.path" />');
+    expect(uiNext).not.toContain('$route.fullPath');
+    // 專案頁必須自己接手 query 變化，否則側欄帶 ?tab=chat 進來時頁籤不會切過去。
+    expect(uiNextPages).toMatch(/"\$route\.query\.tab"\(tab\)\s*\{[\s\S]{0,260}this\.detailTab = next/);
     expect(uiNextPages).toContain("statusOptions()");
     expect(uiNextPages).not.toContain("window.STATUS_LABELS\" :key");
     expect(uiNextPages).toContain("開始新對話");
@@ -597,9 +604,15 @@ describe("ui-next 平行介面", () => {
     expect(projects).toContain("{{ project.name }} <small>Odoo {{ project.odoo_version }}");
     expect(projects).not.toContain('ui-next-project-card-meta');
     expect(projects).toContain('ui-next-project-more-menu');
-    expect(projects).toContain('goDb(id)');
-    expect(projects).toContain('goDeploySop(id)');
-    expect(projects).toContain('openRelease(id)');
+    // ⋮ 的前段與側欄 ⋮ 同順序（測試區／上正式／REPO／連線設定／專案設定），
+    // 側欄沒有的往後放。這裡只斷言入口都在，不綁順序以外的實作細節。
+    ['測試區', '上正式', 'REPO', '連線設定', '專案設定', '問答', 'Wiki', '部署 SOP'].forEach((label) =>
+      expect(projects).toContain(`>${label}</button>`));
+    // 卡片下方那排按鈕已整個收掉，剩下的入口只有標題列的 ⋮。
+    expect(projects).not.toMatch(/<footer>\s*<button @click="openEnv/);
+    expect(projects).toContain('goTab(id, tab)');
+    expect(projects).toContain('/projects/${id}?tab=${tab}');
+    expect(projects).not.toContain('>資料庫查詢</button>');
     expect(projects).toContain('_onProjectMoreOutside');
   });
 });
