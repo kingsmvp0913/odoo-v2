@@ -289,6 +289,12 @@
         commandOpen: false,
         commandQuery: "",
         commandIndex: 0,
+        commandResults: [],
+        commandLoading: false,
+        // 每次查詢遞增。回應是非同步的，慢的那次可能後到並蓋掉新的結果，
+        // 所以回來時要比對序號，不是自己那次就整包丟掉。
+        commandSeq: 0,
+        commandTimer: null,
         commandTrigger: null,
         toolsTrigger: null,
         accountTrigger: null,
@@ -358,30 +364,10 @@
         if (current) selected.set(String(current.id), current);
         return [...selected.values()].sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name, "zh-Hant"));
       },
+      // 搜的是使用者實際在做的東西——任務、對話、專案，不含頁面：
+      // 頁面在側欄與帳號／更多工具選單都各有常駐入口，混進搜尋結果只會把真正要找的東西擠掉。
       commandItems() {
-        const common = [
-          { label: "問答", path: "/" },
-          { label: "任務列表", path: "/tasks" },
-          { label: "專案", path: "/projects" },
-          { label: "設定", path: "/settings" },
-          { label: "架構圖", path: "/architecture" },
-          { label: "流程圖", path: "/pipeline-flow" },
-        ];
-        if (this.isAdmin)
-          common.push(
-            { label: "用量報表", path: "/token-report" },
-            { label: "管理員", path: "/admin" },
-          );
-        this.projects.forEach((project) =>
-          common.push({
-            label: `專案：${project.name}`,
-            path: `/projects/${project.id}`,
-          }),
-        );
-        const query = this.commandQuery.trim().toLowerCase();
-        return query
-          ? common.filter((item) => item.label.toLowerCase().includes(query))
-          : common;
+        return this.commandResults;
       },
       },
       async mounted() {
@@ -439,6 +425,19 @@
     // 點遮罩、切換路由），在每個地方各自加解鎖遲早會漏掉一處。
     watch: {
       commandOpen() { this.syncBodyScroll(); },
+      // 打字每個字都打一次 API 會讓伺服器接到一串註定被丟掉的查詢，
+      // 且慢的那次可能後到並蓋掉新結果（序號在 runCommandSearch 內擋掉）。
+      commandQuery() {
+        this.commandIndex = 0;
+        clearTimeout(this.commandTimer);
+        if (!this.commandQuery.trim()) {
+          this.commandResults = [];
+          this.commandLoading = false;
+          return;
+        }
+        this.commandLoading = true;
+        this.commandTimer = setTimeout(() => this.runCommandSearch(), 220);
+      },
       mobileSidebarOpen() { this.syncBodyScroll(); },
       "$route.path"() { this.syncSidebarToRoute(); },
     },
@@ -534,10 +533,42 @@
         this.commandTrigger = trigger || null;
         this.commandOpen = true;
         this.commandIndex = 0;
+        // 每次重開都從空白開始：留著上一次的字，使用者第一個動作永遠是先清掉它。
+        this.commandQuery = "";
+        this.commandResults = [];
         this.focusCommand();
       },
       showSearch(event) {
         this.openCommand(event && event.currentTarget);
+      },
+      // 三類結果攤平成一個清單，鍵盤上下鍵才能一路走到底（分組會讓索引邏輯多一層）。
+      // kind 只是顯示用的標籤，讓「新對話」這種撞名的項目分得出是任務還是對話。
+      async runCommandSearch() {
+        const seq = ++this.commandSeq;
+        const q = this.commandQuery.trim();
+        try {
+          const data = await Api.get("search?q=" + encodeURIComponent(q));
+          if (seq !== this.commandSeq) return;
+          this.commandResults = [
+            ...(data.tasks || []).map((t) => ({
+              key: "task-" + t.id, kind: "任務", label: t.title || t.task_id,
+              hint: t.project_name || "", path: "/task/" + t.id,
+            })),
+            ...(data.chats || []).map((c) => ({
+              key: "chat-" + c.id, kind: "對話", label: c.title || "新對話",
+              hint: c.project_name || "", path: "/projects/" + c.project_id + "/chat/" + c.id,
+            })),
+            ...(data.projects || []).map((p) => ({
+              key: "project-" + p.id, kind: "專案", label: p.name,
+              hint: "", path: "/projects/" + p.id,
+            })),
+          ];
+        } catch (error) {
+          if (seq !== this.commandSeq) return;
+          this.commandResults = [];
+        } finally {
+          if (seq === this.commandSeq) this.commandLoading = false;
+        }
       },
       closeCommand() {
         // Escape 是全域監聽，palette 沒開時也會呼叫到這裡；
@@ -568,6 +599,7 @@
       selectCommand(item) {
         this.closeCommand();
         this.commandQuery = "";
+        this.commandResults = [];
         this.go(item.path);
       },
       openTour() {
@@ -754,11 +786,13 @@
           <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
             <!-- Enter 綁在 input 而不是 backdrop：焦點若在某個選項上，backdrop 的 Enter
                  會和該按鈕的原生 click 同時觸發,等於導航兩次。 -->
-            <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋頁面或專案…" role="combobox" aria-expanded="true" aria-controls="ui-next-command-list" :aria-activedescendant="commandItems.length ? 'ui-next-command-item-' + commandIndex : null" @input="commandIndex = 0" @keydown.enter.prevent="chooseCommand()">
+            <input ref="commandInput" v-model="commandQuery" autofocus placeholder="搜尋任務、對話或專案…" role="combobox" aria-expanded="true" aria-controls="ui-next-command-list" :aria-activedescendant="commandItems.length ? 'ui-next-command-item-' + commandIndex : null" @keydown.enter.prevent="chooseCommand()">
             <div id="ui-next-command-list" role="listbox" aria-label="搜尋結果">
-              <button v-for="(item, index) in commandItems" :key="item.path" :id="'ui-next-command-item-' + index" role="option" :aria-selected="index === commandIndex" :class="{ 'is-active': index === commandIndex }" @click="selectCommand(item)" @mousemove="commandIndex = index">{{ item.label }}<span><ui-next-icon name="enter"/></span></button>
+              <button v-for="(item, index) in commandItems" :key="item.key" :id="'ui-next-command-item-' + index" role="option" :aria-selected="index === commandIndex" :class="{ 'is-active': index === commandIndex }" @click="selectCommand(item)" @mousemove="commandIndex = index"><em class="ui-next-command-kind">{{ item.kind }}</em><b>{{ item.label }}</b><small v-if="item.hint">{{ item.hint }}</small><span><ui-next-icon name="enter"/></span></button>
             </div>
-            <p v-if="!commandItems.length">找不到符合的項目</p>
+            <p v-if="commandLoading">搜尋中…</p>
+            <p v-else-if="!commandQuery.trim()">輸入關鍵字搜尋任務、對話或專案</p>
+            <p v-else-if="!commandItems.length">找不到符合的項目</p>
           </section>
         </div>
       </div>

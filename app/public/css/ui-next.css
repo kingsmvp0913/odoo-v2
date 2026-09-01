@@ -147,6 +147,13 @@ html[data-theme="dark"] [data-ui="next"]{--sidebar-bg:#1B1B1E;--sidebar-text:#C4
 .ui-next-command{display:flex;flex-direction:column;max-height:calc((100vh - 240px) / var(--ui-zoom, 1))}
 .ui-next-command [role="listbox"]{min-height:0;flex:1;overflow:auto}
 
+/* 一列有四塊：類別標籤、標題、所屬專案、Enter 提示。標題吃掉剩下的寬度並在過長時截斷，
+   否則長任務標題會把右邊的專案名與 Enter 提示擠出按鈕外。 */
+.ui-next-command button{gap:8px}
+.ui-next-command-kind{flex:none;border-radius:5px;padding:2px 6px;background:var(--bg);color:var(--text-muted);font-size:11px;font-style:normal}
+.ui-next-command button b{overflow:hidden;flex:1;min-width:0;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
+.ui-next-command button small{overflow:hidden;max-width:40%;color:var(--text-muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+
 /* 全站捲軸比照側欄：極細、軌道透明、hover 才明顯。掛在 [data-ui="next"] 上，
    scrollbar-width/color 會往下繼承到所有捲動容器；::-webkit-* 給不吃標準屬性的舊版 Chromium。
    顏色走 --text 而不是寫死，深淺色各自成立。 */
