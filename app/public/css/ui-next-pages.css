@@ -3185,3 +3185,24 @@
 .ui-next-send,.ui-next-thread-send{background:color-mix(in srgb,var(--text) 26%,var(--surface));color:var(--text)}
 .ui-next-send:not(:disabled):hover,.ui-next-thread-send:not(:disabled):hover{background:color-mix(in srgb,var(--text) 38%,var(--surface));color:var(--text)}
 .ui-next-send:disabled,.ui-next-thread-send:disabled{opacity:.45}
+.ui-next-running-hint{color:var(--info);font-size:12px}
+
+/* 對話頁把垂直空間讓給訊息：輸入區壓低、最後一則訊息與輸入區之間不留大片空白、
+   頁面底部也不再留 96px。原本三處加起來吃掉快 300px 的可視高度。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list{padding:12px 0 6px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list article:last-of-type{margin-bottom:4px}
+.ui-next-task-detail-grid.is-tab-conversation{gap:6px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{padding-bottom:0}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{padding:12px 14px}
+.ui-next-task-action textarea{min-height:56px}
+.ui-next-task-action > p,.ui-next-task-action > .ui-next-field-note{margin:0 0 8px}
+/* 失敗待確認的三個快捷句原本各佔一整行 */
+.ui-next-shortcut-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.ui-next-shortcut-row button{border:1px solid var(--border);border-radius:99px;padding:5px 11px;background:transparent;color:var(--text-secondary);font:inherit;font-size:12px;cursor:pointer;transition:background-color .125s ease}
+.ui-next-shortcut-row button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+/* 對話頁不需要頁面底部那段大留白（輸入區已經 sticky 在底） */
+.ui-next-task-detail{padding-bottom:20px}
+
+/* 訊息不多時 sticky 不會貼底（它只在內容超出視窗時才生效），輸入區就停在半空中、
+   下面一大片空白。讓對話頁的內容區至少撐滿一個畫面高，輸入區自然落到底部。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{margin-top:2px}

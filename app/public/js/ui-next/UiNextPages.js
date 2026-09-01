@@ -2393,7 +2393,6 @@
 <textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)" @input="autoResize" @paste="onPasteFiles($event,'answerFiles')">
 </textarea>
 </div>
-<p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
 <label class="ui-next-upload ui-next-upload-inline"><input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
 <p v-if="!clarAllAnswered" class="ui-next-error-text">還有必答的問題沒回答</p>
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
@@ -2412,8 +2411,7 @@
      （見本檔 submitAnswer 的 else 分支），resolution 是 blocker mode 的 resolveBlocker 在用。
      綁錯的後果是靜默失效——打字讓按鈕亮起，點下去在那個 "沒文字就 return" 的早退直接返回，
      沒有 toast、沒有錯誤，而 clarify_pending 狀態下這是唯一的回覆入口。 -->
-<p class="ui-next-field-note">AI 有問題等待你回覆。</p>
-<textarea v-model="newMessageText" placeholder="輸入給 AI 的回答或補充…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
+<textarea v-model="newMessageText" placeholder="回答 AI 的問題或補充說明…（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
 </textarea>
 <!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
@@ -2472,7 +2470,7 @@
 <span v-if="repo.truncated">（diff 過大已截斷，完整內容請至 repo 檢視）</span>
 </div>
 </div>
-<textarea v-model="rejectReason" placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
+<textarea v-model="rejectReason" placeholder="填寫退回原因，可一次列多個問題（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
 </textarea>
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
@@ -2481,9 +2479,8 @@
 <small v-if="rejectFiles.length">已選 {{ rejectFiles.length }} 個附件</small>
 </div>
 <div class="ui-next-inline-actions">
-<button v-if="isAgentRunning" class="ui-next-stop" @click="togglePause"><ui-next-icon name="close"/>停止</button>
-<button v-else @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
-<button v-if="!isAgentRunning" class="ui-next-primary" @click="approve" :disabled="approving">{{ approving?'處理中…':'審核通過' }}</button>
+<button @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
+<button class="ui-next-primary" @click="approve" :disabled="approving">{{ approving?'處理中…':'審核通過' }}</button>
 </div>
 </div>
 </template>
@@ -2526,9 +2523,8 @@
 <button v-if="conflictItems.length&&!isRebuildConflict" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已在 Repo 手動解完剩餘檔，收尾繼續' }}</button>
 </template>
 <template v-else-if="timelineActionMode==='cs_reply'">
-<div class="ui-next-help-box">{{ task.cs_reply }}</div>
-<p>這題判定為「操作問題」——用現有功能就能解決，不需要改程式，所以這裡要你確認的是回覆內容，不是程式改動。確認後送出即結案；若要調整或有疑問，於下方追問，客服會依此重新處理（釐清後若真的需要改程式，會自動轉開發）。</p>
-<textarea v-model="csFollowup" placeholder="可追問或要求調整回覆（例：客戶用的是 17.0／回覆再客氣些）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="csFollowupSubmit">
+<div v-if="task.cs_reply" class="ui-next-help-box">{{ task.cs_reply }}</div>
+<textarea v-model="csFollowup" placeholder="確認回覆內容後按「確認結案」；要調整就在這裡追問（例：客戶用的是 17.0／回覆再客氣些）" @keydown.enter.exact.prevent="csFollowupSubmit">
 </textarea>
 <div class="ui-next-inline-actions">
 <button @click="csFollowupSubmit" :disabled="csFollowingUp||!csFollowup.trim()">送出</button>
@@ -2536,7 +2532,6 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='cs_data'">
-<p>請填寫以下所有問題後送出，AI 將重新分析。</p>
 <div v-for="(question,index) in csQuestions" :key="index" class="ui-next-question">
 <b>{{ index+1 }}. {{ question }}</b>
 <!-- ref 與 handleCsEnter 成對：少了 ref，Enter 找不到下一題的元素就靜默什麼都不做 -->
@@ -2548,17 +2543,18 @@
 </template>
 <template v-else-if="timelineActionMode==='blocker'">
 <p class="ui-next-error-text">{{ task.blocker_content || '任務分診失敗或執行中斷' }}</p>
-<p>說明你的修正方向，任務將回到失敗的那一關重試。常見情況可直接按下面的按鈕，句子會填進輸入框（裡面已帶好系統要的判斷，建議只加內容、不要改寫原句）。</p>
-<button v-for="shortcut in blockerShortcuts" :key="shortcut.label" @click="applyResolutionShortcut(shortcut.text)">{{ shortcut.label }}</button>
+<div class="ui-next-shortcut-row"><button v-for="shortcut in blockerShortcuts" :key="shortcut.label" :title="shortcut.text" @click="applyResolutionShortcut(shortcut.text)">{{ shortcut.label }}</button></div>
 <textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="resolveBlocker">
 </textarea>
+<div class="ui-next-inline-actions">
 <button class="ui-next-primary" @click="resolveBlocker" :disabled="resolving||!resolution.trim()">{{ resolving?'處理中…':'從中斷處繼續' }}</button>
+</div>
 </template>
 <template v-else>
 <!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因不秀出來就會靜默卡好幾天。
      只認 sync_wait，避免把「分診中」等狀態殘留的上次停下原因也當成當前錯誤秀出來。 -->
 <p v-if="task.blocker_type==='sync_wait'&&task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
-<textarea v-model="newMessageText" placeholder="新增留言…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="sendTaskMessage">
+<textarea v-model="newMessageText" placeholder="新增留言…（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="sendTaskMessage">
 </textarea>
 <!-- ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
      檔名會留在欄位裡看起來像又要再送一次。 -->
@@ -2573,7 +2569,14 @@
 <input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
 <!-- disabled 只看文字，與 sendTaskMessage 第一行那個 "沒文字就 return" 的早退對齊。
      原本額外放行「只選了檔案」的情況，按鈕會亮但點下去被那行擋掉，靜默什麼都不發生。 -->
+<div class="ui-next-action-foot">
+<small v-if="isAgentRunning" class="ui-next-running-hint">AI 正在處理這一輪…</small>
+<span v-else></span>
+<div class="ui-next-inline-actions">
+<button v-if="isAgentRunning" class="ui-next-stop" @click="togglePause"><ui-next-icon name="close"/>停止</button>
 <button class="ui-next-primary" @click="sendTaskMessage" :disabled="sendingMessage||!newMessageText.trim()">{{ sendingMessage?'送出中…':'送出留言' }}</button>
+</div>
+</div>
 </template>
 </section>
 </aside>
