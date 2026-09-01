@@ -27,7 +27,8 @@ describe("ui-next 平行介面", () => {
     expect(css).toContain(".ui-next-shell");
     expect(pagesCss).toContain(".ui-next-chat-page");
     expect(index).toContain("get('ui') === 'next'");
-    expect(index).toContain("document.write('<link rel=\"stylesheet\" href=\"css/ui-next.css\">");
+    expect(index).toContain("document.write('<link rel=\"stylesheet\" href=\"css/ui-next.css?v=");
+    expect(index).toContain("document.write('<script src=\"js/ui-next/UiNextApp.js?v=");
   });
 
   test("Next CSS 的每個 selector 都有專用 scope，不會污染 Legacy DOM", () => {
@@ -279,6 +280,28 @@ describe("ui-next 平行介面", () => {
     expect(css).toContain(".ui-next-main{box-sizing:border-box;scroll-padding-bottom:max(32px,env(safe-area-inset-bottom));padding-bottom:max(32px,env(safe-area-inset-bottom))}");
   });
 
+  test("側欄帳號與更多工具使用相同的水平內距", () => {
+    expect(css).toContain(".ui-next-account{width:100%;display:flex;gap:9px;align-items:center;border:0;background:transparent;color:var(--sidebar-text);padding:8px 9px");
+    expect(css).toContain(".ui-next-tools{width:100%;border:0;background:transparent;color:var(--sidebar-text);padding:8px 9px");
+    expect(uiNext).toContain('class="ui-next-user-icon"');
+    expect(uiNext).toContain('<span>帳號與設定</span>');
+    expect(uiNext).not.toContain('{{ userName }}<br><small>帳號與設定</small>');
+  });
+
+  test("側欄用量卡顯示服務、剩餘比例與更新時間，不使用泛稱標題", () => {
+    expect(uiNext).toContain('provider: "claude", label: "Claude 5hr"');
+    expect(uiNext).toContain('formatUsageUpdated(value)');
+    expect(uiNext).toContain('methods: {\n      formatUsageUpdated(value)');
+    expect(uiNext).toContain('class="usage-provider-logo claude"');
+    expect(uiNext).toContain('class="usage-provider-logo codex"');
+    expect(uiNext).toContain('剩 {{ row.remaining }}%');
+    expect(uiNext).toContain('更新 {{ formatUsageUpdated(row.updatedAt) }}');
+    expect(uiNext).toContain("width: row.used + '%'");
+    expect(uiNext).toContain('<i><em :class="row.level"');
+    expect(css).toContain('.ui-next-usage-row i{flex-basis:100%');
+    expect(uiNext).not.toContain('<b>Usage</b>');
+  });
+
   test("Pipeline Monitor 在背景頁籤停止輪詢，回到前景立即更新", () => {
     expect(uiNextPages).toContain('document.addEventListener("visibilitychange", this._onVisibility)');
     expect(uiNextPages).toContain("if (document.hidden) this.stopPolling()");
@@ -361,10 +384,37 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain("is-tab-'+taskTab");
     expect(uiNextPages).toContain('eventSummary(event)');
     expect(uiNextPages).toContain('toggleEvent(event)');
+    expect(uiNextPages).not.toContain("'/task/'+task.id+'/terminal'");
     expect(uiNextPages).toContain('eventsError');
     expect(uiNextPages).toContain('ui-next-event-summary');
     expect(pagesCss).toContain('.ui-next-task-detail-grid.is-tab-conversation{grid-template-columns:minmax(0,1fr)}');
     expect(pagesCss).toContain('.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{grid-column:1}');
+  });
+
+  test("任務詳情與管理頁的主要操作維持在頁首，新增使用者改用彈窗", () => {
+    const users = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextAdminUsersView"'),
+      uiNextPages.indexOf('name: "UiNextAdminSettingsView"'),
+    );
+    expect(uiNextPages).toContain("task.status==='done'&&!task.is_hidden");
+    expect(uiNextPages).toContain('<ui-next-icon name="arrow-left"/> 返回');
+    expect(uiNextPages).not.toContain("task.project_name || '專案任務'");
+    expect(users).toContain('addUserOpen: false');
+    expect(users).toContain('@click="addUserOpen=true"');
+    expect(users).toContain('class="ui-next-user-create"');
+    expect(users).not.toContain('<h2 class="section-title">新增使用者</h2>');
+    expect(uiNextPages).toContain('<h1 class="page-title">系統設定</h1>');
+    expect(uiNextPages).toContain('page-header ui-next-admin-page-head');
+  });
+
+  test("Agent 管理首次開啟時預設顯示 CLAUDE.md，全域健檢預填仍優先", () => {
+    const agents = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextAdminAgentsView"'),
+      uiNextPages.indexOf('name: "UiNextAdminSchedulesView"'),
+    );
+    expect(agents).toContain("const name = this.$route.query.prefill;");
+    expect(agents).toContain("await this.select({ name: 'CLAUDE' });");
+    expect(agents).toContain("if (name) {");
   });
 
   test("Chat Thread 使用單一 Composer 並提供原始程式碼複製", () => {
@@ -383,6 +433,19 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain("this.closeHistory(); return;");
     expect(pagesCss).toContain("inset: 0 0 0 auto;");
     expect(pagesCss).toContain("width: min(380px, 100vw);");
+  });
+
+  test("有內容的專案對話專注訊息與 Composer，建立任務緊鄰上傳附件", () => {
+    const chat = uiNextPages.slice(
+      uiNextPages.indexOf('name: "UiNextProjectChatView"'),
+      uiNextPages.indexOf('name: "UiNextProjectDetailView"'),
+    );
+    const activeChat = chat.slice(chat.indexOf('<template v-if="activeChat">'), chat.indexOf('<template v-else>'));
+    expect(activeChat).not.toContain('ui-next-thread-head');
+    expect(activeChat).not.toContain('{{ projectName }}');
+    expect(activeChat).toContain('title="建立任務" aria-label="建立任務"');
+    expect(activeChat).toContain('<ui-next-icon name="plus"/>');
+    expect(activeChat).toContain('title="上傳圖片"');
   });
 
   test("Chat 建立任務 Overlay 可關閉、圈限焦點並保留失敗內容", () => {

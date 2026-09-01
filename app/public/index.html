@@ -9,7 +9,7 @@
   <script>
     // Next assets 僅在明確選擇 ?ui=next 時載入，Legacy 不承擔其下載與 selector 成本。
     if (new URLSearchParams(location.search).get('ui') === 'next') {
-      document.write('<link rel="stylesheet" href="css/ui-next.css"><link rel="stylesheet" href="css/ui-next-pages.css">');
+      document.write('<link rel="stylesheet" href="css/ui-next.css?v=20260910"><link rel="stylesheet" href="css/ui-next-pages.css?v=20260910">');
     }
   </script>
   <link rel="stylesheet" href="css/vendor/xterm.css" />
@@ -81,7 +81,7 @@
   <!-- ui-next 與既有 View 分離；只有 ?ui=next 才載入資產與選為根介面。 -->
   <script>
     if (new URLSearchParams(location.search).get('ui') === 'next') {
-      document.write('<script src="js/ui-next/UiNextApp.js"><\/script><script src="js/ui-next/UiNextPages.js"><\/script>');
+      document.write('<script src="js/ui-next/UiNextApp.js?v=20260910"><\/script><script src="js/ui-next/UiNextPages.js?v=20260910"><\/script>');
     }
   </script>
   <script src="js/socket.js"></script>

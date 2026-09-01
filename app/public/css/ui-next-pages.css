@@ -229,7 +229,7 @@
 
 /* 專案詳情 */
 .ui-next-detail-head {
-  align-items: flex-end;
+  align-items: flex-start;
 }
 .ui-next-back {
   margin: 0 0 12px;
@@ -259,11 +259,14 @@
   font-size: 12px;
   cursor: pointer;
 }
-.ui-next-detail-actions button:last-child,
+.ui-next-detail-actions button:last-child:not(.ui-next-back),
 .ui-next-env-actions .ui-next-primary {
   border-color: var(--text);
   background: var(--text);
   color: var(--surface);
+}
+.ui-next-detail-actions .ui-next-back {
+  margin: 0;
 }
 .ui-next-detail-actions button:disabled,
 .ui-next-env-actions button:disabled,
@@ -616,7 +619,7 @@
 /* 任務詳情 */
 .ui-next-task-detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(310px, 0.7fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
@@ -753,17 +756,22 @@
   cursor: pointer;
 }
 .ui-next-conversation {
+  max-width: 812px;
+  margin: 0 auto;
   padding: 0;
-  overflow: hidden;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 .ui-next-conversation > .ui-next-card-title {
-  padding: 17px 18px;
+  padding: 0 0 13px;
   border-bottom: 1px solid var(--border);
 }
 .ui-next-conv-list {
-  max-height: 640px;
-  overflow: auto;
-  padding: 15px;
+  max-height: none;
+  overflow: visible;
+  padding: 24px 0;
 }
 .ui-next-conv-list > button {
   display: block;
@@ -776,24 +784,24 @@
   cursor: pointer;
 }
 .ui-next-conv-list article {
-  max-width: 86%;
-  margin: 0 0 14px;
+  max-width: 100%;
+  margin: 0 0 24px;
 }
 .ui-next-conv-list article.user {
   margin-left: auto;
 }
 .ui-next-conv-list article > p {
   margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 11px 11px 11px 3px;
-  background: var(--bg);
-  white-space: pre-wrap;
-  line-height: 1.55;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 1.7;
 }
 .ui-next-conv-list article.user > p {
-  border: 0;
-  border-radius: 11px 11px 3px 11px;
+  max-width: 82%;
+  margin-left: auto;
+  padding: 11px 14px;
+  border-radius: 15px 15px 4px 15px;
   background: var(--text);
   color: var(--surface);
 }
@@ -825,6 +833,8 @@
   font-size: 10px;
 }
 .ui-next-task-action {
+  max-width: 812px;
+  margin: 0 auto;
   display: grid;
   gap: 10px;
 }
@@ -1381,7 +1391,9 @@
 .ui-next-task-list h2 {
   margin: 0;
   font-size: 15px;
+  text-decoration: none;
 }
+.ui-next-task-detail h1 { text-decoration: none; }
 .ui-next-task-list p {
   margin: 5px 0 0;
   color: var(--text-muted);
@@ -1688,13 +1700,34 @@
   position: sticky;
   top: 0;
   z-index: 4;
-  padding: 17px 28px;
+  box-sizing: border-box;
+  width: min(812px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 17px 0;
   border-bottom: 0;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(14px);
 }
 .ui-next-thread-head h2 {
-  max-width: 430px;
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-next-thread-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.ui-next-thread-title p {
+  flex: none;
+  margin: 0;
+  white-space: nowrap;
+}
+.ui-next-thread-title h2 {
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1845,7 +1878,7 @@
 .ui-next-file-preview{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;padding:5px 7px;border:1px solid var(--border);border-radius:7px;color:var(--text-secondary);font-size:12px}.ui-next-file-preview button{display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--text-muted);cursor:pointer}.ui-next-file-preview button:hover{background:var(--bg)}.ui-next-file-preview .ui-next-icon{width:14px;height:14px}
 
 @media (max-width: 760px) {
-  .ui-next-thread-head { padding: 14px 16px; }
+  .ui-next-thread-head { width: calc(100% - 24px); padding: 14px 0; }
   .ui-next-thread-head h2 { max-width: 170px; }
   .ui-next-thread-actions button { padding: 7px; font-size: 0; }
   .ui-next-thread-actions .ui-next-task-action { font-size: 12px; }
@@ -1863,6 +1896,70 @@
   place-items: center;
   padding: 20px;
   background: rgba(0, 0, 0, 0.48);
+}
+.ui-next-user-create {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  padding: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.ui-next-user-create > header,
+.ui-next-user-create > footer,
+.ui-next-admin-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ui-next-user-create > header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-next-user-create h2 { margin: 0; font-size: 17px; }
+.ui-next-user-create > header button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-user-create > footer { justify-content: flex-end; }
+.ui-next-main .topbar.ui-next-admin-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1240px;
+  min-height: 66px;
+  margin: 0 auto;
+  padding: 18px 34px;
+}
+.ui-next-main .topbar.ui-next-admin-head h1 { margin: 0; }
+.ui-next-main .ui-next-admin-head-actions { margin-left: auto; }
+.ui-next-main .page-header.ui-next-admin-page-head .page-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1240px;
+  min-height: 66px;
+  margin: 0 auto;
+  padding: 18px 34px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-next-main .page-header.ui-next-admin-page-head .page-header-inner > .btn { margin-left: auto; }
+.ui-next-main .page-header.ui-next-admin-page-head { padding: 0; border-bottom: 0; }
+@media (max-width: 560px) {
+  .ui-next-main .topbar.ui-next-admin-head,
+  .ui-next-main .page-header.ui-next-admin-page-head .page-header-inner { padding-inline: 15px; }
+  .ui-next-user-create { max-height: calc(100dvh - 40px); overflow: auto; }
 }
 .ui-next-task-modal {
   width: min(560px, 100%);

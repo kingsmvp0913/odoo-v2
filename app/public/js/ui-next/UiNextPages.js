@@ -1000,17 +1000,6 @@
       <section class="ui-next-chat-page">
         <div class="ui-next-thread">
 <template v-if="activeChat">
-<header class="ui-next-thread-head">
-<div>
-<p>{{ projectName }}</p>
-<h2>{{ activeChat.title || '新對話' }}</h2>
-</div>
-<div class="ui-next-thread-actions">
-<button ref="historyTrigger" type="button" @click="toggleHistory"><ui-next-icon name="chat"/> 對話紀錄<span v-if="chats.length">{{ chats.length }}</span></button>
-<button type="button" @click="showNewChat=!showNewChat"><ui-next-icon name="plus"/> 新對話</button>
-<button type="button" class="ui-next-task-action" @click="toTask($event)" :disabled="draftingTask||sending">{{ draftingTask ? '摘要中…' : '建立任務' }}</button>
-</div>
-</header>
 <div v-if="showNewChat" class="ui-next-new-chat ui-next-new-chat-popover">
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
 <p v-if="chatError" class="ui-next-inline-error" role="alert">{{ chatError }}</p>
@@ -1059,6 +1048,7 @@
 <div class="ui-next-composer-foot">
 <div class="ui-next-composer-options">
 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
+<button type="button" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
 <span class="ui-next-composer-hint">Enter 送出 · Shift + Enter 換行 · 可直接貼上截圖</span>
 </div>
 <button class="ui-next-thread-send" :disabled="sending||(!newInput.trim()&&!pendingFiles.length)" :aria-label="sending?'送出中':'送出'"><span v-if="sending">送出中</span><ui-next-icon v-else name="send"/></button>
@@ -2180,8 +2170,6 @@
 <template v-else-if="task">
 <header class="ui-next-page-head ui-next-detail-head">
 <div>
-<button class="ui-next-back" @click="back"><ui-next-icon name="arrow-left"/> 任務列表</button>
-<p class="ui-next-eyebrow">{{ task.project_name || '專案任務' }}</p>
 <h1>{{ task.title || task.task_id }}</h1>
 <p>{{ task.task_id }} · 最後更新 {{ formatTime(task.updated_at) }}</p>
 </div>
@@ -2191,6 +2179,8 @@
 <button v-if="task.env_status" @click="openEnv">測試機</button>
 <button v-if="isAdmin&&!isTourDemo" @click="startHealthCheck" :disabled="healthChecking">{{ healthChecking?'健檢中…':'任務健檢' }}</button>
 <button v-if="isAdmin&&task.git_branch" @click="downloadCodeZip" :disabled="downloadingZip">{{ downloadingZip?'打包中…':'下載程式碼' }}</button>
+<button v-if="isAdmin&&task.status==='done'&&!task.is_hidden" @click="archive" :disabled="archiving">{{ archiving?'封存中…':'封存' }}</button>
+<button class="ui-next-back" @click="back"><ui-next-icon name="arrow-left"/> 返回</button>
 </div>
 </header>
 <div class="ui-next-task-tabs" role="tablist" aria-label="任務詳情">
@@ -2274,10 +2264,9 @@
 <p v-if="eventsError" class="ui-next-inline-error" role="alert">{{ eventsError }} <button type="button" @click="loadEvents">重試</button></p>
 <p v-else-if="!events.length">尚無執行輸出。</p>
 </div>
-<router-link :to="'/task/'+task.id+'/terminal'">開啟完整終端機</router-link>
 </section>
 </div>
-<aside v-show="taskTab==='conversation'" class="ui-next-task-side">
+<aside v-show="taskTab==='conversation'&&timelineActionMode!=='archive'" class="ui-next-task-side">
 <section class="ui-next-panel ui-next-task-action">
 <p class="ui-next-eyebrow">下一步</p>
 <h2>{{ actionModeLabel }}</h2>
@@ -2470,10 +2459,6 @@
 <textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="resolveBlocker">
 </textarea>
 <button class="ui-next-primary" @click="resolveBlocker" :disabled="resolving||!resolution.trim()">{{ resolving?'處理中…':'從中斷處繼續' }}</button>
-</template>
-<template v-else-if="timelineActionMode==='archive'">
-<p>任務已完成，可手動封存。</p>
-<button @click="archive" :disabled="archiving">{{ archiving?'封存中…':'封存任務' }}</button>
 </template>
 <template v-else>
 <!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因不秀出來就會靜默卡好幾天。
@@ -2823,7 +2808,6 @@
       <section class="ui-next-page ui-next-task-page ui-next-task-page-rich">
 <header class="ui-next-page-head">
 <div>
-<p class="ui-next-eyebrow">工作區</p>
 <h1>任務列表</h1>
 <p>跨專案追蹤開發、澄清與交付進度。</p>
 </div>
@@ -3354,7 +3338,6 @@
       { to: "/admin/users", title: "使用者管理", detail: "帳號、角色與核准狀態" },
       { to: "/admin/agents", title: "Agent 管理", detail: "模型、提示詞與執行設定" },
       { to: "/admin/schedules", title: "排程", detail: "背景工作與執行週期" },
-      { to: "/admin/pipelines", title: "Pipeline", detail: "流程狀態與執行觀測" },
       { to: "/admin/health", title: "工作流程健檢", detail: "健康度與改善建議" },
       { to: "/admin/rejections", title: "退回原因", detail: "人工退回與分類" },
       { to: "/admin/classify-samples", title: "失敗分類樣本", detail: "待人工歸納的案例" },
@@ -3671,6 +3654,7 @@
         loading: true,
         newUser: { username: '', password: '', display_name: '', role: 'user' },
         savingUser: false,
+        addUserOpen: false,
         search: ''
       };
     },
@@ -3698,6 +3682,7 @@
         try {
           await Api.post('admin/users', { ...this.newUser });
           this.newUser = { username: '', password: '', display_name: '', role: 'user' };
+          this.addUserOpen = false;
           await this.loadUsers();
           showToast('已新增使用者', 'success');
         } catch (e) { showToast(e.message, 'error'); }
@@ -3731,9 +3716,9 @@
       }
     },
     template: `
-      <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
+      <div class="topbar ui-next-admin-head">
         <h1>使用者管理</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-primary btn-sm" @click="addUserOpen=true">＋ 新增</button><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div v-if="loading" class="admin-users-list">
@@ -3810,9 +3795,9 @@
             </div>
           </div>
 
-          <!-- 新增使用者 -->
-          <div class="settings-section">
-            <h2 class="section-title">新增使用者</h2>
+          <div v-if="addUserOpen" class="ui-next-task-modal-backdrop" @click.self="addUserOpen=false">
+          <section class="ui-next-user-create" role="dialog" aria-modal="true" aria-labelledby="ui-next-user-create-title">
+            <header><h2 id="ui-next-user-create-title">新增使用者</h2><button type="button" @click="addUserOpen=false" aria-label="關閉新增使用者視窗">關閉</button></header>
             <div class="admin-users-form-grid">
               <div class="form-group" style="margin:0">
                 <label>帳號</label>
@@ -3834,10 +3819,10 @@
                 </select>
               </div>
             </div>
-            <button class="btn btn-primary btn-sm" @click="addUser" :disabled="savingUser">
+            <footer><button class="btn btn-outline btn-sm" @click="addUserOpen=false" :disabled="savingUser">取消</button><button class="btn btn-primary btn-sm" @click="addUser" :disabled="savingUser">
               {{ savingUser ? '新增中...' : '+ 新增使用者' }}
-            </button>
-          </div>
+            </button></footer>
+          </section></div>
 
         </div>
       </div>
@@ -4184,9 +4169,10 @@
       }
     },
     template: `
-      <div class="page-header">
+      <div class="page-header ui-next-admin-page-head">
         <div class="page-header-inner">
-          <h1 class="page-title">管理員設定</h1>
+          <h1 class="page-title">系統設定</h1>
+          <button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button>
         </div>
       </div>
       <div class="page-body">
@@ -4621,6 +4607,9 @@
             if (n === this.selected.name && prompt) this.form.prompt = prompt;  // 留 dirty，提示「尚未儲存」
           } catch (_) { /* 壞資料忽略 */ }
         }
+      } else {
+        // 首次進入先顯示全域規則，讓管理員可立即查看 CLAUDE.md。
+        await this.select({ name: 'CLAUDE' });
       }
     },
     methods: {
@@ -4669,9 +4658,9 @@
       }
     },
     template: `
-      <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
+      <div class="topbar ui-next-admin-head">
         <h1>Agent 管理</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div v-if="loading" class="loading">載入中...</div>
@@ -4763,8 +4752,8 @@
       }
     },
     template: `
-      <div class="page-header">
-        <div class="page-header-inner"><h1 class="page-title">排程</h1></div>
+      <div class="page-header ui-next-admin-page-head">
+        <div class="page-header-inner"><h1 class="page-title">排程</h1><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="page-body">
         <div v-if="loading" class="loading">載入中...</div>
@@ -4952,9 +4941,9 @@
       }
     },
     template: `
-      <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
+      <div class="topbar ui-next-admin-head">
         <h1>系統健檢</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div class="hc-page">
@@ -5172,9 +5161,9 @@
       }
     },
     template: `
-      <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
+      <div class="topbar ui-next-admin-head">
         <h1>退回原因管理</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div>
@@ -5273,9 +5262,9 @@
       verdictLabel(v) { return { transient: '暫時性', env: '環境', code: '程式' }[v] || v; }
     },
     template: `
-      <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
+      <div class="topbar ui-next-admin-head">
         <h1>失敗分類樣本</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div class="classify-wrap">
@@ -5384,9 +5373,9 @@
       }
     },
     template: `
-      <div class="topbar">
-        <button class="btn btn-outline btn-sm" @click="$router.push('/admin')" style="margin-right:var(--space-3)">← 返回</button>
+      <div class="topbar ui-next-admin-head">
         <h1>Prompt 送出記錄</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div>
@@ -5477,9 +5466,10 @@
       hostOf(url) { try { return new URL(url).host; } catch { return url; } }
     },
     template: `
-      <div class="page-header">
+      <div class="page-header ui-next-admin-page-head">
         <div class="page-header-inner">
           <h1 class="page-title">測試區 port 池</h1>
+          <button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button>
         </div>
       </div>
       <div class="page-body">
@@ -5639,9 +5629,10 @@
       }
     },
     template: `
-      <div class="page-header">
+      <div class="page-header ui-next-admin-page-head">
         <div class="page-header-inner">
           <h1 class="page-title">企業版來源</h1>
+          <button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button>
         </div>
       </div>
       <div class="page-body">
