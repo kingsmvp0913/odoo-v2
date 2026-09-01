@@ -7,8 +7,21 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="css/app.css" />
   <script>
-    // Next assets 僅在明確選擇 ?ui=next 時載入，Legacy 不承擔其下載與 selector 成本。
-    if (new URLSearchParams(location.search).get('ui') === 'next') {
+    // 選哪一套介面的唯一判準。這段必須排在所有會依版本分歧的東西之前（CSS、UiNextApp.js、app.js）。
+    //
+    // 轉正式＝把 DEFAULT_UI 改成 'next' 這一個字，舊版立刻變成 ?ui=legacy 的退路，
+    // 兩邊的碼都留著、出事隨時可退。網址參數永遠優先於預設值，兩個方向都指定得動。
+    //
+    // ⚠ app/public 是靜態直接服務的：改這個值不需要重啟也不需要 push，存檔就對所有人生效。
+    window.UiVersion = (function () {
+      var DEFAULT_UI = 'legacy';
+      var picked = new URLSearchParams(location.search).get('ui');
+      return picked === 'next' || picked === 'legacy' ? picked : DEFAULT_UI;
+    })();
+  </script>
+  <script>
+    // Next assets 只在實際會用到時載入，另一邊不承擔其下載與 selector 成本。
+    if (window.UiVersion === 'next') {
       document.write('<link rel="stylesheet" href="css/ui-next.css?v=20260910"><link rel="stylesheet" href="css/ui-next-pages.css?v=20260910">');
     }
   </script>
@@ -78,9 +91,9 @@
   <script src="js/views/AdminPortPool.js"></script>
   <script src="js/views/AdminEnterprise.js"></script>
   <script src="js/views/TokenReport.js"></script>
-  <!-- ui-next 與既有 View 分離；只有 ?ui=next 才載入資產與選為根介面。 -->
+  <!-- ui-next 與既有 View 分離；版本判斷單一來源在 head 的 window.UiVersion。 -->
   <script>
-    if (new URLSearchParams(location.search).get('ui') === 'next') {
+    if (window.UiVersion === 'next') {
       document.write('<script src="js/ui-next/UiNextApp.js?v=20260910"><\/script><script src="js/ui-next/UiNextPages.js?v=20260910"><\/script>');
     }
   </script>

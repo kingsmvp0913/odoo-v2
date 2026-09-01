@@ -12,11 +12,22 @@ describe("ui-next 平行介面", () => {
   const css = read("css/ui-next.css");
   const pagesCss = read("css/ui-next-pages.css");
 
-  test("只在網址帶 ui=next 時選用新版根介面", () => {
-    expect(uiNext).toMatch(/query\.get\(["']ui["']\) === ["']next["']/);
+  // 版本判準只能有一處。以前 index.html 與 UiNextApp.js 各自讀一次網址，
+  // 改了其中一處就會變成「載了新版資產卻走舊版 View」——畫面壞掉但沒有任何錯誤訊息。
+  test("根介面依單一來源 window.UiVersion 決定，不自己讀網址", () => {
+    expect(uiNext).toContain('window.UiNextEnabled = window.UiVersion === "next"');
+    expect(uiNext).not.toMatch(/query\.get\(["']ui["']\)/);
     expect(app).toContain(
       "const RootApp = window.UiNextEnabled ? window.UiNextApp : App;",
     );
+  });
+
+  // 舊版是轉正式後的退路：兩個方向都要指定得動，預設值集中在一個常數上，
+  // 轉正式就是改那一個字，不必再回頭找散落各處的判斷。
+  test("?ui=legacy 與 ?ui=next 都認得，預設值是單一常數", () => {
+    expect(index).toContain("window.UiVersion = (function ()");
+    expect(index).toMatch(/picked === 'next' \|\| picked === 'legacy' \? picked : DEFAULT_UI/);
+    expect(index).toMatch(/var DEFAULT_UI = '(next|legacy)'/);
   });
 
   test("新版資產獨立載入，且所有 CSS 規則皆有 ui-next 範圍", () => {
@@ -26,7 +37,7 @@ describe("ui-next 平行介面", () => {
     expect(index).toContain("js/ui-next/UiNextPages.js");
     expect(css).toContain(".ui-next-shell");
     expect(pagesCss).toContain(".ui-next-chat-page");
-    expect(index).toContain("get('ui') === 'next'");
+    expect(index).toContain("window.UiVersion === 'next'");
     expect(index).toContain("document.write('<link rel=\"stylesheet\" href=\"css/ui-next.css?v=");
     expect(index).toContain("document.write('<script src=\"js/ui-next/UiNextApp.js?v=");
   });

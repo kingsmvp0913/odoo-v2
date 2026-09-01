@@ -1,6 +1,7 @@
 (function () {
-  const query = new URLSearchParams(window.location.search);
-  window.UiNextEnabled = query.get("ui") === "next";
+  // 判準單一來源在 index.html 的 window.UiVersion（那段排在本檔之前）。
+  // 這裡不再自己讀網址：兩處各判一次，改了其中一處就會出現「載了資產卻走舊 View」的錯位。
+  window.UiNextEnabled = window.UiVersion === "next";
 
   function chatTitle(value) {
     const text = (value || "").trim().replace(/\s+/g, " ");
