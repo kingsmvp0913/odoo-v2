@@ -110,6 +110,22 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 標題原本只有建立時能定（取自第一則訊息），改錯了就再也改不掉。
+  // 授權比照 delete：只能改自己的對話。
+  app.put('/api/projects/:projectId/chats/:id', verifyToken, async (req, res) => {
+    try {
+      const title = (req.body.title || '').trim();
+      // 空白不回退成「新對話」：那是建立時的預設值，改名改成空白是使用者失誤，要擋。
+      if (!title) return res.status(400).json({ error: '標題不可空白' });
+      const { rows: [chat] } = await query(
+        'UPDATE project_chats SET title = $1 WHERE id = $2 AND project_id = $3 AND user_id = $4 RETURNING id, title',
+        [title, req.params.id, req.params.projectId, req.userId]
+      );
+      if (!chat) return res.status(404).json({ error: '找不到對話' });
+      res.json(chat);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.delete('/api/projects/:projectId/chats/:id', verifyToken, async (req, res) => {
     try {
       const { rowCount } = await query(

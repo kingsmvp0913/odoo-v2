@@ -363,6 +363,123 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain('label: "Codex 5hr"');
     expect(uiNext).toContain('to="/tasks"');
     expect(uiNext).toContain('to="/projects"');
+    // 側欄專案仍走 lazy load：改成 mounted 逐專案讀 Chat 會變成每次登入 N+1。
+    expect(uiNext).toContain("if (opening) await this.ensureProjectChats(id)");
+    expect(uiNext).toMatch(/ensureProjectChats\(id\)\s*\{\s*\n\s*if \(Object\.prototype\.hasOwnProperty\.call\(this\.projectChats, id\)\) return;/);
+  });
+
+  test("側欄導覽是一棵樹：沒有區塊小標題，專案清單掛在「專案」底下", () => {
+    // 這兩個小標題把同一棵導覽樹切成三段，是本次改版要移除的東西。
+    expect(uiNext).not.toContain(">工作區</span>");
+    expect(uiNext).not.toContain(">專案 Chat</span>");
+    expect(uiNext).not.toContain('class="ui-next-section-label"');
+    expect(css).not.toContain(".ui-next-section-label{");
+    // 專案清單必須包在「專案」row 的同一個 group 內，而不是另一個獨立區塊。
+    expect(uiNext).toMatch(/<div class="ui-next-nav-group">[\s\S]*?to="\/projects"[\s\S]*?class="ui-next-projects"/);
+    // 沒有展開箭頭，所以清單常駐（不是 v-if 控制的可收合區塊）。
+    expect(uiNext).toContain('<div class="ui-next-projects">');
+    expect(uiNext).not.toContain("projectsOpen");
+    // 分隔線保留，否則第一層入口會直接黏在搜尋下面。
+    expect(uiNext).toContain('<div class="ui-next-sidebar-rule"></div>');
+  });
+
+  test("目前 Chat 一定看得到而且看得出是哪一列", () => {
+    // 第 6 筆以後的目前 Chat 若被 slice 掉，深連結進來的人會看到一份「沒有自己」的清單。
+    expect(uiNext).toContain('v-for="chat in visibleChats(project)"');
+    expect(uiNext).not.toContain("(projectChats[project.id] || []).slice(0, 5)");
+    // 順序固定：目前 Chat 只在被擠出前 5 筆時才補進來，而且補在末尾。
+    // 提到最前面會讓「點一下清單就重排」，使用者的視線還停在原位（實測回報過）。
+    expect(uiNext).toMatch(/return \[\.\.\.chats\.slice\(0, 4\), chats\[at\]\]/);
+    expect(uiNext).toMatch(/if \(at < 0 \|\| at < 5\) return chats\.slice\(0, 5\)/);
+    // 目前專案不在近期／最愛清單時的唯一例外補入。
+    expect(uiNext).toMatch(/const current = projectById\.get\(this\.currentProjectId\);\s*\n\s*if \(current\) selected\.set/);
+    // 換路由（不只 mounted）都要重新對齊側欄，否則 SPA 內切換 Chat 樹不會跟著展開。
+    expect(uiNext).toContain('"$route.path"() { this.syncSidebarToRoute(); }');
+    expect(uiNext).toContain("this.syncSidebarToRoute();");
+    expect(uiNext).toMatch(/syncSidebarToRoute\(\)\s*\{[\s\S]{0,320}this\.expandedProjects\[id\] = true;[\s\S]{0,120}await this\.ensureProjectChats\(id\)/);
+  });
+
+  test("Menu row 是低對比單層樣式，不再有卡片與左側色條", () => {
+    // 「新對話」的卡片外觀讓它看起來像側欄唯一的主要動作，實際上只是導回首頁。
+    expect(css).toContain(".ui-next-new{display:flex;align-items:center;border:0;background:transparent;box-shadow:none");
+    expect(css).not.toContain(".ui-next-nav.is-active::before{");
+    // 尺寸只斷言「四個第一層入口共用同一條規則」與字級，不寫死 px——
+    // 寫死的話每次視覺微調都會假紅，而假紅久了就沒人看了。
+    // ⚠ 這個 selector 出現兩次：平板 icon-only 的 media query 裡也有一條（font-size:0）。
+    // 要的是桌機那條，用 min-height 認人，別直接取第一個匹配。
+    const rowRules = [...css.matchAll(/\.ui-next-new,\.ui-next-search,\.ui-next-nav\{([^}]*)\}/g)].map((m) => m[1]);
+    const rowRule = rowRules.find((body) => body.includes("min-height"));
+    expect(rowRule).toBeTruthy();
+    expect(rowRule).toMatch(/font-size:13px/);
+    expect(rowRule).toMatch(/font-weight:400/);
+    expect(rowRule).toMatch(/border-radius:(?:9|10)px/);
+    // 最明確的 selected 底色只留給最深層的目前 Chat；祖先只加深文字。
+    expect(css).toContain(".ui-next-nav.is-active{background:transparent;color:var(--sidebar-active);font-weight:500}");
+    // selected 底色掛在整列（.ui-next-chat-row.is-active），不是掛在 button 上——
+    // 掛 button 上時滑到右側 ⋮，button 失去 hover，整列底色會缺一塊。
+    expect(css).toMatch(/\.ui-next-chat-row\.is-active\{background:color-mix\(in srgb,var\(--sidebar-active\) 10%,transparent\)\}/);
+    expect(css).not.toMatch(/\.ui-next-project-chats button\.is-active\{/);
+    // 籠統的 transition:all 會把 padding/height 這種不該動畫的屬性一起帶進來。
+    expect(css).not.toMatch(/\.ui-next-(?:new|search|nav|project-chats button)[^{}]*\{[^{}]*transition:\s*all/);
+    expect(css).toContain("translate:0 -2px");
+    expect(css).toContain("@media(prefers-reduced-motion:reduce){.ui-next-new:hover");
+  });
+
+  test("專案清單延伸到側欄底部，且只有一層細捲軸", () => {
+    // 原本 .ui-next-projects 鎖 30vh 又自己 overflow:auto：清單短時底下空一塊、
+    // 長時變成「側欄捲軸裡還有一條專案捲軸」。捲動一律交給 .ui-next-sidebar-scroll。
+    expect(css).toMatch(/\.ui-next-projects\{[^}]*max-height:none/);
+    expect(css).toMatch(/\.ui-next-projects\{[^}]*overflow:visible/);
+    expect(css).toContain(".ui-next-sidebar-scroll{min-height:0;flex:1;overflow:auto}");
+    // 細捲軸兩套都要寫：scrollbar-width 是標準屬性，::-webkit-* 給舊版 Chromium。
+    expect(css).toMatch(/\.ui-next-sidebar-scroll\{[^}]*scrollbar-width:thin/);
+    expect(css).toMatch(/\.ui-next-sidebar-scroll\{[^}]*scrollbar-color:color-mix\(in srgb,var\(--sidebar-active\)/);
+    expect(css).toContain(".ui-next-sidebar-scroll::-webkit-scrollbar{width:6px}");
+    expect(css).toContain(".ui-next-sidebar-scroll::-webkit-scrollbar-track{background:transparent}");
+    // 顏色走 --sidebar-active 而不是寫死，否則淺色模式下會是一條看不見（或死黑）的軌道。
+    expect(css).toMatch(/::-webkit-scrollbar-thumb\{[^}]*background:color-mix\(in srgb,var\(--sidebar-active\)/);
+  });
+
+  test("⋮ 選單不被所在列的樣式污染，hover 也不位移", () => {
+    // 選單是「列」的子節點，所以列的規則（padding/font-size/hover 上浮）會一路打進選單裡。
+    // 實測後果：專案選單第一項變成 13px、左縮排 24px，和其他三項對不齊；
+    // 對話選單則是 hover 每一項都往上跳 2px。兩者都要靠更高權重的 selector 擋住。
+    expect(css).toMatch(/\.ui-next-project-head \.ui-next-row-menu button,\.ui-next-chat-row \.ui-next-row-menu button\{/);
+    expect(css).not.toMatch(/(?:^|\})\.ui-next-row-menu button\{/);
+    // hover 態必須壓過 .ui-next-project-chats button:not(.is-active):hover（同權重、且它在後面），
+    // 所以要用 .has-menu 墊高一級。降回無 .has-menu 的寫法就會重現位移。
+    expect(css).toMatch(/\.ui-next-project-head\.has-menu \.ui-next-row-menu button:hover,\.ui-next-chat-row\.has-menu \.ui-next-row-menu button:hover\{[^}]*translate:none/);
+    // 選單開著時整列不上浮：選單是列的子節點，列一浮選單就跟著跳。
+    expect(css).toMatch(/\.ui-next-project-head\.has-menu,\.ui-next-project-head\.has-menu:hover\{translate:none\}/);
+    // 選單被後面的兄弟列蓋住就是看得到點不到（實測踩過）。
+    expect(css).toMatch(/\.ui-next-project-head\.has-menu,\.ui-next-chat-row\.has-menu\{z-index:5\}/);
+  });
+
+  test("⋮ 平時不出現，但鍵盤 focus 時必須看得到", () => {
+    // 只綁 :hover 的話，鍵盤使用者 Tab 到 ⋮ 時它仍是 opacity:0——焦點在一個隱形元素上。
+    expect(css).toMatch(/\.ui-next-project-head:focus-within \.ui-next-row-more/);
+    expect(css).toMatch(/\.ui-next-chat-row:focus-within \.ui-next-row-more/);
+    expect(css).toMatch(/\.ui-next-project-head \.ui-next-row-more,\.ui-next-chat-row \.ui-next-row-more\{[^}]*opacity:0/);
+    // dots 圖示要真的是三個點：原本只畫一個圓，畫面上是一顆點而不是「更多操作」。
+    expect(uiNext).toMatch(/name==='dots'[^>]*><circle cx="12" cy="5"[^>]*\/><circle cx="12" cy="12"[^>]*\/><circle cx="12" cy="19"/);
+  });
+
+  test("側欄沒有任何展開箭頭，展開改由點名稱本身觸發", () => {
+    // 箭頭全面移除：DOM 與 CSS 都不該再留下它，否則 :last-child 這類選擇器會誤套到別人身上。
+    expect(uiNext).not.toContain("ui-next-nav-toggle");
+    // 只檢查專案樹那一段：chevron-down/up 仍是「更多工具」「帳號與設定」在用的圖示，
+    // 對整份檔案做反向斷言會連它們一起擋掉。
+    const tree = uiNext.slice(uiNext.indexOf('<div class="ui-next-nav-group">'), uiNext.indexOf('<div class="ui-next-bottom">'));
+    expect(tree).toBeTruthy();
+    expect(tree).toContain('class="ui-next-projects"');
+    expect(tree).not.toContain("chevron-down");
+    expect(tree).not.toContain("chevron-up");
+    expect(css).not.toContain("ui-next-nav-row");
+    // ⚠ 專案列只剩名稱一個 button 時，button:last-child 會選中名稱自己。
+    // 曾因此把名稱設成絕對定位 → 整列高度塌成 0、點不到（實測踩過），不准再出現。
+    expect(css).not.toContain(".ui-next-project-head button:last-child");
+    // 點名稱是展開／收合，不是導航——所以它必須是 button 綁 toggleProject，不是 router-link。
+    expect(uiNext).toMatch(/<button @click="toggleProject\(project\)" :aria-expanded="!!expandedProjects\[project\.id\]">/);
   });
 
   test("首頁專案選擇器保留最後專案，並區分載入、錯誤與真實測試環境狀態", () => {

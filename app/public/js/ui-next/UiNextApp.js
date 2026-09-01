@@ -30,7 +30,7 @@
     template: `<svg class="ui-next-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path v-if="name==='plus'" d="M12 5v14M5 12h14"/><path v-else-if="name==='search'" d="m20 20-4.2-4.2M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"/>
       <path v-else-if="name==='chat'" d="M20 11a7 7 0 0 1-7 7H8l-4 3v-6a7 7 0 1 1 16-4Z"/><path v-else-if="name==='tasks'" d="M9 5h10M9 12h10M9 19h10M4 5l1 1 2-2m-3 8 1 1 2-2m-3 8 1 1 2-2"/>
-      <path v-else-if="name==='project'" d="M3 7h7l2 2h9v10H3z"/><path v-else-if="name==='flow'" d="M6 5h12M6 12h12M6 19h12"/><circle v-else-if="name==='dots'" cx="6" cy="12" r="1" fill="currentColor"/><path v-else-if="name==='grid'" d="M5 5h5v5H5zm9 0h5v5h-5zM5 14h5v5H5zm9 0h5v5h-5z"/>
+      <path v-else-if="name==='project'" d="M3 7h7l2 2h9v10H3z"/><path v-else-if="name==='flow'" d="M6 5h12M6 12h12M6 19h12"/><g v-else-if="name==='dots'" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></g><path v-else-if="name==='grid'" d="M5 5h5v5H5zm9 0h5v5h-5zM5 14h5v5H5zm9 0h5v5h-5z"/>
       <path v-else-if="name==='book'" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 5.5v16"/><path v-else-if="name==='chart'" d="M5 20v-8m7 8V4m7 16v-5"/>
       <path v-else-if="name==='paperclip'" d="m21 11.5-8.7 8.7a5 5 0 0 1-7.1-7.1l8.8-8.8a3.5 3.5 0 0 1 5 5l-8.8 8.8a2 2 0 0 1-2.8-2.8l8.1-8.1"/>
       <path v-else-if="name==='arrow-left'" d="m14 5-7 7 7 7M7 12h12"/>
@@ -258,6 +258,11 @@
         sidebarProjectsError: "",
         projectChats: {},
         expandedProjects: {},
+        menuProjectId: null,
+        menuChatId: null,
+        releaseId: null,
+        renamingChatId: null,
+        renameTitle: "",
         mobileSidebarOpen: false,
         isAdmin: false,
         userName: "使用者",
@@ -294,6 +299,12 @@
                   : "healthy",
         }));
       },
+      currentProjectId() {
+        return this.$route.params.id ? String(this.$route.params.id) : "";
+      },
+      currentChatId() {
+        return this.$route.params.chatId ? String(this.$route.params.chatId) : "";
+      },
       sidebarProjects() {
         const projectById = new Map(this.projects.map((project) => [String(project.id), project]));
         const selected = new Map();
@@ -302,6 +313,10 @@
           if (project) selected.set(String(project.id), project);
         });
         this.projects.filter((project) => project.is_favorite).forEach((project) => selected.set(String(project.id), project));
+        // 目前路由的專案是唯一例外：開著一個既不在近期、也不是最愛的舊專案時，
+        // 不補進來的話側欄整棵樹選不到自己，使用者看不出人在哪裡。
+        const current = projectById.get(this.currentProjectId);
+        if (current) selected.set(String(current.id), current);
         return [...selected.values()].sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name, "zh-Hant"));
       },
       commandItems() {
@@ -346,6 +361,8 @@
         window.UserStore.role = me.role || "";
         this.projects = projects || [];
         this.sidebarChatProjects = sidebarChatProjects || [];
+        // 直接開 Chat 深連結時 watch 不會觸發（路由沒變過），所以載完專案要自己補一次。
+        this.syncSidebarToRoute();
         window.loadClaudeUsage && window.loadClaudeUsage();
         window.loadCodexUsage && window.loadCodexUsage();
         window.loadUnread && window.loadUnread();
@@ -361,12 +378,14 @@
           if (event.key === "Escape") {
             this.closeCommand();
             this.closePopovers(true);
+            this.closeSidebarMenus();
             this.closeMobileSidebar();
           }
         };
         window.addEventListener("keydown", this._onCommandKey);
         this._onOutsidePointer = (event) => {
           if (!event.target.closest(".ui-next-tools-wrap") && !event.target.closest(".ui-next-account-wrap")) this.closePopovers();
+          if (!event.target.closest(".ui-next-row-menu") && !event.target.closest(".ui-next-row-more")) this.closeSidebarMenus();
         };
         document.addEventListener("pointerdown", this._onOutsidePointer);
       } catch (e) {
@@ -382,28 +401,53 @@
     watch: {
       commandOpen() { this.syncBodyScroll(); },
       mobileSidebarOpen() { this.syncBodyScroll(); },
+      "$route.path"() { this.syncSidebarToRoute(); },
     },
     methods: {
       formatUsageUpdated(value) {
         if (!value) return "—";
         return new Date(value).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
       },
+      // 對話僅在展開專案時才讀，避免登入就對每個專案發請求；標題由既有 Chat API 回傳。
+      // 收合不清 cache，所以重複展開同一個專案只會打一次 API。
+      async ensureProjectChats(id) {
+        if (Object.prototype.hasOwnProperty.call(this.projectChats, id)) return;
+        try {
+          this.projectChats[id] = await Api.get(`projects/${id}/chats`);
+        } catch (e) {
+          this.projectChats[id] = [];
+          showToast("無法載入專案對話", "error");
+        }
+      },
       async toggleProject(project) {
         const id = project.id;
         const opening = !this.expandedProjects[id];
         this.expandedProjects[id] = opening;
-        // 對話僅在展開專案時才讀，避免登入就對每個專案發請求；標題由既有 Chat API 回傳。
-        if (
-          opening &&
-          !Object.prototype.hasOwnProperty.call(this.projectChats, id)
-        ) {
-          try {
-            this.projectChats[id] = await Api.get(`projects/${id}/chats`);
-          } catch (e) {
-            this.projectChats[id] = [];
-            showToast("無法載入專案對話", "error");
-          }
-        }
+        if (opening) await this.ensureProjectChats(id);
+      },
+      // 側欄只放得下 5 筆，但目前 Chat 若排在第 6 筆之後就會整列消失——
+      // 深連結進來時使用者看到的是一份「沒有自己」的清單。
+      // ⚠ 清單順序必須固定：把目前 Chat 提到最前面的話，點一下清單就重排，
+      // 使用者的眼睛還停在剛才那個位置，會覺得點錯了。只在它真的被擠出去時才補進來。
+      visibleChats(project) {
+        const chats = this.projectChats[project.id] || [];
+        if (this.currentProjectId !== String(project.id)) return chats.slice(0, 5);
+        const at = chats.findIndex((chat) => String(chat.id) === this.currentChatId);
+        if (at < 0 || at < 5) return chats.slice(0, 5);
+        // 擠掉第 5 筆而不是重排：前 4 筆位置原封不動。
+        return [...chats.slice(0, 4), chats[at]];
+      },
+      isCurrentChat(project, chat) {
+        return this.currentProjectId === String(project.id) && this.currentChatId === String(chat.id);
+      },
+      // 深連結與 SPA 內換頁都要讓側欄指到目前位置。只在 mounted 做一次的話，
+      // 從任務頁點進 Chat 時整棵樹仍是收合的，看起來像沒有這個 Chat。
+      async syncSidebarToRoute() {
+        if (!this.$route.path.startsWith("/projects")) return;
+        const id = this.currentProjectId;
+        if (!id) return;
+        this.expandedProjects[id] = true;
+        await this.ensureProjectChats(id);
       },
       toggleTools(event) {
         const opening = !this.toolsOpen;
@@ -491,8 +535,84 @@
         this.toolsOpen = false;
         window.TourManager.open();
       },
+      // ── 側欄 ⋮ 選單 ───────────────────────────────────────────────
+      // 兩份選單共用「同時只能開一個」的規則，否則點開第二個時第一個還浮在上面。
+      toggleProjectMenu(project, event) {
+        event.stopPropagation();
+        this.menuChatId = null;
+        this.menuProjectId = this.menuProjectId === project.id ? null : project.id;
+      },
+      toggleChatMenu(chat, event) {
+        event.stopPropagation();
+        this.menuProjectId = null;
+        this.menuChatId = this.menuChatId === chat.id ? null : chat.id;
+      },
+      closeSidebarMenus() {
+        this.menuProjectId = null;
+        this.menuChatId = null;
+      },
+      // 頁籤寫進 query，專案詳情頁的 detailTab 會照著開；直接 push 路徑只會停在總覽。
+      goProjectTab(id, tab) {
+        this.closeSidebarMenus();
+        this.go(tab ? `/projects/${id}?tab=${tab}` : `/projects/${id}`);
+      },
+      // 沿用專案頁那支：先開空白分頁再輪詢 SSO URL。不先開分頁的話，
+      // 等 await 回來才 window.open 會被瀏覽器當成非使用者手勢而擋掉。
+      async openEnv(id) {
+        this.closeSidebarMenus();
+        const popup = window.open("about:blank", "_blank");
+        try {
+          const url = await window.pollEnvSso(id);
+          if (popup) popup.location = url; else window.location.href = url;
+        } catch (error) {
+          if (popup) popup.close();
+          showToast(error.message || "無法開啟測試區", "error", 0);
+        }
+      },
+      openRelease(id) {
+        this.closeSidebarMenus();
+        this.releaseId = id;
+      },
+      startRenameChat(chat) {
+        this.closeSidebarMenus();
+        this.renamingChatId = chat.id;
+        this.renameTitle = chat.title || "";
+        this.$nextTick(() => this.$refs.renameInput && this.$refs.renameInput[0] && this.$refs.renameInput[0].select());
+      },
+      cancelRenameChat() {
+        this.renamingChatId = null;
+        this.renameTitle = "";
+      },
+      async submitRenameChat(project, chat) {
+        const title = this.renameTitle.trim();
+        if (!title || title === chat.title) { this.cancelRenameChat(); return; }
+        try {
+          const updated = await Api.put(`projects/${project.id}/chats/${chat.id}`, { title });
+          // 只改 cache 裡那一筆：重抓整份清單會讓側欄閃一下，而且會蓋掉其他專案的展開狀態。
+          const list = this.projectChats[project.id] || [];
+          const at = list.findIndex((item) => String(item.id) === String(chat.id));
+          if (at > -1) list[at] = { ...list[at], title: updated.title };
+        } catch (error) {
+          showToast(error.message || "無法重新命名對話", "error");
+        }
+        this.cancelRenameChat();
+      },
+      async deleteChat(project, chat) {
+        this.closeSidebarMenus();
+        if (!await confirmDialog({ title: "刪除對話", message: `確定刪除「${chat.title || "新對話"}」？`, danger: true, confirmText: "刪除" })) return;
+        try {
+          await Api.delete(`projects/${project.id}/chats/${chat.id}`);
+          this.projectChats[project.id] = (this.projectChats[project.id] || []).filter((item) => String(item.id) !== String(chat.id));
+          // 刪掉的正是目前開著的那個 Chat，留在原地會是一頁 404。
+          if (this.isCurrentChat(project, chat)) this.go(`/projects/${project.id}/chat`);
+        } catch (error) {
+          showToast(error.message || "無法刪除對話", "error");
+        }
+      },
       toProject(project) {
-        this.$router.push(`/projects/${project.id}`);
+        this.expandedProjects[project.id] = true;
+        this.ensureProjectChats(project.id);
+        this.go(`/projects/${project.id}`);
       },
       go(path) {
         this.closePopovers();
@@ -573,11 +693,14 @@
           <button class="ui-next-search" @click="showSearch($event)"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
           <div class="ui-next-sidebar-scroll">
           <div class="ui-next-sidebar-rule"></div>
-          <span class="ui-next-section-label">工作區</span>
-          <router-link class="ui-next-nav" to="/" exact-active-class="is-active"><ui-next-icon name="chat"/>問答</router-link>
+          <!-- 沒有「問答」：它和上面的「新對話」都是導到 /，同一個入口列兩次。 -->
           <router-link class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" to="/tasks" @click="mobileSidebarOpen=false"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></router-link>
-          <router-link class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" to="/projects" @click="mobileSidebarOpen=false"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></router-link>
-          <div class="ui-next-projects"><span class="ui-next-section-label">專案 Chat</span><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head"><button @click="toProject(project)"><ui-next-icon name="project"/>{{ project.name }}<ui-next-icon v-if="project.is_favorite" name="star"/></button><button @click="toggleProject(project)" :aria-label="(expandedProjects[project.id] ? '收合' : '展開') + ' ' + project.name" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon :name="expandedProjects[project.id] ? 'chevron-up' : 'chevron-down'"/></button></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><button v-for="chat in (projectChats[project.id] || []).slice(0, 5)" :key="chat.id" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
+          <!-- 專案清單是「專案」這個入口的下層，不是另一個區塊。沒有展開箭頭：
+               清單常駐，專案的展開改成點名稱本身，右側 ⋮ 才是那一列的操作入口。 -->
+          <div class="ui-next-nav-group">
+            <router-link class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" to="/projects" @click="mobileSidebarOpen=false"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></router-link>
+            <div class="ui-next-projects"><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head" :class="{ 'is-current': currentProjectId === String(project.id), 'has-menu': menuProjectId === project.id }"><button @click="toggleProject(project)" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon name="project"/>{{ project.name }}</button><button type="button" class="ui-next-row-more" :aria-label="project.name + ' 更多操作'" :aria-expanded="menuProjectId === project.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleProjectMenu(project, $event)"><ui-next-icon name="dots"/></button><div v-if="menuProjectId === project.id" class="ui-next-row-menu" role="menu"><button type="button" role="menuitem" @click="openEnv(project.id)">測試區</button><button type="button" role="menuitem" @click="openRelease(project.id)">上正式</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'repos')">REPO 連線設定</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'settings')">專案設定</button></div></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><div v-for="chat in visibleChats(project)" :key="chat.id" class="ui-next-chat-row" :class="{ 'has-menu': menuChatId === chat.id, 'is-active': isCurrentChat(project, chat) }"><input v-if="renamingChatId === chat.id" ref="renameInput" v-model="renameTitle" class="ui-next-rename-input" :aria-label="'重新命名對話'" @keydown.enter.prevent="submitRenameChat(project, chat)" @keydown.esc.prevent="cancelRenameChat" @blur="submitRenameChat(project, chat)"><template v-else><button :aria-current="isCurrentChat(project, chat) ? 'page' : null" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button type="button" class="ui-next-row-more" :aria-label="(chat.title || '新對話') + ' 更多操作'" :aria-expanded="menuChatId === chat.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleChatMenu(chat, $event)"><ui-next-icon name="dots"/></button><div v-if="menuChatId === chat.id" class="ui-next-row-menu" role="menu"><button type="button" role="menuitem" @click="startRenameChat(chat)">重新命名</button><button type="button" role="menuitem" class="danger" @click="deleteChat(project, chat)">刪除</button></div></template></div><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '/chat')">查看全部對話</button></div></div></div>
+          </div>
           </div>
           <div class="ui-next-bottom">
             <div class="ui-next-tools-wrap"><div v-if="toolsOpen" ref="toolsMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><small>其他功能</small><button role="menuitem" @click="openTour"><ui-next-icon name="book"/>新手教學</button><button role="menuitem" v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button role="menuitem" v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button role="menuitem" @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button role="menuitem" @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen" aria-haspopup="menu"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div>
@@ -586,6 +709,8 @@
           </div>
         </aside>
         <main id="ui-next-main" class="ui-next-main" tabindex="-1"><router-view :key="$route.fullPath" /></main>
+        <!-- 掛在 shell 而不是 aside 內：側欄是 overflow:hidden，放進去會被裁掉一半。 -->
+        <ReleaseModal v-if="releaseId" :key="releaseId" :project-id="releaseId" @close="releaseId=null" />
         <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown.down.prevent="moveCommand(1)" @keydown.up.prevent="moveCommand(-1)" @keydown="trapCommandFocus">
           <section class="ui-next-command" role="dialog" aria-modal="true" aria-label="快速切換">
             <!-- Enter 綁在 input 而不是 backdrop：焦點若在某個選項上，backdrop 的 Enter

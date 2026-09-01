@@ -161,6 +161,48 @@ test('POST messages → 400 if content empty', async () => {
   expect(res.status).toBe(400);
 });
 
+test('PUT chat → 改標題', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '舊標題', $2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .put(`/api/projects/${projectId}/chats/${chat.id}`).set(auth()).send({ title: '  新標題  ' });
+  expect(res.status).toBe(200);
+  expect(res.body.title).toBe('新標題');
+  const { rows } = await dbModule.query('SELECT title FROM project_chats WHERE id = $1', [chat.id]);
+  expect(rows[0].title).toBe('新標題');
+});
+
+// 空白不能悄悄變成「新對話」：那樣使用者以為改名成功，回頭看到的卻是另一個字。
+test('PUT chat → 標題空白回 400 且不動到原標題', async () => {
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '原標題', $2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .put(`/api/projects/${projectId}/chats/${chat.id}`).set(auth()).send({ title: '   ' });
+  expect(res.status).toBe(400);
+  const { rows } = await dbModule.query('SELECT title FROM project_chats WHERE id = $1', [chat.id]);
+  expect(rows[0].title).toBe('原標題');
+});
+
+// 授權要比照 delete：能改別人的對話等於誰都能竄改別人的紀錄。
+test('PUT chat → 改不到別人的對話', async () => {
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('renamer','x','Other') RETURNING id"
+  );
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1,'別人的標題',$2) RETURNING id",
+    [projectId, other.id]
+  );
+  const res = await request(app)
+    .put(`/api/projects/${projectId}/chats/${chat.id}`).set(auth()).send({ title: '我改的' });
+  expect(res.status).toBe(404);
+  const { rows } = await dbModule.query('SELECT title FROM project_chats WHERE id = $1', [chat.id]);
+  expect(rows[0].title).toBe('別人的標題');
+});
+
 test('DELETE chat → removes it', async () => {
   const { rows: [chat] } = await dbModule.query(
     "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '要刪', $2) RETURNING id",

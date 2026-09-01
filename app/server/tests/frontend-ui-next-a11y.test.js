@@ -75,9 +75,30 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
     // 所以必須是條件綁定而不是靜態屬性。
     expect(APP).toMatch(/:role="mobileSidebarOpen \? 'dialog' : null"/);
     expect(APP).toMatch(/:aria-modal="mobileSidebarOpen \? 'true' : null"/);
-    // 靜態的 role="dialog" 不該出現在 sidebar 上
-    const aside = APP.slice(APP.indexOf('<aside class="ui-next-sidebar"'));
-    expect(aside.slice(0, aside.indexOf('>'))).not.toMatch(/\srole="dialog"/);
+    // 靜態的 role="dialog" 不該出現在 sidebar 上。
+    // ⚠ 原本這裡找的是 '<aside class="ui-next-sidebar"'，但 template 上 ref 排在 class 前面，
+    // indexOf 回 -1 → slice(-1) 取到最後一個字元 → 這個反向斷言恆真、擋不住任何東西。
+    // 改用 <aside 起點並先驗證抓得到，解析器失效時要紅而不是靜默通過。
+    const asideAt = APP.indexOf('<aside ');
+    expect(asideAt).toBeGreaterThan(-1);
+    const asideTag = APP.slice(asideAt, APP.indexOf('>', asideAt) + 1);
+    expect(asideTag).toContain('class="ui-next-sidebar"');
+    expect(asideTag).not.toMatch(/\srole="dialog"/);
+  });
+
+  // 沒有展開箭頭之後，專案名稱本身就是 toggle：它必須是原生 button 並回報 aria-expanded，
+  // 否則螢幕閱讀器只會聽到一個專案名，聽不出「這裡可以展開，而且現在是收合的」。
+  test('專案名稱本身是展開控制，回報 aria-expanded', () => {
+    expect(APP).toMatch(/<button @click="toggleProject\(project\)" :aria-expanded="!!expandedProjects\[project\.id\]">/);
+    // 反向：箭頭已全面移除，不該再有第二個 toggle 控制項
+    expect(APP).not.toContain('ui-next-nav-toggle');
+  });
+
+  // selected 是視覺樣式，輔助技術讀不到 class。沒有 aria-current，
+  // 螢幕閱讀器使用者在一排 Chat 標題裡分不出自己正開著哪一個。
+  test('目前 Chat 標記 aria-current="page"', () => {
+    expect(APP).toMatch(/:aria-current="isCurrentChat\(project, chat\) \? 'page' : null"/);
+    expect(APP).toMatch(/isCurrentChat\(project, chat\)\s*\{/);
   });
 
   // role="dialog" 卻不 trap 焦點是半套，而且比不加還糟：輔助技術宣告「這是對話框」，
@@ -96,9 +117,13 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
   // 側欄底部兩個下拉（更多工具／帳號）。原本只有 aria-expanded，
   // 對輔助技術而言那只說明「展開了」，沒說明「展開的是一份選單」。
   test('下拉選單有 menu 語意', () => {
-    // 兩個 trigger 都要宣告它會開出選單
-    expect(APP.match(/aria-haspopup="menu"/g) || []).toHaveLength(2);
+    // 底部兩個下拉（更多工具／帳號）＋ 側欄兩個 ⋮（專案／對話），每個 trigger 都要宣告它會開出選單。
+    // 不斷言總數：那會讓「多加一個合法的選單」變成假紅（實測踩過）。
+    expect(APP).toMatch(/class="ui-next-tools"[^>]*aria-haspopup="menu"/);
+    expect(APP).toMatch(/class="ui-next-account"[^>]*aria-haspopup="menu"/);
+    expect(APP.match(/class="ui-next-row-more"[\s\S]{0,200}?aria-haspopup="menu"/g) || []).toHaveLength(2);
     expect(APP.match(/class="ui-next-account-menu" role="menu"/g) || []).toHaveLength(2);
+    expect(APP.match(/class="ui-next-row-menu" role="menu"/g) || []).toHaveLength(2);
     // 選單項要是 menuitem，不能只是裸 button
     expect(APP).toMatch(/role="menuitem"/);
   });
