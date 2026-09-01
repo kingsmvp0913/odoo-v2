@@ -3039,3 +3039,7 @@
 .ui-next-form-modal .ui-next-file-preview{display:flex;align-items:center;gap:8px;margin:0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text-secondary);font-size:12px}
 .ui-next-form-modal .ui-next-file-preview em{flex:1;min-width:0;overflow:hidden;font-style:normal;white-space:nowrap;text-overflow:ellipsis}
 .ui-next-form-modal .ui-next-file-preview > .ui-next-icon{flex:none;width:14px;height:14px;color:var(--text-muted)}
+
+/* 系統設定用頁籤分組：11 個設定區塊疊成一長條時，要找某一項只能一路捲。
+   沿用專案頁那排頁籤的外觀，不另立一套。 */
+.ui-next-settings-tabs{margin:0 0 16px}

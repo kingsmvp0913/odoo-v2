@@ -3913,7 +3913,7 @@
   window.UiNextAdminSettingsView = Vue.defineComponent({
     name: "UiNextAdminSettingsView",
     data() {
-      return {
+      return { settingsTab: "conn", settingsTabs: [["conn","連線"],["ai","AI 憑證"],["integr","整合"],["adv","進階"]],
         odoo: { url: '', db: '', sync_interval: 60 },
         service: { url: '', db: '', sync_interval: 60 },
         teams: { tenant_id: '', client_id: '', client_secret: '', team_id: '', channel_id: '', webhook_url: '', notify_webhook_url: '' },
@@ -4250,7 +4250,8 @@
         <div v-else class="settings-layout">
 
           <!-- 系統連線設定 -->
-          <div class="setting-block" data-tour="admin-conn">
+          <nav class="ui-next-detail-tabs ui-next-settings-tabs"><button v-for="tab in settingsTabs" :key="tab[0]" :class="{active:settingsTab===tab[0]}" @click="settingsTab=tab[0]">{{ tab[1] }}</button></nav>
+              <div v-show="settingsTab==='conn'" class="setting-block" data-tour="admin-conn">
             <div class="setting-block-head">
               <div class="setting-block-title">系統連線設定</div>
               <div class="setting-block-desc">設定全公司共用的伺服器位址。個人帳號密碼請至「個人設定」填寫。</div>
@@ -4302,7 +4303,7 @@
           </div>
 
           <!-- Teams 整合 -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='integr'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">Microsoft Teams 整合</div>
               <div class="setting-block-desc">任務通知發送至指定頻道，並 @mention 各任務負責人。需要 Azure App 權限：ChannelMessage.Send、ChannelMessage.ReadWrite.All。</div>
@@ -4350,7 +4351,7 @@
           </div>
 
           <!-- Claude 用量閘門 -->
-          <div class="setting-block" data-tour="admin-gate">
+          <div v-show="settingsTab==='ai'" class="setting-block" data-tour="admin-gate">
             <div class="setting-block-head">
               <div class="setting-block-title">Claude 用量閘門</div>
               <div class="setting-block-desc">Claude 帳號用量達門檻時，自動停止 Pipeline 自動推進（手動「繼續」不受影響）。5 小時視窗或本週任一超標即暫停。全台共用同一帳號，此設定為全域。</div>
@@ -4406,7 +4407,7 @@
           </div>
 
           <!-- Claude 認證憑證 -->
-          <div class="setting-block" data-tour="admin-token">
+          <div v-show="settingsTab==='ai'" class="setting-block" data-tour="admin-token">
             <div class="setting-block-head">
               <div class="setting-block-title">Claude 認證憑證</div>
               <div class="setting-block-desc">在任一台裝有 Claude Code 的機器執行 <code>claude setup-token</code> 產生長效 token（綁訂閱、不另計費，效期一年），貼在這裡即可。設定後所有 pipeline 子行程改用它認證，取代伺服器本機的登入憑證檔——後者在多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。換帳號只要貼新的 token，不必重啟伺服器。</div>
@@ -4437,7 +4438,7 @@
           </div>
 
           <!-- Codex 訂閱登入 -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='ai'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">Codex 訂閱連線</div>
               <div class="setting-block-desc">使用 ChatGPT 的 Codex 訂閱，不會走 OpenAI API 按量計費。按下連線後，在自己的瀏覽器開啟一次性網址並輸入代碼；正式機只由 Codex CLI 保存與自動刷新登入，平台不會接觸或保存 token 明文。</div>
@@ -4460,7 +4461,7 @@
           </div>
 
           <!-- 備用憑證（用量撞閘門時接手） -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='ai'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">備用 Claude 憑證</div>
               <div class="setting-block-desc">主憑證的用量撞到上方閘門門檻時，整條 pipeline 會停下等視窗重置。貼一把<strong>另一份訂閱</strong>的 <code>claude setup-token</code>，並開啟下方開關，撞門檻時就改用它繼續推進，主帳號用量降回門檻下自動切回。<strong>務必用不同帳號產生</strong>——同一個帳號的第二把 token 共用同一份用量，切過去照樣是超標狀態。備用帳號的用量能不能讀到取決於該 token 的權限，讀不到時顯示「不可得」，屆時只有跑失敗才會知道它也用完了。</div>
@@ -4497,7 +4498,7 @@
           </div>
 
           <!-- context7 API key -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='ai'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">context7 API key</div>
               <div class="setting-block-desc">AI 寫 Odoo 程式碼時靠 context7 查官方寫法。未設定則使用匿名額度，配額用盡時<strong>不會有任何錯誤</strong>——各關會靜默改用網路搜尋去抓 Odoo 原始碼，慢、不準，且那段消耗不會出現在用量報表上。在 <code>context7.com/dashboard</code> 註冊可取得免費 key（額度遠高於匿名）。貼上後下一張任務即生效，不必重啟伺服器。</div>
@@ -4525,7 +4526,7 @@
           </div>
 
           <!-- CLI 推送身分 -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='integr'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">CLI 推送身分</div>
               <div class="setting-block-desc">有人在終端機手動跑 <code>pushRepo/push.js</code> 推 GitHub、又沒指定 <code>--user</code> 時，要用誰的 GitHub PAT。<strong>只影響手動操作</strong>——平台自己的推送（任務完成推 code、合併、企業版 clone）一律用該任務擁有者的 PAT，不看這個設定。未設定時腳本會列出可用帳號要求指定，不會自己猜一個。</div>
@@ -4551,7 +4552,7 @@
           </div>
 
           <!-- 測試模式 -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='adv'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">Pipeline 測試模式</div>
               <div class="setting-block-desc">開啟後，排程停止自動推進 Pipeline，改為手動逐步執行，方便測試每個階段結果。</div>
@@ -4572,7 +4573,7 @@
           </div>
 
           <!-- 留言回寫 Odoo/eService -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='conn'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">留言回寫 Odoo/eService</div>
               <div class="setting-block-desc">開啟後，使用者在任務詳情頁新增的留言會以「記錄備註」寫回原單據（不發送給客戶、不建活動）。</div>
@@ -4590,7 +4591,7 @@
           </div>
 
           <!-- 語意檢索索引 -->
-          <div class="setting-block">
+          <div v-show="settingsTab==='adv'" class="setting-block">
             <div class="setting-block-head">
               <div class="setting-block-title">語意檢索索引</div>
               <div class="setting-block-desc">wiki 與歷史任務規格的語意索引，供 AI 用「意思相近」而非「字串相同」找資料。索引在內容變動時自動增量更新，夜間另有一輪補算；這裡的重建是換模型或懷疑索引不同步時才需要按。模型未就緒時檢索自動退回關鍵字比對，功能不會中斷。</div>
