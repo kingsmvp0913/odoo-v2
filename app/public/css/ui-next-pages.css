@@ -2966,7 +2966,7 @@
 .ui-next-form-modal-wide{grid-column:1/-1}
 .ui-next-form-modal-grid input,.ui-next-form-modal-grid select,.ui-next-form-modal-grid textarea{box-sizing:border-box;width:100%;border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
 .ui-next-form-modal-grid input,.ui-next-form-modal-grid select{height:36px}
-.ui-next-form-modal-grid textarea{min-height:78px;resize:vertical}
+.ui-next-form-modal-grid textarea{min-height:140px;resize:vertical}
 .ui-next-form-modal-grid input:focus,.ui-next-form-modal-grid select:focus,.ui-next-form-modal-grid textarea:focus{outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:1px}
 .ui-next-form-modal-grid small{color:var(--text-muted);font-size:12px}
 .ui-next-form-modal-grid small.error{color:var(--danger)}
@@ -2974,7 +2974,7 @@
 @media(max-width:640px){.ui-next-form-modal-grid{grid-template-columns:1fr}}
 
 .ui-next-form-modal .ui-next-inline-error{margin:0 18px 12px}
-.ui-next-form-modal .ui-next-file-preview{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:3px 7px;border-radius:7px;background:var(--bg);font-size:12px}
+
 .ui-next-form-modal footer{justify-content:flex-end;gap:8px}
 
 /* 卡片動作全部收進 ⋮ 之後，卡片矮了一截，1440 寬放得下三欄。 */
@@ -2987,3 +2987,55 @@
 .ui-next-project-card-title .ui-next-project-more .ui-next-icon{width:16px;height:16px}
 /* ⋮ 從卡片底部移到標題列之後，選單要往下開；沿用舊的 bottom 定位會蓋到卡片上方的頁面標題。 */
 .ui-next-project-card-title .ui-next-project-more-menu{top:calc(100% + 5px);bottom:auto}
+
+/* Wiki 頁面樹比照側欄 menu：一列一項，操作平時收起來、hover 或選單開著才出現 ⋮。
+   原本每個節點下面常駐「重新生成／刪除」兩顆按鈕，65 個頁面就是 130 顆，整棵樹 4100px 高。 */
+.ui-next-wiki-row{position:relative;display:flex;align-items:center;border-radius:8px;transition:background-color .125s ease}
+.ui-next-wiki-row:hover{background:color-mix(in srgb,var(--text) 6%,transparent)}
+.ui-next-wiki-row.active{background:color-mix(in srgb,var(--text) 10%,transparent)}
+.ui-next-wiki-row.has-menu{z-index:5}
+.ui-next-wiki-row .ui-next-wiki-node{flex:1;min-width:0;overflow:hidden;border:0;border-radius:8px;padding-block:7px;padding-right:30px;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:17px;text-align:left;white-space:nowrap;text-overflow:ellipsis;cursor:pointer}
+.ui-next-wiki-row.active .ui-next-wiki-node{color:var(--text);font-weight:500}
+.ui-next-wiki-more{position:absolute;top:50%;right:4px;z-index:1;display:grid;place-items:center;width:24px;height:24px;translate:0 -50%;border:0;border-radius:7px;padding:0;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text);opacity:0;cursor:pointer;transition:opacity .125s ease,background-color .125s ease}
+.ui-next-wiki-row:hover .ui-next-wiki-more,.ui-next-wiki-row:focus-within .ui-next-wiki-more,.ui-next-wiki-row.has-menu .ui-next-wiki-more{opacity:1}
+.ui-next-wiki-more:hover{background:color-mix(in srgb,var(--text) 20%,transparent);color:var(--text)}
+.ui-next-wiki-more .ui-next-icon{width:15px;height:15px}
+.ui-next-wiki-menu{position:absolute;z-index:var(--z-dropdown);top:calc(100% - 2px);right:4px;min-width:126px;padding:5px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ui-next-wiki-menu button{display:block;width:100%;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:var(--text);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.ui-next-wiki-menu button:hover{background:var(--bg)}
+.ui-next-wiki-menu button.danger{color:var(--danger)}
+.ui-next-wiki-menu button:disabled{opacity:.5;cursor:not-allowed}
+/* 頁面多的時候讓樹自己捲，不要把整頁撐成 4000px 高、右邊內容區一片空白。 */
+.ui-next-wiki-tree{position:sticky;top:0;max-height:calc(100vh - 220px);overflow:auto;align-self:start}
+
+/* 階層線比照側欄的對話清單：只靠縮排看不出哪幾頁是同一層的子頁。
+   線畫在子層容器上，深度由 WikiNode 的 padding-left 決定，所以用 depth 對齊。 */
+.ui-next-wiki-row.has-guide::before{position:absolute;top:0;bottom:0;left:calc(10px + (var(--wiki-depth) - 1) * 14px + 7px);width:1px;background:color-mix(in srgb,var(--text) 22%,transparent);content:""}
+
+/* 對話頁實測只用了 467px（容器有 900px 可用），左邊空一大片：.ui-next-conversation 的
+   max-width/margin:0 auto 被別處覆蓋掉，grid item 也沒有 stretch 開。這裡用明確寬度定住。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conversation{width:100%;max-width:none;margin:0}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{max-width:none}
+
+/* ⚠ 舊規則寫的是 article > p，但訊息本文其實是 <div v-html>——選擇器對不上，
+   所以「自己說的話」那個氣泡樣式從來沒生效過，AI／系統／自己全部長一樣。
+   div:first-child 只會命中一般訊息；LOG 那種第一個子元素是 <button>，不會被誤套。 */
+.ui-next-conv-list article{margin:0 0 14px}
+.ui-next-conv-list article > div:first-child{padding:10px 13px;border-radius:4px 13px 13px 13px;background:color-mix(in srgb,var(--text) 5%,transparent);line-height:1.65}
+.ui-next-conv-list article.user > div:first-child{max-width:82%;margin-left:auto;border-radius:13px 13px 4px 13px;background:var(--text);color:var(--surface)}
+.ui-next-conv-list article.user small{display:block;text-align:right}
+.ui-next-conv-list small{margin-top:5px;font-size:11px}
+
+/* 附件：原生 file input 會畫出「Choose Files / No file chosen」，和旁邊的欄位完全不同調。
+   input 用 sr-only 藏起來（不是 display:none，否則鍵盤 focus 不到），外觀交給可點的放置區。 */
+.ui-next-upload input[type=file]{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+.ui-next-upload-drop{display:flex;align-items:center;justify-content:center;gap:8px;min-height:64px;border:1px dashed var(--border-strong);border-radius:10px;padding:10px;background:var(--bg);color:var(--text-secondary);cursor:pointer;transition:border-color .125s ease,background-color .125s ease}
+.ui-next-upload-drop:hover{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,var(--bg))}
+.ui-next-upload input[type=file]:focus-visible + .ui-next-upload-drop{outline:2px solid var(--primary);outline-offset:2px}
+.ui-next-upload-drop b{font-size:13px;font-weight:500}
+.ui-next-upload-drop small{color:var(--text-muted);font-size:12px}
+.ui-next-upload-drop .ui-next-icon{width:16px;height:16px}
+.ui-next-upload-list{display:grid;gap:6px;margin-top:-6px}
+.ui-next-form-modal .ui-next-file-preview{display:flex;align-items:center;gap:8px;margin:0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text-secondary);font-size:12px}
+.ui-next-form-modal .ui-next-file-preview em{flex:1;min-width:0;overflow:hidden;font-style:normal;white-space:nowrap;text-overflow:ellipsis}
+.ui-next-form-modal .ui-next-file-preview > .ui-next-icon{flex:none;width:14px;height:14px;color:var(--text-muted)}
