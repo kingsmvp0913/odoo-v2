@@ -1489,8 +1489,8 @@
         this.taskTab = tab;
         if (this.$route.query.tab !== tab) this.$router.replace({ query: { ...this.$route.query, tab } });
         this.$nextTick(() => {
-          const heading = this.$refs.taskTabHeading;
-          (Array.isArray(heading) ? heading.find((item) => item.offsetParent !== null) : heading)?.focus();
+          const visible = (item) => item && item.getClientRects().length > 0;
+          [...document.querySelectorAll(".ui-next-task-detail-grid [role=\"tabpanel\"]")].find(visible)?.focus();
         });
       },
       async openEnv() {
@@ -2234,7 +2234,7 @@
 </div>
 <div class="ui-next-task-detail-grid" :class="'is-tab-'+taskTab">
 <div class="ui-next-task-content-column">
-<section v-show="taskTab==='requirements'" class="ui-next-panel ui-next-task-summary" role="tabpanel" aria-labelledby="ui-next-task-tab-requirements">
+<section v-show="taskTab==='requirements'" tabindex="-1" class="ui-next-panel ui-next-task-summary" role="tabpanel" aria-labelledby="ui-next-task-tab-requirements">
 <div class="ui-next-task-badges">
 <span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
@@ -2247,7 +2247,6 @@
 <span v-if="task.created_at">建立 {{ formatTime(task.created_at) }}</span>
 </div>
 <div class="ui-next-card-title">
-<h2 ref="taskTabHeading" tabindex="-1">需求內容</h2>
 <button v-if="canEditContent&&!editingContent" @click="startEditContent">編輯</button>
 </div>
 <p v-if="!editingContent" class="ui-next-task-content">{{ task.original_text || '（無內容）' }}</p>
@@ -2265,13 +2264,7 @@
 </button>
 </div>
 </section>
-<section v-show="taskTab==='conversation'" class="ui-next-panel ui-next-conversation" role="tabpanel" aria-labelledby="ui-next-task-tab-conversation">
-<div class="ui-next-card-title">
-<div>
-<h2 ref="taskTabHeading" tabindex="-1">對話</h2>
-<p>保留完整溝通紀錄與下一步操作。</p>
-</div>
-</div>
+<section v-show="taskTab==='conversation'" tabindex="-1" class="ui-next-panel ui-next-conversation" role="tabpanel" aria-labelledby="ui-next-task-tab-conversation">
 <div ref="convPanel" class="ui-next-conv-list" @scroll="onConvScroll" @click="handleTaskMessageClick">
 <button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
 <article v-for="item in visibleTimeline" :key="item._key" :class="timelineClass(item)">
@@ -2296,8 +2289,7 @@
 <p v-if="!timeline.length" class="ui-next-empty-state">尚無對話記錄。</p>
 </div>
 </section>
-<section v-show="taskTab==='history'" class="ui-next-panel ui-next-events" role="tabpanel" aria-labelledby="ui-next-task-tab-history">
-<h2 ref="taskTabHeading" tabindex="-1">執行歷程</h2>
+<section v-show="taskTab==='history'" tabindex="-1" class="ui-next-panel ui-next-events" role="tabpanel" aria-labelledby="ui-next-task-tab-history">
 <div ref="eventsBox" @scroll="onEventsScroll">
 <button v-if="eventsLoading" type="button" disabled>載入較早紀錄中…</button>
 <p v-if="events.length&&!eventsHasMore">— 已到最前 —</p>
@@ -2850,7 +2842,7 @@
       },
       clearFilters() { this.search = ""; this.releaseFilter = "all"; this.projectFilter = ""; this.ownerFilter = ""; this.statusFilter = ""; this.sourceFilter = ""; },
       applySort(list) { const timestamp = (value) => new Date(value || 0).getTime(); return list.slice().sort((a, b) => this.sort === "created_desc" ? timestamp(b.created_at) - timestamp(a.created_at) : this.sort === "title_asc" ? (a.title || a.task_id || "").localeCompare(b.title || b.task_id || "", "zh-Hant") : this.sort === "status_asc" ? (a.status || "").localeCompare(b.status || "") : timestamp(b.updated_at || b.created_at) - timestamp(a.updated_at || a.created_at)); },
-      needsAction(task) { return (window.HUMAN_STATUSES || []).includes(task.status); }, isStopped(task) { return task.status === "stopped" || task.status === "merge_conflict"; }, statusLabel(status) { return (window.STATUS_LABELS || {})[status] || status; }, sourceLabel(source) { return source === "odoo" ? "Odoo" : source === "service" ? "eService" : source === "manual" ? "手動增加" : source; }, timeAgo(value) { const delta = Date.now() - new Date(value).getTime(); return delta < 60000 ? "剛剛" : delta < 3600000 ? `${Math.floor(delta / 60000)} 分鐘前` : delta < 86400000 ? `${Math.floor(delta / 3600000)} 小時前` : `${Math.floor(delta / 86400000)} 天前`; },
+      needsAction(task) { return (window.HUMAN_STATUSES || []).includes(task.status); }, isRunning(task) { return (window.RUNNABLE_STATUSES || []).includes(task.status); }, isStopped(task) { return task.status === "stopped" || task.status === "merge_conflict"; }, statusLabel(status) { return (window.STATUS_LABELS || {})[status] || status; }, sourceLabel(source) { return source === "odoo" ? "Odoo" : source === "service" ? "eService" : source === "manual" ? "手動增加" : source; }, timeAgo(value) { const delta = Date.now() - new Date(value).getTime(); return delta < 60000 ? "剛剛" : delta < 3600000 ? `${Math.floor(delta / 60000)} 分鐘前` : delta < 86400000 ? `${Math.floor(delta / 3600000)} 小時前` : `${Math.floor(delta / 86400000)} 天前`; },
       async load() { this.loading = true; this.loadError = ""; try { const data = await Api.get(this.filter === "archived" ? "tasks?archived=true" : this.showAllUsers ? "tasks?all=true" : "tasks"); if (this.filter === "archived") this.archivedTasks = data.tasks || data; else { this.tasks = data.tasks || data; if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount; } } catch (error) { this.loadError = error.message || "無法載入任務"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       taskPath(task) { return { path: `/task/${task.id}`, query: { from: this.filter } }; }, openTask(task) { this.$router.push(this.taskPath(task)); }, onTaskKeydown(task, event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openTask(task); } }, toggleBatchMode() { this.batchMode = !this.batchMode; if (!this.batchMode) this.selectedIds = []; }, toggleSelect(id, event) { event.stopPropagation(); const index = this.selectedIds.indexOf(id); if (index < 0) this.selectedIds.push(id); else this.selectedIds.splice(index, 1); }, toggleSelectAll() { this.selectedIds = this.allSelected ? [] : this.filteredTasks.map((task) => task.id); },
       openAdd(event) { this.newTask = { title: "", original_text: "", project_id: "" }; this.newFiles = []; this.addError = ""; this.addTrigger = event?.currentTarget || null; this.showAdd = true; this.$nextTick(() => this.$refs.newTaskTitle?.focus()); }, closeAdd() { this.showAdd = false; this.$nextTick(() => this.addTrigger?.focus()); }, onAddFilesSelected(event) { const files = Array.from(event.target.files || []); this.addError = files.length > 5 ? "最多上傳 5 個附件，請重新選擇。" : ""; this.newFiles = files.slice(0, 5); event.target.value = ""; }, removeAddFile(index) { this.newFiles.splice(index, 1); }, trapAddFocus(event) { if (event.key === "Escape") return this.closeAdd(); if (event.key !== "Tab") return; const items = Array.from(this.$refs.taskCreateModal?.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])") || []); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } }, async submitAdd() { if (!this.newTask.project_id || !this.newTask.title.trim() || !this.newTask.original_text.trim()) { this.addError = "請完整填寫專案、標題與內容。"; return; } this.adding = true; this.addError = ""; try { const form = new FormData(); form.append("title", this.newTask.title.trim()); form.append("original_text", this.newTask.original_text); form.append("project_id", this.newTask.project_id); this.newFiles.forEach((file) => form.append("files", file)); await Api.postForm("tasks", form); this.showAdd = false; this.filter = "all"; showToast("已新增任務", "success"); } catch (error) { this.addError = error.message || "新增任務失敗"; showToast(this.addError, "error", 0); } finally { this.adding = false; } },
@@ -2949,19 +2941,18 @@
 <div v-if="loading" class="ui-next-loading-card">載入任務中…</div>
 <div v-else-if="loadError" class="ui-next-loading-card"><p>{{ loadError }}</p><button class="ui-next-primary" @click="load">重試</button></div>
 <div v-else class="ui-next-task-rich-list">
-<article v-for="task in filteredTasks" :key="task.id" :class="{selected:selectedIds.includes(task.id),need:needsAction(task)&&!task.is_paused}" :tabindex="batchMode?-1:0" @click="batchMode?toggleSelect(task.id,$event):openTask(task)" @keydown="!batchMode&&onTaskKeydown(task,$event)">
+<article v-for="task in filteredTasks" :key="task.id" :class="{selected:selectedIds.includes(task.id),need:needsAction(task)&&!task.is_paused,running:isRunning(task)&&!task.is_paused}" :tabindex="batchMode?-1:0" @click="batchMode?toggleSelect(task.id,$event):openTask(task)" @keydown="!batchMode&&onTaskKeydown(task,$event)">
 <div class="ui-next-task-rich-head">
 <label v-if="batchMode">
 <input type="checkbox" :aria-label="'選取任務：'+(task.title||task.task_id)" :checked="selectedIds.includes(task.id)" @click.stop="toggleSelect(task.id,$event)">
 </label>
 <div>
 <h2><router-link :to="taskPath(task)" @click.stop>{{ task.title||task.task_id }}</router-link></h2>
-<p>{{ sourceLabel(task.source) }} · {{ task.project_name||'未分類專案' }} · {{ timeAgo(task.updated_at||task.created_at) }}</p>
+<p>{{ statusLabel(task.status) }} · {{ task.project_name||'未分類專案' }} · {{ timeAgo(task.updated_at||task.created_at) }}</p>
 </div>
 <div class="ui-next-task-card-actions">
 <button v-if="!batchMode&&!isStopped(task)&&task.status!=='done'" @click.stop="togglePause(task,$event)">{{ task.is_paused?'恢復':'暫停' }}</button>
 <button v-if="!batchMode" type="button" @click.stop="moreTaskId=moreTaskId===task.id?null:task.id" :aria-label="'更多操作：'+(task.title||task.task_id)" :aria-expanded="moreTaskId===task.id">更多</button>
-<span>{{ statusLabel(task.status) }}</span>
 <div v-if="moreTaskId===task.id" class="ui-next-task-more" @click.stop><button v-if="filter!=='archived'" type="button" @click="archiveTask(task)">封存</button><button v-else type="button" @click="unarchiveTask(task)">解除封存</button><button type="button" class="danger" @click="deleteTask(task)">刪除</button></div>
 </div>
 </div>

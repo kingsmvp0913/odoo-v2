@@ -33,7 +33,9 @@ describe("ui-next 平行介面", () => {
 
   test("Next CSS 的每個 selector 都有專用 scope，不會污染 Legacy DOM", () => {
     const selectors = (source) => {
-      const out = [], clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
+      const out = [], clean = source
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
       let buffer = "";
       for (const char of clean) {
         if (char === "{") {
@@ -47,6 +49,10 @@ describe("ui-next 平行介面", () => {
     };
     for (const selector of selectors(`${css}\n${pagesCss}`)) {
       expect(selector).toMatch(/^(?:\.ui-next|\[data-ui="next"\]|html\[data-theme=)/);
+    }
+    // keyframes 是全域命名空間，撞名會讓別人的動畫被改掉——名稱一樣要有 ui-next 前綴。
+    for (const name of [...`${css}\n${pagesCss}`.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1])) {
+      expect(name).toMatch(/^ui-next-/);
     }
   });
 
