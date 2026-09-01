@@ -3047,12 +3047,15 @@
 /* Pipeline 還在推進的任務：左緣那條色標改成藍色並上下流動，一眼看得出「這張還在跑」。
    底色留一條淡的，動畫只是疊在上面的亮段——沒有動畫時仍看得出它是藍的。 */
 .ui-next-task-rich-list article.running{position:relative;border-left:3px solid color-mix(in srgb,var(--info) 35%,transparent)}
-.ui-next-task-rich-list article.running::before{position:absolute;z-index:1;top:0;bottom:0;left:-3px;width:3px;background:linear-gradient(180deg,transparent 0%,var(--info) 50%,transparent 100%);background-size:100% 60%;background-repeat:no-repeat;animation:ui-next-task-flow 1.6s linear infinite;content:""}
-@keyframes ui-next-task-flow{from{background-position:0 -60%}to{background-position:0 160%}}
+/* 亮段畫在一個「和卡片邊框重疊的 border-left」上，再用 mask 讓它上下流動——原本是一條
+   3px 寬的直方塊，卡片有 12px 圓角，上下兩端就翹出圓弧外面。位移量對齊卡片的邊框寬度
+   （左 3px、其餘 1px），這個 ::before 的邊框盒才會和卡片的邊框盒完全重合。 */
+.ui-next-task-rich-list article.running::before{position:absolute;z-index:1;top:-1px;right:-1px;bottom:-1px;left:-3px;border-left:3px solid var(--info);border-radius:12px;pointer-events:none;-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 50%,transparent 100%);mask-image:linear-gradient(180deg,transparent 0%,#000 50%,transparent 100%);-webkit-mask-size:100% 60%;mask-size:100% 60%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;animation:ui-next-task-flow 1.6s linear infinite;content:""}
+@keyframes ui-next-task-flow{from{-webkit-mask-position:0 -60%;mask-position:0 -60%}to{-webkit-mask-position:0 160%;mask-position:0 160%}}
 /* 需回覆優先：同時符合時維持警示色，不要被「執行中」蓋掉。 */
 .ui-next-task-rich-list article.need.running{border-left-color:var(--warning)}
 .ui-next-task-rich-list article.need.running::before{display:none}
-@media(prefers-reduced-motion:reduce){.ui-next-task-rich-list article.running::before{animation:none;background:var(--info)}}
+@media(prefers-reduced-motion:reduce){.ui-next-task-rich-list article.running::before{animation:none;-webkit-mask-image:none;mask-image:none}}
 
 /* 專案備註：固定佔兩行的高度，超出用 … 截斷。
    有描述才長高的話，同一排卡片會參差不齊——沒有描述時放一個同高的空區塊補位。 */
