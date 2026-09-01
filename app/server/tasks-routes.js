@@ -583,8 +583,19 @@ function registerRoutes(app) {
         'UPDATE tasks SET is_paused = $2, updated_at = NOW() WHERE id = $1',
         [req.params.id, newPaused]
       );
-      if (newPaused) abortTask(req.params.id);
-      else runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      if (newPaused) {
+        abortTask(req.params.id);
+        await query(
+          "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1, 'system', '系統', $2, NOW())",
+          [req.params.id, '已取消本輪執行。按「繼續」會從目前這一關重跑。']
+        );
+      } else {
+        await query(
+          "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1, 'system', '系統', $2, NOW())",
+          [req.params.id, '已繼續執行。']
+        );
+        runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      }
       res.json({ ok: true, is_paused: newPaused });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

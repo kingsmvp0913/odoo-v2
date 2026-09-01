@@ -1898,3 +1898,30 @@ describe('admin 存取地基 — loadTaskForActor / req.isAdmin', () => {
     expect(res.status).toBe(404);
   });
 });
+
+// 中止那一輪要在對話留下痕跡：否則畫面上只看到 AI 講到一半就沒了，重整之後
+// 更看不出發生過什麼、也不知道還能不能繼續。
+describe('暫停／繼續會在對話留下記錄', () => {
+  test('暫停 → 對話多一筆「已取消本輪執行」', async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'pause-log-1','manual','取消測試','coding_running') RETURNING id", [userId]);
+    const res = await request(app).put(`/api/tasks/${t.id}/pause`).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.is_paused).toBe(true);
+    const { rows } = await dbModule.query(
+      "SELECT content, source FROM task_messages WHERE task_id = $1 ORDER BY id DESC LIMIT 1", [t.id]);
+    expect(rows[0].source).toBe('system');
+    expect(rows[0].content).toContain('已取消本輪執行');
+  });
+
+  test('再按一次繼續 → 對話多一筆「已繼續執行」', async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status, is_paused) VALUES ($1,'pause-log-2','manual','繼續測試','coding_running',true) RETURNING id", [userId]);
+    const res = await request(app).put(`/api/tasks/${t.id}/pause`).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.is_paused).toBe(false);
+    const { rows } = await dbModule.query(
+      "SELECT content FROM task_messages WHERE task_id = $1 ORDER BY id DESC LIMIT 1", [t.id]);
+    expect(rows[0].content).toContain('已繼續執行');
+  });
+});

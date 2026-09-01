@@ -937,6 +937,11 @@
         catch (error) { showToast(error.message || "無法刪除對話", "error"); }
       },
       onFilesSelected(event) { this.addPendingFiles(Array.from(event.target.files || [])); event.target.value = ""; },
+      autoResize(event) {
+        const el = event.currentTarget;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+      },
       onPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => /^image\//.test(file.type)); if (files.length) { event.preventDefault(); this.addPendingFiles(files); } },
       addPendingFiles(files) { files.forEach((file) => { if (!/^image\//.test(file.type) || file.size > 10 * 1024 * 1024 || this.pendingFiles.length >= 5) return; this.pendingFiles.push(file); this.pendingPreviews.push(URL.createObjectURL(file)); }); },
       removePendingFile(index) { URL.revokeObjectURL(this.pendingPreviews[index]); this.pendingFiles.splice(index, 1); this.pendingPreviews.splice(index, 1); },
@@ -1047,7 +1052,7 @@
 </span>
 </div>
 <form class="ui-next-thread-composer" @submit.prevent="send">
-<textarea v-model="newInput" placeholder="輸入你的需求或追問…" @paste="onPaste" @keydown.enter="handleEnter">
+<textarea v-model="newInput" placeholder="輸入你的需求或追問…" @paste="onPaste" @input="autoResize" @keydown.enter="handleEnter">
 </textarea>
 <div class="ui-next-composer-foot">
 <div class="ui-next-composer-options">
@@ -1340,6 +1345,7 @@
       return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
     },
     computed: {
+      isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
       isAdmin() { return window.UserStore.role === 'admin'; },
       // 新手教程的示範任務（/task/demo）：整頁資料改由 tour-demo.js 供應，一律不打 API。
       // 課程換關卡＝換 demoStatus，watcher 會把動作區重新套用，人才看得到同一個位置換不同的事要做。
@@ -1449,6 +1455,7 @@
       this.taskTab = ['requirements', 'conversation', 'history'].includes(requestedTab)
         ? requestedTab
         : ((window.HUMAN_STATUSES || []).includes(this.task?.status) ? 'conversation' : 'requirements');
+      if (this.taskTab === "conversation") this.$nextTick(() => this.bindConvScroll());
       Api.get('system/config').then(r => {
         this.odooUrl = r.odoo_url || '';
         this.serviceUrl = r.service_url || '';
@@ -1481,7 +1488,7 @@
       };
       if (sock) sock.on('terminal:output', this._onTermOutput);
     },
-    beforeUnmount() {
+    beforeUnmount() { this.unbindConvScroll();
       const sock = window._socket;
       if (sock && sock.off) {
         if (this._onTaskUpdated) sock.off('task:updated', this._onTaskUpdated);
@@ -1503,6 +1510,7 @@
       setTaskTab(tab) {
         this.taskTab = tab;
         if (this.$route.query.tab !== tab) this.$router.replace({ query: { ...this.$route.query, tab } });
+        if (tab === "conversation") this.$nextTick(() => this.bindConvScroll());
         this.$nextTick(() => {
           const visible = (item) => item && item.getClientRects().length > 0;
           [...document.querySelectorAll(".ui-next-task-detail-grid [role=\"tabpanel\"]")].find(visible)?.focus();
@@ -1724,7 +1732,8 @@
         try {
           const r = await Api.put(`tasks/${this.task.id}/pause`, {});
           this.task.is_paused = r.is_paused;
-          showToast(r.is_paused ? '任務已暫停，Pipeline 將跳過' : '任務已恢復', r.is_paused ? 'warn' : 'success');
+          showToast(r.is_paused ? '已取消本輪執行' : '已繼續執行', r.is_paused ? 'warn' : 'success');
+          await this.loadMessages();
         } catch (err) { showToast(err.message, 'error'); }
       },
       startEditContent() {
@@ -1750,6 +1759,21 @@
           // 初載完成後貼底看最新（此時 logs 已載入、conv-panel 確定已掛載，補上 watch 首次時序可能落空的貼底）
           if (this._convPinBottom !== false) this.$nextTick(() => this.scrollConvToBottom());
         } catch { /* best-effort */ }
+      },
+      autoResize(event) {
+        const el = event.currentTarget;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+      },
+      // 截圖直接貼上：畫面類問題用截圖說明比打字快，而下游只讀得到程式碼 diff。
+      // target 指定塞進哪個附件清單——這一頁的回答／提問／退回／留言各有各的。
+      onPasteFiles(event, target) {
+        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => /^image\//.test(f.type));
+        if (!files.length) return;
+        event.preventDefault();
+        const list = this[target];
+        if (!Array.isArray(list)) return;
+        files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && list.length < 5) list.push(f); });
       },
       async sendTaskMessage() {
         if (!this.newMessageText.trim()) return;
@@ -2180,19 +2204,34 @@
       eventSummary(event) { const text = String(event.content || '').replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '執行輸出'; return text.length > 160 ? `${text.slice(0, 160)}…` : text; },
       eventKind(event) { const text = String(event.content || ''); return /(?:❌|error|failed|失敗|錯誤)/i.test(text) ? 'error' : /(?:▶|start|開始|執行)/i.test(text) ? 'stage' : 'output'; },
       toggleEvent(event) { const key = event.id || event.content; this.expandedEvents[key] = !this.expandedEvents[key]; },
-      scrollConvToBottom() { const c = this.$refs.convPanel; if (c) c.scrollTop = c.scrollHeight; },
+      scrollConvToBottom() { const c = this._convScroller || document.querySelector(".ui-next-main"); if (c) c.scrollTop = c.scrollHeight; },
       // 捲到頂→載入更早，並補回捲動位移讓畫面不跳（新內容撐高後維持原本閱讀點）
       loadMoreConv() {
-        const c = this.$refs.convPanel;
+        const c = this._convScroller || document.querySelector(".ui-next-main");
         const prevH = c ? c.scrollHeight : 0;
         this.convVisible += 10;
         this.$nextTick(() => { if (c) c.scrollTop += c.scrollHeight - prevH; });
+      },
+      // 捲軸統一在最外面之後，實際在捲的是 .ui-next-main；綁在對話清單上不會觸發。
+      bindConvScroll() {
+        this._convScroller = document.querySelector('.ui-next-main');
+        if (!this._convScroller || this._onConvScrollBound) return;
+        this._onConvScrollBound = () => this.onConvScroll({ target: this._convScroller });
+        this._convScroller.addEventListener('scroll', this._onConvScrollBound, { passive: true });
+      },
+      unbindConvScroll() {
+        if (this._convScroller && this._onConvScrollBound) {
+          this._convScroller.removeEventListener('scroll', this._onConvScrollBound);
+          this._onConvScrollBound = null;
+        }
       },
       onConvScroll(e) {
         const el = e.target;
         // 跟隨使用者位置：停在底部→維持釘住（新訊息貼底）；往上捲→解除釘住
         this._convPinBottom = (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
-        if (el.scrollTop <= 8 && this.hasMoreConv) this.loadMoreConv();
+        const list = this.$refs.convPanel;
+        const listTop = list ? list.getBoundingClientRect().top : 999;
+        if (listTop > -8 && this.hasMoreConv) this.loadMoreConv();
       },
       async loadEvents() {
         if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
@@ -2268,7 +2307,7 @@
 </div>
 <p v-if="!editingContent" class="ui-next-task-content">{{ task.original_text || '（無內容）' }}</p>
 <div v-else>
-<textarea v-model="editText">
+<textarea v-model="editText" @input="autoResize">
 </textarea>
 <div class="ui-next-inline-actions">
 <button class="ui-next-primary" @click="saveContent" :disabled="savingContent||!editText.trim()">{{ savingContent?'儲存中…':'儲存' }}</button>
@@ -2282,7 +2321,7 @@
 </div>
 </section>
 <section v-show="taskTab==='conversation'" tabindex="-1" class="ui-next-panel ui-next-conversation" role="tabpanel" aria-labelledby="ui-next-task-tab-conversation">
-<div ref="convPanel" class="ui-next-conv-list" @scroll="onConvScroll" @click="handleTaskMessageClick">
+<div ref="convPanel" class="ui-next-conv-list" @click="handleTaskMessageClick">
 <button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
 <article v-for="item in visibleTimeline" :key="item._key" :class="timelineClass(item)">
 <!-- 錯誤 LOG 與機器 log 分開標示：兩者合併成一句「技術紀錄」時，畫面上看不出這則是不是錯誤，
@@ -2348,10 +2387,10 @@
 <template v-if="q.type==='choice'">
 <label v-for="opt in q.options" :key="opt.key">
 <input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"> {{ opt.label }}<template v-if="q.recommended===opt.key"> ★建議</template></label>
-<textarea v-model="answerExtra[q.id]" placeholder="以上選項都不合適？也可以直接寫你的答案或補充說明">
+<textarea v-model="answerExtra[q.id]" placeholder="以上選項都不合適？也可以直接寫你的答案或補充說明" @input="autoResize">
 </textarea>
 </template>
-<textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)">
+<textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)" @input="autoResize" @paste="onPasteFiles($event,'answerFiles')">
 </textarea>
 </div>
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
@@ -2362,7 +2401,7 @@
 </template>
 <template v-else>
 <p class="ui-next-field-note">看不懂、要補充、或方向要改都在這裡講。問問題不會讓任務往下跑；談出結論時 AI 會順手把「規格書 QA」那頁的題目改成最新的。</p>
-<textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAsk">
+<textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAsk" @input="autoResize" @paste="onPasteFiles($event,'askFiles')">
 </textarea>
 <label class="ui-next-upload ui-next-upload-inline"><input ref="askFileInput" type="file" multiple @change="onAskFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
 <button class="ui-next-primary" @click="submitAsk" :disabled="clarBusy||askSubmitting||!askText.trim()">{{ askSubmitting?'送出中…':'送出提問' }}</button>
@@ -2374,7 +2413,7 @@
      綁錯的後果是靜默失效——打字讓按鈕亮起，點下去在那個 "沒文字就 return" 的早退直接返回，
      沒有 toast、沒有錯誤，而 clarify_pending 狀態下這是唯一的回覆入口。 -->
 <p class="ui-next-field-note">AI 有問題等待你回覆。</p>
-<textarea v-model="newMessageText" placeholder="輸入給 AI 的回答或補充…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAnswer">
+<textarea v-model="newMessageText" placeholder="輸入給 AI 的回答或補充…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
 </textarea>
 <!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
@@ -2413,7 +2452,7 @@
 </template>
 </div>
 <p v-else>請確認規格後開始實作。</p>
-<textarea v-model="specFeedback" placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="specRevise">
+<textarea v-model="specFeedback" placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="specRevise" @input="autoResize">
 </textarea>
 <div class="ui-next-inline-actions">
 <button @click="specRevise" :disabled="specRevising||!specFeedback.trim()">{{ specRevising?'送出中…':'要求調整' }}</button>
@@ -2433,7 +2472,7 @@
 <span v-if="repo.truncated">（diff 過大已截斷，完整內容請至 repo 檢視）</span>
 </div>
 </div>
-<textarea v-model="rejectReason" placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="reject">
+<textarea v-model="rejectReason" placeholder="填寫退回原因（可一次列多個問題，系統會自動分類歸檔）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
 </textarea>
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
@@ -2442,8 +2481,9 @@
 <small v-if="rejectFiles.length">已選 {{ rejectFiles.length }} 個附件</small>
 </div>
 <div class="ui-next-inline-actions">
-<button @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
-<button class="ui-next-primary" @click="approve" :disabled="approving">{{ approving?'處理中…':'審核通過' }}</button>
+<button v-if="isAgentRunning" class="ui-next-stop" @click="togglePause"><ui-next-icon name="close"/>停止</button>
+<button v-else @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
+<button v-if="!isAgentRunning" class="ui-next-primary" @click="approve" :disabled="approving">{{ approving?'處理中…':'審核通過' }}</button>
 </div>
 </div>
 </template>
@@ -2886,14 +2926,14 @@
 <div class="ui-next-head-tools">
 <button @click="toggleBatchMode">{{ batchMode?'取消批次':'批次' }}</button>
 <button @click="syncNow" :disabled="syncing">{{ syncing?'同步中…':'同步' }}</button>
-<button class="ui-next-primary" @click="openAdd($event)">建立任務</button>
+<button class="ui-next-primary ui-next-cta" @click="openAdd($event)"><ui-next-icon name="plus"/>建立任務</button>
 </div>
 </header>
 <div v-if="showAdd" class="ui-next-task-modal-backdrop" @click.self="closeAdd" @keydown="trapAddFocus">
 <section ref="taskCreateModal" class="ui-next-task-modal ui-next-form-modal" role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title">
 <header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" class="ui-next-modal-close" aria-label="關閉建立任務視窗" @click="closeAdd"><ui-next-icon name="close"/></button></header>
 <div class="ui-next-form-modal-grid">
-<label>專案
+<label class="ui-next-form-modal-wide">專案
 <select v-model="newTask.project_id">
 <option value="">選擇專案</option>
 <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>

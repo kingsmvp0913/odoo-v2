@@ -2960,7 +2960,7 @@
 
 /* 新增專案改成彈窗：原本是頁面頂端的 inline 表單，展開時把整份清單往下推，
    欄位又被塞進不等高的兩欄（Odoo 版本和專案描述並排，一個 34px 一個 96px）。 */
-.ui-next-form-modal{width:min(620px,100%);padding:0}
+.ui-next-form-modal{width:min(760px,100%);max-height:calc((100vh - 80px) / var(--ui-zoom, 1));display:flex;flex-direction:column;padding:0}
 .ui-next-form-modal-grid{padding:16px 18px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin-top:4px}
 .ui-next-form-modal-grid label{display:grid;align-content:start;gap:5px;min-width:0;color:var(--text-secondary);font-size:13px}
 .ui-next-form-modal-wide{grid-column:1/-1}
@@ -3119,8 +3119,8 @@
 /* 對話清單自己捲：既有程式碼（onConvScroll 捲到頂載入更早、scrollConvToBottom 釘底）
    本來就假設這個容器會捲，但 CSS 是 overflow:visible + max-height:none——整頁在捲，
    那些邏輯一次都沒被觸發過。輸入區已 sticky 在底部，這裡自己捲才對得起來。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-conversation{display:flex;flex-direction:column;max-height:calc((100vh - 330px) / var(--ui-zoom, 1))}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list{min-height:0;flex:1;overflow:auto;padding:16px 0}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conversation{display:block;max-height:none}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list{max-height:none;overflow:visible;padding:16px 0}
 
 /* 任務編號用等寬字：它是要拿去比對／搜尋的識別碼，比例字型下容易看錯字元。 */
 .ui-next-task-badges .is-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
@@ -3130,3 +3130,58 @@
 .ui-next-task-detail .ui-next-detail-head{margin-bottom:10px}
 .ui-next-task-detail .ui-next-detail-head h1{margin:0 0 2px;line-height:1.25}
 .ui-next-task-detail .ui-next-task-badges{margin-bottom:10px}
+
+/* 對話框下方那排按鈕原本沒有任何 hover 回饋，看起來像不能按。 */
+.ui-next-composer .ui-next-icon-button,.ui-next-thread-composer .ui-next-icon-button{border-radius:9px;transition:background-color .125s ease,color .125s ease}
+.ui-next-composer .ui-next-icon-button:hover,.ui-next-thread-composer .ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+.ui-next-composer .ui-next-icon-button:focus-within{outline:2px solid var(--primary);outline-offset:1px}
+.ui-next-composer .ui-next-send,.ui-next-thread-composer .ui-next-send{transition:background-color .125s ease,opacity .125s ease}
+.ui-next-composer .ui-next-send:not(:disabled):hover,.ui-next-thread-composer .ui-next-send:not(:disabled):hover{background:var(--primary);color:var(--surface)}
+/* 送不出去的時候游標要說明白，而不是讓人一直點 */
+.ui-next-composer .ui-next-send:disabled,.ui-next-thread-composer .ui-next-send:disabled{cursor:not-allowed}
+.ui-next-project-picker-trigger{transition:background-color .125s ease}
+.ui-next-project-picker-trigger:hover:not(:disabled){background:color-mix(in srgb,var(--text) 8%,transparent);border-radius:8px}
+
+/* 彈窗放大後內容可能超出視窗：header／footer 固定，中間那塊自己捲。 */
+.ui-next-form-modal > header,.ui-next-form-modal > footer{flex:none}
+.ui-next-form-modal-grid{min-height:0;flex:1;overflow:auto}
+.ui-next-form-modal-grid textarea{min-height:190px}
+
+/* 「建立任務」原本是一顆沒有任何提示的實心色塊。比照上傳那組的語氣：icon＋文字、
+   圓角一致、hover 有回饋，看得出是可按的東西而不是一塊底色。 */
+.ui-next-cta{display:inline-flex;align-items:center;gap:7px;border-radius:10px;padding:0 14px;height:36px;font-size:13px;font-weight:500;transition:background-color .125s ease,translate .125s ease,box-shadow .125s ease}
+.ui-next-cta:hover{translate:0 -1px;box-shadow:var(--shadow-sm)}
+.ui-next-cta .ui-next-icon{width:16px;height:16px}
+@media(prefers-reduced-motion:reduce){.ui-next-cta:hover{translate:none}}
+
+/* AI 還在跑的時候，那排動作換成「停止」——中止這一輪比再送一次更常是使用者要的。 */
+.ui-next-stop{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--danger);border-radius:8px;padding:0 13px;height:34px;background:transparent;color:var(--danger);font:inherit;font-size:13px;cursor:pointer;transition:background-color .125s ease}
+.ui-next-stop:hover{background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.ui-next-stop .ui-next-icon{width:14px;height:14px}
+/* 系統寫的「已取消／已繼續」記錄：和 AI／自己的訊息區分開，不做成氣泡 */
+.ui-next-conv-list article.system > div:first-child{border:1px dashed var(--border-strong);background:transparent;color:var(--text-muted);font-size:12px}
+
+/* 專案對話的訊息區原本自己開一條捲軸（.ui-next-thread-messages{overflow:auto}），
+   捲軸出現在版面中間而不是視窗右緣。統一改由整頁捲：訊息區不限高、輸入區改用 sticky
+   釘在底部（原本靠 flex 佔位，整頁捲之後會被推到內容最下面）。 */
+.ui-next-chat-page{height:auto;min-height:0}
+.ui-next-thread{height:auto;min-height:0;display:block}
+.ui-next-thread-messages{min-height:0;max-height:none;overflow:visible;flex:none}
+.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;background:var(--surface)}
+.ui-next-thread-composer::before{position:absolute;z-index:-1;right:0;bottom:-56px;left:0;top:-22px;background:linear-gradient(180deg,transparent,var(--bg) 30%);content:""}
+
+/* ⚠ .ui-next-icon-button 原本只設尺寸與顏色，沒清掉 button 的瀏覽器預設：
+   同一個 class 掛在 <label>（附件）上是透明的，掛在 <button>（建立任務）上卻是
+   白底加黑框——同一排兩顆長得完全不一樣。 */
+.ui-next-icon-button{border:0;background:transparent;color:var(--text-muted);font:inherit;padding:0}
+.ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+
+/* 對話框比照 AskMe（取樣自實際畫面）：立體感來自「深底 + 略亮的細邊框 + 大圓角」，
+   不是陰影。原本邊框用 --border-strong（#45454D）比 AskMe 的 #2d2d2d 亮太多，
+   看起來像被框住而不是浮起來。送出鈕那邊 AskMe 是灰圓配白箭頭（#3c3c3c），
+   我們原本是白圓配深箭頭，在深色底上過亮、搶掉輸入區的視線。 */
+.ui-next-composer,.ui-next-thread-composer{border-radius:22px;border-color:color-mix(in srgb,var(--text) 12%,var(--surface))}
+.ui-next-composer:focus-within,.ui-next-thread-composer:focus-within{border-color:color-mix(in srgb,var(--text) 22%,var(--surface))}
+.ui-next-send,.ui-next-thread-send{background:color-mix(in srgb,var(--text) 26%,var(--surface));color:var(--text)}
+.ui-next-send:not(:disabled):hover,.ui-next-thread-send:not(:disabled):hover{background:color-mix(in srgb,var(--text) 38%,var(--surface));color:var(--text)}
+.ui-next-send:disabled,.ui-next-thread-send:disabled{opacity:.45}

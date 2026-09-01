@@ -151,6 +151,14 @@
         if (this.files.length !== selected.length) showToast("附件限圖片、單檔 10MB、最多 5 個", "error");
         e.target.value = "";
       },
+      // 截圖直接貼上：問答首頁本來只能透過「上傳圖片」選檔，貼上是完全沒反應的。
+      // 限制沿用 chooseFiles：只收圖片、單檔 10MB、最多 5 個。
+      onPasteFiles(event) {
+        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => /^image\//.test(f.type));
+        if (!files.length) return;
+        event.preventDefault();
+        files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && this.files.length < 5) this.files.push(f); });
+      },
       autoResize(event) {
         const textarea = event.currentTarget;
         textarea.style.height = "auto";
@@ -208,7 +216,7 @@
             <div v-if="files.length" class="ui-next-attachments">
               <span v-for="(file, index) in files" :key="file.name + index"><ui-next-icon name="paperclip"/>{{ file.name }} <button type="button" @click="removeFile(index)" aria-label="移除附件"><ui-next-icon name="close"/></button></span>
             </div>
-            <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @input="autoResize" @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send"></textarea>
+            <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @input="autoResize" @paste="onPasteFiles" @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send"></textarea>
             <p v-if="sendError" class="ui-next-inline-error">{{ sendError }} <button type="button" @click="send">重試</button></p>
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
