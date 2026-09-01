@@ -202,11 +202,15 @@ function registerRoutes(app) {
         let reply;
         try { reply = await chatReply(req.params.projectId, req.params.id, content, req.userId, attachments, ctrl.signal); }
         finally { _replyAborts.delete(String(req.params.id)); }
+        // 標題自動命名擺在通知之後：使用者要的是回覆先出現，標題晚幾秒補上沒有差別。
+        // maybeGenerateTitle 自己吞掉所有錯誤，這裡不需要（也不該）擋。
+        const { maybeGenerateTitle } = require('./pipeline/chat-title');
+        const newTitle = await maybeGenerateTitle(req.params.id, content, reply, req.userId);
         emitToUser(req.userId, 'chat:reply', {
           projectId: Number(req.params.projectId),
           chatId: Number(req.params.id)
         });
-        res.json({ reply });
+        res.json({ reply, title: newTitle || undefined });
       } catch (err) {
         // 搶佔成功後才失敗的話得自己還回去，否則這場對話永遠送不出下一則
         //（啟動時的 recoverInterruptedChats 只兜得到進程崩潰那種）
