@@ -6,6 +6,9 @@
         // 多數專案真正在跑的流程，要看開啟後長怎樣再自己撥開關。
         e2eEnabled: false,     // 專案層 e2e_disabled 的反面（出考題與考試同一個開關）
         hovered: null,
+        // 與 hovered 分開存、取聯集（比照 Architecture）。捲動時瀏覽器會補一次 mouseleave
+        // （內容從指標底下移走），只靠 hovered 的話——往下看圖，說明就整塊不見了。
+        focused: null,
         // 泳道顯示開關（目前只有 Git 一條，純顯示、與專案設定無關）由 PF_TRACKS 推導，預設全開。
         // 不可寫死鍵名：照 pipeline-spec.js:25 的說明加一條新泳道時，那個 flag 不會存在於 data，
         // v-model 寫不進去、flags 也永遠是 undefined——泳道與掛在它上面的節點一個都不出現，
@@ -439,14 +442,14 @@
       // 亮著卻沒接到任何亮起的東西，看起來就是一截斷在半空中的線。
       // hover 的是目標關本身時才整條亮——那時每一條接頭確實都通到它。
       busHighlight() {
-        if (!this.hovered) return [];
+        if (!this.current) return [];
         const out = [];
         for (const b of this.buses) {
-          if (this.hovered === b.id) { out.push({ key: b.id, d: b.path }); continue; }
-          if (!b.sources.includes(this.hovered)) continue;
+          if (this.current === b.id) { out.push({ key: b.id, d: b.path }); continue; }
+          if (!b.sources.includes(this.current)) continue;
           out.push({ key: b.id, d: b.bottom
-            ? `M ${b.x} ${b.sourceY[this.hovered]} V ${b.endY}`
-            : `M ${b.x} ${b.sourceY[this.hovered]} V ${b.endY} H ${b.enter}` });
+            ? `M ${b.x} ${b.sourceY[this.current]} V ${b.endY}`
+            : `M ${b.x} ${b.sourceY[this.current]} V ${b.endY} H ${b.enter}` });
         }
         return out;
       },
@@ -455,17 +458,17 @@
       // 看不到它接去哪，感覺像少了一段。在接頭末端標出目標名稱，就不必追著線捲畫面。
       // 只在 hover 時出現，平常不佔版面。
       busStubLabels() {
-        if (!this.hovered) return [];
-        const q = this.layout.pos[this.hovered], n = this.nodeById[this.hovered];
+        if (!this.current) return [];
+        const q = this.layout.pos[this.current], n = this.nodeById[this.current];
         if (!q || !n) return [];
-        return this.buses.filter(b => b.sources.includes(this.hovered)).map(b => {
+        return this.buses.filter(b => b.sources.includes(this.current)).map(b => {
           const tgt = this.nodeById[b.id];
           // 高度必須跟接頭**用同一個算式**（見 buses）：跨泳道的接頭走 gapY（間隙 18px 起、
           // 每讓一軌再 13px），這裡原本自己算成間隙正中間（29px），差 11px——標籤剛好落在
           // 它要標示的那條線上，字被線穿過去。
           const y = n.track === tgt.track
-            ? q.y + q.h / 2 + ((this.portOffsets[this.hovered + '>' + b.id] || {}).out || 0)
-            : this.gapY(q, this.hovered + '>' + b.id, true);
+            ? q.y + q.h / 2 + ((this.portOffsets[this.current + '>' + b.id] || {}).out || 0)
+            : this.gapY(q, this.current + '>' + b.id, true);
           return {
             key: b.id, x: b.x + (b.side === 'left' ? 6 : -6), y: y - 7,
             anchor: b.side === 'left' ? 'start' : 'end',
@@ -474,19 +477,21 @@
         });
       },
 
-      active() { return this.hovered ? this.nodeById[this.hovered] : null; },
+      // 點一下節點會讓它取得焦點，說明就留著，直到點別處或 Tab 走。
+      current() { return this.hovered || this.focused; },
+      active() { return this.current ? this.nodeById[this.current] : null; },
       activeEdges() {
-        if (!this.hovered) return new Set();
+        if (!this.current) return new Set();
         return new Set(this.edges
-          .filter(([a, b]) => a === this.hovered || b === this.hovered)
+          .filter(([a, b]) => a === this.current || b === this.current)
           .map(([a, b]) => a + '>' + b));
       },
       activeNeighbours() {
         const s = new Set();
-        if (!this.hovered) return s;
+        if (!this.current) return s;
         for (const [a, b] of this.edges) {
-          if (a === this.hovered) s.add(b);
-          if (b === this.hovered) s.add(a);
+          if (a === this.current) s.add(b);
+          if (b === this.current) s.add(a);
         }
         return s;
       }
@@ -735,8 +740,8 @@
         if (kind === 'link' || this.busEdges.has(key)) return '';       // 接頭的箭頭在主幹末端
         return kind === 'back' ? 'url(#pf-arrow-danger)' : 'url(#pf-arrow)';
       },
-      dim(id) { return this.hovered && id !== this.hovered && !this.activeNeighbours.has(id); },
-      edgeDim(a, b) { return this.hovered && !this.activeEdges.has(a + '>' + b); }
+      dim(id) { return this.current && id !== this.current && !this.activeNeighbours.has(id); },
+      edgeDim(a, b) { return this.current && !this.activeEdges.has(a + '>' + b); }
     },
     template: `
       <section class="ui-next-page ui-next-flow-page">
@@ -829,7 +834,7 @@
                    mouseenter 再送 click，寫成 toggle 會當場又關掉。鍵盤同理走 focus。 -->
               <g v-for="n in nodes" :key="n.id"
                  @mouseenter="hovered = n.id" @mouseleave="hovered = null"
-                 @click="hovered = n.id" @focus="hovered = n.id"
+                 @click="hovered = n.id" @focus="focused = n.id" @blur="focused = null"
                  tabindex="0" role="button" :aria-label="n.label"
                  :opacity="dim(n.id) ? 0.25 : 1"
                  style="cursor:pointer;transition:opacity .15s">
