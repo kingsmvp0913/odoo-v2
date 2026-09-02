@@ -1,5 +1,12 @@
 (function () {
   const { fmtNumber, fmtCompact, fmtUSD, agentColor, catColor, usageLevel, usageTime, usageWindowLabel } = window.UiNextShared;
+  const DETAIL_PAGE = 20;
+  const TABS = [
+    { key: "overview", label: "總覽" },
+    { key: "usage", label: "用量報表" },
+    { key: "quality", label: "品質報表" },
+    { key: "detail", label: "明細" },
+  ];
 
   window.UiNextTokenReportView = Vue.defineComponent({
     name: "UiNextTokenReportView",
@@ -14,6 +21,11 @@
         expanded: {},
         claudeUsage: null,
         codexUsage: null,
+        tab: "overview",
+        // 明細先畫 20 筆，捲到底再續 20。原本一次畫 100 筆、超過就只印一行「僅顯示前 100 筆」，
+        // 後面的資料看不到也載不到。
+        detailLimit: DETAIL_PAGE,
+        detailObserver: null,
         filters: {
           range: "30",
           start: "",
@@ -114,9 +126,10 @@
         ];
       },
       // 明細表最多顯示 100 筆；下方另有「共 N 筆」提示，否則看不出被截斷
-      visibleTasks() {
-        return ((this.report && this.report.tasks) || []).slice(0, 100);
-      },
+      tabs() { return TABS; },
+      allTasks() { return (this.report && this.report.tasks) || []; },
+      visibleTasks() { return this.allTasks.slice(0, this.detailLimit); },
+      hasMoreTasks() { return this.allTasks.length > this.detailLimit; },
       // Legacy 用三張 SVG 圓餅呈現 Agent／專案／使用者的占比。這裡改成「百分比＋顏色」清單版：
       // 資訊等價（顏色沿用同一份對照），少一套繪圖與放大 modal 的碼。
       agentShares() {
@@ -153,6 +166,12 @@
       this.codexUsage = codex;
       await this.load();
     },
+    beforeUnmount() { this.teardownDetailObserver(); },
+    watch: {
+      // 換頁籤／換篩選都要回到第一頁：留著舊的 limit 會讓新資料一進來就畫幾百筆。
+      tab() { this.detailLimit = DETAIL_PAGE; this.$nextTick(() => this.syncDetailObserver()); },
+      report() { this.detailLimit = DETAIL_PAGE; this.$nextTick(() => this.syncDetailObserver()); },
+    },
     methods: {
       fmtNumber,
       fmtCompact,
@@ -162,6 +181,28 @@
       agentColor,
       agentLabel(type) {
         return this.labels[type] || type;
+      },
+      // 用 IntersectionObserver 而不是監聽捲動：真正在捲的是 .ui-next-main（不是這個區塊，
+      // 也不是 window），綁錯對象的話事件一次都不會來。哨兵看得見＝使用者捲到清單尾巴了。
+      syncDetailObserver() {
+        this.teardownDetailObserver();
+        const sentinel = this.$refs.detailSentinel;
+        if (!sentinel || typeof IntersectionObserver === "undefined") return;
+        this.detailObserver = new IntersectionObserver((entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) this.loadMoreTasks();
+        }, { rootMargin: "200px" });
+        this.detailObserver.observe(sentinel);
+      },
+      teardownDetailObserver() {
+        if (this.detailObserver) this.detailObserver.disconnect();
+        this.detailObserver = null;
+      },
+      loadMoreTasks() {
+        if (!this.hasMoreTasks) return;
+        this.detailLimit += DETAIL_PAGE;
+        // 續載之後哨兵還在原地（畫面又長高了），下一次進入視野才會再觸發；
+        // 一次多筆 entries 也只加一頁，靠 hasMoreTasks 收尾。
+        this.$nextTick(() => this.syncDetailObserver());
       },
       shareRows(rows, labelOf, colorOf) {
         const list = rows || [];
@@ -247,7 +288,10 @@
 <input v-model="filters.showAll" type="checkbox" @change="load"> 全部使用者</label>
 <button class="ui-next-primary" @click="load" :disabled="loading">{{ loading ? '更新中…' : '更新報表' }}</button>
 </div>
-        <div class="ui-next-quota-card">
+        <div class="ui-next-report-tabs" role="tablist">
+<button v-for="item in tabs" :key="item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
+</div>
+        <div v-show="tab==='overview'" class="ui-next-quota-card">
 <div class="ui-next-card-title">
 <div>
 <h2>目前額度</h2>
@@ -277,6 +321,7 @@
 </template>
 <div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 <template v-else-if="report">
+<template v-if="tab==='overview'">
 <div class="ui-next-metric-grid">
 <article v-for="card in summaryCards" :key="card.label">
 <span>{{ card.label }}</span>
@@ -284,7 +329,7 @@
 <small>{{ card.note }}</small>
 </article>
 </div>
-<div class="ui-next-usage-grid">
+<div class="ui-next-usage-grid ui-next-usage-grid-single">
 <article class="ui-next-panel">
 <h2>每日趨勢</h2>
 <svg viewBox="0 0 300 92" preserveAspectRatio="none" v-if="trendPoints">
@@ -292,6 +337,10 @@
 </svg>
 <p v-else class="ui-next-empty-inline">本期間資料不足，尚無趨勢。</p>
 </article>
+</div>
+</template>
+<template v-if="tab==='usage'">
+<div class="ui-next-usage-grid">
 <article class="ui-next-panel">
 <h2>依專案</h2>
 <div class="ui-next-share-row" v-for="row in projectShares" :key="row.key">
@@ -342,6 +391,8 @@
 </tbody>
 </table>
 </div>
+</template>
+<template v-if="tab==='quality'">
 <div class="tr-table-card" v-if="report.project_stats && report.project_stats.length">
 <h2 class="ui-next-table-title">專案品質統計<small>本期間完成的任務；一次過關＝分析／開發／QA／E2E 四關都沒重跑</small></h2>
 <table class="tr-table">
@@ -359,7 +410,9 @@
 </tbody>
 </table>
 </div>
-<section class="ui-next-panel ui-next-usage-detail">
+<p v-else class="ui-next-empty-inline">本期間沒有已完成的任務，尚無品質統計。</p>
+</template>
+<section v-if="tab==='detail'" class="ui-next-panel ui-next-usage-detail">
 <div class="ui-next-card-title">
 <div>
 <h2>使用明細</h2>
@@ -385,7 +438,8 @@
 </article>
 <p v-if="!report.tasks.length" class="ui-next-empty-inline">本期間無 Token 使用記錄。</p>
 </div>
-<p v-if="report.tasks.length > 100" class="ui-next-more-hint">僅顯示前 100 筆（共 {{ report.tasks.length }} 筆）</p>
+<div ref="detailSentinel" class="ui-next-detail-sentinel" aria-hidden="true"></div>
+<p v-if="hasMoreTasks" class="ui-next-more-hint">已顯示 {{ visibleTasks.length }} / {{ allTasks.length }} 筆，繼續往下捲會自動載入</p>
 </section>
 </template>
       </section>`,

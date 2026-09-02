@@ -604,3 +604,14 @@
 /* ⚠ 名稱與百分比那一列的分置靠 .ui-next-quota-list>div>div（直接子代）。中間多包一層
    .ui-next-quota-group 之後就選不到了，兩段字會黏成「5 小時剩 53%」。 */
 .ui-next-quota-group>div>div{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:13px}
+
+/* 用量報表拆成四個頁籤。樣式比照任務詳情的頁籤列，但不共用 class——那個名字叫 task-tabs，
+   借過來會讓人以為兩邊的行為綁在一起。 */
+.ui-next-report-tabs{display:flex;gap:5px;margin:14px 0 18px;border-bottom:1px solid var(--border)}
+.ui-next-report-tabs button{border:0;border-bottom:2px solid transparent;padding:9px 12px;background:transparent;color:var(--text-muted);font:inherit;cursor:pointer}
+.ui-next-report-tabs button[aria-selected=true]{border-bottom-color:var(--primary);color:var(--text);font-weight:700}
+.ui-next-report-tabs button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+/* 總覽只剩趨勢一張卡，維持兩欄會讓它縮成半個畫面寬。 */
+.ui-next-usage-grid-single{grid-template-columns:minmax(0,1fr)}
+/* 無限捲動的哨兵：本身不佔視覺，但要有高度才進得了視野。 */
+.ui-next-detail-sentinel{height:1px}
