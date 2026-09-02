@@ -4,12 +4,12 @@ const path = require("path");
 // ---------------------------------------------------------------------------
 // 為什麼要有這一支
 //
-// `app/public/js/ui-next/UiNextPages.js` 裡有 13 個 View 是從 Legacy 的
+// `app/public/js/ui-next/pages/*.js` 裡有幾個 View 是從 Legacy 的
 // `app/public/js/views/*.js` **逐字複製**過來的，兩邊唯一允許的差異就是元件名稱那一行
 // （`window.XxxView = Vue.defineComponent({` 與其下的 `name:`）。這是刻意的：Next 介面要能
 // 跟 Legacy 平行存在、各自獨立演進，所以不共用同一個元件物件。
 //
-// 代價是近四千行重複碼（13 段合計約 3,800 行）。重複碼本身不是問題，**靜默漂移**才是：
+// 代價是大量重複碼。重複碼本身不是問題，**靜默漂移**才是：
 // 有人改了 Legacy 的 AdminUsers.js 修一個 bug，Next 那份沒跟上，於是同一個畫面在
 // `?ui=next` 下還是壞的——而且沒有任何訊號。程式跑得起來、測試全綠、畫面看起來正常。
 //
@@ -37,9 +37,9 @@ const nextFileFor = (nextName) => {
 
 // [Next 元件名, Legacy 來源檔, Legacy 元件名]
 //
-// 注意：Architecture / PipelineFlow / AdminHealthCheck 的 Legacy 檔在元件定義**之前**還有
-// 一段 top-level `const`（AR_KIND_COLOR、PF_BUSES、HC_STATUS…）。那些常數沒有被複製進
-// Next——Next 直接吃全域。所以這裡比對的範圍嚴格限定在
+// 注意：Architecture / PipelineFlow 的 Legacy 檔在元件定義**之前**還有一段 top-level
+// `const`（AR_KIND_COLOR、PF_BUSES…）。那些常數沒有被複製進 Next——Next 直接吃全域
+// （Legacy 的 script 一律會載入，所以拿得到）。故這裡比對的範圍嚴格限定在
 // `window.<名稱> = Vue.defineComponent({ … })` 這個賦值本身。
 const FROZEN_COPIES = [
   // UiNextDbView 已於 2026-09-01 與 Legacy 分家：Next 把它內嵌成專案頁的「連線設定」頁籤，
@@ -49,15 +49,25 @@ const FROZEN_COPIES = [
   // 一整組管理工具卡片，這一頁底部又放了同一批（navTools），同樣的十個入口在同一條動線上
   // 出現兩次。Next 這邊移除該區塊，Legacy 的 AdminView 是唯一入口所以保留——兩邊本來就
   // 不該再逐字相同。
-  ["UiNextAdminUsersView", "js/views/AdminUsers.js", "AdminUsersView"],
-  ["UiNextAdminAgentsView", "js/views/AdminAgents.js", "AdminAgentsView"],
-  ["UiNextAdminSchedulesView", "js/views/AdminSchedules.js", "AdminSchedulesView"],
-  ["UiNextAdminHealthCheckView", "js/views/AdminHealthCheck.js", "AdminHealthCheckView"],
-  ["UiNextAdminRejectionsView", "js/views/AdminRejections.js", "AdminRejectionsView"],
-  ["UiNextAdminClassifySamplesView", "js/views/AdminClassifySamples.js", "AdminClassifySamplesView"],
-  ["UiNextAdminPromptLogsView", "js/views/AdminPromptLogs.js", "AdminPromptLogsView"],
-  ["UiNextAdminPortPoolView", "js/views/AdminPortPool.js", "AdminPortPoolView"],
-  ["UiNextAdminEnterpriseView", "js/views/AdminEnterprise.js", "AdminEnterpriseView"],
+  //
+  // ── 2026-09-02：九個 Admin 子頁一併分家 ───────────────────────────────────
+  // 逐頁比對過九支的實際差異，全部是 **Next 這一側刻意往前走**，沒有任何一頁是
+  // 「Legacy 修了 bug、Next 沒跟上」。共同的分家點：
+  //   1. Next 的 /admin 是卡片首頁，子頁需要回得去，所以「← 返回」從 topbar 左側
+  //      移進 .ui-next-admin-head-actions；同時 topbar 掛上 ui-next-admin-head
+  //      （Legacy 沒有這些 class，照搬過去會是沒有樣式的裸元素）。
+  //   2. 引號風格 '' → ""（Next 這批檔案走過一次格式化）。
+  // 另外兩支各有一項 Next 專屬行為，且都已由 frontend-ui-next.test.js 正面斷言：
+  //   - AdminAgents：首次開啟預設選 CLAUDE.md（Legacy 停在空白）
+  //   - AdminUsers：「新增使用者」從頁內區塊改為彈窗（依賴 ui-next-task-modal-backdrop）
+  //
+  // 為什麼是移除而不是放寬比對：凍結契約與那兩支正面斷言已經互相矛盾——一邊要求
+  // 「和 Legacy 逐字相同」，另一邊要求「Next 要有彈窗」。放寬比對會讓兩邊都失去意義。
+  //
+  // ⚠ 代價說清楚：這九頁從此沒有自動訊號。Legacy 之後若修了 bug，不會再有東西提醒
+  // Next 跟進。動到 js/views/Admin*.js 時請自行確認 js/ui-next/pages/ 的同名檔要不要跟。
+  //
+  // Architecture／PipelineFlow 仍留在清單內：那兩支至今確實逐字相同，契約還有效。
   ["UiNextArchitectureView", "js/views/Architecture.js", "ArchitectureView"],
   ["UiNextPipelineFlowView", "js/views/PipelineFlow.js", "PipelineFlowView"],
 ];
