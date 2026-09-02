@@ -198,6 +198,11 @@
               })()
             : Api.post(`projects/${this.projectId}/chats/${chat.id}/messages`, { content });
           request.catch((e) => showToast(e.message || "訊息送出失敗", "error", 0));
+          // 側欄先展開，動畫這 300ms 正好把清單載完——不然它會和右側的內容同時跳出來。
+          window.dispatchEvent(new CustomEvent("ui-next:project-preload", { detail: { projectId: this.projectId } }));
+          // 把剛送出的那句留給對話頁先畫上：訊息端點還在跑，DB 這一刻可能還沒有這則，
+          // 對話頁只信伺服器的話，換過去會是一片空白——自己剛打的字不見了。
+          try { sessionStorage.setItem(`ui-next:pending-msg:${chat.id}`, content); } catch (_) { /* 隱私模式沒有 sessionStorage，退回原本的空白等待 */ }
           await this.slideToChat();
           this.$router.replace(`/projects/${this.projectId}/chat/${chat.id}?pending=1`);
           this.createdChatId = "";
@@ -416,6 +421,15 @@
           if (!event.target.closest(".ui-next-row-menu") && !event.target.closest(".ui-next-row-more")) this.closeSidebarMenus();
         };
         document.addEventListener("pointerdown", this._onOutsidePointer);
+        // 首頁送出時側欄還指著別的地方；等換路由才由 syncSidebarToRoute 展開，整棵樹會在
+        // 換頁那一幀跟著右側內容一起炸開。送出當下就先展開＋預載，換過去時側欄已經就位。
+        this._onProjectPreload = (event) => {
+          const id = event.detail && event.detail.projectId;
+          if (!id) return;
+          this.expandedProjects[id] = true;
+          this.ensureProjectChats(id);
+        };
+        window.addEventListener("ui-next:project-preload", this._onProjectPreload);
       } catch (e) {
         /* router 的登入守衛處理失效憑證 */
       }
@@ -423,6 +437,7 @@
     beforeUnmount() {
       window.removeEventListener("keydown", this._onCommandKey);
       document.removeEventListener("pointerdown", this._onOutsidePointer);
+      window.removeEventListener("ui-next:project-preload", this._onProjectPreload);
     },
     // 背景捲動鎖定集中在這裡：這兩個狀態各有好幾處會改（按鈕、⌘K、Escape、
     // 點遮罩、切換路由），在每個地方各自加解鎖遲早會漏掉一處。

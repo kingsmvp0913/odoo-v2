@@ -581,3 +581,10 @@
 .ui-next-message-retry button:hover:not(:disabled){border-color:var(--text-muted);color:var(--text)}
 .ui-next-message-retry button:disabled{opacity:.55;cursor:not-allowed}
 .ui-next-message-retry .ui-next-icon{width:13px;height:13px}
+
+/* 換頁那一幀，右側是從「空白」變成「整頁訊息」——輸入框對齊了也沒用，周圍的一切同時出現
+   就是「跳頁」的感覺。讓訊息區浮現一下，把那一刀切開的邊緣磨掉。
+   只在元件掛載時跑一次（animation 不隨資料更新重播），輪詢帶回新訊息時不會閃。 */
+@keyframes ui-next-thread-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.ui-next-thread-messages{animation:ui-next-thread-enter .19s ease-out}
+@media(prefers-reduced-motion:reduce){.ui-next-thread-messages{animation:none}}

@@ -12,7 +12,7 @@
         sending: false, loadingMsgs: false, draftingTask: false, creatingTask: false,
         showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] }, taskError: "", taskModalTrigger: null,
         replyPending: false, pendingFiles: [], pendingPreviews: [], attachUrls: {},
-        pendingHint: false, pollTicks: 0, stopping: false, resending: false,
+        pendingHint: false, pollTicks: 0, stopping: false, resending: false, optimisticText: "",
         projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, historyQuery: "", historyMenuId: null, chatError: "", chatsError: "", creatingChat: false, requestId: 0, replyTimer: null };
     },
     computed: {
@@ -67,6 +67,16 @@
           // ?pending=1 是「新對話」把人送過來時帶的旗標：那邊的訊息 POST 是不等待就換頁的，
           // 這一刻伺服器可能還沒把 reply_pending 寫進去，只信 DB 會有幾秒空窗顯示成「沒事發生」。
           this.pendingHint = this.$route.query.pending === "1";
+          // 讀完即焚：只有「從首頁送出、帶著 ?pending=1 過來」的那一次要它。留著的話，
+          // 下次再開這場對話會憑空多出一則早就存在的訊息。
+          this.optimisticText = "";
+          if (this.pendingHint && this.activeChat) {
+            try {
+              const key = `ui-next:pending-msg:${this.activeChat.id}`;
+              this.optimisticText = sessionStorage.getItem(key) || "";
+              sessionStorage.removeItem(key);
+            } catch (_) { /* 沒有 sessionStorage 就退回空白等待 */ }
+          }
           this.pollTicks = 0;
           if (this.activeChat) await this.loadMessages(requestId);
           if (this.pendingHint) this.startReplyPolling();
@@ -89,6 +99,7 @@
           const changed = JSON.stringify(signature(this.messages)) !== JSON.stringify(signature(nextMessages));
           const shouldFollow = !background || this.isMessagesNearBottom();
           if (changed) this.messages = nextMessages;
+          this.applyOptimisticPending();
           this.replyPending = !!this.activeChat.reply_pending || this.pendingHint;
           if (this.replyPending) this.startReplyPolling(); else this.stopReplyPolling();
           if (changed && shouldFollow) this.$nextTick(() => this.scrollToBottom());
@@ -210,6 +221,13 @@
           this.newInput = content; this.pendingHint = false; this.replyPending = false; this.stopReplyPolling();
           showToast(error.message || "訊息送出失敗", "error");
         });
+      },
+      // 伺服器還沒把剛送出的那則寫進 DB 之前，先用首頁交接過來的文字畫一則上去。
+      // 伺服器版本一到（內容相同）就把暫時這則丟掉，不會留下兩份。
+      applyOptimisticPending() {
+        if (!this.optimisticText) return;
+        if (this.messages.some((message) => message.role === "user" && message.content === this.optimisticText)) { this.optimisticText = ""; return; }
+        this.messages = [...this.messages, { id: `optimistic-${this.activeChat.id}`, role: "user", content: this.optimisticText, created_at: new Date().toISOString() }];
       },
       // 停止回覆、或伺服器重啟，那一輪都沒有回覆——AI 方會補一則中斷訊息（chat-agent）。
       // 訊息本身還在，但要再試一次原本只能自己把問題複製貼上重打一遍。
