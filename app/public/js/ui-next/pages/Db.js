@@ -1,6 +1,7 @@
 (function () {
   window.UiNextDbView = Vue.defineComponent({
     name: "UiNextDbView",
+    components: { UiNextIcon: window.UiNextIcon },
     // 內嵌成專案頁的「連線設定」頁籤時不轉址；直接開舊網址才轉。
     props: { embedded: { type: Boolean, default: false } },
     data() {
@@ -158,26 +159,29 @@
         </div>
       </div>
       <div class="content" v-else>
-        <div class="settings-section" data-tour="db-vpn" style="margin-bottom:var(--space-5)">
-          <h2 class="section-title">
-            專案 VPN 設定
-            <span v-if="vpn.has_config" style="font-size:var(--fs-xs);padding:1px 6px;border-radius:3px;background:var(--primary);color:#fff">已設定</span>
-          </h2>
-          <p style="color:var(--text-muted);font-size:var(--fs-sm);margin:0 0 var(--space-3)">
-            一個專案共用一組 VPN：下方勾選「需要 VPN」的連線會共用同一條隧道，只撥號一次。
-          </p>
-          <div class="pdq-vpn-grid">
-            <div class="form-group" style="grid-column:1/-1;margin:0">
-              <label>VPN 設定檔（.ovpn）{{ vpnForm.vpn_config_name ? '－已選擇：' + vpnForm.vpn_config_name : (vpn.has_config ? '（留空＝不變）' : '') }}</label>
-              <input type="file" accept=".ovpn,.conf" class="form-control" @change="onVpnFileChange" />
+        <section class="ui-next-panel ui-next-vpn-panel" data-tour="db-vpn">
+          <div class="ui-next-card-title">
+            <div>
+              <h2>專案 VPN 設定<em v-if="vpn.has_config">已設定</em></h2>
+              <p>一個專案共用一組 VPN：下方勾選「需要 VPN」的連線會共用同一條隧道，只撥號一次。</p>
             </div>
-            <div class="form-group" style="margin:0"><label>VPN 帳號</label><input v-model="vpnForm.vpn_username" class="form-control" /></div>
-            <div class="form-group" style="margin:0"><label>VPN 密碼（留空＝不變）</label><input v-model="vpnForm.vpn_password" type="password" class="form-control" placeholder="••••••" /></div>
           </div>
-          <div style="margin-top:var(--space-3)">
-            <button class="btn btn-primary" :disabled="vpnSaving" @click="saveVpn">{{ vpnSaving ? '儲存中…' : '儲存 VPN 設定' }}</button>
+          <label class="ui-next-upload">
+            <input type="file" accept=".ovpn,.conf" @change="onVpnFileChange">
+            <span class="ui-next-upload-drop">
+              <ui-next-icon name="paperclip"/>
+              <b>{{ vpnForm.vpn_config_name || '選擇 VPN 設定檔（.ovpn）' }}</b>
+              <small v-if="!vpnForm.vpn_config_name">{{ vpn.has_config ? '已有設定檔，留空＝不變' : '尚未上傳' }}</small>
+            </span>
+          </label>
+          <div class="ui-next-vpn-fields">
+            <label>VPN 帳號<input v-model="vpnForm.vpn_username"></label>
+            <label>VPN 密碼<small>留空＝不變</small><input v-model="vpnForm.vpn_password" type="password" placeholder="••••••"></label>
           </div>
-        </div>
+          <div class="ui-next-inline-actions">
+            <button class="ui-next-primary" :disabled="vpnSaving" @click="saveVpn">{{ vpnSaving ? '儲存中…' : '儲存 VPN 設定' }}</button>
+          </div>
+        </section>
 
         <div class="settings-section" data-tour="db-conns" style="margin-bottom:var(--space-5)">
           <h2 class="section-title">連線管理（{{ conns.length }}）</h2>
