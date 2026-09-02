@@ -578,9 +578,12 @@ describe("ui-next 平行介面", () => {
 
   test("首頁專案選擇器保留最後專案，並區分載入、錯誤與真實測試環境狀態", () => {
     expect(uiNext).toContain("oaa.next.last-project-id");
-    expect(uiNext).toContain('class="ui-next-project-picker"');
+    // 容許附加 class：這個容器現在同時是 composer 底排的一個 chip（圖示＋文字＋下拉）。
+    expect(uiNext).toMatch(/class="ui-next-project-picker[ "]/);
     expect(uiNext).toContain('role="listbox"');
     expect(uiNext).toContain("onProjectPickerKeydown(event)");
+    // ⚠ 環境狀態那行小字已依使用者要求從畫面移除，但狀態本身仍要讀得到、錯誤仍要分得出來
+    //（下面兩條守的是那個，不是「畫面上有沒有那行字」）。
     expect(uiNext).toContain("測試環境狀態讀取失敗");
     expect(uiNext).toContain('Api.get(`projects/${this.projectId}/env/summary`)');
   });

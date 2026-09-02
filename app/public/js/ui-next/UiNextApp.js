@@ -304,7 +304,8 @@
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
                 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple @change="chooseFiles"></label>
-                <div class="ui-next-project-picker" @keydown="onProjectPickerKeydown">
+                <div class="ui-next-project-picker ui-next-composer-chip" @keydown="onProjectPickerKeydown">
+                  <ui-next-icon name="project"/>
                   <input ref="projectTrigger" type="text" class="ui-next-project-picker-trigger" role="combobox" aria-autocomplete="list" :aria-expanded="projectPickerOpen" :value="projectPickerOpen ? projectQuery : (selectedProject ? selectedProject.name : '')" :placeholder="projects.length ? (selectedProject ? selectedProject.name : '選擇專案') : '沒有可用專案'" :disabled="loading || !projects.length" @focus="projectPickerOpen=true;projectQuery=''" @input="projectQuery=$event.target.value;projectPickerOpen=true">
                   <div v-if="projectPickerOpen" ref="projectOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇專案">
                     <button v-for="project in filteredProjects" :key="project.id" type="button" role="option" :aria-selected="String(project.id)===String(projectId)" @click="selectProject(project)">{{ project.name }}</button>
@@ -312,11 +313,14 @@
                   </div>
                 </div>
                 <span v-if="projectId" class="ui-next-context-sep" aria-hidden="true">·</span>
-                <select v-if="projectId" v-model="dataSource" class="ui-next-source-select" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">
+                <span v-if="projectId" class="ui-next-composer-chip">
+                <ui-next-icon name="grid"/>
+                <select v-model="dataSource" class="ui-next-source-select" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">
                   <option value="">自動</option>
                   <option value="test_env">平台測試環境</option>
                   <option v-for="conn in dbConnections" :key="conn.id" :value="'db:' + conn.id">{{ conn.name }}</option>
                 </select>
+                </span>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
             </div>

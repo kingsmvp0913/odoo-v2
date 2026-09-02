@@ -653,7 +653,11 @@
 /* 專案與資料來源都收成 composer 底下那排小字（原本「測試環境：運行中」的分量）：
    它們是這次送出的前提，不是主要動作，做成輸入框的樣子會比送出鈕還搶眼。
    ⚠ 換成 <input> 之後瀏覽器的預設框與內距要自己清掉。 */
-.ui-next-project-picker-trigger{max-width:150px;padding:2px 4px;border-radius:8px;outline:0;color:var(--text-muted);font-size:12px}
+/* 寬度跟著內容走：固定 150px 的話，「concord」這種短名字後面會空一大截，
+   跟它旁邊那個「·」離得老遠，看起來不像同一組。
+   field-sizing 沒有的瀏覽器就退回固定寬（比截字安全）。 */
+.ui-next-project-picker-trigger{width:auto;min-width:64px;max-width:190px;field-sizing:content;padding:2px 4px;border-radius:8px;outline:0;color:var(--text-muted);font-size:12px}
+@supports not (field-sizing: content){.ui-next-project-picker-trigger{width:150px}}
 .ui-next-project-picker-trigger:hover:not(:disabled),.ui-next-project-picker-trigger:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
 .ui-next-project-picker-trigger::placeholder{color:var(--text-muted);opacity:1}
 .ui-next-project-picker-options p{margin:0;padding:8px 10px;color:var(--text-muted);font-size:12px}
@@ -664,6 +668,19 @@
 .ui-next-composer .ui-next-source-select:hover,.ui-next-composer .ui-next-source-select:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
 /* 專案與來源是一組（「問哪個專案的哪個庫」），中間用一個點連起來，不各自寫標題。 */
 .ui-next-context-sep{color:var(--text-muted);font-size:12px}
+/* 比照 AskMe 的 composer 底排：每個可選項都是「小圖示＋文字＋下拉」，文字用主色不是灰的，
+   整排看起來是同一組控制項而不是三種東西。 */
+.ui-next-composer-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;border-radius:8px;padding:2px 6px;color:var(--text-muted);transition:background-color .125s ease}
+.ui-next-composer-chip:hover,.ui-next-composer-chip:focus-within{background:color-mix(in srgb,var(--text) 8%,transparent)}
+.ui-next-composer-chip .ui-next-icon{width:14px;height:14px;flex:none}
+.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger,
+.ui-next-composer .ui-next-composer-chip .ui-next-source-select{padding:0;border-radius:0;color:var(--text)}
+.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:hover:not(:disabled),
+.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:focus,
+.ui-next-composer .ui-next-composer-chip .ui-next-source-select:hover,
+.ui-next-composer .ui-next-composer-chip .ui-next-source-select:focus{background:transparent}
 /* 對話頁 composer 下的「專案 · 資料來源」：與首頁選完之後那排同一個分量（小字、次要色）。
    它是唯讀的——來源在開新對話時就定了，這裡只是提醒現在問的是哪個專案的哪個庫。 */
-.ui-next-chat-context{min-width:0;overflow:hidden;color:var(--text-muted);font-size:12px;white-space:nowrap;text-overflow:ellipsis}
+/* 右邊那條分隔線比照原本的環境狀態小字：沒有它，「鴻久」會和後面的「Enter 送出…」
+   讀成同一句。 */
+.ui-next-chat-context{min-width:0;overflow:hidden;padding-right:9px;border-right:1px solid var(--border);color:var(--text-muted);font-size:12px;white-space:nowrap;text-overflow:ellipsis}
