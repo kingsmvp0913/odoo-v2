@@ -349,20 +349,26 @@
 
 /* 動作面板原本只有 893 寬（側欄 1031）又佔掉 48% 畫面高。拉齊寬度、收斂內距，
    工具收成底部一排（比照問答的 composer-foot），不再每個各佔一整行。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-width:none;margin:0;padding:14px 16px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-width:none;margin:0;padding:12px 16px}
+/* 標題列只有一行字，上下各留 14px 等於一個空行——頭列比內容還佔位。 */
 .ui-next-task-action-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.ui-next-task-action-collapse{display:grid;width:30px;height:30px;flex:none;place-items:center;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-muted);cursor:pointer}
-.ui-next-task-action-collapse:hover{background:var(--bg);color:var(--text)}
-.ui-next-task-action-collapse:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
-.ui-next-task-action-collapse .ui-next-icon{width:15px;height:15px}
+.ui-next-task-action-head h2{line-height:1.35}
+/* 收合鈕跟標題一樣大就夠了：一個框加 30px 見方，在只有一行標題的頭列裡比標題本身還搶眼。 */
+.ui-next-task-action-collapse{display:grid;width:22px;height:22px;flex:none;place-items:center;border:0;border-radius:6px;background:transparent;color:var(--text-muted);cursor:pointer}
+.ui-next-task-action-collapse:hover{color:var(--text)}
+.ui-next-task-action-collapse:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.ui-next-task-action-collapse .ui-next-icon{width:17px;height:17px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action.is-collapsed{gap:0;padding:9px 14px}
 .ui-next-task-action textarea{min-height:74px}
 .ui-next-action-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
 .ui-next-action-tools{display:flex;align-items:center;gap:6px;min-width:0}
 .ui-next-action-tools small{color:var(--text-muted);font-size:12px;white-space:nowrap}
-.ui-next-action-tools .ui-next-icon-button{display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--text-secondary);cursor:pointer;transition:background-color .125s ease,color .125s ease}
-.ui-next-action-tools .ui-next-icon-button:hover{background:var(--bg);color:var(--text)}
-.ui-next-action-tools .ui-next-icon-button.active{border-color:var(--primary);color:var(--primary)}
+/* 比照 chat 的 composer 工具（.ui-next-icon-button 原型：裸 icon、無框無底）。原本這裡加了框，
+   同一個附件鈕在兩個畫面上長得不一樣。active 改用顏色表示——沒有框可以變色了。 */
+.ui-next-action-tools .ui-next-icon-button{display:grid;place-items:center;width:31px;height:31px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);cursor:pointer;transition:background-color .125s ease,color .125s ease}
+.ui-next-action-tools .ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+.ui-next-action-tools .ui-next-icon-button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.ui-next-action-tools .ui-next-icon-button.active{color:var(--primary)}
 .ui-next-action-tools .ui-next-icon-button:disabled{opacity:.5;cursor:not-allowed}
 .ui-next-action-tools .ui-next-icon-button input[type=file]{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%)}
 .ui-next-action-foot .ui-next-inline-actions{margin:0;flex:none}
@@ -534,8 +540,10 @@
 .ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>textarea:focus{outline:0}
 
 /* 規格書 QA 的「提問」是一個完整 Composer，不再讓裸 textarea、附件與送出鈕散在面板裡。 */
-.ui-next-qa-ask-composer{display:grid;gap:9px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));border-radius:16px;padding:12px 13px 10px;background:var(--surface)}
-.ui-next-qa-ask-composer:focus-within{border-color:color-mix(in srgb,var(--text) 36%,var(--surface))}
+/* 邊框與聚焦態跟 chat 的 composer 同一套（--border-strong → 聚焦 --text-muted）：
+   原本這裡自己調了一組 color-mix，同一個輸入框在兩個畫面上亮起來的顏色不一樣。 */
+.ui-next-qa-ask-composer{display:grid;gap:9px;border:1px solid var(--border-strong);border-radius:16px;padding:12px 13px 10px;background:var(--surface)}
+.ui-next-qa-ask-composer:focus-within{border-color:var(--text-muted)}
 .ui-next-task-action .ui-next-qa-ask-composer textarea{min-height:78px;margin:0;border:0;border-radius:0;padding:0;background:transparent;resize:none}
 .ui-next-task-action .ui-next-qa-ask-composer textarea:focus{outline:0}
 .ui-next-qa-ask-foot{display:flex;min-width:0;align-items:center;gap:8px}
@@ -548,7 +556,16 @@
    底部的，被頂出去的是頂端——標題列連同「縮小」鈕停在 y=-82，捲動也追不回來。
    規格書自己捲、面板高度封頂、標題列黏在面板頂端，縮小鈕才一直點得到。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-height:calc(100dvh - 24px);overflow-y:auto}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) .ui-next-task-action-head{position:sticky;top:-14px;z-index:3;margin:-14px -16px 0;padding:14px 16px 8px;background:var(--surface)}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) .ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -16px 0;padding:12px 16px 4px;background:var(--surface)}
 .ui-next-task-action .ui-next-spec-box{max-height:46dvh;overflow-y:auto;overscroll-behavior:contain}
 /* composer 自己有 gap:9px，inline-actions 再帶 margin-top 就變成兩倍間距。 */
 .ui-next-qa-ask-composer .ui-next-inline-actions{margin:0}
+
+/* AI 產的摘要與時間軸訊息現在可以用 markdown 表格做「現在 vs 改完」對照。marked 吐的是裸
+   <table>，全域 reset 把 padding 清成 0、也沒有框線——三欄會擠成一團，比純文字還難讀。 */
+.ui-next-conv-list article > div:first-child table,.ui-next-spec-md table{width:100%;margin:0 0 11px;border-collapse:collapse;font-size:12px}
+.ui-next-conv-list article > div:first-child th,.ui-next-conv-list article > div:first-child td,.ui-next-spec-md th,.ui-next-spec-md td{border:1px solid var(--border);padding:5px 8px;text-align:left;vertical-align:top}
+.ui-next-conv-list article > div:first-child th,.ui-next-spec-md th{background:var(--bg);color:var(--text-secondary);font-weight:600}
+.ui-next-spec-md p{margin:0 0 9px}
+.ui-next-spec-md > *:last-child{margin-bottom:0}
+.ui-next-spec-md ul,.ui-next-spec-md ol{margin:0 0 9px;padding-left:18px}

@@ -1105,7 +1105,9 @@
 <div v-if="spec" class="ui-next-help-box ui-next-spec-box">
 <template v-if="spec.summary">
 <b>摘要</b>
-<p>{{ spec.summary }}</p>
+<!-- 走 markdown：「現在 vs 改完」用表格對照，比同樣內容攤成幾段文字好讀得多。
+     渲染器與時間軸同一個（原始 HTML 已被轉義），舊的純文字摘要照樣顯示——breaks:true 保留換行。 -->
+<div class="ui-next-spec-md" v-html="renderTaskMessage(spec.summary)"></div>
 </template>
 <template v-if="spec.module">
 <b>模組</b>

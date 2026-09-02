@@ -1,4 +1,6 @@
-const { determineNextStatus, recommendedLine } = require('../pipeline/analysis');
+jest.mock('../db', () => ({ query: jest.fn() }));
+const { query } = require('../db');
+const { determineNextStatus, recommendedLine, logAnalysisGate } = require('../pipeline/analysis');
 
 // determineNextStatus 是分析路徑唯一的「YAML → 下一閘門」推導（analysis-project/task-agent 共用）。
 // 純函式測試釘住分支意圖，取代已移除的 analyzeTask（analysis-basic 一次性路徑）整合測試。
@@ -93,4 +95,61 @@ test('text 題（無 options）→ 原樣顯示 recommended 本身', () => {
 
 test('recommended 指向不存在的 option key → 原樣顯示，不得靜默吞掉', () => {
   expect(recommendedLine(q({ recommended: 'Z' }))).toBe('Z');
+});
+
+test('withWhy:false → 只回選項名稱；預設仍帶理由（推播與 respec 沒有動作面板可看）', () => {
+  const item = q({ recommended: 'A', recommended_why: '既有 write() 對 state=sale 有寫入保護' });
+  expect(recommendedLine(item, { withWhy: false })).toBe('只重編草稿單');
+  expect(recommendedLine(item)).toBe('只重編草稿單（既有 write() 對 state=sale 有寫入保護）');
+});
+
+// logAnalysisGate：時間軸那則閘門訊息。它與動作面板並存在同一頁，面板上已有完整的 intro、
+// 題目與建議理由——這則的角色是「答完之後回頭還看得到問過什麼」的書籤，不是第二份說明書。
+const gateContent = () => query.mock.calls[0][1][1];
+
+// 意圖：summary 現在可能帶 markdown 表格（「現在 vs 改完」對照）。表格的每一列都必須在行首，
+// 接在「模組：…｜重點：」後面同一行的話 marked 不會解析，畫面上就是一排管線符號。
+test('summary 帶表格 → 表格自己起一行，不與模組黏在同一行', async () => {
+  query.mockClear();
+  await logAnalysisGate(7, {
+    module: 'idx_hj',
+    summary: '備註欄改成可以打字。\n\n| 項目 | 現在 | 改完 |\n| --- | --- | --- |\n| 備註欄 | 唯讀 | 可填 |',
+    clarification_channel: { questions: [{ id: 'q1', text: '要不要一起拆？' }] },
+  }, 'confirm_pending');
+  const lines = gateContent().split('\n');
+  expect(lines[0]).toBe('[需要你回答]');
+  expect(lines[1]).toBe('模組：idx_hj');
+  expect(gateContent()).toContain('\n| 項目 | 現在 | 改完 |');
+  expect(gateContent()).not.toContain('重點：');
+});
+
+// 意圖：recommended_why 動輒上百字，是這則訊息最長的一段，而它完整印在旁邊的面板上。
+test('建議只印選項名稱，不把理由再抄一遍', async () => {
+  query.mockClear();
+  await logAnalysisGate(7, {
+    module: 'idx_hj',
+    summary: '把報表的開關拆開。',
+    clarification_channel: {
+      questions: [{
+        id: 'q1', text: '報告設定檔要不要一起拆？', type: 'choice',
+        options: [{ key: 'A', label: '一起拆' }, { key: 'B', label: '維持原本一列' }],
+        recommended: 'B', recommended_why: '您要比照的維修前報告也只拆了報表本身的開關',
+      }],
+    },
+  }, 'confirm_pending');
+  expect(gateContent()).toContain('建議：維持原本一列');
+  expect(gateContent()).not.toContain('維修前報告');
+});
+
+test('spec_review 分支：標題後同樣帶模組與摘要', async () => {
+  query.mockClear();
+  await logAnalysisGate(7, { module: 'idx_hj', summary: '把報表的開關拆開。' }, 'spec_review');
+  expect(gateContent()).toBe('[等待你審核規格]\n模組：idx_hj\n\n把報表的開關拆開。');
+});
+
+// summary 留空是允許的（低信心時 agent 可能只列問題）：不得留下一個孤零零的空行。
+test('summary 為空 → 只有標題與模組，不留空行', async () => {
+  query.mockClear();
+  await logAnalysisGate(7, { module: 'idx_hj', summary: '   ' }, 'spec_review');
+  expect(gateContent()).toBe('[等待你審核規格]\n模組：idx_hj');
 });

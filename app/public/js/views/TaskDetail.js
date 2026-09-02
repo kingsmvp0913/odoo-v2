@@ -787,6 +787,8 @@ window.TaskDetailView = Vue.defineComponent({
       } catch (e) { showToast(e.message, 'error'); }
       finally { this.stepping = false; }
     },
+    // 規格摘要走 markdown（分析關會用表格做「現在 vs 改完」對照）。renderMarkdown 會把原始 HTML 轉義。
+    renderSpecSummary(value) { return window.renderMarkdown(value); },
     // 把後端標的灰階 ANSI（\x1b[90m…\x1b[0m，工具呼叫/回傳）包成預設收合的 <details>，其餘文字照常顯示；
     // 其他未知 ANSI code 直接丟棄。內容先 escape 再包 HTML，避免 tool input/output 帶 HTML 造成 XSS。
     ansiToHtml(s) {
@@ -1064,7 +1066,9 @@ window.TaskDetailView = Vue.defineComponent({
               <div v-if="spec" style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
                 <div v-if="spec.summary" style="margin-bottom:var(--space-3)">
                   <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">摘要</div>
-                  <div style="font-size:var(--fs-base);white-space:pre-wrap">{{ spec.summary }}</div>
+                  <!-- 與 ui-next 同一份摘要：那邊走 markdown（表格對照），這裡不跟著渲染的話，
+                       同一段文字在舊版畫面會露出 `|` 與 `**`。 -->
+                  <div class="md-body" style="font-size:var(--fs-base)" v-html="renderSpecSummary(spec.summary)"></div>
                 </div>
                 <div v-if="spec.module" style="margin-bottom:var(--space-3)">
                   <div style="font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);margin-bottom:var(--space-1)">模組</div>

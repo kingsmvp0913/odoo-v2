@@ -1421,3 +1421,10 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 @media (max-width: 760px) {
   .sop-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Markdown 內文（AI 產的規格摘要等）：marked 吐裸 <table>，沒樣式時欄位會黏在一起 ── */
+.md-body table { width: 100%; margin: 0 0 var(--space-3); border-collapse: collapse; font-size: var(--fs-base); }
+.md-body th, .md-body td { border: 1px solid var(--border); padding: var(--space-2) var(--space-3); text-align: left; vertical-align: top; }
+.md-body th { background: var(--bg); color: var(--text-secondary); font-weight: var(--fw-semibold); }
+.md-body p { margin: 0 0 var(--space-2); }
+.md-body > *:last-child { margin-bottom: 0; }
