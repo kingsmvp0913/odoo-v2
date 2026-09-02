@@ -7,7 +7,7 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, tabs: [["chat","Chat"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"],["settings","設定"]], _pollTimer: null, _reposPollTimer: null }; },
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, tabs: [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]], _pollTimer: null, _reposPollTimer: null }; },
     computed: { embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
     watch: {
       "$route.query.tab"(tab) {
@@ -197,6 +197,19 @@
 <label>專案名稱<input v-model="editName" autocomplete="off"></label>
 <label>專案備註<textarea v-model="editDescription" placeholder="這個專案在做什麼、有什麼要注意的"></textarea></label>
 <button class="ui-next-primary" @click="saveBasics" :disabled="savingBasics||!editName.trim()">{{ savingBasics?'儲存中…':'儲存' }}</button>
+<template v-if="isAdmin()">
+<div class="ui-next-settings-divider"></div>
+<label class="ui-next-inline-field">Odoo 版本類型
+<select v-model="editEdition" @change="saveEdition" :disabled="savingEdition">
+<option value="community">社群版（Community）</option>
+<option value="enterprise">企業版（Enterprise）</option>
+</select>
+</label>
+<label class="ui-next-toggle ui-next-toggle-row">
+<input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e">
+<span></span>{{ editE2eEnabled?'E2E 測試啟用中':'已停用 E2E 測試' }}</label>
+<small class="ui-next-field-note">E2E 會依驗收條件建立並在部署後執行。</small>
+</template>
 </div>
 <div class="ui-next-panel">
 <h2>同步來源對應</h2>
@@ -212,20 +225,7 @@
 </label>
 <button class="ui-next-primary" @click="saveProjectMapping">儲存對應</button>
 </div>
-<div v-if="isAdmin()" class="ui-next-panel">
-<h2>測試流程</h2>
-<p>E2E 會依驗收條件建立並在部署後執行。</p>
-<label class="ui-next-toggle">
-<input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e">
-<span>
-</span>{{ editE2eEnabled?'E2E 測試啟用中':'已停用 E2E 測試' }}</label>
-<hr>
-<h2>Odoo 版本類型</h2>
-<select v-model="editEdition" @change="saveEdition" :disabled="savingEdition">
-<option value="community">社群版（Community）</option>
-<option value="enterprise">企業版（Enterprise）</option>
-</select>
-</div>
+
 </section>
         <ReleaseModal v-if="showReleaseModal" :project-id="$route.params.id" @close="showReleaseModal=false" />
       </section>
