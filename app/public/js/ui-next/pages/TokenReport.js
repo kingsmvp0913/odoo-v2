@@ -26,6 +26,11 @@
         // 後面的資料看不到也載不到。
         detailLimit: DETAIL_PAGE,
         detailObserver: null,
+        // 折線圖用實際像素畫，不用 viewBox 拉伸——被拉伸的 SVG 連文字都會變形，
+        // 而這張圖現在要放刻度與日期。尺寸由 ResizeObserver 量繪圖區得來。
+        chartW: 800,
+        chartH: 220,
+        chartObserver: null,
         filters: {
           range: "30",
           start: "",
@@ -141,6 +146,33 @@
       userShares() {
         return this.shareRows(this.report && this.report.by_user, (row) => row.username, (row, index) => catColor(index));
       },
+      // 幾何比照 Legacy 版：左側留 48px 給數量刻度，首點再內縮 16px，否則第一個日期標籤
+      // 會壓在 y 軸的 0 上。
+      chartData() {
+        const daily = (this.report && this.report.daily) || [];
+        if (daily.length < 2) return null;
+        const left = 48, top = 16, bottom = this.chartH - 28;
+        const plotLeft = left + 16, plotRight = this.chartW - 24;
+        const max = Math.max(...daily.map((row) => Number(row.tokens || 0)), 1);
+        const dots = daily.map((row, index) => ({
+          x: plotLeft + (index / (daily.length - 1)) * (plotRight - plotLeft),
+          y: bottom - (Number(row.tokens || 0) / max) * (bottom - top),
+          date: row.date,
+          tokens: Number(row.tokens || 0),
+        }));
+        // 每天都標日期會糊成一團：最多 10 個標籤，但最後一天一定要有。
+        const step = Math.max(1, Math.ceil(daily.length / 10));
+        const labels = dots
+          .filter((_, index) => index % step === 0 || index === daily.length - 1)
+          .map((dot) => ({ x: dot.x, label: this.fmtMD(dot.date) }));
+        const TICKS = 4;
+        const yTicks = [];
+        for (let i = 0; i <= TICKS; i++) {
+          const value = (max / TICKS) * i;
+          yTicks.push({ y: bottom - (value / max) * (bottom - top), label: fmtCompact(Math.round(value)) });
+        }
+        return { points: dots.map((dot) => `${dot.x},${dot.y}`).join(" "), dots, labels, yTicks, left, right: plotRight };
+      },
       trendPoints() {
         const rows = (this.report && this.report.daily) || [];
         if (rows.length < 2) return "";
@@ -166,11 +198,11 @@
       this.codexUsage = codex;
       await this.load();
     },
-    beforeUnmount() { this.teardownDetailObserver(); },
+    beforeUnmount() { this.teardownDetailObserver(); this.teardownChartObserver(); },
     watch: {
       // 換頁籤／換篩選都要回到第一頁：留著舊的 limit 會讓新資料一進來就畫幾百筆。
-      tab() { this.detailLimit = DETAIL_PAGE; this.$nextTick(() => this.syncDetailObserver()); },
-      report() { this.detailLimit = DETAIL_PAGE; this.$nextTick(() => this.syncDetailObserver()); },
+      tab() { this.detailLimit = DETAIL_PAGE; this.$nextTick(() => { this.syncDetailObserver(); this.observeChart(); }); },
+      report() { this.detailLimit = DETAIL_PAGE; this.$nextTick(() => { this.syncDetailObserver(); this.observeChart(); }); },
     },
     methods: {
       fmtNumber,
@@ -181,6 +213,33 @@
       agentColor,
       agentLabel(type) {
         return this.labels[type] || type;
+      },
+      // date 可能是 Date 物件（pg）或 'YYYY-MM-DD' 字串（pg-mem）→ 統一輸出本地 MM-DD
+      fmtMD(value) {
+        const date = value instanceof Date ? value : new Date(`${String(value)}T00:00:00`);
+        return Number.isNaN(date.getTime())
+          ? String(value).slice(5, 10)
+          : `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      },
+      measureChart() {
+        const el = this.$refs.trendBox;
+        if (!el) return;
+        this.chartW = Math.max(320, el.clientWidth);
+        this.chartH = Math.max(180, el.clientHeight);
+      },
+      // ResizeObserver 而不是 nextTick：切到這個頁籤時版面還在定型，量到的是中間態寬度。
+      // SVG 是絕對定位、不撐高容器，所以量測不會回饋成無限循環。
+      observeChart() {
+        this.teardownChartObserver();
+        const el = this.$refs.trendBox;
+        if (!el || typeof ResizeObserver === "undefined") return;
+        this.chartObserver = new ResizeObserver(() => this.measureChart());
+        this.chartObserver.observe(el);
+        this.measureChart();
+      },
+      teardownChartObserver() {
+        if (this.chartObserver) this.chartObserver.disconnect();
+        this.chartObserver = null;
       },
       // 用 IntersectionObserver 而不是監聽捲動：真正在捲的是 .ui-next-main（不是這個區塊，
       // 也不是 window），綁錯對象的話事件一次都不會來。哨兵看得見＝使用者捲到清單尾巴了。
@@ -329,17 +388,21 @@
 <small>{{ card.note }}</small>
 </article>
 </div>
-<div class="ui-next-usage-grid ui-next-usage-grid-single">
-<article class="ui-next-panel">
-<h2>每日趨勢</h2>
-<svg viewBox="0 0 300 92" preserveAspectRatio="none" v-if="trendPoints">
-<polyline :points="trendPoints" fill="none" stroke="currentColor" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
-</svg>
-<p v-else class="ui-next-empty-inline">本期間資料不足，尚無趨勢。</p>
-</article>
-</div>
 </template>
 <template v-if="tab==='usage'">
+<article class="ui-next-panel ui-next-trend-panel">
+<h2>每日趨勢</h2>
+<div ref="trendBox" class="ui-next-trend-box">
+<svg v-if="chartData" :width="chartW" :height="chartH">
+<line v-for="(tick,index) in chartData.yTicks" :key="'g'+index" :x1="chartData.left" :y1="tick.y" :x2="chartData.right" :y2="tick.y" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 3"/>
+<text v-for="(tick,index) in chartData.yTicks" :key="'y'+index" :x="chartData.left - 6" :y="tick.y + 3" font-size="9" fill="var(--text-muted)" text-anchor="end">{{ tick.label }}</text>
+<polyline :points="chartData.points" fill="none" stroke="var(--primary)" stroke-width="2"/>
+<circle v-for="dot in chartData.dots" :key="'d'+dot.date" :cx="dot.x" :cy="dot.y" r="3" fill="var(--primary)"><title>{{ fmtMD(dot.date) }}：{{ fmtNumber(dot.tokens) }} Token</title></circle>
+<text v-for="(item,index) in chartData.labels" :key="'x'+index" :x="item.x" :y="chartH - 8" font-size="10" fill="var(--text-muted)" text-anchor="middle">{{ item.label }}</text>
+</svg>
+<p v-else class="ui-next-empty-inline">本期間資料不足，尚無趨勢。</p>
+</div>
+</article>
 <div class="ui-next-usage-grid">
 <article class="ui-next-panel">
 <h2>依專案</h2>
@@ -372,6 +435,8 @@
 <p v-if="!userShares.length" class="ui-next-empty-inline">尚無使用者資料（未勾「全部使用者」時只會有你自己）。</p>
 </article>
 </div>
+</template>
+<template v-if="tab==='quality'">
 <div class="tr-table-card" v-if="report.by_agent.length">
 <h2 class="ui-next-table-title">各關卡成本與失敗率<small>失敗率高的關卡＝重跑成本集中處，是省 token 的第一優先目標</small></h2>
 <table class="tr-table">
@@ -391,8 +456,6 @@
 </tbody>
 </table>
 </div>
-</template>
-<template v-if="tab==='quality'">
 <div class="tr-table-card" v-if="report.project_stats && report.project_stats.length">
 <h2 class="ui-next-table-title">專案品質統計<small>本期間完成的任務；一次過關＝分析／開發／QA／E2E 四關都沒重跑</small></h2>
 <table class="tr-table">

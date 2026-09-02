@@ -615,3 +615,8 @@
 .ui-next-usage-grid-single{grid-template-columns:minmax(0,1fr)}
 /* 無限捲動的哨兵：本身不佔視覺，但要有高度才進得了視野。 */
 .ui-next-detail-sentinel{height:1px}
+/* 趨勢圖：SVG 絕對定位填滿繪圖區，不反過來撐高容器——否則 ResizeObserver 會量到
+   自己造成的高度變化，一路循環下去。 */
+.ui-next-trend-panel{margin-bottom:14px}
+.ui-next-trend-box{position:relative;min-height:220px}
+.ui-next-trend-box svg{position:absolute;top:0;left:0}
