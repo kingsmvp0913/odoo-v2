@@ -670,7 +670,17 @@
 .ui-next-context-sep{color:var(--text-muted);font-size:12px}
 /* 比照 AskMe 的 composer 底排：每個可選項都是「小圖示＋文字＋下拉」，文字用主色不是灰的，
    整排看起來是同一組控制項而不是三種東西。 */
-.ui-next-composer-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;border-radius:8px;padding:2px 6px;color:var(--text-muted);transition:background-color .125s ease}
+/* 三者等高（附件鈕、專案、來源）：原本是 31 / 23 / 21，focus 起來高度各自不同，
+   那一列看起來就是三種零件湊在一起。 */
+.ui-next-composer .ui-next-composer-options > *{height:26px}
+.ui-next-composer .ui-next-icon-button{width:26px;height:26px}
+.ui-next-composer-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;height:26px;box-sizing:border-box;border-radius:8px;padding:0 7px;color:var(--text-muted);transition:background-color .125s ease}
+/* select 的原生外觀（連同瀏覽器自己畫的箭頭）與旁邊的 chip 對不起來：關掉，
+   箭頭改用我們自己的圖示，才和專案那格是同一套。 */
+/* field-sizing 讓寬度跟著「目前選中的那一項」，不是最長的那一項——選「自動」時
+   後面會空出一整個「鴻久 - SM - 正式」的寬度，箭頭被推得老遠。 */
+.ui-next-composer .ui-next-composer-chip .ui-next-source-select{appearance:none;-webkit-appearance:none;height:100%;width:auto;max-width:170px;field-sizing:content;padding-right:0}
+.ui-next-composer-chip > .ui-next-icon:last-child{width:12px;height:12px;opacity:.75}
 .ui-next-composer-chip:hover,.ui-next-composer-chip:focus-within{background:color-mix(in srgb,var(--text) 8%,transparent)}
 .ui-next-composer-chip .ui-next-icon{width:14px;height:14px;flex:none}
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger,
@@ -684,3 +694,19 @@
 /* 右邊那條分隔線比照原本的環境狀態小字：沒有它，「鴻久」會和後面的「Enter 送出…」
    讀成同一句。 */
 .ui-next-chat-context{min-width:0;overflow:hidden;padding-right:9px;border-right:1px solid var(--border);color:var(--text-muted);font-size:12px;white-space:nowrap;text-overflow:ellipsis}
+
+/* 側欄的 hover／選中原本只換底色，貼在同色背景上幾乎看不出來。加一圈內描邊與一點落影，
+   看起來是「浮起來的一塊」而不是「顏色深了一點」（比照 AskMe 的觸感）。
+   ⚠ selector 帶上 .ui-next-sidebar：ui-next.css 已經有 .ui-next-nav:hover 那組，
+   字面相同的話會多一筆跨檔重複，frontend-ui-next.test.js 有基線在守。 */
+.ui-next-sidebar .ui-next-nav:hover,
+.ui-next-sidebar .ui-next-search:hover,
+.ui-next-sidebar .ui-next-project-head button:hover,
+.ui-next-sidebar .ui-next-project-chats button:hover{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 13%,transparent),0 1px 3px color-mix(in srgb,#000 28%,transparent)}
+/* 目前所在的那一項要更明確：描邊更實、底色更沉，一眼看得出「我在這裡」。 */
+.ui-next-sidebar .ui-next-nav.is-active{background:color-mix(in srgb,var(--surface) 26%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 20%,transparent),0 2px 5px color-mix(in srgb,#000 34%,transparent)}
+/* 鍵盤焦點沿用同一套立體感，再加一圈焦點色——只有 outline 的話，在深色側欄上很難找。 */
+.ui-next-sidebar .ui-next-nav:focus-visible,
+.ui-next-sidebar .ui-next-search:focus-visible,
+.ui-next-sidebar .ui-next-project-head button:focus-visible,
+.ui-next-sidebar .ui-next-project-chats button:focus-visible{outline:0;background:color-mix(in srgb,var(--surface) 22%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--primary) 55%,transparent),0 2px 6px color-mix(in srgb,#000 32%,transparent)}

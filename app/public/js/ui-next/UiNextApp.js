@@ -320,6 +320,7 @@
                   <option value="test_env">平台測試環境</option>
                   <option v-for="conn in dbConnections" :key="conn.id" :value="'db:' + conn.id">{{ conn.name }}</option>
                 </select>
+                <ui-next-icon name="chevron-down"/>
                 </span>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
