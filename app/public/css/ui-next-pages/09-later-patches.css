@@ -490,3 +490,38 @@
 /* .ui-next-main 有 32px 的底部 padding，對話頁的輸入框釘在底部時會被它墊高一截。
    用負 margin 把這一頁的內容盒縮回去（選不到父層，只能從子層拉）。 */
 .ui-next-chat-page{margin-bottom:-24px}
+
+/* Chat 與 AskMe 採相同的視窗骨架：訊息由上往下讀、短對話不把 Composer 推到半空，
+   只有訊息欄捲動，Composer 永遠留在視窗底部。 */
+.ui-next-chat-page{height:100%;min-height:0;margin-bottom:0;overflow:hidden}
+.ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}
+.ui-next-thread{display:flex;height:100%;min-height:0;flex-direction:column}
+.ui-next-thread-messages{min-height:0;max-height:none;flex:1;overflow:auto;padding-top:28px;padding-bottom:10px}
+.ui-next-thread-composer{position:relative;bottom:auto;z-index:2;flex:none;margin-bottom:max(18px,env(safe-area-inset-bottom));background:var(--surface);box-shadow:var(--shadow-lg)}
+.ui-next-thread-composer::before{display:none}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:start}
+
+/* 產生任務草稿可能需數秒；視窗先出現，讓等待狀態可見且不造成重複點擊。 */
+.ui-next-task-drafting{display:grid;min-height:220px;place-items:center;align-content:center;gap:9px;padding:24px;color:var(--text-secondary);text-align:center}
+.ui-next-task-drafting i{width:28px;height:28px;border:3px solid var(--border-strong);border-top-color:var(--primary);border-radius:50%;animation:ui-next-task-spin .75s linear infinite}
+.ui-next-task-drafting b{color:var(--text);font-size:14px}
+.ui-next-task-drafting p{margin:0;color:var(--text-muted);font-size:12px}
+@keyframes ui-next-task-spin{to{transform:rotate(360deg)}}
+
+/* 規格書 QA：選項是完整可點的選擇卡，自由回答則做成明確的 Composer。 */
+.ui-next-qa-options{display:grid;gap:7px;margin-top:3px}
+.ui-next-task-action .ui-next-question .ui-next-qa-options label{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--border);border-radius:10px;padding:10px 11px;background:var(--surface);color:var(--text-secondary);cursor:pointer;transition:border-color .14s ease,background-color .14s ease}
+.ui-next-task-action .ui-next-question .ui-next-qa-options label:hover{border-color:var(--border-strong);background:color-mix(in srgb,var(--text) 4%,var(--surface))}
+.ui-next-task-action .ui-next-question .ui-next-qa-options label.selected{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 9%,var(--surface))}
+.ui-next-task-action .ui-next-question .ui-next-qa-options label:has(input:focus-visible){outline:2px solid var(--primary);outline-offset:1px}
+.ui-next-qa-options input{position:absolute;opacity:0;pointer-events:none}
+.ui-next-qa-options label>i{box-sizing:border-box;width:17px;height:17px;flex:none;margin-top:1px;border:1.5px solid var(--border-strong);border-radius:50%;background:var(--surface)}
+.ui-next-qa-options label.selected>i{border:5px solid var(--primary)}
+.ui-next-qa-options label>span{display:flex;min-width:0;flex:1;align-items:center;justify-content:space-between;gap:8px;color:inherit}
+.ui-next-qa-options em{border-radius:999px;padding:2px 7px;background:color-mix(in srgb,var(--primary) 12%,var(--surface));color:var(--primary);font-size:10px;font-style:normal}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer{display:grid;gap:3px;margin-top:6px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));border-radius:14px;padding:11px 12px;background:var(--surface);color:var(--text)}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer:focus-within{border-color:color-mix(in srgb,var(--text) 36%,var(--surface))}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>b{font-size:12px}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>span{color:var(--text-muted);font-size:11px}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>textarea{min-height:66px;margin-top:5px;border:0;padding:0;background:transparent;resize:none}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>textarea:focus{outline:0}

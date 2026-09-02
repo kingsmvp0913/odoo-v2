@@ -180,7 +180,7 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain("oaa.next.last-project-id");
     expect(uiNext).toContain("projects/${this.projectId}/env");
     expect(uiNext).toContain("this.createdChatId");
-    expect(uiNext).toContain("@keydown.meta.enter.prevent");
+    expect(uiNext).toContain('@keydown.enter.exact.prevent="send"');
   });
 
   test("Chat 採用問答主畫面，對話紀錄改為按需展開", () => {
@@ -383,7 +383,7 @@ describe("ui-next 平行介面", () => {
   test("側欄用量卡顯示服務、剩餘比例與更新時間，不使用泛稱標題", () => {
     expect(uiNext).toContain('provider: "claude", label: "Claude 5hr"');
     expect(uiNext).toContain('formatUsageUpdated(value)');
-    expect(uiNext).toContain('methods: {\n      formatUsageUpdated(value)');
+    expect(uiNext).toMatch(/methods: \{\r?\n\s+formatUsageUpdated\(value\)/);
     expect(uiNext).toContain('class="usage-provider-logo claude"');
     expect(uiNext).toContain('class="usage-provider-logo codex"');
     expect(uiNext).toContain('剩 {{ row.remaining }}%');
@@ -476,19 +476,21 @@ describe("ui-next 平行介面", () => {
   });
 
   test("目前 Chat 一定看得到而且看得出是哪一列", () => {
-    // 第 6 筆以後的目前 Chat 若被 slice 掉，深連結進來的人會看到一份「沒有自己」的清單。
+    // 第 11 筆以後的目前 Chat 若被 slice 掉，深連結進來的人會看到一份「沒有自己」的清單。
     expect(uiNext).toContain('v-for="chat in visibleChats(project)"');
-    expect(uiNext).not.toContain("(projectChats[project.id] || []).slice(0, 5)");
-    // 順序固定：目前 Chat 只在被擠出前 5 筆時才補進來，而且補在末尾。
+    expect(uiNext).not.toContain("(projectChats[project.id] || []).slice(0, 10)");
+    // 順序固定：目前 Chat 只在被擠出前 10 筆時才補進來，而且補在末尾。
     // 提到最前面會讓「點一下清單就重排」，使用者的視線還停在原位（實測回報過）。
-    expect(uiNext).toMatch(/return \[\.\.\.chats\.slice\(0, 4\), chats\[at\]\]/);
-    expect(uiNext).toMatch(/if \(at < 0 \|\| at < 5\) return chats\.slice\(0, 5\)/);
+    expect(uiNext).toMatch(/return \[\.\.\.chats\.slice\(0, 9\), chats\[at\]\]/);
+    expect(uiNext).toMatch(/if \(at < 0 \|\| at < 10\) return chats\.slice\(0, 10\)/);
     // 目前專案不在近期／最愛清單時的唯一例外補入。
     expect(uiNext).toMatch(/const current = projectById\.get\(this\.currentProjectId\);\s*\n\s*if \(current\) selected\.set/);
     // 換路由（不只 mounted）都要重新對齊側欄，否則 SPA 內切換 Chat 樹不會跟著展開。
     expect(uiNext).toContain('"$route.path"() { this.syncSidebarToRoute(); }');
     expect(uiNext).toContain("this.syncSidebarToRoute();");
-    expect(uiNext).toMatch(/syncSidebarToRoute\(\)\s*\{[\s\S]{0,320}this\.expandedProjects\[id\] = true;[\s\S]{0,120}await this\.ensureProjectChats\(id\)/);
+    expect(uiNext).toMatch(/syncSidebarToRoute\(\)\s*\{[\s\S]{0,320}this\.expandedProjects\[id\] = true;[\s\S]{0,120}await this\.loadProjectChats\(id\)/);
+    // 路由切到剛建立的 Chat 時強制重抓，不讓 lazy-load cache 把最新一筆藏掉。
+    expect(uiNext).toContain("async loadProjectChats(id)");
   });
 
   test("Menu row 是低對比單層樣式，不再有卡片與左側色條", () => {
@@ -628,6 +630,15 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain('@click="handleTaskMessageClick"');
     expect(pagesCss).toContain(".ui-next-code-block{");
     expect(pagesCss).toContain(".ui-next-thread-messages{min-height:0;flex:1;overflow:auto");
+    expect(pagesCss).toContain(".ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}");
+    expect(pagesCss).toContain(".ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:start}");
+  });
+
+  test("Chat 輪詢只在訊息真的變更時更新畫面", () => {
+    const chat = viewSrc("UiNextProjectChatView");
+    expect(chat).toContain("await this.loadMessages(this.requestId, { background: true })");
+    expect(chat).toContain("if (changed) this.messages = nextMessages");
+    expect(chat).toContain("if (changed && shouldFollow) this.$nextTick(() => this.scrollToBottom())");
   });
 
   test("對話歷程是可 Escape 與 focus trap 的右側 Drawer", () => {
@@ -655,6 +666,25 @@ describe("ui-next 平行介面", () => {
     expect(chat).toContain('closeTaskModal()');
     expect(chat).toContain('建立任務失敗，請重試。');
     expect(chat).toContain('role="alert"');
+    expect(chat).toContain('class="ui-next-task-drafting" role="status"');
+    expect(chat).toMatch(/this\.showTaskModal = true;[\s\S]{0,180}draft-task/);
+  });
+
+  test("首頁與 Chat 都用 Enter 送出、Shift+Enter 換行", () => {
+    const chat = viewSrc("UiNextProjectChatView");
+    expect(uiNext).toContain('@keydown.enter.exact.prevent="send"');
+    expect(uiNext).not.toContain('@keydown.ctrl.enter.prevent="send"');
+    expect(chat).toContain('@keydown.enter="handleEnter"');
+    expect(chat).toContain('!event.shiftKey');
+  });
+
+  test("規格書 QA 使用可辨識選擇卡與自由回答 Composer", () => {
+    const task = viewSrc("UiNextTaskDetailView");
+    expect(task).toContain('class="ui-next-qa-options"');
+    expect(task).toContain('class="ui-next-qa-custom-answer"');
+    expect(task).toContain('以上選項都不適合？');
+    expect(pagesCss).toContain('.ui-next-qa-options label.selected');
+    expect(pagesCss).toContain('.ui-next-qa-custom-answer:focus-within');
   });
 
   test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {

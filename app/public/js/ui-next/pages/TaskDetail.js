@@ -1054,10 +1054,15 @@
 <!-- AI 的建議答案：只有它推導得出依據的題目才有，純偏好題刻意留空＝這一行不渲染 -->
 <span v-if="clarRecommend(q)">建議：{{ clarRecommend(q) }}</span>
 <template v-if="q.type==='choice'">
-<label v-for="opt in q.options" :key="opt.key">
-<input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"> {{ opt.label }}<template v-if="q.recommended===opt.key"> ★建議</template></label>
-<textarea v-model="answerExtra[q.id]" placeholder="以上選項都不合適？也可以直接寫你的答案或補充說明" @input="autoResize">
-</textarea>
+<div class="ui-next-qa-options">
+<label v-for="opt in q.options" :key="opt.key" :class="{selected:answerFields[q.id]===opt.key}">
+<input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"><i aria-hidden="true"></i><span>{{ opt.label }}<em v-if="q.recommended===opt.key">建議</em></span></label>
+</div>
+<label class="ui-next-qa-custom-answer">
+<b>以上選項都不適合？</b>
+<span>直接寫下你的答案或補充說明</span>
+<textarea v-model="answerExtra[q.id]" placeholder="輸入你的答案…" @input="autoResize"></textarea>
+</label>
 </template>
 <textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)" @input="autoResize" @paste="onPasteFiles($event,'answerFiles')">
 </textarea>

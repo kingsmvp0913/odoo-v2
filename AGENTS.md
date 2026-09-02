@@ -79,6 +79,28 @@
 <!-- /platform-only -->
 - 驗證統一在 deploy 關「安裝／升級模組」時進行（語法錯、invalid field、view 繼承錯、缺 depends 一併把關）；pipeline 各關**不自行**跑 py_compile／xmllint／odoo-bin 或建 DB 做本地驗證，寫對程式碼靠 Context7＋讀既有碼。
 
+<!-- platform-only -->
+### 平台 Jest 測試輸出
+
+全套先落檔，只顯示紅燈檔名與摘要；紅了才單獨重跑該檔看完整輸出。2026-09-02 實測即使加上 Jest 靜音參數，原始輸出仍有 20,266 bytes，以下摘要輸出可避免讀入失敗 diff／stack：
+
+```powershell
+cd app
+$testLog = Join-Path $env:TEMP 'odoo-v2-full-test.log'
+rtk proxy npm test -- --silent --noStackTrace --no-color *> $testLog
+$testExit = $LASTEXITCODE
+rtk rg -n '^(FAIL|Test Suites:|Tests:|Snapshots:|Time:)' $testLog
+exit $testExit
+```
+
+目前 Windows 基線紅燈（與前端修改無關，對應檔案未變更）：
+
+- `server/tests/enterprise-sources.test.js`：3 項本地企業版目錄判定失敗。
+- `server/tests/vpn-gateway-run.test.js`：1 項測試寫死 POSIX `APP_DIR` 路徑，在 Windows 判定失敗。
+- `server/tests/cron.test.js`：1 項 weekly health check 假時間案例未建立 running row。
+- 全套曾連帶讓 `task-agent.test.js`、`vpn-migrate.test.js` 紅燈，但兩檔單獨重跑皆全綠，屬跨 suite／時序性紅燈；遇到時先單檔複驗。
+<!-- /platform-only -->
+
 ## 4. Output Style
 繁中術語：專案/資料庫/佈署/模組. Keep English: Variable/Function/Hook/Class/Field/Model/Method/Controller.
 

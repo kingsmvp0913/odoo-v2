@@ -248,7 +248,7 @@
             <div v-if="files.length" class="ui-next-attachments">
               <span v-for="(file, index) in files" :key="file.name + index"><ui-next-icon name="paperclip"/>{{ file.name }} <button type="button" @click="removeFile(index)" aria-label="移除附件"><ui-next-icon name="close"/></button></span>
             </div>
-            <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @input="autoResize" @paste="onPasteFiles" @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send"></textarea>
+            <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @input="autoResize" @paste="onPasteFiles" @keydown.enter.exact.prevent="send"></textarea>
             <p v-if="sendError" class="ui-next-inline-error">{{ sendError }} <button type="button" @click="send">重試</button></p>
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
@@ -264,7 +264,7 @@
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
             </div>
           </form>
-          <small>Ctrl + Enter 送出。附件沿用既有 Chat 的圖片上傳限制。</small>
+          <small>Enter 送出，Shift + Enter 換行。附件沿用既有 Chat 的圖片上傳限制。</small>
         </div>
       </section>
     `,
@@ -451,6 +451,9 @@
       // 收合不清 cache，所以重複展開同一個專案只會打一次 API。
       async ensureProjectChats(id) {
         if (Object.prototype.hasOwnProperty.call(this.projectChats, id)) return;
+        await this.loadProjectChats(id);
+      },
+      async loadProjectChats(id) {
         try {
           this.projectChats[id] = await Api.get(`projects/${id}/chats`);
         } catch (e) {
@@ -464,17 +467,17 @@
         this.expandedProjects[id] = opening;
         if (opening) await this.ensureProjectChats(id);
       },
-      // 側欄只放得下 5 筆，但目前 Chat 若排在第 6 筆之後就會整列消失——
+      // 側欄顯示最新 10 筆，但目前 Chat 若排在第 11 筆之後就會整列消失——
       // 深連結進來時使用者看到的是一份「沒有自己」的清單。
       // ⚠ 清單順序必須固定：把目前 Chat 提到最前面的話，點一下清單就重排，
       // 使用者的眼睛還停在剛才那個位置，會覺得點錯了。只在它真的被擠出去時才補進來。
       visibleChats(project) {
         const chats = this.projectChats[project.id] || [];
-        if (this.currentProjectId !== String(project.id)) return chats.slice(0, 5);
+        if (this.currentProjectId !== String(project.id)) return chats.slice(0, 10);
         const at = chats.findIndex((chat) => String(chat.id) === this.currentChatId);
-        if (at < 0 || at < 5) return chats.slice(0, 5);
-        // 擠掉第 5 筆而不是重排：前 4 筆位置原封不動。
-        return [...chats.slice(0, 4), chats[at]];
+        if (at < 0 || at < 10) return chats.slice(0, 10);
+        // 擠掉第 10 筆而不是重排：前 9 筆位置原封不動。
+        return [...chats.slice(0, 9), chats[at]];
       },
       isCurrentChat(project, chat) {
         return this.currentProjectId === String(project.id) && this.currentChatId === String(chat.id);
@@ -486,7 +489,7 @@
         const id = this.currentProjectId;
         if (!id) return;
         this.expandedProjects[id] = true;
-        await this.ensureProjectChats(id);
+        await this.loadProjectChats(id);
       },
       toggleTools(event) {
         const opening = !this.toolsOpen;

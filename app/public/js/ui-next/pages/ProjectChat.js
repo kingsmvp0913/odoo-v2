@@ -70,17 +70,24 @@
         finally { if (requestId === this.requestId) this.loadingMsgs = false; }
       },
       async selectChat(chat) { await this.$router.push(this.routePath(chat)); },
-      async loadMessages(requestId = this.requestId) {
+      async loadMessages(requestId = this.requestId, { background = false } = {}) {
         if (!this.activeChat) return;
         const chatId = this.activeChat.id;
-        this.loadingMsgs = true;
+        if (!background && !this.messages.length) this.loadingMsgs = true;
         try {
           const messages = await Api.get(`projects/${this.$route.params.id}/chats/${chatId}/messages`);
           if (requestId !== this.requestId || !this.activeChat || this.activeChat.id !== chatId) return;
-          this.revokeMessageUrls();   // 換對話／重載前先收掉舊圖，否則 objectURL 一路累積到離開頁面
-          this.messages = messages || []; this.replyPending = !!this.activeChat.reply_pending || this.pendingHint;
+          const nextMessages = messages || [];
+          const signature = (items) => items.map((message) => [
+            message.id, message.role, message.content,
+            (message.attachments || []).map((attachment) => attachment.id),
+          ]);
+          const changed = JSON.stringify(signature(this.messages)) !== JSON.stringify(signature(nextMessages));
+          const shouldFollow = background && this.isMessagesNearBottom();
+          if (changed) this.messages = nextMessages;
+          this.replyPending = !!this.activeChat.reply_pending || this.pendingHint;
           if (this.replyPending) this.startReplyPolling(); else this.stopReplyPolling();
-          this.$nextTick(() => this.scrollToBottom());
+          if (changed && shouldFollow) this.$nextTick(() => this.scrollToBottom());
           this.loadAttachmentThumbs(requestId);
           this.markRead(this.activeChat);
         } catch (error) { showToast(error.message || "無法載入訊息", "error"); }
@@ -103,7 +110,7 @@
         // 兩 tick（約 6 秒）後一律拿掉樂觀旗標，改由 DB 說了算。不設期限的話「AI 比輪詢還快回完」
         // 那種情形會讓畫面永遠停在回覆中。
         if (++this.pollTicks >= 2) this.pendingHint = false;
-        await this.loadMessages();
+        await this.loadMessages(this.requestId, { background: true });
       },
       // 取消這一輪回覆。伺服器端會 abort 正在跑的 agent 行程並在對話裡補一則「已取消」，
       // 所以紀錄看得到，不是只把前端的動畫關掉。
@@ -200,12 +207,28 @@
           showToast(error.message || "訊息送出失敗", "error");
         });
       },
-      async toTask(event) { if (!this.activeChat || this.draftingTask) return; this.draftingTask = true; this.taskError = ""; this.taskModalTrigger = event?.currentTarget || null; try { const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {}); this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) }; this.showTaskModal = true; this.$nextTick(() => this.$refs.chatTaskTitle?.focus()); } catch (error) { showToast(error.message || "無法建立草稿", "error"); } finally { this.draftingTask = false; } },
+      async toTask(event) {
+        if (!this.activeChat || this.draftingTask) return;
+        this.draftingTask = true;
+        this.taskError = "";
+        this.taskModalTrigger = event?.currentTarget || null;
+        this.showTaskModal = true;
+        try {
+          const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {});
+          this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) };
+          this.$nextTick(() => this.showTaskModal && this.$refs.chatTaskTitle?.focus());
+        } catch (error) {
+          this.showTaskModal = false;
+          showToast(error.message || "無法建立草稿", "error");
+        } finally { this.draftingTask = false; }
+      },
       async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) { this.taskError = "請填寫標題與內容。"; return; } this.creatingTask = true; this.taskError = ""; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.closeTaskModal(); showToast("已建立任務", "success"); } catch (error) { this.taskError = error.message || "建立任務失敗，請重試。"; } finally { this.creatingTask = false; } },
-      // 捲軸統一到最外面（見 ui-next-pages.css 的 .ui-next-thread-messages{overflow:visible}）之後，
-      // 真正在捲的是 .ui-next-main；沿用 $refs.messages 會捲一個 overflow:visible 的容器＝什麼都沒發生，
-      // 症狀是「進對話要自己往下滾才看得到最新訊息」。
-      scrollToBottom() { const element = document.querySelector(".ui-next-main") || this.$refs.messages; if (element) element.scrollTop = element.scrollHeight; },
+      // 訊息欄自己捲、Composer 固定在底部；送出與 AI 新回覆只捲訊息欄，不推動整頁。
+      scrollToBottom() { const element = this.$refs.messages || document.querySelector(".ui-next-main"); if (element) element.scrollTop = element.scrollHeight; },
+      isMessagesNearBottom() {
+        const element = this.$refs.messages;
+        return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+      },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
       renderMd(value) { return window.renderNextMarkdown(value); },
       handleMessageClick(event) { return window.copyNextCode(event); },
@@ -294,6 +317,12 @@
 <h2 id="chat-task-modal-title">建立任務</h2>
 <button type="button" @click="closeTaskModal" aria-label="關閉建立任務視窗"><ui-next-icon name="close"/></button>
 </header>
+<div v-if="draftingTask" class="ui-next-task-drafting" role="status" aria-live="polite">
+<i aria-hidden="true"></i>
+<b>正在整理對話內容…</b>
+<p>系統正在產生任務標題與需求草稿。</p>
+</div>
+<template v-else>
 <label>標題<input ref="chatTaskTitle" v-model="taskDraft.title" placeholder="任務標題">
 </label>
 <label>需求內容<textarea v-model="taskDraft.original_text" placeholder="需求描述">
@@ -308,6 +337,7 @@
 <button @click="closeTaskModal">取消</button>
 <button class="ui-next-primary" @click="submitTask" :disabled="creatingTask">{{ creatingTask?'建立中…':'建立任務' }}</button>
 </footer>
+</template>
 </section>
 </div>
       </section>`,
