@@ -176,7 +176,7 @@
           </label>
           <div class="ui-next-vpn-fields">
             <label>VPN 帳號<input v-model="vpnForm.vpn_username"></label>
-            <label>VPN 密碼<small>留空＝不變</small><input v-model="vpnForm.vpn_password" type="password" placeholder="••••••"></label>
+            <label>VPN 密碼<input v-model="vpnForm.vpn_password" type="password" placeholder="留空＝不變"></label>
           </div>
           <div class="ui-next-inline-actions">
             <button class="ui-next-primary" :disabled="vpnSaving" @click="saveVpn">{{ vpnSaving ? '儲存中…' : '儲存 VPN 設定' }}</button>
