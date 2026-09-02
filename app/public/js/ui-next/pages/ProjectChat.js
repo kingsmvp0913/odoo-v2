@@ -352,7 +352,7 @@
 <div v-if="loadingMsgs" class="ui-next-empty-state">載入訊息中…</div>
 <template v-for="row in messageRows" :key="row.key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
 <article v-else :class="row.message.role">
-<span v-if="row.message.role!=='user'" class="ui-next-msg-avatar" aria-hidden="true"><ui-next-icon name="chat"/></span>
+<span v-if="row.message.role!=='user'" class="ui-next-msg-avatar" aria-hidden="true"><img src="favicon.svg" alt=""></span>
 <div class="ui-next-message" v-html="renderMd(row.message.content)" v-show="row.message.content"></div>
 <div v-if="(row.message.attachments&&row.message.attachments.length)||(row.message.pending_previews&&row.message.pending_previews.length)" class="ui-next-message-files">
 <img v-for="attachment in (row.message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id)">

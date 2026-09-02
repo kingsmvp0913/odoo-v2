@@ -784,8 +784,10 @@
    哪一段是誰說的。頭像把「這是 AI 在講」釘在每一段的起點。 */
 .ui-next-thread-messages > article.ai{display:grid;grid-template-columns:24px minmax(0,1fr);gap:11px;align-items:start}
 .ui-next-thread-messages > article.ai > *{grid-column:2}
-.ui-next-msg-avatar{grid-column:1;grid-row:1;display:grid;place-items:center;width:24px;height:24px;margin-top:1px;border:1px solid var(--border);border-radius:50%;background:var(--surface);color:var(--text-muted)}
-.ui-next-msg-avatar .ui-next-icon{width:13px;height:13px}
+/* 平台 logo 本身就是一個深底圓角方塊（favicon.svg），所以不裁成圓、也不再加底色。
+   深色模式下它的底幾乎與頁面同色，補一圈細邊框才有形；淺色模式那圈也不礙事。 */
+.ui-next-msg-avatar{grid-column:1;grid-row:1;display:grid;place-items:center;width:24px;height:24px;margin-top:1px;border-radius:7px;overflow:hidden;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 16%,transparent)}
+.ui-next-msg-avatar img{width:100%;height:100%;display:block;object-fit:cover}
 /* 署名列補上圖示，與頭像同一套語彙。
    ⚠ 用 `> article small` 而不是 `.ui-next-thread-messages small`——後者 06-chat.css 已經有一份，
    字面相同會多一筆跨檔重複（frontend-ui-next.test.js 有基線在守）。 */
