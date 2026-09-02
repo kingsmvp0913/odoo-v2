@@ -256,7 +256,7 @@
       }
     },
     template: `<section class="ui-next-page ui-next-sop-page">
-<header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())"><ui-next-icon name="arrow-left"/>返回專案</button><p class="ui-next-eyebrow">交付工具</p><h1>自動部署 SOP</h1><p><template v-if="project">專案：<b>{{ project.name }}</b> · </template>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header>
+<header class="ui-next-page-head"><div><button class="ui-next-back" @click="$router.push('/projects/'+pid())"><ui-next-icon name="arrow-left"/>返回專案</button><h1>自動部署 SOP</h1><p><template v-if="project">專案：<b>{{ project.name }}</b> · </template>將測試與正式環境的必要事實整理成可逐步驗證的部署流程。</p></div></header>
 <div v-if="loading" class="ui-next-loading-card">載入專案設定中…</div>
 <template v-else>
 <section class="ui-next-panel">

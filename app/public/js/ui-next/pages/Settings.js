@@ -25,7 +25,6 @@
       <section class="ui-next-page ui-next-settings-page">
 <header class="ui-next-page-head">
 <div>
-<p class="ui-next-eyebrow">帳號與設定</p>
 <h1>個人設定</h1>
 <p>管理帳號、通知、GitHub 與外部系統連線。</p>
 </div>

@@ -90,8 +90,6 @@
       <section class="ui-next-page ui-next-pipeline-page">
 <header class="ui-next-page-head">
 <div>
-<button class="ui-next-back" @click="$router.push('/admin')"><ui-next-icon name="arrow-left"/>返回</button>
-<p class="ui-next-eyebrow">即時監控</p>
 <h1>進行中 Pipeline</h1>
 <p>僅顯示真正執行中的任務與等待 AI 回覆的問答；每 3 秒更新一次。</p>
 </div>

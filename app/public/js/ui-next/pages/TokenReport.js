@@ -196,7 +196,6 @@
       <section class="ui-next-page ui-next-usage-page">
         <header class="ui-next-page-head">
 <div>
-<p class="ui-next-eyebrow">分析工具</p>
 <h1>用量報表</h1>
 <p>查看額度、成本與交付品質；篩選只影響下方分析資料。</p>
 </div>
