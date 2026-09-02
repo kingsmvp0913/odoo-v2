@@ -668,9 +668,13 @@
 /* 比照 AskMe 的 composer 底排：每個可選項都是「小圖示＋文字＋下拉」，文字用主色不是灰的，
    整排看起來是同一組控制項而不是三種東西。 */
 /* 三者等高（附件鈕、專案、來源）：原本是 31 / 23 / 21，focus 起來高度各自不同，
-   那一列看起來就是三種零件湊在一起。 */
-.ui-next-composer .ui-next-composer-options > *{height:26px}
-.ui-next-composer .ui-next-icon-button{width:26px;height:26px}
+   那一列看起來就是三種零件湊在一起。
+   ⚠ 兩種 composer 都要寫：首頁是 .ui-next-composer，對話頁是 .ui-next-thread-composer，
+   只寫前者的話對話頁那排維持 34px、圖示 17px，兩頁看起來是兩套。 */
+.ui-next-composer .ui-next-composer-options > *,
+.ui-next-thread-composer .ui-next-composer-options > *{height:26px}
+.ui-next-composer .ui-next-icon-button,
+.ui-next-thread-composer .ui-next-icon-button{width:26px;height:26px}
 .ui-next-composer-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;height:26px;box-sizing:border-box;border-radius:8px;padding:0 7px;color:var(--text-muted);transition:background-color .125s ease}
 /* select 的原生外觀（連同瀏覽器自己畫的箭頭）與旁邊的 chip 對不起來：關掉，
    箭頭改用我們自己的圖示，才和專案那格是同一套。 */
@@ -680,7 +684,8 @@
 /* 底排的圖示一律 14px：原本附件 17、chip 內 14、箭頭 12，三種大小配同一行 12px 的字，
    看起來就不是同一組（AskMe 那排的圖示與文字是等大的）。 */
 .ui-next-composer-chip .ui-next-icon,
-.ui-next-composer .ui-next-icon-button .ui-next-icon{width:14px;height:14px;flex:none}
+.ui-next-composer .ui-next-icon-button .ui-next-icon,
+.ui-next-thread-composer .ui-next-icon-button .ui-next-icon{width:14px;height:14px;flex:none}
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger{padding:0;border-radius:0;color:var(--text)}
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:hover:not(:disabled),
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:focus{background:transparent}
@@ -707,6 +712,7 @@
 .ui-next-sidebar .ui-next-project-chats button:hover,
 .ui-next-chat-tab-list button:hover,
 .ui-next-composer .ui-next-icon-button:hover,
+.ui-next-thread-composer .ui-next-icon-button:hover,
 .ui-next-composer-chip:hover{background:color-mix(in srgb,var(--surface) 34%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 24%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 45%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 24%,transparent),0 4px 10px color-mix(in srgb,#000 48%,transparent)}
 /* 目前所在的那一項：比照側欄對話列的選中樣式——只有一層淡底色，沒有描邊也沒有立體。
    三種狀態各自分工：底色＝我在這裡、浮起＝我指著這裡、outline＝鍵盤焦點。 */
