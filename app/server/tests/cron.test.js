@@ -463,3 +463,62 @@ test('cron tick：上次健檢超過一個週期 → 再跑一次', async () => 
   const { rows } = await dbModule.query('SELECT id FROM health_check_runs');
   expect(rows).toHaveLength(2);   // 舊的保留、新的建立
 });
+
+// 自動封存從「每分鐘」改成「臺灣時間每日 01:00」。這三條釘的是那個改動的意圖：
+// 條件一天內不會變（完成滿 30 天），每分鐘掃一次全表是白工；但也不能改成「剛好落在
+// 01:00 那一分鐘」——tick 被上一輪佔住時那一分鐘會整個被跳過，當天就不封存了。
+const runTick = async (isoTime) => {
+  const nodeCron = require('node-cron');
+  cronModule._setClockForTesting(() => new Date(isoTime));
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+};
+const hiddenCount = async () => Number(
+  (await dbModule.query("SELECT COUNT(*) c FROM tasks WHERE is_hidden = true AND status = 'done'")).rows[0].c
+);
+let _seedSeq = 0;
+const seedOldDone = async () => {
+  const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+  await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, is_hidden, done_at) VALUES ($1,$2,'odoo','封存排程測試','done',false,$3)",
+    [userId, `arch_sched_${++_seedSeq}`, old]
+  );
+};
+
+test('封存排程：臺灣時間 01:00 之前不跑', async () => {
+  cronModule._resetArchiveStateForTesting();
+  await dbModule.query("DELETE FROM tasks WHERE title = '封存排程測試'");
+  const before = await hiddenCount();
+  await seedOldDone();
+  await runTick('2026-09-02T16:30:00.000Z'); // 臺灣 09-03 00:30
+  expect(await hiddenCount()).toBe(before);
+});
+
+test('封存排程：過了 01:00 就補跑，不必剛好落在那一分鐘', async () => {
+  cronModule._resetArchiveStateForTesting();
+  await dbModule.query("DELETE FROM tasks WHERE title = '封存排程測試'");
+  const before = await hiddenCount();
+  await seedOldDone();
+  await runTick('2026-09-02T23:47:00.000Z'); // 臺灣 09-03 07:47，早就過了 01:00
+  expect(await hiddenCount()).toBe(before + 1);
+});
+
+// 同一天內反覆跑等於又回到每分鐘掃全表。
+test('封存排程：同一天的第二次 tick 不再封存', async () => {
+  cronModule._resetArchiveStateForTesting();
+  await dbModule.query("DELETE FROM tasks WHERE title = '封存排程測試'");
+  await seedOldDone();
+  await runTick('2026-09-02T23:47:00.000Z');
+  const afterFirst = await hiddenCount();
+  await seedOldDone();
+  await runTick('2026-09-02T23:59:00.000Z'); // 同一個臺灣日期
+  expect(await hiddenCount()).toBe(afterFirst);
+});
+
+test('排程清單顯示每日一次，下次執行時間指向 01:00', async () => {
+  const rows = await cronModule.getCronSchedules();
+  const item = rows.find((r) => r.id === 'auto-archive');
+  expect(item.timing).toMatch(/每日 01:00/);
+  expect(new Date(item.nextRunAt).toISOString()).toMatch(/T17:00:00/); // 台灣 01:00 = UTC 前一天 17:00
+});

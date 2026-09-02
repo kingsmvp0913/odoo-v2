@@ -93,6 +93,7 @@ async function cleanupOldInboxRows() {
 let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一個；重入會重複分類退回、重複觸發關機
 let _clockForTesting = null;
 let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
+let _lastArchiveDay = null;  // 同一天只封存一次（同上，過了預定時刻才補跑）
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
@@ -112,9 +113,21 @@ const HEALTH_CHECK_HOUR = 23;
 function taipeiDateParts(now) {
   const values = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: HEALTH_CHECK_TIME_ZONE,
-    year: 'numeric', month: '2-digit', day: '2-digit'
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
   }).formatToParts(now).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
-  return { year: Number(values.year), month: Number(values.month), day: Number(values.day) };
+  // hour 只有自動封存在用；健檢那幾處只取年月日。24 是 en-US 對午夜的表示法，正規化成 0。
+  return { year: Number(values.year), month: Number(values.month), day: Number(values.day), hour: Number(values.hour) % 24 };
+}
+
+// 完成滿 30 天才封存——這個條件一天之內不會有意義的變化，而原本每分鐘掃一次全表，
+// 等於一天 1440 次註定沒有結果的 UPDATE。改成臺灣時間每日一次。
+const AUTO_ARCHIVE_HOUR = parseInt(process.env.AUTO_ARCHIVE_HOUR || '1', 10);
+
+function autoArchiveNextRunAt(now) {
+  const { year, month, day, hour } = taipeiDateParts(now);
+  // 今天的時刻已經過了就排明天：日期用 UTC 建再加天數，跨月與跨年由 Date 自己處理。
+  const target = new Date(Date.UTC(year, month - 1, day + (hour >= AUTO_ARCHIVE_HOUR ? 1 : 0)));
+  return new Date(`${target.toISOString().slice(0, 10)}T${String(AUTO_ARCHIVE_HOUR).padStart(2, '0')}:00:00+08:00`).toISOString();
 }
 
 function healthCheckTargetAt(now, dayOffset = 0) {
@@ -202,7 +215,7 @@ async function getCronSchedules(now = new Date()) {
     { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
     { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },
     { id: 'classification', name: '退回與 wiki 漂移分類', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用分類。' : '每次僅處理小批待分類資料。' },
-    { id: 'auto-archive', name: '完成任務自動封存', timing: '每分鐘', enabled: true, nextRunAt: nextMinuteAt(now), note: '封存完成已滿 30 天的任務。' },
+    { id: 'auto-archive', name: '完成任務自動封存', timing: `每日 ${String(AUTO_ARCHIVE_HOUR).padStart(2, '0')}:00（臺灣時間）`, enabled: true, nextRunAt: autoArchiveNextRunAt(now), note: '封存完成已滿 30 天的任務；錯過整點會由之後的 tick 補跑。' },
     { id: 'embedding-sweep', name: '語意索引補算', timing: `每日 ${String(EMBEDDING_SWEEP_HOUR).padStart(2, '0')}:00（伺服器本機時區）`, enabled: !testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: !testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0 ? '僅在向量模型可用時執行。' : '測試模式或設定已停用。' }
   ];
 }
@@ -310,8 +323,16 @@ function startCron() {
         }
       }
 
-      // 自動封存：完成滿一個月的任務移出主列表（冪等）
-      await autoArchiveDone().catch(err => console.error('[CRON] auto-archive:', err.message));
+      // 自動封存：完成滿一個月的任務移出主列表（冪等）。臺灣時間每日 AUTO_ARCHIVE_HOUR 點一次；
+      // 判斷是「過了那個鐘點且今天還沒跑」而不是「剛好落在那一分鐘」——tick 被上一輪佔住時
+      // （分類每筆要跑一次 runClaude，積壓時輕易超過 60 秒）那一分鐘會整個被跳過。
+      const archiveNow = _clockForTesting ? _clockForTesting() : new Date();
+      const archiveParts = taipeiDateParts(archiveNow);
+      const archiveDayKey = `${archiveParts.year}-${archiveParts.month}-${archiveParts.day}`;
+      if (archiveParts.hour >= AUTO_ARCHIVE_HOUR && _lastArchiveDay !== archiveDayKey) {
+        _lastArchiveDay = archiveDayKey;
+        await autoArchiveDone().catch(err => console.error('[CRON] auto-archive:', err.message));
+      }
 
       // 每小時第 0 分清一次過期 task_events／deploy-E2E log 檔／token_usage（冪等；重入鎖已保證單飛）
       if (new Date().getMinutes() === 0) {
@@ -365,6 +386,7 @@ function stopCron() {
 // 測試用：「今天已經關過機」是模組層變數，跨 test 累積。補跑改成「過了預定時刻就跑」之後，
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
+function _resetArchiveStateForTesting() { _lastArchiveDay = null; }
 function _setClockForTesting(clock) { _clockForTesting = clock; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _setClockForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _setClockForTesting };
