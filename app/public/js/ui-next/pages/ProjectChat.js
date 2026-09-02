@@ -83,7 +83,7 @@
             (message.attachments || []).map((attachment) => attachment.id),
           ]);
           const changed = JSON.stringify(signature(this.messages)) !== JSON.stringify(signature(nextMessages));
-          const shouldFollow = background && this.isMessagesNearBottom();
+          const shouldFollow = !background || this.isMessagesNearBottom();
           if (changed) this.messages = nextMessages;
           this.replyPending = !!this.activeChat.reply_pending || this.pendingHint;
           if (this.replyPending) this.startReplyPolling(); else this.stopReplyPolling();
@@ -223,10 +223,10 @@
         } finally { this.draftingTask = false; }
       },
       async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) { this.taskError = "請填寫標題與內容。"; return; } this.creatingTask = true; this.taskError = ""; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.closeTaskModal(); showToast("已建立任務", "success"); } catch (error) { this.taskError = error.message || "建立任務失敗，請重試。"; } finally { this.creatingTask = false; } },
-      // 訊息欄自己捲、Composer 固定在底部；送出與 AI 新回覆只捲訊息欄，不推動整頁。
-      scrollToBottom() { const element = this.$refs.messages || document.querySelector(".ui-next-main"); if (element) element.scrollTop = element.scrollHeight; },
+      // Chat 與任務對話共用右側主畫面捲軸；短對話不會位移，長對話才跟到最新訊息。
+      scrollToBottom() { const element = document.querySelector(".ui-next-main"); if (element) element.scrollTop = element.scrollHeight; },
       isMessagesNearBottom() {
-        const element = this.$refs.messages;
+        const element = document.querySelector(".ui-next-main");
         return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 80;
       },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },

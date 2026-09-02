@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -211,7 +211,7 @@
         } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
       },
       async load() {
-        this._convPinBottom = true; this.convVisible = 5;
+        this._convPinBottom = true; this.convVisible = 5; this.taskActionCollapsed = false;
         this.loading = true;
         try {
           await this.refresh();
@@ -1028,8 +1028,12 @@
 </section>
 </div>
 <aside v-show="taskTab==='conversation'&&timelineActionMode!=='archive'" class="ui-next-task-side">
-<section class="ui-next-panel ui-next-task-action">
+<section class="ui-next-panel ui-next-task-action" :class="{'is-collapsed':taskActionCollapsed}">
+<div class="ui-next-task-action-head">
 <h2>{{ actionModeLabel }}</h2>
+<button type="button" class="ui-next-task-action-collapse" :aria-label="taskActionCollapsed?'展開任務對話框':'縮小任務對話框'" :title="taskActionCollapsed?'展開':'縮小'" :aria-expanded="(!taskActionCollapsed).toString()" @click="taskActionCollapsed=!taskActionCollapsed"><ui-next-icon :name="taskActionCollapsed?'chevron-up':'chevron-down'"/></button>
+</div>
+<template v-if="!taskActionCollapsed">
 <template v-if="timelineActionMode==='answer'">
 <p v-if="clarIntro">{{ clarIntro }}</p>
 <template v-if="clarQuestions.length">
@@ -1059,8 +1063,7 @@
 <input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"><i aria-hidden="true"></i><span>{{ opt.label }}<em v-if="q.recommended===opt.key">建議</em></span></label>
 </div>
 <label class="ui-next-qa-custom-answer">
-<b>以上選項都不適合？</b>
-<span>直接寫下你的答案或補充說明</span>
+<span class="ui-next-qa-custom-answer-heading"><b>以上選項都不適合？</b> 直接寫下你的答案或補充說明</span>
 <textarea v-model="answerExtra[q.id]" placeholder="輸入你的答案…" @input="autoResize"></textarea>
 </label>
 </template>
@@ -1073,11 +1076,15 @@
 </template>
 </template>
 <template v-else>
-<p class="ui-next-field-note">看不懂、要補充、或方向要改都在這裡講。問問題不會讓任務往下跑；談出結論時 AI 會順手把「規格書 QA」那頁的題目改成最新的。</p>
+<form class="ui-next-qa-ask-composer" @submit.prevent="submitAsk">
 <textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAsk" @input="autoResize" @paste="onPasteFiles($event,'askFiles')">
 </textarea>
-<label class="ui-next-upload ui-next-upload-inline"><input ref="askFileInput" type="file" multiple @change="onAskFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
-<button class="ui-next-primary" @click="submitAsk" :disabled="clarBusy||askSubmitting||!askText.trim()">{{ askSubmitting?'送出中…':'送出提問' }}</button>
+<div class="ui-next-qa-ask-foot">
+<label class="ui-next-icon-button" title="附加截圖"><ui-next-icon name="paperclip"/><input ref="askFileInput" type="file" multiple aria-label="附加截圖" @change="onAskFilesSelected"></label>
+<span v-if="askFiles.length">已附加 {{ askFiles.length }} 個檔案</span>
+<button type="submit" class="ui-next-primary" :disabled="clarBusy||askSubmitting||!askText.trim()">{{ askSubmitting?'送出中…':'送出提問' }}</button>
+</div>
+</form>
 </template>
 </template>
 <template v-else>
@@ -1255,6 +1262,7 @@
 <button class="ui-next-primary" @click="sendTaskMessage" :disabled="sendingMessage||!newMessageText.trim()">{{ sendingMessage?'送出中…':'送出留言' }}</button>
 </div>
 </div>
+</template>
 </template>
 </section>
 </aside>

@@ -629,7 +629,7 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain('@click="handleMessageClick"');
     expect(uiNextPages).toContain('@click="handleTaskMessageClick"');
     expect(pagesCss).toContain(".ui-next-code-block{");
-    expect(pagesCss).toContain(".ui-next-thread-messages{min-height:0;flex:1;overflow:auto");
+    expect(pagesCss).toContain(".ui-next-thread-messages{min-height:0;max-height:none;flex:1 0 auto;overflow:visible");
     expect(pagesCss).toContain(".ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}");
     expect(pagesCss).toContain(".ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:start}");
   });
@@ -637,8 +637,20 @@ describe("ui-next 平行介面", () => {
   test("Chat 輪詢只在訊息真的變更時更新畫面", () => {
     const chat = viewSrc("UiNextProjectChatView");
     expect(chat).toContain("await this.loadMessages(this.requestId, { background: true })");
+    expect(chat).toContain("const shouldFollow = !background || this.isMessagesNearBottom()");
     expect(chat).toContain("if (changed) this.messages = nextMessages");
     expect(chat).toContain("if (changed && shouldFollow) this.$nextTick(() => this.scrollToBottom())");
+    expect(chat).toContain('const element = document.querySelector(".ui-next-main")');
+  });
+
+  test("任務對話框可縮小且不清除尚未送出的內容", () => {
+    const task = viewSrc("UiNextTaskDetailView");
+    expect(task).toContain("taskActionCollapsed: false");
+    expect(task).toContain("<template v-if=\"!taskActionCollapsed\">");
+    expect(task).toContain("taskActionCollapsed=!taskActionCollapsed");
+    expect(task).toContain("taskActionCollapsed?'展開任務對話框':'縮小任務對話框'");
+    expect(pagesCss).toContain(".ui-next-task-action-collapse{");
+    expect(pagesCss).toContain(".ui-next-task-action.is-collapsed{");
   });
 
   test("對話歷程是可 Escape 與 focus trap 的右側 Drawer", () => {
@@ -683,8 +695,19 @@ describe("ui-next 平行介面", () => {
     expect(task).toContain('class="ui-next-qa-options"');
     expect(task).toContain('class="ui-next-qa-custom-answer"');
     expect(task).toContain('以上選項都不適合？');
+    expect(task).toContain('<span class="ui-next-qa-custom-answer-heading"><b>以上選項都不適合？</b> 直接寫下你的答案或補充說明</span>');
     expect(pagesCss).toContain('.ui-next-qa-options label.selected');
     expect(pagesCss).toContain('.ui-next-qa-custom-answer:focus-within');
+    expect(pagesCss).toContain('.ui-next-qa-custom-answer-heading{color:var(--text-muted);font-size:11px;white-space:nowrap}');
+  });
+
+  test("規格書 QA 提問使用單一 Composer 並移除說明段落", () => {
+    const task = viewSrc("UiNextTaskDetailView");
+    expect(task).toContain('class="ui-next-qa-ask-composer"');
+    expect(task).toContain('class="ui-next-qa-ask-foot"');
+    expect(task).toContain('@submit.prevent="submitAsk"');
+    expect(task).not.toContain('看不懂、要補充、或方向要改都在這裡講');
+    expect(pagesCss).toContain('.ui-next-qa-ask-composer:focus-within');
   });
 
   test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {
