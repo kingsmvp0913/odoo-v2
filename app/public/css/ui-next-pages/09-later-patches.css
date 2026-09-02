@@ -184,7 +184,7 @@
 .ui-next-chat-tab-empty{margin:16px 0 0;color:var(--text-muted);font-size:13px}
 .ui-next-chat-tab-list{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:4px}
 .ui-next-chat-tab-list button{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;width:100%;border:0;border-radius:10px;padding:10px 12px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background-color .125s ease}
-.ui-next-chat-tab-list button:hover{background:color-mix(in srgb,var(--text) 6%,transparent)}
+
 .ui-next-chat-tab-list button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 .ui-next-chat-tab-list b{min-width:0;overflow:hidden;font-size:14px;font-weight:500;white-space:nowrap;text-overflow:ellipsis}
 .ui-next-chat-tab-list small{color:var(--text-muted);font-size:12px;white-space:nowrap}
@@ -661,11 +661,10 @@
 .ui-next-project-picker-trigger:hover:not(:disabled),.ui-next-project-picker-trigger:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
 .ui-next-project-picker-trigger::placeholder{color:var(--text-muted);opacity:1}
 .ui-next-project-picker-options p{margin:0;padding:8px 10px;color:var(--text-muted);font-size:12px}
-/* 資料來源選單：與專案選擇器同一列、同一個分量。
-   ⚠ 選擇器要帶上 .ui-next-composer——ui-next.css 有一條 `.ui-next-composer select`（0,1,1），
-   單一 class 的 .ui-next-source-select（0,1,0）壓不過它，字級與顏色會整組失效。 */
-.ui-next-composer .ui-next-source-select{max-width:170px;border:0;padding:2px 4px;border-radius:8px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;outline:0;cursor:pointer}
-.ui-next-composer .ui-next-source-select:hover,.ui-next-composer .ui-next-source-select:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+/* 資料來源：原本是原生 <select>，下拉一打開就是瀏覽器自己的選單，和專案那格
+   （自訂 listbox、跟著網站配色）長得完全不一樣。改成同一套自訂清單。 */
+.ui-next-source-picker{position:relative}
+.ui-next-composer .ui-next-source-trigger{max-width:170px;overflow:hidden;border:0;padding:0;background:transparent;color:var(--text);font:inherit;font-size:12px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap;outline:0;cursor:pointer}
 /* 專案與來源是一組（「問哪個專案的哪個庫」），中間用一個點連起來，不各自寫標題。 */
 .ui-next-context-sep{color:var(--text-muted);font-size:12px}
 /* 比照 AskMe 的 composer 底排：每個可選項都是「小圖示＋文字＋下拉」，文字用主色不是灰的，
@@ -677,18 +676,15 @@
 .ui-next-composer-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;height:26px;box-sizing:border-box;border-radius:8px;padding:0 7px;color:var(--text-muted);transition:background-color .125s ease}
 /* select 的原生外觀（連同瀏覽器自己畫的箭頭）與旁邊的 chip 對不起來：關掉，
    箭頭改用我們自己的圖示，才和專案那格是同一套。 */
-/* field-sizing 讓寬度跟著「目前選中的那一項」，不是最長的那一項——選「自動」時
-   後面會空出一整個「鴻久 - SM - 正式」的寬度，箭頭被推得老遠。 */
-.ui-next-composer .ui-next-composer-chip .ui-next-source-select{appearance:none;-webkit-appearance:none;height:100%;width:auto;max-width:170px;field-sizing:content;padding-right:0}
+
 .ui-next-composer-chip > .ui-next-icon:last-child{width:12px;height:12px;opacity:.75}
-.ui-next-composer-chip:hover,.ui-next-composer-chip:focus-within{background:color-mix(in srgb,var(--text) 8%,transparent)}
+.ui-next-composer-chip:focus-within{background:color-mix(in srgb,var(--text) 8%,transparent)}
 .ui-next-composer-chip .ui-next-icon{width:14px;height:14px;flex:none}
-.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger,
-.ui-next-composer .ui-next-composer-chip .ui-next-source-select{padding:0;border-radius:0;color:var(--text)}
+.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger{padding:0;border-radius:0;color:var(--text)}
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:hover:not(:disabled),
-.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:focus,
-.ui-next-composer .ui-next-composer-chip .ui-next-source-select:hover,
-.ui-next-composer .ui-next-composer-chip .ui-next-source-select:focus{background:transparent}
+.ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:focus{background:transparent}
+/* 來源的清單要對齊這一格，不是對齊整個 composer */
+.ui-next-source-picker .ui-next-project-picker-options{left:0;right:auto;min-width:150px}
 /* 對話頁 composer 下的「專案 · 資料來源」：與首頁選完之後那排同一個分量（小字、次要色）。
    它是唯讀的——來源在開新對話時就定了，這裡只是提醒現在問的是哪個專案的哪個庫。 */
 /* 右邊那條分隔線比照原本的環境狀態小字：沒有它，「鴻久」會和後面的「Enter 送出…」
@@ -701,13 +697,22 @@
    字面相同的話會多一筆跨檔重複，frontend-ui-next.test.js 有基線在守。 */
 .ui-next-sidebar .ui-next-nav:hover,
 .ui-next-sidebar .ui-next-search:hover,
+.ui-next-sidebar .ui-next-new:hover,
+.ui-next-sidebar .ui-next-tools:hover,
+.ui-next-sidebar .ui-next-account:hover,
+.ui-next-sidebar .ui-next-account-menu button:hover,
 .ui-next-sidebar .ui-next-project-head button:hover,
-.ui-next-sidebar .ui-next-project-chats button:hover{background:color-mix(in srgb,var(--surface) 34%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 24%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 45%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 24%,transparent),0 4px 10px color-mix(in srgb,#000 48%,transparent)}
+.ui-next-sidebar .ui-next-project-chats button:hover,
+.ui-next-chat-tab-list button:hover,
+.ui-next-composer .ui-next-icon-button:hover,
+.ui-next-composer-chip:hover{background:color-mix(in srgb,var(--surface) 34%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 24%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 45%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 24%,transparent),0 4px 10px color-mix(in srgb,#000 48%,transparent)}
 /* 目前所在的那一項要更明確：描邊更實、底色更沉，一眼看得出「我在這裡」。
    上緣一條亮邊＋下方一團落影＝浮起來的實體感；只有外框的話還是像平的貼紙。 */
 .ui-next-sidebar .ui-next-nav.is-active{background:color-mix(in srgb,var(--surface) 52%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 34%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 55%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 34%,transparent),0 6px 16px color-mix(in srgb,#000 60%,transparent)}
-/* 鍵盤焦點沿用同一套立體感，再加一圈焦點色——只有 outline 的話，在深色側欄上很難找。 */
+/* 鍵盤焦點比照專案頁的對話清單：一圈 outline 就好，不跟著做立體——
+   立體是給「滑鼠停在上面」與「目前所在」用的，焦點框再疊上去會分不出誰是誰。 */
 .ui-next-sidebar .ui-next-nav:focus-visible,
 .ui-next-sidebar .ui-next-search:focus-visible,
+.ui-next-sidebar .ui-next-new:focus-visible,
 .ui-next-sidebar .ui-next-project-head button:focus-visible,
-.ui-next-sidebar .ui-next-project-chats button:focus-visible{outline:0;background:color-mix(in srgb,var(--surface) 34%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 20%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--primary) 70%,transparent),0 4px 12px color-mix(in srgb,#000 50%,transparent)}
+.ui-next-sidebar .ui-next-project-chats button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;box-shadow:none}

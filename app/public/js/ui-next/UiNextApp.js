@@ -62,6 +62,7 @@
         environmentSummaries: {},
         environmentError: "",
         projectPickerOpen: false,
+        sourcePickerOpen: false,
         projectQuery: "",
         // 空＝不指定，由 agent 自己判斷該查哪裡（使用者裁決：沒選就自行決定）。
         dataSource: "",
@@ -104,6 +105,7 @@
     mounted() {
       this._onProjectPickerOutside = (event) => {
         if (!event.target.closest(".ui-next-project-picker")) this.projectPickerOpen = false;
+        if (!event.target.closest(".ui-next-source-picker")) this.sourcePickerOpen = false;
       };
       document.addEventListener("pointerdown", this._onProjectPickerOutside);
     },
@@ -113,6 +115,18 @@
     computed: {
       // 排序比照側欄：我的最愛 → 最近有對話 → 其餘按名稱。三十幾個專案時，
       // 按 id 排等於每次都要從頭找。
+      // 資料來源的選項：自動 → 平台測試環境 → 這個專案設定過的每個連線。
+      sourceOptions() {
+        return [
+          { value: "", label: "自動" },
+          { value: "test_env", label: "平台測試環境" },
+          ...this.dbConnections.map((conn) => ({ value: `db:${conn.id}`, label: conn.name })),
+        ];
+      },
+      selectedSourceLabel() {
+        const hit = this.sourceOptions.find((opt) => opt.value === this.dataSource);
+        return hit ? hit.label : "自動";
+      },
       sortedProjects() {
         const recent = new Map(this.recentChatProjects.map((row, index) => [String(row.project_id), index]));
         const rank = (project) => (project.is_favorite ? 0 : recent.has(String(project.id)) ? 1 : 2);
@@ -174,6 +188,20 @@
         this.projectPickerOpen = false;
         this.projectQuery = "";
         this.onProjectChange();
+      },
+      selectSource(option) {
+        this.dataSource = option.value;
+        this.sourcePickerOpen = false;
+      },
+      onSourcePickerKeydown(event) {
+        if (event.key === "Escape") { this.sourcePickerOpen = false; this.$nextTick(() => this.$refs.sourceTrigger?.focus()); return; }
+        const options = this.$refs.sourceOptions ? Array.from(this.$refs.sourceOptions.querySelectorAll("button")) : [];
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!this.sourcePickerOpen) { this.sourcePickerOpen = true; return; }
+          const index = options.indexOf(document.activeElement);
+          (options[index + (event.key === "ArrowDown" ? 1 : -1)] || options[event.key === "ArrowDown" ? 0 : options.length - 1])?.focus();
+        }
       },
       onProjectPickerKeydown(event) {
         const options = this.$refs.projectOptions ? Array.from(this.$refs.projectOptions.querySelectorAll("button:not([disabled])")) : [];
@@ -313,15 +341,14 @@
                   </div>
                 </div>
                 <span v-if="projectId" class="ui-next-context-sep" aria-hidden="true">·</span>
-                <span v-if="projectId" class="ui-next-composer-chip">
-                <ui-next-icon name="grid"/>
-                <select v-model="dataSource" class="ui-next-source-select" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">
-                  <option value="">自動</option>
-                  <option value="test_env">平台測試環境</option>
-                  <option v-for="conn in dbConnections" :key="conn.id" :value="'db:' + conn.id">{{ conn.name }}</option>
-                </select>
-                <ui-next-icon name="chevron-down"/>
-                </span>
+                <div v-if="projectId" class="ui-next-source-picker ui-next-composer-chip" @keydown="onSourcePickerKeydown">
+                  <ui-next-icon name="grid"/>
+                  <button ref="sourceTrigger" type="button" class="ui-next-source-trigger" :aria-expanded="sourcePickerOpen" aria-haspopup="listbox" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷" @click="sourcePickerOpen=!sourcePickerOpen">{{ selectedSourceLabel }}</button>
+                  <ui-next-icon name="chevron-down"/>
+                  <div v-if="sourcePickerOpen" ref="sourceOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇資料來源">
+                    <button v-for="option in sourceOptions" :key="option.value || 'auto'" type="button" role="option" :aria-selected="option.value===dataSource" @click="selectSource(option)">{{ option.label }}</button>
+                  </div>
+                </div>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
             </div>
@@ -909,7 +936,7 @@
                清單常駐，專案的展開改成點名稱本身，右側 ⋮ 才是那一列的操作入口。 -->
           <div class="ui-next-nav-group">
             <router-link class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" to="/projects" @click="mobileSidebarOpen=false"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></router-link>
-            <div class="ui-next-projects"><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head" :class="{ 'is-current': currentProjectId === String(project.id), 'has-menu': menuProjectId === project.id }" @contextmenu.prevent="openProjectMenu(project, $event)"><button @click="toggleProject(project)" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon name="project"/>{{ project.name }}</button><button type="button" class="ui-next-row-more" :aria-label="project.name + ' 更多操作'" :aria-expanded="menuProjectId === project.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleProjectMenu(project, $event)"><ui-next-icon name="dots"/></button><teleport to="[data-ui='next']" :disabled="!rowMenuPos"><div v-if="menuProjectId === project.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button type="button" role="menuitem" @click="openEnv(project.id)">測試區</button><button type="button" role="menuitem" @click="openRelease(project.id)">上正式</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'repos')">REPO</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'db')">連線設定</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'settings')">專案設定</button></div></teleport></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><div v-for="chat in visibleChats(project)" :key="chat.id" class="ui-next-chat-row" :class="{ 'has-menu': menuChatId === chat.id, 'is-active': isCurrentChat(project, chat) }" @contextmenu.prevent="openChatMenu(chat, $event)"><input v-if="renamingChatId === chat.id" ref="renameInput" v-model="renameTitle" class="ui-next-rename-input" :aria-label="'重新命名對話'" @keydown.enter.prevent="submitRenameChat(project, chat)" @keydown.esc.prevent="cancelRenameChat" @blur="submitRenameChat(project, chat)"><template v-else><button :aria-current="isCurrentChat(project, chat) ? 'page' : null" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button type="button" class="ui-next-row-more" :aria-label="(chat.title || '新對話') + ' 更多操作'" :aria-expanded="menuChatId === chat.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleChatMenu(chat, $event)"><ui-next-icon name="dots"/></button><teleport to="[data-ui='next']" :disabled="!rowMenuPos"><div v-if="menuChatId === chat.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button type="button" role="menuitem" @click="startRenameChat(chat)">重新命名</button><button type="button" role="menuitem" class="danger" @click="deleteChat(project, chat)">刪除</button></div></teleport></template></div><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '?tab=chat')">查看全部對話</button></div></div></div>
+            <div class="ui-next-projects"><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head" :class="{ 'is-current': currentProjectId === String(project.id) && !currentChatId, 'has-menu': menuProjectId === project.id }" @contextmenu.prevent="openProjectMenu(project, $event)"><button @click="toggleProject(project)" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon name="project"/>{{ project.name }}</button><button type="button" class="ui-next-row-more" :aria-label="project.name + ' 更多操作'" :aria-expanded="menuProjectId === project.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleProjectMenu(project, $event)"><ui-next-icon name="dots"/></button><teleport to="[data-ui='next']" :disabled="!rowMenuPos"><div v-if="menuProjectId === project.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button type="button" role="menuitem" @click="openEnv(project.id)">測試區</button><button type="button" role="menuitem" @click="openRelease(project.id)">上正式</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'repos')">REPO</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'db')">連線設定</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'settings')">專案設定</button></div></teleport></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><div v-for="chat in visibleChats(project)" :key="chat.id" class="ui-next-chat-row" :class="{ 'has-menu': menuChatId === chat.id, 'is-active': isCurrentChat(project, chat) }" @contextmenu.prevent="openChatMenu(chat, $event)"><input v-if="renamingChatId === chat.id" ref="renameInput" v-model="renameTitle" class="ui-next-rename-input" :aria-label="'重新命名對話'" @keydown.enter.prevent="submitRenameChat(project, chat)" @keydown.esc.prevent="cancelRenameChat" @blur="submitRenameChat(project, chat)"><template v-else><button :aria-current="isCurrentChat(project, chat) ? 'page' : null" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button type="button" class="ui-next-row-more" :aria-label="(chat.title || '新對話') + ' 更多操作'" :aria-expanded="menuChatId === chat.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleChatMenu(chat, $event)"><ui-next-icon name="dots"/></button><teleport to="[data-ui='next']" :disabled="!rowMenuPos"><div v-if="menuChatId === chat.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button type="button" role="menuitem" @click="startRenameChat(chat)">重新命名</button><button type="button" role="menuitem" class="danger" @click="deleteChat(project, chat)">刪除</button></div></teleport></template></div><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '?tab=chat')">查看全部對話</button></div></div></div>
           </div>
           </div>
           <div class="ui-next-bottom">
