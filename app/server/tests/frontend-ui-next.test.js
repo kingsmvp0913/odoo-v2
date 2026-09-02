@@ -670,9 +670,10 @@ describe("ui-next 平行介面", () => {
     const chat = viewSrc("UiNextProjectChatView");
     const activeChat = chat.slice(chat.indexOf('<template v-if="activeChat">'), chat.indexOf('<template v-else>'));
     expect(activeChat).not.toContain('ui-next-thread-head');
-    // 專案名回來了，但只能是 composer 下方那排小字——追問幾輪之後「這是在問哪個專案的
-    // 哪個庫」是最常忘的事（使用者要求）。原本整條禁掉是為了擋大標題，那個仍然禁著（上一行）。
-    expect(activeChat).toMatch(/ui-next-chat-context">\{\{ projectName \}\}/);
+    // 專案名回來了，但只能是 composer 底排的一個唯讀 chip（與首頁同一組樣式）——追問幾輪
+    // 之後「這是在問哪個專案的哪個庫」是最常忘的事（使用者要求）。原本整條禁掉是為了擋
+    // 大標題，那個仍然禁著（上一行）。
+    expect(activeChat).toMatch(/ui-next-chip-static">[^<]*<ui-next-icon name="project"\/>\{\{ projectName \}\}/);
     expect(activeChat).toContain('title="建立任務" aria-label="建立任務"');
     expect(activeChat).toContain('<ui-next-icon name="plus"/>');
     expect(activeChat).toContain('title="上傳圖片"');

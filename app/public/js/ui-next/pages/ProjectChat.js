@@ -357,13 +357,14 @@
 <div class="ui-next-composer-options">
 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
 <button type="button" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
-<span v-if="projectName" class="ui-next-chat-context">{{ projectName }}<template v-if="dataSourceLabel()"> · {{ dataSourceLabel() }}</template></span>
-<span class="ui-next-composer-hint">Enter 送出 · Shift + Enter 換行 · 可直接貼上截圖</span>
+<span v-if="projectName" class="ui-next-composer-chip ui-next-chip-static"><ui-next-icon name="project"/>{{ projectName }}</span>
+<span v-if="dataSourceLabel()" class="ui-next-composer-chip ui-next-chip-static"><ui-next-icon name="grid"/>{{ dataSourceLabel() }}</span>
 </div>
 <button v-if="sending||replyPending" type="button" class="ui-next-thread-send" :disabled="stopping" aria-label="停止回覆" title="停止回覆" @click="stopReply"><ui-next-icon name="square"/></button>
 <button v-else class="ui-next-thread-send" :disabled="!newInput.trim()&&!pendingFiles.length" aria-label="送出"><ui-next-icon name="send"/></button>
 </div>
 </form>
+<small class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。附件沿用既有 Chat 的圖片上傳限制。</small>
 </template>
 <div v-else class="ui-next-thread-empty">
 <h2>{{ chatsError ? '無法載入對話' : chats.length ? '選擇一段對話' : '尚無對話' }}</h2>

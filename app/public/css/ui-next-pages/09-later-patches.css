@@ -392,7 +392,7 @@
 .ui-next-composer .ui-next-icon-button,.ui-next-thread-composer .ui-next-icon-button{border-radius:9px;transition:background-color .125s ease,color .125s ease}
 .ui-next-composer .ui-next-icon-button:hover,.ui-next-thread-composer .ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
 .ui-next-composer .ui-next-icon-button:focus-within{outline:2px solid var(--primary);outline-offset:1px}
-.ui-next-composer .ui-next-send,.ui-next-thread-composer .ui-next-send{transition:background-color .125s ease,opacity .125s ease}
+.ui-next-composer .ui-next-send,.ui-next-thread-composer .ui-next-send{transition:background-color .125s ease,color .125s ease}
 .ui-next-composer .ui-next-send:not(:disabled):hover,.ui-next-thread-composer .ui-next-send:not(:disabled):hover{background:var(--primary);color:var(--surface)}
 /* 送不出去的時候游標要說明白，而不是讓人一直點 */
 .ui-next-composer .ui-next-send:disabled,.ui-next-thread-composer .ui-next-send:disabled{cursor:not-allowed}
@@ -688,9 +688,10 @@
 .ui-next-source-picker .ui-next-project-picker-options{left:0;right:auto;min-width:150px}
 /* 對話頁 composer 下的「專案 · 資料來源」：與首頁選完之後那排同一個分量（小字、次要色）。
    它是唯讀的——來源在開新對話時就定了，這裡只是提醒現在問的是哪個專案的哪個庫。 */
-/* 右邊那條分隔線比照原本的環境狀態小字：沒有它，「鴻久」會和後面的「Enter 送出…」
-   讀成同一句。 */
-.ui-next-chat-context{min-width:0;overflow:hidden;padding-right:9px;border-right:1px solid var(--border);color:var(--text-muted);font-size:12px;white-space:nowrap;text-overflow:ellipsis}
+/* 對話頁的專案／來源與首頁用同一組 chip，只是不能點：這場對話綁的東西在開新對話時
+   就定了，這裡只是提醒「現在問的是哪個專案的哪個庫」。 */
+.ui-next-chip-static{cursor:default}
+.ui-next-chip-static:hover{background:transparent;box-shadow:none}
 
 /* 側欄的 hover／選中原本只換底色，貼在同色背景上幾乎看不出來。加一圈內描邊與一點落影，
    看起來是「浮起來的一塊」而不是「顏色深了一點」（比照 AskMe 的觸感）。
@@ -707,10 +708,10 @@
 .ui-next-chat-tab-list button:hover,
 .ui-next-composer .ui-next-icon-button:hover,
 .ui-next-composer-chip:hover{background:color-mix(in srgb,var(--surface) 34%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 24%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 45%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 24%,transparent),0 4px 10px color-mix(in srgb,#000 48%,transparent)}
-/* 目前所在的那一項：底色沉一點、一圈描邊就夠，不做立體——立體留給滑鼠停在上面時，
-   兩者都浮起來的話，分不出「我在這裡」和「我指著這裡」。 */
-.ui-next-sidebar .ui-next-nav.is-active{background:color-mix(in srgb,var(--surface) 38%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 26%,transparent)}
-.ui-next-sidebar .ui-next-project-head.is-current{border-radius:7px;background:color-mix(in srgb,var(--surface) 30%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 22%,transparent)}
+/* 目前所在的那一項：比照側欄對話列的選中樣式——只有一層淡底色，沒有描邊也沒有立體。
+   三種狀態各自分工：底色＝我在這裡、浮起＝我指著這裡、outline＝鍵盤焦點。 */
+.ui-next-sidebar .ui-next-nav.is-active{background:color-mix(in srgb,var(--sidebar-active) 10%,transparent);box-shadow:none}
+.ui-next-sidebar .ui-next-project-head.is-current{border-radius:7px;background:color-mix(in srgb,var(--sidebar-active) 10%,transparent);box-shadow:none}
 /* 鍵盤焦點比照專案頁的對話清單：一圈 outline 就好，不跟著做立體——
    立體是給「滑鼠停在上面」與「目前所在」用的，焦點框再疊上去會分不出誰是誰。 */
 .ui-next-sidebar .ui-next-nav:focus-visible,
@@ -718,3 +719,34 @@
 .ui-next-sidebar .ui-next-new:focus-visible,
 .ui-next-sidebar .ui-next-project-head button:focus-visible,
 .ui-next-sidebar .ui-next-project-chats button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;box-shadow:none}
+
+
+/* 送出鈕：停用與可送出原本只差 opacity（.42 vs 1），底色都是同一塊灰，看起來像沒反應。
+   改成實色對比——可送出時是亮底深字（AskMe 的做法），停用時是沉在背景裡的灰。
+   ⚠ 要壓過 ui-next.css 的 `.ui-next-send:disabled{opacity:.42}`。 */
+/* ⚠ 對話頁的送出鈕 class 是 .ui-next-thread-send（不是 .ui-next-send），只寫後者
+   等於只修好首頁那一顆。 */
+.ui-next-composer .ui-next-send,.ui-next-thread-composer .ui-next-thread-send{opacity:1;background:color-mix(in srgb,var(--text) 14%,var(--surface));color:var(--text-muted)}
+.ui-next-composer .ui-next-send:not(:disabled),.ui-next-thread-composer .ui-next-thread-send:not(:disabled){background:var(--text);color:var(--surface)}
+.ui-next-composer .ui-next-send:not(:disabled):hover,.ui-next-thread-composer .ui-next-thread-send:not(:disabled):hover{background:var(--primary);color:var(--surface)}
+.ui-next-thread-send .ui-next-icon{transform:translate(1px,-1px)}
+
+/* 4) 下拉清單：項目字級 14px、內距 9px，比它上面那排 12px 的字大了一整級，
+   而且完全沒有 hover——指上去沒有任何反應，看起來像壞掉的清單。 */
+.ui-next-project-picker-options button,.ui-next-source-picker .ui-next-project-picker-options button{padding:7px 9px;font-size:12px;transition:background-color .12s ease}
+.ui-next-project-picker-options button:hover,.ui-next-source-picker .ui-next-project-picker-options button:hover{background:color-mix(in srgb,var(--text) 10%,transparent)}
+.ui-next-project-picker-options button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+.ui-next-project-picker-options button[aria-selected=true]{background:color-mix(in srgb,var(--text) 7%,transparent);font-weight:650}
+/* 專案清單原本寬到 390px，掛在一個 70px 的輸入框下面很突兀 */
+.ui-next-project-picker .ui-next-project-picker-options{width:auto;min-width:190px;max-width:320px}
+
+/* 5) 專案框不留最小寬度：短名字（concord）時，箭頭會被推開一截，中間空一塊。 */
+.ui-next-project-picker-trigger{min-width:0}
+
+/* 紙飛機的墨水重心偏左下（圖形本身就不對稱），幾何置中之後看起來仍是歪的。 */
+.ui-next-send .ui-next-icon{transform:translate(1px,-1px)}
+/* 來源清單帶出資料庫名稱：「鴻久 - 正式」是人取的名字，背後是哪個庫要看得到。 */
+.ui-next-source-picker .ui-next-project-picker-options button{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.ui-next-source-picker .ui-next-project-picker-options small{color:var(--text-muted);font-size:11px;white-space:nowrap}
+/* 對話頁的 Enter 說明搬到對話框外（與首頁同一個位置）：它是操作提示不是輸入區的一部分。 */
+.ui-next-thread-hint{display:block;width:min(812px,calc(100% - 48px));margin:0 auto 18px;color:var(--text-muted);font-size:12px}
