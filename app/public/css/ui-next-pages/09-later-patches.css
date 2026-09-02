@@ -814,9 +814,11 @@
 
 /* 專案卡片右上：「更多」是 31px 的按鈕、「我的最愛」是 19×24 的裸圖示，兩者只有頂端
    對齊、視覺中心差了 4px。統一成側欄那種 26px 的方形按鈕，並排才會齊。 */
-.ui-next-project-card-title .ui-next-project-more button,
+.ui-next-project-card-title .ui-next-project-more > button,
 .ui-next-project-card-title > button[aria-label*="我的最愛"]{display:grid;place-items:center;width:26px;height:26px;border-radius:8px;transition:background-color .12s ease}
-.ui-next-project-card-title .ui-next-project-more button:hover,
+/* ⚠ 一定要 `> button`：選單就長在 .ui-next-project-more 裡面，不限定直接子代的話，
+   選單裡每一項也會被套成 26×26 的方塊，整份選單塌掉（實測項目變 29×29）。 */
+.ui-next-project-card-title .ui-next-project-more > button:hover,
 .ui-next-project-card-title > button[aria-label*="我的最愛"]:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
 /* 標籤那排原本緊貼標題（間距 0），而標題與版本號之間有 8px——三行看起來是 2+1 而不是 3。 */
 .ui-next-project-grid-rich .ui-next-project-facts{margin-top:8px}
