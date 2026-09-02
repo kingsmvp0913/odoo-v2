@@ -771,3 +771,11 @@
 .ui-next-thread-dock{position:sticky;bottom:0;z-index:2;background:var(--bg)}
 .ui-next-thread-dock .ui-next-thread-composer{position:static;margin-bottom:10px}
 .ui-next-thread-dock .ui-next-thread-hint{margin-bottom:max(14px,env(safe-area-inset-bottom))}
+
+
+/* 對話內容的可讀性：AI 那側原本一路撐到 893px，一行塞得下六十幾個中文字，
+   眼睛掃到行尾就找不到下一行的開頭（AskMe 那邊是 680）。收到 720。 */
+.ui-next-thread-messages > article.ai .ui-next-message{max-width:720px}
+/* 行內程式碼原本與內文同字體同色，`idx_alias_report_setting` 這種東西整段糊在一起。 */
+.ui-next-message code{padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text);font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:.92em}
+.ui-next-message pre code{padding:0;border-radius:0;background:transparent;font-size:1em}
