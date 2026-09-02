@@ -92,10 +92,13 @@ describe('updateAgent', () => {
   });
 
   test('改 prompt 會寫入新 body（保留既有 placeholder）', () => {
-    const p = '新的提示詞 {{project_name}} {{wiki}} {{history}} {{user_message}}';
+    // ⚠ 這個 fixture 必須列齊 chat 目前所有的 placeholder：updateAgent 會擋下「新 prompt 少了
+    // 既有 placeholder」的更新（JS 端仍在傳那份資料）。agent 加了新 placeholder 就要補進來，
+    // 否則這條會紅在防護上，而不是紅在真的壞掉。
+    const p = '新的提示詞 {{project_name}} {{wiki}} {{data_source_hint}} {{history}} {{user_message}}';
     const updated = L.updateAgent('chat', { prompt: p });
     expect(updated.body.trim()).toBe(p);
-    expect(updated.render({ project_name: 'P', wiki: 'W', history: 'H', user_message: 'X' })).toContain('X');
+    expect(updated.render({ project_name: 'P', wiki: 'W', data_source_hint: '', history: 'H', user_message: 'X' })).toContain('X');
   });
 
   test('移除既有 placeholder 遭拒（400，防契約漂移）', () => {

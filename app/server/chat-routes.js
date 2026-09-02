@@ -106,9 +106,12 @@ function registerRoutes(app) {
   app.post('/api/projects/:projectId/chats', verifyToken, async (req, res) => {
     try {
       const title = (req.body.title || '').trim() || '新對話';
+      // 白名單而非照收：這個值會被組進 agent 的 prompt，任意字串等於讓呼叫端寫 prompt。
+      // 認不得就當成沒選（agent 照原本判準自己挑來源）。
+      const dataSource = ['test_env', 'production_db'].includes(req.body.data_source) ? req.body.data_source : null;
       const { rows: [chat] } = await query(
-        'INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, $2, $3) RETURNING id, title, created_at',
-        [req.params.projectId, title, req.userId]
+        'INSERT INTO project_chats (project_id, title, user_id, data_source) VALUES ($1, $2, $3, $4) RETURNING id, title, created_at',
+        [req.params.projectId, title, req.userId, dataSource]
       );
       res.status(201).json(chat);
     } catch (err) { res.status(500).json({ error: err.message }); }

@@ -63,6 +63,8 @@
         environmentError: "",
         projectPickerOpen: false,
         projectQuery: "",
+        // 空＝不指定，由 agent 自己判斷該查哪裡（使用者裁決：沒選就自行決定）。
+        dataSource: "",
         // 「最近有 chat 的專案」與側欄同一支 API，排序才會一致。
         recentChatProjects: [],
         createdChatId: "",
@@ -212,7 +214,7 @@
         try {
           const chat = this.createdChatId
             ? { id: this.createdChatId }
-            : await Api.post(`projects/${this.projectId}/chats`, { title: chatTitle(this.prompt) });
+            : await Api.post(`projects/${this.projectId}/chats`, { title: chatTitle(this.prompt), data_source: this.dataSource || undefined });
           this.createdChatId = String(chat.id);
           const content = this.prompt.trim();
           // ⚠ 訊息端點會 await 整輪 AI 回覆（chat-agent 的 chatReply，動輒數分鐘）。等它回來才換頁
@@ -297,6 +299,11 @@
                     <p v-if="!filteredProjects.length">找不到符合的專案</p>
                   </div>
                 </div>
+                <select v-if="projectId" v-model="dataSource" class="ui-next-source-select" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">
+                  <option value="">資料來源：自動</option>
+                  <option value="test_env">優先查測試環境</option>
+                  <option value="production_db">優先查正式區</option>
+                </select>
                 <span class="ui-next-environment" :class="{error:environmentError}">{{ environmentLabel }}</span>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>

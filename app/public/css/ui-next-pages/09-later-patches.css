@@ -657,3 +657,6 @@
 .ui-next-project-picker-trigger::placeholder{color:var(--text);opacity:1}
 .ui-next-project-picker-trigger:disabled::placeholder{color:var(--text-muted)}
 .ui-next-project-picker-options p{margin:0;padding:8px 10px;color:var(--text-muted);font-size:12px}
+/* 資料來源選單：與專案選擇器同一列，樣式沿用 composer 內的 select（無框、透明底）。 */
+.ui-next-source-select{max-width:150px;border:0;padding:2px 4px;border-radius:8px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;outline:0;cursor:pointer}
+.ui-next-source-select:hover,.ui-next-source-select:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
