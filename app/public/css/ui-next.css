@@ -108,9 +108,9 @@ html[data-theme="dark"] [data-ui="next"]{--sidebar-bg:#1B1B1E;--sidebar-text:#C4
 
 /* 選單自己不能被列的 hover 上浮帶著跑，否則點的瞬間它會往上跳 2px。 */
 .ui-next-row-menu{position:absolute;z-index:var(--z-dropdown);top:calc(100% - 2px);right:4px;min-width:150px;padding:5px;border:1px solid var(--border-strong);border-radius:11px;background:var(--surface);box-shadow:var(--shadow-lg)}
-.ui-next-project-head .ui-next-row-menu button,.ui-next-chat-row .ui-next-row-menu button{display:block;width:100%;min-height:0;margin:0;overflow:visible;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:var(--text);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-align:left;white-space:nowrap;cursor:pointer;translate:none}
-.ui-next-project-head.has-menu .ui-next-row-menu button:hover,.ui-next-chat-row.has-menu .ui-next-row-menu button:hover{background:var(--bg);color:var(--text);translate:none}
-.ui-next-project-head .ui-next-row-menu button.danger,.ui-next-chat-row .ui-next-row-menu button.danger{color:var(--danger)}
+.ui-next-row-menu.is-at-pointer button,.ui-next-project-head .ui-next-row-menu button,.ui-next-chat-row .ui-next-row-menu button{display:block;width:100%;min-height:0;margin:0;overflow:visible;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:var(--text);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-align:left;white-space:nowrap;cursor:pointer;translate:none}
+.ui-next-row-menu.is-at-pointer button:hover,.ui-next-project-head.has-menu .ui-next-row-menu button:hover,.ui-next-chat-row.has-menu .ui-next-row-menu button:hover{background:var(--bg);color:var(--text);translate:none}
+.ui-next-row-menu button.danger{color:var(--danger)}
 /* 就地改名：外觀要和它取代的那一列一致，否則改名時整排會跳動。 */
 .ui-next-rename-input{box-sizing:border-box;width:100%;margin:0;border:1px solid var(--primary);border-radius:10px;padding:6px 10px 6px 11px;background:var(--surface);color:var(--text);font:inherit;font-size:12px;line-height:16px;outline:0}
 .ui-next-chat-row > button:first-child{padding-right:34px}
