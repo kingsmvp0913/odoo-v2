@@ -801,7 +801,7 @@
 /* composer 底排的 hover 要自己一組：共用那條是為深色側欄調的（用 --surface 提亮），
    疊在 composer 本來就是 --surface 的底上等於沒變化。這裡改用 --text 的低透明度。 */
 .ui-next-composer .ui-next-composer-chip:hover,.ui-next-thread-composer .ui-next-composer-chip:hover,
-.ui-next-composer .ui-next-icon-button:hover,.ui-next-thread-composer .ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 20%,transparent),0 2px 6px color-mix(in srgb,#000 38%,transparent)}
+.ui-next-composer .ui-next-icon-button:hover,.ui-next-thread-composer .ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 18%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 28%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 42%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--text) 24%,transparent)}
 
 /* 專案卡片右上：「更多」是 31px 的按鈕、「我的最愛」是 19×24 的裸圖示，兩者只有頂端
    對齊、視覺中心差了 4px。統一成側欄那種 26px 的方形按鈕，並排才會齊。 */
