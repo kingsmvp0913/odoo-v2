@@ -25,7 +25,12 @@ curl -s -H "Authorization: Bearer $TOK" -H "anthropic-beta: oauth-2025-04-20" \
 
 **週額度（`seven_day.utilization`）≥ 60 → 立刻停止本輪**，不寫任何碼，把「因額度停手」記進交班檔，不再排下一輪。
 
-這是使用者 2026-08-31 明確裁決的數字，理由是保住隔天上班的額度。週額度重置在 **9/3 13:00（台北）**，中間都是同一桶。
+這是使用者 2026-08-31 裁決的數字，理由是保住隔天上班的額度。**每輪要問過使用者當下的門檻**——
+2026-09-02 他當面改成 70%（只當次有效，明言不寫回本檔）。
+
+**重置時間以 API 回的 `resets_at` 為準，不要照著本檔或前一輪的推算規劃額度。**
+2026-09-02 實測：同一場作業內 `utilization` 從 50% 掉到 2%，而當時記錄的 `resets_at` 還在隔天——
+拿推算值去分配「還剩幾個百分點可以用」會失準。每輪重新讀。
 
 5 小時額度撞到不用停 —— 它每 5 小時自己回滿，等下一輪即可。
 
@@ -37,10 +42,17 @@ cd /home/odoo/odoo-v2 && git pull --ff-only origin master
 
 **待辦來源，依此優先序**：
 
-1. `OAA-UI-NEXT-CORRECTION-SPEC.md` —— 自稱「目前唯一有效進度」，含 `NEXT-UX-001`~`007` 九項需求與各項「尚未完成」驗收欄
-2. `OAA-UI-NEXT-ROUND2-SPEC.md` —— 「執行狀態總表」與 **§9 GodUI 全面校準**（ROUND2 範圍內唯一未做的）
+1. **使用者當面交辦的事項**（若這一輪是他交辦後才跑的）
+2. `docs/nightshift-review.md` 的最後一輪 —— 那裡有「仍未做／沒驗到」清單與上一輪的拍板結果
+3. `OAA-UI-NEXT-CORRECTION-SPEC.md`、`OAA-UI-NEXT-ROUND2-SPEC.md`
 
-兩份**管不同範圍不是互相取代**。真的對不上時以 CORRECTION 為準，並把矛盾記進交班檔，不要自己調和。
+⚠ **第 3 項那兩份規格書 2026-09-02 實測已不在硬碟上**（曾在 repo 根，後來被刪；`docs/` 又在 `.gitignore`）。
+需要的話從 git 撈：`git show dca89815:OAA-UI-NEXT-CORRECTION-SPEC.md`、`git show 8842b336:OAA-UI-NEXT-ROUND2-SPEC.md`。
+
+**這件事害過一次**：找不到待辦來源時本 skill 沒有備援指示，結果交班檔連續 98 輪記「維護模式、無變化」，
+每輪都花額度確認一次「沒事可做」。**待辦來源全空 ≠ 無事可做，那是訊號本身壞了 —— 直接停止排下一輪並在交班檔寫明。**
+
+多份來源**管不同範圍不是互相取代**。真的對不上時記進交班檔，不要自己調和。
 
 ### 3. 做
 
@@ -88,15 +100,23 @@ spec 內已知待拍板：§7.3 九種 action mode 補到什麼程度、§4.4 �
 
 ### 改 ui-next 的 CSS 前必讀（2026-08-31 兩次踩到）
 
-**同一條 selector 會被定義好幾次，改了不一定生效。** `.ui-next-thread-composer` 與
-`.ui-next-message` 在 `ui-next-pages.css` 都被定義多次，兩個 CSS 檔之間還有逐字重複的規則
-（載入序 `ui-next.css` → `ui-next-pages.css`，同 specificity 後者贏）。
+**同一條 selector 會被定義好幾次，改了不一定生效。** 同權重的規則後者贏，
+所以「改了沒反應」的第一個假設永遠是**它在後面被蓋掉了**。
 更陰險的是**移除一條之後，原本被它蓋住的另一條會浮上來**：移掉卡片的 `min-height:210px`，
 `min-height` 反而變成 250px（另一條規則），看起來像沒改到。
 
-（**這裡刻意不寫「幾次」**：2026-08-31 夜班期間這個數字從 11 變 9 再變 8，
+**2026-09-02 起 CSS 已拆檔**，覆蓋關係現在跨檔案：
+
+- `ui-next-pages.css` **已不存在**，改成 `app/public/css/ui-next-pages/01-…09-*.css`
+- 載入序＝`ui-next.css` → `01-base` → … → `09-later-patches`。
+  **檔名前綴的數字就是層疊順序，不可重排、不可按字母排序**——
+  `09-later-patches` 整份是靠排在最後才生效的補丁
+- 要找某條規則被誰蓋掉，`grep -rn '<selector>' app/public/css/`，看它出現在哪幾個檔、
+  哪個排在後面
+
+（**這裡刻意不寫「重複幾組」**：2026-08-31 夜班期間這個數字從 11 變 9 再變 8，
 寫死的數字會腐爛成假事實——`always.md` 規則 2 講的就是這件事。
-要知道現況就自己 `grep -c`。）
+現況鎖在 `frontend-ui-next.test.js` 的 `CROSS_FILE_DUP_BASELINE`，要知道就去讀那個常數。）
 
 ⇒ **改完一定要用瀏覽器 computed style 反查真正生效的值**，不要看原始碼就當作生效：
 
@@ -126,7 +146,9 @@ cd /home/odoo/odoo-v2/app && npm run rwd:capture
 截圖腳本三個必要設定，少一個就出錯：`require` playwright 要用絕對路徑 `/home/odoo/odoo-v2/app/node_modules/playwright`、`PLAYWRIGHT_BROWSERS_PATH` 指 `app/rwd/.pw-browsers`、`XDG_DATA_HOME` 指 `app/rwd/.fontroot`（不設中文變豆腐框）。登入靠 `addInitScript` 塞 `localStorage.aidev_token`。
 
 - 平台埠是 **8771**，不是 rwd 預設的 3939
-- `RWD_TOKEN` 於 **2026-09-02 13:55 到期**。過期症狀是截到登入頁而不是內容頁 —— 看到就停手記進交班檔，不要繼續截一整輪沒用的圖
+- `RWD_TOKEN` 會過期（上一次記錄的到期時間是 **2026-09-02 13:55**，之後沒人更新過這行，所以**很可能已經過期**）。
+  過期症狀是截到登入頁而不是內容頁 —— 看到就停手記進交班檔，不要繼續截一整輪沒用的圖。
+  換發：請使用者從瀏覽器 devtools 的 `localStorage.aidev_token` 複製，貼進 `~/.claude/nightshift.env`。
 - **截圖門禁自我比對全綠 ≠ 正確**（它比的是自己）。淺色其實是深色、中文變豆腐框都只有人眼開圖看得到。通過後一定要自己 Read 幾張真圖抽驗
 
 ### AskMe 是視覺基準
