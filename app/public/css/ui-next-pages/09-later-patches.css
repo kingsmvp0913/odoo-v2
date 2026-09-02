@@ -649,3 +649,11 @@
    維持「標籤｜內容」兩欄，橫著一條本來就有寬度可用。 */
 .ui-next-flow-detail .flow-detail-grid{grid-template-columns:auto minmax(0,1fr);gap:4px 14px;max-width:1000px}
 
+
+/* 專案選擇器改成可打字的自動完成：原本是 <button>，換成 <input> 之後要自己把
+   瀏覽器預設的框與內距清掉，否則它在 composer 那一列會突出一塊。 */
+.ui-next-project-picker-trigger{width:205px;padding:2px 4px;border-radius:8px;outline:0}
+.ui-next-project-picker-trigger:focus{background:color-mix(in srgb,var(--text) 8%,transparent)}
+.ui-next-project-picker-trigger::placeholder{color:var(--text);opacity:1}
+.ui-next-project-picker-trigger:disabled::placeholder{color:var(--text-muted)}
+.ui-next-project-picker-options p{margin:0;padding:8px 10px;color:var(--text-muted);font-size:12px}

@@ -62,6 +62,9 @@
         environmentSummaries: {},
         environmentError: "",
         projectPickerOpen: false,
+        projectQuery: "",
+        // 「最近有 chat 的專案」與側欄同一支 API，排序才會一致。
+        recentChatProjects: [],
         createdChatId: "",
         sendError: "",
         userName: "使用者",
@@ -72,12 +75,14 @@
     },
     async created() {
       try {
-        const [projects, me, summaries] = await Promise.all([
+        const [projects, me, summaries, recent] = await Promise.all([
           Api.get("projects"),
           Api.get("auth/me"),
           Api.get("projects/env-summaries").catch(() => []),
+          Api.get("chats/sidebar-projects").catch(() => []),
         ]);
         this.projects = projects || [];
+        this.recentChatProjects = recent || [];
         this.userName = me.display_name || me.username || "使用者";
         this.environmentSummaries = (summaries || []).reduce((result, summary) => { result[String(summary.project_id)] = summary; return result; }, {});
         const lastProjectId = localStorage.getItem("oaa.next.last-project-id");
@@ -101,6 +106,23 @@
       document.removeEventListener("pointerdown", this._onProjectPickerOutside);
     },
     computed: {
+      // 排序比照側欄：我的最愛 → 最近有對話 → 其餘按名稱。三十幾個專案時，
+      // 按 id 排等於每次都要從頭找。
+      sortedProjects() {
+        const recent = new Map(this.recentChatProjects.map((row, index) => [String(row.project_id), index]));
+        const rank = (project) => (project.is_favorite ? 0 : recent.has(String(project.id)) ? 1 : 2);
+        return [...this.projects].sort((a, b) => {
+          const ra = rank(a), rb = rank(b);
+          if (ra !== rb) return ra - rb;
+          if (ra === 1) return recent.get(String(a.id)) - recent.get(String(b.id));
+          return String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant");
+        });
+      },
+      filteredProjects() {
+        const query = this.projectQuery.trim().toLowerCase();
+        if (!query) return this.sortedProjects;
+        return this.sortedProjects.filter((project) => String(project.name || "").toLowerCase().includes(query));
+      },
       selectedProject() {
         return this.projects.find(
           (p) => String(p.id) === String(this.projectId),
@@ -136,11 +158,19 @@
       selectProject(project) {
         this.projectId = String(project.id);
         this.projectPickerOpen = false;
+        this.projectQuery = "";
         this.onProjectChange();
       },
       onProjectPickerKeydown(event) {
         const options = this.$refs.projectOptions ? Array.from(this.$refs.projectOptions.querySelectorAll("button:not([disabled])")) : [];
-        if (event.key === "Escape") { this.projectPickerOpen = false; this.$nextTick(() => this.$refs.projectTrigger?.focus()); return; }
+        if (event.key === "Escape") { this.projectPickerOpen = false; this.projectQuery = ""; this.$nextTick(() => this.$refs.projectTrigger?.focus()); return; }
+        // 打完字直接 Enter 就選中第一筆——這是自動完成最常用的操作，要求先按方向鍵才選得到
+        // 等於把「可以打字」這件事做一半。
+        if (event.key === "Enter" && this.projectPickerOpen && document.activeElement === this.$refs.projectTrigger) {
+          const first = this.filteredProjects[0];
+          if (first) { event.preventDefault(); this.selectProject(first); }
+          return;
+        }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           if (!this.projectPickerOpen) { this.projectPickerOpen = true; return; }
@@ -261,9 +291,10 @@
               <div class="ui-next-composer-options">
                 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple @change="chooseFiles"></label>
                 <div class="ui-next-project-picker" @keydown="onProjectPickerKeydown">
-                  <button ref="projectTrigger" type="button" class="ui-next-project-picker-trigger" :aria-expanded="projectPickerOpen" aria-haspopup="listbox" @click="projectPickerOpen=!projectPickerOpen" @keydown.enter.prevent="projectPickerOpen=!projectPickerOpen" :disabled="loading || !projects.length">{{ selectedProject ? selectedProject.name + ' · Odoo ' + (selectedProject.odoo_version || '未設定') : '沒有可用專案' }}</button>
+                  <input ref="projectTrigger" type="text" class="ui-next-project-picker-trigger" role="combobox" aria-autocomplete="list" :aria-expanded="projectPickerOpen" :value="projectPickerOpen ? projectQuery : (selectedProject ? selectedProject.name : '')" :placeholder="projects.length ? (selectedProject ? selectedProject.name : '選擇專案') : '沒有可用專案'" :disabled="loading || !projects.length" @focus="projectPickerOpen=true;projectQuery=''" @input="projectQuery=$event.target.value;projectPickerOpen=true">
                   <div v-if="projectPickerOpen" ref="projectOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇專案">
-                    <button v-for="project in projects" :key="project.id" type="button" role="option" :aria-selected="String(project.id)===String(projectId)" @click="selectProject(project)"><b>{{ project.name }} · Odoo {{ project.odoo_version || '未設定' }}</b><small>{{ environmentOptionLabel(project) }}</small></button>
+                    <button v-for="project in filteredProjects" :key="project.id" type="button" role="option" :aria-selected="String(project.id)===String(projectId)" @click="selectProject(project)">{{ project.name }}</button>
+                    <p v-if="!filteredProjects.length">找不到符合的專案</p>
                   </div>
                 </div>
                 <span class="ui-next-environment" :class="{error:environmentError}">{{ environmentLabel }}</span>

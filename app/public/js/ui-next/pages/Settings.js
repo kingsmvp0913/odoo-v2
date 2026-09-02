@@ -2,7 +2,7 @@
   const SETTINGS_TABS = [
     { key: "general", label: "一般" },
     { key: "account", label: "帳號" },
-    { key: "connection", label: "連線與通知" },
+    { key: "connection", label: "連線設定" },
   ];
 
   window.UiNextSettingsView = Vue.defineComponent({
@@ -73,30 +73,6 @@
 <p v-if="pwError" class="ui-next-error-text">{{ pwError }}</p>
 <button @click="savePw" :disabled="savingPw">{{ savingPw?'更新中…':'更新密碼' }}</button>
 </section>
-<section v-show="tab==='connection'" class="ui-next-panel" data-tour="set-github">
-<h2>GitHub 認證</h2>
-<p>個人 GitHub Personal Access Token，供你的任務推送程式碼使用。</p>
-<p v-if="githubPat.configured">已連結：<b>{{ githubPat.login }}</b></p>
-<p v-else class="ui-next-error-text">尚未設定個人 GitHub PAT——你的任務將被擋下，請先設定。</p>
-<!-- 輸入框與儲存鈕不能藏在 v-else 裡：token 會過期，已連結狀態下換 token 是常態操作，
-     藏起來等於逼使用者先「移除連結」把自己鎖在門外再重設。 -->
-<input v-model="githubPat.input" type="password" :placeholder="githubPat.configured?'貼上新的 Personal Access Token 以更換':'貼上 GitHub Personal Access Token'">
-<div class="ui-next-help-box">
-<b>如何取得 PAT：</b>
-<ol>
-<li>GitHub → 右上頭像 → <b>Settings</b> → 左側最底 <b>Developer settings</b></li>
-<li><b>Personal access tokens → Tokens (classic) → Generate new token (classic)</b></li>
-<li><b>Scopes</b> 勾 <code>repo</code>；<b>Expiration</b> 建議 90 天以上</li>
-<li>按 <b>Generate token</b>，複製那串 <code>ghp_…</code>（<b>只會顯示一次</b>）</li>
-</ol>
-<a :href="patLink" target="_blank" rel="noopener">↗ 開啟 GitHub 建立權杖頁（已預帶 repo 權限與名稱）</a>
-<p>需對目標 org repo 有 read/write 權限；若 org 開啟 SAML SSO，建立後請在 GitHub「Authorize」此 token。</p>
-</div>
-<div class="ui-next-inline-actions">
-<button class="ui-next-primary" @click="saveGithubPat" :disabled="githubPat.saving">{{ githubPat.saving?'驗證中…':(githubPat.configured?'更新 PAT':'連結 GitHub') }}</button>
-<button v-if="githubPat.configured" class="danger" @click="removeGithubPat">移除連結</button>
-</div>
-</section>
 <section v-show="tab==='connection'" class="ui-next-panel ui-next-settings-wide">
 <h2>外部系統連線</h2>
 <div class="ui-next-settings-connection">
@@ -127,6 +103,30 @@
 </div>
 </div>
 <button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存連線設定' }}</button>
+</section>
+<section v-show="tab==='connection'" class="ui-next-panel" data-tour="set-github">
+<h2>GitHub 認證</h2>
+<p>個人 GitHub Personal Access Token，供你的任務推送程式碼使用。</p>
+<p v-if="githubPat.configured">已連結：<b>{{ githubPat.login }}</b></p>
+<p v-else class="ui-next-error-text">尚未設定個人 GitHub PAT——你的任務將被擋下，請先設定。</p>
+<!-- 輸入框與儲存鈕不能藏在 v-else 裡：token 會過期，已連結狀態下換 token 是常態操作，
+     藏起來等於逼使用者先「移除連結」把自己鎖在門外再重設。 -->
+<input v-model="githubPat.input" type="password" :placeholder="githubPat.configured?'貼上新的 Personal Access Token 以更換':'貼上 GitHub Personal Access Token'">
+<div class="ui-next-help-box">
+<b>如何取得 PAT：</b>
+<ol>
+<li>GitHub → 右上頭像 → <b>Settings</b> → 左側最底 <b>Developer settings</b></li>
+<li><b>Personal access tokens → Tokens (classic) → Generate new token (classic)</b></li>
+<li><b>Scopes</b> 勾 <code>repo</code>；<b>Expiration</b> 建議 90 天以上</li>
+<li>按 <b>Generate token</b>，複製那串 <code>ghp_…</code>（<b>只會顯示一次</b>）</li>
+</ol>
+<a :href="patLink" target="_blank" rel="noopener">↗ 開啟 GitHub 建立權杖頁（已預帶 repo 權限與名稱）</a>
+<p>需對目標 org repo 有 read/write 權限；若 org 開啟 SAML SSO，建立後請在 GitHub「Authorize」此 token。</p>
+</div>
+<div class="ui-next-inline-actions">
+<button class="ui-next-primary" @click="saveGithubPat" :disabled="githubPat.saving">{{ githubPat.saving?'驗證中…':(githubPat.configured?'更新 PAT':'連結 GitHub') }}</button>
+<button v-if="githubPat.configured" class="danger" @click="removeGithubPat">移除連結</button>
+</div>
 </section>
 <section v-show="tab==='connection'" class="ui-next-panel">
 <h2>Teams 通知</h2>
