@@ -503,8 +503,9 @@
 .ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}
 .ui-next-thread{display:flex;height:auto;min-height:100%;flex-direction:column}
 .ui-next-thread-messages{min-height:0;max-height:none;flex:1 0 auto;overflow:visible;padding-top:28px;padding-bottom:10px}
-.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;flex:none;margin-bottom:max(18px,env(safe-area-inset-bottom));background:var(--surface);box-shadow:var(--shadow-lg)}
-.ui-next-thread-composer::before{display:block}
+.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;flex:none;margin-bottom:max(18px,env(safe-area-inset-bottom));border-color:transparent;background:var(--surface);box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)}
+.ui-next-thread-composer:focus-within{border-color:transparent;box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 36%,transparent)}
+.ui-next-thread-composer::before{display:none}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:start}
 
 /* 產生任務草稿可能需數秒；視窗先出現，讓等待狀態可見且不造成重複點擊。 */

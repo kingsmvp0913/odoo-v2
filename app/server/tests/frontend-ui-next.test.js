@@ -631,6 +631,8 @@ describe("ui-next 平行介面", () => {
     expect(pagesCss).toContain(".ui-next-code-block{");
     expect(pagesCss).toContain(".ui-next-thread-messages{min-height:0;max-height:none;flex:1 0 auto;overflow:visible");
     expect(pagesCss).toContain(".ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}");
+    expect(pagesCss).toContain("box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)");
+    expect(pagesCss).toContain(".ui-next-thread-composer::before{display:none}");
     expect(pagesCss).toContain(".ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:start}");
   });
 
