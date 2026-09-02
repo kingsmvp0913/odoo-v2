@@ -765,3 +765,9 @@
 .ui-next-source-picker .ui-next-source-trigger{pointer-events:none}
 .ui-next-project-picker .ui-next-project-picker-options,.ui-next-source-picker .ui-next-project-picker-options{cursor:default}
 .ui-next-project-picker-options button{cursor:pointer}
+
+/* 對話框與它下面那行說明是一組：原本只有對話框 sticky，捲動時說明被留在後面、
+   對話框直接貼死底部。改成外面包一層一起黏，底下墊 --bg 擋住從縫隙透出來的訊息。 */
+.ui-next-thread-dock{position:sticky;bottom:0;z-index:2;background:var(--bg)}
+.ui-next-thread-dock .ui-next-thread-composer{position:static;margin-bottom:10px}
+.ui-next-thread-dock .ui-next-thread-hint{margin-bottom:max(14px,env(safe-area-inset-bottom))}

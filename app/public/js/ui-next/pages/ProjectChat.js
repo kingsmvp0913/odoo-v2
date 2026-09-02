@@ -350,6 +350,7 @@
 <button type="button" @click="removePendingFile(index)" aria-label="移除待傳圖片"><ui-next-icon name="close"/></button>
 </span>
 </div>
+<div class="ui-next-thread-dock">
 <form class="ui-next-thread-composer" @submit.prevent="send">
 <textarea v-model="newInput" placeholder="輸入你的需求或追問…" @paste="onPaste" @input="autoResize" @keydown.enter="handleEnter">
 </textarea>
@@ -365,6 +366,7 @@
 </div>
 </form>
 <small class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。附件沿用既有 Chat 的圖片上傳限制。</small>
+</div>
 </template>
 <div v-else class="ui-next-thread-empty">
 <h2>{{ chatsError ? '無法載入對話' : chats.length ? '選擇一段對話' : '尚無對話' }}</h2>
