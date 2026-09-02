@@ -1,7 +1,9 @@
 (function () {
-  // 中斷訊息的開頭（伺服器端全文在 pipeline/chat-agent.js 的 CHAT_INTERRUPTED_MSG）。
+  // 「這一輪沒有回覆」的兩種收尾，伺服器端全文在 pipeline/chat-agent.js：
+  //   ⚠️ = CHAT_INTERRUPTED_MSG（伺服器重啟／連線異常）
+  //   ⏸  = CHAT_STOPPED_MSG（使用者自己按了停止）——漏掉這個的話，最常見的那種情況反而沒有重送鈕。
   // 只比前綴：全文含標點與說明，改一個字就對不上；chat-interrupted-resend.test.js 釘住兩邊一致。
-  const INTERRUPTED_PREFIX = "⚠️ 這則回覆在產生途中中斷了";
+  const INTERRUPTED_PREFIXES = ["⚠️ 這則回覆在產生途中中斷了", "⏸ 你取消了這則回覆"];
 
   // Next Chat 自行管理 route identity 與 request sequence，避免同一 component 實例在換專案時寫回舊資料。
   window.UiNextProjectChatView = Vue.defineComponent({
@@ -231,7 +233,7 @@
       },
       // 停止回覆、或伺服器重啟，那一輪都沒有回覆——AI 方會補一則中斷訊息（chat-agent）。
       // 訊息本身還在，但要再試一次原本只能自己把問題複製貼上重打一遍。
-      isInterrupted(message) { return message.role === "ai" && String(message.content || "").startsWith(INTERRUPTED_PREFIX); },
+      isInterrupted(message) { const text = String(message.content || ""); return message.role === "ai" && INTERRUPTED_PREFIXES.some((prefix) => text.startsWith(prefix)); },
       // 只有最後一則中斷訊息給重送鈕：舊的那些後面都已經有新對話接下去，重送等於插隊。
       canResend(message, index) { return this.isInterrupted(message) && index === this.messages.length - 1 && !this.replyPending && !this.sending; },
       lastUserMessage() {
@@ -316,10 +318,7 @@
 <img v-for="attachment in (message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id)">
 <img v-for="(url,index) in (message.pending_previews||[])" :key="'pending'+index" :src="url">
 </div>
-<div v-if="canResend(message,index)" class="ui-next-message-retry">
-<button type="button" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button>
-</div>
-<small>{{ message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(message.created_at) }}</small>
+<small>{{ message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(message.created_at) }}<button v-if="canResend(message,index)" type="button" class="ui-next-message-retry" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button></small>
 </article>
 <div v-if="sending||replyPending" class="ui-next-ai-thinking">
 <i>

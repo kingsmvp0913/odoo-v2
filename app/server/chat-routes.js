@@ -201,6 +201,14 @@ function registerRoutes(app) {
         _replyAborts.set(String(req.params.id), ctrl);
         let reply;
         try { reply = await chatReply(req.params.projectId, req.params.id, content, req.userId, attachments, ctrl.signal); }
+        catch (err) {
+          if (!ctrl.signal.aborted) throw err;
+          // 使用者自己按的停止不是錯誤。往外拋的話這個請求以 500 收場，而發動它的是「首頁送出」
+          // 那條不等待的路徑——它的 catch 會彈一則不會自己關掉的錯誤 toast，人已經在對話頁了，
+          // 畫面上就掛著一則「訊息送出失敗」不走。取消的收尾訊息 chatReply 已經寫進對話。
+          await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [req.params.id]).catch(() => {});
+          return res.json({ stopped: true });
+        }
         finally { _replyAborts.delete(String(req.params.id)); }
         // 標題自動命名擺在通知之後：使用者要的是回覆先出現，標題晚幾秒補上沒有差別。
         // maybeGenerateTitle 自己吞掉所有錯誤，這裡不需要（也不該）擋。

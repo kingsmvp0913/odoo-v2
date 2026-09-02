@@ -574,13 +574,12 @@
 .ui-next-spec-md > *:last-child{margin-bottom:0}
 .ui-next-spec-md ul,.ui-next-spec-md ol{margin:0 0 9px;padding-left:18px}
 
-/* 中斷訊息（停止回覆／伺服器重啟）下方的重送鈕：跟在那則訊息底下，不做成整排動作列——
-   它只對最後一則有效，做得太顯眼會像是每則訊息都能重跑。 */
-.ui-next-message-retry{margin-top:8px}
-.ui-next-message-retry button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px;background:var(--surface);color:var(--text-secondary);font:inherit;font-size:12px;cursor:pointer}
-.ui-next-message-retry button:hover:not(:disabled){border-color:var(--text-muted);color:var(--text)}
-.ui-next-message-retry button:disabled{opacity:.55;cursor:not-allowed}
-.ui-next-message-retry .ui-next-icon{width:13px;height:13px}
+/* 中斷／取消訊息的重送鈕：接在那則訊息的署名列後面，不另起一塊——它只對最後一則有效，
+   做成整排動作列會像是每則訊息都能重跑。 */
+.ui-next-message-retry{display:inline-flex;align-items:center;gap:5px;margin-left:10px;border:1px solid var(--border-strong);border-radius:7px;padding:2px 8px;background:var(--surface);color:var(--text-secondary);font:inherit;font-size:11px;vertical-align:middle;cursor:pointer}
+.ui-next-message-retry:hover:not(:disabled){border-color:var(--text-muted);color:var(--text)}
+.ui-next-message-retry:disabled{opacity:.55;cursor:not-allowed}
+.ui-next-message-retry .ui-next-icon{width:12px;height:12px}
 
 /* 換頁那一幀，右側是從「空白」變成「整頁訊息」——輸入框對齊了也沒用，周圍的一切同時出現
    就是「跳頁」的感覺。讓訊息區浮現一下，把那一刀切開的邊緣磨掉。
