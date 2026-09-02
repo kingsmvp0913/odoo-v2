@@ -295,7 +295,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("動態 HTML 容器不保留子節點，避免 Vue 在進入詳情頁時拒絕編譯", () => {
-    expect(uiNextPages).toContain('v-html="renderMd(message.content)" v-show="message.content"></div>');
+    expect(uiNextPages).toContain('v-html="renderMd(row.message.content)" v-show="row.message.content"></div>');
     expect(uiNextPages).toContain('v-html="ansiToHtml(event.content)"></pre>');
   });
 

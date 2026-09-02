@@ -30,6 +30,8 @@ test('每個前綴都長到足以識別，不是一兩個符號', () => {
 // 意圖：重送鈕只能出現在最後一則。舊的中斷訊息後面通常已經有新的對話接下去，
 // 在那裡重送等於把舊問題插隊到最新的討論之後。
 test('canResend 綁在最後一則，且回覆進行中不給按', () => {
-  expect(clientSource).toMatch(/canResend\(message,\s*index\)\s*{[^}]*index === this\.messages\.length - 1/);
-  expect(clientSource).toMatch(/canResend\(message,\s*index\)\s*{[^}]*!this\.replyPending/);
+  // ⚠ 判斷改用 id 不用 index：清單裡插了日期分隔列之後，index 不再等於「第幾則訊息」。
+  expect(clientSource).toMatch(/canResend\(message[^)]*\)\s*{[^}]*message\.id === this\.lastMessageId/);
+  expect(clientSource).toMatch(/canResend\(message[^)]*\)\s*{[^}]*!this\.replyPending/);
+  expect(clientSource).toMatch(/lastMessageId\(\)\s*{[^}]*this\.messages\[this\.messages\.length - 1\]/);
 });

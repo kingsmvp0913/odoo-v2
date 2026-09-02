@@ -779,3 +779,19 @@
 /* 行內程式碼原本與內文同字體同色，`idx_alias_report_setting` 這種東西整段糊在一起。 */
 .ui-next-message code{padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text);font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:.92em}
 .ui-next-message pre code{padding:0;border-radius:0;background:transparent;font-size:1em}
+
+/* AI 訊息左邊的頭像：訊息之間原本只靠 29px 的空白分隔，長對話捲起來會分不出
+   哪一段是誰說的。頭像把「這是 AI 在講」釘在每一段的起點。 */
+.ui-next-thread-messages > article.ai{display:grid;grid-template-columns:24px minmax(0,1fr);gap:11px;align-items:start}
+.ui-next-thread-messages > article.ai > *{grid-column:2}
+.ui-next-msg-avatar{grid-column:1;grid-row:1;display:grid;place-items:center;width:24px;height:24px;margin-top:1px;border:1px solid var(--border);border-radius:50%;background:var(--surface);color:var(--text-muted)}
+.ui-next-msg-avatar .ui-next-icon{width:13px;height:13px}
+/* 署名列補上圖示，與頭像同一套語彙。
+   ⚠ 用 `> article small` 而不是 `.ui-next-thread-messages small`——後者 06-chat.css 已經有一份，
+   字面相同會多一筆跨檔重複（frontend-ui-next.test.js 有基線在守）。 */
+.ui-next-thread-messages > article small{display:flex;align-items:center;gap:5px}
+.ui-next-thread-messages > article.user small{justify-content:flex-end}
+.ui-next-thread-messages > article small .ui-next-icon{width:11px;height:11px;opacity:.7}
+/* 日期分隔：一長串對話跨好幾天時，捲上去完全分不出哪些是今天的 */
+.ui-next-day-divider{display:flex;align-items:center;gap:12px;margin:6px 0 26px;color:var(--text-muted);font-size:11px}
+.ui-next-day-divider::before,.ui-next-day-divider::after{content:"";flex:1;height:1px;background:var(--border)}

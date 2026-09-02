@@ -21,6 +21,20 @@
         projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, historyQuery: "", historyMenuId: null, chatError: "", chatsError: "", creatingChat: false, requestId: 0, replyTimer: null };
     },
     computed: {
+      // 訊息之間插入日期分隔：一長串對話跨好幾天時，捲上去完全分不出哪些是今天的。
+      messageRows() {
+        const rows = [];
+        let lastDay = "";
+        for (const message of this.messages) {
+          const day = message.created_at ? new Date(message.created_at).toDateString() : "";
+          if (day && day !== lastDay) { rows.push({ divider: true, key: `d-${day}`, label: this.dayLabel(message.created_at) }); lastDay = day; }
+          rows.push({ divider: false, key: message.id, message });
+        }
+        return rows;
+      },
+      lastMessageId() {
+        return this.messages.length ? this.messages[this.messages.length - 1].id : null;
+      },
       filteredChats() { const query = this.historyQuery.trim().toLocaleLowerCase("zh-TW"); return query ? this.chats.filter((chat) => (chat.title || "新對話").toLocaleLowerCase("zh-TW").includes(query)) : this.chats; },
     },
     async created() {
@@ -251,7 +265,8 @@
       // 訊息本身還在，但要再試一次原本只能自己把問題複製貼上重打一遍。
       isInterrupted(message) { const text = String(message.content || ""); return message.role === "ai" && INTERRUPTED_PREFIXES.some((prefix) => text.startsWith(prefix)); },
       // 只有最後一則中斷訊息給重送鈕：舊的那些後面都已經有新對話接下去，重送等於插隊。
-      canResend(message, index) { return this.isInterrupted(message) && index === this.messages.length - 1 && !this.replyPending && !this.sending; },
+      // ⚠ 用 id 不用 index：清單裡插了日期分隔列之後，index 不再等於「第幾則訊息」。
+      canResend(message, index) { return this.isInterrupted(message) && message.id === this.lastMessageId && !this.replyPending && !this.sending; },
       lastUserMessage() {
         for (let i = this.messages.length - 1; i >= 0; i -= 1) if (this.messages[i].role === "user") return this.messages[i];
         return null;
@@ -295,6 +310,13 @@
         const element = document.querySelector(".ui-next-main");
         return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 80;
       },
+      dayLabel(value) {
+        const at = new Date(value), now = new Date();
+        const days = Math.round((new Date(now.toDateString()) - new Date(at.toDateString())) / 86400000);
+        if (days === 0) return "今天";
+        if (days === 1) return "昨天";
+        return at.toLocaleDateString("zh-TW", { year: at.getFullYear() === now.getFullYear() ? undefined : "numeric", month: "long", day: "numeric" });
+      },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
       renderMd(value) { return window.renderNextMarkdown(value); },
       handleMessageClick(event) { return window.copyNextCode(event); },
@@ -328,14 +350,16 @@
 </aside>
 <div ref="messages" class="ui-next-thread-messages" @click="handleMessageClick">
 <div v-if="loadingMsgs" class="ui-next-empty-state">載入訊息中…</div>
-<article v-for="(message,index) in messages" :key="message.id" :class="message.role">
-<div class="ui-next-message" v-html="renderMd(message.content)" v-show="message.content"></div>
-<div v-if="(message.attachments&&message.attachments.length)||(message.pending_previews&&message.pending_previews.length)" class="ui-next-message-files">
-<img v-for="attachment in (message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id)">
-<img v-for="(url,index) in (message.pending_previews||[])" :key="'pending'+index" :src="url">
+<template v-for="row in messageRows" :key="row.key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
+<article v-else :class="row.message.role">
+<span v-if="row.message.role!=='user'" class="ui-next-msg-avatar" aria-hidden="true"><ui-next-icon name="chat"/></span>
+<div class="ui-next-message" v-html="renderMd(row.message.content)" v-show="row.message.content"></div>
+<div v-if="(row.message.attachments&&row.message.attachments.length)||(row.message.pending_previews&&row.message.pending_previews.length)" class="ui-next-message-files">
+<img v-for="attachment in (row.message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id)">
+<img v-for="(url,index) in (row.message.pending_previews||[])" :key="'pending'+index" :src="url">
 </div>
-<small>{{ message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(message.created_at) }}<button v-if="canResend(message,index)" type="button" class="ui-next-message-retry" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button></small>
-</article>
+<small><ui-next-icon v-if="row.message.role!=='user'" name="chat"/>{{ row.message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(row.message.created_at) }}<button v-if="canResend(row.message)" type="button" class="ui-next-message-retry" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button></small>
+</article></template>
 <div v-if="sending||replyPending" class="ui-next-ai-thinking">
 <i>
 </i>
