@@ -41,6 +41,23 @@
   };
   const usageLevel = (pct) =>
     pct >= 90 ? "critical" : pct >= 70 ? "warning" : "healthy";
+  // 額度視窗的重置／更新時刻。5 小時的窗常跨到隔天凌晨，只印時分會被讀成「早就過了」，
+  // 所以不同天就把日期帶上。左下角與用量報表共用同一份，措辭不會各自漂移。
+  const usageTime = (value) => {
+    if (!value) return "—";
+    const at = new Date(value);
+    if (Number.isNaN(at.getTime())) return "—";
+    const time = at.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
+    return at.toDateString() === new Date().toDateString() ? time : `${at.getMonth() + 1}/${at.getDate()} ${time}`;
+  };
+  // Codex 的額度視窗長度由 API 給分鐘數（300／10080），Claude 則是固定的兩種窗。
+  const usageWindowLabel = (minutes) => {
+    const value = Number(minutes);
+    if (!value) return "";
+    if (value % 1440 === 0) return `${value / 1440} 天`;
+    if (value % 60 === 0) return `${value / 60} 小時`;
+    return `${value} 分鐘`;
+  };
 
   // 任務清單的流程列獨立由狀態 registry 推導，不依賴 Legacy View。
   const UiNextStatusBar = Vue.defineComponent({
@@ -81,5 +98,5 @@
   ];
 
 
-  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS };
+  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS };
 })();

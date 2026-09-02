@@ -1,5 +1,5 @@
 (function () {
-  const { fmtNumber, fmtCompact, fmtUSD, agentColor, catColor, usageLevel } = window.UiNextShared;
+  const { fmtNumber, fmtCompact, fmtUSD, agentColor, catColor, usageLevel, usageTime, usageWindowLabel } = window.UiNextShared;
 
   window.UiNextTokenReportView = Vue.defineComponent({
     name: "UiNextTokenReportView",
@@ -45,30 +45,41 @@
         }
         return { start: this.filters.start, end: this.filters.end };
       },
+      // ⚠ 四列一律講「剩 X%」。原本 Claude 講「47% 已使用」、Codex 講「剩 9%」，同一張卡兩種
+      // 基準——Codex 那條長條畫的是已使用的 91%，旁邊卻寫「剩 9%」，讀起來像是只用了 9%。
+      // 側欄左下角講的也是「剩」，統一才對得起來。
       quotaRows() {
         const rows = [];
         const claude = this.claudeUsage || {};
         [
           ["Claude · 5 小時", claude.five_hour],
-          ["Claude · 本週", claude.seven_day],
+          ["Claude · 7 天", claude.seven_day],
         ].forEach(([label, item]) => {
-          if (item && item.utilization != null)
+          if (item && item.utilization != null) {
+            const used = Math.round(item.utilization);
             rows.push({
               label,
-              used: Math.round(item.utilization),
-              note: `${Math.round(item.utilization)}% 已使用`,
+              used,
+              remaining: Math.max(0, 100 - used),
+              resetsAt: item.resets_at,
+              updatedAt: claude.updated_at,
+              // API 自己標的：這份快照已經不新鮮（見 lib/claude-usage.js）。不顯示的話，
+              // 畫面上是一個看起來很確定的數字，實際可能是幾小時前的。
+              stale: !!claude.stale,
             });
+          }
         });
         const codex = this.codexUsage || {};
-        [
-          ["Codex · 主要額度", codex.primary],
-          ["Codex · 週額度", codex.secondary],
-        ].forEach(([label, item]) => {
+        [codex.primary, codex.secondary].forEach((item) => {
           if (item && item.used_percent != null)
             rows.push({
-              label,
+              // 「主要額度／週額度」看不出是多長的窗；API 給了分鐘數就照著寫。
+              label: `Codex · ${usageWindowLabel(item.window_minutes) || '額度'}`,
               used: Math.round(item.used_percent),
-              note: `剩 ${Math.round(item.remaining_percent)}%`,
+              remaining: Math.round(item.remaining_percent),
+              resetsAt: item.resets_at,
+              updatedAt: codex.updated_at,
+              stale: false,
             });
         });
         return rows;
@@ -133,6 +144,7 @@
       fmtCompact,
       fmtUSD,
       usageLevel,
+      usageTime,
       agentColor,
       agentLabel(type) {
         return this.labels[type] || type;
@@ -225,19 +237,20 @@
 <div class="ui-next-card-title">
 <div>
 <h2>目前額度</h2>
-<p>顏色只用於額度狀態提醒。</p>
+<p>長條畫的是「已使用」的比例，數字寫的是「還剩多少」；顏色只是狀態提醒。</p>
 </div>
 </div>
 <div class="ui-next-quota-list">
 <div v-for="row in quotaRows" :key="row.label">
 <div>
 <b>{{ row.label }}</b>
-<span>{{ row.note }}</span>
+<span>剩 {{ row.remaining }}%</span>
 </div>
 <i>
 <em :class="usageLevel(row.used)" :style="{width:row.used+'%'}">
 </em>
 </i>
+<small>重置 {{ usageTime(row.resetsAt) }} · 更新 {{ usageTime(row.updatedAt) }}<template v-if="row.stale"> · 這份快照可能已過期</template></small>
 </div>
 <p v-if="!quotaRows.length" class="ui-next-empty-inline">目前無法取得訂閱額度。</p>
 </div>

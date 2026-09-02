@@ -592,3 +592,6 @@
    就跟指標對不上了。right 必須清掉——原規則的 right:4px 沒有被 inline 的 left 蓋掉，
    兩邊都有值的話寬度會被拉開成整條。 */
 .ui-next-row-menu.is-at-pointer{position:fixed;right:auto;z-index:var(--z-modal)}
+
+/* 額度列補上的重置／更新時刻。放在長條下面一行，字級比數字小一階——它是佐證不是主角。 */
+.ui-next-quota-list small{display:block;margin-top:5px;color:var(--text-muted);font-size:11px}
