@@ -4,6 +4,12 @@ const path = require("path");
 const read = (file) =>
   fs.readFileSync(path.join(__dirname, "../../public", file), "utf8");
 
+// 拆檔當下實測到的跨檔重複 selector 數（2026-09-02）。這些是拆檔前就存在的層疊覆蓋，
+// 不是拆檔造成的——拆檔只是讓它們第一次變成看得見的數字。
+// 這個數字只該往下走。往上代表又疊了一層「A 檔定義、B 檔靜默蓋掉」，
+// 而那正是這個專案反覆踩到的坑：改了規則卻不生效，或移掉一條之後別條浮上來。
+const CROSS_FILE_DUP_BASELINE = 28;
+
 describe("ui-next 平行介面", () => {
   const index = read("index.html");
   const app = read("js/app.js");
@@ -24,7 +30,11 @@ describe("ui-next 平行介面", () => {
     read(`js/ui-next/pages/${component.replace(/^UiNext|View$/g, "")}.js`);
 
   const css = read("css/ui-next.css");
-  const pagesCss = read("css/ui-next-pages.css");
+  // 拆檔後仍以「串接後的整體」為檢查對象：這些規則本來就是一份層疊，
+  // 分開檢查會讓「A 檔定義、B 檔覆蓋」的組合失去意義。順序照 index.html 的清單。
+  const cssOrder = index.match(/var UI_NEXT_CSS = \[([\s\S]*?)\]/)[1]
+    .match(/'([^']+)'/g).map((s) => s.slice(1, -1));
+  const pagesCss = cssOrder.map((n) => read(`css/ui-next-pages/${n}.css`)).join("\n");
 
   // 版本判準只能有一處。以前 index.html 與 UiNextApp.js 各自讀一次網址，
   // 改了其中一處就會變成「載了新版資產卻走舊版 View」——畫面壞掉但沒有任何錯誤訊息。
@@ -46,13 +56,14 @@ describe("ui-next 平行介面", () => {
 
   test("新版資產獨立載入，且所有 CSS 規則皆有 ui-next 範圍", () => {
     expect(index).toContain("css/ui-next.css");
-    expect(index).toContain("css/ui-next-pages.css");
+    expect(index).toContain("css/ui-next-pages/");
     expect(index).toContain("js/ui-next/UiNextApp.js");
     expect(index).toContain("js/ui-next/UiNextShared.js");
     expect(css).toContain(".ui-next-shell");
     expect(pagesCss).toContain(".ui-next-chat-page");
     expect(index).toContain("window.UiVersion === 'next'");
-    expect(index).toContain("document.write('<link rel=\"stylesheet\" href=\"css/ui-next.css?v=");
+    // CSS 同樣由 ui-next 分支動態寫入，Legacy 不承擔其下載成本。
+    expect(index).toContain("document.write(href.map(");
     // JS 由 ui-next 分支動態寫入，且拆出去的 pages/ 也要在同一批載入——
     // 漏掉的話那些 window.UiNextXxxView 不存在，路由拿到 undefined 元件即白畫面。
     expect(index).toContain("js/ui-next/pages/");
@@ -64,6 +75,37 @@ describe("ui-next 平行介面", () => {
   test("UiNextShared.js 排在 pages/ 之前", () => {
     expect(index.indexOf("UiNextShared.js")).toBeGreaterThan(-1);
     expect(index.indexOf("UiNextShared.js")).toBeLessThan(index.indexOf("js/ui-next/pages/"));
+  });
+
+  // CSS 的載入順序就是層疊順序：同權重後者贏，而 09-later-patches 整份都是靠排在
+  // 最後才生效的補丁。重排或漏載的症狀是樣式默默變掉——沒有錯誤、沒有測試會叫。
+  // 檔名前綴的數字順序＝載入順序，兩者對不上就是有人動過其中一邊。
+  test("CSS 依檔名數字順序載入，且目錄內每個檔都在清單裡", () => {
+    const onDisk = fs
+      .readdirSync(path.join(__dirname, "../../public/css/ui-next-pages"))
+      .filter((f) => f.endsWith(".css")).map((f) => f.replace(/\.css$/, "")).sort();
+    expect(cssOrder).toEqual(onDisk);
+    expect(cssOrder).toEqual([...cssOrder].sort());
+  });
+
+  // 同一個 selector 在多個檔重複定義＝後面那份靜默蓋掉前面那份。拆檔後這種覆蓋
+  // 跨了檔案更難察覺，所以把現況鎖住：新增重複要嘛合併、要嘛在此明列並說明理由。
+  test("跨檔重複的 selector 沒有增加", () => {
+    const seen = new Map();
+    cssOrder.forEach((name) => {
+      const src = read(`css/ui-next-pages/${name}.css`)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+      for (const m of src.matchAll(/(^|\})([^{}@]+)\{/g)) {
+        for (const sel of m[2].split(",").map((s) => s.trim()).filter(Boolean)) {
+          if (!seen.has(sel)) seen.set(sel, new Set());
+          seen.get(sel).add(name);
+        }
+      }
+    });
+    const crossFile = [...seen.entries()].filter(([, files]) => files.size > 1);
+    // 現況基線。要調高就代表又疊了一層跨檔覆蓋，請先確認那是不是本意。
+    expect(crossFile.length).toBeLessThanOrEqual(CROSS_FILE_DUP_BASELINE);
   });
 
   // 載入清單漏一個檔＝那一頁白畫面，而且 index.html 看起來完全正常。

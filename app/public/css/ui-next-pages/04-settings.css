@@ -1,0 +1,97 @@
+/* 個人設定 */
+.ui-next-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.ui-next-settings-grid .ui-next-panel {
+  display: grid;
+  align-content: start;
+  gap: 11px;
+}
+.ui-next-settings-grid h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.ui-next-settings-grid h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.ui-next-settings-grid p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ui-next-settings-grid label:not(.ui-next-toggle) {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-settings-grid input:not([type="checkbox"]) {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.ui-next-settings-grid button {
+  width: max-content;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-settings-grid .ui-next-primary {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--surface);
+}
+.ui-next-settings-grid a {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-settings-wide {
+  grid-column: span 2;
+}
+.ui-next-settings-connection {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.ui-next-settings-connection > div {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  padding-right: 16px;
+  border-right: 1px solid var(--border);
+}
+.ui-next-settings-connection > div:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+@media (max-width: 750px) {
+  .ui-next-settings-grid,
+  .ui-next-settings-connection {
+    grid-template-columns: 1fr;
+  }
+  .ui-next-settings-wide {
+    grid-column: auto;
+  }
+  .ui-next-settings-connection > div {
+    padding: 0 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ui-next-settings-connection > div:last-child {
+    border-bottom: 0;
+  }
+}

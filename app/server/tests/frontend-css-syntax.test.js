@@ -19,10 +19,15 @@ const path = require('path');
 const CSS_DIR = path.join(__dirname, '../../public/css');
 
 // vendor/ 是第三方 bundle，壞了也不歸我們修。
-const cssFiles = fs
-  .readdirSync(CSS_DIR, { withFileTypes: true })
-  .filter((e) => e.isFile() && e.name.endsWith('.css'))
-  .map((e) => e.name);
+// ui-next-pages/ 是拆檔後的 Next 頁面樣式，必須一起掃——漏掉的話那幾百條規則裡
+// 少一個括號也不會有人發現，而這支測試存在的理由正是這件事。
+const listCss = (dir, prefix = '') =>
+  fs
+    .readdirSync(path.join(CSS_DIR, dir), { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.css'))
+    .map((e) => prefix + e.name);
+
+const cssFiles = [...listCss('.'), ...listCss('ui-next-pages', 'ui-next-pages/')];
 
 // 逐字掃描，跳過註解與字串；回報第一個結構失衡的位置。
 // 不用 regex：CSS 的括號結構本來就不是 regular 的，而且 url() 與 content:"…}"
@@ -112,10 +117,16 @@ describe('規則數不得斷崖式塌陷', () => {
     return n;
   };
 
-  const FLOORS = { 'ui-next.css': 190, 'ui-next-pages.css': 280, 'app.css': 400 };
+  // ui-next-pages 拆成多檔後，門檻改看整個目錄的總和——單檔各自設門檻會在日後
+  // 搬動規則時誤紅，而真正要擋的是「整批規則憑空少了一截」。
+  const FLOORS = { 'ui-next.css': 190, 'ui-next-pages/': 280, 'app.css': 400 };
+
+  const srcOf = (name) =>
+    name.endsWith('/')
+      ? listCss(name.slice(0, -1), name).map((f) => fs.readFileSync(path.join(CSS_DIR, f), 'utf8')).join('\n')
+      : fs.readFileSync(path.join(CSS_DIR, name), 'utf8');
 
   test.each(Object.keys(FLOORS))('%s 的頂層規則數沒有塌陷', (name) => {
-    const src = fs.readFileSync(path.join(CSS_DIR, name), 'utf8');
-    expect(countTopLevelRules(src)).toBeGreaterThanOrEqual(FLOORS[name]);
+    expect(countTopLevelRules(srcOf(name))).toBeGreaterThanOrEqual(FLOORS[name]);
   });
 });

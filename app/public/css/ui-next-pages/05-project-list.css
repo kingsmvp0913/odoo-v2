@@ -1,0 +1,423 @@
+/* 專案清單：沿用預覽的雙欄資訊卡與輔助資訊區，而非簡化成名稱卡片。 */
+.ui-next-project-grid-rich {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ui-next-project-folder {
+  display: block;
+  color: var(--text-muted);
+  font-size: 25px;
+  line-height: 1;
+}
+.ui-next-project-folder svg {
+  width: 22px;
+  height: 22px;
+}
+.ui-next-project-grid-rich .ui-next-project-open h2 {
+  margin-top: 11px;
+}
+.ui-next-project-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.ui-next-project-facts span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+
+.ui-next-project-context {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+.ui-next-project-context h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.ui-next-project-context p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.ui-next-project-context div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.ui-next-project-context button {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+@media (max-width: 760px) {
+  .ui-next-project-grid-rich,
+  .ui-next-project-context {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ui-next-project-create,
+.ui-next-task-create {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 16px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.ui-next-project-create textarea,
+.ui-next-task-create textarea {
+  grid-column: span 2;
+  min-height: 72px;
+  resize: vertical;
+}
+.ui-next-project-create input,
+.ui-next-project-create select,
+.ui-next-project-create textarea,
+.ui-next-task-create input,
+.ui-next-task-create select,
+.ui-next-task-create textarea {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.ui-next-project-create .ui-next-primary,
+.ui-next-task-create .ui-next-primary {
+  justify-self: end;
+}
+.ui-next-project-create > h2 { grid-column:1 / -1; margin:0; font-size:17px; }
+.ui-next-project-create > label { display:grid; gap:5px; color:var(--text-secondary); font-size:12px; }
+.ui-next-project-create > label input,
+.ui-next-project-create > label select,
+.ui-next-project-create > label textarea { width:100%; box-sizing:border-box; }
+.ui-next-project-create > label:has(textarea) { grid-column:span 2; }
+.ui-next-project-create > small.error { color:var(--danger); }
+.ui-next-project-create > footer { grid-column:1 / -1; display:flex; justify-content:flex-end; gap:8px; }
+.ui-next-project-create > footer button { border:0; border-radius:7px; padding:8px 10px; background:var(--bg); color:var(--text); font:inherit; cursor:pointer; }
+.ui-next-project-create > footer .ui-next-primary { background:var(--text); color:var(--surface); }
+.ui-next-project-search,
+.ui-next-task-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.ui-next-project-search input,
+.ui-next-task-controls input,
+.ui-next-task-controls select {
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.ui-next-project-search input {
+  width: 300px;
+}
+.ui-next-project-search span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ui-next-project-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+}
+.ui-next-project-grid > article {
+  display: flex;
+  flex-direction: column;
+  padding: 17px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 0.15s,
+    border-color 0.15s;
+}
+.ui-next-project-grid > article:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+.ui-next-project-grid header,
+.ui-next-project-grid footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+/* 操作列貼底:同列卡片會被 grid 拉成等高,內容行數不同時(例如有「範例」標記的專案)
+   按鈕列若不貼底就會左右錯開。 */
+.ui-next-project-grid footer {
+  margin-top: auto;
+}
+.ui-next-project-grid header > button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 17px;
+  cursor: pointer;
+}
+.ui-next-project-grid header > button.active {
+  color: var(--warning);
+}
+.ui-next-project-grid .ui-next-project-card-title { align-items:flex-start; }
+.ui-next-project-grid .ui-next-project-title-open { min-width:0; flex:1; border:0; padding:0; background:transparent; color:var(--text); text-align:left; font:inherit; cursor:pointer; }
+.ui-next-project-grid header > button.active .ui-next-icon { fill:currentColor; }
+.ui-next-project-grid header span,
+.ui-next-project-grid footer > span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ui-next-project-open {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.ui-next-project-title-open h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.ui-next-project-title-open h2 small { display:block; margin-top:3px; color:var(--text-muted); font-size:12px; font-weight:500; white-space:nowrap; }
+.ui-next-project-open { flex:initial; margin-top:7px; }
+.ui-next-project-open p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+.ui-next-project-grid footer {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.ui-next-project-grid footer div {
+  display: flex;
+  gap: 5px;
+}
+.ui-next-project-grid footer button {
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 5px 7px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ui-next-project-more { position:relative; }
+.ui-next-project-more-menu { position:absolute; z-index:3; right:0; bottom:calc(100% + 5px); display:grid !important; min-width:118px; gap:3px !important; padding:5px; border:1px solid var(--border); border-radius:9px; background:var(--surface); box-shadow:var(--shadow-lg); }
+.ui-next-project-more-menu button { width:100%; border:0 !important; background:transparent !important; color:var(--text-secondary); text-align:left; white-space:nowrap; }
+.ui-next-project-more-menu button:hover { background:var(--bg) !important; color:var(--text); }
+.ui-next-project-more-menu button:disabled { opacity:.5; cursor:not-allowed; }
+.ui-next-task-controls {
+  align-items: center;
+}
+.ui-next-task-controls > div {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.ui-next-task-controls > div button {
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-task-controls > div button.active {
+  background: var(--bg);
+  color: var(--text);
+}
+.ui-next-task-list {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.ui-next-task-list > a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+.ui-next-task-list > a:hover {
+  background: var(--bg);
+}
+.ui-next-task-list > a > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+.ui-next-task-list h2 {
+  margin: 0;
+  font-size: 15px;
+  text-decoration: none;
+}
+.ui-next-task-detail h1 { text-decoration: none; }
+.ui-next-task-list p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ui-next-status-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.ui-next-status-dot.done {
+  background: var(--success);
+}
+.ui-next-status-dot.stopped,
+.ui-next-status-dot.merge_conflict {
+  background: var(--danger);
+}
+.ui-next-status-dot.review_pending,
+.ui-next-status-dot.clarify_pending {
+  background: var(--warning);
+}
+.ui-next-status-dot.coding_running,
+.ui-next-status-dot.analysis_running,
+.ui-next-status-dot.qa_running {
+  background: var(--info);
+}
+.ui-next-task-meta {
+  text-align: right;
+  white-space: nowrap;
+}
+.ui-next-task-meta span,
+.ui-next-task-meta em {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+.ui-next-task-meta em {
+  margin-top: 4px;
+  color: var(--warning);
+}
+@media (max-width: 900px) {
+  .ui-next-project-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ui-next-project-create,
+  .ui-next-task-create {
+    grid-template-columns: 1fr;
+  }
+  .ui-next-project-create textarea,
+  .ui-next-task-create textarea {
+    grid-column: auto;
+  }
+  .ui-next-project-create .ui-next-primary,
+  .ui-next-task-create .ui-next-primary {
+    justify-self: stretch;
+  }
+}
+@media (max-width: 600px) {
+  .ui-next-project-grid {
+    grid-template-columns: 1fr;
+  }
+  .ui-next-project-search,
+  .ui-next-task-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .ui-next-project-search input {
+    width: 100%;
+  }
+  .ui-next-task-list > a {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .ui-next-task-meta {
+    text-align: left;
+  }
+}
+.ui-next-thread {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.ui-next-thread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 19px 27px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.ui-next-thread-head p {
+  margin: 0 0 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ui-next-thread-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.ui-next-thread-head button {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-thread-messages {
+  flex: 1;
+  overflow: auto;
+  /* 24px 對應 Composer 的 calc(100% - 48px),讓訊息欄與 Composer 等寬且同中線 */
+  padding: 30px 24px;
+}
+.ui-next-thread-messages > article {
+  display: flex;
+  width: 100%;
+  max-width: min(812px, 100%);
+  flex-direction: column;
+  align-items: flex-start;
+  margin: 0 auto 24px;
+}
+.ui-next-thread-messages > article.user {
+  align-items: flex-end;
+}

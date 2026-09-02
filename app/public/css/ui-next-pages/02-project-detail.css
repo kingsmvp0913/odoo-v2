@@ -1,0 +1,388 @@
+/* 專案詳情 */
+.ui-next-detail-head {
+  align-items: flex-start;
+}
+.ui-next-back {
+  margin: 0 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.ui-next-detail-actions button,
+.ui-next-project-tools button,
+.ui-next-env-actions button,
+.ui-next-repo-actions button {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-detail-actions button:last-child:not(.ui-next-back),
+.ui-next-env-actions .ui-next-primary {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--surface);
+}
+.ui-next-detail-actions .ui-next-back {
+  margin: 0;
+}
+.ui-next-detail-actions button:disabled,
+.ui-next-env-actions button:disabled,
+.ui-next-repo-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ui-next-detail-actions span {
+  display: inline-grid;
+  min-width: 17px;
+  height: 17px;
+  place-items: center;
+  margin-left: 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: var(--surface);
+  font-size: 10px;
+}
+.ui-next-project-statbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 15px;
+}
+.ui-next-project-statbar span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ui-next-project-statbar .is-running {
+  color: var(--success);
+}
+.ui-next-project-statbar .is-setting_up {
+  color: var(--warning);
+}
+.ui-next-project-statbar .is-error {
+  color: var(--danger);
+}
+.ui-next-project-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+}
+.ui-next-repos {
+  overflow: hidden;
+  padding: 0;
+}
+.ui-next-repos > .ui-next-card-title {
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-next-repo-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-next-repo-row > div:first-child {
+  min-width: 0;
+}
+.ui-next-repo-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ui-next-repo-name b {
+  font-size: 14px;
+}
+.ui-next-repo-name span,
+.ui-next-repo-name em {
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 2px 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+}
+.ui-next-repo-name em.done {
+  color: var(--success);
+}
+.ui-next-repo-name em.error {
+  color: var(--danger);
+}
+.ui-next-repo-name em.cloning {
+  color: var(--warning);
+}
+.ui-next-repo-row p,
+.ui-next-repo-row small {
+  display: block;
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+.ui-next-repo-actions {
+  display: flex;
+  flex: none;
+  gap: 5px;
+}
+.ui-next-repo-actions .danger,
+.ui-next-env-actions .danger {
+  color: var(--danger);
+}
+.ui-next-add-repo {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  background: var(--bg);
+}
+.ui-next-add-repo input:not([type="checkbox"]),
+.ui-next-add-repo .searchable-select {
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.ui-next-add-repo label,
+.ui-next-field-note {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ui-next-project-side {
+  display: grid;
+  gap: 14px;
+}
+.ui-next-env-card {
+  padding: 0;
+  overflow: hidden;
+}
+.ui-next-env-card > .ui-next-card-title {
+  align-items: flex-start;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-next-env-status {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.ui-next-env-status.running {
+  color: var(--success);
+}
+.ui-next-env-status.setting_up {
+  color: var(--warning);
+}
+.ui-next-env-status.error {
+  color: var(--danger);
+}
+.ui-next-env-card > p,
+.ui-next-env-card > details,
+.ui-next-env-card > .ui-next-env-actions,
+.ui-next-runtime-log {
+  margin-right: 18px;
+  margin-left: 18px;
+}
+.ui-next-error-text,
+.ui-next-warning-text {
+  white-space: pre-wrap;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ui-next-warning-text {
+  color: var(--warning);
+}
+.ui-next-env-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+.ui-next-env-card details {
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ui-next-env-card summary {
+  cursor: pointer;
+}
+.ui-next-env-card pre,
+.ui-next-runtime-log pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 9px 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.ui-next-runtime-log > div {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ui-next-runtime-log button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.ui-next-project-tools {
+  display: grid;
+  gap: 7px;
+}
+.ui-next-project-tools h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.ui-next-project-tools button {
+  text-align: left;
+}
+.ui-next-project-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.ui-next-project-settings h2 {
+  margin: 0 0 7px;
+  font-size: 15px;
+}
+.ui-next-project-settings p {
+  margin: 0 0 13px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ui-next-project-settings label:not(.ui-next-toggle) {
+  display: block;
+  margin: 10px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-project-settings textarea,
+.ui-next-project-settings select {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.ui-next-project-settings textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.ui-next-project-settings .ui-next-primary {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-project-settings hr {
+  margin: 15px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.ui-next-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-toggle input {
+  appearance: none;
+  width: 31px;
+  height: 18px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--border-strong);
+  cursor: pointer;
+}
+.ui-next-toggle input:checked {
+  background: var(--text);
+}
+.ui-next-toggle input::after {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--surface);
+  content: "";
+  transition: transform 0.15s;
+}
+.ui-next-toggle input:checked::after {
+  transform: translateX(13px);
+}
+@media (max-width: 1000px) {
+  .ui-next-project-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .ui-next-add-repo {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ui-next-project-settings {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 650px) {
+  .ui-next-detail-head {
+    align-items: flex-start;
+  }
+  .ui-next-detail-actions {
+    justify-content: flex-start;
+  }
+  .ui-next-repo-row {
+    flex-direction: column;
+  }
+  .ui-next-add-repo {
+    grid-template-columns: 1fr;
+  }
+  .ui-next-repo-actions {
+    width: 100%;
+  }
+}

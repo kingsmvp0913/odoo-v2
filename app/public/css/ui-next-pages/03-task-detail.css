@@ -1,0 +1,383 @@
+/* 任務詳情 */
+.ui-next-task-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.ui-next-task-content-column,
+.ui-next-task-side {
+  display: grid;
+  gap: 14px;
+}
+.ui-next-task-summary .ui-next-card-title {
+  margin-bottom: 10px;
+}
+.ui-next-task-summary .ui-next-card-title h2,
+.ui-next-task-action h2,
+.ui-next-events h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.ui-next-events > div { display:grid; gap:7px; }
+.ui-next-event-summary { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.ui-next-event-summary > button { display:grid; width:100%; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; border:0; padding:9px 10px; background:var(--surface); color:var(--text); font:inherit; text-align:left; cursor:pointer; }
+.ui-next-event-summary > button:hover { background:var(--bg); }
+.ui-next-event-summary span { border-radius:5px; padding:3px 5px; background:var(--bg); color:var(--text-secondary); font-size:11px; white-space:nowrap; }
+.ui-next-event-summary.error span { background:color-mix(in srgb,var(--danger) 13%,var(--surface)); color:var(--danger); }
+.ui-next-event-summary.stage span { background:color-mix(in srgb,var(--info) 13%,var(--surface)); color:var(--info); }
+.ui-next-event-summary b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.ui-next-event-summary time { color:var(--text-muted); font-size:11px; white-space:nowrap; }
+.ui-next-event-summary pre { max-height:360px; margin:0; overflow:auto; border-top:1px solid var(--border); padding:10px; background:var(--code-bg); color:var(--code-text); font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; }
+.ui-next-task-summary .ui-next-card-title button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-task-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+/* 來源徽章（.src-badge，Odoo／eService 各有配色，深色模式在 app.css 已備好）要讓位：
+   `.ui-next-task-badges span` 是 (0,1,1)，會壓過 `.src-odoo` 的 (0,1,0)，只剩底色被套上、
+   文字色仍是灰的。用 :not() 排除，特異度不變。 */
+.ui-next-task-badges span:not(.src-badge),
+.ui-next-task-badges a:not(.src-badge) {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-decoration: none;
+}
+.ui-next-status-badge.done {
+  color: var(--success);
+}
+.ui-next-status-badge.stopped,
+.ui-next-status-badge.merge_conflict {
+  color: var(--danger);
+}
+.ui-next-status-badge.review_pending,
+.ui-next-status-badge.clarify_pending,
+.ui-next-status-badge.confirm_pending {
+  color: var(--warning);
+}
+.ui-next-task-badges .is-live {
+  color: var(--info);
+}
+.ui-next-task-content {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+.ui-next-task-summary textarea,
+.ui-next-task-action textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 90px;
+  margin-top: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.ui-next-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 9px;
+}
+.ui-next-inline-actions button,
+.ui-next-task-action > button,
+.ui-next-task-action .ui-next-primary {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-inline-actions .ui-next-primary,
+.ui-next-task-action .ui-next-primary {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--surface);
+}
+.ui-next-ticket-files {
+  display: grid;
+  gap: 7px;
+  margin-top: 17px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.ui-next-ticket-files b {
+  font-size: 12px;
+}
+.ui-next-ticket-files button {
+  width: max-content;
+  max-width: 100%;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.ui-next-conversation {
+  max-width: 812px;
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.ui-next-conversation > .ui-next-card-title {
+  padding: 0 0 13px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-next-conv-list {
+  max-height: none;
+  overflow: visible;
+  padding: 24px 0;
+}
+.ui-next-conv-list > button {
+  display: block;
+  margin: 0 auto 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ui-next-conv-list article {
+  max-width: 100%;
+  margin: 0 0 24px;
+}
+.ui-next-conv-list article.user {
+  margin-left: auto;
+}
+.ui-next-conv-list article > p {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 1.7;
+}
+.ui-next-conv-list article.user > p {
+  max-width: 82%;
+  margin-left: auto;
+  padding: 11px 14px;
+  border-radius: 15px 15px 4px 15px;
+  background: var(--text);
+  color: var(--surface);
+}
+.ui-next-conv-list article > button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ui-next-conv-list pre {
+  max-height: 250px;
+  overflow: auto;
+  margin: 6px 0;
+  padding: 9px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.ui-next-conv-list small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.ui-next-task-action {
+  max-width: 812px;
+  margin: 0 auto;
+  display: grid;
+  gap: 10px;
+}
+.ui-next-task-action > .ui-next-eyebrow {
+  margin: 0;
+}
+.ui-next-task-action > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.ui-next-task-action ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-task-action input[type="file"] {
+  max-width: 100%;
+  font-size: 11px;
+}
+.ui-next-task-action .ui-next-question {
+  display: grid;
+  /* ⚠ .ui-next-question 這個 class 名被兩個語意完全不同的區塊共用：
+       ui-next.css       → UiNextApp 首頁那塊「大提問區」（置中、padding 36px、無框）
+       這裡（pages.css） → 任務詳情的「題目卡」（靠左、padding 10px、有框）
+     兩邊特異度相同，而 pages.css 後載入 ⇒ 本檔整組蓋掉首頁那塊，
+     首頁提問區因此變成靠左、padding 縮成 10px、還多一圈框。
+     所以本檔這一組全部收窄到 .ui-next-task-action 底下，兩者不再互相干擾。
+     根治做法是把其中一個改名，那要動 template，留到下一輪。 */
+  justify-items: stretch;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  font-size: 12px;
+}
+.ui-next-task-action .ui-next-question label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-task-action .ui-next-question textarea {
+  min-height: 58px;
+  margin-top: 0;
+}
+/* 衝突卡的說明列與追問對答。巢狀在題目卡內，吃不到 .ui-next-task-action > button
+   那條「直接子代」規則，不補這裡就是一顆瀏覽器預設的裸按鈕。 */
+.ui-next-task-action .ui-next-question span {
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.ui-next-task-action .ui-next-question button {
+  justify-self: end;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-next-task-action .ui-next-question button:disabled {
+  opacity: 0.55;
+}
+/* 語意色要贏過動作區的通用灰。`.ui-next-task-action > p` 與 `.ui-next-task-action .ui-next-question span` 都是
+   (0,1,1)，比 `.ui-next-error-text` 的 (0,1,0) 高——不寫這兩條，「還有必答的問題沒回答」與
+   中斷原因會跟旁邊的說明文字一樣灰，等於沒有警示。 */
+.ui-next-task-action .ui-next-error-text {
+  color: var(--danger);
+}
+.ui-next-task-action .ui-next-warning-text {
+  color: var(--warning);
+}
+.ui-next-task-action .ui-next-help-box p {
+  margin: 4px 0 10px;
+  white-space: pre-wrap;
+}
+.ui-next-task-action .ui-next-help-box > *:last-child {
+  margin-bottom: 0;
+}
+.ui-next-spec-box b {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ui-next-spec-box > b:first-child {
+  margin-top: 0;
+}
+.ui-next-spec-box .ui-next-spec-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.ui-next-spec-box ul {
+  margin: 4px 0 10px;
+  padding-left: 17px;
+}
+.ui-next-spec-box li {
+  white-space: pre-wrap;
+}
+.ui-next-diff-repo {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.ui-next-diff-repo b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ui-next-diff-repo span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+.ui-next-events > div {
+  max-height: 240px;
+  overflow: auto;
+}
+.ui-next-events pre {
+  margin: 0 0 7px;
+  padding: 8px;
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-size: 10px;
+  white-space: pre-wrap;
+}
+.ui-next-events p {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ui-next-events a {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+@media (max-width: 1000px) {
+  .ui-next-task-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 650px) {
+  .ui-next-task-detail-grid,
+  .ui-next-task-content-column,
+  .ui-next-task-side {
+    min-width: 0;
+    width: 100%;
+  }
+  .ui-next-task-side > *,
+  .ui-next-task-detail-grid input,
+  .ui-next-task-detail-grid select,
+  .ui-next-task-detail-grid textarea,
+  .ui-next-task-detail-grid button {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .ui-next-conv-list article {
+    max-width: 95%;
+  }
+}

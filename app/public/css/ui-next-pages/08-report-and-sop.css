@@ -1,0 +1,128 @@
+/* 用量報表：Legacy 的兩張分析表與三個維度的占比在 Next 缺席，補回時沿用 app.css 的
+   .tr-table-card／.tr-table（ui-next.css 已有對應的 .ui-next-main 覆寫），這裡只補
+   Next 需要的間距、數字靠右與占比清單樣式。 */
+.ui-next-usage-page .ui-next-usage-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ui-next-usage-page .ui-next-table-title {
+  margin: 0;
+  padding: 16px 13px 4px;
+  font-size: 14px;
+}
+.ui-next-usage-page .ui-next-table-title small {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.ui-next-usage-page .tr-table th,
+.ui-next-usage-page .tr-table td {
+  padding: 8px 13px;
+  text-align: left;
+}
+.ui-next-usage-page .tr-table thead th {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ui-next-usage-page .tr-table tbody tr {
+  border-top: 1px solid var(--border);
+}
+.ui-next-usage-page .ui-next-num {
+  text-align: right;
+  white-space: nowrap;
+}
+.ui-next-usage-page .ui-next-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+.ui-next-usage-page .ui-next-more-hint {
+  margin: 0;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.ui-next-share-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.ui-next-share-row:last-of-type {
+  border-bottom: 0;
+}
+.ui-next-share-row i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.ui-next-share-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-next-share-row em {
+  min-width: 44px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+  text-align: right;
+}
+/* ui-next.css 的 900px 斷點把 usage-grid 壓成單欄，上面那條專用規則特異性較高會蓋掉它 */
+@media (max-width: 900px) {
+  .ui-next-usage-page .ui-next-usage-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 部署 SOP：步驟內的說明與安全提示沿用 app.css 的 .sop-desc／.sop-note／.sop-warn
+   （已走 CSS 變數，深色模式安全），這裡只補它們在 Next 步驟卡內的間距，
+   以及「複製鈕被擋住」時的可見說明——按不下去卻不說原因，跟壞掉沒兩樣。 */
+.ui-next-sop-page .ui-next-sop-facts {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ui-next-warn-text {
+  color: var(--warning);
+}
+.ui-next-sop-page .sop-desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.85;
+}
+.ui-next-sop-page .sop-note,
+.ui-next-sop-page .sop-warn {
+  font-size: 13px;
+}
+.ui-next-sop-steps .sop-desc {
+  margin: 12px 13px;
+}
+.ui-next-sop-steps .sop-note,
+.ui-next-sop-steps .sop-warn {
+  margin: 12px 13px;
+}
+.ui-next-sop-steps button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ui-next-sop-blocked {
+  margin: 0;
+  padding: 9px 13px;
+  border-top: 1px solid var(--border);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.7;
+}

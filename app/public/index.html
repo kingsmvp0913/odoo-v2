@@ -22,7 +22,19 @@
   <script>
     // Next assets 只在實際會用到時載入，另一邊不承擔其下載與 selector 成本。
     if (window.UiVersion === 'next') {
-      document.write('<link rel="stylesheet" href="css/ui-next.css?v=20260910"><link rel="stylesheet" href="css/ui-next-pages.css?v=20260910">');
+      // ⚠ 這個陣列的順序就是層疊順序，**不可以重排也不可以按字母排序**。
+      // 同權重的規則後者贏，而 09-later-patches 整份都是靠排在最後才生效的補丁。
+      // 換順序的症狀是樣式默默變掉，沒有錯誤、沒有測試會叫，只有人眼看得出來。
+      var UI_NEXT_CSS = [
+        '01-base', '02-project-detail', '03-task-detail', '04-settings',
+        '05-project-list', '06-chat', '07-admin', '08-report-and-sop',
+        '09-later-patches'
+      ];
+      var href = ['css/ui-next.css']
+        .concat(UI_NEXT_CSS.map(function (n) { return 'css/ui-next-pages/' + n + '.css'; }));
+      document.write(href.map(function (h) {
+        return '<link rel="stylesheet" href="' + h + '?v=20260910">';
+      }).join(''));
     }
   </script>
   <link rel="stylesheet" href="css/vendor/xterm.css" />
