@@ -626,25 +626,26 @@
    把 340px 讓給右側說明欄，圖只剩 951px 卻要畫 1060px——每次看圖都得先橫向捲一次。
    說明改成浮在圖的右上角，圖吃滿整個寬度。 */
 .ui-next-flow-page .ui-next-flow-body{padding:0 0 42px}
-/* 圖與說明疊在同一個 grid 格子裡：說明浮在圖上，但仍留在正常流中——absolute 會讓它
-   跟著內容捲走（實測：往下看圖時說明就不見了），而 fixed 在這裡也救不了，
-   body 帶著 zoom，zoom 元素就是 fixed 的定位基準，等同 absolute。
-   留在流裡才能用 sticky，格子高度＝圖的高度，所以整段捲動都黏得住。 */
-.ui-next-flow-page .flow-main-row{display:grid;grid-template-columns:minmax(0,1fr)}
-.ui-next-flow-page .flow-diagram-panel{grid-area:1/1;width:100%;flex:none;overflow-x:auto}
+/* 說明改成貼在畫面底部的一條，不再浮在圖的右上角——流程圖右邊那條泳道有節點，
+   300px 的浮框正好蓋住它（架構圖右側大多是空的，所以只有流程圖看得出來）。
+   底部這一條只擋到圖的最下緣，而且橫著排放得下更多欄。
+   ⚠ 仍然是 sticky 不是 fixed：body 帶著 zoom，zoom 元素就是 fixed 的定位基準，
+   用 fixed 等同 absolute，會跟著內容捲走。 */
+.ui-next-flow-page .flow-main-row{display:block}
+.ui-next-flow-page .flow-diagram-panel{width:100%;flex:none;overflow-x:auto}
 /* 圖是固定座標的曼哈頓路由，超過容器就等比縮（放不下才縮，放得下維持原寸）。
    ⚠ SVG 上原本有 inline 的 max-width:none，那會讓這條完全失效。 */
 .ui-next-flow-page .flow-diagram-panel > svg{max-width:100%;height:auto;min-width:760px}
 /* ⚠ ui-next.css 把 .flow-side-panel 也算進「卡片」那一組（border＋surface＋shadow）。
    浮起來之後外層只該當定位容器，視覺全交給內層那張卡，否則空狀態會浮一個空框擋著圖。 */
-.ui-next-flow-page .flow-side-panel{grid-area:1/1;justify-self:end;align-self:start;position:sticky;top:14px;z-index:3;width:300px;min-width:0;margin-right:14px;flex:none;border:0;padding:0;background:transparent;box-shadow:none}
+.ui-next-flow-page .flow-side-panel{position:sticky;bottom:14px;z-index:3;width:auto;min-width:0;margin:14px 0 0;flex:none;border:0;padding:0;background:transparent;box-shadow:none}
 /* 空狀態整塊收起來：它只是一句「把滑鼠移到節點上」，而頁首說明已經講過同一件事。
    留著會有兩種壞法——有底色就擋住圖，沒底色則文字直接疊在泳道標題上（實測後者）。 */
 .ui-next-flow-page .flow-side-panel.is-empty{display:none}
-.ui-next-flow-detail{min-height:0;border:1px solid var(--border-strong);border-radius:12px;padding:12px 14px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ui-next-flow-detail{min-height:0;border:1px solid var(--border-strong);border-radius:12px;padding:12px 16px;background:var(--surface);box-shadow:var(--shadow-lg)}
 .ui-next-flow-detail h3{margin:0 0 4px;font-size:14px;font-weight:650}
-@media(max-width:1100px){
-  /* 窄畫面就讓它回到圖的下方——浮著會把圖蓋掉一半。 */
-  .ui-next-flow-page .flow-main-row{display:block}
-  .ui-next-flow-page .flow-side-panel{position:static;width:auto;margin:14px 0 0}
-}
+/* ⚠ 不要改成 auto-fit 多欄：dt 與 dd 是兩個獨立的格子，多欄會讓它們交錯填格，
+   變成「進入 | Wiki 更新完畢 | 做什麼」這種標籤配到別人內容的錯位（實測）。
+   維持「標籤｜內容」兩欄，橫著一條本來就有寬度可用。 */
+.ui-next-flow-detail .flow-detail-grid{grid-template-columns:auto minmax(0,1fr);gap:4px 14px;max-width:1000px}
+
