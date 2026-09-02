@@ -146,6 +146,9 @@
       userShares() {
         return this.shareRows(this.report && this.report.by_user, (row) => row.username, (row, index) => catColor(index));
       },
+      agentPie() { return this.pieSlices(this.agentShares); },
+      projectPie() { return this.pieSlices(this.projectShares); },
+      userPie() { return this.pieSlices(this.userShares); },
       // 幾何比照 Legacy 版：左側留 48px 給數量刻度，首點再內縮 16px，否則第一個日期標籤
       // 會壓在 y 軸的 0 上。
       chartData() {
@@ -262,6 +265,26 @@
         // 續載之後哨兵還在原地（畫面又長高了），下一次進入視野才會再觸發；
         // 一次多筆 entries 也只加一頁，靠 hasMoreTasks 收尾。
         this.$nextTick(() => this.syncDetailObserver());
+      },
+      // 扇形路徑。幾何與 Legacy 版同源，包含那個「整圓」的特例：只有一筆資料時起訖點重合，
+      // A 弧會退化成畫不出來（畫面一片空白），要改用上下兩段半弧拼成整圓。
+      pieSlices(rows) {
+        const total = rows.reduce((sum, row) => sum + row.tokens, 0);
+        if (!total) return [];
+        const radius = 70, cx = 90, cy = 90;
+        let angle = -Math.PI / 2;
+        return rows.map((row) => {
+          const frac = row.tokens / total;
+          const a0 = angle;
+          angle += frac * 2 * Math.PI;
+          const a1 = angle;
+          if (frac >= 1) {
+            return { ...row, d: `M${cx - radius},${cy} A${radius},${radius},0,1,1,${cx + radius},${cy} A${radius},${radius},0,1,1,${cx - radius},${cy}Z` };
+          }
+          const x0 = cx + radius * Math.cos(a0), y0 = cy + radius * Math.sin(a0);
+          const x1 = cx + radius * Math.cos(a1), y1 = cy + radius * Math.sin(a1);
+          return { ...row, d: `M${cx},${cy} L${x0},${y0} A${radius},${radius},0,${frac > 0.5 ? 1 : 0},1,${x1},${y1}Z` };
+        });
       },
       shareRows(rows, labelOf, colorOf) {
         const list = rows || [];
@@ -406,31 +429,52 @@
 <div class="ui-next-usage-grid">
 <article class="ui-next-panel">
 <h2>依專案</h2>
+<div class="ui-next-share-body">
+<svg v-if="projectPie.length" class="ui-next-share-pie" viewBox="0 0 180 180" width="150" height="150" role="img" :aria-label="'依專案占比圖'">
+<path v-for="slice in projectPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" opacity="0.9"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
+</svg>
+<div class="ui-next-share-legend">
 <div class="ui-next-share-row" v-for="row in projectShares" :key="row.key">
 <i :style="{background:row.color}"></i>
 <span :title="row.label">{{ row.label }}</span>
 <b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
 <em>{{ row.pct.toFixed(1) }}%</em>
 </div>
+</div>
+</div>
 <p v-if="!projectShares.length" class="ui-next-empty-inline">尚無專案資料。</p>
 </article>
 <article class="ui-next-panel">
 <h2>依 Agent</h2>
+<div class="ui-next-share-body">
+<svg v-if="agentPie.length" class="ui-next-share-pie" viewBox="0 0 180 180" width="150" height="150" role="img" :aria-label="'依 Agent占比圖'">
+<path v-for="slice in agentPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" opacity="0.9"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
+</svg>
+<div class="ui-next-share-legend">
 <div class="ui-next-share-row" v-for="row in agentShares" :key="row.key">
 <i :style="{background:row.color}"></i>
 <span :title="row.label">{{ row.label }}</span>
 <b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
 <em>{{ row.pct.toFixed(1) }}%</em>
 </div>
+</div>
+</div>
 <p v-if="!agentShares.length" class="ui-next-empty-inline">尚無 Agent 資料。</p>
 </article>
 <article class="ui-next-panel">
 <h2>依使用者</h2>
+<div class="ui-next-share-body">
+<svg v-if="userPie.length" class="ui-next-share-pie" viewBox="0 0 180 180" width="150" height="150" role="img" :aria-label="'依使用者占比圖'">
+<path v-for="slice in userPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" opacity="0.9"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
+</svg>
+<div class="ui-next-share-legend">
 <div class="ui-next-share-row" v-for="row in userShares" :key="row.key">
 <i :style="{background:row.color}"></i>
 <span :title="row.label">{{ row.label }}</span>
 <b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
 <em>{{ row.pct.toFixed(1) }}%</em>
+</div>
+</div>
 </div>
 <p v-if="!userShares.length" class="ui-next-empty-inline">尚無使用者資料（未勾「全部使用者」時只會有你自己）。</p>
 </article>

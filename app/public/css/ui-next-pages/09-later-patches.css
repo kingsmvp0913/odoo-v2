@@ -620,3 +620,12 @@
 .ui-next-trend-panel{margin-bottom:14px}
 .ui-next-trend-box{position:relative;min-height:220px}
 .ui-next-trend-box svg{position:absolute;top:0;left:0}
+
+/* 占比卡＝圓餅（看比例）＋清單（看數字），兩者並排。窄一點就自動疊成上下。 */
+/* flex-start 而非 center：清單長度各卡不同（Agent 有九列、專案七列），置中會讓圓餅
+   浮在半空中，卡片之間的圓心高度全都對不齊。 */
+.ui-next-share-body{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;margin-top:10px}
+/* ⚠ .ui-next-usage-grid svg 是 width:100%;height:120px（給趨勢圖那條折線用的），
+   圓餅吃到會被拉成 464px 寬的橢圓。這裡把尺寸釘回去。 */
+.ui-next-usage-grid .ui-next-share-pie{flex:none;width:150px;height:150px;margin-top:0}
+.ui-next-share-legend{flex:1 1 200px;min-width:0}
