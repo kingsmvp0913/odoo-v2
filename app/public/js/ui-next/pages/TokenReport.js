@@ -52,12 +52,13 @@
         const rows = [];
         const claude = this.claudeUsage || {};
         [
-          ["Claude · 5 小時", claude.five_hour],
-          ["Claude · 7 天", claude.seven_day],
+          ["5 小時", claude.five_hour],
+          ["7 天", claude.seven_day],
         ].forEach(([label, item]) => {
           if (item && item.utilization != null) {
             const used = Math.round(item.utilization);
             rows.push({
+              provider: "Claude",
               label,
               used,
               remaining: Math.max(0, 100 - used),
@@ -73,8 +74,9 @@
         [codex.primary, codex.secondary].forEach((item) => {
           if (item && item.used_percent != null)
             rows.push({
+              provider: "Codex",
               // 「主要額度／週額度」看不出是多長的窗；API 給了分鐘數就照著寫。
-              label: `Codex · ${usageWindowLabel(item.window_minutes) || '額度'}`,
+              label: usageWindowLabel(item.window_minutes) || "額度",
               used: Math.round(item.used_percent),
               remaining: Math.round(item.remaining_percent),
               resetsAt: item.resets_at,
@@ -83,6 +85,18 @@
             });
         });
         return rows;
+      },
+      // 一家一欄（Claude 左、Codex 右）。原本是 2×2 row-major，同一列並排的是
+      // 「Claude 的 5 小時」和「Claude 的 7 天」，而上下相鄰的才是同一種視窗——
+      // 兩個維度都在，眼睛不知道該橫著讀還是直著讀。
+      quotaGroups() {
+        const groups = [];
+        this.quotaRows.forEach((row) => {
+          const hit = groups.find((g) => g.provider === row.provider);
+          if (hit) hit.rows.push(row);
+          else groups.push({ provider: row.provider, rows: [row] });
+        });
+        return groups;
       },
       // title＝未縮寫的完整數字。卡片顯示的是 K/M 縮寫與四捨五入後的金額，沒有 title 就再也查不到原值。
       summaryCards() {
@@ -241,7 +255,9 @@
 </div>
 </div>
 <div class="ui-next-quota-list">
-<div v-for="row in quotaRows" :key="row.label">
+<section v-for="group in quotaGroups" :key="group.provider" class="ui-next-quota-group">
+<h3>{{ group.provider }}</h3>
+<div v-for="row in group.rows" :key="row.provider + row.label">
 <div>
 <b>{{ row.label }}</b>
 <span>剩 {{ row.remaining }}%</span>
@@ -252,6 +268,7 @@
 </i>
 <small>重置 {{ usageTime(row.resetsAt) }} · 更新 {{ usageTime(row.updatedAt) }}<template v-if="row.stale"> · 這份快照可能已過期</template></small>
 </div>
+</section>
 <p v-if="!quotaRows.length" class="ui-next-empty-inline">目前無法取得訂閱額度。</p>
 </div>
 </div>
