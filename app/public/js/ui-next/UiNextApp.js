@@ -327,7 +327,11 @@
       // 只有右鍵開的才吃這組座標；dots 鈕開的回傳 null，維持 CSS 裡貼齊那一列的定位。
       rowMenuStyle() {
         if (!this.rowMenuPos) return null;
-        return { left: `${Math.round(this.rowMenuPos.x)}px`, top: `${Math.round(this.rowMenuPos.y)}px` };
+        return {
+          left: `${Math.round(this.rowMenuPos.x)}px`,
+          top: `${Math.round(this.rowMenuPos.y)}px`,
+          visibility: this.rowMenuPos.ready ? null : "hidden",
+        };
       },
       isLoggedIn() {
         return Api.authState.loggedIn;
@@ -655,7 +659,9 @@
       // 改成先放上去、量出實際落點、再把差距補回來：不管中間隔了幾層縮放都會對齊。
       placeRowMenuAt(event) {
         const target = { x: event.clientX, y: event.clientY };
-        this.rowMenuPos = { x: target.x, y: target.y, target };
+        // ready:false → 這一幀先藏起來。第一次放上去的位置是還沒校正的，看得到的話就是
+        // 「先閃在一個地方、再跳到指標處」。校正在下一幀完成，肉眼看到的只有最終位置。
+        this.rowMenuPos = { x: target.x, y: target.y, target, ready: false };
         this.$nextTick(() => this.alignRowMenu());
       },
       alignRowMenu() {
@@ -670,7 +676,7 @@
         const right = rect.x + dx + rect.width, bottom = rect.y + dy + rect.height;
         if (right > window.innerWidth - 8) dx -= right - (window.innerWidth - 8);
         if (bottom > window.innerHeight - 8) dy -= bottom - (window.innerHeight - 8);
-        this.rowMenuPos = { x: this.rowMenuPos.x + dx / zoom, y: this.rowMenuPos.y + dy / zoom, target };
+        this.rowMenuPos = { x: this.rowMenuPos.x + dx / zoom, y: this.rowMenuPos.y + dy / zoom, target, ready: true };
       },
       toggleProjectMenu(project, event) {
         event.stopPropagation();
