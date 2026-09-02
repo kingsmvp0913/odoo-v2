@@ -587,3 +587,8 @@
 @keyframes ui-next-thread-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .ui-next-thread-messages{animation:ui-next-thread-enter .19s ease-out}
 @media(prefers-reduced-motion:reduce){.ui-next-thread-messages{animation:none}}
+
+/* 右鍵開的列選單落在指標處。fixed 而非 absolute：側欄自己會捲，貼著那一列的絕對定位在捲動後
+   就跟指標對不上了。right 必須清掉——原規則的 right:4px 沒有被 inline 的 left 蓋掉，
+   兩邊都有值的話寬度會被拉開成整條。 */
+.ui-next-row-menu.is-at-pointer{position:fixed;right:auto;z-index:var(--z-modal)}

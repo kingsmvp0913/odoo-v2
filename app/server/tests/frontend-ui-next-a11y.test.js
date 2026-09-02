@@ -129,7 +129,9 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
     expect(APP).toMatch(/class="ui-next-account"[^>]*aria-haspopup="menu"/);
     expect(APP.match(/class="ui-next-row-more"[\s\S]{0,200}?aria-haspopup="menu"/g) || []).toHaveLength(2);
     expect(APP.match(/class="ui-next-account-menu" role="menu"/g) || []).toHaveLength(2);
-    expect(APP.match(/class="ui-next-row-menu" role="menu"/g) || []).toHaveLength(2);
+    // 中間容許其他屬性：這兩個選單支援右鍵開在指標處，帶著 :class／:style 綁定。
+    // 仍然釘住「兩個 row-menu 都宣告了 role=menu」，只是不再要求兩者相鄰。
+    expect(APP.match(/class="ui-next-row-menu"[^>]*role="menu"/g) || []).toHaveLength(2);
     // 選單項要是 menuitem，不能只是裸 button
     expect(APP).toMatch(/role="menuitem"/);
   });

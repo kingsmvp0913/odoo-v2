@@ -311,6 +311,8 @@
         sidebarProjectsError: "",
         projectChats: {},
         expandedProjects: {},
+        // 右鍵開的選單要落在指標處；用 dots 鈕開的維持貼齊那一列（null）。
+        rowMenuPos: null,
         menuProjectId: null,
         menuChatId: null,
         releaseId: null,
@@ -322,6 +324,11 @@
       };
     },
     computed: {
+      // 只有右鍵開的才吃這組座標；dots 鈕開的回傳 null，維持 CSS 裡貼齊那一列的定位。
+      rowMenuStyle() {
+        if (!this.rowMenuPos) return null;
+        return { left: `${Math.round(this.rowMenuPos.x)}px`, top: `${Math.round(this.rowMenuPos.y)}px` };
+      },
       isLoggedIn() {
         return Api.authState.loggedIn;
       },
@@ -634,26 +641,53 @@
         event.stopPropagation();
         this.menuChatId = null;
         this.menuProjectId = project.id;
+        this.placeRowMenuAt(event);
       },
       openChatMenu(chat, event) {
         if (this.renamingChatId === chat.id) return; // 正在改名，讓瀏覽器原生的文字選單留著
         event.stopPropagation();
         this.menuProjectId = null;
         this.menuChatId = chat.id;
+        this.placeRowMenuAt(event);
+      },
+      // ⚠ 不要試著自己把滑鼠座標換算成 left/top。body 有 zoom: var(--ui-zoom)，而 zoom 元素
+      // 同時是 fixed 的 containing block——實測用「clientX / zoom」直接寫進去，落點偏了 345px。
+      // 改成先放上去、量出實際落點、再把差距補回來：不管中間隔了幾層縮放都會對齊。
+      placeRowMenuAt(event) {
+        const target = { x: event.clientX, y: event.clientY };
+        this.rowMenuPos = { x: target.x, y: target.y, target };
+        this.$nextTick(() => this.alignRowMenu());
+      },
+      alignRowMenu() {
+        const menu = document.querySelector(".ui-next-row-menu.is-at-pointer");
+        if (!menu || !this.rowMenuPos || !this.rowMenuPos.target) return;
+        const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1;
+        const rect = menu.getBoundingClientRect();
+        const target = this.rowMenuPos.target;
+        let dx = target.x - rect.x;
+        let dy = target.y - rect.y;
+        // 靠近視窗邊緣時往內收：選單開在畫面外等於這次右鍵沒有反應。
+        const right = rect.x + dx + rect.width, bottom = rect.y + dy + rect.height;
+        if (right > window.innerWidth - 8) dx -= right - (window.innerWidth - 8);
+        if (bottom > window.innerHeight - 8) dy -= bottom - (window.innerHeight - 8);
+        this.rowMenuPos = { x: this.rowMenuPos.x + dx / zoom, y: this.rowMenuPos.y + dy / zoom, target };
       },
       toggleProjectMenu(project, event) {
         event.stopPropagation();
+        this.rowMenuPos = null;
         this.menuChatId = null;
         this.menuProjectId = this.menuProjectId === project.id ? null : project.id;
       },
       toggleChatMenu(chat, event) {
         event.stopPropagation();
+        this.rowMenuPos = null;
         this.menuProjectId = null;
         this.menuChatId = this.menuChatId === chat.id ? null : chat.id;
       },
       closeSidebarMenus() {
         this.menuProjectId = null;
         this.menuChatId = null;
+        this.rowMenuPos = null;
       },
       // 頁籤寫進 query，專案詳情頁的 detailTab 會照著開；直接 push 路徑只會停在第一個頁籤。
       goProjectTab(id, tab) {
@@ -794,7 +828,7 @@
         <aside ref="mobileSidebar" class="ui-next-sidebar" :class="{ 'is-mobile-open': mobileSidebarOpen }" :role="mobileSidebarOpen ? 'dialog' : null" :aria-modal="mobileSidebarOpen ? 'true' : null" :aria-label="mobileSidebarOpen ? '主選單' : null" :tabindex="mobileSidebarOpen ? '-1' : null" @keydown="trapSidebarFocus">
           <div class="ui-next-brand"><img src="favicon.svg" alt="OAA"><span><b>Odoo AI</b><small>自動開發平台</small></span></div>
           <button class="ui-next-new" @click="go('/')"><ui-next-icon name="plus"/>新對話</button>
-          <button class="ui-next-search" @click="showSearch($event)"><ui-next-icon name="search"/>搜尋 <kbd>⌘ K</kbd></button>
+          <button class="ui-next-search" title="搜尋（⌘ K）" @click="showSearch($event)"><ui-next-icon name="search"/>搜尋</button>
           <div class="ui-next-sidebar-scroll">
           <div class="ui-next-sidebar-rule"></div>
           <!-- 沒有「問答」：它和上面的「新對話」都是導到 /，同一個入口列兩次。 -->
@@ -803,7 +837,7 @@
                清單常駐，專案的展開改成點名稱本身，右側 ⋮ 才是那一列的操作入口。 -->
           <div class="ui-next-nav-group">
             <router-link class="ui-next-nav" :class="{ 'is-active': $route.path.startsWith('/projects') }" to="/projects" @click="mobileSidebarOpen=false"><ui-next-icon name="project"/>專案 <span v-if="projectUnreadTotal">{{ projectUnreadTotal }}</span></router-link>
-            <div class="ui-next-projects"><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head" :class="{ 'is-current': currentProjectId === String(project.id), 'has-menu': menuProjectId === project.id }" @contextmenu.prevent="openProjectMenu(project, $event)"><button @click="toggleProject(project)" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon name="project"/>{{ project.name }}</button><button type="button" class="ui-next-row-more" :aria-label="project.name + ' 更多操作'" :aria-expanded="menuProjectId === project.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleProjectMenu(project, $event)"><ui-next-icon name="dots"/></button><div v-if="menuProjectId === project.id" class="ui-next-row-menu" role="menu"><button type="button" role="menuitem" @click="openEnv(project.id)">測試區</button><button type="button" role="menuitem" @click="openRelease(project.id)">上正式</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'repos')">REPO</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'db')">連線設定</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'settings')">專案設定</button></div></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><div v-for="chat in visibleChats(project)" :key="chat.id" class="ui-next-chat-row" :class="{ 'has-menu': menuChatId === chat.id, 'is-active': isCurrentChat(project, chat) }" @contextmenu.prevent="openChatMenu(chat, $event)"><input v-if="renamingChatId === chat.id" ref="renameInput" v-model="renameTitle" class="ui-next-rename-input" :aria-label="'重新命名對話'" @keydown.enter.prevent="submitRenameChat(project, chat)" @keydown.esc.prevent="cancelRenameChat" @blur="submitRenameChat(project, chat)"><template v-else><button :aria-current="isCurrentChat(project, chat) ? 'page' : null" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button type="button" class="ui-next-row-more" :aria-label="(chat.title || '新對話') + ' 更多操作'" :aria-expanded="menuChatId === chat.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleChatMenu(chat, $event)"><ui-next-icon name="dots"/></button><div v-if="menuChatId === chat.id" class="ui-next-row-menu" role="menu"><button type="button" role="menuitem" @click="startRenameChat(chat)">重新命名</button><button type="button" role="menuitem" class="danger" @click="deleteChat(project, chat)">刪除</button></div></template></div><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '?tab=chat')">查看全部對話</button></div></div></div>
+            <div class="ui-next-projects"><p v-if="sidebarProjectsError" class="ui-next-sidebar-error">{{ sidebarProjectsError }}</p><p v-else-if="!sidebarProjects.length" class="ui-next-sidebar-empty">沒有近期對話或我的最愛專案</p><div v-for="project in sidebarProjects" :key="project.id"><div class="ui-next-project-head" :class="{ 'is-current': currentProjectId === String(project.id), 'has-menu': menuProjectId === project.id }" @contextmenu.prevent="openProjectMenu(project, $event)"><button @click="toggleProject(project)" :aria-expanded="!!expandedProjects[project.id]"><ui-next-icon name="project"/>{{ project.name }}</button><button type="button" class="ui-next-row-more" :aria-label="project.name + ' 更多操作'" :aria-expanded="menuProjectId === project.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleProjectMenu(project, $event)"><ui-next-icon name="dots"/></button><div v-if="menuProjectId === project.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button type="button" role="menuitem" @click="openEnv(project.id)">測試區</button><button type="button" role="menuitem" @click="openRelease(project.id)">上正式</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'repos')">REPO</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'db')">連線設定</button><button type="button" role="menuitem" @click="goProjectTab(project.id, 'settings')">專案設定</button></div></div><div v-if="expandedProjects[project.id]" class="ui-next-project-chats"><div v-for="chat in visibleChats(project)" :key="chat.id" class="ui-next-chat-row" :class="{ 'has-menu': menuChatId === chat.id, 'is-active': isCurrentChat(project, chat) }" @contextmenu.prevent="openChatMenu(chat, $event)"><input v-if="renamingChatId === chat.id" ref="renameInput" v-model="renameTitle" class="ui-next-rename-input" :aria-label="'重新命名對話'" @keydown.enter.prevent="submitRenameChat(project, chat)" @keydown.esc.prevent="cancelRenameChat" @blur="submitRenameChat(project, chat)"><template v-else><button :aria-current="isCurrentChat(project, chat) ? 'page' : null" @click="go('/projects/' + project.id + '/chat/' + chat.id)">{{ chat.title || '新對話' }}</button><button type="button" class="ui-next-row-more" :aria-label="(chat.title || '新對話') + ' 更多操作'" :aria-expanded="menuChatId === chat.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleChatMenu(chat, $event)"><ui-next-icon name="dots"/></button><div v-if="menuChatId === chat.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button type="button" role="menuitem" @click="startRenameChat(chat)">重新命名</button><button type="button" role="menuitem" class="danger" @click="deleteChat(project, chat)">刪除</button></div></template></div><button v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats" @click="go('/projects/' + project.id + '?tab=chat')">查看全部對話</button></div></div></div>
           </div>
           </div>
           <div class="ui-next-bottom">
