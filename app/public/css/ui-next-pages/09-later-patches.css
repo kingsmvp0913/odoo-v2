@@ -621,3 +621,27 @@
 .ui-next-trend-box{position:relative;min-height:220px}
 .ui-next-trend-box svg{position:absolute;top:0;left:0}
 
+
+/* 架構圖／流程圖：圖本身是固定尺寸的曼哈頓路由（座標全部算好、縮不得），而原本的版面
+   把 340px 讓給右側說明欄，圖只剩 951px 卻要畫 1060px——每次看圖都得先橫向捲一次。
+   說明改成浮在圖的右上角，圖吃滿整個寬度。 */
+.ui-next-flow-page .ui-next-flow-body{padding:0 0 42px}
+/* 定位基準放在 flow-main-row（只含圖與說明）而不是整個 body：流程圖的 body 上面還有一排
+   開關，以 body 為基準的話說明框會對到開關那一列，而不是圖的上緣。 */
+.ui-next-flow-page .flow-main-row{display:block;position:relative}
+.ui-next-flow-page .flow-diagram-panel{width:100%;flex:none;overflow-x:auto}
+/* 圖是固定座標的曼哈頓路由，超過容器就等比縮（放不下才縮，放得下維持原寸）。
+   ⚠ SVG 上原本有 inline 的 max-width:none，那會讓這條完全失效。 */
+.ui-next-flow-page .flow-diagram-panel > svg{max-width:100%;height:auto;min-width:760px}
+/* ⚠ ui-next.css 把 .flow-side-panel 也算進「卡片」那一組（border＋surface＋shadow）。
+   浮起來之後外層只該當定位容器，視覺全交給內層那張卡，否則空狀態會浮一個空框擋著圖。 */
+.ui-next-flow-page .flow-side-panel{position:absolute;z-index:3;top:0;right:14px;width:300px;min-width:0;flex:none;border:0;padding:0;background:transparent;box-shadow:none}
+/* 空狀態整塊收起來：它只是一句「把滑鼠移到節點上」，而頁首說明已經講過同一件事。
+   留著會有兩種壞法——有底色就擋住圖，沒底色則文字直接疊在泳道標題上（實測後者）。 */
+.ui-next-flow-page .flow-side-panel.is-empty{display:none}
+.ui-next-flow-detail{min-height:0;border:1px solid var(--border-strong);border-radius:12px;padding:12px 14px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ui-next-flow-detail h3{margin:0 0 4px;font-size:14px;font-weight:650}
+@media(max-width:1100px){
+  /* 窄畫面就讓它回到圖的下方——浮著會把圖蓋掉一半。 */
+  .ui-next-flow-page .flow-side-panel{position:static;width:auto;margin-top:14px}
+}

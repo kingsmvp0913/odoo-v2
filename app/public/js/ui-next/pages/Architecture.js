@@ -427,23 +427,24 @@
       linkDim(r) { return this.current ? !this.activeLinks.has(r.key) : false; }
     },
     template: `
-      <div class="page-header">
-        <div class="page-header-inner">
-          <h1 class="page-title">系統地景圖</h1>
-          <p style="color:var(--text-muted);font-size:var(--fs-sm);margin-top:var(--space-1)">
+      <section class="ui-next-page ui-next-flow-page">
+      <header class="ui-next-page-head">
+        <div>
+          <h1>架構圖</h1>
+          <p>
             這套體系會碰到哪些地方、彼此怎麼連。中間那一直排是公司主機，裡面四個虛線框各是一個 Docker 容器（彼此是兄弟關係，不是層層包住）；左邊那一欄是本來就存在、不是我們架的（上半是單子從哪來，下半是客戶現場），右邊是程式碼。
             滑鼠移到任一個方塊上會打亮它與相鄰的路徑，並在右側說明它是什麼。
             想看「一張任務會經過哪幾關」請改看<router-link to="/pipeline-flow">流程圖</router-link>。
           </p>
         </div>
-      </div>
+      </header>
 
-      <div class="page-body">
+      <div class="ui-next-flow-body">
         <div class="flow-main-row">
           <div class="flow-diagram-panel">
             <div class="flow-mobile-hint">圖較寬，可左右捲動檢視；完整地景建議在桌機檢視</div>
             <svg :width="layout.w" :height="layout.h" :viewBox="'0 0 ' + layout.w + ' ' + layout.h"
-                 style="display:block;max-width:none">
+                 style="display:block">
               <defs>
                 <marker id="ar-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-muted)" />
@@ -524,8 +525,8 @@
             </ul>
           </div>
 
-          <div class="flow-side-panel">
-            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);min-height:220px">
+          <div class="flow-side-panel" :class="{'is-empty':!active}">
+            <div class="ui-next-flow-detail">
               <template v-if="active">
                 <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)">{{ active.label }}</h3>
                 <div style="font-size:var(--fs-xs);color:var(--text-muted);margin-bottom:var(--space-2)">{{ active.sub }}</div>
@@ -543,5 +544,6 @@
           </div>
         </div>
       </div>
+      </section>
     `
   });

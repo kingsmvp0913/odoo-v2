@@ -739,17 +739,18 @@
       edgeDim(a, b) { return this.hovered && !this.activeEdges.has(a + '>' + b); }
     },
     template: `
-      <div class="page-header">
-        <div class="page-header-inner">
-          <h1 class="page-title">Pipeline 流程圖</h1>
-          <p style="color:var(--text-muted);font-size:var(--fs-sm);margin-top:var(--space-1)">
+      <section class="ui-next-page ui-next-flow-page">
+      <header class="ui-next-page-head">
+        <div>
+          <h1>流程圖</h1>
+          <p>
             泳道由左到右是{{ tracks.map(t => t.label).join('、') }}。滑鼠移到節點上會打亮它與相鄰的路徑，並在右側顯示這一關的邏輯。
             下方開關是<strong>推演用</strong>——只改這張圖，不會動到任何專案的設定。
           </p>
         </div>
-      </div>
+      </header>
 
-      <div class="page-body">
+      <div class="ui-next-flow-body">
         <div class="flow-toggle-bar">
           <label class="switch-label-row">
             <div class="switch">
@@ -777,7 +778,7 @@
                  只會看到左邊一小條，不會知道右邊還有東西。 -->
             <div class="flow-mobile-hint">圖較寬，可左右捲動檢視；完整流程建議在桌機檢視</div>
             <svg :width="layout.w" :height="layout.h" :viewBox="'0 0 ' + layout.w + ' ' + layout.h"
-                 style="display:block;max-width:none">
+                 style="display:block">
               <defs>
                 <marker id="pf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-muted)" />
@@ -873,8 +874,8 @@
             </div>
           </div>
 
-          <div class="flow-side-panel">
-            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);min-height:220px">
+          <div class="flow-side-panel" :class="{'is-empty':!active}">
+            <div class="ui-next-flow-detail">
               <template v-if="active">
                 <h3 style="font-size:var(--fs-md);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)">{{ active.label }}</h3>
                 <div style="font-size:var(--fs-xs);color:var(--text-muted);font-family:var(--font-mono, monospace);margin-bottom:var(--space-2)">
@@ -894,5 +895,6 @@
           </div>
         </div>
       </div>
+      </section>
     `
   });
