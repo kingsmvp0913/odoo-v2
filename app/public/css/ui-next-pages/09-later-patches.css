@@ -750,3 +750,9 @@
 .ui-next-source-picker .ui-next-project-picker-options small{color:var(--text-muted);font-size:11px;white-space:nowrap}
 /* 對話頁的 Enter 說明搬到對話框外（與首頁同一個位置）：它是操作提示不是輸入區的一部分。 */
 .ui-next-thread-hint{display:block;width:min(812px,calc(100% - 48px));margin:0 auto 18px;color:var(--text-muted);font-size:12px}
+/* 整格可點，游標就要一路是手指——只有文字是 pointer 的話，使用者會以為旁邊點不動。 */
+.ui-next-project-picker,.ui-next-source-picker{cursor:pointer}
+.ui-next-project-picker .ui-next-icon,.ui-next-source-picker .ui-next-icon,
+.ui-next-source-picker .ui-next-source-trigger{pointer-events:none}
+.ui-next-project-picker .ui-next-project-picker-options,.ui-next-source-picker .ui-next-project-picker-options{cursor:default}
+.ui-next-project-picker-options button{cursor:pointer}

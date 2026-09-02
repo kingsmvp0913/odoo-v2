@@ -183,6 +183,13 @@
         try { this.dbConnections = await Api.get(`projects/${this.projectId}/db-connections`) || []; }
         catch (error) { /* 沒設連線是常態，選單就只剩測試環境那一項 */ }
       },
+      // 整格可點：點圖示、箭頭或留白都要展開，不是只有點到文字才算。
+      openProjectPicker() {
+        if (this.loading || !this.projects.length) return;
+        this.projectPickerOpen = true;
+        this.projectQuery = "";
+        this.$nextTick(() => this.$refs.projectTrigger?.focus());
+      },
       selectProject(project) {
         this.projectId = String(project.id);
         this.projectPickerOpen = false;
@@ -332,20 +339,20 @@
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
                 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple @change="chooseFiles"></label>
-                <div class="ui-next-project-picker ui-next-composer-chip" @keydown="onProjectPickerKeydown">
+                <div class="ui-next-project-picker ui-next-composer-chip" @keydown="onProjectPickerKeydown" @click="openProjectPicker">
                   <ui-next-icon name="project"/>
                   <input ref="projectTrigger" type="text" class="ui-next-project-picker-trigger" role="combobox" aria-autocomplete="list" :aria-expanded="projectPickerOpen" :value="projectPickerOpen ? projectQuery : (selectedProject ? selectedProject.name : '')" :placeholder="projects.length ? (selectedProject ? selectedProject.name : '選擇專案') : '沒有可用專案'" :disabled="loading || !projects.length" @focus="projectPickerOpen=true;projectQuery=''" @input="projectQuery=$event.target.value;projectPickerOpen=true">
                   <ui-next-icon name="chevron-down"/>
-                  <div v-if="projectPickerOpen" ref="projectOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇專案">
+                  <div v-if="projectPickerOpen" ref="projectOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇專案" @click.stop>
                     <button v-for="project in filteredProjects" :key="project.id" type="button" role="option" :aria-selected="String(project.id)===String(projectId)" @click="selectProject(project)">{{ project.name }}</button>
                     <p v-if="!filteredProjects.length">找不到符合的專案</p>
                   </div>
                 </div>
-                <div v-if="projectId" class="ui-next-source-picker ui-next-composer-chip" @keydown="onSourcePickerKeydown">
+                <div v-if="projectId" class="ui-next-source-picker ui-next-composer-chip" @keydown="onSourcePickerKeydown" @click="sourcePickerOpen=!sourcePickerOpen">
                   <ui-next-icon name="grid"/>
-                  <button ref="sourceTrigger" type="button" class="ui-next-source-trigger" :aria-expanded="sourcePickerOpen" aria-haspopup="listbox" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷" @click="sourcePickerOpen=!sourcePickerOpen">{{ selectedSourceLabel }}</button>
+                  <button ref="sourceTrigger" type="button" class="ui-next-source-trigger" :aria-expanded="sourcePickerOpen" aria-haspopup="listbox" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">{{ selectedSourceLabel }}</button>
                   <ui-next-icon name="chevron-down"/>
-                  <div v-if="sourcePickerOpen" ref="sourceOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇資料來源">
+                  <div v-if="sourcePickerOpen" ref="sourceOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇資料來源" @click.stop>
                     <button v-for="option in sourceOptions" :key="option.value || 'auto'" type="button" role="option" :aria-selected="option.value===dataSource" @click="selectSource(option)">{{ option.label }}<small v-if="option.hint">{{ option.hint }}</small></button>
                   </div>
                 </div>
