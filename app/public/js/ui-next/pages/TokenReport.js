@@ -379,7 +379,7 @@
 <input v-model="filters.showAll" type="checkbox" @change="load"> 全部使用者</label>
 <button class="ui-next-primary" @click="load" :disabled="loading">{{ loading ? '更新中…' : '更新報表' }}</button>
 </div>
-        <div class="ui-next-report-tabs" role="tablist">
+        <div class="ui-next-page-tabs" role="tablist">
 <button v-for="item in tabs" :key="item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
 </div>
         <div v-show="tab==='overview'" class="ui-next-quota-card">

@@ -1,9 +1,15 @@
 (function () {
+  const SETTINGS_TABS = [
+    { key: "general", label: "一般" },
+    { key: "account", label: "帳號" },
+    { key: "connection", label: "連線與通知" },
+  ];
+
   window.UiNextSettingsView = Vue.defineComponent({
     name: "UiNextSettingsView",
     components: { UiNextIcon: window.UiNextIcon },
-    data() { return { me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
-    computed: { patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
+    data() { return { tab: "general", me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
+    computed: { tabs() { return SETTINGS_TABS; }, patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
     async created() { await this.load(); },
     mounted() { this._onThemeChange = (event) => { this.isDark = event.detail === "dark"; }; window.addEventListener("themechange", this._onThemeChange); },
     unmounted() { window.removeEventListener("themechange", this._onThemeChange); },
@@ -29,10 +35,13 @@
 <p>管理帳號、通知、GitHub 與外部系統連線。</p>
 </div>
 </header>
+<div class="ui-next-page-tabs" role="tablist">
+<button v-for="item in tabs" :key="item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
+</div>
 <div v-if="loading" class="ui-next-loading-card">載入設定中…</div>
 <div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 <div v-else class="ui-next-settings-grid">
-<section class="ui-next-panel">
+<section v-show="tab==='general'" class="ui-next-panel">
 <h2>外觀與通知</h2>
 <label class="ui-next-toggle" data-tour="set-dark">
 <input type="checkbox" :checked="isDark" @change="toggleTheme">
@@ -45,7 +54,7 @@
 <button v-if="notifyOn" @click="testNotify"><ui-next-icon name="alert"/> 測試通知</button>
 <p>開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</p>
 </section>
-<section class="ui-next-panel">
+<section v-show="tab==='account'" class="ui-next-panel">
 <h2>帳號資料</h2>
 <label>帳號<input :value="me.username" disabled>
 </label>
@@ -53,7 +62,7 @@
 </label>
 <button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存帳號設定' }}</button>
 </section>
-<section class="ui-next-panel">
+<section v-show="tab==='account'" class="ui-next-panel">
 <h2>變更密碼</h2>
 <label>目前密碼<input v-model="pw.current" type="password">
 </label>
@@ -64,7 +73,7 @@
 <p v-if="pwError" class="ui-next-error-text">{{ pwError }}</p>
 <button @click="savePw" :disabled="savingPw">{{ savingPw?'更新中…':'更新密碼' }}</button>
 </section>
-<section class="ui-next-panel" data-tour="set-github">
+<section v-show="tab==='connection'" class="ui-next-panel" data-tour="set-github">
 <h2>GitHub 認證</h2>
 <p>個人 GitHub Personal Access Token，供你的任務推送程式碼使用。</p>
 <p v-if="githubPat.configured">已連結：<b>{{ githubPat.login }}</b></p>
@@ -88,7 +97,7 @@
 <button v-if="githubPat.configured" class="danger" @click="removeGithubPat">移除連結</button>
 </div>
 </section>
-<section class="ui-next-panel ui-next-settings-wide">
+<section v-show="tab==='connection'" class="ui-next-panel ui-next-settings-wide">
 <h2>外部系統連線</h2>
 <div class="ui-next-settings-connection">
 <div data-tour="set-odoo">
@@ -119,7 +128,7 @@
 </div>
 <button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存連線設定' }}</button>
 </section>
-<section class="ui-next-panel">
+<section v-show="tab==='connection'" class="ui-next-panel">
 <h2>Teams 通知</h2>
 <p>填寫你的 Azure AD 物件識別碼，任務通知時系統會以你的顯示名稱 @mention。</p>
 <label>Teams 使用者 ID（AAD Object ID）<input v-model="teamsUserId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
