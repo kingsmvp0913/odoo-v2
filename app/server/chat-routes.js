@@ -87,7 +87,7 @@ function registerRoutes(app) {
         // MAX(t.id) 而非裸選 t.id：JOIN 打在主鍵上最多配一列，兩者在 PostgreSQL 語意等價，但裸選就得把
         // t.id 放進 GROUP BY，而 pg-mem 一旦 GROUP BY 含 t.id 就會把同名的 c.id 一起解析成 t.id
         //（實測 chat id 被吐成 task id，整份清單的 id 全錯）。聚合掉可讓 GROUP BY 不含 t.id，繞開該缺陷。
-        `SELECT c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id,
+        `SELECT c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id, c.data_source,
                 MAX(t.id) AS converted_task_id,
                 COUNT(m.id) AS unread
          FROM project_chats c
@@ -95,7 +95,7 @@ function registerRoutes(app) {
            ON m.chat_id = c.id AND m.role = 'ai' AND m.id > c.last_read_message_id
          LEFT JOIN tasks t ON t.id = c.converted_task_id
          WHERE c.project_id = $1 AND c.user_id = $2
-         GROUP BY c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id
+         GROUP BY c.id, c.title, c.created_at, c.reply_pending, c.chat_session_id, c.data_source
          ORDER BY c.created_at DESC`,
         [req.params.projectId, req.userId]
       );
@@ -108,7 +108,15 @@ function registerRoutes(app) {
       const title = (req.body.title || '').trim() || '新對話';
       // 白名單而非照收：這個值會被組進 agent 的 prompt，任意字串等於讓呼叫端寫 prompt。
       // 認不得就當成沒選（agent 照原本判準自己挑來源）。
-      const dataSource = ['test_env', 'production_db'].includes(req.body.data_source) ? req.body.data_source : null;
+      // 允許兩種：'test_env'，或 'db:<連線 id>'——而且那個連線必須真的屬於這個專案，
+      // 否則等於讓人用別的專案的庫名去問（名稱會被寫進 prompt）。
+      let dataSource = null;
+      const raw = String(req.body.data_source || '');
+      if (raw === 'test_env') dataSource = raw;
+      else if (/^db:\d+$/.test(raw)) {
+        const { rows } = await query('SELECT id FROM db_connections WHERE id = $1 AND project_id = $2', [raw.slice(3), req.params.projectId]);
+        if (rows.length) dataSource = raw;
+      }
       const { rows: [chat] } = await query(
         'INSERT INTO project_chats (project_id, title, user_id, data_source) VALUES ($1, $2, $3, $4) RETURNING id, title, created_at',
         [req.params.projectId, title, req.userId, dataSource]

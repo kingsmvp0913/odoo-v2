@@ -65,6 +65,9 @@
         projectQuery: "",
         // 空＝不指定，由 agent 自己判斷該查哪裡（使用者裁決：沒選就自行決定）。
         dataSource: "",
+        // 這個專案實際設定過的資料庫連線。固定寫死「正式區」一個選項是錯的——
+        // 一個專案可以掛好幾個庫（鴻久有六個：測試、鴻久正式、鴻伍正式…）。
+        dbConnections: [],
         // 「最近有 chat 的專案」與側欄同一支 API，排序才會一致。
         recentChatProjects: [],
         createdChatId: "",
@@ -91,7 +94,7 @@
         this.projectId = this.projects.some((project) => String(project.id) === lastProjectId)
           ? lastProjectId
           : this.projects[0] ? String(this.projects[0].id) : "";
-        await this.loadEnvironment();
+        await Promise.all([this.loadEnvironment(), this.loadDbConnections()]);
       } catch (e) {
         showToast("無法載入專案清單", "error");
       } finally {
@@ -155,7 +158,16 @@
       onProjectChange() {
         localStorage.setItem("oaa.next.last-project-id", this.projectId);
         this.createdChatId = "";
+        // 連線 id 是專案自己的，換專案就得清掉——留著會指到別的專案的庫。
+        this.dataSource = "";
         this.loadEnvironment();
+        this.loadDbConnections();
+      },
+      async loadDbConnections() {
+        this.dbConnections = [];
+        if (!this.projectId) return;
+        try { this.dbConnections = await Api.get(`projects/${this.projectId}/db-connections`) || []; }
+        catch (error) { /* 沒設連線是常態，選單就只剩測試環境那一項 */ }
       },
       selectProject(project) {
         this.projectId = String(project.id);
@@ -301,10 +313,9 @@
                 </div>
                 <select v-if="projectId" v-model="dataSource" class="ui-next-source-select" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">
                   <option value="">資料來源：自動</option>
-                  <option value="test_env">優先查測試環境</option>
-                  <option value="production_db">優先查正式區</option>
+                  <option value="test_env">平台測試環境</option>
+                  <option v-for="conn in dbConnections" :key="conn.id" :value="'db:' + conn.id">{{ conn.name }}</option>
                 </select>
-                <span class="ui-next-environment" :class="{error:environmentError}">{{ environmentLabel }}</span>
               </div>
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
             </div>

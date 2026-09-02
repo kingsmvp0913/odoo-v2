@@ -650,13 +650,16 @@
 .ui-next-flow-detail .flow-detail-grid{grid-template-columns:auto minmax(0,1fr);gap:4px 14px;max-width:1000px}
 
 
-/* 專案選擇器改成可打字的自動完成：原本是 <button>，換成 <input> 之後要自己把
-   瀏覽器預設的框與內距清掉，否則它在 composer 那一列會突出一塊。 */
-.ui-next-project-picker-trigger{width:205px;padding:2px 4px;border-radius:8px;outline:0}
-.ui-next-project-picker-trigger:focus{background:color-mix(in srgb,var(--text) 8%,transparent)}
-.ui-next-project-picker-trigger::placeholder{color:var(--text);opacity:1}
-.ui-next-project-picker-trigger:disabled::placeholder{color:var(--text-muted)}
+/* 專案與資料來源都收成 composer 底下那排小字（原本「測試環境：運行中」的分量）：
+   它們是這次送出的前提，不是主要動作，做成輸入框的樣子會比送出鈕還搶眼。
+   ⚠ 換成 <input> 之後瀏覽器的預設框與內距要自己清掉。 */
+.ui-next-project-picker-trigger{max-width:150px;padding:2px 4px;border-radius:8px;outline:0;color:var(--text-muted);font-size:12px}
+.ui-next-project-picker-trigger:hover:not(:disabled),.ui-next-project-picker-trigger:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+.ui-next-project-picker-trigger::placeholder{color:var(--text-muted);opacity:1}
 .ui-next-project-picker-options p{margin:0;padding:8px 10px;color:var(--text-muted);font-size:12px}
-/* 資料來源選單：與專案選擇器同一列，樣式沿用 composer 內的 select（無框、透明底）。 */
-.ui-next-source-select{max-width:150px;border:0;padding:2px 4px;border-radius:8px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;outline:0;cursor:pointer}
+/* 資料來源選單：與專案選擇器同一列、同一個分量。 */
+.ui-next-source-select{max-width:160px;border:0;padding:2px 4px;border-radius:8px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;outline:0;cursor:pointer}
 .ui-next-source-select:hover,.ui-next-source-select:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+/* 對話頁 composer 下的「專案 · 資料來源」：與首頁選完之後那排同一個分量（小字、次要色）。
+   它是唯讀的——來源在開新對話時就定了，這裡只是提醒現在問的是哪個專案的哪個庫。 */
+.ui-next-chat-context{min-width:0;overflow:hidden;color:var(--text-muted);font-size:12px;white-space:nowrap;text-overflow:ellipsis}

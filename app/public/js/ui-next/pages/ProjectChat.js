@@ -15,6 +15,9 @@
         showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] }, taskError: "", taskModalTrigger: null,
         replyPending: false, pendingFiles: [], pendingPreviews: [], attachUrls: {},
         pendingHint: false, pollTicks: 0, stopping: false, resending: false, optimisticText: "",
+        // 這場對話綁的專案與查證來源。首頁選完就固定了，但畫面上要看得到——
+        // 換了幾輪追問之後，「這是在問哪個專案的哪個庫」是最常忘記的事。
+        dbConnections: [],
         projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, historyQuery: "", historyMenuId: null, chatError: "", chatsError: "", creatingChat: false, requestId: 0, replyTimer: null };
     },
     computed: {
@@ -57,6 +60,18 @@
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       },
+      // 來源顯示成人看得懂的名字：db:<id> 要對回連線名稱（一個專案可以掛好幾個庫）。
+      dataSourceLabel() {
+        const value = this.activeChat && this.activeChat.data_source;
+        if (!value) return "";
+        if (value === "test_env") return "平台測試環境";
+        const hit = this.dbConnections.find((conn) => `db:${conn.id}` === value);
+        return hit ? hit.name : "指定的資料庫";
+      },
+      async loadDbConnections() {
+        try { this.dbConnections = await Api.get(`projects/${this.$route.params.id}/db-connections`) || []; }
+        catch (error) { this.dbConnections = []; }
+      },
       async loadChats() {
         const requestId = ++this.requestId;
         this.activeChat = null; this.messages = []; this.loadingMsgs = true; this.chatsError = "";
@@ -64,6 +79,7 @@
           const chats = await Api.get(`projects/${this.$route.params.id}/chats`);
           if (requestId !== this.requestId) return;
           this.chats = chats || [];
+          this.loadDbConnections();
           const chatId = this.$route.params.chatId;
           this.activeChat = this.chats.find((chat) => String(chat.id) === String(chatId)) || null;
           // ?pending=1 是「新對話」把人送過來時帶的旗標：那邊的訊息 POST 是不等待就換頁的，
@@ -341,6 +357,7 @@
 <div class="ui-next-composer-options">
 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
 <button type="button" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
+<span v-if="projectName" class="ui-next-chat-context">{{ projectName }}<template v-if="dataSourceLabel()"> · {{ dataSourceLabel() }}</template></span>
 <span class="ui-next-composer-hint">Enter 送出 · Shift + Enter 換行 · 可直接貼上截圖</span>
 </div>
 <button v-if="sending||replyPending" type="button" class="ui-next-thread-send" :disabled="stopping" aria-label="停止回覆" title="停止回覆" @click="stopReply"><ui-next-icon name="square"/></button>
