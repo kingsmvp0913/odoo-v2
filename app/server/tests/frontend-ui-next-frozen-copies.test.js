@@ -25,14 +25,14 @@ const path = require("path");
 const publicDir = path.join(__dirname, "../../public");
 const read = (file) => fs.readFileSync(path.join(publicDir, file), "utf8");
 
-// Next 這一側的 View 拆檔拆到一半：跑在全域範圍的那批已經搬進 pages/，
-// 仍在 UiNextPages.js 那個 IIFE 內的（目前是 UiNextAdminUsersView）還沒搬。
-// 用「檔案在不在」判斷而不是寫死清單——搬完剩下的那些時這裡不必再改。
+// Next 這一側的 View 已全部拆進 pages/，檔名＝元件名去掉 UiNext 前綴與 View 後綴。
+// 找不到就直接失敗，不要退回某個「大概在那裡」的檔——那會讓比對悄悄比到錯的東西。
 const nextFileFor = (nextName) => {
   const candidate = `js/ui-next/pages/${nextName.replace(/^UiNext|View$/g, "")}.js`;
-  return fs.existsSync(path.join(publicDir, candidate))
-    ? candidate
-    : "js/ui-next/UiNextPages.js";
+  if (!fs.existsSync(path.join(publicDir, candidate))) {
+    throw new Error(`找不到 ${nextName} 對應的檔案 ${candidate}——元件被改名或搬走了？`);
+  }
+  return candidate;
 };
 
 // [Next 元件名, Legacy 來源檔, Legacy 元件名]

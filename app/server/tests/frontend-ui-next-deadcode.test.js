@@ -17,12 +17,13 @@
 const fs = require('fs');
 const path = require('path');
 
-// View 拆檔後仍要全部掃到。只讀 UiNextPages.js 會讓 pages/ 內那批的死碼靜默不再被檢查，
-// 而症狀是「測試照樣全綠」。列舉目錄，新增的檔案自動涵蓋。
+// View 已全部拆進 pages/。列舉目錄而不是寫死清單：漏列一個檔的症狀是那支 View 的
+// 死碼不再被檢查，而測試照樣全綠。
 const uiNextDir = path.join(__dirname, '../../public/js/ui-next');
 const pagesDir = path.join(uiNextDir, 'pages');
+// UiNextShared.js 一併掃：共用的小元件（StatusBar／WikiNode）住在那裡。
 const SRC = [
-  fs.readFileSync(path.join(uiNextDir, 'UiNextPages.js'), 'utf8'),
+  fs.readFileSync(path.join(uiNextDir, 'UiNextShared.js'), 'utf8'),
   ...fs.readdirSync(pagesDir).filter((f) => f.endsWith('.js'))
     .map((f) => fs.readFileSync(path.join(pagesDir, f), 'utf8')),
 ].join('\n');

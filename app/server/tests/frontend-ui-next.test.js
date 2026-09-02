@@ -8,14 +8,21 @@ describe("ui-next 平行介面", () => {
   const index = read("index.html");
   const app = read("js/app.js");
   const uiNext = read("js/ui-next/UiNextApp.js");
-  // View 拆檔後，「Next 的頁面碼」不再只在 UiNextPages.js 裡。
-  // 只讀那一檔會讓 pages/ 內那批的斷言靜默失去對象——測試照樣全綠，但已經沒在檢查了。
+  // 「Next 的頁面碼」現在散在 pages/ 各檔。列舉目錄而不是寫死清單：
+  // 漏列一個檔的症狀是針對它的斷言靜默失去對象——測試照樣全綠，但已經沒在檢查了。
   const pagesDir = path.join(__dirname, "../../public/js/ui-next/pages");
+  // UiNextShared.js 一併讀：共用的小元件（StatusBar／WikiNode）住在那裡，漏掉它
+  // 等於針對那些元件的斷言全部失去對象。
   const uiNextPages = [
-    read("js/ui-next/UiNextPages.js"),
+    read("js/ui-next/UiNextShared.js"),
     ...fs.readdirSync(pagesDir).filter((f) => f.endsWith(".js"))
       .map((f) => read(`js/ui-next/pages/${f}`)),
   ].join("\n");
+  // 取單一 View 的原始碼。拆檔前得在大字串裡「切兩個元件之間」，那寫法依賴元件在檔內的
+  // 先後順序——順序一變就默默切出空字串或別人的碼，而斷言照樣「通過」。現在一檔一 View，直接讀。
+  const viewSrc = (component) =>
+    read(`js/ui-next/pages/${component.replace(/^UiNext|View$/g, "")}.js`);
+
   const css = read("css/ui-next.css");
   const pagesCss = read("css/ui-next-pages.css");
 
@@ -41,7 +48,7 @@ describe("ui-next 平行介面", () => {
     expect(index).toContain("css/ui-next.css");
     expect(index).toContain("css/ui-next-pages.css");
     expect(index).toContain("js/ui-next/UiNextApp.js");
-    expect(index).toContain("js/ui-next/UiNextPages.js");
+    expect(index).toContain("js/ui-next/UiNextShared.js");
     expect(css).toContain(".ui-next-shell");
     expect(pagesCss).toContain(".ui-next-chat-page");
     expect(index).toContain("window.UiVersion === 'next'");
@@ -50,6 +57,13 @@ describe("ui-next 平行介面", () => {
     // 漏掉的話那些 window.UiNextXxxView 不存在，路由拿到 undefined 元件即白畫面。
     expect(index).toContain("js/ui-next/pages/");
     expect(index).toContain("document.write(src.map(");
+  });
+
+  // 有幾個 pages/ 檔在載入當下就從 window.UiNextShared 解構取 helper。
+  // shared 排到它們後面的話拿到的是 undefined，那幾支檔直接拋錯不執行 —— 白畫面。
+  test("UiNextShared.js 排在 pages/ 之前", () => {
+    expect(index.indexOf("UiNextShared.js")).toBeGreaterThan(-1);
+    expect(index.indexOf("UiNextShared.js")).toBeLessThan(index.indexOf("js/ui-next/pages/"));
   });
 
   // 載入清單漏一個檔＝那一頁白畫面，而且 index.html 看起來完全正常。
@@ -285,20 +299,14 @@ describe("ui-next 平行介面", () => {
         new RegExp(`window\\.${name}\\.(?:data|computed|watch|methods|created|mounted|beforeUnmount|unmounted)`),
       );
     });
-    const projectDetail = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextProjectDetailView"'),
-      uiNextPages.indexOf('name: "UiNextTaskDetailView"'),
-    );
+    const projectDetail = viewSrc("UiNextProjectDetailView");
     expect(projectDetail).not.toMatch(
       /window\.ProjectDetailView\.(?:data|computed|watch|methods|created|mounted|beforeUnmount|unmounted)/,
     );
   });
 
   test("Wiki 新增頁面視窗保留焦點、取消與失敗回饋", () => {
-    const wiki = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextWikiView"'),
-      uiNextPages.indexOf('name: "UiNextDeploySopView"'),
-    );
+    const wiki = viewSrc("UiNextWikiView");
     expect(wiki).toContain('trapAddPageFocus(event)');
     expect(wiki).toContain('ref="wikiAddModal"');
     expect(wiki).toContain('role="dialog"');
@@ -551,10 +559,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("任務詳情與管理頁的主要操作維持在頁首，新增使用者改用彈窗", () => {
-    const users = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextAdminUsersView"'),
-      uiNextPages.indexOf('name: "UiNextAdminSettingsView"'),
-    );
+    const users = viewSrc("UiNextAdminUsersView");
     expect(uiNextPages).toContain("task.status==='done'&&!task.is_hidden");
     expect(uiNextPages).toContain('<ui-next-icon name="arrow-left"/> 返回');
     expect(uiNextPages).not.toContain("task.project_name || '專案任務'");
@@ -567,10 +572,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("Agent 管理首次開啟時預設顯示 CLAUDE.md，全域健檢預填仍優先", () => {
-    const agents = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextAdminAgentsView"'),
-      uiNextPages.indexOf('name: "UiNextAdminSchedulesView"'),
-    );
+    const agents = viewSrc("UiNextAdminAgentsView");
     expect(agents).toContain("const name = this.$route.query.prefill;");
     expect(agents).toContain("await this.select({ name: 'CLAUDE' });");
     expect(agents).toContain("if (name) {");
@@ -595,10 +597,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("有內容的專案對話專注訊息與 Composer，建立任務緊鄰上傳附件", () => {
-    const chat = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextProjectChatView"'),
-      uiNextPages.indexOf('name: "UiNextProjectDetailView"'),
-    );
+    const chat = viewSrc("UiNextProjectChatView");
     const activeChat = chat.slice(chat.indexOf('<template v-if="activeChat">'), chat.indexOf('<template v-else>'));
     expect(activeChat).not.toContain('ui-next-thread-head');
     expect(activeChat).not.toContain('{{ projectName }}');
@@ -608,10 +607,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("Chat 建立任務 Overlay 可關閉、圈限焦點並保留失敗內容", () => {
-    const chat = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextProjectChatView"'),
-      uiNextPages.indexOf('name: "UiNextProjectDetailView"'),
-    );
+    const chat = viewSrc("UiNextProjectChatView");
     expect(chat).toContain('onTaskModalKeydown(event)');
     expect(chat).toContain('ref="chatTaskModal"');
     expect(chat).toContain('closeTaskModal()');
@@ -620,10 +616,7 @@ describe("ui-next 平行介面", () => {
   });
 
   test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {
-    const projects = uiNextPages.slice(
-      uiNextPages.indexOf('name: "UiNextProjectListView"'),
-      uiNextPages.indexOf('name: "UiNextWikiView"'),
-    );
+    const projects = viewSrc("UiNextProjectListView");
     expect(projects).toContain('folderNameError()');
     expect(projects).toContain('openAddForm()');
     expect(projects).toContain('closeAddForm()');
