@@ -817,7 +817,7 @@
 .ui-next-project-card-title .ui-next-project-more button,
 .ui-next-project-card-title > button[aria-label*="我的最愛"]{display:grid;place-items:center;width:26px;height:26px;border-radius:8px;transition:background-color .12s ease}
 .ui-next-project-card-title .ui-next-project-more button:hover,
-.ui-next-project-card-title > button[aria-label*="我的最愛"]:hover{background:color-mix(in srgb,var(--text) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 20%,transparent),0 2px 6px color-mix(in srgb,#000 38%,transparent)}
+.ui-next-project-card-title > button[aria-label*="我的最愛"]:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
 /* 標籤那排原本緊貼標題（間距 0），而標題與版本號之間有 8px——三行看起來是 2+1 而不是 3。 */
 .ui-next-project-grid-rich .ui-next-project-facts{margin-top:8px}
 /* 整張卡都能點進詳情（更多與我的最愛各自 stop 掉，不會被蓋住）。 */
@@ -826,3 +826,8 @@
 
 
 
+
+/* 選單是卡片的子節點，z-index:3 只在自己那張卡的堆疊裡有效——後面幾張卡整張都畫在
+   它上面，選單一展開就被隔壁卡片的「更多」壓住（點不到也看不全）。
+   展開時把整張卡提到上層。 */
+.ui-next-project-grid-rich article:has(.ui-next-project-more-menu){position:relative;z-index:20}
