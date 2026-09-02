@@ -543,3 +543,12 @@
 .ui-next-qa-ask-foot .ui-next-icon-button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
 .ui-next-qa-ask-foot>span{min-width:0;overflow:hidden;color:var(--text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .ui-next-qa-ask-foot .ui-next-primary{margin-left:auto;white-space:nowrap}
+
+/* 規格審核的規格書一長，整個動作面板就高過畫面（實測 963px / 視窗 900px）。面板是 sticky 在
+   底部的，被頂出去的是頂端——標題列連同「縮小」鈕停在 y=-82，捲動也追不回來。
+   規格書自己捲、面板高度封頂、標題列黏在面板頂端，縮小鈕才一直點得到。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-height:calc(100dvh - 24px);overflow-y:auto}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) .ui-next-task-action-head{position:sticky;top:-14px;z-index:3;margin:-14px -16px 0;padding:14px 16px 8px;background:var(--surface)}
+.ui-next-task-action .ui-next-spec-box{max-height:46dvh;overflow-y:auto;overscroll-behavior:contain}
+/* composer 自己有 gap:9px，inline-actions 再帶 margin-top 就變成兩倍間距。 */
+.ui-next-qa-ask-composer .ui-next-inline-actions{margin:0}

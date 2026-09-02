@@ -1131,11 +1131,15 @@
 </template>
 </div>
 <p v-else>請確認規格後開始實作。</p>
+<!-- 輸入框與兩個動作收進同一個 composer 框，和上方規格書分開：裸 textarea 貼在規格書下面時，
+     看不出哪裡是「讀」哪裡是「寫」。框樣式沿用規格書 QA 的提問 composer。 -->
+<div class="ui-next-qa-ask-composer">
 <textarea v-model="specFeedback" placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="specRevise" @input="autoResize">
 </textarea>
 <div class="ui-next-inline-actions">
 <button @click="specRevise" :disabled="specRevising||!specFeedback.trim()">{{ specRevising?'送出中…':'要求調整' }}</button>
 <button class="ui-next-primary" @click="specApprove" :disabled="specApproving">{{ specApproving?'處理中…':'確認開工' }}</button>
+</div>
 </div>
 </template>
 <template v-else-if="timelineActionMode==='review'">
