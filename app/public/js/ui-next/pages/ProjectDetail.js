@@ -196,20 +196,22 @@
 <p>顯示在專案清單與側欄的名稱與備註。</p>
 <label>專案名稱<input v-model="editName" autocomplete="off"></label>
 <label>專案備註<textarea v-model="editDescription" placeholder="這個專案在做什麼、有什麼要注意的"></textarea></label>
-<button class="ui-next-primary" @click="saveBasics" :disabled="savingBasics||!editName.trim()">{{ savingBasics?'儲存中…':'儲存' }}</button>
 <template v-if="isAdmin()">
-<div class="ui-next-settings-divider"></div>
 <label class="ui-next-inline-field">Odoo 版本類型
 <select v-model="editEdition" @change="saveEdition" :disabled="savingEdition">
 <option value="community">社群版（Community）</option>
 <option value="enterprise">企業版（Enterprise）</option>
 </select>
 </label>
+<div class="ui-next-inline-field">E2E 測試
 <label class="ui-next-toggle ui-next-toggle-row">
 <input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e">
-<span></span>{{ editE2eEnabled?'E2E 測試啟用中':'已停用 E2E 測試' }}</label>
-<small class="ui-next-field-note">E2E 會依驗收條件建立並在部署後執行。</small>
+<span></span>{{ editE2eEnabled?'啟用中':'已停用' }}</label>
+</div>
 </template>
+<div class="ui-next-panel-actions">
+<button class="ui-next-primary" @click="saveBasics" :disabled="savingBasics||!editName.trim()">{{ savingBasics?'儲存中…':'儲存' }}</button>
+</div>
 </div>
 <div class="ui-next-panel">
 <h2>同步來源對應</h2>
@@ -223,7 +225,9 @@
 <label>主要聯絡人<textarea v-model="editServiceContactName" placeholder="一行一個完整名稱">
 </textarea>
 </label>
+<div class="ui-next-panel-actions">
 <button class="ui-next-primary" @click="saveProjectMapping">儲存對應</button>
+</div>
 </div>
 
 </section>

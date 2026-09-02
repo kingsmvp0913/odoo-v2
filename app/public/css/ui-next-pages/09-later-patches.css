@@ -854,7 +854,10 @@
 /* 專案設定：測試流程與版本類型併進「基本資料」後，需要一條分隔與一組橫向欄位。
    ⚠ 那個開關原本吃 .ui-next-toggle 的 grid 版型，在這張卡裡被拉成整條寬（軌道橫跨
    整個面板、圓鈕停在最左邊）——改成 inline-flex，讓它只佔自己該佔的寬度。 */
-.ui-next-settings-divider{height:1px;margin:4px 0 2px;background:var(--border)}
+/* 兩張卡等高並排時，儲存鈕各自停在自己內容的下緣（一張在中間、一張在底部）。
+   面板改 flex 直排、動作列 margin-top:auto，兩顆鈕就都落在右下同一條線上。 */
+.ui-next-project-settings .ui-next-panel{display:flex;flex-direction:column}
+.ui-next-panel-actions{display:flex;justify-content:flex-end;margin-top:auto;padding-top:14px}
 .ui-next-project-settings .ui-next-inline-field{display:grid;gap:5px;color:var(--text-secondary);font-size:12px}
 .ui-next-project-settings .ui-next-inline-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--border-strong);border-radius:8px;padding:0 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
 .ui-next-project-settings .ui-next-toggle-row{display:flex;align-items:center;gap:10px;width:100%;color:var(--text);font-size:13px;white-space:nowrap}
