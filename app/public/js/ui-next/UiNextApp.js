@@ -311,8 +311,9 @@
                     <p v-if="!filteredProjects.length">找不到符合的專案</p>
                   </div>
                 </div>
+                <span v-if="projectId" class="ui-next-context-sep" aria-hidden="true">·</span>
                 <select v-if="projectId" v-model="dataSource" class="ui-next-source-select" aria-label="優先查證的資料來源" title="這場對話優先從哪裡找資料；不選則由 AI 自己判斷">
-                  <option value="">資料來源：自動</option>
+                  <option value="">自動</option>
                   <option value="test_env">平台測試環境</option>
                   <option v-for="conn in dbConnections" :key="conn.id" :value="'db:' + conn.id">{{ conn.name }}</option>
                 </select>

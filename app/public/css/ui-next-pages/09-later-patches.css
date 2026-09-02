@@ -657,9 +657,13 @@
 .ui-next-project-picker-trigger:hover:not(:disabled),.ui-next-project-picker-trigger:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
 .ui-next-project-picker-trigger::placeholder{color:var(--text-muted);opacity:1}
 .ui-next-project-picker-options p{margin:0;padding:8px 10px;color:var(--text-muted);font-size:12px}
-/* 資料來源選單：與專案選擇器同一列、同一個分量。 */
-.ui-next-source-select{max-width:160px;border:0;padding:2px 4px;border-radius:8px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;outline:0;cursor:pointer}
-.ui-next-source-select:hover,.ui-next-source-select:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+/* 資料來源選單：與專案選擇器同一列、同一個分量。
+   ⚠ 選擇器要帶上 .ui-next-composer——ui-next.css 有一條 `.ui-next-composer select`（0,1,1），
+   單一 class 的 .ui-next-source-select（0,1,0）壓不過它，字級與顏色會整組失效。 */
+.ui-next-composer .ui-next-source-select{max-width:170px;border:0;padding:2px 4px;border-radius:8px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;outline:0;cursor:pointer}
+.ui-next-composer .ui-next-source-select:hover,.ui-next-composer .ui-next-source-select:focus{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+/* 專案與來源是一組（「問哪個專案的哪個庫」），中間用一個點連起來，不各自寫標題。 */
+.ui-next-context-sep{color:var(--text-muted);font-size:12px}
 /* 對話頁 composer 下的「專案 · 資料來源」：與首頁選完之後那排同一個分量（小字、次要色）。
    它是唯讀的——來源在開新對話時就定了，這裡只是提醒現在問的是哪個專案的哪個庫。 */
 .ui-next-chat-context{min-width:0;overflow:hidden;color:var(--text-muted);font-size:12px;white-space:nowrap;text-overflow:ellipsis}
