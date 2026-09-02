@@ -665,8 +665,6 @@
    （自訂 listbox、跟著網站配色）長得完全不一樣。改成同一套自訂清單。 */
 .ui-next-source-picker{position:relative}
 .ui-next-composer .ui-next-source-trigger{max-width:170px;overflow:hidden;border:0;padding:0;background:transparent;color:var(--text);font:inherit;font-size:12px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap;outline:0;cursor:pointer}
-/* 專案與來源是一組（「問哪個專案的哪個庫」），中間用一個點連起來，不各自寫標題。 */
-.ui-next-context-sep{color:var(--text-muted);font-size:12px}
 /* 比照 AskMe 的 composer 底排：每個可選項都是「小圖示＋文字＋下拉」，文字用主色不是灰的，
    整排看起來是同一組控制項而不是三種東西。 */
 /* 三者等高（附件鈕、專案、來源）：原本是 31 / 23 / 21，focus 起來高度各自不同，
@@ -677,9 +675,12 @@
 /* select 的原生外觀（連同瀏覽器自己畫的箭頭）與旁邊的 chip 對不起來：關掉，
    箭頭改用我們自己的圖示，才和專案那格是同一套。 */
 
-.ui-next-composer-chip > .ui-next-icon:last-child{width:12px;height:12px;opacity:.75}
+.ui-next-composer-chip > .ui-next-icon:last-child{opacity:.7}
 .ui-next-composer-chip:focus-within{background:color-mix(in srgb,var(--text) 8%,transparent)}
-.ui-next-composer-chip .ui-next-icon{width:14px;height:14px;flex:none}
+/* 底排的圖示一律 14px：原本附件 17、chip 內 14、箭頭 12，三種大小配同一行 12px 的字，
+   看起來就不是同一組（AskMe 那排的圖示與文字是等大的）。 */
+.ui-next-composer-chip .ui-next-icon,
+.ui-next-composer .ui-next-icon-button .ui-next-icon{width:14px;height:14px;flex:none}
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger{padding:0;border-radius:0;color:var(--text)}
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:hover:not(:disabled),
 .ui-next-composer .ui-next-composer-chip .ui-next-project-picker-trigger:focus{background:transparent}
@@ -706,9 +707,10 @@
 .ui-next-chat-tab-list button:hover,
 .ui-next-composer .ui-next-icon-button:hover,
 .ui-next-composer-chip:hover{background:color-mix(in srgb,var(--surface) 34%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 24%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 45%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 24%,transparent),0 4px 10px color-mix(in srgb,#000 48%,transparent)}
-/* 目前所在的那一項要更明確：描邊更實、底色更沉，一眼看得出「我在這裡」。
-   上緣一條亮邊＋下方一團落影＝浮起來的實體感；只有外框的話還是像平的貼紙。 */
-.ui-next-sidebar .ui-next-nav.is-active{background:color-mix(in srgb,var(--surface) 52%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sidebar-active) 34%,transparent),inset 0 -1px 0 color-mix(in srgb,#000 55%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 34%,transparent),0 6px 16px color-mix(in srgb,#000 60%,transparent)}
+/* 目前所在的那一項：底色沉一點、一圈描邊就夠，不做立體——立體留給滑鼠停在上面時，
+   兩者都浮起來的話，分不出「我在這裡」和「我指著這裡」。 */
+.ui-next-sidebar .ui-next-nav.is-active{background:color-mix(in srgb,var(--surface) 38%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 26%,transparent)}
+.ui-next-sidebar .ui-next-project-head.is-current{border-radius:7px;background:color-mix(in srgb,var(--surface) 30%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sidebar-active) 22%,transparent)}
 /* 鍵盤焦點比照專案頁的對話清單：一圈 outline 就好，不跟著做立體——
    立體是給「滑鼠停在上面」與「目前所在」用的，焦點框再疊上去會分不出誰是誰。 */
 .ui-next-sidebar .ui-next-nav:focus-visible,

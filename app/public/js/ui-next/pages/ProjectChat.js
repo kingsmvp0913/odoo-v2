@@ -357,7 +357,7 @@
 <div class="ui-next-composer-options">
 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
 <button type="button" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
-<span v-if="projectName" class="ui-next-chat-context">{{ projectName }}<template v-if="dataSourceLabel()"> <span class="ui-next-context-sep">·</span> {{ dataSourceLabel() }}</template></span>
+<span v-if="projectName" class="ui-next-chat-context">{{ projectName }}<template v-if="dataSourceLabel()"> · {{ dataSourceLabel() }}</template></span>
 <span class="ui-next-composer-hint">Enter 送出 · Shift + Enter 換行 · 可直接貼上截圖</span>
 </div>
 <button v-if="sending||replyPending" type="button" class="ui-next-thread-send" :disabled="stopping" aria-label="停止回覆" title="停止回覆" @click="stopReply"><ui-next-icon name="square"/></button>
