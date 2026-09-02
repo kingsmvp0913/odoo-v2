@@ -31,6 +31,8 @@
         chartW: 800,
         chartH: 220,
         chartObserver: null,
+        // 同時只會 hover 一個地方，所以三張卡共用一個 key（key 本身已帶卡片別）。
+        hoverShare: "",
         filters: {
           range: "30",
           start: "",
@@ -138,13 +140,13 @@
       // Legacy 用三張 SVG 圓餅呈現 Agent／專案／使用者的占比。這裡改成「百分比＋顏色」清單版：
       // 資訊等價（顏色沿用同一份對照），少一套繪圖與放大 modal 的碼。
       agentShares() {
-        return this.shareRows(this.report && this.report.by_agent, (row) => this.agentLabel(row.agent_type), (row) => agentColor(row.agent_type));
+        return this.shareRows(this.report && this.report.by_agent, (row) => this.agentLabel(row.agent_type), (row) => agentColor(row.agent_type), "agent");
       },
       projectShares() {
-        return this.shareRows(this.report && this.report.by_project, (row) => row.project_name, (row, index) => catColor(index));
+        return this.shareRows(this.report && this.report.by_project, (row) => row.project_name, (row, index) => catColor(index), "project");
       },
       userShares() {
-        return this.shareRows(this.report && this.report.by_user, (row) => row.username, (row, index) => catColor(index));
+        return this.shareRows(this.report && this.report.by_user, (row) => row.username, (row, index) => catColor(index), "user");
       },
       agentPie() { return this.pieSlices(this.agentShares); },
       projectPie() { return this.pieSlices(this.projectShares); },
@@ -268,6 +270,11 @@
       },
       // 扇形路徑。幾何與 Legacy 版同源，包含那個「整圓」的特例：只有一筆資料時起訖點重合，
       // A 弧會退化成畫不出來（畫面一片空白），要改用上下兩段半弧拼成整圓。
+      // 只有同一張卡裡「不是被指到的那一塊」才變暗。
+      isDimmed(key) {
+        if (!this.hoverShare || this.hoverShare === key) return false;
+        return this.hoverShare.split("::")[0] === key.split("::")[0];
+      },
       pieSlices(rows) {
         const total = rows.reduce((sum, row) => sum + row.tokens, 0);
         if (!total) return [];
@@ -286,11 +293,13 @@
           return { ...row, d: `M${cx},${cy} L${x0},${y0} A${radius},${radius},0,${frac > 0.5 ? 1 : 0},1,${x1},${y1}Z` };
         });
       },
-      shareRows(rows, labelOf, colorOf) {
+      shareRows(rows, labelOf, colorOf, card) {
         const list = rows || [];
         const total = list.reduce((sum, row) => sum + Number(row.tokens || 0), 0);
         return list.map((row, index) => ({
-          key: `${labelOf(row, index)}#${index}`,
+          // key 帶卡片別：三張卡共用一個 hover 狀態，不分家的話指著專案那張，
+          // 另外兩張的扇形也會一起變暗。
+          key: `${card}::${labelOf(row, index)}#${index}`,
           label: labelOf(row, index),
           tokens: Number(row.tokens || 0),
           color: colorOf(row, index),
@@ -430,11 +439,11 @@
 <article class="ui-next-panel">
 <h2>依專案</h2>
 <div class="ui-next-share-body">
-<svg v-if="projectPie.length" class="ui-next-share-pie" viewBox="0 0 180 180" width="150" height="150" role="img" :aria-label="'依專案占比圖'">
-<path v-for="slice in projectPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" opacity="0.9"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
+<svg v-if="projectPie.length" class="ui-next-share-pie" viewBox="0 0 184 184" width="210" height="210" role="img" :aria-label="'依專案占比圖'">
+<path v-for="slice in projectPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" :class="{'is-active':hoverShare===slice.key,'is-dim':isDimmed(slice.key)}" @mouseenter="hoverShare=slice.key" @mouseleave="hoverShare=''"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
 </svg>
 <div class="ui-next-share-legend">
-<div class="ui-next-share-row" v-for="row in projectShares" :key="row.key">
+<div class="ui-next-share-row" v-for="row in projectShares" :key="row.key" :class="{'is-active':hoverShare===row.key}" @mouseenter="hoverShare=row.key" @mouseleave="hoverShare=''">
 <i :style="{background:row.color}"></i>
 <span :title="row.label">{{ row.label }}</span>
 <b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
@@ -447,11 +456,11 @@
 <article class="ui-next-panel">
 <h2>依 Agent</h2>
 <div class="ui-next-share-body">
-<svg v-if="agentPie.length" class="ui-next-share-pie" viewBox="0 0 180 180" width="150" height="150" role="img" :aria-label="'依 Agent占比圖'">
-<path v-for="slice in agentPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" opacity="0.9"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
+<svg v-if="agentPie.length" class="ui-next-share-pie" viewBox="0 0 184 184" width="210" height="210" role="img" :aria-label="'依 Agent占比圖'">
+<path v-for="slice in agentPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" :class="{'is-active':hoverShare===slice.key,'is-dim':isDimmed(slice.key)}" @mouseenter="hoverShare=slice.key" @mouseleave="hoverShare=''"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
 </svg>
 <div class="ui-next-share-legend">
-<div class="ui-next-share-row" v-for="row in agentShares" :key="row.key">
+<div class="ui-next-share-row" v-for="row in agentShares" :key="row.key" :class="{'is-active':hoverShare===row.key}" @mouseenter="hoverShare=row.key" @mouseleave="hoverShare=''">
 <i :style="{background:row.color}"></i>
 <span :title="row.label">{{ row.label }}</span>
 <b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
@@ -464,11 +473,11 @@
 <article class="ui-next-panel">
 <h2>依使用者</h2>
 <div class="ui-next-share-body">
-<svg v-if="userPie.length" class="ui-next-share-pie" viewBox="0 0 180 180" width="150" height="150" role="img" :aria-label="'依使用者占比圖'">
-<path v-for="slice in userPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" opacity="0.9"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
+<svg v-if="userPie.length" class="ui-next-share-pie" viewBox="0 0 184 184" width="210" height="210" role="img" :aria-label="'依使用者占比圖'">
+<path v-for="slice in userPie" :key="slice.key" :d="slice.d" :style="{fill:slice.color}" :class="{'is-active':hoverShare===slice.key,'is-dim':isDimmed(slice.key)}" @mouseenter="hoverShare=slice.key" @mouseleave="hoverShare=''"><title>{{ slice.label }}：{{ fmtNumber(slice.tokens) }}（{{ slice.pct.toFixed(1) }}%）</title></path>
 </svg>
 <div class="ui-next-share-legend">
-<div class="ui-next-share-row" v-for="row in userShares" :key="row.key">
+<div class="ui-next-share-row" v-for="row in userShares" :key="row.key" :class="{'is-active':hoverShare===row.key}" @mouseenter="hoverShare=row.key" @mouseleave="hoverShare=''">
 <i :style="{background:row.color}"></i>
 <span :title="row.label">{{ row.label }}</span>
 <b :title="fmtNumber(row.tokens)">{{ fmtCompact(row.tokens) }}</b>
