@@ -729,6 +729,9 @@
 .ui-next-composer .ui-next-send,.ui-next-thread-composer .ui-next-thread-send{opacity:1;background:color-mix(in srgb,var(--text) 14%,var(--surface));color:var(--text-muted)}
 .ui-next-composer .ui-next-send:not(:disabled),.ui-next-thread-composer .ui-next-thread-send:not(:disabled){background:var(--text);color:var(--surface)}
 .ui-next-composer .ui-next-send:not(:disabled):hover,.ui-next-thread-composer .ui-next-thread-send:not(:disabled):hover{background:var(--primary);color:var(--surface)}
+/* 送出中那顆雖然是 disabled（點了也沒用，正在送），但它是「現在正在進行」的指示，
+   套上停用的灰會讓人以為卡住了。維持亮底。 */
+.ui-next-composer .ui-next-send[aria-label="送出中"]{background:var(--text);color:var(--surface)}
 .ui-next-thread-send .ui-next-icon{transform:translate(1px,-1px)}
 
 /* 4) 下拉清單：項目字級 14px、內距 9px，比它上面那排 12px 的字大了一整級，

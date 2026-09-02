@@ -44,7 +44,7 @@
       <path v-else-if="name==='download'" d="M12 3v12m0 0 4.2-4.2M12 15l-4.2-4.2M4 19h16"/>
       <path v-else-if="name==='wrench'" d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/>
       <path v-else-if="name==='enter'" d="m9 10-4 4 4 4M5 14h9a4 4 0 0 0 4-4V6"/>
-      <rect v-else-if="name==='square'" x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>
+      <rect v-else-if="name==='square'" x="4" y="4" width="16" height="16" rx="3.2" fill="currentColor" stroke="none"/>
     </svg>`,
   });
   window.UiNextIcon = UiNextIcon;
