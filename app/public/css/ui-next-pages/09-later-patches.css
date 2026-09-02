@@ -750,7 +750,8 @@
 /* 4) 下拉清單：項目字級 14px、內距 9px，比它上面那排 12px 的字大了一整級，
    而且完全沒有 hover——指上去沒有任何反應，看起來像壞掉的清單。 */
 .ui-next-project-picker-options button,.ui-next-source-picker .ui-next-project-picker-options button{padding:7px 9px;font-size:12px;transition:background-color .12s ease}
-.ui-next-project-picker-options button:hover,.ui-next-source-picker .ui-next-project-picker-options button:hover{background:color-mix(in srgb,var(--text) 10%,transparent)}
+/* 這兩份清單也是浮在 --surface 上的選單，與側欄右鍵選單同性質——吃同一組變數。 */
+.ui-next-project-picker-options button:hover,.ui-next-source-picker .ui-next-project-picker-options button:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
 .ui-next-project-picker-options button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 .ui-next-project-picker-options button[aria-selected=true]{background:color-mix(in srgb,var(--text) 7%,transparent);font-weight:650}
 /* 專案清單原本寬到 390px，掛在一個 70px 的輸入框下面很突兀 */
