@@ -17,10 +17,15 @@ const APP = fs.readFileSync(
   path.join(__dirname, '../../public/js/ui-next/UiNextApp.js'),
   'utf8',
 );
-const PAGES = fs.readFileSync(
-  path.join(__dirname, '../../public/js/ui-next/UiNextPages.js'),
-  'utf8',
-);
+// View 拆檔後仍要全部納入檢查。只讀 UiNextPages.js 會讓 pages/ 內那批靜默失去覆蓋，
+// 而症狀是「測試照樣全綠」——比直接漏檢更難發現。列舉目錄，新增的檔案自動涵蓋。
+const uiNextDir = path.join(__dirname, '../../public/js/ui-next');
+const pagesDir = path.join(uiNextDir, 'pages');
+const PAGES = [
+  fs.readFileSync(path.join(uiNextDir, 'UiNextPages.js'), 'utf8'),
+  ...fs.readdirSync(pagesDir).filter((f) => f.endsWith('.js'))
+    .map((f) => fs.readFileSync(path.join(pagesDir, f), 'utf8')),
+].join('\n');
 
 // 取出某個 class 起始的那個開標籤（含全部屬性），用於檢查屬性有沒有掛上。
 function openTagWithClass(src, className) {

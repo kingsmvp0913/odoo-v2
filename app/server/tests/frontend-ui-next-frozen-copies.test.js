@@ -25,7 +25,15 @@ const path = require("path");
 const publicDir = path.join(__dirname, "../../public");
 const read = (file) => fs.readFileSync(path.join(publicDir, file), "utf8");
 
-const NEXT_PAGES = "js/ui-next/UiNextPages.js";
+// Next 這一側的 View 拆檔拆到一半：跑在全域範圍的那批已經搬進 pages/，
+// 仍在 UiNextPages.js 那個 IIFE 內的（目前是 UiNextAdminUsersView）還沒搬。
+// 用「檔案在不在」判斷而不是寫死清單——搬完剩下的那些時這裡不必再改。
+const nextFileFor = (nextName) => {
+  const candidate = `js/ui-next/pages/${nextName.replace(/^UiNext|View$/g, "")}.js`;
+  return fs.existsSync(path.join(publicDir, candidate))
+    ? candidate
+    : "js/ui-next/UiNextPages.js";
+};
 
 // [Next 元件名, Legacy 來源檔, Legacy 元件名]
 //
@@ -153,22 +161,22 @@ const firstDifference = (nextLines, legacyLines) => {
   return null;
 };
 
-const drift = (nextName, legacyFile, legacyName, diff, nextLines, legacyLines) =>
+const drift = (nextName, nextFile, legacyFile, legacyName, diff, nextLines, legacyLines) =>
   [
     "",
     `【凍結複製漂移】${nextName} 與 ${legacyName} 不再一致。`,
     "",
-    `這兩段是**刻意逐字複製**的：${legacyFile} 的 ${legacyName} 與 ${NEXT_PAGES} 的 ${nextName}，`,
+    `這兩段是**刻意逐字複製**的：${legacyFile} 的 ${legacyName} 與 ${nextFile} 的 ${nextName}，`,
     "除了元件名稱那一行以外必須完全相同。這條紅燈代表其中一邊被改了、另一邊沒跟上——",
     "也就是同一個畫面在 Legacy 與 ?ui=next 下行為已經分岔，而且平常不會有任何訊號。",
     "",
     `正規化後行數：Next ${nextLines.length} 行 / Legacy ${legacyLines.length} 行`,
     `第一處差異在正規化後第 ${diff.index + 1} 行：`,
-    `  Next   (${NEXT_PAGES}): ${diff.next}`,
+    `  Next   (${nextFile}): ${diff.next}`,
     `  Legacy (${legacyFile}): ${diff.legacy}`,
     "",
     "修法（擇一）：",
-    `  1. 若是 Legacy 改了 → 把同樣的改動原封不動同步到 ${NEXT_PAGES} 裡 ${nextName} 的對應段落。`,
+    `  1. 若是 Legacy 改了 → 把同樣的改動原封不動同步到 ${nextFile} 裡 ${nextName} 的對應段落。`,
     `  2. 若是 Next 改了   → 把同樣的改動同步回 ${legacyFile}。`,
     "  3. 若是**刻意**要讓兩份分家（Next 版要長出 Legacy 沒有的行為）→ 把這一組從本檔的",
     "     FROZEN_COPIES 移除，並在該處註明分家的理由與日期。不要用放寬比對的方式讓它變綠。",
@@ -176,19 +184,23 @@ const drift = (nextName, legacyFile, legacyName, diff, nextLines, legacyLines) =
   ].join("\n");
 
 describe("ui-next 逐字複製的 View 必須與 Legacy 保持一致", () => {
-  const nextSource = read(NEXT_PAGES);
-  const legacySources = new Map();
-  for (const [, legacyFile] of FROZEN_COPIES) {
-    if (!legacySources.has(legacyFile)) legacySources.set(legacyFile, read(legacyFile));
-  }
+  const sources = new Map();
+  const sourceOf = (file) => {
+    if (!sources.has(file)) sources.set(file, read(file));
+    return sources.get(file);
+  };
 
-  const segments = FROZEN_COPIES.map(([nextName, legacyFile, legacyName]) => ({
-    nextName,
-    legacyFile,
-    legacyName,
-    next: extractComponent(nextSource, nextName),
-    legacy: extractComponent(legacySources.get(legacyFile), legacyName),
-  }));
+  const segments = FROZEN_COPIES.map(([nextName, legacyFile, legacyName]) => {
+    const nextFile = nextFileFor(nextName);
+    return {
+      nextName,
+      nextFile,
+      legacyFile,
+      legacyName,
+      next: extractComponent(sourceOf(nextFile), nextName),
+      legacy: extractComponent(sourceOf(legacyFile), legacyName),
+    };
+  });
 
   // -------------------------------------------------------------------------
   // 解析健全性：括號配對解析器一旦失效（元件改名、賦值寫法改寫、字串跳脫沒處理好），
@@ -211,7 +223,7 @@ describe("ui-next 逐字複製的 View 必須與 Legacy 保持一致", () => {
       (_name, index) => {
         const seg = segments[index];
         for (const [side, source, file, component] of [
-          ["Next", seg.next, NEXT_PAGES, seg.nextName],
+          ["Next", seg.next, seg.nextFile, seg.nextName],
           ["Legacy", seg.legacy, seg.legacyFile, seg.legacyName],
         ]) {
           const where = `${side} ${file} 的 ${component}`;
@@ -243,7 +255,7 @@ describe("ui-next 逐字複製的 View 必須與 Legacy 保持一致", () => {
       const diff = firstDifference(nextLines, legacyLines);
       if (diff) {
         throw new Error(
-          drift(seg.nextName, seg.legacyFile, seg.legacyName, diff, nextLines, legacyLines),
+          drift(seg.nextName, seg.nextFile, seg.legacyFile, seg.legacyName, diff, nextLines, legacyLines),
         );
       }
       expect(nextLines.join("\n")).toBe(legacyLines.join("\n"));

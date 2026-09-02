@@ -8,7 +8,14 @@ describe("ui-next 平行介面", () => {
   const index = read("index.html");
   const app = read("js/app.js");
   const uiNext = read("js/ui-next/UiNextApp.js");
-  const uiNextPages = read("js/ui-next/UiNextPages.js");
+  // View 拆檔後，「Next 的頁面碼」不再只在 UiNextPages.js 裡。
+  // 只讀那一檔會讓 pages/ 內那批的斷言靜默失去對象——測試照樣全綠，但已經沒在檢查了。
+  const pagesDir = path.join(__dirname, "../../public/js/ui-next/pages");
+  const uiNextPages = [
+    read("js/ui-next/UiNextPages.js"),
+    ...fs.readdirSync(pagesDir).filter((f) => f.endsWith(".js"))
+      .map((f) => read(`js/ui-next/pages/${f}`)),
+  ].join("\n");
   const css = read("css/ui-next.css");
   const pagesCss = read("css/ui-next-pages.css");
 
@@ -39,7 +46,18 @@ describe("ui-next 平行介面", () => {
     expect(pagesCss).toContain(".ui-next-chat-page");
     expect(index).toContain("window.UiVersion === 'next'");
     expect(index).toContain("document.write('<link rel=\"stylesheet\" href=\"css/ui-next.css?v=");
-    expect(index).toContain("document.write('<script src=\"js/ui-next/UiNextApp.js?v=");
+    // JS 由 ui-next 分支動態寫入，且拆出去的 pages/ 也要在同一批載入——
+    // 漏掉的話那些 window.UiNextXxxView 不存在，路由拿到 undefined 元件即白畫面。
+    expect(index).toContain("js/ui-next/pages/");
+    expect(index).toContain("document.write(src.map(");
+  });
+
+  // 載入清單漏一個檔＝那一頁白畫面，而且 index.html 看起來完全正常。
+  test("pages/ 內每個檔都被 index.html 列進載入清單", () => {
+    const listed = index.match(/var UI_NEXT_PAGES = \[([^\]]*)\]/)[1];
+    for (const file of fs.readdirSync(pagesDir).filter((f) => f.endsWith(".js"))) {
+      expect(listed).toContain(`'${file.replace(/\.js$/, "")}'`);
+    }
   });
 
   test("Next CSS 的每個 selector 都有專用 scope，不會污染 Legacy DOM", () => {

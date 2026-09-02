@@ -94,7 +94,18 @@
   <!-- ui-next 與既有 View 分離；版本判斷單一來源在 head 的 window.UiVersion。 -->
   <script>
     if (window.UiVersion === 'next') {
-      document.write('<script src="js/ui-next/UiNextApp.js?v=20260910"><\/script><script src="js/ui-next/UiNextPages.js?v=20260910"><\/script>');
+      // pages/ 內每個檔各定義一個 window.UiNextXxxView，彼此不相依，順序無關；
+      // 只要全部排在 app.js（建路由時才讀這些全域）之前即可。
+      var UI_NEXT_PAGES = [
+        'AdminSettings', 'AdminAgents', 'AdminSchedules', 'AdminHealthCheck',
+        'AdminRejections', 'AdminClassifySamples', 'AdminPromptLogs',
+        'AdminPortPool', 'AdminEnterprise', 'Architecture', 'PipelineFlow'
+      ];
+      var src = ['js/ui-next/UiNextApp.js', 'js/ui-next/UiNextPages.js']
+        .concat(UI_NEXT_PAGES.map(function (n) { return 'js/ui-next/pages/' + n + '.js'; }));
+      document.write(src.map(function (s) {
+        return '<script src="' + s + '?v=20260910"><\/script>';
+      }).join(''));
     }
   </script>
   <script src="js/socket.js"></script>

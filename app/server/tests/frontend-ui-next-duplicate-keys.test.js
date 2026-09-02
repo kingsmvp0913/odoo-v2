@@ -17,9 +17,13 @@
 const fs = require('fs');
 const path = require('path');
 
+// pages/ 是拆檔後各自獨立的 View。列舉目錄而不是寫死清單：
+// 漏列一個檔的症狀是那支 View 不再被檢查，而測試照樣全綠。
 const FILES = [
   'UiNextPages.js',
   'UiNextApp.js',
+  ...fs.readdirSync(path.join(__dirname, '../../public/js/ui-next/pages'))
+    .filter((f) => f.endsWith('.js')).map((f) => `pages/${f}`),
 ];
 
 // ── 解析：括號配對，跳過註解與三種引號（與 frontend-ui-next-deadcode 同一套） ──

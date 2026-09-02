@@ -1,0 +1,128 @@
+  window.UiNextAdminRejectionsView = Vue.defineComponent({
+    name: "UiNextAdminRejectionsView",
+    data() {
+      return {
+        rows: [],
+        total: 0,
+        loading: true,
+        deleting: false,
+        limit: 50,
+        offset: 0,
+        selected: {},   // { [id]: true }
+        expanded: {}    // { [id]: true } 原因展開全文
+      };
+    },
+    computed: {
+      selectedIds() { return Object.keys(this.selected).filter(id => this.selected[id]).map(Number); },
+      allChecked() { return this.rows.length > 0 && this.rows.every(r => this.selected[r.id]); },
+      statusLabel() { return { new: '待分類', classified: '已分類', error: '分類失敗' }; }
+    },
+    async created() { await this.load(); },
+    methods: {
+      async load() {
+        this.loading = true;
+        try {
+          const data = await Api.get(`admin/rejections?limit=${this.limit}&offset=${this.offset}`);
+          this.rows = data.rows || [];
+          this.total = data.total || 0;
+          this.selected = {};
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.loading = false; }
+      },
+      toggleAll(e) {
+        const on = e.target.checked;
+        const next = {};
+        if (on) this.rows.forEach(r => { next[r.id] = true; });
+        this.selected = next;
+      },
+      toggleExpand(id) { this.expanded = { ...this.expanded, [id]: !this.expanded[id] }; },
+      truncate(s) { s = s || ''; return s.length > 120 ? s.slice(0, 120) + '…' : s; },
+      fmtTime(ts) { return new Date(ts).toLocaleString('zh-TW'); },
+      async prev() { if (this.offset > 0) { this.offset = Math.max(0, this.offset - this.limit); await this.load(); } },
+      async next() { if (this.offset + this.limit < this.total) { this.offset += this.limit; await this.load(); } },
+      async deleteSelected() {
+        const ids = this.selectedIds;
+        if (!ids.length) return;
+        if (!await confirmDialog({ title: '刪除退回紀錄', message: `確定刪除選取的 ${ids.length} 筆退回原因？分類條目會一併清除，且無法復原。`, danger: true, confirmText: '刪除' })) return;
+        this.deleting = true;
+        try {
+          const r = await Api.post('admin/rejections/delete', { ids });
+          await this.load();
+          showToast(`已刪除 ${r.deleted} 筆`, 'success');
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.deleting = false; }
+      }
+    },
+    template: `
+      <div class="topbar ui-next-admin-head">
+        <h1>退回原因管理</h1>
+        <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
+      </div>
+      <div class="content">
+        <div>
+          <div class="settings-section">
+            <div class="arj-header-row">
+              <h2 class="section-title" style="margin:0">退回紀錄（共 {{ total }}）</h2>
+              <button class="btn btn-outline btn-sm" style="color:var(--error)"
+                :disabled="selectedIds.length === 0 || deleting" @click="deleteSelected">
+                {{ deleting ? '刪除中...' : '刪除選取（' + selectedIds.length + '）' }}
+              </button>
+            </div>
+            <div class="table-wrap table-cards-sm">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th style="width:32px"><input type="checkbox" :checked="allChecked" @change="toggleAll" /></th>
+                    <th class="arj-col-time">時間</th>
+                    <th>專案</th>
+                    <th>任務 ID</th>
+                    <th>原因</th>
+                    <th style="width:80px">狀態</th>
+                    <th style="width:60px">來源</th>
+                    <th style="width:60px">條目</th>
+                    <th>分類明細</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- empty-row：跨欄的單格列不該被卡片化拆開。少了它，手機上 .table-cards-sm
+                       的 ::before 會給這格留 88px 的欄名縮排（data-label 不存在時仍佔位），
+                       「載入中...」整條往右縮一截。空狀態那列本來就有，只有這列漏了。 -->
+                  <tr v-if="loading" class="empty-row"><td colspan="9" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
+                  <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="9">目前沒有退回紀錄</td></tr>
+                  <tr v-for="r in rows" :key="r.id">
+                    <td data-label="" class="td-checkbox"><input type="checkbox" :checked="!!selected[r.id]" @change="selected = { ...selected, [r.id]: $event.target.checked }" /></td>
+                    <td data-label="時間" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
+                    <td data-label="專案">{{ r.project_name || '—' }}</td>
+                    <td data-label="任務 ID" style="font-size:var(--fs-sm)">{{ r.task_id }}</td>
+                    <td data-label="原因" style="font-size:var(--fs-sm)">
+                      <span style="white-space:pre-wrap;word-break:break-word">{{ expanded[r.id] ? r.reason : truncate(r.reason) }}</span>
+                      <a v-if="(r.reason || '').length > 120" @click="toggleExpand(r.id)"
+                        class="arj-reason-toggle">
+                        {{ expanded[r.id] ? '收合' : '展開' }}
+                      </a>
+                    </td>
+                    <td data-label="狀態" style="font-size:var(--fs-sm)">{{ statusLabel[r.status] || r.status }}</td>
+                    <td data-label="來源" style="font-size:var(--fs-sm)">{{ r.source === 'qa' ? 'QA' : '人工' }}</td>
+                    <td data-label="條目" class="arj-col-center">{{ r.item_count }}</td>
+                    <td data-label="分類明細" style="font-size:var(--fs-sm)">
+                      <span v-if="!(r.items && r.items.length)" style="color:var(--text-muted)">—</span>
+                      <div v-for="(it, i) in r.items" :key="i"
+                        class="arj-item-row">
+                        <span class="pill pill-info" style="flex-shrink:0">{{ it.category }}</span>
+                        <span style="white-space:pre-wrap;word-break:break-word">{{ it.description }}</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="total > limit" class="arj-pagination-row">
+              <button class="btn btn-outline btn-sm" :disabled="offset === 0" @click="prev">← 上一頁</button>
+              <span style="font-size:var(--fs-sm);color:var(--text-muted)">{{ offset + 1 }}–{{ Math.min(offset + limit, total) }} / {{ total }}</span>
+              <button class="btn btn-outline btn-sm" :disabled="offset + limit >= total" @click="next">下一頁 →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `
+  });

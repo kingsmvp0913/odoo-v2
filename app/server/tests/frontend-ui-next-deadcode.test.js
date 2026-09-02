@@ -17,10 +17,15 @@
 const fs = require('fs');
 const path = require('path');
 
-const SRC = fs.readFileSync(
-  path.join(__dirname, '../../public/js/ui-next/UiNextPages.js'),
-  'utf8',
-);
+// View 拆檔後仍要全部掃到。只讀 UiNextPages.js 會讓 pages/ 內那批的死碼靜默不再被檢查，
+// 而症狀是「測試照樣全綠」。列舉目錄，新增的檔案自動涵蓋。
+const uiNextDir = path.join(__dirname, '../../public/js/ui-next');
+const pagesDir = path.join(uiNextDir, 'pages');
+const SRC = [
+  fs.readFileSync(path.join(uiNextDir, 'UiNextPages.js'), 'utf8'),
+  ...fs.readdirSync(pagesDir).filter((f) => f.endsWith('.js'))
+    .map((f) => fs.readFileSync(path.join(pagesDir, f), 'utf8')),
+].join('\n');
 
 // 已知且刻意保留的死碼。每一筆都要寫清楚為什麼不修，不接受只寫「既有問題」。
 const ALLOWED = new Map([
