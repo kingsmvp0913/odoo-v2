@@ -221,10 +221,12 @@
           // ⚠ 不要改成「自己算要移多少 px」——實測一直差 35px，因為這個 section 是垂直置中的，
           //   內容一變高（is-launching 會動到版面）位移量就跟著變，先量後套永遠對不上。
           //   FLIP 兩端都是實測值，天生免疫這種版面變化。
-          const first = form.getBoundingClientRect().top;
+          // 量下緣而不是上緣：落點與對話頁輸入框對齊的是「底線」（兩邊寬度與 bottom 已對齊，
+          // 但首頁的 textarea 比較高，上緣天生對不上）。用 top 做 FLIP 會讓底線在換路由時跳一截。
+          const first = form.getBoundingClientRect().bottom;
           this.launching = true;
           requestAnimationFrame(() => {
-            const delta = first - form.getBoundingClientRect().top;
+            const delta = first - form.getBoundingClientRect().bottom;
             inner.style.transition = "none";
             inner.style.transform = `translateY(${delta}px)`;
             requestAnimationFrame(() => {

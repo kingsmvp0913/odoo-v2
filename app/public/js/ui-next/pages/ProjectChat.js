@@ -1,4 +1,8 @@
 (function () {
+  // 中斷訊息的開頭（伺服器端全文在 pipeline/chat-agent.js 的 CHAT_INTERRUPTED_MSG）。
+  // 只比前綴：全文含標點與說明，改一個字就對不上；chat-interrupted-resend.test.js 釘住兩邊一致。
+  const INTERRUPTED_PREFIX = "⚠️ 這則回覆在產生途中中斷了";
+
   // Next Chat 自行管理 route identity 與 request sequence，避免同一 component 實例在換專案時寫回舊資料。
   window.UiNextProjectChatView = Vue.defineComponent({
     name: "UiNextProjectChatView",
@@ -8,7 +12,7 @@
         sending: false, loadingMsgs: false, draftingTask: false, creatingTask: false,
         showTaskModal: false, taskDraft: { title: "", original_text: "", attachments: [] }, taskError: "", taskModalTrigger: null,
         replyPending: false, pendingFiles: [], pendingPreviews: [], attachUrls: {},
-        pendingHint: false, pollTicks: 0, stopping: false,
+        pendingHint: false, pollTicks: 0, stopping: false, resending: false,
         projectName: "專案", showNewChat: false, showHistory: false, historyTrigger: null, historyQuery: "", historyMenuId: null, chatError: "", chatsError: "", creatingChat: false, requestId: 0, replyTimer: null };
     },
     computed: {
@@ -207,6 +211,32 @@
           showToast(error.message || "訊息送出失敗", "error");
         });
       },
+      // 停止回覆、或伺服器重啟，那一輪都沒有回覆——AI 方會補一則中斷訊息（chat-agent）。
+      // 訊息本身還在，但要再試一次原本只能自己把問題複製貼上重打一遍。
+      isInterrupted(message) { return message.role === "ai" && String(message.content || "").startsWith(INTERRUPTED_PREFIX); },
+      // 只有最後一則中斷訊息給重送鈕：舊的那些後面都已經有新對話接下去，重送等於插隊。
+      canResend(message, index) { return this.isInterrupted(message) && index === this.messages.length - 1 && !this.replyPending && !this.sending; },
+      lastUserMessage() {
+        for (let i = this.messages.length - 1; i >= 0; i -= 1) if (this.messages[i].role === "user") return this.messages[i];
+        return null;
+      },
+      // 附件不重送：檔案已經在伺服器上了，重打一次會多存一份。內容為空（純圖片那則）就不給重送。
+      async resendLast() {
+        const previous = this.lastUserMessage(), content = String(previous?.content || "").trim();
+        if (!content || this.replyPending || this.resending || !this.activeChat) return;
+        const chatId = this.activeChat.id;
+        this.resending = true;
+        this.messages.push({ id: Date.now(), role: "user", content, created_at: new Date().toISOString() });
+        this.pendingHint = true; this.pollTicks = 0; this.replyPending = true; this.startReplyPolling();
+        this.$nextTick(() => this.scrollToBottom());
+        try {
+          await Api.post(`projects/${this.$route.params.id}/chats/${chatId}/messages`, { content });
+        } catch (error) {
+          if (!this.activeChat || this.activeChat.id !== chatId) return;
+          this.pendingHint = false; this.replyPending = false; this.stopReplyPolling();
+          showToast(error.message || "重新發送失敗", "error");
+        } finally { this.resending = false; }
+      },
       async toTask(event) {
         if (!this.activeChat || this.draftingTask) return;
         this.draftingTask = true;
@@ -262,11 +292,14 @@
 </aside>
 <div ref="messages" class="ui-next-thread-messages" @click="handleMessageClick">
 <div v-if="loadingMsgs" class="ui-next-empty-state">載入訊息中…</div>
-<article v-for="message in messages" :key="message.id" :class="message.role">
+<article v-for="(message,index) in messages" :key="message.id" :class="message.role">
 <div class="ui-next-message" v-html="renderMd(message.content)" v-show="message.content"></div>
 <div v-if="(message.attachments&&message.attachments.length)||(message.pending_previews&&message.pending_previews.length)" class="ui-next-message-files">
 <img v-for="attachment in (message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id)">
 <img v-for="(url,index) in (message.pending_previews||[])" :key="'pending'+index" :src="url">
+</div>
+<div v-if="canResend(message,index)" class="ui-next-message-retry">
+<button type="button" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button>
 </div>
 <small>{{ message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(message.created_at) }}</small>
 </article>

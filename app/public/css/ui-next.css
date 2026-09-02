@@ -179,5 +179,5 @@ html[data-theme="dark"] [data-ui="next"]{--sidebar-bg:#1B1B1E;--sidebar-text:#C4
    底下再加 padding/margin 都推不動（實測 0→31px 只換來 3px 位移）。section 的下緣正好就是
    對話頁輸入框的下緣，所以 bottom:0 即無縫。 */
 .ui-next-question.is-launching{overflow:hidden}
-.ui-next-question.is-launching .ui-next-question-inner{position:absolute;right:0;bottom:-3px;left:0;width:min(720px,100%);margin:0 auto;padding-bottom:0}
+.ui-next-question.is-launching .ui-next-question-inner{position:absolute;right:0;bottom:-16px;left:0;width:min(812px,calc(100% - 48px));margin:0 auto;padding-bottom:0}
 @media(prefers-reduced-motion:reduce){.ui-next-question-inner{transition:none}}

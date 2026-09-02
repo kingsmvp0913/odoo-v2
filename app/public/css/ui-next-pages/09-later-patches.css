@@ -505,9 +505,13 @@
 
 /* Chat 與任務對話共用右側主畫面捲軸：短對話由頂端開始、Composer 留在底部；
    長對話由程式捲到最新訊息，訊息區本身不再產生第二條捲軸。 */
-.ui-next-chat-page{height:auto;min-height:100%;margin-bottom:0;overflow:visible}
+/* ⚠ .ui-next-thread 的 min-height:100% 解析不出來——父層 .ui-next-chat-page 是 height:auto，
+   百分比高度沒有可依據的基準。結果短對話時 thread 只有內容高，sticky 的輸入框停在內容正下方、
+   離視窗底部三百多 px。首頁送出時輸入框是 FLIP 滑到「畫面底部 -3px」的，落點對不上就成了
+   換頁那一下的跳動。改用 flex 撐開：chat-page 自己是 flex column，thread 吃滿它。 */
+.ui-next-chat-page{display:flex;flex-direction:column;height:auto;min-height:100%;margin-bottom:0;overflow:visible}
 .ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}
-.ui-next-thread{display:flex;height:auto;min-height:100%;flex-direction:column}
+.ui-next-thread{display:flex;height:auto;min-height:0;flex:1 0 auto;flex-direction:column}
 .ui-next-thread-messages{min-height:0;max-height:none;flex:1 0 auto;overflow:visible;padding-top:28px;padding-bottom:10px}
 .ui-next-thread-composer{position:sticky;bottom:0;z-index:2;flex:none;margin-bottom:max(18px,env(safe-area-inset-bottom));border-color:transparent;background:var(--surface);box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)}
 .ui-next-thread-composer:focus-within{border-color:transparent;box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 36%,transparent)}
@@ -569,3 +573,11 @@
 .ui-next-spec-md p{margin:0 0 9px}
 .ui-next-spec-md > *:last-child{margin-bottom:0}
 .ui-next-spec-md ul,.ui-next-spec-md ol{margin:0 0 9px;padding-left:18px}
+
+/* 中斷訊息（停止回覆／伺服器重啟）下方的重送鈕：跟在那則訊息底下，不做成整排動作列——
+   它只對最後一則有效，做得太顯眼會像是每則訊息都能重跑。 */
+.ui-next-message-retry{margin-top:8px}
+.ui-next-message-retry button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px;background:var(--surface);color:var(--text-secondary);font:inherit;font-size:12px;cursor:pointer}
+.ui-next-message-retry button:hover:not(:disabled){border-color:var(--text-muted);color:var(--text)}
+.ui-next-message-retry button:disabled{opacity:.55;cursor:not-allowed}
+.ui-next-message-retry .ui-next-icon{width:13px;height:13px}

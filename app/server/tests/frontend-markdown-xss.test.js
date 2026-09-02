@@ -159,6 +159,11 @@ describe('v-html 綁定白名單', () => {
     // 白名單比對的是表達式「字面值」，所以改個變數名就落到清單外——那是刻意的，
     // 逼人重新確認新綁定的字串來源，不是可以隨手照抄補進來的形式差異。
     'ansiToHtml(event.content)',  // UiNextTaskDetailView：同 ansiToHtml(ev.content)
+    // 規格摘要（analysis-project 產的 YAML 欄位，經後端 parse）改走 markdown 才能用表格做
+    // 「現在 vs 改完」對照。消毒入口與上面幾筆相同：renderMarkdown 把原始 HTML 一律 escape
+    // （markdown.js 的 renderer.html），href/src 走 safeUrl。
+    'renderTaskMessage(spec.summary)',  // UiNextTaskDetailView：同一個 renderMarkdown 薄封裝
+    'renderSpecSummary(spec.summary)',  // Legacy TaskDetail：同上，只是薄封裝的名字不同
     // tour.js：step.text 的字串來源全部是 tour-courses.js 裡硬編的靜態字面值；
     // 教程刻意不打任何 API（tour-isolation.test.js 守「不得出現 fetch/Api. 呼叫」），
     // 進度只存 localStorage，沒有 DB 資料、API 回應或使用者輸入會流進這個綁定。
