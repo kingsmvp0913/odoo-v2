@@ -1050,7 +1050,17 @@
 
 /* 底排的回寫下拉：外觀沿用新對話那顆（.ui-next-source-picker ＋ .ui-next-composer-chip），
    這裡只補「開著時」的狀態色——一眼看得出這則留言會被回寫。 */
+/* ⚠ .ui-next-source-trigger 的外觀規則掛在 .ui-next-composer 底下（見本檔上方），
+   本頁的 chip 在 .ui-next-task-action 內吃不到——沒補的話它就是原生 button：白底、黑字、
+   自己的邊框。整組宣告在這裡補一份。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-trigger{max-width:170px;overflow:hidden;border:0;padding:0;background:transparent;color:var(--text);font:inherit;font-size:12px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap;outline:0;cursor:pointer;pointer-events:none}
+/* 選單只有兩個選項，不需要 390px 寬 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-project-picker-options{width:auto;min-width:0;max-width:none}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker{cursor:pointer;user-select:none}
+/* 選單往上展開會超出面板，而面板是 overflow-y:auto——不放行就會被裁掉一截。
+   ⚠ 只在選單開著時放行：面板平時要保有捲動（衝突裁決逐檔、補資料多題那些會超過 max-height，
+   一律 visible 的話它們會溢出到視窗外，底部按鈕就按不到了）。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:has(.ui-next-project-picker-options){overflow:visible}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-icon{width:13px;height:13px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-project-picker-options button{display:grid;gap:1px;text-align:left}
