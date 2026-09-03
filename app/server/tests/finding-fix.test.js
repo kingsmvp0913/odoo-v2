@@ -60,3 +60,30 @@ test('空輸入（什麼都沒改）→ 沒有檔案也沒有違規', () => {
   expect(classifyChanges('')).toEqual({ files: [], violations: [] });
   expect(classifyChanges(null)).toEqual({ files: [], violations: [] });
 });
+
+// 自動化之後「守門的碼在它自己守的範圍裡」是結構性的洞：ALLOW 含 app/server/（裡面就有
+// 守門碼本身與那份白名單）、.claude/agents/*.md 只擋 health-*（所以審查者的判準可以被
+// 被審者改掉）。人工按按鈕時沒事，無人監督時不行。
+describe('DENY：守門相關的檔不准被自動改', () => {
+  const { classifyChanges } = require('../pipeline/finding-fix');
+
+  test.each([
+    'app/server/pipeline/finding-fix.js',
+    'app/server/pipeline/nightly-fix.js',
+    '.claude/agents/fix-review.md',
+    '.claude/agents/feedback-triage.md',
+  ])('%s 被擋下', (file) => {
+    const { violations, files } = classifyChanges(` M ${file}`);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(file);
+    expect(files).toHaveLength(0);
+  });
+
+  // ⚠ 這條證明 DENY 沒寫太寬。cron.js 刻意不擋——它還裝著退回分類、wiki 漂移套用、
+  //   環境回收等一堆別的排程，全擋等於那些也永遠自動修不了（使用者裁決）。
+  test('cron.js 不在 DENY 內', () => {
+    const { violations, files } = classifyChanges(' M app/server/cron.js');
+    expect(violations).toHaveLength(0);
+    expect(files).toEqual(['app/server/cron.js']);
+  });
+});

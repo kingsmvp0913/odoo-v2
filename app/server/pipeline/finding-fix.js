@@ -48,6 +48,13 @@ const ALLOW = [
 const DENY = [
   { re: /^\.claude\/agents\/health-/, why: '健檢自己的提示詞（放寬自己的判準不會有任何訊號）' },
   { re: /^\.claude\/skills\/healthCheck\//, why: '健檢判準（同上）' },
+  // 自動化之後，守門的碼不能在它自己守的範圍裡。人工按按鈕時每一步都有人看，
+  // 無人監督時一份修正可以「順手」放寬白名單，而下一晚守門就失效了。
+  // 代價：這四支真的有 bug 時只能人工修——那正是人工那條路要留著的理由。
+  { re: /^app\/server\/pipeline\/finding-fix\.js$/,  why: '守門碼本體，含這份 ALLOW／DENY 清單' },
+  { re: /^app\/server\/pipeline\/nightly-fix\.js$/,  why: '夜間批次與三道保險絲' },
+  { re: /^\.claude\/agents\/fix-review\.md$/,        why: '審這份修正的那個 agent 的判準' },
+  { re: /^\.claude\/agents\/feedback-triage\.md$/,   why: '入口的翻譯與 understandable 門檻' },
 ];
 
 // git status --porcelain 的一行 → { code, file }。重新命名（R）會有 "old -> new"，取新的那個。
@@ -69,15 +76,16 @@ function classifyChanges(porcelain) {
   for (const raw of String(porcelain || '').split('\n')) {
     if (!raw.trim()) continue;
     const { code, file } = parseStatusLine(raw);
-    files.push(file);
     const denied = DENY.find(d => d.re.test(file));
     if (denied) { violations.push(`${file}：${denied.why}`); continue; }
     if (/^app\/server\/tests\//.test(file)) {
       const isNew = code.trim() === '??' || code[0] === 'A';
-      if (!isNew) violations.push(`${file}：不得修改或刪除既有測試（新增可以）`);
+      if (!isNew) { violations.push(`${file}：不得修改或刪除既有測試（新增可以）`); continue; }
+      files.push(file);
       continue;
     }
-    if (!ALLOW.some(re => re.test(file))) violations.push(`${file}：超出可修改範圍`);
+    if (!ALLOW.some(re => re.test(file))) { violations.push(`${file}：超出可修改範圍`); continue; }
+    files.push(file);
   }
   return { files, violations };
 }
@@ -227,18 +235,20 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     const { stdout: porcelain } = await git(worktree, ['status', '--porcelain', '-uall']);
     const { files, violations } = classifyChanges(porcelain);
 
-    // 什麼都沒改是合法結果——提示詞明說「認為不該做就不要硬做」。工作區沒有價值，直接收掉。
-    if (!files.length) {
-      await removeWorktree(worktree);
-      return setStatus(fixId, 'no_change', { notes, test_result: tests || 'skip', worktree: null });
-    }
     // 超出範圍：整份作廢。留著 notes 讓人看得到它想幹嘛，但工作區收掉，避免半套改動被誤採用。
+    // ⚠ 順序不可調換：先判 violations 再判「什麼都沒改」——DENY／越界的檔不會進 files，
+    // 若只動了那些檔，files 會是空陣列，但那是「越界」不是「合法的沒改動」。
     if (violations.length) {
       await removeWorktree(worktree);
       return setStatus(fixId, 'rejected', {
         notes, test_result: tests || 'skip', worktree: null,
         reject_reason: `動到不該動的檔案：\n${violations.join('\n')}`
       });
+    }
+    // 什麼都沒改是合法結果——提示詞明說「認為不該做就不要硬做」。工作區沒有價值，直接收掉。
+    if (!files.length) {
+      await removeWorktree(worktree);
+      return setStatus(fixId, 'no_change', { notes, test_result: tests || 'skip', worktree: null });
     }
 
     // 確定這份修正值得看了，才由平台自己複驗測試——沒改東西或超出範圍的那兩條路上，工作區都
