@@ -249,7 +249,9 @@
 .ui-next-wiki-more .ui-next-icon{width:15px;height:15px}
 .ui-next-wiki-menu{position:absolute;z-index:var(--z-dropdown);top:calc(100% - 2px);right:4px;min-width:126px;padding:5px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);box-shadow:var(--shadow-lg)}
 .ui-next-wiki-menu button{display:block;width:100%;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:var(--text);font:inherit;font-size:12px;text-align:left;cursor:pointer}
-.ui-next-wiki-menu button:hover{background:var(--bg)}
+/* 選單項目吃同一組 hover 變數：這份選單與側欄右鍵選單是同一種東西（浮在 --surface 上的
+   選單），只換底色在這個底上幾乎看不出來，撐起 hover 的是 lift 的上亮邊／下暗邊／描邊。 */
+.ui-next-wiki-menu button:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
 .ui-next-wiki-menu button.danger{color:var(--danger)}
 .ui-next-wiki-menu button:disabled{opacity:.5;cursor:not-allowed}
 /* 頁面多的時候讓樹自己捲，不要把整頁撐成 4000px 高、右邊內容區一片空白。 */
@@ -258,6 +260,21 @@
 /* 階層線比照側欄的對話清單：只靠縮排看不出哪幾頁是同一層的子頁。
    線畫在子層容器上，深度由 WikiNode 的 padding-left 決定，所以用 depth 對齊。 */
 .ui-next-wiki-row.has-guide::before{position:absolute;top:0;bottom:0;left:calc(10px + (var(--wiki-depth) - 1) * 14px + 7px);width:1px;background:color-mix(in srgb,var(--text) 22%,transparent);content:""}
+
+/* 子頁的 hover／選中那塊要停在階層線右邊（比照側欄的對話列：線畫在容器上，浮起的是
+   線右邊那一列）。這裡線是列自己的 ::before，底色若畫在列上就會連線一起蓋掉。
+   改用 ::after 當視覺層，左緣從線再往右 1px 起算；列本身的底色與陰影對這些列關掉。 */
+.ui-next-wiki-row.has-guide:hover{box-shadow:none}
+.ui-next-wiki-row.has-guide:not(.active):hover,.ui-next-wiki-row.has-guide.active{background:transparent}
+.ui-next-wiki-row.has-guide::after{position:absolute;top:0;right:0;bottom:0;left:calc(10px + (var(--wiki-depth) - 1) * 14px + 8px);border-radius:8px;content:"";pointer-events:none;transition:background-color .125s ease,box-shadow .125s ease}
+.ui-next-wiki-row.has-guide.active::after{background:color-mix(in srgb,var(--text) 10%,transparent)}
+.ui-next-wiki-row.has-guide:hover::after{box-shadow:var(--ui-next-hover-lift)}
+.ui-next-wiki-row.has-guide:not(.active):hover::after{background:var(--ui-next-hover-bg)}
+/* ::after 是列的最後一個子節點，不抬高文字就會被那塊底色蓋住。 */
+.ui-next-wiki-row .ui-next-wiki-node{position:relative;z-index:1}
+/* 整列（含文字）浮起 2px 時，線是列自己畫的、會跟著上移，與上下列的線錯開成缺口。
+   反向補回 2px，線就跟側欄一樣是連續不動的。 */
+.ui-next-wiki-row.has-guide:hover::before{translate:0 2px}
 
 /* 對話頁實測只用了 467px（容器有 900px 可用），左邊空一大片：.ui-next-conversation 的
    max-width/margin:0 auto 被別處覆蓋掉，grid item 也沒有 stretch 開。這裡用明確寬度定住。 */
@@ -883,6 +900,13 @@
        那條 margin:10px 0——上一格有外距、它沒有，看起來又比別行擠。 */
 .ui-next-project-settings .ui-next-inline-field{margin:10px 0}
 .ui-next-project-settings .ui-next-toggle-row{box-sizing:border-box;min-height:36px;border:1px solid var(--border-strong);border-radius:8px;padding:0 10px;background:var(--bg)}
+/* ⚠ 上面只把 width／height 釘回去是不夠的：`.ui-next-project-settings label input`（0,2,1）
+   同時還餵了 padding:8px 10px、border、border-radius:8px、background:var(--bg) 進來，
+   而 `.ui-next-toggle input` 也是 (0,2,1)、載入在前，平手就全輸。後果是軌道變成空心的
+   圓角框，圓鈕被 padding 推出軌道、掉到右下角（個人設定那顆沒有這條規則，所以是好的）。
+   toggle 的外觀要整組要回來，checked 態也要——它同樣被那條壓掉。 */
+.ui-next-project-settings .ui-next-toggle-row input{border:0;border-radius:10px;padding:0;background:var(--border-strong)}
+.ui-next-project-settings .ui-next-toggle-row input:checked{background:var(--text)}
 
 /* 專案 VPN 設定的兩個欄位：底色／邊框／圓角其實都與同頁的連線表單一致（實測皆為
    rgb(27,27,30) + 1px var(--border-strong) + 8px），真正不同的是**高度**——
@@ -892,6 +916,20 @@
    （13px × 1.5 ≈ 19.5），而 .form-control 沒動 font，吃的是 input 預設的 normal（≈1.2）。
    line-height 補上才真的等高（實測 39 → 33，與同頁連線表單一致）。 */
 .ui-next-vpn-fields input{height:auto;padding:7px 10px;line-height:normal}
+
+/* 「VPN 帳號／密碼的顏色跟別人不一樣」的真因不在我們的 CSS：那兩格會被瀏覽器自動填入，
+   Chrome 對 :-webkit-autofill 硬塞 `-internal-light-dark(rgb(232,240,254), …)` 的淺藍底，
+   優先權高過任何 background 宣告。無痕／自動化環境不會觸發，所以量測永遠看到「兩邊同色」。
+   ⚠ 這不是 VPN 專屬——帳號密碼欄凡是被記住的都會中（Login／個人設定／連線表單／管理者頁），
+   所以規則下在 [data-ui="next"] 這一層。
+   ⚠ 只寫 background 沒有用，Chrome 會蓋掉；業界解法是用一層厚的 inset 陰影頂掉它，
+   文字色也要另外用 -webkit-text-fill-color 指定（一般的 color 同樣壓不過）。
+   底色預設取 --bg（平台多數輸入框），少數本來就用 --surface 的容器在下一條指定。 */
+[data-ui="next"] input:-webkit-autofill,
+[data-ui="next"] input:-webkit-autofill:hover,
+[data-ui="next"] input:-webkit-autofill:focus,
+[data-ui="next"] input:-webkit-autofill:active{-webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 100px var(--field-autofill-bg,var(--bg)) inset;caret-color:var(--text)}
+.ui-next-vpn-fields,[data-ui="next"] .form-group,[data-ui="next"] .ui-next-filterbar{--field-autofill-bg:var(--surface)}
 
 /* 「驗證 Odoo／eService」貼在使用者 ID 欄位右邊：按鈕靠 stretch 跟輸入框等高，
    不寫死高度——輸入框的高度是 padding 撐出來的，寫死就會在字級變動時脫節。 */
