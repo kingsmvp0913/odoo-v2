@@ -232,9 +232,14 @@
 
 /* Wiki 頁面樹比照側欄 menu：一列一項，操作平時收起來、hover 或選單開著才出現 ⋮。
    原本每個節點下面常駐「重新生成／刪除」兩顆按鈕，65 個頁面就是 130 顆，整棵樹 4100px 高。 */
-.ui-next-wiki-row{position:relative;display:flex;align-items:center;border-radius:8px;transition:background-color .125s ease}
-.ui-next-wiki-row:hover{background:color-mix(in srgb,var(--text) 6%,transparent)}
+.ui-next-wiki-row{position:relative;display:flex;align-items:center;border-radius:8px;transition:background-color .125s ease,box-shadow .125s ease,translate .125s ease}
+/* hover 比照側欄：只換底色時貼在同色背景上幾乎看不出來，要的是「浮起來的一塊」。
+   底色只在非 active 時換掉，讓「我在這裡」（底色）與「我指著這裡」（浮起）分得開——
+   active 那列指上去仍然會浮，否則會像壞掉沒反應。 */
+.ui-next-wiki-row:hover{box-shadow:var(--ui-next-hover-lift);translate:0 -2px}
+.ui-next-wiki-row:not(.active):hover{background:var(--ui-next-hover-bg)}
 .ui-next-wiki-row.active{background:color-mix(in srgb,var(--text) 10%,transparent)}
+.ui-next-wiki-row.has-menu,.ui-next-wiki-row.has-menu:hover{translate:none}
 .ui-next-wiki-row.has-menu{z-index:5}
 .ui-next-wiki-row .ui-next-wiki-node{flex:1;min-width:0;overflow:hidden;border:0;border-radius:8px;padding-block:7px;padding-right:30px;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:17px;text-align:left;white-space:nowrap;text-overflow:ellipsis;cursor:pointer}
 .ui-next-wiki-row.active .ui-next-wiki-node{color:var(--text);font-weight:500}
@@ -857,7 +862,7 @@
 /* 兩張卡等高並排時，儲存鈕各自停在自己內容的下緣（一張在中間、一張在底部）。
    面板改 flex 直排、動作列 margin-top:auto，兩顆鈕就都落在右下同一條線上。 */
 .ui-next-project-settings .ui-next-panel{display:flex;flex-direction:column}
-.ui-next-panel-actions{display:flex;justify-content:flex-end;margin-top:auto;padding-top:14px}
+.ui-next-panel-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding-top:14px}
 .ui-next-project-settings .ui-next-inline-field{display:grid;gap:5px;color:var(--text-secondary);font-size:12px}
 .ui-next-project-settings .ui-next-inline-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--border-strong);border-radius:8px;padding:0 10px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
 .ui-next-project-settings .ui-next-toggle-row{display:flex;align-items:center;gap:10px;width:100%;color:var(--text);font-size:13px;white-space:nowrap}
@@ -869,3 +874,27 @@
 .ui-next-project-settings .ui-next-toggle-row > span{display:none}
 /* 說明自己一行：面板是 block 排版，inline 的說明會被擠到開關右邊那一小段空間裡。 */
 .ui-next-project-settings .ui-next-field-note{display:block;margin:2px 0 0;color:var(--text-muted);font-size:12px}
+
+/* 基本資料卡：四個欄位排下來，前兩個是 40px 高的輸入框、第三個是 40px 的下拉，
+   第四個「E2E 測試」卻是一顆 21px 的裸開關浮在那裡——高度差 19px，整行看起來像塌了一塊。
+   ⚠ 兩件事一起才修得好：
+   (a) 開關要有跟下拉一樣的框（36px + 邊框 + --bg 底），四行才成為同一種東西；
+   (b) E2E 那格的容器是 <div>，吃不到 02-project-detail.css 的 `label:not(.ui-next-toggle)`
+       那條 margin:10px 0——上一格有外距、它沒有，看起來又比別行擠。 */
+.ui-next-project-settings .ui-next-inline-field{margin:10px 0}
+.ui-next-project-settings .ui-next-toggle-row{box-sizing:border-box;min-height:36px;border:1px solid var(--border-strong);border-radius:8px;padding:0 10px;background:var(--bg)}
+
+/* 專案 VPN 設定的兩個欄位：底色／邊框／圓角其實都與同頁的連線表單一致（實測皆為
+   rgb(27,27,30) + 1px var(--border-strong) + 8px），真正不同的是**高度**——
+   這裡寫死 height:36px（實測 40px），而 .form-control 是 padding:7px 撐出來的 33px。
+   同一頁上下兩塊表單差 7px，就是「看起來不是同一套」的來源。改成同樣用 padding 撐。
+   ⚠ 只改 padding 還差 6px：這裡寫 `font:inherit` 連 body 的 line-height 一起繼承了
+   （13px × 1.5 ≈ 19.5），而 .form-control 沒動 font，吃的是 input 預設的 normal（≈1.2）。
+   line-height 補上才真的等高（實測 39 → 33，與同頁連線表單一致）。 */
+.ui-next-vpn-fields input{height:auto;padding:7px 10px;line-height:normal}
+
+/* 「驗證 Odoo／eService」貼在使用者 ID 欄位右邊：按鈕靠 stretch 跟輸入框等高，
+   不寫死高度——輸入框的高度是 padding 撐出來的，寫死就會在字級變動時脫節。 */
+.ui-next-settings-grid .ui-next-field-row{display:flex;align-items:stretch;gap:8px}
+.ui-next-settings-grid .ui-next-field-row input{min-width:0;flex:1}
+.ui-next-settings-grid .ui-next-field-row button{flex:none;white-space:nowrap}

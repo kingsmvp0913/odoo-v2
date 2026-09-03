@@ -1,14 +1,15 @@
 (function () {
+  // 帳號排第一：進這頁最常做的是改自己的顯示名稱與密碼，「一般」只有兩個開關。
   const SETTINGS_TABS = [
-    { key: "general", label: "一般" },
     { key: "account", label: "帳號" },
+    { key: "general", label: "一般" },
     { key: "connection", label: "連線設定" },
   ];
 
   window.UiNextSettingsView = Vue.defineComponent({
     name: "UiNextSettingsView",
     components: { UiNextIcon: window.UiNextIcon },
-    data() { return { tab: "general", me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
+    data() { return { tab: "account", me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
     computed: { tabs() { return SETTINGS_TABS; }, patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
     async created() { await this.load(); },
     mounted() { this._onThemeChange = (event) => { this.isDark = event.detail === "dark"; }; window.addEventListener("themechange", this._onThemeChange); },
@@ -43,6 +44,7 @@
 <div v-else class="ui-next-settings-grid">
 <section v-show="tab==='general'" class="ui-next-panel">
 <h2>外觀與通知</h2>
+<p>開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</p>
 <label class="ui-next-toggle" data-tour="set-dark">
 <input type="checkbox" :checked="isDark" @change="toggleTheme">
 <span>
@@ -51,8 +53,7 @@
 <input type="checkbox" :checked="notifyOn" @change="toggleNotify">
 <span>
 </span>桌面通知（有任務需要你處理時提醒）</label>
-<button v-if="notifyOn" @click="testNotify"><ui-next-icon name="alert"/> 測試通知</button>
-<p>開啟後瀏覽器會請求通知權限；需保持至少一個分頁開著才能收到。</p>
+<div v-if="notifyOn" class="ui-next-panel-actions"><button @click="testNotify"><ui-next-icon name="alert"/> 測試通知</button></div>
 </section>
 <section v-show="tab==='account'" class="ui-next-panel">
 <h2>帳號資料</h2>
@@ -60,7 +61,7 @@
 </label>
 <label>顯示名稱<input v-model="me.display_name" placeholder="你的名字">
 </label>
-<button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存帳號設定' }}</button>
+<div class="ui-next-panel-actions"><button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存帳號設定' }}</button></div>
 </section>
 <section v-show="tab==='account'" class="ui-next-panel">
 <h2>變更密碼</h2>
@@ -71,7 +72,7 @@
 <label>確認新密碼<input v-model="pw.confirm" type="password" :class="{'is-invalid':pw.confirm&&pw.next!==pw.confirm}">
 </label>
 <p v-if="pwError" class="ui-next-error-text">{{ pwError }}</p>
-<button @click="savePw" :disabled="savingPw">{{ savingPw?'更新中…':'更新密碼' }}</button>
+<div class="ui-next-panel-actions"><button class="ui-next-primary" @click="savePw" :disabled="savingPw">{{ savingPw?'更新中…':'更新密碼' }}</button></div>
 </section>
 <section v-show="tab==='connection'" class="ui-next-panel ui-next-settings-wide">
 <h2>外部系統連線</h2>
@@ -83,11 +84,11 @@
 </label>
 <label>密碼<input v-model="creds.odoo_password" type="password" :placeholder="pwSet.odoo?'已設定，留空不變更':'輸入密碼'">
 </label>
-<!-- 使用者 ID 沒有輸入框時，verifyOdoo 寫進來的值與 save() 送出去的值都是看不見也改不掉的。 -->
-<label>使用者 ID<input v-model="creds.odoo_user_id" placeholder="點擊驗證自動取得">
+<!-- 使用者 ID 沒有輸入框時，verifyOdoo 寫進來的值與 save() 送出去的值都是看不見也改不掉的。
+     驗證鈕貼在這個欄位右邊：它做的事就是「把這一格填好」，擺在欄位下方會讀成獨立動作。 -->
+<label>使用者 ID<span class="ui-next-field-row"><input v-model="creds.odoo_user_id" placeholder="點擊驗證自動取得"><button @click="verifyOdoo" :disabled="verifyingOdoo">{{ verifyingOdoo?'驗證中…':'驗證 Odoo' }}</button></span>
 </label>
 <p class="ui-next-field-note">任務負責人篩選會用到；按下驗證會自動填入。</p>
-<button @click="verifyOdoo" :disabled="verifyingOdoo">{{ verifyingOdoo?'驗證中…':'驗證 Odoo' }}</button>
 </div>
 <div data-tour="set-eservice">
 <h3>eService</h3>
@@ -96,13 +97,12 @@
 </label>
 <label>密碼<input v-model="creds.service_password" type="password" :placeholder="pwSet.service?'已設定，留空不變更':'輸入密碼'">
 </label>
-<label>使用者 ID<input v-model="creds.service_user_id" placeholder="點擊驗證自動取得">
+<label>使用者 ID<span class="ui-next-field-row"><input v-model="creds.service_user_id" placeholder="點擊驗證自動取得"><button @click="verifyService" :disabled="verifyingService">{{ verifyingService?'驗證中…':'驗證 eService' }}</button></span>
 </label>
 <p class="ui-next-field-note">任務負責人篩選會用到；按下驗證會自動填入。</p>
-<button @click="verifyService" :disabled="verifyingService">{{ verifyingService?'驗證中…':'驗證 eService' }}</button>
 </div>
 </div>
-<button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存連線設定' }}</button>
+<div class="ui-next-panel-actions"><button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存連線設定' }}</button></div>
 </section>
 <section v-show="tab==='connection'" class="ui-next-panel" data-tour="set-github">
 <h2>GitHub 認證</h2>
@@ -123,9 +123,9 @@
 <a :href="patLink" target="_blank" rel="noopener">↗ 開啟 GitHub 建立權杖頁（已預帶 repo 權限與名稱）</a>
 <p>需對目標 org repo 有 read/write 權限；若 org 開啟 SAML SSO，建立後請在 GitHub「Authorize」此 token。</p>
 </div>
-<div class="ui-next-inline-actions">
-<button class="ui-next-primary" @click="saveGithubPat" :disabled="githubPat.saving">{{ githubPat.saving?'驗證中…':(githubPat.configured?'更新 PAT':'連結 GitHub') }}</button>
+<div class="ui-next-panel-actions">
 <button v-if="githubPat.configured" class="danger" @click="removeGithubPat">移除連結</button>
+<button class="ui-next-primary" @click="saveGithubPat" :disabled="githubPat.saving">{{ githubPat.saving?'驗證中…':(githubPat.configured?'更新 PAT':'連結 GitHub') }}</button>
 </div>
 </section>
 <section v-show="tab==='connection'" class="ui-next-panel">
@@ -134,7 +134,7 @@
 <label>Teams 使用者 ID（AAD Object ID）<input v-model="teamsUserId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
 </label>
 <p class="ui-next-field-note">Azure AD → 使用者 → 物件識別碼</p>
-<button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存' }}</button>
+<div class="ui-next-panel-actions"><button class="ui-next-primary" @click="save" :disabled="saving">{{ saving?'儲存中…':'儲存' }}</button></div>
 </section>
 </div>
 </section>`,
