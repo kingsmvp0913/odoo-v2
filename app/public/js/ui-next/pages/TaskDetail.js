@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -104,13 +104,19 @@
         const blocker = (this.task && this.task.status === 'stopped' && this.task.blocker_content)
           ? [{ _key: 'blocker', ts: this.task.updated_at, kind: 'log', role: 'blocker', content: this.task.blocker_content }]
           : [];
+        // 需求本文就是對話的第一則（原本獨立在「需求內容」頁籤）：它是客戶提的那段話，
+        // 放進時間軸才讀得出「他要什麼 → 我們怎麼回」的順序。主附件跟著這一則走。
+        const req = (this.task && this.task.original_text)
+          ? [{ _key: 'req', ts: this.task.created_at, kind: 'message', source: 'sync',
+               content: this.task.original_text, attachments: this.ticketAttachments, isRequirement: true }]
+          : [];
         // 人工審核那關：程式變更本身是「要讀的東西」，排在對話最後一則，動作面板只留退回／通過。
         // 走 kind:'log'+role:'ai' 是為了直接吃既有的 ai 樣式與頭像；content 留空，
         // isErrorLog／machineLogHint 都判不到它，不會被誤折成收合列。
         const diff = (this.timelineActionMode === 'review')
           ? [{ _key: 'diff', ts: this.task.updated_at, kind: 'log', role: 'ai', content: '', isDiff: true }]
           : [];
-        return [...msgs, ...logs, ...blocker, ...diff].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+        return [...req, ...msgs, ...logs, ...blocker, ...diff].sort((a, b) => new Date(a.ts) - new Date(b.ts));
       },
       // 只渲染末 N 筆（最新）；往上捲再增量載入更早的，避免整條歷史撐開版面
       visibleTimeline() { return this.timeline.slice(-this.convVisible); },
@@ -133,11 +139,7 @@
     },
     async created() {
       await this.load();
-      const requestedTab = this.$route.query.tab;
-      this.taskTab = ['requirements', 'conversation', 'history'].includes(requestedTab)
-        ? requestedTab
-        : ((window.HUMAN_STATUSES || []).includes(this.task?.status) ? 'conversation' : 'requirements');
-      if (this.taskTab === "conversation") this.$nextTick(() => this.bindConvScroll());
+      this.$nextTick(() => this.bindConvScroll());
       Api.get('system/config').then(r => {
         this.odooUrl = r.odoo_url || '';
         this.serviceUrl = r.service_url || '';
@@ -145,7 +147,6 @@
         this.writebackEnabled = !!r.writeback_odoo_notes;
       }).catch(() => {});
       this.checkInflight();
-      this.loadEvents();
       this.loadTaskMessages();
       this.markInboxRead();
     },
@@ -190,20 +191,10 @@
         if (n && this._convPinBottom !== false) this.$nextTick(() => this.scrollConvToBottom());
       },
       tourDemoStatus() { if (this.isTourDemo) this.refresh(); },
-      '$route.query.tab'(tab) {
-        if (['requirements', 'conversation', 'history'].includes(tab) && tab !== this.taskTab) this.taskTab = tab;
-      },
     },
     methods: {
-      setTaskTab(tab) {
-        this.taskTab = tab;
-        if (this.$route.query.tab !== tab) this.$router.replace({ query: { ...this.$route.query, tab } });
-        if (tab === "conversation") this.$nextTick(() => this.bindConvScroll());
-        this.$nextTick(() => {
-          const visible = (item) => item && item.getClientRects().length > 0;
-          [...document.querySelectorAll(".ui-next-task-detail-grid [role=\"tabpanel\"]")].find(visible)?.focus();
-        });
-      },
+      // 執行歷程改成跳窗：開的時候才抓，關掉不保留（它是除錯用的終端輸出，不是常駐內容）
+      openEvents() { this.eventsOpen = true; this.loadEvents(); },
       async openEnv() {
         // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
         // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
@@ -685,6 +676,7 @@
         return item.source === 'manual' ? 'user' : 'ai';
       },
       timelineMeta(item) {
+        if (item.isRequirement) return '需求';
         if (item.kind === 'log') return this.roleLabel(item.role);
         return item.source === 'manual' ? (item.author || '你') : '（同步）';
       },
@@ -979,61 +971,31 @@
 <div v-if="loading" class="ui-next-loading-card">載入任務中…</div>
 <div v-else-if="error" class="ui-next-loading-card ui-next-error-text">{{ error }}</div>
 <template v-else-if="task">
-<header class="ui-next-page-head ui-next-detail-head">
-<div>
+<!-- 頂欄固定在頁面上方：名稱、來源／狀態／階段，動作按鈕。原本這裡是「大標題 ＋ 一整排
+     六個標籤 ＋ 三個頁籤」三層，佔掉整個第一屏；標籤砍到只剩看了會做決定的那三個。 -->
+<header class="ui-next-page-head ui-next-detail-head ui-next-task-topbar">
+<div class="ui-next-task-topbar-main">
+<button class="ui-next-back" @click="back" aria-label="返回"><ui-next-icon name="arrow-left"/></button>
 <h1>{{ task.title || task.task_id }}</h1>
+<a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
+<span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
+<span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
+<span v-if="task.stage_label" class="ui-next-stage-badge">{{ task.stage_label }}</span>
+<span v-if="serverConfirmedRunning" class="is-live">處理中</span>
 </div>
 <div class="ui-next-detail-actions">
 <button v-if="testMode" @click="stepPipeline" :disabled="stepping">{{ stepping?'執行中…':'推進 Pipeline' }}</button>
 <button v-if="task.status!=='stopped'&&task.status!=='done'" @click="togglePause">{{ task.is_paused?'恢復任務':'暫停任務' }}</button>
 <button v-if="task.env_status" @click="openEnv">測試機</button>
+<button @click="openEvents">執行歷程</button>
 <button v-if="isAdmin&&!isTourDemo" @click="startHealthCheck" :disabled="healthChecking">{{ healthChecking?'健檢中…':'任務健檢' }}</button>
 <button v-if="isAdmin&&task.git_branch" @click="downloadCodeZip" :disabled="downloadingZip">{{ downloadingZip?'打包中…':'下載程式碼' }}</button>
 <button v-if="isAdmin&&task.status==='done'&&!task.is_hidden" @click="archive" :disabled="archiving">{{ archiving?'封存中…':'封存' }}</button>
-<button class="ui-next-back" @click="back"><ui-next-icon name="arrow-left"/> 返回</button>
 </div>
 </header>
-<div class="ui-next-task-badges">
-<span class="is-id">{{ task.task_id }}</span>
-<span>最後更新 {{ formatTime(task.updated_at) }}</span>
-<span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
-<span v-if="serverConfirmedRunning" class="is-live">處理中</span>
-<a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
-<span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
-<span v-if="task.stage_label">{{ task.stage_label }}</span>
-<span v-if="task.classification_label">分類：{{ task.classification_label }}</span>
-<span v-if="task.has_attachment">含附件</span>
-<span v-if="task.module">{{ task.module }}</span>
-<span v-if="task.created_at">建立 {{ formatTime(task.created_at) }}</span>
-</div>
-<div class="ui-next-task-tabs" role="tablist" aria-label="任務詳情">
-<button id="ui-next-task-tab-requirements" role="tab" :aria-selected="taskTab==='requirements'" :tabindex="taskTab==='requirements'?0:-1" @click="setTaskTab('requirements')">需求內容</button>
-<button id="ui-next-task-tab-conversation" role="tab" :aria-selected="taskTab==='conversation'" :tabindex="taskTab==='conversation'?0:-1" @click="setTaskTab('conversation')">對話</button>
-<button id="ui-next-task-tab-history" role="tab" :aria-selected="taskTab==='history'" :tabindex="taskTab==='history'?0:-1" @click="setTaskTab('history')">執行歷程</button>
-</div>
-<div class="ui-next-task-detail-grid" :class="'is-tab-'+taskTab">
+<div class="ui-next-task-detail-grid is-tab-conversation">
 <div class="ui-next-task-content-column">
-<section v-show="taskTab==='requirements'" tabindex="-1" class="ui-next-panel ui-next-task-summary" role="tabpanel" aria-labelledby="ui-next-task-tab-requirements">
-
-<div class="ui-next-card-title">
-<button v-if="canEditContent&&!editingContent" @click="startEditContent">編輯</button>
-</div>
-<p v-if="!editingContent" class="ui-next-task-content">{{ task.original_text || '（無內容）' }}</p>
-<div v-else>
-<textarea v-model="editText" @input="autoResize">
-</textarea>
-<div class="ui-next-inline-actions">
-<button class="ui-next-primary" @click="saveContent" :disabled="savingContent||!editText.trim()">{{ savingContent?'儲存中…':'儲存' }}</button>
-<button @click="cancelEditContent">取消</button>
-</div>
-</div>
-<div v-if="ticketAttachments.length" class="ui-next-ticket-files">
-<b>主附件</b>
-<button v-for="file in ticketAttachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }} <small v-if="file.size">{{ formatSize(file.size) }}</small>
-</button>
-</div>
-</section>
-<section v-show="taskTab==='conversation'" tabindex="-1" class="ui-next-panel ui-next-conversation" role="tabpanel" aria-labelledby="ui-next-task-tab-conversation">
+<section tabindex="-1" class="ui-next-panel ui-next-conversation">
 <div ref="convPanel" class="ui-next-conv-list" @click="handleTaskMessageClick">
 <button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
 <template v-for="row in visibleRows" :key="row._key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
@@ -1063,6 +1025,16 @@
 <button @click="toggleLog(row._key)">{{ expandedLogs[row._key]?'收合':'展開' }} {{ machineLogHint(row) }}（技術細節 {{ logLineCount(row) }} 行）</button>
 <pre v-if="expandedLogs[row._key]">{{ row.content }}</pre>
 </template>
+<!-- 需求那則就地編輯（任務還在 new 時可改）：原本的入口在「需求內容」頁籤的編輯鈕，
+     那個頁籤沒了，入口要跟著需求本文搬進對話裡，否則功能還在但永遠按不到。 -->
+<template v-else-if="row.isRequirement&&editingContent">
+<textarea v-model="editText" @input="autoResize">
+</textarea>
+<div class="ui-next-inline-actions">
+<button class="ui-next-primary" @click="saveContent" :disabled="savingContent||!editText.trim()">{{ savingContent?'儲存中…':'儲存' }}</button>
+<button @click="cancelEditContent">取消</button>
+</div>
+</template>
 <template v-else>
 <div v-html="renderTaskMessage(row.content)"></div>
 <!-- 規格審核那則 log 只寫得下摘要。模組／實作項／驗收／權限接在同一則底下，
@@ -1082,8 +1054,9 @@
 <template v-if="spec.permissions&&spec.permissions.trim()"><b>權限</b><p>{{ spec.permissions }}</p></template>
 </div>
 <div v-if="row.attachments&&row.attachments.length">
-<button v-for="file in row.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}</button>
+<button v-for="file in row.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}<small v-if="file.size"> {{ formatSize(file.size) }}</small></button>
 </div>
+<button v-if="row.isRequirement&&canEditContent" class="ui-next-req-edit" @click="startEditContent">編輯需求</button>
 </template>
 <small>{{ timelineMeta(row) }} · {{ formatTime(row.ts) }}</small>
 <!-- 頭像放在最後：CSS 用 grid 把它定位回左上角。放最前面會讓內容 div 不再是 :first-child，
@@ -1093,20 +1066,9 @@
 <p v-if="!timeline.length" class="ui-next-empty-state">尚無對話記錄。</p>
 </div>
 </section>
-<section v-show="taskTab==='history'" tabindex="-1" class="ui-next-panel ui-next-events" role="tabpanel" aria-labelledby="ui-next-task-tab-history">
-<div ref="eventsBox" @scroll="onEventsScroll">
-<button v-if="eventsLoading" type="button" disabled>載入較早紀錄中…</button>
-<p v-if="events.length&&!eventsHasMore">— 已到最前 —</p>
-<article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event),{'is-open':!!expandedEvents[event.id||event.content]}]">
-<button type="button" :aria-expanded="!!expandedEvents[event.id||event.content]" @click="toggleEvent(event)"><span>{{ eventKind(event)==='error' ? '錯誤' : eventKind(event)==='stage' ? '階段' : '輸出' }}</span><b>{{ eventSummary(event) }}</b><time v-if="event.created_at">{{ formatTime(event.created_at) }}</time></button>
-<pre v-if="expandedEvents[event.id||event.content]" v-html="ansiToHtml(event.content)"></pre>
-</article>
-<p v-if="eventsError" class="ui-next-inline-error" role="alert">{{ eventsError }} <button type="button" @click="loadEvents">重試</button></p>
-<p v-else-if="!events.length">尚無執行輸出。</p>
+
 </div>
-</section>
-</div>
-<aside v-show="taskTab==='conversation'&&timelineActionMode!=='archive'" class="ui-next-task-side">
+<aside v-show="timelineActionMode!=='archive'" class="ui-next-task-side">
 <!-- 規格問答的頁籤掛在框外上方：一層就好（題目 1..n 在前、「提問」在最後），
      原本是「規格書 QA／提問」外面再包一層題目數字，兩層疊在框裡分不出哪層是哪層。 -->
 <div v-if="timelineActionMode==='answer'&&clarQuestions.length&&!taskActionCollapsed" class="ui-next-q-tabs" role="tablist">
@@ -1335,6 +1297,23 @@
      塞在 placeholder 裡的話，一開始打字它就消失，正是最需要它的時候。 -->
 <small v-if="!taskActionCollapsed" class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。</small>
 </aside>
+</div>
+<!-- 執行歷程改成跳窗：它是持續 append 的終端輸出，量大又只在除錯時看，
+     擺成第三個頁籤會讓每次進頁面都先看到一個空的分頁。 -->
+<div v-if="eventsOpen" class="ui-next-task-modal-backdrop" @click.self="eventsOpen=false">
+<div class="ui-next-events-modal" role="dialog" aria-modal="true" aria-label="執行歷程">
+<header><h2>執行歷程</h2><button type="button" class="ui-next-icon-button" aria-label="關閉" @click="eventsOpen=false"><ui-next-icon name="close"/></button></header>
+<div ref="eventsBox" @scroll="onEventsScroll">
+<button v-if="eventsLoading" type="button" disabled>載入較早紀錄中…</button>
+<p v-if="events.length&&!eventsHasMore">— 已到最前 —</p>
+<article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event),{'is-open':!!expandedEvents[event.id||event.content]}]">
+<button type="button" :aria-expanded="!!expandedEvents[event.id||event.content]" @click="toggleEvent(event)"><span>{{ eventKind(event)==='error' ? '錯誤' : eventKind(event)==='stage' ? '階段' : '輸出' }}</span><b>{{ eventSummary(event) }}</b><time v-if="event.created_at">{{ formatTime(event.created_at) }}</time></button>
+<pre v-if="expandedEvents[event.id||event.content]" v-html="ansiToHtml(event.content)"></pre>
+</article>
+<p v-if="eventsError" class="ui-next-inline-error" role="alert">{{ eventsError }} <button type="button" @click="loadEvents">重試</button></p>
+<p v-else-if="!events.length">尚無執行輸出。</p>
+</div>
+</div>
 </div>
 </template>
 </section>`,

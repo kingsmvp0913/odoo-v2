@@ -168,8 +168,8 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
   test('任務篩選用 aria-pressed 表達啟用中，而不是掛無效的 aria-selected', () => {
     expect(PAGES).toMatch(/class="ui-next-task-tabs" role="group" aria-label="任務篩選"/);
     expect(PAGES).toMatch(/:aria-pressed="filter===item\[0\] \? 'true' : 'false'"/);
-    // TaskDetail 那組必須維持 tablist，不能被一起改掉
-    expect(PAGES).toMatch(/class="ui-next-task-tabs" role="tablist" aria-label="任務詳情"/);
+    // TaskDetail 那組頁籤已整組移除（需求進對話、執行歷程走跳窗），這裡只剩任務篩選那組
+    expect(PAGES).not.toMatch(/role="tablist" aria-label="任務詳情"/);
     // 反向斷言：篩選那組不要掛 aria-selected（在 button 上是無效屬性）
     const at = PAGES.indexOf('class="ui-next-task-tabs" role="group"');
     expect(PAGES.slice(at, at + 700)).not.toMatch(/aria-selected/);

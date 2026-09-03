@@ -588,14 +588,17 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain('Api.get(`projects/${this.projectId}/env/summary`)');
   });
 
-  test("任務詳情以三個可還原 query 的頁籤分離需求、對話與執行歷程", () => {
-    expect(uiNextPages).toContain("taskTab: 'requirements'");
-    expect(uiNextPages).toContain("['requirements', 'conversation', 'history']");
-    expect(uiNextPages).toContain("setTaskTab(tab)");
-    expect(uiNextPages).toContain("@click=\"setTaskTab('requirements')\"");
-    expect(uiNextPages).toContain("@click=\"setTaskTab('conversation')\"");
-    expect(uiNextPages).toContain("@click=\"setTaskTab('history')\"");
-    expect(uiNextPages).toContain("is-tab-'+taskTab");
+  test("任務詳情是單欄對話：需求進對話第一則、執行歷程走跳窗、沒有頁籤", () => {
+    // 三個頁籤收掉了：需求本文變成對話的第一則（含主附件與就地編輯的入口），
+    // 執行歷程改成跳窗。頁面因此只剩「固定頂欄 ＋ 對話 ＋ 底部對話框」，與聊天頁同構。
+    expect(uiNextPages).not.toContain("setTaskTab(");
+    expect(uiNextPages).not.toContain('class="ui-next-task-tabs" role="tablist"');
+    expect(uiNextPages).toContain("isRequirement: true");
+    expect(uiNextPages).toContain("row.isRequirement&&canEditContent");   // 編輯需求的入口跟著搬進對話
+    expect(uiNextPages).toContain("openEvents()");
+    expect(uiNextPages).toContain('class="ui-next-events-modal"');
+    expect(uiNextPages).toContain('ui-next-task-topbar');
+    expect(uiNextPages).toContain("is-tab-conversation");
     expect(uiNextPages).toContain('eventSummary(event)');
     expect(uiNextPages).toContain('toggleEvent(event)');
     expect(uiNextPages).not.toContain("'/task/'+task.id+'/terminal'");

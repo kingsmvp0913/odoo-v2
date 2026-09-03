@@ -1065,3 +1065,22 @@
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-project-picker-options button{display:grid;gap:1px;text-align:left}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-project-picker-options small{color:var(--text-muted);font-size:11px}
+
+/* ── 任務詳情改成「像聊天頁」：固定頂欄 ＋ 對話 ＋ 底部對話框 ────────────────────────
+   原本第一屏是「大標題／六個標籤／三個頁籤」三層，捲下去就全部消失，看不出自己在哪一張
+   任務。改成一條固定的頂欄：名稱與那三個看了會做決定的標籤（來源、狀態、階段）永遠在。 */
+.ui-next-task-topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 4px;padding:10px 0;background:var(--bg)}
+.ui-next-task-topbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--border)}
+.ui-next-task-topbar-main{display:flex;min-width:0;align-items:center;gap:8px}
+/* 標題不放大：它與旁邊的標籤是同一列資訊，放大反而把那一列拉高 */
+.ui-next-task-topbar-main h1{margin:0;overflow:hidden;font-size:15px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
+.ui-next-task-topbar .ui-next-back{display:grid;flex:none;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--border-strong);border-radius:8px;background:transparent;color:var(--text-secondary);cursor:pointer}
+.ui-next-task-topbar .ui-next-back:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
+.ui-next-task-topbar .ui-next-stage-badge,.ui-next-task-topbar .is-live{flex:none;border:1px solid var(--border);border-radius:999px;padding:2px 9px;color:var(--text-muted);font-size:11px}
+.ui-next-task-topbar .ui-next-detail-actions{flex:none}
+
+/* 執行歷程跳窗：終端輸出要看得寬、捲得動 */
+.ui-next-events-modal{display:flex;width:min(1000px,100%);max-height:min(80dvh,calc(100dvh - 40px));flex-direction:column;overflow:hidden;border:1px solid var(--border-strong);border-radius:15px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ui-next-events-modal>header{display:flex;flex:none;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid var(--border)}
+.ui-next-events-modal>header h2{margin:0;font-size:15px}
+.ui-next-events-modal>div{min-height:0;flex:1;overflow:auto;padding:12px 16px}
