@@ -939,12 +939,14 @@ describe('provider / effort', () => {
     expect400(() => L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'sonnet' }));
   });
 
-  test('effort 逐模型校驗：gpt-5.4 不支援 max（用全域清單會放行）', () => {
-    // gpt-5.6-terra 有 max，gpt-5.4 只到 xhigh。這一條是本組最關鍵的斷言：
+  test('effort 逐模型校驗：gpt-5.5 不支援 max（用全域清單會放行）', () => {
+    // gpt-5.6-terra 有 max，gpt-5.5 只到 xhigh。這一條是本組最關鍵的斷言：
     // codex 在設定載入階段不校驗 effort 值，平台這裡是唯一防線。
+    // ⚠ 挑的兩個 model 必須是 codex 實時清單裡真的存在的（modelEfforts 回 null 會讓
+    //   .not.toContain 直接拋錯）——CLI 會換代，原本用的 gpt-5.4 已下架換成 gpt-5.2。
     expect(L.modelEfforts('codex', 'gpt-5.6-terra')).toContain('max');
-    expect(L.modelEfforts('codex', 'gpt-5.4')).not.toContain('max');
-    const msg = expect400(() => L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'gpt-5.4', effort: 'max' }));
+    expect(L.modelEfforts('codex', 'gpt-5.5')).not.toContain('max');
+    const msg = expect400(() => L.updateAgent(ELIGIBLE, { provider: 'codex', model: 'gpt-5.5', effort: 'max' }));
     expect(msg).toContain('max');
   });
 

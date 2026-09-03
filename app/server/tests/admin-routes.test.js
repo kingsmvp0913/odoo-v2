@@ -346,10 +346,11 @@ test('GET /api/admin/providers → codex 的 efforts 逐模型不同，且不含
   const res = await request(app).get('/api/admin/providers').set('Authorization', 'Bearer ' + adminToken);
   const byId = Object.fromEntries(res.body.codex.models.map(m => [m.id, m.efforts]));
 
-  // 這是本組最關鍵的斷言：若回傳的是同一份全域清單，前端會讓使用者選到 gpt-5.4 + max，
+  // 這是本組最關鍵的斷言：若回傳的是同一份全域清單，前端會讓使用者選到「無 max 的 model + max」，
   // 而 codex 在設定載入階段不校驗 effort，要 spawn 之後才失敗。
+  // ⚠ 挑的 model 要是 codex 實時清單裡真的存在的（gpt-5.4 已下架換成 gpt-5.2，改用 gpt-5.5）。
   expect(byId['gpt-5.6-terra']).toContain('max');
-  expect(byId['gpt-5.4']).not.toContain('max');
+  expect(byId['gpt-5.5']).not.toContain('max');
 
   // codex-auto-review 是 visibility: hide（codex review 專用），不得出現在使用者可選清單
   expect(Object.keys(byId)).not.toContain('codex-auto-review');

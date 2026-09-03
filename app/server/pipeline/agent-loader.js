@@ -44,8 +44,7 @@ const PROVIDERS = {
       { id: 'gpt-5.6-terra', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
       { id: 'gpt-5.6-luna',  efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
       { id: 'gpt-5.5',       efforts: ['low', 'medium', 'high', 'xhigh'] },
-      { id: 'gpt-5.4',       efforts: ['low', 'medium', 'high', 'xhigh'] },
-      { id: 'gpt-5.4-mini',  efforts: ['low', 'medium', 'high', 'xhigh'] }
+      { id: 'gpt-5.2',       efforts: ['low', 'medium', 'high', 'xhigh'] }
     ]
   }
 };
