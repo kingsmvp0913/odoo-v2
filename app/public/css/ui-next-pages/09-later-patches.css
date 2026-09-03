@@ -1085,7 +1085,7 @@
 .ui-next-task-topbar .ui-next-detail-actions{flex:none}
 
 /* 執行歷程跳窗：終端輸出要看得寬、捲得動 */
-.ui-next-events-modal{display:flex;width:min(1000px,100%);max-height:min(80dvh,calc(100dvh - 40px));flex-direction:column;overflow:hidden;border:1px solid var(--border-strong);border-radius:15px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ui-next-events-modal{display:flex;width:min(1000px,100%);height:min(80dvh,calc(100dvh - 40px));flex-direction:column;overflow:hidden;border:1px solid var(--border-strong);border-radius:15px;background:var(--surface);box-shadow:var(--shadow-lg)}
 .ui-next-events-modal>header{display:flex;flex:none;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid var(--border)}
 .ui-next-events-modal>header h2{margin:0;font-size:15px}
 .ui-next-events-modal>div{min-height:0;flex:1;overflow:auto;padding:12px 16px}

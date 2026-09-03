@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -944,32 +944,16 @@
         this._convPinBottom = (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
       },
       async loadEvents() {
-        if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
+        if (this.isTourDemo) { this.events = window.TourDemo.events(); return; }
         this.eventsError = '';
         try {
-          const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10`);
+          // 取最新 30 筆。⚠ 不要回到「先給 10 筆、捲到頂再載更早」那套：內容不夠高就沒有
+          // 捲軸，捲到頂那個條件永遠不成立，實測 1796 筆的任務永遠只看得到 10 筆。
+          const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=30`);
           this.events = Array.isArray(rows) ? rows : [];
-          this.eventsHasMore = this.events.length >= 10;
           this.$nextTick(() => this.scrollEventsToBottom());
         } catch (error) { this.eventsError = error.message || '無法載入執行歷程'; }
       },
-      async loadOlderEvents() {
-        if (this.eventsLoading || !this.eventsHasMore) return;
-        const oldest = this.events.find(e => e.id);
-        if (!oldest) return;
-        this.eventsLoading = true;
-        const c = this.$refs.eventsBox;
-        const prevHeight = c ? c.scrollHeight : 0;
-        try {
-          const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=10&before=${oldest.id}`);
-          const older = Array.isArray(rows) ? rows : [];
-          this.eventsHasMore = older.length >= 10;
-          this.events = [...older, ...this.events];
-          this.$nextTick(() => { if (c) c.scrollTop = c.scrollHeight - prevHeight; }); // 維持捲動位置
-        } catch (error) { this.eventsError = error.message || '無法載入更早的執行歷程'; }
-        finally { this.eventsLoading = false; }
-      },
-      onEventsScroll(e) { if (e.target.scrollTop <= 4) this.loadOlderEvents(); }
     },
     template: `
       <section class="ui-next-page ui-next-task-detail">
@@ -1322,9 +1306,8 @@
 <div v-if="eventsOpen" class="ui-next-task-modal-backdrop" @click.self="eventsOpen=false">
 <div class="ui-next-events-modal" role="dialog" aria-modal="true" aria-label="執行歷程">
 <header><h2>執行歷程</h2><button type="button" class="ui-next-icon-button" aria-label="關閉" @click="eventsOpen=false"><ui-next-icon name="close"/></button></header>
-<div ref="eventsBox" @scroll="onEventsScroll">
-<button v-if="eventsLoading" type="button" disabled>載入較早紀錄中…</button>
-<p v-if="events.length&&!eventsHasMore">— 已到最前 —</p>
+<div ref="eventsBox">
+<p v-if="eventsLoading" class="ui-next-field-note">載入中…</p>
 <article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event),{'is-open':!!expandedEvents[event.id||event.content]}]">
 <button type="button" :aria-expanded="!!expandedEvents[event.id||event.content]" @click="toggleEvent(event)"><span>{{ eventKind(event)==='error' ? '錯誤' : eventKind(event)==='stage' ? '階段' : '輸出' }}</span><b>{{ eventSummary(event) }}</b><time v-if="event.created_at">{{ formatTime(event.created_at) }}</time></button>
 <pre v-if="expandedEvents[event.id||event.content]" v-html="ansiToHtml(event.content)"></pre>
