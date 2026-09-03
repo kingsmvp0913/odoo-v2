@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -178,6 +178,7 @@
       document.addEventListener('click', this._onDocClick);
     },
     beforeUnmount() { this.unbindConvScroll();
+      Object.values(this.attachUrls).forEach(url => URL.revokeObjectURL(url));
       if (this._onDocClick) document.removeEventListener('click', this._onDocClick);
       const sock = window._socket;
       if (sock && sock.off) {
@@ -190,6 +191,7 @@
       // 使用者一往上捲，onConvScroll 會解除釘住，之後新訊息不再打斷閱讀
       'timeline.length'(n) {
         if (n && this._convPinBottom !== false) this.$nextTick(() => this.scrollConvToBottom());
+        this.loadAttachmentThumbs();   // 新訊息帶圖時也要顯示
       },
       tourDemoStatus() { if (this.isTourDemo) this.refresh(); },
     },
@@ -486,6 +488,27 @@
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+      },
+      isImageAttachment(file) {
+        return /^image\//.test(file.mimetype || '') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.filename || '');
+      },
+      imageAttachments(row) { return (row.attachments || []).filter(f => this.isImageAttachment(f)); },
+      fileAttachments(row) { return (row.attachments || []).filter(f => !this.isImageAttachment(f)); },
+      // 附件端點要帶 Authorization header，<img src> 直連拿不到 → 逐張 fetch 成 objectURL。
+      // 少了這一步 attachUrls 恆空、模板那個 v-show 恆為 false ⇒ 一張圖都不會顯示。
+      async loadAttachmentThumbs() {
+        if (!this.task) return;
+        for (const file of this.timeline.flatMap(row => this.imageAttachments(row))) {
+          if (this.attachUrls[file.id]) continue;
+          try {
+            const res = await fetch(`${BASE_PATH}api/tasks/${this.task.id}/attachments/${file.id}/download`, {
+              headers: { Authorization: `Bearer ${Api.getToken()}` }
+            });
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            if (blob.size) this.attachUrls[file.id] = URL.createObjectURL(blob);
+          } catch { /* 單張載不出來就不畫這張 */ }
+        }
       },
       async downloadAttachment(attId, filename) {
         try {
@@ -1031,8 +1054,13 @@
      而下游 QA 的判準正是拿實作去比對這一段。 -->
 <template v-if="spec.permissions&&spec.permissions.trim()"><b>權限</b><p>{{ spec.permissions }}</p></template>
 </div>
-<div v-if="row.attachments&&row.attachments.length">
-<button v-for="file in row.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}<small v-if="file.size"> {{ formatSize(file.size) }}</small></button>
+<!-- 圖片直接顯示縮圖（同聊天頁）：一排「淺底大字檔名」的下載鈕在深色下最刺眼，
+     而且看不到內容還得先下載。非圖片才走檔案列，縮成一行小字。 -->
+<div v-if="imageAttachments(row).length" class="ui-next-conv-images">
+<img v-for="file in imageAttachments(row)" :key="file.id" v-show="attachUrls[file.id]" :src="attachUrls[file.id]" :alt="file.filename" :title="file.filename" @click="downloadAttachment(file.id,file.filename)">
+</div>
+<div v-if="fileAttachments(row).length" class="ui-next-conv-files">
+<button v-for="file in fileAttachments(row)" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/>{{ file.filename }}<small v-if="file.size">{{ formatSize(file.size) }}</small></button>
 </div>
 <button v-if="row.isRequirement&&canEditContent" class="ui-next-req-edit" @click="startEditContent">編輯需求</button>
 </template>

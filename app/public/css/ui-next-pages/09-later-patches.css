@@ -1093,3 +1093,13 @@
    主要動作（那是「返回」還在這一排時的慣例）。頂欄裡最後一顆是「下載程式碼」，不是主要
    動作，填色會變成整條列最搶眼的東西。 */
 .ui-next-task-topbar .ui-next-detail-actions button:last-child:not(.ui-next-back){border-color:var(--border-strong);background:transparent;color:var(--text-secondary)}
+
+/* 對話裡的附件。圖片走縮圖（同聊天頁的 .ui-next-message-files）；非圖片才是檔案列，
+   收成一行小字——原本那排「淺底、13px 檔名、大小另起一行」的下載鈕在深色下最刺眼。 */
+.ui-next-conv-images{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ui-next-conv-images img{max-width:220px;max-height:180px;border:1px solid var(--border);border-radius:9px;cursor:pointer}
+.ui-next-conv-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ui-next-conv-list article .ui-next-conv-files button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-secondary);font:inherit;font-size:11px;cursor:pointer}
+.ui-next-conv-list article .ui-next-conv-files button:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift);color:var(--text)}
+.ui-next-conv-files button .ui-next-icon{width:12px;height:12px}
+.ui-next-conv-files small{color:var(--text-muted)}
