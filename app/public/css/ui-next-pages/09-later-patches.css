@@ -566,11 +566,9 @@
 .ui-next-qa-options label.selected>i{border:5px solid var(--primary)}
 .ui-next-qa-options label>span{display:flex;min-width:0;flex:1;align-items:center;justify-content:space-between;gap:8px;color:inherit}
 .ui-next-qa-options em{border-radius:999px;padding:2px 7px;background:color-mix(in srgb,var(--primary) 12%,var(--surface));color:var(--primary);font-size:10px;font-style:normal}
-.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer{display:grid;gap:3px;margin-top:6px;padding:10px 11px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text)}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer{display:grid;margin-top:6px;padding:10px 11px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text)}
 .ui-next-task-action .ui-next-question .ui-next-qa-custom-answer:focus-within{border-color:var(--border-strong)}
-.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer-heading{color:var(--text-muted);font-size:11px;white-space:nowrap}
-.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer-heading>b{color:var(--text);font-size:12px}
-.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>textarea{min-height:66px;margin-top:5px;border:0;padding:0;background:transparent;resize:none}
+.ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>textarea{min-height:20px;height:20px;margin:0;border:0;padding:0;background:transparent;resize:none}
 .ui-next-task-action .ui-next-question .ui-next-qa-custom-answer>textarea:focus{outline:0}
 
 /* 規格書 QA 的「提問」是一個完整 Composer，不再讓裸 textarea、附件與送出鈕散在面板裡。 */

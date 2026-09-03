@@ -702,13 +702,13 @@ describe("ui-next 平行介面", () => {
     const task = viewSrc("UiNextTaskDetailView");
     expect(task).toContain('class="ui-next-qa-options"');
     expect(task).toContain('class="ui-next-qa-custom-answer"');
-    expect(task).toContain('以上選項都不適合？');
-    expect(task).toContain('<span class="ui-next-qa-custom-answer-heading"><b>以上選項都不適合？</b> 直接寫下你的答案或補充說明</span>');
+    // 說明走 placeholder 而不是另一行標題：多一行標題這張卡就比選項卡高一截
+    expect(task).toContain('placeholder="以上選項都不適合？直接寫下你的答案或補充說明"');
+    expect(task).not.toContain('ui-next-qa-custom-answer-heading');
     expect(pagesCss).toContain('.ui-next-qa-options label.selected');
-    expect(pagesCss).toContain('.ui-next-qa-custom-answer-heading{color:var(--text-muted);font-size:11px;white-space:nowrap}');
     // 這一欄與上面兩張選項卡用同一組框（1px --border、10px 圓角、10/11 內距、--surface 底），
     // 三者才讀得出是同一層級的選項；不是裸 textarea，也不是另一種尺寸的框。
-    expect(pagesCss).toContain('.ui-next-qa-custom-answer{display:grid;gap:3px;margin-top:6px;padding:10px 11px;border:1px solid var(--border);border-radius:10px;background:var(--surface)');
+    expect(pagesCss).toContain('.ui-next-qa-custom-answer{display:grid;margin-top:6px;padding:10px 11px;border:1px solid var(--border);border-radius:10px;background:var(--surface)');
   });
 
   test("規格書 QA 提問是單一 Composer：由動作面板本身提供，不再套內層框", () => {

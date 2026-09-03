@@ -1138,9 +1138,9 @@
 <label v-for="opt in q.options" :key="opt.key" :class="{selected:answerFields[q.id]===opt.key}">
 <input type="radio" :name="'answer_'+q.id" :value="opt.key" v-model="answerFields[q.id]"><i aria-hidden="true"></i><span>{{ opt.label }}<em v-if="q.recommended===opt.key">建議</em></span></label>
 </div>
+<!-- 說明放 placeholder，不另立標題行：它與上面兩張選項卡是同一層級，多一行標題就比選項高一截 -->
 <label class="ui-next-qa-custom-answer">
-<span class="ui-next-qa-custom-answer-heading"><b>以上選項都不適合？</b> 直接寫下你的答案或補充說明</span>
-<textarea v-model="answerExtra[q.id]" placeholder="輸入你的答案…" @input="autoResize"></textarea>
+<textarea v-model="answerExtra[q.id]" placeholder="以上選項都不適合？直接寫下你的答案或補充說明" @input="autoResize"></textarea>
 </label>
 </template>
 <textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)" @input="autoResize">
