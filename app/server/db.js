@@ -493,6 +493,37 @@ async function migrate() {
       finished_at  TIMESTAMPTZ
     )`,
 
+    // 使用者意見回饋。⚠ 提交這一步不得呼叫任何 agent——AI 全部在管理員核准之後才動
+    // （見 spec §5.1）。否則任何登入使用者都能單方面觸發無上限的 opus 成本。
+    `CREATE TABLE IF NOT EXISTS feedback (
+      id            SERIAL PRIMARY KEY,
+      user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      content       TEXT NOT NULL,                 -- 使用者原文，永不覆寫
+      status        TEXT NOT NULL DEFAULT 'new',   -- new | approved | rejected | done
+      triage_title  TEXT,                          -- 以下由 feedback-triage agent 夜間填
+      triage_detail TEXT,
+      triage_layer  TEXT,                          -- code | prompt | observability | env | unclear
+      triage_action TEXT,
+      triage_note   TEXT,                          -- 看不懂時寫「為什麼」，顯示在管理頁
+      verify_route  TEXT,                          -- 截圖審查要開哪一頁（推不出來就留空）
+      finding_id    INTEGER REFERENCES health_check_findings(id) ON DELETE SET NULL,
+      decided_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      decided_at    TIMESTAMPTZ,
+      verdict_note  TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // ⚠ FK 必須 CASCADE。裸 REFERENCES 會讓「刪 feedback」被這張表擋住——
+    // 此 repo 在 user_inbox 踩過同一件事，症狀是 500 而不是任何看得懂的訊息。
+    `CREATE TABLE IF NOT EXISTS feedback_attachments (
+      id          SERIAL PRIMARY KEY,
+      feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      mimetype    TEXT,
+      file_path   TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     // agent 提示詞版本的出現時間。promptVersion() 本身只是內容 hash、不帶時間，健檢因此無從
     // 分辨「這 30 天的指標是哪一版 prompt 產生的」——改完 prompt 隔天看到的數字，29 天來自舊版。
     // 只在健檢掃到「現值與最後一列不同」時補一列，故也涵蓋直接改檔案（沒走 updateAgent）的情況。
@@ -799,7 +830,10 @@ async function migrate() {
     // 健檢節奏：daily＝增量視窗（既有行為，故 DEFAULT）／weekly＝固定回看 7 天／monthly＝固定回看
     // 30 天且額外做趨勢比對。刻意不叫 kind：findings 已有同名欄位（提案／訊號／診斷），混用會讓
     // 「這一輪是什麼節奏」與「這一條是什麼類型」在查詢與畫面上再也分不出來。
-    { table: 'health_check_runs', col: 'cadence', sql: "ALTER TABLE health_check_runs ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'" }
+    { table: 'health_check_runs', col: 'cadence', sql: "ALTER TABLE health_check_runs ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'" },
+    // 維護視窗：夜間批次期間暫停同步與派工。⚠ 用「到期時間」不是布林——布林卡在 true 會讓
+    // 派工從此安靜地停擺，而安靜的失敗最難發現（此 repo 踩過：夜班空轉 98 輪無人察覺）。
+    { table: 'teams_settings', col: 'maintenance_until', sql: 'ALTER TABLE teams_settings ADD COLUMN maintenance_until TIMESTAMPTZ' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -980,6 +1014,10 @@ async function migrate() {
 
   // health_check_runs / health_check_findings（工作流程健檢）
   await query('CREATE INDEX IF NOT EXISTS idx_hcf_run ON health_check_findings (run_id)').catch(() => {});
+
+  // 管理頁預設只看未處理的；夜間批次撈 approved
+  await query("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback (status)").catch(() => {});
+  await query('CREATE INDEX IF NOT EXISTS idx_feedback_attachments_fb ON feedback_attachments (feedback_id)').catch(() => {});
 
   // wiki_pages indexes
   await query('CREATE INDEX IF NOT EXISTS idx_wiki_parent ON wiki_pages (parent_id)').catch(() => {});
