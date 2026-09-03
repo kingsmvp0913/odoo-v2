@@ -432,7 +432,9 @@
           const r = await Api.put(`tasks/${this.task.id}/pause`, {});
           this.task.is_paused = r.is_paused;
           showToast(r.is_paused ? '已取消本輪執行' : '已繼續執行', r.is_paused ? 'warn' : 'success');
-          await this.loadMessages();
+          // 後端在暫停／繼續時各寫一則 system 訊息，重讀對話才看得到；
+          // 這一頁的方法叫 loadTaskMessages（loadMessages 是聊天頁那支，在這裡是 undefined）。
+          await this.loadTaskMessages();
         } catch (err) { showToast(err.message, 'error'); }
       },
       startEditContent() {
