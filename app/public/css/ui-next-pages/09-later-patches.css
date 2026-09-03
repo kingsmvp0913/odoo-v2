@@ -580,8 +580,13 @@
 
 /* 規格審核的規格書一長，整個動作面板就高過畫面（實測 963px / 視窗 900px）。面板是 sticky 在
    底部的，被頂出去的是頂端——標題列連同「縮小」鈕停在 y=-82，捲動也追不回來。
-   規格書自己捲、面板高度封頂、標題列黏在面板頂端，縮小鈕才一直點得到。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-height:calc(100dvh - 24px);overflow-y:auto}
+   規格書自己捲、面板高度封頂、標題列黏在面板頂端，縮小鈕才一直點得到。
+   ⚠ 封頂值必須除以 --ui-zoom：body 帶 zoom:1.1，calc(100dvh - 24px) 得到的 876 CSS px
+   視覺上是 963px，又高過 900 的視窗——漏除等於這條沒寫（澄清題目一多就重現）。
+   ⚠ 面板是 grid：容器一有確定高度，auto row 會被壓到 min-content，而卡片 overflow:visible，
+   內容於是溢出蓋到下一張卡，同時 scrollHeight≈clientHeight 讓上面的 overflow-y:auto 捲不動。
+   grid-auto-rows:max-content 才是「不壓縮、超出就捲」。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-height:calc((100dvh - 24px) / var(--ui-zoom, 1));grid-auto-rows:max-content;overflow-y:auto}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) .ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -16px 0;padding:12px 16px 4px;background:var(--surface)}
 .ui-next-task-action .ui-next-spec-box{max-height:46dvh;overflow-y:auto;overscroll-behavior:contain}
 /* composer 自己有 gap:9px，inline-actions 再帶 margin-top 就變成兩倍間距。 */
