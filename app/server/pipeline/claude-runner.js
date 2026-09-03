@@ -33,6 +33,8 @@ const MCP_PROFILES = {
 const NO_MCP_STAGES = new Set([
   'respec', 'merge', 'chat-to-task', 'deploy_fix', 'reject_classify',
   'wiki', 'wiki_drift_classify', 'workflow_health',
+  // 意見回饋的翻譯與統整：只讀使用者原文與候選清單、產出結構化 JSON，不碰 Odoo API 或平台程式碼本身。
+  'feedback_triage', 'feedback_merge',
 ]);
 // context7 啟動策略：優先用本地依賴（node ＋ 執行期解析的絕對路徑）——npx -y 每次 spawn 都可能
 // 重新下載套件（冷啟動慢、離線直接失敗）。未安裝時退回 npx。
