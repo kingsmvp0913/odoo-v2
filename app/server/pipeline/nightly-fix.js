@@ -1,18 +1,20 @@
 const { execFile } = require('child_process');
 const { query } = require('../db');
-const { enterMaintenance, leaveMaintenance } = require('./maintenance');
+const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
 const { triageOne, mergeCandidates } = require('./feedback-triage');
 const { reviewFix } = require('./fix-review');
-const { runFix, adoptFix, applyFix, pickSelfContainer } = require('./finding-fix');
+const { runFix, adoptFix, applyFix, selfContainerName } = require('./finding-fix');
 
 /**
  * nightly-fix.js — 夜間批次編排器：意見回饋通道的核心。
  *
- * 進維護視窗 → 撈候選（意見回饋 approved ＋ 健檢提案 approved）→ triage → 統整 → 逐條
- * 走完整條鏈（runFix → fix-review → adopt → applyFix 只合併）→ 全部跑完才重啟一次。
+ * 進維護視窗 → 等在飛任務排空 → 撈候選（意見回饋 approved ＋ 健檢提案 approved）→ triage →
+ * 統整 → 逐條走完整條鏈（runFix → fix-review → adopt → applyFix 只合併）→ 標 done →
+ * 全部跑完才重啟一次。
  *
- * ⚠ 這是「平台自己改自己」的最後一段自動化，任何一步失敗都不能讓維護旗標卡死——
- * 那會讓派工從此安靜停擺（見 maintenance.js 的三道保險）。
+ * ⚠ 這是「平台自己改自己」的最後一段自動化。它最可能的失敗方式不是炸掉，而是**安靜地什麼都
+ * 沒做**——保險絲誤擋、候選撈不到、每條都失敗，畫面上全都長得跟「今晚本來就沒事做」一模一樣
+ * （此 repo 踩過：夜班空轉 98 輪無人察覺）。所以每一道擋下候選的決定都要留 log。
  */
 
 const NIGHTLY_FIX_MAX = parseInt(process.env.NIGHTLY_FIX_MAX || '5', 10);
@@ -20,8 +22,10 @@ const NIGHTLY_FIX_MAX_RETRY = parseInt(process.env.NIGHTLY_FIX_MAX_RETRY || '1',
 const NIGHTLY_FIX_DEADLINE_HOUR = parseInt(process.env.NIGHTLY_FIX_DEADLINE_HOUR || '2', 10);
 const NIGHTLY_FIX_TOKEN_BUDGET = parseInt(process.env.NIGHTLY_FIX_TOKEN_BUDGET || '12000000', 10);
 const NIGHTLY_FIX_DRAIN_MAX_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_MAX_MS || '1800000', 10);
-const DRAIN_POLL_MS = 60000;
+const DRAIN_POLL_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_POLL_MS || '60000', 10);
 const TIME_ZONE = 'Asia/Taipei';
+// 本批次自建的 health_check_runs 用 window_days=0 表示「不是回看某個視窗的健檢，是這一晚的修正批次」。
+const BATCH_WINDOW_DAYS = 0;
 
 // 可自動修的 layer；健檢候選的嚴重度門檻。意見回饋不套嚴重度——人親自核准過就是把關。
 const AUTO_LAYERS = new Set(['code', 'prompt', 'observability']);
@@ -31,16 +35,31 @@ let _clockForTesting = null;
 function _setClockForTesting(clock) { _clockForTesting = clock; }
 function now() { return _clockForTesting ? _clockForTesting() : new Date(); }
 
-// 比照 cron.js 的 taipeiDateParts：只取當地時（deadline 判斷只需要這個）。
-function taipeiHour(d) {
+// 比照 cron.js 的 taipeiDateParts
+function taipeiDateParts(d) {
   const values = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: TIME_ZONE, hour: '2-digit', hour12: false
+    timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
   }).formatToParts(d).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
-  return Number(values.hour) % 24; // 24 是 en-US 對午夜的表示法，正規化成 0
+  // 24 是 en-US 對午夜的表示法，正規化成 0
+  return { year: Number(values.year), month: Number(values.month), day: Number(values.day), hour: Number(values.hour) % 24 };
 }
 
-// getInflightInfo 延到函式內才 require：nightly-fix 不該在載入時就拉進 runner（避免循環依賴，
-// runner.js 之後串接本模組——Task 7.3）。
+/**
+ * 批次起點之後的「下一個台北 02:00」＝本批次的絕對截止時刻。
+ *
+ * ⚠ 不可改回「拿當下的小時跟 2 比大小」。批次是接在 23:00 健檢後面啟動的，`23 >= 2` 恆為真，
+ * 迴圈第一輪就 break ＝整條通道每晚靜默 no-op、零 log（實測過的失敗，不是假想）。
+ * 算成絕對時刻後，23:00 起跑得到 3 小時、00:30 起跑得到 1.5 小時，語意才是「跑到凌晨兩點為止」。
+ */
+function nextDeadlineAt(startedAt) {
+  const { year, month, day, hour } = taipeiDateParts(startedAt);
+  // 起點已過當日 02:00 就指向隔天的 02:00；日期用 UTC 建再加天數，跨月跨年交給 Date 自己處理
+  const target = new Date(Date.UTC(year, month - 1, day + (hour >= NIGHTLY_FIX_DEADLINE_HOUR ? 1 : 0)));
+  return new Date(`${target.toISOString().slice(0, 10)}T${String(NIGHTLY_FIX_DEADLINE_HOUR).padStart(2, '0')}:00:00+08:00`);
+}
+
+// getInflightInfo 延到函式內才 require：載入期就拉進 runner 會有循環依賴
+// （runner.js 之後串接本模組——Task 7.3）。
 function inflightCount() {
   const { getInflightInfo } = require('./runner');
   return getInflightInfo().length;
@@ -65,11 +84,24 @@ async function tokensSince(sinceAt) {
   return Number(rows[0]?.total || 0);
 }
 
-// 健檢提案候選：approved 的 proposal，套 severity 門檻與可自動修的 layer（已知 layer，可在此就篩）。
+/**
+ * 兩道保險絲。回傳擋下的原因（`deadline`／`token-budget`）或 null。
+ *
+ * ⚠ 一律在「開跑之前」問，不是跑到一半砍掉——半途中斷會留下髒 worktree 與半套 diff。
+ * triage／merge 本身就要燒 token，所以進迴圈之前也要先問一次（50 筆 approved 意見會先燒
+ * 50 次 triage 才輪到第一次檢查預算）。
+ */
+async function fuseTripped(deadlineAt, batchStartedAt) {
+  if (now() >= deadlineAt) return 'deadline';
+  if (await tokensSince(batchStartedAt) >= NIGHTLY_FIX_TOKEN_BUDGET) return 'token-budget';
+  return null;
+}
+
+// 健檢提案候選：approved 的 proposal，套 severity 門檻與可自動修的 layer（layer 已知，可在此就篩）。
 async function fetchHealthCandidates() {
   const { rows: hc } = await query(
-    `SELECT id, agent_label AS title, diagnosis AS detail, layer, severity, rationale AS action,
-            risk_if_wrong, target_metric, metric_baseline, evidence, created_at
+    `SELECT id, agent_name, agent_label AS title, diagnosis AS detail, layer, severity,
+            rationale AS action, risk_if_wrong, target_metric, metric_baseline, evidence, created_at
        FROM health_check_findings
       WHERE status = 'approved' AND kind = 'proposal'
       ORDER BY created_at ASC`
@@ -79,8 +111,9 @@ async function fetchHealthCandidates() {
     .map(h => ({ source: 'finding', row: h }));
 }
 
-// 意見回饋候選：approved 但**尚未 triage**（triage_layer 還是 NULL，layer 要等 triageOne 跑完才知道，
-// 不可在這裡先套 layer 條件）。不套嚴重度——人親自核准過就是把關。
+// 意見回饋候選：status='approved' 的全部撈出來。
+// ⚠ 這裡**不能**套 layer 條件：layer 要等 triageOne 跑完才會寫進 triage_layer，此刻還是 NULL，
+// 先套等於把所有新核准的意見全部濾掉（整條通道對意見回饋永遠 no-op）。
 async function fetchApprovedFeedback() {
   const { rows: fb } = await query(
     `SELECT id, content, user_id, created_at FROM feedback WHERE status = 'approved' ORDER BY created_at ASC`
@@ -88,8 +121,8 @@ async function fetchApprovedFeedback() {
   return fb.map(f => ({ source: 'feedback', row: f }));
 }
 
-// 意見回饋跑 triageOne：把使用者原文翻成具體修改需求，順便補上 layer（觸發本函式前 layer 未知）。
-// 回 understandable:false 的剔除（triageOne 內部已把 status 退回 'new'）；翻譯出來的 layer 不在
+// 意見回饋跑 triageOne：把使用者原文翻成具體修改需求，順便定出 layer。
+// 回 understandable:false 的剔除（triageOne 內部已把 status 退回 'new'）；翻出來的 layer 不在
 // 可自動修範圍（例如 env）也剔除——篩掉的意見留在原地不動狀態，不做任何寫入。
 async function triageFeedback(items) {
   const kept = [];
@@ -100,7 +133,12 @@ async function triageFeedback(items) {
       `SELECT id, triage_title AS title, triage_detail AS detail, triage_layer AS layer,
               triage_action AS action, verify_route, user_id, created_at
          FROM feedback WHERE id=$1`, [it.row.id]);
-    if (!AUTO_LAYERS.has(refreshed.layer)) continue;
+    if (!refreshed) continue;
+    if (!AUTO_LAYERS.has(refreshed.layer)) {
+      console.log('[NIGHTLY-FIX] 意見 #%d 的 layer=%s 不在可自動修範圍，跳過',
+        it.row.id, refreshed.layer || '未分類');
+      continue;
+    }
     kept.push({ source: 'feedback', row: refreshed });
   }
   return kept;
@@ -118,104 +156,120 @@ function sortCandidates(feedbackItems, healthItems) {
   });
 }
 
-function toCandidateItem(it) {
-  return { id: it.row.id, source: it.source, title: it.row.title || '(無標題)', detail: it.row.detail || '' };
+/**
+ * 送給 merge agent 的候選一律用**批次內序號 1..N**，不是資料表的主鍵。
+ *
+ * ⚠ `feedback` 與 `health_check_findings` 各自 SERIAL，撞號是常態（不是邊緣case）。裸 id 進去、
+ * 裸 id 回來之後，`feedback:7` 與 `finding:7` 再也分不開：一組純意見的修改會被認成某筆健檢提案，
+ * runFix 從 DB 讀到健檢提案的內文、fix-review 卻拿到意見的 title/detail ⇒ **改錯東西，且零訊號**。
+ * 序號天生不撞，而 agent 那邊看到的仍是裸數字，契約不變。
+ */
+function indexCandidates(candidates) {
+  const indexed = candidates.map((it, i) => ({ ordinal: i + 1, ...it }));
+  return { indexed, byOrdinal: new Map(indexed.map(it => [it.ordinal, it])) };
 }
 
-// 統整後的一組 → 準備寫進 health_check_findings 的欄位（不重建健檢來源的既有 finding）。
-async function feedbackEvidence(memberIds, byKey) {
+function toCandidateItem(it) {
+  return {
+    id: it.ordinal, source: it.source,
+    title: it.row.title || '(無標題)', detail: it.row.detail || ''
+  };
+}
+
+/**
+ * merge agent 回來的組 → 可執行的組。三件事：
+ *   1. member_ids 只留認得的序號（agent 可能回不存在的號碼）
+ *   2. layer 重新套 AUTO_LAYERS——merge 的 schema 允許回 env／unclear，回了照樣進 runFix 會白燒
+ *      一輪；agent 沒填時沿用組內第一個成員的 layer（成員在入選時都已通過同一道篩選）
+ *   3. verify_route 為空時 fallback 到組內意見成員的值——merge 的 prompt 寫「推不出來留空」，
+ *      實務上它幾乎必然留空，而 needsScreenshot 只看這個欄位 ⇒ 截圖審查對最需要它的來源
+ *      （使用者親眼看到畫面不對而提的意見）永遠不會啟動
+ */
+function normalizeGroups(groups, byOrdinal) {
+  const usable = [];
+  for (const g of groups) {
+    const memberIds = (Array.isArray(g.member_ids) ? g.member_ids : [])
+      .map(Number).filter(id => byOrdinal.has(id));
+    if (!memberIds.length) {
+      console.log('[NIGHTLY-FIX] 統整結果「%s」沒有對得上的成員序號，跳過', g.title || '(無標題)');
+      continue;
+    }
+    const members = memberIds.map(id => byOrdinal.get(id));
+    // ⚠ agent **明講**的 layer 一律照認：它說 env／unclear 就是判斷「這條自動改不動」，
+    // 此時不可拿成員的 layer 去蓋掉它（那等於把它的結論改寫成我們想要的答案）。
+    // 只有它沒填時才沿用成員的 layer（成員在入選時都已通過同一道 AUTO_LAYERS 篩選）。
+    const declared = String(g.layer || '').trim().toLowerCase();
+    const layer = declared
+      ? (AUTO_LAYERS.has(declared) ? declared : null)
+      : members.map(m => m.row.layer).find(l => AUTO_LAYERS.has(l));
+    if (!layer) {
+      console.log('[NIGHTLY-FIX] 統整結果「%s」的 layer=%s 不在可自動修範圍，跳過',
+        g.title || '(無標題)', g.layer || '未填');
+      continue;
+    }
+    const route = String(g.verify_route || '').trim()
+      || (members.find(m => m.source === 'feedback' && m.row.verify_route)?.row.verify_route || '');
+    usable.push({
+      memberIds, members, layer,
+      title: g.title || '(無標題)',
+      detail: g.detail || '',
+      action: g.action || '',
+      verify_route: route,
+    });
+  }
+  return usable;
+}
+
+// 一組只有單一健檢提案成員（沒有意見回饋、沒有被合併）：健檢來源本來就有 finding，不重建，
+// 直接沿用既有 id。重建會讓健檢頁多出一條看起來一樣、脈絡卻是全新的重複列。
+function soleFindingId(members) {
+  if (members.length !== 1 || members[0].source !== 'finding') return null;
+  return members[0].row.id;
+}
+
+// evidence：意見回饋成員的「誰在何時回報」。夜間無人監督，這是事後唯一看得出這條修改
+// 從何而來的線索。
+async function feedbackEvidence(members) {
   const notes = [];
-  for (const id of memberIds) {
-    const it = byKey.get(`feedback:${id}`);
-    if (!it) continue;
+  for (const it of members) {
+    if (it.source !== 'feedback') continue;
     const { rows: [u] } = await query('SELECT display_name, username FROM users WHERE id=$1', [it.row.user_id]);
     const who = (u && (u.display_name || u.username)) || '匿名';
-    const when = new Date(it.row.created_at).toISOString();
-    notes.push(`使用者 ${who} 於 ${when} 回報`);
+    notes.push(`使用者 ${who} 於 ${new Date(it.row.created_at).toISOString()} 回報`);
   }
   return notes.length ? notes.join('\n') : null;
 }
 
-// 一組只有單一健檢提案成員（沒有意見回饋、沒有被合併）：健檢來源本來就有 finding，不重建，
-// 直接沿用既有 id——重建會讓 fix-review 之後的 applyFix 標「done」寫錯 finding、也會讓健檢頁
-// 出現一條看起來一樣但脈絡全新的重複列。
-function soleFindingId(memberIds, byKey) {
-  if (memberIds.length !== 1) return null;
-  const it = byKey.get(`finding:${memberIds[0]}`);
-  return it ? it.row.id : null;
-}
-
-async function materializeGroup(group, byKey, runId) {
-  const memberIds = Array.isArray(group.member_ids) ? group.member_ids : [];
-  const reuseId = soleFindingId(memberIds, byKey);
-
+async function materializeGroup(group, runId) {
+  const reuseId = soleFindingId(group.members);
   const base = {
-    title: group.title || '(無標題)',
-    detail: group.detail || '',
-    action: group.action || '',
-    layer: group.layer || 'code',
-    verify_route: group.verify_route || '',
-    risk_if_wrong: null,
-    member_ids: memberIds,
+    title: group.title, detail: group.detail, action: group.action,
+    layer: group.layer, verify_route: group.verify_route,
+    risk_if_wrong: reuseId != null ? (group.members[0].row.risk_if_wrong || null) : null,
+    members: group.members,
   };
+  if (reuseId != null) return { findingId: reuseId, reused: true, ...base };
 
-  if (reuseId != null) return { findingId: reuseId, ...base };
+  const hasFeedback = group.members.some(m => m.source === 'feedback');
+  const evidence = await feedbackEvidence(group.members);
 
-  // 一組裡若含意見回饋成員，補上「誰在何時回報」；純健檢提案（多筆合併）沒有單一原文可附。
-  const hasFeedback = memberIds.some(id => byKey.has(`feedback:${id}`));
-  const evidence = hasFeedback ? await feedbackEvidence(memberIds, byKey) : null;
-
-  // ⚠ health_check_findings 沒有 verify_route 欄位（那是 feedback 表才有的）；merge 產出的
-  // verify_route 只在記憶體內傳給 reviewFix 判斷要不要截圖，不落地。
+  /**
+   * ⚠ 這一列是「批次的施工紀錄」，不是等人裁決的提案，所以明確帶 status='done'：
+   *   - 走 DEFAULT（現在是 pending、Phase 7.1 之後是 approved）會讓它變成**隔晚的候選**，
+   *     與「成功後才標 done」疊起來就是自我餵食迴圈：每晚產生新提案、每晚再修一次。
+   *   - 真正的處置結果由 applied_at 區分：有值＝碼已合併；沒值＝這一晚試過但沒成功。
+   * health_check_findings 沒有 verify_route 欄位（那是 feedback 表才有的），只在記憶體內傳給
+   * reviewFix 判斷要不要截圖。
+   */
   const { rows: [row] } = await query(
     `INSERT INTO health_check_findings
-       (run_id, agent_name, agent_label, diagnosis, severity, rationale, kind, layer, evidence)
-     VALUES ($1,'feedback',$2,$3,'medium',$4,'proposal',$5,$6)
+       (run_id, agent_name, agent_label, diagnosis, severity, rationale, kind, layer, evidence, status)
+     VALUES ($1,$2,$3,$4,'medium',$5,'proposal',$6,$7,'done')
      RETURNING id`,
-    [runId, base.title, base.detail, base.action || null, base.layer, evidence]
+    [runId, hasFeedback ? 'feedback' : 'health-auditor',
+     base.title, base.detail, base.action || null, base.layer, evidence]
   );
-  return { findingId: row.id, ...base };
-}
-
-// 逐條走完整條鏈：runFix → (通過測試才)fix-review → reject 重跑一次 → adopt →
-// applyFix(只合併，僅在有 pushUserId 時)。
-//
-// pushUserId 為 null（teams_settings.cli_push_user_id 未設定）：整批停在 adopted，不呼叫
-// applyFix——不得寫死 user id，也不得代為決定用誰的身分推。
-async function runOneCandidate(cand, { pushUserId, startedBy }) {
-  let fixId = await createFixRow(cand.findingId, startedBy);
-  await runFix(fixId, { findingId: cand.findingId, startedBy });
-
-  let attempt = 0;
-  for (;;) {
-    const { rows: [fix] } = await query('SELECT status FROM finding_fixes WHERE id=$1', [fixId]);
-    if (!fix || fix.status !== 'ready') return { merged: false };
-
-    const verdict = await reviewFix(fixId, cand);
-    if (verdict.verdict === 'approve') {
-      if (!pushUserId) {
-        await adoptFix(fixId, startedBy);
-        console.error('[NIGHTLY-FIX] 未設定 CLI 推送身分（teams_settings.cli_push_user_id 為空），'
-          + `提案 #${cand.findingId} 停在 adopted，不合併不重啟`);
-        return { merged: false, adopted: true, fixId };
-      }
-      await adoptFix(fixId, pushUserId);
-      // ⚠ inflight 傳非空值 ⇒ 只合併不重啟。
-      await applyFix(fixId, pushUserId, ['nightly-fix']);
-      return { merged: true, fixId };
-    }
-
-    // reviewFix 只回 verdict，不落地——記到這一筆 finding_fixes，否則審查理由無跡可尋。
-    await query(`UPDATE finding_fixes SET reject_reason=$2 WHERE id=$1`, [fixId, verdict.reason || '審查未通過']);
-
-    attempt += 1;
-    if (attempt > NIGHTLY_FIX_MAX_RETRY) return { merged: false };
-
-    // 退回改一次：開新的一筆 finding_fixes 重跑（不覆寫舊列，finding_fixes 本來就是為
-    // 「一條提案可試修多次」設計的）。
-    fixId = await createFixRow(cand.findingId, startedBy);
-    await runFix(fixId, { findingId: cand.findingId, startedBy });
-  }
+  return { findingId: row.id, reused: false, ...base };
 }
 
 async function createFixRow(findingId, startedBy) {
@@ -227,10 +281,96 @@ async function createFixRow(findingId, startedBy) {
 }
 
 /**
+ * 成功合併之後把來源標掉。**沒有這一步，同一批 approved 每晚會重做一次**：重新 triage、重建
+ * finding、重跑兩次全套測試，而使用者端永遠停在「已核准」（`task-1.3-brief.md`：done 由夜間批次寫）。
+ *
+ * ⚠ 不能指望 applyFix 代勞：它在 inflight 非空時提早 return（夜間批次正是傳非空值來「只合併不
+ * 重啟」），跳過了它自己標 done 的那段。
+ */
+async function markGroupDone(cand, userId) {
+  for (const it of cand.members) {
+    if (it.source === 'feedback') {
+      await query(
+        `UPDATE feedback SET status='done', finding_id=$2 WHERE id=$1`, [it.row.id, cand.findingId]);
+    } else {
+      await query(
+        `UPDATE health_check_findings
+            SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+          WHERE id=$1`, [it.row.id, userId || null]);
+    }
+  }
+  // 批次自建的那一列（合併組）也要記 applied_at，才分得出「試過沒成」與「已套用」
+  await query(
+    `UPDATE health_check_findings SET applied_at = COALESCE(applied_at, NOW()) WHERE id=$1`,
+    [cand.findingId]);
+}
+
+/**
+ * 逐條走完整條鏈：runFix → (通過測試才) fix-review → reject 退回改一次 → adopt →
+ * applyFix(只合併，僅在有 pushUserId 時)。
+ *
+ * pushUserId 為 null（teams_settings.cli_push_user_id 未設定）：停在 adopted，不呼叫 applyFix
+ * ——不得寫死 user id，也不得代為決定用誰的身分推。
+ */
+async function runOneCandidate(cand, { pushUserId, startedBy }) {
+  let fixId = await createFixRow(cand.findingId, startedBy);
+  await runFix(fixId, { findingId: cand.findingId, startedBy });
+
+  let attempt = 0;
+  for (;;) {
+    const { rows: [fix] } = await query('SELECT status, reject_reason FROM finding_fixes WHERE id=$1', [fixId]);
+    if (!fix || fix.status !== 'ready') {
+      console.log('[NIGHTLY-FIX] 提案 #%d 的修正狀態為 %s，不進審核',
+        cand.findingId, (fix && fix.status) || '（查無此列）');
+      return { merged: false };
+    }
+
+    const verdict = await reviewFix(fixId, cand);
+    if (verdict.verdict === 'approve') {
+      if (!pushUserId) {
+        await adoptFix(fixId, startedBy);
+        console.error('[NIGHTLY-FIX] 未設定 CLI 推送身分（teams_settings.cli_push_user_id 為空），'
+          + `提案 #${cand.findingId} 停在 adopted，不合併不重啟`);
+        return { merged: false, adopted: true, fixId };
+      }
+      await adoptFix(fixId, pushUserId);
+      // ⚠ inflight 傳非空值 ⇒ 只合併不重啟（最後才單獨重啟一次）
+      await applyFix(fixId, pushUserId, ['nightly-fix']);
+      return { merged: true, fixId };
+    }
+
+    // reviewFix 只回 verdict、不落地。狀態也要一起改掉：只寫 reject_reason 會讓這筆停在 ready，
+    // 管理頁看起來像「還可以採用」。
+    await query(
+      `UPDATE finding_fixes SET status='rejected', reject_reason=$2, finished_at=NOW() WHERE id=$1`,
+      [fixId, verdict.reason || '審查未通過']);
+    console.log('[NIGHTLY-FIX] 提案 #%d 第 %d 次審核未通過：%s',
+      cand.findingId, attempt + 1, verdict.reason || '（未附理由）');
+
+    attempt += 1;
+    if (attempt > NIGHTLY_FIX_MAX_RETRY) return { merged: false };
+
+    // 退回改一次：開新的一筆 finding_fixes 重跑（不覆寫舊列——finding_fixes 本來就是為
+    // 「一條提案可試修多次」設計的，覆寫會讓「上一次試了什麼、為什麼失敗」消失）。
+    fixId = await createFixRow(cand.findingId, startedBy);
+    await runFix(fixId, { findingId: cand.findingId, startedBy });
+  }
+}
+
+/**
  * runNightlyFix({ startedBy }) -> { attempted, applied, skipped, reason? }
  */
 async function runNightlyFix({ startedBy = null } = {}) {
-  const batchStartedAt = now().toISOString();
+  // 併發防護：cron 重複觸發、或人工在批次進行中又按一次，會變成兩批各自往 master 合併。
+  // 維護旗標是現成的單一真相（自帶到期時間，卡死不了）。
+  if (await isMaintenance()) {
+    console.log('[NIGHTLY-FIX] 已在維護視窗中（上一批還在跑或旗標未到期），本次不啟動');
+    return { attempted: 0, applied: 0, skipped: 0, reason: 'already-running' };
+  }
+
+  const startedAt = now();
+  const batchStartedAt = startedAt.toISOString();
+  const deadlineAt = nextDeadlineAt(startedAt);
   let entered = false;
   let mergedAny = false;
 
@@ -238,27 +378,43 @@ async function runNightlyFix({ startedBy = null } = {}) {
     await enterMaintenance();
     entered = true;
 
-    const drained = await waitForDrain();
-    if (!drained) {
+    if (!await waitForDrain()) {
+      console.log('[NIGHTLY-FIX] 等在飛任務排空逾時（%d 分鐘），放棄本批次', Math.round(NIGHTLY_FIX_DRAIN_MAX_MS / 60000));
       return { attempted: 0, applied: 0, skipped: 0, reason: 'drain-timeout' };
+    }
+
+    // triage／merge 也要燒 token，所以進迴圈之前先問一次保險絲
+    const preFuse = await fuseTripped(deadlineAt, batchStartedAt);
+    if (preFuse) {
+      console.log('[NIGHTLY-FIX] 開跑前保險絲已跳（%s），本批次不執行', preFuse);
+      return { attempted: 0, applied: 0, skipped: 0, reason: preFuse };
     }
 
     const healthCandidates = await fetchHealthCandidates();
     const feedbackCandidates = await triageFeedback(await fetchApprovedFeedback());
     const candidates = sortCandidates(feedbackCandidates, healthCandidates);
-    if (!candidates.length) return { attempted: 0, applied: 0, skipped: 0 };
+    if (!candidates.length) {
+      console.log('[NIGHTLY-FIX] 沒有可執行的候選（意見回饋 %d、健檢提案 %d）',
+        feedbackCandidates.length, healthCandidates.length);
+      return { attempted: 0, applied: 0, skipped: 0 };
+    }
 
-    const byKey = new Map(candidates.map(it => [`${it.source}:${it.row.id}`, it]));
-    const groups = await mergeCandidates(candidates.map(toCandidateItem));
-    if (!groups.length) return { attempted: 0, applied: 0, skipped: 0 };
+    const { indexed, byOrdinal } = indexCandidates(candidates);
+    const groups = normalizeGroups(await mergeCandidates(indexed.map(toCandidateItem)), byOrdinal);
+    if (!groups.length) {
+      console.log('[NIGHTLY-FIX] %d 筆候選統整後沒有可執行的組', candidates.length);
+      return { attempted: 0, applied: 0, skipped: 0 };
+    }
 
+    // ⚠ 上限套在**統整後**的條數：統整前就砍會把「其實是同一件事的 8 筆」誤當成 8 條工作。
     const capped = groups.slice(0, NIGHTLY_FIX_MAX);
     const skipped = groups.length - capped.length;
+    console.log('[NIGHTLY-FIX] 候選 %d 筆 → 統整 %d 組 → 本批次執行 %d 組（截止 %s）',
+      candidates.length, groups.length, capped.length, deadlineAt.toISOString());
 
     const { rows: [run] } = await query(
-      `INSERT INTO health_check_runs (status, window_days, started_by)
-       VALUES ('running',0,$1) RETURNING id`,
-      [startedBy]
+      `INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,$2) RETURNING id`,
+      [BATCH_WINDOW_DAYS, startedBy]
     );
 
     const { rows: [settings] } = await query('SELECT cli_push_user_id FROM teams_settings WHERE id=1');
@@ -268,56 +424,54 @@ async function runNightlyFix({ startedBy = null } = {}) {
     let applied = 0;
 
     for (const group of capped) {
-      // 兩道保險絲在開跑前檢查：deadline、token 預算。半途中斷會留下髒 worktree 與半套 diff。
-      if (taipeiHour(now()) >= NIGHTLY_FIX_DEADLINE_HOUR) break;
-      if (await tokensSince(batchStartedAt) >= NIGHTLY_FIX_TOKEN_BUDGET) break;
+      const fuse = await fuseTripped(deadlineAt, batchStartedAt);
+      if (fuse) {
+        console.log('[NIGHTLY-FIX] 保險絲跳了（%s），不再開新的一條（已跑 %d 條）', fuse, attempted);
+        break;
+      }
 
-      const cand = await materializeGroup(group, byKey, run.id);
-      attempted += 1;
-
-      const result = await runOneCandidate(cand, { pushUserId, startedBy });
-      if (result.merged) { applied += 1; mergedAny = true; }
+      // ⚠ 每條各自 try/catch：adoptFix（狀態不符）與 applyFix（主 clone 髒、與 origin 分岔、
+      // push 失敗、查不到容器名）都會拋。不接住的話第一條死掉後面全不跑，連 health_check_runs
+      // 都收不了尾。
+      try {
+        const cand = await materializeGroup(group, run.id);
+        attempted += 1;
+        const result = await runOneCandidate(cand, { pushUserId, startedBy });
+        if (result.merged) {
+          applied += 1;
+          mergedAny = true;
+          await markGroupDone(cand, pushUserId || startedBy);
+        }
+      } catch (err) {
+        console.error('[NIGHTLY-FIX] 這一條中止（%s）：%s', group.title, err.message);
+      }
     }
 
     await query(`UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1`, [run.id]);
+    console.log('[NIGHTLY-FIX] 本批次結束：嘗試 %d 條、合併 %d 條、超出上限未跑 %d 條', attempted, applied, skipped);
 
-    // skipped：統整後超出 NIGHTLY_FIX_MAX 上限、連跑都沒跑到的組數（不含開跑前就 break 掉的
-    // 剩餘 capped 項目——那些歸在 attempted 之外、既非 applied 也非本欄定義的「上限之外」）。
+    // skipped：統整後超出 NIGHTLY_FIX_MAX、連跑都沒跑到的組數
     return { attempted, applied, skipped };
   } finally {
-    // 清旗標要排在重啟指令之前：docker restart 會把這個行程一起帶走，之後的程式碼不保證跑得到。
+    // ⚠ 順序不可調換：清旗標一定要排在重啟指令之前。那道指令會把這個行程一起帶走，
+    // 排在後面的話 finally 剩下的部分不保證跑得到，維護旗標就會留到 4 小時後才自動到期。
     if (entered) await leaveMaintenance().catch(() => {});
-    if (mergedAny) {
-      try {
-        const container = await pickSelfContainerSafe();
-        if (container) {
-          execFile('docker', ['restart', container], err => {
-            if (err) console.error('[NIGHTLY-FIX] restart:', err.message);
-          });
-        }
-      } catch (err) {
-        console.error('[NIGHTLY-FIX] restart lookup:', err.message);
-      }
-    }
+    // 一條都沒合併成功就不重啟：沒有新碼進 master，重啟只是白白中斷服務。
+    if (mergedAny) await restartSelf();
   }
 }
 
-// docker ps/inspect 查容器名，沿用 finding-fix.js 的 pickSelfContainer 判定規則（唯一命中才重啟）。
-async function pickSelfContainerSafe() {
-  const os = require('os');
-  const { promisify } = require('util');
-  const execFileAsync = promisify(execFile);
-  if (process.env.PLATFORM_CONTAINER) return process.env.PLATFORM_CONTAINER;
+async function restartSelf() {
   try {
-    const { stdout: names } = await execFileAsync('docker', ['ps', '--format', '{{.Names}}']);
-    const list = names.split('\n').map(s => s.trim()).filter(Boolean);
-    if (!list.length) return null;
-    const { stdout } = await execFileAsync(
-      'docker', ['inspect', '--format', '{{.Name}}\t{{.Config.Hostname}}', ...list], { maxBuffer: 8 * 1024 * 1024 });
-    return pickSelfContainer(stdout, os.hostname());
+    const container = await selfContainerName();
+    console.log('[NIGHTLY-FIX] 重啟平台容器 %s 讓新碼生效', container);
+    execFile('docker', ['restart', container], err => {
+      if (err) console.error('[NIGHTLY-FIX] restart:', err.message);
+    });
   } catch (err) {
-    console.error('[NIGHTLY-FIX] pickSelfContainer:', err.message);
-    return null;
+    // 查不到容器名＝重啟不了。碼已經在 master 上，人工重啟即可——但一定要留下這行字，
+    // 否則現象會是「平台跑著舊碼、畫面上什麼都沒變」。
+    console.error('[NIGHTLY-FIX] 查不到平台容器，碼已合併但未重啟，請人工重啟：', err.message);
   }
 }
 

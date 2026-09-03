@@ -443,5 +443,5 @@ async function applyFix(fixId, userId, inflight = []) {
 
 module.exports = {
   runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer,
-  compareToBaseline, parseJestCounts, measureTests,
+  selfContainerName, compareToBaseline, parseJestCounts, measureTests,
 };
