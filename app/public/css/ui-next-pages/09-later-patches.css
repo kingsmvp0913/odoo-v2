@@ -482,7 +482,7 @@
 /* 失敗待確認的三個快捷句原本各佔一整行 */
 .ui-next-shortcut-row{flex-wrap:wrap;margin:0}
 /* 對話頁不需要頁面底部那段大留白（輸入區已經 sticky 在底） */
-.ui-next-task-detail{padding-bottom:10px}
+.ui-next-task-detail{padding-top:0;padding-bottom:10px}
 .ui-next-task-detail:has(.is-tab-conversation){margin-bottom:-18px}
 
 /* 訊息不多時 sticky 不會貼底（它只在內容超出視窗時才生效），輸入區就停在半空中、
@@ -1069,7 +1069,7 @@
 /* ── 任務詳情改成「像聊天頁」：固定頂欄 ＋ 對話 ＋ 底部對話框 ────────────────────────
    原本第一屏是「大標題／六個標籤／三個頁籤」三層，捲下去就全部消失，看不出自己在哪一張
    任務。改成一條固定的頂欄：名稱與那三個看了會做決定的標籤（來源、狀態、階段）永遠在。 */
-.ui-next-task-topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:5px 0;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(8px)}
+.ui-next-task-topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:12px 0 8px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(8px)}
 .ui-next-task-topbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--border)}
 .ui-next-task-topbar-main{display:flex;min-width:0;align-items:center;gap:8px}
 /* 標題不放大：它與旁邊的標籤是同一列資訊，放大反而把那一列拉高 */
