@@ -837,7 +837,13 @@ async function migrate() {
     { table: 'health_check_runs', col: 'cadence', sql: "ALTER TABLE health_check_runs ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'" },
     // 維護視窗：夜間批次期間暫停同步與派工。⚠ 用「到期時間」不是布林——布林卡在 true 會讓
     // 派工從此安靜地停擺，而安靜的失敗最難發現（此 repo 踩過：夜班空轉 98 輪無人察覺）。
-    { table: 'teams_settings', col: 'maintenance_until', sql: 'ALTER TABLE teams_settings ADD COLUMN maintenance_until TIMESTAMPTZ' }
+    { table: 'teams_settings', col: 'maintenance_until', sql: 'ALTER TABLE teams_settings ADD COLUMN maintenance_until TIMESTAMPTZ' },
+    // 夜間批次的「連續失敗次數」（見 pipeline/nightly-fix.js）。⚠ 這兩欄是**飢餓防線**：
+    // 「成功才標 done」意味著一條永遠合併不了的意見／提案會每晚重跑一次完整流程（重付 triage、
+    // 重跑兩次全套測試），並永久佔掉 NIGHTLY_FIX_MAX 的一格，把後來的意見擠到永遠輪不到。
+    // 達門檻即退回人工並歸零（退場動作本身會換 status，所以計數不需要保留歷史累計）。
+    { table: 'feedback', col: 'fix_attempts', sql: 'ALTER TABLE feedback ADD COLUMN fix_attempts INTEGER NOT NULL DEFAULT 0' },
+    { table: 'health_check_findings', col: 'fix_attempts', sql: 'ALTER TABLE health_check_findings ADD COLUMN fix_attempts INTEGER NOT NULL DEFAULT 0' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

@@ -617,3 +617,145 @@ test('查不到容器名 → 不重啟也不拋錯（碼已合併，留 log 讓�
   expect(restartCalls()).toHaveLength(0);
   expect(await maintenance.isMaintenance()).toBe(false);
 });
+
+// --- 失敗退場（否則一條永遠修不好的意見會每晚重跑、並永久佔住 5 格中的一格）---
+
+test('失敗一次 → 只累加次數，狀態不動（下一晚還會再試）', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  reviewFix.mockResolvedValue({ verdict: 'reject', reason: '還是不行' });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [fb] } = await dbModule.query('SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(fb).toMatchObject({ status: 'approved', fix_attempts: 1 });
+});
+
+test('連續失敗達門檻 → 意見退回人工（status=new＋triage_note 寫原因），並歸零讓人再核准時有完整額度', async () => {
+  const fbId = await insertFeedback();
+  await dbModule.query('UPDATE feedback SET fix_attempts=2 WHERE id=$1', [fbId]);  // 前兩晚已失敗
+  stubTriage('code');
+  stubHappyPath();
+  reviewFix.mockResolvedValue({ verdict: 'reject', reason: '改法會弄壞別的東西' });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [fb] } = await dbModule.query(
+    'SELECT status, triage_note, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(fb.status).toBe('new');                      // 回到管理員那一格，不是靜靜消失
+  expect(fb.fix_attempts).toBe(0);                    // 人再核准一次就再給一輪完整額度
+  expect(fb.triage_note).toContain('連續失敗 3 次');
+  expect(fb.triage_note).toContain('改法會弄壞別的東西'); // 附上最後一次失敗原因
+});
+
+test('連續失敗達門檻 → 健檢提案退回 pending，且 decided_by 留空（分得出是機器退場不是人的裁決）', async () => {
+  const findingId = await insertHealthProposal({ severity: 'high' });
+  await dbModule.query('UPDATE health_check_findings SET fix_attempts=2 WHERE id=$1', [findingId]);
+  stubHappyPath();
+  runFix.mockImplementation(async (fixId) => {
+    await dbModule.query(`UPDATE finding_fixes SET status='failed' WHERE id=$1`, [fixId]);
+  });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [f] } = await dbModule.query(
+    'SELECT status, verdict_note, decided_by, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
+  expect(f.status).toBe('pending');
+  expect(f.fix_attempts).toBe(0);
+  expect(f.verdict_note).toContain('連續失敗 3 次');
+  expect(f.decided_by).toBeNull();
+});
+
+test('退場後不再是候選：下一晚連 triage 都不會為它花錢', async () => {
+  const fbId = await insertFeedback();
+  await dbModule.query('UPDATE feedback SET fix_attempts=2 WHERE id=$1', [fbId]);
+  stubTriage('code');
+  stubHappyPath();
+  reviewFix.mockResolvedValue({ verdict: 'reject', reason: '不行' });
+  await nightlyFix.runNightlyFix({ startedBy: userId });   // 第一晚：退場
+
+  jest.clearAllMocks();
+  stubTriage('code');
+  stubHappyPath();
+  const second = await nightlyFix.runNightlyFix({ startedBy: userId });  // 第二晚
+
+  expect(triageOne).not.toHaveBeenCalled();
+  expect(second.attempted).toBe(0);
+});
+
+test('停在 adopted（沒設推送身分）不算失敗額度：一次設定疏漏不該燒掉每一條的退場額度', async () => {
+  await dbModule.query('UPDATE teams_settings SET cli_push_user_id = NULL WHERE id=1');
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [fb] } = await dbModule.query('SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(fb).toMatchObject({ status: 'approved', fix_attempts: 0 });
+});
+
+// --- 收尾與計數的韌性 ---
+
+test('保險絲檢查自己拋錯 → 例外逃出迴圈，但 health_check_runs 仍被收成 done（不會停在 running）', async () => {
+  await insertHealthProposal({ severity: 'high', label: '第一條' });
+  await insertHealthProposal({ severity: 'high', label: '第二條' });
+  stubHappyPath();
+  // 保險絲檢查（讀時鐘＋查 token 用量）在 per-candidate try 之外，它一拋就直接離開迴圈。
+  // 這裡讓時鐘在第一條跑完後開始拋，模擬那一類例外——綁在「第一條跑完」這個行為上，
+  // 不綁死時鐘被呼叫第幾次。
+  let clockBroken = false;
+  nightlyFix._setClockForTesting(() => {
+    if (clockBroken) throw new Error('保險絲檢查失敗');
+    return new Date(clockMs);
+  });
+  runFix.mockImplementationOnce(async (fixId) => {
+    await dbModule.query(`UPDATE finding_fixes SET status='ready' WHERE id=$1`, [fixId]);
+    clockBroken = true;
+  });
+
+  await expect(nightlyFix.runNightlyFix({ startedBy: userId })).rejects.toThrow('保險絲檢查失敗');
+
+  const { rows } = await dbModule.query(
+    'SELECT status FROM health_check_runs WHERE window_days=0 ORDER BY id DESC LIMIT 1');
+  expect(rows[0].status).toBe('done');                 // 收尾在 finally，任何離開路徑都收得到
+  expect(await maintenance.isMaintenance()).toBe(false);
+});
+
+test('markGroupDone 拋錯 → 不計入 applied（免得隔晚對已合併的碼再跑一次），但仍要重啟', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  // 合併成功之後、標記之前，把 finding 抽掉 ⇒ markGroupDone 寫 feedback.finding_id 會撞 FK
+  applyFix.mockImplementation(async () => {
+    await dbModule.query('DELETE FROM health_check_findings');
+    return { merged: true, restarted: false };
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result).toMatchObject({ attempted: 1, applied: 0 });   // 不高報
+  const { rows: [fb] } = await dbModule.query('SELECT status FROM feedback WHERE id=$1', [fbId]);
+  expect(fb.status).not.toBe('done');
+  // 碼此刻已經在 master 上了，不重啟的話平台會一直跑舊碼
+  expect(restartCalls()).toHaveLength(1);
+});
+
+test('手動在白天觸發 → 跑道被上限截斷，不是「到明天凌晨兩點」的 16 小時', async () => {
+  await insertHealthProposal({ severity: 'high', label: '第一條' });
+  await insertHealthProposal({ severity: 'high', label: '第二條' });
+  stubHappyPath();
+  setClock('2020-01-01T02:00:00Z');           // 台北 10:00：下一個 02:00 在 16 小時後
+  // 第一條花掉 5 小時：超過 4 小時的跑道上限，但遠不到 16 小時。
+  // 沒有上限的話第二條會照跑——這就是這支測試的鑑別力所在。
+  runFix.mockImplementation(async (fixId) => {
+    advanceClock(5 * 60 * 60 * 1000);
+    await dbModule.query(`UPDATE finding_fixes SET status='ready' WHERE id=$1`, [fixId]);
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(1);
+  expect(runFix).toHaveBeenCalledTimes(1);
+});

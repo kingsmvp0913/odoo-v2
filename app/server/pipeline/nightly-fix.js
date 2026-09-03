@@ -23,6 +23,12 @@ const NIGHTLY_FIX_DEADLINE_HOUR = parseInt(process.env.NIGHTLY_FIX_DEADLINE_HOUR
 const NIGHTLY_FIX_TOKEN_BUDGET = parseInt(process.env.NIGHTLY_FIX_TOKEN_BUDGET || '12000000', 10);
 const NIGHTLY_FIX_DRAIN_MAX_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_MAX_MS || '1800000', 10);
 const DRAIN_POLL_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_POLL_MS || '60000', 10);
+// 單一批次的跑道上限。截止時刻是「下一個台北 02:00」，對 23:00 起跑的排程＝3 小時；但**手動**
+// 在白天觸發時，同一個算法會給出 16 小時（10:00 起跑）甚至 24 小時（剛好 02:00 起跑）的跑道，
+// 保險絲等於不存在。與維護視窗的自動到期同量級（4 小時），對自動排程完全無感。
+const NIGHTLY_FIX_MAX_RUNWAY_MS = parseInt(process.env.NIGHTLY_FIX_MAX_RUNWAY_MS || '14400000', 10);
+// 同一條連續失敗幾次就退回人工（見 retireCandidate）
+const NIGHTLY_FIX_MAX_ATTEMPTS = parseInt(process.env.NIGHTLY_FIX_MAX_ATTEMPTS || '3', 10);
 const TIME_ZONE = 'Asia/Taipei';
 // 本批次自建的 health_check_runs 用 window_days=0 表示「不是回看某個視窗的健檢，是這一晚的修正批次」。
 const BATCH_WINDOW_DAYS = 0;
@@ -45,17 +51,21 @@ function taipeiDateParts(d) {
 }
 
 /**
- * 批次起點之後的「下一個台北 02:00」＝本批次的絕對截止時刻。
+ * 本批次的絕對截止時刻＝「起點之後的下一個台北 02:00」與「起點 + 跑道上限」取早的那個。
  *
  * ⚠ 不可改回「拿當下的小時跟 2 比大小」。批次是接在 23:00 健檢後面啟動的，`23 >= 2` 恆為真，
  * 迴圈第一輪就 break ＝整條通道每晚靜默 no-op、零 log（實測過的失敗，不是假想）。
  * 算成絕對時刻後，23:00 起跑得到 3 小時、00:30 起跑得到 1.5 小時，語意才是「跑到凌晨兩點為止」。
+ *
+ * 跑道上限則是補住另一頭：手動在白天觸發時「下一個 02:00」可以遠到 16～24 小時之後，
+ * 保險絲形同虛設。兩者取早的，自動排程（3 小時）不受影響。
  */
-function nextDeadlineAt(startedAt) {
+function deadlineFor(startedAt) {
   const { year, month, day, hour } = taipeiDateParts(startedAt);
   // 起點已過當日 02:00 就指向隔天的 02:00；日期用 UTC 建再加天數，跨月跨年交給 Date 自己處理
   const target = new Date(Date.UTC(year, month - 1, day + (hour >= NIGHTLY_FIX_DEADLINE_HOUR ? 1 : 0)));
-  return new Date(`${target.toISOString().slice(0, 10)}T${String(NIGHTLY_FIX_DEADLINE_HOUR).padStart(2, '0')}:00:00+08:00`);
+  const atHour = new Date(`${target.toISOString().slice(0, 10)}T${String(NIGHTLY_FIX_DEADLINE_HOUR).padStart(2, '0')}:00:00+08:00`);
+  return new Date(Math.min(atHour.getTime(), startedAt.getTime() + NIGHTLY_FIX_MAX_RUNWAY_MS));
 }
 
 // getInflightInfo 延到函式內才 require：載入期就拉進 runner 會有循環依賴
@@ -100,7 +110,7 @@ async function fuseTripped(deadlineAt, batchStartedAt) {
 // 健檢提案候選：approved 的 proposal，套 severity 門檻與可自動修的 layer（layer 已知，可在此就篩）。
 async function fetchHealthCandidates() {
   const { rows: hc } = await query(
-    `SELECT id, agent_name, agent_label AS title, diagnosis AS detail, layer, severity,
+    `SELECT id, agent_label AS title, diagnosis AS detail, layer, severity,
             rationale AS action, risk_if_wrong, target_metric, metric_baseline, evidence, created_at
        FROM health_check_findings
       WHERE status = 'approved' AND kind = 'proposal'
@@ -306,6 +316,48 @@ async function markGroupDone(cand, userId) {
 }
 
 /**
+ * 這一晚沒能合併 → 每個來源成員的連續失敗次數 +1，達門檻就退回人工。
+ *
+ * 「成功才標 done」的反面是：一條**永遠**合併不了的意見（review 一直 reject、主 clone 一直髒、
+ * applyFix 一直拋）會每晚重跑一次完整流程——重付一次 triage、重跑兩次 runFix（含兩次全套測試）
+ * ——並且**永久佔掉 NIGHTLY_FIX_MAX 的一格**，把後來提的意見擠在後面永遠輪不到。
+ * 無上限的成本＋安靜的飢餓，兩件事都不能留。
+ *
+ * 退場＝把狀態換回「等人」那一格並歸零計數，不是靜靜地從候選裡消失：
+ *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（與 triageOne 判不出來時同一個慣例，
+ *     管理頁本來就會顯示這個欄位）
+ *   - 健檢提案 → `status='pending'`（回到等人裁決）＋ `verdict_note` 寫原因，
+ *     並**刻意留 `decided_by` 為 NULL**——有裁決文字卻沒有裁決者，才分得出這是機器退場不是人的決定
+ * 計數歸零是為了「人再核准一次就再給一輪完整額度」，不必另外開一支重設路徑。
+ */
+async function noteFailedAttempt(cand, reason) {
+  for (const it of cand.members) {
+    const isFeedback = it.source === 'feedback';
+    const { rows: [r] } = isFeedback
+      ? await query(
+        `UPDATE feedback SET fix_attempts = COALESCE(fix_attempts,0) + 1 WHERE id=$1 RETURNING fix_attempts`,
+        [it.row.id])
+      : await query(
+        `UPDATE health_check_findings SET fix_attempts = COALESCE(fix_attempts,0) + 1 WHERE id=$1 RETURNING fix_attempts`,
+        [it.row.id]);
+    const attempts = (r && r.fix_attempts) || 0;
+    if (attempts < NIGHTLY_FIX_MAX_ATTEMPTS) continue;
+
+    const note = `自動修正連續失敗 ${attempts} 次，已退回人工處理。最後一次原因：${reason || '未提供'}`;
+    if (isFeedback) {
+      await query(
+        `UPDATE feedback SET status='new', triage_note=$2, fix_attempts=0 WHERE id=$1`, [it.row.id, note]);
+    } else {
+      await query(
+        `UPDATE health_check_findings SET status='pending', verdict_note=$2, fix_attempts=0 WHERE id=$1`,
+        [it.row.id, note]);
+    }
+    console.log('[NIGHTLY-FIX] %s #%d 已退回人工（連續失敗 %d 次）：%s',
+      isFeedback ? '意見' : '提案', it.row.id, attempts, reason || '未提供');
+  }
+}
+
+/**
  * 逐條走完整條鏈：runFix → (通過測試才) fix-review → reject 退回改一次 → adopt →
  * applyFix(只合併，僅在有 pushUserId 時)。
  *
@@ -320,9 +372,9 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
   for (;;) {
     const { rows: [fix] } = await query('SELECT status, reject_reason FROM finding_fixes WHERE id=$1', [fixId]);
     if (!fix || fix.status !== 'ready') {
-      console.log('[NIGHTLY-FIX] 提案 #%d 的修正狀態為 %s，不進審核',
-        cand.findingId, (fix && fix.status) || '（查無此列）');
-      return { merged: false };
+      const status = (fix && fix.status) || '（查無此列）';
+      console.log('[NIGHTLY-FIX] 提案 #%d 的修正狀態為 %s，不進審核', cand.findingId, status);
+      return { merged: false, reason: `修正未通過測試（狀態 ${status}）${fix && fix.reject_reason ? '：' + fix.reject_reason : ''}` };
     }
 
     const verdict = await reviewFix(fixId, cand);
@@ -348,7 +400,9 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
       cand.findingId, attempt + 1, verdict.reason || '（未附理由）');
 
     attempt += 1;
-    if (attempt > NIGHTLY_FIX_MAX_RETRY) return { merged: false };
+    if (attempt > NIGHTLY_FIX_MAX_RETRY) {
+      return { merged: false, reason: `審核連續 ${attempt} 次未通過：${verdict.reason || '未附理由'}` };
+    }
 
     // 退回改一次：開新的一筆 finding_fixes 重跑（不覆寫舊列——finding_fixes 本來就是為
     // 「一條提案可試修多次」設計的，覆寫會讓「上一次試了什麼、為什麼失敗」消失）。
@@ -370,9 +424,12 @@ async function runNightlyFix({ startedBy = null } = {}) {
 
   const startedAt = now();
   const batchStartedAt = startedAt.toISOString();
-  const deadlineAt = nextDeadlineAt(startedAt);
+  const deadlineAt = deadlineFor(startedAt);
   let entered = false;
   let mergedAny = false;
+  // runId 放在 try 外面：收尾要在 finally 做，否則保險絲查詢（tokensSince）之類的例外一逃出
+  // 迴圈，這一列就永遠停在 running——那正是 C4 要防的症狀。
+  let runId = null;
 
   try {
     await enterMaintenance();
@@ -416,6 +473,7 @@ async function runNightlyFix({ startedBy = null } = {}) {
       `INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,$2) RETURNING id`,
       [BATCH_WINDOW_DAYS, startedBy]
     );
+    runId = run.id;
 
     const { rows: [settings] } = await query('SELECT cli_push_user_id FROM teams_settings WHERE id=1');
     const pushUserId = settings && settings.cli_push_user_id;
@@ -431,32 +489,48 @@ async function runNightlyFix({ startedBy = null } = {}) {
       }
 
       // ⚠ 每條各自 try/catch：adoptFix（狀態不符）與 applyFix（主 clone 髒、與 origin 分岔、
-      // push 失敗、查不到容器名）都會拋。不接住的話第一條死掉後面全不跑，連 health_check_runs
-      // 都收不了尾。
+      // push 失敗、查不到容器名）都會拋。不接住的話第一條死掉後面全不跑。
+      let cand = null;
       try {
-        const cand = await materializeGroup(group, run.id);
+        cand = await materializeGroup(group, runId);
         attempted += 1;
         const result = await runOneCandidate(cand, { pushUserId, startedBy });
         if (result.merged) {
-          applied += 1;
+          // ⚠ mergedAny 要在這裡就設：碼此刻已經在 master 上了。就算下面標記失敗，平台也必須
+          // 重啟才會載到新碼——不重啟的話現象是「碼進去了、畫面卻什麼都沒變」。
           mergedAny = true;
+          // 反過來，計數要等標記成功才加：markGroupDone 拋錯代表來源沒被標掉，這一條隔晚會對
+          // 已經合併的碼再跑一次，此時報「applied+1」是高報。
           await markGroupDone(cand, pushUserId || startedBy);
+          applied += 1;
+        } else if (!result.adopted) {
+          // adopted＝修好了只差沒有推送身分（設定問題），不該算在這一條的失敗額度裡，
+          // 否則一次設定疏漏就會把當晚每一條的退場額度都燒掉。
+          await noteFailedAttempt(cand, result.reason);
         }
       } catch (err) {
         console.error('[NIGHTLY-FIX] 這一條中止（%s）：%s', group.title, err.message);
+        if (cand) await noteFailedAttempt(cand, err.message).catch(e =>
+          console.error('[NIGHTLY-FIX] 記錄失敗次數時又出錯：', e.message));
       }
     }
 
-    await query(`UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1`, [run.id]);
     console.log('[NIGHTLY-FIX] 本批次結束：嘗試 %d 條、合併 %d 條、超出上限未跑 %d 條', attempted, applied, skipped);
 
     // skipped：統整後超出 NIGHTLY_FIX_MAX、連跑都沒跑到的組數
     return { attempted, applied, skipped };
   } finally {
-    // ⚠ 順序不可調換：清旗標一定要排在重啟指令之前。那道指令會把這個行程一起帶走，
-    // 排在後面的話 finally 剩下的部分不保證跑得到，維護旗標就會留到 4 小時後才自動到期。
+    // ⚠ 這三件事的順序不可調換，而且都要在 finally：
+    // 1. 收掉 run——不論是正常跑完、保險絲查詢拋錯、還是整批拋錯，都不能讓它停在 running
+    //    （停在 running 會讓健檢頁永遠顯示「執行中」，也讓下一輪排程誤判上一輪還沒結束）
+    if (runId != null) {
+      await query(`UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1`, [runId])
+        .catch(err => console.error('[NIGHTLY-FIX] 收尾 health_check_runs 失敗：', err.message));
+    }
+    // 2. 清旗標——一定要排在重啟指令之前。那道指令會把這個行程一起帶走，排在後面的話不保證
+    //    跑得到，維護旗標就會留到 4 小時後才自動到期，期間派工全部停擺。
     if (entered) await leaveMaintenance().catch(() => {});
-    // 一條都沒合併成功就不重啟：沒有新碼進 master，重啟只是白白中斷服務。
+    // 3. 一條都沒合併成功就不重啟：沒有新碼進 master，重啟只是白白中斷服務。
     if (mergedAny) await restartSelf();
   }
 }
