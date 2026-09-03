@@ -13,6 +13,7 @@ const { invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles } = require('./lib/attachments');
 const { loadTaskForActor } = require('./lib/task-access');
+const { isMaintenance } = require('./pipeline/maintenance');
 
 // multer 設定已移到 lib/attachments 當單一來源：新增任務／留言／人工退回三個入口共用同一組限制，
 // 各持一份會漂移成「有的入口能傳、有的不能」且完全無訊號。此處保留舊名，呼叫端不動。
@@ -200,6 +201,12 @@ function parseChatAttachmentIds(raw) {
 }
 
 function registerRoutes(app) {
+  // 維護中橫幅用：輕量旗標端點，不包進 /api/tasks 回應——GET /api/tasks 回裸陣列，
+  // 多處呼叫端用 `data.tasks || data` 兼容，包一層 blast radius 太大（見 controller ruling）。
+  app.get('/api/maintenance', verifyToken, async (req, res) => {
+    res.json({ maintenance: await isMaintenance() });
+  });
+
   // List tasks with optional filters
   app.get('/api/tasks', verifyToken, async (req, res) => {
     try {

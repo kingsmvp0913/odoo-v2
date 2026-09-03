@@ -1225,3 +1225,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 /* 任務那側的下緣不是頁面 padding，是 .ui-next-task-side 這塊 sticky 停在
    .ui-next-main 的 padding-bottom（12px）上方。往下多停 8px 才收得到。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{bottom:-8px}
+
+/* 維護中橫幅：走 --warning 的疊色，不寫死淺色底——寫死的話深色模式文字色吃 var(--text)
+   會翻白變隱形（platformDev skill 的 dark-mode 硬規則）。 */
+.ui-next-maintenance-banner{margin:0 0 10px;padding:8px 12px;border-radius:10px;
+  border:1px solid color-mix(in srgb,var(--warning) 40%,transparent);
+  background:color-mix(in srgb,var(--warning) 12%,var(--bg));color:var(--text);font-size:12px}
