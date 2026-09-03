@@ -1,10 +1,13 @@
 (function () {
+  // 執行歷程每批筆數。⚠ 不能太小：跳窗是固定高度，首批要撐得出捲軸，否則「捲到頂載更早」
+  // 永遠觸發不了（實測首批 10 筆時 1796 筆的任務只看得到 10 筆）。
+  const EVENTS_PAGE = 30;
   // 任務詳情的資料、輪詢、附件與每種 Pipeline 動作均沿用既有實作；新版只重組資訊層級。
   window.UiNextTaskDetailView = Vue.defineComponent({
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -152,15 +155,16 @@
       this.markInboxRead();
     },
     mounted() {
-      // 訂閱狀態更新：pipeline 推 task:updated 時靜默重抓，讓狀態/阻塞原因即時更新（免手動重整）
-      const sock = window._socket;
+      // ⚠ window._socket 在 mounted 當下通常還是 undefined：initSocket 掛在 app.js 那支
+      // Api.get('auth/me').then() 裡，比元件掛載晚。原本直接 `const sock = window._socket`
+      // ＋ `if (sock)` 的寫法會整組靜默跳過——實測 terminal:output 的 listener 數是 0，
+      // 即時歷程從來沒生效過。改成輪詢等它出現再訂閱。
       this._onTaskUpdated = (data) => {
         if (this.task && data && data.taskId === this.task.id) {
           this.refresh().catch(() => {});
           this.checkInflight();
         }
       };
-      if (sock) sock.on('task:updated', this._onTaskUpdated);
       // 即時歷程：pipeline 推 terminal:output 時直接 append 到本頁記錄
       this._onTermOutput = (data) => {
         if (this.task && data && data.taskId === this.task.id) {
@@ -170,7 +174,16 @@
           if (atBottom) this.$nextTick(() => this.scrollEventsToBottom());
         }
       };
-      if (sock) sock.on('terminal:output', this._onTermOutput);
+      const bind = () => {
+        const sock = window._socket;
+        if (!sock) return false;
+        sock.on('task:updated', this._onTaskUpdated);
+        sock.on('terminal:output', this._onTermOutput);
+        return true;
+      };
+      if (!bind()) {
+        this._sockTimer = setInterval(() => { if (bind()) { clearInterval(this._sockTimer); this._sockTimer = null; } }, 300);
+      }
       // 點到別處就收起回寫下拉：它是 chip 自己 toggle 的，沒有這行的話點畫面其他地方選單會留著
       this._onDocClick = (event) => {
         if (this.writebackOpen && !event.target.closest('.ui-next-source-picker')) this.writebackOpen = false;
@@ -178,6 +191,7 @@
       document.addEventListener('click', this._onDocClick);
     },
     beforeUnmount() { this.unbindConvScroll();
+      if (this._sockTimer) clearInterval(this._sockTimer);
       Object.values(this.attachUrls).forEach(url => URL.revokeObjectURL(url));
       if (this._onDocClick) document.removeEventListener('click', this._onDocClick);
       const sock = window._socket;
@@ -944,16 +958,35 @@
         this._convPinBottom = (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
       },
       async loadEvents() {
-        if (this.isTourDemo) { this.events = window.TourDemo.events(); return; }
+        if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
         this.eventsError = '';
         try {
-          // 取最新 30 筆。⚠ 不要回到「先給 10 筆、捲到頂再載更早」那套：內容不夠高就沒有
-          // 捲軸，捲到頂那個條件永遠不成立，實測 1796 筆的任務永遠只看得到 10 筆。
-          const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=30`);
+          // ⚠ 首批一定要多到撐出捲軸（跳窗是固定 80dvh）：原本首批 10 筆時內容比視窗矮，
+          // 沒有捲軸就觸發不了下面那個「捲到頂載更早」，1796 筆的任務永遠停在 10 筆。
+          const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=${EVENTS_PAGE}`);
           this.events = Array.isArray(rows) ? rows : [];
+          this.eventsHasMore = this.events.length >= EVENTS_PAGE;
           this.$nextTick(() => this.scrollEventsToBottom());
         } catch (error) { this.eventsError = error.message || '無法載入執行歷程'; }
       },
+      async loadOlderEvents() {
+        if (this.eventsLoading || !this.eventsHasMore) return;
+        const oldest = this.events.find(e => e.id);
+        if (!oldest) return;
+        this.eventsLoading = true;
+        const box = this.$refs.eventsBox;
+        const prevHeight = box ? box.scrollHeight : 0;
+        try {
+          const rows = await Api.get(`tasks/${this.$route.params.id}/events?limit=${EVENTS_PAGE}&before=${oldest.id}`);
+          const older = Array.isArray(rows) ? rows : [];
+          this.eventsHasMore = older.length >= EVENTS_PAGE;
+          this.events = [...older, ...this.events];
+          // 維持視線位置：接在最前面會把原本看的那幾筆往下推，不補回捲動位置就會整個跳掉
+          this.$nextTick(() => { if (box) box.scrollTop = box.scrollHeight - prevHeight; });
+        } catch (error) { this.eventsError = error.message || '無法載入更早的執行歷程'; }
+        finally { this.eventsLoading = false; }
+      },
+      onEventsScroll(e) { if (e.target.scrollTop <= 4) this.loadOlderEvents(); },
     },
     template: `
       <section class="ui-next-page ui-next-task-detail">
@@ -1306,8 +1339,9 @@
 <div v-if="eventsOpen" class="ui-next-task-modal-backdrop" @click.self="eventsOpen=false">
 <div class="ui-next-events-modal" role="dialog" aria-modal="true" aria-label="執行歷程">
 <header><h2>執行歷程</h2><button type="button" class="ui-next-icon-button" aria-label="關閉" @click="eventsOpen=false"><ui-next-icon name="close"/></button></header>
-<div ref="eventsBox">
-<p v-if="eventsLoading" class="ui-next-field-note">載入中…</p>
+<div ref="eventsBox" @scroll="onEventsScroll">
+<p v-if="eventsLoading" class="ui-next-field-note">載入更早的紀錄中…</p>
+<p v-else-if="events.length&&!eventsHasMore" class="ui-next-field-note">— 已到最前 —</p>
 <article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event),{'is-open':!!expandedEvents[event.id||event.content]}]">
 <button type="button" :aria-expanded="!!expandedEvents[event.id||event.content]" @click="toggleEvent(event)"><span>{{ eventKind(event)==='error' ? '錯誤' : eventKind(event)==='stage' ? '階段' : '輸出' }}</span><b>{{ eventSummary(event) }}</b><time v-if="event.created_at">{{ formatTime(event.created_at) }}</time></button>
 <pre v-if="expandedEvents[event.id||event.content]" v-html="ansiToHtml(event.content)"></pre>
