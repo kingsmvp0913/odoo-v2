@@ -50,6 +50,16 @@ function deleteTaskDir(taskId) { deleteScopedDir('task', taskId); }
 // 刪對話時同理：project_chat_attachments 靠 ON DELETE CASCADE 自己清掉，實體檔沒人管。
 function deleteChatDir(chatId) { deleteScopedDir('chat', chatId); }
 
+// 意見回饋的圖片：落在 feedback_<id>/，DB 存相對路徑（同 task／chat）。
+// 走同一支 saveScopedFile 是刻意的——三處的路徑組法必須逐字相同，各寫一份會漂移成
+// 「存得進去但刪不掉」的孤兒檔，而那完全沒有訊號。
+function saveFeedbackAttachmentFile(feedbackId, filename, buffer) {
+  return saveScopedFile('feedback', feedbackId, filename, buffer);
+}
+
+// feedback_attachments 靠 ON DELETE CASCADE 自己清掉，實體檔沒人管，所以刪意見時要連目錄收掉
+function deleteFeedbackDir(feedbackId) { deleteScopedDir('feedback', feedbackId); }
+
 // 刪單一附件實體檔（相對 uploadRoot），best-effort。用於汰換舊版壞檔列時連磁碟一起收，避免留孤兒檔。
 function deleteAttachmentFile(relativePath) {
   try {
@@ -144,4 +154,4 @@ function isImageBuffer(buf) {
   return /^image\//.test(sniffFile(buf).mime);
 }
 
-module.exports = { uploadRoot, taskDir, saveAttachmentFile, saveChatAttachmentFile, deleteTaskDir, deleteChatDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles, uploadChatImages, isImageBuffer };
+module.exports = { uploadRoot, taskDir, saveAttachmentFile, saveChatAttachmentFile, deleteTaskDir, deleteChatDir, saveFeedbackAttachmentFile, deleteFeedbackDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles, uploadChatImages, isImageBuffer };
