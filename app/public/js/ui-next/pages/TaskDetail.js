@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -169,8 +169,14 @@
         }
       };
       if (sock) sock.on('terminal:output', this._onTermOutput);
+      // 點到別處就收起回寫下拉：它是 chip 自己 toggle 的，沒有這行的話點畫面其他地方選單會留著
+      this._onDocClick = (event) => {
+        if (this.writebackOpen && !event.target.closest('.ui-next-source-picker')) this.writebackOpen = false;
+      };
+      document.addEventListener('click', this._onDocClick);
     },
     beforeUnmount() { this.unbindConvScroll();
+      if (this._onDocClick) document.removeEventListener('click', this._onDocClick);
       const sock = window._socket;
       if (sock && sock.off) {
         if (this._onTaskUpdated) sock.off('task:updated', this._onTaskUpdated);
@@ -1303,9 +1309,17 @@
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
 <label class="ui-next-icon-button" title="附加檔案"><ui-next-icon name="paperclip"/><input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected"></label>
-<!-- 開關做成一顆可切換的 chip（aria-pressed 帶狀態）：底排裡放原生 checkbox 在視覺上
-     跟旁邊的圖示鈕是兩套東西，而它本來就是「開／關」而不是表單欄位。 -->
-<button v-if="showWritebackOption" type="button" class="ui-next-composer-chip ui-next-foot-toggle" :class="{active:messageWriteback}" :aria-pressed="messageWriteback.toString()" :title="messageWriteback?'送出後會同步回寫到來源系統，再點一下取消':'只留在平台，點一下改成同步回寫至來源'" @click="messageWriteback=!messageWriteback"><ui-next-icon name="send"/>同步回寫至來源</button>
+<!-- 比照新對話那顆「資料來源」下拉：底排放原生 checkbox 在視覺上跟旁邊的圖示鈕是兩套東西。
+     兩個選項各自說明後果，chip 上只留短標籤（「回寫來源」／「不回寫」）。 -->
+<div v-if="showWritebackOption" class="ui-next-source-picker ui-next-composer-chip" @click="writebackOpen=!writebackOpen">
+<ui-next-icon name="send"/>
+<button type="button" class="ui-next-source-trigger" :aria-expanded="writebackOpen.toString()" aria-haspopup="listbox" aria-label="這則留言要不要回寫到來源系統">{{ messageWriteback?'回寫來源':'不回寫' }}</button>
+<ui-next-icon name="chevron-down"/>
+<div v-if="writebackOpen" class="ui-next-project-picker-options" role="listbox" aria-label="回寫設定" @click.stop>
+<button type="button" role="option" :aria-selected="(!messageWriteback).toString()" @click="messageWriteback=false;writebackOpen=false">不回寫<small>只留在平台</small></button>
+<button type="button" role="option" :aria-selected="messageWriteback.toString()" @click="messageWriteback=true;writebackOpen=false">回寫來源<small>同步寫回 Odoo／eService</small></button>
+</div>
+</div>
 <small v-if="newMessageFiles.length">已選 {{ newMessageFiles.length }} 個附件</small>
 <small v-if="isAgentRunning" class="ui-next-running-hint">AI 正在處理這一輪…</small>
 </div>

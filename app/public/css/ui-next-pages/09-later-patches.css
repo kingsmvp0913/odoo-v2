@@ -1048,9 +1048,10 @@
    .ui-next-question，那兩處是「同時列出多張卡」，去掉框會整片黏在一起。 */
 .ui-next-task-action .ui-next-question.ui-next-question-solo{padding:0;border:0;border-radius:0;background:transparent}
 
-/* 底排的「同步回寫至來源」：一顆可切換的 chip，與旁邊的圖示鈕同高同圓角。
-   關＝與其他底排工具一樣是靜音的灰；開＝主色描邊＋淡底，一眼看得出這則留言會被回寫。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-foot-toggle{border:1px solid transparent;background:transparent;font:inherit;font-size:12px;cursor:pointer}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-foot-toggle .ui-next-icon{width:13px;height:13px}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-foot-toggle:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-foot-toggle.active{border-color:color-mix(in srgb,var(--primary) 55%,transparent);background:color-mix(in srgb,var(--primary) 14%,transparent);color:var(--text)}
+/* 底排的回寫下拉：外觀沿用新對話那顆（.ui-next-source-picker ＋ .ui-next-composer-chip），
+   這裡只補「開著時」的狀態色——一眼看得出這則留言會被回寫。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker{cursor:pointer;user-select:none}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-icon{width:13px;height:13px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-project-picker-options button{display:grid;gap:1px;text-align:left}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-source-picker .ui-next-project-picker-options small{color:var(--text-muted);font-size:11px}
