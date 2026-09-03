@@ -1149,8 +1149,14 @@
 <!-- 問卷這裡不放附件：要貼圖說明的情境走「提問」頁籤。
      ⚠ 另一個 answerFileInput 在下方「無解析題目」的自由回答分支，那個要留——
      停在該閘門時留言框與退回框都被本面板取代，那是唯一能補圖的地方。 -->
-<p v-if="!clarAllAnswered" class="ui-next-error-text">還有必答的問題沒回答</p>
+<!-- 送出走與其他關卡同一個底排：靠右、膠囊、同高。原本是佔滿一行的方按鈕，
+     同一個面板裡兩種按鈕長不一樣。必答提示拿掉——按鈕本來就 disabled，多一行紅字只是噪音。 -->
+<div class="ui-next-action-foot">
+<span></span>
+<div class="ui-next-inline-actions">
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
+</div>
+</div>
 </template>
 </template>
 <template v-else>

@@ -495,10 +495,11 @@
 /* 動作面板比照 AskMe 的 composer：整塊就是一個輸入區。
    原本是「面板有框、裡面的 textarea 又有一個框」——雙層框是它最不像的地方。
    textarea 去邊框去底色、融進面板；面板本身用 composer 那組圓角與邊框。 */
-/* ⚠ 邊框與陰影要照抄 .ui-next-thread-composer（06-chat.css）：原本 box-shadow:none、邊框只取
-   12%，在我們這組幾乎同色的 --surface／--bg 上等於整個框浮不起來，看起來就是「不夠立體」。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));box-shadow:0 14px 36px color-mix(in srgb,var(--text) 9%,transparent),var(--shadow-sm);padding:14px 16px 12px}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:color-mix(in srgb,var(--text) 36%,var(--surface))}
+/* ⚠ 要照抄的是「真正生效」的那條 .ui-next-thread-composer——06-chat.css 那份被本檔下方
+   （position:sticky 那條）整個覆蓋過：邊框其實是 inset shadow 不是 border，外加 --shadow-lg。
+   照 06-chat 抄會得到另一種立體感（14px/36px 的淡陰影），和聊天頁對不起來。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border-color:transparent;background:var(--surface);box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent);padding:14px 16px 12px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:transparent;box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 36%,transparent)}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea{border:0;border-radius:0;padding:0;margin:0;background:transparent;min-height:44px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea:focus{outline:0}
 /* 標題只是說明現在停在哪一關，不需要跟頁面標題一樣大 */
@@ -977,21 +978,15 @@
 /* Enter 提示接在框下方。寬度要跟面板同一條規則（min(100%,812px) 置中），否則它會靠 aside
    的左緣而不是框的左緣——差 55px，看起來像沒對齊。內距 17px 對齊框內文字。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,812px);box-sizing:border-box;margin:7px auto 0;padding-left:17px}
-/* 問卷那種佔滿一行的主要動作（送出回答）不在 .ui-next-inline-actions 裡，但高度與圓角要一致，
-   否則同一個面板裡兩種按鈕長不一樣。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary{
-  height:33px;border-radius:999px;font-size:13px;border-color:transparent;background:var(--text);color:var(--surface)}
 
 /* 動作面板的按鈕原本完全沒有 hover 規則（全站找不到 .ui-next-primary:hover），滑過去毫無反應，
    而聊天頁的送出鈕與圖示鈕都有。照那邊的兩套語彙補：
    主要動作＝深底轉主色（同 .ui-next-thread-send:hover）；次要與圖示＝hover 底＋內外陰影抬起
    （同 composer 的 chip／icon-button）。disabled 一律不反應，否則「還不能按」會被誤解成可以按。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button,
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button{
   transition:background-color .125s ease,box-shadow .125s ease,border-color .125s ease}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button.ui-next-primary:not(:disabled):hover,
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary:not(:disabled):hover{
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button.ui-next-primary:not(:disabled):hover{
   background:var(--primary);color:var(--surface)}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button:not(.ui-next-primary):not(:disabled):hover,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button:hover{
@@ -999,18 +994,21 @@
 
 /* 規格問卷的題目頁籤：數字膠囊，與上一層「規格書 QA／提問」那組文字頁籤在視覺上分開，
    否則兩層頁籤疊在一起會分不出哪一層是哪一層。答過的打勾＝一次一題也看得出還剩幾題。 */
-/* 頁籤是框的一部分，不是浮在框上方的另一塊：與面板同寬、同底色、同邊框，上緣圓角、
-   下緣不封口，再用 -1px 把兩者的邊框接起來——看起來就是一個框長出了頁籤。
-   （⚠ 動作面板是 sticky，它上方是 aside 的漸層透明區；沒有自己的底色時頁籤會和捲過去的
-   對話文字疊在一起，這也是必須給底的原因。） */
-.ui-next-q-tabs{display:flex;flex-wrap:wrap;gap:6px;width:min(100%,812px);box-sizing:border-box;margin:0 auto -15px;padding:9px 15px 10px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));border-bottom:0;border-radius:22px 22px 0 0;background:var(--surface)}
-/* 有頁籤時框自己的上圓角要收掉，否則接縫處會出現兩層圓角。 */
-.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0}
-.ui-next-q-tabs button{display:inline-flex;align-items:center;gap:4px;min-width:29px;height:26px;padding:0 9px;border:1px solid var(--border-strong);border-radius:999px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .125s ease,box-shadow .125s ease,border-color .125s ease}
-.ui-next-q-tabs button:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
-.ui-next-q-tabs button.done{color:var(--text-secondary);border-color:var(--border)}
+/* Chrome 分頁的模型：分頁列本身是頁面底色（較暗），選中的那一頁換成框的底色並長出上圓角，
+   與下方的框連成同一塊；沒選中的融進分頁列。框在有頁籤時上緣不封口（inset 只畫下／左／右），
+   接縫處才不會多一條線——選中的分頁自己畫上／左／右，那就是 Chrome 分頁的輪廓。
+   ⚠ 分頁列必須有不透明底：動作面板是 sticky，它上方是 aside 的漸層透明區，
+   沒有底色時分頁會和捲過去的對話文字疊在一起。
+   ⚠ -15px 是抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。 */
+.ui-next-q-tabs{display:flex;flex-wrap:wrap;align-items:flex-end;gap:3px;width:min(100%,812px);box-sizing:border-box;margin:0 auto -15px;padding:0 10px;background:var(--bg)}
+.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:34px;height:31px;padding:0 12px;border:0;border-radius:10px 10px 0 0;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.ui-next-q-tabs button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text-secondary)}
 .ui-next-q-tabs button.done .ui-next-icon{width:12px;height:12px;color:var(--success)}
-.ui-next-q-tabs button.active{border-color:transparent;background:var(--text);color:var(--surface)}
-.ui-next-q-tabs button.active .ui-next-icon{color:var(--surface)}
-/* 「提問」與題目同一層但語意不同：留一段間距並改成文字寬度，數字膠囊才不會被讀成「第 3 題」。 */
-.ui-next-q-tabs .ui-next-q-tab-ask{margin-left:8px;padding:0 13px}
+.ui-next-q-tabs button.active{background:var(--surface);color:var(--text);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0;box-shadow:var(--shadow-lg),inset 0 -1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
+.ui-next-q-tabs .ui-next-q-tab-ask{margin-left:10px}
+
+/* 動作面板離視窗底 35px，聊天頁的 composer 只有 15px。差別不在自己的 margin：sticky 的
+   bottom:0 貼的是 .ui-next-main 的 padding box，而那裡有 padding-bottom:32px；聊天頁走的是
+   另一套 thread-dock 結構所以不吃這個值。往下借 20px 補平（仍在 main 的 padding 內，不會被裁）。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{bottom:-20px}

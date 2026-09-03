@@ -719,8 +719,9 @@ describe("ui-next 平行介面", () => {
     // 內層框連同它的 CSS 一起移除，兩邊都不許復活（留著就會有人照舊把 class 加回去）
     expect(task).not.toContain('ui-next-qa-ask-composer');
     expect(pagesCss).not.toContain('ui-next-qa-ask-composer');
-    // 取而代之：面板自己就是 composer，邊框與陰影照抄 .ui-next-thread-composer
-    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));box-shadow:0 14px 36px');
+    // 取而代之：面板自己就是 composer。⚠ 要對齊的是「真正生效」的 .ui-next-thread-composer——
+    // 邊框是 inset shadow 不是 border，外加 --shadow-lg；06-chat.css 那份宣告已被 09 覆蓋。
+    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border-color:transparent;background:var(--surface);box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)');
   });
 
   test("規格問答的題目頁籤接在動作面板上緣，最後一個是提問", () => {
@@ -731,10 +732,13 @@ describe("ui-next 平行介面", () => {
     expect(task.indexOf('ui-next-q-tabs')).toBeLessThan(task.indexOf('ui-next-panel ui-next-task-action'));
     // 舊的「規格書 QA／提問」那層併掉了：兩層頁籤疊在框裡分不出哪層是哪層
     expect(task).not.toContain('>規格書 QA</button>');
-    // 與框連成一體：下緣不封口、上緣圓角，-15px 抵掉 .ui-next-task-side 的 grid gap:14px
+    // Chrome 分頁的模型：分頁列是頁面底色，選中的那一頁換成框的底色並長出上圓角。
+    // -15px 抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。
     expect(pagesCss).toContain('margin:0 auto -15px');
-    expect(pagesCss).toContain('border-bottom:0;border-radius:22px 22px 0 0');
-    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0');
+    expect(pagesCss).toContain('.ui-next-q-tabs button.active{background:var(--surface)');
+    expect(pagesCss).toContain('.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:34px;height:31px;padding:0 12px;border:0;border-radius:10px 10px 0 0');
+    // 框在有頁籤時上緣不封口，接縫處才不會多一條線
+    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0;box-shadow:var(--shadow-lg),inset 0 -1px 0');
   });
 
   test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {
