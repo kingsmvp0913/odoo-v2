@@ -1141,6 +1141,10 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   background:color-mix(in srgb,var(--text) 13%,var(--bg));color:var(--text);box-shadow:none;
   /* 內縮：氣泡不貼齊內容欄右緣，與 AI 那側被頭像推進去的距離對稱 */
   margin-right:35px}
+/* 署名／時間要跟著內縮同樣的量，否則它比氣泡多凸出 35px（實測氣泡右緣 1286、時間 1325）。
+   ⚠ 只縮 .user 那側：AI 那側的時間本來就對齊訊息左緣，動了會歪。 */
+.ui-next-thread-messages > article.user > small,
+.ui-next-conv-list article.user small{margin-right:35px}
 
 /* ⚠ chat 的頭像跑到訊息上方：`> article.ai > *{grid-column:2}`（0,2,2）壓過
    `.ui-next-msg-avatar{grid-column:1}`（0,1,0），頭像被推進第 2 欄、擠到訊息上面一列。
