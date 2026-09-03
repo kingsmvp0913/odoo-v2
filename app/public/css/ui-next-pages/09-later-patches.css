@@ -1115,8 +1115,8 @@
 /* 頂欄比照對話框：同一組底色／邊框／圓角／陰影，讀起來是「上下各一塊浮起的面板」，
    而不是一條貼在頁面上的橫幅。⚠ 內容寬度要跟對話同一條（777px，見上方整欄那組），
    否則框比訊息寬一截。 */
-.ui-next-task-topbar{background:var(--bg);backdrop-filter:none;padding-top:8px;padding-bottom:8px}
-.ui-next-task-topbar::after{content:"";position:absolute;left:max(0px,calc((100% - 812px) / 2));right:auto;top:8px;bottom:8px;width:min(100%,777px);height:auto;border-radius:16px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--ui-next-composer-bg,var(--surface));box-shadow:var(--shadow-lg)}
+.ui-next-task-topbar{background:var(--bg);backdrop-filter:none;padding-top:1px;padding-bottom:24px}
+.ui-next-task-topbar::after{content:"";position:absolute;left:max(0px,calc((100% - 812px) / 2));right:auto;top:0;bottom:24px;width:min(100%,777px);height:auto;border-radius:16px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--ui-next-composer-bg,var(--surface));box-shadow:var(--shadow-lg)}
 /* ::after 是背景板，內容要浮在它上面 */
 .ui-next-task-topbar>*{position:relative;z-index:1}
 .ui-next-task-topbar-main{padding-left:14px}
@@ -1159,7 +1159,7 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-q-tabs,
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,777px);margin-left:max(0px,calc((100% - 812px) / 2));margin-right:0}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,777px);margin:-6px 0 0 max(0px,calc((100% - 812px) / 2))}
 
 /* ⚠ chat 的頭像跑到訊息上方：`> article.ai > *{grid-column:2}`（0,2,2）壓過
    `.ui-next-msg-avatar{grid-column:1}`（0,1,0），頭像被推進第 2 欄、擠到訊息上面一列。
