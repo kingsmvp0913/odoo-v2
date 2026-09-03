@@ -187,6 +187,11 @@
             </span>
           </div>
 
+          <div v-if="ofKind('proposal').some(f => f.status === 'approved')" class="settings-section"
+            style="border-left:3px solid var(--warning-strong);margin-bottom:var(--space-3);font-size:var(--fs-sm);color:var(--text)">
+            ⏱ 已核准的提案**沒有人會先看過**，今晚 22:00 會自動實作並合併。不想讓某一條跑，要在那之前按「擋下這條」。
+          </div>
+
           <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
 
           <div v-for="f in ofKind('summary')" :key="f.id"
@@ -210,6 +215,9 @@
               <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
                 {{ sev(f.severity).label }}
               </span>
+              <span v-if="f.status === 'approved'" style="font-size:var(--fs-xs);padding:1px var(--space-2);border-radius:4px;color:#fff;background:var(--warning-strong)" title="沒有人會先審——今晚 22:00 會被自動實作並合併">
+                ⏱ 今晚 22:00 自動執行
+              </span>
             </div>
             <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px;white-space:pre-wrap">{{ f.diagnosis }}</div>
             <div v-if="f.evidence" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
@@ -221,6 +229,9 @@
 
             <div class="hc-window-row" style="margin-top:6px">
               <span style="font-size:var(--fs-sm);color:var(--text-muted)">處置：</span>
+              <button v-if="f.status !== 'no_change' && f.status !== 'done'" class="btn btn-danger btn-sm"
+                :disabled="savingId === f.id" @click="setStatus(f, 'no_change')"
+                title="預設核准後會在今晚自動執行；按這顆才會擋下，不會被排進去">🛑 擋下這條</button>
               <button v-if="f.status !== 'done'" class="btn btn-outline btn-sm" :disabled="fixBusy === f.id || (fixState(f.id) && ['running','ready','adopted'].includes(fixState(f.id).status))"
                 @click="startFix(f)" title="在獨立工作區改碼並自己跑測試，改完給你看 diff，你點頭才提交">🔧 修這條</button>
               <button v-for="s in statuses" :key="s.value" class="btn btn-sm"

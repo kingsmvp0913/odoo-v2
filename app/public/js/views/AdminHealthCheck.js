@@ -43,6 +43,7 @@ const HC_CADENCE = { weekly: '（週）', monthly: '（月）' };
 
 const HC_STATUS = [
   { value: 'pending',   label: '待處理' },
+  { value: 'approved',  label: '已核准（將自動執行）' },
   { value: 'no_change', label: '不須調整' },
   { value: 'done',      label: '處理完成' }
 ];
