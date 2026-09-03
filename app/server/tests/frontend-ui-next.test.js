@@ -719,9 +719,10 @@ describe("ui-next 平行介面", () => {
     // 內層框連同它的 CSS 一起移除，兩邊都不許復活（留著就會有人照舊把 class 加回去）
     expect(task).not.toContain('ui-next-qa-ask-composer');
     expect(pagesCss).not.toContain('ui-next-qa-ask-composer');
-    // 取而代之：面板自己就是 composer。⚠ 要對齊的是「真正生效」的 .ui-next-thread-composer——
-    // 邊框是 inset shadow 不是 border，外加 --shadow-lg；06-chat.css 那份宣告已被 09 覆蓋。
-    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border-color:transparent;background:var(--surface);box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)');
+    // 取而代之：面板自己就是 composer，顏色與陰影照 .ui-next-thread-composer（--shadow-lg、
+    // 22%／focus 36%）。⚠ 線用真 border 不是 inset shadow——分頁的線要對得上它，只要一邊
+    // 用 inset、一邊用 border 就永遠差一個 border 寬度，接縫處看起來是斷的。
+    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--surface);box-shadow:var(--shadow-lg)');
   });
 
   test("規格問答的題目頁籤接在動作面板上緣，最後一個是提問", () => {
@@ -739,22 +740,22 @@ describe("ui-next 平行介面", () => {
     expect(pagesCss).toContain('margin:0 auto -14px');
     // 選中那一頁換成框的底色（深色下 --surface 比 --bg 亮一階），才會讀成「同一塊」
     expect(pagesCss).toMatch(/\.ui-next-q-tabs button\.active\{[^}]*background:var\(--surface\)/);
-    // 釘形狀不釘尺寸：分頁是「上緣圓角、下緣不封口」的分頁，不是膠囊（999px）也不是方鈕。
-    // 尺寸還會隨版面微調，寫死 px 只會讓下次調整撞紅而學不到東西。
-    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:\d+px \d+px 0 0/);
+    // 分頁是方角（使用者定案），不是膠囊
     expect(pagesCss).not.toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:999px/);
+    // 分頁的線也用真 border（上／左／右，底部不封口），與框同一層級才對得齊
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border:1px solid color-mix\(in srgb,var\(--text\) 22%,var\(--surface\)\);border-bottom:0/);
     // 框的邊框維持完整、只收上圓角：上緣線在分頁右側那一大段是必須存在的，整條拿掉會讓
     // 框看起來沒有上緣。接縫改由選中的分頁往下疊 1px 蓋掉（Chrome 的作法）。
     // 只收左上角：分頁只佔左邊一小段，右上角仍要圓
     expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0}');
-    // 反圓角：分頁底部兩側往外彎進框（Chrome 分頁的形狀），弧線上要帶同一條邊線才不會斷
-    expect(pagesCss).toContain('.ui-next-q-tabs button.active::before,.ui-next-q-tabs button.active::after');
-    expect(pagesCss).toContain('.ui-next-q-tabs button.active:first-child::before{display:none}');
+    // 反圓角隨方角一起移除：那兩塊是用來把圓角平滑接進框的，方角不需要
+    expect(pagesCss).not.toContain('.ui-next-q-tabs button.active::before');
     // 每一頁都往下疊 1px 蓋掉框的上緣線：分頁與框之間屬於形狀內部，不該有線；
     // 那條線只在最後一頁右側之後才算外圍。相鄰兩頁 -1px 共用一條邊。
-    // ⚠ 2px 不是 1px：版面套了 --ui-zoom≈1.1，1px 的負 margin 縮放後蓋不滿 1.1px 的線
-    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*margin:0 0 -2px -1px/);
-    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*box-shadow:inset 0 1px 0 [^;]*,inset 1px 0 0 [^;]*,inset -1px 0 0/);
+    // 下緣 -1px 蓋掉框的上緣 border；左緣 -1px 讓相鄰兩頁共用一條邊
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*margin:0 0 -1px -1px/);
+    // 上緣圓角保留、下緣不封口＝分頁的形狀（使用者定案：只移除下方那對反圓角）
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:9px 9px 0 0/);
     // 分頁是一條連續的列，不是幾顆分開的按鈕
     expect(pagesCss).toMatch(/\.ui-next-q-tabs\{[^}]*gap:0/);
   });
