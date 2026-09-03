@@ -735,13 +735,18 @@ describe("ui-next 平行介面", () => {
     // Chrome 分頁的模型：分頁列是頁面底色，選中的那一頁換成框的底色並長出上圓角。
     // -15px 抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。
     expect(pagesCss).toContain('margin:0 auto -15px');
-    expect(pagesCss).toContain('.ui-next-q-tabs button.active{background:var(--surface)');
+    // 選中那一頁換成框的底色（深色下 --surface 比 --bg 亮一階），才會讀成「同一塊」
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\.active\{[^}]*background:var\(--surface\)/);
     // 釘形狀不釘尺寸：分頁是「上緣圓角、下緣不封口」的分頁，不是膠囊（999px）也不是方鈕。
     // 尺寸還會隨版面微調，寫死 px 只會讓下次調整撞紅而學不到東西。
     expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:\d+px \d+px 0 0/);
     expect(pagesCss).not.toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:999px/);
-    // 框在有頁籤時上緣不封口，接縫處才不會多一條線
-    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0;box-shadow:var(--shadow-lg),inset 0 -1px 0');
+    // 框的邊框維持完整、只收上圓角：上緣線在分頁右側那一大段是必須存在的，整條拿掉會讓
+    // 框看起來沒有上緣。接縫改由選中的分頁往下疊 1px 蓋掉（Chrome 的作法）。
+    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0}');
+    expect(pagesCss).toContain('.ui-next-q-tabs button.active{position:relative;margin-bottom:-1px');
+    // 分頁是一條連續的列，不是幾顆分開的按鈕
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs\{[^}]*gap:0/);
   });
 
   test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {
