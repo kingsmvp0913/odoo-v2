@@ -1127,7 +1127,7 @@
 </div>
 <template v-else>
 <!-- v-show 而非 v-if：切頁籤時保住 textarea 被 autoResize 撐開的高度與捲動位置。 -->
-<div v-for="(q,index) in clarVisible()" v-show="index===clarIdx" :key="q.id" class="ui-next-question">
+<div v-for="(q,index) in clarVisible()" v-show="index===clarIdx" :key="q.id" class="ui-next-question ui-next-question-solo">
 <b>{{ index+1 }}. {{ q.text }}<template v-if="!q.required"> · 選填</template></b>
 <!-- 選錯的代價用標記呈現，不寫進題目文字。只標 costly，reversible 不渲染——沒有標記＝不必特別小心。 -->
 <span v-if="q.impact==='costly'" class="ui-next-warning-text" title="這題選錯要退回重寫規格與程式，請多看一眼">選錯難改</span>
