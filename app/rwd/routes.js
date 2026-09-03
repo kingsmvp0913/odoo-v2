@@ -71,6 +71,7 @@ const ROUTES = [
   { key: 'admin-prompt-logs', hash: '#/admin/prompt-logs', auth: 'admin', covered: true },
   { key: 'admin-port-pool', hash: '#/admin/port-pool', auth: 'admin', covered: true },
   { key: 'admin-enterprise', hash: '#/admin/enterprise', auth: 'admin', covered: true },
+  { key: 'admin-feedback', hash: '#/admin/feedback', auth: 'admin', covered: true },
   { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true, expect: '.sg-wrap' }
 ];
 
