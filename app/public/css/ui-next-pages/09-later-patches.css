@@ -1000,18 +1000,28 @@
    ⚠ 分頁列必須有不透明底：動作面板是 sticky，它上方是 aside 的漸層透明區，
    沒有底色時分頁會和捲過去的對話文字疊在一起。
    ⚠ -15px 是抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。 */
-.ui-next-q-tabs{position:relative;z-index:1;display:flex;flex-wrap:wrap;align-items:flex-end;gap:0;width:min(100%,812px);box-sizing:border-box;margin:0 auto -15px;padding:0;background:var(--bg)}
+/* 分頁列本身透明：整條給底色的話，「提問」右邊那一大段會變成一塊擋住對話的色塊。
+   改成每個分頁自己帶不透明底（未選中用頁面底色 --bg，看不出方塊但擋得住字），
+   只有分頁佔到的寬度會遮住捲過去的對話文字。 */
+.ui-next-q-tabs{position:relative;z-index:1;display:flex;flex-wrap:wrap;align-items:flex-end;gap:0;width:min(100%,812px);box-sizing:border-box;margin:0 auto -14px;padding:0;background:transparent}
 /* 尺寸跟著框走：框是 22px 圓角、16px 內距的大塊，配 31px 高／12px 字的小方塊會像另一個元件。
    分頁彼此緊鄰（gap 2px）才讀得出是一排分頁，而不是幾顆散落的按鈕。 */
-.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:48px;height:36px;padding:0 16px;border:0;border-radius:11px 11px 0 0;background:transparent;color:var(--text-muted);font:inherit;font-size:13px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
-.ui-next-q-tabs button:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text-secondary)}
-.ui-next-q-tabs button.done .ui-next-icon{width:13px;height:13px;color:var(--success)}
+.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:44px;height:25px;padding:0 14px;border:0;border-radius:9px 9px 0 0;background:var(--bg);color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.ui-next-q-tabs button:hover{background:color-mix(in srgb,var(--text) 9%,var(--bg));color:var(--text-secondary)}
+.ui-next-q-tabs button.done .ui-next-icon{width:11px;height:11px;color:var(--success)}
 /* 選中那一頁：底色換成框的 --surface（深色下比頁面底 --bg 亮一階），並自己畫上／左／右的
    輪廓——與框上緣不封口配成一組，接縫處就沒有線，看起來是同一塊。 */
 .ui-next-q-tabs button.active{position:relative;margin-bottom:-1px;padding-bottom:1px;background:var(--surface);color:var(--text);font-weight:600;box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
+/* 反圓角（Chrome 分頁底部兩側往外彎進內容區的那個小弧）。用 radial-gradient 疊出來：
+   圓心放在角落，7px 內透明、7~8px 是那條 22% 的邊線、之後是框的底色——邊線接得上分頁的
+   輪廓，不然轉角處會斷一截。第一個分頁貼齊框左緣，它的左弧會畫到框外，所以不畫。 */
+.ui-next-q-tabs button.active::before,.ui-next-q-tabs button.active::after{content:"";position:absolute;bottom:0;width:8px;height:8px;pointer-events:none}
+.ui-next-q-tabs button.active::before{left:-8px;background:radial-gradient(circle at 0 0,transparent 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 8px,var(--surface) 8px)}
+.ui-next-q-tabs button.active::after{right:-8px;background:radial-gradient(circle at 100% 0,transparent 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 8px,var(--surface) 8px)}
+.ui-next-q-tabs button.active:first-child::before{display:none}
 /* 只收上圓角，邊框維持完整四邊——上緣線在分頁右側那一大段是必須存在的，
    整條拿掉會讓框看起來沒有上緣。被分頁蓋住的那一小段由分頁自己遮（見下）。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0}
 
 
 /* 動作面板離視窗底 35px，聊天頁的 composer 只有 15px。差別不在自己的 margin：sticky 的

@@ -734,7 +734,9 @@ describe("ui-next 平行介面", () => {
     expect(task).not.toContain('>規格書 QA</button>');
     // Chrome 分頁的模型：分頁列是頁面底色，選中的那一頁換成框的底色並長出上圓角。
     // -15px 抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。
-    expect(pagesCss).toContain('margin:0 auto -15px');
+    // -14px 讓分頁列底貼齊框頂但「不重疊」：重疊的話未選中分頁的底色會蓋掉框的上緣線，
+    // 框看起來就沒有上緣。只有選中的那一頁用自己的 -1px 往下疊去蓋。
+    expect(pagesCss).toContain('margin:0 auto -14px');
     // 選中那一頁換成框的底色（深色下 --surface 比 --bg 亮一階），才會讀成「同一塊」
     expect(pagesCss).toMatch(/\.ui-next-q-tabs button\.active\{[^}]*background:var\(--surface\)/);
     // 釘形狀不釘尺寸：分頁是「上緣圓角、下緣不封口」的分頁，不是膠囊（999px）也不是方鈕。
@@ -743,7 +745,11 @@ describe("ui-next 平行介面", () => {
     expect(pagesCss).not.toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:999px/);
     // 框的邊框維持完整、只收上圓角：上緣線在分頁右側那一大段是必須存在的，整條拿掉會讓
     // 框看起來沒有上緣。接縫改由選中的分頁往下疊 1px 蓋掉（Chrome 的作法）。
-    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0}');
+    // 只收左上角：分頁只佔左邊一小段，右上角仍要圓
+    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0}');
+    // 反圓角：分頁底部兩側往外彎進框（Chrome 分頁的形狀），弧線上要帶同一條邊線才不會斷
+    expect(pagesCss).toContain('.ui-next-q-tabs button.active::before,.ui-next-q-tabs button.active::after');
+    expect(pagesCss).toContain('.ui-next-q-tabs button.active:first-child::before{display:none}');
     expect(pagesCss).toContain('.ui-next-q-tabs button.active{position:relative;margin-bottom:-1px');
     // 分頁是一條連續的列，不是幾顆分開的按鈕
     expect(pagesCss).toMatch(/\.ui-next-q-tabs\{[^}]*gap:0/);
