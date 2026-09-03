@@ -590,7 +590,10 @@
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) /* ⚠ 左右退 1px（-15px 而非 -16px）：框的邊線是畫在 padding box 邊緣的 inset shadow，
    而這一列為了 sticky 需要滿寬鋪底 + z-index:3，鋪到 -16px 正好把左右那 1px 邊線蓋掉——
    症狀是「框只有標題列這一段沒有左右邊」。padding 同步減 1，文字位置不變。 */
-.ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -15px 0;padding:12px 15px 4px;background:var(--surface)}
+.ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -15px 0;padding:12px 15px 4px;border-radius:21px 21px 0 0;background:var(--surface)}
+/* 這一列的底也要跟著框收圓角：它是矩形，方角會蓋掉框上緣那兩段圓弧（症狀＝「右上角缺一點」）。
+   21px＝框的 22px 減掉左右各退的那 1px。有分頁時框的左上角是直角，這裡也要跟著直。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action-head{border-top-left-radius:0}
 .ui-next-task-action .ui-next-spec-box{max-height:46dvh;overflow-y:auto;overscroll-behavior:contain}
 /* composer 自己有 gap:9px，inline-actions 再帶 margin-top 就變成兩倍間距。 */
 
