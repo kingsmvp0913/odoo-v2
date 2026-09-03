@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 30, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -936,7 +936,7 @@
         this._convPinBottom = (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
         const list = this.$refs.convPanel;
         const listTop = list ? list.getBoundingClientRect().top : 999;
-        if (listTop > -8 && this.hasMoreConv) this.loadMoreConv();
+        if (listTop > -140 && this.hasMoreConv) this.loadMoreConv();
       },
       async loadEvents() {
         if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
@@ -997,7 +997,9 @@
 <div class="ui-next-task-content-column">
 <section tabindex="-1" class="ui-next-panel ui-next-conversation">
 <div ref="convPanel" class="ui-next-conv-list" @click="handleTaskMessageClick">
-<button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
+<!-- 沒有「載入更早」的按鈕：往上捲會自動接（見 onConvScroll）。放一顆按鈕會讓人以為
+     前面的對話被收起來了——它其實只是還沒渲染。 -->
+<p v-if="hasMoreConv" class="ui-next-conv-more">往上捲載入更早的 {{ timeline.length-convVisible }} 則</p>
 <template v-for="row in visibleRows" :key="row._key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
 <article v-else :class="timelineClass(row)">
 <!-- 錯誤 LOG 與機器 log 分開標示：兩者合併成一句「技術紀錄」時，畫面上看不出這則是不是錯誤，
