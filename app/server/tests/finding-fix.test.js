@@ -87,3 +87,46 @@ describe('DENY：守門相關的檔不准被自動改', () => {
     expect(files).toEqual(['app/server/cron.js']);
   });
 });
+
+describe('測試判準：與基線比較，不是 exit code', () => {
+  const { compareToBaseline } = require('../pipeline/finding-fix');
+
+  // 此 repo 2026-09-03 實測有 4 支既有紅燈。照 exit code 判的話一條都不會通過，
+  // 整條夜間通道天天空轉——而空轉沒有任何訊號。
+  test('既有紅燈持平 → 算通過', () => {
+    const r = compareToBaseline({ failed: 6, passed: 3654 }, { failed: 6, passed: 3661 });
+    expect(r.regressed).toBe(false);
+    expect(r.line).toMatch(/^pass（基線 6 failed／3654 passed → 改後 6 failed／3661 passed）$/);
+  });
+
+  test('紅燈變多 → 算失敗', () => {
+    const r = compareToBaseline({ failed: 6, passed: 3654 }, { failed: 8, passed: 3652 });
+    expect(r.regressed).toBe(true);
+    expect(r.line).toMatch(/^fail/);
+  });
+
+  test('紅燈變少 → 算通過', () => {
+    expect(compareToBaseline({ failed: 6, passed: 3654 }, { failed: 4, passed: 3656 }).regressed).toBe(false);
+  });
+
+  // 測試根本沒跑起來時 failed 是 null。這種情況一律當失敗——
+  // 「解析不出來就當通過」等於把「測試環境壞掉」偽裝成「修正沒問題」。
+  test('基線解析不出來 → 算失敗', () => {
+    expect(compareToBaseline({ failed: null, passed: null }, { failed: 6, passed: 3654 }).regressed).toBe(true);
+  });
+  test('改後解析不出來 → 算失敗', () => {
+    expect(compareToBaseline({ failed: 6, passed: 3654 }, { failed: null, passed: null }).regressed).toBe(true);
+  });
+});
+
+describe('measureTests 解析 Tests: 那一行', () => {
+  test('解析出 failed 與 passed', () => {
+    const { parseJestCounts } = require('../pipeline/finding-fix');
+    expect(parseJestCounts('Tests:       6 failed, 3 skipped, 3651 passed, 3660 total'))
+      .toEqual({ failed: 6, passed: 3651 });
+    // 全綠時沒有 failed 那一段，要當成 0 而不是 null
+    expect(parseJestCounts('Tests:       3660 passed, 3660 total'))
+      .toEqual({ failed: 0, passed: 3660 });
+    expect(parseJestCounts('沒有總結行')).toEqual({ failed: null, passed: null });
+  });
+});

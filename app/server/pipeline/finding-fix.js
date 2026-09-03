@@ -130,6 +130,17 @@ function jestSummary(stdout, stderr) {
   return m ? m[1].trim() : '';
 }
 
+// 從 jest 的總結行解出數字。全綠時那行沒有 "N failed" 這一段，要當 0——
+// 回 null 會讓 compareToBaseline 判成「解析失敗」，於是全綠的修正反而過不了。
+function parseJestCounts(summaryLine) {
+  const line = String(summaryLine || '');
+  if (!/\btotal\b/.test(line)) return { failed: null, passed: null };
+  const f = /(\d+)\s+failed/.exec(line);
+  const p = /(\d+)\s+passed/.exec(line);
+  if (!p) return { failed: null, passed: null };
+  return { failed: f ? Number(f[1]) : 0, passed: Number(p[1]) };
+}
+
 /**
  * 平台自己在工作區跑一次測試——**實測結果為準，不採信 agent 自報**。
  *
@@ -141,26 +152,35 @@ async function measureTests(worktree) {
   try {
     const { stdout, stderr } = await execFileAsync('npm', ['run', 'test:quiet'],
       { cwd, timeout: FIX_TEST_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 });
-    return { ok: true, summary: jestSummary(stdout, stderr) };
+    const summary = jestSummary(stdout, stderr);
+    return { ok: true, summary, ...parseJestCounts(summary) };
   } catch (err) {
     // 有紅燈時 jest exit≠0 也走這裡，跟「測試根本沒跑起來」要分得開——靠解不解析得到總結行判定
     const summary = jestSummary(err.stdout, err.stderr);
     return summary
-      ? { ok: false, summary }
-      : { ok: false, summary: '', error: String(err.message || '').split('\n')[0] };
+      ? { ok: false, summary, ...parseJestCounts(summary) }
+      : { ok: false, summary: '', failed: null, passed: null, error: String(err.message || '').split('\n')[0] };
   }
 }
 
-// 存進 test_result 的字串＝人在畫面上看到的那一行，所以自報與實測不一致必須寫在同一行裡。
-function formatTestResult(measured, selfReported) {
-  const self = (selfReported || '').trim();
-  if (!measured.summary) {
-    return `unknown（測試沒跑起來：${measured.error || '無輸出'}${self ? `；agent 自報 ${self}` : ''}）`;
-  }
-  const verdict = measured.ok ? 'pass' : 'fail';
-  const line = `${verdict}（實測 ${measured.summary}）`;
-  // 自報跟實測對不上，代表這份修正的其他自述也不能信——這句話要跟結果黏在一起
-  return self && self !== verdict ? `${line} ⚠ agent 自報 ${self}` : line;
+/**
+ * 判準是「有沒有新增紅燈」，不是 exit code = 0。
+ *
+ * 此 repo 2026-09-03 實測有 4 支既有紅燈。人工審核時人看得到那行字、自己判斷
+ * 「那幾支跟這次改動無關」；夜間自動套用沒有人做這個判斷，照 exit code 判的話
+ * 一條都不會通過、整條通道天天空轉，而空轉沒有任何訊號。
+ *
+ * ⚠ 不得改成「允許紅 N 支」這種寫死的數字，也不得在任何地方列出既有紅燈清單——
+ * 那種清單會腐爛成「教人把自己改壞的東西當既有問題放過去」（rules/always.md 第 2 條）。
+ * 基線每次現場量。
+ */
+function compareToBaseline(base, after) {
+  const unknown = base.failed == null || after.failed == null;
+  const regressed = unknown || after.failed > base.failed;
+  const detail = `基線 ${base.failed == null ? '?' : base.failed} failed／${base.passed == null ? '?' : base.passed} passed`
+               + ` → 改後 ${after.failed == null ? '?' : after.failed} failed／${after.passed == null ? '?' : after.passed} passed`;
+  const head = unknown ? 'unknown' : (regressed ? 'fail' : 'pass');
+  return { regressed, line: `${head}（${detail}）` };
 }
 
 // 收工作區。Windows 上 `worktree remove` 常在最後刪目錄那一步吃到 Permission denied（有殘留的
@@ -198,6 +218,10 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     await git(REPO_ROOT, ['worktree', 'add', '-B', branch, worktree, 'HEAD']);
     await setStatus(fixId, 'running', { branch, worktree });
     linkNodeModules(worktree);
+    // 改碼之前先量基線。這一趟多花約 60 秒（2026-09-03 實測全跑 60s），換到的是
+    // 「新紅燈」與「既有紅燈」分得開——沒有它，自動套用那條路只能全有或全無。
+    const baseline = await measureTests(worktree);
+    unlinkNodeModules(worktree);
 
     const agent = loadAgent('platform-fix');
     const prompt = agent.render({
@@ -256,12 +280,16 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     linkNodeModules(worktree);
     const measured = await measureTests(worktree);
     unlinkNodeModules(worktree);
+    const cmp = compareToBaseline(baseline, measured);
+    // 自報跟實測對不上，代表這份修正的其他自述也不能信——這句話要跟結果黏在一起
+    const testResult = (tests && tests !== (cmp.regressed ? 'fail' : 'pass'))
+      ? `${cmp.line} ⚠ agent 自報 ${tests}` : cmp.line;
 
     // 全部收進索引再取 diff：未追蹤的新檔（新增的測試、新模組）不進索引就不會出現在 diff 裡，
     // 人會以為那些檔案不存在。commit 也用同一批。
     await git(worktree, ['add', '-A']);
     const { stdout: diff } = await git(worktree, ['diff', '--cached']);
-    await setStatus(fixId, 'ready', { notes, test_result: formatTestResult(measured, tests), diff });
+    await setStatus(fixId, 'ready', { notes, test_result: testResult, diff });
   } catch (err) {
     console.error('[FIX]', err.message);
     await removeWorktree(worktree).catch(() => {});
@@ -413,4 +441,7 @@ async function applyFix(fixId, userId, inflight = []) {
   return { branch: fix.branch, merged: true, restarted: true, container };
 }
 
-module.exports = { runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer };
+module.exports = {
+  runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer,
+  compareToBaseline, parseJestCounts, measureTests,
+};
