@@ -412,6 +412,11 @@
         mobileSidebarOpen: false,
         isAdmin: false,
         userName: "使用者",
+        feedbackOpen: false,
+        feedbackTrigger: null,
+        feedbackContent: "",
+        feedbackFiles: [],
+        feedbackSubmitting: false,
       };
     },
     computed: {
@@ -649,6 +654,57 @@
         if (!id) return;
         this.expandedProjects[id] = true;
         await this.loadProjectChats(id);
+      },
+      // 「提意見」不掛 isAdmin：所有登入使用者都看得到（刻意），提交端點也不限管理員。
+      openFeedback(event) {
+        this.closePopovers();
+        this.feedbackContent = "";
+        this.feedbackFiles = [];
+        this.feedbackTrigger = event && event.currentTarget;
+        this.feedbackOpen = true;
+        this.$nextTick(() => {
+          const el = this.$refs.feedbackModal && this.$refs.feedbackModal.querySelector("textarea");
+          if (el) el.focus();
+        });
+      },
+      closeFeedback() {
+        this.feedbackOpen = false;
+        this.$nextTick(() => this.feedbackTrigger && this.feedbackTrigger.focus());
+      },
+      trapFeedbackFocus(event) {
+        if (event.key === "Escape") return this.closeFeedback();
+        this.trapFocus(event, this.$refs.feedbackModal);
+      },
+      // 截圖直接貼上，比照 TaskDetail.js 的 onPasteFiles：限圖片、單檔 10MB、最多 5 個。
+      onFeedbackPaste(event) {
+        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => /^image\//.test(f.type));
+        if (!files.length) return;
+        event.preventDefault();
+        files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && this.feedbackFiles.length < 5) this.feedbackFiles.push(f); });
+      },
+      onFeedbackFilesSelected(event) {
+        const selected = Array.from(event.target.files || []);
+        this.feedbackFiles = selected.filter((f) => /^image\//.test(f.type) && f.size <= 10 * 1024 * 1024).slice(0, 5);
+        event.target.value = "";
+      },
+      removeFeedbackFile(index) {
+        this.feedbackFiles.splice(index, 1);
+      },
+      async submitFeedback() {
+        if (!this.feedbackContent.trim()) return;
+        this.feedbackSubmitting = true;
+        try {
+          const form = new FormData();
+          form.append("content", this.feedbackContent.trim());
+          this.feedbackFiles.forEach((file) => form.append("files", file));
+          await Api.postForm("feedback", form);
+          showToast("感謝回饋，已送出", "success");
+          this.closeFeedback();
+        } catch (error) {
+          showToast(error.message || "送出失敗", "error", 0);
+        } finally {
+          this.feedbackSubmitting = false;
+        }
       },
       toggleTools(event) {
         const opening = !this.toolsOpen;
@@ -1056,7 +1112,7 @@
           </div>
           </div>
           <div class="ui-next-bottom">
-            <div class="ui-next-tools-wrap"><div v-if="toolsOpen" ref="toolsMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><button role="menuitem" @click="openTour"><ui-next-icon name="book"/>新手教學</button><button role="menuitem" v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button role="menuitem" v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button role="menuitem" @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button role="menuitem" @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen" aria-haspopup="menu"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div>
+            <div class="ui-next-tools-wrap"><div v-if="toolsOpen" ref="toolsMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><button role="menuitem" @click="openFeedback($event)"><ui-next-icon name="chat"/>提意見</button><button role="menuitem" @click="openTour"><ui-next-icon name="book"/>新手教學</button><button role="menuitem" v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button role="menuitem" v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button role="menuitem" @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button role="menuitem" @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button></div><button ref="toolsTrigger" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen" aria-haspopup="menu"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div>
             <div class="ui-next-account-wrap"><div v-if="accountOpen" ref="accountMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><button role="menuitem" @click="go('/settings')">設定</button><button role="menuitem" @click="toggleTheme">切換深淺色</button><button role="menuitem" v-if="isAdmin" @click="go('/admin')">管理員</button><button role="menuitem" @click="logout">登出</button></div><button ref="accountTrigger" class="ui-next-account" @click="toggleAccount($event)" :aria-expanded="accountOpen" aria-haspopup="menu"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ui-next-user-icon" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg><span>帳號與設定</span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div>
             <router-link v-if="isAdmin && usageRows.length" class="ui-next-usage" to="/token-report"><div v-for="row in usageRows" :key="row.label" class="ui-next-usage-row"><span v-if="row.provider==='claude'" class="usage-provider-logo claude" role="img" :aria-label="row.label"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"></path></svg></span><span v-else class="usage-provider-logo codex" role="img" :aria-label="row.label"><img src="https://images.ctfassets.net/kftzwdyauwt9/77tJ5U1tgxHMZflZ5m4Z24/ace4d8b6ad200d87ebcb69c466344343/Blossom_4k_Icon_1.png?w=1920&amp;q=90&amp;fm=webp" alt=""></span><strong>剩 {{ row.remaining }}%</strong><small>更新 {{ formatUsageUpdated(row.updatedAt) }}<template v-if="row.resetsAt"> · 重置 {{ formatUsageReset(row.resetsAt) }}</template></small><i><em :class="row.level" :style="{ width: row.used + '%' }"></em></i></div></router-link>
           </div>
@@ -1075,6 +1131,22 @@
             <p v-if="commandLoading">搜尋中…</p>
             <p v-else-if="!commandQuery.trim()">輸入關鍵字搜尋任務、對話或專案</p>
             <p v-else-if="!commandItems.length">找不到符合的項目</p>
+          </section>
+        </div>
+        <div v-if="feedbackOpen" class="ui-next-task-modal-backdrop" @mousedown.self="closeFeedback" @keydown="trapFeedbackFocus">
+          <section ref="feedbackModal" class="ui-next-task-modal ui-next-form-modal" role="dialog" aria-modal="true" aria-labelledby="ui-next-feedback-title">
+            <header><h2 id="ui-next-feedback-title">提意見</h2><button type="button" class="ui-next-modal-close" aria-label="關閉提意見視窗" @click="closeFeedback"><ui-next-icon name="close"/></button></header>
+            <div class="ui-next-form-modal-grid">
+              <label class="ui-next-form-modal-wide">你的意見<textarea v-model="feedbackContent" placeholder="想反映的問題或想法，可直接貼上截圖" @paste="onFeedbackPaste"></textarea></label>
+              <label class="ui-next-form-modal-wide ui-next-upload">附件（最多 5 個）
+                <input type="file" accept="image/*" multiple @change="onFeedbackFilesSelected">
+                <span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>點此選擇檔案</b><small>最多 5 個</small></span>
+              </label>
+              <div v-if="feedbackFiles.length" class="ui-next-form-modal-wide ui-next-upload-list">
+                <span v-for="(file,index) in feedbackFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><ui-next-icon name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFeedbackFile(index)"><ui-next-icon name="close"/></button></span>
+              </div>
+            </div>
+            <footer><button type="button" @click="closeFeedback">取消</button><button class="ui-next-primary" @click="submitFeedback" :disabled="feedbackSubmitting||!feedbackContent.trim()">{{ feedbackSubmitting?'送出中…':'送出' }}</button></footer>
           </section>
         </div>
       </div>
