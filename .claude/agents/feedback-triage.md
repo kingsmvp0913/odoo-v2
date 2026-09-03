@@ -14,11 +14,9 @@ stage: feedback_triage
 
 {{content}}
 
-## 附件圖片路徑清單
+## 附件
 
-{{attachment_paths}}
-
-（若上面是空的，代表這則意見沒有附圖。）
+{{attachments}}
 
 ## 判準
 
