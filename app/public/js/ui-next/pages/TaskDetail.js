@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 5, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, taskTab: 'requirements' };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -294,6 +294,7 @@
           this._clarSig = clarSig;
           this.answerFields = {};
           this.answerExtra = {};
+          this.clarIdx = 0; // 題目整組換過了，停在舊的第 3 題會看到一題不存在的題目
         }
         const clarInit = {}, extraInit = {};
         this.clarification.questions.forEach(q => {
@@ -824,9 +825,14 @@
       handleClarEnter(idx) {
         const nextIdx = idx + 1;
         if (nextIdx < this.clarQuestions.length) {
-          const next = this.$refs['clarInput_' + nextIdx];
-          const el = Array.isArray(next) ? next[0] : next;
-          if (el) el.focus();
+          // 題目切成頁籤後，只 focus 是不夠的：下一題還藏在別的頁籤裡，
+          // 畫面不會動，看起來像 Enter 沒反應。先換頁籤，等它顯示出來再 focus。
+          this.clarIdx = nextIdx;
+          this.$nextTick(() => {
+            const next = this.$refs['clarInput_' + nextIdx];
+            const el = Array.isArray(next) ? next[0] : next;
+            if (el) el.focus();
+          });
         } else if (this.clarAllAnswered) {
           this.submitAnswer();
         }
@@ -1118,7 +1124,14 @@
 <p>AI 判斷後會回到這裡：可能直接往下跑，或把問題更新後再請你補答。</p>
 </div>
 <template v-else>
-<div v-for="(q,index) in clarVisible()" :key="q.id" class="ui-next-question">
+<!-- 題目切成頁籤：整份問卷攤開時面板會佔掉大半個畫面，但人一次只答一題。
+     數字膠囊而非文字頁籤，與上面那層「規格書 QA／提問」分開；答過的打勾，
+     否則切成一次一題就看不出還剩幾題沒答。 -->
+<div v-if="clarVisible().length>1" class="ui-next-q-tabs" role="tablist">
+<button v-for="(q,index) in clarVisible()" :key="'qtab'+q.id" type="button" role="tab" :class="{active:clarIdx===index,done:!!clarAnswerText(q)}" :aria-selected="(clarIdx===index).toString()" :title="q.text" @click="clarIdx=index">{{ index+1 }}<ui-next-icon v-if="clarAnswerText(q)" name="check"/></button>
+</div>
+<!-- v-show 而非 v-if：切頁籤時保住 textarea 被 autoResize 撐開的高度與捲動位置。 -->
+<div v-for="(q,index) in clarVisible()" v-show="index===clarIdx" :key="q.id" class="ui-next-question">
 <b>{{ index+1 }}. {{ q.text }}<template v-if="!q.required"> · 選填</template></b>
 <!-- 選錯的代價用標記呈現，不寫進題目文字。只標 costly，reversible 不渲染——沒有標記＝不必特別小心。 -->
 <span v-if="q.impact==='costly'" class="ui-next-warning-text" title="這題選錯要退回重寫規格與程式，請多看一眼">選錯難改</span>
@@ -1134,10 +1147,12 @@
 <textarea v-model="answerExtra[q.id]" placeholder="輸入你的答案…" @input="autoResize"></textarea>
 </label>
 </template>
-<textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)" @input="autoResize" @paste="onPasteFiles($event,'answerFiles')">
+<textarea v-else v-model="answerFields[q.id]" :ref="'clarInput_'+index" placeholder="輸入回答…（Enter 跳下題／送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="handleClarEnter(index)" @input="autoResize">
 </textarea>
 </div>
-<label class="ui-next-upload ui-next-upload-inline"><input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
+<!-- 問卷這裡不放附件：要貼圖說明的情境走「提問」頁籤。
+     ⚠ 另一個 answerFileInput 在下方「無解析題目」的自由回答分支，那個要留——
+     停在該閘門時留言框與退回框都被本面板取代，那是唯一能補圖的地方。 -->
 <p v-if="!clarAllAnswered" class="ui-next-error-text">還有必答的問題沒回答</p>
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||clarBusy||!clarAllAnswered">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>

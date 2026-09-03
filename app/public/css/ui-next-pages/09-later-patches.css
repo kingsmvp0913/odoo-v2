@@ -1002,3 +1002,13 @@
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button:not(.ui-next-primary):not(:disabled):hover,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button:hover{
   background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
+
+/* 規格問卷的題目頁籤：數字膠囊，與上一層「規格書 QA／提問」那組文字頁籤在視覺上分開，
+   否則兩層頁籤疊在一起會分不出哪一層是哪一層。答過的打勾＝一次一題也看得出還剩幾題。 */
+.ui-next-q-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 11px}
+.ui-next-q-tabs button{display:inline-flex;align-items:center;gap:4px;min-width:29px;height:26px;padding:0 9px;border:1px solid var(--border-strong);border-radius:999px;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .125s ease,box-shadow .125s ease,border-color .125s ease}
+.ui-next-q-tabs button:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
+.ui-next-q-tabs button.done{color:var(--text-secondary);border-color:var(--border)}
+.ui-next-q-tabs button.done .ui-next-icon{width:12px;height:12px;color:var(--success)}
+.ui-next-q-tabs button.active{border-color:transparent;background:var(--text);color:var(--surface)}
+.ui-next-q-tabs button.active .ui-next-icon{color:var(--surface)}
