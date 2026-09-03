@@ -310,13 +310,7 @@
         const element = document.querySelector(".ui-next-main");
         return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 80;
       },
-      dayLabel(value) {
-        const at = new Date(value), now = new Date();
-        const days = Math.round((new Date(now.toDateString()) - new Date(at.toDateString())) / 86400000);
-        if (days === 0) return "今天";
-        if (days === 1) return "昨天";
-        return at.toLocaleDateString("zh-TW", { year: at.getFullYear() === now.getFullYear() ? undefined : "numeric", month: "long", day: "numeric" });
-      },
+      dayLabel(value) { return window.UiNextShared.dayLabel(value); },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
       renderMd(value) { return window.renderNextMarkdown(value); },
       handleMessageClick(event) { return window.copyNextCode(event); },

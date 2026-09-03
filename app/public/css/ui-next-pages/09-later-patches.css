@@ -283,10 +283,12 @@
 
 /* ⚠ 舊規則寫的是 article > p，但訊息本文其實是 <div v-html>——選擇器對不上，
    所以「自己說的話」那個氣泡樣式從來沒生效過，AI／系統／自己全部長一樣。
-   div:first-child 只會命中一般訊息；LOG 那種第一個子元素是 <button>，不會被誤套。 */
-.ui-next-conv-list article{margin:0 0 14px}
-.ui-next-conv-list article > div:first-child{padding:10px 13px;border-radius:4px 13px 13px 13px;background:color-mix(in srgb,var(--text) 5%,transparent);line-height:1.65}
-.ui-next-conv-list article.user > div:first-child{max-width:82%;margin-left:auto;border-radius:13px 13px 4px 13px;background:var(--text);color:var(--surface)}
+   div:first-child 只會命中一般訊息；LOG 那種第一個子元素是 <button>，不會被誤套。
+   AI 那側不給底色（比照專案對話：AI 走主要內容欄，只有自己的話是氣泡），所以 padding／
+   背景都下放到 .user 與 .system，通用規則只留行高。 */
+.ui-next-conv-list article{margin:0 0 29px}
+.ui-next-conv-list article > div:first-child{line-height:1.65}
+.ui-next-conv-list article.user > div:first-child{max-width:82%;margin-left:auto;padding:11px 14px;border-radius:14px 14px 5px 14px;background:var(--text);color:var(--surface);box-shadow:var(--shadow-sm)}
 .ui-next-conv-list article.user small{display:block;text-align:right}
 .ui-next-conv-list small{margin-top:5px;font-size:11px}
 
@@ -438,7 +440,7 @@
 .ui-next-stop:hover{background:color-mix(in srgb,var(--danger) 12%,transparent)}
 .ui-next-stop .ui-next-icon{width:14px;height:14px}
 /* 系統寫的「已取消／已繼續」記錄：和 AI／自己的訊息區分開，不做成氣泡 */
-.ui-next-conv-list article.system > div:first-child{border:1px dashed var(--border-strong);background:transparent;color:var(--text-muted);font-size:12px}
+.ui-next-conv-list article.system > div:first-child{padding:10px 13px;border:1px dashed var(--border-strong);border-radius:4px 13px 13px 13px;background:transparent;color:var(--text-muted);font-size:12px}
 .ui-next-conv-list article.system.is-blocker > div:first-child{border-color:var(--danger);color:var(--danger)}
 .ui-next-conv-list article.system.is-blocker small{color:var(--danger)}
 
@@ -941,3 +943,10 @@
 .ui-next-settings-grid .ui-next-field-row{display:flex;align-items:stretch;gap:8px}
 .ui-next-settings-grid .ui-next-field-row input{min-width:0;flex:1}
 .ui-next-settings-grid .ui-next-field-row button{flex:none;white-space:nowrap}
+
+/* 任務對話比照專案對話：AI 那側掛頭像。訊息不再有底色之後，只靠空白分不出一段話從哪裡開始。
+   ⚠ 頭像在 DOM 排最後（見 TaskDetail.js 內註解），靠 grid 定位回左上；選擇器必須比
+   `> *` 那條更明確，否則 grid-column:2 會贏，頭像被推進訊息欄。 */
+.ui-next-conv-list article.ai{display:grid;grid-template-columns:24px minmax(0,1fr);gap:11px;align-items:start}
+.ui-next-conv-list article.ai > *{grid-column:2}
+.ui-next-conv-list article.ai > .ui-next-msg-avatar{grid-column:1;grid-row:1}

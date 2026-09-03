@@ -108,6 +108,17 @@
       },
       // 只渲染末 N 筆（最新）；往上捲再增量載入更早的，避免整條歷史撐開版面
       visibleTimeline() { return this.timeline.slice(-this.convVisible); },
+      // 比照專案對話：跨天處插一條日期分隔。時間軸項目直接攤平進 row，模板才不必多一層 row.item。
+      visibleRows() {
+        const rows = [];
+        let lastDay = '';
+        for (const item of this.visibleTimeline) {
+          const day = item.ts ? new Date(item.ts).toDateString() : '';
+          if (day && day !== lastDay) { rows.push({ divider: true, _key: 'day-' + day, label: window.UiNextShared.dayLabel(item.ts) }); lastDay = day; }
+          rows.push({ ...item, divider: false });
+        }
+        return rows;
+      },
       hasMoreConv() { return this.timeline.length > this.convVisible; },
       // 留言模式（非回覆 AI 問題）且任務有外部來源、管理者開了回寫開關時，才顯示「回寫 Odoo」勾選框
       showWritebackOption() {
@@ -992,25 +1003,29 @@
 <section v-show="taskTab==='conversation'" tabindex="-1" class="ui-next-panel ui-next-conversation" role="tabpanel" aria-labelledby="ui-next-task-tab-conversation">
 <div ref="convPanel" class="ui-next-conv-list" @click="handleTaskMessageClick">
 <button v-if="hasMoreConv" @click="loadMoreConv">載入更早的對話（{{ timeline.length-convVisible }}）</button>
-<article v-for="item in visibleTimeline" :key="item._key" :class="timelineClass(item)">
+<template v-for="row in visibleRows" :key="row._key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
+<article v-else :class="timelineClass(row)">
 <!-- 錯誤 LOG 與機器 log 分開標示：兩者合併成一句「技術紀錄」時，畫面上看不出這則是不是錯誤，
      而使用者貼的錯誤訊息正是最需要一眼認出來的那種。 -->
-<template v-if="isErrorLog(item)">
-<button @click="toggleLog(item._key)">{{ expandedLogs[item._key]?'收合':'展開' }} 錯誤 LOG（{{ logLineCount(item) }} 行）</button>
-<pre v-if="expandedLogs[item._key]">{{ item.content }}</pre>
+<template v-if="isErrorLog(row)">
+<button @click="toggleLog(row._key)">{{ expandedLogs[row._key]?'收合':'展開' }} 錯誤 LOG（{{ logLineCount(row) }} 行）</button>
+<pre v-if="expandedLogs[row._key]">{{ row.content }}</pre>
 </template>
-<template v-else-if="machineLogHint(item)">
-<button @click="toggleLog(item._key)">{{ expandedLogs[item._key]?'收合':'展開' }} {{ machineLogHint(item) }}（技術細節 {{ logLineCount(item) }} 行）</button>
-<pre v-if="expandedLogs[item._key]">{{ item.content }}</pre>
+<template v-else-if="machineLogHint(row)">
+<button @click="toggleLog(row._key)">{{ expandedLogs[row._key]?'收合':'展開' }} {{ machineLogHint(row) }}（技術細節 {{ logLineCount(row) }} 行）</button>
+<pre v-if="expandedLogs[row._key]">{{ row.content }}</pre>
 </template>
 <template v-else>
-<div v-html="renderTaskMessage(item.content)"></div>
-<div v-if="item.attachments&&item.attachments.length">
-<button v-for="file in item.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}</button>
+<div v-html="renderTaskMessage(row.content)"></div>
+<div v-if="row.attachments&&row.attachments.length">
+<button v-for="file in row.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}</button>
 </div>
 </template>
-<small>{{ timelineMeta(item) }} · {{ formatTime(item.ts) }}</small>
-</article>
+<small>{{ timelineMeta(row) }} · {{ formatTime(row.ts) }}</small>
+<!-- 頭像放在最後：CSS 用 grid 把它定位回左上角。放最前面會讓內容 div 不再是 :first-child，
+     而 markdown 的整套排版規則（09-later-patches）都掛在 div:first-child 那條選擇器上。 -->
+<span v-if="timelineClass(row)==='ai'" class="ui-next-msg-avatar" aria-hidden="true"><img src="favicon.svg" alt=""></span>
+</article></template>
 <p v-if="!timeline.length" class="ui-next-empty-state">尚無對話記錄。</p>
 </div>
 </section>
@@ -1210,7 +1225,8 @@
 <button v-if="conflictItems.length&&!isRebuildConflict" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已在 Repo 手動解完剩餘檔，收尾繼續' }}</button>
 </template>
 <template v-else-if="timelineActionMode==='cs_reply'">
-<div v-if="task.cs_reply" class="ui-next-help-box">{{ task.cs_reply }}</div>
+<!-- 回覆全文不在這裡重印：cs-agent 已把它寫進 task_logs（[客服回覆]），左側對話流看得到。
+     面板只留「追問／確認結案」這兩個動作。 -->
 <textarea v-model="csFollowup" placeholder="確認回覆內容後按「確認結案」；要調整就在這裡追問（例：客戶用的是 17.0／回覆再客氣些）" @keydown.enter.exact.prevent="csFollowupSubmit">
 </textarea>
 <div class="ui-next-inline-actions">

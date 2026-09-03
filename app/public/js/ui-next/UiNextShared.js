@@ -5,6 +5,14 @@
 // SyntaxError（整支檔不執行、畫面白掉），而 fmtNumber／elapsed 這種名字很容易撞。
 (function () {
   const fmtNumber = (value) => Number(value || 0).toLocaleString("zh-TW");
+  // 對話的日期分隔文字。專案對話與任務對話共用，各寫一份會漂移成兩種寫法。
+  const dayLabel = (value) => {
+    const at = new Date(value), now = new Date();
+    const days = Math.round((new Date(now.toDateString()) - new Date(at.toDateString())) / 86400000);
+    if (days === 0) return "今天";
+    if (days === 1) return "昨天";
+    return at.toLocaleDateString("zh-TW", { year: at.getFullYear() === now.getFullYear() ? undefined : "numeric", month: "long", day: "numeric" });
+  };
   const fmtCompact = (value) => {
     const n = Number(value || 0);
     if (n >= 1e6)
@@ -98,5 +106,5 @@
   ];
 
 
-  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS };
+  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, dayLabel, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS };
 })();
