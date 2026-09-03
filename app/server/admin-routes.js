@@ -586,7 +586,9 @@ function registerRoutes(app) {
 
   // 提案的處置狀態。這支存在的理由是「跨輪記憶」：沒有它，健檢每輪都會把同一件事重講一次，
   // 而你上輪的裁決沒有任何地方記得住；下一輪的 previousProposals() 就是讀這裡。
-  const FINDING_STATUS = new Set(['pending', 'no_change', 'done']);
+  // approved＝已核准，當晚會被自動實作並合併。它必須在白名單裡，否則前端 HC_STATUS 那顆按鈕
+  // 按下去一律 400——前端的狀態清單是直接 render 成可點的裁決鈕的，不是純顯示用。
+  const FINDING_STATUS = new Set(['pending', 'approved', 'no_change', 'done']);
   app.patch('/api/admin/health-check/findings/:id', auth, async (req, res) => {
     try {
       const status = String(req.body?.status || '').trim();

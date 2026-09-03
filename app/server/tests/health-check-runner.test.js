@@ -683,6 +683,60 @@ test('runAudit：說不出「動哪個指標、現值多少」的提案一律丟
   expect(rows.map(r => r.agent_label)).toEqual(['有指標的']);   // 沒有驗收條件的提案不成立
 });
 
+// signal 的定義就是「證據還不夠、存著等下一輪累積」，判準又叫 agent 把講不出指標的一律降級成
+// signal——指標門檻若連 signal 一起套，降級完照樣被丟掉，那個收納桶等於不存在（判準在說謊），
+// 而「講不出指標的真 bug」會就這樣人間蒸發。
+test('runAudit：候選訊號免附指標照樣入庫；提案缺指標仍然丟掉', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>x</summary><result>' + JSON.stringify({
+      severity: 'low',
+      proposals: [
+        { kind: 'signal', title: '沒指標的訊號', layer: 'platform', detail: '只有一張任務，先存著' },
+        { kind: 'proposal', title: '沒指標的提案', layer: 'prompt', detail: 'd' }
+      ]
+    }) + '</result>', usage: {}, durationMs: 5
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(), startedBy: null });
+  const { rows } = await dbModule2.query(
+    "SELECT kind, agent_label FROM health_check_findings WHERE run_id=$1 AND kind IN ('proposal','signal')", [runId]);
+  expect(rows.map(r => r.agent_label)).toEqual(['沒指標的訊號']);
+  expect(rows[0].kind).toBe('signal');
+});
+
+// 沒有標題就連「這是在講什麼」都不知道，signal 也一樣不收——免的是指標，不是全部門檻。
+test('runAudit：連標題都沒有的候選訊號仍然丟掉', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>x</summary><result>' + JSON.stringify({
+      severity: 'low', proposals: [{ kind: 'signal', layer: 'platform', detail: '沒有標題' }]
+    }) + '</result>', usage: {}, durationMs: 5
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(), startedBy: null });
+  const { rows } = await dbModule2.query(
+    "SELECT id FROM health_check_findings WHERE run_id=$1 AND kind='signal'", [runId]);
+  expect(rows).toHaveLength(0);
+});
+
+// 提案改成預設核准、當晚自動實作之後沒有人會先看過，「做錯了會壞掉什麼」就是下游 fix-review
+// 唯一的審查基準。產得出來卻存不下去的話，等於每輪多燒一段 opus output 然後丟掉。
+test('runAudit：提案的「做錯了會壞掉什麼」要落地，不能產完就丟', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>x</summary><result>' + JSON.stringify({
+      severity: 'medium',
+      proposals: [{
+        kind: 'proposal', title: '有風險說明的', layer: 'platform', detail: 'd',
+        target_metric: 'm', metric_baseline: '1', risk_if_wrong: '改錯會讓 QA 全部誤判通過'
+      }]
+    }) + '</result>', usage: {}, durationMs: 5
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(), startedBy: null });
+  const { rows: [f] } = await dbModule2.query(
+    "SELECT risk_if_wrong FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
+  expect(f.risk_if_wrong).toBe('改錯會讓 QA 全部誤判通過');
+});
+
 test('runAudit：視窗內沒有新資料 → 不呼叫模型，照實記一筆', async () => {
   buildWindowSummary.mockResolvedValueOnce({
     window: { since: '2026-08-20T00:00:00.000Z', until: '2026-08-21T00:00:00.000Z' },

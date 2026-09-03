@@ -425,7 +425,7 @@ const AUDIT_AGENT = '__audit__';
 // 用當年的 600s 預設直接逾時、整輪報廢。現在與共用上限同值，旋鈕保留供本關單獨再放寬。
 const AUDIT_TIMEOUT_MS = parseInt(process.env.HEALTH_AUDIT_TIMEOUT_MS || '2400000', 10);
 
-const STATUS_TEXT = { pending: '待處理', no_change: '不須調整', done: '處理完成' };
+const STATUS_TEXT = { pending: '待處理', approved: '已核准（將自動執行）', no_change: '不須調整', done: '處理完成' };
 
 // 上一輪留下的提案與人的裁決。餵回去有兩個作用：判「不須調整」的不會被重講第二次；判「處理完成」
 // 的要回頭查那個指標有沒有往預期方向走。這是把健檢從「每輪重寫一份報告」變成「有記憶的優化迴圈」
@@ -450,10 +450,11 @@ async function insertFinding(runId, row) {
   await query(
     `INSERT INTO health_check_findings
        (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
-        kind, layer, evidence, target_metric, metric_baseline)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11)`,
+        kind, layer, evidence, target_metric, metric_baseline, risk_if_wrong)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12)`,
     [runId, AUDIT_AGENT, row.label || '系統健檢', row.diagnosis, row.severity, row.rationale || null,
-     row.kind, row.layer || null, row.evidence || null, row.target_metric || null, row.metric_baseline || null]
+     row.kind, row.layer || null, row.evidence || null, row.target_metric || null, row.metric_baseline || null,
+     row.risk_if_wrong || null]
   );
 }
 
@@ -521,9 +522,13 @@ async function runAudit(runId, { sinceAt, cadence = 'daily', startedBy = null } 
       const title = String(p.title || '').trim();
       const metric = String(p.target_metric || '').trim();
       const baseline = String(p.metric_baseline || '').trim();
-      // 說不出「動哪個指標、現值多少」的提案一律丟掉（判準：三者缺一不成立）。丟掉要留痕，
+      const kind = p.kind === 'signal' ? 'signal' : 'proposal';
+      // 指標門檻只套在 proposal 上。signal 的定義就是「證據還不夠、存著等下一輪累積」——要求它
+      // 附得出指標基線本身自相矛盾，而判準又叫 agent 把講不出指標的一律降級成 signal，兩邊一夾
+      // 就是「降級完照樣被丟掉」，等於承諾了一個不存在的收納桶。
+      // 說不出「動哪個指標、現值多少」的**提案**仍一律丟掉（判準：三者缺一不成立）。丟掉要留痕，
       // 否則下次會誤以為模型什麼都沒提。
-      if (!title || !metric || !baseline) {
+      if (!title || (kind === 'proposal' && (!metric || !baseline))) {
         console.warn('[HEALTH-CHECK] 提案缺標題或指標，已丟棄：', title || '(無標題)');
         continue;
       }
@@ -532,13 +537,14 @@ async function runAudit(runId, { sinceAt, cadence = 'daily', startedBy = null } 
       // 讓舊資料與新舊版本交接期照樣顯示得出來。
       const psev = String(p.severity || '').trim().toLowerCase();
       await insertFinding(runId, {
-        kind: p.kind === 'signal' ? 'signal' : 'proposal',
+        kind,
         severity: SEVERITIES.has(psev) ? psev : severity,
         label: title,
         layer: String(p.layer || '').trim() || null,
         evidence: p.evidence ? String(p.evidence) : null,
         target_metric: metric,
         metric_baseline: baseline,
+        risk_if_wrong: p.risk_if_wrong ? String(p.risk_if_wrong) : null,
         diagnosis: [title, String(p.detail || '').trim()].filter(Boolean).join('\n\n'),
         rationale: p.action ? String(p.action) : null
       });

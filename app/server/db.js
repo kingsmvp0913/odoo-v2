@@ -816,6 +816,10 @@ async function migrate() {
     { table: 'health_check_findings', col: 'applied_at',     sql: 'ALTER TABLE health_check_findings ADD COLUMN applied_at TIMESTAMPTZ' },
     { table: 'health_check_findings', col: 'target_metric',  sql: 'ALTER TABLE health_check_findings ADD COLUMN target_metric TEXT' },
     { table: 'health_check_findings', col: 'metric_baseline', sql: 'ALTER TABLE health_check_findings ADD COLUMN metric_baseline TEXT' },
+    // 「這個改動如果做錯了，會壞掉什麼」：提案改成預設核准、當晚自動實作之後，沒有人會先看過，
+    // 這句就是下游 fix-review 審查那份 diff 時的基準。沒有這個欄位的話，health-auditor 每輪都會
+    // 產出這段 opus output 然後在入庫時被丟掉。
+    { table: 'health_check_findings', col: 'risk_if_wrong', sql: 'ALTER TABLE health_check_findings ADD COLUMN risk_if_wrong TEXT' },
     // 根因層：prompt / platform / env / observability。決定這條該走哪個出口，也擋住「判定非
     // 提示詞可解卻仍附一份新提示詞」那個紅旗。
     { table: 'health_check_findings', col: 'layer',    sql: 'ALTER TABLE health_check_findings ADD COLUMN layer TEXT' },
