@@ -26,9 +26,22 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSER_ROOT)) {
   process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSER_ROOT;
 }
 // 截圖機器不一定裝了中文字型，漏了中文全變豆腐框——而豆腐框寬度不等於中文字寬，
-// 會讓 fix-review 誤判成版面壞掉。字型跟著 repo 走（同上，比照 capture.js）。
+// 會讓 fix-review 誤判成「版面塌掉」而 reject 一份其實沒問題的修正。字型跟著 repo 走
+// （比照 app/rwd/capture.js）。
+//
+// ⚠ 只檢查「目錄在不在」是不夠的：`.fontroot/` 在 .gitignore 內，換機／容器重建後目錄可能
+// 還在、裡面卻空了。那時照樣 set env、中文照樣全變豆腐框，而且零訊號。所以比照 capture.js
+// 多做一層：數 `.fontroot/fonts/` 裡有沒有真的字型檔。缺字型時 captureBeforeAfter 直接回 null
+// ——**無截圖好過錯截圖**：無截圖只是少一份證據，錯截圖會製造出無辜的 reject。
 const FONT_ROOT = path.join(REPO_ROOT, 'app', 'rwd', '.fontroot');
-if (!process.env.XDG_DATA_HOME && fs.existsSync(FONT_ROOT)) {
+const FONT_DIR = path.join(FONT_ROOT, 'fonts');
+
+function fontFiles() {
+  try {
+    return fs.readdirSync(FONT_DIR).filter(f => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(f));
+  } catch { return []; }
+}
+if (!process.env.XDG_DATA_HOME && fontFiles().length) {
   process.env.XDG_DATA_HOME = FONT_ROOT;
 }
 
@@ -59,8 +72,9 @@ function serveStatic(publicDir, req, res) {
   const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
   let rel = urlPath === '/' ? '/index.html' : urlPath;
   let file = path.join(publicDir, rel);
-  // 防目錄穿越：resolve 後必須仍在 publicDir 之下
-  if (!file.startsWith(publicDir)) { res.writeHead(403); return res.end(); }
+  // 防目錄穿越：resolve 後必須仍在 publicDir 之下。尾綴分隔符不可省——沒有它，
+  // `/app/public-secrets` 這種「同前綴的鄰居目錄」會被判成合法。
+  if (!file.startsWith(publicDir + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) {
       // SPA：找不到的路徑一律回 index.html，讓前端路由接手
@@ -102,35 +116,58 @@ function closeServer(server) {
   return new Promise(resolve => { if (!server) return resolve(); server.close(() => resolve()); });
 }
 
-async function shootOne(chromium, baseUrl, route, token, outFile) {
-  const browser = await chromium.launch();
+/**
+ * 拍一張首屏。
+ *
+ * ⚠ **刻意不捲動**。原本先 `scrollTop = scrollHeight` 再截（不帶 fullPage）＝只拍最後 900px，
+ * 有兩個問題：多數前端修正在頁面上半部，agent 根本看不到；而且 before／after 的 scrollHeight
+ * 往往不同（修正本身就會改變內容高度），兩張圖會捲到不同位置，**差異來自捲動而不是修正**，
+ * 直接餵出誤判。首屏至少保證兩張圖對齊同一個基準。
+ *
+ * 已知限制：**頁面下半部的修正這裡看不到**。fix-review 的判準 5（畫面有沒有壞掉）因此只覆蓋
+ * 首屏；真要看下半部得另外決定捲多少、而且 before／after 要捲到「語意上同一處」才可比，
+ * 那是另一個題目。
+ */
+async function shootOne(browser, baseUrl, route, token, outFile) {
+  const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
   try {
-    const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
     await context.addInitScript(tk => { localStorage.setItem('aidev_token', tk); }, token);
     const page = await context.newPage();
     await page.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle', timeout: 30000 });
+    // networkidle 之後 Vue 仍可能在渲染；等版面靜下來再截。
     await page.waitForTimeout(1000);
-    // fullPage:true 截不到捲動內容——真正在捲的是 .ui-next-main，截圖前先捲到底。
-    await page.evaluate(() => {
-      const el = document.querySelector('.ui-next-main');
-      if (el) el.scrollTop = el.scrollHeight;
-    });
     await page.screenshot({ path: outFile });
   } finally {
-    await browser.close();
+    await context.close();
   }
 }
 
 /**
- * captureBeforeAfter(worktree, route) -> { before, after } | null
+ * captureBeforeAfter(worktree, route) -> { before, after, dir } | null
  *
- * route 為空、或起不了伺服器／截不到圖時回 null（呼叫端走無截圖路徑）。
+ * route 為空、缺中文字型、或起不了伺服器／截不到圖時回 null（呼叫端走無截圖路徑）。
+ * `dir` 是兩張圖所在的暫存目錄——**呼叫端用完必須自己刪掉**（見 fix-review.js 的 finally），
+ * 否則夜間每跑一條就疊一份 PNG，沒有上限也沒人回收。
+ *
+ * ⚠ before 拍的是**主 clone 的 live checkout**（不是 HEAD 的乾淨副本）。夜間批次時這不成立
+ * 為風險：`finding-fix.js` 的 applyFix 已要求主 clone 沒有未提交的變更，那條路上 live checkout
+ * 就等於 HEAD。但**人工觸發時**主 clone 常有別股平行工作的未提交變更（finding-fix.js:217 的
+ * 註解記著同一件事），此時 before 會混進不屬於這次修正的畫面差異——人工看圖時要自己知道。
  */
 async function captureBeforeAfter(worktree, route) {
   if (!route || !String(route).trim()) return null;
 
+  // 缺中文字型就不截：拿豆腐框的圖給 fix-review 看，會換來一個無辜的 reject（見檔頭 FONT_ROOT 註解）。
+  if (!fontFiles().length) {
+    console.error('[UI-PREVIEW] 找不到截圖字型（%s 內沒有任何字型檔），本輪不截圖——'
+      + '中文會全變豆腐框，會讓 fix-review 誤判成版面壞掉。重抓方式見 app/rwd/README.md。', FONT_DIR);
+    return null;
+  }
+
   let beforeServer = null;
   let afterServer = null;
+  let browser = null;
+  let outDir = null;
   let browserMod = null;
   try {
     browserMod = require('playwright');
@@ -147,18 +184,24 @@ async function captureBeforeAfter(worktree, route) {
     const beforeUrl = `http://127.0.0.1:${beforeServer.address().port}`;
     const afterUrl = `http://127.0.0.1:${afterServer.address().port}`;
 
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-preview-'));
+    outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-preview-'));
     const beforeFile = path.join(outDir, 'before.png');
     const afterFile = path.join(outDir, 'after.png');
 
-    await shootOne(browserMod.chromium, beforeUrl, route, token, beforeFile);
-    await shootOne(browserMod.chromium, afterUrl, route, token, afterFile);
+    // 一個 browser、兩個 context：兩張圖只差在吃哪一份 app/public，沒有理由各開一次瀏覽器
+    // （chromium.launch 是這裡最慢的一步）。
+    browser = await browserMod.chromium.launch();
+    await shootOne(browser, beforeUrl, route, token, beforeFile);
+    await shootOne(browser, afterUrl, route, token, afterFile);
 
-    return { before: beforeFile, after: afterFile };
+    return { before: beforeFile, after: afterFile, dir: outDir };
   } catch (err) {
     console.error('[UI-PREVIEW] 截圖失敗：', err.message);
+    // 失敗路徑上沒有人會拿到 dir，這裡就地收乾淨，不留半套的暫存目錄。
+    if (outDir) { try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* 清不掉不值得再拋 */ } }
     return null;
   } finally {
+    if (browser) await browser.close().catch(() => {});
     await closeServer(beforeServer);
     await closeServer(afterServer);
   }

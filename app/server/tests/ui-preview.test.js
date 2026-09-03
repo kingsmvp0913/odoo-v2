@@ -37,26 +37,84 @@ describe('route 為空', () => {
   });
 });
 
+// `.fontroot/` 在 .gitignore 內：換機／容器重建後目錄還在、裡面卻空了。此時中文全變豆腐框，
+// 而豆腐框會讓 fix-review 判「版面塌掉」→ 一份沒問題的修正被無辜 reject，且零訊號。
+// 無截圖好過錯截圖：缺字型一律回 null。
+describe('缺中文字型 → 不截圖（無截圖好過錯截圖）', () => {
+  test('.fontroot/fonts 空的時候回 null，且不起伺服器', async () => {
+    const spy = jest.spyOn(fs, 'readdirSync').mockReturnValue([]);
+    try {
+      const result = await captureBeforeAfter('/some/worktree', '#/tasks');
+      expect(result).toBeNull();
+      expect(mockCreateServer).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
+  test('目錄整個不存在（readdirSync 拋錯）也一樣回 null，不能當成「有字型」', async () => {
+    const spy = jest.spyOn(fs, 'readdirSync').mockImplementation(() => { throw new Error('ENOENT'); });
+    try {
+      const result = await captureBeforeAfter('/some/worktree', '#/tasks');
+      expect(result).toBeNull();
+      expect(mockCreateServer).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
+  test('目錄裡只有非字型檔 → 仍算缺字型', async () => {
+    const spy = jest.spyOn(fs, 'readdirSync').mockReturnValue(['README.md', '.gitkeep']);
+    try {
+      expect(await captureBeforeAfter('/some/worktree', '#/tasks')).toBeNull();
+    } finally { spy.mockRestore(); }
+  });
+});
+
 describe('token 簽發失敗（缺 JWT_SECRET 或 cli_push_user_id）', () => {
-  test('查無 cli_push_user_id → 回 null，不起伺服器', async () => {
+  // ⚠ 這一支的價值全在「不起伺服器」那個斷言。只斷言 toBeNull() 近乎恆真——
+  // 幾乎每一條失敗路徑都回 null，把實作整個刪掉改成 `return null` 也會綠。
+  test('查無 cli_push_user_id → 回 null，且沒有起任何伺服器', async () => {
     mockQuery.mockResolvedValue({ rows: [{ cli_push_user_id: null }] });
     const result = await captureBeforeAfter('/some/worktree', '#/tasks');
     expect(result).toBeNull();
+    expect(mockCreateServer).not.toHaveBeenCalled();
   });
 });
 
 describe('playwright 載入或啟動失敗 → 走無截圖路徑', () => {
   test('chromium.launch 拋錯時 captureBeforeAfter 回 null（不拋出）', async () => {
     mockQuery.mockResolvedValue({ rows: [{ cli_push_user_id: 1 }] });
-    // 讓 createServer 回一個可用的假 server，讓流程走到 launch 那一步再炸
-    mockCreateServer.mockImplementation((handler) => {
-      const net = jest.requireActual('net');
-      const actualHttp = jest.requireActual('http');
-      const srv = actualHttp.createServer(handler);
-      return srv;
-    });
+    // 讓 createServer 回一個真的 http server，讓流程走到 launch 那一步再炸
+    mockCreateServer.mockImplementation((handler) => jest.requireActual('http').createServer(handler));
     mockLaunch.mockRejectedValue(new Error('Executable doesn\'t exist'));
     const result = await captureBeforeAfter(os.tmpdir(), '#/tasks');
     expect(result).toBeNull();
+    // 起了才炸：這條路徑上 createServer 應該有被呼叫（與上面那支形成對照，證明
+    // 「不起伺服器」的斷言真的分得出兩種情況，不是恆真）
+    expect(mockCreateServer).toHaveBeenCalled();
+  });
+});
+
+// ⚠ 本檔的頭號紅線：ui-preview 絕不能起完整的 app server。
+// `index.js:303` 的 startCron() 無條件執行、沒有 env 可以關；兩個 cron 共用同一個 DB 會讓
+// 同一任務被派兩次、兩支 claude 並行寫同一個工作區（index.js:285-292 記著這起實際事故）。
+// 這是靜態守衛：行為測試攔不住「有人日後為了方便直接 require 平台本體」，因為那在單元測試裡
+// 會被 mock 掉而看不出來。
+describe('不得起完整的 app server（靜態守衛）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'pipeline', 'ui-preview.js'), 'utf8');
+
+  test('原始碼不得 require 平台本體（index.js）', () => {
+    expect(src).not.toMatch(/require\(\s*['"][./]*\.\.\/index['"]\s*\)/);
+    expect(src).not.toMatch(/require\(\s*['"][^'"]*\/index\.js['"]\s*\)/);
+  });
+
+  test('原始碼不得出現 startCron', () => {
+    // 註解裡講「為什麼不能起 cron」是必要的，所以只擋「真的呼叫」：startCron( 後面接參數或右括號
+    expect(src).not.toMatch(/^[^/*]*\bstartCron\s*\(/m);
+  });
+
+  // before／after 的 scrollHeight 往往不同（修正本身就會改變內容高度），捲到底再截會讓兩張圖
+  // 停在不同位置——**差異來自捲動而不是修正**，直接餵出誤判；而且不帶 fullPage 時只拍最後
+  // 900px，多數在頁面上半部的改動 agent 根本看不到。改成拍首屏之後，這行不該再回來。
+  // 同 startCron 那支：註解裡必須講得出「為什麼不捲」，所以只擋真的賦值（行首不是註解標記）。
+  test('不得在截圖前捲動（scrollTop = scrollHeight）', () => {
+    expect(src).not.toMatch(/^[^/*]*\bscrollTop\s*=/m);
   });
 });

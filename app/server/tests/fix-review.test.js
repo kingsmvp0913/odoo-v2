@@ -147,3 +147,138 @@ describe('修正紀錄不存在', () => {
     expect(mockRunClaude).not.toHaveBeenCalled();
   });
 });
+
+// health-auditor.md:61 明寫 risk_if_wrong「是下游 fix-review 審查這條修正時的基準」。
+// DB 有欄、health-check-runner 有寫入，但沒人撈出來餵進 prompt 的話，那句話等於空頭支票，
+// 而且不會有任何徵狀（審查照跑、只是少看一個維度）。
+describe('risk_if_wrong 要真的餵進 prompt', () => {
+  test('finding 直接帶了 risk_if_wrong → 用它，不必回頭查 DB', async () => {
+    mockFix();
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
+    });
+    await reviewFix(1, { title: 't', detail: 'd', action: 'a', risk_if_wrong: '會弄壞 QA 關的退回路由' });
+
+    expect(mockRender.mock.calls[0][0].risk_if_wrong).toBe('會弄壞 QA 關的退回路由');
+    // 沒有回頭 JOIN health_check_findings
+    expect(mockQuery.mock.calls.filter(([sql]) => /health_check_findings/.test(sql))).toHaveLength(0);
+  });
+
+  test('finding 沒帶 → 自己 JOIN health_check_findings 撈', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ diff: 'diff --git a/app/server/x.js b/app/server/x.js', test_result: 'pass', worktree: '/tmp/w', notes: NOTES_MARKER }] })
+      .mockResolvedValueOnce({ rows: [{ risk_if_wrong: '會讓部署關無限重試' }] });
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
+    });
+    await reviewFix(1, { title: 't', detail: 'd', action: 'a' });
+
+    expect(mockRender.mock.calls[0][0].risk_if_wrong).toBe('會讓部署關無限重試');
+  });
+
+  test('兩邊都沒有 → 明白標示「沒有宣告失敗模式」，不留空字串', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ diff: 'd', test_result: 'pass', worktree: '/tmp/w' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
+    });
+    await reviewFix(1, { title: 't' });
+
+    expect(mockRender.mock.calls[0][0].risk_if_wrong).toMatch(/沒有宣告失敗模式/);
+  });
+});
+
+// fix-review.md 對 agent 說 <notes>「這段是給人事後複核用的」。這是無人監督閘門唯一的
+// 人類稽核材料——只留一句 reason 的話，事後想知道「它為什麼這樣判」就再也查不到。
+describe('agent 的 <notes> 不得丟棄', () => {
+  test('notes 要被接出來回傳', async () => {
+    mockFix();
+    mockRunClaude.mockResolvedValue({
+      text: '<notes>判準 3 沒過：改了行為卻沒有對應測試。</notes>\n'
+          + '<result>{"verdict":"reject","reason":"缺測試"}</result>',
+      usage: {}, durationMs: 1
+    });
+    const result = await reviewFix(1, { title: 't' });
+    expect(result.notes).toBe('判準 3 沒過：改了行為卻沒有對應測試。');
+    expect(result.verdict).toBe('reject');
+  });
+
+  test('解析不出 result 時也要保住 notes（那時最需要人來看它在想什麼）', async () => {
+    mockFix();
+    mockRunClaude.mockResolvedValue({
+      text: '<notes>我覺得怪怪的但講不清楚</notes>\n沒有 result 標籤', usage: {}, durationMs: 1
+    });
+    const result = await reviewFix(1, { title: 't' });
+    expect(result.verdict).toBe('reject');
+    expect(result.notes).toBe('我覺得怪怪的但講不清楚');
+  });
+});
+
+// rules/pipeline.md#72：模型輸出的大小寫與尾隨空白不穩定。
+// 方向雖然安全（不正規化只會多 reject 不會多 approve），但那是「無辜的 reject」。
+describe('verdict 大小寫與空白要正規化', () => {
+  test.each(['Approve', 'APPROVE', ' approve ', 'approve\n'])('%p → approve', async (raw) => {
+    mockFix();
+    mockRunClaude.mockResolvedValue({
+      text: `<result>{"verdict":${JSON.stringify(raw)},"reason":"ok"}</result>`, usage: {}, durationMs: 1
+    });
+    const result = await reviewFix(1, { title: 't' });
+    expect(result.verdict).toBe('approve');
+  });
+
+  test('"Reject" 一樣正規化', async () => {
+    mockFix();
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"Reject","reason":"不行"}</result>', usage: {}, durationMs: 1
+    });
+    expect((await reviewFix(1, { title: 't' })).verdict).toBe('reject');
+  });
+});
+
+// 夜間跑幾條就疊幾份 PNG，沒有人回收。ui-preview 刻意把暫存目錄交出來，就是要在這裡收。
+describe('暫存截圖用完要刪', () => {
+  const realFs = jest.requireActual('fs');
+  const os = require('os');
+  const path = require('path');
+
+  test('審完之後暫存目錄不留下（approve 路徑）', async () => {
+    const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'uiprev-test-'));
+    realFs.writeFileSync(path.join(dir, 'before.png'), 'x');
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js' });
+    mockCapture.mockResolvedValue({ before: `${dir}/before.png`, after: `${dir}/after.png`, dir });
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
+    });
+
+    await reviewFix(1, { title: 't', verify_route: '#/tasks' });
+    expect(realFs.existsSync(dir)).toBe(false);
+  });
+
+  test('agent 執行失敗那條路也要刪（否則失敗越多殘留越多）', async () => {
+    const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'uiprev-test-'));
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js' });
+    mockCapture.mockResolvedValue({ before: `${dir}/before.png`, after: `${dir}/after.png`, dir });
+    mockRunClaude.mockRejectedValue(new Error('claude 掛了'));
+
+    const result = await reviewFix(1, { title: 't', verify_route: '#/tasks' });
+    expect(result.verdict).toBe('reject');
+    expect(realFs.existsSync(dir)).toBe(false);
+  });
+});
+
+// 這一支是閘門，而 runClaude 帶 --dangerously-skip-permissions。不指定 cwd 會讓它跑在
+// 平台的 live checkout 上，等於給審查者一把可以動被審程式碼的鑰匙。
+describe('審查者不得跑在平台 live checkout 上', () => {
+  test('runClaude 要帶 cwd，且不是平台 repo', async () => {
+    mockFix();
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
+    });
+    await reviewFix(1, { title: 't' });
+
+    const opts = mockRunClaude.mock.calls[0][1];
+    expect(opts.cwd).toBeTruthy();
+    expect(opts.cwd).not.toContain('odoo-v2');
+  });
+});
