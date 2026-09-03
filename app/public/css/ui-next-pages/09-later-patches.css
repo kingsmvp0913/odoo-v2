@@ -1018,7 +1018,7 @@
 /* 每一頁都畫上／左／右的輪廓、底部不畫，並整排往下疊 1px 蓋掉框的上緣線——分頁與框之間
    屬於形狀內部，不該有線；那條線只在最後一頁右側之後才算外圍。相鄰兩頁用 -1px 疊在一起
    共用一條，整體就是一圈連續的外框沿著「分頁＋框」的輪廓走。 */
-.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:44px;box-sizing:border-box;height:26px;margin:0 0 0 -1px;padding:0 14px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));border-bottom:0;border-radius:9px 9px 0 0;background:var(--bg);color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:44px;position:relative;box-sizing:border-box;height:26px;margin:0 0 0 -1px;padding:0 14px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));border-bottom:0;border-radius:9px 9px 0 0;background:var(--bg);color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .ui-next-q-tabs button:first-child{margin-left:0}
 .ui-next-q-tabs button:not(.active):hover{background:color-mix(in srgb,var(--text) 9%,var(--bg));color:var(--text-secondary)}
 .ui-next-q-tabs button.done .ui-next-icon{width:11px;height:11px;color:var(--success)}
@@ -1027,11 +1027,14 @@
 .ui-next-q-tabs button.active{position:relative;background:var(--surface);color:var(--text);font-weight:600}
 /* 只收上圓角，邊框維持完整四邊——上緣線在分頁右側那一大段是必須存在的，
    整條拿掉會讓框看起來沒有上緣。被分頁蓋住的那一小段由分頁自己遮（見下）。 */
-/* 有分頁時框自己不畫上緣線，改由分頁列末端那段填充補「最後一頁右側到框右緣」。
-   ⚠ 這樣分頁才不必往下疊 1px 去蓋線——疊下去的話它的左右 border 也會跟著多出一截，
-   線頭懸在框裡面沒有收尾，接縫處看起來就突兀。上緣不畫線，兩個上角也就不留圓角。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-color:transparent;border-top-left-radius:0;border-top-right-radius:0}
-.ui-next-q-tabs::after{content:"";flex:1 1 auto;align-self:stretch;margin-bottom:-1px;border-bottom:1px solid color-mix(in srgb,var(--text) 22%,var(--surface))}
+/* 框的 border 維持完整（右上角的圓角要留），只收左上角——那裡被第一個分頁接著。
+   分頁底下那一段線由分頁自己的遮罩蓋掉（見下），所以分頁不必往下疊：疊下去的話它的
+   左右 border 也會跟著多出一截，線頭懸在框裡沒有收尾。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0}
+/* 每個分頁在自己正下方蓋掉框的上緣線，用各自的底色補平。⚠ 2px 不是 1px：版面套了
+   --ui-zoom≈1.1，1px 蓋不滿 1.1px 的線。 */
+.ui-next-q-tabs button::after{content:"";position:absolute;left:0;right:0;bottom:-2px;height:2px;background:var(--bg)}
+.ui-next-q-tabs button.active::after{background:var(--surface)}
 
 
 /* 動作面板離視窗底 35px，聊天頁的 composer 只有 15px。差別不在自己的 margin：sticky 的

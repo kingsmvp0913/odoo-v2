@@ -755,9 +755,11 @@ describe("ui-next 平行介面", () => {
     // 分頁不往下疊：疊下去的話左右 border 會跟著多出一截，線頭懸在框裡沒有收尾。
     // 左緣 -1px 讓相鄰兩頁共用一條邊。
     expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*margin:0 0 0 -1px/);
-    // 框的上緣線改由分頁列末端那段填充補「最後一頁右側到框右緣」
-    expect(pagesCss).toContain('.ui-next-q-tabs::after{content:"";flex:1 1 auto;align-self:stretch;margin-bottom:-1px;border-bottom:1px solid');
-    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-color:transparent');
+    // 框的 border 維持完整（右上圓角要留），只收左上角；分頁底下那一段由分頁自己的遮罩蓋掉。
+    // ⚠ 遮罩 2px 不是 1px：--ui-zoom≈1.1，1px 蓋不滿 1.1px 的線。
+    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0}');
+    expect(pagesCss).toContain('.ui-next-q-tabs button::after{content:"";position:absolute;left:0;right:0;bottom:-2px;height:2px;background:var(--bg)}');
+    expect(pagesCss).toContain('.ui-next-q-tabs button.active::after{background:var(--surface)}');
 
     // 上緣圓角保留、下緣不封口＝分頁的形狀（使用者定案：只移除下方那對反圓角）
     expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:9px 9px 0 0/);
