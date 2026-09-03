@@ -198,6 +198,8 @@
     methods: {
       // 執行歷程改成跳窗：開的時候才抓，關掉不保留（它是除錯用的終端輸出，不是常駐內容）
       openEvents() { this.eventsOpen = true; this.loadEvents(); },
+      // 收合時整條標題列都能展開；已展開時不做事，否則點標題旁的來源連結會誤收
+      expandActionIfCollapsed() { if (this.taskActionCollapsed) this.taskActionCollapsed = false; },
       async openEnv() {
         // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
         // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
@@ -980,7 +982,6 @@
 <div class="ui-next-task-topbar-main">
 <button class="ui-next-back" @click="back" aria-label="返回"><ui-next-icon name="arrow-left"/></button>
 <h1>{{ task.title || task.task_id }}</h1>
-<span v-if="task.stage_label" class="ui-next-stage-badge">{{ task.stage_label }}</span>
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
 </div>
 <div class="ui-next-detail-actions">
@@ -1079,7 +1080,9 @@
 <button type="button" role="tab" class="ui-next-q-tab-ask" :class="{active:clarTab==='ask'}" :aria-selected="(clarTab==='ask').toString()" @click="clarTab='ask'">提問</button>
 </div>
 <section class="ui-next-panel ui-next-task-action" :class="{'is-collapsed':taskActionCollapsed}">
-<div class="ui-next-task-action-head">
+<!-- 收合時整條標題列都是展開的入口：只有右邊那顆 24px 的箭頭可點，等於把面板收起來之後
+     要瞄準一個很小的目標才打得開。展開狀態不掛 handler，否則點標題旁的來源連結會誤收。 -->
+<div class="ui-next-task-action-head" :class="{'is-clickable':taskActionCollapsed}" @click="expandActionIfCollapsed">
 <h2>{{ actionModeLabel }}</h2>
 <!-- 來源／狀態接在小標題後面：它們說明的是「這張任務現在停在哪、從哪來」，
      與這一區要你做的事是同一件事的兩面。頂欄只留名稱與階段。 -->
@@ -1087,7 +1090,7 @@
 <span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
 <span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span class="ui-next-head-spacer"></span>
-<button type="button" class="ui-next-task-action-collapse" :aria-label="taskActionCollapsed?'展開任務對話框':'縮小任務對話框'" :title="taskActionCollapsed?'展開':'縮小'" :aria-expanded="(!taskActionCollapsed).toString()" @click="taskActionCollapsed=!taskActionCollapsed"><ui-next-icon :name="taskActionCollapsed?'chevron-up':'chevron-down'"/></button>
+<button type="button" class="ui-next-task-action-collapse" :aria-label="taskActionCollapsed?'展開任務對話框':'縮小任務對話框'" :title="taskActionCollapsed?'展開':'縮小'" :aria-expanded="(!taskActionCollapsed).toString()" @click.stop="taskActionCollapsed=!taskActionCollapsed"><ui-next-icon :name="taskActionCollapsed?'chevron-up':'chevron-down'"/></button>
 </div>
 <template v-if="!taskActionCollapsed">
 <!-- 已完成：面板留著但只當資訊列，沒有輸入框也沒有送出——整塊消失的話畫面下半部會空掉，
