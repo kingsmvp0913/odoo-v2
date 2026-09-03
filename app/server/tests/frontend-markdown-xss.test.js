@@ -151,7 +151,7 @@ describe('v-html 綁定白名單', () => {
   const VETTED = new Set([
     'renderedContent',      // WikiView：走 renderMarkdown，見本檔上方行為測試
     'renderMd(m.content)',  // ProjectChat：renderMd 只是 renderMarkdown 的薄封裝（同一消毒入口）
-    'renderMd(message.content)', // UiNextProjectChat：同一個 renderMarkdown 薄封裝
+    'renderMd(row.message.content)', // UiNextProjectChat：同一個 renderMarkdown 薄封裝（v-for 變數 message→row，因為對話插了日期分隔列；來源仍是後端 project_chats 訊息內容）
     'renderTaskMessage(row.content)', // UiNextTaskDetail：同一個 renderMarkdown 薄封裝（v-for 變數 item→row，因為時間軸插了日期分隔列）
     'ansiToHtml(ev.content)', // TaskDetail：函式內自行 escape 後才組 HTML（TaskDetail.js 的 esc()）
     // Next UI 是同樣這兩個綁定的重寫，消毒入口相同、只有 v-for 變數名不同：
