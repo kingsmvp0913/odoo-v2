@@ -1294,22 +1294,19 @@
 <p v-if="task.blocker_type==='sync_wait'&&task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
 <textarea v-model="newMessageText" placeholder="新增留言…可直接貼上截圖" @keydown.enter.exact.prevent="sendTaskMessage">
 </textarea>
-<!-- ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
+<!-- 附件與回寫收進底排（同人工審核那一關、同聊天頁的 composer）：原本「附加檔案」是一條
+     滿寬的虛線放置區、回寫勾選又獨佔一行，兩者加起來佔掉面板一半的高度。
+     ⚠ ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
      檔名會留在欄位裡看起來像又要再送一次。 -->
-<label class="ui-next-upload ui-next-upload-inline">
-<input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected">
-<span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加檔案</b></span>
-</label>
-<div v-if="newMessageFiles.length" class="ui-next-upload-list">
-<span v-for="(file,index) in newMessageFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><ui-next-icon name="paperclip"/><em>{{ file.name }}</em></span>
-</div>
-<label v-if="showWritebackOption">
-<input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
 <!-- disabled 只看文字，與 sendTaskMessage 第一行那個 "沒文字就 return" 的早退對齊。
      原本額外放行「只選了檔案」的情況，按鈕會亮但點下去被那行擋掉，靜默什麼都不發生。 -->
 <div class="ui-next-action-foot">
+<div class="ui-next-action-tools">
+<label class="ui-next-icon-button" title="附加檔案"><ui-next-icon name="paperclip"/><input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected"></label>
+<label v-if="showWritebackOption" class="ui-next-foot-check"><input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
+<small v-if="newMessageFiles.length">已選 {{ newMessageFiles.length }} 個附件</small>
 <small v-if="isAgentRunning" class="ui-next-running-hint">AI 正在處理這一輪…</small>
-<span v-else></span>
+</div>
 <div class="ui-next-inline-actions">
 <button v-if="isAgentRunning" class="ui-next-stop" @click="togglePause"><ui-next-icon name="close"/>停止</button>
 <button class="ui-next-primary" @click="sendTaskMessage" :disabled="sendingMessage||!newMessageText.trim()">{{ sendingMessage?'送出中…':'送出留言' }}</button>

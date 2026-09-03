@@ -1036,12 +1036,18 @@
 .ui-next-q-tabs button.active::after{background:var(--surface)}
 
 
-/* 動作面板離視窗底 35px，聊天頁的 composer 只有 15px。差別不在自己的 margin：sticky 的
-   bottom:0 貼的是 .ui-next-main 的 padding box，而那裡有 padding-bottom:32px；聊天頁走的是
-   另一套 thread-dock 結構所以不吃這個值。往下借 20px 補平（仍在 main 的 padding 內，不會被裁）。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{bottom:-20px}
+/* 動作面板離視窗底太遠：sticky 的 bottom:0 貼的是 .ui-next-main 的 padding box，而那裡有
+   padding-bottom:32px（ui-next.css）。⚠ 不要改成 bottom 負值去借——sticky 一旦捲到最底就
+   回到正常流的位置，負值會讓它往下掉、Enter 說明底下露出一塊空白，捲動時位置還會跳。
+   正確做法是把捲動容器在這一頁的下內距收掉，bottom 維持 0，位置才會像聊天頁一樣不動。 */
+.ui-next-main:has(.ui-next-task-detail-grid.is-tab-conversation){padding-bottom:12px;scroll-padding-bottom:12px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{bottom:0}
 
 /* 問卷的題目卡不再自己畫框：面板本身已經是那個容器，圓角內再一個圓角框就是框中框。
    ⚠ 只針對問卷這一種（-solo）：conflict 的逐檔裁決卡與 cs_data 的多題填答同樣叫
    .ui-next-question，那兩處是「同時列出多張卡」，去掉框會整片黏在一起。 */
 .ui-next-task-action .ui-next-question.ui-next-question-solo{padding:0;border:0;border-radius:0;background:transparent}
+
+/* 底排的勾選（同步回寫）：原生 checkbox ＋ 一整行的版面換成一顆小標籤，與旁邊的圖示鈕同高。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-foot-check{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;cursor:pointer}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-foot-check input{width:13px;height:13px;margin:0;accent-color:var(--primary)}
