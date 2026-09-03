@@ -950,3 +950,9 @@
 .ui-next-conv-list article.ai{display:grid;grid-template-columns:24px minmax(0,1fr);gap:11px;align-items:start}
 .ui-next-conv-list article.ai > *{grid-column:2}
 .ui-next-conv-list article.ai > .ui-next-msg-avatar{grid-column:1;grid-row:1}
+
+/* 對話與輸入區的行長比照專案對話：那邊是 24px 頭像 + 11px 間隙 + 777px 文字＝812px。
+   這裡原本讓兩者跟著側欄撐滿 1031px，文字欄就變成 902px——同一段話在任務頁比在
+   聊天頁寬 125px，一行拉太長，眼睛回到行首會找不到位置。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{width:min(100%,812px);box-sizing:border-box;margin-left:auto;margin-right:auto}
