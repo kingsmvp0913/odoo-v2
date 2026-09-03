@@ -985,12 +985,14 @@
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
 </div>
 <div class="ui-next-detail-actions">
-<button v-if="testMode" @click="stepPipeline" :disabled="stepping">{{ stepping?'執行中…':'推進 Pipeline' }}</button>
-<button v-if="task.status!=='stopped'&&task.status!=='done'" @click="togglePause">{{ task.is_paused?'恢復任務':'暫停任務' }}</button>
-<button v-if="task.env_status" @click="openEnv">測試機</button>
-<button @click="openEvents">執行歷程</button>
-<button v-if="isAdmin&&task.git_branch" @click="downloadCodeZip" :disabled="downloadingZip">{{ downloadingZip?'打包中…':'下載程式碼' }}</button>
-<button v-if="isAdmin&&task.status==='done'&&!task.is_hidden" @click="archive" :disabled="archiving">{{ archiving?'封存中…':'封存' }}</button>
+<!-- 全改成圖示鈕：最多同時 5 顆，一排文字按鈕會把標題擠掉。文案移進 title／aria-label，
+     每顆都保有「執行中」的 disabled 狀態（原本靠文字換成「打包中…」表達，圖示鈕改用 disabled）。 -->
+<button v-if="testMode" class="ui-next-icon-button" @click="stepPipeline" :disabled="stepping" :title="stepping?'執行中…':'推進 Pipeline'" :aria-label="stepping?'執行中':'推進 Pipeline'"><ui-next-icon name="flow"/></button>
+<button v-if="task.status!=='stopped'&&task.status!=='done'" class="ui-next-icon-button" @click="togglePause" :title="task.is_paused?'恢復任務':'暫停任務'" :aria-label="task.is_paused?'恢復任務':'暫停任務'"><ui-next-icon :name="task.is_paused?'play':'pause'"/></button>
+<button v-if="task.env_status" class="ui-next-icon-button" @click="openEnv" title="測試機" aria-label="開啟測試機"><ui-next-icon name="grid"/></button>
+<button class="ui-next-icon-button" @click="openEvents" title="執行歷程" aria-label="執行歷程"><ui-next-icon name="terminal"/></button>
+<button v-if="isAdmin&&task.git_branch" class="ui-next-icon-button" @click="downloadCodeZip" :disabled="downloadingZip" :title="downloadingZip?'打包中…':'下載程式碼'" :aria-label="downloadingZip?'打包中':'下載程式碼'"><ui-next-icon name="download"/></button>
+<button v-if="isAdmin&&task.status==='done'&&!task.is_hidden" class="ui-next-icon-button" @click="archive" :disabled="archiving" :title="archiving?'封存中…':'封存'" :aria-label="archiving?'封存中':'封存'"><ui-next-icon name="archive"/></button>
 </div>
 </header>
 <div class="ui-next-task-detail-grid is-tab-conversation">

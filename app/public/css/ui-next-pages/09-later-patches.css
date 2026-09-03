@@ -1092,7 +1092,9 @@
 /* 頂欄的動作鈕：原本沿用頁面標題列那組（39px 高、13px 字），在一條要「不佔位」的懸浮列裡
    太重。收成 26px、12px 字，與返回鈕同高。 */
 .ui-next-task-topbar .ui-next-detail-actions{display:flex;align-items:center;gap:6px}
-.ui-next-task-topbar .ui-next-detail-actions button{height:24px;padding:0 9px;border:1px solid var(--border-strong);border-radius:8px;background:transparent;color:var(--text-secondary);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,box-shadow .12s ease}
+.ui-next-task-topbar .ui-next-detail-actions button{display:grid;place-items:center;width:26px;height:26px;padding:0;border:1px solid var(--border-strong);border-radius:8px;background:transparent;color:var(--text-secondary);font:inherit;cursor:pointer;transition:background-color .12s ease,box-shadow .12s ease}
+.ui-next-task-topbar .ui-next-detail-actions button .ui-next-icon{width:14px;height:14px}
+.ui-next-task-topbar .ui-next-detail-actions button:disabled{opacity:.45;cursor:default}
 .ui-next-task-topbar .ui-next-detail-actions button:hover:not(:disabled){background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift);color:var(--text)}
 /* ⚠ 共用規則 .ui-next-detail-actions button:last-child:not(.ui-next-back) 會把最後一顆填成
    主要動作（那是「返回」還在這一排時的慣例）。頂欄裡最後一顆是「下載程式碼」，不是主要
