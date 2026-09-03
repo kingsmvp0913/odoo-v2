@@ -147,8 +147,8 @@
                       </div>
                     </td>
                   </tr>
-                  <tr v-if="rejecting[r.id]">
-                    <td colspan="7" style="background:var(--bg)">
+                  <tr v-if="rejecting[r.id]" class="empty-row">
+                    <td colspan="7" style="background:var(--bg);text-align:left">
                       <div style="display:flex;gap:8px;align-items:flex-start">
                         <textarea v-model="rejectNote[r.id]" class="form-control" placeholder="駁回原因（選填）" style="flex:1;min-height:60px"></textarea>
                         <div style="display:flex;flex-direction:column;gap:6px">
