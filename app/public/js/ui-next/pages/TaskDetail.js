@@ -1062,7 +1062,11 @@
      而 markdown 的整套排版規則（09-later-patches）都掛在 div:first-child 那條選擇器上。 -->
 <span v-if="timelineClass(row)==='ai'" class="ui-next-msg-avatar" aria-hidden="true"><img src="favicon.svg" alt=""></span>
 </article></template>
-<p v-if="!timeline.length" class="ui-next-empty-state">尚無對話記錄。</p>
+<!-- 處理中動畫比照聊天頁：任務正在跑時，對話最底出現三顆脈動的點。
+     serverConfirmedRunning＝server 確認這張在飛；isAgentRunning＝狀態可跑但可能還在排隊，
+     兩者聯集才能涵蓋整段處理窗（剛送出、排隊、真的在跑）。 -->
+<div v-if="serverConfirmedRunning||isAgentRunning" class="ui-next-ai-thinking"><i></i><i></i><i></i> AI 正在處理</div>
+<p v-if="!timeline.length&&!(serverConfirmedRunning||isAgentRunning)" class="ui-next-empty-state">尚無對話記錄。</p>
 </div>
 </section>
 
