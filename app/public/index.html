@@ -14,7 +14,7 @@
     //
     // ⚠ app/public 是靜態直接服務的：改這個值不需要重啟也不需要 push，存檔就對所有人生效。
     window.UiVersion = (function () {
-      var DEFAULT_UI = 'legacy';
+      var DEFAULT_UI = 'next';
       var picked = new URLSearchParams(location.search).get('ui');
       return picked === 'next' || picked === 'legacy' ? picked : DEFAULT_UI;
     })();
