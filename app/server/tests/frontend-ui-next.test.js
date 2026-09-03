@@ -698,24 +698,43 @@ describe("ui-next 平行介面", () => {
     expect(chat).toContain('!event.shiftKey');
   });
 
-  test("規格書 QA 使用可辨識選擇卡與自由回答 Composer", () => {
+  test("規格書 QA 使用可辨識選擇卡與自由回答欄", () => {
     const task = viewSrc("UiNextTaskDetailView");
     expect(task).toContain('class="ui-next-qa-options"');
     expect(task).toContain('class="ui-next-qa-custom-answer"');
     expect(task).toContain('以上選項都不適合？');
     expect(task).toContain('<span class="ui-next-qa-custom-answer-heading"><b>以上選項都不適合？</b> 直接寫下你的答案或補充說明</span>');
     expect(pagesCss).toContain('.ui-next-qa-options label.selected');
-    expect(pagesCss).toContain('.ui-next-qa-custom-answer:focus-within');
     expect(pagesCss).toContain('.ui-next-qa-custom-answer-heading{color:var(--text-muted);font-size:11px;white-space:nowrap}');
+    // 原本這一欄有自己的框，但動作面板本身已經是 composer，兩層框正是它最不像聊天頁的地方。
+    // intent 不變——這一區仍要「看得出是獨立的一塊」，只是改用分隔線＋標題撐，不是裸 textarea。
+    expect(pagesCss).toContain('.ui-next-qa-custom-answer{display:grid;gap:3px;margin-top:10px;padding:10px 2px 0;border:0;border-top:1px solid var(--border)');
   });
 
-  test("規格書 QA 提問使用單一 Composer 並移除說明段落", () => {
+  test("規格書 QA 提問是單一 Composer：由動作面板本身提供，不再套內層框", () => {
     const task = viewSrc("UiNextTaskDetailView");
-    expect(task).toContain('class="ui-next-qa-ask-composer"');
     expect(task).toContain('class="ui-next-qa-ask-foot"');
     expect(task).toContain('@submit.prevent="submitAsk"');
     expect(task).not.toContain('看不懂、要補充、或方向要改都在這裡講');
-    expect(pagesCss).toContain('.ui-next-qa-ask-composer:focus-within');
+    // 內層框連同它的 CSS 一起移除，兩邊都不許復活（留著就會有人照舊把 class 加回去）
+    expect(task).not.toContain('ui-next-qa-ask-composer');
+    expect(pagesCss).not.toContain('ui-next-qa-ask-composer');
+    // 取而代之：面板自己就是 composer，邊框與陰影照抄 .ui-next-thread-composer
+    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));box-shadow:0 14px 36px');
+  });
+
+  test("規格問答的題目頁籤接在動作面板上緣，最後一個是提問", () => {
+    const task = viewSrc("UiNextTaskDetailView");
+    expect(task).toContain('class="ui-next-q-tabs"');
+    expect(task).toContain('ui-next-q-tab-ask');
+    // 頁籤要在面板之前＝掛在框外上方，而不是框內又一層
+    expect(task.indexOf('ui-next-q-tabs')).toBeLessThan(task.indexOf('ui-next-panel ui-next-task-action'));
+    // 舊的「規格書 QA／提問」那層併掉了：兩層頁籤疊在框裡分不出哪層是哪層
+    expect(task).not.toContain('>規格書 QA</button>');
+    // 與框連成一體：下緣不封口、上緣圓角，-15px 抵掉 .ui-next-task-side 的 grid gap:14px
+    expect(pagesCss).toContain('margin:0 auto -15px');
+    expect(pagesCss).toContain('border-bottom:0;border-radius:22px 22px 0 0');
+    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0');
   });
 
   test("專案建立表單有可見 label、資料夾即時驗證、取消與搜尋清除", () => {

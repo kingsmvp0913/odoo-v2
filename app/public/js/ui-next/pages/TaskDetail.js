@@ -1101,6 +1101,12 @@
 </section>
 </div>
 <aside v-show="taskTab==='conversation'&&timelineActionMode!=='archive'" class="ui-next-task-side">
+<!-- 規格問答的頁籤掛在框外上方：一層就好（題目 1..n 在前、「提問」在最後），
+     原本是「規格書 QA／提問」外面再包一層題目數字，兩層疊在框裡分不出哪層是哪層。 -->
+<div v-if="timelineActionMode==='answer'&&clarQuestions.length&&!taskActionCollapsed" class="ui-next-q-tabs" role="tablist">
+<button v-for="(q,index) in clarVisible()" :key="'qtab'+q.id" type="button" role="tab" :class="{active:clarTab==='qa'&&clarIdx===index,done:!!clarAnswerText(q)}" :aria-selected="(clarTab==='qa'&&clarIdx===index).toString()" :title="q.text" @click="clarTab='qa';clarIdx=index">{{ index+1 }}<ui-next-icon v-if="clarAnswerText(q)" name="check"/></button>
+<button type="button" role="tab" class="ui-next-q-tab-ask" :class="{active:clarTab==='ask'}" :aria-selected="(clarTab==='ask').toString()" @click="clarTab='ask'">提問</button>
+</div>
 <section class="ui-next-panel ui-next-task-action" :class="{'is-collapsed':taskActionCollapsed}">
 <div class="ui-next-task-action-head">
 <h2>{{ actionModeLabel }}</h2>
@@ -1108,13 +1114,9 @@
 </div>
 <template v-if="!taskActionCollapsed">
 <template v-if="timelineActionMode==='answer'">
-<p v-if="clarIntro">{{ clarIntro }}</p>
+<!-- intro 不在這裡重印：analysis 已把它整段寫進對話流那則「[需要你回答]」。
+     頁籤（含「提問」——看不懂題目時問清楚再答的唯一入口）移到框外上方。 -->
 <template v-if="clarQuestions.length">
-<!-- 「提問」頁籤是問清楚再答的唯一入口：少了它，看不懂題目的人只能硬答或把任務卡在這一關。 -->
-<div class="ui-next-detail-tabs">
-<button :class="{active:clarTab==='qa'}" @click="clarTab='qa'">規格書 QA</button>
-<button :class="{active:clarTab==='ask'}" @click="clarTab='ask'">提問</button>
-</div>
 <p v-if="clarBusy" class="ui-next-field-note">AI 正在回覆，稍候一下…</p>
 <template v-if="clarTab==='qa'">
 <!-- 送出後任務轉 clarify_chat_running：整組題目收起來換成這張卡。只把按鈕 disable 的話，
@@ -1124,12 +1126,6 @@
 <p>AI 判斷後會回到這裡：可能直接往下跑，或把問題更新後再請你補答。</p>
 </div>
 <template v-else>
-<!-- 題目切成頁籤：整份問卷攤開時面板會佔掉大半個畫面，但人一次只答一題。
-     數字膠囊而非文字頁籤，與上面那層「規格書 QA／提問」分開；答過的打勾，
-     否則切成一次一題就看不出還剩幾題沒答。 -->
-<div v-if="clarVisible().length>1" class="ui-next-q-tabs" role="tablist">
-<button v-for="(q,index) in clarVisible()" :key="'qtab'+q.id" type="button" role="tab" :class="{active:clarIdx===index,done:!!clarAnswerText(q)}" :aria-selected="(clarIdx===index).toString()" :title="q.text" @click="clarIdx=index">{{ index+1 }}<ui-next-icon v-if="clarAnswerText(q)" name="check"/></button>
-</div>
 <!-- v-show 而非 v-if：切頁籤時保住 textarea 被 autoResize 撐開的高度與捲動位置。 -->
 <div v-for="(q,index) in clarVisible()" v-show="index===clarIdx" :key="q.id" class="ui-next-question">
 <b>{{ index+1 }}. {{ q.text }}<template v-if="!q.required"> · 選填</template></b>
@@ -1158,7 +1154,7 @@
 </template>
 </template>
 <template v-else>
-<form class="ui-next-qa-ask-composer" @submit.prevent="submitAsk">
+<form @submit.prevent="submitAsk">
 <textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？" @keydown.enter.exact.prevent="submitAsk" @input="autoResize" @paste="onPasteFiles($event,'askFiles')">
 </textarea>
 <div class="ui-next-qa-ask-foot">
