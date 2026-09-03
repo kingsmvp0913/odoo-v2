@@ -123,15 +123,20 @@ describe('ROUND2-SPEC §9.3 無障礙契約', () => {
   // 側欄底部兩個下拉（更多工具／帳號）。原本只有 aria-expanded，
   // 對輔助技術而言那只說明「展開了」，沒說明「展開的是一份選單」。
   test('下拉選單有 menu 語意', () => {
-    // 底部兩個下拉（更多工具／帳號）＋ 側欄兩個 ⋮（專案／對話），每個 trigger 都要宣告它會開出選單。
-    // 不斷言總數：那會讓「多加一個合法的選單」變成假紅（實測踩過）。
+    // 底部兩個下拉（更多工具／帳號）＋ 側欄每一個 ⋮（任務／專案／對話），每個 trigger 都要宣告它會開出選單。
+    // 不寫死總數：那會讓「多加一個合法的選單」變成假紅（實測踩過——側欄補上任務那組 ⋮ 時就紅了一次）。
+    // 改成「有幾個 row-more 就要有幾個 aria-haspopup」，新增選單不會紅，漏掛屬性才會紅。
     expect(APP).toMatch(/class="ui-next-tools"[^>]*aria-haspopup="menu"/);
     expect(APP).toMatch(/class="ui-next-account"[^>]*aria-haspopup="menu"/);
-    expect(APP.match(/class="ui-next-row-more"[\s\S]{0,200}?aria-haspopup="menu"/g) || []).toHaveLength(2);
+    const rowMoreCount = (APP.match(/class="ui-next-row-more"/g) || []).length;
+    expect(rowMoreCount).toBeGreaterThanOrEqual(2);
+    expect(APP.match(/class="ui-next-row-more"[\s\S]{0,200}?aria-haspopup="menu"/g) || []).toHaveLength(rowMoreCount);
     expect(APP.match(/class="ui-next-account-menu" role="menu"/g) || []).toHaveLength(2);
-    // 中間容許其他屬性：這兩個選單支援右鍵開在指標處，帶著 :class／:style 綁定。
-    // 仍然釘住「兩個 row-menu 都宣告了 role=menu」，只是不再要求兩者相鄰。
-    expect(APP.match(/class="ui-next-row-menu"[^>]*role="menu"/g) || []).toHaveLength(2);
+    // 中間容許其他屬性：這些選單支援右鍵開在指標處，帶著 :class／:style 綁定。
+    // 仍然釘住「每個 row-menu 都宣告了 role=menu」，只是不再要求屬性相鄰。
+    const rowMenuCount = (APP.match(/class="ui-next-row-menu"/g) || []).length;
+    expect(rowMenuCount).toBe(rowMoreCount);
+    expect(APP.match(/class="ui-next-row-menu"[^>]*role="menu"/g) || []).toHaveLength(rowMenuCount);
     // 選單項要是 menuitem，不能只是裸 button
     expect(APP).toMatch(/role="menuitem"/);
   });

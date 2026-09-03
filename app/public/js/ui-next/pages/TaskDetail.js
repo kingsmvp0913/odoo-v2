@@ -597,41 +597,12 @@
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.approving = false; }
       },
+      // 下載本體（含 stale／deleted 兩則覆蓋風險警示）在 UiNextShared：側欄的任務右鍵選單
+      // 也有同一個動作，各寫一份遲早只剩一邊有警示。這裡只負責按鈕的「打包中」狀態。
       async downloadCodeZip() {
         this.downloadingZip = true;
-        let url = null;
-        try {
-          const { blob, headers } = await Api.getBlob(`tasks/${this.task.id}/code-zip`);
-          // header 於伺服器端編碼過（非 ASCII 檔名會生出無效 header）；解不開就當沒有，不擋下載。
-          const readList = (name) => {
-            try { return JSON.parse(decodeURIComponent(headers.get(name) || '')) || []; }
-            catch { return []; }
-          };
-          url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${this.task.task_id}.zip`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          const entries = readList('X-Zip-Entries');
-          const deleted = readList('X-Zip-Deleted');
-          const stale = readList('X-Zip-Stale');
-          // 覆蓋風險必須當下就講：stale＝這些檔在任務切點之後也被別人改過，直接覆蓋會蓋掉對方的改動；
-          // deleted＝zip 表達不了刪除，不講的話正式區會永遠留著本該移除的檔。兩者都用警示色，不混在成功訊息裡。
-          showToast(`已下載 ${entries.length} 個改動檔`, 'success');
-          if (stale.length) {
-            showToast(`⚠️ 這 ${stale.length} 個檔在本任務之後也被改過，覆蓋會蓋掉對方的改動：${stale.join('、')}`, 'error');
-          }
-          if (deleted.length) {
-            showToast(`⚠️ 本任務刪除了這些檔，請自行到正式區移除：${deleted.join('、')}`, 'error');
-          }
-        } catch (e) { showToast(e.message, 'error'); }
-        finally {
-          // 撤銷必須晚於 click：過早撤掉會讓瀏覽器抓不到內容，下載靜默失敗。
-          if (url) setTimeout(() => URL.revokeObjectURL(url), 10000);
-          this.downloadingZip = false;
-        }
+        try { await window.UiNextShared.downloadTaskCodeZip(this.task); }
+        finally { this.downloadingZip = false; }
       },
       async reject() {
         if (!this.rejectReason.trim()) return;

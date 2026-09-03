@@ -105,6 +105,38 @@
     ["<模組名>", "「自訂模組名稱」"],
   ];
 
+  // 下載某張任務的改動檔 zip。任務頁的頂欄與側欄的右鍵選單都要這個動作，放在這裡是因為
+  // 重點不在下載本身，而是 stale／deleted 那兩則警示：stale＝這些檔在任務切點之後也被別人
+  // 改過，直接覆蓋會蓋掉對方的改動；deleted＝zip 表達不了刪除。各寫一份遲早只剩一邊有警示。
+  async function downloadTaskCodeZip(task) {
+    let url = null;
+    try {
+      const { blob, headers } = await Api.getBlob(`tasks/${task.id}/code-zip`);
+      // header 於伺服器端編碼過（非 ASCII 檔名會生出無效 header）；解不開就當沒有，不擋下載。
+      const readList = (name) => {
+        try { return JSON.parse(decodeURIComponent(headers.get(name) || "")) || []; }
+        catch { return []; }
+      };
+      url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${task.task_id}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      const entries = readList("X-Zip-Entries");
+      const deleted = readList("X-Zip-Deleted");
+      const stale = readList("X-Zip-Stale");
+      showToast(`已下載 ${entries.length} 個改動檔`, "success");
+      if (stale.length) showToast(`⚠️ 這 ${stale.length} 個檔在本任務之後也被改過，覆蓋會蓋掉對方的改動：${stale.join("、")}`, "error");
+      if (deleted.length) showToast(`⚠️ 本任務刪除了這些檔，請自行到正式區移除：${deleted.join("、")}`, "error");
+    } catch (e) {
+      showToast(e.message, "error");
+    } finally {
+      // 撤銷必須晚於 click：過早撤掉會讓瀏覽器抓不到內容，下載靜默失敗。
+      if (url) setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+  }
 
-  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, dayLabel, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS };
+  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, dayLabel, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS, downloadTaskCodeZip };
 })();

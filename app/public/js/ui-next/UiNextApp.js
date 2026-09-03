@@ -404,6 +404,8 @@
         rowMenuPos: null,
         menuProjectId: null,
         menuChatId: null,
+        menuTaskId: null,
+        sidebarTasks: [],
         releaseId: null,
         renamingChatId: null,
         renameTitle: "",
@@ -458,6 +460,19 @@
       currentChatId() {
         return this.$route.params.chatId ? String(this.$route.params.chatId) : "";
       },
+      // 不能用 $route.params.id：任務頁與專案頁共用同一個參數名，拿它會讓專案頁也自認在某張任務上。
+      currentTaskId() {
+        const at = this.$route.path.match(/^\/task\/([^/]+)/);
+        return at ? at[1] : "";
+      },
+      // 側欄的任務清單比照專案對話：需回覆的排最前面，其餘照更新時間（後端已 updated_at DESC，
+      // sort 穩定所以組內順序不會被打亂），只留還在跑的（已完成不列；已封存後端本來就不回），取前五筆。
+      sidebarTaskRows() {
+        return [...this.sidebarTasks]
+          .filter((task) => task.status !== "done")
+          .sort((a, b) => Number(this.taskNeedsAction(b)) - Number(this.taskNeedsAction(a)))
+          .slice(0, 5);
+      },
       sidebarProjects() {
         const projectById = new Map(this.projects.map((project) => [String(project.id), project]));
         const selected = new Map();
@@ -496,6 +511,19 @@
         this.sidebarChatProjects = sidebarChatProjects || [];
         // 直接開 Chat 深連結時 watch 不會觸發（路由沒變過），所以載完專案要自己補一次。
         this.syncSidebarToRoute();
+        this.loadSidebarTasks();
+        // 任務狀態是背景 pipeline 在推的，不訂閱的話側欄那五筆會停在進站當下的樣子。
+        // ⚠ window._socket 在 mounted 當下通常還是 undefined（initSocket 在 app.js 的
+        // auth/me 回來之後才跑），要輪詢等它出現——同 TaskDetail.js 的那段註解。
+        this._onSidebarTaskUpdated = () => this.loadSidebarTasks();
+        const bindSock = () => {
+          if (!window._socket) return false;
+          window._socket.on("task:updated", this._onSidebarTaskUpdated);
+          return true;
+        };
+        if (!bindSock()) {
+          this._sockTimer = setInterval(() => { if (bindSock()) { clearInterval(this._sockTimer); this._sockTimer = null; } }, 300);
+        }
         window.loadClaudeUsage && window.loadClaudeUsage();
         window.loadCodexUsage && window.loadCodexUsage();
         window.loadUnread && window.loadUnread();
@@ -538,6 +566,8 @@
       window.removeEventListener("keydown", this._onCommandKey);
       document.removeEventListener("pointerdown", this._onOutsidePointer);
       window.removeEventListener("ui-next:project-preload", this._onProjectPreload);
+      if (this._sockTimer) { clearInterval(this._sockTimer); this._sockTimer = null; }
+      if (this._onSidebarTaskUpdated && window._socket) window._socket.off("task:updated", this._onSidebarTaskUpdated);
     },
     // 背景捲動鎖定集中在這裡：這兩個狀態各有好幾處會改（按鈕、⌘K、Escape、
     // 點遮罩、切換路由），在每個地方各自加解鎖遲早會漏掉一處。
@@ -740,6 +770,7 @@
       openProjectMenu(project, event) {
         event.stopPropagation();
         this.menuChatId = null;
+        this.menuTaskId = null;
         this.menuProjectId = project.id;
         this.placeRowMenuAt(event);
       },
@@ -747,6 +778,7 @@
         if (this.renamingChatId === chat.id) return; // 正在改名，讓瀏覽器原生的文字選單留著
         event.stopPropagation();
         this.menuProjectId = null;
+        this.menuTaskId = null;
         this.menuChatId = chat.id;
         this.placeRowMenuAt(event);
       },
@@ -782,18 +814,85 @@
         event.stopPropagation();
         this.rowMenuPos = null;
         this.menuChatId = null;
+        this.menuTaskId = null;
         this.menuProjectId = this.menuProjectId === project.id ? null : project.id;
       },
       toggleChatMenu(chat, event) {
         event.stopPropagation();
         this.rowMenuPos = null;
         this.menuProjectId = null;
+        this.menuTaskId = null;
         this.menuChatId = this.menuChatId === chat.id ? null : chat.id;
+      },
+      openTaskMenu(task, event) {
+        event.stopPropagation();
+        this.menuProjectId = null;
+        this.menuChatId = null;
+        this.menuTaskId = task.id;
+        this.placeRowMenuAt(event);
+      },
+      toggleTaskMenu(task, event) {
+        event.stopPropagation();
+        this.rowMenuPos = null;
+        this.menuProjectId = null;
+        this.menuChatId = null;
+        this.menuTaskId = this.menuTaskId === task.id ? null : task.id;
       },
       closeSidebarMenus() {
         this.menuProjectId = null;
         this.menuChatId = null;
+        this.menuTaskId = null;
         this.rowMenuPos = null;
+      },
+      // 「輪到你」的判準與任務列表頁同一條：暫停中的不算，但 stopped 是人工退回，仍要處理。
+      taskNeedsAction(task) {
+        return (window.HUMAN_STATUSES || []).includes(task.status) && (task.status === "stopped" || !task.is_paused);
+      },
+      async loadSidebarTasks() {
+        try {
+          const data = await Api.get("tasks");
+          this.sidebarTasks = data.tasks || data || [];
+          // 順手校正「任務列表」那顆徽章：原本只有任務列表頁載入時才寫這顆全域值，
+          // 從別的頁面進來時數字是 0。
+          window.needsActionCount.value = this.sidebarTasks.filter((task) => this.taskNeedsAction(task)).length;
+        } catch { this.sidebarTasks = []; }
+      },
+      async toggleTaskPause(task) {
+        this.closeSidebarMenus();
+        try {
+          const r = await Api.put(`tasks/${task.id}/pause`, {});
+          task.is_paused = r.is_paused;
+          showToast(r.is_paused ? "已取消本輪執行" : "已繼續執行", r.is_paused ? "warn" : "success");
+        } catch (error) { showToast(error.message || "無法切換暫停狀態", "error"); }
+      },
+      // ⚠ 不先 closeSidebarMenus() 再 await：openEnv 的 window.open 必須留在 click handler
+      // 的同步段內，中間插一個 await 就會被 popup-blocker 擋掉。openEnv 自己會關選單。
+      openTaskEnv(task) {
+        this.openEnv(task.project_id);
+      },
+      async downloadTaskZip(task) {
+        this.closeSidebarMenus();
+        await window.UiNextShared.downloadTaskCodeZip(task);
+      },
+      async archiveSidebarTask(task) {
+        this.closeSidebarMenus();
+        if (!await confirmDialog({ title: "封存任務", message: `確定要封存任務「${task.title || task.task_id}」？`, confirmText: "封存" })) return;
+        try {
+          await Api.post(`tasks/${task.id}/archive`, {});
+          this.sidebarTasks = this.sidebarTasks.filter((item) => item.id !== task.id);
+          showToast("任務已封存", "success");
+        } catch (error) { showToast(error.message || "封存失敗", "error"); }
+      },
+      async deleteSidebarTask(task) {
+        this.closeSidebarMenus();
+        if (!await confirmDialog({ title: "永久刪除任務", message: `確定要永久刪除任務「${task.title || task.task_id}」？`, danger: true, confirmText: "刪除" })) return;
+        try {
+          await Api.delete(`tasks/${task.id}`);
+          this.sidebarTasks = this.sidebarTasks.filter((item) => item.id !== task.id);
+          // 刪掉的正是目前開著的那張，留在原地會是一頁「找不到任務」。
+          if (this.currentTaskId === String(task.id)) this.go("/tasks");
+          showToast("任務已刪除", "success");
+        } catch (error) { showToast(error.message || "刪除失敗", "error"); }
       },
       // 頁籤寫進 query，專案詳情頁的 detailTab 會照著開；直接 push 路徑只會停在第一個頁籤。
       goProjectTab(id, tab) {
@@ -938,7 +1037,12 @@
           <div class="ui-next-sidebar-scroll">
           <div class="ui-next-sidebar-rule"></div>
           <!-- 沒有「問答」：它和上面的「新對話」都是導到 /，同一個入口列兩次。 -->
-          <router-link class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" to="/tasks" @click="mobileSidebarOpen=false"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></router-link>
+          <!-- 任務清單比照下面的專案對話：同一組 class（.ui-next-project-chats／.ui-next-chat-row）
+               所以外觀與右鍵選單的行為完全一致，不必再養第二套樣式。 -->
+          <div class="ui-next-nav-group">
+            <router-link class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" to="/tasks" @click="mobileSidebarOpen=false"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></router-link>
+            <div v-if="sidebarTaskRows.length" class="ui-next-project-chats ui-next-sidebar-tasks"><div v-for="task in sidebarTaskRows" :key="task.id" class="ui-next-chat-row" :class="{ 'has-menu': menuTaskId === task.id, 'is-active': currentTaskId === String(task.id), 'is-need': taskNeedsAction(task) }" @contextmenu.prevent="openTaskMenu(task, $event)"><button :aria-current="currentTaskId === String(task.id) ? 'page' : null" :title="task.title || task.task_id" @click="go('/task/' + task.id)">{{ task.title || task.task_id }}</button><button type="button" class="ui-next-row-more" :aria-label="(task.title || task.task_id) + ' 更多操作'" :aria-expanded="menuTaskId === task.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleTaskMenu(task, $event)"><ui-next-icon name="dots"/></button><teleport to="[data-ui='next']" :disabled="!rowMenuPos"><div v-if="menuTaskId === task.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button v-if="task.status !== 'stopped'" type="button" role="menuitem" @click="toggleTaskPause(task)">{{ task.is_paused ? '繼續執行' : '暫停' }}</button><button v-if="task.project_id" type="button" role="menuitem" @click="openTaskEnv(task)">測試區</button><button v-if="isAdmin && task.git_branch" type="button" role="menuitem" @click="downloadTaskZip(task)">下載程式碼</button><button type="button" role="menuitem" @click="archiveSidebarTask(task)">封存</button><button type="button" role="menuitem" class="danger" @click="deleteSidebarTask(task)">刪除</button></div></teleport></div></div>
+          </div>
           <!-- 專案清單是「專案」這個入口的下層，不是另一個區塊。沒有展開箭頭：
                清單常駐，專案的展開改成點名稱本身，右側 ⋮ 才是那一列的操作入口。 -->
           <div class="ui-next-nav-group">

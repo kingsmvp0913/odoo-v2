@@ -1179,3 +1179,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-thread .ui-next-source-trigger,
 .ui-next-composer .ui-next-chip-static,
 .ui-next-thread .ui-next-chip-static{font-size:11px}
+/* 側欄的任務清單沿用專案對話那組樣式；只補兩件事：
+   1) 需回覆的那幾筆用亮色標出來——不標的話「排最前面」在畫面上看不出來。
+   2) 平板寬度的側欄是純圖示（.ui-next-projects 已被藏起來），這一塊要一起藏。 */
+.ui-next-sidebar-tasks .ui-next-chat-row.is-need > button:first-child{color:var(--sidebar-active);font-weight:500}
+@media(min-width:768px) and (max-width:1199px){.ui-next-sidebar-tasks{display:none}}
+
