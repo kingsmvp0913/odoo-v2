@@ -980,9 +980,6 @@
 <div class="ui-next-task-topbar-main">
 <button class="ui-next-back" @click="back" aria-label="返回"><ui-next-icon name="arrow-left"/></button>
 <h1>{{ task.title || task.task_id }}</h1>
-<a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()">{{ sourceLabel() }}</a>
-<span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
-<span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span v-if="task.stage_label" class="ui-next-stage-badge">{{ task.stage_label }}</span>
 <span v-if="serverConfirmedRunning" class="is-live">處理中</span>
 </div>
@@ -1074,7 +1071,7 @@
 </section>
 
 </div>
-<aside v-show="timelineActionMode!=='archive'" class="ui-next-task-side">
+<aside class="ui-next-task-side">
 <!-- 規格問答的頁籤掛在框外上方：一層就好（題目 1..n 在前、「提問」在最後），
      原本是「規格書 QA／提問」外面再包一層題目數字，兩層疊在框裡分不出哪層是哪層。 -->
 <div v-if="timelineActionMode==='answer'&&clarQuestions.length&&!taskActionCollapsed" class="ui-next-q-tabs" role="tablist">
@@ -1084,10 +1081,21 @@
 <section class="ui-next-panel ui-next-task-action" :class="{'is-collapsed':taskActionCollapsed}">
 <div class="ui-next-task-action-head">
 <h2>{{ actionModeLabel }}</h2>
+<!-- 來源／狀態接在小標題後面：它們說明的是「這張任務現在停在哪、從哪來」，
+     與這一區要你做的事是同一件事的兩面。頂欄只留名稱與階段。 -->
+<a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()" @click.stop>{{ sourceLabel() }}</a>
+<span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
+<span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
+<span class="ui-next-head-spacer"></span>
 <button type="button" class="ui-next-task-action-collapse" :aria-label="taskActionCollapsed?'展開任務對話框':'縮小任務對話框'" :title="taskActionCollapsed?'展開':'縮小'" :aria-expanded="(!taskActionCollapsed).toString()" @click="taskActionCollapsed=!taskActionCollapsed"><ui-next-icon :name="taskActionCollapsed?'chevron-up':'chevron-down'"/></button>
 </div>
 <template v-if="!taskActionCollapsed">
-<template v-if="timelineActionMode==='answer'">
+<!-- 已完成：面板留著但只當資訊列，沒有輸入框也沒有送出——整塊消失的話畫面下半部會空掉，
+     而且看不出這張任務已經結案了。 -->
+<template v-if="timelineActionMode==='archive'">
+<p class="ui-next-field-note">這張任務已完成，不再接受新的留言。</p>
+</template>
+<template v-else-if="timelineActionMode==='answer'">
 <!-- intro 不在這裡重印：analysis 已把它整段寫進對話流那則「[需要你回答]」。
      頁籤（含「提問」——看不懂題目時問清楚再答的唯一入口）移到框外上方。 -->
 <template v-if="clarQuestions.length">
@@ -1301,7 +1309,7 @@
 </section>
 <!-- Enter 的說明比照聊天頁：放在框外下方一行，而不是塞進每個 placeholder。
      塞在 placeholder 裡的話，一開始打字它就消失，正是最需要它的時候。 -->
-<small v-if="!taskActionCollapsed" class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。</small>
+<small v-if="!taskActionCollapsed&&timelineActionMode!=='archive'" class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。</small>
 </aside>
 </div>
 <!-- 執行歷程改成跳窗：它是持續 append 的終端輸出，量大又只在除錯時看，

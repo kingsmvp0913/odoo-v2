@@ -1070,6 +1070,8 @@
    原本第一屏是「大標題／六個標籤／三個頁籤」三層，捲下去就全部消失，看不出自己在哪一張
    任務。改成一條固定的頂欄：名稱與那三個看了會做決定的標籤（來源、狀態、階段）永遠在。 */
 .ui-next-task-topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:12px 0 8px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(8px)}
+/* 內容與對話等寬（812px 置中）；底線仍拉滿整條，那是「懸浮列」的邊界不是內容的一部分 */
+.ui-next-task-topbar>*{max-width:none}
 .ui-next-task-topbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--border)}
 .ui-next-task-topbar-main{display:flex;min-width:0;align-items:center;gap:8px}
 /* 標題不放大：它與旁邊的標籤是同一列資訊，放大反而把那一列拉高 */
@@ -1103,3 +1105,11 @@
 .ui-next-conv-list article .ui-next-conv-files button:hover{background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift);color:var(--text)}
 .ui-next-conv-files button .ui-next-icon{width:12px;height:12px}
 .ui-next-conv-files small{color:var(--text-muted)}
+/* 頂欄的內容收到與對話同寬：原本它跟著頁面 1180px 撐滿，名稱在最左、按鈕在最右，
+   與底下 812px 的對話兩邊各差一截。用一層內距把內容框回來（底線仍拉滿）。 */
+.ui-next-task-topbar{padding-left:max(0px,calc((100% - 812px) / 2));padding-right:max(0px,calc((100% - 812px) / 2))}
+/* 動作面板的標題列現在還放了來源／狀態：標題與標籤靠左成一組，收合鈕靠右。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head{gap:7px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head .ui-next-head-spacer{flex:1}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head .src-badge,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head .ui-next-status-badge{flex:none;font-size:11px}
