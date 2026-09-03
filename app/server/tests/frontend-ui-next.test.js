@@ -750,7 +750,10 @@ describe("ui-next 平行介面", () => {
     // 反圓角：分頁底部兩側往外彎進框（Chrome 分頁的形狀），弧線上要帶同一條邊線才不會斷
     expect(pagesCss).toContain('.ui-next-q-tabs button.active::before,.ui-next-q-tabs button.active::after');
     expect(pagesCss).toContain('.ui-next-q-tabs button.active:first-child::before{display:none}');
-    expect(pagesCss).toContain('.ui-next-q-tabs button.active{position:relative;margin-bottom:-1px');
+    // 每一頁都往下疊 1px 蓋掉框的上緣線：分頁與框之間屬於形狀內部，不該有線；
+    // 那條線只在最後一頁右側之後才算外圍。相鄰兩頁 -1px 共用一條邊。
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*margin:0 0 -1px -1px/);
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*box-shadow:inset 0 1px 0 [^;]*,inset 1px 0 0 [^;]*,inset -1px 0 0/);
     // 分頁是一條連續的列，不是幾顆分開的按鈕
     expect(pagesCss).toMatch(/\.ui-next-q-tabs\{[^}]*gap:0/);
   });
