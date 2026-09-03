@@ -527,6 +527,16 @@
         }
         this.diffOpen = true;
       },
+      // 底排那顆 code 鈕：diff 渲染在對話流最後一則，展開後要自己捲過去，否則按了看起來像沒反應
+      // （新增的內容在畫面外、又被 sticky 的動作面板擋住）。
+      async showDiff() {
+        await this.toggleDiff();
+        if (!this.diffOpen) return;
+        this.$nextTick(() => {
+          const panel = document.querySelector('.ui-next-main');
+          if (panel) panel.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' });
+        });
+      },
       diffLines(diff) {
         return diff.split('\n').map(text => {
           let cls = '';
@@ -1134,7 +1144,7 @@
 </template>
 <template v-else>
 <form class="ui-next-qa-ask-composer" @submit.prevent="submitAsk">
-<textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="submitAsk" @input="autoResize" @paste="onPasteFiles($event,'askFiles')">
+<textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？" @keydown.enter.exact.prevent="submitAsk" @input="autoResize" @paste="onPasteFiles($event,'askFiles')">
 </textarea>
 <div class="ui-next-qa-ask-foot">
 <label class="ui-next-icon-button" title="附加截圖"><ui-next-icon name="paperclip"/><input ref="askFileInput" type="file" multiple aria-label="附加截圖" @change="onAskFilesSelected"></label>
@@ -1149,7 +1159,7 @@
      （見本檔 submitAnswer 的 else 分支），resolution 是 blocker mode 的 resolveBlocker 在用。
      綁錯的後果是靜默失效——打字讓按鈕亮起，點下去在那個 "沒文字就 return" 的早退直接返回，
      沒有 toast、沒有錯誤，而 clarify_pending 狀態下這是唯一的回覆入口。 -->
-<textarea v-model="newMessageText" placeholder="回答 AI 的問題或補充說明…（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
+<textarea v-model="newMessageText" placeholder="回答 AI 的問題或補充說明…可直接貼上截圖" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
 </textarea>
 <!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
@@ -1161,8 +1171,7 @@
 <!-- 規格書不在這裡重印：它就是上方對話流那則「等待你審核規格」（見 isSpecLog，模組／實作項／
      驗收／權限接在同一則底下）。面板只管「寫」，內層那個 composer 框因此不再需要——
      面板本身已經是 composer，兩層框正是它最不像聊天頁的地方。 -->
-<p class="ui-next-field-note">規格在上方對話裡。提問時 AI 會直接在對話回答、規格不變；判定要改時才重產規格再回到這裡。</p>
-<textarea v-model="specFeedback" placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="specRevise" @input="autoResize">
+<textarea v-model="specFeedback" placeholder="規格在上方對話裡。可提問或要求調整（例：為什麼備註欄唯讀？／備註欄位改成多行）——提問時 AI 直接在對話回答、規格不變；判定要改才重產規格回到這裡" @keydown.enter.exact.prevent="specRevise" @input="autoResize">
 </textarea>
 <div class="ui-next-action-foot">
 <span></span>
@@ -1175,11 +1184,14 @@
 <template v-else-if="timelineActionMode==='review'">
 <!-- 程式變更移到上方對話流的最後一則（見 row.isDiff）：它是「要讀的東西」，
      和退回原因這個「要寫的地方」擠在同一個框裡時，看不出哪裡是讀哪裡是寫。 -->
-<textarea v-model="rejectReason" placeholder="填寫退回原因，可一次列多個問題（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
+<textarea v-model="rejectReason" placeholder="填寫退回原因，可一次列多個問題，可直接貼上截圖" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
 </textarea>
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
 <label class="ui-next-icon-button" :title="'附加截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面'"><ui-next-icon name="paperclip"/><input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected"></label>
+<!-- diff 本身在對話流最後一則，但那裡被輸入框擋著、不是人會去找的地方：底排留一個入口，
+     點了展開並捲過去。狀態與那則卡片共用同一個 diffOpen，兩邊不會各開各的。 -->
+<button type="button" class="ui-next-icon-button" :class="{active:diffOpen}" :disabled="diffLoading" :aria-label="diffOpen?'收合程式變更':'查看程式變更'" :title="diffOpen?'收合程式變更':'查看程式變更'" @click="showDiff"><ui-next-icon name="code"/></button>
 <small v-if="rejectFiles.length">已選 {{ rejectFiles.length }} 個附件</small>
 </div>
 <div class="ui-next-inline-actions">
@@ -1248,7 +1260,7 @@
 </template>
 <template v-else-if="timelineActionMode==='blocker'">
 <p v-if="!task.blocker_content" class="ui-next-error-text">任務分診失敗或執行中斷</p>
-<textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…（Enter 送出，Shift+Enter 換行）" @keydown.enter.exact.prevent="resolveBlocker">
+<textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…" @keydown.enter.exact.prevent="resolveBlocker">
 </textarea>
 <div class="ui-next-action-foot">
 <div class="ui-next-inline-actions ui-next-shortcut-row">
@@ -1263,7 +1275,7 @@
 <!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因不秀出來就會靜默卡好幾天。
      只認 sync_wait，避免把「分診中」等狀態殘留的上次停下原因也當成當前錯誤秀出來。 -->
 <p v-if="task.blocker_type==='sync_wait'&&task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
-<textarea v-model="newMessageText" placeholder="新增留言…（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="sendTaskMessage">
+<textarea v-model="newMessageText" placeholder="新增留言…可直接貼上截圖" @keydown.enter.exact.prevent="sendTaskMessage">
 </textarea>
 <!-- ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
      檔名會留在欄位裡看起來像又要再送一次。 -->
@@ -1289,6 +1301,9 @@
 </template>
 </template>
 </section>
+<!-- Enter 的說明比照聊天頁：放在框外下方一行，而不是塞進每個 placeholder。
+     塞在 placeholder 裡的話，一開始打字它就消失，正是最需要它的時候。 -->
+<small v-if="!taskActionCollapsed" class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。</small>
 </aside>
 </div>
 </template>

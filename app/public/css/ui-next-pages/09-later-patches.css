@@ -495,8 +495,10 @@
 /* 動作面板比照 AskMe 的 composer：整塊就是一個輸入區。
    原本是「面板有框、裡面的 textarea 又有一個框」——雙層框是它最不像的地方。
    textarea 去邊框去底色、融進面板；面板本身用 composer 那組圓角與邊框。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 12%,var(--surface));box-shadow:none;padding:14px 16px 12px}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:color-mix(in srgb,var(--text) 22%,var(--surface))}
+/* ⚠ 邊框與陰影要照抄 .ui-next-thread-composer（06-chat.css）：原本 box-shadow:none、邊框只取
+   12%，在我們這組幾乎同色的 --surface／--bg 上等於整個框浮不起來，看起來就是「不夠立體」。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));box-shadow:0 14px 36px color-mix(in srgb,var(--text) 9%,transparent),var(--shadow-sm);padding:14px 16px 12px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:color-mix(in srgb,var(--text) 36%,var(--surface))}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea{border:0;border-radius:0;padding:0;margin:0;background:transparent;min-height:44px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea:focus{outline:0}
 /* 標題只是說明現在停在哪一關，不需要跟頁面標題一樣大 */
@@ -966,3 +968,22 @@
 /* grid item 預設 stretch，AI 那側的收合鈕（程式變更／技術紀錄）會被拉成整欄寬，
    和右側那些靠內容寬的收合鈕長得不一樣。 */
 .ui-next-conv-list article.ai > button{justify-self:start}
+
+/* 動作面板底排的按鈕比照聊天頁的 composer-foot：那邊是 36px 圓形送出鈕 + 29px 圓角圖示鈕，
+   這裡原本是 39px 高、8px 圓角、12px 字的方按鈕，並排看就是兩套語彙。文字動作（確認開工／
+   審核通過）沒辦法收成圖示，改用同高的膠囊：圓潤度與配色（深底反白）對齊送出鈕。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button{
+  height:33px;padding:0 15px;border-radius:999px;font-size:13px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button.ui-next-primary{
+  border-color:transparent;background:var(--text);color:var(--surface)}
+/* 次要動作退成透明底：兩顆都填底色時看不出哪顆是主要動作。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button:not(.ui-next-primary){
+  background:transparent}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button{width:26px;height:26px;border-radius:9px}
+/* Enter 提示接在框下方。寬度要跟面板同一條規則（min(100%,812px) 置中），否則它會靠 aside
+   的左緣而不是框的左緣——差 55px，看起來像沒對齊。內距 17px 對齊框內文字。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,812px);box-sizing:border-box;margin:7px auto 0;padding-left:17px}
+/* 問卷那種佔滿一行的主要動作（送出回答）不在 .ui-next-inline-actions 裡，但高度與圓角要一致，
+   否則同一個面板裡兩種按鈕長不一樣。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary{
+  height:33px;border-radius:999px;font-size:13px;border-color:transparent;background:var(--text);color:var(--surface)}
