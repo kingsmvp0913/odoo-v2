@@ -501,7 +501,7 @@
 /* ⚠ 邊線用真 border 而不是 inset shadow：分頁的線也要對得上它，而 inset 是畫在 border
    之內的——兩者只要一邊用 inset、一邊用 border，就永遠差一個 border 寬度，接縫處看起來
    是斷的。顏色與陰影仍照 .ui-next-thread-composer（--shadow-lg ＋ 22%／focus 36%）。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--surface);box-shadow:var(--shadow-lg);padding:14px 16px 12px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--ui-next-composer-bg,var(--surface));box-shadow:var(--shadow-lg);padding:9px 16px 12px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:focus-within{border-color:color-mix(in srgb,var(--text) 36%,var(--surface))}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea{border:0;border-radius:0;padding:0;margin:0;background:transparent;min-height:44px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea:focus{outline:0}
@@ -592,7 +592,7 @@
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) /* ⚠ 左右退 1px（-15px 而非 -16px）：框的邊線是畫在 padding box 邊緣的 inset shadow，
    而這一列為了 sticky 需要滿寬鋪底 + z-index:3，鋪到 -16px 正好把左右那 1px 邊線蓋掉——
    症狀是「框只有標題列這一段沒有左右邊」。padding 同步減 1，文字位置不變。 */
-.ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -15px 0;padding:12px 15px 4px;border-radius:21px 21px 0 0;background:var(--surface)}
+.ui-next-task-action-head{position:sticky;top:-7px;z-index:3;margin:-12px -15px 0;padding:7px 15px 2px;border-radius:21px 21px 0 0;background:var(--ui-next-composer-bg,var(--surface))}
 /* 這一列的底也要跟著框收圓角：它是矩形，方角會蓋掉框上緣那兩段圓弧（症狀＝「右上角缺一點」）。
    21px＝框的 22px 減掉左右各退的那 1px。有分頁時框的左上角是直角，這裡也要跟著直。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action-head{border-top-left-radius:0}
@@ -1112,6 +1112,15 @@
 /* 頂欄的內容收到與對話同寬：原本它跟著頁面 1180px 撐滿，名稱在最左、按鈕在最右，
    與底下 812px 的對話兩邊各差一截。用一層內距把內容框回來（底線仍拉滿）。 */
 .ui-next-task-topbar{padding-left:max(0px,calc((100% - 812px) / 2));padding-right:max(0px,calc((100% - 812px) / 2))}
+/* 頂欄比照對話框：同一組底色／邊框／圓角／陰影，讀起來是「上下各一塊浮起的面板」，
+   而不是一條貼在頁面上的橫幅。⚠ 內容寬度要跟對話同一條（777px，見上方整欄那組），
+   否則框比訊息寬一截。 */
+.ui-next-task-topbar{background:var(--bg);backdrop-filter:none;padding-top:8px;padding-bottom:8px}
+.ui-next-task-topbar::after{content:"";position:absolute;left:max(0px,calc((100% - 812px) / 2));right:auto;top:8px;bottom:8px;width:min(100%,777px);height:auto;border-radius:16px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--ui-next-composer-bg,var(--surface));box-shadow:var(--shadow-lg)}
+/* ::after 是背景板，內容要浮在它上面 */
+.ui-next-task-topbar>*{position:relative;z-index:1}
+.ui-next-task-topbar-main{padding-left:14px}
+.ui-next-task-topbar .ui-next-detail-actions{padding-right:14px;margin-right:35px}
 /* 動作面板的標題列現在還放了來源／狀態：標題與標籤靠左成一組，收合鈕靠右。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head{gap:7px}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head .ui-next-head-spacer{flex:1}
@@ -1156,3 +1165,17 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    `.ui-next-msg-avatar{grid-column:1}`（0,1,0），頭像被推進第 2 欄、擠到訊息上面一列。
    任務對話那邊補過同等特異度的規則，chat 這邊漏了。 */
 .ui-next-thread-messages > article.ai > .ui-next-msg-avatar{grid-column:1;grid-row:1}
+
+/* 輸入框的字（含 placeholder）收到 13px：14px 在一條只有一兩行的輸入區裡比旁邊的
+   標題與按鈕都大，整個框的重心被它拉走。三處 composer 一起收。 */
+.ui-next-composer textarea,
+.ui-next-thread .ui-next-thread-composer textarea,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea{font-size:13px}
+/* chat／新對話的 composer 底排：專案名與資料來源那兩顆 chip 的字收到 11px。
+   它們是輔助資訊（現在選了哪個專案），12px 與旁邊的輸入文字同級，讀起來像主要內容。 */
+.ui-next-composer .ui-next-project-picker-trigger,
+.ui-next-composer .ui-next-source-trigger,
+.ui-next-thread .ui-next-project-picker-trigger,
+.ui-next-thread .ui-next-source-trigger,
+.ui-next-composer .ui-next-chip-static,
+.ui-next-thread .ui-next-chip-static{font-size:11px}

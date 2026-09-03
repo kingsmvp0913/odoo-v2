@@ -725,7 +725,8 @@ describe("ui-next 平行介面", () => {
     // 取而代之：面板自己就是 composer，顏色與陰影照 .ui-next-thread-composer（--shadow-lg、
     // 22%／focus 36%）。⚠ 線用真 border 不是 inset shadow——分頁的線要對得上它，只要一邊
     // 用 inset、一邊用 border 就永遠差一個 border 寬度，接縫處看起來是斷的。
-    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--surface);box-shadow:var(--shadow-lg)');
+    // 底色走 --ui-next-composer-bg（三處 composer 共用，見比照 AskMe 那組）；邊框與陰影不變
+    expect(pagesCss).toContain('.ui-next-task-action{border-radius:22px;border:1px solid color-mix(in srgb,var(--text) 22%,var(--surface));background:var(--ui-next-composer-bg,var(--surface));box-shadow:var(--shadow-lg)');
   });
 
   test("規格問答的題目頁籤接在動作面板上緣，最後一個是提問", () => {
