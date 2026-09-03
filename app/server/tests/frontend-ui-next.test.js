@@ -706,9 +706,9 @@ describe("ui-next 平行介面", () => {
     expect(task).toContain('<span class="ui-next-qa-custom-answer-heading"><b>以上選項都不適合？</b> 直接寫下你的答案或補充說明</span>');
     expect(pagesCss).toContain('.ui-next-qa-options label.selected');
     expect(pagesCss).toContain('.ui-next-qa-custom-answer-heading{color:var(--text-muted);font-size:11px;white-space:nowrap}');
-    // 原本這一欄有自己的框，但動作面板本身已經是 composer，兩層框正是它最不像聊天頁的地方。
-    // intent 不變——這一區仍要「看得出是獨立的一塊」，只是改用分隔線＋標題撐，不是裸 textarea。
-    expect(pagesCss).toContain('.ui-next-qa-custom-answer{display:grid;gap:3px;margin-top:10px;padding:10px 2px 0;border:0;border-top:1px solid var(--border)');
+    // 這一欄與上面兩張選項卡用同一組框（1px --border、10px 圓角、10/11 內距、--surface 底），
+    // 三者才讀得出是同一層級的選項；不是裸 textarea，也不是另一種尺寸的框。
+    expect(pagesCss).toContain('.ui-next-qa-custom-answer{display:grid;gap:3px;margin-top:6px;padding:10px 11px;border:1px solid var(--border);border-radius:10px;background:var(--surface)');
   });
 
   test("規格書 QA 提問是單一 Composer：由動作面板本身提供，不再套內層框", () => {
