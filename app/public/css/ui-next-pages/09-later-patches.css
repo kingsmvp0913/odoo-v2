@@ -1093,5 +1093,3 @@
    主要動作（那是「返回」還在這一排時的慣例）。頂欄裡最後一顆是「下載程式碼」，不是主要
    動作，填色會變成整條列最搶眼的東西。 */
 .ui-next-task-topbar .ui-next-detail-actions button:last-child:not(.ui-next-back){border-color:var(--border-strong);background:transparent;color:var(--text-secondary)}
-/* 還沒渲染到的舊訊息：一行靜音提示，不是可按的東西 */
-.ui-next-conv-more{margin:0 0 14px;color:var(--text-muted);font-size:11px;text-align:center}

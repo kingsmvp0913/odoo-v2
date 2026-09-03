@@ -4,7 +4,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, convVisible: 30, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, taskActionCollapsed: false, downloadingZip: false, healthChecking: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -118,8 +118,10 @@
           : [];
         return [...req, ...msgs, ...logs, ...blocker, ...diff].sort((a, b) => new Date(a.ts) - new Date(b.ts));
       },
-      // 只渲染末 N 筆（最新）；往上捲再增量載入更早的，避免整條歷史撐開版面
-      visibleTimeline() { return this.timeline.slice(-this.convVisible); },
+      // ⚠ 整條歷史一次渲染完，不要分批：資料本來就全在前端（fetchAllLogs 已分頁撈完），
+      // 分批只省渲染成本，卻換來一個死結——訊息不夠高就沒有捲軸，沒有捲軸就觸發不了
+      // 「往上捲載入更早」，剩下的那幾則永遠出不來。實測 task_logs 最多的一張是 56 則。
+      visibleTimeline() { return this.timeline; },
       // 比照專案對話：跨天處插一條日期分隔。時間軸項目直接攤平進 row，模板才不必多一層 row.item。
       visibleRows() {
         const rows = [];
@@ -131,7 +133,6 @@
         }
         return rows;
       },
-      hasMoreConv() { return this.timeline.length > this.convVisible; },
       // 留言模式（非回覆 AI 問題）且任務有外部來源、管理者開了回寫開關時，才顯示「回寫 Odoo」勾選框
       showWritebackOption() {
         return !this.canAnswer && this.writebackEnabled && !!this.task && (this.task.source === 'odoo' || this.task.source === 'service');
@@ -225,7 +226,7 @@
         } catch (e) { /* 靜默：badge 不是關鍵路徑 */ }
       },
       async load() {
-        this._convPinBottom = true; this.convVisible = 5; this.taskActionCollapsed = false;
+        this._convPinBottom = true; this.taskActionCollapsed = false;
         this.loading = true;
         try {
           await this.refresh();
@@ -911,12 +912,6 @@
       toggleEvent(event) { const key = event.id || event.content; this.expandedEvents[key] = !this.expandedEvents[key]; },
       scrollConvToBottom() { const c = this._convScroller || document.querySelector(".ui-next-main"); if (c) c.scrollTop = c.scrollHeight; },
       // 捲到頂→載入更早，並補回捲動位移讓畫面不跳（新內容撐高後維持原本閱讀點）
-      loadMoreConv() {
-        const c = this._convScroller || document.querySelector(".ui-next-main");
-        const prevH = c ? c.scrollHeight : 0;
-        this.convVisible += 10;
-        this.$nextTick(() => { if (c) c.scrollTop += c.scrollHeight - prevH; });
-      },
       // 捲軸統一在最外面之後，實際在捲的是 .ui-next-main；綁在對話清單上不會觸發。
       bindConvScroll() {
         this._convScroller = document.querySelector('.ui-next-main');
@@ -934,9 +929,6 @@
         const el = e.target;
         // 跟隨使用者位置：停在底部→維持釘住（新訊息貼底）；往上捲→解除釘住
         this._convPinBottom = (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
-        const list = this.$refs.convPanel;
-        const listTop = list ? list.getBoundingClientRect().top : 999;
-        if (listTop > -140 && this.hasMoreConv) this.loadMoreConv();
       },
       async loadEvents() {
         if (this.isTourDemo) { this.events = window.TourDemo.events(); this.eventsHasMore = false; return; }
@@ -997,9 +989,6 @@
 <div class="ui-next-task-content-column">
 <section tabindex="-1" class="ui-next-panel ui-next-conversation">
 <div ref="convPanel" class="ui-next-conv-list" @click="handleTaskMessageClick">
-<!-- 沒有「載入更早」的按鈕：往上捲會自動接（見 onConvScroll）。放一顆按鈕會讓人以為
-     前面的對話被收起來了——它其實只是還沒渲染。 -->
-<p v-if="hasMoreConv" class="ui-next-conv-more">往上捲載入更早的 {{ timeline.length-convVisible }} 則</p>
 <template v-for="row in visibleRows" :key="row._key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
 <article v-else :class="timelineClass(row)">
 <!-- 錯誤 LOG 與機器 log 分開標示：兩者合併成一句「技術紀錄」時，畫面上看不出這則是不是錯誤，
