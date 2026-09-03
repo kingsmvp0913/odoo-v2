@@ -736,7 +736,10 @@ describe("ui-next 平行介面", () => {
     // -15px 抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。
     expect(pagesCss).toContain('margin:0 auto -15px');
     expect(pagesCss).toContain('.ui-next-q-tabs button.active{background:var(--surface)');
-    expect(pagesCss).toContain('.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:34px;height:31px;padding:0 12px;border:0;border-radius:10px 10px 0 0');
+    // 釘形狀不釘尺寸：分頁是「上緣圓角、下緣不封口」的分頁，不是膠囊（999px）也不是方鈕。
+    // 尺寸還會隨版面微調，寫死 px 只會讓下次調整撞紅而學不到東西。
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:\d+px \d+px 0 0/);
+    expect(pagesCss).not.toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:999px/);
     // 框在有頁籤時上緣不封口，接縫處才不會多一條線
     expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0;box-shadow:var(--shadow-lg),inset 0 -1px 0');
   });

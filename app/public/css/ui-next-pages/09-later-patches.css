@@ -1000,13 +1000,18 @@
    ⚠ 分頁列必須有不透明底：動作面板是 sticky，它上方是 aside 的漸層透明區，
    沒有底色時分頁會和捲過去的對話文字疊在一起。
    ⚠ -15px 是抵掉 .ui-next-task-side 的 grid gap:14px（只用 -1px 會留 18px 的縫）。 */
-.ui-next-q-tabs{display:flex;flex-wrap:wrap;align-items:flex-end;gap:3px;width:min(100%,812px);box-sizing:border-box;margin:0 auto -15px;padding:0 10px;background:var(--bg)}
-.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:34px;height:31px;padding:0 12px;border:0;border-radius:10px 10px 0 0;background:transparent;color:var(--text-muted);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
-.ui-next-q-tabs button:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text-secondary)}
-.ui-next-q-tabs button.done .ui-next-icon{width:12px;height:12px;color:var(--success)}
-.ui-next-q-tabs button.active{background:var(--surface);color:var(--text);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
+.ui-next-q-tabs{display:flex;flex-wrap:wrap;align-items:flex-end;gap:2px;width:min(100%,812px);box-sizing:border-box;margin:0 auto -15px;padding:0;background:var(--bg)}
+/* 尺寸跟著框走：框是 22px 圓角、16px 內距的大塊，配 31px 高／12px 字的小方塊會像另一個元件。
+   分頁彼此緊鄰（gap 2px）才讀得出是一排分頁，而不是幾顆散落的按鈕。 */
+.ui-next-q-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:46px;height:36px;padding:0 16px;border:0;border-radius:12px 12px 0 0;background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text-muted);font:inherit;font-size:13px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.ui-next-q-tabs button:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text-secondary)}
+.ui-next-q-tabs button.done .ui-next-icon{width:13px;height:13px;color:var(--success)}
+/* 選中那一頁：底色換成框的 --surface（深色下比頁面底 --bg 亮一階），並自己畫上／左／右的
+   輪廓——與框上緣不封口配成一組，接縫處就沒有線，看起來是同一塊。 */
+.ui-next-q-tabs button.active{background:var(--surface);color:var(--text);font-weight:600;box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0;border-top-right-radius:0;box-shadow:var(--shadow-lg),inset 0 -1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
-.ui-next-q-tabs .ui-next-q-tab-ask{margin-left:10px}
+/* 「提問」是最後一頁，緊鄰其他分頁即可；推到遠處會變成另一個獨立按鈕。 */
+.ui-next-q-tabs .ui-next-q-tab-ask{margin-left:4px}
 
 /* 動作面板離視窗底 35px，聊天頁的 composer 只有 15px。差別不在自己的 margin：sticky 的
    bottom:0 貼的是 .ui-next-main 的 padding box，而那裡有 padding-bottom:32px；聊天頁走的是
