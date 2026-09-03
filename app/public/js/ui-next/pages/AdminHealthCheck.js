@@ -14,6 +14,16 @@
         if (s.running) return '本輪執行中';
         if (s.due) return '即將執行';
         return new Date(s.nextRunAt).toLocaleString();
+      },
+      // 已核准的提案什麼時候會被自動實作，一律引用排程 API 的真值。寫死「22:00」的話，同一畫面
+      // 上方的「下次自動健檢」讀的是真值，兩個數字對不起來就是在說謊；而且下次改排程還會再漂一次。
+      // 只回時間片語，動詞留在模板——拿不到排程資訊就回 null，寧可不講時間也不要講錯的時間。
+      autoRunText() {
+        const s = this.schedule;
+        if (!s || !s.enabled) return null;
+        if (s.running) return '本輪';
+        if (s.due) return '即將';
+        return new Date(s.nextRunAt).toLocaleString();
       }
     },
     methods: {
@@ -189,7 +199,7 @@
 
           <div v-if="ofKind('proposal').some(f => f.status === 'approved')" class="settings-section"
             style="border-left:3px solid var(--warning-strong);margin-bottom:var(--space-3);font-size:var(--fs-sm);color:var(--text)">
-            ⏱ 已核准的提案**沒有人會先看過**，今晚 22:00 會自動實作並合併。不想讓某一條跑，要在那之前按「擋下這條」。
+            ⏱ 已核准的提案<strong>沒有人會先看過</strong>，<span v-if="autoRunText">{{ autoRunText }} </span>會自動實作並合併。不想讓某一條跑，要在那之前按「擋下這條」。
           </div>
 
           <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
@@ -215,8 +225,8 @@
               <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
                 {{ sev(f.severity).label }}
               </span>
-              <span v-if="f.status === 'approved'" style="font-size:var(--fs-xs);padding:1px var(--space-2);border-radius:4px;color:#fff;background:var(--warning-strong)" title="沒有人會先審——今晚 22:00 會被自動實作並合併">
-                ⏱ 今晚 22:00 自動執行
+              <span v-if="f.status === 'approved'" style="font-size:var(--fs-xs);padding:1px var(--space-2);border-radius:4px;color:#fff;background:var(--warning-strong)" title="沒有人會先審——排程一到就自動實作並合併">
+                ⏱ <span v-if="autoRunText">{{ autoRunText }} </span>自動執行
               </span>
             </div>
             <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px;white-space:pre-wrap">{{ f.diagnosis }}</div>
