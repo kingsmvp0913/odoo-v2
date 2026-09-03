@@ -104,7 +104,13 @@
         const blocker = (this.task && this.task.status === 'stopped' && this.task.blocker_content)
           ? [{ _key: 'blocker', ts: this.task.updated_at, kind: 'log', role: 'blocker', content: this.task.blocker_content }]
           : [];
-        return [...msgs, ...logs, ...blocker].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+        // 人工審核那關：程式變更本身是「要讀的東西」，排在對話最後一則，動作面板只留退回／通過。
+        // 走 kind:'log'+role:'ai' 是為了直接吃既有的 ai 樣式與頭像；content 留空，
+        // isErrorLog／machineLogHint 都判不到它，不會被誤折成收合列。
+        const diff = (this.timelineActionMode === 'review')
+          ? [{ _key: 'diff', ts: this.task.updated_at, kind: 'log', role: 'ai', content: '', isDiff: true }]
+          : [];
+        return [...msgs, ...logs, ...blocker, ...diff].sort((a, b) => new Date(a.ts) - new Date(b.ts));
       },
       // 只渲染末 N 筆（最新）；往上捲再增量載入更早的，避免整條歷史撐開版面
       visibleTimeline() { return this.timeline.slice(-this.convVisible); },
@@ -680,6 +686,11 @@
         if (item.kind !== 'log') return null;
         return window.machineLogHint(item.role, item.content);
       },
+      // 規格審核的那則 AI log（analysis.js 寫入時固定這個前綴）。比對 role 的理由同 machineLogHint：
+      // 使用者把那段整則複製、貼進提問框問「這是什麼意思」，只比前綴就會把他的發言也當成規格書。
+      isSpecLog(item) {
+        return item.kind === 'log' && item.role === 'ai' && String(item.content || '').startsWith('[等待你審核規格]');
+      },
       logLineCount(item) { return (String(item.content || '').match(/\n/g) || []).length + 1; },
       toggleLog(key) { this.expandedLogs[key] = !this.expandedLogs[key]; },
       formatTime(ts) {
@@ -1007,7 +1018,22 @@
 <article v-else :class="timelineClass(row)">
 <!-- 錯誤 LOG 與機器 log 分開標示：兩者合併成一句「技術紀錄」時，畫面上看不出這則是不是錯誤，
      而使用者貼的錯誤訊息正是最需要一眼認出來的那種。 -->
-<template v-if="isErrorLog(row)">
+<template v-if="row.isDiff">
+<button :disabled="diffLoading" @click="toggleDiff">{{ diffLoading?'載入中…':(diffOpen?'收合':'展開') }} 這一輪的程式變更</button>
+<p v-if="diffError" class="ui-next-error-text">{{ diffError }}</p>
+<!-- 逐行著色而非把所有 repo 併成一行：join(' | ') 的版本讀不出哪幾行是加、哪幾行是刪，
+     而這一關要人決定的就是「這些改動能不能上」。 -->
+<div v-if="diffOpen&&diffData">
+<div v-for="repo in diffData.repos" :key="repo.label" class="ui-next-diff-repo">
+<b>{{ repo.label }}</b>
+<span v-if="repo.missing">分支已清理，無法取得 diff</span>
+<span v-else-if="!repo.diff">此 repo 無變更</span>
+<div v-else class="diff-view"><div v-for="(line,index) in diffLines(repo.diff)" :key="index" :class="['diff-line',line.cls]">{{ line.text }}</div></div>
+<span v-if="repo.truncated">（diff 過大已截斷，完整內容請至 repo 檢視）</span>
+</div>
+</div>
+</template>
+<template v-else-if="isErrorLog(row)">
 <button @click="toggleLog(row._key)">{{ expandedLogs[row._key]?'收合':'展開' }} 錯誤 LOG（{{ logLineCount(row) }} 行）</button>
 <pre v-if="expandedLogs[row._key]">{{ row.content }}</pre>
 </template>
@@ -1017,6 +1043,22 @@
 </template>
 <template v-else>
 <div v-html="renderTaskMessage(row.content)"></div>
+<!-- 規格審核那則 log 只寫得下摘要。模組／實作項／驗收／權限接在同一則底下，
+     這一關過了之後（動作面板消失）也還看得到規格是什麼。 -->
+<div v-if="isSpecLog(row)&&spec" class="ui-next-spec-box ui-next-spec-inline">
+<template v-if="spec.module"><b>模組</b><p><code>{{ spec.module }}</code></p></template>
+<template v-if="spec.requirements&&spec.requirements.length">
+<b class="ui-next-spec-toggle" @click="specReqOpen=!specReqOpen">{{ specReqOpen?'▾':'▸' }} 實作項（給 AI 的施工細節，共 {{ spec.requirements.length }} 項）</b>
+<ul v-if="specReqOpen"><li v-for="(item,index) in spec.requirements" :key="'req'+index">{{ item }}</li></ul>
+</template>
+<template v-if="spec.acceptance&&spec.acceptance.length">
+<b>驗收項</b>
+<ul><li v-for="(item,index) in spec.acceptance" :key="'acc'+index">{{ item }}</li></ul>
+</template>
+<!-- 權限是審核者唯一能看到「誰能用、能做什麼」的地方：不渲染就等於這一關沒得審，
+     而下游 QA 的判準正是拿實作去比對這一段。 -->
+<template v-if="spec.permissions&&spec.permissions.trim()"><b>權限</b><p>{{ spec.permissions }}</p></template>
+</div>
 <div v-if="row.attachments&&row.attachments.length">
 <button v-for="file in row.attachments" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/> {{ file.filename }}</button>
 </div>
@@ -1116,43 +1158,14 @@
 </template>
 </template>
 <template v-else-if="timelineActionMode==='spec_review'">
-<p>以下是 AI 分析出的規格，請確認沒問題後開始實作。下方可提問或要求調整規格：提問時 AI 會直接在時間軸回答、規格不變；判定要改時才重產規格再回到這裡。</p>
-<div v-if="spec" class="ui-next-help-box ui-next-spec-box">
-<template v-if="spec.summary">
-<b>摘要</b>
-<!-- 走 markdown：「現在 vs 改完」用表格對照，比同樣內容攤成幾段文字好讀得多。
-     渲染器與時間軸同一個（原始 HTML 已被轉義），舊的純文字摘要照樣顯示——breaks:true 保留換行。 -->
-<div class="ui-next-spec-md" v-html="renderTaskMessage(spec.summary)"></div>
-</template>
-<template v-if="spec.module">
-<b>模組</b>
-<p><code>{{ spec.module }}</code></p>
-</template>
-<template v-if="spec.requirements&&spec.requirements.length">
-<b class="ui-next-spec-toggle" @click="specReqOpen=!specReqOpen">{{ specReqOpen?'▾':'▸' }} 實作項（給 AI 的施工細節，共 {{ spec.requirements.length }} 項）</b>
-<ul v-if="specReqOpen">
-<li v-for="(item,index) in spec.requirements" :key="'req'+index">{{ item }}</li>
-</ul>
-</template>
-<template v-if="spec.acceptance&&spec.acceptance.length">
-<b>驗收項</b>
-<ul>
-<li v-for="(item,index) in spec.acceptance" :key="'acc'+index">{{ item }}</li>
-</ul>
-</template>
-<!-- 權限是審核者唯一能看到「誰能用、能做什麼」的地方：不渲染就等於這一關沒得審，
-     而下游 QA 的判準正是拿實作去比對這一段。 -->
-<template v-if="spec.permissions&&spec.permissions.trim()">
-<b>權限</b>
-<p>{{ spec.permissions }}</p>
-</template>
-</div>
-<p v-else>請確認規格後開始實作。</p>
-<!-- 輸入框與兩個動作收進同一個 composer 框，和上方規格書分開：裸 textarea 貼在規格書下面時，
-     看不出哪裡是「讀」哪裡是「寫」。框樣式沿用規格書 QA 的提問 composer。 -->
-<div class="ui-next-qa-ask-composer">
+<!-- 規格書不在這裡重印：它就是上方對話流那則「等待你審核規格」（見 isSpecLog，模組／實作項／
+     驗收／權限接在同一則底下）。面板只管「寫」，內層那個 composer 框因此不再需要——
+     面板本身已經是 composer，兩層框正是它最不像聊天頁的地方。 -->
+<p class="ui-next-field-note">規格在上方對話裡。提問時 AI 會直接在對話回答、規格不變；判定要改時才重產規格再回到這裡。</p>
 <textarea v-model="specFeedback" placeholder="可提問或要求調整規格（例：為什麼備註欄唯讀？／備註欄位改成多行）。Enter 送出，Shift+Enter 換行" @keydown.enter.exact.prevent="specRevise" @input="autoResize">
 </textarea>
+<div class="ui-next-action-foot">
+<span></span>
 <div class="ui-next-inline-actions">
 <button @click="specRevise" :disabled="specRevising||!specFeedback.trim()">{{ specRevising?'送出中…':'要求調整' }}</button>
 <button class="ui-next-primary" @click="specApprove" :disabled="specApproving">{{ specApproving?'處理中…':'確認開工' }}</button>
@@ -1160,24 +1173,13 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='review'">
-<p v-if="diffError" class="ui-next-error-text">{{ diffError }}</p>
-<!-- 逐行著色而非把所有 repo 併成一行：join(' | ') 的版本讀不出哪幾行是加、哪幾行是刪，
-     而這一關要人決定的就是「這些改動能不能上」。 -->
-<div v-if="diffOpen&&diffData">
-<div v-for="repo in diffData.repos" :key="repo.label" class="ui-next-diff-repo">
-<b>{{ repo.label }}</b>
-<span v-if="repo.missing">分支已清理，無法取得 diff</span>
-<span v-else-if="!repo.diff">此 repo 無變更</span>
-<div v-else class="diff-view"><div v-for="(line,index) in diffLines(repo.diff)" :key="index" :class="['diff-line',line.cls]">{{ line.text }}</div></div>
-<span v-if="repo.truncated">（diff 過大已截斷，完整內容請至 repo 檢視）</span>
-</div>
-</div>
+<!-- 程式變更移到上方對話流的最後一則（見 row.isDiff）：它是「要讀的東西」，
+     和退回原因這個「要寫的地方」擠在同一個框裡時，看不出哪裡是讀哪裡是寫。 -->
 <textarea v-model="rejectReason" placeholder="填寫退回原因，可一次列多個問題（Enter 送出，Shift+Enter 換行，可直接貼上截圖）" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
 </textarea>
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
 <label class="ui-next-icon-button" :title="'附加截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面'"><ui-next-icon name="paperclip"/><input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected"></label>
-<button type="button" class="ui-next-icon-button" :class="{active:diffOpen}" :disabled="diffLoading" :aria-label="diffOpen?'收合程式變更':'查看程式變更'" :title="diffOpen?'收合程式變更':'查看程式變更'" @click="toggleDiff"><ui-next-icon name="flow"/></button>
 <small v-if="rejectFiles.length">已選 {{ rejectFiles.length }} 個附件</small>
 </div>
 <div class="ui-next-inline-actions">

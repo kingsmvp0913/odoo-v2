@@ -956,3 +956,13 @@
    聊天頁寬 125px，一行拉太長，眼睛回到行首會找不到位置。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{width:min(100%,812px);box-sizing:border-box;margin-left:auto;margin-right:auto}
+
+/* 規格的細項（模組／實作項／驗收／權限）接在對話流那則「等待你審核規格」底下。
+   摘要是那則 log 的正文，細項是補充，中間拉一條線分開，否則兩段連在一起像同一段話。 */
+.ui-next-spec-inline{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+/* 程式變更那則：展開鈕與對話流其他收合列（錯誤 LOG／技術紀錄）同一個樣式，diff 自己捲，
+   不撐破 777px 的文字欄。 */
+.ui-next-conv-list article .diff-view{margin-top:8px;max-width:100%}
+/* grid item 預設 stretch，AI 那側的收合鈕（程式變更／技術紀錄）會被拉成整欄寬，
+   和右側那些靠內容寬的收合鈕長得不一樣。 */
+.ui-next-conv-list article.ai > button{justify-self:start}
