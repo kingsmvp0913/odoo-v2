@@ -987,3 +987,18 @@
    否則同一個面板裡兩種按鈕長不一樣。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary{
   height:33px;border-radius:999px;font-size:13px;border-color:transparent;background:var(--text);color:var(--surface)}
+
+/* 動作面板的按鈕原本完全沒有 hover 規則（全站找不到 .ui-next-primary:hover），滑過去毫無反應，
+   而聊天頁的送出鈕與圖示鈕都有。照那邊的兩套語彙補：
+   主要動作＝深底轉主色（同 .ui-next-thread-send:hover）；次要與圖示＝hover 底＋內外陰影抬起
+   （同 composer 的 chip／icon-button）。disabled 一律不反應，否則「還不能按」會被誤解成可以按。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button{
+  transition:background-color .125s ease,box-shadow .125s ease,border-color .125s ease}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button.ui-next-primary:not(:disabled):hover,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action > .ui-next-primary:not(:disabled):hover{
+  background:var(--primary);color:var(--surface)}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button:not(.ui-next-primary):not(:disabled):hover,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button:hover{
+  background:var(--ui-next-hover-bg);box-shadow:var(--ui-next-hover-lift)}
