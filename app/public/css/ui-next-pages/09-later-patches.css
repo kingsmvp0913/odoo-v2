@@ -983,9 +983,8 @@
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-inline-actions button:not(.ui-next-primary){
   background:transparent}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action .ui-next-icon-button{width:26px;height:26px;border-radius:9px}
-/* Enter 提示接在框下方。寬度要跟面板同一條規則（min(100%,812px) 置中），否則它會靠 aside
-   的左緣而不是框的左緣——差 55px，看起來像沒對齊。內距 17px 對齊框內文字。 */
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,812px);box-sizing:border-box;margin:-6px auto 0;padding-left:17px}
+/* Enter 提示接在框下方，寬度與面板同一條規則；內距 17px 對齊框內文字。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{box-sizing:border-box;margin-top:-6px;padding-left:17px}
 
 /* 動作面板的按鈕原本完全沒有 hover 規則（全站找不到 .ui-next-primary:hover），滑過去毫無反應，
    而聊天頁的送出鈕與圖示鈕都有。照那邊的兩套語彙補：
@@ -1145,6 +1144,13 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    ⚠ 只縮 .user 那側：AI 那側的時間本來就對齊訊息左緣，動了會歪。 */
 .ui-next-thread-messages > article.user > small,
 .ui-next-conv-list article.user small{margin-right:35px}
+/* AI 那側不得比使用者氣泡更靠右（AskMe 是這樣）。⚠ 收在 article 上會讓對話框與分頁跟不上
+   ——它們是另一組「限寬 812px ＋ 置中」的元素，改 margin 只會把它們往左推、右緣仍不齊
+   （實測差 20px）。改成整欄一起收：清單／面板／分頁／Enter 提示共用同一個寬度。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-conv-list,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-q-tabs,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,777px);margin-left:max(0px,calc((100% - 812px) / 2));margin-right:0}
 
 /* ⚠ chat 的頭像跑到訊息上方：`> article.ai > *{grid-column:2}`（0,2,2）壓過
    `.ui-next-msg-avatar{grid-column:1}`（0,1,0），頭像被推進第 2 欄、擠到訊息上面一列。
