@@ -273,6 +273,12 @@ const router = createRouter({
       component: window.UiNextEnabled ? window.UiNextAdminEnterpriseView : window.AdminEnterpriseView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
+    {
+      // Legacy 沒有這一頁（意見回饋通道是 Next-only 功能），沒有 Legacy fallback 元件。
+      path: "/admin/feedback",
+      component: window.UiNextAdminFeedbackView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });
