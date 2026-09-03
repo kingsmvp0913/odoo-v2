@@ -83,9 +83,13 @@ test('GET /api/admin/agents/:name → 含 prompt', async () => {
 });
 
 test('PUT /api/admin/agents/:name → 改 model + prompt', async () => {
+  // placeholder 清單會隨 chat.md 演進（34e19ac4 加了 data_source_hint 就讓這支紅了一次）。
+  // 這支測的是「改 model＋prompt 並保留其他 frontmatter」，不是 placeholder 守衛
+  // （那由 agent-loader.test.js 正面覆蓋）——動態取現有的，才不會每次有人加 placeholder 就假紅。
+  const placeholders = [...new Set(fs.readFileSync(agentPath('chat'), 'utf8').match(/\{\{\w+\}\}/g) || [])].join(' ');
   const res = await request(app).put('/api/admin/agents/chat')
     .set('Authorization', `Bearer ${adminToken}`)
-    .send({ model: 'haiku', prompt: '測試提示詞 {{project_name}} {{wiki}} {{history}} {{user_message}}' });
+    .send({ model: 'haiku', prompt: `測試提示詞 ${placeholders}` });
   expect(res.status).toBe(200);
   expect(res.body.model).toBe('haiku');
   expect(res.body.prompt).toContain('測試提示詞');
