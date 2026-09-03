@@ -1303,7 +1303,9 @@
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
 <label class="ui-next-icon-button" title="附加檔案"><ui-next-icon name="paperclip"/><input ref="messageFileInput" type="file" multiple @change="onMessageFilesSelected"></label>
-<label v-if="showWritebackOption" class="ui-next-foot-check"><input type="checkbox" v-model="messageWriteback"> 同步回寫至來源</label>
+<!-- 開關做成一顆可切換的 chip（aria-pressed 帶狀態）：底排裡放原生 checkbox 在視覺上
+     跟旁邊的圖示鈕是兩套東西，而它本來就是「開／關」而不是表單欄位。 -->
+<button v-if="showWritebackOption" type="button" class="ui-next-composer-chip ui-next-foot-toggle" :class="{active:messageWriteback}" :aria-pressed="messageWriteback.toString()" :title="messageWriteback?'送出後會同步回寫到來源系統，再點一下取消':'只留在平台，點一下改成同步回寫至來源'" @click="messageWriteback=!messageWriteback"><ui-next-icon name="send"/>同步回寫至來源</button>
 <small v-if="newMessageFiles.length">已選 {{ newMessageFiles.length }} 個附件</small>
 <small v-if="isAgentRunning" class="ui-next-running-hint">AI 正在處理這一輪…</small>
 </div>
