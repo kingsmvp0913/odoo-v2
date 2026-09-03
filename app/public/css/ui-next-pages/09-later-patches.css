@@ -587,7 +587,10 @@
    內容於是溢出蓋到下一張卡，同時 scrollHeight≈clientHeight 讓上面的 overflow-y:auto 捲不動。
    grid-auto-rows:max-content 才是「不壓縮、超出就捲」。 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{max-height:calc((100dvh - 24px) / var(--ui-zoom, 1));grid-auto-rows:max-content;overflow-y:auto}
-.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) .ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -16px 0;padding:12px 16px 4px;background:var(--surface)}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action:not(.is-collapsed) /* ⚠ 左右退 1px（-15px 而非 -16px）：框的邊線是畫在 padding box 邊緣的 inset shadow，
+   而這一列為了 sticky 需要滿寬鋪底 + z-index:3，鋪到 -16px 正好把左右那 1px 邊線蓋掉——
+   症狀是「框只有標題列這一段沒有左右邊」。padding 同步減 1，文字位置不變。 */
+.ui-next-task-action-head{position:sticky;top:-12px;z-index:3;margin:-12px -15px 0;padding:12px 15px 4px;background:var(--surface)}
 .ui-next-task-action .ui-next-spec-box{max-height:46dvh;overflow-y:auto;overscroll-behavior:contain}
 /* composer 自己有 gap:9px，inline-actions 再帶 margin-top 就變成兩倍間距。 */
 
@@ -1011,14 +1014,14 @@
 .ui-next-q-tabs button.done .ui-next-icon{width:11px;height:11px;color:var(--success)}
 /* 選中那一頁：底色換成框的 --surface（深色下比頁面底 --bg 亮一階），並自己畫上／左／右的
    輪廓——與框上緣不封口配成一組，接縫處就沒有線，看起來是同一塊。 */
-.ui-next-q-tabs button.active{position:relative;margin-bottom:-1px;padding-bottom:1px;background:var(--surface);color:var(--text);font-weight:600}
+.ui-next-q-tabs button.active{position:relative;margin-bottom:-1px;padding-bottom:1px;background:var(--surface);color:var(--text);font-weight:600;box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 22%,transparent),inset 1px 0 0 color-mix(in srgb,var(--text) 22%,transparent),inset -1px 0 0 color-mix(in srgb,var(--text) 22%,transparent)}
 /* 反圓角（Chrome 分頁底部兩側往外彎進內容區的那個小弧）。用 radial-gradient 疊出來：
-   圓心放在角落，8px 內透明、之外是框的底色。分頁本身不畫輪廓（畫了在與框相接處會看到
-   一段線），只靠底色分：選中＝框的 --surface，其餘＝頁面 --bg。
+   圓心放在角落，7px 內透明、7~8px 是那條 22% 的邊線、之後是框的底色——邊線要接得上分頁
+   自己的輪廓，不然轉角處會斷一截。分頁的輪廓只畫上／左／右，底部與框相接處刻意不畫。
    第一個分頁貼齊框左緣，它的左弧會畫到框外，所以不畫。 */
 .ui-next-q-tabs button.active::before,.ui-next-q-tabs button.active::after{content:"";position:absolute;bottom:0;width:8px;height:8px;pointer-events:none}
-.ui-next-q-tabs button.active::before{left:-8px;background:radial-gradient(circle at 0 0,transparent 8px,var(--surface) 8px)}
-.ui-next-q-tabs button.active::after{right:-8px;background:radial-gradient(circle at 100% 0,transparent 8px,var(--surface) 8px)}
+.ui-next-q-tabs button.active::before{left:-8px;background:radial-gradient(circle at 0 0,transparent 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 8px,var(--surface) 8px)}
+.ui-next-q-tabs button.active::after{right:-8px;background:radial-gradient(circle at 100% 0,transparent 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 7px,color-mix(in srgb,var(--text) 22%,var(--surface)) 8px,var(--surface) 8px)}
 .ui-next-q-tabs button.active:first-child::before{display:none}
 /* 只收上圓角，邊框維持完整四邊——上緣線在分頁右側那一大段是必須存在的，
    整條拿掉會讓框看起來沒有上緣。被分頁蓋住的那一小段由分頁自己遮（見下）。 */
