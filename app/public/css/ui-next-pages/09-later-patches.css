@@ -450,7 +450,7 @@
 .ui-next-chat-page{height:auto;min-height:0}
 .ui-next-thread{height:auto;min-height:0;display:block}
 .ui-next-thread-messages{min-height:0;max-height:none;overflow:visible;flex:none}
-.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;background:var(--surface)}
+.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;background:var(--ui-next-composer-bg,var(--surface))}
 .ui-next-thread-composer::before{position:absolute;z-index:-1;right:0;bottom:-56px;left:0;top:-22px;background:linear-gradient(180deg,transparent,var(--bg) 30%);content:""}
 
 /* ⚠ .ui-next-icon-button 原本只設尺寸與顏色，沒清掉 button 的瀏覽器預設：
@@ -543,7 +543,7 @@
 .ui-next-main:has(> .ui-next-chat-page){padding-bottom:0}
 .ui-next-thread{display:flex;height:auto;min-height:0;flex:1 0 auto;flex-direction:column}
 .ui-next-thread-messages{min-height:0;max-height:none;flex:1 0 auto;overflow:visible;padding-top:28px;padding-bottom:10px}
-.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;flex:none;margin-bottom:max(18px,env(safe-area-inset-bottom));border-color:transparent;background:var(--surface);box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)}
+.ui-next-thread-composer{position:sticky;bottom:0;z-index:2;flex:none;margin-bottom:max(18px,env(safe-area-inset-bottom));border-color:transparent;background:var(--ui-next-composer-bg,var(--surface));box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 22%,transparent)}
 .ui-next-thread-composer:focus-within{border-color:transparent;box-shadow:var(--shadow-lg),inset 0 0 0 1px color-mix(in srgb,var(--text) 36%,transparent)}
 .ui-next-thread-composer::before{display:none}
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-content-column{align-content:start}
@@ -1120,3 +1120,29 @@
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head .ui-next-status-badge{flex:none;font-size:11px}
 /* 收合狀態：整條標題列是展開的入口，游標要看得出可點 */
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action-head.is-clickable{cursor:pointer}
+
+
+/* ── 比照 AskMe 的三處配色（新對話 composer／chat／任務對話框）─────────────────────
+   量到的差異（AskMe 深色）：頁面底 #262626、對話框底 #1B1B1B、邊框 #2D2D2D。
+   關鍵是**對話框比頁面深**——我們原本相反（--surface #202020 亮於 --bg #191919），
+   所以框在深色下浮不出來、和內容糊成一片。 */
+html[data-theme="light"] .ui-next-shell{--ui-next-composer-bg:var(--surface)}
+/* 比頁面再深一階（AskMe 的比例約 0.71）。純黑太重，用疊色留一點層次。 */
+html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#000 34%,var(--bg))}
+.ui-next-composer,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-q-tabs button.active,
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-q-tabs button.active::after{background:var(--ui-next-composer-bg,var(--surface))}
+
+/* 使用者的訊息氣泡：AskMe 是偏灰的一塊，我們原本是 var(--text)＝近白底＋深字，
+   在一片深色裡是整頁最亮的東西，比 AI 的內容還搶眼。改成灰底＋原本的文字色。 */
+.ui-next-thread-messages > article.user > .ui-next-message,
+.ui-next-conv-list article.user > div:first-child{
+  background:color-mix(in srgb,var(--text) 13%,var(--bg));color:var(--text);box-shadow:none;
+  /* 內縮：氣泡不貼齊內容欄右緣，與 AI 那側被頭像推進去的距離對稱 */
+  margin-right:35px}
+
+/* ⚠ chat 的頭像跑到訊息上方：`> article.ai > *{grid-column:2}`（0,2,2）壓過
+   `.ui-next-msg-avatar{grid-column:1}`（0,1,0），頭像被推進第 2 欄、擠到訊息上面一列。
+   任務對話那邊補過同等特異度的規則，chat 這邊漏了。 */
+.ui-next-thread-messages > article.ai > .ui-next-msg-avatar{grid-column:1;grid-row:1}
