@@ -518,6 +518,10 @@ async function runPipeline(userId, { auto = false } = {}) {
     const { getGateState } = require('./usage-gate');
     const gate = await getGateState();
     if (gate.blocked) return { dispatched: 0, blocked: true };
+    // 夜間批次期間不派工：重啟會砍掉在飛的 agent、留下卡在 *_running 的孤兒任務。
+    // 與用量閘門同樣的語意——只擋自動推進，手動入口（auto:false）不受限。
+    const { isMaintenance } = require('./maintenance');
+    if (await isMaintenance()) return { dispatched: 0, blocked: true, maintenance: true };
   }
   if (_pipelineRunning.has(userId)) return { dispatched: 0 }; // 掃描鎖：防同 user 重複掃描
   _pipelineRunning.add(userId);

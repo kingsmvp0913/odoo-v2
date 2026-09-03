@@ -274,6 +274,9 @@ if (require.main === module) {
         console.log(`[STARTUP] 中斷升級清理：重啟 ${s.restarted}／略過 ${s.skipped}／失敗 ${s.failed}／超預算 ${s.overBudget}`);
       }
     } catch (e) { console.error('[STARTUP] 中斷升級清理:', e.message); }
+    // 維護旗標可能卡在上次沒收乾淨的狀態（批次拋錯／被 kill）。開機清一次是第三道保險。
+    try { await require('./pipeline/maintenance').leaveMaintenance(); }
+    catch (e) { console.error('[STARTUP] 清維護旗標:', e.message); }
 
     setIo(io);
     // Claude 長效憑證載入快取：runClaude 同步取用，故必須在派工開始前備妥（未設定則沿用本機憑證檔）

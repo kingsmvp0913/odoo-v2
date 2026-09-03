@@ -20,6 +20,8 @@ async function getGlobalSettings() {
 
 async function runForUser(userId, { skipPipeline = false } = {}) {
   try {
+    // 維護中連同步都跳過：同步進來的新任務會立刻變成待派工，等維護結束一次湧出
+    if (await require('./pipeline/maintenance').isMaintenance()) return;
     const result = await syncUser(userId);
     const total = result.odoo.added + result.service.added;
     if (total > 0) {
