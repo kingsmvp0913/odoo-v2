@@ -747,13 +747,18 @@ describe("ui-next 平行介面", () => {
     // 框的邊框維持完整、只收上圓角：上緣線在分頁右側那一大段是必須存在的，整條拿掉會讓
     // 框看起來沒有上緣。接縫改由選中的分頁往下疊 1px 蓋掉（Chrome 的作法）。
     // 只收左上角：分頁只佔左邊一小段，右上角仍要圓
-    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-left-radius:0}');
+
     // 反圓角隨方角一起移除：那兩塊是用來把圓角平滑接進框的，方角不需要
     expect(pagesCss).not.toContain('.ui-next-q-tabs button.active::before');
     // 每一頁都往下疊 1px 蓋掉框的上緣線：分頁與框之間屬於形狀內部，不該有線；
     // 那條線只在最後一頁右側之後才算外圍。相鄰兩頁 -1px 共用一條邊。
-    // 下緣 -1px 蓋掉框的上緣 border；左緣 -1px 讓相鄰兩頁共用一條邊
-    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*margin:0 0 -1px -1px/);
+    // 分頁不往下疊：疊下去的話左右 border 會跟著多出一截，線頭懸在框裡沒有收尾。
+    // 左緣 -1px 讓相鄰兩頁共用一條邊。
+    expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*margin:0 0 0 -1px/);
+    // 框的上緣線改由分頁列末端那段填充補「最後一頁右側到框右緣」
+    expect(pagesCss).toContain('.ui-next-q-tabs::after{content:"";flex:1 1 auto;align-self:stretch;margin-bottom:-1px;border-bottom:1px solid');
+    expect(pagesCss).toContain('.ui-next-task-side:has(.ui-next-q-tabs) .ui-next-task-action{border-top-color:transparent');
+
     // 上緣圓角保留、下緣不封口＝分頁的形狀（使用者定案：只移除下方那對反圓角）
     expect(pagesCss).toMatch(/\.ui-next-q-tabs button\{[^}]*border-radius:9px 9px 0 0/);
     // 分頁是一條連續的列，不是幾顆分開的按鈕
