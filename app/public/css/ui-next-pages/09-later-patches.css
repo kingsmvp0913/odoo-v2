@@ -1213,3 +1213,15 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-composer,.ui-next-thread-composer{padding-bottom:9px}
 /* 頂欄：上緣 8→5、下緣同步（32→29，::after 的 bottom 仍是 24px，框與內容的距離不變）。 */
 .ui-next-task-topbar{padding-top:5px;padding-bottom:29px}
+
+/* 「Enter 送出」那一行是提示，不該把輸入框到畫面底的高度整段佔走。任務對話與 chat
+   同步收：上緣靠負 margin 貼近框、下緣收頁面／dock 的留白。
+   ⚠ 任務那側的 margin 是上面用 shorthand 寫的（-6px 0 0 X），這裡只覆蓋 margin-top，
+   下緣改由 .ui-next-task-detail 的 padding 收——動 shorthand 會把置左的偏移一起清掉。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{margin-top:-12px}
+.ui-next-task-detail{padding-bottom:4px}
+.ui-next-thread-hint{margin-top:-6px;margin-bottom:4px}
+.ui-next-thread-dock .ui-next-thread-hint{margin-bottom:max(4px,env(safe-area-inset-bottom))}
+/* 任務那側的下緣不是頁面 padding，是 .ui-next-task-side 這塊 sticky 停在
+   .ui-next-main 的 padding-bottom（12px）上方。往下多停 8px 才收得到。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{bottom:-8px}
