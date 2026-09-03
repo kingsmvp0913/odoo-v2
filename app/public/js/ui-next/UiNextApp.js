@@ -473,6 +473,11 @@
           .sort((a, b) => Number(this.taskNeedsAction(b)) - Number(this.taskNeedsAction(a)))
           .slice(0, 5);
       },
+      // 目前這張任務有沒有出現在側欄那五筆裡。有的話，那一列自己會亮（is-active），
+      // 「任務列表」nav 就不該再亮一次——否則同一件事在側欄被標了兩層，看起來像選錯了。
+      currentTaskInSidebar() {
+        return this.sidebarTaskRows.some((task) => String(task.id) === this.currentTaskId);
+      },
       sidebarProjects() {
         const projectById = new Map(this.projects.map((project) => [String(project.id), project]));
         const selected = new Map();
@@ -1040,7 +1045,7 @@
           <!-- 任務清單比照下面的專案對話：同一組 class（.ui-next-project-chats／.ui-next-chat-row）
                所以外觀與右鍵選單的行為完全一致，不必再養第二套樣式。 -->
           <div class="ui-next-nav-group">
-            <router-link class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || $route.path.startsWith('/task/') }" to="/tasks" @click="mobileSidebarOpen=false"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></router-link>
+            <router-link class="ui-next-nav" :class="{ 'is-active': $route.path === '/tasks' || ($route.path.startsWith('/task/') && !currentTaskInSidebar) }" to="/tasks" @click="mobileSidebarOpen=false"><ui-next-icon name="tasks"/>任務列表 <span v-if="needsActionCount">{{ needsActionCount }}</span></router-link>
             <div v-if="sidebarTaskRows.length" class="ui-next-project-chats ui-next-sidebar-tasks"><div v-for="task in sidebarTaskRows" :key="task.id" class="ui-next-chat-row" :class="{ 'has-menu': menuTaskId === task.id, 'is-active': currentTaskId === String(task.id), 'is-need': taskNeedsAction(task) }" @contextmenu.prevent="openTaskMenu(task, $event)"><button :aria-current="currentTaskId === String(task.id) ? 'page' : null" :title="task.title || task.task_id" @click="go('/task/' + task.id)">{{ task.title || task.task_id }}</button><button type="button" class="ui-next-row-more" :aria-label="(task.title || task.task_id) + ' 更多操作'" :aria-expanded="menuTaskId === task.id ? 'true' : 'false'" aria-haspopup="menu" @click="toggleTaskMenu(task, $event)"><ui-next-icon name="dots"/></button><teleport to="[data-ui='next']" :disabled="!rowMenuPos"><div v-if="menuTaskId === task.id" class="ui-next-row-menu" :class="{ 'is-at-pointer': !!rowMenuPos }" :style="rowMenuStyle" role="menu"><button v-if="task.status !== 'stopped'" type="button" role="menuitem" @click="toggleTaskPause(task)">{{ task.is_paused ? '繼續執行' : '暫停' }}</button><button v-if="task.project_id" type="button" role="menuitem" @click="openTaskEnv(task)">測試區</button><button v-if="isAdmin && task.git_branch" type="button" role="menuitem" @click="downloadTaskZip(task)">下載程式碼</button><button type="button" role="menuitem" @click="archiveSidebarTask(task)">封存</button><button type="button" role="menuitem" class="danger" @click="deleteSidebarTask(task)">刪除</button></div></teleport></div></div>
           </div>
           <!-- 專案清單是「專案」這個入口的下層，不是另一個區塊。沒有展開箭頭：
