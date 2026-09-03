@@ -363,7 +363,10 @@ test('cron tick：週日 → 建 weekly run，視窗固定回看 7 天且節奏�
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',1,NOW() - INTERVAL '1 day',NOW() - INTERVAL '1 day')");
+    // ⚠ 健檢排程的 fixture 一律用**絕對時間字串**，不要用 NOW() - INTERVAL。程式的「現在」
+    // 被 _setClockForTesting 凍住、DB 的 NOW() 沒有——兩邊一混，真實日期往前走就會一支一支
+    // 轉紅，且看起來像程式壞了（實測 a2e641a6 當天就紅）。getHealthCheckSchedule 只看 created_at。
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',1,'2026-08-29T15:00:00.000Z','2026-08-29T15:00:00.000Z')");
   runner.runAudit.mockClear();
   cronModule._setClockForTesting(() => new Date('2026-08-30T15:00:00.000Z')); // 臺灣週日 23:00
   cronModule.startCron();
@@ -419,7 +422,7 @@ test('cron tick：最後一筆是單張任務健檢 → 平台健檢照樣依平
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '9 days',NOW() - INTERVAL '9 days')");
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-16T15:00:00.000Z','2026-08-16T15:00:00.000Z')");
   await dbModule.query(
     "INSERT INTO health_check_runs (status, window_days, created_at, task_db_id) VALUES ('running',30,NOW(),12345)");
   runner.runAudit.mockClear();
@@ -452,7 +455,7 @@ test('cron tick：上次健檢超過一個週期 → 再跑一次', async () => 
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,NOW() - INTERVAL '8 days',NOW())");
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-17T15:00:00.000Z',NOW())");
   runner.runAudit.mockClear();
   cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z'));
   cronModule.startCron();
