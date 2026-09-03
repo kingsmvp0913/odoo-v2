@@ -1179,9 +1179,37 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-thread .ui-next-source-trigger,
 .ui-next-composer .ui-next-chip-static,
 .ui-next-thread .ui-next-chip-static{font-size:11px}
+
+/* AI 那側的內容原本撐滿整個文字欄，右緣直接貼上對話欄邊界；使用者氣泡那側有 35px 內縮，
+   兩邊看起來一邊懸空、一邊貼牆。收到 95%，右緣就落在與氣泡右緣同一條線附近。
+   ⚠ 收在 article 上（不是內層 div）：頭像在第 1 欄，只收內容欄會讓時間／附件列跟不上。 */
+.ui-next-conv-list article.ai{width:95%}
+
+/* 頂欄的背景板：按鈕上下各只有 1px／0px，整條看起來是硬塞進框裡的。
+   padding-top 8 給上緣，padding-bottom 24+8 給下緣——⚠ ::after 的 bottom 仍是 24px，
+   多出來的 8px 落在框內，框與底下內容的距離不變。 */
+.ui-next-task-topbar{padding-top:8px;padding-bottom:32px}
+/* 上方不要圓角：頂欄 sticky 在頁面最上緣，圓角在那裡沒有東西可以襯，只剩兩個缺口。 */
+.ui-next-task-topbar::after{border-radius:0 0 16px 16px}
+
 /* 側欄的任務清單沿用專案對話那組樣式；只補兩件事：
    1) 需回覆的那幾筆用亮色標出來——不標的話「排最前面」在畫面上看不出來。
    2) 平板寬度的側欄是純圖示（.ui-next-projects 已被藏起來），這一塊要一起藏。 */
 .ui-next-sidebar-tasks .ui-next-chat-row.is-need > button:first-child{color:var(--sidebar-active);font-weight:500}
 @media(min-width:768px) and (max-width:1199px){.ui-next-sidebar-tasks{display:none}}
 
+/* ── 把中間看得見的高度還回來 ────────────────────────────────────────────────
+   對話框（三處：新對話 composer／chat／任務動作面板）與任務頂欄的留白全面收一階。
+   量到的：任務面板 162px（其中真正在用的只有 44px 輸入格），頂欄 73px。 */
+/* 任務動作面板：列距 10→6、輸入格下緣 12→8。⚠ padding-top 不動（維持 9px）——
+   標題列是 sticky 且用 margin:-12px 咬住框頂，改上緣它會跟著跑出框外。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action{gap:6px;padding-bottom:8px}
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-action-foot{margin-top:4px}
+/* 輸入格改成一行起跳、打字時由 autoResize 撐高（見 TaskDetail.js 的 messageInput）。
+   原本 44px 是固定值：不打字時空一半，打長了又只能在小窗裡捲。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action textarea{min-height:32px}
+/* 三處 composer 的底排下緣一起收（14→9）：按鈕本身已有 36px 高，下面再留 14px
+   等於整條工具列浮在空白上。 */
+.ui-next-composer,.ui-next-thread-composer{padding-bottom:9px}
+/* 頂欄：上緣 8→5、下緣同步（32→29，::after 的 bottom 仍是 24px，框與內容的距離不變）。 */
+.ui-next-task-topbar{padding-top:5px;padding-bottom:29px}

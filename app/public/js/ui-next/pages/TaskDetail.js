@@ -488,6 +488,9 @@
           this.newMessageText = '';
           this.newMessageFiles = [];
           if (this.$refs.messageFileInput) this.$refs.messageFileInput.value = '';
+          // autoResize 寫的是 inline height：清空文字它不會自己縮，欄位會一直停在
+          // 上一則留言撐開的高度。清掉 inline 值讓它退回 CSS 的 min-height。
+          if (this.$refs.messageInput) this.$refs.messageInput.style.height = '';
           await this.loadTaskMessages();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.sendingMessage = false; }
@@ -1269,7 +1272,11 @@
 <!-- 執行中卻被別張任務的同步衝突擋住：狀態沒變（仍是分析中），原因不秀出來就會靜默卡好幾天。
      只認 sync_wait，避免把「分診中」等狀態殘留的上次停下原因也當成當前錯誤秀出來。 -->
 <p v-if="task.blocker_type==='sync_wait'&&task.blocker_content" class="ui-next-error-text">{{ task.blocker_content }}</p>
-<textarea v-model="newMessageText" placeholder="新增留言…可直接貼上截圖" @keydown.enter.exact.prevent="sendTaskMessage">
+<!-- ref＋autoResize：這一格原本是固定高，多行留言只能在一個小窗裡捲。ref 是給送出後
+     還原高度用的（autoResize 寫的是 inline height，清空文字它不會自己縮回去）。 -->
+<!-- rows="1"：HTML 預設是 2，會讓空欄位固定佔兩行（39px）比 min-height 還高，
+     一打字反而被 autoResize 縮回 32px，看起來像跳了一下。 -->
+<textarea ref="messageInput" rows="1" v-model="newMessageText" placeholder="新增留言…可直接貼上截圖" @keydown.enter.exact.prevent="sendTaskMessage" @input="autoResize">
 </textarea>
 <!-- 附件與回寫收進底排（同人工審核那一關、同聊天頁的 composer）：原本「附加檔案」是一條
      滿寬的虛線放置區、回寫勾選又獨佔一行，兩者加起來佔掉面板一半的高度。
