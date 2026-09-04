@@ -21,6 +21,11 @@ jest.mock('../pipeline/health-check-runner', () => ({
   auditWindowStart: jest.fn().mockResolvedValue(new Date(Date.now() - 86400000)),
   resumeInterruptedRuns: jest.fn().mockResolvedValue(0)
 }));
+// Task 7.3：健檢跑完（runAudit 的 promise chain 尾端）會觸發夜間批次。它自己有完整的保險絲
+// （維護旗標／token 預算／跑道上限／drain timeout），測試只驗「有沒有被觸發、帶了什麼參數」。
+jest.mock('../pipeline/nightly-fix', () => ({
+  runNightlyFix: jest.fn().mockResolvedValue({ attempted: 0, applied: 0, skipped: 0 })
+}));
 
 let dbModule, cronModule, notifyModule;
 let userId;
@@ -316,33 +321,33 @@ test('尚未到預定關機時刻 → 不關機', async () => {
 // 意圖：健檢原本只有 admin 手動觸發，而上線後從沒被按過一次（run#1 是平台史上第一次執行）。
 // 再好的診斷不跑就沒有價值。節流以 DB 的 started_at 為準而非行程內變數——server 常重啟，
 // 用記憶體節流會變成「每次重啟後不久又跑一次」，而一次健檢要燒 20+ 個 opus。
-test('健檢固定臺灣時間 23:00，手動全平台健檢不會帶偏排程', async () => {
+test('健檢固定臺灣時間 22:00，手動全平台健檢不會帶偏排程', async () => {
   await dbModule.query('DELETE FROM health_check_runs');
-  const beforeTarget = new Date('2026-08-25T14:00:00.000Z'); // 臺灣時間 22:00
+  const beforeTarget = new Date('2026-08-25T13:00:00.000Z'); // 臺灣時間 21:00
   let schedule = await cronModule.getHealthCheckSchedule(beforeTarget);
-  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T15:00:00.000Z' });
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T14:00:00.000Z' });
 
   // started_by 有值是 admin 手動執行，必須忽略，否則每次人工健檢又會重設排程。
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, started_by, created_at) VALUES ('done',1,$1,'2026-08-25T14:30:00.000Z')", [userId]);
+    "INSERT INTO health_check_runs (status, window_days, started_by, created_at) VALUES ('done',1,$1,'2026-08-25T13:30:00.000Z')", [userId]);
   schedule = await cronModule.getHealthCheckSchedule(beforeTarget);
-  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T15:00:00.000Z', lastRunAt: null });
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T14:00:00.000Z', lastRunAt: null });
 
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',1,'2026-08-25T15:01:00.000Z')");
-  schedule = await cronModule.getHealthCheckSchedule(new Date('2026-08-26T14:00:00.000Z'));
-  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-26T15:00:00.000Z' });
+    "INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',1,'2026-08-25T14:01:00.000Z')");
+  schedule = await cronModule.getHealthCheckSchedule(new Date('2026-08-26T13:00:00.000Z'));
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-26T14:00:00.000Z' });
 });
 
-// 大健檢的節奏判斷。每天只有一個 23:00 slot，所以「這一天跑哪一種」就等於「大健檢當天不跑日健檢」——
-// 判斷錯不會有任何徵狀：畫面上照樣是一輪健檢，只是視窗與趨勢比對靜默變成另一種。
+// 大健檢的節奏判斷。每天只有一個 HEALTH_CHECK_HOUR slot，所以「這一天跑哪一種」就等於「大健檢
+// 當天不跑日健檢」——判斷錯不會有任何徵狀：畫面上照樣是一輪健檢，只是視窗與趨勢比對靜默變成另一種。
 describe('healthCheckCadence', () => {
   test('平日 → 增量（daily）', () => {
-    expect(cronModule.healthCheckCadence(new Date('2026-08-25T15:00:00.000Z'))).toBe('daily'); // 臺灣週二 23:00
+    expect(cronModule.healthCheckCadence(new Date('2026-08-25T14:00:00.000Z'))).toBe('daily'); // 臺灣週二 22:00
   });
 
   test('週日 → 回看 7 天的週健檢', () => {
-    expect(cronModule.healthCheckCadence(new Date('2026-08-30T15:00:00.000Z'))).toBe('weekly'); // 臺灣週日 23:00
+    expect(cronModule.healthCheckCadence(new Date('2026-08-30T14:00:00.000Z'))).toBe('weekly'); // 臺灣週日 22:00
   });
 
   // 同時驗時區：這個時刻在 UTC 還是 8/31，只有換算到臺灣才是 9/1。用本機時區判會整整差一天，
@@ -352,7 +357,7 @@ describe('healthCheckCadence', () => {
   });
 
   test('1 號剛好是週日 → 只跑月健檢，大的吃掉小的', () => {
-    expect(cronModule.healthCheckCadence(new Date('2026-11-01T15:00:00.000Z'))).toBe('monthly'); // 臺灣 11/1 週日
+    expect(cronModule.healthCheckCadence(new Date('2026-11-01T14:00:00.000Z'))).toBe('monthly'); // 臺灣 11/1 週日
   });
 });
 
@@ -366,9 +371,9 @@ test('cron tick：週日 → 建 weekly run，視窗固定回看 7 天且節奏�
     // ⚠ 健檢排程的 fixture 一律用**絕對時間字串**，不要用 NOW() - INTERVAL。程式的「現在」
     // 被 _setClockForTesting 凍住、DB 的 NOW() 沒有——兩邊一混，真實日期往前走就會一支一支
     // 轉紅，且看起來像程式壞了（實測 a2e641a6 當天就紅）。getHealthCheckSchedule 只看 created_at。
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',1,'2026-08-29T15:00:00.000Z','2026-08-29T15:00:00.000Z')");
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',1,'2026-08-29T14:00:00.000Z','2026-08-29T14:00:00.000Z')");
   runner.runAudit.mockClear();
-  cronModule._setClockForTesting(() => new Date('2026-08-30T15:00:00.000Z')); // 臺灣週日 23:00
+  cronModule._setClockForTesting(() => new Date('2026-08-30T14:00:00.000Z')); // 臺灣週日 22:00
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
@@ -388,7 +393,7 @@ test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
     'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=0, service_sync_interval=0'
   );
   runner.runAudit.mockClear();
-  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z')); // 臺灣時間 23:00
+  cronModule._setClockForTesting(() => new Date('2026-08-25T14:00:00.000Z')); // 臺灣時間 22:00
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
@@ -397,6 +402,51 @@ test('cron tick：從沒跑過健檢 → 建立 run 並啟動', async () => {
   expect(rows).toHaveLength(1);
   expect(rows[0].status).toBe('running');
   expect(runner.runAudit).toHaveBeenCalled();
+});
+
+// Task 7.3：健檢跑完（不論成功失敗）要接著觸發夜間批次。runNightlyFix 自己重撈 DB 裡所有
+// approved 候選、不是只吃這輪 runAudit 的產出，所以兩者刻意用 .finally 串接、不用序列化 await
+// ——cron tick 本身不該被 20+ 個 opus 的健檢卡住，nightly-fix 的觸發要接在 runAudit 的
+// promise chain 尾端而非 tick 主體內。startedBy 傳 null：系統自動排程觸發，比照
+// health_check_runs.started_by 同一套「NULL＝自動、有值＝人工」的既有慣例。
+test('cron tick：健檢跑完（成功）→ 觸發夜間批次，startedBy 為 null', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  const nightlyFix = require('../pipeline/nightly-fix');
+  await dbModule.query('DELETE FROM health_check_runs');
+  runner.runAudit.mockClear();
+  runner.runAudit.mockResolvedValueOnce(undefined);
+  nightlyFix.runNightlyFix.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-08-25T14:00:00.000Z')); // 臺灣時間 22:00
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); // 排空 runAudit 的 .finally 微任務
+  } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+
+  expect(nightlyFix.runNightlyFix).toHaveBeenCalledWith({ startedBy: null });
+});
+
+// 健檢失敗不能連坐夜間批次：runNightlyFix 撈的是候選池全貌，跟這一輪健檢的成敗無關，沒有
+// 理由因為當晚健檢掛了就連帶跳過整條修正通道（候選可能是前幾晚累積、或人工手動核准的）。
+test('cron tick：健檢跑完（失敗）→ 仍觸發夜間批次，不因健檢掛掉而連坐跳過', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  const nightlyFix = require('../pipeline/nightly-fix');
+  await dbModule.query('DELETE FROM health_check_runs');
+  runner.runAudit.mockClear();
+  runner.runAudit.mockRejectedValueOnce(new Error('健檢炸了'));
+  nightlyFix.runNightlyFix.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-08-25T14:00:00.000Z'));
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+
+  expect(nightlyFix.runNightlyFix).toHaveBeenCalledWith({ startedBy: null });
 });
 
 // 不疊加：上一輪還在跑就跳過。健檢是 20+ 個 opus 的長工，重複啟動會讓同一份診斷跑兩遍。
@@ -422,11 +472,11 @@ test('cron tick：最後一筆是單張任務健檢 → 平台健檢照樣依平
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-16T15:00:00.000Z','2026-08-16T15:00:00.000Z')");
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-16T14:00:00.000Z','2026-08-16T14:00:00.000Z')");
   await dbModule.query(
     "INSERT INTO health_check_runs (status, window_days, created_at, task_db_id) VALUES ('running',30,NOW(),12345)");
   runner.runAudit.mockClear();
-  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z'));
+  cronModule._setClockForTesting(() => new Date('2026-08-25T14:00:00.000Z'));
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
@@ -455,9 +505,9 @@ test('cron tick：上次健檢超過一個週期 → 再跑一次', async () => 
   const runner = require('../pipeline/health-check-runner');
   await dbModule.query('DELETE FROM health_check_runs');
   await dbModule.query(
-    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-17T15:00:00.000Z',NOW())");
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-17T14:00:00.000Z',NOW())");
   runner.runAudit.mockClear();
-  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z'));
+  cronModule._setClockForTesting(() => new Date('2026-08-25T14:00:00.000Z'));
   cronModule.startCron();
   const tick = nodeCron.schedule.mock.calls.at(-1)[1];
   try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
