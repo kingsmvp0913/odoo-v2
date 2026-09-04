@@ -381,30 +381,89 @@ describe('一次性遷移：health_check_findings.status 改預設核准', () =>
     expect(f.status).toBe('approved');
   });
 
+  // 這個轉換只能真的發生一次，故需要獨立的 pg-mem 連線：外層 dbModule 的連線在 beforeAll 就已經
+  // 跑過 migrate()（那時沒有 pending 資料），若沿用同一條連線，這裡插入的 pending 資料會遇到旗標
+  // 已被消耗、永遠轉不了正。獨立連線讓「插入舊資料」發生在該連線的第一次 migrate() 之前，才能正確
+  // 驗證「第一次轉正」這個語意。
+  //
+  // 表本身也是靠 migrate() 建立，第一次呼叫必然會順便消耗旗標（此時無資料，UPDATE 影響 0 列）——
+  // 故第一次呼叫後手動刪掉 migration_flags 那一列，模擬「這個轉換的 key 尚未被任何一次 migrate()
+  // 消耗過」的資料庫狀態，才能在插入舊資料後驗證「真正的第一次轉正」會不會發生。
   test('既有 pending 的 proposal 被一次性轉成 approved；agent／signal 的 pending 不受影響', async () => {
-    const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
-    const insertPending = async (kind) => {
+    const { newDb } = require('pg-mem');
+    const freshDb = newDb();
+    const { Pool } = freshDb.adapters.createPg();
+    const freshPool = new Pool();
+    dbModule._setPoolForTesting(freshPool);
+    try {
+      await dbModule.migrate(); // 只為了建表；順帶消耗旗標，下面立刻復原
+      await dbModule.query(
+        "DELETE FROM migration_flags WHERE key='health_check_findings_pending_to_approved'"
+      );
+
+      const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+      const insertPending = async (kind) => {
+        const { rows: [f] } = await dbModule.query(
+          `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+           VALUES ($1,'__audit__','舊資料',$2,$3,'pending') RETURNING id`,
+          [run.id, kind === 'proposal' ? 'medium' : 'ok', kind]
+        );
+        return f.id;
+      };
+      const proposalId = await insertPending('proposal');
+      const agentId = await insertPending('agent');
+      const signalId = await insertPending('signal');
+
+      await dbModule.migrate(); // 這條連線的第一次一次性遷移
+
+      // 不用 WHERE id = ANY($1)：pg-mem 對 SERIAL PK 的 int 陣列型別調解會查不到既有列
+      // （testing.md #12），逐筆查詢繞開這個限制。
+      const statusOf = async (id) => {
+        const { rows: [r] } = await dbModule.query('SELECT status FROM health_check_findings WHERE id = $1', [id]);
+        return r.status;
+      };
+      expect(await statusOf(proposalId)).toBe('approved');   // 只有 proposal 被轉正
+      expect(await statusOf(agentId)).toBe('pending');       // agent 不動
+      expect(await statusOf(signalId)).toBe('pending');      // signal 不動
+    } finally {
+      dbModule._setPoolForTesting(null);
+    }
+  });
+
+  // 缺陷回歸：nightly-fix 的機器退場（連續失敗 3 次，見 retireToHuman）會把提案 status 改回
+  // 'pending' 且 verdict_note 帶「自動退場：」前綴。若一次性轉正只靠資料狀態判斷冪等，下次
+  // server 重啟時這條退場的提案會被誤判成「還沒轉正」而翻回 approved——等於退場機制被繞過，
+  // 提案每晚重新變回候選、無限重燒 NIGHTLY_FIX_MAX 額度。這裡驗證：第二次以後的 migrate()，
+  // 即使 DB 裡出現新的 status='pending' AND kind='proposal' 列，也絕對不能再被轉正。
+  test('一次性遷移只跑一次：機器退場產生的新 pending proposal 在後續 migrate() 不會被翻回 approved', async () => {
+    const { newDb } = require('pg-mem');
+    const freshDb = newDb();
+    const { Pool } = freshDb.adapters.createPg();
+    const freshPool = new Pool();
+    dbModule._setPoolForTesting(freshPool);
+    try {
+      await dbModule.migrate(); // 第一次：此時無資料，轉換旗標在此消耗
+
+      const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
       const { rows: [f] } = await dbModule.query(
         `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
-         VALUES ($1,'__audit__','舊資料',$2,$3,'pending') RETURNING id`,
-        [run.id, kind === 'proposal' ? 'medium' : 'ok', kind]
+         VALUES ($1,'__audit__','曾核准後又退場','medium','proposal','pending') RETURNING id`,
+        [run.id]
       );
-      return f.id;
-    };
-    const proposalId = await insertPending('proposal');
-    const agentId = await insertPending('agent');
-    const signalId = await insertPending('signal');
+      // 模擬 retireToHuman：verdict_note 帶機器退場前綴、decided_by/decided_at 清空
+      await dbModule.query(
+        "UPDATE health_check_findings SET verdict_note='自動退場：連續 3 次修復失敗' WHERE id=$1",
+        [f.id]
+      );
 
-    await dbModule.migrate(); // 冪等，重跑會套用一次性遷移
+      await dbModule.migrate(); // 模擬下次 server 重啟（第二次以後）
 
-    // 不用 WHERE id = ANY($1)：pg-mem 對 SERIAL PK 的 int 陣列型別調解會查不到既有列
-    // （testing.md #12），逐筆查詢繞開這個限制。
-    const statusOf = async (id) => {
-      const { rows: [r] } = await dbModule.query('SELECT status FROM health_check_findings WHERE id = $1', [id]);
-      return r.status;
-    };
-    expect(await statusOf(proposalId)).toBe('approved');   // 只有 proposal 被轉正
-    expect(await statusOf(agentId)).toBe('pending');       // agent 不動
-    expect(await statusOf(signalId)).toBe('pending');      // signal 不動
+      const { rows: [after] } = await dbModule.query(
+        'SELECT status FROM health_check_findings WHERE id=$1', [f.id]
+      );
+      expect(after.status).toBe('pending'); // 必須仍是 pending，不得被翻回 approved
+    } finally {
+      dbModule._setPoolForTesting(null);
+    }
   });
 });

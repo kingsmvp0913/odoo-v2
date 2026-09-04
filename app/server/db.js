@@ -560,6 +560,16 @@ async function migrate() {
       created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+
+    // 一次性 data migration 的「已執行」旗標。純資料狀態式的冪等判斷（如「還有 pending 列就跑」）
+    // 在下游流程會把狀態改回同一個值時失效——一次性轉換就會被誤判成「還沒做過」而重跑
+    // （見 health_check_findings.status 那筆：nightly-fix 的機器退場把 status 改回 pending，
+    // 每次 server 重啟又被 migrate 轉回 approved，退場機制形同被繞過）。
+    // 用 key 記錄「這個轉換已完成」本身的語意，不去猜資料列有沒有被別的路徑碰過。
+    `CREATE TABLE IF NOT EXISTS migration_flags (
+      key        TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -977,12 +987,23 @@ async function migrate() {
 
   // 健檢提案改預設核准（Phase 7）：既有資料庫的欄位早在 colMigrations 的 ADD COLUMN 就建立過，
   // 上面改的字面值 DEFAULT 'approved' 對它不生效（db-schema.md #40）——這裡明確 SET DEFAULT
-  // 補上「新產生的列」路徑；已存在的 pending 提案另外用一次性 UPDATE 轉正（只轉 kind='proposal'，
-  // agent／signal／summary／note 本來就不進修正通道，碰它們只會製造雜訊）。
+  // 補上「新產生的列」路徑，這行本身冪等、每次啟動都跑沒問題。
   await query("ALTER TABLE health_check_findings ALTER COLUMN status SET DEFAULT 'approved'").catch(() => {});
-  await query(
-    "UPDATE health_check_findings SET status='approved' WHERE status='pending' AND kind='proposal'"
-  ).catch(() => {});
+
+  // 已存在的 pending 提案另外用一次性 UPDATE 轉正（只轉 kind='proposal'，agent／signal／summary／note
+  // 本來就不進修正通道，碰它們只會製造雜訊）——但這個轉換**只能真的做一次**，不能用「還有 pending
+  // 列就跑」判斷：nightly-fix 的機器退場（連續失敗 3 次）會把提案 status 改回 'pending'
+  // （見 retireToHuman），若這裡仍用資料狀態當冪等依據，退場的提案會在下次 server 重啟時被這段
+  // 誤判成「還沒轉正」而翻回 approved，等於退場機制被繞過、無限重燒修復額度。
+  // 用 migration_flags 記錄「這個轉換本身已跑過」，第二次以後即使有 pending proposal 也不再碰。
+  const { rows: [flagDone] } = await query(
+    "INSERT INTO migration_flags (key) VALUES ('health_check_findings_pending_to_approved') ON CONFLICT DO NOTHING RETURNING key"
+  );
+  if (flagDone) {
+    await query(
+      "UPDATE health_check_findings SET status='approved' WHERE status='pending' AND kind='proposal'"
+    ).catch(() => {});
+  }
 
   // VPN 憑證上移專案層（同專案共用一條隧道）。獨立模組，見 lib/vpn-migrate.js 的註解。
   // 這是迴圈跑多筆 UPDATE、沒包交易，中途失敗可能半套（部分連線埠改到 22000 系列、部分留在
