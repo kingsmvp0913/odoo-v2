@@ -570,6 +570,126 @@ async function migrate() {
       key        TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+
+    // ── Odoo 認證考試題庫（見 docs/superpowers/specs/2026-09-04-odoo-exam-platform-design.md）──
+    // 建表順序不可調換：外鍵要求被引用的表先建。
+
+    // 一次考試＝一份題庫。失敗的留著標 failed 不刪——直接消失的話
+    // 使用者不知道是哪一步壞的，也不知道已跑完的部分還能重用。
+    `CREATE TABLE IF NOT EXISTS exam_banks (
+      id           SERIAL PRIMARY KEY,
+      label        TEXT NOT NULL,
+      odoo_version TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'building',  -- building | ready | failed
+      taken_at     DATE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // 唯一的題，跨考次合併。去重鍵含 odoo_version：同一題在 17 與 19 的答案
+    // 可能不同，17 版考過的題不得汙染 19 版題庫。
+    // confidence 100 專屬於官方確認（official_from 非空），其餘來源上限 99——
+    // 否則 /api/exam/lookup 的「只回 100%」規則就失去意義。
+    `CREATE TABLE IF NOT EXISTS exam_items (
+      id              SERIAL PRIMARY KEY,
+      odoo_version    TEXT NOT NULL,
+      fingerprint     TEXT NOT NULL,
+      question_en     TEXT NOT NULL,
+      question_zh     TEXT,
+      options         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      qtype           TEXT NOT NULL DEFAULT 'single',
+      section_title   TEXT,
+      answer_official TEXT[],
+      official_from   TEXT,                            -- manual | section-all-correct
+      confidence      INT,
+      confidence_why  TEXT,
+      calibrated      BOOLEAN NOT NULL DEFAULT FALSE,
+      seen_count      INT NOT NULL DEFAULT 1,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (odoo_version, fingerprint)
+    )`,
+
+    // 某次考試裡這題的一次出現。四種答案不得合併——曾把 final 填進 official，
+    // 整張表寫著「正確率 93%」，但那個數字不是那個意思。
+    `CREATE TABLE IF NOT EXISTS exam_attempts (
+      id           SERIAL PRIMARY KEY,
+      item_id      INTEGER NOT NULL REFERENCES exam_items(id) ON DELETE CASCADE,
+      bank_id      INTEGER NOT NULL REFERENCES exam_banks(id) ON DELETE CASCADE,
+      page         TEXT,
+      no           INTEGER,
+      answer_their TEXT[],
+      answer_final TEXT[],
+      responder    TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // 官方章節結果。存題數不存百分比——8 題的 63% 到底是 5 題還是 5.04 題，
+    // 記百分比永遠說不清楚。這是信心度校準的唯一硬事實來源。
+    `CREATE TABLE IF NOT EXISTS exam_sections (
+      id         SERIAL PRIMARY KEY,
+      bank_id    INTEGER NOT NULL REFERENCES exam_banks(id) ON DELETE CASCADE,
+      title      TEXT NOT NULL,
+      n          INTEGER NOT NULL,
+      correct    INTEGER NOT NULL,
+      incorrect  INTEGER NOT NULL,
+      unanswered INTEGER NOT NULL DEFAULT 0,
+      partial    INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (bank_id, title)
+    )`,
+
+    // 每次模型判斷一筆。kind='adversary' 是新流程；blind_r1/blind_r2 只在
+    // 匯入舊題庫時產生，保留不刪——那是唯一能對照「舊盲判 vs 新對立審查」的基準。
+    `CREATE TABLE IF NOT EXISTS exam_verdicts (
+      id             SERIAL PRIMARY KEY,
+      item_id        INTEGER NOT NULL REFERENCES exam_items(id) ON DELETE CASCADE,
+      attempt_id     INTEGER REFERENCES exam_attempts(id) ON DELETE SET NULL,
+      kind           TEXT NOT NULL,                    -- adversary | blind_r1 | blind_r2
+      refuted        BOOLEAN,
+      correct_answer TEXT[],
+      confidence     INTEGER,
+      reason         TEXT,
+      model          TEXT NOT NULL,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // 硬證據。kind='source' 的 ref 一律存相對於 data/odoo-core/<version>/ 的路徑，
+    // 不得存絕對路徑。信心度的分層靠這張表區分「找得到碼」與「只有模型自評」。
+    `CREATE TABLE IF NOT EXISTS exam_evidence (
+      id         SERIAL PRIMARY KEY,
+      verdict_id INTEGER NOT NULL REFERENCES exam_verdicts(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL,                        -- source | docs
+      ref        TEXT NOT NULL,
+      excerpt    TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // 建題庫工作狀態。**進度必須存在 DB 不能只靠 socket 廣播**：廣播只送給當下開著
+    // 頁面的人，重整一次前端記憶體就空了、畫面上工作就消失，使用者以為沒反應再按
+    // 一次撞 409，於是認為「建不了題庫」，但第一次早就在跑了。
+    // 同時這張表讓平台重啟後認得出被殺掉的工作（標 interrupted）並續跑。
+    `CREATE TABLE IF NOT EXISTS exam_jobs (
+      id          SERIAL PRIMARY KEY,
+      bank_id     INTEGER NOT NULL REFERENCES exam_banks(id) ON DELETE CASCADE,
+      status      TEXT NOT NULL,                       -- running | done | failed | interrupted
+      phase       TEXT,
+      pages_done  INTEGER NOT NULL DEFAULT 0,
+      pages_total INTEGER,
+      pid         INTEGER,
+      started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // Odoo 官方繁中術語表，從 data/odoo-core/<ver>/**/i18n/zh_TW.po 抽。
+    // 一個英文可能對到多個中文（實測 473 條），全部收下用 hit_count 排序。
+    `CREATE TABLE IF NOT EXISTS exam_glossary (
+      id           SERIAL PRIMARY KEY,
+      odoo_version TEXT NOT NULL,
+      term_en      TEXT NOT NULL,
+      term_zh      TEXT NOT NULL,
+      modules      TEXT[],
+      hit_count    INTEGER NOT NULL DEFAULT 1,
+      UNIQUE (odoo_version, term_en, term_zh)
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
