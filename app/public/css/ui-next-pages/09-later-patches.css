@@ -1340,3 +1340,4 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 }
 .ui-next-exam-excerpt { margin-left: 6px; color: var(--text-muted); }
 .ui-next-exam-warn { margin-top: 8px; color: var(--danger); font-size: var(--fs-sm); }
+.ui-next-exam-ver { color: var(--text-muted); font-size: var(--fs-sm); }

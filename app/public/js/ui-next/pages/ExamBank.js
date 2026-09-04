@@ -111,6 +111,11 @@
       <div class="topbar ui-next-admin-head">
         <h1>認證題庫</h1>
         <div class="ui-next-admin-head-actions">
+          <!-- 只有一份題庫時 select 不顯示，但版本仍要看得見：同一題在 Odoo 17
+               與 19 的答案可能不同，不知道自己在看哪個版本會誤用。 -->
+          <span v-if="bank && banks.length <= 1" class="ui-next-exam-ver">
+            {{ bank.label }} · Odoo {{ bank.odoo_version }}
+          </span>
           <select v-if="banks.length > 1" v-model="bankId" @change="loadBank" class="ui-next-exam-bank-pick">
             <option v-for="b in banks" :key="b.id" :value="b.id">{{ b.label }}（Odoo {{ b.odoo_version }}）</option>
           </select>
