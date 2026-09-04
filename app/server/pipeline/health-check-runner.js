@@ -186,15 +186,44 @@ async function insertFinding(runId, row) {
   // 落 pending 才是誠實的初始狀態，人要核准仍可以核准（核准後才變 approved，屆時才真的會被撈）。
   const auto = row.kind === 'proposal' && inAutoFixScope(row.layer || null, row.severity || null);
   const status = auto ? 'approved' : 'pending';
-  await query(
+  const { rows: [f] } = await query(
     `INSERT INTO health_check_findings
        (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
         kind, layer, evidence, target_metric, metric_baseline, risk_if_wrong, status)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12,$13)`,
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [runId, AUDIT_AGENT, row.label || '系統健檢', row.diagnosis, row.severity, row.rationale || null,
      row.kind, row.layer || null, row.evidence || null, row.target_metric || null, row.metric_baseline || null,
      row.risk_if_wrong || null, status]
   );
+  if (auto) await openFeedbackForFinding(f.id, row);
+}
+
+// 中等以上的提案同時在「意見回饋管理」開一筆，預設已核准。那一頁是唯一的待辦收斂處：使用者提的
+// 意見與健檢挖出來的問題最後都要有人決定做不做，分兩個畫面管等於要記得兩個地方都要看。
+//
+// user_id 留 NULL＝提交者是 AI 健檢（前端據此顯示，見 AdminFeedback.js）。
+// triage_* 直接用健檢的產出填好：health-auditor 的輸出本來就是「標題／細節／根因層／建議做法」
+// 那個形狀，跟 feedback-triage 要翻出來的東西一模一樣，再花一次 opus 去翻是白燒。
+// finding_id 連回來源，也是「這條已經開過單」的唯一憑據——nightly-fix 的 fetchHealthCandidates
+// 靠它排除掉已開單的提案，否則同一條會被當成兩個候選跑兩遍。
+async function openFeedbackForFinding(findingId, row) {
+  try {
+    // 先查再插，不用 `INSERT ... SELECT ... WHERE NOT EXISTS` 的單句寫法：pg-mem 解析不了
+    // 帶參數的 EXISTS（實測 `function exists(integer[]) does not exist`），整支測試會紅在
+    // 一個與正式環境無關的地方。健檢一次只跑一輪，這裡沒有並發插入的競態。
+    const { rows: dup } = await query('SELECT 1 FROM feedback WHERE finding_id = $1 LIMIT 1', [findingId]);
+    if (dup.length) return;
+    await query(
+      `INSERT INTO feedback (user_id, content, status, triage_title, triage_detail, triage_layer,
+                             triage_action, finding_id)
+       VALUES (NULL, $1, 'approved', $2, $3, $4, $5, $6)`,
+      [row.diagnosis, row.label || '系統健檢', row.diagnosis, row.layer || null,
+       row.rationale || null, findingId]
+    );
+  } catch (err) {
+    // 開單失敗不能讓整輪健檢報廢——提案本身已經寫進 findings 了，人還是看得到。
+    console.error('[HEALTH-CHECK] 健檢提案開單失敗：', err.message);
+  }
 }
 
 // 趨勢比對的資料塊：把「上一期同長度視窗」的量體與各關指標一起餵進去，讓 agent 回答得了

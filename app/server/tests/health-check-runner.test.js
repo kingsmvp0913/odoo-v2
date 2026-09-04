@@ -577,3 +577,49 @@ test('已退役的逐關診斷歷史列 → 收成 error 並寫明退役，不�
   expect(r.error).toContain('退役');
   expect(mockRunClaude).not.toHaveBeenCalled();  // 不得因此燒掉任何一次模型呼叫
 });
+
+// --- 健檢提案同時在「意見回饋管理」開一筆 ---
+// 那一頁是唯一的待辦收斂處：使用者提的意見與健檢挖出來的問題最後都要有人決定做不做，
+// 分兩個畫面管等於要記得兩個地方都要看。
+
+test('中等以上的提案 → 意見回饋管理開一筆，預設已核准、提交者留空代表 AI 健檢', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<result>' + JSON.stringify({ severity: 'medium', proposals: [
+      { title: '某個要修的東西', detail: '細節', layer: 'code', action: '這樣改',
+        target_metric: 'm', metric_baseline: 'b', risk_if_wrong: '會壞掉這個' }
+    ] }) + '</result>',
+    usage: { input_tokens: 1 }, durationMs: 10
+  });
+  const runId = await newAuditRun();
+
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000) });
+
+  const { rows: [fb] } = await dbModule2.query(
+    "SELECT user_id, status, triage_title, triage_layer, finding_id FROM feedback ORDER BY id DESC LIMIT 1");
+  expect(fb.status).toBe('approved');       // 預設就是核准，不必再按一次
+  expect(fb.user_id).toBeNull();            // 提交者＝AI 健檢
+  expect(fb.triage_title).toBe('某個要修的東西');
+  expect(fb.triage_layer).toBe('code');     // 健檢的產出直接當翻譯結果，不再燒一次 triage
+  expect(fb.finding_id).toBeTruthy();       // 連得回來源提案
+});
+
+test('低嚴重度的提案不開單：那是「放著也不會怎樣」，開單等於逼人處理', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<result>' + JSON.stringify({ severity: 'low', proposals: [
+      { title: '無關痛癢', detail: 'd', layer: 'code', action: 'a',
+        target_metric: 'm', metric_baseline: 'b' }
+    ] }) + '</result>',
+    usage: { input_tokens: 1 }, durationMs: 10
+  });
+  const before = await dbModule2.query('SELECT COUNT(*)::int AS n FROM feedback');
+  const runId = await newAuditRun();
+
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000) });
+
+  const after = await dbModule2.query('SELECT COUNT(*)::int AS n FROM feedback');
+  expect(after.rows[0].n).toBe(before.rows[0].n);
+  // 正向錨：提案本身有落地，只是沒開單——不然這支測的可能是「整輪都沒跑」
+  const { rows: [p] } = await dbModule2.query(
+    "SELECT status FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
+  expect(p.status).toBe('pending');
+});

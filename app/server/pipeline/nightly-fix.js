@@ -121,6 +121,13 @@ async function fetchHealthCandidates() {
             rationale AS action, risk_if_wrong, target_metric, metric_baseline, evidence, created_at
        FROM health_check_findings
       WHERE status = 'approved' AND kind = 'proposal'
+        -- 已經在意見回饋管理開過單的提案不再單獨當候選：那一筆 feedback 才是它的管理面
+        -- （見 health-check-runner.js 的 openFeedbackForFinding）。兩邊都撈的話同一條會被
+        -- 當成兩個候選跑兩遍——重付一次 triage、重跑兩次全套測試、還可能各自合併一次。
+        -- ⚠ 用 NOT IN 而非 NOT EXISTS：pg-mem 解析不了帶參數的相關子查詢（rules/testing.md #14）。
+        -- 子查詢的 IS NOT NULL 不可省——真 PG 裡 NOT IN 的清單只要含一個 NULL，整個條件恆為
+        -- UNKNOWN，這個 WHERE 會靜默地把所有候選都篩掉，而且測試不會紅。
+        AND id NOT IN (SELECT finding_id FROM feedback WHERE finding_id IS NOT NULL)
       ORDER BY created_at ASC`
   );
   const kept = [];

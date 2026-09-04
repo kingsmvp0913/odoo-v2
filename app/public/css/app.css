@@ -1063,8 +1063,12 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .hc-page { max-width:1000px }
 /* AdminHealthCheck: 視窗天數設定列（與 .settings-section 併用） */
 .hc-window-row { display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-5) }
-/* AdminHealthCheck: 診斷卡片標題列 */
-.hc-finding-title-row { display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px }
+/* AdminHealthCheck: 提案卡片標題列。第一個子元素是標題（可換行、吃剩下的寬度），其餘都是短標籤
+   （來源／根因層／嚴重度／自動執行時刻）。不釘死的話 flex 會去壓縮標籤，把「平台健檢」折成
+   「平台健／檢」、「中等」折成「中／等」——實測長標題的提案就是這樣。 */
+.hc-finding-title-row { display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px;flex-wrap:wrap }
+.hc-finding-title-row > :first-child { flex:1 1 auto;min-width:0 }
+.hc-finding-title-row > :not(:first-child) { flex:0 0 auto;white-space:nowrap }
 
 /* ── AdminUsers.js ── */
 

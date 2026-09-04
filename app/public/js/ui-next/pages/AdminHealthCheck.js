@@ -79,6 +79,16 @@
       scopeText(r) { return r && r.task_db_id ? ('任務 ' + (r.task_id || r.task_db_id)) : '全平台'; },
       layer(l) { return HC_LAYER[l] || null; },
       kindOf(f) { return f.kind || 'agent'; },
+      // health-auditor 產出的 diagnosis 第一行就是標題本身（agent_label 取自同一句），照原樣印
+      // 會讓每張卡的標題出現兩次。只在「首行與標題完全相同」時去掉，其餘一律原樣保留——
+      // 用猜的（例如砍掉所有首行）會把真正的內文吃掉。
+      bodyOf(f) {
+        const d = String(f.diagnosis || '');
+        const nl = d.indexOf('\n');
+        const first = (nl === -1 ? d : d.slice(0, nl)).trim();
+        if (first && first === String(f.agent_label || '').trim()) return d.slice(nl + 1).replace(/^\s+/, '');
+        return d;
+      },
       // 提案的來源。agent_name 在這張表同時承載「哪一關」與「哪一種非 per-agent 的診斷」：
       // 'feedback' 是 nightly-fix 的 materializeGroup 寫的（使用者意見統整後落地），
       // '__task__' 是單張任務健檢，其餘（含 '__audit__'）都是平台健檢自己挖出來的。
@@ -118,8 +128,6 @@
         if (/^unknown/.test(tr || '')) return 'var(--warning, #d97706)';
         return 'var(--text-muted)';
       },
-      // 每次打開一輪就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
-      // 會有人再按一次而在同一條上開第二個工作區。
       // 提案清單是這一頁的主體，跨輪撈。⚠ 不能用某一輪的 findings 當來源：最後一輪剛好失敗
       // （零 finding）整頁就會顯示「待處理 0 條」，而 DB 裡其實還有待辦——實測 run#19 就是這樣。
       async loadProposals() {
@@ -127,6 +135,8 @@
         catch (e) { showToast(e.message, 'error'); }
         await this.loadFixes();
       },
+      // 每次載入就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
+      // 會有人再按一次而在同一條上開第二個工作區。
       async loadFixes() {
         for (const f of this.proposals) {
           try {
@@ -249,7 +259,7 @@
                 ⏱ <span v-if="autoRunText">{{ autoRunText }} </span>自動執行
               </span>
             </div>
-            <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px;white-space:pre-wrap">{{ f.diagnosis }}</div>
+            <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px;white-space:pre-wrap">{{ bodyOf(f) }}</div>
             <div v-if="f.evidence" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
             <div v-if="f.rationale" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">建議做法：{{ f.rationale }}</div>
             <div v-if="f.target_metric" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">

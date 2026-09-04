@@ -135,7 +135,12 @@
                 <template v-for="r in rows" :key="r.id">
                   <tr>
                     <td data-label="時間" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
-                    <td data-label="提交者">{{ r.user_name || '—' }}</td>
+                    <!-- user_id 為 NULL＝健檢自己開的單（見 health-check-runner.js 的
+                         openFeedbackForFinding）。顯示 '—' 會讓人以為是哪個使用者的帳號被刪了。 -->
+                    <td data-label="提交者">
+                      <span v-if="!r.user_id" class="pill pill-info">AI 健檢</span>
+                      <span v-else>{{ r.user_name || '—' }}</span>
+                    </td>
                     <td data-label="原文" style="font-size:var(--fs-sm)">
                       <span style="white-space:pre-wrap;word-break:break-word">{{ r.content }}</span>
                     </td>
@@ -162,9 +167,12 @@
                     </td>
                     <td data-label="操作">
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <!-- done（已合併）不給再按核准：再按一次會把它塞回 approved，
-                             夜間批次會重跑整條已經做完的鏈。rejected 仍可核准（人工改變心意、重新開放）。 -->
-                        <button v-if="r.status !== 'done'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
+                        <!-- 核准鈕只在「還沒核准」時出現。已經是 approved 還留著它，按下去是把
+                             同一個狀態再寫一次——畫面沒有任何變化，看起來像沒反應／沒存到。
+                             done（已合併）更不能按：會把它塞回 approved，夜間批次重跑整條已經做完的鏈。
+                             rejected 仍可核准（人工改變心意、重新開放）。
+                             駁回鈕的條件不同：已核准但還沒跑的可以反悔擋掉，所以只擋 done。 -->
+                        <button v-if="r.status !== 'approved' && r.status !== 'done'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
                         <button v-if="r.status !== 'done'" class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
                       </div>
                     </td>
