@@ -207,8 +207,8 @@ test('triage 回 understandable:false → 剔除，不進統整', async () => {
   expect(result.attempted).toBe(0);
 });
 
-test('triage 之後 layer=env → 剔除（layer 只有 triage 完才知道，不能在撈候選時就篩）', async () => {
-  await insertFeedback();
+test('triage 之後 layer=env → 立即退場（status=new＋triage_note），不是留在原地不動', async () => {
+  const fbId = await insertFeedback();
   stubTriage('env');
   stubHappyPath();
 
@@ -217,6 +217,33 @@ test('triage 之後 layer=env → 剔除（layer 只有 triage 完才知道，�
   expect(triageOne).toHaveBeenCalled();
   expect(mergeCandidates).not.toHaveBeenCalled();
   expect(result.attempted).toBe(0);
+  // layer=env 是確定性結果（同一份原文不會突然變 code），一次就退場，不佔用重試額度、
+  // 不是靜靜留在 approved 不動——那樣使用者端會永遠停在「已核准」卻什麼都不會發生。
+  const { rows: [fb] } = await dbModule.query(
+    'SELECT status, triage_note, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(fb.status).toBe('new');
+  expect(fb.fix_attempts).toBe(0);
+  expect(fb.triage_note).toContain('layer=env');
+});
+
+test('triage 之後 layer=env → 連跑三晚只付一次 triage 的錢（退場後不再是候選）', async () => {
+  await insertFeedback();
+  stubTriage('env');
+  stubHappyPath();
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });          // 第一晚：立即退場
+  jest.clearAllMocks();
+  stubTriage('env');
+  stubHappyPath();
+  await nightlyFix.runNightlyFix({ startedBy: userId });          // 第二晚
+  jest.clearAllMocks();
+  stubTriage('env');
+  stubHappyPath();
+  const third = await nightlyFix.runNightlyFix({ startedBy: userId });   // 第三晚
+
+  // 退場後 status='new'，不再是 fetchApprovedFeedback 的候選（該函式只撈 status='approved'）
+  expect(triageOne).not.toHaveBeenCalled();
+  expect(third.attempted).toBe(0);
 });
 
 test('意見回饋撞號不會被誤認成健檢提案：兩張表各自 SERIAL，靠批次序號分辨', async () => {
@@ -303,6 +330,39 @@ test('統整結果 layer=env 或成員序號對不上 → 該組不執行', asyn
   expect(runFix).toHaveBeenCalledTimes(1);
 });
 
+test('merge agent 把同一個候選序號放進兩組 → 後出現的組剔掉重複成員，該成員不會被記兩次失敗', async () => {
+  const findingId1 = await insertHealthProposal({ severity: 'high', label: '第一條' });
+  await insertHealthProposal({ severity: 'high', label: '第二條' });
+  stubHappyPath();
+  reviewFix.mockResolvedValue({ verdict: 'reject', reason: '都不行' }); // 兩組都失敗，才看得出有沒有記兩次
+  mergeCandidates.mockImplementation(async (items) => [
+    { member_ids: [items[0].id], title: '第一組（先出現，拿走 items[0]）', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+    // 第二組同時要 items[0]（重複）與 items[1]（正常）：items[0] 要被剔掉，items[1] 照跑
+    { member_ids: [items[0].id, items[1].id], title: '第二組（撞號）', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+  ]);
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  // 兩組都還是各自跑一次（第二組剔掉重複成員後剩 items[1]，不是整組被丟掉）
+  expect(result.attempted).toBe(2);
+  const { rows: [f1] } = await dbModule.query('SELECT fix_attempts FROM health_check_findings WHERE id=$1', [findingId1]);
+  expect(f1.fix_attempts).toBe(1);           // 不是 2——沒有被兩組各記一次
+});
+
+test('merge agent 把同一組的成員全撞號（去重後剩空組）→ 整組丟掉並留 log，不執行', async () => {
+  await insertHealthProposal({ severity: 'high', label: '唯一一條' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => [
+    { member_ids: [items[0].id], title: '先出現的組', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+    { member_ids: [items[0].id], title: '撞號後整組淨空', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+  ]);
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(1);          // 只有先出現的組跑，撞號組被整組丟掉
+  expect(runFix).toHaveBeenCalledTimes(1);
+});
+
 test('統整沒填 verify_route → 沿用組內意見成員的值（否則截圖審查對意見來源永遠不啟動）', async () => {
   await insertFeedback();
   stubTriage('code');                        // triage 會寫入 verify_route='#/tasks'
@@ -332,6 +392,28 @@ test('測試沒過（status 非 ready）→ 不呼叫 adoptFix', async () => {
   expect(reviewFix).not.toHaveBeenCalled();
   expect(adoptFix).not.toHaveBeenCalled();
   expect(result.applied).toBe(0);
+});
+
+test('修正結果為 no_change（platform-fix 判斷不該做）→ 立即退場，不是「未通過測試」，也不佔重試額度', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  runFix.mockImplementation(async (fixId) => {
+    await dbModule.query(`UPDATE finding_fixes SET status='no_change' WHERE id=$1`, [fixId]);
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(runFix).toHaveBeenCalledTimes(1);          // 確定性結果，不重試
+  expect(reviewFix).not.toHaveBeenCalled();
+  expect(adoptFix).not.toHaveBeenCalled();
+  expect(result.applied).toBe(0);
+  const { rows: [fb] } = await dbModule.query(
+    'SELECT status, triage_note, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(fb.status).toBe('new');                    // 一次即退場，不是留在 approved 每晚重跑
+  expect(fb.fix_attempts).toBe(0);
+  expect(fb.triage_note).not.toContain('未通過測試');  // 事實錯誤的舊文案不可再出現
+  expect(fb.triage_note).toContain('no_change');
 });
 
 test('reviewFix 第一次 reject → 新開一筆 finding_fixes 重跑（新增而非覆寫），舊列標 rejected', async () => {
@@ -649,9 +731,13 @@ test('連續失敗達門檻 → 意見退回人工（status=new＋triage_note �
   expect(fb.triage_note).toContain('改法會弄壞別的東西'); // 附上最後一次失敗原因
 });
 
-test('連續失敗達門檻 → 健檢提案退回 pending，且 decided_by 留空（分得出是機器退場不是人的裁決）', async () => {
+test('連續失敗達門檻 → 健檢提案退回 pending，且清掉 decided_by／decided_at（分得出是機器退場不是人的裁決）', async () => {
   const findingId = await insertHealthProposal({ severity: 'high' });
   await dbModule.query('UPDATE health_check_findings SET fix_attempts=2 WHERE id=$1', [findingId]);
+  // fixture 補上人工核准會寫的欄位（admin-routes.js:602 的 UPDATE 會寫 decided_by/decided_at）。
+  // 不補的話這支測試永遠是空心的：兩欄本來就預設 NULL，不管退場邏輯清不清都會通過。
+  await dbModule.query('UPDATE health_check_findings SET decided_by=$2, decided_at=NOW() WHERE id=$1',
+    [findingId, userId]);
   stubHappyPath();
   runFix.mockImplementation(async (fixId) => {
     await dbModule.query(`UPDATE finding_fixes SET status='failed' WHERE id=$1`, [fixId]);
@@ -660,11 +746,13 @@ test('連續失敗達門檻 → 健檢提案退回 pending，且 decided_by 留�
   await nightlyFix.runNightlyFix({ startedBy: userId });
 
   const { rows: [f] } = await dbModule.query(
-    'SELECT status, verdict_note, decided_by, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
+    'SELECT status, verdict_note, decided_by, decided_at, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
   expect(f.status).toBe('pending');
   expect(f.fix_attempts).toBe(0);
   expect(f.verdict_note).toContain('連續失敗 3 次');
+  expect(f.verdict_note).toMatch(/^自動退場：/);   // 機器標記前綴，供前端 pill 判斷
   expect(f.decided_by).toBeNull();
+  expect(f.decided_at).toBeNull();
 });
 
 test('退場後不再是候選：下一晚連 triage 都不會為它花錢', async () => {
@@ -723,7 +811,7 @@ test('保險絲檢查自己拋錯 → 例外逃出迴圈，但 health_check_runs
   expect(await maintenance.isMaintenance()).toBe(false);
 });
 
-test('markGroupDone 拋錯 → 不計入 applied（免得隔晚對已合併的碼再跑一次），但仍要重啟', async () => {
+test('markGroupDone 拋錯 → 不計入 applied（免得隔晚對已合併的碼再跑一次），但仍要重啟；也不能誤記失敗次數', async () => {
   const fbId = await insertFeedback();
   stubTriage('code');
   stubHappyPath();
@@ -736,10 +824,55 @@ test('markGroupDone 拋錯 → 不計入 applied（免得隔晚對已合併的�
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
   expect(result).toMatchObject({ attempted: 1, applied: 0 });   // 不高報
-  const { rows: [fb] } = await dbModule.query('SELECT status FROM feedback WHERE id=$1', [fbId]);
+  const { rows: [fb] } = await dbModule.query('SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
   expect(fb.status).not.toBe('done');
+  // 碼此刻已經合併成功了，只是收尾（markGroupDone）失敗——不是這一條真的沒改好，
+  // 不該算進失敗額度。誤記的話訊息會與事實相反：使用者看到自己核准的意見先顯示已核准，
+  // 三晚後翻回「待處理」並掛著「連續失敗」，但碼其實早就在 master 上了。
+  expect(fb.fix_attempts).toBe(0);
+  expect(fb.status).toBe('approved');
   // 碼此刻已經在 master 上了，不重啟的話平台會一直跑舊碼
   expect(restartCalls()).toHaveLength(1);
+});
+
+test('materializeGroup 本身拋錯 → 仍計入 attempted（否則摘要行低報），來源成員仍要記失敗次數', async () => {
+  const fbId1 = await insertFeedback({ content: '第一筆' });
+  const fbId2 = await insertFeedback({ content: '第二筆' });
+  stubTriage('code');
+  stubHappyPath();
+  // 兩筆各自成組。第一組完整跑完（含 markGroupDone）之後，才把批次共用的 health_check_runs
+  // 那一列砍掉；第二組進 materializeGroup 時 INSERT health_check_findings 會因為 run_id
+  // 對不到列而撞 FK——這是「materializeGroup 自己拋錯」在這條編排邏輯裡唯一自然會發生的方式
+  // （runId 是整批次共用的單一值，開跑前建好，不是逐組重建）。
+  //
+  // 掛勾點：注入時鐘的 now() 在這條路徑上依序被呼叫 5 次——
+  //   1=startedAt 2=waitForDrain 3=開跑前 preFuse 4=第一組的 fuseTripped 5=第二組的 fuseTripped。
+  // 第 5 次呼叫的當下，第一組（含 materializeGroup／runOneCandidate／markGroupDone）已經
+  // 完整跑完，第二組的 materializeGroup 則還沒開始——這是唯一能精準卡在這個縫隙的鉤子。
+  const realClock = () => new Date(clockMs);
+  let clockCalls = 0;
+  let deleteQueued = null;
+  nightlyFix._setClockForTesting(() => {
+    clockCalls += 1;
+    if (clockCalls === 5 && !deleteQueued) {
+      deleteQueued = dbModule.query('DELETE FROM health_check_runs');
+    }
+    return realClock();
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(clockCalls).toBeGreaterThanOrEqual(5);      // 正向錨：確定真的卡到第二組的檢查點
+  await deleteQueued;                                 // 確保刪除真的落地過，斷言才有意義
+  // 第一組建出 cand 並成功跑完 runOneCandidate（合併成功）；第二組 materializeGroup 拋錯，
+  // 但仍要算進 attempted（否則摘要行「嘗試 N 條」低報）
+  expect(result.attempted).toBe(2);
+  expect(result.applied).toBe(1);
+  const { rows: [fb1] } = await dbModule.query('SELECT status FROM feedback WHERE id=$1', [fbId1]);
+  const { rows: [fb2] } = await dbModule.query('SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId2]);
+  expect(fb1.status).toBe('done');
+  expect(fb2.status).toBe('approved');
+  expect(fb2.fix_attempts).toBe(1);                   // 來源成員仍要記一次失敗，不能悄悄放過
 });
 
 test('手動在白天觸發 → 跑道被上限截斷，不是「到明天凌晨兩點」的 16 小時', async () => {

@@ -27,7 +27,7 @@ const DRAIN_POLL_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_POLL_MS || '60000',
 // 在白天觸發時，同一個算法會給出 16 小時（10:00 起跑）甚至 24 小時（剛好 02:00 起跑）的跑道，
 // 保險絲等於不存在。與維護視窗的自動到期同量級（4 小時），對自動排程完全無感。
 const NIGHTLY_FIX_MAX_RUNWAY_MS = parseInt(process.env.NIGHTLY_FIX_MAX_RUNWAY_MS || '14400000', 10);
-// 同一條連續失敗幾次就退回人工（見 retireCandidate）
+// 同一條連續失敗幾次就退回人工（見 noteFailedAttempt／retireToHuman）
 const NIGHTLY_FIX_MAX_ATTEMPTS = parseInt(process.env.NIGHTLY_FIX_MAX_ATTEMPTS || '3', 10);
 const TIME_ZONE = 'Asia/Taipei';
 // 本批次自建的 health_check_runs 用 window_days=0 表示「不是回看某個視窗的健檢，是這一晚的修正批次」。
@@ -133,7 +133,9 @@ async function fetchApprovedFeedback() {
 
 // 意見回饋跑 triageOne：把使用者原文翻成具體修改需求，順便定出 layer。
 // 回 understandable:false 的剔除（triageOne 內部已把 status 退回 'new'）；翻出來的 layer 不在
-// 可自動修範圍（例如 env）也剔除——篩掉的意見留在原地不動狀態，不做任何寫入。
+// 可自動修範圍（例如 env）→ **立即退場**，不是留在原地不動：同一份原文 triage 不會突然變 code，
+// 這是確定性結果，不需要像「修不出來」那樣給三次額度重試——不退場的話這條意見會每晚重付一次
+// triage 的 token，永遠卡在「已核准」，使用者與管理員都看不出「自動修正範圍不含這一類」。
 async function triageFeedback(items) {
   const kept = [];
   for (const it of items) {
@@ -145,8 +147,11 @@ async function triageFeedback(items) {
          FROM feedback WHERE id=$1`, [it.row.id]);
     if (!refreshed) continue;
     if (!AUTO_LAYERS.has(refreshed.layer)) {
-      console.log('[NIGHTLY-FIX] 意見 #%d 的 layer=%s 不在可自動修範圍，跳過',
-        it.row.id, refreshed.layer || '未分類');
+      const layerLabel = refreshed.layer || '未分類';
+      console.log('[NIGHTLY-FIX] 意見 #%d 的 layer=%s 不在可自動修範圍，立即退場',
+        it.row.id, layerLabel);
+      await retireToHuman(true, refreshed.id,
+        `翻出來的 layer=${layerLabel}，自動修正範圍不含環境類，請人工處理`);
       continue;
     }
     kept.push({ source: 'feedback', row: refreshed });
@@ -194,16 +199,22 @@ function toCandidateItem(it) {
  *   3. verify_route 為空時 fallback 到組內意見成員的值——merge 的 prompt 寫「推不出來留空」，
  *      實務上它幾乎必然留空，而 needsScreenshot 只看這個欄位 ⇒ 截圖審查對最需要它的來源
  *      （使用者親眼看到畫面不對而提的意見）永遠不會啟動
+ *   4. **跨組去重**：merge agent 若把同一個候選序號放進兩個 group（prompt 沒禁止、agent 偶爾
+ *      會犯），該成員一晚會在兩組各記一次 fix_attempts（見 noteFailedAttempt），等於 +2，
+ *      兩晚就達到 NIGHTLY_FIX_MAX_ATTEMPTS 退場——比真正只失敗兩次的候選更快被踢出去，且原因
+ *      跟事實不符。後出現的組把已被更早的組拿走的序號剔掉；剔到空組就整組丟掉並留 log。
  */
 function normalizeGroups(groups, byOrdinal) {
   const usable = [];
+  const claimed = new Set();
   for (const g of groups) {
     const memberIds = (Array.isArray(g.member_ids) ? g.member_ids : [])
-      .map(Number).filter(id => byOrdinal.has(id));
+      .map(Number).filter(id => byOrdinal.has(id) && !claimed.has(id));
     if (!memberIds.length) {
       console.log('[NIGHTLY-FIX] 統整結果「%s」沒有對得上的成員序號，跳過', g.title || '(無標題)');
       continue;
     }
+    memberIds.forEach(id => claimed.add(id));
     const members = memberIds.map(id => byOrdinal.get(id));
     // ⚠ agent **明講**的 layer 一律照認：它說 env／unclear 就是判斷「這條自動改不動」，
     // 此時不可拿成員的 layer 去蓋掉它（那等於把它的結論改寫成我們想要的答案）。
@@ -315,6 +326,36 @@ async function markGroupDone(cand, userId) {
     [cand.findingId]);
 }
 
+// 機器退場寫進 note 的標記前綴。前端用 `startsWith` 判斷（不是 SQL LIKE），所以不受
+// pg-mem 把 `[...]` 當字元類別那個坑影響；但這裡選不含方括號的字面詞，避免以後有人
+// 改成 SQL LIKE 查詢又踩一次。
+const MACHINE_RETIRE_PREFIX = '自動退場：';
+
+/**
+ * 退場＝把狀態換回「等人」那一格並歸零計數，不是靜靜地從候選裡消失：
+ *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（與 triageOne 判不出來時同一個慣例，
+ *     管理頁本來就會顯示這個欄位）
+ *   - 健檢提案 → `status='pending'`（回到等人裁決）＋ `verdict_note` 寫原因，
+ *     並**清掉 `decided_by`／`decided_at`**——人工核准會寫這兩欄（`admin-routes.js`），
+ *     機器退場若不清掉，畫面上會留著使用者自己核准時的裁決時間與（將被覆寫的）理由，
+ *     看起來像是他自己把核准的東西又改回待處理。note 前綴另外標出「這是機器寫的」，
+ *     供 `AdminHealthCheck.js` 的 pill 判斷。
+ * 計數歸零是為了「人再核准一次就再給一輪完整額度」，不必另外開一支重設路徑。
+ */
+async function retireToHuman(isFeedback, id, note) {
+  const tagged = MACHINE_RETIRE_PREFIX + note;
+  if (isFeedback) {
+    await query(
+      `UPDATE feedback SET status='new', triage_note=$2, fix_attempts=0 WHERE id=$1`, [id, tagged]);
+  } else {
+    await query(
+      `UPDATE health_check_findings
+          SET status='pending', verdict_note=$2, fix_attempts=0, decided_by=NULL, decided_at=NULL
+        WHERE id=$1`,
+      [id, tagged]);
+  }
+}
+
 /**
  * 這一晚沒能合併 → 每個來源成員的連續失敗次數 +1，達門檻就退回人工。
  *
@@ -322,13 +363,6 @@ async function markGroupDone(cand, userId) {
  * applyFix 一直拋）會每晚重跑一次完整流程——重付一次 triage、重跑兩次 runFix（含兩次全套測試）
  * ——並且**永久佔掉 NIGHTLY_FIX_MAX 的一格**，把後來提的意見擠在後面永遠輪不到。
  * 無上限的成本＋安靜的飢餓，兩件事都不能留。
- *
- * 退場＝把狀態換回「等人」那一格並歸零計數，不是靜靜地從候選裡消失：
- *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（與 triageOne 判不出來時同一個慣例，
- *     管理頁本來就會顯示這個欄位）
- *   - 健檢提案 → `status='pending'`（回到等人裁決）＋ `verdict_note` 寫原因，
- *     並**刻意留 `decided_by` 為 NULL**——有裁決文字卻沒有裁決者，才分得出這是機器退場不是人的決定
- * 計數歸零是為了「人再核准一次就再給一輪完整額度」，不必另外開一支重設路徑。
  */
 async function noteFailedAttempt(cand, reason) {
   for (const it of cand.members) {
@@ -344,14 +378,7 @@ async function noteFailedAttempt(cand, reason) {
     if (attempts < NIGHTLY_FIX_MAX_ATTEMPTS) continue;
 
     const note = `自動修正連續失敗 ${attempts} 次，已退回人工處理。最後一次原因：${reason || '未提供'}`;
-    if (isFeedback) {
-      await query(
-        `UPDATE feedback SET status='new', triage_note=$2, fix_attempts=0 WHERE id=$1`, [it.row.id, note]);
-    } else {
-      await query(
-        `UPDATE health_check_findings SET status='pending', verdict_note=$2, fix_attempts=0 WHERE id=$1`,
-        [it.row.id, note]);
-    }
+    await retireToHuman(isFeedback, it.row.id, note);
     console.log('[NIGHTLY-FIX] %s #%d 已退回人工（連續失敗 %d 次）：%s',
       isFeedback ? '意見' : '提案', it.row.id, attempts, reason || '未提供');
   }
@@ -373,6 +400,13 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
     const { rows: [fix] } = await query('SELECT status, reject_reason FROM finding_fixes WHERE id=$1', [fixId]);
     if (!fix || fix.status !== 'ready') {
       const status = (fix && fix.status) || '（查無此列）';
+      // no_change 是合法且刻意的結果（platform-fix 判斷「不該做」）——不是測試沒過，
+      // 「修正未通過測試」這句話在這裡是事實錯誤。它也是確定性的：同一份原文重跑仍會判
+      // no_change，不需要像真的失敗那樣給三次額度重試，白燒兩次 platform-fix。
+      if (fix && fix.status === 'no_change') {
+        console.log('[NIGHTLY-FIX] 提案 #%d 的修正判定 no_change（platform-fix 認為不該做），立即退場', cand.findingId);
+        return { merged: false, retire: true, reason: 'platform-fix 判斷不需要修改（no_change）' };
+      }
       console.log('[NIGHTLY-FIX] 提案 #%d 的修正狀態為 %s，不進審核', cand.findingId, status);
       return { merged: false, reason: `修正未通過測試（狀態 ${status}）${fix && fix.reject_reason ? '：' + fix.reject_reason : ''}` };
     }
@@ -491,6 +525,12 @@ async function runNightlyFix({ startedBy = null } = {}) {
       // ⚠ 每條各自 try/catch：adoptFix（狀態不符）與 applyFix（主 clone 髒、與 origin 分岔、
       // push 失敗、查不到容器名）都會拋。不接住的話第一條死掉後面全不跑。
       let cand = null;
+      // ⚠ merged 要跟著 cand 一起帶出 try：result.merged 為 true 之後，markGroupDone 仍可能拋錯
+      // （例如來源列被別處刪掉）而落進下面的 catch。這種情況碼已經合併成功，catch 卻無條件
+      // noteFailedAttempt 的話，會把「合併成功、只是收尾失敗」記成失敗額度——訊息與事實相反：
+      // 使用者會看到自己核准的意見先顯示已核准、幾晚後又跳回待處理並掛著「連續失敗」，但碼其實
+      // 早就在 master 上了。catch 裡要用 `!merged` 擋掉這種情況。
+      let merged = false;
       try {
         cand = await materializeGroup(group, runId);
         attempted += 1;
@@ -499,10 +539,17 @@ async function runNightlyFix({ startedBy = null } = {}) {
           // ⚠ mergedAny 要在這裡就設：碼此刻已經在 master 上了。就算下面標記失敗，平台也必須
           // 重啟才會載到新碼——不重啟的話現象是「碼進去了、畫面卻什麼都沒變」。
           mergedAny = true;
+          merged = true;
           // 反過來，計數要等標記成功才加：markGroupDone 拋錯代表來源沒被標掉，這一條隔晚會對
           // 已經合併的碼再跑一次，此時報「applied+1」是高報。
           await markGroupDone(cand, pushUserId || startedBy);
           applied += 1;
+        } else if (result.retire) {
+          // no_change：一次即退場，不走「累加到門檻」那條路（見 runOneCandidate 內的說明）。
+          for (const it of cand.members) {
+            await retireToHuman(it.source === 'feedback', it.row.id, result.reason);
+          }
+          console.log('[NIGHTLY-FIX] 提案 #%d 已因 no_change 立即退場', cand.findingId);
         } else if (!result.adopted) {
           // adopted＝修好了只差沒有推送身分（設定問題），不該算在這一條的失敗額度裡，
           // 否則一次設定疏漏就會把當晚每一條的退場額度都燒掉。
@@ -510,8 +557,17 @@ async function runNightlyFix({ startedBy = null } = {}) {
         }
       } catch (err) {
         console.error('[NIGHTLY-FIX] 這一條中止（%s）：%s', group.title, err.message);
-        if (cand) await noteFailedAttempt(cand, err.message).catch(e =>
-          console.error('[NIGHTLY-FIX] 記錄失敗次數時又出錯：', e.message));
+        if (cand) {
+          if (!merged) await noteFailedAttempt(cand, err.message).catch(e =>
+            console.error('[NIGHTLY-FIX] 記錄失敗次數時又出錯：', e.message));
+        } else {
+          // materializeGroup 自己就拋錯：cand 從沒建出來，但這一條確實試過了（不記的話摘要行
+          // 「嘗試 N 條」會低報），來源成員也確實沒能推進，要照樣記次——noteFailedAttempt
+          // 只用得到 cand.members，不需要完整的 cand。
+          attempted += 1;
+          await noteFailedAttempt({ members: group.members }, err.message).catch(e =>
+            console.error('[NIGHTLY-FIX] 記錄失敗次數時又出錯：', e.message));
+        }
       }
     }
 
