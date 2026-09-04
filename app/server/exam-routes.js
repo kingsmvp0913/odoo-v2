@@ -63,6 +63,20 @@ function registerRoutes(app) {
          FROM exam_sections WHERE bank_id = $1`, [bankId])).rows;
     const byTitle = new Map(secs.map(s => [s.title, s]));
 
+    // 列表要能區分「審查沒異議」與「審查推翻了」，否則畫面上只有一個信心度數字，
+    // 看不出那個數字是「大家都同意」還是「有人有意見」。
+    //
+    // 取最新一筆 adversary 用「全撈出來按 id 排序、後面覆蓋前面」而不是相關子查詢
+    // 或 DISTINCT ON——pg-mem 兩者都不支援，而那種落差會偽裝成「測試卡住」
+    // （實測踩過，240s 沒輸出，其實是 6.9 秒就報錯了）。
+    const vrows = (await query(
+      `SELECT item_id, refuted, id FROM exam_verdicts WHERE kind = 'adversary' ORDER BY id`)).rows;
+    const latestRefuted = new Map();
+    for (const v of vrows) latestRefuted.set(v.item_id, v.refuted);
+    for (const it of items) {
+      it.refuted = latestRefuted.has(it.id) ? latestRefuted.get(it.id) : null;
+    }
+
     // 章節順序照題目第一次出現的順序，與考試當下的順序一致
     const groups = [];
     const seen = new Map();

@@ -33,7 +33,7 @@
       var href = ['css/ui-next.css']
         .concat(UI_NEXT_CSS.map(function (n) { return 'css/ui-next-pages/' + n + '.css'; }));
       document.write(href.map(function (h) {
-        return '<link rel="stylesheet" href="' + h + '?v=20260912">';
+        return '<link rel="stylesheet" href="' + h + '?v=20260904d">';
       }).join(''));
     }
   </script>
@@ -121,7 +121,7 @@
       var src = ['js/ui-next/UiNextApp.js', 'js/ui-next/UiNextShared.js']
         .concat(UI_NEXT_PAGES.map(function (n) { return 'js/ui-next/pages/' + n + '.js'; }));
       document.write(src.map(function (s) {
-        return '<script src="' + s + '?v=20260912"><\/script>';
+        return '<script src="' + s + '?v=20260904d"><\/script>';
       }).join(''));
     }
   </script>

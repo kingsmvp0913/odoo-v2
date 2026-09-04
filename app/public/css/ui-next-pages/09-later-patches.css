@@ -1282,30 +1282,46 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-group-title { font-weight: var(--fw-semibold); color: var(--text); }
 .ui-next-exam-group-note { margin-left: auto; color: var(--text-muted); font-size: var(--fs-sm); }
 
-/* 一題一行：信心度、題幹。其餘全部收進點開後的詳情。 */
+/* 一題一行：鎖頭、信心度、題幹。其餘全部收進點開後的詳情。
+
+   用 grid 不用 flex。flex 版試過兩輪都對不齊：flex item 的寬度是「flex-basis
+   加上依內容協商的結果」，emoji 與空字串在不同字型下協商出來的寬度不同，
+   於是有鎖頭的行與沒鎖頭的行，題幹起點差了一截。
+   grid 的欄寬由 grid-template-columns 直接決定，內容完全不參與，
+   空欄位也照樣佔滿該欄——這正是「固定欄」該有的行為。
+
+   align-items: start 而非 baseline：emoji 的基線與文字不同，baseline 會讓
+   有鎖頭的那幾行整行上下偏移。 */
+/* ⚠ 欄數必須等於這一列的子元素個數（目前 3：信心度／題幹／「估」標記）。
+   少一欄的後果不是溢出，是**多出來的元素掉到下一列的第一欄**——而「估」只在
+   未校準的題出現，於是有些行變兩列高、有些一列，整份清單看起來就是亂的。
+   實測踩過。改 template 加減子元素時，這一行要跟著改。
+   最後一欄用 auto：沒有「估」的行寬度為 0，不佔位。
+
+   欄寬刻意收窄：鎖頭原本獨立一欄，結果孤零零留在最左邊，中間空一大段才接到
+   題幹（實際畫面確認）。現在鎖頭與數字同格靠右貼齊，整組再貼近題幹。 */
 .ui-next-exam-row {
-  display: flex; align-items: baseline; gap: 10px; padding: 5px 8px 5px 22px;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 8px; align-items: start;
+  padding: 5px 8px 5px 8px; line-height: 1.6;
   cursor: pointer; border-bottom: 1px solid var(--border);
 }
 .ui-next-exam-row:hover { background: var(--surface); }
-/* 鎖頭與數字各佔固定一欄，題幹的起點才不會隨內容浮動。
-   兩欄都要 min-width:0——flex item 的 min-width 預設是 auto，內容比
-   flex-basis 寬時會把欄位撐開（emoji 在不同字型下寬度差很多）。 */
-.ui-next-exam-lock {
-  flex: 0 0 20px; min-width: 0; text-align: center;
-  font-size: var(--fs-sm); line-height: inherit;
-}
+.ui-next-exam-lock { margin-right: 3px; }
 .ui-next-exam-conf {
-  flex: 0 0 46px; min-width: 0; text-align: right; font-size: var(--fs-sm);
+  overflow: hidden; white-space: nowrap; text-align: right;
+  font-size: var(--fs-sm); line-height: inherit;
   font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums;
 }
 .ui-next-exam-q {
-  flex: 1 1 auto; min-width: 0; color: var(--text); font-size: var(--fs-sm);
+  min-width: 0; color: var(--text); font-size: var(--fs-sm);
+  line-height: inherit;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* 展開時攤開成完整題幹，詳細區就不必再印一次同一句話 */
 .ui-next-exam-q.is-open {
-  white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.5;
+  white-space: normal; overflow: visible; text-overflow: clip;
 }
 /* 未校準：沒有官方章節結果可對，數字只是估計。用虛線框而非另一種顏色，
    顏色已經被信心度用掉了，再加一種會回到「標籤太多」的老問題。 */
@@ -1321,8 +1337,11 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-conf-bad  { color: var(--error); }
 .ui-next-exam-conf-none { color: var(--text-muted); }
 
+/* 左內距對齊上一行題幹的起點（8 padding + 58 信心度欄 + 8 gap = 74px）。
+   對不齊的話展開的內容會比題幹更靠左，看起來像跑到別的層級去了。
+   ⚠ 改上面 exam-row 的 padding／欄寬／gap 時，這個數字要跟著改。 */
 .ui-next-exam-detail {
-  padding: 10px 8px 14px 22px; border-bottom: 1px solid var(--border);
+  padding: 10px 8px 14px 74px; border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 .ui-next-exam-why { color: var(--text-secondary); font-size: var(--fs-sm); margin-bottom: 8px; }

@@ -96,6 +96,39 @@ describe('章節分組', () => {
     expect(res.body.groups[0].items[0].options).toBeUndefined();
   });
 
+  // 列表要能區分「審查沒異議」與「審查推翻了」：只有一個信心度數字的話，
+  // 看不出那個數字是大家都同意還是有人有意見。
+  test('列表帶最新一次審查有沒有推翻', async () => {
+    const res = await auth(request(app).get(`/api/exam/sections?bank=${bankId}`)).expect(200);
+    const inv = res.body.groups.find(g => g.title === 'Inventory');
+    expect(inv.items[0].refuted).toBe(true);       // fixture 那筆 adversary 是 refuted
+    const intro = res.body.groups.find(g => g.title === 'Introduction');
+    expect(intro.items[0].refuted).toBeNull();      // 沒審查過＝null，不是 false
+  });
+
+  // 同一題審過多次時要取最新那一筆，不是第一筆。
+  // 用獨立的題來測——表在測試之間不清空（專案規則 17），插在 itemLow 上會讓
+  // 後面「單題詳情」讀到的最新 verdict 變成這一筆，那支測試就莫名紅了（實測踩過）。
+  test('多次審查取最新一筆的結果', async () => {
+    const { fingerprint } = require('../lib/exam/fingerprint');
+    const q = 'A question judged twice for latest-verdict test';
+    const it = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version, fingerprint, question_en, options, qtype, section_title, confidence)
+       VALUES ('19',$1,$2,'[]'::jsonb,'single','TwiceJudged',80) RETURNING id`,
+      [fingerprint(q), q]);
+    const id = it.rows[0].id;
+    await dbModule.query(
+      `INSERT INTO exam_attempts (item_id, bank_id, page, no, answer_final)
+       VALUES ($1,$2,'90',1,$3)`, [id, bankId, ['B']]);
+    await dbModule.query(
+      `INSERT INTO exam_verdicts (item_id, kind, refuted, correct_answer, confidence, model)
+       VALUES ($1,'adversary',true,$2,60,'m'), ($1,'adversary',false,$2,95,'m')`, [id, ['B']]);
+
+    const res = await auth(request(app).get(`/api/exam/sections?bank=${bankId}`)).expect(200);
+    const g = res.body.groups.find(x => x.title === 'TwiceJudged');
+    expect(g.items[0].refuted).toBe(false);       // 後插入的那筆（id 較大）才算數
+  });
+
   test('缺 bank 參數回 400，不存在回 404', async () => {
     await auth(request(app).get('/api/exam/sections')).expect(400);
     await auth(request(app).get('/api/exam/sections?bank=99999')).expect(404);
