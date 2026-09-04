@@ -60,7 +60,16 @@ async function runPage({ bank, page, shot }) {
 
   const theirAnswers = rows.map(r => r.answer_their || []);
   const t0 = Date.now();
-  const { verdict, model } = await reviewPage({ imagePath: shot, theirAnswers, glossary });
+
+  // 單頁失敗不可以中斷整批。實測踩過：跑到第 10 頁逾時，整個腳本 exit 1，
+  // 後面 9 頁完全沒跑，而前 9 頁的結果已經在 DB 裡——看起來像「跑完了」但少一半。
+  let verdict, model;
+  try {
+    ({ verdict, model } = await reviewPage({ imagePath: shot, theirAnswers, glossary }));
+  } catch (e) {
+    console.log(`P${page} ✗ 審查失敗：${e.message}`);
+    return null;
+  }
   const secs = Math.round((Date.now() - t0) / 1000);
 
   if (verdict.readable === false) {
@@ -178,9 +187,17 @@ async function recomputeConfidence(bank) {
     ? [...shots.keys()].sort((a, b) => Number(a) - Number(b))
     : [String(pageArg)];
 
+  // 已經審查過的頁跳過（可續跑）。逾時或中斷之後重跑不必從頭燒一次 token；
+  // 要重審整份就先 DELETE FROM exam_verdicts WHERE kind='adversary'。
+  const done = new Set((await db.query(`
+    SELECT DISTINCT a.page FROM exam_attempts a
+      JOIN exam_verdicts v ON v.item_id = a.item_id AND v.kind = 'adversary'
+     WHERE a.bank_id = $1`, [bank.id])).rows.map(r => String(r.page)));
+
   for (const p of pages) {
     const shot = shots.get(p);
     if (!shot) { console.log(`P${p} 找不到截圖，跳過`); continue; }
+    if (done.has(p) && !flags.includes('--force')) { console.log(`P${p} 已審查過，跳過（--force 可重審）`); continue; }
     await runPage({ bank, page: p, shot });
   }
 
