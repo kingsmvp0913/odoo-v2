@@ -17,6 +17,7 @@ const { verifyToken } = require('./auth');
 const { uploadRoot } = require('./lib/attachments');
 const { decodeImage, sniffImage, readUploadToken, isLocal, saveImage, validateItem } = require('./lib/exam/upload');
 const { runQueue } = require('./lib/exam/worker');
+const { listPages, archiveBank } = require('./lib/exam/archive');
 const { emitAll } = require('./notify');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
@@ -82,16 +83,19 @@ async function resolveBank(bankRef) {
   return rows[0] || null;
 }
 
-async function insertUpload({ bankId, batchKey, batchLabel, page, answer, responder, imagePath, isTest }) {
+async function insertUpload({ bankId, batchKey, batchLabel, page, answer, responder, imagePath, isTest, section }) {
   const { rows } = await query(
     `INSERT INTO exam_uploads
-       (bank_id, batch_key, batch_label, page, answer_raw, responder, image_path, is_test)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+       (bank_id, batch_key, batch_label, page, answer_raw, responder, image_path, is_test, section_title)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [bankId, batchKey || null, batchLabel || null, String(page), answer,
-     responder || null, imagePath, !!isTest]
+     responder || null, imagePath, !!isTest, sectionValue(section)]
   );
   return rows[0].id;
 }
+
+// 章節名前後空白會讓「同一章」變成兩章（'Sales ' ≠ 'Sales'），而畫面上看不出差別。
+const sectionValue = v => (v == null ? null : String(v).trim() || null);
 
 // '1' / 'true' / 'yes' / 'on' 為測試資料，其餘與未帶一律正式。
 // 統計數字若把測試混進去，「不一致 N 筆」這個唯一要看的數字就沒用了。
@@ -162,7 +166,7 @@ function registerRoutes(app) {
       const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf: req.file.buffer, ext });
       const id = await insertUpload({
         bankId: bank.id, batchKey: req.body.batch, batchLabel: req.body.label,
-        page, answer, responder: req.body.name,
+        page, answer, responder: req.body.name, section: req.body.section,
         imagePath, isTest: asTest(req.body.test),
       });
       res.json({ id, bank: bank.label, page, status: 'queued' });
@@ -201,6 +205,7 @@ function registerRoutes(app) {
         const id = await insertUpload({
           bankId: bank.id, batchKey, batchLabel, page: it.page, answer: it.answer,
           responder: it.name || req.body.name, imagePath,
+          section: it.section ?? req.body.section,
           isTest: asTest(it.test ?? req.body.test),
         });
         accepted.push({ id, page: String(it.page) });
@@ -288,9 +293,23 @@ function registerRoutes(app) {
     const attempts = (await query(`
       SELECT a.id AS attempt_id, a.upload_id, a.page, a.no, a.answer_their, a.answer_final,
              a.responder, a.created_at, i.id AS item_id, i.question_en, i.question_zh,
-             i.options, i.qtype, i.answer_official, i.official_from
+             i.options, i.qtype, i.answer_official, i.official_from, i.confidence, i.history_wrong
         FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id
        WHERE a.bank_id=$1 ORDER BY a.id`, [bankId])).rows;
+
+    // 歷史答案＝同一題在**別場考試**裡我當時勾的最終答案。
+    //
+    // 排除本場（a.bank_id <> $2）：拿這一場自己的答案當「歷史」等於自問自答。
+    // 全撈出來在 Node 端取最新，不用相關子查詢或 DISTINCT ON——pg-mem 兩者都不支援，
+    // 而那種落差會偽裝成「測試卡住」。
+    const itemIds = [...new Set(attempts.map(a => a.item_id))];
+    const history = itemIds.length ? (await query(`
+      SELECT h.item_id, h.answer_final, b.label, b.taken_at, h.id
+        FROM exam_attempts h JOIN exam_banks b ON b.id = h.bank_id
+       WHERE h.item_id = ANY($1::int[]) AND h.bank_id <> $2 AND h.answer_final IS NOT NULL
+       ORDER BY h.id`, [itemIds, bankId])).rows : [];
+    const lastHistory = new Map();
+    for (const h of history) lastHistory.set(h.item_id, h);
 
     const verdicts = attempts.length ? (await query(`
       SELECT id, attempt_id, correct_answer, confidence, reason
@@ -317,7 +336,20 @@ function registerRoutes(app) {
       const verdict = latest.get(a.attempt_id) || null;
       a.review_answer = official ? a.answer_official : (verdict && verdict.correct_answer);
       a.review_source = official ? 'official' : (verdict ? 'review' : null);
-      a.review_confidence = official ? 100 : (verdict && verdict.confidence);
+      // 用 exam_items.confidence（系統算出來的單一信心度）而不是 verdict.confidence
+      // （模型自報的數字）。模型自報的只是 baseConfidence 的其中一個輸入，而且
+      // **它常常根本不回**——實測 eCommerce 那一頁四題全是 null，畫面上「一致且
+      // 有把握」的勾勾因此一個都沒出現，看起來像功能壞了。
+      a.review_confidence = official ? 100 : a.confidence;
+
+      // 歷史答案只在「有把握」或「已知大概率錯」時才給前端。中間地帶（信心不高
+      // 又沒被標錯）顯示出來只會多一個沒有判準的數字，考試當下反而干擾。
+      // 被標大概率錯的一律顯示——那正是要提醒「別再選一次」的情況。
+      const past = lastHistory.get(a.item_id) || null;
+      const trusted = Number.isFinite(a.confidence) && a.confidence > 80;
+      a.history_answer = past && (trusted || a.history_wrong) ? past.answer_final : null;
+      a.history_bank = a.history_answer ? past.label : null;
+      delete a.confidence;
       a.review_reason = official ? '官方確認正確' : (verdict && verdict.reason);
 
       const rows = byAttempt.get(a.attempt_id) || [];
@@ -330,6 +362,93 @@ function registerRoutes(app) {
       delete a.official_from;
     }
     res.json({ bank, uploads, attempts });
+  });
+
+  // 把「上次那個答案大概率錯」的旗標掛在題目上（題庫頁手動勾）。
+  //
+  // 官方確認過的題不給改：它的答案是硬事實，標它「大概率錯」只會讓考試當下看到
+  // 兩個互相矛盾的訊號。
+  app.patch('/api/exam/items/:id/history-wrong', verifyToken, express.json(), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
+      const item = (await query(
+        `SELECT id, certain, official_from FROM exam_items WHERE id = $1`, [id])).rows[0];
+      if (!item) return res.status(404).json({ error: '找不到題目' });
+      if (item.certain || item.official_from) {
+        return res.status(409).json({ error: '官方確認題不需要標記' });
+      }
+      const wrong = req.body.wrong === true;
+      await query(
+        `UPDATE exam_items SET history_wrong = $2, updated_at = NOW() WHERE id = $1`, [id, wrong]);
+      emitAll('exam-progress', { itemId: id, status: 'history-wrong' });
+      res.json({ ok: true, wrong });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 歸檔前的現況：每一頁的章節名、題數、已作答數。畫面靠這支列出可勾選的區塊。
+  app.get('/api/exam/banks/:id/archive', verifyToken, async (req, res) => {
+    try {
+      const bankId = parseInt(req.params.id, 10);
+      if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+      const bank = (await query(
+        `SELECT id, label, odoo_version, status FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
+      if (!bank) return res.status(404).json({ error: '找不到題庫' });
+      res.json({ bank, pages: await listPages(require('./db'), bankId) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 歸檔：寫章節名，並把勾了「這章沒答錯」的章節推導成官方正解。
+  //
+  // **這一步不可逆**（certain 取 OR，蓋不掉），所以跳過與衝突一律具名回傳給畫面顯示，
+  // 不做「靜靜成功」。
+  app.post('/api/exam/banks/:id/archive', verifyToken, express.json(), async (req, res) => {
+    try {
+      const bankId = parseInt(req.params.id, 10);
+      if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+      const bank = (await query(`SELECT id FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
+      if (!bank) return res.status(404).json({ error: '找不到題庫' });
+
+      const busy = (await query(
+        `SELECT id FROM exam_jobs WHERE bank_id = $1 AND status = 'running' LIMIT 1`,
+        [bankId])).rows[0];
+      if (busy) return res.status(409).json({ error: '這份題庫還有工作在跑，跑完再歸檔' });
+
+      const pages = Array.isArray(req.body.pages) ? req.body.pages : [];
+      if (!pages.length) return res.status(400).json({ error: 'pages 是空的' });
+
+      const stat = await archiveBank(require('./db'), { bankId, pages });
+      emitAll('exam-progress', { bankId, status: 'archived' });
+      res.json({ ok: true, ...stat });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 清空這份題庫「這一場」的作答：uploads 與 attempts（投票隨 attempts 級聯）。
+  //
+  // **不刪 exam_items 與 exam_verdicts**——那是跨考次累積的題庫知識，砍掉等於把
+  // 花 token 審出來的結果丟了。這支清的是「這次考試的紀錄」，不是題庫本身。
+  //
+  // 有工作在跑時拒絕：worker 正在對這些列寫入，中途抽掉會讓它撞 FK 而整批 failed，
+  // 而畫面上只看得到「失敗」查不出原因。
+  app.delete('/api/exam/banks/:id/attempts', verifyToken, async (req, res) => {
+    try {
+      const bankId = parseInt(req.params.id, 10);
+      if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+      const bank = (await query(`SELECT id FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
+      if (!bank) return res.status(404).json({ error: '找不到題庫' });
+
+      const busy = (await query(
+        `SELECT id FROM exam_jobs WHERE bank_id = $1 AND status = 'running' LIMIT 1`,
+        [bankId])).rows[0];
+      if (busy) return res.status(409).json({ error: '這份題庫還有工作在跑，跑完再清空' });
+
+      // attempts 先於 uploads：attempts.upload_id 是 ON DELETE SET NULL，先刪 uploads
+      // 的話 attempts 會變成孤兒留在畫面上，看起來像「清了但沒清乾淨」。
+      const att = await query(`DELETE FROM exam_attempts WHERE bank_id = $1 RETURNING id`, [bankId]);
+      const ups = await query(`DELETE FROM exam_uploads WHERE bank_id = $1 RETURNING id`, [bankId]);
+      emitAll('exam-progress', { bankId, status: 'cleared' });
+      res.json({ ok: true, attempts: att.rows.length, uploads: ups.rows.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   app.post('/api/exam/attempts/:id/vote', verifyToken, express.json(), async (req, res) => {

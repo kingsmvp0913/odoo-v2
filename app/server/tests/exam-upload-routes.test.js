@@ -302,6 +302,78 @@ describe('考試結果、投票與最後答案', () => {
     });
   });
 
+  // 信心度要回「系統算出來的那一個數字」（exam_items.confidence），不是模型自報的
+  // verdict.confidence——模型自報的只是 baseConfidence 的其中一個輸入，而且它常常
+  // 根本不回。實測 eCommerce 一頁四題全 null，畫面上「有把握」的勾勾一個都沒出現。
+  test('回的是系統算出來的信心度，不是模型自報的', async () => {
+    await dbModule.query(
+      `UPDATE exam_verdicts SET confidence = NULL WHERE attempt_id = $1`, [openAttemptId]);
+    const res = await auth(request(app).get(`/api/exam/dashboard?bank=${bankId}`)).expect(200);
+    const row = res.body.attempts.find(x => x.attempt_id === openAttemptId);
+    expect(row.review_confidence).toBe(90);      // exam_items.confidence
+    expect(row).not.toHaveProperty('confidence'); // 內部欄位不外洩
+  });
+
+  // 歷史答案＝同一題在**別場考試**裡我當時勾的最終答案。拿本場自己的答案當「歷史」
+  // 等於自問自答，所以查詢一定要排除本 bank。
+  describe('歷史答案', () => {
+    let pastBankId, histItemId, histAttemptId;
+
+    beforeAll(async () => {
+      const b = await dbModule.query(
+        `INSERT INTO exam_banks (label, odoo_version) VALUES ('上一場','19') RETURNING id`);
+      pastBankId = b.rows[0].id;
+      const it = await dbModule.query(
+        `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,confidence)
+         VALUES ('19','hist-fp','Hist question','[]'::jsonb,'single',95) RETURNING id`);
+      histItemId = it.rows[0].id;
+      // 上一場：我當時勾 C
+      await dbModule.query(
+        `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+         VALUES ($1,$2,'90',1,$3,$3)`, [histItemId, pastBankId, ['C']]);
+      // 這一場：同一題又出現，我答 A
+      const cur = await dbModule.query(
+        `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+         VALUES ($1,$2,'91',1,$3,$3) RETURNING id`, [histItemId, bankId, ['A']]);
+      histAttemptId = cur.rows[0].id;
+    });
+
+    const row = async () => {
+      const res = await auth(request(app).get(`/api/exam/dashboard?bank=${bankId}`)).expect(200);
+      return res.body.attempts.find(x => x.attempt_id === histAttemptId);
+    };
+
+    test('信心夠高時帶出上一場的最終答案，且不是本場自己的', async () => {
+      const r = await row();
+      expect(r.history_answer).toEqual(['C']);
+      expect(r.history_bank).toBe('上一場');
+    });
+
+    // 中間地帶（信心不高又沒被標錯）顯示出來只是多一個沒有判準的數字
+    test('信心不到 80 且沒被標錯時不給歷史答案', async () => {
+      await dbModule.query(`UPDATE exam_items SET confidence = 60 WHERE id = $1`, [histItemId]);
+      expect((await row()).history_answer).toBeNull();
+    });
+
+    // 標了大概率錯的一律顯示——那正是要提醒「別再選一次」的情況
+    test('被標大概率錯時就算信心低也一定顯示', async () => {
+      await auth(request(app).patch(`/api/exam/items/${histItemId}/history-wrong`))
+        .send({ wrong: true }).expect(200);
+      const r = await row();
+      expect(r.history_answer).toEqual(['C']);
+      expect(r.history_wrong).toBe(true);
+    });
+
+    test('官方確認題不給標大概率錯', async () => {
+      const off = await dbModule.query(
+        `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,certain)
+         VALUES ('19','hist-official','X','[]'::jsonb,'single',true) RETURNING id`);
+      const res = await auth(
+        request(app).patch(`/api/exam/items/${off.rows[0].id}/history-wrong`)).send({ wrong: true });
+      expect(res.status).toBe(409);
+    });
+  });
+
   test('投票不顯示姓名，但同一平台使用者每題只能投一次', async () => {
     await auth(request(app).post(`/api/exam/attempts/${openAttemptId}/vote`))
       .send({ answer: 'A' }).expect(200);
@@ -331,5 +403,70 @@ describe('考試結果、投票與最後答案', () => {
       .send({ answer: 'A' }).expect(409);
     await auth(request(app).patch(`/api/exam/attempts/${attemptId}/final`))
       .send({ answer: [] }).expect(409);
+  });
+});
+
+// 用自己的 bank，不碰上面那組：清空是破壞性的，共用 bankId 會把別的測試的
+// fixture 一起清掉，而症狀是「別支測試莫名其妙紅了」（專案規則 17）。
+describe('清空這一場的作答', () => {
+  const auth = r => r.set('Authorization', `Bearer ${jwt}`);
+  let clearBankId, itemId;
+
+  beforeAll(async () => {
+    const b = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('清空用','19') RETURNING id`);
+    clearBankId = b.rows[0].id;
+    const item = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype)
+       VALUES ('19','clear-fp','Clear me','[]'::jsonb,'single') RETURNING id`);
+    itemId = item.rows[0].id;
+    const up = await dbModule.query(
+      `INSERT INTO exam_uploads (bank_id,page,answer_raw,image_path,status)
+       VALUES ($1,'1','A','exam-test/c.jpg','done') RETURNING id`, [clearBankId]);
+    const at = await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,upload_id,page,no,answer_their)
+       VALUES ($1,$2,$3,'1',1,$4) RETURNING id`, [itemId, clearBankId, up.rows[0].id, ['A']]);
+    await dbModule.query(
+      `INSERT INTO exam_verdicts (item_id,attempt_id,kind,refuted,correct_answer,confidence,model)
+       VALUES ($1,$2,'adversary',false,$3,88,'claude-opus-5')`, [itemId, at.rows[0].id, ['A']]);
+  });
+
+  test('未登入不得清空', async () => {
+    await request(app).delete(`/api/exam/banks/${clearBankId}/attempts`).expect(401);
+  });
+
+  // 這是整支端點的重點：清的是「這一場」，不是題庫。花 token 審出來的 item 與
+  // verdict 若跟著消失，等於每清一次就把累積的知識歸零。
+  test('清掉 uploads 與 attempts，但題庫的題目與審查結果留著', async () => {
+    const res = await auth(request(app).delete(`/api/exam/banks/${clearBankId}/attempts`)).expect(200);
+    expect(res.body).toMatchObject({ ok: true, attempts: 1, uploads: 1 });
+
+    const left = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_attempts WHERE bank_id = $1`, [clearBankId]);
+    expect(left.rows[0].c).toBe(0);
+    const ups = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_uploads WHERE bank_id = $1`, [clearBankId]);
+    expect(ups.rows[0].c).toBe(0);
+
+    const item = await dbModule.query(`SELECT COUNT(*)::int c FROM exam_items WHERE id = $1`, [itemId]);
+    expect(item.rows[0].c).toBe(1);
+    const verdict = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_verdicts WHERE item_id = $1`, [itemId]);
+    expect(verdict.rows[0].c).toBe(1);
+  });
+
+  // worker 正在對這些列寫入時抽掉它們，整批會撞 FK 變成 failed，而畫面上只看得到
+  // 「失敗」查不出原因。擋在這裡才講得出理由。
+  test('有工作在跑時拒絕清空', async () => {
+    await dbModule.query(
+      `INSERT INTO exam_jobs (bank_id,status,phase,pages_done,pages_total)
+       VALUES ($1,'running','審查中',1,3)`, [clearBankId]);
+    const res = await auth(request(app).delete(`/api/exam/banks/${clearBankId}/attempts`));
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/工作在跑/);
+  });
+
+  test('題庫不存在回 404', async () => {
+    await auth(request(app).delete('/api/exam/banks/999999/attempts')).expect(404);
   });
 });
