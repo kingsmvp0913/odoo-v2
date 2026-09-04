@@ -158,11 +158,14 @@ test('候選篩選：健檢 low 不入選／medium 入選／layer=env 不入選�
 
   expect(mergeCandidates).toHaveBeenCalled();  // 正向錨：確定真的走到統整這一步
   expect(result.attempted).toBe(2);
-  // 被篩掉的兩筆留在原地不動狀態（逐筆查：pg-mem 對 SERIAL 主鍵的 `= ANY($1)` 查不到列，
-  // 見 rules/testing.md #12——用它會全部回空、變成恆真的假綠）
+  // 被篩掉的兩筆要寫回 pending。⚠ 這一段原本斷言的是 'approved'（「篩掉的留在原地不動」），
+  // 那是**刻意改掉的舊行為**，不是把測試改綠：留在 approved 會讓畫面掛著「⏱ 自動執行」的 pill、
+  // 每晚被默默濾掉、又因為 open_count 只算 pending 而顯示 0 待處理——三件事同時成立就是狀態在說謊。
+  // 本測試的主 intent（篩選條件真的生效）由上面 mergeCandidates 內的斷言保住，未被削弱。
+  // 逐筆查：pg-mem 對 SERIAL 主鍵的 `= ANY($1)` 查不到列（rules/testing.md #12），用它會恆真假綠。
   for (const id of [low, envLayer]) {
     const { rows: [r] } = await dbModule.query('SELECT status FROM health_check_findings WHERE id=$1', [id]);
-    expect(r.status).toBe('approved');
+    expect(r.status).toBe('pending');
   }
 });
 
@@ -1163,4 +1166,39 @@ test('合併兩個健檢提案成員（新建列）→ target_metric／metric_ba
   expect(merged.metric_baseline).toBe('15');
   expect(merged.risk_if_wrong).toBe('改錯會讓退回率誤判');
   expect(merged.evidence).toBe('3 張任務證據');   // 沒有意見回饋成員時，退回健檢來源自己的 evidence
+});
+
+// 超出自動範圍卻停在 approved 的提案（來源：7.1 那條一次性 UPDATE 只看 status＋kind，不看
+// severity／layer，把 low 的也一起轉正了——實測正式 DB 的 id 73）。不處理的話畫面掛著
+// 「⏱ 自動執行」的 pill、每晚被默默濾掉、又因為 open_count 只算 pending 而顯示 0 待處理：
+// 「被承諾會跑」「不會跑」「不算待處理」三件事同時成立。這支釘住「會自我修復並留下理由」。
+test('approved 但超出自動範圍的提案 → 寫回 pending 並附理由，不是每晚默默濾掉', async () => {
+  const low = await insertHealthProposal({ severity: 'low', label: 'low的' });
+  const envLayer = await insertHealthProposal({ layer: 'env', severity: 'high', label: 'env的' });
+  await insertHealthProposal({ severity: 'medium', layer: 'code', label: '正常的' });
+  stubHappyPath();
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(1);            // 正向錨：正常那筆有跑，證明迴圈不是整個沒動
+  for (const id of [low, envLayer]) {
+    const { rows: [f] } = await dbModule.query(
+      'SELECT status, verdict_note FROM health_check_findings WHERE id=$1', [id]);
+    expect(f.status).toBe('pending');           // 回到「等人」那格，open_count 才算得到
+    expect(f.verdict_note).toContain('超出自動範圍');
+  }
+});
+
+test('寫回 pending 之後不再是候選 → 連跑兩晚只會被處理一次', async () => {
+  await insertHealthProposal({ severity: 'low', label: 'low的' });
+  stubHappyPath();
+
+  const first = await nightlyFix.runNightlyFix({ startedBy: userId });
+  const second = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(first.attempted).toBe(0);              // 本來就不該跑它
+  expect(second.attempted).toBe(0);
+  const { rows } = await dbModule.query(
+    "SELECT COUNT(*)::int AS n FROM health_check_findings WHERE status='approved' AND kind='proposal'");
+  expect(rows[0].n).toBe(0);                    // 第二晚沒有殘留的 approved 可撈
 });

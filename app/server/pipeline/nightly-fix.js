@@ -123,9 +123,23 @@ async function fetchHealthCandidates() {
       WHERE status = 'approved' AND kind = 'proposal'
       ORDER BY created_at ASC`
   );
-  return hc
-    .filter(h => inAutoFixScope(h.layer, h.severity))
-    .map(h => ({ source: 'finding', row: h }));
+  const kept = [];
+  for (const h of hc) {
+    if (inAutoFixScope(h.layer, h.severity)) { kept.push({ source: 'finding', row: h }); continue; }
+    // 超出自動範圍卻停在 approved：畫面會掛「⏱ 自動執行」的 pill，這裡卻每晚默默把它濾掉——
+    // 「被承諾會跑」「不會跑」「不算待處理（open_count 只算 pending）」三件事同時成立，狀態在說謊。
+    // 來源是 7.1 那條一次性 UPDATE：它只看 status 與 kind、不看 severity／layer，所以把 low 的
+    // 提案也一起轉正了（實測 id 73，severity=low）。insertFinding 那半已經依 inAutoFixScope 落
+    // pending，但它管不到既有列。這裡寫回 pending 讓它自我修復，順便留下人看得懂的理由——
+    // 規格 §257 本來就要求「篩掉的標『超出自動範圍，需人工處理』留在管理頁」。
+    console.log('[NIGHTLY-FIX] 提案 #%s 超出自動修正範圍（layer=%s severity=%s），退回人工',
+      h.id, h.layer, h.severity);
+    await retireToHuman(false, h.id,
+      `超出自動範圍，需人工處理（layer=${h.layer || '未填'}、severity=${h.severity || '未填'}；`
+      + '自動修正只收 code／prompt／observability 且嚴重度 medium 以上）')
+      .catch(e => console.error('[NIGHTLY-FIX] 提案退回人工失敗：', e.message));
+  }
+  return kept;
 }
 
 // 意見回饋候選：status='approved' 的全部撈出來。
