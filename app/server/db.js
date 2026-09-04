@@ -872,7 +872,11 @@ async function migrate() {
     // 重跑兩次全套測試），並永久佔掉 NIGHTLY_FIX_MAX 的一格，把後來的意見擠到永遠輪不到。
     // 達門檻即退回人工並歸零（退場動作本身會換 status，所以計數不需要保留歷史累計）。
     { table: 'feedback', col: 'fix_attempts', sql: 'ALTER TABLE feedback ADD COLUMN fix_attempts INTEGER NOT NULL DEFAULT 0' },
-    { table: 'health_check_findings', col: 'fix_attempts', sql: 'ALTER TABLE health_check_findings ADD COLUMN fix_attempts INTEGER NOT NULL DEFAULT 0' }
+    { table: 'health_check_findings', col: 'fix_attempts', sql: 'ALTER TABLE health_check_findings ADD COLUMN fix_attempts INTEGER NOT NULL DEFAULT 0' },
+    // fix-review agent 的 <notes>（審核推理過程）：無人監督閘門唯一的人類稽核材料，approve／
+    // reject 兩條路徑都要寫（見 pipeline/nightly-fix.js）。不可疊用既有的 notes 欄——那欄已被
+    // platform-fix 自己的辯護詞佔用（finding-fix.js），混用會讓「誰寫的、審什麼」分不清楚。
+    { table: 'finding_fixes', col: 'review_notes', sql: 'ALTER TABLE finding_fixes ADD COLUMN review_notes TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

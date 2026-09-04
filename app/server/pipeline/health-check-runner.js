@@ -7,8 +7,15 @@ const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('./health-data');
 const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
+const { inAutoFixScope } = require('./auto-fix-scope');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
+
+// 夜間批次（nightly-fix.js）自建的 health_check_runs 列的辨識機制：沿用既有的 cadence 欄
+// （daily／weekly／monthly 已在用），不新增欄位。⚠ 這裡不 require nightly-fix.js 取常數字面值
+// ——那會與它 require 本檔的方向形成循環（見 retire-prefix.js 的檔頭說明，MACHINE_RETIRE_PREFIX
+// 就是同一個坑抽出來的教訓），只能各自寫死同一個字串常數，兩邊改動時要留意保持一致。
+const BATCH_CADENCE = 'nightly-fix';
 
 // 健檢子行程一律在 repo 根執行：judging 用的判準寫在 .claude/skills/healthCheck，而 headless
 // claude 只認 cwd 的 project skill、不會往上層目錄找。server 是 `npm start`（cwd=app/）起的，
@@ -470,7 +477,15 @@ async function insertFinding(runId, row) {
   // status 明確帶值、不依賴欄位 DEFAULT：DEFAULT 已改成 approved（Phase 7.1，讓 proposal 當晚
   // 自動實作），但 signal（證據還不夠）／summary（總結敘述）／note（零樣本、解析失敗）都不是
   // 「可核准、會被自動修」的條目，混著吃到 DEFAULT 會把它們也標成 approved 送進夜間批次。
-  const status = row.kind === 'proposal' ? 'approved' : 'pending';
+  //
+  // 2-I2：proposal 還要再依 severity／layer 分岔——不符合 nightly-fix.js 的自動修範圍
+  // （layer 不在 code／prompt／observability，或 severity 是 low／ok）的提案，落 approved
+  // 會讓管理頁寫著「已核准（將自動執行）」，但 fetchHealthCandidates 永遠篩不到它，狀態說謊；
+  // 而 open_count（admin-routes.js）只算 status='pending'，這些提案又會從待處理清單裡消失，
+  // 三邊互相矛盾。规格 §255／§257 明寫「low／ok 與超出自動範圍的都留在管理頁給人決定」——
+  // 落 pending 才是誠實的初始狀態，人要核准仍可以核准（核准後才變 approved，屆時才真的會被撈）。
+  const auto = row.kind === 'proposal' && inAutoFixScope(row.layer || null, row.severity || null);
+  const status = auto ? 'approved' : 'pending';
   await query(
     `INSERT INTO health_check_findings
        (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
@@ -584,9 +599,15 @@ async function runAudit(runId, { sinceAt, cadence = 'daily', startedBy = null } 
 // 本輪視窗的起點＝上一輪全平台健檢的完成時刻。刻意不是「上次套用改動的時刻」：被判「不須調整」
 // 的輪次也要把視窗往前推，否則視窗永遠停在原地、每輪重看同一批資料。
 // 從沒跑過 → 退回 7 天，給第一輪一點基礎樣本。
+//
+// 2-M1：排除夜間批次自建的列（cadence='nightly-fix'）。批次列的 finished_at 是它自己收尾的
+// 時刻（通常在凌晨 2 點附近），若被當成「上一輪全平台健檢完成時刻」，下一輪審計的視窗起點會
+// 被推到批次結束那一刻——跳過批次執行期間累積的資料，等於漏看一段。
 async function auditWindowStart() {
   const { rows } = await query(
-    "SELECT finished_at, created_at FROM health_check_runs WHERE task_db_id IS NULL AND status='done' ORDER BY id DESC LIMIT 1"
+    `SELECT finished_at, created_at FROM health_check_runs
+      WHERE task_db_id IS NULL AND status='done' AND cadence <> $1
+      ORDER BY id DESC LIMIT 1`, [BATCH_CADENCE]
   );
   const last = rows[0];
   if (!last) return new Date(Date.now() - 7 * 86400000);
@@ -600,6 +621,19 @@ async function auditWindowStart() {
 async function resumeInterruptedRuns() {
   const { rows } = await query("SELECT id, task_db_id, since_at, cadence FROM health_check_runs WHERE status='running'");
   for (const r of rows) {
+    // 2-C1：批次列（cadence='nightly-fix'）必須最先攔下，不落入下面任何一種 scope 的續跑。
+    // 批次本身無法「續跑」——它的狀態（哪些候選已 triage、哪些已合併）活在 nightly-fix.js
+    // 的函式呼叫堆疊裡，不是可以從 DB 重建的檢查點；resumeInterruptedRuns 若把它交給
+    // runHealthCheck（沒有 task_db_id／since_at 時的 fallback），會在批次列底下冒出全平台
+    // 逐關診斷的 findings（21 關），與批次自己合併組寫入的 findings 混在同一個 run 下——
+    // 這正是本輪要修的坑本身（實測過的失敗）。直接收成 error，讓管理頁看得出「這輪沒完成」，
+    // 而不是被誤判成另一種健檢在跑。
+    if (r.cadence === BATCH_CADENCE) {
+      console.log(`[HEALTH-CHECK] run ${r.id} 是夜間批次列，無法續跑，收成 error`);
+      await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [r.id])
+        .catch(err => console.error('[HEALTH-CHECK] 收批次列失敗：', err.message));
+      continue;
+    }
     console.log(`[HEALTH-CHECK] resume interrupted run ${r.id}`);
     // 三種 scope 各自續跑：單張任務／主導型審計（有 since_at）／舊的逐關健檢（歷史列）。
     // 走錯會在同一個 run 底下混進另一種格式的 findings，畫面上再也分不出這一輪是什麼。

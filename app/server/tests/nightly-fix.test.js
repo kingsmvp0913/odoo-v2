@@ -957,3 +957,210 @@ test('手動在白天觸發 → 跑道被上限截斷，不是「到明天凌晨
   expect(result.attempted).toBe(1);
   expect(runFix).toHaveBeenCalledTimes(1);
 });
+
+// --- 2-C1：批次列的辨識機制（health_check_runs.cadence） ---
+
+test('批次自建的 health_check_runs 列帶 cadence=nightly-fix（供 health-check-runner.js 辨識，不可被當成舊式逐關健檢續跑）', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [run] } = await dbModule.query(
+    "SELECT cadence, window_days FROM health_check_runs WHERE window_days=0 ORDER BY id DESC LIMIT 1");
+  expect(run.cadence).toBe('nightly-fix');
+});
+
+// --- 2-C2：對帳——同一個坑第五次，候選蒸發而不記帳的四個位置都要能記到失敗 ---
+
+test('mergeCandidates 回 [] → 候選集體落空，不記個別失敗次數（不是候選自己的錯），但要留 error log', async () => {
+  const findingId = await insertHealthProposal({ severity: 'high' });
+  mergeCandidates.mockResolvedValue([]);
+  const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(0);
+  const { rows: [f] } = await dbModule.query('SELECT status, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
+  expect(f.status).toBe('approved');    // 還是候選，下一晚還會再試——不是永久蒸發
+  expect(f.fix_attempts).toBe(0);       // 不記個別失敗，這不是候選自己的錯
+  const errLines = errSpy.mock.calls.map(c => c.join(' '));
+  expect(errLines.some(l => l.includes('候選統整（mergeCandidates）集體落空'))).toBe(true);
+  errSpy.mockRestore();
+});
+
+test('normalizeGroups 判「沒有對得上的成員序號」→ 該候選不是靜默消失，要記一次失敗次數', async () => {
+  const findingId = await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  // merge agent 回一個誰都不認得的序號：normalizeGroups 會把這一組整個跳過（見「沒有對得上
+  // 的成員序號」那段 log），但原候選（byOrdinal 裡的序號 1）並沒有被記錄成任何失敗——
+  // 對帳要能抓到「這個候選明明存在，卻沒有出現在任何一組」這件事。
+  mergeCandidates.mockResolvedValue([
+    { member_ids: [999], title: '序號對不上的組', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+  ]);
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(0);       // 沒有組真的執行
+  expect(runFix).not.toHaveBeenCalled();
+  const { rows: [f] } = await dbModule.query('SELECT status, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
+  expect(f.status).toBe('approved');      // 還沒到退場門檻，留著下一晚再試
+  expect(f.fix_attempts).toBe(1);         // 但這一晚確實要記一次失敗——不是連 log 都沒有的靜默蒸發
+});
+
+test('對帳：跨組去重淨空的候選（撞號後整組丟掉）也要記一次失敗，不是只有先出現的組拿走的那個記', async () => {
+  const survivorId = await insertHealthProposal({ severity: 'high', label: '先出現的' });
+  const vanishedId = await insertHealthProposal({ severity: 'high', label: '撞號後淨空的' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => {
+    const survivor = items.find(it => it.title === '先出現的');
+    const vanished = items.find(it => it.title === '撞號後淨空的');
+    return [
+      { member_ids: [survivor.id], title: '先出現的組', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+      // 第二組同時要 survivor（已被拿走）與自己的成員都算撞號，去重後只剩 survivor 被剔除、
+      // 但這裡刻意只塞 survivor.id（vanished 完全不被任何一組提及）來製造「vanished 蒸發」。
+      { member_ids: [survivor.id], title: '撞號後整組淨空', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+    ];
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(1);          // 只有「先出現的組」真的跑
+  const { rows: [survivor] } = await dbModule.query(
+    'SELECT status FROM health_check_findings WHERE id=$1', [survivorId]);
+  expect(survivor.status).toBe('done');      // 正常合併
+  const { rows: [vanished] } = await dbModule.query(
+    'SELECT status, fix_attempts FROM health_check_findings WHERE id=$1', [vanishedId]);
+  expect(vanished.status).toBe('approved');  // 還沒到退場門檻
+  expect(vanished.fix_attempts).toBe(1);     // merge 完全沒提到它 → 對帳要記一次失敗
+});
+
+test('對帳：merge agent 宣告整組 layer=env（自動改不動）而被跳過的候選也要記一次失敗', async () => {
+  const findingId = await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => [
+    { member_ids: [items[0].id], title: 'env 的組', detail: 'd', action: 'a', layer: 'env', verify_route: '' },
+  ]);
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [f] } = await dbModule.query(
+    'SELECT status, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
+  expect(f.status).toBe('approved');
+  expect(f.fix_attempts).toBe(1);            // layer=env 整組被跳過，成員仍要記一次失敗，不是靜默消失
+});
+
+test('對帳要能分辨「排隊等下一晚」（超出 NIGHTLY_FIX_MAX）與「蒸發」（沒進任何一組）——只驗一晚看不出差別，這支同時起兩種候選並各自斷言', async () => {
+  // 6 條候選：merge 統整成 6 組（不合併），超過 NIGHTLY_FIX_MAX=5 → 第 6 組排隊等下一晚。
+  // 額外再插入 1 條完全不被 merge 提及的候選（蒸發）。
+  const ids = [];
+  for (let i = 0; i < 6; i++) ids.push(await insertHealthProposal({ severity: 'high', label: `第${i}條` }));
+  const vanishedId = await insertHealthProposal({ severity: 'high', label: '蒸發的' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => {
+    // 只把前 6 筆（對應 ids）各自成組，「蒸發的」那一筆（items 中最後一個）完全不提
+    const withoutVanished = items.filter(it => it.title !== '第6條' && it.title !== '蒸發的' && ids.length);
+    return items.filter(it => it.title !== '蒸發的').map(it => ({
+      member_ids: [it.id], title: it.title, detail: 'd', action: 'a', layer: 'code', verify_route: '',
+    }));
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.skipped).toBe(1);          // 第 6 組排隊等下一晚
+  // 排隊等下一晚的候選：不記失敗次數（它明明被 merge 收進組了，只是超出當晚上限）
+  const queuedRows = await Promise.all(ids.map(id =>
+    dbModule.query('SELECT fix_attempts FROM health_check_findings WHERE id=$1', [id])));
+  const queuedAttempts = queuedRows.map(r => r.rows[0].fix_attempts);
+  expect(queuedAttempts.filter(n => n > 0).length).toBeLessThanOrEqual(1); // 最多 1 條（第 6 組本身跑不到，其餘 5 條已成功合併標 done 查不到列）
+  // 蒸發的候選：merge 完全沒提到它，要記一次失敗
+  const { rows: [vanished] } = await dbModule.query(
+    'SELECT status, fix_attempts FROM health_check_findings WHERE id=$1', [vanishedId]);
+  expect(vanished.status).toBe('approved');
+  expect(vanished.fix_attempts).toBe(1);
+});
+
+// --- 2-C3：fix-review 的 <notes> 要落地到 finding_fixes.review_notes（approve／reject 兩條路徑都要寫）---
+
+test('reviewFix 回 approve 且帶 notes → review_notes 寫入該筆 finding_fixes', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  reviewFix.mockResolvedValue({ verdict: 'approve', reason: 'ok', notes: '審核推理：diff 只動了單一函式，風險低。' });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [fix] } = await dbModule.query(
+    "SELECT review_notes FROM finding_fixes ORDER BY id DESC LIMIT 1");
+  expect(fix.review_notes).toBe('審核推理：diff 只動了單一函式，風險低。');
+});
+
+test('reviewFix 回 reject 且帶 notes → review_notes 與 reject_reason 都要寫入（無人監督閘門的稽核材料不能丟）', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  reviewFix.mockResolvedValue({ verdict: 'reject', reason: '截圖顯示畫面壞了', notes: '審核推理：截圖比對出版面跑掉。' });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [fix] } = await dbModule.query(
+    "SELECT status, reject_reason, review_notes FROM finding_fixes ORDER BY id DESC LIMIT 1");
+  expect(fix.status).toBe('rejected');
+  expect(fix.reject_reason).toBe('截圖顯示畫面壞了');
+  expect(fix.review_notes).toBe('審核推理：截圖比對出版面跑掉。');
+});
+
+// --- 2-I1：維護視窗續期——每條候選開始前續期，避免最後一條候選跑到一半視窗就到期 ---
+
+test('每條候選開始前續期維護視窗：跑第二條時，第一條開跑當下設定的到期時間應已被往後推', async () => {
+  await insertHealthProposal({ severity: 'high', label: '第一條' });
+  await insertHealthProposal({ severity: 'high', label: '第二條' });
+  stubHappyPath();
+
+  const untilBefore = [];
+  const untilDuring = [];
+  runFix.mockImplementation(async (fixId) => {
+    const { rows: [t] } = await dbModule.query('SELECT maintenance_until FROM teams_settings WHERE id=1');
+    untilDuring.push(new Date(t.maintenance_until).getTime());
+    // 每條之間推進 1 小時，模擬候選之間確實花了時間
+    advanceClock(60 * 60 * 1000);
+    await runFixReady(fixId);
+  });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(untilDuring).toHaveLength(2);
+  // 第二條開跑當下量到的 maintenance_until 要比第一條當下量到的更晚——代表兩條之間確實續期過，
+  // 不是進場時設一次就再也不動（否則兩個值會相等，因為 enterMaintenance(ms) 一律是「現在 + ms」）。
+  expect(untilDuring[1]).toBeGreaterThan(untilDuring[0]);
+});
+
+// --- 2-M2：materializeGroup 合併多個健檢來源時，evidence／target_metric／metric_baseline／risk_if_wrong 要能帶過去 ---
+
+test('合併兩個健檢提案成員（新建列）→ target_metric／metric_baseline／risk_if_wrong／evidence 取第一個有值的健檢來源成員', async () => {
+  await dbModule.query(
+    `UPDATE health_check_findings SET target_metric=NULL, metric_baseline=NULL WHERE 1=0`); // no-op，保留欄位存在性檢查
+  const { rows: [run] } = await dbModule.query(`INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id`);
+  const { rows: [f1] } = await dbModule.query(
+    `INSERT INTO health_check_findings
+       (run_id, agent_name, agent_label, diagnosis, severity, kind, layer, status, target_metric, metric_baseline, risk_if_wrong, evidence)
+     VALUES ($1,'health-auditor','第一條','診斷','high','proposal','code','approved','qa_rejections.rate','15','改錯會讓退回率誤判','3 張任務證據')
+     RETURNING id`, [run.id]);
+  const { rows: [f2] } = await dbModule.query(
+    `INSERT INTO health_check_findings
+       (run_id, agent_name, agent_label, diagnosis, severity, kind, layer, status, target_metric, metric_baseline, risk_if_wrong, evidence)
+     VALUES ($1,'health-auditor','第二條','診斷','high','proposal','code','approved',NULL,NULL,NULL,NULL)
+     RETURNING id`, [run.id]);
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => [
+    { member_ids: items.map(it => it.id), title: '合併組', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+  ]);
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  // 合併組是新建列（兩個成員，不是 soleFindingId 的沿用情境）
+  const { rows: [merged] } = await dbModule.query(
+    "SELECT target_metric, metric_baseline, risk_if_wrong, evidence FROM health_check_findings WHERE agent_label='合併組'");
+  expect(merged.target_metric).toBe('qa_rejections.rate');
+  expect(merged.metric_baseline).toBe('15');
+  expect(merged.risk_if_wrong).toBe('改錯會讓退回率誤判');
+  expect(merged.evidence).toBe('3 張任務證據');   // 沒有意見回饋成員時，退回健檢來源自己的 evidence
+});

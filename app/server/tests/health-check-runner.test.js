@@ -873,3 +873,125 @@ test('runAudit：previousProposals 組 prompt 時，機器退場的 note 不冠�
   expect(prompt).toContain('人裁決的提案：某某問題');
   expect(prompt).toContain('你的裁決：自動退場：這其實是我自己的裁決');
 });
+
+// --- 2-C1：夜間批次列（cadence='nightly-fix'）不可被當成舊式逐關健檢重跑 ---
+// 根因（已實跑驗證過）：批次插入 health_check_runs 只給 status／window_days／started_by，
+// task_db_id 與 since_at 皆 NULL，resumeInterruptedRuns 的三分流 task_db_id ? … : since_at ? … : 舊行為
+// 剛好落進最後那個 fallback（runHealthCheck），重啟後會在批次列底下冒出 21 關的全平台診斷。
+
+async function newBatchRun() {
+  const { rows: [r] } = await dbModule2.query(
+    "INSERT INTO health_check_runs (status, window_days, cadence) VALUES ('running',0,'nightly-fix') RETURNING id");
+  return r.id;
+}
+
+test('resumeInterruptedRuns：批次列（cadence=nightly-fix）不會被當成舊式逐關健檢續跑，直接收成 error', async () => {
+  await dbModule2.query("UPDATE health_check_runs SET status='done' WHERE status='running'");
+  const runId = await newBatchRun();
+
+  expect(await resumeInterruptedRuns()).toBe(1);
+
+  // 不能呼叫 runHealthCheck（會產生 21 關的 findings）；批次列底下不該冒出任何一筆 finding
+  expect(mockRunClaude).not.toHaveBeenCalled();
+  const { rows: findings } = await dbModule2.query(
+    'SELECT agent_name FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(findings).toHaveLength(0);
+  const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
+  expect(run.status).toBe('error');   // 批次無法續跑，不是「執行中」也不是被當成完成
+});
+
+test('resumeInterruptedRuns：批次列與其他中斷 run 混在一起時，只有批次列被收掉，其餘照常續跑', async () => {
+  await dbModule2.query("UPDATE health_check_runs SET status='done' WHERE status='running'");
+  const batchRunId = await newBatchRun();
+  const taskRunId = await newTaskRun(1);
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>處置：補充資訊。</diagnosis><result>{"severity":"low"}</result>', usage: {}, durationMs: 5
+  });
+
+  expect(await resumeInterruptedRuns()).toBe(2);
+  for (let i = 0; i < 40; i++) {
+    const { rows: [r] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [taskRunId]);
+    if (r.status !== 'running') break;
+    await new Promise(r2 => setTimeout(r2, 25));
+  }
+
+  const { rows: [batch] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [batchRunId]);
+  expect(batch.status).toBe('error');
+  const { rows: [taskRun] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [taskRunId]);
+  expect(taskRun.status).toBe('done');   // 沒有被批次列的處理連坐影響
+});
+
+// --- 2-M1：批次列不可污染健檢排程的讀取點（auditWindowStart）---
+
+test('auditWindowStart：批次自建的 run 不會被當成「上一輪全平台健檢完成時刻」', async () => {
+  await dbModule2.query("UPDATE health_check_runs SET status='done' WHERE status='running'");
+  // 真正的全平台健檢：3 天前完成
+  const realFinishedAt = new Date(Date.now() - 3 * 86400000);
+  await dbModule2.query(
+    "INSERT INTO health_check_runs (status, since_at, cadence, finished_at) VALUES ('done', NOW() - INTERVAL '4 day', 'daily', $1)",
+    [realFinishedAt]);
+  // 夜間批次：剛剛才收尾（finished_at 遠比上面新），若沒排除會把視窗起點拉到現在附近
+  await dbModule2.query(
+    "INSERT INTO health_check_runs (status, window_days, cadence, finished_at) VALUES ('done', 0, 'nightly-fix', NOW())");
+
+  const { auditWindowStart } = require('../pipeline/health-check-runner');
+  const start = await auditWindowStart();
+
+  // 起點要對到「真正的全平台健檢」那筆，不是批次列（誤用批次列會讓 start 落在幾秒鐘前）
+  expect(Math.abs(start.getTime() - realFinishedAt.getTime())).toBeLessThan(2000);
+});
+
+// --- 2-I2：健檢提案要依 severity／layer 分岔，不符合自動修範圍的落 pending 而非 approved ---
+// 規格 §255／§257：low／ok 與超出自動範圍（layer 不在 code／prompt／observability）的提案
+// 留在管理頁給人決定。落 approved 卻永遠不會被 nightly-fix.js 的 fetchHealthCandidates 撈到，
+// 是「已核准（將自動執行）」但實際永遠不執行的狀態說謊。
+
+test('runAudit：severity=low 的提案落 pending，不是 approved（低嚴重度留給人決定）', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>本輪無重大問題。</summary><result>' + JSON.stringify({
+      severity: 'low',
+      proposals: [
+        { kind: 'proposal', title: '小優化', layer: 'code', severity: 'low', detail: '無關緊要的小事',
+          evidence: '#1', action: '順手改一下',
+          target_metric: 'x', metric_baseline: '1' }
+      ]
+    }) + '</result>',
+    usage: { input_tokens: 1 }, durationMs: 10
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+
+  const { rows: [proposal] } = await dbModule2.query(
+    "SELECT status FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
+  expect(proposal.status).toBe('pending');
+});
+
+test('runAudit：layer=env 的提案落 pending，不是 approved（自動修範圍不含 env）', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<summary>本輪看到環境層問題。</summary><result>' + JSON.stringify({
+      severity: 'high',
+      proposals: [
+        { kind: 'proposal', title: '外部服務逾時', layer: 'env', severity: 'high', detail: '第三方 API 常常逾時',
+          evidence: '#1 #2 #3', action: '找對方確認 SLA',
+          target_metric: 'x', metric_baseline: '1' }
+      ]
+    }) + '</result>',
+    usage: { input_tokens: 1 }, durationMs: 10
+  });
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+
+  const { rows: [proposal] } = await dbModule2.query(
+    "SELECT status FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
+  expect(proposal.status).toBe('pending');
+});
+
+test('runAudit：medium 以上且 layer 在自動修範圍（含 platform 別名 code）的提案仍落 approved', async () => {
+  mockRunClaude.mockResolvedValue(AUDIT_OK);   // layer='platform', severity 繼承整輪 'medium'
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+
+  const { rows: [proposal] } = await dbModule2.query(
+    "SELECT status FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
+  expect(proposal.status).toBe('approved');
+});

@@ -1,6 +1,7 @@
 const { execFile } = require('child_process');
 const { query } = require('../db');
 const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
+const { AUTO_LAYERS, HEALTH_SEVERITIES, inAutoFixScope, normalizeLayer } = require('./auto-fix-scope');
 const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
 const { triageOne, mergeCandidates } = require('./feedback-triage');
 const { reviewFix } = require('./fix-review');
@@ -33,10 +34,15 @@ const NIGHTLY_FIX_MAX_ATTEMPTS = parseInt(process.env.NIGHTLY_FIX_MAX_ATTEMPTS |
 const TIME_ZONE = 'Asia/Taipei';
 // 本批次自建的 health_check_runs 用 window_days=0 表示「不是回看某個視窗的健檢，是這一晚的修正批次」。
 const BATCH_WINDOW_DAYS = 0;
+// 批次列的辨識機制：health_check_runs.cadence 沿用既有欄位（daily／weekly／monthly 已在用），
+// 不新增欄位。⚠ 這個值要與 health-check-runner.js 的 resumeInterruptedRuns／auditWindowStart
+// 保持字面一致——那兩處刻意不 require 本檔（避免與 health-check-runner.js 形成循環依賴，
+// 見 retire-prefix.js 的檔頭說明），只能各自寫死同一個字串常數。
+const BATCH_CADENCE = 'nightly-fix';
 
-// 可自動修的 layer；健檢候選的嚴重度門檻。意見回饋不套嚴重度——人親自核准過就是把關。
-const AUTO_LAYERS = new Set(['code', 'prompt', 'observability']);
-const HEALTH_SEVERITIES = new Set(['medium', 'high', 'error']);
+// 可自動修的 layer；健檢候選的嚴重度門檻（AUTO_LAYERS／HEALTH_SEVERITIES 定義於 auto-fix-scope.js，
+// health-check-runner.js 的 insertFinding 共用同一份判準——見該檔 2-I2 的說明）。
+// 意見回饋不套嚴重度——人親自核准過就是把關。
 
 let _clockForTesting = null;
 function _setClockForTesting(clock) { _clockForTesting = clock; }
@@ -118,7 +124,7 @@ async function fetchHealthCandidates() {
       ORDER BY created_at ASC`
   );
   return hc
-    .filter(h => AUTO_LAYERS.has(h.layer) && HEALTH_SEVERITIES.has(h.severity))
+    .filter(h => inAutoFixScope(h.layer, h.severity))
     .map(h => ({ source: 'finding', row: h }));
 }
 
@@ -235,7 +241,7 @@ function normalizeGroups(groups, byOrdinal) {
     const declared = String(g.layer || '').trim().toLowerCase();
     const layer = declared
       ? (AUTO_LAYERS.has(declared) ? declared : null)
-      : members.map(m => m.row.layer).find(l => AUTO_LAYERS.has(l));
+      : members.map(m => normalizeLayer(m.row.layer)).find(l => AUTO_LAYERS.has(l));
     if (!layer) {
       console.log('[NIGHTLY-FIX] 統整結果「%s」的 layer=%s 不在可自動修範圍，跳過',
         g.title || '(無標題)', g.layer || '未填');
@@ -274,18 +280,29 @@ async function feedbackEvidence(members) {
   return notes.length ? notes.join('\n') : null;
 }
 
+// 多個健檢提案成員合併成一組時，target_metric／metric_baseline／risk_if_wrong 這三個欄位取
+// 「第一個有值的健檢來源成員」——比照 verify_route 的 fallback 策略：指標與風險描述的是
+// 「這一類問題」而非逐條意見量身定制，多條合併時沒有比「沿用最早那條」更好的自動合併規則，
+// 硬串接多筆反而會讓 fix-review 讀到一段誰也不對應的雜訊。
+function firstHealthField(members, field) {
+  const hit = members.find(m => m.source === 'finding' && m.row[field]);
+  return hit ? hit.row[field] : null;
+}
+
 async function materializeGroup(group, runId) {
   const reuseId = soleFindingId(group.members);
   const base = {
     title: group.title, detail: group.detail, action: group.action,
     layer: group.layer, verify_route: group.verify_route,
-    risk_if_wrong: reuseId != null ? (group.members[0].row.risk_if_wrong || null) : null,
+    risk_if_wrong: reuseId != null ? (group.members[0].row.risk_if_wrong || null) : firstHealthField(group.members, 'risk_if_wrong'),
+    target_metric: reuseId != null ? (group.members[0].row.target_metric || null) : firstHealthField(group.members, 'target_metric'),
+    metric_baseline: reuseId != null ? (group.members[0].row.metric_baseline || null) : firstHealthField(group.members, 'metric_baseline'),
     members: group.members,
   };
   if (reuseId != null) return { findingId: reuseId, reused: true, ...base };
 
   const hasFeedback = group.members.some(m => m.source === 'feedback');
-  const evidence = await feedbackEvidence(group.members);
+  const evidence = await feedbackEvidence(group.members) || firstHealthField(group.members, 'evidence');
 
   /**
    * ⚠ 這一列是「批次的施工紀錄」，不是等人裁決的提案，所以明確帶 status='done'：
@@ -297,11 +314,13 @@ async function materializeGroup(group, runId) {
    */
   const { rows: [row] } = await query(
     `INSERT INTO health_check_findings
-       (run_id, agent_name, agent_label, diagnosis, severity, rationale, kind, layer, evidence, status)
-     VALUES ($1,$2,$3,$4,'medium',$5,'proposal',$6,$7,'done')
+       (run_id, agent_name, agent_label, diagnosis, severity, rationale, kind, layer, evidence,
+        target_metric, metric_baseline, risk_if_wrong, status)
+     VALUES ($1,$2,$3,$4,'medium',$5,'proposal',$6,$7,$8,$9,$10,'done')
      RETURNING id`,
     [runId, hasFeedback ? 'feedback' : 'health-auditor',
-     base.title, base.detail, base.action || null, base.layer, evidence]
+     base.title, base.detail, base.action || null, base.layer, evidence,
+     base.target_metric, base.metric_baseline, base.risk_if_wrong]
   );
   return { findingId: row.id, reused: false, ...base };
 }
@@ -424,6 +443,9 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
     }
 
     const verdict = await reviewFix(fixId, cand);
+    // review_notes：fix-review 的推理過程，approve／reject 兩條路徑都要寫——這是無人監督閘門
+    // 唯一的人類事後稽核材料（見跨單元契約 1；管理頁顯示由單元 3 負責）。
+    await query(`UPDATE finding_fixes SET review_notes=$2 WHERE id=$1`, [fixId, verdict.notes || null]);
     if (verdict.verdict === 'approve') {
       if (!pushUserId) {
         await adoptFix(fixId, startedBy);
@@ -503,7 +525,39 @@ async function runNightlyFix({ startedBy = null } = {}) {
     }
 
     const { indexed, byOrdinal } = indexCandidates(candidates);
-    const groups = normalizeGroups(await mergeCandidates(indexed.map(toCandidateItem)), byOrdinal);
+    const mergedGroups = await mergeCandidates(indexed.map(toCandidateItem));
+    if (!mergedGroups.length) {
+      // ⚠ 這不是候選自己的錯（agent 執行失敗或解析不出 groups），不該記在候選帳上——
+      // 但也不能悄悄什麼都不做：候選集體落空要大聲留痕，否則現象是「今晚有 approved
+      // 候選、卻連一條 fix_attempts 都沒增加」，看起來像候選憑空消失。
+      console.error('[NIGHTLY-FIX] 本輪 %d 筆候選統整（mergeCandidates）集體落空，本批次不執行任何一條',
+        candidates.length);
+      return { attempted: 0, applied: 0, skipped: 0 };
+    }
+    const groups = normalizeGroups(mergedGroups, byOrdinal);
+
+    /**
+     * 對帳（2-C2）：四個位置會讓候選蒸發而完全不記帳——mergeCandidates 集體落空（上面已處理，
+     * 不佔用個別候選的失敗額度）、normalizeGroups 判「沒有對得上的成員序號」／跨組去重淨空、
+     * merge agent 宣告 layer=env/unclear 而整組被跳過。這些情況下對應的候選成員連 log 都沒有
+     * （normalizeGroups 只印組名，不印落單成員的序號）。⚠ 必須放在「groups 是否為空」的早退
+     * 判斷**之前**：groups.length===0（merge 回的組全數被 normalizeGroups 判掉）本身就是
+     * 「全部候選蒸發」的極端情況，早退在對帳之前會讓這整批連一次失敗都不記。
+     *
+     * ⚠ 這裡刻意只對「進了 groups（不論是否因超出 NIGHTLY_FIX_MAX 被 capped 排除）」與
+     * 「byOrdinal 全集」兩者的差集記帳——**排隊等下一晚**的候選（在 groups 裡、只是被
+     * capped 截斷）不算蒸發，不能誤記失敗；只有「merge 完全沒把它放進任何一組」的才算。
+     */
+    const groupedIds = new Set();
+    for (const g of groups) for (const id of g.memberIds) groupedIds.add(id);
+    const vanished = indexed.filter(it => !groupedIds.has(it.ordinal));
+    if (vanished.length) {
+      console.log('[NIGHTLY-FIX] %d 筆候選統整後未落入任何一組（非因排隊），記一次失敗：%s',
+        vanished.length, vanished.map(it => `${it.source}#${it.row.id}`).join(','));
+      await noteFailedAttempt({ members: vanished }, '統整（merge）未把此候選納入任何一組')
+        .catch(e => console.error('[NIGHTLY-FIX] 對帳記錄失敗次數時又出錯：', e.message));
+    }
+
     if (!groups.length) {
       console.log('[NIGHTLY-FIX] %d 筆候選統整後沒有可執行的組', candidates.length);
       return { attempted: 0, applied: 0, skipped: 0 };
@@ -516,8 +570,8 @@ async function runNightlyFix({ startedBy = null } = {}) {
       candidates.length, groups.length, capped.length, deadlineAt.toISOString());
 
     const { rows: [run] } = await query(
-      `INSERT INTO health_check_runs (status, window_days, started_by) VALUES ('running',$1,$2) RETURNING id`,
-      [BATCH_WINDOW_DAYS, startedBy]
+      `INSERT INTO health_check_runs (status, window_days, started_by, cadence) VALUES ('running',$1,$2,$3) RETURNING id`,
+      [BATCH_WINDOW_DAYS, startedBy, BATCH_CADENCE]
     );
     runId = run.id;
 
@@ -533,6 +587,20 @@ async function runNightlyFix({ startedBy = null } = {}) {
         console.log('[NIGHTLY-FIX] 保險絲跳了（%s），不再開新的一條（已跑 %d 條）', fuse, attempted);
         break;
       }
+
+      /**
+       * 2-I1：維護視窗續期。保險絲是「開跑之前」檢查（見 fuseTripped 的檔頭註解），單一候選最壞
+       * 可跑到 ~90 分鐘（measureTests × 2 ＋ platform-fix ＋ fix-review ＋ 重跑一次）；
+       * NIGHTLY_FIX_MAINTENANCE_MS 卻只有 4 小時且只在批次一開始 enterMaintenance 過一次、
+       * 不會自動續期。自動排程路徑（22:30 起跑、02:00 截止）最後一條可能 01:59 才開始、03:30 才
+       * 結束，維護旗標卻在 02:30 到期——中間整整一小時 cron 會恢復派工，然後 restartSelf() 把
+       * 剛派出去的 agent 全砍掉留下 `*_running` 孤兒，正是維護視窗存在的理由，而且完全靜默。
+       * 選這個做法而非把 NIGHTLY_FIX_MAINTENANCE_MS 拉大：拉大治標不治本（仍有理論上限，且會讓
+       * 「批次真的卡死不動」時的維護旗標多佔用好幾小時）。enterMaintenance 是冪等的 UPSERT
+       * （見 maintenance.js），這裡每條開始前續期一次，成本只是一個 UPDATE；只要批次仍在推進，
+       * 視窗就跟著往後延，一旦卡死不再有候選開跑，旗標仍會在最後一次續期後的原定時間到期解除。
+       */
+      await enterMaintenance().catch(e => console.error('[NIGHTLY-FIX] 維護視窗續期失敗：', e.message));
 
       // ⚠ 每條各自 try/catch：adoptFix（狀態不符）與 applyFix（主 clone 髒、與 origin 分岔、
       // push 失敗、查不到容器名）都會拋。不接住的話第一條死掉後面全不跑。
