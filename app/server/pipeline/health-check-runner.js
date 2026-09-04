@@ -6,7 +6,7 @@ const { runAgent } = require('./agent-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('./health-data');
-const { MACHINE_RETIRE_PREFIX } = require('./nightly-fix');
+const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 
@@ -433,7 +433,7 @@ const STATUS_TEXT = { pending: '待處理', approved: '已核准（將自動執�
 // 的關鍵——尤其視窗改成增量之後，沒有它每輪都會從零開始。
 async function previousProposals(limit = 20) {
   const { rows } = await query(
-    `SELECT diagnosis, layer, status, verdict_note, target_metric, metric_baseline, applied_at, kind
+    `SELECT diagnosis, layer, status, verdict_note, target_metric, metric_baseline, applied_at, kind, decided_at
        FROM health_check_findings
       WHERE kind IN ('proposal','signal') ORDER BY id DESC LIMIT $1`, [limit]
   );
@@ -443,8 +443,11 @@ async function previousProposals(limit = 20) {
     const applied = r.applied_at ? `；於 ${new Date(r.applied_at).toISOString().slice(0, 10)} 套用` : '';
     // 帶 MACHINE_RETIRE_PREFIX 的 note 是夜間批次自己寫的，不是人的裁決——冠「你的裁決」等於把
     // 機器自己的輸出貼上人類標籤送回去當跨輪記憶，auditor 讀到會誤以為是人在跟它對話。
+    // ⚠ 光看前綴不夠：管理員按「待處理」但沒清空預填的機器 note 時，那筆 note 仍以前綴開頭卻
+    // 確實是人的裁決（decided_at 非 NULL）。要跟前端 isMachineRetired 對齊——帶前綴「且」
+    // decided_at 為 NULL 才算機器退場，否則這裡會把人的裁決誤標成「夜間批次自動退場」餵回去。
     const verdict = r.verdict_note
-      ? (r.verdict_note.startsWith(MACHINE_RETIRE_PREFIX)
+      ? ((r.verdict_note.startsWith(MACHINE_RETIRE_PREFIX) && !r.decided_at)
           ? `\n  夜間批次自動退場：${r.verdict_note.slice(MACHINE_RETIRE_PREFIX.length)}`
           : `\n  你的裁決：${r.verdict_note}`)
       : '';

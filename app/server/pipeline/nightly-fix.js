@@ -1,5 +1,6 @@
 const { execFile } = require('child_process');
 const { query } = require('../db');
+const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
 const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
 const { triageOne, mergeCandidates } = require('./feedback-triage');
 const { reviewFix } = require('./fix-review');
@@ -338,11 +339,6 @@ async function markGroupDone(cand, userId) {
     [cand.findingId]);
 }
 
-// 機器退場寫進 note 的標記前綴。前端用 `startsWith` 判斷（不是 SQL LIKE），所以不受
-// pg-mem 把 `[...]` 當字元類別那個坑影響；但這裡選不含方括號的字面詞，避免以後有人
-// 改成 SQL LIKE 查詢又踩一次。
-const MACHINE_RETIRE_PREFIX = '自動退場：';
-
 /**
  * 退場＝把狀態換回「等人」那一格並歸零計數，不是靜靜地從候選裡消失：
  *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（與 triageOne 判不出來時同一個慣例，
@@ -590,7 +586,8 @@ async function runNightlyFix({ startedBy = null } = {}) {
         } else if (!result.adopted) {
           // adopted＝修好了只差沒有推送身分（設定問題），不該算在這一條的失敗額度裡，
           // 否則一次設定疏漏就會把當晚每一條的退場額度都燒掉。
-          await noteFailedAttempt(cand, result.reason);
+          await noteFailedAttempt(cand, result.reason).catch(e =>
+            console.error('[NIGHTLY-FIX] 記錄失敗次數時又出錯：', e.message));
         }
       } catch (err) {
         console.error('[NIGHTLY-FIX] 這一條中止（%s）：%s', group.title, err.message);

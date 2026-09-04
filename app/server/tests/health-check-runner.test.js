@@ -829,3 +829,42 @@ test('runAudit：上一輪的提案與裁決會餵回下一輪（跨輪記憶，
   expect(prompt).toContain('證據只有一張任務');           // 沒有這句，下一輪會把同一件事再提一次
   expect(prompt).toContain('repeat_calls.avg');           // 指標要帶回去才驗得到成效
 });
+
+// N9：previousProposals 組 prompt 時，機器退場的 note 不能冠「你的裁決」送回去——那會讓
+// auditor 誤以為是人在跟它對話。R1(b) 把 MACHINE_RETIRE_PREFIX 抽到 retire-prefix.js 這個
+// 葉節點模組之後，這條風險理論上不會再因為 nightly-fix.js／health-check-runner.js 的 require
+// 順序而靜默退化（見 retire-prefix.js 檔頭註解）——但這支測試本身**擋不住循環**：這裡跟本檔案
+// 其他測試共用同一個 module registry，多半剛好落在「先 require health-check-runner」那個
+// 不會觸發問題的順序，真正擋循環的是 R1(b) 的葉節點抽離，不是這支測試。這支測試唯一保證的是
+// 「prompt 字串本身組對了」——一旦哪天真的循環又形成、MACHINE_RETIRE_PREFIX 變回 undefined，
+// 這支測試才有機會在自己的 module registry 剛好踩到壞順序時紅一次。
+test('runAudit：previousProposals 組 prompt 時，機器退場的 note 不冠「你的裁決」，人的裁決會', async () => {
+  const prevRun = await newAuditRun();
+  // 機器退場：帶 MACHINE_RETIRE_PREFIX 前綴，且 decided_at 為 NULL（跟前端 isMachineRetired 對齊）
+  await dbModule2.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, kind, layer,
+                                        status, verdict_note, target_metric, metric_baseline)
+     VALUES ($1,'__audit__','機器退場的提案','機器退場的提案：某某問題','medium','proposal','code',
+             'pending','自動退場：自動修正連續失敗 3 次，已退回人工處理','fix_attempts.count','3')`,
+    [prevRun]);
+  // 人的裁決：即使 note 內容也帶同一段前綴文字（模擬管理員按「待處理」但沒清空預填文字），
+  // decided_at 非 NULL 時仍要判成人的裁決——這是 F-3 對齊前端判準的核心。
+  await dbModule2.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, kind, layer,
+                                        status, verdict_note, decided_at, target_metric, metric_baseline)
+     VALUES ($1,'__audit__','人裁決的提案','人裁決的提案：某某問題','medium','proposal','code',
+             'pending','自動退場：這其實是我自己的裁決',NOW(),'fix_attempts.count','1')`,
+    [prevRun]);
+
+  mockRunClaude.mockResolvedValue(AUDIT_OK);
+  const runId = await newAuditRun();
+  await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
+
+  const prompt = mockRunClaude.mock.calls.at(-1)[0];
+  // 機器退場那筆：不冠「你的裁決」，改標「夜間批次自動退場」
+  expect(prompt).toContain('機器退場的提案：某某問題');
+  expect(prompt).toContain('夜間批次自動退場：自動修正連續失敗 3 次，已退回人工處理');
+  // 人裁決那筆：即使 note 帶同一段前綴文字，decided_at 非 NULL 時仍要冠「你的裁決」
+  expect(prompt).toContain('人裁決的提案：某某問題');
+  expect(prompt).toContain('你的裁決：自動退場：這其實是我自己的裁決');
+});

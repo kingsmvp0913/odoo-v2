@@ -631,6 +631,9 @@
                   </select>
                 </div>
               </div>
+              <div v-if="!cliPushUserId" class="pill pill-warn" style="margin-top:8px">
+                未設定 CLI 推送身分：意見回饋夜間批次修好的項目會停在「已採用」，不會自動合併與重啟，需要人工到這裡設定後才會推送
+              </div>
             </div>
             <div class="setting-block-footer">
               <button class="btn btn-primary btn-sm" @click="saveCliPushUser" :disabled="savingCliPushUser">

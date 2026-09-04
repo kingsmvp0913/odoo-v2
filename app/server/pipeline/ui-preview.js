@@ -21,10 +21,13 @@ const VIEWPORT = { width: 1440, height: 900 };
 
 // 換一版 Chromium，同一份 HTML 的文字描邊就有 subpixel 差；playwright 是在 require 時就依這個
 // 變數決定去哪裡找執行檔的，必須在 require('playwright') 之前設定（比照 app/rwd/capture.js）。
+// ⚠ 這兩個變數的實際寫入動作（`process.env.xxx = ...`）搬到 captureBeforeAfter 裡、緊鄰
+// `require('playwright')` 之前才做——這裡曾經是模組頂層直接寫，而本模組現在會被
+// `admin-routes.js` 開機時的 require 鏈間接拉進來（見 health-check-runner.js），
+// 頂層寫入等於平台一開機就把整個 process 的 XDG_DATA_HOME／PLAYWRIGHT_BROWSERS_PATH
+// 污染成這裡的值，殃及平台 spawn 的每個子行程（claude CLI、git、docker）。搬進 lazy 分支後
+// 只有真的要截圖（呼叫 captureBeforeAfter 且缺字型檢查通過）才會寫，語意不變、副作用歸零。
 const BROWSER_ROOT = path.join(REPO_ROOT, 'app', 'rwd', '.pw-browsers');
-if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSER_ROOT)) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSER_ROOT;
-}
 // 截圖機器不一定裝了中文字型，漏了中文全變豆腐框——而豆腐框寬度不等於中文字寬，
 // 會讓 fix-review 誤判成「版面塌掉」而 reject 一份其實沒問題的修正。字型跟著 repo 走
 // （比照 app/rwd/capture.js）。
@@ -40,9 +43,6 @@ function fontFiles() {
   try {
     return fs.readdirSync(FONT_DIR).filter(f => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(f));
   } catch { return []; }
-}
-if (!process.env.XDG_DATA_HOME && fontFiles().length) {
-  process.env.XDG_DATA_HOME = FONT_ROOT;
 }
 
 function readConfig() {
@@ -170,6 +170,13 @@ async function captureBeforeAfter(worktree, route) {
   let outDir = null;
   let browserMod = null;
   try {
+    // 必須在 require('playwright') 之前設定（見檔頭 BROWSER_ROOT／FONT_ROOT 註解）。
+    if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSER_ROOT)) {
+      process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSER_ROOT;
+    }
+    if (!process.env.XDG_DATA_HOME) {
+      process.env.XDG_DATA_HOME = FONT_ROOT;
+    }
     browserMod = require('playwright');
   } catch (err) {
     console.error('[UI-PREVIEW] playwright 載入失敗：', err.message);
