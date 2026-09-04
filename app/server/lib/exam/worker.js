@@ -9,7 +9,8 @@
 //      前端記憶體就空了、畫面上工作消失，使用者以為沒反應再按一次撞 409，
 //      於是認為「建不了題庫」——但第一次早就在跑了。
 //   2. **併行有上限**。Claude 用量是全平台單一帳號共用，跑太兇會排擠正在跑的
-//      開發 pipeline（那是天天在用的東西）。原專案實測上限 2→3。
+//      開發 pipeline（那是天天在用的東西）。原專案實測 2→3，本平台放寬到 5
+//      （使用者 2026-09-05 裁決：考試當下等不起，寧可排擠開發）。
 //   3. **單筆失敗不中斷整批**。實測踩過：一頁逾時讓整個腳本 exit，前面跑完的
 //      結果留在 DB，從結果看不出少了一半。
 const path = require('path');
@@ -20,8 +21,9 @@ const { fingerprint } = require('./fingerprint');
 const { baseConfidence, calibrateSection } = require('./confidence');
 const { parseAnswers, checkCount, alignAnswers } = require('./answers');
 
-// 併行上限。超過 3 會排擠平台自己的 pipeline——Claude 帳號是全平台共用的。
-const concurrency = () => Math.max(1, parseInt(process.env.EXAM_CONCURRENCY || '3', 10));
+// 併行上限。Claude 帳號是全平台共用的，開越多越會排擠自家 pipeline；
+// 5 是使用者權衡「考試當下等不起」之後訂的線，要再調用 EXAM_CONCURRENCY。
+const concurrency = () => Math.max(1, parseInt(process.env.EXAM_CONCURRENCY || '5', 10));
 
 const uploadRootOf = () => require('../attachments').uploadRoot();
 
@@ -212,9 +214,11 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
     `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
   if (!bank) throw new Error(`找不到題庫 ${bankId}`);
 
-  const pending = (await db.query(
+  const fetchPending = async () => (await db.query(
     `SELECT id, bank_id, page, answer_raw, responder, image_path, is_test, section_title
        FROM exam_uploads WHERE bank_id = $1 AND status = 'pending' ORDER BY id`, [bankId])).rows;
+
+  const pending = await fetchPending();
   if (!pending.length) return { jobId: null, total: 0, done: 0, failed: 0 };
 
   const job = (await db.query(
@@ -223,10 +227,23 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
     [bankId, pending.length, process.pid])).rows[0];
 
   const stat = { jobId: job.id, total: pending.length, done: 0, failed: 0 };
-  const queue = [...pending];
+  let queue = [...pending];
 
   const nextOne = async () => {
     for (;;) {
+      // 佇列空了先回頭查一次 DB，不要拿開頭那份快照當全部。
+      //
+      // 同事是**一頁一頁**傳的（那是主流程，不是例外）。用快照的話，第二頁在
+      // 幾十毫秒後才進 DB，這一批早就決定好只有第一頁，第二頁得等整批跑完才
+      // 開新的一批——實測兩次 POST 相差 31ms，結果是兩個各只有 1 頁的 job，
+      // 併行上限 3 完全沒有機會生效。
+      if (!queue.length) {
+        queue = await fetchPending();
+        if (queue.length) {
+          stat.total += queue.length;
+          await setJob(db, job.id, { pages_total: stat.total });
+        }
+      }
       const up = queue.shift();
       if (!up) return;
       await db.query(`UPDATE exam_uploads SET status='running', updated_at=NOW() WHERE id=$1`, [up.id]);
@@ -259,7 +276,9 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
     }
   };
 
-  await Promise.all(Array.from({ length: Math.min(concurrency(), pending.length) }, nextOne));
+  // 固定開滿併行數，不看開頭有幾頁：多出來的 worker 查不到待處理就立刻結束，
+  // 但只要有一個還在跑，後到的頁就有 worker 可以馬上接手。
+  await Promise.all(Array.from({ length: concurrency() }, nextOne));
 
   await setJob(db, job.id, { phase: '重算信心度' });
   const { notes } = await recomputeConfidence(db, bank);

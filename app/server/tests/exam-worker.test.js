@@ -196,6 +196,33 @@ test('審查中途失敗時，那一頁已建的作答要清乾淨', async () =>
   expect(up.rows[0].error).toMatch(/0\.95/);
 });
 
+// 同事是一頁一頁傳的（主流程，不是例外）。用開頭那份快照當全部的話，第二頁
+// 得等整批跑完才開新的一批——實測兩次 POST 相差 31ms，結果是兩個各只有 1 頁的
+// job，併行上限 3 完全沒有機會生效。
+test('執行期間新進的頁會加入同一批，不必等整批跑完', async () => {
+  await addUpload('50', 'B', null);
+  let injected = false;
+  mockExtract.mockImplementation(async () => {
+    // 第一頁開始處理後才插入第二頁，模擬「跑到一半又有人傳圖進來」
+    if (!injected) { injected = true; await addUpload('51', 'B', null); }
+    return { page: pageOf([{ en: `Q for page ${injected}` }]), model: 'm' };
+  });
+  mockReview.mockResolvedValue({ verdict: verdictOf([{ en: 'Q' }]), model: 'm' });
+
+  const r = await runQueue(dbModule, { bankId });
+  expect(r.total).toBe(2);          // 開頭只看得到 1 頁，跑的時候補進第 2 頁
+  expect(r.done).toBe(2);
+
+  const left = await dbModule.query(
+    `SELECT COUNT(*)::int c FROM exam_uploads WHERE page IN ('50','51') AND status <> 'done'`);
+  expect(left.rows[0].c).toBe(0);
+
+  const job = await dbModule.query(
+    `SELECT pages_total FROM exam_jobs ORDER BY id DESC LIMIT 1`);
+  expect(job.rows[0].pages_total).toBe(2);   // 進度分母要跟著長，不然永遠顯示 1/1
+  mockExtract.mockReset();
+});
+
 test('讀不出題目算失敗並寫下原因', async () => {
   await addUpload('9', 'B', null);
   mockExtract.mockResolvedValue({
