@@ -420,7 +420,7 @@ window.TOUR_COURSES = [
         route: '/token-report',
         target: '[data-tour="tr-charts"]',
         title: '花在哪一關、哪個專案',
-        text: '三張圓餅分別是 <strong>Agent 類型／專案／使用者</strong>，點一下可以放大。右邊折線是每日趨勢。<br><br>某個 agent 的占比突然變大，通常代表那一關的提示詞該調了——可以到「管理員 → 工作流程健檢」讓 AI 分析。'
+        text: '三張圓餅分別是 <strong>Agent 類型／專案／使用者</strong>，點一下可以放大。右邊折線是每日趨勢。<br><br>某個 agent 的占比突然變大，通常代表那一關的提示詞該調了——可以到「管理員 → 改善提案」看 AI 分析出來的待辦提案。'
       },
       {
         route: '/token-report',
@@ -454,7 +454,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="admin-tools"]',
         placement: 'top',
         title: '其他管理工具',
-        text: '常用的三個：<strong>使用者管理</strong>（開帳號、給權限）、<strong>Agent 管理</strong>（調各關的模型與提示詞）、<strong>工作流程健檢</strong>（讓 AI 分析近期表現並建議改提示詞）。<br><br>其餘是排查用的：退回原因、失敗分類樣本、Prompt 送出記錄、測試區 port 池、企業版來源。'
+        text: '常用的三個：<strong>使用者管理</strong>（開帳號、給權限）、<strong>Agent 管理</strong>（調各關的模型與提示詞）、<strong>改善提案</strong>（健檢與意見回饋產生的待辦提案）。<br><br>其餘是排查用的：退回原因、失敗分類樣本、Prompt 送出記錄、測試區 port 池、企業版來源。'
       }
     ]
   }

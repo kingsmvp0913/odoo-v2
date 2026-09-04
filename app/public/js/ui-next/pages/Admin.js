@@ -6,7 +6,7 @@
       { to: "/admin/users", title: "使用者管理", detail: "帳號、角色與核准狀態" },
       { to: "/admin/agents", title: "Agent 管理", detail: "模型、提示詞與執行設定" },
       { to: "/admin/schedules", title: "排程", detail: "背景工作與執行週期" },
-      { to: "/admin/health", title: "工作流程健檢", detail: "健康度與改善建議" },
+      { to: "/admin/health", title: "改善提案", detail: "健檢與意見回饋產生的待辦提案" },
       { to: "/admin/rejections", title: "退回原因", detail: "人工退回與分類" },
       { to: "/admin/classify-samples", title: "失敗分類樣本", detail: "待人工歸納的案例" },
       { to: "/admin/prompt-logs", title: "Prompt 記錄", detail: "送往 AI 的提示詞" },

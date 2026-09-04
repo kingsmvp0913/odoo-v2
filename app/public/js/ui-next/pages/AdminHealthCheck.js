@@ -1,9 +1,9 @@
   window.UiNextAdminHealthCheckView = Vue.defineComponent({
     name: "UiNextAdminHealthCheckView",
     data() {
-      return { runId: null, run: null, findings: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, _timer: null, _fixTimer: null };
+      return { runId: null, run: null, findings: [], proposals: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, _timer: null, _fixTimer: null };
     },
-    async mounted() { await this.loadHistory(); await this.openFromQuery(); },
+    async mounted() { await this.loadProposals(); await this.loadHistory(); await this.openFromQuery(); },
     unmounted() { if (this._timer) clearInterval(this._timer); if (this._fixTimer) clearInterval(this._fixTimer); },
     computed: {
       // 排程是每週自動跑（cron 每分鐘一 tick），所以顯示的是「最早會被執行的時刻」
@@ -18,6 +18,9 @@
       // 已核准的提案什麼時候會被自動實作，一律引用排程 API 的真值。寫死「22:00」的話，同一畫面
       // 上方的「下次自動健檢」讀的是真值，兩個數字對不起來就是在說謊；而且下次改排程還會再漂一次。
       // 只回時間片語，動詞留在模板——拿不到排程資訊就回 null，寧可不講時間也不要講錯的時間。
+      // 最新一輪。失敗橫幅要吃它而不是 run——run 只有點進某一輪才有值，而「健檢掛了」這件事
+      // 必須一進頁面就看得到（掛掉時零提案，整頁跟「今天本來就沒事」長得一樣）。
+      latestRun() { return this.history && this.history.length ? this.history[0] : null; },
       autoRunText() {
         const s = this.schedule;
         if (!s || !s.enabled) return null;
@@ -56,7 +59,9 @@
           if (run.status !== 'running') {
             clearInterval(this._timer); this._timer = null; this.running = false;
             await this.loadHistory();
-            await this.loadFixes();
+            // 這一輪產出的新提案要進主清單。只重載 findings 的話，跑完健檢畫面上的提案數不會動
+            // ——新的那幾條要重整頁面才看得到，看起來像健檢什麼都沒做出來。
+            await this.loadProposals();
           }
         } catch (e) { /* 單次輪詢失敗保留上批，下次恢復 */ }
       },
@@ -74,6 +79,14 @@
       scopeText(r) { return r && r.task_db_id ? ('任務 ' + (r.task_id || r.task_db_id)) : '全平台'; },
       layer(l) { return HC_LAYER[l] || null; },
       kindOf(f) { return f.kind || 'agent'; },
+      // 提案的來源。agent_name 在這張表同時承載「哪一關」與「哪一種非 per-agent 的診斷」：
+      // 'feedback' 是 nightly-fix 的 materializeGroup 寫的（使用者意見統整後落地），
+      // '__task__' 是單張任務健檢，其餘（含 '__audit__'）都是平台健檢自己挖出來的。
+      sourceText(f) {
+        if (f.agent_name === 'feedback') return '意見回饋';
+        if (f.agent_name === '__task__') return '任務健檢';
+        return '平台健檢';
+      },
       ofKind(k) { return this.findings.filter(f => this.kindOf(f) === k); },
       statusLabel(v) { return (HC_STATUS.find(s => s.value === v) || {}).label || v; },
       // 夜間批次退場（連續失敗／no_change／layer 不可自動修，都是同一個前綴）：
@@ -107,8 +120,15 @@
       },
       // 每次打開一輪就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
       // 會有人再按一次而在同一條上開第二個工作區。
+      // 提案清單是這一頁的主體，跨輪撈。⚠ 不能用某一輪的 findings 當來源：最後一輪剛好失敗
+      // （零 finding）整頁就會顯示「待處理 0 條」，而 DB 裡其實還有待辦——實測 run#19 就是這樣。
+      async loadProposals() {
+        try { this.proposals = await Api.get('admin/proposals'); }
+        catch (e) { showToast(e.message, 'error'); }
+        await this.loadFixes();
+      },
       async loadFixes() {
-        for (const f of this.ofKind('proposal')) {
+        for (const f of this.proposals) {
           try {
             const fx = await Api.get('admin/health-check/findings/' + f.id + '/fix');
             if (fx) this.fixes[f.id] = fx;
@@ -175,38 +195,22 @@
     },
     template: `
       <div class="topbar ui-next-admin-head">
-        <h1>系統健檢</h1>
+        <h1>改善提案</h1>
         <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
         <div class="hc-page">
-          <div class="settings-section hc-window-row">
-            <label style="font-size:var(--fs-base)" title="增量＝只看上一輪健檢之後的新資料。大健檢固定回看 7／30 天，30 天那份還會多帶上一期資料做趨勢比對。">
-              節奏
-              <select v-model="cadence" class="form-control" style="width:auto">
-                <option value="daily">增量</option>
-                <option value="weekly">7 天大健檢</option>
-                <option value="monthly">30 天大健檢（含趨勢比對）</option>
-              </select>
-            </label>
-            <label v-if="cadence === 'daily'" style="font-size:var(--fs-base)" title="留空＝只看上一輪健檢之後的新資料（預設）。填數字＝回頭重掃這麼多天。">
-              回溯
-              <input type="number" v-model.number="sinceDays" min="1" placeholder="增量" style="width:72px" class="form-control" /> 天
-            </label>
-            <button class="btn btn-primary btn-sm" :disabled="running" @click="start">
-              {{ running ? '健檢中...' : '開始健檢' }}
-            </button>
-            <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
-              範圍：{{ run.task_db_id ? ('任務 ' + ((run.task && run.task.task_id) || run.task_db_id)) : '全平台' }}　
-              狀態：{{ run.status }}（{{ ofKind('proposal').length }} 條提案）
-              <span v-if="run.since_at">　視窗：{{ new Date(run.since_at).toLocaleString() }} 起</span>
-            </span>
-            <span v-if="nextRunText" style="font-size:var(--fs-sm);color:var(--text-muted);margin-left:auto">
-              下次自動健檢：{{ nextRunText }}
-            </span>
+          <!-- 這一頁的用途是「管理提案」。健檢只是提案的其中一個來源（另一個是使用者意見回饋），
+               它的操作與紀錄一律收到頁尾的摺疊區——攤在最上面會讓「這頁要我做什麼」變成
+               「這頁在跑什麼」。唯一留在上面的是「上一輪成功了沒」，理由見下一段。 -->
+          <div class="settings-section hc-window-row" style="font-size:var(--fs-sm);color:var(--text-muted)">
+            <span>待處理 {{ proposals.filter(f => f.status === 'pending').length }} 條
+                  已核准 {{ proposals.filter(f => f.status === 'approved').length }} 條
+                  <span v-if="!proposals.length">（目前沒有提案）</span></span>
+            <span v-if="nextRunText" style="margin-left:auto">下次自動產生：{{ nextRunText }}</span>
           </div>
 
-          <div v-if="ofKind('proposal').some(f => f.status === 'approved')" class="settings-section"
+          <div v-if="proposals.some(f => f.status === 'approved')" class="settings-section"
             style="border-left:3px solid var(--warning-strong);margin-bottom:var(--space-3);font-size:var(--fs-sm);color:var(--text)">
             <!-- 3-I4：runAudit(...).finally(() => runNightlyFix(...))——健檢一寫完 approved 提案，
                  下一步就是批次，中間只隔一個 waitForDrain，沒有在飛任務時是 0 秒銜接。「要在那之前
@@ -219,17 +223,22 @@
           <!-- 健檢自己掛掉的話，它一筆提案都不會產生——畫面上跟「今晚本來就沒事做」長得一模一樣
                （此 repo 踩過：夜班空轉 98 輪無人察覺）。這一頁收斂成只看提案之後，這是唯一分辨得
                出來的地方，所以要顯著、要帶原因（health_check_runs.error）。 -->
-          <div v-if="run && run.status === 'error'" class="error-msg" style="margin-bottom:var(--space-3)">
-            ⚠ 這一輪健檢失敗，沒有產生任何提案。<span v-if="run.error">原因：{{ run.error }}</span>
+          <div v-if="latestRun && latestRun.status === 'error'" class="error-msg" style="margin-bottom:var(--space-3)">
+            ⚠ 上一輪健檢失敗（{{ new Date(latestRun.created_at).toLocaleString() }}），沒有產生任何提案。<span v-if="latestRun.error">原因：{{ latestRun.error }}</span>
             <span v-else>（沒有記到原因——這輪是舊版留下的，新版失敗都會寫原因）</span>
           </div>
 
           <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
 
-          <div v-for="f in ofKind('proposal')" :key="f.id"
+          <div v-for="f in proposals" :key="f.id"
             style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
             <div class="hc-finding-title-row">
               <span style="font-weight:var(--fw-semibold)">{{ f.agent_label }}</span>
+              <!-- 來源：兩條路都落在同一張表、同一份清單裡（健檢的 health-auditor／單張任務健檢，
+                   與使用者意見經 nightly-fix 的 materializeGroup 寫進來的 'feedback'）。不標的話
+                   「這是誰要求的」在畫面上完全消失，而那正是判斷要不要放行時最先想問的事。 -->
+              <span class="pill" :class="f.agent_name === 'feedback' ? 'pill-info' : ''"
+                style="font-size:var(--fs-xs)">{{ sourceText(f) }}</span>
               <span v-if="layer(f.layer)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:layer(f.layer).color}">
                 {{ layer(f.layer).label }}
               </span>
@@ -333,8 +342,40 @@
             </div>
           </details>
 
-          <div class="settings-section">
-            <h2 class="section-title">歷史健檢</h2>
+          <!-- 健檢的操作與紀錄。健檢是提案的來源之一，不是這一頁的主題，所以整組收在最後、預設關起來。
+               ⚠ 唯一不收的是「上一輪失敗了」那則橫幅（在頁首）：健檢掛掉時它一筆提案都不會產生，
+               整頁看起來就像「今天本來就沒事」，那是這個 repo 踩過的靜默失敗（夜班空轉 98 輪）。 -->
+          <details class="settings-section">
+            <summary style="cursor:pointer">
+              <span class="section-title" style="display:inline">健檢執行</span>
+              <span style="font-size:var(--fs-sm);color:var(--text-muted)">
+                　手動跑一次、看歷史紀錄<span v-if="nextRunText">（下次自動：{{ nextRunText }}）</span>
+              </span>
+            </summary>
+
+            <div class="hc-window-row" style="margin:var(--space-3) 0">
+              <label style="font-size:var(--fs-base)" title="增量＝只看上一輪健檢之後的新資料。大健檢固定回看 7／30 天，30 天那份還會多帶上一期資料做趨勢比對。">
+                節奏
+                <select v-model="cadence" class="form-control" style="width:auto">
+                  <option value="daily">增量</option>
+                  <option value="weekly">7 天大健檢</option>
+                  <option value="monthly">30 天大健檢（含趨勢比對）</option>
+                </select>
+              </label>
+              <label v-if="cadence === 'daily'" style="font-size:var(--fs-base)" title="留空＝只看上一輪健檢之後的新資料（預設）。填數字＝回頭重掃這麼多天。">
+                回溯
+                <input type="number" v-model.number="sinceDays" min="1" placeholder="增量" style="width:72px" class="form-control" /> 天
+              </label>
+              <button class="btn btn-primary btn-sm" :disabled="running" @click="start">
+                {{ running ? '健檢中...' : '開始健檢' }}
+              </button>
+              <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
+                本輪：{{ run.task_db_id ? ('任務 ' + ((run.task && run.task.task_id) || run.task_db_id)) : '全平台' }}
+                　{{ run.status }}（{{ ofKind('proposal').length }} 條提案）
+                <span v-if="run.since_at">　視窗：{{ new Date(run.since_at).toLocaleString() }} 起</span>
+              </span>
+            </div>
+
             <div class="table-wrap">
               <table class="data-table">
                 <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>嚴重度</th><th>處理狀態</th><th>提案／診斷</th></tr></thead>
@@ -366,7 +407,7 @@
                 </tbody>
               </table>
             </div>
-          </div>
+          </details>
         </div>
       </div>
     `

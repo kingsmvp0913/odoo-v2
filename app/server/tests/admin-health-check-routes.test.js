@@ -390,3 +390,32 @@ test('取修正詳情要帶 review_notes：漏了前端會靜默不顯示審查�
   expect(r.status).toBe(200);
   expect(r.body.review_notes).toBe('截圖看不出差別，但 diff 只動註解');
 });
+
+// --- 跨輪的提案清單 ---
+// 管理頁的主體是「還沒結案的提案」，不是「某一輪健檢的產物」。綁單一 run 的話，最後一輪剛好
+// 失敗（零 finding）整頁就顯示「待處理 0 條」——實測 run#19 失敗當下，DB 裡其實有 4 筆 approved。
+test('提案清單跨輪撈，且不受最後一輪失敗影響', async () => {
+  const oldId = await newProposal();                       // 舊輪的提案
+  const { rows: [failed] } = await dbModule.query(
+    "INSERT INTO health_check_runs (status) VALUES ('error') RETURNING id");   // 最新一輪：失敗、零 finding
+
+  const r = await request(app).get('/api/admin/proposals')
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(r.status).toBe(200);
+  expect(r.body.map(f => f.id)).toContain(oldId);          // 最新輪失敗不影響舊輪的待辦
+  expect(r.body.every(f => f.kind === 'proposal')).toBe(true);   // 逐關診斷／總結／訊號不混進來
+  expect(failed).toBeTruthy();
+});
+
+test('提案清單把待處理排在前面：要決定的東西不該被已結案的洗到下面', async () => {
+  const pend = await newProposal();
+  const done = await newProposal();
+  await dbModule.query("UPDATE health_check_findings SET status='done' WHERE id=$1", [done]);
+
+  const r = await request(app).get('/api/admin/proposals')
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  const ids = r.body.map(f => f.id);
+  expect(ids.indexOf(pend)).toBeLessThan(ids.indexOf(done));
+});

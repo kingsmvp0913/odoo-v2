@@ -628,6 +628,26 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 跨輪的提案清單。管理頁的主體是「還沒結案的提案」，不是「某一輪健檢的產物」——綁單一 run 的話，
+  // 最後一輪剛好失敗（零 finding）整頁就空白，而 DB 裡其實還有待辦（實測：run#19 失敗當下，
+  // 畫面顯示「待處理 0 條」但實際有 4 筆 approved 提案）。
+  // 兩個來源（平台健檢的 __audit__／單張任務健檢的 __task__，與使用者意見經 materializeGroup
+  // 寫進來的 'feedback'）都落在這張表，這裡一併撈出來——那正是「統一到提案管理」的意思。
+  app.get('/api/admin/proposals', auth, async (_req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT f.*, r.created_at AS run_at, r.cadence
+           FROM health_check_findings f
+           JOIN health_check_runs r ON r.id = f.run_id
+          WHERE f.kind = 'proposal'
+          ORDER BY CASE f.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1
+                                 WHEN 'no_change' THEN 2 ELSE 3 END, f.id DESC
+          LIMIT 100`
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.get('/api/admin/health-check', auth, async (_req, res) => {
     try {
       // LEFT JOIN tasks：task_db_id 刻意不帶 FK（見 db.js），任務被刪掉時這裡回 null，
