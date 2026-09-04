@@ -216,6 +216,21 @@ function normalize(raw, theirAnswers = []) {
   };
 }
 
+// 從整頁的術語清單裡篩出「這一段英文真的用到的」。
+//
+// 非有不可：術語表是對**整頁**的英文查的，但譯文檢查是**逐題**做的。直接拿整頁
+// 的術語去比單題譯文，Q1 會被報「沒對上 Q2、Q3 的術語」——實跑時每題吐出十幾條
+// 假的沒對上，真正該看的被淹沒。
+function termsIn(enText, glossary) {
+  const hay = String(enText || '');
+  if (!hay.trim()) return [];
+  return (glossary || []).filter(g => {
+    if (!g || !g.en) return false;
+    const re = new RegExp(`\\b${g.en.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return re.test(hay);
+  });
+}
+
 // 翻完之後驗一次：官方譯法有沒有真的出現在譯文裡。
 // 沒對上不是致命錯誤（模型可能改寫了句式），但要標出來讓人看得到——
 // 「中譯跟畫面上的字對不起來」正是需求 2 要解決的問題本身。
@@ -366,5 +381,5 @@ async function saveVerdicts(db, { bankId, page, verdict, model }) {
 }
 
 module.exports = {
-  reviewPage, buildPrompt, normalize, extractJson, checkGlossary, saveVerdicts, MODEL,
+  reviewPage, buildPrompt, normalize, extractJson, checkGlossary, termsIn, saveVerdicts, MODEL,
 };

@@ -81,4 +81,29 @@ describe('isTerm', () => {
   test('含換行的不是術語', () => {
     expect(isTerm('Line\nBreak', '換行')).toBe(false);
   });
+
+  // 下面四條是實跑一頁時真的看到的垃圾。沒擋掉的話 75 個「術語」塞進 prompt，
+  // 大半是虛詞，還讓「譯文有沒有用官方譯法」的檢查報一長串假的沒對上。
+  test('太短的不是術語', () => {
+    expect(isTerm('A', 'A')).toBe(false);
+    expect(isTerm('g', '克')).toBe(false);
+    expect(isTerm('in', ':')).toBe(false);
+  });
+
+  test('全小寫的虛詞不是術語', () => {
+    expect(isTerm('the', '於')).toBe(false);
+    expect(isTerm('can', '罐')).toBe(false);
+    expect(isTerm('create', '創建')).toBe(false);
+  });
+
+  test('譯文沒有中文的不是術語', () => {
+    expect(isTerm('Dashboard', 'Dashboard')).toBe(false);
+    expect(isTerm('Odoo', 'Odoo')).toBe(false);
+  });
+
+  test('真的術語不受影響', () => {
+    expect(isTerm('Sales Order', '銷售訂單')).toBe(true);
+    expect(isTerm('Vendor', '供應商')).toBe(true);
+    expect(isTerm('Reordering Rule', '重訂貨規則')).toBe(true);
+  });
 });

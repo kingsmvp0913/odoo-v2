@@ -87,7 +87,12 @@ function variants(term) {
 // 作法是反過來的：不掃文字去猜哪些是術語（猜不準），而是把該版本的術語表拉出來，
 // 看哪些出現在這段文字裡。Odoo 19 有 32,814 條，一次拉出來在記憶體比對即可，
 // 逐條丟 SQL 會是 32,814 次查詢。
-async function lookupTerms(db, version, text) {
+// 一頁最多塞這麼多術語進 prompt。實跑一頁時命中 75 個（多半是虛詞垃圾，
+// 已由 isTerm 修掉），但即使全是真術語，塞幾十個也會稀釋掉真正關鍵的那幾個。
+// 長的排前面，所以砍掉的是最短、最泛用、最不需要指定譯法的那些。
+const MAX_GLOSSARY_HITS = 25;
+
+async function lookupTerms(db, version, text, limit = MAX_GLOSSARY_HITS) {
   const hay = String(text == null ? '' : text);
   if (!hay.trim()) return [];
   const res = await db.query(
@@ -102,7 +107,9 @@ async function lookupTerms(db, version, text) {
     }
   }
   // 長的優先：把 "Sales Order" 排在 "Order" 前面，prompt 裡才不會被短的蓋掉
-  return [...found.values()].sort((a, b) => b.en.length - a.en.length);
+  return [...found.values()]
+    .sort((a, b) => b.en.length - a.en.length)
+    .slice(0, limit);
 }
 
-module.exports = { collectTerms, syncGlossary, lookupTerms, variants };
+module.exports = { collectTerms, syncGlossary, lookupTerms, variants, MAX_GLOSSARY_HITS };

@@ -39,8 +39,13 @@ function parsePo(content) {
   return out;
 }
 
-// 只要術語不要整句翻譯。門檻是實測調出來的（Odoo 19 全量掃過 409 個檔，
-// 這組條件留下約 32,800 條，"Delivery Orders"／"Bill of Materials" 都在裡面）。
+// 只要術語不要整句翻譯，也不要虛詞。
+//
+// 第一版只擋長度與標點，結果收進 `the→於`、`can→罐`、`g→克`、`in→:`、`A→A`
+// 這類垃圾。實跑一頁時它們塞爆了 prompt（75 個「術語」大半是虛詞），還讓
+// 「譯文有沒有用官方譯法」的檢查報出一長串假的沒對上。
+//
+// 四條加嚴，每條都對應一類實際看到的垃圾：
 function isTerm(msgid, msgstr) {
   const k = String(msgid == null ? '' : msgid).trim();
   const v = String(msgstr == null ? '' : msgstr).trim();
@@ -49,6 +54,22 @@ function isTerm(msgid, msgstr) {
   if (k.includes('\n') || v.includes('\n')) return false;
   if (k.includes('.')) return false;   // 句號 = 整句話
   if (k.includes('%')) return false;   // 格式化字串，不是術語
+
+  // 1. 太短的不是術語：擋掉 A／B／g／in／an
+  if (k.length < 3) return false;
+
+  // 2. 首字必須是大寫英文字母。Odoo 的 UI 術語是 Title Case（Sales Order、
+  //    Delivery Orders），畫面上印的也是那個形。全小寫的 the／can／create
+  //    是句子裡的字，不是使用者看得到的標籤。
+  if (!/^[A-Z]/.test(k)) return false;
+
+  // 3. 譯文必須含中文。擋掉 Dashboard→Dashboard、odoo→odoo 這種「翻了等於沒翻」，
+  //    以及 in→: 這種譯成標點的壞資料。
+  if (!/[一-鿿]/.test(v)) return false;
+
+  // 4. 譯文與原文相同的不算對照，沒有任何資訊量。
+  if (k === v) return false;
+
   return true;
 }
 

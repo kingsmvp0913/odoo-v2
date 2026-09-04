@@ -91,7 +91,13 @@ function calibrateSection(items, { incorrect } = {}) {
   // 硬縮放會除以零，給個假數字則等於假裝沒事。一律具名回報讓人去看。
   if (!scalable.length || rawRisk === 0) {
     if (incorrect > 0) {
-      return { scaled: 0, note: `官方說錯 ${incorrect} 題，但這章找不到可分配風險的題——對不上，未校準` };
+      // 分兩種情況講，不然只跑了幾頁的時候整片「對不上」會嚇人——那多半只是
+      // 還沒輪到審查，不是資料矛盾。真矛盾（每題都判滿分卻說有錯）才要追。
+      const pending = list.filter(i =>
+        i && !i.certain && i.answered !== false && !Number.isFinite(i.confidence)).length;
+      return pending
+        ? { scaled: 0, note: `尚未校準：這章還有 ${pending} 題沒審查過` }
+        : { scaled: 0, note: `官方說錯 ${incorrect} 題，但這章每題都判滿分——對不上，未校準` };
     }
     for (const i of scalable) i.calibrated = true;
     return { scaled: scalable.length, note: '' };

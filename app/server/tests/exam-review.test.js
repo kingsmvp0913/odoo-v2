@@ -1,5 +1,5 @@
 const { newDb } = require('pg-mem');
-const { buildPrompt, normalize, saveVerdicts, checkGlossary } = require('../lib/exam/review');
+const { buildPrompt, normalize, saveVerdicts, checkGlossary, termsIn } = require('../lib/exam/review');
 
 let dbModule;
 
@@ -124,6 +124,35 @@ describe('checkGlossary', () => {
 
   test('沒有術語表時不報任何 missed', () => {
     expect(checkGlossary('任何文字', []).missed).toEqual([]);
+  });
+});
+
+describe('termsIn', () => {
+  const all = [
+    { en: 'Sales Order', zh: '銷售訂單' },
+    { en: 'Reordering Rule', zh: '重訂貨規則' },
+    { en: 'Fiscal Position', zh: '財務規則' },
+  ];
+
+  // 術語表是對整頁的英文查的，譯文檢查卻是逐題做的。不先篩出「這一題用到的」，
+  // Q1 會被報「沒對上 Q2、Q3 的術語」——實跑時每題吐出十幾條假的沒對上。
+  test('只回這段英文真的用到的術語', () => {
+    const hit = termsIn('Where do you confirm a Sales Order?', all);
+    expect(hit.map(t => t.en)).toEqual(['Sales Order']);
+  });
+
+  test('大小寫不影響比對', () => {
+    expect(termsIn('the sales order line', all).map(t => t.en)).toEqual(['Sales Order']);
+  });
+
+  // \b 邊界：避免 "Order" 命中 "Orders" 之外的東西，也避免子字串誤判
+  test('部分字詞不算命中', () => {
+    expect(termsIn('Reordering', all).map(t => t.en)).toEqual([]);
+  });
+
+  test('空輸入回空陣列', () => {
+    expect(termsIn('', all)).toEqual([]);
+    expect(termsIn('anything', [])).toEqual([]);
   });
 });
 
