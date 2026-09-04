@@ -364,6 +364,30 @@ function registerRoutes(app) {
     res.json({ bank, uploads, attempts });
   });
 
+  // 重跑某一頁。中斷（重啟、逾時、模型格式跑掉）之後靠這支救回來，不必重新上傳。
+  //
+  // 一定要先清掉那一頁已建的作答：attempts 建在審查之前，中途失敗會留下一批沒有
+  // verdict 的孤兒，不清就重跑等於再建一份重複的（實測踩過，8 題的頁變成 16 筆）。
+  app.post('/api/exam/uploads/:id/retry', verifyToken, express.json(), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
+      const up = (await query(
+        `SELECT id, bank_id, page, status FROM exam_uploads WHERE id = $1`, [id])).rows[0];
+      if (!up) return res.status(404).json({ error: '找不到這一頁' });
+      if (up.status === 'running') {
+        return res.status(409).json({ error: '這一頁正在跑，等它結束或先停掉再重試' });
+      }
+
+      await query(`DELETE FROM exam_attempts WHERE upload_id = $1`, [id]);
+      await query(
+        `UPDATE exam_uploads SET status='pending', error=NULL, updated_at=NOW() WHERE id=$1`, [id]);
+      emitAll('exam-progress', { bankId: up.bank_id, page: up.page, status: 'pending' });
+      res.json({ ok: true, page: up.page });
+      scheduleQueue(up.bank_id);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // 把「上次那個答案大概率錯」的旗標掛在題目上（題庫頁手動勾）。
   //
   // 官方確認過的題不給改：它的答案是硬事實，標它「大概率錯」只會讓考試當下看到

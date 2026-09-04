@@ -133,3 +133,24 @@ test('一致與否比對的是最終答案，不是原始輸入', () => {
   expect(view).toContain('!this.sameAnswer(this.current(q), q.review_answer)');
   expect(view).toContain('q.answer_final) && q.answer_final.length) ? q.answer_final : q.answer_their');
 });
+
+// 作答是在審查完成前就建好的（saveVerdicts 要靠它們對應題號），所以題目會先冒出來、
+// 判斷卻還沒寫進去。那時候計進統計，「需確認」會先跳一個假數字再自己變回去，
+// 看起來像判錯又改口（2026-09-05 使用者回饋）。
+test('還在跑的頁不計入統計', () => {
+  expect(view).toContain('!g.is_test && !this.isBusy(g)');
+});
+
+// socket 從第一天起就沒綁上過：舊寫法去讀 window._socket，而那個全域根本不存在
+// （_socket 是 socket.js 那個 IIFE 的區域變數）。失敗完全靜默——畫面只是退回
+// 5 秒輪詢，沒有任何錯誤，所以一直沒人發現（2026-09-05 使用者回報）。
+test('即時更新走 SocketManager，不要自己摸 window._socket', () => {
+  const socket = fs.readFileSync(
+    path.join(__dirname, '../../public/js/socket.js'), 'utf8');
+  expect(socket).toContain('onSocket, offSocket');
+  expect(view).toContain("SocketManager.onSocket('exam-progress'");
+  // 只擋真正的用法，不擋註解裡解釋「為什麼不能用它」的那句
+  expect(view).not.toMatch(/=\s*window\._socket|window\._socket\./);
+  // 綁不到就每 300ms 重試的那個永不停止的計時器要一起拆掉
+  expect(view).not.toContain('_sockTimer');
+});

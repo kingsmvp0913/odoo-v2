@@ -1573,7 +1573,7 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    時間被 margin-left:auto 推到最右，中間一大片空白，掃視時看不出哪個字是哪一欄。
    grid 的欄數必須等於子元素個數（4 個），少一欄會讓最後一個掉到下一列。 */
 .ui-next-exam-run-card-head {
-  display: grid; grid-template-columns: 46px minmax(0, 1fr) 52px;
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) 52px 54px;
   gap: 10px; align-items: center; padding: 9px 14px; cursor: pointer;
   color: var(--text-secondary); font-size: var(--fs-sm);
 }
@@ -1709,3 +1709,12 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-run-sig i {
   font-style: normal; font-weight: var(--fw-semibold); line-height: 1;
 }
+
+
+/* 每一頁右上的重試。中斷之後靠它救回來，不必請同事重傳截圖。 */
+.ui-next-exam-run-retry {
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--card-bg); color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer;
+}
+.ui-next-exam-run-retry:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.ui-next-exam-run-retry:disabled { opacity: .45; cursor: default; }

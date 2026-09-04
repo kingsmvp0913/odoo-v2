@@ -10,6 +10,7 @@ window.UiNextExamRunView = Vue.defineComponent({
       filter: 'all', clearing: false,
       finalDraft: {}, savingFinal: {},
       archiveOpen: false, archivePages: [], archiving: false, archiveResult: null,
+      retrying: {},
     };
   },
   async created() {
@@ -21,26 +22,21 @@ window.UiNextExamRunView = Vue.defineComponent({
   },
   mounted() {
     this._onProgress = () => this.queueRefresh();
-    const bind = () => {
-      const sock = window._socket;
-      if (!sock) return false;
-      sock.on('exam-progress', this._onProgress);
-      return true;
-    };
-    if (!bind()) this._sockTimer = setInterval(() => {
-      if (bind()) { clearInterval(this._sockTimer); this._sockTimer = null; }
-    }, 300);
+    // 走 SocketManager.onSocket，不要自己去摸 window._socket——那個全域根本不存在
+    // （_socket 是 socket.js 那個 IIFE 的區域變數），舊寫法從第一天起就沒綁上過，
+    // 而且「綁不到就每 300ms 重試」變成一個永不停止的計時器。
+    // 失敗是靜默的：畫面只是退回 5 秒輪詢，沒有任何錯誤訊息。
+    this._offSocket = window.SocketManager
+      && window.SocketManager.onSocket('exam-progress', this._onProgress);
     // socket 只是加速通知；工作進度的真相仍在 DB。
     // 即使目前清單是空的也固定回查：外部 POST 可能發生在頁面開啟之後；若那一刻
     // socket 正在重連，只在「已有 pending」時輪詢會讓新資料永遠不出現。
     this._pollTimer = setInterval(() => this.refresh(), 5000);
   },
   beforeUnmount() {
-    if (this._sockTimer) clearInterval(this._sockTimer);
     if (this._pollTimer) clearInterval(this._pollTimer);
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
-    const sock = window._socket;
-    if (sock && sock.off && this._onProgress) sock.off('exam-progress', this._onProgress);
+    if (this._offSocket) this._offSocket();
   },
   computed: {
     uploadGroups() {
@@ -60,7 +56,10 @@ window.UiNextExamRunView = Vue.defineComponent({
         .filter(g => this.filter !== 'check' || g.questions.length);
     },
     stats() {
-      const groups = this.uploadGroups.filter(g => !g.is_test);
+      // 還在跑的那一頁不計入。作答是在審查完成**之前**就建好的（saveVerdicts 要靠
+      // 它們對應題號），所以題目會先冒出來、判斷卻還沒寫進去——那時候把它算進
+      // 統計，「需確認」會先跳一個假數字再自己變回去，看起來像判錯又改口。
+      const groups = this.uploadGroups.filter(g => !g.is_test && !this.isBusy(g));
       const questions = groups.flatMap(g => g.questions);
       const check = questions.filter(q => this.needsCheck(q)).length;
       const judged = questions.filter(q => q.review_source).length;
@@ -79,6 +78,21 @@ window.UiNextExamRunView = Vue.defineComponent({
         }
         this.finalDraft = next;
       } catch (e) { this.err = e.message; }
+    },
+    async retryPage(g) {
+      if (!await confirmDialog({
+        title: `重跑 P${g.page}`,
+        message: '會先清掉這一頁已建的作答再重新判題（不清的話會變成兩份重複的）。'
+          + '原本的截圖與作答不受影響。',
+        confirmText: '重跑',
+      })) return;
+      this.retrying = { ...this.retrying, [g.id]: true };
+      try {
+        await Api.post(`exam/uploads/${g.id}/retry`, {});
+        await this.refresh();
+        showToast(`P${g.page} 已排入重跑`, 'success');
+      } catch (e) { showToast(e.message, 'error', 0); }
+      finally { this.retrying = { ...this.retrying, [g.id]: false }; }
     },
     queueRefresh() {
       if (this._refreshTimer) return;
@@ -275,12 +289,18 @@ window.UiNextExamRunView = Vue.defineComponent({
           </div>
         </div>
         <div v-if="err" class="ui-next-exam-run-err">{{ err }}</div>
-        <details v-for="g in visibleGroups" :key="g.id" :open="groupNeedsCheck(g)"
+        <details v-for="g in visibleGroups" :key="g.id" :open="!isBusy(g) && groupNeedsCheck(g)"
                  :class="['ui-next-exam-run-card',g.status==='failed' && 'is-failed']">
           <summary class="ui-next-exam-run-card-head">
             <b>P{{ g.page }}</b>
             <span><i v-if="isBusy(g)" class="spinner"></i>{{ statusText(g) }}</span>
             <time>{{ shortTime(g.created_at) }}</time>
+            <!-- 中斷（重啟、逾時、模型格式跑掉）之後靠這顆救回來，不必請同事重傳。
+                 .prevent 是必要的：summary 內的按鈕不擋掉預設行為會順手收合／展開。 -->
+            <button class="ui-next-exam-run-retry" :disabled="isBusy(g) || retrying[g.id]"
+                    @click.stop.prevent="retryPage(g)">
+              {{ retrying[g.id] ? '重試中…' : '重試' }}
+            </button>
           </summary>
           <template v-for="q in g.questions" :key="q.attempt_id">
             <div v-if="q.review_source==='official'" class="ui-next-exam-run-question ui-next-exam-run-official">
