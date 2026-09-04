@@ -9,6 +9,7 @@ const { registerRoutes: registerTasksRoutes } = require('./tasks-routes');
 const { registerRoutes: registerInboxRoutes } = require('./inbox-routes');
 const { registerRoutes: registerFeedbackRoutes } = require('./feedback-routes');
 const { registerRoutes: registerExamRoutes } = require('./exam-routes');
+const { registerRoutes: registerExamUploadRoutes } = require('./exam-upload-routes');
 const { registerRoutes: registerPipelineRoutes } = require('./pipeline-routes');
 const { registerRoutes: registerProjectRoutes } = require('./project-routes');
 const { registerRoutes: registerWikiRoutes } = require('./wiki-routes');
@@ -88,6 +89,7 @@ function createApp() {
   registerInboxRoutes(app);
   registerFeedbackRoutes(app);
   registerExamRoutes(app);
+  registerExamUploadRoutes(app);
   registerPipelineRoutes(app);
   registerProjectRoutes(app);
   registerWikiRoutes(app);
