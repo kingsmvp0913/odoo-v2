@@ -468,7 +468,6 @@
 .ui-next-send,.ui-next-thread-send{background:color-mix(in srgb,var(--text) 26%,var(--surface));color:var(--text)}
 .ui-next-send:not(:disabled):hover,.ui-next-thread-send:not(:disabled):hover{background:color-mix(in srgb,var(--text) 38%,var(--surface));color:var(--text)}
 .ui-next-send:disabled,.ui-next-thread-send:disabled{opacity:.45}
-.ui-next-running-hint{color:var(--info);font-size:12px}
 
 /* 對話頁把垂直空間讓給訊息：輸入區壓低、最後一則訊息與輸入區之間不留大片空白、
    頁面底部也不再留 96px。原本三處加起來吃掉快 300px 的可視高度。 */
@@ -1231,3 +1230,16 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-maintenance-banner{margin:0 0 10px;padding:8px 12px;border-radius:10px;
   border:1px solid color-mix(in srgb,var(--warning) 40%,transparent);
   background:color-mix(in srgb,var(--warning) 12%,var(--bg));color:var(--text);font-size:12px}
+
+/* 任務卡的暫停／繼續改成圖示：文字版曾同時存在「恢復」「繼續執行」「已暫停」三種說法，
+   而使用者要判斷的只是「現在按下去會停還是會跑」。圖示沒有翻譯歧義。
+   選擇器帶 .ui-next-task-card-actions>button 是為了勝過 01-base.css 同名規則的 padding
+   （0,1,1 對 0,1,0，只寫 .ui-next-pause-toggle 會被吃掉）。 */
+.ui-next-task-card-actions>button.ui-next-pause-toggle{display:grid;place-items:center;padding:6px}
+.ui-next-task-card-actions .ui-next-icon{width:14px;height:14px}
+
+/* 換關那一行（role='stage'）：沿用 system 的灰字，但拿掉虛線框與內距。一張任務走完十來關，
+   每一關都包一個框會讓真正的對話變成配角——它要像時間軸上的刻度，不是一則訊息。 */
+.ui-next-conv-list article.system.is-stage > div:first-child{
+  padding:0;border:0;background:transparent;color:var(--text-muted);font-size:11px}
+.ui-next-conv-list article.system.is-stage small{font-size:11px}

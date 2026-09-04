@@ -178,6 +178,7 @@ beforeEach(async () => {
   await dbModule.query('DELETE FROM token_usage');
   await dbModule.query('DELETE FROM task_events');
   await dbModule.query('DELETE FROM task_logs');
+  await dbModule.query('DELETE FROM task_specs');
   await dbModule.query('DELETE FROM task_rejections');
   // task_messages 有 FK 指向 tasks(id) 且不帶 CASCADE，不先清會讓 DELETE FROM tasks 整批撞 FK
   // ——正式的三條刪除路徑（tasks-routes／project-routes／admin-routes）也都是顯式先刪它。

@@ -2,6 +2,11 @@ const { query } = require('../db');
 
 const REQUIRED_FIELDS = ['case_id', 'module', 'odoo_version', 'execution_mode', 'summary'];
 
+// 「這一則底下要掛規格書」的標記前綴。前端 TaskDetail 的 isSpecLog 靠它認人，runner 的
+// recordSpecVersion 也用它寫第 2 版起的紀錄——三處對同一個字面值，任一處改字就靜默斷開
+//（畫面上規格書整個不見，測試不會紅），所以字面值只留這一份。
+const SPEC_GATE_PREFIX = '[等待你審核規格]';
+
 // choice 題的 recommended 存的是 option 的 key（A／B），時間軸上要換成人看得懂的 label——
 // 印「建議：A」等於沒講。找不到對應 option（text 題，或 key 打錯）就原樣印 recommended 本身。
 // withWhy=false 只回選項名稱：時間軸那則是「事後回看問過什麼」的書籤，理由（recommended_why）
@@ -37,7 +42,7 @@ async function logAnalysisGate(taskId, parsed, nextStatus) {
     const intro = typeof parsed?.clarification_channel?.intro === 'string' ? parsed.clarification_channel.intro.trim() : '';
     content = `[需要你回答]\n${head}${intro ? `\n\n${intro}` : ''}${qs ? `\n\n${qs}` : ''}`;
   } else if (nextStatus === 'spec_review') {
-    content = `[等待你審核規格]\n${head}`;
+    content = `${SPEC_GATE_PREFIX}\n${head}`;
   } else {
     content = `分析完成，直接開工\n${head}`;
   }
@@ -61,4 +66,4 @@ function determineNextStatus(parsed) {
 
 // determineNextStatus / REQUIRED_FIELDS / logAnalysisGate 供 task-agent（analysis-project 路徑）共用：
 // 單一份「YAML → 下一狀態」推導、必要欄位驗證與閘門訊息，避免雙契約漂移。
-module.exports = { determineNextStatus, REQUIRED_FIELDS, logAnalysisGate, recommendedLine };
+module.exports = { determineNextStatus, REQUIRED_FIELDS, SPEC_GATE_PREFIX, logAnalysisGate, recommendedLine };

@@ -7,7 +7,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specFeedback: '', specApproving: false, specRevising: false, specReqOpen: false, maintenance: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], specFeedback: '', specApproving: false, specRevising: false, maintenance: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -296,6 +296,9 @@
         this.ticketAttachments = data.attachments || [];
         this.clarification = data.clarification || { summary: '', questions: [] };
         this.spec = data.spec || null; // spec_review 審核頁的規格（後端已 parse analysis_yaml）
+        // 每一版規格（task_specs）。時間軸上的規格書靠它掛版本，與上面那份「現在要你審的」分開：
+        // 共用一份的話，規格被退回改寫過的任務，舊的那一則會跟著顯示最新規格＝改動完全無痕。
+        this.specs = Array.isArray(data.specs) ? data.specs : [];
         // Init answer fields for each cs question
         const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
         const init = {};
@@ -673,8 +676,18 @@
         if (this.task.source === 'service') return 'src-badge src-service';
         return 'src-badge src-default';
       },
-      roleClass(role) { if (role === 'blocker') return 'system is-blocker'; return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system'; },
-      roleLabel(role) { if (role === 'blocker') return '執行中斷'; return role === 'ai' ? 'AI' : role === 'user' ? '你' : '系統'; },
+      // stage＝runner 寫的「→ 換關」單行紀錄。沿用 system 的灰字，但另掛 is-stage 拿掉虛線框：
+      // 一張任務會有十來行，每行都包一個框會把真正的對話擠成配角。
+      roleClass(role) {
+        if (role === 'blocker') return 'system is-blocker';
+        if (role === 'stage') return 'system is-stage';
+        return role === 'ai' ? 'ai' : role === 'user' ? 'user' : 'system';
+      },
+      roleLabel(role) {
+        if (role === 'blocker') return '執行中斷';
+        if (role === 'stage') return '流程';
+        return role === 'ai' ? 'AI' : role === 'user' ? '你' : '系統';
+      },
       // 時間軸項目來自 task_logs 沿用 roleClass；來自 task_messages 用 source 對應到既有 ai/user 泡泡樣式
       // （sync=外部進來的訊息，靠左走 ai 樣式；manual=你自己留言，靠右走 user 樣式，不新增 CSS class）
       timelineClass(item) {
@@ -705,6 +718,22 @@
       // 使用者把那段整則複製、貼進提問框問「這是什麼意思」，只比前綴就會把他的發言也當成規格書。
       isSpecLog(item) {
         return item.kind === 'log' && item.role === 'ai' && String(item.content || '').startsWith('[等待你審核規格]');
+      },
+      // 這一則掛哪一版規格。第 2 版起，runner 把版號寫進標頭列的全形括號（[等待你審核規格]（第 3 版））；
+      // 沒有括號的就是第 1 版。對不到版本時退回 spec（動作面板那份）——task_specs 是後來才加的表，
+      // 既有任務一筆版本都沒有，不退回的話它們的規格書會整個從畫面上消失。
+      specForLog(item) {
+        if (!this.isSpecLog(item)) return null;
+        const m = String(item.content || '').match(/^\[等待你審核規格\]（第\s*(\d+)\s*版）/);
+        const version = m ? Number(m[1]) : 1;
+        return (this.specs || []).find(s => s.version === version) || this.spec || null;
+      },
+      // 最新那一版才直接攤開。用「時間軸上最後一則規格 log」而不是「specs 的最大版號」：
+      // 版號寫在 log 內容裡，兩邊本來就對得起來，而以 log 為準才不會在 specs 為空（舊任務）時
+      // 把唯一那一則也判成舊版收起來。
+      isLatestSpecLog(item) {
+        const specLogs = this.timeline.filter(r => this.isSpecLog(r));
+        return !specLogs.length || specLogs[specLogs.length - 1]._key === item._key;
       },
       logLineCount(item) { return (String(item.content || '').match(/\n/g) || []).length + 1; },
       toggleLog(key) { this.expandedLogs[key] = !this.expandedLogs[key]; },
@@ -1035,20 +1064,26 @@
 <template v-else>
 <div v-html="renderTaskMessage(row.content)"></div>
 <!-- 規格審核那則 log 只寫得下摘要。模組／實作項／驗收／權限接在同一則底下，
-     這一關過了之後（動作面板消失）也還看得到規格是什麼。 -->
-<div v-if="isSpecLog(row)&&spec" class="ui-next-spec-box ui-next-spec-inline">
-<template v-if="spec.module"><b>模組</b><p><code>{{ spec.module }}</code></p></template>
-<template v-if="spec.requirements&&spec.requirements.length">
-<b class="ui-next-spec-toggle" @click="specReqOpen=!specReqOpen">{{ specReqOpen?'▾':'▸' }} 實作項（給 AI 的施工細節，共 {{ spec.requirements.length }} 項）</b>
-<ul v-if="specReqOpen"><li v-for="(item,index) in spec.requirements" :key="'req'+index">{{ item }}</li></ul>
+     這一關過了之後（動作面板消失）也還看得到規格是什麼。
+     規格被退回改寫過的任務會有多則：每一則掛自己那一版（specForLog），且只有最新那一版
+     直接攤開——舊版收成一顆按鈕。全部攤開的話同一頁會出現三份長得很像的規格，
+     使用者反而分不出正在審的是哪一份。 -->
+<div v-if="specForLog(row)" class="ui-next-spec-box ui-next-spec-inline">
+<b v-if="!isLatestSpecLog(row)" class="ui-next-spec-toggle" @click="toggleLog('spec'+row._key)">{{ expandedLogs['spec'+row._key]?'▾':'▸' }} 第 {{ specForLog(row).version||1 }} 版規格（已被後來的版本取代）</b>
+<template v-if="isLatestSpecLog(row)||expandedLogs['spec'+row._key]">
+<template v-if="specForLog(row).module"><b>模組</b><p><code>{{ specForLog(row).module }}</code></p></template>
+<template v-if="specForLog(row).requirements&&specForLog(row).requirements.length">
+<b class="ui-next-spec-toggle" @click="toggleLog('req'+row._key)">{{ expandedLogs['req'+row._key]?'▾':'▸' }} 實作項（給 AI 的施工細節，共 {{ specForLog(row).requirements.length }} 項）</b>
+<ul v-if="expandedLogs['req'+row._key]"><li v-for="(item,index) in specForLog(row).requirements" :key="'req'+index">{{ item }}</li></ul>
 </template>
-<template v-if="spec.acceptance&&spec.acceptance.length">
+<template v-if="specForLog(row).acceptance&&specForLog(row).acceptance.length">
 <b>驗收項</b>
-<ul><li v-for="(item,index) in spec.acceptance" :key="'acc'+index">{{ item }}</li></ul>
+<ul><li v-for="(item,index) in specForLog(row).acceptance" :key="'acc'+index">{{ item }}</li></ul>
 </template>
 <!-- 權限是審核者唯一能看到「誰能用、能做什麼」的地方：不渲染就等於這一關沒得審，
      而下游 QA 的判準正是拿實作去比對這一段。 -->
-<template v-if="spec.permissions&&spec.permissions.trim()"><b>權限</b><p>{{ spec.permissions }}</p></template>
+<template v-if="specForLog(row).permissions&&specForLog(row).permissions.trim()"><b>權限</b><p>{{ specForLog(row).permissions }}</p></template>
+</template>
 </div>
 <!-- 圖片直接顯示縮圖（同聊天頁）：一排「淺底大字檔名」的下載鈕在深色下最刺眼，
      而且看不到內容還得先下載。非圖片才走檔案列，縮成一行小字。 -->
@@ -1306,7 +1341,6 @@
 </div>
 </div>
 <small v-if="newMessageFiles.length">已選 {{ newMessageFiles.length }} 個附件</small>
-<small v-if="isAgentRunning" class="ui-next-running-hint">AI 正在處理這一輪…</small>
 </div>
 <div class="ui-next-inline-actions">
 <button v-if="isAgentRunning" class="ui-next-stop" @click="togglePause"><ui-next-icon name="close"/>停止</button>

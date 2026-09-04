@@ -121,9 +121,13 @@ function taskClarification(task) {
 // case_id/odoo_version/clarification_channel/low_confidence 屬 metadata/內部控制，不外吐。解析失敗回 null。
 // permissions 是白名單成員：它是使用者按「核准」的三大依據之一，漏放行會讓審核頁權限區塊永遠空白且無錯誤訊息。
 function taskSpec(task) {
-  if (!task || !task.analysis_yaml) return null;
+  return parseSpecYaml(task && task.analysis_yaml);
+}
+
+function parseSpecYaml(analysisYaml) {
+  if (!analysisYaml) return null;
   try {
-    const p = yaml.load(task.analysis_yaml, { schema: yaml.CORE_SCHEMA }) || {};
+    const p = yaml.load(analysisYaml, { schema: yaml.CORE_SCHEMA }) || {};
     const strList = v => Array.isArray(v) ? v.filter(x => typeof x === 'string') : [];
     return {
       summary: typeof p.summary === 'string' ? p.summary : '',
@@ -374,9 +378,20 @@ function registerRoutes(app) {
       const showClar = tasks[0].status === 'confirm_pending'
         || (tasks[0].status === 'clarify_chat_running' && tasks[0].clarify_from === 'confirm_pending');
       const clarification = showClar ? taskClarification(tasks[0]) : { summary: '', intro: '', questions: [] };
-      // spec_review（MODE_B 規格審核閘門）：附解析後的規格供審核頁渲染；其他狀態不附（防殘留規格冒出）
+      // spec_review（MODE_B 規格審核閘門）：附解析後的規格供**動作面板**渲染；其他狀態不附（防殘留規格冒出）
       const spec = tasks[0].status === 'spec_review' ? taskSpec(tasks[0]) : null;
-      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec });
+      // 時間軸上的規格書走 specs（每一版一筆），與動作面板的 spec 分開：
+      // 面板是「現在要你審這一份」，時間軸是「當初給你看的是哪一份」——規格被改寫過的任務，
+      // 兩者本來就不該是同一個東西（舊版那一則若跟著顯示最新規格，等於改動無痕）。
+      // 不限狀態：閘門過了之後回頭看仍該看得到每一版長什麼樣。
+      const { rows: specRows } = await query(
+        'SELECT version, analysis_yaml FROM task_specs WHERE task_id = $1 ORDER BY version',
+        [req.params.id]
+      );
+      const specs = specRows
+        .map(r => ({ version: r.version, ...(parseSpecYaml(r.analysis_yaml) || {}) }))
+        .filter(s => s.summary !== undefined);
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec, specs });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -692,6 +707,7 @@ function registerRoutes(app) {
       //   classify_samples  → 分類器準確率訓練語料（admin 依 recorded_at 時窗統計）
       await query('DELETE FROM task_events WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_logs WHERE task_id = $1', [req.params.id]);
+      await query('DELETE FROM task_specs WHERE task_id = $1', [req.params.id]);
       await query('DELETE FROM task_attachments WHERE task_id = $1', [req.params.id]);
       deleteTaskDir(req.params.id); // 連帶清磁碟上的 uploads/task_<id>（否則實體檔變孤兒）
       await query('DELETE FROM task_messages WHERE task_id = $1', [req.params.id]);
@@ -730,6 +746,7 @@ function registerRoutes(app) {
       // 同單筆刪除：只清任務生命週期子表；token_usage/prompt_logs/task_rejections/classify_samples 刻意保留（原因見上方單筆刪除註解）。
       await query('DELETE FROM task_events WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_logs WHERE task_id = ANY($1::int[])', [delIds]);
+      await query('DELETE FROM task_specs WHERE task_id = ANY($1::int[])', [delIds]);
       await query('DELETE FROM task_attachments WHERE task_id = ANY($1::int[])', [delIds]);
       delIds.forEach(id => deleteTaskDir(id)); // 連帶清各任務磁碟上的 uploads/task_<id>
       await query('DELETE FROM task_messages WHERE task_id = ANY($1::int[])', [delIds]);

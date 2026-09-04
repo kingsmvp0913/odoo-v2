@@ -47,6 +47,7 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(async () => {
   runClaude.mockReset();
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
+  await dbModule.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id=$1', [userId]);
 });
 

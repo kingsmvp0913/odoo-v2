@@ -174,7 +174,7 @@
 <p>{{ statusLabel(task.status) }} · {{ task.project_name||'未分類專案' }} · {{ timeAgo(task.updated_at||task.created_at) }}</p>
 </div>
 <div class="ui-next-task-card-actions">
-<button v-if="!batchMode&&!isStopped(task)&&task.status!=='done'" @click.stop="togglePause(task,$event)">{{ task.is_paused?'恢復':'暫停' }}</button>
+<button v-if="!batchMode&&!isStopped(task)&&task.status!=='done'" class="ui-next-pause-toggle" :title="task.is_paused?'繼續執行':'暫停'" :aria-label="(task.is_paused?'繼續執行':'暫停')+'：'+(task.title||task.task_id)" @click.stop="togglePause(task,$event)"><ui-next-icon :name="task.is_paused?'play':'pause'"/></button>
 <button v-if="!batchMode" type="button" @click.stop="moreTaskId=moreTaskId===task.id?null:task.id" :aria-label="'更多操作：'+(task.title||task.task_id)" :aria-expanded="moreTaskId===task.id">更多</button>
 <div v-if="moreTaskId===task.id" class="ui-next-task-more" @click.stop><button v-if="filter!=='archived'" type="button" @click="archiveTask(task)">封存</button><button v-else type="button" @click="unarchiveTask(task)">解除封存</button><button type="button" class="danger" @click="deleteTask(task)">刪除</button></div>
 </div>

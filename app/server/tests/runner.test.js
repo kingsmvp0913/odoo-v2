@@ -83,6 +83,7 @@ beforeEach(async () => {
   await dbModule.query('DELETE FROM task_messages WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  await dbModule.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
 });
 
@@ -118,6 +119,82 @@ test('analysis_running 未綁專案 → runTaskAnalysis 回 false → stopped', 
   const { rows } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id = $1', [taskId]);
   expect(rows[0].status).toBe('stopped');
   expect(rows[0].blocker_content).toContain('專案');
+});
+
+// --- 換關的時間軸紀錄（停在對話流的人看得到自己被叫到）---
+// 意圖：轉關原本只寫進「執行歷程」與狀態徽章，對話流上是空窗——尤其進入等人的關時最該當場看到。
+// 轉移邏輯散在 20 幾處 inline 賦值，所以驗的是 runner 兩個必經點各補一行，而不是某一關記得呼叫。
+test('換關 → task_logs 落一行 role=stage，進入的關與推進到的關各一行', async () => {
+  const taskId = await insertTask('branch_pending');
+  await run();   // branch_pending（派工前那個必經點）→ handler 推成 coding_running（收工後那個）
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND role='stage' ORDER BY id", [taskId]
+  );
+  expect(rows.map(r => r.content)).toEqual(['→ 建立分支', '→ 開發中']);
+});
+
+// 鑑別力：cron 每分鐘掃一次，同一關會被重複摸到。沒有去重的話每 tick 都補一行，
+// 一張停在 review_pending 的任務放一天就是 1440 行洗掉整條對話。
+test('同一關被重複摸到 → 只留一行（last_logged_status 去重）', async () => {
+  const taskId = await insertTask('qa_running');
+  await run();
+  await dbModule.query("UPDATE tasks SET status='qa_running' WHERE id=$1", [taskId]);  // 模擬 QA 未推進，下一 tick 再摸
+  await run();
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND role='stage'", [taskId]
+  );
+  expect(rows.length).toBe(1);
+});
+
+// --- 規格版本歷程 ---
+// 意圖：規格被退回改寫時，tasks.analysis_yaml 是覆寫式的，舊版就此消失、時間軸上也沒有新紀錄，
+// 使用者看到的是「同一則規格書內容悄悄變了」（他的原話：「他會修前面的規格書然後不顯示新的規格書」）。
+test('規格改寫 → 留下每一版快照，且第 2 版起在時間軸另起一筆', async () => {
+  const taskId = await insertTask('spec_review');
+  await runnerModule.writeAnalysisYaml(taskId, { module: 'idx_a', summary: '第一版' });
+  await runnerModule.writeAnalysisYaml(taskId, { module: 'idx_a', summary: '改過的第二版' });
+  const { rows: specs } = await dbModule.query('SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 ORDER BY version', [taskId]);
+  expect(specs.map(s => s.version)).toEqual([1, 2]);
+  expect(specs[0].analysis_yaml).toContain('第一版');       // 舊版沒有被新版蓋掉
+  expect(specs[1].analysis_yaml).toContain('改過的第二版');
+  // 第 1 版不另外落 log（分析關本來就會寫那一則）；第 2 版才寫，版號要進得了標頭列——
+  // 前端就是靠括號裡的版號決定這一則底下要掛第幾版規格。
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.length).toBe(1);
+  expect(logs[0].content).toContain('[等待你審核規格]（第 2 版）');
+});
+
+// 鑑別力：respec 判「規格不需要調整」也會走 writeAnalysisYaml。內容一字未動卻記一版的話，
+// 時間軸會生出一串看不出差別的版本，反而蓋掉真正改過的那幾版。
+test('規格一字未動 → 不記新版、不落新紀錄', async () => {
+  const taskId = await insertTask('spec_review');
+  await runnerModule.writeAnalysisYaml(taskId, { module: 'idx_b', summary: '沒動' });
+  await runnerModule.writeAnalysisYaml(taskId, { module: 'idx_b', summary: '沒動' });
+  const { rows } = await dbModule.query('SELECT version FROM task_specs WHERE task_id=$1', [taskId]);
+  expect(rows.length).toBe(1);
+});
+
+// 鑑別力（這條決定功能對現存任務有不有效）：task_specs 是後來才加的表，改版前的任務一筆版本都沒有。
+// 若不把「被這次覆寫掉的那一份」補記成第 1 版，它們的第一次改寫會被算成第 1 版 → 不落 log → 對舊任務無效。
+test('改版前就有規格的任務：第一次改寫要補記舊版為第 1 版，新的算第 2 版', async () => {
+  const taskId = await insertTask('spec_review');
+  await dbModule.query("UPDATE tasks SET analysis_yaml='module: idx_c\\nsummary: 改版前就存在的規格\\n' WHERE id=$1", [taskId]);
+  await runnerModule.writeAnalysisYaml(taskId, { module: 'idx_c', summary: '退回後改寫的' });
+  const { rows: specs } = await dbModule.query('SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 ORDER BY version', [taskId]);
+  expect(specs.map(s => s.version)).toEqual([1, 2]);
+  expect(specs[0].analysis_yaml).toContain('改版前就存在的規格');
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai'", [taskId]);
+  expect(logs.some(l => l.content.includes('（第 2 版）'))).toBe(true);
+});
+
+// 鑑別力：閘門的出入口標記（confirm_answered 等）是瞬態，答完立刻走，畫上去等於多一行沒人停過的紀錄。
+test('閘門過渡態不留換關行', async () => {
+  const taskId = await insertTask('confirm_answered');
+  await run();
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND role='stage'", [taskId]
+  );
+  expect(rows.map(r => r.content)).toEqual(['→ 分析中']);   // 只有它推進到的那一關
 });
 
 test('branch_pending 非專案 → createBranch → coding_running', async () => {
@@ -600,6 +677,9 @@ test('C-4 全機上限跨 user 併發掃描不超過 MAX_GLOBAL（TOCTOU 防護�
     openGate();
     await runnerModule.whenIdle();
     await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId2]);
+    // 派工會落換關行（role='stage'），不清會被 task_logs 的 FK 擋住 tasks 的刪除
+    await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId2]);
+    await dbModule.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId2]);
     await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId2]);
     await dbModule.query('DELETE FROM users WHERE id = $1', [userId2]);
   }

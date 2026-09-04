@@ -31,6 +31,9 @@ afterAll(() => dbModule._setPoolForTesting(null));
 beforeEach(async () => {
   await maintenance.leaveMaintenance();
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  // 派工會落換關行（task_logs, role='stage'），不清會被 FK 擋住 tasks 的刪除
+  await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  await dbModule.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
   await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, status) VALUES ($1,'maint_t','manual','new')",

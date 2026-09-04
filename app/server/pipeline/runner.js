@@ -18,6 +18,7 @@ const { buildGitEnv } = require('../lib/git-identity');
 const notify = require('../notify');
 const { runClarifyChat } = require('./clarify-chat');
 const { safeReturnStatus } = require('./stations');
+const { SPEC_GATE_PREFIX } = require('./analysis');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const yaml = require('js-yaml');
 
@@ -35,7 +36,43 @@ const STAGE_LABELS = {
 const _inFlight = new Map();
 const _pipelineRunning = new Set(); // userId → 掃描中（防同 user 重複掃描派工）
 // 可派工推進的狀態——由 status registry 的 actor:'system'／'agent' 推導（＝扣掉等人的與終態）
-const { RUNNABLE_STATUSES } = require('../../public/js/status-labels.js');
+const { RUNNABLE_STATUSES, STATUS_LABELS } = require('../../public/js/status-labels.js');
+
+// ── 時間軸上的「換關」一行 ───────────────────────────────────────────
+// 停在任務詳細頁的人只看得到對話流；轉關本來只寫進「執行歷程」（task_events 的 ▶ 標記，摺在另一個
+// 區塊裡）與狀態徽章，所以畫面上會出現「什麼都沒發生」的空窗——尤其是進入等待審核／等待規格確認
+// 這種要人動作的關，使用者反而最需要當場知道。
+//
+// 為什麼用「比對上次寫過什麼」而不是在轉關處寫：轉移邏輯是各關的 inline 賦值、散在 20 幾處
+// （pipeline-spec.js 檔頭已記載這件事），逐處補呼叫等於埋 20 個會被下一個新關漏掉的洞。改成在
+// runner 的兩個必經點各比對一次：派工前（進入 AI／系統關）與 handler 收工後（落到等人的關或終態）。
+// 代價是同一個 tick 內連跳兩關時中間那個瞬態不會留行——這是想要的，那些關本來就沒人停在上面。
+const UNLOGGED_STAGES = new Set([
+  // 閘門的出入口標記與閘門內部過渡態：答完立刻走，畫上去等於多三行沒人停過的紀錄。
+  // 名單與 pipeline-spec.js 的 PF_UNDRAWN_STATUSES 同一組理由（那份是給畫圖用的，刻意不 require
+  // 過來：spec 是人工謄本、不驅動執行，讓執行路徑依賴它會把兩邊的方向弄反）。
+  'confirm_answered', 'clarify_answered', 'clarify_chat_running'
+]);
+
+// role='stage'：與 'ai'／'user'／'system' 分家，餵 prompt 的讀取點全部是 role IN ('user','ai')，
+// 所以新增這個值不會稀釋任何 agent 的對話窗（唯一沒過濾 role 的 library-agent 已一併補上）。
+// 前端 roleClass 落到 system 分支＝既有的灰色小字樣式，不必動畫面。
+async function logStageEntry(taskId, status) {
+  if (!status || UNLOGGED_STAGES.has(status)) return;
+  const label = STATUS_LABELS[status];
+  if (!label) return;   // registry 沒有的狀態不猜文案：寧可少一行，也不要在時間軸印英文代號
+  // 條件更新當去重鎖：兩個必經點會對同一個狀態各叫一次（派工前寫 qa_running，上一輪收工後也寫
+  // qa_running），靠這個單一 statement 保證只有一邊寫得進去，不需要額外的讀後判斷。
+  const { rowCount } = await query(
+    "UPDATE tasks SET last_logged_status=$2 WHERE id=$1 AND COALESCE(last_logged_status,'') <> $2",
+    [taskId, status]
+  );
+  if (!rowCount) return;
+  await query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'stage', $2)",
+    [taskId, `→ ${label}`]
+  );
+}
 
 // 併發上限：每人同時可跑幾個任務、全機總量（保護機器；claude CLI 很吃資源）
 const MAX_PER_USER = parseInt(process.env.PIPELINE_MAX_PER_USER || '5', 10);
@@ -283,12 +320,55 @@ const MIDWAY_RESUME = new Set([...TRIAGE_RESUME, 'respec_running']);
 // 故為主防線；reject-triage.js 的 goto 對 respec 路徑另外清一次同樣欄位，只是進 analysis 之前的
 // 備援，不是真正的規格重產發生點。
 async function writeAnalysisYaml(taskId, spec) {
+  const dumped = yaml.dump(spec, { lineWidth: -1 });
+  // 覆寫前先把舊的那一份讀出來：task_specs 是後來才加的表，改版前就存在的任務一筆版本都沒有，
+  // 而「這次要被覆寫掉的那一份」只有現在讀得到。晚一步就永久消失，於是舊任務的第一次改寫會被
+  // 當成第 1 版、也就不會落那筆「規格已更新」的紀錄——這個功能對現存任務等於沒做。
+  const { rows: [before] } = await query('SELECT analysis_yaml FROM tasks WHERE id=$1', [taskId]);
   await query(
     'UPDATE tasks SET analysis_yaml=$2, spec_session_id=NULL, spec_prompt_ver=NULL, '
     + 'clarify_session_id=NULL, clarify_prompt_ver=NULL WHERE id=$1',
-    [taskId, yaml.dump(spec, { lineWidth: -1 })]
+    [taskId, dumped]
   );
+  // 留一份版本快照。tasks.analysis_yaml 是覆寫式的當前規格（下游各關讀它，維持單一來源），
+  // 但覆寫掉的那一版就此消失——使用者退回規格、AI 就地改寫之後，畫面上沒有任何「規格變了」的痕跡。
+  await recordSpecVersion(taskId, dumped, before?.analysis_yaml || null).catch(err => {
+    // 旁支：留不成版本歷程不該讓規格寫不進去（規格落地是主線，這裡只是可見性）。
+    console.error(`[RUNNER] task ${taskId} spec version snapshot failed:`, err.message);
+  });
   enqueueEmbedding({ taskId });
+}
+
+// 規格版本快照＋時間軸上的那一筆。第 1 版不另外落 log：分析關本來就會寫
+// 「[等待你審核規格]」／「分析完成，直接開工」那一則，再補一筆等於同一件事講兩遍。
+// 第 2 版起才寫，因為那正是使用者看不到的那一段（「他會修前面的規格書然後不顯示新的規格書」）。
+async function recordSpecVersion(taskId, dumped, previousYaml) {
+  const { rows } = await query(
+    'SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 ORDER BY version DESC LIMIT 1',
+    [taskId]
+  );
+  let last = rows[0] || null;
+  // 一筆版本都沒有、但任務已經有規格 ⇒ 補記舊的那份為第 1 版，這次才算得上第 2 版。
+  // created_at 會是現在而不是當初，但沒有地方顯示它：畫面上的時間來自它掛的那則 log。
+  if (!last && previousYaml && previousYaml !== dumped) {
+    await query('INSERT INTO task_specs (task_id, version, analysis_yaml) VALUES ($1, 1, $2)', [taskId, previousYaml]);
+    last = { version: 1, analysis_yaml: previousYaml };
+  }
+  // 一字未動＝不算新版：respec 判「規格不需要調整」也會走到這裡（見 respec-agent），
+  // 每次都記一版會在時間軸上生出一串看不出差別的版本。
+  if (last && last.analysis_yaml === dumped) return;
+  const version = (last?.version || 0) + 1;
+  await query(
+    'INSERT INTO task_specs (task_id, version, analysis_yaml) VALUES ($1, $2, $3)',
+    [taskId, version, dumped]
+  );
+  if (version === 1) return;
+  // 前綴與分析關那一則相同：前端靠這個前綴決定「這一則底下要掛規格書」（isSpecLog），
+  // 版號寫在標頭列的全形括號裡，也是前端決定要掛第幾版的依據。
+  await query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+    [taskId, `${SPEC_GATE_PREFIX}（第 ${version} 版）\n規格已依你的意見更新。前一版收在上面那一則裡。`]
+  );
 }
 
 async function recordSpecDecision(taskId, analysisYaml, answer) {
@@ -366,6 +446,9 @@ async function runTask(task, settings, signal) {
     const marker = `\n\x1b[96m▶ ${STAGE_LABELS[task.status] || task.status}\x1b[0m\n`;
     notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: marker });
     await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, marker]).catch(() => {});
+    // 同一件事寫給「停在對話流的人」看一行（第一個必經點：進入 AI／系統關）。
+    // 失敗吞掉：這是旁支的可見性補強，不該讓一行 log 寫不進去就中斷整關。
+    await logStageEntry(task.id, task.status).catch(() => {});
     // 記錄目前這一關：若此階段失敗轉 stopped，解決阻塞可回到這一關續跑（而非退回 new 重分診）。
     // 例外：分診關（reject_triage／resolve_triage）本身的 resume_status 是「真正的原關」資料（由 route 保留供分診讀取，
     // 見 tasks-routes.js），不可蓋成分診自己——否則分診 resume 會回到自己，無限重進分診。
@@ -400,6 +483,11 @@ async function runTask(task, settings, signal) {
       notify.emitToUser(task.user_id, 'terminal:output', { taskId: task.id, data: reason });
       await query('INSERT INTO task_events (task_id, content) VALUES ($1, $2)', [task.id, reason]).catch(() => {});
     }
+
+    // 第二個必經點：handler 已把狀態推到下一關。這裡涵蓋的是「不會被派工、所以第一個必經點永遠
+    // 摸不到」的那些關——等待審核／等待規格確認／待你裁決／合併衝突／完成／失敗待確認，也正是
+    // 使用者最需要當場知道自己被叫到的幾關。
+    await logStageEntry(task.id, u.status).catch(() => {});
 
     // 追加需求佇列檢查點：任務每次「成功推進」到下一關就攔一次——若有待吸收的使用者留言
     // （task_messages.applied_at IS NULL），改轉 respec_running（增量改寫規格後退回 coding），而非往下一關。

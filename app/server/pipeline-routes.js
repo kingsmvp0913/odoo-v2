@@ -7,6 +7,7 @@ const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 const { loadTaskForActor } = require('./lib/task-access');
 const { saveAttachmentFile, uploadAttachmentFiles } = require('./lib/attachments');
+const { machineLogHeader } = require('../public/js/machine-logs.js');
 
 // approve 進行中的任務佔位：雙擊／前端重送會讓兩個請求都通過狀態檢查、都跑 mergeToAiBranch
 // （第二個在分支已刪後失敗回假 500）。單行程 in-memory 佔位＋結尾條件更新雙防護。
@@ -105,15 +106,16 @@ function registerRoutes(app) {
       // 條件更新防雙擊：輸掉競態的請求不再重複落 log／task_rejections
       const { rowCount } = await query(
         "UPDATE tasks SET status='reject_triage', retry_feedback=$2, updated_at=NOW() WHERE id=$1 AND status='review_pending'",
-        [req.params.id, `[人工退回]\n${reason}`]
+        [req.params.id, `${machineLogHeader('manual_reject')}\n${reason}`]
       );
       if (!rowCount) return res.json({ ok: true });
-      // 時間軸只落「[人工退回]」標記，不塞原因本文（審核者常整包貼錯誤 log，全灌進畫面沒意義）。
-      // 完整原因仍在 retry_feedback（分診 agent 讀）與 task_rejections.reason（分類 agent 讀），
-      // 使用者面的原因總結＋結論改由 reject-triage 的 AI 泡泡呈現。
+      // 時間軸落原因本文，role='user'（審核者自己打的字，泡泡在使用者側）。原本只落「[人工退回]」
+      // 四個字、原因僅存 retry_feedback 與 task_rejections，畫面上等於沒有原因——使用者實際回報
+      // 「人工退回好像都沒有顯示原因，而且都是歸在 AI 方」。當初不寫全文的顧慮（整包貼錯誤 log 會
+      // 洗版）改由 machine-logs registry 的 collapseWhenLong 承接：長原因收成一句話、可展開。
       await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'system', '[人工退回]')",
-        [req.params.id]
+        'INSERT INTO task_logs (task_id, role, content) VALUES ($1, \'user\', $2)',
+        [req.params.id, `${machineLogHeader('manual_reject')}\n${reason}`]
       );
       await query(
         "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ($1,$2,$3,$4,'new')",

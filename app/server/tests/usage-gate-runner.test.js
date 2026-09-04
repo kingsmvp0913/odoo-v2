@@ -25,9 +25,12 @@ afterAll(() => dbModule._setPoolForTesting(null));
 
 beforeEach(async () => {
   getGateState.mockReset();
-  // runTask 本身（不論 handler 是否 mock）都會寫 task_events；先清依賴表再清 tasks，
-  // 否則上一輪真的派工過的任務會讓這裡的 DELETE FROM tasks 撞 FK（比照 runner.test.js 既有慣例）。
+  // runTask 本身（不論 handler 是否 mock）都會寫 task_events 與換關行（task_logs, role='stage'）；
+  // 先清依賴表再清 tasks，否則上一輪真的派工過的任務會讓這裡的 DELETE FROM tasks 撞 FK
+  //（比照 runner.test.js 既有慣例）。
   await dbModule.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  await dbModule.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbModule.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
   // 一個 new 狀態任務：cs handler 會被派工（此處只斷言有無派工，不等它跑完）
   await dbModule.query(

@@ -245,7 +245,9 @@ async function runLibraryAgent(taskId, userId, signal) {
   }
 
   const { rows: logs } = await query(
-    'SELECT role, content FROM task_logs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 20',
+    // 只取對話（user／ai）：role='stage' 是 runner 補寫的「→ 換關」單行紀錄，對寫 wiki 毫無資訊量，
+    // 但一張任務會產生十來行，不過濾就會把這 20 筆的窗口整個吃掉、真正的結論被擠出去。
+    "SELECT role, content FROM task_logs WHERE task_id = $1 AND role IN ('user','ai') ORDER BY created_at DESC LIMIT 20",
     [taskId]
   );
   const logText = logs.reverse().map(l => `[${l.role}] ${l.content}`).join('\n');

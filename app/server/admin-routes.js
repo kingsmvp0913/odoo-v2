@@ -353,6 +353,7 @@ function registerRoutes(app) {
           await client.query('DELETE FROM task_attachments WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
           await client.query('DELETE FROM task_events      WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
           await client.query('DELETE FROM task_logs        WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
+          await client.query('DELETE FROM task_specs       WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
           await client.query('DELETE FROM task_messages    WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [id]);
           await client.query('DELETE FROM tasks WHERE user_id = $1', [id]);
         }

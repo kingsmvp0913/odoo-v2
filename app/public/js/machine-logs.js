@@ -22,7 +22,13 @@ const MACHINE_LOGS = {
   // 分診結論寫給開發／審核看（實測是「`search()` 未帶 `active_test=False`」這種純技術文，平均 247~433 字），
   // 卻與客服回覆並排在同一條時間軸上。不設 collapseWhenLong：它幾乎都在 400 字以下，但短不代表看得懂。
   // 去向（fix／advance／…）由寫入端帶進標頭列，收合後那句人話才講得出「所以接下來會怎樣」。
-  triage_summary: { prefix: '[審核分診]', role: 'ai', hint: '已判斷這次退回要怎麼處理' }
+  triage_summary: { prefix: '[審核分診]', role: 'ai', hint: '已判斷這次退回要怎麼處理' },
+  // 人工審核退回的原因本文。role='user'：這是審核者自己打的字，不是系統通知，泡泡要落在使用者那一側
+  // （原本以 role='system' 寫入，靠左顯示成灰色系統列，看起來像平台通知而不是「你退回的」）。
+  // 原本也只落「[人工退回]」四個字，原因僅存 retry_feedback 與 task_rejections，畫面上等於沒有原因。
+  // 當初刻意不寫全文的顧慮是「審核者常整包貼錯誤 log」——那個顧慮由 collapseWhenLong 承接：
+  // 短原因直接看到，超過 400 字／8 行才收成一句話可展開，不必整段藏起來。
+  manual_reject: { prefix: '[人工退回]', role: 'user', hint: '你退回了這次審核', collapseWhenLong: true }
 };
 
 // 標頭列格式：`<prefix>（<去向>）\n<本體>`。去向是給人看的一句話（顯示端接在 hint 後面），可省略。

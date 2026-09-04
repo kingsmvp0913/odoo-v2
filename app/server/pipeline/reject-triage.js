@@ -10,7 +10,7 @@ const { getProjectNotes } = require('./project-notes');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { safeReturnStatus } = require('./stations');
-const { machineLogHeader } = require('../../public/js/machine-logs.js');
+const { machineLogHeader, stripMachineHeader } = require('../../public/js/machine-logs.js');
 const { taskAttachmentNote } = require('./sync');
 
 // 卡在哪一關的中文顯示（stuck_stage 用）
@@ -70,7 +70,9 @@ async function runRejectTriage(taskId, userId, signal) {
   if (isReject) {
     stuckStage = STAGE_LABEL.review_pending;
     stopContext = '任務已通過所有自動關卡（QA／E2E），在最終人工審核被審核者退回。';
-    rejectReason = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || null;
+    // 走 registry 的剝除器，不要自己寫 /^\[人工退回\]\s*/：轉義後的字面值繞得過
+    // frontend-machine-logs 的前綴單一來源守衛（它比對的是未轉義字串），等於留下看不見的第二份副本。
+    rejectReason = stripMachineHeader('manual_reject', task.retry_feedback) || null;
     userInstruction = rejectReason || '（無退回原因）';
     homeStatus = 'review_pending';
   } else {
@@ -198,7 +200,7 @@ async function runRejectTriage(taskId, userId, signal) {
   // 只有真的退回修改才計入退回統計／健檢。刪本次 task_rejections(new)＋系統退回標記、清 retry_feedback。
   // 不動 reentry_count：/reject 本就不再累加它，故此處也無 +1 可回滾；若硬扣會誤傷真實自動彈跳累積的計數。
   if (decision === 'answer' && isReject) {
-    const question = (task.retry_feedback || '').replace(/^\[人工退回\]\s*/, '').trim() || '（提問）';
+    const question = stripMachineHeader('manual_reject', task.retry_feedback) || '（提問）';
     await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [taskId, question]);
     await logAi(summary || '（無回答）');
     // 認 source='human' 而非 status='new'：classify 的 cron 撈 new 只花 5~13 秒、本關要跑 60~190 秒，
@@ -211,9 +213,20 @@ async function runRejectTriage(taskId, userId, signal) {
       [task.task_id]
     );
     if (rej) await query('DELETE FROM task_rejections WHERE id=$1', [rej.id]);
+    // 前綴比對而非整串相等：/reject 那筆改成 role='user' 且內容是「[人工退回]\n<原因全文>」之後，
+    // 原本 content='[人工退回]' 的等值條件一次也命中不了——症狀是提問被回滾了，時間軸上卻還留著
+    // 一則「你退回了這次審核」。上一行剛插入的提問本文沒有前綴，不會被這條誤刪。
+    // role 收兩種：改版當下已經停在 reject_triage 的任務，標記還是舊的 role='system' 那一筆。
+    // 用 substring 而非 LIKE '[人工退回]%'：pg-mem 把 LIKE 裡的 [...] 當成 regex 字元類別（真
+    // Postgres 不會），寫成 LIKE 的話正式環境會刪、測試環境永遠刪不到，等於測試在說謊。
+    // 長度直接內插：來源是本檔的常數前綴、不是使用者輸入；CJK 都在 BMP，JS 的 .length 與
+    // Postgres substring 的字元數一致。
+    const rejectMarker = machineLogHeader('manual_reject');
     const { rows: [sys] } = await query(
-      "SELECT id FROM task_logs WHERE task_id=$1 AND role='system' AND content='[人工退回]' ORDER BY created_at DESC, id DESC LIMIT 1",
-      [taskId]
+      "SELECT id FROM task_logs WHERE task_id=$1 AND role IN ('user','system')"
+      + ` AND substring(content, 1, ${rejectMarker.length}) = $2`
+      + ' ORDER BY created_at DESC, id DESC LIMIT 1',
+      [taskId, rejectMarker]
     );
     if (sys) await query('DELETE FROM task_logs WHERE id=$1', [sys.id]);
     await query(

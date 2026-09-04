@@ -566,7 +566,7 @@ function registerRoutes(app) {
           'SELECT id FROM project_chats WHERE project_id = $1', [req.params.id]
         );
         if (ids.length) {
-          // 參照 tasks(id) 的 4 張子表全是裸的 REFERENCES、**沒有任何 ON DELETE CASCADE**
+          // 參照 tasks(id) 的 5 張子表全是裸的 REFERENCES、**沒有任何 ON DELETE CASCADE**
           // （原本的註解宣稱有，那是錯的），所以每一張都必須顯式刪：漏掉任一張都會讓下面
           // DELETE FROM tasks 撞 FK。task_attachments 還參照 task_messages(id)，必須排在
           // task_messages 之前。
@@ -580,6 +580,7 @@ function registerRoutes(app) {
           await client.query('DELETE FROM task_attachments WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
           await client.query('DELETE FROM task_events      WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
           await client.query('DELETE FROM task_logs        WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
+          await client.query('DELETE FROM task_specs       WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
           await client.query('DELETE FROM task_messages    WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)', [req.params.id]);
           await client.query('DELETE FROM tasks WHERE project_id = $1', [req.params.id]);
         }

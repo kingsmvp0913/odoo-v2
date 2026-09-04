@@ -76,11 +76,12 @@ test('review_pending 退回 → reject_triage、原因帶入 feedback、不動 r
   const { rows: logRows } = await dbModule.query(
     "SELECT role, content FROM task_logs WHERE task_id=$1 ORDER BY id", [taskDbId]
   );
-  // 時間軸只留標記，不渲染原始原因本文（避免整包錯誤 log 灌進畫面）
+  // 時間軸落原因全文，且歸在使用者側（role='user'）：這是審核者自己打的字，不是平台的系統通知。
+  // 寫成 role='system' 會靠左顯示成灰色系統列，使用者看不出「這是我退回的、我寫了什麼」。
+  // 洗版顧慮由前端 machine-logs 的 collapseWhenLong 承接（超過 400 字／8 行才收合），不是靠後端不寫。
   expect(logRows.length).toBe(1);
-  expect(logRows[0].role).toBe('system');
-  expect(logRows[0].content).toBe('[人工退回]');
-  expect(logRows[0].content).not.toContain('備註欄位型別錯');
+  expect(logRows[0].role).toBe('user');
+  expect(logRows[0].content).toBe('[人工退回]\n備註欄位型別錯；審核清單想預設收合');
 });
 
 test('非 review_pending（已被上題退回成 coding）→ 400', async () => {

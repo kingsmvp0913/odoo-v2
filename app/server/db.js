@@ -110,6 +110,19 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 規格的每一版快照。tasks.analysis_yaml 是覆寫式的「當前規格」（下游各關讀它，維持單一來源），
+    // 這張表只負責留下歷程：使用者退回規格後 AI 就地改寫，畫面上看不出哪裡變了、也沒有新的一筆紀錄
+    //（使用者原話：「他會修前面的規格書然後不顯示新的規格書」）。
+    // 不設 UNIQUE(task_id, version)：version 由 MAX+1 現算，兩個併發寫入撞同號時寧可留兩筆
+    // （時間軸多一行，人看得懂）也不要讓寫規格這件事整個失敗。
+    `CREATE TABLE IF NOT EXISTS task_specs (
+      id            SERIAL PRIMARY KEY,
+      task_id       INTEGER NOT NULL REFERENCES tasks(id),
+      version       INTEGER NOT NULL,
+      analysis_yaml TEXT NOT NULL,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     `CREATE TABLE IF NOT EXISTS task_events (
       id         SERIAL PRIMARY KEY,
       task_id    INTEGER NOT NULL REFERENCES tasks(id),
@@ -673,6 +686,10 @@ async function migrate() {
     { table: 'teams_settings', col: 'openai_api_key_enc', sql: 'ALTER TABLE teams_settings ADD COLUMN openai_api_key_enc TEXT' },
     { table: 'tasks', col: 'is_paused',  sql: 'ALTER TABLE tasks ADD COLUMN is_paused BOOLEAN NOT NULL DEFAULT false' },
     { table: 'tasks', col: 'is_hidden',  sql: 'ALTER TABLE tasks ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT false' },
+    // 時間軸上最後寫過「換關」那一行時的狀態。唯一用途是去重：轉關由各關 inline 賦值、散在 20 幾處，
+    // 沒有集中的轉移表可掛 hook，所以改由 runner 兩個必經點（派工前、handler 收工後）比對這一欄補寫。
+    // NULL＝這張任務還沒寫過換關行（改版前的舊任務也是 NULL，第一次被摸到時補一行，不回填歷史）。
+    { table: 'tasks', col: 'last_logged_status', sql: 'ALTER TABLE tasks ADD COLUMN last_logged_status TEXT' },
     { table: 'project_repos', col: 'clone_status',    sql: 'ALTER TABLE project_repos ADD COLUMN clone_status TEXT' },
     { table: 'project_repos', col: 'clone_error',     sql: 'ALTER TABLE project_repos ADD COLUMN clone_error TEXT' },
     { table: 'project_repos', col: 'graphify_status', sql: "ALTER TABLE project_repos ADD COLUMN graphify_status TEXT DEFAULT 'idle'" },

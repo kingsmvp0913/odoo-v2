@@ -345,7 +345,8 @@ test('answer（純提問）→ review_pending：Q&A 落時間軸、刪最近 tas
   claudeReturns({ decision: 'answer', summary: '這個欄位設計成唯讀，是因為它同步自來源工單。' });
   const id = await makeTask({ rejectCount: 1 });   // retry_feedback='[人工退回]\n備註型別錯'
   await dbModule.query('UPDATE tasks SET reentry_count=1 WHERE id=$1', [id]);  // 模擬先前真實自動彈跳累積的計數
-  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'system','[人工退回]')", [id]);
+  // /reject 實際寫入的形狀：role='user'、內容是「[人工退回]\n<原因全文>」（見 pipeline-routes.js）。
+  await dbModule.query("INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','[人工退回]\n備註型別錯')", [id]);
 
   await runRejectTriage(id, userId);
 
@@ -358,9 +359,11 @@ test('answer（純提問）→ review_pending：Q&A 落時間軸、刪最近 tas
   );
   expect(rej.length).toBe(0);                     // 本次退回記錄刪除
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
-  expect(logs.some(l => l.role === 'user' && l.content.includes('備註型別錯'))).toBe(true);   // 提問落時間軸(=退回原因本文)
+  expect(logs.some(l => l.role === 'user' && l.content === '備註型別錯')).toBe(true);         // 提問本文落時間軸（無前綴）
   expect(logs.some(l => l.role === 'ai' && l.content.includes('同步自來源工單'))).toBe(true);  // 回答落時間軸
-  expect(logs.some(l => l.role === 'system' && l.content === '[人工退回]')).toBe(false);       // 系統退回標記回滾
+  // 退回標記回滾：帶前綴的那筆整個刪掉。判斷「刪到的是哪一筆」必須靠前綴而不是內容關鍵字——
+  // 退回原因與提問本文是同一段文字，用 includes('備註型別錯') 會兩筆都命中，這條斷言就恆真。
+  expect(logs.some(l => l.content.startsWith('[人工退回]'))).toBe(false);
 });
 
 // 鑑別力：上面那支用預設的 status='new' fixture，測不到正式環境唯一會發生的時序。classify 的 cron

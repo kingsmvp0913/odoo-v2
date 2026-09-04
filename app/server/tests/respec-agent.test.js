@@ -53,6 +53,7 @@ beforeEach(async () => {
   // respec 判「無規格變更」時會寫一行 task_logs 交代原因（否則使用者看不到任務為何轉了一圈），
   // 不一併清會讓下一個 test 的 DELETE tasks 撞 task_logs 的 FK。
   await dbModule.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
+  await dbModule.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);
   // 附件那支測試會插 task_attachments，同理不清會撞 FK。這個缺口一直沒被觸發是因為它原本是檔內
   // 最後一支、後面沒有 test 再 DELETE tasks——在它後面新增任何 test 都會踩到。
   await dbModule.query('DELETE FROM task_attachments WHERE task_id IN (SELECT id FROM tasks WHERE user_id=$1)', [userId]);

@@ -151,8 +151,11 @@ afterAll(() => { dbA._setPoolForTesting(null); dbB._setPoolForTesting(null); });
 beforeEach(async () => {
   hooks.calls = {};
   hooks.advanceToQa = null;
-  // runTask 一定會寫 task_events，先清依賴表再清 tasks（比照 runner.test.js／usage-gate-runner.test.js）
+  // runTask 一定會寫 task_events 與換關行（task_logs, role='stage'），先清依賴表再清 tasks
+  //（比照 runner.test.js／usage-gate-runner.test.js）
   await dbA.query('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  await dbA.query('DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
+  await dbA.query('DELETE FROM task_specs WHERE task_id IN (SELECT id FROM tasks WHERE user_id = $1)', [userId]);
   await dbA.query('DELETE FROM tasks WHERE user_id = $1', [userId]);
   // 值班牌回到「沒人持有」，兩個行程都還沒問過（＝剛啟動的狀態）
   await dbA.query('DELETE FROM dispatcher_lease');
