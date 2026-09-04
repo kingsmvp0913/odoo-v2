@@ -187,4 +187,42 @@ describe('佇列現況', () => {
     expect(res.body.length).toBeGreaterThan(0);
     expect(res.body[0]).toHaveProperty('status');
   });
+
+  test('工作歷程要平台帳號', async () => {
+    await request(app).get('/api/exam/jobs').expect(401);
+    await request(app).get('/api/exam/jobs').set('Authorization', `Bearer ${jwt}`).expect(200);
+  });
+});
+
+describe('觸發佇列', () => {
+  const auth = r => r.set('Authorization', `Bearer ${jwt}`);
+
+  test('要平台帳號', async () => {
+    await request(app).post('/api/exam/run').send({ bank: bankId }).expect(401);
+  });
+
+  test('缺 bank 回 400', async () => {
+    await auth(request(app).post('/api/exam/run')).send({}).expect(400);
+  });
+
+  test('沒有待處理時回 400 而不是空跑', async () => {
+    const b = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('空的','19') RETURNING id`);
+    const res = await auth(request(app).post('/api/exam/run')).send({ bank: b.rows[0].id });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/沒有待處理/);
+  });
+
+  // 只說「還在跑」等於沒說——使用者看不到進度就會再按一次，然後以為壞了
+  test('已有工作在跑時的 409 要講得出在跑什麼、多久、進度到哪', async () => {
+    await dbModule.query(
+      `INSERT INTO exam_jobs (bank_id, status, phase, pages_done, pages_total, started_at)
+       VALUES ($1,'running','審查中',3,19, NOW() - INTERVAL '7 minutes')`, [bankId]);
+    const res = await auth(request(app).post('/api/exam/run')).send({ bank: bankId });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/審查中/);
+    expect(res.body.error).toMatch(/7 分鐘/);
+    expect(res.body.error).toMatch(/3\/19/);
+    await dbModule.query(`UPDATE exam_jobs SET status='done' WHERE status='running'`);
+  });
 });

@@ -1,0 +1,202 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { newDb } = require('pg-mem');
+
+// 模型呼叫全部 mock：這支測的是佇列與資料流，不是審查品質。
+// 審查品質有它自己的實測（docs/superpowers/specs/2026-09-04-adversary-bench-result.md）。
+const mockReview = jest.fn();
+const mockEvidence = jest.fn();
+jest.mock('../lib/exam/review', () => {
+  const actual = jest.requireActual('../lib/exam/review');
+  return { ...actual, reviewPage: (...a) => mockReview(...a) };
+});
+jest.mock('../lib/exam/evidence', () => {
+  const actual = jest.requireActual('../lib/exam/evidence');
+  return { ...actual, gatherEvidence: (...a) => mockEvidence(...a) };
+});
+
+const { runQueue, reclaimInterrupted } = require('../lib/exam/worker');
+
+let dbModule, bankId, uploadDir;
+
+const verdictOf = (qs) => ({
+  readable: true, page: '', note: '',
+  questions: qs.map((q, i) => ({
+    no: i + 1, question: q.en, question_zh: q.zh, type: 'single',
+    options: [{ letter: 'A', text: 'aa', text_zh: '啊' }, { letter: 'B', text: 'bb', text_zh: '玻' }],
+    their_answer: q.their || ['B'], refuted: !!q.refuted,
+    correct_answer: q.correct || ['B'], confidence: q.conf ?? 95, reason: 'r',
+  })),
+});
+
+async function addUpload(page, answer, name) {
+  const rel = path.join('exam_1', `${page}.jpg`);
+  fs.mkdirSync(path.join(uploadDir, 'exam_1'), { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, rel), Buffer.from([0xff, 0xd8, 0xff]));
+  const r = await dbModule.query(
+    `INSERT INTO exam_uploads (bank_id, page, answer_raw, responder, image_path)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`, [bankId, page, answer, name || null, rel]);
+  return r.rows[0].id;
+}
+
+beforeAll(async () => {
+  uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-worker-'));
+  process.env.UPLOAD_DIR = uploadDir;
+  process.env.EXAM_CONCURRENCY = '2';
+
+  const db = newDb();
+  const { Pool } = db.adapters.createPg();
+  dbModule = require('../db');
+  dbModule._setPoolForTesting(new Pool());
+  await dbModule.migrate();
+
+  const b = await dbModule.query(
+    `INSERT INTO exam_banks (label, odoo_version) VALUES ('W','19') RETURNING id`);
+  bankId = b.rows[0].id;
+});
+
+afterAll(() => {
+  dbModule._setPoolForTesting(null);
+  fs.rmSync(uploadDir, { recursive: true, force: true });
+  delete process.env.UPLOAD_DIR;
+  delete process.env.EXAM_CONCURRENCY;
+});
+
+beforeEach(() => {
+  mockReview.mockReset();
+  mockEvidence.mockReset();
+  mockEvidence.mockResolvedValue({ result: { found: false, evidence: [], rejected: [] } });
+});
+
+test('沒有待處理時不建 job', async () => {
+  const r = await runQueue(dbModule, { bankId });
+  expect(r).toMatchObject({ jobId: null, total: 0 });
+  const jobs = await dbModule.query('SELECT COUNT(*)::int c FROM exam_jobs');
+  expect(jobs.rows[0].c).toBe(0);
+});
+
+test('跑完一筆會建題目、作答與判斷', async () => {
+  await addUpload('1', '第 1 題 B；第 2 題 A', '小王');
+  mockReview.mockResolvedValue({
+    verdict: verdictOf([
+      { en: 'What is a delivery order?', zh: '什麼是交貨單？', their: ['B'] },
+      { en: 'Where is the reordering rule?', zh: '重訂貨規則在哪？', their: ['A'], correct: ['A'] },
+    ]),
+    model: 'claude-opus-5',
+  });
+
+  const r = await runQueue(dbModule, { bankId });
+  expect(r).toMatchObject({ total: 1, done: 1, failed: 0 });
+
+  const items = await dbModule.query(`SELECT COUNT(*)::int c FROM exam_items WHERE odoo_version='19'`);
+  expect(items.rows[0].c).toBe(2);
+  const att = await dbModule.query(
+    `SELECT no, answer_their, responder FROM exam_attempts ORDER BY no`);
+  expect(att.rows[0]).toMatchObject({ no: 1, answer_their: ['B'], responder: '小王' });
+  const v = await dbModule.query(`SELECT COUNT(*)::int c FROM exam_verdicts WHERE kind='adversary'`);
+  expect(v.rows[0].c).toBe(2);
+
+  const up = await dbModule.query(`SELECT status FROM exam_uploads WHERE page='1'`);
+  expect(up.rows[0].status).toBe('done');
+});
+
+// 同一題再考一次不可以建成新的一列，否則累積的證據散在兩列上
+test('第二次遇到同一題是合併不是新增', async () => {
+  await addUpload('2', 'B', null);
+  mockReview.mockResolvedValue({
+    verdict: verdictOf([{ en: 'What is a delivery order?', zh: '什麼是交貨單？' }]),
+    model: 'claude-opus-5',
+  });
+  await runQueue(dbModule, { bankId });
+
+  const items = await dbModule.query(`SELECT seen_count FROM exam_items WHERE question_en LIKE 'What is a delivery%'`);
+  expect(items.rows).toHaveLength(1);
+  expect(items.rows[0].seen_count).toBe(2);
+});
+
+// 單筆失敗不中斷整批：實測踩過一頁逾時讓整個腳本 exit，前面的結果留在 DB
+// 看起來像跑完了
+test('一筆失敗不影響其他筆，且具名留下錯誤', async () => {
+  await addUpload('7', 'B', null);
+  await addUpload('8', 'B', null);
+  mockReview
+    .mockRejectedValueOnce(new Error('審查逾時（1200s）'))
+    .mockResolvedValue({ verdict: verdictOf([{ en: 'Q8 unique question', zh: '第八題' }]), model: 'm' });
+
+  const r = await runQueue(dbModule, { bankId });
+  expect(r.done + r.failed).toBe(2);
+  expect(r.failed).toBe(1);
+
+  const failed = await dbModule.query(`SELECT page, error FROM exam_uploads WHERE status='failed'`);
+  expect(failed.rows).toHaveLength(1);
+  expect(failed.rows[0].error).toMatch(/逾時/);
+});
+
+test('讀不出題目算失敗並寫下原因', async () => {
+  await addUpload('9', 'B', null);
+  mockReview.mockResolvedValue({
+    verdict: { readable: false, note: '截圖被裁掉一半', questions: [] }, model: 'm' });
+  const r = await runQueue(dbModule, { bankId });
+  expect(r.failed).toBe(1);
+  const row = await dbModule.query(`SELECT error FROM exam_uploads WHERE page='9'`);
+  expect(row.rows[0].error).toMatch(/截圖被裁掉一半/);
+});
+
+// 題數對不上時寧可留空也不移位——補空或截斷會讓答案錯位，
+// 而錯位的症狀是「某幾題莫名被判不一致」，離真因很遠
+test('作答題數與審查讀出的題數不符時不硬湊', async () => {
+  await addUpload('11', 'BAA', null);   // 看起來 3 題
+  mockReview.mockResolvedValue({
+    verdict: verdictOf([{ en: 'Only one question here', zh: '只有一題' }]), model: 'm' });
+  await runQueue(dbModule, { bankId });
+
+  const att = await dbModule.query(`SELECT answer_their FROM exam_attempts WHERE page='11'`);
+  expect(att.rows[0].answer_their).toBeNull();
+  const up = await dbModule.query(`SELECT status, error FROM exam_uploads WHERE page='11'`);
+  expect(up.rows[0].status).toBe('done');
+  expect(up.rows[0].error).toMatch(/沒對齊|3 題.*1 題/);
+});
+
+test('信心足夠就不取證，不足才取證', async () => {
+  await addUpload('12', '第 1 題 B；第 2 題 B', null);
+  mockReview.mockResolvedValue({
+    verdict: verdictOf([
+      { en: 'High confidence question here', zh: '高信心', conf: 95 },
+      { en: 'Low confidence question here', zh: '低信心', conf: 60 },
+    ]), model: 'm' });
+
+  await runQueue(dbModule, { bankId });
+  expect(mockEvidence).toHaveBeenCalledTimes(1);   // 只有 60 分那題
+});
+
+test('job 記錄進度且結束時標 done', async () => {
+  const jobs = await dbModule.query(`SELECT status, pages_total, pages_done FROM exam_jobs ORDER BY id DESC LIMIT 1`);
+  expect(jobs.rows[0].status).toBe('done');
+  expect(jobs.rows[0].pages_done).toBe(jobs.rows[0].pages_total);
+});
+
+// 沒有這一步，重啟後 job 永遠停在 running，畫面看起來像「還在跑」，
+// 但跑它的行程早就不在了
+describe('reclaimInterrupted', () => {
+  test('把上次被殺掉的工作標 interrupted，upload 退回 pending', async () => {
+    const j = await dbModule.query(
+      `INSERT INTO exam_jobs (bank_id, status, phase) VALUES ($1,'running','審查中') RETURNING id`, [bankId]);
+    await addUpload('30', 'B', null);
+    await dbModule.query(`UPDATE exam_uploads SET status='running' WHERE page='30'`);
+
+    const r = await reclaimInterrupted(dbModule);
+    expect(r.jobs).toBe(1);
+    expect(r.uploads).toBe(1);
+
+    const job = await dbModule.query(`SELECT status FROM exam_jobs WHERE id=$1`, [j.rows[0].id]);
+    expect(job.rows[0].status).toBe('interrupted');
+    const up = await dbModule.query(`SELECT status FROM exam_uploads WHERE page='30'`);
+    expect(up.rows[0].status).toBe('pending');
+  });
+
+  test('已完成的不受影響', async () => {
+    const done = await dbModule.query(`SELECT COUNT(*)::int c FROM exam_uploads WHERE status='done'`);
+    expect(done.rows[0].c).toBeGreaterThan(0);
+  });
+});

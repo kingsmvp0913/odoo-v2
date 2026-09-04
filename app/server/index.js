@@ -255,6 +255,16 @@ if (require.main === module) {
       const c = await failInterruptedClones();
       if (c.failed) console.log(`[STARTUP] 中斷 clone 清理：${c.failed} 個 repo 標記為 error`);
     } catch (e) { console.error('[STARTUP] 中斷 clone 清理:', e.message); }
+    // 被重啟打斷的題庫審查：job 若留在 running，畫面上看起來像「還在跑」，
+    // 但跑它的行程早就不在了，等多久都不會有進展。running 的 upload 一併退回
+    // pending，下次觸發會接續（已 done 的不受影響，不重燒 token）。
+    try {
+      const { reclaimInterrupted } = require('./lib/exam/worker');
+      const x = await reclaimInterrupted(require('./db'));
+      if (x.jobs || x.uploads) {
+        console.log(`[STARTUP] 中斷題庫審查清理：${x.jobs} 個工作標記中斷、${x.uploads} 張截圖退回待處理`);
+      }
+    } catch (e) { console.error('[STARTUP] 中斷題庫審查清理:', e.message); }
     // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續），
     // 不再一律標 error 作廢
     try {

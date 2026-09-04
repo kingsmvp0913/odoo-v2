@@ -15,6 +15,8 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { uploadRoot } = require('./lib/attachments');
 const { decodeImage, sniffImage, readUploadToken, isLocal, saveImage, validateItem } = require('./lib/exam/upload');
+const { runQueue } = require('./lib/exam/worker');
+const { emitAll } = require('./notify');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
 const BATCH_BODY_LIMIT = process.env.EXAM_BATCH_BODY_LIMIT || '60mb';
@@ -144,6 +146,57 @@ function registerRoutes(app) {
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // 觸發佇列。**立刻回 {jobId} 再背景跑**——判題要燒 token、跑好幾分鐘，
+  // hold 住 HTTP 連線兩邊都難用（呼叫端逾時，server 還在寫）。
+  //
+  // 同一個題庫只允許一個工作在跑；第二個回 409 而且**要講得出在跑什麼、
+  // 多久、進度到哪**——只說「還在跑」等於沒說（原專案實測的使用者回饋）。
+  app.post('/api/exam/run', verifyToken, express.json(), async (req, res) => {
+    const bankId = parseInt(req.body.bank, 10);
+    if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
+
+    const busy = (await query(
+      `SELECT id, phase, pages_done, pages_total, started_at FROM exam_jobs
+        WHERE bank_id = $1 AND status = 'running' ORDER BY id DESC LIMIT 1`, [bankId])).rows[0];
+    if (busy) {
+      const mins = Math.round((Date.now() - new Date(busy.started_at).getTime()) / 60000);
+      return res.status(409).json({
+        error: `這份題庫已經有工作在跑：${busy.phase || '處理中'}，` +
+               `已跑 ${mins} 分鐘，進度 ${busy.pages_done}/${busy.pages_total}`,
+        jobId: busy.id,
+      });
+    }
+
+    const pending = (await query(
+      `SELECT COUNT(*)::int c FROM exam_uploads WHERE bank_id = $1 AND status = 'pending'`,
+      [bankId])).rows[0].c;
+    if (!pending) return res.status(400).json({ error: '沒有待處理的上傳' });
+
+    res.json({ started: true, pending });
+
+    // 回應之後才開跑。失敗只能記在 DB 與 log——這時連線已經關了。
+    //
+    // 廣播走平台既有的 notify.emitAll，不自己接 io：socket 實例只在 index.js
+    // 的 listen 之後才有，模組層拿不到，而 notify.js 已經處理好那個時序。
+    runQueue(require('./db'), {
+      bankId,
+      onEvent: (e) => { try { emitAll('exam-progress', e); } catch (_) { /* 廣播失敗不影響工作 */ } },
+    }).catch((e) => console.error('[EXAM-WORKER]', e.message));
+  });
+
+  // 工作歷程。進度的真相在這裡，socket 廣播只是讓開著頁面的人即時看到——
+  // 廣播錯過了就沒了，重整一次前端記憶體就空的。
+  app.get('/api/exam/jobs', verifyToken, async (req, res) => {
+    const bankId = parseInt(req.query.bank, 10);
+    const params = [], where = [];
+    if (Number.isInteger(bankId)) { params.push(bankId); where.push(`bank_id = $${params.length}`); }
+    const { rows } = await query(`
+      SELECT id, bank_id, status, phase, pages_done, pages_total, started_at, updated_at
+        FROM exam_jobs ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY id DESC LIMIT 50`, params);
+    res.json(rows);
   });
 
   // 佇列現況。這支給平台使用者看，所以用 JWT 而不是 X-Token。
