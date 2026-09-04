@@ -172,8 +172,18 @@ async function recomputeConfidence(db, bank) {
     bySection.get(key).push({ id: it.id, confidence, why, certain: it.certain, answered });
   }
 
-  const secs = (await db.query(
-    `SELECT title, incorrect FROM exam_sections WHERE bank_id = $1`, [bank.id])).rows;
+  // 章節結果要跨 bank 撈**同版本的全部**，不能只看這一場。
+  //
+  // 上面撈題目用的是 odoo_version（題庫是跨考次共用的），章節結果卻綁在 bank 上。
+  // 只撈這一場的話，新考一場就會讓舊考次那些章節「查無官方結果」而整批失去校準——
+  // 實測踩過：POST 進一份新題庫後 120 題全部 calibrated=false，風險總和從 15.03
+  // 跳回 17.46，畫面上沒有任何錯誤，只是信心度悄悄變了。
+  //
+  // 同名章節有多場結果時取最新那場（id 大的覆蓋），最近一次官方回饋最能反映現況。
+  const secs = (await db.query(`
+    SELECT s.title, s.incorrect
+      FROM exam_sections s JOIN exam_banks b ON b.id = s.bank_id
+     WHERE b.odoo_version = $1 ORDER BY s.bank_id`, [bank.odoo_version])).rows;
   const incByTitle = new Map(secs.map(s => [s.title, s.incorrect]));
 
   const notes = [];
@@ -203,7 +213,7 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
   if (!bank) throw new Error(`找不到題庫 ${bankId}`);
 
   const pending = (await db.query(
-    `SELECT id, bank_id, page, answer_raw, responder, image_path, is_test
+    `SELECT id, bank_id, page, answer_raw, responder, image_path, is_test, section_title
        FROM exam_uploads WHERE bank_id = $1 AND status = 'pending' ORDER BY id`, [bankId])).rows;
   if (!pending.length) return { jobId: null, total: 0, done: 0, failed: 0 };
 
@@ -232,6 +242,12 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
         stat.done++;
         onEvent({ jobId: job.id, page: up.page, status: 'done', questions: r.questions, note: r.note });
       } catch (e) {
+        // attempts 是在審查**之前**就建好的（saveVerdicts 要靠它們對應題號），
+        // 所以審查那一步炸掉時會留下一批沒有 verdict 的孤兒：畫面上永遠顯示
+        // 「等待中」，重跑同一頁還會再建一份重複的。實測踩過——模型把信心度回成
+        // 0.95 撞爛 INTEGER 欄位，整頁 4 題就這樣卡在那裡。
+        // 失敗即回滾成「這頁沒跑過」，重跑才是乾淨的。
+        await db.query(`DELETE FROM exam_attempts WHERE upload_id = $1`, [up.id]);
         // 單筆失敗不中斷整批：標 failed 留著，讓人看得出是哪一步壞的、也知道能重跑
         await db.query(
           `UPDATE exam_uploads SET status='failed', error=$2, updated_at=NOW() WHERE id=$1`,

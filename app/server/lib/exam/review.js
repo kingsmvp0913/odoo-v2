@@ -241,6 +241,24 @@ function cleanAnswer(arr) {
 // 模型回傳的形狀會漂（實測拿到過單一物件、裸陣列、契約格式三種），
 // 一律壓成同一種再往下傳。前端若直接吃原始輸出，遇到裸陣列時 readable 是
 // undefined，會掉進「讀不出題目」分支——審查明明成功，真正的問題卻被藏起來。
+/**
+ * 信心度一律收成 0-100 的整數。
+ *
+ * prompt 寫明「0-100 的整數」，模型仍然會回 0.95——實測 eCommerce 那一頁就是這樣炸的：
+ * exam_verdicts.confidence 是 INTEGER，寫入時 `invalid input syntax for type integer: "0.95"`
+ * 讓整頁 4 題一起失敗，而錯誤訊息完全看不出是模型格式跑掉。
+ *
+ * 0 與 1 之間視為比例（0.95 → 95）。剛好 1 當成 1 分而不是 100%：模型要表達「完全確定」
+ * 時回的是 100 或 1.0，前者已經對，後者落在這裡當 1 分反而安全——低估信心只會多找證據，
+ * 高估則會讓錯答案混進高信心區。
+ */
+function normalizeConfidence(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const scaled = n > 0 && n < 1 ? n * 100 : n;
+  return Math.max(0, Math.min(100, Math.round(scaled)));
+}
+
 function normalize(raw, theirAnswers = []) {
   const one = (q, i) => {
     const { ok, bad } = cleanAnswer(q?.correct_answer);
@@ -259,7 +277,7 @@ function normalize(raw, theirAnswers = []) {
         : (theirAnswers[i] || []),
       refuted: q?.refuted === true,
       correct_answer: ok,
-      confidence: Number.isFinite(Number(q?.confidence)) ? Number(q.confidence) : null,
+      confidence: normalizeConfidence(q?.confidence),
       reason: q?.reason || '',
       ...(bad.length ? { shape_error: `correct_answer 回的是選項文字不是字母：${bad.join('、')}` } : {}),
     };
@@ -505,5 +523,5 @@ async function saveVerdicts(db, { bankId, page, verdict, model }) {
 module.exports = {
   reviewPage, extractPage, reviewQuestions, buildPrompt, buildExtractPrompt,
   buildReviewQuestionsPrompt, normalize, normalizeExtract, extractJson, checkGlossary,
-  termsIn, saveVerdicts, MODEL,
+  termsIn, saveVerdicts, normalizeConfidence, MODEL,
 };

@@ -134,6 +134,45 @@ describe('兩階段審題 prompt', () => {
   });
 });
 
+// 實測炸過：模型無視 prompt 寫的「0-100 整數」回了 0.95，寫進 INTEGER 欄位時
+// `invalid input syntax for type integer: "0.95"` 讓整頁 4 題一起 failed，
+// 而錯誤訊息完全不指向「模型格式跑掉」。
+describe('normalizeConfidence', () => {
+  const { normalizeConfidence } = require('../lib/exam/review');
+
+  test('0 到 1 之間的小數當成比例換算', () => {
+    expect(normalizeConfidence(0.95)).toBe(95);
+    expect(normalizeConfidence(0.4)).toBe(40);
+  });
+
+  test('正常的 0-100 整數原樣保留', () => {
+    expect(normalizeConfidence(92)).toBe(92);
+    expect(normalizeConfidence(0)).toBe(0);
+    expect(normalizeConfidence(100)).toBe(100);
+  });
+
+  // 寧可低估：低信心只會多找一次證據，高估會讓錯答案混進高信心區直接被採用
+  test('剛好 1 當成 1 分，不放大成 100', () => {
+    expect(normalizeConfidence(1)).toBe(1);
+  });
+
+  test('超出範圍夾回 0-100，小數四捨五入成整數', () => {
+    expect(normalizeConfidence(120)).toBe(100);
+    expect(normalizeConfidence(-5)).toBe(0);
+    expect(normalizeConfidence(88.6)).toBe(89);
+  });
+
+  test('不是數字時回 null 而不是 0', () => {
+    expect(normalizeConfidence(undefined)).toBeNull();
+    expect(normalizeConfidence('高')).toBeNull();
+  });
+
+  test('normalize 走同一套，模型回小數也寫得進 INTEGER 欄位', () => {
+    const v = normalize({ questions: [{ no: 1, confidence: 0.95 }] }, [['A']]);
+    expect(v.questions[0].confidence).toBe(95);
+  });
+});
+
 describe('checkGlossary', () => {
   test('官方譯法有出現在譯文裡就算命中', () => {
     const r = checkGlossary('請設定交貨單的重訂貨規則',

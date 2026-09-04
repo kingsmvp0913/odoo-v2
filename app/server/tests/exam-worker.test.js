@@ -174,6 +174,28 @@ test('一筆失敗不影響其他筆，且具名留下錯誤', async () => {
   expect(failed.rows[0].error).toMatch(/逾時/);
 });
 
+// attempts 建在審查之前（saveVerdicts 要靠它們對應題號），所以審查炸掉會留下
+// 一批沒有 verdict 的孤兒：畫面上永遠「等待中」，重跑還會再建一份重複的。
+// 實測踩過——模型把信心度回成 0.95 撞爛 INTEGER 欄位，整頁 4 題卡死。
+test('審查中途失敗時，那一頁已建的作答要清乾淨', async () => {
+  await addUpload('40', 'B,A', null);
+  mockExtract.mockResolvedValue({
+    page: pageOf([{ en: 'Rollback question one' }, { en: 'Rollback question two' }]), model: 'm' });
+  mockReview.mockRejectedValue(new Error('invalid input syntax for type integer: "0.95"'));
+
+  const r = await runQueue(dbModule, { bankId });
+  expect(r.failed).toBe(1);
+
+  const left = await dbModule.query(
+    `SELECT COUNT(*)::int c FROM exam_attempts a
+       JOIN exam_uploads u ON u.id = a.upload_id WHERE u.page = '40'`);
+  expect(left.rows[0].c).toBe(0);
+
+  const up = await dbModule.query(`SELECT status, error FROM exam_uploads WHERE page='40'`);
+  expect(up.rows[0].status).toBe('failed');
+  expect(up.rows[0].error).toMatch(/0\.95/);
+});
+
 test('讀不出題目算失敗並寫下原因', async () => {
   await addUpload('9', 'B', null);
   mockExtract.mockResolvedValue({
