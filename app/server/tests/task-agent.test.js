@@ -528,6 +528,31 @@ test('B-5 收尾漏 <result> 且無新 commit → 維持 stopped', async () => {
   expect(t.blocker_content).toContain('未回傳有效結果');
 });
 
+// 鑑別力：兜底原本只在 result===null 時觸發，於是「補救吐出可解析但沒用的物件」比「補救什麼都吐不出」
+// 更慘——前者靜默跳過兜底。實測 task 230（2026-09-03）：coding 已 commit 7 個檔、收尾吐 markdown 摘要，
+// 任務照樣 stopped，整輪成果與 18 分鐘全部丟掉，還要人工介入才推得動。
+test('B-5 收尾漏 <result>、補救回可解析但無可用 status 的物件 → 仍依 git 事實推進 QA', async () => {
+  let call = 0;
+  mockClaude({ onCall: (child) => {
+    call += 1;
+    emitInit(child, `sess-junk-${call}`);
+    // 第一次＝coding 本體，吐 markdown 摘要（整段沒有 <result>）。
+    // 第二次＝haiku 補救，這次「有」<result> 且 JSON 合法，但 status 不是契約裡的值。
+    const out = call === 1
+      ? 'Committed. Summary of what was implemented:\n\n**Model changes:**\n- 新增 purchase_default_slip_id'
+      : '<result>\n{"status":"completed","summary":"已完成"}\n</result>';
+    child.stdout.emit('data', JSON.stringify({ type: 'result', result: out, usage: null, duration_ms: 10 }) + '\n');
+    child.emit('close', 0);
+  } });
+  let n = 0;
+  git.revParse.mockImplementation(() => Promise.resolve(`sha-junk-${++n}`));
+  const id = await insertCodingTask('junkstatus1');
+  await runTaskCoding(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('qa_running');
+});
+
 // 鑑別力（最傷的誤判方向）：agent 明講 stopped 是它的判斷，不是格式抖動。兜底若連這個一起覆蓋，
 // 「做不下去」會被 commit 的存在蓋過去、硬送進 QA——只兜「解析不出來」這一種。
 test('B-5 agent 明講 stopped → 即使有新 commit 也不得被兜底覆蓋', async () => {

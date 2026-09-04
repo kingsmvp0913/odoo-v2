@@ -403,8 +403,14 @@ async function runTaskAnalysis(taskId, userId, signal) {
   // 契約（analysis-project.md）：<result> 內「裸 YAML」。
   // 舊契約要 agent 把整份 YAML 做 JSON 逃逸再包 JSON——多欄位含引號時逃逸極易出錯；
   // 改裸 YAML，下一狀態由 server 端 determineNextStatus 推導（與 analysis.js 單一真相）。
+  // schemaHint 用 REQUIRED_FIELDS 推導，不寫死一份：漏給提示時補救 agent 不知道要產什麼鍵名只能亂猜
+  // （agent-result.js 已記過這個坑，coding 關有給、分析關卻一直沒給——而實測 5 筆「Agent 未回傳有效
+  // 結果」裡有 3 筆出在分析關）。字面是 YAML 不是 JSON：本關的契約是 <result> 內裸 YAML。
   const result = await parseAgentResult(raw, {
     parse: s => yaml.load(s, { schema: yaml.CORE_SCHEMA }), signal,
+    schemaHint: '<result> 內是裸 YAML（不是 JSON、不要包 ``` fence），至少要有這些鍵：'
+      + REQUIRED_FIELDS.join('、')
+      + '。含冒號的值一律用雙引號包起來，否則會被當成 YAML 的鍵值對而解析失敗。',
     ref: { taskId: task.task_id, projectId: task.project_id }, userId
   });
 
@@ -766,12 +772,20 @@ async function runTaskCoding(taskId, userId, signal) {
     signal, ref, userId
   });
 
+  const ACTIONABLE_CODING_STATUS = ['qa_running', 'stopped'];
+  // 下面這道保底的觸發條件不是「result 是 null」而是「拿不到可行動的 status」。實測 task 230（2026-09-03）：
+  // coding 已 commit fa6b9cd（7 個檔），收尾吐的是一段 markdown 摘要、整段沒有 <result>；Haiku 補救
+  // 回了一個能被 JSON.parse 但沒有可用 status 的物件 ⇒ result 非 null ⇒ 下面整段保底被跳過 ⇒ stopped。
+  // 只認 null 的判準會讓「補救吐出垃圾」比「補救什麼都吐不出」更慘，因為前者靜默跳過保底。
+  // qa_running／stopped 是唯二有意義的值：其餘（缺欄位、空物件、模型自創的 completed）一律當沒解析到。
+  //
   // 補救仍解析不出結果時，不能讓整輪報廢：commit 在不在是客觀事實，比 agent 的收尾自述可靠得多。
   // 有新 commit ⇒ 本輪確實做出東西，照樣進 QA——QA 本來就審 diff 對規格，格式抖動造成的誤放行由
   // 它擋；反過來把 18 分鐘／1M tokens 的成果丟掉、還要人工介入才推得動，代價大得多（實測 task 152：
   // 已 commit 6 個檔，只因最後吐的是中文摘要而非 <result> 就 stopped）。
-  // 只兜「解析不出來」這一種：agent 明講 {"status":"stopped"} 是它的判斷，必須照辦，不得覆蓋。
-  if (result == null) {
+  // 只兜「解析不出來」這一種：agent 明講 {"status":"stopped"} 是它的判斷，必須照辦，不得覆蓋
+  // （所以 stopped 也列在 ACTIONABLE 內，不會走到這裡被改判成 qa_running）。
+  if (!ACTIONABLE_CODING_STATUS.includes(result?.status)) {
     const headsAfterParseFail = await readHeads(info, task.task_id);
     const repos = Object.keys(headsAfterParseFail);
     const advanced = repos.length > 0
