@@ -600,6 +600,8 @@ async function migrate() {
       section_title   TEXT,
       answer_official TEXT[],
       official_from   TEXT,                            -- manual | section-all-correct
+      -- 落在官方全對的章節＝邏輯上必然正確。與 answer_official 不等價，見 colMigrations 的說明。
+      certain         BOOLEAN NOT NULL DEFAULT FALSE,
       confidence      INT,
       confidence_why  TEXT,
       calibrated      BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1000,7 +1002,12 @@ async function migrate() {
     // fix-review agent 的 <notes>（審核推理過程）：無人監督閘門唯一的人類稽核材料，approve／
     // reject 兩條路徑都要寫（見 pipeline/nightly-fix.js）。不可疊用既有的 notes 欄——那欄已被
     // platform-fix 自己的辯護詞佔用（finding-fix.js），混用會讓「誰寫的、審什麼」分不清楚。
-    { table: 'finding_fixes', col: 'review_notes', sql: 'ALTER TABLE finding_fixes ADD COLUMN review_notes TEXT' }
+    { table: 'finding_fixes', col: 'review_notes', sql: 'ALTER TABLE finding_fixes ADD COLUMN review_notes TEXT' },
+    // 「這題落在官方全對的章節」——官方說某章 incorrect=0 等價於逐題告知「這些都對」，
+    // 是整份題庫裡唯一邏輯上必然為真的東西。與 answer_official 不等價：未來若拿到官方
+    // 逐題正解，會有「有官方答案但該章沒全對」的題。合併時取 OR（任一次考試 certain
+    // 就永久 certain），這正是規格 §6.7「永久鎖成 100」的實作點。
+    { table: 'exam_items', col: 'certain', sql: 'ALTER TABLE exam_items ADD COLUMN certain BOOLEAN NOT NULL DEFAULT FALSE' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

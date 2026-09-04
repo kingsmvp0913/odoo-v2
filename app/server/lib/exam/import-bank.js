@@ -59,12 +59,13 @@ async function importBank(db, { label, odooVersion, questions, sections, takenAt
       const ins = await db.query(
         `INSERT INTO exam_items
            (odoo_version, fingerprint, question_en, question_zh, options, qtype,
-            section_title, answer_official, official_from)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            section_title, answer_official, official_from, certain)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          RETURNING id`,
         [odooVersion, fp, q.question, q.question_zh || null,
          JSON.stringify(q.options || []), q.type === 'multi' ? 'multi' : 'single',
-         q.pageTitle || null, official, official ? (q.officialFrom || 'manual') : null]
+         q.pageTitle || null, official, official ? (q.officialFrom || 'manual') : null,
+         q.certain === true]
       );
       itemId = ins.rows[0].id;
       stat.items++;
@@ -72,15 +73,18 @@ async function importBank(db, { label, odooVersion, questions, sections, takenAt
       // 已存在：合併。seen_count++，並在本次有官方答案而舊列沒有時補上。
       // COALESCE 的方向是刻意的——舊列已有的官方答案不被本次覆蓋，
       // 因為官方確認是硬事實，不該被後來一次沒有官方回饋的考試洗掉。
+      // certain 取 OR：任何一次考試落在官方全對的章節，這題就永久確定
+      // （規格 §6.7「永久鎖成 100」）。後來一次沒有官方回饋的考試不得把它洗掉。
       itemId = hit.rows[0].id;
       await db.query(
         `UPDATE exam_items
             SET seen_count = seen_count + 1,
                 answer_official = COALESCE(answer_official, $2),
                 official_from = COALESCE(official_from, $3),
+                certain = certain OR $4,
                 updated_at = NOW()
           WHERE id = $1`,
-        [itemId, official, official ? (q.officialFrom || 'manual') : null]
+        [itemId, official, official ? (q.officialFrom || 'manual') : null, q.certain === true]
       );
       stat.merged++;
     }

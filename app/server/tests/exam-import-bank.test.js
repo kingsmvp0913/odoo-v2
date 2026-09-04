@@ -13,7 +13,10 @@ const QUESTIONS = {
       options: [{ letter: 'A', text: 'Not possible' }, { letter: 'B', text: 'Leave Company empty' }],
       round1: { answer: ['B'], confidence: 95, reason: 'r1' },
       round2: { answer: ['B'], confidence: 90, reason: 'r2' },
-      their: ['B'], final: 'B', official: 'B', officialFrom: 'section-all-correct', certain: true,
+      // 刻意照抄真實資料的形狀：officialFrom 是 'manual' 但 certain 是 true。
+      // 原專案的 build-bank 讓 prev.official 分支優先，所以章節推得的來源被標成 manual。
+      // 只看 official_from 去數「官方確定幾題」會得到 0——實測踩過。
+      their: ['B'], final: 'B', official: 'B', officialFrom: 'manual', certain: true,
     },
     {
       page: '2', pageTitle: 'Sales', no: 1,
@@ -80,7 +83,7 @@ test('官方答案與來源正確帶入', async () => {
   const res = await dbModule.query(
     `SELECT answer_official, official_from FROM exam_items WHERE section_title = 'Introduction'`);
   expect(res.rows[0].answer_official).toEqual(['B']);
-  expect(res.rows[0].official_from).toBe('section-all-correct');
+  expect(res.rows[0].official_from).toBe('manual');
 });
 
 // 沒有官方答案的題不可以被填上任何東西——把 final 填進 official 是規格 §5.3
@@ -118,19 +121,51 @@ test('題幹空白的題跳過並具名回報，不中斷整批', async () => {
   expect(r.skipped[0]).toMatch(/P9-1/);
 });
 
-// 官方確認是硬事實，不該被後來一次沒有官方回饋的考試洗掉
-test('合併時已有的官方答案不被沒有官方答案的那次覆蓋', async () => {
+// certain 與「有官方答案」不等價，必須各自存。來源資料裡 certain=true 的題
+// officialFrom 標的是 'manual'（原專案的 prev.official 分支優先），只看 official_from
+// 會數出 0 題官方確定——實測踩過，驗收在這裡失敗。
+test('certain 獨立於 official_from 存下來', async () => {
+  const res = await dbModule.query(
+    `SELECT certain, official_from FROM exam_items WHERE section_title = 'Introduction'`);
+  expect(res.rows[0].certain).toBe(true);
+  expect(res.rows[0].official_from).toBe('manual');   // 來源標記與 certain 各說各話
+
+  const notCertain = await dbModule.query(
+    `SELECT certain FROM exam_items WHERE section_title = 'Sales' AND odoo_version = '19'`);
+  expect(notCertain.rows[0].certain).toBe(false);
+});
+
+// 官方確認是硬事實，不該被後來一次沒有官方回饋的考試洗掉（規格 §6.7）
+test('合併時已有的官方答案與 certain 都不被後來那次洗掉', async () => {
   const noOfficial = { questions: [{
     page: '1', pageTitle: 'Introduction', no: 1,
     question: 'In a multi-company setup, how can you share a customer?',
-    type: 'single', options: [], their: ['B'], final: 'B', official: null,
+    type: 'single', options: [], their: ['B'], final: 'B', official: null, certain: false,
   }] };
   await importBank(dbModule, {
     label: '沒官方回饋那次', odooVersion: '19', questions: noOfficial, sections: { sections: {} } });
   const res = await dbModule.query(
-    `SELECT answer_official, official_from FROM exam_items WHERE section_title = 'Introduction'`);
+    `SELECT answer_official, official_from, certain FROM exam_items WHERE section_title = 'Introduction'`);
   expect(res.rows[0].answer_official).toEqual(['B']);
-  expect(res.rows[0].official_from).toBe('section-all-correct');
+  expect(res.rows[0].official_from).toBe('manual');
+  expect(res.rows[0].certain).toBe(true);   // OR 而非覆蓋
+});
+
+// 反向：第一次不確定、第二次落在全對章節 → 升成 certain
+test('後來的考試確認了，certain 從 false 升成 true', async () => {
+  const later = { questions: [{
+    page: '2', pageTitle: 'Sales', no: 1,
+    question: 'Which report shows the margin?',
+    type: 'single', options: [], their: ['A'], final: 'A',
+    official: 'A', officialFrom: 'section-all-correct', certain: true,
+  }] };
+  await importBank(dbModule, {
+    label: '這次 Sales 全對', odooVersion: '19', questions: later, sections: { sections: {} } });
+  const res = await dbModule.query(
+    `SELECT certain, answer_official FROM exam_items
+      WHERE section_title = 'Sales' AND odoo_version = '19'`);
+  expect(res.rows[0].certain).toBe(true);
+  expect(res.rows[0].answer_official).toEqual(['A']);
 });
 
 // 17 版考過的題不得汙染 19 版題庫
