@@ -6,20 +6,13 @@ const { newDb } = require('pg-mem');
 // 模型呼叫全部 mock：這支測的是佇列與資料流，不是審查品質。
 // 審查品質有它自己的實測（docs/superpowers/specs/2026-09-04-adversary-bench-result.md）。
 const mockExtract = jest.fn();
-const mockReview = jest.fn();
-const mockEvidence = jest.fn();
+const mockChallenge = jest.fn();
 jest.mock('../lib/exam/review', () => {
   const actual = jest.requireActual('../lib/exam/review');
-  return {
-    ...actual,
-    extractPage: (...a) => mockExtract(...a),
-    reviewQuestions: (...a) => mockReview(...a),
-  };
+  return { ...actual, extractPage: (...a) => mockExtract(...a) };
 });
-jest.mock('../lib/exam/evidence', () => {
-  const actual = jest.requireActual('../lib/exam/evidence');
-  return { ...actual, gatherEvidence: (...a) => mockEvidence(...a) };
-});
+// 挑戰模式：判斷與證據在同一次呼叫產出，所以只有一支要 mock
+jest.mock('../lib/exam/challenge', () => ({ challengePage: (...a) => mockChallenge(...a) }));
 
 const { runQueue, reclaimInterrupted } = require('../lib/exam/worker');
 
@@ -32,6 +25,7 @@ const verdictOf = (qs) => ({
     options: [{ letter: 'A', text: 'aa', text_zh: '啊' }, { letter: 'B', text: 'bb', text_zh: '玻' }],
     their_answer: q.their || ['B'], refuted: !!q.refuted,
     correct_answer: q.correct || ['B'], confidence: q.conf ?? 95, reason: 'r',
+    evidence: q.evidence || [], rejected_refs: q.rejected || [],
   })),
 });
 const pageOf = (qs) => ({
@@ -77,9 +71,7 @@ afterAll(() => {
 
 beforeEach(() => {
   mockExtract.mockReset();
-  mockReview.mockReset();
-  mockEvidence.mockReset();
-  mockEvidence.mockResolvedValue({ result: { found: false, evidence: [], rejected: [] } });
+  mockChallenge.mockReset();
 });
 
 test('沒有待處理時不建 job', async () => {
@@ -96,7 +88,7 @@ test('跑完一筆會建題目、作答與判斷', async () => {
     { en: 'Where is the reordering rule?', zh: '重訂貨規則在哪？', their: ['A'], correct: ['A'] },
   ];
   mockExtract.mockResolvedValue({ page: pageOf(qs), model: 'claude-opus-5' });
-  mockReview.mockResolvedValue({
+  mockChallenge.mockResolvedValue({
     verdict: verdictOf(qs),
     model: 'claude-opus-5',
   });
@@ -121,7 +113,7 @@ test('第二次遇到同一題是合併不是新增', async () => {
   await addUpload('2', 'B', null);
   const qs = [{ en: 'What is a delivery order?', zh: '什麼是交貨單？' }];
   mockExtract.mockResolvedValue({ page: pageOf(qs), model: 'claude-opus-5' });
-  mockReview.mockResolvedValue({
+  mockChallenge.mockResolvedValue({
     verdict: verdictOf(qs),
     model: 'claude-opus-5',
   });
@@ -145,7 +137,7 @@ test('只有官方確認答案命中才短路，且不寫假的 adversary', asyn
 
   await runQueue(dbModule, { bankId });
 
-  expect(mockReview).not.toHaveBeenCalled();
+  expect(mockChallenge).not.toHaveBeenCalled();
   const attempt = (await dbModule.query(
     `SELECT answer_their,answer_final FROM exam_attempts WHERE item_id=$1 ORDER BY id DESC LIMIT 1`,
     [item.rows[0].id])).rows[0];
@@ -163,7 +155,7 @@ test('一筆失敗不影響其他筆，且具名留下錯誤', async () => {
   mockExtract
     .mockRejectedValueOnce(new Error('審查逾時（1200s）'))
     .mockResolvedValue({ page: pageOf([{ en: 'Q8 unique question', zh: '第八題' }]), model: 'm' });
-  mockReview.mockResolvedValue({ verdict: verdictOf([{ en: 'Q8 unique question', zh: '第八題' }]), model: 'm' });
+  mockChallenge.mockResolvedValue({ verdict: verdictOf([{ en: 'Q8 unique question', zh: '第八題' }]), model: 'm' });
 
   const r = await runQueue(dbModule, { bankId });
   expect(r.done + r.failed).toBe(2);
@@ -181,7 +173,7 @@ test('審查中途失敗時，那一頁已建的作答要清乾淨', async () =>
   await addUpload('40', 'B,A', null);
   mockExtract.mockResolvedValue({
     page: pageOf([{ en: 'Rollback question one' }, { en: 'Rollback question two' }]), model: 'm' });
-  mockReview.mockRejectedValue(new Error('invalid input syntax for type integer: "0.95"'));
+  mockChallenge.mockRejectedValue(new Error('invalid input syntax for type integer: "0.95"'));
 
   const r = await runQueue(dbModule, { bankId });
   expect(r.failed).toBe(1);
@@ -207,7 +199,7 @@ test('執行期間新進的頁會加入同一批，不必等整批跑完', async
     if (!injected) { injected = true; await addUpload('51', 'B', null); }
     return { page: pageOf([{ en: `Q for page ${injected}` }]), model: 'm' };
   });
-  mockReview.mockResolvedValue({ verdict: verdictOf([{ en: 'Q' }]), model: 'm' });
+  mockChallenge.mockResolvedValue({ verdict: verdictOf([{ en: 'Q' }]), model: 'm' });
 
   const r = await runQueue(dbModule, { bankId });
   expect(r.total).toBe(2);          // 開頭只看得到 1 頁，跑的時候補進第 2 頁
@@ -220,6 +212,30 @@ test('執行期間新進的頁會加入同一批，不必等整批跑完', async
   const job = await dbModule.query(
     `SELECT pages_total FROM exam_jobs ORDER BY id DESC LIMIT 1`);
   expect(job.rows[0].pages_total).toBe(2);   // 進度分母要跟著長，不然永遠顯示 1/1
+  mockExtract.mockReset();
+});
+
+// 「先從佇列取出、再標記 running」中間隔著一個 await，那個空隙足夠讓另一個 worker
+// 查到同一筆還是 pending 而重複拿走。實測炸過：8 題的頁跑出 16 筆作答，同一頁判了
+// 兩次、token 白燒一份，而畫面上只看得到「怎麼有兩個 8 題」。
+test('同一頁不會被兩個 worker 同時認領', async () => {
+  await addUpload('60', 'B', null);
+  let extracts = 0;
+  mockExtract.mockImplementation(async () => {
+    extracts++;
+    await new Promise(r => setTimeout(r, 30));   // 拉長空窗期讓競態有機會發生
+    return { page: pageOf([{ en: 'Claim race question here' }]), model: 'm' };
+  });
+  mockChallenge.mockResolvedValue({ verdict: verdictOf([{ en: 'Claim race question here' }]), model: 'm' });
+
+  const r = await runQueue(dbModule, { bankId });
+  expect(extracts).toBe(1);      // 只跑一次判題，不是每個 worker 各跑一次
+  expect(r.total).toBe(1);
+
+  const att = await dbModule.query(`
+    SELECT COUNT(*)::int c FROM exam_attempts a
+      JOIN exam_uploads u ON u.id = a.upload_id WHERE u.page = '60'`);
+  expect(att.rows[0].c).toBe(1);  // 一題就是一筆，不會變兩筆
   mockExtract.mockReset();
 });
 
@@ -238,7 +254,7 @@ test('讀不出題目算失敗並寫下原因', async () => {
 test('作答題數與審查讀出的題數不符時不硬湊', async () => {
   await addUpload('11', 'BAA', null);   // 看起來 3 題
   mockExtract.mockResolvedValue({ page: pageOf([{ en: 'Only one question here', zh: '只有一題' }]), model: 'm' });
-  mockReview.mockResolvedValue({
+  mockChallenge.mockResolvedValue({
     verdict: verdictOf([{ en: 'Only one question here', zh: '只有一題' }]), model: 'm' });
   await runQueue(dbModule, { bankId });
 
@@ -249,18 +265,66 @@ test('作答題數與審查讀出的題數不符時不硬湊', async () => {
   expect(up.rows[0].error).toMatch(/沒對齊|3 題.*1 題/);
 });
 
-test('信心足夠就不取證，不足才取證', async () => {
+// 挑戰模式一次呼叫就把判斷與證據一起產出，所以只送一次、而且只送真的要判的題。
+// 拆成審查→取證兩步時實測 Project 一頁＝6.5 分＋5.1 分，而審查那 6.5 分幾乎都在
+// 等網路（它手上沒原始碼只好去 WebSearch）。
+test('未命中官方的題整批送一次挑戰，證據跟著同一次寫入', async () => {
   await addUpload('12', '第 1 題 B；第 2 題 B', null);
   const qs = [
-    { en: 'High confidence question here', zh: '高信心', conf: 95 },
-    { en: 'Low confidence question here', zh: '低信心', conf: 60 },
+    { en: 'Challenge question one here', zh: '一', conf: 95,
+      evidence: [{ kind: 'source', ref: 'addons/project/models/project_task.py:154', excerpt: 'x' }] },
+    { en: 'Challenge question two here', zh: '二', conf: 60,
+      evidence: [{ kind: 'source', ref: 'ent/project_enterprise/models/project_task.py:41', excerpt: 'y' }] },
   ];
   mockExtract.mockResolvedValue({ page: pageOf(qs), model: 'm' });
-  mockReview.mockResolvedValue({
-    verdict: verdictOf(qs), model: 'm' });
+  mockChallenge.mockResolvedValue({ verdict: verdictOf(qs), model: 'm' });
 
   await runQueue(dbModule, { bankId });
-  expect(mockEvidence).toHaveBeenCalledTimes(1);   // 只有 60 分那題
+
+  expect(mockChallenge).toHaveBeenCalledTimes(1);
+  expect(mockChallenge.mock.calls[0][0].questions).toHaveLength(2);
+  // 企業版證據要進得去：認證考很多 ent/ 才有的功能
+  const ev = await dbModule.query(
+    `SELECT ref FROM exam_evidence WHERE ref LIKE 'ent/%'`);
+  expect(ev.rows.length).toBeGreaterThan(0);
+});
+
+// 路徑不合法的證據在 challenge 那層就被丟掉，但要留下痕跡讓人看得到
+test('證據路徑被丟棄時具名記在該頁的 note', async () => {
+  await addUpload('15', 'B', null);
+  const qs = [{ en: 'Rejected ref question here', zh: '丟棄', rejected: ['/etc/passwd'] }];
+  mockExtract.mockResolvedValue({ page: pageOf(qs), model: 'm' });
+  mockChallenge.mockResolvedValue({ verdict: verdictOf(qs), model: 'm' });
+
+  await runQueue(dbModule, { bankId });
+  const up = await dbModule.query(`SELECT error FROM exam_uploads WHERE page='15'`);
+  expect(up.rows[0].error).toMatch(/證據路徑不合法/);
+});
+
+test('讀不出題目算失敗並寫下原因', async () => {
+  await addUpload('9', 'B', null);
+  mockExtract.mockResolvedValue({
+    page: { readable: false, note: '截圖被裁掉一半', questions: [] }, model: 'm' });
+  const r = await runQueue(dbModule, { bankId });
+  expect(r.failed).toBe(1);
+  const row = await dbModule.query(`SELECT error FROM exam_uploads WHERE page='9'`);
+  expect(row.rows[0].error).toMatch(/截圖被裁掉一半/);
+});
+
+// 題數對不上時寧可留空也不移位——補空或截斷會讓答案錯位，
+// 而錯位的症狀是「某幾題莫名被判不一致」，離真因很遠
+test('作答題數與審查讀出的題數不符時不硬湊', async () => {
+  await addUpload('11', 'BAA', null);   // 看起來 3 題
+  mockExtract.mockResolvedValue({ page: pageOf([{ en: 'Only one question here', zh: '只有一題' }]), model: 'm' });
+  mockChallenge.mockResolvedValue({
+    verdict: verdictOf([{ en: 'Only one question here', zh: '只有一題' }]), model: 'm' });
+  await runQueue(dbModule, { bankId });
+
+  const att = await dbModule.query(`SELECT answer_their FROM exam_attempts WHERE page='11'`);
+  expect(att.rows[0].answer_their).toBeNull();
+  const up = await dbModule.query(`SELECT status, error FROM exam_uploads WHERE page='11'`);
+  expect(up.rows[0].status).toBe('done');
+  expect(up.rows[0].error).toMatch(/沒對齊|3 題.*1 題/);
 });
 
 test('job 記錄進度且結束時標 done', async () => {

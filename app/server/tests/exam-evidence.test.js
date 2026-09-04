@@ -86,6 +86,17 @@ describe('normalizeEvidence', () => {
 
   // 落在 src/ 之外的一律丟棄——即使 prompt 說了不要，那是 soft instruction。
   // Node 端這一關是硬的，agent 亂跑也帶不回來。
+  // 企業版證據保留 ent/ 前綴，社群版不留——既有 150 筆存的都是去前綴的社群版路徑，
+  // 全部改格式等於動到舊資料。所以「沒前綴」繼續代表社群版。
+  test('企業版路徑保留 ent/ 前綴，社群版維持去前綴', () => {
+    const { safeSourceRef } = require('../lib/exam/evidence');
+    expect(safeSourceRef('ent/project_enterprise/models/project_task.py:41'))
+      .toBe('ent/project_enterprise/models/project_task.py:41');
+    expect(safeSourceRef('src/addons/sale/models/sale_order.py:88'))
+      .toBe('addons/sale/models/sale_order.py:88');
+    expect(safeSourceRef('ent/../../etc/passwd')).toBeNull();
+  });
+
   test('src 以外的路徑被丟棄並記錄', () => {
     const r = normalizeEvidence({ evidence: [
       { kind: 'source', ref: 'data/exam/answer-key.json:3' },
@@ -160,5 +171,45 @@ describe('saveEvidence', () => {
     expect(await saveEvidence(dbModule, { verdictId, evidence: [] })).toBe(0);
     const after = await dbModule.query('SELECT COUNT(*)::int c FROM exam_evidence');
     expect(after.rows[0].c).toBe(before.rows[0].c);
+  });
+});
+
+// 查證方法抽成獨立檔案，靠「複製進沙箱」而不是 Claude Code 的 skill 機制。
+// 實測：子行程的 cwd 是暫存目錄，專案的 .claude/skills/ 在那裡載不到，
+// 只載得到 ~/.claude/skills/ 的 user scope——而那份不進版控又全平台共用。
+describe('查證指引檔', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { ensureEvidenceCwd, buildBatchEvidencePrompt } = require('../lib/exam/evidence');
+
+  test('指引檔會被複製進沙箱，agent 讀得到', () => {
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'core-'));
+    fs.mkdirSync(path.join(dir, '19'), { recursive: true });
+    const prev = process.env.ODOO_CORE_SRC_DIR;
+    process.env.ODOO_CORE_SRC_DIR = dir;
+    jest.resetModules();
+    const { ensureEvidenceCwd: fresh } = require('../lib/exam/evidence');
+    const cwd = fresh('19');
+    expect(fs.existsSync(path.join(cwd, 'evidence-guide.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(cwd, 'evidence-guide.md'), 'utf8')).toContain('只有 `src/` 底下');
+    if (prev === undefined) delete process.env.ODOO_CORE_SRC_DIR;
+    else process.env.ODOO_CORE_SRC_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('批次 prompt 叫 agent 先讀指引，並要求逐題回報', () => {
+    const p = buildBatchEvidencePrompt({
+      questions: [
+        { no: 1, question: 'Q1', options: [{ letter: 'A', text: 'a' }], candidate: ['A'] },
+        { no: 5, question: 'Q5', options: [], candidate: [] },
+      ],
+      odooVersion: '19',
+    });
+    expect(p).toContain('evidence-guide.md');
+    expect(p).toContain('第 1 題');
+    expect(p).toContain('第 5 題');
+    expect(p).toContain('"results"');
+    // 漏回整題的話下游分不出「查過查不到」與「漏查」
+    expect(p).toMatch(/每一題都要有一筆/);
   });
 });

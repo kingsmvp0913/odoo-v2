@@ -117,6 +117,44 @@ describe('兩階段審題 prompt', () => {
     expect(p).not.toContain('作答者在這一頁的答案');
   });
 
+  // 審查只回增量欄位。抄題那一步已經產出題幹、選項與中英翻譯，審查再抄一遍
+  // 等於把時間花在生成已經存在的文字上——實測 8 題重抄一遍多跑好幾分鐘，
+  // 而那個子行程 --allowed-tools 是空的，它根本沒在查東西，純粹在打字。
+  test('審查的輸出契約只有五個欄位，明講不要重抄題幹', () => {
+    const p = buildReviewQuestionsPrompt({
+      questions: [{ no: 1, question: 'Q', options: [], has_image: false }],
+      theirAnswers: [['B']], glossary: [],
+    });
+    expect(p).toMatch(/每題只回這五個欄位/);
+    expect(p).toMatch(/不要把題幹、選項或翻譯再抄一次/);
+    expect(p).not.toMatch(/並包含 question、question_zh、type、\noptions/);
+  });
+
+  test('模型只回增量欄位時，題幹與選項從抄題那步補回來', () => {
+    const source = [{
+      no: 1, question: 'Where do you confirm it?', question_zh: '在哪裡確認？', type: 'single',
+      options: [{ letter: 'A', text: 'Sales', text_zh: '銷售' },
+                { letter: 'B', text: 'Stock', text_zh: '庫存' }],
+    }];
+    const v = normalize(
+      { questions: [{ no: 1, refuted: true, correct_answer: ['B'], confidence: 71, reason: 'r' }] },
+      [['A']], source);
+    expect(v.questions[0]).toMatchObject({
+      no: 1, question: 'Where do you confirm it?', question_zh: '在哪裡確認？',
+      their_answer: ['A'], refuted: true, correct_answer: ['B'], confidence: 71,
+    });
+    expect(v.questions[0].options).toEqual([
+      { letter: 'A', text: 'Sales', text_zh: '銷售' },
+      { letter: 'B', text: 'Stock', text_zh: '庫存' },
+    ]);
+  });
+
+  // 單階段的 reviewPage 沒有抄題來源，照舊要吃模型回的完整內容
+  test('沒有給來源時維持原本行為', () => {
+    const v = normalize({ questions: [{ no: 1, question: 'Solo', correct_answer: ['A'] }] }, [['A']]);
+    expect(v.questions[0].question).toBe('Solo');
+  });
+
   test('第二階段只收到未命中官方答案的題目', () => {
     const p = buildReviewQuestionsPrompt({
       questions: [{ no: 2, question: 'Q', options: [], has_image: false }],
