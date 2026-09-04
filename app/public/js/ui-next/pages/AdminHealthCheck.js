@@ -208,7 +208,12 @@
 
           <div v-if="ofKind('proposal').some(f => f.status === 'approved')" class="settings-section"
             style="border-left:3px solid var(--warning-strong);margin-bottom:var(--space-3);font-size:var(--fs-sm);color:var(--text)">
-            ⏱ 已核准的提案<strong>沒有人會先看過</strong>，<span v-if="autoRunText">{{ autoRunText }} </span>會自動實作並合併。不想讓某一條跑，要在那之前按「擋下這條」。
+            <!-- 3-I4：runAudit(...).finally(() => runNightlyFix(...))——健檢一寫完 approved 提案，
+                 下一步就是批次，中間只隔一個 waitForDrain，沒有在飛任務時是 0 秒銜接。「要在那之前
+                 按下擋下」暗示有一段可操作的等待窗，但那個「之前」不存在：批次是接在同一輪健檢
+                 後面自動起跑的，不是等到隔天固定時刻。文案只能誠實說「隨時可能已經在執行」，
+                 不能承諾「還來得及」。⚠ 不改行為——「預設核准」是已拍板的產品裁決。 -->
+            ⏱ 已核准的提案<strong>沒有人會先看過</strong>，健檢一跑完就會緊接著自動實作並合併，沒有事後可攔截的等待期。不想讓某一條跑，請立刻按「擋下這條」。
           </div>
 
           <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
@@ -279,6 +284,12 @@
               </div>
               <div v-if="fixState(f.id).reject_reason" class="error-msg" style="white-space:pre-wrap;margin:6px 0">{{ fixState(f.id).reject_reason }}</div>
               <div v-if="fixState(f.id).notes" style="font-size:var(--fs-sm);color:var(--text);white-space:pre-wrap;margin-bottom:6px">{{ fixState(f.id).notes }}</div>
+              <!-- review_notes：fix-review 對這份修正的審核推理，approve／reject 兩條路徑都會寫（單元 2）。
+                   這是無人監督閘門唯一的人類稽核材料——一份修正被自動合併進 master 或被 reject 兩次退場，
+                   事後就靠這段字知道「它為什麼這樣判」，所以獨立一段顯示，不與上面的 notes（提案本身的說明）混在一起。 -->
+              <div v-if="fixState(f.id).review_notes" style="font-size:var(--fs-sm);color:var(--text-muted);white-space:pre-wrap;margin-bottom:6px;border-left:2px solid var(--border);padding-left:6px">
+                審核意見：{{ fixState(f.id).review_notes }}
+              </div>
               <div v-if="fixState(f.id).diff">
                 <button class="btn btn-ghost btn-sm" @click="diffOpen[f.id] = !diffOpen[f.id]">
                   {{ diffOpen[f.id] ? '▾ 收合改動' : '▸ 看改了什麼' }}

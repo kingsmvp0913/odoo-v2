@@ -27,6 +27,9 @@
         clearingContext7Key: false,
         users: [],
         cliPushUserId: null,
+        // 「未設定 CLI 推送身分」警告要看已存值，不是下拉選單的暫存值：選了人還沒按儲存，
+        // 警告就消失，但 DB 仍是 null，讓人誤以為已經生效。
+        savedCliPushUserId: null,
         savingCliPushUser: false,
         loading: true,
         savingConn: false,
@@ -86,6 +89,7 @@
             this.usageGate.th5     = d.usage_gate_5h_threshold ?? 90;
             this.usageGate.th7     = d.usage_gate_7d_threshold ?? 95;
             this.cliPushUserId     = d.cli_push_user_id ?? null;
+            this.savedCliPushUserId = this.cliPushUserId;
             Object.assign(this.teams, {
               tenant_id: d.tenant_id || '', client_id: d.client_id || '',
               client_secret: d.client_secret || '', team_id: d.team_id || '',
@@ -217,6 +221,7 @@
         try {
           // 後端會擋掉不存在或沒 PAT 的 id，錯誤訊息直接回顯
           await Api.put('admin/cli-push-user', { cli_push_user_id: this.cliPushUserId });
+          this.savedCliPushUserId = this.cliPushUserId;
           showToast('已儲存 CLI 推送身分', 'success');
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.savingCliPushUser = false; }
@@ -631,7 +636,7 @@
                   </select>
                 </div>
               </div>
-              <div v-if="!cliPushUserId" class="pill pill-warn" style="margin-top:8px">
+              <div v-if="!savedCliPushUserId" class="pill pill-warn" style="margin-top:8px">
                 未設定 CLI 推送身分：意見回饋夜間批次修好的項目會停在「已採用」，不會自動合併與重啟，需要人工到這裡設定後才會推送
               </div>
             </div>

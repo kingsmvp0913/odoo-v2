@@ -417,6 +417,10 @@
         feedbackContent: "",
         feedbackFiles: [],
         feedbackSubmitting: false,
+        myFeedbackOpen: false,
+        myFeedbackTrigger: null,
+        myFeedbackList: [],
+        myFeedbackLoading: false,
       };
     },
     computed: {
@@ -675,6 +679,33 @@
         if (event.key === "Escape") return this.closeFeedback();
         this.trapFocus(event, this.$refs.feedbackModal);
       },
+      // GET /api/feedback/mine 原本在前端零呼叫端：使用者送出意見後永遠看不到後續（triage_note／
+      // verdict_note 只有管理頁看得到）。這裡補一個最小的「我的意見」清單入口，放在提意見 modal
+      // 旁邊——同一個心智模型（我跟平台反映了什麼、後來怎樣了）。
+      async openMyFeedback(event) {
+        this.closePopovers();
+        this.myFeedbackTrigger = event && event.currentTarget;
+        this.myFeedbackOpen = true;
+        this.myFeedbackLoading = true;
+        try {
+          this.myFeedbackList = await Api.get("feedback/mine");
+        } catch (error) {
+          showToast(error.message || "載入失敗", "error");
+        } finally {
+          this.myFeedbackLoading = false;
+        }
+      },
+      closeMyFeedback() {
+        this.myFeedbackOpen = false;
+        this.$nextTick(() => this.myFeedbackTrigger && this.myFeedbackTrigger.focus());
+      },
+      trapMyFeedbackFocus(event) {
+        if (event.key === "Escape") return this.closeMyFeedback();
+        this.trapFocus(event, this.$refs.myFeedbackModal);
+      },
+      myFeedbackStatusLabel(status) {
+        return { new: "待審核", approved: "已核准", rejected: "已駁回", done: "已完成" }[status] || status;
+      },
       // 截圖直接貼上，比照 TaskDetail.js 的 onPasteFiles：限圖片、單檔 10MB、最多 5 個。
       onFeedbackPaste(event) {
         const files = Array.from((event.clipboardData || {}).files || []).filter((f) => /^image\//.test(f.type));
@@ -683,8 +714,10 @@
         files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && this.feedbackFiles.length < 5) this.feedbackFiles.push(f); });
       },
       onFeedbackFilesSelected(event) {
+        // 兩個入口的行為要一致：onFeedbackPaste 是 push（累加），這裡原本是 = 覆寫整包——
+        // 先貼上的截圖會被檔案選擇器靜默清掉。改成同樣 push，並保留同一個 5 張上限。
         const selected = Array.from(event.target.files || []);
-        this.feedbackFiles = selected.filter((f) => /^image\//.test(f.type) && f.size <= 10 * 1024 * 1024).slice(0, 5);
+        selected.forEach((f) => { if (/^image\//.test(f.type) && f.size <= 10 * 1024 * 1024 && this.feedbackFiles.length < 5) this.feedbackFiles.push(f); });
         event.target.value = "";
       },
       removeFeedbackFile(index) {
@@ -1146,7 +1179,27 @@
                 <span v-for="(file,index) in feedbackFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><ui-next-icon name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFeedbackFile(index)"><ui-next-icon name="close"/></button></span>
               </div>
             </div>
-            <footer><button type="button" @click="closeFeedback">取消</button><button class="ui-next-primary" @click="submitFeedback" :disabled="feedbackSubmitting||!feedbackContent.trim()">{{ feedbackSubmitting?'送出中…':'送出' }}</button></footer>
+            <footer><button type="button" @click="openMyFeedback">查看我的意見</button><button type="button" @click="closeFeedback">取消</button><button class="ui-next-primary" @click="submitFeedback" :disabled="feedbackSubmitting||!feedbackContent.trim()">{{ feedbackSubmitting?'送出中…':'送出' }}</button></footer>
+          </section>
+        </div>
+        <div v-if="myFeedbackOpen" class="ui-next-task-modal-backdrop" @mousedown.self="closeMyFeedback" @keydown="trapMyFeedbackFocus">
+          <section ref="myFeedbackModal" class="ui-next-task-modal ui-next-form-modal" role="dialog" aria-modal="true" aria-labelledby="ui-next-my-feedback-title">
+            <header><h2 id="ui-next-my-feedback-title">我的意見</h2><button type="button" class="ui-next-modal-close" aria-label="關閉我的意見視窗" @click="closeMyFeedback"><ui-next-icon name="close"/></button></header>
+            <div class="ui-next-form-modal-grid">
+              <p v-if="myFeedbackLoading" class="ui-next-form-modal-wide">載入中…</p>
+              <p v-else-if="!myFeedbackList.length" class="ui-next-form-modal-wide">還沒有送出過意見</p>
+              <div v-else class="ui-next-form-modal-wide ui-next-upload-list" style="flex-direction:column;align-items:stretch;gap:var(--space-3)">
+                <div v-for="item in myFeedbackList" :key="item.id" style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-2)">
+                  <div style="display:flex;justify-content:space-between;gap:var(--space-2)">
+                    <span style="white-space:pre-wrap">{{ item.content }}</span>
+                    <span class="pill" style="flex:none">{{ myFeedbackStatusLabel(item.status) }}</span>
+                  </div>
+                  <div v-if="item.triage_note" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">AI 回覆：{{ item.triage_note }}</div>
+                  <div v-if="item.verdict_note" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">駁回原因：{{ item.verdict_note }}</div>
+                </div>
+              </div>
+            </div>
+            <footer><button type="button" @click="closeMyFeedback">關閉</button></footer>
           </section>
         </div>
       </div>

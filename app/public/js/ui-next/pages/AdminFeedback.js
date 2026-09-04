@@ -37,20 +37,35 @@
         finally { this.loading = false; }
       },
       // 附件端點要帶 Authorization header，<img src> 直連拿不到 token → 逐張 fetch 成 objectURL。
+      // 列表 LIMIT 200 × 每筆最多 5 張＝最壞 1000 張縮圖。原本逐張 await 會序列跑完全部 1000 次
+      // 往返才解開 loading，改成固定併發窗口平行跑，同時不會一次開千條連線打爆瀏覽器。
       async loadAttachmentThumbs() {
+        const tasks = [];
         for (const row of this.rows) {
           for (const file of (row.attachments || [])) {
             if (this.attachUrls[file.id]) continue;
-            try {
-              const res = await fetch(`${BASE_PATH}api/feedback/attachments/${file.id}`, {
-                headers: { Authorization: `Bearer ${Api.getToken()}` }
-              });
-              if (!res.ok) continue;
-              const blob = await res.blob();
-              if (blob.size) this.attachUrls[file.id] = URL.createObjectURL(blob);
-            } catch { /* 單張載不出來就不畫這張 */ }
+            tasks.push(file.id);
           }
         }
+        const CONCURRENCY = 6;
+        const loadOne = async (fileId) => {
+          try {
+            const res = await fetch(`${BASE_PATH}api/feedback/attachments/${fileId}`, {
+              headers: { Authorization: `Bearer ${Api.getToken()}` }
+            });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            if (blob.size) this.attachUrls[fileId] = URL.createObjectURL(blob);
+          } catch { /* 單張載不出來就不畫這張 */ }
+        };
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < tasks.length) {
+            const fileId = tasks[cursor++];
+            await loadOne(fileId);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
       },
       async approve(row) {
         this.deciding = { ...this.deciding, [row.id]: true };
@@ -90,7 +105,9 @@
       <div class="content">
         <div class="settings-section">
           <div class="arj-header-row">
-            <h2 class="section-title" style="margin:0">使用者意見（共 {{ rows.length }}）</h2>
+            <!-- 後端 GET /api/admin/feedback 有 LIMIT 200（feedback-routes.js），rows.length 在
+                 超過上限時恆為 200、不代表真實總筆數；改用「最多顯示 N 筆」避免這個數字說謊。 -->
+            <h2 class="section-title" style="margin:0">使用者意見（{{ rows.length >= 200 ? '最多顯示 200 筆' : ('共 ' + rows.length + ' 筆') }}）</h2>
             <select v-model="statusFilter" class="form-control" style="width:auto" @change="load">
               <option value="">全部狀態</option>
               <option value="new">待審核</option>
@@ -136,14 +153,19 @@
                         <div><strong>{{ r.triage_title }}</strong></div>
                         <div v-if="r.triage_layer" style="color:var(--text-muted)">{{ layerLabel[r.triage_layer] || r.triage_layer }}</div>
                         <div v-if="r.triage_detail" style="white-space:pre-wrap;word-break:break-word">{{ r.triage_detail }}</div>
-                        <div v-if="r.triage_note" class="pill pill-warn" style="margin-top:4px">{{ r.triage_note }}</div>
                       </template>
                       <span v-else style="color:var(--text-muted)">尚未翻譯</span>
+                      <!-- triage_note 不能綁在 triage_title 底下：AI 看不懂／解析失敗／agent 執行失敗
+                           時 rejectBack 只寫 triage_note、triage_title 是 NULL，這句話是唯一告訴
+                           管理員「為什麼退回」的地方，藏起來等於管理員永遠看不到原因。 -->
+                      <div v-if="r.triage_note" class="pill pill-warn" style="margin-top:4px">{{ r.triage_note }}</div>
                     </td>
                     <td data-label="操作">
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
-                        <button class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
+                        <!-- done（已合併）不給再按核准：再按一次會把它塞回 approved，
+                             夜間批次會重跑整條已經做完的鏈。rejected 仍可核准（人工改變心意、重新開放）。 -->
+                        <button v-if="r.status !== 'done'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
+                        <button v-if="r.status !== 'done'" class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
                       </div>
                     </td>
                   </tr>

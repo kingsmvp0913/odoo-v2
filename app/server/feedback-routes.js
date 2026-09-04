@@ -10,7 +10,8 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const {
-  uploadChatImages, saveFeedbackAttachmentFile, sniffFile, isImageBuffer, readAttachmentFile
+  uploadChatImages, saveFeedbackAttachmentFile, sniffFile, isImageBuffer, readAttachmentFile,
+  deleteFeedbackDir
 } = require('./lib/attachments');
 
 // 人工可以設的狀態只有這三個。done 由夜間批次寫，不開放從 API 設——
@@ -20,9 +21,11 @@ const HUMAN_STATUSES = ['approved', 'rejected', 'new'];
 const parseId = (v) => { const n = Number(v); return Number.isInteger(n) ? n : null; };
 
 async function requireAdmin(req, res, next) {
-  const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-  if (!rows.length || rows[0].role !== 'admin') return res.status(403).json({ error: '需要管理員權限' });
-  next();
+  try {
+    const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (!rows.length || rows[0].role !== 'admin') return res.status(403).json({ error: '需要管理員權限' });
+    next();
+  } catch (err) { res.status(500).json({ error: err.message }); }
 }
 
 function registerRoutes(app) {
@@ -47,8 +50,10 @@ function registerRoutes(app) {
 
   app.get('/api/feedback/mine', verifyToken, async (req, res) => {
     try {
+      // verdict_note（駁回原因）原本沒選出來——使用者送出意見後除了 triage_note 之外看不到任何
+      // 後續，包括自己的意見被駁回時「為什麼」。兩者一起帶出去，前端才有東西可顯示。
       const { rows } = await query(
-        `SELECT id, content, status, triage_note, created_at FROM feedback
+        `SELECT id, content, status, triage_note, verdict_note, created_at FROM feedback
           WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, [req.userId]);
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -81,6 +86,13 @@ function registerRoutes(app) {
       if (!HUMAN_STATUSES.includes(status)) {
         return res.status(400).json({ error: `status 只能是 ${HUMAN_STATUSES.join('／')}` });
       }
+      // done 是夜間批次合併完才會寫的終態；再核准一次會把它塞回 approved，
+      // 讓下一輪夜間批次重跑整條已經做完的鏈（同一份 finding_fixes 再修一次）。
+      const { rows: [cur] } = await query('SELECT status FROM feedback WHERE id=$1', [id]);
+      if (!cur) return res.status(404).json({ error: '找不到這筆意見' });
+      if (cur.status === 'done' && status === 'approved') {
+        return res.status(400).json({ error: '已完成的意見不能重新核准' });
+      }
       const { rowCount } = await query(
         `UPDATE feedback SET status=$2, verdict_note=$3, decided_by=$4, decided_at=NOW()
           WHERE id=$1`, [id, status, verdict_note || null, req.userId]);
@@ -106,6 +118,34 @@ function registerRoutes(app) {
       if (!buf) return res.status(404).end();
       res.setHeader('Content-Type', rows[0].mimetype || 'application/octet-stream');
       res.send(buf);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 意見與附件原本只增不減：沒有刪除端點，deleteFeedbackDir（lib/attachments.js）唯一呼叫端是
+  // 測試。每位登入者每次可傳 5×10MB，長期累積即無上限成長。feedback_attachments 靠 DB 層
+  // ON DELETE CASCADE 清列，但實體檔要自己收——順序：先刪 DB（cascade 生效），DB 成功才刪目錄，
+  // 避免刪錯目錄後 DB 那筆還在、附件連結卻已 404。
+  app.delete('/api/admin/feedback/:id', verifyToken, requireAdmin, async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id == null) return res.status(404).json({ error: '找不到這筆意見' });
+      const { rowCount } = await query('DELETE FROM feedback WHERE id=$1', [id]);
+      if (!rowCount) return res.status(404).json({ error: '找不到這筆意見' });
+      deleteFeedbackDir(id);
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 3-I2：手動補跑一次夜間批次。runNightlyFix 內部已有完整保險絲（維護旗標、token 預算、
+  // 跑道上限、drain timeout、併發守衛回 already-running），這裡不重複判斷，單純轉發。
+  // fire-and-forget：批次動輒數十分鐘到數小時，不 await。
+  // startedBy 帶觸發者 userId（不是 null）——排程判斷（getHealthCheckSchedule 等）
+  // 靠 started_by IS NULL 分辨自動排程與人工觸發，這裡是人工觸發。
+  app.post('/api/admin/nightly-fix', verifyToken, requireAdmin, async (req, res) => {
+    try {
+      const { runNightlyFix } = require('./pipeline/nightly-fix');
+      runNightlyFix({ startedBy: req.userId }).catch(err => console.error('[FEEDBACK] 手動觸發夜間批次:', err.message));
+      res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 }

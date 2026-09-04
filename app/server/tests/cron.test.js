@@ -339,6 +339,25 @@ test('健檢固定臺灣時間 22:00，手動全平台健檢不會帶偏排程',
   expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-26T14:00:00.000Z' });
 });
 
+// 3-I4：批次自建的 health_check_runs 列（cadence='nightly-fix'）自動排程觸發時 started_by=NULL、
+// task_db_id=NULL——與這裡找「最後一輪自動全平台健檢」的條件同形，若不排除，批次 running 時畫面會
+// 顯示「本輪執行中」（其實是批次在跑，不是健檢）；批次 done 後又會把 lastRunAt 讀成批次開始時間，
+// 讓排程剛啟動、碼正在合併的那一刻反而顯示「明天 22:00」。
+test('getHealthCheckSchedule 忽略批次自建列（cadence=nightly-fix），不當成最後一輪健檢', async () => {
+  await dbModule.query('DELETE FROM health_check_runs');
+  const beforeTarget = new Date('2026-08-25T13:00:00.000Z'); // 臺灣時間 21:00
+  // 先建一筆真的健檢（已完成），排程應以它為準
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at) VALUES ('done',1,'2026-08-25T12:00:00.000Z')");
+  // 再插入批次自建列：running 中，created_at 比健檢更新，若沒排除會被誤判成「最後一輪健檢正在跑」
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, started_by, cadence, created_at) " +
+    "VALUES ('running',0,NULL,'nightly-fix','2026-08-25T12:30:00.000Z')");
+  const schedule = await cronModule.getHealthCheckSchedule(beforeTarget);
+  expect(schedule.running).toBe(false);
+  expect(schedule).toMatchObject({ due: false, nextRunAt: '2026-08-25T14:00:00.000Z' });
+});
+
 // 大健檢的節奏判斷。每天只有一個 HEALTH_CHECK_HOUR slot，所以「這一天跑哪一種」就等於「大健檢
 // 當天不跑日健檢」——判斷錯不會有任何徵狀：畫面上照樣是一輪健檢，只是視窗與趨勢比對靜默變成另一種。
 describe('healthCheckCadence', () => {
@@ -447,6 +466,51 @@ test('cron tick：健檢跑完（失敗）→ 仍觸發夜間批次，不因健�
   } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
 
   expect(nightlyFix.runNightlyFix).toHaveBeenCalledWith({ startedBy: null });
+});
+
+// 3-I2：健檢今天已經跑過（due=false）不該連坐讓夜間批次整條通道停擺——批次自己有獨立的
+// due 判斷（過了 HEALTH_CHECK_HOUR 且今天這個 process 還沒觸發過批次）。
+test('cron tick：健檢今天已跑過（不 due）→ 夜間批次仍靠自己的排程觸發', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  const nightlyFix = require('../pipeline/nightly-fix');
+  await dbModule.query('DELETE FROM health_check_runs');
+  // 今天已經跑過健檢（finished_at 在 22:00 之後、當天之內）——due 判斷會是 false
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-25T14:30:00.000Z','2026-08-25T14:30:00.000Z')");
+  runner.runAudit.mockClear();
+  nightlyFix.runNightlyFix.mockClear();
+  cronModule._resetNightlyFixStateForTesting(); // 前面測試可能已把「今天」標成觸發過，這裡重置
+  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z')); // 臺灣時間 23:00，晚於 HEALTH_CHECK_HOUR=22
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+
+  expect(runner.runAudit).not.toHaveBeenCalled();               // 健檢本身沒有被重新觸發
+  expect(nightlyFix.runNightlyFix).toHaveBeenCalledWith({ startedBy: null }); // 但批次仍被觸發
+});
+
+// 同一天同一個 process 內不重複觸發：批次自己的節流旗標要生效，否則每分鐘一 tick
+// 又會變成每分鐘打一次 runNightlyFix（雖然它內部有 isMaintenance 擋，但沒必要打那麼多次）。
+test('cron tick：夜間批次已在今天觸發過 → 同一天不再靠獨立排程重複觸發', async () => {
+  const nodeCron = require('node-cron');
+  const runner = require('../pipeline/health-check-runner');
+  const nightlyFix = require('../pipeline/nightly-fix');
+  await dbModule.query('DELETE FROM health_check_runs');
+  await dbModule.query(
+    "INSERT INTO health_check_runs (status, window_days, created_at, finished_at) VALUES ('done',30,'2026-08-25T14:30:00.000Z','2026-08-25T14:30:00.000Z')");
+  runner.runAudit.mockClear();
+  cronModule._resetNightlyFixStateForTesting();
+  cronModule._setClockForTesting(() => new Date('2026-08-25T15:00:00.000Z'));
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick();
+    nightlyFix.runNightlyFix.mockClear(); // 第一次 tick 的觸發清掉，只看第二次 tick 還會不會再觸發
+    await tick();
+  } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+
+  expect(nightlyFix.runNightlyFix).not.toHaveBeenCalled();
 });
 
 // 不疊加：上一輪還在跑就跳過。健檢是 20+ 個 opus 的長工，重複啟動會讓同一份診斷跑兩遍。
@@ -574,4 +638,34 @@ test('排程清單顯示每日一次，下次執行時間指向 01:00', async ()
   const item = rows.find((r) => r.id === 'auto-archive');
   expect(item.timing).toMatch(/每日 01:00/);
   expect(new Date(item.nextRunAt).toISOString()).toMatch(/T17:00:00/); // 台灣 01:00 = UTC 前一天 17:00
+});
+
+// 維護中：shouldSyncOdoo/shouldSyncService 判到期後會立刻 .set(now) 消耗節流旗標，若這時
+// runForUser 因維護而早退，這個同步 slot 等於平白蒸發——要等下一個完整間隔才補跑。
+// 用獨立 user 避免與檔案內其他測試共用 lastOdooSync/lastServiceSync 這個模組層 Map 產生節流累積干擾。
+test('維護中：tick 完全不消耗同步節流旗標，維護一結束下一個 tick 立刻補跑', async () => {
+  const nodeCron = require('node-cron');
+  const { syncUser } = require('../pipeline/sync');
+  const maintenance = require('../pipeline/maintenance');
+  const { rows: [u] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name) VALUES ('cronmaintslot','x','CMS') RETURNING id"
+  );
+  await dbModule.query(
+    'INSERT INTO teams_settings (id, odoo_sync_interval, service_sync_interval) VALUES (1, 1, 1) ' +
+    'ON CONFLICT (id) DO UPDATE SET odoo_sync_interval=1, service_sync_interval=1'
+  );
+  syncUser.mockClear();
+  await maintenance.enterMaintenance(60000);
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try {
+    await tick(); // 維護中：這個 user 的同步 slot 到期了，但不該被消耗
+    expect(syncUser).not.toHaveBeenCalledWith(u.id);
+    await maintenance.leaveMaintenance();
+    await tick(); // 維護結束後下一個 tick：旗標沒被消耗過，應視為仍到期，立刻補跑
+    expect(syncUser).toHaveBeenCalledWith(u.id);
+  } finally {
+    cronModule.stopCron();
+    await maintenance.leaveMaintenance();
+  }
 });

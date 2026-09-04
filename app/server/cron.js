@@ -96,6 +96,9 @@ let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一
 let _clockForTesting = null;
 let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
 let _lastArchiveDay = null;  // 同一天只封存一次（同上，過了預定時刻才補跑）
+// 3-I2：夜間批次（意見回饋通道）自己的節流旗標，與健檢的 shouldRunHealthCheck 完全脫鉤——
+// HEALTH_CHECK_INTERVAL_MS=0（健檢停用）或健檢卡在 running 都不該連坐把這條通道一起停掉。
+let _lastNightlyFixDay = null;
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
@@ -123,6 +126,12 @@ function taipeiDateParts(now) {
   return { year: Number(values.year), month: Number(values.month), day: Number(values.day), hour: Number(values.hour) % 24 };
 }
 
+// 台北當地日期字串，給「同一天只觸發一次」類節流旗標比對用（比照 archiveDayKey／dayKey 的既有寫法）。
+function taipeiDayKey(now) {
+  const { year, month, day } = taipeiDateParts(now);
+  return `${year}-${month}-${day}`;
+}
+
 // 完成滿 30 天才封存——這個條件一天之內不會有意義的變化，而原本每分鐘掃一次全表，
 // 等於一天 1440 次註定沒有結果的 UPDATE。改成臺灣時間每日一次。
 const AUTO_ARCHIVE_HOUR = parseInt(process.env.AUTO_ARCHIVE_HOUR || '1', 10);
@@ -147,6 +156,14 @@ function healthCheckTargetAt(now, dayOffset = 0) {
 // slot 連跑兩輪的話，先完成的那一輪會把 auditWindowStart 推到現在，後一輪等於掃到空視窗。
 const HEALTH_CADENCE_DAYS = { weekly: 7, monthly: 30 };
 
+// 3-I4：夜間批次（nightly-fix.js）自建的 health_check_runs 列，自動排程觸發時 started_by=NULL、
+// task_db_id=NULL——與 getHealthCheckSchedule 底下用來找「最後一輪自動全平台健檢」的條件完全同形，
+// 批次列會被誤當成健檢本身：running 時顯示「本輪執行中」、done 後把 lastRunAt 讀成批次的開始時間，
+// 導致排程剛啟動、碼正在合併的那一刻反而顯示「明天 22:00」。⚠ 這裡不 require nightly-fix.js
+// 取常數字面值（見 health-check-runner.js 同名常數的檔頭說明，避免循環依賴），只能各自寫死同一個
+// 字串常數，兩邊改動時要留意保持一致。
+const BATCH_CADENCE = 'nightly-fix';
+
 function healthCheckCadence(now = _clockForTesting ? _clockForTesting() : new Date()) {
   const { year, month, day } = taipeiDateParts(now);
   if (day === 1) return 'monthly';
@@ -163,7 +180,8 @@ async function getHealthCheckSchedule(now = _clockForTesting ? _clockForTesting(
   // 只認 cron 建的全平台健檢。task_db_id 排除單張任務健檢；started_by 排除 admin 手動全平台健檢，
   // 所以人工診斷不會重設晚上 HEALTH_CHECK_HOUR 的自動排程。
   const { rows } = await query(
-    'SELECT status, created_at FROM health_check_runs WHERE task_db_id IS NULL AND started_by IS NULL ORDER BY id DESC LIMIT 1'
+    'SELECT status, created_at FROM health_check_runs WHERE task_db_id IS NULL AND started_by IS NULL AND cadence <> $1 ORDER BY id DESC LIMIT 1',
+    [BATCH_CADENCE]
   );
   const last = rows[0];
   const lastRunAt = last && new Date(last.created_at);
@@ -286,6 +304,9 @@ function startCron() {
 
       // 每日系統健檢（fire-and-forget，比照 admin 手動觸發那條路徑）。
       // 獨立 try：健檢排程壞掉不得連坐同步／關機／回收——本檔刻意不共用 early return。
+      // 3-I2：nightlyFixTriggered 記下「這個 tick 有沒有已經（或即將）觸發過批次」，避免下面
+      // 獨立的批次 due 判斷在健檢也 due 的同一個 tick 內重複觸發一次。
+      let nightlyFixTriggered = false;
       try {
         if (await shouldRunHealthCheck()) {
           const { runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
@@ -303,6 +324,8 @@ function startCron() {
           // 不影響候選池的完整性——沒有理由因為當晚健檢掛了就連帶跳過整條修正通道。
           // 用 .finally 而非序列化 await：runAudit 是背景長工（20+ 個 opus），cron tick 本身
           // 不等它，nightly-fix 的觸發要接在 runAudit 的 promise chain 尾端、不是 tick 主體內。
+          nightlyFixTriggered = true;
+          _lastNightlyFixDay = taipeiDayKey(_clockForTesting ? _clockForTesting() : new Date());
           runAudit(run.id, { sinceAt, cadence })
             .catch(err => console.error('[CRON] health check:', err.message))
             .finally(() => {
@@ -315,6 +338,27 @@ function startCron() {
         }
       } catch (err) { console.error('[CRON] health check schedule:', err.message); }
 
+      // 3-I2：夜間批次的觸發點不能只掛在健檢的 due 判斷底下——HEALTH_CHECK_INTERVAL_MS=0
+      // （文件寫「0=停用」指的是健檢本身）會連帶把意見回饋通道整條關掉；健檢卡在 running
+      // 也會讓兩者一起永久停擺。這裡是批次自己的 due 判斷：與健檢是否啟用／是否卡住無關，
+      // 只看「今天台北時間是否已過 HEALTH_CHECK_HOUR，且這個 process 今天還沒觸發過批次」。
+      // runNightlyFix 內部本身已有完整保險絲（維護旗標／token 預算／跑道上限／drain timeout／
+      // 併發守衛回 already-running），這裡不重複做那些判斷，只負責「要不要打這一通」。
+      if (!nightlyFixTriggered) {
+        try {
+          const nightlyFixNow = _clockForTesting ? _clockForTesting() : new Date();
+          const parts = taipeiDateParts(nightlyFixNow);
+          const dayKey = taipeiDayKey(nightlyFixNow);
+          if (parts.hour >= HEALTH_CHECK_HOUR && _lastNightlyFixDay !== dayKey) {
+            _lastNightlyFixDay = dayKey;
+            console.log('[CRON] 健檢未觸發夜間批次（停用或本輪未 due），改由批次自己的排程觸發');
+            const { runNightlyFix } = require('./pipeline/nightly-fix');
+            runNightlyFix({ startedBy: null })
+              .catch(err => console.error('[CRON] nightly fix (standalone):', err.message));
+          }
+        } catch (err) { console.error('[CRON] nightly fix schedule:', err.message); }
+      }
+
       // 這裡刻意沒有「兩個同步都關就 return」的提前結束。關閉同步是「不要去外部撈單」，與
       // 「要不要推進 pipeline」「要不要做清理排程」「要不要管理測試區」都無關——共用一個 return
       // 會讓管理員把同步關掉的同時，整個平台停止推進任務（任務凍在原狀態）、自動封存與各項清理
@@ -323,7 +367,14 @@ function startCron() {
       // 兩個間隔都是 0 時自然全部落到 else 分支（只推進 pipeline、不撈單）。
       const { rows: users } = await query('SELECT id FROM users');
       const now = Date.now();
+      // 維護中（夜間批次改碼期間）查一次，避免每個 user 各自查一次 DB。runForUser／runPipeline
+      // 各自也會查 isMaintenance 並早退（見它們檔頭），這裡不是取代那兩層擋——是額外擋住
+      // 「到期判斷＋節流旗標消耗」本身：shouldSyncOdoo/shouldSyncService 判到期就立刻 .set(now)，
+      // 若這時 runForUser 因維護而早退，這個同步 slot 等於平白蒸發，要等下一個完整間隔才補跑。
+      // 維護中直接跳過整輪判斷，旗標留在原值，維護結束後下一個 tick 自然判定「已到期」補跑。
+      const maintaining = await require('./pipeline/maintenance').isMaintenance();
       for (const user of users) {
+        if (maintaining) continue;
         const shouldSyncOdoo    = odooMs    > 0 && (now - (lastOdooSync.get(user.id) || 0)) >= odooMs;
         const shouldSyncService = serviceMs > 0 && (now - (lastServiceSync.get(user.id) || 0)) >= serviceMs;
         if (shouldSyncOdoo)    lastOdooSync.set(user.id, now);
@@ -403,6 +454,7 @@ function stopCron() {
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
 function _resetArchiveStateForTesting() { _lastArchiveDay = null; }
+function _resetNightlyFixStateForTesting() { _lastNightlyFixDay = null; }
 function _setClockForTesting(clock) { _clockForTesting = clock; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _setClockForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _resetNightlyFixStateForTesting, _setClockForTesting };
