@@ -29,9 +29,9 @@ const normLayer = (v) => {
 // 給補救 agent 的目標結構（同 feedback-triage.md 的輸出契約）：raw 整段沒有 <result> 時，
 // 它沒有鍵名可依循就只能亂猜，等於白跑一次 haiku（見 task-agent.js 的同一個決定）。
 const TRIAGE_SCHEMA = '{"title":"一句話標題","detail":"具體問題描述","layer":"code｜prompt｜observability｜env｜unclear",'
-  + '"action":"建議修法","understandable":true,"note":"看不懂時寫原因","verify_route":"#/tasks 這種 hash 路由，推不出來留空"}';
+  + '"action":"建議修法","understandable":"true｜false（判不出來填 false）","note":"看不懂時寫原因","verify_route":"#/tasks 這種 hash 路由，推不出來留空"}';
 const MERGE_SCHEMA = '{"groups":[{"member_ids":[1,2],"title":"標題","detail":"合併後描述",'
-  + '"action":"建議修法","layer":"code","verify_route":""}]}';
+  + '"action":"建議修法","layer":"code","verify_route":"","risk_if_wrong":"這組若修錯了最壞會怎樣，推不出來留空"}]}';
 
 // 附件（使用者截圖）往往是這則意見唯一講得清楚的部分，agent 有 Read 工具可直接檢視。
 // ⚠ file_path 存的是「相對 uploadRoot()」的路徑，一定要 resolve 成絕對路徑；而且要明確授權唯讀，
@@ -132,6 +132,10 @@ async function mergeCandidates(items) {
     return [];
   }
 
+  // feedback-merge.md 的輸出契約只有 <result>，沒有 <notes>（4-M1：落地需要單元 2 的
+  // materializeGroup／DB 才能接住批次級稽核材料，這輪先拿掉宣告、不留沒人讀的欄位）。
+  // 這裡仍剝一次 <notes> 只是防禦：就算 agent 習慣性夾帶說明文字，parseAgentResult 本來就會
+  // 用 lastIndexOf 找最後一組 <result>，剝不剝都不影響解析，純粹清理雜訊。
   const { cleaned } = extractTaggedBlock(text, 'notes');
   const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, schemaHint: MERGE_SCHEMA, ref: {} });
   if (!parsed || !Array.isArray(parsed.groups)) {
