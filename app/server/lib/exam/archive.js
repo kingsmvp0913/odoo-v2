@@ -114,11 +114,18 @@ async function archiveBank(db, { bankId, pages = [] }) {
       }
       // certain 取 OR、answer_official 用 COALESCE：任何一次考試確定過就永久確定，
       // 已有的官方答案不被後來的覆蓋（與 import-bank.js 同一套合併規則）。
+      //
+      // history_wrong 一併清掉，而且**只清這一題**：官方正解已知之後，「上次那個
+      // 答案大概率錯」這個人工提醒就沒有意義了，留著會讓考試當下同時看到一個
+      // 官方鎖定與一個紅叉警告，互相矛盾。
+      // 不可以寫成 `WHERE history_wrong` 之類的全表更新——那會連別題人工標的
+      // 一起掃掉，而且沒有任何稽核紀錄救得回來（實測踩過，一次清掉 11 筆）。
       await db.query(`
         UPDATE exam_items
            SET answer_official = COALESCE(answer_official, $2),
                official_from = COALESCE(official_from, 'section-all-correct'),
                certain = TRUE,
+               history_wrong = FALSE,
                updated_at = NOW()
          WHERE id = $1`, [a.item_id, a.answer_final]);
       stat.locked++;

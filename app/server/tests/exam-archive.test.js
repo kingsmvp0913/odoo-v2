@@ -145,9 +145,90 @@ describe('archiveBank', () => {
     expect(items[0].answer_official).toEqual(['D']);   // 不是輸入的 A
   });
 
+  // 官方正解已知之後那個人工提醒就沒意義了，留著會讓考試當下同時看到官方鎖定
+  // 與紅叉警告。但只能清這一題——全表更新會掃掉別題人工標的，救不回來。
+  test('被鎖成官方的題清掉大概率錯標記，其他題的標記不動', async () => {
+    await addPage(21, [['A']], { section: 'Cleared' });
+    const mine = (await itemsOfPage(21))[0];
+    const other = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,history_wrong)
+       VALUES ('19','keep-my-mark','X','[]'::jsonb,'single',true) RETURNING id`);
+    await dbModule.query(
+      `UPDATE exam_items SET history_wrong = true WHERE id IN
+        (SELECT item_id FROM exam_attempts WHERE bank_id = $1 AND page = '21')`, [bankId]);
+
+    await archiveBank(dbModule, {
+      bankId, pages: [{ page: '21', section: 'Cleared', noWrong: true }] });
+
+    const after = await dbModule.query(`
+      SELECT i.history_wrong FROM exam_attempts a JOIN exam_items i ON i.id = a.item_id
+       WHERE a.bank_id = $1 AND a.page = '21'`, [bankId]);
+    expect(after.rows[0].history_wrong).toBe(false);
+
+    const untouched = await dbModule.query(
+      `SELECT history_wrong FROM exam_items WHERE id = $1`, [other.rows[0].id]);
+    expect(untouched.rows[0].history_wrong).toBe(true);
+  });
+
   test('歸檔後題庫狀態轉 ready', async () => {
     const b = await dbModule.query(`SELECT status FROM exam_banks WHERE id = $1`, [bankId]);
     expect(b.rows[0].status).toBe('ready');
+  });
+});
+
+// 使用者情境（2026-09-05）：第一次考 A 區沒全對，第二次 A 區全對。
+// 第二次歸檔時，第一次考過的同一題也要跟著變成「已確認」。
+describe('第二次考全對，第一次的同一題也要一起確認', () => {
+  let firstBank, secondBank, sharedItem, onlyInFirst;
+
+  beforeAll(async () => {
+    const a = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('第一次','22') RETURNING id`);
+    firstBank = a.rows[0].id;
+    const b = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('第二次','22') RETURNING id`);
+    secondBank = b.rows[0].id;
+
+    // 兩次都考到的題：第一次答 C（那次該區有錯所以沒鎖），第二次答 B
+    const shared = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,section_title)
+       VALUES ('22','shared-q','Shared','[]'::jsonb,'single','A區') RETURNING id`);
+    sharedItem = shared.rows[0].id;
+    await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,'1',1,$3,$3)`, [sharedItem, firstBank, ['C']]);
+    await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,'1',1,$3,$3)`, [sharedItem, secondBank, ['B']]);
+
+    // 只有第一次考到的題：第二次沒出現，所以拿不到任何官方資訊
+    const only = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,section_title)
+       VALUES ('22','only-first','OnlyFirst','[]'::jsonb,'single','A區') RETURNING id`);
+    onlyInFirst = only.rows[0].id;
+    await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,'1',2,$3,$3)`, [onlyInFirst, firstBank, ['A']]);
+  });
+
+  test('第二次歸檔後，第一次考過的同一題也變成官方確認', async () => {
+    await archiveBank(dbModule, {
+      bankId: secondBank, pages: [{ page: '1', section: 'A區', noWrong: true }] });
+
+    const it = (await dbModule.query(
+      `SELECT certain, answer_official, confidence FROM exam_items WHERE id = $1`,
+      [sharedItem])).rows[0];
+    expect(it.certain).toBe(true);
+    expect(it.answer_official).toEqual(['B']);   // 用第二次的答案，不是第一次答錯的 C
+    expect(it.confidence).toBe(100);
+  });
+
+  // 第二次沒考到的題拿不到任何官方資訊，不可以跟著被鎖——那等於憑空捏造正解
+  test('只有第一次考到、第二次沒出現的題不受影響', async () => {
+    const it = (await dbModule.query(
+      `SELECT certain, answer_official FROM exam_items WHERE id = $1`, [onlyInFirst])).rows[0];
+    expect(it.certain).toBe(false);
+    expect(it.answer_official).toBeNull();
   });
 });
 
