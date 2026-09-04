@@ -76,11 +76,14 @@
       kindOf(f) { return f.kind || 'agent'; },
       ofKind(k) { return this.findings.filter(f => this.kindOf(f) === k); },
       statusLabel(v) { return (HC_STATUS.find(s => s.value === v) || {}).label || v; },
-      // 夜間批次連續失敗退場：status='pending' 且 verdict_note 帶機器標記前綴（見 nightly-fix.js
-      // 的 MACHINE_RETIRE_PREFIX）。人工核准會寫 decided_by/decided_at，機器退場會清成 NULL，
-      // 所以這裡不能只看 decided_at 缺席——要靠 note 前綴才分得出「機器退場」與「從沒被裁決過」。
+      // 夜間批次退場（連續失敗／no_change／layer 不可自動修，都是同一個前綴）：
+      // status='pending' 且 verdict_note 帶機器標記前綴（見 nightly-fix.js 的 MACHINE_RETIRE_PREFIX）。
+      // 人工核准會寫 decided_by/decided_at，retireToHuman 一律清成 NULL，所以再加這個條件是免費的
+      // 精準化：真機器退場恆成立、人的裁決恆不成立，能擋掉「管理員按『待處理』但沒清空輸入框，
+      // 導致人工裁決的 note 沿用了機器寫的字串」那種情況。
       isMachineRetired(f) {
-        return f.status === 'pending' && typeof f.verdict_note === 'string' && f.verdict_note.startsWith('自動退場：');
+        return f.status === 'pending' && !f.decided_at
+          && typeof f.verdict_note === 'string' && f.verdict_note.startsWith('自動退場：');
       },
       // 裁決：狀態一律連同備註一起送，備註是下一輪健檢會讀到的東西（「為什麼判不須調整」）。
       async setStatus(f, status) {
@@ -258,8 +261,8 @@
                 @input="noteDraft[f.id] = $event.target.value" />
             </div>
             <div v-if="isMachineRetired(f)" class="pill pill-warn" style="margin-top:4px"
-              title="夜間批次自動修正連續失敗，已退回人工——不是有人核准後又改回待處理">
-              🤖 自動修正失敗，已退回人工
+              title="夜間批次自動退場——不是有人核准後又改回待處理，原因見下方裁決理由">
+              🤖 夜間批次自動退場
             </div>
             <div v-if="f.decided_at" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">
               已裁決 {{ new Date(f.decided_at).toLocaleString() }}<span v-if="f.applied_at">，套用於 {{ new Date(f.applied_at).toLocaleDateString() }}</span>

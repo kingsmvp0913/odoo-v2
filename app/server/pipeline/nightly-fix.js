@@ -151,7 +151,7 @@ async function triageFeedback(items) {
       console.log('[NIGHTLY-FIX] 意見 #%d 的 layer=%s 不在可自動修範圍，立即退場',
         it.row.id, layerLabel);
       await retireToHuman(true, refreshed.id,
-        `翻出來的 layer=${layerLabel}，自動修正範圍不含環境類，請人工處理`);
+        `翻出來的 layer=${layerLabel}，自動修正範圍只含 code／prompt／observability，請人工處理`);
       continue;
     }
     kept.push({ source: 'feedback', row: refreshed });
@@ -208,10 +208,22 @@ function normalizeGroups(groups, byOrdinal) {
   const usable = [];
   const claimed = new Set();
   for (const g of groups) {
-    const memberIds = (Array.isArray(g.member_ids) ? g.member_ids : [])
-      .map(Number).filter(id => byOrdinal.has(id) && !claimed.has(id));
+    const rawIds = (Array.isArray(g.member_ids) ? g.member_ids : []).map(Number);
+    // 跨組去重前先算掉哪些序號是因為「被更早的組拿走」才消失，不是「本來就對不上」——
+    // 兩種原因的正確查法完全不同，不留這行 log 的話「沒有對得上的成員序號」會把人導去查錯方向
+    // （它們對得上，只是被更早的組拿走了）。
+    const dropped = rawIds.filter(id => byOrdinal.has(id) && claimed.has(id));
+    if (dropped.length) {
+      console.log('[NIGHTLY-FIX] 統整結果「%s」的成員序號 %s 已被更早的組拿走，跨組去重剔除',
+        g.title || '(無標題)', dropped.join(','));
+    }
+    const memberIds = rawIds.filter(id => byOrdinal.has(id) && !claimed.has(id));
     if (!memberIds.length) {
-      console.log('[NIGHTLY-FIX] 統整結果「%s」沒有對得上的成員序號，跳過', g.title || '(無標題)');
+      if (dropped.length) {
+        console.log('[NIGHTLY-FIX] 統整結果「%s」去重後成員序號淨空，跳過', g.title || '(無標題)');
+      } else {
+        console.log('[NIGHTLY-FIX] 統整結果「%s」沒有對得上的成員序號，跳過', g.title || '(無標題)');
+      }
       continue;
     }
     memberIds.forEach(id => claimed.add(id));
@@ -335,18 +347,22 @@ const MACHINE_RETIRE_PREFIX = '自動退場：';
  * 退場＝把狀態換回「等人」那一格並歸零計數，不是靜靜地從候選裡消失：
  *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（與 triageOne 判不出來時同一個慣例，
  *     管理頁本來就會顯示這個欄位）
- *   - 健檢提案 → `status='pending'`（回到等人裁決）＋ `verdict_note` 寫原因，
- *     並**清掉 `decided_by`／`decided_at`**——人工核准會寫這兩欄（`admin-routes.js`），
- *     機器退場若不清掉，畫面上會留著使用者自己核准時的裁決時間與（將被覆寫的）理由，
- *     看起來像是他自己把核准的東西又改回待處理。note 前綴另外標出「這是機器寫的」，
- *     供 `AdminHealthCheck.js` 的 pill 判斷。
+ *   - 健檢提案 → `status='pending'`（回到等人裁決）＋ `verdict_note` 寫原因
+ *   兩張表都要**清掉 `decided_by`／`decided_at`**——人工核准都會寫這兩欄
+ *   （健檢提案見 `admin-routes.js`；意見回饋見 `feedback-routes.js:85`），機器退場若不清掉，
+ *   畫面上會留著使用者自己核准時的裁決時間與（將被覆寫的）理由，看起來像是他自己把核准的東西
+ *   又改回待處理。note 前綴另外標出「這是機器寫的」，供對應管理頁的 pill 判斷。
  * 計數歸零是為了「人再核准一次就再給一輪完整額度」，不必另外開一支重設路徑。
  */
 async function retireToHuman(isFeedback, id, note) {
   const tagged = MACHINE_RETIRE_PREFIX + note;
   if (isFeedback) {
+    // 意見回饋也有 decided_by／decided_at／verdict_note（人工核准會寫，見 feedback-routes.js:85），
+    // 跟健檢提案同一個坑：機器退場不清掉的話，畫面上會留著使用者自己核准時的裁決時間與理由，
+    // 看起來像是他自己把核准的東西又改回待處理。
     await query(
-      `UPDATE feedback SET status='new', triage_note=$2, fix_attempts=0 WHERE id=$1`, [id, tagged]);
+      `UPDATE feedback SET status='new', triage_note=$2, fix_attempts=0,
+              decided_by=NULL, decided_at=NULL WHERE id=$1`, [id, tagged]);
   } else {
     await query(
       `UPDATE health_check_findings
@@ -530,6 +546,12 @@ async function runNightlyFix({ startedBy = null } = {}) {
       // noteFailedAttempt 的話，會把「合併成功、只是收尾失敗」記成失敗額度——訊息與事實相反：
       // 使用者會看到自己核准的意見先顯示已核准、幾晚後又跳回待處理並掛著「連續失敗」，但碼其實
       // 早就在 master 上了。catch 裡要用 `!merged` 擋掉這種情況。
+      //
+      // ⚠ 但「什麼都不記」也不對：若 markGroupDone **持續**拋錯（來源列被刪、FK、DB 暫時性錯誤），
+      // 該候選的 status 會永遠停在 approved、fix_attempts 永遠 0——每晚重付 triage、重跑兩次全套
+      // 測試、重新 merge 進 master、重啟平台一次，且永久佔掉 NIGHTLY_FIX_MAX 一格。這是「碼已合併
+      // 但收尾失敗」的第三種結局，不併進 merged／failed 任一格：走專屬的 retireToHuman，文案明講
+      // 「碼已合併進 master」——這是使用者與管理員最需要知道的一句。
       let merged = false;
       try {
         cand = await materializeGroup(group, runId);
@@ -542,12 +564,27 @@ async function runNightlyFix({ startedBy = null } = {}) {
           merged = true;
           // 反過來，計數要等標記成功才加：markGroupDone 拋錯代表來源沒被標掉，這一條隔晚會對
           // 已經合併的碼再跑一次，此時報「applied+1」是高報。
-          await markGroupDone(cand, pushUserId || startedBy);
-          applied += 1;
+          try {
+            await markGroupDone(cand, pushUserId || startedBy);
+            applied += 1;
+          } catch (doneErr) {
+            console.error('[NIGHTLY-FIX] 提案 #%d 碼已合併但標記來源失敗，退回人工確認：%s',
+              cand.findingId, doneErr.message);
+            for (const it of cand.members) {
+              await retireToHuman(it.source === 'feedback', it.row.id,
+                `碼已合併進 master，但標記來源失敗，請人工確認並手動結案：${doneErr.message}`)
+                .catch(e => console.error('[NIGHTLY-FIX] 退回人工時又出錯：', e.message));
+            }
+          }
         } else if (result.retire) {
           // no_change：一次即退場，不走「累加到門檻」那條路（見 runOneCandidate 內的說明）。
+          // ⚠ 對照 markGroupDone 失敗那段：每個成員各自 `.catch`，不讓單一成員退場失敗逃到外層
+          // catch。逃出去的話 cand 非 null、merged 為 false，外層會對**全部**成員（含已經退場
+          // 成功、fix_attempts 剛被歸零的那幾個）再跑一次 noteFailedAttempt，把計數從 0 灌回 1。
           for (const it of cand.members) {
-            await retireToHuman(it.source === 'feedback', it.row.id, result.reason);
+            await retireToHuman(it.source === 'feedback', it.row.id, result.reason)
+              .catch(e => console.error('[NIGHTLY-FIX] 提案 #%d 成員 %s#%d 退場失敗：%s',
+                cand.findingId, it.source, it.row.id, e.message));
           }
           console.log('[NIGHTLY-FIX] 提案 #%d 已因 no_change 立即退場', cand.findingId);
         } else if (!result.adopted) {
@@ -605,4 +642,4 @@ async function restartSelf() {
   }
 }
 
-module.exports = { runNightlyFix, _setClockForTesting };
+module.exports = { runNightlyFix, _setClockForTesting, MACHINE_RETIRE_PREFIX };

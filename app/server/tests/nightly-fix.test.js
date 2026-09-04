@@ -356,11 +356,18 @@ test('merge agent 把同一組的成員全撞號（去重後剩空組）→ 整�
     { member_ids: [items[0].id], title: '先出現的組', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
     { member_ids: [items[0].id], title: '撞號後整組淨空', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
   ]);
+  const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
   expect(result.attempted).toBe(1);          // 只有先出現的組跑，撞號組被整組丟掉
   expect(runFix).toHaveBeenCalledTimes(1);
+  // 去重動作本身要留 log，且不能被誤導成「沒有對得上的成員序號」——它們對得上，
+  // 只是被更早的組拿走了，兩句話對應的排查方向完全不同。
+  const logLines = logSpy.mock.calls.map(c => c.join(' '));
+  expect(logLines.some(l => l.includes('已被更早的組拿走'))).toBe(true);
+  expect(logLines.some(l => l.includes('沒有對得上的成員序號'))).toBe(false);
+  logSpy.mockRestore();
 });
 
 test('統整沒填 verify_route → 沿用組內意見成員的值（否則截圖審查對意見來源永遠不啟動）', async () => {
@@ -714,9 +721,13 @@ test('失敗一次 → 只累加次數，狀態不動（下一晚還會再試）
   expect(fb).toMatchObject({ status: 'approved', fix_attempts: 1 });
 });
 
-test('連續失敗達門檻 → 意見退回人工（status=new＋triage_note 寫原因），並歸零讓人再核准時有完整額度', async () => {
+test('連續失敗達門檻 → 意見退回人工（status=new＋triage_note 寫原因），並歸零讓人再核准時有完整額度；且清掉 decided_by／decided_at', async () => {
   const fbId = await insertFeedback();
   await dbModule.query('UPDATE feedback SET fix_attempts=2 WHERE id=$1', [fbId]);  // 前兩晚已失敗
+  // fixture 補上人工核准會寫的欄位（feedback-routes.js:85 的 UPDATE 會寫 decided_by/decided_at/
+  // verdict_note）。不補的話這支測試永遠是空心的：兩欄本來就預設 NULL，不管退場邏輯清不清都會通過。
+  await dbModule.query('UPDATE feedback SET decided_by=$2, decided_at=NOW(), verdict_note=$3 WHERE id=$1',
+    [fbId, userId, '管理員說：這個要做']);
   stubTriage('code');
   stubHappyPath();
   reviewFix.mockResolvedValue({ verdict: 'reject', reason: '改法會弄壞別的東西' });
@@ -724,11 +735,15 @@ test('連續失敗達門檻 → 意見退回人工（status=new＋triage_note �
   await nightlyFix.runNightlyFix({ startedBy: userId });
 
   const { rows: [fb] } = await dbModule.query(
-    'SELECT status, triage_note, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+    'SELECT status, triage_note, fix_attempts, decided_by, decided_at FROM feedback WHERE id=$1', [fbId]);
   expect(fb.status).toBe('new');                      // 回到管理員那一格，不是靜靜消失
   expect(fb.fix_attempts).toBe(0);                    // 人再核准一次就再給一輪完整額度
+  expect(fb.triage_note).toMatch(/^自動退場：/);      // 機器標記前綴，供前端 pill 判斷
   expect(fb.triage_note).toContain('連續失敗 3 次');
   expect(fb.triage_note).toContain('改法會弄壞別的東西'); // 附上最後一次失敗原因
+  // 人工核准過的欄位不能留著——不清掉的話會讓機器退場看起來像使用者自己核准後又反悔
+  expect(fb.decided_by).toBeNull();
+  expect(fb.decided_at).toBeNull();
 });
 
 test('連續失敗達門檻 → 健檢提案退回 pending，且清掉 decided_by／decided_at（分得出是機器退場不是人的裁決）', async () => {
@@ -811,11 +826,13 @@ test('保險絲檢查自己拋錯 → 例外逃出迴圈，但 health_check_runs
   expect(await maintenance.isMaintenance()).toBe(false);
 });
 
-test('markGroupDone 拋錯 → 不計入 applied（免得隔晚對已合併的碼再跑一次），但仍要重啟；也不能誤記失敗次數', async () => {
+test('markGroupDone 持續拋錯 → 不計入 applied、不誤記失敗次數，且立即退場（不是永遠停在 approved 每晚重跑）', async () => {
   const fbId = await insertFeedback();
   stubTriage('code');
   stubHappyPath();
-  // 合併成功之後、標記之前，把 finding 抽掉 ⇒ markGroupDone 寫 feedback.finding_id 會撞 FK
+  // 合併成功之後、標記之前，把 finding 抽掉 ⇒ markGroupDone 寫 feedback.finding_id 會撞 FK。
+  // 用 mockImplementation（非 Once）模擬「持續拋錯」——這是 F1 症狀換了條路徑長回來的重點：
+  // 上一輪的 I2 把「誤記失敗」換成「完全不記」，若只驗一晚看不出「這一條永遠不退場」這個洞。
   applyFix.mockImplementation(async () => {
     await dbModule.query('DELETE FROM health_check_findings');
     return { merged: true, restarted: false };
@@ -824,15 +841,54 @@ test('markGroupDone 拋錯 → 不計入 applied（免得隔晚對已合併的�
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
   expect(result).toMatchObject({ attempted: 1, applied: 0 });   // 不高報
-  const { rows: [fb] } = await dbModule.query('SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
-  expect(fb.status).not.toBe('done');
-  // 碼此刻已經合併成功了，只是收尾（markGroupDone）失敗——不是這一條真的沒改好，
-  // 不該算進失敗額度。誤記的話訊息會與事實相反：使用者看到自己核准的意見先顯示已核准，
-  // 三晚後翻回「待處理」並掛著「連續失敗」，但碼其實早就在 master 上了。
+  const { rows: [fb] } = await dbModule.query(
+    'SELECT status, fix_attempts, triage_note FROM feedback WHERE id=$1', [fbId]);
+  // 碼此刻已經合併成功了，只是收尾（markGroupDone）失敗——不是這一條真的沒改好，不該算進
+  // 失敗額度；也不是「什麼都不記」，那樣這條意見的 status 會永遠停在 approved、永久佔住
+  // NIGHTLY_FIX_MAX 一格。第三種結局：立即退場給人工，文案明講「碼已合併進 master」。
   expect(fb.fix_attempts).toBe(0);
-  expect(fb.status).toBe('approved');
+  expect(fb.status).toBe('new');
+  expect(fb.triage_note).toContain('碼已合併進 master');
   // 碼此刻已經在 master 上了，不重啟的話平台會一直跑舊碼
   expect(restartCalls()).toHaveLength(1);
+});
+
+test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不會每晚重付 triage、重跑兩次全套測試、重新 merge、重啟', async () => {
+  await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  applyFix.mockImplementation(async () => {
+    await dbModule.query('DELETE FROM health_check_findings');
+    return { merged: true, restarted: false };
+  });
+
+  const first = await nightlyFix.runNightlyFix({ startedBy: userId });     // 第一晚：合併成功但收尾失敗，立即退場
+  expect(first).toMatchObject({ attempted: 1, applied: 0 });
+  expect(restartCalls()).toHaveLength(1);
+
+  jest.clearAllMocks();
+  stubTriage('code');
+  stubHappyPath();
+  applyFix.mockImplementation(async () => {
+    await dbModule.query('DELETE FROM health_check_findings');
+    return { merged: true, restarted: false };
+  });
+  const second = await nightlyFix.runNightlyFix({ startedBy: userId });    // 第二晚：已退場，不再是候選
+  expect(triageOne).not.toHaveBeenCalled();
+  expect(second.attempted).toBe(0);
+  expect(restartCalls()).toHaveLength(0);   // 這一晚沒有新碼要合併，不該重啟
+
+  jest.clearAllMocks();
+  stubTriage('code');
+  stubHappyPath();
+  applyFix.mockImplementation(async () => {
+    await dbModule.query('DELETE FROM health_check_findings');
+    return { merged: true, restarted: false };
+  });
+  const third = await nightlyFix.runNightlyFix({ startedBy: userId });     // 第三晚：同上
+  expect(triageOne).not.toHaveBeenCalled();
+  expect(third.attempted).toBe(0);
+  expect(restartCalls()).toHaveLength(0);
 });
 
 test('materializeGroup 本身拋錯 → 仍計入 attempted（否則摘要行低報），來源成員仍要記失敗次數', async () => {
@@ -845,10 +901,19 @@ test('materializeGroup 本身拋錯 → 仍計入 attempted（否則摘要行低
   // 對不到列而撞 FK——這是「materializeGroup 自己拋錯」在這條編排邏輯裡唯一自然會發生的方式
   // （runId 是整批次共用的單一值，開跑前建好，不是逐組重建）。
   //
-  // 掛勾點：注入時鐘的 now() 在這條路徑上依序被呼叫 5 次——
-  //   1=startedAt 2=waitForDrain 3=開跑前 preFuse 4=第一組的 fuseTripped 5=第二組的 fuseTripped。
-  // 第 5 次呼叫的當下，第一組（含 materializeGroup／runOneCandidate／markGroupDone）已經
-  // 完整跑完，第二組的 materializeGroup 則還沒開始——這是唯一能精準卡在這個縫隙的鉤子。
+  // ⚠ 掛勾點刻意留在 now() 呼叫次數上，這是 fix round 4 evaluate 過語意掛勾（改在 applyFix／
+  // reviewFix mock 裡觸發）之後**主動放棄**的結果，不是沒試過：markGroupDone 本身不是 mock、
+  // 沒有可注入的縫，而 applyFix／reviewFix 都在 markGroupDone 執行**之前**就返回——把刪除動作
+  // 塞進第一組的 applyFix mock，砍表的時間點會早於第一組自己的 markGroupDone，讓第一組也連帶
+  // 撞到 FK、掉進 fix round 4 新增的「碼已合併但標記來源失敗」退場分支，扭曲了這支測試要驗的
+  // 「只有第二組的 materializeGroup 拋錯」前提。markGroupDone 之後、下一組 materializeGroup
+  // 之前沒有其他可 mock 的斷點，只剩 now()。
+  //
+  // 這個掛勾綁的是 now() 呼叫次數：依序 1=startedAt 2=waitForDrain 3=開跑前 preFuse
+  // 4=第一組的 fuseTripped 5=第二組的 fuseTripped。第 5 次呼叫的當下，第一組（含
+  // materializeGroup／runOneCandidate／markGroupDone）已經完整跑完，第二組的 materializeGroup
+  // 則還沒開始。**動生產碼裡 fuseTripped／markGroupDone／批次前置流程任一處的 now() 呼叫次數，
+  // 這支測試會變紅，回來改這裡的次數，不代表這支測試本身測錯了東西。**
   const realClock = () => new Date(clockMs);
   let clockCalls = 0;
   let deleteQueued = null;

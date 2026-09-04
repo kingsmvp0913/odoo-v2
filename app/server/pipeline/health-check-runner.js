@@ -6,6 +6,7 @@ const { runAgent } = require('./agent-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('./health-data');
+const { MACHINE_RETIRE_PREFIX } = require('./nightly-fix');
 
 const SEVERITIES = new Set(['ok', 'low', 'medium', 'high']);
 
@@ -440,7 +441,13 @@ async function previousProposals(limit = 20) {
   return rows.reverse().map(r => {
     const head = String(r.diagnosis || '').split('\n')[0].slice(0, 200);
     const applied = r.applied_at ? `；於 ${new Date(r.applied_at).toISOString().slice(0, 10)} 套用` : '';
-    const verdict = r.verdict_note ? `\n  你的裁決：${r.verdict_note}` : '';
+    // 帶 MACHINE_RETIRE_PREFIX 的 note 是夜間批次自己寫的，不是人的裁決——冠「你的裁決」等於把
+    // 機器自己的輸出貼上人類標籤送回去當跨輪記憶，auditor 讀到會誤以為是人在跟它對話。
+    const verdict = r.verdict_note
+      ? (r.verdict_note.startsWith(MACHINE_RETIRE_PREFIX)
+          ? `\n  夜間批次自動退場：${r.verdict_note.slice(MACHINE_RETIRE_PREFIX.length)}`
+          : `\n  你的裁決：${r.verdict_note}`)
+      : '';
     return `- [${r.kind === 'signal' ? '候選訊號' : '提案'}｜${r.layer || '未分類'}｜${STATUS_TEXT[r.status] || r.status}] ${head}\n` +
            `  指標：${r.target_metric || '（未填）'}（當時 ${r.metric_baseline || '—'}）${applied}${verdict}`;
   }).join('\n');
