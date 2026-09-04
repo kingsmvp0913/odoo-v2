@@ -66,6 +66,7 @@ const ROUTES = [
   { key: 'pipeline-flow', hash: '#/pipeline-flow', auth: 'user', covered: true },
   { key: 'architecture', hash: '#/architecture', auth: 'user', covered: true },
   { key: 'exam-bank', hash: '#/exam-bank', auth: 'user', covered: true },
+  { key: 'exam-run', hash: '#/exam-run', auth: 'user', covered: true },
   { key: 'admin-health', hash: '#/admin/health', auth: 'admin', covered: true },
   { key: 'admin-rejections', hash: '#/admin/rejections', auth: 'admin', covered: true },
   { key: 'admin-classify-samples', hash: '#/admin/classify-samples', auth: 'admin', covered: true },

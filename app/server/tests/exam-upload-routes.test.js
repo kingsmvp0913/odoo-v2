@@ -109,6 +109,16 @@ describe('認證（直接測 middleware）', () => {
     expect((await run(fakeReq({ body: { token: TOKEN } }))).code).toBe(401);
   });
 
+  // 作戰台頁面的瀏覽器來自區網（isLocal 為 false），但它有平台帳號。少了這條，
+  // 已登入的使用者上傳一律 401，而畫面上的訊息會指向「通行碼」——離真因很遠。
+  test('外部來源帶平台 JWT 放行', async () => {
+    expect((await run(fakeReq({ headers: { authorization: `Bearer ${jwt}` } }))).code).toBe(200);
+  });
+
+  test('壞掉的 JWT 不放行', async () => {
+    expect((await run(fakeReq({ headers: { authorization: 'Bearer not-a-real-token' } }))).code).toBe(401);
+  });
+
   test('本機來源不需要 token', async () => {
     expect((await run(fakeReq({ ip: '127.0.0.1' }))).code).toBe(200);
     expect((await run(fakeReq({ ip: '::ffff:127.0.0.1' }))).code).toBe(200);

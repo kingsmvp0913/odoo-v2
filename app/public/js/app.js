@@ -216,6 +216,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 考試作戰台（考試當天用）。同樣只有 ui-next 版本，理由同上。
+      path: "/exam-run",
+      component: window.UiNextExamRunView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/admin",
       component: window.UiNextEnabled
         ? window.UiNextAdminView

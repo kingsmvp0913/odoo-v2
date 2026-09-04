@@ -49,6 +49,19 @@ function checkExamToken(req, res, next) {
   // 判斷一律用 socket.remoteAddress，絕不可看 header（同網段誰都偽造得出來）。
   if (isLocal(req)) return next();
 
+  // 平台帳號也放行。X-Token 是給「不想開平台帳號的同事」用的旁路，不是唯一的路——
+  // 沒有這一段的話，作戰台頁面（瀏覽器來自區網，isLocal 為 false）明明已經登入，
+  // 上傳卻一律 401，而畫面上看起來像「通行碼沒設定」。
+  // 只驗簽章不查 users：這裡的授權門檻本來就低於 X-Token（那是一組共用碼），
+  // 而 index.js 的未核准閘門已經先擋過未核准帳號。
+  const auth = req.headers && req.headers.authorization;
+  if (auth && auth.startsWith('Bearer ')) {
+    try {
+      require('jsonwebtoken').verify(auth.slice(7), process.env.JWT_SECRET);
+      return next();
+    } catch { /* 壞 token 不放行，往下走 X-Token 那條 */ }
+  }
+
   const want = readUploadToken(dataDir());
   if (!want) {
     return res.status(503).json({ error: '尚未設定上傳通行碼（data/exam/upload-token.txt）' });
