@@ -1452,7 +1452,6 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   border: 1px solid var(--border); background: var(--surface);
   color: var(--text-muted); font-size: var(--fs-base);
 }
-.ui-next-exam-run-idle { margin-top: 10px; padding: 14px; color: var(--text-muted); font-size: var(--fs-sm); }
 .ui-next-exam-run-err {
   margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
@@ -1542,9 +1541,14 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 
 /* 新考試工作台：外部 POST、自動審題，本頁只呈現結果。正式答案改由完整選項前的
    checkbox 操作；摘要固定三欄（輸入／審查／最高票），欄數與直接子元素數一致。 */
-.ui-next-exam-run-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+/* 等寬三欄而不是 flex：flex 讓框寬跟著文字長度跑，「正式題數」比「一致」寬一截，
+   三個並排時高低不齊、看起來沒對齊過。數字要能互相比較就得同寬。 */
+.ui-next-exam-run-stats {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px; margin-bottom: 14px; max-width: 560px;
+}
 .ui-next-exam-run-stat {
-  min-width: 104px; padding: 10px 16px; border: 1px solid var(--border);
+  padding: 10px 14px; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--card-bg); color: var(--text); text-align: left;
 }
 .ui-next-exam-run-stat { cursor: pointer; }
@@ -1558,47 +1562,150 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 }
 .ui-next-exam-run-toolbar label { color: var(--text-muted); font-size: var(--fs-sm); }
 .ui-next-exam-run-card {
-  display: block; margin-bottom: 12px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--card-bg); overflow: hidden;
+  display: block; margin-bottom: 6px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg); overflow: hidden;
 }
+/* 收合時只剩標題那一行，不留多餘的下緣空白 */
+.ui-next-exam-run-card[open] { padding-bottom: 6px; }
+.ui-next-exam-run-card-head { background: var(--card-bg); }
 .ui-next-exam-run-card.is-failed { background: color-mix(in srgb, var(--warning) 7%, var(--card-bg)); }
+/* 每一列固定四欄，欄位才對得齊。原本是 flex：頁碼、狀態、姓名全擠在左邊，
+   時間被 margin-left:auto 推到最右，中間一大片空白，掃視時看不出哪個字是哪一欄。
+   grid 的欄數必須等於子元素個數（4 個），少一欄會讓最後一個掉到下一列。 */
 .ui-next-exam-run-card-head {
-  display: flex; gap: 12px; align-items: baseline; padding: 11px 14px; cursor: pointer;
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) 52px;
+  gap: 10px; align-items: center; padding: 9px 14px; cursor: pointer;
   color: var(--text-secondary); font-size: var(--fs-sm);
 }
 .ui-next-exam-run-card-head b { color: var(--primary); font-size: var(--fs-base); }
-.ui-next-exam-run-card-head time { margin-left: auto; color: var(--text-muted); font-size: var(--fs-xs); }
-.ui-next-exam-run-question { display: block; border-top: 1px solid var(--border); }
+.ui-next-exam-run-card-head > span:first-of-type { display: inline-flex; align-items: center; gap: 3px; }
+.ui-next-exam-run-card-head time { color: var(--text-muted); font-size: var(--fs-xs); text-align: right; }
+/* 題目之間用「實體空隙」而不是髮絲線分隔：一頁十幾題全部黏在同一片白底上時，
+   每題又有中英兩行，掃視時分不出上一題的英文與下一題的中文。
+   注意 --surface 與 --card-bg 在兩個主題下是同一個值，做不出對比，
+   只有頁面底色 --bg 才有差（淺色 #f7f8fa／深色 #191919）。 */
+.ui-next-exam-run-question, .ui-next-exam-run-official {
+  display: block; margin: 6px 6px 0; border-radius: var(--radius-sm);
+  background: var(--card-bg);
+}
 .ui-next-exam-run-question.is-mismatch[open] {
   background: color-mix(in srgb, var(--danger) 7%, var(--card-bg));
 }
 .ui-next-exam-run-question > summary { padding: 13px 14px; cursor: pointer; list-style: none; }
 .ui-next-exam-run-question > summary::marker { display: none; content: ''; }
 .ui-next-exam-run-question > summary::-webkit-details-marker { display: none; }
-.ui-next-exam-run-official { padding: 13px 14px; background: var(--surface); }
+.ui-next-exam-run-official { padding: 13px 14px; }
 .ui-next-exam-run-official > small { display: block; margin-top: 4px; color: var(--text-muted); }
 .ui-next-exam-run-question h3 { margin: 0; color: var(--text); font-size: var(--fs-base); font-weight: var(--fw-semibold); }
 .ui-next-exam-run-question h3 span { color: var(--text-muted); }
 .ui-next-exam-run-en { margin-top: 3px; color: var(--text-muted); font-size: var(--fs-sm); }
 .ui-next-exam-run-options { display: grid; gap: 6px; padding: 0 14px 12px; }
 .ui-next-exam-run-option {
-  display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 6px 8px;
+  display: flex; align-items: flex-start; gap: 9px; min-height: 38px; padding: 7px 8px;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card-bg);
 }
-.ui-next-exam-run-option.is-review { background: color-mix(in srgb, var(--danger) 7%, var(--card-bg)); }
-.ui-next-exam-run-option.is-input { background: color-mix(in srgb, var(--success) 7%, var(--card-bg)); }
 .ui-next-exam-run-option.is-selected { box-shadow: inset 0 0 0 1px var(--primary); }
-.ui-next-exam-run-option label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; cursor: pointer; }
-.ui-next-exam-run-option input { width: 16px; height: 16px; flex: none; accent-color: var(--primary); }
+.ui-next-exam-run-option label { display: flex; min-width: 0; flex: 1; align-items: flex-start; gap: 8px; cursor: pointer; }
+.ui-next-exam-run-option input { width: 16px; height: 16px; flex: none; margin-top: 2px; accent-color: var(--primary); }
 .ui-next-exam-run-option label:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
 .ui-next-exam-run-option b { color: var(--text); }
 .ui-next-exam-run-option span { min-width: 0; color: var(--text-secondary); }
-.ui-next-exam-run-option small { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semibold); }
-.ui-next-exam-run-input-mark { color: var(--success); }
-.ui-next-exam-run-review-mark { color: var(--danger); }
-.ui-next-exam-run-vote-mark { color: var(--text-muted); }
-.ui-next-exam-run-vote-empty { color: var(--text-muted); font-size: var(--fs-xs); }
+/* 四個訊號各一種形狀。原本是「輸入答案／審查答案／投票 100%」三串中文，
+   每串長度不同、位置跟著浮動，掃視時要逐字讀。改成圖示後靠形狀就分得出來。 */
+.ui-next-exam-run-sig {
+  display: inline-flex; align-items: center; gap: 2px; margin-left: 6px;
+  vertical-align: -2px; white-space: nowrap;
+}
+.ui-next-exam-run-sig .ui-next-icon { width: 13px; height: 13px; }
+.ui-next-exam-run-sig em {
+  font-style: normal; font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+}
+.ui-next-exam-run-sig.is-review { color: var(--warning); }
+.ui-next-exam-run-sig.is-vote { color: var(--info); }
+.ui-next-exam-run-sig.is-past { color: var(--success); }
+.ui-next-exam-run-sig.is-past-bad { color: var(--danger); }
 .ui-next-exam-run-vote {
   padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--card-bg); color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer;
+}
+
+/* 歸檔面板：對著官方成績圖勾「這章沒答錯」。
+   grid 是 4 欄，而每一列剛好 4 個子元素——少一欄的話第 4 個會掉到下一列，
+   版面亂掉而且沒有任何錯誤訊息（本頁實測踩過，找了三輪）。 */
+.ui-next-exam-arch {
+  margin-bottom: 14px; padding: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface);
+}
+.ui-next-exam-arch-intro {
+  color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.6; margin-bottom: 10px;
+}
+.ui-next-exam-arch-intro b { color: var(--text); }
+.ui-next-exam-arch-warn { color: var(--warning); }
+.ui-next-exam-arch-row {
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) 130px 58px;
+  gap: 8px; align-items: center; padding: 4px 0;
+}
+.ui-next-exam-arch-row.is-head {
+  color: var(--text-muted); font-size: var(--fs-xs);
+  border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px;
+}
+.ui-next-exam-arch-page { color: var(--text-muted); font-size: var(--fs-sm); }
+.ui-next-exam-arch-name {
+  width: 100%; padding: 5px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--card-bg); color: var(--text);
+  font-size: var(--fs-sm);
+}
+.ui-next-exam-arch-name::placeholder { color: var(--text-placeholder); }
+.ui-next-exam-arch-name:focus { outline: none; border-color: var(--primary); }
+.ui-next-exam-arch-n { color: var(--text-secondary); font-size: var(--fs-sm); }
+.ui-next-exam-arch-n small { margin-left: 6px; color: var(--text-muted); font-size: var(--fs-xs); }
+.ui-next-exam-arch-n small.ui-next-exam-arch-locked { color: var(--success); }
+.ui-next-exam-arch-tick { display: flex; justify-content: center; cursor: pointer; }
+.ui-next-exam-arch-block {
+  margin-top: 8px; color: var(--warning); font-size: var(--fs-sm);
+}
+.ui-next-exam-arch-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+  color: var(--text-muted); font-size: var(--fs-sm);
+}
+.ui-next-exam-arch-result {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+  color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.6;
+}
+.ui-next-exam-arch-skip { color: var(--text-muted); }
+.ui-next-exam-arch-conflict { color: var(--danger); }
+
+/* 判題中的提示。.spinner 是 app.css 的共用件（規則 31：先挑現成的，別自己填 px）。 */
+.ui-next-exam-run-card-head .spinner { width: 11px; height: 11px; border-width: 2px; }
+
+/* 選項的中英對照：中譯在上、英文原文在下，與題幹同一套排法。
+   標記（輸入答案／審查答案／投票）跟在中譯後面，長了自然斷行。 */
+.ui-next-exam-run-opt-text { display: block; line-height: 1.55; }
+.ui-next-exam-run-opt-en {
+  display: block; margin-top: 2px; color: var(--text-muted);
+  font-size: var(--fs-xs); line-height: 1.5;
+}
+/* 題號前的狀態圖示。改用側欄那套線條 SVG 而不是 emoji：emoji 的字重與大小跟著
+   系統走，跟旁邊的圖示擺在一起像兩個時代的東西，缺字時還會變豆腐框。 */
+.ui-next-exam-run-mark { width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
+.ui-next-exam-run-mark.is-lock { color: var(--success); }
+.ui-next-exam-run-mark.is-ok { color: var(--success); }
+/* 題庫頁同一套圖示（原本是 emoji 字元，改 SVG 後要給尺寸，否則吃 viewBox 的 24px） */
+.ui-next-exam-lock, .ui-next-exam-mark {
+  width: 13px; height: 13px; vertical-align: -2px;
+}
+
+/* 「上次的答案大概率錯」勾選。放在選項上方而不是底部：勾它的當下人正在看選項，
+   要往下捲才找得到的開關等於沒有。 */
+.ui-next-exam-histwrong {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 10px;
+  color: var(--text-secondary); font-size: var(--fs-sm); cursor: pointer;
+}
+.ui-next-exam-histwrong input { width: 15px; height: 15px; accent-color: var(--danger); }
+
+/* 可信的歷史答案用「?」而不是勾勾：它只是「上次我這樣答」，沒有官方背書。
+   用文字而不是 SVG——問號在 13px 下畫成線條會糊掉，字元反而清楚。 */
+.ui-next-exam-run-sig i {
+  font-style: normal; font-weight: var(--fw-semibold); line-height: 1;
 }

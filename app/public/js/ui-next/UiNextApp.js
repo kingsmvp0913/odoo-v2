@@ -45,6 +45,8 @@
       <path v-else-if="name==='wrench'" d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/>
       <path v-else-if="name==='enter'" d="m9 10-4 4 4 4M5 14h9a4 4 0 0 0 4-4V6"/>
       <rect v-else-if="name==='square'" x="4" y="4" width="16" height="16" rx="3.2" fill="currentColor" stroke="none"/>
+      <g v-else-if="name==='lock'"><rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></g>
+      <g v-else-if="name==='thumb-up'"><path d="M7 21V10l4.5-7a2 2 0 0 1 2.9 2.4L13 10h5.6a2 2 0 0 1 2 2.4l-1.4 6.6a2.5 2.5 0 0 1-2.5 2H7Z"/><path d="M7 10H3v11h4"/></g>
     </svg>`,
   });
   window.UiNextIcon = UiNextIcon;

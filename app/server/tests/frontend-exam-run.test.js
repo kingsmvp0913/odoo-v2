@@ -25,17 +25,41 @@ test('完整選項用勾選框設定正式答案，而且可以取消成空白',
   expect(view).not.toContain('最後答案（可空白）');
 });
 
-test('各答案直接標在完整選項上，不再顯示下方答案區塊', () => {
-  expect(view).toContain('ui-next-exam-run-input-mark');
-  expect(view).toContain('ui-next-exam-run-review-mark');
-  expect(view).toContain('投票 {{ topVote(q).pct }}%');
-  expect(view).toContain('投票 -');
+// 四個訊號各一種形狀，不用讀文字就分得出來。原本是「輸入答案／審查答案／
+// 投票 100%」三串中文，長度不同、位置跟著浮動，掃視時要逐字讀。
+test('各答案用圖示標在選項上，不再顯示下方答案區塊', () => {
+  expect(view).toContain('name="star-filled"');                    // 審查
+  expect(view).toContain('name="thumb-up"');                       // 投票
+  // 歷史：可信＝綠問號＋信心度（只是「上次我這樣答」，沒有官方背書，
+  // 用勾勾看起來跟已確認的一樣篤定）；大概率錯＝紅叉
+  expect(view).toContain('v-if="q.history_wrong" name="close"');
+  expect(view).toContain('<template v-else><i>?</i>');
+  // 沒人投票時不留「投票 -」佔位：那一行對使用者沒有資訊（2026-09-05 使用者回饋）
+  expect(view).not.toContain('投票 -');
   expect(view).toContain('topVote(q).answer');
   expect(view).not.toContain('<div class="ui-next-exam-run-answers">');
 });
 
-test('只有答案不一致的題目預設展開，投票後按鈕消失', () => {
-  expect(view).toContain(':open="isMismatch(q)"');
+// 輸入答案刻意不另外標：worker 寫入時 answer_final 預設就等於作答答案，
+// 勾選狀態本身就是它。多一個綠標只是重複同一件事。
+test('輸入答案不另外標，改過之後靠 title 查得回原本輸入什麼', () => {
+  expect(view).not.toContain('ui-next-exam-run-input-mark');
+  expect(view).not.toContain('>輸入答案<');
+  expect(view).toContain('這是原本輸入的答案');
+});
+
+// 星號旁邊要有數字：只有一顆星看不出「審查有多確定」，而那正是要不要
+// 推翻自己作答的依據
+test('審查星號帶著信心度百分比', () => {
+  expect(view).toContain('q.review_confidence != null');
+  expect(view).toContain('{{ q.review_confidence }}%');
+});
+
+// 「需確認」＝審查有意見，或又選了上次已知大概率錯的那個答案。
+// 後者審查可能毫無異議（它跟上次一樣被騙），光看不一致抓不到。
+test('只有需確認的題目預設展開，投票後按鈕消失', () => {
+  expect(view).toContain(':open="needsCheck(q)"');
+  expect(view).toContain('isMismatch(q) || this.repeatsKnownWrong(q)');
   expect(view).toContain('v-if="!q.has_voted"');
   expect(view).toContain('q.has_voted = true');
 });
@@ -45,7 +69,7 @@ test('考試頁狀態不使用左側色條', () => {
 });
 
 test('題目列隱藏原生展開箭頭但仍保留 details 收合能力', () => {
-  expect(view).toContain('<details v-else :open="isMismatch(q)"');
+  expect(view).toContain('<details v-else :open="needsCheck(q)"');
   expect(css).toContain('.ui-next-exam-run-question > summary { padding: 13px 14px; cursor: pointer; list-style: none; }');
   expect(css).toContain('.ui-next-exam-run-question > summary::-webkit-details-marker { display: none; }');
 });
@@ -58,7 +82,23 @@ test('考試頁不顯示審查原因，但不影響 API 保存該值', () => {
 test('官方確認題是不可展開的鎖定區塊', () => {
   expect(view).toContain("v-if=\"q.review_source==='official'\"");
   expect(view).toContain('ui-next-exam-run-official');
-  expect(view).toContain('🔒');
+  // 圖示走側欄那套線條 SVG，不是 emoji：emoji 的字重與大小跟著系統走，
+  // 跟旁邊的圖示擺在一起像兩個時代的東西，缺字時還會變豆腐框
+  expect(view).toContain('<ui-next-icon name="lock"');
+  expect(view).not.toContain('🔒');
+});
+
+// 掃視時要能一眼跳過「不用看的題」——收合狀態下沒有這個標記就得一題題點開
+test('一致且有把握的題在題號前掛勾勾，判準與題庫頁同一套', () => {
+  expect(view).toContain('isSettled(q)');
+  expect(view).toContain('<ui-next-icon v-if="isSettled(q)" name="check"');
+  expect(view).toContain('q.review_confidence >= 70');
+});
+
+// 考題原文是英文，中譯只是輔助。看不到原文就無法確認翻譯有沒有把語意帶偏
+test('選項與題幹一樣中英對照', () => {
+  expect(view).toContain('ui-next-exam-run-opt-en');
+  expect(view).toContain('v-if="option.text_zh && option.text"');
 });
 
 test('更多工具只有一個認證入口，題庫改由考試頁右上進入', () => {
@@ -78,4 +118,18 @@ test('兩頁互動元件沿用平台的 focus-visible 與輸入框 focus 樣式'
   expect(css).toContain('.ui-next-exam-search:focus');
   expect(css).toContain('.ui-next-exam-run-option label:has(input:focus-visible)');
   expect(css).toContain('outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent)');
+});
+
+// 篩選要真的只留有問題的題目：原本只篩到「頁」，點進去整頁 12 題還是全部攤開，
+// 要自己在裡面找哪幾題有問題（2026-09-05 使用者回饋）
+test('只看需確認時，頁內也只留需確認的題目', () => {
+  expect(view).toContain("this.filter === 'check' ? g.questions.filter(q => this.needsCheck(q))");
+  expect(view).toContain("this.filter !== 'check' || g.questions.length");
+});
+
+// 照審查改完之後那題就該退出清單。比對 answer_their 的話清單永遠不會變短，
+// 等於沒有「處理完」這件事。
+test('一致與否比對的是最終答案，不是原始輸入', () => {
+  expect(view).toContain('!this.sameAnswer(this.current(q), q.review_answer)');
+  expect(view).toContain('q.answer_final) && q.answer_final.length) ? q.answer_final : q.answer_their');
 });

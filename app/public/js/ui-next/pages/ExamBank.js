@@ -5,10 +5,12 @@
   // 現在只有一個信心度、一個顏色、一句白話，其餘全部收進點開後的詳情。
   window.UiNextExamBankView = Vue.defineComponent({
     name: "UiNextExamBankView",
+    components: { UiNextIcon: window.UiNextIcon },
     data() {
       return {
         banks: [],
         bankId: null,
+        histSaving: false,
         groups: [],
         bank: null,
         loading: true,
@@ -89,7 +91,7 @@
       },
 
       // 展開後選項旁的圖示（沿用列表那一行的判準，兩處不會各說各話）
-      finalMark() { return this.detailState === 'official' ? '🔒' : '✓'; },
+      finalMark() { return this.detailState === 'official' ? 'lock' : 'check'; },
 
       // 展開中的那一題（列表資料，含 confidence）
       openItem() {
@@ -159,14 +161,27 @@
       // 這幾題也正是官方章節結果裡的「未作答」，校準時本來就排除在外。
       isUnanswered(it) { return !(it.answer_final && it.answer_final.length); },
 
+      async setHistoryWrong(item, wrong) {
+        this.histSaving = true;
+        try {
+          await Api.patch(`exam/items/${item.id}/history-wrong`, { wrong });
+          item.history_wrong = wrong;
+          showToast(wrong ? '已標記：上次答案大概率錯' : '已取消標記', 'success');
+        } catch (e) { showToast(e.message, 'error', 0); }
+        finally { this.histSaving = false; }
+      },
+
       // 列表那一行的標記。三種狀態對應「我該不該花時間看這題」，
       // 與展開後的 detailState 同一套判準：
-      //   🔒 官方確定  ✓ 審查沒異議且有把握  （空白）要看
+      //   lock 官方確定  check 審查沒異議且有把握  （空白）要看
       // refuted 由後端給（列表本身查不到 verdicts）。null＝還沒審查過。
+      //
+      // 回 icon 名而不是 emoji：emoji 的字重與大小跟著系統走，跟側欄那套線條圖示
+      // 擺在一起像兩個時代的東西，而且缺字時直接變成豆腐框。
       rowMark(it) {
         if (this.isUnanswered(it)) return '';
-        if (it.confidence === 100) return '🔒';
-        if (it.refuted === false && Number.isFinite(it.confidence) && it.confidence >= 70) return '✓';
+        if (it.confidence === 100) return 'lock';
+        if (it.refuted === false && Number.isFinite(it.confidence) && it.confidence >= 70) return 'check';
         return '';
       },
 
@@ -230,7 +245,7 @@
                 要注意 {{ totals.risky }}
               </button>
               <button :class="['ui-next-exam-chip', filter==='sure' && 'is-on']" @click="setFilter('sure')">
-                🔒 官方確定 {{ totals.sure }}
+                <ui-next-icon name="lock"/> 官方確定 {{ totals.sure }}
               </button>
             </div>
             <div class="ui-next-exam-lang">
@@ -258,7 +273,7 @@
                   <!-- 標記放在標題這一行而不是展開後的選項裡：不展開就要看得出
                        「這題要不要花時間看」，那正是這一頁存在的理由。 -->
                   <span :class="['ui-next-exam-conf', confClass(it.confidence, it)]">
-                    <span v-if="rowMark(it)" class="ui-next-exam-lock">{{ rowMark(it) }}</span>{{ confText(it) }}
+                    <ui-next-icon v-if="rowMark(it)" :name="rowMark(it)" class="ui-next-exam-lock"/>{{ confText(it) }}
                   </span>
                   <!-- 展開時這一行自己攤開成完整題幹，詳細區就不必再寫一次。
                        原本兩邊都印題幹，英文等於出現兩次。 -->
@@ -278,14 +293,23 @@
                          攤開了，這裡再印一次等於同一句話出現兩次。 -->
                     <div v-if="altText" class="ui-next-exam-qfull-zh">{{ altText }}</div>
 
+                    <!-- 「上次那個答案大概率錯」。系統推不出來（推得出來就有官方答案了），
+                         只能人看完證據自己判。勾了之後考試當下那個選項會標紅叉，
+                         提醒別再選一次。官方確認題不給勾——它的答案是硬事實。 -->
+                    <label v-if="detailState !== 'official'" class="ui-next-exam-histwrong">
+                      <input type="checkbox" :checked="!!detail.item.history_wrong"
+                             :disabled="histSaving" @change="setHistoryWrong(detail.item, $event.target.checked)" />
+                      上次的答案大概率錯（考試時標紅叉提醒）
+                    </label>
+
                     <div class="ui-next-exam-opts">
                       <div v-for="o in (detail.item.options || [])" :key="o.letter"
                            :class="['ui-next-exam-opt', isFinal(o.letter) && 'is-final']">
                         <!-- 字母與文字同一行，長了才自然換行（不是 flex 換行） -->
                         <div class="ui-next-exam-opt-en">
                           <b>{{ o.letter }}.</b> {{ o.text }}
-                          <span v-if="isFinal(o.letter) && detailState !== 'review'"
-                                class="ui-next-exam-mark">{{ finalMark }}</span>
+                          <ui-next-icon v-if="isFinal(o.letter) && detailState !== 'review'"
+                                :name="finalMark" class="ui-next-exam-mark"/>
                         </div>
                         <div v-if="o.text_zh" class="ui-next-exam-opt-zh">{{ o.text_zh }}</div>
                       </div>
