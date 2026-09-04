@@ -960,12 +960,6 @@ describe('provider / effort', () => {
     expect(L.loadAgent('chat').body).not.toContain('Skill(');
   });
 
-  test('workflow-health 還原 Claude 預設後保留 Claude Skill 契約', () => {
-    const agent = L.loadAgent('workflow-health');
-    expect(agent.provider).toBe('claude');
-    expect(agent.body).toContain('Skill(healthCheck)');
-  });
-
   test('provider 為 claude 時不接受 effort', () => {
     expect400(() => L.updateAgent(ELIGIBLE, { effort: 'high' }));
   });

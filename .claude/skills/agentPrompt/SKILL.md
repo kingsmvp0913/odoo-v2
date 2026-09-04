@@ -14,7 +14,7 @@ description: Use when editing pipeline agent prompts (.claude/agents/*.md), shar
 - 共用片段的 placeholder 一樣算數：`source-routing.md` 用 `{{repo_paths}}`/`{{main_branch}}`/`{{git_branch}}`；`cs-capability.md` 用 `{{project_name}}`/`{{repo_paths}}`。
 
 ## 鐵則 2：主輸出契約（`<result>` 標籤）
-- **有 `<result>` 契約**（下游用 `agent-result.js` 解析，格式各異——analysis 是 YAML、多數是 JSON）：analysis-project、analysis-reject、chat-to-task、coding-project、cs、library、merge-explain、qa、qa-retry、reject-classifier、respec-patch、spec-review、wiki-drift-classifier、workflow-health。
+- **有 `<result>` 契約**（下游用 `agent-result.js` 解析，格式各異——analysis 是 YAML、多數是 JSON）：analysis-project、analysis-reject、chat-to-task、coding-project、cs、feedback-triage、feedback-merge、fix-review、health-auditor、health-task、library、merge-explain、qa、qa-retry、reject-classifier、respec-patch、spec-review、wiki-drift-classifier。
 - **沒有、也不得擅自加上**：`merge`（吐裸檔案內容）、`playwright`（吐說明文字）、`chat`（自然語言回覆）、`deploy-fix`。加了 `<result>` 會破壞該關解析。
 - 改契約格式（欄位增減）必須同步改 JS 解析端與對應測試；只改措辭不用。
 
@@ -60,7 +60,7 @@ cd app && npm test          # 全套（改共用片段／契約時跑這個）
 pipeline 各關的行為測試都在 `app/server/tests/`；改哪個 agent 就找同名／相關 test 檔一併看。
 
 ## Common Mistakes
-- 在 workflow-health 的 `suggested_prompt` 之外的地方改 prompt 卻忘了它的規則同樣適用——所有改動（人工或 UI）都受鐵則 1／2 約束。
+- 在健檢提案的 `suggested_prompt` 之外的地方改 prompt 卻忘了它的規則同樣適用——所有改動（人工、UI、或夜間批次自動實作）都受鐵則 1／2 約束。
 - 幫 merge／playwright「補上」`<result>` 求一致 → 該關解析直接壞。
 - 改 `cs-capability.md` 只想著 cs，忘了 chat 也吃同一份。
 - 把共用規則同時注入首輪與 retry 關（`qa-retry`／`clarify-chat-retry`）→ retry 靠 `--resume` 繼承上一輪對話，
@@ -72,5 +72,5 @@ pipeline 各關的行為測試都在 `app/server/tests/`；改哪個 agent 就�
   **通常會讓渲染後的 prompt 變大**（片段是各份的聯集），收益是一致性不是省 token。
 - 以為「body 裡把 placeholder 搬到最後」就能救 prompt cache——**注入了含動態值片段（source-routing／
   spec-lookup／cs-capability）的 agent，前綴早在那一層就斷了**，body 內部怎麼排都無效。只有純 body
-  的關（workflow-health、health-summary、merge 系、library、分類器）搬動才有效益。
+  的關（health-auditor、health-task、merge 系、library、分類器）搬動才有效益。
 - 大改 coding-project 後奇怪任務全部 fresh 重跑——那是 promptVersion 換版的預期行為，不是 bug。

@@ -864,6 +864,10 @@ async function migrate() {
     // 30 天且額外做趨勢比對。刻意不叫 kind：findings 已有同名欄位（提案／訊號／診斷），混用會讓
     // 「這一輪是什麼節奏」與「這一條是什麼類型」在查詢與畫面上再也分不出來。
     { table: 'health_check_runs', col: 'cadence', sql: "ALTER TABLE health_check_runs ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'" },
+    // 失敗原因。原本只有 status='error'，為什麼掛的完全沒地方存——實測 run#19（2026-09-03 23:00
+    // 的自動健檢）就是這樣靜靜掛掉，隔天查不出原因。健檢管理頁收斂成「只看提案」之後，這件事更嚴重：
+    // 健檢掛掉時它一筆提案都不會產生，畫面上跟「今晚本來就沒事做」長得一模一樣。
+    { table: 'health_check_runs', col: 'error', sql: 'ALTER TABLE health_check_runs ADD COLUMN error TEXT' },
     // 維護視窗：夜間批次期間暫停同步與派工。⚠ 用「到期時間」不是布林——布林卡在 true 會讓
     // 派工從此安靜地停擺，而安靜的失敗最難發現（此 repo 踩過：夜班空轉 98 輪無人察覺）。
     { table: 'teams_settings', col: 'maintenance_until', sql: 'ALTER TABLE teams_settings ADD COLUMN maintenance_until TIMESTAMPTZ' },

@@ -216,18 +216,15 @@
             ⏱ 已核准的提案<strong>沒有人會先看過</strong>，健檢一跑完就會緊接著自動實作並合併，沒有事後可攔截的等待期。不想讓某一條跑，請立刻按「擋下這條」。
           </div>
 
-          <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
-
-          <div v-for="f in ofKind('summary')" :key="f.id"
-            style="border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
-            <div class="hc-finding-title-row">
-              <span style="font-weight:var(--fw-semibold)">本輪總結</span>
-              <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
-                {{ sev(f.severity).label }}
-              </span>
-            </div>
-            <div style="font-size:var(--fs-base);color:var(--text);white-space:pre-wrap">{{ f.diagnosis }}</div>
+          <!-- 健檢自己掛掉的話，它一筆提案都不會產生——畫面上跟「今晚本來就沒事做」長得一模一樣
+               （此 repo 踩過：夜班空轉 98 輪無人察覺）。這一頁收斂成只看提案之後，這是唯一分辨得
+               出來的地方，所以要顯著、要帶原因（health_check_runs.error）。 -->
+          <div v-if="run && run.status === 'error'" class="error-msg" style="margin-bottom:var(--space-3)">
+            ⚠ 這一輪健檢失敗，沒有產生任何提案。<span v-if="run.error">原因：{{ run.error }}</span>
+            <span v-else>（沒有記到原因——這輪是舊版留下的，新版失敗都會寫原因）</span>
           </div>
+
+          <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
 
           <div v-for="f in ofKind('proposal')" :key="f.id"
             style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
@@ -312,25 +309,29 @@
             </div>
           </div>
 
-          <div v-if="ofKind('signal').length" class="settings-section">
-            <h2 class="section-title">候選訊號（證據還不夠，累積中）</h2>
-            <div v-for="f in ofKind('signal')" :key="f.id" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px;white-space:pre-wrap">
+          <!-- 提案以外的輸出收進摺疊區。這一頁的用途已收斂成「管理提案」——提案才有決定要做
+               （核准／擋下／修這條），總結與候選訊號是唯讀的背景資料，攤平在同一頁會把 7 筆
+               要決定的東西埋在 90 幾筆不用決定的東西裡。收起來而不是刪掉：signal 是刻意保留的
+               「證據還不夠」收納桶，砍掉等於承諾了一個不存在的去處。
+               kind='agent'（逐關診斷）的區塊已整段移除——那條路徑（runHealthCheck）已退役，
+               最後一次實際執行是 2026-08-20，舊資料留在 DB 但不再顯示。 -->
+          <details v-if="ofKind('summary').length || ofKind('signal').length" class="settings-section">
+            <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--text-muted)">
+              本輪其他輸出（總結 {{ ofKind('summary').length }}、候選訊號 {{ ofKind('signal').length }}）
+            </summary>
+            <div v-for="f in ofKind('summary')" :key="f.id" style="margin-top:var(--space-3)">
+              <div class="hc-finding-title-row">
+                <span style="font-weight:var(--fw-semibold)">本輪總結</span>
+                <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
+                  {{ sev(f.severity).label }}
+                </span>
+              </div>
+              <div style="font-size:var(--fs-sm);color:var(--text);white-space:pre-wrap">{{ f.diagnosis }}</div>
+            </div>
+            <div v-for="f in ofKind('signal')" :key="f.id" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px;white-space:pre-wrap">
               ・{{ f.diagnosis }}<span v-if="f.evidence">（{{ f.evidence }}）</span>
             </div>
-          </div>
-
-          <div v-for="f in ofKind('agent')" :key="f.id"
-            style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
-            <div class="hc-finding-title-row">
-              <span style="font-family:monospace;font-weight:var(--fw-semibold)">{{ f.agent_label || f.agent_name }}</span>
-              <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
-                {{ sev(f.severity).label }}
-              </span>
-            </div>
-            <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px">{{ f.diagnosis }}</div>
-            <div v-if="f.rationale" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">理由：{{ f.rationale }}</div>
-            <button v-if="f.suggested_prompt" class="btn btn-outline btn-sm" @click="applyToEditor(f)">帶入編輯器 →</button>
-          </div>
+          </details>
 
           <div class="settings-section">
             <h2 class="section-title">歷史健檢</h2>
@@ -342,7 +343,13 @@
                     <td>{{ new Date(h.created_at).toLocaleString() }}</td>
                     <td>{{ scopeText(h) }}</td>
                     <td>{{ h.task_db_id ? '—' : h.window_days + ' 天' + cadenceText(h) }}</td>
-                    <td>{{ h.status }}</td>
+                    <!-- 失敗原因直接列在狀態旁：只寫 error 的話，要知道為什麼掛還得逐輪點進去，
+                         而失敗的那輪點進去也是空的（一筆 finding 都沒有）。 -->
+                    <td>
+                      {{ h.status }}
+                      <div v-if="h.status === 'error' && h.error"
+                        style="font-size:var(--fs-xs);color:var(--danger);white-space:pre-wrap">{{ h.error }}</div>
+                    </td>
                     <td>
                       <span v-if="histSev(h)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:histSev(h).color}">
                         {{ histSev(h).label }}

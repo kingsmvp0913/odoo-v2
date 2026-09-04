@@ -638,7 +638,7 @@ function registerRoutes(app) {
       // 會讓整份清單長年掛著紅字，真正該處理的那幾條反而淹沒其中。low 在明細裡照樣列得出來。
       const { rows } = await query(
         `SELECT r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
-                r.task_db_id, r.cadence, t.task_id, t.title,
+                r.task_db_id, r.cadence, r.error, t.task_id, t.title,
                 COUNT(f.id)::int AS findings_count,
                 MAX(CASE WHEN f.severity IS NULL THEN NULL   -- LEFT JOIN 落空＝這輪一則 finding 都沒有
                          WHEN f.severity='high' THEN 3 WHEN f.severity='medium' THEN 2
@@ -651,7 +651,7 @@ function registerRoutes(app) {
            LEFT JOIN health_check_findings f ON f.run_id = r.id
            LEFT JOIN tasks t ON t.id = r.task_db_id
           GROUP BY r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
-                   r.task_db_id, r.cadence, t.task_id, t.title
+                   r.task_db_id, r.cadence, r.error, t.task_id, t.title
           ORDER BY r.id DESC LIMIT 20`
       );
       res.json(rows);
