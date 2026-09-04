@@ -13,7 +13,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { ensureEvidenceCwd, normalizeEvidence, MCP_CONFIG } = require('./evidence');
+const { ensureEvidenceCwd, sourceDirs, normalizeEvidence, MCP_CONFIG } = require('./evidence');
 const { extractJson, normalizeConfidence, glossaryBlock, TRAPS, cleanAnswer } = require('./review');
 
 const TIMEOUT_MS = parseInt(process.env.EXAM_CHALLENGE_TIMEOUT_MS
@@ -37,14 +37,14 @@ const SYSTEM = `你是 Odoo 官方認證考題的挑戰者。工作目錄是一�
    不要為了完成任務而編造理由。
 2. 結論要有根據，而根據只認**沙箱內的原始碼行號**，不認你對 Odoo 的印象。
    你記得的可能是別的版本；眼前這份碼才是這次考的版本。
-3. 可讀範圍只有 src/（社群版）與 ent/（企業版）。**兩邊都要查**——認證考試大量
-   涵蓋企業版功能，只看 src/ 會把「在 ent/ 裡」誤判成「Odoo 沒有這個功能」。
-   沙箱外的檔案讀了也會被丟棄。
+3. 可讀範圍只有下面會告訴你的那兩個原始碼目錄（社群版與企業版）。**兩邊都要查**
+   ——認證考試大量涵蓋企業版功能，只看社群版會把「在企業版裡」誤判成
+   「Odoo 沒有這個功能」。其餘路徑讀了也會被丟棄。
 4. 沒有網路可用，也不要試。查不到就照實說查不到，不要用猜的填空。
 5. **動手前先讀工作目錄下的 challenge-guide.md**，那裡寫了這場考試的性質、
    社群版與企業版怎麼分、以及各種題型該去翻哪個檔案。`;
 
-function buildChallengePrompt({ questions, theirAnswers, glossary, odooVersion, imageName = null }) {
+function buildChallengePrompt({ questions, theirAnswers, glossary, odooVersion, imageName = null, dirs = [] }) {
   const rows = (questions || []).map((q, i) => ({
     no: q.no || i + 1,
     question: q.question,
@@ -55,11 +55,18 @@ function buildChallengePrompt({ questions, theirAnswers, glossary, odooVersion, 
     has_image: q.has_image === true,
   }));
 
+  const dirLines = (dirs || []).map(d =>
+    `- ${d.name === 'ent' ? '企業版' : '社群版'}：\`${d.path}\``).join('\n');
+
   return `這是 **Odoo ${odooVersion}** 官方認證考題，以及作答者選的答案。
 這些題在題庫裡**沒有**官方確認答案，所以要靠你判斷。
 
-沙箱裡的 \`src/\`（社群版）與 \`ent/\`（企業版）就是 Odoo ${odooVersion} 的原始碼——
+## 原始碼在這裡（就是 Odoo ${odooVersion} 這一版）
+
+${dirLines}
+
 查到什麼就是什麼，不要用「我記得某版是這樣」去覆蓋眼前的碼。
+**這些是絕對路徑，Glob 與 Grep 都要用完整路徑**，不要用相對路徑或代號。
 
 ${imageName ? `需要看圖的題（has_image 為 true）可以 Read ${imageName}。` : '這批題全部可由文字回答，沒有附圖。'}
 
@@ -74,10 +81,9 @@ ${TRAPS}
 同一頁的題目幾乎都在問同一個 Odoo 模組。**先把那個模組的目錄結構摸清楚一次**，
 後面每一題重用，不要每題從頭掃整個原始碼樹。
 
-定位模組時**社群版與企業版都要掃**：
+定位模組時**社群版與企業版都要掃**（用上面給的絕對路徑）：
 
-    Glob  src/addons/*<關鍵字>*/
-    Glob  ent/*<關鍵字>*/
+${(dirs || []).map(d => `    Glob  ${d.path}/${d.name === 'ent' ? '' : 'addons/'}*<關鍵字>*/`).join('\n')}
 
 企業版模組常是「社群版模組名 ＋ 後綴」（project_enterprise、account_accountant、
 sale_subscription），覆寫社群版行為。Documents／Sign／Helpdesk／Planning／
@@ -107,13 +113,13 @@ Appraisal／Studio 這些**只在 ent/**。
 
 - correct_answer：**選項字母**陣列。refuted=false 時填作答者的答案。
 - confidence：0-100 的**整數**，你對這個結論的把握。
-- ref：\`src/…:行號\` 或 \`ent/…:行號\`。沙箱外的路徑會被丟棄。
+- ref：上面那兩個目錄底下的**完整路徑＋行號**。其他路徑會被丟棄。
 - **不要重抄題幹、選項或翻譯**，上面已經給你了，我們用 no 對回去。`;
 }
 
 // 模型回的每題結果 → 判斷欄位 ＋ 已驗證的證據。
 // 證據沿用 evidence.js 的 normalizeEvidence，路徑驗證那道硬關卡完全一樣。
-function normalizeChallenge(raw, theirAnswers = [], source = null) {
+function normalizeChallenge(raw, theirAnswers = [], source = null, dirs = null) {
   const byNo = new Map((source || []).map((q, i) => [Number(q?.no) || i + 1, q]));
   const rows = Array.isArray(raw) ? raw : (Array.isArray(raw?.questions) ? raw.questions : []);
   const readable = (Array.isArray(raw) ? true : raw?.readable !== false);
@@ -125,7 +131,7 @@ function normalizeChallenge(raw, theirAnswers = [], source = null) {
     const src = byNo.get(no) || {};
     const { ok, bad } = cleanAnswer(q?.correct_answer);
     const idx = order.indexOf(no);
-    const ev = normalizeEvidence({ found: true, evidence: q?.evidence });
+    const ev = normalizeEvidence({ found: true, evidence: q?.evidence }, dirs);
     return {
       no,
       question: src.question || '',
@@ -148,8 +154,11 @@ function normalizeChallenge(raw, theirAnswers = [], source = null) {
 function challengePage({ questions, theirAnswers, glossary, odooVersion,
   imagePath = null, onProgress, model = MODEL }) {
   return new Promise((resolve, reject) => {
+    // 每次呼叫一個獨立目錄。併行 5 個 worker 共用一個沙箱時，一個在重建 symlink
+    // 的瞬間另一個會看到空目錄（實測 P4 因此失敗），而且兩頁的截圖會互相蓋掉。
     let cwd;
-    try { cwd = ensureEvidenceCwd(odooVersion); } catch (e) { return reject(e); }
+    try { cwd = ensureEvidenceCwd(odooVersion, { unique: true }); } catch (e) { return reject(e); }
+    const cleanup = () => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) { /* 清不掉就留著 */ } };
 
     // 需要看圖的題才把截圖複製進沙箱，而且只給檔名不給絕對路徑——prompt 裡出現
     // 絕對路徑等於告訴它 repo 在哪。
@@ -161,9 +170,17 @@ function challengePage({ questions, theirAnswers, glossary, odooVersion,
       catch { imageName = null; }
     }
 
+    // 原始碼靠 --add-dir 加進可讀範圍，**不能用 symlink**。
+    // 實測：sandbox 裡放 src -> odoo-core 的 symlink 之後，Glob 與 Grep 都回 0 筆
+    // ——兩個都不跟隨 symlink。結果是 7 頁裡只有 3 頁有證據，而那 3 頁是模型直接
+    // Read 猜對完整路徑碰運氣來的，ent/ 更是從頭到尾一筆都沒用到。
+    // 最糟的是失敗只發生在「比較誠實」的那幾頁：其餘頁靠印象答完，系統卻記成
+    // 「查過查不到」。
+    const dirs = sourceDirs(odooVersion);
     const args = [
       '-p', '--output-format', 'stream-json', '--verbose',
       '--dangerously-skip-permissions',
+      ...dirs.flatMap(d => ['--add-dir', d.path]),
       // 白名單不是限制（實測給 'Read' 它照樣跑 Bash），拒絕清單才是
       '--disallowed-tools', ...DISALLOWED,
       '--append-system-prompt', SYSTEM,
@@ -175,7 +192,7 @@ function challengePage({ questions, theirAnswers, glossary, odooVersion,
     child.stdin.on('error', () => {});
 
     let assistantText = '', lineBuffer = '', stderr = '', usage = null, settled = false;
-    const finish = fn => { if (!settled) { settled = true; clearTimeout(timer); fn(); } };
+    const finish = fn => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); fn(); } };
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 5000).unref();
@@ -203,7 +220,7 @@ function challengePage({ questions, theirAnswers, glossary, odooVersion,
     child.stderr.on('data', d => { stderr += d.toString(); });
 
     child.stdin.write(buildChallengePrompt({
-      questions, theirAnswers, glossary, odooVersion, imageName }));
+      questions, theirAnswers, glossary, odooVersion, imageName, dirs }));
     child.stdin.end();
 
     child.on('error', err => {
@@ -215,7 +232,7 @@ function challengePage({ questions, theirAnswers, glossary, odooVersion,
         if (code !== 0) return reject(new Error(stderr.trim() || `claude 結束於 exit code ${code}`));
         const raw = extractJson(assistantText);
         if (!raw) return reject(new Error(`挑戰輸出無法解析：${assistantText.slice(0, 200) || '(空輸出)'}`));
-        resolve({ verdict: normalizeChallenge(raw, theirAnswers, questions), usage, model });
+        resolve({ verdict: normalizeChallenge(raw, theirAnswers, questions, dirs), usage, model });
       });
     });
   });

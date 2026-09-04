@@ -45,7 +45,12 @@ window.UiNextExamRunView = Vue.defineComponent({
         if (!questions.has(a.upload_id)) questions.set(a.upload_id, []);
         questions.get(a.upload_id).push(a);
       }
-      return this.uploads.map(u => ({ ...u, questions: questions.get(u.id) || [] }));
+      // 依上傳順序由上而下（先傳的在上面）。考卷本來就是 P1、P2… 這樣走，
+      // 倒著排會讓人在畫面上逆著找題號。
+      // 在前端排而不是靠 API 的 ORDER BY：這樣不管後端回什麼順序都是對的。
+      return this.uploads
+        .map(u => ({ ...u, questions: questions.get(u.id) || [] }))
+        .sort((a, b) => a.id - b.id);
     },
     visibleGroups() {
       // 測試資料一律不顯示：統計本來就把它排除，讓它在清單出現只會讓兩個數字對不起來。

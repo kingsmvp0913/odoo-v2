@@ -39,6 +39,50 @@ const CORE_ROOT = process.env.ODOO_CORE_SRC_DIR
 const ENTERPRISE_ROOT = process.env.ODOO_ENTERPRISE_SRC_DIR
   || path.join(__dirname, '..', '..', '..', '..', 'enterprise');
 
+// 給 agent 查的原始碼放在 repo 外的暫存區。
+//
+// 為什麼要複製而不是直接指向 repo 內的目錄：--add-dir 的路徑會出現在 prompt 裡，
+// 而 repo 內的路徑等於告訴 agent 「這台機器的 repo 在 /home/.../odoo-v2」——
+// 它接著就能 Read data/exam/answer-key.json 把答案抄走。那正是這整套設計最想防的。
+// 換成 /tmp 底下的路徑，它看到的只是一棵沒有上下文的原始碼樹。
+const STAGE_ROOT = process.env.EXAM_SRC_STAGE_DIR || path.join(os.tmpdir(), 'odoo-exam-src');
+
+// 複製一次就重用（2.1 GB，每次呼叫都複製不可行）。以「來源目錄的 mtime」判斷
+// 要不要重做——原始碼解出來之後不會再變，所以幾乎永遠是命中。
+function stageSource(name, srcDir, version) {
+  const dest = path.join(STAGE_ROOT, String(version), name);
+  const stamp = path.join(dest, '.staged');
+  const want = String(fs.statSync(srcDir).mtimeMs);
+  try { if (fs.readFileSync(stamp, 'utf8') === want) return dest; } catch { /* 還沒建或壞了 */ }
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // dereference 一定要關：Odoo 原始碼裡有斷掉的 symlink（point_of_sale 的
+  // Inconsolata.otf 字型），解析它會讓整個複製 ENOENT 中斷。當成 symlink 原樣
+  // 複製就沒事——那些連結是樹內相對的，不影響 Glob/Grep 在真實目錄上的運作。
+  fs.cpSync(srcDir, dest, { recursive: true, dereference: false, force: true });
+  fs.writeFileSync(stamp, want);
+  return dest;
+}
+
+/**
+ * 這個版本有哪些原始碼樹可以查。回絕對路徑，交給 --add-dir。
+ *
+ * 不做成 symlink：實測 Glob 與 Grep 都不跟隨 symlink（沙箱裡放 src -> odoo-core
+ * 之後兩個工具都回 0 筆），agent 只能靠猜完整路徑去 Read，等於沒有查證能力。
+ */
+function sourceDirs(odooVersion) {
+  const out = [];
+  const core = path.resolve(CORE_ROOT, String(odooVersion));
+  if (!fs.existsSync(core)) {
+    throw new Error(`找不到 Odoo ${odooVersion} 原始碼（${core}）——先用 ensureOdooCoreSrc('${odooVersion}') 解出來`);
+  }
+  out.push({ name: 'src', path: stageSource('community', core, odooVersion) });
+  // 企業版是選配：沒有就只給社群版，不要因此讓整件事失敗
+  const ent = path.resolve(ENTERPRISE_ROOT, String(odooVersion));
+  if (fs.existsSync(ent)) out.push({ name: 'ent', path: stageSource('enterprise', ent, odooVersion) });
+  return out;
+}
+
 function linkTo(link, target) {
   let ok = false;
   try { ok = fs.readlinkSync(link) === target; } catch { ok = false; }
@@ -48,9 +92,21 @@ function linkTo(link, target) {
   }
 }
 
-// 為每個版本準備一個隔離的工作目錄。重複呼叫時重用，symlink 指向變了就重建。
-function ensureEvidenceCwd(odooVersion) {
-  const cwd = path.join(os.tmpdir(), `odoo-exam-evidence-${odooVersion}`);
+/**
+ * 準備一個掛好原始碼的工作目錄。
+ *
+ * @param unique 為 true 時每次呼叫給一個全新目錄。**併行時必須用這個。**
+ *
+ * 共用同一個目錄在併行下會爆兩種：
+ *   1. 一個 worker 在重建 symlink（unlink 再 symlink）的瞬間，另一個進去看到空的
+ *      ——實測 P4 直接失敗，訊息是「工作目錄下沒有 src/ 或 ent/」。
+ *   2. 兩頁同時把各自的截圖複製成 shot.jpg，其中一頁會讀到別頁的圖，
+ *      而且完全不會報錯——抄出來的題目是別頁的，事後從結果看不出來。
+ */
+function ensureEvidenceCwd(odooVersion, { unique = false } = {}) {
+  const cwd = unique
+    ? fs.mkdtempSync(path.join(os.tmpdir(), `odoo-exam-run-${odooVersion}-`))
+    : path.join(os.tmpdir(), `odoo-exam-evidence-${odooVersion}`);
   const link = path.join(cwd, 'src');
   const target = path.resolve(CORE_ROOT, String(odooVersion));
   if (!fs.existsSync(target)) {
@@ -199,23 +255,33 @@ ${blocks}
 //
 // 這一關是硬的。prompt 裡的「只能查 src/」是 soft instruction，模型不聽也不會怎樣；
 // 這裡不收就是不收，agent 亂跑也帶不回任何 repo 內的東西。
-function safeSourceRef(ref) {
+function safeSourceRef(ref, dirs = null) {
   const raw = String(ref || '').trim();
   if (!raw) return null;
   const [filePart, lineNo] = raw.split(/:(?=\d+$)/);
-  if (path.isAbsolute(filePart)) return null;
   const norm = path.posix.normalize(filePart.replace(/\\/g, '/'));
-  // 兩個合法根：src/（社群版）與 ent/（企業版）。
+
+  // 兩種寫法都收：
+  //   1. 暫存區的**絕對路徑**——agent 現在拿到的是 --add-dir 的真實目錄，
+  //      它自然會回那個形式。
+  //   2. `src/…`／`ent/…` 的相對寫法——舊 prompt 的格式，留著才不會因為
+  //      模型偶爾照舊寫而整批證據被丟掉。
   //
-  // **src/ 去前綴、ent/ 保留前綴**，看起來不對稱但這是刻意的：既有的 150 筆證據
-  // 存的都是去前綴的社群版路徑，全部改格式等於動到舊資料。所以「沒有前綴」
-  // 就繼續代表社群版（與既有資料一致），只有企業版才多一個 ent/ 標記出來。
-  const root = ['src/', 'ent/'].find(r => norm.startsWith(r));
-  if (!root) return null;
-  const inner = norm.slice(root.length);
+  // **存進 DB 的一律是去掉根之後的相對路徑，企業版多留 ent/ 前綴**。
+  // 既有 150 筆存的都是去前綴的社群版路徑，換格式等於動到舊資料；
+  // 所以「沒有前綴」繼續代表社群版，只有企業版才標出來。
+  const roots = [];
+  for (const d of (dirs || [])) {
+    roots.push({ prefix: `${path.posix.normalize(d.path)}/`, name: d.name });
+  }
+  roots.push({ prefix: 'src/', name: 'src' }, { prefix: 'ent/', name: 'ent' });
+
+  const hit = roots.find(r => norm.startsWith(r.prefix));
+  if (!hit) return null;
+  const inner = norm.slice(hit.prefix.length);
   // normalize 之後仍能往上跳＝一開始就跳出去了
   if (!inner || inner.startsWith('../') || inner.includes('/../')) return null;
-  const rel = root === 'ent/' ? `ent/${inner}` : inner;
+  const rel = hit.name === 'ent' ? `ent/${inner}` : inner;
   return lineNo ? `${rel}:${lineNo}` : rel;
 }
 
@@ -228,7 +294,7 @@ function trimExcerpt(s) {
   return t.length > MAX_EXCERPT ? `${t.slice(0, MAX_EXCERPT)}…（已截斷）` : (t || null);
 }
 
-function normalizeEvidence(raw) {
+function normalizeEvidence(raw, dirs = null) {
   const out = { found: false, evidence: [], rejected: [], supports: null, confidence: null, reason: '' };
   if (!raw || typeof raw !== 'object') return out;
 
@@ -245,7 +311,7 @@ function normalizeEvidence(raw) {
       if (e.ref) out.evidence.push({ kind: 'docs', ref: String(e.ref), excerpt: trimExcerpt(e.excerpt) });
       continue;
     }
-    const safe = safeSourceRef(e.ref);
+    const safe = safeSourceRef(e.ref, dirs);
     if (!safe) { out.rejected.push(String(e.ref || '(空)')); continue; }
     out.evidence.push({ kind: 'source', ref: safe, excerpt: trimExcerpt(e.excerpt) });
   }
@@ -384,5 +450,5 @@ async function gatherEvidenceBatch({ questions, odooVersion, onProgress, model =
 module.exports = {
   gatherEvidence, gatherEvidenceBatch, buildEvidencePrompt, buildBatchEvidencePrompt,
   normalizeEvidence, saveEvidence, needsEvidence, safeSourceRef, ensureEvidenceCwd,
-  EVIDENCE_THRESHOLD, MCP_CONFIG,
+  EVIDENCE_THRESHOLD, MCP_CONFIG, sourceDirs, STAGE_ROOT,
 };

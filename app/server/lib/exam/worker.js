@@ -26,6 +26,14 @@ const { parseAnswers, checkCount, alignAnswers } = require('./answers');
 // 5 是使用者權衡「考試當下等不起」之後訂的線，要再調用 EXAM_CONCURRENCY。
 const concurrency = () => Math.max(1, parseInt(process.env.EXAM_CONCURRENCY || '5', 10));
 
+// 空手的 worker 在結束前要再等幾輪。一次丟一整份考卷時那些 POST 是陸續落地的，
+// 立刻結束會讓併行退化成序列（實測 19 頁只有 1 個 worker 在跑）。
+// 6 輪 × 2 秒 = 12 秒，涵蓋得了一份考卷全部落地，也不會讓空佇列時的收工拖太久。
+// 執行期讀，不在模組載入時 snapshot（專案規則 122）——snapshot 的話改了設定要
+// 重啟才生效，測試也沒辦法把等待時間調短。
+const idleWaitMs = () => parseInt(process.env.EXAM_IDLE_WAIT_MS || '2000', 10);
+const idleRounds = () => parseInt(process.env.EXAM_IDLE_ROUNDS || '6', 10);
+
 const uploadRootOf = () => require('../attachments').uploadRoot();
 
 async function setJob(db, jobId, patch) {
@@ -253,6 +261,7 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
   };
 
   const nextOne = async () => {
+    let emptyRounds = 0;
     for (;;) {
       // 佇列空了先回頭查一次 DB，不要拿開頭那份快照當全部。
       //
@@ -260,9 +269,20 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
       // 幾十毫秒後才進 DB，這一批早就決定好只有第一頁，第二頁得等整批跑完才
       // 開新的一批——實測兩次 POST 相差 31ms，結果是兩個各只有 1 頁的 job，
       // 併行上限完全沒有機會生效。
+      //
+      // **查不到不能立刻結束，要等幾秒再查。** 一次丟 19 頁時那些 POST 是在幾百
+      // 毫秒內陸續落地的；worker 全部同時啟動，第 2~5 個當下查到空的就走人，
+      // 結果只剩一個在序列跑——實測 job 的 pages_total 是 2，併行上限 5 完全沒有
+      // 機會生效。等幾輪再走，晚到的頁才有人接。
       if (!queue.length) queue = await fetchPending();
+      if (!queue.length) {
+        if (++emptyRounds > idleRounds()) return;
+        await new Promise(r => setTimeout(r, idleWaitMs()));
+        continue;
+      }
+      emptyRounds = 0;
       const up = queue.shift();
-      if (!up) return;
+      if (!up) continue;
       if (!await claim(up)) continue;   // 被別的 worker 搶走了
       onEvent({ jobId: job.id, page: up.page, status: 'running' });
       try {

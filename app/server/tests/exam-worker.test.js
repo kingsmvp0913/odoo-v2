@@ -50,6 +50,10 @@ beforeAll(async () => {
   uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-worker-'));
   process.env.UPLOAD_DIR = uploadDir;
   process.env.EXAM_CONCURRENCY = '2';
+  // 正式環境是 6 輪 × 2 秒＝收工前最多等 12 秒；測試把它壓到毫秒級，
+  // 否則每支測試都會撞 jest 預設的 5 秒逾時。
+  process.env.EXAM_IDLE_WAIT_MS = '5';
+  process.env.EXAM_IDLE_ROUNDS = '2';
 
   const db = newDb();
   const { Pool } = db.adapters.createPg();
@@ -67,6 +71,8 @@ afterAll(() => {
   fs.rmSync(uploadDir, { recursive: true, force: true });
   delete process.env.UPLOAD_DIR;
   delete process.env.EXAM_CONCURRENCY;
+  delete process.env.EXAM_IDLE_WAIT_MS;
+  delete process.env.EXAM_IDLE_ROUNDS;
 });
 
 beforeEach(() => {
@@ -239,6 +245,31 @@ test('同一頁不會被兩個 worker 同時認領', async () => {
   mockExtract.mockReset();
 });
 
+// 一次丟一整份考卷時，那些 POST 是在幾百毫秒內陸續落地的。worker 全部同時啟動，
+// 開場撲空的那幾個若立刻結束，就只剩一個在序列跑——實測 19 頁的 job pages_total
+// 是 2，併行上限 5 完全沒有機會生效。
+test('開場查不到的 worker 要等一下，晚到的頁才有人接', async () => {
+  await addUpload('70', 'B', null);
+  mockExtract.mockImplementation(async () => {
+    await new Promise(r => setTimeout(r, 40));
+    return { page: pageOf([{ en: 'Late arrival question here' }]), model: 'm' };
+  });
+  mockChallenge.mockResolvedValue({
+    verdict: verdictOf([{ en: 'Late arrival question here' }]), model: 'm' });
+
+  // 第一頁開跑之後才進來的第二頁，要被同一批的閒置 worker 接走
+  const run = runQueue(dbModule, { bankId });
+  await new Promise(r => setTimeout(r, 30));
+  await addUpload('71', 'B', null);
+  const r = await run;
+
+  expect(r.total).toBe(2);
+  const left = await dbModule.query(
+    `SELECT COUNT(*)::int c FROM exam_uploads WHERE page IN ('70','71') AND status <> 'done'`);
+  expect(left.rows[0].c).toBe(0);
+  mockExtract.mockReset();
+});
+
 test('讀不出題目算失敗並寫下原因', async () => {
   await addUpload('9', 'B', null);
   mockExtract.mockResolvedValue({
@@ -299,6 +330,31 @@ test('證據路徑被丟棄時具名記在該頁的 note', async () => {
   await runQueue(dbModule, { bankId });
   const up = await dbModule.query(`SELECT error FROM exam_uploads WHERE page='15'`);
   expect(up.rows[0].error).toMatch(/證據路徑不合法/);
+});
+
+// 一次丟一整份考卷時，那些 POST 是在幾百毫秒內陸續落地的。worker 全部同時啟動，
+// 開場撲空的那幾個若立刻結束，就只剩一個在序列跑——實測 19 頁的 job pages_total
+// 是 2，併行上限 5 完全沒有機會生效。
+test('開場查不到的 worker 要等一下，晚到的頁才有人接', async () => {
+  await addUpload('70', 'B', null);
+  mockExtract.mockImplementation(async () => {
+    await new Promise(r => setTimeout(r, 40));
+    return { page: pageOf([{ en: 'Late arrival question here' }]), model: 'm' };
+  });
+  mockChallenge.mockResolvedValue({
+    verdict: verdictOf([{ en: 'Late arrival question here' }]), model: 'm' });
+
+  // 第一頁開跑之後才進來的第二頁，要被同一批的閒置 worker 接走
+  const run = runQueue(dbModule, { bankId });
+  await new Promise(r => setTimeout(r, 30));
+  await addUpload('71', 'B', null);
+  const r = await run;
+
+  expect(r.total).toBe(2);
+  const left = await dbModule.query(
+    `SELECT COUNT(*)::int c FROM exam_uploads WHERE page IN ('70','71') AND status <> 'done'`);
+  expect(left.rows[0].c).toBe(0);
+  mockExtract.mockReset();
 });
 
 test('讀不出題目算失敗並寫下原因', async () => {

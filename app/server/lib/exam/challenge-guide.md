@@ -21,51 +21,49 @@
 不是重新作答，是**挑戰**：找出作答者那個答案為什麼站不住腳。
 
 判準只有一個 —— **原始碼怎麼寫的**。不是你的印象、不是常識推論、不是文件記憶。
-沙箱裡就是這個版本的 Odoo 原始碼，答案在裡面。
+下面那兩個目錄就是這個版本的 Odoo 原始碼，答案在裡面。
 
 找不到反證就誠實說找不到（`refuted: false`）。編造出來的反證比不挑戰更糟：
 它會讓真正該看的題被淹沒在假警報裡。
 
-## 沙箱裡有什麼
+## 你有什麼可以查
+
+**兩個原始碼目錄的絕對路徑會寫在題目那一則訊息裡**，長這樣：
 
 ```
-src/   → Odoo 社群版（Community）原始碼
-         src/addons/    685 個社群版模組
-         src/odoo/      框架本體（ORM、fields、http…）
-ent/   → Odoo 企業版（Enterprise）模組，762 個。可能不存在，存在就一定要查
-challenge-guide.md  → 這份檔案
-shot.jpg            → 只有「需要看圖的題」才會出現
+- 社群版：/tmp/odoo-exam-src/<版本>/community     addons/ 685 個模組 ＋ odoo/ 框架本體
+- 企業版：/tmp/odoo-exam-src/<版本>/enterprise    762 個模組。可能沒有，有就一定要查
 ```
 
-**版本**：題目會告訴你是 Odoo 幾。`src/` 與 `ent/` 就是那個版本的碼，不是別版。
-所以查到什麼就是什麼，不要用「我記得某版是這樣」去覆蓋眼前的碼。
+**一律用完整的絕對路徑下 Glob 與 Grep。** 相對路徑、代號、`src/` 這種簡寫都查不到
+——實測 symlink 形式的 `src/` 讓 Glob 與 Grep 全部回 0 筆，等於整個查證能力歸零。
 
-沒有網路。沒有 Bash。讀不到沙箱以外的東西，硬讀回報上來也會被丟棄。
+**版本**：題目會告訴你是 Odoo 幾。那兩個目錄就是那個版本的碼，不是別版。
+查到什麼就是什麼，不要用「我記得某版是這樣」去覆蓋眼前的碼。
+
+工作目錄下另外有 `shot.jpg`（只有需要看圖的題才會出現）。
+
+沒有網路。沒有 Bash。那兩個目錄以外的路徑讀了也會被丟棄。
 
 ## 社群版還是企業版？先分清楚
 
-**認證考試大量涵蓋企業版功能。** 在 `src/` 找不到不代表 Odoo 沒有，
-很可能它在 `ent/`。兩邊都查過才能說「查不到」。
+**認證考試大量涵蓋企業版功能。** 在社群版找不到不代表 Odoo 沒有，
+很可能它在企業版那棵樹裡。兩邊都查過才能說「查不到」。
 
 | 功能 | 在哪 |
 | --- | --- |
-| 銷售、採購、庫存、會計基礎、專案、CRM、網站、POS | `src/addons/` |
-| 文件管理 Documents、電子簽章 Sign、客服 Helpdesk | `ent/` |
-| 排班 Planning、考核 Appraisal、外勤 Field Service | `ent/` |
-| 訂閱 Subscription、租賃 Rental、品質 Quality、維護 Maintenance | `ent/` |
-| 專案甘特圖／自動排程、會計進階（對帳、報表引擎） | `ent/` |
-| Studio（自訂欄位／畫面） | `ent/` |
+| 銷售、採購、庫存、會計基礎、專案、CRM、網站、POS | 社群版 `.../community/addons/` |
+| 文件管理 Documents、電子簽章 Sign、客服 Helpdesk | 企業版 `.../enterprise/` |
+| 排班 Planning、考核 Appraisal、外勤 Field Service | 企業版 |
+| 訂閱 Subscription、租賃 Rental、品質 Quality、維護 Maintenance | 企業版 |
+| 專案甘特圖／自動排程、會計進階（對帳、報表引擎） | 企業版 |
+| Studio（自訂欄位／畫面） | 企業版 |
 
 企業版模組常以「社群版模組名 ＋ 後綴」命名，覆寫社群版的行為：
 `project_enterprise`（甘特圖）、`web_enterprise`（後台介面）、
 `account_accountant`（完整會計）、`sale_subscription`。
 
-**所以查一個功能時，兩邊都要掃一次**：
-
-```
-Glob  src/addons/*project*/
-Glob  ent/*project*/
-```
+**所以查一個功能時，兩邊都要掃一次**（用訊息裡給的完整路徑）。
 
 ## 方法：怎麼在 Odoo 原始碼裡找
 
@@ -75,8 +73,9 @@ Glob  ent/*project*/
 線上商店 → `website_sale`、庫存 → `stock`、發票 → `account`、POS → `point_of_sale`。
 
 ```
-Glob  src/addons/*<關鍵字>*/    ent/*<關鍵字>*/
-Grep  -l "畫面上看到的英文字串" src/addons/<模組>/ ent/<模組>/
+Glob  <社群版路徑>/addons/*<關鍵字>*/
+Glob  <企業版路徑>/*<關鍵字>*/
+Grep  -l "畫面上看到的英文字串" <社群版路徑>/addons/<模組>/
 ```
 
 找不到模組名時，**用題目裡出現的英文字串反查**——欄位標籤、按鈕文字、選單名
@@ -95,11 +94,11 @@ Grep  -l "畫面上看到的英文字串" src/addons/<模組>/ ent/<模組>/
 | 畫面上的顏色、圖示、星星幾顆 | `static/src/**/*.js`、`*.xml`（owl 樣板） |
 | 預設排序、預設篩選 | model 的 `_order`，或 action 的 `context` |
 | 報表 | `report/*.xml` |
-| ORM 行為本身（`_compute`、`related`、`ondelete`） | `src/odoo/fields.py`、`src/odoo/models.py` |
+| ORM 行為本身（`_compute`、`related`、`ondelete`） | 社群版的 `odoo/fields.py`、`odoo/models.py` |
 
 ### 第三步，證據要指到「那一行」
 
-`ref` 寫 `src/…:行號` 或 `ent/…:行號`，指到真正決定行為的那幾行 ——
+`ref` 寫**完整路徑＋行號**，指到真正決定行為的那幾行 ——
 欄位定義、判斷式、domain 條件。不要指整個檔案，也不要貼整個函式。
 
 ## 三個實測栽過的陷阱
@@ -124,4 +123,4 @@ Grep  -l "畫面上看到的英文字串" src/addons/<模組>/ ent/<模組>/
 這三種 `evidence` 給空陣列，在 `reason` 說明為什麼查不到，
 然後純粹依你的判斷給一個**誠實偏低**的 confidence。
 
-**兩邊（`src/` 與 `ent/`）都掃過才能說查不到。**
+**社群版與企業版都掃過才能說查不到。**

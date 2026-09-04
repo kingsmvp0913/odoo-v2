@@ -213,3 +213,33 @@ describe('查證指引檔', () => {
     expect(p).toMatch(/每一題都要有一筆/);
   });
 });
+
+// 併行時 5 個 worker 共用一個沙箱會爆兩種：一個在重建 symlink 的瞬間另一個看到
+// 空目錄（實測 P4 失敗，訊息「工作目錄下沒有 src/ 或 ent/」），以及兩頁的截圖
+// 都叫 shot.jpg 互相蓋掉——後者不會報錯，抄出來的題目是別頁的。
+describe('併行沙箱', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+
+  test('unique 模式每次給不同目錄，各自掛好原始碼', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-'));
+    fs.mkdirSync(path.join(dir, '19'), { recursive: true });
+    const prev = process.env.ODOO_CORE_SRC_DIR;
+    process.env.ODOO_CORE_SRC_DIR = dir;
+    jest.resetModules();
+    const { ensureEvidenceCwd: fresh } = require('../lib/exam/evidence');
+
+    const a = fresh('19', { unique: true });
+    const b = fresh('19', { unique: true });
+    expect(a).not.toBe(b);
+    for (const d of [a, b]) {
+      expect(fs.existsSync(path.join(d, 'src'))).toBe(true);
+      expect(fs.existsSync(path.join(d, 'challenge-guide.md'))).toBe(true);
+    }
+    for (const d of [a, b]) fs.rmSync(d, { recursive: true, force: true });
+    if (prev === undefined) delete process.env.ODOO_CORE_SRC_DIR;
+    else process.env.ODOO_CORE_SRC_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

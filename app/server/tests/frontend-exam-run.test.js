@@ -154,3 +154,8 @@ test('即時更新走 SocketManager，不要自己摸 window._socket', () => {
   // 綁不到就每 300ms 重試的那個永不停止的計時器要一起拆掉
   expect(view).not.toContain('_sockTimer');
 });
+
+// 考卷本來就是 P1、P2… 這樣走，倒著排會讓人逆著找題號（2026-09-05 使用者回饋）
+test('頁面依上傳順序由上而下，先傳的在最上面', () => {
+  expect(view).toContain('.sort((a, b) => a.id - b.id)');
+});
