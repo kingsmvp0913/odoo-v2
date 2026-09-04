@@ -692,6 +692,28 @@ async function migrate() {
       hit_count    INTEGER NOT NULL DEFAULT 1,
       UNIQUE (odoo_version, term_en, term_zh)
     )`,
+
+    // 同事上傳的截圖，還沒被審查解析成題目。
+    //
+    // 為什麼需要獨立一張表而不是直接寫 exam_attempts：上傳的當下**還不知道題目是什麼**
+    // ——題幹與選項只存在於截圖裡，要跑過審查才抄得出來。而 exam_attempts.item_id 是
+    // NOT NULL（它連的是「哪一題」），在解析出題目之前根本填不了。
+    //
+    // 生命週期：上傳 → status='pending' → 審查跑完建好 item 與 attempt → 'done'。
+    // 失敗的留著標 'failed' 不刪，否則使用者不知道是哪一步壞的、也不知道還能重跑。
+    `CREATE TABLE IF NOT EXISTS exam_uploads (
+      id           SERIAL PRIMARY KEY,
+      bank_id      INTEGER NOT NULL REFERENCES exam_banks(id) ON DELETE CASCADE,
+      page         TEXT,
+      answer_raw   TEXT,                       -- 作答者原始輸入，如「第 1 題 B；第 2 題 A」
+      responder    TEXT,
+      image_path   TEXT NOT NULL,              -- 相對 UPLOAD_DIR，不存絕對路徑
+      status       TEXT NOT NULL DEFAULT 'pending',  -- pending | running | done | failed
+      error        TEXT,
+      is_test      BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
