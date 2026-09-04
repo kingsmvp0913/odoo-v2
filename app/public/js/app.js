@@ -208,6 +208,14 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 認證題庫只有 ui-next 版本，沒有 legacy 對應（舊版不再新增頁面）。
+      // legacy 模式下 index.html 不載入 ExamBank.js，這裡會是 undefined；
+      // 但入口只掛在 ui-next 的「更多工具」選單裡，legacy 使用者走不到這條路由。
+      path: "/exam-bank",
+      component: window.UiNextExamBankView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/admin",
       component: window.UiNextEnabled
         ? window.UiNextAdminView
