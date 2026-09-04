@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { sniffFile, isImageBuffer } = require('../attachments');
 
 // 圖片一律用檔頭（magic bytes）認格式，**不信 data URI 宣告的型別也不信長度**。
 //
@@ -11,22 +12,16 @@ const crypto = require('crypto');
 // 也能「解碼成功」變成幾個 bytes 的垃圾。只檢查長度的話那題會被收下、排進佇列、
 // 燒一次 token，最後才由 claude 回一個讀不出來的空答案——錯誤在離真因最遠的
 // 地方才浮現（原專案實測踩過）。
-const MAGIC = [
-  { ext: 'jpg', bytes: [0xff, 0xd8, 0xff] },
-  { ext: 'png', bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
-  { ext: 'gif', bytes: [0x47, 0x49, 0x46, 0x38] },
-  { ext: 'webp', bytes: [0x52, 0x49, 0x46, 0x46] },   // RIFF，第 8-11 byte 還要是 WEBP
-];
-
+//
+// 判定本身借用平台既有的 `attachments.js`（聊天圖片上傳已經在用同一套），
+// 不自己再寫一份 magic bytes 表——兩份遲早會分岔，而分岔的症狀是「同一張圖
+// 在聊天可以傳、在題庫被拒收」，沒人會想到去比對兩張表。
+// 回不帶點的副檔名（'jpg'）。sniffFile 回的是 '.jpg'，直接拿去組檔名會變成
+// `xxx..jpg`——這種錯不會報，只是檔名醜且日後用副檔名比對時對不上。
 function sniffImage(buf) {
-  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
-  for (const m of MAGIC) {
-    if (m.bytes.every((b, i) => buf[i] === b)) {
-      if (m.ext === 'webp' && buf.slice(8, 12).toString('ascii') !== 'WEBP') continue;
-      return m.ext;
-    }
-  }
-  return null;
+  if (!Buffer.isBuffer(buf) || !isImageBuffer(buf)) return null;
+  const { ext } = sniffFile(buf);
+  return ext ? ext.replace(/^\./, '') : null;
 }
 
 // base64 或 data URI 都吃。解不出合法圖片一律回 null，不要讓呼叫端自己判斷。
