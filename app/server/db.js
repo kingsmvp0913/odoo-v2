@@ -822,9 +822,11 @@ async function migrate() {
     // 之後的表現」。NULL＝舊的固定視窗（沿用 window_days），既有列行為不變。
     { table: 'health_check_runs', col: 'since_at', sql: 'ALTER TABLE health_check_runs ADD COLUMN since_at TIMESTAMPTZ' },
     // --- 提案化的 finding（見 health_check_findings 的 kind）---
-    // 處置狀態：pending 待處理 / no_change 不須調整 / done 處理完成。預設 pending。
+    // 處置狀態：pending 待處理 / approved 已核准（當晚自動實作）/ no_change 不須調整 / done 處理完成。
+    // 預設 approved（Phase 7 前是 pending，人工逐條核准；通道補齊守門後改為預設放行，見下方
+    // ALTER COLUMN SET DEFAULT ——這裡的字面值只對「欄位尚不存在」的全新資料庫生效）。
     // 沒有這個欄位時，健檢每輪都會把同一件事重講一次，而你上輪的裁決沒有任何地方記得住。
-    { table: 'health_check_findings', col: 'status',       sql: "ALTER TABLE health_check_findings ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'" },
+    { table: 'health_check_findings', col: 'status',       sql: "ALTER TABLE health_check_findings ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'" },
     { table: 'health_check_findings', col: 'verdict_note', sql: 'ALTER TABLE health_check_findings ADD COLUMN verdict_note TEXT' },
     { table: 'health_check_findings', col: 'decided_by',   sql: 'ALTER TABLE health_check_findings ADD COLUMN decided_by INTEGER' },
     { table: 'health_check_findings', col: 'decided_at',   sql: 'ALTER TABLE health_check_findings ADD COLUMN decided_at TIMESTAMPTZ' },
@@ -971,6 +973,15 @@ async function migrate() {
     `UPDATE tasks SET status='stopped',
        blocker_content = COALESCE(blocker_content, '流程改版，請人工重新確認')
      WHERE status IN ('final_pending','deploy_pending','deploy_fixing','deploy_ready')`
+  ).catch(() => {});
+
+  // 健檢提案改預設核准（Phase 7）：既有資料庫的欄位早在 colMigrations 的 ADD COLUMN 就建立過，
+  // 上面改的字面值 DEFAULT 'approved' 對它不生效（db-schema.md #40）——這裡明確 SET DEFAULT
+  // 補上「新產生的列」路徑；已存在的 pending 提案另外用一次性 UPDATE 轉正（只轉 kind='proposal'，
+  // agent／signal／summary／note 本來就不進修正通道，碰它們只會製造雜訊）。
+  await query("ALTER TABLE health_check_findings ALTER COLUMN status SET DEFAULT 'approved'").catch(() => {});
+  await query(
+    "UPDATE health_check_findings SET status='approved' WHERE status='pending' AND kind='proposal'"
   ).catch(() => {});
 
   // VPN 憑證上移專案層（同專案共用一條隧道）。獨立模組，見 lib/vpn-migrate.js 的註解。

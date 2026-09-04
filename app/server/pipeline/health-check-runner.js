@@ -91,9 +91,11 @@ async function aggregateSystemFinding(runId, windowDays) {
       `統計單位是「幾張不同任務卡在同一類原因」而非「幾個 agent 提到它」：同一張任務會走過多個關卡，` +
       `在每一關的 blocker 樣本裡各出現一次，用後者會把一件事誤算成多個獨立證據。`
   };
+  // kind 省略走 DEFAULT 'agent'（例行診斷，非提案）；status 明確帶 pending，不吃欄位 DEFAULT
+  // （已改成 approved 是為了 kind='proposal'，這裡混到會把跨關彙整誤標成「已核准待自動修」）。
   await query(
-    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6)`,
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, status)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,'pending')`,
     [runId, SYSTEM_AGENT, '跨關卡彙整', finding.diagnosis, finding.severity, finding.rationale]
   );
   return finding;
@@ -136,9 +138,10 @@ async function summarizeRun(runId, startedBy) {
   // 解析不過就不落：這是加值資訊，落一筆「總結失敗」的紅字只會擠掉真正該看的那幾則
   // （比照 aggregateSystemFinding 的「沒有達標的群就不落，不為報而報」）。
   if (!diagnosis || !SEVERITIES.has(severity)) return null;
+  // 同上：kind 走 DEFAULT 'agent'，status 明確 pending，不吃已改成 approved 的欄位 DEFAULT。
   await query(
-    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6)`,
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, status)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,'pending')`,
     [runId, SUMMARY_AGENT, '全域總結', diagnosis, severity, (ratBlock && ratBlock.trim()) || null]
   );
   return { severity, diagnosis };
@@ -155,9 +158,10 @@ async function recordSkipped(runId, agent, summary) {
     `分流階段未點名，未拉出提示詞深入診斷。近期指標：呼叫 ${t.calls || 0} 次、` +
     `每張任務平均 ${rc.avg != null ? rc.avg : '—'} 次、卡死率 ${tk.stopped_rate != null ? tk.stopped_rate : '—'}、` +
     `成本 $${t.cost_usd != null ? t.cost_usd : '—'}。`;
+  // 同上：kind 走 DEFAULT 'agent'，status 明確 pending。
   await query(
-    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-     VALUES ($1,$2,$3,$4,$5,NULL,NULL)`,
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, status)
+     VALUES ($1,$2,$3,$4,$5,NULL,NULL,'pending')`,
     [runId, agent.name, agent.label, diagnosis, severity]
   ).catch(err => console.error('[HEALTH-CHECK] skipped finding:', err.message));
 }
@@ -197,9 +201,10 @@ async function triageRun(runId, targets, windowDays, startedBy) {
 （超過深診上限 ${MAX_FOCUS}，未深診：${dropped.join('、')}）`.trim();
       console.warn(`[HEALTH-CHECK] focus 超過上限，未深診：${dropped.join(',')}`);
     }
+    // 同上：kind 走 DEFAULT 'agent'，status 明確 pending。
     await query(
-      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-       VALUES ($1,$2,$3,$4,$5,NULL,$6)`,
+      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, status)
+       VALUES ($1,$2,$3,$4,$5,NULL,$6,'pending')`,
       [runId, TRIAGE_AGENT, '健檢分流', diagnosis, severity, note]
     );
     return { focus, summaries };
@@ -337,9 +342,10 @@ async function checkOne(runId, agent, ha, windowDays, startedBy, preSummary = nu
     finding.severity = SEV_NO_SAMPLE;                       // 零樣本不記 ok（見 SEV_NO_SAMPLE）
   }
   try {
+    // 同上：kind 走 DEFAULT 'agent'，status 明確 pending。
     await query(
-      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending')`,
       [runId, agent.name, agent.label, finding.diagnosis, finding.severity, finding.suggested_prompt, finding.rationale]
     );
   } catch (err) {
@@ -354,14 +360,17 @@ async function checkOne(runId, agent, ha, windowDays, startedBy, preSummary = nu
 // 這個取捨；而依判準，單張任務的證據本來就不得產生提示詞改動（一張任務走過七關會在七處各出現
 // 一次，用次數算會把一件事誤算成七個獨立證據），深診那半段在這裡沒有出口。
 async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
+  // status 依 kind 明確帶值、不吃欄位 DEFAULT：kind='agent'（一般診斷）維持 pending；
+  // kind='proposal'（挖到平台 bug，見下方 layer==='platform' 分支）比照 runAudit 走 approved，
+  // 兩者是同一個「提案通道」概念，不該因為來源是單張任務診斷就少了自動核准。
   const insert =
-    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, kind, layer)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8)`;
+    `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, kind, layer, status)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9)`;
   try {
     const summary = await buildTaskSummary(taskDbId);
     // 任務不存在要落成看得見的失敗：run 停在 running 或空白收尾，畫面上跟「還在跑」長得一樣。
     if (!summary) {
-      await query(insert, [runId, TASK_AGENT, TASK_LABEL, `找不到任務（tasks.id=${taskDbId}）`, 'error', null, 'agent', null]);
+      await query(insert, [runId, TASK_AGENT, TASK_LABEL, `找不到任務（tasks.id=${taskDbId}）`, 'error', null, 'agent', null, 'pending']);
       await query("UPDATE health_check_runs SET status='error', finished_at=NOW() WHERE id=$1", [runId]);
       return;
     }
@@ -408,7 +417,8 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
     // 走獨立出口」。原本這裡一律落 kind='agent'，等於連那條出口一起堵死：任務健檢挖到平台 bug 也
     // 只能寫成一段字給人自己去改（task 184 的 QA 拿舊規格審查即是一例）。
     const kind = finding.layer === 'platform' ? 'proposal' : 'agent';
-    await query(insert, [runId, TASK_AGENT, TASK_LABEL, finding.diagnosis, finding.severity, finding.rationale, kind, finding.layer]);
+    const status = kind === 'proposal' ? 'approved' : 'pending';
+    await query(insert, [runId, TASK_AGENT, TASK_LABEL, finding.diagnosis, finding.severity, finding.rationale, kind, finding.layer, status]);
     await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
   } catch (err) {
     console.error('[HEALTH-CHECK] task:', err.message);
@@ -457,14 +467,18 @@ async function previousProposals(limit = 20) {
 }
 
 async function insertFinding(runId, row) {
+  // status 明確帶值、不依賴欄位 DEFAULT：DEFAULT 已改成 approved（Phase 7.1，讓 proposal 當晚
+  // 自動實作），但 signal（證據還不夠）／summary（總結敘述）／note（零樣本、解析失敗）都不是
+  // 「可核准、會被自動修」的條目，混著吃到 DEFAULT 會把它們也標成 approved 送進夜間批次。
+  const status = row.kind === 'proposal' ? 'approved' : 'pending';
   await query(
     `INSERT INTO health_check_findings
        (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
-        kind, layer, evidence, target_metric, metric_baseline, risk_if_wrong)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12)`,
+        kind, layer, evidence, target_metric, metric_baseline, risk_if_wrong, status)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [runId, AUDIT_AGENT, row.label || '系統健檢', row.diagnosis, row.severity, row.rationale || null,
      row.kind, row.layer || null, row.evidence || null, row.target_metric || null, row.metric_baseline || null,
-     row.risk_if_wrong || null]
+     row.risk_if_wrong || null, status]
   );
 }
 

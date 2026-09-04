@@ -643,7 +643,9 @@ const AUDIT_OK = {
   usage: { input_tokens: 1 }, durationMs: 10
 };
 
-test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／證據／指標，狀態預設待處理', async () => {
+// Phase 7.1：提案通道守門已補齊（DENY 四支＋基線比較＋fix-review），提案改成預設核准，
+// 當晚自動實作；候選訊號（kind=signal）證據不夠、本來就不進修正通道，不受這次改動影響。
+test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／證據／指標，狀態預設核准', async () => {
   mockRunClaude.mockResolvedValue(AUDIT_OK);
   const runId = await newAuditRun();
   await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
@@ -658,9 +660,12 @@ test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／
   expect(proposal.evidence).toContain('3 張不同任務');
   expect(proposal.target_metric).toBe('qa_rejections.impl_miss');
   expect(proposal.metric_baseline).toBe('15');
-  expect(proposal.status).toBe('pending');
-  // 候選訊號與提案分開存：證據不夠的不該長得像可以動手的
+  expect(proposal.status).toBe('approved');
+  // 候選訊號與提案分開存：證據不夠的不該長得像可以動手的，status 不能被欄位 DEFAULT
+  // （已改成 approved）連坐——summary／signal 都不是「可核准」的條目。
+  expect(rows[0].status).toBe('pending');   // summary
   expect(rows[2].kind).toBe('signal');
+  expect(rows[2].status).toBe('pending');   // signal
   const { rows: [run] } = await dbModule2.query('SELECT status FROM health_check_runs WHERE id=$1', [runId]);
   expect(run.status).toBe('done');
   expect(mockRunClaude).toHaveBeenCalledTimes(1);          // 一輪一次呼叫，不再逐關各跑一次

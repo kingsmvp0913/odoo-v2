@@ -98,12 +98,14 @@ test('POST 不帶 cadence／亂填 → 退回 daily 增量，不會靜默跑成�
 });
 
 // 處置狀態就是「跨輪記憶」：沒有它，健檢每輪把同一件事重講一次，而上輪的裁決無處可存。
+// 這支測的是「pending → no_change → done」的流轉路徑，故明確指定初始 status='pending'
+// （Phase 7 起新建列預設是 approved，見 db-migration.test.js 的一次性遷移測試）。
 test('PATCH finding 狀態：落狀態＋裁決理由；判「處理完成」才補成效回看的起算點', async () => {
   const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
   const { rows: [f] } = await dbModule.query(
-    `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind)
-     VALUES ($1,'__audit__','某條提案','medium','proposal') RETURNING id, status, applied_at`, [run.id]);
-  expect(f.status).toBe('pending');                     // 預設待處理
+    `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+     VALUES ($1,'__audit__','某條提案','medium','proposal','pending') RETURNING id, status, applied_at`, [run.id]);
+  expect(f.status).toBe('pending');
   expect(f.applied_at).toBeNull();
 
   const noChange = await request(app).patch('/api/admin/health-check/findings/' + f.id)
@@ -121,6 +123,19 @@ test('PATCH finding 狀態：落狀態＋裁決理由；判「處理完成」才
   const again = await request(app).patch('/api/admin/health-check/findings/' + f.id)
     .set('Authorization', `Bearer ${adminToken}`).send({ status: 'done', verdict_note: '補一句' });
   expect(again.body.applied_at).toBe(applied);
+});
+
+// approved 早在 Phase 7.2（Ruling C1）就加進白名單，這裡補一支直接測「PATCH 成 approved
+// 會成功」——前端 HC_STATUS 那顆按鈕按下去若被 400 擋掉，使用者完全無法核准提案。
+test('PATCH finding：狀態改成 approved 成功（前端核准鈕依賴的白名單值）', async () => {
+  const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+  const { rows: [f] } = await dbModule.query(
+    `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+     VALUES ($1,'__audit__','某條提案','medium','proposal','pending') RETURNING id`, [run.id]);
+  const res = await request(app).patch('/api/admin/health-check/findings/' + f.id)
+    .set('Authorization', `Bearer ${adminToken}`).send({ status: 'approved' });
+  expect(res.status).toBe(200);
+  expect(res.body.status).toBe('approved');
 });
 
 test('PATCH finding：狀態不合法回 400 / 非 admin 403 / 不存在回 404', async () => {
@@ -218,13 +233,13 @@ describe('GET /api/admin/health-check-schedule', () => {
   });
 });
 
-test('GET 排程總覽：僅 admin 可讀，包含臺灣時間 23:00 的健檢', async () => {
+test('GET 排程總覽：僅 admin 可讀，包含臺灣時間 22:00 的健檢', async () => {
   expect((await request(app).get('/api/admin/schedules')).status).toBe(401);
   expect((await request(app).get('/api/admin/schedules').set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
   const res = await request(app).get('/api/admin/schedules').set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
   expect(res.body).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: 'health-check', timing: expect.stringContaining('每日 23:00（臺灣時間）') }),
+    expect.objectContaining({ id: 'health-check', timing: expect.stringContaining('每日 22:00（臺灣時間）') }),
     expect.objectContaining({ id: 'cron-tick', timing: '每分鐘' })
   ]));
 });

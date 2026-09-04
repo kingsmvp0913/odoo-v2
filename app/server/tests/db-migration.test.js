@@ -367,3 +367,44 @@ describe('一次性遷移：odoo_settings 密碼欄位加密', () => {
     expect(decryptSettings(afterSecond).odoo_password).toBe('plain-pw');
   });
 });
+
+// 意圖：Phase 7 把健檢提案改成預設核准，通道守門已補齊（DENY 四支＋基線比較＋fix-review）。
+// 新建列要直接拿到 approved（見 ALTER COLUMN SET DEFAULT），既有卡在 pending 的提案要一次性
+// 轉正——但只轉 kind='proposal'：agent（例行診斷）／signal（證據不足的候選）本來就不進修正
+// 通道，一起轉會製造「畫面上多出一堆從沒被人看過的『已核准』」的雜訊。
+describe('一次性遷移：health_check_findings.status 改預設核准', () => {
+  test('新建列（未指定 status）預設拿到 approved', async () => {
+    const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+    const { rows: [f] } = await dbModule.query(
+      `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind)
+       VALUES ($1,'__audit__','新提案','medium','proposal') RETURNING status`, [run.id]);
+    expect(f.status).toBe('approved');
+  });
+
+  test('既有 pending 的 proposal 被一次性轉成 approved；agent／signal 的 pending 不受影響', async () => {
+    const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+    const insertPending = async (kind) => {
+      const { rows: [f] } = await dbModule.query(
+        `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+         VALUES ($1,'__audit__','舊資料',$2,$3,'pending') RETURNING id`,
+        [run.id, kind === 'proposal' ? 'medium' : 'ok', kind]
+      );
+      return f.id;
+    };
+    const proposalId = await insertPending('proposal');
+    const agentId = await insertPending('agent');
+    const signalId = await insertPending('signal');
+
+    await dbModule.migrate(); // 冪等，重跑會套用一次性遷移
+
+    // 不用 WHERE id = ANY($1)：pg-mem 對 SERIAL PK 的 int 陣列型別調解會查不到既有列
+    // （testing.md #12），逐筆查詢繞開這個限制。
+    const statusOf = async (id) => {
+      const { rows: [r] } = await dbModule.query('SELECT status FROM health_check_findings WHERE id = $1', [id]);
+      return r.status;
+    };
+    expect(await statusOf(proposalId)).toBe('approved');   // 只有 proposal 被轉正
+    expect(await statusOf(agentId)).toBe('pending');       // agent 不動
+    expect(await statusOf(signalId)).toBe('pending');      // signal 不動
+  });
+});
