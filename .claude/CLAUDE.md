@@ -19,6 +19,8 @@ When the user types `/platformDev`, invoke the Skill tool with `skill: "platform
 When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"` before doing anything else.
 - **healthCheck** (`.claude/skills/healthCheck/SKILL.md`) - 平台健檢判準：指標判讀、裁決的證據門檻、什麼才配列入修改、已知盲區。跑健檢、看健檢結果、或判斷某關要不要改 prompt 之前必讀。觸發：`/healthCheck`
 When the user types `/healthCheck`, invoke the Skill tool with `skill: "healthCheck"` before doing anything else.
+- **odooGlossary** (`.claude/skills/odooGlossary/SKILL.md`) - 查 Odoo 官方繁中術語表（25,015 條，抽自各版本 `zh_TW.po`）。決定欄位標籤／選單名／按鈕文字的中文怎麼寫時查它，別自己翻——自己翻的字對不上使用者實際看到的畫面。觸發：`/odooGlossary`
+When the user types `/odooGlossary`, invoke the Skill tool with `skill: "odooGlossary"` before doing anything else.
 <!-- /platform-only -->
 
 ## 0. Hard Rules
