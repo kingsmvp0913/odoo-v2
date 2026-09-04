@@ -57,6 +57,69 @@
           else if (it.confidence < 70) risky++;
         }
         return { n, sure, risky, pending };
+      },
+
+      // 官方確定的題只擺答案，不擺審查意見——答案已經是硬事實，再列出
+      // 「審查覺得應該選 X」只會製造「那要聽誰的」的疑慮。實測那 47 題
+      // 確定的題目上，審查自己還錯過 2 次。
+      isSure() {
+        const it = this.detail && this.detail.item;
+        return !!(it && it.answer_official && it.answer_official.length);
+      },
+
+      // 展開後只有三種狀態，對應三種「我該不該花時間看這題」：
+      //   official — 官方確定，不用看
+      //   agreed   — 審查沒異議且有把握，也不用看
+      //   review   — 有異議或沒把握，這才是要看的
+      //
+      // 把 agreed 併進「不用看」是刻意的：原本它會吐出「作答 A／審查推不翻，
+      // 但沒找證據／審查與作答一致，沒有異議」三行，三行在講同一件事，
+      // 而那件事就是「沒問題」。沒問題的題不需要三行字來說明它沒問題。
+      detailState() {
+        if (this.isSure) return 'official';
+        const it = this.openItem;
+        const conf = it && it.confidence;
+        // 門檻與列表的「要注意」同一條線（<70），兩邊的判準不該各說各話
+        if (!this.disagreeing.length && Number.isFinite(conf) && conf >= 70) return 'agreed';
+        return 'review';
+      },
+
+      // 正解選項旁的圖示。官方與審查用不同符號——都是「就是這個」，
+      // 但硬事實與模型意見不該長得一模一樣。
+      finalMark() { return this.detailState === 'official' ? '🔒' : '✓'; },
+
+      // 展開中的那一題（列表資料，含 confidence）
+      openItem() {
+        for (const g of this.groups) for (const it of g.items) if (it.id === this.openId) return it;
+        return null;
+      },
+
+      // 詳細區只顯示「列表那行沒顯示的那個語言」。跟著 EN／中 開關走，
+      // 兩邊各印一種，同一句話不會出現兩次。
+      altText() {
+        const it = this.detail && this.detail.item;
+        if (!it) return '';
+        return this.lang === 'zh' ? (it.question_en || '') : (it.question_zh || '');
+      },
+
+      // 各次考試的作答取最新一筆有填的。不逐筆列出——歷史本身不是要看的東西。
+      finalAnswer() {
+        const list = (this.detail && this.detail.attempts) || [];
+        for (let i = list.length - 1; i >= 0; i--) {
+          const a = list[i].answer_final || list[i].answer_their;
+          if (a && a.length) return a;
+        }
+        return null;
+      },
+
+      seenTimes() { return ((this.detail && this.detail.attempts) || []).length; },
+
+      // 只留「與作答不一樣」的審查。一致的沒有資訊量，列出來只是佔版面；
+      // 有異議的才是要花時間看的東西，而且要看得到理由。
+      // 舊的 blind_r1/blind_r2 一律不顯示——那是退役流程的歷史資料。
+      disagreeing() {
+        const vs = (this.detail && this.detail.verdicts) || [];
+        return vs.filter(v => v.kind === 'adversary' && v.refuted);
       }
     },
     methods: {
@@ -87,9 +150,9 @@
         if (c >= 50) return 'ui-next-exam-conf-low';
         return 'ui-next-exam-conf-bad';
       },
+      // 只回數字。鎖頭由 template 另一欄畫，混在一起會撐開固定寬度。
       confText(it) {
-        if (it.confidence == null) return '—';
-        return it.confidence === 100 ? '🔒100%' : `${it.confidence}%`;
+        return it.confidence == null ? '—' : `${it.confidence}%`;
       },
       qText(it) {
         const en = it.question_en || '';
@@ -105,7 +168,19 @@
         if (o.unanswered) bits.push(`未答 ${o.unanswered}`);
         return bits.join(' · ');
       },
-      answerOf(arr) { return Array.isArray(arr) && arr.length ? arr.join('、') : '—'; }
+      answerOf(arr) { return Array.isArray(arr) && arr.length ? arr.join('、') : '—'; },
+
+      // 官方確定的題把那個選項本身標出來（focus 樣式），比在別處寫一次
+      // 「答案是 B」更直接——眼睛不必在兩個地方之間對照。
+      isFinal(letter) {
+        const it = this.detail && this.detail.item;
+        const src = (it && it.answer_official) || this.finalAnswer;
+        return Array.isArray(src) && src.includes(letter);
+      },
+
+      evidenceOf(verdictId) {
+        return ((this.detail && this.detail.evidence) || []).filter(e => e.verdict_id === verdictId);
+      }
     },
     template: `
       <div class="topbar ui-next-admin-head">
@@ -156,8 +231,14 @@
             <div v-if="!collapsed[g.title]">
               <div v-for="it in g.items" :key="it.id">
                 <div class="ui-next-exam-row" @click="toggleItem(it)">
+                  <!-- 鎖頭獨立一欄：把它併進信心度欄的話，emoji 會把固定寬度撐開
+                       （flex item 的 min-width 預設是 auto），題幹的起點就跟著浮動。 -->
+                  <span class="ui-next-exam-lock">{{ it.confidence === 100 ? '🔒' : '' }}</span>
                   <span :class="['ui-next-exam-conf', confClass(it.confidence)]">{{ confText(it) }}</span>
-                  <span class="ui-next-exam-q" :title="it.confidence_why || ''">{{ qText(it) }}</span>
+                  <!-- 展開時這一行自己攤開成完整題幹，詳細區就不必再寫一次。
+                       原本兩邊都印題幹，英文等於出現兩次。 -->
+                  <span :class="['ui-next-exam-q', openId === it.id && 'is-open']"
+                        :title="it.confidence_why || ''">{{ qText(it) }}</span>
                   <span v-if="!it.calibrated && it.confidence != null && it.confidence !== 100"
                         class="ui-next-exam-uncal" title="還沒有官方章節結果可校準，這個數字只是估計">估</span>
                 </div>
@@ -165,40 +246,51 @@
                 <div v-if="openId === it.id" class="ui-next-exam-detail">
                   <div v-if="detailLoading" class="ui-next-exam-empty">載入中…</div>
                   <div v-else-if="detail">
-                    <div class="ui-next-exam-why">{{ it.confidence_why || '尚未審查' }}</div>
-                    <div class="ui-next-exam-qfull">{{ detail.item.question_en }}</div>
-                    <div v-if="detail.item.question_zh" class="ui-next-exam-qfull-zh">{{ detail.item.question_zh }}</div>
+                    <!-- 只放「上面那行沒顯示的那個語言」。題幹本身已經在列表那行
+                         攤開了，這裡再印一次等於同一句話出現兩次。 -->
+                    <div v-if="altText" class="ui-next-exam-qfull-zh">{{ altText }}</div>
+
                     <div class="ui-next-exam-opts">
-                      <div v-for="o in (detail.item.options || [])" :key="o.letter" class="ui-next-exam-opt">
-                        <b>{{ o.letter }}.</b>
-                        <span>{{ o.text }}</span>
-                        <span v-if="o.text_zh" class="ui-next-exam-opt-zh">{{ o.text_zh }}</span>
+                      <div v-for="o in (detail.item.options || [])" :key="o.letter"
+                           :class="['ui-next-exam-opt', isFinal(o.letter) && 'is-final']">
+                        <!-- 字母與文字同一行，長了才自然換行（不是 flex 換行） -->
+                        <div class="ui-next-exam-opt-en">
+                          <b>{{ o.letter }}.</b> {{ o.text }}
+                          <span v-if="isFinal(o.letter) && detailState !== 'review'"
+                                class="ui-next-exam-mark">{{ finalMark }}</span>
+                        </div>
+                        <div v-if="o.text_zh" class="ui-next-exam-opt-zh">{{ o.text_zh }}</div>
                       </div>
                     </div>
-                    <div class="ui-next-exam-facts">
-                      <span v-if="detail.item.answer_official">
-                        官方正解 <b>{{ answerOf(detail.item.answer_official) }}</b>
-                        <template v-if="detail.item.official_from === 'section-all-correct'">（該章官方全對推得）</template>
-                      </span>
-                      <span v-for="a in detail.attempts" :key="a.bank_label + a.page + a.no">
-                        {{ a.bank_label }} P{{ a.page }}-{{ a.no }} 作答 {{ answerOf(a.answer_final || a.answer_their) }}
-                      </span>
-                    </div>
-                    <div v-for="v in detail.verdicts" :key="v.id" class="ui-next-exam-verdict">
-                      <span class="ui-next-exam-vkind">{{ v.kind === 'adversary' ? '對立審查' : '舊盲判' }}</span>
-                      <span v-if="v.refuted" class="ui-next-exam-vrefute">認為應該選 {{ answerOf(v.correct_answer) }}</span>
-                      <span v-else class="ui-next-exam-vok">推不翻</span>
-                      <span class="ui-next-exam-vconf">自評 {{ v.confidence == null ? '—' : v.confidence }}</span>
-                      <div class="ui-next-exam-vreason">{{ v.reason }}</div>
-                      <div v-for="e in detail.evidence.filter(x => x.verdict_id === v.id)" :key="e.id"
-                           class="ui-next-exam-evidence">
-                        <code>{{ e.ref }}</code>
-                        <span v-if="e.excerpt" class="ui-next-exam-excerpt">{{ e.excerpt }}</span>
+
+                    <!-- 沒問題的題到選項為止，下方什麼都不放。
+                         正解已經標在選項上，再用三行字說明「它沒問題」是多餘的。 -->
+                    <template v-if="detailState === 'review'">
+                      <!-- 不列每一次歷史，只給一行總結。
+                           不寫「審查與作答一致」——confidence_why 已經把狀況說完了，
+                           再加一句是同一件事講兩次。 -->
+                      <div class="ui-next-exam-sum">
+                        <span>作答 <b>{{ answerOf(finalAnswer) }}</b></span>
+                        <span class="ui-next-exam-sum-conf">{{ it.confidence_why || '尚未審查' }}</span>
+                        <span v-if="seenTimes > 1" class="ui-next-exam-sum-seen">考過 {{ seenTimes }} 次</span>
                       </div>
-                    </div>
-                    <div v-if="it.confidence != null && it.confidence < 70" class="ui-next-exam-warn">
-                      值得重讀，但**不要**直接照審查的答案改——它在官方確定的題上也錯過。
-                    </div>
+
+                      <!-- 只列「與作答不一樣」的審查，因為那才是要看的東西 -->
+                      <div v-for="v in disagreeing" :key="v.id" class="ui-next-exam-verdict">
+                        <div class="ui-next-exam-vhead">
+                          <span class="ui-next-exam-vrefute">審查認為應該選 {{ answerOf(v.correct_answer) }}</span>
+                          <span class="ui-next-exam-vconf">自評 {{ v.confidence == null ? '—' : v.confidence }}</span>
+                        </div>
+                        <div class="ui-next-exam-vreason">{{ v.reason || '（沒有寫理由）' }}</div>
+                        <div v-for="e in evidenceOf(v.id)" :key="e.ref" class="ui-next-exam-evidence">
+                          <code>{{ e.ref }}</code>
+                          <span v-if="e.excerpt" class="ui-next-exam-excerpt">{{ e.excerpt }}</span>
+                        </div>
+                      </div>
+                      <div v-if="it.confidence != null && it.confidence < 70" class="ui-next-exam-warn">
+                        值得重讀，但不要直接照審查的答案改——它在官方確定的題上也錯過。
+                      </div>
+                    </template>
                   </div>
                 </div>
               </div>

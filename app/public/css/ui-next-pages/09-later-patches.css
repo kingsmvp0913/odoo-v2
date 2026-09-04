@@ -1288,13 +1288,24 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   cursor: pointer; border-bottom: 1px solid var(--border);
 }
 .ui-next-exam-row:hover { background: var(--surface); }
+/* 鎖頭與數字各佔固定一欄，題幹的起點才不會隨內容浮動。
+   兩欄都要 min-width:0——flex item 的 min-width 預設是 auto，內容比
+   flex-basis 寬時會把欄位撐開（emoji 在不同字型下寬度差很多）。 */
+.ui-next-exam-lock {
+  flex: 0 0 20px; min-width: 0; text-align: center;
+  font-size: var(--fs-sm); line-height: inherit;
+}
 .ui-next-exam-conf {
-  flex: 0 0 62px; text-align: right; font-size: var(--fs-sm);
+  flex: 0 0 46px; min-width: 0; text-align: right; font-size: var(--fs-sm);
   font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums;
 }
 .ui-next-exam-q {
   flex: 1 1 auto; min-width: 0; color: var(--text); font-size: var(--fs-sm);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 展開時攤開成完整題幹，詳細區就不必再印一次同一句話 */
+.ui-next-exam-q.is-open {
+  white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.5;
 }
 /* 未校準：沒有官方章節結果可對，數字只是估計。用虛線框而非另一種顏色，
    顏色已經被信心度用掉了，再加一種會回到「標籤太多」的老問題。 */
@@ -1345,6 +1356,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-opt.is-final { background: var(--surface); border-color: var(--success); }
 .ui-next-exam-opt.is-final .ui-next-exam-opt-en { font-weight: var(--fw-semibold); }
 .ui-next-exam-opt.is-final .ui-next-exam-opt-en b { color: var(--success); }
+/* 🔒 官方確定／✓ 審查沒異議。兩者都是「就是這個」，但硬事實與模型意見
+   不該長得一模一樣，所以用不同符號而不是同一個勾。 */
+.ui-next-exam-mark { margin-left: 6px; font-size: var(--fs-sm); }
 
 /* 一行總結取代逐筆歷史 */
 .ui-next-exam-sum {
