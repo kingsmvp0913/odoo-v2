@@ -22,11 +22,24 @@ const MCP_CONFIG = path.join(MCP_DIR, 'none.json');
 fs.mkdirSync(MCP_DIR, { recursive: true });
 if (!fs.existsSync(MCP_CONFIG)) fs.writeFileSync(MCP_CONFIG, '{"mcpServers":{}}');
 
-// 子行程的工作目錄必須在本專案之外：claude CLI 會載入 cwd 及每一層父目錄的
-// CLAUDE.md。不隔離的話平台的 CLAUDE.md 與 .claude/rules/always.md 整份進入
-// 審查 context。原專案實測：子行程一字不差引用了當時檔案裡的題號清單，整輪作廢。
-const REVIEW_CWD = path.join(os.tmpdir(), 'odoo-exam-review-cwd');
-fs.mkdirSync(REVIEW_CWD, { recursive: true });
+// 子行程的工作目錄必須在本專案之外，而且**截圖要複製進去、prompt 只給相對檔名**。
+//
+// 兩個不同的洩漏通道，兩個都要堵：
+//   1. claude CLI 會載入 cwd 及每一層父目錄的 CLAUDE.md。不隔離的話平台的
+//      CLAUDE.md 與 .claude/rules/always.md 整份進入審查 context。原專案實測：
+//      子行程一字不差引用了當時檔案裡的題號清單，整輪作廢。
+//   2. `--allowed-tools Read` **不限制 Read 的路徑**。prompt 裡若出現截圖的絕對
+//      路徑，agent 就知道 repo 在哪，可以直接 Read data/exam/answer-key.json 或
+//      questions.json 的 official 欄位——那正是這台機器最在意的失效模式。
+//      給相對檔名，它沒有任何線索指向 repo。
+//
+// 已知殘留風險：`--dangerously-skip-permissions` 是無人監督自動化的必要條件
+// （不加的話每次工具呼叫都停下來等人按同意），所以 Read 在檔案系統層面仍然
+// 不受限。要真正的隔離得把子行程放進容器或 chroot，那是另一個層級的工程。
+// 目前靠「不給線索」把風險降到可接受，不宣稱它是密不透風的。
+function makeRunCwd() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'odoo-exam-review-'));
+}
 
 const TRAPS = `下面三類是實測栽過的陷阱（30 題錯 4 題，全部落在這三類），審到類似題型要停一下：
    - **方向性直覺**：Customer Location 是售出商品的「目的地」，貨流**進**它，庫存為**正**；Vendor Location
@@ -53,14 +66,16 @@ ${list.map(g => `- ${g.en} → ${g.zh}`).join('\n')}
 `;
 }
 
-function buildPrompt({ imagePath, theirAnswers, glossary }) {
+// imageName 是**相對於子行程 cwd 的檔名**，不是絕對路徑。見上方 makeRunCwd 的說明：
+// 絕對路徑會告訴 agent repo 在哪，它就有辦法自己去讀官方答案。
+function buildPrompt({ imageName = 'shot.jpg', theirAnswers, glossary }) {
   const answerLines = (theirAnswers || [])
     .map((ls, i) => `第 ${i + 1} 題：${(ls || []).join('、') || '(未作答)'}`)
     .join('\n');
 
   return `你是 Odoo 19 認證題目的對立審查員。
 
-截圖路徑：${imagePath}
+截圖檔名：${imageName}（就在你的工作目錄下，直接用這個檔名讀）
 
 作答者在這一頁的答案：
 ${answerLines}
@@ -214,6 +229,17 @@ function checkGlossary(zhText, glossary) {
 
 function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MODEL }) {
   return new Promise((resolve, reject) => {
+    // 每次呼叫一個獨立的暫存目錄：截圖複製進去，agent 只看得到那一個檔案。
+    // 獨立目錄同時讓並行審查不會互相蓋掉截圖。
+    let runCwd;
+    try {
+      runCwd = makeRunCwd();
+      fs.copyFileSync(imagePath, path.join(runCwd, 'shot.jpg'));
+    } catch (e) {
+      return reject(new Error(`準備審查工作目錄失敗：${e.message}`));
+    }
+    const cleanup = () => { try { fs.rmSync(runCwd, { recursive: true, force: true }); } catch { /* 清不掉不影響結果 */ } };
+
     const args = [
       '-p', '--output-format', 'stream-json', '--verbose',
       '--dangerously-skip-permissions',
@@ -224,13 +250,14 @@ function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MOD
       '--model', model,
     ];
 
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: REVIEW_CWD });
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: runCwd });
     // 子行程提早死掉時對已關閉的 stdin 寫入會發 EPIPE；無 handler 會變 uncaughtException。
     child.stdin.on('error', () => {});
 
     let assistantText = '', lineBuffer = '', stderr = '', usage = null, settled = false;
 
-    const finish = fn => { if (!settled) { settled = true; clearTimeout(timer); fn(); } };
+    // 每條退出路徑都要清掉暫存目錄，否則 /tmp 會被截圖堆滿
+    const finish = fn => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); fn(); } };
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 5000).unref();
@@ -258,7 +285,7 @@ function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MOD
 
     child.stderr.on('data', d => { stderr += d.toString(); });
 
-    child.stdin.write(buildPrompt({ imagePath, theirAnswers, glossary }));
+    child.stdin.write(buildPrompt({ imageName: 'shot.jpg', theirAnswers, glossary }));
     child.stdin.end();
 
     child.on('error', err => {

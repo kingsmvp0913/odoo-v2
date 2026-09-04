@@ -121,6 +121,14 @@ describe('normalizeEvidence', () => {
     expect(normalizeEvidence(null).evidence).toEqual([]);
     expect(normalizeEvidence({ evidence: 'not an array' }).evidence).toEqual([]);
   });
+
+  // 沒有上限的話 agent 可以把任意檔案的內容整段塞進 excerpt，路徑檢查就白做了
+  test('過長的 excerpt 被截斷', () => {
+    const r = normalizeEvidence({ evidence: [
+      { kind: 'source', ref: 'src/addons/sale/models/sale_order.py:1', excerpt: 'x'.repeat(5000) }] });
+    expect(r.evidence[0].excerpt.length).toBeLessThan(700);
+    expect(r.evidence[0].excerpt).toMatch(/已截斷/);
+  });
 });
 
 describe('saveEvidence', () => {

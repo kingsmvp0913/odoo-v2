@@ -132,6 +132,15 @@ function safeSourceRef(ref) {
   return lineNo ? `${inner}:${lineNo}` : inner;
 }
 
+// excerpt 上限：證據是「哪個檔案第幾行」，不是貼整個函式。
+// 沒有上限的話 agent 可以把任意檔案的內容整段塞進 DB，路徑檢查就白做了。
+const MAX_EXCERPT = 600;
+
+function trimExcerpt(s) {
+  const t = String(s == null ? '' : s);
+  return t.length > MAX_EXCERPT ? `${t.slice(0, MAX_EXCERPT)}…（已截斷）` : (t || null);
+}
+
 function normalizeEvidence(raw) {
   const out = { found: false, evidence: [], rejected: [], supports: null, confidence: null, reason: '' };
   if (!raw || typeof raw !== 'object') return out;
@@ -146,12 +155,12 @@ function normalizeEvidence(raw) {
     if (!e || typeof e !== 'object') continue;
     if (e.kind === 'docs') {
       // 文件類不受路徑限制（它不是本機檔案，是 Context7 的 library id）
-      if (e.ref) out.evidence.push({ kind: 'docs', ref: String(e.ref), excerpt: e.excerpt || null });
+      if (e.ref) out.evidence.push({ kind: 'docs', ref: String(e.ref), excerpt: trimExcerpt(e.excerpt) });
       continue;
     }
     const safe = safeSourceRef(e.ref);
     if (!safe) { out.rejected.push(String(e.ref || '(空)')); continue; }
-    out.evidence.push({ kind: 'source', ref: safe, excerpt: e.excerpt || null });
+    out.evidence.push({ kind: 'source', ref: safe, excerpt: trimExcerpt(e.excerpt) });
   }
   return out;
 }

@@ -14,7 +14,7 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 describe('buildPrompt', () => {
-  const base = { imagePath: '/tmp/p.jpg', theirAnswers: [['B'], ['A'], ['A']] };
+  const base = { imageName: 'shot.jpg', theirAnswers: [['B'], ['A'], ['A']] };
 
   test('作答者的答案逐題進 prompt', () => {
     const p = buildPrompt(base);
@@ -62,6 +62,15 @@ describe('buildPrompt', () => {
     const p = buildPrompt(base);
     expect(p).not.toContain('answer-key');
     expect(p).not.toContain('official');
+  });
+
+  // --allowed-tools Read 不限制路徑。prompt 裡若出現截圖的絕對路徑，agent 就知道
+  // repo 在哪，可以自己去 Read data/exam/answer-key.json——那正是這台機器最在意的
+  // 失效模式。只給相對檔名，它沒有任何線索。
+  test('只給相對檔名，不洩漏 repo 的絕對路徑', () => {
+    const p = buildPrompt({ ...base, imageName: 'shot.jpg' });
+    expect(p).toContain('shot.jpg');
+    expect(p).not.toMatch(/\/home\/|C:\\|odoo-v2|data\/exam/);
   });
 });
 
