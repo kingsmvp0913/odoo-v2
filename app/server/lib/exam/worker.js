@@ -13,7 +13,7 @@
 //   3. **單筆失敗不中斷整批**。實測踩過：一頁逾時讓整個腳本 exit，前面跑完的
 //      結果留在 DB，從結果看不出少了一半。
 const path = require('path');
-const { reviewPage, saveVerdicts } = require('./review');
+const { extractPage, reviewQuestions, saveVerdicts } = require('./review');
 const { gatherEvidence, saveEvidence, needsEvidence } = require('./evidence');
 const { lookupTerms } = require('./glossary');
 const { fingerprint } = require('./fingerprint');
@@ -33,30 +33,28 @@ async function setJob(db, jobId, patch) {
     [jobId, ...vals]);
 }
 
-// 把一筆 upload 跑完：審查 → 建題目 → 建作答 → 建判斷 → 取證。
+// 把一筆 upload 跑完：抄題 → 查官方題庫 → 未命中才審查 → 建作答／判斷 → 取證。
 async function processUpload(db, { upload, bank, onProgress }) {
   const shot = path.join(uploadRootOf(), upload.image_path);
   const parsed = parseAnswers(upload.answer_raw);
 
-  // 術語表只塞得到「已知題目」用得到的字——這裡題目還沒抄出來，所以給空的，
-  // 改由 review.js 的 checkGlossary 事後比對標記。
-  const { verdict, model } = await reviewPage({
-    imagePath: shot, theirAnswers: parsed.answers, glossary: [], onProgress,
-  });
+  const { page } = await extractPage({ imagePath: shot, onProgress });
 
-  if (verdict.readable === false) {
-    throw new Error(`讀不出題目：${verdict.note || '(未說明)'}`);
+  if (page.readable === false) {
+    throw new Error(`讀不出題目：${page.note || '(未說明)'}`);
   }
-  const qs = verdict.questions || [];
+  const qs = page.questions || [];
   const count = checkCount(parsed, qs.length);
   const aligned = alignAnswers(parsed, qs.length);
 
   const notes = [];
   if (!count.ok) notes.push(count.note);
   if (parsed.note) notes.push(parsed.note);
+  if (page.note) notes.push(page.note);
 
-  // 逐題建立或合併 exam_items，再建 exam_attempts。
-  const madeItems = [];
+  // 先建 item／attempt，並把只有官方確認答案的命中題短路掉。
+  // 最後答案刻意留 NULL：輸入、官方／審查、投票、最後答案是四種不同事實。
+  const toReview = [];
   for (const [i, q] of qs.entries()) {
     let fp;
     try { fp = fingerprint(q.question); } catch { notes.push(`第 ${q.no} 題抄不出題幹，跳過`); continue; }
@@ -64,12 +62,17 @@ async function processUpload(db, { upload, bank, onProgress }) {
     // 先 SELECT 再分岔，不用 ON CONFLICT RETURNING——pg-mem 在真衝突時仍回一列，
     // 靠 rows.length 判斷會讓測試環境永遠走新增分支（見 import-bank.js 的同一段）。
     const hit = await db.query(
-      `SELECT id FROM exam_items WHERE odoo_version = $1 AND fingerprint = $2`,
+      `SELECT id, answer_official, official_from
+         FROM exam_items WHERE odoo_version = $1 AND fingerprint = $2`,
       [bank.odoo_version, fp]);
 
-    let itemId;
+    let itemId, officialAnswer = null;
     if (hit.rows.length) {
-      itemId = hit.rows[0].id;
+      const known = hit.rows[0];
+      itemId = known.id;
+      if (known.official_from && Array.isArray(known.answer_official) && known.answer_official.length) {
+        officialAnswer = known.answer_official;
+      }
       await db.query(
         `UPDATE exam_items SET seen_count = seen_count + 1, updated_at = NOW() WHERE id = $1`,
         [itemId]);
@@ -85,20 +88,42 @@ async function processUpload(db, { upload, bank, onProgress }) {
     }
 
     await db.query(
-      `INSERT INTO exam_attempts (item_id, bank_id, page, no, answer_their, answer_final, responder)
-       VALUES ($1,$2,$3,$4,$5,$5,$6)`,
-      [itemId, bank.id, String(upload.page), q.no,
+      `INSERT INTO exam_attempts
+         (item_id, bank_id, upload_id, page, no, answer_their, answer_final, responder)
+       VALUES ($1,$2,$3,$4,$5,$6,$6,$7)`,
+      [itemId, bank.id, upload.id, String(upload.page), q.no,
        aligned[i] && aligned[i].length ? aligned[i] : null, upload.responder || null]);
 
-    madeItems.push({ itemId, q });
+    if (!officialAnswer) {
+      toReview.push({ itemId, q, theirAnswer: aligned[i] || [] });
+    }
   }
 
-  // verdict 用 (bank_id, page, no) 對應，所以 attempts 必須先建好
-  const saved = await saveVerdicts(db, { bankId: bank.id, page: String(upload.page), verdict, model });
-  if (saved.unmatched.length) notes.push(`對不上的題號：${saved.unmatched.join('、')}`);
+  let reviewed = [];
+  if (toReview.length) {
+    const allText = toReview.map(x => [x.q.question, ...(x.q.options || []).map(o => o.text)].join(' ')).join('\n');
+    const glossary = await lookupTerms(db, bank.odoo_version, allText);
+    const { verdict, model } = await reviewQuestions({
+      questions: toReview.map(x => x.q),
+      theirAnswers: toReview.map(x => x.theirAnswer),
+      glossary,
+      imagePath: shot,
+      onProgress,
+    });
+    if (verdict.readable === false) throw new Error(`審查失敗：${verdict.note || '(未說明)'}`);
+    reviewed = verdict.questions || [];
+
+    // verdict 用 (bank_id, page, no) 對應，所以 attempts 必須先建好。
+    // 官方命中題不在 verdict 裡，因此不會產生假的 adversary 紀錄。
+    const saved = await saveVerdicts(db, { bankId: bank.id, page: String(upload.page), verdict, model });
+    if (saved.unmatched.length) notes.push(`對不上的題號：${saved.unmatched.join('、')}`);
+  }
 
   // 取證：信心 < 90 或被推翻的題
-  for (const { itemId, q } of madeItems) {
+  const itemByNo = new Map(toReview.map(x => [x.q.no, x.itemId]));
+  for (const q of reviewed) {
+    const itemId = itemByNo.get(q.no);
+    if (!itemId) continue;
     if (!needsEvidence({ confidence: q.confidence, refuted: q.refuted })) continue;
     try {
       const candidate = q.refuted ? q.correct_answer : q.their_answer;
@@ -114,7 +139,8 @@ async function processUpload(db, { upload, bank, onProgress }) {
     }
   }
 
-  return { questions: qs.length, note: notes.join('；') };
+  return { questions: qs.length, official: qs.length - toReview.length, reviewed: reviewed.length,
+    note: notes.join('；') };
 }
 
 // 重算整份題庫的信心度＋章節校準。純計算，每次跑完都重來。

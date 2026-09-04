@@ -4,6 +4,9 @@ const path = require('path');
 const request = require('supertest');
 const { newDb } = require('pg-mem');
 
+const mockRunQueue = jest.fn(async () => ({ jobId: null, total: 0, done: 0, failed: 0 }));
+jest.mock('../lib/exam/worker', () => ({ runQueue: (...args) => mockRunQueue(...args) }));
+
 process.env.JWT_SECRET = 'test-exam-upload';
 
 const TOKEN = 'let-me-in-1234';
@@ -126,6 +129,17 @@ describe('認證（直接測 middleware）', () => {
 });
 
 describe('批次上傳', () => {
+  beforeEach(() => mockRunQueue.mockClear());
+
+  test('POST 收下後自動啟動該題庫的 worker', async () => {
+    const res = await request(app).post('/api/exam/batch').send({
+      bank: '2026-09-04', items: [{ page: '9', answer: 'B', image: b64 }],
+    });
+    expect(res.status).toBe(200);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(mockRunQueue).toHaveBeenCalledWith(dbModule, expect.objectContaining({ bankId }));
+  });
+
   test('單筆壞掉不讓整批失敗，具名回報', async () => {
     const res = await request(app).post('/api/exam/batch').send({
       bank: '2026-09-04',
@@ -141,6 +155,10 @@ describe('批次上傳', () => {
     expect(res.body.rejected).toHaveLength(2);
     expect(res.body.rejected[0]).toMatchObject({ index: 1, page: '11' });
     expect(res.body.rejected[1].reason).toMatch(/圖片/);
+    const rows = await dbModule.query(
+      `SELECT batch_key FROM exam_uploads WHERE id=$1 OR id=$2 ORDER BY id`,
+      res.body.accepted.map(x => x.id));
+    expect(rows.rows.map(x => x.batch_key)).toEqual([res.body.batch, res.body.batch]);
   });
 
   test('找不到題庫回 400', async () => {
@@ -234,5 +252,84 @@ describe('觸發佇列', () => {
     expect(res.body.error).toMatch(/7 分鐘/);
     expect(res.body.error).toMatch(/3\/19/);
     await dbModule.query(`UPDATE exam_jobs SET status='done' WHERE status='running'`);
+  });
+});
+
+describe('考試結果、投票與最後答案', () => {
+  const auth = r => r.set('Authorization', `Bearer ${jwt}`);
+  let attemptId, openAttemptId;
+
+  beforeAll(async () => {
+    const item = await dbModule.query(
+      `INSERT INTO exam_items
+         (odoo_version,fingerprint,question_en,options,qtype,answer_official,official_from,confidence)
+       VALUES ('19','dashboard-official','Official dashboard question',$1,'single',$2,'manual',100)
+       RETURNING id`,
+      [JSON.stringify([{ letter: 'A', text: 'One' }, { letter: 'B', text: 'Two' }]), ['B']]);
+    const up = await dbModule.query(
+      `INSERT INTO exam_uploads (bank_id,batch_key,page,answer_raw,image_path,status)
+       VALUES ($1,'batch-dashboard','31','A','exam-test/x.jpg','done') RETURNING id`, [bankId]);
+    const attempt = await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,upload_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,$3,'31',1,$4,NULL) RETURNING id`,
+      [item.rows[0].id, bankId, up.rows[0].id, ['A']]);
+    attemptId = attempt.rows[0].id;
+    await dbModule.query(
+      `INSERT INTO exam_votes (attempt_id,voter_key,answer) VALUES
+       ($1,'official-v1',$2),($1,'official-v2',$3),($1,'official-v3',$2)`,
+      [attemptId, ['B'], ['A']]);
+
+    const openItem = await dbModule.query(
+      `INSERT INTO exam_items
+         (odoo_version,fingerprint,question_en,options,qtype,confidence)
+       VALUES ('19','dashboard-open','Open dashboard question',$1,'single',90)
+       RETURNING id`,
+      [JSON.stringify([{ letter: 'A', text: 'One' }, { letter: 'B', text: 'Two' }])]);
+    const openAttempt = await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,upload_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,$3,'31',2,$4,$4) RETURNING id`,
+      [openItem.rows[0].id, bankId, up.rows[0].id, ['A']]);
+    openAttemptId = openAttempt.rows[0].id;
+  });
+
+  test('工作台分開回傳輸入、官方審查、投票與可空白最後答案', async () => {
+    const res = await auth(request(app).get(`/api/exam/dashboard?bank=${bankId}`)).expect(200);
+    const row = res.body.attempts.find(x => x.attempt_id === attemptId);
+    expect(row).toMatchObject({
+      answer_their: ['A'], answer_final: null,
+      review_answer: ['B'], review_source: 'official', review_confidence: 100,
+      vote_total: 3, vote_options: { A: 1, B: 2 },
+    });
+  });
+
+  test('投票不顯示姓名，但同一平台使用者每題只能投一次', async () => {
+    await auth(request(app).post(`/api/exam/attempts/${openAttemptId}/vote`))
+      .send({ answer: 'A' }).expect(200);
+    await auth(request(app).post(`/api/exam/attempts/${openAttemptId}/vote`))
+      .send({ answer: 'B' }).expect(409);
+    const count = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_votes WHERE attempt_id=$1`, [openAttemptId]);
+    expect(count.rows[0].c).toBe(1);
+    const dashboard = await auth(request(app).get(`/api/exam/dashboard?bank=${bankId}`)).expect(200);
+    expect(dashboard.body.attempts.find(x => x.attempt_id === openAttemptId).has_voted).toBe(true);
+  });
+
+  test('最後答案可以填入，也可以清回 NULL', async () => {
+    let res = await auth(request(app).patch(`/api/exam/attempts/${openAttemptId}/final`))
+      .send({ answer: 'B' }).expect(200);
+    expect(res.body.answer).toEqual(['B']);
+    res = await auth(request(app).patch(`/api/exam/attempts/${openAttemptId}/final`))
+      .send({ answer: [] }).expect(200);
+    expect(res.body.answer).toBeNull();
+    const row = await dbModule.query(
+      `SELECT answer_final FROM exam_attempts WHERE id=$1`, [openAttemptId]);
+    expect(row.rows[0].answer_final).toBeNull();
+  });
+
+  test('官方確認題的投票與正式答案都由 server 鎖定', async () => {
+    await auth(request(app).post(`/api/exam/attempts/${attemptId}/vote`))
+      .send({ answer: 'A' }).expect(409);
+    await auth(request(app).patch(`/api/exam/attempts/${attemptId}/final`))
+      .send({ answer: [] }).expect(409);
   });
 });

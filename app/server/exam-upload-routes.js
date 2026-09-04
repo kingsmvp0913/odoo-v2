@@ -5,12 +5,13 @@
  * 平台帳號沒道理，所以走 X-Token（一組共用通行碼）。認證模型不同的東西混在
  * 同一個檔裡，遲早有人把 verifyToken 加到這幾支上、或把 X-Token 漏到別支去。
  *
- * 上傳只負責「收下並排隊」，不當場判題——判題要燒 token、跑好幾分鐘，綁在
- * HTTP 請求上兩邊都難用。落 exam_uploads 後回 {id}，實際執行由佇列處理。
+ * POST 收下後立刻在背景啟動佇列，但不 hold HTTP 等判題完成——判題要燒 token、
+ * 跑好幾分鐘。落 exam_uploads 後先回 queued，結果由考試工作台透過 DB＋socket 取得。
  */
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const crypto = require('crypto');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { uploadRoot } = require('./lib/attachments');
@@ -81,11 +82,13 @@ async function resolveBank(bankRef) {
   return rows[0] || null;
 }
 
-async function insertUpload({ bankId, page, answer, responder, imagePath, isTest }) {
+async function insertUpload({ bankId, batchKey, batchLabel, page, answer, responder, imagePath, isTest }) {
   const { rows } = await query(
-    `INSERT INTO exam_uploads (bank_id, page, answer_raw, responder, image_path, is_test)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [bankId, String(page), answer, responder || null, imagePath, !!isTest]
+    `INSERT INTO exam_uploads
+       (bank_id, batch_key, batch_label, page, answer_raw, responder, image_path, is_test)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [bankId, batchKey || null, batchLabel || null, String(page), answer,
+     responder || null, imagePath, !!isTest]
   );
   return rows[0].id;
 }
@@ -93,6 +96,49 @@ async function insertUpload({ bankId, page, answer, responder, imagePath, isTest
 // '1' / 'true' / 'yes' / 'on' 為測試資料，其餘與未帶一律正式。
 // 統計數字若把測試混進去，「不一致 N 筆」這個唯一要看的數字就沒用了。
 const asTest = v => ['1', 'true', 'yes', 'on'].includes(String(v ?? '').toLowerCase());
+
+// 同一題庫只留一支 drain。POST 發生在既有 job 執行期間時，該 job 的 snapshot 不會
+// 吃到新列，所以跑完後必須再看一次 pending，直到真正清空為止。
+const scheduled = new Map();
+function scheduleQueue(bankId) {
+  const active = scheduled.get(bankId);
+  if (active) {
+    // runQueue 只處理呼叫當下的 pending snapshot；記下執行期間又有 POST 進來，
+    // 讓現有 drain 跑完後再掃一次。這個旗標不需查 DB，也不會在 Jest teardown
+    // 後留下背景 query。
+    active.dirty = true;
+    return active.task;
+  }
+  const state = { dirty: false, task: null };
+  state.task = (async () => {
+    do {
+      state.dirty = false;
+      await runQueue(require('./db'), {
+        bankId,
+        onEvent: (e) => { try { emitAll('exam-progress', e); } catch (_) { /* DB 才是真相 */ } },
+      });
+    } while (state.dirty);
+  })().catch(e => console.error('[EXAM-WORKER]', e.message)).finally(() => {
+    scheduled.delete(bankId);
+  });
+  scheduled.set(bankId, state);
+  return state.task;
+}
+
+function answerValue(value, { required = false } = {}) {
+  if (value == null || value === '') {
+    if (required) throw new Error('答案不可空白');
+    return null;
+  }
+  const raw = Array.isArray(value) ? value : String(value).split(/[,，、\s]+/);
+  const out = [...new Set(raw.map(x => String(x).trim().toUpperCase()).filter(Boolean))];
+  if (!out.length) {
+    if (required) throw new Error('答案不可空白');
+    return null;
+  }
+  if (out.some(x => !/^[A-Z]$/.test(x))) throw new Error('答案只能是選項字母');
+  return out;
+}
 
 function registerRoutes(app) {
   // 單筆上傳（multipart）。checkExamToken 在 shotUpload 之前——順序是安全的一部分。
@@ -115,10 +161,12 @@ function registerRoutes(app) {
 
       const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf: req.file.buffer, ext });
       const id = await insertUpload({
-        bankId: bank.id, page, answer, responder: req.body.name,
+        bankId: bank.id, batchKey: req.body.batch, batchLabel: req.body.label,
+        page, answer, responder: req.body.name,
         imagePath, isTest: asTest(req.body.test),
       });
-      res.json({ id, bank: bank.label, page });
+      res.json({ id, bank: bank.label, page, status: 'queued' });
+      scheduleQueue(bank.id);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -142,6 +190,8 @@ function registerRoutes(app) {
       // 單筆壞掉不讓整批失敗：好的收下，壞的具名回報。同事一次丟 20 題，
       // 不該因為第 13 題漏填答案就得整批重送、重燒一次 token。
       const accepted = [], rejected = [];
+      const batchKey = String(req.body.batch || crypto.randomUUID());
+      const batchLabel = String(req.body.label || '').trim() || null;
       for (const [i, it] of items.entries()) {
         const bad = validateItem(it, i);
         if (bad) { rejected.push(bad); continue; }
@@ -149,13 +199,14 @@ function registerRoutes(app) {
         const ext = sniffImage(buf);
         const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf, ext });
         const id = await insertUpload({
-          bankId: bank.id, page: it.page, answer: it.answer,
+          bankId: bank.id, batchKey, batchLabel, page: it.page, answer: it.answer,
           responder: it.name || req.body.name, imagePath,
           isTest: asTest(it.test ?? req.body.test),
         });
         accepted.push({ id, page: String(it.page) });
       }
-      res.json({ bank: bank.label, accepted, rejected });
+      res.json({ bank: bank.label, batch: batchKey, accepted, rejected, status: 'queued' });
+      if (accepted.length) scheduleQueue(bank.id);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -193,10 +244,7 @@ function registerRoutes(app) {
     //
     // 廣播走平台既有的 notify.emitAll，不自己接 io：socket 實例只在 index.js
     // 的 listen 之後才有，模組層拿不到，而 notify.js 已經處理好那個時序。
-    runQueue(require('./db'), {
-      bankId,
-      onEvent: (e) => { try { emitAll('exam-progress', e); } catch (_) { /* 廣播失敗不影響工作 */ } },
-    }).catch((e) => console.error('[EXAM-WORKER]', e.message));
+    scheduleQueue(bankId);
   });
 
   // 工作歷程。進度的真相在這裡，socket 廣播只是讓開著頁面的人即時看到——
@@ -218,12 +266,116 @@ function registerRoutes(app) {
     const params = [], where = [];
     if (Number.isInteger(bankId)) { params.push(bankId); where.push(`bank_id = $${params.length}`); }
     const { rows } = await query(`
-      SELECT id, bank_id, page, responder, status, error, is_test, created_at, updated_at
+      SELECT id, bank_id, batch_key, batch_label, page, responder, status, error,
+             is_test, created_at, updated_at
         FROM exam_uploads
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY id DESC LIMIT 200`, params);
     res.json(rows);
   });
+
+  // 考試工作台一次取得上傳與逐題結果。官方答案優先；沒有官方答案才使用最新 adversary。
+  app.get('/api/exam/dashboard', verifyToken, async (req, res) => {
+    const bankId = parseInt(req.query.bank, 10);
+    if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
+    const bank = (await query(
+      `SELECT id, label, odoo_version FROM exam_banks WHERE id=$1`, [bankId])).rows[0];
+    if (!bank) return res.status(404).json({ error: '找不到題庫' });
+
+    const uploads = (await query(`
+      SELECT id, batch_key, batch_label, page, responder, status, error, is_test, created_at, updated_at
+        FROM exam_uploads WHERE bank_id=$1 ORDER BY id DESC`, [bankId])).rows;
+    const attempts = (await query(`
+      SELECT a.id AS attempt_id, a.upload_id, a.page, a.no, a.answer_their, a.answer_final,
+             a.responder, a.created_at, i.id AS item_id, i.question_en, i.question_zh,
+             i.options, i.qtype, i.answer_official, i.official_from
+        FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id
+       WHERE a.bank_id=$1 ORDER BY a.id`, [bankId])).rows;
+
+    const verdicts = attempts.length ? (await query(`
+      SELECT id, attempt_id, correct_answer, confidence, reason
+        FROM exam_verdicts
+       WHERE attempt_id = ANY($1::int[]) AND kind='adversary' ORDER BY id`,
+      [attempts.map(a => a.attempt_id)])).rows : [];
+    const latest = new Map();
+    for (const v of verdicts) latest.set(v.attempt_id, v);
+
+    const votes = attempts.length ? (await query(`
+      SELECT attempt_id, voter_key, answer FROM exam_votes
+       WHERE attempt_id = ANY($1::int[]) ORDER BY id`,
+      [attempts.map(a => a.attempt_id)])).rows : [];
+    const byAttempt = new Map();
+    for (const v of votes) {
+      if (!byAttempt.has(v.attempt_id)) byAttempt.set(v.attempt_id, []);
+      byAttempt.get(v.attempt_id).push(v);
+    }
+    for (const a of attempts) {
+      if (typeof a.options === 'string') {
+        try { a.options = JSON.parse(a.options); } catch { a.options = []; }
+      }
+      const official = a.official_from && Array.isArray(a.answer_official) && a.answer_official.length;
+      const verdict = latest.get(a.attempt_id) || null;
+      a.review_answer = official ? a.answer_official : (verdict && verdict.correct_answer);
+      a.review_source = official ? 'official' : (verdict ? 'review' : null);
+      a.review_confidence = official ? 100 : (verdict && verdict.confidence);
+      a.review_reason = official ? '官方確認正確' : (verdict && verdict.reason);
+
+      const rows = byAttempt.get(a.attempt_id) || [];
+      const counts = {};
+      for (const row of rows) for (const letter of (row.answer || [])) counts[letter] = (counts[letter] || 0) + 1;
+      a.vote_total = rows.length;
+      a.vote_options = counts;
+      a.has_voted = rows.some(row => row.voter_key === `user:${req.userId}`);
+      delete a.answer_official;
+      delete a.official_from;
+    }
+    res.json({ bank, uploads, attempts });
+  });
+
+  app.post('/api/exam/attempts/:id/vote', verifyToken, express.json(), async (req, res) => {
+    try {
+      const attemptId = parseInt(req.params.id, 10);
+      if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });
+      const answer = answerValue(req.body.answer, { required: true });
+      const attempt = (await query(
+        `SELECT i.official_from, i.answer_official
+           FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id WHERE a.id=$1`,
+        [attemptId])).rows[0];
+      if (!attempt) return res.status(404).json({ error: '找不到這題' });
+      if (attempt.official_from && attempt.answer_official && attempt.answer_official.length) {
+        return res.status(409).json({ error: '官方確認題已鎖定' });
+      }
+      const voterKey = `user:${req.userId}`;
+      const voted = (await query(
+        `SELECT 1 FROM exam_votes WHERE attempt_id=$1 AND voter_key=$2`, [attemptId, voterKey])).rows.length;
+      if (voted) return res.status(409).json({ error: '這題已經投過票' });
+      // 畫面不公開姓名，但以平台 user id 保證同一人、同一題只能投一次。
+      await query(`INSERT INTO exam_votes (attempt_id,voter_key,answer) VALUES ($1,$2,$3)`,
+        [attemptId, voterKey, answer]);
+      emitAll('exam-progress', { attemptId, status: 'vote' });
+      res.json({ ok: true, answer });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  app.patch('/api/exam/attempts/:id/final', verifyToken, express.json(), async (req, res) => {
+    try {
+      const attemptId = parseInt(req.params.id, 10);
+      if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });
+      const answer = answerValue(req.body.answer);
+      const attempt = (await query(
+        `SELECT i.official_from, i.answer_official
+           FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id WHERE a.id=$1`,
+        [attemptId])).rows[0];
+      if (!attempt) return res.status(404).json({ error: '找不到這題' });
+      if (attempt.official_from && attempt.answer_official && attempt.answer_official.length) {
+        return res.status(409).json({ error: '官方確認題已鎖定' });
+      }
+      const out = await query(
+        `UPDATE exam_attempts SET answer_final=$2 WHERE id=$1 RETURNING id`, [attemptId, answer]);
+      emitAll('exam-progress', { attemptId, status: 'final' });
+      res.json({ ok: true, answer });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
 }
 
-module.exports = { registerRoutes, checkExamToken };
+module.exports = { registerRoutes, checkExamToken, scheduleQueue, answerValue };

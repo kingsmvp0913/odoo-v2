@@ -14,7 +14,7 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 
 const TABLES = ['exam_banks', 'exam_items', 'exam_attempts', 'exam_sections',
                 'exam_verdicts', 'exam_evidence', 'exam_jobs', 'exam_glossary',
-                'exam_uploads'];
+                'exam_uploads', 'exam_votes'];
 
 test.each(TABLES)('%s 表存在且可查詢', async (t) => {
   const res = await dbModule.query(`SELECT * FROM ${t} LIMIT 1`);

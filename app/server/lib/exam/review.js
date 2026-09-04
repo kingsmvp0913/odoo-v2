@@ -149,6 +149,69 @@ ${glossaryBlock(glossary)}
 - readable 為 false 時 questions 給空陣列，note 寫讀不到的原因。`;
 }
 
+// 第一階段只負責忠實抄題，絕不判斷答案。先取得穩定題幹後，worker 才能用
+// (odoo_version, fingerprint) 查官方題庫，避免已知官方答案的題又白跑一次審查。
+function buildExtractPrompt({ imageName = 'shot.jpg' } = {}) {
+  return `你是 Odoo 認證考試截圖的逐字轉錄員。
+
+截圖檔名：${imageName}（就在你的工作目錄下，直接用這個檔名讀）
+
+只做轉錄與翻譯，**不要作答、不要判斷正確選項**。由上而下取出畫面上每一題的完整
+英文題幹與所有選項，並翻成繁體中文。若回答這題必須依賴題目附帶的圖片、圖表、
+流程圖或畫面位置，has_image 設為 true；純文字即可回答則為 false。
+
+只輸出一個 json 區塊：
+
+\`\`\`json
+{
+  "readable": true,
+  "page": "3",
+  "note": "",
+  "questions": [{
+    "no": 1,
+    "question": "英文題幹一字不差",
+    "question_zh": "繁體中文翻譯",
+    "type": "single",
+    "has_image": false,
+    "options": [{ "letter": "A", "text": "英文原文", "text_zh": "繁中翻譯" }]
+  }]
+}
+\`\`\`
+
+截圖被裁切、選項不全或讀不出任何題目時不要猜：整頁無法使用就把 readable 設為
+false；只有部分受損則保留可讀題目並在 note 具名說明。`;
+}
+
+// 第二階段只收到「沒有官方確認答案」的題。沒有圖題不再重讀截圖；有圖題才把
+// shot.jpg 一起放入隔離目錄，避免新考卷每題都付一次影像讀取成本。
+function buildReviewQuestionsPrompt({ questions, theirAnswers, glossary, imageName = null }) {
+  const rows = (questions || []).map((q, i) => ({
+    no: q.no || i + 1,
+    question: q.question,
+    question_zh: q.question_zh,
+    type: q.type,
+    options: q.options,
+    their_answer: (theirAnswers[i] || []),
+    has_image: q.has_image === true,
+  }));
+  return `你是 Odoo 19 認證題目的對立審查員。
+
+以下只包含題庫中**沒有官方確認答案**的題目。不是重新盲猜，而是認真尋找作答者答案
+的反證；確實找不到問題時 refuted=false，不要為了完成任務編造理由。
+${imageName ? `需要看圖的題可用 Read 讀取 ${imageName}；純文字題以這裡提供的完整文字審查。` : '這批題全部可由文字回答，不提供截圖。'}
+
+待審題目：
+${JSON.stringify(rows, null, 2)}
+${glossaryBlock(glossary)}
+審查時注意否定詞（NOT／EXCEPT／不正確）、版本差異，以及這三類已知陷阱：
+${TRAPS}
+
+只輸出一個 json 區塊，questions 必須逐題保留原 no，並包含 question、question_zh、type、
+options、their_answer、refuted、correct_answer、confidence、reason。correct_answer 一律填
+選項字母陣列；refuted=false 時填 their_answer。最外層格式為
+{"readable":true,"note":"","questions":[]}。`;
+}
+
 // 從 assistant 全文抓「最後一組」json 區塊：agent 可能先講解再給結果，
 // 取最後一組最接近最終結論。
 function extractJson(text) {
@@ -221,6 +284,28 @@ function normalize(raw, theirAnswers = []) {
   };
 }
 
+function normalizeExtract(raw) {
+  const src = Array.isArray(raw) ? { readable: true, questions: raw } : (raw || {});
+  const questions = Array.isArray(src.questions) ? src.questions.map((q, i) => ({
+    no: Number(q?.no) || i + 1,
+    question: q?.question || '',
+    question_zh: q?.question_zh || '',
+    type: q?.type === 'multi' ? 'multi' : 'single',
+    has_image: q?.has_image === true,
+    options: Array.isArray(q?.options) ? q.options.map(o => ({
+      letter: String(o?.letter || '').trim().toUpperCase(),
+      text: o?.text || '',
+      text_zh: o?.text_zh || '',
+    })) : [],
+  })) : [];
+  return {
+    readable: src.readable !== false,
+    page: String(src.page || ''),
+    note: src.note || '',
+    questions: src.readable === false ? [] : questions,
+  };
+}
+
 // 從整頁的術語清單裡篩出「這一段英文真的用到的」。
 //
 // 非有不可：術語表是對**整頁**的英文查的，但譯文檢查是**逐題**做的。直接拿整頁
@@ -247,14 +332,14 @@ function checkGlossary(zhText, glossary) {
   return { missed };
 }
 
-function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MODEL }) {
+function runPrompt({ prompt, imagePath = null, onProgress, model = MODEL }) {
   return new Promise((resolve, reject) => {
     // 每次呼叫一個獨立的暫存目錄：截圖複製進去，agent 只看得到那一個檔案。
     // 獨立目錄同時讓並行審查不會互相蓋掉截圖。
     let runCwd;
     try {
       runCwd = makeRunCwd();
-      fs.copyFileSync(imagePath, path.join(runCwd, 'shot.jpg'));
+      if (imagePath) fs.copyFileSync(imagePath, path.join(runCwd, 'shot.jpg'));
     } catch (e) {
       return reject(new Error(`準備審查工作目錄失敗：${e.message}`));
     }
@@ -265,7 +350,7 @@ function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MOD
       '--dangerously-skip-permissions',
       // 只給 Read：審查階段不取證（取證是另一次呼叫，額外給 Grep）。
       // 這同時是成本閘門——agent 沒有工具可以繞去做別的事。
-      '--allowed-tools', 'Read',
+      '--allowed-tools', imagePath ? 'Read' : '',
       '--strict-mcp-config', '--mcp-config', MCP_CONFIG,
       '--model', model,
     ];
@@ -274,7 +359,7 @@ function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MOD
     // 子行程提早死掉時對已關閉的 stdin 寫入會發 EPIPE；無 handler 會變 uncaughtException。
     child.stdin.on('error', () => {});
 
-    let assistantText = '', lineBuffer = '', stderr = '', usage = null, settled = false;
+    let assistantText = '', lineBuffer = '', stderr = '', resultError = '', usage = null, settled = false;
 
     // 每條退出路徑都要清掉暫存目錄，否則 /tmp 會被截圖堆滿
     const finish = fn => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); fn(); } };
@@ -299,13 +384,16 @@ function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MOD
             if (blk.type === 'tool_use') onProgress?.('讀取截圖…');
           }
         }
-        if (ev.type === 'result') usage = ev.usage || null;
+        if (ev.type === 'result') {
+          usage = ev.usage || null;
+          if (ev.is_error || ev.error || ev.result) resultError = ev.result || ev.error || '';
+        }
       }
     });
 
     child.stderr.on('data', d => { stderr += d.toString(); });
 
-    child.stdin.write(buildPrompt({ imageName: 'shot.jpg', theirAnswers, glossary }));
+    child.stdin.write(prompt);
     child.stdin.end();
 
     child.on('error', err => {
@@ -315,13 +403,42 @@ function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MOD
 
     child.on('close', code => {
       finish(() => {
-        if (code !== 0) return reject(new Error(stderr.trim() || `claude 結束於 exit code ${code}`));
+        if (code !== 0) return reject(new Error(
+          stderr.trim() || String(resultError).trim() || assistantText.trim() || `claude 結束於 exit code ${code}`));
         const raw = extractJson(assistantText);
         if (!raw) return reject(new Error(`審查輸出無法解析：${assistantText.slice(0, 200) || '(空輸出)'}`));
-        resolve({ verdict: normalize(raw, theirAnswers), usage, model });
+        resolve({ raw, usage, model });
       });
     });
   });
+}
+
+async function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MODEL }) {
+  const out = await runPrompt({
+    prompt: buildPrompt({ imageName: 'shot.jpg', theirAnswers, glossary }),
+    imagePath, onProgress, model,
+  });
+  return { verdict: normalize(out.raw, theirAnswers), usage: out.usage, model: out.model };
+}
+
+async function extractPage({ imagePath, onProgress, model = MODEL }) {
+  const out = await runPrompt({
+    prompt: buildExtractPrompt({ imageName: 'shot.jpg' }), imagePath, onProgress, model,
+  });
+  return { page: normalizeExtract(out.raw), usage: out.usage, model: out.model };
+}
+
+async function reviewQuestions({ questions, theirAnswers, glossary, imagePath, onProgress, model = MODEL }) {
+  const needsImage = (questions || []).some(q => q.has_image === true);
+  const out = await runPrompt({
+    prompt: buildReviewQuestionsPrompt({
+      questions, theirAnswers, glossary, imageName: needsImage ? 'shot.jpg' : null,
+    }),
+    imagePath: needsImage ? imagePath : null,
+    onProgress,
+    model,
+  });
+  return { verdict: normalize(out.raw, theirAnswers), usage: out.usage, model: out.model };
 }
 
 // 寫入 exam_verdicts，並順便補上中譯。
@@ -386,5 +503,7 @@ async function saveVerdicts(db, { bankId, page, verdict, model }) {
 }
 
 module.exports = {
-  reviewPage, buildPrompt, normalize, extractJson, checkGlossary, termsIn, saveVerdicts, MODEL,
+  reviewPage, extractPage, reviewQuestions, buildPrompt, buildExtractPrompt,
+  buildReviewQuestionsPrompt, normalize, normalizeExtract, extractJson, checkGlossary,
+  termsIn, saveVerdicts, MODEL,
 };

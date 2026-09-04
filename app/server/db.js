@@ -704,6 +704,8 @@ async function migrate() {
     `CREATE TABLE IF NOT EXISTS exam_uploads (
       id           SERIAL PRIMARY KEY,
       bank_id      INTEGER NOT NULL REFERENCES exam_banks(id) ON DELETE CASCADE,
+      batch_key    TEXT,
+      batch_label  TEXT,
       page         TEXT,
       answer_raw   TEXT,                       -- 作答者原始輸入，如「第 1 題 B；第 2 題 A」
       responder    TEXT,
@@ -713,6 +715,19 @@ async function migrate() {
       is_test      BOOLEAN NOT NULL DEFAULT FALSE,
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+
+    // 考試工作台匿名顯示投票。voter_key 內存平台 user id，讓同一人對同一題只能投一次；
+    // API 與畫面皆不回傳姓名。answer 用陣列保留多選題能力，百分比以總票數為分母。
+    `CREATE TABLE IF NOT EXISTS exam_votes (
+      id           SERIAL PRIMARY KEY,
+      attempt_id   INTEGER NOT NULL REFERENCES exam_attempts(id) ON DELETE CASCADE,
+      voter_key    TEXT NOT NULL,
+      voter_name   TEXT,
+      answer       TEXT[] NOT NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (attempt_id, voter_key)
     )`,
   ];
 
@@ -1029,7 +1044,11 @@ async function migrate() {
     // 是整份題庫裡唯一邏輯上必然為真的東西。與 answer_official 不等價：未來若拿到官方
     // 逐題正解，會有「有官方答案但該章沒全對」的題。合併時取 OR（任一次考試 certain
     // 就永久 certain），這正是規格 §6.7「永久鎖成 100」的實作點。
-    { table: 'exam_items', col: 'certain', sql: 'ALTER TABLE exam_items ADD COLUMN certain BOOLEAN NOT NULL DEFAULT FALSE' }
+    { table: 'exam_items', col: 'certain', sql: 'ALTER TABLE exam_items ADD COLUMN certain BOOLEAN NOT NULL DEFAULT FALSE' },
+    // 考試結果必須能精確回到是哪一張 POST 截圖。只靠 bank/page 會在重考同頁碼時串錯。
+    { table: 'exam_attempts', col: 'upload_id', sql: 'ALTER TABLE exam_attempts ADD COLUMN upload_id INTEGER REFERENCES exam_uploads(id) ON DELETE SET NULL' },
+    { table: 'exam_uploads', col: 'batch_key', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_key TEXT' },
+    { table: 'exam_uploads', col: 'batch_label', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_label TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

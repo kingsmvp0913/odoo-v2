@@ -192,11 +192,12 @@ describe("ui-next 平行介面", () => {
     expect(pagesCss).toContain('.ui-next-chat-history {');
   });
 
-  test("收件匣不進新版日常導覽，新手教學位於更多工具", () => {
+  test("收件匣與新手教學不進新版日常導覽", () => {
     expect(uiNext).not.toMatch(/go\(["']\/inbox["']\)/);
     expect(app).toContain('redirect: window.UiNextEnabled ? "/tasks?tab=needs_action" : undefined');
     expect(uiNextPages).toContain("this.$route.query.tab");
-    expect(uiNext).toContain("新手教學");
+    expect(uiNext).not.toContain('@click="openTour"><ui-next-icon name="book"/>新手教學');
+    // 只隱藏入口，保留 TourManager 整合，日後恢復時不需要重建教學功能。
     expect(uiNext).toContain("window.TourManager.open()");
     expect(uiNext).toMatch(/go\(["']\/admin\/pipelines["']\)/);
     expect(uiNext).toMatch(/go\(["']\/token-report["']\)/);

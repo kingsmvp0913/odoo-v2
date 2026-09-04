@@ -1,5 +1,6 @@
 const { newDb } = require('pg-mem');
-const { buildPrompt, normalize, saveVerdicts, checkGlossary, termsIn } = require('../lib/exam/review');
+const { buildPrompt, buildExtractPrompt, buildReviewQuestionsPrompt, normalize, normalizeExtract,
+  saveVerdicts, checkGlossary, termsIn } = require('../lib/exam/review');
 
 let dbModule;
 
@@ -105,6 +106,31 @@ describe('normalize', () => {
     const v = normalize({ questions: [{ no: 1, correct_answer: ['No'] }] }, [['A']]);
     expect(v.questions[0].correct_answer).toEqual([]);
     expect(v.questions[0].shape_error).toMatch(/字母/);
+  });
+});
+
+describe('兩階段審題 prompt', () => {
+  test('第一階段只抄題並標記是否必須看圖，不要求作答', () => {
+    const p = buildExtractPrompt({ imageName: 'shot.jpg' });
+    expect(p).toContain('不要作答');
+    expect(p).toContain('has_image');
+    expect(p).not.toContain('作答者在這一頁的答案');
+  });
+
+  test('第二階段只收到未命中官方答案的題目', () => {
+    const p = buildReviewQuestionsPrompt({
+      questions: [{ no: 2, question: 'Q', options: [], has_image: false }],
+      theirAnswers: [['B']], glossary: [],
+    });
+    expect(p).toContain('沒有官方確認答案');
+    expect(p).toContain('"no": 2');
+    expect(p).toContain('"their_answer"');
+  });
+
+  test('轉錄結果保留 has_image 且不產生答案欄位', () => {
+    const page = normalizeExtract({ questions: [{ no: 1, question: 'Q', has_image: true }] });
+    expect(page.questions[0]).toMatchObject({ no: 1, question: 'Q', has_image: true });
+    expect(page.questions[0]).not.toHaveProperty('correct_answer');
   });
 });
 

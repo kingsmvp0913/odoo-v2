@@ -1271,6 +1271,17 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 }
 .ui-next-exam-chip:hover { border-color: var(--border-strong); }
 .ui-next-exam-chip.is-on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.ui-next-exam-chip:focus-visible,
+.ui-next-exam-run-stat:focus-visible,
+.ui-next-exam-run-vote:focus-visible,
+.ui-next-exam-run-card-head:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px;
+}
+.ui-next-exam-bank-pick:focus,
+.ui-next-exam-search:focus {
+  outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  outline-offset: 1px; border-color: var(--text-muted);
+}
 
 .ui-next-exam-group { margin-bottom: 14px; }
 .ui-next-exam-group-head {
@@ -1528,3 +1539,66 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   font-size: var(--fs-xs); color: var(--text-secondary);
 }
 .ui-next-exam-run-history { margin-top: 12px; }
+
+/* 新考試工作台：外部 POST、自動審題，本頁只呈現結果。正式答案改由完整選項前的
+   checkbox 操作；摘要固定三欄（輸入／審查／最高票），欄數與直接子元素數一致。 */
+.ui-next-exam-run-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.ui-next-exam-run-stat {
+  min-width: 104px; padding: 10px 16px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--card-bg); color: var(--text); text-align: left;
+}
+.ui-next-exam-run-stat { cursor: pointer; }
+.ui-next-exam-run-stat.is-on { border-color: var(--primary); }
+.ui-next-exam-run-stat b { display: block; font-size: var(--fs-xl); line-height: 1.2; }
+.ui-next-exam-run-stat span { color: var(--text-muted); font-size: var(--fs-xs); }
+.ui-next-exam-run-stat.is-bad b { color: var(--danger); }
+.ui-next-exam-run-stat.is-ok b { color: var(--success); }
+.ui-next-exam-run-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.ui-next-exam-run-toolbar label { color: var(--text-muted); font-size: var(--fs-sm); }
+.ui-next-exam-run-card {
+  display: block; margin-bottom: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--card-bg); overflow: hidden;
+}
+.ui-next-exam-run-card.is-failed { background: color-mix(in srgb, var(--warning) 7%, var(--card-bg)); }
+.ui-next-exam-run-card-head {
+  display: flex; gap: 12px; align-items: baseline; padding: 11px 14px; cursor: pointer;
+  color: var(--text-secondary); font-size: var(--fs-sm);
+}
+.ui-next-exam-run-card-head b { color: var(--primary); font-size: var(--fs-base); }
+.ui-next-exam-run-card-head time { margin-left: auto; color: var(--text-muted); font-size: var(--fs-xs); }
+.ui-next-exam-run-question { display: block; border-top: 1px solid var(--border); }
+.ui-next-exam-run-question.is-mismatch[open] {
+  background: color-mix(in srgb, var(--danger) 7%, var(--card-bg));
+}
+.ui-next-exam-run-question > summary { padding: 13px 14px; cursor: pointer; list-style: none; }
+.ui-next-exam-run-question > summary::marker { display: none; content: ''; }
+.ui-next-exam-run-question > summary::-webkit-details-marker { display: none; }
+.ui-next-exam-run-official { padding: 13px 14px; background: var(--surface); }
+.ui-next-exam-run-official > small { display: block; margin-top: 4px; color: var(--text-muted); }
+.ui-next-exam-run-question h3 { margin: 0; color: var(--text); font-size: var(--fs-base); font-weight: var(--fw-semibold); }
+.ui-next-exam-run-question h3 span { color: var(--text-muted); }
+.ui-next-exam-run-en { margin-top: 3px; color: var(--text-muted); font-size: var(--fs-sm); }
+.ui-next-exam-run-options { display: grid; gap: 6px; padding: 0 14px 12px; }
+.ui-next-exam-run-option {
+  display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card-bg);
+}
+.ui-next-exam-run-option.is-review { background: color-mix(in srgb, var(--danger) 7%, var(--card-bg)); }
+.ui-next-exam-run-option.is-input { background: color-mix(in srgb, var(--success) 7%, var(--card-bg)); }
+.ui-next-exam-run-option.is-selected { box-shadow: inset 0 0 0 1px var(--primary); }
+.ui-next-exam-run-option label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; cursor: pointer; }
+.ui-next-exam-run-option input { width: 16px; height: 16px; flex: none; accent-color: var(--primary); }
+.ui-next-exam-run-option label:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.ui-next-exam-run-option b { color: var(--text); }
+.ui-next-exam-run-option span { min-width: 0; color: var(--text-secondary); }
+.ui-next-exam-run-option small { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semibold); }
+.ui-next-exam-run-input-mark { color: var(--success); }
+.ui-next-exam-run-review-mark { color: var(--danger); }
+.ui-next-exam-run-vote-mark { color: var(--text-muted); }
+.ui-next-exam-run-vote-empty { color: var(--text-muted); font-size: var(--fs-xs); }
+.ui-next-exam-run-vote {
+  padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--card-bg); color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer;
+}
