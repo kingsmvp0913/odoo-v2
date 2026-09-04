@@ -14,8 +14,9 @@
 //   3. **單筆失敗不中斷整批**。實測踩過：一頁逾時讓整個腳本 exit，前面跑完的
 //      結果留在 DB，從結果看不出少了一半。
 const path = require('path');
-const { extractPage, reviewQuestions, saveVerdicts } = require('./review');
-const { gatherEvidence, saveEvidence, needsEvidence } = require('./evidence');
+const { extractPage, saveVerdicts } = require('./review');
+const { challengePage } = require('./challenge');
+const { saveEvidence } = require('./evidence');
 const { lookupTerms } = require('./glossary');
 const { fingerprint } = require('./fingerprint');
 const { baseConfidence, calibrateSection } = require('./confidence');
@@ -101,43 +102,46 @@ async function processUpload(db, { upload, bank, onProgress }) {
     }
   }
 
+  // 挑戰：一次呼叫同時做「找反證」與「拿原始碼佐證」。
+  //
+  // 原本拆成審查→取證兩步，實測 Project 一頁 8 題＝審查 6.5 分＋取證 5.1 分。
+  // 而審查那 6.5 分幾乎都在等網路——它手上沒有原始碼，就跑去 WebSearch/WebFetch
+  // 抓 odoo.com 文件，17 次網路請求、單筆空檔就有 96 秒。一開始就把原始碼給它，
+  // 它沒有理由上網；而且結論與證據出自同一次推理，不會兩步各說各話。
   let reviewed = [];
   if (toReview.length) {
     const allText = toReview.map(x => [x.q.question, ...(x.q.options || []).map(o => o.text)].join(' ')).join('\n');
     const glossary = await lookupTerms(db, bank.odoo_version, allText);
-    const { verdict, model } = await reviewQuestions({
+    const { verdict, model } = await challengePage({
       questions: toReview.map(x => x.q),
       theirAnswers: toReview.map(x => x.theirAnswer),
       glossary,
+      odooVersion: bank.odoo_version,
       imagePath: shot,
       onProgress,
     });
-    if (verdict.readable === false) throw new Error(`審查失敗：${verdict.note || '(未說明)'}`);
+    if (verdict.readable === false) throw new Error(`挑戰失敗：${verdict.note || '(未說明)'}`);
     reviewed = verdict.questions || [];
 
     // verdict 用 (bank_id, page, no) 對應，所以 attempts 必須先建好。
     // 官方命中題不在 verdict 裡，因此不會產生假的 adversary 紀錄。
     const saved = await saveVerdicts(db, { bankId: bank.id, page: String(upload.page), verdict, model });
     if (saved.unmatched.length) notes.push(`對不上的題號：${saved.unmatched.join('、')}`);
-  }
 
-  // 取證：信心 < 90 或被推翻的題
-  const itemByNo = new Map(toReview.map(x => [x.q.no, x.itemId]));
-  for (const q of reviewed) {
-    const itemId = itemByNo.get(q.no);
-    if (!itemId) continue;
-    if (!needsEvidence({ confidence: q.confidence, refuted: q.refuted })) continue;
-    try {
-      const candidate = q.refuted ? q.correct_answer : q.their_answer;
-      const { result } = await gatherEvidence({
-        question: q.question, options: q.options, candidate, odooVersion: bank.odoo_version, onProgress });
+    // 證據跟著同一次判斷寫進去。ref 的路徑驗證在 challenge 那邊就做完了，
+    // 這裡收到的已經是只剩沙箱內合法路徑的清單。
+    const itemByNo = new Map(toReview.map(x => [x.q.no, x.itemId]));
+    for (const q of reviewed) {
+      // 被丟棄的路徑先記——它跟「有沒有合法證據」是兩回事，寫在 continue 之後
+      // 就永遠不會執行（全部證據都不合法時剛好一筆都沒有，那正是最該講的情況）。
+      if (q.rejected_refs && q.rejected_refs.length) {
+        notes.push(`第 ${q.no} 題有 ${q.rejected_refs.length} 筆證據路徑不合法，已丟棄`);
+      }
+      if (!q.evidence || !q.evidence.length) continue;
       const v = await db.query(
         `SELECT id FROM exam_verdicts WHERE item_id = $1 AND kind = 'adversary'
-          ORDER BY id DESC LIMIT 1`, [itemId]);
-      if (v.rows.length) await saveEvidence(db, { verdictId: v.rows[0].id, evidence: result.evidence });
-    } catch (e) {
-      // 取證失敗不影響這一題的審查結果，只是少了證據（信心度停在「沒找證據」那層）
-      notes.push(`第 ${q.no} 題取證失敗：${e.message}`);
+          ORDER BY id DESC LIMIT 1`, [itemByNo.get(q.no)]);
+      if (v.rows.length) await saveEvidence(db, { verdictId: v.rows[0].id, evidence: q.evidence });
     }
   }
 
@@ -226,8 +230,27 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
      VALUES ($1,'running','審查中',$2,$3) RETURNING id`,
     [bankId, pending.length, process.pid])).rows[0];
 
-  const stat = { jobId: job.id, total: pending.length, done: 0, failed: 0 };
+  const stat = { jobId: job.id, total: 0, done: 0, failed: 0 };
   let queue = [...pending];
+
+  /**
+   * 認領一筆。**認領＝把 pending 改成 running，而且要靠 DB 判斷有沒有搶到。**
+   *
+   * 「先從佇列取出、再去標記 running」中間隔著一個 await，那個空隙足夠讓另一個
+   * worker 查到同一筆還是 pending 而重複拿走——實測炸過：8 題的頁跑出 16 筆作答，
+   * 同一頁被判了兩次，token 也白燒一份。
+   *
+   * `WHERE status='pending'` 讓搶輸的那個拿到 0 列，直接跳過。
+   */
+  const claim = async (up) => {
+    const r = await db.query(
+      `UPDATE exam_uploads SET status='running', updated_at=NOW()
+        WHERE id=$1 AND status='pending' RETURNING id`, [up.id]);
+    if (!r.rows.length) return false;
+    stat.total++;
+    await setJob(db, job.id, { pages_total: stat.total });
+    return true;
+  };
 
   const nextOne = async () => {
     for (;;) {
@@ -236,17 +259,11 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
       // 同事是**一頁一頁**傳的（那是主流程，不是例外）。用快照的話，第二頁在
       // 幾十毫秒後才進 DB，這一批早就決定好只有第一頁，第二頁得等整批跑完才
       // 開新的一批——實測兩次 POST 相差 31ms，結果是兩個各只有 1 頁的 job，
-      // 併行上限 3 完全沒有機會生效。
-      if (!queue.length) {
-        queue = await fetchPending();
-        if (queue.length) {
-          stat.total += queue.length;
-          await setJob(db, job.id, { pages_total: stat.total });
-        }
-      }
+      // 併行上限完全沒有機會生效。
+      if (!queue.length) queue = await fetchPending();
       const up = queue.shift();
       if (!up) return;
-      await db.query(`UPDATE exam_uploads SET status='running', updated_at=NOW() WHERE id=$1`, [up.id]);
+      if (!await claim(up)) continue;   // 被別的 worker 搶走了
       onEvent({ jobId: job.id, page: up.page, status: 'running' });
       try {
         const r = await processUpload(db, {

@@ -206,10 +206,20 @@ ${glossaryBlock(glossary)}
 審查時注意否定詞（NOT／EXCEPT／不正確）、版本差異，以及這三類已知陷阱：
 ${TRAPS}
 
-只輸出一個 json 區塊，questions 必須逐題保留原 no，並包含 question、question_zh、type、
-options、their_answer、refuted、correct_answer、confidence、reason。correct_answer 一律填
-選項字母陣列；refuted=false 時填 their_answer。最外層格式為
-{"readable":true,"note":"","questions":[]}。`;
+只輸出一個 json 區塊，**每題只回這五個欄位**：
+
+\`\`\`json
+{"readable":true,"note":"","questions":[
+  {"no":1,"refuted":false,"correct_answer":["B"],"confidence":88,"reason":"一到三句"}
+]}
+\`\`\`
+
+- no：對應上面待審題目的題號，一題一筆，不可漏也不可改號。
+- correct_answer：一律**選項字母**陣列；refuted=false 時填作答者的答案。
+- confidence：0-100 的**整數**。
+
+**不要把題幹、選項或翻譯再抄一次。** 那些上面已經給你了，Node 端會用 no 對回去。
+重抄一遍只是把時間花在生成已經存在的文字上——實測 8 題重抄一遍要多跑好幾分鐘。`;
 }
 
 // 從 assistant 全文抓「最後一組」json 區塊：agent 可能先講解再給結果，
@@ -259,22 +269,32 @@ function normalizeConfidence(v) {
   return Math.max(0, Math.min(100, Math.round(scaled)));
 }
 
-function normalize(raw, theirAnswers = []) {
+/**
+ * @param source 兩階段流程裡「抄題那一步」的題目。給了就用它補回題幹、選項與翻譯——
+ *   審查不必再抄一次那些字（實測 8 題重抄一遍多跑好幾分鐘，而且抄的內容我們早就有）。
+ *   單階段的 reviewPage 沒有這個來源，照舊吃模型回的完整內容。
+ */
+function normalize(raw, theirAnswers = [], source = null) {
+  const byNo = new Map((source || []).map((q, i) => [Number(q?.no) || i + 1, q]));
   const one = (q, i) => {
     const { ok, bad } = cleanAnswer(q?.correct_answer);
+    const no = Number(q?.no) || i + 1;
+    const src = byNo.get(no) || {};
+    const opts = Array.isArray(q?.options) && q.options.length ? q.options
+      : (Array.isArray(src.options) ? src.options : []);
     return {
-      no: Number(q?.no) || i + 1,
-      question: q?.question || '',
-      question_zh: q?.question_zh || '',
-      type: q?.type === 'multi' ? 'multi' : 'single',
-      options: Array.isArray(q?.options) ? q.options.map(o => ({
+      no,
+      question: q?.question || src.question || '',
+      question_zh: q?.question_zh || src.question_zh || '',
+      type: (q?.type || src.type) === 'multi' ? 'multi' : 'single',
+      options: opts.map(o => ({
         letter: String(o?.letter || '').trim().toUpperCase(),
         text: o?.text || '',
         text_zh: o?.text_zh || '',
-      })) : [],
+      })),
       their_answer: Array.isArray(q?.their_answer) && q.their_answer.length
         ? q.their_answer.map(a => String(a).trim().toUpperCase())
-        : (theirAnswers[i] || []),
+        : (theirAnswers[byNo.size ? [...byNo.keys()].indexOf(no) : i] || theirAnswers[i] || []),
       refuted: q?.refuted === true,
       correct_answer: ok,
       confidence: normalizeConfidence(q?.confidence),
@@ -436,7 +456,7 @@ async function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model
     prompt: buildPrompt({ imageName: 'shot.jpg', theirAnswers, glossary }),
     imagePath, onProgress, model,
   });
-  return { verdict: normalize(out.raw, theirAnswers), usage: out.usage, model: out.model };
+  return { verdict: normalize(out.raw, theirAnswers, questions), usage: out.usage, model: out.model };
 }
 
 async function extractPage({ imagePath, onProgress, model = MODEL }) {
@@ -456,7 +476,7 @@ async function reviewQuestions({ questions, theirAnswers, glossary, imagePath, o
     onProgress,
     model,
   });
-  return { verdict: normalize(out.raw, theirAnswers), usage: out.usage, model: out.model };
+  return { verdict: normalize(out.raw, theirAnswers, questions), usage: out.usage, model: out.model };
 }
 
 // 寫入 exam_verdicts，並順便補上中譯。
@@ -524,4 +544,7 @@ module.exports = {
   reviewPage, extractPage, reviewQuestions, buildPrompt, buildExtractPrompt,
   buildReviewQuestionsPrompt, normalize, normalizeExtract, extractJson, checkGlossary,
   termsIn, saveVerdicts, normalizeConfidence, MODEL,
+  // 挑戰模式（challenge.js）要沿用同一套陷阱清單、術語鎖定與答案清洗，
+  // 各寫一份的話兩邊會慢慢長歪，而「判題陷阱」正是 30/30 那個成績的來源。
+  glossaryBlock, TRAPS, cleanAnswer,
 };

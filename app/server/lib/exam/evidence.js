@@ -27,8 +27,26 @@ const MCP_CONFIG = path.join(MCP_DIR, 'none.json');
 fs.mkdirSync(MCP_DIR, { recursive: true });
 if (!fs.existsSync(MCP_CONFIG)) fs.writeFileSync(MCP_CONFIG, '{"mcpServers":{}}');
 
+const GUIDE_NAME = 'evidence-guide.md';
+const CHALLENGE_GUIDE = 'challenge-guide.md';
+
 const CORE_ROOT = process.env.ODOO_CORE_SRC_DIR
   || path.join(__dirname, '..', '..', '..', '..', 'data', 'odoo-core');
+
+// 企業版原始碼。認證考試考很多企業版才有的功能（Documents、Sign、Helpdesk、
+// Planning、Appraisal、專案甘特圖…），社群版的 685 個 addons 裡一個都沒有——
+// 只掛社群版等於叫 agent 去找不存在的檔案，它查不到就只能猜。
+const ENTERPRISE_ROOT = process.env.ODOO_ENTERPRISE_SRC_DIR
+  || path.join(__dirname, '..', '..', '..', '..', 'enterprise');
+
+function linkTo(link, target) {
+  let ok = false;
+  try { ok = fs.readlinkSync(link) === target; } catch { ok = false; }
+  if (!ok) {
+    try { fs.unlinkSync(link); } catch { /* 本來就不存在 */ }
+    fs.symlinkSync(target, link, 'dir');
+  }
+}
 
 // 為每個版本準備一個隔離的工作目錄。重複呼叫時重用，symlink 指向變了就重建。
 function ensureEvidenceCwd(odooVersion) {
@@ -39,11 +57,20 @@ function ensureEvidenceCwd(odooVersion) {
     throw new Error(`找不到 Odoo ${odooVersion} 原始碼（${target}）——先用 ensureOdooCoreSrc('${odooVersion}') 解出來`);
   }
   fs.mkdirSync(cwd, { recursive: true });
-  let ok = false;
-  try { ok = fs.readlinkSync(link) === target; } catch { ok = false; }
-  if (!ok) {
-    try { fs.unlinkSync(link); } catch { /* 本來就不存在 */ }
-    fs.symlinkSync(target, link, 'dir');
+  linkTo(link, target);
+
+  // 企業版是選配：沒有就只掛社群版，不要因此讓整個取證失敗。
+  const ent = path.resolve(ENTERPRISE_ROOT, String(odooVersion));
+  const entLink = path.join(cwd, 'ent');
+  if (fs.existsSync(ent)) linkTo(entLink, ent);
+  else { try { fs.unlinkSync(entLink); } catch { /* 本來就沒有 */ } }
+  // 查證方法寫在獨立檔案，複製進沙箱讓 agent 自己讀，不塞進每次呼叫的 prompt。
+  //
+  // 為什麼不做成 Claude Code 的 skill：這裡的 cwd 是暫存目錄，專案的
+  // .claude/skills/ 在那裡載不到（實測：只載得到 ~/.claude/skills/ 的 user scope）。
+  // 而 user scope 不進版控、又全平台共用，等於破壞這支刻意做出來的隔離。
+  for (const g of [GUIDE_NAME, CHALLENGE_GUIDE]) {
+    fs.copyFileSync(path.join(__dirname, g), path.join(cwd, g));
   }
   return cwd;
 }
@@ -117,6 +144,57 @@ found 設為 false，reason 寫清楚為什麼查不到。
 - found 為 false 時 evidence 給空陣列。`;
 }
 
+/**
+ * 批次版：同一頁的題目一起查。
+ *
+ * 一次收到的題目來自考卷的同一頁，而同一頁幾乎都在問同一個 Odoo 模組
+ * （Project 那頁全是 project/、eCommerce 那頁全是 website_sale/）。分開查的話
+ * 每個 agent 都要重新摸索一次那個模組的目錄結構——那份成本乘以題數。
+ */
+function buildBatchEvidencePrompt({ questions, odooVersion }) {
+  const blocks = (questions || []).map(q => {
+    const opts = (q.options || []).map(o => `  ${o.letter}. ${o.text}`).join('\n');
+    return `### 第 ${q.no} 題\n\n${q.question}\n\n${opts}\n\n候選答案：${(q.candidate || []).join('、') || '(無)'}`;
+  }).join('\n\n');
+
+  return `你是 Odoo ${odooVersion} 的原始碼查證員。
+
+**動手前先讀 \`${GUIDE_NAME}\`**（就在你的工作目錄下），那裡寫了可查範圍、
+題型怎麼分、以及證據要長什麼樣。
+
+## 這一批題目（同一頁，通常屬於同一個模組）
+
+${blocks}
+
+## 你的任務
+
+對**每一題**去原始碼裡找能支持或推翻其候選答案的硬證據，回報哪個檔案第幾行。
+
+先把這一批共同的模組摸清楚一次，後面每題重用，不要每題從頭 Grep 整個 src/。
+
+只輸出一個 json 區塊，前後不要有任何其他文字：
+
+\`\`\`json
+{
+  "results": [
+    {
+      "no": 1,
+      "found": true,
+      "evidence": [
+        { "kind": "source", "ref": "src/addons/stock/models/product.py:412", "excerpt": "關鍵的那幾行" }
+      ],
+      "supports": "B",
+      "confidence": 92,
+      "reason": "這段碼為什麼支持（或推翻）候選答案，一到三句"
+    }
+  ]
+}
+\`\`\`
+
+**每一題都要有一筆**，查不到的那題 found 給 false、evidence 給空陣列，
+不要整題省略——省略的話下游分不出「查過查不到」與「漏查」。`;
+}
+
 // 路徑驗證：只收落在 src/ 底下的原始碼證據，存成相對 odoo-core 的路徑。
 //
 // 這一關是硬的。prompt 裡的「只能查 src/」是 soft instruction，模型不聽也不會怎樣；
@@ -127,11 +205,18 @@ function safeSourceRef(ref) {
   const [filePart, lineNo] = raw.split(/:(?=\d+$)/);
   if (path.isAbsolute(filePart)) return null;
   const norm = path.posix.normalize(filePart.replace(/\\/g, '/'));
-  if (!norm.startsWith('src/')) return null;
-  const inner = norm.slice(4);
+  // 兩個合法根：src/（社群版）與 ent/（企業版）。
+  //
+  // **src/ 去前綴、ent/ 保留前綴**，看起來不對稱但這是刻意的：既有的 150 筆證據
+  // 存的都是去前綴的社群版路徑，全部改格式等於動到舊資料。所以「沒有前綴」
+  // 就繼續代表社群版（與既有資料一致），只有企業版才多一個 ent/ 標記出來。
+  const root = ['src/', 'ent/'].find(r => norm.startsWith(r));
+  if (!root) return null;
+  const inner = norm.slice(root.length);
   // normalize 之後仍能往上跳＝一開始就跳出去了
   if (!inner || inner.startsWith('../') || inner.includes('/../')) return null;
-  return lineNo ? `${inner}:${lineNo}` : inner;
+  const rel = root === 'ent/' ? `ent/${inner}` : inner;
+  return lineNo ? `${rel}:${lineNo}` : rel;
 }
 
 // excerpt 上限：證據是「哪個檔案第幾行」，不是貼整個函式。
@@ -195,7 +280,8 @@ function extractJson(text) {
   return null;
 }
 
-function gatherEvidence({ question, options, candidate, odooVersion, onProgress, model = MODEL }) {
+// 單題與批次共用同一支 spawn。差別只在 prompt 與怎麼解讀輸出。
+function runEvidence({ prompt, odooVersion, onProgress, model = MODEL }) {
   return new Promise((resolve, reject) => {
     let cwd;
     try { cwd = ensureEvidenceCwd(odooVersion); } catch (e) { return reject(e); }
@@ -242,7 +328,7 @@ function gatherEvidence({ question, options, candidate, odooVersion, onProgress,
 
     child.stderr.on('data', d => { stderr += d.toString(); });
 
-    child.stdin.write(buildEvidencePrompt({ question, options, candidate, odooVersion }));
+    child.stdin.write(prompt);
     child.stdin.end();
 
     child.on('error', err => {
@@ -255,13 +341,48 @@ function gatherEvidence({ question, options, candidate, odooVersion, onProgress,
         if (code !== 0) return reject(new Error(stderr.trim() || `claude 結束於 exit code ${code}`));
         const raw = extractJson(assistantText);
         if (!raw) return reject(new Error(`取證輸出無法解析：${assistantText.slice(0, 200) || '(空輸出)'}`));
-        resolve({ result: normalizeEvidence(raw), usage, model });
+        resolve({ raw, usage, model });
       });
     });
   });
 }
 
+async function gatherEvidence({ question, options, candidate, odooVersion, onProgress, model = MODEL }) {
+  const { raw, usage } = await runEvidence({
+    prompt: buildEvidencePrompt({ question, options, candidate, odooVersion }),
+    odooVersion, onProgress, model,
+  });
+  return { result: normalizeEvidence(raw), usage, model };
+}
+
+/**
+ * 批次取證。回傳 Map<題號, 正規化後的證據>。
+ *
+ * 模型漏掉某幾題時**不補空殼**——回傳的 Map 就是少那幾個 key，呼叫端才分得出
+ * 「查過查不到」（found:false）與「根本沒回」（key 不存在）。兩者的處置不同：
+ * 前者信心度該停在「沒找證據」那層，後者應該退回單題重跑。
+ */
+async function gatherEvidenceBatch({ questions, odooVersion, onProgress, model = MODEL }) {
+  const list = Array.isArray(questions) ? questions : [];
+  if (!list.length) return { results: new Map(), usage: null, model };
+
+  const { raw, usage } = await runEvidence({
+    prompt: buildBatchEvidencePrompt({ questions: list, odooVersion }),
+    odooVersion, onProgress, model,
+  });
+
+  const rows = raw && Array.isArray(raw.results) ? raw.results : [];
+  const results = new Map();
+  for (const r of rows) {
+    const no = Number(r && r.no);
+    if (!Number.isFinite(no)) continue;
+    results.set(no, normalizeEvidence(r));
+  }
+  return { results, usage, model };
+}
+
 module.exports = {
-  gatherEvidence, buildEvidencePrompt, normalizeEvidence, saveEvidence,
-  needsEvidence, safeSourceRef, ensureEvidenceCwd, EVIDENCE_THRESHOLD,
+  gatherEvidence, gatherEvidenceBatch, buildEvidencePrompt, buildBatchEvidencePrompt,
+  normalizeEvidence, saveEvidence, needsEvidence, safeSourceRef, ensureEvidenceCwd,
+  EVIDENCE_THRESHOLD, MCP_CONFIG,
 };
