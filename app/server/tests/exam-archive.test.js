@@ -1,0 +1,198 @@
+const { newDb } = require('pg-mem');
+const { listPages, archiveBank } = require('../lib/exam/archive');
+
+let dbModule, bankId;
+
+// 建一頁：page 一個章節，answers 逐題作答（null＝未作答）。
+// answers 逐題「最終答案」（null＝沒拍板）。worker 建 attempt 時 answer_final
+// 預設等於 answer_their，所以這裡兩欄一起寫；要測「改過答案」再單獨覆蓋 final。
+async function addPage(page, answers, { section = null } = {}) {
+  await dbModule.query(
+    `INSERT INTO exam_uploads (bank_id,page,answer_raw,image_path,status,section_title)
+     VALUES ($1,$2,'x','exam-test/x.jpg','done',$3)`, [bankId, String(page), section]);
+  for (const [i, ans] of answers.entries()) {
+    const it = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype)
+       VALUES ('19',$1,'Q','[]'::jsonb,'single') RETURNING id`, [`fp-${page}-${i}`]);
+    await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,$3,$4,$5,$5)`, [it.rows[0].id, bankId, String(page), i + 1, ans]);
+  }
+}
+
+const itemsOfPage = async (page) => (await dbModule.query(`
+  SELECT a.no, i.certain, i.answer_official, i.official_from, i.section_title
+    FROM exam_attempts a JOIN exam_items i ON i.id = a.item_id
+   WHERE a.bank_id = $1 AND a.page = $2 ORDER BY a.no`, [bankId, String(page)])).rows;
+
+beforeAll(async () => {
+  const db = newDb();
+  const { Pool } = db.adapters.createPg();
+  dbModule = require('../db');
+  dbModule._setPoolForTesting(new Pool());
+  await dbModule.migrate();
+  const b = await dbModule.query(
+    `INSERT INTO exam_banks (label, odoo_version) VALUES ('archive-test','19') RETURNING id`);
+  bankId = b.rows[0].id;
+
+  await addPage(1, [['A'], ['B'], ['C']], { section: 'Survey' });   // 上傳時就帶了章節
+  await addPage(2, [['A'], null, ['C']]);                           // 有未作答，且沒帶章節
+  await addPage(3, [['A'], ['B']]);                                 // 這章有答錯
+});
+
+afterAll(() => { dbModule._setPoolForTesting(null); });
+
+describe('listPages', () => {
+  test('逐頁回報題數與已作答數，章節名沿用上傳時帶的', async () => {
+    const pages = await listPages(dbModule, bankId);
+    expect(pages).toEqual([
+      { page: '1', section: 'Survey', total: 3, answered: 3, locked: 0 },
+      { page: '2', section: null, total: 3, answered: 2, locked: 0 },
+      { page: '3', section: null, total: 2, answered: 2, locked: 0 },
+    ]);
+  });
+});
+
+describe('archiveBank', () => {
+  // 這是整套歸檔的核心推論，也是唯一會把答案永久鎖成 100% 的地方。
+  test('勾了「沒答錯」的章節，該章有作答的題全部鎖成官方正解', async () => {
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '1', section: 'Survey', noWrong: true }] });
+    expect(stat.locked).toBe(3);
+    expect(stat.sections).toBe(1);
+
+    const items = await itemsOfPage(1);
+    expect(items.map(x => x.certain)).toEqual([true, true, true]);
+    expect(items.map(x => x.answer_official)).toEqual([['A'], ['B'], ['C']]);
+    expect(items[0].official_from).toBe('section-all-correct');
+  });
+
+  // 舊題庫的 POS：3 題答對 2、未答 1，incorrect 仍是 0 而它確實 certain。
+  // 未作答的那題沒有答案可推，必須跳過——硬填等於憑空捏造正解。
+  // 11 個 incorrect=0 的章節 49 題扣掉 2 題未作答 = 47，這條就是那個 2 的來源。
+  test('章節沒答錯但有未作答時，未作答的題跳過並具名回報', async () => {
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '2', section: 'POS', noWrong: true }] });
+    expect(stat.locked).toBe(2);
+    expect(stat.skipped).toEqual(['P2-2 沒有最終答案，無法推導正解']);
+
+    const items = await itemsOfPage(2);
+    expect(items.map(x => x.certain)).toEqual([true, false, true]);
+    expect(items[1].answer_official).toBeNull();
+  });
+
+  test('未作答的題不算進 correct，記進 unanswered', async () => {
+    const s = await dbModule.query(
+      `SELECT n, correct, incorrect, unanswered FROM exam_sections WHERE bank_id=$1 AND title='POS'`,
+      [bankId]);
+    expect(s.rows[0]).toMatchObject({ n: 3, correct: 2, incorrect: 0, unanswered: 0 + 1 });
+  });
+
+  // 沒勾的章節我們不知道它錯幾題，寫個猜的數字比不寫更糟——校準會拿它當硬事實。
+  test('沒勾「沒答錯」時只寫章節名，不推導也不寫章節結果', async () => {
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '3', section: 'Accounting', noWrong: false }] });
+    expect(stat.locked).toBe(0);
+    expect(stat.sections).toBe(0);
+
+    const items = await itemsOfPage(3);
+    expect(items.map(x => x.certain)).toEqual([false, false]);
+    expect(items.map(x => x.section_title)).toEqual(['Accounting', 'Accounting']);
+    const s = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_sections WHERE bank_id=$1 AND title='Accounting'`, [bankId]);
+    expect(s.rows[0].c).toBe(0);
+  });
+
+  // 勾了卻沒有章節名 → 寫不出 exam_sections，而且分組會塌成「(無章節)」。
+  // 擋下來並說原因，不要半套寫進去。
+  test('勾了「沒答錯」但沒填章節名時整頁略過', async () => {
+    const stat = await archiveBank(dbModule, { bankId, pages: [{ page: '3', noWrong: true }] });
+    expect(stat.locked).toBe(0);
+    expect(stat.skipped).toEqual(['P3 勾了「沒答錯」但沒有章節名，略過']);
+    expect((await itemsOfPage(3)).map(x => x.certain)).toEqual([false, false]);
+  });
+
+  // 同一題在不同場考試被推出不同答案＝有一場勾錯了。靜靜覆蓋會讓錯的那次贏，
+  // 而且完全沒有痕跡。
+  test('既有官方答案與本次作答不符時保留既有並回報衝突', async () => {
+    await addPage(9, [['A']], { section: 'Sales' });
+    await archiveBank(dbModule, { bankId, pages: [{ page: '9', section: 'Sales', noWrong: true }] });
+    await dbModule.query(
+      `UPDATE exam_attempts SET answer_final = $2 WHERE bank_id = $1 AND page = '9'`,
+      [bankId, ['D']]);
+
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '9', section: 'Sales', noWrong: true }] });
+    expect(stat.conflicts).toEqual(
+      ['P9-1 既有官方答案 A 與本次最終答案 D 不符，保留既有']);
+    const items = await itemsOfPage(9);
+    expect(items[0].answer_official).toEqual(['A']);
+  });
+
+  // 官方評分評的是真正提交上去的答案＝作戰台上拍板的最終答案，不是同事一開始輸入的。
+  // 搞反的話：AI 說你答錯、你改成 B、官方說這章沒錯 → 卻把改之前的 A 永久鎖成正解，
+  // 而且 certain 取 OR 蓋不掉。這是整支歸檔最貴的錯誤。
+  test('作戰台改過答案的題，鎖的是改之後的最終答案', async () => {
+    await addPage(20, [['A']], { section: 'Changed' });
+    await dbModule.query(
+      `UPDATE exam_attempts SET answer_final = $2 WHERE bank_id = $1 AND page = '20'`,
+      [bankId, ['D']]);
+
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '20', section: 'Changed', noWrong: true }] });
+    expect(stat.locked).toBe(1);
+    const items = await itemsOfPage(20);
+    expect(items[0].answer_official).toEqual(['D']);   // 不是輸入的 A
+  });
+
+  test('歸檔後題庫狀態轉 ready', async () => {
+    const b = await dbModule.query(`SELECT status FROM exam_banks WHERE id = $1`, [bankId]);
+    expect(b.rows[0].status).toBe('ready');
+  });
+});
+
+// 題目是跨考次共用的（綁 odoo_version），章節結果卻綁在 bank 上。兩者範圍不一致時，
+// 「只撈這一場的章節結果」會讓舊考次的章節全部查無官方結果而失去校準。
+//
+// 實測踩過：POST 進一份新題庫後，整個版本 120 題 calibrated 全變 false、
+// 風險總和從 15.03 跳回 17.46——沒有錯誤訊息，信心度就這樣悄悄變了。
+describe('校準跨考次撈章節結果', () => {
+  const { recomputeConfidence } = require('../lib/exam/worker');
+  let oldBank, newBank;
+
+  beforeAll(async () => {
+    const a = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('舊考次','21') RETURNING id`);
+    oldBank = a.rows[0].id;
+    const b = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('新考次','21') RETURNING id`);
+    newBank = b.rows[0].id;
+
+    // 舊考次：一個有官方結果的章節，兩題都被審查過且沒被推翻
+    await dbModule.query(`
+      INSERT INTO exam_sections (bank_id,title,n,correct,incorrect,unanswered,partial)
+      VALUES ($1,'Legacy',2,1,1,0,0)`, [oldBank]);
+    for (const i of [1, 2]) {
+      const it = await dbModule.query(
+        `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,section_title)
+         VALUES ('21',$1,'Q','[]'::jsonb,'single','Legacy') RETURNING id`, [`legacy-${i}`]);
+      const at = await dbModule.query(
+        `INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+         VALUES ($1,$2,'1',$3,$4,$4) RETURNING id`, [it.rows[0].id, oldBank, i, ['A']]);
+      await dbModule.query(`
+        INSERT INTO exam_verdicts (item_id,attempt_id,kind,refuted,correct_answer,confidence,model)
+        VALUES ($1,$2,'adversary',false,$3,80,'m')`, [it.rows[0].id, at.rows[0].id, ['A']]);
+    }
+  });
+
+  test('對新考次重算時，舊考次的章節仍然校準得到', async () => {
+    const bank = (await dbModule.query(
+      `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`, [newBank])).rows[0];
+    const { notes } = await recomputeConfidence(dbModule, bank);
+
+    expect(notes.join('|')).not.toMatch(/Legacy.*沒有官方章節結果/);
+    const rows = await dbModule.query(
+      `SELECT calibrated FROM exam_items WHERE odoo_version='21' AND section_title='Legacy'`);
+    expect(rows.rows.map(r => r.calibrated)).toEqual([true, true]);
+  });
+});

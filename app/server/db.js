@@ -1048,7 +1048,16 @@ async function migrate() {
     // 考試結果必須能精確回到是哪一張 POST 截圖。只靠 bank/page 會在重考同頁碼時串錯。
     { table: 'exam_attempts', col: 'upload_id', sql: 'ALTER TABLE exam_attempts ADD COLUMN upload_id INTEGER REFERENCES exam_uploads(id) ON DELETE SET NULL' },
     { table: 'exam_uploads', col: 'batch_key', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_key TEXT' },
-    { table: 'exam_uploads', col: 'batch_label', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_label TEXT' }
+    { table: 'exam_uploads', col: 'batch_label', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_label TEXT' },
+    // 一頁截圖＝一個章節（舊題庫 19 頁 19 章節，零例外）。章節是 certain 推導的骨架：
+    // 官方成績只到章節層級，沒有章節就沒有「這章全對」可勾，整個歸檔流程失去依據。
+    // 選填——POST 沒帶的可以在歸檔頁補，漏填不該擋住上傳。
+    { table: 'exam_uploads', col: 'section_title', sql: 'ALTER TABLE exam_uploads ADD COLUMN section_title TEXT' },
+    // 「上次我答的那個，已知大概率錯」。人在題庫頁手動勾的，不是系統推的——
+    // 系統推得出來的話它早就有官方答案了。
+    // 存在 items 而不是 attempts：這是對「這一題」的認知，不是對某一次作答的評語；
+    // 下次再考到同一題，警告要跟著題目走。
+    { table: 'exam_items', col: 'history_wrong', sql: 'ALTER TABLE exam_items ADD COLUMN history_wrong BOOLEAN NOT NULL DEFAULT FALSE' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
