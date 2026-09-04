@@ -56,6 +56,9 @@ beforeAll(() => {
       return done(null, { stdout: stray + ' M app/server/pipeline/health-data.js\n', stderr: '' });
     }
     if (line.startsWith('diff --cached')) return done(null, { stdout: '--- a\n+++ b\n', stderr: '' });
+    // runFix 現在會量基線與改後兩次測試（見 finding-fix.js 的 compareToBaseline）；
+    // 這支測試只在乎 node_modules 連結不會被誤判越界，兩次都回同樣的全綠總結即可。
+    if (cmd === 'npm') return done(null, { stdout: '', stderr: 'Tests:       10 passed, 10 total\n' });
     return done(null, { stdout: '', stderr: '' });
   });
 });

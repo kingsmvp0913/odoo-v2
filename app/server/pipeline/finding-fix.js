@@ -55,6 +55,12 @@ const DENY = [
   { re: /^app\/server\/pipeline\/nightly-fix\.js$/,  why: '夜間批次與三道保險絲' },
   { re: /^\.claude\/agents\/fix-review\.md$/,        why: '審這份修正的那個 agent 的判準' },
   { re: /^\.claude\/agents\/feedback-triage\.md$/,   why: '入口的翻譯與 understandable 門檻' },
+  // 上面四支擋的是 .md／守門本體，但那些判準有一半在 JS 裡：fix-review.js 的「解析不出來一律
+  // reject」與「prompt 不得帶 notes」契約、feedback-triage.js 的 understandable 判斷、
+  // retire-prefix.js（飢餓防線的前綴）、maintenance.js、ui-preview.js——.md 只是判準的一半，
+  // 守門碼的程式半邊不能被自動改掉。
+  { re: /^app\/server\/pipeline\/(fix-review|feedback-triage|ui-preview|maintenance|retire-prefix)\.js$/,
+    why: '守門碼的程式半邊——.md 只是判準的一半' },
 ];
 
 // git status --porcelain 的一行 → { code, file }。重新命名（R）會有 "old -> new"，取新的那個。
@@ -141,6 +147,17 @@ function parseJestCounts(summaryLine) {
   return { failed: f ? Number(f[1]) : 0, passed: Number(p[1]) };
 }
 
+// ⚠ `Test Suites:` 那行（例：`Test Suites: 1 failed, 1 passed, 2 total`）跟 `Tests:` 是兩件事：
+// 整支測試檔載入失敗（例如改壞的 require、語法錯）時，jest 不會把裡面沒跑到的測試算進
+// `Tests:` 的 failed，那一行只會少掉一整批 passed、完全沒有 "failed" 字樣——騙人的 pass。
+// suite 級失敗只在這一行留痕，這裡不能刪，否則「suite 載不起來」會被 compareToBaseline 放行。
+function parseJestSuiteFailed(stdout, stderr) {
+  const m = /^Test Suites:\s+(.+)$/m.exec(`${stdout || ''}\n${stderr || ''}`);
+  if (!m) return null;
+  const f = /(\d+)\s+failed/.exec(m[1]);
+  return f ? Number(f[1]) : 0;
+}
+
 /**
  * 平台自己在工作區跑一次測試——**實測結果為準，不採信 agent 自報**。
  *
@@ -153,13 +170,16 @@ async function measureTests(worktree) {
     const { stdout, stderr } = await execFileAsync('npm', ['run', 'test:quiet'],
       { cwd, timeout: FIX_TEST_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 });
     const summary = jestSummary(stdout, stderr);
-    return { ok: true, summary, ...parseJestCounts(summary) };
+    return { ok: true, summary, ...parseJestCounts(summary), suiteFailed: parseJestSuiteFailed(stdout, stderr) };
   } catch (err) {
     // 有紅燈時 jest exit≠0 也走這裡，跟「測試根本沒跑起來」要分得開——靠解不解析得到總結行判定
     const summary = jestSummary(err.stdout, err.stderr);
     return summary
-      ? { ok: false, summary, ...parseJestCounts(summary) }
-      : { ok: false, summary: '', failed: null, passed: null, error: String(err.message || '').split('\n')[0] };
+      ? { ok: false, summary, ...parseJestCounts(summary), suiteFailed: parseJestSuiteFailed(err.stdout, err.stderr) }
+      : {
+        ok: false, summary: '', failed: null, passed: null, suiteFailed: null,
+        error: String(err.message || '').split('\n')[0]
+      };
   }
 }
 
@@ -176,7 +196,12 @@ async function measureTests(worktree) {
  */
 function compareToBaseline(base, after) {
   const unknown = base.failed == null || after.failed == null;
-  const regressed = unknown || after.failed > base.failed;
+  // suite 整支載不起來時 `Tests:` 那行不含 "failed"，只比 failed 數會被騙成 pass——
+  // 補兩道：passed 數掉了也算退步（少掉的測試不會出現在任何一邊的 failed 裡），
+  // 以及 suite 級 failed（只在 `Test Suites:` 那行留痕，見 parseJestSuiteFailed 的註解）。
+  const suiteBroke = !unknown && Number(after.suiteFailed || 0) > Number(base.suiteFailed || 0);
+  const passedDropped = !unknown && Number(after.passed) < Number(base.passed);
+  const regressed = unknown || after.failed > base.failed || passedDropped || suiteBroke;
   const detail = `基線 ${base.failed == null ? '?' : base.failed} failed／${base.passed == null ? '?' : base.passed} passed`
                + ` → 改後 ${after.failed == null ? '?' : after.failed} failed／${after.passed == null ? '?' : after.passed} passed`;
   const head = unknown ? 'unknown' : (regressed ? 'fail' : 'pass');
@@ -289,7 +314,17 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     // 人會以為那些檔案不存在。commit 也用同一批。
     await git(worktree, ['add', '-A']);
     const { stdout: diff } = await git(worktree, ['diff', '--cached']);
-    await setStatus(fixId, 'ready', { notes, test_result: testResult, diff });
+    // 1-C1：退步不能只停在 test_result 那行字，要真的擋下「無條件進 ready」——
+    // 規格 §150 明寫「ready 且測試全綠？」為否時要「留給人看，不自動套」。這裡的 rejected
+    // 是既有狀態值（不新增狀態），nightly-fix.js 的 `status !== 'ready'` 守衛天然會攔住它；
+    // diff 照樣寫進去，人工複核仍看得到改了什麼、理由是什麼。
+    if (cmp.regressed) {
+      await setStatus(fixId, 'rejected', {
+        notes, test_result: testResult, diff, reject_reason: `測試退步：${testResult}`
+      });
+    } else {
+      await setStatus(fixId, 'ready', { notes, test_result: testResult, diff });
+    }
   } catch (err) {
     console.error('[FIX]', err.message);
     await removeWorktree(worktree).catch(() => {});

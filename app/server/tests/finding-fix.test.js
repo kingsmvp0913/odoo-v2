@@ -72,6 +72,12 @@ describe('DENY：守門相關的檔不准被自動改', () => {
     'app/server/pipeline/nightly-fix.js',
     '.claude/agents/fix-review.md',
     '.claude/agents/feedback-triage.md',
+    // 1-C3：這五支是守門碼的程式半邊——.md 只是判準的一半，程式裡的判準同樣不能被自動改掉
+    'app/server/pipeline/fix-review.js',
+    'app/server/pipeline/feedback-triage.js',
+    'app/server/pipeline/ui-preview.js',
+    'app/server/pipeline/maintenance.js',
+    'app/server/pipeline/retire-prefix.js',
   ])('%s 被擋下', (file) => {
     const { violations, files } = classifyChanges(` M ${file}`);
     expect(violations).toHaveLength(1);

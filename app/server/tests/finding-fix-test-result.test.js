@@ -40,6 +40,12 @@ const lastTestResult = () => {
   return { sql, params, value: params.find(p => typeof p === 'string' && /pass|fail|unknown/.test(p)), idx };
 };
 
+// 最後一次 setStatus 寫進去的 status（第二個位置參數，見 finding-fix.js 的 setStatus）
+const lastStatus = () => {
+  const [, params] = mockQuery.mock.calls.filter(([s]) => /UPDATE finding_fixes/.test(s)).pop();
+  return params[1];
+};
+
 // jest 的總結行印在 stderr；紅燈時 exit≠0，promisify 過的 execFile 會 reject 並把兩股輸出掛在 err 上
 let npmResult; // 單一物件或 [基線, 改後] 陣列
 let npmCallCount;
@@ -74,7 +80,7 @@ beforeEach(() => {
 });
 afterAll(() => { fs.rmSync(WORKTREE_ROOT, { recursive: true, force: true }); });
 
-test('測試實際是紅的就記 fail，並把 agent 自報的 pass 一起標出來', async () => {
+test('測試實際是紅的就記 fail，並把 agent 自報的 pass 一起標出來；最終狀態要是 rejected 不是 ready', async () => {
   // 基線沒有紅燈，改後新增 9 個 → 判定退步，不是單看改後有沒有紅燈
   npmResult = [
     { fails: false, stderr: 'Tests:       3122 passed, 3122 total\n' },
@@ -88,6 +94,8 @@ test('測試實際是紅的就記 fail，並把 agent 自報的 pass 一起標�
   expect(value).toContain('3113 passed');
   // 自報與實測不一致要黏在同一行：分開兩處顯示的話，人只會看到前面那個字
   expect(value).toContain('agent 自報 pass');
+  // 1-C1：regressed 必須真的擋下「進 ready」，不能只停在字串描述
+  expect(lastStatus()).toBe('rejected');
 });
 
 test('基線與改後打平才記 pass，且不留下多餘的自報噪音', async () => {
@@ -98,6 +106,7 @@ test('基線與改後打平才記 pass，且不留下多餘的自報噪音', asy
   expect(value).toMatch(/^pass/);
   expect(value).toContain('3122 passed');
   expect(value).not.toContain('自報');
+  expect(lastStatus()).toBe('ready');
 });
 
 test('測試根本沒跑起來要記 unknown，不能因為沒有紅燈就當成綠的', async () => {
@@ -107,4 +116,24 @@ test('測試根本沒跑起來要記 unknown，不能因為沒有紅燈就當成
   const { value } = lastTestResult();
   expect(value).toMatch(/^unknown/);
   expect(value).toContain('agent 自報 pass');
+  expect(lastStatus()).toBe('rejected');
+});
+
+// 1-C2：suite 載入失敗（例如改壞的碼讓某支測試檔整支炸掉）時，jest 的 `Tests:` 那行不含
+// `N failed` 這一段——那是 suite 級失敗，只在 `Test Suites:` 那行留痕。這是 2026-09-03 實測
+// 拿到的真實 jest 輸出，不是編造的數字：52 支測試消失、`Tests:` 那行卻只寫 `passed`。
+test('suite 整支載不起來（Tests 行沒有 failed 段，但少了一大票測試）要判定退步', async () => {
+  npmResult = [
+    { fails: false, stderr: 'Test Suites: 2 passed, 2 total\nTests:       3812 passed, 3812 total\n' },
+    {
+      fails: true,
+      stderr: 'Test Suites: 1 failed, 1 passed, 2 total\nTests:       3760 passed, 3760 total\n'
+    },
+  ];
+  await runFix(1, { findingId: 9, startedBy: 2 });
+
+  const { value } = lastTestResult();
+  // 少了 52 支測試，不能因為 `Tests:` 行沒有 "failed" 字樣就判定 pass
+  expect(value).toMatch(/^fail/);
+  expect(lastStatus()).toBe('rejected');
 });
