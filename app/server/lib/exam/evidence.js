@@ -14,7 +14,9 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const TIMEOUT_MS = parseInt(process.env.EXAM_EVIDENCE_TIMEOUT_MS || '180000', 10);
+// 一次呼叫＝一題的原始碼查證。與 review 同樣拉到 1200s：Grep 在 Odoo 全量原始碼上
+// 可能要翻很多輪，而逾時的代價是這題完全沒有證據（信心度就永遠停在「沒找證據」那一層）。
+const TIMEOUT_MS = parseInt(process.env.EXAM_EVIDENCE_TIMEOUT_MS || '1200000', 10);
 const MODEL = process.env.EXAM_JUDGE_MODEL || 'opus';
 
 // 使用者拍板：信心低於這個數就強制找證據。

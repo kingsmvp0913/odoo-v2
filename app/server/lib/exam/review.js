@@ -12,7 +12,12 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const TIMEOUT_MS = parseInt(process.env.EXAM_JUDGE_TIMEOUT_MS || '180000', 10);
+// 一次呼叫＝一整頁（3–12 題一起審查、抄題、翻譯）。實測 3 題約 45s、10 題約 90–120s。
+//
+// 預設 1200s 是刻意給很寬的：這個數字是「掛死」而非「慢」的門檻，而逾時的代價
+// 是整頁重跑、白燒一次 token。原本 180s 在一頁 8 題時就撞到了（實測 P10）。
+// 代價是真的掛死時要等 20 分鐘才發現——但那比每次多題的頁都逾時重跑划算。
+const TIMEOUT_MS = parseInt(process.env.EXAM_JUDGE_TIMEOUT_MS || '1200000', 10);
 const MODEL = process.env.EXAM_JUDGE_MODEL || 'opus';
 
 // 空的 MCP 設定：不加 --strict-mcp-config 的話子行程會繼承環境 MCP，
