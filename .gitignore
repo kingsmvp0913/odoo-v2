@@ -76,6 +76,9 @@ app/server/pipeline/mcp/context7.local.json
 # 執行期生成的掃碟守衛 settings（claude-runner 依本機 hook 腳本路徑產生）
 app/server/pipeline/hooks/scan-guard.settings.json
 /data/odoo-core/
+# 認證考試題庫：截圖是二進位大檔，answer-key.json 含官方答案。
+# 答案檔進版控等於讓 agent 讀得到，那正是原專案花大力氣在防的事。
+/data/exam/
 
 # graphify 手動工具（scripts/graphify_index.py）的產物：自動索引已移除，圖只在跑的當下正確、
 # 無任何程式或 AI 指示在讀它。留在版控只是讓每次 clone 多拉十幾 MB 的化石。
