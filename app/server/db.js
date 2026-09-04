@@ -1013,6 +1013,28 @@ async function migrate() {
     ).catch(() => {});
   }
 
+  // 這功能上線前就已存在的健檢提案，補開一筆意見回饋單（見 health-check-runner.js 的
+  // openFeedbackForFinding）。條件與 auto-fix-scope.js 的 inAutoFixScope 一致：中等以上、
+  // layer 在可自動修範圍內（'platform' 是 health-auditor 詞彙表對 'code' 的別名）。
+  // 只轉 status='approved'：no_change 是人裁決過「不須調整」，補單等於把擋掉的重新打開；
+  // low 不在自動範圍，補了也不會被撈，只會在待辦清單長期掛著。
+  // 一樣走 migration_flags：這是補歷史資料，不是每次開機都要重算的東西。
+  const { rows: [openedFlag] } = await query(
+    "INSERT INTO migration_flags (key) VALUES ('health_findings_open_feedback_backfill') ON CONFLICT DO NOTHING RETURNING key"
+  );
+  if (openedFlag) {
+    await query(
+      `INSERT INTO feedback (user_id, content, status, triage_title, triage_detail, triage_layer,
+                             triage_action, finding_id)
+       SELECT NULL, f.diagnosis, 'approved', f.agent_label, f.diagnosis, f.layer, f.rationale, f.id
+         FROM health_check_findings f
+        WHERE f.kind = 'proposal' AND f.status = 'approved'
+          AND f.severity IN ('medium', 'high', 'error')
+          AND f.layer IN ('code', 'prompt', 'observability', 'platform')
+          AND f.id NOT IN (SELECT finding_id FROM feedback WHERE finding_id IS NOT NULL)`
+    ).catch(e => console.error('[migrate] 健檢提案補開單失敗：', e.message));
+  }
+
   // VPN 憑證上移專案層（同專案共用一條隧道）。獨立模組，見 lib/vpn-migrate.js 的註解。
   // 這是迴圈跑多筆 UPDATE、沒包交易，中途失敗可能半套（部分連線埠改到 22000 系列、部分留在
   // 舊值）——不能吞得無聲無息，至少要印出來讓人知道要去查；遷移失敗不該擋住整個 server 起動，故不 throw。

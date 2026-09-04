@@ -14,19 +14,27 @@
         rejecting: {},     // { [id]: true } 該列正在展開駁回原因輸入
         rejectNote: {},    // { [id]: string }
         attachUrls: {},    // { [attachmentId]: objectURL }
+        healthFailed: null,// 最新一輪健檢若失敗就放那一列，用來顯示警示
       };
     },
     computed: {
       statusLabel() { return STATUS_LABEL; },
       layerLabel() { return LAYER_LABEL; },
     },
-    async created() { await this.load(); },
+    async created() { await this.load(); await this.loadHealth(); },
     beforeUnmount() {
       Object.values(this.attachUrls).forEach(url => URL.revokeObjectURL(url));
     },
     methods: {
       pillClass(status) { return STATUS_PILL[status] || 'pill-info'; },
       fmtTime(ts) { return new Date(ts).toLocaleString('zh-TW'); },
+      // 只取最新一輪判斷有沒有失敗。失敗不擋主清單：這是附註，沒有它整頁照樣可用。
+      async loadHealth() {
+        try {
+          const h = await Api.get('admin/health-check');
+          this.healthFailed = (h && h.length && h[0].status === 'error') ? h[0] : null;
+        } catch (e) { this.healthFailed = null; }
+      },
       async load() {
         this.loading = true;
         try {
@@ -99,10 +107,20 @@
     },
     template: `
       <div class="topbar ui-next-admin-head">
-        <h1>意見回饋管理</h1>
+        <h1>改善提案</h1>
         <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
+        <!-- 健檢掛掉時它一筆單都不會開，這一頁看起來就跟「今天本來就沒事」一模一樣（此 repo 踩過：
+             夜班空轉 98 輪無人察覺）。改善提案已收斂到這一頁，所以警示也要在這裡，不能只留在
+             健檢紀錄頁——那頁現在是當 log 看的，沒事不會有人點進去。 -->
+        <div v-if="healthFailed" class="error-msg" style="margin-bottom:var(--space-3)">
+          ⚠ 上一輪 AI 健檢失敗（{{ new Date(healthFailed.created_at).toLocaleString() }}），這一輪沒有產生任何提案。
+          <span v-if="healthFailed.error">原因：{{ healthFailed.error }}</span>
+          <!-- 不吃 error-msg 的紅：連結在紅底上是紅字，實測幾乎看不到。用 --text 加底線，
+               在深淺兩色主題下都讀得到（配色一律走變數，不寫死顏色）。 -->
+          <a href="#/admin/health" style="margin-left:var(--space-2);color:var(--text);text-decoration:underline">看健檢紀錄 →</a>
+        </div>
         <div class="settings-section">
           <div class="arj-header-row">
             <!-- 後端 GET /api/admin/feedback 有 LIMIT 200（feedback-routes.js），rows.length 在

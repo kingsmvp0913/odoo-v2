@@ -205,7 +205,7 @@
     },
     template: `
       <div class="topbar ui-next-admin-head">
-        <h1>改善提案</h1>
+        <h1>健檢紀錄</h1>
         <div class="ui-next-admin-head-actions"><button class="btn btn-outline btn-sm" @click="$router.push('/admin')">← 返回</button></div>
       </div>
       <div class="content">
