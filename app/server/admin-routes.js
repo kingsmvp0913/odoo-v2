@@ -714,7 +714,9 @@ function registerRoutes(app) {
   app.get('/api/admin/health-check/findings/:id/fix', auth, async (req, res) => {
     try {
       const { rows } = await query(
-        `SELECT id, finding_id, status, branch, notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at
+        // review_notes 是 fix-review 的推理過程——無人監督閘門唯一的人類稽核材料。漏掉它前端
+        // 的 v-if 會靜默不渲染、不拋錯，畫面看起來只是「這條沒有審查說明」，零徵狀。
+        `SELECT id, finding_id, status, branch, notes, review_notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at
            FROM finding_fixes WHERE finding_id=$1 ORDER BY id DESC LIMIT 1`, [req.params.id]);
       res.json(rows[0] || null);
     } catch (err) { res.status(500).json({ error: err.message }); }

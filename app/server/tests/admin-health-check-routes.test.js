@@ -372,3 +372,21 @@ test('套用要把在飛任務清單傳進去：重不重啟由 runner 的實際
   expect(r.status).toBe(200);
   expect(mockApply).toHaveBeenCalledWith(7, expect.any(Number), []);
 });
+
+// review_notes 是 fix-review 的推理過程——那份修正會被無人監督地合併進 master，事後要問
+// 「它為什麼判 approve」就只剩這一段。SELECT 漏掉它時前端的 v-if 靜默不渲染、不拋錯，
+// 畫面看起來只是「這條沒有審查說明」，零徵狀——所以要有測試釘住欄位真的送得到前端。
+test('取修正詳情要帶 review_notes：漏了前端會靜默不顯示審查理由', async () => {
+  const findingId = await newProposal();
+  const { rows: [fix] } = await dbModule.query(
+    `INSERT INTO finding_fixes (finding_id, status, created_by) VALUES ($1,'ready',1) RETURNING id`,
+    [findingId]);
+  await dbModule.query(
+    `UPDATE finding_fixes SET review_notes=$2 WHERE id=$1`, [fix.id, '截圖看不出差別，但 diff 只動註解']);
+
+  const r = await request(app).get(`/api/admin/health-check/findings/${findingId}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(r.status).toBe(200);
+  expect(r.body.review_notes).toBe('截圖看不出差別，但 diff 只動註解');
+});
