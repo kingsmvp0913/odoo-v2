@@ -467,3 +467,64 @@ describe('一次性遷移：health_check_findings.status 改預設核准', () =>
     }
   });
 });
+
+// 被重啟砍掉的批次要在開機時收掉。健檢與夜間批次都靠 finally 把自己那一列從 running 收成 done，
+// 而重啟（人工 docker restart，或別條修正合併後的自動重啟）會連 node 行程一起帶走那個 finally。
+// 留下的假 running 不只是少一列紀錄：健檢紀錄頁會永遠顯示「執行中」，而夜間批次判「上一批是不是
+// 還在跑」也會被它騙住。實測 2026-09-05：run #21 就是這樣被留下來的。
+describe('開機收掉被重啟中斷的執行', () => {
+  // ⚠ 自備 pool：本檔上一個 describe 在 finally 裡把 pool 設回 null，沿用會拿到
+  // 「no PostgreSQL user name specified in startup packet」。
+  beforeAll(async () => {
+    const freshDb = newDb();
+    const { Pool } = freshDb.adapters.createPg();
+    dbModule._setPoolForTesting(new Pool());
+    await dbModule.migrate();
+  });
+  afterAll(() => { dbModule._setPoolForTesting(null); });
+
+  test('停在 running 的 health_check_runs → 標 error 並寫明原因，不留成假的「執行中」', async () => {
+    const { rows: [run] } = await dbModule.query(
+      "INSERT INTO health_check_runs (status, cadence) VALUES ('running','nightly-fix') RETURNING id");
+    const { rows: [done] } = await dbModule.query(
+      "INSERT INTO health_check_runs (status, cadence) VALUES ('done','daily') RETURNING id");
+
+    await dbModule.migrate();   // ＝下一次開機
+
+    const { rows: [after] } = await dbModule.query(
+      'SELECT status, finished_at, error FROM health_check_runs WHERE id=$1', [run.id]);
+    // 標 error 不是 done：它確實沒跑完，記成 done 會讓那一晚的空結果看起來像「本來就沒事做」
+    expect(after.status).toBe('error');
+    expect(after.finished_at).not.toBeNull();
+    expect(after.error).toContain('中斷');
+    // 對照組：已經收掉的不准被動到，否則每次開機都會把歷史紀錄改寫一遍
+    const { rows: [untouched] } = await dbModule.query(
+      'SELECT status, error FROM health_check_runs WHERE id=$1', [done.id]);
+    expect(untouched.status).toBe('done');
+    expect(untouched.error).toBeNull();
+  });
+
+  test('停在 running 的 finding_fixes → 標 failed（已經沒有行程在推它了）', async () => {
+    const { rows: [run] } = await dbModule.query(
+      "INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+    const { rows: [f] } = await dbModule.query(
+      `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+       VALUES ($1,'__audit__','診斷','medium','proposal','approved') RETURNING id`, [run.id]);
+    const { rows: [fx] } = await dbModule.query(
+      "INSERT INTO finding_fixes (finding_id, status) VALUES ($1,'running') RETURNING id", [f.id]);
+    const { rows: [adopted] } = await dbModule.query(
+      "INSERT INTO finding_fixes (finding_id, status) VALUES ($1,'adopted') RETURNING id", [f.id]);
+
+    await dbModule.migrate();
+
+    const { rows: [after] } = await dbModule.query(
+      'SELECT status, reject_reason FROM finding_fixes WHERE id=$1', [fx.id]);
+    expect(after.status).toBe('failed');
+    expect(after.reject_reason).toContain('中斷');
+    // ⚠ adopted 不可被掃掉：那是「改好了只差合併」，下一批的 resumeAdoptedFixes 要靠它撿回來。
+    // 一起收掉的話，分支上那顆審過的 commit 就再也沒人撿了。
+    const { rows: [keep] } = await dbModule.query(
+      'SELECT status FROM finding_fixes WHERE id=$1', [adopted.id]);
+    expect(keep.status).toBe('adopted');
+  });
+});

@@ -1223,3 +1223,72 @@ test('寫回 pending 之後不再是候選 → 連跑兩晚只會被處理一次
     "SELECT COUNT(*)::int AS n FROM health_check_findings WHERE status='approved' AND kind='proposal'");
   expect(rows[0].n).toBe(0);                    // 第二晚沒有殘留的 approved 可撈
 });
+
+// --- 合併被平台當下的狀態擋住（deferred）---
+// 實測 2026-09-05：提案 #106 修好、審過、adopt 了，applyFix 卻因為「主 clone 有未提交的變更」
+// 拋錯（人與批次同時在動同一個 clone）。當時的結果是三件事一起發生：分支孤在那裡沒人撿、
+// 失敗額度被燒掉一格、原因只進 console.error（本平台 pipeline 的 console 不落檔）。以下三支各釘一件。
+//
+// ⚠ 這幾支要用會真的落地的 adoptFix：stubHappyPath 的 adoptFix 只是 jest.fn，不會把 finding_fixes
+// 改成 'adopted'，而 resumeAdoptedFixes 正是靠掃那個狀態決定要撿誰——用假的等於整條路徑沒被測到。
+const adoptForReal = () => adoptFix.mockImplementation(async (fixId) => {
+  await dbModule.query(`UPDATE finding_fixes SET status='adopted' WHERE id=$1`, [fixId]);
+  return { branch: 'fix/x', commit: 'abc' };
+});
+
+test('applyFix 拋錯 → 不燒失敗額度（那不是這份 diff 的錯）', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  adoptForReal();
+  applyFix.mockRejectedValue(new Error('主 clone 有未提交的變更，先處理再套用'));
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [f] } = await dbModule.query('SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  // 對照組是下面「審核 reject」那條路：那個才該 +1。這裡 +1 的話，連著三晚有人在批次時間編輯
+  // 主 clone，使用者核准的意見就會被「連續失敗三次」退回人工——三次都不是它的問題。
+  expect(f.fix_attempts).toBe(0);
+  expect(f.status).toBe('approved');
+});
+
+test('applyFix 拋錯 → 原因寫進 last_attempt_note（不能只留在 console）', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  adoptForReal();
+  applyFix.mockRejectedValue(new Error('主 clone 有未提交的變更，先處理再套用'));
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [f] } = await dbModule.query('SELECT last_attempt_note FROM feedback WHERE id=$1', [fbId]);
+  // 沒有這欄的話，這一列在畫面上跟「今晚還沒輪到它」一模一樣——使用者只看得到「已核准」。
+  expect(f.last_attempt_note).toContain('主 clone 有未提交的變更');
+  // 修正列留在 adopted，下一批才撿得到（狀態若被改掉，resumeAdoptedFixes 就永遠掃不到它）
+  const { rows: [fx] } = await dbModule.query('SELECT status FROM finding_fixes ORDER BY id DESC LIMIT 1');
+  expect(fx.status).toBe('adopted');
+});
+
+test('上一批停在 adopted 的 → 下一批只補合併，不重跑 platform-fix', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  adoptForReal();
+  applyFix.mockRejectedValue(new Error('主 clone 有未提交的變更，先處理再套用'));
+  await nightlyFix.runNightlyFix({ startedBy: userId });   // 第一晚：卡在 adopted
+  expect(runFix).toHaveBeenCalledTimes(1);
+
+  jest.clearAllMocks();
+  stubTriage('code');
+  stubHappyPath();                                          // 第二晚：主 clone 乾淨了
+  const second = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(applyFix).toHaveBeenCalledTimes(1);
+  // 頭號斷言：不准再跑一次 platform-fix。重跑等於重付 triage＋兩次全套測試＋一次 fix-review，
+  // 換到的還是分支上那份已經審過的同一個 diff。
+  expect(runFix).not.toHaveBeenCalled();
+  // 來源要標掉，否則第三晚它又是候選（補合併必須發生在取候選之前，才有這個效果）
+  const { rows: [f] } = await dbModule.query('SELECT status FROM feedback WHERE id=$1', [fbId]);
+  expect(f.status).toBe('done');
+  expect(second.attempted).toBe(0);              // 這一晚沒有新候選可跑
+});

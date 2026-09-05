@@ -81,14 +81,35 @@ describe('token 簽發失敗（缺 JWT_SECRET 或 cli_push_user_id）', () => {
 describe('playwright 載入或啟動失敗 → 走無截圖路徑', () => {
   test('chromium.launch 拋錯時 captureBeforeAfter 回 null（不拋出）', async () => {
     mockQuery.mockResolvedValue({ rows: [{ cli_push_user_id: 1 }] });
-    // 讓 createServer 回一個真的 http server，讓流程走到 launch 那一步再炸
-    mockCreateServer.mockImplementation((handler) => jest.requireActual('http').createServer(handler));
-    mockLaunch.mockRejectedValue(new Error('Executable doesn\'t exist'));
-    const result = await captureBeforeAfter(os.tmpdir(), '#/tasks');
-    expect(result).toBeNull();
-    // 起了才炸：這條路徑上 createServer 應該有被呼叫（與上面那支形成對照，證明
-    // 「不起伺服器」的斷言真的分得出兩種情況，不是恆真）
-    expect(mockCreateServer).toHaveBeenCalled();
+    // ⚠ 字型與 data/config.json 都要自己餵，不能靠真檔：兩者都在 .gitignore 內，於是主 clone 有、
+    // **worktree 沒有**——而 worktree 正是夜間批次跑自我驗證的地方（finding-fix.js 在 worktree 內
+    // 跑全套測試）。少了這兩個 stub，缺字型／缺 JWT_SECRET 的早退會讓流程走不到 launch，這一支在
+    // 批次的基線裡就永遠是紅的（實測 2026-09-05：每晚基線都掛著它，靠「改動前後相同」才沒被當成
+    // 回歸——等於這一支對批次完全失去把關能力）。
+    // ⚠ 正式執行不受影響：批次是在主 clone 的行程裡 require 本模組，REPO_ROOT 指的是主 clone，
+    // worktree 只是傳進來的參數。純粹是測試自己被搬進 worktree 才碰得到。
+    // 只攔自己這兩個路徑、其餘 fallthrough：無條件攔 fs 會弄壞 jest 自己的檔案讀取。
+    const realReaddir = fs.readdirSync;
+    const realReadFile = fs.readFileSync;
+    const fontSpy = jest.spyOn(fs, 'readdirSync').mockImplementation((p, ...rest) =>
+      (String(p).includes('.fontroot') ? ['NotoSansTC-Regular.otf'] : realReaddir(p, ...rest)));
+    const cfgSpy = jest.spyOn(fs, 'readFileSync').mockImplementation((p, ...rest) =>
+      (String(p).endsWith(path.join('data', 'config.json'))
+        ? JSON.stringify({ JWT_SECRET: 'test-secret' })
+        : realReadFile(p, ...rest)));
+    try {
+      // 讓 createServer 回一個真的 http server，讓流程走到 launch 那一步再炸
+      mockCreateServer.mockImplementation((handler) => jest.requireActual('http').createServer(handler));
+      mockLaunch.mockRejectedValue(new Error('Executable doesn\'t exist'));
+      const result = await captureBeforeAfter(os.tmpdir(), '#/tasks');
+      expect(result).toBeNull();
+      // 起了才炸：這條路徑上 createServer 應該有被呼叫（與上面那支形成對照，證明
+      // 「不起伺服器」的斷言真的分得出兩種情況，不是恆真）
+      expect(mockCreateServer).toHaveBeenCalled();
+      // launch 真的被走到了才算數：少了這條，缺字型的早退（也回 null、也沒起 server）會讓
+      // 這一支在「根本沒進到 playwright」的情況下照樣綠——那正是它原本紅的那個路徑。
+      expect(mockLaunch).toHaveBeenCalled();
+    } finally { fontSpy.mockRestore(); cfgSpy.mockRestore(); }
   });
 });
 

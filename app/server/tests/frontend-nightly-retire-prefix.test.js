@@ -44,3 +44,16 @@ test('後端與前端的機器退場前綴都解析得到（解析失敗或空�
 test('前端 pill 判斷用的前綴，與後端實際寫進 note 的前綴逐字相同', () => {
   expect(frontendPrefix()).toBe(backendPrefix());
 });
+
+// 同一條縫的第二處：`last_attempt_note`（夜間批次寫「上次試到哪、為什麼沒過」的欄位）。
+// 後端 nightly-fix.js 寫它、前端 AdminFeedback.js 的 stateOf 讀它，中間一樣是零守衛的字面值。
+// 欄位改名時的症狀與前綴那條完全一樣：測試全綠、畫面上那個狀態靜默消失，使用者又回到
+// 「已核准的意見一直停在已核准，不知道昨晚試過沒過」——也就是本欄一開始要解決的那件事。
+test('last_attempt_note：後端會寫、前端會讀（欄位改名時兩邊必須一起改）', () => {
+  const backend = read('server/pipeline/nightly-fix.js');
+  const frontend = read('public/js/ui-next/pages/AdminFeedback.js');
+  // 後端：UPDATE 語句裡真的有設這一欄（只 SELECT 不算——那不會讓畫面有東西看）
+  expect(backend).toMatch(/UPDATE\s+feedback\s+SET[\s\S]{0,200}?last_attempt_note\s*=/);
+  // 前端：stateOf 裡真的讀得到它
+  expect(frontend).toMatch(/stateOf\(r\)\s*\{[\s\S]*?r\.last_attempt_note/);
+});

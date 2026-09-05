@@ -71,6 +71,12 @@
             ? { label: '翻譯失敗', pill: 'pill-danger', hint: note }
             : { label: '看不懂，已退回', pill: 'pill-warn', hint: note };
         }
+        // 已核准但夜間批次試過沒成：只印「已核准」的話，這一列跟「今晚還沒輪到它」長得一模一樣。
+        // 原因以前只進 console.error（本平台的 pipeline console 不落檔＝等於沒寫），要累計三次
+        // 退場了才由 triage_note 講出來——前兩次一樣是無聲的。後端 last_attempt_note 補的就是這段。
+        if (r.status === 'approved' && r.last_attempt_note) {
+          return { label: '改善中，上次未完成', pill: 'pill-warn', hint: r.last_attempt_note };
+        }
         return { label: STATUS_LABEL[r.status] || r.status, pill: this.pillClass(r.status), hint: '' };
       },
       // 縮圖是 objectURL（附件端點要帶 token，<img src> 直連拿不到）。開新分頁看原圖，

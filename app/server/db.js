@@ -1040,6 +1040,18 @@ async function migrate() {
     // reject 兩條路徑都要寫（見 pipeline/nightly-fix.js）。不可疊用既有的 notes 欄——那欄已被
     // platform-fix 自己的辯護詞佔用（finding-fix.js），混用會讓「誰寫的、審什麼」分不清楚。
     { table: 'finding_fixes', col: 'review_notes', sql: 'ALTER TABLE finding_fixes ADD COLUMN review_notes TEXT' },
+    // 這一筆修正是替哪些來源（意見／提案）做的：`[{ source:'feedback'|'health', id }]`。
+    // ⚠ 不是冗餘資料。合併被環境擋下時（主 clone 髒等）修正會停在 adopted，下一批要能只做
+    // 「重新合併」而不重跑一次 platform-fix；但合併成功後得把來源標 done，而來源清單本來只活在
+    // 記憶體裡的 group（feedback.finding_id 是**成功後**才回填的，拿它反查是雞生蛋）。
+    // 沒有這一欄就只能整條從頭重做：重付 triage、重跑兩次全套測試，換到同一份已經寫好的 diff。
+    { table: 'finding_fixes', col: 'members', sql: 'ALTER TABLE finding_fixes ADD COLUMN members JSONB' },
+    // 「上一次自動修正試到哪、為什麼沒過」。⚠ 在此之前這個原因只進 console.error，而本平台的
+    // pipeline console 不落任何檔（見 rules）＝等於沒寫：畫面上只看得到 fix_attempts 這個裸計數，
+    // 使用者看到的是自己核准的意見一直停在「已核准」，完全不知道昨晚試過、更不知道卡在哪。
+    // 累計到第三次才由 retireToHuman 寫 triage_note 是太晚的補救——前兩次一樣是無聲的。
+    { table: 'feedback', col: 'last_attempt_note', sql: 'ALTER TABLE feedback ADD COLUMN last_attempt_note TEXT' },
+    { table: 'health_check_findings', col: 'last_attempt_note', sql: 'ALTER TABLE health_check_findings ADD COLUMN last_attempt_note TEXT' },
     // 「這題落在官方全對的章節」——官方說某章 incorrect=0 等價於逐題告知「這些都對」，
     // 是整份題庫裡唯一邏輯上必然為真的東西。與 answer_official 不等價：未來若拿到官方
     // 逐題正解，會有「有官方答案但該章沒全對」的題。合併時取 OR（任一次考試 certain
@@ -1224,6 +1236,31 @@ async function migrate() {
   // 但它只是補值，失敗不該擋住 server 起動，故比照上面的 vpn-migrate 只印不 throw。
   await query("UPDATE odoo_envs SET started_at=updated_at WHERE status='running' AND started_at IS NULL")
     .catch(e => console.error('[migrate] odoo_envs.started_at 補值失敗：', e.message));
+
+  /**
+   * 被重啟砍掉的健檢／夜間批次要在開機時收掉。
+   *
+   * 健檢與夜間批次都靠 `finally` 把自己那一列從 running 收成 done——重啟（人工 docker restart、
+   * 或別條修正合併後的自動重啟）會連 node 行程一起帶走，那個 finally 永遠跑不到。留下的後果不是
+   * 「少一列紀錄」而是兩件會擴散的事：健檢紀錄頁永遠顯示「執行中」（假的進行中，看起來像卡住的
+   * 批次還在跑），而夜間批次開跑前是拿維護旗標＋上一輪狀態判「是不是還在跑」的，一列假 running
+   * 會讓後面每一晚都以為前一批沒結束。
+   *
+   * 開機這一刻不可能有任何一列是真的在跑（跑的人就是這個剛起來的行程），所以無條件收掉、不看時間
+   * 差——用「超過 N 小時才算過期」反而會留下一段判不準的灰色地帶。
+   * 標成 error 而不是 done：它確實沒跑完，記成 done 會讓那一晚的空結果看起來像「本來就沒事做」。
+   * finding_fixes 同理，停在 running 的那筆修正其實已經沒有行程在推它了。
+   */
+  await query(
+    `UPDATE health_check_runs SET status='error', finished_at=NOW(),
+            error=COALESCE(error,'') || '平台重啟時這次執行仍在進行中，已被中斷（未跑完）。'
+      WHERE status='running'`
+  ).catch(e => console.error('[migrate] 收掉中斷的 health_check_runs 失敗：', e.message));
+  await query(
+    `UPDATE finding_fixes SET status='failed', finished_at=NOW(),
+            reject_reason=COALESCE(reject_reason,'') || '平台重啟時這次修正仍在進行中，已被中斷（未跑完）。'
+      WHERE status='running'`
+  ).catch(e => console.error('[migrate] 收掉中斷的 finding_fixes 失敗：', e.message));
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});

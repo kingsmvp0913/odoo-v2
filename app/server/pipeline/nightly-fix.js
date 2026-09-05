@@ -354,10 +354,26 @@ async function materializeGroup(group, runId) {
   return { findingId: row.id, reused: false, ...base };
 }
 
-async function createFixRow(findingId, startedBy) {
+/** cand.members（記憶體物件，帶整列 row）壓成落得了 DB 的最小識別：`[{ source, id }]` */
+function memberRefs(cand) {
+  return (cand.members || []).map(it => ({ source: it.source, id: it.row.id }));
+}
+
+/**
+ * memberRefs 的反向：把 finding_fixes.members 還原成 markGroupDone／noteDeferred 吃的形狀。
+ * ⚠ 要收得下字串：JSONB 欄位在 pg 會回物件，pg-mem 有時回原始字串，只認陣列會在測試裡靜默變空。
+ */
+function membersFromRefs(refs) {
+  let list = refs;
+  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = null; } }
+  return (Array.isArray(list) ? list : []).map(r => ({ source: r.source, row: { id: r.id } }));
+}
+
+async function createFixRow(findingId, startedBy, cand) {
   const { rows: [row] } = await query(
-    `INSERT INTO finding_fixes (finding_id, status, created_by) VALUES ($1,'running',$2) RETURNING id`,
-    [findingId, startedBy || null]
+    `INSERT INTO finding_fixes (finding_id, status, created_by, members)
+     VALUES ($1,'running',$2,$3) RETURNING id`,
+    [findingId, startedBy || null, cand ? JSON.stringify(memberRefs(cand)) : null]
   );
   return row.id;
 }
@@ -416,6 +432,33 @@ async function retireToHuman(isFeedback, id, note) {
   }
 }
 
+/** 落進 last_attempt_note 的字串。長度設限：這欄會整串送進管理頁的列，不是給人讀 stack 的地方。 */
+function attemptNote(reason) {
+  return String(reason || '未提供原因').replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
+/**
+ * 「修好了、審過了，只是這一刻合併不進去」——不是這條修正的錯，不記失敗次數。
+ *
+ * applyFix 會拋的四種原因（主 clone 有未提交的變更、與 origin 分岔、push 失敗、查不到容器名）
+ * 全是**平台當下的狀態**，不是這份 diff 的品質問題：重跑一次 platform-fix 不會讓主 clone 變乾淨。
+ * 記成失敗的話，只要有人連著三晚在批次跑的時候編輯主 clone，使用者核准的意見就會被「連續失敗
+ * 三次」退回人工——而三次都不是它的問題。實際發生過（2026-09-05，提案 #106）。
+ *
+ * 修正列留在 adopted：分支上的 commit 是好的，下一批開跑時 resumeAdoptedFixes 直接重試合併，
+ * 不重跑 agent、不重跑測試。
+ */
+async function noteDeferred(cand, reason) {
+  const note = attemptNote(`已修好並通過審核，但這次合併不進去，下批會自動重試：${reason}`);
+  for (const it of cand.members) {
+    await query(
+      it.source === 'feedback'
+        ? 'UPDATE feedback SET last_attempt_note=$2 WHERE id=$1'
+        : 'UPDATE health_check_findings SET last_attempt_note=$2 WHERE id=$1',
+      [it.row.id, note]);
+  }
+}
+
 /**
  * 這一晚沒能合併 → 每個來源成員的連續失敗次數 +1，達門檻就退回人工。
  *
@@ -425,15 +468,21 @@ async function retireToHuman(isFeedback, id, note) {
  * 無上限的成本＋安靜的飢餓，兩件事都不能留。
  */
 async function noteFailedAttempt(cand, reason) {
+  // ⚠ 不可命名為 note：迴圈裡（達門檻退場那段）已經有一個 `const note`，同名會讓這裡的參照
+  // 落進那個 block 的 TDZ，整個函式在執行期炸「Cannot access 'note' before initialization」，
+  // 而呼叫端是 `.catch(console.error)` ⇒ 失敗次數靜默不再累加、飢餓防線整條失效。
+  const attemptText = attemptNote(reason);
   for (const it of cand.members) {
     const isFeedback = it.source === 'feedback';
     const { rows: [r] } = isFeedback
       ? await query(
-        `UPDATE feedback SET fix_attempts = COALESCE(fix_attempts,0) + 1 WHERE id=$1 RETURNING fix_attempts`,
-        [it.row.id])
+        `UPDATE feedback SET fix_attempts = COALESCE(fix_attempts,0) + 1, last_attempt_note=$2
+          WHERE id=$1 RETURNING fix_attempts`,
+        [it.row.id, attemptText])
       : await query(
-        `UPDATE health_check_findings SET fix_attempts = COALESCE(fix_attempts,0) + 1 WHERE id=$1 RETURNING fix_attempts`,
-        [it.row.id]);
+        `UPDATE health_check_findings SET fix_attempts = COALESCE(fix_attempts,0) + 1, last_attempt_note=$2
+          WHERE id=$1 RETURNING fix_attempts`,
+        [it.row.id, attemptText]);
     const attempts = (r && r.fix_attempts) || 0;
     if (attempts < NIGHTLY_FIX_MAX_ATTEMPTS) continue;
 
@@ -452,7 +501,7 @@ async function noteFailedAttempt(cand, reason) {
  * ——不得寫死 user id，也不得代為決定用誰的身分推。
  */
 async function runOneCandidate(cand, { pushUserId, startedBy }) {
-  let fixId = await createFixRow(cand.findingId, startedBy);
+  let fixId = await createFixRow(cand.findingId, startedBy, cand);
   await runFix(fixId, { findingId: cand.findingId, startedBy });
 
   let attempt = 0;
@@ -483,8 +532,17 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
         return { merged: false, adopted: true, fixId };
       }
       await adoptFix(fixId, pushUserId);
-      // ⚠ inflight 傳非空值 ⇒ 只合併不重啟（最後才單獨重啟一次）
-      await applyFix(fixId, pushUserId, ['nightly-fix']);
+      try {
+        // ⚠ inflight 傳非空值 ⇒ 只合併不重啟（最後才單獨重啟一次）
+        await applyFix(fixId, pushUserId, ['nightly-fix']);
+      } catch (err) {
+        // ⚠ 這個 catch 不能省成外層的統一 catch：外層會 noteFailedAttempt，而 applyFix 拋的
+        // 是「平台此刻的狀態」不是這份 diff 的問題（見 noteDeferred）。修正列留在 adopted，
+        // 由下一批的 resumeAdoptedFixes 直接重試合併。
+        console.error('[NIGHTLY-FIX] 提案 #%d 已採用但這次合併不進去，留待下批重試：%s',
+          cand.findingId, err.message);
+        return { merged: false, deferred: true, fixId, reason: err.message };
+      }
       return { merged: true, fixId };
     }
 
@@ -503,9 +561,46 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
 
     // 退回改一次：開新的一筆 finding_fixes 重跑（不覆寫舊列——finding_fixes 本來就是為
     // 「一條提案可試修多次」設計的，覆寫會讓「上一次試了什麼、為什麼失敗」消失）。
-    fixId = await createFixRow(cand.findingId, startedBy);
+    fixId = await createFixRow(cand.findingId, startedBy, cand);
     await runFix(fixId, { findingId: cand.findingId, startedBy });
   }
+}
+
+/**
+ * 開跑前先把上一批「改好了但沒合併進去」的撿回來重試 -> 這一輪合併成功的筆數。
+ *
+ * 這是 deferred 的另一半：停在 adopted 的修正，分支上的 commit 已經寫好、測試過、審核過了，
+ * 缺的只是主 clone 當下不能合併。沒有這段的話它會永遠孤在分支上（實測 2026-09-05 提案 #106），
+ * 而來源意見仍是 approved ⇒ 隔晚整條從頭重做：重付 triage、重跑兩次全套測試、重跑一次 fix-review，
+ * 換到的還是同一份 diff。這裡只做「合併＋標來源」，一個 agent 都不叫。
+ *
+ * ⚠ 刻意放在保險絲（fuseTripped）之前：保險絲擋的是 token 花費，這段不燒 token。
+ * ⚠ 舊資料的 members 可能是 NULL（本欄上線前建的列）：碼照樣合併——它已經審過了，把好碼留在
+ *    分支上沒有任何好處——但標不了來源，要大聲印出來讓人知道那幾筆得手動結案。
+ */
+async function resumeAdoptedFixes({ pushUserId, startedBy }) {
+  if (!pushUserId) return 0;
+  const { rows } = await query(
+    `SELECT id, finding_id, members FROM finding_fixes WHERE status='adopted' ORDER BY id`);
+  let merged = 0;
+  for (const fix of rows) {
+    try {
+      await applyFix(fix.id, pushUserId, ['nightly-fix']);
+      merged += 1;
+      const members = membersFromRefs(fix.members);
+      if (!members.length) {
+        console.error('[NIGHTLY-FIX] 修正 #%d（提案 #%d）已補合併，但這列沒有成員紀錄，'
+          + '來源標不了 done，請人工確認並結案', fix.id, fix.finding_id);
+        continue;
+      }
+      await markGroupDone({ findingId: fix.finding_id, members }, pushUserId || startedBy);
+      console.log('[NIGHTLY-FIX] 上一批停在 adopted 的提案 #%d 已補合併', fix.finding_id);
+    } catch (err) {
+      // 還是合不進去（主 clone 仍髒／仍分岔）＝下一批再試。這裡不記失敗額度，理由同 noteDeferred。
+      console.error('[NIGHTLY-FIX] 補合併提案 #%d 仍未成功，留待下批：%s', fix.finding_id, err.message);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -536,6 +631,24 @@ async function runNightlyFix({ startedBy = null } = {}) {
       console.log('[NIGHTLY-FIX] 等在飛任務排空逾時（%d 分鐘），放棄本批次', Math.round(NIGHTLY_FIX_DRAIN_MAX_MS / 60000));
       return { attempted: 0, applied: 0, skipped: 0, reason: 'drain-timeout' };
     }
+
+    const { rows: [settings] } = await query('SELECT cli_push_user_id FROM teams_settings WHERE id=1');
+    const pushUserId = settings && settings.cli_push_user_id;
+
+    /**
+     * 撿上一批停在 adopted 的（見 resumeAdoptedFixes）。
+     *
+     * ⚠ 位置有兩個硬條件，不可下移：
+     * 1. 必須在 fetchApprovedFeedback **之前**。deferred 的來源意見仍是 approved，補合併成功會把
+     *    它們標成 done；晚於取候選的話，同一批意見會一邊被補合併、一邊又被當成新候選整條重跑。
+     * 2. 必須在「沒有候選就早退」**之前**。那正是最需要補合併的情況——來源已經被上一批處理完、
+     *    只剩一個孤在分支上的 commit，早退會讓它永遠等不到下一次。
+     * ⚠ mergedAny 也要在這裡就設：下面幾個早退都是 `return`，finally 照跑，補進去的碼一樣要靠
+     *    那次重啟才會生效。
+     */
+    const resumed = await resumeAdoptedFixes({ pushUserId, startedBy })
+      .catch(e => { console.error('[NIGHTLY-FIX] 補合併上一批失敗：', e.message); return 0; });
+    if (resumed) mergedAny = true;
 
     // triage／merge 也要燒 token，所以進迴圈之前先問一次保險絲
     const preFuse = await fuseTripped(deadlineAt, batchStartedAt);
@@ -603,9 +716,6 @@ async function runNightlyFix({ startedBy = null } = {}) {
       [BATCH_WINDOW_DAYS, startedBy, BATCH_CADENCE]
     );
     runId = run.id;
-
-    const { rows: [settings] } = await query('SELECT cli_push_user_id FROM teams_settings WHERE id=1');
-    const pushUserId = settings && settings.cli_push_user_id;
 
     let attempted = 0;
     let applied = 0;
@@ -680,6 +790,11 @@ async function runNightlyFix({ startedBy = null } = {}) {
                 cand.findingId, it.source, it.row.id, e.message));
           }
           console.log('[NIGHTLY-FIX] 提案 #%d 已因 no_change 立即退場', cand.findingId);
+        } else if (result.deferred) {
+          // deferred＝改好也審過了，只是合併當下平台狀態不允許（主 clone 髒／分岔／push 失敗）。
+          // 同 adopted 一樣不燒失敗額度，但一定要留痕：不留的話畫面上跟「今晚沒輪到它」無法區分。
+          await noteDeferred(cand, result.reason).catch(e =>
+            console.error('[NIGHTLY-FIX] 記錄延後原因時又出錯：', e.message));
         } else if (!result.adopted) {
           // adopted＝修好了只差沒有推送身分（設定問題），不該算在這一條的失敗額度裡，
           // 否則一次設定疏漏就會把當晚每一條的退場額度都燒掉。
