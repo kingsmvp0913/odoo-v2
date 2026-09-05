@@ -38,10 +38,15 @@ test('健檢頁每一顆狀態鈕送出的值，後端 PATCH 白名單都收得�
   expect(missing).toEqual([]);
 });
 
-// 「擋下這條」是預設核准之後管理員唯一還需要做的動作，它送的值必須真的被後端接受。
-test('ui-next 健檢頁的「擋下這條」送的是後端收得下的值', () => {
+// 這一支原本釘的是 ui-next 健檢頁「擋下這條」那顆鈕送出的值。2026-09-05 使用者裁決：
+// 健檢頁收斂成純 log，提案的處置（核准／駁回／刪除）一律在「改善提案」頁——兩頁各放一套
+// 按鈕做同一件事，正是這次要消掉的毛病。
+//
+// 守衛跟著換方向：不再檢查那顆鈕送什麼，改成擋住「有人又把裁決鈕加回健檢頁」。加回去的話
+// 症狀不是壞掉而是分裂——同一條提案在兩頁各有一套狀態，管理員按了哪邊才算數沒有人說得準。
+test('ui-next 健檢頁不得再送出任何裁決（處置一律在改善提案頁）', () => {
   const src = read('public/js/ui-next/pages/AdminHealthCheck.js');
-  const btn = src.match(/setStatus\(f,\s*'([^']+)'\)"[^>]*>[^<]*擋下這條/);
-  expect(btn).not.toBeNull();
-  expect(backendStatuses()).toContain(btn[1]);
+  expect(src).not.toMatch(/setStatus\s*\(/);
+  // 這一頁只讀不寫：PATCH／DELETE 出現就是又長出了處置入口
+  expect(src).not.toMatch(/Api\.(patch|delete)\s*\(/);
 });

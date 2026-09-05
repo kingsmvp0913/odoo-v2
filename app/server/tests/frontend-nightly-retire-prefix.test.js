@@ -21,12 +21,16 @@ function backendPrefix() {
   return m[1];
 }
 
-// 從前端來源檔字串解析 isMachineRetired 用的 startsWith 字面值。刻意用來源檔字串解析而不是
-// require：那支檔是瀏覽器全域腳本（頂層就 window.XXX = Vue.defineComponent），在 node 裡載不起來。
+// 從前端來源檔字串解析狀態判斷用的 startsWith 字面值。刻意用來源檔字串解析而不是 require：
+// 那支檔是瀏覽器全域腳本（頂層就 window.XXX = Vue.defineComponent），在 node 裡載不起來。
+//
+// ⚠ 2026-09-05 搬家：原本釘的是 AdminHealthCheck.js 的 isMachineRetired（提案卡片上那顆
+// 「🤖 夜間批次自動退場」pill）。健檢頁已依使用者裁決收斂成純 log，提案的狀態與處置全部
+// 集中到「改善提案」頁，這條守衛跟著指到新家 AdminFeedback.js 的 stateOf。
 function frontendPrefix() {
-  const src = read('public/js/ui-next/pages/AdminHealthCheck.js');
-  const m = src.match(/isMachineRetired\(f\)\s*\{[\s\S]*?startsWith\('([^']*)'\)/);
-  if (!m) throw new Error('找不到 isMachineRetired 的 startsWith 前綴——寫法改了，這條守衛要跟著改');
+  const src = read('public/js/ui-next/pages/AdminFeedback.js');
+  const m = src.match(/stateOf\(r\)\s*\{[\s\S]*?startsWith\('([^']*)'\)/);
+  if (!m) throw new Error('找不到 stateOf 的 startsWith 前綴——寫法改了，這條守衛要跟著改');
   return m[1];
 }
 

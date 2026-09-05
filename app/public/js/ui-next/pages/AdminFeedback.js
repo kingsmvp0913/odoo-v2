@@ -15,12 +15,14 @@
         rejectNote: {},    // { [id]: string }
         attachUrls: {},    // { [attachmentId]: objectURL }
         healthFailed: null,// 最新一輪健檢若失敗就放那一列，用來顯示警示
-        bodyOpen: {},      // { [id]: true } 展開這一列的原文／翻譯全文
+        bodyOpen: {},      // { [id]: true } 展開這一列的原文全文與翻譯結果
         bodyLong: {},      // { [id]: true } 這一列長到需要收合（量 DOM 得來，見 measureBodies）
+        removing: {},      // { [id]: true } 刪除送出中
       };
     },
     computed: {
-      statusLabel() { return STATUS_LABEL; },
+      // statusLabel 不再是 computed：狀態欄改由 stateOf 產生（要把翻譯失敗併進來一起顯示），
+      // 那裡直接讀 STATUS_LABEL 常數，留著 computed 就是沒人讀的死碼。
       layerLabel() { return LAYER_LABEL; },
     },
     async created() { await this.load(); await this.loadHealth(); },
@@ -30,12 +32,58 @@
     methods: {
       pillClass(status) { return STATUS_PILL[status] || 'pill-info'; },
       fmtTime(ts) { return new Date(ts).toLocaleString('zh-TW'); },
-      // 健檢自己開的單，content 是整段診斷（好幾百字），翻譯結果那欄同樣是長文。兩欄一起攤開，
-      // 一列就吃掉整個畫面高度，「這頁有幾筆待審」完全看不出來。長的先切短、要看再點開。
+      // 健檢自己開的單，content 是整段診斷（好幾百字）。攤開的話一列就吃掉整個畫面高度，
+      // 「這頁有幾筆待審」完全看不出來。長的先切短、點那一列就展開。
       // ⚠ 判長短只能量 DOM 不能估字數：中英混排與換行讓同樣字數高度差很多（健檢頁那邊用字數
       // 估，實測有一半的按鈕按下去畫面完全不動）。6.4 要與 app.css 的 .hc-body-clamp 一致。
       bodyClamped(r) { return this.bodyLong[r.id] === true && !this.bodyOpen[r.id]; },
-      isLongBody(r) { return this.bodyLong[r.id] === true; },
+      // 整列可點：按鈕與附件縮圖各自 @click.stop，否則按「駁回」會順手把列也展開／收合。
+      toggleRow(r) { this.bodyOpen = { ...this.bodyOpen, [r.id]: !this.bodyOpen[r.id] }; },
+      // 狀態欄要說的是「這筆現在卡在哪」，而不只是人工裁決的那個欄位值。翻譯掛掉時
+      // status 仍是 approved（見 feedback-triage.js：執行失敗刻意不動 status 以便重試），
+      // 只印「已核准」等於把失敗藏起來——使用者要的正是「失敗的那筆要看得出失敗」。
+      // 判準：rejectBack 與執行失敗都會清空／不寫 triage_title 而只留 triage_note，
+      // 所以「沒有 triage_title 但有 triage_note」就是這一輪翻譯沒成功。
+      stateOf(r) {
+        const note = r.triage_note || '';
+        // 夜間批次的機器退場（連續失敗達門檻／layer 不可自動修）：status 被寫回 'new'，
+        // 只印「待審核」會看起來像使用者剛提的新意見，完全看不出它跑過又被踢回來。
+        // ⚠ 這個前綴與後端 retire-prefix.js 的 MACHINE_RETIRE_PREFIX 是兩份寫死的字面值，
+        // 靠 frontend-nightly-retire-prefix.test.js 防漂移（前後端無共用模組機制是已裁決的
+        // 取捨）。改字（含把全形冒號打成半形）會讓這個狀態靜默消失，那支測試會紅。
+        // 判斷放在最前面且不看 triage_title：retireToHuman 只覆寫 status 與 triage_note，
+        // 上一輪翻譯成功留下的 triage_title 還在，落到下面那個分支就會被漏掉。
+        if (note.startsWith('自動退場：')) {
+          return { label: '自動退場，待人工', pill: 'pill-warn', hint: note };
+        }
+        if (!r.triage_title && note) {
+          return /^執行失敗/.test(note)
+            ? { label: '翻譯失敗', pill: 'pill-danger', hint: note }
+            : { label: '看不懂，已退回', pill: 'pill-warn', hint: note };
+        }
+        return { label: STATUS_LABEL[r.status] || r.status, pill: this.pillClass(r.status), hint: '' };
+      },
+      // 縮圖是 objectURL（附件端點要帶 token，<img src> 直連拿不到）。開新分頁看原圖，
+      // 與專案對話頁的附件同一個做法，不另外造一套燈箱。
+      openImage(fileId) {
+        const url = this.attachUrls[fileId];
+        if (url) window.open(url, '_blank');
+      },
+      async remove(r) {
+        const what = r.triage_title || (r.content || '').slice(0, 30);
+        if (!await confirmDialog({
+          title: '刪除這筆提案',
+          message: `確定刪除「${what}」？附件會一併刪除，無法復原。`,
+          danger: true, confirmText: '刪除'
+        })) return;
+        this.removing = { ...this.removing, [r.id]: true };
+        try {
+          await Api.delete(`admin/feedback/${r.id}`);
+          showToast('已刪除', 'success');
+          await this.load();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.removing = { ...this.removing, [r.id]: false }; }
+      },
       measureBodies() {
         this.$nextTick(() => {
           const next = {};
@@ -159,22 +207,25 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <!-- 原文與翻譯結果是這張表唯一的長文欄，其餘全是短欄。不給寬度的話瀏覽器會
-                       依內容平均分配，把兩個長文欄擠成細長條（實測翻譯結果欄窄到一個字一行）。 -->
+                  <!-- 原文是唯一的長文欄，其餘全是短欄。不給寬度的話瀏覽器會依內容平均分配，
+                       把長文欄擠成細長條（實測「執行失敗：…」那欄窄到一個字一行）。
+                       翻譯結果不在這裡：它同樣是長文，兩個長文欄並排等於兩邊都被壓扁，而且
+                       日常只需要知道「這筆現在什麼狀態」——全文收進展開區，點該列就看得到。 -->
                   <th style="width:110px">時間</th>
                   <th style="width:100px">提交者</th>
-                  <th style="width:33%">原文</th>
+                  <th>內容</th>
                   <th style="width:70px">附件</th>
-                  <th style="width:100px">狀態</th>
-                  <th style="width:33%">翻譯結果</th>
-                  <th style="width:150px">操作</th>
+                  <th style="width:120px">狀態</th>
+                  <th style="width:190px">操作</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="loading" class="empty-row"><td colspan="7" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
-                <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="7">目前沒有意見</td></tr>
+                <tr v-if="loading" class="empty-row"><td colspan="6" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
+                <tr v-else-if="rows.length === 0" class="empty-row"><td colspan="6">目前沒有意見</td></tr>
                 <template v-for="r in rows" :key="r.id">
-                  <tr>
+                  <!-- 整列可點開／收合。.clickable 同時給了 cursor 與 hover 底色，是這張表既有的
+                       慣例（健檢歷史表也用它），不另外造一套「可點」的視覺提示。 -->
+                  <tr class="clickable" @click="toggleRow(r)">
                     <td data-label="時間" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
                     <!-- user_id 為 NULL＝健檢自己開的單（見 health-check-runner.js 的
                          openFeedbackForFinding）。顯示 '—' 會讓人以為是哪個使用者的帳號被刪了。 -->
@@ -184,36 +235,25 @@
                       <span v-if="!r.user_id" class="pill pill-info" style="white-space:nowrap">AI 健檢</span>
                       <span v-else>{{ r.user_name || '—' }}</span>
                     </td>
-                    <td data-label="原文" style="font-size:var(--fs-sm)">
+                    <td data-label="內容" style="font-size:var(--fs-sm)">
                       <div class="hc-body" :data-fbid="r.id" :class="{ 'hc-body-clamp': bodyClamped(r) }">{{ r.content }}</div>
                     </td>
                     <td data-label="附件">
                       <div v-if="(r.attachments||[]).length" style="display:flex;gap:6px;flex-wrap:wrap">
+                        <!-- @click.stop：點圖是「看大圖」，不該順手把整列收合掉 -->
                         <img v-for="file in r.attachments" :key="file.id" v-show="attachUrls[file.id]"
-                          :src="attachUrls[file.id]" :alt="file.filename" :title="file.filename"
-                          style="width:48px;height:48px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+                          :src="attachUrls[file.id]" :alt="file.filename" :title="'點開看原圖：' + file.filename"
+                          @click.stop="openImage(file.id)"
+                          style="width:48px;height:48px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:zoom-in">
                       </div>
                       <span v-else style="color:var(--text-muted)">—</span>
                     </td>
-                    <td data-label="狀態"><span class="pill" :class="pillClass(r.status)" style="white-space:nowrap">{{ statusLabel[r.status] || r.status }}</span></td>
-                    <td data-label="翻譯結果" style="font-size:var(--fs-sm)">
-                      <template v-if="r.triage_title">
-                        <div><strong>{{ r.triage_title }}</strong></div>
-                        <div v-if="r.triage_layer" style="color:var(--text-muted)">{{ layerLabel[r.triage_layer] || r.triage_layer }}</div>
-                        <div v-if="r.triage_detail" class="hc-body" :data-fbid="r.id" :class="{ 'hc-body-clamp': bodyClamped(r) }">{{ r.triage_detail }}</div>
-                      </template>
-                      <span v-else style="color:var(--text-muted)">尚未翻譯</span>
-                      <!-- triage_note 不能綁在 triage_title 底下：AI 看不懂／解析失敗／agent 執行失敗
-                           時 rejectBack 只寫 triage_note、triage_title 是 NULL，這句話是唯一告訴
-                           管理員「為什麼退回」的地方，藏起來等於管理員永遠看不到原因。 -->
-                      <!-- ⚠ 不可用 .pill：pill 是 inline-block 的短標籤，套在這種整句訊息上，
-                           欄位一窄就被壓成一個字一行的直條（實測「執行失敗：claude exited with
-                           code 1」在這欄變成 6 行寬 1 字的長條，就是使用者說的跑版）。
-                           改用一般文字塊＋左側色條表示警示，語意一樣但寬度吃得下。 -->
-                      <div v-if="r.triage_note" class="hc-body"
-                        style="margin-top:4px;padding-left:6px;border-left:2px solid var(--warning-strong);font-size:var(--fs-xs);color:var(--warning-strong)">{{ r.triage_note }}</div>
+                    <!-- 狀態要說「這筆現在卡在哪」：翻譯掛掉時 status 仍是 approved，只印
+                         「已核准」等於把失敗藏起來。stateOf 把翻譯失敗／看不懂併進來一起顯示。 -->
+                    <td data-label="狀態">
+                      <span class="pill" :class="stateOf(r).pill" :title="stateOf(r).hint" style="white-space:nowrap">{{ stateOf(r).label }}</span>
                     </td>
-                    <td data-label="操作">
+                    <td data-label="操作" @click.stop>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
                         <!-- 核准鈕只在「還沒核准」時出現。已經是 approved 還留著它，按下去是把
                              同一個狀態再寫一次——畫面沒有任何變化，看起來像沒反應／沒存到。
@@ -222,14 +262,36 @@
                              駁回鈕的條件不同：已核准但還沒跑的可以反悔擋掉，所以只擋 done。 -->
                         <button v-if="r.status !== 'approved' && r.status !== 'done'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
                         <button v-if="r.status !== 'done'" class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
-                        <!-- 只在真的被切到時才出現：沒被切還掛按鈕，按下去畫面完全不動＝騙人的按鈕 -->
-                        <button v-if="isLongBody(r)" class="btn btn-ghost btn-sm"
-                          @click="bodyOpen[r.id] = !bodyOpen[r.id]">{{ bodyOpen[r.id] ? '▾ 收合' : '▸ 看全文' }}</button>
+                        <!-- 刪除是唯一不可復原的動作（連附件實體檔一起刪），所以永遠可用但走
+                             確認對話框。駁回只是改狀態，兩者不可混為一談。 -->
+                        <button class="btn btn-ghost btn-sm" style="color:var(--danger)"
+                          :disabled="removing[r.id]" @click="remove(r)">刪除</button>
                       </div>
                     </td>
                   </tr>
+                  <!-- 展開區：原文全文與翻譯結果。翻譯結果從表格欄位移到這裡——它是長文，
+                       跟原文並排會把兩邊都壓扁，而日常只需要看狀態欄那顆標籤。 -->
+                  <tr v-if="bodyOpen[r.id]" class="empty-row">
+                    <td colspan="6" style="background:var(--bg);text-align:left;padding:var(--space-3) var(--space-4)">
+                      <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">原文</div>
+                      <div class="hc-body" style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">{{ r.content }}</div>
+                      <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">翻譯結果</div>
+                      <template v-if="r.triage_title">
+                        <div style="font-size:var(--fs-sm)"><strong>{{ r.triage_title }}</strong></div>
+                        <div v-if="r.triage_layer" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ layerLabel[r.triage_layer] || r.triage_layer }}</div>
+                        <div v-if="r.triage_detail" class="hc-body" style="font-size:var(--fs-sm)">{{ r.triage_detail }}</div>
+                      </template>
+                      <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">尚未翻譯</div>
+                      <!-- triage_note 是「為什麼沒翻成功」的唯一說明（rejectBack 與執行失敗都只寫
+                           這欄、triage_title 留空）。⚠ 不可用 .pill：那是 inline-block 短標籤，
+                           欄位一窄就被壓成一個字一行的直條（實測「執行失敗：claude exited with
+                           code 1」變成 6 行寬 1 字，就是使用者說的跑版）。 -->
+                      <div v-if="r.triage_note" class="hc-body"
+                        style="margin-top:6px;padding-left:6px;border-left:2px solid var(--warning-strong);font-size:var(--fs-xs);color:var(--warning-strong)">{{ r.triage_note }}</div>
+                    </td>
+                  </tr>
                   <tr v-if="rejecting[r.id]" class="empty-row">
-                    <td colspan="7" style="background:var(--bg);text-align:left">
+                    <td colspan="6" style="background:var(--bg);text-align:left" @click.stop>
                       <div style="display:flex;gap:8px;align-items:flex-start">
                         <textarea v-model="rejectNote[r.id]" class="form-control" placeholder="駁回原因（選填）" style="flex:1;min-height:60px"></textarea>
                         <div style="display:flex;flex-direction:column;gap:6px">

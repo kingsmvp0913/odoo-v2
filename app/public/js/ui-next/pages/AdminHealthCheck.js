@@ -1,12 +1,27 @@
+  // 這一頁只做一件事：當健檢的 log 看。
+  //
+  // 它原本是「提案管理台」——七張提案卡片，每張掛著擋下／修這條／四顆裁決鈕＋裁決理由輸入框，
+  // 底下再串「採用 → 推上 GitHub → 合併並重啟」。但提案的處置早就收斂到「改善提案」頁
+  // （管理員 > 改善提案，資料源是 feedback 表，健檢提案會由 openFeedbackForFinding 開單進去），
+  // 兩頁各有一套按鈕做同一件事，反而讓人不知道該在哪裡按。
+  // 2026-09-05 使用者裁決：健檢頁只留 log，「修這條」那條手動改碼鏈直接移除——已核准的提案
+  // 每晚 22:00 由夜間批次自動跑，不需要手動觸發的入口。
   window.UiNextAdminHealthCheckView = Vue.defineComponent({
     name: "UiNextAdminHealthCheckView",
     data() {
-      return { runId: null, run: null, findings: [], proposals: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, bodyOpen: {}, bodyLong: {}, _timer: null, _fixTimer: null };
+      return {
+        history: [], schedule: null,
+        rowOpen: {},        // { [runId]: true } 展開這一輪看它產出什麼
+        runFindings: {},    // { [runId]: [...] } 展開時才抓，抓過就留著
+        loadingRun: {},     // { [runId]: true } 該輪的內容抓取中
+        // 手動跑一輪（收在頁尾摺疊區）。runId／running 只服務這條路徑。
+        runId: null, running: false, cadence: 'daily', sinceDays: null, _timer: null,
+      };
     },
-    async mounted() { await this.loadProposals(); await this.loadHistory(); await this.openFromQuery(); },
-    unmounted() { if (this._timer) clearInterval(this._timer); if (this._fixTimer) clearInterval(this._fixTimer); },
+    async mounted() { await this.loadHistory(); await this.openFromQuery(); },
+    unmounted() { if (this._timer) clearInterval(this._timer); },
     computed: {
-      // 排程是每週自動跑（cron 每分鐘一 tick），所以顯示的是「最早會被執行的時刻」
+      // 排程是每日自動跑（cron 每分鐘一 tick），所以顯示的是「最早會被執行的時刻」
       nextRunText() {
         const s = this.schedule;
         if (!s) return '';
@@ -15,19 +30,9 @@
         if (s.due) return '即將執行';
         return new Date(s.nextRunAt).toLocaleString();
       },
-      // 已核准的提案什麼時候會被自動實作，一律引用排程 API 的真值。寫死「22:00」的話，同一畫面
-      // 上方的「下次自動健檢」讀的是真值，兩個數字對不起來就是在說謊；而且下次改排程還會再漂一次。
-      // 只回時間片語，動詞留在模板——拿不到排程資訊就回 null，寧可不講時間也不要講錯的時間。
-      // 最新一輪。失敗橫幅要吃它而不是 run——run 只有點進某一輪才有值，而「健檢掛了」這件事
-      // 必須一進頁面就看得到（掛掉時零提案，整頁跟「今天本來就沒事」長得一樣）。
+      // 失敗橫幅吃最新一輪。健檢掛掉時它一筆提案都不會產生，整頁跟「今天本來就沒事」長得
+      // 一模一樣——這個 repo 踩過（夜班空轉 98 輪無人察覺），所以要一進頁面就看得到。
       latestRun() { return this.history && this.history.length ? this.history[0] : null; },
-      autoRunText() {
-        const s = this.schedule;
-        if (!s || !s.enabled) return null;
-        if (s.running) return '本輪';
-        if (s.due) return '即將';
-        return new Date(s.nextRunAt).toLocaleString();
-      }
     },
     methods: {
       async loadHistory() {
@@ -37,8 +42,21 @@
         try { this.schedule = await Api.get('admin/health-check-schedule'); }
         catch (e) { this.schedule = null; }
       },
+      // 點整列展開，看那一輪產出了什麼（唯讀）。內容按需抓：一次列 20 輪，開頁就全抓等於
+      // 20 個請求換一個多數人不會展開的區塊。
+      async toggleRun(h) {
+        const open = !this.rowOpen[h.id];
+        this.rowOpen = { ...this.rowOpen, [h.id]: open };
+        if (!open || this.runFindings[h.id]) return;
+        this.loadingRun = { ...this.loadingRun, [h.id]: true };
+        try {
+          const { findings } = await Api.get('admin/health-check/' + h.id);
+          this.runFindings = { ...this.runFindings, [h.id]: findings || [] };
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.loadingRun = { ...this.loadingRun, [h.id]: false }; }
+      },
       async start() {
-        this.running = true; this.findings = []; this.run = null;
+        this.running = true;
         try {
           // 不帶 sinceDays＝用預設的增量視窗（上一輪之後）；填了才是「回頭重掃這麼多天」。
           // 大健檢走 cadence：它不只是換個天數，30 天那份還會多帶一份上一期資料做趨勢比對，
@@ -52,20 +70,18 @@
           await this.poll();
         } catch (e) { showToast(e.message, 'error'); this.running = false; }
       },
+      // 只盯「跑完了沒」，跑完重載列表。內容要看就點那一列，不在這裡另外渲染一份。
       async poll() {
         try {
-          const { run, findings } = await Api.get('admin/health-check/' + this.runId);
-          this.run = run; this.findings = findings;
+          const { run } = await Api.get('admin/health-check/' + this.runId);
           if (run.status !== 'running') {
             clearInterval(this._timer); this._timer = null; this.running = false;
+            // 這一輪的內容可能已被展開過並快取住，清掉才不會顯示跑之前的舊結果
+            this.runFindings = { ...this.runFindings, [this.runId]: undefined };
             await this.loadHistory();
-            // 這一輪產出的新提案要進主清單。只重載 findings 的話，跑完健檢畫面上的提案數不會動
-            // ——新的那幾條要重整頁面才看得到，看起來像健檢什麼都沒做出來。
-            await this.loadProposals();
           }
         } catch (e) { /* 單次輪詢失敗保留上批，下次恢復 */ }
       },
-      async openRun(id) { this.runId = id; await this.poll(); await this.loadFixes(); },
       // 由任務詳情頁的「健檢這張任務」導過來（?run=N）：那支 run 已經在背景跑了，這裡直接盯著它，
       // 不必也不能再按一次「開始健檢」——按下去建的是另一支全平台健檢。
       async openFromQuery() {
@@ -77,6 +93,7 @@
         if (this.running) this._timer = setInterval(() => this.poll(), 3000);
       },
       scopeText(r) { return r && r.task_db_id ? ('任務 ' + (r.task_id || r.task_db_id)) : '全平台'; },
+      sev(s) { return HC_SEV[s] || HC_SEV.error; },
       layer(l) { return HC_LAYER[l] || null; },
       kindOf(f) { return f.kind || 'agent'; },
       // health-auditor 產出的 diagnosis 第一行就是標題本身（agent_label 取自同一句），照原樣印
@@ -89,128 +106,18 @@
         if (first && first === String(f.agent_label || '').trim()) return d.slice(nl + 1).replace(/^\s+/, '');
         return d;
       },
-      // health-auditor 的診斷動輒好幾百字（要寫出根因、證據、指標基線），一張卡就佔滿整個
-      // 畫面，七條提案要捲很久才看得完「有哪些提案」。長的先切短、要看再點開。
-      //
-      // 這張卡有沒有「收起來的東西」＝主文長到被截，或底下還有證據／建議做法／指標三段。
-      // 光看主文長度不夠：多數提案主文剛好四行內，但接著三段細節一路攤下去，一張卡照樣吃掉
-      // 半個畫面——要先看得到「有哪些提案」，細節點開再看。
-      isLongBody(f) { return this.bodyLong[f.id] === true || !!(f.evidence || f.rationale || f.target_metric); },
-      // 主文只有真的溢出才截：不長卻套上 clamp 的話，::after 那層漸層會蓋掉最後一行正常內容。
-      bodyClamped(f) { return this.bodyLong[f.id] === true && !this.bodyOpen[f.id]; },
-      // ⚠ 判「主文長不長」只能量 DOM，不能用字數估。中英混排、標點、換行讓同樣字數的高度差
-      // 很多——實測門檻 180 有 5 條、260 仍有 2 條「掛了按鈕但根本沒被截」，按下去畫面完全不動。
-      // 6.4 必須與 app.css 的 .hc-body-clamp max-height 一致；比 scrollHeight 與這個上限，
-      // 元素當下有沒有套著 clamp 都量得準（overflow:hidden 不改變 scrollHeight）。
-      // 4px 容差：字體渲染的次像素差會讓「剛好塞滿」量出 1~2px 的假溢出。
-      measureBodies() {
-        this.$nextTick(() => {
-          const next = {};
-          for (const el of document.querySelectorAll('.hc-body[data-fid]')) {
-            next[el.dataset.fid] = el.scrollHeight - 6.4 * parseFloat(getComputedStyle(el).fontSize) > 4;
-          }
-          this.bodyLong = next;
-        });
+      // 展開區只列「有內容可看」的三類：提案、候選訊號、本輪總結。
+      // kind='agent'（逐關診斷）那條路徑（runHealthCheck）已退役，最後一次實際執行是
+      // 2026-08-20，舊資料留在 DB 但不再顯示。
+      shownFindings(runId) {
+        const list = this.runFindings[runId] || [];
+        return list.filter(f => ['proposal', 'signal', 'summary', 'note'].includes(this.kindOf(f)));
       },
-      // 提案的來源。agent_name 在這張表同時承載「哪一關」與「哪一種非 per-agent 的診斷」：
-      // 'feedback' 是 nightly-fix 的 materializeGroup 寫的（使用者意見統整後落地），
-      // '__task__' 是單張任務健檢，其餘（含 '__audit__'）都是平台健檢自己挖出來的。
-      sourceText(f) {
-        if (f.agent_name === 'feedback') return '意見回饋';
-        if (f.agent_name === '__task__') return '任務健檢';
-        return '平台健檢';
-      },
-      ofKind(k) { return this.findings.filter(f => this.kindOf(f) === k); },
-      statusLabel(v) { return (HC_STATUS.find(s => s.value === v) || {}).label || v; },
-      // 夜間批次退場（連續失敗／no_change／layer 不可自動修，都是同一個前綴）：
-      // status='pending' 且 verdict_note 帶機器標記前綴（見 nightly-fix.js 的 MACHINE_RETIRE_PREFIX）。
-      // 人工核准會寫 decided_by/decided_at，retireToHuman 一律清成 NULL，所以再加這個條件是免費的
-      // 精準化：真機器退場恆成立、人的裁決恆不成立，能擋掉「管理員按『待處理』但沒清空輸入框，
-      // 導致人工裁決的 note 沿用了機器寫的字串」那種情況。
-      isMachineRetired(f) {
-        return f.status === 'pending' && !f.decided_at
-          && typeof f.verdict_note === 'string' && f.verdict_note.startsWith('自動退場：');
-      },
-      // 裁決：狀態一律連同備註一起送，備註是下一輪健檢會讀到的東西（「為什麼判不須調整」）。
-      async setStatus(f, status) {
-        this.savingId = f.id;
-        try {
-          const r = await Api.patch('admin/health-check/findings/' + f.id, {
-            status, verdict_note: this.noteDraft[f.id] !== undefined ? this.noteDraft[f.id] : f.verdict_note
-          });
-          Object.assign(f, r);
-          showToast('已記錄：' + this.statusLabel(status), 'success');
-        } catch (e) { showToast(e.message, 'error'); }
-        finally { this.savingId = null; }
-      },
-      fixState(id) { return this.fixes[id] || null; },
-      fixLabel(st) { return HC_FIX[st] || { label: st, color: 'var(--text-muted)' }; },
-      // 測試結果不能全部一個灰色：紅燈跟「沒跑起來」都得跳出來，否則跟一堆灰字擠在同一行等於沒寫
-      testTone(tr) {
-        if (/^fail/.test(tr || '')) return 'var(--error)';
-        if (/^unknown/.test(tr || '')) return 'var(--warning, #d97706)';
-        return 'var(--text-muted)';
-      },
-      // 提案清單是這一頁的主體，跨輪撈。⚠ 不能用某一輪的 findings 當來源：最後一輪剛好失敗
-      // （零 finding）整頁就會顯示「待處理 0 條」，而 DB 裡其實還有待辦——實測 run#19 就是這樣。
-      async loadProposals() {
-        try { this.proposals = await Api.get('admin/proposals'); }
-        catch (e) { showToast(e.message, 'error'); }
-        // 提案換了就要重量：哪幾條長到需要收合，只有渲染出來才知道
-        this.measureBodies();
-        await this.loadFixes();
-      },
-      // 每次載入就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
-      // 會有人再按一次而在同一條上開第二個工作區。
-      async loadFixes() {
-        for (const f of this.proposals) {
-          try {
-            const fx = await Api.get('admin/health-check/findings/' + f.id + '/fix');
-            if (fx) this.fixes[f.id] = fx;
-          } catch (e) { /* 單條失敗不擋整頁 */ }
-        }
-        this.watchRunningFixes();
-      },
-      watchRunningFixes() {
-        const anyRunning = Object.values(this.fixes).some(x => x && x.status === 'running');
-        if (anyRunning && !this._fixTimer) this._fixTimer = setInterval(() => this.loadFixes(), 4000);
-        if (!anyRunning && this._fixTimer) { clearInterval(this._fixTimer); this._fixTimer = null; }
-      },
-      async startFix(f) {
-        this.fixBusy = f.id;
-        try {
-          await Api.post('admin/health-check/findings/' + f.id + '/fix', {});
-          await this.loadFixes();
-        } catch (e) { showToast(e.message, 'error'); }
-        finally { this.fixBusy = null; }
-      },
-      async fixAction(f, action) {
-        const fx = this.fixes[f.id];
-        if (!fx) return;
-        this.fixBusy = f.id;
-        try {
-          const r = await Api.post('admin/fixes/' + fx.id + '/' + action, {});
-          if (action === 'apply') {
-            // 擋下時碼已經進主分支了，只差重啟——訊息要說清楚，否則人會以為整件事沒發生而重按
-            showToast(r.restarted
-              ? '已合併並推送，平台重啟中（約 30 秒後重新整理）'
-              : ('已合併並推送，但還有 ' + r.inflight.length + ' 張任務在跑，暫不重啟：'
-                 + r.inflight.map(function (t) { return '#' + t.taskId; }).join('、')),
-              r.restarted ? 'success' : 'warning');
-          } else {
-            showToast(action === 'adopt' ? ('已提交到分支 ' + (r.branch || '')) : action === 'push' ? ('已推上 ' + (r.branch || '')) : '已捨棄', 'success');
-          }
-          await this.loadFixes();
-        } catch (e) { showToast(e.message, 'error'); }
-        finally { this.fixBusy = null; }
-      },
-      sev(s) { return HC_SEV[s] || HC_SEV.error; },
-      // 歷史列的嚴重度＝本輪最嚴重的那一條（後端算的 severity_rank）。健檢自己失敗優先蓋過一切：
-      // 那一輪的「最嚴重只有 low」是假的，它根本沒檢查完。
+      // 歷史列的嚴重度＝本輪最嚴重的那一條（後端算的 severity_rank）。
+      // 健檢自己沒跑完優先蓋過一切：收掉「狀態」欄之後，這裡是畫面上唯一分辨得出
+      // 「這一輪根本沒跑完」的地方。不特判的話 run#19（status='error'、零 finding）會顯示成
+      // 「—」，跟「今天本來就沒事」長得一模一樣。
       histSev(h) {
-        // 收掉「狀態」欄之後，這裡是畫面上唯一分辨得出「這一輪根本沒跑完」的地方。
-        // 不特判的話 run#19（status='error'、零 finding）會顯示成「—」，跟「今天本來就沒事」
-        // 長得一模一樣——正是這個 repo 踩過的靜默失敗。
         if (h.status === 'error') return HC_SEV.error;
         if (h.error_count > 0) return HC_SEV.error;
         if (h.severity_rank === null || h.severity_rank === undefined) return null;
@@ -225,12 +132,6 @@
           : { label: '已處理完', color: 'var(--text-muted)' };
       },
       cadenceText(h) { return HC_CADENCE[h.cadence] || ''; },
-      applyToEditor(f) {
-        if (!f.suggested_prompt) return;
-        // 帶入既有 agent 編輯器：以 sessionStorage 暫存建議 prompt，導到 /admin/agents 由該頁預填
-        sessionStorage.setItem('agentPrefill', JSON.stringify({ name: f.agent_name, prompt: f.suggested_prompt }));
-        this.$router.push('/admin/agents?prefill=' + encodeURIComponent(f.agent_name));
-      }
     },
     template: `
       <div class="topbar ui-next-admin-head">
@@ -239,167 +140,82 @@
       </div>
       <div class="content">
         <div class="hc-page">
-          <!-- 這一頁的用途是「管理提案」。健檢只是提案的其中一個來源（另一個是使用者意見回饋），
-               它的操作與紀錄一律收到頁尾的摺疊區——攤在最上面會讓「這頁要我做什麼」變成
-               「這頁在跑什麼」。唯一留在上面的是「上一輪成功了沒」，理由見下一段。 -->
-          <div class="settings-section hc-window-row" style="font-size:var(--fs-sm);color:var(--text-muted)">
-            <span>待處理 {{ proposals.filter(f => f.status === 'pending').length }} 條
-                  已核准 {{ proposals.filter(f => f.status === 'approved').length }} 條
-                  <span v-if="!proposals.length">（目前沒有提案）</span></span>
-            <span v-if="nextRunText" style="margin-left:auto">下次自動產生：{{ nextRunText }}</span>
-          </div>
-
-          <div v-if="proposals.some(f => f.status === 'approved')" class="settings-section"
-            style="border-left:3px solid var(--warning-strong);margin-bottom:var(--space-3);font-size:var(--fs-sm);color:var(--text)">
-            <!-- 3-I4：runAudit(...).finally(() => runNightlyFix(...))——健檢一寫完 approved 提案，
-                 下一步就是批次，中間只隔一個 waitForDrain，沒有在飛任務時是 0 秒銜接。「要在那之前
-                 按下擋下」暗示有一段可操作的等待窗，但那個「之前」不存在：批次是接在同一輪健檢
-                 後面自動起跑的，不是等到隔天固定時刻。文案只能誠實說「隨時可能已經在執行」，
-                 不能承諾「還來得及」。⚠ 不改行為——「預設核准」是已拍板的產品裁決。 -->
-            ⏱ 已核准的提案<strong>沒有人會先看過</strong>，健檢一跑完就會緊接著自動實作並合併，沒有事後可攔截的等待期。不想讓某一條跑，請立刻按「擋下這條」。
-          </div>
-
-          <!-- 健檢自己掛掉的話，它一筆提案都不會產生——畫面上跟「今晚本來就沒事做」長得一模一樣
-               （此 repo 踩過：夜班空轉 98 輪無人察覺）。這一頁收斂成只看提案之後，這是唯一分辨得
-               出來的地方，所以要顯著、要帶原因（health_check_runs.error）。 -->
+          <!-- 唯一留在列表之上的東西：上一輪掛了沒。理由見 latestRun 的註解。 -->
           <div v-if="latestRun && latestRun.status === 'error'" class="error-msg" style="margin-bottom:var(--space-3)">
             ⚠ 上一輪健檢失敗（{{ new Date(latestRun.created_at).toLocaleString() }}），沒有產生任何提案。<span v-if="latestRun.error">原因：{{ latestRun.error }}</span>
             <span v-else>（沒有記到原因——這輪是舊版留下的，新版失敗都會寫原因）</span>
           </div>
 
-          <div v-for="f in ofKind('note')" :key="f.id" class="error-msg" style="margin-bottom:var(--space-3)">{{ f.diagnosis }}</div>
-
-          <div v-for="f in proposals" :key="f.id"
-            style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);margin-bottom:var(--space-3);background:var(--surface)">
-            <div class="hc-finding-title-row">
-              <span style="font-weight:var(--fw-semibold)">{{ f.agent_label }}</span>
-              <!-- 來源：兩條路都落在同一張表、同一份清單裡（健檢的 health-auditor／單張任務健檢，
-                   與使用者意見經 nightly-fix 的 materializeGroup 寫進來的 'feedback'）。不標的話
-                   「這是誰要求的」在畫面上完全消失，而那正是判斷要不要放行時最先想問的事。 -->
-              <span class="pill" :class="f.agent_name === 'feedback' ? 'pill-info' : ''"
-                style="font-size:var(--fs-xs)">{{ sourceText(f) }}</span>
-              <span v-if="layer(f.layer)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:layer(f.layer).color}">
-                {{ layer(f.layer).label }}
-              </span>
-              <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
-                {{ sev(f.severity).label }}
-              </span>
-              <span v-if="f.status === 'approved'" style="font-size:var(--fs-xs);padding:1px var(--space-2);border-radius:4px;color:#fff;background:var(--warning-strong)" title="沒有人會先審——排程一到就自動實作並合併">
-                ⏱ <span v-if="autoRunText">{{ autoRunText }} </span>自動執行
-              </span>
+          <div class="settings-section">
+            <div class="arj-header-row">
+              <h2 class="section-title" style="margin:0">健檢紀錄（{{ history.length }} 輪）</h2>
+              <span v-if="nextRunText" style="font-size:var(--fs-sm);color:var(--text-muted)">下次自動：{{ nextRunText }}</span>
             </div>
-            <div class="hc-body" :data-fid="f.id" :class="{ 'hc-body-clamp': bodyClamped(f) }"
-              style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px">{{ bodyOf(f) }}</div>
-            <button v-if="isLongBody(f)" class="btn btn-ghost btn-sm" style="margin-bottom:6px"
-              @click="bodyOpen[f.id] = !bodyOpen[f.id]">{{ bodyOpen[f.id] ? '▾ 收合說明' : '▸ 看完整說明' }}</button>
-            <!-- 證據／建議做法／指標跟著同一顆按鈕收合。條件不能寫 bodyClamped：主文短的卡片
-                 不套 clamp，那樣這三段就永遠攤著，卡片還是佔滿整個畫面（實測 7 條裡有 5 條）。 -->
-            <template v-if="bodyOpen[f.id] || !isLongBody(f)">
-              <div v-if="f.evidence" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
-              <div v-if="f.rationale" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">建議做法：{{ f.rationale }}</div>
-              <div v-if="f.target_metric" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">
-                要動的指標：{{ f.target_metric }}（現值 {{ f.metric_baseline }}）
-              </div>
-            </template>
-            <button v-if="f.suggested_prompt" class="btn btn-outline btn-sm" style="margin-bottom:6px" @click="applyToEditor(f)">帶入編輯器 →</button>
-
-            <div class="hc-window-row" style="margin-top:6px">
-              <span style="font-size:var(--fs-sm);color:var(--text-muted)">處置：</span>
-              <button v-if="f.status !== 'no_change' && f.status !== 'done'" class="btn btn-danger btn-sm"
-                :disabled="savingId === f.id" @click="setStatus(f, 'no_change')"
-                title="預設核准後會在今晚自動執行；按這顆才會擋下，不會被排進去">🛑 擋下這條</button>
-              <button v-if="f.status !== 'done'" class="btn btn-outline btn-sm" :disabled="fixBusy === f.id || (fixState(f.id) && ['running','ready','adopted'].includes(fixState(f.id).status))"
-                @click="startFix(f)" title="在獨立工作區改碼並自己跑測試，改完給你看 diff，你點頭才提交">🔧 修這條</button>
-              <button v-for="s in statuses" :key="s.value" class="btn btn-sm"
-                :class="f.status === s.value ? 'btn-primary' : 'btn-outline'"
-                :disabled="savingId === f.id" @click="setStatus(f, s.value)">{{ s.label }}</button>
-              <input class="form-control" style="flex:1;min-width:180px" placeholder="裁決理由（下一輪健檢會讀到）"
-                :value="noteDraft[f.id] !== undefined ? noteDraft[f.id] : (f.verdict_note || '')"
-                @input="noteDraft[f.id] = $event.target.value" />
-            </div>
-            <div v-if="isMachineRetired(f)" class="pill pill-warn" style="margin-top:4px"
-              title="夜間批次自動退場——不是有人核准後又改回待處理，原因見下方裁決理由">
-              🤖 夜間批次自動退場
-            </div>
-            <div v-if="f.decided_at" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:4px">
-              已裁決 {{ new Date(f.decided_at).toLocaleString() }}<span v-if="f.applied_at">，套用於 {{ new Date(f.applied_at).toLocaleDateString() }}</span>
-            </div>
-
-            <div v-if="fixState(f.id)" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-              <div class="hc-finding-title-row">
-                <span style="font-size:var(--fs-sm);font-weight:var(--fw-semibold)">修正</span>
-                <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:fixLabel(fixState(f.id).status).color}">
-                  {{ fixLabel(fixState(f.id).status).label }}
-                </span>
-                <span v-if="fixState(f.id).test_result" :style="{fontSize:'var(--fs-xs)',color:testTone(fixState(f.id).test_result)}">測試：{{ fixState(f.id).test_result }}</span>
-                <span v-if="fixState(f.id).branch" style="font-size:var(--fs-xs);color:var(--text-muted);font-family:monospace">{{ fixState(f.id).branch }}</span>
-              </div>
-              <div v-if="fixState(f.id).reject_reason" class="error-msg hc-body" style="margin:6px 0">{{ fixState(f.id).reject_reason }}</div>
-              <div v-if="fixState(f.id).notes" class="hc-body" style="font-size:var(--fs-sm);color:var(--text);margin-bottom:6px">{{ fixState(f.id).notes }}</div>
-              <!-- review_notes：fix-review 對這份修正的審核推理，approve／reject 兩條路徑都會寫（單元 2）。
-                   這是無人監督閘門唯一的人類稽核材料——一份修正被自動合併進 master 或被 reject 兩次退場，
-                   事後就靠這段字知道「它為什麼這樣判」，所以獨立一段顯示，不與上面的 notes（提案本身的說明）混在一起。 -->
-              <div v-if="fixState(f.id).review_notes" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px;border-left:2px solid var(--border);padding-left:6px">
-                審核意見：{{ fixState(f.id).review_notes }}
-              </div>
-              <div v-if="fixState(f.id).diff">
-                <button class="btn btn-ghost btn-sm" @click="diffOpen[f.id] = !diffOpen[f.id]">
-                  {{ diffOpen[f.id] ? '▾ 收合改動' : '▸ 看改了什麼' }}
-                </button>
-                <pre v-if="diffOpen[f.id]" style="max-height:360px;overflow:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-2);font-size:var(--fs-xs)">{{ fixState(f.id).diff }}</pre>
-              </div>
-              <!-- 標成「處理完成」之後就不再給動作，只留紀錄（狀態、測試結果、diff）。狀態按鈕不藏，
-                   才回得去。真的還差重啟時提案不會是 done（見 applyFix），所以那顆按鈕不會被藏掉。 -->
-              <div v-if="f.status !== 'done'" class="hc-window-row" style="margin-top:6px">
-                <button v-if="fixState(f.id).status === 'ready'" class="btn btn-primary btn-sm"
-                  :disabled="fixBusy === f.id" @click="fixAction(f, 'adopt')">採用（提交到分支）</button>
-                <button v-if="fixState(f.id).status === 'adopted'" class="btn btn-primary btn-sm"
-                  :disabled="fixBusy === f.id" @click="fixAction(f, 'push')">推上 GitHub</button>
-                <button v-if="['adopted','pushed','merged'].includes(fixState(f.id).status)" class="btn btn-primary btn-sm"
-                  :disabled="fixBusy === f.id" @click="fixAction(f, 'apply')">
-                  {{ fixState(f.id).status === 'merged' ? '重啟平台（碼已合併）' : '合併並套用（會重啟平台）' }}</button>
-                <button v-if="['ready','adopted'].includes(fixState(f.id).status)" class="btn btn-outline btn-sm"
-                  :disabled="fixBusy === f.id" @click="fixAction(f, 'discard')">捨棄</button>
-              </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <!-- 這張表只回答兩個問題：那一輪是什麼等級、要不要進改善。範圍／視窗／狀態
+                     三欄拿掉——每天看的人不會用它們分流，要細節就點那一列。狀態欄的資訊沒有
+                     消失：失敗被 histSev 吸收成「健檢失敗」等級，原因跟在下面。 -->
+                <thead><tr><th>時間</th><th style="width:110px">等級</th><th style="width:110px">要不要改善</th><th style="width:90px">提案數</th></tr></thead>
+                <tbody>
+                  <template v-for="h in history" :key="h.id">
+                    <tr class="clickable" @click="toggleRun(h)">
+                      <td>
+                        {{ new Date(h.created_at).toLocaleString() }}
+                        <!-- 範圍與節奏降成副標，不各佔一欄：多數列是「全平台／增量」，每列都標等於
+                             沒標；但大健檢（週／月）與任務健檢的等級跟日健檢不可比，看不出來會誤讀。 -->
+                        <div v-if="h.task_db_id || cadenceText(h)" style="font-size:var(--fs-xs);color:var(--text-muted)">
+                          <span v-if="h.task_db_id">{{ scopeText(h) }}</span>{{ cadenceText(h) }}
+                        </div>
+                      </td>
+                      <td>
+                        <span v-if="histSev(h)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:histSev(h).color,whiteSpace:'nowrap'}">
+                          {{ histSev(h).label }}
+                        </span>
+                        <span v-else style="color:var(--text-muted)">—</span>
+                        <!-- 失敗原因跟著等級走：要知道為什麼掛還得點進去的話，而失敗那輪點進去
+                             又是空的（一筆 finding 都沒有），等於查不到。 -->
+                        <div v-if="h.status === 'error' && h.error" class="hc-body"
+                          style="font-size:var(--fs-xs);color:var(--danger)">{{ h.error }}</div>
+                      </td>
+                      <td>
+                        <span v-if="histTodo(h)" :style="{fontSize:'var(--fs-sm)',color:histTodo(h).color,whiteSpace:'nowrap'}">{{ histTodo(h).label }}</span>
+                        <span v-else style="color:var(--text-muted)">—</span>
+                      </td>
+                      <td>{{ h.proposal_count || 0 }}</td>
+                    </tr>
+                    <!-- 展開區：那一輪產出了什麼。純唯讀——處置（核准／駁回／刪除）一律在
+                         「改善提案」頁，兩頁各放一套按鈕會讓人不知道該在哪按。 -->
+                    <tr v-if="rowOpen[h.id]" class="empty-row">
+                      <td colspan="4" style="background:var(--bg);text-align:left;padding:var(--space-3) var(--space-4)">
+                        <div v-if="loadingRun[h.id]" style="color:var(--text-muted);font-size:var(--fs-sm)">載入中...</div>
+                        <div v-else-if="!shownFindings(h.id).length" style="color:var(--text-muted);font-size:var(--fs-sm)">這一輪沒有產出任何內容。</div>
+                        <div v-for="f in shownFindings(h.id)" :key="f.id" style="margin-bottom:var(--space-3)">
+                          <div class="hc-finding-title-row">
+                            <span style="font-weight:var(--fw-semibold);font-size:var(--fs-sm)">{{ f.agent_label || '本輪總結' }}</span>
+                            <span v-if="layer(f.layer)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:layer(f.layer).color}">
+                              {{ layer(f.layer).label }}
+                            </span>
+                            <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
+                              {{ sev(f.severity).label }}
+                            </span>
+                          </div>
+                          <div class="hc-body" style="font-size:var(--fs-sm);color:var(--text)">{{ bodyOf(f) }}</div>
+                          <div v-if="f.evidence" class="hc-body" style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:2px">證據：{{ f.evidence }}</div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                  <tr v-if="history.length === 0" class="empty-row"><td colspan="4">尚無健檢紀錄</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <!-- 提案以外的輸出收進摺疊區。這一頁的用途已收斂成「管理提案」——提案才有決定要做
-               （核准／擋下／修這條），總結與候選訊號是唯讀的背景資料，攤平在同一頁會把 7 筆
-               要決定的東西埋在 90 幾筆不用決定的東西裡。收起來而不是刪掉：signal 是刻意保留的
-               「證據還不夠」收納桶，砍掉等於承諾了一個不存在的去處。
-               kind='agent'（逐關診斷）的區塊已整段移除——那條路徑（runHealthCheck）已退役，
-               最後一次實際執行是 2026-08-20，舊資料留在 DB 但不再顯示。 -->
-          <details v-if="ofKind('summary').length || ofKind('signal').length" class="settings-section">
-            <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--text-muted)">
-              本輪其他輸出（總結 {{ ofKind('summary').length }}、候選訊號 {{ ofKind('signal').length }}）
-            </summary>
-            <div v-for="f in ofKind('summary')" :key="f.id" style="margin-top:var(--space-3)">
-              <div class="hc-finding-title-row">
-                <span style="font-weight:var(--fw-semibold)">本輪總結</span>
-                <span :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:sev(f.severity).color}">
-                  {{ sev(f.severity).label }}
-                </span>
-              </div>
-              <div class="hc-body" style="font-size:var(--fs-sm);color:var(--text)">{{ f.diagnosis }}</div>
-            </div>
-            <div v-for="f in ofKind('signal')" :key="f.id" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">
-              ・{{ f.diagnosis }}<span v-if="f.evidence">（{{ f.evidence }}）</span>
-            </div>
-          </details>
-
-          <!-- 健檢的操作與紀錄。健檢是提案的來源之一，不是這一頁的主題，所以整組收在最後、預設關起來。
-               ⚠ 唯一不收的是「上一輪失敗了」那則橫幅（在頁首）：健檢掛掉時它一筆提案都不會產生，
-               整頁看起來就像「今天本來就沒事」，那是這個 repo 踩過的靜默失敗（夜班空轉 98 輪）。 -->
+          <!-- 手動跑一輪。健檢本來就是排程自動跑的，手動只在查問題時用得到，所以收在頁尾。 -->
           <details class="settings-section">
-            <summary style="cursor:pointer">
-              <span class="section-title" style="display:inline">健檢執行</span>
-              <span style="font-size:var(--fs-sm);color:var(--text-muted)">
-                　手動跑一次、看歷史紀錄<span v-if="nextRunText">（下次自動：{{ nextRunText }}）</span>
-              </span>
-            </summary>
-
-            <div class="hc-window-row" style="margin:var(--space-3) 0">
+            <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--text-muted)">手動跑一輪健檢</summary>
+            <div class="hc-window-row" style="margin:var(--space-3) 0 0">
               <label style="font-size:var(--fs-base)" title="增量＝只看上一輪健檢之後的新資料。大健檢固定回看 7／30 天，30 天那份還會多帶上一期資料做趨勢比對。">
                 節奏
                 <select v-model="cadence" class="form-control" style="width:auto">
@@ -415,48 +231,6 @@
               <button class="btn btn-primary btn-sm" :disabled="running" @click="start">
                 {{ running ? '健檢中...' : '開始健檢' }}
               </button>
-              <span v-if="run" style="font-size:var(--fs-sm);color:var(--text-muted)">
-                本輪：{{ run.task_db_id ? ('任務 ' + ((run.task && run.task.task_id) || run.task_db_id)) : '全平台' }}
-                　{{ run.status }}（{{ ofKind('proposal').length }} 條提案）
-                <span v-if="run.since_at">　視窗：{{ new Date(run.since_at).toLocaleString() }} 起</span>
-              </span>
-            </div>
-
-            <div class="table-wrap">
-              <table class="data-table">
-                <!-- 這張表只回答兩個問題：昨天那輪是什麼等級、要不要進改善。範圍／視窗／狀態
-                     三欄拿掉——每天看的人不會用它們分流，要細節點進去那一輪就有。狀態欄的資訊
-                     沒有消失：失敗被 histSev 吸收成「健檢失敗」等級，原因跟在下面。 -->
-                <thead><tr><th>時間</th><th>等級</th><th>要不要改善</th><th>提案數</th></tr></thead>
-                <tbody>
-                  <tr v-for="h in history" :key="h.id" class="clickable" @click="openRun(h.id)">
-                    <td>
-                      {{ new Date(h.created_at).toLocaleString() }}
-                      <!-- 範圍與節奏降成副標，不各佔一欄：多數列是「全平台／增量」，每列都標等於
-                           沒標；但大健檢（週／月）與任務健檢的等級跟日健檢不可比，看不出來會誤讀。 -->
-                      <div v-if="h.task_db_id || cadenceText(h)" style="font-size:var(--fs-xs);color:var(--text-muted)">
-                        <span v-if="h.task_db_id">{{ scopeText(h) }}</span>{{ cadenceText(h) }}
-                      </div>
-                    </td>
-                    <td>
-                      <span v-if="histSev(h)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:histSev(h).color}">
-                        {{ histSev(h).label }}
-                      </span>
-                      <span v-else style="color:var(--text-muted)">—</span>
-                      <!-- 失敗原因跟著等級走：要知道為什麼掛還得點進去的話，而失敗那輪點進去
-                           又是空的（一筆 finding 都沒有），等於查不到。 -->
-                      <div v-if="h.status === 'error' && h.error" class="hc-body"
-                        style="font-size:var(--fs-xs);color:var(--danger)">{{ h.error }}</div>
-                    </td>
-                    <td>
-                      <span v-if="histTodo(h)" :style="{fontSize:'var(--fs-sm)',color:histTodo(h).color}">{{ histTodo(h).label }}</span>
-                      <span v-else style="color:var(--text-muted)">—</span>
-                    </td>
-                    <td>{{ h.proposal_count || 0 }}</td>
-                  </tr>
-                  <tr v-if="history.length === 0" class="empty-row"><td colspan="4">尚無健檢紀錄</td></tr>
-                </tbody>
-              </table>
             </div>
           </details>
         </div>
