@@ -258,6 +258,20 @@ describe('批次上傳', () => {
       expect((await dbModule.query('SELECT COUNT(*)::int c FROM exam_banks')).rows[0].c).toBe(before);
     });
 
+    // CLI 匯入的舊題庫 status 是 'ready'（沒走過歸檔），只看 status 的話它永遠
+    // 被當成「進行中」，下一場的截圖會靜靜掉進去年那份資料裡。實測踩過。
+    test('已經有官方章節結果的題庫也算結束，不會再收新圖', async () => {
+      await dbModule.query(
+        `INSERT INTO exam_sections (bank_id,title,n,correct,incorrect,unanswered,partial)
+         VALUES ($1,'ImportedSection',3,3,0,0,0)`, [bankId]);
+      const res = await upload();
+      const row = (await dbModule.query(
+        'SELECT bank_id FROM exam_uploads WHERE id=$1', [res.body.accepted[0].id])).rows[0];
+      expect(row.bank_id).not.toBe(bankId);          // status 仍是 ready，但它已經有章節結果
+      await dbModule.query(`DELETE FROM exam_banks WHERE id=$1`, [row.bank_id]);
+      await dbModule.query(`DELETE FROM exam_sections WHERE bank_id=$1 AND title='ImportedSection'`, [bankId]);
+    });
+
     // 歸檔＝這一場結束。之後再傳圖就是下一場了——連考兩次時這正是想要的行為。
     test('目前那場歸檔之後，下一張圖自動開新的一場', async () => {
       await dbModule.query(`UPDATE exam_banks SET status='archived' WHERE id=$1`, [bankId]);

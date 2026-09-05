@@ -104,9 +104,19 @@ async function resolveBank(bankRef) {
     return rows[0] || null;
   }
 
+  // 「已經有官方章節結果」也算結束——不是只看 status。
+  //
+  // CLI 匯入的舊題庫 status 是 'ready'（沒經過歸檔那條路），於是它永遠被當成
+  // 「進行中」，下一場考試的截圖會靜靜掉進去年那份資料裡。實測踩過。
+  //
+  // 用 NOT IN 而不是相關子查詢（pg-mem 不支援後者，測試環境會炸而正式環境好）；
+  // 子查詢必須加 IS NOT NULL——真 PG 裡 NOT IN 清單含一個 NULL 就整條恆為
+  // UNKNOWN，查詢會靜默全失效（專案規則 testing.md #14）。
   const open = (await query(
     `SELECT id, label, odoo_version FROM exam_banks
-      WHERE status <> 'archived' ORDER BY id DESC LIMIT 1`)).rows[0];
+      WHERE status <> 'archived'
+        AND id NOT IN (SELECT bank_id FROM exam_sections WHERE bank_id IS NOT NULL)
+      ORDER BY id DESC LIMIT 1`)).rows[0];
   if (open) return open;
 
   // 版本沿用最近一場：題庫是按 odoo_version 分池的（見 exam_items 的 UNIQUE），
