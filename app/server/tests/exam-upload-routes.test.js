@@ -235,10 +235,53 @@ describe('批次上傳', () => {
     expect(rows.rows.map(x => x.batch_key)).toEqual([res.body.batch, res.body.batch]);
   });
 
-  test('找不到題庫回 400', async () => {
+  test('指定了不存在的題庫回 400（自動開場只在完全不指定時發生）', async () => {
     const res = await request(app).post('/api/exam/batch')
       .send({ bank: '不存在的題庫', items: [{ page: '1', answer: 'B', image: b64 }] });
     expect(res.status).toBe(400);
+  });
+
+  // 使用者不必先開考試（2026-09-05 拍板）：不指定 bank 就自動放進進行中的那一場，
+  // 沒有進行中的就開一場新的。少了這個，每次考試都要先按一顆只是重填同樣三個
+  // 欄位的按鈕——一道沒有內容的手續。
+  describe('不指定 bank 時自動決定', () => {
+    const upload = (over = {}) => request(app).post('/api/exam/batch')
+      .send({ items: [{ page: '90', answer: 'A', image: b64 }], ...over });
+
+    test('放進目前進行中的那一場，不會開新的', async () => {
+      const before = (await dbModule.query('SELECT COUNT(*)::int c FROM exam_banks')).rows[0].c;
+      const res = await upload();
+      expect(res.status).toBe(200);
+      const row = (await dbModule.query(
+        'SELECT bank_id FROM exam_uploads WHERE id=$1', [res.body.accepted[0].id])).rows[0];
+      expect(row.bank_id).toBe(bankId);
+      expect((await dbModule.query('SELECT COUNT(*)::int c FROM exam_banks')).rows[0].c).toBe(before);
+    });
+
+    // 歸檔＝這一場結束。之後再傳圖就是下一場了——連考兩次時這正是想要的行為。
+    test('目前那場歸檔之後，下一張圖自動開新的一場', async () => {
+      await dbModule.query(`UPDATE exam_banks SET status='archived' WHERE id=$1`, [bankId]);
+      const res = await upload();
+      expect(res.status).toBe(200);
+      const row = (await dbModule.query(
+        'SELECT bank_id FROM exam_uploads WHERE id=$1', [res.body.accepted[0].id])).rows[0];
+      expect(row.bank_id).not.toBe(bankId);
+      const nb = (await dbModule.query(
+        'SELECT label, odoo_version, status FROM exam_banks WHERE id=$1', [row.bank_id])).rows[0];
+      // 版本沿用最近一場：題庫按 odoo_version 分池，猜錯版本會讓這場跟既有題庫
+      // 完全對不起來，而畫面上看不出原因
+      expect(nb.odoo_version).toBe('19');
+      expect(nb.status).toBe('ready');
+      expect(nb.label).toMatch(/^\d{4}-\d{2}-\d{2}/);
+
+      // 再傳一張要進同一場（那場還沒歸檔），不能每張圖都開一場新的
+      const again = await upload();
+      const row2 = (await dbModule.query(
+        'SELECT bank_id FROM exam_uploads WHERE id=$1', [again.body.accepted[0].id])).rows[0];
+      expect(row2.bank_id).toBe(row.bank_id);
+      await dbModule.query(`UPDATE exam_banks SET status='ready' WHERE id=$1`, [bankId]);
+      await dbModule.query(`DELETE FROM exam_banks WHERE id=$1`, [row.bank_id]);
+    });
   });
 
   test('空 items 回 400', async () => {
@@ -259,12 +302,11 @@ describe('批次上傳', () => {
 describe('落檔與紀錄', () => {
   test('圖片真的寫進磁碟，DB 存相對路徑', async () => {
     const res = await request(app).post('/api/exam/batch')
-      .send({ bank: '2026-09-04', items: [{ page: '20', answer: 'B', image: b64, name: '小王' }] });
+      .send({ bank: '2026-09-04', items: [{ page: '20', answer: 'B', image: b64 }] });
     const id = res.body.accepted[0].id;
     const row = (await dbModule.query(
-      'SELECT image_path, responder, status, is_test FROM exam_uploads WHERE id = $1', [id])).rows[0];
+      'SELECT image_path, status, is_test FROM exam_uploads WHERE id = $1', [id])).rows[0];
 
-    expect(row.responder).toBe('小王');
     expect(row.status).toBe('pending');
     expect(row.is_test).toBe(false);
     // 相對路徑，不得是絕對路徑（專案硬規則）

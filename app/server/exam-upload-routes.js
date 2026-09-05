@@ -83,14 +83,52 @@ function checkExamToken(req, res, next) {
   next();
 }
 
+/**
+ * 決定這張截圖要進哪一場考試。
+ *
+ * **bank 不給就自動決定**（2026-09-05 使用者拍板）：沒有進行中的考試就開一場新的。
+ * 在這之前使用者得先手動按「新考試」拿到 id 才傳得了圖，而那顆鈕的三個欄位
+ * 每次都填一樣的東西——等於一道沒有內容的手續。
+ *
+ * 「進行中」＝ status <> 'archived'。歸檔是這一場結束的唯一訊號（archive.js 寫的），
+ * 所以歸檔之後再傳圖會自動開下一場，這正是連考兩次時想要的行為。
+ */
 async function resolveBank(bankRef) {
-  if (!bankRef) return null;
-  const asId = parseInt(bankRef, 10);
-  const sql = Number.isInteger(asId) && String(asId) === String(bankRef)
-    ? `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`
-    : `SELECT id, label, odoo_version FROM exam_banks WHERE label = $1 ORDER BY id DESC LIMIT 1`;
-  const { rows } = await query(sql, [Number.isInteger(asId) && String(asId) === String(bankRef) ? asId : bankRef]);
-  return rows[0] || null;
+  if (bankRef) {
+    const asId = parseInt(bankRef, 10);
+    const byId = Number.isInteger(asId) && String(asId) === String(bankRef);
+    const sql = byId
+      ? `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`
+      : `SELECT id, label, odoo_version FROM exam_banks WHERE label = $1 ORDER BY id DESC LIMIT 1`;
+    const { rows } = await query(sql, [byId ? asId : bankRef]);
+    return rows[0] || null;
+  }
+
+  const open = (await query(
+    `SELECT id, label, odoo_version FROM exam_banks
+      WHERE status <> 'archived' ORDER BY id DESC LIMIT 1`)).rows[0];
+  if (open) return open;
+
+  // 版本沿用最近一場：題庫是按 odoo_version 分池的（見 exam_items 的 UNIQUE），
+  // 猜錯版本會讓這一場的題目跟既有題庫完全對不起來，而畫面上看不出原因。
+  const last = (await query(
+    `SELECT odoo_version FROM exam_banks ORDER BY id DESC LIMIT 1`)).rows[0];
+  const version = (last && last.odoo_version) || '19';
+  const label = new Date().toISOString().slice(0, 10);
+  // 同版本同名時補序號：同一天考兩場（前一場已歸檔）不該撞名，
+  // 而 label 是外部指定題庫的鍵，重名會讓圖靜靜落到別場去。
+  let tryLabel = label;
+  for (let n = 2; n < 50; n++) {
+    const dup = (await query(
+      `SELECT id FROM exam_banks WHERE label = $1 AND odoo_version = $2`, [tryLabel, version])).rows[0];
+    if (!dup) break;
+    tryLabel = `${label}-${n}`;
+  }
+  const { rows } = await query(`
+    INSERT INTO exam_banks (label, odoo_version, status, taken_at)
+    VALUES ($1, $2, 'ready', CURRENT_DATE)
+    RETURNING id, label, odoo_version`, [tryLabel, version]);
+  return rows[0];
 }
 
 // 測試上傳直接標 done，不進判題佇列。
@@ -102,14 +140,16 @@ async function resolveBank(bankRef) {
 // 順帶：判題一頁要燒好幾分鐘的 opus token，煙霧測試不該付這個錢。
 const TEST_UPLOAD_NOTE = '測試上傳（test=1）：只驗證上傳路徑，未進判題佇列';
 
-async function insertUpload({ bankId, batchKey, batchLabel, page, answer, responder, imagePath, isTest, section }) {
+// responder（作答者）已移除：前端從來沒顯示過，DB 裡 120 筆全是 NULL——
+// 純粹是要人多填一格的贅欄。欄位本身留在 schema，不動舊資料。
+async function insertUpload({ bankId, batchKey, batchLabel, page, answer, imagePath, isTest, section }) {
   const { rows } = await query(
     `INSERT INTO exam_uploads
-       (bank_id, batch_key, batch_label, page, answer_raw, responder, image_path, is_test,
+       (bank_id, batch_key, batch_label, page, answer_raw, image_path, is_test,
         section_title, status, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
     [bankId, batchKey || null, batchLabel || null, String(page), answer,
-     responder || null, imagePath, !!isTest, sectionValue(section),
+     imagePath, !!isTest, sectionValue(section),
      isTest ? 'done' : 'pending', isTest ? TEST_UPLOAD_NOTE : null]
   );
   return rows[0].id;
@@ -184,7 +224,7 @@ function registerRoutes(app) {
   app.post('/api/exam/submit', checkExamToken, shotUpload.single('screenshot'), async (req, res) => {
     try {
       const bank = await resolveBank(req.body.bank);
-      if (!bank) return res.status(400).json({ error: '找不到題庫（bank 給 id 或 label）' });
+      if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
       if (!req.file) return res.status(400).json({ error: '缺少 screenshot' });
 
       const page = String(req.body.page ?? '').trim();
@@ -202,8 +242,7 @@ function registerRoutes(app) {
       const isTest = asTest(req.body.test);
       const id = await insertUpload({
         bankId: bank.id, batchKey: req.body.batch, batchLabel: req.body.label,
-        page, answer, responder: req.body.name, section: req.body.section,
-        imagePath, isTest,
+        page, answer, section: req.body.section, imagePath, isTest,
       });
       // status 要照實講。回 'queued' 而實際上不會判題，是在騙呼叫端等一個不會來的結果。
       res.json({ id, bank: bank.label, page, status: isTest ? 'test-ok' : 'queued' });
@@ -220,7 +259,7 @@ function registerRoutes(app) {
   app.post('/api/exam/batch', checkExamToken, express.json({ limit: BATCH_BODY_LIMIT }), async (req, res) => {
     try {
       const bank = await resolveBank(req.body.bank);
-      if (!bank) return res.status(400).json({ error: '找不到題庫（bank 給 id 或 label）' });
+      if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
 
       const items = Array.isArray(req.body.items) ? req.body.items : [];
       if (!items.length) return res.status(400).json({ error: 'items 是空的' });
@@ -243,9 +282,7 @@ function registerRoutes(app) {
         const isTest = asTest(it.test ?? req.body.test);
         const id = await insertUpload({
           bankId: bank.id, batchKey, batchLabel, page: it.page, answer: it.answer,
-          responder: it.name || req.body.name, imagePath,
-          section: it.section ?? req.body.section,
-          isTest,
+          imagePath, section: it.section ?? req.body.section, isTest,
         });
         if (!isTest) real++;
         accepted.push({ id, page: String(it.page), test: isTest || undefined });
@@ -514,7 +551,9 @@ function registerRoutes(app) {
             pages: pages.map(p => p.section).filter(Boolean),
           });
         }
-        res.json({ ...m, skipped: read.skipped || [] });
+        // 兩邊的 skipped 都要留：讀圖時略過的（看錯欄）與比對時略過的（有部分給分）
+        // 是不同的原因，只留一邊會讓人看不出某章為什麼沒填。
+        res.json({ ...m, skipped: [...(read.skipped || []), ...(m.skipped || [])] });
       } catch (e) {
         res.status(500).json({ error: e.message });
       } finally {

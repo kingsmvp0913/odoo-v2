@@ -188,7 +188,10 @@ async function archiveBank(db, { bankId, pages = [] }) {
 
     const { notes } = await recomputeConfidence(db, bank);
     stat.notes = notes;
-    await db.query(`UPDATE exam_banks SET status = 'ready' WHERE id = $1`, [bankId]);
+    // 標 archived 而不是 ready：這是「這一場結束了」的唯一訊號。
+    // 上傳端靠它決定截圖要進哪一場——沒有進行中的考試就自動開一場新的，
+    // 所以使用者完全不必管「開考試」這件事（2026-09-05 使用者拍板）。
+    await db.query(`UPDATE exam_banks SET status = 'archived' WHERE id = $1`, [bankId]);
   }
   return stat;
 }

@@ -13,7 +13,6 @@ window.UiNextExamRunView = Vue.defineComponent({
       reading: false, readNote: '',
       retrying: {},
       apiOpen: false, token: null, tokenExpiresAt: null, tokenExpired: false, issuing: false,
-      newOpen: false, creating: false, draft: { label: '', odoo_version: '', taken_at: '' },
     };
   },
   async created() {
@@ -98,28 +97,6 @@ window.UiNextExamRunView = Vue.defineComponent({
         }
         this.finalDraft = next;
       } catch (e) { this.err = e.message; }
-    },
-    // 開一場新考試。名稱與日期都預填今天，版本沿用上一場——絕大多數情況三個欄位
-    // 都不用改，直接按建立。
-    openNew() {
-      const today = new Date().toISOString().slice(0, 10);
-      this.draft = {
-        label: today,
-        odoo_version: (this.bank && this.bank.odoo_version) || '19',
-        taken_at: today,
-      };
-      this.newOpen = true;
-    },
-    async createBank() {
-      this.creating = true;
-      try {
-        const b = await Api.post('exam/banks', this.draft);
-        this.newOpen = false;
-        // refresh 每輪跟到最新的題庫，新建的 id 最大 ⇒ 畫面自動切過去
-        await this.refresh();
-        showToast(`已開新考試「${b.label}」，現在可以開始傳截圖`, 'success');
-      } catch (e) { showToast(e.message, 'error', 0); }
-      finally { this.creating = false; }
     },
     async openApi() {
       this.apiOpen = !this.apiOpen;
@@ -399,37 +376,16 @@ window.UiNextExamRunView = Vue.defineComponent({
             {{ clearing ? '清空中…' : '清空' }}
           </button>
           <button :class="apiOpen && 'ui-next-primary'" @click="openApi">串接說明</button>
-          <button :class="archiveOpen && 'ui-next-primary'"
-                  :disabled="!stats.total" @click="openArchive">歸檔</button>
-          <button class="ui-next-primary ui-next-cta" @click="openNew">
-            <ui-next-icon name="plus"/>新考試
-          </button>
+          <button class="ui-next-primary ui-next-cta" :disabled="!stats.total"
+                  @click="openArchive">歸檔</button>
         </div>
       </header>
-      <div v-if="newOpen" class="ui-next-task-modal-backdrop" @mousedown.self="newOpen=false">
-        <section class="ui-next-task-modal ui-next-exam-new" role="dialog" aria-modal="true"
-                 aria-labelledby="exam-new-title">
-          <header><h2 id="exam-new-title">開一場新考試</h2></header>
-          <label>名稱<input v-model="draft.label" placeholder="例：2026-10-01 秋季"></label>
-          <label>Odoo 版本<input v-model="draft.odoo_version" inputmode="numeric" placeholder="19"></label>
-          <label>考試日期<input v-model="draft.taken_at" type="date"></label>
-          <p class="ui-next-exam-new-note">
-            建立之後這一頁就會切到新的這場，接著把截圖傳進來即可。
-            題庫累積的題目與答案不受影響——同一題再考到會自動接上。
-          </p>
-          <footer>
-            <button type="button" @click="newOpen=false">取消</button>
-            <button class="ui-next-primary" :disabled="creating || !draft.label.trim()"
-                    @click="createBank">{{ creating ? '建立中…' : '建立' }}</button>
-          </footer>
-        </section>
-      </div>
     <div v-if="apiOpen" class="ui-next-task-modal-backdrop" @mousedown.self="apiOpen=false">
       <section class="ui-next-task-modal ui-next-exam-api" role="dialog" aria-modal="true" aria-labelledby="exam-api-title">
         <header class="ui-next-exam-api-head">
           <div>
             <h2 id="exam-api-title">上傳串接說明</h2>
-            <p>給沒有平台帳號的同事：拿一組通行碼就能傳截圖</p>
+            <p>給沒有平台帳號的同事：拿一組通行碼就能傳截圖。不必先開考試——第一張圖進來就會自動開一場。</p>
           </div>
           <button type="button" class="ui-next-exam-api-x" aria-label="關閉" @click="apiOpen=false">
             <ui-next-icon name="close"/>
@@ -462,12 +418,11 @@ window.UiNextExamRunView = Vue.defineComponent({
           </div>
 
           <dl class="ui-next-exam-api-fields">
-            <dt>bank</dt><dd>題庫 id 或 label<i>必填</i></dd>
             <dt>page</dt><dd>頁碼，例 10<i>必填</i></dd>
             <dt>answer</dt><dd>作答，逗號分隔，例 C,C,B<i>必填</i></dd>
-            <dt>section</dt><dd>章節名，例 Project</dd>
-            <dt>name</dt><dd>作答者</dd>
             <dt>screenshot</dt><dd>圖片檔（batch 改放 image，base64）<i>必填</i></dd>
+            <dt>section</dt><dd>章節名，例 Project（歸檔時要對成績單，建議填）</dd>
+            <dt>bank</dt><dd>指定題庫 id 或名稱。<b>不填就自動放進進行中的那一場</b>，沒有就開一場新的</dd>
           </dl>
 
           <p class="ui-next-exam-api-note">

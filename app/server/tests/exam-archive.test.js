@@ -206,9 +206,12 @@ describe('archiveBank', () => {
     expect(untouched.rows[0].history_wrong).toBe(true);
   });
 
-  test('歸檔後題庫狀態轉 ready', async () => {
+  // 歸檔＝這一場結束了，狀態要能表達這件事。上傳端靠它決定截圖進哪一場：
+  // 沒有進行中的考試就自動開一場新的（使用者因此完全不必管「開考試」）。
+  // 原本轉 'ready'，跟剛建好的新題庫同一個值 ⇒ 分不出「還在考」與「考完了」。
+  test('歸檔後題庫狀態轉 archived，代表這一場結束', async () => {
     const b = await dbModule.query(`SELECT status FROM exam_banks WHERE id = $1`, [bankId]);
-    expect(b.rows[0].status).toBe('ready');
+    expect(b.rows[0].status).toBe('archived');
   });
 });
 
