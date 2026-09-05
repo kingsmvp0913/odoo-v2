@@ -118,6 +118,21 @@ test('選項上只留推薦分數與投票兩個標記', () => {
   expect(view).toContain('scoreWhy(q,option.letter)');
 });
 
+// 「還在跑」與「跑到一半死了」原本在畫面上長得一模一樣——兩者都是每一頁顯示
+// 「等待審題」轉圈，等多久都不會變。判題狀態沒接前端，這件事就看不出來。
+test('判題狀態接上前端，卡住時給得出「繼續判題」', () => {
+  expect(view).toContain('exam/jobs?bank=');
+  expect(view).toContain('jobState');
+  // 三種狀態要分得開：跑著等就好／卡住要按繼續／失敗要看錯誤
+  for (const k of ['running', 'stuck', 'failed']) expect(view).toContain(`'${k}'`);
+  // 卡住＝有頁在等但沒有工作在跑；重啟打斷後最常見的就是這個
+  expect(view).toContain("u.status === 'pending'");
+  expect(view).toContain("j.status === 'interrupted'");
+  // 繼續判題走既有的 POST /api/exam/run（本來就在，只是沒地方按得到）
+  expect(view).toContain("Api.post('exam/run'");
+  expect(css).toContain('.ui-next-exam-job.is-stuck');
+});
+
 // 考題原文是英文，中譯只是輔助。看不到原文就無法確認翻譯有沒有把語意帶偏
 test('選項與題幹一樣中英對照', () => {
   expect(view).toContain('ui-next-exam-run-opt-en');

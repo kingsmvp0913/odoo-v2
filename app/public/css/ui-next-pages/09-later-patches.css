@@ -1604,6 +1604,27 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   background: var(--card-bg); color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer;
 }
 
+/* 判題狀態列。三種狀態三個顏色，因為要做的事不一樣：
+   跑著＝等就好／卡住＝要按繼續／失敗＝要看錯誤。 */
+.ui-next-exam-job {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: var(--text-secondary); font-size: var(--fs-sm);
+}
+.ui-next-exam-job .spinner { width: 13px; height: 13px; border-width: 2px; flex: none; }
+.ui-next-exam-job.is-stuck {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--text);
+}
+.ui-next-exam-job.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--text);
+}
+.ui-next-exam-job .ui-next-exam-btn { margin-left: auto; }
+
 /* 歸檔面板：對著官方成績圖勾「這章沒答錯」。
    grid 是 4 欄，而每一列剛好 4 個子元素——少一欄的話第 4 個會掉到下一列，
    版面亂掉而且沒有任何錯誤訊息（本頁實測踩過，找了三輪）。 */

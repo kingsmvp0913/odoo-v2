@@ -11,7 +11,7 @@ window.UiNextExamRunView = Vue.defineComponent({
       finalDraft: {}, savingFinal: {},
       archiveOpen: false, archivePages: [], archiving: false, archiveResult: null,
       reading: false, readNote: '',
-      retrying: {},
+      retrying: {}, job: null, resuming: false,
       apiOpen: false, token: null, tokenExpiresAt: null, tokenExpired: false, issuing: false,
     };
   },
@@ -61,6 +61,29 @@ window.UiNextExamRunView = Vue.defineComponent({
         // 篩選時整頁都沒問題就連頁一起收掉，剩下的才是真的要處理的
         .filter(g => this.filter !== 'check' || g.questions.length);
     },
+    // 判題現在到底怎麼了。分四種，因為使用者要做的事不一樣：
+    //   running 等就好／stuck 要按繼續／failed 要看錯誤／null 沒事
+    //
+    // 「卡住」＝有頁在等但沒有工作在跑。這是重啟打斷後最常見的狀態，而畫面上
+    // 原本完全看不出來——每一頁都顯示「等待審題」轉圈，跟正常排隊一模一樣。
+    jobState() {
+      const pending = this.uploads.filter(u => !u.is_test && u.status === 'pending').length;
+      const failed = this.uploads.filter(u => !u.is_test && u.status === 'failed');
+      const j = this.job;
+      if (j && j.status === 'running') {
+        return { kind: 'running', text: `${j.phase || '判題中'}　${j.pages_done}/${j.pages_total} 頁` };
+      }
+      if (pending) {
+        return { kind: 'stuck', pending,
+          text: j && j.status === 'interrupted'
+            ? `上次判題被中斷（多半是平台重啟），還有 ${pending} 頁沒跑`
+            : `有 ${pending} 頁在等，但目前沒有工作在跑` };
+      }
+      if (failed.length) {
+        return { kind: 'failed', text: `${failed.length} 頁判題失敗：${failed[0].error || '未說明'}` };
+      }
+      return null;
+    },
     stats() {
       // 還在跑的那一頁不計入。作答是在審查完成**之前**就建好的（saveVerdicts 要靠
       // 它們對應題號），所以題目會先冒出來、判斷卻還沒寫進去——那時候把它算進
@@ -89,7 +112,14 @@ window.UiNextExamRunView = Vue.defineComponent({
       } catch (e) { this.err = e.message; }
       if (!this.bankId) return;
       try {
-        const data = await Api.get(`exam/dashboard?bank=${this.bankId}`);
+        // 判題狀態與看板一起抓（並行，不多一輪輪詢）。
+        // 沒有這個，「還在跑」與「跑到一半死了」在畫面上長得一模一樣——
+        // 兩者都是每一頁顯示「等待審題」轉圈，等多久都不會變。
+        const [data, jobs] = await Promise.all([
+          Api.get(`exam/dashboard?bank=${this.bankId}`),
+          Api.get(`exam/jobs?bank=${this.bankId}`).catch(() => []),
+        ]);
+        this.job = (jobs || [])[0] || null;
         this.bank = data.bank; this.uploads = data.uploads || []; this.attempts = data.attempts || [];
         const next = { ...this.finalDraft };
         for (const a of this.attempts) if (!this.savingFinal[a.attempt_id]) {
@@ -138,6 +168,16 @@ window.UiNextExamRunView = Vue.defineComponent({
         showToast(`P${g.page} 已排入重跑`, 'success');
       } catch (e) { showToast(e.message, 'error', 0); }
       finally { this.retrying = { ...this.retrying, [g.id]: false }; }
+    },
+    // 卡住時把佇列重新推起來。POST /api/exam/run 本來就在，只是沒有任何地方按得到。
+    async resumeJob() {
+      this.resuming = true;
+      try {
+        const r = await Api.post('exam/run', { bank: this.bankId });
+        await this.refresh();
+        showToast(`已重新排入判題（${r.pending} 頁）`, 'success');
+      } catch (e) { showToast(e.message, 'error', 0); }
+      finally { this.resuming = false; }
     },
     queueRefresh() {
       if (this._refreshTimer) return;
@@ -446,6 +486,14 @@ window.UiNextExamRunView = Vue.defineComponent({
                   :class="['ui-next-exam-run-stat',stats.check && 'is-bad',filter==='check' && 'is-on']"><b>{{ stats.check }}</b><span>需確認</span></button>
           <!-- 沒有「只看沒問題」這個篩選，所以這張不是按鈕，也不該長得像可以點 -->
           <div class="ui-next-exam-run-stat is-ok is-static"><b>{{ stats.ok }}</b><span>沒問題</span></div>
+        </div>
+        <div v-if="jobState" :class="['ui-next-exam-job','is-'+jobState.kind]">
+          <i v-if="jobState.kind==='running'" class="spinner"></i>
+          <span>{{ jobState.text }}</span>
+          <button v-if="jobState.kind==='stuck'" class="ui-next-exam-btn"
+                  :disabled="resuming" @click="resumeJob">
+            {{ resuming ? '啟動中…' : '繼續判題' }}
+          </button>
         </div>
         <div v-if="archiveOpen" class="ui-next-exam-arch">
           <div class="ui-next-exam-arch-intro">
