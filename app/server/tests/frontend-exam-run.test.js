@@ -105,10 +105,27 @@ test('更多工具只有一個認證入口，題庫改由考試頁右上進入',
   expect(app).toContain("go('/exam-run')\"><ui-next-icon name=\"book\"/>ODOO認證輔助");
   expect(app).not.toContain("go('/exam-bank')");
   expect(app).not.toContain('考試作戰台</button>');
-  expect(view).toContain("$router.push('/exam-bank')");
-  expect(view).toContain('class="btn btn-outline btn-sm" @click="$router.push(\'/exam-bank\')">題庫</button>');
-  expect(bankView).toContain('class="btn btn-outline btn-sm" @click="$router.push(\'/exam-run\')">← 考試頁</button>');
+  expect(view).toContain('@click="$router.push(\'/exam-bank\')">題庫</button>');
+  expect(bankView).toContain('@click="$router.push(\'/exam-run\')">考試作戰台</button>');
   expect(bankView).not.toContain("banks.length <= 1");
+});
+
+// 兩頁是「更多工具」選單裡的一般頁面，不是 Admin 子頁。走錯外殼的症狀很難用肉眼歸因：
+// 標題只有 24px、貼著頂端、多一條橫線、內容也不受 1180px 置中限寬，
+// 但每一項單看都像「這頁就長這樣」。所以把外殼與按鈕系統釘死在這裡。
+test('兩頁走主要頁面的外殼與按鈕，不是 Admin 子頁那一套', () => {
+  for (const [name, src] of [['ExamRun', view], ['ExamBank', bankView]]) {
+    expect(`${name}:${src}`).toContain('class="ui-next-page ui-next-exam-page"');
+    expect(`${name}:${src}`).toContain('class="ui-next-page-head"');
+    expect(`${name}:${src}`).toContain('class="ui-next-head-tools"');
+    // .topbar／.content 是 Admin 子頁的殼，.btn btn-* 是 app.css 的舊按鈕系統
+    expect(`${name}:${src}`).not.toContain('class="topbar');
+    expect(`${name}:${src}`).not.toContain('class="content"');
+    expect(`${name}:${src}`).not.toContain('class="btn btn-');
+  }
+  // 篩選用全站的頁籤列，不是自成一套的實心藥丸
+  expect(view).toContain('class="ui-next-page-tabs"');
+  expect(bankView).toContain('class="ui-next-page-tabs"');
 });
 
 test('兩頁互動元件沿用平台的 focus-visible 與輸入框 focus 樣式', () => {

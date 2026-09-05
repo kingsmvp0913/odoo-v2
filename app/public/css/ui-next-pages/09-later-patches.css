@@ -644,6 +644,12 @@
 .ui-next-page-tabs button{border:0;border-bottom:2px solid transparent;padding:9px 12px;background:transparent;color:var(--text-muted);font:inherit;cursor:pointer}
 .ui-next-page-tabs button[aria-selected=true]{border-bottom-color:var(--primary);color:var(--text);font-weight:700}
 .ui-next-page-tabs button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+/* 頁籤上的計數與圖示。數值比照任務列表的 .ui-next-task-tabs b，兩處的計數長一樣；
+   inline-flex 是為了讓「官方確定」前面那顆鎖頭跟文字同一條基線，不然圖示會把行高撐開。 */
+.ui-next-page-tabs button{display:inline-flex;align-items:center;gap:5px}
+/* 計數底色用 --surface＋描邊而不是任務列表那顆的 --bg：頁籤列本身就坐在 --bg 上，
+   同色的藥丸等於看不見（任務列表的頁籤選中時有白底，所以那邊 --bg 才顯得出來）。 */
+.ui-next-page-tabs b{display:inline-grid;min-width:18px;height:18px;place-items:center;border:1px solid var(--border);border-radius:9px;background:var(--surface);font-size:10px;font-weight:600}
 /* 總覽只剩趨勢一張卡，維持兩欄會讓它縮成半個畫面寬。 */
 .ui-next-usage-grid-single{grid-template-columns:minmax(0,1fr)}
 /* 無限捲動的哨兵：本身不佔視覺，但要有高度才進得了視野。 */
@@ -1254,25 +1260,36 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   margin: 0 0 12px; padding: 8px 12px; border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text-secondary); font-size: var(--fs-sm);
 }
-.ui-next-exam-bank-pick {
-  padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--card-bg); color: var(--text); font-size: var(--fs-sm);
+/* 以下四顆（題庫下拉、搜尋框、EN／中 切換、複製）一律抄任務列表 .ui-next-task-toolbar 的
+   量法：8px 10px 內距、8px 圓角、--border-strong 描邊、12px 字，高度讓它自己算。
+   ⚠ 不要改寫成固定 height——ui-next 的外殼帶著 zoom，CSS px 與畫面 px 不是 1:1
+     （量到的 39 是 rect，換算回 CSS 約 35.5），寫死 39 會比旁邊的鈕高一截。
+   原本是自己填的 6px 圓角＋細描邊＋4px 內距，並排時比任務頁矮一截，看得出是另一套元件。 */
+.ui-next-exam-bank-pick,
+.ui-next-exam-search,
+.ui-next-exam-chip,
+.ui-next-exam-btn,
+.ui-next-exam-page .ui-next-head-tools .ui-next-primary {
+  /* height:auto 是給 .ui-next-primary 用的——它自帶 height:34px，不解掉會比旁邊矮 2px */
+  box-sizing: border-box; height: auto; padding: 8px 10px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 12px;
 }
-.ui-next-exam-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-.ui-next-exam-search {
-  flex: 1 1 240px; min-width: 180px; padding: 6px 10px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--card-bg); color: var(--text); font-size: var(--fs-sm);
+/* 上面那條把 .ui-next-primary 的底色也一起蓋掉了，補回來——它靠反白表示「面板開著」。 */
+.ui-next-exam-page .ui-next-head-tools .ui-next-primary {
+  border-color: var(--text); background: var(--text); color: var(--surface); font-weight: 650;
 }
+.ui-next-exam-chip, .ui-next-exam-btn { color: var(--text-secondary); cursor: pointer; }
+.ui-next-exam-bank-pick { cursor: pointer; }
+.ui-next-exam-toolbar { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.ui-next-exam-search { flex: 1 1 240px; min-width: 180px; }
 .ui-next-exam-search::placeholder { color: var(--text-placeholder); }
-.ui-next-exam-filters, .ui-next-exam-lang { display: flex; gap: 6px; }
-.ui-next-exam-chip {
-  padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
-  background: var(--card-bg); color: var(--text-secondary);
-  font-size: var(--fs-sm); cursor: pointer;
+.ui-next-exam-lang { display: flex; gap: 7px; }
+.ui-next-exam-chip:hover, .ui-next-exam-btn:hover { border-color: var(--text-muted); }
+/* 選中態用 --text 反白，與 .ui-next-primary 同一個訊號。原本是實心紫藥丸，全站沒有第二處那樣畫。 */
+.ui-next-exam-chip.is-on {
+  background: var(--text); border-color: var(--text); color: var(--surface); font-weight: 650;
 }
-.ui-next-exam-chip:hover { border-color: var(--border-strong); }
-.ui-next-exam-chip.is-on { background: var(--primary); border-color: var(--primary); color: #fff; }
 .ui-next-exam-chip:focus-visible,
 .ui-next-exam-run-stat:focus-visible,
 .ui-next-exam-run-vote:focus-visible,
@@ -1418,128 +1435,13 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-warn { margin-top: 8px; color: var(--danger); font-size: var(--fs-sm); }
 .ui-next-exam-ver { color: var(--text-muted); font-size: var(--fs-sm); }
 
-/* ── 考試作戰台（ExamRun）──────────────────────────────────────────────
-   查題結果的三種狀態各有一個顏色：命中走 --success、沒命中走 --text-muted、
-   出錯走 --danger。全部取自 app.css 的變數——寫死亮底在深色模式會變隱形字
-   （frontend.md 規則 32）。                                             */
-.ui-next-exam-run-lookup, .ui-next-exam-run-batch {
-  margin-bottom: 18px; padding: 14px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--card-bg);
-}
-.ui-next-exam-run-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-.ui-next-exam-run-head h2 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semibold); color: var(--text); }
-.ui-next-exam-run-sub { color: var(--text-muted); font-size: var(--fs-sm); }
-
-.ui-next-exam-run-q {
-  width: 100%; box-sizing: border-box; padding: 10px 12px; resize: vertical;
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--bg); color: var(--text); font-size: var(--fs-base); line-height: 1.5;
-}
-.ui-next-exam-run-q::placeholder { color: var(--text-placeholder); }
-
-/* 命中時字要大到瞄一眼就讀得到——考試當下沒有時間對焦。 */
-.ui-next-exam-run-hit {
-  margin-top: 10px; padding: 14px; border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--success) 45%, transparent);
-  background: color-mix(in srgb, var(--success) 12%, var(--bg));
-}
-.ui-next-exam-run-answer {
-  font-size: 40px; line-height: 1.1; font-weight: var(--fw-bold);
-  color: var(--success); letter-spacing: 0.06em;
-}
-.ui-next-exam-run-src { margin-top: 4px; color: var(--text-secondary); font-size: var(--fs-sm); }
-/* 沒命中時**只講沒有**：不顯示數字、不顯示相似題。看到不確定的舊答案會錨定判斷。 */
-.ui-next-exam-run-miss {
-  margin-top: 10px; padding: 14px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--text-muted); font-size: var(--fs-base);
-}
+/* ── 考試作戰台（ExamRun）────────────────────────────────────────────── */
 .ui-next-exam-run-err {
   margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   background: color-mix(in srgb, var(--danger) 12%, var(--bg));
   color: var(--text); font-size: var(--fs-sm); white-space: pre-wrap;
 }
-.ui-next-exam-run-ok { margin-top: 10px; color: var(--success); font-size: var(--fs-sm); }
-
-.ui-next-exam-run-name, .ui-next-exam-run-page, .ui-next-exam-run-answer-in {
-  padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--bg); color: var(--text); font-size: var(--fs-sm);
-}
-.ui-next-exam-run-name::placeholder,
-.ui-next-exam-run-page::placeholder,
-.ui-next-exam-run-answer-in::placeholder { color: var(--text-placeholder); }
-.ui-next-exam-run-page { width: 84px; }
-.ui-next-exam-run-answer-in { flex: 1 1 240px; min-width: 160px; }
-
-.ui-next-exam-run-drop {
-  padding: 18px; text-align: center; border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm); color: var(--text-muted); font-size: var(--fs-sm);
-}
-.ui-next-exam-run-drop.is-over {
-  border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--bg));
-  color: var(--text);
-}
-.ui-next-exam-run-pick { color: var(--primary); cursor: pointer; text-decoration: underline; }
-
-.ui-next-exam-run-file {
-  display: flex; align-items: center; gap: 10px; padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-.ui-next-exam-run-thumb {
-  width: 64px; height: 48px; object-fit: cover; flex: 0 0 auto;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
-}
-.ui-next-exam-run-fmeta { flex: 1 1 auto; min-width: 0; }
-.ui-next-exam-run-fname {
-  color: var(--text-muted); font-size: var(--fs-xs); margin-bottom: 4px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.ui-next-exam-run-finputs { display: flex; gap: 8px; flex-wrap: wrap; }
-
-.ui-next-exam-run-actions { margin-top: 10px; }
-.ui-next-exam-run-send, .ui-next-exam-run-start {
-  padding: 6px 14px; border: 1px solid var(--primary); border-radius: var(--radius-sm);
-  background: var(--primary); color: #fff; font-size: var(--fs-sm); cursor: pointer;
-}
-.ui-next-exam-run-send:disabled, .ui-next-exam-run-start:disabled {
-  opacity: 0.5; cursor: not-allowed;
-}
-
-.ui-next-exam-run-rejected {
-  margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
-  background: color-mix(in srgb, var(--warning) 12%, var(--bg)); color: var(--text);
-}
-.ui-next-exam-run-rejected-head { font-weight: var(--fw-semibold); font-size: var(--fs-sm); margin-bottom: 4px; }
-.ui-next-exam-run-rejected-row { font-size: var(--fs-sm); color: var(--text-secondary); }
-
-.ui-next-exam-run-queue { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
-.ui-next-exam-run-queue-head {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  color: var(--text-secondary); font-size: var(--fs-sm); margin-bottom: 8px;
-}
-.ui-next-exam-run-job {
-  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
-  padding: 4px 0; font-size: var(--fs-sm); color: var(--text-secondary);
-}
-.ui-next-exam-run-jstatus { font-weight: var(--fw-semibold); color: var(--text-muted); }
-.ui-next-exam-run-jstatus.is-running { color: var(--info); }
-.ui-next-exam-run-jstatus.is-done { color: var(--success); }
-.ui-next-exam-run-jstatus.is-failed { color: var(--danger); }
-.ui-next-exam-run-jstatus.is-interrupted { color: var(--warning-strong); }
-.ui-next-exam-run-jprog { font-variant-numeric: tabular-nums; color: var(--text-muted); }
-.ui-next-exam-run-jtime { color: var(--text-muted); font-size: var(--fs-xs); }
-
-.ui-next-exam-run-live {
-  margin-top: 10px; max-height: 180px; overflow-y: auto;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
-}
-.ui-next-exam-run-live-row {
-  display: flex; gap: 8px; padding: 3px 8px;
-  font-size: var(--fs-xs); color: var(--text-secondary);
-}
-.ui-next-exam-run-history { margin-top: 12px; }
 
 /* 新考試工作台：外部 POST、自動審題，本頁只呈現結果。正式答案改由完整選項前的
    checkbox 操作；摘要固定三欄（輸入／審查／最高票），欄數與直接子元素數一致。 */
@@ -1549,23 +1451,23 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px; margin-bottom: 14px; max-width: 560px;
 }
+/* 數字卡的尺寸抄任務列表的 .ui-next-task-summary-grid：12px 圓角、--surface 底、
+   shadow-sm、數字 25px、標籤 11px。原本是 8px 圓角、無陰影、數字 18px，
+   跟站上其他數字卡擺一起像小一號的另一種元件。 */
 .ui-next-exam-run-stat {
-  padding: 10px 14px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--card-bg); color: var(--text); text-align: left;
+  padding: 15px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); box-shadow: var(--shadow-sm);
+  color: var(--text); text-align: left; cursor: pointer;
 }
-.ui-next-exam-run-stat { cursor: pointer; }
-.ui-next-exam-run-stat.is-on { border-color: var(--primary); }
-.ui-next-exam-run-stat b { display: block; font-size: var(--fs-xl); line-height: 1.2; }
-.ui-next-exam-run-stat span { color: var(--text-muted); font-size: var(--fs-xs); }
+/* 選中只加深描邊。用 --text 會變成白卡上的粗黑框，比卡片裡的數字還搶眼。 */
+.ui-next-exam-run-stat.is-on { border-color: var(--text-muted); }
+.ui-next-exam-run-stat b { display: block; margin: 0 0 6px; font-size: 25px; line-height: 1.2; }
+.ui-next-exam-run-stat span { display: block; color: var(--text-muted); font-size: 11px; }
 .ui-next-exam-run-stat.is-bad b { color: var(--danger); }
 .ui-next-exam-run-stat.is-ok b { color: var(--success); }
-.ui-next-exam-run-toolbar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
-}
-.ui-next-exam-run-toolbar label { color: var(--text-muted); font-size: var(--fs-sm); }
 .ui-next-exam-run-card {
   display: block; margin-bottom: 6px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--bg); overflow: hidden;
+  border-radius: 12px; background: var(--bg); overflow: hidden;
 }
 /* 收合時只剩標題那一行，不留多餘的下緣空白 */
 .ui-next-exam-run-card[open] { padding-bottom: 6px; }
@@ -1636,7 +1538,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    版面亂掉而且沒有任何錯誤訊息（本頁實測踩過，找了三輪）。 */
 .ui-next-exam-arch {
   margin-bottom: 14px; padding: 12px; border: 1px solid var(--border);
-  border-radius: var(--radius-md); background: var(--surface);
+  /* 原本寫 var(--radius-md)，但全站沒有這顆 token（只有 -sm／無後綴／-lg）
+     ⇒ 宣告無效、退回初始值 0，歸檔面板是唯一一塊方角的。改成與其他面板同樣的 12px。 */
+  border-radius: 12px; background: var(--surface);
 }
 .ui-next-exam-arch-intro {
   color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.6; margin-bottom: 10px;

@@ -276,18 +276,25 @@ window.UiNextExamRunView = Vue.defineComponent({
     },
   },
   template: `
-    <div class="topbar ui-next-admin-head">
-      <div><h1>考試作戰台</h1><div class="ui-next-exam-run-sub">外部 POST 後自動審題；這裡只看結果、投票與最後答案</div></div>
-      <div class="ui-next-admin-head-actions">
-        <button :class="['btn','btn-sm', archiveOpen ? 'btn-primary' : 'btn-outline']"
-                :disabled="!stats.total" @click="openArchive">歸檔</button>
-        <button class="btn btn-outline btn-sm" :disabled="clearing || !stats.total" @click="clearAll">
-          {{ clearing ? '清空中…' : '清空' }}
-        </button>
-        <button class="btn btn-outline btn-sm" @click="$router.push('/exam-bank')">題庫</button>
-        <button :class="['btn','btn-sm', apiOpen ? 'btn-primary' : 'btn-outline']" @click="openApi">串接說明</button>
-      </div>
-    </div>
+    <!-- 外殼與按鈕都改走 ui-next 主要頁面那一套（.ui-next-page／.ui-next-page-head／
+         .ui-next-head-tools）。原本是 Admin 子頁的 .topbar ＋ app.css 的 .btn btn-outline btn-sm，
+         標題矮 6px、鈕小一號，跟同一個「更多工具」選單裡的架構圖／用量報表對不起來。 -->
+    <section class="ui-next-page ui-next-exam-page">
+      <header class="ui-next-page-head">
+        <div>
+          <h1>考試作戰台</h1>
+          <p>外部 POST 後自動審題；這裡只看結果、投票與最後答案。</p>
+        </div>
+        <div class="ui-next-head-tools">
+          <button @click="$router.push('/exam-bank')">題庫</button>
+          <button :disabled="clearing || !stats.total" @click="clearAll">
+            {{ clearing ? '清空中…' : '清空' }}
+          </button>
+          <button :class="apiOpen && 'ui-next-primary'" @click="openApi">串接說明</button>
+          <button :class="archiveOpen && 'ui-next-primary'"
+                  :disabled="!stats.total" @click="openArchive">歸檔</button>
+        </div>
+      </header>
     <div v-if="apiOpen" class="ui-next-task-modal-backdrop" @mousedown.self="apiOpen=false">
       <section class="ui-next-task-modal ui-next-exam-api" role="dialog" aria-modal="true" aria-labelledby="exam-api-title">
         <header class="ui-next-exam-api-head">
@@ -308,8 +315,8 @@ window.UiNextExamRunView = Vue.defineComponent({
             <div class="ui-next-exam-api-token-row">
               <code v-if="token">{{ token }}</code>
               <code v-else class="is-empty">{{ tokenExpired ? '上一組已過期' : '尚未產生' }}</code>
-              <button v-if="token" class="btn btn-outline btn-sm" @click="copyToken">複製</button>
-              <button class="btn btn-primary btn-sm" :disabled="issuing" @click="issueToken">
+              <button v-if="token" class="ui-next-exam-btn" @click="copyToken">複製</button>
+              <button class="ui-next-primary" :disabled="issuing" @click="issueToken">
                 {{ issuing ? '產生中…' : (token ? '重產' : '產生') }}
               </button>
             </div>
@@ -341,7 +348,6 @@ window.UiNextExamRunView = Vue.defineComponent({
         </div>
       </section>
     </div>
-    <div class="content">
       <div v-if="loading" class="ui-next-exam-empty">載入中…</div>
       <div v-else-if="!banks.length" class="ui-next-exam-empty">還沒有題庫，外部 POST 前需先指定題庫。</div>
       <template v-else>
@@ -350,9 +356,10 @@ window.UiNextExamRunView = Vue.defineComponent({
           <button @click="filter='check'" :class="['ui-next-exam-run-stat',stats.check && 'is-bad',filter==='check' && 'is-on']"><b>{{ stats.check }}</b><span>需確認</span></button>
           <div class="ui-next-exam-run-stat is-ok"><b>{{ stats.ok }}</b><span>沒問題</span></div>
         </div>
-        <div class="ui-next-exam-run-toolbar">
-          <button :class="['ui-next-exam-chip',filter==='all' && 'is-on']" @click="filter='all'">全部</button>
-          <button :class="['ui-next-exam-chip',filter==='check' && 'is-on']" @click="filter='check'">只看需確認</button>
+        <!-- 篩選走全站的 .ui-next-page-tabs，與題庫頁同一顆 -->
+        <div class="ui-next-page-tabs" role="group" aria-label="題目篩選">
+          <button :aria-selected="filter==='all'" @click="filter='all'">全部</button>
+          <button :aria-selected="filter==='check'" @click="filter='check'">只看需確認</button>
         </div>
         <div v-if="archiveOpen" class="ui-next-exam-arch">
           <div class="ui-next-exam-arch-intro">
@@ -377,7 +384,7 @@ window.UiNextExamRunView = Vue.defineComponent({
           </div>
           <div class="ui-next-exam-arch-foot">
             <span>已勾 {{ archiveTicked().length }} 個章節</span>
-            <button class="btn btn-primary btn-sm" :disabled="archiving || !archiveTicked().length"
+            <button class="ui-next-primary" :disabled="archiving || !archiveTicked().length"
                     @click="doArchive">{{ archiving ? '歸檔中…' : '確認歸檔' }}</button>
           </div>
           <div v-if="archiveResult" class="ui-next-exam-arch-result">
@@ -453,6 +460,6 @@ window.UiNextExamRunView = Vue.defineComponent({
         </details>
         <div v-if="!visibleGroups.length" class="ui-next-exam-empty">沒有需要確認的題目。</div>
       </template>
-    </div>
+    </section>
   `,
 });

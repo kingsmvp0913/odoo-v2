@@ -222,32 +222,36 @@
       }
     },
     template: `
-      <div class="topbar ui-next-admin-head">
-        <h1>認證題庫</h1>
-        <div class="ui-next-admin-head-actions">
-          <select v-if="banks.length > 1" v-model="bankId" @change="loadBank" class="ui-next-exam-bank-pick">
-            <option v-for="b in banks" :key="b.id" :value="b.id">{{ b.label }}（Odoo {{ b.odoo_version }}）</option>
-          </select>
-          <button class="btn btn-outline btn-sm" @click="$router.push('/exam-run')">← 考試頁</button>
-        </div>
-      </div>
-      <div class="content">
+      <!-- 外殼用 .ui-next-page／.ui-next-page-head，與任務列表、用量報表、架構圖同一套。
+           原本走 .topbar + .content（那是 Admin 子頁的殼）：標題只有 24px 且貼著頂端、
+           多一條橫線、內容也不受 1180px 置中限寬——同一個「更多工具」選單裡就它兩頁不一樣。 -->
+      <section class="ui-next-page ui-next-exam-page">
+        <header class="ui-next-page-head">
+          <div>
+            <h1>認證題庫</h1>
+            <p>累積下來的題目與審查結果。一題一個信心度，理由與證據點開才看。</p>
+          </div>
+          <div class="ui-next-head-tools">
+            <select v-if="banks.length > 1" v-model="bankId" @change="loadBank" class="ui-next-exam-bank-pick">
+              <option v-for="b in banks" :key="b.id" :value="b.id">{{ b.label }}（Odoo {{ b.odoo_version }}）</option>
+            </select>
+            <button @click="$router.push('/exam-run')">考試作戰台</button>
+          </div>
+        </header>
         <div v-if="loading" class="ui-next-exam-empty">載入中…</div>
         <div v-else-if="!banks.length" class="ui-next-exam-empty">還沒有任何題庫。用 tools/exam-import.js 匯入一份。</div>
         <div v-else>
+          <!-- 篩選走全站的 .ui-next-page-tabs（用量報表、個人設定同一顆），計數放 b。
+               原本是自成一套的實心紫藥丸，全站找不到第二處那樣畫。 -->
+          <div class="ui-next-page-tabs" role="group" aria-label="題目篩選">
+            <button :aria-selected="filter==='all'" @click="setFilter('all')">全部 <b>{{ totals.n }}</b></button>
+            <button :aria-selected="filter==='risky'" @click="setFilter('risky')">要注意 <b>{{ totals.risky }}</b></button>
+            <button :aria-selected="filter==='sure'" @click="setFilter('sure')">
+              <ui-next-icon name="lock" class="ui-next-exam-lock"/>官方確定 <b>{{ totals.sure }}</b>
+            </button>
+          </div>
           <div class="ui-next-exam-toolbar">
             <input v-model="keyword" class="ui-next-exam-search" placeholder="搜尋（打多個詞，每個詞都要出現）" />
-            <div class="ui-next-exam-filters">
-              <button :class="['ui-next-exam-chip', filter==='all' && 'is-on']" @click="setFilter('all')">
-                全部 {{ totals.n }}
-              </button>
-              <button :class="['ui-next-exam-chip', filter==='risky' && 'is-on']" @click="setFilter('risky')">
-                要注意 {{ totals.risky }}
-              </button>
-              <button :class="['ui-next-exam-chip', filter==='sure' && 'is-on']" @click="setFilter('sure')">
-                <ui-next-icon name="lock"/> 官方確定 {{ totals.sure }}
-              </button>
-            </div>
             <div class="ui-next-exam-lang">
               <button :class="['ui-next-exam-chip', lang==='en' && 'is-on']" @click="setLang('en')">EN</button>
               <button :class="['ui-next-exam-chip', lang==='zh' && 'is-on']" @click="setLang('zh')">中</button>
@@ -350,6 +354,6 @@
           </div>
           <div v-if="!filteredGroups.length" class="ui-next-exam-empty">沒有符合的題目。</div>
         </div>
-      </div>
+      </section>
     `
   });
