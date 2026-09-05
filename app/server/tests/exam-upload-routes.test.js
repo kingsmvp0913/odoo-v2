@@ -15,11 +15,17 @@ let app, dbModule, jwt, bankId, dataDir, uploadDir;
 const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(64)]);
 const b64 = jpg.toString('base64');
 
+const writeToken = (token, expiresAt) => fs.writeFileSync(
+  path.join(dataDir, 'exam', 'upload-token.json'),
+  JSON.stringify({ token, expires_at: expiresAt }));
+
 beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-data-'));
   uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-up-'));
   fs.mkdirSync(path.join(dataDir, 'exam'), { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'exam', 'upload-token.txt'), `${TOKEN}\n`);
+  // 通行碼改成帶到期時間的 JSON。舊的純文字 .txt 一律不再認——那種檔案是
+  // 手動放的、永不過期，正是這次要換掉的東西，留著等於留一把萬用鑰匙。
+  writeToken(TOKEN, Date.now() + 3600_000);
   process.env.EXAM_DATA_DIR = dataDir;
   process.env.UPLOAD_DIR = uploadDir;
 
@@ -125,6 +131,74 @@ describe('認證（直接測 middleware）', () => {
   test('本機來源不需要 token', async () => {
     expect((await run(fakeReq({ ip: '127.0.0.1' }))).code).toBe(200);
     expect((await run(fakeReq({ ip: '::ffff:127.0.0.1' }))).code).toBe(200);
+  });
+
+  // 過期的通行碼一定要跟「還沒設定過」分得出來。兩者都擋下沒錯，但同事看到
+  // 「尚未設定通行碼」會去找管理員要一組全新的，而其實他只要請人按一下重產。
+  test('過期的通行碼擋下，而且訊息說得出是過期', async () => {
+    writeToken(TOKEN, Date.now() - 1000);
+    const r = await run(fakeReq({ headers: { 'x-token': TOKEN } }));
+    expect(r.code).toBe(401);
+    expect(r.payload.error).toContain('過期');
+    writeToken(TOKEN, Date.now() + 3600_000);
+  });
+});
+
+describe('上傳通行碼', () => {
+  test('產生後可立刻拿去上傳，效期 3 小時', async () => {
+    const gen = await request(app).post('/api/exam/upload-token')
+      .set('Authorization', `Bearer ${jwt}`).send({});
+    expect(gen.status).toBe(200);
+    expect(gen.body.token).toBeTruthy();
+    // 3 小時；容差抓 60 秒，避免測試機慢一點就紅
+    const ttl = gen.body.expires_at - Date.now();
+    expect(ttl).toBeGreaterThan(3 * 3600_000 - 60_000);
+    expect(ttl).toBeLessThanOrEqual(3 * 3600_000);
+
+    const up = await request(app).post('/api/exam/batch')
+      .set('X-Token', gen.body.token)
+      .send({ bank: '2026-09-04', items: [{ page: '77', answer: 'A', image: b64 }] });
+    expect(up.status).toBe(200);
+  });
+
+  // 只留一把有效的鑰匙：重產＝上一組立刻作廢。不然離職的同事手上那組會一直能用。
+  test('重新產生會讓舊的失效', async () => {
+    const first = await request(app).post('/api/exam/upload-token')
+      .set('Authorization', `Bearer ${jwt}`).send({});
+    const second = await request(app).post('/api/exam/upload-token')
+      .set('Authorization', `Bearer ${jwt}`).send({});
+    expect(second.body.token).not.toBe(first.body.token);
+
+    const { checkExamToken } = require('../exam-upload-routes');
+    const res = await new Promise((resolve) => {
+      const r = { status(c) { this._c = c; return this; }, json(p) { resolve({ code: this._c, payload: p }); } };
+      checkExamToken({ socket: { remoteAddress: '10.0.0.9' }, headers: { 'x-token': first.body.token },
+        query: {}, body: {}, get(n) { return n.toLowerCase() === 'x-token' ? first.body.token : undefined; } },
+      r, () => resolve({ code: 200 }));
+    });
+    expect(res.code).toBe(401);
+  });
+
+  test('GET 回目前狀態；沒登入不能產也不能看', async () => {
+    await request(app).post('/api/exam/upload-token')
+      .set('Authorization', `Bearer ${jwt}`).send({});
+    const got = await request(app).get('/api/exam/upload-token')
+      .set('Authorization', `Bearer ${jwt}`);
+    expect(got.status).toBe(200);
+    expect(got.body.exists).toBe(true);
+    expect(got.body.expired).toBe(false);
+
+    expect((await request(app).get('/api/exam/upload-token')).status).toBe(401);
+    expect((await request(app).post('/api/exam/upload-token').send({})).status).toBe(401);
+  });
+
+  test('過期時不把通行碼吐回畫面', async () => {
+    writeToken('expired-one', Date.now() - 1000);
+    const got = await request(app).get('/api/exam/upload-token')
+      .set('Authorization', `Bearer ${jwt}`);
+    expect(got.body.expired).toBe(true);
+    expect(got.body.token).toBeNull();
+    writeToken(TOKEN, Date.now() + 3600_000);
   });
 });
 

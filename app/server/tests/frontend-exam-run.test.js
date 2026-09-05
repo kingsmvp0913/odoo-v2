@@ -170,3 +170,25 @@ test('每次 refresh 都重抓題庫清單並跟到最新的那一場', () => {
   // created 不得自己再抓一份，否則「跟到最新」有兩份實作會漂移
   expect(view.match(/Api\.get\('exam\/banks'\)/g)).toHaveLength(1);
 });
+
+describe('串接說明跳窗', () => {
+  test('右上有入口，開的是 modal 不是內嵌面板', () => {
+    expect(view).toContain('串接說明');
+    expect(view).toContain('ui-next-task-modal-backdrop');
+    // 沒有題庫時最需要看串接說明（那正是還沒開始傳的時候），
+    // 所以入口不能被 v-else-if="!banks.length" 之後那一段包住
+    expect(view.indexOf('串接說明')).toBeLessThan(view.indexOf('!banks.length'));
+  });
+
+  test('產通行碼走 POST，並把效期一起顯示', () => {
+    expect(view).toContain("Api.post('exam/upload-token'");
+    expect(view).toContain("Api.get('exam/upload-token')");
+    expect(view).toContain('tokenExpiresAt');
+  });
+
+  // .ui-next-modal-close 全站沒有任何 CSS（同 .btn-secondary 那個家族），
+  // 用了等於放一顆裸按鈕。這裡改用真的有樣式的 btn。
+  test('關閉鈕不用沒有樣式的 ui-next-modal-close', () => {
+    expect(view).not.toContain('ui-next-modal-close');
+  });
+});

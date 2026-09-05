@@ -38,9 +38,37 @@ function decodeImage(input) {
 
 // 上傳通行碼：給同事用的，與平台帳號無關——為了傳一張圖去開平台帳號沒道理。
 // 存在檔案裡（被 gitignore），不進版控也不進 DB。
+//
+// **有效期 3 小時**：這組碼會被貼進 Line 群、寫進同事的腳本，一旦外流就是
+// 整個網段都能往平台塞圖。考試當天用完即失效，比「永久有效但記得刪」可靠。
+// 舊的純文字 `upload-token.txt` 不再認：那是手動放的、永不過期，正是要換掉的東西。
+const TOKEN_FILE = 'upload-token.json';
+const tokenTtlMs = () => parseInt(process.env.EXAM_TOKEN_TTL_MS || String(3 * 60 * 60 * 1000), 10);
+const tokenPath = dataDir => path.join(dataDir, 'exam', TOKEN_FILE);
+
+// 給畫面用：連「過期了」也要看得到，才講得出「請重新產生」而不是「尚未設定」。
+function peekUploadToken(dataDir) {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(tokenPath(dataDir), 'utf8')); } catch { return null; }
+  const token = String(raw && raw.token || '').trim();
+  const expiresAt = Number(raw && raw.expires_at) || 0;
+  if (!token || !expiresAt) return null;
+  return { token, expiresAt, expired: Date.now() >= expiresAt };
+}
+
+// 認證用：過期的一律當作沒有。
 function readUploadToken(dataDir) {
-  const f = path.join(dataDir, 'exam', 'upload-token.txt');
-  try { return fs.readFileSync(f, 'utf8').trim() || null; } catch { return null; }
+  const t = peekUploadToken(dataDir);
+  return t && !t.expired ? t.token : null;
+}
+
+// 重產＝舊的立刻失效（只留一把有效的鑰匙）。
+function issueUploadToken(dataDir) {
+  fs.mkdirSync(path.join(dataDir, 'exam'), { recursive: true });
+  const token = crypto.randomBytes(18).toString('base64url');
+  const expiresAt = Date.now() + tokenTtlMs();
+  fs.writeFileSync(tokenPath(dataDir), JSON.stringify({ token, expires_at: expiresAt }, null, 2));
+  return { token, expiresAt };
 }
 
 // **判斷一律用 req.socket.remoteAddress，絕不可改成看 header／query／body 裡的東西。**
@@ -74,4 +102,7 @@ function validateItem(it, index) {
   return null;
 }
 
-module.exports = { sniffImage, decodeImage, readUploadToken, isLocal, saveImage, validateItem };
+module.exports = {
+  sniffImage, decodeImage, readUploadToken, peekUploadToken, issueUploadToken,
+  isLocal, saveImage, validateItem,
+};

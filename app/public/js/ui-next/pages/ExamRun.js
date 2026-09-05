@@ -11,6 +11,7 @@ window.UiNextExamRunView = Vue.defineComponent({
       finalDraft: {}, savingFinal: {},
       archiveOpen: false, archivePages: [], archiving: false, archiveResult: null,
       retrying: {},
+      apiOpen: false, token: null, tokenExpiresAt: null, tokenExpired: false, issuing: false,
     };
   },
   async created() {
@@ -95,6 +96,32 @@ window.UiNextExamRunView = Vue.defineComponent({
         }
         this.finalDraft = next;
       } catch (e) { this.err = e.message; }
+    },
+    async openApi() {
+      this.apiOpen = !this.apiOpen;
+      if (!this.apiOpen) return;
+      try {
+        const t = await Api.get('exam/upload-token');
+        this.token = t.token || null;
+        this.tokenExpiresAt = t.expires_at || null;
+        this.tokenExpired = !!t.expired;
+      } catch (e) { showToast(e.message, 'error', 0); }
+    },
+    async issueToken() {
+      this.issuing = true;
+      try {
+        const t = await Api.post('exam/upload-token', {});
+        this.token = t.token;
+        this.tokenExpiresAt = t.expires_at;
+        this.tokenExpired = false;
+      } catch (e) { showToast(e.message, 'error', 0); }
+      finally { this.issuing = false; }
+    },
+    copyToken() {
+      if (!this.token) return;
+      navigator.clipboard.writeText(this.token)
+        .then(() => showToast('通行碼已複製', 'success'))
+        .catch(() => showToast('複製失敗，請手動選取', 'error'));
     },
     async retryPage(g) {
       if (!await confirmDialog({
@@ -258,7 +285,64 @@ window.UiNextExamRunView = Vue.defineComponent({
           {{ clearing ? '清空中…' : '清空' }}
         </button>
         <button class="btn btn-outline btn-sm" @click="$router.push('/exam-bank')">題庫</button>
+        <button :class="['btn','btn-sm', apiOpen ? 'btn-primary' : 'btn-outline']" @click="openApi">串接說明</button>
       </div>
+    </div>
+    <div v-if="apiOpen" class="ui-next-task-modal-backdrop" @mousedown.self="apiOpen=false">
+      <section class="ui-next-task-modal ui-next-exam-api" role="dialog" aria-modal="true" aria-labelledby="exam-api-title">
+        <header><h2 id="exam-api-title">上傳串接說明</h2></header>
+        <div class="ui-next-exam-api-body">
+
+        <div class="ui-next-exam-api-token">
+          <div class="ui-next-exam-api-token-head">
+            <b>上傳通行碼</b>
+            <span class="ui-next-exam-api-ttl">效期 3 小時</span>
+          </div>
+          <div v-if="token" class="ui-next-exam-api-token-row">
+            <code>{{ token }}</code>
+            <button class="btn btn-outline btn-sm" @click="copyToken">複製</button>
+          </div>
+          <div v-else-if="tokenExpired" class="ui-next-exam-api-warn">上一組已過期，按下方重新產生。</div>
+          <div v-else class="ui-next-exam-api-warn">還沒產生過通行碼，外部上傳會被擋下（503）。</div>
+          <div class="ui-next-exam-api-token-foot">
+            <span v-if="token && tokenExpiresAt">有效到 {{ shortTime(tokenExpiresAt) }}</span>
+            <button class="btn btn-primary btn-sm" :disabled="issuing" @click="issueToken">
+              {{ issuing ? '產生中…' : (token ? '重新產生' : '產生通行碼') }}
+            </button>
+          </div>
+          <div class="ui-next-exam-api-note">重新產生會讓上一組立刻失效。從本機（127.0.0.1）送的免帶通行碼。</div>
+        </div>
+
+        <h3>單張截圖（multipart）</h3>
+        <pre class="ui-next-exam-api-code">POST /api/exam/submit
+X-Token: 上面那組通行碼
+
+bank        題庫 id 或 label（必填）
+page        頁碼，例 10（必填）
+answer      作答，逗號分隔，例 C,C,B（必填）
+section     章節名，例 Project
+name        作答者
+screenshot  圖片檔（jpg/png）</pre>
+
+        <h3>多張一次送（JSON + base64）</h3>
+        <pre class="ui-next-exam-api-code">POST /api/exam/batch
+X-Token: 上面那組通行碼
+Content-Type: application/json
+
+{ "bank": "2026-08-14-1",
+  "items": [ { "page": "1", "answer": "C,B", "section": "Sales", "image": "&lt;base64&gt;" } ] }
+
+一次最多 50 筆；單筆壞掉不會讓整批失敗，會具名回報在 rejected。</pre>
+
+        <div class="ui-next-exam-api-note">
+          送出後立刻回 queued，不等判題完成——判題要跑好幾分鐘，結果在本頁自動出現。
+        </div>
+
+        </div>
+        <footer class="ui-next-exam-api-foot">
+          <button class="btn btn-outline btn-sm" @click="apiOpen=false">關閉</button>
+        </footer>
+      </section>
     </div>
     <div class="content">
       <div v-if="loading" class="ui-next-exam-empty">載入中…</div>

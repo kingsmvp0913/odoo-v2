@@ -15,7 +15,8 @@ const crypto = require('crypto');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { uploadRoot } = require('./lib/attachments');
-const { decodeImage, sniffImage, readUploadToken, isLocal, saveImage, validateItem } = require('./lib/exam/upload');
+const { decodeImage, sniffImage, readUploadToken, peekUploadToken, issueUploadToken,
+  isLocal, saveImage, validateItem } = require('./lib/exam/upload');
 const { runQueue } = require('./lib/exam/worker');
 const { listPages, archiveBank } = require('./lib/exam/archive');
 const { emitAll } = require('./notify');
@@ -64,12 +65,17 @@ function checkExamToken(req, res, next) {
     } catch { /* 壞 token 不放行，往下走 X-Token 那條 */ }
   }
 
-  const want = readUploadToken(dataDir());
-  if (!want) {
-    return res.status(503).json({ error: '尚未設定上傳通行碼（data/exam/upload-token.txt）' });
+  // 過期與從沒設定過要分得出來：同事看到「尚未設定」會去找管理員要一組全新的，
+  // 而其實他只要請人在作戰台按一下重產。
+  const current = peekUploadToken(dataDir());
+  if (!current) {
+    return res.status(503).json({ error: '尚未產生上傳通行碼（請在考試作戰台的「串接說明」產生）' });
+  }
+  if (current.expired) {
+    return res.status(401).json({ error: '通行碼已過期（效期 3 小時），請重新產生' });
   }
   const got = req.get('X-Token') || req.query.token;
-  if (got !== want) return res.status(401).json({ error: '通行碼不對' });
+  if (got !== current.token) return res.status(401).json({ error: '通行碼不對' });
   next();
 }
 
@@ -145,6 +151,20 @@ function answerValue(value, { required = false } = {}) {
 }
 
 function registerRoutes(app) {
+  // 通行碼的查詢與重產。**走 verifyToken，不走 checkExamToken**——拿舊碼換新碼
+  // 等於永不過期，3 小時效期就白設了。要新的一律得有平台帳號。
+  app.get('/api/exam/upload-token', verifyToken, (req, res) => {
+    const t = peekUploadToken(dataDir());
+    if (!t) return res.json({ exists: false });
+    // 過期的不吐值：貼出去也用不了，只會讓人以為還能用
+    res.json({ exists: true, expired: t.expired, expires_at: t.expiresAt, token: t.expired ? null : t.token });
+  });
+
+  app.post('/api/exam/upload-token', verifyToken, (req, res) => {
+    const t = issueUploadToken(dataDir());
+    res.json({ token: t.token, expires_at: t.expiresAt });
+  });
+
   // 單筆上傳（multipart）。checkExamToken 在 shotUpload 之前——順序是安全的一部分。
   app.post('/api/exam/submit', checkExamToken, shotUpload.single('screenshot'), async (req, res) => {
     try {
