@@ -23,8 +23,19 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
 - Decimal 轉換一律 Decimal(str(x))，禁止 Decimal(浮點數) 直接轉（浮點誤差會讓結果整個跑掉）
 - list/tree view header 按鈕預設 display="selection"（只有勾選列時才顯示），需求是「常駐顯示」要明確加 display="always"
 
-【本關不做驗證】coding 只負責「寫對程式碼並 commit」，**本關不做任何驗證**：不跑 py_compile／xmllint、不跑 odoo-bin、不建任何 DB、不做模組安裝／載入測試，也不要去讀 DATABASE_URL／psql／venv／odoo-bin 路徑等執行環境。語法錯、invalid field／view 繼承錯、缺 depends 這類問題，一律由 deploy 關「安裝／升級模組」時統一把關（**部署才是唯一驗證權威關**），失敗會帶失敗訊息（見下方【上一次執行的失敗訊息】）退回本關據以外科修正。靠 Context7（Odoo API）＋讀既有程式碼把程式寫對，就是本關的品質責任。
+【本關不做驗證】coding 只負責「寫對程式碼並 commit」，**本關不做任何驗證**：不跑 py_compile／xmllint、不跑 odoo-bin、不建任何 DB、不做模組安裝／載入測試，也不要去讀 DATABASE_URL／psql／venv／odoo-bin 路徑等執行環境。語法錯、invalid field／view 繼承錯、**`__manifest__.py` 的 `depends` 漏列**（模組安裝依賴）這類「裝不起來就會炸」的問題，一律由 deploy 關「安裝／升級模組」時統一把關（**部署是唯一的安裝驗證權威關**），失敗會帶失敗訊息（見下方【上一次執行的失敗訊息】）退回本關據以外科修正。靠 Context7（Odoo API）＋讀既有程式碼把程式寫對，就是本關的品質責任。
+  * **注意 deploy 只驗「裝不裝得起來」，不執行你的業務邏輯**：`@api.depends` 漏欄位、migration 靜默跳過／比對條件對不上／`WHERE` 過寬這類「裝得起來但邏輯錯／誤傷資料」的缺陷，deploy 一路綠燈也抓不到——見下方【deploy 抓不到的靜默缺陷——本關必須自檢】，這些是你在本關的責任，不能推給 deploy。
   * **嚴禁**開「會活過本輪結果輸出」的背景任務再空等它（如背景跑指令後 `sleep` 輪詢、ScheduleWakeup、派 Explore 找環境）——這會讓本輪被判「未回傳有效結果」而整輪報廢。
+
+【deploy 抓不到的靜默缺陷——本關必須自檢】
+下面這幾類不會讓模組安裝失敗、deploy 綠燈也放行，卻讓修正等於沒跑或誤傷資料，deploy 把不到，你要逐項自檢：
+- (A) 寫 migration（本輪在 `migrations/` 有新增或修改 `pre-`／`post-`／`end-` script）時，逐條對照：
+  1. 新增 migration 一定要同步升 `__manifest__.py` 的 `version`——版本沒升 Odoo 會**靜默跳過**該 migration，你的清理／回填等於完全沒跑。
+  2. 比對條件要對得上實際檔名／資料格式——LIKE 字串多一個空白、大小寫不符，該清的列會一筆都沒清。
+  3. `WHERE` 不可過寬——`%.lab`／`%.csv` 之類樣式會連使用者上傳的檔一起命中，誤刪／誤改到使用者資料；先想清楚實際會命中哪些列。
+  4. 不可逆的 `UPDATE`／`DELETE` 前，先 `SELECT` 出受影響列並用 `_logger` 記下（至少 id 與筆數）——否則出事後無法追溯改到了誰。
+  5. `noupdate=1` 的資料被改結構或移除時，要一併清掉遺留的孤兒記錄（舊 external ID 指向已不存在的資料）。
+- (B) `@api.depends` 完整性（本輪新增或改動 compute 欄位時）：compute method body 讀取的每個欄位——**含跨 model 的點路徑**（如 `order_id.partner_id.xxx`，每一段都算）——都必須出現在 `@api.depends(...)`。漏一個不會讓安裝失敗（deploy 抓不到），但該來源欄位變動時 compute 不會重算＝畫面停在舊值。
 
 【Commit 格式】（只 commit，不 push；每個 repo 子目錄各是獨立 git repo）
 對每個「有變更」的 repo 子目錄，分別在該子目錄內 commit：
