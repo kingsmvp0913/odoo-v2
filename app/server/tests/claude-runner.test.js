@@ -322,6 +322,47 @@ test('runClaude：exit code null（外部 kill）→ reject 且 claudeStatus=int
   await expect(p).rejects.toMatchObject({ message: expect.stringMatching(/外部終止/), claudeStatus: 'interrupted' });
 });
 
+// CLI 自己判定失敗時（額度用盡、模型不可用），真因在 stdout 那則 result 事件的 subtype／result，
+// stderr 是空的。不撿起來的話錯誤只剩「exited with code 1」——2026-09-04 feedback_triage 連 5 次
+// 全掛（每次 1.5 秒），真因到現在都查不出來，因為那幾行當場就沒了（該關 taskId=null，連
+// task_events 都不落地）。這一支釘住「stderr 空時改用 result 事件的錯誤字面」。
+test('runClaude：exit 非 0 且 stderr 空 → 用 stdout result 事件的錯誤內容當訊息', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', JSON.stringify({
+    type: 'result', subtype: 'error_max_turns', is_error: true, result: '額度已用盡'
+  }) + '\n');
+  child.emit('close', 1);
+  await expect(p).rejects.toMatchObject({
+    message: expect.stringMatching(/error_max_turns.*額度已用盡/), claudeStatus: 'error'
+  });
+});
+
+// 反向錨：成功那則也是 type='result'，無條件收下會把正常產出當錯誤訊息塞進 blocker。
+test('runClaude：exit 0 的 result 事件不被當成錯誤，正常回傳內容', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockReturnValueOnce(child);
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', JSON.stringify({ type: 'result', subtype: 'success', result: '做完了' }) + '\n');
+  child.emit('close', 0);
+  await expect(p).resolves.toMatchObject({ text: '做完了' });
+});
+
 // 健檢 U12：失敗/中斷/逾時的執行也要記帳（usage 為零＋status 標記），
 // 否則最貴的情境（失敗重跑）在 token 帳面上隱形，成本控管系統性低估。
 test('logFailedUsage：失敗執行落一筆零用量記錄，status 標注失敗類別', async () => {

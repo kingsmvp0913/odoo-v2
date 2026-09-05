@@ -1,7 +1,7 @@
   window.UiNextAdminHealthCheckView = Vue.defineComponent({
     name: "UiNextAdminHealthCheckView",
     data() {
-      return { runId: null, run: null, findings: [], proposals: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, _timer: null, _fixTimer: null };
+      return { runId: null, run: null, findings: [], proposals: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, bodyOpen: {}, _timer: null, _fixTimer: null };
     },
     async mounted() { await this.loadProposals(); await this.loadHistory(); await this.openFromQuery(); },
     unmounted() { if (this._timer) clearInterval(this._timer); if (this._fixTimer) clearInterval(this._fixTimer); },
@@ -89,6 +89,11 @@
         if (first && first === String(f.agent_label || '').trim()) return d.slice(nl + 1).replace(/^\s+/, '');
         return d;
       },
+      // health-auditor 的診斷動輒好幾百字（要寫出根因、證據、指標基線），一張卡就佔滿整個
+      // 畫面，七條提案要捲很久才看得完「有哪些提案」。長的先切短、要看再點開。
+      // 門檻用字數而非行數：短行很多的內文（條列）跟一整段長文一樣佔版面。
+      isLongBody(f) { return this.bodyOf(f).length > 180; },
+      bodyClamped(f) { return this.isLongBody(f) && !this.bodyOpen[f.id]; },
       // 提案的來源。agent_name 在這張表同時承載「哪一關」與「哪一種非 per-agent 的診斷」：
       // 'feedback' 是 nightly-fix 的 materializeGroup 寫的（使用者意見統整後落地），
       // '__task__' 是單張任務健檢，其餘（含 '__audit__'）都是平台健檢自己挖出來的。
@@ -183,6 +188,10 @@
       // 歷史列的嚴重度＝本輪最嚴重的那一條（後端算的 severity_rank）。健檢自己失敗優先蓋過一切：
       // 那一輪的「最嚴重只有 low」是假的，它根本沒檢查完。
       histSev(h) {
+        // 收掉「狀態」欄之後，這裡是畫面上唯一分辨得出「這一輪根本沒跑完」的地方。
+        // 不特判的話 run#19（status='error'、零 finding）會顯示成「—」，跟「今天本來就沒事」
+        // 長得一模一樣——正是這個 repo 踩過的靜默失敗。
+        if (h.status === 'error') return HC_SEV.error;
         if (h.error_count > 0) return HC_SEV.error;
         if (h.severity_rank === null || h.severity_rank === undefined) return null;
         return HC_SEV[SEV_BY_RANK[Number(h.severity_rank) + 1]] || null;
@@ -259,12 +268,18 @@
                 ⏱ <span v-if="autoRunText">{{ autoRunText }} </span>自動執行
               </span>
             </div>
-            <div style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px;white-space:pre-wrap">{{ bodyOf(f) }}</div>
-            <div v-if="f.evidence" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
-            <div v-if="f.rationale" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">建議做法：{{ f.rationale }}</div>
-            <div v-if="f.target_metric" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">
-              要動的指標：{{ f.target_metric }}（現值 {{ f.metric_baseline }}）
-            </div>
+            <div class="hc-body" :class="{ 'hc-body-clamp': bodyClamped(f) }"
+              style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px">{{ bodyOf(f) }}</div>
+            <button v-if="isLongBody(f)" class="btn btn-ghost btn-sm" style="margin-bottom:6px"
+              @click="bodyOpen[f.id] = !bodyOpen[f.id]">{{ bodyOpen[f.id] ? '▾ 收合說明' : '▸ 看完整說明' }}</button>
+            <!-- 證據／建議做法／指標一律跟著主文收合：它們同樣是長文，展開時單獨留著等於沒收 -->
+            <template v-if="!bodyClamped(f)">
+              <div v-if="f.evidence" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
+              <div v-if="f.rationale" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">建議做法：{{ f.rationale }}</div>
+              <div v-if="f.target_metric" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">
+                要動的指標：{{ f.target_metric }}（現值 {{ f.metric_baseline }}）
+              </div>
+            </template>
             <button v-if="f.suggested_prompt" class="btn btn-outline btn-sm" style="margin-bottom:6px" @click="applyToEditor(f)">帶入編輯器 →</button>
 
             <div class="hc-window-row" style="margin-top:6px">
@@ -298,12 +313,12 @@
                 <span v-if="fixState(f.id).test_result" :style="{fontSize:'var(--fs-xs)',color:testTone(fixState(f.id).test_result)}">測試：{{ fixState(f.id).test_result }}</span>
                 <span v-if="fixState(f.id).branch" style="font-size:var(--fs-xs);color:var(--text-muted);font-family:monospace">{{ fixState(f.id).branch }}</span>
               </div>
-              <div v-if="fixState(f.id).reject_reason" class="error-msg" style="white-space:pre-wrap;margin:6px 0">{{ fixState(f.id).reject_reason }}</div>
-              <div v-if="fixState(f.id).notes" style="font-size:var(--fs-sm);color:var(--text);white-space:pre-wrap;margin-bottom:6px">{{ fixState(f.id).notes }}</div>
+              <div v-if="fixState(f.id).reject_reason" class="error-msg hc-body" style="margin:6px 0">{{ fixState(f.id).reject_reason }}</div>
+              <div v-if="fixState(f.id).notes" class="hc-body" style="font-size:var(--fs-sm);color:var(--text);margin-bottom:6px">{{ fixState(f.id).notes }}</div>
               <!-- review_notes：fix-review 對這份修正的審核推理，approve／reject 兩條路徑都會寫（單元 2）。
                    這是無人監督閘門唯一的人類稽核材料——一份修正被自動合併進 master 或被 reject 兩次退場，
                    事後就靠這段字知道「它為什麼這樣判」，所以獨立一段顯示，不與上面的 notes（提案本身的說明）混在一起。 -->
-              <div v-if="fixState(f.id).review_notes" style="font-size:var(--fs-sm);color:var(--text-muted);white-space:pre-wrap;margin-bottom:6px;border-left:2px solid var(--border);padding-left:6px">
+              <div v-if="fixState(f.id).review_notes" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px;border-left:2px solid var(--border);padding-left:6px">
                 審核意見：{{ fixState(f.id).review_notes }}
               </div>
               <div v-if="fixState(f.id).diff">
@@ -345,9 +360,9 @@
                   {{ sev(f.severity).label }}
                 </span>
               </div>
-              <div style="font-size:var(--fs-sm);color:var(--text);white-space:pre-wrap">{{ f.diagnosis }}</div>
+              <div class="hc-body" style="font-size:var(--fs-sm);color:var(--text)">{{ f.diagnosis }}</div>
             </div>
-            <div v-for="f in ofKind('signal')" :key="f.id" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px;white-space:pre-wrap">
+            <div v-for="f in ofKind('signal')" :key="f.id" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">
               ・{{ f.diagnosis }}<span v-if="f.evidence">（{{ f.evidence }}）</span>
             </div>
           </details>
@@ -388,32 +403,37 @@
 
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th>時間</th><th>範圍</th><th>視窗</th><th>狀態</th><th>嚴重度</th><th>處理狀態</th><th>提案／診斷</th></tr></thead>
+                <!-- 這張表只回答兩個問題：昨天那輪是什麼等級、要不要進改善。範圍／視窗／狀態
+                     三欄拿掉——每天看的人不會用它們分流，要細節點進去那一輪就有。狀態欄的資訊
+                     沒有消失：失敗被 histSev 吸收成「健檢失敗」等級，原因跟在下面。 -->
+                <thead><tr><th>時間</th><th>等級</th><th>要不要改善</th><th>提案數</th></tr></thead>
                 <tbody>
                   <tr v-for="h in history" :key="h.id" class="clickable" @click="openRun(h.id)">
-                    <td>{{ new Date(h.created_at).toLocaleString() }}</td>
-                    <td>{{ scopeText(h) }}</td>
-                    <td>{{ h.task_db_id ? '—' : h.window_days + ' 天' + cadenceText(h) }}</td>
-                    <!-- 失敗原因直接列在狀態旁：只寫 error 的話，要知道為什麼掛還得逐輪點進去，
-                         而失敗的那輪點進去也是空的（一筆 finding 都沒有）。 -->
                     <td>
-                      {{ h.status }}
-                      <div v-if="h.status === 'error' && h.error"
-                        style="font-size:var(--fs-xs);color:var(--danger);white-space:pre-wrap">{{ h.error }}</div>
+                      {{ new Date(h.created_at).toLocaleString() }}
+                      <!-- 範圍與節奏降成副標，不各佔一欄：多數列是「全平台／增量」，每列都標等於
+                           沒標；但大健檢（週／月）與任務健檢的等級跟日健檢不可比，看不出來會誤讀。 -->
+                      <div v-if="h.task_db_id || cadenceText(h)" style="font-size:var(--fs-xs);color:var(--text-muted)">
+                        <span v-if="h.task_db_id">{{ scopeText(h) }}</span>{{ cadenceText(h) }}
+                      </div>
                     </td>
                     <td>
                       <span v-if="histSev(h)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:histSev(h).color}">
                         {{ histSev(h).label }}
                       </span>
                       <span v-else style="color:var(--text-muted)">—</span>
+                      <!-- 失敗原因跟著等級走：要知道為什麼掛還得點進去的話，而失敗那輪點進去
+                           又是空的（一筆 finding 都沒有），等於查不到。 -->
+                      <div v-if="h.status === 'error' && h.error" class="hc-body"
+                        style="font-size:var(--fs-xs);color:var(--danger)">{{ h.error }}</div>
                     </td>
                     <td>
                       <span v-if="histTodo(h)" :style="{fontSize:'var(--fs-sm)',color:histTodo(h).color}">{{ histTodo(h).label }}</span>
                       <span v-else style="color:var(--text-muted)">—</span>
                     </td>
-                    <td>{{ h.findings_count }}</td>
+                    <td>{{ h.proposal_count || 0 }}</td>
                   </tr>
-                  <tr v-if="history.length === 0" class="empty-row"><td colspan="7">尚無健檢紀錄</td></tr>
+                  <tr v-if="history.length === 0" class="empty-row"><td colspan="4">尚無健檢紀錄</td></tr>
                 </tbody>
               </table>
             </div>

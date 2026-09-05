@@ -79,9 +79,15 @@ async function triageOne(feedbackId) {
     text = r.text;
     await logTokenUsage({ taskId: null, projectId: null }, null, 'feedback_triage', r.usage, r.durationMs);
   } catch (err) {
+    // ⚠ 執行失敗（CLI 掛掉／逾時／額度）與「看不懂」是兩件事，處置不能共用 rejectBack：
+    // 看不懂是確定性結果，同一份原文重跑一百次還是看不懂，退回 new 交給人是對的；執行失敗
+    // 多半是暫時的，退回 new 等於「一次暫時失敗＝永久卡死」——下一輪的 fetchApprovedFeedback
+    // 只撈 status='approved'，退回去的再也不會被重試（實測 2026-09-04：5 筆候選連 5 次
+    // `claude exited with code 1`，全被退回 new，整條改善通道從此停擺，畫面上毫無訊號）。
+    // 這裡只留痕、不動 status，由呼叫端走既有的 fix_attempts 飢餓防線：連續失敗達門檻才退場。
     await logFailedUsage({ taskId: null, projectId: null }, null, 'feedback_triage', err);
-    await rejectBack(feedbackId, `執行失敗：${err.message}`);
-    return { ok: false, understandable: false };
+    await query('UPDATE feedback SET triage_note=$2 WHERE id=$1', [feedbackId, `執行失敗：${err.message}`]);
+    return { ok: false, understandable: false, transient: true };
   }
 
   const { inner: notesBlock, cleaned } = extractTaggedBlock(text, 'notes');

@@ -633,6 +633,17 @@ test('封存排程：同一天的第二次 tick 不再封存', async () => {
   expect(await hiddenCount()).toBe(afterFirst);
 });
 
+// 夜間改善批次是全平台唯一「無人監督就會動 production 程式碼」的排程，卻原本是唯一
+// 不在排程頁上的一支。它在沒有候選時提早結束、連 health_check_runs 列都不建，所以不列出來
+// 的話「昨晚到底有沒有跑」在畫面上完全查不到（使用者實際回報：管理員 > 排程 沒有這支）。
+test('排程清單含夜間改善批次，下次執行時間指向臺灣時間 22:00', async () => {
+  const rows = await cronModule.getCronSchedules();
+  const item = rows.find((r) => r.id === 'nightly-fix');
+  expect(item).toBeTruthy();
+  expect(item.timing).toMatch(/每日 22:00/);
+  expect(new Date(item.nextRunAt).toISOString()).toMatch(/T14:00:00/); // 台灣 22:00 = UTC 14:00
+});
+
 test('排程清單顯示每日一次，下次執行時間指向 01:00', async () => {
   const rows = await cronModule.getCronSchedules();
   const item = rows.find((r) => r.id === 'auto-archive');

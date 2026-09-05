@@ -215,6 +215,17 @@ function minuteLabel(ms) {
   return minutes % 60 === 0 ? `每 ${minutes / 60} 小時` : `每 ${minutes} 分鐘`;
 }
 
+// 夜間改善批次的下次時刻。它跟健檢共用同一個 22:00 slot（健檢跑完由 .finally 接著觸發；
+// 健檢停用或未 due 時由批次自己的 due 判斷補跑），所以直接沿用健檢的目標時刻算法。
+// ⚠ 只能讀記憶體旗標 _lastNightlyFixDay，不能查 DB：批次在「沒有候選」時提早結束、
+// 根本不會建 health_check_runs 列，查 DB 會把「今天跑過但沒事做」誤判成「今天還沒跑」。
+// 代價是 server 重啟會讓旗標歸零、當天顯示成「還沒跑」——note 已寫明，不假裝精確。
+function nightlyFixNextRunAt(now) {
+  const alreadyRan = _lastNightlyFixDay === taipeiDayKey(now);
+  const { hour } = taipeiDateParts(now);
+  return healthCheckTargetAt(now, (alreadyRan || hour >= HEALTH_CHECK_HOUR) ? 1 : 0).toISOString();
+}
+
 // 管理工具的排程清單：cron 內的行為才列入，不把 API 的人工觸發誤寫成排程。
 // 各使用者同步與閒置回收的精確下次時間只存在記憶體且各自不同，因此明確標示無單一時刻。
 async function getCronSchedules(now = new Date()) {
@@ -233,6 +244,10 @@ async function getCronSchedules(now = new Date()) {
     { id: 'service-sync', name: 'Service 任務同步', timing: settings.service_sync_interval > 0 ? minuteLabel(settings.service_sync_interval * 60000) : '已停用', enabled: settings.service_sync_interval > 0, nextRunAt: null, note: '依每位使用者上次同步時間分別計算。' },
     { id: 'pipeline', name: 'Pipeline 自動推進', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用自動推進。' : '同步未執行時仍會推進可執行任務。' },
     { id: 'health-check', name: '工作流程健檢', timing: '每日 22:00（臺灣時間）；週日回看 7 天、每月 1 號回看 30 天；跑完接著觸發夜間批次', enabled: health.enabled, nextRunAt: health.nextRunAt, note: health.running ? '本輪執行中。' : (health.due ? '已到排程時刻，下一個 cron tick 會補跑。' : '大健檢當天不另跑當日健檢；手動健檢不影響此排程。') },
+    // 這一支原本不在清單裡：它每晚自動改平台自己的碼、跑測試、審核、合併，是全平台唯一
+    // 無人監督就會動 production 的排程，卻是唯一在排程頁看不到的——不列出來，「昨晚到底有沒有
+    // 跑」在畫面上無處可查（它沒候選時連 health_check_runs 都不建）。
+    { id: 'nightly-fix', name: '夜間改善批次', timing: `每日 ${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00（臺灣時間）；健檢跑完接著執行`, enabled: true, nextRunAt: nightlyFixNextRunAt(now), note: '把已核准的意見回饋與健檢提案自動改碼、跑測試、審核後合併並重啟。沒有候選時仍會啟動但不做事，且不留執行紀錄；下次時刻在平台重啟後會重新起算。' },
     { id: 'nightly-shutdown', name: '測試區夜間關機', timing: `每日 ${shutdownTime}（${shutdownTz}）`, enabled: true, nextRunAt: null, note: '每天只執行一次；若錯過整點，之後的 tick 會補跑。' },
     { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
     { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },

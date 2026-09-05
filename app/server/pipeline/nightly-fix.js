@@ -167,7 +167,15 @@ async function fetchApprovedFeedback() {
 async function triageFeedback(items) {
   const kept = [];
   for (const it of items) {
-    const { understandable } = await triageOne(it.row.id);
+    const { understandable, transient } = await triageOne(it.row.id);
+    // transient＝triage 自己沒跑起來（CLI 掛掉／額度），不是這條意見的錯：status 維持 approved
+    // 讓下一晚重試，只在飢餓防線上記一次。連續失敗達門檻才由 noteFailedAttempt 退回人工——
+    // 不記帳的話，一支永遠跑不起來的 triage 會每晚白燒一次額度且無人察覺。
+    if (transient) {
+      await noteFailedAttempt({ members: [it] }, 'triage 執行失敗（CLI 未跑起來，非意見本身的問題）')
+        .catch(e => console.error('[NIGHTLY-FIX] triage 失敗記帳時又出錯：', e.message));
+      continue;
+    }
     if (!understandable) continue;
     const { rows: [refreshed] } = await query(
       `SELECT id, triage_title AS title, triage_detail AS detail, triage_layer AS layer,

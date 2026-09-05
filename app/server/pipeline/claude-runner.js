@@ -200,6 +200,11 @@ function runClaude(prompt, opts = {}) {
     // 認證失效的原始字面：claude 把 "Not logged in" 印在 stdout（非 JSON 行）且 stderr 空，
     // 不留存的話 close 只剩泛用退出碼、真因整個蒸發（見 auth-signature.js）
     let authReason = null;
+    // 同一個蒸發問題的另一半：CLI 自己判定失敗時，真因是 stdout 那則 result 事件的
+    // subtype／result（額度用盡、模型不可用等），stderr 一樣是空的。不留存的話 close 只剩
+    // 「exited with code 1」——實測 2026-09-04 feedback_triage 連 5 次全掛（每次 1.5 秒），
+    // 真因至今查不出來，因為那幾行早就沒了（該關 taskId=null，連 task_events 都沒落地）。
+    let errorResult = null;
     let settled = false;
     let timer = null;
     const startedAt = Date.now();
@@ -270,6 +275,11 @@ function runClaude(prompt, opts = {}) {
             resultText = ev.result      || resultText;
             usage      = ev.usage       || null;
             durationMs = ev.duration_ms || null;
+            // is_error／subtype!=='success' 才算失敗訊息：成功那則也走同一個 type，
+            // 無條件收下會把正常產出當成錯誤字串塞進 blocker。
+            if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
+              errorResult = [ev.subtype, ev.result].filter(Boolean).join('：').slice(0, 300);
+            }
           }
         } catch {
           if (!authReason && looksLikeAuthFailure(line)) authReason = line.slice(0, 200);
@@ -302,7 +312,8 @@ function runClaude(prompt, opts = {}) {
         // code null＝被 signal 終止：自家的 timeout/abort kill 已先 settle（此處為 no-op），
         // 走到這裡代表外部殺掉（OOM killer 等）→ 視為失敗，不能拿空結果當成功回傳
         if (code !== 0) {
-          const raw = stderr.trim();
+          // stderr 為空是常態（CLI 把失敗寫在 stdout 的 result 事件），errorResult 是那半的補位
+          const raw = stderr.trim() || errorResult || '';
           // 認證失效優先歸因：否則只剩泛用「exited with code 1」，blocker 看不出真因、
           // 分類器也判不出（→ 停等人工）。標 claudeStatus='auth' 供分類器歸 transient 自癒。
           const auth = authReason || (looksLikeAuthFailure(raw) ? raw.slice(0, 200) : null);

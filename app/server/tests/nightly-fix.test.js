@@ -210,6 +210,27 @@ test('triage 回 understandable:false → 剔除，不進統整', async () => {
   expect(result.attempted).toBe(0);
 });
 
+// ⚠ 這一支與上面的 understandable:false 刻意分開：兩者在舊碼是同一條路（都靜默 continue），
+// 而那正是 2026-09-04 整條改善通道停擺的原因——triage 的 CLI 連 5 次沒跑起來，5 筆候選全被
+// 當成「看不懂」退回 new，下一輪只撈 approved 就再也撈不到它們，畫面上零訊號。
+// 執行失敗不是這條意見的錯：status 要維持 approved 等下一晚重試，同時記一次飢餓防線，
+// 讓「永遠跑不起來的 triage」在達門檻後退回人工，而不是每晚白燒一次額度。
+test('triage 回 transient（CLI 沒跑起來）→ 維持 approved 等重試，且記一次 fix_attempts', async () => {
+  const fbId = await insertFeedback();
+  triageOne.mockResolvedValue({ ok: false, understandable: false, transient: true });
+  stubHappyPath();
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(triageOne).toHaveBeenCalled();
+  expect(mergeCandidates).not.toHaveBeenCalled();
+  expect(result.attempted).toBe(0);
+  const { rows: [fb] } = await dbModule.query(
+    'SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(fb.status).toBe('approved');   // 沒被退回 new＝下一晚還撈得到
+  expect(fb.fix_attempts).toBe(1);      // 記帳＝不會無限重試
+});
+
 test('triage 之後 layer=env → 立即退場（status=new＋triage_note），不是留在原地不動', async () => {
   const fbId = await insertFeedback();
   stubTriage('env');

@@ -152,12 +152,20 @@ test('layer 回五值以外 → 當成 unclear（不可原樣寫進 DB 讓下游
 });
 
 // timeout 最可能走的就是這條路，而它原本零測試覆蓋。
-test('runClaude 拋錯 → 退回 new，triage_note 寫「執行失敗」', async () => {
+// ⚠ 這一支刻意與上面「看不懂 → 退回 new」相反，兩者不可合併：看不懂是確定性結果（同一份原文
+// 重跑一百次還是看不懂），執行失敗多半是暫時的。執行失敗也退回 new 的話，這條意見再也不會被
+// 重試——下一輪的 fetchApprovedFeedback 只撈 status='approved'，等於「一次 CLI 掛掉＝永久卡死」
+// （2026-09-04 實測：5 筆候選連 5 次 `claude exited with code 1` 全被退回 new，整條改善通道從此
+// 停擺，畫面上毫無訊號）。維持 approved 才等得到下一晚重試；燒不完的重試由呼叫端的
+// fix_attempts 飢餓防線收斂（見 nightly-fix.js 的 triageFeedback／noteFailedAttempt）。
+test('runClaude 拋錯 → status 維持 approved 等下一輪重試，triage_note 寫「執行失敗」', async () => {
   mockRunClaude.mockRejectedValue(new Error('timeout'));
   const r = await triageOne(fbId);
   expect(r.ok).toBe(false);
+  // transient 是呼叫端分辨「該記飢餓防線」還是「該當成看不懂丟掉」的唯一依據
+  expect(r.transient).toBe(true);
   const { rows } = await dbModule.query('SELECT status, triage_note FROM feedback WHERE id=$1', [fbId]);
-  expect(rows[0].status).toBe('new');
+  expect(rows[0].status).toBe('approved');
   expect(rows[0].triage_note).toContain('執行失敗');
   expect(mockLogFailedUsage).toHaveBeenCalled();
 });
