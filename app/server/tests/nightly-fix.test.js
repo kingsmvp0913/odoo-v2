@@ -1292,3 +1292,65 @@ test('上一批停在 adopted 的 → 下一批只補合併，不重跑 platform
   expect(f.status).toBe('done');
   expect(second.attempted).toBe(0);              // 這一晚沒有新候選可跑
 });
+
+// --- 已經修好的不可以再修一次 ---
+test('健檢提案開的單合併後 → 來源提案一起標 done，不會變回候選被重修一次', async () => {
+  const findingId = await insertHealthProposal({ label: '來源提案' });
+  // openFeedbackForFinding 的形狀：健檢提案自動開一筆 approved 的 feedback，用 finding_id 連回來源。
+  // fetchHealthCandidates 排除「已開單提案」靠的就是這個欄位。
+  const { rows: [fb] } = await dbModule.query(
+    `INSERT INTO feedback (user_id, content, status, finding_id) VALUES ($1,'診斷內容','approved',$2) RETURNING id`,
+    [userId, findingId]);
+  stubTriage('code');
+  stubHappyPath();
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });   // 第一次：修好、合併
+  const { rows: [f1] } = await dbModule.query('SELECT status FROM feedback WHERE id=$1', [fb.id]);
+  expect(f1.status).toBe('done');
+  // markGroupDone 會把 feedback.finding_id 改指到本次的施工紀錄，來源提案就從那張排除清單裡掉出來。
+  // 沒有一起標 done 的話，它還停在 approved ⇒ 下一次整條重修一遍已經合併好的東西。
+  const { rows: [src] } = await dbModule.query(
+    'SELECT status FROM health_check_findings WHERE id=$1', [findingId]);
+  expect(src.status).toBe('done');
+
+  jest.clearAllMocks();
+  stubTriage('code');
+  stubHappyPath();
+  const second = await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(second.attempted).toBe(0);     // 第二次一條都不該跑
+  expect(runFix).not.toHaveBeenCalled();
+});
+
+// --- 處理中是哪一筆 ---
+test('批次跑到哪一筆，那一列就帶 batch_stage；整批結束後清空', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  // 在最耗時的那一步（改碼＋跑測試）當場觀測：這是使用者盯著畫面的那幾十分鐘
+  let seen = null;
+  runFix.mockImplementation(async (fixId) => {
+    const { rows: [r] } = await dbModule.query('SELECT batch_stage FROM feedback WHERE id=$1', [fbId]);
+    seen = r.batch_stage;
+    await runFixReady(fixId);
+  });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(seen).toBe('改碼與跑測試中');
+  // 跑完一定要收掉，否則那一列永遠掛著轉圈動畫、而它其實早就做完了
+  const { rows: [after] } = await dbModule.query('SELECT batch_stage FROM feedback WHERE id=$1', [fbId]);
+  expect(after.batch_stage).toBeNull();
+});
+
+test('這一條中途拋錯 → batch_stage 照樣收掉（不可以停在轉圈）', async () => {
+  const fbId = await insertFeedback();
+  stubTriage('code');
+  stubHappyPath();
+  runFix.mockRejectedValue(new Error('platform-fix 掛了'));
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows: [after] } = await dbModule.query('SELECT batch_stage, fix_attempts FROM feedback WHERE id=$1', [fbId]);
+  expect(after.batch_stage).toBeNull();
+  expect(after.fix_attempts).toBe(1);   // 正向錨：這條真的跑過並失敗了，不是根本沒進迴圈
+});

@@ -315,8 +315,14 @@
                     </td>
                     <!-- 狀態要說「這筆現在卡在哪」：翻譯掛掉時 status 仍是 approved，只印
                          「已核准」等於把失敗藏起來。stateOf 把翻譯失敗／看不懂併進來一起顯示。 -->
+                    <!-- 批次正在做這一筆時，狀態欄換成轉圈＋做到哪一步。最上面那條橫幅只說得出
+                         「有東西在跑」，而一輪動輒數十分鐘，使用者要的是「現在在處理哪一筆」。
+                         ⚠ 用 .spinner（app.css 既有）不要自己刻，深色模式的邊框色已經在那裡處理過。 -->
                     <td data-label="狀態">
-                      <span class="pill" :class="stateOf(r).pill" :title="stateOf(r).hint" style="white-space:nowrap">{{ stateOf(r).label }}</span>
+                      <span v-if="r.batch_stage" style="display:inline-flex;align-items:center;white-space:nowrap;color:var(--info)">
+                        <span class="spinner"></span>{{ r.batch_stage }}
+                      </span>
+                      <span v-else class="pill" :class="stateOf(r).pill" :title="stateOf(r).hint" style="white-space:nowrap">{{ stateOf(r).label }}</span>
                     </td>
                     <td data-label="操作" @click.stop>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">

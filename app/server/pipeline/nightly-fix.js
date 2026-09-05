@@ -167,7 +167,9 @@ async function fetchApprovedFeedback() {
 async function triageFeedback(items) {
   const kept = [];
   for (const it of items) {
+    await setStage([it], '翻譯需求中');
     const { understandable, transient } = await triageOne(it.row.id);
+    await setStage([it], null);
     // transient＝triage 自己沒跑起來（CLI 掛掉／額度），不是這條意見的錯：status 維持 approved
     // 讓下一晚重試，只在飢餓防線上記一次。連續失敗達門檻才由 noteFailedAttempt 退回人工——
     // 不記帳的話，一支永遠跑不起來的 triage 會每晚白燒一次額度且無人察覺。
@@ -388,6 +390,22 @@ async function createFixRow(findingId, startedBy, cand) {
 async function markGroupDone(cand, userId) {
   for (const it of cand.members) {
     if (it.source === 'feedback') {
+      /**
+       * ⚠ 改寫 finding_id 之前要先把它原本指的那條提案標掉。
+       *
+       * 健檢提案會由 openFeedbackForFinding 開一筆 feedback 並用 finding_id 連回來源，而
+       * fetchHealthCandidates 排除「已開單提案」靠的就是這個欄位（`id NOT IN (SELECT finding_id
+       * FROM feedback ...)`）。這裡把它改指到本次的施工紀錄，等於把來源提案從那張排除清單裡放掉
+       * ——它還停在 approved，下一批就會把**已經合併好的同一條**當成新候選再修一次。
+       * 實測 2026-09-05：提案 81／91 合併完之後就重新出現在候選清單裡。
+       */
+      const { rows: [prev] } = await query('SELECT finding_id FROM feedback WHERE id=$1', [it.row.id]);
+      if (prev && prev.finding_id && prev.finding_id !== cand.findingId) {
+        await query(
+          `UPDATE health_check_findings
+              SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+            WHERE id=$1`, [prev.finding_id, userId || null]);
+      }
       await query(
         `UPDATE feedback SET status='done', finding_id=$2 WHERE id=$1`, [it.row.id, cand.findingId]);
     } else {
@@ -429,6 +447,24 @@ async function retireToHuman(isFeedback, id, note) {
           SET status='pending', verdict_note=$2, fix_attempts=0, decided_by=NULL, decided_at=NULL
         WHERE id=$1`,
       [id, tagged]);
+  }
+}
+
+/**
+ * 「這一筆現在做到哪一步」——純顯示，任何判斷都不准讀它。
+ *
+ * 沒有這個的話，畫面上只有最上面一條「批次執行中」的橫幅：使用者知道有東西在跑，但不知道在跑
+ * 哪一筆，而一輪動輒數十分鐘。stage 傳 null＝這一筆做完了（或跑掉了），把動畫收掉。
+ * ⚠ 寫失敗一律吞掉：顯示用的欄位不值得讓整條修正鏈中斷。
+ */
+async function setStage(members, stage) {
+  for (const it of members || []) {
+    await query(
+      it.source === 'feedback'
+        ? 'UPDATE feedback SET batch_stage=$2 WHERE id=$1'
+        : 'UPDATE health_check_findings SET batch_stage=$2 WHERE id=$1',
+      [it.row.id, stage]
+    ).catch(e => console.error('[NIGHTLY-FIX] 寫 batch_stage 失敗：', e.message));
   }
 }
 
@@ -502,6 +538,7 @@ async function noteFailedAttempt(cand, reason) {
  */
 async function runOneCandidate(cand, { pushUserId, startedBy }) {
   let fixId = await createFixRow(cand.findingId, startedBy, cand);
+  await setStage(cand.members, '改碼與跑測試中');
   await runFix(fixId, { findingId: cand.findingId, startedBy });
 
   let attempt = 0;
@@ -520,6 +557,7 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
       return { merged: false, reason: `修正未通過測試（狀態 ${status}）${fix && fix.reject_reason ? '：' + fix.reject_reason : ''}` };
     }
 
+    await setStage(cand.members, '審核中');
     const verdict = await reviewFix(fixId, cand);
     // review_notes：fix-review 的推理過程，approve／reject 兩條路徑都要寫——這是無人監督閘門
     // 唯一的人類事後稽核材料（見跨單元契約 1；管理頁顯示由單元 3 負責）。
@@ -531,6 +569,7 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
           + `提案 #${cand.findingId} 停在 adopted，不合併不重啟`);
         return { merged: false, adopted: true, fixId };
       }
+      await setStage(cand.members, '合併中');
       await adoptFix(fixId, pushUserId);
       try {
         // ⚠ inflight 傳非空值 ⇒ 只合併不重啟（最後才單獨重啟一次）
@@ -562,6 +601,7 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
     // 退回改一次：開新的一筆 finding_fixes 重跑（不覆寫舊列——finding_fixes 本來就是為
     // 「一條提案可試修多次」設計的，覆寫會讓「上一次試了什麼、為什麼失敗」消失）。
     fixId = await createFixRow(cand.findingId, startedBy, cand);
+    await setStage(cand.members, '改碼與跑測試中（審核退回，重改一次）');
     await runFix(fixId, { findingId: cand.findingId, startedBy });
   }
 }
@@ -814,6 +854,10 @@ async function runNightlyFix({ startedBy = null } = {}) {
           await noteFailedAttempt({ members: group.members }, err.message).catch(e =>
             console.error('[NIGHTLY-FIX] 記錄失敗次數時又出錯：', e.message));
         }
+      } finally {
+        // 這一條走完（成功、退場、失敗、拋錯都算）就把「處理中」收掉。放 finally 而不是各分支
+        // 各寫一次：漏掉任一條路徑，那一列就會永遠掛著轉圈動畫，而它其實早就跑完了。
+        await setStage((cand || group).members, null);
       }
     }
 
@@ -828,6 +872,12 @@ async function runNightlyFix({ startedBy = null } = {}) {
     if (runId != null) {
       await query(`UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1`, [runId])
         .catch(err => console.error('[NIGHTLY-FIX] 收尾 health_check_runs 失敗：', err.message));
+    }
+    // 兜底清 batch_stage：上面每一條各自的 finally 已經清過自己，但 triage 途中拋錯、或哪天新增
+    // 了漏清的路徑，殘留的值會讓那一列永遠轉圈。整批清一次，代價是兩句 UPDATE。
+    for (const t of ['feedback', 'health_check_findings']) {
+      await query(`UPDATE ${t} SET batch_stage=NULL WHERE batch_stage IS NOT NULL`)
+        .catch(err => console.error('[NIGHTLY-FIX] 收尾清 batch_stage 失敗：', err.message));
     }
     // 2. 清旗標——一定要排在重啟指令之前。那道指令會把這個行程一起帶走，排在後面的話不保證
     //    跑得到，維護旗標就會留到 4 小時後才自動到期，期間派工全部停擺。

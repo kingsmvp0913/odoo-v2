@@ -1052,6 +1052,12 @@ async function migrate() {
     // 累計到第三次才由 retireToHuman 寫 triage_note 是太晚的補救——前兩次一樣是無聲的。
     { table: 'feedback', col: 'last_attempt_note', sql: 'ALTER TABLE feedback ADD COLUMN last_attempt_note TEXT' },
     { table: 'health_check_findings', col: 'last_attempt_note', sql: 'ALTER TABLE health_check_findings ADD COLUMN last_attempt_note TEXT' },
+    // 「這一筆此刻正被批次做到哪一步」（翻譯需求／改碼與跑測試／審核／合併），沒在跑就是 NULL。
+    // ⚠ 不從 finding_fixes 推導：那張表要等改碼那一步才建列，而批次前段（翻譯需求）動輒十幾分鐘，
+    // 推導法在那整段會顯示「沒有任何一筆在處理」——正好是使用者最想知道是哪一筆的時候。
+    // 只當顯示用，不參與任何判斷（開機清空，見下方 sweep）。
+    { table: 'feedback', col: 'batch_stage', sql: 'ALTER TABLE feedback ADD COLUMN batch_stage TEXT' },
+    { table: 'health_check_findings', col: 'batch_stage', sql: 'ALTER TABLE health_check_findings ADD COLUMN batch_stage TEXT' },
     // 「這題落在官方全對的章節」——官方說某章 incorrect=0 等價於逐題告知「這些都對」，
     // 是整份題庫裡唯一邏輯上必然為真的東西。與 answer_official 不等價：未來若拿到官方
     // 逐題正解，會有「有官方答案但該章沒全對」的題。合併時取 OR（任一次考試 certain
@@ -1261,6 +1267,11 @@ async function migrate() {
             reject_reason=COALESCE(reject_reason,'') || '平台重啟時這次修正仍在進行中，已被中斷（未跑完）。'
       WHERE status='running'`
   ).catch(e => console.error('[migrate] 收掉中斷的 finding_fixes 失敗：', e.message));
+  // batch_stage 純顯示，跑到一半被重啟就沒人會清它了，留著會讓那一列永遠掛著「改碼中」的動畫。
+  for (const t of ['feedback', 'health_check_findings']) {
+    await query(`UPDATE ${t} SET batch_stage=NULL WHERE batch_stage IS NOT NULL`)
+      .catch(e => console.error(`[migrate] 清 ${t}.batch_stage 失敗：`, e.message));
+  }
 
   // Unique indexes (idempotent via IF NOT EXISTS)
   await query('CREATE UNIQUE INDEX IF NOT EXISTS project_repos_project_label_idx ON project_repos (project_id, label)').catch(() => {});
