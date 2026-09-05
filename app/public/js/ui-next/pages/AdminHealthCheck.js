@@ -1,7 +1,7 @@
   window.UiNextAdminHealthCheckView = Vue.defineComponent({
     name: "UiNextAdminHealthCheckView",
     data() {
-      return { runId: null, run: null, findings: [], proposals: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, bodyOpen: {}, _timer: null, _fixTimer: null };
+      return { runId: null, run: null, findings: [], proposals: [], history: [], schedule: null, running: false, cadence: 'daily', sinceDays: null, savingId: null, noteDraft: {}, statuses: HC_STATUS, fixes: {}, fixBusy: null, diffOpen: {}, bodyOpen: {}, bodyLong: {}, _timer: null, _fixTimer: null };
     },
     async mounted() { await this.loadProposals(); await this.loadHistory(); await this.openFromQuery(); },
     unmounted() { if (this._timer) clearInterval(this._timer); if (this._fixTimer) clearInterval(this._fixTimer); },
@@ -91,9 +91,27 @@
       },
       // health-auditor 的診斷動輒好幾百字（要寫出根因、證據、指標基線），一張卡就佔滿整個
       // 畫面，七條提案要捲很久才看得完「有哪些提案」。長的先切短、要看再點開。
-      // 門檻用字數而非行數：短行很多的內文（條列）跟一整段長文一樣佔版面。
-      isLongBody(f) { return this.bodyOf(f).length > 180; },
-      bodyClamped(f) { return this.isLongBody(f) && !this.bodyOpen[f.id]; },
+      //
+      // 這張卡有沒有「收起來的東西」＝主文長到被截，或底下還有證據／建議做法／指標三段。
+      // 光看主文長度不夠：多數提案主文剛好四行內，但接著三段細節一路攤下去，一張卡照樣吃掉
+      // 半個畫面——要先看得到「有哪些提案」，細節點開再看。
+      isLongBody(f) { return this.bodyLong[f.id] === true || !!(f.evidence || f.rationale || f.target_metric); },
+      // 主文只有真的溢出才截：不長卻套上 clamp 的話，::after 那層漸層會蓋掉最後一行正常內容。
+      bodyClamped(f) { return this.bodyLong[f.id] === true && !this.bodyOpen[f.id]; },
+      // ⚠ 判「主文長不長」只能量 DOM，不能用字數估。中英混排、標點、換行讓同樣字數的高度差
+      // 很多——實測門檻 180 有 5 條、260 仍有 2 條「掛了按鈕但根本沒被截」，按下去畫面完全不動。
+      // 6.4 必須與 app.css 的 .hc-body-clamp max-height 一致；比 scrollHeight 與這個上限，
+      // 元素當下有沒有套著 clamp 都量得準（overflow:hidden 不改變 scrollHeight）。
+      // 4px 容差：字體渲染的次像素差會讓「剛好塞滿」量出 1~2px 的假溢出。
+      measureBodies() {
+        this.$nextTick(() => {
+          const next = {};
+          for (const el of document.querySelectorAll('.hc-body[data-fid]')) {
+            next[el.dataset.fid] = el.scrollHeight - 6.4 * parseFloat(getComputedStyle(el).fontSize) > 4;
+          }
+          this.bodyLong = next;
+        });
+      },
       // 提案的來源。agent_name 在這張表同時承載「哪一關」與「哪一種非 per-agent 的診斷」：
       // 'feedback' 是 nightly-fix 的 materializeGroup 寫的（使用者意見統整後落地），
       // '__task__' 是單張任務健檢，其餘（含 '__audit__'）都是平台健檢自己挖出來的。
@@ -138,6 +156,8 @@
       async loadProposals() {
         try { this.proposals = await Api.get('admin/proposals'); }
         catch (e) { showToast(e.message, 'error'); }
+        // 提案換了就要重量：哪幾條長到需要收合，只有渲染出來才知道
+        this.measureBodies();
         await this.loadFixes();
       },
       // 每次載入就把提案既有的修正狀態撈回來——不撈的話重新整理後看起來像沒修過，
@@ -268,12 +288,13 @@
                 ⏱ <span v-if="autoRunText">{{ autoRunText }} </span>自動執行
               </span>
             </div>
-            <div class="hc-body" :class="{ 'hc-body-clamp': bodyClamped(f) }"
+            <div class="hc-body" :data-fid="f.id" :class="{ 'hc-body-clamp': bodyClamped(f) }"
               style="font-size:var(--fs-base);color:var(--text);margin-bottom:6px">{{ bodyOf(f) }}</div>
             <button v-if="isLongBody(f)" class="btn btn-ghost btn-sm" style="margin-bottom:6px"
               @click="bodyOpen[f.id] = !bodyOpen[f.id]">{{ bodyOpen[f.id] ? '▾ 收合說明' : '▸ 看完整說明' }}</button>
-            <!-- 證據／建議做法／指標一律跟著主文收合：它們同樣是長文，展開時單獨留著等於沒收 -->
-            <template v-if="!bodyClamped(f)">
+            <!-- 證據／建議做法／指標跟著同一顆按鈕收合。條件不能寫 bodyClamped：主文短的卡片
+                 不套 clamp，那樣這三段就永遠攤著，卡片還是佔滿整個畫面（實測 7 條裡有 5 條）。 -->
+            <template v-if="bodyOpen[f.id] || !isLongBody(f)">
               <div v-if="f.evidence" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">證據：{{ f.evidence }}</div>
               <div v-if="f.rationale" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">建議做法：{{ f.rationale }}</div>
               <div v-if="f.target_metric" class="hc-body" style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:6px">

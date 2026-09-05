@@ -1073,11 +1073,11 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
    不含空白的長字串，配上 pre-wrap 就沒有可斷行的位置，整張卡片被橫向撐破（就是「跑版」）。
    anywhere 讓它在任何字元處斷行；斷詞位置不好看，但總比整頁出現橫向捲軸好。 */
 .hc-body { white-space:pre-wrap;overflow-wrap:anywhere }
-/* 摺疊狀態：只露前幾行。用 max-height 而非 line-clamp——內文是 pre-wrap 的多段文字，
-   line-clamp 在 Firefox 對 pre-wrap 的行為不一致，而這裡只需要「切一刀」。 */
-.hc-body-clamp { max-height:5.4em;overflow:hidden;position:relative }
+/* 摺疊狀態：露四行左右。高度不是隨便挑的——漸層要蓋掉最後那一行（被切一半的字看起來像
+   畫面壞掉），所以可讀的其實只有前三行，太矮就變成「每條都得點開」等於沒收合。 */
+.hc-body-clamp { max-height:6.4em;overflow:hidden;position:relative }
 /* 漸層淡出，讓「下面還有」看得出來，而不是像剛好寫到這裡就沒了 */
-.hc-body-clamp::after { content:'';position:absolute;left:0;right:0;bottom:0;height:1.8em;background:linear-gradient(to bottom, transparent, var(--surface)) }
+.hc-body-clamp::after { content:'';position:absolute;left:0;right:0;bottom:0;height:1.9em;background:linear-gradient(to bottom, transparent, var(--surface)) }
 
 /* ── AdminUsers.js ── */
 
