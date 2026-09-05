@@ -97,6 +97,27 @@ describe('normalizeEvidence', () => {
     expect(safeSourceRef('ent/../../etc/passwd')).toBeNull();
   });
 
+  // agent 拿到的是 --add-dir 的真實目錄（`…/19/community`、`…/19/enterprise`），
+  // 它回引用時**會自己把共同的上層砍掉**，剩下 `community/…`／`enterprise/…`。
+  // 實跑一頁 8 題，15 筆引用全長這樣、全被丟掉，DB 一筆證據都沒進——
+  // 而且畫面上只顯示「證據路徑不合法」，看不出是格式沒對上。
+  test('引用相對暫存區根目錄時（community/…、enterprise/…）也收', () => {
+    const { safeSourceRef } = require('../lib/exam/evidence');
+    const dirs = [
+      { name: 'src', path: '/tmp/odoo-exam-src/19/community' },
+      { name: 'ent', path: '/tmp/odoo-exam-src/19/enterprise' },
+    ];
+    expect(safeSourceRef('community/addons/project/models/project_task.py:371', dirs))
+      .toBe('addons/project/models/project_task.py:371');
+    expect(safeSourceRef('enterprise/project_enterprise/models/project_task.py:1151', dirs))
+      .toBe('ent/project_enterprise/models/project_task.py:1151');
+    // 絕對路徑那條原本就要收，不能因為加了這條而壞掉
+    expect(safeSourceRef('/tmp/odoo-exam-src/19/community/addons/sale/models/sale_order.py:88', dirs))
+      .toBe('addons/sale/models/sale_order.py:88');
+    // 逃逸照樣擋
+    expect(safeSourceRef('community/../../../etc/passwd', dirs)).toBeNull();
+  });
+
   test('src 以外的路徑被丟棄並記錄', () => {
     const r = normalizeEvidence({ evidence: [
       { kind: 'source', ref: 'data/exam/answer-key.json:3' },

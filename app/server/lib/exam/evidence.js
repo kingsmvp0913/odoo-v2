@@ -261,10 +261,12 @@ function safeSourceRef(ref, dirs = null) {
   const [filePart, lineNo] = raw.split(/:(?=\d+$)/);
   const norm = path.posix.normalize(filePart.replace(/\\/g, '/'));
 
-  // 兩種寫法都收：
-  //   1. 暫存區的**絕對路徑**——agent 現在拿到的是 --add-dir 的真實目錄，
-  //      它自然會回那個形式。
-  //   2. `src/…`／`ent/…` 的相對寫法——舊 prompt 的格式，留著才不會因為
+  // 三種寫法都收：
+  //   1. 暫存區的**絕對路徑**——agent 拿到的是 --add-dir 的真實目錄。
+  //   2. 暫存區目錄的**末層名**（`community/…`、`enterprise/…`）——兩個 --add-dir
+  //      有共同上層時，模型會自己把那段砍掉只留末層。實跑一頁 8 題，15 筆引用
+  //      全長這樣、於是全被丟掉，DB 一筆證據都沒進。
+  //   3. `src/…`／`ent/…` 的相對寫法——舊 prompt 的格式，留著才不會因為
   //      模型偶爾照舊寫而整批證據被丟掉。
   //
   // **存進 DB 的一律是去掉根之後的相對路徑，企業版多留 ent/ 前綴**。
@@ -272,7 +274,9 @@ function safeSourceRef(ref, dirs = null) {
   // 所以「沒有前綴」繼續代表社群版，只有企業版才標出來。
   const roots = [];
   for (const d of (dirs || [])) {
-    roots.push({ prefix: `${path.posix.normalize(d.path)}/`, name: d.name });
+    const abs = path.posix.normalize(d.path);
+    roots.push({ prefix: `${abs}/`, name: d.name });
+    roots.push({ prefix: `${path.posix.basename(abs)}/`, name: d.name });
   }
   roots.push({ prefix: 'src/', name: 'src' }, { prefix: 'ent/', name: 'ent' });
 

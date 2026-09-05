@@ -142,8 +142,10 @@ async function processUpload(db, { upload, bank, onProgress }) {
     for (const q of reviewed) {
       // 被丟棄的路徑先記——它跟「有沒有合法證據」是兩回事，寫在 continue 之後
       // 就永遠不會執行（全部證據都不合法時剛好一筆都沒有，那正是最該講的情況）。
+      // 只報數量的話，「格式對不上」與「agent 真的亂跑」長得一模一樣——
+      // 實測整批被丟掉時得去翻 CLI transcript 才看得出是前者。附上第一筆原文。
       if (q.rejected_refs && q.rejected_refs.length) {
-        notes.push(`第 ${q.no} 題有 ${q.rejected_refs.length} 筆證據路徑不合法，已丟棄`);
+        notes.push(`第 ${q.no} 題有 ${q.rejected_refs.length} 筆證據路徑不合法，已丟棄（例：${q.rejected_refs[0]}）`);
       }
       if (!q.evidence || !q.evidence.length) continue;
       const v = await db.query(
