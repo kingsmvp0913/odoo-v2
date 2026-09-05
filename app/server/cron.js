@@ -337,8 +337,12 @@ function startCron() {
           // 健檢跑完（不論成功失敗）才觸發夜間批次：runNightlyFix 自己重撈 DB 裡所有 approved
           // 候選（意見回饋＋健檢提案），不是只吃這一輪 runAudit 的產出，所以健檢這輪失敗
           // 不影響候選池的完整性——沒有理由因為當晚健檢掛了就連帶跳過整條修正通道。
-          // 用 .finally 而非序列化 await：runAudit 是背景長工（20+ 個 opus），cron tick 本身
-          // 不等它，nightly-fix 的觸發要接在 runAudit 的 promise chain 尾端、不是 tick 主體內。
+          // 用 .finally 而非序列化 await：runAudit 是背景工作，cron tick 本身不等它，
+          // nightly-fix 的觸發要接在 runAudit 的 promise chain 尾端、不是 tick 主體內。
+          // ⚠ 這裡原本寫「背景長工（20+ 個 opus）」——那是**已退役的逐關診斷**（每關各跑一次
+          // 模型）的規模，主導型審計上線後就不成立了：實測 08-30~09-04 每天各 1 次呼叫、
+          // 單輪 2.1~6.5 分鐘（token_usage 的 agent_type='workflow_health'）。留著那個數字會讓
+          // 人把「健檢被打斷」的損失估成一整晚與一大筆錢，據此做出過度的修法。
           nightlyFixTriggered = true;
           _lastNightlyFixDay = taipeiDayKey(_clockForTesting ? _clockForTesting() : new Date());
           runAudit(run.id, { sinceAt, cadence })

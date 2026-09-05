@@ -348,18 +348,17 @@ async function auditWindowStart() {
 
 // 啟動續跑：上次 server 重啟時跑到一半的健檢（status='running'）從中斷點接續，
 // 而非永遠停在 running 或一律標 error 作廢。fire-and-forget，比照原觸發路徑。
-// 依 task_db_id 分流：拿 scope=task 的 run 去跑全平台健檢，會在同一個 run 底下混進 21 關的
-// findings，畫面上再也分不出這是哪一張任務的診斷。
+// 依 task_db_id 分流：拿 scope=task 的 run 去跑全平台健檢，會在同一個 run 底下混進全平台
+// 審計的 findings，畫面上再也分不出這是哪一張任務的診斷。
 async function resumeInterruptedRuns() {
   const { rows } = await query("SELECT id, task_db_id, since_at, cadence FROM health_check_runs WHERE status='running'");
   for (const r of rows) {
     // 2-C1：批次列（cadence='nightly-fix'）必須最先攔下，不落入下面任何一種 scope 的續跑。
     // 批次本身無法「續跑」——它的狀態（哪些候選已 triage、哪些已合併）活在 nightly-fix.js
-    // 的函式呼叫堆疊裡，不是可以從 DB 重建的檢查點；resumeInterruptedRuns 若把它交給
-    // runHealthCheck（沒有 task_db_id／since_at 時的 fallback），會在批次列底下冒出全平台
-    // 逐關診斷的 findings（21 關），與批次自己合併組寫入的 findings 混在同一個 run 下——
-    // 這正是本輪要修的坑本身（實測過的失敗）。直接收成 error，讓管理頁看得出「這輪沒完成」，
-    // 而不是被誤判成另一種健檢在跑。
+    // 的函式呼叫堆疊裡，不是可以從 DB 重建的檢查點。這條攔截當初是為了擋「交給 runHealthCheck
+    // 這個 fallback，結果在批次列底下冒出一整套逐關診斷的 findings」（實測過的失敗）——那個
+    // fallback 已隨 runHealthCheck 一起退役（見下方 else 分支），但攔截仍要留著：批次列本來
+    // 就無法續跑。直接收成 error，讓管理頁看得出「這輪沒完成」，而不是被誤判成另一種健檢在跑。
     if (r.cadence === BATCH_CADENCE) {
       console.log(`[HEALTH-CHECK] run ${r.id} 是夜間批次列，無法續跑，收成 error`);
       await failRun(r.id, '夜間批次中途被重啟打斷，無法續跑');
