@@ -24,11 +24,11 @@ function registerRoutes(app) {
   // 會回 `column "b.id" does not exist`。測試環境炸、正式環境好，是最難查的那種落差。
   app.get('/api/exam/banks', verifyToken, async (req, res) => {
     const { rows } = await query(`
-      SELECT b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at,
+      SELECT b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image,
              COUNT(a.id)::int AS item_count
         FROM exam_banks b
         LEFT JOIN exam_attempts a ON a.bank_id = b.id
-       GROUP BY b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at
+       GROUP BY b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image
        ORDER BY b.id DESC`);
     res.json(rows);
   });
@@ -147,12 +147,22 @@ function registerRoutes(app) {
       : [];
 
     const attempts = (await query(`
-      SELECT a.page, a.no, a.answer_their, a.answer_final, a.responder,
+      SELECT a.page, a.no, a.answer_their, a.answer_final, a.upload_id,
              b.label AS bank_label, b.taken_at
         FROM exam_attempts a JOIN exam_banks b ON b.id = a.bank_id
        WHERE a.item_id = $1 ORDER BY a.id`, [id])).rows;
 
-    res.json({ item, verdicts, evidence, attempts });
+    // 這一題的原始考卷截圖（可能有好幾次考試各一張）。抄出來的文字對不對、
+    // 題目裡本來就有的圖，都只能看原圖才確認得了。
+    // 舊的 CLI 匯入資料沒有 upload_id，那幾題就沒有圖——這是資料的事實，不是壞掉。
+    const uids = [...new Set(attempts.map(a => a.upload_id).filter(Boolean))];
+    const shots = uids.length ? (await query(`
+      SELECT u.id, u.page, b.label AS bank_label
+        FROM exam_uploads u JOIN exam_banks b ON b.id = u.bank_id
+       WHERE u.id = ANY($1::int[]) AND u.image_path IS NOT NULL
+       ORDER BY u.id DESC`, [uids])).rows : [];
+
+    res.json({ item, verdicts, evidence, attempts, shots });
   });
 
   // 給 /solve 用的查詢。**伺服器端就過濾掉非 100%**。

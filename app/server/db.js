@@ -1090,7 +1090,11 @@ async function migrate() {
     // 已「證明」是錯的作答（不是猜的）。由 lib/exam/deduce.js 從各場考試的
     // 官方章節錯題數解聯立推出來，形狀是 [["B"],["A","C"]]——同一題可能在不同
     // 考次填過不同答案，每一個都是獨立的事實。
-    { table: 'exam_items', col: 'wrong_answers', sql: "ALTER TABLE exam_items ADD COLUMN wrong_answers JSONB NOT NULL DEFAULT '[]'::jsonb" }
+    { table: 'exam_items', col: 'wrong_answers', sql: "ALTER TABLE exam_items ADD COLUMN wrong_answers JSONB NOT NULL DEFAULT '[]'::jsonb" },
+    // 歸檔時讀的那張官方成績單。留著才回頭查得到「這章到底錯幾題」的依據——
+    // 推導出來的每一個結論最終都源自它。存相對 uploadRoot 的路徑（專案硬規則：
+    // 不寫死絕對路徑）。
+    { table: 'exam_banks', col: 'score_image', sql: 'ALTER TABLE exam_banks ADD COLUMN score_image TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

@@ -16,7 +16,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
-const { uploadRoot } = require('./lib/attachments');
+const { uploadRoot, readAttachmentFile } = require('./lib/attachments');
 const { decodeImage, sniffImage, readUploadToken, peekUploadToken, issueUploadToken,
   isLocal, saveImage, validateItem } = require('./lib/exam/upload');
 const { runQueue } = require('./lib/exam/worker');
@@ -522,10 +522,10 @@ function registerRoutes(app) {
   // **只讀不寫**：讀完把數字回給前端預填，人看過再按確認歸檔。歸檔不可逆
   // （certain 取 OR，蓋不掉），而模型讀表格會看錯行——不能讓它直接落地。
   //
-  // 圖不留檔：它只是這一次的輸入，跟考題截圖不同（那些要留著給取證看）。
+  // **圖要留著**：推導出來的每一個結論最終都源自它，之後想確認「這章到底錯幾題」
+  // 只能回頭看原圖。存進這一場的上傳目錄，路徑寫在 exam_banks.score_image。
   app.post('/api/exam/banks/:id/read-sections', verifyToken,
     shotUpload.single('screenshot'), async (req, res) => {
-      let tmp = null;
       try {
         const bankId = parseInt(req.params.id, 10);
         if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
@@ -533,9 +533,9 @@ function registerRoutes(app) {
         const ext = sniffImage(req.file.buffer);
         if (!ext) return res.status(400).json({ error: '不是圖片檔（檔頭認不出已知的圖片格式）' });
 
-        tmp = path.join(os.tmpdir(),
-          `exam-score-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`);
-        fs.writeFileSync(tmp, req.file.buffer);
+        // 先落到這一場的上傳目錄（不是暫存）：讀得成功就留著當依據
+        const rel = saveImage({ uploadRoot: uploadRoot(), bankId, buf: req.file.buffer, ext });
+        tmp = path.join(uploadRoot(), rel);
 
         const read = await readSections({ imagePath: tmp });
         if (!read.readable) {
@@ -553,13 +553,39 @@ function registerRoutes(app) {
         }
         // 兩邊的 skipped 都要留：讀圖時略過的（看錯欄）與比對時略過的（有部分給分）
         // 是不同的原因，只留一邊會讓人看不出某章為什麼沒填。
-        res.json({ ...m, skipped: [...(read.skipped || []), ...(m.skipped || [])] });
+        // 讀成功才記進 bank：讀失敗的圖留在磁碟上但不掛到題庫，
+        // 免得畫面顯示一張根本沒被採用的圖。
+        await query(`UPDATE exam_banks SET score_image = $2 WHERE id = $1`, [bankId, rel]);
+        res.json({ ...m, skipped: [...(read.skipped || []), ...(m.skipped || [])], image: rel });
       } catch (e) {
         res.status(500).json({ error: e.message });
-      } finally {
-        if (tmp) { try { fs.unlinkSync(tmp); } catch { /* 清不掉不影響結果 */ } }
       }
     });
+
+  // 送圖：成績單與考題截圖都走這裡。
+  //
+  // 只認 DB 裡登記過的路徑（先查出 image_path 再讀檔），**絕不吃使用者給的路徑**
+  // ——直接把 query 參數接到 uploadRoot 後面就是路徑穿越。
+  app.get('/api/exam/shot/:kind/:id', verifyToken, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id)) return res.status(404).end();
+      let rel = null;
+      if (req.params.kind === 'score') {
+        rel = (await query(`SELECT score_image FROM exam_banks WHERE id = $1`, [id])).rows[0]?.score_image;
+      } else if (req.params.kind === 'upload') {
+        rel = (await query(`SELECT image_path FROM exam_uploads WHERE id = $1`, [id])).rows[0]?.image_path;
+      }
+      if (!rel) return res.status(404).end();
+      const buf = readAttachmentFile(rel);
+      if (!buf) return res.status(404).end();
+      // 副檔名決定 content-type：檔頭在上傳時已經驗過，這裡只是回報
+      const ext = String(rel).split('.').pop().toLowerCase();
+      res.setHeader('Content-Type', ext === 'png' ? 'image/png' : (ext === 'webp' ? 'image/webp' : 'image/jpeg'));
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.send(buf);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 
   // 歸檔：寫章節名，並依每章的官方錯題數處理——0 題錯的推導成官方正解，
   // 有錯的只把錯題數寫進 exam_sections（不知道錯哪題，一題都不能鎖）。

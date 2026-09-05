@@ -21,7 +21,12 @@
         collapsed: {},      // { [章節名]: true }
         openId: null,       // 展開中的題目 id
         detail: null,
-        detailLoading: false
+        detailLoading: false,
+        lightbox: null,     // 放大中的圖 { src, alt }
+        // 圖走 Api.getBlob 轉 objectURL，不能直接把路徑塞 <img src>——
+        // 那條路由掛 verifyToken，而 <img> 不會帶 Authorization header，會一律 401。
+        // 平台既有的附件顯示（ProjectChat／TaskDetail）都是這個模式。
+        shotUrls: {}
       };
     },
     async created() {
@@ -134,15 +139,34 @@
           const res = await Api.get(`exam/sections?bank=${this.bankId}`);
           this.bank = res.bank;
           this.groups = res.groups;
+          if (this.hasScoreShot()) this.loadShot('score', `exam/shot/score/${this.bankId}`);
         } catch (e) { showToast(e.message, 'error'); }
       },
+      // 這一場的官方成績單。推導出來的每個結論最終都源自它，留著才回頭查得到依據。
+      hasScoreShot() {
+        const b = this.banks.find(x => x.id === this.bankId);
+        return !!(b && b.score_image);
+      },
+      shotUrl(key) { return this.shotUrls[key] || null; },
+      // 抓過就快取。載不出來的那張就不畫，不要整區塌掉。
+      async loadShot(key, path) {
+        if (this.shotUrls[key]) return;
+        try {
+          const { blob } = await Api.getBlob(path);
+          if (blob && blob.size) this.shotUrls = { ...this.shotUrls, [key]: URL.createObjectURL(blob) };
+        } catch (e) { /* 單張載不出來不影響其他內容 */ }
+      },
+      open(key, alt) { if (this.shotUrls[key]) this.lightbox = { src: this.shotUrls[key], alt }; },
       setFilter(f) { this.filter = f; localStorage.setItem('examFilter', f); },
       setLang(l) { this.lang = l; localStorage.setItem('examLang', l); },
       toggleGroup(t) { this.collapsed = { ...this.collapsed, [t]: !this.collapsed[t] }; },
       async toggleItem(it) {
         if (this.openId === it.id) { this.openId = null; this.detail = null; return; }
         this.openId = it.id; this.detail = null; this.detailLoading = true;
-        try { this.detail = await Api.get(`exam/items/${it.id}`); }
+        try {
+          this.detail = await Api.get(`exam/items/${it.id}`);
+          for (const sh of (this.detail.shots || [])) this.loadShot('u' + sh.id, `exam/shot/upload/${sh.id}`);
+        }
         catch (e) { showToast(e.message, 'error'); }
         finally { this.detailLoading = false; }
       },
@@ -241,6 +265,19 @@
         <div v-if="loading" class="ui-next-exam-empty">載入中…</div>
         <div v-else-if="!banks.length" class="ui-next-exam-empty">還沒有任何題庫。用 tools/exam-import.js 匯入一份。</div>
         <div v-else>
+          <!-- 官方成績單：縮圖擺著就好，要看細節再展開。整張攤在頁首會把題目擠掉，
+               而它平常不需要看——只在懷疑「這章到底錯幾題」時才回頭比對。 -->
+          <div v-if="hasScoreShot()" class="ui-next-exam-shot">
+            <img v-if="shotUrl('score')" :src="shotUrl('score')" alt="官方成績單縮圖"
+                 @click="open('score','官方成績單')" />
+            <div class="ui-next-exam-shot-ph" v-else>載入中…</div>
+            <div>
+              <b>官方成績單</b>
+              <button class="ui-next-exam-btn" :disabled="!shotUrl('score')"
+                      @click="open('score','官方成績單')">展開</button>
+              <em>這一場所有「錯幾題」的依據</em>
+            </div>
+          </div>
           <!-- 篩選走全站的 .ui-next-page-tabs（用量報表、個人設定同一顆），計數放 b。
                原本是自成一套的實心紫藥丸，全站找不到第二處那樣畫。 -->
           <div class="ui-next-page-tabs" role="group" aria-label="題目篩選">
@@ -319,6 +356,21 @@
                       </div>
                     </div>
 
+                    <!-- 原始考卷截圖。抄出來的文字對不對、題目裡本來就有的圖，
+                         都只能看原圖才確認得了。舊的 CLI 匯入資料沒有截圖。 -->
+                    <div v-if="(detail.shots || []).length" class="ui-next-exam-shots">
+                      <span v-for="sh in detail.shots" :key="sh.id" class="ui-next-exam-shot-mini">
+                        <img v-if="shotUrl('u'+sh.id)" :src="shotUrl('u'+sh.id)"
+                             :alt="sh.bank_label + ' P' + sh.page + ' 考卷截圖'"
+                             @click="open('u'+sh.id, sh.bank_label + ' P' + sh.page)" />
+                        <span v-else class="ui-next-exam-shot-ph">載入中…</span>
+                        <button class="ui-next-exam-btn" :disabled="!shotUrl('u'+sh.id)"
+                                @click="open('u'+sh.id, sh.bank_label + ' P' + sh.page)">
+                          {{ sh.bank_label }} P{{ sh.page }}
+                        </button>
+                      </span>
+                    </div>
+
                     <!-- 沒問題的題到選項為止，下方什麼都不放。
                          正解已經標在選項上，再用三行字說明「它沒問題」是多餘的。 -->
                     <template v-if="detailState === 'review'">
@@ -353,6 +405,15 @@
             </div>
           </div>
           <div v-if="!filteredGroups.length" class="ui-next-exam-empty">沒有符合的題目。</div>
+        </div>
+        <!-- 放大檢視。點背景或按 Esc 關掉——圖佔滿畫面時，找不到關閉鈕是最惱人的。 -->
+        <div v-if="lightbox" class="ui-next-exam-lightbox" tabindex="-1"
+             @click="lightbox=null" @keydown.esc="lightbox=null">
+          <img :src="lightbox.src" :alt="lightbox.alt" @click.stop />
+          <div class="ui-next-exam-lightbox-bar">
+            <span>{{ lightbox.alt }}</span>
+            <button class="ui-next-exam-btn" @click="lightbox=null">關閉</button>
+          </div>
         </div>
       </section>
     `
