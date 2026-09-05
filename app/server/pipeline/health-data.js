@@ -418,6 +418,8 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
       WHERE tr.created_at >= $1${upTo('tr.created_at')} ORDER BY ri.id`, args
   ).catch(() => ({ rows: [] }));
 
+  const chat_quality = await buildChatQuality(args, upTo);
+
   return {
     window: { since, until: until || new Date().toISOString() },
     volume: {
@@ -427,8 +429,88 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
       wall_clock: wallClock(tasks)
     },
     per_stage,
+    chat_quality,
     tasks: task_rows,
     rejections: rej.map(r => ({ task_id: r.task_id, source: r.source, category: r.category, description: r.description }))
+  };
+}
+
+/**
+ * chat 對話品質。健檢原本對 chat 只收 token／耗時／呼叫數，全是成本面——「答得好不好」
+ * 完全沒有訊號，所以使用者實際感受到的「鬼打牆、廢話太多」健檢一律報平安（2026-09-05 回報）。
+ *
+ * 兩個指標都刻意選「不必讀懂內容就算得出來」的：
+ * - verbosity：AI 回覆長度 ÷ 使用者提問長度。實測全平台落在 11~36 倍，中位數約 15。
+ * - self_correct：AI 在自己的回覆裡承認上一輪判斷錯。這是「鬼打牆」唯一留得下痕跡的地方
+ *   ——使用者用領域知識糾正、AI 才修，等於使用者在幫它除錯。
+ *
+ * ⚠ self_correct 是**啟發式關鍵字比對**，不是語意判斷：會漏（換個說法就抓不到）、也會誤判
+ * （正常的「你說的對」被算進去）。它的用途是「哪幾場值得人去看」，不是精確計數——
+ * 拿它當提案的唯一證據不成立，要點進那場對話確認過才算。
+ *
+ * ⚠ 長度、截斷、關鍵字比對全部在 JS 做，SQL 只負責把列撈出來：pg-mem 連 `length()` 與
+ * `LEFT()` 都沒有（實測 `function length(text) does not exist`），寫進 SQL 會變成
+ * 「正式環境對、測試整組跑不起來」。關鍵字也不能用 SQL 的 LIKE——它轉 regex 沒有 dotAll，
+ * `%` 跨不了換行（rules/testing #13），而這些訊息全是多行的。
+ * 自我更正的措辭都在回覆開頭（實測「你說的對，我上一輪的結論錯了」都在第一句），所以只看前 120 字，
+ * 避免「我上一輪說的那個檔案」這種在長文中段的正常引述被誤算。
+ */
+const SELF_CORRECT_RE = /上一輪|我更正|要更正|我搞混|我(判斷|說|想|理解)錯|你說的對|你說得對|抓錯/;
+
+async function buildChatQuality(args, upTo) {
+  let rows;
+  try {
+    ({ rows } = await query(
+      `SELECT m.chat_id, c.title, m.role, m.content
+         FROM project_chat_messages m JOIN project_chats c ON c.id = m.chat_id
+        WHERE m.created_at >= $1${upTo('m.created_at')} ORDER BY m.id`, args));
+  } catch (err) {
+    // 這一塊壞掉不該讓整輪健檢報廢，但也**不能靜默回零樣本**——那會跟「窗內真的沒對話」
+    // 長得一模一樣，而健檢對零樣本的處置是「照實寫」，等於把一個故障講成正常。
+    return { chats: 0, error: `chat_quality 查詢失敗：${err.message}` };
+  }
+
+  const byChat = new Map();
+  for (const r of rows) {
+    if (!byChat.has(r.chat_id)) {
+      byChat.set(r.chat_id, { chat_id: r.chat_id, title: r.title, ai: [], user: [], self_correct: 0 });
+    }
+    const c = byChat.get(r.chat_id);
+    const text = String(r.content || '');
+    if (r.role === 'ai') {
+      c.ai.push(text.length);
+      if (SELF_CORRECT_RE.test(text.slice(0, 120))) c.self_correct += 1;
+    } else if (r.role === 'user') {
+      c.user.push(text.length);
+    }
+  }
+
+  // ⚠ 不能用 wallClock 裡那個 r1：它是那個函式的區域變數，在這裡是 undefined（會 ReferenceError）
+  const r1 = (n) => Math.round(n * 10) / 10;
+  const avg = (a) => (a.length ? a.reduce((s, n) => s + n, 0) / a.length : 0);
+  // 只看「真的來回過」的對話：一問一答的單輪對話沒有鬼打牆可言，混進來會把中位數洗淡
+  const chats = [...byChat.values()]
+    .filter(c => c.ai.length >= 2 && c.user.length)
+    .map(c => ({
+      chat_id: c.chat_id,
+      title: (c.title || '').slice(0, 40),
+      ai_turns: c.ai.length,
+      ratio: r1(avg(c.ai) / (avg(c.user) || 1)),
+      self_correct: c.self_correct
+    }));
+  if (!chats.length) return { chats: 0, note: '窗內沒有來回兩輪以上的對話，這個區塊不成立（不是「都很好」）' };
+
+  const ratios = chats.map(c => c.ratio).sort((a, b) => a - b);
+  return {
+    chats: chats.length,
+    ai_turns: chats.reduce((s, c) => s + c.ai_turns, 0),
+    // p50 而非平均：一場 34 倍的對話會把平均拉到看不出常態
+    verbosity_ratio_p50: r1(pct(ratios, 0.5)),
+    verbosity_ratio_max: ratios[ratios.length - 1],
+    self_correcting_chats: chats.filter(c => c.self_correct > 0).length,
+    self_correct_turns: chats.reduce((s, c) => s + c.self_correct, 0),
+    // 只給最差三場：這個區塊是要讓人「知道去看哪一場」，列滿只會把訊號淹掉
+    worst: chats.sort((a, b) => (b.self_correct - a.self_correct) || (b.ratio - a.ratio)).slice(0, 3)
   };
 }
 

@@ -342,3 +342,65 @@ test('buildWindowSummary：帶上界時只取那一段，且 window.until 回上
   expect(prev.tasks.map(t => t.task_id)).toEqual(['T-WND-上期']);
   expect(prev.window.until).toBe(untilAt.toISOString());
 });
+
+// ── chat_quality ──
+// 意圖：健檢原本對 chat 只收 token／耗時／呼叫數，全是成本面。使用者實際感受到的
+// 「鬼打牆、廢話太多」（2026-09-05 回報）在指標上完全沒有訊號，健檢一律報平安。
+// 這幾支釘住那兩個品質數字算得對，以及「沒樣本」不得被講成「都很好」。
+
+// 建一場對話：aiLens／userLens 是各輪的字數，corrections 是要塞進 AI 回覆開頭的更正措辭。
+async function seedChat(title, aiLens, userLens, corrections = []) {
+  const { rows: [p] } = await dbModule.query(
+    `INSERT INTO projects (name, odoo_version) VALUES ($1,'17.0') RETURNING id`, ['P-' + title]);
+  const { rows: [c] } = await dbModule.query(
+    `INSERT INTO project_chats (project_id, title) VALUES ($1,$2) RETURNING id`, [p.id, title]);
+  for (let i = 0; i < Math.max(aiLens.length, userLens.length); i++) {
+    if (userLens[i] != null) {
+      await dbModule.query(
+        `INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'user',$2)`,
+        [c.id, 'u'.repeat(userLens[i])]);
+    }
+    if (aiLens[i] != null) {
+      const head = corrections[i] || '';
+      await dbModule.query(
+        `INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1,'ai',$2)`,
+        [c.id, head + 'a'.repeat(Math.max(1, aiLens[i] - head.length))]);
+    }
+  }
+  return c.id;
+}
+
+test('chat_quality：冗長比＝AI 回覆長度 ÷ 使用者提問長度', async () => {
+  // AI 每輪 100 字、使用者每輪 10 字 → 10 倍。用兩輪：一輪的話「平均」與「單筆」看不出差別
+  await seedChat('冗長比', [100, 100], [10, 10]);
+  const w = await buildWindowSummary(new Date(Date.now() - 86400000));
+  const hit = w.chat_quality.worst.find(c => c.title === '冗長比');
+  expect(hit.ratio).toBe(10);
+  expect(hit.ai_turns).toBe(2);
+});
+
+test('chat_quality：AI 承認上一輪判斷錯會被記成 self_correct', async () => {
+  await seedChat('鬼打牆', [80, 80, 80], [10, 10, 10],
+    ['', '你說的對，我上一輪的結論錯了。', '我要更正上一輪的說法。']);
+  const w = await buildWindowSummary(new Date(Date.now() - 86400000));
+  const hit = w.chat_quality.worst.find(c => c.title === '鬼打牆');
+  // 第一輪沒有更正措辭，只有後兩輪算數——全部都算的話這個指標無法分辨「有沒有在繞」
+  expect(hit.self_correct).toBe(2);
+  expect(w.chat_quality.self_correcting_chats).toBeGreaterThanOrEqual(1);
+});
+
+// 一問一答的單輪對話沒有「鬼打牆」可言，混進來只會把中位數洗淡、讓真正在繞的那幾場被稀釋掉。
+test('chat_quality：只算來回兩輪以上的對話，單輪的不列入', async () => {
+  await seedChat('單輪不算', [500], [5]);   // 比值 100 倍，若被算進去 max 會被它主導
+  const w = await buildWindowSummary(new Date(Date.now() - 86400000));
+  expect(w.chat_quality.worst.some(c => c.title === '單輪不算')).toBe(false);
+  expect(w.chat_quality.verbosity_ratio_max).toBeLessThan(100);
+});
+
+// 零樣本不得長得像「都很好」——這是這個 repo 踩過的健檢通病（零樣本記成 ok）。
+test('chat_quality：窗內沒有夠長的對話時回 chats:0 並明說不成立，不得靜默回好看的數字', async () => {
+  const w = await buildWindowSummary(new Date(Date.now() + 86400000));   // 未來視窗＝必定零樣本
+  expect(w.chat_quality.chats).toBe(0);
+  expect(w.chat_quality.note).toMatch(/不是/);
+  expect(w.chat_quality.verbosity_ratio_p50).toBeUndefined();
+});
