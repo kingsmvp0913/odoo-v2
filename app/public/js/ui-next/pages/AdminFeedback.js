@@ -18,6 +18,7 @@
         bodyOpen: {},      // { [id]: true } 展開這一列的原文全文與翻譯結果
         bodyLong: {},      // { [id]: true } 這一列長到需要收合（量 DOM 得來，見 measureBodies）
         removing: {},      // { [id]: true } 刪除送出中
+        startingBatch: false, // 手動觸發改善批次送出中
       };
     },
     computed: {
@@ -68,6 +69,27 @@
       openImage(fileId) {
         const url = this.attachUrls[fileId];
         if (url) window.open(url, '_blank');
+      },
+      // 手動補跑一次改善批次。端點（POST /api/admin/nightly-fix）早就有，但前端從來沒有入口
+      // ——已核准的提案只能等每晚 22:00，想當場驗一次「改善通道通不通」完全沒辦法。
+      // ⚠ 這會真的改平台自己的程式、跑測試、審核、合併，並可能重啟平台，所以：
+      // (1) 走確認對話框且把後果講白；(2) fire-and-forget——批次動輒數十分鐘到數小時，
+      //     端點本身也是不 await 的，這裡不能假裝有進度可等。
+      async runBatch() {
+        const approved = this.rows.filter(r => r.status === 'approved').length;
+        if (!await confirmDialog({
+          title: '立即執行改善',
+          message: `會把目前已核准的 ${approved} 筆提案送去自動改碼、跑測試、審核後合併，`
+            + '過程可能重啟平台（畫面會短暫斷線）。整個批次要數十分鐘到數小時，'
+            + '沒有進度條——結果去「健檢紀錄」看標著「改善批次」的那一列。',
+          danger: true, confirmText: '開始執行'
+        })) return;
+        this.startingBatch = true;
+        try {
+          await Api.post('admin/nightly-fix', {});
+          showToast('改善批次已開始，稍後到健檢紀錄看結果', 'success');
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.startingBatch = false; }
       },
       async remove(r) {
         const what = r.triage_title || (r.content || '').slice(0, 30);
@@ -202,6 +224,11 @@
               <option value="rejected">已駁回</option>
               <option value="done">已完成</option>
             </select>
+            <!-- 只在真的有東西可跑時出現：沒有已核准的提案時按下去，批次會在「沒有候選」
+                 那個早退分支立刻結束，連一列紀錄都不會留，看起來就像按了沒反應。 -->
+            <button v-if="rows.some(r => r.status === 'approved')" class="btn btn-outline btn-sm"
+              :disabled="startingBatch" @click="runBatch"
+              title="把已核准的提案送去自動改碼、跑測試、審核後合併（可能重啟平台）">立即執行改善</button>
           </div>
           <div class="table-wrap table-cards-sm">
             <table class="data-table">

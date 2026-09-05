@@ -131,7 +131,13 @@
           ? { label: '待處理 ' + h.open_count, color: 'var(--warning-strong)' }
           : { label: '已處理完', color: 'var(--text-muted)' };
       },
-      cadenceText(h) { return HC_CADENCE[h.cadence] || ''; },
+      // 夜間改善批次自建的列也落在同一張表（cadence='nightly-fix'，見 nightly-fix.js 的
+      // BATCH_CADENCE）。不特別標的話它長得像一輪什麼都沒查到的健檢：等級「—」、提案數 0，
+      // 完全看不出「昨晚的改善跑過了」——而那正是這張 log 最該回答的事情之一。
+      cadenceText(h) {
+        if (h.cadence === 'nightly-fix') return '（改善批次）';
+        return HC_CADENCE[h.cadence] || '';
+      },
     },
     template: `
       <div class="topbar ui-next-admin-head">
