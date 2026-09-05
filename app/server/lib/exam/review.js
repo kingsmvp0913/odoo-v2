@@ -544,6 +544,9 @@ module.exports = {
   reviewPage, extractPage, reviewQuestions, buildPrompt, buildExtractPrompt,
   buildReviewQuestionsPrompt, normalize, normalizeExtract, extractJson, checkGlossary,
   termsIn, saveVerdicts, normalizeConfidence, MODEL,
+  // 讀官方成績圖（sections.js）沿用同一支 runPrompt：沙箱、只給 Read、
+  // stream-json 解析與逾時處理都在裡面，各寫一份會慢慢長歪。
+  runPrompt,
   // 挑戰模式（challenge.js）要沿用同一套陷阱清單、術語鎖定與答案清洗，
   // 各寫一份的話兩邊會慢慢長歪，而「判題陷阱」正是 30/30 那個成績的來源。
   glossaryBlock, TRAPS, cleanAnswer,

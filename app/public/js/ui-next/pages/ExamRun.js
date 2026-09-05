@@ -10,6 +10,7 @@ window.UiNextExamRunView = Vue.defineComponent({
       filter: 'all', clearing: false,
       finalDraft: {}, savingFinal: {},
       archiveOpen: false, archivePages: [], archiving: false, archiveResult: null,
+      reading: false, readNote: '',
       retrying: {},
       apiOpen: false, token: null, tokenExpiresAt: null, tokenExpired: false, issuing: false,
       newOpen: false, creating: false, draft: { label: '', odoo_version: '', taken_at: '' },
@@ -188,7 +189,6 @@ window.UiNextExamRunView = Vue.defineComponent({
     visibleQuestions(g) {
       return this.filter === 'check' ? g.questions.filter(q => this.needsCheck(q)) : g.questions;
     },
-    answerText(a) { return Array.isArray(a) ? a.join(',') : ''; },
     async clearAll() {
       if (!await confirmDialog({
         title: '清空目前的題目',
@@ -213,6 +213,7 @@ window.UiNextExamRunView = Vue.defineComponent({
         // wrong 用字串存：'' 是「還沒填」，'0' 是「這章沒答錯」，兩者意義完全不同。
         // 用 number 會讓空值變成 0，等於把沒填的章節全部當成全對去鎖，不可逆。
         this.archivePages = (data.pages || []).map(p => ({ ...p, wrong: '' }));
+        this.readNote = '';
       } catch (e) { showToast(e.message, 'error', 0); this.archiveOpen = false; }
     },
     wrongOf(p) {
@@ -220,6 +221,33 @@ window.UiNextExamRunView = Vue.defineComponent({
       if (!s) return null;
       const n = Number(s);
       return Number.isInteger(n) && n >= 0 ? n : null;
+    },
+    // 上傳官方成績單，讓 AI 把每章的錯題數讀出來填進表格。
+    //
+    // **只預填，不送出。** 歸檔不可逆（certain 取 OR，蓋不掉），而模型讀表格會
+    // 看錯行——填完人要自己對一眼再按確認歸檔。
+    async onScoreSheet(e) {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';                       // 讓同一個檔可以再選一次
+      if (!file) return;
+      this.reading = true; this.readNote = '';
+      try {
+        const fd = new FormData();
+        fd.append('screenshot', file);
+        const r = await Api.postForm(`exam/banks/${this.bankId}/read-sections`, fd);
+        const byPage = new Map(r.filled.map(f => [String(f.page), f.wrong]));
+        this.archivePages = this.archivePages.map(p =>
+          byPage.has(String(p.page)) ? { ...p, wrong: String(byPage.get(String(p.page))) } : p);
+        // 對不上的一定要講。靜靜少填幾章的話，人會以為「這幾章成績單上沒有」，
+        // 而真因通常是章節名沒填或拼法不同。
+        const bits = [`已填 ${r.filled.length} 章`];
+        if (r.unmatchedPages.length) bits.push(`對不上：${r.unmatchedPages.join('、')}`);
+        if (r.unusedTitles.length) bits.push(`成績單上多出：${r.unusedTitles.join('、')}`);
+        if (r.skipped && r.skipped.length) bits.push(`讀不出：${r.skipped.join('、')}`);
+        this.readNote = bits.join('　·　');
+        showToast(`成績單已讀出 ${r.filled.length} 章，請對一眼再送出`, 'success');
+      } catch (err) { showToast(err.message, 'error', 0); }
+      finally { this.reading = false; }
     },
     archiveFilled() { return this.archivePages.filter(p => this.wrongOf(p) != null); },
     // 沒填章節名的會被 server 整頁略過，先在畫面上講，不要等送出才發現
@@ -261,6 +289,51 @@ window.UiNextExamRunView = Vue.defineComponent({
       for (const letter of order) if (this.voteCount(q, letter) > this.voteCount(q, answer)) answer = letter;
       return { answer, pct: this.votePct(q, answer) };
     },
+    // ── 推薦分數 ────────────────────────────────────────────────────────
+    // 分數由**後端**算好，隨 dashboard 一起送過來（`option_scores`，公式與完整
+    // 理由見 server/lib/exam/score.js）。前端只負責顯示。
+    //
+    // 為什麼不放這裡：那個公式最容易寫反（c 是「你的答案正確的機率」，不是
+    // 「審查有多確定」），而寫反之後畫面照樣好好的，只是每題都推薦錯的那個選項。
+    // 放在 View 檔裡就只能靠正則把函式挖出來測，等於沒有防線。
+    //
+    // 這裡只做顯示，不會替任何人勾選或送出答案（設計文件 §14 的硬規則）。
+    scoreOf(q, letter) {
+      const s = q.option_scores;
+      return s && s[letter] != null ? s[letter] : null;
+    },
+    topScore(q) {
+      const s = q.option_scores;
+      if (!s) return null;
+      let best = null;
+      for (const k of Object.keys(s)) if (best === null || s[k] > s[best]) best = k;
+      return best === null ? null : { letter: best, score: s[best] };
+    },
+    topText(q) { const t = this.topScore(q); return t ? t.letter : '—'; },
+    // 分數哪來的——放 title 而不是畫在版面上。使用者要的是「兩個標記」，
+    // 但把「你上次也選這個」這種資訊直接刪掉是損失，收進 tooltip 兩邊都顧到。
+    scoreWhy(q, letter) {
+      const bits = [];
+      if (q.review_source === 'official') {
+        bits.push(this.hasAnswer(q.review_answer, letter) ? '官方確認的正解' : '官方確認不是這個');
+      } else {
+        if (this.hasAnswer(q.review_answer, letter)) bits.push('審查主張這個');
+        if (this.hasAnswer(this.current(q), letter)) bits.push('你這次填的');
+      }
+      if (this.hasAnswer(q.history_answer, letter)) {
+        bits.push(q.history_wrong ? '上次選這個，已知大概率錯' : '上次也選這個');
+      }
+      return bits.join('・');
+    },
+    // 沒分數時要講得出為什麼。「—」本身沒有資訊量，使用者會以為系統壞了。
+    noScoreWhy(q) {
+      if (q.option_scores) return '';
+      if (q.qtype === 'multi') return '複選題不算推薦分數（可以同時對兩個，機率分佈不成立）';
+      if (!q.review_source) return '這題還沒審查過，沒有依據可以算';
+      if (!(Array.isArray(q.review_answer) && q.review_answer.length)) return '審查沒有給出答案';
+      return '這題沒有信心度，算不出分數';
+    },
+
     isFinalSelected(q, letter) {
       return (this.finalDraft[q.attempt_id] || []).includes(letter);
     },
@@ -292,12 +365,6 @@ window.UiNextExamRunView = Vue.defineComponent({
     // 判題要跑好幾分鐘，靜止的文字看起來像當掉——實測一頁 4 題約 3 分鐘，
     // 這段時間畫面上必須有東西在動，否則使用者會以為沒反應而重傳。
     isBusy(g) { return g.status === 'pending' || g.status === 'running'; },
-    // 收合時也要看得出「這題不用花時間看」——判準與題庫頁的勾勾同一套
-    // （審查過、沒異議、信心 ≥ 70），兩頁不會各說各話。
-    isSettled(q) {
-      return !!q.review_source && !this.needsCheck(q)
-        && Number.isFinite(q.review_confidence) && q.review_confidence >= 70;
-    },
     statusText(g) {
       if (g.status === 'pending') return '等待審題';
       if (g.status === 'running') return '審題中';
@@ -428,6 +495,13 @@ window.UiNextExamRunView = Vue.defineComponent({
             <span class="ui-next-exam-arch-key"><b>留白</b> 先不處理</span>
             <span class="ui-next-exam-arch-warn">未作答的題不會被鎖。</span>
           </div>
+          <!-- 成績單本來就是一張圖，人再抄一次只是多一次出錯的機會，而抄錯會把
+               錯的題永久鎖成正解。讀完只預填，人對過再按確認歸檔。 -->
+          <label class="ui-next-exam-arch-read">
+            <input type="file" accept="image/*" :disabled="reading" @change="onScoreSheet" />
+            <span class="ui-next-exam-btn">{{ reading ? '讀取中…' : '上傳官方成績單自動填' }}</span>
+            <em v-if="readNote">{{ readNote }}</em>
+          </label>
           <div class="ui-next-exam-arch-row is-head">
             <span>頁</span><span>章節名稱</span><span>題數</span><span>錯幾題</span>
           </div>
@@ -474,44 +548,60 @@ window.UiNextExamRunView = Vue.defineComponent({
             </button>
           </summary>
           <template v-for="q in g.questions" :key="q.attempt_id">
+            <!-- 建議的字母放在題號**前面**、固定寬度一欄：不展開就要看得出「這題選哪個」，
+                 而且整份清單的字母要對得齊才能一路掃下來。沒建議的畫破折號，
+                 空著會讓那一行的題號往左跑，看起來像另一個層級。 -->
+            <!-- 最高分的字母放在題號**前面**、固定寬度一欄：不展開就要看得出「這題選哪個」，
+                 而且整份清單的字母要對得齊才能一路掃下來。算不出分數的畫破折號，
+                 空著會讓那一行的題號往左跑，看起來像另一個層級。 -->
             <div v-if="q.review_source==='official'" class="ui-next-exam-run-question ui-next-exam-run-official">
-              <h3><span><ui-next-icon name="lock" class="ui-next-exam-run-mark is-lock"/>{{ q.no }}.</span> {{ q.question_zh || q.question_en }}</h3>
-              <small>官方確認 · {{ answerText(q.review_answer) }}</small>
+              <h3>
+                <span class="ui-next-exam-run-sug is-sure" title="官方確認">
+                  <ui-next-icon name="lock" class="ui-next-exam-run-mark"/>{{ topText(q) }}
+                </span>
+                <span class="ui-next-exam-run-no">{{ q.no }}.</span> {{ q.question_zh || q.question_en }}
+              </h3>
+              <small>官方確認</small>
             </div>
             <details v-else :open="needsCheck(q)" :class="['ui-next-exam-run-question',needsCheck(q) && 'is-mismatch']">
               <summary>
                 <h3>
-                  <span>
-                    <ui-next-icon v-if="isSettled(q)" name="check" class="ui-next-exam-run-mark is-ok"/>{{ q.no }}.
-                  </span> {{ q.question_zh || q.question_en }}
+                  <span :class="['ui-next-exam-run-sug', topScore(q) ? 'is-rec' : 'is-none']"
+                        :title="topScore(q) ? ('推薦 ' + topScore(q).score + ' 分') : noScoreWhy(q)">
+                    {{ topText(q) }}<em v-if="topScore(q)">{{ topScore(q).score }}</em>
+                  </span>
+                  <span class="ui-next-exam-run-no">{{ q.no }}.</span> {{ q.question_zh || q.question_en }}
                 </h3>
                 <div v-if="q.question_zh" class="ui-next-exam-run-en">{{ q.question_en }}</div>
               </summary>
               <div class="ui-next-exam-run-options">
+                <!-- 算不出分數時要講得出為什麼。只畫「—」等於沒說，使用者會以為
+                     系統壞了，而不是「這題真的沒有依據可以算」。 -->
+                <div v-if="noScoreWhy(q)" class="ui-next-exam-run-nosug">{{ noScoreWhy(q) }}</div>
                 <div v-for="option in q.options" :key="option.letter" :class="['ui-next-exam-run-option',
-                     isFinalSelected(q,option.letter) && 'is-selected']">
+                     isFinalSelected(q,option.letter) && 'is-selected',
+                     scoreOf(q,option.letter) === topScore(q)?.score && 'is-suggested']">
                   <label>
                     <!-- 輸入答案不另外標：worker 寫入時 answer_final 預設就等於作答答案，
                          勾選狀態本身就是它。改過之後才靠 title 查得回原本輸入什麼。 -->
                     <input type="checkbox" :title="hasAnswer(q.answer_their,option.letter) ? '正式答案（這是原本輸入的答案）' : '正式答案'" :checked="isFinalSelected(q,option.letter)" :disabled="savingFinal[q.attempt_id]" @change="toggleFinal(q,option.letter,$event.target.checked)" />
                     <b>{{ option.letter }}</b>
                     <span class="ui-next-exam-run-opt-text">
-                      {{ option.text_zh || option.text }}
-                      <!-- 四個訊號各一種形狀，不用讀文字就分得出來：
-                           ★ 審查　讚 投票　✓/✗ 歷史（我上次的最終答案／已知大概率錯） -->
-                      <span v-if="hasAnswer(q.review_answer,option.letter)" class="ui-next-exam-run-sig is-review" title="審查答案">
-                        <ui-next-icon name="star-filled"/><em v-if="q.review_confidence != null">{{ q.review_confidence }}%</em>
+                      <!-- 只有兩個標記：推薦分數與投票。
+                           原本另外三個（★ 審查答案／? 上次我選這個／✗ 上次已知答錯）
+                           全部折進分數裡了——審查與信心度就是分數的來源，已知答錯的
+                           那個會被歸零。它們的原始資訊改掛 title，滑過去看得到，
+                           不佔版面。 -->
+                      <span v-if="scoreOf(q,option.letter) !== null"
+                            :class="['ui-next-exam-run-score',
+                                     scoreOf(q,option.letter) >= 50 && 'is-high',
+                                     scoreOf(q,option.letter) === 0 && 'is-zero']"
+                            :title="scoreWhy(q,option.letter) || '沒有證據支持，但也沒被排除過'">
+                        {{ scoreOf(q,option.letter) }}
                       </span>
+                      {{ option.text_zh || option.text }}
                       <span v-if="topVote(q).answer===option.letter" class="ui-next-exam-run-sig is-vote" title="投票最高">
                         <ui-next-icon name="thumb-up"/><em>{{ topVote(q).pct }}%</em>
-                      </span>
-                      <span v-if="hasAnswer(q.history_answer,option.letter)"
-                            :class="['ui-next-exam-run-sig', q.history_wrong ? 'is-past-bad' : 'is-past']"
-                            :title="q.history_wrong ? '上次考試我選這個，已知大概率錯' : '上次考試我選這個'">
-                        <!-- 可信的歷史答案用問號而不是勾：它只是「上次我這樣答」，
-                             沒有任何官方背書，用勾勾看起來跟已確認的一樣篤定。 -->
-                        <ui-next-icon v-if="q.history_wrong" name="close"/>
-                        <template v-else><i>?</i><em v-if="q.review_confidence != null">{{ q.review_confidence }}%</em></template>
                       </span>
                       <!-- 英文原文：考題原文是英文，中譯只是輔助。看不到原文就沒辦法
                            確認翻譯有沒有把語意帶偏（題幹已經這樣做，選項也要一致）。 -->

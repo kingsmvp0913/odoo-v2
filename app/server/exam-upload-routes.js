@@ -11,6 +11,8 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
 const crypto = require('crypto');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
@@ -19,6 +21,8 @@ const { decodeImage, sniffImage, readUploadToken, peekUploadToken, issueUploadTo
   isLocal, saveImage, validateItem } = require('./lib/exam/upload');
 const { runQueue } = require('./lib/exam/worker');
 const { listPages, archiveBank } = require('./lib/exam/archive');
+const { optionScores } = require('./lib/exam/score');
+const { readSections, matchToPages } = require('./lib/exam/sections');
 const { emitAll } = require('./notify');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
@@ -386,8 +390,23 @@ function registerRoutes(app) {
       const trusted = Number.isFinite(a.confidence) && a.confidence > 80;
       a.history_answer = past && (trusted || a.history_wrong) ? past.answer_final : null;
       a.history_bank = a.history_answer ? past.label : null;
-      delete a.confidence;
       a.review_reason = official ? '官方確認正確' : (verdict && verdict.reason);
+
+      // 每個選項的推薦分數（一題加起來 100）。在後端算而不是前端：這是邏輯不是排版，
+      // 而且這個公式最容易寫反——反了之後畫面照樣好好的，只是每題都推薦錯的那個。
+      // ⚠ 餵的是 answer_final（拍板的），沒拍板才退回 answer_their，與 confidence
+      // 的定義（「最終作答正確的機率」）對齊。
+      const mine = (Array.isArray(a.answer_final) && a.answer_final.length)
+        ? a.answer_final : a.answer_their;
+      a.option_scores = optionScores({
+        letters: (a.options || []).map(o => o && o.letter).filter(Boolean),
+        qtype: a.qtype,
+        reviewSource: a.review_source,
+        reviewAnswer: a.review_answer,
+        confidence: a.review_confidence,
+        mine,
+      });
+      delete a.confidence;
 
       const rows = byAttempt.get(a.attempt_id) || [];
       const counts = {};
@@ -458,6 +477,48 @@ function registerRoutes(app) {
       res.json({ bank, pages: await listPages(require('./db'), bankId) });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
+
+  // 讀官方成績圖，把每章的錯題數填回歸檔面板。
+  //
+  // **只讀不寫**：讀完把數字回給前端預填，人看過再按確認歸檔。歸檔不可逆
+  // （certain 取 OR，蓋不掉），而模型讀表格會看錯行——不能讓它直接落地。
+  //
+  // 圖不留檔：它只是這一次的輸入，跟考題截圖不同（那些要留著給取證看）。
+  app.post('/api/exam/banks/:id/read-sections', verifyToken,
+    shotUpload.single('screenshot'), async (req, res) => {
+      let tmp = null;
+      try {
+        const bankId = parseInt(req.params.id, 10);
+        if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+        if (!req.file) return res.status(400).json({ error: '缺少 screenshot' });
+        const ext = sniffImage(req.file.buffer);
+        if (!ext) return res.status(400).json({ error: '不是圖片檔（檔頭認不出已知的圖片格式）' });
+
+        tmp = path.join(os.tmpdir(),
+          `exam-score-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`);
+        fs.writeFileSync(tmp, req.file.buffer);
+
+        const read = await readSections({ imagePath: tmp });
+        if (!read.readable) {
+          return res.status(422).json({ error: `讀不出成績單：${read.note || '未說明'}` });
+        }
+        const pages = await listPages(require('./db'), bankId);
+        const m = matchToPages(read.sections, pages);
+        // §13.4 的教訓：一個都對不上時要報錯，不能回一包空的讓畫面顯示「讀好了」
+        if (!m.filled.length) {
+          return res.status(422).json({
+            error: '成績單上的章節與這場考試對不起來，沒有填進任何一章',
+            read: read.sections.map(s => s.title),
+            pages: pages.map(p => p.section).filter(Boolean),
+          });
+        }
+        res.json({ ...m, skipped: read.skipped || [] });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      } finally {
+        if (tmp) { try { fs.unlinkSync(tmp); } catch { /* 清不掉不影響結果 */ } }
+      }
+    });
 
   // 歸檔：寫章節名，並依每章的官方錯題數處理——0 題錯的推導成官方正解，
   // 有錯的只把錯題數寫進 exam_sections（不知道錯哪題，一題都不能鎖）。

@@ -9,11 +9,31 @@ const bankView = fs.readFileSync(
   path.join(__dirname, '../../public/js/ui-next/pages/ExamBank.js'), 'utf8');
 const css = fs.readFileSync(
   path.join(__dirname, '../../public/css/ui-next-pages/09-later-patches.css'), 'utf8');
+const routes = fs.readFileSync(
+  path.join(__dirname, '../exam-upload-routes.js'), 'utf8');
 
-test('考試頁是 POST 結果工作台，不再要求使用者手動上傳或啟動', () => {
+test('考試頁是 POST 結果工作台，不再要求使用者手動上傳考題或啟動判題', () => {
   expect(view).toContain('外部 POST 後自動審題');
-  expect(view).not.toContain('type="file"');
   expect(view).not.toContain('開始判題');
+  // 考題截圖一律走外部 POST。頁面上唯一的 file input 是歸檔時讀官方成績單那顆，
+  // 它讀完只預填欄位、不會送出，與「手動上傳考題」是兩件事。
+  const fileInputs = view.match(/type="file"/g) || [];
+  expect(fileInputs).toHaveLength(1);
+  expect(view).toContain('@change="onScoreSheet"');
+});
+
+// 成績單本來就是一張圖，人再抄一次只是多一次出錯的機會——而抄錯會把錯的題
+// 永久鎖成正解（歸檔不可逆）。所以讀完只預填，人對過再按確認歸檔。
+test('讀成績單只預填欄位，不會直接歸檔', () => {
+  expect(view).toContain('read-sections');
+  expect(view).toContain('this.archivePages = this.archivePages.map');
+  // onScoreSheet 裡不得出現送出歸檔的呼叫
+  const fn = view.slice(view.indexOf('async onScoreSheet('), view.indexOf('archiveFilled()'));
+  expect(fn).not.toContain('doArchive');
+  expect(fn).not.toContain("banks/${this.bankId}/archive`,");
+  // 對不上的章節要講出來，不能靜靜少填
+  expect(fn).toContain('unmatchedPages');
+  expect(fn).toContain('unusedTitles');
 });
 
 test('完整選項用勾選框設定正式答案，而且可以取消成空白', () => {
@@ -25,18 +45,13 @@ test('完整選項用勾選框設定正式答案，而且可以取消成空白',
   expect(view).not.toContain('最後答案（可空白）');
 });
 
-// 四個訊號各一種形狀，不用讀文字就分得出來。原本是「輸入答案／審查答案／
-// 投票 100%」三串中文，長度不同、位置跟著浮動，掃視時要逐字讀。
-test('各答案用圖示標在選項上，不再顯示下方答案區塊', () => {
-  expect(view).toContain('name="star-filled"');                    // 審查
-  expect(view).toContain('name="thumb-up"');                       // 投票
-  // 歷史：可信＝綠問號＋信心度（只是「上次我這樣答」，沒有官方背書，
-  // 用勾勾看起來跟已確認的一樣篤定）；大概率錯＝紅叉
-  expect(view).toContain('v-if="q.history_wrong" name="close"');
-  expect(view).toContain('<template v-else><i>?</i>');
+// 原本一個選項最多掛五個標記（輸入答案／審查／投票／上次我選／上次已知答錯），
+// 要同時讀五種形狀才判斷得出一題。審查與已知答錯已折進推薦分數，其餘改掛 title。
+test('選項上只留推薦分數與投票，其餘訊號折進分數', () => {
+  expect(view).toContain('name="thumb-up"');                       // 投票留著
+  expect(view).toContain('topVote(q).answer');
   // 沒人投票時不留「投票 -」佔位：那一行對使用者沒有資訊（2026-09-05 使用者回饋）
   expect(view).not.toContain('投票 -');
-  expect(view).toContain('topVote(q).answer');
   expect(view).not.toContain('<div class="ui-next-exam-run-answers">');
 });
 
@@ -46,13 +61,6 @@ test('輸入答案不另外標，改過之後靠 title 查得回原本輸入什�
   expect(view).not.toContain('ui-next-exam-run-input-mark');
   expect(view).not.toContain('>輸入答案<');
   expect(view).toContain('這是原本輸入的答案');
-});
-
-// 星號旁邊要有數字：只有一顆星看不出「審查有多確定」，而那正是要不要
-// 推翻自己作答的依據
-test('審查星號帶著信心度百分比', () => {
-  expect(view).toContain('q.review_confidence != null');
-  expect(view).toContain('{{ q.review_confidence }}%');
 });
 
 // 「需確認」＝審查有意見，或又選了上次已知大概率錯的那個答案。
@@ -88,11 +96,26 @@ test('官方確認題是不可展開的鎖定區塊', () => {
   expect(view).not.toContain('🔒');
 });
 
-// 掃視時要能一眼跳過「不用看的題」——收合狀態下沒有這個標記就得一題題點開
-test('一致且有把握的題在題號前掛勾勾，判準與題庫頁同一套', () => {
-  expect(view).toContain('isSettled(q)');
-  expect(view).toContain('<ui-next-icon v-if="isSettled(q)" name="check"');
-  expect(view).toContain('q.review_confidence >= 70');
+// 公式本身在 server/lib/exam/score.js，由 exam-score.test.js 守。這裡只守「前端有
+// 照著用後端算好的數字」——前端自己再算一份就會有兩套會漂移的實作。
+test('推薦分數用後端算好的 option_scores，前端不自己算', () => {
+  expect(view).toContain('q.option_scores');
+  expect(view).not.toMatch(/EXAM_SCORE_FLOOR|normalize100/);
+  expect(routes).toContain("require('./lib/exam/score')");
+  expect(routes).toContain('a.option_scores = optionScores(');
+  // 餵給公式的是拍板的答案，沒拍板才退回輸入答案——要與 confidence 的定義對齊
+  expect(routes).toContain('? a.answer_final : a.answer_their');
+});
+
+test('選項上只留推薦分數與投票兩個標記', () => {
+  expect(view).toContain('ui-next-exam-run-score');
+  expect(view).toContain('is-vote');
+  // 折進分數的三個原始訊號不該再各自畫一個標記
+  expect(view).not.toContain('is-review');
+  expect(view).not.toContain('is-past');
+  expect(view).not.toContain('star-filled');
+  // 但資訊不能消失——改掛 title
+  expect(view).toContain('scoreWhy(q,option.letter)');
 });
 
 // 考題原文是英文，中譯只是輔助。看不到原文就無法確認翻譯有沒有把語意帶偏

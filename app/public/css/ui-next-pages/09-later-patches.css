@@ -1517,8 +1517,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-run-option label:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
 .ui-next-exam-run-option b { color: var(--text); }
 .ui-next-exam-run-option span { min-width: 0; color: var(--text-secondary); }
-/* 四個訊號各一種形狀。原本是「輸入答案／審查答案／投票 100%」三串中文，
-   每串長度不同、位置跟著浮動，掃視時要逐字讀。改成圖示後靠形狀就分得出來。 */
+/* 選項上只剩兩個標記：推薦分數與投票。原本有五個（輸入答案／審查／投票／上次我選／
+   上次已知答錯），要同時讀五種形狀才判斷得出來一題。審查與已知答錯已經折進分數裡，
+   原始資訊改掛 title。 */
 .ui-next-exam-run-sig {
   display: inline-flex; align-items: center; gap: 2px; margin-left: 6px;
   vertical-align: -2px; white-space: nowrap;
@@ -1527,10 +1528,30 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-run-sig em {
   font-style: normal; font-size: var(--fs-xs); font-weight: var(--fw-semibold);
 }
-.ui-next-exam-run-sig.is-review { color: var(--warning); }
 .ui-next-exam-run-sig.is-vote { color: var(--info); }
-.ui-next-exam-run-sig.is-past { color: var(--success); }
-.ui-next-exam-run-sig.is-past-bad { color: var(--danger); }
+
+/* 推薦分數。等寬數字＋固定寬度，一整欄掃下來才對得齊。
+   只有最高分那個亮起來——其餘是「剩下的機率平分」，不是逐項評估過的數字，
+   全部一樣顯眼會讓人以為四個都量過。 */
+.ui-next-exam-run-score {
+  display: inline-block; min-width: 26px; margin-right: 7px; padding: 1px 5px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-muted);
+  font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums; text-align: center;
+}
+.ui-next-exam-run-score.is-high {
+  border-color: var(--success); background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
+}
+/* 0 分＝上次已知答錯，被歸零。畫得比其他弱，但不是隱形——它是個警告 */
+.ui-next-exam-run-score.is-zero { border-style: dashed; color: var(--danger); opacity: .8; }
+
+/* 算不出分數時的說明。它佔滿選項那個 grid 的一整列 */
+.ui-next-exam-run-nosug {
+  grid-column: 1 / -1; padding: 6px 8px; border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6;
+}
 .ui-next-exam-run-vote {
   padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--card-bg); color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer;
@@ -1562,6 +1583,16 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    給它 653px 會讓輸入框橫跨大半個畫面，而右邊兩個窄欄被推到天邊，掃視時對不起來。
    ⚠ 欄數（4）必須等於每一列的子元素個數，少一欄最後一個會掉到下一列。
    最後一欄 72px 是量出來的：type=number 有 UA 最小寬度，58px 會被撐破而溢出。 */
+/* 上傳成績單自動填。原生 file input 醜且沒辦法改字，藏起來讓 label 當按鈕。 */
+.ui-next-exam-arch-read {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 12px; cursor: pointer;
+}
+.ui-next-exam-arch-read input[type="file"] { display: none; }
+.ui-next-exam-arch-read .ui-next-exam-btn { display: inline-block; }
+.ui-next-exam-arch-read em {
+  color: var(--text-muted); font-size: var(--fs-xs); font-style: normal; line-height: 1.6;
+}
 .ui-next-exam-arch-row {
   display: grid; grid-template-columns: 46px minmax(0, 340px) 110px 72px;
   gap: 8px; align-items: center; padding: 4px 0;
@@ -1620,7 +1651,23 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    系統走，跟旁邊的圖示擺在一起像兩個時代的東西，缺字時還會變豆腐框。 */
 .ui-next-exam-run-mark { width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
 .ui-next-exam-run-mark.is-lock { color: var(--success); }
-.ui-next-exam-run-mark.is-ok { color: var(--success); }
+
+/* 題號前那一欄：最高分的字母（＋分數）。固定寬度，整份清單的字母才對得齊——
+   不展開就要能一路掃下來看「這題選哪個」，那正是這一頁存在的理由。
+   算不出分數的畫「—」而不是留白：空著會讓題號往左跑，看起來像另一個層級。 */
+.ui-next-exam-run-sug {
+  display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 3px;
+  min-width: 46px; margin-right: 8px;
+  font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold);
+}
+.ui-next-exam-run-sug.is-sure { color: var(--success); }
+.ui-next-exam-run-sug.is-rec  { color: var(--text); }
+.ui-next-exam-run-sug.is-none { color: var(--text-muted); }
+.ui-next-exam-run-sug em {
+  font-style: normal; font-size: var(--fs-xs); font-weight: var(--fw-normal);
+  color: var(--text-muted);
+}
+.ui-next-exam-run-no { color: var(--text-muted); }
 /* 題庫頁同一套圖示（原本是 emoji 字元，改 SVG 後要給尺寸，否則吃 viewBox 的 24px） */
 .ui-next-exam-lock, .ui-next-exam-mark {
   width: 13px; height: 13px; vertical-align: -2px;
@@ -1633,12 +1680,6 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   color: var(--text-secondary); font-size: var(--fs-sm); cursor: pointer;
 }
 .ui-next-exam-histwrong input { width: 15px; height: 15px; accent-color: var(--danger); }
-
-/* 可信的歷史答案用「?」而不是勾勾：它只是「上次我這樣答」，沒有官方背書。
-   用文字而不是 SVG——問號在 13px 下畫成線條會糊掉，字元反而清楚。 */
-.ui-next-exam-run-sig i {
-  font-style: normal; font-weight: var(--fw-semibold); line-height: 1;
-}
 
 
 /* 每一頁右上的重試。中斷之後靠它救回來，不必請同事重傳截圖。 */
