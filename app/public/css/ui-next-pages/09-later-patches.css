@@ -1737,13 +1737,19 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-api-head p {
   margin: 3px 0 0; color: var(--text-muted); font-size: var(--fs-xs);
 }
-/* 全站的 .ui-next-modal-close 沒有任何 CSS（等於裸按鈕），所以自己定一顆。 */
-.ui-next-exam-api-x {
-  display: grid; place-items: center; width: 28px; height: 28px; flex: none;
+/* 全站的 .ui-next-modal-close 沒有任何 CSS（等於裸按鈕），所以自己定一顆。
+   選擇器要帶 .ui-next-task-modal header——那條是 (0,1,1)，它的
+   `padding: 8px 10px` 會蓋掉單一 class 的設定，把 X 擠出正中央
+   （實測偏 X 4.95px／Y 2.74px，肉眼就看得出來）。 */
+.ui-next-task-modal header button.ui-next-exam-api-x {
+  display: grid; place-items: center; box-sizing: border-box;
+  width: 30px; height: 30px; flex: none; padding: 0;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: transparent; color: var(--text-muted); cursor: pointer;
 }
-.ui-next-exam-api-x:hover { border-color: var(--border-strong); color: var(--text); }
+.ui-next-task-modal header button.ui-next-exam-api-x:hover {
+  border-color: var(--border-strong); color: var(--text);
+}
 
 .ui-next-exam-api-token {
   padding: 10px 12px; border: 1px solid var(--border);
