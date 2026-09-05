@@ -1227,9 +1227,6 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 
 /* 維護中橫幅：走 --warning 的疊色，不寫死淺色底——寫死的話深色模式文字色吃 var(--text)
    會翻白變隱形（platformDev skill 的 dark-mode 硬規則）。 */
-.ui-next-maintenance-banner{margin:0 0 10px;padding:8px 12px;border-radius:10px;
-  border:1px solid color-mix(in srgb,var(--warning) 40%,transparent);
-  background:color-mix(in srgb,var(--warning) 12%,var(--bg));color:var(--text);font-size:12px}
 
 /* 任務卡的暫停／繼續改成圖示：文字版曾同時存在「恢復」「繼續執行」「已暫停」三種說法，
    而使用者要判斷的只是「現在按下去會停還是會跑」。圖示沒有翻譯歧義。
@@ -1819,3 +1816,41 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg); color: var(--text-secondary);
 }
+
+/* 全站「改善執行中」緞帶（Odoo 那種右上角 45° 斜標）。
+   原本只有任務頁與任務列表有一條橫幅，實測太不明顯——批次跑起來時整個平台會暫停推進任務、
+   而且可能在任何一刻重啟，這是全站狀態，不該只有兩頁看得到。
+   ⚠ pointer-events:none：緞帶蓋在 topbar 右上角，不擋掉的話它會吃掉底下按鈕的點擊。
+   z-index 900：壓得過內容（ui-next 最高 20），但低於 modal(1000) 與 toast(9999)——
+   維護中仍要開得了對話框、看得到提示。 */
+.ui-next-ribbon {
+  position: fixed; top: 0; right: 0; width: 132px; height: 132px;
+  overflow: hidden; pointer-events: none; z-index: 900;
+}
+.ui-next-ribbon span {
+  position: absolute; right: -46px; top: 26px; width: 200px;
+  transform: rotate(45deg);
+  padding: 5px 0; text-align: center;
+  font-size: 11px; font-weight: var(--fw-semibold); letter-spacing: .3px;
+  /* 不吃 var(--text)：緞帶底色固定是警示色，文字色跟著主題翻會在深色模式變成看不見的深字 */
+  background: var(--warning-strong); color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .28);
+}
+/* 尊重系統的「減少動態效果」設定：這條只是狀態提示，不值得為它造成不適 */
+.ui-next-ribbon span::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent);
+  animation: ui-next-ribbon-sweep 2.2s ease-in-out infinite;
+}
+@keyframes ui-next-ribbon-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .ui-next-ribbon span::after { animation: none; } }
+/* 緞帶蓋在右上角，而各頁 topbar 的動作鈕（「建立任務」「← 返回」）正好在那裡。
+   pointer-events:none 讓按鈕還按得到，但視覺被壓住一半仍然是壞的。掛在 shell 上的
+   has-ribbon 只在批次執行期間存在，平時完全不影響版面——所以不必為它調整任何頁面的
+   固定間距，也不會有「明明沒在跑卻空一塊」的副作用。 */
+/* ⚠ 用屬性選擇器而不是列出四種頁首 class（實測有 .ui-next-page-head／.topbar／
+   .page-header／.page-header-inner 四種）：列死清單的話，之後新增的頁只要換個 class 名
+   就漏掉，而症狀是「某一頁的按鈕在批次執行時被壓住」這種沒人會回報的小事。
+   :not([class*="-inner"]) 排掉內層容器——父子都加就變成右邊空一大塊。 */
+.ui-next-shell.has-ribbon .ui-next-main [class*="page-head"]:not([class*="-inner"]),
+.ui-next-shell.has-ribbon .ui-next-main [class*="topbar"] { padding-right: 118px; }

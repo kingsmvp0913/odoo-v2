@@ -397,6 +397,10 @@
         commandTrigger: null,
         toolsTrigger: null,
         accountTrigger: null,
+        // 改善批次在跑：全站右上角掛緞帶。旗標唯一來源是 nightly-fix 的 enterMaintenance
+        // （實查 enterMaintenance 的呼叫端只有它一支），所以文案可以直說「改善執行中」。
+        maintenance: false,
+        _maintTimer: null,
         projects: [],
         sidebarChatProjects: [],
         sidebarProjectsError: "",
@@ -511,6 +515,11 @@
       },
       async mounted() {
       if (!Api.isLoggedIn()) return;
+      // 批次跑幾十分鐘到幾小時，期間任務全部暫停推進、平台隨時可能重啟。這件事以前只有
+      // 任務頁與任務列表各有一條橫幅（實測太不明顯），改成全站緞帶。輪詢而非只查一次：
+      // 批次多半是排程在半夜自己起跑的，開著頁面的人不會重新整理。
+      this.pollMaintenance();
+      this._maintTimer = setInterval(() => this.pollMaintenance(), 15000);
       try {
         const [me, projects, sidebarChatProjects] = await Promise.all([
           Api.get("auth/me"),
@@ -583,6 +592,7 @@
       document.removeEventListener("pointerdown", this._onOutsidePointer);
       window.removeEventListener("ui-next:project-preload", this._onProjectPreload);
       if (this._sockTimer) { clearInterval(this._sockTimer); this._sockTimer = null; }
+      if (this._maintTimer) { clearInterval(this._maintTimer); this._maintTimer = null; }
       if (this._onSidebarTaskUpdated && window._socket) window._socket.off("task:updated", this._onSidebarTaskUpdated);
     },
     // 背景捲動鎖定集中在這裡：這兩個狀態各有好幾處會改（按鈕、⌘K、Escape、
@@ -616,6 +626,15 @@
         const at = new Date(value);
         const time = at.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
         return at.toDateString() === new Date().toDateString() ? time : `${at.getMonth() + 1}/${at.getDate()} ${time}`;
+      },
+      // ⚠ 這個方法不能排在 methods 的第一個：frontend-ui-next.test.js 的用量卡那支用
+      // 「methods: { 之後緊接 formatUsageUpdated」來定位，插到前面會讓它紅在一個與用量卡
+      // 完全無關的地方。
+      // 查詢失敗就保留上一個狀態：閃一下又回來比顯示錯的更難看，而且這只是狀態提示，
+      // 少更新一輪（15 秒）沒有代價。
+      async pollMaintenance() {
+        try { this.maintenance = !!(await Api.get("maintenance")).maintenance; }
+        catch { /* 保留上一個狀態 */ }
       },
       // 對話僅在展開專案時才讀，避免登入就對每個專案發請求；標題由既有 Chat API 回傳。
       // 收合不清 cache，所以重複展開同一個專案只會打一次 API。
@@ -1120,7 +1139,7 @@
     },
     template: `
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
-      <div v-else class="ui-next-shell" data-ui="next">
+      <div v-else class="ui-next-shell" :class="{ 'has-ribbon': maintenance }" data-ui="next">
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
         <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" :aria-expanded="mobileSidebarOpen ? 'true' : 'false'" @click="openMobileSidebar($event)"><ui-next-icon name="grid"/></button>
         <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="closeMobileSidebar(); closePopovers()"></div>
@@ -1153,6 +1172,13 @@
           </div>
         </aside>
         <main id="ui-next-main" class="ui-next-main" tabindex="-1"><router-view :key="$route.path" /></main>
+        <!-- 改善批次跑起來時整個平台會暫停推進任務、而且可能在任何一刻重啟，這是全站狀態。
+             原本只有任務頁與任務列表各掛一條橫幅，實測太不明顯。緞帶蓋在右上角、pointer-events
+             關掉所以不擋底下的按鈕。role=status 讓螢幕閱讀器在它出現時報一次，不搶焦點。 -->
+        <div v-if="maintenance" class="ui-next-ribbon" role="status" aria-live="polite"
+          title="已核准的改善提案正在自動改碼、跑測試、審核後合併。期間任務暫停推進，平台可能重啟。">
+          <span>改善執行中</span>
+        </div>
         <!-- 掛在 shell 而不是 aside 內：側欄是 overflow:hidden，放進去會被裁掉一半。 -->
         <ReleaseModal v-if="releaseId" :key="releaseId" :project-id="releaseId" @close="releaseId=null" />
         <div v-if="commandOpen" ref="commandPalette" class="ui-next-command-backdrop" @click.self="closeCommand" @keydown.esc="closeCommand" @keydown.down.prevent="moveCommand(1)" @keydown.up.prevent="moveCommand(-1)" @keydown="trapCommandFocus">

@@ -4,7 +4,7 @@
   window.UiNextTaskListView = Vue.defineComponent({
     name: "UiNextTaskListView",
     components: { StatusBar: UiNextStatusBar, UiNextIcon: window.UiNextIcon },
-    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, addError: "", addTrigger: null, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null, showAllUsers: false, ownerFilter: "", users: [], maintenance: false }; },
+    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, addError: "", addTrigger: null, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null, showAllUsers: false, ownerFilter: "", users: [] }; },
     computed: {
       isAdmin() { return window.UserStore.role === "admin"; },
       // ownerFilter 與 showAllUsers 都刻意不進網址列：它們是「這次看別人任務」的臨時狀態，
@@ -44,7 +44,7 @@
       if (["needs_action", "pending", "paused", "all", "archived"].includes(tab)) this.filter = tab;
       this.projectFilter = query.project || ""; this.statusFilter = query.status || ""; this.sourceFilter = query.source || "";
       this.search = query.q || ""; this.sort = query.sort || "updated_desc"; this.releaseFilter = query.release || "all";
-      await Promise.all([this.load(), Api.get("projects").then((projects) => { this.projects = projects || []; }).catch(() => {}), Api.get("maintenance").then((r) => { this.maintenance = r.maintenance; }).catch(() => {})]);
+      await Promise.all([this.load(), Api.get("projects").then((projects) => { this.projects = projects || []; }).catch(() => {})]);
     },
     // SocketManager 只留得住一個 callback：離開頁面沒解除的話，下一頁的即時事件仍會打這一頁的 refresh。
     mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
@@ -55,7 +55,7 @@
       // users 在這裡才抓不在 created()：UserStore.role 由 router.afterEach 非同步填，
       // created() 當下 isAdmin 還是 false，那時抓就永遠抓不到，使用者下拉會是空的。
       async toggleAllUsers() { this.showAllUsers = !this.showAllUsers; if (!this.showAllUsers) this.ownerFilter = ""; else if (!this.users.length) Api.get("admin/users").then((users) => { this.users = users || []; }).catch(() => {}); await this.load(); },
-      refresh() { Api.get(this.showAllUsers ? "tasks?all=true" : "tasks").then((data) => { this.tasks = data.tasks || data; if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount; }).catch(() => {}); if (this.filter === "archived") Api.get("tasks?archived=true").then((data) => { this.archivedTasks = data.tasks || data; }).catch(() => {}); Api.get("maintenance").then((r) => { this.maintenance = r.maintenance; }).catch(() => {}); },
+      refresh() { Api.get(this.showAllUsers ? "tasks?all=true" : "tasks").then((data) => { this.tasks = data.tasks || data; if (!this.showAllUsers) window.needsActionCount.value = this.needsActionCount; }).catch(() => {}); if (this.filter === "archived") Api.get("tasks?archived=true").then((data) => { this.archivedTasks = data.tasks || data; }).catch(() => {}); },
       syncQuery() {
         const query = { ...this.$route.query, tab: this.filter };
         const values = { project: this.projectFilter, status: this.statusFilter, source: this.sourceFilter, q: this.search, sort: this.sort === "updated_desc" ? "" : this.sort, release: this.releaseFilter === "all" ? "" : this.releaseFilter };
@@ -87,7 +87,6 @@
 <button class="ui-next-primary ui-next-cta" @click="openAdd($event)"><ui-next-icon name="plus"/>建立任務</button>
 </div>
 </header>
-<div v-if="maintenance" class="ui-next-maintenance-banner">系統維護中，任務暫停推進</div>
 <div v-if="showAdd" class="ui-next-task-modal-backdrop" @click.self="closeAdd" @keydown="trapAddFocus">
 <section ref="taskCreateModal" class="ui-next-task-modal ui-next-form-modal" role="dialog" aria-modal="true" aria-labelledby="ui-next-task-create-title">
 <header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" class="ui-next-modal-close" aria-label="關閉建立任務視窗" @click="closeAdd"><ui-next-icon name="close"/></button></header>

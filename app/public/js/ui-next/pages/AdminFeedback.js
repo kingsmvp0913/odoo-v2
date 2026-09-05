@@ -18,7 +18,9 @@
         bodyOpen: {},      // { [id]: true } 展開這一列的原文全文與翻譯結果
         bodyLong: {},      // { [id]: true } 這一列長到需要收合（量 DOM 得來，見 measureBodies）
         removing: {},      // { [id]: true } 刪除送出中
-        startingBatch: false, // 手動觸發改善批次送出中
+        startingBatch: false, // 手動觸發改善批次送出中（只是「送出這一下」，不是整個批次）
+        batchRunning: false,  // 批次正在跑（輪詢 /api/maintenance 得知）
+        _batchTimer: null,
       };
     },
     computed: {
@@ -26,9 +28,16 @@
       // 那裡直接讀 STATUS_LABEL 常數，留著 computed 就是沒人讀的死碼。
       layerLabel() { return LAYER_LABEL; },
     },
-    async created() { await this.load(); await this.loadHealth(); },
+    async created() {
+      await this.load(); await this.loadHealth();
+      // 批次可能是別人按的、或是每晚 22:00 排程跑的——不能只在「自己按下去」之後才輪詢，
+      // 否則同一件事在不同人的畫面上有不同的樣子。一進頁面就開始盯。
+      await this.pollBatch();
+      this._batchTimer = setInterval(() => this.pollBatch(), 15000);
+    },
     beforeUnmount() {
       Object.values(this.attachUrls).forEach(url => URL.revokeObjectURL(url));
+      if (this._batchTimer) clearInterval(this._batchTimer);
     },
     methods: {
       pillClass(status) { return STATUS_PILL[status] || 'pill-info'; },
@@ -87,9 +96,27 @@
         this.startingBatch = true;
         try {
           await Api.post('admin/nightly-fix', {});
-          showToast('改善批次已開始，稍後到健檢紀錄看結果', 'success');
+          showToast('改善批次已開始', 'success');
+          // 端點是 fire-and-forget，回來得很快；不立刻查一次的話，畫面要等到下一個
+          // 15 秒 tick 才會出現「執行中」，中間那段看起來像按了沒反應。
+          await this.pollBatch();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.startingBatch = false; }
+      },
+      // 批次在跑的期間會掛上維護旗標（nightly-fix 開頭 enterMaintenance），這是唯一能從外面
+      // 看出「正在跑」的訊號——批次前段（等在飛任務排空、triage）還沒建 health_check_runs 列，
+      // 只看那張表會有一段長達十幾分鐘的空窗，畫面上完全沒有動靜。
+      // ⚠ 旗標本身只說「系統在維護中」，不保證是改善批次（理論上其他東西也能掛），
+      // 所以文案不寫死成「你按的那個批次」。
+      async pollBatch() {
+        let running = false;
+        try { running = !!(await Api.get('maintenance')).maintenance; }
+        catch { return; }   // 單次查詢失敗保留上一個狀態，不要閃一下又回來
+        const was = this.batchRunning;
+        this.batchRunning = running;
+        // 跑完那一刻要把清單重抓：提案狀態會變成「已完成」，不重抓就停在舊的
+        if (was && !running) { showToast('改善批次已結束', 'success'); await this.load(); }
+        else if (running) { await this.load(); }
       },
       async remove(r) {
         const what = r.triage_title || (r.content || '').slice(0, 30);
@@ -212,6 +239,9 @@
                在深淺兩色主題下都讀得到（配色一律走變數，不寫死顏色）。 -->
           <a href="#/admin/health" style="margin-left:var(--space-2);color:var(--text);text-decoration:underline">看健檢紀錄 →</a>
         </div>
+        <!-- 這裡不再自己掛橫幅：「批次在跑」已經由全站右上角的緞帶負責（見 UiNextApp.js
+             的 .ui-next-ribbon）。同一件事在兩處各講一次，兩邊文案遲早會漂掉。
+             這一頁只保留跟「按鈕」有關的本地回饋：執行中時鈕變成「執行中…」並鎖住。 -->
         <div class="settings-section">
           <div class="arj-header-row">
             <!-- 後端 GET /api/admin/feedback 有 LIMIT 200（feedback-routes.js），rows.length 在
@@ -226,9 +256,11 @@
             </select>
             <!-- 只在真的有東西可跑時出現：沒有已核准的提案時按下去，批次會在「沒有候選」
                  那個早退分支立刻結束，連一列紀錄都不會留，看起來就像按了沒反應。 -->
-            <button v-if="rows.some(r => r.status === 'approved')" class="btn btn-outline btn-sm"
-              :disabled="startingBatch" @click="runBatch"
-              title="把已核准的提案送去自動改碼、跑測試、審核後合併（可能重啟平台）">立即執行改善</button>
+            <button v-if="rows.some(r => r.status === 'approved') || batchRunning" class="btn btn-outline btn-sm"
+              :disabled="startingBatch || batchRunning" @click="runBatch"
+              title="把已核准的提案送去自動改碼、跑測試、審核後合併（可能重啟平台）">
+              <span v-if="batchRunning" class="spinner"></span>{{ batchRunning ? '執行中…' : '立即執行改善' }}
+            </button>
           </div>
           <div class="table-wrap table-cards-sm">
             <table class="data-table">
