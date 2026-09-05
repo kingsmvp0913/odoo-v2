@@ -1159,6 +1159,11 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-task-action,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-q-tabs,
 .ui-next-task-detail-grid.is-tab-conversation .ui-next-thread-hint{width:min(100%,777px);margin:-6px 0 0 max(0px,calc((100% - 812px) / 2))}
+/* ⚠ 上面的 margin shorthand 把分頁列的 margin-bottom 一起清成 0，蓋掉 base 規則
+   （.ui-next-q-tabs{margin:0 auto -14px}）用來抵掉 .ui-next-task-side 的 grid gap:14px 的負值，
+   於是分頁與動作面板之間露出 14px 空白。只補回 margin-bottom（不動 shorthand 設好的置左偏移），
+   分頁才會像 Chrome 分頁一樣貼在框上緣。 */
+.ui-next-task-detail-grid.is-tab-conversation .ui-next-q-tabs{margin-bottom:-14px}
 
 /* ⚠ chat 的頭像跑到訊息上方：`> article.ai > *{grid-column:2}`（0,2,2）壓過
    `.ui-next-msg-avatar{grid-column:1}`（0,1,0），頭像被推進第 2 欄、擠到訊息上面一列。
