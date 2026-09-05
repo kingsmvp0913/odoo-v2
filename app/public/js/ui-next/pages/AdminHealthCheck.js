@@ -118,6 +118,10 @@
       // 「這一輪根本沒跑完」的地方。不特判的話 run#19（status='error'、零 finding）會顯示成
       // 「—」，跟「今天本來就沒事」長得一模一樣。
       histSev(h) {
+        // 還在跑的那一輪（含夜間改善批次，它一開跑就先建列）：等級要等跑完才算得出來，
+        // 不特判的話 severity_rank 是 NULL、這一格顯示「—」，跟「跑完了但什麼都沒查到」
+        // 長得一模一樣——使用者實際回報「批次看不出來有沒有跑」就是卡在這裡。
+        if (h.status === 'running') return { label: '執行中', color: 'var(--info)' };
         if (h.status === 'error') return HC_SEV.error;
         if (h.error_count > 0) return HC_SEV.error;
         if (h.severity_rank === null || h.severity_rank === undefined) return null;
