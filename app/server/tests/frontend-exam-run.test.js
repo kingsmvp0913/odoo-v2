@@ -159,3 +159,14 @@ test('即時更新走 SocketManager，不要自己摸 window._socket', () => {
 test('頁面依上傳順序由上而下，先傳的在最上面', () => {
   expect(view).toContain('.sort((a, b) => a.id - b.id)');
 });
+
+// 本頁沒有題庫選擇器，bankId 只在 created 設一次＝「最新的那個」只在開頁那一刻算。
+// 頁面開著時新建的題庫永遠不會出現，而症狀長得像 socket 壞掉（2026-09-05 使用者回報）。
+test('每次 refresh 都重抓題庫清單並跟到最新的那一場', () => {
+  // 抓題庫清單必須在 refresh() 裡（每輪都會跑），不能只留在 created()
+  const refreshBody = view.slice(view.indexOf('async refresh()'));
+  expect(refreshBody).toContain("this.banks = await Api.get('exam/banks')");
+  expect(refreshBody).toContain('this.bankId = latest');
+  // created 不得自己再抓一份，否則「跟到最新」有兩份實作會漂移
+  expect(view.match(/Api\.get\('exam\/banks'\)/g)).toHaveLength(1);
+});

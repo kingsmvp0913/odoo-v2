@@ -14,11 +14,10 @@ window.UiNextExamRunView = Vue.defineComponent({
     };
   },
   async created() {
-    try {
-      this.banks = await Api.get('exam/banks');
-      if (this.banks.length) { this.bankId = this.banks[0].id; await this.refresh(); }
-    } catch (e) { this.err = e.message; }
-    finally { this.loading = false; }
+    // 題庫清單與資料都在 refresh 裡抓，這裡不要再抓一次——兩處各抓一份的話，
+    // 「跟到最新」的規則就有兩份實作，改了一邊另一邊會靜默走舊行為。
+    await this.refresh();
+    this.loading = false;
   },
   mounted() {
     this._onProgress = () => this.queueRefresh();
@@ -73,6 +72,19 @@ window.UiNextExamRunView = Vue.defineComponent({
   },
   methods: {
     async refresh() {
+      try {
+        // 題庫清單每輪都重抓。本頁沒有選擇器，看的永遠是「最新的那一場」——
+        // 但 created 只算一次，頁面開著時新建的題庫就永遠不會出現。
+        // 症狀長得像 socket 壞掉：事件有到、refresh 也有跑，只是一直查同一個舊題庫。
+        this.banks = await Api.get('exam/banks');
+        const latest = this.banks.length ? this.banks[0].id : null;
+        if (latest !== this.bankId) {
+          this.bankId = latest;
+          // 換場了，上一場的草稿留著會對到別場的 attempt id
+          this.finalDraft = {}; this.savingFinal = {};
+          this.uploads = []; this.attempts = [];
+        }
+      } catch (e) { this.err = e.message; }
       if (!this.bankId) return;
       try {
         const data = await Api.get(`exam/dashboard?bank=${this.bankId}`);
