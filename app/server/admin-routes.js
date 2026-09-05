@@ -736,7 +736,9 @@ function registerRoutes(app) {
       const { rows } = await query(
         // review_notes 是 fix-review 的推理過程——無人監督閘門唯一的人類稽核材料。漏掉它前端
         // 的 v-if 會靜默不渲染、不拋錯，畫面看起來只是「這條沒有審查說明」，零徵狀。
-        `SELECT id, finding_id, status, branch, notes, review_notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at
+        // verify_notes 同理，是合併前那道複檢（fix-verify）留下的唯一紀錄；它有權直接改碼，
+        // 「它到底動了什麼、為什麼」只在這一欄裡。
+        `SELECT id, finding_id, status, branch, notes, review_notes, verify_notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at
            FROM finding_fixes WHERE finding_id=$1 ORDER BY id DESC LIMIT 1`, [req.params.id]);
       res.json(rows[0] || null);
     } catch (err) { res.status(500).json({ error: err.message }); }

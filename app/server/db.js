@@ -1046,6 +1046,17 @@ async function migrate() {
     // 記憶體裡的 group（feedback.finding_id 是**成功後**才回填的，拿它反查是雞生蛋）。
     // 沒有這一欄就只能整條從頭重做：重付 triage、重跑兩次全套測試，換到同一份已經寫好的 diff。
     { table: 'finding_fixes', col: 'members', sql: 'ALTER TABLE finding_fixes ADD COLUMN members JSONB' },
+    // 改碼**之前**在同一個工作區量到的測試基線（見 finding-fix.js 的 measureTests）。
+    // ⚠ 存下來是因為複檢那一關（fix-verify）改完碼要再比一次「有沒有退步」，而它跟 runFix 是
+    // 不同的行程／不同的呼叫，拿不到那個區域變數。從 test_result 那行字回頭 parse 也行，但那是
+    // 給人看的文案，改一次措辭就靜默解析失敗——複檢會變成「量了但比不出來」，而不確定一律
+    // 當退步 ⇒ 每一份修正都被擋下，且畫面上只看得到一句 unknown。
+    { table: 'finding_fixes', col: 'baseline_failed', sql: 'ALTER TABLE finding_fixes ADD COLUMN baseline_failed INTEGER' },
+    { table: 'finding_fixes', col: 'baseline_passed', sql: 'ALTER TABLE finding_fixes ADD COLUMN baseline_passed INTEGER' },
+    // 複檢 agent（fix-verify）的推理過程，比照 review_notes：pass／fail 兩條路都寫。
+    // 這一關是合併進 master 前的最後一道，且同樣無人監督——沒有這欄，事後只查得到「它擋了」
+    // 或「它放行了」，查不到為什麼。
+    { table: 'finding_fixes', col: 'verify_notes', sql: 'ALTER TABLE finding_fixes ADD COLUMN verify_notes TEXT' },
     // 「上一次自動修正試到哪、為什麼沒過」。⚠ 在此之前這個原因只進 console.error，而本平台的
     // pipeline console 不落任何檔（見 rules）＝等於沒寫：畫面上只看得到 fix_attempts 這個裸計數，
     // 使用者看到的是自己核准的意見一直停在「已核准」，完全不知道昨晚試過、更不知道卡在哪。

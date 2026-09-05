@@ -25,6 +25,9 @@ const MCP_PROFILES = {
   // 健檢提案的「修這條」：與 coding 同性質——改的是平台自己的 Node／Vue 程式，會碰到 express、
   // jest、pg、socket.io 這些外部 API。沒有文件就只能憑記憶猜，而猜錯不一定被既有測試接住。
   platform_fix: 'context7.json',
+  // 合併前複檢：跟 platform_fix 同一個工作區、同一類程式碼，而且它有權直接動手修。
+  // 「這個 express／jest／Vue 的用法對不對」正是它要判的東西之一，沒有文件就只能憑記憶猜。
+  fix_verify: 'context7.json',
 };
 // 「刻意不掛」也要具名：漏登記與決定不掛在程式上長得一模一樣（都是查不到 key → none.json），
 // 分不出來就沒有東西擋得住下一個新關卡重蹈 spec_tour 的覆轍。新增 stage 時兩張表挑一張填，

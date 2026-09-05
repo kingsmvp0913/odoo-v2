@@ -5,6 +5,7 @@ const { AUTO_LAYERS, HEALTH_SEVERITIES, inAutoFixScope, normalizeLayer } = requi
 const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
 const { triageOne, mergeCandidates } = require('./feedback-triage');
 const { reviewFix } = require('./fix-review');
+const { verifyFix } = require('./fix-verify');
 const { runFix, adoptFix, applyFix, selfContainerName } = require('./finding-fix');
 
 /**
@@ -562,7 +563,28 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
     // review_notes：fix-review 的推理過程，approve／reject 兩條路徑都要寫——這是無人監督閘門
     // 唯一的人類事後稽核材料（見跨單元契約 1；管理頁顯示由單元 3 負責）。
     await query(`UPDATE finding_fixes SET review_notes=$2 WHERE id=$1`, [fixId, verdict.notes || null]);
-    if (verdict.verdict === 'approve') {
+    // 審核過了還不能合併：先進複檢。fix-review 只看得到 diff 的文字，看不到呼叫端、看不到
+    // 被改檔案的其餘部分、不能執行任何東西——「這份 diff 自己沒毛病」與「它放進整個 repo 之後
+    // 是對的」是兩件事。複檢跑在工作區內，讀得到全部檔案也能動手修（見 fix-verify.js）。
+    // 兩關的失敗在這裡走同一條落地路徑（rejected ＋ 重改一次），所以用同一個變數帶原因。
+    let blocked = verdict.verdict === 'approve' ? null : (verdict.reason || '審查未通過');
+    if (!blocked) {
+      await setStage(cand.members, '複檢中');
+      const vr = await verifyFix(fixId, cand);
+      // verify_notes 比照 review_notes：pass／fail 兩條路都寫，這是這一關唯一的事後稽核材料。
+      await query(`UPDATE finding_fixes SET verify_notes=$2 WHERE id=$1`, [fixId, vr.notes || null]);
+      // 複檢動過手就把 diff／測試結果換成複檢後的那一份：合併進 master 的是這一份，
+      // 管理頁給人看的也該是這一份（舊值會讓人審到一份已經不存在的改動）。
+      if (vr.changed && vr.diff) {
+        await query(`UPDATE finding_fixes SET diff=$2, test_result=$3 WHERE id=$1`,
+          [fixId, vr.diff, vr.testResult || null]);
+      }
+      if (!vr.pass) blocked = `複檢未通過：${vr.reason || '未附理由'}`;
+      else if (vr.changed) {
+        console.log('[NIGHTLY-FIX] 提案 #%d 複檢時發現問題並已修正：%s', cand.findingId, vr.reason || '');
+      }
+    }
+    if (!blocked) {
       if (!pushUserId) {
         await adoptFix(fixId, startedBy);
         console.error('[NIGHTLY-FIX] 未設定 CLI 推送身分（teams_settings.cli_push_user_id 為空），'
@@ -585,23 +607,22 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
       return { merged: true, fixId };
     }
 
-    // reviewFix 只回 verdict、不落地。狀態也要一起改掉：只寫 reject_reason 會讓這筆停在 ready，
-    // 管理頁看起來像「還可以採用」。
+    // reviewFix／verifyFix 都只回 verdict、不落地。狀態也要一起改掉：只寫 reject_reason 會讓
+    // 這筆停在 ready，管理頁看起來像「還可以採用」。
     await query(
       `UPDATE finding_fixes SET status='rejected', reject_reason=$2, finished_at=NOW() WHERE id=$1`,
-      [fixId, verdict.reason || '審查未通過']);
-    console.log('[NIGHTLY-FIX] 提案 #%d 第 %d 次審核未通過：%s',
-      cand.findingId, attempt + 1, verdict.reason || '（未附理由）');
+      [fixId, blocked]);
+    console.log('[NIGHTLY-FIX] 提案 #%d 第 %d 次未通過：%s', cand.findingId, attempt + 1, blocked);
 
     attempt += 1;
     if (attempt > NIGHTLY_FIX_MAX_RETRY) {
-      return { merged: false, reason: `審核連續 ${attempt} 次未通過：${verdict.reason || '未附理由'}` };
+      return { merged: false, reason: `連續 ${attempt} 次未通過：${blocked}` };
     }
 
     // 退回改一次：開新的一筆 finding_fixes 重跑（不覆寫舊列——finding_fixes 本來就是為
     // 「一條提案可試修多次」設計的，覆寫會讓「上一次試了什麼、為什麼失敗」消失）。
     fixId = await createFixRow(cand.findingId, startedBy, cand);
-    await setStage(cand.members, '改碼與跑測試中（審核退回，重改一次）');
+    await setStage(cand.members, '改碼與跑測試中（未通過，重改一次）');
     await runFix(fixId, { findingId: cand.findingId, startedBy });
   }
 }

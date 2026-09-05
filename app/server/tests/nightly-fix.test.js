@@ -12,6 +12,10 @@ jest.mock('../pipeline/feedback-triage', () => ({
   mergeCandidates: jest.fn(),
 }));
 jest.mock('../pipeline/fix-review', () => ({ reviewFix: jest.fn() }));
+// 合併前複檢：審核過了還要再過這一關才 adopt（見 pipeline/fix-verify.js）。沒 mock 的話它會
+// 真的去 spawn claude CLI——新增會被編排器呼叫的外部依賴一定要補 mock，否則整支測試不再 hermetic
+// （rules/testing #23）。
+jest.mock('../pipeline/fix-verify', () => ({ verifyFix: jest.fn() }));
 jest.mock('../pipeline/finding-fix', () => ({
   runFix: jest.fn(),
   adoptFix: jest.fn(),
@@ -26,6 +30,7 @@ const { newDb } = require('pg-mem');
 const { getInflightInfo } = require('../pipeline/runner');
 const { triageOne, mergeCandidates } = require('../pipeline/feedback-triage');
 const { reviewFix } = require('../pipeline/fix-review');
+const { verifyFix } = require('../pipeline/fix-verify');
 const { runFix, adoptFix, applyFix, selfContainerName } = require('../pipeline/finding-fix');
 
 let dbModule, nightlyFix, maintenance, userId;
@@ -61,6 +66,9 @@ beforeEach(async () => {
   jest.clearAllMocks();
   getInflightInfo.mockReturnValue([]);
   selfContainerName.mockResolvedValue('odoo-v2');
+  // 複檢預設通過且沒動手：這支測的是編排器的路由，複檢自己的判準在 fix-verify.test.js。
+  // 要驗「複檢擋下」的那幾支各自覆寫這個回傳值。
+  verifyFix.mockResolvedValue({ pass: true, changed: false, reason: '複檢通過', notes: '複檢說明' });
   mockExecFile.mockImplementation((...args) => { const cb = args[args.length - 1]; cb(null, { stdout: '', stderr: '' }); });
   setClock(BASE_ISO);
   nightlyFix._setClockForTesting(() => new Date(clockMs));
@@ -495,6 +503,55 @@ test('兩者都過 → 依序呼叫 adoptFix、applyFix，且 applyFix 收到非
   expect(inflightArg.length).toBeGreaterThan(0);
   expect(adoptFix.mock.invocationCallOrder[0]).toBeLessThan(applyFix.mock.invocationCallOrder[0]);
   expect(result.applied).toBe(1);
+});
+
+// 複檢是合併進 master 前的最後一道，且排在 adopt 之前——排在之後就沒有意義了：adopt 會把
+// commit 寫進分支、applyFix 緊接著合併，等碼進了 master 再說「不該合併」已經來不及。
+test('審核過了但複檢擋下 → 不 adopt、不 merge，改走重跑一次的路徑', async () => {
+  const findingId = await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  verifyFix.mockResolvedValue({ pass: false, changed: false, reason: '呼叫端沒跟著改', notes: 'n' });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(adoptFix).not.toHaveBeenCalled();
+  expect(applyFix).not.toHaveBeenCalled();
+  expect(runFix).toHaveBeenCalledTimes(2);   // 比照審核 reject：退回改一次
+  expect(result.applied).toBe(0);
+  const { rows } = await dbModule.query(
+    'SELECT status, reject_reason FROM finding_fixes WHERE finding_id=$1 ORDER BY id', [findingId]);
+  // 原因要看得出是哪一關擋的：兩關的失敗都落在 reject_reason，混在一起就查不出是誰判的
+  expect(rows[0].status).toBe('rejected');
+  expect(rows[0].reject_reason).toContain('複檢未通過');
+});
+
+test('複檢在合併之前執行（順序錯了等於沒有這一關）', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(verifyFix.mock.invocationCallOrder[0]).toBeLessThan(adoptFix.mock.invocationCallOrder[0]);
+  expect(verifyFix.mock.invocationCallOrder[0]).toBeLessThan(applyFix.mock.invocationCallOrder[0]);
+});
+
+test('複檢動手改過 → diff 與測試結果換成複檢後那一份（管理頁與合併內容要一致）', async () => {
+  const findingId = await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  verifyFix.mockResolvedValue({
+    pass: true, changed: true, notes: 'n', reason: '補上漏改的呼叫端',
+    diff: 'diff --git a/app/server/x.js b/app/server/x.js\n+複檢後',
+    testResult: 'pass（基線 1 failed／10 passed → 改後 1 failed／11 passed）',
+  });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const { rows } = await dbModule.query(
+    'SELECT diff, test_result, verify_notes FROM finding_fixes WHERE finding_id=$1 ORDER BY id DESC LIMIT 1',
+    [findingId]);
+  expect(rows[0].diff).toContain('複檢後');
+  expect(rows[0].test_result).toContain('改後 1 failed／11 passed');
+  expect(rows[0].verify_notes).toBe('n');   // 稽核材料：它動了什麼、為什麼，只在這一欄
 });
 
 test('cli_push_user_id 為 null → 停在 adopted、不呼叫 applyFix、來源不標 done', async () => {

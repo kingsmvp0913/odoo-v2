@@ -54,12 +54,13 @@ const DENY = [
   { re: /^app\/server\/pipeline\/finding-fix\.js$/,  why: '守門碼本體，含這份 ALLOW／DENY 清單' },
   { re: /^app\/server\/pipeline\/nightly-fix\.js$/,  why: '夜間批次與三道保險絲' },
   { re: /^\.claude\/agents\/fix-review\.md$/,        why: '審這份修正的那個 agent 的判準' },
+  { re: /^\.claude\/agents\/fix-verify\.md$/,        why: '合併前最後一道複檢的判準' },
   { re: /^\.claude\/agents\/feedback-triage\.md$/,   why: '入口的翻譯與 understandable 門檻' },
   // 上面四支擋的是 .md／守門本體，但那些判準有一半在 JS 裡：fix-review.js 的「解析不出來一律
   // reject」與「prompt 不得帶 notes」契約、feedback-triage.js 的 understandable 判斷、
   // retire-prefix.js（飢餓防線的前綴）、maintenance.js、ui-preview.js——.md 只是判準的一半，
   // 守門碼的程式半邊不能被自動改掉。
-  { re: /^app\/server\/pipeline\/(fix-review|feedback-triage|ui-preview|maintenance|retire-prefix)\.js$/,
+  { re: /^app\/server\/pipeline\/(fix-review|fix-verify|feedback-triage|ui-preview|maintenance|retire-prefix)\.js$/,
     why: '守門碼的程式半邊——.md 只是判準的一半' },
 ];
 
@@ -247,6 +248,11 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     // 「新紅燈」與「既有紅燈」分得開——沒有它，自動套用那條路只能全有或全無。
     const baseline = await measureTests(worktree);
     unlinkNodeModules(worktree);
+    // 基線落 DB：複檢那一關（fix-verify）改完碼要用同一個基線再比一次退步，而它拿不到這個
+    // 區域變數。量不到（測試沒跑起來）時寫 null——compareToBaseline 看到 null 會判 unknown，
+    // 而 unknown 一律當退步，方向是安全的。
+    await query('UPDATE finding_fixes SET baseline_failed=$2, baseline_passed=$3 WHERE id=$1',
+      [fixId, baseline.failed, baseline.passed]);
 
     const agent = loadAgent('platform-fix');
     const prompt = agent.render({
@@ -479,4 +485,8 @@ async function applyFix(fixId, userId, inflight = []) {
 module.exports = {
   runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer,
   selfContainerName, compareToBaseline, parseJestCounts, measureTests,
+  // 複檢那一關（fix-verify.js）在同一個工作區裡改碼、重跑測試、重取 diff，要用同一套
+  // 相依連結與 git 呼叫。不 export 的話它只能自己複製一份，兩份會各自漂移——而其中一份
+  // 漏掉「先 unlink 再刪」這種順序性細節時，症狀是遞迴刪沿著 junction 刪到主 repo。
+  linkNodeModules, unlinkNodeModules, git,
 };
