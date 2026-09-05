@@ -320,8 +320,13 @@ window.UiNextExamRunView = Vue.defineComponent({
         if (this.hasAnswer(q.review_answer, letter)) bits.push('審查主張這個');
         if (this.hasAnswer(this.current(q), letter)) bits.push('你這次填的');
       }
+      // 已證明答錯要講得出「怎麼證明的」。只顯示一個 0 的話跟「系統覺得不可能」
+      // 分不出來，而這兩件事的可信度差很多。
+      if ((q.wrong_answers || []).some(w => Array.isArray(w) && w.length === 1 && w[0] === letter)) {
+        bits.push('已證明答錯（由各場考試的官方章節錯題數推出）');
+      }
       if (this.hasAnswer(q.history_answer, letter)) {
-        bits.push(q.history_wrong ? '上次選這個，已知大概率錯' : '上次也選這個');
+        bits.push(q.history_wrong ? '上次選這個，你標過大概率錯' : '上次也選這個');
       }
       return bits.join('・');
     },

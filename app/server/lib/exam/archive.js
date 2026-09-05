@@ -17,6 +17,7 @@
 // 未作答（answer_final 是 NULL）的題必須跳過：沒有答案就沒有東西可推，硬填等於
 // 憑空捏造正解。而且要具名回報——靜靜少掉兩題，事後沒有任何線索看得出來。
 const { recomputeConfidence } = require('./worker');
+const { applyDeduction } = require('./deduce');
 
 const clean = v => (v == null ? null : String(v).trim() || null);
 const hasAnswer = a => Array.isArray(a) && a.length > 0;
@@ -174,6 +175,17 @@ async function archiveBank(db, { bankId, pages = [] }) {
   const bank = (await db.query(
     `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
   if (bank) {
+    // 推導要排在重算信心度**之前**：它可能推出新的官方答案，而那會讓那些題的
+    // 信心度變成 100。順序反了的話畫面上要等到下一次歸檔才會更新。
+    //
+    // 這一步做的是上面那段做不到的事：上面只處理「這章 0 題錯」，推導則把各場
+    // 考試的錯題數湊成聯立方程式，解得出「第一場錯的那一題到底是哪一題」。
+    const d = await applyDeduction(db, bank.odoo_version);
+    stat.deduced = { locked: d.locked, marked: d.marked };
+    // 矛盾一定要浮到畫面上。推導在矛盾時什麼都不寫（見 deduce.js），
+    // 靜靜跳過的話使用者只會覺得「推導沒作用」，而真因是他成績單抄錯了一格。
+    if (d.contradictions.length) stat.conflicts.push(...d.contradictions);
+
     const { notes } = await recomputeConfidence(db, bank);
     stat.notes = notes;
     await db.query(`UPDATE exam_banks SET status = 'ready' WHERE id = $1`, [bankId]);

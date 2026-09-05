@@ -334,7 +334,8 @@ function registerRoutes(app) {
     const attempts = (await query(`
       SELECT a.id AS attempt_id, a.upload_id, a.page, a.no, a.answer_their, a.answer_final,
              a.responder, a.created_at, i.id AS item_id, i.question_en, i.question_zh,
-             i.options, i.qtype, i.answer_official, i.official_from, i.confidence, i.history_wrong
+             i.options, i.qtype, i.answer_official, i.official_from, i.confidence, i.history_wrong,
+             i.wrong_answers
         FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id
        WHERE a.bank_id=$1 ORDER BY a.id`, [bankId])).rows;
 
@@ -405,6 +406,7 @@ function registerRoutes(app) {
         reviewAnswer: a.review_answer,
         confidence: a.review_confidence,
         mine,
+        wrongAnswers: a.wrong_answers,
       });
       delete a.confidence;
 

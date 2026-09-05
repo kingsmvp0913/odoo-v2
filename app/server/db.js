@@ -1086,7 +1086,11 @@ async function migrate() {
     // 系統推得出來的話它早就有官方答案了。
     // 存在 items 而不是 attempts：這是對「這一題」的認知，不是對某一次作答的評語；
     // 下次再考到同一題，警告要跟著題目走。
-    { table: 'exam_items', col: 'history_wrong', sql: 'ALTER TABLE exam_items ADD COLUMN history_wrong BOOLEAN NOT NULL DEFAULT FALSE' }
+    { table: 'exam_items', col: 'history_wrong', sql: 'ALTER TABLE exam_items ADD COLUMN history_wrong BOOLEAN NOT NULL DEFAULT FALSE' },
+    // 已「證明」是錯的作答（不是猜的）。由 lib/exam/deduce.js 從各場考試的
+    // 官方章節錯題數解聯立推出來，形狀是 [["B"],["A","C"]]——同一題可能在不同
+    // 考次填過不同答案，每一個都是獨立的事實。
+    { table: 'exam_items', col: 'wrong_answers', sql: "ALTER TABLE exam_items ADD COLUMN wrong_answers JSONB NOT NULL DEFAULT '[]'::jsonb" }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

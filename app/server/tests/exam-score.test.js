@@ -44,6 +44,32 @@ test('人工標的「上次答錯」不影響分數', () => {
   expect(marked).toEqual(base);
 });
 
+// 這批是 deduce.js 解聯立推出來的證明（「第二場全對 ⇒ 第一場錯的只能是這題」），
+// 與上面那個被拿掉的人工勾選是完全不同等級的證據，所以這裡敢給 0。
+test('已證明答錯的選項歸零，分數讓給其他選項', () => {
+  const base = optionScores(q({ reviewAnswer: ['A'], mine: ['B'], confidence: 30 }));
+  const s = optionScores(q({
+    reviewAnswer: ['A'], mine: ['B'], confidence: 30, wrongAnswers: [['D']] }));
+  expect(s.D).toBe(0);
+  expect(s.A).toBeGreaterThan(base.A);
+  expect(Object.values(s).reduce((a, b) => a + b, 0)).toBe(100);
+});
+
+// 連你這次填的那個都被證明過是錯的 ⇒ 它也要歸零，不能因為 c 高就留著
+test('連自己填的答案被證明錯也要歸零', () => {
+  const s = optionScores(q({
+    reviewAnswer: ['A'], mine: ['B'], confidence: 45, wrongAnswers: [['B']] }));
+  expect(s.B).toBe(0);
+  expect(Object.values(s).reduce((a, b) => a + b, 0)).toBe(100);
+});
+
+// 複選的證明（['A','C'] 錯）不能拿來單獨否定 A 或 C——錯的是那個組合
+test('複選的已證明答錯不影響單選的分數', () => {
+  const base = optionScores(q({ reviewAnswer: ['A'], mine: ['B'], confidence: 30 }));
+  expect(optionScores(q({
+    reviewAnswer: ['A'], mine: ['B'], confidence: 30, wrongAnswers: [['A', 'C']] }))).toEqual(base);
+});
+
 test('一題永遠加起來剛好 100', () => {
   for (const c of [0, 30, 45, 60, 80, 88, 92, 99, 100]) {
     for (const mine of [['A'], ['B'], null]) {

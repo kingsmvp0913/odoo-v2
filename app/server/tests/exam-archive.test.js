@@ -157,8 +157,10 @@ describe('archiveBank', () => {
 
     const stat = await archiveBank(dbModule, {
       bankId, pages: [{ page: '9', section: 'Sales', noWrong: true }] });
-    expect(stat.conflicts).toEqual(
-      ['P9-1 既有官方答案 A 與本次最終答案 D 不符，保留既有']);
+    // 用 toContain 不用 toEqual：推導（deduce.js）看到同一份資料也會回報矛盾
+    // ——官方答案是 A、你填 D，卻又說這章 0 題錯，兩件事不可能同時成立。
+    // 那是它該講的話，不是雜訊。
+    expect(stat.conflicts).toContain('P9-1 既有官方答案 A 與本次最終答案 D 不符，保留既有');
     const items = await itemsOfPage(9);
     expect(items[0].answer_official).toEqual(['A']);
   });
@@ -271,6 +273,53 @@ describe('第二次考全對，第一次的同一題也要一起確認', () => {
 //
 // 實測踩過：POST 進一份新題庫後，整個版本 120 題 calibrated 全變 false、
 // 風險總和從 15.03 跳回 17.46——沒有錯誤訊息，信心度就這樣悄悄變了。
+// 走真的 DB 驗一次跨考次推導：純函式的測試在 exam-deduce.test.js，這裡驗的是
+// 「歸檔之後真的會寫進 exam_items」——SQL 對不上的話純函式再對也沒用。
+describe('跨考次推導：第一場錯的是哪一題', () => {
+  let b1, b2, ids;
+  beforeAll(async () => {
+    const mk = async (label) => (await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ($1,'33') RETURNING id`, [label])).rows[0].id;
+    b1 = await mk('推導-第一場'); b2 = await mk('推導-第二場');
+    ids = [];
+    for (const i of [1, 2, 3, 4]) {
+      ids.push((await dbModule.query(`
+        INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,section_title)
+        VALUES ('33',$1,'Q','[]'::jsonb,'single','Deduce') RETURNING id`, [`ded-${i}`])).rows[0].id);
+    }
+    const att = async (bank, itemId, no, ans) => dbModule.query(`
+      INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+      VALUES ($1,$2,'1',$3,$4,$4)`, [itemId, bank, no, ans]);
+    // 第一場：q1=A q2=B q3=C，官方說錯 1 題（不知道是哪題）
+    await att(b1, ids[0], 1, ['A']); await att(b1, ids[1], 2, ['B']); await att(b1, ids[2], 3, ['C']);
+    // 第二場：q1=A q2=B q4=D，官方說 0 題錯
+    await att(b2, ids[0], 1, ['A']); await att(b2, ids[1], 2, ['B']); await att(b2, ids[3], 3, ['D']);
+  });
+
+  test('第二場全對之後，回頭推出第一場錯的是第三題', async () => {
+    await archiveBank(dbModule, { bankId: b1, pages: [{ page: '1', section: 'Deduce', wrong: 1 }] });
+    // 這時還推不出來：三題裡有一題錯，但沒有別的線索
+    let q3 = (await dbModule.query(
+      `SELECT certain, wrong_answers FROM exam_items WHERE id=$1`, [ids[2]])).rows[0];
+    expect(q3.wrong_answers).toEqual([]);
+
+    const stat = await archiveBank(dbModule, { bankId: b2, pages: [{ page: '1', section: 'Deduce', wrong: 0 }] });
+    expect(stat.conflicts).toEqual([]);
+
+    // q1／q2／q4 由「這章 0 題錯」直接鎖定
+    for (const i of [0, 1, 3]) {
+      const r = (await dbModule.query(`SELECT certain FROM exam_items WHERE id=$1`, [ids[i]])).rows[0];
+      expect(r.certain).toBe(true);
+    }
+    // q3 從來沒出現在全對的章節裡，但被消去法證明答錯了
+    q3 = (await dbModule.query(
+      `SELECT certain, wrong_answers FROM exam_items WHERE id=$1`, [ids[2]])).rows[0];
+    expect(q3.wrong_answers).toEqual([['C']]);
+    expect(q3.certain).toBe(false);          // 知道 C 是錯的，不代表知道正解是什麼
+    expect(stat.deduced.marked).toBeGreaterThan(0);
+  });
+});
+
 describe('校準跨考次撈章節結果', () => {
   const { recomputeConfidence } = require('../lib/exam/worker');
   let oldBank, newBank;

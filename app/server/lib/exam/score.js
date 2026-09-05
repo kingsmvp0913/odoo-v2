@@ -49,11 +49,12 @@ function normalize100(raw) {
  * @param {string[]} a.reviewAnswer   官方答案或審查主張的答案
  * @param {number}   a.confidence     見上方 c 的說明
  * @param {string[]} a.mine           你這次的最終作答（沒拍板就是輸入答案）
+ * @param {Array}    a.wrongAnswers  已**證明**答錯的作答（deduce.js 解聯立推出來的）
  * @returns {object|null} { 字母: 分數 }，算不出來回 null
  */
 function optionScores({
   letters = [], qtype = 'single', reviewSource = null, reviewAnswer = null,
-  confidence = null, mine = null,
+  confidence = null, mine = null, wrongAnswers = null,
 } = {}) {
   if (!Array.isArray(letters) || !letters.length) return null;
   // 複選題可以同時對兩個，機率分佈的語意不成立，硬套單選的算法會誤導
@@ -89,6 +90,15 @@ function optionScores({
     // 沒作答（或作答的字母不在選項裡）：c 沒有對應的選項可掛，只認得審查主張的那個
     for (const L of letters) out[L] = SCORE_FLOOR;
     if (letters.includes(R)) out[R] = Math.max(SCORE_FLOOR, 100 - floorFor(n - 1));
+  }
+
+  // 已**證明**答錯的選項歸零，分數讓給其他選項。
+  //
+  // 這批是 deduce.js 從各場考試的官方章節錯題數解聯立推出來的，不是猜的：
+  // 「第二場 Sales 全對 ⇒ q1 q2 對 ⇒ 第一場那一題錯的只能是 q3」。
+  // 所以這裡敢給 0——與下面那個被拿掉的人工勾選是完全不同等級的證據。
+  for (const w of (Array.isArray(wrongAnswers) ? wrongAnswers : [])) {
+    if (Array.isArray(w) && w.length === 1 && out[w[0]] != null) out[w[0]] = 0;
   }
 
   // ⚠ 這裡**刻意不使用** history_wrong（人工勾的「上次答案大概率錯」）。
