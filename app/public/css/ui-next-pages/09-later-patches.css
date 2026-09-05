@@ -1461,6 +1461,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 }
 /* 選中只加深描邊。用 --text 會變成白卡上的粗黑框，比卡片裡的數字還搶眼。 */
 .ui-next-exam-run-stat.is-on { border-color: var(--text-muted); }
+/* 這兩張卡就是篩選本身（底下那排重複的頁籤已移除），所以要看得出可以點 */
+.ui-next-exam-run-stat:not(.is-static):hover { border-color: var(--text-muted); background: var(--bg); }
+.ui-next-exam-run-stat.is-static { cursor: default; }
 .ui-next-exam-run-stat b { display: block; margin: 0 0 6px; font-size: 25px; line-height: 1.2; }
 .ui-next-exam-run-stat span { display: block; color: var(--text-muted); font-size: 11px; }
 .ui-next-exam-run-stat.is-bad b { color: var(--danger); }

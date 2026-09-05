@@ -351,15 +351,17 @@ window.UiNextExamRunView = Vue.defineComponent({
       <div v-if="loading" class="ui-next-exam-empty">載入中…</div>
       <div v-else-if="!banks.length" class="ui-next-exam-empty">還沒有題庫，外部 POST 前需先指定題庫。</div>
       <template v-else>
-        <div class="ui-next-exam-run-stats">
-          <button @click="filter='all'" :class="['ui-next-exam-run-stat',filter==='all' && 'is-on']"><b>{{ stats.total }}</b><span>正式題數</span></button>
-          <button @click="filter='check'" :class="['ui-next-exam-run-stat',stats.check && 'is-bad',filter==='check' && 'is-on']"><b>{{ stats.check }}</b><span>需確認</span></button>
-          <div class="ui-next-exam-run-stat is-ok"><b>{{ stats.ok }}</b><span>沒問題</span></div>
-        </div>
-        <!-- 篩選走全站的 .ui-next-page-tabs，與題庫頁同一顆 -->
-        <div class="ui-next-page-tabs" role="group" aria-label="題目篩選">
-          <button :aria-selected="filter==='all'" @click="filter='all'">全部</button>
-          <button :aria-selected="filter==='check'" @click="filter='check'">只看需確認</button>
+        <!-- 篩選只有這一組。原本數字卡底下還有一排「全部／只看需確認」頁籤，
+             兩者改的是同一個 filter，點哪個都一樣——同一個狀態不該有兩顆開關。
+             留數字卡而不是留頁籤：考試當下是瞄一眼就要讀到「還剩幾題要看」，
+             頁籤沒有那個大數字。aria-pressed 讓讀螢幕的人也知道它是開關。 -->
+        <div class="ui-next-exam-run-stats" role="group" aria-label="題目篩選">
+          <button @click="filter='all'" :aria-pressed="filter==='all'"
+                  :class="['ui-next-exam-run-stat',filter==='all' && 'is-on']"><b>{{ stats.total }}</b><span>正式題數</span></button>
+          <button @click="filter='check'" :aria-pressed="filter==='check'"
+                  :class="['ui-next-exam-run-stat',stats.check && 'is-bad',filter==='check' && 'is-on']"><b>{{ stats.check }}</b><span>需確認</span></button>
+          <!-- 沒有「只看沒問題」這個篩選，所以這張不是按鈕，也不該長得像可以點 -->
+          <div class="ui-next-exam-run-stat is-ok is-static"><b>{{ stats.ok }}</b><span>沒問題</span></div>
         </div>
         <div v-if="archiveOpen" class="ui-next-exam-arch">
           <div class="ui-next-exam-arch-intro">

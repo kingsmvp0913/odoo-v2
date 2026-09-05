@@ -123,9 +123,17 @@ test('兩頁走主要頁面的外殼與按鈕，不是 Admin 子頁那一套', (
     expect(`${name}:${src}`).not.toContain('class="content"');
     expect(`${name}:${src}`).not.toContain('class="btn btn-');
   }
-  // 篩選用全站的頁籤列，不是自成一套的實心藥丸
-  expect(view).toContain('class="ui-next-page-tabs"');
+  // 題庫頁的篩選用全站的頁籤列，不是自成一套的實心藥丸
   expect(bankView).toContain('class="ui-next-page-tabs"');
+});
+
+// 同一個 filter 有兩顆開關時，改了一邊另一邊會靜默不同步，而且畫面上看不出哪個才算數
+test('作戰台的篩選只有數字卡一組，沒有第二排重複的頁籤', () => {
+  expect(view).toContain('ui-next-exam-run-stats');
+  expect(view).not.toContain('ui-next-page-tabs');
+  // 沒有「只看沒問題」這個篩選，那張卡就不能長得像可以點
+  expect(view).toContain('ui-next-exam-run-stat is-ok is-static');
+  expect(css).toContain('.ui-next-exam-run-stat.is-static { cursor: default; }');
 });
 
 test('兩頁互動元件沿用平台的 focus-visible 與輸入框 focus 樣式', () => {
