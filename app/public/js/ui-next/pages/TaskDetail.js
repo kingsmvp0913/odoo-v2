@@ -1123,7 +1123,9 @@
      與這一區要你做的事是同一件事的兩面。頂欄只留名稱與階段。 -->
 <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()" @click.stop>{{ sourceLabel() }}</a>
 <span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
-<span :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
+<!-- clarify_chat_running（「AI 回覆中」）時不重印狀態徽章：對話框已有「AI 正在處理」動畫、
+     QA 頁籤內也有「回覆已送出，AI 正在確認」灰框，頂欄再掛一個字只是第三次講同一件事。 -->
+<span v-if="!clarBusy" :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span class="ui-next-head-spacer"></span>
 <button type="button" class="ui-next-task-action-collapse" :aria-label="taskActionCollapsed?'展開任務對話框':'縮小任務對話框'" :title="taskActionCollapsed?'展開':'縮小'" :aria-expanded="(!taskActionCollapsed).toString()" @click.stop="taskActionCollapsed=!taskActionCollapsed"><ui-next-icon :name="taskActionCollapsed?'chevron-up':'chevron-down'"/></button>
 </div>
@@ -1137,7 +1139,9 @@
 <!-- intro 不在這裡重印：analysis 已把它整段寫進對話流那則「[需要你回答]」。
      頁籤（含「提問」——看不懂題目時問清楚再答的唯一入口）移到框外上方。 -->
 <template v-if="clarQuestions.length">
-<p v-if="clarBusy" class="ui-next-field-note">AI 正在回覆，稍候一下…</p>
+<!-- 只在「提問」頁籤提示：QA 頁籤送出後已換成下方「回覆已送出，AI 正在確認」灰框，
+     這行再出現就是同一則訊息疊兩次（legacy 版本本來就限定 clarTab==='ask'）。 -->
+<p v-if="clarBusy&&clarTab==='ask'" class="ui-next-field-note">AI 正在回覆，稍候一下…</p>
 <template v-if="clarTab==='qa'">
 <!-- 送出後任務轉 clarify_chat_running：整組題目收起來換成這張卡。只把按鈕 disable 的話，
      空白的答案框留在原地，看起來像根本沒送出去。 -->
