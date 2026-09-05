@@ -290,58 +290,55 @@ window.UiNextExamRunView = Vue.defineComponent({
     </div>
     <div v-if="apiOpen" class="ui-next-task-modal-backdrop" @mousedown.self="apiOpen=false">
       <section class="ui-next-task-modal ui-next-exam-api" role="dialog" aria-modal="true" aria-labelledby="exam-api-title">
-        <header><h2 id="exam-api-title">上傳串接說明</h2></header>
+        <header class="ui-next-exam-api-head">
+          <div>
+            <h2 id="exam-api-title">上傳串接說明</h2>
+            <p>給沒有平台帳號的同事：拿一組通行碼就能傳截圖</p>
+          </div>
+          <button type="button" class="ui-next-exam-api-x" aria-label="關閉" @click="apiOpen=false">
+            <ui-next-icon name="close"/>
+          </button>
+        </header>
         <div class="ui-next-exam-api-body">
-
-        <div class="ui-next-exam-api-token">
-          <div class="ui-next-exam-api-token-head">
-            <b>上傳通行碼</b>
-            <span class="ui-next-exam-api-ttl">效期 3 小時</span>
+          <div class="ui-next-exam-api-token">
+            <div class="ui-next-exam-api-token-head">
+              <b>上傳通行碼</b><span class="ui-next-exam-api-ttl">效期 3 小時</span>
+              <span v-if="token && tokenExpiresAt" class="ui-next-exam-api-until">有效到 {{ shortTime(tokenExpiresAt) }}</span>
+            </div>
+            <div class="ui-next-exam-api-token-row">
+              <code v-if="token">{{ token }}</code>
+              <code v-else class="is-empty">{{ tokenExpired ? '上一組已過期' : '尚未產生' }}</code>
+              <button v-if="token" class="btn btn-outline btn-sm" @click="copyToken">複製</button>
+              <button class="btn btn-primary btn-sm" :disabled="issuing" @click="issueToken">
+                {{ issuing ? '產生中…' : (token ? '重產' : '產生') }}
+              </button>
+            </div>
+            <p class="ui-next-exam-api-note">重產會讓上一組立刻失效。從本機（127.0.0.1）送的免帶。</p>
           </div>
-          <div v-if="token" class="ui-next-exam-api-token-row">
-            <code>{{ token }}</code>
-            <button class="btn btn-outline btn-sm" @click="copyToken">複製</button>
+
+          <div class="ui-next-exam-api-ep">
+            <span class="ui-next-exam-api-verb">POST</span><code>/api/exam/submit</code>
+            <em>單張，multipart，欄位直接放 form</em>
           </div>
-          <div v-else-if="tokenExpired" class="ui-next-exam-api-warn">上一組已過期，按下方重新產生。</div>
-          <div v-else class="ui-next-exam-api-warn">還沒產生過通行碼，外部上傳會被擋下（503）。</div>
-          <div class="ui-next-exam-api-token-foot">
-            <span v-if="token && tokenExpiresAt">有效到 {{ shortTime(tokenExpiresAt) }}</span>
-            <button class="btn btn-primary btn-sm" :disabled="issuing" @click="issueToken">
-              {{ issuing ? '產生中…' : (token ? '重新產生' : '產生通行碼') }}
-            </button>
+          <div class="ui-next-exam-api-ep">
+            <span class="ui-next-exam-api-verb">POST</span><code>/api/exam/batch</code>
+            <em>多張，JSON，同樣的欄位放進 items[]，一次最多 50 筆</em>
           </div>
-          <div class="ui-next-exam-api-note">重新產生會讓上一組立刻失效。從本機（127.0.0.1）送的免帶通行碼。</div>
+
+          <dl class="ui-next-exam-api-fields">
+            <dt>bank</dt><dd>題庫 id 或 label<i>必填</i></dd>
+            <dt>page</dt><dd>頁碼，例 10<i>必填</i></dd>
+            <dt>answer</dt><dd>作答，逗號分隔，例 C,C,B<i>必填</i></dd>
+            <dt>section</dt><dd>章節名，例 Project</dd>
+            <dt>name</dt><dd>作答者</dd>
+            <dt>screenshot</dt><dd>圖片檔（batch 改放 image，base64）<i>必填</i></dd>
+          </dl>
+
+          <p class="ui-next-exam-api-note">
+            認證帶 <code>X-Token: 通行碼</code>。送出立刻回 queued，不等判題完成——結果會自己出現在本頁。
+            批次裡單筆壞掉不會讓整批失敗，會具名回報在 rejected。
+          </p>
         </div>
-
-        <h3>單張截圖（multipart）</h3>
-        <pre class="ui-next-exam-api-code">POST /api/exam/submit
-X-Token: 上面那組通行碼
-
-bank        題庫 id 或 label（必填）
-page        頁碼，例 10（必填）
-answer      作答，逗號分隔，例 C,C,B（必填）
-section     章節名，例 Project
-name        作答者
-screenshot  圖片檔（jpg/png）</pre>
-
-        <h3>多張一次送（JSON + base64）</h3>
-        <pre class="ui-next-exam-api-code">POST /api/exam/batch
-X-Token: 上面那組通行碼
-Content-Type: application/json
-
-{ "bank": "2026-08-14-1",
-  "items": [ { "page": "1", "answer": "C,B", "section": "Sales", "image": "&lt;base64&gt;" } ] }
-
-一次最多 50 筆；單筆壞掉不會讓整批失敗，會具名回報在 rejected。</pre>
-
-        <div class="ui-next-exam-api-note">
-          送出後立刻回 queued，不等判題完成——判題要跑好幾分鐘，結果在本頁自動出現。
-        </div>
-
-        </div>
-        <footer class="ui-next-exam-api-foot">
-          <button class="btn btn-outline btn-sm" @click="apiOpen=false">關閉</button>
-        </footer>
       </section>
     </div>
     <div class="content">

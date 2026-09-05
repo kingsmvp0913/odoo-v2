@@ -1720,52 +1720,96 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-run-retry:disabled { opacity: .45; cursor: default; }
 
 
-/* 上傳串接說明的跳窗。外框沿用 .ui-next-task-modal，這裡只補內容區。
+/* 上傳串接說明的跳窗。外框沿用 .ui-next-task-modal，這裡只補內容。
    顏色一律走 token（var(--…)），寫死的淺色系在深色模式會維持亮底。 */
+
 /* .ui-next-task-modal 只設了 width，沒有 max-height／overflow——內容一長就直接
-   衝出視窗且捲不動。這個跳窗塞了兩段程式碼範例，一定會超過。 */
+   衝出視窗且捲不動。這裡把高度壓在視窗的七成，超過才內部捲：跳窗滿版會看不到
+   底下的作戰台，感覺像換頁而不是開一個說明。 */
 .ui-next-exam-api {
-  width: min(680px, 100%); max-height: calc(100vh - 40px); overflow: auto;
+  width: min(600px, 100%); max-height: min(70vh, 620px); overflow: auto;
 }
-/* header／footer 之外的內容自己給邊距，不然程式碼區塊會貼著跳窗邊緣 */
-.ui-next-exam-api-body { padding: 14px 18px; }
-.ui-next-exam-api h3 {
-  margin: 16px 0 6px; font-size: var(--fs-sm); color: var(--text-secondary);
+.ui-next-exam-api-body { padding: 14px 18px 18px; }
+
+/* header 的 justify-content 由 .ui-next-task-modal header (0,1,1) 決定，
+   這裡只要不去動它就是「標題靠左、關閉靠右」。 */
+.ui-next-exam-api-head { align-items: flex-start; }
+.ui-next-exam-api-head p {
+  margin: 3px 0 0; color: var(--text-muted); font-size: var(--fs-xs);
 }
-.ui-next-exam-api-code {
-  margin: 0; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface);
-  color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.7;
-  /* 長行讓它自己捲，不要把整個 modal 撐寬 */
-  overflow-x: auto; white-space: pre;
+/* 全站的 .ui-next-modal-close 沒有任何 CSS（等於裸按鈕），所以自己定一顆。 */
+.ui-next-exam-api-x {
+  display: grid; place-items: center; width: 28px; height: 28px; flex: none;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); cursor: pointer;
 }
+.ui-next-exam-api-x:hover { border-color: var(--border-strong); color: var(--text); }
+
 .ui-next-exam-api-token {
-  padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface);
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface);
 }
 .ui-next-exam-api-token-head {
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;
 }
 .ui-next-exam-api-ttl { color: var(--text-muted); font-size: var(--fs-xs); }
-.ui-next-exam-api-token-row {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+.ui-next-exam-api-until {
+  margin-left: auto; color: var(--text-secondary); font-size: var(--fs-xs);
 }
+.ui-next-exam-api-token-row { display: flex; align-items: center; gap: 8px; }
 .ui-next-exam-api-token-row code {
-  flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: var(--card-bg); color: var(--text);
-  font-size: var(--fs-sm); overflow-x: auto; white-space: nowrap;
+  flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--code-bg); color: var(--code-text);
+  font-size: var(--fs-sm); letter-spacing: .02em;
+  overflow-x: auto; white-space: nowrap;
 }
-.ui-next-exam-api-warn { color: var(--warning); font-size: var(--fs-sm); margin-bottom: 8px; }
-.ui-next-exam-api-token-foot {
-  /* 沒有通行碼時左邊那段字不存在，用 space-between 會讓按鈕跑到左邊 */
-  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
-  color: var(--text-secondary); font-size: var(--fs-sm);
+.ui-next-exam-api-token-row code.is-empty {
+  background: transparent; color: var(--warning); letter-spacing: 0;
 }
-.ui-next-exam-api-token-foot > span { margin-right: auto;
+
+/* 端點一行講完：動詞、路徑、用途。兩段各一行比兩塊 pre 少掉一半高度。 */
+.ui-next-exam-api-ep {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px;
 }
+.ui-next-exam-api-verb {
+  border-radius: var(--radius-sm); padding: 2px 7px;
+  background: var(--success); color: #fff;
+  font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: .04em;
+}
+.ui-next-exam-api-ep code {
+  padding: 3px 8px; border-radius: var(--radius-sm);
+  background: var(--code-bg); color: var(--code-text); font-size: var(--fs-sm);
+}
+.ui-next-exam-api-ep em {
+  flex: 1 1 100%; color: var(--text-muted); font-size: var(--fs-xs); font-style: normal;
+}
+
+.ui-next-exam-api-fields {
+  display: grid; grid-template-columns: 104px minmax(0, 1fr);
+  gap: 0 12px; margin: 14px 0 0;
+  border-top: 1px solid var(--border); padding-top: 10px;
+}
+.ui-next-exam-api-fields dt {
+  padding: 3px 0; color: var(--text); font-size: var(--fs-xs);
+}
+.ui-next-exam-api-fields dd {
+  display: flex; align-items: center; gap: 8px; margin: 0; padding: 3px 0;
+  color: var(--text-secondary); font-size: var(--fs-xs);
+}
+.ui-next-exam-api-fields i {
+  margin-left: auto; color: var(--danger); font-size: var(--fs-xs); font-style: normal;
+}
+
 .ui-next-exam-api-note {
-  margin-top: 8px; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6;
+  margin: 8px 0 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.7;
 }
-/* .ui-next-task-modal footer 是 (0,1,1)，只用一個 class 蓋不過它——
-   那條把 justify-content 設成 space-between，關閉鈕會被推到左下角。 */
-.ui-next-task-modal footer.ui-next-exam-api-foot { justify-content: flex-end; }
+/* 欄位表之後那段結語要跟表分開，不然看起來像最後一列的續行 */
+.ui-next-exam-api-fields + .ui-next-exam-api-note {
+  margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px;
+}
+/* 行內的短程式碼用描邊，不用 --code-bg——深色模式下 --code-bg 是 #141414，
+   跟跳窗底色幾乎同色，那顆 chip 會整個消失。 */
+.ui-next-exam-api-note code {
+  padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text-secondary);
+}
