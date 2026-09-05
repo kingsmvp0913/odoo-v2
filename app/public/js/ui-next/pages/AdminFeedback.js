@@ -15,6 +15,8 @@
         rejectNote: {},    // { [id]: string }
         attachUrls: {},    // { [attachmentId]: objectURL }
         healthFailed: null,// 最新一輪健檢若失敗就放那一列，用來顯示警示
+        bodyOpen: {},      // { [id]: true } 展開這一列的原文／翻譯全文
+        bodyLong: {},      // { [id]: true } 這一列長到需要收合（量 DOM 得來，見 measureBodies）
       };
     },
     computed: {
@@ -28,6 +30,23 @@
     methods: {
       pillClass(status) { return STATUS_PILL[status] || 'pill-info'; },
       fmtTime(ts) { return new Date(ts).toLocaleString('zh-TW'); },
+      // 健檢自己開的單，content 是整段診斷（好幾百字），翻譯結果那欄同樣是長文。兩欄一起攤開，
+      // 一列就吃掉整個畫面高度，「這頁有幾筆待審」完全看不出來。長的先切短、要看再點開。
+      // ⚠ 判長短只能量 DOM 不能估字數：中英混排與換行讓同樣字數高度差很多（健檢頁那邊用字數
+      // 估，實測有一半的按鈕按下去畫面完全不動）。6.4 要與 app.css 的 .hc-body-clamp 一致。
+      bodyClamped(r) { return this.bodyLong[r.id] === true && !this.bodyOpen[r.id]; },
+      isLongBody(r) { return this.bodyLong[r.id] === true; },
+      measureBodies() {
+        this.$nextTick(() => {
+          const next = {};
+          for (const el of document.querySelectorAll('.hc-body[data-fbid]')) {
+            const long = el.scrollHeight - 6.4 * parseFloat(getComputedStyle(el).fontSize) > 4;
+            // 一列有原文與翻譯兩塊，任一塊過長就整列收合（兩塊各自收合會讓同一列出現兩顆按鈕）
+            next[el.dataset.fbid] = next[el.dataset.fbid] || long;
+          }
+          this.bodyLong = next;
+        });
+      },
       // 只取最新一輪判斷有沒有失敗。失敗不擋主清單：這是附註，沒有它整頁照樣可用。
       async loadHealth() {
         try {
@@ -40,6 +59,8 @@
         try {
           const q = this.statusFilter ? `?status=${this.statusFilter}` : '';
           this.rows = await Api.get(`admin/feedback${q}`);
+          // 換了資料就要重量：哪幾列長到需要收合，只有渲染出來才知道
+          this.measureBodies();
           await this.loadAttachmentThumbs();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.loading = false; }
@@ -138,13 +159,15 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th style="width:120px">時間</th>
-                  <th>提交者</th>
-                  <th>原文</th>
-                  <th>附件</th>
-                  <th style="width:90px">狀態</th>
-                  <th>翻譯結果</th>
-                  <th style="width:170px">操作</th>
+                  <!-- 原文與翻譯結果是這張表唯一的長文欄，其餘全是短欄。不給寬度的話瀏覽器會
+                       依內容平均分配，把兩個長文欄擠成細長條（實測翻譯結果欄窄到一個字一行）。 -->
+                  <th style="width:110px">時間</th>
+                  <th style="width:100px">提交者</th>
+                  <th style="width:33%">原文</th>
+                  <th style="width:70px">附件</th>
+                  <th style="width:100px">狀態</th>
+                  <th style="width:33%">翻譯結果</th>
+                  <th style="width:150px">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -155,12 +178,14 @@
                     <td data-label="時間" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ fmtTime(r.created_at) }}</td>
                     <!-- user_id 為 NULL＝健檢自己開的單（見 health-check-runner.js 的
                          openFeedbackForFinding）。顯示 '—' 會讓人以為是哪個使用者的帳號被刪了。 -->
+                    <!-- pill 預設會斷行：在窄欄裡「AI 健檢」被拆成兩行、「已核准」被拆成三行的
+                         直條（實測）。標籤本來就該整塊呈現，這兩處一律 nowrap。 -->
                     <td data-label="提交者">
-                      <span v-if="!r.user_id" class="pill pill-info">AI 健檢</span>
+                      <span v-if="!r.user_id" class="pill pill-info" style="white-space:nowrap">AI 健檢</span>
                       <span v-else>{{ r.user_name || '—' }}</span>
                     </td>
                     <td data-label="原文" style="font-size:var(--fs-sm)">
-                      <span style="white-space:pre-wrap;word-break:break-word">{{ r.content }}</span>
+                      <div class="hc-body" :data-fbid="r.id" :class="{ 'hc-body-clamp': bodyClamped(r) }">{{ r.content }}</div>
                     </td>
                     <td data-label="附件">
                       <div v-if="(r.attachments||[]).length" style="display:flex;gap:6px;flex-wrap:wrap">
@@ -170,18 +195,23 @@
                       </div>
                       <span v-else style="color:var(--text-muted)">—</span>
                     </td>
-                    <td data-label="狀態"><span class="pill" :class="pillClass(r.status)">{{ statusLabel[r.status] || r.status }}</span></td>
+                    <td data-label="狀態"><span class="pill" :class="pillClass(r.status)" style="white-space:nowrap">{{ statusLabel[r.status] || r.status }}</span></td>
                     <td data-label="翻譯結果" style="font-size:var(--fs-sm)">
                       <template v-if="r.triage_title">
                         <div><strong>{{ r.triage_title }}</strong></div>
                         <div v-if="r.triage_layer" style="color:var(--text-muted)">{{ layerLabel[r.triage_layer] || r.triage_layer }}</div>
-                        <div v-if="r.triage_detail" style="white-space:pre-wrap;word-break:break-word">{{ r.triage_detail }}</div>
+                        <div v-if="r.triage_detail" class="hc-body" :data-fbid="r.id" :class="{ 'hc-body-clamp': bodyClamped(r) }">{{ r.triage_detail }}</div>
                       </template>
                       <span v-else style="color:var(--text-muted)">尚未翻譯</span>
                       <!-- triage_note 不能綁在 triage_title 底下：AI 看不懂／解析失敗／agent 執行失敗
                            時 rejectBack 只寫 triage_note、triage_title 是 NULL，這句話是唯一告訴
                            管理員「為什麼退回」的地方，藏起來等於管理員永遠看不到原因。 -->
-                      <div v-if="r.triage_note" class="pill pill-warn" style="margin-top:4px">{{ r.triage_note }}</div>
+                      <!-- ⚠ 不可用 .pill：pill 是 inline-block 的短標籤，套在這種整句訊息上，
+                           欄位一窄就被壓成一個字一行的直條（實測「執行失敗：claude exited with
+                           code 1」在這欄變成 6 行寬 1 字的長條，就是使用者說的跑版）。
+                           改用一般文字塊＋左側色條表示警示，語意一樣但寬度吃得下。 -->
+                      <div v-if="r.triage_note" class="hc-body"
+                        style="margin-top:4px;padding-left:6px;border-left:2px solid var(--warning-strong);font-size:var(--fs-xs);color:var(--warning-strong)">{{ r.triage_note }}</div>
                     </td>
                     <td data-label="操作">
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -192,6 +222,9 @@
                              駁回鈕的條件不同：已核准但還沒跑的可以反悔擋掉，所以只擋 done。 -->
                         <button v-if="r.status !== 'approved' && r.status !== 'done'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
                         <button v-if="r.status !== 'done'" class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
+                        <!-- 只在真的被切到時才出現：沒被切還掛按鈕，按下去畫面完全不動＝騙人的按鈕 -->
+                        <button v-if="isLongBody(r)" class="btn btn-ghost btn-sm"
+                          @click="bodyOpen[r.id] = !bodyOpen[r.id]">{{ bodyOpen[r.id] ? '▾ 收合' : '▸ 看全文' }}</button>
                       </div>
                     </td>
                   </tr>

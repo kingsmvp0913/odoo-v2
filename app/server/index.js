@@ -35,18 +35,35 @@ function createApp() {
   // 使用者的瀏覽器就一直吃快取的舊檔——實測對外網址載到的是舊版面，要硬重整才會變，
   // 而「改了但畫面沒變」最難察覺。改用資產的最新 mtime 當版本號，改完自動失效。
   const PUBLIC_DIR = path.join(__dirname, '../public');
-  const VERSIONED_ASSETS = [
-    'css/app.css', 'css/ui-next.css', 'css/ui-next-pages.css',
-    'js/app.js', 'js/ui-next/UiNextApp.js', 'js/ui-next/UiNextPages.js',
+  // ⚠ 這裡**不可以列死檔案清單**（rules/testing：列死清單的守衛，之後新增的檔一律漏掃）。
+  // 原本列的六個檔裡有兩個早就不存在：ui-next 已把 UiNextPages.js 拆成 pages/ 底下 26 支、
+  // ui-next-pages.css 拆成 9 支。結果是「改任何一支 View 或分頁 CSS，版本號都不會變」，
+  // 使用者拿到的永遠是快取的舊碼，而且畫面上沒有任何徵狀（2026-09-05 實際發生）。
+  // 掃目錄不遞迴：只取這幾個目錄下的第一層 .css／.js，避開 vendor 那種大目錄。
+  const ASSET_DIRS = [
+    'css', 'css/ui-next-pages',
+    'js', 'js/views', 'js/ui-next', 'js/ui-next/pages',
   ];
+  const newestAssetMtime = () => {
+    let newest = 0;
+    for (const dir of ASSET_DIRS) {
+      let names = [];
+      try { names = fs.readdirSync(path.join(PUBLIC_DIR, dir)); } catch { continue; }
+      for (const name of names) {
+        if (!/\.(css|js)$/.test(name)) continue;
+        try { newest = Math.max(newest, fs.statSync(path.join(PUBLIC_DIR, dir, name)).mtimeMs); } catch { /* 掃描期間被刪就跳過 */ }
+      }
+    }
+    return newest;
+  };
   const sendIndex = (req, res) => {
     try {
-      let newest = 0;
-      for (const file of VERSIONED_ASSETS) {
-        try { newest = Math.max(newest, fs.statSync(path.join(PUBLIC_DIR, file)).mtimeMs); } catch { /* 檔案不存在就跳過 */ }
-      }
       const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8')
-        .replace(/\?v=\d+/g, `?v=${Math.round(newest)}`);
+        .replace(/\?v=\d+/g, `?v=${Math.round(newestAssetMtime())}`);
+      // 版本號寫在 index.html 裡，所以 index.html 自己絕不能被瀏覽器直接吃快取——那樣整套
+      // cache-busting 會被繞過：改了碼、版本號也算對了，使用者卻連請求都沒發出去，畫面照舊。
+      // no-cache 不是不快取，是「每次都回來驗證」，ETag 沒變仍走 304，沒有額外流量成本。
+      res.set('Cache-Control', 'no-cache');
       res.type('html').send(html);
     } catch {
       // 讀檔或取代失敗時退回原本行為，寧可拿到舊快取也不要整站白畫面
