@@ -22,6 +22,13 @@ stage: qa
    - 同一 Model 是否只有一個 view 檔、同一原生 view 是否只繼承一次
    - 原生 SQL 前後是否 `flush_model()` / `invalidate_model()`
    - 是否新增了規格以外的欄位／Model／邏輯
+   - `@api.depends` 完整性（可從 diff 機械判定，deploy 抓不到——它只安裝不執行）：diff 內每個被 `@api.depends(...)` 修飾的 compute 方法，其 body 讀取的所有欄位——**含跨 model 的點路徑**（如 `self.order_id.partner_id.xxx`，路徑上每一段欄位都算）——是否都出現在 `depends` 清單裡。漏列的欄位變動時 compute 不重算＝畫面顯示舊值，安裝／升級卻完全不報錯（別把它跟 `__manifest__.py` 的 `depends` 混為一談：後者是安裝依賴、deploy 會擋，前者 deploy 不擋）。
+   - migration 資料清理／回填審查（本次 diff 若 `migrations/` 有新增或修改 `pre-`／`post-`／`end-` script 才查；這些是安裝時能跑起來、但邏輯錯就靜默清錯資料的缺陷，deploy 綠燈證明不了它對）逐項對應：
+     ① 有新增 migration 檔卻沒同步升 `__manifest__.py` 的 `version` → Odoo 會**靜默跳過**，修正等於沒跑；
+     ② 比對條件（LIKE／`=`）與實際檔名／資料格式不符（多空白、大小寫）→ 該清的列一筆沒清；
+     ③ `WHERE` 過寬（如 `%.lab`／`%.csv` 連上傳檔一起命中）→ 誤傷使用者資料；
+     ④ 不可逆的 `UPDATE`／`DELETE` 前缺 `SELECT`＋`_logger` 記錄 → 事後無法追溯受影響列；
+     ⑤ `noupdate=1` 資料被改結構／移除卻未清孤兒記錄。
    - `__manifest__.py` 的 `data` 載入順序：新增的 XML 檔若引用了別的檔案定義的 external ID（`ref=`、`action=`、`inherit_id=`、`parent=`），該檔必須排在定義者**之後**。這類錯只有安裝／升級時才會炸，diff 上看起來完全正常（實測 task 152：view 檔被插在定義 action 的 menus.xml 之前，QA 連兩輪判 pass、部署連兩次失敗）
 
 若判定 fail 的依據與已知的環境/部署限制衝突（例如規格要求的做法在 base Odoo 不合法），summary 要明確指出這是規格與環境的衝突本身，而非只重複規格字面要求。
