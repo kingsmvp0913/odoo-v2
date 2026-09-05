@@ -5,7 +5,10 @@ const { listAgents, loadAgent } = require('./agent-loader');
 const { runAgent } = require('./agent-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { buildAgentSummary, buildTaskSummary, buildWindowSummary } = require('./health-data');
+// buildAgentSummary 刻意不 import：本檔沒有任何一處呼叫它（健檢改成「起手包＋agent 自己查」之後
+// 就不再逐 agent 預先聚合了）。死引用會讓它看起來還在服役，於是它裡面走樣的口徑沒人發現——
+// 實測 2026-09-05：failed_calls 的舊定義在那支函式裡整整多活了一輪修正。
+const { buildTaskSummary, buildWindowSummary } = require('./health-data');
 const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
 const { inAutoFixScope } = require('./auto-fix-scope');
 

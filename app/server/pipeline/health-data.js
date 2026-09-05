@@ -109,14 +109,17 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
   // 的 agent 被判「表現正常」——成本是本平台最該被觀測的訊號，不能不在視野內。
   const { weighted: WEIGHTED, rate: RATE } = costSql();
   const { rows: [tk] } = await query(
-    `SELECT COUNT(*)::int AS calls,
+    // ⚠ calls／failed_calls 的口徑與 buildWindowSummary 的 per_stage 及正式報表三者必須一致：
+    // aborted（按停止）與 interrupted（重啟／OOM）分子分母都排除。同一個檔案裡放兩份不同定義，
+    // 會變成「改了一處、另一處還在報舊數字」，而兩邊都叫 failed_calls，看數字看不出是哪一份。
+    `SELECT COALESCE(SUM(CASE WHEN COALESCE(status,'completed') NOT IN ('aborted','interrupted') THEN 1 ELSE 0 END),0)::int AS calls,
             COALESCE(SUM(input_tokens),0)::int  AS input_tokens,
             COALESCE(SUM(output_tokens),0)::int AS output_tokens,
             COALESCE(SUM(cache_read_tokens),0)::int AS cache_read,
             COALESCE(SUM(cache_create_tokens),0)::int AS cache_create,
             COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd,
             COALESCE(AVG(duration_ms),0)::int   AS avg_duration_ms,
-            COALESCE(SUM(CASE WHEN status <> 'completed' THEN 1 ELSE 0 END),0)::int AS failed_calls
+            COALESCE(SUM(CASE WHEN COALESCE(status,'completed') NOT IN ('completed','aborted','interrupted') THEN 1 ELSE 0 END),0)::int AS failed_calls
        FROM token_usage
       WHERE agent_type IN (${typePh}) AND recorded_at >= ${cutoffPh}`,
     [...types, cutoff]
@@ -361,12 +364,25 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
   for (const u of usage) {
     const k = u.agent_type || '(未知)';
     const acc = byStage.get(k) || { calls: 0, failed: 0, duration_ms: 0 };
-    acc.calls += 1;
-    acc.duration_ms += u.duration_ms || 0;
-    // failed 口徑對齊正式報表（token-report-routes.js:78）：只有真正的執行失敗才計入。
-    // aborted（使用者按停止）與 interrupted（進程被外部信號終止，如重啟／OOM）是刻意／外部中斷、
-    // 非執行失敗，一律排除——否則每輪只要有人按停止或平台重啟就把 failed 灌水、產生假警報。
-    if (u.status && !['completed', 'aborted', 'interrupted'].includes(u.status)) acc.failed += 1;
+    /**
+     * 口徑對齊正式報表（token-report-routes.js 的 byAgent）：aborted（使用者按停止）與
+     * interrupted（進程被外部信號終止，如重啟／OOM）是刻意／外部中斷、非執行失敗，
+     * **分子分母都要排除**。
+     *
+     * ⚠ 只改分子是半套：failed 少算、calls 照算，失敗率就從原本的高報變成低報，兩張畫面的
+     * 數字依然對不起來——而這兩個值擺在一起本來就只會被讀成「這關的失敗率」。
+     * ⚠ 與上面 buildTaskSummary 的 per_stage.calls 刻意不同調：那個問的是「這關在這張任務上
+     * 重跑了幾次」（彈跳訊號），被中斷的那一趟確實跑過也確實花了錢，該算進去。這裡問的是
+     * 失敗率的分母，兩者不是同一個問題，別為了「一致」把它們統一掉。
+     */
+    // ⚠ 只跳過 calls／failed／duration 三個累加，不可整輪 `continue`：下面的 tasksOfStage／
+    // chatsOfStage 是 repeat_avg 的分母，正式報表的 tasks 欄也沒有排除中斷的那幾筆。
+    // 整輪跳過會讓「只被中斷過」的任務從分母消失，repeat_avg 反而被推高。
+    if (!['aborted', 'interrupted'].includes(u.status)) {
+      acc.calls += 1;
+      acc.duration_ms += u.duration_ms || 0;
+      if (u.status && u.status !== 'completed') acc.failed += 1;
+    }
     byStage.set(k, acc);
     if (u.task_id) {
       if (!tasksOfStage.has(k)) tasksOfStage.set(k, new Set());

@@ -1124,8 +1124,10 @@
 <a v-if="sourceUrl()" :href="sourceUrl()" target="_blank" :class="sourceBadgeClass()" @click.stop>{{ sourceLabel() }}</a>
 <span v-else :class="sourceBadgeClass()">{{ sourceLabel() }}</span>
 <!-- clarify_chat_running（「AI 回覆中」）時不重印狀態徽章：對話框已有「AI 正在處理」動畫、
-     QA 頁籤內也有「回覆已送出，AI 正在確認」灰框，頂欄再掛一個字只是第三次講同一件事。 -->
-<span v-if="!clarBusy" :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
+     QA 頁籤內也有「回覆已送出，AI 正在確認」灰框，頂欄再掛一個字只是第三次講同一件事。
+     ⚠ 收合時要留著。上面說的那兩個替代品都在 `v-if="!taskActionCollapsed"` 裡面，收起來就一起
+     消失了——結果是「收合＋AI 回覆中」整條標題列沒有任何動靜，看起來像卡住。 -->
+<span v-if="!clarBusy||taskActionCollapsed" :class="['ui-next-status-badge',task.status]">{{ statusLabel }}</span>
 <span class="ui-next-head-spacer"></span>
 <button type="button" class="ui-next-task-action-collapse" :aria-label="taskActionCollapsed?'展開任務對話框':'縮小任務對話框'" :title="taskActionCollapsed?'展開':'縮小'" :aria-expanded="(!taskActionCollapsed).toString()" @click.stop="taskActionCollapsed=!taskActionCollapsed"><ui-next-icon :name="taskActionCollapsed?'chevron-up':'chevron-down'"/></button>
 </div>
