@@ -363,7 +363,10 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
     const acc = byStage.get(k) || { calls: 0, failed: 0, duration_ms: 0 };
     acc.calls += 1;
     acc.duration_ms += u.duration_ms || 0;
-    if (u.status && u.status !== 'completed') acc.failed += 1;
+    // failed 口徑對齊正式報表（token-report-routes.js:78）：只有真正的執行失敗才計入。
+    // aborted（使用者按停止）與 interrupted（進程被外部信號終止，如重啟／OOM）是刻意／外部中斷、
+    // 非執行失敗，一律排除——否則每輪只要有人按停止或平台重啟就把 failed 灌水、產生假警報。
+    if (u.status && !['completed', 'aborted', 'interrupted'].includes(u.status)) acc.failed += 1;
     byStage.set(k, acc);
     if (u.task_id) {
       if (!tasksOfStage.has(k)) tasksOfStage.set(k, new Set());
