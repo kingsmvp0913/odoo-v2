@@ -412,4 +412,37 @@ describe('reclaimInterrupted', () => {
     const done = await dbModule.query(`SELECT COUNT(*)::int c FROM exam_uploads WHERE status='done'`);
     expect(done.rows[0].c).toBeGreaterThan(0);
   });
+
+  // processUpload 是「先建 attempt 再送審」，重啟打斷在中間時 attempts 已經在 DB。
+  // 只退回 pending 不刪的話，續跑會再建一份重複的作答，而 saveVerdicts 用
+  // (bank_id, page, no) 查、取 rows[0]，審查結果掛到哪一份看運氣。
+  // 失敗路徑與「重試」端點都特地刪過，唯獨開機回收漏了。
+  test('退回 pending 時要刪掉已建的孤兒作答，否則續跑會建出重複', async () => {
+    const up = await dbModule.query(`
+      INSERT INTO exam_uploads (bank_id,page,answer_raw,image_path,status)
+      VALUES ($1,'31','B','exam-test/x.jpg','running') RETURNING id`, [bankId]);
+    const it = await dbModule.query(`
+      INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype)
+      VALUES ('19','orphan-fp','Q','[]'::jsonb,'single') RETURNING id`);
+    await dbModule.query(`
+      INSERT INTO exam_attempts (item_id,bank_id,upload_id,page,no,answer_their,answer_final)
+      VALUES ($1,$2,$3,'31',1,$4,$4)`, [it.rows[0].id, bankId, up.rows[0].id, ['B']]);
+
+    await reclaimInterrupted(dbModule);
+
+    const left = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_attempts WHERE upload_id=$1`, [up.rows[0].id]);
+    expect(left.rows[0].c).toBe(0);
+    // 題目本身留著——那是跨考次累積的知識，不該因為一次重啟就丟掉
+    const item = await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_items WHERE fingerprint='orphan-fp'`);
+    expect(item.rows[0].c).toBe(1);
+  });
+
+  // scheduleQueue 的其餘呼叫點全在 HTTP handler 內。沒有這個清單，開機後那些頁
+  // 會停在「等待審題」轉圈，直到有人手動按重試——而畫面上看不出它已經不動了。
+  test('回報還有待處理頁的題庫，讓開機流程把佇列推起來', async () => {
+    const r = await reclaimInterrupted(dbModule);
+    expect(r.resumeBanks).toContain(bankId);
+  });
 });

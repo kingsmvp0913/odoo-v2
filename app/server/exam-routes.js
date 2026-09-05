@@ -3,9 +3,10 @@
  *
  * 設計文件：docs/superpowers/specs/2026-09-04-odoo-exam-platform-design.md
  *
- * 全部唯讀。建題庫與跑審查走 CLI（tools/exam-*.js），不掛在 HTTP 上——那是要燒
- * token、跑好幾分鐘的重活，綁在請求上兩邊都難用。
+ * 除了「開一場新考試」之外全部唯讀。跑審查仍走 worker／CLI，不綁在請求上——
+ * 那是要燒 token、跑好幾分鐘的重活。開一場空的考試則只是 INSERT 一列，很輕。
  */
+const express = require('express');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 
@@ -30,6 +31,35 @@ function registerRoutes(app) {
        GROUP BY b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at
        ORDER BY b.id DESC`);
     res.json(rows);
+  });
+
+  // 開一場新考試。
+  //
+  // 在這之前，建 exam_banks 的唯一途徑是 CLI `tools/exam-import.js`，而那支要餵它
+  // 一整包做好的 questions.json——它是拿來搬舊資料的，不是拿來開新考試的。
+  // 於是「考完一場 → 開下一場」這條路整個不存在，累積機制等於只能用一次。
+  //
+  // 建出來就是 ready：空的題庫本來就可以直接接收上傳，沒有要等什麼。
+  app.post('/api/exam/banks', verifyToken, express.json(), async (req, res) => {
+    try {
+      const label = String(req.body.label ?? '').trim();
+      const version = String(req.body.odoo_version ?? '').trim();
+      if (!label) return res.status(400).json({ error: '名稱不可空白' });
+      if (!/^\d+$/.test(version)) return res.status(400).json({ error: 'Odoo 版本要填數字，例 19' });
+
+      // 同版本內名稱不可重複：外部上傳可以用 label 指定題庫（resolveBank），
+      // 重名時它取 id 最大的那個，於是圖會靜靜落到另一場考試上。
+      const dup = (await query(
+        `SELECT id FROM exam_banks WHERE label = $1 AND odoo_version = $2`, [label, version])).rows[0];
+      if (dup) return res.status(409).json({ error: `Odoo ${version} 已經有一場叫「${label}」的考試` });
+
+      const takenAt = String(req.body.taken_at ?? '').trim() || null;
+      const { rows } = await query(`
+        INSERT INTO exam_banks (label, odoo_version, status, taken_at)
+        VALUES ($1, $2, 'ready', $3)
+        RETURNING id, label, odoo_version, status, taken_at, created_at`, [label, version, takenAt]);
+      res.status(201).json(rows[0]);
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // 有哪些 Odoo 版本的題（版本切換用）。

@@ -274,12 +274,21 @@ if (require.main === module) {
     } catch (e) { console.error('[STARTUP] 中斷 clone 清理:', e.message); }
     // 被重啟打斷的題庫審查：job 若留在 running，畫面上看起來像「還在跑」，
     // 但跑它的行程早就不在了，等多久都不會有進展。running 的 upload 一併退回
-    // pending，下次觸發會接續（已 done 的不受影響，不重燒 token）。
+    // pending（已 done 的不受影響，不重燒 token）。
+    //
+    // 退回之後**必須自己把佇列推起來**：scheduleQueue 的其餘呼叫點全都在 HTTP
+    // handler 內，沒有這一步的話那些頁會停在「等待審題」一直轉圈，直到有人手動
+    // 按重試或再傳一張圖進同一個題庫——而畫面上完全看不出它其實已經不動了。
     try {
       const { reclaimInterrupted } = require('./lib/exam/worker');
       const x = await reclaimInterrupted(require('./db'));
       if (x.jobs || x.uploads) {
         console.log(`[STARTUP] 中斷題庫審查清理：${x.jobs} 個工作標記中斷、${x.uploads} 張截圖退回待處理`);
+      }
+      if (x.resumeBanks && x.resumeBanks.length) {
+        const { scheduleQueue } = require('./exam-upload-routes');
+        for (const bankId of x.resumeBanks) scheduleQueue(bankId);
+        console.log(`[STARTUP] 題庫審查續跑：${x.resumeBanks.length} 份題庫`);
       }
     } catch (e) { console.error('[STARTUP] 中斷題庫審查清理:', e.message); }
     // fire-and-forget 的 running 殘留：可續跑的直接續跑（健檢從中斷點接續），

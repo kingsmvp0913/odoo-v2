@@ -165,7 +165,7 @@ async function recomputeConfidence(db, bank) {
     SELECT i.id, i.certain, i.answer_official, i.section_title
       FROM exam_items i WHERE i.odoo_version = $1`, [bank.odoo_version])).rows;
 
-  const bySection = new Map();
+  const byItem = new Map();
   for (const it of items) {
     const v = (await db.query(
       `SELECT id, refuted, confidence, correct_answer FROM exam_verdicts
@@ -183,29 +183,52 @@ async function recomputeConfidence(db, bank) {
       certain: it.certain, hasOfficial: !!it.answer_official,
       verdict: v, evidence: ev, agreeCount: agree });
 
-    const key = it.section_title || '(無章節)';
-    if (!bySection.has(key)) bySection.set(key, []);
-    bySection.get(key).push({ id: it.id, confidence, why, certain: it.certain, answered });
+    byItem.set(it.id, { id: it.id, confidence, why, certain: it.certain, answered,
+      title: it.section_title || '(無章節)' });
   }
 
-  // 章節結果要跨 bank 撈**同版本的全部**，不能只看這一場。
+  // 每一題要用「它自己出現過的那一場」的章節結果校準，不能按章節名跨 bank 共用。
   //
-  // 上面撈題目用的是 odoo_version（題庫是跨考次共用的），章節結果卻綁在 bank 上。
-  // 只撈這一場的話，新考一場就會讓舊考次那些章節「查無官方結果」而整批失去校準——
-  // 實測踩過：POST 進一份新題庫後 120 題全部 calibrated=false，風險總和從 15.03
-  // 跳回 17.46，畫面上沒有任何錯誤，只是信心度悄悄變了。
+  // 「Purchase 這章官方說錯 0 題」是對**那一場的那批題目**講的話。舊寫法只按章節名對，
+  // 於是舊考次某章全對（incorrect=0）會套到新考次同名章節的**新題目**上：
+  // scale = 0 / rawRisk = 0 ⇒ 風險歸零 ⇒ 那些從沒有人確認過的題被寫成 confidence=100
+  // 且 calibrated=true。題庫頁對 confidence===100 畫鎖頭、算進「官方確定 N」，
+  // 於是畫面上與真正的官方確認完全分不出來（DB 層的 certain／answer_official 仍是空的，
+  // 所以 /api/exam/lookup 沒被污染——只有人眼會被騙）。
   //
-  // 同名章節有多場結果時取最新那場（id 大的覆蓋），最近一次官方回饋最能反映現況。
-  const secs = (await db.query(`
-    SELECT s.title, s.incorrect
-      FROM exam_sections s JOIN exam_banks b ON b.id = s.bank_id
-     WHERE b.odoo_version = $1 ORDER BY s.bank_id`, [bank.odoo_version])).rows;
-  const incByTitle = new Map(secs.map(s => [s.title, s.incorrect]));
+  // 改成用 (bank, 章節) 當校準單位：同一場的章節結果只作用在那一場考過的題上。
+  // 這仍然保住了舊寫法真正想要的東西——新考一場不會讓舊考次失去校準，因為舊題
+  // 對到的是舊 bank 自己的那一列。
+  //
+  // 同一題出現在多場時取最新那場（bank_id 最大），最近一次官方回饋最能反映現況；
+  // 代價是舊那場的群組會少掉這幾題，其風險總和改由剩下的題分攤。校準本來就是
+  // 「一場考試內的總量守恆」，一題只能有一個信心度，這裡必須擇一。
+  const secRows = (await db.query(`
+    SELECT a.item_id, s.bank_id, s.title, s.incorrect
+      FROM exam_attempts a
+      JOIN exam_banks b ON b.id = a.bank_id
+      JOIN exam_items i ON i.id = a.item_id
+      JOIN exam_sections s ON s.bank_id = a.bank_id AND s.title = i.section_title
+     WHERE b.odoo_version = $1
+     ORDER BY s.bank_id`, [bank.odoo_version])).rows;
+  // ORDER BY bank_id 遞增 ⇒ 後寫入的覆蓋前面的 ⇒ 留下的是最新那場
+  const secOfItem = new Map();
+  for (const r of secRows) secOfItem.set(r.item_id, r);
+
+  const bySection = new Map();
+  const incOfGroup = new Map();
+  for (const e of byItem.values()) {
+    const sec = secOfItem.get(e.id);
+    // 沒有官方章節結果的題自成一組，incorrect 給 null ⇒ calibrateSection 會標「未校準」
+    const key = sec ? `b${sec.bank_id}|${sec.title}` : `-|${e.title}`;
+    if (!bySection.has(key)) { bySection.set(key, []); incOfGroup.set(key, sec ? sec.incorrect : null); }
+    bySection.get(key).push(e);
+  }
 
   const notes = [];
-  for (const [title, list] of bySection) {
-    const r = calibrateSection(list, { incorrect: incByTitle.has(title) ? incByTitle.get(title) : null });
-    if (r.note) notes.push(`[${title}] ${r.note}`);
+  for (const [key, list] of bySection) {
+    const r = calibrateSection(list, { incorrect: incOfGroup.get(key) });
+    if (r.note) notes.push(`[${key.split('|')[1]}] ${r.note}`);
   }
   for (const list of bySection.values()) {
     for (const e of list) {
@@ -339,8 +362,27 @@ async function reclaimInterrupted(db) {
       WHERE status='running' RETURNING id`);
   const ups = await db.query(
     `UPDATE exam_uploads SET status='pending', updated_at=NOW()
-      WHERE status='running' RETURNING id`);
-  return { jobs: jobs.rows.length, uploads: ups.rows.length };
+      WHERE status='running' RETURNING id, bank_id`);
+
+  // 退回 pending 之前建好的 attempts 必須刪掉，否則續跑會再建一份重複的。
+  //
+  // processUpload 是「先建 attempt 再送審」的順序，重啟打斷在中間時 attempts 已經
+  // 在 DB。失敗路徑（上面的 catch）與「重試」端點都特地刪過，唯獨這裡漏了——
+  // 症狀是同一頁出現兩份作答，而 saveVerdicts 用 (bank_id, page, no) 查，
+  // rows[0] 會隨機挑一份，審查結果掛到哪一份看運氣。
+  for (const u of ups.rows) {
+    await db.query(`DELETE FROM exam_attempts WHERE upload_id = $1`, [u.id]);
+  }
+  // 有哪些題庫還有待處理的頁——呼叫端要據此把佇列重新推起來。
+  // 這裡不自己呼叫 runQueue：worker 不該知道 socket 廣播與同題庫單一 drain 那套
+  // （那是 exam-upload-routes 的 scheduleQueue 在管），互相 require 會變成循環相依。
+  const pending = await db.query(
+    `SELECT DISTINCT bank_id FROM exam_uploads WHERE status='pending'`);
+  return {
+    jobs: jobs.rows.length,
+    uploads: ups.rows.length,
+    resumeBanks: pending.rows.map(r => r.bank_id),
+  };
 }
 
 module.exports = { runQueue, processUpload, recomputeConfidence, reclaimInterrupted, concurrency };

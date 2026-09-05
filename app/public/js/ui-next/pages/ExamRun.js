@@ -12,6 +12,7 @@ window.UiNextExamRunView = Vue.defineComponent({
       archiveOpen: false, archivePages: [], archiving: false, archiveResult: null,
       retrying: {},
       apiOpen: false, token: null, tokenExpiresAt: null, tokenExpired: false, issuing: false,
+      newOpen: false, creating: false, draft: { label: '', odoo_version: '', taken_at: '' },
     };
   },
   async created() {
@@ -96,6 +97,28 @@ window.UiNextExamRunView = Vue.defineComponent({
         }
         this.finalDraft = next;
       } catch (e) { this.err = e.message; }
+    },
+    // 開一場新考試。名稱與日期都預填今天，版本沿用上一場——絕大多數情況三個欄位
+    // 都不用改，直接按建立。
+    openNew() {
+      const today = new Date().toISOString().slice(0, 10);
+      this.draft = {
+        label: today,
+        odoo_version: (this.bank && this.bank.odoo_version) || '19',
+        taken_at: today,
+      };
+      this.newOpen = true;
+    },
+    async createBank() {
+      this.creating = true;
+      try {
+        const b = await Api.post('exam/banks', this.draft);
+        this.newOpen = false;
+        // refresh 每輪跟到最新的題庫，新建的 id 最大 ⇒ 畫面自動切過去
+        await this.refresh();
+        showToast(`已開新考試「${b.label}」，現在可以開始傳截圖`, 'success');
+      } catch (e) { showToast(e.message, 'error', 0); }
+      finally { this.creating = false; }
     },
     async openApi() {
       this.apiOpen = !this.apiOpen;
@@ -187,25 +210,38 @@ window.UiNextExamRunView = Vue.defineComponent({
       this.archiveResult = null;
       try {
         const data = await Api.get(`exam/banks/${this.bankId}/archive`);
-        this.archivePages = (data.pages || []).map(p => ({ ...p, noWrong: false }));
+        // wrong 用字串存：'' 是「還沒填」，'0' 是「這章沒答錯」，兩者意義完全不同。
+        // 用 number 會讓空值變成 0，等於把沒填的章節全部當成全對去鎖，不可逆。
+        this.archivePages = (data.pages || []).map(p => ({ ...p, wrong: '' }));
       } catch (e) { showToast(e.message, 'error', 0); this.archiveOpen = false; }
     },
-    archiveTicked() { return this.archivePages.filter(p => p.noWrong); },
-    // 沒填章節名的勾選會被 server 整頁略過，先在畫面上講，不要等送出才發現
-    archiveBlocked() { return this.archiveTicked().filter(p => !String(p.section || '').trim()); },
+    wrongOf(p) {
+      const s = String(p.wrong ?? '').trim();
+      if (!s) return null;
+      const n = Number(s);
+      return Number.isInteger(n) && n >= 0 ? n : null;
+    },
+    archiveFilled() { return this.archivePages.filter(p => this.wrongOf(p) != null); },
+    // 沒填章節名的會被 server 整頁略過，先在畫面上講，不要等送出才發現
+    archiveBlocked() { return this.archiveFilled().filter(p => !String(p.section || '').trim()); },
+    // 填了但超過作答數的也會被略過，同樣先講
+    archiveOverflow() { return this.archiveFilled().filter(p => this.wrongOf(p) > p.answered); },
     async doArchive() {
-      const ticked = this.archiveTicked();
-      const lock = ticked.reduce((n, p) => n + p.answered, 0);
+      const filled = this.archiveFilled();
+      const clean = filled.filter(p => this.wrongOf(p) === 0);
+      const lock = clean.reduce((n, p) => n + p.answered, 0);
+      const withErr = filled.length - clean.length;
       if (!await confirmDialog({
         title: '歸檔這場考試',
-        message: `將把 ${ticked.length} 個章節共 ${lock} 題鎖成官方正解，信心度 100%。`
-          + '這一步不可逆——鎖上之後那些題不會再被審查。確定嗎？',
+        message: `${clean.length} 個章節共 ${lock} 題會被鎖成官方正解，信心度 100%——這一步不可逆。`
+          + (withErr ? `另外 ${withErr} 個章節只記錄錯題數，不鎖任何題。` : '')
+          + '確定嗎？',
         danger: true, confirmText: '歸檔',
       })) return;
       this.archiving = true;
       try {
         this.archiveResult = await Api.post(`exam/banks/${this.bankId}/archive`, {
-          pages: this.archivePages.map(p => ({ page: p.page, section: p.section, noWrong: p.noWrong })),
+          pages: this.archivePages.map(p => ({ page: p.page, section: p.section, wrong: this.wrongOf(p) })),
         });
         await this.refresh();
         showToast(`已鎖定 ${this.archiveResult.locked} 題`, 'success');
@@ -293,8 +329,29 @@ window.UiNextExamRunView = Vue.defineComponent({
           <button :class="apiOpen && 'ui-next-primary'" @click="openApi">串接說明</button>
           <button :class="archiveOpen && 'ui-next-primary'"
                   :disabled="!stats.total" @click="openArchive">歸檔</button>
+          <button class="ui-next-primary ui-next-cta" @click="openNew">
+            <ui-next-icon name="plus"/>新考試
+          </button>
         </div>
       </header>
+      <div v-if="newOpen" class="ui-next-task-modal-backdrop" @mousedown.self="newOpen=false">
+        <section class="ui-next-task-modal ui-next-exam-new" role="dialog" aria-modal="true"
+                 aria-labelledby="exam-new-title">
+          <header><h2 id="exam-new-title">開一場新考試</h2></header>
+          <label>名稱<input v-model="draft.label" placeholder="例：2026-10-01 秋季"></label>
+          <label>Odoo 版本<input v-model="draft.odoo_version" inputmode="numeric" placeholder="19"></label>
+          <label>考試日期<input v-model="draft.taken_at" type="date"></label>
+          <p class="ui-next-exam-new-note">
+            建立之後這一頁就會切到新的這場，接著把截圖傳進來即可。
+            題庫累積的題目與答案不受影響——同一題再考到會自動接上。
+          </p>
+          <footer>
+            <button type="button" @click="newOpen=false">取消</button>
+            <button class="ui-next-primary" :disabled="creating || !draft.label.trim()"
+                    @click="createBank">{{ creating ? '建立中…' : '建立' }}</button>
+          </footer>
+        </section>
+      </div>
     <div v-if="apiOpen" class="ui-next-task-modal-backdrop" @mousedown.self="apiOpen=false">
       <section class="ui-next-task-modal ui-next-exam-api" role="dialog" aria-modal="true" aria-labelledby="exam-api-title">
         <header class="ui-next-exam-api-head">
@@ -365,11 +422,14 @@ window.UiNextExamRunView = Vue.defineComponent({
         </div>
         <div v-if="archiveOpen" class="ui-next-exam-arch">
           <div class="ui-next-exam-arch-intro">
-            對著官方成績圖，把<b>沒有答錯題目</b>的章節勾起來。勾起來的章節，你答的每一題都會被當成正解永久鎖定。
-            <span class="ui-next-exam-arch-warn">未作答的題不會被鎖（沒答不算對也不算錯）。</span>
+            照著官方成績圖，填每一章錯幾題。
+            <span class="ui-next-exam-arch-key"><b>0</b> 這章你答的每題都鎖成正解（不可逆）</span>
+            <span class="ui-next-exam-arch-key"><b>1 以上</b> 只記錯幾題，不鎖</span>
+            <span class="ui-next-exam-arch-key"><b>留白</b> 先不處理</span>
+            <span class="ui-next-exam-arch-warn">未作答的題不會被鎖。</span>
           </div>
           <div class="ui-next-exam-arch-row is-head">
-            <span>頁</span><span>章節名稱</span><span>題數</span><span>沒答錯</span>
+            <span>頁</span><span>章節名稱</span><span>題數</span><span>錯幾題</span>
           </div>
           <div v-for="p in archivePages" :key="p.page" class="ui-next-exam-arch-row">
             <span class="ui-next-exam-arch-page">P{{ p.page }}</span>
@@ -379,14 +439,18 @@ window.UiNextExamRunView = Vue.defineComponent({
               <small v-if="p.answered < p.total">未答 {{ p.total - p.answered }}</small>
               <small v-if="p.locked" class="ui-next-exam-arch-locked">已鎖 {{ p.locked }}</small>
             </span>
-            <label class="ui-next-exam-arch-tick"><input type="checkbox" v-model="p.noWrong" /></label>
+            <input class="ui-next-exam-arch-wrong" type="number" min="0" :max="p.answered"
+                   v-model="p.wrong" placeholder="—" :aria-label="'P' + p.page + ' 官方說錯幾題'" />
           </div>
           <div v-if="archiveBlocked().length" class="ui-next-exam-arch-block">
-            這幾頁勾了但沒填章節名，會被略過：{{ archiveBlocked().map(p => 'P' + p.page).join('、') }}
+            這幾頁填了錯題數但沒填章節名，會被略過：{{ archiveBlocked().map(p => 'P' + p.page).join('、') }}
+          </div>
+          <div v-if="archiveOverflow().length" class="ui-next-exam-arch-block">
+            這幾頁的錯題數比有作答的題還多，會被略過：{{ archiveOverflow().map(p => 'P' + p.page).join('、') }}
           </div>
           <div class="ui-next-exam-arch-foot">
-            <span>已勾 {{ archiveTicked().length }} 個章節</span>
-            <button class="ui-next-primary" :disabled="archiving || !archiveTicked().length"
+            <span>已填 {{ archiveFilled().length }} 個章節</span>
+            <button class="ui-next-primary" :disabled="archiving || !archiveFilled().length"
                     @click="doArchive">{{ archiving ? '歸檔中…' : '確認歸檔' }}</button>
           </div>
           <div v-if="archiveResult" class="ui-next-exam-arch-result">

@@ -59,11 +59,25 @@ async function listPages(db, bankId) {
   return [...pages.values()];
 }
 
+// 官方成績圖上那一欄「這章錯幾題」。留白／非數字＝這章不處理。
+// 回 null 而不是 0：「不知道」與「0 題錯」是完全不同的兩件事，前者不該鎖任何題。
+function wrongCount(v) {
+  if (v == null || v === '' || v === false) return null;
+  if (v === true) return 0;               // 舊介面的「沒答錯」勾選＝錯 0 題
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 /**
- * 歸檔。pages 是 [{ page, section, noWrong }]。
+ * 歸檔。pages 是 [{ page, section, wrong }]，wrong ＝官方說這章錯幾題。
  *
- * noWrong 為 true 才推導正解；false 只是把章節名寫進去（章節名本身對題庫分組
- * 與後續校準有用，不該因為那章有錯就不記）。
+ * - `wrong` 留白 → 這章不處理（只寫章節名）
+ * - `wrong === 0` → 那章你答的每一題都是正解，永久鎖定
+ * - `wrong > 0`  → **不鎖任何題**（不知道錯的是哪一題），但把錯題數寫進 exam_sections
+ *
+ * 最後一條是「答錯的經驗」唯一的落地點。沒有它，`exam_sections.incorrect` 在網頁
+ * 流程下恆為 0，信心度校準（把整章風險總和拉回官方講的錯題數）就永遠拿不到輸入，
+ * 那個設計等於不存在。
  */
 async function archiveBank(db, { bankId, pages = [] }) {
   const stat = { sections: 0, locked: 0, skipped: [], conflicts: [] };
@@ -71,10 +85,11 @@ async function archiveBank(db, { bankId, pages = [] }) {
   for (const p of pages) {
     const page = String(p.page);
     const section = clean(p.section);
-    const noWrong = p.noWrong === true;
+    // noWrong 是舊欄位名，留著讓既有呼叫端不會靜默失效
+    const wrong = wrongCount(p.wrong != null ? p.wrong : p.noWrong);
 
-    if (noWrong && !section) {
-      stat.skipped.push(`P${page} 勾了「沒答錯」但沒有章節名，略過`);
+    if (wrong != null && !section) {
+      stat.skipped.push(`P${page} 填了錯題數但沒有章節名，略過`);
       continue;
     }
 
@@ -96,16 +111,19 @@ async function archiveBank(db, { bankId, pages = [] }) {
       }
     }
 
-    if (!noWrong) continue;
+    if (wrong == null) continue;
 
     let answered = 0;
     for (const a of attempts) {
       if (!hasAnswer(a.answer_final)) {
         // 未作答：官方說「沒有答錯的」不包含它——沒答不算錯也不算對。
-        stat.skipped.push(`P${page}-${a.no} 沒有最終答案，無法推導正解`);
+        if (wrong === 0) stat.skipped.push(`P${page}-${a.no} 沒有最終答案，無法推導正解`);
         continue;
       }
       answered++;
+      // 這章有答錯的題：不知道是哪一題，所以一題都不能鎖。錯題數寫進 exam_sections
+      // 讓校準去分配風險——那是「答錯」這件事唯一能用的形式。
+      if (wrong > 0) continue;
       if (hasAnswer(a.answer_official) && !sameAnswer(a.answer_official, a.answer_final)) {
         // 官方答案打架：可能是上一場考試推出來的，也可能是這次勾錯章節。
         // 兩種都不該靜靜覆蓋掉，具名報出來讓人判。
@@ -131,19 +149,24 @@ async function archiveBank(db, { bankId, pages = [] }) {
       stat.locked++;
     }
 
-    // 官方章節結果。這是信心度校準的唯一硬事實來源，只在勾了「沒答錯」時才寫得出來
-    // ——沒勾的章節我們不知道錯幾題，寫個猜的數字比不寫更糟。
+    // 官方章節結果。這是信心度校準唯一的硬事實來源。
+    // 錯題數不能超過有作答的題數——超過就是勾錯章節或看錯成績圖，寧可不寫也不要
+    // 寫一個會讓整章校準亂掉的數字（scale = incorrect/rawRisk 會把信心度壓成負的再夾回 0）。
+    if (wrong > answered) {
+      stat.skipped.push(`P${page} 官方說錯 ${wrong} 題，但這章只有 ${answered} 題有作答，未寫入`);
+      continue;
+    }
     const existing = (await db.query(
       `SELECT id FROM exam_sections WHERE bank_id = $1 AND title = $2`, [bankId, section])).rows;
     if (existing.length) {
       await db.query(
-        `UPDATE exam_sections SET n=$2, correct=$3, incorrect=0, unanswered=$4, partial=0 WHERE id=$1`,
-        [existing[0].id, attempts.length, answered, attempts.length - answered]);
+        `UPDATE exam_sections SET n=$2, correct=$3, incorrect=$4, unanswered=$5, partial=0 WHERE id=$1`,
+        [existing[0].id, attempts.length, answered - wrong, wrong, attempts.length - answered]);
     } else {
       await db.query(`
         INSERT INTO exam_sections (bank_id, title, n, correct, incorrect, unanswered, partial)
-        VALUES ($1,$2,$3,$4,0,$5,0)`,
-        [bankId, section, attempts.length, answered, attempts.length - answered]);
+        VALUES ($1,$2,$3,$4,$5,$6,0)`,
+        [bankId, section, attempts.length, answered - wrong, wrong, attempts.length - answered]);
     }
     stat.sections++;
   }

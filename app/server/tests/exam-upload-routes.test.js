@@ -272,12 +272,28 @@ describe('落檔與紀錄', () => {
     expect(fs.existsSync(path.join(uploadDir, row.image_path))).toBe(true);
   });
 
-  test('test 旗標收得到', async () => {
+  // test=1 的用途是「證明我這支腳本傳得進去」，不是判題。原本它照樣走完整條流水線，
+  // 把假題寫進跨考次共用的 exam_items 並累加 seen_count，只有畫面把它濾掉
+  // （is_test 在 worker 裡從頭到尾沒被讀過）——測一次串接就汙染題庫一次。
+  test('test 旗標收得到，而且直接標 done 不進判題佇列', async () => {
     const res = await request(app).post('/api/exam/batch')
       .send({ bank: '2026-09-04', test: '1', items: [{ page: '21', answer: 'B', image: b64 }] });
+    expect(res.body.status).toBe('test-ok');   // 不能回 queued——那是在騙人等一個不會來的結果
     const row = (await dbModule.query(
-      'SELECT is_test FROM exam_uploads WHERE id = $1', [res.body.accepted[0].id])).rows[0];
+      'SELECT is_test, status, error FROM exam_uploads WHERE id = $1',
+      [res.body.accepted[0].id])).rows[0];
     expect(row.is_test).toBe(true);
+    expect(row.status).toBe('done');
+    expect(row.error).toMatch(/未進判題佇列/);
+  });
+
+  test('正式上傳仍然是 pending 等判題', async () => {
+    const res = await request(app).post('/api/exam/batch')
+      .send({ bank: '2026-09-04', items: [{ page: '22', answer: 'C', image: b64 }] });
+    expect(res.body.status).toBe('queued');
+    const row = (await dbModule.query(
+      'SELECT is_test, status FROM exam_uploads WHERE id = $1', [res.body.accepted[0].id])).rows[0];
+    expect(row).toMatchObject({ is_test: false, status: 'pending' });
   });
 });
 

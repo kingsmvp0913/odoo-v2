@@ -1549,9 +1549,21 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.6; margin-bottom: 10px;
 }
 .ui-next-exam-arch-intro b { color: var(--text); }
-.ui-next-exam-arch-warn { color: var(--warning); }
+/* 三種填法各自成塊，不要串成一整段。原本那一段密密麻麻六行，
+   而它要講的其實只有「0／1 以上／留白」三件事。 */
+.ui-next-exam-arch-key {
+  display: inline-block; margin: 6px 8px 0 0; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--card-bg); font-size: var(--fs-xs);
+}
+.ui-next-exam-arch-key b { margin-right: 4px; }
+.ui-next-exam-arch-warn { display: inline-block; margin-top: 6px; color: var(--warning); }
+/* 欄寬收成「表單寬」而不是 1fr 撐滿：章節名是 Sales／Project 這種短字，
+   給它 653px 會讓輸入框橫跨大半個畫面，而右邊兩個窄欄被推到天邊，掃視時對不起來。
+   ⚠ 欄數（4）必須等於每一列的子元素個數，少一欄最後一個會掉到下一列。
+   最後一欄 72px 是量出來的：type=number 有 UA 最小寬度，58px 會被撐破而溢出。 */
 .ui-next-exam-arch-row {
-  display: grid; grid-template-columns: 46px minmax(0, 1fr) 130px 58px;
+  display: grid; grid-template-columns: 46px minmax(0, 340px) 110px 72px;
   gap: 8px; align-items: center; padding: 4px 0;
 }
 .ui-next-exam-arch-row.is-head {
@@ -1569,7 +1581,16 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-arch-n { color: var(--text-secondary); font-size: var(--fs-sm); }
 .ui-next-exam-arch-n small { margin-left: 6px; color: var(--text-muted); font-size: var(--fs-xs); }
 .ui-next-exam-arch-n small.ui-next-exam-arch-locked { color: var(--success); }
-.ui-next-exam-arch-tick { display: flex; justify-content: center; cursor: pointer; }
+/* 錯題數輸入。取代原本的「沒答錯」勾選——勾選只表達得了 0，表達不了「錯 2 題」，
+   而後者正是下一次最需要的經驗。置中並用等寬數字，一整欄掃下來對得齊。 */
+.ui-next-exam-arch-wrong {
+  width: 100%; box-sizing: border-box; padding: 5px 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--card-bg); color: var(--text);
+  font-size: var(--fs-sm); font-variant-numeric: tabular-nums; text-align: center;
+}
+.ui-next-exam-arch-wrong::placeholder { color: var(--text-muted); }
+.ui-next-exam-arch-wrong:focus { outline: none; border-color: var(--primary); }
 .ui-next-exam-arch-block {
   margin-top: 8px; color: var(--warning); font-size: var(--fs-sm);
 }
@@ -1628,6 +1649,14 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-run-retry:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
 .ui-next-exam-run-retry:disabled { opacity: .45; cursor: default; }
 
+
+/* 開新考試的跳窗。三個欄位都預填好，多數情況直接按建立。
+   .ui-next-task-modal 已經有 label／input／footer 的樣式，這裡只補寬度與說明字。 */
+.ui-next-exam-new { width: min(420px, 100%); }
+.ui-next-exam-new > footer { justify-content: flex-end; gap: 8px; }
+.ui-next-exam-new-note {
+  margin: 12px 18px 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6;
+}
 
 /* 上傳串接說明的跳窗。外框沿用 .ui-next-task-modal，這裡只補內容。
    顏色一律走 token（var(--…)），寫死的淺色系在深色模式會維持亮底。 */

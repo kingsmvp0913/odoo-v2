@@ -74,6 +74,46 @@ test('題庫清單帶題數', async () => {
   expect(res.body[0]).toMatchObject({ label: 'B1', odoo_version: '19', item_count: 2 });
 });
 
+// 在這之前，建 exam_banks 的唯一途徑是 CLI，而那支要餵一整包做好的 questions.json。
+// 沒有這支端點，「考完一場 → 開下一場」整條路不存在，累積機制只能用一次。
+describe('開一場新考試', () => {
+  test('建得起來，而且立刻是 ready 可收上傳', async () => {
+    const res = await auth(request(app).post('/api/exam/banks'))
+      .send({ label: '2026-10-01 秋季', odoo_version: '19', taken_at: '2026-10-01' })
+      .expect(201);
+    expect(res.body).toMatchObject({ label: '2026-10-01 秋季', odoo_version: '19', status: 'ready' });
+    expect(res.body.id).toEqual(expect.any(Number));
+
+    const list = await auth(request(app).get('/api/exam/banks')).expect(200);
+    expect(list.body[0]).toMatchObject({ label: '2026-10-01 秋季', item_count: 0 });
+  });
+
+  // 外部上傳可以用 label 指定題庫，重名時 resolveBank 取 id 最大的那個
+  // ⇒ 截圖會靜靜落到另一場考試上，而且完全沒有徵狀。
+  test('同版本內名稱重複要擋下', async () => {
+    await auth(request(app).post('/api/exam/banks'))
+      .send({ label: '重名測試', odoo_version: '19' }).expect(201);
+    const dup = await auth(request(app).post('/api/exam/banks'))
+      .send({ label: '重名測試', odoo_version: '19' }).expect(409);
+    expect(dup.body.error).toMatch(/已經有一場/);
+    // 版本不同就不算重複——17 和 19 的題庫本來就是分開的
+    await auth(request(app).post('/api/exam/banks'))
+      .send({ label: '重名測試', odoo_version: '17' }).expect(201);
+  });
+
+  test('名稱空白與版本非數字都擋下', async () => {
+    await auth(request(app).post('/api/exam/banks'))
+      .send({ label: '  ', odoo_version: '19' }).expect(400);
+    await auth(request(app).post('/api/exam/banks'))
+      .send({ label: 'x', odoo_version: 'saas~19' }).expect(400);
+  });
+
+  test('未帶 token 不得建立', async () => {
+    await request(app).post('/api/exam/banks')
+      .send({ label: 'x', odoo_version: '19' }).expect(401);
+  });
+});
+
 test('版本清單供切換用', async () => {
   const res = await auth(request(app).get('/api/exam/versions')).expect(200);
   expect(res.body).toEqual([{ odoo_version: '19', n: 2 }]);

@@ -89,13 +89,24 @@ async function resolveBank(bankRef) {
   return rows[0] || null;
 }
 
+// 測試上傳直接標 done，不進判題佇列。
+//
+// `test=1` 的用途是「證明我這支腳本傳得進去」，不是要判題。原本它照樣走完整條
+// 流水線：建 exam_items、累加 seen_count、寫 exam_verdicts，全部進跨考次共用的
+// 題庫，只有 ExamRun 的畫面把它濾掉（is_test 在 worker 裡從頭到尾沒被讀過）。
+// 於是同事測一次串接就替題庫塞一批假題，而且看不見、刪不掉。
+// 順帶：判題一頁要燒好幾分鐘的 opus token，煙霧測試不該付這個錢。
+const TEST_UPLOAD_NOTE = '測試上傳（test=1）：只驗證上傳路徑，未進判題佇列';
+
 async function insertUpload({ bankId, batchKey, batchLabel, page, answer, responder, imagePath, isTest, section }) {
   const { rows } = await query(
     `INSERT INTO exam_uploads
-       (bank_id, batch_key, batch_label, page, answer_raw, responder, image_path, is_test, section_title)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+       (bank_id, batch_key, batch_label, page, answer_raw, responder, image_path, is_test,
+        section_title, status, error)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [bankId, batchKey || null, batchLabel || null, String(page), answer,
-     responder || null, imagePath, !!isTest, sectionValue(section)]
+     responder || null, imagePath, !!isTest, sectionValue(section),
+     isTest ? 'done' : 'pending', isTest ? TEST_UPLOAD_NOTE : null]
   );
   return rows[0].id;
 }
@@ -184,13 +195,15 @@ function registerRoutes(app) {
       }
 
       const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf: req.file.buffer, ext });
+      const isTest = asTest(req.body.test);
       const id = await insertUpload({
         bankId: bank.id, batchKey: req.body.batch, batchLabel: req.body.label,
         page, answer, responder: req.body.name, section: req.body.section,
-        imagePath, isTest: asTest(req.body.test),
+        imagePath, isTest,
       });
-      res.json({ id, bank: bank.label, page, status: 'queued' });
-      scheduleQueue(bank.id);
+      // status 要照實講。回 'queued' 而實際上不會判題，是在騙呼叫端等一個不會來的結果。
+      res.json({ id, bank: bank.label, page, status: isTest ? 'test-ok' : 'queued' });
+      if (!isTest) scheduleQueue(bank.id);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -214,6 +227,7 @@ function registerRoutes(app) {
       // 單筆壞掉不讓整批失敗：好的收下，壞的具名回報。同事一次丟 20 題，
       // 不該因為第 13 題漏填答案就得整批重送、重燒一次 token。
       const accepted = [], rejected = [];
+      let real = 0;   // 非測試的筆數——全是測試就不必推佇列
       const batchKey = String(req.body.batch || crypto.randomUUID());
       const batchLabel = String(req.body.label || '').trim() || null;
       for (const [i, it] of items.entries()) {
@@ -222,16 +236,19 @@ function registerRoutes(app) {
         const buf = decodeImage(it.image);
         const ext = sniffImage(buf);
         const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf, ext });
+        const isTest = asTest(it.test ?? req.body.test);
         const id = await insertUpload({
           bankId: bank.id, batchKey, batchLabel, page: it.page, answer: it.answer,
           responder: it.name || req.body.name, imagePath,
           section: it.section ?? req.body.section,
-          isTest: asTest(it.test ?? req.body.test),
+          isTest,
         });
-        accepted.push({ id, page: String(it.page) });
+        if (!isTest) real++;
+        accepted.push({ id, page: String(it.page), test: isTest || undefined });
       }
-      res.json({ bank: bank.label, batch: batchKey, accepted, rejected, status: 'queued' });
-      if (accepted.length) scheduleQueue(bank.id);
+      res.json({ bank: bank.label, batch: batchKey, accepted, rejected,
+        status: real ? 'queued' : 'test-ok' });
+      if (real) scheduleQueue(bank.id);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -442,10 +459,11 @@ function registerRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // 歸檔：寫章節名，並把勾了「這章沒答錯」的章節推導成官方正解。
+  // 歸檔：寫章節名，並依每章的官方錯題數處理——0 題錯的推導成官方正解，
+  // 有錯的只把錯題數寫進 exam_sections（不知道錯哪題，一題都不能鎖）。
   //
-  // **這一步不可逆**（certain 取 OR，蓋不掉），所以跳過與衝突一律具名回傳給畫面顯示，
-  // 不做「靜靜成功」。
+  // **0 題錯那一步不可逆**（certain 取 OR，蓋不掉），所以跳過與衝突一律具名回傳給
+  // 畫面顯示，不做「靜靜成功」。
   app.post('/api/exam/banks/:id/archive', verifyToken, express.json(), async (req, res) => {
     try {
       const bankId = parseInt(req.params.id, 10);

@@ -108,8 +108,42 @@ describe('archiveBank', () => {
   test('勾了「沒答錯」但沒填章節名時整頁略過', async () => {
     const stat = await archiveBank(dbModule, { bankId, pages: [{ page: '3', noWrong: true }] });
     expect(stat.locked).toBe(0);
-    expect(stat.skipped).toEqual(['P3 勾了「沒答錯」但沒有章節名，略過']);
+    expect(stat.skipped).toEqual(['P3 填了錯題數但沒有章節名，略過']);
     expect((await itemsOfPage(3)).map(x => x.certain)).toEqual([false, false]);
+  });
+
+  // 「答錯的經驗」唯一的落地點。舊版對有錯的章節整段 `continue`，什麼都不寫，
+  // 於是 exam_sections.incorrect 在網頁流程下恆為 0，校準永遠拿不到非零輸入。
+  test('章節有答錯時不鎖任何題，但把錯題數寫進 exam_sections', async () => {
+    await addPage(11, [['A'], ['B'], ['C']], { section: 'Project' });
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '11', section: 'Project', wrong: 2 }] });
+
+    expect(stat.locked).toBe(0);                       // 不知道錯哪兩題，一題都不能鎖
+    expect((await itemsOfPage(11)).map(x => x.certain)).toEqual([false, false, false]);
+    const s = (await dbModule.query(
+      `SELECT n, correct, incorrect, unanswered FROM exam_sections
+        WHERE bank_id=$1 AND title='Project'`, [bankId])).rows[0];
+    expect(s).toMatchObject({ n: 3, correct: 1, incorrect: 2, unanswered: 0 });
+  });
+
+  // 錯題數比有作答的題還多＝看錯成績圖或勾錯章節。寫進去會讓 scale 把整章壓爛。
+  test('錯題數超過作答數時不寫入並具名回報', async () => {
+    await addPage(12, [['A'], null], { section: 'Studio' });
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '12', section: 'Studio', wrong: 2 }] });
+    expect(stat.sections).toBe(0);
+    expect(stat.skipped).toContain('P12 官方說錯 2 題，但這章只有 1 題有作答，未寫入');
+  });
+
+  // 留白＝「我還不知道這章的結果」，與「這章 0 題錯」是兩件事，不可混為一談
+  test('錯題數留白時只寫章節名，不鎖也不寫章節結果', async () => {
+    await addPage(13, [['A']], { section: 'Knowledge' });
+    const stat = await archiveBank(dbModule, {
+      bankId, pages: [{ page: '13', section: 'Knowledge', wrong: null }] });
+    expect(stat.locked).toBe(0);
+    expect(stat.sections).toBe(0);
+    expect((await itemsOfPage(13)).map(x => x.section_title)).toEqual(['Knowledge']);
   });
 
   // 同一題在不同場考試被推出不同答案＝有一場勾錯了。靜靜覆蓋會讓錯的那次贏，
@@ -264,6 +298,37 @@ describe('校準跨考次撈章節結果', () => {
         INSERT INTO exam_verdicts (item_id,attempt_id,kind,refuted,correct_answer,confidence,model)
         VALUES ($1,$2,'adversary',false,$3,80,'m')`, [it.rows[0].id, at.rows[0].id, ['A']]);
     }
+  });
+
+  // 這是「越考越假」那個洩漏。舊寫法按章節名跨 bank 共用 incorrect，於是舊考次
+  // 某章全對（incorrect=0）會讓新考次同名章節的**新題目** scale = 0/rawRisk = 0，
+  // 風險歸零被寫成 confidence=100 且 calibrated=true——那些題從沒有人確認過，
+  // 但題庫頁對 confidence===100 畫鎖頭、算進「官方確定 N」，人眼分不出來。
+  test('舊考次某章全對，不得把新考次同名章節的新題目拉成 100', async () => {
+    // 舊考次的 Purchase 官方說 0 題錯
+    await dbModule.query(`
+      INSERT INTO exam_sections (bank_id,title,n,correct,incorrect,unanswered,partial)
+      VALUES ($1,'Purchase',1,1,0,0,0)`, [oldBank]);
+    // 新考次冒出一題同章節的新題，審查過沒被推翻、無證據 ⇒ base 80，且尚未歸檔
+    const it = await dbModule.query(`
+      INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,section_title)
+      VALUES ('21','fresh-purchase','Q','[]'::jsonb,'single','Purchase') RETURNING id`);
+    const at = await dbModule.query(`
+      INSERT INTO exam_attempts (item_id,bank_id,page,no,answer_their,answer_final)
+      VALUES ($1,$2,'9',1,$3,$3) RETURNING id`, [it.rows[0].id, newBank, ['A']]);
+    await dbModule.query(`
+      INSERT INTO exam_verdicts (item_id,attempt_id,kind,refuted,correct_answer,confidence,model)
+      VALUES ($1,$2,'adversary',false,$3,80,'m')`, [it.rows[0].id, at.rows[0].id, ['A']]);
+
+    const bank = (await dbModule.query(
+      `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`, [newBank])).rows[0];
+    await recomputeConfidence(dbModule, bank);
+
+    const row = (await dbModule.query(
+      `SELECT confidence, calibrated, certain FROM exam_items WHERE fingerprint='fresh-purchase'`)).rows[0];
+    expect(row.confidence).toBe(80);      // 舊寫法是 100
+    expect(row.calibrated).toBe(false);   // 舊寫法是 true
+    expect(row.certain).toBe(false);      // 兩邊都是 false——所以 lookup 沒被污染，只有畫面會騙人
   });
 
   test('對新考次重算時，舊考次的章節仍然校準得到', async () => {
