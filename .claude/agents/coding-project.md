@@ -36,6 +36,10 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
   4. 不可逆的 `UPDATE`／`DELETE` 前，先 `SELECT` 出受影響列並用 `_logger` 記下（至少 id 與筆數）——否則出事後無法追溯改到了誰。
   5. `noupdate=1` 的資料被改結構或移除時，要一併清掉遺留的孤兒記錄（舊 external ID 指向已不存在的資料）。
 - (B) `@api.depends` 完整性（本輪新增或改動 compute 欄位時）：compute method body 讀取的每個欄位——**含跨 model 的點路徑**（如 `order_id.partner_id.xxx`，每一段都算）——都必須出現在 `@api.depends(...)`。漏一個不會讓安裝失敗（deploy 抓不到），但該來源欄位變動時 compute 不會重算＝畫面停在舊值。
+- (C) 跨事務邊界的外部系統寫入一致性（**僅當本輪改動明顯涉及「跨 Odoo 事務邊界的外部寫入」才自檢**——呼叫外部 DB／API、`postcommit` hook、outbox、`_sync_`／`_enqueue_` 之類方法、對外部系統（SM／SmartERP／MSSQL）下 `UPDATE`；純 Odoo 任務不適用，不要誤觸發）。Odoo 的交易只保得住 Odoo 自己那份，外部寫入不在同一個 rollback 傘下，deploy 裝得起來也證明不了一致性，逐項自檢：
+  1. **Odoo rollback 時外部已 commit**：外部寫入若在 Odoo 交易 commit 之前就送出，之後這筆交易一旦 rollback（後續任一步拋錯），外部系統已寫入、Odoo 卻沒寫＝兩邊永久不一致。外部寫入要嘛延到 Odoo commit 之後（postcommit），要嘛設計成可補償／可重放。
+  2. **分組 commit 的部分成功**：一批資料分組（逐筆／逐組）寫外部系統時，寫到一半拋錯＝前面已成功、後面沒寫，兩邊對不齊且無法整批回滾。要嘛收斂成同一交易一次寫、要嘛記錄進度可續傳，不可假設「一定跑得到底」。
+  3. **以 0／空值覆蓋外部既有的正確值**：把 Odoo 端尚未計算／為空的欄位當成 `0`／空字串寫回外部系統，會蓋掉外部原本正確的值。寫回前先確認該值確實該被更新，不可用預設 `0`／空值無條件覆蓋。
 
 【Commit 格式】（只 commit，不 push；每個 repo 子目錄各是獨立 git repo）
 對每個「有變更」的 repo 子目錄，分別在該子目錄內 commit：
