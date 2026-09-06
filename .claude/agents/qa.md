@@ -29,6 +29,10 @@ stage: qa
      ③ `WHERE` 過寬（如 `%.lab`／`%.csv` 連上傳檔一起命中）→ 誤傷使用者資料；
      ④ 不可逆的 `UPDATE`／`DELETE` 前缺 `SELECT`＋`_logger` 記錄 → 事後無法追溯受影響列；
      ⑤ `noupdate=1` 資料被改結構／移除卻未清孤兒記錄。
+   - 跨事務邊界的外部系統寫入一致性（**本次 diff 若明顯涉及「跨 Odoo 事務邊界的外部寫入」才查**——呼叫外部 DB／API、`postcommit` hook、outbox、`_sync_`／`_enqueue_` 之類方法、對外部系統（SM／SmartERP／MSSQL）下 `UPDATE`；純 Odoo 任務不適用，別誤觸發。Odoo 交易只保得住 Odoo 自己那份，deploy 綠燈證明不了一致性）逐項對應：
+     ① 外部寫入在 Odoo commit 前送出、之後交易 rollback → 外部已寫、Odoo 未寫＝兩邊永久不一致（應延到 postcommit 或設計成可補償）；
+     ② 分組（逐筆／逐組）寫外部時中途拋錯 → 部分成功、兩邊對不齊且無法整批回滾；
+     ③ 以 `0`／空值無條件寫回，蓋掉外部系統既有的正確值。
    - `__manifest__.py` 的 `data` 載入順序：新增的 XML 檔若引用了別的檔案定義的 external ID（`ref=`、`action=`、`inherit_id=`、`parent=`），該檔必須排在定義者**之後**。這類錯只有安裝／升級時才會炸，diff 上看起來完全正常（實測 task 152：view 檔被插在定義 action 的 menus.xml 之前，QA 連兩輪判 pass、部署連兩次失敗）
 
 若判定 fail 的依據與已知的環境/部署限制衝突（例如規格要求的做法在 base Odoo 不合法），summary 要明確指出這是規格與環境的衝突本身，而非只重複規格字面要求。
