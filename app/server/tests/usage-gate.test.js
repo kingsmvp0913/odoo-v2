@@ -3,9 +3,9 @@ jest.mock('../lib/claude-auth', () => ({
   setActiveCredential: jest.fn(),
   getActiveCredential: jest.fn(() => 'primary')
 }));
-jest.mock('../lib/claude-usage', () => ({ getUsage: jest.fn() }));
+jest.mock('../lib/claude-usage', () => ({ getUsage: jest.fn(), getRateLimitState: jest.fn(() => null) }));
 const { newDb } = require('pg-mem');
-const { getUsage } = require('../lib/claude-usage');
+const { getUsage, getRateLimitState } = require('../lib/claude-usage');
 
 let dbModule, gate;
 
@@ -176,5 +176,84 @@ describe('用量閘門：備用憑證備援', () => {
     const s = await gate.getGateState();
     expect(s.active_credential).toBe('primary');
     expect(auth.setActiveCredential).toHaveBeenCalledWith('primary');
+  });
+});
+
+// 百分比的唯一來源是 /api/oauth/usage，那支端點被 429 罰站時就凍在舊值上
+//（2026-09-07 實地觀察：snapshot 停在 06:24、近兩小時未更新，而 TTL 只有幾分鐘）。
+// 閘門若只看百分比，罰站期間等於瞎的——舊值低就一路放行到真的撞死，舊值高就無限期停住。
+// rate_limit_event 走 pipeline 自己的 stream-json，不花配額、429 期間照樣更新。
+describe('rate_limit_event 補擋', () => {
+  const FUTURE = new Date(Date.now() + 3600e3).toISOString();
+  const PAST = new Date(Date.now() - 3600e3).toISOString();
+  const UNDER = { available: true, five_hour: { utilization: 23, resets_at: 'r5' }, seven_day: { utilization: 35 } };
+  const OVER = { available: true, five_hour: { utilization: 92, resets_at: 'r5' }, seven_day: { utilization: 35 } };
+
+  beforeEach(() => {
+    gate._resetForTesting();
+    getRateLimitState.mockReset();
+    getRateLimitState.mockReturnValue(null);
+    // 未知 status 會刻意 warn 一次（供日後補值域），不讓它汙染測試輸出
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  test('百分比遠低於門檻、但串流回報已被限流 → 仍 blocked', async () => {
+    await setGate();
+    getUsage.mockResolvedValue(UNDER);
+    getRateLimitState.mockReturnValue({ status: 'rejected', rate_limit_type: 'five_hour', resets_at: FUTURE });
+    const s = await gate.getGateState();
+    expect(s.blocked).toBe(true);
+    expect(s.reason.source).toBe('rate_limit_event');
+    expect(s.reason.window).toBe('5h');
+    // 這條來源沒有百分比，不得假裝有——訊息組裝會據此改用不帶數字的句型。
+    expect(s.reason.current).toBeNull();
+  });
+
+  test('status=allowed → 不擋（正常狀態不得誤停 pipeline）', async () => {
+    await setGate();
+    getUsage.mockResolvedValue(UNDER);
+    getRateLimitState.mockReturnValue({ status: 'allowed', rate_limit_type: 'five_hour', resets_at: FUTURE });
+    const s = await gate.getGateState();
+    expect(s.blocked).toBe(false);
+  });
+
+  // 這欄位的值域只實測過 allowed。拿沒把握的未知值去停整條 pipeline，誤停的代價
+  // 遠大於漏擋，所以未知值一律維持現狀。
+  test('未知的 status → 不擋，行為退回原本的百分比判定', async () => {
+    await setGate();
+    getUsage.mockResolvedValue(UNDER);
+    getRateLimitState.mockReturnValue({ status: 'some_future_value', rate_limit_type: 'five_hour', resets_at: FUTURE });
+    const s = await gate.getGateState();
+    expect(s.blocked).toBe(false);
+  });
+
+  // 任務不是隨時在跑，沒有新事件覆蓋時這筆狀態會一直留著（且跨重啟保留）。
+  // 不看視窗就會擋到天荒地老。
+  test('視窗已重置 → 該筆狀態作廢，不再擋', async () => {
+    await setGate();
+    getUsage.mockResolvedValue(UNDER);
+    getRateLimitState.mockReturnValue({ status: 'rejected', rate_limit_type: 'five_hour', resets_at: PAST });
+    const s = await gate.getGateState();
+    expect(s.blocked).toBe(false);
+  });
+
+  // 這條來源只准加擋、不准放行：它沒有百分比，拿它去推翻「百分比已達門檻」等於
+  // 讓一個資訊量更少的來源覆蓋更精確的來源。
+  test('百分比已超標時，串流說 allowed 也照樣 blocked', async () => {
+    await setGate();
+    getUsage.mockResolvedValue(OVER);
+    getRateLimitState.mockReturnValue({ status: 'allowed', rate_limit_type: 'five_hour', resets_at: FUTURE });
+    const s = await gate.getGateState();
+    expect(s.blocked).toBe(true);
+    expect(s.reason.current).toBe(92);
+  });
+
+  test('沒有任何事件（從沒跑過任務）→ 不擋', async () => {
+    await setGate();
+    getUsage.mockResolvedValue(UNDER);
+    getRateLimitState.mockReturnValue(null);
+    const s = await gate.getGateState();
+    expect(s.blocked).toBe(false);
   });
 });

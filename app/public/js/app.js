@@ -335,9 +335,10 @@ router.afterEach((to) => {
 });
 
 // 與 lib/claude-usage.js 的 CACHE_TTL_MS 對齊（改一邊必須改另一邊）。2026-08-31 實測
-// /api/oauth/usage 的門檻約「5 分鐘 6 次」，60s 輪詢＝5 分鐘 5 次，安全。原本的 10 分鐘
-// 反而讓數字落後半小時以上。Codex 端點的門檻沒量過，維持 10 分鐘不動。
-setInterval(loadClaudeUsage, 60 * 1000);
+// /api/oauth/usage 的門檻約「5 分鐘 6 次」。原本的 10 分鐘讓數字落後半小時以上，
+// 但 60s 那版 24/7 長跑後仍被持續罰站（2026-09-07 觀察到 snapshot 近兩小時未更新），
+// 故放寬到 3 分鐘。Codex 端點的門檻沒量過，維持 10 分鐘不動。
+setInterval(loadClaudeUsage, 3 * 60 * 1000);
 setInterval(loadCodexUsage, 10 * 60 * 1000);
 
 const App = defineComponent({

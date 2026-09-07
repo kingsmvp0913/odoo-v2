@@ -1,6 +1,42 @@
 const { query } = require('../db');
-const { getUsage } = require('../lib/claude-usage');
+const { getUsage, getRateLimitState } = require('../lib/claude-usage');
 const claudeAuth = require('../lib/claude-auth');
+
+// rate_limit_event 的 status 值域只實測過 allowed。故意寫成黑名單而非白名單：
+// 拿沒把握的未知值去停 pipeline，誤停的代價遠大於漏擋。認不得的值只記一次 log
+// 供日後補進本表，行為完全維持現狀。
+const RL_BLOCKING = new Set(['rejected', 'blocked', 'exceeded', 'limited']);
+const RL_OK = new Set(['allowed', 'allowed_warning', 'warning']);
+const _rlUnknownSeen = new Set();
+
+// 百分比來自 usage API，那支端點被 429 罰站時就凍在舊值上（2026-09-07 實地觀察凍住近兩
+// 小時），閘門等於瞎的。rate_limit_event 走 pipeline 自己的 stream-json、不花配額、429
+// 期間照樣更新，是那段期間唯一還會動的真相來源；缺點是沒有百分比。
+// 故只拿它「加擋」不拿它「放行」：百分比判不擋但它說被拒 → 改判擋；百分比已判擋 →
+// 不因它而放行。最壞情況（值域猜錯）退回原本的行為，不會誤停。
+function _rateLimitBlock(rl) {
+  if (!rl || typeof rl.status !== 'string') return null;
+  if (RL_OK.has(rl.status)) return null;
+  if (!RL_BLOCKING.has(rl.status)) {
+    if (!_rlUnknownSeen.has(rl.status)) {
+      _rlUnknownSeen.add(rl.status);
+      console.warn(`[USAGE-GATE] 未知的 rate_limit_event status「${rl.status}」，不據此擋任務；確認語意後補進 RL_BLOCKING／RL_OK`);
+    }
+    return null;
+  }
+  // 視窗已重置就作廢：這筆狀態只在它自己的視窗內成立，而任務不是隨時在跑，
+  // 沒有新事件覆蓋時它會一直留著（且跨重啟保留），否則會擋到天荒地老。
+  const resets = Date.parse(rl.resets_at || '');
+  if (Number.isFinite(resets) && resets <= Date.now()) return null;
+  return {
+    window: rl.rate_limit_type === 'seven_day' ? '7d' : '5h',
+    current: null,
+    threshold: null,
+    resets_at: rl.resets_at || null,
+    stale: false,
+    source: 'rate_limit_event'
+  };
+}
 
 // 單一視窗的超標判定：回 { blocked, window, current, threshold, resets_at, stale }
 function _evaluate(u, th5, th7) {
@@ -48,6 +84,9 @@ async function getGateState() {
 
   const u = await getUsage('primary');
   const primary = _evaluate(u, th5, th7);
+  // 百分比判不擋時才問串流事件（見 _rateLimitBlock）——它只加擋、不放行。
+  const rlReason = primary.blocked ? null : _rateLimitBlock(getRateLimitState());
+  const blocked = primary.blocked || !!rlReason;
 
   const base = {
     enabled: true, available: primary.available, stale: primary.stale,
@@ -56,12 +95,12 @@ async function getGateState() {
     fallback_enabled: fallbackEnabled, backup: null
   };
 
-  if (!primary.blocked) {
+  if (!blocked) {
     claudeAuth.setActiveCredential('primary');
     return { ...base, blocked: false, reason: null, active_credential: 'primary' };
   }
 
-  const reason = {
+  const reason = rlReason || {
     window: primary.window, current: primary.current, threshold: primary.threshold,
     resets_at: primary.resets_at, stale: primary.stale
   };
@@ -99,14 +138,22 @@ function _gateMessage(state) {
   const r = state.reason || {};
   const win = r.window === '5h' ? '5 小時視窗' : '本週';
   const staleNote = r.stale ? '（用量資料為快取，可能不是最新）' : '';
-  return `Claude 用量閘門觸發：${win}用量 ${r.current}% 已達門檻 ${r.threshold}%，暫停自動推進任務${staleNote}。重置時間：${r.resets_at || '未知'}。`;
+  // rate_limit_event 那條來源只給狀態不給百分比，照原句型會印出「用量 null% 已達門檻
+  // null%」。訊息是給人看的，說不出數字就別假裝有。
+  const detail = r.source === 'rate_limit_event'
+    ? `Claude 回報${win}已被限流`
+    : `${win}用量 ${r.current}% 已達門檻 ${r.threshold}%`;
+  return `Claude 用量閘門觸發：${detail}，暫停自動推進任務${staleNote}。重置時間：${r.resets_at || '未知'}。`;
 }
 
 // 切到備用憑證要主動說一聲：第二份訂閱被燒掉而沒人知道，是這個功能最容易發生的失敗方式。
 function _switchMessage(state) {
   const r = state.primary_reason || {};
   const win = r.window === '5h' ? '5 小時視窗' : '本週';
-  return `Claude 主憑證${win}用量 ${r.current}% 已達門檻 ${r.threshold}%，已改用備用憑證繼續推進任務。主帳號重置時間：${r.resets_at || '未知'}。`;
+  const detail = r.source === 'rate_limit_event'
+    ? `Claude 回報主憑證${win}已被限流`
+    : `Claude 主憑證${win}用量 ${r.current}% 已達門檻 ${r.threshold}%`;
+  return `${detail}，已改用備用憑證繼續推進任務。主帳號重置時間：${r.resets_at || '未知'}。`;
 }
 
 async function _broadcast(payload, socketEvent, socketData, teamsHtml) {

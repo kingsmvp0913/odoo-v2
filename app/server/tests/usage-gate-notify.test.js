@@ -1,4 +1,4 @@
-jest.mock('../lib/claude-usage', () => ({ getUsage: jest.fn() }));
+jest.mock('../lib/claude-usage', () => ({ getUsage: jest.fn(), getRateLimitState: jest.fn(() => null) }));
 jest.mock('../notify', () => ({ emitAll: jest.fn(), notifyAction: jest.fn(), emitToUser: jest.fn() }));
 jest.mock('../notify-webhook', () => ({ sendWebhook: jest.fn().mockResolvedValue(true) }));
 jest.mock('../teams', () => ({

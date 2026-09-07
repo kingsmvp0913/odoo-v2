@@ -88,8 +88,9 @@ describe('lib/claude-usage getUsage', () => {
     expect(u.five_hour.utilization).toBe(55);
   });
 
-  // 前端多個分頁＋usage-gate 每關評估都會呼叫，沒有快取就是每次都真打。TTL 是 60 秒
-  //（2026-08-31 實測端點門檻約「5 分鐘 6 次」，見 lib/claude-usage.js 的註解），
+  // 前端多個分頁＋usage-gate 每關評估都會呼叫，沒有快取就是每次都真打。TTL 是 3 分鐘
+  //（2026-08-31 實測端點門檻約「5 分鐘 6 次」；60s 版 24/7 長跑後仍被持續罰站，
+  // 2026-09-07 放寬，見 lib/claude-usage.js 的註解），
   // 兩個斷言夾住它：窗內不得重打、窗外必須重打——只驗前者的話 TTL 被改成任意大值都不會紅。
   test('TTL 窗內重複呼叫只打一次 API，窗外才重打', async () => {
     let now = 1_000_000;
@@ -102,7 +103,7 @@ describe('lib/claude-usage getUsage', () => {
     await lib.getUsage();
     expect(global.fetch).toHaveBeenCalledTimes(1);
 
-    now += 60 * 1000;
+    now += 3 * 60 * 1000;
     await lib.getUsage();
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
@@ -129,6 +130,8 @@ describe('lib/claude-usage getUsage', () => {
     auth._setForTesting('primary-tok', 'backup-tok', 'primary');
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => '1800' } })
+      // 主憑證被罰站後會改用本機憑證替補再問一次（見下方「主憑證被限流時改用本機憑證」那組）。
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ five_hour: { utilization: 88, resets_at: 'x' } }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ five_hour: { utilization: 3, resets_at: 'y' } }) });
     await lib.getUsage('primary');
     const b = await lib.getUsage('backup');
@@ -250,5 +253,90 @@ describe('lib/claude-usage rate_limit_event', () => {
   test('resetsAt 不是有效數字 → 該欄位留 null，其餘照收', () => {
     const state = lib.recordRateLimitEvent({ status: 'rejected', resetsAt: null });
     expect(state).toMatchObject({ status: 'rejected', resets_at: null });
+  });
+});
+
+// 限流是綁在 token 上、不綁帳號的：2026-08-31 同一秒對打，平台 setup-token 回 429、
+// 本機那把回 200，而兩者的 five_hour.resets_at 只差 0.4 秒（＝同一個配額桶）。
+// 主憑證被罰站期間（實測可達 40 分鐘）畫面與閘門都只能吃凍住的舊值，換本機那把就問得到。
+describe('lib/claude-usage 主憑證被限流時改用本機憑證', () => {
+  let lib, auth;
+  const RATE_LIMITED = { ok: false, status: 429, headers: { get: () => '600' } };
+  const ok = body => ({ ok: true, json: async () => body });
+
+  beforeEach(() => {
+    jest.resetModules();
+    jest.spyOn(fs, 'readFileSync').mockImplementation(mockReadFileSync('local-creds-token'));
+    jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+    jest.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+    jest.spyOn(fs, 'appendFileSync').mockImplementation(() => {});
+    jest.spyOn(fs, 'statSync').mockImplementation((p, ...rest) =>
+      String(p).endsWith('claude-usage-calibration.jsonl') ? { size: 1 } : realStatSync(p, ...rest));
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    auth = require('../lib/claude-auth');
+    lib = require('../lib/claude-usage');
+    lib._resetCacheForTesting();
+    auth._setForTesting('primary-tok', null, 'primary');
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  test('主憑證 429 → 改用本機憑證問到真值，而不是交出 stale', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce(RATE_LIMITED)
+      .mockResolvedValueOnce(ok({ five_hour: { utilization: 23, resets_at: '2026-09-07T10:40:00.000Z' } }));
+    const u = await lib.getUsage('primary');
+    expect(u.available).toBe(true);
+    expect(u.stale).toBeUndefined();
+    expect(u.five_hour.utilization).toBe(23);
+    expect(u.source).toBe('local');
+    expect(global.fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer local-creds-token');
+  });
+
+  // 罰站期間 getUsage 走的是「冷卻窗提前 return」那條路，根本不會進 try/catch。
+  // 替補若只掛在 catch 上，整段罰站期間就一次都上不了場——那正是原本卡住的成因。
+  test('冷卻窗內（不再打主憑證）仍會走本機憑證', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce(RATE_LIMITED)
+      .mockResolvedValue(ok({ five_hour: { utilization: 31, resets_at: '2026-09-07T10:40:00.000Z' } }));
+    await lib.getUsage('primary');
+    lib._resetCacheForTesting();
+    const u = await lib.getUsage('primary');
+    expect(u.available).toBe(true);
+    expect(u.five_hour.utilization).toBe(31);
+    // 主憑證只在第一次被打過；冷卻窗內不得再送它。
+    const primaryCalls = global.fetch.mock.calls.filter(c => c[1].headers.Authorization === 'Bearer primary-tok');
+    expect(primaryCalls).toHaveLength(1);
+  });
+
+  // 兩把不同帳號時量到的是不相干的數字，閘門會據此誤判。判同源要比 resets_at——
+  // 比 utilization 沒用，取樣時間差就會不同（2026-08-27 曾因此誤判成不同帳號）。
+  test('本機憑證與主憑證不是同一個帳號 → 不採用，維持 stale', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce(ok({ five_hour: { utilization: 40, resets_at: '2026-09-07T10:40:00.000Z' } }))
+      .mockResolvedValueOnce(RATE_LIMITED)
+      .mockResolvedValueOnce(ok({ five_hour: { utilization: 5, resets_at: '2026-09-07T13:20:00.000Z' } }));
+    await lib.getUsage('primary');
+    lib._resetCacheForTesting();
+    const u = await lib.getUsage('primary');
+    expect(u.stale).toBe(true);
+    expect(u.five_hour.utilization).toBe(40);
+  });
+
+  // 備用憑證的意義就是「另一份訂閱」。拿本機憑證頂替會把主帳號的用量回報成備用帳號的，
+  // 閘門看到「備用還很空」就切過去，實際切到同一個已超標的帳號。
+  test('備用憑證被限流 → 不得用本機憑證頂替', async () => {
+    auth._setForTesting('primary-tok', 'backup-tok', 'primary');
+    global.fetch = jest.fn().mockResolvedValue(RATE_LIMITED);
+    const u = await lib.getUsage('backup');
+    expect(u.available).toBe(false);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('主憑證本來就是本機那把 → 被限流時不重打同一把白燒配額', async () => {
+    auth._setForTesting(null, null, 'primary');
+    global.fetch = jest.fn().mockResolvedValue(RATE_LIMITED);
+    const u = await lib.getUsage('primary');
+    expect(u.available).toBe(false);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });

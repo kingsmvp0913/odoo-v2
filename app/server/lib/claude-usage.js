@@ -9,11 +9,12 @@ const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 //   短窗——2 秒間隔連打，第 7 次才 429（Retry-After=300）⇒ 約「5 分鐘 6 次」。
 //   60 秒間隔連打 10 次（跨 10 分鐘）全數 200，一次都沒被擋。
 // 先前設 10 分鐘是把「曾經撞過 429」誤讀成「這端點不准頻繁問」，反而讓畫面在冷卻期
-// 卡上 40 分鐘的 stale。60s 換算＝5 分鐘 5 次，仍在短窗門檻下。
-// ⚠ 只實測了 10 分鐘，24/7 長跑會不會累積撞到更深一層（平台憑證曾被罰 Retry-After 2476s）
-// 未經驗證；下方的 blockedUntil 退避是安全網，最壞退回原本的行為。
+// 卡上 40 分鐘的 stale。
+// 2026-09-07 由 60s 放寬到 3 分鐘：60s 那版只實測過 10 分鐘，而 24/7 長跑後實地觀察到
+// 主憑證持續被罰站（snapshot 停在 06:24、近兩小時未更新），疑似撞到更深一層的累積限制。
+// 3 分鐘＝5 分鐘 1.7 次，離短窗門檻更遠，代價只是畫面最多晚 3 分鐘。
 // 改這裡要連同前端 app.js 的輪詢間隔一起改。
-const CACHE_TTL_MS = 60 * 1000;
+const CACHE_TTL_MS = 3 * 60 * 1000;
 // 磁碟 snapshot：server 重啟後 usage API 若當機仍能靠它判閘門／顯示。lib 在 app/server/lib/，
 // 三個 .. 才回到 repo 根（app/server/lib → app/server → app → <repo>）。
 // 只存主憑證的用量——備用是「撞閘門才用」的旁路，沒有跨重啟保存的必要。
@@ -43,6 +44,14 @@ const _state = {
 // 最近一次 rate_limit_event。跨重啟保留：任務不是隨時在跑，重啟後若清空，
 // 到下一張任務跑完之前都會誤判成「從來沒有狀態」。
 let _rateLimit = null;
+
+// 本機互動式憑證是主憑證被罰站時的替補（限流綁在 token 上，不綁帳號——2026-08-31 實測
+// 同一秒對打：平台 setup-token 429、本機那把 200）。冷卻窗自己記一份，連坐主憑證的
+// blockedUntil 等於替補永遠上不了場。
+let _localBlockedUntil = 0;
+// null=尚未判定／true=與主憑證同一個配額桶／false=不同帳號。判定一次就定案：視窗重置後
+// resets_at 會整個換掉，屆時已無可比對的基準。不同帳號時量到的是不相干的數字，寧可不用。
+let _localSameAccount = null;
 
 try {
   const snap = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, 'utf8'));
@@ -126,13 +135,25 @@ function _tokenFor(which) {
   try { tok = require('./claude-auth').getTokenFor(which); } catch { /* 尚未初始化 */ }
   if (tok) return tok;
   if (which === 'backup') return null;
-  const raw = JSON.parse(fs.readFileSync(CREDS_PATH, 'utf8'));
-  return raw?.claudeAiOauth?.accessToken || null;
+  return _localToken();
+}
+
+// 本機互動式登入憑證。讀不到／格式不符一律回 null 由呼叫端決定，不往外拋——
+// 它是替補路徑，替補缺席不該讓主路徑的錯誤訊息被蓋掉。
+function _localToken() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CREDS_PATH, 'utf8'));
+    return raw?.claudeAiOauth?.accessToken || null;
+  } catch { return null; }
 }
 
 async function fetchUsage(which) {
   const token = _tokenFor(which);
   if (!token) throw new Error('no oauth token');
+  return fetchUsageWith(token);
+}
+
+async function fetchUsageWith(token) {
   const res = await fetch(USAGE_URL, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -161,21 +182,76 @@ function _degraded(st, reason) {
   return st.lastGood ? { ...st.lastGood, stale: true } : { available: false, error: reason };
 }
 
+function _shape(u) {
+  return {
+    available: true,
+    updated_at: new Date().toISOString(),
+    five_hour: pick(u.five_hour),
+    seven_day: pick(u.seven_day),
+    seven_day_opus: pick(u.seven_day_opus),
+    seven_day_sonnet: pick(u.seven_day_sonnet)
+  };
+}
+
+// 兩把 token 是否指向同一個配額桶。比 utilization 沒用——取樣時間差就會不同，2026-08-27
+// 曾因此誤判成不同帳號；比 five_hour.resets_at 才準（同帳號兩把實測只差 0.4 秒）。
+// 任一邊沒有可比對的時間就回 null＝無從判定，留待下次再比，不當成否定。
+function _sameAccount(a, b) {
+  const ta = Date.parse(a?.five_hour?.resets_at || '');
+  const tb = Date.parse(b?.five_hour?.resets_at || '');
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return null;
+  return Math.abs(ta - tb) <= 5000;
+}
+
+// 主憑證這條路走不通（被罰站或抓取失敗）時的替補：改用本機憑證問一次。
+// 只服務主憑證——備用憑證的意義就是「另一份訂閱」，拿本機憑證頂替會把主帳號的用量
+// 回報成備用帳號的，閘門看到「備用還很空」就切過去，實際切到同一個已超標的帳號。
+async function _fallbackToLocal(st, which) {
+  if (which === 'backup' || _localSameAccount === false) return null;
+  if (Date.now() < _localBlockedUntil) return null;
+  const tok = _localToken();
+  if (!tok) return null;
+  // 主憑證本來就是本機那把時，再打一次只是拿同一個 token 白燒同一個配額。
+  let primaryTok = null;
+  try { primaryTok = require('./claude-auth').getTokenFor('primary'); } catch { /* 尚未初始化 */ }
+  if (!primaryTok || primaryTok === tok) return null;
+
+  let data;
+  try {
+    data = _shape(await fetchUsageWith(tok));
+  } catch (err) {
+    if (err.retryAfterMs) _localBlockedUntil = Date.now() + err.retryAfterMs;
+    return null;
+  }
+
+  if (_localSameAccount === null && st.lastGood) {
+    _localSameAccount = _sameAccount(st.lastGood, data);
+    if (_localSameAccount === false) {
+      console.warn('[CLAUDE-USAGE] 本機憑證與主憑證不是同一個帳號，不採用其用量數字');
+      return null;
+    }
+  }
+
+  // source 只為日後判讀「這筆數字是哪把量的」，既有消費端不看這個欄位。
+  data.source = 'local';
+  st.cache = { at: Date.now(), data };
+  st.lastGood = data;
+  saveSnapshot(data);
+  _appendCalibration(data);
+  return data;
+}
+
 async function getUsage(which = 'primary') {
   const st = _state[which === 'backup' ? 'backup' : 'primary'];
   if (st.cache.data && Date.now() - st.cache.at < CACHE_TTL_MS) return st.cache.data;
   // 冷卻窗內不再送請求：實測 Retry-After 是逐秒倒數的，窗口不因重打而延長，硬打只是白燒配額。
-  if (Date.now() < st.blockedUntil) return _degraded(st, 'rate limited');
+  // 但限流綁在 token 上，換本機那把仍問得到——罰站期間正是替補該上場的時候。
+  if (Date.now() < st.blockedUntil) {
+    return (await _fallbackToLocal(st, which)) || _degraded(st, 'rate limited');
+  }
   try {
     const u = await fetchUsage(which);
-    const data = {
-      available: true,
-      updated_at: new Date().toISOString(),
-      five_hour: pick(u.five_hour),
-      seven_day: pick(u.seven_day),
-      seven_day_opus: pick(u.seven_day_opus),
-      seven_day_sonnet: pick(u.seven_day_sonnet)
-    };
+    const data = _shape(u);
     st.cache = { at: Date.now(), data };
     st.lastGood = data;
     if (which !== 'backup') {
@@ -185,6 +261,8 @@ async function getUsage(which = 'primary') {
     return data;
   } catch (err) {
     if (err.retryAfterMs) st.blockedUntil = Date.now() + err.retryAfterMs;
+    const alt = await _fallbackToLocal(st, which);
+    if (alt) return alt;
     const data = _degraded(st, err.message);
     st.cache = { at: Date.now(), data };
     return data;
@@ -197,6 +275,8 @@ function _resetCacheForTesting() {
   _state.primary.cache = { at: 0, data: null };
   _state.backup.cache = { at: 0, data: null };
   _rateLimit = null;
+  _localBlockedUntil = 0;
+  _localSameAccount = null;
 }
 
 module.exports = { getUsage, recordRateLimitEvent, getRateLimitState, _resetCacheForTesting };
