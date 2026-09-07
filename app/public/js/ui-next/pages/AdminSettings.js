@@ -343,7 +343,7 @@
         <div v-else class="settings-layout">
 
           <!-- 系統連線設定 -->
-          <nav class="ui-next-detail-tabs ui-next-settings-tabs"><button v-for="tab in settingsTabs" :key="tab[0]" :class="{active:settingsTab===tab[0]}" @click="settingsTab=tab[0]">{{ tab[1] }}</button></nav>
+          <nav class="ui-next-detail-tabs ui-next-settings-tabs"><button v-for="tab in settingsTabs" :key="tab[0]" :data-tour="'admin-tab-' + tab[0]" :class="{active:settingsTab===tab[0]}" @click="settingsTab=tab[0]">{{ tab[1] }}</button></nav>
               <div v-show="settingsTab==='conn'" class="setting-block" data-tour="admin-conn">
             <div class="setting-block-head">
               <div class="setting-block-title">系統連線設定</div>

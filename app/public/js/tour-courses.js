@@ -82,24 +82,28 @@ window.TOUR_COURSES = [
       },
       {
         route: '/settings',
+        click: '[data-tour="set-tab-connection"]',
         target: '[data-tour="set-github"]',
         title: '這一項不設，任務會卡住',
         text: 'AI 寫完程式要<strong>用你的身分</strong>推上 GitHub。沒給權杖，任務就停在這裡不動。<br><br>照卡片裡四個步驟做，或直接點<strong>「↗ 開啟 GitHub 建立權杖頁」</strong>——網址已經預帶好 <strong>repo</strong> 權限。'
       },
       {
         route: '/settings',
+        click: '[data-tour="set-tab-connection"]',
         target: '[data-tour="set-odoo"]',
         title: 'Odoo 帳號',
         text: '這組是拿來<strong>把你負責的 Odoo 工單自動同步進來</strong>的，任務列表才認得出哪些該歸你。<br><br>填完按「驗證取得」，使用者 ID 會自動帶出來。<strong>沒在用就跳過。</strong>'
       },
       {
         route: '/settings',
+        click: '[data-tour="set-tab-connection"]',
         target: '[data-tour="set-eservice"]',
         title: 'eService 帳號',
         text: '同上，客服系統那邊的工單靠這組認人。<br><br>兩邊都沒在用的話，這兩塊留白不影響其他功能。'
       },
       {
         route: '/settings',
+        click: '[data-tour="set-tab-general"]',
         target: '[data-tour="set-notify"]',
         interactive: true,
         title: '桌面通知 — 最值得開的一個',
@@ -108,6 +112,7 @@ window.TOUR_COURSES = [
       },
       {
         route: '/settings',
+        click: '[data-tour="set-tab-general"]',
         target: '[data-tour="set-dark"]',
         interactive: true,
         title: '深色模式',
@@ -136,21 +141,21 @@ window.TOUR_COURSES = [
         text: '按右上角「+ 新增專案」就會展開這張表單。<br><br><strong>專案名稱用中文時，英文資料夾名稱是必填的</strong>——這是最多人卡住的地方，資料夾與測試資料庫都用它命名。'
       },
       {
-        route: '/projects/demo',
+        route: '/projects/demo?tab=repos',
         target: '[data-tour="pd-repos"]',
         title: '接上程式碼來源',
         text: '貼上 Git URL 後平台會去 clone，<strong>要等狀態變成「✓ 已同步」</strong>才算好。<br><br>網址填完會自動去讀遠端分支，讓你挑<strong>主分支</strong>（讀不到就維持自動偵測）。AI 的 <code>ai-dev</code> 分支就是從這條長出來的。<br><br>這一步是硬前置：沒同步完成，初始化 Wiki 和「上正式」都會是灰的。',
         warn: '主分支「建立後不能再改」——ai-dev 已經長在那條分支上，改設定不會讓它搬家。選錯只能把 repo 移除後重新新增。'
       },
       {
-        route: '/projects/demo',
+        route: '/projects/demo?tab=settings',
         target: '[data-tour="pd-mapping"]',
         title: '這一步不做，任務永遠不會進來',
         text: '平台靠這裡的名稱，判斷 Odoo 和客服系統來的工單該歸到哪個專案。<br><br><strong>名稱要跟來源系統寫的一模一樣</strong>，一行一個，可以綁多個。',
         warn: '同一個來源名稱不能同時綁在兩個專案上，撞名會被擋下來並告訴你被誰用走了。'
       },
       {
-        route: '/projects/demo',
+        route: '/projects/demo?tab=env',
         target: '[data-tour="pd-env"]',
         title: '建一個測試環境',
         text: 'AI 改完的東西會先裝進這個環境，讓你在真的畫面上驗收，確認沒問題才上正式。<br><br>建立要跑一陣子，狀態變成「運行中」之後就會出現「開啟測試區」。'
@@ -217,10 +222,10 @@ window.TOUR_COURSES = [
     steps: [
       {
         route: '/projects/demo/chat/demo',
-        target: '[data-tour="chat-list"]',
+        target: '[data-tour="nav-sidebar-projects"]',
         placement: 'right',
         title: '不確定該不該開任務時，先來這裡',
-        text: 'Chat 是<strong>專案排障助理</strong>，每個專案各自一組對話，左邊可以開很多條、各聊各的。<br><br>問它不會建立任何任務、不會改到程式，純粹查清楚狀況。'
+        text: 'Chat 是<strong>專案排障助理</strong>。每個專案底下可以開很多條對話、各聊各的，<strong>都掛在側欄的專案樹底下</strong>——點專案名稱展開就看得到。<br><br>問它不會建立任何任務、不會改到程式，純粹查清楚狀況。'
       },
       {
         route: '/projects/demo/chat/demo',
@@ -347,6 +352,7 @@ window.TOUR_COURSES = [
       {
         route: '/task/demo',
         demoStatus: 'coding_running',
+        click: '[data-tour="td-events-open"]',
         target: '[data-tour="td-events"]',
         placement: 'top',
         title: '⑤ 這段可以去忙別的',
@@ -476,12 +482,14 @@ window.TOUR_COURSES = [
       },
       {
         route: '/token-report',
+        click: '[data-tour="tr-tab-usage"]',
         target: '[data-tour="tr-charts"]',
         title: '花在哪一關、哪個專案',
         text: '三張圓餅分別是 <strong>Agent 類型／專案／使用者</strong>，點一下可以放大。右邊折線是每日趨勢。<br><br>某個 agent 的占比突然變大，通常代表那一關的提示詞該調了——可以到「管理員 → 改善提案」看 AI 分析出來的待辦提案。'
       },
       {
         route: '/token-report',
+        click: '[data-tour="tr-tab-detail"]',
         target: '[data-tour="tr-tasks"]',
         placement: 'top',
         title: '明細：抓出那幾張異常的',
@@ -495,6 +503,7 @@ window.TOUR_COURSES = [
       },
       {
         route: '/admin/settings',
+        click: '[data-tour="admin-tab-ai"]',
         target: '[data-tour="admin-gate"]',
         title: '用量閘門 — 別讓額度一次燒光',
         text: '全台共用同一個 Claude 帳號。用量達門檻時，這道閘門會<strong>自動停止 Pipeline 自動推進</strong>，但手動按「繼續」不受影響。<br><br>5 小時視窗或本週任一超標就暫停，兩個門檻可以各自調。',
@@ -502,6 +511,7 @@ window.TOUR_COURSES = [
       },
       {
         route: '/admin/settings',
+        click: '[data-tour="admin-tab-ai"]',
         target: '[data-tour="admin-token"]',
         title: 'Claude 憑證 — 建議一定要設',
         text: '在任一台裝有 Claude Code 的機器跑 <code>claude setup-token</code>，把產生的長效 token 貼進來即可（綁訂閱、不另計費，效期一年）。<br><br><strong>不設的話會用伺服器本機的登入憑證，多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。</strong>換帳號只要貼新的 token，不必重啟伺服器。<br><br>下面還有一格<strong>備用憑證</strong>：主帳號用量撞到上面那道閘門時，開啟開關就改用它繼續跑，主帳號降回門檻下自動切回。',

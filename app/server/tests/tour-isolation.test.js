@@ -84,6 +84,36 @@ describe('data-tour 錨點與課程定義對得上', () => {
   });
   ['notes', 'overview', 'module', 'troubleshooting'].forEach(t => anchors.add('wiki-node-' + t));
 
+  // 分頁列同理：UI Next 把個人設定、用量報表、管理員設定、專案頁都拆成分頁，
+  // 教學要先點分頁才指得到裡面的東西，所以每個分頁鈕都掛了一個拼接出來的錨點。
+  // key 清單**從原始碼撈**而不是寫死——寫死的話新增／改名一個分頁就會腐爛成假事實。
+  const DYNAMIC_TABS = [
+    { prefix: 'set-tab-', file: 'js/ui-next/pages/Settings.js', decl: 'SETTINGS_TABS', bind: `:data-tour="'set-tab-' + item.key"`, min: 3 },
+    { prefix: 'tr-tab-', file: 'js/ui-next/pages/TokenReport.js', decl: 'TABS', bind: `:data-tour="'tr-tab-' + item.key"`, min: 4 },
+    { prefix: 'admin-tab-', file: 'js/ui-next/pages/AdminSettings.js', decl: 'settingsTabs', bind: `:data-tour="'admin-tab-' + tab[0]"`, min: 4 },
+    { prefix: 'pd-tab-', file: 'js/ui-next/pages/ProjectDetail.js', decl: 'tabs', bind: `:data-tour="'pd-tab-' + tab[0]"`, min: 6 },
+  ];
+  const tabKeys = (spec) => {
+    const src = read(spec.file);
+    const at = src.indexOf(spec.decl);
+    // 巢狀陣列（[["conn","連線"],…]）要切到 ]] 才是整份；只找第一個 ] 會停在第一組裡面，
+    // 於是永遠只撈到一個 key——而那看起來像「撈到了」，不像失敗。
+    const open = src.indexOf('[', at);
+    const nested = /^\s*\[/.test(src.slice(open + 1));
+    const close = nested ? src.indexOf(']]', open) + 2 : src.indexOf(']', open);
+    const body = src.slice(open, close);
+    // 兩種寫法都吃：{ key: "x", ... } 與 ["x", "標籤"]
+    return [...body.matchAll(/(?:key:\s*"([a-z]+)"|\[\s*"([a-z]+)"\s*,)/g)].map(m => m[1] || m[2]);
+  };
+  DYNAMIC_TABS.forEach((spec) => {
+    // eslint-disable-next-line jest/valid-title
+    test(`${spec.prefix}* 的拼接還在，且撈得到 key`, () => {
+      expect(read(spec.file)).toContain(spec.bind);
+      expect(tabKeys(spec).length).toBeGreaterThanOrEqual(spec.min);
+    });
+    tabKeys(spec).forEach(k => anchors.add(spec.prefix + k));
+  });
+
   const wanted = [...new Set(
     [...read('js/tour-courses.js').matchAll(/\[data-tour="([^"]+)"\]/g)].map(m => m[1])
   )];
@@ -258,5 +288,30 @@ describe('新手教學在「更多工具」選單裡叫得出來', () => {
   test('openTour 會先收掉選單再開教學', () => {
     // 不收的話選單浮在教學遮罩上，第一步就被自己的選單擋住
     expect(src).toMatch(/openTour\(\)\s*\{\s*this\.toolsOpen\s*=\s*false;\s*window\.TourManager\.open\(\);/);
+  });
+});
+
+// toast 與確認視窗跟教學是同一個成因：三者一起掛在 shell 外面、一起吃不到 ui-next 色票。
+// dialog.js 與 app.js 的 class 名新舊共用不能改，所以只覆寫外觀——這幾條掉了就會
+// 悄悄退回 app.css 的 8px 圓角與飽和色塊，而畫面照跑、沒有任何測試會叫。
+describe('toast 與確認視窗吃 ui-next 的外觀', () => {
+  const css = fs.readFileSync(
+    path.join(publicDir, 'css/ui-next-pages/01-base.css'), 'utf8');
+
+  test('覆寫都限定在 [data-ui="next"] 範圍內（不得濺到舊介面）', () => {
+    ['.toast', '.toast-close', '.modal-overlay', '.modal'].forEach((sel) => {
+      const re = new RegExp('(^|[},])\\s*\\[data-ui="next"\\] \\' + sel + '[\\s.{,]', 'm');
+      expect(css).toMatch(re);
+    });
+  });
+
+  test('toast 不再整塊塗語意色（深色模式白字讀不到）', () => {
+    const block = css.slice(css.indexOf('[data-ui="next"] .toast {'));
+    expect(block).toMatch(/background:\s*var\(--surface\)/);
+    expect(block).toMatch(/border-left:\s*3px solid/);
+    // 四個級別各自只換左側那條的顏色，級別仍分得出來
+    ['info', 'success', 'warn', 'error'].forEach((level) => {
+      expect(css).toContain(`[data-ui="next"] .toast.${level} { border-left-color:`);
+    });
   });
 });

@@ -115,9 +115,9 @@
 <button v-for="item in [['needs_action','需回覆',needsActionShown],['pending','待處理',pendingShown],['paused','暫停中',pausedShown],['all','全部',allShown],['archived','已封存','']]" :key="item[0]" :class="{active:filter===item[0]}" :aria-pressed="filter===item[0] ? 'true' : 'false'" @click="filter=item[0]">{{ item[1] }} <b v-if="item[2]!==''">{{ item[2] }}</b>
 </button>
 </div>
-<div data-tour="task-filters-toggle" class="ui-next-task-toolbar">
+<div class="ui-next-task-toolbar">
 <input v-model="search" placeholder="搜尋標題、任務 ID、專案或來源…">
-<button @click="filtersOpen=!filtersOpen">篩選 <b v-if="activeFilterCount">{{ activeFilterCount }}</b>
+<button data-tour="task-filters-toggle" @click="filtersOpen=!filtersOpen">篩選 <b v-if="activeFilterCount">{{ activeFilterCount }}</b>
 </button>
 <select v-model="sort">
 <option value="updated_desc">最近更新</option>

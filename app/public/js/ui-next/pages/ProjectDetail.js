@@ -98,7 +98,7 @@
 <span :class="['is-'+(env&&env.status||'idle')]">{{ {idle:'環境未建立',setting_up:'環境建立中',running:'環境運行中',error:'環境發生錯誤'}[env&&env.status] || '環境未建立' }}</span>
 </div>
         <nav data-tour="pd-tools" class="ui-next-detail-tabs">
-<button v-for="tab in tabs" :key="tab[0]" :class="{active:detailTab===tab[0]}" @click="selectTab(tab[0])">{{ tab[1] }}<span v-if="tab[0]==='chat'&&unreadCount()">{{ unreadCount() }}</span></button>
+<button :data-tour="'pd-tab-' + tab[0]" v-for="tab in tabs" :key="tab[0]" :class="{active:detailTab===tab[0]}" @click="selectTab(tab[0])">{{ tab[1] }}<span v-if="tab[0]==='chat'&&unreadCount()">{{ unreadCount() }}</span></button>
 </nav>
         <div v-if="detailTab==='repos'" class="ui-next-project-detail-grid">
 <section data-tour="pd-repos" class="ui-next-panel ui-next-repos">

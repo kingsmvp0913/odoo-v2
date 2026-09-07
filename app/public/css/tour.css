@@ -139,15 +139,25 @@
 .tour-btn-ghost { background: transparent; color: var(--text-muted); border-color: var(--border); }
 .tour-btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
 
+/* 課程數會長（目前 10 堂）：卡片本身鎖在視窗內、由課程清單自己捲，
+   否則標題與底部的「關閉」會被推出畫面外——實測 10 堂就已經溢出 900px 高的視窗。
+   ⚠ 高度要除以 --ui-zoom：body 有 zoom:1.1，直接寫 vh 會比視覺上大 10%。 */
 .tour-menu {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
   width: min(520px, calc(100vw - 32px)); pointer-events: auto;
+  display: flex; flex-direction: column;
+  max-height: calc((100vh - 48px) / var(--ui-zoom, 1));
   background: var(--surface); border: 1px solid var(--border-strong);
   border-radius: 15px; box-shadow: var(--shadow-lg); padding: var(--space-5);
 }
 .tour-menu-title { font-size: var(--fs-2xl); font-weight: var(--fw-bold); margin-bottom: var(--space-1); }
 .tour-menu-sub { font-size: var(--fs-base); color: var(--text-muted); margin-bottom: var(--space-4); }
-.tour-menu-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.tour-menu-list {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  /* 捲動時項目的 focus ring 不要被裁掉 */
+  padding: 2px;
+}
 .tour-menu-item {
   display: flex; align-items: center; gap: var(--space-3); width: 100%;
   font: inherit; text-align: left; cursor: pointer;
@@ -169,7 +179,8 @@
 .tour-menu-name { display: block; font-size: var(--fs-md); font-weight: var(--fw-semibold); }
 .tour-menu-desc { display: block; font-size: var(--fs-sm); color: var(--text-muted); }
 .tour-menu-steps { flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-muted); }
-.tour-menu-foot { display: flex; justify-content: flex-end; margin-top: var(--space-4); }
+.tour-menu-foot { display: flex; flex: none; justify-content: flex-end; margin-top: var(--space-4); }
+.tour-menu-title, .tour-menu-sub { flex: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .tour-ring, .tour-pop, .tour-progress > span { transition: none; }

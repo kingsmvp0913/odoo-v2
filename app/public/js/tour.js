@@ -157,7 +157,10 @@
 
         if (window.TourDemo && step.demoStatus) window.TourDemo.status = step.demoStatus;
 
-        if (step.route && this.$route.path !== step.route) {
+        // 帶 query 的 route（專案頁用 ?tab= 選分頁）要比 fullPath；只比 path 的話
+        // 同一頁的三個分頁會被判成「已經在那裡」而不切換，或反過來每步都重推一次。
+        const here = step.route && step.route.includes('?') ? this.$route.fullPath : this.$route.path;
+        if (step.route && here !== step.route) {
           await this.$router.push(step.route).catch(() => {});
           if (token !== this._token) return;
         }

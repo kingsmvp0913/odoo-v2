@@ -232,3 +232,39 @@
    該屬性的子樹上，而這三者刻意掛在 .ui-next-shell 外面（登入頁與未登入狀態也要有）。
    display:contents ⇒ 不產生 box、不影響任何定位；自訂屬性照樣繼承下去。 */
 .ui-next-overlays { display: contents; }
+
+/* ── 全域 overlay 的 ui-next 外觀 ─────────────────────────────────────────
+   toast 與確認視窗走的是 js/dialog.js 與 app.js 的 legacy class（那兩支新舊共用，
+   改 class 名會弄壞舊介面），所以這裡只覆寫外觀。作用範圍是 .ui-next-overlays
+   帶的 data-ui="next"，舊介面不受影響。
+   基準取自 .ui-next-task-modal／.ui-next-account-menu：surface 底、border-strong
+   邊、shadow-lg、15px 圓角。 */
+
+/* toast 原本整塊塗語意色＋白字。ui-next 深色模式的 --success 是亮綠 #4ADE80、
+   --warning 是 #FBBF24，白字壓上去讀不到；而整片飽和色塊也和這套安靜的版面
+   格格不入。改成 surface 卡片＋左側一條語意色，顏色仍分得出級別。 */
+[data-ui="next"] .toast {
+  padding: 11px 15px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+}
+[data-ui="next"] .toast.info { border-left-color: var(--info); }
+[data-ui="next"] .toast.success { border-left-color: var(--success); }
+[data-ui="next"] .toast.warn { border-left-color: var(--warning); }
+[data-ui="next"] .toast.error { border-left-color: var(--danger); }
+[data-ui="next"] .toast-close { color: var(--text-muted); }
+[data-ui="next"] .toast-close:hover { color: var(--text); }
+
+/* 確認視窗：遮罩深淺對齊 .ui-next-task-modal-backdrop，卡片對齊 .ui-next-task-modal */
+[data-ui="next"] .modal-overlay { background: color-mix(in srgb, #000 48%, transparent); }
+[data-ui="next"] .modal {
+  border: 1px solid var(--border-strong);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}

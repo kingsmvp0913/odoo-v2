@@ -37,7 +37,7 @@
 </div>
 </header>
 <div class="ui-next-page-tabs" role="tablist">
-<button v-for="item in tabs" :key="item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
+<button v-for="item in tabs" :key="item.key" :data-tour="'set-tab-' + item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
 </div>
 <div v-if="loading" class="ui-next-loading-card">載入設定中…</div>
 <div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>

@@ -488,11 +488,16 @@
       },
       // 側欄的任務清單比照專案對話：需回覆的排最前面，其餘照更新時間（後端已 updated_at DESC，
       // sort 穩定所以組內順序不會被打亂），只留還在跑的（已完成不列；已封存後端本來就不回），取前五筆。
+      // 教學開著時把示範任務插到最前面：新帳號側欄本來就是空的（整段 v-if 不渲染），
+      // 而「認識新介面」第一課要教的就是這一段與它的右鍵選單，沒有列可指就整課空轉。
+      // 只影響顯示，不進 this.sidebarTasks，所以「任務列表」的未處理數不會被灌水。
       sidebarTaskRows() {
-        return [...this.sidebarTasks]
+        const rows = [...this.sidebarTasks]
           .filter((task) => task.status !== "done")
           .sort((a, b) => Number(this.taskNeedsAction(b)) - Number(this.taskNeedsAction(a)))
           .slice(0, 5);
+        const demo = window.TourDemo;
+        return demo && demo.active ? [demo.task(), ...rows] : rows;
       },
       // 目前這張任務有沒有出現在側欄那五筆裡。有的話，那一列自己會亮（is-active），
       // 「任務列表」nav 就不該再亮一次——否則同一件事在側欄被標了兩層，看起來像選錯了。
