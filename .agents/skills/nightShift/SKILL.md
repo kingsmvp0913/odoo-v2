@@ -1,11 +1,15 @@
 ---
 name: nightShift
-description: Use when the user leaves for the day and wants unattended overnight progress on the UI Next redesign (OAA UI Next). Defines the per-round contract — usage-quota gate, authoritative todo source, decision anchors, screenshot verification, git safety — and the morning handoff. Invoke at clock-out; each scheduled wake-up re-reads this file.
+description: Use when the user leaves for the day and wants unattended overnight progress on a task they nominate at clock-out. The assignment file docs/nightshift-assignment.md is the authoritative scope; this skill defines the per-round contract — usage-quota gate, decision anchors, screenshot verification, git safety — and the morning handoff. Invoke at clock-out; each scheduled wake-up re-reads this file.
 ---
 
-# 夜班：無人值守推進 UI Next 改版
+# 夜班：無人值守推進「當晚指定的那一件事」
 
-使用者下班後自動推進 `?ui=next` 版面改版。**每一輪都從這份檔案重新開始** —— 對話可能已被 compact、session 可能已重開，所以任何「記在腦子裡」的東西都不算數。狀態一律讀檔。
+使用者下班前**指定當晚要做哪一件事**，寫成工作單 `docs/nightshift-assignment.md`；夜班照著推進。
+**每一輪都從這份檔案重新開始** —— 對話可能已被 compact、session 可能已重開，所以任何「記在腦子裡」的東西都不算數。狀態一律讀檔。
+
+⚠ 本 skill **不預設題目**。沒有工作單就沒有夜班（見第 2 步）。歷史上它曾綁死在「UI Next 改版」，
+結果那份待辦來源被刪掉之後，交班檔連續 98 輪記「無變化」。題目改由工作單帶入就不會再發生。
 
 ## 為什麼不靠 compact
 
@@ -23,10 +27,11 @@ curl -s -H "Authorization: Bearer $TOK" -H "anthropic-beta: oauth-2025-04-20" \
   https://api.anthropic.com/api/oauth/usage | python3 -m json.tool | grep -A3 seven_day
 ```
 
-**週額度（`seven_day.utilization`）≥ 60 → 立刻停止本輪**，不寫任何碼，把「因額度停手」記進交班檔，不再排下一輪。
+**門檻寫在當晚的工作單裡**（`docs/nightshift-assignment.md` 的「額度門檻」欄）。
+**週額度（`seven_day.utilization`）≥ 該門檻 → 立刻停止本輪**，不寫任何碼，把「因額度停手」記進交班檔，不再排下一輪。
 
-這是使用者 2026-08-31 裁決的數字，理由是保住隔天上班的額度。**每輪要問過使用者當下的門檻**——
-2026-09-02 他當面改成 70%（只當次有效，明言不寫回本檔）。
+工作單沒寫門檻時用 **60**（2026-08-31 的原始裁決，理由是保住隔天上班的額度）。
+數字每次都可能不同——2026-09-02 是 70、2026-09-07 也是 70。**以工作單為準，不要照抄本檔的 60。**
 
 **重置時間以 API 回的 `resets_at` 為準，不要照著本檔或前一輪的推算規劃額度。**
 2026-09-02 實測：同一場作業內 `utilization` 從 50% 掉到 2%，而當時記錄的 `resets_at` 還在隔天——
@@ -40,19 +45,25 @@ curl -s -H "Authorization: Bearer $TOK" -H "anthropic-beta: oauth-2025-04-20" \
 cd /home/odoo/odoo-v2 && git pull --ff-only origin master
 ```
 
-**待辦來源，依此優先序**：
+#### 2a. 讀當晚的工作單（**唯一題目來源**）
 
-1. **使用者當面交辦的事項**（若這一輪是他交辦後才跑的）
-2. `docs/nightshift-review.md` 的最後一輪 —— 那裡有「仍未做／沒驗到」清單與上一輪的拍板結果
-3. `OAA-UI-NEXT-CORRECTION-SPEC.md`、`OAA-UI-NEXT-ROUND2-SPEC.md`
+```bash
+cat /home/odoo/odoo-v2/docs/nightshift-assignment.md
+```
 
-⚠ **第 3 項那兩份規格書 2026-09-02 實測已不在硬碟上**（曾在 repo 根，後來被刪；`docs/` 又在 `.gitignore`）。
-需要的話從 git 撈：`git show dca89815:OAA-UI-NEXT-CORRECTION-SPEC.md`、`git show 8842b336:OAA-UI-NEXT-ROUND2-SPEC.md`。
+工作單由使用者下班前指定、由當時的 session 寫檔。它決定**當晚做哪一件事**，格式見本檔末〈工作單格式〉。
+裡面的裁決（範圍、額度門檻、push 策略、完成定義）**一律優先於本 skill 的預設值**。
 
-**這件事害過一次**：找不到待辦來源時本 skill 沒有備援指示，結果交班檔連續 98 輪記「維護模式、無變化」，
-每輪都花額度確認一次「沒事可做」。**待辦來源全空 ≠ 無事可做，那是訊號本身壞了 —— 直接停止排下一輪並在交班檔寫明。**
+**工作單不存在、或狀態已是「已完成」 → 停止，不排下一輪**，並在交班檔寫明原因。
+**不要自己找事做。** 找不到題目不等於閒著沒事，那是「使用者今晚沒交辦」或「訊號壞了」，兩者都該停。
 
-多份來源**管不同範圍不是互相取代**。真的對不上時記進交班檔，不要自己調和。
+> 這條是有代價換來的：本 skill 原本把題目綁死在兩份規格書上，那兩份後來被刪掉，
+> 而當時沒寫「來源全空怎麼辦」，於是交班檔連續 **98 輪**記「維護模式、無變化」，每輪都花額度確認一次沒事做。
+
+#### 2b. 接上一輪的進度
+
+`docs/nightshift-review.md` 的最後一輪 —— 那裡有「仍未做／沒驗到」清單與上一輪自己拍板的結果。
+**工作單定範圍，交班檔定進度到哪裡。** 兩者對不上時記進交班檔，不要自己調和。
 
 ### 3. 做
 
@@ -76,8 +87,8 @@ grep -E '^Tests:|^Test Suites:' /tmp/t.log
 
 - 更新對應 spec 的狀態表
 - `git status --porcelain -uno` **逐檔挑選**，禁用 `git add -A`
-- commit 訊息格式 `[UI Next]: 為什麼（不是做了什麼）`
-- **只 commit，不 push**。push 留給使用者早上審完決定
+- commit 訊息格式 `[模組]: 為什麼（不是做了什麼）`；模組名取自工作單
+- **push 策略照工作單的「push 策略」欄**。工作單沒寫時的預設是**只 commit 不 push**，留給使用者早上審完決定
 
 ### 6. 排下一輪
 
@@ -94,7 +105,7 @@ grep -E '^Tests:|^Test Suites:' /tmp/t.log
 - 找得到明確錨點（GodUI 元件規格、AskMe 實際畫面、同專案既有寫法、spec 白紙黑字）→ **選一個做**，把「選了什麼、根據哪個錨點、還有什麼選項」記進交班檔
 - 找不到錨點 → **跳過**，記進交班檔。這條守住 `CLAUDE.md` 的 NEVER guess intent
 
-spec 內已知待拍板：§7.3 九種 action mode 補到什麼程度、§4.4 的 13 處圖示卡在凍結 View 要不要分家。
+當晚有哪些已知待拍板事項，看工作單自己列的清單（本檔不寫死——寫死的清單會跟著題目換而腐爛）。
 
 **不動核心與別人的碼。** 只碰 `app/public`（前端）與必要的 `app/server`。改 `app/public` 前先載入 `platformDev` skill（配色 dark-mode 硬規則在那）。
 
@@ -107,7 +118,7 @@ spec 內已知待拍板：§7.3 九種 action mode 補到什麼程度、§4.4 �
 
 **2026-09-02 起 CSS 已拆檔**，覆蓋關係現在跨檔案：
 
-- `ui-next-pages.css` **已不存在**，改成 `app/public/css/ui-next-pages/01-…09-*.css`
+- `ui-next-pages.css` **已不存在**（2026-09-02 拆檔），改成 `app/public/css/ui-next-pages/01-…09-*.css`。**別再 grep 舊檔名**
 - 載入序＝`ui-next.css` → `01-base` → … → `09-later-patches`。
   **檔名前綴的數字就是層疊順序，不可重排、不可按字母排序**——
   `09-later-patches` 整份是靠排在最後才生效的補丁
@@ -146,10 +157,20 @@ cd /home/odoo/odoo-v2/app && npm run rwd:capture
 截圖腳本三個必要設定，少一個就出錯：`require` playwright 要用絕對路徑 `/home/odoo/odoo-v2/app/node_modules/playwright`、`PLAYWRIGHT_BROWSERS_PATH` 指 `app/rwd/.pw-browsers`、`XDG_DATA_HOME` 指 `app/rwd/.fontroot`（不設中文變豆腐框）。登入靠 `addInitScript` 塞 `localStorage.aidev_token`。
 
 - 平台埠是 **8771**，不是 rwd 預設的 3939
-- `RWD_TOKEN` 會過期（上一次記錄的到期時間是 **2026-09-02 13:55**，之後沒人更新過這行，所以**很可能已經過期**）。
-  過期症狀是截到登入頁而不是內容頁 —— 看到就停手記進交班檔，不要繼續截一整輪沒用的圖。
-  換發：請使用者從瀏覽器 devtools 的 `localStorage.aidev_token` 複製，貼進 `~/.claude/nightshift.env`。
+- **`~/.claude/nightshift.env` 裡的 `RWD_TOKEN` 早就過期了**（2026-09-07 實測：`exp` 停在 2026-09-02 05:55 UTC）。
+  **不要用它，也不要因此停手**——自己簽一顆（2026-09-07 實測 `/api/tasks` 回 200）：
+
+  ```bash
+  export RWD_TOKEN=$(cd /home/odoo/odoo-v2/app && node -e "const jwt=require('jsonwebtoken');const fs=require('fs');
+  const cfg=JSON.parse(fs.readFileSync('../data/config.json','utf8'));
+  console.log(jwt.sign({userId:2},cfg.JWT_SECRET,{expiresIn:'12h'}));")
+  ```
+  `JWT_SECRET` 在 `data/config.json`（**不在 `.env`**）。過期症狀是截到登入頁而不是內容頁。
+  細節與其他判讀陷阱見記憶 `ui-next-frontend-verify-loop`。
 - **截圖門禁自我比對全綠 ≠ 正確**（它比的是自己）。淺色其實是深色、中文變豆腐框都只有人眼開圖看得到。通過後一定要自己 Read 幾張真圖抽驗
+
+> 以下〈AskMe 是視覺基準〉與〈GodUI 是元件基準〉兩節，**只在當晚工作單的題目與 UI Next 版面有關時才適用**。
+> 題目換成別的（後端、pipeline、測試）就整段跳過，不要硬套。
 
 ### AskMe 是視覺基準
 
@@ -208,6 +229,36 @@ MCP 可用（`mcp__godui__*`，111 個元件，2026-08-31 實測）。§9 要校
 
 1. 週額度 ≥ 60%
 2. 待辦清空
-3. `RWD_TOKEN` 過期且該輪需要截圖驗證
+3. ~~`RWD_TOKEN` 過期~~ → **已不是停止條件**，自簽一顆即可（見〈驗證：截圖〉）。改為：**截圖環境壞掉且修不好**（例如 playwright 起不來、平台 8771 沒回應）
 4. 連續兩輪測試紅燈修不好（陷入迴圈，換人比較快）
 5. 撞到需要使用者拍板、且找不到錨點的事，**且**剩下的待辦都被同一個決定卡住
+
+---
+
+## 工作單格式
+
+`docs/nightshift-assignment.md`（`docs/` 在 `.gitignore`，不進版控、只在本機）。
+下班前由當時的 session 寫，**一晚一份、直接覆寫**。夜班每輪第 2a 步讀它。
+
+```markdown
+# 今晚的工作單 — YYYY-MM-DD
+
+- **狀態**：進行中 | 已完成        ← 「已完成」代表夜班該停，不再排下一輪
+- **題目**：<一句話>
+- **規格書**：<路徑，或「無，範圍就是本檔」>
+- **額度門檻**：<數字>%           ← 覆寫本 skill 預設的 60
+- **push 策略**：只 commit 不 push | 測試全綠就 push
+- **完成定義**：<什麼條件成立才算做完，要可驗證>
+
+## 施工順序
+1. …
+
+## 已知待拍板
+- <找不到錨點、需要人決定的事>
+
+## 不要做
+- <明確排除的範圍>
+```
+
+**必填是「狀態」「題目」「完成定義」三欄。** 少了「完成定義」夜班會不知道何時該停，
+那就會退化成 98 輪空轉的老毛病。
