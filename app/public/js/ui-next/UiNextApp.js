@@ -569,7 +569,12 @@
           }
         };
         window.addEventListener("keydown", this._onCommandKey);
+        // 新手教學會打光在這些選單上，而它的說明框吃事件（pointer-events:auto）且不在下列任何一個
+        // 選擇器內 ⇒ 使用者按「下一步」的那一下會被判成「點到外面」，把正在教的選單關掉。
+        // 教學覆蓋層本來就不是「外面」，所以整層排除。
+        const inTour = (el) => !!el.closest(".tour-layer");
         this._onOutsidePointer = (event) => {
+          if (inTour(event.target)) return;
           if (!event.target.closest(".ui-next-tools-wrap") && !event.target.closest(".ui-next-account-wrap")) this.closePopovers();
           if (!event.target.closest(".ui-next-row-menu") && !event.target.closest(".ui-next-row-more")) this.closeSidebarMenus();
         };

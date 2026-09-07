@@ -164,3 +164,24 @@ describe('教程接線', () => {
     expect(src).toContain('<tour-host />');
   });
 });
+
+// 教學說明框 `.tour-pop` 吃事件（pointer-events:auto），而 UiNextApp 在 document 上掛的
+// pointerdown 監聽會把「點到 .ui-next-tools-wrap／.ui-next-account-wrap／.ui-next-row-menu 以外」
+// 一律當成點到外面而關掉選單。兩者相加＝使用者按「下一步」那一下，就把教學正在教的選單關掉。
+// 症狀是教學靜默失效（退成置中說明框），畫面不報錯、其他測試也不會紅，只有人眼看得出來。
+describe('教學覆蓋層不被當成「點到選單外面」', () => {
+  const src = read('js/ui-next/UiNextApp.js');
+
+  test('外部點擊監聽對 .tour-layer 整層放行', () => {
+    expect(src).toMatch(/closest\(["']\.tour-layer["']\)/);
+  });
+
+  test('放行發生在關閉選單之前（掃得到那段，改寫時不得靜默失效）', () => {
+    const guard = src.indexOf('.tour-layer');
+    const closePopovers = src.indexOf('this.closePopovers()', guard);
+    const closeSidebar = src.indexOf('this.closeSidebarMenus()', guard);
+    expect(guard).toBeGreaterThan(-1);
+    expect(closePopovers).toBeGreaterThan(guard);
+    expect(closeSidebar).toBeGreaterThan(guard);
+  });
+});
