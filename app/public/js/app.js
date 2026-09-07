@@ -420,9 +420,6 @@ const App = defineComponent({
       add("secondary", "週額度", u.secondary);
       return rows;
     },
-    tourRemaining() {
-      return window.TourManager ? TourManager.remainingCount() : 0;
-    },
     projectUnreadTotal() {
       return Object.values(window.UnreadStore.byProject).reduce(
         (a, b) => a + (b || 0),
@@ -471,9 +468,6 @@ const App = defineComponent({
       window.UserStore.role = "";
       SocketManager.disconnectSocket();
       this.$router.push("/login");
-    },
-    openTour() {
-      TourManager.open();
     },
   },
   template: `
@@ -557,9 +551,6 @@ const App = defineComponent({
               </div>
             </div>
             <div class="sidebar-footer-actions">
-              <button class="tour-launch" type="button" @click="openTour" title="開啟新手教學">
-                🎓 新手教學<span v-if="tourRemaining" class="tour-launch-badge">{{ tourRemaining }}</span>
-              </button>
               <a @click="logout" style="cursor:pointer">登出</a>
             </div>
           </div>

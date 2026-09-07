@@ -1,15 +1,9 @@
 /* 新手教程覆蓋層。全部 tour- 前綴、零 element selector、不覆寫任何既有 class。
    刪掉本檔與 tour.js／tour-courses.js／tour-demo.js 即完全消失。守衛見 tour-isolation.test.js。 */
 
-.tour-launch {
-  font: inherit; font-size: var(--fs-sm); cursor: pointer;
-  background: transparent; border: 1px solid rgba(255,255,255,.18);
-  color: var(--sidebar-text); border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-3); margin-right: auto;
-  transition: color var(--transition), border-color var(--transition);
-}
-.tour-launch:hover { color: var(--sidebar-active); border-color: var(--primary); }
-.tour-launch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* 入口已移進「更多工具」選單，外觀吃 .ui-next-account-menu > button 的現成樣式。
+   原本的 .tour-launch 是舊介面側欄專用（--sidebar-text ＋ 白色半透明邊框），
+   放進淺底選單裡會變成看不見的字，所以整組刪掉而不是沿用。 */
 .tour-launch-badge {
   display: inline-block; margin-left: var(--space-1);
   background: var(--primary); color: var(--bg);

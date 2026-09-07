@@ -160,10 +160,12 @@ describe('教程接線', () => {
     expect(html()).toContain('href="css/tour.css"');
   });
 
-  // 使用者明確指定按鈕位置在登出左邊；靠 DOM 先後順序守住。
-  test('入口按鈕排在「登出」之前', () => {
+  // 教學改成 UI Next 專用（2026-09-07 使用者裁決）：舊介面的側欄入口已移除。
+  // 這條反向守著——留一顆點下去只會看到全部對不準的教學的鈕，比拿掉更糟。
+  test('舊介面側欄不再有教學入口', () => {
     const src = appJs();
-    expect(src.indexOf('tour-launch')).toBeLessThan(src.indexOf('>登出<'));
+    expect(src).not.toContain('tour-launch');
+    expect(src).not.toContain('TourManager.open()');
   });
 
   test('TourHost 有被註冊且掛進 template', () => {
@@ -221,5 +223,28 @@ describe('全域 overlay 吃得到 ui-next 色票', () => {
     const css = fs.readFileSync(
       path.join(publicDir, 'css/ui-next-pages/01-base.css'), 'utf8');
     expect(css).toMatch(/\.ui-next-overlays\s*\{[^}]*display:\s*contents/);
+  });
+});
+
+// 入口掉過一次：UI Next 上線後 openTour() 一直都在，但沒有任何 UI 呼叫它——
+// 功能還在、叫不出來，grep 函式名也找不到問題（要反查呼叫端才看得見）。
+// 這條守住「有一顆按得到的鈕」，不然下次改選單時它會再無聲消失一次。
+describe('新手教學在「更多工具」選單裡叫得出來', () => {
+  const src = read('js/ui-next/UiNextApp.js');
+
+  test('選單有一顆 menuitem 呼叫 openTour', () => {
+    expect(src).toMatch(/role="menuitem"[^>]*@click="openTour"/);
+  });
+
+  test('badge 的未完成數走 TourManager，不是寫死的字', () => {
+    expect(src).toMatch(/tourRemaining\(\)\s*\{[^}]*TourManager[^}]*remainingCount\(\)/s);
+    // Vue computed 呼叫端不得加括號（加了直接 TypeError 白畫面，rules/frontend.md #34）
+    expect(src).toContain('{{ tourRemaining }}');
+    expect(src).not.toContain('{{ tourRemaining() }}');
+  });
+
+  test('openTour 會先收掉選單再開教學', () => {
+    // 不收的話選單浮在教學遮罩上，第一步就被自己的選單擋住
+    expect(src).toMatch(/openTour\(\)\s*\{\s*this\.toolsOpen\s*=\s*false;\s*window\.TourManager\.open\(\);/);
   });
 });
