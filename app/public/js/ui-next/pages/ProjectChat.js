@@ -86,9 +86,18 @@
         try { this.dbConnections = await Api.get(`projects/${this.$route.params.id}/db-connections`) || []; }
         catch (error) { this.dbConnections = []; }
       },
+      isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
       async loadChats() {
         const requestId = ++this.requestId;
         this.activeChat = null; this.messages = []; this.loadingMsgs = true; this.chatsError = "";
+        // 新手教學的示範專案：整條讀取路徑改吃假資料，不打任何 API。
+        if (this.isTourDemo()) {
+          this.chats = window.TourDemo.chats();
+          this.activeChat = this.chats[0] || null;
+          this.messages = window.TourDemo.chatMessages();
+          this.loadingMsgs = false;
+          return;
+        }
         try {
           const chats = await Api.get(`projects/${this.$route.params.id}/chats`);
           if (requestId !== this.requestId) return;
@@ -118,6 +127,7 @@
       async selectChat(chat) { await this.$router.push(this.routePath(chat)); },
       async loadMessages(requestId = this.requestId, { background = false } = {}) {
         if (!this.activeChat) return;
+        if (this.isTourDemo()) { this.messages = window.TourDemo.chatMessages(); this.loadingMsgs = false; return; }
         const chatId = this.activeChat.id;
         if (!background && !this.messages.length) this.loadingMsgs = true;
         try {
@@ -148,7 +158,7 @@
       // `this.activeChat.reply_pending` 判斷要不要繼續輪詢，而 activeChat 是進頁面時 loadChats
       // 抓的那份快照，永遠不會變。只 loadMessages 的話「回覆中」不是永遠停著就是第一 tick 就自己關掉。
       async pollReply() {
-        if (!this.activeChat) return;
+        if (!this.activeChat || this.isTourDemo()) return;
         const chatId = this.activeChat.id;
         const chats = await Api.get(`projects/${this.$route.params.id}/chats`).catch(() => null);
         if (!chats || !this.activeChat || this.activeChat.id !== chatId) return;
@@ -290,9 +300,11 @@
       },
       async toTask(event) {
         if (!this.activeChat || this.draftingTask) return;
+        this.taskModalTrigger = event?.currentTarget || null;
+        // 示範對話直接給草稿：真的送出去會建立一張假任務，而教學不該產生任何資料。
+        if (this.isTourDemo()) { this.taskDraft = window.TourDemo.chatDraft(); this.taskError = ""; this.showTaskModal = true; return; }
         this.draftingTask = true;
         this.taskError = "";
-        this.taskModalTrigger = event?.currentTarget || null;
         this.showTaskModal = true;
         try {
           const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {});
@@ -332,7 +344,7 @@
 <aside v-if="showHistory" ref="historyDrawer" class="ui-next-chat-history" role="dialog" aria-modal="true" aria-label="對話紀錄" @keydown="onHistoryKeydown">
 <div class="ui-next-chat-history-head"><strong>對話紀錄</strong><button ref="historyClose" type="button" @click="closeHistory">關閉</button></div>
 <div class="ui-next-chat-history-tools"><label><span class="sr-only">搜尋對話</span><ui-next-icon name="search"/><input v-model="historyQuery" type="search" placeholder="搜尋對話"></label><button type="button" class="ui-next-primary" @click="showNewChat=true;closeHistory()"><ui-next-icon name="plus"/> 新對話</button></div>
-<div class="ui-next-chat-list">
+<div data-tour="chat-list" class="ui-next-chat-list">
 <article v-for="chat in filteredChats" :key="chat.id" :class="{active:activeChat&&activeChat.id===chat.id}">
 <button type="button" class="ui-next-chat-select" :aria-current="activeChat&&activeChat.id===chat.id?'page':null" @click="selectChat(chat);closeHistory()"><b>{{ chat.title || '新對話' }}</b><small v-if="chat.reply_pending">AI 回覆中</small></button>
 <i v-if="chat.unread">{{ chat.unread }}</i>
@@ -342,7 +354,7 @@
 <p v-if="!chats.length">尚無對話，建立一段新的討論開始。</p><p v-else-if="!filteredChats.length">找不到符合的對話。</p>
 </div>
 </aside>
-<div ref="messages" class="ui-next-thread-messages" @click="handleMessageClick">
+<div ref="messages" data-tour="chat-messages" class="ui-next-thread-messages" @click="handleMessageClick">
 <div v-if="loadingMsgs" class="ui-next-empty-state">載入訊息中…</div>
 <template v-for="row in messageRows" :key="row.key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
 <article v-else :class="row.message.role">
@@ -369,13 +381,13 @@
 </span>
 </div>
 <div class="ui-next-thread-dock">
-<form class="ui-next-thread-composer" @submit.prevent="send">
+<form data-tour="chat-input" class="ui-next-thread-composer" @submit.prevent="send">
 <textarea v-model="newInput" placeholder="輸入你的需求或追問…" @paste="onPaste" @input="autoResize" @keydown.enter="handleEnter">
 </textarea>
 <div class="ui-next-composer-foot">
 <div class="ui-next-composer-options">
 <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
-<button type="button" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
+<button type="button" data-tour="chat-totask" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
 <span v-if="projectName" class="ui-next-composer-chip ui-next-chip-static"><ui-next-icon name="project"/>{{ projectName }}</span>
 <span v-if="dataSourceLabel()" class="ui-next-composer-chip ui-next-chip-static"><ui-next-icon name="grid"/>{{ dataSourceLabel() }}</span>
 </div>
@@ -399,7 +411,7 @@
 </div>
 </div>
 </div>
-        <div v-if="showTaskModal" class="ui-next-task-modal-backdrop" @mousedown.self="closeTaskModal" @keydown="onTaskModalKeydown">
+        <div v-if="showTaskModal" data-tour="chat-modal" class="ui-next-task-modal-backdrop" @mousedown.self="closeTaskModal" @keydown="onTaskModalKeydown">
 <section ref="chatTaskModal" class="ui-next-task-modal" role="dialog" aria-modal="true" aria-labelledby="chat-task-modal-title">
 <header>
 <h2 id="chat-task-modal-title">建立任務</h2>

@@ -358,7 +358,7 @@
 <p>查看額度、成本與交付品質；篩選只影響下方分析資料。</p>
 </div>
 </header>
-        <div class="ui-next-filterbar">
+        <div data-tour="tr-filters" class="ui-next-filterbar">
 <select v-model="filters.range">
 <option value="today">今天</option>
 <option value="7">最近 7 天</option>
@@ -413,7 +413,7 @@
 <div v-else-if="loadError" class="ui-next-loading-card ui-next-error-text">{{ loadError }} <button type="button" @click="load">重試</button></div>
 <template v-else-if="report">
 <template v-if="tab==='overview'">
-<div class="ui-next-metric-grid">
+<div data-tour="tr-summary" class="ui-next-metric-grid">
 <article v-for="card in summaryCards" :key="card.label">
 <span>{{ card.label }}</span>
 <strong :title="card.title">{{ card.value }}</strong>
@@ -435,7 +435,7 @@
 <p v-else class="ui-next-empty-inline">本期間資料不足，尚無趨勢。</p>
 </div>
 </article>
-<div class="ui-next-usage-grid">
+<div data-tour="tr-charts" class="ui-next-usage-grid">
 <article class="ui-next-panel">
 <h2>依專案</h2>
 <div class="ui-next-share-body">
@@ -528,7 +528,7 @@
 </div>
 <p v-else class="ui-next-empty-inline">本期間沒有已完成的任務，尚無品質統計。</p>
 </template>
-<section v-if="tab==='detail'" class="ui-next-panel ui-next-usage-detail">
+<section v-if="tab==='detail'" data-tour="tr-tasks" class="ui-next-panel ui-next-usage-detail">
 <div class="ui-next-card-title">
 <div>
 <h2>使用明細</h2>

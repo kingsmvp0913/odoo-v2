@@ -16,7 +16,9 @@
         return Object.entries(window.STATUS_LABELS || {}).map(([value, label]) => ({ value, label }));
       },
       realFilteredTasks() { let list = this.filter === "archived" ? this.archivedTasks : this.filter === "paused" ? this.tasks.filter((task) => task.is_paused) : this.filter === "needs_action" ? this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused)) : this.filter === "pending" ? this.tasks.filter((task) => !task.is_paused && task.status !== "done") : this.tasks; return this.applySort(list.filter((task) => this.matchAll(task))); },
-      filteredTasks() { return this.realFilteredTasks; },
+      // 插一張示範任務給新手教學指。刻意只加在 filteredTasks（不進 this.tasks），
+      // 各項計數與側欄 badge 才不會被灌水；教學沒開著時這裡等同直接回傳真資料。
+      filteredTasks() { const demo = window.TourDemo; return demo && demo.active && this.filter !== "archived" ? [demo.task(), ...this.realFilteredTasks] : this.realFilteredTasks; },
       needsActionCount() { return this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused)).length; },
       needsActionShown() { return this.tasks.filter((task) => this.needsAction(task) && (task.status === "stopped" || !task.is_paused) && this.matchAll(task)).length; },
       pendingShown() { return this.tasks.filter((task) => !task.is_paused && task.status !== "done" && this.matchAll(task)).length; },
@@ -84,7 +86,7 @@
 <div class="ui-next-head-tools">
 <button @click="toggleBatchMode">{{ batchMode?'取消批次':'批次' }}</button>
 <button @click="syncNow" :disabled="syncing">{{ syncing?'同步中…':'同步' }}</button>
-<button class="ui-next-primary ui-next-cta" @click="openAdd($event)"><ui-next-icon name="plus"/>建立任務</button>
+<button data-tour="task-add" class="ui-next-primary ui-next-cta" @click="openAdd($event)"><ui-next-icon name="plus"/>建立任務</button>
 </div>
 </header>
 <div v-if="showAdd" class="ui-next-task-modal-backdrop" @click.self="closeAdd" @keydown="trapAddFocus">
@@ -109,11 +111,11 @@
 <p v-if="addError" class="ui-next-inline-error" role="alert">{{ addError }}</p>
 <footer><button type="button" @click="closeAdd">取消</button><button class="ui-next-primary" @click="submitAdd" :disabled="adding">{{ adding?'建立中…':'建立任務' }}</button></footer>
 </section></div>
-<div class="ui-next-task-tabs" role="group" aria-label="任務篩選">
+<div data-tour="task-filters" class="ui-next-task-tabs" role="group" aria-label="任務篩選">
 <button v-for="item in [['needs_action','需回覆',needsActionShown],['pending','待處理',pendingShown],['paused','暫停中',pausedShown],['all','全部',allShown],['archived','已封存','']]" :key="item[0]" :class="{active:filter===item[0]}" :aria-pressed="filter===item[0] ? 'true' : 'false'" @click="filter=item[0]">{{ item[1] }} <b v-if="item[2]!==''">{{ item[2] }}</b>
 </button>
 </div>
-<div class="ui-next-task-toolbar">
+<div data-tour="task-filters-toggle" class="ui-next-task-toolbar">
 <input v-model="search" placeholder="搜尋標題、任務 ID、專案或來源…">
 <button @click="filtersOpen=!filtersOpen">篩選 <b v-if="activeFilterCount">{{ activeFilterCount }}</b>
 </button>
@@ -124,7 +126,7 @@
 <option value="status_asc">依狀態</option>
 </select>
 </div>
-<div v-if="filtersOpen" class="ui-next-task-filters">
+<div v-if="filtersOpen" data-tour="task-filters-more" class="ui-next-task-filters">
 <button v-if="isAdmin" :class="{active:showAllUsers}" @click="toggleAllUsers" :title="showAllUsers?'目前顯示全部使用者的任務，點一下改回只顯示自己的':'目前只顯示自己的任務，點一下顯示全部使用者的'">顯示全部使用者</button>
 <select v-if="isAdmin&&showAllUsers" v-model="ownerFilter">
 <option value="">全部使用者</option>
@@ -163,29 +165,29 @@
 <div v-if="loading" class="ui-next-loading-card">載入任務中…</div>
 <div v-else-if="loadError" class="ui-next-loading-card"><p>{{ loadError }}</p><button class="ui-next-primary" @click="load">重試</button></div>
 <div v-else class="ui-next-task-rich-list">
-<article v-for="task in filteredTasks" :key="task.id" :class="{selected:selectedIds.includes(task.id),need:needsAction(task)&&!task.is_paused,running:isRunning(task)&&!task.is_paused}" :tabindex="batchMode?-1:0" @click="batchMode?toggleSelect(task.id,$event):openTask(task)" @keydown="!batchMode&&onTaskKeydown(task,$event)">
+<article data-tour="task-card" v-for="task in filteredTasks" :key="task.id" :class="{selected:selectedIds.includes(task.id),need:needsAction(task)&&!task.is_paused,running:isRunning(task)&&!task.is_paused}" :tabindex="batchMode?-1:0" @click="batchMode?toggleSelect(task.id,$event):openTask(task)" @keydown="!batchMode&&onTaskKeydown(task,$event)">
 <div class="ui-next-task-rich-head">
 <label v-if="batchMode">
 <input type="checkbox" :aria-label="'選取任務：'+(task.title||task.task_id)" :checked="selectedIds.includes(task.id)" @click.stop="toggleSelect(task.id,$event)">
 </label>
 <div>
 <h2><router-link :to="taskPath(task)" @click.stop>{{ task.title||task.task_id }}</router-link></h2>
-<p>{{ statusLabel(task.status) }} · {{ task.project_name||'未分類專案' }} · {{ timeAgo(task.updated_at||task.created_at) }}</p>
+<p data-tour="task-status">{{ statusLabel(task.status) }} · {{ task.project_name||'未分類專案' }} · {{ timeAgo(task.updated_at||task.created_at) }}</p>
 </div>
 <div class="ui-next-task-card-actions">
 <button v-if="!batchMode&&!isStopped(task)&&task.status!=='done'" class="ui-next-pause-toggle" :title="task.is_paused?'繼續執行':'暫停'" :aria-label="(task.is_paused?'繼續執行':'暫停')+'：'+(task.title||task.task_id)" @click.stop="togglePause(task,$event)"><ui-next-icon :name="task.is_paused?'play':'pause'"/></button>
 <button v-if="!batchMode" type="button" @click.stop="moreTaskId=moreTaskId===task.id?null:task.id" :aria-label="'更多操作：'+(task.title||task.task_id)" :aria-expanded="moreTaskId===task.id">更多</button>
-<div v-if="moreTaskId===task.id" class="ui-next-task-more" @click.stop><button v-if="filter!=='archived'" type="button" @click="archiveTask(task)">封存</button><button v-else type="button" @click="unarchiveTask(task)">解除封存</button><button type="button" class="danger" @click="deleteTask(task)">刪除</button></div>
+<div v-if="moreTaskId===task.id" data-tour="task-row-menu" class="ui-next-task-more" @click.stop><button v-if="filter!=='archived'" type="button" @click="archiveTask(task)">封存</button><button v-else type="button" @click="unarchiveTask(task)">解除封存</button><button type="button" class="danger" @click="deleteTask(task)">刪除</button></div>
 </div>
 </div>
-<div class="ui-next-task-rich-meta">
+<div data-tour="task-chips" class="ui-next-task-rich-meta">
 <span>{{ sourceLabel(task.source) }}</span>
 <span v-if="task.env_status">測試機</span>
 <span v-if="task.merged_to_main_at">已上正式</span>
 <span v-if="showAllUsers&&task.owner_name">{{ task.owner_name }}</span>
 <span v-if="task.module">{{ task.module }}</span>
 </div>
-<StatusBar :status="task.status" :source="task.source" :git-branch="task.git_branch" :e2e-disabled="task.e2e_disabled" />
+<StatusBar data-tour="task-stepper" :status="task.status" :source="task.source" :git-branch="task.git_branch" :e2e-disabled="task.e2e_disabled" />
 </article>
 <p v-if="!filteredTasks.length" class="ui-next-empty-state">{{ activeFilterCount ? '找不到符合篩選條件的任務。' : '目前沒有任務。' }} <button v-if="activeFilterCount" type="button" @click="clearFilters">清除篩選</button></p>
 </div>

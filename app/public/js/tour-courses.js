@@ -13,6 +13,62 @@
 //   adminOnly    課程走到的路由有 requiresAdmin（報表、管理員設定）→ 非管理員連選單都不該看到
 window.TOUR_COURSES = [
   {
+    id: 'intro',
+    name: '認識新介面',
+    desc: '側欄怎麼看、右鍵選單、快速搜尋',
+    steps: [
+      {
+        route: '/',
+        target: '[data-tour="home-question"]',
+        title: '首頁是一個問句',
+        text: '打開平台停在這裡：<strong>選一個專案，直接開始問</strong>。<br><br>不用先想好是要開任務還是查資料——講清楚情況，系統會判斷。真的要動程式時，對話可以直接轉成任務。'
+      },
+      {
+        route: '/',
+        target: '[data-tour="home-project"]',
+        title: '先挑專案，再打字',
+        text: '這一格是<strong>專案選擇器</strong>，打幾個字就會濾出來。<br><br>對話會存在你選的那個專案底下，之後在側欄找得回來。沒選專案就送出的話，它會先問你要放哪裡。'
+      },
+      {
+        route: '/tasks',
+        target: '[data-tour="nav-sidebar-tasks"]',
+        placement: 'right',
+        title: '側欄分三段',
+        text: '由上到下是<strong>任務</strong>、<strong>專案</strong>、還有專案底下展開的<strong>對話</strong>。<br><br>這一段是任務：<strong>只列在等你的那幾張</strong>，不是全部。要看完整清單點上面的「任務列表」。'
+      },
+      {
+        route: '/tasks',
+        target: '[data-tour="nav-row-menu"]',
+        placement: 'right',
+        title: '每一列都有選單 — 兩種開法',
+        text: '側欄每一列右邊都有一顆 <strong>⋮</strong>，滑上去才出現。<br><br><strong>在那一列上按右鍵也一樣</strong>，選單會直接開在游標位置。任務列、專案列、對話列、專案卡片、Wiki 樹的節點，五個地方都是這個規則。<br><br>暫停任務、開測試區、重新命名、刪除，都在這裡面。',
+        warn: '右鍵開的是平台自己的選單，不是瀏覽器的。要用瀏覽器原生選單請在空白處按右鍵。'
+      },
+      {
+        route: '/tasks',
+        target: '[data-tour="nav-search"]',
+        placement: 'right',
+        title: '找東西按 ⌘K',
+        text: '任務、專案、對話一起搜。<strong>鍵盤按 ⌘K（Windows 是 Ctrl+K）</strong>隨時叫得出來，不必先切到哪一頁。<br><br>用上下鍵選、Enter 開啟、Esc 關掉。'
+      },
+      {
+        route: '/tasks',
+        target: '[data-tour="nav-tools"]',
+        placement: 'right',
+        title: '「更多工具」裡有什麼',
+        text: '不是每天用、但需要時要找得到的都收在這裡：<strong>提意見</strong>、<strong>架構圖</strong>、<strong>流程圖</strong>、<strong>ODOO認證輔助</strong>，管理員還多兩項（進行中 Pipeline、用量報表）。<br><br><strong>這一課的入口「新手教學」也在這裡</strong>，隨時可以回來重上。'
+      },
+      {
+        route: '/tasks',
+        target: '[data-tour="nav-account"]',
+        placement: 'right',
+        title: '設定與深淺色在最下面',
+        text: '側欄最下面這顆是<strong>帳號與設定</strong>：個人設定、<strong>切換深淺色</strong>、登出都在裡面，管理員多一個「管理員」入口。<br><br>深色模式在這裡切，不在設定頁裡。'
+      }
+    ]
+  },
+
+  {
     id: 'setup',
     name: '初始設定',
     desc: '補回註冊時略過的設定',
@@ -22,7 +78,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="nav-settings"]',
         placement: 'right',
         title: '把註冊時略過的補完',
-        text: '註冊精靈那幾步都可以按「略過」，多數人也真的略過了。<strong>這一課帶你把它們補上，大概一分鐘。</strong><br><br>入口就在左邊選單的「⚙️ 設定」，隨時可以自己回來。'
+        text: '註冊精靈那幾步都可以按「略過」，多數人也真的略過了。<strong>這一課帶你把它們補上，大概一分鐘。</strong><br><br>入口在側欄最下面的<strong>「帳號與設定」→「設定」</strong>，隨時可以自己回來。'
       },
       {
         route: '/settings',
@@ -55,7 +111,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="set-dark"]',
         interactive: true,
         title: '深色模式',
-        text: '純看個人喜好，勾了立刻換，隨時改回來。<br><br>初始設定就這些。下一課帶你把專案跑起來。'
+        text: '純看個人喜好，勾了立刻換，隨時改回來。<br><br>側欄最下面的<strong>「帳號與設定」→「切換深淺色」</strong>也可以直接切，不必特地進來這一頁。<br><br>初始設定就這些。下一課帶你把專案跑起來。'
       }
     ]
   },
@@ -103,8 +159,9 @@ window.TOUR_COURSES = [
         route: '/projects/demo',
         target: '[data-tour="pd-tools"]',
         placement: 'bottom',
-        title: '專案頁上的工具列',
-        text: '<strong>📖 Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><strong>💬 Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>資料庫查詢</strong>：正式區的唯讀連線，設好之後 AI 也會用它去查。<br><strong>🚀 上正式</strong>：把已核准的任務真的送上正式區。<br><strong>🛠 自動部署 SOP</strong>：想把「上正式」接成推上去就自動部署時照著這頁做，指令已經幫你填好值。<br><br>Wiki、Chat、資料庫查詢各有一課，接下來就是。'
+        title: '專案頁的七個分頁',
+        text: '<strong>Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>設定</strong>：專案名稱、來源對應這些。<br><strong>Repo</strong>：程式碼來源。<br><strong>連線設定</strong>：正式區的唯讀資料庫連線，設好之後 AI 也會用它去查。<br><strong>測試環境</strong>：驗收用的那台。<br><strong>Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><strong>部署 SOP</strong>：想把「上正式」接成推上去就自動部署時照著這頁做，指令已經幫你填好值。<br><br>Wiki、Chat、連線設定各有一課，接下來就是。',
+        warn: '「上正式」不在這裡——它在專案列表的卡片選單裡（⋮ 或右鍵），「實際流程」那一課會帶到。'
       }
     ]
   },
@@ -202,21 +259,21 @@ window.TOUR_COURSES = [
     desc: '認得畫面上的東西，尤其「怎麼看出輪到我」',
     steps: [
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="nav-tasks"]',
         placement: 'right',
-        title: '每天從這裡開始',
-        text: '任務列表是預設首頁，右邊那顆數字就是<strong>還有幾件事在等你</strong>。<br><br>下面幾步用一張<strong>示範任務</strong>帶你認畫面上的訊號。'
+        title: '完整清單在這裡',
+        text: '側欄的「任務列表」列出<strong>全部</strong>任務，右邊那顆數字是<strong>還有幾件事在等你</strong>。<br><br>（側欄上面那一小段只列在等你的那幾張，是捷徑不是全部。）<br><br>下面幾步用一張<strong>示範任務</strong>帶你認畫面上的訊號。'
       },
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="task-filters"]',
         title: '預設就幫你篩好了',
         text: '第一次進來停在<strong>「需回覆」</strong>分頁，列出來的都是<strong>在等你的</strong>，數字就是還有幾件。<br><br>另外四個分頁是<strong>待處理</strong>（AI 正在跑）、<strong>暫停中</strong>、<strong>全部</strong>、<strong>已封存</strong>。',
         warn: '分頁與下一步那排篩選都會記在這台瀏覽器，下次打開停在你上次看的地方——不是每次都回到「需回覆」。覺得列表空空的，先看一眼篩選還開著什麼。'
       },
       {
-        route: '/',
+        route: '/tasks',
         // 手機上這排是 display:none（收在「篩選」鈕後面），不先點開就找不到目標；
         // 桌機恆為可見，引擎的 click 只在目標不可見時才動，故兩邊共用同一步。
         click: '[data-tour="task-filters-toggle"]',
@@ -226,25 +283,25 @@ window.TOUR_COURSES = [
         warn: '手機上這一排收在分頁列最右邊的「篩選」鈕後面，鈕上的數字是目前生效幾個條件。'
       },
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="task-card"]',
         title: '黃色 ＝ 輪到你',
         text: '<strong>左邊一條黃線加上一顆會呼吸的黃點</strong>，就是在等你。整份清單只要掃黃色就好。<br><br>這是最該記住的一個訊號。'
       },
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="task-status"]',
         title: '狀態標籤',
         text: '狀態總共三十幾種，但<strong>你只要認得會停下來等人的那幾個</strong>：等待確認、等待規格確認、待你裁決、等待審核、失敗待確認。<br><br>其餘都是 AI 在跑，看看就好。'
       },
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="task-stepper"]',
         title: '流程走到哪一格',
         text: '從分析走到完成，打勾的是走過的，數字的還沒。<br><br>不用記每一格在幹嘛，<strong>看它有沒有在動</strong>就夠了。'
       },
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="task-chips"]',
         title: '卡片上的其他標記',
         text: '<strong>來源</strong>（從 Odoo 或客服系統來的，點了開原單）、<strong>專案</strong>（點了跳專案頁）、<strong>🖥 測試機</strong>（點了直接開測試環境，驗收時最常用）。'
@@ -258,7 +315,7 @@ window.TOUR_COURSES = [
     desc: '輪到你時做什麼，從建任務到上正式',
     steps: [
       {
-        route: '/',
+        route: '/tasks',
         target: '[data-tour="task-add"]',
         title: '① 任務從這裡開',
         text: 'Odoo 和客服系統的工單會自動同步進來，<strong>自己想開的就按這顆</strong>。<br><br>要填的只有三格：專案、標題、內容。',
@@ -306,9 +363,10 @@ window.TOUR_COURSES = [
       },
       {
         route: '/projects',
+        click: '[data-tour="proj-card-menu"]',
         target: '[data-tour="proj-release"]',
         title: '⑦ 核准了還沒上線',
-        text: '這是最多人誤會的地方。<strong>審核通過只是「排進待上正式」</strong>，東西還在測試區。<br><br>要真的生效，得回到<strong>專案</strong>按這顆「🚀 上正式」，那時才會合併到正式區。',
+        text: '這是最多人誤會的地方。<strong>審核通過只是「排進待上正式」</strong>，東西還在測試區。<br><br>要真的生效，得到<strong>專案列表</strong>，在那張專案卡上按 <strong>⋮</strong>（或直接右鍵）叫出選單，點<strong>「上正式」</strong>，那時才會合併到正式區。',
         warn: '一按會把該專案所有已核准的任務一起送上去，不能只挑其中幾張。'
       },
       {
@@ -341,7 +399,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="nav-pipeline"]',
         placement: 'right',
         title: '🚦 想知道此刻跑到哪',
-        text: '「進行中 Pipeline」列出<strong>你自己</strong>正在跑的任務，看得到目前在哪一關、已經跑多久，每三秒更新。<br><br>某張卡太久沒動時，可以在這裡按「暫停」把它停下來。',
+        text: '入口在側欄最下面的<strong>「更多工具」→「進行中 Pipeline」</strong>。<br><br>它列出<strong>你自己</strong>正在跑的任務，看得到目前在哪一關、已經跑多久，每三秒更新。某張卡太久沒動時，可以在這裡按「暫停」把它停下來。',
         warn: '只看得到也只能暫停自己的任務，不會影響別人。'
       },
       {
@@ -430,20 +488,20 @@ window.TOUR_COURSES = [
         text: '逐張列出花費，展開可以看到<strong>每一關各花多少</strong>。<br><br>排在最前面的那幾張就是燒最多的，點進去看它彈跳了幾次，多半能找到規格沒寫清楚或環境有問題。'
       },
       {
-        route: '/admin',
+        route: '/admin/settings',
         target: '[data-tour="admin-conn"]',
         title: '管理員設定：全公司共用的部分',
-        text: 'Odoo 與 eService 的<strong>伺服器位址、資料庫名稱、同步間隔</strong>設在這裡，全站共用一份。<br><br>個人的帳號密碼不在這裡——那是每個人自己到「個人設定」填的。同步間隔填 0 就是停用自動同步。'
+        text: '入口在側欄「帳號與設定」→「管理員」，再點<strong>「系統設定」</strong>那張卡。<br><br>Odoo 與 eService 的<strong>伺服器位址、資料庫名稱、同步間隔</strong>設在這裡，全站共用一份。<br><br>個人的帳號密碼不在這裡——那是每個人自己到「個人設定」填的。同步間隔填 0 就是停用自動同步。'
       },
       {
-        route: '/admin',
+        route: '/admin/settings',
         target: '[data-tour="admin-gate"]',
         title: '用量閘門 — 別讓額度一次燒光',
         text: '全台共用同一個 Claude 帳號。用量達門檻時，這道閘門會<strong>自動停止 Pipeline 自動推進</strong>，但手動按「繼續」不受影響。<br><br>5 小時視窗或本週任一超標就暫停，兩個門檻可以各自調。',
         warn: '沒有用量資料時採 fail-open（不擋），不會因為讀不到數字就把整條線停掉。'
       },
       {
-        route: '/admin',
+        route: '/admin/settings',
         target: '[data-tour="admin-token"]',
         title: 'Claude 憑證 — 建議一定要設',
         text: '在任一台裝有 Claude Code 的機器跑 <code>claude setup-token</code>，把產生的長效 token 貼進來即可（綁訂閱、不另計費，效期一年）。<br><br><strong>不設的話會用伺服器本機的登入憑證，多個任務並行時會互相踩到刷新中的憑證，造成任務無故中斷。</strong>換帳號只要貼新的 token，不必重啟伺服器。<br><br>下面還有一格<strong>備用憑證</strong>：主帳號用量撞到上面那道閘門時，開啟開關就改用它繼續跑，主帳號降回門檻下自動切回。',
@@ -454,7 +512,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="admin-tools"]',
         placement: 'top',
         title: '其他管理工具',
-        text: '常用的三個：<strong>使用者管理</strong>（開帳號、給權限）、<strong>Agent 管理</strong>（調各關的模型與提示詞）、<strong>改善提案</strong>（健檢與意見回饋產生的待辦提案）。<br><br>其餘是排查用的：退回原因、失敗分類樣本、Prompt 送出記錄、測試區 port 池、企業版來源。'
+        text: '管理員首頁是一排<strong>工具卡</strong>，一張卡一件事，點進去才載入那一頁的表單。<br><br>常用的三個：<strong>使用者管理</strong>（開帳號、給權限）、<strong>Agent 管理</strong>（調各關的模型與提示詞）、<strong>改善提案</strong>（健檢與意見回饋產生的待辦提案）。<br><br>其餘是排查用的：退回原因、失敗分類樣本、Prompt 送出記錄、測試區 port 池、企業版來源。'
       }
     ]
   }

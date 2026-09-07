@@ -1020,7 +1020,7 @@
 </header>
 <div class="ui-next-task-detail-grid is-tab-conversation">
 <div class="ui-next-task-content-column">
-<section tabindex="-1" class="ui-next-panel ui-next-conversation">
+<section tabindex="-1" data-tour="td-content" class="ui-next-panel ui-next-conversation">
 <div ref="convPanel" class="ui-next-conv-list" @click="handleTaskMessageClick">
 <template v-for="row in visibleRows" :key="row._key"><div v-if="row.divider" class="ui-next-day-divider"><span>{{ row.label }}</span></div>
 <article v-else :class="timelineClass(row)">
@@ -1110,11 +1110,11 @@
 <aside class="ui-next-task-side">
 <!-- 規格問答的頁籤掛在框外上方：一層就好（題目 1..n 在前、「提問」在最後），
      原本是「規格書 QA／提問」外面再包一層題目數字，兩層疊在框裡分不出哪層是哪層。 -->
-<div v-if="timelineActionMode==='answer'&&clarQuestions.length&&!taskActionCollapsed" class="ui-next-q-tabs" role="tablist">
+<div v-if="timelineActionMode==='answer'&&clarQuestions.length&&!taskActionCollapsed" data-tour="td-tabs" class="ui-next-q-tabs" role="tablist">
 <button v-for="(q,index) in clarVisible()" :key="'qtab'+q.id" type="button" role="tab" :class="{active:clarTab==='qa'&&clarIdx===index,done:!!clarAnswerText(q)}" :aria-selected="(clarTab==='qa'&&clarIdx===index).toString()" :title="q.text" @click="clarTab='qa';clarIdx=index">{{ index+1 }}<ui-next-icon v-if="clarAnswerText(q)" name="check"/></button>
 <button type="button" role="tab" class="ui-next-q-tab-ask" :class="{active:clarTab==='ask'}" :aria-selected="(clarTab==='ask').toString()" @click="clarTab='ask'">提問</button>
 </div>
-<section class="ui-next-panel ui-next-task-action" :class="{'is-collapsed':taskActionCollapsed}">
+<section data-tour="td-action" class="ui-next-panel ui-next-task-action" :class="{'is-collapsed':taskActionCollapsed}">
 <!-- 收合時整條標題列都是展開的入口：只有右邊那顆 24px 的箭頭可點，等於把面板收起來之後
      要瞄準一個很小的目標才打得開。展開狀態不掛 handler，否則點標題旁的來源連結會誤收。 -->
 <div class="ui-next-task-action-head" :class="{'is-clickable':taskActionCollapsed}" @click="expandActionIfCollapsed">
@@ -1364,7 +1364,7 @@
 <div v-if="eventsOpen" class="ui-next-task-modal-backdrop" @click.self="eventsOpen=false">
 <div class="ui-next-events-modal" role="dialog" aria-modal="true" aria-label="執行歷程">
 <header><h2>執行歷程</h2><button type="button" class="ui-next-icon-button" aria-label="關閉" @click="eventsOpen=false"><ui-next-icon name="close"/></button></header>
-<div ref="eventsBox" @scroll="onEventsScroll">
+<div ref="eventsBox" data-tour="td-events" @scroll="onEventsScroll">
 <p v-if="eventsLoading" class="ui-next-field-note">載入更早的紀錄中…</p>
 <p v-else-if="events.length&&!eventsHasMore" class="ui-next-field-note">— 已到最前 —</p>
 <article v-for="event in events" :key="event.id||event.content" :class="['ui-next-event-summary',eventKind(event),{'is-open':!!expandedEvents[event.id||event.content]}]">

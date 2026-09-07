@@ -470,7 +470,9 @@ describe("ui-next 平行介面", () => {
     // 專案清單必須包在「專案」row 的同一個 group 內，而不是另一個獨立區塊。
     expect(uiNext).toMatch(/<div class="ui-next-nav-group">[\s\S]*?to="\/projects"[\s\S]*?class="ui-next-projects"/);
     // 沒有展開箭頭，所以清單常駐（不是 v-if 控制的可收合區塊）。
-    expect(uiNext).toContain('<div class="ui-next-projects">');
+    // 比對「這個 div 上沒有 v-if」而不是整串字面值——字面值會被之後補上的
+    // 無關屬性（例如新手教學的 data-tour 錨點）打斷，那是假紅。
+    expect(uiNext).toMatch(/<div (?![^>]*v-if)[^>]*class="ui-next-projects"/);
     expect(uiNext).not.toContain("projectsOpen");
     // 分隔線保留，否則第一層入口會直接黏在搜尋下面。
     expect(uiNext).toContain('<div class="ui-next-sidebar-rule"></div>');

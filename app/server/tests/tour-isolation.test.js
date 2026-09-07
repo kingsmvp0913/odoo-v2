@@ -55,22 +55,32 @@ describe('tour js 不打 API', () => {
 
 // 教程改成在真實畫面上打光後，靠 view 裡的 data-tour 錨點定位。
 // 錨點被改名或刪掉時教程只會在 console 警告後退成置中，畫面不會紅——所以在這裡對帳。
+//
+// ⚠ 這裡原本寫死一份**舊介面**的檔案清單，於是 UI Next 上線後掃不到 js/ui-next/：
+// 53 個步驟裡有 38 步指向不存在的元素，這份測試照樣全綠，撐了整整一個改版週期沒人發現。
+// 改成遞迴掃目錄——新增的 View 檔會自動納入，不會再有「漏列一個檔＝那個檔不設防」。
 describe('data-tour 錨點與課程定義對得上', () => {
-  const VIEW_FILES = [
-    'js/app.js', 'js/views/Settings.js', 'js/views/TaskList.js',
-    'js/views/TaskDetail.js', 'js/views/ProjectList.js', 'js/views/ProjectDetail.js',
-    'js/views/WikiView.js', 'js/views/ProjectChat.js', 'js/views/ProjectDbQuery.js',
-    'js/views/TokenReport.js', 'js/views/Admin.js', 'js/views/Inbox.js',
-    'js/views/PipelineFlow.js'
-  ];
+  // 教學已改成 UI Next 專用（2026-09-07 使用者裁決），舊介面不再維護 ⇒ 只掃 ui-next。
+  const NEXT_DIR = path.join(publicDir, 'js/ui-next');
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = path.join(dir, e.name);
+    return e.isDirectory() ? walk(full) : (e.name.endsWith('.js') ? [full] : []);
+  });
+  const nextFiles = walk(NEXT_DIR);
   const anchors = new Set();
-  for (const f of VIEW_FILES) {
-    for (const m of read(f).matchAll(/data-tour="([^"]+)"/g)) anchors.add(m[1]);
+  for (const f of nextFiles) {
+    for (const m of fs.readFileSync(f, 'utf8').matchAll(/data-tour="([^"]+)"/g)) anchors.add(m[1]);
   }
+
+  test('掃得到 ui-next 的檔（目錄搬家時不得靜默變成掃 0 個檔）', () => {
+    expect(nextFiles.length).toBeGreaterThanOrEqual(25);
+  });
+
   // Wiki 樹是遞迴元件，錨點由 node_type 組出來（:data-tour="'wiki-node-' + node.node_type"），
   // 靜態掃不到字面值 → 在此列出後端 wiki 實際會產出的四種 node_type，並守住那段拼接還在。
   test('wiki 樹的動態錨點仍以 node_type 拼接', () => {
-    expect(read('js/views/WikiView.js')).toContain(`:data-tour="'wiki-node-' + node.node_type"`);
+    expect(read('js/ui-next/UiNextShared.js'))
+      .toContain(`:data-tour="'wiki-node-' + node.node_type"`);
   });
   ['notes', 'overview', 'module', 'troubleshooting'].forEach(t => anchors.add('wiki-node-' + t));
 
@@ -83,7 +93,7 @@ describe('data-tour 錨點與課程定義對得上', () => {
     expect(wanted.length).toBeGreaterThanOrEqual(25);
   });
 
-  test.each(wanted)('課程用到的 %s 在 view 裡存在', (name) => {
+  test.each(wanted)('課程用到的 %s 在 ui-next 裡存在', (name) => {
     expect(anchors.has(name)).toBe(true);
   });
 });
@@ -110,7 +120,9 @@ describe('warn 是純文字，不得含 HTML 標籤', () => {
 // （資料庫查詢已開放給所有登入者，故不在此清單內。）
 describe('管理員限定課程不對一般使用者出現', () => {
   const courses = read('js/tour-courses.js');
-  const ADMIN_ROUTES = ['/token-report', '/admin'];
+  // /admin/settings 是 UI Next 才有的拆分（舊版三個錨點都在 /admin 一頁上）。
+  // 漏列它的症狀是「一般使用者看得到那堂課、點下去被導回首頁」。
+  const ADMIN_ROUTES = ['/token-report', '/admin', '/admin/settings'];
 
   test('引擎依 UserStore.role 過濾 adminOnly', () => {
     const src = read('js/tour.js');
