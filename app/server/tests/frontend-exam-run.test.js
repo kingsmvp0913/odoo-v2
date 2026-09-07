@@ -49,10 +49,30 @@ test('完整選項用勾選框設定正式答案，而且可以取消成空白',
 // 要同時讀五種形狀才判斷得出一題。審查與已知答錯已折進推薦分數，其餘改掛 title。
 test('選項上只留推薦分數與投票，其餘訊號折進分數', () => {
   expect(view).toContain('name="thumb-up"');                       // 投票留著
-  expect(view).toContain('topVote(q).answer');
+  // 平手要全部標出來。回單一字母時另一票會整個從畫面消失，看起來像投票沒算進去
+  expect(view).toContain('topVotes(q).includes(option.letter)');
+  expect(view).not.toContain('topVote(q).answer');
   // 沒人投票時不留「投票 -」佔位：那一行對使用者沒有資訊（2026-09-05 使用者回饋）
   expect(view).not.toContain('投票 -');
   expect(view).not.toContain('<div class="ui-next-exam-run-answers">');
+});
+
+// 字串比對證明不了「平手會回兩個字母」，所以這支真的把函式挖出來跑一次。
+// 修之前是「取字母序最前的那一個」，兩人各投一票時另一票在畫面上完全消失——
+// 使用者回報成「投票只顯示自己的、而且不會自動更新」，但票其實都在 DB 裡
+// （實測 bank 19 的 attempt 657：user:6 投 C、user:2 投 D，畫面只標 C）。
+test('最高票平手時每一票都要標出來', () => {
+  const src = view.slice(view.indexOf('voteLetters(q) {'), view.indexOf('// ── 推薦分數'));
+  const vm = new Function(`return { ${src} }`)();
+  const q = {
+    vote_total: 2, vote_options: { C: 1, D: 1 },
+    options: [{ letter: 'A' }, { letter: 'B' }, { letter: 'C' }, { letter: 'D' }],
+  };
+  expect(vm.topVotes(q)).toEqual(['C', 'D']);
+  // 沒平手時只有一個，不能因為改寫就變成全部都標
+  expect(vm.topVotes({ ...q, vote_total: 3, vote_options: { C: 2, D: 1 } })).toEqual(['C']);
+  // 沒人投票就不標。回 ['A'] 之類的會在每一題掛一個沒有依據的讚
+  expect(vm.topVotes({ ...q, vote_total: 0, vote_options: {} })).toEqual([]);
 });
 
 // 輸入答案刻意不另外標：worker 寫入時 answer_final 預設就等於作答答案，

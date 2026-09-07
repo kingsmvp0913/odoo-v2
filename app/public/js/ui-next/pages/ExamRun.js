@@ -11,7 +11,7 @@ window.UiNextExamRunView = Vue.defineComponent({
       finalDraft: {}, savingFinal: {},
       archiveOpen: false, archivePages: [], archiving: false, archiveResult: null,
       reading: false, readNote: '',
-      retrying: {}, job: null, resuming: false,
+      retrying: {}, job: null, resuming: false, pausing: false,
       apiOpen: false, token: null, tokenExpiresAt: null, tokenExpired: false, issuing: false,
     };
   },
@@ -70,6 +70,13 @@ window.UiNextExamRunView = Vue.defineComponent({
       const pending = this.uploads.filter(u => !u.is_test && u.status === 'pending').length;
       const failed = this.uploads.filter(u => !u.is_test && u.status === 'failed');
       const j = this.job;
+      // 暫停要排在最前面，而且**沒有待處理的頁也要顯示**。判斷順序放後面的話，
+      // 暫停中會被歸成「卡住」，畫面叫人去按「繼續判題」——而那顆按了不會動
+      // （取頁那一關被旗標擋著），看起來就是系統壞了。
+      // 全部跑完時也照顯示：不然取消暫停的按鈕會消失，之後傳的圖永遠不會判。
+      if (this.bank && this.bank.paused) {
+        return { kind: 'paused', text: pending ? `判題已暫停，${pending} 頁在等` : '判題已暫停' };
+      }
       if (j && j.status === 'running') {
         return { kind: 'running', text: `${j.phase || '判題中'}　${j.pages_done}/${j.pages_total} 頁` };
       }
@@ -178,6 +185,20 @@ window.UiNextExamRunView = Vue.defineComponent({
         showToast(`已重新排入判題（${r.pending} 頁）`, 'success');
       } catch (e) { showToast(e.message, 'error', 0); }
       finally { this.resuming = false; }
+    },
+    // 暫停／繼續。正在審的那一頁會跑完才停——中途砍掉會留下沒有判斷的孤兒作答，
+    // 得整頁刪掉重來，反而更浪費。
+    async togglePause() {
+      const next = !(this.bank && this.bank.paused);
+      this.pausing = true;
+      try {
+        const r = await Api.post(`exam/banks/${this.bankId}/pause`, { paused: next });
+        await this.refresh();
+        showToast(next
+          ? (r.pending ? `已暫停，${r.pending} 頁留在佇列` : '已暫停判題')
+          : '已繼續判題', 'success');
+      } catch (e) { showToast(e.message, 'error', 0); }
+      finally { this.pausing = false; }
     },
     queueRefresh() {
       if (this._refreshTimer) return;
@@ -299,12 +320,16 @@ window.UiNextExamRunView = Vue.defineComponent({
     },
     voteCount(q, letter) { return Number((q.vote_options || {})[letter] || 0); },
     votePct(q, letter) { return q.vote_total ? Math.round(this.voteCount(q, letter) * 100 / q.vote_total) : 0; },
-    topVote(q) {
-      if (!q.vote_total) return { answer: '-', pct: null };
+    // 最高票**可能不只一個**，平手時全部都要標。
+    //
+    // 原本回單一字母，平手就只留字母序最前的那個——兩個人各投一票時（實測 bank 19
+    // 的 attempt 657：C 與 D 各一票）畫面上只看得到 C，另一票整個消失。看起來像
+    // 「投票只算我自己的」「別人投了畫面也不動」，其實票都在，只是被顯示邏輯吃掉了。
+    topVotes(q) {
+      if (!q.vote_total) return [];
       const order = this.voteLetters(q);
-      let answer = order[0];
-      for (const letter of order) if (this.voteCount(q, letter) > this.voteCount(q, answer)) answer = letter;
-      return { answer, pct: this.votePct(q, answer) };
+      const max = Math.max(...order.map(letter => this.voteCount(q, letter)));
+      return max > 0 ? order.filter(letter => this.voteCount(q, letter) === max) : [];
     },
     // ── 推薦分數 ────────────────────────────────────────────────────────
     // 分數由**後端**算好，隨 dashboard 一起送過來（`option_scores`，公式與完整
@@ -494,6 +519,11 @@ window.UiNextExamRunView = Vue.defineComponent({
                   :disabled="resuming" @click="resumeJob">
             {{ resuming ? '啟動中…' : '繼續判題' }}
           </button>
+          <!-- 暫停是整場的開關，所以放在這條狀態列而不是每一頁旁邊：
+               一頁一頁按會漏掉還沒傳上來的那些。 -->
+          <button class="ui-next-exam-btn" :disabled="pausing" @click="togglePause">
+            {{ pausing ? '處理中…' : (jobState.kind==='paused' ? '恢復判題' : '暫停判題') }}
+          </button>
         </div>
         <div v-if="archiveOpen" class="ui-next-exam-arch">
           <div class="ui-next-exam-arch-intro">
@@ -600,6 +630,11 @@ window.UiNextExamRunView = Vue.defineComponent({
                            全部折進分數裡了——審查與信心度就是分數的來源，已知答錯的
                            那個會被歸零。它們的原始資訊改掛 title，滑過去看得到，
                            不佔版面。 -->
+                      {{ option.text_zh || option.text }}
+                      <!-- 分數排在選項文字**後面**、投票前面（2026-09-07 使用者要求）。
+                           擺前面時它會把每一行的文字往右推一格，四個選項讀起來像有縮排；
+                           而分數與投票是同一類東西（都是「哪個選項比較可能」的訊號），
+                           擺在一起才掃得出來。 -->
                       <span v-if="scoreOf(q,option.letter) !== null"
                             :class="['ui-next-exam-run-score',
                                      scoreOf(q,option.letter) >= 50 && 'is-high',
@@ -607,9 +642,9 @@ window.UiNextExamRunView = Vue.defineComponent({
                             :title="scoreWhy(q,option.letter) || '沒有證據支持，但也沒被排除過'">
                         {{ scoreOf(q,option.letter) }}
                       </span>
-                      {{ option.text_zh || option.text }}
-                      <span v-if="topVote(q).answer===option.letter" class="ui-next-exam-run-sig is-vote" title="投票最高">
-                        <ui-next-icon name="thumb-up"/><em>{{ topVote(q).pct }}%</em>
+                      <span v-if="topVotes(q).includes(option.letter)" class="ui-next-exam-run-sig is-vote"
+                            :title="topVotes(q).length > 1 ? '投票最高（平手）' : '投票最高'">
+                        <ui-next-icon name="thumb-up"/><em>{{ votePct(q,option.letter) }}%</em>
                       </span>
                       <!-- 英文原文：考題原文是英文，中譯只是輔助。看不到原文就沒辦法
                            確認翻譯有沒有把語意帶偏（題幹已經這樣做，選項也要一致）。 -->

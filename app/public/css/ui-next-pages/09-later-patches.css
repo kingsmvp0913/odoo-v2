@@ -1577,11 +1577,13 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 }
 .ui-next-exam-run-sig.is-vote { color: var(--info); }
 
-/* 推薦分數。等寬數字＋固定寬度，一整欄掃下來才對得齊。
+/* 推薦分數。2026-09-07 起改排在選項文字**之後**、投票標記之前（使用者要求）：
+   擺前面時每一行的文字都被往右推一格，四個選項讀起來像有縮排。代價是不再對齊
+   成一欄——文字長度不同，分數就跟著跑，只能靠它跟投票黏在一起自成一組來讀。
    只有最高分那個亮起來——其餘是「剩下的機率平分」，不是逐項評估過的數字，
    全部一樣顯眼會讓人以為四個都量過。 */
 .ui-next-exam-run-score {
-  display: inline-block; min-width: 26px; margin-right: 7px; padding: 1px 5px;
+  display: inline-block; min-width: 26px; margin-left: 8px; padding: 1px 5px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text-muted);
   font-size: var(--fs-xs); font-weight: var(--fw-semibold);
@@ -1623,7 +1625,10 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--text);
 }
-.ui-next-exam-job .ui-next-exam-btn { margin-left: auto; }
+/* 只有第一顆按鈕靠右推。掛在每一顆上的話，flex 會把剩餘空間平分給每個 auto
+   margin——「繼續判題」會浮在中間，看起來像跟狀態文字沒關係的另一個東西。
+   暫停中不套色：那是使用者自己按的，染成警告色會讀成「出事了」。 */
+.ui-next-exam-job button:first-of-type { margin-left: auto; }
 
 /* 歸檔面板：對著官方成績圖勾「這章沒答錯」。
    grid 是 4 欄，而每一列剛好 4 個子元素——少一欄的話第 4 個會掉到下一列，
