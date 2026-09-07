@@ -226,3 +226,9 @@
   font-size: 13px;
   text-align: center;
 }
+
+/* 三個全域 overlay（toast／確認視窗／新手教學）的包裹層。
+   存在的唯一理由是把 [data-ui="next"] 的色票帶給它們——ui-next 的變數是 scoped 在
+   該屬性的子樹上，而這三者刻意掛在 .ui-next-shell 外面（登入頁與未登入狀態也要有）。
+   display:contents ⇒ 不產生 box、不影響任何定位；自訂屬性照樣繼承下去。 */
+.ui-next-overlays { display: contents; }

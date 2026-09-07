@@ -12,7 +12,7 @@
 .tour-launch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .tour-launch-badge {
   display: inline-block; margin-left: var(--space-1);
-  background: var(--primary); color: #fff;
+  background: var(--primary); color: var(--bg);
   border-radius: 99px; padding: 0 5px; font-size: var(--fs-2xs);
 }
 
@@ -21,8 +21,10 @@
    同層時只靠 DOM 順序贏，一旦有人調整 App template 的掛載位置就會靜默被蓋住。 */
 .tour-layer { position: fixed; inset: 0; z-index: calc(var(--z-modal) + 1); pointer-events: none; }
 
-/* rgba(9,9,12,…) 是刻意的例外：遮罩黑不屬於任何語意色 token */
-.tour-mask { position: absolute; background: rgba(9,9,12,.55); pointer-events: auto; }
+/* 遮罩黑不屬於任何語意色 token，所以是唯一寫死顏色的地方。
+   數值對齊 .ui-next-task-modal-backdrop（ui-next.css），讓教學遮罩與平台自己的
+   modal 遮罩深淺一致——兩者會在同一畫面上先後出現（教 Chat 轉任務那一步）。 */
+.tour-mask { position: absolute; background: color-mix(in srgb, #000 48%, transparent); pointer-events: auto; }
 /* 只有選單畫面點遮罩會關閉，所以也只有它給游標提示；課程進行中點背景不關（見 tour.js onMaskClick） */
 .tour-layer.is-menu .tour-mask { cursor: pointer; }
 /* 光圈裡的透明擋板：步驟沒開放互動時蓋著，避免在示範資料上按到會打真 API 的按鈕 */
@@ -30,7 +32,7 @@
 
 .tour-ring {
   position: absolute; pointer-events: none;
-  border-radius: var(--radius); border: 2px solid var(--primary);
+  border-radius: 12px; border: 2px solid var(--primary);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 25%, transparent);
   transition: top .3s cubic-bezier(.3,.9,.3,1), left .3s cubic-bezier(.3,.9,.3,1),
               width .3s cubic-bezier(.3,.9,.3,1), height .3s cubic-bezier(.3,.9,.3,1);
@@ -38,8 +40,11 @@
 
 .tour-pop {
   position: absolute; width: 340px; pointer-events: auto;
-  background: var(--card-bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius);
+  /* --surface 而不是 --card-bg：後者只在 app.css 定義（深色 #202020），
+     與 ui-next 的深色 surface #1B1B1E 差一階，並排時看得出來是兩張不同的紙。
+     圓角 15px／--border-strong 對齊 .ui-next-task-modal 與 .ui-next-account-menu。 */
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 15px;
   box-shadow: var(--shadow-lg); padding: var(--space-4);
   transition: top .3s cubic-bezier(.3,.9,.3,1), left .3s cubic-bezier(.3,.9,.3,1);
 }
@@ -52,22 +57,22 @@
 .tour-pop[data-side="bottom"] > .tour-arrow {
   top: -7px; margin-left: -7px;
   border-left: 7px solid transparent; border-right: 7px solid transparent;
-  border-bottom: 7px solid var(--card-bg);
+  border-bottom: 7px solid var(--surface);
 }
 .tour-pop[data-side="top"] > .tour-arrow {
   bottom: -7px; margin-left: -7px;
   border-left: 7px solid transparent; border-right: 7px solid transparent;
-  border-top: 7px solid var(--card-bg);
+  border-top: 7px solid var(--surface);
 }
 .tour-pop[data-side="right"] > .tour-arrow {
   left: -7px; margin-top: -7px;
   border-top: 7px solid transparent; border-bottom: 7px solid transparent;
-  border-right: 7px solid var(--card-bg);
+  border-right: 7px solid var(--surface);
 }
 .tour-pop[data-side="left"] > .tour-arrow {
   right: -7px; margin-top: -7px;
   border-top: 7px solid transparent; border-bottom: 7px solid transparent;
-  border-left: 7px solid var(--card-bg);
+  border-left: 7px solid var(--surface);
 }
 .tour-pop.is-center > .tour-arrow { display: none; }
 
@@ -77,7 +82,9 @@
 }
 .tour-tag {
   font-size: var(--fs-xs); font-weight: var(--fw-semibold);
-  color: var(--primary); background: var(--primary-light);
+  /* --primary-light 是 app.css 的舊靛藍 #eef2ff，與 ui-next 的主色無關；
+     改成從當下主色調出來，深淺色與新舊介面都自動對。 */
+  color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent);
   border-radius: 99px; padding: 1px var(--space-2);
 }
 .tour-count {
@@ -131,7 +138,9 @@
   transition: background var(--transition), border-color var(--transition);
 }
 .tour-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.tour-btn-primary { background: var(--primary); color: #fff; }
+/* color 不能寫死 #fff：ui-next 深色模式的主色是亮藍 #93C5FD，白字壓在上面對比不足。
+   --bg 在淺色是近白、深色是深灰，兩邊都與主色形成足夠反差。 */
+.tour-btn-primary { background: var(--primary); color: var(--bg); }
 .tour-btn-primary:hover { background: var(--primary-hover); }
 .tour-btn-ghost { background: transparent; color: var(--text-muted); border-color: var(--border); }
 .tour-btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
@@ -139,8 +148,8 @@
 .tour-menu {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
   width: min(520px, calc(100vw - 32px)); pointer-events: auto;
-  background: var(--card-bg); border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg); padding: var(--space-5);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 15px; box-shadow: var(--shadow-lg); padding: var(--space-5);
 }
 .tour-menu-title { font-size: var(--fs-2xl); font-weight: var(--fw-bold); margin-bottom: var(--space-1); }
 .tour-menu-sub { font-size: var(--fs-base); color: var(--text-muted); margin-bottom: var(--space-4); }
@@ -149,18 +158,19 @@
   display: flex; align-items: center; gap: var(--space-3); width: 100%;
   font: inherit; text-align: left; cursor: pointer;
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: var(--space-3) var(--space-4);
+  border-radius: 12px; padding: var(--space-3) var(--space-4);
   color: var(--text);
 }
 .tour-menu-item:hover { border-color: var(--primary); }
 .tour-menu-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .tour-menu-num {
   flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
-  background: var(--primary-light); color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary);
   display: flex; align-items: center; justify-content: center;
   font-size: var(--fs-sm); font-weight: var(--fw-semibold);
 }
-.tour-menu-item.is-done > .tour-menu-num { background: var(--success); color: #fff; }
+/* 同 .tour-btn-primary：ui-next 深色模式的 --success 是亮綠 #4ADE80，白字壓不住。 */
+.tour-menu-item.is-done > .tour-menu-num { background: var(--success); color: var(--bg); }
 .tour-menu-body { flex: 1; min-width: 0; }
 .tour-menu-name { display: block; font-size: var(--fs-md); font-weight: var(--fw-semibold); }
 .tour-menu-desc { display: block; font-size: var(--fs-sm); color: var(--text-muted); }

@@ -27,11 +27,21 @@ describe('tour.css 與既有樣式完全隔離', () => {
     expect(offenders).toEqual([]);
   });
 
-  test('不得寫死顏色，一律走 app.css 變數', () => {
+  // 遮罩黑（#000）是唯一放行的寫死顏色：它不屬於任何語意色 token，
+  // 且數值要跟 ui-next 的 .ui-next-task-modal-backdrop 對齊，走變數反而對不上。
+  // 白名單只有這一個——多放一個顏色就等於多一處深色模式看不出來的破口。
+  const HEX_ALLOWED = new Set(['#000']);
+  test('不得寫死顏色，一律走變數', () => {
     const src = css().replace(/\/\*[\s\S]*?\*\//g, '');
-    // rgba(9,9,12,...) 這類遮罩黑是刻意的例外：遮罩不屬於任何語意色 token。
     const hex = src.match(/#[0-9a-fA-F]{3,8}\b/g) || [];
-    expect(hex.filter(h => h.toLowerCase() !== '#fff' && h.toLowerCase() !== '#ffffff')).toEqual([]);
+    expect(hex.filter(h => !HEX_ALLOWED.has(h.toLowerCase()))).toEqual([]);
+  });
+
+  // #fff 曾經在白名單裡，是因為主要按鈕與 badge 的文字寫死白色。
+  // ui-next 深色模式的主色是亮藍 #93C5FD，白字壓上去對比不足 ⇒ 已改成 var(--bg)。
+  // 這條守住它不被改回去（改回去畫面不會壞，只會在深色模式下變得難讀）。
+  test('主色按鈕與 badge 的文字色不寫死白色', () => {
+    expect(css()).not.toMatch(/color:\s*#fff/i);
   });
 });
 
@@ -183,5 +193,33 @@ describe('教學覆蓋層不被當成「點到選單外面」', () => {
     expect(guard).toBeGreaterThan(-1);
     expect(closePopovers).toBeGreaterThan(guard);
     expect(closeSidebar).toBeGreaterThan(guard);
+  });
+});
+
+// ui-next 的色票是 scoped 在 [data-ui="next"] 子樹（ui-next.css 第 8–11 行）。
+// 這三個 overlay 刻意掛在 .ui-next-shell 外面（登入頁與未登入狀態也要有它們），
+// 所以必須自己帶一層 data-ui="next"，否則整組退回 app.css 的舊色票：
+// 主色變靛藍 #6366f1、卡片底變 #202020，跟旁邊的 .ui-next-task-modal 不是同一套。
+// 破法無聲：畫面照跑、其他測試照綠，只有把它們跟平台的卡片擺在一起看才發現。
+describe('全域 overlay 吃得到 ui-next 色票', () => {
+  const src = read('js/ui-next/UiNextApp.js');
+  const wrapper = src.indexOf('class="ui-next-overlays"');
+
+  test('三個 overlay 都被 data-ui="next" 的 wrapper 包住', () => {
+    expect(wrapper).toBeGreaterThan(-1);
+    expect(src.slice(wrapper - 40, wrapper)).toContain('data-ui="next"');
+    const tail = src.slice(wrapper);
+    ['toast-container', '<confirm-dialog-host />', '<tour-host />'].forEach((frag) => {
+      const at = tail.indexOf(frag);
+      expect(at).toBeGreaterThan(-1);
+      // 必須落在 wrapper 收尾之前，否則等於掛在外面
+      expect(at).toBeLessThan(tail.indexOf('</div>\n    `'));
+    });
+  });
+
+  test('wrapper 不產生 box（display:contents）', () => {
+    const css = fs.readFileSync(
+      path.join(publicDir, 'css/ui-next-pages/01-base.css'), 'utf8');
+    expect(css).toMatch(/\.ui-next-overlays\s*\{[^}]*display:\s*contents/);
   });
 });

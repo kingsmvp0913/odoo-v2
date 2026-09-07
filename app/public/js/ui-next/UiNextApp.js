@@ -1239,12 +1239,20 @@
       <!-- 這三個全域 overlay 必須在 v-if/v-else 兩個分支之外。
            原本掛在 shell 這個 v-else 裡面，於是未登入與 /login 頁走 v-if 分支時三者都不存在：
            登入失敗的 toast、確認視窗、新手教學在那些頁面上全部靜默不出現。
-           它們都是 position:fixed 的 overlay，放在哪一層不影響定位。 -->
-      <div class="toast-container" role="status" aria-live="polite" aria-atomic="false">
-        <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)"><ui-next-icon name="close"/></button></div>
+           它們都是 position:fixed 的 overlay，放在哪一層不影響定位。
+
+           ⚠ 但 data-ui="next" 這層包裹不能省：ui-next 的色票是 scoped 在 [data-ui="next"]
+           子樹上（見 ui-next.css 第 8–11 行），掛在 shell 外面就完全吃不到，三者會退回
+           app.css 的舊色票——主色靛藍 #6366f1 而不是全站的 #714B67。畫面照跑、測試照綠，
+           只有把它們跟旁邊的卡片擺在一起看才發現不是同一套。
+           wrapper 走 display:contents，只借變數不產生任何 box。 -->
+      <div data-ui="next" class="ui-next-overlays">
+        <div class="toast-container" role="status" aria-live="polite" aria-atomic="false">
+          <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)"><ui-next-icon name="close"/></button></div>
+        </div>
+        <confirm-dialog-host />
+        <tour-host />
       </div>
-      <confirm-dialog-host />
-      <tour-host />
     `,
   });
 })();
