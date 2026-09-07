@@ -251,9 +251,13 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
     `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
   if (!bank) throw new Error(`找不到題庫 ${bankId}`);
 
+  // 暫停就當作「沒有待處理的頁」。擋在取頁這一個點，其餘流程完全不必知道有暫停這回事：
+  // 正在審的那頁照樣跑完（中途砍掉會留下沒有判斷的孤兒作答，跟失敗路徑一樣要刪掉重來），
+  // 排隊的留在 pending 不動，取消暫停後原地接上。
   const fetchPending = async () => (await db.query(
-    `SELECT id, bank_id, page, answer_raw, responder, image_path, is_test, section_title
-       FROM exam_uploads WHERE bank_id = $1 AND status = 'pending' ORDER BY id`, [bankId])).rows;
+    `SELECT u.id, u.bank_id, u.page, u.answer_raw, u.responder, u.image_path, u.is_test, u.section_title
+       FROM exam_uploads u JOIN exam_banks b ON b.id = u.bank_id
+      WHERE u.bank_id = $1 AND u.status = 'pending' AND NOT b.paused ORDER BY u.id`, [bankId])).rows;
 
   const pending = await fetchPending();
   if (!pending.length) return { jobId: null, total: 0, done: 0, failed: 0 };
@@ -265,6 +269,8 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
 
   const stat = { jobId: job.id, total: 0, done: 0, failed: 0 };
   let queue = [...pending];
+  // 目前有幾個 worker 正在審頁。空手的 worker 靠它決定要不要留下來待命（見 nextOne）。
+  let busy = 0;
 
   /**
    * 認領一筆。**認領＝把 pending 改成 running，而且要靠 DB 判斷有沒有搶到。**
@@ -299,9 +305,17 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
       // 毫秒內陸續落地的；worker 全部同時啟動，第 2~5 個當下查到空的就走人，
       // 結果只剩一個在序列跑——實測 job 的 pages_total 是 2，併行上限 5 完全沒有
       // 機會生效。等幾輪再走，晚到的頁才有人接。
+      //
+      // **只要還有別人在審，就不下班。** 上面那個 12 秒只夠涵蓋「一次丟一整份考卷」；
+      // 實際主流程是人一邊考一邊傳，每頁間隔數十秒而一頁要跑 1~2 分鐘——12 秒到了
+      // 其他 worker 全走光，只剩一個在序列跑（實測 bank 19：8 頁進來，job 的
+      // pages_total 只有 3，P4 之後全排隊）。有人在忙就代表這場考試還沒完，留著待命
+      // 才接得住下一頁；真的全空了（busy 為 0）再照原本的 12 秒收工，不會拖到
+      // 「重算信心度」那一步。
       if (!queue.length) queue = await fetchPending();
       if (!queue.length) {
-        if (++emptyRounds > idleRounds()) return;
+        if (busy > 0) emptyRounds = 0;
+        else if (++emptyRounds > idleRounds()) return;
         await new Promise(r => setTimeout(r, idleWaitMs()));
         continue;
       }
@@ -309,6 +323,7 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
       const up = queue.shift();
       if (!up) continue;
       if (!await claim(up)) continue;   // 被別的 worker 搶走了
+      busy++;
       onEvent({ jobId: job.id, page: up.page, status: 'running' });
       try {
         const r = await processUpload(db, {
@@ -333,6 +348,10 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
           [up.id, e.message]);
         stat.failed++;
         onEvent({ jobId: job.id, page: up.page, status: 'failed', error: e.message });
+      } finally {
+        // 用 finally 而不是接在 catch 後面：catch 裡那兩句 UPDATE 也可能失敗，
+        // 那時 busy 若沒歸零，其他 worker 會永遠等下去、job 永遠不會結束。
+        busy--;
       }
       await setJob(db, job.id, { pages_done: stat.done + stat.failed });
     }

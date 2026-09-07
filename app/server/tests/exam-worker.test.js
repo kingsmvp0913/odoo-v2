@@ -446,3 +446,45 @@ describe('reclaimInterrupted', () => {
     expect(r.resumeBanks).toContain(bankId);
   });
 });
+
+// 人是一邊考一邊傳的：下一頁在數十秒後才進 DB，而一頁要跑 1~2 分鐘。空手的工人
+// 若照「查不到就等 12 秒下班」，其他工人會在第一頁跑完前全退光，只剩一個在序列跑
+// （實測 bank 19：8 頁陸續進來只有 3 頁被認領，其餘全排隊，而畫面上看起來像沒在動）。
+test('有工人在審時，空手的工人要留下來待命，接住晚到的頁', async () => {
+  // 用獨立題庫：本檔的表在測試之間不清空，共用題庫會撈到前面留下的 pending，
+  // 讓「第二個工人是不是還在」這件事測不出來。
+  const b = await dbModule.query(
+    `INSERT INTO exam_banks (label, odoo_version) VALUES ('W-late','19') RETURNING id`);
+  const lateBank = b.rows[0].id;
+  const add = async (page) => {
+    const rel = path.join('exam_late', `${page}.jpg`);
+    fs.mkdirSync(path.join(uploadDir, 'exam_late'), { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, rel), Buffer.from([0xff, 0xd8, 0xff]));
+    await dbModule.query(
+      `INSERT INTO exam_uploads (bank_id, page, answer_raw, image_path) VALUES ($1,$2,'B',$3)`,
+      [lateBank, page, rel]);
+  };
+
+  let inFlight = 0, peak = 0, n = 0;
+  mockExtract.mockImplementation(async () => {
+    const qs = [{ en: `late question ${++n}`, zh: `晚到的題 ${n}` }];
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise(r => setTimeout(r, 60));
+    inFlight--;
+    return { page: pageOf(qs), model: 'claude-opus-5' };
+  });
+  mockChallenge.mockResolvedValue({
+    verdict: verdictOf([{ en: 'late question', zh: '晚到的題' }]), model: 'claude-opus-5',
+  });
+
+  await add('90');
+  const run = runQueue(dbModule, { bankId: lateBank });
+  // 30ms 遠大於空手工人的收工線（2 輪 × 5ms），第二頁是在他「本來早就下班」之後才到
+  await new Promise(r => setTimeout(r, 30));
+  await add('91');
+
+  const r = await run;
+  expect(r).toMatchObject({ total: 2, done: 2, failed: 0 });
+  // 峰值 1 代表退化成序列：第二個工人在第二頁進來之前就走了
+  expect(peak).toBe(2);
+});

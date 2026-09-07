@@ -616,3 +616,50 @@ describe('清空這一場的作答', () => {
     await auth(request(app).delete('/api/exam/banks/999999/attempts')).expect(404);
   });
 });
+
+// 暫停是整場的開關：截圖傳錯了、或想先省 token 換個傳法時按下去。
+// 只翻旗標、不砍正在跑的那一頁——中途砍會留下沒有判斷的孤兒作答，得整頁重來。
+describe('暫停判題', () => {
+  test('暫停後排隊的頁留在原地，取消暫停才把佇列推起來', async () => {
+    const up = await dbModule.query(`
+      INSERT INTO exam_uploads (bank_id, page, answer_raw, image_path, status)
+      VALUES ($1,'77','B','exam-pause/x.jpg','pending') RETURNING id`, [bankId]);
+
+    // 本檔的表在測試之間不清空，前面留下的 pending 也會被算進去——數字自己量，
+    // 不要寫死 1
+    const queued = (await dbModule.query(
+      `SELECT COUNT(*)::int c FROM exam_uploads
+        WHERE bank_id=$1 AND status='pending' AND NOT is_test`, [bankId])).rows[0].c;
+
+    mockRunQueue.mockClear();
+    const on = await request(app).post(`/api/exam/banks/${bankId}/pause`)
+      .set('Authorization', `Bearer ${jwt}`).send({ paused: true });
+    expect(on.status).toBe(200);
+    expect(on.body).toMatchObject({ paused: true, pending: queued });
+    // 暫停不會順手把頁標成別的狀態：取消暫停要能原地接上，不必請人重傳
+    const still = await dbModule.query(
+      `SELECT status FROM exam_uploads WHERE id=$1`, [up.rows[0].id]);
+    expect(still.rows[0].status).toBe('pending');
+    // 而且不准趁機推佇列——按了暫停還在燒 token 是這顆鈕唯一不能出的錯
+    expect(mockRunQueue).not.toHaveBeenCalled();
+
+    const off = await request(app).post(`/api/exam/banks/${bankId}/pause`)
+      .set('Authorization', `Bearer ${jwt}`).send({ paused: false });
+    expect(off.body).toMatchObject({ paused: false, pending: queued });
+    // 取消暫停要自己推佇列，否則那些 pending 會等到下次有人上傳才被撿走
+    await new Promise(r => setImmediate(r));
+    expect(mockRunQueue).toHaveBeenCalled();
+
+    await dbModule.query(`DELETE FROM exam_uploads WHERE id=$1`, [up.rows[0].id]);
+  });
+
+  test('看板要回報暫停狀態，否則畫面上跟「卡住」分不出來', async () => {
+    await request(app).post(`/api/exam/banks/${bankId}/pause`)
+      .set('Authorization', `Bearer ${jwt}`).send({ paused: true });
+    const res = await request(app).get(`/api/exam/dashboard?bank=${bankId}`)
+      .set('Authorization', `Bearer ${jwt}`);
+    expect(res.body.bank.paused).toBe(true);
+    await request(app).post(`/api/exam/banks/${bankId}/pause`)
+      .set('Authorization', `Bearer ${jwt}`).send({ paused: false });
+  });
+});

@@ -1094,7 +1094,10 @@ async function migrate() {
     // 歸檔時讀的那張官方成績單。留著才回頭查得到「這章到底錯幾題」的依據——
     // 推導出來的每一個結論最終都源自它。存相對 uploadRoot 的路徑（專案硬規則：
     // 不寫死絕對路徑）。
-    { table: 'exam_banks', col: 'score_image', sql: 'ALTER TABLE exam_banks ADD COLUMN score_image TEXT' }
+    { table: 'exam_banks', col: 'score_image', sql: 'ALTER TABLE exam_banks ADD COLUMN score_image TEXT' },
+    // 判題暫停鈕。放題庫層而不是全平台：佇列本來就是一場考試一條，暫停的語意
+    // 也是「這場先別判」。DEFAULT FALSE ＋ 只有暫停端點寫 true，不需要回填。
+    { table: 'exam_banks', col: 'paused', sql: 'ALTER TABLE exam_banks ADD COLUMN paused BOOLEAN NOT NULL DEFAULT FALSE' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

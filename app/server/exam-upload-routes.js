@@ -340,6 +340,28 @@ function registerRoutes(app) {
     scheduleQueue(bankId);
   });
 
+  // 暫停／繼續判題。截圖傳錯了、或想先省 token 換個傳法時按這個。
+  //
+  // 只翻旗標，不去砍正在跑的那一頁：中途砍會留下一批沒有判斷的孤兒作答（畫面上
+  // 永遠顯示等待中），要走跟失敗路徑一樣的清理。排隊的頁留在 pending 原地不動，
+  // 取消暫停後接上去繼續，不必重傳。
+  app.post('/api/exam/banks/:id/pause', verifyToken, express.json(), async (req, res) => {
+    const bankId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
+    const paused = !!req.body.paused;
+    const { rows } = await query(
+      `UPDATE exam_banks SET paused = $2 WHERE id = $1 RETURNING id, paused`, [bankId, paused]);
+    if (!rows.length) return res.status(404).json({ error: '找不到題庫' });
+
+    const pending = (await query(
+      `SELECT COUNT(*)::int c FROM exam_uploads
+        WHERE bank_id = $1 AND status = 'pending' AND NOT is_test`, [bankId])).rows[0].c;
+    res.json({ paused, pending });
+
+    // 取消暫停要自己把佇列推起來，否則那些 pending 會等到下一次有人上傳才被撿走。
+    if (!paused && pending) scheduleQueue(bankId);
+  });
+
   // 工作歷程。進度的真相在這裡，socket 廣播只是讓開著頁面的人即時看到——
   // 廣播錯過了就沒了，重整一次前端記憶體就空的。
   app.get('/api/exam/jobs', verifyToken, async (req, res) => {
@@ -372,7 +394,7 @@ function registerRoutes(app) {
     const bankId = parseInt(req.query.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
     const bank = (await query(
-      `SELECT id, label, odoo_version FROM exam_banks WHERE id=$1`, [bankId])).rows[0];
+      `SELECT id, label, odoo_version, paused FROM exam_banks WHERE id=$1`, [bankId])).rows[0];
     if (!bank) return res.status(404).json({ error: '找不到題庫' });
 
     const uploads = (await query(`
