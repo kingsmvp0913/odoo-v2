@@ -673,6 +673,13 @@
         await this.loadProjectChats(id);
       },
       async loadProjectChats(id) {
+        // 教學示範專案的 id 是字串 'demo'，打真 API 會讓後端拿它去比對 integer 的 project_id 而 500
+        //（症狀：每進一堂 /projects/demo 的課，側欄同步就跳一次「無法載入專案對話」）。
+        // 假資料 TourDemo.chats() 早就備好，只是這條路徑漏接——比照 Wiki／Db 的接管方式補上。
+        if (window.TourDemo && window.TourDemo.isProject(id)) {
+          this.projectChats[id] = window.TourDemo.chats();
+          return;
+        }
         try {
           this.projectChats[id] = await Api.get(`projects/${id}/chats`);
         } catch (e) {

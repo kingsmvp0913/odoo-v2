@@ -68,6 +68,8 @@
       },
       async loadChats() {
         this.chatsLoading = true; this.chatsError = "";
+        // 示範專案 id 是 'demo'，打真 API 會 500（後端拿它比對 integer 的 project_id）——同 loadProjectChats。
+        if (this.isTourDemo()) { this.chats = window.TourDemo.chats(); this.chatsLoading = false; return; }
         try { this.chats = await Api.get(`projects/${this.$route.params.id}/chats`); }
         catch (error) { this.chatsError = error.message || "無法載入對話清單"; }
         finally { this.chatsLoading = false; }
