@@ -98,3 +98,19 @@ test('遮罩 Authorization=Bearer 格式（等號分隔）', () => {
   expect(masked).not.toContain(jwt);
   expect(masked).toContain('Authorization=Bearer ***');
 });
+
+// 意圖（Rule 9）：客戶的 odoo.conf 內 db_password／admin_passwd 是明碼，讀 log 與自動部署
+// 都會讀到並寫進平台的 DB。原本 lookbehind 用 \w 把底線也擋掉，於是 `db_password=` 這種
+// 帶前綴的欄位完全不在遮罩範圍——兩台真機的密碼看起來有遮到，只是因為剛好 32 字以上被
+// LONG_TOKEN_RE 撈走。短密碼會原樣落進 deploy_runs.log 與 log 檢視畫面。
+test('遮罩帶前綴的憑證欄位（db_password／admin_passwd），短值也要遮', () => {
+  expect(maskSecrets('db_password = short1')).toBe('db_password = ***');
+  expect(maskSecrets('admin_passwd=abc')).toBe('admin_passwd=***');
+  expect(maskSecrets('odoo_db_password: p1')).not.toContain('p1');
+});
+
+// 放寬 lookbehind 不得把「不誤遮」那條吃掉：底線放行、英數仍擋。
+test('放寬底線後 mytoken 仍不被誤遮', () => {
+  expect(maskSecrets('mytoken=notasecretvalue')).toBe('mytoken=notasecretvalue');
+  expect(maskSecrets('mypassword=plain')).toBe('mypassword=plain');
+});

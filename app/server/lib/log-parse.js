@@ -89,8 +89,13 @@ function truncate(entries, maxEntries, maxBytes) {
 // - 用 negative lookbehind (?<![\w-]) 代替 \b（underscore 是 word char，\b 無法判界）
 const BEARER_RE_COLON = /Authorization\s*:\s*Bearer\s+[\w.-]+/gi;
 const BEARER_RE_EQUAL = /Authorization\s*=\s*Bearer\s+[\w.-]+/gi;
-const QUOTED_CRED_RE = /(?<![\w-])(['"]?)(?:access_token|auth_token|csrf_token|api[_-]?key|password|passwd|pwd|token|secret|authorization)\1?\s*([:=])\s*(['"])([^'"]*)\3/gi;
-const UNQUOTED_CRED_RE = /(?<![\w-])((?:access_token|auth_token|csrf_token|api[_-]?key|password|passwd|pwd|token|secret|authorization))\s*([:=])\s*(?!Bearer\s)([^\s,'";}\]]+)/gi;
+// lookbehind 排除英數與連字號、但**放行底線**：
+// `mytoken=` 不該遮（token 前是 n），但 `db_password=`／`admin_passwd=` 必須遮（前面是 _）。
+// 用 \w 會連底線一起擋掉，於是客戶 odoo.conf 的 db_password 完全不在遮罩範圍內——
+// 那兩台真機的密碼之所以看起來有遮到，只是因為剛好 32 字以上被 LONG_TOKEN_RE 撈到，
+// 短密碼會原樣寫進 deploy_runs.log 與 log 檢視畫面。
+const QUOTED_CRED_RE = /(?<![A-Za-z0-9-])(['"]?)(?:access_token|auth_token|csrf_token|api[_-]?key|password|passwd|pwd|token|secret|authorization)\1?\s*([:=])\s*(['"])([^'"]*)\3/gi;
+const UNQUOTED_CRED_RE = /(?<![A-Za-z0-9-])((?:access_token|auth_token|csrf_token|api[_-]?key|password|passwd|pwd|token|secret|authorization))\s*([:=])\s*(?!Bearer\s)([^\s,'";}\]]+)/gi;
 const LONG_TOKEN_RE = /\b[A-Za-z0-9]{32,}\b/g;
 
 function maskSecrets(text) {
