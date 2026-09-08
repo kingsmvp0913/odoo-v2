@@ -86,7 +86,9 @@
   align-items: start;
 }
 .ui-next-repos {
-  overflow: hidden;
+  /* 不能用 overflow:hidden：新增列的分支下拉是浮層，會被裁成只剩一條搜尋框。
+     圓角改由最後一列自己收邊。 */
+  overflow: visible;
   padding: 0;
 }
 .ui-next-repos > .ui-next-card-title {
@@ -157,6 +159,41 @@
   gap: 8px;
   padding: 13px 18px;
   background: var(--bg);
+  border-radius: 0 0 14px 14px;
+}
+/* 分支選單：外框比照旁邊的輸入欄，展開的浮層沿用專案選擇器（新對話那顆）的樣式。 */
+.ui-next-branch-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 6px 0 8px;
+  background: var(--surface);
+}
+.ui-next-add-repo .ui-next-branch-picker input:not([type="checkbox"]) {
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 0;
+  background: transparent;
+}
+.ui-next-add-repo .ui-next-branch-picker input:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+.ui-next-branch-picker .ui-next-project-picker-options {
+  width: max-content;
+  min-width: 100%;
+  max-width: min(390px, calc(100vw - 48px));
+}
+.ui-next-branch-picker .ui-next-project-picker-options p {
+  margin: 0;
+  padding: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .ui-next-add-repo input:not([type="checkbox"]),
 .ui-next-add-repo .searchable-select {

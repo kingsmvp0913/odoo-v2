@@ -3,12 +3,11 @@
   window.UiNextProjectDetailView = Vue.defineComponent({
     name: "UiNextProjectDetailView",
     components: {
-      SearchableSelect: window.SearchableSelect,
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, tabs: [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]], _pollTimer: null, _reposPollTimer: null }; },
-    computed: { embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); } },
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, tabs: [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]], _pollTimer: null, _reposPollTimer: null }; },
+    computed: { embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
     watch: {
       "$route.query.tab"(tab) {
         const next = ["repos","env","settings","chat","db","sop","wiki"].includes(tab) ? tab : "chat";
@@ -21,7 +20,8 @@
     },
     async created() { await Promise.all([this.load(), this.loadEnv()]); if (this.detailTab === "chat") this.loadChats(); },
     // 沒有這行，離開專案頁之後那兩個 timer 還會繼續打 API（元件早就卸載，畫面也不會更新）。
-    beforeUnmount() { this._stopPoll(); this._stopReposPoll(); },
+    mounted() { this._onBranchPickerOutside = (event) => { if (!event.target.closest(".ui-next-branch-picker")) this.branchPickerOpen = false; }; document.addEventListener("pointerdown", this._onBranchPickerOutside); },
+    beforeUnmount() { this._stopPoll(); this._stopReposPoll(); document.removeEventListener("pointerdown", this._onBranchPickerOutside); },
     methods: {
       // 環境建立／repo clone 都是背景長工，後端不推事件；不輪詢的話「建立中」「同步中」會永遠停在原地。
       _startPoll() { if (this._pollTimer) return; this._pollTimer = setInterval(() => this.loadEnv(), 5000); },
@@ -31,8 +31,24 @@
       isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
       async load() { this.loading = true; this.loadError = ""; if (this.isTourDemo()) { this.project = window.TourDemo.project(); this.repos = window.TourDemo.project().repos || []; this.loading = false; this.loadEnv(); return; } try { const data = await Api.get(`projects/${this.$route.params.id}`); this.project = data; this.editName = this.project?.name || ""; this.editDescription = this.project?.description || ""; this.repos = data.repos || []; this.editOdooProjectName = data.odoo_project_name || ""; this.editServiceRespondentName = data.service_respondent_name || ""; this.editServiceContactName = data.service_contact_name || ""; this.editE2eEnabled = !data.e2e_disabled; this.editEdition = data.edition || "community"; await Promise.all(this.repos.filter((repo) => repo.clone_status === "done").map(async (repo) => { const info = await Api.get(`projects/${data.id}/repos/${repo.id}/branches`).catch(() => null); if (info) this.branchInfo[repo.id] = info; })); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       async loadEnv() { if (this.isTourDemo()) { this.env = window.TourDemo.env(); return; } this.env = await Api.get(`projects/${this.$route.params.id}/env`).catch(() => this.env || { status: "idle" }); },
-      async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
-      async probeRemoteBranches() { const url = this.newRepo.repo_url.trim(); if (!url || url === this.lastProbedUrl) return; this.lastProbedUrl = url; this.probingBranches = true; try { const data = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`); this.remoteBranches = data.ok ? data.branches || [] : []; this.newRepo.base_branch = data.defaultBranch || ""; } catch { this.remoteBranches = []; } finally { this.probingBranches = false; } },
+      async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; this.lastProbedUrl = null; this.branchProbeError = ""; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
+      async probeRemoteBranches() { const url = this.newRepo.repo_url.trim(); if (!url || url === this.lastProbedUrl) return; this.lastProbedUrl = url; this.probingBranches = true; this.branchProbeError = ""; try { const data = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`); this.remoteBranches = data.ok ? data.branches || [] : []; this.branchProbeError = data.ok ? "" : (data.reason || "讀不到分支"); this.newRepo.base_branch = data.defaultBranch || ""; } catch (error) { this.remoteBranches = []; this.branchProbeError = error.message || "讀不到分支"; } finally { this.probingBranches = false; } },
+      // 貼上網址當下就去讀分支：等游標離開欄位才讀，等於逼人多點一下畫面才看得到選項。
+      onRepoUrlPaste() { setTimeout(() => this.probeRemoteBranches(), 0); },
+      openBranchPicker() { if (this.probingBranches || !this.remoteBranches.length) return; this.branchPickerOpen = true; this.branchQuery = ""; this.$nextTick(() => this.$refs.branchTrigger?.focus()); },
+      // 標籤空著就拿分支名補：兩欄十之八九同名，讓人再打一次是白工。
+      selectBranch(branch) { this.newRepo.base_branch = branch; if (branch && !this.newRepo.label.trim()) this.newRepo.label = branch; this.branchPickerOpen = false; this.branchQuery = ""; },
+      onBranchPickerKeydown(event) {
+        if (event.key === "Escape") { this.branchPickerOpen = false; this.branchQuery = ""; this.$nextTick(() => this.$refs.branchTrigger?.focus()); return; }
+        if (event.key === "Enter" && this.branchPickerOpen) { const first = this.filteredBranches[0]; if (first) { event.preventDefault(); this.selectBranch(first); } return; }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!this.branchPickerOpen) return this.openBranchPicker();
+          const options = this.$refs.branchOptions ? Array.from(this.$refs.branchOptions.querySelectorAll("button")) : [];
+          const index = options.indexOf(document.activeElement);
+          (options[index + (event.key === "ArrowDown" ? 1 : -1)] || options[event.key === "ArrowDown" ? 0 : options.length - 1])?.focus();
+        }
+      },
       async removeRepo(id) { if (!await confirmDialog({ title: "移除 Repo", message: "確定移除此 repo？本機 clone 的程式碼將一併刪除，且無法復原。", danger: true, confirmText: "移除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/repos/${id}`); await this.load(); } catch (error) { showToast(error.message || "移除失敗", "error", 0); } }, async reclone(id) { try { await Api.post(`projects/${this.$route.params.id}/repos/${id}/reclone`, {}); await this.load(); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } }, updateRepo(id) { return this.reclone(id); },
       unreadCount() { return this.project ? (window.UnreadStore.byProject[String(this.project.id)] || this.project.unread_count || 0) : 0; },  // 七個頁籤裡只有三個是同一頁的區塊，其餘四個是獨立路由；切同頁的頁籤要同步寫進 ?tab=，否則重整會跳回第一個。
       selectTab(key) { 
@@ -129,9 +145,16 @@
 </article>
 <form class="ui-next-add-repo" @submit.prevent="addRepo">
 <input v-model="newRepo.label" placeholder="標籤，例如 main">
-<input v-model="newRepo.repo_url" placeholder="Git URL" @blur="probeRemoteBranches">
-<SearchableSelect v-if="remoteBranches.length" :model-value="newRepo.base_branch" :options="remoteBranches.map(b=>({value:b,label:b}))" all-label="自動偵測" placeholder="主分支" @update:modelValue="v=>newRepo.base_branch=v||''"/>
-<span v-else class="ui-next-field-note">{{ probingBranches?'讀取分支中…':'主分支自動偵測' }}</span>
+<input v-model="newRepo.repo_url" placeholder="Git URL" @paste="onRepoUrlPaste" @blur="probeRemoteBranches">
+<div class="ui-next-branch-picker" @keydown="onBranchPickerKeydown" @click="openBranchPicker">
+<input ref="branchTrigger" type="text" role="combobox" aria-autocomplete="list" aria-label="主分支" :aria-expanded="branchPickerOpen" :disabled="probingBranches||!remoteBranches.length" :value="branchPickerOpen?branchQuery:newRepo.base_branch" :placeholder="probingBranches?'讀取分支中…':(remoteBranches.length?'主分支':(branchProbeError||'主分支自動偵測'))" @focus="openBranchPicker" @input="branchQuery=$event.target.value;branchPickerOpen=true">
+<ui-next-icon name="chevron-down"/>
+<div v-if="branchPickerOpen" ref="branchOptions" class="ui-next-project-picker-options" role="listbox" aria-label="選擇主分支" @click.stop>
+<button type="button" role="option" :aria-selected="!newRepo.base_branch" @click="selectBranch('')">自動偵測</button>
+<button v-for="branch in filteredBranches" :key="branch" type="button" role="option" :aria-selected="branch===newRepo.base_branch" @click="selectBranch(branch)">{{ branch }}</button>
+<p v-if="!filteredBranches.length">找不到符合的分支</p>
+</div>
+</div>
 <label>
 <input type="checkbox" v-model="newRepo.is_primary"> 主要 Repo</label>
 <button class="ui-next-primary" :disabled="savingRepo||probingBranches">{{ savingRepo?'新增中…':'新增 Repo' }}</button>
