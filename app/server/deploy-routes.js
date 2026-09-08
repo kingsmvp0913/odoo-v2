@@ -20,6 +20,7 @@ async function requireAdmin(req, res, next) {
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
 const { runProbe } = require('./lib/deploy-probe');
+const { withProjectLock } = require('./pipeline/project-lock');
 
 const TARGET_COLS = `id, project_id, repo_id, env, conn_id, runtime, compose_dir, compose_service,
        service_name, container_name, addons_dir, conf_path, db_name, http_port,
@@ -87,6 +88,59 @@ function registerRoutes(app) {
          b.enabled === true, b.probe_json || null]
       );
       res.json({ ok: true, id: rows[0].id });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.patch('/api/projects/:id/deploy-targets/:tid', guard, async (req, res) => {
+    try {
+      if (typeof req.body.enabled !== 'boolean') return res.status(400).json({ error: 'enabled 必須是布林' });
+      const { rows } = await query(
+        `UPDATE project_deploy_targets SET enabled = $1, updated_at = NOW()
+         WHERE id = $2 AND project_id = $3 RETURNING id, enabled`,
+        [req.body.enabled, req.params.tid, req.params.id]
+      );
+      if (!rows.length) return res.status(404).json({ error: '找不到部署目標' });
+      res.json({ ok: true, enabled: rows[0].enabled });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/projects/:id/deploy-targets/:tid/deploy', guard, async (req, res) => {
+    try {
+      const { rows: [t] } = await query(
+        'SELECT id, env FROM project_deploy_targets WHERE id = $1 AND project_id = $2',
+        [req.params.tid, req.params.id]
+      );
+      if (!t) return res.status(404).json({ error: '找不到部署目標' });
+      // 正式區不可逆：失敗只還原檔案，資料庫的改動留在原地。少了這道確認，
+      // 誤點一下就直接動到客戶正在用的系統。
+      if (t.env === 'prod' && req.body.confirm !== true) {
+        return res.status(400).json({ error: '正式區部署需要明確確認（confirm）' });
+      }
+      const { runDeploy } = require('./lib/deploy-run');
+      // 與 pipeline 對同一個主 clone 的 git 操作互斥：部署要 fetch／archive，
+      // 同時有人在 merge 會拿到半套狀態
+      const r = await withProjectLock(Number(req.params.id), () =>
+        runDeploy(t.id, { trigger: t.env === 'prod' ? 'manual_prod' : 'manual_retry', userId: req.userId })
+      );
+      res.json(r);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/projects/:id/deploy-runs', guard, async (req, res) => {
+    try {
+      const params = [req.params.id];
+      let where = 'WHERE t.project_id = $1';
+      if (req.query.target_id) { params.push(req.query.target_id); where += ` AND r.target_id = $${params.length}`; }
+      const { rows } = await query(
+        `SELECT r.id, r.target_id, r.task_id, r.triggered_by, r.trigger, r.from_sha, r.to_sha,
+                r.modules, r.status, r.log, r.started_at, r.finished_at, t.env
+           FROM deploy_runs r
+           JOIN project_deploy_targets t ON t.id = r.target_id
+          ${where}
+          ORDER BY r.id DESC LIMIT 50`,
+        params
+      );
+      res.json({ runs: rows });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 }

@@ -13,6 +13,7 @@
         showRaw: false,
         // 指認表單：一個候選一份，key 是候選索引
         assign: {}, saving: false,
+        runs: [], runsLoading: false, openRun: null, deploying: 0,
       };
     },
     computed: {
@@ -20,7 +21,7 @@
       // 有登記 SSH 的連線才探得動；direct 模式（DBeaver 式直連）沒有 SSH 欄位
       sshConns() { return this.conns.filter((c) => c.ssh_host && c.ssh_user); },
     },
-    async created() { await this.load(); },
+    async created() { await this.load(); await this.loadRuns(); },
     methods: {
       async load() {
         this.loading = true; this.loadError = "";
@@ -35,6 +36,44 @@
         } catch (e) {
           this.loadError = e.message || "無法載入部署設定";
         } finally { this.loading = false; }
+      },
+      async loadRuns() {
+        this.runsLoading = true;
+        try {
+          const r = await Api.get(`projects/${this.projectId}/deploy-runs`);
+          this.runs = r.runs || [];
+        } catch (e) { /* 歷史讀不到不該擋住主功能 */ } finally { this.runsLoading = false; }
+      },
+      async toggleEnabled(t) {
+        try {
+          await Api.patch(`projects/${this.projectId}/deploy-targets/${t.id}`, { enabled: !t.enabled });
+          await this.load();
+        } catch (e) { showToast(e.message || '切換失敗', 'error', 0); }
+      },
+      async deployNow(t) {
+        if (t.env === 'prod') {
+          const ok = await confirmDialog({
+            title: '確定要部署到正式區？',
+            message: `這會直接更新客戶正在使用的系統（${this.addrOf(t)} / ${t.db_name}）。`
+              + '失敗時只會還原程式檔案，資料庫的改動不會還原。',
+            danger: true,
+            confirmText: '部署到正式區',
+          });
+          if (!ok) return;
+        }
+        this.deploying = t.id;
+        try {
+          const r = await Api.post(`projects/${this.projectId}/deploy-targets/${t.id}/deploy`,
+            t.env === 'prod' ? { confirm: true } : {});
+          if (r.ok) {
+            showToast(r.modules && r.modules.length ? `部署完成：${r.modules.join(', ')}` : '沒有模組變更，略過', 'success');
+          } else {
+            showToast(`部署失敗：${r.error || '未知原因'}`, 'error', 0);
+          }
+          await Promise.all([this.load(), this.loadRuns()]);
+        } catch (e) {
+          showToast(e.message || '部署失敗', 'error', 0);
+        } finally { this.deploying = 0; }
       },
       async runProbe() {
         if (!this.probeConnId) return;
@@ -86,6 +125,8 @@
         return m ? Number(m[1]) : null;
       },
       envLabel(e) { return e === "prod" ? "正式區" : "測試區"; },
+      statusLabel(s) { return { running: '執行中', success: '成功', failed: '失敗', rolled_back: '已回滾' }[s] || s; },
+      statusColor(s) { return s === 'success' ? 'var(--success)' : (s === 'running' ? 'var(--text-muted)' : 'var(--danger)'); },
       addrOf(t) { return t.runtime === "docker" ? (t.compose_service || t.container_name) : t.service_name; },
     },
     template: `
@@ -99,7 +140,7 @@
   <template v-else>
     <div v-if="!targets.length" style="color:var(--text-muted)">尚未設定任何部署目標。</div>
     <table v-else class="ui-next-table">
-      <thead><tr><th>環境</th><th>形式</th><th>服務</th><th>資料庫</th><th>addons 目錄</th><th>分支</th><th>上次部署</th><th>狀態</th></tr></thead>
+      <thead><tr><th>環境</th><th>形式</th><th>服務</th><th>資料庫</th><th>addons 目錄</th><th>分支</th><th>上次部署</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>
         <tr v-for="t in targets" :key="t.id">
           <td>{{ envLabel(t.env) }}</td>
@@ -110,7 +151,35 @@
           <td><code>{{ t.branch }}</code></td>
           <td>{{ t.last_deployed_sha ? t.last_deployed_sha.slice(0,8) : '—' }}</td>
           <td><span :style="{color: t.enabled ? 'var(--success)' : 'var(--text-muted)'}">{{ t.enabled ? '已啟用' : '停用' }}</span></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-ghost btn-sm" @click="toggleEnabled(t)">{{ t.enabled ? '停用' : '啟用' }}</button>
+            <button class="btn btn-ghost btn-sm" :disabled="deploying === t.id" @click="deployNow(t)">
+              {{ deploying === t.id ? '部署中…' : '立即部署' }}
+            </button>
+          </td>
         </tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:var(--space-6)">部署歷史</h3>
+    <div v-if="runsLoading">載入中…</div>
+    <div v-else-if="!runs.length" style="color:var(--text-muted)">還沒有部署紀錄。</div>
+    <table v-else class="ui-next-table">
+      <thead><tr><th>時間</th><th>環境</th><th>觸發</th><th>模組</th><th>版本</th><th>結果</th><th></th></tr></thead>
+      <tbody>
+        <template v-for="r in runs" :key="r.id">
+          <tr>
+            <td>{{ new Date(r.started_at).toLocaleString() }}</td>
+            <td>{{ envLabel(r.env) }}</td>
+            <td>{{ r.trigger }}</td>
+            <td>{{ (r.modules || []).join(', ') || '—' }}</td>
+            <td><code>{{ r.to_sha ? r.to_sha.slice(0,8) : '—' }}</code></td>
+            <td><span :style="{color: statusColor(r.status)}">{{ statusLabel(r.status) }}</span></td>
+            <td><button class="btn btn-ghost btn-sm" @click="openRun = openRun === r.id ? null : r.id">
+              {{ openRun === r.id ? '收合' : '看輸出' }}</button></td>
+          </tr>
+          <tr v-if="openRun === r.id"><td colspan="7"><pre class="ui-next-log-pre">{{ r.log || '（無輸出）' }}</pre></td></tr>
+        </template>
       </tbody>
     </table>
 
