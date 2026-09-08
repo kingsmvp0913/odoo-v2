@@ -205,6 +205,47 @@ async function migrate() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    `CREATE TABLE IF NOT EXISTS project_deploy_targets (
+      id                SERIAL PRIMARY KEY,
+      project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      repo_id           INTEGER REFERENCES project_repos(id) ON DELETE CASCADE,
+      env               TEXT NOT NULL,
+      conn_id           INTEGER,
+      runtime           TEXT NOT NULL,
+      compose_dir       TEXT,
+      compose_service   TEXT,
+      service_name      TEXT,
+      container_name    TEXT,
+      addons_dir        TEXT NOT NULL,
+      conf_path         TEXT,
+      db_name           TEXT NOT NULL,
+      http_port         INTEGER,
+      modules           TEXT[] NOT NULL DEFAULT '{}',
+      branch            TEXT NOT NULL,
+      sudo_mode         TEXT NOT NULL DEFAULT 'none',
+      enabled           BOOLEAN NOT NULL DEFAULT false,
+      last_deployed_sha TEXT,
+      last_probe_at     TIMESTAMPTZ,
+      probe_json        JSONB,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS deploy_runs (
+      id            SERIAL PRIMARY KEY,
+      target_id     INTEGER NOT NULL REFERENCES project_deploy_targets(id) ON DELETE CASCADE,
+      task_id       INTEGER,
+      triggered_by  INTEGER,
+      trigger       TEXT NOT NULL,
+      from_sha      TEXT,
+      to_sha        TEXT,
+      modules       TEXT[] NOT NULL DEFAULT '{}',
+      status        TEXT NOT NULL,
+      log           TEXT NOT NULL DEFAULT '',
+      started_at    TIMESTAMPTZ DEFAULT NOW(),
+      finished_at   TIMESTAMPTZ
+    )`,
+
     `CREATE TABLE IF NOT EXISTS wiki_pages (
       id         SERIAL PRIMARY KEY,
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -837,6 +878,8 @@ async function migrate() {
     // 測試區建置模式：'venv'（預設，宿主 venv）或 'docker'（官方 odoo image，自動涵蓋 13→20+）。由管理設定切換。
     { table: 'teams_settings', col: 'env_mode', sql: "ALTER TABLE teams_settings ADD COLUMN env_mode TEXT DEFAULT 'venv'" },
     // Claude 用量閘門：超標停自動推進（全域單一，全台共用同一 claude 帳號）
+    // 自動部署總開關。預設 false：這個功能會連進客戶正式機下指令，必須明確開啟才生效。
+    { table: 'teams_settings', col: 'auto_deploy_enabled', sql: 'ALTER TABLE teams_settings ADD COLUMN auto_deploy_enabled BOOLEAN DEFAULT false' },
     { table: 'teams_settings', col: 'usage_gate_enabled',     sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_enabled BOOLEAN DEFAULT true' },
     { table: 'teams_settings', col: 'usage_gate_5h_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_5h_threshold INTEGER DEFAULT 90' },
     { table: 'teams_settings', col: 'usage_gate_7d_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_7d_threshold INTEGER DEFAULT 95' },
