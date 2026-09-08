@@ -24,6 +24,7 @@ const { registerRoutes: registerDbQueryRoutes } = require('./db-query-routes');
 const { registerRoutes: registerPortPoolRoutes } = require('./port-pool-routes');
 const { registerRoutes: registerEnterpriseRoutes } = require('./enterprise-routes');
 const { registerRoutes: registerSearchRoutes } = require('./search-routes');
+const { registerRoutes: registerDeployRoutes } = require('./deploy-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -121,6 +122,7 @@ function createApp() {
   registerPortPoolRoutes(app);
   registerEnterpriseRoutes(app);
   registerSearchRoutes(app);
+  registerDeployRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');

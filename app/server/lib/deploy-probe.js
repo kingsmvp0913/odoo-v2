@@ -2,7 +2,8 @@
 //
 // 探測與解析刻意分家：解析是純函式，用兩台真機的實際輸出當 fixture 測得起來；
 // SSH 那半只有在有真機時才驗得了。自己編的樣本過了不代表看得懂真機吐出來的東西。
-const { sudoPrefix } = require('./ssh-exec');
+const { sshExec, sudoPrefix, requireIdent } = require('./ssh-exec');
+const { maskSecrets } = require('./log-parse');
 
 // 段落標記。用 ### 前綴切段，指令輸出裡不會自然出現這個開頭。
 const SECT = /^### (.+)$/;
@@ -103,4 +104,67 @@ function parseConf(text) {
   };
 }
 
-module.exports = { buildProbeScript, parseProbe, parseComposeLabels, parseConf, isDeployCandidate };
+// execFn 可注入，測試才餵得進假輸出（比照 ssh-log.js 的 probeLogSource）。
+async function runProbe(connId, projectId, execFn = sshExec) {
+  const { loadDecryptedConn } = require('./db-connections');
+  const conn = await loadDecryptedConn(connId, projectId);
+  if (!conn) return { ok: false, error: '找不到這筆連線設定' };
+
+  let target = conn;
+  if (conn.vpn_enabled) {
+    // 不先撥號就 SSH，會對連不到的內網位址握手，錯誤訊息完全不指向真因
+    const { ensureGatewayRunning } = require('./vpn-gateway');
+    if (!conn.vpn) return { ok: false, error: '[VPN] 專案尚未設定 VPN，請先上傳 .ovpn' };
+    if (!conn.vpn_forward_port) return { ok: false, error: '[VPN] 此連線尚未配置轉發埠，請重新儲存一次連線設定' };
+    try { await ensureGatewayRunning(conn.vpn); }
+    catch (e) { return { ok: false, error: `[VPN] ${e.message}` }; }
+    target = { ...conn, ssh_host: '127.0.0.1', ssh_port: conn.vpn_forward_port };
+  }
+
+  let out;
+  try { out = await execFn(target, buildProbeScript(target)); }
+  catch (e) { return { ok: false, error: e.message }; }
+
+  const parsed = parseProbe(out.stdout);
+  // 客戶 conf 內的 db_password／admin_passwd 是明碼，這份會存進 probe_json 也會回前端
+  const raw = maskSecrets(`${out.stdout}\n${out.stderr || ''}`);
+
+  let candidates;
+  if (parsed.runtime === 'docker') {
+    candidates = [];
+    for (const c of parsed.containers) {
+      // compose 定址：service 名與容器名不同（odoo-tst vs odoo-tst-web），兩個都要存。
+      // 標籤是容器自己帶的，比 find 找 compose 檔可靠——鴻久的 compose.yaml 在第 5 層，
+      // find -maxdepth 4 剛好漏掉（2026-09-08 實際踩過）。
+      let compose = { project: '', service: '', workingDir: '', configFiles: '' };
+      let ver = parsed.odooVersion;
+      const S = sudoPrefix(target);
+      let name;
+      try { name = requireIdent(c.name, 'container'); } catch { continue; }
+      try {
+        const insp = await execFn(target,
+          `${S}docker inspect -f 'project={{index .Config.Labels "com.docker.compose.project"}} service={{index .Config.Labels "com.docker.compose.service"}} workdir={{index .Config.Labels "com.docker.compose.project.working_dir"}} files={{index .Config.Labels "com.docker.compose.project.config_files"}}' ${name}`);
+        compose = parseComposeLabels(insp.stdout);
+      } catch { /* 標籤取不到不算致命，候選仍列出來讓人指認 */ }
+      try {
+        const v = await execFn(target, `${S}docker exec ${name} odoo --version 2>&1 | head -1`);
+        if (v.stdout && v.stdout.trim()) ver = v.stdout.trim();
+      } catch { /* 同上 */ }
+      candidates.push({
+        runtime: 'docker', containerName: c.name, serviceName: null,
+        composeDir: compose.workingDir || null, composeService: compose.service || null,
+        dbName: conn.db_name, sudoMode: parsed.sudoMode, ports: c.ports, odooVersion: ver,
+      });
+    }
+  } else {
+    candidates = parsed.units.map(u => ({
+      runtime: 'systemd', serviceName: u, containerName: null,
+      composeDir: null, composeService: null,
+      dbName: conn.db_name, sudoMode: parsed.sudoMode, ports: null, odooVersion: parsed.odooVersion,
+    }));
+  }
+
+  return { ok: true, candidates, diskAvailGb: parsed.diskAvailGb, raw };
+}
+
+module.exports = { buildProbeScript, parseProbe, parseComposeLabels, parseConf, isDeployCandidate, runProbe };
