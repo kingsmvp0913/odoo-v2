@@ -339,10 +339,33 @@
       },
       async submitTask() { if (!this.taskDraft.title.trim() || !this.taskDraft.original_text.trim()) { this.taskError = "請填寫標題與內容。"; return; } this.creatingTask = true; this.taskError = ""; try { const task = await Api.post("tasks", { title: this.taskDraft.title.trim(), original_text: this.taskDraft.original_text, project_id: this.$route.params.id, chat_id: this.activeChat.id, chat_attachment_ids: this.taskDraft.attachments.filter((item) => item.chosen).map((item) => item.id) }); this.activeChat.converted_task_id = task.id; this.closeTaskModal(); showToast("已建立任務", "success"); } catch (error) { this.taskError = error.message || "建立任務失敗，請重試。"; } finally { this.creatingTask = false; } },
       // Chat 與任務對話共用右側主畫面捲軸；短對話不會位移，長對話才跟到最新訊息。
-      scrollToBottom() { const element = document.querySelector(".ui-next-main"); if (element) element.scrollTop = element.scrollHeight; },
+      // 捲到底之後內容還會再長高：markdown、程式碼區塊、字型要等後續幾幀才把高度撐開，
+      // 只捲一次就會停在「當下的底」而不是最終的底（實測初次載入完仍差 351px，量兩次都一樣）。
+      // 這 351px 大於 isMessagesNearBottom 的 80px 門檻，於是背景輪詢一律判定成「使用者自己
+      // 捲上去了，別打擾他」→ AI 回覆進來完全不跟隨，實測回完畫面一動也不動、要自己滾很久才
+      // 找得到新回覆。所以貼底必須撐到高度不再變。
+      // 上限 30 幀（約 0.5 秒）：內容若一直在長（大量圖片陸續載入），不能無限貼著把使用者
+      // 自己的捲動也吃掉——寧可少貼一次，不可搶走操作權。
+      scrollToBottom() {
+        const element = document.querySelector(".ui-next-main");
+        if (!element) return;
+        if (this._stickFrame) cancelAnimationFrame(this._stickFrame);
+        let frames = 0;
+        const stick = () => {
+          element.scrollTop = element.scrollHeight;
+          // 固定貼滿約 30 幀（0.5 秒），不是「高度連兩幀不變就收手」——文字先渲染完、圖片與
+          // 字型晚幾幀才到，中間本來就會有一段高度不動，一收手就再也貼不回去。
+          this._stickFrame = ++frames <= 30 ? requestAnimationFrame(stick) : null;
+        };
+        stick();
+      },
       isMessagesNearBottom() {
         const element = document.querySelector(".ui-next-main");
-        return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+        // 門檻取半頁高而非固定 80px：貼底之後內容仍會長高（同上），固定 80px 容不下那個誤差，
+        // 於是「其實還在看最新訊息」被判成「使用者自己捲上去了」，之後 AI 回覆一律不跟隨。
+        // 使用者真的往上翻時捲的距離遠大於半頁，不會被這個放寬誤判成還在底部。
+        return !element || element.scrollHeight - element.scrollTop - element.clientHeight
+          < Math.max(80, element.clientHeight * 0.5);
       },
       dayLabel(value) { return window.UiNextShared.dayLabel(value); },
       formatTime(value) { return value ? new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; },
