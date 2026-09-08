@@ -1,4 +1,4 @@
-const { Client } = require('ssh2');
+const { sshExec } = require('./ssh-exec');
 const { ensureGatewayRunning } = require('./vpn-gateway');
 
 function validateConnField(val, name) {
@@ -101,25 +101,6 @@ function parseCsv(text) {
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
   return rows;
-}
-
-function sshExec(conn, command) {
-  return new Promise((resolve, reject) => {
-    const c = new Client();
-    let stdout = '', stderr = '';
-    c.on('ready', () => {
-      c.exec(command, (err, stream) => {
-        if (err) { c.end(); return reject(err); }
-        stream.on('close', (code) => { c.end(); resolve({ stdout, stderr, code }); })
-          .on('data', d => { stdout += d; })
-          .stderr.on('data', d => { stderr += d; });
-      });
-    }).on('error', reject);
-    const cfg = { host: conn.ssh_host, port: conn.ssh_port || 22, username: conn.ssh_user, readyTimeout: 15000 };
-    if (conn.auth_type === 'key' && conn.ssh_key) cfg.privateKey = Buffer.from(conn.ssh_key, 'utf8');
-    else cfg.password = conn.ssh_password;
-    c.connect(cfg);
-  });
 }
 
 // 統一把 driver 回傳值正規化成字串（NULL→空字串，對齊 --csv 語意）

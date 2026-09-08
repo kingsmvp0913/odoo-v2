@@ -3,7 +3,7 @@
 // 安全模型與 runSelect 相反且更嚴：runSelect 讓呼叫端自由撰寫 SQL、靠黑名單攔截危險語句；
 // 本模組所有進入指令的參數都是型別受控（時間戳由程式重新序列化、window/level 是 enum、
 // 連線設定來自 DB），唯一的自由文字 keyword 根本不進指令，在平台側比對。
-const { Client } = require('ssh2');
+const { sshExec, sudoPrefix, requireIdent, validatePath, IDENT_RE } = require('./ssh-exec');
 const { ensureGatewayRunning } = require('./vpn-gateway');
 const { splitEntries, filterByLevel, filterByKeyword, truncate, maskSecrets, TS_RE } = require('./log-parse');
 
@@ -39,20 +39,6 @@ function validateLogParams({ at, window, level, keyword } = {}) {
   return { ok: true, atMs, windowMin, level: lv, keyword: keyword == null ? '' : String(keyword) };
 }
 
-const IDENT_RE = /^[A-Za-z0-9_.\-]+$/;
-const PATH_RE = /^\/[A-Za-z0-9_.\-\/]+$/;
-
-function validateLogPath(p) {
-  const s = String(p || '');
-  return PATH_RE.test(s) && !s.includes('..');
-}
-
-function requireIdent(val, name) {
-  if (!val) throw new Error(`連線缺少 ${name}，請先執行 log 來源偵測`);
-  if (!IDENT_RE.test(String(val))) throw new Error(`連線欄位 ${name} 含不允許的字元`);
-  return String(val);
-}
-
 // 兩位數補零的 UTC 分解，避免依賴執行機時區。
 function partsUtc(ms) {
   const d = new Date(ms);
@@ -64,16 +50,6 @@ function partsUtc(ms) {
 }
 function isoUtc(ms) { const { date, time } = partsUtc(ms); return `${date}T${time}Z`; }
 function spaceUtc(ms) { const { date, time } = partsUtc(ms); return `${date} ${time}`; }
-
-// sudo 前綴：沿用 ssh-sql 的慣例，有密碼走 sudo -S，沒有就直接 sudo。
-// -p '' 把提示字串置空：docker 指令尾端帶 2>&1，sudo 的提示（預設「[sudo] password for x: 」）
-// 會被併入 stdout 且不帶換行，黏在第一行 log 前面，splitEntries 會把整個「提示+第一筆」當成
-// 不含時間戳的孤兒續行丟棄——第一筆記錄因此消失。置空提示等於不印，從源頭避免此問題。
-function sudoPrefix(conn) {
-  const pw = conn.ssh_password || '';
-  if (!pw) return 'sudo ';
-  return `echo '${pw.replace(/'/g, "'\\''")}' | sudo -S -p '' `;
-}
 
 // 時間基準三者不同，見計畫「對 spec 未定處的明確化」第 3 點。
 function buildLogCmd(conn, fromMs, toMs) {
@@ -137,25 +113,9 @@ function lastTsOf(text) {
   return null;
 }
 
-// 與 ssh-sql.js 的 sshExec 同構（逐字元相同）。暫不共用，待抽 lib/ssh-exec.js（後續重構）。
-function sshExecLog(conn, command) {
-  return new Promise((resolve, reject) => {
-    const c = new Client();
-    let stdout = '', stderr = '';
-    c.on('ready', () => {
-      c.exec(command, (err, stream) => {
-        if (err) { c.end(); return reject(err); }
-        stream.on('close', (code) => { c.end(); resolve({ stdout, stderr, code }); })
-          .on('data', d => { stdout += d; })
-          .stderr.on('data', d => { stderr += d; });
-      });
-    }).on('error', reject);
-    const cfg = { host: conn.ssh_host, port: conn.ssh_port || 22, username: conn.ssh_user, readyTimeout: 15000 };
-    if (conn.auth_type === 'key' && conn.ssh_key) cfg.privateKey = Buffer.from(conn.ssh_key, 'utf8');
-    else cfg.password = conn.ssh_password;
-    c.connect(cfg);
-  });
-}
+// sshExecLog／validateLogPath 是 lib/ssh-exec 的別名，保留舊名供既有呼叫端與測試使用。
+const sshExecLog = sshExec;
+const validateLogPath = validatePath;
 
 // VPN 專案的連線在執行前需先確保閘道就緒並改指轉發埠（比照 runSelect）。
 async function withVpn(conn) {
