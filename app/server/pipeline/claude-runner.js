@@ -180,7 +180,14 @@ function runClaude(prompt, opts = {}) {
       // aiTokenEnv：/ai/* 端點的通行碼。agent 用 curl 打那些端點時要帶進 header——
       // 沒有它，agent 查不到客戶 DB／wiki，而症狀（403）完全不像認證問題（見 lib/ai-token.js）。
       // aiBaseEnv：同一組端點的 base URL。prompt 不得寫死埠號，否則 PORT 一被覆寫就整組靜默失聯。
-      env: { ...process.env, ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
+      // SECURITY_GUIDANCE_DISABLE：關掉使用者層繼承來的 security-guidance plugin（官方 marketplace）。
+      // 它的 Stop hook 帶 asyncRewake＝「agent 講完話要停下時，把它叫醒再講一次」，而 pipeline agent
+      // 一旦在 <result> 之後被叫醒補一段話，CLI 末輪的 ev.result 就換成那段話、契約標籤整個蒸發
+      // （task 248 實例：14:44:17 Stop hook 觸發、14:44:47 審出 1 個 high/critical、14:45:02 agent 被
+      // 叫醒回「這跟我無關」，整輪分析報廢）。更糟的是它審的是**平台自己的 repo**（實測 baseline_sha
+      // 落在 odoo-v2 的 commit，untracked 清單是 app/server/*.js），與該任務的 worktree 毫不相干。
+      // 這裡只關 pipeline 子行程，人用的互動 session 不受影響。
+      env: { ...process.env, SECURITY_GUIDANCE_DISABLE: '1', ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
     });
     // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
     // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。
@@ -335,7 +342,9 @@ function runClaude(prompt, opts = {}) {
           const finalModel = usedModel || model || null;
           // 折進 usage，讓 logTokenUsage 零改動就能落 model 欄
           if (usage && finalModel) usage.model = finalModel;
-          resolve({ text: resultText.trim(), assistantText: assistantText.trim(), usage, durationMs, sessionId, model: finalModel });
+          // raw＝結構化契約（<result>／側通道標籤）的唯一取用來源，見 assistantText 宣告處的理由；
+          // 空 transcript（純工具輪、CLI 只吐 result）時退回 text 保底。
+          resolve({ text: resultText.trim(), assistantText: assistantText.trim(), raw: assistantText.trim() || resultText.trim(), usage, durationMs, sessionId, model: finalModel });
         }
       });
     });

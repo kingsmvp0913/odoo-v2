@@ -79,7 +79,7 @@ async function verifyFix(fixId, finding = {}) {
     const r = await runClaude(prompt, {
       model: agent.model, agentType: 'fix_verify', cwd: fix.worktree, timeoutMs: VERIFY_TIMEOUT_MS,
     });
-    text = r.text;
+    text = r.raw ?? r.text;
     await logTokenUsage({ taskId: null, projectId: null }, null, 'fix_verify', r.usage, r.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: null, projectId: null }, null, 'fix_verify', err);

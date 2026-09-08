@@ -198,7 +198,9 @@ ${src || '（無原始碼）'}`;
   let title = node.title, content = node.content, description = null;
   try {
     const agent = loadAgent('library');
-    const { text, usage, durationMs } = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const r = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const { usage, durationMs } = r;
+    const text = r.raw ?? r.text;
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
     if (!p) throw new Error('agent 輸出無法解析為有效 JSON');
@@ -299,7 +301,9 @@ ${ovRow?.content || '（尚未建立）'}
 
 若這次功能讓「模組頁」或「總覽」變得有誤或不完整，於 parents 附上修正後內容（只附需要動的頁、保留既有正確內容）；不需要則不附 parents。`;
 
-    const { text, usage, durationMs } = await runAgent(agent.render({ context }), { signal, taskId, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const r = await runAgent(agent.render({ context }), { signal, taskId, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const { usage, durationMs } = r;
+    const text = r.raw ?? r.text;
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
     wikiUpdate = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { taskId: task.task_id }, userId });
   } catch (err) {
@@ -416,7 +420,9 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
   let overviewDesc = null;
   try {
-    const { text, usage, durationMs } = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const r = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const { usage, durationMs } = r;
+    const text = r.raw ?? r.text;
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
     const p = await parseAgentResult(text, { parse: JSON.parse, signal, ref: { projectId }, userId });
     if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; overviewDesc = p.description || overviewDesc; }

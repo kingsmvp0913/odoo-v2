@@ -65,7 +65,7 @@ async function draftTaskFromChat(projectId, chatId, userId) {
   }
   await logTokenUsage(ref, userId, 'chat-to-task', result.usage, result.durationMs);
 
-  const draft = await parseAgentResult(result.text, { parse: JSON.parse, ref, userId });
+  const draft = await parseAgentResult(result.raw ?? result.text, { parse: JSON.parse, ref, userId });
   if (!draft || !draft.title) {
     const e = new Error('無法從對話摘要出任務草稿，請重試');
     e.status = 500;

@@ -270,7 +270,7 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
       const r = await runClaude(prompt, {
         model: agent.model, agentType: 'platform_fix', cwd: worktree, timeoutMs: FIX_TIMEOUT_MS
       });
-      text = r.text;
+      text = r.raw ?? r.text;
       await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'platform_fix', r.usage, r.durationMs);
     } catch (err) {
       await logFailedUsage({ taskId: null, projectId: null }, startedBy, 'platform_fix', err);

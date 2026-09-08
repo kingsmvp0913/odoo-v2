@@ -141,7 +141,7 @@ async function runRejectTriage(taskId, userId, signal) {
     const cwd = fs.existsSync(wt) ? wt : info.root;
     if (cwd === wt) ensureWorktreeSkills(cwd);      // 退回專案根時不佈：那是主 clone，不是任務工作區
     const result = await runClaude(prompt, { cwd, taskId, userId, signal, model: agent.model, agentType: 'reject_triage' });
-    raw = result.text;
+    raw = result.raw ?? result.text;
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'reject_triage', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'reject_triage', err);

@@ -369,7 +369,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
       // worktree 不在此移除：留給 coding 沿用，approve 併 main 後才清。
       analysisResult = await runClaude(built.prompt, { cwd: wtParent, taskId, userId, signal, model: built.model, agentType: 'analysis' });
     }
-    raw = analysisResult.text;
+    raw = analysisResult.raw ?? analysisResult.text;
     // 記本輪 session：規格 tour 靠它 --resume 續寫（脈絡已在，不必重讀 code 也不必重述規格）。
     // 落地在下方與 status 同一次 UPDATE——writeSpecTour 已搬到 runner 的 doBranch，那裡讀不到這個區域變數。
     // resume 輪回不出 sessionId 時退回舊值（CLI 偶爾不吐；此時對話仍延續在同一條 session 上），
@@ -750,7 +750,7 @@ async function runTaskCoding(taskId, userId, signal) {
     const codingResult = await runCodingOnce(task, info, userId, signal, resolution, gitEnv);
     // 記本輪 session id 當「已開工」marker（供 respec 等判斷；不再用於 resume）
     await query('UPDATE tasks SET coding_session_id=$2 WHERE id=$1', [taskId, codingResult.sessionId]).catch(() => {});
-    raw = codingResult.text;
+    raw = codingResult.raw ?? codingResult.text;
     await logTokenUsage(ref, userId, 'coding', codingResult.usage, codingResult.durationMs);
   } catch (err) {
     await logFailedUsage(ref, userId, 'coding', err);

@@ -90,7 +90,9 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
     let finding = null;
     let raw = null;
     try {
-      const { text, usage, durationMs } = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT });
+      const r = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT });
+      const { usage, durationMs } = r;
+      const text = r.raw ?? r.text;
       raw = text;
       // taskId 一律給 null（不是漏填）：健檢自己的花費若記進被診斷的那張任務，下次再健檢同一張，
       // 它就會在自己的 per_stage 與關卡序列裡看到 workflow_health——診斷工具污染被診斷的對象。
@@ -265,9 +267,11 @@ async function runAudit(runId, { sinceAt, cadence = 'daily', startedBy = null } 
         : '本輪不做趨勢比對（只有每月 1 號的 30 天大健檢會帶上一期資料）。',
       summary: JSON.stringify(summary)
     });
-    const { text, usage, durationMs } = await runAgent(prompt, {
+    const r = await runAgent(prompt, {
       model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'workflow_health', cwd: REPO_ROOT, timeoutMs: AUDIT_TIMEOUT_MS
     });
+    const { usage, durationMs } = r;
+    const text = r.raw ?? r.text;
     raw = text;
     await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'workflow_health', usage, durationMs);
 

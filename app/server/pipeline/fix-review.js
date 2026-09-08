@@ -102,7 +102,7 @@ async function reviewFix(fixId, finding = {}) {
       // cwd 指到暫存目錄：這一支是閘門，而 runClaude 帶 --dangerously-skip-permissions。
       // 不指定 cwd 會讓它跑在平台的 live checkout 上，等於給審查者一把可以動被審程式碼的鑰匙。
       const r = await runClaude(prompt, { model: agent.model, agentType: 'fix_review', cwd: os.tmpdir() });
-      text = r.text;
+      text = r.raw ?? r.text;
       await logTokenUsage({ taskId: null, projectId: null }, null, 'fix_review', r.usage, r.durationMs);
     } catch (err) {
       await logFailedUsage({ taskId: null, projectId: null }, null, 'fix_review', err);

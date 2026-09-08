@@ -245,6 +245,31 @@ test('runClaude：assistantText 累積全部 assistant 文字（非只末輪 ev.
   const r = await p;
   expect(r.text).toBe('收尾散文');                       // 末輪 ev.result 已丟契約
   expect(r.assistantText).toContain('<result>{"ok":1}</result>');  // 但 transcript 撈得回
+  // raw＝契約解析的唯一來源：呼叫端不必各自決定要取 text 還是 assistantText（取錯就是整輪報廢）
+  expect(r.raw).toContain('<result>{"ok":1}</result>');
+});
+
+// 使用者層的 security-guidance plugin（官方 marketplace）掛 Stop hook 且帶 asyncRewake＝「agent 講完話
+// 要停下時，把它叫醒再講一次」。pipeline agent 一旦在 <result> 之後被叫醒補一段話，末輪 ev.result 就換成
+// 那段話——task 248 的分析關即因此整輪報廢（規格完全正確卻被判「未回傳有效結果」）。raw 是治本的那一半，
+// 這個 env 是另一半：不讓 pipeline 子行程被外部 hook 叫醒。人用的互動 session 不受影響。
+test('runClaude：spawn env 帶 SECURITY_GUIDANCE_DISABLE=1', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockClear();
+  spawn.mockReturnValue(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'x', usage: null, duration_ms: 1 }) + '\n');
+  child.emit('close', 0);
+  await p;
+  expect(spawn.mock.calls[0][2].env.SECURITY_GUIDANCE_DISABLE).toBe('1');
 });
 
 test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含', async () => {

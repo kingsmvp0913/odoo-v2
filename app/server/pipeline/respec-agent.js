@@ -114,7 +114,7 @@ async function runRespecPatch(taskId, userId, signal) {
       repo_paths: work ? work.repoPaths : ''
     }).trim();
     const result = await runClaude(prompt, { cwd: work ? work.cwd : undefined, taskId, userId, signal, model: agent.model, agentType: 'respec' });
-    raw = result.text;
+    raw = result.raw ?? result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage(ref, userId, 'respec', err);

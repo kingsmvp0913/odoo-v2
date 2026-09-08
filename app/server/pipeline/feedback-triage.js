@@ -76,7 +76,7 @@ async function triageOne(feedbackId) {
   let text = '';
   try {
     const r = await runClaude(prompt, { model: agent.model, agentType: 'feedback_triage' });
-    text = r.text;
+    text = r.raw ?? r.text;
     await logTokenUsage({ taskId: null, projectId: null }, null, 'feedback_triage', r.usage, r.durationMs);
   } catch (err) {
     // ⚠ 執行失敗（CLI 掛掉／逾時／額度）與「看不懂」是兩件事，處置不能共用 rejectBack：
@@ -140,7 +140,7 @@ async function mergeCandidates(items) {
     let text = '';
     try {
       const r = await runClaude(prompt, { model: agent.model, agentType: 'feedback_merge' });
-      text = r.text;
+      text = r.raw ?? r.text;
       await logTokenUsage({ taskId: null, projectId: null }, null, 'feedback_merge', r.usage, r.durationMs);
     } catch (err) {
       await logFailedUsage({ taskId: null, projectId: null }, null, 'feedback_merge', err);

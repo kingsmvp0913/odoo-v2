@@ -180,7 +180,7 @@ async function runQaAgent(taskId, userId, signal) {
     // resumed 一起記帳：fresh 與 resume 的耗時／成本差一個量級，事後要判斷「放寬 resume 之後 QA 準不準」
     // 就得先分得出哪一輪是哪種——不記的話只能靠比對 task_events 的 session id 反推。
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'qa', callResult.usage, callResult.durationMs, 'completed', usedResume);
-    return callResult.text;
+    return callResult.raw ?? callResult.text;
   };
 
   let raw;

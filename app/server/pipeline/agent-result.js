@@ -4,6 +4,12 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 // 統一 agent 輸出契約解析（健檢主題 F）：需要結構化結果的 agent 走同一份，取代逐個修的貪婪 regex／裸 YAML。
 // 契約：結果資料包在 <result>…</result>（Claude 訓練過的 XML 閉合標籤，比自訂 ---END--- 更可靠）。
 // 註：merge（吐裸檔案內容）、deploy-fix（裸 JSON）、playwright／chat（自然語言）刻意不用此契約。
+//
+// 解析來源一律取 runner 的 `raw`（整段 assistant transcript），不是 `text`（CLI 末輪的 ev.result）：
+// agent 吐完 <result> 之後只要再講一句話——自己補收尾散文、派子任務，或被外部 hook 叫醒（實例：
+// 使用者層的 security-guidance plugin，Stop hook 帶 asyncRewake，task 248 的分析關整輪因此報廢）
+// ——ev.result 就換成那句話、契約標籤整個蒸發，連補救 haiku 都只拿得到那句話而必然失敗。
+// 呼叫端統一寫 `x.raw ?? x.text`：runner 一定給 raw，`?? text` 是未提供該欄位時（替身、舊 provider）的保底。
 const OPEN = '<result>';
 const CLOSE = '</result>';
 
@@ -71,7 +77,7 @@ async function parseAgentResult(raw, { parse, schemaHint, signal, ref, userId } 
     // 契約補救固定 Claude/haiku：只做文字整形，不隨原 agent 改 provider 以免多一個變數。
     const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair' });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
-    out = doParse(extractResult(repaired.text));
+    out = doParse(extractResult(repaired.raw ?? repaired.text));
   } catch (err) {
     if (err && err.aborted) throw err;
     if (ref) await logFailedUsage(ref, userId, 'repair', err);

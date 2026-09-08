@@ -94,7 +94,7 @@ async function runCsAgent(taskId, userId, signal) {
   let rawText = '';
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
-    const { text, assistantText, usage, durationMs } = await withResume({
+    const { raw, text, usage, durationMs } = await withResume({
       freshAgentName: 'cs',
       retryAgentName: 'cs-retry',
       getSession: async () => {
@@ -117,8 +117,8 @@ async function runCsAgent(taskId, userId, signal) {
       runOpts: { signal, taskId, userId, agentType: 'cs' }
     });
     // cs 會實地查證、有時把 <result> 當中間步驟吐出後又補收尾散文／派子任務，末輪 ev.result（text）就不含契約標籤。
-    // 用整段 assistant transcript（assistantText）解析，讓 extractResult 撈得回最後一組 <result>；退回 text 保底。
-    rawText = assistantText || text || '';
+    // runner 的 raw 就是「整段 assistant transcript，空的才退回 text」，讓 extractResult 撈得回最後一組 <result>。
+    rawText = (raw ?? text) || '';
     await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
     result = await parseAgentResult(rawText, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId: task.user_id });
   } catch (err) {

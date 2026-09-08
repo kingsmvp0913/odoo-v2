@@ -94,7 +94,8 @@ function runCodex(prompt, opts = {}) {
         usage.model = model || null;
         usage.provider = 'codex';
       }
-      resolve({ text: resultText.trim(), assistantText: assistantText.trim(), usage, durationMs: Date.now() - startedAt, sessionId, model: model || null });
+      // raw：與 claude-runner 同一份語意（契約解析的唯一來源），呼叫端才能不分 provider 一律取 .raw
+      resolve({ text: resultText.trim(), assistantText: assistantText.trim(), raw: assistantText.trim() || resultText.trim(), usage, durationMs: Date.now() - startedAt, sessionId, model: model || null });
     }));
     child.on('error', err => finish(() => {
       if (err.code === 'ENOENT') err.message = cwd && !require('fs').existsSync(cwd) ? `工作目錄不存在：${cwd}` : '找不到 codex 執行檔，請確認 Codex CLI 可用';

@@ -97,7 +97,7 @@ async function runSpecReview(task, userId, signal) {
       model: agent.model,
       runOpts: { cwd: work ? work.cwd : undefined, taskId, userId, signal, agentType: 'respec' }
     });
-    raw = result.text;
+    raw = result.raw ?? result.text;
     await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
   } catch (err) {
     await logFailedUsage(ref, userId, 'respec', err);

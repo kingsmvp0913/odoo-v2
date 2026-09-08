@@ -160,9 +160,9 @@ async function explainConflict(repoPath, file, signal, opts = {}) {
     if (err && err.aborted) throw err;
     return null;
   }
-  if (!res || res.text == null) return null;
+  if (!res || (res.raw ?? res.text) == null) return null;
   if (res.usage && ref) await logTokenUsage(ref, refUser, 'merge-explain', res.usage, res.durationMs);
-  return parseAgentResult(res.text, { parse: parseExplain, signal, ref, userId: refUser });
+  return parseAgentResult(res.raw ?? res.text, { parse: parseExplain, signal, ref, userId: refUser });
 }
 
 // 追問作答用：送給 agent 的對話歷史只帶最近 N 輪，讓每次呼叫成本有上界（不隨對話無限膨脹）。
@@ -221,7 +221,7 @@ async function clarifyConflict(repoPath, file, ctx, signal, opts = {}) {
     return { ...CLARIFY_FALLBACK };
   }
   if (res.usage && ref) await logTokenUsage(ref, refUser, 'merge-clarify', res.usage, res.durationMs);
-  const parsed = await parseAgentResult(res.text, { parse: parseClarify, signal, ref, userId: refUser });
+  const parsed = await parseAgentResult(res.raw ?? res.text, { parse: parseClarify, signal, ref, userId: refUser });
   return parsed || { ...CLARIFY_FALLBACK };
 }
 

@@ -597,6 +597,39 @@ test('B-5 coding 遇手動暫停（aborted）→ 狀態原地不動、不列入 
 
 // ===== 主題 C：一個任務一個 worktree，analysis 建、coding 沿用、併 main 後才刪（U7）=====
 
+// 回歸（task 248 真實故障）：分析 agent 吐完 <result> 之後被外部 Stop hook 叫醒又補了一段散文，
+// CLI 末輪的 ev.result 只剩那段散文。解析若取 text 而非 raw，一份完全合法的規格會被整包丟掉、
+// 任務誤判成「未回傳有效結果」stopped——而補救 haiku 拿到的同樣只有那段散文，必然也救不回來。
+test('analysis：<result> 之後還有收尾散文 → 仍取得規格，不誤判 stopped', async () => {
+  git.pullBranch.mockReset().mockResolvedValue(undefined);
+  git.ensureMainBranch.mockReset().mockResolvedValue('main');
+  git.ensureWorktreeAtMain.mockReset().mockResolvedValue(undefined);
+
+  const tail = '這則安全審查與本次任務無關，我沒有動過那個檔案。';
+  // 第 2 通以後＝補救 haiku。它只吐得出散文（真實情況就是如此：拿到的輸入本身已經沒有契約標籤了），
+  // 所以這支測試量的是「analysis 這一輪自己有沒有把契約撈回來」，不會被補救路徑救成假綠。
+  mockClaude({ onCall: (child, call, idx) => {
+    if (idx === 0) {
+      child.stdout.emit('data', JSON.stringify({ type: 'assistant', message: { model: 'x', content: [{ type: 'text',
+        text: '<result>\ncase_id: "ana_tail"\nmodule: idx_x\nodoo_version: "17.0"\nexecution_mode: "MODE_A"\nsummary: "s"\n</result>' }] } }) + '\n');
+      child.stdout.emit('data', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: tail }] } }) + '\n');
+    }
+    child.stdout.emit('data', JSON.stringify({ type: 'result', result: tail, usage: null, duration_ms: 5 }) + '\n');
+    child.emit('close', 0);
+  }});
+
+  const { rows: [t] } = await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ana_tail','odoo','T','需求','analysis_running',$2) RETURNING id",
+    [userId, projectId]
+  );
+  await runTaskAnalysis(t.id, userId);
+
+  const { rows: [row] } = await dbModule.query('SELECT status, blocker_content, analysis_yaml FROM tasks WHERE id=$1', [t.id]);
+  expect(row.status).not.toBe('stopped');
+  expect(row.blocker_content).toBeNull();
+  expect(row.analysis_yaml).toContain('ana_tail');
+});
+
 test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且讀完不移除（留給 coding 沿用）', async () => {
   const git = require('../pipeline/git');
   git.pullBranch.mockReset().mockResolvedValue(undefined);
