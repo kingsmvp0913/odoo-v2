@@ -490,6 +490,24 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     expect(a[odooIdx + 1]).toBe('-d');               // 沒有子指令，直接接 db 參數
     expect(a.indexOf('-d')).toBeLessThan(a.indexOf('-i'));
   });
+  // 缺 depends 的判定要以容器實況為準：核心 addons 隨 Odoo 大版本增刪（實測 l10n_tw_city 在 14 缺、
+  // 卻不能因此推論其他版本；同一支腳本在 17 之後連 addons-path 檢查都沒了）。
+  test('listContainerModules：列出容器內實際存在的模組，去重', async () => {
+    const r = await d.listContainerModules('c1', '/a,/b', { spawnFn: fakeSpawn({ code: 0, stdout: 'base\naccount\nbase\n' }) });
+    expect(r).toEqual(['base', 'account']);
+  });
+  test('listContainerModules：exec 失敗 → null（要能跟「查到但一個都沒有」分開，否則會謊報沒缺件）', async () => {
+    expect(await d.listContainerModules('c1', '/a', { spawnFn: fakeSpawn({ code: 1, stdout: '' }) })).toBeNull();
+    expect(await d.listContainerModules('c1', '/a', { spawnFn: fakeSpawn({ code: 0, stdout: '' }) })).toEqual([]);
+  });
+  test('listContainerModules：addons-path 當參數傳給 sh，不內插進腳本（含空白的路徑不會拆掉指令）', async () => {
+    const cap = {};
+    await d.listContainerModules('c1', '/mnt/a,/mnt/b', { spawnFn: captureSpawn(cap) });
+    expect(cap.args.slice(0, 2)).toEqual(['exec', 'c1']);
+    expect(cap.args[cap.args.length - 1]).toBe('/mnt/a,/mnt/b');
+    expect(cap.args).toContain('sh');
+  });
+
   test('execPipInstall：用 python3（官方 image 無 python 別名）、以 root 補件', async () => {
     const cap = {};
     await d.execPipInstall('c1', ['docxtpl', 'htmldocx'], { spawnFn: captureSpawn(cap) });

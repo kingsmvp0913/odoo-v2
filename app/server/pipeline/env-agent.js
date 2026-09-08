@@ -257,6 +257,84 @@ function pythonExternalDeps(manifestText) {
     .filter(name => SAFE_PKG.test(name));
 }
 
+// Odoo 模組名的合法字元（Python 識別字）——depends 是要拿去當套件名 import 的。
+const SAFE_MODULE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// 從 __manifest__.py 抽 depends 清單（Odoo 模組相依，不是上面那個 Python 套件相依）。
+// manifest 是 Python dict literal，用 regex 抓 'depends': [ ... ]（可跨行）。
+function moduleDependsFrom(manifestText) {
+  const m = String(manifestText || '').match(/['"]depends['"]\s*:\s*\[([\s\S]*?)\]/);
+  if (!m) return [];
+  return [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map(x => x[1].trim()).filter(n => SAFE_MODULE.test(n));
+}
+
+function readManifestText(dir) {
+  for (const f of ['__manifest__.py', '__openerp__.py']) {
+    const p = path.join(dir, f);
+    try { if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8'); } catch { /* 讀不到當沒有 */ }
+  }
+  return null;
+}
+
+// 掃出專案 repo 裡「有哪些模組、各自 depends 什麼」。兩種 repo 形狀都要涵蓋：一般的（模組是第一層
+// 子資料夾）與「repo 根自己就是一個模組」的（冠今 idx_kjco）。後者共用 addonsMounts 的同一個判斷函式，
+// 不另外實作一份——兩邊分頭判斷遲早會不一致，而不一致的症狀是「掃不到那個模組」＝靜默漏檢。
+async function scanProjectModules(projectId) {
+  const out = new Map();
+  for (const r of await projectAddonsPaths(projectId)) {
+    const rootMod = dockerEnv.repoRootModuleName(r.path, r.repoUrl, fs);
+    let dirs;
+    if (rootMod) {
+      dirs = [[rootMod, r.path]];
+    } else {
+      let entries = [];
+      try { entries = fs.readdirSync(r.path, { withFileTypes: true }); } catch { entries = []; }
+      dirs = entries.filter(e => e.isDirectory()).map(e => [e.name, path.join(r.path, e.name)]);
+    }
+    for (const [name, dir] of dirs) {
+      const text = readManifestText(dir);
+      if (text !== null) out.set(name, moduleDependsFrom(text));
+    }
+  }
+  return out;
+}
+
+// 專案模組宣告的 depends 裡，哪些在這個測試環境根本不存在。
+// 為什麼要主動查：Odoo 安裝時一次只報「第一個」缺的模組（`依賴於 'l10n_tw_city'，但後者不可用`），
+// 缺三個就得來回三輪，每輪都要等一次完整升級才知道下一個是誰。一次列全部才補得完。
+// checked=false ＝「沒查成」（容器沒起／exec 失敗），呼叫端不得把它當成「沒有缺件」——
+// 那正是把一句「都沒問題」印在其實沒檢查的情況上。
+async function missingModuleDepends(projectId) {
+  const ctx = await dockerCtxFor(projectId);
+  if (!ctx) return { missing: new Map(), checked: false };
+  const available = await dockerEnv.listContainerModules(
+    ctx.container, dockerEnv.containerAddonsPath(ctx.mounts));
+  if (!available) return { missing: new Map(), checked: false };
+  const projMods = await scanProjectModules(projectId);
+  const known = new Set([...available, ...projMods.keys()]);
+  const missing = new Map();
+  for (const [name, deps] of projMods) {
+    for (const d of deps) {
+      if (known.has(d)) continue;
+      if (!missing.has(d)) missing.set(d, []);
+      missing.get(d).push(name);
+    }
+  }
+  return { missing, checked: true };
+}
+
+// 缺件清單寫進 setup_log（專案環境頁「查看建立記錄」）。不擋建立：環境本身（base＋SSO）裝得起來，
+// 缺的是專案模組要用的東西，那要到 deploy 才需要——擋掉會連「先開個環境看看」都做不了。
+function formatMissingDepends({ missing, checked }) {
+  if (!checked) return '[depends] 未檢查：查不到測試環境內的可用模組清單（容器未就緒或指令失敗）\n';
+  if (!missing.size) return '[depends] OK 專案模組宣告的相依模組全部找得到\n';
+  const lines = [...missing].map(([m, by]) => `  - ${m}（${by.join('、')} 要用）`).join('\n');
+  return `[depends] 缺 ${missing.size} 個相依模組——這些在測試環境裡不存在，安裝專案模組時一定會失敗：\n`
+    + `${lines}\n`
+    + '  Odoo 一次只會報第一個，以上是一次掃出來的全部。補法：把這些模組放進專案 repo（或另開一個 repo\n'
+    + '  掛進來），若它們是企業版模組則需把專案改標為企業版。\n';
+}
+
 // deploy 前自動補裝自訂模組宣告的 Python 相依。相依宣告有兩處來源，都要涵蓋：
 //   (1) <repo>/requirements.txt 與 <repo>/<module>/requirements.txt
 //   (2) 各模組 __manifest__.py 的 external_dependencies['python']（Odoo 安裝時實際檢查的權威來源；
@@ -946,6 +1024,10 @@ async function _runEnvSetupDocker(projectId) {
 
   // 4) 補裝自訂模組 Python 相依（image 未內建）＋ seed users
   try { log += await installModuleRequirements(projectId); } catch (e) { log += `[deps] FAIL ${e.message}\n`; }
+  // 專案模組宣告的「Odoo 模組相依」有沒有缺（上一行管的是 Python 套件，是兩回事）。
+  // best-effort：查不到只在 log 標明未檢查，不影響建立——環境本身裝得起來，缺件要到 deploy 才擋路。
+  try { log += formatMissingDepends(await missingModuleDepends(projectId)); }
+  catch (e) { log += `[depends] 檢查失敗：${e.message}\n`; }
   // seed 失敗不得放行成 running：這一步寫的是「測試區裡的 E2E 帳號」與
   // 「ir.config_parameter('aidev.sso_secret')」，而平台端的 sso_secret／e2e_password 在上面
   // 已經先存進 odoo_envs 了。放行的話兩邊憑證不一致——SSO 免密登入驗章失敗、E2E 拿一組
@@ -1069,4 +1151,4 @@ async function _seedOdooUsersDocker(ctx) {
   throw new Error(last);
 }
 
-module.exports = { runEnvSetup, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor, addonsMountDrift };
+module.exports = { runEnvSetup, moduleDependsFrom, scanProjectModules, missingModuleDepends, formatMissingDepends, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor, addonsMountDrift };

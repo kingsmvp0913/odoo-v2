@@ -436,6 +436,21 @@ async function execPipInstall(container, pkgs, io = {}) {
   return runDocker(buildExecArgs({ container, argv, user: 'root' }), io);
 }
 
+// 列出容器內 addons-path 上「實際存在」的模組名（有 manifest 的第一層子資料夾）。
+// 缺 depends 的判定必須以容器實況為準：核心 addons 隨 Odoo 大版本增刪（l10n_* 尤其），
+// 拿宿主清單或寫死名單去比對，遲早在某個版本上給出錯的答案。
+// addons-path 以參數（$1）餵給 sh，不做字串內插——路徑含空白或引號時內插會把指令拆掉。
+// 查不到回 null，與「查到但一個都沒有」明確區分：呼叫端要能分辨「沒缺件」與「根本沒查成」。
+async function listContainerModules(container, addonsPath, io = {}) {
+  const script = 'for d in $(printf %s "$1" | tr "," " "); do '
+    + 'for m in "$d"/*/; do [ -f "$m/__manifest__.py" ] || [ -f "$m/__openerp__.py" ] && basename "$m"; done; '
+    + 'done 2>/dev/null';
+  const { code, stdout } = await runDocker(
+    buildExecArgs({ container, argv: ['sh', '-c', script, 'sh', String(addonsPath || '')] }), io);
+  if (code !== 0) return null;
+  return [...new Set(String(stdout || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean))];
+}
+
 async function stopContainer(name, deps = {}) {
   return runDocker(['stop', '-t', '10', name], deps);
 }
@@ -513,7 +528,7 @@ async function containerLogs(name, { tail = 2000 } = {}, deps = {}) {
 module.exports = {
   // 純函式（單測用）
   imageTagFor, depsFingerprint, majorDigits, containerNameFor, remapDbHostForContainer, addonsMounts, repoRootModuleName,
-  containerAddonsPath, remapContainerPathsInText, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs, buildRootRmArgs,
+  containerAddonsPath, remapContainerPathsInText, listContainerModules, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs, buildRootRmArgs,
   // 低階 IO
   runDocker, dockerAvailable, ensureDockerRunning,
   imageExists, containerExists, containerRunning, containerMountSources,
