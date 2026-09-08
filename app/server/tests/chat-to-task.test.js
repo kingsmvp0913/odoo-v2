@@ -132,8 +132,8 @@ test('agent 挑中的標 chosen，沒挑中的也一併回傳（使用者要能�
   const draft = await draftTaskFromChat(1, 9, 99);
 
   expect(draft.attachments).toEqual([
-    { id: 11, filename: 'a.png', chosen: true },
-    { id: 12, filename: 'b.png', chosen: false }
+    { id: 11, filename: 'a.png', mimetype: 'image/png', chosen: true },
+    { id: 12, filename: 'b.png', mimetype: 'image/png', chosen: false }
   ]);
 });
 

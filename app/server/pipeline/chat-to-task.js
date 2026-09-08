@@ -80,7 +80,8 @@ async function draftTaskFromChat(projectId, chatId, userId) {
     original_text: String(draft.original_text || '').trim(),
     // 全部候選都吐回去、被挑中的標 chosen：agent 沒挑的也要讓使用者看得到並能勾回來（這個 modal
     // 的既有精神就是草稿可人工修改，圖沒理由是唯一不能改的）
-    attachments: atts.map(a => ({ id: a.id, filename: a.filename, chosen: picked.includes(a.id) }))
+    // mimetype 要一起回：前端靠它判斷「這張要畫縮圖」還是「只列檔名」，光靠副檔名會漏判。
+    attachments: atts.map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype || '', chosen: picked.includes(a.id) }))
   };
 }
 

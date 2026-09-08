@@ -331,6 +331,7 @@
         try {
           const draft = await Api.post(`projects/${this.$route.params.id}/chats/${this.activeChat.id}/draft-task`, {});
           this.taskDraft = { title: draft.title || "", original_text: draft.original_text || "", attachments: (draft.attachments || []).map((item) => ({ ...item, chosen: !!item.chosen })) };
+          this.loadDraftThumbs(this.activeChat.id);
           this.$nextTick(() => this.showTaskModal && this.$refs.chatTaskTitle?.focus());
         } catch (error) {
           this.showTaskModal = false;
@@ -376,6 +377,29 @@
       openImage(attachmentId, filename) {
         const url = this.attachUrls[attachmentId];
         if (url) window.previewImage({ src: url, alt: filename || "" });
+      },
+      // 只有圖片畫縮圖。attachUrls 是無差別下載的（loadAttachmentThumbs 不篩 mimetype），
+      // 少了這道判斷，非圖片附件會拿到 blob URL 而畫成一張破圖。
+      thumbUrl(attachment) {
+        if (!String(attachment.mimetype || "").startsWith("image/")) return "";
+        return this.attachUrls[attachment.id] || "";
+      },
+      // 草稿裡的候選圖多半已由 loadAttachmentThumbs 抓過（同一組 attachUrls），
+      // 但捲到一半就按建立任務時可能還沒輪到，這裡把缺的補齊——沒有 URL 的那張只會顯示檔名。
+      async loadDraftThumbs(chatId) {
+        const projectId = this.$route.params.id;
+        for (const attachment of this.taskDraft.attachments || []) {
+          if (!String(attachment.mimetype || "").startsWith("image/")) continue;
+          if (this.attachUrls[attachment.id]) continue;
+          try {
+            const { blob } = await Api.getBlob(
+              `projects/${projectId}/chats/${chatId}/attachments/${attachment.id}/download`,
+            );
+            // 抓的期間可能已換對話：此時 attachUrls 已被 revokeMessageUrls 換掉，寫進去沒人回收。
+            if (!this.activeChat || this.activeChat.id !== chatId) return;
+            this.attachUrls[attachment.id] = URL.createObjectURL(blob);
+          } catch (error) { /* 單張載不出來就只顯示檔名 */ }
+        }
       },
     },
     watch: { "$route.fullPath"() { this.loadChats(); } },
@@ -473,7 +497,7 @@
 </div>
 </div>
         <div v-if="showTaskModal" data-tour="chat-modal" class="ui-next-task-modal-backdrop" @mousedown.self="closeTaskModal" @keydown="onTaskModalKeydown">
-<section ref="chatTaskModal" class="ui-next-task-modal" role="dialog" aria-modal="true" aria-labelledby="chat-task-modal-title">
+<section ref="chatTaskModal" class="ui-next-task-modal ui-next-chat-task-modal" role="dialog" aria-modal="true" aria-labelledby="chat-task-modal-title">
 <header>
 <h2 id="chat-task-modal-title">建立任務</h2>
 <button type="button" @click="closeTaskModal" aria-label="關閉建立任務視窗"><ui-next-icon name="close"/></button>
@@ -484,16 +508,24 @@
 <p>系統正在產生任務標題與需求草稿。</p>
 </div>
 <template v-else>
+<div class="ui-next-chat-task-body">
 <label>標題<input ref="chatTaskTitle" v-model="taskDraft.title" placeholder="任務標題">
 </label>
 <label>需求內容<textarea v-model="taskDraft.original_text" placeholder="需求描述">
 </textarea>
 </label>
 <div v-if="taskDraft.attachments&&taskDraft.attachments.length" class="ui-next-task-attachments">
-<label v-for="attachment in taskDraft.attachments" :key="attachment.id">
-<input type="checkbox" v-model="attachment.chosen"> {{ attachment.filename }}</label>
+<b>附件</b>
+<div class="ui-next-task-attachment-list">
+<label v-for="attachment in taskDraft.attachments" :key="attachment.id" class="ui-next-task-attachment">
+<input type="checkbox" v-model="attachment.chosen">
+<img v-if="thumbUrl(attachment)" :src="thumbUrl(attachment)" :alt="attachment.filename" title="點擊放大" @click.prevent.stop="previewImage({src:thumbUrl(attachment),alt:attachment.filename})">
+<ui-next-icon v-else name="paperclip"/>
+<em>{{ attachment.filename }}</em></label>
+</div>
 </div>
 <p v-if="taskError" class="ui-next-inline-error" role="alert">{{ taskError }}</p>
+</div>
 <footer>
 <button @click="closeTaskModal">取消</button>
 <button class="ui-next-primary" @click="submitTask" :disabled="creatingTask">{{ creatingTask?'建立中…':'建立任務' }}</button>

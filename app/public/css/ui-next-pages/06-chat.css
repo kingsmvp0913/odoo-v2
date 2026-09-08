@@ -688,3 +688,85 @@
   min-width: 260px;
   flex: 1;
 }
+/* 對話轉任務的跳窗。共用 .ui-next-task-modal 的外觀，但那個框是 560px、沒有 max-height：
+   需求描述常常是一整段對話摘要，560 寬 + 145 高的 textarea 一次只看得到三四行，
+   內容再長就直接把 footer 頂出視窗外且捲不動（.ui-next-task-modal 沒設 overflow）。
+   這裡把框放寬拉高、改成 header／footer 固定中間捲——高度除以 --ui-zoom 是因為
+   外殼帶 zoom:1.1，直接寫 dvh 會比視覺上高一成、上下留白就沒了。 */
+.ui-next-chat-task-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: calc((100dvh - 64px) / var(--ui-zoom, 1));
+}
+.ui-next-chat-task-modal > header,
+.ui-next-chat-task-modal > footer { flex: none; }
+.ui-next-chat-task-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 14px;
+}
+/* .ui-next-task-modal > label 的左右內距是「直接子元素」選到的，包進 body 這層就失效，
+   症狀是標題／需求內容兩個輸入框整條貼齊跳窗邊緣。 */
+.ui-next-chat-task-body > label { display: block; padding: 12px 18px 0; }
+.ui-next-chat-task-body > .ui-next-inline-error { margin: 12px 18px 0; }
+/* 視窗矮的時候讓 textarea 先縮，否則它一個人吃掉整個可捲區、
+   底下的附件勾選要捲下去才看得到。 */
+.ui-next-chat-task-modal textarea { min-height: clamp(150px, calc(30vh / var(--ui-zoom, 1)), 280px); }
+
+/* 附件挑選區：原本只有檔名（timestamp_xxx.png），看不出是哪張圖。
+   區塊標題比照上面的「標題」「需求內容」，勾選框排在檔名前面就是「勾了才帶走」。 */
+.ui-next-task-attachments > b {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: inherit;
+}
+.ui-next-task-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+}
+.ui-next-task-attachments label.ui-next-task-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0;
+  padding: 6px 10px 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ui-next-task-attachment input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 0;
+}
+.ui-next-task-attachment img {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  object-fit: cover;
+  cursor: zoom-in;
+}
+.ui-next-task-attachment > .ui-next-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+.ui-next-task-attachment em {
+  max-width: 190px;
+  overflow: hidden;
+  font-style: normal;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
