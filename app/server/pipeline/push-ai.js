@@ -120,11 +120,43 @@ async function doPushAi(task, taskId, userId, signal) {
     await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
   }
 
+  await deployToTestEnv(task, taskId, userId);
+
   await query(
     "UPDATE tasks SET status='wiki_updating', approved_at=NOW(), merge_conflict_data=NULL, updated_at=NOW() WHERE id=$1",
     [taskId]
   );
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'wiki_updating' });
+}
+
+// 自動部署到客戶測試區。刻意放在所有 repo 都成功併入 ai-dev 之後：
+// 碼進了 ai-dev 是既成事實，部署失敗不回頭改 git 狀態，也不讓整張任務失敗——
+// 那會讓使用者以為程式根本沒併進去。
+//
+// 已在 tryProjectLock 之內，runDeploy 自己不取鎖，不會 deadlock。
+// 每一種「沒做」都印一行：靜默跳過最難查，使用者會以為部署了，其實沒有。
+async function deployToTestEnv(task, taskId, userId) {
+  const say = (msg) => notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] ${msg}\n` });
+  try {
+    const { isAutoDeployEnabled } = require('../lib/auto-deploy-switch');
+    if (!await isAutoDeployEnabled()) return say('自動部署已停用，略過');
+
+    const { rows: targets } = await query(
+      "SELECT id FROM project_deploy_targets WHERE project_id = $1 AND env = 'test' AND enabled = true ORDER BY id",
+      [task.project_id]
+    );
+    if (!targets.length) return say('此專案沒有啟用的測試區部署目標，略過');
+
+    const { runDeploy } = require('../lib/deploy-run');
+    for (const tg of targets) {
+      const r = await runDeploy(tg.id, { trigger: 'auto_test', taskId: task.id, userId: null });
+      const mods = (r.modules || []).join(', ') || '無模組變更';
+      say(r.ok ? `測試區部署完成：${mods}` : `測試區部署失敗（${mods}）：${r.error || '未知原因'}`);
+    }
+  } catch (e) {
+    // 部署出事不可以讓任務卡住。留聲，不靜默。
+    say(`自動部署發生例外：${e.message}`);
+  }
 }
 
 async function stop(taskId, userId, reason) {
