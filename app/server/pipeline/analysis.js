@@ -2,8 +2,8 @@ const { query } = require('../db');
 
 const REQUIRED_FIELDS = ['case_id', 'module', 'odoo_version', 'execution_mode', 'summary'];
 
-// 「這一則底下要掛規格書」的標記前綴。前端 TaskDetail 的 isSpecLog 靠它認人，runner 的
-// recordSpecVersion 也用它寫第 2 版起的紀錄——三處對同一個字面值，任一處改字就靜默斷開
+// 「這一則底下要掛規格書」的標記前綴。前端 TaskDetail 的 isSpecLog 靠它認人，
+// spec-version.js 的 recordSpecVersion 也用它寫第 2 版起的紀錄——三處對同一個字面值，任一處改字就靜默斷開
 //（畫面上規格書整個不見，測試不會紅），所以字面值只留這一份。
 const SPEC_GATE_PREFIX = '[等待你審核規格]';
 

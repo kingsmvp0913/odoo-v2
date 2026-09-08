@@ -9,6 +9,7 @@ const { withResume } = require('./with-resume');
 const { taskAttachmentNote } = require('./sync');
 const { parseAgentResult } = require('./agent-result');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
+const { recordSpecVersionSafe } = require('./spec-version');
 const yaml = require('js-yaml');
 
 // spec_review 對話式閘門（pre-coding）：讀 task_logs 對話＋現行 analysis_yaml，跑 spec-review agent。
@@ -127,6 +128,11 @@ async function runSpecReview(task, userId, signal) {
       "UPDATE tasks SET analysis_yaml=$2, status='spec_review', updated_at=NOW() WHERE id=$1",
       [taskId, parsed.analysis_yaml]
     );
+    // 不走 runner 的 writeAnalysisYaml：那支會一併清掉 spec_session_id／clarify_session_id，
+    // 而這裡正是那場 spec_review 問答的中途，清了下一輪就續接不上（withResume 會整場重跑）。
+    // 只補快照這一件事——少了它，最常走的這條路上使用者送出修改意見後畫面沒有新版規格書，
+    // 版號也會跳號（下一次經分析關寫入時會把第 N+1 版記成第 N 版）。
+    await recordSpecVersionSafe(taskId, parsed.analysis_yaml, task.analysis_yaml || null);
     enqueueEmbedding({ taskId });
   } else {
     await query("UPDATE tasks SET status='spec_review', updated_at=NOW() WHERE id=$1", [taskId]);
