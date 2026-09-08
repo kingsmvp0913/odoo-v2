@@ -6,7 +6,7 @@ window.ReleaseModal = {
   props: { projectId: { type: [Number, String], required: true } },
   emits: ['close'],
   data() {
-    return { pending: [], loading: true, working: false, repos: null };
+    return { pending: [], loading: true, working: false, repos: null, deploy: null, deploySkipped: false };
   },
   async created() {
     try {
@@ -20,14 +20,26 @@ window.ReleaseModal = {
   methods: {
     async doRelease() {
       this.working = true;
-      this.repos = null;
+      this.repos = null; this.deploy = null; this.deploySkipped = false;
       try {
         const data = await Api.post(`projects/${this.projectId}/release`, {});
         if (data.ok) {
           const n = (data.tasks || []).length;
+          this.deploySkipped = !!data.deploySkipped;
+          const failed = (data.deploy || []).filter((d) => !d.ok);
+          if (failed.length) {
+            // 部署失敗留在彈窗裡攤開。碼已經上 main 了，這時候關掉視窗等於把失敗藏起來——
+            // 使用者會以為一切正常，但客戶正式區其實沒更新（且已回滾過一次）。
+            this.deploy = data.deploy;
+            showToast('已上正式，但正式區部署失敗', 'error', 0);
+            return;
+          }
           this.$emit('close');
           // ok 只代表「沒有任何 repo 失敗」；ai-dev 不存在時也是 ok，但實際什麼都沒上
-          showToast(n ? `已上正式，${n} 張任務` : '沒有任何變更需要上正式', n ? 'success' : 'info');
+          const base = n ? `已上正式，${n} 張任務` : '沒有任何變更需要上正式';
+          const tail = this.deploySkipped ? '（自動部署已停用，客戶正式區未更新）'
+            : ((data.deploy || []).length ? '，正式區已部署' : '');
+          showToast(base + tail, n ? 'success' : 'info');
         } else {
           // 失敗細節留在彈窗裡攤開，不縮成一句 toast
           this.repos = data.repos || [];
@@ -62,6 +74,18 @@ window.ReleaseModal = {
                 ⚠ 會把整條 ai-dev 一次合併到 main，無法只挑其中幾張。
               </div>
             </template>
+            <!-- 部署失敗細節：碼已經上 main 了，這裡不攤開就等於藏起來 -->
+            <div v-if="deploy" style="margin-top:var(--space-3)">
+              <div v-for="(d, i) in deploy" :key="i" style="margin-bottom:var(--space-2)">
+                <div v-if="d.ok" style="font-size:var(--fs-sm);color:var(--text-muted)">
+                  正式區已部署：{{ (d.modules || []).join(', ') || '無模組變更' }}
+                </div>
+                <div v-else class="error-msg" style="white-space:pre-wrap">
+                  <div>程式已上 main，但<strong>正式區部署失敗</strong>：{{ d.error || '未知原因' }}</div>
+                  <div style="margin-top:4px">程式檔案已還原並重啟，<strong>資料庫的改動不會還原</strong>。細節見專案頁的「自動部署」分頁。</div>
+                </div>
+              </div>
+            </div>
             <!-- 失敗細節：哪個 repo、哪些檔案衝突，完整攤開 -->
             <div v-if="repos" style="margin-top:var(--space-3)">
               <div v-for="r in repos" :key="r.label" style="margin-bottom:var(--space-2)">

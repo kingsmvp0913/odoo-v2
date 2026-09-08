@@ -953,7 +953,36 @@ function registerRoutes(app) {
         );
         tasks = rows;
       }
-      res.json({ ok: allOk, repos: results, tasks });
+      // 上正式之後接部署。刻意放在 merged_to_main_at 標記之後：碼已經 push 上 main
+      // 是既成事實，部署失敗不可以讓 /release 回錯——回錯使用者會重按，變成重複 merge。
+      let deploy = [], deploySkipped = false;
+      if (allOk && anyMerged) {
+        const { isAutoDeployEnabled } = require('./lib/auto-deploy-switch');
+        if (!await isAutoDeployEnabled()) {
+          deploySkipped = true;
+        } else {
+          const { rows: targets } = await query(
+            "SELECT id FROM project_deploy_targets WHERE project_id = $1 AND env = 'prod' AND enabled = true ORDER BY id",
+            [project.id]
+          );
+          const { runDeploy } = require('./lib/deploy-run');
+          // 與 pipeline 的 git 操作互斥：部署要 fetch／archive 同一個主 clone。
+          // 前面那把鎖在 releaseAiToMain 結束時已釋放，這裡是重新取。
+          deploy = await withProjectLock(Number(project.id), async () => {
+            const out = [];
+            for (const tg of targets) {
+              try {
+                out.push(await runDeploy(tg.id, { trigger: 'manual_prod', userId: req.userId }));
+              } catch (e) {
+                out.push({ ok: false, error: e.message });
+              }
+            }
+            return out;
+          });
+        }
+      }
+
+      res.json({ ok: allOk, repos: results, tasks, deploy, deploySkipped });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
