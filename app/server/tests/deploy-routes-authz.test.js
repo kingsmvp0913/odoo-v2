@@ -4,7 +4,7 @@ const { newDb } = require('pg-mem');
 process.env.JWT_SECRET = 'test-deploy-authz';
 process.env.APP_SECRET = 'test-app-secret';
 
-let app, dbModule, token;
+let app, dbModule, token, userToken;
 
 beforeAll(async () => {
   const db = newDb();
@@ -18,6 +18,15 @@ beforeAll(async () => {
     username: 'admin', password: 'password123', display_name: '管理員'
   });
   token = res.body.token;
+
+  // 非 admin 的一般使用者
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('pass1234', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('regular', $1, '一般使用者', 'user')", [hash]
+  );
+  const login = await request(app).post('/api/auth/login').send({ username: 'regular', password: 'pass1234' });
+  userToken = login.body.token;
 
   await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('甲客戶', '17.0')");   // id 1
   await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('乙客戶', '17.0')");   // id 2
@@ -86,4 +95,25 @@ test('列表只回本專案的目標', async () => {
     .set('Authorization', `Bearer ${token}`);
   expect(res.status).toBe(200);
   expect(res.body.targets).toEqual([]);
+});
+
+// 意圖（Rule 9）：這些端點會 SSH 進客戶的正式機下指令。此 repo 沒有 project_members 表、
+// 專案共享是既有設計，沒有「專案擁有者」可檢查，所以全部限 admin——總開關本來就在
+// admin 設定頁裡。少了這道，任何登入者都能對任何客戶的正式機下指令。
+test('非 admin 一律 403，五個端點都是', async () => {
+  const calls = [
+    ['get',  '/api/projects/1/deploy-targets'],
+    ['post', '/api/projects/1/deploy-probe'],
+    ['post', '/api/projects/1/deploy-targets'],
+  ];
+  for (const [m, url] of calls) {
+    const res = await request(app)[m](url).set('Authorization', `Bearer ${userToken}`).send(body({}));
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('Admin only');
+  }
+});
+
+test('未帶 token 一律 401', async () => {
+  const res = await request(app).get('/api/projects/1/deploy-targets');
+  expect(res.status).toBe(401);
 });

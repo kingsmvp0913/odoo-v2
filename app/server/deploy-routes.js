@@ -1,11 +1,24 @@
 // 自動部署的 HTTP 介面。
 //
-// 每一支都掛 requireAutoDeploy——前端隱藏分頁不是授權，使用者照樣打得到 API。
-// 所有查詢都帶 project_id 條件：此 repo 沒有 project_members 表，專案端點多半只驗 token，
-// 跨專案隔離要端點自己做。
+// 授權比其他專案端點嚴一級，刻意的：這些端點會 SSH 進客戶的正式機下指令，
+// 而此 repo 沒有 project_members 表、專案共享是既有設計（12 個 project 端點有 11 個只驗
+// token）。沒有「專案擁有者」可以檢查，所以退而求其次全部限 admin——總開關本來就在
+// admin 設定頁裡，兩者一致。代價：非 admin 的專案負責人按不了部署，是已知取捨。
+//
+// requireAutoDeploy 另外擋總開關——前端隱藏分頁不是授權，使用者照樣打得到 API。
+// 所有查詢都帶 project_id 條件，跨專案隔離要端點自己做。
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { requireAutoDeploy } = require('./lib/auto-deploy-switch');
+
+// 比照 admin-routes／feedback-routes 的既有寫法（該檔未匯出，兩處已各自定義一份）
+async function requireAdmin(req, res, next) {
+  try {
+    const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (!rows.length || rows[0].role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    next();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+}
 const { runProbe } = require('./lib/deploy-probe');
 
 const TARGET_COLS = `id, project_id, repo_id, env, conn_id, runtime, compose_dir, compose_service,
@@ -21,7 +34,7 @@ async function belongsToProject(table, id, projectId) {
 }
 
 function registerRoutes(app) {
-  const guard = [verifyToken, requireAutoDeploy];
+  const guard = [verifyToken, requireAdmin, requireAutoDeploy];
 
   app.get('/api/projects/:id/deploy-targets', guard, async (req, res) => {
     try {

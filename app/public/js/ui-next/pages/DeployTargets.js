@@ -1,0 +1,189 @@
+(function () {
+  // 自動部署目標：評估客戶機 → 人指認哪個 instance 是測試／正式 → 存成設定。
+  //
+  // 只做「評估與指認」，不做部署動作（那在後續 Task）。
+  // 這頁一定是專案頁的內嵌分頁，外層用主要頁面外殼，不是 Admin 子頁外殼。
+  window.UiNextDeployTargetsView = Vue.defineComponent({
+    name: "UiNextDeployTargetsView",
+    props: { embedded: { type: Boolean, default: false } },
+    data() {
+      return {
+        targets: [], conns: [], loading: true, loadError: "",
+        probing: false, probeError: "", probe: null, probeConnId: null,
+        showRaw: false,
+        // 指認表單：一個候選一份，key 是候選索引
+        assign: {}, saving: false,
+      };
+    },
+    computed: {
+      projectId() { return this.$route.params.id; },
+      // 有登記 SSH 的連線才探得動；direct 模式（DBeaver 式直連）沒有 SSH 欄位
+      sshConns() { return this.conns.filter((c) => c.ssh_host && c.ssh_user); },
+    },
+    async created() { await this.load(); },
+    methods: {
+      async load() {
+        this.loading = true; this.loadError = "";
+        try {
+          const [t, c] = await Promise.all([
+            Api.get(`projects/${this.projectId}/deploy-targets`),
+            Api.get(`projects/${this.projectId}/db-connections`).catch(() => ({ connections: [] })),
+          ]);
+          this.targets = t.targets || [];
+          this.conns = c.connections || c || [];
+          if (!this.probeConnId && this.sshConns.length) this.probeConnId = this.sshConns[0].id;
+        } catch (e) {
+          this.loadError = e.message || "無法載入部署設定";
+        } finally { this.loading = false; }
+      },
+      async runProbe() {
+        if (!this.probeConnId) return;
+        this.probing = true; this.probeError = ""; this.probe = null; this.assign = {};
+        try {
+          const r = await Api.post(`projects/${this.projectId}/deploy-probe`, { conn_id: Number(this.probeConnId) });
+          if (!r.ok) { this.probeError = r.error || "評估失敗"; return; }
+          this.probe = r;
+          (r.candidates || []).forEach((c, i) => {
+            this.assign[i] = { env: "", addons_dir: "", modules: "", conf_path: "", branch: "" };
+          });
+        } catch (e) {
+          this.probeError = e.message || "評估失敗";
+        } finally { this.probing = false; }
+      },
+      async saveTarget(i) {
+        const c = this.probe.candidates[i];
+        const a = this.assign[i];
+        if (!a.env) { showToast("請先指認這是測試區還是正式區", "error"); return; }
+        if (!a.addons_dir) { showToast("請填 addons 目錄", "error"); return; }
+        this.saving = true;
+        try {
+          await Api.post(`projects/${this.projectId}/deploy-targets`, {
+            env: a.env,
+            conn_id: Number(this.probeConnId),
+            runtime: c.runtime,
+            compose_dir: c.composeDir,
+            compose_service: c.composeService,
+            service_name: c.serviceName,
+            container_name: c.containerName,
+            addons_dir: a.addons_dir.trim(),
+            conf_path: a.conf_path.trim() || null,
+            db_name: c.dbName,
+            http_port: c.ports ? this.guessPort(c.ports) : null,
+            modules: a.modules.split(",").map((m) => m.trim()).filter(Boolean),
+            branch: a.branch.trim() || (a.env === "prod" ? "main" : "ai-dev"),
+            sudo_mode: c.sudoMode,
+            probe_json: { candidate: c, diskAvailGb: this.probe.diskAvailGb },
+          });
+          showToast("已存成部署目標（預設停用，確認無誤再啟用）", "success");
+          await this.load();
+        } catch (e) {
+          showToast(e.message || "存檔失敗", "error", 0);
+        } finally { this.saving = false; }
+      },
+      // docker ports 形如 "8071-8072/tcp, 0.0.0.0:8101->8069/tcp"，取對外那個
+      guessPort(ports) {
+        const m = /:(\d+)->/.exec(String(ports || ""));
+        return m ? Number(m[1]) : null;
+      },
+      envLabel(e) { return e === "prod" ? "正式區" : "測試區"; },
+      addrOf(t) { return t.runtime === "docker" ? (t.compose_service || t.container_name) : t.service_name; },
+    },
+    template: `
+<section class="ui-next-panel">
+  <h2>自動部署目標</h2>
+  <p>先評估客戶機長什麼形狀，再由你指認哪一個 instance 是這個專案的測試區／正式區。<strong>新建的目標一律停用</strong>，確認無誤後再手動啟用。</p>
+
+  <div v-if="loading">載入中…</div>
+  <div v-else-if="loadError" class="error-msg">{{ loadError }}</div>
+
+  <template v-else>
+    <div v-if="!targets.length" style="color:var(--text-muted)">尚未設定任何部署目標。</div>
+    <table v-else class="ui-next-table">
+      <thead><tr><th>環境</th><th>形式</th><th>服務</th><th>資料庫</th><th>addons 目錄</th><th>分支</th><th>上次部署</th><th>狀態</th></tr></thead>
+      <tbody>
+        <tr v-for="t in targets" :key="t.id">
+          <td>{{ envLabel(t.env) }}</td>
+          <td>{{ t.runtime }}</td>
+          <td><code>{{ addrOf(t) }}</code></td>
+          <td><code>{{ t.db_name }}</code></td>
+          <td><code>{{ t.addons_dir }}</code></td>
+          <td><code>{{ t.branch }}</code></td>
+          <td>{{ t.last_deployed_sha ? t.last_deployed_sha.slice(0,8) : '—' }}</td>
+          <td><span :style="{color: t.enabled ? 'var(--success)' : 'var(--text-muted)'}">{{ t.enabled ? '已啟用' : '停用' }}</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:var(--space-6)">評估客戶機</h3>
+    <div v-if="!sshConns.length" style="color:var(--text-muted)">
+      這個專案沒有登記 SSH 的連線設定。請先到「連線設定」分頁新增一筆（direct 模式不經 SSH，評估不了）。
+    </div>
+    <template v-else>
+      <div class="conn-fields">
+        <div class="field-item">
+          <label class="field-label">要評估哪一條連線</label>
+          <select v-model="probeConnId" class="field-input">
+            <option v-for="c in sshConns" :key="c.id" :value="c.id">{{ c.name }}（{{ c.ssh_user }}@{{ c.ssh_host }} / {{ c.db_name }}）</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:var(--space-3)" :disabled="probing" @click="runProbe">
+        {{ probing ? '評估中…' : '開始評估（唯讀，不會改動客戶機）' }}
+      </button>
+      <div v-if="probeError" class="error-msg" style="margin-top:var(--space-3)">{{ probeError }}</div>
+    </template>
+
+    <template v-if="probe">
+      <h3 style="margin-top:var(--space-6)">評估結果</h3>
+      <p v-if="probe.diskAvailGb">磁碟可用 {{ probe.diskAvailGb }} GB。</p>
+      <div v-if="!probe.candidates.length" style="color:var(--warning)">
+        沒有偵測到 Odoo instance。展開下方原始輸出核對。
+      </div>
+
+      <div v-for="(c, i) in probe.candidates" :key="i" class="ui-next-panel" style="margin-top:var(--space-4)">
+        <div><strong>{{ c.runtime === 'docker' ? (c.composeService || c.containerName) : c.serviceName }}</strong>
+          <span style="color:var(--text-muted)">（{{ c.runtime }}{{ c.ports ? '，' + c.ports : '' }}）</span></div>
+        <div style="font-size:var(--fs-sm);color:var(--text-muted)">
+          資料庫 <code>{{ c.dbName }}</code>ㆍsudo {{ c.sudoMode === 'nopasswd' ? '免密碼' : '需密碼（平台已存）' }}
+          <template v-if="c.odooVersion">ㆍ{{ c.odooVersion }}</template>
+          <template v-if="c.composeDir">ㆍcompose <code>{{ c.composeDir }}</code></template>
+        </div>
+
+        <div class="conn-fields" style="margin-top:var(--space-3)">
+          <div class="field-item field-item-narrow">
+            <label class="field-label">這是哪一區</label>
+            <select v-model="assign[i].env" class="field-input">
+              <option value="">（不指認，略過）</option>
+              <option value="test">測試區</option>
+              <option value="prod">正式區</option>
+            </select>
+          </div>
+          <div class="field-item">
+            <label class="field-label">addons 目錄（絕對路徑）</label>
+            <input v-model="assign[i].addons_dir" class="field-input" placeholder="/home/arich/DockerData/odoo/Data/odoo-tst/addons" />
+          </div>
+          <div class="field-item">
+            <label class="field-label">conf 路徑</label>
+            <input v-model="assign[i].conf_path" class="field-input" placeholder="/etc/odoo/odoo.conf" />
+          </div>
+          <div class="field-item">
+            <label class="field-label">我們管的模組（逗號分隔）</label>
+            <input v-model="assign[i].modules" class="field-input" placeholder="idx_hj, idx_scan" />
+          </div>
+          <div class="field-item field-item-narrow">
+            <label class="field-label">來源分支（留白用預設）</label>
+            <input v-model="assign[i].branch" class="field-input" :placeholder="assign[i].env === 'prod' ? 'main' : 'ai-dev'" />
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:var(--space-3)" :disabled="saving" @click="saveTarget(i)">存成部署目標</button>
+      </div>
+
+      <div style="margin-top:var(--space-5)">
+        <button class="btn btn-ghost btn-sm" @click="showRaw = !showRaw">{{ showRaw ? '收合' : '展開' }}原始輸出（已遮罩密碼）</button>
+        <pre v-if="showRaw" class="ui-next-log-pre" style="margin-top:var(--space-3)">{{ probe.raw }}</pre>
+      </div>
+    </template>
+  </template>
+</section>`,
+  });
+})();

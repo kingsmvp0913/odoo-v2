@@ -6,8 +6,16 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], tabs: [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]], _pollTimer: null, _reposPollTimer: null }; },
-    computed: { embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, autoDeployEnabled: false, detailTab: ["repos","env","settings","chat","db","sop","wiki","deploy"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
+    computed: {
+      // tabs 是 computed 不是靜態陣列：自動部署總開關關閉時，這個分頁必須整個不存在。
+      // 這只是畫面——後端每一支部署端點自己也擋（requireAdmin + requireAutoDeploy）。
+      tabs() {
+        const base = [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]];
+        if (this.autoDeployEnabled) base.push(["deploy","自動部署"]);
+        return base;
+      },
+      embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView, deploy: window.UiNextDeployTargetsView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
     watch: {
       "$route.query.tab"(tab) {
         const next = ["repos","env","settings","chat","db","sop","wiki"].includes(tab) ? tab : "chat";
@@ -18,7 +26,13 @@
       "env.status"(value) { if (value === "setting_up") this._startPoll(); else this._stopPoll(); },
       hasCloning(value) { if (value) this._startReposPoll(); else this._stopReposPoll(); },
     },
-    async created() { await Promise.all([this.load(), this.loadEnv()]); if (this.detailTab === "chat") this.loadChats(); },
+    async created() {
+      // 開關值是非同步載入的，初始化當下還不知道 deploy 分頁在不在，載回來後要再驗一次。
+      // 讀不到（非 admin、或請求失敗）一律當關閉：寧可少一個分頁，也不要顯示一個按了會 403 的。
+      await Promise.all([this.load(), this.loadEnv(), this.loadAutoDeployFlag()]);
+      this.selectTab(this.detailTab);
+      if (this.detailTab === "chat") this.loadChats();
+    },
     // 沒有這行，離開專案頁之後那兩個 timer 還會繼續打 API（元件早就卸載，畫面也不會更新）。
     mounted() { this._onBranchPickerOutside = (event) => { if (!event.target.closest(".ui-next-branch-picker")) this.branchPickerOpen = false; }; document.addEventListener("pointerdown", this._onBranchPickerOutside); },
     beforeUnmount() { this.revokeNewChatUrls(); this._stopPoll(); this._stopReposPoll(); document.removeEventListener("pointerdown", this._onBranchPickerOutside); },
@@ -30,6 +44,11 @@
       _stopReposPoll() { if (this._reposPollTimer) { clearInterval(this._reposPollTimer); this._reposPollTimer = null; } },
       isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
       async load() { this.loading = true; this.loadError = ""; if (this.isTourDemo()) { this.project = window.TourDemo.project(); this.repos = window.TourDemo.project().repos || []; this.loading = false; this.loadEnv(); return; } try { const data = await Api.get(`projects/${this.$route.params.id}`); this.project = data; this.editName = this.project?.name || ""; this.editDescription = this.project?.description || ""; this.repos = data.repos || []; this.editOdooProjectName = data.odoo_project_name || ""; this.editServiceRespondentName = data.service_respondent_name || ""; this.editServiceContactName = data.service_contact_name || ""; this.editE2eEnabled = !data.e2e_disabled; this.editEdition = data.edition || "community"; await Promise.all(this.repos.filter((repo) => repo.clone_status === "done").map(async (repo) => { const info = await Api.get(`projects/${data.id}/repos/${repo.id}/branches`).catch(() => null); if (info) this.branchInfo[repo.id] = info; })); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
+      async loadAutoDeployFlag() {
+        if (this.isTourDemo()) return;
+        const s = await Api.get("admin/teams-settings").catch(() => null);
+        this.autoDeployEnabled = !!(s && s.auto_deploy_enabled);
+      },
       async loadEnv() { if (this.isTourDemo()) { this.env = window.TourDemo.env(); return; } this.env = await Api.get(`projects/${this.$route.params.id}/env`).catch(() => this.env || { status: "idle" }); },
       async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; this.lastProbedUrl = null; this.branchProbeError = ""; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
       async probeRemoteBranches() { const url = this.newRepo.repo_url.trim(); if (!url || url === this.lastProbedUrl) return; this.lastProbedUrl = url; this.probingBranches = true; this.branchProbeError = ""; try { const data = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`); this.remoteBranches = data.ok ? data.branches || [] : []; this.branchProbeError = data.ok ? "" : (data.reason || "讀不到分支"); this.newRepo.base_branch = data.defaultBranch || ""; } catch (error) { this.remoteBranches = []; this.branchProbeError = error.message || "讀不到分支"; } finally { this.probingBranches = false; } },
@@ -51,7 +70,9 @@
       },
       async removeRepo(id) { if (!await confirmDialog({ title: "移除 Repo", message: "確定移除此 repo？本機 clone 的程式碼將一併刪除，且無法復原。", danger: true, confirmText: "移除" })) return; try { await Api.delete(`projects/${this.$route.params.id}/repos/${id}`); await this.load(); } catch (error) { showToast(error.message || "移除失敗", "error", 0); } }, async reclone(id) { try { await Api.post(`projects/${this.$route.params.id}/repos/${id}/reclone`, {}); await this.load(); } catch (error) { showToast(error.message || "同步失敗", "error", 0); } }, updateRepo(id) { return this.reclone(id); },
       unreadCount() { return this.project ? (window.UnreadStore.byProject[String(this.project.id)] || this.project.unread_count || 0) : 0; },  // 七個頁籤裡只有三個是同一頁的區塊，其餘四個是獨立路由；切同頁的頁籤要同步寫進 ?tab=，否則重整會跳回第一個。
-      selectTab(key) { 
+      selectTab(key) {
+        // 分頁可能因總開關關閉而不存在（含有人存了 ?tab=deploy 的深連結）
+        if (!this.tabs.some((t) => t[0] === key)) key = "chat";
         this.detailTab = key; this.$router.replace({ query: { ...this.$route.query, tab: key } });
         if (key === "chat") this.loadChats(); },
       // 對話清單只在切到該頁籤時才讀，進專案頁不必先打這支 API。

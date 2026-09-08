@@ -54,6 +54,10 @@ const ROUTES = [
     why: '需要可用的遠端資料庫連線，無法穩定造資料' },
   // 與 project-db 不同：這頁沒有連線時顯示的是引導卡，畫面照樣穩定，進得了門禁
   { key: 'project-deploy-sop', hash: '#/projects/:projectId/deploy-sop', auth: 'user', covered: true, needs: 'projectId' },
+  // 自動部署分頁：只有總開關開啟時才存在，且限 admin。門禁環境的開關預設關閉 ⇒ 截不到，
+  // 這是刻意的（把預設值改掉只為了截圖，等於在門禁裡開啟一個會連客戶正式機的功能）。
+  { key: 'project-deploy-targets', hash: '#/projects/:projectId?tab=deploy', auth: 'admin', covered: false,
+    why: '需開啟自動部署總開關才會出現，門禁不宜為截圖而開啟會連客戶正式機的功能' },
   { key: 'token-report', hash: '#/token-report', auth: 'admin', covered: true },
   { key: 'settings', hash: '#/settings', auth: 'user', covered: true },
   { key: 'admin', hash: '#/admin', auth: 'admin', covered: true },
