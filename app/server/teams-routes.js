@@ -17,7 +17,7 @@ async function requireAdmin(req, res, next) {
 const TEAMS_PUBLIC_COLS = 'id, tenant_id, client_id, client_secret, team_id, channel_id, '
   + 'odoo_base_url, eservice_base_url, mention_users, webhook_url, notify_webhook_url, '
   + 'odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, '
-  + 'test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, '
+  + 'test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, auto_deploy_enabled, '
   + 'usage_gate_5h_threshold, usage_gate_7d_threshold, port_pool_min, port_pool_max, '
   + 'cli_push_user_id, updated_at';
 
@@ -36,10 +36,10 @@ function registerRoutes(app) {
 
   app.put('/api/admin/teams-settings', auth, async (req, res) => {
     try {
-      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold } = req.body;
+      const { tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold, auto_deploy_enabled } = req.body;
       await query(`
-        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold, updated_at)
-        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15, false), COALESCE($16, false), COALESCE($17,'venv'), COALESCE($18, true), COALESCE($19, 90), COALESCE($20, 95), NOW())
+        INSERT INTO teams_settings (id, tenant_id, client_id, client_secret, team_id, channel_id, mention_users, webhook_url, notify_webhook_url, odoo_sync_interval, service_sync_interval, odoo_url, odoo_db, service_url, service_db, test_mode, writeback_odoo_notes, env_mode, usage_gate_enabled, usage_gate_5h_threshold, usage_gate_7d_threshold, auto_deploy_enabled, updated_at)
+        VALUES (1, $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15, false), COALESCE($16, false), COALESCE($17,'venv'), COALESCE($18, true), COALESCE($19, 90), COALESCE($20, 95), COALESCE($21, false), NOW())
         ON CONFLICT (id) DO UPDATE SET
           tenant_id             = $1,
           client_id             = $2,
@@ -65,6 +65,9 @@ function registerRoutes(app) {
           usage_gate_enabled       = COALESCE($18, teams_settings.usage_gate_enabled),
           usage_gate_5h_threshold  = COALESCE($19, teams_settings.usage_gate_5h_threshold),
           usage_gate_7d_threshold  = COALESCE($20, teams_settings.usage_gate_7d_threshold),
+          -- 新欄位一律接在最後：INSERT 的 $n 是連續編號，插在中間要把後面全部往後推，
+          -- 而編號錯開不會報錯，只會把值默默寫進錯的欄位。
+          auto_deploy_enabled      = COALESCE($21, teams_settings.auto_deploy_enabled),
           updated_at            = NOW()
       `, [
         tenant_id || null, client_id || null, client_secret || null,
@@ -85,7 +88,10 @@ function registerRoutes(app) {
         // 未帶（舊前端）傳 null 由 COALESCE 保留現值，不誤清；enabled 明確布林
         usage_gate_enabled == null ? null : !!usage_gate_enabled,
         usage_gate_5h_threshold != null ? parseInt(usage_gate_5h_threshold) : null,
-        usage_gate_7d_threshold != null ? parseInt(usage_gate_7d_threshold) : null
+        usage_gate_7d_threshold != null ? parseInt(usage_gate_7d_threshold) : null,
+        // 未帶傳 null 由 COALESCE 保留現值。設定頁四個區塊共用儲存動作，任一區塊送出時
+        // 都不會帶這欄——不保留現值就會按一下就把自動部署關掉。
+        auto_deploy_enabled == null ? null : !!auto_deploy_enabled
       ]);
       resetTokenCache();
       res.json({ ok: true });
