@@ -134,14 +134,11 @@
         return hit ? hit.label : "自動";
       },
       sortedProjects() {
-        const recent = new Map(this.recentChatProjects.map((row, index) => [String(row.project_id), index]));
-        const rank = (project) => (project.is_favorite ? 0 : recent.has(String(project.id)) ? 1 : 2);
-        return [...this.projects].sort((a, b) => {
-          const ra = rank(a), rb = rank(b);
-          if (ra !== rb) return ra - rb;
-          if (ra === 1) return recent.get(String(a.id)) - recent.get(String(b.id));
-          return String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant");
-        });
+        // 排序規則與建立任務彈窗共用（UiNextShared）；這裡的「最近」只算對話。
+        return window.UiNextShared.sortProjectsForPicker(
+          this.projects,
+          this.recentChatProjects.map((row) => ({ project_id: row.project_id, at: row.last_message_at })),
+        );
       },
       filteredProjects() {
         const query = this.projectQuery.trim().toLowerCase();
