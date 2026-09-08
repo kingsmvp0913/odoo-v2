@@ -60,6 +60,9 @@
         projectId: "",
         prompt: "",
         files: [],
+        // 貼上截圖後只跳一行檔名（剪貼簿給的名字一律是 image.png），看起來像沒生效——
+        // 對話頁一直是縮圖，這裡比照。與 files 同步重建，不各自維護。
+        filePreviews: [],
         environment: null,
         environmentSummaries: {},
         environmentError: "",
@@ -113,6 +116,7 @@
     },
     beforeUnmount() {
       document.removeEventListener("pointerdown", this._onProjectPickerOutside);
+      this.filePreviews.forEach((url) => URL.revokeObjectURL(url));
     },
     computed: {
       // 排序比照側欄：我的最愛 → 最近有對話 → 其餘按名稱。三十幾個專案時，
@@ -234,6 +238,12 @@
         this.files = selected.filter((file) => /^image\//.test(file.type) && file.size <= 10 * 1024 * 1024).slice(0, 5);
         if (this.files.length !== selected.length) showToast("附件限圖片、單檔 10MB、最多 5 個", "error");
         e.target.value = "";
+        this.syncFilePreviews();
+      },
+      // 每次變動整組重建：分兩個陣列各自 push／splice，刪掉中間一張就會錯位，預覽對不上檔案。
+      syncFilePreviews() {
+        this.filePreviews.forEach((url) => URL.revokeObjectURL(url));
+        this.filePreviews = this.files.map((file) => URL.createObjectURL(file));
       },
       // 截圖直接貼上：問答首頁本來只能透過「上傳圖片」選檔，貼上是完全沒反應的。
       // 限制沿用 chooseFiles：只收圖片、單檔 10MB、最多 5 個。
@@ -242,6 +252,7 @@
         if (!files.length) return;
         event.preventDefault();
         files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && this.files.length < 5) this.files.push(f); });
+        this.syncFilePreviews();
       },
       autoResize(event) {
         const textarea = event.currentTarget;
@@ -250,6 +261,7 @@
       },
       removeFile(index) {
         this.files.splice(index, 1);
+        this.syncFilePreviews();
       },
       async send() {
         if (
@@ -334,7 +346,7 @@
           </div>
           <form data-tour="home-composer" class="ui-next-composer" @submit.prevent="send">
             <div v-if="files.length" class="ui-next-attachments">
-              <span v-for="(file, index) in files" :key="file.name + index"><ui-next-icon name="paperclip"/>{{ file.name }} <button type="button" @click="removeFile(index)" aria-label="移除附件"><ui-next-icon name="close"/></button></span>
+              <span v-for="(file, index) in files" :key="file.name + index"><img v-if="filePreviews[index]" class="ui-next-thumb" :src="filePreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:filePreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/>{{ file.name }} <button type="button" @click="removeFile(index)" aria-label="移除附件"><ui-next-icon name="close"/></button></span>
             </div>
             <textarea v-model="prompt" placeholder="詢問專案需求、流程問題，或描述你想完成的工作…" @input="autoResize" @paste="onPasteFiles" @keydown.enter.exact.prevent="send"></textarea>
             <p v-if="sendError" class="ui-next-inline-error">{{ sendError }} <button type="button" @click="send">重試</button></p>
@@ -422,6 +434,8 @@
         feedbackTrigger: null,
         feedbackContent: "",
         feedbackFiles: [],
+        // 貼上後只跳一行 image.png 看起來像沒生效，比照對話頁顯示縮圖。
+        feedbackPreviews: [],
         feedbackSubmitting: false,
         myFeedbackOpen: false,
         myFeedbackTrigger: null,
@@ -701,6 +715,7 @@
         this.closePopovers();
         this.feedbackContent = "";
         this.feedbackFiles = [];
+        this.syncFeedbackPreviews();
         this.feedbackTrigger = event && event.currentTarget;
         this.feedbackOpen = true;
         this.$nextTick(() => {
@@ -710,6 +725,8 @@
       },
       closeFeedback() {
         this.feedbackOpen = false;
+        this.feedbackFiles = [];
+        this.syncFeedbackPreviews();
         this.$nextTick(() => this.feedbackTrigger && this.feedbackTrigger.focus());
       },
       trapFeedbackFocus(event) {
@@ -745,20 +762,28 @@
       },
       // 截圖直接貼上，比照 TaskDetail.js 的 onPasteFiles：限圖片、單檔 10MB、最多 5 個。
       onFeedbackPaste(event) {
-        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => /^image\//.test(f.type));
+        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => f.type.startsWith("image/"));
         if (!files.length) return;
         event.preventDefault();
         files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && this.feedbackFiles.length < 5) this.feedbackFiles.push(f); });
+        this.syncFeedbackPreviews();
+      },
+      // 每次變動整組重建：分兩個陣列各自 push／splice，刪掉中間一張就會錯位、縮圖對不上檔案。
+      syncFeedbackPreviews() {
+        this.feedbackPreviews.forEach((url) => URL.revokeObjectURL(url));
+        this.feedbackPreviews = this.feedbackFiles.map((file) => URL.createObjectURL(file));
       },
       onFeedbackFilesSelected(event) {
         // 兩個入口的行為要一致：onFeedbackPaste 是 push（累加），這裡原本是 = 覆寫整包——
         // 先貼上的截圖會被檔案選擇器靜默清掉。改成同樣 push，並保留同一個 5 張上限。
         const selected = Array.from(event.target.files || []);
-        selected.forEach((f) => { if (/^image\//.test(f.type) && f.size <= 10 * 1024 * 1024 && this.feedbackFiles.length < 5) this.feedbackFiles.push(f); });
+        selected.forEach((f) => { if (f.type.startsWith("image/") && f.size <= 10 * 1024 * 1024 && this.feedbackFiles.length < 5) this.feedbackFiles.push(f); });
         event.target.value = "";
+        this.syncFeedbackPreviews();
       },
       removeFeedbackFile(index) {
         this.feedbackFiles.splice(index, 1);
+        this.syncFeedbackPreviews();
       },
       async submitFeedback() {
         if (!this.feedbackContent.trim()) return;
@@ -1220,7 +1245,7 @@
                 <span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>點此選擇檔案</b><small>最多 5 個</small></span>
               </label>
               <div v-if="feedbackFiles.length" class="ui-next-form-modal-wide ui-next-upload-list">
-                <span v-for="(file,index) in feedbackFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><ui-next-icon name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFeedbackFile(index)"><ui-next-icon name="close"/></button></span>
+                <span v-for="(file,index) in feedbackFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="feedbackPreviews[index]" class="ui-next-thumb" :src="feedbackPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:feedbackPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFeedbackFile(index)"><ui-next-icon name="close"/></button></span>
               </div>
             </div>
             <footer><button type="button" @click="openMyFeedback">查看我的意見</button><button type="button" @click="closeFeedback">取消</button><button class="ui-next-primary" @click="submitFeedback" :disabled="feedbackSubmitting||!feedbackContent.trim()">{{ feedbackSubmitting?'送出中…':'送出' }}</button></footer>
@@ -1262,6 +1287,7 @@
           <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)"><ui-next-icon name="close"/></button></div>
         </div>
         <confirm-dialog-host />
+        <image-preview-host />
         <tour-host />
       </div>
     `,

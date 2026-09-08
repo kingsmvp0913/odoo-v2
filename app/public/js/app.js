@@ -564,6 +564,7 @@ const App = defineComponent({
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)">×</button></div>
     </div>
     <confirm-dialog-host />
+    <image-preview-host />
     <tour-host />
   `,
 });
@@ -572,6 +573,10 @@ const App = defineComponent({
 const RootApp = window.UiNextEnabled ? window.UiNextApp : App;
 const app = createApp(RootApp);
 app.component("ConfirmDialogHost", window.ConfirmDialogHost);
+app.component("ImagePreviewHost", window.ImagePreviewHost);
+// 放大跳窗要能從任何一支 View 的 template 直接叫（縮圖散在十幾個地方），掛 globalProperties
+// 比每支 View 各包一個同名 method 少十幾份重複，也不會漂移成十幾種行為。
+app.config.globalProperties.previewImage = window.previewImage;
 app.component("Skeleton", window.Skeleton);
 app.component("ReleaseModal", window.ReleaseModal);
 app.component("TourHost", window.TourHost);

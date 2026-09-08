@@ -36,6 +36,11 @@ const ALLOWED = new Map([
   // 這裡修掉它會讓凍結比對紅，而那個比對擋的是更重要的東西（兩份靜默漂移）。
   // 要清的話得連 Legacy 一起清，屬於另一件事。
   ['UiNextAdminSettingsView', new Set(['method stepPipeline'])],
+  // toggleHistory 是「對話紀錄」抽屜的開關，template 裡沒有任何按鈕綁它 ⇒ 抽屜叫不出來，
+  // 掛在抽屜裡的「新對話」小視窗也跟著按不到。這是待拍板的既有問題（入口要放哪、要不要放），
+  // 修法是補按鈕而不是刪 method，所以先記在這裡而不是讓整支 View 又退回不受檢查。
+  // ⚠ 這支 View 之前根本不在檢查範圍內（見下方 declared 的說明），2026-09-08 才第一次掃到。
+  ['UiNextProjectChatView', new Set(['method toggleHistory'])],
 ]);
 
 // ── 解析：括號配對，跳過註解與三種引號 ──────────────────────────
@@ -103,12 +108,17 @@ function topLevelMethodNames(methodsBlock) {
   return [...new Set(names)];
 }
 
-const components = [...SRC.matchAll(/window\.(UiNext\w*View)\s*=\s*Vue\.defineComponent\(/g)]
-  .map((m) => ({ name: m[1], body: extractBlock(SRC, m.index) }))
-  .filter((c) => c.body);
+const declared = [...SRC.matchAll(/window\.(UiNext\w*View)\s*=\s*Vue\.defineComponent\(/g)]
+  .map((m) => ({ name: m[1], body: extractBlock(SRC, m.index) }));
+const components = declared.filter((c) => c.body);
 
 // 解析器失效時測試不得靜默通過——這是此 repo 反覆踩過的坑。
 test('解析得到 component（解析器或寫法變動時不得靜默略過）', () => {
+  // 括號配對失敗的 component 會被 filter 濾掉，而下面的 test.each 只跑得到剩下的：
+  // 症狀是「那支 View 的死碼不再被檢查」，測試照樣全綠。2026-09-08 實際發生過——
+  // 解析器把 /^image\//.test(...) 的 \// 當成行註解，整行被吃掉、大括號失衡，
+  // UiNextProjectChatView 就這樣長期不在檢查範圍內（沒有任何訊號）。
+  expect(declared.filter((c) => !c.body).map((c) => c.name)).toEqual([]);
   expect(components.length).toBeGreaterThanOrEqual(20);
   expect(components.every((c) => c.body.length > 200)).toBe(true);
 });

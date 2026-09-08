@@ -1446,3 +1446,34 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 .md-body th { background: var(--bg); color: var(--text-secondary); font-weight: var(--fw-semibold); }
 .md-body p { margin: 0 0 var(--space-2); }
 .md-body > *:last-child { margin-bottom: 0; }
+
+/* 圖片放大跳窗（js/image-preview.js）。放在 app.css 而不是 ui-next-pages/：
+   兩套 shell 都掛了 image-preview-host，只寫在 ui-next 那邊的話，舊介面會是沒有樣式的裸圖。
+   底色寫死深色是刻意的——這是覆蓋整個畫面的觀圖模式，兩種主題下都該是暗的，
+   所以文字色也一併寫死白色，不跟著 var(--text) 走（跟著走在淺色模式會變成白底白字）。 */
+.img-lightbox {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  /* flex 而不是 grid：grid 會把「圖」和「檔名列」分成兩個等分的 row，
+     圖被推到上半部、檔名列掉到畫面底部，中間空一大塊。 */
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-3); padding: var(--space-5);
+  background: rgba(0, 0, 0, 0.86);
+  cursor: zoom-out;
+}
+.img-lightbox img {
+  max-width: 100%; max-height: calc(100vh - 120px); object-fit: contain;
+  border-radius: var(--radius-sm); background: #fff; cursor: default;
+}
+.img-lightbox-bar {
+  display: flex; align-items: center; gap: var(--space-3);
+  max-width: 100%; color: #fff; font-size: var(--fs-sm); cursor: default;
+}
+.img-lightbox-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.img-lightbox-bar button {
+  flex: none; border: 1px solid rgba(255, 255, 255, 0.45); border-radius: var(--radius-sm);
+  padding: 6px 12px; background: transparent; color: #fff; font: inherit; cursor: pointer;
+}
+.img-lightbox-bar button:hover { background: rgba(255, 255, 255, 0.16); }
+/* 點得開的縮圖都給 zoom-in：沒有游標提示的話，沒有人知道這張圖點得動。 */
+.ui-next-thumb, .ui-next-pending-files img, .ui-next-new-chat-files img,
+.ui-next-message-files img, .ui-next-attachments img { cursor: zoom-in; }

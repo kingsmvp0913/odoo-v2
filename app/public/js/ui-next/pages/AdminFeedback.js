@@ -79,11 +79,11 @@
         }
         return { label: STATUS_LABEL[r.status] || r.status, pill: this.pillClass(r.status), hint: '' };
       },
-      // 縮圖是 objectURL（附件端點要帶 token，<img src> 直連拿不到）。開新分頁看原圖，
-      // 與專案對話頁的附件同一個做法，不另外造一套燈箱。
-      openImage(fileId) {
+      // 縮圖是 objectURL（附件端點要帶 token，<img src> 直連拿不到）。放大走全域跳窗
+      // （js/image-preview.js），與對話頁、任務詳情同一套；原本是另開分頁。
+      openImage(fileId, filename) {
         const url = this.attachUrls[fileId];
-        if (url) window.open(url, '_blank');
+        if (url) window.previewImage({ src: url, alt: filename || '' });
       },
       // 手動補跑一次改善批次。端點（POST /api/admin/nightly-fix）早就有，但前端從來沒有入口
       // ——已核准的提案只能等每晚 22:00，想當場驗一次「改善通道通不通」完全沒辦法。
@@ -307,8 +307,8 @@
                       <div v-if="(r.attachments||[]).length" style="display:flex;gap:6px;flex-wrap:wrap">
                         <!-- @click.stop：點圖是「看大圖」，不該順手把整列收合掉 -->
                         <img v-for="file in r.attachments" :key="file.id" v-show="attachUrls[file.id]"
-                          :src="attachUrls[file.id]" :alt="file.filename" :title="'點開看原圖：' + file.filename"
-                          @click.stop="openImage(file.id)"
+                          :src="attachUrls[file.id]" :alt="file.filename" :title="'點擊放大：' + file.filename"
+                          @click.stop="openImage(file.id,file.filename)"
                           style="width:48px;height:48px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:zoom-in">
                       </div>
                       <span v-else style="color:var(--text-muted)">—</span>

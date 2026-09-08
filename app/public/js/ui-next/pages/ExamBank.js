@@ -22,7 +22,6 @@
         openId: null,       // 展開中的題目 id
         detail: null,
         detailLoading: false,
-        lightbox: null,     // 放大中的圖 { src, alt }
         // 圖走 Api.getBlob 轉 objectURL，不能直接把路徑塞 <img src>——
         // 那條路由掛 verifyToken，而 <img> 不會帶 Authorization header，會一律 401。
         // 平台既有的附件顯示（ProjectChat／TaskDetail）都是這個模式。
@@ -156,7 +155,9 @@
           if (blob && blob.size) this.shotUrls = { ...this.shotUrls, [key]: URL.createObjectURL(blob) };
         } catch (e) { /* 單張載不出來不影響其他內容 */ }
       },
-      open(key, alt) { if (this.shotUrls[key]) this.lightbox = { src: this.shotUrls[key], alt }; },
+      // 走全域放大跳窗（js/image-preview.js）：這一頁原本自己養了一個 lightbox，
+      // 平台其他地方的圖點開卻是另開分頁或直接下載，三套行為互不一樣。
+      open(key, alt) { if (this.shotUrls[key]) window.previewImage({ src: this.shotUrls[key], alt }); },
       setFilter(f) { this.filter = f; localStorage.setItem('examFilter', f); },
       setLang(l) { this.lang = l; localStorage.setItem('examLang', l); },
       toggleGroup(t) { this.collapsed = { ...this.collapsed, [t]: !this.collapsed[t] }; },
@@ -405,15 +406,6 @@
             </div>
           </div>
           <div v-if="!filteredGroups.length" class="ui-next-exam-empty">沒有符合的題目。</div>
-        </div>
-        <!-- 放大檢視。點背景或按 Esc 關掉——圖佔滿畫面時，找不到關閉鈕是最惱人的。 -->
-        <div v-if="lightbox" class="ui-next-exam-lightbox" tabindex="-1"
-             @click="lightbox=null" @keydown.esc="lightbox=null">
-          <img :src="lightbox.src" :alt="lightbox.alt" @click.stop />
-          <div class="ui-next-exam-lightbox-bar">
-            <span>{{ lightbox.alt }}</span>
-            <button class="ui-next-exam-btn" @click="lightbox=null">關閉</button>
-          </div>
         </div>
       </section>
     `

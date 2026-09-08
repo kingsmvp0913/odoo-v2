@@ -127,9 +127,12 @@
 .ui-next-chat-rail-head > .ui-next-primary {
   width: 100%;
 }
+/* 直排：這個小視窗除了標題欄，還有「第一句話」與待傳圖的縮圖列，橫排擠不下。 */
 .ui-next-new-chat {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   margin-top: 8px;
 }
 .ui-next-new-chat input {

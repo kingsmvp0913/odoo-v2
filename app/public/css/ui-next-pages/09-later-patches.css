@@ -1333,22 +1333,6 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   background: var(--card-bg); cursor: zoom-in;
 }
 
-/* 放大檢視。z-index 用 modal 那一層：它就是一個跳窗，不該被別的東西蓋住。 */
-.ui-next-exam-lightbox {
-  position: fixed; inset: 0; z-index: var(--z-modal);
-  display: grid; place-items: center; gap: 12px; padding: 24px;
-  background: color-mix(in srgb, #000 78%, transparent);
-  cursor: zoom-out;
-}
-.ui-next-exam-lightbox img {
-  max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain;
-  border-radius: var(--radius-sm); background: #fff; cursor: default;
-}
-.ui-next-exam-lightbox-bar {
-  display: flex; align-items: center; gap: 12px;
-  color: #fff; font-size: var(--fs-sm);
-}
-
 .ui-next-exam-group { margin-bottom: 14px; }
 .ui-next-exam-group-head {
   display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; cursor: pointer;
@@ -1909,3 +1893,15 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    :not([class*="-inner"]) 排掉內層容器——父子都加就變成右邊空一大塊。 */
 .ui-next-shell.has-ribbon .ui-next-main [class*="page-head"]:not([class*="-inner"]),
 .ui-next-shell.has-ribbon .ui-next-main [class*="topbar"] { padding-right: 118px; }
+
+/* 貼上截圖後只跳一行檔名（剪貼簿給的名字一律是 image.png）看起來像沒生效，所以是圖就顯示縮圖。
+   首頁輸入框與建立任務視窗的附件列都是「一行一個檔名」的 chip，共用這顆；非圖片（pdf 等）
+   維持原本的迴紋針圖示。 */
+.ui-next-thumb {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}

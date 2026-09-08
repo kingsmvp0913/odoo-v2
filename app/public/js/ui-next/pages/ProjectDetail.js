@@ -6,7 +6,7 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, tabs: [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]], _pollTimer: null, _reposPollTimer: null }; },
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, detailTab: ["repos","env","settings","chat","db","sop","wiki"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], tabs: [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]], _pollTimer: null, _reposPollTimer: null }; },
     computed: { embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
     watch: {
       "$route.query.tab"(tab) {
@@ -21,7 +21,7 @@
     async created() { await Promise.all([this.load(), this.loadEnv()]); if (this.detailTab === "chat") this.loadChats(); },
     // 沒有這行，離開專案頁之後那兩個 timer 還會繼續打 API（元件早就卸載，畫面也不會更新）。
     mounted() { this._onBranchPickerOutside = (event) => { if (!event.target.closest(".ui-next-branch-picker")) this.branchPickerOpen = false; }; document.addEventListener("pointerdown", this._onBranchPickerOutside); },
-    beforeUnmount() { this._stopPoll(); this._stopReposPoll(); document.removeEventListener("pointerdown", this._onBranchPickerOutside); },
+    beforeUnmount() { this.revokeNewChatUrls(); this._stopPoll(); this._stopReposPoll(); document.removeEventListener("pointerdown", this._onBranchPickerOutside); },
     methods: {
       // 環境建立／repo clone 都是背景長工，後端不推事件；不輪詢的話「建立中」「同步中」會永遠停在原地。
       _startPoll() { if (this._pollTimer) return; this._pollTimer = setInterval(() => this.loadEnv(), 5000); },
@@ -72,11 +72,33 @@
         catch (error) { this.chatsError = error.message || "無法載入對話清單"; }
         finally { this.chatsLoading = false; }
       },
+      // 「新對話」先展開輸入框而不是直接建一則空對話：截圖說明問題最常走貼上這條路，
+      // 而建完才跳進對話頁貼圖，等於逼人先進去再重打一次背景。留白直接按「開始對話」，
+      // 行為與原本的「建一則空對話並跳進去」完全相同。
+      openNewChat() { this.showNewChat = true; this.$nextTick(() => this.$refs.newChatText?.focus()); },
+      resetNewChat() { this.revokeNewChatUrls(); this.newChatTitle = ""; this.newChatText = ""; this.newChatFiles = []; this.newChatPreviews = []; this.showNewChat = false; },
+      onNewChatPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); this.addNewChatFiles(files); } },
+      onNewChatFilesSelected(event) { this.addNewChatFiles(Array.from(event.target.files || [])); event.target.value = ""; },
+      // 限制與對話輸入列同一組：只收圖、單檔 10MB、最多 5 張。
+      addNewChatFiles(files) { files.forEach((file) => { if (!file.type.startsWith("image/") || file.size > 10 * 1024 * 1024 || this.newChatFiles.length >= 5) return; this.newChatFiles.push(file); this.newChatPreviews.push(URL.createObjectURL(file)); }); },
+      removeNewChatFile(index) { URL.revokeObjectURL(this.newChatPreviews[index]); this.newChatFiles.splice(index, 1); this.newChatPreviews.splice(index, 1); },
+      revokeNewChatUrls() { this.newChatPreviews.forEach((url) => URL.revokeObjectURL(url)); },
       async createChat() {
         if (this.creatingChat) return;
         this.creatingChat = true;
-        try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: "新對話" });
-          this.$router.push(`/projects/${this.$route.params.id}/chat/${chat.id}`); }
+        const content = this.newChatText.trim(), files = this.newChatFiles.slice();
+        try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: this.newChatTitle.trim() || "新對話" });
+          // ⚠ 訊息端點會 await 整輪 AI 回覆（動輒數分鐘），等它回來才換頁＝畫面像當掉。
+          // 比照首頁：送出即不等待，對話頁靠 ?pending=1 立刻進入「回覆中」並開始輪詢。
+          if (content || files.length) {
+            let request;
+            if (files.length) { const form = new FormData(); form.append("content", content); files.forEach((file) => form.append("files", file)); request = Api.postForm(`projects/${this.$route.params.id}/chats/${chat.id}/messages`, form); }
+            else request = Api.post(`projects/${this.$route.params.id}/chats/${chat.id}/messages`, { content });
+            request.catch((error) => showToast(error.message || "訊息送出失敗", "error", 0));
+            try { sessionStorage.setItem(`ui-next:pending-msg:${chat.id}`, content); } catch (_) { /* 隱私模式沒有 sessionStorage，退回原本的空白等待 */ }
+          }
+          this.resetNewChat();
+          this.$router.push(`/projects/${this.$route.params.id}/chat/${chat.id}${content || files.length ? "?pending=1" : ""}`); }
         catch (error) { showToast(error.message || "無法建立對話", "error"); }
         finally { this.creatingChat = false; }
       },
@@ -196,7 +218,18 @@
 <section v-if="detailTab==='chat'" class="ui-next-panel ui-next-chat-tab">
 <div class="ui-next-card-title">
 <div><h2>對話</h2><p>{{ chats.length }} 則對話；點一則進入專心模式。</p></div>
-<button class="ui-next-primary" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'新對話' }}</button>
+<button v-if="!showNewChat" class="ui-next-primary" @click="openNewChat">新對話</button>
+</div>
+<div v-if="showNewChat" class="ui-next-new-chat">
+<input v-model="newChatTitle" placeholder="對話標題（選填）">
+<textarea ref="newChatText" v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可直接貼上截圖" @paste="onNewChatPaste"></textarea>
+<div v-if="newChatPreviews.length" class="ui-next-new-chat-files">
+<span v-for="(url,index) in newChatPreviews" :key="url"><img :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><button type="button" aria-label="移除待傳圖片" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
+</div>
+<div class="ui-next-new-chat-foot">
+<label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onNewChatFilesSelected"></label>
+<span class="ui-next-new-chat-actions"><button type="button" @click="resetNewChat">取消</button><button type="button" class="ui-next-primary" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'開始對話' }}</button></span>
+</div>
 </div>
 <input v-if="chats.length" v-model="chatSearch" class="ui-next-chat-tab-search" type="search" placeholder="搜尋對話標題" aria-label="搜尋對話">
 <p v-if="chatsError" class="ui-next-inline-error" role="alert">{{ chatsError }} <button type="button" @click="loadChats">重試</button></p>

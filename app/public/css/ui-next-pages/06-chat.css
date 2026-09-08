@@ -235,6 +235,63 @@
   background: var(--text);
   color: var(--surface);
 }
+.ui-next-new-chat-text {
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 7px;
+  font: inherit;
+  font-size: 12px;
+}
+.ui-next-new-chat-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ui-next-new-chat-files span { position: relative; }
+.ui-next-new-chat-files img {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+/* 蓋掉 .ui-next-new-chat button 的實心底色——那是給「開始對話」用的，
+   套到移除鈕會變成一顆比縮圖還搶眼的黑方塊。 */
+.ui-next-new-chat-files button {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  place-items: center;
+  border-radius: 50%;
+}
+.ui-next-new-chat-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ui-next-new-chat-foot .ui-next-icon-button {
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+}
+.ui-next-new-chat-foot > button { padding: 7px 12px; }
+.ui-next-new-chat-actions { display: flex; gap: 8px; }
+.ui-next-new-chat-actions button { padding: 7px 12px; }
+/* 「取消」不能吃 .ui-next-new-chat button 的實心底色——兩顆一樣重時，
+   使用者分不出哪顆是送出。 */
+.ui-next-new-chat-actions > button:not(.ui-next-primary) {
+  background: var(--bg);
+  color: var(--text-secondary);
+}
 .ui-next-new-chat-popover {
   position: absolute;
   z-index: 7;

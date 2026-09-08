@@ -82,16 +82,21 @@ function topLevelKeys(body) {
 }
 
 const components = [];
+const unparsed = [];
 for (const f of FILES) {
   const src = fs.readFileSync(path.join(__dirname, '../../public/js/ui-next/', f), 'utf8');
   for (const m of src.matchAll(/window\.(UiNext\w*)\s*=\s*Vue\.defineComponent\(/g)) {
     const body = extractBlock(src, m.index);
     if (body) components.push({ file: f, name: m[1], body });
+    else unparsed.push(m[1]);
   }
 }
 
 // 解析器失效時測試不得靜默通過——這是此 repo 反覆踩過的坑。
 test('解析得到 component（解析器或寫法變動時不得靜默略過）', () => {
+  // 括號配對失敗就整支被略過，而測試照樣全綠——2026-09-08 實際發生過（解析器把
+  // /^image\//.test(...) 的 \// 當成行註解，吃掉整行）。所以先擋「有沒有人被漏掉」。
+  expect(unparsed).toEqual([]);
   expect(components.length).toBeGreaterThanOrEqual(20);
   expect(components.every((c) => c.body.length > 200)).toBe(true);
   // 反向自驗：解析器真的抓得到頂層 key，而不是每次都回空陣列而讓測試全綠

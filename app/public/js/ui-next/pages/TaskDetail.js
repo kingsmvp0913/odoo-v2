@@ -7,7 +7,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], specFeedback: '', specApproving: false, specRevising: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], rejectFilesPreviews: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], newMessageFilesPreviews: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], answerFilesPreviews: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], askFilesPreviews: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], specFeedback: '', specApproving: false, specRevising: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -193,6 +193,10 @@
     beforeUnmount() { this.unbindConvScroll();
       if (this._sockTimer) clearInterval(this._sockTimer);
       Object.values(this.attachUrls).forEach(url => URL.revokeObjectURL(url));
+      // 四個輸入框的待傳縮圖：關視窗以外還有「直接切走」這條路，不收就是每開一張任務漏一次。
+      ['askFiles', 'answerFiles', 'rejectFiles', 'newMessageFiles'].forEach((key) => {
+        (this[key + 'Previews'] || []).forEach((url) => { if (url) URL.revokeObjectURL(url); });
+      });
       if (this._onDocClick) document.removeEventListener('click', this._onDocClick);
       const sock = window._socket;
       if (sock && sock.off) {
@@ -395,6 +399,7 @@
           }
           this.newMessageText = '';
           this.answerFiles = [];
+          this.syncPreviews('answerFiles');
           if (this.$refs.answerFileInput) this.$refs.answerFileInput.value = '';
           this.answerFields = {};
           this.answerExtra = {};
@@ -423,6 +428,7 @@
           }
           this.askText = '';
           this.askFiles = [];
+          this.syncPreviews('askFiles');
           if (this.$refs.askFileInput) this.$refs.askFileInput.value = '';
           showToast('已送出提問，任務不會往下跑', 'success');
           this._convPinBottom = true;   // 同 submitAnswer：靜默重抓，不整頁閃「載入中」
@@ -479,6 +485,21 @@
         const list = this[target];
         if (!Array.isArray(list)) return;
         files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && list.length < 5) list.push(f); });
+        this.syncPreviews(target);
+      },
+      // 貼上後畫面要看得到那張圖：原本四個框都只有一行「已附加 N 個」（回答那格連這行都沒有），
+      // 貼完跟沒貼一樣，也沒辦法只拿掉貼錯的那一張。
+      // 每次變動整組重建：分兩個陣列各自 push／splice，刪掉中間一張就會錯位、縮圖對不上檔案。
+      syncPreviews(key) {
+        const previews = key + 'Previews';
+        (this[previews] || []).forEach((url) => { if (url) URL.revokeObjectURL(url); });
+        this[previews] = (this[key] || []).map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : ''));
+      },
+      removeFileAt(key, index) {
+        const previews = key + 'Previews';
+        if (this[previews][index]) URL.revokeObjectURL(this[previews][index]);
+        this[key].splice(index, 1);
+        this.syncPreviews(key);
       },
       async sendTaskMessage() {
         if (!this.newMessageText.trim()) return;
@@ -491,6 +512,7 @@
           await Api.postForm(`tasks/${this.task.id}/messages`, fd);
           this.newMessageText = '';
           this.newMessageFiles = [];
+          this.syncPreviews('newMessageFiles');
           if (this.$refs.messageFileInput) this.$refs.messageFileInput.value = '';
           // autoResize 寫的是 inline height：清空文字它不會自己縮，欄位會一直停在
           // 上一則留言撐開的高度。清掉 inline 值讓它退回 CSS 的 min-height。
@@ -501,12 +523,15 @@
       },
       onMessageFilesSelected(e) {
         this.newMessageFiles = Array.from(e.target.files || []);
+        this.syncPreviews('newMessageFiles');
       },
       onAnswerFilesSelected(e) {
         this.answerFiles = Array.from(e.target.files || []);
+        this.syncPreviews('answerFiles');
       },
       onAskFilesSelected(e) {
         this.askFiles = Array.from(e.target.files || []);
+        this.syncPreviews('askFiles');
       },
       formatSize(bytes) {
         if (!bytes) return '0 B';
@@ -534,6 +559,13 @@
             if (blob.size) this.attachUrls[file.id] = URL.createObjectURL(blob);
           } catch { /* 單張載不出來就不畫這張 */ }
         }
+      },
+      // 點圖是「想看清楚」，不是「想存檔」：原本直接觸發下載，看一眼要先存到硬碟再開。
+      // 下載沒有拿掉，移到跳窗裡那顆按鈕。
+      previewAttachment(file) {
+        const url = this.attachUrls[file.id];
+        if (!url) return;
+        window.previewImage({ src: url, alt: file.filename, onDownload: () => this.downloadAttachment(file.id, file.filename) });
       },
       async downloadAttachment(attId, filename) {
         try {
@@ -624,6 +656,7 @@
           showToast('已退回，任務回到開發依原因修正', 'success');
           this.rejectReason = '';
           this.rejectFiles = [];
+          this.syncPreviews('rejectFiles');
           if (this.$refs.rejectFileInput) this.$refs.rejectFileInput.value = '';
           await this.load();
         } catch (e) { showToast(e.message, 'error'); }
@@ -631,6 +664,7 @@
       },
       onRejectFilesSelected(e) {
         this.rejectFiles = Array.from(e.target.files || []);
+        this.syncPreviews('rejectFiles');
       },
       // MODE_B 規格審核閘門——確認規格沒問題，開始實作
       async specApprove() {
@@ -1086,7 +1120,7 @@
 <!-- 圖片直接顯示縮圖（同聊天頁）：一排「淺底大字檔名」的下載鈕在深色下最刺眼，
      而且看不到內容還得先下載。非圖片才走檔案列，縮成一行小字。 -->
 <div v-if="imageAttachments(row).length" class="ui-next-conv-images">
-<img v-for="file in imageAttachments(row)" :key="file.id" v-show="attachUrls[file.id]" :src="attachUrls[file.id]" :alt="file.filename" :title="file.filename" @click="downloadAttachment(file.id,file.filename)">
+<img v-for="file in imageAttachments(row)" :key="file.id" v-show="attachUrls[file.id]" :src="attachUrls[file.id]" :alt="file.filename" :title="'點擊放大：'+file.filename" @click="previewAttachment(file)">
 </div>
 <div v-if="fileAttachments(row).length" class="ui-next-conv-files">
 <button v-for="file in fileAttachments(row)" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/>{{ file.filename }}<small v-if="file.size">{{ formatSize(file.size) }}</small></button>
@@ -1189,9 +1223,12 @@
 <form @submit.prevent="submitAsk">
 <textarea v-model="askText" :disabled="clarBusy" placeholder="例如：我測試好像正常，要怎麼重現這個情況？" @keydown.enter.exact.prevent="submitAsk" @input="autoResize" @paste="onPasteFiles($event,'askFiles')">
 </textarea>
+<div v-if="askFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in askFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="askFilesPreviews[index]" class="ui-next-thumb" :src="askFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:askFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('askFiles',index)"><ui-next-icon name="close"/></button></span>
+</div>
 <div class="ui-next-qa-ask-foot">
 <label class="ui-next-icon-button" title="附加截圖"><ui-next-icon name="paperclip"/><input ref="askFileInput" type="file" multiple aria-label="附加截圖" @change="onAskFilesSelected"></label>
-<span v-if="askFiles.length">已附加 {{ askFiles.length }} 個檔案</span>
+
 <button type="submit" class="ui-next-primary" :disabled="clarBusy||askSubmitting||!askText.trim()">{{ askSubmitting?'送出中…':'送出提問' }}</button>
 </div>
 </form>
@@ -1202,11 +1239,17 @@
      （見本檔 submitAnswer 的 else 分支），resolution 是 blocker mode 的 resolveBlocker 在用。
      綁錯的後果是靜默失效——打字讓按鈕亮起，點下去在那個 "沒文字就 return" 的早退直接返回，
      沒有 toast、沒有錯誤，而 clarify_pending 狀態下這是唯一的回覆入口。 -->
-<textarea v-model="newMessageText" placeholder="回答 AI 的問題或補充說明…可直接貼上截圖" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
+<!-- ⚠ 貼上一定要進 answerFiles：submitAnswer 送的是 answerFiles，而這一格的選檔鈕
+     （onAnswerFilesSelected）也是寫進 answerFiles。原本貼上寫進 newMessageFiles，
+     那是底下「留言」框在用的，於是這裡貼的圖被靜默丟掉——畫面沒有任何徵狀。 -->
+<textarea v-model="newMessageText" placeholder="回答 AI 的問題或補充說明…可直接貼上截圖" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'answerFiles')">
 </textarea>
 <!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
 <p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
 <label class="ui-next-upload ui-next-upload-inline"><input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
+<div v-if="answerFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in answerFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="answerFilesPreviews[index]" class="ui-next-thumb" :src="answerFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:answerFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('answerFiles',index)"><ui-next-icon name="close"/></button></span>
+</div>
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||!newMessageText.trim()">{{ submitting?'送出中…':'送出回答' }}</button>
 </template>
 </template>
@@ -1229,13 +1272,16 @@
      和退回原因這個「要寫的地方」擠在同一個框裡時，看不出哪裡是讀哪裡是寫。 -->
 <textarea v-model="rejectReason" placeholder="填寫退回原因，可一次列多個問題，可直接貼上截圖" @keydown.enter.exact.prevent="reject" @input="autoResize" @paste="onPasteFiles($event,'rejectFiles')">
 </textarea>
+<div v-if="rejectFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in rejectFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="rejectFilesPreviews[index]" class="ui-next-thumb" :src="rejectFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:rejectFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('rejectFiles',index)"><ui-next-icon name="close"/></button></span>
+</div>
 <div class="ui-next-action-foot">
 <div class="ui-next-action-tools">
 <label class="ui-next-icon-button" :title="'附加截圖（選填，最多 5 個）——下游只讀得到程式碼 diff，看不到畫面'"><ui-next-icon name="paperclip"/><input ref="rejectFileInput" type="file" multiple @change="onRejectFilesSelected"></label>
 <!-- diff 本身在對話流最後一則，但那裡被輸入框擋著、不是人會去找的地方：底排留一個入口，
      點了展開並捲過去。狀態與那則卡片共用同一個 diffOpen，兩邊不會各開各的。 -->
 <button type="button" class="ui-next-icon-button" :class="{active:diffOpen}" :disabled="diffLoading" :aria-label="diffOpen?'收合程式變更':'查看程式變更'" :title="diffOpen?'收合程式變更':'查看程式變更'" @click="showDiff"><ui-next-icon name="code"/></button>
-<small v-if="rejectFiles.length">已選 {{ rejectFiles.length }} 個附件</small>
+
 </div>
 <div class="ui-next-inline-actions">
 <button @click="reject" :disabled="rejecting||!rejectReason.trim()">{{ rejecting?'退回中…':'退回修正' }}</button>
@@ -1322,8 +1368,11 @@
      還原高度用的（autoResize 寫的是 inline height，清空文字它不會自己縮回去）。 -->
 <!-- rows="1"：HTML 預設是 2，會讓空欄位固定佔兩行（39px）比 min-height 還高，
      一打字反而被 autoResize 縮回 32px，看起來像跳了一下。 -->
-<textarea ref="messageInput" rows="1" v-model="newMessageText" placeholder="新增留言…可直接貼上截圖" @keydown.enter.exact.prevent="sendTaskMessage" @input="autoResize">
+<textarea ref="messageInput" rows="1" v-model="newMessageText" placeholder="新增留言…可直接貼上截圖" @keydown.enter.exact.prevent="sendTaskMessage" @input="autoResize" @paste="onPasteFiles($event,'newMessageFiles')">
 </textarea>
+<div v-if="newMessageFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in newMessageFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="newMessageFilesPreviews[index]" class="ui-next-thumb" :src="newMessageFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:newMessageFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('newMessageFiles',index)"><ui-next-icon name="close"/></button></span>
+</div>
 <!-- 附件與回寫收進底排（同人工審核那一關、同聊天頁的 composer）：原本「附加檔案」是一條
      滿寬的虛線放置區、回寫勾選又獨佔一行，兩者加起來佔掉面板一半的高度。
      ⚠ ref 對應 sendTaskMessage 送出後的 value 清空；沒有 ref 那行清空是死碼，
@@ -1344,7 +1393,7 @@
 <button type="button" role="option" :aria-selected="messageWriteback.toString()" @click="messageWriteback=true;writebackOpen=false">回寫來源<small>同步寫回 Odoo／eService</small></button>
 </div>
 </div>
-<small v-if="newMessageFiles.length">已選 {{ newMessageFiles.length }} 個附件</small>
+
 </div>
 <div class="ui-next-inline-actions">
 <button v-if="isAgentRunning" class="ui-next-stop" @click="togglePause"><ui-next-icon name="close"/>停止</button>
