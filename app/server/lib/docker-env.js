@@ -99,24 +99,78 @@ function remapDbHostForContainer(dbArgs) {
   return out;
 }
 
-// 把 host repo 路徑清單映射成容器掛載點：[{ host, container }]，容器路徑用 basename 掛在 EXTRA_ADDONS_ROOT 下。
-// basename 撞名時綴序號，確保容器內路徑唯一（否則後者覆蓋前者、addons 遺失）。
-function addonsMounts(hostPaths) {
+// Odoo 認得的 manifest 檔名（新舊版）。
+const MANIFEST_NAMES = ['__manifest__.py', '__openerp__.py'];
+
+// repo 根目錄自己就是一個 Odoo 模組（根有 __manifest__.py）時，該模組的技術名稱。不是這種形狀回 null。
+// Odoo 的 --addons-path 要求「傳入目錄的**子資料夾**」才是模組（_is_addons_path），故直接把這種 repo 掛成
+// addons 目錄，Odoo 會在參數檢查階段就死掉：`option --addons-path: the path '...' is not a valid addons
+// directory`——容器起不來、DB 也沒建，症狀完全不指向 repo 結構（2026-09-08 冠今 idx_kjco 即如此）。
+// 模組名優先取 repo_url 的 basename：模組技術名＝客戶正式機上的資料夾名，而 hostPath 的 basename 是
+// repo 的 label（'main'），拿它當模組名會讓 depends／odoo.addons.<name> 全部對不上。
+function repoRootModuleName(hostPath, repoUrl, deps) {
+  const { existsSync, readdirSync } = deps;
+  const hasManifest = (dir) => MANIFEST_NAMES.some(f => existsSync(path.join(dir, f)));
+  if (!hasManifest(hostPath)) return null;
+  // 混合形狀（根自己是模組、底下卻還有別的模組）：多包一層會讓那些子模組全部掛不到，比原狀更糟。
+  // 維持舊行為（掛 repo 根當 addons 目錄），至少子模組載得到——根模組載不到是這種 repo 結構本身的
+  // 問題，Odoo 也處理不了，不在此自作聰明。實測 16 個既有 repo 沒有這種形狀。
+  let entries = [];
+  try { entries = readdirSync(hostPath, { withFileTypes: true }) || []; } catch { return null; }
+  if (entries.some(e => e.isDirectory() && hasManifest(path.join(hostPath, e.name)))) return null;
+  const fromUrl = String(repoUrl || '').replace(/\.git$/, '').split(/[/\\]/).filter(Boolean).pop();
+  const raw = fromUrl || path.basename(String(hostPath).replace(/[/\\]+$/, ''));
+  // Odoo 模組名要能當 Python 套件名：非法字元換 _，開頭數字補前綴。
+  return String(raw).replace(/[^A-Za-z0-9_]/g, '_').replace(/^(?=\d)/, 'm_') || null;
+}
+
+// 把 host repo 路徑清單映射成容器掛載點：[{ host, container, addonsDir? }]，容器路徑用 basename 掛在
+// EXTRA_ADDONS_ROOT 下。basename 撞名時綴序號，確保容器內路徑唯一（否則後者覆蓋前者、addons 遺失）。
+// 元素可為字串（host 路徑）或 { path, repoUrl }——後者才推得出「repo 根即模組」時的模組名。
+// repo 根即模組時多包一層：掛進 <addonsDir>/<模組名>，addons-path 收 addonsDir（docker 會自動建父目錄）。
+// 掛載的 host 端一律維持 repo 根不變——addonsMountDrift 拿 host 路徑跟 project_repos.local_path 比對，
+// 改動 host 端會讓每個專案都被誤判成「repo 沒掛到」。
+// existsSync 可注入（純函式可測性：本檔設計原則是組參數的邏輯全部離線可驗）。
+function addonsMounts(hostPaths, deps = {}) {
+  const fsDeps = { existsSync: deps.existsSync || fs.existsSync, readdirSync: deps.readdirSync || fs.readdirSync };
   const seen = new Map();
-  return (hostPaths || []).filter(Boolean).map((hostPath) => {
-    let base = path.basename(hostPath.replace(/[/\\]+$/, '')) || 'addons';
+  // 過濾在取值之後：元素改成物件後，falsy 的 path 藏在 { path: undefined } 裡，filter(Boolean) 擋不到。
+  return (hostPaths || []).map((entry) => (typeof entry === 'string' ? { path: entry } : entry))
+    .filter(e => e && e.path).map((entry) => {
+    const hostPath = entry.path;
+    const repoUrl = entry.repoUrl;
+    let base = path.basename(String(hostPath).replace(/[/\\]+$/, '')) || 'addons';
     base = base.replace(/[^a-zA-Z0-9_.-]/g, '-');
     const n = (seen.get(base) || 0) + 1;
     seen.set(base, n);
     const uniq = n === 1 ? base : `${base}-${n}`;
-    return { host: hostPath, container: `${EXTRA_ADDONS_ROOT}/${uniq}` };
+    const addonsDir = `${EXTRA_ADDONS_ROOT}/${uniq}`;
+    const modName = repoRootModuleName(hostPath, repoUrl, fsDeps);
+    return modName
+      ? { host: hostPath, container: `${addonsDir}/${modName}`, addonsDir }
+      : { host: hostPath, container: addonsDir };
   });
+}
+
+// 把一段文字（Odoo log／traceback）裡的容器內路徑換回 host 路徑。Odoo 印的是容器路徑
+// （/mnt/extra-addons/...），但 coding agent 改的是 host 上的 repo 工作區——照著容器路徑去找檔會找不到。
+// 一般 repo 兩邊尾段剛好一致（<模組>/models/x.py）所以歷來沒炸；「repo 根自己就是模組」的專案容器端
+// 多一層模組名，尾段不再一致，非映射不可（2026-09-08 冠今 idx_kjco）。
+// 較長的 container 先換：掛載點互為前綴時（'/mnt/extra-addons/main' 與 '.../main/idx_x'），短的先命中
+// 會把後者換成拼接錯的路徑。找不到對應的路徑一律原樣保留——沒把握的字串不動，錯改比不改更難查。
+function remapContainerPathsInText(text, mounts) {
+  let out = String(text == null ? '' : text);
+  const sorted = [...(mounts || [])].filter(m => m && m.container && m.host)
+    .sort((a, b) => b.container.length - a.container.length);
+  for (const m of sorted) out = out.split(m.container).join(m.host);
+  return out;
 }
 
 // 容器內完整 addons-path 字串：核心 addons + 各掛載子目錄（順序：自訂優先於核心，與 venv 模式一致——
 // venv 模式 addons-path = [src/addons, ...extraAddons]，自訂在後；此處核心置後以讓自訂覆蓋能力相同）。
 function containerAddonsPath(mounts) {
-  return [PLATFORM_ADDONS_CONTAINER, ...(mounts || []).map(m => m.container), CORE_ADDONS].join(',');
+  // addonsDir 存在＝該 repo 根自己是模組、實際掛在 <addonsDir>/<模組名>；addons-path 要收父層 addonsDir。
+  return [PLATFORM_ADDONS_CONTAINER, ...(mounts || []).map(m => m.addonsDir || m.container), CORE_ADDONS].join(',');
 }
 
 // 掛載 addons 的 `-v` 片段（唯讀）；run/one-shot 共用。
@@ -458,8 +512,8 @@ async function containerLogs(name, { tail = 2000 } = {}, deps = {}) {
 
 module.exports = {
   // 純函式（單測用）
-  imageTagFor, depsFingerprint, majorDigits, containerNameFor, remapDbHostForContainer, addonsMounts,
-  containerAddonsPath, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs, buildRootRmArgs,
+  imageTagFor, depsFingerprint, majorDigits, containerNameFor, remapDbHostForContainer, addonsMounts, repoRootModuleName,
+  containerAddonsPath, remapContainerPathsInText, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs, buildRootRmArgs,
   // 低階 IO
   runDocker, dockerAvailable, ensureDockerRunning,
   imageExists, containerExists, containerRunning, containerMountSources,

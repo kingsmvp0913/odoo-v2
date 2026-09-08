@@ -229,10 +229,11 @@ function findChrome() {
 // 專案所有已 clone 完成的 repo 路徑，全部掛進 addons-path（primary 優先，不依賴是否勾選 primary）
 async function projectAddonsPaths(projectId) {
   const { rows } = await query(
-    "SELECT local_path FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
+    "SELECT local_path, repo_url FROM project_repos WHERE project_id=$1 AND clone_status='done' AND local_path IS NOT NULL ORDER BY is_primary DESC, id",
     [projectId]
   );
-  return rows.map(r => r.local_path);
+  // 帶 repo_url 給 addonsMounts：repo 根自己就是一個模組時，模組技術名要從 repo 名推（見 repoRootModuleName）。
+  return rows.map(r => ({ path: r.local_path, repoUrl: r.repo_url }));
 }
 
 // PEP 508 套件名（含 optional extras 與版本限定）。manifest 由 GitHub 拉來的 repo 提供、非可信輸入：
@@ -305,7 +306,8 @@ const REQ_FILENAMES = ['requirements.txt', 'requirement.txt'];
 
 async function getDeclaredPythonDeps(projectId) {
   const declared = new Set();
-  const repos = await projectAddonsPaths(projectId);
+  // projectAddonsPaths 回 { path, repoUrl }（addonsMounts 要 repoUrl）；此處只掃檔案，取路徑即可。
+  const repos = (await projectAddonsPaths(projectId)).map(r => r.path);
   const addName = (raw) => {
     const name = String(raw || '').trim().split(/[<>=!~;\s\[]/)[0].trim().toLowerCase();
     if (name && !name.startsWith('#') && !name.startsWith('-')) declared.add(name);

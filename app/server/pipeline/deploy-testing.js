@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, addonsMountDrift } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, addonsMountDrift, dockerCtxFor } = require('./env-agent');
+const dockerEnv = require('../lib/docker-env');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
@@ -34,7 +35,8 @@ async function readAssetTraceback(projectId, header = '【測試環境 runtime l
     // tail 以行數取，再截尾端位元組：QWeb 的 xpath traceback 通常十幾行，200 行綽綽有餘，
     // 且避免一次把整個容器 log 拉進記憶體。
     const log = await dockerEnv.containerLogs(ctx.container, { tail: 200 }).catch(() => '');
-    const tail = String(log || '').slice(-ASSET_LOG_TAIL_BYTES).trim();
+    // 容器路徑換回 host 路徑：這段整個餵給 coding agent，路徑對不上它會照著不存在的路徑找檔（見 toHostPaths）。
+    const tail = dockerEnv.remapContainerPathsInText(log, ctx.mounts).slice(-ASSET_LOG_TAIL_BYTES).trim();
     if (!tail) return '';
     return `\n\n${header}\n${tail}`;
   } catch { return ''; }
@@ -94,6 +96,16 @@ const ORMCACHE_NOISE = /^KeyError: \(.*<function .+>/;
 function isNoiseSegment(seg) {
   const i = findExcIdx(seg);
   return i >= 0 && ORMCACHE_NOISE.test(seg[i].trim());
+}
+
+// Odoo 的 traceback 印的是容器內路徑（/mnt/extra-addons/...），但 coding agent 改的是 host 上的 repo
+// 工作區——不換算，它會照著一條在 host 不存在的路徑找檔（詳見 docker-env.remapContainerPathsInText）。
+// 取不到 mounts 一律原樣回傳：換算只是便利，不得讓錯誤處理本身出錯而吞掉真正的錯誤訊息。
+async function toHostPaths(projectId, text) {
+  try {
+    const ctx = await dockerCtxFor(projectId);
+    return ctx ? dockerEnv.remapContainerPathsInText(text, ctx.mounts) : text;
+  } catch { return text; }
 }
 
 function extractOdooError(log) {
@@ -398,7 +410,7 @@ async function doDeploy(task, taskId, userId, signal) {
     }
 
     if (err) {
-      const odooErr = extractOdooError(err.message);
+      const odooErr = extractOdooError(await toHostPaths(task.project_id, err.message));
       const pipRef = /FAIL/.test(reqLog) ? `\npip 補裝紀錄：\n${reqLog.slice(-400)}` : '';
       // 分診 agent 讀得到的只有 blocker_content（reject-triage 的 stop_context 就是它），而 c8287fe
       // 已把 {{runtime_log_path}} 從 prompt 拿掉、改成「證據已附在上面」——不附等於告訴它「這次沒有
@@ -532,4 +544,4 @@ async function doDeploy(task, taskId, userId, signal) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
 }
 
-module.exports = { runDeployTesting, extractOdooError, looksLikeInfraDeath };
+module.exports = { runDeployTesting, extractOdooError, looksLikeInfraDeath, toHostPaths };

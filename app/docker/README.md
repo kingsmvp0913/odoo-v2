@@ -21,7 +21,9 @@
 - **宿主 Postgres**：容器經 `--add-host=host.docker.internal:host-gateway` 連回宿主，
   `--db_host localhost/127.0.0.1` 自動改寫為 `host.docker.internal`。
 - **自訂 addons**：各 repo 掛成 `/mnt/extra-addons/<name>`（唯讀），`--addons-path`
-  自動補上 image 內核心 addons。
+  自動補上 image 內核心 addons。例外：repo 根目錄自己就是一個模組（根有 `__manifest__.py`）時，
+  改掛成 `/mnt/extra-addons/<name>/<模組名>`、`--addons-path` 收父層——Odoo 要求傳入目錄的
+  **子資料夾**才是模組，直接掛 repo 根會在參數檢查就死。
 - **log**：前端「查看 log」在 docker 模式改讀 `docker logs`。
 
 ## 首跑驗證清單（實機才驗得出，程式已就緒）

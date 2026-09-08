@@ -85,6 +85,122 @@ describe('addonsMounts / containerAddonsPath', () => {
     expect(d.containerAddonsPath(mounts))
       .toBe(`${d.PLATFORM_ADDONS_CONTAINER},/mnt/extra-addons/main,/mnt/enterprise,${d.CORE_ADDONS}`);
   });
+  // 2026-09-08 冠今（idx_kjco）：repo 根目錄自己就是一個模組（根有 __manifest__.py），不是「裝了多個模組的
+  // addons 目錄」。Odoo 的 --addons-path 檢查要求傳入目錄的**子資料夾**才是模組，於是容器在參數解析階段
+  // 就死：`option --addons-path: the path '/mnt/extra-addons/main' is not a valid addons directory`。
+  // 症狀完全不指向 repo 結構（容器起不來、DB 沒建、setup_log 空），故行為必須被測住。
+  describe('repo 根自己就是一個模組', () => {
+    // 冠今的真實形狀：根有 manifest，底下是 models/views/security 這些「不是模組」的目錄。
+    const asModule = (root) => ({
+      existsSync: (f) => f === `${root}/__manifest__.py`,
+      readdirSync: () => [
+        { name: 'models', isDirectory: () => true },
+        { name: 'views', isDirectory: () => true },
+        { name: 'README.md', isDirectory: () => false },
+      ],
+    });
+
+    test('容器內多包一層，addons-path 收父層（否則 Odoo 判定不是有效 addons 目錄）', () => {
+      const m = d.addonsMounts(
+        [{ path: '/repos/kjco/main', repoUrl: 'https://github.com/Ideaxpress-odoo/idx_kjco.git' }],
+        asModule('/repos/kjco/main')
+      );
+      expect(m).toEqual([{
+        host: '/repos/kjco/main',
+        container: '/mnt/extra-addons/main/idx_kjco',
+        addonsDir: '/mnt/extra-addons/main',
+      }]);
+      expect(d.containerAddonsPath(m))
+        .toBe(`${d.PLATFORM_ADDONS_CONTAINER},/mnt/extra-addons/main,${d.CORE_ADDONS}`);
+    });
+
+    test('模組名取自 repo 名而非 repo 目錄名——目錄名是 label（main），拿它當模組名會讓 depends／odoo.addons.<name> 全對不上', () => {
+      const m = d.addonsMounts(
+        [{ path: '/repos/kjco/main', repoUrl: 'git@github.com:org/idx_kjco.git' }],
+        asModule('/repos/kjco/main')
+      );
+      expect(m[0].container).toBe('/mnt/extra-addons/main/idx_kjco');
+    });
+
+    test('host 端仍是 repo 根——addonsMountDrift 拿它跟 local_path 比對，動了會讓每個專案被誤判成沒掛到', () => {
+      const m = d.addonsMounts(
+        [{ path: '/repos/kjco/main', repoUrl: 'https://x/idx_kjco.git' }],
+        asModule('/repos/kjco/main')
+      );
+      const args = d.buildRunArgs({ name: 'c', image: 'i', host: '127.0.0.1', port: 21000, dbName: 'test_x', mounts: m });
+      expect(args).toContain('/repos/kjco/main:/mnt/extra-addons/main/idx_kjco:ro');
+    });
+
+    test('沒有 repoUrl 可推時退回目錄名（起得來優先於名字漂亮）', () => {
+      const m = d.addonsMounts(['/repos/p/idx_solo'], asModule('/repos/p/idx_solo'));
+      expect(m[0].container).toBe('/mnt/extra-addons/idx_solo/idx_solo');
+    });
+
+    test('一般 addons 型 repo（根沒有 manifest）行為不變，不多包一層', () => {
+      const m = d.addonsMounts(
+        [{ path: '/repos/p/main', repoUrl: 'https://x/customer-addons.git' }],
+        { existsSync: () => false, readdirSync: () => [] }
+      );
+      expect(m).toEqual([{ host: '/repos/p/main', container: '/mnt/extra-addons/main' }]);
+    });
+
+    test('混合形狀（根是模組、底下還有別的模組）→ 不多包一層，維持舊行為', () => {
+      // 多包一層會讓底下那些子模組全部掛不到，比原狀更糟。這種 repo 結構 Odoo 本來就處理不了，
+      // 不在此自作聰明；維持舊行為至少子模組載得到。
+      const deps = {
+        existsSync: (f) => f === '/r/main/__manifest__.py' || f === '/r/main/idx_other/__manifest__.py',
+        readdirSync: () => [{ name: 'idx_other', isDirectory: () => true }, { name: 'README.md', isDirectory: () => false }],
+      };
+      const m = d.addonsMounts([{ path: '/r/main', repoUrl: 'https://x/idx_root.git' }], deps);
+      expect(m).toEqual([{ host: '/r/main', container: '/mnt/extra-addons/main' }]);
+    });
+
+    test('模組名非法字元清成 _（Odoo 模組名要能當 Python 套件名）', () => {
+      const deps = (isMod) => ({ existsSync: () => isMod, readdirSync: () => [] });
+      expect(d.repoRootModuleName('/r/main', 'https://x/idx-kj.co.git', deps(true))).toBe('idx_kj_co');
+      expect(d.repoRootModuleName('/r/main', 'https://x/idx_kjco.git', deps(false))).toBeNull();
+    });
+  });
+
+  // Odoo 的 traceback 印的是容器內路徑（/mnt/extra-addons/...），但 coding agent 改的是 host 上的
+  // repo 工作區。一般 repo 兩邊尾段剛好一致（<模組>/models/x.py）所以歷來沒人發現對不上；「repo 根
+  // 自己就是模組」的專案容器端多一層模組名，尾段不再一致，agent 會照著不存在的路徑找檔。
+  describe('remapContainerPathsInText', () => {
+    test('traceback 裡的容器路徑換成 host 路徑', () => {
+      const mounts = [{ host: '/repos/kjco/main', container: '/mnt/extra-addons/main/idx_kjco', addonsDir: '/mnt/extra-addons/main' }];
+      const log = '  File "/mnt/extra-addons/main/idx_kjco/models/sale_order.py", line 30, in _compute';
+      expect(d.remapContainerPathsInText(log, mounts))
+        .toBe('  File "/repos/kjco/main/models/sale_order.py", line 30, in _compute');
+    });
+
+    test('一般 repo 也換（容器路徑在 host 上同樣不存在）', () => {
+      const mounts = d.addonsMounts(['/repos/raifong/main'], { existsSync: () => false, readdirSync: () => [] });
+      expect(d.remapContainerPathsInText('/mnt/extra-addons/main/idx_giveme/models/x.py:5', mounts))
+        .toBe('/repos/raifong/main/idx_giveme/models/x.py:5');
+    });
+
+    test('核心路徑與無對應的容器路徑原樣保留（不得亂改沒把握的字串）', () => {
+      const mounts = [{ host: '/repos/p/main', container: '/mnt/extra-addons/main' }];
+      const log = '/usr/lib/python3/dist-packages/odoo/models.py:100 與 /mnt/enterprise/web_x/a.py';
+      expect(d.remapContainerPathsInText(log, mounts)).toBe(log);
+    });
+
+    test('掛載點互為前綴時取較長的（否則 main 會先吃掉 main/idx_x 的替換）', () => {
+      const mounts = [
+        { host: '/repos/p/main', container: '/mnt/extra-addons/main' },
+        { host: '/repos/p/solo', container: '/mnt/extra-addons/main/idx_solo', addonsDir: '/mnt/extra-addons/main' },
+      ];
+      expect(d.remapContainerPathsInText('/mnt/extra-addons/main/idx_solo/models/x.py', mounts))
+        .toBe('/repos/p/solo/models/x.py');
+    });
+
+    test('mounts 空／文字空 → 原樣回傳，不拋錯', () => {
+      expect(d.remapContainerPathsInText('abc', [])).toBe('abc');
+      expect(d.remapContainerPathsInText('abc', null)).toBe('abc');
+      expect(d.remapContainerPathsInText(null, [])).toBe('');
+    });
+  });
+
   test('enterprise 掛載一律唯讀（容器內寫不進共用來源）', () => {
     // mountFlags 未匯出（module.exports :312-323），故從 buildRunArgs 的實際輸出驗證，
     // 不為了測試而擴大匯出面。

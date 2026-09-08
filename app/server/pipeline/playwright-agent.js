@@ -7,7 +7,7 @@ const { ensureWorktreeSkills } = require('./worktree-skills');
 const { ensureEnvRunning } = require('./ensure-env');
 const { runTourTests, restartEnv } = require('./env-agent');
 const { classifyFailureWithAgent } = require('./failure-classifier');
-const { extractOdooError, looksLikeInfraDeath } = require('./deploy-testing');
+const { extractOdooError, looksLikeInfraDeath, toHostPaths } = require('./deploy-testing');
 const { primaryModule } = require('./spec-modules');
 const { withProjectLock } = require('./project-lock');
 const { diffNameOnly, AI_BRANCH } = require('./git');
@@ -218,7 +218,7 @@ async function runTourStage(taskId, userId, signal) {
 
   // 失敗分類（比照 deploy）：env／env 已非 running → 停等修環境；code → 退 coding 計數。
   // cls 已在 lock 內算過（健檢 F3），此處直接重用，不再問第二次 haiku。
-  const odooErr = extractOdooError(err.message);
+  const odooErr = extractOdooError(await toHostPaths(task.project_id, err.message));
   const logFile = saveTourLog(taskId, err);
   const logRef = logFile ? `\n完整 log：${logFile}` : '';
   const { rows: [env2] } = await query('SELECT status FROM odoo_envs WHERE project_id=$1', [task.project_id]);

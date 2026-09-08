@@ -17,7 +17,10 @@ jest.mock('../pipeline/env-agent', () => ({
 }));
 jest.mock('../lib/docker-env', () => ({
   containerExists: jest.fn().mockResolvedValue(true),
-  containerLogs: jest.fn().mockResolvedValue('')
+  containerLogs: jest.fn().mockResolvedValue(''),
+  // 路徑換算用真實實作：mock 成 undefined 的話，readAssetTraceback 與 toHostPaths 的 try/catch 會把
+  // 「函式不存在」一起吞掉——測試全綠，功能卻是死的（實際踩到過，全 131 支照樣過）。
+  remapContainerPathsInText: jest.requireActual('../lib/docker-env').remapContainerPathsInText
 }));
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: jest.fn() })); // 分類器 agent fallback 用
 jest.mock('../pipeline/git', () => ({
@@ -936,4 +939,26 @@ test('asset 失敗但容器不存在 → 照常落 retry_feedback，不拋錯', 
   } finally {
     dockerEnv.containerExists.mockResolvedValue(true);
   }
+});
+
+
+// --- 容器路徑 → host 路徑（coding agent 改的是 host 上的 repo，照容器路徑找檔會找不到）---
+describe('toHostPaths', () => {
+  test('traceback 的容器路徑換成 host 路徑', async () => {
+    const { toHostPaths } = require('../pipeline/deploy-testing');
+    envAgent.dockerCtxFor.mockResolvedValueOnce({
+      container: 'c',
+      mounts: [{ host: '/repos/kjco/main', container: '/mnt/extra-addons/main/idx_kjco' }]
+    });
+    await expect(toHostPaths(1, 'File "/mnt/extra-addons/main/idx_kjco/models/x.py", line 3'))
+      .resolves.toBe('File "/repos/kjco/main/models/x.py", line 3');
+  });
+
+  test('取不到 ctx／查詢出錯 → 原樣回傳，不得吞掉真正的錯誤訊息', async () => {
+    const { toHostPaths } = require('../pipeline/deploy-testing');
+    envAgent.dockerCtxFor.mockResolvedValueOnce(null);
+    await expect(toHostPaths(1, 'boom')).resolves.toBe('boom');
+    envAgent.dockerCtxFor.mockRejectedValueOnce(new Error('db down'));
+    await expect(toHostPaths(1, 'boom')).resolves.toBe('boom');
+  });
 });
