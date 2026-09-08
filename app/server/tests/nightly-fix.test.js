@@ -1054,19 +1054,51 @@ test('批次自建的 health_check_runs 列帶 cadence=nightly-fix（供 health-
 
 // --- 2-C2：對帳——同一個坑第五次，候選蒸發而不記帳的四個位置都要能記到失敗 ---
 
-test('mergeCandidates 回 [] → 候選集體落空，不記個別失敗次數（不是候選自己的錯），但要留 error log', async () => {
+// 2026-09-07 實測：merge agent 的 JSON 寫壞（detail 裡未跳脫的雙引號），整晚 4 筆候選一條
+// 都沒跑，候選帳面完全沒變化，畫面看起來像「昨晚根本沒跑」。合併只是省 token 的優化，
+// 候選在入選時就各自帶著可執行的 title／detail／action／layer——統整掛掉要能逐條照跑，
+// 這一支釘住「merge 不是整批的單點」。
+test('mergeCandidates 回 [] → 不歸零，改逐條各自成一組照跑，並留 error log', async () => {
   const findingId = await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
   mergeCandidates.mockResolvedValue([]);
   const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
-  expect(result.attempted).toBe(0);
-  const { rows: [f] } = await dbModule.query('SELECT status, fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
-  expect(f.status).toBe('approved');    // 還是候選，下一晚還會再試——不是永久蒸發
-  expect(f.fix_attempts).toBe(0);       // 不記個別失敗，這不是候選自己的錯
+  expect(result.attempted).toBe(1);       // 統整掛了，但這一條照樣跑完
+  expect(runFix).toHaveBeenCalled();
+  // 批次列照建：沒有它的話健檢頁上這一晚仍是一片空白，等於「跑了但看不出來」
+  const { rows: [run] } = await dbModule.query(
+    "SELECT id FROM health_check_runs WHERE cadence='nightly-fix' ORDER BY id DESC LIMIT 1");
+  expect(run).toBeTruthy();
+  const { rows: [f] } = await dbModule.query('SELECT fix_attempts FROM health_check_findings WHERE id=$1', [findingId]);
+  expect(f.fix_attempts).toBe(0);         // 統整落空不是候選自己的錯，不記個別失敗
   const errLines = errSpy.mock.calls.map(c => c.join(' '));
-  expect(errLines.some(l => l.includes('候選統整（mergeCandidates）集體落空'))).toBe(true);
+  expect(errLines.some(l => l.includes('改為逐條處理'))).toBe(true);
+  errSpy.mockRestore();
+});
+
+// 逐條退路要用候選自己的內容，不是拿空字串或別條的內容去修——修正 agent 只讀得到這裡傳下去
+// 的 title／detail／action，餵錯等於叫它改一個不存在的需求。
+test('逐條退路帶的是各候選自己的 title／detail／action 與 layer', async () => {
+  await insertFeedback({ content: '第一則' });
+  await insertFeedback({ content: '第二則' });
+  stubTriage('code');
+  stubHappyPath();
+  mergeCandidates.mockResolvedValue([]);
+  const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(result.attempted).toBe(2);       // 兩筆各成一組，不會被併掉也不會互相蓋掉
+  const { rows } = await dbModule.query(
+    'SELECT agent_label, diagnosis, layer FROM health_check_findings ORDER BY id DESC LIMIT 2');
+  rows.forEach(r => {
+    expect(r.agent_label).toBe('翻譯後標題');   // triage 寫進 feedback 的值，原樣帶下去
+    expect(r.diagnosis).toBe('翻譯後描述');
+    expect(r.layer).toBe('code');         // 沿用成員 layer（入選時已通過同一道篩選）
+  });
   errSpy.mockRestore();
 });
 

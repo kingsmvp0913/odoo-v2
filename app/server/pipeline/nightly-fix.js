@@ -231,6 +231,29 @@ function toCandidateItem(it) {
 }
 
 /**
+ * 統整（merge）拿不到結果時的退路：每個候選各自成一組，不合併。
+ *
+ * 分組只是「省 token 的優化」，不是修正流程的必要前提——每個候選在入選時就已經有可執行的
+ * title／detail／action／layer（意見走 triageOne 寫進 feedback，健檢提案本來就有），這裡只是
+ * 把它們原樣包成 merge 的輸出格式，完全不需要 AI。沒有這條退路的話，merge 這一支 agent 就是
+ * 整批候選的單點：它一次格式失誤（2026-09-07 實測：JSON 字串裡的未跳脫雙引號）就讓整晚歸零，
+ * 而且候選帳面上毫無變化，畫面看起來像「昨晚根本沒跑」。
+ *
+ * ⚠ 刻意不填 layer：normalizeGroups 在 `g.layer` 為空時會沿用組內成員的 layer，而成員的 layer
+ * 在入選時都已通過 AUTO_LAYERS／inAutoFixScope 篩選。這裡自己填等於把同一道判斷抄第二遍，
+ * 兩邊哪天不一致就會冒出「明明入選了卻被自己的 fallback 判成不可自動修」的鬼打牆。
+ */
+function identityGroups(indexed) {
+  return indexed.map(it => ({
+    member_ids: [it.ordinal],
+    title: it.row.title || '(無標題)',
+    detail: it.row.detail || '',
+    action: it.row.action || '',
+    verify_route: it.row.verify_route || '',
+  }));
+}
+
+/**
  * merge agent 回來的組 → 可執行的組。三件事：
  *   1. member_ids 只留認得的序號（agent 可能回不存在的號碼）
  *   2. layer 重新套 AUTO_LAYERS——merge 的 schema 允許回 env／unclear，回了照樣進 runFix 會白燒
@@ -729,20 +752,19 @@ async function runNightlyFix({ startedBy = null } = {}) {
 
     const { indexed, byOrdinal } = indexCandidates(candidates);
     const mergedGroups = await mergeCandidates(indexed.map(toCandidateItem));
-    if (!mergedGroups.length) {
-      // ⚠ 這不是候選自己的錯（agent 執行失敗或解析不出 groups），不該記在候選帳上——
-      // 但也不能悄悄什麼都不做：候選集體落空要大聲留痕，否則現象是「今晚有 approved
-      // 候選、卻連一條 fix_attempts 都沒增加」，看起來像候選憑空消失。
-      console.error('[NIGHTLY-FIX] 本輪 %d 筆候選統整（mergeCandidates）集體落空，本批次不執行任何一條',
+    // ⚠ 統整拿不到結果不該讓整批歸零：這不是候選自己的錯（agent 執行失敗或解析不出 groups），
+    // 而合併本來就只是優化。改走 identityGroups 逐條處理，並大聲留痕——沉默的代價是現象變成
+    // 「今晚有 approved 候選、卻連一條 fix_attempts 都沒增加」，看起來像候選憑空消失。
+    const unmerged = !mergedGroups.length;
+    if (unmerged) {
+      console.error('[NIGHTLY-FIX] 本輪 %d 筆候選統整（mergeCandidates）沒有結果，改為逐條處理（不合併）',
         candidates.length);
-      return { attempted: 0, applied: 0, skipped: 0 };
     }
-    const groups = normalizeGroups(mergedGroups, byOrdinal);
+    const groups = normalizeGroups(unmerged ? identityGroups(indexed) : mergedGroups, byOrdinal);
 
     /**
-     * 對帳（2-C2）：四個位置會讓候選蒸發而完全不記帳——mergeCandidates 集體落空（上面已處理，
-     * 不佔用個別候選的失敗額度）、normalizeGroups 判「沒有對得上的成員序號」／跨組去重淨空、
-     * merge agent 宣告 layer=env/unclear 而整組被跳過。這些情況下對應的候選成員連 log 都沒有
+     * 對帳（2-C2）：三個位置會讓候選蒸發而完全不記帳——normalizeGroups 判「沒有對得上的成員
+     * 序號」／跨組去重淨空、merge agent 宣告 layer=env/unclear 而整組被跳過。這些情況下對應的候選成員連 log 都沒有
      * （normalizeGroups 只印組名，不印落單成員的序號）。⚠ 必須放在「groups 是否為空」的早退
      * 判斷**之前**：groups.length===0（merge 回的組全數被 normalizeGroups 判掉）本身就是
      * 「全部候選蒸發」的極端情況，早退在對帳之前會讓這整批連一次失敗都不記。
@@ -769,8 +791,9 @@ async function runNightlyFix({ startedBy = null } = {}) {
     // ⚠ 上限套在**統整後**的條數：統整前就砍會把「其實是同一件事的 8 筆」誤當成 8 條工作。
     const capped = groups.slice(0, NIGHTLY_FIX_MAX);
     const skipped = groups.length - capped.length;
-    console.log('[NIGHTLY-FIX] 候選 %d 筆 → 統整 %d 組 → 本批次執行 %d 組（截止 %s）',
-      candidates.length, groups.length, capped.length, deadlineAt.toISOString());
+    console.log('[NIGHTLY-FIX] 候選 %d 筆 → %s %d 組 → 本批次執行 %d 組（截止 %s）',
+      candidates.length, unmerged ? '未合併，逐條' : '統整', groups.length, capped.length,
+      deadlineAt.toISOString());
 
     const { rows: [run] } = await query(
       `INSERT INTO health_check_runs (status, window_days, started_by, cadence) VALUES ('running',$1,$2,$3) RETURNING id`,
