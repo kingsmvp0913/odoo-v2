@@ -405,7 +405,7 @@ window.ProjectChatView = Vue.defineComponent({
             <button class="btn btn-outline" title="附加檔案：圖片、PDF、Excel／Word、CSV／TXT（也可直接 Ctrl+V 貼上截圖）"
                     style="align-self:flex-end" @click="$refs.chatFileInput.click()" :disabled="sending">📎</button>
             <textarea v-model="newInput"
-                      placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行，可貼上截圖)"
+                      placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行，可貼上截圖或附檔案)"
                       style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:var(--fs-base);resize:none;height:60px"
                       @paste="onPaste"
                       @keydown.enter="handleEnter"></textarea>
@@ -433,7 +433,7 @@ window.ProjectChatView = Vue.defineComponent({
           </div>
           <!-- 挑圖是 AI 判的，但這個視窗的既有精神就是草稿可人工修改，圖沒理由是唯一不能改的 -->
           <div class="field-item" v-if="taskDraft.attachments && taskDraft.attachments.length" style="margin-top:var(--space-4)">
-            <label class="field-label">帶進任務的圖片</label>
+            <label class="field-label">帶進任務的附件</label>
             <div style="font-size:var(--fs-xs);color:var(--text-secondary);margin-bottom:6px">
               已勾選的是 AI 判斷後續開發需要看的；可自行增減。
             </div>

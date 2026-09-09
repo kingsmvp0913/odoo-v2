@@ -240,7 +240,7 @@
 </div>
 <div v-if="showNewChat" class="ui-next-new-chat">
 <input v-model="newChatTitle" placeholder="對話標題（選填）">
-<textarea ref="newChatText" v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可直接貼上截圖" @paste="onNewChatPaste"></textarea>
+<textarea ref="newChatText" v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可貼上截圖或附檔案" @paste="onNewChatPaste"></textarea>
 <div v-if="newChatPreviews.length" class="ui-next-new-chat-files">
 <span v-for="(url,index) in newChatPreviews" :key="index"><img v-if="url" :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><em v-else class="ui-next-file-chip"><ui-next-icon name="paperclip"/>{{ newChatFiles[index] && newChatFiles[index].name }}</em><button type="button" aria-label="移除待傳附件" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
 </div>

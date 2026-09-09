@@ -374,7 +374,7 @@
               <button class="ui-next-send" :disabled="sending || (!prompt.trim() && !files.length) || !projectId" :aria-label="sending ? '送出中' : '送出'"><ui-next-icon :name="sending ? 'square' : 'send'"/></button>
             </div>
           </form>
-          <small>Enter 送出，Shift + Enter 換行。附件沿用既有 Chat 的圖片上傳限制。</small>
+          <small>Enter 送出，Shift + Enter 換行。可附圖片、PDF、Excel／Word、CSV／TXT 等，單檔 25MB、最多 5 個。</small>
         </div>
       </section>
     `,
