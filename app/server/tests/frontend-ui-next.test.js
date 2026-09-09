@@ -387,8 +387,11 @@ describe("ui-next 平行介面", () => {
     expect(uiNext).toContain('class="usage-provider-logo codex"');
     expect(uiNext).toContain('剩 {{ row.remaining }}%');
     expect(uiNext).toContain('更新 {{ formatUsageUpdated(row.updatedAt) }}');
-    expect(uiNext).toContain("width: row.used + '%'");
+    // 條長必須跟著「剩 X%」走：畫 used 會讓用越多條越長，跟文字看起來相反。
+    expect(uiNext).toContain("width: row.remaining + '%'");
     expect(uiNext).toContain('<i><em :class="row.level"');
+    // 用量報表的額度條同一個契約，兩處要一致——否則點進去看到的長度跟側欄相反。
+    expect(viewSrc("TokenReport")).toContain(":style=\"{width:row.remaining+'%'}\"");
     expect(css).toContain('.ui-next-usage-row i{flex-basis:100%');
     expect(uiNext).not.toContain('<b>Usage</b>');
   });

@@ -398,7 +398,7 @@
 <span>剩 {{ row.remaining }}%</span>
 </div>
 <i>
-<em :class="usageLevel(row.used)" :style="{width:row.used+'%'}">
+<em :class="usageLevel(row.used)" :style="{width:row.remaining+'%'}">
 </em>
 </i>
 <small>重置 {{ usageTime(row.resetsAt) }} · 更新 {{ usageTime(row.updatedAt) }}<template v-if="row.stale"> · 這份快照可能已過期</template></small>
