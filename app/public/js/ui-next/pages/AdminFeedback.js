@@ -49,11 +49,8 @@
       bodyClamped(r) { return this.bodyLong[r.id] === true && !this.bodyOpen[r.id]; },
       // 整列可點：按鈕與附件縮圖各自 @click.stop，否則按「駁回」會順手把列也展開／收合。
       toggleRow(r) { this.bodyOpen = { ...this.bodyOpen, [r.id]: !this.bodyOpen[r.id] }; },
-      // 狀態欄要說的是「這筆現在卡在哪」，而不只是人工裁決的那個欄位值。翻譯掛掉時
-      // status 仍是 approved（見 feedback-triage.js：執行失敗刻意不動 status 以便重試），
-      // 只印「已核准」等於把失敗藏起來——使用者要的正是「失敗的那筆要看得出失敗」。
-      // 判準：rejectBack 與執行失敗都會清空／不寫 triage_title 而只留 triage_note，
-      // 所以「沒有 triage_title 但有 triage_note」就是這一輪翻譯沒成功。
+      // 狀態欄要說的是「這筆現在卡在哪」，而不只是人工裁決的那個欄位值：試過沒成、被機器踢
+      // 回來這兩種，status 欄位都看不出來，只印「已核准／待審核」等於把過程藏起來。
       stateOf(r) {
         const note = r.triage_note || '';
         // 夜間批次的機器退場（連續失敗達門檻／layer 不可自動修）：status 被寫回 'new'，
@@ -61,15 +58,10 @@
         // ⚠ 這個前綴與後端 retire-prefix.js 的 MACHINE_RETIRE_PREFIX 是兩份寫死的字面值，
         // 靠 frontend-nightly-retire-prefix.test.js 防漂移（前後端無共用模組機制是已裁決的
         // 取捨）。改字（含把全形冒號打成半形）會讓這個狀態靜默消失，那支測試會紅。
-        // 判斷放在最前面且不看 triage_title：retireToHuman 只覆寫 status 與 triage_note，
-        // 上一輪翻譯成功留下的 triage_title 還在，落到下面那個分支就會被漏掉。
+        // 「改碼那關讀完程式碼判定不該做」也走這條（no_change → retireToHuman），
+        // 所以拿掉翻譯關之後這仍是機器退場的唯一出口。
         if (note.startsWith('自動退場：')) {
           return { label: '自動退場，待人工', pill: 'pill-warn', hint: note };
-        }
-        if (!r.triage_title && note) {
-          return /^執行失敗/.test(note)
-            ? { label: '翻譯失敗', pill: 'pill-danger', hint: note }
-            : { label: '看不懂，已退回', pill: 'pill-warn', hint: note };
         }
         // 已核准但夜間批次試過沒成：只印「已核准」的話，這一列跟「今晚還沒輪到它」長得一模一樣。
         // 原因以前只進 console.error（本平台的 pipeline console 不落檔＝等於沒寫），要累計三次
@@ -346,15 +338,17 @@
                     <td colspan="6" style="background:var(--bg);text-align:left;padding:var(--space-3) var(--space-4)">
                       <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">原文</div>
                       <div class="hc-body" style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">{{ r.content }}</div>
-                      <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">翻譯結果</div>
+                      <!-- triage_* 只有健檢自己開的單才有值（health-check-runner 開單時直接填好）。
+                           使用者親手打的意見沒有這些欄位——2026-09-09 之後不再有 agent 翻譯它，
+                           原文就是下游真正讀的東西，所以沒有值時整塊不顯示，不是「還沒翻」。 -->
                       <template v-if="r.triage_title">
+                        <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">健檢整理的描述</div>
                         <div style="font-size:var(--fs-sm)"><strong>{{ r.triage_title }}</strong></div>
                         <div v-if="r.triage_layer" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ layerLabel[r.triage_layer] || r.triage_layer }}</div>
                         <div v-if="r.triage_detail" class="hc-body" style="font-size:var(--fs-sm)">{{ r.triage_detail }}</div>
                       </template>
-                      <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">尚未翻譯</div>
-                      <!-- triage_note 是「為什麼沒翻成功」的唯一說明（rejectBack 與執行失敗都只寫
-                           這欄、triage_title 留空）。⚠ 不可用 .pill：那是 inline-block 短標籤，
+                      <!-- triage_note 是「為什麼被退回」的唯一說明。
+                           ⚠ 不可用 .pill：那是 inline-block 短標籤，
                            欄位一窄就被壓成一個字一行的直條（實測「執行失敗：claude exited with
                            code 1」變成 6 行寬 1 字，就是使用者說的跑版）。 -->
                       <div v-if="r.triage_note" class="hc-body"

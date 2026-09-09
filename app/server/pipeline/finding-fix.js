@@ -4,6 +4,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { query } = require('../db');
+const { uploadRoot } = require('../lib/attachments');
 const { loadAgent } = require('./agent-loader');
 const { runClaude } = require('./claude-runner');
 const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
@@ -55,12 +56,14 @@ const DENY = [
   { re: /^app\/server\/pipeline\/nightly-fix\.js$/,  why: '夜間批次與三道保險絲' },
   { re: /^\.claude\/agents\/fix-review\.md$/,        why: '審這份修正的那個 agent 的判準' },
   { re: /^\.claude\/agents\/fix-verify\.md$/,        why: '合併前最後一道複檢的判準' },
-  { re: /^\.claude\/agents\/feedback-triage\.md$/,   why: '入口的翻譯與 understandable 門檻' },
-  // 上面四支擋的是 .md／守門本體，但那些判準有一半在 JS 裡：fix-review.js 的「解析不出來一律
-  // reject」與「prompt 不得帶 notes」契約、feedback-triage.js 的 understandable 判斷、
-  // retire-prefix.js（飢餓防線的前綴）、maintenance.js、ui-preview.js——.md 只是判準的一半，
-  // 守門碼的程式半邊不能被自動改掉。
-  { re: /^app\/server\/pipeline\/(fix-review|fix-verify|feedback-triage|ui-preview|maintenance|retire-prefix)\.js$/,
+  // ⚠ platform-fix.md 自己也在清單內：拿掉 feedback-triage 那一關（2026-09-09）之後，
+  // 「這條看不看得懂／該不該自動做」的判準整個搬進了它的提示詞，它已經是入口的守門本身。
+  // 讓它改自己的判準，等於讓守門的人自己決定門檻。
+  { re: /^\.claude\/agents\/platform-fix\.md$/,      why: '入口的「看不懂就不要硬做」門檻' },
+  // 上面幾支擋的是 .md／守門本體，但那些判準有一半在 JS 裡：fix-review.js 的「解析不出來一律
+  // reject」與「prompt 不得帶 notes」契約、retire-prefix.js（飢餓防線的前綴）、
+  // maintenance.js、ui-preview.js——.md 只是判準的一半，守門碼的程式半邊不能被自動改掉。
+  { re: /^app\/server\/pipeline\/(fix-review|fix-verify|feedback-merge|ui-preview|maintenance|retire-prefix)\.js$/,
     why: '守門碼的程式半邊——.md 只是判準的一半' },
 ];
 
@@ -229,7 +232,33 @@ async function removeWorktree(worktree) {
 /**
  * 跑一次修正嘗試（fire-and-forget，比照健檢）。
  */
-async function runFix(fixId, { findingId, startedBy = null } = {}) {
+/**
+ * 這一組修正裡，使用者當初附的截圖。
+ *
+ * ⚠ `file_path` 存的是「相對 uploadRoot()」的路徑，一定要 resolve 成絕對路徑；而且要明確授權
+ * 唯讀，否則 agent 會因「不得存取工作目錄外路徑」規則跳過不讀。措辭與 sync.js 的
+ * taskAttachmentNote 同源。少了這兩件事完全無訊號：agent 打不開圖，只會回報看不懂。
+ *
+ * 這段原本長在 feedback-triage.js（翻譯關讀圖、翻成文字再往下傳）。那一關拿掉之後若不搬過來，
+ * 使用者附的截圖就再也沒有任何 agent 看得到——而截圖往往是一則意見裡講得最清楚的部分。
+ */
+async function attachmentNote(members) {
+  const ids = (members || []).filter(m => m.source === 'feedback').map(m => m.row.id);
+  if (!ids.length) return '（無：這一組沒有使用者附圖）';
+  const atts = [];
+  for (const id of ids) {
+    const { rows } = await query(
+      'SELECT filename, mimetype, file_path FROM feedback_attachments WHERE feedback_id = $1 ORDER BY id',
+      [id]);
+    atts.push(...rows);
+  }
+  if (!atts.length) return '（無：這一組沒有使用者附圖）';
+  return '以下檔案可用 Read 工具讀取（圖片可直接檢視）。明確授權：讀取這些附件屬唯讀，'
+    + '不受「不得存取工作目錄外路徑」限制；僅可讀取，不得修改。\n'
+    + atts.map(a => `- ${a.filename}${a.mimetype ? `（${a.mimetype}）` : ''}：${path.resolve(uploadRoot(), a.file_path)}`).join('\n');
+}
+
+async function runFix(fixId, { findingId, startedBy = null, members = null } = {}) {
   let worktree = null;
   try {
     const { rows: [f] } = await query(
@@ -262,7 +291,8 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
       evidence: f.evidence || '（無）',
       action: f.rationale || '（未提供）',
       target_metric: f.target_metric || '（未填）',
-      metric_baseline: f.metric_baseline || '—'
+      metric_baseline: f.metric_baseline || '—',
+      attachments: await attachmentNote(members)
     });
 
     let text = '';
@@ -282,6 +312,11 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     const parsed = await parseAgentResult(cleaned, { parse: JSON.parse, ref: {}, userId: startedBy });
     const notes = (notesBlock || '').trim() || (parsed && parsed.notes) || '';
     const tests = String((parsed && parsed.tests) || '').trim().toLowerCase();
+    // 「這次改動要開哪一頁才看得到」——由改碼的人回報，存在修正列上（見 db.js 的 verify_route）。
+    // ⚠ 一律當成不可信的外部輸入過濾：只收 `#/` 開頭的平台 hash 路由。放行任意字串的話，
+    // 它會直接被送進 captureBeforeAfter 組成瀏覽器要開的網址（見 ui-preview.js）。
+    const route = String((parsed && parsed.verify_route) || '').trim();
+    const verifyRoute = /^#\/[\w\-/?=&.#]*$/.test(route) ? route : null;
 
     // 先拆掉 node_modules 的連結再看變更：`.gitignore` 的 `node_modules/` 帶尾斜線只匹配目錄，
     // 而這裡掛的是 symlink（git 視為檔案）＝不被忽略，會以 `?? app/node_modules` 現身而被判超出
@@ -328,10 +363,11 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
       // diff 已經存進 DB 了，工作區沒有留的價值；不收的話每次退步都永久多一份完整 checkout。
       await removeWorktree(worktree);
       await setStatus(fixId, 'rejected', {
-        notes, test_result: testResult, diff, worktree: null, reject_reason: `測試退步：${testResult}`
+        notes, test_result: testResult, diff, worktree: null,
+        verify_route: verifyRoute, reject_reason: `測試退步：${testResult}`
       });
     } else {
-      await setStatus(fixId, 'ready', { notes, test_result: testResult, diff });
+      await setStatus(fixId, 'ready', { notes, test_result: testResult, diff, verify_route: verifyRoute });
     }
   } catch (err) {
     console.error('[FIX]', err.message);

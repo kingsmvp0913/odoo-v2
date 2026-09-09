@@ -33,8 +33,8 @@ stage: fix_verify
 
 守門機制不能在它自己守的範圍裡。下面這些即使你認為它們有問題也不准改（平台的範圍檢查會擋，改了整份修正會被作廢，你的其餘工作一起白費）：
 
-- `app/server/pipeline/finding-fix.js`、`nightly-fix.js`、`fix-review.js`、`fix-verify.js`、`feedback-triage.js`、`ui-preview.js`、`maintenance.js`、`retire-prefix.js`
-- `.claude/agents/fix-review.md`、`fix-verify.md`、`feedback-triage.md`、`health-*.md`
+- `app/server/pipeline/finding-fix.js`、`nightly-fix.js`、`fix-review.js`、`fix-verify.js`、`feedback-merge.js`、`ui-preview.js`、`maintenance.js`、`retire-prefix.js`
+- `.claude/agents/fix-review.md`、`fix-verify.md`、`platform-fix.md`、`health-*.md`
 - `.claude/skills/healthCheck/` 底下任何檔
 
 可以動的只有 `app/server/`、`app/public/`、`.claude/agents/*.md`（扣除上面點名的）。

@@ -208,7 +208,9 @@ async function insertFinding(runId, row) {
 //
 // user_id 留 NULL＝提交者是 AI 健檢（前端據此顯示，見 AdminFeedback.js）。
 // triage_* 直接用健檢的產出填好：health-auditor 的輸出本來就是「標題／細節／根因層／建議做法」
-// 那個形狀，跟 feedback-triage 要翻出來的東西一模一樣，再花一次 opus 去翻是白燒。
+// 那個形狀。⚠ 2026-09-09 拿掉翻譯關之後，**這裡是這四個欄位僅存的寫入點**——夜間批次讀它們時
+// 一律 COALESCE 回 content（見 nightly-fix.js 的 fetchApprovedFeedback），所以不填也不會壞，
+// 只是下游會拿到診斷全文的第一行當標題，不如這裡填的 label 精準。
 // finding_id 連回來源，也是「這條已經開過單」的唯一憑據——nightly-fix 的 fetchHealthCandidates
 // 靠它排除掉已開單的提案，否則同一條會被當成兩個候選跑兩遍。
 async function openFeedbackForFinding(findingId, row) {

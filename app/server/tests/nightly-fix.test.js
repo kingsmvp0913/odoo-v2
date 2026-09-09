@@ -7,10 +7,7 @@
 // 用真實 Date.now() 寫測試的話，00:00–01:59 那兩小時綠、其餘時段紅——本 repo 的 cron.test.js
 // 剛因為同一個病紅過。每一支都自己設時鐘，不依賴跑測試的當下幾點。
 jest.mock('../pipeline/runner', () => ({ getInflightInfo: jest.fn(() => []) }));
-jest.mock('../pipeline/feedback-triage', () => ({
-  triageOne: jest.fn(),
-  mergeCandidates: jest.fn(),
-}));
+jest.mock('../pipeline/feedback-merge', () => ({ mergeCandidates: jest.fn() }));
 jest.mock('../pipeline/fix-review', () => ({ reviewFix: jest.fn() }));
 // 合併前複檢：審核過了還要再過這一關才 adopt（見 pipeline/fix-verify.js）。沒 mock 的話它會
 // 真的去 spawn claude CLI——新增會被編排器呼叫的外部依賴一定要補 mock，否則整支測試不再 hermetic
@@ -29,7 +26,7 @@ jest.mock('child_process', () => ({ execFile: (...args) => mockExecFile(...args)
 
 const { newDb } = require('pg-mem');
 const { getInflightInfo } = require('../pipeline/runner');
-const { triageOne, mergeCandidates } = require('../pipeline/feedback-triage');
+const { mergeCandidates } = require('../pipeline/feedback-merge');
 const { reviewFix } = require('../pipeline/fix-review');
 const { verifyFix } = require('../pipeline/fix-verify');
 const { runFix, adoptFix, applyFix, removeWorktree, selfContainerName } = require('../pipeline/finding-fix');
@@ -104,19 +101,6 @@ async function insertHealthProposal({
   return f.id;
 }
 
-// triageOne 預設：把 feedback 的 layer 填成指定值並標可理解
-function stubTriage(layer = 'code', understandable = true) {
-  triageOne.mockImplementation(async (feedbackId) => {
-    if (!understandable) return { ok: true, understandable: false };
-    await dbModule.query(
-      `UPDATE feedback SET triage_title='翻譯後標題', triage_detail='翻譯後描述',
-              triage_layer=$2, triage_action='建議修法', verify_route='#/tasks' WHERE id=$1`,
-      [feedbackId, layer]
-    );
-    return { ok: true, understandable: true };
-  });
-}
-
 // 一組一筆：把每個候選各自成一組（不合併）
 const oneGroupEach = async (items) => items.map(it => ({
   member_ids: [it.id], title: it.title, detail: it.detail,
@@ -150,11 +134,10 @@ test('候選篩選：健檢 low 不入選／medium 入選／layer=env 不入選�
   const envLayer = await insertHealthProposal({ layer: 'env', severity: 'high', label: 'env的' });
   await insertFeedback();       // 意見沒有 severity 這個概念，要能入選
 
-  stubTriage('code');
   stubHappyPath();
   mergeCandidates.mockImplementation(async (items) => {
     const titles = items.map(it => `${it.source}:${it.title}`);
-    expect(titles).toEqual(expect.arrayContaining(['finding:medium的', 'feedback:翻譯後標題']));
+    expect(titles).toEqual(expect.arrayContaining(['finding:medium的', 'feedback:意見內容']));
     expect(titles).not.toContain('finding:low的');
     expect(titles).not.toContain('finding:env的');
     expect(items.length).toBe(2);            // 只有這兩筆，不多不少
@@ -194,89 +177,114 @@ test('候選篩選：status 非 approved／kind 非 proposal 的健檢列不入�
   expect(result.attempted).toBe(1);
 });
 
-test('候選篩選：意見回饋 status 非 approved 不入選（連 triage 都不該跑，那是要花錢的）', async () => {
+test('候選篩選：意見回饋 status 非 approved 不入選（進了就是一輪 opus 的錢）', async () => {
   await insertFeedback({ status: 'new' });
   await insertFeedback({ status: 'rejected' });
   await insertFeedback({ status: 'done' });
-  stubTriage('code');
   stubHappyPath();
 
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
-  expect(triageOne).not.toHaveBeenCalled();
+  expect(mergeCandidates).not.toHaveBeenCalled();
   expect(result.attempted).toBe(0);
 });
 
-test('triage 回 understandable:false → 剔除，不進統整', async () => {
+// 2026-09-09 拿掉了「先把原文翻成規格」那一關（feedback-triage）。這一支是那次改動的主錨：
+// 使用者原文必須**原樣**走到統整，中間沒有任何 agent 改寫它。翻譯關存在時，下游讀到的是
+// 翻譯後的句子；一旦翻錯，錯誤會被當成事實傳到底，而原文再也沒有人看。
+test('使用者原文原樣進統整：不經任何翻譯改寫', async () => {
+  await insertFeedback({ content: '任務列表的日期欄在深色模式下看不到' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => {
+    expect(items).toHaveLength(1);
+    expect(items[0].detail).toBe('任務列表的日期欄在深色模式下看不到');   // 一字不改
+    return oneGroupEach(items);
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(result.attempted).toBe(1);
+});
+
+// 短標取第一行而不是前 N 字：使用者多半第一行講結論、後面補細節。而 detail 一定是完整原文——
+// 截斷的那半往往正是講清楚「哪一頁、什麼情況」的部分，少了它改碼的人只能猜。
+test('多行原文：title 取第一行當短標，detail 仍是完整原文', async () => {
+  await insertFeedback({ content: '匯出按鈕沒反應\n在專案設定頁，Chrome，按了完全沒事' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => {
+    expect(items[0].title).toBe('匯出按鈕沒反應');
+    expect(items[0].detail).toBe('匯出按鈕沒反應\n在專案設定頁，Chrome，按了完全沒事');
+    return oneGroupEach(items);
+  });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(mergeCandidates).toHaveBeenCalled();
+});
+
+// 健檢自己開的單（openFeedbackForFinding）在 triage_* 已經填好了——它的產出本來就是
+// 「標題／細節／建議做法」那個形狀。有值就沿用，不要用 content 的第一行去蓋掉一個更好的標題。
+test('健檢開的單：沿用已填好的 triage_* 當標題與描述', async () => {
+  const fbId = await insertFeedback({ content: '診斷全文' });
+  await dbModule.query(
+    `UPDATE feedback SET triage_title='健檢標題', triage_detail='健檢細節', triage_action='健檢修法'
+      WHERE id=$1`, [fbId]);
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => {
+    expect(items[0].title).toBe('健檢標題');
+    expect(items[0].detail).toBe('健檢細節');
+    return oneGroupEach(items);
+  });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(mergeCandidates).toHaveBeenCalled();
+});
+
+// 意見沒有人幫它標 layer（拿掉翻譯關之後就是這個現況）。舊碼的 layer 閘門會把每一條意見都判成
+// 「不在可自動修範圍」而整批消失＝整條通道對意見回饋永遠 no-op。而 merge 只看得到候選清單、
+// 沒讀過任何程式碼，它說 env／unclear 只是猜測，不該用來終結一條使用者親手提的意見——
+// 「該不該做」改由讀得到程式碼的 platform-fix 判（判不該做→no_change→立即退場）。
+test('merge 對含意見的組回 layer=unclear → 仍然送去改，不在這裡攔掉', async () => {
   await insertFeedback();
-  stubTriage('code', false);
   stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => [
+    { member_ids: [items[0].id], title: 't', detail: 'd', action: 'a', layer: 'unclear' },
+  ]);
 
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
-
-  expect(triageOne).toHaveBeenCalled();       // 正向錨：真的跑了 triage
-  expect(mergeCandidates).not.toHaveBeenCalled();
-  expect(result.attempted).toBe(0);
+  expect(result.attempted).toBe(1);
+  expect(runFix).toHaveBeenCalled();
 });
 
-// ⚠ 這一支與上面的 understandable:false 刻意分開：兩者在舊碼是同一條路（都靜默 continue），
-// 而那正是 2026-09-04 整條改善通道停擺的原因——triage 的 CLI 連 5 次沒跑起來，5 筆候選全被
-// 當成「看不懂」退回 new，下一輪只撈 approved 就再也撈不到它們，畫面上零訊號。
-// 執行失敗不是這條意見的錯：status 要維持 approved 等下一晚重試，同時記一次飢餓防線，
-// 讓「永遠跑不起來的 triage」在達門檻後退回人工，而不是每晚白燒一次額度。
-test('triage 回 transient（CLI 沒跑起來）→ 維持 approved 等重試，且記一次 fix_attempts', async () => {
+// 反面錨：純健檢提案的組維持原行為。它們的 layer 由 health-auditor 標好、入選時已過
+// inAutoFixScope，merge 明講 env 就是「這條自動改不動」，照認。
+test('merge 對純健檢提案的組回 layer=env → 照舊攔掉', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  mergeCandidates.mockImplementation(async (items) => [
+    { member_ids: [items[0].id], title: 't', detail: 'd', action: 'a', layer: 'env' },
+  ]);
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(result.attempted).toBe(0);
+  expect(runFix).not.toHaveBeenCalled();
+});
+
+// 使用者附的截圖常常是一則意見裡講得最清楚的部分。翻譯關是原本唯一會讀圖的地方（讀完翻成
+// 文字往下傳），拿掉之後若沒把附件接到 platform-fix，圖就再也沒有任何 agent 看得到——
+// 而且完全無訊號：畫面正常、測試全綠，只是改碼的人從此看不到證據。
+test('意見的附件要傳給改碼那一關（members 帶下去，否則沒人讀得到圖）', async () => {
   const fbId = await insertFeedback();
-  triageOne.mockResolvedValue({ ok: false, understandable: false, transient: true });
   stubHappyPath();
 
-  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  await nightlyFix.runNightlyFix({ startedBy: userId });
 
-  expect(triageOne).toHaveBeenCalled();
-  expect(mergeCandidates).not.toHaveBeenCalled();
-  expect(result.attempted).toBe(0);
-  const { rows: [fb] } = await dbModule.query(
-    'SELECT status, fix_attempts FROM feedback WHERE id=$1', [fbId]);
-  expect(fb.status).toBe('approved');   // 沒被退回 new＝下一晚還撈得到
-  expect(fb.fix_attempts).toBe(1);      // 記帳＝不會無限重試
-});
-
-test('triage 之後 layer=env → 立即退場（status=new＋triage_note），不是留在原地不動', async () => {
-  const fbId = await insertFeedback();
-  stubTriage('env');
-  stubHappyPath();
-
-  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
-
-  expect(triageOne).toHaveBeenCalled();
-  expect(mergeCandidates).not.toHaveBeenCalled();
-  expect(result.attempted).toBe(0);
-  // layer=env 是確定性結果（同一份原文不會突然變 code），一次就退場，不佔用重試額度、
-  // 不是靜靜留在 approved 不動——那樣使用者端會永遠停在「已核准」卻什麼都不會發生。
-  const { rows: [fb] } = await dbModule.query(
-    'SELECT status, triage_note, fix_attempts FROM feedback WHERE id=$1', [fbId]);
-  expect(fb.status).toBe('new');
-  expect(fb.fix_attempts).toBe(0);
-  expect(fb.triage_note).toContain('layer=env');
-});
-
-test('triage 之後 layer=env → 連跑三晚只付一次 triage 的錢（退場後不再是候選）', async () => {
-  await insertFeedback();
-  stubTriage('env');
-  stubHappyPath();
-
-  await nightlyFix.runNightlyFix({ startedBy: userId });          // 第一晚：立即退場
-  jest.clearAllMocks();
-  stubTriage('env');
-  stubHappyPath();
-  await nightlyFix.runNightlyFix({ startedBy: userId });          // 第二晚
-  jest.clearAllMocks();
-  stubTriage('env');
-  stubHappyPath();
-  const third = await nightlyFix.runNightlyFix({ startedBy: userId });   // 第三晚
-
-  // 退場後 status='new'，不再是 fetchApprovedFeedback 的候選（該函式只撈 status='approved'）
-  expect(triageOne).not.toHaveBeenCalled();
-  expect(third.attempted).toBe(0);
+  expect(runFix).toHaveBeenCalledWith(
+    expect.any(Number),
+    expect.objectContaining({
+      members: expect.arrayContaining([
+        expect.objectContaining({ source: 'feedback', row: expect.objectContaining({ id: fbId }) }),
+      ]),
+    })
+  );
 });
 
 test('意見回饋撞號不會被誤認成健檢提案：兩張表各自 SERIAL，靠批次序號分辨', async () => {
@@ -295,7 +303,6 @@ test('意見回饋撞號不會被誤認成健檢提案：兩張表各自 SERIAL�
   const findingId = hcfRow.id;
   expect(fbId).toBe(findingId);              // 撞號前提成立，這支測試才有意義
 
-  stubTriage('code');
   stubHappyPath();
   // 統整成一組，只收「意見」那一筆（序號 1）
   mergeCandidates.mockImplementation(async (items) => {
@@ -403,18 +410,20 @@ test('merge agent 把同一組的成員全撞號（去重後剩空組）→ 整�
   logSpy.mockRestore();
 });
 
-test('統整沒填 verify_route → 沿用組內意見成員的值（否則截圖審查對意見來源永遠不啟動）', async () => {
+// 截圖要開哪一頁不再經過這裡：改由 platform-fix 改完碼自己回報，寫進 finding_fixes.verify_route
+// （見 finding-fix.js／fix-review.js）。舊做法讀來源列的欄位，而 health_check_findings 根本沒有
+// 那個欄位 ⇒ 健檢提案就算改的是前端也永遠拍不到對照圖。這裡釘住「編排器不再自己組路由」。
+test('編排器不再傳 verify_route 給審核（路由改由改碼那關回報）', async () => {
   await insertFeedback();
-  stubTriage('code');                        // triage 會寫入 verify_route='#/tasks'
   stubHappyPath();
   mergeCandidates.mockImplementation(async (items) => [
-    { member_ids: [items[0].id], title: 't', detail: 'd', action: 'a', layer: 'code', verify_route: '' },
+    { member_ids: [items[0].id], title: 't', detail: 'd', action: 'a', layer: 'code' },
   ]);
 
   await nightlyFix.runNightlyFix({ startedBy: userId });
 
   expect(reviewFix).toHaveBeenCalled();
-  expect(reviewFix.mock.calls[0][1].verify_route).toBe('#/tasks');
+  expect(reviewFix.mock.calls[0][1].verify_route).toBeUndefined();
 });
 
 // --- 修正鏈 ---
@@ -436,7 +445,6 @@ test('測試沒過（status 非 ready）→ 不呼叫 adoptFix', async () => {
 
 test('修正結果為 no_change（platform-fix 判斷不該做）→ 立即退場，不是「未通過測試」，也不佔重試額度', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   runFix.mockImplementation(async (fixId) => {
     await dbModule.query(`UPDATE finding_fixes SET status='no_change' WHERE id=$1`, [fixId]);
@@ -599,7 +607,6 @@ test('cli_push_user_id 為 null → 停在 adopted、不呼叫 applyFix、來源
 
 test('合併成功 → 意見標 done 並寫回 finding_id；健檢提案標 done 並記 applied_at', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
 
   await nightlyFix.runNightlyFix({ startedBy: userId });
@@ -632,7 +639,6 @@ test('健檢來源沿用既有 finding、不重建；合併後標 done ＋ appli
 
 test('批次自建的 finding 不會成為隔晚候選（明確帶 status=done，不吃 DEFAULT）', async () => {
   await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   await nightlyFix.runNightlyFix({ startedBy: userId });
 
@@ -644,7 +650,6 @@ test('批次自建的 finding 不會成為隔晚候選（明確帶 status=done�
 
 test('合併失敗 → 意見不標 done，下一晚還撈得到（不會靜默吃掉使用者的意見）', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   reviewFix.mockResolvedValue({ verdict: 'reject', reason: '不行' });
 
@@ -686,10 +691,9 @@ test('23:00 起跑不會被誤擋——deadline 是「起點之後的下一個 0
   expect(result.attempted).toBe(1);
 });
 
-test('token 超預算 → 不再開新的一條（開跑前、連 triage 都不跑）', async () => {
+test('token 超預算 → 不再開新的一條（開跑前擋，一個 agent 都不叫）', async () => {
   await insertFeedback();
   await insertHealthProposal({ severity: 'high' });
-  stubTriage('code');
   stubHappyPath();
   // 批次起點固定在 2020，token_usage 的 recorded_at 走真實 NOW() ⇒ 恆落在起點之後，不靠毫秒競賽
   await dbModule.query(
@@ -698,8 +702,7 @@ test('token 超預算 → 不再開新的一條（開跑前、連 triage 都不�
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
   expect(result).toMatchObject({ attempted: 0, applied: 0, reason: 'token-budget' });
-  expect(triageOne).not.toHaveBeenCalled();  // triage 也要花錢，保險絲要擋在它前面
-  expect(mergeCandidates).not.toHaveBeenCalled();
+  expect(mergeCandidates).not.toHaveBeenCalled();   // 統整也要花錢，保險絲要擋在它前面
   expect(runFix).not.toHaveBeenCalled();
 });
 
@@ -830,7 +833,6 @@ test('查不到容器名 → 不重啟也不拋錯（碼已合併，留 log 讓�
 
 test('失敗一次 → 只累加次數，狀態不動（下一晚還會再試）', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   reviewFix.mockResolvedValue({ verdict: 'reject', reason: '還是不行' });
 
@@ -847,7 +849,6 @@ test('連續失敗達門檻 → 意見退回人工（status=new＋triage_note �
   // verdict_note）。不補的話這支測試永遠是空心的：兩欄本來就預設 NULL，不管退場邏輯清不清都會通過。
   await dbModule.query('UPDATE feedback SET decided_by=$2, decided_at=NOW(), verdict_note=$3 WHERE id=$1',
     [fbId, userId, '管理員說：這個要做']);
-  stubTriage('code');
   stubHappyPath();
   reviewFix.mockResolvedValue({ verdict: 'reject', reason: '改法會弄壞別的東西' });
 
@@ -889,27 +890,24 @@ test('連續失敗達門檻 → 健檢提案退回 pending，且清掉 decided_b
   expect(f.decided_at).toBeNull();
 });
 
-test('退場後不再是候選：下一晚連 triage 都不會為它花錢', async () => {
+test('退場後不再是候選：下一晚連統整都不會為它花錢', async () => {
   const fbId = await insertFeedback();
   await dbModule.query('UPDATE feedback SET fix_attempts=2 WHERE id=$1', [fbId]);
-  stubTriage('code');
   stubHappyPath();
   reviewFix.mockResolvedValue({ verdict: 'reject', reason: '不行' });
   await nightlyFix.runNightlyFix({ startedBy: userId });   // 第一晚：退場
 
   jest.clearAllMocks();
-  stubTriage('code');
   stubHappyPath();
   const second = await nightlyFix.runNightlyFix({ startedBy: userId });  // 第二晚
 
-  expect(triageOne).not.toHaveBeenCalled();
+  expect(mergeCandidates).not.toHaveBeenCalled();
   expect(second.attempted).toBe(0);
 });
 
 test('停在 adopted（沒設推送身分）不算失敗額度：一次設定疏漏不該燒掉每一條的退場額度', async () => {
   await dbModule.query('UPDATE teams_settings SET cli_push_user_id = NULL WHERE id=1');
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
 
   await nightlyFix.runNightlyFix({ startedBy: userId });
@@ -947,7 +945,6 @@ test('保險絲檢查自己拋錯 → 例外逃出迴圈，但 health_check_runs
 
 test('markGroupDone 持續拋錯 → 不計入 applied、不誤記失敗次數，且立即退場（不是永遠停在 approved 每晚重跑）', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   // 合併成功之後、標記之前，把 finding 抽掉 ⇒ markGroupDone 寫 feedback.finding_id 會撞 FK。
   // 用 mockImplementation（非 Once）模擬「持續拋錯」——這是 F1 症狀換了條路徑長回來的重點：
@@ -974,7 +971,6 @@ test('markGroupDone 持續拋錯 → 不計入 applied、不誤記失敗次數�
 
 test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不會每晚重付 triage、重跑兩次全套測試、重新 merge、重啟', async () => {
   await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   applyFix.mockImplementation(async () => {
     await dbModule.query('DELETE FROM health_check_findings');
@@ -986,26 +982,24 @@ test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不�
   expect(restartCalls()).toHaveLength(1);
 
   jest.clearAllMocks();
-  stubTriage('code');
   stubHappyPath();
   applyFix.mockImplementation(async () => {
     await dbModule.query('DELETE FROM health_check_findings');
     return { merged: true, restarted: false };
   });
   const second = await nightlyFix.runNightlyFix({ startedBy: userId });    // 第二晚：已退場，不再是候選
-  expect(triageOne).not.toHaveBeenCalled();
+  expect(mergeCandidates).not.toHaveBeenCalled();
   expect(second.attempted).toBe(0);
   expect(restartCalls()).toHaveLength(0);   // 這一晚沒有新碼要合併，不該重啟
 
   jest.clearAllMocks();
-  stubTriage('code');
   stubHappyPath();
   applyFix.mockImplementation(async () => {
     await dbModule.query('DELETE FROM health_check_findings');
     return { merged: true, restarted: false };
   });
   const third = await nightlyFix.runNightlyFix({ startedBy: userId });     // 第三晚：同上
-  expect(triageOne).not.toHaveBeenCalled();
+  expect(mergeCandidates).not.toHaveBeenCalled();
   expect(third.attempted).toBe(0);
   expect(restartCalls()).toHaveLength(0);
 });
@@ -1013,7 +1007,6 @@ test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不�
 test('materializeGroup 本身拋錯 → 仍計入 attempted（否則摘要行低報），來源成員仍要記失敗次數', async () => {
   const fbId1 = await insertFeedback({ content: '第一筆' });
   const fbId2 = await insertFeedback({ content: '第二筆' });
-  stubTriage('code');
   stubHappyPath();
   // 兩筆各自成組。第一組完整跑完（含 markGroupDone）之後，才把批次共用的 health_check_runs
   // 那一列砍掉；第二組進 materializeGroup 時 INSERT health_check_findings 會因為 run_id
@@ -1122,7 +1115,6 @@ test('mergeCandidates 回 [] → 不歸零，改逐條各自成一組照跑，�
 test('逐條退路帶的是各候選自己的 title／detail／action 與 layer', async () => {
   await insertFeedback({ content: '第一則' });
   await insertFeedback({ content: '第二則' });
-  stubTriage('code');
   stubHappyPath();
   mergeCandidates.mockResolvedValue([]);
   const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -1132,11 +1124,11 @@ test('逐條退路帶的是各候選自己的 title／detail／action 與 layer'
   expect(result.attempted).toBe(2);       // 兩筆各成一組，不會被併掉也不會互相蓋掉
   const { rows } = await dbModule.query(
     'SELECT agent_label, diagnosis, layer FROM health_check_findings ORDER BY id DESC LIMIT 2');
-  rows.forEach(r => {
-    expect(r.agent_label).toBe('翻譯後標題');   // triage 寫進 feedback 的值，原樣帶下去
-    expect(r.diagnosis).toBe('翻譯後描述');
-    expect(r.layer).toBe('code');         // 沿用成員 layer（入選時已通過同一道篩選）
-  });
+  // 使用者原文原樣帶下去：短標＝第一行，描述＝完整原文
+  expect(rows.map(r => r.agent_label).sort()).toEqual(['第一則', '第二則']);
+  expect(rows.map(r => r.diagnosis).sort()).toEqual(['第一則', '第二則']);
+  // 意見沒有 layer（沒有人幫它標），落到 platform-fix 去判——不是在這裡被攔掉
+  rows.forEach(r => expect(r.layer).toBeNull());
   errSpy.mockRestore();
 });
 
@@ -1365,7 +1357,6 @@ const adoptForReal = () => adoptFix.mockImplementation(async (fixId) => {
 
 test('applyFix 拋錯 → 不燒失敗額度（那不是這份 diff 的錯）', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   adoptForReal();
   applyFix.mockRejectedValue(new Error('主 clone 有未提交的變更，先處理再套用'));
@@ -1381,7 +1372,6 @@ test('applyFix 拋錯 → 不燒失敗額度（那不是這份 diff 的錯）', 
 
 test('applyFix 拋錯 → 原因寫進 last_attempt_note（不能只留在 console）', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   adoptForReal();
   applyFix.mockRejectedValue(new Error('主 clone 有未提交的變更，先處理再套用'));
@@ -1398,7 +1388,6 @@ test('applyFix 拋錯 → 原因寫進 last_attempt_note（不能只留在 conso
 
 test('上一批停在 adopted 的 → 下一批只補合併，不重跑 platform-fix', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   adoptForReal();
   applyFix.mockRejectedValue(new Error('主 clone 有未提交的變更，先處理再套用'));
@@ -1406,7 +1395,6 @@ test('上一批停在 adopted 的 → 下一批只補合併，不重跑 platform
   expect(runFix).toHaveBeenCalledTimes(1);
 
   jest.clearAllMocks();
-  stubTriage('code');
   stubHappyPath();                                          // 第二晚：主 clone 乾淨了
   const second = await nightlyFix.runNightlyFix({ startedBy: userId });
 
@@ -1428,7 +1416,6 @@ test('健檢提案開的單合併後 → 來源提案一起標 done，不會變�
   const { rows: [fb] } = await dbModule.query(
     `INSERT INTO feedback (user_id, content, status, finding_id) VALUES ($1,'診斷內容','approved',$2) RETURNING id`,
     [userId, findingId]);
-  stubTriage('code');
   stubHappyPath();
 
   await nightlyFix.runNightlyFix({ startedBy: userId });   // 第一次：修好、合併
@@ -1441,7 +1428,6 @@ test('健檢提案開的單合併後 → 來源提案一起標 done，不會變�
   expect(src.status).toBe('done');
 
   jest.clearAllMocks();
-  stubTriage('code');
   stubHappyPath();
   const second = await nightlyFix.runNightlyFix({ startedBy: userId });
   expect(second.attempted).toBe(0);     // 第二次一條都不該跑
@@ -1451,7 +1437,6 @@ test('健檢提案開的單合併後 → 來源提案一起標 done，不會變�
 // --- 處理中是哪一筆 ---
 test('批次跑到哪一筆，那一列就帶 batch_stage；整批結束後清空', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   // 在最耗時的那一步（改碼＋跑測試）當場觀測：這是使用者盯著畫面的那幾十分鐘
   let seen = null;
@@ -1471,7 +1456,6 @@ test('批次跑到哪一筆，那一列就帶 batch_stage；整批結束後清�
 
 test('這一條中途拋錯 → batch_stage 照樣收掉（不可以停在轉圈）', async () => {
   const fbId = await insertFeedback();
-  stubTriage('code');
   stubHappyPath();
   runFix.mockRejectedValue(new Error('platform-fix 掛了'));
 

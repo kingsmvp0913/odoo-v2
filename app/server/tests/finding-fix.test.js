@@ -71,10 +71,12 @@ describe('DENY：守門相關的檔不准被自動改', () => {
     'app/server/pipeline/finding-fix.js',
     'app/server/pipeline/nightly-fix.js',
     '.claude/agents/fix-review.md',
-    '.claude/agents/feedback-triage.md',
+    // 拿掉 feedback-triage 那一關（2026-09-09）之後，「這條看不看得懂／該不該自動做」的判準
+    // 整個搬進了 platform-fix 的提示詞：它已經是入口的守門本身，不能自己改自己的門檻。
+    '.claude/agents/platform-fix.md',
     // 1-C3：這五支是守門碼的程式半邊——.md 只是判準的一半，程式裡的判準同樣不能被自動改掉
     'app/server/pipeline/fix-review.js',
-    'app/server/pipeline/feedback-triage.js',
+    'app/server/pipeline/feedback-merge.js',
     'app/server/pipeline/ui-preview.js',
     'app/server/pipeline/maintenance.js',
     'app/server/pipeline/retire-prefix.js',

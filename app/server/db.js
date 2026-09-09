@@ -554,12 +554,15 @@ async function migrate() {
       user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
       content       TEXT NOT NULL,                 -- 使用者原文，永不覆寫
       status        TEXT NOT NULL DEFAULT 'new',   -- new | approved | rejected | done
-      triage_title  TEXT,                          -- 以下由 feedback-triage agent 夜間填
+      -- triage_* ：2026-09-09 拿掉 feedback-triage 那一關之後，已**沒有任何 agent** 會寫這四欄。
+      -- 剩兩個來源：health-check-runner 開單時直接填（健檢的產出本來就是這個形狀），
+      -- 以及那一關還在時留下的舊列。夜間批次讀它們時一律 COALESCE 回 content。
+      triage_title  TEXT,
       triage_detail TEXT,
       triage_layer  TEXT,                          -- code | prompt | observability | env | unclear
       triage_action TEXT,
-      triage_note   TEXT,                          -- 看不懂時寫「為什麼」，顯示在管理頁
-      verify_route  TEXT,                          -- 截圖審查要開哪一頁（推不出來就留空）
+      triage_note   TEXT,                          -- 退場原因（機器或人工），顯示在管理頁
+      verify_route  TEXT,                          -- 已停用：路由改存 finding_fixes.verify_route
       finding_id    INTEGER REFERENCES health_check_findings(id) ON DELETE SET NULL,
       decided_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
       decided_at    TIMESTAMPTZ,
@@ -1101,6 +1104,10 @@ async function migrate() {
     // 這一關是合併進 master 前的最後一道，且同樣無人監督——沒有這欄，事後只查得到「它擋了」
     // 或「它放行了」，查不到為什麼。
     { table: 'finding_fixes', col: 'verify_notes', sql: 'ALTER TABLE finding_fixes ADD COLUMN verify_notes TEXT' },
+    // 截圖審查要開哪一頁：由 platform-fix 改完碼之後自己回報（它剛動過那個檔，最清楚是哪一頁）。
+    // ⚠ 存在**修正列**而不是來源列，是為了讓截圖不再挑來源：`health_check_findings` 沒有這個欄位，
+    // 舊做法只有 feedback 給得出路由 ⇒ 健檢提案動到前端也永遠拍不到對照圖。
+    { table: 'finding_fixes', col: 'verify_route', sql: 'ALTER TABLE finding_fixes ADD COLUMN verify_route TEXT' },
     // 「上一次自動修正試到哪、為什麼沒過」。⚠ 在此之前這個原因只進 console.error，而本平台的
     // pipeline console 不落任何檔（見 rules）＝等於沒寫：畫面上只看得到 fix_attempts 這個裸計數，
     // 使用者看到的是自己核准的意見一直停在「已核准」，完全不知道昨晚試過、更不知道卡在哪。

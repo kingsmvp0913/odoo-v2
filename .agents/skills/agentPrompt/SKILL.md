@@ -14,7 +14,7 @@ description: Use when editing pipeline agent prompts (.claude/agents/*.md), shar
 - 共用片段的 placeholder 一樣算數：`source-routing.md` 用 `{{repo_paths}}`/`{{main_branch}}`/`{{git_branch}}`；`cs-capability.md` 用 `{{project_name}}`/`{{repo_paths}}`。
 
 ## 鐵則 2：主輸出契約（`<result>` 標籤）
-- **有 `<result>` 契約**（下游用 `agent-result.js` 解析，格式各異——analysis 是 YAML、多數是 JSON）：analysis-project、analysis-reject、chat-to-task、coding-project、cs、feedback-triage、feedback-merge、fix-review、health-auditor、health-task、library、merge-explain、qa、qa-retry、reject-classifier、respec-patch、spec-review、wiki-drift-classifier。
+- **有 `<result>` 契約**（下游用 `agent-result.js` 解析，格式各異——analysis 是 YAML、多數是 JSON）：analysis-project、analysis-reject、chat-to-task、coding-project、cs、feedback-merge、fix-review、health-auditor、health-task、library、merge-explain、qa、qa-retry、reject-classifier、respec-patch、spec-review、wiki-drift-classifier。
 - **沒有、也不得擅自加上**：`merge`（吐裸檔案內容）、`playwright`（吐說明文字）、`chat`（自然語言回覆）、`deploy-fix`。加了 `<result>` 會破壞該關解析。
 - 改契約格式（欄位增減）必須同步改 JS 解析端與對應測試；只改措辭不用。
 

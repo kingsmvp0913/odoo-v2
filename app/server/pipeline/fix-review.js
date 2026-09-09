@@ -10,7 +10,7 @@ const { captureBeforeAfter } = require('./ui-preview');
 /**
  * fix-review.js — 第二道 AI 審核：跑 fix-review agent，判一份 finding_fixes 修正該不該套用。
  *
- * 跟 finding-fix.js／feedback-triage.js 同一套組合（loadAgent → render → runClaude →
+ * 跟 finding-fix.js／feedback-merge.js 同一套組合（loadAgent → render → runClaude →
  * extractTaggedBlock → parseAgentResult），差別是這裡的輸出只有一個 verdict、不改任何程式碼。
  *
  * ⚠ prompt 不得帶 finding_fixes.notes（platform-fix 自己寫的辯護詞）——已實測的失敗模式是
@@ -32,14 +32,14 @@ function touchedFiles(diff) {
 }
 
 /**
- * 要不要截圖：動到 `app/public/` 且這條提案講得出「要開哪一頁」才截。
+ * 要不要截圖：動到 `app/public/` 且改碼的人講得出「要開哪一頁」才截。
  *
- * ⚠ `health_check_findings` **沒有** `verify_route` 欄（只有 `feedback` 有，見 db.js:508）
- * ⇒ **健檢提案來源永遠不截圖**。這是刻意的：健檢提案多半是 prompt／觀測性類的改動，本來就
- * 沒有對應畫面；要截也不知道該開哪一頁。不是漏寫。
+ * 路由來自 `finding_fixes.verify_route`——**改碼的那一關（platform-fix）自己回報的**，
+ * 不再看來源列。舊做法讀 `feedback.verify_route`，而 `health_check_findings` 根本沒有這個欄位
+ * ⇒ 健檢提案就算改的是前端也永遠拍不到對照圖。改存修正列之後截圖不再挑來源，
+ * 判斷也更準：回報的人剛動過那個檔，比沒看過碼的人猜得準。
  */
-function needsScreenshot(diff, finding) {
-  const route = finding && finding.verify_route;
+function needsScreenshot(diff, route) {
   if (!route || !String(route).trim()) return false;
   return touchedFiles(diff).some(f => f.startsWith('app/public/'));
 }
@@ -63,13 +63,14 @@ async function riskIfWrong(fixId, finding) {
 /**
  * reviewFix(fixId, finding) -> { verdict: 'approve'|'reject', reason, notes }
  *
- * finding：triage／merge 結果那份結構（至少含 title/detail/action/verify_route；
- * 有整列 health_check_findings 時也吃得下 risk_if_wrong）。
+ * finding：merge 結果那份結構（至少含 title/detail/action；有整列 health_check_findings 時
+ * 也吃得下 risk_if_wrong）。截圖路由不從這裡拿——見 needsScreenshot。
  *
  * `notes` 是 agent 的推理過程——這是無人監督閘門唯一的人類稽核材料，不可丟棄（見下方註解）。
  */
 async function reviewFix(fixId, finding = {}) {
-  const { rows: [fix] } = await query('SELECT diff, test_result, worktree FROM finding_fixes WHERE id=$1', [fixId]);
+  const { rows: [fix] } = await query(
+    'SELECT diff, test_result, worktree, verify_route FROM finding_fixes WHERE id=$1', [fixId]);
   if (!fix) return { verdict: 'reject', reason: '修正紀錄不存在', notes: '' };
 
   const diff = fix.diff || '';
@@ -77,8 +78,8 @@ async function reviewFix(fixId, finding = {}) {
 
   let screenshots = null;
   let screenshotNote = '無';
-  if (needsScreenshot(diff, finding)) {
-    screenshots = fix.worktree ? await captureBeforeAfter(fix.worktree, finding.verify_route) : null;
+  if (needsScreenshot(diff, fix.verify_route)) {
+    screenshots = fix.worktree ? await captureBeforeAfter(fix.worktree, fix.verify_route) : null;
     if (!screenshots) {
       screenshotNote = '無（截圖失敗：缺中文字型／起不了預覽伺服器／playwright 無法執行，本輪未看到畫面）';
     }

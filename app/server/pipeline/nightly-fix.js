@@ -3,7 +3,7 @@ const { query } = require('../db');
 const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
 const { AUTO_LAYERS, HEALTH_SEVERITIES, inAutoFixScope, normalizeLayer } = require('./auto-fix-scope');
 const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
-const { triageOne, mergeCandidates } = require('./feedback-triage');
+const { mergeCandidates } = require('./feedback-merge');
 const { reviewFix } = require('./fix-review');
 const { verifyFix } = require('./fix-verify');
 const { runFix, adoptFix, applyFix, removeWorktree, selfContainerName } = require('./finding-fix');
@@ -158,52 +158,43 @@ async function fetchHealthCandidates() {
   return kept;
 }
 
-// 意見回饋候選：status='approved' 的全部撈出來。
-// ⚠ 這裡**不能**套 layer 條件：layer 要等 triageOne 跑完才會寫進 triage_layer，此刻還是 NULL，
-// 先套等於把所有新核准的意見全部濾掉（整條通道對意見回饋永遠 no-op）。
+/**
+ * 意見回饋候選：status='approved' 的全部撈出來，**使用者原文直接送下去**。
+ *
+ * 2026-09-09 拿掉了中間那關「先用 opus 把原文翻成規格」（feedback-triage）：真正改碼的
+ * platform-fix 也是 opus，讀得懂同一段原文，翻一次等於同一件事付兩次錢。實測那一關宣稱要擋的
+ * 兩件事（判 layer 不在範圍、判看不懂）在 17 筆意見的完整歷史裡**一次都沒有發生過**，
+ * 而它每晚對沒收尾的候選重翻一遍，連三晚各燒掉約 0.9M token。
+ * 「這條看不看得懂、該不該自動做」的判斷改由 platform-fix 在讀完相關程式碼之後做
+ * （見 platform-fix.md，判不該做就什麼都不改 → no_change → 立即退場）。
+ *
+ * ⚠ 這裡**不能**套 layer 條件：使用者提的意見沒有人幫它標 layer，套了等於全部濾掉。
+ * triage_* 只有健檢開的單才有值（health-check-runner 的 openFeedbackForFinding 直接填好，
+ * 它的產出本來就是這個形狀），所以用 COALESCE 沿用；一般使用者的意見一律回到 content。
+ */
 async function fetchApprovedFeedback() {
   const { rows: fb } = await query(
-    `SELECT id, content, user_id, created_at FROM feedback WHERE status = 'approved' ORDER BY created_at ASC`
+    `SELECT id, content, user_id, created_at, triage_title, triage_detail, triage_action
+       FROM feedback WHERE status = 'approved' ORDER BY created_at ASC`
   );
-  return fb.map(f => ({ source: 'feedback', row: f }));
+  return fb.map(f => ({
+    source: 'feedback',
+    row: {
+      ...f,
+      // title 只是給統整與管理頁認人用的短標；原文一律完整放進 detail，不截斷——
+      // 截掉的那半往往正是講清楚「哪一頁、什麼情況」的部分。
+      title: f.triage_title || feedbackTitle(f.content),
+      detail: f.triage_detail || f.content || '',
+      action: f.triage_action || '',
+    },
+  }));
 }
 
-// 意見回饋跑 triageOne：把使用者原文翻成具體修改需求，順便定出 layer。
-// 回 understandable:false 的剔除（triageOne 內部已把 status 退回 'new'）；翻出來的 layer 不在
-// 可自動修範圍（例如 env）→ **立即退場**，不是留在原地不動：同一份原文 triage 不會突然變 code，
-// 這是確定性結果，不需要像「修不出來」那樣給三次額度重試——不退場的話這條意見會每晚重付一次
-// triage 的 token，永遠卡在「已核准」，使用者與管理員都看不出「自動修正範圍不含這一類」。
-async function triageFeedback(items) {
-  const kept = [];
-  for (const it of items) {
-    await setStage([it], '翻譯需求中');
-    const { understandable, transient } = await triageOne(it.row.id);
-    await setStage([it], null);
-    // transient＝triage 自己沒跑起來（CLI 掛掉／額度），不是這條意見的錯：status 維持 approved
-    // 讓下一晚重試，只在飢餓防線上記一次。連續失敗達門檻才由 noteFailedAttempt 退回人工——
-    // 不記帳的話，一支永遠跑不起來的 triage 會每晚白燒一次額度且無人察覺。
-    if (transient) {
-      await noteFailedAttempt({ members: [it] }, 'triage 執行失敗（CLI 未跑起來，非意見本身的問題）')
-        .catch(e => console.error('[NIGHTLY-FIX] triage 失敗記帳時又出錯：', e.message));
-      continue;
-    }
-    if (!understandable) continue;
-    const { rows: [refreshed] } = await query(
-      `SELECT id, triage_title AS title, triage_detail AS detail, triage_layer AS layer,
-              triage_action AS action, verify_route, user_id, created_at
-         FROM feedback WHERE id=$1`, [it.row.id]);
-    if (!refreshed) continue;
-    if (!AUTO_LAYERS.has(refreshed.layer)) {
-      const layerLabel = refreshed.layer || '未分類';
-      console.log('[NIGHTLY-FIX] 意見 #%d 的 layer=%s 不在可自動修範圍，立即退場',
-        it.row.id, layerLabel);
-      await retireToHuman(true, refreshed.id,
-        `翻出來的 layer=${layerLabel}，自動修正範圍只含 code／prompt／observability，請人工處理`);
-      continue;
-    }
-    kept.push({ source: 'feedback', row: refreshed });
-  }
-  return kept;
+// 原文的第一行（過長就截）當短標。取第一行而不是前 N 字：使用者多半第一行講結論、後面補細節。
+const FEEDBACK_TITLE_MAX = 40;
+function feedbackTitle(content) {
+  const first = String(content || '').split('\n').map(l => l.trim()).find(Boolean) || '(無標題)';
+  return first.length > FEEDBACK_TITLE_MAX ? `${first.slice(0, FEEDBACK_TITLE_MAX)}…` : first;
 }
 
 // 兩批候選合併＋排序：severity 高的先，其次 created_at 舊的先。意見回饋沒有 severity，
@@ -242,7 +233,7 @@ function toCandidateItem(it) {
  * 統整（merge）拿不到結果時的退路：每個候選各自成一組，不合併。
  *
  * 分組只是「省 token 的優化」，不是修正流程的必要前提——每個候選在入選時就已經有可執行的
- * title／detail／action／layer（意見走 triageOne 寫進 feedback，健檢提案本來就有），這裡只是
+ * title／detail／action（意見用使用者原文，健檢提案本來就有），這裡只是
  * 把它們原樣包成 merge 的輸出格式，完全不需要 AI。沒有這條退路的話，merge 這一支 agent 就是
  * 整批候選的單點：它一次格式失誤（2026-09-07 實測：JSON 字串裡的未跳脫雙引號）就讓整晚歸零，
  * 而且候選帳面上毫無變化，畫面看起來像「昨晚根本沒跑」。
@@ -257,19 +248,14 @@ function identityGroups(indexed) {
     title: it.row.title || '(無標題)',
     detail: it.row.detail || '',
     action: it.row.action || '',
-    verify_route: it.row.verify_route || '',
   }));
 }
 
 /**
  * merge agent 回來的組 → 可執行的組。三件事：
  *   1. member_ids 只留認得的序號（agent 可能回不存在的號碼）
- *   2. layer 重新套 AUTO_LAYERS——merge 的 schema 允許回 env／unclear，回了照樣進 runFix 會白燒
- *      一輪；agent 沒填時沿用組內第一個成員的 layer（成員在入選時都已通過同一道篩選）
- *   3. verify_route 為空時 fallback 到組內意見成員的值——merge 的 prompt 寫「推不出來留空」，
- *      實務上它幾乎必然留空，而 needsScreenshot 只看這個欄位 ⇒ 截圖審查對最需要它的來源
- *      （使用者親眼看到畫面不對而提的意見）永遠不會啟動
- *   4. **跨組去重**：merge agent 若把同一個候選序號放進兩個 group（prompt 沒禁止、agent 偶爾
+ *   2. layer：純健檢提案的組重新套 AUTO_LAYERS（詳見下方註解）；含意見成員的組不套
+ *   3. **跨組去重**：merge agent 若把同一個候選序號放進兩個 group（prompt 沒禁止、agent 偶爾
  *      會犯），該成員一晚會在兩組各記一次 fix_attempts（見 noteFailedAttempt），等於 +2，
  *      兩晚就達到 NIGHTLY_FIX_MAX_ATTEMPTS 退場——比真正只失敗兩次的候選更快被踢出去，且原因
  *      跟事實不符。後出現的組把已被更早的組拿走的序號剔掉；剔到空組就整組丟掉並留 log。
@@ -300,24 +286,34 @@ function normalizeGroups(groups, byOrdinal) {
     const members = memberIds.map(id => byOrdinal.get(id));
     // ⚠ agent **明講**的 layer 一律照認：它說 env／unclear 就是判斷「這條自動改不動」，
     // 此時不可拿成員的 layer 去蓋掉它（那等於把它的結論改寫成我們想要的答案）。
-    // 只有它沒填時才沿用成員的 layer（成員在入選時都已通過同一道 AUTO_LAYERS 篩選）。
+    // 只有它沒填時才沿用成員的 layer（健檢成員在入選時都已通過同一道 AUTO_LAYERS 篩選）。
     const declared = String(g.layer || '').trim().toLowerCase();
     const layer = declared
       ? (AUTO_LAYERS.has(declared) ? declared : null)
-      : members.map(m => normalizeLayer(m.row.layer)).find(l => AUTO_LAYERS.has(l));
-    if (!layer) {
+      : (members.map(m => normalizeLayer(m.row.layer)).find(l => AUTO_LAYERS.has(l)) || null);
+    /**
+     * layer 閘門只擋「全部成員都是健檢提案」的組。
+     *
+     * 使用者提的意見**沒有任何人幫它標 layer**（2026-09-09 拿掉翻譯關之後就是這個現況），
+     * 照舊擋的話每一條意見都會落在這裡被判「不在可自動修範圍」而整批消失，等於整條通道對
+     * 意見回饋永遠 no-op。而 merge 只看得到候選清單、沒讀過任何程式碼，它對意見說 env／unclear
+     * 只是猜測，不該用來終結一條使用者親手提的意見。
+     *
+     * 「這條該不該自動做」改由 platform-fix 在**讀完相關程式碼之後**判：判不該做就什麼都不改
+     * → no_change → runOneCandidate 立即退場（那條路本來就在，見下方 no_change 分支）。
+     * 純健檢提案的組維持原行為：它們的 layer 由 health-auditor 標好，入選時已過 inAutoFixScope。
+     */
+    const hasFeedback = members.some(m => m.source === 'feedback');
+    if (!layer && !hasFeedback) {
       console.log('[NIGHTLY-FIX] 統整結果「%s」的 layer=%s 不在可自動修範圍，跳過',
         g.title || '(無標題)', g.layer || '未填');
       continue;
     }
-    const route = String(g.verify_route || '').trim()
-      || (members.find(m => m.source === 'feedback' && m.row.verify_route)?.row.verify_route || '');
     usable.push({
       memberIds, members, layer,
       title: g.title || '(無標題)',
       detail: g.detail || '',
       action: g.action || '',
-      verify_route: route,
     });
   }
   return usable;
@@ -344,7 +340,7 @@ async function feedbackEvidence(members) {
 }
 
 // 多個健檢提案成員合併成一組時，target_metric／metric_baseline／risk_if_wrong 這三個欄位取
-// 「第一個有值的健檢來源成員」——比照 verify_route 的 fallback 策略：指標與風險描述的是
+// 「第一個有值的健檢來源成員」：指標與風險描述的是
 // 「這一類問題」而非逐條意見量身定制，多條合併時沒有比「沿用最早那條」更好的自動合併規則，
 // 硬串接多筆反而會讓 fix-review 讀到一段誰也不對應的雜訊。
 function firstHealthField(members, field) {
@@ -356,7 +352,7 @@ async function materializeGroup(group, runId) {
   const reuseId = soleFindingId(group.members);
   const base = {
     title: group.title, detail: group.detail, action: group.action,
-    layer: group.layer, verify_route: group.verify_route,
+    layer: group.layer,
     risk_if_wrong: reuseId != null ? (group.members[0].row.risk_if_wrong || null) : firstHealthField(group.members, 'risk_if_wrong'),
     target_metric: reuseId != null ? (group.members[0].row.target_metric || null) : firstHealthField(group.members, 'target_metric'),
     metric_baseline: reuseId != null ? (group.members[0].row.metric_baseline || null) : firstHealthField(group.members, 'metric_baseline'),
@@ -372,8 +368,7 @@ async function materializeGroup(group, runId) {
    *   - 走 DEFAULT（現在是 pending、Phase 7.1 之後是 approved）會讓它變成**隔晚的候選**，
    *     與「成功後才標 done」疊起來就是自我餵食迴圈：每晚產生新提案、每晚再修一次。
    *   - 真正的處置結果由 applied_at 區分：有值＝碼已合併；沒值＝這一晚試過但沒成功。
-   * health_check_findings 沒有 verify_route 欄位（那是 feedback 表才有的），只在記憶體內傳給
-   * reviewFix 判斷要不要截圖。
+   * 截圖要開哪一頁不在這裡：由 platform-fix 改完碼後回報，存進 finding_fixes.verify_route。
    */
   const { rows: [row] } = await query(
     `INSERT INTO health_check_findings
@@ -455,7 +450,7 @@ async function markGroupDone(cand, userId) {
 
 /**
  * 退場＝把狀態換回「等人」那一格並歸零計數，不是靜靜地從候選裡消失：
- *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（與 triageOne 判不出來時同一個慣例，
+ *   - 意見回饋 → `status='new'` ＋ `triage_note` 寫原因（管理頁本來就會顯示這個欄位，
  *     管理頁本來就會顯示這個欄位）
  *   - 健檢提案 → `status='pending'`（回到等人裁決）＋ `verdict_note` 寫原因
  *   兩張表都要**清掉 `decided_by`／`decided_at`**——人工核准都會寫這兩欄
@@ -572,7 +567,7 @@ async function noteFailedAttempt(cand, reason) {
 async function runOneCandidate(cand, { pushUserId, startedBy }) {
   let fixId = await createFixRow(cand.findingId, startedBy, cand);
   await setStage(cand.members, '改碼與跑測試中');
-  await runFix(fixId, { findingId: cand.findingId, startedBy });
+  await runFix(fixId, { findingId: cand.findingId, startedBy, members: cand.members });
 
   let attempt = 0;
   for (;;) {
@@ -659,7 +654,7 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
     // 「一條提案可試修多次」設計的，覆寫會讓「上一次試了什麼、為什麼失敗」消失）。
     fixId = await createFixRow(cand.findingId, startedBy, cand);
     await setStage(cand.members, '改碼與跑測試中（未通過，重改一次）');
-    await runFix(fixId, { findingId: cand.findingId, startedBy });
+    await runFix(fixId, { findingId: cand.findingId, startedBy, members: cand.members });
   }
 }
 
@@ -755,7 +750,7 @@ async function runNightlyFix({ startedBy = null } = {}) {
     }
 
     const healthCandidates = await fetchHealthCandidates();
-    const feedbackCandidates = await triageFeedback(await fetchApprovedFeedback());
+    const feedbackCandidates = await fetchApprovedFeedback();
     const candidates = sortCandidates(feedbackCandidates, healthCandidates);
     if (!candidates.length) {
       console.log('[NIGHTLY-FIX] 沒有可執行的候選（意見回饋 %d、健檢提案 %d）',

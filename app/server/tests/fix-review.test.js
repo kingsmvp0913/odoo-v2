@@ -84,8 +84,11 @@ describe('agent 回不出 JSON → 當成 reject', () => {
   });
 });
 
+// 路由的來源是 finding_fixes.verify_route（platform-fix 改完碼自己回報的），不是來源提案那一列。
+// 舊做法讀 feedback.verify_route，而 health_check_findings 沒有那個欄位 ⇒ 健檢提案改前端也永遠
+// 拍不到對照圖。
 describe('verify_route 為空 → 不起任何伺服器、不截圖', () => {
-  test('finding.verify_route 未提供', async () => {
+  test('修正列沒有 verify_route', async () => {
     mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js\n+x' });
     mockRunClaude.mockResolvedValue({
       text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
@@ -97,39 +100,52 @@ describe('verify_route 為空 → 不起任何伺服器、不截圖', () => {
 
 describe('diff 只動 app/server/ → 不截圖', () => {
   test('即使 verify_route 有值也不截圖', async () => {
-    mockFix({ diff: 'diff --git a/app/server/foo.js b/app/server/foo.js\n+x' });
+    mockFix({ diff: 'diff --git a/app/server/foo.js b/app/server/foo.js\n+x', verify_route: '#/tasks' });
     mockRunClaude.mockResolvedValue({
       text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
     });
-    await reviewFix(1, { title: 't', detail: 'd', action: 'a', verify_route: '#/tasks' });
+    await reviewFix(1, { title: 't', detail: 'd', action: 'a' });
     expect(mockCapture).not.toHaveBeenCalled();
   });
 });
 
 describe('動到 app/public/ 且有 verify_route → 會截圖', () => {
   test('截圖成功時把路徑帶進 render 參數', async () => {
-    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js\n+x' });
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js\n+x', verify_route: '#/tasks' });
     mockCapture.mockResolvedValue({ before: '/tmp/before.png', after: '/tmp/after.png' });
     mockRunClaude.mockResolvedValue({
       text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
     });
-    await reviewFix(1, { title: 't', detail: 'd', action: 'a', verify_route: '#/tasks' });
+    await reviewFix(1, { title: 't', detail: 'd', action: 'a' });
 
     expect(mockCapture).toHaveBeenCalledWith('/tmp/some-worktree', '#/tasks');
     const renderArgs = mockRender.mock.calls[0][0];
     expect(renderArgs.before_screenshot).toBe('/tmp/before.png');
     expect(renderArgs.after_screenshot).toBe('/tmp/after.png');
   });
+
+  // 這一支是把路由從來源列搬到修正列的理由本身：來源是健檢提案（呼叫端連 finding 結構都
+  // 給不出 verify_route，因為 health_check_findings 沒有那個欄位）時，一樣要截得到圖。
+  test('來源是健檢提案也照樣截圖（路由只看修正列）', async () => {
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js\n+x', verify_route: '#/admin/health' });
+    mockCapture.mockResolvedValue({ before: '/tmp/b.png', after: '/tmp/a.png' });
+    mockRunClaude.mockResolvedValue({
+      text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
+    });
+    await reviewFix(1, { title: '健檢提案', detail: 'd', action: 'a', risk_if_wrong: 'r' });
+
+    expect(mockCapture).toHaveBeenCalledWith('/tmp/some-worktree', '#/admin/health');
+  });
 });
 
 describe('截圖失敗 → 走無截圖路徑，原因要帶得到', () => {
   test('captureBeforeAfter 回 null 時 render 參數要標明失敗原因，且仍照常審', async () => {
-    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js\n+x' });
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js\n+x', verify_route: '#/tasks' });
     mockCapture.mockResolvedValue(null);
     mockRunClaude.mockResolvedValue({
       text: '<result>{"verdict":"reject","reason":"看不到畫面"}</result>', usage: {}, durationMs: 1
     });
-    const result = await reviewFix(1, { title: 't', detail: 'd', action: 'a', verify_route: '#/tasks' });
+    const result = await reviewFix(1, { title: 't', detail: 'd', action: 'a' });
 
     expect(mockCapture).toHaveBeenCalled();
     const renderArgs = mockRender.mock.calls[0][0];
@@ -245,23 +261,23 @@ describe('暫存截圖用完要刪', () => {
   test('審完之後暫存目錄不留下（approve 路徑）', async () => {
     const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'uiprev-test-'));
     realFs.writeFileSync(path.join(dir, 'before.png'), 'x');
-    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js' });
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js', verify_route: '#/tasks' });
     mockCapture.mockResolvedValue({ before: `${dir}/before.png`, after: `${dir}/after.png`, dir });
     mockRunClaude.mockResolvedValue({
       text: '<result>{"verdict":"approve","reason":"ok"}</result>', usage: {}, durationMs: 1
     });
 
-    await reviewFix(1, { title: 't', verify_route: '#/tasks' });
+    await reviewFix(1, { title: 't' });
     expect(realFs.existsSync(dir)).toBe(false);
   });
 
   test('agent 執行失敗那條路也要刪（否則失敗越多殘留越多）', async () => {
     const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'uiprev-test-'));
-    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js' });
+    mockFix({ diff: 'diff --git a/app/public/js/x.js b/app/public/js/x.js', verify_route: '#/tasks' });
     mockCapture.mockResolvedValue({ before: `${dir}/before.png`, after: `${dir}/after.png`, dir });
     mockRunClaude.mockRejectedValue(new Error('claude 掛了'));
 
-    const result = await reviewFix(1, { title: 't', verify_route: '#/tasks' });
+    const result = await reviewFix(1, { title: 't' });
     expect(result.verdict).toBe('reject');
     expect(realFs.existsSync(dir)).toBe(false);
   });
