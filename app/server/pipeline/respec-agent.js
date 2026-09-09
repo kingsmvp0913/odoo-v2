@@ -6,6 +6,7 @@ const { taskWorkContext } = require('./work-context');
 const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
+const { recordSpecVersionSafe } = require('./spec-version');
 const yaml = require('js-yaml');
 const { safeReturnStatus } = require('./stations');
 const { taskAttachmentNote } = require('./sync');
@@ -201,6 +202,9 @@ async function runRespecPatch(taskId, userId, signal) {
     "UPDATE tasks SET analysis_yaml = $2, retry_feedback = $3, status = 'coding_running', respec_return_status = NULL, qa_session_id = NULL, qa_resume_count = 0, updated_at = NOW() WHERE id = $1",
     [taskId, newYaml, `[追加需求]\n${requirements}`]
   );
+  // 途中追加需求＝規格真的變了，留快照讓時間軸長出帶版號的那一則（規格書展得開新版）。
+  // 這裡的 session 欄位由上面那句 UPDATE 自己決定要清哪些，故不借 writeAnalysisYaml。
+  await recordSpecVersionSafe(taskId, newYaml, task.analysis_yaml || null);
   enqueueEmbedding({ taskId });
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'coding_running' });
 }
