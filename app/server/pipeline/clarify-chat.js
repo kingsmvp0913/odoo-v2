@@ -7,7 +7,7 @@ const { taskWorkContext } = require('./work-context');
 const { taskAttachmentNote } = require('./sync');
 const { stopReason } = require('./claude-runner');
 const { withResume } = require('./with-resume');
-const { parseAgentResult } = require('./agent-result');
+const { parseAgentResult, repairYamlPayload } = require('./agent-result');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const { recordSpecVersionSafe } = require('./spec-version');
 const yaml = require('js-yaml');
@@ -30,7 +30,12 @@ function mergeClarification(analysisYaml, questionsYaml) {
   } catch { return null; }
 }
 
-function parseClarifyChat(s) {
+// lenient：嚴格解析失敗後立刻試的零成本第二手（見 agent-result.js 的順序說明）。題目 YAML 壞掉就
+// 先當它沒產（questions_yaml=null）並把壞掉的原文帶出去，呼叫端據此只補救那一段 YAML；
+// DECISION／REPLY 仍照常要求——那兩樣缺了就是真垃圾，得 fail loud。
+// 補救也救不回來時，questions_yaml 維持 null，走 mergeClarification 回 null 的既有分支：
+// 題目維持原樣＋時間軸講明「這次沒有更新」。
+function parseClarifyChat(s, { lenient = false } = {}) {
   const text = String(s).trim();
   const m = text.match(/^DECISION:\s*(answer|proceed|revise)\b/i);
   if (!m) throw new Error('缺 DECISION');
@@ -40,16 +45,48 @@ function parseClarifyChat(s) {
   const replyPart = sepIdx === -1 ? rest : rest.slice(0, sepIdx);
   const reply = replyPart.replace(/^\s*REPLY:\s*/i, '').trim();
   if (!reply) throw new Error('缺 REPLY');
-  let questions_yaml = null;
+  let questions_yaml = null, broken_payload = null, payload_error = null;
   if (decision === 'revise') {
-    if (sepIdx === -1) throw new Error('revise 缺 ---QUESTIONS---');
-    const yamlStr = rest.slice(sepIdx + Q_SEP.length).trim();
-    const v = yaml.load(yamlStr, { schema: yaml.CORE_SCHEMA });
-    if (!v || typeof v !== 'object') throw new Error('QUESTIONS 非有效 YAML 物件');
-    questions_yaml = yamlStr;
+    try {
+      if (sepIdx === -1) throw new Error('revise 缺 ---QUESTIONS---');
+      const yamlStr = rest.slice(sepIdx + Q_SEP.length).trim();
+      const v = yaml.load(yamlStr, { schema: yaml.CORE_SCHEMA });
+      if (!v || typeof v !== 'object') throw new Error('QUESTIONS 非有效 YAML 物件');
+      questions_yaml = yamlStr;
+    } catch (e) {
+      if (!lenient) throw e;
+      // 壞掉的原文與錯誤訊息一起帶出去：呼叫端要拿它去做「只修 YAML 區塊」的補救。
+      broken_payload = sepIdx === -1 ? null : rest.slice(sepIdx + Q_SEP.length).trim();
+      payload_error = String((e && e.message) || '').split('\n')[0] || null;
+    }
   }
-  return { decision, reply, questions_yaml };
+  return { decision, reply, questions_yaml, broken_payload, payload_error };
 }
+
+// 補救 agent 沒看過這份自訂契約，不講給它聽就只能猜（131e495a 已為別的 agent 修過同一件事）。
+// 拆兩份：只修 YAML 區塊時送 QUESTIONS_SCHEMA_HINT，整段重整時送含 DECISION／REPLY 的完整版。
+// intro／questions／user_answer 必須頂格這句是刻意寫出來的——task 254 就是 user_answer 縮排 2 而炸掉。
+const QUESTIONS_SCHEMA_HINT = [
+  'intro／questions／user_answer 三個鍵一律頂格（第 0 欄）：',
+  'intro: |',
+  '  <說明段>',
+  'questions:',
+  '  - id: q1',
+  '    text: <題目>',
+  '    type: choice',
+  '    required: true',
+  '    options:',
+  '      - key: A',
+  '        label: <選項>',
+  'user_answer: ""'
+].join('\n');
+const CLARIFY_SCHEMA_HINT = [
+  'DECISION: answer|proceed|revise',
+  'REPLY:',
+  '<給使用者看的回覆全文，可多行>',
+  `${Q_SEP}   ← 只有 revise 才有；以下整段是 YAML`,
+  QUESTIONS_SCHEMA_HINT
+].join('\n');
 
 // mode → 允許的決策集合。結構性限制：agent 回了不被允許的決策就降級成 answer，
 // 因為 answer 是唯一「什麼都不會壞」的結果（只是多回一句話）。
@@ -176,10 +213,25 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
   // 不包 try/catch：parseAgentResult 只在「補救呼叫本身被 abort」時往外拋，
   // 那是手動暫停＝正常流程，必須讓它往上傳（比照 spec-review／respec-agent），
   // 吞掉會把暫停誤標成「AI 回覆失敗」寫進時間軸還改狀態。解析失敗它自己回 null。
-  const parsed = await parseAgentResult(raw, { parse: parseClarifyChat, signal, ref, userId });
+  const parsed = await parseAgentResult(raw, {
+    parse: parseClarifyChat,
+    // 題目 YAML 壞掉時先把回覆與壞掉的原文撈出來，下面單獨補救那一段（見 agent-result.js 的順序說明）。
+    lenientParse: t => parseClarifyChat(t, { lenient: true }),
+    schemaHint: CLARIFY_SCHEMA_HINT,
+    signal, ref, userId
+  });
   if (!parsed) {
     await failBack(task, userId, 'AI 回覆失敗，請再送出一次。（未回傳有效結果）');
     return;
+  }
+
+  // 題目 YAML 壞掉（lenient 降級）→ 只把那段 YAML 送去修，修回來就照常套用，使用者不必重講一次。
+  // 這是「格式錯了也要自己走下去」的落點：整段補救做不到的事（要它重抄幾千字中文回覆），
+  // 縮小到「修好這段 YAML 的縮排」就在 haiku 的能力範圍內。
+  if (parsed.decision === 'revise' && !parsed.questions_yaml && parsed.broken_payload) {
+    parsed.questions_yaml = await repairYamlPayload(parsed.broken_payload, parsed.payload_error, {
+      schemaHint: QUESTIONS_SCHEMA_HINT, signal, ref, userId
+    });
   }
 
   // 決策不在本 mode 允許範圍 → 降級成 answer（回話但不推進、不改題目），絕不放行成推進

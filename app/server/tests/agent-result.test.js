@@ -7,7 +7,7 @@ const mockLogUsage = jest.fn();
 const mockLogFailed = jest.fn();
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: mockLogUsage, logFailedUsage: mockLogFailed }));
 
-const { extractResult, parseAgentResult } = require('../pipeline/agent-result');
+const { extractResult, parseAgentResult, repairYamlPayload } = require('../pipeline/agent-result');
 
 beforeEach(() => { mockRunClaude.mockReset(); mockLogUsage.mockReset(); mockLogFailed.mockReset(); });
 
@@ -132,4 +132,81 @@ test('parseAgentResult：抽不出 <result>（無解析錯誤可報）→ 補救
   mockRunClaude.mockResolvedValue({ text: '<result>{"status":"fixed"}</result>' });
   await parseAgentResult('完全沒有標記的一段話', { parse: JSON.parse });
   expect(mockRunClaude.mock.calls[0][0]).not.toContain('上一次解析失敗');
+});
+
+// 意圖：契約裡「使用者非看到不可的那一段」（對話回覆）不該跟「結構化附載」（YAML 規格／題目）同生共死。
+// 實測 task 254：clarify-chat 跑了 285 秒／22.6k output，回覆完全正確，只因題目 YAML 有一行縮排差兩格
+// （`  user_answer: ''`）就整輪報廢，使用者只看到「AI 回覆失敗，請再送出一次」。
+// lenientParse 是 strict＋haiku 補救都失敗之後的最後一道，由呼叫端決定哪些欄位可以降級成 null。
+test('parseAgentResult：strict 成功時不得動用 lenientParse', async () => {
+  const lenient = jest.fn();
+  const v = await parseAgentResult('<result>{"status":"ok"}</result>', { parse: JSON.parse, lenientParse: lenient });
+  expect(v.status).toBe('ok');
+  expect(lenient).not.toHaveBeenCalled();
+});
+
+// 順序很重要：lenientParse 是零成本的，必須排在 haiku 整段補救之前。實測 task 254 的整段補救
+// 花了 92 秒、照抄同一份壞資料回來——那 92 秒是使用者盯著轉圈的時間，而且結果還是失敗。
+test('parseAgentResult：strict 失敗 → 先用零成本的 lenientParse，成功就不呼叫 haiku', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>{"status":"fixed"}</result>' });
+  const v = await parseAgentResult('<result>DECISION: revise\nREPLY:\n改好了\n---SPEC---\n: : 壞 YAML</result>', {
+    parse: () => { throw new Error('壞 YAML'); },
+    lenientParse: s => ({ salvaged: true, src: s })
+  });
+  expect(v.salvaged).toBe(true);
+  expect(v.src).toContain('改好了');          // 拿到的是 <result> 內層原文，不是整段 raw
+  expect(mockRunClaude).not.toHaveBeenCalled();
+});
+
+test('parseAgentResult：strict 與 lenient 都失敗 → 才走 haiku 整段補救', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>{"status":"fixed"}</result>' });
+  const v = await parseAgentResult('壞掉的輸出', {
+    parse: JSON.parse,
+    lenientParse: () => { throw new Error('連寬鬆解析都救不了'); }
+  });
+  expect(v.status).toBe('fixed');
+  expect(mockRunClaude).toHaveBeenCalledTimes(1);
+});
+
+test('parseAgentResult：三種解析全失敗 → 回 null（例外不得炸給呼叫端）', async () => {
+  mockRunClaude.mockResolvedValue({ text: '還是壞的' });
+  const v = await parseAgentResult('<result>垃圾</result>', {
+    parse: () => { throw new Error('x'); },
+    lenientParse: () => { throw new Error('連寬鬆解析都救不了'); }
+  });
+  expect(v).toBeNull();
+});
+
+// ── repairYamlPayload：只修 YAML 那半邊 ──────────────────────────────────
+// 整段補救要 model 把數千字中文回覆逐字重抄一遍才能改掉一個縮排，實測它會直接照抄壞資料回來。
+// 只送 YAML 區塊，它要做的事才回到做得到的尺寸——這是「格式錯了也能自己走下去」的關鍵。
+test('repairYamlPayload：prompt 只含 YAML 區塊，不得夾帶回覆全文', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>\nintro: 說明\nuser_answer: ""\n</result>' });
+  const fixed = await repairYamlPayload('intro: 說明\n  user_answer: ""', 'bad indentation', { schemaHint: 'intro／user_answer 要頂格' });
+  expect(fixed).toContain('user_answer');
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('bad indentation');        // 錯誤原文要轉述，否則它只能盲修
+  expect(prompt).toContain('intro／user_answer 要頂格');
+  expect(prompt).not.toContain('DECISION');           // 回覆那半邊完全不進 prompt
+});
+
+test('repairYamlPayload：修回來的東西仍不是合法 YAML 物件 → 回 null（絕不放行壞資料）', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>\n: : : 還是壞的 : :\n</result>' });
+  expect(await repairYamlPayload('壞 YAML', 'err', {})).toBeNull();
+});
+
+test('repairYamlPayload：修回來的是純量／陣列而非物件 → 回 null', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>\n- a\n- b\n</result>' });
+  expect(await repairYamlPayload('壞 YAML', 'err', {})).toBeNull();
+});
+
+test('repairYamlPayload：空輸入不浪費一次呼叫', async () => {
+  expect(await repairYamlPayload('   ', 'err', {})).toBeNull();
+  expect(mockRunClaude).not.toHaveBeenCalled();
+});
+
+test('repairYamlPayload：補救途中 abort → rethrow（不吞成 null）', async () => {
+  const aborted = new Error('aborted'); aborted.aborted = true;
+  mockRunClaude.mockRejectedValue(aborted);
+  await expect(repairYamlPayload('intro: x', 'err', {})).rejects.toThrow();
 });

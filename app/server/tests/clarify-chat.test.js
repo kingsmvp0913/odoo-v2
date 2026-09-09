@@ -389,3 +389,97 @@ test('推進（proceed）→ 清掉 clarify session（這場對話結束了）',
   expect(t.clarify_session_id).toBeNull();
   expect(t.clarify_prompt_ver).toBeNull();
 });
+
+// ── 回覆與題目必須可以分開活下來（task 254 回歸）─────────────────────────────
+// 實測：agent 跑了 285 秒／22.6k output，DECISION 與 REPLY 完全正確，只有題目 YAML 最後一行
+// `  user_answer: ''` 縮排少兩格（該在第 0 欄），yaml.load 丟 "bad indentation of a mapping entry"。
+// 舊行為＝整輪報廢、使用者只看到「AI 回覆失敗，請再送出一次」，一整輪的成本與結論全丟。
+// 正確行為：題目救不回來就維持原樣並講明，但回覆一定要送到使用者眼前。
+const BROKEN_QUESTIONS = [
+  'DECISION: revise',
+  'REPLY:',
+  '了解，範圍是 UMC8 改版加兩個新增格式。',
+  '---QUESTIONS---',
+  'intro: 說明段',
+  'questions:',
+  '  - id: q1',
+  '    text: 欄位對應對嗎？',
+  '    type: choice',
+  '    required: true',
+  '    options:',
+  '      - key: A',
+  '        label: 照這樣做',
+  "  user_answer: ''"      // ← 縮排 2，該是 0；整份 YAML 因此 load 不起來
+].join('\n');
+
+test('parseClarifyChat：lenient 模式下題目 YAML 壞掉不丟例外，回覆保住、questions_yaml 為 null', () => {
+  expect(() => parseClarifyChat(BROKEN_QUESTIONS)).toThrow();        // 嚴格模式維持原樣（補救 agent 才有得修）
+  const out = parseClarifyChat(BROKEN_QUESTIONS, { lenient: true });
+  expect(out.decision).toBe('revise');
+  expect(out.reply).toContain('UMC8 改版');
+  expect(out.questions_yaml).toBeNull();
+});
+
+test('parseClarifyChat：lenient 也救不了缺 DECISION／缺 REPLY（真垃圾仍要 fail loud）', () => {
+  expect(() => parseClarifyChat('REPLY:\n沒有決策', { lenient: true })).toThrow();
+  expect(() => parseClarifyChat('DECISION: answer\nREPLY:\n  ', { lenient: true })).toThrow();
+});
+
+// 這是使用者要的「不可以只因為格式錯就停下」：題目 YAML 壞掉時，系統自己把那段 YAML 送去修，
+// 修回來就照常套用，任務往下走、使用者不必重講一次。
+test('題目 YAML 壞掉 → 自己修好並照常套用，使用者完全不必重送', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_mode='ask' WHERE id=$1", [task.id]);
+  runClaude.mockResolvedValueOnce({ text: `<result>\n${BROKEN_QUESTIONS}\n</result>`, usage: {}, durationMs: 1 });
+  // 只修 YAML 區塊的補救：把 user_answer 的縮排改回頂格，其餘一字不動
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nintro: 說明段\nquestions:\n  - id: q1\n    text: 欄位對應對嗎？\nuser_answer: \'\'\n</result>',
+    usage: {}, durationMs: 1
+  });
+
+  await runClarifyChat({ id: task.id }, 1, null, null);
+
+  const { rows } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_pending');
+  expect(rows[0].analysis_yaml).toContain('欄位對應對嗎');   // 題目真的套用了
+  expect(rows[0].analysis_yaml).toContain('summary');         // 既有規格仍在（併入而非覆寫）
+  const all = (await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' ORDER BY id", [task.id])).rows
+    .map(l => l.content).join('\n');
+  expect(all).toContain('UMC8 改版');
+  expect(all).not.toContain('沒有更新');    // 沒有降級，不該出現這句
+  expect(all).not.toContain('AI 回覆失敗');
+});
+
+// 只送 YAML 區塊是這條路能成立的原因：整段（含數千字中文回覆）丟給 haiku，它會照抄壞資料回來。
+test('補救 prompt 只送 YAML 區塊，不夾帶回覆全文，且要轉述解析器的錯誤', async () => {
+  const task = await makeTask('clarify_chat_running');
+  runClaude.mockResolvedValueOnce({ text: `<result>\n${BROKEN_QUESTIONS}\n</result>`, usage: {}, durationMs: 1 });
+  runClaude.mockResolvedValueOnce({ text: '<result>\nintro: x\n</result>', usage: {}, durationMs: 1 });
+  await runClarifyChat({ id: task.id }, 1, null, 'ask');
+  const repairPrompt = runClaude.mock.calls[runClaude.mock.calls.length - 1][0];
+  expect(repairPrompt).toContain('user_answer');
+  expect(repairPrompt).toContain('indentation');        // 解析器的抱怨原樣轉述
+  expect(repairPrompt).toContain('頂格');                // 目標結構講給它聽
+  expect(repairPrompt).not.toContain('UMC8 改版');       // 回覆那半邊沒進 prompt
+  expect(repairPrompt).not.toContain('DECISION');
+});
+
+// 最後一道：連只修 YAML 都救不回來，才降級。回覆仍要送到、題目維持原樣、並明講這次沒更新。
+test('連 YAML 補救都失敗 → 回覆仍送到、題目原封不動、明講沒更新，不是「AI 回覆失敗」', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_mode='ask' WHERE id=$1", [task.id]);
+  const broken = { text: `<result>\n${BROKEN_QUESTIONS}\n</result>`, usage: {}, durationMs: 1 };
+  runClaude.mockResolvedValueOnce(broken);
+  runClaude.mockResolvedValueOnce(broken);   // 補救照抄壞資料回來（實測常態）
+
+  await runClarifyChat({ id: task.id }, 1, null, null);
+
+  const { rows } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_pending');
+  expect(rows[0].analysis_yaml).toBe('summary: s');   // 壞題目絕不覆蓋既有規格
+  const all = (await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' ORDER BY id", [task.id])).rows
+    .map(l => l.content).join('\n');
+  expect(all).toContain('UMC8 改版');
+  expect(all).toContain('沒有更新');
+  expect(all).not.toContain('AI 回覆失敗');
+});

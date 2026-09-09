@@ -8,7 +8,7 @@ jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
 jest.mock('../pipeline/claude-runner', () => ({ ...jest.requireActual('../pipeline/claude-runner'), runClaude: jest.fn() }));
 
-let dbModule, runSpecReview, runClaude, userId, projectId, seq = 0;
+let dbModule, runSpecReview, parseSpecReview, runClaude, userId, projectId, seq = 0;
 
 async function insertTask(analysisYaml) {
   const { rows: [t] } = await dbModule.query(
@@ -39,7 +39,7 @@ beforeAll(async () => {
   );
   projectId = p.id;
   ({ runClaude } = require('../pipeline/claude-runner'));
-  ({ runSpecReview } = require('../pipeline/spec-review'));
+  ({ runSpecReview, parseSpecReview } = require('../pipeline/spec-review'));
 });
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
@@ -92,7 +92,34 @@ test('revise（明確要改）→ 更新 analysis_yaml＋回覆落 ai、回 spec
   expect(logs.some(l => l.role === 'ai' && l.content.includes('可編輯多行'))).toBe(true);
 });
 
-test('revise 但 SPEC 段非有效 YAML → stopped（regen 失敗不靜默放行）', async () => {
+// task 254 在 clarify 關踩到的同一顆子彈：回覆完全正確，只因附載 YAML 壞掉就整輪報廢。
+// 這一關的附載是整份 analysis.yaml（幾百行），踩中機率更高，而且原本直接打成 stopped＝關掉對話入口。
+// 現在：只把壞掉的 YAML 送去修，修回來就照常套用，任務自己往下走。
+test('revise 但 SPEC 段壞掉 → 自己修好並照常套用規格，不停下', async () => {
+  const id = await insertTask('module: sale');
+  await addLog(id, 'user', '改一下');
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nDECISION: revise\nREPLY:\n改了\n---SPEC---\nmodule: sale\n  summary: 壞縮排\n</result>',
+    usage: null, durationMs: null
+  });
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nmodule: sale\nsummary: 修好了\n</result>', usage: null, durationMs: null
+  });
+
+  await runSpecReview(await loadTask(id), userId, undefined);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('spec_review');
+  expect(t.analysis_yaml).toContain('修好了');   // 規格真的套用了
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' ORDER BY id", [id]);
+  const all = logs.map(l => l.content).join('\n');
+  expect(all).toContain('改了');
+  expect(all).not.toContain('沒有更新');
+});
+
+// 最後一道：連只修 YAML 都救不回來才降級。既有規格絕不被壞 YAML 覆蓋（不變），
+// 但回覆要送到、對話入口不關——stopped 會逼使用者改走 blocker／修正指示那條長路。
+test('revise 且 SPEC 連補救都救不回 → 規格不覆蓋、回覆仍送到、講明沒更新，且不關掉對話入口', async () => {
   const id = await insertTask('module: sale');
   await addLog(id, 'user', '改一下');
   runClaude.mockResolvedValue({
@@ -103,8 +130,21 @@ test('revise 但 SPEC 段非有效 YAML → stopped（regen 失敗不靜默放�
   await runSpecReview(await loadTask(id), userId, undefined);
 
   const { rows: [t] } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('stopped');
+  expect(t.status).toBe('spec_review');
   expect(t.analysis_yaml).toBe('module: sale');   // 未被壞 YAML 覆蓋
+  const { rows: logs } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND role='ai' ORDER BY id", [id]);
+  const all = logs.map(l => l.content).join('\n');
+  expect(all).toContain('改了');       // 回覆沒有跟著壞 YAML 一起被丟掉
+  expect(all).toContain('沒有更新');   // 但要明講規格這次沒動，不能讓他以為改好了
+});
+
+test('parseSpecReview：lenient 模式下 SPEC 壞掉不丟例外，回覆保住、analysis_yaml 為 null', () => {
+  const raw = 'DECISION: revise\nREPLY:\n改了\n---SPEC---\n: : : 不是 YAML : :';
+  expect(() => parseSpecReview(raw)).toThrow();
+  const out = parseSpecReview(raw, { lenient: true });
+  expect(out.decision).toBe('revise');
+  expect(out.reply).toBe('改了');
+  expect(out.analysis_yaml).toBeNull();
 });
 
 test('agent 無有效 result → stopped', async () => {

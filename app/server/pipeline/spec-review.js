@@ -7,7 +7,7 @@ const { taskWorkContext } = require('./work-context');
 const { stopReason } = require('./claude-runner');
 const { withResume } = require('./with-resume');
 const { taskAttachmentNote } = require('./sync');
-const { parseAgentResult } = require('./agent-result');
+const { parseAgentResult, repairYamlPayload } = require('./agent-result');
 const { enqueue: enqueueEmbedding } = require('../lib/embedding-index');
 const { recordSpecVersionSafe } = require('./spec-version');
 const yaml = require('js-yaml');
@@ -22,7 +22,11 @@ const yaml = require('js-yaml');
 //   [revise 才有] ---SPEC---\n<完整 analysis.yaml>
 // 換行安全、免 JSON 跳脫。revise 必須帶可被 yaml.load 解析的 SPEC，否則丟例外（→ parseAgentResult 回 null → stopped）。
 const SPEC_SEP = '---SPEC---';
-function parseSpecReview(s) {
+// lenient：嚴格解析失敗後立刻試的零成本第二手（見 agent-result.js 的順序說明）。規格 YAML 壞掉就
+// 先當它沒產（analysis_yaml=null）並把壞掉的原文帶出去，呼叫端據此只補救那一段 YAML，修回來照常套用。
+// 補救也失敗才降級成「規格不動＋講明沒更新」，而不是把整輪連同一段正確的回覆一起丟掉——
+// 這一關的附載是幾百行的 analysis.yaml，踩中機率最高。
+function parseSpecReview(s, { lenient = false } = {}) {
   const text = String(s).trim();
   const m = text.match(/^DECISION:\s*(answer|revise)\b/i);
   if (!m) throw new Error('缺 DECISION');
@@ -32,16 +36,32 @@ function parseSpecReview(s) {
   const replyPart = sepIdx === -1 ? rest : rest.slice(0, sepIdx);
   const reply = replyPart.replace(/^\s*REPLY:\s*/i, '').trim();
   if (!reply) throw new Error('缺 REPLY');
-  let analysis_yaml = null;
+  let analysis_yaml = null, broken_payload = null, payload_error = null;
   if (decision === 'revise') {
-    if (sepIdx === -1) throw new Error('revise 缺 ---SPEC---');
-    const yamlStr = rest.slice(sepIdx + SPEC_SEP.length).trim();
-    const v = yaml.load(yamlStr, { schema: yaml.CORE_SCHEMA });
-    if (!v || typeof v !== 'object') throw new Error('SPEC 非有效 YAML 物件');
-    analysis_yaml = yamlStr;
+    try {
+      if (sepIdx === -1) throw new Error('revise 缺 ---SPEC---');
+      const yamlStr = rest.slice(sepIdx + SPEC_SEP.length).trim();
+      const v = yaml.load(yamlStr, { schema: yaml.CORE_SCHEMA });
+      if (!v || typeof v !== 'object') throw new Error('SPEC 非有效 YAML 物件');
+      analysis_yaml = yamlStr;
+    } catch (e) {
+      if (!lenient) throw e;
+      // 壞掉的原文與錯誤訊息一起帶出去：呼叫端要拿它去做「只修 YAML 區塊」的補救。
+      broken_payload = sepIdx === -1 ? null : rest.slice(sepIdx + SPEC_SEP.length).trim();
+      payload_error = String((e && e.message) || '').split('\n')[0] || null;
+    }
   }
-  return { decision, reply, analysis_yaml };
+  return { decision, reply, analysis_yaml, broken_payload, payload_error };
 }
+
+// 補救 agent 沒看過這份自訂契約，不講給它聽就只能猜鍵名。
+const SPEC_SCHEMA_HINT = [
+  'DECISION: answer|revise',
+  'REPLY:',
+  '<給使用者看的回覆全文，可多行>',
+  `${SPEC_SEP}   ← 只有 revise 才有；以下整段是完整的 analysis.yaml`,
+  '<YAML>'
+].join('\n');
 
 async function runSpecReview(task, userId, signal) {
   const taskId = task.id;
@@ -111,7 +131,13 @@ async function runSpecReview(task, userId, signal) {
     return;
   }
 
-  const parsed = await parseAgentResult(raw, { parse: parseSpecReview, signal, ref, userId });
+  const parsed = await parseAgentResult(raw, {
+    parse: parseSpecReview,
+    // 規格 YAML 壞掉時先把回覆與壞掉的原文撈出來，下面單獨補救那一段（見 agent-result.js 的順序說明）。
+    lenientParse: t => parseSpecReview(t, { lenient: true }),
+    schemaHint: SPEC_SCHEMA_HINT,
+    signal, ref, userId
+  });
   if (!parsed) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_content='規格問答未回傳有效結果，請檢查 terminal 輸出', updated_at=NOW() WHERE id=$1",
@@ -121,9 +147,25 @@ async function runSpecReview(task, userId, signal) {
     return;
   }
 
+  // 規格 YAML 壞掉（lenient 降級）→ 只把那段 YAML 送去修，修回來就照常套用，使用者不必重講一次。
+  // 整段補救辦不到的事（要它把回覆連同幾百行規格逐字重抄），縮到「修這段 YAML 的格式」才做得到。
+  if (parsed.decision === 'revise' && !parsed.analysis_yaml && parsed.broken_payload) {
+    parsed.analysis_yaml = await repairYamlPayload(parsed.broken_payload, parsed.payload_error, {
+      signal, ref, userId
+    });
+  }
+
   // 回覆一律落時間軸（role='ai'）；revise 才連同更新 analysis_yaml。兩者狀態都回 spec_review 讓使用者續看／續問。
   await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, parsed.reply]);
-  if (parsed.decision === 'revise') {
+  // revise 但規格沒救回來（lenient 降級）：規格維持原樣，並讓使用者看得到「這次沒更新」——
+  // 靜靜不更新的話他會以為改好了，往下走才發現規格還是舊的。比照 clarify-chat 的同款分支。
+  if (parsed.decision === 'revise' && !parsed.analysis_yaml) {
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, '（規格這次沒有更新：AI 回傳的規格格式異常，上面的回覆仍然有效，請再說一次或人工確認規格。）']
+    );
+  }
+  if (parsed.decision === 'revise' && parsed.analysis_yaml) {
     await query(
       "UPDATE tasks SET analysis_yaml=$2, status='spec_review', updated_at=NOW() WHERE id=$1",
       [taskId, parsed.analysis_yaml]

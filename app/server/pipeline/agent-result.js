@@ -1,4 +1,5 @@
 const { runAgent } = require('./agent-runner');
+const yaml = require('js-yaml');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 
 // 統一 agent 輸出契約解析（健檢主題 F）：需要結構化結果的 agent 走同一份，取代逐個修的貪婪 regex／裸 YAML。
@@ -60,24 +61,34 @@ const REPAIR_PROMPT = (raw, err, schemaHint) =>
     '輸出若沒有明說對應的值，就依它實際做了什麼如實填，不要編造。' : '') +
   '\n\n' + raw;
 
-// 解析 agent 輸出：先直接 extract+parse，失敗才用 haiku 補救一次（只修格式、不改語意），
-// 仍失敗回 null（呼叫端 stopped）。agent 已花完數十萬 token，不該因收尾格式抖動整輪報廢（健檢 F）。
-// ref/userId：補救那一次 haiku 呼叫的記帳歸屬（不帶則不記帳，僅測試允許）。
+// 解析 agent 輸出。順序刻意排成「先免費、再便宜、最後才貴」：
+//   1. 嚴格解析
+//   2. lenientParse（呼叫端提供，零成本）——契約若是「散文回覆 ＋ 分隔線 ＋ 結構化附載」，
+//      壞的幾乎一定是附載那半邊。先把回覆撈出來，附載交給呼叫端用 repairYamlPayload 單獨修。
+//   3. 整段丟 haiku 重整（只有連 DECISION／REPLY 都讀不出來時才走到這）
+// 步驟 2 排在 3 前面不只是省錢：實測 task 254 的整段補救花了 92 秒卻照抄同一份壞資料回來，
+// 因為那段有 3.7k 字（大半是中文散文），要它改一個縮排等於要它逐字重抄一遍。
+// ref/userId：補救那次 haiku 呼叫的記帳歸屬（不帶則不記帳，僅測試允許）。
 // abort（手動暫停）必須 rethrow 而非吞成 null——吞掉會讓呼叫端把「暫停」誤標成 stopped。
-async function parseAgentResult(raw, { parse, schemaHint, signal, ref, userId } = {}) {
+async function parseAgentResult(raw, { parse, lenientParse, schemaHint, signal, ref, userId } = {}) {
   let parseErr = null; // 只留第一次（原始輸出）的錯誤：那才是要補救 agent 修的東西
-  const doParse = s => {
+  const doParse = (fn, s) => {
     if (s == null) return null;
-    try { const v = parse(s); return v == null ? null : v; }
-    catch (e) { parseErr = String((e && e.message) || '').split('\n')[0] || null; return null; }
+    try { const v = fn(s); return v == null ? null : v; }
+    catch (e) { if (parseErr == null) parseErr = String((e && e.message) || '').split('\n')[0] || null; return null; }
   };
-  let out = doParse(extractResult(raw));
+  const inner = extractResult(raw);
+  let out = doParse(parse, inner);
   if (out != null) return out;
+  if (lenientParse) {
+    out = doParse(lenientParse, inner);
+    if (out != null) return out;   // 部分結果：缺的那半邊由呼叫端負責補回來
+  }
   try {
     // 契約補救固定 Claude/haiku：只做文字整形，不隨原 agent 改 provider 以免多一個變數。
     const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair' });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
-    out = doParse(extractResult(repaired.raw ?? repaired.text));
+    out = doParse(parse, extractResult(repaired.raw ?? repaired.text));
   } catch (err) {
     if (err && err.aborted) throw err;
     if (ref) await logFailedUsage(ref, userId, 'repair', err);
@@ -86,4 +97,32 @@ async function parseAgentResult(raw, { parse, schemaHint, signal, ref, userId } 
   return out;
 }
 
-module.exports = { extractResult, parseAgentResult, stripFence, extractTaggedBlock };
+// 只把壞掉的 YAML 附載送去修，回覆那半邊完全不進 prompt。回傳修好且能 yaml.load 的字串，否則 null。
+// 這是「格式錯了也要自己走下去」的關鍵一步：修回來之後呼叫端照常套用，使用者不必重講一次。
+// 刻意不做任何本地的縮排猜測——猜錯就是靜默寫壞規格（Rule 70），寧可交給 model 再讓 yaml.load 把關。
+async function repairYamlPayload(yamlStr, parseErr, { schemaHint, signal, ref, userId } = {}) {
+  if (!yamlStr || !String(yamlStr).trim()) return null;
+  const prompt = '以下是一段 YAML，解析失敗了。請只回傳修正後的 YAML 本身，完整包在 <result></result> 標籤內，' +
+    '標籤外不要有任何其他文字。**只修格式**（縮排、引號、跳脫、標點）——內容一個字都不要改，' +
+    '不要增加或刪除任何欄位、任何一題、任何一個選項。' +
+    (parseErr ? `\n\n解析器的錯誤訊息是「${parseErr}」，請針對它修正。` : '') +
+    (schemaHint ? `\n\n這份 YAML 應有的結構：\n${schemaHint}` : '') +
+    '\n\n' + yamlStr;
+  let fixed = null;
+  try {
+    const r = await runAgent(prompt, { provider: 'claude', model: 'haiku', signal, agentType: 'repair' });
+    if (ref) await logTokenUsage(ref, userId, 'repair', r.usage, r.durationMs);
+    fixed = extractResult(r.raw ?? r.text);
+  } catch (err) {
+    if (err && err.aborted) throw err;
+    if (ref) await logFailedUsage(ref, userId, 'repair', err);
+    return null;
+  }
+  if (!fixed) return null;
+  try {
+    const v = yaml.load(fixed, { schema: yaml.CORE_SCHEMA });
+    return v && typeof v === 'object' && !Array.isArray(v) ? fixed : null;
+  } catch { return null; }
+}
+
+module.exports = { extractResult, parseAgentResult, repairYamlPayload, stripFence, extractTaggedBlock };
