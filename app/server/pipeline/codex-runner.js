@@ -4,6 +4,7 @@ const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
 const { looksLikeAuthFailure } = require('./auth-signature');
+const { sandboxFailureReason } = require('./sandbox-signature');
 
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.CLAUDE_AGENT_TIMEOUT_MS || '2400000', 10);
 const KILL_GRACE_MS = parseInt(process.env.PIPELINE_KILL_GRACE_MS || '5000', 10);
@@ -34,9 +35,13 @@ function runCodex(prompt, opts = {}) {
     if (model) args.push('--model', model);
     if (effort) args.push('-c', `model_reasoning_effort="${effort}"`);
     // 批次一全為無工作區寫入的純文字 agent；read-only 避免意外寫檔。
-    args.push('--sandbox', 'read-only', '--dangerously-bypass-hook-trust');
+    // `exec resume` 子指令不接受 --sandbox（0.149.1 實測：unexpected argument、exit code 2，
+    // 數十毫秒即退），整包參數在 CLI 解析階段就死掉、with-resume 靜默降級成 fresh 重送——
+    // 續接輪等於從沒成立過。續接改用等價的 -c 設定同一個 read-only 模式（非放寬保護）。
+    args.push(...(resumeSessionId ? ['-c', 'sandbox_mode="read-only"'] : ['--sandbox', 'read-only']));
+    args.push('--dangerously-bypass-hook-trust');
     const startedAt = Date.now();
-    let sessionId = null, resultText = '', assistantText = '', usage = null, stderr = '', settled = false, timer;
+    let sessionId = null, resultText = '', assistantText = '', usage = null, stderr = '', toolOutput = '', settled = false, timer;
     let lineBuffer = '';
     // 訂閱模式使用 `codex app-server` 所保存、會自動刷新的 ChatGPT 登入；絕不把
     // OPENAI_API_KEY 繼承進子行程，避免同一台正式機意外退回 API 按量計費。
@@ -72,6 +77,8 @@ function runCodex(prompt, opts = {}) {
             resultText = ev.item.text || resultText;
             assistantText += ev.item.text || '';
           }
+          // 工具指令的輸出只走 stdout 的 JSONL（不進 stderr）——沙箱起不來的證據只在這裡。
+          if (ev.type === 'item.completed' && ev.item?.type === 'command_execution') toolOutput += `${ev.item.aggregated_output || ''}\n`;
           if (ev.type === 'turn.completed') usage = ev.usage || null;
           if (ev.type === 'turn.failed') stderr += `${ev.error?.message || 'Codex turn failed'}\n`;
           const shown = displayEvent(ev); if (shown) emit(shown);
@@ -87,6 +94,12 @@ function runCodex(prompt, opts = {}) {
         const message = stderr.trim() || (code === null ? `codex 行程被外部終止（${sig || 'signal'}）` : `codex exited with code ${code}`);
         const status = code === null ? 'interrupted' : (looksLikeAuthFailure(message) ? 'auth' : 'error');
         return reject(fail(new Error(message), status, startedAt, sessionId));
+      }
+      // 沙箱起不來時每個工具呼叫都在啟動階段就失敗（agent 讀不到任何檔案、只能回「查不到」），
+      // 但 CLI 仍以 exit 0 結束；不在這裡攔就會被 token-logger 記成 completed，全程零失敗訊號。
+      const sandboxReason = sandboxFailureReason(`${toolOutput}\n${stderr}`);
+      if (sandboxReason) {
+        return reject(fail(new Error(`codex 沙箱啟動失敗，agent 無法執行任何工具指令：${sandboxReason}`), 'error', startedAt, sessionId));
       }
       if (usage) {
         usage.cache_read_input_tokens = usage.cached_input_tokens || 0;
