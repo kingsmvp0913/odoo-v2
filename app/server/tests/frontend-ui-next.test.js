@@ -223,7 +223,6 @@ describe("ui-next 平行介面", () => {
       "'/projects/:id/wiki'",
       "'/projects/:id/wiki/:slug'",
       "'/projects/:id/db'",
-      "'/projects/:id/deploy-sop'",
       "'/settings'",
       "'/token-report'",
       "'/architecture'",
@@ -259,7 +258,6 @@ describe("ui-next 平行介面", () => {
 
   test("新版工具與管理頁保留原始 View 的資料操作，並有新版框架", () => {
     [
-      "UiNextDeploySopView",
       "UiNextAdminView",
     ].forEach((name) =>
       expect(uiNextPages).toMatch(new RegExp(`name:\\s*["']${name}["']`)),
@@ -796,7 +794,7 @@ describe("ui-next 平行介面", () => {
     expect(projects).toContain('ui-next-project-more-menu');
     // ⋮ 的前段與側欄 ⋮ 同順序（測試區／上正式／REPO／連線設定／專案設定），
     // 側欄沒有的往後放。這裡只斷言入口都在，不綁順序以外的實作細節。
-    ['測試區', '上正式', 'REPO', '連線設定', '專案設定', '問答', 'Wiki', '部署 SOP'].forEach((label) =>
+    ['測試區', '上正式', 'REPO', '連線設定', '專案設定', '問答', 'Wiki'].forEach((label) =>
       expect(projects).toContain(`>${label}</button>`));
     // 卡片下方那排按鈕已整個收掉，剩下的入口只有標題列的 ⋮。
     expect(projects).not.toMatch(/<footer>\s*<button @click="openEnv/);

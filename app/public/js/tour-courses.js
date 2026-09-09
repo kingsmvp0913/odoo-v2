@@ -165,7 +165,7 @@ window.TOUR_COURSES = [
         target: '[data-tour="pd-tools"]',
         placement: 'bottom',
         title: '專案頁的七個分頁',
-        text: '<strong>Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>設定</strong>：專案名稱、來源對應這些。<br><strong>Repo</strong>：程式碼來源。<br><strong>連線設定</strong>：正式區的唯讀資料庫連線，設好之後 AI 也會用它去查。<br><strong>測試環境</strong>：驗收用的那台。<br><strong>Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><strong>部署 SOP</strong>：想把「上正式」接成推上去就自動部署時照著這頁做，指令已經幫你填好值。<br><br>Wiki、Chat、連線設定各有一課，接下來就是。',
+        text: '<strong>Chat</strong>：排障助理，聊出結論可以直接變成一張任務。<br><strong>設定</strong>：專案名稱、來源對應這些。<br><strong>Repo</strong>：程式碼來源。<br><strong>連線設定</strong>：正式區的唯讀資料庫連線，設好之後 AI 也會用它去查。<br><strong>測試環境</strong>：驗收用的那台。<br><strong>Wiki</strong>：AI 讀完整個 repo 整理的知識庫，含踩過的坑。<br><br>Wiki、Chat、連線設定各有一課，接下來就是。',
         warn: '「上正式」不在這裡——它在專案列表的卡片選單裡（⋮ 或右鍵），「實際流程」那一課會帶到。'
       }
     ]

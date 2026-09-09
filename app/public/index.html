@@ -27,7 +27,7 @@
       // 換順序的症狀是樣式默默變掉，沒有錯誤、沒有測試會叫，只有人眼看得出來。
       var UI_NEXT_CSS = [
         '01-base', '02-project-detail', '03-task-detail', '04-settings',
-        '05-project-list', '06-chat', '07-admin', '08-report-and-sop',
+        '05-project-list', '06-chat', '07-admin', '08-report',
         '09-later-patches'
       ];
       var href = ['css/ui-next.css']
@@ -84,7 +84,6 @@
   <script src="js/views/ProjectList.js"></script>
   <script src="js/views/ProjectDetail.js"></script>
   <script src="js/views/ProjectDbQuery.js"></script>
-  <script src="js/views/DeploySop.js"></script>
   <script src="js/views/Terminal.js"></script>
   <script src="js/vendor/marked.min.js"></script>
   <script src="js/markdown.js"></script>
@@ -112,7 +111,7 @@
       // window.UiNextShared 解構取 helper，晚一步就是 undefined 而整支檔炸掉。
       var UI_NEXT_PAGES = [
         'Login', 'TokenReport', 'Pipeline', 'ProjectChat', 'ProjectDetail',
-        'TaskDetail', 'Settings', 'ProjectList', 'TaskList', 'Wiki', 'DeploySop',
+        'TaskDetail', 'Settings', 'ProjectList', 'TaskList', 'Wiki',
         'Terminal', 'Admin', 'Db', 'AdminUsers', 'DeployTargets',
         'AdminSettings', 'AdminAgents', 'AdminSchedules', 'AdminHealthCheck',
         'AdminRejections', 'AdminClassifySamples', 'AdminPromptLogs',

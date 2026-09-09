@@ -6,19 +6,19 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, editAutoDeploy: false, savingAutoDeploy: false, detailTab: ["repos","env","settings","chat","db","sop","wiki","deploy"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, editAutoDeploy: false, savingAutoDeploy: false, detailTab: ["repos","env","settings","chat","db","wiki","deploy"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
     computed: {
       // tabs 是 computed 不是靜態陣列：這個專案的自動部署開關關閉時，分頁必須整個不存在。
       // 這只是畫面——後端每一支部署端點自己也擋（requireAdmin + requireAutoDeploy）。
       tabs() {
-        const base = [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]];
+        const base = [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"]];
         if (this.project && this.project.auto_deploy_enabled) base.push(["deploy","自動部署"]);
         return base;
       },
-      embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView, deploy: window.UiNextDeployTargetsView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
+      embeddedTab() { return { db: window.UiNextDbView, wiki: window.UiNextWikiView, deploy: window.UiNextDeployTargetsView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
     watch: {
       "$route.query.tab"(tab) {
-        const next = ["repos","env","settings","chat","db","sop","wiki"].includes(tab) ? tab : "chat";
+        const next = ["repos","env","settings","chat","db","wiki","deploy"].includes(tab) ? tab : "chat";
         if (next === this.detailTab) return;
         this.detailTab = next;
         if (next === "chat") this.loadChats();

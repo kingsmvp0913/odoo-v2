@@ -177,13 +177,6 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: "/projects/:id/deploy-sop",
-      component: window.UiNextEnabled
-        ? window.UiNextDeploySopView
-        : window.DeploySopView,
-      meta: { requiresAuth: true },
-    },
-    {
       path: "/token-report",
       component: window.UiNextEnabled
         ? window.UiNextTokenReportView
