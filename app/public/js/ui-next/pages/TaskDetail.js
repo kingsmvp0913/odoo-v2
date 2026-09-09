@@ -709,8 +709,8 @@
         if (this.task.source === 'service') return 'src-badge src-service';
         return 'src-badge src-default';
       },
-      // stage＝runner 寫的「→ 換關」單行紀錄。沿用 system 的灰字，但另掛 is-stage 拿掉虛線框：
-      // 一張任務會有十來行，每行都包一個框會把真正的對話擠成配角。
+      // stage＝runner 寫的「→ 換關」單行紀錄。沿用 system 的灰色虛線框泡泡，另掛 is-stage
+      // 只為了把框收成內容寬（換關文字都很短，撐滿整欄的框比字還搶眼）。
       roleClass(role) {
         if (role === 'blocker') return 'system is-blocker';
         if (role === 'stage') return 'system is-stage';

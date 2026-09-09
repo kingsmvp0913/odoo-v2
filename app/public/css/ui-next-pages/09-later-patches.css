@@ -1246,11 +1246,12 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-task-card-actions>button.ui-next-pause-toggle{display:grid;place-items:center;padding:6px}
 .ui-next-task-card-actions .ui-next-icon{width:14px;height:14px}
 
-/* 換關那一行（role='stage'）：沿用 system 的灰字，但拿掉虛線框與內距。一張任務走完十來關，
-   每一關都包一個框會讓真正的對話變成配角——它要像時間軸上的刻度，不是一則訊息。 */
-.ui-next-conv-list article.system.is-stage > div:first-child{
-  padding:0;border:0;background:transparent;color:var(--text-muted);font-size:11px}
-.ui-next-conv-list article.system.is-stage small{font-size:11px}
+/* 換關那一行（role='stage'）：2026-09-09 使用者回饋「階段更新也做成對話泡泡格式，可以用
+   灰色虛線框表示」——原本刻意拿掉框、壓成時間軸刻度，現改回沿用 .system 那顆灰色虛線框，
+   時間軸上每一則訊息（AI／你／系統／換關）就是同一套版型，只靠框的有無與顏色分身分。
+   只額外收寬度：換關文字都是「→ 部署測試區」這種短句，撐滿整欄的虛線框比字本身還搶眼，
+   fit-content 讓框貼著字走才像氣泡（真的很長時仍由 max-width 收在欄寬內）。 */
+.ui-next-conv-list article.system.is-stage > div:first-child{width:fit-content;max-width:100%}
 
 /* ── 認證題庫（ExamBank）───────────────────────────────────────────────
    配色一律走 app.css 的變數。不寫死任何淺色背景——深色模式下文字色吃
