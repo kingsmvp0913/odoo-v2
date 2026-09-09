@@ -28,7 +28,7 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
   * **嚴禁**開「會活過本輪結果輸出」的背景任務再空等它（如背景跑指令後 `sleep` 輪詢、ScheduleWakeup、派 Explore 找環境）——這會讓本輪被判「未回傳有效結果」而整輪報廢。
 
 【deploy 抓不到的靜默缺陷——本關必須自檢】
-下面這幾類不會讓模組安裝失敗、deploy 綠燈也放行，卻讓修正等於沒跑或誤傷資料，deploy 把不到，你要逐項自檢：
+下面這幾類不會讓模組安裝失敗、deploy 綠燈也放行，卻讓修正等於沒跑、誤傷資料，或讓失敗被報成別的原因甚至報成成功，deploy 把不到，你要逐項自檢：
 - (A) 寫 migration（本輪在 `migrations/` 有新增或修改 `pre-`／`post-`／`end-` script）時，逐條對照：
   1. 新增 migration 一定要同步升 `__manifest__.py` 的 `version`——版本沒升 Odoo 會**靜默跳過**該 migration，你的清理／回填等於完全沒跑。
   2. 比對條件要對得上實際檔名／資料格式——LIKE 字串多一個空白、大小寫不符，該清的列會一筆都沒清。
@@ -40,6 +40,10 @@ Think in English internally; output Traditional Chinese. 保留英文術語：Va
   1. **Odoo rollback 時外部已 commit**：外部寫入若在 Odoo 交易 commit 之前就送出，之後這筆交易一旦 rollback（後續任一步拋錯），外部系統已寫入、Odoo 卻沒寫＝兩邊永久不一致。外部寫入要嘛延到 Odoo commit 之後（postcommit），要嘛設計成可補償／可重放。
   2. **分組 commit 的部分成功**：一批資料分組（逐筆／逐組）寫外部系統時，寫到一半拋錯＝前面已成功、後面沒寫，兩邊對不齊且無法整批回滾。要嘛收斂成同一交易一次寫、要嘛記錄進度可續傳，不可假設「一定跑得到底」。
   3. **以 0／空值覆蓋外部既有的正確值**：把 Odoo 端尚未計算／為空的欄位當成 `0`／空字串寫回外部系統，會蓋掉外部原本正確的值。寫回前先確認該值確實該被更新，不可用預設 `0`／空值無條件覆蓋。
+- (D) try/except 的涵蓋範圍（本輪新增或改動 `try:` 區塊時）。這類缺陷程式跑得起來、deploy 一定綠燈，QA 看 diff 也覺得 try/except 形狀正常，只有真正踩到錯誤路徑的使用者會遇到，逐項自檢：
+  1. **try 只包住該 except 語意真正負責的那幾行呼叫**：前置準備（取參數、查 record、組 payload）與後續動作（寫回欄位、回傳、發通知）一律移到 try 外。同一個 try 內若混著兩種失敗語意（例如「連外部系統」與「寫 Odoo 欄位」），拆成兩個 try 各自處理。
+  2. **except 產生的錯誤訊息必須指向 try 內實際失敗的那個操作**：訊息（`UserError`／`_logger`）講的那件事若不在 try 範圍內，使用者看到的錯誤就指向錯的操作，照著它查永遠找不到真因。寫完回頭讀一次訊息文字，確認它講的操作真的在 try 裡。
+  3. **不得讓上層 except 把子操作的失敗吞成成功**：except 內若既不重拋、也不把失敗反映到回傳值／狀態就往下走（只 `pass`、只 `_logger.warning`），流程會照常跑到最後回一句「完成」，使用者收到成功訊息但事情根本沒做。每個 except 都要有回報路徑。
 
 【Commit 格式】（只 commit，不 push；每個 repo 子目錄各是獨立 git repo）
 對每個「有變更」的 repo 子目錄，分別在該子目錄內 commit：
