@@ -7,7 +7,10 @@ const { query } = require('../db');
 // 否則最貴的情境（失敗重跑）在帳面上隱形（健檢 U12）。
 // resumed：這一輪是續用上輪 session（true）還是全量重讀（false）。未傳＝該關卡沒有 resume 概念
 // 或還沒接上，一律留 NULL，不可退成 false——兩者混在一起，「fresh 佔比」就再也算不準。
-async function logTokenUsage(ref, userId, agentType, usage, durationMs, status = 'completed', resumed = null) {
+// errorMessage：失敗列的成因（只有 logFailedUsage 會傳）。成功列留 NULL。
+const ERROR_MESSAGE_MAX = 2000;
+
+async function logTokenUsage(ref, userId, agentType, usage, durationMs, status = 'completed', resumed = null, errorMessage = null) {
   if (!usage && status === 'completed') return;
   const u = usage || {};
   try {
@@ -15,8 +18,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
       `INSERT INTO token_usage
          (task_id, project_id, chat_id, user_id, agent_type, model, provider,
           input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
-          duration_ms, status, source, resumed)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'server',$14)`,
+          duration_ms, status, source, resumed, error_message)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'server',$14,$15)`,
       [
         ref.taskId    || null,
         ref.projectId || null,
@@ -34,7 +37,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
         u.cache_creation_input_tokens || 0,
         durationMs || null,
         status,
-        resumed
+        resumed,
+        errorMessage ? String(errorMessage).slice(0, ERROR_MESSAGE_MAX) : null
       ]
     );
   } catch (err) {
@@ -42,9 +46,17 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
   }
 }
 
-// 失敗路徑專用（best-effort）：runClaude 會在 err 標注 claudeStatus 與 durationMs
+// 失敗路徑專用（best-effort）：runClaude 會在 err 標注 claudeStatus 與 durationMs。
+// err.message 一定要跟著落庫：這些呼叫點有一半傳 taskId=null（health-check-runner／fix-review／
+// fix-verify／chat 相關），連 task_events 都沒有對應紀錄，訊息丟掉就只剩 duration 可以反推成因。
 function logFailedUsage(ref, userId, agentType, err) {
-  return logTokenUsage(ref, userId, agentType, null, err?.durationMs || null, err?.claudeStatus || 'error');
+  return logTokenUsage(
+    ref, userId, agentType, null,
+    err?.durationMs || null,
+    err?.claudeStatus || 'error',
+    null,
+    err?.message || (err ? String(err) : null)
+  );
 }
 
 module.exports = { logTokenUsage, logFailedUsage };

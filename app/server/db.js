@@ -370,6 +370,7 @@ async function migrate() {
       duration_ms          INTEGER,
       source               TEXT NOT NULL DEFAULT 'server' CHECK (source IN ('server','ps1')),
       resumed              BOOLEAN,
+      error_message        TEXT,
       recorded_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
 
@@ -998,6 +999,12 @@ async function migrate() {
     // 「這些列被明確標記過」。計價需要它——lib/token-cost.js 原本只看 model 字串，codex 的
     // model 名會全數落到 ELSE 分支被當 sonnet 計，而且不會報錯。
     { table: 'token_usage', col: 'provider', sql: 'ALTER TABLE token_usage ADD COLUMN provider TEXT' },
+    // 失敗列的錯誤訊息。沒有這一欄時，一次失敗的執行在 DB 裡只剩 status 與 duration_ms 兩個線索，
+    // 而 logFailedUsage 有一半的呼叫點（health-check-runner／fix-review／fix-verify／chat 相關）
+    // 傳 taskId=null、連 task_events 都不會留紀錄，等於零診斷線索——實際已連兩次只能靠 duration
+    // 的形狀反推成因（2026-09-08 的 9 筆 codex 續接失敗、feedback_triage 首日 5 筆 error）。
+    // 成功列一律 NULL；寫入端截斷長度，避免整份 stack／輸出塞爆這張高頻寫入的表。
+    { table: 'token_usage', col: 'error_message', sql: 'ALTER TABLE token_usage ADD COLUMN error_message TEXT' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
     { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },
