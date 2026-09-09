@@ -6,7 +6,7 @@ const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./mainten
 const { triageOne, mergeCandidates } = require('./feedback-triage');
 const { reviewFix } = require('./fix-review');
 const { verifyFix } = require('./fix-verify');
-const { runFix, adoptFix, applyFix, selfContainerName } = require('./finding-fix');
+const { runFix, adoptFix, applyFix, removeWorktree, selfContainerName } = require('./finding-fix');
 
 /**
  * nightly-fix.js — 夜間批次編排器：意見回饋通道的核心。
@@ -641,9 +641,13 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
 
     // reviewFix／verifyFix 都只回 verdict、不落地。狀態也要一起改掉：只寫 reject_reason 會讓
     // 這筆停在 ready，管理頁看起來像「還可以採用」。
+    // 工作區一併收掉：finding-fix.js 自己那三條退場路徑（越界、沒改動、人工捨棄）都收，只有
+    // 這條漏掉，於是每被駁回一次就永久留下一份完整 checkout，而畫面上完全看不出來。
+    const { rows: [prev] } = await query('SELECT worktree FROM finding_fixes WHERE id=$1', [fixId]);
     await query(
-      `UPDATE finding_fixes SET status='rejected', reject_reason=$2, finished_at=NOW() WHERE id=$1`,
+      `UPDATE finding_fixes SET status='rejected', reject_reason=$2, worktree=NULL, finished_at=NOW() WHERE id=$1`,
       [fixId, blocked]);
+    await removeWorktree(prev && prev.worktree);
     console.log('[NIGHTLY-FIX] 提案 #%d 第 %d 次未通過：%s', cand.findingId, attempt + 1, blocked);
 
     attempt += 1;

@@ -20,6 +20,7 @@ jest.mock('../pipeline/finding-fix', () => ({
   runFix: jest.fn(),
   adoptFix: jest.fn(),
   applyFix: jest.fn(),
+  removeWorktree: jest.fn(),
   selfContainerName: jest.fn(async () => 'odoo-v2'),
 }));
 // execFile 的 promisify 版依呼叫方式走 (cmd, args, cb) 或 (cmd, args, opts, cb)：callback 一律是最後一個參數
@@ -31,7 +32,7 @@ const { getInflightInfo } = require('../pipeline/runner');
 const { triageOne, mergeCandidates } = require('../pipeline/feedback-triage');
 const { reviewFix } = require('../pipeline/fix-review');
 const { verifyFix } = require('../pipeline/fix-verify');
-const { runFix, adoptFix, applyFix, selfContainerName } = require('../pipeline/finding-fix');
+const { runFix, adoptFix, applyFix, removeWorktree, selfContainerName } = require('../pipeline/finding-fix');
 
 let dbModule, nightlyFix, maintenance, userId;
 
@@ -475,6 +476,30 @@ test('reviewFix 第一次 reject → 新開一筆 finding_fixes 重跑（新增�
   expect(rows).toHaveLength(2);
   expect(rows[0]).toMatchObject({ status: 'rejected', reject_reason: '不夠好' }); // 舊列保留且不再像「可採用」
   expect(result.applied).toBe(1);
+});
+
+// 審核打回票的工作區沒人收＝每次被駁回都永久留下一份完整 checkout，而畫面上零徵狀。
+// finding-fix.js 自己那三條退場路徑（越界、沒改動、人工捨棄）都收，只有這條漏掉。
+test('審核未通過時要收掉工作區，並把 worktree 欄清空', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  runFix.mockImplementation(async (fixId) => {
+    await dbModule.query(
+      `UPDATE finding_fixes SET status='ready', worktree=$2 WHERE id=$1`, [fixId, `/tmp/wt-${fixId}`]);
+  });
+  reviewFix.mockResolvedValue({ verdict: 'reject', reason: '不行' });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  // 不寫死 id：pg-mem 的 SERIAL 跨測試累加，寫死會在別支測試增減時無聲地失去鑑別力
+  const { rows } = await dbModule.query(
+    `SELECT id, worktree FROM finding_fixes WHERE status='rejected' ORDER BY id`);
+  expect(rows.length).toBeGreaterThan(0);
+  const removed = removeWorktree.mock.calls.map(c => c[0]);
+  for (const r of rows) {
+    expect(removed).toContain(`/tmp/wt-${r.id}`);
+    expect(r.worktree).toBeNull();
+  }
 });
 
 test('reviewFix 第二次仍 reject → 不再重試，這條結束', async () => {

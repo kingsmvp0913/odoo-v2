@@ -98,6 +98,24 @@ test('測試實際是紅的就記 fail，並把 agent 自報的 pass 一起標�
   expect(lastStatus()).toBe('rejected');
 });
 
+// 被駁回的工作區留著就是永久累積：每次審核打回票都多一份完整 checkout，畫面上零徵狀。
+// 2026-09-09 清出一個 09-08 留下的（fix-10）。diff 已經存進 DB，工作區沒有留的價值。
+test('測試退步而被駁回時要收掉工作區，並把 worktree 欄清空', async () => {
+  npmResult = [
+    { fails: false, stderr: 'Tests:       3122 passed, 3122 total\n' },
+    { fails: true, stderr: 'Tests:       9 failed, 3113 passed, 3122 total\n' },
+  ];
+  await runFix(1, { findingId: 9, startedBy: 2 });
+
+  const removed = mockExecFile.mock.calls.some(
+    c => c[0] === 'git' && c[1].join(' ') === `worktree remove --force ${worktree}`);
+  expect(removed).toBe(true);
+  // 欄位也要清：留著路徑會讓「還有工作區可看」變成假的
+  const [sql, params] = mockQuery.mock.calls.filter(([s]) => /UPDATE finding_fixes/.test(s)).pop();
+  expect(sql).toMatch(/worktree/);
+  expect(params).toContain(null);
+});
+
 test('基線與改後打平才記 pass，且不留下多餘的自報噪音', async () => {
   npmResult = { fails: false, stderr: 'Tests:       3 skipped, 3122 passed, 3125 total\n' };
   await runFix(1, { findingId: 9, startedBy: 2 });

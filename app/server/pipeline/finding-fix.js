@@ -325,8 +325,10 @@ async function runFix(fixId, { findingId, startedBy = null } = {}) {
     // 是既有狀態值（不新增狀態），nightly-fix.js 的 `status !== 'ready'` 守衛天然會攔住它；
     // diff 照樣寫進去，人工複核仍看得到改了什麼、理由是什麼。
     if (cmp.regressed) {
+      // diff 已經存進 DB 了，工作區沒有留的價值；不收的話每次退步都永久多一份完整 checkout。
+      await removeWorktree(worktree);
       await setStatus(fixId, 'rejected', {
-        notes, test_result: testResult, diff, reject_reason: `測試退步：${testResult}`
+        notes, test_result: testResult, diff, worktree: null, reject_reason: `測試退步：${testResult}`
       });
     } else {
       await setStatus(fixId, 'ready', { notes, test_result: testResult, diff });
@@ -534,4 +536,7 @@ module.exports = {
   // 相依連結與 git 呼叫。不 export 的話它只能自己複製一份，兩份會各自漂移——而其中一份
   // 漏掉「先 unlink 再刪」這種順序性細節時，症狀是遞迴刪沿著 junction 刪到主 repo。
   linkNodeModules, unlinkNodeModules, git,
+  // nightly-fix 的「審核未通過」也要收工作區。不 export 的話那條路只能留著不收，而每次被
+  // 駁回就多一份完整 checkout、畫面上零徵狀（2026-09-09 清出一個 09-08 留下的）。
+  removeWorktree,
 };
