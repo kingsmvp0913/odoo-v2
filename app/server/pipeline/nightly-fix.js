@@ -23,7 +23,10 @@ const { runFix, adoptFix, applyFix, selfContainerName } = require('./finding-fix
 const NIGHTLY_FIX_MAX = parseInt(process.env.NIGHTLY_FIX_MAX || '5', 10);
 const NIGHTLY_FIX_MAX_RETRY = parseInt(process.env.NIGHTLY_FIX_MAX_RETRY || '1', 10);
 const NIGHTLY_FIX_DEADLINE_HOUR = parseInt(process.env.NIGHTLY_FIX_DEADLINE_HOUR || '2', 10);
-const NIGHTLY_FIX_TOKEN_BUDGET = parseInt(process.env.NIGHTLY_FIX_TOKEN_BUDGET || '12000000', 10);
+// 不含 cache_read（見 tokensSince）。實測 2026-09-08 那批：一組修正（platform-fix＋review＋
+// verify＋全套測試）約 40 萬，所以這個數字約等於 35 組——遠大於 NIGHTLY_FIX_MAX 的 5 組。
+// 刻意留這麼多餘裕：先撞到的應該是組數上限，保險絲只負責擋「某一支 agent 失控」的異常爆量。
+const NIGHTLY_FIX_TOKEN_BUDGET = parseInt(process.env.NIGHTLY_FIX_TOKEN_BUDGET || '15000000', 10);
 const NIGHTLY_FIX_DRAIN_MAX_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_MAX_MS || '1800000', 10);
 const DRAIN_POLL_MS = parseInt(process.env.NIGHTLY_FIX_DRAIN_POLL_MS || '60000', 10);
 // 單一批次的跑道上限。截止時刻是「下一個台北 02:00」，對 23:00 起跑的排程＝3 小時；但**手動**
@@ -92,10 +95,15 @@ async function waitForDrain() {
   return true;
 }
 
-// 本批次累計 token（input+output+cache_read+cache_create），從批次開始時間往後算。
+// 本批次累計 token，從批次開始時間往後算。
+//
+// ⚠ **不算 cache_read**。它是重讀快取的量，計價只有一般 input 的 1/10，但數量級完全不同：實測
+// 2026-09-08 的批次，13.2M 裡有 12.76M（97%）是 cache_read，光兩組就撞穿當時 12M 的上限，保險絲
+// 跳了、5 組只跑掉 2 組——而真實花費其實只有 83 萬。把它算進來等於用「讀了幾次快取」在限制花費，
+// 兩者對不上。cache_create 仍要算（那是實際寫入的成本）。
 async function tokensSince(sinceAt) {
   const { rows } = await query(
-    `SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0)::bigint AS total
+    `SELECT COALESCE(SUM(input_tokens + output_tokens + cache_create_tokens), 0)::bigint AS total
        FROM token_usage WHERE recorded_at >= $1`,
     [sinceAt]
   );

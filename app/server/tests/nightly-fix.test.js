@@ -668,7 +668,7 @@ test('token 超預算 → 不再開新的一條（開跑前、連 triage 都不�
   stubHappyPath();
   // 批次起點固定在 2020，token_usage 的 recorded_at 走真實 NOW() ⇒ 恆落在起點之後，不靠毫秒競賽
   await dbModule.query(
-    `INSERT INTO token_usage (agent_type, input_tokens, output_tokens) VALUES ('platform_fix', 13000000, 0)`);
+    `INSERT INTO token_usage (agent_type, input_tokens, output_tokens) VALUES ('platform_fix', 16000000, 0)`);
 
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
@@ -683,6 +683,19 @@ test('預算未超 → 照常跑（對照組，證明上一支是預算擋的而
   stubHappyPath();
   await dbModule.query(
     `INSERT INTO token_usage (agent_type, input_tokens, output_tokens) VALUES ('platform_fix', 100, 0)`);
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(result.attempted).toBe(1);
+});
+
+test('cache_read 再多都不進預算——保險絲擋的是花費，不是讀了幾次快取', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  // 遠超上限的 cache_read。實測 2026-09-08 的批次一晚就累積 12.76M，佔總量 97%，把它算進來
+  // 等於兩組就撞穿上限；但它計價只有一般 input 的 1/10，拿它當花費上限的分母是錯的口徑。
+  await dbModule.query(
+    `INSERT INTO token_usage (agent_type, input_tokens, output_tokens, cache_read_tokens)
+      VALUES ('platform_fix', 100, 0, 99000000)`);
 
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
   expect(result.attempted).toBe(1);
