@@ -573,5 +573,8 @@ app.config.globalProperties.previewImage = window.previewImage;
 app.component("Skeleton", window.Skeleton);
 app.component("ReleaseModal", window.ReleaseModal);
 app.component("TourHost", window.TourHost);
+// 可搜尋的專案下拉，跟上面幾個一樣是跨 View 共用的元件，所以一起全域註冊。
+// 要判斷：Legacy 那套 shell 不載 UiNextShared.js，註冊 undefined 會在主控台噴警告。
+if (window.UiNextShared) app.component("UiNextProjectPicker", window.UiNextShared.UiNextProjectPicker);
 app.use(router);
 app.mount("#app");

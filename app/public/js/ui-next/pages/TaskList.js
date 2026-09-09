@@ -4,7 +4,7 @@
   window.UiNextTaskListView = Vue.defineComponent({
     name: "UiNextTaskListView",
     components: { StatusBar: UiNextStatusBar, UiNextIcon: window.UiNextIcon },
-    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, addError: "", addTrigger: null, projects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], newPreviews: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null, showAllUsers: false, ownerFilter: "", users: [] }; },
+    data() { return { tasks: [], archivedTasks: [], filter: "needs_action", releaseFilter: "all", search: "", sort: "updated_desc", loading: true, loadError: "", syncing: false, batchMode: false, selectedIds: [], batchWorking: false, showAdd: false, adding: false, addError: "", addTrigger: null, projects: [], recentChatProjects: [], newTask: { title: "", original_text: "", project_id: "" }, newFiles: [], newPreviews: [], projectFilter: "", statusFilter: "", sourceFilter: "", filtersOpen: false, moreTaskId: null, showAllUsers: false, ownerFilter: "", users: [] }; },
     computed: {
       isAdmin() { return window.UserStore.role === "admin"; },
       // ownerFilter 與 showAllUsers 都刻意不進網址列：它們是「這次看別人任務」的臨時狀態，
@@ -26,6 +26,15 @@
       allShown() { return this.tasks.filter((task) => this.matchAll(task)).length; },
       allSelected() { return this.filteredTasks.length > 0 && this.filteredTasks.every((task) => this.selectedIds.includes(task.id)); },
       activeFilterCount() { return [this.projectFilter, this.ownerFilter, this.statusFilter, this.sourceFilter, this.search].filter(Boolean).length + (this.releaseFilter !== "all" ? 1 : 0); },
+      // 建立任務的專案下拉順序。與首頁新對話共用同一條規則，差別只在第二順位：
+      // 那邊只算「最近有對話」，這邊還要算「最近有任務」——會來這裡開任務的專案，
+      // 多半是最近才剛開過任務的那幾個，只看對話會把它們排到最後。
+      sortedProjects() {
+        return window.UiNextShared.sortProjectsForPicker(this.projects, [
+          ...this.recentChatProjects.map((row) => ({ project_id: row.project_id, at: row.last_message_at })),
+          ...[...this.tasks, ...this.archivedTasks].map((task) => ({ project_id: task.project_id, at: task.updated_at || task.created_at })),
+        ]);
+      },
     },
     watch: {
       filter() { this.selectedIds = []; this.batchMode = false; this.syncQuery(); this.load(); },
@@ -46,7 +55,12 @@
       if (["needs_action", "pending", "paused", "all", "archived"].includes(tab)) this.filter = tab;
       this.projectFilter = query.project || ""; this.statusFilter = query.status || ""; this.sourceFilter = query.source || "";
       this.search = query.q || ""; this.sort = query.sort || "updated_desc"; this.releaseFilter = query.release || "all";
-      await Promise.all([this.load(), Api.get("projects").then((projects) => { this.projects = projects || []; }).catch(() => {})]);
+      await Promise.all([
+        this.load(),
+        Api.get("projects").then((projects) => { this.projects = projects || []; }).catch(() => {}),
+        // 建立任務的專案排序要算「最近有對話」，任務那半邊直接用已載入的 tasks，不必再打一支 API。
+        Api.get("chats/sidebar-projects").then((rows) => { this.recentChatProjects = rows || []; }).catch(() => {}),
+      ]);
     },
     // SocketManager 只留得住一個 callback：離開頁面沒解除的話，下一頁的即時事件仍會打這一頁的 refresh。
     mounted() { SocketManager.setRefreshCallback(this.refresh.bind(this)); },
@@ -111,10 +125,7 @@
 <header><h2 id="ui-next-task-create-title">建立任務</h2><button type="button" class="ui-next-modal-close" aria-label="關閉建立任務視窗" @click="closeAdd"><ui-next-icon name="close"/></button></header>
 <div class="ui-next-form-modal-grid">
 <label class="ui-next-form-modal-wide">專案
-<select v-model="newTask.project_id">
-<option value="">選擇專案</option>
-<option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
-</select></label>
+<ui-next-project-picker :projects="sortedProjects" v-model="newTask.project_id"/></label>
 <label class="ui-next-form-modal-wide">任務標題<input ref="newTaskTitle" v-model="newTask.title" required></label>
 <label class="ui-next-form-modal-wide">需求描述<textarea v-model="newTask.original_text" placeholder="描述要做什麼…可直接貼上截圖" required @paste="onAddPaste"></textarea></label>
 <label class="ui-next-form-modal-wide ui-next-upload">附件（最多 5 個）

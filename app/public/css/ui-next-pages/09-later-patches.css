@@ -1905,3 +1905,31 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+
+/* 建立任務彈窗的專案欄：同一個 combobox 元件，但這裡是表單欄位不是 composer 的 chip。
+   共通的外框／底色／高度由上面的 .ui-next-form-modal-grid input 那條給，這裡只推翻
+   composer 專用的三件事，以及開啟方向。 */
+.ui-next-form-modal-grid .ui-next-project-picker-trigger {
+  /* composer 版是 field-sizing:content ＋ max-width:190px（寬度跟著專案名縮），
+     在表單裡會變成一個窄框飄在整寬的欄位左邊。 */
+  field-sizing: fixed;
+  max-width: none;
+  padding-right: 28px;
+}
+.ui-next-form-modal-grid .ui-next-project-picker > .ui-next-icon {
+  /* composer 那顆靠 flex 排箭頭；表單這格是 grid，沒有絕對定位箭頭會掉到輸入框下面。 */
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.ui-next-form-modal-grid .ui-next-project-picker-options {
+  /* composer 在畫面底部所以往上開；這一格在彈窗最上方，往上開會開到彈窗外面看不到。 */
+  top: calc(100% + 4px);
+  bottom: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}

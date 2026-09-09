@@ -67,6 +67,105 @@
     return `${value} 分鐘`;
   };
 
+  // 專案下拉的排序：我的最愛 → 最近有互動 → 其餘按中文名。三十幾個專案時，
+  // 按 API 原始順序排等於每次都要從頭找。
+  //
+  // 「最近」的來源由呼叫端決定，因為兩處算法不同：首頁新對話只算最近有對話，
+  // 建立任務彈窗還要把最近有任務算進去（同一專案取兩者較新的那個時間）。
+  // recencyRows 為 { project_id, at } 的陣列，at 是任何 Date 吃得下的時間值。
+  const sortProjectsForPicker = (projects, recencyRows) => {
+    const recency = new Map();
+    (recencyRows || []).forEach((row) => {
+      if (!row) return;
+      const key = String(row.project_id);
+      const at = new Date(row.at || 0).getTime();
+      if (at && at > (recency.get(key) || 0)) recency.set(key, at);
+    });
+    const lastAt = (project) => recency.get(String(project.id)) || 0;
+    const rank = (project) => (project.is_favorite ? 0 : lastAt(project) ? 1 : 2);
+    return [...(projects || [])].sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      if (ra === 1) return lastAt(b) - lastAt(a);
+      return String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant");
+    });
+  };
+
+  // 可打字過濾的專案下拉。首頁新對話的 composer 有同一種東西（UiNextApp.js 內），
+  // 那顆綁著新手教學錨點與 composer 版面，所以留在原地；這裡是「放進表單」的版本。
+  // 排序不在元件內做：呼叫端傳已排好的 projects 進來（見 sortProjectsForPicker）。
+  const UiNextProjectPicker = Vue.defineComponent({
+    name: "UiNextProjectPicker",
+    components: { UiNextIcon: window.UiNextIcon },
+    props: {
+      projects: { type: Array, default: () => [] },
+      modelValue: { type: [String, Number], default: "" },
+      placeholder: { type: String, default: "選擇專案" },
+    },
+    emits: ["update:modelValue"],
+    data() { return { open: false, query: "" }; },
+    computed: {
+      selected() { return this.projects.find((project) => String(project.id) === String(this.modelValue)); },
+      filtered() {
+        const query = this.query.trim().toLowerCase();
+        if (!query) return this.projects;
+        return this.projects.filter((project) => String(project.name || "").toLowerCase().includes(query));
+      },
+    },
+    mounted() {
+      this._onOutside = (event) => { if (!this.$el.contains(event.target)) this.open = false; };
+      document.addEventListener("pointerdown", this._onOutside);
+    },
+    beforeUnmount() { document.removeEventListener("pointerdown", this._onOutside); },
+    methods: {
+      // 整格可點：點圖示、箭頭或留白都要展開，不是只有點到文字才算。
+      openPicker() {
+        if (!this.projects.length) return;
+        this.open = true;
+        this.query = "";
+        this.$nextTick(() => this.$refs.trigger?.focus());
+      },
+      select(project) {
+        this.open = false;
+        this.query = "";
+        this.$emit("update:modelValue", String(project.id));
+      },
+      onKeydown(event) {
+        // Escape 要就地攔下不往上冒泡：這顆常放在對話框裡，讓它傳上去會連對話框一起關掉，
+        // 使用者填到一半的內容就沒了。
+        if (event.key === "Escape") {
+          if (!this.open) return;
+          event.stopPropagation();
+          this.open = false;
+          this.query = "";
+          this.$nextTick(() => this.$refs.trigger?.focus());
+          return;
+        }
+        // 打完字直接 Enter 就選中第一筆——要求先按方向鍵才選得到，等於把「可以打字」做一半。
+        if (event.key === "Enter" && this.open && document.activeElement === this.$refs.trigger) {
+          const first = this.filtered[0];
+          if (first) { event.preventDefault(); this.select(first); }
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!this.open) { this.open = true; return; }
+          const options = this.$refs.options ? Array.from(this.$refs.options.querySelectorAll("button")) : [];
+          const index = options.indexOf(document.activeElement);
+          (options[index + (event.key === "ArrowDown" ? 1 : -1)] || options[event.key === "ArrowDown" ? 0 : options.length - 1])?.focus();
+        }
+      },
+    },
+    template: `<div class="ui-next-project-picker" @keydown="onKeydown" @click="openPicker">
+      <input ref="trigger" type="text" class="ui-next-project-picker-trigger" role="combobox" aria-autocomplete="list" :aria-expanded="open" :value="open ? query : (selected ? selected.name : '')" :placeholder="projects.length ? (selected ? selected.name : placeholder) : '沒有可用專案'" :disabled="!projects.length" @focus="open=true;query=''" @input="query=$event.target.value;open=true">
+      <ui-next-icon name="chevron-down"/>
+      <div v-if="open" ref="options" class="ui-next-project-picker-options" role="listbox" aria-label="選擇專案" @click.stop>
+        <button v-for="project in filtered" :key="project.id" type="button" role="option" :aria-selected="String(project.id)===String(modelValue)" @click="select(project)">{{ project.name }}</button>
+        <p v-if="!filtered.length">找不到符合的專案</p>
+      </div>
+    </div>`,
+  });
+
   // 任務清單的流程列獨立由狀態 registry 推導，不依賴 Legacy View。
   const UiNextStatusBar = Vue.defineComponent({
     name: "UiNextStatusBar",
@@ -138,5 +237,5 @@
     }
   }
 
-  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, dayLabel, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, SOP_FILLABLE_PLACEHOLDERS, downloadTaskCodeZip };
+  window.UiNextShared = { fmtNumber, fmtCompact, fmtUSD, dayLabel, AGENT_COLOR, agentColor, catColor, elapsed, usageLevel, usageTime, usageWindowLabel, UiNextStatusBar, UiNextWikiNode, UiNextProjectPicker, sortProjectsForPicker, SOP_FILLABLE_PLACEHOLDERS, downloadTaskCodeZip };
 })();
