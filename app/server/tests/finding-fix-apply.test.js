@@ -1,6 +1,8 @@
 // 意圖：「合併並套用」會把碼推上 origin 再重啟整個平台——這是本專案唯一一顆會停掉自己的按鈕。
-// 釘住的是三道不能被繞過的守衛：不在主分支不動、主 clone 髒不動、有任務在飛就不重啟。
-// 任一道失守的代價分別是：合併到錯的分支、把別人未提交的工作一起 commit、砍掉在跑的 agent。
+// 釘住的是三道不能被繞過的守衛：不在主分支不動、會被一起帶走的髒東西不動、有任務在飛就不重啟。
+// 任一道失守的代價分別是：合併到錯的分支、把別人的工作一起 commit、砍掉在跑的 agent。
+// 第二道刻意只擋「已暫存」與「與這次要合併的檔重疊」——擋過頭的代價同樣真實：2026-09-08 一個
+// 不相干的檔沒提交，當晚五組修正一組都沒併進去，而畫面上只留一行「留待下批重試」。
 const os = require('os');
 
 const mockExecFile = jest.fn();
@@ -13,11 +15,14 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messa
 const { applyFix, pickSelfContainer } = require('../pipeline/finding-fix');
 
 // execFile 的 promisify 版走 (cmd, args, opts, cb)；這裡照 cmd+args 決定回什麼
-let gitBranch, gitDirty, mergeFails, ffFails, pushFails;
+let gitBranch, gitDirty, mergeFails, ffFails, pushFails, gitCounts, mergeFiles;
 const calls = () => mockExecFile.mock.calls.map(c => [c[0], ...c[1]].join(' '));
 
 beforeEach(() => {
   gitBranch = 'master'; gitDirty = ''; mergeFails = false; ffFails = false; pushFails = false;
+  // behind \t ahead（origin/master...master 的左右計數）
+  gitCounts = '0\t0';
+  mergeFiles = 'app/server/pipeline/runner.js\n';
   mockExecFile.mockReset();
   mockExecFile.mockImplementation((cmd, args, opts, cb) => {
     const done = typeof opts === 'function' ? opts : cb;
@@ -30,6 +35,8 @@ beforeEach(() => {
     if (line.startsWith('rev-parse --abbrev-ref')) return done(null, { stdout: gitBranch + '\n', stderr: '' });
     if (line === 'rev-parse HEAD') return done(null, { stdout: 'abc1234\n', stderr: '' });
     if (line.startsWith('status --porcelain')) return done(null, { stdout: gitDirty, stderr: '' });
+    if (line.startsWith('rev-list --left-right')) return done(null, { stdout: gitCounts + '\n', stderr: '' });
+    if (line.startsWith('diff --name-only')) return done(null, { stdout: mergeFiles, stderr: '' });
     if (line.startsWith('merge --ff-only') && ffFails) return done(new Error('Not possible to fast-forward'));
     if (line.startsWith('merge --no-ff') && mergeFails) return done(new Error('CONFLICT (content)'));
     if (line.startsWith('push') && pushFails) return done(new Error('! [rejected] master -> master (fetch first)'));
@@ -45,10 +52,28 @@ test('不在主分支就不合併：主 clone 停在別的分支時代為切換�
   expect(calls().some(c => c.includes('merge'))).toBe(false);
 });
 
-test('主 clone 有未提交變更就不合併：此 repo 常態多股平行工作，硬合併會把別人的東西一起帶走', async () => {
-  gitDirty = ' M app/server/other-work.js\n';
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/未提交/);
-  expect(calls().some(c => c.includes('merge'))).toBe(false);
+test('staged 的變更就不合併：git add 過的東西會被一起包進 merge commit', async () => {
+  gitDirty = 'M  app/server/other-work.js\n';   // 第一欄＝index
+  await expect(applyFix(1, 2, [])).rejects.toThrow(/暫存/);
+  expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
+});
+
+// 舊版是「有任何未提交的檔就整批放棄」，害一個不相干的檔擋掉整晚的自動合併（2026-09-08 實際發生：
+// chat.md 改了一行沒提交，五組修正一組都沒併進去）。工作區的未暫存變更不會進 merge commit，
+// 真正會出事的只有「它跟這次要合併的檔重疊」——那時 git 自己也會拒絕，但錯誤訊息看不出所以然。
+test('只有工作區改動、且不碰這次要合併的檔 → 照常合併', async () => {
+  gitDirty = ' M .claude/agents/chat.md\n';
+  mergeFiles = 'app/server/pipeline/runner.js\napp/server/pipeline/spec-version.js\n';
+  const r = await applyFix(1, 2, [{ taskId: 1, userId: 2, startedAt: Date.now() }]);
+  expect(r).toMatchObject({ merged: true });
+  expect(calls().some(c => c.includes('merge --no-ff'))).toBe(true);
+});
+
+test('工作區改動與要合併的檔重疊 → 擋下，並指名是哪個檔', async () => {
+  gitDirty = ' M app/server/pipeline/runner.js\n';
+  mergeFiles = 'app/server/pipeline/runner.js\n';
+  await expect(applyFix(1, 2, [])).rejects.toThrow(/runner\.js/);
+  expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
 });
 
 test('合併衝突要 abort：留著衝突會讓主 clone 卡在 MERGING，之後每個 git 動作都失敗', async () => {
@@ -120,11 +145,30 @@ test('整套做完（含重啟）才把提案標 done：留在 pending 的話，
   } finally { jest.useRealTimers(); }
 });
 
-test('與遠端分岔就停手：本地那些沒推上去的東西是誰放的、要不要留，只有人知道', async () => {
-  ffFails = true;
+test('真的分岔（兩邊各有各的 commit）就停手：本地那些是誰放的、要不要留只有人知道', async () => {
+  gitCounts = '3\t2';   // origin 多 3、本地多 2
   await expect(applyFix(1, 2, [])).rejects.toThrow(/分岔/);
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
   expect(calls().some(c => c.startsWith('git push'))).toBe(false);
+});
+
+// 「commit 了但忘記 push」跟「分岔」不是同一件事：遠端沒有本地沒有的東西時，本地那幾顆推上去
+// 就對齊了，不需要人裁決。舊版把兩者混為一談，於是忘記 push 一次＝當晚全部白跑。
+test('只是忘記 push（本地領先、遠端沒新東西）→ 先推上去再合併', async () => {
+  gitCounts = '0\t2';
+  const r = await applyFix(1, 2, [{ taskId: 1, userId: 2, startedAt: Date.now() }]);
+  expect(r).toMatchObject({ merged: true });
+  const seq = calls();
+  const pushed = seq.findIndex(c => c === 'git push origin master');
+  const merged = seq.findIndex(c => c.includes('merge --no-ff'));
+  expect(pushed).toBeGreaterThanOrEqual(0);
+  expect(pushed).toBeLessThan(merged);
+});
+
+test('追不上 origin 仍要停手，不能默默往下合併', async () => {
+  ffFails = true;
+  await expect(applyFix(1, 2, [])).rejects.toThrow(/追上/);
+  expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
 });
 
 test('push 失敗要把合併節點收回去：留著會讓主分支多一顆只有本機看得到的 commit，重按也解不開', async () => {

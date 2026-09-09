@@ -402,6 +402,18 @@ async function selfContainerName() {
 }
 
 /**
+ * 拆 `git status --porcelain` 的兩欄狀態碼：col 0＝index（已暫存）、col 1＝工作區。
+ * 取 col 為指定欄且非空白的路徑；改名列（`R  old -> new`）取箭頭後的新路徑。
+ */
+function parseStatus(porcelain, col) {
+  return String(porcelain || '').split('\n')
+    .filter(l => l.length > 3 && l[col] !== ' ' && l[col] !== '?')
+    .map(l => l.slice(3).trim())
+    .map(f => (f.includes(' -> ') ? f.split(' -> ').pop() : f))
+    .map(f => f.replace(/^"|"$/g, ''));
+}
+
+/**
  * 一鍵套用：合併進主分支 → 推 origin → 重啟平台。
  *
  * 重啟走 `docker restart`（交給 host 的 daemon）而不是自殺讓 policy 撿回來：容器內 kill node 會
@@ -424,10 +436,13 @@ async function applyFix(fixId, userId, inflight = []) {
     if (br.trim() !== MAIN_BRANCH) {
       throw new Error(`主 clone 目前在 ${br.trim()} 分支（預期 ${MAIN_BRANCH}），不代為切換`);
     }
-    // 此 repo 常態是多股平行工作：在別人未提交的變更上合併，會把他們的東西一起帶進 commit
+    // 此 repo 常態是多股平行工作。**已暫存**（git add 過）的東西會被一起包進 merge commit，
+    // 這種一定要擋；只改在工作區、還沒 add 的不會進 commit，擋它沒有道理——2026-09-08 就因為
+    // 一個不相干的檔改了一行沒提交，當晚五組修正一組都沒併進去。
     const { stdout: dirty } = await git(REPO_ROOT, ['status', '--porcelain', '-uno']);
-    if (dirty.trim()) {
-      throw new Error(`主 clone 有未提交的變更，先處理再套用：\n${dirty.trim()}`);
+    const staged = parseStatus(dirty, 0);
+    if (staged.length) {
+      throw new Error(`主 clone 有已暫存（git add）的變更，會被一起併進來，先處理再套用：\n${staged.join('\n')}`);
     }
     const gitEnv = await buildGitEnv(userId);
     const env = { ...process.env, ...gitEnv };
@@ -435,11 +450,41 @@ async function applyFix(fixId, userId, inflight = []) {
     // 按下前 13 分鐘有人推了一顆）。少了這步就會停在「本地多了合併節點、push 被拒」——碼進了主
     // 分支卻沒上遠端、狀態也沒記，而再按一次 merge 只會回 Already up to date、push 依然被拒。
     await git(REPO_ROOT, ['fetch', 'origin', MAIN_BRANCH], { env });
-    try {
-      await git(REPO_ROOT, ['merge', '--ff-only', `origin/${MAIN_BRANCH}`], { env });
-    } catch (err) {
-      // 分岔＝本地有還沒推上去的東西。那是誰放的、要不要留只有人知道，不代為裁決。
-      throw new Error(`主 clone 與 origin/${MAIN_BRANCH} 已分岔，不代為裁決：${err.message}`);
+
+    // 「commit 了但忘記 push」與「真的分岔」不是同一件事，舊版把兩者都當分岔擋掉，於是忘記推
+    // 一次就等於當晚全部白跑。遠端沒有本地缺的東西時，把本地那幾顆推上去就對齊了，不必人裁決。
+    const { stdout: counts } = await git(
+      REPO_ROOT, ['rev-list', '--left-right', '--count', `origin/${MAIN_BRANCH}...${MAIN_BRANCH}`], { env });
+    const [behind, ahead] = counts.trim().split(/\s+/).map(Number);
+
+    if (ahead > 0 && behind > 0) {
+      // 雙向都有＝要留誰只有人知道，不代為裁決。
+      throw new Error(`主 clone 與 origin/${MAIN_BRANCH} 已分岔（本地多 ${ahead} 顆、遠端多 ${behind} 顆），不代為裁決`);
+    }
+
+    // 工作區的未暫存變更只有「跟這次要動到的檔重疊」才有問題（git 自己也會拒絕，但訊息看不出
+    // 所以然）。要動到的檔＝追上 origin 會帶進來的 ＋ 這條分支會帶進來的，兩段都要算。
+    const worktree = parseStatus(dirty, 1);
+    if (worktree.length) {
+      const incoming = new Set();
+      for (const ref of [`origin/${MAIN_BRANCH}`, fix.branch]) {
+        const { stdout } = await git(REPO_ROOT, ['diff', '--name-only', `HEAD...${ref}`], { env });
+        stdout.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => incoming.add(f));
+      }
+      const clash = worktree.filter(f => incoming.has(f));
+      if (clash.length) {
+        throw new Error(`主 clone 有未提交的變更，剛好也是這次要合併的檔，先處理再套用：\n${clash.join('\n')}`);
+      }
+    }
+
+    if (ahead > 0) {
+      await git(REPO_ROOT, ['push', 'origin', MAIN_BRANCH], { env });
+    } else {
+      try {
+        await git(REPO_ROOT, ['merge', '--ff-only', `origin/${MAIN_BRANCH}`], { env });
+      } catch (err) {
+        throw new Error(`追上 origin/${MAIN_BRANCH} 失敗，不繼續合併：${err.message}`);
+      }
     }
     const { stdout: preSha } = await git(REPO_ROOT, ['rev-parse', 'HEAD']);
     try {

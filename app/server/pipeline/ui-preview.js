@@ -149,10 +149,10 @@ async function shootOne(browser, baseUrl, route, token, outFile) {
  * `dir` 是兩張圖所在的暫存目錄——**呼叫端用完必須自己刪掉**（見 fix-review.js 的 finally），
  * 否則夜間每跑一條就疊一份 PNG，沒有上限也沒人回收。
  *
- * ⚠ before 拍的是**主 clone 的 live checkout**（不是 HEAD 的乾淨副本）。夜間批次時這不成立
- * 為風險：`finding-fix.js` 的 applyFix 已要求主 clone 沒有未提交的變更，那條路上 live checkout
- * 就等於 HEAD。但**人工觸發時**主 clone 常有別股平行工作的未提交變更（finding-fix.js:217 的
- * 註解記著同一件事），此時 before 會混進不屬於這次修正的畫面差異——人工看圖時要自己知道。
+ * ⚠ before 拍的是**主 clone 的 live checkout**（不是 HEAD 的乾淨副本），所以主 clone 只要有
+ * 別股平行工作的未提交變更，before 就會混進不屬於這次修正的畫面差異。
+ * ⚠ 夜間批次**也不例外**：截圖發生在 fix-review，比 applyFix 的關卡早，而 applyFix 現在也只擋
+ * 「已暫存」與「跟這次要合併的檔重疊」兩種（見該檔 applyFix）——未暫存又不重疊的改動照樣入鏡。
  */
 async function captureBeforeAfter(worktree, route) {
   if (!route || !String(route).trim()) return null;
