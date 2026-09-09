@@ -12,9 +12,10 @@ const path = require('path');
 
 const src = fs.readFileSync(path.join(__dirname, '../../public/js/views/ProjectChat.js'), 'utf8');
 
-describe('對話上傳圖片：前端接線', () => {
-  test('輸入列有檔案入口，且限定圖片', () => {
-    expect(src).toMatch(/type="file"[^>]*accept="image\/\*"/);
+describe('對話上傳附件：前端接線', () => {
+  test('輸入列有檔案入口，且 accept 綁在共用清單上（不是自己寫死一份）', () => {
+    expect(src).toMatch(/type="file"[^>]*:accept="acceptTypes"/);
+    expect(src).toContain('window.CHAT_FILE_TYPES.accept');
     expect(src).toContain('onFilesSelected');
   });
 

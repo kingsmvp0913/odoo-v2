@@ -2,7 +2,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { emitToUser } = require('./notify');
 const {
-  saveChatAttachmentFile, deleteChatDir, readAttachmentFile, sniffFile, uploadChatImages, isImageBuffer
+  saveChatAttachmentFile, deleteChatDir, readAttachmentFile, sniffFile, uploadChatFiles, resolveChatFile
 } = require('./lib/attachments');
 
 // chatId(string) → AbortController，只在該輪回覆進行中存在。單一平台實例假設下不需跨進程
@@ -172,16 +172,16 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // uploadChatImages：multer 遇非 multipart 直接放行、req.files 為空，既有純 JSON 呼叫零影響。
-  app.post('/api/projects/:projectId/chats/:id/messages', verifyToken, uploadChatImages, async (req, res) => {
+  // uploadChatFiles：multer 遇非 multipart 直接放行、req.files 為空，既有純 JSON 呼叫零影響。
+  app.post('/api/projects/:projectId/chats/:id/messages', verifyToken, uploadChatFiles, async (req, res) => {
     try {
       const content = (req.body.content || '').trim();
       const files = req.files || [];
-      // 只貼一張截圖不打字是對話裡很自然的行為，所以圖也算內容；兩者皆空才是空訊息。
+      // 只貼一張截圖不打字是對話裡很自然的行為，所以檔案也算內容；兩者皆空才是空訊息。
       if (!content && !files.length) return res.status(400).json({ error: 'content required' });
-      // client 宣告的 mimetype 可偽造，以 magic bytes 為準（multer 的 fileFilter 只是省下先吃進記憶體）
-      const bad = files.find(f => !isImageBuffer(f.buffer));
-      if (bad) return res.status(400).json({ error: `「${bad.originalname}」不是圖片檔` });
+      // client 宣告的 mimetype 可偽造，以內容為準（multer 的 fileFilter 只是省下先吃進記憶體）
+      const bad = files.find(f => !resolveChatFile(f.buffer, f.originalname));
+      if (bad) return res.status(400).json({ error: `「${bad.originalname}」的內容與副檔名不符，或不是支援的檔案格式` });
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       // 原子搶佔這一輪：回覆要跑數分鐘，期間 F5 或換分頁再送一則就會有兩個 claude 帶著同一個
@@ -197,7 +197,7 @@ function registerRoutes(app) {
         // message_id 這裡留空，由 chatReply 插完使用者訊息後回填（它才知道那則的 id）。
         const attachments = [];
         for (const f of files) {
-          const mimetype = sniffFile(f.buffer).mime;
+          const mimetype = resolveChatFile(f.buffer, f.originalname).mime;
           const filePath = saveChatAttachmentFile(req.params.id, f.originalname, f.buffer);
           const { rows: [att] } = await query(
             `INSERT INTO project_chat_attachments (chat_id, filename, mimetype, file_path)

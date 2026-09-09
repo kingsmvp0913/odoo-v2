@@ -86,4 +86,10 @@ RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/in
 # 與 SKILL.md 自身安裝 fallback 一致。skill 檔本身在 ~/.claude volume，此處只補回被重建清掉的引擎。
 RUN python3 -m pip install --user --break-system-packages graphifyy
 
+# 對話附件裡的 Office 檔要靠這三個套件才讀得出內容（chat-agent 的 ATTACHMENT_READ_HINTS 直接指名
+# 它們）：openpyxl 讀 .xlsx／.xlsm、python-docx 讀 .docx、xlrd 讀 .xls（openpyxl 讀不了舊格式）。
+# ⚠ 前兩個目前是 graphifyy 順帶拉進來的相依，靠那條線等於「哪天 graphifyy 換相依就靜默失效」——
+# 症狀會是 agent 說它讀不到那個 Excel，而平台完全沒有告警。所以在這裡明確再裝一次。
+RUN python3 -m pip install --user --break-system-packages openpyxl python-docx xlrd
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

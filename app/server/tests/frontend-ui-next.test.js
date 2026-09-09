@@ -680,7 +680,7 @@ describe("ui-next 平行介面", () => {
     expect(activeChat).toMatch(/ui-next-chip-static">[^<]*<ui-next-icon name="project"\/>\{\{ projectName \}\}/);
     expect(activeChat).toContain('title="建立任務" aria-label="建立任務"');
     expect(activeChat).toContain('<ui-next-icon name="plus"/>');
-    expect(activeChat).toContain('title="上傳圖片"');
+    expect(activeChat).toContain('title="上傳附件"');   // 對話可收圖片以外的辦公室／ERP 文件
   });
 
   test("Chat 建立任務 Overlay 可關閉、圈限焦點並保留失敗內容", () => {

@@ -232,23 +232,26 @@
       },
       chooseFiles(e) {
         const selected = Array.from(e.target.files || []);
-        this.files = selected.filter((file) => /^image\//.test(file.type) && file.size <= 10 * 1024 * 1024).slice(0, 5);
-        if (this.files.length !== selected.length) showToast("附件限圖片、單檔 10MB、最多 5 個", "error");
+        const types = window.CHAT_FILE_TYPES;
+        this.files = selected.filter((file) => types.allows(file) && file.size <= types.maxBytes).slice(0, types.maxFiles);
+        if (this.files.length !== selected.length) showToast(`附件限圖片／PDF／Office／文字檔，單檔 ${types.maxBytes / 1024 / 1024}MB、最多 ${types.maxFiles} 個`, "error");
         e.target.value = "";
         this.syncFilePreviews();
       },
       // 每次變動整組重建：分兩個陣列各自 push／splice，刪掉中間一張就會錯位，預覽對不上檔案。
+      // 非圖片留空字串——模板據此改畫檔名（有 objectURL 的話 <img> 會顯示破圖示）。
       syncFilePreviews() {
-        this.filePreviews.forEach((url) => URL.revokeObjectURL(url));
-        this.filePreviews = this.files.map((file) => URL.createObjectURL(file));
+        this.filePreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); });
+        this.filePreviews = this.files.map((file) => (window.CHAT_FILE_TYPES.isImage(file) ? URL.createObjectURL(file) : ""));
       },
-      // 截圖直接貼上：問答首頁本來只能透過「上傳圖片」選檔，貼上是完全沒反應的。
-      // 限制沿用 chooseFiles：只收圖片、單檔 10MB、最多 5 個。
+      // 截圖直接貼上：問答首頁本來只能透過「上傳附件」選檔，貼上是完全沒反應的。
+      // 限制沿用 chooseFiles（window.CHAT_FILE_TYPES，與後端同一份清單）。
       onPasteFiles(event) {
-        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => /^image\//.test(f.type));
+        const types = window.CHAT_FILE_TYPES;
+        const files = Array.from((event.clipboardData || {}).files || []).filter((f) => types.allows(f));
         if (!files.length) return;
         event.preventDefault();
-        files.forEach((f) => { if (f.size <= 10 * 1024 * 1024 && this.files.length < 5) this.files.push(f); });
+        files.forEach((f) => { if (f.size <= types.maxBytes && this.files.length < types.maxFiles) this.files.push(f); });
         this.syncFilePreviews();
       },
       autoResize(event) {
@@ -349,7 +352,7 @@
             <p v-if="sendError" class="ui-next-inline-error">{{ sendError }} <button type="button" @click="send">重試</button></p>
             <div class="ui-next-composer-foot">
               <div class="ui-next-composer-options">
-                <label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple @change="chooseFiles"></label>
+                <label class="ui-next-icon-button" title="上傳附件"><ui-next-icon name="paperclip"/><input type="file" accept="${window.CHAT_FILE_TYPES.accept}" multiple @change="chooseFiles"></label>
                 <div data-tour="home-project" class="ui-next-project-picker ui-next-composer-chip" @keydown="onProjectPickerKeydown" @click="openProjectPicker">
                   <ui-next-icon name="project"/>
                   <input ref="projectTrigger" type="text" class="ui-next-project-picker-trigger" role="combobox" aria-autocomplete="list" :aria-expanded="projectPickerOpen" :value="projectPickerOpen ? projectQuery : (selectedProject ? selectedProject.name : '')" :placeholder="projects.length ? (selectedProject ? selectedProject.name : '選擇專案') : '沒有可用專案'" :disabled="loading || !projects.length" @focus="projectPickerOpen=true;projectQuery=''" @input="projectQuery=$event.target.value;projectPickerOpen=true">

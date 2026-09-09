@@ -14,9 +14,10 @@ window.ProjectChatView = Vue.defineComponent({
       taskDraft: { title: '', original_text: '', attachments: [] },
       creatingTask: false,
       replyPending: false,   // 後端 reply_pending：離開對話再回來仍能看到「回覆進行中」動畫
-      pendingFiles: [],      // 這則訊息要一起送出的圖（尚未送出）
-      pendingPreviews: [],   // 與 pendingFiles 同索引的 objectURL，送出／移除時要 revoke
+      pendingFiles: [],      // 這則訊息要一起送出的附件（尚未送出）
+      pendingPreviews: [],   // 與 pendingFiles 同索引；圖片是 objectURL，非圖片是空字串
       attachUrls: {},        // 已送出訊息的附圖：attId → objectURL（認證走 header，不能直接 <img src>）
+      acceptTypes: window.CHAT_FILE_TYPES.accept,   // 與後端 lib/attachments.js 同一份清單
       _pollTimer: null
     };
   },
@@ -128,6 +129,9 @@ window.ProjectChatView = Vue.defineComponent({
       if (!cid) return;
       for (const m of this.messages) {
         for (const a of (m.attachments || [])) {
+          // 只抓圖片：非圖片附件可以到 25MB，一進對話就整包拉進記憶體只為了畫一列檔名，
+          // 而那一列不需要內容——要下載時才抓（downloadAttachment）。
+          if (!String(a.mimetype || '').startsWith('image/')) continue;
           if (this.attachUrls[a.id]) continue;
           try {
             const { blob } = await Api.getBlob(`projects/${pid}/chats/${cid}/attachments/${a.id}/download`);
@@ -144,21 +148,24 @@ window.ProjectChatView = Vue.defineComponent({
       this.attachUrls = {};
       // 樂觀顯示用的預覽 URL：送出成功那條路徑已自己收掉，但送出失敗時那則訊息會留在畫面上，
       // 它的 URL 沒有別人管——一併在這裡收，否則每失敗一次就漏一份。
-      this.messages.forEach(m => (m.pending_previews || []).forEach(u => URL.revokeObjectURL(u)));
+      this.messages.forEach(m => (m.pending_previews || []).forEach(u => { if (u) URL.revokeObjectURL(u); }));
     },
     revokePendingUrls() {
-      this.pendingPreviews.forEach(u => URL.revokeObjectURL(u));
+      this.pendingPreviews.forEach(u => { if (u) URL.revokeObjectURL(u); });
       this.pendingPreviews = [];
     },
     revokeAllUrls() { this.revokeMessageUrls(); this.revokePendingUrls(); },
-    // 選檔與貼上共用的入口：型別與張數的把關只有這一處，兩條路徑不會漂移成「貼上能過、選檔不能」
+    // 選檔與貼上共用的入口：型別與張數的把關只有這一處，兩條路徑不會漂移成「貼上能過、選檔不能」。
+    // 可收的檔型由 window.CHAT_FILE_TYPES 決定，與後端 lib/attachments.js 是同一份清單。
+    // ⚠ 非圖片在 pendingPreviews 留空字串（沒有縮圖可畫），模板要用 v-if 擋掉，否則是破圖示。
     addPendingFiles(files) {
+      const types = window.CHAT_FILE_TYPES;
       for (const f of files) {
-        if (!/^image\//.test(f.type || '')) { showToast(`「${f.name || '檔案'}」不是圖片，已略過`, 'error'); continue; }
-        if (f.size > 10 * 1024 * 1024) { showToast(`「${f.name || '圖片'}」超過 10MB`, 'error'); continue; }
-        if (this.pendingFiles.length >= 5) { showToast('一次最多 5 張圖', 'error'); break; }
+        if (!types.allows(f)) { showToast(`「${f.name || '檔案'}」不是支援的格式，已略過`, 'error'); continue; }
+        if (f.size > types.maxBytes) { showToast(`「${f.name || '檔案'}」超過 ${types.maxBytes / 1024 / 1024}MB`, 'error'); continue; }
+        if (this.pendingFiles.length >= types.maxFiles) { showToast(`一次最多 ${types.maxFiles} 個附件`, 'error'); break; }
         this.pendingFiles.push(f);
-        this.pendingPreviews.push(URL.createObjectURL(f));
+        this.pendingPreviews.push(types.isImage(f) ? URL.createObjectURL(f) : '');
       }
     },
     onFilesSelected(e) {
@@ -168,19 +175,38 @@ window.ProjectChatView = Vue.defineComponent({
     // 截圖後 Ctrl+V 直接貼——這是對話裡傳圖最常走的路徑，比開檔案總管找檔快得多
     onPaste(e) {
       const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
-      const imgs = files.filter(f => /^image\//.test(f.type || ''));
-      if (!imgs.length) return;   // 純文字貼上照原生行為走
+      const usable = files.filter(f => window.CHAT_FILE_TYPES.allows(f));
+      if (!usable.length) return;   // 純文字貼上照原生行為走
       e.preventDefault();
-      this.addPendingFiles(imgs);
+      this.addPendingFiles(usable);
     },
     removePendingFile(i) {
-      URL.revokeObjectURL(this.pendingPreviews[i]);
+      if (this.pendingPreviews[i]) URL.revokeObjectURL(this.pendingPreviews[i]);
       this.pendingFiles.splice(i, 1);
       this.pendingPreviews.splice(i, 1);
     },
     openImage(attId) {
       const url = this.attachUrls[attId];
       if (url) window.open(url, '_blank');
+    },
+    isImageAttachment(a) { return String((a || {}).mimetype || '').startsWith('image/'); },
+    // 非圖片附件只列檔名，要看內容得下載。用 <a download> 而不是另開分頁看 blob URL：
+    // 後者會存成無副檔名的亂數檔，Excel 直接打不開。
+    async downloadAttachment(attId, filename) {
+      const pid = this.$route.params.id, cid = this.activeChat && this.activeChat.id;
+      if (!cid) return;
+      try {
+        const { blob } = await Api.getBlob(`projects/${pid}/chats/${cid}/attachments/${attId}/download`);
+        if (!blob.size) throw new Error('此附件無內容（0 bytes），無法開啟');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'attachment';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      } catch (e) { showToast(e.message || '下載失敗', 'error'); }
     },
     handleEnter(e) {
       if (e.isComposing || e.keyCode === 229) return; // IME 組字中，Enter 用於選字，不送出
@@ -338,12 +364,19 @@ window.ProjectChatView = Vue.defineComponent({
                    直接把 URL 塞進 src 只會拿到 401）。pending_previews 是剛送出那則的樂觀顯示。 -->
               <div v-if="(m.attachments && m.attachments.length) || (m.pending_previews && m.pending_previews.length)"
                    :style="{ display:'flex', flexWrap:'wrap', gap:'6px', marginTop:'4px', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }">
-                <img v-for="a in (m.attachments || [])" :key="a.id" v-show="attachUrls[a.id]"
-                     :src="attachUrls[a.id]" :alt="a.filename" :title="a.filename"
-                     @click="openImage(a.id)"
-                     style="max-width:200px;max-height:160px;border-radius:8px;border:1px solid var(--border);cursor:pointer;display:block" />
-                <img v-for="(u, i) in (m.pending_previews || [])" :key="'p' + i" :src="u"
-                     style="max-width:200px;max-height:160px;border-radius:8px;border:1px solid var(--border);opacity:.7;display:block" />
+                <template v-for="a in (m.attachments || [])" :key="a.id">
+                  <img v-if="isImageAttachment(a)" v-show="attachUrls[a.id]"
+                       :src="attachUrls[a.id]" :alt="a.filename" :title="a.filename"
+                       @click="openImage(a.id)"
+                       style="max-width:200px;max-height:160px;border-radius:8px;border:1px solid var(--border);cursor:pointer;display:block" />
+                  <button v-else class="btn btn-outline btn-sm" :title="'下載 ' + a.filename"
+                          @click="downloadAttachment(a.id, a.filename)"
+                          style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 {{ a.filename }}</button>
+                </template>
+                <!-- ⚠ v-if 不能和 v-for 掛在同一個元素：Vue 3 的 v-if 優先序較高，會在 u 還沒定義時求值。
+                     非圖片附件在 previews 是空字串，這裡用 template 包一層才擋得掉那張破圖。 -->
+                <template v-for="(u, i) in (m.pending_previews || [])" :key="'p' + i"><img v-if="u" :src="u"
+                     style="max-width:200px;max-height:160px;border-radius:8px;border:1px solid var(--border);opacity:.7;display:block" /></template>
               </div>
               <div :style="{ textAlign: m.role === 'user' ? 'right' : 'left', fontSize:'var(--fs-xs)', color:'var(--text-muted)', marginTop:'2px' }">
                 {{ m.role === 'user' ? '你' : '🤖 AI' }} · {{ formatTime(m.created_at) }}
@@ -360,15 +393,16 @@ window.ProjectChatView = Vue.defineComponent({
           <!-- 待送出的圖：送出前可逐張移除 -->
           <div v-if="pendingPreviews.length" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0">
             <div v-for="(u, i) in pendingPreviews" :key="i" style="position:relative">
-              <img :src="u" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--border);display:block" />
+              <img v-if="u" :src="u" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--border);display:block" />
+              <span v-else style="display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:var(--fs-xs)">📎 {{ pendingFiles[i] && pendingFiles[i].name }}</span>
               <button class="btn btn-outline btn-sm" title="移除"
                       style="position:absolute;top:-6px;right:-6px;padding:0 5px;font-size:var(--fs-2xs);line-height:16px;color:var(--error);background:var(--surface)"
                       @click="removePendingFile(i)">✕</button>
             </div>
           </div>
           <div data-tour="chat-input" class="chat-input-bar">
-            <input ref="chatFileInput" type="file" accept="image/*" multiple @change="onFilesSelected" style="display:none" />
-            <button class="btn btn-outline" title="附加圖片（也可直接 Ctrl+V 貼上截圖）"
+            <input ref="chatFileInput" type="file" :accept="acceptTypes" multiple @change="onFilesSelected" style="display:none" />
+            <button class="btn btn-outline" title="附加檔案：圖片、PDF、Excel／Word、CSV／TXT（也可直接 Ctrl+V 貼上截圖）"
                     style="align-self:flex-end" @click="$refs.chatFileInput.click()" :disabled="sending">📎</button>
             <textarea v-model="newInput"
                       placeholder="輸入訊息... (Enter 傳送，Shift+Enter 換行，可貼上截圖)"

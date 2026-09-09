@@ -97,13 +97,40 @@ describe('貼上截圖：各個上傳入口', () => {
     expect(taskList).toMatch(/beforeUnmount\(\)[^\n]*revokeObjectURL/);
   });
 
-  test('限制與對話那邊同一組：只收圖、單檔 10MB、最多 5 張', () => {
-    for (const src of [shell, chat, taskList, projectDetail]) {
-      expect(src).toMatch(/10 \* 1024 \* 1024/);
-      // ⚠ 判圖片用 startsWith('image/') 而不是 /^image\//：後者的 \// 會被
-      // frontend-ui-next-deadcode／duplicate-keys 那兩支守衛的解析器當成行註解，
-      // 整行被吃掉、大括號失衡，那支 View 就靜默退出檢查範圍（實際發生過）。
-      expect(src).toMatch(/startsWith\("image\/"\)|\^image\\\//);
+  // 對話的三個入口（首頁 composer／對話輸入列／專案頁新對話小視窗）限制必須同一組，而且那一組
+  // 只能來自 window.CHAT_FILE_TYPES——後端 lib/attachments.js 的鏡像。各自寫死自己那份的話，
+  // 症狀是「這個入口傳得上、那個入口傳不上」，而畫面完全看不出差別。
+  test('對話的三個入口都吃共用清單，不自己寫死上限或型別', () => {
+    for (const src of [shell, chat, projectDetail]) {
+      expect(src).toContain('window.CHAT_FILE_TYPES');
+      expect(src).toMatch(/CHAT_FILE_TYPES\.maxBytes|types\.maxBytes/);
     }
+    // 逐個 handler 檢查而不是整檔掃：UiNextApp 裡還有「意見回饋」那條路，它刻意維持
+    // 只收圖、10MB 的另一組限制，整檔掃會把它誤判成漏改。
+    // 錨點要帶 ' {'：不帶的話 indexOf 會先撞到 onNewChatPaste 裡的呼叫端而不是定義。
+    const fn = (src, name) => {
+      const at = src.indexOf(name + ' {');
+      expect(at).toBeGreaterThan(-1);
+      return src.slice(at, at + 500);
+    };
+    const chatHandlers = [
+      fn(shell, 'chooseFiles(e)'),
+      fn(chat, 'addPendingFiles(files)'),
+      fn(chat, 'addNewChatFiles(files)'),
+      fn(projectDetail, 'addNewChatFiles(files)')
+    ];
+    for (const handler of chatHandlers) {
+      expect(handler).toMatch(/maxBytes/);
+      expect(handler).not.toMatch(/10 \* 1024 \* 1024/);   // 舊的寫死上限要真的被拿掉
+    }
+  });
+
+  // 任務附件走的是另一條端點（uploadAttachmentFiles），限制刻意與對話分開，維持自己那份 10MB。
+  test('任務清單的附件入口維持自己的限制（不跟著對話一起放寬）', () => {
+    expect(taskList).toMatch(/10 \* 1024 \* 1024/);
+    // ⚠ 判圖片用 startsWith('image/') 而不是 /^image\//：後者的 \// 會被
+    // frontend-ui-next-deadcode／duplicate-keys 那兩支守衛的解析器當成行註解，
+    // 整行被吃掉、大括號失衡，那支 View 就靜默退出檢查範圍（實際發生過）。
+    expect(taskList).toMatch(/startsWith\("image\/"\)/);
   });
 });

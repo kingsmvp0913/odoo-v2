@@ -340,6 +340,36 @@ test('附圖 → fresh prompt 帶路徑與唯讀授權（少了授權那句 agen
   expect(prompt).toContain('明確授權');
 });
 
+// 意圖：Read 工具開 .xlsx／.doc 這類 zip／OLE2 二進位一律失敗，而失敗之後 agent 照樣生得出一段話，
+// 使用者完全看不出它其實沒讀到內容。所以「怎麼開」必須寫進 prompt，且只在真的有那種檔時才寫
+//（每次都掛一大段讀法說明是純浪費 token）。
+test('Excel 附件 → prompt 帶 openpyxl 讀法；沒有 Office 檔時不掛這段', async () => {
+  const prev = mockQuery.getMockImplementation();
+  mockQuery.mockImplementation(withUserMsgInsert(prev));
+
+  const XLSX = [{ id: 6, filename: '出貨.xlsx', mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', file_path: 'chat_2/a.xlsx' }];
+  await chatReply('1', '2', '幫我看這張表', 99, XLSX);
+  expect(mockRunClaude.mock.calls[0][0]).toContain('openpyxl');
+
+  mockRunClaude.mockClear();
+  await chatReply('1', '2', '這畫面怎麼了', 99, IMG);
+  expect(mockRunClaude.mock.calls[0][0]).not.toContain('openpyxl');
+});
+
+// .doc 這台機器真的解不開（antiword／catdoc／libreoffice 都沒有）。沒明講的話 agent 會從檔名
+// 掰內容——寧可讓它說「讀不出來請改存 .docx」，也不要一段看起來很像真的的猜測。
+test('舊版 .doc 附件 → prompt 明講讀不出來、要它別猜', async () => {
+  const prev = mockQuery.getMockImplementation();
+  mockQuery.mockImplementation(withUserMsgInsert(prev));
+
+  const DOC = [{ id: 7, filename: '規格.doc', mimetype: 'application/msword', file_path: 'chat_2/a.doc' }];
+  await chatReply('1', '2', '看一下規格', 99, DOC);
+
+  const prompt = mockRunClaude.mock.calls[0][0];
+  expect(prompt).toContain('讀不出內容');
+  expect(prompt).toContain('不要猜');
+});
+
 test('附圖 → 續接輪同樣帶得到（chat-retry 只有 {{user_message}}，接錯地方這裡就會紅）', async () => {
   const rows = (sql) => {
     if (/project_repos/.test(sql)) return { rows: [] };

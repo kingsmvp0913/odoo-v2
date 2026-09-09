@@ -94,12 +94,13 @@
       // 行為與原本的「建一則空對話並跳進去」完全相同。
       openNewChat() { this.showNewChat = true; this.$nextTick(() => this.$refs.newChatText?.focus()); },
       resetNewChat() { this.revokeNewChatUrls(); this.newChatTitle = ""; this.newChatText = ""; this.newChatFiles = []; this.newChatPreviews = []; this.showNewChat = false; },
-      onNewChatPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); this.addNewChatFiles(files); } },
+      onNewChatPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => window.CHAT_FILE_TYPES.allows(file)); if (files.length) { event.preventDefault(); this.addNewChatFiles(files); } },
       onNewChatFilesSelected(event) { this.addNewChatFiles(Array.from(event.target.files || [])); event.target.value = ""; },
-      // 限制與對話輸入列同一組：只收圖、單檔 10MB、最多 5 張。
-      addNewChatFiles(files) { files.forEach((file) => { if (!file.type.startsWith("image/") || file.size > 10 * 1024 * 1024 || this.newChatFiles.length >= 5) return; this.newChatFiles.push(file); this.newChatPreviews.push(URL.createObjectURL(file)); }); },
-      removeNewChatFile(index) { URL.revokeObjectURL(this.newChatPreviews[index]); this.newChatFiles.splice(index, 1); this.newChatPreviews.splice(index, 1); },
-      revokeNewChatUrls() { this.newChatPreviews.forEach((url) => URL.revokeObjectURL(url)); },
+      // 限制與對話輸入列同一組：window.CHAT_FILE_TYPES，與後端 lib/attachments.js 同一份清單。
+      // previews 對非圖片存空字串（沒有縮圖可畫），模板因此用 index 當 key，不是 url。
+      addNewChatFiles(files) { files.forEach((file) => { if (!window.CHAT_FILE_TYPES.allows(file) || file.size > window.CHAT_FILE_TYPES.maxBytes || this.newChatFiles.length >= window.CHAT_FILE_TYPES.maxFiles) return; this.newChatFiles.push(file); this.newChatPreviews.push(window.CHAT_FILE_TYPES.isImage(file) ? URL.createObjectURL(file) : ""); }); },
+      removeNewChatFile(index) { if (this.newChatPreviews[index]) URL.revokeObjectURL(this.newChatPreviews[index]); this.newChatFiles.splice(index, 1); this.newChatPreviews.splice(index, 1); },
+      revokeNewChatUrls() { this.newChatPreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); }); },
       async createChat() {
         if (this.creatingChat) return;
         this.creatingChat = true;
@@ -241,10 +242,10 @@
 <input v-model="newChatTitle" placeholder="對話標題（選填）">
 <textarea ref="newChatText" v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可直接貼上截圖" @paste="onNewChatPaste"></textarea>
 <div v-if="newChatPreviews.length" class="ui-next-new-chat-files">
-<span v-for="(url,index) in newChatPreviews" :key="url"><img :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><button type="button" aria-label="移除待傳圖片" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
+<span v-for="(url,index) in newChatPreviews" :key="index"><img v-if="url" :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><em v-else class="ui-next-file-chip"><ui-next-icon name="paperclip"/>{{ newChatFiles[index] && newChatFiles[index].name }}</em><button type="button" aria-label="移除待傳附件" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
 </div>
 <div class="ui-next-new-chat-foot">
-<label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onNewChatFilesSelected"></label>
+<label class="ui-next-icon-button" title="上傳附件"><ui-next-icon name="paperclip"/><input type="file" accept="${window.CHAT_FILE_TYPES.accept}" multiple aria-label="上傳附件" @change="onNewChatFilesSelected"></label>
 <span class="ui-next-new-chat-actions"><button type="button" @click="resetNewChat">取消</button><button type="button" class="ui-next-primary" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'開始對話' }}</button></span>
 </div>
 </div>

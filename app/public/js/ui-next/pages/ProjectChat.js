@@ -206,12 +206,14 @@
         finally { this.creatingChat = false; }
       },
       resetNewChat() { this.revokeNewChatUrls(); this.newTitle = ""; this.newChatText = ""; this.newChatFiles = []; this.newChatPreviews = []; this.showNewChat = false; },
-      // 新對話小視窗的圖片入口：限制與對話輸入列同一組（只收圖、單檔 10MB、最多 5 張）。
-      onNewChatPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); this.addNewChatFiles(files); } },
+      // 新對話小視窗的附件入口：限制與對話輸入列同一組（window.CHAT_FILE_TYPES，與後端同一份清單）。
+      // ⚠ previews 對非圖片存空字串（只有圖片才有縮圖），所以模板一律用 index 當 key——
+      // 用 url 當 key 的話多個非圖片會是同一個空字串，Vue 會把它們當成同一個節點。
+      onNewChatPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => window.CHAT_FILE_TYPES.allows(file)); if (files.length) { event.preventDefault(); this.addNewChatFiles(files); } },
       onNewChatFilesSelected(event) { this.addNewChatFiles(Array.from(event.target.files || [])); event.target.value = ""; },
-      addNewChatFiles(files) { files.forEach((file) => { if (!file.type.startsWith("image/") || file.size > 10 * 1024 * 1024 || this.newChatFiles.length >= 5) return; this.newChatFiles.push(file); this.newChatPreviews.push(URL.createObjectURL(file)); }); },
-      removeNewChatFile(index) { URL.revokeObjectURL(this.newChatPreviews[index]); this.newChatFiles.splice(index, 1); this.newChatPreviews.splice(index, 1); },
-      revokeNewChatUrls() { this.newChatPreviews.forEach((url) => URL.revokeObjectURL(url)); },
+      addNewChatFiles(files) { files.forEach((file) => { if (!window.CHAT_FILE_TYPES.allows(file) || file.size > window.CHAT_FILE_TYPES.maxBytes || this.newChatFiles.length >= window.CHAT_FILE_TYPES.maxFiles) return; this.newChatFiles.push(file); this.newChatPreviews.push(window.CHAT_FILE_TYPES.isImage(file) ? URL.createObjectURL(file) : ""); }); },
+      removeNewChatFile(index) { if (this.newChatPreviews[index]) URL.revokeObjectURL(this.newChatPreviews[index]); this.newChatFiles.splice(index, 1); this.newChatPreviews.splice(index, 1); },
+      revokeNewChatUrls() { this.newChatPreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); }); },
       async deleteChat(chat) {
         if (!await confirmDialog({ title: "刪除對話", message: `確定刪除「${chat.title || "新對話"}」？`, danger: true, confirmText: "刪除" })) return;
         try { await Api.delete(`projects/${this.$route.params.id}/chats/${chat.id}`); if (this.activeChat && this.activeChat.id === chat.id) await this.$router.push(`/projects/${this.$route.params.id}/chat`); else this.chats = this.chats.filter((item) => item.id !== chat.id); }
@@ -223,18 +225,21 @@
         el.style.height = "auto";
         el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
       },
-      onPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); this.addPendingFiles(files); } },
-      addPendingFiles(files) { files.forEach((file) => { if (!file.type.startsWith("image/") || file.size > 10 * 1024 * 1024 || this.pendingFiles.length >= 5) return; this.pendingFiles.push(file); this.pendingPreviews.push(URL.createObjectURL(file)); }); },
-      removePendingFile(index) { URL.revokeObjectURL(this.pendingPreviews[index]); this.pendingFiles.splice(index, 1); this.pendingPreviews.splice(index, 1); },
-      revokePendingUrls() { this.pendingPreviews.forEach((url) => URL.revokeObjectURL(url)); },
+      onPaste(event) { const files = Array.from((event.clipboardData || {}).files || []).filter((file) => window.CHAT_FILE_TYPES.allows(file)); if (files.length) { event.preventDefault(); this.addPendingFiles(files); } },
+      addPendingFiles(files) { files.forEach((file) => { if (!window.CHAT_FILE_TYPES.allows(file) || file.size > window.CHAT_FILE_TYPES.maxBytes || this.pendingFiles.length >= window.CHAT_FILE_TYPES.maxFiles) return; this.pendingFiles.push(file); this.pendingPreviews.push(window.CHAT_FILE_TYPES.isImage(file) ? URL.createObjectURL(file) : ""); }); },
+      removePendingFile(index) { if (this.pendingPreviews[index]) URL.revokeObjectURL(this.pendingPreviews[index]); this.pendingFiles.splice(index, 1); this.pendingPreviews.splice(index, 1); },
+      revokePendingUrls() { this.pendingPreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); }); },
       // 附件端點要帶 Authorization header，<img src> 直連拿不到，只能逐張 fetch 成 objectURL。
       // 少了這一步，attachUrls 永遠是空物件、模板那個 v-show 恆為 false ⇒ 所有已送出的圖都不顯示。
+      // ⚠ 只抓圖片：非圖片附件可以到 25MB，一進對話就把每個 Excel 整包拉進記憶體只為了畫一列檔名，
+      // 而那一列根本不需要內容——要下載時才抓（downloadAttachment）。
       async loadAttachmentThumbs(requestId = this.requestId) {
         const projectId = this.$route.params.id;
         const chatId = this.activeChat && this.activeChat.id;
         if (!chatId) return;
         for (const message of this.messages) {
           for (const attachment of message.attachments || []) {
+            if (!String(attachment.mimetype || "").startsWith("image/")) continue;
             if (this.attachUrls[attachment.id]) continue;
             try {
               const { blob } = await Api.getBlob(
@@ -378,10 +383,30 @@
         const url = this.attachUrls[attachmentId];
         if (url) window.previewImage({ src: url, alt: filename || "" });
       },
-      // 只有圖片畫縮圖。attachUrls 是無差別下載的（loadAttachmentThumbs 不篩 mimetype），
-      // 少了這道判斷，非圖片附件會拿到 blob URL 而畫成一張破圖。
+      isImageAttachment(attachment) { return String((attachment || {}).mimetype || "").startsWith("image/"); },
+      // 非圖片附件（Excel／PDF／CSV…）只畫檔名，要看內容得下載。用 <a download> 而不是
+      // 另開分頁看 blob URL：後者會存成無副檔名的亂數檔，Excel 直接打不開。
+      async downloadAttachment(attachmentId, filename) {
+        const projectId = this.$route.params.id;
+        const chatId = this.activeChat && this.activeChat.id;
+        if (!chatId) return;
+        try {
+          const { blob } = await Api.getBlob(`projects/${projectId}/chats/${chatId}/attachments/${attachmentId}/download`);
+          if (!blob.size) throw new Error("此附件無內容（0 bytes），無法開啟");
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = filename || "attachment";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 30000);
+        } catch (error) { showToast(error.message || "下載失敗", "error"); }
+      },
+      // 只有圖片畫縮圖。attachUrls 現在只裝圖片（loadAttachmentThumbs 已篩掉非圖片），
+      // 這道判斷仍留著：草稿那份 taskDraft.attachments 走的是同一個物件池。
       thumbUrl(attachment) {
-        if (!String(attachment.mimetype || "").startsWith("image/")) return "";
+        if (!this.isImageAttachment(attachment)) return "";
         return this.attachUrls[attachment.id] || "";
       },
       // 草稿裡的候選圖多半已由 loadAttachmentThumbs 抓過（同一組 attachUrls），
@@ -411,11 +436,11 @@
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
 <textarea v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可直接貼上截圖" @paste="onNewChatPaste"></textarea>
 <div v-if="newChatPreviews.length" class="ui-next-new-chat-files">
-<span v-for="(url,index) in newChatPreviews" :key="url"><img :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><button type="button" aria-label="移除待傳圖片" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
+<span v-for="(url,index) in newChatPreviews" :key="index"><img v-if="url" :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><em v-else class="ui-next-file-chip"><ui-next-icon name="paperclip"/>{{ newChatFiles[index] && newChatFiles[index].name }}</em><button type="button" aria-label="移除待傳附件" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
 </div>
 <p v-if="chatError" class="ui-next-inline-error" role="alert">{{ chatError }}</p>
 <div class="ui-next-new-chat-foot">
-<label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onNewChatFilesSelected"></label>
+<label class="ui-next-icon-button" title="上傳附件"><ui-next-icon name="paperclip"/><input type="file" accept="${window.CHAT_FILE_TYPES.accept}" multiple aria-label="上傳附件" @change="onNewChatFilesSelected"></label>
 <button type="button" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'開始對話' }}</button>
 </div>
 </div>
@@ -439,7 +464,7 @@
 <span v-if="row.message.role!=='user'" class="ui-next-msg-avatar" aria-hidden="true"><img src="favicon.svg" alt=""></span>
 <div class="ui-next-message" v-html="renderMd(row.message.content)" v-show="row.message.content"></div>
 <div v-if="(row.message.attachments&&row.message.attachments.length)||(row.message.pending_previews&&row.message.pending_previews.length)" class="ui-next-message-files">
-<img v-for="attachment in (row.message.attachments||[])" :key="attachment.id" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id,attachment.filename)">
+<template v-for="attachment in (row.message.attachments||[])" :key="attachment.id"><img v-if="isImageAttachment(attachment)" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id,attachment.filename)"><button v-else type="button" class="ui-next-file-chip" :title="'下載 '+attachment.filename" @click="downloadAttachment(attachment.id,attachment.filename)"><ui-next-icon name="paperclip"/>{{ attachment.filename }}</button></template>
 <img v-for="(url,index) in (row.message.pending_previews||[])" :key="'pending'+index" :src="url">
 </div>
 <small><ui-next-icon v-if="row.message.role!=='user'" name="chat"/>{{ row.message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(row.message.created_at) }}<button v-if="canResend(row.message)" type="button" class="ui-next-message-retry" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button></small>
@@ -453,9 +478,10 @@
 </i> OAA 正在處理</div>
 </div>
 <div v-if="pendingPreviews.length" class="ui-next-pending-files">
-<span v-for="(url,index) in pendingPreviews" :key="url">
-<img :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})">
-<button type="button" @click="removePendingFile(index)" aria-label="移除待傳圖片"><ui-next-icon name="close"/></button>
+<span v-for="(url,index) in pendingPreviews" :key="index">
+<img v-if="url" :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})">
+<em v-else class="ui-next-file-chip"><ui-next-icon name="paperclip"/>{{ pendingFiles[index] && pendingFiles[index].name }}</em>
+<button type="button" @click="removePendingFile(index)" aria-label="移除待傳附件"><ui-next-icon name="close"/></button>
 </span>
 </div>
 <div class="ui-next-thread-dock">
@@ -464,7 +490,7 @@
 </textarea>
 <div class="ui-next-composer-foot">
 <div class="ui-next-composer-options">
-<label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onFilesSelected"></label>
+<label class="ui-next-icon-button" title="上傳附件"><ui-next-icon name="paperclip"/><input type="file" accept="${window.CHAT_FILE_TYPES.accept}" multiple aria-label="上傳附件" @change="onFilesSelected"></label>
 <button type="button" data-tour="chat-totask" class="ui-next-icon-button" title="建立任務" aria-label="建立任務" @click="toTask($event)" :disabled="draftingTask||sending"><ui-next-icon name="plus"/></button>
 <span v-if="projectName" class="ui-next-composer-chip ui-next-chip-static"><ui-next-icon name="project"/>{{ projectName }}</span>
 <span v-if="dataSourceLabel()" class="ui-next-composer-chip ui-next-chip-static"><ui-next-icon name="grid"/>{{ dataSourceLabel() }}</span>
@@ -473,7 +499,7 @@
 <button v-else class="ui-next-thread-send" :disabled="!newInput.trim()&&!pendingFiles.length" aria-label="送出"><ui-next-icon name="send"/></button>
 </div>
 </form>
-<small class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。附件沿用既有 Chat 的圖片上傳限制。</small>
+<small class="ui-next-thread-hint">Enter 送出，Shift + Enter 換行。可附圖片、PDF、Excel／Word、CSV／TXT 等，單檔 25MB、最多 5 個。</small>
 </div>
 </template>
 <div v-else class="ui-next-thread-empty">
@@ -486,11 +512,11 @@
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
 <textarea v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可直接貼上截圖" @paste="onNewChatPaste"></textarea>
 <div v-if="newChatPreviews.length" class="ui-next-new-chat-files">
-<span v-for="(url,index) in newChatPreviews" :key="url"><img :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><button type="button" aria-label="移除待傳圖片" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
+<span v-for="(url,index) in newChatPreviews" :key="index"><img v-if="url" :src="url" alt="待傳圖片" title="點擊放大" @click="previewImage({src:url})"><em v-else class="ui-next-file-chip"><ui-next-icon name="paperclip"/>{{ newChatFiles[index] && newChatFiles[index].name }}</em><button type="button" aria-label="移除待傳附件" @click="removeNewChatFile(index)"><ui-next-icon name="close"/></button></span>
 </div>
 <p v-if="chatError" class="ui-next-inline-error" role="alert">{{ chatError }}</p>
 <div class="ui-next-new-chat-foot">
-<label class="ui-next-icon-button" title="上傳圖片"><ui-next-icon name="paperclip"/><input type="file" accept="image/*" multiple aria-label="上傳圖片" @change="onNewChatFilesSelected"></label>
+<label class="ui-next-icon-button" title="上傳附件"><ui-next-icon name="paperclip"/><input type="file" accept="${window.CHAT_FILE_TYPES.accept}" multiple aria-label="上傳附件" @change="onNewChatFilesSelected"></label>
 <button type="button" @click="createChat" :disabled="creatingChat">{{ creatingChat?'建立中…':'開始對話' }}</button>
 </div>
 </div>

@@ -39,6 +39,30 @@
   border-radius: 9px;
   cursor: pointer;
 }
+/* 非圖片附件（Excel／PDF／CSV…）沒有縮圖可畫，只列檔名。訊息列裡的是 <button>（點了下載），
+   待傳列裡的是 <em>（還沒有檔案 id，下載無從談起）——.ui-next-pending-files button 那條
+   絕對定位規則是給移除 ✕ 用的，chip 若也用 button 會被吸過去疊在角落。 */
+.ui-next-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 選 <button> 那一版（<em> 沒有 type）。⚠ 不能寫成 button.ui-next-file-chip——ui-next 的 CSS
+   每個 selector 都必須以 .ui-next 開頭，否則 frontend-ui-next 的 scope 守衛會紅。 */
+.ui-next-file-chip[type="button"] { cursor: pointer; }
+.ui-next-file-chip[type="button"]:hover { border-color: var(--text-muted); }
 .ui-next-thread-messages small {
   margin-top: 5px;
   color: var(--text-muted);

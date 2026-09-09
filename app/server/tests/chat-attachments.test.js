@@ -146,6 +146,52 @@ test('非圖檔即使宣告成 image/png 也擋掉（判準是 magic bytes，不
   expect(mockChatReply).not.toHaveBeenCalled();
 });
 
+// 意圖：對話從「只收圖」開放成也收辦公室／ERP 文件。這幾支守的是使用者實際會傳的那幾種，
+// 而且 mimetype 必須是後端自己判出來的——存錯的話 agent 那邊會照錯的型別選錯讀法。
+test('PDF／Excel／CSV 都收得下，mimetype 由後端判定而非採信 client', async () => {
+  const cases = [
+    { filename: 'spec.pdf', buf: Buffer.from('%PDF-1.7 ...'), mime: 'application/pdf' },
+    {
+      filename: '出貨明細.xlsx',
+      buf: Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('..xl/workbook.xml..')]),
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    },
+    { filename: 'export.csv', buf: Buffer.from('品號,數量\nA001,3\n'), mime: 'text/csv' },
+    { filename: 'odoo.log', buf: Buffer.from('2026-09-09 ERROR something'), mime: 'text/plain' }
+  ];
+  for (const c of cases) {
+    const chat = await newChat();
+    mockChatReply.mockResolvedValue('收到');
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
+      .set(auth()).field('content', '看一下這個')
+      // client 一律宣告成 octet-stream：後端不該採信它
+      .attach('files', c.buf, { filename: c.filename, contentType: 'application/octet-stream' });
+    expect(res.status).toBe(200);
+    const passed = mockChatReply.mock.calls.at(-1)[4];
+    expect(passed[0].mimetype).toBe(c.mime);
+    expect(fs.existsSync(path.join(tmpUploadRoot, passed[0].file_path))).toBe(true);
+  }
+});
+
+// 純文字類沒有 magic bytes，是唯一必須信副檔名的一類——所以要確認副檔名不是繞過嗅測的後門。
+test('二進位內容套個 .csv 副檔名一樣擋掉；未開放的檔型（.zip）也擋掉', async () => {
+  const chat = await newChat();
+  const binaryAsCsv = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
+    .set(auth()).field('content', 'x')
+    .attach('files', Buffer.from([0x41, 0x00, 0x42]), { filename: 'evil.csv' });
+  expect(binaryAsCsv.status).toBe(400);
+
+  const chat2 = await newChat();
+  const zip = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat2.id}/messages`)
+    .set(auth()).field('content', 'x')
+    .attach('files', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x11]), { filename: 'pack.zip' });
+  expect(zip.status).toBe(400);
+  expect(mockChatReply).not.toHaveBeenCalled();
+});
+
 test('回覆進行中被擋下時不留孤兒檔（落地必須在搶佔之後）', async () => {
   const chat = await newChat();
   await dbModule.query('UPDATE project_chats SET reply_pending = true WHERE id = $1', [chat.id]);
