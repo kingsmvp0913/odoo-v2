@@ -6,13 +6,13 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, autoDeployEnabled: false, detailTab: ["repos","env","settings","chat","db","sop","wiki","deploy"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, editAutoDeploy: false, savingAutoDeploy: false, detailTab: ["repos","env","settings","chat","db","sop","wiki","deploy"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
     computed: {
-      // tabs 是 computed 不是靜態陣列：自動部署總開關關閉時，這個分頁必須整個不存在。
+      // tabs 是 computed 不是靜態陣列：這個專案的自動部署開關關閉時，分頁必須整個不存在。
       // 這只是畫面——後端每一支部署端點自己也擋（requireAdmin + requireAutoDeploy）。
       tabs() {
         const base = [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["sop","部署 SOP"]];
-        if (this.autoDeployEnabled) base.push(["deploy","自動部署"]);
+        if (this.project && this.project.auto_deploy_enabled) base.push(["deploy","自動部署"]);
         return base;
       },
       embeddedTab() { return { db: window.UiNextDbView, sop: window.UiNextDeploySopView, wiki: window.UiNextWikiView, deploy: window.UiNextDeployTargetsView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
@@ -27,9 +27,8 @@
       hasCloning(value) { if (value) this._startReposPoll(); else this._stopReposPoll(); },
     },
     async created() {
-      // 開關值是非同步載入的，初始化當下還不知道 deploy 分頁在不在，載回來後要再驗一次。
-      // 讀不到（非 admin、或請求失敗）一律當關閉：寧可少一個分頁，也不要顯示一個按了會 403 的。
-      await Promise.all([this.load(), this.loadEnv(), this.loadAutoDeployFlag()]);
+      // 專案資料是非同步載入的，初始化當下還不知道 deploy 分頁在不在，載回來後要再驗一次。
+      await Promise.all([this.load(), this.loadEnv()]);
       this.selectTab(this.detailTab);
       if (this.detailTab === "chat") this.loadChats();
     },
@@ -43,12 +42,7 @@
       _startReposPoll() { if (this._reposPollTimer) return; this._reposPollTimer = setInterval(async () => { const data = await Api.get(`projects/${this.$route.params.id}`).catch(() => null); if (data) this.repos = data.repos || []; }, 3000); },
       _stopReposPoll() { if (this._reposPollTimer) { clearInterval(this._reposPollTimer); this._reposPollTimer = null; } },
       isTourDemo() { return !!(window.TourDemo && window.TourDemo.isProject(this.$route.params.id)); },
-      async load() { this.loading = true; this.loadError = ""; if (this.isTourDemo()) { this.project = window.TourDemo.project(); this.repos = window.TourDemo.project().repos || []; this.loading = false; this.loadEnv(); return; } try { const data = await Api.get(`projects/${this.$route.params.id}`); this.project = data; this.editName = this.project?.name || ""; this.editDescription = this.project?.description || ""; this.repos = data.repos || []; this.editOdooProjectName = data.odoo_project_name || ""; this.editServiceRespondentName = data.service_respondent_name || ""; this.editServiceContactName = data.service_contact_name || ""; this.editE2eEnabled = !data.e2e_disabled; this.editEdition = data.edition || "community"; await Promise.all(this.repos.filter((repo) => repo.clone_status === "done").map(async (repo) => { const info = await Api.get(`projects/${data.id}/repos/${repo.id}/branches`).catch(() => null); if (info) this.branchInfo[repo.id] = info; })); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
-      async loadAutoDeployFlag() {
-        if (this.isTourDemo()) return;
-        const s = await Api.get("admin/teams-settings").catch(() => null);
-        this.autoDeployEnabled = !!(s && s.auto_deploy_enabled);
-      },
+      async load() { this.loading = true; this.loadError = ""; if (this.isTourDemo()) { this.project = window.TourDemo.project(); this.repos = window.TourDemo.project().repos || []; this.loading = false; this.loadEnv(); return; } try { const data = await Api.get(`projects/${this.$route.params.id}`); this.project = data; this.editName = this.project?.name || ""; this.editDescription = this.project?.description || ""; this.repos = data.repos || []; this.editOdooProjectName = data.odoo_project_name || ""; this.editServiceRespondentName = data.service_respondent_name || ""; this.editServiceContactName = data.service_contact_name || ""; this.editE2eEnabled = !data.e2e_disabled; this.editAutoDeploy = !!data.auto_deploy_enabled; this.editEdition = data.edition || "community"; await Promise.all(this.repos.filter((repo) => repo.clone_status === "done").map(async (repo) => { const info = await Api.get(`projects/${data.id}/repos/${repo.id}/branches`).catch(() => null); if (info) this.branchInfo[repo.id] = info; })); } catch (error) { this.loadError = error.message || "無法載入專案"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
       async loadEnv() { if (this.isTourDemo()) { this.env = window.TourDemo.env(); return; } this.env = await Api.get(`projects/${this.$route.params.id}/env`).catch(() => this.env || { status: "idle" }); },
       async addRepo() { if (!this.newRepo.label || !this.newRepo.repo_url) return showToast("請填寫標籤和 repo URL", "error"); this.savingRepo = true; try { await Api.post(`projects/${this.$route.params.id}/repos`, { ...this.newRepo }); this.newRepo = { label: "", repo_url: "", is_primary: false, base_branch: "" }; this.remoteBranches = []; this.lastProbedUrl = null; this.branchProbeError = ""; await this.load(); showToast("Repo 已新增，正在同步", "success"); } catch (error) { showToast(error.message || "新增 Repo 失敗", "error", 0); } finally { this.savingRepo = false; } },
       async probeRemoteBranches() { const url = this.newRepo.repo_url.trim(); if (!url || url === this.lastProbedUrl) return; this.lastProbedUrl = url; this.probingBranches = true; this.branchProbeError = ""; try { const data = await Api.get(`git/remote-branches?url=${encodeURIComponent(url)}`); this.remoteBranches = data.ok ? data.branches || [] : []; this.branchProbeError = data.ok ? "" : (data.reason || "讀不到分支"); this.newRepo.base_branch = data.defaultBranch || ""; } catch (error) { this.remoteBranches = []; this.branchProbeError = error.message || "讀不到分支"; } finally { this.probingBranches = false; } },
@@ -129,7 +123,7 @@
       chatDate(value) { return value ? new Date(value).toLocaleString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"; },
       
       async setupEnv() { this.envWorking = true; try { await Api.post(`projects/${this.$route.params.id}/env/setup`, {}); this.env = { ...(this.env || {}), status: "setting_up" }; showToast("環境建立已開始", "success"); } catch (error) { showToast(error.message || "建立環境失敗", "error", 0); } finally { this.envWorking = false; } }, async stopEnv() { this.envWorking = true; try { await Api.post(`projects/${this.$route.params.id}/env/stop`, {}); await this.loadEnv(); } finally { this.envWorking = false; } }, async releaseExternal() { await Api.post(`projects/${this.$route.params.id}/env/external/release`, {}); await this.loadEnv(); }, async openEnv() { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(this.$route.params.id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } }, async viewLog() { this.logLoading = true; try { const data = await Api.get(`projects/${this.$route.params.id}/env/log`); this.runtimeLog = data.exists ? data.log || "（log 為空）" : "（尚無 log 檔）"; } finally { this.logLoading = false; } }, async deleteEnv() { if (!await confirmDialog({ title: "刪除測試環境", message: "確定刪除整個測試環境？", danger: true, confirmText: "刪除" })) return; await Api.delete(`projects/${this.$route.params.id}/env`); await this.loadEnv(); },
-      async saveProjectMapping() { await Api.patch(`projects/${this.project.id}/mapping`, { odoo_project_name: this.editOdooProjectName || null, service_respondent_name: this.editServiceRespondentName || null, service_contact_name: this.editServiceContactName || null }); showToast("已儲存", "success"); }, async saveE2eSetting() { this.savingE2e = true; try { await Api.patch(`projects/${this.project.id}`, { e2e_disabled: !this.editE2eEnabled }); } finally { this.savingE2e = false; } }, async saveEdition() { this.savingEdition = true; try { await Api.patch(`projects/${this.project.id}`, { edition: this.editEdition }); } finally { this.savingEdition = false; } }, isAdmin() { return window.UserStore.role === "admin"; },
+      async saveProjectMapping() { await Api.patch(`projects/${this.project.id}/mapping`, { odoo_project_name: this.editOdooProjectName || null, service_respondent_name: this.editServiceRespondentName || null, service_contact_name: this.editServiceContactName || null }); showToast("已儲存", "success"); }, async saveE2eSetting() { this.savingE2e = true; try { await Api.patch(`projects/${this.project.id}`, { e2e_disabled: !this.editE2eEnabled }); } finally { this.savingE2e = false; } }, async saveEdition() { this.savingEdition = true; try { await Api.patch(`projects/${this.project.id}`, { edition: this.editEdition }); } finally { this.savingEdition = false; } }, async saveAutoDeploy() { this.savingAutoDeploy = true; try { await Api.patch(`projects/${this.project.id}`, { auto_deploy_enabled: this.editAutoDeploy }); this.project.auto_deploy_enabled = this.editAutoDeploy; this.selectTab(this.detailTab); } catch (e) { this.editAutoDeploy = !this.editAutoDeploy; showToast(e.message || '儲存失敗', 'error', 0); } finally { this.savingAutoDeploy = false; } }, isAdmin() { return window.UserStore.role === "admin"; },
     },
     template: `
       <section v-if="loading" class="ui-next-page">
@@ -288,6 +282,12 @@
 <input type="checkbox" v-model="editE2eEnabled" @change="saveE2eSetting" :disabled="savingE2e">
 <span></span>{{ editE2eEnabled?'啟用中':'已停用' }}</label>
 </div>
+<div v-if="isAdmin()" class="ui-next-inline-field">自動部署
+<label class="ui-next-toggle ui-next-toggle-row">
+<input type="checkbox" v-model="editAutoDeploy" @change="saveAutoDeploy" :disabled="savingAutoDeploy">
+<span></span>{{ editAutoDeploy?'啟用中':'已停用' }}</label>
+</div>
+<p v-if="editAutoDeploy" class="ui-next-field-hint">任務核准併入 ai-dev 會自動部署到客戶測試區；按「上正式」會接著部署到客戶正式區。部署失敗只還原程式檔案，<b>資料庫的改動不會還原</b>。</p>
 </template>
 <div class="ui-next-panel-actions">
 <button class="ui-next-primary" @click="saveBasics" :disabled="savingBasics||!editName.trim()">{{ savingBasics?'儲存中…':'儲存' }}</button>

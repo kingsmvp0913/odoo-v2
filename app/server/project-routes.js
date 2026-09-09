@@ -17,7 +17,7 @@ const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '
 // 明列欄位，不用 SELECT */RETURNING *：projects 已存了 vpn_config_enc／vpn_username／vpn_password_enc
 // （VPN 憑證密文），這些路由給一般已登入使用者，密文外流一樣是機密外洩。VPN 狀態改走專屬的
 // GET /api/projects/:id/vpn（只回 has_config/vpn_username），這裡完全不帶三個 vpn_* 欄位。
-const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, service_contact_name, e2e_disabled, edition';
+const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, service_contact_name, e2e_disabled, edition, auto_deploy_enabled';
 
 // folder_name 同時決定三個外部識別：測試容器名 odoo-test-<folder>、環境目錄 odoo-envs/<folder>、
 // 測試資料庫 test_<folder>。容器名只吃 [a-zA-Z0-9_.-]，過去這裡不驗格式，填中文會被靜默清成一串
@@ -525,6 +525,9 @@ function registerRoutes(app) {
       if ('odoo_project_name' in req.body) setDirect('odoo_project_name', odoo_project_name || null);
       if ('service_respondent_name' in req.body) setDirect('service_respondent_name', service_respondent_name || null);
       if ('e2e_disabled' in req.body) setDirect('e2e_disabled', !!e2e_disabled);
+      // 自動部署開關掛在這支（已有 requireAdmin）：它決定平台能不能連進客戶正式機下指令，
+      // 與 folder_name／e2e_disabled 同屬高風險欄位，不放進一般使用者能打的 /mapping。
+      if ('auto_deploy_enabled' in req.body) setDirect('auto_deploy_enabled', !!req.body.auto_deploy_enabled);
       if ('edition' in req.body) {
         if (!EDITIONS.includes(req.body.edition)) {
           return res.status(400).json({ error: 'edition 只能是 community 或 enterprise' });
@@ -958,7 +961,7 @@ function registerRoutes(app) {
       let deploy = [], deploySkipped = false;
       if (allOk && anyMerged) {
         const { isAutoDeployEnabled } = require('./lib/auto-deploy-switch');
-        if (!await isAutoDeployEnabled()) {
+        if (!await isAutoDeployEnabled(project.id)) {
           deploySkipped = true;
         } else {
           const { rows: targets } = await query(

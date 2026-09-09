@@ -139,7 +139,7 @@ async function deployToTestEnv(task, taskId, userId) {
   const say = (msg) => notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] ${msg}\n` });
   try {
     const { isAutoDeployEnabled } = require('../lib/auto-deploy-switch');
-    if (!await isAutoDeployEnabled()) return say('自動部署已停用，略過');
+    if (!await isAutoDeployEnabled(task.project_id)) return say('此專案未啟用自動部署，略過');
 
     const { rows: targets } = await query(
       "SELECT id FROM project_deploy_targets WHERE project_id = $1 AND env = 'test' AND enabled = true ORDER BY id",

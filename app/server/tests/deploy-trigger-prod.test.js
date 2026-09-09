@@ -49,8 +49,7 @@ afterAll(() => { dbModule._setPoolForTesting(null); });
 beforeEach(async () => {
   runDeploy.mockReset().mockResolvedValue({ ok: true, status: 'success', modules: ['idx_hj'] });
   await dbModule.query('DELETE FROM project_deploy_targets');
-  await dbModule.query('DELETE FROM teams_settings');
-  await dbModule.query('INSERT INTO teams_settings (id, auto_deploy_enabled) VALUES (1, true)');
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = true');
   await dbModule.query('DELETE FROM tasks');
   // 一張待上正式的任務：已核准、尚未推 main
   await dbModule.query(
@@ -76,8 +75,8 @@ test('有啟用的正式區目標時，上正式之後接著部署', async () =>
 });
 
 // 意圖：關著開關的人會以為程式沒上去，或以為部署過了。兩種誤解都要避免。
-test('總開關關閉時回應帶 deploySkipped，且不部署', async () => {
-  await dbModule.query('UPDATE teams_settings SET auto_deploy_enabled = false WHERE id = 1');
+test('專案開關關閉時回應帶 deploySkipped，且不部署', async () => {
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = false');
   await addTarget('prod', true);
   const res = await release();
   expect(res.body.deploySkipped).toBe(true);

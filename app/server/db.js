@@ -815,6 +815,9 @@ async function migrate() {
     { table: 'tasks', col: 'approved_by',          sql: 'ALTER TABLE tasks ADD COLUMN approved_by INTEGER' },
     // 「上正式」按鈕把 ai-dev 併進 main 並 push 成功的時間。approved_at 只代表併進 ai-dev，
     // 兩者的差集＝待上正式。若改在 GitHub 上手動合併，此欄不會被寫入（已知代價，見設計文件）。
+    // 自動部署開關，每個專案自己一顆。預設 false：這個功能會連進客戶正式機下指令，
+    // 新建專案不該一建好就處於「會自動部署」的狀態。
+    { table: 'projects', col: 'auto_deploy_enabled', sql: 'ALTER TABLE projects ADD COLUMN auto_deploy_enabled BOOLEAN DEFAULT false' },
     { table: 'tasks', col: 'merged_to_main_at',    sql: 'ALTER TABLE tasks ADD COLUMN merged_to_main_at TIMESTAMPTZ' },
     { table: 'tasks', col: 'retry_feedback',       sql: 'ALTER TABLE tasks ADD COLUMN retry_feedback TEXT' },
     { table: 'tasks', col: 'coding_session_id',    sql: 'ALTER TABLE tasks ADD COLUMN coding_session_id TEXT' },
@@ -878,8 +881,6 @@ async function migrate() {
     // 測試區建置模式：'venv'（預設，宿主 venv）或 'docker'（官方 odoo image，自動涵蓋 13→20+）。由管理設定切換。
     { table: 'teams_settings', col: 'env_mode', sql: "ALTER TABLE teams_settings ADD COLUMN env_mode TEXT DEFAULT 'venv'" },
     // Claude 用量閘門：超標停自動推進（全域單一，全台共用同一 claude 帳號）
-    // 自動部署總開關。預設 false：這個功能會連進客戶正式機下指令，必須明確開啟才生效。
-    { table: 'teams_settings', col: 'auto_deploy_enabled', sql: 'ALTER TABLE teams_settings ADD COLUMN auto_deploy_enabled BOOLEAN DEFAULT false' },
     { table: 'teams_settings', col: 'usage_gate_enabled',     sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_enabled BOOLEAN DEFAULT true' },
     { table: 'teams_settings', col: 'usage_gate_5h_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_5h_threshold INTEGER DEFAULT 90' },
     { table: 'teams_settings', col: 'usage_gate_7d_threshold', sql: 'ALTER TABLE teams_settings ADD COLUMN usage_gate_7d_threshold INTEGER DEFAULT 95' },
@@ -1201,6 +1202,15 @@ async function migrate() {
       `SELECT 1 FROM information_schema.columns WHERE table_name='projects' AND column_name=$1`, [col]
     );
     if (rows.length) await query(`ALTER TABLE projects DROP COLUMN ${col}`);
+  }
+
+  // 退場：自動部署的全域總開關（2026-09-08 當天加、當天退），改為每專案一顆。
+  // 留著一顆沒人讀的開關最危險——有人會去撥它，然後以為自己關掉了什麼。
+  {
+    const { rows } = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name='teams_settings' AND column_name='auto_deploy_enabled'`
+    );
+    if (rows.length) await query('ALTER TABLE teams_settings DROP COLUMN auto_deploy_enabled');
   }
 
   // One-time backfill：token_usage.project_id 由 tasks 回填（任務被刪前先固化歸因，

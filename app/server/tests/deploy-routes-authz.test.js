@@ -37,7 +37,7 @@ beforeAll(async () => {
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url) VALUES (2, '乙repo', 'https://x/y.git')"
   );
-  await dbModule.query('INSERT INTO teams_settings (id, auto_deploy_enabled) VALUES (1, true)');
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = true');
 }, 30000);
 
 afterAll(() => { dbModule._setPoolForTesting(null); });

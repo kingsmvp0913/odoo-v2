@@ -24,7 +24,7 @@ beforeAll(async () => {
 
   await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('甲', '17.0')");   // 1
   await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('乙', '17.0')");   // 2
-  await dbModule.query('INSERT INTO teams_settings (id, auto_deploy_enabled) VALUES (1, true)');
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = true WHERE id = 1');
   // 1 = 甲的測試區、2 = 甲的正式區、3 = 乙的測試區
   for (const [pid, env] of [[1, 'test'], [1, 'prod'], [2, 'test']]) {
     await dbModule.query(
@@ -37,14 +37,14 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 const auth = (r) => r.set('Authorization', `Bearer ${token}`);
-const on = () => dbModule.query('UPDATE teams_settings SET auto_deploy_enabled = true WHERE id = 1');
-const off = () => dbModule.query('UPDATE teams_settings SET auto_deploy_enabled = false WHERE id = 1');
+const on = () => dbModule.query('UPDATE projects SET auto_deploy_enabled = true WHERE id = 1');
+const off = () => dbModule.query('UPDATE projects SET auto_deploy_enabled = false WHERE id = 1');
 
 beforeEach(() => runDeploy.mockClear());
 
 // 意圖（Rule 9）：前端把分頁藏起來不是授權，使用者照樣打得到 API。
 // 五個端點漏任何一個，關掉總開關就形同虛設。
-test('總開關關閉時所有部署端點都 403', async () => {
+test('專案開關關閉時所有部署端點都 403', async () => {
   await off();
   const calls = [
     ['get', '/api/projects/1/deploy-targets'],

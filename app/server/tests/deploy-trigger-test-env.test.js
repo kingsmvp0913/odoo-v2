@@ -46,13 +46,11 @@ beforeEach(async () => {
   await dbModule.query('DELETE FROM tasks');
   await dbModule.query('DELETE FROM project_repos');
   await dbModule.query('DELETE FROM projects');
-  await dbModule.query('DELETE FROM teams_settings');
-  await dbModule.query('INSERT INTO teams_settings (id, auto_deploy_enabled) VALUES (1, true)');
 });
 
 async function setup({ targets = [] } = {}) {
   const { rows: [proj] } = await dbModule.query(
-    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('PA','17.0','pa') RETURNING id"
+    "INSERT INTO projects (name, odoo_version, folder_name, auto_deploy_enabled) VALUES ('PA','17.0','pa',true) RETURNING id"
   );
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/pa/main',true,'done')",
@@ -85,12 +83,12 @@ test('有啟用的測試區目標時觸發部署，且任務照常推進', async
 });
 
 // 意圖：靜默跳過最難查——使用者會以為部署了，其實沒有。
-test('總開關關閉時不部署，但留一行說明', async () => {
-  await dbModule.query('UPDATE teams_settings SET auto_deploy_enabled = false WHERE id = 1');
+test('專案開關關閉時不部署，但留一行說明', async () => {
   const id = await setup({ targets: [{ env: 'test', enabled: true }] });
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = false');
   await pushAi.runPushAi(id, userId, null);
   expect(runDeploy).not.toHaveBeenCalled();
-  expect(said()).toMatch(/停用/);
+  expect(said()).toMatch(/未啟用/);
   expect(await statusOf(id)).toBe('wiki_updating');
 });
 

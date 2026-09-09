@@ -47,8 +47,19 @@ test('刪專案會連帶刪掉 target 與部署紀錄', async () => {
   expect(r.rows).toHaveLength(0);
 });
 
-test('teams_settings 有 auto_deploy_enabled 且預設關閉', async () => {
-  await dbModule.query('INSERT INTO teams_settings (id) VALUES (1)');
-  const { rows } = await dbModule.query('SELECT auto_deploy_enabled FROM teams_settings WHERE id = 1');
+// 意圖：開關是每個專案自己的。預設 false——這個功能會連進客戶正式機下指令，
+// 新建專案不該一建好就處於「會自動部署」的狀態。
+test('projects 有 auto_deploy_enabled 且預設關閉', async () => {
+  await dbModule.query("INSERT INTO projects (name, odoo_version) VALUES ('p2', '17.0')");
+  const { rows } = await dbModule.query("SELECT auto_deploy_enabled FROM projects WHERE name = 'p2'");
   expect(rows[0].auto_deploy_enabled).toBe(false);
+});
+
+// 意圖：全域總開關已退場（使用者裁決只留專案層）。留著一顆沒人讀的開關最危險——
+// 有人會去撥它，然後以為自己關掉了什麼。
+test('teams_settings 不再有 auto_deploy_enabled', async () => {
+  const { rows } = await dbModule.query(
+    "SELECT 1 FROM information_schema.columns WHERE table_name='teams_settings' AND column_name='auto_deploy_enabled'"
+  );
+  expect(rows).toHaveLength(0);
 });

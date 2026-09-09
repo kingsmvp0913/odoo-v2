@@ -149,39 +149,3 @@ test('GET /api/admin/teams-settings 不得回傳 claude_oauth_token_enc（密文
   expect(res.body.client_secret).toBe('••••••');
 });
 
-// 意圖（Rule 9）：INSERT 的 $n 是連續編號，新增欄位若插在中間、後面編號沒往後推，
-// 不會有任何錯誤——只會把值默默寫進錯的欄位。這條走完整往返，釘死 auto_deploy_enabled
-// 存進去的就是它自己，不是隔壁的 usage_gate_7d_threshold。
-test('PUT/GET 往返：auto_deploy_enabled 存得進也讀得回，且不誤傷鄰欄', async () => {
-  await request(app).put('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`)
-    .send({ usage_gate_7d_threshold: 95, auto_deploy_enabled: true });
-
-  const on = await request(app).get('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`);
-  expect(on.body.auto_deploy_enabled).toBe(true);
-  expect(on.body.usage_gate_7d_threshold).toBe(95);
-
-  // 明確送 false 要能關掉（不可被當成「沒帶」而保留現值）
-  await request(app).put('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`)
-    .send({ auto_deploy_enabled: false });
-  const off = await request(app).get('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`);
-  expect(off.body.auto_deploy_enabled).toBe(false);
-});
-
-// 意圖：設定頁四個區塊共用儲存動作，任一區塊送出時都不會帶 auto_deploy_enabled。
-// 沒有 COALESCE 保留現值，就會變成「存一次 Teams 設定就把自動部署關掉」。
-// test_mode 曾經就是這樣被靜默關掉的。
-test('其他區塊儲存時未帶 auto_deploy_enabled，現值要保留', async () => {
-  await request(app).put('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`)
-    .send({ auto_deploy_enabled: true });
-  await request(app).put('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`)
-    .send({ odoo_url: 'https://example.test' });
-  const res = await request(app).get('/api/admin/teams-settings')
-    .set('Authorization', `Bearer ${adminToken}`);
-  expect(res.body.auto_deploy_enabled).toBe(true);
-});

@@ -8,7 +8,6 @@
         testMode: false,
         writebackOdooNotes: false,
         usageGate: { enabled: true, th5: 90, th7: 95 },
-        autoDeploy: { enabled: false },
         gateStatus: null,
         claudeToken: { configured: false, backup_configured: false, fallback_enabled: false, shadowed_by: null },
         claudeTokenInput: '',
@@ -87,7 +86,6 @@
             this.testMode            = !!d.test_mode;
             this.writebackOdooNotes  = !!d.writeback_odoo_notes;
             this.usageGate.enabled = d.usage_gate_enabled != null ? !!d.usage_gate_enabled : true;
-            this.autoDeploy.enabled = !!d.auto_deploy_enabled;
             this.usageGate.th5     = d.usage_gate_5h_threshold ?? 90;
             this.usageGate.th7     = d.usage_gate_7d_threshold ?? 95;
             this.cliPushUserId     = d.cli_push_user_id ?? null;
@@ -315,7 +313,6 @@
             odoo_url: this.odoo.url, odoo_db: this.odoo.db, odoo_sync_interval: this.odoo.sync_interval,
             service_url: this.service.url, service_db: this.service.db, service_sync_interval: this.service.sync_interval,
             usage_gate_enabled: this.usageGate.enabled,
-            auto_deploy_enabled: this.autoDeploy.enabled,
             usage_gate_5h_threshold: th5,
             usage_gate_7d_threshold: th7
           });
@@ -443,27 +440,6 @@
               <button class="btn btn-ghost btn-sm" @click="testTeams" :disabled="testingTeams">
                 {{ testingTeams ? '發送中...' : '傳送測試訊息' }}
               </button>
-            </div>
-          </div>
-
-          <!-- 自動部署 -->
-          <div v-show="settingsTab==='ai'" class="setting-block">
-            <div class="setting-block-head">
-              <div class="setting-block-title">自動部署</div>
-              <div class="setting-block-desc">開啟後，任務核准併入 <code>ai-dev</code> 會自動部署到客戶<strong>測試區</strong>；按「上正式」會接著部署到客戶<strong>正式區</strong>。關閉時所有部署功能停用、專案頁的「自動部署」分頁隱藏，且<strong>後端一併拒絕</strong>（不只是把畫面藏起來）。此設定為全域。</div>
-            </div>
-            <div class="setting-block-body">
-              <label class="switch-label-row">
-                <div style="position:relative;width:44px;height:24px;flex-shrink:0">
-                  <input type="checkbox" v-model="autoDeploy.enabled" style="opacity:0;width:0;height:0;position:absolute" />
-                  <div :style="{background: autoDeploy.enabled ? 'var(--primary)' : 'var(--border)', borderRadius:'var(--radius-lg)', width:'44px', height:'24px', transition:'background 0.2s'}"></div>
-                  <div :style="{position:'absolute', top:'3px', left: autoDeploy.enabled ? '23px' : '3px', width:'18px', height:'18px', background:'#fff', borderRadius:'50%', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,.25)'}"></div>
-                </div>
-                <span style="font-size:var(--fs-md);color:var(--text)">{{ autoDeploy.enabled ? '自動部署已啟用' : '自動部署已停用（分頁隱藏、API 一併拒絕）' }}</span>
-              </label>
-              <div v-if="autoDeploy.enabled" style="margin-top:var(--space-4);font-size:var(--fs-sm);color:var(--warning)">
-                ⚠ 部署失敗時只還原程式檔案，<strong>資料庫的改動不會還原</strong>。
-              </div>
             </div>
           </div>
 
