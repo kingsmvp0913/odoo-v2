@@ -32,7 +32,9 @@ async function runDeploy(targetId, opts, deps = {}) {
 }
 
 // 一組共用一次停機的目標。N=1 時走原本的單 DB 指令，行為與過去一致。
-async function runDeployGroup(targetIds, { trigger, taskId = null, userId = null }, deps = {}) {
+// gitUserId：拿誰的 GitHub PAT 去 fetch。自動部署的 triggered_by 是 null（系統觸發），
+// 但 fetch 私有 repo 仍要有人的憑證，所以與 userId 分開傳。
+async function runDeployGroup(targetIds, { trigger, taskId = null, userId = null, gitUserId = userId }, deps = {}) {
   const items = [];
   for (const id of targetIds) {
     const { rows: [t] } = await query('SELECT * FROM project_deploy_targets WHERE id = $1', [id]);
@@ -40,7 +42,7 @@ async function runDeployGroup(targetIds, { trigger, taskId = null, userId = null
     items.push({ target: t });
   }
   const head = items[0].target;
-  const git = deps.git || defaultGit(head);
+  const git = deps.git || defaultGit(head, gitUserId);
   const exec = deps.exec || sshExec;
   const upload = deps.upload || defaultUpload;
 
@@ -199,18 +201,36 @@ async function runDeployGroup(targetIds, { trigger, taskId = null, userId = null
 
 // --- 真實依賴（測試一律注入假的，不會走到這裡）---
 
-function defaultGit(t) {
+function defaultGit(t, userId) {
   const { execFile } = require('child_process');
   const { promisify } = require('util');
   const pExecFile = promisify(execFile);
   const repoPath = () => query('SELECT local_path FROM project_repos WHERE id = $1', [t.repo_id])
     .then(r => (r.rows[0] && r.rows[0].local_path) || null);
 
+  // fetch 是這裡唯一會連外的一步（rev-parse／diff／archive 都在本地），也是唯一需要憑證的一步。
+  // 私有 repo 沒帶 PAT 時 git 會轉去問互動輸入，在無 tty 的伺服器上就是
+  // "could not read Username for 'https://github.com'"。沒有 PAT 仍照舊直跑：公開 repo 不需要。
+  const fetchEnv = async () => {
+    if (!userId) return process.env;
+    const { buildGitEnv } = require('./git-identity');
+    const gitEnv = await buildGitEnv(userId).catch(() => null);
+    return gitEnv ? { ...process.env, ...gitEnv } : process.env;
+  };
+
   return {
     async headSha(branch) {
       const cwd = await repoPath();
       if (!cwd) throw new Error('這個部署目標沒有對應的 repo');
-      await pExecFile('git', ['-C', cwd, 'fetch', 'origin', branch]);
+      try {
+        await pExecFile('git', ['-C', cwd, 'fetch', 'origin', branch], { env: await fetchEnv() });
+      } catch (e) {
+        // 原訊息只說「讀不到 Username」，看的人不會聯想到 PAT。翻成能照做的一句。
+        if (/could not read Username|Authentication failed|terminal prompts disabled/i.test(e.message)) {
+          throw new Error('GitHub 認證失敗，請到設定填個人 GitHub PAT');
+        }
+        throw e;
+      }
       const { stdout } = await pExecFile('git', ['-C', cwd, 'rev-parse', `origin/${branch}`]);
       return stdout.trim();
     },
@@ -263,4 +283,4 @@ function defaultUpload(conn, buffer, remotePath) {
 }
 
 // groupTargets／groupKey 轉出只為相容既有匯入，真身在 deploy-cmd（純函式那一側）
-module.exports = { runDeploy, runDeployGroup, groupTargets, groupKey, readExitCode };
+module.exports = { runDeploy, runDeployGroup, groupTargets, groupKey, readExitCode, defaultGit };

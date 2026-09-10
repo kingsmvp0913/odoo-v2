@@ -152,7 +152,12 @@ async function deployToTestEnv(task, taskId, userId) {
     const byTarget = new Map(targets.map(t => [t.id, t]));
     // 掛在同一個容器／服務上的多個資料庫合成一輪，客戶只被斷一次線
     for (const ids of groupTargets(targets)) {
-      const results = await runDeployGroup(ids, { trigger: 'auto_test', taskId: task.id, userId: null });
+      // userId 維持 null（這是系統觸發，不歸屬到人）；但 fetch 私有 repo 要憑證，
+      // 用與 push 同一個人的 PAT。
+      const results = await runDeployGroup(ids, {
+        trigger: 'auto_test', taskId: task.id, userId: null,
+        gitUserId: task.approved_by || task.user_id,
+      });
       for (const r of results) {
         const t = byTarget.get(r.targetId);
         const who = t ? t.db_name : r.targetId;
