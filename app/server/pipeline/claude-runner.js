@@ -187,7 +187,14 @@ function runClaude(prompt, opts = {}) {
       // 叫醒回「這跟我無關」，整輪分析報廢）。更糟的是它審的是**平台自己的 repo**（實測 baseline_sha
       // 落在 odoo-v2 的 commit，untracked 清單是 app/server/*.js），與該任務的 worktree 毫不相干。
       // 這裡只關 pipeline 子行程，人用的互動 session 不受影響。
-      env: { ...process.env, SECURITY_GUIDANCE_DISABLE: '1', ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
+      // CLAUDE_CODE_PROMPT_CACHE_TTL：釘在 5m。Claude Code 自己的預設是 1h（env 與兩份 settings.json
+      // 皆未設定，實測 usage.cache_creation 仍全數落在 ephemeral_1h_input_tokens），而 1h 的快取寫入
+      // 費率是 2× base input、5m 是 1.25×。實測本平台同一任務相鄰事件的間隔 97.3% 在 1 分鐘內、只有
+      // 0.62% 超過 5 分鐘 —— 絕大多數呼叫在 5m 內就被下一次讀取續命（讀取會免費重置計時），付 2×
+      // 買不到任何東西。依 token_usage 2183 筆估算，改 5m 淨省約 11% 成本。
+      // ⚠ 這條與 lib/token-cost.js 的 cache_create 係數 1.25 綁死：拿掉這個釘子＝實際回到 1h＝2×，
+      // 而成本模型不會跟著變，整份帳會靜默低估兩成（且沒有任何測試會紅）。
+      env: { ...process.env, SECURITY_GUIDANCE_DISABLE: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
     });
     // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
     // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。

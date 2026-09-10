@@ -272,6 +272,32 @@ test('runClaude：spawn env 帶 SECURITY_GUIDANCE_DISABLE=1', async () => {
   expect(spawn.mock.calls[0][2].env.SECURITY_GUIDANCE_DISABLE).toBe('1');
 });
 
+// Claude Code 的 prompt 快取預設是 1h TTL（env／settings 都沒設也一樣），而 1h 的寫入費率是 2×
+// base input、5m 是 1.25×。實測本平台 97.3% 的相鄰呼叫在 1 分鐘內、只有 0.62% 超過 5 分鐘，
+// 也就是絕大多數呼叫在 5m 內就被下一次讀取續命，付 2× 完全買不到東西（估算淨省約 11% 成本）。
+// 這個釘子還撐著 lib/token-cost.js 的 cache_create 係數 1.25——拿掉它，整份成本報表會低估兩成
+// 而毫無徵狀。所以它必須有測試守著，不能只靠註解。
+test('runClaude：spawn env 把 prompt 快取 TTL 釘在 5m（成本模型的 1.25 係數依賴它）', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  child.kill = jest.fn();
+  spawn.mockClear();
+  spawn.mockReturnValue(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'x', usage: null, duration_ms: 1 }) + '\n');
+  child.emit('close', 0);
+  await p;
+  expect(spawn.mock.calls[0][2].env.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe('5m');
+  // 係數與釘子綁在一起：任一邊改了另一邊沒改，這裡就會紅。
+  expect(require('../lib/token-cost').costSql('').weighted).toContain('cache_create_tokens * 1.25');
+});
+
 test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含', async () => {
   const { spawn } = require('child_process');
   const { EventEmitter } = require('events');

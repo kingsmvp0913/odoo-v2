@@ -7,6 +7,12 @@
 //
 // 成本模型（對齊 ccusage）：各 model 內的比例一致（output=5×input、cache_read=0.1×、
 // cache_create=1.25×），所以成本 = 該 model 每 1M input 單價 × 加權 input 等效顆數 / 1e6。
+//
+// ⚠ cache_create 的 1.25 **只在 5 分鐘 TTL 下成立**；1 小時 TTL 的快取寫入是 2× base input。
+// pipeline 的 TTL 由 pipeline/claude-runner.js 的 CLAUDE_CODE_PROMPT_CACHE_TTL='5m' 釘住，這個
+// 係數才是對的。那個釘子一旦被拿掉，Claude Code 會回到它自己的 1h 預設，本檔算出來的每一筆
+// 成本都會低估約兩成，而且沒有任何測試或畫面會反映出來——動 TTL 的人必須同時動這裡。
+// （2026-09-10 之前的歷史資料是在 1h 下產生的，那段區間的成本數字本來就低估，無法回頭修正。）
 // 未知或空白的 model 一律以 sonnet 計（低估比高估安全：不會憑空生出一筆嚇人的支出）。
 // LOWER + LIKE 而非 ILIKE：pg-mem（測試用）不保證支援 ILIKE。
 //
