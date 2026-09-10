@@ -113,8 +113,8 @@ function registerRoutes(app) {
       // 四個字、原因僅存 retry_feedback 與 task_rejections，畫面上等於沒有原因——使用者實際回報
       // 「人工退回好像都沒有顯示原因，而且都是歸在 AI 方」。當初不寫全文的顧慮（整包貼錯誤 log 會
       // 洗版）改由 machine-logs registry 的 collapseWhenLong 承接：長原因收成一句話、可展開。
-      await query(
-        'INSERT INTO task_logs (task_id, role, content) VALUES ($1, \'user\', $2)',
+      const { rows: [rejectLog] } = await query(
+        'INSERT INTO task_logs (task_id, role, content) VALUES ($1, \'user\', $2) RETURNING id',
         [req.params.id, `${machineLogHeader('manual_reject')}\n${reason}`]
       );
       await query(
@@ -128,10 +128,12 @@ function registerRoutes(app) {
       // 寫在 rowCount 檢查之後：輸掉雙擊競態的請求不該落附件。
       for (const file of req.files || []) {
         const relPath = saveAttachmentFile(task.id, file.originalname, file.buffer);
+        // 帶上剛寫的那則 log 的 id：附件在時間軸上要跟退回原因同一則，不然會被歸到需求那一則的
+        // 整包主附件裡，顯示成「不管什麼時候上傳都排在最前面」。
         await query(
-          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
-           VALUES ($1, $2, $3, $4, 'manual')`,
-          [task.id, file.originalname, file.mimetype, relPath]
+          `INSERT INTO task_attachments (task_id, log_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, $5, 'manual')`,
+          [task.id, rejectLog.id, file.originalname, file.mimetype, relPath]
         );
       }
       require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: task.id, status: 'reject_triage' });

@@ -357,14 +357,14 @@ function registerRoutes(app) {
       );
       // 抓全部附件（含 message 的）算實際大小：主附件清單只給非空的主附件；has_attachment 依「有沒有任何非空附件」重算
       const { rows: attRows } = await query(
-        'SELECT id, filename, mimetype, file_path, message_id FROM task_attachments WHERE task_id = $1',
+        'SELECT id, filename, mimetype, file_path, message_id, log_id FROM task_attachments WHERE task_id = $1',
         [req.params.id]
       );
       const withSize = attRows.map(a => ({ ...a, size: attachmentSize(a.file_path) }));
       // 主附件清單：濾掉 0-byte 空檔（來源未成功上傳的死列），沒有真內容就不吐給前端＝主附件區塊自然隱藏。不把 file_path 外洩給前端
       const attachments = withSize
         .filter(a => a.message_id === null && a.size > 0)
-        .map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: a.size }));
+        .map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: a.size, log_id: a.log_id }));
       // 舊碼把空附件也設了 has_attachment=true → 殘留旗標讓「含附件」pill 誤顯示。依實際非空附件重算並自癒回寫，詳情頁與任務列表一起修正
       const realHasAttachment = withSize.some(a => a.size > 0);
       if (!!tasks[0].has_attachment !== realHasAttachment) {
@@ -833,8 +833,8 @@ function registerRoutes(app) {
         [req.params.id, task.status]
       );
       if (!rowCount) return res.json({ ok: true });
-      await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+      const { rows: [answerLog] } = await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
         [req.params.id, user_answer]
       );
       // 附件必須早於 runPipeline 寫入：taskAttachmentNote 是在 agent 起跑時才查 task_attachments，
@@ -842,10 +842,12 @@ function registerRoutes(app) {
       // 輸掉雙擊競態的請求不該落附件。
       for (const file of req.files || []) {
         const relPath = saveAttachmentFile(task.id, file.originalname, file.buffer);
+        // 帶上剛寫的那則 log 的 id：附件要跟這則發言掛在時間軸同一位置，
+        // 不然會被歸到需求那一則的整包主附件裡，顯示成「不管什麼時候上傳都排在最前面」。
         await query(
-          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
-           VALUES ($1, $2, $3, $4, 'manual')`,
-          [task.id, file.originalname, file.mimetype, relPath]
+          `INSERT INTO task_attachments (task_id, log_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, $5, 'manual')`,
+          [task.id, answerLog.id, file.originalname, file.mimetype, relPath]
         );
       }
       if ((req.files || []).length) await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [task.id]);
@@ -875,15 +877,17 @@ function registerRoutes(app) {
         [req.params.id, task.status]
       );
       if (!rowCount) return res.json({ ok: true });
-      await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)", [req.params.id, question]);
+      const { rows: [askLog] } = await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2) RETURNING id", [req.params.id, question]);
       // 與 /answer 同一段時序：附件必須早於 runPipeline 落地（taskAttachmentNote 在 agent 起跑時才查），
       // 且寫在 rowCount 檢查之後——輸掉雙擊競態的請求不該落附件。
       for (const file of req.files || []) {
         const relPath = saveAttachmentFile(task.id, file.originalname, file.buffer);
+        // 帶上剛寫的那則 log 的 id：附件要跟這則發言掛在時間軸同一位置，
+        // 不然會被歸到需求那一則的整包主附件裡，顯示成「不管什麼時候上傳都排在最前面」。
         await query(
-          `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin)
-           VALUES ($1, $2, $3, $4, 'manual')`,
-          [task.id, file.originalname, file.mimetype, relPath]
+          `INSERT INTO task_attachments (task_id, log_id, filename, mimetype, file_path, origin)
+           VALUES ($1, $2, $3, $4, $5, 'manual')`,
+          [task.id, askLog.id, file.originalname, file.mimetype, relPath]
         );
       }
       if ((req.files || []).length) await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [task.id]);

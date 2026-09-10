@@ -958,6 +958,36 @@ test('POST /api/tasks/:id/messages 夾帶檔案 → 建立 manual_reply 附件',
   expect(atts[0].origin).toBe('manual_reply');
 });
 
+// 前端靠這個欄位把附件掛回時間軸上正確的那一則。後端漏吐 log_id 的症狀是完全靜默：
+// 端點回 200、附件也在，只是全部又擠回需求那一則的最前面。
+test('GET /api/tasks/:id → 主附件清單帶出 log_id（前端據此掛回所屬的那一則）', async () => {
+  const { rows: [t] } = await dbModule.query(
+    `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+     VALUES ($1,'task_att_logid','odoo','T','base','review_pending') RETURNING id`,
+    [userId]
+  );
+  const { rows: [log] } = await dbModule.query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1,'user','退回：見附圖') RETURNING id", [t.id]
+  );
+  const attachments = require('../lib/attachments');
+  const ticketPath = attachments.saveAttachmentFile(t.id, 'ticket.png', Buffer.from('fake-png'));
+  const laterPath = attachments.saveAttachmentFile(t.id, 'later.png', Buffer.from('fake-png'));
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, filename, mimetype, file_path, origin) VALUES ($1,'ticket.png','image/png',$2,'ticket_main')`,
+    [t.id, ticketPath]
+  );
+  await dbModule.query(
+    `INSERT INTO task_attachments (task_id, log_id, filename, mimetype, file_path, origin) VALUES ($1,$2,'later.png','image/png',$3,'manual')`,
+    [t.id, log.id, laterPath]
+  );
+
+  const res = await request(app).get(`/api/tasks/${t.id}`).set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(200);
+  const byName = Object.fromEntries(res.body.attachments.map(a => [a.filename, a]));
+  expect(byName['ticket.png'].log_id).toBeNull();
+  expect(byName['later.png'].log_id).toBe(log.id);
+});
+
 test('POST /api/tasks/:id/messages 超過檔案數量限制 → 400', async () => {
   const { rows: [t] } = await dbModule.query(
     `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
@@ -1228,9 +1258,13 @@ test('POST /api/tasks/:id/answer → multipart 可夾帶附件，落 task_attach
     .field('user_answer', '如附圖三處')
     .attach('files', Buffer.from('PNGDATA'), '審核標註.png');
   expect(res.status).toBe(200);
-  const { rows: atts } = await dbModule.query('SELECT filename, origin FROM task_attachments WHERE task_id=$1', [t.id]);
+  const { rows: atts } = await dbModule.query('SELECT filename, origin, log_id FROM task_attachments WHERE task_id=$1', [t.id]);
   expect(atts).toHaveLength(1);
   expect(atts[0].filename).toBe('審核標註.png');
+  // 綁在這次回答那則 log 上：沒綁的話前端會把它併進需求那一則的整包主附件，而需求那則的時間戳
+  // 固定是任務建立時間 ⇒ 不管什麼時候上傳的圖都排到時間軸最前面。
+  const { rows: [ansLog] } = await dbModule.query("SELECT id FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id", [t.id]);
+  expect(atts[0].log_id).toBe(ansLog.id);
   const { rows: [row] } = await dbModule.query('SELECT status, has_attachment FROM tasks WHERE id=$1', [t.id]);
   expect(row.status).toBe('clarify_chat_running');
   expect(row.has_attachment).toBe(true);
@@ -1571,9 +1605,12 @@ test('POST /clarify-ask → multipart 可夾帶附件，落 task_attachments 並
     .field('question', '你說的那個欄位是這個嗎？')
     .attach('files', Buffer.from('PNGDATA'), '我看到的畫面.png');
   expect(res.status).toBe(200);
-  const { rows: atts } = await dbModule.query('SELECT filename, origin FROM task_attachments WHERE task_id=$1', [t.id]);
+  const { rows: atts } = await dbModule.query('SELECT filename, origin, log_id FROM task_attachments WHERE task_id=$1', [t.id]);
   expect(atts).toHaveLength(1);
   expect(atts[0].filename).toBe('我看到的畫面.png');
+  // 同 /answer：附件要掛在這則提問上，才會顯示在時間軸的正確位置而不是被推到最前面。
+  const { rows: [askLog] } = await dbModule.query("SELECT id FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id", [t.id]);
+  expect(atts[0].log_id).toBe(askLog.id);
   const { rows: [row] } = await dbModule.query('SELECT status, has_attachment FROM tasks WHERE id=$1', [t.id]);
   expect(row.status).toBe('clarify_chat_running');
   expect(row.has_attachment).toBe(true);

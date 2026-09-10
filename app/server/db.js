@@ -498,6 +498,7 @@ async function migrate() {
       id                     SERIAL PRIMARY KEY,
       task_id                INTEGER NOT NULL REFERENCES tasks(id),
       message_id             INTEGER REFERENCES task_messages(id),
+      log_id                 INTEGER REFERENCES task_logs(id),
       filename               TEXT NOT NULL,
       mimetype               TEXT,
       file_path              TEXT NOT NULL,
@@ -1155,7 +1156,13 @@ async function migrate() {
     { table: 'exam_banks', col: 'score_image', sql: 'ALTER TABLE exam_banks ADD COLUMN score_image TEXT' },
     // 判題暫停鈕。放題庫層而不是全平台：佇列本來就是一場考試一條，暫停的語意
     // 也是「這場先別判」。DEFAULT FALSE ＋ 只有暫停端點寫 true，不需要回填。
-    { table: 'exam_banks', col: 'paused', sql: 'ALTER TABLE exam_banks ADD COLUMN paused BOOLEAN NOT NULL DEFAULT FALSE' }
+    { table: 'exam_banks', col: 'paused', sql: 'ALTER TABLE exam_banks ADD COLUMN paused BOOLEAN NOT NULL DEFAULT FALSE' },
+    // 這張附件屬於時間軸上的哪一則 task_logs。人工退回／澄清回答／澄清提問三個入口都會同時寫一筆
+    // task_logs 與一筆附件，但兩者過去沒有任何關聯欄位——前端只能把所有 message_id 為 NULL 的附件
+    // 整包掛到需求那一則（ts 固定是 task.created_at），結果是「不管什麼時候上傳的圖都排在最前面」。
+    // message_id 指向的是 task_messages（外部溝通紀錄），與 task_logs 是兩張表，不能共用。
+    // 舊列為 NULL＝維持原本掛在需求那一則的行為，不回填（推不出當初對應哪一則）。
+    { table: 'task_attachments', col: 'log_id', sql: 'ALTER TABLE task_attachments ADD COLUMN log_id INTEGER REFERENCES task_logs(id)' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

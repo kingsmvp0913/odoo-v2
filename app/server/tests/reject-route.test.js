@@ -108,7 +108,7 @@ test('退回夾帶截圖 → 落 task_attachments，且在 runPipeline 觸發前
   expect(res.status).toBe(200);
 
   const { rows: atts } = await dbModule.query(
-    'SELECT filename, origin FROM task_attachments WHERE task_id=$1', [t2.id]
+    'SELECT filename, origin, log_id FROM task_attachments WHERE task_id=$1', [t2.id]
   );
   expect(atts.length).toBe(1);
   expect(atts[0].filename).toBe('shot.png');
@@ -117,4 +117,13 @@ test('退回夾帶截圖 → 落 task_attachments，且在 runPipeline 觸發前
   expect(atts[0].origin).toBe('manual');
   // 關鍵斷言：附件一定要在 runPipeline 觸發**之前**寫完
   expect(order).toEqual(['save', 'pipeline']);
+
+  // 附件要綁在「退回原因」那則 log 上。沒綁的話前端只認得 message_id，會把它併進需求那一則的
+  // 整包主附件——需求那則的時間戳固定是任務建立時間，於是不管什麼時候上傳的圖都排到時間軸最前面。
+  // 不用 LIKE '[人工退回]%' 比前綴：pg-mem 會把 [...] 當成字元類別，正式環境命中、測試永遠 0 筆。
+  const { rows: [rejLog] } = await dbModule.query(
+    "SELECT id, content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id", [t2.id]
+  );
+  expect(rejLog.content.startsWith('[人工退回]')).toBe(true);
+  expect(atts[0].log_id).toBe(rejLog.id);
 });

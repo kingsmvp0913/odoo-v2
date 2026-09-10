@@ -447,7 +447,9 @@ describe("ui-next 平行介面", () => {
 
   test("Sidebar 只用批次 Chat metadata 篩選近期專案，Usage 與 Popover 遵循 Next UX", () => {
     expect(uiNext).toContain('Api.get("chats/sidebar-projects")');
-    expect(uiNext).toContain("sidebarChatProjects.slice(0, 5)");
+    // 側欄的篩選規則（最愛＋15 天內有任務或對話）行為由 frontend-sidebar-recent-projects.test.js 實跑把關，
+    // 這裡只確認它仍吃批次 metadata、沒有退回逐專案打 API。
+    expect(uiNext).toContain("sidebarChatProjects.forEach");
     expect(uiNext).toContain("project.is_favorite");
     expect(uiNext).not.toContain('>尚無對話</button>');
     expect(uiNext).toContain('v-if="(projectChats[project.id] || []).length" class="ui-next-all-chats"');
@@ -610,6 +612,28 @@ describe("ui-next 平行介面", () => {
     expect(uiNextPages).toContain('ui-next-event-summary');
     expect(pagesCss).toContain('.ui-next-task-detail-grid.is-tab-conversation{grid-template-columns:minmax(0,1fr)}');
     expect(pagesCss).toContain('.ui-next-task-detail-grid.is-tab-conversation .ui-next-task-side{grid-column:1}');
+  });
+
+  // 後期上傳的附件（人工退回／澄清回答／澄清提問的截圖）曾經一律排在時間軸最前面：前端把所有
+  // message_id 為 NULL 的附件整包掛到「需求」那一則，而那一則的 ts 固定是 task.created_at。
+  // 後端現在替這些附件帶上 log_id，前端必須依它掛回所屬的那一則 log。
+  test("附件依 log_id 掛回所屬的時間軸那一則，不再整包擠到需求那則", () => {
+    const src = viewSrc("UiNextTaskDetailView");
+    // 有 log_id 的歸各自那則 log
+    expect(src).toContain("if (a.log_id) (attByLog[a.log_id] = attByLog[a.log_id] || []).push(a)");
+    expect(src).toContain("attachments: attByLog[l.id] || []");
+    // 需求那則只留沒有 log_id 的（工單主附件、建立任務時夾帶的）
+    expect(src).toContain("attachments: (this.ticketAttachments || []).filter(a => !a.log_id)");
+    expect(src).not.toContain("attachments: this.ticketAttachments,");
+
+    // 附件的渲染必須在所有分支之外。留在正常分支裡的話，退回原因過長時那一則會走
+    // machineLogHint 的收合分支，附件跟著整則被藏起來——而收合的正是最需要配圖的那種長原因。
+    const between = src.slice(
+      src.lastIndexOf("</template>", src.indexOf("<small>{{ timelineMeta(row) }}")),
+      src.indexOf("<small>{{ timelineMeta(row) }}")
+    );
+    expect(between).toContain('v-if="imageAttachments(row).length"');
+    expect(between).toContain('v-if="fileAttachments(row).length"');
   });
 
   test("任務詳情與管理頁的主要操作維持在頁首，新增使用者改用彈窗", () => {

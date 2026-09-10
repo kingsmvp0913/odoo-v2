@@ -101,8 +101,16 @@
           _key: 'msg-' + m.id, ts: m.occurred_at, kind: 'message', source: m.source,
           author: m.author, content: m.content, synced_to_odoo: m.synced_to_odoo, attachments: m.attachments
         }));
+        // 後期上傳的附件（人工退回／澄清回答／澄清提問的截圖）帶著 log_id，掛回它所屬的那一則。
+        // 不掛回去的話它們會落進下面 req 那一則的整包主附件，而 req 的 ts 固定是 task.created_at
+        // ⇒ 不管什麼時候上傳，圖都排在時間軸最前面。
+        const attByLog = {};
+        (this.ticketAttachments || []).forEach(a => {
+          if (a.log_id) (attByLog[a.log_id] = attByLog[a.log_id] || []).push(a);
+        });
         const logs = (this.logs || []).map(l => ({
-          _key: 'log-' + l.id, ts: l.created_at, kind: 'log', role: l.role, content: l.content
+          _key: 'log-' + l.id, ts: l.created_at, kind: 'log', role: l.role, content: l.content,
+          attachments: attByLog[l.id] || []
         }));
         const blocker = (this.task && this.task.status === 'stopped' && this.task.blocker_content)
           ? [{ _key: 'blocker', ts: this.task.updated_at, kind: 'log', role: 'blocker', content: this.task.blocker_content }]
@@ -111,7 +119,8 @@
         // 放進時間軸才讀得出「他要什麼 → 我們怎麼回」的順序。主附件跟著這一則走。
         const req = (this.task && this.task.original_text)
           ? [{ _key: 'req', ts: this.task.created_at, kind: 'message', source: 'sync',
-               content: this.task.original_text, attachments: this.ticketAttachments, isRequirement: true }]
+               content: this.task.original_text, isRequirement: true,
+               attachments: (this.ticketAttachments || []).filter(a => !a.log_id) }]
           : [];
         // 人工審核那關：程式變更本身是「要讀的東西」，排在對話最後一則，動作面板只留退回／通過。
         // 走 kind:'log'+role:'ai' 是為了直接吃既有的 ai 樣式與頭像；content 留空，
@@ -1117,7 +1126,11 @@
 <template v-if="specForLog(row).permissions&&specForLog(row).permissions.trim()"><b>權限</b><p>{{ specForLog(row).permissions }}</p></template>
 </template>
 </div>
-<!-- 圖片直接顯示縮圖（同聊天頁）：一排「淺底大字檔名」的下載鈕在深色下最刺眼，
+<button v-if="row.isRequirement&&canEditContent" class="ui-next-req-edit" @click="startEditContent">編輯需求</button>
+</template>
+<!-- 附件放在所有分支之外：退回原因過長時這一則會走 machineLogHint 的收合分支，
+     附件若留在正常分支裡就會跟著被藏起來（收合的正是最需要配圖的那種長原因）。
+     圖片直接顯示縮圖（同聊天頁）：一排「淺底大字檔名」的下載鈕在深色下最刺眼，
      而且看不到內容還得先下載。非圖片才走檔案列，縮成一行小字。 -->
 <div v-if="imageAttachments(row).length" class="ui-next-conv-images">
 <img v-for="file in imageAttachments(row)" :key="file.id" v-show="attachUrls[file.id]" :src="attachUrls[file.id]" :alt="file.filename" :title="'點擊放大：'+file.filename" @click="previewAttachment(file)">
@@ -1125,8 +1138,6 @@
 <div v-if="fileAttachments(row).length" class="ui-next-conv-files">
 <button v-for="file in fileAttachments(row)" :key="file.id" @click="downloadAttachment(file.id,file.filename)"><ui-next-icon name="download"/>{{ file.filename }}<small v-if="file.size">{{ formatSize(file.size) }}</small></button>
 </div>
-<button v-if="row.isRequirement&&canEditContent" class="ui-next-req-edit" @click="startEditContent">編輯需求</button>
-</template>
 <small>{{ timelineMeta(row) }} · {{ formatTime(row.ts) }}</small>
 <!-- 頭像放在最後：CSS 用 grid 把它定位回左上角。放最前面會讓內容 div 不再是 :first-child，
      而 markdown 的整套排版規則（09-later-patches）都掛在 div:first-child 那條選擇器上。 -->
