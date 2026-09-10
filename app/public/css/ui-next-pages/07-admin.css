@@ -470,3 +470,15 @@
     flex-direction: column;
   }
 }
+
+/* Agent 管理：右欄的 sticky 在 ui-next 外殼下**完全沒有作用**（實測 position:sticky 與 static
+   捲到底的位置一模一樣，差 0px）。原因是 sticky 黏的是「最近的捲動祖先」，而 app.css 的
+   `.content { overflow-y:auto }` 剛好是一個——它在舊外殼確實是捲動區，但在 ui-next 真正在捲的
+   是 .ui-next-main（見 ui-next.css）。.content 沒有高度上限、跟著內容長到 3303px，永遠不會捲，
+   於是 sticky 有一個「不動的捲動容器」，等於失效。左邊 32 個 agent 讓整頁 3108px，使用者往下捲
+   去點下面的 agent，右邊編輯區就整塊離開畫面（實測 top 從 108 掉到 -2411）。
+   只解掉這一頁的 .content：它在 ui-next 本來就沒在捲，拿掉 overflow 不影響版面，只是把捲動祖先
+   還給 .ui-next-main，讓 app.css 那條 sticky 真的生效（實測捲到底 top=18，編輯區留在畫面上）。
+   ⚠ 不要放寬成所有 .content——ui-next 各頁都有 sticky 補丁是繞著這個限制長出來的，一次全解會
+   讓那些頁面的定位同時改變。 */
+.ui-next-main .content:has(> .aa-layout) { overflow: visible }
