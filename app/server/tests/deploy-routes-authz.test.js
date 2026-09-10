@@ -37,6 +37,11 @@ beforeAll(async () => {
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url) VALUES (2, '乙repo', 'https://x/y.git')"
   );
+  // 甲客戶自己的 repo。repo_id 現在是建立部署目標的必填欄位（少了它按部署必定失敗），
+  // 所以「同專案外鍵可以建立」那條要有一個合法的自家 repo 可送。
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url) VALUES (1, '甲repo', 'https://x/a.git')"
+  );
   await dbModule.query('UPDATE projects SET auto_deploy_enabled = true');
 }, 30000);
 
@@ -72,15 +77,43 @@ test('不得對別的專案的連線跑探測', async () => {
   expect(res.status).toBe(404);
 });
 
+// 意圖（Rule 9）：repo_id 決定「部署的碼從哪個 repo 來」。少了它 deploy-run 的第一步
+// headSha 就拋「這個部署目標沒有對應的 repo」——目標存得下去、畫面全綠，按部署必定失敗。
+test('缺 repo_id 時擋下，不留一個按了必定失敗的目標', async () => {
+  const { rows: [c0] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 2');
+  const before = await dbModule.query('SELECT count(*) AS n FROM project_deploy_targets');
+  const res = await request(app).post('/api/projects/1/deploy-targets')
+    .set('Authorization', `Bearer ${token}`).send(body({}));
+  expect(res.status).toBe(400);
+  expect(res.body.error).toMatch(/repo_id/);
+  const after = await dbModule.query('SELECT count(*) AS n FROM project_deploy_targets');
+  expect(Number(after.rows[0].n)).toBe(Number(before.rows[0].n));
+});
+
 test('同專案的外鍵可以正常建立', async () => {
   await dbModule.query(
     "INSERT INTO db_connections (project_id, name, ssh_host, ssh_user, db_name) VALUES (1, '甲-正式', '10.0.0.1', 'root', 'jia_prod')"
   );
   const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
+  const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
   const res = await request(app).post('/api/projects/1/deploy-targets')
-    .set('Authorization', `Bearer ${token}`).send(body({ conn_id: c.id }));
+    .set('Authorization', `Bearer ${token}`).send(body({ conn_id: c.id, repo_id: r.id }));
   expect(res.status).toBe(200);
   expect(res.body.ok).toBe(true);
+});
+
+// 意圖：分支不再由前端指定。前端填死的 ai-dev／main 對 base_branch 不是 main 的專案是錯的
+// （遠端 ai 分支叫 ai-dev-odoo15、主分支叫 develop），推不出來時才退回舊預設值。
+test('來源分支由後端依環境推導，前端送什麼都不算數', async () => {
+  const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
+  const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  const res = await request(app).post('/api/projects/1/deploy-targets')
+    .set('Authorization', `Bearer ${token}`)
+    .send(body({ env: 'test', conn_id: c.id, repo_id: r.id, branch: '前端亂送的分支' }));
+  expect(res.status).toBe(200);
+  expect(res.body.branch).toBe('ai-dev');
+  const { rows } = await dbModule.query('SELECT branch FROM project_deploy_targets ORDER BY id DESC LIMIT 1');
+  expect(rows[0].branch).toBe('ai-dev');
 });
 
 // 意圖：新建目標一律不自動啟用。這個功能會連進客戶正式機下指令，

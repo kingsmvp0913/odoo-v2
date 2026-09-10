@@ -1936,3 +1936,16 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   min-width: 0;
   max-width: none;
 }
+
+/* 自動部署頁：原本整頁擠在一張卡、表格套的 .ui-next-table 與 .ui-next-log-pre 都沒有定義過 */
+.ui-next-deploy-page{display:flex;flex-direction:column;gap:16px}
+.ui-next-deploy-page .ui-next-panel h2{margin-bottom:10px}
+.ui-next-deploy-page .ui-next-panel h3{margin:22px 0 10px;font-size:14px}
+.ui-next-deploy-hint{margin:0 0 14px;color:var(--text-muted);font-size:12px;line-height:1.6}
+.ui-next-deploy-page .data-table td .btn+.btn{margin-left:6px}
+.ui-next-deploy-page .data-table code{font-size:12px}
+.ui-next-log-pre{max-height:320px;overflow:auto;margin:0;padding:10px 12px;border-radius:8px;background:var(--code-bg);color:var(--code-text);font-size:11px;line-height:1.55;white-space:pre-wrap}
+.ui-next-deploy-page .data-table td{white-space:nowrap}
+.ui-next-deploy-path{max-width:160px;overflow:hidden;text-overflow:ellipsis}
+/* 說明行裡的切換連結。不定義就吃瀏覽器預設的 #0000EE，深色底上幾乎讀不到 */
+.ui-next-deploy-hint a{color:var(--info);text-decoration:underline;cursor:pointer}

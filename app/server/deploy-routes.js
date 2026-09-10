@@ -34,6 +34,20 @@ async function belongsToProject(table, id, projectId) {
   return rows.length > 0;
 }
 
+// 來源分支不讓前端指定：填死的 ai-dev／main 對 base_branch 不是 main 的專案是錯的——
+// 遠端的 ai 分支可能叫 ai-dev-odoo15、主分支可能叫 develop，兩者都由 repo 自己算得出來。
+// 算不出來（尚未 clone、git 指令失敗）就退回舊的預設值，不擋住建立。
+async function resolveBranch(repoId, env) {
+  const fallback = env === 'prod' ? 'main' : 'ai-dev';
+  try {
+    const { rows: [repo] } = await query('SELECT local_path FROM project_repos WHERE id = $1', [repoId]);
+    if (!repo || !repo.local_path) return fallback;
+    const git = require('./pipeline/git');
+    const b = env === 'prod' ? await git.getMainBranch(repo.local_path) : await git.remoteAiRef(repo.local_path);
+    return b || fallback;
+  } catch { return fallback; }
+}
+
 function registerRoutes(app) {
   const guard = [verifyToken, requireAdmin, requireAutoDeploy];
 
@@ -64,7 +78,7 @@ function registerRoutes(app) {
       const b = req.body || {};
       if (!['test', 'prod'].includes(b.env)) return res.status(400).json({ error: 'env 只能是 test 或 prod' });
       if (!b.runtime) return res.status(400).json({ error: '缺少 runtime' });
-      if (!b.addons_dir || !b.db_name || !b.branch) return res.status(400).json({ error: '缺少必填欄位（addons_dir／db_name／branch）' });
+      if (!b.addons_dir || !b.db_name) return res.status(400).json({ error: '缺少必填欄位（addons_dir／db_name）' });
       // 兩個外鍵都必須屬於同一個專案，否則等於借用別的客戶的連線與 repo
       if (b.conn_id && !await belongsToProject('db_connections', b.conn_id, req.params.id)) {
         return res.status(400).json({ error: 'conn_id 不屬於此專案' });
@@ -72,6 +86,10 @@ function registerRoutes(app) {
       if (b.repo_id && !await belongsToProject('project_repos', b.repo_id, req.params.id)) {
         return res.status(400).json({ error: 'repo_id 不屬於此專案' });
       }
+      // repo_id 是部署的碼從哪來。少了它 deploy-run 的 headSha 第一步就拋
+      // 「這個部署目標沒有對應的 repo」——目標存得下去、按部署必定失敗。
+      if (!b.repo_id) return res.status(400).json({ error: '缺少 repo_id（要從哪個 repo 拿碼部署）' });
+      const branch = await resolveBranch(b.repo_id, b.env);
       const { rows } = await query(
         `INSERT INTO project_deploy_targets
            (project_id, repo_id, env, conn_id, runtime, compose_dir, compose_service, service_name,
@@ -82,12 +100,12 @@ function registerRoutes(app) {
         [req.params.id, b.repo_id || null, b.env, b.conn_id || null, b.runtime,
          b.compose_dir || null, b.compose_service || null, b.service_name || null,
          b.container_name || null, b.addons_dir, b.conf_path || null, b.db_name,
-         b.http_port || null, Array.isArray(b.modules) ? b.modules : [], b.branch,
+         b.http_port || null, Array.isArray(b.modules) ? b.modules : [], branch,
          b.sudo_mode || 'none',
          // 新建一律不自動啟用，要人再按一次——這個功能會動客戶的機器
          b.enabled === true, b.probe_json || null]
       );
-      res.json({ ok: true, id: rows[0].id });
+      res.json({ ok: true, id: rows[0].id, branch });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

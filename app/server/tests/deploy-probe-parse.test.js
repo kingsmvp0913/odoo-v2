@@ -1,4 +1,5 @@
-const { parseProbe, parseConf, parseComposeLabels, buildProbeScript } = require('../lib/deploy-probe');
+const { parseProbe, parseConf, parseComposeLabels, buildProbeScript,
+  parseConfPath, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs } = require('../lib/deploy-probe');
 
 // 以下 fixture 是 2026-09-08 對兩台真實客戶機的探測輸出，逐字照抄。
 // 意圖（Rule 9）：解析器唯一的價值就是「看得懂真機吐出來的東西」，自己編的樣本
@@ -106,4 +107,85 @@ test('探測腳本唯讀且不含破壞性指令', () => {
   expect(s).toContain("sudo -S -p ''");
   expect(s).not.toMatch(/\brm\b|\bmv\b|systemctl (stop|restart|start)|docker (restart|stop|rm)/);
   expect(s).toContain('### odooversion');
+});
+
+// ── 自動帶出欄位用的解析器
+
+// 意圖（Rule 9）：conf 路徑抓錯，部署指令的 -c 就指到不存在的檔，Odoo 直接用預設值起來，
+// 升級的是別的資料庫。docker 與 systemd 兩種來源的分隔符不同，兩種都要吃得下。
+test('conf 路徑：docker 的 JSON 陣列與 systemd 的 ExecStart 都解得出來', () => {
+  expect(parseConfPath('["odoo","-c","/etc/odoo/odoo.conf"] ["/entrypoint.sh"]'))
+    .toBe('/etc/odoo/odoo.conf');
+  expect(parseConfPath('{ path=/usr/bin/odoo ; argv[]=/usr/bin/odoo -c /etc/odoo15.conf ; ignore_errors=no }'))
+    .toBe('/etc/odoo15.conf');
+  expect(parseConfPath('["odoo","--config=/opt/odoo/custom.conf"]')).toBe('/opt/odoo/custom.conf');
+});
+
+// 找不到就回 null，不可退回一個猜的路徑——猜的路徑會被當成事實存進部署目標。
+test('conf 路徑找不到時回 null，不亂猜', () => {
+  expect(parseConfPath('["odoo"]')).toBeNull();
+  expect(parseConfPath('')).toBeNull();
+  expect(parseConfPath('-c /etc/odoo/odoo.yaml')).toBeNull();   // 不是 .conf
+});
+
+test('掛載資訊解不動時回空陣列，不拋', () => {
+  expect(parseMounts('')).toEqual([]);
+  expect(parseMounts('Error: No such object')).toEqual([]);
+  expect(parseMounts('[{"Source":"/host/a","Destination":"/mnt/a"}]'))
+    .toEqual([{ Source: '/host/a', Destination: '/mnt/a' }]);
+});
+
+// 意圖（Rule 9）：conf 裡的 addons_path 是容器內路徑，部署卻是 SFTP 傳到宿主。
+// 少了這層換算會把宿主上不存在的路徑存成 addons_dir，要到真的部署那一刻才炸。
+// 兩個掛載都命中時必須取較深的那個——取錯會把碼放到整個資料目錄的根。
+test('容器內路徑換算成宿主路徑，多個掛載命中時取最深的', () => {
+  const mounts = [
+    { Source: '/home/arich/DockerData/odoo/Data', Destination: '/mnt' },
+    { Source: '/home/arich/DockerData/odoo/Data/odoo-tst/addons', Destination: '/mnt/extra-addons' },
+  ];
+  expect(mapToHostPath('/mnt/extra-addons', mounts))
+    .toBe('/home/arich/DockerData/odoo/Data/odoo-tst/addons');
+  expect(mapToHostPath('/mnt/extra-addons/idx_hj', mounts))
+    .toBe('/home/arich/DockerData/odoo/Data/odoo-tst/addons/idx_hj');
+});
+
+// 沒有對應掛載的多半是容器內建的核心 addons，本來就不該部署，回 null 讓呼叫端跳過。
+test('容器內路徑沒有對應掛載時回 null', () => {
+  expect(mapToHostPath('/usr/lib/python3/dist-packages/odoo/addons', [{ Source: '/h', Destination: '/mnt' }]))
+    .toBeNull();
+  expect(mapToHostPath('/mnt/x', [])).toBeNull();
+});
+
+// 意圖（Rule 9 + Rule 19）：addons_path 常混著 Odoo 核心與 OCA（鴻久那台就是）。
+// 挑錯目錄，部署當下不會報錯——升級指令照跑，只是升的是舊碼。
+// 一定要放兩個以上目錄：只有一筆時排序邏輯對錯都一樣，全綠證明不了什麼。
+test('addons 目錄依「我們的模組命中數」排序，命中多的排前面', () => {
+  const listings = [
+    { dir: '/opt/oca', entries: ['web_responsive', 'idx_hj'] },
+    { dir: '/opt/ours', entries: ['idx_hj', 'idx_scan', 'hungjou_base'] },
+    { dir: '/opt/core', entries: ['sale', 'purchase'] },
+  ];
+  const r = rankAddonsDirs(listings, ['idx_hj', 'idx_scan', 'hungjou_base']);
+  expect(r[0].dir).toBe('/opt/ours');
+  expect(r[0].matched).toEqual(['idx_hj', 'idx_scan', 'hungjou_base']);
+  expect(r[2].dir).toBe('/opt/core');
+  expect(r[2].matched).toEqual([]);
+});
+
+// repo 裡不是每個目錄都是模組（.git、docs、setup），也不能只篩 idx_ 前綴——
+// 沿用既有 module 時不改名（CLAUDE.md §1），那些不叫 idx_。判準只有 __manifest__.py。
+test('repo 模組清單以 __manifest__.py 為準，不看名字', () => {
+  const dirs = ['.git', 'docs', 'idx_hj', 'hungjou_base', 'setup'];
+  const withManifest = new Set(['idx_hj', 'hungjou_base']);
+  const fs = {
+    readdirSync: () => dirs.map(n => ({ name: n, isDirectory: () => true })),
+    existsSync: (p) => withManifest.has(String(p).split('/').slice(-2)[0]),
+  };
+  expect(listRepoModules('/repo', { fs, path: { join: (...a) => a.join('/') } }))
+    .toEqual(['hungjou_base', 'idx_hj']);
+});
+
+test('repo 路徑讀不到時回空陣列，不拋', () => {
+  const fs = { readdirSync: () => { throw new Error('ENOENT'); }, existsSync: () => false };
+  expect(listRepoModules('/nope', { fs })).toEqual([]);
 });
