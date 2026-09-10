@@ -31,6 +31,26 @@ function pickModules(changedPaths, targetModules, lastSha) {
   return mods.filter(m => tops.has(m));
 }
 
+// 一組能共用一次停機的目標必須完全同一個「部署位置」：同一台機（conn）、同一個容器／
+// 服務、同一個 addons 目錄與 conf，而且同一個 repo 的同一個分支——分支不同代表要送的
+// 檔案版本不同，共用同一份 addons 目錄就會互相覆蓋。
+function groupKey(t) {
+  return [t.conn_id, t.repo_id, t.branch, t.runtime, t.compose_dir, t.compose_service,
+          t.container_name, t.service_name, t.addons_dir, t.conf_path]
+    .map(v => (v === null || v === undefined ? '' : String(v))).join(' | ');
+}
+
+// 把目標分成「可以合併成一次停機」的組。回傳 id 陣列的陣列，順序照傳進來的順序。
+function groupTargets(targets) {
+  const map = new Map();
+  for (const t of targets) {
+    const k = groupKey(t);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(t.id);
+  }
+  return [...map.values()];
+}
+
 function buildUpgradeCmd(target, conn, modules) {
   const S = sudoPrefix(conn);
   const mods = modsArg(modules);
@@ -74,6 +94,77 @@ function buildUpgradeCmd(target, conn, modules) {
     `${S}systemctl start ${svc}`,
     `cat ${LOG}`,
   ].join('\n');
+}
+
+// 同一個容器要升級多個資料庫（鴻久那台的 odoo_prd 與 odoo_dev 都掛在 odoo-prd 底下）時，
+// 停一次、逐個 DB 升、起一次。一個目標停一次的話客戶會被斷線 N 次，而且兩次停機之間
+// 服務是活的——使用者這時進得來，用到的卻是只升了一半的狀態。
+//
+// items: [{ target, modules }]，每個 target 有自己的 db_name 與模組清單。
+// 呼叫端必須確保同一組的 compose 定址、addons 目錄與 conf 路徑都相同。
+function buildUpgradeCmdMulti(items, conn) {
+  if (!Array.isArray(items) || !items.length) throw new Error('目標清單不可為空');
+  const S = sudoPrefix(conn);
+  const head = items[0].target;
+  // 每個 DB 前面印一行 marker，讀 exit code 時才分得出是誰的（見 readExitCodesByDb）
+  const runs = items.map(({ target, modules }) => {
+    const db = requireIdent(target.db_name, 'db_name');
+    const conf = path_(target.conf_path, 'conf_path');
+    const mods = modsArg(modules);
+    return { db, conf, mods };
+  });
+
+  if (head.runtime === 'docker' && head.compose_dir && head.compose_service) {
+    const dir = path_(head.compose_dir, 'compose_dir');
+    const svc = requireIdent(head.compose_service, 'compose_service');
+    const lines = [`cd ${dir}`, `${S}docker compose stop ${svc}`, `: > ${LOG}`];
+    for (const r of runs) {
+      lines.push(`echo "### DB ${r.db}" >> ${LOG}`);
+      lines.push(`${S}docker compose run --rm ${svc} odoo -c ${r.conf} -d ${r.db} -u ${r.mods} --stop-after-init >> ${LOG} 2>&1`);
+      lines.push(`echo "EXITCODE=$?" >> ${LOG}`);
+    }
+    lines.push(`${S}docker compose start ${svc}`, `cat ${LOG}`);
+    return lines.join('\n');
+  }
+
+  if (head.runtime === 'docker') {
+    // 退路：沒有 compose context 時只能在跑著的容器裡 exec，最後整個容器重啟一次
+    const c = requireIdent(head.container_name, 'container_name');
+    const lines = [`: > ${LOG}`];
+    for (const r of runs) {
+      lines.push(`echo "### DB ${r.db}" >> ${LOG}`);
+      lines.push(`${S}docker exec ${c} odoo -c ${r.conf} -d ${r.db} -u ${r.mods} --stop-after-init >> ${LOG} 2>&1`);
+      lines.push(`echo "EXITCODE=$?" >> ${LOG}`);
+    }
+    lines.push(`${S}docker restart ${c}`, `cat ${LOG}`);
+    return lines.join('\n');
+  }
+
+  const svc = requireIdent(head.service_name, 'service_name');
+  const lines = [`${S}systemctl stop ${svc}`, `: > ${LOG}`];
+  for (const r of runs) {
+    lines.push(`echo "### DB ${r.db}" >> ${LOG}`);
+    // 以 odoo 帳號執行，理由同 buildUpgradeCmd
+    lines.push(`${S}-u odoo odoo-bin -c ${r.conf} -d ${r.db} -u ${r.mods} --stop-after-init >> ${LOG} 2>&1`);
+    lines.push(`echo "EXITCODE=$?" >> ${LOG}`);
+  }
+  lines.push(`${S}systemctl start ${svc}`, `cat ${LOG}`);
+  return lines.join('\n');
+}
+
+// 多 DB 的 log 依 `### DB <name>` 分段，每段最後一個 EXITCODE 才是那個 DB 的碼。
+// 沿用單一的 readExitCode（取整份最後一個）會只讀到最後一個 DB 的結果，
+// 前面失敗的全部被判成功——而且部署回報綠燈。
+function readExitCodesByDb(stdout) {
+  const out = new Map();
+  let cur = null;
+  for (const line of String(stdout || '').split('\n')) {
+    const m = /^### DB (\S+)\s*$/.exec(line);
+    if (m) { cur = m[1]; if (!out.has(cur)) out.set(cur, null); continue; }
+    const e = /^EXITCODE=(-?\d+)\s*$/.exec(line);
+    if (e && cur !== null) out.set(cur, Number(e[1]));
+  }
+  return out;
 }
 
 function buildRestartCmd(target, conn) {
@@ -123,4 +214,5 @@ function buildRollbackCmd(target, modules, ts) {
   return lines.join('\n');
 }
 
-module.exports = { pickModules, buildUpgradeCmd, buildRestartCmd, buildHealthCmd, buildSwapCmd, buildRollbackCmd };
+module.exports = { pickModules, buildUpgradeCmd, buildUpgradeCmdMulti, readExitCodesByDb,
+  buildRestartCmd, buildHealthCmd, buildSwapCmd, buildRollbackCmd, groupTargets, groupKey };

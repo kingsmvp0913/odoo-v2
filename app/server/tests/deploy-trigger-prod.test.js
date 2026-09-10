@@ -7,7 +7,7 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messa
 jest.mock('../pipeline/runner', () => ({ runPipeline: jest.fn().mockResolvedValue({ dispatched: 0 }), resetLoopCounter: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../lib/project-vpn', () => ({ startProjectVpns: jest.fn().mockResolvedValue(''), stopProjectVpns: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../lib/git-identity', () => ({ buildGitEnv: jest.fn().mockResolvedValue({}) }));
-jest.mock('../lib/deploy-run', () => ({ runDeploy: jest.fn() }));
+jest.mock('../lib/deploy-run', () => ({ runDeploy: jest.fn(), runDeployGroup: jest.fn() }));
 
 // releaseAiToMain 回「有合進去」，其餘 git 函式一律無害
 jest.mock('../pipeline/git', () => {
@@ -18,7 +18,7 @@ jest.mock('../pipeline/git', () => {
 process.env.JWT_SECRET = 'test-prod-trigger';
 process.env.APP_SECRET = 'test-app-secret';
 
-const { runDeploy } = require('../lib/deploy-run');
+const { runDeployGroup } = require('../lib/deploy-run');
 let app, dbModule, token, projectId;
 
 beforeAll(async () => {
@@ -47,7 +47,8 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
-  runDeploy.mockReset().mockResolvedValue({ ok: true, status: 'success', modules: ['idx_hj'] });
+  runDeployGroup.mockReset().mockImplementation(async (ids) =>
+    ids.map((id) => ({ targetId: id, ok: true, status: 'success', modules: ['idx_hj'] })));
   await dbModule.query('DELETE FROM project_deploy_targets');
   await dbModule.query('UPDATE projects SET auto_deploy_enabled = true');
   await dbModule.query('DELETE FROM tasks');
@@ -69,8 +70,8 @@ test('有啟用的正式區目標時，上正式之後接著部署', async () =>
   await addTarget('prod', true);
   const res = await release();
   expect(res.status).toBe(200);
-  expect(runDeploy).toHaveBeenCalledTimes(1);
-  expect(runDeploy.mock.calls[0][1].trigger).toBe('manual_prod');
+  expect(runDeployGroup).toHaveBeenCalledTimes(1);
+  expect(runDeployGroup.mock.calls[0][1].trigger).toBe('manual_prod');
   expect(res.body.deploy[0].ok).toBe(true);
 });
 
@@ -81,7 +82,7 @@ test('專案開關關閉時回應帶 deploySkipped，且不部署', async () => 
   const res = await release();
   expect(res.body.deploySkipped).toBe(true);
   expect(res.body.deploy).toEqual([]);
-  expect(runDeploy).not.toHaveBeenCalled();
+  expect(runDeployGroup).not.toHaveBeenCalled();
 });
 
 test('沒有啟用的正式區目標時 deploy 是空陣列', async () => {
@@ -95,12 +96,13 @@ test('沒有啟用的正式區目標時 deploy 是空陣列', async () => {
 test('不觸發測試區目標', async () => {
   await addTarget('test', true);
   await release();
-  expect(runDeploy).not.toHaveBeenCalled();
+  expect(runDeployGroup).not.toHaveBeenCalled();
 });
 
 // 意圖（Rule 9）：碼已經 push 上 main 了。這時候回錯會讓使用者重按，變成重複 merge。
 test('部署失敗時 /release 仍回 ok:true，失敗放在 deploy 裡', async () => {
-  runDeploy.mockResolvedValue({ ok: false, status: 'rolled_back', error: '健康檢查未通過' });
+  runDeployGroup.mockImplementation(async (ids) =>
+    ids.map((id) => ({ targetId: id, ok: false, status: 'rolled_back', error: '健康檢查未通過' })));
   await addTarget('prod', true);
   const res = await release();
   expect(res.status).toBe(200);
@@ -110,7 +112,7 @@ test('部署失敗時 /release 仍回 ok:true，失敗放在 deploy 裡', async 
 });
 
 test('部署丟例外也不讓 /release 回 500', async () => {
-  runDeploy.mockRejectedValue(new Error('SSH 連不上'));
+  runDeployGroup.mockRejectedValue(new Error('SSH 連不上'));
   await addTarget('prod', true);
   const res = await release();
   expect(res.status).toBe(200);
@@ -119,7 +121,7 @@ test('部署丟例外也不讓 /release 回 500', async () => {
 
 // 意圖：任務標記與部署是兩件事，部署失敗不該讓「已上正式」的標記消失。
 test('部署失敗仍標記 merged_to_main_at', async () => {
-  runDeploy.mockResolvedValue({ ok: false, error: 'x' });
+  runDeployGroup.mockImplementation(async (ids) => ids.map((id) => ({ targetId: id, ok: false, error: 'x' })));
   await addTarget('prod', true);
   await release();
   const { rows } = await dbModule.query('SELECT merged_to_main_at FROM tasks WHERE task_id = $1', ['task_pa_1']);

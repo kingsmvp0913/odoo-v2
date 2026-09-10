@@ -1949,3 +1949,9 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-deploy-path{max-width:160px;overflow:hidden;text-overflow:ellipsis}
 /* 說明行裡的切換連結。不定義就吃瀏覽器預設的 #0000EE，深色底上幾乎讀不到 */
 .ui-next-deploy-hint a{color:var(--info);text-decoration:underline;cursor:pointer}
+/* 探測候選上的「連線設定已指名這個容器」線索。不是錯誤，用資訊色不用 error-msg */
+.ui-next-deploy-linked{margin-top:12px;padding:9px 11px;border:1px solid var(--border);border-left:3px solid var(--info);border-radius:8px;background:var(--bg);color:var(--text-secondary);font-size:12px;line-height:1.7}
+.ui-next-deploy-linked span+span::before{content:"、"}
+/* 四顆操作鈕。表格本來就剛好塞滿，不換行會把最後一顆推出容器外 */
+.ui-next-deploy-actions{display:flex;flex-wrap:wrap;gap:6px;min-width:150px}
+.ui-next-deploy-page .data-table td .ui-next-deploy-actions .btn{margin:0}

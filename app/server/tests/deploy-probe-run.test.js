@@ -3,7 +3,7 @@ jest.mock('../lib/db-connections', () => ({ loadDecryptedConn: jest.fn() }));
 
 const { ensureGatewayRunning } = require('../lib/vpn-gateway');
 const { loadDecryptedConn } = require('../lib/db-connections');
-const { runProbe } = require('../lib/deploy-probe');
+const { runProbe, linkConns } = require('../lib/deploy-probe');
 
 const DOCKER_OUT = `### sudo-nopass
 sudo: a password is required
@@ -223,4 +223,206 @@ test('啟動指令沒帶 -c 時退回預設 conf 路徑，且要讀得到才算�
   conn();
   const r = await runProbe(1, 3, richExec({ cmd: '["odoo"] ["/entrypoint.sh"]' }), deps);
   expect(r.candidates[0].confPath).toBe('/etc/odoo/odoo.conf');
+});
+
+// ── 用連線的 log_container 認出「這個資料庫由哪個容器服務」
+
+const DOCKER_TWO = `### sudo-nopass
+RC=0
+### docker
+odoo-dev-web|odoo-dev:17.0|0.0.0.0:8201->8069/tcp
+odoo-prd-web|odoo-prd:17.0|0.0.0.0:8001->8069/tcp
+### disk
+/dev/nvme0n1p2  900G  442G  412G  52% /`;
+
+function twoExec() {
+  return async (conn, cmd) => {
+    if (cmd.includes('### whoami')) return { stdout: DOCKER_TWO, stderr: '', code: 0 };
+    if (cmd.includes('com.docker.compose')) {
+      const svc = cmd.includes('odoo-prd-web') ? 'odoo-prd' : 'odoo-dev';
+      return { stdout: `project=odoo service=${svc} workdir=/home/arich/DockerData/odoo files=x`, stderr: '', code: 0 };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+}
+
+// 意圖（Rule 9）：鴻久那台的 odoo_dev 是掛在 **odoo-prd** 容器底下，
+// 但機器上另有一個同名的 odoo-dev 容器。照名字挑會挑到沒人在用的那個，
+// 於是碼傳進沒人讀的目錄、重啟沒人用的容器，而 DB 的模組版本卻被升上去——
+// 檔案舊、DB 新，Odoo 直接壞。唯一分辨得出來的線索是人填的 log_container。
+test('連線的 log_container 指向誰，就把誰標成關聯並排到最前面', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 1, ssh_host: 'h', ssh_user: 'u', ssh_password: 'p', vpn_enabled: false, db_name: 'odoo_tst',
+  });
+  const conns = [
+    { id: 2, name: '鴻久 - 正式', db_name: 'odoo_prd', log_container: 'odoo-prd-web' },
+    { id: 3, name: '鴻伍 - 正式', db_name: 'odoo_dev', log_container: 'odoo-prd-web' },
+  ];
+  const r = await runProbe(1, 3, twoExec(), { loadRepos: async () => [], loadConns: async () => conns });
+  // docker ps 先吐 odoo-dev-web，但有連線指名的 odoo-prd-web 要排第一
+  expect(r.candidates[0].containerName).toBe('odoo-prd-web');
+  expect(r.candidates[0].linkedConns.map(c => c.dbName)).toEqual(['odoo_prd', 'odoo_dev']);
+  expect(r.candidates[1].containerName).toBe('odoo-dev-web');
+  expect(r.candidates[1].linkedConns).toEqual([]);
+});
+
+// 沒有任何連線填 log_container 時不能報錯也不能亂排，維持 docker ps 的原順序。
+test('沒有 log_container 線索時候選照原順序，linkedConns 為空', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 1, ssh_host: 'h', ssh_user: 'u', ssh_password: 'p', vpn_enabled: false, db_name: 'odoo_tst',
+  });
+  const r = await runProbe(1, 3, twoExec(), { loadRepos: async () => [], loadConns: async () => [] });
+  expect(r.candidates.map(c => c.containerName)).toEqual(['odoo-dev-web', 'odoo-prd-web']);
+  expect(r.candidates[0].linkedConns).toEqual([]);
+});
+
+// log_container 可能填的是 compose service 名而不是容器名（兩者不同：odoo-prd vs odoo-prd-web）
+test('log_container 填 compose service 名也認得出來', () => {
+  const c = { containerName: 'odoo-prd-web', composeService: 'odoo-prd', serviceName: null };
+  expect(linkConns(c, [{ id: 9, name: 'X', db_name: 'd', log_container: 'odoo-prd' }]))
+    .toEqual([{ id: 9, name: 'X', dbName: 'd' }]);
+});
+
+// ── systemd 專案（慈雲那台沒有容器）
+
+const SYSTEMD_FULL = `### sudo-nopass
+RC=0
+### systemd-odoo
+  odoo.service    loaded active running Odoo
+### disk
+/dev/sda1  200G  80G  110G  42% /
+### odooversion
+Odoo Server 17.0`;
+
+const CIYUN_CONF = `[options]
+addons_path = /opt/odoo/odoo/addons,/opt/odoo/custom/addons
+db_name = ciyun
+http_port = 8069`;
+
+// 意圖（Rule 9）：conf 路徑寫死 /etc/odoo/odoo.conf 的話，systemd 安裝的專案（慈雲那台
+// 是 /etc/odoo.conf）會全部抓不到 conf，於是 addons 目錄與模組三個欄位一起退回手填——
+// 而且畫面上看不出是「路徑猜錯」還是「真的沒有 conf」。
+function systemdExec({ confAt = '/etc/odoo.conf', execStart = null } = {}) {
+  return async (conn, cmd) => {
+    if (cmd.includes('### whoami')) return { stdout: SYSTEMD_FULL, stderr: '', code: 0 };
+    if (cmd.includes('systemctl show')) return { stdout: execStart || '', stderr: '', code: 0 };
+    if (cmd.includes('cat ')) {
+      return cmd.includes(confAt)
+        ? { stdout: CIYUN_CONF, stderr: '', code: 0 }
+        : { stdout: `cat: 沒有此檔案`, stderr: '', code: 1 };
+    }
+    if (cmd.includes('ls -1 /opt/odoo/custom/addons')) return { stdout: 'idx_cy\nidx_hj\n', stderr: '', code: 0 };
+    if (cmd.includes('ls -1 ')) return { stdout: 'base\nweb\n', stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+}
+
+test('systemd 專案：啟動指令沒帶 -c 時，依序試到 /etc/odoo.conf 才停', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: '34.173.226.223', ssh_user: 'ideaxpress', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const r = await runProbe(8, 2, systemdExec(), {
+    loadRepos: async () => [{ id: 1, label: 'main', isPrimary: true, modules: ['idx_cy', 'idx_hj'] }],
+    loadConns: async () => [],
+  });
+  const c = r.candidates[0];
+  expect(c.runtime).toBe('systemd');
+  expect(c.serviceName).toBe('odoo');
+  expect(c.confPath).toBe('/etc/odoo.conf');
+  expect(c.confDbNames).toEqual(['ciyun']);
+  expect(c.httpPort).toBe(8069);
+});
+
+// systemd 沒有容器掛載，conf 裡的 addons_path 本身就是宿主路徑，直接 ls 不必換算
+test('systemd 專案：addons 目錄不做掛載換算，命中多的排前面', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: 'h', ssh_user: 'u', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const r = await runProbe(8, 2, systemdExec(), {
+    loadRepos: async () => [{ id: 1, label: 'main', isPrimary: true, modules: ['idx_cy', 'idx_hj'] }],
+    loadConns: async () => [],
+  });
+  const dirs = r.candidates[0].addonsCandidates;
+  expect(dirs[0].dir).toBe('/opt/odoo/custom/addons');
+  expect(dirs[0].matched).toEqual(['idx_cy', 'idx_hj']);
+  expect(dirs[1].dir).toBe('/opt/odoo/odoo/addons');
+  expect(dirs[1].matched).toEqual([]);
+});
+
+test('systemd 專案：ExecStart 帶 -c 時就用它，不再試慣例路徑', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: 'h', ssh_user: 'u', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const exec = systemdExec({
+    confAt: '/opt/odoo/odoo.conf',
+    execStart: '{ path=/opt/odoo/odoo-bin ; argv[]=/opt/odoo/odoo-bin -c /opt/odoo/odoo.conf ; }',
+  });
+  const r = await runProbe(8, 2, exec, { loadRepos: async () => [], loadConns: async () => [] });
+  expect(r.candidates[0].confPath).toBe('/opt/odoo/odoo.conf');
+});
+
+// 慈雲的連線沒填 log_unit／log_container（實查：兩條都是 null）。
+// 沒有線索時不可以報錯，也不可以亂排——就是照原順序、linkedConns 空。
+test('systemd 專案沒填 log_unit 時不影響探測', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: 'h', ssh_user: 'u', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const r = await runProbe(8, 2, systemdExec(), { loadRepos: async () => [], loadConns: async () => [] });
+  expect(r.candidates).toHaveLength(1);
+  expect(r.candidates[0].linkedConns).toEqual([]);
+});
+
+// systemd 專案的線索在 log_unit（沒有容器名）。unit 名帶不帶 .service 都要認得。
+test('systemd 專案用 log_unit 當線索，.service 後綴有無都認得', () => {
+  const c = { containerName: null, composeService: null, serviceName: 'odoo' };
+  expect(linkConns(c, [{ id: 8, name: '正式', db_name: 'ciyun', log_unit: 'odoo.service' }]))
+    .toEqual([{ id: 8, name: '正式', dbName: 'ciyun' }]);
+  expect(linkConns(c, [{ id: 8, name: '正式', db_name: 'ciyun', log_unit: 'odoo' }]))
+    .toEqual([{ id: 8, name: '正式', dbName: 'ciyun' }]);
+});
+
+// 意圖（Rule 9）：鴻久那台實測列出 7 個候選，其中 4 個是 queue_job 的 *-runner——
+// 它們沒有掛我們的 addons 目錄，卻會混在候選清單前面把真正的目標推下去。
+// 沒有連線指名時，「這個 instance 有沒有我們的模組」就是唯一能排序的線索。
+test('都沒有連線指名時，有我們模組的 instance 排在沒有的前面', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 1, ssh_host: 'h', ssh_user: 'u', ssh_password: 'p', vpn_enabled: false, db_name: 'odoo_tst',
+  });
+  const exec = async (conn, cmd) => {
+    if (cmd.includes('### whoami')) return { stdout: DOCKER_TWO, stderr: '', code: 0 };
+    if (cmd.includes('com.docker.compose')) {
+      const svc = cmd.includes('odoo-prd-web') ? 'odoo-prd-runner' : 'odoo-dev';
+      return { stdout: `project=odoo service=${svc} workdir=/srv files=x`, stderr: '', code: 0 };
+    }
+    if (cmd.includes('.Mounts')) {
+      // runner 沒有掛 addons 目錄；odoo-dev 有
+      return cmd.includes('odoo-prd-web')
+        ? { stdout: '[]', stderr: '', code: 0 }
+        : { stdout: '[{"Source":"/host/dev/addons","Destination":"/mnt/extra-addons"}]', stderr: '', code: 0 };
+    }
+    if (cmd.includes('cat ')) return { stdout: 'addons_path = /mnt/extra-addons\ndb_name = d\n', stderr: '', code: 0 };
+    if (cmd.includes('ls -1 /host/dev/addons')) return { stdout: 'idx_hj\n', stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const r = await runProbe(1, 3, exec, {
+    loadRepos: async () => [{ id: 1, label: 'm', isPrimary: true, modules: ['idx_hj'] }],
+    loadConns: async () => [],
+  });
+  // docker ps 先吐 odoo-dev-web；就算順序反過來，有 addons 的也該在前
+  expect(r.candidates[0].containerName).toBe('odoo-dev-web');
+  expect(r.candidates[0].addonsCandidates).toHaveLength(1);
+  expect(r.candidates[1].containerName).toBe('odoo-prd-web');
+  expect(r.candidates[1].addonsCandidates).toHaveLength(0);
+});
+
+// 連線指名仍然是第一順位：runner 就算沒有 addons，被指名時也該排在前面（人說了算）
+test('連線指名優先於「有沒有我們的模組」', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 1, ssh_host: 'h', ssh_user: 'u', ssh_password: 'p', vpn_enabled: false, db_name: 'odoo_tst',
+  });
+  const r = await runProbe(1, 3, twoExec(), {
+    loadRepos: async () => [],
+    loadConns: async () => [{ id: 9, name: 'X', db_name: 'd', log_container: 'odoo-prd-web' }],
+  });
+  expect(r.candidates[0].containerName).toBe('odoo-prd-web');
 });

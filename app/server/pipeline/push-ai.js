@@ -142,16 +142,24 @@ async function deployToTestEnv(task, taskId, userId) {
     if (!await isAutoDeployEnabled(task.project_id)) return say('此專案未啟用自動部署，略過');
 
     const { rows: targets } = await query(
-      "SELECT id FROM project_deploy_targets WHERE project_id = $1 AND env = 'test' AND enabled = true ORDER BY id",
+      "SELECT * FROM project_deploy_targets WHERE project_id = $1 AND env = 'test' AND enabled = true ORDER BY id",
       [task.project_id]
     );
     if (!targets.length) return say('此專案沒有啟用的測試區部署目標，略過');
 
-    const { runDeploy } = require('../lib/deploy-run');
-    for (const tg of targets) {
-      const r = await runDeploy(tg.id, { trigger: 'auto_test', taskId: task.id, userId: null });
-      const mods = (r.modules || []).join(', ') || '無模組變更';
-      say(r.ok ? `測試區部署完成：${mods}` : `測試區部署失敗（${mods}）：${r.error || '未知原因'}`);
+    const { runDeployGroup } = require('../lib/deploy-run');
+    const { groupTargets } = require('../lib/deploy-cmd');
+    const byTarget = new Map(targets.map(t => [t.id, t]));
+    // 掛在同一個容器／服務上的多個資料庫合成一輪，客戶只被斷一次線
+    for (const ids of groupTargets(targets)) {
+      const results = await runDeployGroup(ids, { trigger: 'auto_test', taskId: task.id, userId: null });
+      for (const r of results) {
+        const t = byTarget.get(r.targetId);
+        const who = t ? t.db_name : r.targetId;
+        const mods = (r.modules || []).join(', ') || '無模組變更';
+        say(r.ok ? `測試區部署完成（${who}）：${mods}`
+          : `測試區部署失敗（${who}／${mods}）：${r.error || '未知原因'}`);
+      }
     }
   } catch (e) {
     // 部署出事不可以讓任務卡住。留聲，不靜默。

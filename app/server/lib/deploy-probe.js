@@ -106,8 +106,10 @@ function parseConf(text) {
 
 // ── 以下是「自動帶出欄位」用的解析器。全是純函式，理由同檔頭：SSH 那半沒有真機驗不了。
 
-// docker 官方 image 的慣例路徑。只在 inspect 找不到 -c 時當候選，且一定要 cat 得到才留著。
-const DEFAULT_CONF = '/etc/odoo/odoo.conf';
+// 啟動指令裡找不到 -c 時才用的慣例路徑，依序試到 cat 得到為止。
+// docker 官方 image 是 /etc/odoo/odoo.conf；systemd 安裝（慈雲那台）常見的是 /etc/odoo.conf，
+// 各家打包又各自不同——寫死一條的話 systemd 專案會全部抓不到 conf，於是三個欄位都退回手填。
+const CONF_FALLBACKS = ['/etc/odoo/odoo.conf', '/etc/odoo.conf', '/etc/odoo-server.conf'];
 
 // 從 docker inspect 的 Cmd/Entrypoint（JSON 陣列）或 systemd 的 ExecStart 找 conf 路徑。
 // 兩種來源的分隔符不同（`","` vs 空白），所以分隔字元放同一個字元類別一起吃。
@@ -183,6 +185,35 @@ async function defaultLoadRepos(projectId) {
   } catch { return []; }
 }
 
+// 同專案的連線設定裡，log_container 指出「這個環境的 log 要去哪個容器抓」——
+// 那就是「這個資料庫由哪個容器服務」的答案，而且是人親手填的。
+// 鴻久實例：conn「鴻伍 - 正式」(odoo_dev) 的 log_container 是 odoo-prd-web，
+// 表示 odoo_dev 是掛在 odoo-prd 底下，不是同名的 odoo-dev 容器。沒有這條線索
+// 就只能靠名字猜，而名字剛好會把人騙到錯的容器去。
+async function defaultLoadConns(projectId) {
+  try {
+    const { query } = require('../db');
+    const { rows } = await query(
+      `SELECT id, name, db_name, log_container, log_unit FROM db_connections
+       WHERE project_id = $1
+         AND (COALESCE(log_container, '') <> '' OR COALESCE(log_unit, '') <> '')
+       ORDER BY id`, [projectId]);
+    return rows;
+  } catch { return []; }
+}
+
+// 哪些連線把 log 指到這個容器。回空陣列＝沒有線索，不是「沒有關聯」。
+function linkConns(candidate, conns) {
+  // systemd 專案沒有容器名，線索在 log_unit；unit 名可能帶或不帶 .service 後綴，兩種都收
+  const strip = (v) => String(v || '').replace(/\.service$/, '');
+  const names = new Set([candidate.containerName, candidate.composeService, candidate.serviceName]
+    .filter(Boolean).map(strip));
+  return (conns || [])
+    .filter(c => (c.log_container && names.has(strip(c.log_container)))
+      || (c.log_unit && names.has(strip(c.log_unit))))
+    .map(c => ({ id: c.id, name: c.name, dbName: c.db_name }));
+}
+
 // 對一個候選補齊 conf 路徑、addons 目錄候選與 conf 內的 db 清單。
 // 每一步都獨立 try：任何一步失敗只讓那個欄位變 null，不可讓整個候選消失——
 // 候選不見了人就無從指認，比欄位空著糟得多。
@@ -213,16 +244,18 @@ async function enrichCandidate(execFn, target, S, c, ourModules) {
     } catch { /* 同上 */ }
   }
 
-  const confTry = out.confPath || DEFAULT_CONF;
+  // 啟動指令抓到的優先；抓不到就依序試慣例路徑。讀不到會拿到「No such file」這類訊息，
+  // 不含 '=' 就當沒讀到——絕不留一條猜的路徑，那會被當成事實存進部署目標。
+  const tries = out.confPath ? [out.confPath] : CONF_FALLBACKS;
   let conf = null;
-  if (validatePath(confTry)) {
+  out.confPath = null;
+  for (const cand of tries) {
+    if (!validatePath(cand)) continue;
     try {
-      const cat = await execFn(target, `${prefix}cat ${confTry}`);
-      // 讀不到會拿到「No such file」這類訊息，不含 '=' 就當沒讀到，不留一條猜的路徑
-      if (cat.stdout && cat.stdout.includes('=')) { conf = parseConf(cat.stdout); out.confPath = confTry; }
-      else out.confPath = null;
-    } catch { out.confPath = null; }
-  } else { out.confPath = null; }
+      const cat = await execFn(target, `${prefix}cat ${cand}`);
+      if (cat.stdout && cat.stdout.includes('=')) { conf = parseConf(cat.stdout); out.confPath = cand; break; }
+    } catch { /* 下一個候選 */ }
+  }
 
   if (!conf) return out;
   out.confDbNames = conf.dbNames;
@@ -271,6 +304,7 @@ async function runProbe(connId, projectId, execFn = sshExec, deps = {}) {
 
   const repos = await (deps.loadRepos || defaultLoadRepos)(projectId);
   const ourModules = [...new Set(repos.flatMap(r => r.modules))];
+  const conns = await (deps.loadConns || defaultLoadConns)(projectId);
   const S = sudoPrefix(target);
 
   let candidates;
@@ -317,10 +351,18 @@ async function runProbe(connId, projectId, execFn = sshExec, deps = {}) {
   // 誰是誰——所以標出「conf 裡沒有這個 db」讓人核對，而不是自作主張改掉。
   for (const c of candidates) {
     c.dbMismatch = c.confDbNames.length > 0 && !c.confDbNames.includes(c.dbName);
+    c.linkedConns = linkConns(c, conns);
   }
+
+  // 有連線指名的排前面。指名是人填的事實，比容器名字可靠——odoo_dev 這個 db
+  // 由 odoo-prd 服務時，照名字排會把 odoo-dev 那個沒人用的容器擺在第一個。
+  // 次要鍵是「這個 instance 的 addons 目錄裡有沒有我們的模組」：鴻久那台實測列出 7 個候選，
+  // 其中 4 個是 queue_job 的 *-runner，它們沒有我們的 addons 目錄，不該混在前面。
+  candidates.sort((a, b) => (b.linkedConns.length - a.linkedConns.length)
+    || (b.addonsCandidates.length - a.addonsCandidates.length));
 
   return { ok: true, candidates, diskAvailGb: parsed.diskAvailGb, raw, repos };
 }
 
 module.exports = { buildProbeScript, parseProbe, parseComposeLabels, parseConf, isDeployCandidate, runProbe,
-  parseConfPath, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs };
+  parseConfPath, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs, linkConns };

@@ -57,7 +57,15 @@ function registerRoutes(app) {
         `SELECT ${TARGET_COLS} FROM project_deploy_targets WHERE project_id = $1 ORDER BY env, id`,
         [req.params.id]
       );
-      res.json({ targets: rows });
+      // 部署紀錄筆數分開查再併：相關子查詢在 pg-mem 跑不動（rules/testing.md #14），
+      // 而這個數字是刪除前的二次確認要用的（deploy_runs 帶 CASCADE，會一起消失）。
+      const { rows: cs } = await query(
+        `SELECT r.target_id, COUNT(*)::int AS c FROM deploy_runs r
+         JOIN project_deploy_targets t ON t.id = r.target_id
+         WHERE t.project_id = $1 GROUP BY r.target_id`, [req.params.id]
+      );
+      const counts = new Map(cs.map(c => [Number(c.target_id), Number(c.c)]));
+      res.json({ targets: rows.map(r => ({ ...r, run_count: counts.get(r.id) || 0 })) });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -111,14 +119,95 @@ function registerRoutes(app) {
 
   app.patch('/api/projects/:id/deploy-targets/:tid', guard, async (req, res) => {
     try {
-      if (typeof req.body.enabled !== 'boolean') return res.status(400).json({ error: 'enabled 必須是布林' });
-      const { rows } = await query(
-        `UPDATE project_deploy_targets SET enabled = $1, updated_at = NOW()
-         WHERE id = $2 AND project_id = $3 RETURNING id, enabled`,
-        [req.body.enabled, req.params.tid, req.params.id]
+      const b = req.body || {};
+      const { rows: [cur] } = await query(
+        'SELECT * FROM project_deploy_targets WHERE id = $1 AND project_id = $2',
+        [req.params.tid, req.params.id]
       );
-      if (!rows.length) return res.status(404).json({ error: '找不到部署目標' });
-      res.json({ ok: true, enabled: rows[0].enabled });
+      if (!cur) return res.status(404).json({ error: '找不到部署目標' });
+
+      // 只切開關（既有前端與測試走這條）
+      if (typeof b.enabled === 'boolean' && Object.keys(b).length === 1) {
+        const { rows } = await query(
+          `UPDATE project_deploy_targets SET enabled = $1, updated_at = NOW()
+           WHERE id = $2 AND project_id = $3 RETURNING id, enabled`,
+          [b.enabled, req.params.tid, req.params.id]
+        );
+        return res.json({ ok: true, enabled: rows[0].enabled });
+      }
+
+      // runtime／容器名／compose 定址是探測出來的事實，不開放手改——改了就與客戶機對不上，
+      // 而且部署當下才會炸。要換 instance 就重新評估、存一筆新的。
+      const FORBIDDEN = ['runtime', 'container_name', 'compose_service', 'compose_dir', 'service_name'];
+      const bad = FORBIDDEN.filter(k => k in b);
+      if (bad.length) {
+        return res.status(400).json({ error: `${bad.join('／')} 是探測結果，不能手改。要換 instance 請重新評估。` });
+      }
+      if ('env' in b && !['test', 'prod'].includes(b.env)) {
+        return res.status(400).json({ error: 'env 只能是 test 或 prod' });
+      }
+      if ('conn_id' in b && b.conn_id && !await belongsToProject('db_connections', b.conn_id, req.params.id)) {
+        return res.status(400).json({ error: 'conn_id 不屬於此專案' });
+      }
+      if ('repo_id' in b && b.repo_id && !await belongsToProject('project_repos', b.repo_id, req.params.id)) {
+        return res.status(400).json({ error: 'repo_id 不屬於此專案' });
+      }
+
+      const next = {
+        env: 'env' in b ? b.env : cur.env,
+        repo_id: 'repo_id' in b ? (b.repo_id || null) : cur.repo_id,
+        conn_id: 'conn_id' in b ? (b.conn_id || null) : cur.conn_id,
+        addons_dir: 'addons_dir' in b ? String(b.addons_dir || '').trim() : cur.addons_dir,
+        conf_path: 'conf_path' in b ? (String(b.conf_path || '').trim() || null) : cur.conf_path,
+        db_name: 'db_name' in b ? String(b.db_name || '').trim() : cur.db_name,
+        http_port: 'http_port' in b ? (b.http_port || null) : cur.http_port,
+        modules: Array.isArray(b.modules) ? b.modules : cur.modules,
+        enabled: typeof b.enabled === 'boolean' ? b.enabled : cur.enabled,
+      };
+      if (!next.addons_dir || !next.db_name) return res.status(400).json({ error: '缺少必填欄位（addons_dir／db_name）' });
+      if (!next.repo_id) return res.status(400).json({ error: '缺少 repo_id（要從哪個 repo 拿碼部署）' });
+
+      // 環境或 repo 換了，來源分支必須跟著重推——否則正式區會繼續吃測試分支的碼
+      const branch = (next.env !== cur.env || next.repo_id !== cur.repo_id)
+        ? await resolveBranch(next.repo_id, next.env)
+        : cur.branch;
+
+      // 改到會影響「部署什麼、部署到哪」的欄位就清掉 last_deployed_sha：那個 sha 是
+      // 「上次送到這個目標的版本」，換了資料庫或目錄之後它描述的已經是別的地方，
+      // 留著會讓下一次部署只送 diff，於是新目標永遠拿不到完整的碼。
+      const moved = next.addons_dir !== cur.addons_dir || next.db_name !== cur.db_name
+        || next.conn_id !== cur.conn_id || branch !== cur.branch;
+
+      const { rows } = await query(
+        `UPDATE project_deploy_targets
+           SET env=$1, repo_id=$2, conn_id=$3, addons_dir=$4, conf_path=$5, db_name=$6,
+               http_port=$7, modules=$8, enabled=$9, branch=$10,
+               last_deployed_sha = CASE WHEN $11 THEN NULL ELSE last_deployed_sha END,
+               updated_at = NOW()
+         WHERE id=$12 AND project_id=$13
+         RETURNING ${TARGET_COLS}`,
+        [next.env, next.repo_id, next.conn_id, next.addons_dir, next.conf_path, next.db_name,
+         next.http_port, next.modules, next.enabled, branch, moved, req.params.tid, req.params.id]
+      );
+      res.json({ ok: true, target: rows[0], branch, resetSha: moved });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/projects/:id/deploy-targets/:tid', guard, async (req, res) => {
+    try {
+      const { rows: [t] } = await query(
+        'SELECT id, enabled FROM project_deploy_targets WHERE id = $1 AND project_id = $2',
+        [req.params.tid, req.params.id]
+      );
+      if (!t) return res.status(404).json({ error: '找不到部署目標' });
+      // 啟用中的不給刪：手滑刪掉一個正在自動部署的目標，之後沒有任何徵狀——
+      // 客戶那台就是靜靜地停在舊版。要刪先停用，多按一次是刻意的。
+      if (t.enabled) return res.status(400).json({ error: '請先停用再刪除' });
+      // deploy_runs 帶 ON DELETE CASCADE，部署歷史會跟著消失，所以先數給前端確認用
+      const { rows: [n] } = await query('SELECT COUNT(*)::int AS c FROM deploy_runs WHERE target_id = $1', [t.id]);
+      await query('DELETE FROM project_deploy_targets WHERE id = $1 AND project_id = $2',
+        [req.params.tid, req.params.id]);
+      res.json({ ok: true, deletedRuns: n.c });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

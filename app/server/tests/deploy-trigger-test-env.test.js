@@ -13,12 +13,12 @@ jest.mock('../pipeline/git', () => ({
 jest.mock('../pipeline/merge-agent', () => ({ resolveConflicts: jest.fn() }));
 jest.mock('../lib/git-identity', () => ({ buildGitEnv: jest.fn().mockResolvedValue({}) }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
-jest.mock('../lib/deploy-run', () => ({ runDeploy: jest.fn() }));
+jest.mock('../lib/deploy-run', () => ({ runDeploy: jest.fn(), runDeployGroup: jest.fn() }));
 
 process.env.JWT_SECRET = 'test-deploy-trigger';
 process.env.APP_SECRET = 'test-app-secret';
 
-const { runDeploy } = require('../lib/deploy-run');
+const { runDeployGroup } = require('../lib/deploy-run');
 const notify = require('../notify');
 
 let dbModule, pushAi, userId;
@@ -39,7 +39,8 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
-  runDeploy.mockReset().mockResolvedValue({ ok: true, status: 'success', modules: ['idx_hj'] });
+  runDeployGroup.mockReset().mockImplementation(async (ids) =>
+    ids.map((id) => ({ targetId: id, ok: true, status: 'success', modules: ['idx_hj'] })));
   notify.emitToUser.mockReset();
   await dbModule.query('DELETE FROM deploy_runs');
   await dbModule.query('DELETE FROM project_deploy_targets');
@@ -58,8 +59,10 @@ async function setup({ targets = [] } = {}) {
   );
   for (const t of targets) {
     await dbModule.query(
-      `INSERT INTO project_deploy_targets (project_id, env, runtime, addons_dir, db_name, branch, enabled)
-       VALUES ($1,$2,'docker','/a/addons','db','ai-dev',$3)`, [proj.id, t.env, t.enabled]
+      `INSERT INTO project_deploy_targets
+         (project_id, env, runtime, addons_dir, db_name, branch, enabled, compose_dir, compose_service)
+       VALUES ($1,$2,'docker',$3,$4,'ai-dev',$5,'/srv',$6)`,
+      [proj.id, t.env, t.addons_dir || '/a/addons', t.db_name || 'db', t.enabled, t.service || 'web']
     );
   }
   const { rows: [task] } = await dbModule.query(
@@ -77,8 +80,8 @@ const statusOf = async (id) => (await dbModule.query('SELECT status FROM tasks W
 test('有啟用的測試區目標時觸發部署，且任務照常推進', async () => {
   const id = await setup({ targets: [{ env: 'test', enabled: true }] });
   await pushAi.runPushAi(id, userId, null);
-  expect(runDeploy).toHaveBeenCalledTimes(1);
-  expect(runDeploy.mock.calls[0][1].trigger).toBe('auto_test');
+  expect(runDeployGroup).toHaveBeenCalledTimes(1);
+  expect(runDeployGroup.mock.calls[0][1].trigger).toBe('auto_test');
   expect(await statusOf(id)).toBe('wiki_updating');
 });
 
@@ -87,7 +90,7 @@ test('專案開關關閉時不部署，但留一行說明', async () => {
   const id = await setup({ targets: [{ env: 'test', enabled: true }] });
   await dbModule.query('UPDATE projects SET auto_deploy_enabled = false');
   await pushAi.runPushAi(id, userId, null);
-  expect(runDeploy).not.toHaveBeenCalled();
+  expect(runDeployGroup).not.toHaveBeenCalled();
   expect(said()).toMatch(/未啟用/);
   expect(await statusOf(id)).toBe('wiki_updating');
 });
@@ -95,7 +98,7 @@ test('專案開關關閉時不部署，但留一行說明', async () => {
 test('沒有啟用的測試區目標時不部署，也留一行說明', async () => {
   const id = await setup({ targets: [{ env: 'test', enabled: false }, { env: 'prod', enabled: true }] });
   await pushAi.runPushAi(id, userId, null);
-  expect(runDeploy).not.toHaveBeenCalled();
+  expect(runDeployGroup).not.toHaveBeenCalled();
   expect(said()).toMatch(/沒有啟用/);
 });
 
@@ -103,13 +106,14 @@ test('沒有啟用的測試區目標時不部署，也留一行說明', async ()
 test('絕不觸發正式區目標', async () => {
   const id = await setup({ targets: [{ env: 'prod', enabled: true }] });
   await pushAi.runPushAi(id, userId, null);
-  expect(runDeploy).not.toHaveBeenCalled();
+  expect(runDeployGroup).not.toHaveBeenCalled();
 });
 
 // 意圖（Rule 9）：碼已經在 ai-dev 上了，這是事實。部署失敗讓任務失敗，
 // 會讓使用者以為程式根本沒併進去，然後跑去重做一次。
 test('部署回失敗時任務照常推進，只留錯誤訊息', async () => {
-  runDeploy.mockResolvedValue({ ok: false, status: 'rolled_back', modules: ['idx_hj'], error: '健康檢查未通過' });
+  runDeployGroup.mockImplementation(async (ids) =>
+    ids.map((id) => ({ targetId: id, ok: false, status: 'rolled_back', modules: ['idx_hj'], error: '健康檢查未通過' })));
   const id = await setup({ targets: [{ env: 'test', enabled: true }] });
   await pushAi.runPushAi(id, userId, null);
   expect(await statusOf(id)).toBe('wiki_updating');
@@ -118,15 +122,36 @@ test('部署回失敗時任務照常推進，只留錯誤訊息', async () => {
 });
 
 test('部署丟例外也不讓任務卡住', async () => {
-  runDeploy.mockRejectedValue(new Error('SSH 連不上'));
+  runDeployGroup.mockRejectedValue(new Error('SSH 連不上'));
   const id = await setup({ targets: [{ env: 'test', enabled: true }] });
   await pushAi.runPushAi(id, userId, null);
   expect(await statusOf(id)).toBe('wiki_updating');
   expect(said()).toMatch(/例外/);
 });
 
-test('多個啟用的測試區目標會逐一部署', async () => {
-  const id = await setup({ targets: [{ env: 'test', enabled: true }, { env: 'test', enabled: true }] });
+// 意圖（Rule 9）：同一個容器上的多個資料庫（鴻久那台 odoo_prd 與 odoo_dev 都掛在
+// odoo-prd 底下）必須合成一輪停機。拆成一個目標停一次的話客戶被斷線 N 次，
+// 而且兩次停機之間服務是活的——使用者這時進得來，用到的是只升了一半的狀態。
+test('同一個容器上的多個資料庫合併成一次停機，兩個目標都有部署到', async () => {
+  const id = await setup({ targets: [
+    { env: 'test', enabled: true, db_name: 'db_a' },
+    { env: 'test', enabled: true, db_name: 'db_b' },
+  ] });
   await pushAi.runPushAi(id, userId, null);
-  expect(runDeploy).toHaveBeenCalledTimes(2);
+  expect(runDeployGroup).toHaveBeenCalledTimes(1);
+  expect(runDeployGroup.mock.calls[0][0]).toHaveLength(2);
+  expect(said()).toMatch(/db_a/);
+  expect(said()).toMatch(/db_b/);
+});
+
+// 反面：不同 addons 目錄＝不同的部署位置，共用一次停機會互相覆蓋檔案，必須拆開。
+test('不同 addons 目錄的目標不合併，各跑各的', async () => {
+  const id = await setup({ targets: [
+    { env: 'test', enabled: true, db_name: 'db_a', addons_dir: '/a/addons' },
+    { env: 'test', enabled: true, db_name: 'db_b', addons_dir: '/b/addons' },
+  ] });
+  await pushAi.runPushAi(id, userId, null);
+  expect(runDeployGroup).toHaveBeenCalledTimes(2);
+  expect(runDeployGroup.mock.calls[0][0]).toHaveLength(1);
+  expect(runDeployGroup.mock.calls[1][0]).toHaveLength(1);
 });

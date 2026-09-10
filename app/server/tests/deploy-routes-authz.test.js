@@ -150,3 +150,110 @@ test('未帶 token 一律 401', async () => {
   const res = await request(app).get('/api/projects/1/deploy-targets');
   expect(res.status).toBe(401);
 });
+
+// ── 編輯與刪除
+
+// 意圖（Rule 9）：這些欄位是探測出來的事實。手改了就跟客戶機對不上，而且要到真的
+// 部署那一刻才炸——改的當下畫面全綠。要換 instance 只能重新評估。
+test('探測出來的定址欄位不給改', async () => {
+  const { rows: [t] } = await dbModule.query('SELECT id FROM project_deploy_targets ORDER BY id LIMIT 1');
+  for (const key of ['runtime', 'container_name', 'compose_service', 'compose_dir', 'service_name']) {
+    const res = await request(app).patch(`/api/projects/1/deploy-targets/${t.id}`)
+      .set('Authorization', `Bearer ${token}`).send({ [key]: 'x', db_name: 'y' });
+    expect([key, res.status]).toEqual([key, 400]);
+    expect(res.body.error).toMatch(/探測結果/);
+  }
+});
+
+// 意圖（Rule 9）：last_deployed_sha 是「上次送到這個目標的版本」。換了資料庫或目錄之後
+// 它描述的是別的地方，留著會讓下次部署只送 diff，新目標永遠拿不到完整的碼——
+// 而且部署會回報成功。
+test('改到資料庫或目錄時清掉 last_deployed_sha，只改模組則保留', async () => {
+  const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
+  const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  const created = await request(app).post('/api/projects/1/deploy-targets')
+    .set('Authorization', `Bearer ${token}`).send(body({ conn_id: c.id, repo_id: r.id }));
+  const id = created.body.id;
+  await dbModule.query("UPDATE project_deploy_targets SET last_deployed_sha = 'abc123' WHERE id = $1", [id]);
+
+  const keep = await request(app).patch(`/api/projects/1/deploy-targets/${id}`)
+    .set('Authorization', `Bearer ${token}`).send({ modules: ['idx_hj'] });
+  expect(keep.status).toBe(200);
+  expect(keep.body.resetSha).toBe(false);
+  let { rows } = await dbModule.query('SELECT last_deployed_sha FROM project_deploy_targets WHERE id = $1', [id]);
+  expect(rows[0].last_deployed_sha).toBe('abc123');
+
+  const moved = await request(app).patch(`/api/projects/1/deploy-targets/${id}`)
+    .set('Authorization', `Bearer ${token}`).send({ db_name: '別的資料庫' });
+  expect(moved.body.resetSha).toBe(true);
+  ({ rows } = await dbModule.query('SELECT last_deployed_sha FROM project_deploy_targets WHERE id = $1', [id]));
+  expect(rows[0].last_deployed_sha).toBeNull();
+});
+
+// 意圖：env 決定來源分支。改了 env 卻沿用舊分支＝正式區繼續吃測試分支的碼。
+test('改 env 時來源分支跟著重推', async () => {
+  const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
+  const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  const created = await request(app).post('/api/projects/1/deploy-targets')
+    .set('Authorization', `Bearer ${token}`).send(body({ env: 'prod', conn_id: c.id, repo_id: r.id }));
+  expect(created.body.branch).toBe('main');
+  const res = await request(app).patch(`/api/projects/1/deploy-targets/${created.body.id}`)
+    .set('Authorization', `Bearer ${token}`).send({ env: 'test' });
+  expect(res.body.branch).toBe('ai-dev');
+  expect(res.body.target.branch).toBe('ai-dev');
+});
+
+// 意圖（Rule 9）：手滑刪掉一個啟用中的目標之後完全沒有徵狀——客戶那台就是靜靜停在舊版。
+test('啟用中的目標不給刪，要先停用', async () => {
+  const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
+  const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  const created = await request(app).post('/api/projects/1/deploy-targets')
+    .set('Authorization', `Bearer ${token}`).send(body({ conn_id: c.id, repo_id: r.id }));
+  const id = created.body.id;
+  await request(app).patch(`/api/projects/1/deploy-targets/${id}`)
+    .set('Authorization', `Bearer ${token}`).send({ enabled: true });
+
+  const blocked = await request(app).delete(`/api/projects/1/deploy-targets/${id}`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(blocked.status).toBe(400);
+  expect(blocked.body.error).toMatch(/停用/);
+
+  await request(app).patch(`/api/projects/1/deploy-targets/${id}`)
+    .set('Authorization', `Bearer ${token}`).send({ enabled: false });
+  const ok = await request(app).delete(`/api/projects/1/deploy-targets/${id}`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(ok.status).toBe(200);
+  const { rows } = await dbModule.query('SELECT id FROM project_deploy_targets WHERE id = $1', [id]);
+  expect(rows).toHaveLength(0);
+});
+
+// 意圖：deploy_runs 帶 ON DELETE CASCADE，刪目標會把部署歷史一起帶走。
+// 前端要在二次確認裡講清楚「連 N 筆一起刪」，所以列表必須給得出這個 N。
+test('列表帶出每個目標的部署紀錄筆數', async () => {
+  const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
+  const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  const created = await request(app).post('/api/projects/1/deploy-targets')
+    .set('Authorization', `Bearer ${token}`).send(body({ conn_id: c.id, repo_id: r.id }));
+  const id = created.body.id;
+  for (const st of ['success', 'failed']) {
+    await dbModule.query(
+      "INSERT INTO deploy_runs (target_id, trigger, status) VALUES ($1, 'manual', $2)", [id, st]);
+  }
+  const res = await request(app).get('/api/projects/1/deploy-targets').set('Authorization', `Bearer ${token}`);
+  const mine = res.body.targets.find(x => x.id === id);
+  expect(mine.run_count).toBe(2);
+  const other = res.body.targets.find(x => x.id !== id && x.run_count === 0);
+  expect(other).toBeTruthy();   // 沒跑過的要是 0 不是 undefined
+});
+
+// 刪除會連 deploy_runs 一起消失（CASCADE），回傳筆數讓前端能誠實回報刪了什麼
+test('刪除回報一起消失的部署紀錄筆數', async () => {
+  const { rows: [t] } = await dbModule.query(
+    'SELECT target_id FROM deploy_runs ORDER BY id DESC LIMIT 1');
+  const res = await request(app).delete(`/api/projects/1/deploy-targets/${t.target_id}`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.status).toBe(200);
+  expect(res.body.deletedRuns).toBe(2);
+  const { rows } = await dbModule.query('SELECT id FROM deploy_runs WHERE target_id = $1', [t.target_id]);
+  expect(rows).toHaveLength(0);
+});

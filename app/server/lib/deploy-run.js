@@ -7,7 +7,9 @@ const { query } = require('../db');
 const { maskSecrets } = require('./log-parse');
 const { sshExec } = require('./ssh-exec');
 const {
-  pickModules, buildUpgradeCmd, buildRestartCmd, buildHealthCmd, buildSwapCmd, buildRollbackCmd,
+  pickModules, buildUpgradeCmd, buildUpgradeCmdMulti, readExitCodesByDb,
+  buildRestartCmd, buildHealthCmd, buildSwapCmd, buildRollbackCmd,
+  groupTargets, groupKey,
 } = require('./deploy-cmd');
 
 // EXITCODE= 是 buildUpgradeCmd 自己 echo 進 log 的。取最後一個：log 內容可能剛好含這串，
@@ -23,53 +25,90 @@ function stampNow() {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '');
 }
 
-async function runDeploy(targetId, { trigger, taskId = null, userId = null }, deps = {}) {
-  const { rows: [t] } = await query('SELECT * FROM project_deploy_targets WHERE id = $1', [targetId]);
-  if (!t) return { ok: false, error: '找不到部署目標' };
+// 單一目標的部署。實作是 runDeployGroup 的單元素特例，指令格式與過去完全相同。
+async function runDeploy(targetId, opts, deps = {}) {
+  const [r] = await runDeployGroup([targetId], opts, deps);
+  return r;
+}
 
-  const git = deps.git || defaultGit(t);
+// 一組共用一次停機的目標。N=1 時走原本的單 DB 指令，行為與過去一致。
+async function runDeployGroup(targetIds, { trigger, taskId = null, userId = null }, deps = {}) {
+  const items = [];
+  for (const id of targetIds) {
+    const { rows: [t] } = await query('SELECT * FROM project_deploy_targets WHERE id = $1', [id]);
+    if (!t) return targetIds.map(x => ({ targetId: x, ok: false, error: '找不到部署目標' }));
+    items.push({ target: t });
+  }
+  const head = items[0].target;
+  const git = deps.git || defaultGit(head);
   const exec = deps.exec || sshExec;
   const upload = deps.upload || defaultUpload;
 
-  let toSha, changed;
-  try {
-    toSha = await git.headSha(t.branch);
-    changed = t.last_deployed_sha ? await git.changedPaths(t.last_deployed_sha, toSha) : [];
-  } catch (e) {
-    return { ok: false, error: `取不到分支 ${t.branch} 的狀態：${e.message}` };
+  // 同組共用同一個 branch，所以 sha 只取一次；但每個目標的 last_deployed_sha 各自不同，
+  // 所以「這次要動哪些模組」仍要一個一個算。
+  let toSha;
+  try { toSha = await git.headSha(head.branch); }
+  catch (e) {
+    return items.map(i => ({ targetId: i.target.id, ok: false, error: `取不到分支 ${head.branch} 的狀態：${e.message}` }));
   }
-  const modules = pickModules(changed, t.modules, t.last_deployed_sha);
 
-  const { rows: [run] } = await query(
-    `INSERT INTO deploy_runs (target_id, task_id, triggered_by, trigger, from_sha, to_sha, modules, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'running') RETURNING id`,
-    [targetId, taskId, userId, trigger, t.last_deployed_sha, toSha, modules]
-  );
+  for (const it of items) {
+    const t = it.target;
+    try {
+      const changed = t.last_deployed_sha ? await git.changedPaths(t.last_deployed_sha, toSha) : [];
+      it.modules = pickModules(changed, t.modules, t.last_deployed_sha);
+    } catch (e) {
+      it.modules = [];
+      it.preError = `取不到變更清單：${e.message}`;
+    }
+    const { rows: [run] } = await query(
+      `INSERT INTO deploy_runs (target_id, task_id, triggered_by, trigger, from_sha, to_sha, modules, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'running') RETURNING id`,
+      [t.id, taskId, userId, trigger, t.last_deployed_sha, toSha, it.modules]
+    );
+    it.runId = run.id;
+  }
 
+  for (const it of items.filter(i => i.preError)) {
+    await query("UPDATE deploy_runs SET status='failed', finished_at=NOW(), log=$2 WHERE id=$1",
+      [it.runId, it.preError]);
+  }
   // 沒有模組要動 ＝ 成功，且完全不連遠端。這不是失敗，別讓它變紅燈。
-  if (!modules.length) {
+  for (const it of items.filter(i => !i.preError && !i.modules.length)) {
     await query("UPDATE deploy_runs SET status='success', finished_at=NOW(), log=$2 WHERE id=$1",
-      [run.id, '本次沒有屬於此目標的模組變更，略過']);
-    return { ok: true, runId: run.id, status: 'success', modules: [] };
+      [it.runId, '本次沒有屬於此目標的模組變更，略過']);
+  }
+  const active = items.filter(i => !i.preError && i.modules.length);
+
+  // 每個目標各自回一筆結果；有動到的那些由 extra 帶入實際成敗。
+  const done = (extra = {}) => items.map(i => ({
+    targetId: i.target.id,
+    runId: i.runId,
+    ...(i.preError ? { ok: false, status: 'failed', modules: [], error: i.preError }
+      : i.modules.length ? extra[i.target.id]
+        : { ok: true, status: 'success', modules: [] }),
+  }));
+  if (!active.length) return done();
+
+  // 整組共用同一條連線，失敗時整組一起標
+  async function failAll(logText, error) {
+    for (const it of active) {
+      await query("UPDATE deploy_runs SET status='failed', finished_at=NOW(), log=$2 WHERE id=$1",
+        [it.runId, logText]);
+    }
+    return done(Object.fromEntries(active.map(i =>
+      [i.target.id, { ok: false, status: 'failed', modules: i.modules, error }])));
   }
 
   const { loadDecryptedConn } = require('./db-connections');
-  const conn = await loadDecryptedConn(t.conn_id, t.project_id);
-  if (!conn) {
-    await query("UPDATE deploy_runs SET status='failed', finished_at=NOW(), log=$2 WHERE id=$1",
-      [run.id, '這個部署目標的連線設定已不存在，請重新評估']);
-    return { ok: false, runId: run.id, status: 'failed', modules, error: '連線設定已不存在' };
-  }
+  const conn = await loadDecryptedConn(head.conn_id, head.project_id);
+  if (!conn) return failAll('這個部署目標的連線設定已不存在，請重新評估', '連線設定已不存在');
 
   let target = conn;
   if (conn.vpn_enabled) {
     const { ensureGatewayRunning } = require('./vpn-gateway');
     try { await ensureGatewayRunning(conn.vpn); }
-    catch (e) {
-      await query("UPDATE deploy_runs SET status='failed', finished_at=NOW(), log=$2 WHERE id=$1",
-        [run.id, `[VPN] ${e.message}`]);
-      return { ok: false, runId: run.id, status: 'failed', modules, error: `[VPN] ${e.message}` };
-    }
+    catch (e) { return failAll(`[VPN] ${e.message}`, `[VPN] ${e.message}`); }
     target = { ...conn, ssh_host: '127.0.0.1', ssh_port: conn.vpn_forward_port };
   }
 
@@ -77,54 +116,80 @@ async function runDeploy(targetId, { trigger, taskId = null, userId = null }, de
   let logBuf = '';
   const say = (s) => { if (s) logBuf += String(s).replace(/\s+$/, '') + '\n'; };
 
-  async function finish(status, error) {
-    // 客戶 conf 內是明碼密碼，Odoo 啟動時會印出來——寫進 DB 之前一定要遮
-    await query('UPDATE deploy_runs SET status=$2, log=$3, finished_at=NOW() WHERE id=$1',
-      [run.id, status, maskSecrets(logBuf)]);
-    return { ok: status === 'success', runId: run.id, status, modules, error };
+  // 同組共用同一份 addons 目錄，所以檔案只送一次；log 也是同一份，每個目標各存一份副本。
+  const allModules = [...new Set(active.flatMap(i => i.modules))];
+
+  async function finishAll(status, error) {
+    for (const it of active) {
+      // 客戶 conf 內是明碼密碼，Odoo 啟動時會印出來——寫進 DB 之前一定要遮
+      await query('UPDATE deploy_runs SET status=$2, log=$3, finished_at=NOW() WHERE id=$1',
+        [it.runId, status, maskSecrets(logBuf)]);
+    }
+    return done(Object.fromEntries(active.map(i =>
+      [i.target.id, { ok: status === 'success', status, modules: i.modules, error }])));
   }
 
   try {
-    say(`[DEPLOY] ${t.env} / ${modules.join(', ')} / ${t.last_deployed_sha || '(初次)'} → ${toSha}`);
+    say(`[DEPLOY] ${active.map(i => `${i.target.env}/${i.target.db_name}`).join('、')}`
+      + ` / ${allModules.join(', ')} / ${head.last_deployed_sha || '(初次)'} → ${toSha}`);
+    if (active.length > 1) say(`[DEPLOY] ${active.length} 個資料庫共用一次停機`);
 
     // 1. 平台端打包，逐模組送上去（SFTP 不經 shell，檔名注入不成立）
-    for (const m of modules) {
+    for (const m of allModules) {
       const tar = await git.archive(toSha, m);
-      await upload(target, tar, `${t.addons_dir}/.deploy-staging/${m}.tgz`);
+      await upload(target, tar, `${head.addons_dir}/.deploy-staging/${m}.tgz`);
     }
 
     // 2. 解檔 + 原子替換
-    const swap = await exec(target, buildSwapCmd(t, modules, ts));
+    const swap = await exec(target, buildSwapCmd(head, allModules, ts));
     say(swap.stdout); say(swap.stderr);
 
-    // 3. 升級（含重啟）
-    const upg = await exec(target, buildUpgradeCmd(t, conn, modules));
-    say(upg.stdout); say(upg.stderr);
-    const rc = readExitCode(upg.stdout);
-    if (rc !== 0) throw new Error(`模組升級失敗（EXITCODE=${rc === null ? '讀不到' : rc}）`);
+    // 3. 升級（含重啟）。多個 DB 時停一次、逐個升、起一次。
+    if (active.length === 1) {
+      const only = active[0];
+      const upg = await exec(target, buildUpgradeCmd(only.target, conn, only.modules));
+      say(upg.stdout); say(upg.stderr);
+      const rc = readExitCode(upg.stdout);
+      if (rc !== 0) throw new Error(`模組升級失敗（EXITCODE=${rc === null ? '讀不到' : rc}）`);
+    } else {
+      const upg = await exec(target, buildUpgradeCmdMulti(active, conn));
+      say(upg.stdout); say(upg.stderr);
+      const codes = readExitCodesByDb(upg.stdout);
+      // 讀不到那個 DB 的 marker 一律當失敗：漏讀比誤判成功安全
+      const bad = active
+        .map(i => ({ db: i.target.db_name, rc: codes.has(i.target.db_name) ? codes.get(i.target.db_name) : null }))
+        .filter(x => x.rc !== 0);
+      if (bad.length) {
+        throw new Error('模組升級失敗：' + bad
+          .map(x => `${x.db}（EXITCODE=${x.rc === null ? '讀不到' : x.rc}）`).join('、'));
+      }
+    }
 
     // 4. 健康檢查
-    const hc = await exec(target, buildHealthCmd(t));
+    const hc = await exec(target, buildHealthCmd(head));
     say(hc.stdout);
     if (!/HEALTH_OK/.test(hc.stdout)) throw new Error('健康檢查未通過，服務沒有回來');
 
-    await query('UPDATE project_deploy_targets SET last_deployed_sha=$2, updated_at=NOW() WHERE id=$1',
-      [targetId, toSha]);
+    for (const it of active) {
+      await query('UPDATE project_deploy_targets SET last_deployed_sha=$2, updated_at=NOW() WHERE id=$1',
+        [it.target.id, toSha]);
+    }
     say('[DEPLOY] 完成');
-    return await finish('success');
+    return await finishAll('success');
   } catch (err) {
     say(`[FAIL] ${err.message}`);
     // 回滾只還原檔案。資料庫的改動留在原地——沒有備份（使用者裁決），這是已知取捨。
+    // 同組共用一份檔案，所以還原是整組一起的：其中一個 DB 升級失敗，另一個也不能留在新碼上。
     try {
-      const rb = await exec(target, buildRollbackCmd(t, modules, ts));
+      const rb = await exec(target, buildRollbackCmd(head, allModules, ts));
       say(rb.stdout); say(rb.stderr);
-      const rs = await exec(target, buildRestartCmd(t, conn));
+      const rs = await exec(target, buildRestartCmd(head, conn));
       say(rs.stdout); say(rs.stderr);
       say('[ROLLBACK] 檔案已還原並重啟；資料庫的改動未還原');
     } catch (e2) {
       say(`[ROLLBACK-FAIL] ${e2.message}`);
     }
-    return await finish('rolled_back', err.message);
+    return await finishAll('rolled_back', err.message);
   }
 }
 
@@ -194,4 +259,5 @@ function defaultUpload(conn, buffer, remotePath) {
   });
 }
 
-module.exports = { runDeploy, readExitCode };
+// groupTargets／groupKey 轉出只為相容既有匯入，真身在 deploy-cmd（純函式那一側）
+module.exports = { runDeploy, runDeployGroup, groupTargets, groupKey, readExitCode };

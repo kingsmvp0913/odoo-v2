@@ -139,3 +139,130 @@ test('找不到目標時回 ok:false，不 throw', async () => {
   const r = await runDeploy(999, { trigger: 'manual_retry', userId: 1 }, deps());
   expect(r.ok).toBe(false);
 });
+
+// ── 多資料庫共用一次停機（runDeployGroup）
+
+// 第二個目標：同一台機、同一個容器、同一個 addons 目錄，只有資料庫不同。
+// 這就是鴻久那台的形狀（odoo_prd 與 odoo_dev 都掛在 odoo-prd 底下）。
+beforeAll(async () => {
+  await dbModule.query(
+    `INSERT INTO project_deploy_targets
+      (project_id, env, conn_id, runtime, compose_dir, compose_service, container_name,
+       addons_dir, conf_path, db_name, http_port, modules, branch, sudo_mode, enabled)
+     VALUES (1,'test',1,'docker','/home/arich/DockerData/odoo','odoo-tst','odoo-tst-web',
+             '/home/arich/DockerData/odoo/Data/odoo-tst/addons','/etc/odoo/odoo.conf',
+             'odoo_dev',8101,ARRAY['idx_hj','idx_scan'],'ai-dev','password',true)`
+  );
+});
+
+function multiDeps({ codes = { odoo_tst: 0, odoo_dev: 0 }, health = 'OK' } = {}) {
+  const calls = [];
+  return {
+    calls,
+    git: {
+      headSha: async () => 'newsha',
+      changedPaths: async () => ['idx_hj/views/x.xml'],
+      archive: async () => Buffer.from('tar-bytes'),
+    },
+    uploads: [],
+    upload: async () => {},
+    exec: async (conn, cmd) => {
+      calls.push(cmd);
+      if (cmd.includes('--stop-after-init')) {
+        // 照 buildUpgradeCmdMulti 的形狀回：每個 DB 一段 marker + 自己的 EXITCODE
+        const out = Object.entries(codes)
+          .map(([db, rc]) => `### DB ${db}\nLoading modules...\nEXITCODE=${rc}`).join('\n');
+        return { stdout: out + '\n', stderr: '', code: 0 };
+      }
+      if (cmd.includes('/web/login')) return { stdout: health === 'OK' ? 'HEALTH_OK' : 'HEALTH_FAIL', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    },
+  };
+}
+
+const resetBoth = (v) => dbModule.query('UPDATE project_deploy_targets SET last_deployed_sha = $1', [v]);
+
+// 意圖（Rule 9）：兩個資料庫共用一次停機。若退化成一個目標停一次，客戶會被斷線兩次，
+// 而且兩次之間服務是活的——使用者這時進得來，用到的是只升了一半的狀態。
+test('兩個資料庫共用一次停機：檔案只送一次，升級指令只下一次', async () => {
+  await resetBoth(null);
+  const { runDeployGroup } = require('../lib/deploy-run');
+  const d = multiDeps();
+  const rs = await runDeployGroup([1, 2], { trigger: 'manual_prod', userId: 1 }, d);
+
+  expect(rs).toHaveLength(2);
+  expect(rs.every(r => r.ok)).toBe(true);
+  // swap（解檔替換）只做一次——兩個目標共用同一個 addons 目錄
+  expect(d.calls.filter(c => c.includes('.deploy-staging')).length).toBe(1);
+  // 升級整串只下一次，裡面兩個 DB
+  const upg = d.calls.filter(c => c.includes('--stop-after-init'));
+  expect(upg).toHaveLength(1);
+  expect(upg[0]).toMatch(/-d odoo_tst /);
+  expect(upg[0]).toMatch(/-d odoo_dev /);
+  expect((upg[0].match(/docker compose stop/g) || [])).toHaveLength(1);
+  // 兩個目標的 sha 都要更新
+  const { rows } = await dbModule.query('SELECT last_deployed_sha FROM project_deploy_targets ORDER BY id');
+  expect(rows.map(r => r.last_deployed_sha)).toEqual(['newsha', 'newsha']);
+});
+
+// 意圖（Rule 9）：只有其中一個 DB 升級失敗時，檔案是共用的一份，另一個 DB 不能留在新碼上——
+// 那會變成「DB 是舊的、檔案是新的」，Odoo 直接壞。整組一起回滾才對。
+test('其中一個資料庫升級失敗時整組回滾，兩個目標都不更新 sha', async () => {
+  await resetBoth(null);
+  const { runDeployGroup } = require('../lib/deploy-run');
+  const d = multiDeps({ codes: { odoo_tst: 0, odoo_dev: 1 } });
+  const rs = await runDeployGroup([1, 2], { trigger: 'manual_prod', userId: 1 }, d);
+
+  expect(rs.every(r => !r.ok)).toBe(true);
+  expect(rs[0].status).toBe('rolled_back');
+  expect(rs[1].status).toBe('rolled_back');
+  // 錯誤訊息要指出是哪一個資料庫，否則兩個 DB 的部署失敗長得一模一樣
+  expect(rs[0].error).toMatch(/odoo_dev/);
+  expect(rs[0].error).not.toMatch(/odoo_tst（/);
+  const { rows } = await dbModule.query('SELECT last_deployed_sha FROM project_deploy_targets ORDER BY id');
+  expect(rows.map(r => r.last_deployed_sha)).toEqual([null, null]);
+});
+
+// 意圖：讀不到某個 DB 的 exit code（指令被截斷、DB 根本沒跑到）一律當失敗。
+// 漏讀當成功的話，客戶那台就是靜靜地沒升級，而畫面回報綠燈。
+test('某個資料庫讀不到 exit code 時當失敗處理', async () => {
+  await resetBoth(null);
+  const { runDeployGroup } = require('../lib/deploy-run');
+  const d = multiDeps({ codes: { odoo_tst: 0 } });   // odoo_dev 那段完全沒出現
+  const rs = await runDeployGroup([1, 2], { trigger: 'manual_prod', userId: 1 }, d);
+  expect(rs.every(r => !r.ok)).toBe(true);
+  expect(rs[0].error).toMatch(/odoo_dev（EXITCODE=讀不到）/);
+});
+
+// 意圖：單一目標走 runDeployGroup 的單元素路徑，指令必須跟過去一模一樣（不帶 ### DB marker）。
+// 這條守的是「重構沒有改到既有行為」。
+test('單一目標仍走原本的單 DB 指令，不帶多 DB 的段落標記', async () => {
+  await resetBoth(null);
+  const { runDeployGroup } = require('../lib/deploy-run');
+  const d = deps();
+  const rs = await runDeployGroup([1], { trigger: 'manual_retry', userId: 1 }, d);
+  expect(rs).toHaveLength(1);
+  expect(rs[0].ok).toBe(true);
+  const upg = d.calls.filter(c => c.includes('--stop-after-init'));
+  expect(upg).toHaveLength(1);
+  expect(upg[0]).not.toMatch(/### DB/);
+});
+
+// 意圖：組裡有目標這次沒有模組要動時，它算成功且不進聯集，但另一個仍要照常部署。
+test('組裡某個目標沒有模組變更時略過它，其餘照常部署', async () => {
+  await resetBoth('oldsha');
+  await dbModule.query("UPDATE project_deploy_targets SET modules = ARRAY['idx_scan'] WHERE id = 2");
+  const { runDeployGroup } = require('../lib/deploy-run');
+  // changedPaths 只回 idx_hj，所以 id=2（只管 idx_scan）這次沒事做
+  const d = multiDeps();
+  const rs = await runDeployGroup([1, 2], { trigger: 'manual_prod', userId: 1 }, d);
+  expect(rs[0].ok).toBe(true);
+  expect(rs[0].modules).toEqual(['idx_hj']);
+  expect(rs[1].ok).toBe(true);
+  expect(rs[1].modules).toEqual([]);
+  // 升級指令裡只有還有事做的那個 DB
+  const upg = d.calls.filter(c => c.includes('--stop-after-init'))[0];
+  expect(upg).toMatch(/-d odoo_tst /);
+  expect(upg).not.toMatch(/-d odoo_dev /);
+  await dbModule.query("UPDATE project_deploy_targets SET modules = ARRAY['idx_hj','idx_scan'] WHERE id = 2");
+});

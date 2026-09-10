@@ -14,6 +14,7 @@
         // 指認表單：一個候選一份，key 是候選索引
         assign: {}, saving: false,
         runs: [], runsLoading: false, openRun: null, deploying: 0,
+        repos: [], editingId: 0, editForm: null, savingEdit: false,
       };
     },
     computed: {
@@ -26,12 +27,14 @@
       async load() {
         this.loading = true; this.loadError = "";
         try {
-          const [t, c] = await Promise.all([
+          const [t, c, r] = await Promise.all([
             Api.get(`projects/${this.projectId}/deploy-targets`),
             Api.get(`projects/${this.projectId}/db-connections`).catch(() => ({ connections: [] })),
+            Api.get(`projects/${this.projectId}/repos`).catch(() => []),
           ]);
           this.targets = t.targets || [];
           this.conns = c.connections || c || [];
+          this.repos = (Array.isArray(r) ? r : []).filter((x) => x.clone_status === "done");
           if (!this.probeConnId && this.sshConns.length) this.probeConnId = this.sshConns[0].id;
         } catch (e) {
           this.loadError = e.message || "無法載入部署設定";
@@ -49,6 +52,56 @@
           await Api.patch(`projects/${this.projectId}/deploy-targets/${t.id}`, { enabled: !t.enabled });
           await this.load();
         } catch (e) { showToast(e.message || '切換失敗', 'error', 0); }
+      },
+      startEdit(t) {
+        this.editingId = t.id;
+        this.editForm = {
+          env: t.env, repo_id: t.repo_id || "", conn_id: t.conn_id || "",
+          addons_dir: t.addons_dir || "", conf_path: t.conf_path || "",
+          db_name: t.db_name || "", http_port: t.http_port || "",
+          modules: (t.modules || []).join(", "),
+        };
+      },
+      cancelEdit() { this.editingId = 0; this.editForm = null; },
+      async saveEdit(t) {
+        const f = this.editForm;
+        this.savingEdit = true;
+        try {
+          const r = await Api.patch(`projects/${this.projectId}/deploy-targets/${t.id}`, {
+            env: f.env,
+            repo_id: Number(f.repo_id) || null,
+            conn_id: Number(f.conn_id) || null,
+            addons_dir: f.addons_dir,
+            conf_path: f.conf_path,
+            db_name: f.db_name,
+            http_port: Number(f.http_port) || null,
+            modules: f.modules.split(",").map((m) => m.trim()).filter(Boolean),
+          });
+          // resetSha 是「下次會整包重送」，不講的話使用者看不出為什麼那次部署特別久
+          showToast(r.resetSha
+            ? `已更新，來源分支 ${r.branch}。改到了部署位置，下次會整包重送一次`
+            : `已更新，來源分支 ${r.branch}`, "success");
+          this.cancelEdit();
+          await this.load();
+        } catch (e) { showToast(e.message || "更新失敗", "error", 0); }
+        finally { this.savingEdit = false; }
+      },
+      async deleteTarget(t) {
+        const n = t.run_count || 0;
+        const ok = await confirmDialog({
+          title: "刪除這個部署目標？",
+          message: `${this.envLabel(t.env)}／${t.db_name}`
+            + (n ? `。這會連同 ${n} 筆部署紀錄一起刪掉，救不回來。` : "。它還沒有部署紀錄。")
+            + "客戶機上的檔案不會被動到。",
+          danger: true,
+          confirmText: "刪除",
+        });
+        if (!ok) return;
+        try {
+          const r = await Api.delete(`projects/${this.projectId}/deploy-targets/${t.id}`);
+          showToast(r.deletedRuns ? `已刪除，連帶移除 ${r.deletedRuns} 筆部署紀錄` : "已刪除", "success");
+          await Promise.all([this.load(), this.loadRuns()]);
+        } catch (e) { showToast(e.message || "刪除失敗", "error", 0); }
       },
       async deployNow(t) {
         if (t.env === 'prod') {
@@ -103,7 +156,11 @@
       // 資料庫選項＝連線設定的值＋conf 讀到的。conf 只有一個且與連線不符時（dbMismatch）
       // 也必須列出來，否則畫面警告「這台管的不是這個 db」卻沒有地方讓人改。
       dbChoices(c) {
-        return [...new Set([c.dbName, ...(c.confDbNames || [])].filter(Boolean))];
+        return [...new Set([
+          c.dbName,
+          ...(c.linkedConns || []).map((x) => x.dbName),
+          ...(c.confDbNames || []),
+        ].filter(Boolean))];
       },
       matchedCount(c, dir) {
         const a = (c.addonsCandidates || []).find((x) => x.dir === dir);
@@ -137,8 +194,7 @@
             addons_dir: a.addons_dir.trim(),
             conf_path: a.conf_path.trim() || null,
             db_name: a.db_name,
-            // conf 的 http_port 比從 docker ports 猜的準，有就用它
-            http_port: c.httpPort || (c.ports ? this.guessPort(c.ports) : null),
+            http_port: this.portOf(c),
             modules: a.modules.split(",").map((m) => m.trim()).filter(Boolean),
             sudo_mode: c.sudoMode,
             probe_json: { candidate: c, diskAvailGb: this.probe.diskAvailGb },
@@ -148,6 +204,15 @@
         } catch (e) {
           showToast(e.message || "存檔失敗", "error", 0);
         } finally { this.saving = false; }
+      },
+      // 健康檢查在**宿主**上 curl，所以要的是對外那個 port。
+      // docker：conf 寫的是容器內的（8069），對外是 ports 映射出來的（8101），要用後者。
+      // systemd：沒有映射，conf 的就是對外的；conf 沒寫時 Odoo 用預設 8069——
+      // 這不是猜，是 Odoo 的預設值。少了這個退路，systemd 專案（慈雲那台）會因為
+      // http_port 是 null，在 buildHealthCmd 直接拋「http_port 不合法」。
+      portOf(c) {
+        if (c.runtime === "docker" && c.ports) return this.guessPort(c.ports) || c.httpPort || 8069;
+        return c.httpPort || 8069;
       },
       // docker ports 形如 "8071-8072/tcp, 0.0.0.0:8101->8069/tcp"，取對外那個
       guessPort(ports) {
@@ -173,7 +238,8 @@
           <thead><tr><th>環境</th><th>形式</th><th>服務</th><th>資料庫</th><th>addons 目錄</th><th>分支</th><th>上次部署</th><th>狀態</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-if="!targets.length" class="empty-row"><td colspan="9">尚未設定任何部署目標。</td></tr>
-            <tr v-for="t in targets" :key="t.id">
+            <template v-for="t in targets" :key="t.id">
+            <tr>
               <td>{{ envLabel(t.env) }}</td>
               <td>{{ t.runtime }}</td>
               <td><code>{{ addrOf(t) }}</code></td>
@@ -182,13 +248,70 @@
               <td><code>{{ t.branch }}</code></td>
               <td>{{ t.last_deployed_sha ? t.last_deployed_sha.slice(0,8) : '—' }}</td>
               <td><span :style="{color: t.enabled ? 'var(--success)' : 'var(--text-muted)'}">{{ t.enabled ? '已啟用' : '停用' }}</span></td>
-              <td style="white-space:nowrap">
-                <button class="btn btn-outline btn-sm" @click="toggleEnabled(t)">{{ t.enabled ? '停用' : '啟用' }}</button>
-                <button class="btn btn-outline btn-sm" :disabled="deploying === t.id" @click="deployNow(t)">
-                  {{ deploying === t.id ? '部署中…' : '立即部署' }}
-                </button>
+              <td>
+                <div class="ui-next-deploy-actions">
+                  <button class="btn btn-outline btn-sm" @click="toggleEnabled(t)">{{ t.enabled ? '停用' : '啟用' }}</button>
+                  <button class="btn btn-outline btn-sm" :disabled="deploying === t.id" @click="deployNow(t)">
+                    {{ deploying === t.id ? '部署中…' : '立即部署' }}
+                  </button>
+                  <button class="btn btn-outline btn-sm" @click="editingId === t.id ? cancelEdit() : startEdit(t)">
+                    {{ editingId === t.id ? '收合' : '編輯' }}</button>
+                  <button class="btn btn-outline btn-sm" @click="deleteTarget(t)">刪除</button>
+                </div>
               </td>
             </tr>
+            <tr v-if="editingId === t.id"><td colspan="9">
+              <div class="conn-fields">
+                <div class="field-item field-item-narrow">
+                  <label class="field-label">環境</label>
+                  <select v-model="editForm.env" class="field-input">
+                    <option value="test">測試區</option>
+                    <option value="prod">正式區</option>
+                  </select>
+                  <span class="ui-next-deploy-hint" style="margin:0">改這個，來源分支會跟著重推</span>
+                </div>
+                <div class="field-item field-item-narrow">
+                  <label class="field-label">從哪個 repo 拿碼</label>
+                  <select v-model="editForm.repo_id" class="field-input">
+                    <option v-for="r in repos" :key="r.id" :value="r.id">{{ r.label }}</option>
+                  </select>
+                </div>
+                <div class="field-item field-item-narrow">
+                  <label class="field-label">用哪條連線</label>
+                  <select v-model="editForm.conn_id" class="field-input">
+                    <option v-for="c in sshConns" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                </div>
+                <div class="field-item field-item-narrow">
+                  <label class="field-label">資料庫</label>
+                  <input v-model="editForm.db_name" class="field-input" />
+                </div>
+                <div class="field-item">
+                  <label class="field-label">addons 目錄（客戶機宿主上的絕對路徑）</label>
+                  <input v-model="editForm.addons_dir" class="field-input" />
+                </div>
+                <div class="field-item">
+                  <label class="field-label">conf 路徑</label>
+                  <input v-model="editForm.conf_path" class="field-input" />
+                </div>
+                <div class="field-item">
+                  <label class="field-label">我們管的模組（逗號分隔）</label>
+                  <input v-model="editForm.modules" class="field-input" />
+                </div>
+                <div class="field-item field-item-narrow">
+                  <label class="field-label">對外 port（健康檢查用）</label>
+                  <input v-model="editForm.http_port" class="field-input" />
+                </div>
+              </div>
+              <p class="ui-next-deploy-hint" style="margin:10px 0 0">
+                形式、服務名、compose 位置是評估時偵測到的，這裡不給改——要換 instance 請重新評估。
+              </p>
+              <div style="margin-top:var(--space-3)">
+                <button class="btn btn-primary btn-sm" :disabled="savingEdit" @click="saveEdit(t)">儲存</button>
+                <button class="btn btn-outline btn-sm" style="margin-left:6px" @click="cancelEdit">取消</button>
+              </div>
+            </td></tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -253,8 +376,13 @@
             <span style="color:var(--text-muted)">（{{ c.runtime }}{{ c.ports ? '，' + c.ports : '' }}）</span></div>
           <div style="font-size:var(--fs-sm);color:var(--text-muted)">
             資料庫 <code>{{ assign[i].db_name }}</code>ㆍsudo {{ c.sudoMode === 'nopasswd' ? '免密碼' : '需密碼（平台已存）' }}
-            <template v-if="c.odooVersion">ㆍ{{ c.odooVersion }}</template>
+            <template v-if="c.odooVersion">ㆍ{{ c.odooVersion }}</template>ㆍ健康檢查打 :{{ portOf(c) }}
             <template v-if="c.composeDir">ㆍcompose <code>{{ c.composeDir }}</code></template>
+          </div>
+          <div v-if="(c.linkedConns || []).length" class="ui-next-deploy-linked">
+            這個 instance 服務的資料庫，你的連線設定裡已經指名過：
+            <span v-for="l in c.linkedConns" :key="l.id"><b>{{ l.name }}</b>（<code>{{ l.dbName }}</code>）</span>
+            <br>依據是那幾條連線的「log 容器」都指向這裡。
           </div>
           <div v-if="c.dbMismatch" class="error-msg" style="margin-top:var(--space-3)">
             這個 instance 的 conf 裡沒有 <code>{{ c.dbName }}</code>，它管的是

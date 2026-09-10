@@ -965,19 +965,25 @@ function registerRoutes(app) {
           deploySkipped = true;
         } else {
           const { rows: targets } = await query(
-            "SELECT id FROM project_deploy_targets WHERE project_id = $1 AND env = 'prod' AND enabled = true ORDER BY id",
+            "SELECT * FROM project_deploy_targets WHERE project_id = $1 AND env = 'prod' AND enabled = true ORDER BY id",
             [project.id]
           );
-          const { runDeploy } = require('./lib/deploy-run');
+          const { runDeployGroup } = require('./lib/deploy-run');
+          const { groupTargets } = require('./lib/deploy-cmd');
+          // 掛在同一個容器／服務上的多個資料庫合成一輪：停一次、逐個升、起一次。
+          // 一個目標停一次的話客戶會被斷線 N 次，而兩次停機之間服務是活的——
+          // 使用者這時進得來，用到的卻是只升了一半的狀態。
+          const groups = groupTargets(targets);
           // 與 pipeline 的 git 操作互斥：部署要 fetch／archive 同一個主 clone。
           // 前面那把鎖在 releaseAiToMain 結束時已釋放，這裡是重新取。
           deploy = await withProjectLock(Number(project.id), async () => {
             const out = [];
-            for (const tg of targets) {
+            for (const ids of groups) {
               try {
-                out.push(await runDeploy(tg.id, { trigger: 'manual_prod', userId: req.userId }));
+                out.push(...await runDeployGroup(ids, { trigger: 'manual_prod', userId: req.userId }));
               } catch (e) {
-                out.push({ ok: false, error: e.message });
+                // 一組炸了不能拖垮其他組——它們是不同的機器／容器
+                for (const id of ids) out.push({ targetId: id, ok: false, error: e.message });
               }
             }
             return out;
