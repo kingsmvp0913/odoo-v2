@@ -98,6 +98,30 @@ function buildServerBlocks(entries, cfg) {
   return blocks.length ? blocks.join('\n') + '\n' : '';
 }
 
+// 把 conf 文字拆成 server_name → 該段內容。用來分辨「這次變更有沒有人在等」：
+// 只要有任何一段是新增的、或既有段的內容變了（例：環境重開換了 port），就有人正等著用那個
+// 網址，必須當場 reload；反之若 content 的每一段都與舊檔逐字相同、只是舊檔多出幾段，
+// 那就是純移除——沒有人在等，留到下次新增或夜間關機一併生效即可。
+// 這台 nginx 與多個正式站共用，每一次 reload 都會重讀所有站的設定，能省就該省。
+function blocksByName(text) {
+  const map = new Map();
+  for (const block of String(text || '').split(/(?=^server \{)/m)) {
+    const m = block.match(/server_name\s+([^;]+);/);
+    if (m) map.set(m[1].trim(), block.trim());
+  }
+  return map;
+}
+
+// 這次變更需不需要當場 reload。prev 為 null（檔案本來不存在）時，content 的每一段都算新增。
+function needsReload(content, prev) {
+  const now = blocksByName(content);
+  const before = blocksByName(prev);
+  for (const [name, block] of now) {
+    if (before.get(name) !== block) return true;
+  }
+  return false;
+}
+
 // 唯一的 process IO 邊界：跑 docker/nginx，測試以 deps.run 注入 mock。
 function defaultRun(cmd, args) {
   return new Promise((resolve) => {
@@ -137,6 +161,11 @@ async function syncNginxMap(deps = {}) {
     const prev = fsx.existsSync(confFile) ? fsx.readFileSync(confFile, 'utf8') : null;
 
     // 原子寫入：先寫 .tmp 再 rename（同分割區 rename 為原子操作，nginx 不會讀到半截檔）。
+    // 內容與磁碟上完全相同 → 連寫檔都不必，更不該 reload。重複點「開啟測試區」時
+    // slot 沒變、conf 逐字相同，舊版仍會走完 寫檔→-t→reload 一整輪，等於每點一次就打擾
+    // 共用 nginx 一次（實測 23 分鐘內 9 次，其中多數是這種空轉）。
+    if (content === prev) return { ok: true, count: rows.length, unchanged: true, reloaded: false };
+
     const tmp = `${confFile}.tmp`;
     fsx.writeFileSync(tmp, content);
     fsx.renameSync(tmp, confFile);
@@ -147,6 +176,11 @@ async function syncNginxMap(deps = {}) {
       console.error(`[nginx-map] nginx -t 失敗，已 rollback 舊 conf、未 reload：${(test.stderr || '').trim()}`);
       return { ok: false, rolledBack: true };
     }
+
+    // 純移除：檔案已更新且過了 -t（不能省——壞檔留在共用目錄，別人一 reload 就全站掛），
+    // 但沒有人在等這個變更生效，故不 reload。殘留段指向已消失的容器，舊分頁重整會拿到 502，
+    // 而那個人本來就已經離開；下一次新增或夜間關機會把它一併收掉。
+    if (!needsReload(content, prev)) return { ok: true, count: rows.length, reloaded: false };
 
     const reload = await run('docker', ['exec', container, 'nginx', '-s', 'reload']);
     if (reload.code !== 0) {
@@ -185,4 +219,4 @@ function syncNginxMapDebounced(deps = {}) {
   });
 }
 
-module.exports = { buildServerBlocks, syncNginxMap, syncNginxMapDebounced, externalServerName, assertServerNames };
+module.exports = { buildServerBlocks, syncNginxMap, syncNginxMapDebounced, externalServerName, assertServerNames, blocksByName, needsReload };

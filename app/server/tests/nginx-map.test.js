@@ -142,6 +142,62 @@ describe('syncNginxMap', () => {
     expect(run).toHaveBeenNthCalledWith(2, 'docker', ['exec', 'agency-NginxUI-1', 'nginx', '-s', 'reload']);
   });
 
+  // —— reload 節流：這台 nginx 與多個正式站共用，每次 reload 都會重讀所有站的設定 ——
+  // 舊版無條件 寫檔→-t→reload，實測「重複點開啟測試區」會一次次空轉打擾共用 nginx。
+  test('內容與磁碟相同 → 不寫檔、不 -t、不 reload（重複點開啟測試區的空轉）', async () => {
+    setAll();
+    process.env.NGINX_SYNC_CONF_FILE = '/m/envs.conf';
+    const query = async () => ({ rows: [{ slot: 0, port: 21000 }] });
+    // 先跑一次拿到「正確內容」，當成磁碟上的現況
+    const seedFs = fakeFs();
+    const seedRun = jest.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    await syncNginxMap({ fs: seedFs, run: seedRun, query });
+    const onDisk = seedFs._store.get('/m/envs.conf');
+
+    const fs = fakeFs({ '/m/envs.conf': onDisk });
+    const run = jest.fn();
+    const res = await syncNginxMap({ fs, run, query });
+
+    expect(res).toEqual({ ok: true, count: 1, unchanged: true, reloaded: false });
+    expect(run).not.toHaveBeenCalled();                       // 連 nginx -t 都不必跑
+    expect(fs._store.get('/m/envs.conf')).toBe(onDisk);       // 檔案原封不動
+  });
+
+  test('純移除（環境關掉）→ 仍寫檔並跑 nginx -t，但不 reload（沒有人在等這個變更）', async () => {
+    setAll();
+    process.env.NGINX_SYNC_CONF_FILE = '/m/envs.conf';
+    // 磁碟上有 slot 0 與 slot 1，這次查詢只剩 slot 0 ⇒ 純移除
+    const seedFs = fakeFs();
+    const seedRun = jest.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    await syncNginxMap({ fs: seedFs, run: seedRun, query: async () => ({ rows: [{ slot: 0, port: 21000 }, { slot: 1, port: 21001 }] }) });
+
+    const fs = fakeFs({ '/m/envs.conf': seedFs._store.get('/m/envs.conf') });
+    const run = jest.fn().mockResolvedValueOnce({ code: 0, stdout: 'syntax ok', stderr: '' }); // 只會被叫一次
+    const res = await syncNginxMap({ fs, run, query: async () => ({ rows: [{ slot: 0, port: 21000 }] }) });
+
+    expect(res).toEqual({ ok: true, count: 1, reloaded: false });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenNthCalledWith(1, 'docker', ['exec', 'agency-NginxUI-1', 'nginx', '-t']);
+    // 檔案確實已更新成只剩 slot 0（-t 必須跑：壞檔留在共用目錄，別人一 reload 就全站掛）
+    expect(fs._store.get('/m/envs.conf')).not.toContain('odoo-ai-dev-1.example.com');
+  });
+
+  test('既有 server_name 但 port 換了 → 視為有人在等，必須 reload', async () => {
+    setAll();
+    process.env.NGINX_SYNC_CONF_FILE = '/m/envs.conf';
+    const seedFs = fakeFs();
+    const seedRun = jest.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    await syncNginxMap({ fs: seedFs, run: seedRun, query: async () => ({ rows: [{ slot: 0, port: 21000 }] }) });
+
+    const fs = fakeFs({ '/m/envs.conf': seedFs._store.get('/m/envs.conf') });
+    const run = jest.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    const res = await syncNginxMap({ fs, run, query: async () => ({ rows: [{ slot: 0, port: 21099 }] }) });
+
+    expect(res.ok).toBe(true);
+    expect(res.reloaded).not.toBe(false);
+    expect(run).toHaveBeenNthCalledWith(2, 'docker', ['exec', 'agency-NginxUI-1', 'nginx', '-s', 'reload']);
+  });
+
   test('nginx -t 失敗 → 還原舊 conf、絕不 reload 壞檔', async () => {
     setAll();
     process.env.NGINX_SYNC_CONF_FILE = '/m/envs.conf';
