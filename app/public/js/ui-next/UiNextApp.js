@@ -441,6 +441,8 @@
         myFeedbackTrigger: null,
         myFeedbackList: [],
         myFeedbackLoading: false,
+        myFeedbackOpenIds: {},   // { [id]: true } 這一列展開看詳情
+        myFeedbackTruncated: {}, // { [id]: true } 那一行放不下被截掉（量 DOM 得來，見 measureMyFeedback）
       };
     },
     computed: {
@@ -756,8 +758,11 @@
         this.myFeedbackTrigger = event && event.currentTarget;
         this.myFeedbackOpen = true;
         this.myFeedbackLoading = true;
+        // 每次重開都收起來：上次點開的是上次想看的那筆，留著會讓一開視窗又是滿滿一片文字。
+        this.myFeedbackOpenIds = {};
         try {
           this.myFeedbackList = await Api.get("feedback/mine");
+          this.measureMyFeedback();
         } catch (error) {
           showToast(error.message || "載入失敗", "error");
         } finally {
@@ -772,8 +777,35 @@
         if (event.key === "Escape") return this.closeMyFeedback();
         this.trapFocus(event, this.$refs.myFeedbackModal);
       },
+      /**
+       * 哪幾行真的被截掉，只有渲染出來才知道——中英混排同樣字數的寬度差很多，估字數會估錯
+       * （這個 repo 的健檢頁用字數估，實測有一半的按鈕按下去畫面完全不動）。
+       */
+      measureMyFeedback() {
+        this.$nextTick(() => {
+          const next = {};
+          for (const el of document.querySelectorAll('.ui-next-myfb-text[data-fbid]')) {
+            next[el.dataset.fbid] = el.scrollWidth > el.clientWidth + 1;
+          }
+          this.myFeedbackTruncated = next;
+        });
+      },
+      // 有沒有東西可展開。沒有卻讓它點得開，點下去只會冒出一條空白帶，看起來像壞掉。
+      hasMyFeedbackDetail(item) {
+        return !!(this.myFeedbackTruncated[item.id] || item.triage_note || item.verdict_note);
+      },
+      toggleMyFeedback(item) {
+        if (!this.hasMyFeedbackDetail(item)) return;
+        this.myFeedbackOpenIds = { ...this.myFeedbackOpenIds, [item.id]: !this.myFeedbackOpenIds[item.id] };
+      },
       myFeedbackStatusLabel(status) {
         return { new: "待審核", approved: "已核准", rejected: "已駁回", done: "已完成" }[status] || status;
+      },
+      // 原本這裡一律用裸 .pill：四種狀態長得一模一樣，得逐字讀才知道自己那條怎麼了。
+      // ⚠ 這份對照與 AdminFeedback.js 的 STATUS_PILL 是同一件事的兩份寫死副本（前端無共用模組
+      //    機制），由 frontend-feedback-status-pill.test.js 防漂移。
+      myFeedbackStatusPill(status) {
+        return { new: "pill-info", approved: "pill-warn", rejected: "pill-danger", done: "pill-success" }[status] || "pill-info";
       },
       // 截圖直接貼上，比照 TaskDetail.js 的 onPasteFiles：限圖片、單檔 10MB、最多 5 個。
       onFeedbackPaste(event) {
@@ -1273,13 +1305,30 @@
               <p v-if="myFeedbackLoading" class="ui-next-form-modal-wide">載入中…</p>
               <p v-else-if="!myFeedbackList.length" class="ui-next-form-modal-wide">還沒有送出過意見</p>
               <div v-else class="ui-next-form-modal-wide ui-next-upload-list" style="flex-direction:column;align-items:stretch;gap:var(--space-3)">
-                <div v-for="item in myFeedbackList" :key="item.id" style="border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-2)">
-                  <div style="display:flex;justify-content:space-between;gap:var(--space-2)">
-                    <span style="white-space:pre-wrap">{{ item.content }}</span>
-                    <span class="pill" style="flex:none">{{ myFeedbackStatusLabel(item.status) }}</span>
+                <!-- 一筆一行，點該行才展開詳情。原本每一筆都把全文與所有註記整段攤開，
+                     十來筆就是一整片文字牆，「我上次提的那件事後來怎樣了」反而最難找。 -->
+                <!-- ⚠ min-width:0：外層 .ui-next-upload-list 是 grid，子項預設 min-width:auto＝內容寬度，
+                     沒有它整列會被長內容撐出視窗外，右邊的狀態標籤直接看不到（實測）。 -->
+                <div v-for="item in myFeedbackList" :key="item.id" style="min-width:0;border:1px solid var(--border);border-radius:var(--radius)">
+                  <button type="button" class="ui-next-myfb-row" @click="toggleMyFeedback(item)"
+                    :disabled="!hasMyFeedbackDetail(item)"
+                    :aria-expanded="myFeedbackOpenIds[item.id] ? 'true' : 'false'">
+                    <!-- ⚠ 不要用 ▸／▾ 這類幾何字元：本專案的字型缺字，畫出來是空心方框（實測截圖）。
+                         chevron 走既有的 ui-next-icon，與「更多工具」那顆一致。
+                         沒東西可展開時整顆箭頭不畫——留著等於承諾點下去有東西。 -->
+                    <ui-next-icon v-if="hasMyFeedbackDetail(item)" class="ui-next-myfb-caret" :name="myFeedbackOpenIds[item.id] ? 'chevron-up' : 'chevron-down'"/>
+                    <span v-else class="ui-next-myfb-caret-empty" aria-hidden="true"></span>
+                    <!-- 一行到底就截斷。⚠ 這個 span 需要 min-width:0（在 class 裡），
+                         否則 flex 子項的最小尺寸是內容寬度，text-overflow 永遠不會生效。 -->
+                    <span class="ui-next-myfb-text" :data-fbid="item.id">{{ item.content }}</span>
+                    <span class="pill" :class="myFeedbackStatusPill(item.status)" style="flex:none">{{ myFeedbackStatusLabel(item.status) }}</span>
+                  </button>
+                  <div v-if="myFeedbackOpenIds[item.id]" class="ui-next-myfb-detail">
+                    <!-- 只有那一行真的被截掉時才重印全文；短的意見上面那行已經看得完，印了就是同一句話兩次。 -->
+                    <div v-if="myFeedbackTruncated[item.id]" style="white-space:pre-wrap">{{ item.content }}</div>
+                    <div v-if="item.triage_note" style="margin-top:var(--space-2);color:var(--text-muted)">AI 回覆：{{ item.triage_note }}</div>
+                    <div v-if="item.verdict_note" style="margin-top:var(--space-2);color:var(--text-muted)">{{ item.status === 'rejected' ? '駁回原因' : '處理說明' }}：{{ item.verdict_note }}</div>
                   </div>
-                  <div v-if="item.triage_note" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">AI 回覆：{{ item.triage_note }}</div>
-                  <div v-if="item.verdict_note" style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:6px">駁回原因：{{ item.verdict_note }}</div>
                 </div>
               </div>
             </div>

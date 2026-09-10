@@ -1,6 +1,11 @@
 (function () {
   const STATUS_LABEL = { new: '待審核', approved: '已核准', rejected: '已駁回', done: '已完成' };
-  const STATUS_PILL = { new: 'pill-info', approved: 'pill-success', rejected: 'pill-danger', done: 'pill-warn' };
+  // 顏色照「事情走到哪」給，不是照字面：
+  //   待審核 = 中性藍、已核准 = 還沒做完的琥珀、已駁回 = 紅、已完成 = 綠。
+  // 原本 approved 給綠、done 給黃，語意剛好相反——綠色會讓人以為那條已經做完了。
+  // ⚠ UiNextApp.js 的 myFeedbackStatusPill 是同一份對照的第二份寫死副本（前端無共用模組機制），
+  //    由 frontend-feedback-status-pill.test.js 防漂移。改這裡要一起改那裡。
+  const STATUS_PILL = { new: 'pill-info', approved: 'pill-warn', rejected: 'pill-danger', done: 'pill-success' };
   const LAYER_LABEL = { code: '程式', prompt: '提示詞', observability: '可觀測性', env: '環境', unclear: '看不懂' };
 
   // 一次載幾筆。整頁原本一口氣撈 200 筆，每筆的附件縮圖還要逐張 fetch（最壞 1000 張往返），

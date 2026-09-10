@@ -271,3 +271,27 @@
   background: var(--surface);
   box-shadow: var(--shadow-lg);
 }
+
+/* 「我的意見」清單：一筆一行，點該行才展開詳情。
+   原本每一筆都把全文與所有註記整段攤開，十來筆就是一整片文字牆，
+   「我上次提的那件事後來怎樣了」反而最難找（使用者回報）。 */
+.ui-next-myfb-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  width: 100%; border: 0; border-radius: var(--radius);
+  padding: var(--space-2); background: transparent; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.ui-next-myfb-row:hover { background: var(--bg) }
+.ui-next-myfb-caret { flex: none; color: var(--text-muted); font-size: var(--fs-xs) }
+/* ⚠ min-width:0 不可省：flex 子項的最小尺寸預設是內容寬度，沒有它 text-overflow 永遠不生效，
+   整行會被內容撐開、狀態標籤被擠出視窗外。 */
+.ui-next-myfb-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.ui-next-myfb-detail {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2);
+  font-size: var(--fs-sm); color: var(--text);
+}
+/* 沒有詳情可看的那幾行：不給 hover 反白、不給手指游標，箭頭那格仍佔位讓所有行的文字對齊。 */
+.ui-next-myfb-row:disabled { cursor: default; color: var(--text) }
+.ui-next-myfb-row:disabled:hover { background: transparent }
+.ui-next-myfb-caret-empty { display: inline-block; flex: none; width: 16px }
