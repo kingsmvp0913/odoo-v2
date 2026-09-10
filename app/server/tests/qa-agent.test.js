@@ -295,6 +295,37 @@ test('QA resume：有 qa_session_id＋上輪未解清單 → --resume 短 prompt
   expect(t.qa_resume_count).toBe(1);
 });
 
+// 意圖：**小修正規格是 resume 這條路上唯一送得到 QA 的規格**，漏傳就是把 task 184 的死迴圈裝回來。
+// qa-retry 的 prompt 刻意一個字規格都不帶（那是它 19 秒跑完的前提），規格換掉時靠 analysis_yaml 的
+// 指紋讓 resume 失效來兜底；但小修正規格是追加的、不動 analysis_yaml，指紋不變 ⇒ resume 照樣續接。
+// 沒有這一段的話：QA 拿舊規格審新實作，把「照使用者說的做」判成超出規格，coding 再改回去，來回到熔斷。
+test('QA resume：小修正規格照樣送進 retry prompt（指紋不變仍 resume，它是唯一送得到的規格）', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+  const id = await makeTask();
+  await dbModule.query("UPDATE tasks SET qa_session_id='qs-1', qa_resume_count=0 WHERE id=$1", [id]);
+  await dbModule.query(
+    "INSERT INTO task_specs (task_id, version, analysis_yaml, kind) VALUES ($1,1,'1. 匯出鈕應位於表頭右上。','tweak')", [id]
+  );
+  await runQaAgent(id, userId);
+  expect(runClaude.mock.calls[0][1].resumeSessionId).toBe('qs-1');    // 仍走 resume（指紋沒變）
+  expect(runClaude.mock.calls[0][0]).toContain('匯出鈕應位於表頭右上'); // 但小修正規格有送到
+  expect(runClaude.mock.calls[0][0]).not.toContain('module: sale');    // 主規格仍不重送
+});
+
+// 多份並存：退回兩次就有兩份，兩份都要送。只送最新那份＝第一次的要求從 QA 眼前消失，
+// 它會把「已經照第一次退回改好的地方」判成超出規格而退回。
+test('QA：多份小修正規格全部送進 prompt，不是只送最新那一份', async () => {
+  claudeReturns({ verdict: 'fail', issues: ['x'], summary: 's' });
+  const id = await makeTask();
+  await dbModule.query(
+    "INSERT INTO task_specs (task_id, version, analysis_yaml, kind) VALUES ($1,1,'第一次：匯出鈕移到表頭。','tweak'), ($1,2,'第二次：匯出鈕改藍色。','tweak')", [id]
+  );
+  await runQaAgent(id, userId);
+  const sent = runClaude.mock.calls[0][0];
+  expect(sent).toContain('匯出鈕移到表頭');
+  expect(sent).toContain('匯出鈕改藍色');
+});
+
 test('QA fresh：首輪（無 session）→ 全量 prompt、存 qa_session_id', async () => {
   runClaude.mockResolvedValue({
     text: '<result>{"verdict":"fail","issues":["x"],"summary":"s"}</result>', usage: null, durationMs: null, sessionId: 'qs-new'

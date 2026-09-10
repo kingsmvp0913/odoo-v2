@@ -210,7 +210,8 @@ function pipelineNodes(flags) {
     id: 'respec', track: 'aside', step: 7, kind: 'agent', label: '規格層重做',
     status: 'respec_running', agent: 'respec-patch',
     detail: [
-      ['進入', '**三個入口**：規格審核閘門送出修改意見（尚未開工）；途中追加需求；人工審核退回、分診判 fix、且任務已開工——第三種是規格檢查點，擋的是「使用者的話不經規格就直接落到 coding」（實測 task 126：退回意見被 QA 判成超出規格，來回兩輪後改動被完全還原）'],
+      ['進入', '**兩個入口**：規格審核閘門送出修改意見（尚未開工）；途中追加需求'],
+      ['已移除的第三個入口', '人工審核退回、分診判 fix、且已開工時，原本一律先繞這一關做規格比對（擋的是「使用者的話不經規格就直接落到 coding」——實測 task 126：退回意見被 QA 判成超出規格，來回兩輪後改動被完全還原）。現在改由分診自己吐 spec_patch 存成小修正規格，同一件事在分診那一輪就做完，不必多燒一支 agent、多等一輪。**兜底沒消失，換了實作**：小修正規格 coding 與 QA 兩關都讀得到'],
       ['做什麼', '增量 patch 進 analysis.yaml（不重讀整包碼），維持單一規格來源'],
       ['尚未開工', 'coding_session_id 與 git_branch 皆空＝規格審核閘門的對話式問答：本關整輪委派 spec-review 處理器，跑完回等待規格確認。這也是這一格最常被踩到的入口，卻最不像「重做規格」'],
       ['往下', '規格有實質變更 → 開發（需求同時寫進 retry_feedback，coding 每輪都讀）'],
@@ -225,7 +226,7 @@ function pipelineNodes(flags) {
     detail: [
       ['進入', '**兩個入口**：reject_triage＝人工審核退回；resolve_triage＝任務停下後人填了修正指示'],
       ['做什麼', '把原因拆成獨立錯誤項並分類，讀 diff／log 決定往哪走'],
-      ['往下', 'fix → 開發（帶著分診結論）；**人工審核退回且已開工時先過規格層重做那一格**再進開發／resume → 回原關／advance → 放行推進'],
+      ['往下', 'fix → 開發（帶著分診結論，並把這次退回要求的正確行為寫成 spec_patch 存為**小修正規格**——主規格一個字不動，coding 與 QA 都讀得到）／resume → 回原關／advance → 放行推進'],
       ['判 respec', '**回分析關完整重跑**，分診結論當成「使用者澄清」餵進去——不是走「規格層重做」那一格（分診員不自己改規格）'],
       ['判提問', '**人工審核退回填的其實是問句、不是缺陷** → 就地在時間軸回答，並回滾這次退回（刪掉 task_rejections 那筆與時間軸上那則退回原因、清 retry_feedback），任務放回等待審核。退回統計刻意不算這一次'],
       ['分支', '判退回原因太含糊 → 待你裁決，答完回到本關'],
@@ -299,7 +300,7 @@ function pipelineNodes(flags) {
       ['進入', 'E2E 通過，或 E2E 已停用時部署成功即到'],
       ['做什麼', '人工驗收「有沒有做到真正想要的事」——這是驗真意的最終防線'],
       ['往下', '核准 → 併進 ai-dev → 更新 Wiki → 完成'],
-      ['分支', '退回 → 分診'],
+      ['分支', '退回 → 分診。判 fix 時分診會追加一份小修正規格（主規格不重產），修完循 開發→QA→併入→部署 回到本關'],
       ['注意', '核准只是「排進待上正式」，東西還在測試區——真正上線要另外按「🚀 上正式」']
     ]
   });
@@ -431,9 +432,10 @@ function pipelineEdges(flags) {
     ['merge', 'deploy', 'main'], ['merge', 'conflict', 'alt'], ['conflict', 'deploy', 'main'],
     ['deploy', 'coding', 'back'], ['deploy', 'stopped', 'back'],
     ['review', 'triage', 'back'], ['stopped', 'triage', 'back'],
-    // triage→respec 走的是 **fix**（人工退回且已開工＝先過規格檢查點），不是判 respec；
-    // 判 respec 回的是分析關完整重跑（reject-triage.js 的 goto('analysis_running')）——那是下一條。
-    ['triage', 'coding', 'back'], ['triage', 'respec', 'back'], ['triage', 'analysis', 'back'],
+    // triage→respec 這條線已移除：人工退回判 fix 時原本無條件先繞「規格層重做」那一關做規格比對，
+    // 現在改由分診自己在同一輪吐出 spec_patch（小修正規格），fix 一律直達 coding。
+    // triage→analysis 留著＝判 respec（整份規格重產），那是另一件事。
+    ['triage', 'coding', 'back'], ['triage', 'analysis', 'back'],
     ['triage', 'clarify', 'alt'],
     // 退回意見其實是問句：分診就地回答並回滾這次退回，任務放回等待審核
     ['triage', 'review', 'back'],

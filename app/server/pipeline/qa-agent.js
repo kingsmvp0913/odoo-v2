@@ -11,6 +11,7 @@ const { classifyFailure } = require('./failure-classifier');
 const { parseQaIssues, recordQaRejection } = require('./qa-rejection');
 const { getProjectNotes } = require('./project-notes');
 const { MACHINE_LOGS, machineLogHeader, stripMachineHeader } = require('../../public/js/machine-logs.js');
+const { loadTweakSpecs } = require('./spec-version');
 const yaml = require('js-yaml');
 const crypto = require('crypto');
 
@@ -94,6 +95,13 @@ async function runQaAgent(taskId, userId, signal) {
     return true;
   }
 
+  // 人工審核退回時分診寫下的小修正規格（追加式，主規格不動）。**resume 與 fresh 兩條路都要帶**：
+  // qa-retry 的 prompt 刻意一個字規格都不帶（那是它 19 秒跑完的前提），規格換掉時靠下面的
+  // specVersion 指紋讓 resume 失效來兜底——但小修正規格不動 analysis_yaml，指紋不變、resume 照樣續接，
+  // 於是它會是這條路上唯一送不到 QA 的規格：QA 拿舊規格審新實作，把「照使用者說的做」判成超出規格，
+  // coding 再改回去，來回到熔斷（task 184 的形狀）。它很短，帶進 retry prompt 幾乎不影響 token。
+  const tweakSpecs = await loadTweakSpecs(taskId).catch(() => '');
+
   // 產出本輪 QA 原始輸出（resume 或 fresh）：抽成內部函式，好在 transient 失敗時整段重跑一次（比照 deploy-testing）
   const attempt = async () => {
     // diff 基底＝任務切點 ai-dev（非實體 main）。任務分支從 ai-dev 切，而 ai-dev 含 main 全部歷史，
@@ -133,6 +141,7 @@ async function runQaAgent(taskId, userId, signal) {
         git_branch: task.git_branch || '（未設定）',
         repo_paths: buildRepoPaths(info, task.task_id),
         odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
+        tweak_specs: tweakSpecs || '（無）',
         prior_findings: priorFindings,
         // 放寬 resume 後唯一真正的準確率風險：同一段對話裡它剛說過 pass，要它推翻自己比讓白紙判斷難。
         // 明講「那次判定可能有誤」來對沖，比清掉整個 session 便宜得多。非回流輪必須留空——每輪都印
@@ -171,6 +180,7 @@ async function runQaAgent(taskId, userId, signal) {
         repo_paths: buildRepoPaths(info, task.task_id),
         odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
         analysis_yaml: task.analysis_yaml || '（無規格）',
+        tweak_specs: tweakSpecs || '（無）',
         prior_findings: priorFindings,
         project_notes: projectNotes || ''
       }).trim();

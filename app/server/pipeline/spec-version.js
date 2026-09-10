@@ -9,8 +9,10 @@ const { SPEC_GATE_PREFIX } = require('./analysis');
 // runner 已經 require 了 clarify-chat，反向 require 會是循環，spec-review／respec-agent 同理。
 // 這支只依賴 db 與 analysis（兩者都是葉子），誰都能安全 require。
 async function recordSpecVersion(taskId, dumped, previousYaml) {
+  // 限 kind='main'：同一張任務底下另有小修正規格（kind='tweak'）在跑自己的序列，不濾的話
+  // 一次小修正就會把主規格的下一版從第 2 版推成第 3 版，時間軸上跳號且對不回任何一份規格。
   const { rows } = await query(
-    'SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 ORDER BY version DESC LIMIT 1',
+    "SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 AND kind='main' ORDER BY version DESC LIMIT 1",
     [taskId]
   );
   let last = rows[0] || null;
@@ -44,4 +46,52 @@ function recordSpecVersionSafe(taskId, dumped, previousYaml) {
   });
 }
 
-module.exports = { recordSpecVersion, recordSpecVersionSafe };
+// ── 小修正規格（kind='tweak'）────────────────────────────────
+// 人工審核退回時，分診員除了判去向，還會寫下「這次退回要求的正確行為」。它以**追加**的方式存成
+// 一份小規格，主規格（tasks.analysis_yaml）一個字不動。
+//
+// 為什麼不直接改主規格：退回意見多半只碰整份規格的一個角落，而重產整份的代價是使用者實測抱怨過的
+// 「我只改一個小地方卻要整個重看過規格」，且每次重產都讓 QA 的規格指紋變動、續接對話作廢，
+// 一次小修正要付一次全量重讀（實測 8~10 分鐘、$3，對照續接的 19 秒、$0.27）。
+//
+// 為什麼存純文字而不是 YAML：它是條列式的補充，沒有下游要 parse 的欄位。強迫 agent 產 YAML 只是
+// 多一個靜默失敗點——實測過兩次同一個病（使用者貼的錯誤訊息含冒號炸掉整份規格、
+// 回覆與 YAML 綁死一行縮排差兩格就整輪報廢）。
+const TWEAK_SPEC_PREFIX = '[小修正規格]';
+
+// 寫一份小修正規格：自己的版本序列 + 時間軸上掛得起規格書的那一則。
+// 回傳版號；text 為空則什麼都不做（分診的 spec_patch 是選填欄位）。
+async function recordTweakSpec(taskId, text) {
+  const body = String(text || '').trim();
+  if (!body) return null;
+  const { rows } = await query(
+    "SELECT MAX(version) AS v FROM task_specs WHERE task_id=$1 AND kind='tweak'",
+    [taskId]
+  );
+  const version = (rows[0]?.v || 0) + 1;
+  await query(
+    "INSERT INTO task_specs (task_id, version, analysis_yaml, kind) VALUES ($1, $2, $3, 'tweak')",
+    [taskId, version, body]
+  );
+  // 前綴＋全形括號版號，與主規格那則（SPEC_GATE_PREFIX）同一套格式：前端靠它決定
+  // 「這一則底下要掛哪一份規格書」。格式一動，畫面上規格書就掛不上去且完全不報錯。
+  await query(
+    "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+    [taskId, `${TWEAK_SPEC_PREFIX}（第 ${version} 版）\n${body}`]
+  );
+  return version;
+}
+
+// 讀回這張任務目前全部的小修正規格，組成給 agent 讀的一段文字。
+// **每輪都給全部、不只給最新那一份**：開發關是無狀態的（每輪 fresh 重送規格），只給最新的話，
+// 第二次小修正會讓第一次的要求從 prompt 裡消失，開發關把它改回去而沒有任何人會發現。
+async function loadTweakSpecs(taskId) {
+  const { rows } = await query(
+    "SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 AND kind='tweak' ORDER BY version",
+    [taskId]
+  );
+  if (!rows.length) return '';
+  return rows.map(r => `── 小修正規格 第 ${r.version} 版 ──\n${r.analysis_yaml}`).join('\n\n');
+}
+
+module.exports = { recordSpecVersion, recordSpecVersionSafe, recordTweakSpec, loadTweakSpecs, TWEAK_SPEC_PREFIX };

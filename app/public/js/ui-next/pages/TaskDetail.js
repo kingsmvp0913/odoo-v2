@@ -7,7 +7,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], rejectFilesPreviews: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], newMessageFilesPreviews: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], answerFilesPreviews: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], askFilesPreviews: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], specFeedback: '', specApproving: false, specRevising: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], rejectFilesPreviews: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], newMessageFilesPreviews: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], answerFilesPreviews: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], askFilesPreviews: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], tweakSpecs: [], specFeedback: '', specApproving: false, specRevising: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -311,6 +311,9 @@
         // 每一版規格（task_specs）。時間軸上的規格書靠它掛版本，與上面那份「現在要你審的」分開：
         // 共用一份的話，規格被退回改寫過的任務，舊的那一則會跟著顯示最新規格＝改動完全無痕。
         this.specs = Array.isArray(data.specs) ? data.specs : [];
+        // 小修正規格（人工審核退回後分診追加）。與 specs 分開存：它是純文字條列、不是 analysis.yaml
+        // 的形狀，後端也分開回傳（見 tasks-routes.js 同段註解）。
+        this.tweakSpecs = Array.isArray(data.tweakSpecs) ? data.tweakSpecs : [];
         // Init answer fields for each cs question
         const qs = (() => { try { return JSON.parse(this.task.cs_question || '[]'); } catch { return []; } })();
         const init = {};
@@ -761,6 +764,18 @@
       isSpecLog(item) {
         return item.kind === 'log' && item.role === 'ai' && String(item.content || '').startsWith('[等待你審核規格]');
       },
+      // 小修正規格那則 log（spec-version.js 的 TWEAK_SPEC_PREFIX）。比對 role 的理由同 isSpecLog。
+      isTweakSpecLog(item) {
+        return item.kind === 'log' && item.role === 'ai' && String(item.content || '').startsWith('[小修正規格]');
+      },
+      // 這一則掛哪一份小修正規格。版號一律寫在標頭列的全形括號裡（第 1 版起就寫，與主規格不同——
+      // 主規格第 1 版是分析關寫的、沒有括號，小修正規格每一份都由 recordTweakSpec 統一格式寫入）。
+      tweakSpecForLog(item) {
+        if (!this.isTweakSpecLog(item)) return null;
+        const m = String(item.content || '').match(/^\[小修正規格\]（第\s*(\d+)\s*版）/);
+        if (!m) return null;
+        return (this.tweakSpecs || []).find(t => t.version === Number(m[1])) || null;
+      },
       // 這一則掛哪一版規格。第 2 版起，runner 把版號寫進標頭列的全形括號（[等待你審核規格]（第 3 版））；
       // 沒有括號的就是第 1 版。對不到版本時退回 spec（動作面板那份）——task_specs 是後來才加的表，
       // 既有任務一筆版本都沒有，不退回的話它們的規格書會整個從畫面上消失。
@@ -1109,6 +1124,12 @@
      規格被退回改寫過的任務會有多則：每一則掛自己那一版（specForLog），且只有最新那一版
      直接攤開——舊版收成一顆按鈕。全部攤開的話同一頁會出現三份長得很像的規格，
      使用者反而分不出正在審的是哪一份。 -->
+<!-- 小修正規格：人工審核退回後分診寫下的追加規格，主規格不會為它改寫。純文字條列，
+     整份直接攤開不收合——它本來就只有幾行，而且是「這一輪到底要改什麼」的唯一出處。 -->
+<div v-if="tweakSpecForLog(row)" class="ui-next-spec-box ui-next-spec-inline">
+<b>小修正規格（第 {{ tweakSpecForLog(row).version }} 版）</b>
+<p class="ui-next-tweak-spec-text">{{ tweakSpecForLog(row).text }}</p>
+</div>
 <div v-if="specForLog(row)" class="ui-next-spec-box ui-next-spec-inline">
 <b v-if="!isLatestSpecLog(row)" class="ui-next-spec-toggle" @click="toggleLog('spec'+row._key)">{{ expandedLogs['spec'+row._key]?'▾':'▸' }} 第 {{ specForLog(row).version||1 }} 版規格（已被後來的版本取代）</b>
 <template v-if="isLatestSpecLog(row)||expandedLogs['spec'+row._key]">

@@ -321,6 +321,12 @@
 .ui-next-spec-box li {
   white-space: pre-wrap;
 }
+/* 小修正規格是 agent 寫的純文字條列（換行就是它的結構），不 pre-wrap 會塌成一整段。
+   比照上面 li 與 help-box p 的做法，不另外配色——沿用 spec-box 既有的容器樣式。 */
+.ui-next-tweak-spec-text {
+  margin: 4px 0 10px;
+  white-space: pre-wrap;
+}
 .ui-next-diff-repo {
   margin-bottom: 10px;
   font-size: 12px;

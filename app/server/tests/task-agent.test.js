@@ -245,6 +245,30 @@ test('B-5 首次 coding → fresh 全量、存 session_id marker、進 QA', asyn
   expect(t.status).toBe('qa_running');
 });
 
+// 意圖：人工審核退回後分診寫下的小修正規格，coding 每輪都要拿到**全部**（不只最新那一份）。
+// coding 是無狀態的（每輪 fresh 重送規格），只送最新的話，第二次退回會讓第一次的要求從 prompt 裡
+// 消失，這一輪就把它改回去——而主規格沒寫過那件事，QA 也不會察覺，錯誤靜默地留在成品裡。
+test('B-5 coding prompt 帶全部小修正規格（多份並存，不是只帶最新）', async () => {
+  const calls = mockClaude({ onCall: (child) => { emitInit(child, 'sess-tw'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('tweak1');
+  await dbModule.query(
+    "INSERT INTO task_specs (task_id, version, analysis_yaml, kind) VALUES ($1,1,'第一次：匯出鈕移到表頭。','tweak'), ($1,2,'第二次：匯出鈕改藍色。','tweak')", [id]
+  );
+  await runTaskCoding(id, userId);
+  expect(calls[0].stdin).toContain('匯出鈕移到表頭');
+  expect(calls[0].stdin).toContain('匯出鈕改藍色');
+  expect(calls[0].stdin).toContain('加欄位 note_t');   // 主規格照舊一起送（兩份合起來才完整）
+});
+
+// 沒有被退回過的任務：該段落必須是「（無）」而不是空白。placeholder 漏傳只會 console.warn、
+// 渲染成空字串，段落標題底下空一片——agent 讀到的是一個沒有內容的規格區，最難察覺的那種失敗。
+test('B-5 無小修正規格時該段落渲染成「（無）」，不是空白', async () => {
+  const calls = mockClaude({ onCall: (child) => { emitInit(child, 'sess-tw0'); emitResult(child); child.emit('close', 0); } });
+  const id = await insertCodingTask('tweak0');
+  await runTaskCoding(id, userId);
+  expect(calls[0].stdin).toContain('【小修正規格（人工審核退回後追加）】\n（無）');
+});
+
 // 意圖（核心）：無狀態——即使任務已有前一輪 session id 與 retry_feedback，也一律 fresh、不 --resume，
 // 且送「全量規格＋retry_feedback」讓 coding 讀 worktree 既有碼做增量修（不重寫）。
 test('B-5 有 session＋feedback 的修正輪 → 仍 fresh（不 --resume）、送全量＋feedback、消費 feedback', async () => {

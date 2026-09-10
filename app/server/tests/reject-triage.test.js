@@ -89,43 +89,75 @@ function claudeReturns(json) {
 
 // ---- 人工退回入口（reject_triage）----
 
-// 人工退回判 fix 的落點是 respec_running（規格檢查點）而非直接 coding：那是唯一「使用者的話不經
-// 規格就落到 coding」的入口，退回意見若改變了「什麼算正確」，QA 只有舊 SD 可比會判超規退回，
-// coding 再照 QA 的話改回去＝使用者的要求被靜默抹掉（實測 task 126）。分診自己不改 SD（本測仍驗
-// analysis_yaml 原封不動），改由 respec-patch 判有無規格變更；兩種判定最後都落回 coding。
-test('人工退回 fix → respec_running 規格檢查點（回程指向 coding）：保留 retry_feedback、SD 不動、summary 落 AI 泡泡', async () => {
-  claudeReturns({ decision: 'fix', summary: '退回原因：備註型別錯；結論：研判為程式 bug，已轉回 coding 修補。' });
+// 人工退回判 fix 直達 coding。這裡曾經先繞一關 respec_running（規格檢查點）——理由是這條路是唯一
+// 「使用者的話不經規格就落到 coding」的入口，退回意見若改變了「什麼算正確」，QA 只有舊 SD 可比會判
+// 超規退回，coding 再照 QA 的話改回去＝使用者的要求被靜默抹掉（實測 task 126）。那個把關沒有消失，
+// 換成分診在同一輪吐 spec_patch 存成小修正規格（下一支測試驗它），省掉整支 agent 的一輪。
+// 分診仍然不自己改主 SD（本測驗 analysis_yaml 原封不動）——小修正規格是追加的另一份。
+test('人工退回 fix → coding_running：保留 retry_feedback、主 SD 不動、summary 落 AI 泡泡', async () => {
+  claudeReturns({ decision: 'fix', summary: '退回原因：備註型別錯；結論：研判為程式 bug，已轉回 coding 修補。', spec_patch: '1. 備註欄應顯示為文字。' });
   const id = await makeTask({ rejectCount: 1 });
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, respec_return_status, retry_feedback, coding_session_id, analysis_yaml FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('respec_running');
-  expect(t.respec_return_status).toBe('coding_running'); // 檢查點跑完回開發，不是回原關
+  expect(t.status).toBe('coding_running');
+  expect(t.respec_return_status).toBeNull();           // 不再有中繼關，也就沒有回程值
   expect(t.retry_feedback).toContain('備註型別錯');   // 保留 → coding resume 修補
   expect(t.coding_session_id).toBe('sess-1');          // resume 續用
-  expect(t.analysis_yaml).toBe('module: sale');        // 分診不自己改 SD（要改是 respec-patch 的事）
+  expect(t.analysis_yaml).toBe('module: sale');        // 主 SD 不被改寫（小修正規格是另一份）
   const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
   expect(logs.some(l => l.role === 'ai' && l.content.includes('研判為程式 bug'))).toBe(true);
 });
 
-// 根治的核心：退回意見必須進「待吸收需求佇列」，respec-patch 才有東西可判。只改狀態不入佇列的話，
-// respec-agent 撈不到 pending 留言會直接原路放行，整道檢查點變成 no-op（多花一次跳轉、什麼都沒把關）。
-test('人工退回 fix → 退回原因入待吸收佇列（applied_at IS NULL），供 respec-patch 判有無規格變更', async () => {
-  claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
+// 根治的核心：這次退回要求的「正確行為」必須以規格的身分落地，QA 才判得出「照使用者說的做」不是
+// 超出規格的改動。只改狀態不寫規格的話，QA 手上仍只有主 SD，task 126 那條路徑立刻復活。
+test('人工退回 fix → spec_patch 落成小修正規格（kind=tweak），主 SD 不動、時間軸掛得起規格書', async () => {
+  claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。', spec_patch: '1. 匯出鈕應位於表頭右上。\n2. 按鈕文字為「匯出」。' });
   const id = await makeTask({ rejectCount: 1 });
   await runRejectTriage(id, userId);
-  const { rows: msgs } = await dbModule.query(
-    "SELECT content, source, applied_at FROM task_messages WHERE task_id=$1", [id]
+  const { rows: specs } = await dbModule.query(
+    "SELECT version, analysis_yaml, kind FROM task_specs WHERE task_id=$1", [id]
   );
-  expect(msgs).toHaveLength(1);
-  expect(msgs[0].content).toContain('備註型別錯');            // 退回原文（已剝掉 [人工退回] 前綴）
-  expect(msgs[0].content).toContain('[人工審核退回意見]');     // 來源標示：respec-patch 的判準吃它
-  expect(msgs[0].source).toBe('manual');
-  expect(msgs[0].applied_at).toBeNull();          // 未吸收＝respec-patch 這輪會撿起
+  expect(specs).toHaveLength(1);
+  expect(specs[0].kind).toBe('tweak');            // 追加式，不佔主規格的版本序列
+  expect(specs[0].version).toBe(1);
+  expect(specs[0].analysis_yaml).toContain('匯出鈕應位於表頭右上');
+  // 前端靠這個前綴＋全形括號版號決定「這一則底下要掛哪一份規格書」，格式一動畫面就靜默掛不上去
+  const { rows: logs } = await dbModule.query("SELECT role, content FROM task_logs WHERE task_id=$1", [id]);
+  expect(logs.some(l => l.role === 'ai' && l.content.startsWith('[小修正規格]（第 1 版）'))).toBe(true);
 });
 
-// 鑑別力對照：卡關修正指示（resolve）多是技術性修法而非需求，維持原本直接進 coding 的路徑。
-// 沒有這條，上面那條測試無法區分「只在人工退回時繞檢查點」與「所有 fix 都繞」。
-test('卡關修正指示 fix → 仍直接 coding_running，不繞規格檢查點', async () => {
+// 版本序列：同一張任務被退回兩次就有兩份，各自從 1 遞增，且**兩份都留著**——
+// coding 是無狀態的，只留最新那份會讓第一次的要求從 prompt 裡消失、被這一輪改回去。
+test('連兩次人工退回 → 小修正規格各自成版（第 1、2 版並存）', async () => {
+  const id = await makeTask({ rejectCount: 1 });
+  claudeReturns({ decision: 'fix', summary: '第一次退回。', spec_patch: '1. 匯出鈕移到表頭。' });
+  await runRejectTriage(id, userId);
+  await dbModule.query("UPDATE tasks SET status='reject_triage' WHERE id=$1", [id]);
+  claudeReturns({ decision: 'fix', summary: '第二次退回。', spec_patch: '1. 匯出鈕改為藍色。' });
+  await runRejectTriage(id, userId);
+  const { rows: specs } = await dbModule.query(
+    "SELECT version, analysis_yaml FROM task_specs WHERE task_id=$1 AND kind='tweak' ORDER BY version", [id]
+  );
+  expect(specs.map(r => r.version)).toEqual([1, 2]);
+  expect(specs[0].analysis_yaml).toContain('移到表頭');   // 第一次的要求沒被覆蓋掉
+  expect(specs[1].analysis_yaml).toContain('改為藍色');
+});
+
+// spec_patch 是選填（resolve 入口的技術性修法通常沒有）：缺了不得丟例外、也不得寫出空規格，
+// 路由照常。fail loud 的界線在這裡刻意讓步——把整包分診結論連同去向一起丟掉的後果嚴重得多。
+test('fix 但無 spec_patch → 不寫規格、不丟例外，照常進 coding', async () => {
+  claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
+  const id = await makeTask({ rejectCount: 1 });
+  await expect(runRejectTriage(id, userId)).resolves.toBe(true);
+  const { rows: specs } = await dbModule.query('SELECT id FROM task_specs WHERE task_id=$1', [id]);
+  expect(specs).toHaveLength(0);
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('coding_running');
+});
+
+// 卡關修正指示（resolve）入口：與人工退回同樣直達 coding。此處另驗它不寫 task_messages——
+// 那是「途中追加需求」佇列，只有 runTaskAnalysis 會讀，分診落點都不讀它，寫了等於憑空多一筆需求。
+test('卡關修正指示 fix → coding_running，不入追加需求佇列', async () => {
   claudeReturns({ decision: 'fix', summary: '環境殘留模組，轉回 coding 補 pre_init_hook。' });
   const id = await makeTask({ rejectCount: 1, status: 'resolve_triage', resume_status: 'deploy_testing' });
   await runRejectTriage(id, userId);
@@ -157,7 +189,7 @@ test('fix 且 reentry_count 歸零（人工介入＝額度重新起算）', asyn
   await dbModule.query('UPDATE tasks SET reentry_count=1 WHERE id=$1', [id]);
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, reentry_count FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('respec_running');
+  expect(t.status).toBe('coding_running');
   expect(t.reentry_count).toBe(0);
 });
 
@@ -169,7 +201,7 @@ test('fix：已達 MAX_REENTRY 的任務被人工退回 → 仍放行（不卡�
   await dbModule.query('UPDATE tasks SET reentry_count=2 WHERE id=$1', [id]); // 已達上限
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, reentry_count FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('respec_running');
+  expect(t.status).toBe('coding_running');
   expect(t.reentry_count).toBe(0);
 });
 
@@ -229,16 +261,15 @@ test('resume → 回原關（reject 入口的原關＝review_pending）', async 
 // 舊版有「人工退回 >=2 次就禁 fix、強制降級 respec」的防呆。它算的是任務累計退回次數而非
 // 「同一問題重複退回」，會把兩件無關的退回算成同一筆帳——實測 task 157 因此把「按鈕樣式改一下」
 // 誤判成規格問題，整包重跑分析＋重寫實作。去向一律由 agent 依退回內容自行判定。
-// 注意兩個「respec」不是同一件事，這支測的是沒有被降級成前者：
-//   decision=respec  → analysis_running：整包重跑分析、重寫 SD、清掉 coding 痕跡（貴）
-//   fix 的規格檢查點 → respec_running：respec-patch 增量比對，多數情況規格一字不動就放行（便宜）
+// 對照組：decision=respec → analysis_running（整包重跑分析、重寫 SD、清掉 coding 痕跡，貴），
+// 這支測的是判 fix 時沒有被降級成那條路。
 test('多次人工退回後，模型判 fix 仍走 fix 路徑（不被降級成整包重跑分析）', async () => {
   claudeReturns({ decision: 'fix', summary: '純樣式問題，轉回 coding 調整 CSS class。' });
   const id = await makeTask({ rejectCount: 3 });
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status, retry_feedback, coding_session_id, analysis_yaml FROM tasks WHERE id=$1', [id]);
   expect(t.status).not.toBe('analysis_running');     // 沒被降級成 decision=respec 那條路
-  expect(t.status).toBe('respec_running');
+  expect(t.status).toBe('coding_running');
   expect(t.analysis_yaml).toBe('module: sale');      // SD 未被重寫
   expect(t.retry_feedback).toContain('備註型別錯');   // 退回原因留給 coding 當修補依據
   expect(t.coding_session_id).not.toBeNull();        // 不清 coding 痕跡＝不必從零重寫
@@ -275,8 +306,7 @@ test('fix → 既有失敗回饋與分診結論併存，互不覆蓋', async () 
 // coding 沒有自己的計數器所以不在 RESUME_COUNTER 裡，結果是 goto('coding_running') 一個都不歸零
 // ——實測 task 109 的 deploy_retry_count 卡在 4（上限 3），此後每次「修正指示→分診 fix→coding→
 // QA→deploy」都在部署第一下就觸頂 stopped，coding 與 QA 每輪約 $1.7 是確定白燒的，且結果注定相同。
-// 繞經 respec_running 不影響這個理由：終點仍是 coding，計數器必須在跳轉當下就歸零——
-// respec-agent 自己不歸零，等它跑完再說就沒有人會做這件事了。
+// 計數器必須在跳轉當下就歸零：下游各關自己不歸零，等跑到那裡再說就沒有人會做這件事了。
 test('fix → coding：下游計數器一併歸零，部署已觸頂的任務才推得動', async () => {
   claudeReturns({ decision: 'fix', summary: '轉回 coding 修補。' });
   const id = await makeTask({ rejectCount: 1, qa: 2, deploy: 4, pw: 1 });
@@ -284,7 +314,8 @@ test('fix → coding：下游計數器一併歸零，部署已觸頂的任務才
   const { rows: [t] } = await dbModule.query(
     'SELECT status, respec_return_status, qa_retry_count, deploy_retry_count, pw_retry_count FROM tasks WHERE id=$1', [id]
   );
-  expect(t.respec_return_status).toBe('coding_running');
+  expect(t.status).toBe('coding_running');
+  expect(t.respec_return_status).toBeNull();
   expect(t.deploy_retry_count).toBe(0); // 超上限的舊計數不得延續，否則部署一下就死
   expect(t.qa_retry_count).toBe(0);
   expect(t.pw_retry_count).toBe(0);
@@ -328,7 +359,7 @@ test('decision 大小寫／空白飄動 → 正規化後照樣走 fix，不當�
   const id = await makeTask({ rejectCount: 1 });
   await runRejectTriage(id, userId);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('respec_running'); // fix 路徑（人工退回先過規格檢查點），不是 stopped
+  expect(t.status).toBe('coding_running'); // 走 fix 路徑，不是被當成無效結果 stopped
 });
 
 // 缺 questions 的 clarify＝無效輸出（契約要求必帶）→ fail loud 停下，不靜默放行
@@ -478,7 +509,7 @@ test('agent 未回 summary → 不因缺欄位丟例外，fix 仍照常路由', 
   const id = await makeTask({ rejectCount: 1 });
   await expect(runRejectTriage(id, userId)).resolves.toBe(true);
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
-  expect(t.status).toBe('respec_running');
+  expect(t.status).toBe('coding_running');
 });
 
 test('advance 但 target 不合法 → 保守退回 resume（回原關）', async () => {

@@ -385,13 +385,20 @@ function registerRoutes(app) {
       // 兩者本來就不該是同一個東西（舊版那一則若跟著顯示最新規格，等於改動無痕）。
       // 不限狀態：閘門過了之後回頭看仍該看得到每一版長什麼樣。
       const { rows: specRows } = await query(
-        'SELECT version, analysis_yaml FROM task_specs WHERE task_id = $1 ORDER BY version',
+        "SELECT version, analysis_yaml FROM task_specs WHERE task_id = $1 AND kind='main' ORDER BY version",
         [req.params.id]
       );
       const specs = specRows
         .map(r => ({ version: r.version, ...(parseSpecYaml(r.analysis_yaml) || {}) }))
         .filter(s => s.summary !== undefined);
-      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec, specs });
+      // 小修正規格（人工審核退回後分診追加）。與主規格分開回傳而不是併進 specs：它存的是純文字條列、
+      // 不是 analysis.yaml 的形狀，混進去會被上面那道 parseSpecYaml + summary 過濾整批丟掉（靜默）。
+      const { rows: tweakRows } = await query(
+        "SELECT version, analysis_yaml FROM task_specs WHERE task_id = $1 AND kind='tweak' ORDER BY version",
+        [req.params.id]
+      );
+      const tweakSpecs = tweakRows.map(r => ({ version: r.version, text: r.analysis_yaml }));
+      res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec, specs, tweakSpecs });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

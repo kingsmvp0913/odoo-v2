@@ -11,6 +11,7 @@ const { runClaude, stopReason } = require('./claude-runner');
 const { parseAgentResult } = require('./agent-result');
 const { safeReturnStatus } = require('./stations');
 const { machineLogHeader, stripMachineHeader } = require('../../public/js/machine-logs.js');
+const { recordTweakSpec } = require('./spec-version');
 const { taskAttachmentNote } = require('./sync');
 
 // 卡在哪一關的中文顯示（stuck_stage 用）
@@ -64,8 +65,7 @@ async function runRejectTriage(taskId, userId, signal) {
   // （分界線寫在 analysis-reject.md）。把關的是人：每一輪 fix 都是人主動退回換來的（見下方 fix 分支）。
 
   // 情境輸入：停在哪關、停下原因、使用者最新的話、以及 resume 的「原關」——依入口組不同來源
-  // rejectReason 另存乾淨的退回原文（userInstruction 下面會被接上近期對話與待吸收留言，不能複用）：
-  // fix 分支要把它原樣送進規格檢查點，混入其他脈絡會讓 respec-patch 把對話內容也當成需求。
+  // rejectReason 另存乾淨的退回原文（userInstruction 下面會被接上近期對話與待吸收留言，不能複用）。
   let stuckStage, stopContext, userInstruction, homeStatus, rejectReason = null;
   if (isReject) {
     stuckStage = STAGE_LABEL.review_pending;
@@ -149,7 +149,13 @@ async function runRejectTriage(taskId, userId, signal) {
     return stop(taskId, userId, stopReason('分診 Agent 執行失敗', err));
   }
 
-  const result = await parseAgentResult(raw, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId });
+  // schemaHint：spec_patch 是多行字串，模型偶爾會在 JSON 內塞真正的換行而不是 \n ⇒ JSON.parse 直接死，
+  // 整包分診結論（含去向）連同它一起丟掉、任務白白 stopped。補救那一輪帶著形狀去修才修得回來
+  // （不帶的話 haiku 只知道「這串 JSON 壞了」，不知道該有哪些欄位）。
+  const result = await parseAgentResult(raw, {
+    parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId,
+    schemaHint: '{"decision":"resume|advance|fix|respec|clarify|answer","summary":"給使用者看的 2–4 句","target":"advance 時必帶","questions":["clarify 時必帶"],"spec_patch":"fix 時必帶；多行條列，換行一律寫成 \\n"}'
+  });
   const summary = (result?.summary || '').trim();
   const logAi = (content) => query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, content]);
   // 分診結論是工程訊息（講 Model／檔名／根因，寫給開發與審核看），走 machine-logs registry 的
@@ -280,30 +286,25 @@ async function runRejectTriage(taskId, userId, signal) {
     if (summary) await logTriage('轉回開發修正', summary);
     const carried = [task.retry_feedback, summary && `[分診結論]\n${summary}`].filter(Boolean).join('\n\n');
     const opts = carried ? { feedback: carried } : { keepFeedback: true };
-    // 人工退回一律先過規格檢查點，再進 coding。理由是 fix 這條路是唯一「使用者的話不經規格就直接
-    // 落到 coding」的入口：退回意見若改變了「什麼算正確」，QA 手上仍只有舊 SD，會把「照使用者說的做」
-    // 判成超出規格而退回，coding 再照 QA 的話改回去——使用者的要求被靜默抹掉，任務最後還顯示綠燈
-    // （實測 task 126：選單改名要求連頁面標題一起改，來回兩輪後改動被完全還原）。分診 prompt 早已
-    // 寫明這個後果（analysis-reject.md 的 fix／respec 分界線）卻仍判錯，故改由結構把關而非 prompt 自律。
-    // 走的是既有的追加需求佇列：respec-patch 判有規格變更就 patch 進 analysis_yaml、判沒有（純 bug）
-    // 就原樣放行，兩種結果最後都落到 coding，所以純實作性退回的行為與過去一致，只多一次規格比對。
-    // 限 isReject：卡關修正指示（resolve）多為技術性修法，不走這條。限已開工（git_branch 有值）：
-    // 未開工時 respec-agent 會判 pre-coding 改委派 spec-review，那是規格審核閘門、不是這裡要的路徑。
-    // 分診結論在這條路上不會遺失：respec-agent 會先把 retry_feedback（含上面塞的 `[分診結論]`）讀成
-    // carried、附進送給 respec-patch 的 requirements，再一起寫回 retry_feedback（見 respec-agent.js 的
-    // carried 段）。本註解原本寫的是「會被 `[追加需求]` 覆寫掉、傳不到 coding」，那是 d0262da0
-    // （2026-08-14 引入 carried）之前的行為，已不成立。
-    if (isReject && rejectReason && task.git_branch) {
-      // 標明來源：respec-patch 的判準對「途中留言」刻意保守（多數留言是流程指示，誤判成需求會讓
-      // 跑到後段的任務整條白跑），但審核退回意見的先驗完全相反——它幾乎都在講成品哪裡不對。
-      // 不標來源它會拿閒聊的標準去看退回意見、一律判無變更，整道檢查點就成了 no-op。
-      await query(
-        "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1, 'manual', '人工退回', $2, NOW())",
-        [taskId, `[人工審核退回意見]\n${rejectReason}`]
-      );
-      await goto('respec_running', { ...opts, returnStatus: 'coding_running' });
-      return true;
-    }
+    // fix 這條路是唯一「使用者的話不經規格就直接落到 coding」的入口：退回意見若改變了「什麼算正確」，
+    // QA 手上仍只有舊 SD，會把「照使用者說的做」判成超出規格而退回，coding 再照 QA 的話改回去——
+    // 使用者的要求被靜默抹掉，任務最後還顯示綠燈（實測 task 126：選單改名要求連頁面標題一起改，
+    // 來回兩輪後改動被完全還原）。
+    //
+    // 原本的兜底是「一律先繞 respec_running 那一關」，由 respec-patch 比對退回意見與 SD、有落差就
+    // 增量補上。改成由分診自己在同一輪吐出 spec_patch：它本來就讀了退回原因、SD 與 diff，多寫一段
+    // 幾乎零成本，而繞那一關是**整支 agent 一輪**，且純 bug 時它的結論固定是「規格不需要調整」＝
+    // 白燒一輪、白等一輪（使用者原話：「我只改一個小地方卻要整個重看過規格 很麻煩」）。
+    // 兜底沒有被拿掉，是換了實作：spec_patch 落成一份小修正規格（追加式，主規格一個字不動），
+    // QA 與 coding 兩關都讀得到，task 126 那條路徑照樣走不通。
+    //
+    // 不限 isReject 也不限已開工：小修正規格只是多一份給下游讀的文件，卡關修正指示（resolve）情境
+    // 若分診真的寫了它，同樣該落地。分診 prompt 對 resolve 情境不會產出 spec_patch，這裡不必再擋一次。
+    await recordTweakSpec(taskId, result?.spec_patch).catch(err => {
+      // 落地失敗不擋推進：小修正規格是給下游讀的補充，寫不進去的後果是 QA 少一份參考（可能多退一輪），
+      // 而在這裡 throw 會讓整包分診結論連同去向一起丟掉、任務白白 stopped——那個後果嚴重得多。
+      console.error(`[REJECT-TRIAGE] task ${taskId} tweak spec write failed:`, err.message);
+    });
     await goto('coding_running', opts);
     return true;
   }

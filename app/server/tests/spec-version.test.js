@@ -142,6 +142,54 @@ test('途中追加需求 patch 規格 → 一樣留快照與帶版號的那一�
   expect((await aiLogs(task.id)).some(c => c.includes('（第 2 版）'))).toBe(true);
 });
 
+// 意圖：小修正規格（kind='tweak'）與主規格各跑各的版本序列。混用一條序列的話，一次人工退回就會
+// 把主規格的下一版從第 2 版推成第 3 版——而時間軸上的規格書是靠標頭列的版號去對的，跳號＝那一則
+// 對不到任何一份規格，畫面上規格書靜默消失。
+test('小修正規格不佔主規格的版本序列（兩邊各自從 1 起算）', async () => {
+  const { recordTweakSpec, loadTweakSpecs } = require('../pipeline/spec-version');
+  const task = await insertTask('respec_running', 'module: sale\nfeatures:\n  - 折扣欄位\n');
+  // 先寫一份主規格第 1 版（模擬分析關），再插進兩份小修正規格
+  await dbModule.query(
+    "INSERT INTO task_specs (task_id, version, analysis_yaml, kind) VALUES ($1,1,'module: sale','main')", [task.id]
+  );
+  expect(await recordTweakSpec(task.id, '1. 匯出鈕移到表頭。')).toBe(1);
+  expect(await recordTweakSpec(task.id, '1. 匯出鈕改藍色。')).toBe(2);
+
+  // 主規格接著被改寫 → 應該是第 2 版，不是被小修正推成第 4 版
+  await dbModule.query(
+    "INSERT INTO task_messages (task_id, source, author, content, occurred_at) VALUES ($1,'manual','me','加一個匯出 Excel 按鈕', NOW())",
+    [task.id]
+  );
+  runClaude.mockResolvedValue({
+    text: '<result>\nmodule: sale\nfeatures:\n  - 折扣欄位\n  - 匯出 Excel 按鈕\n</result>',
+    usage: null, durationMs: null
+  });
+  await runRespecPatch(task.id, userId, undefined);
+
+  const { rows: mains } = await dbModule.query(
+    "SELECT version FROM task_specs WHERE task_id=$1 AND kind='main' ORDER BY version", [task.id]
+  );
+  expect(mains.map(r => r.version)).toEqual([1, 2]);
+  // 反向也要成立：主規格改版不影響小修正的序列
+  expect(await recordTweakSpec(task.id, '1. 再加一條。')).toBe(3);
+  // 讀回時給的是全部、依序，不是只有最新（coding 無狀態，少一份就等於那條要求消失）
+  const text = await loadTweakSpecs(task.id);
+  expect(text).toContain('匯出鈕移到表頭');
+  expect(text).toContain('匯出鈕改藍色');
+  expect(text).toContain('再加一條');
+});
+
+// 空字串／null 不得寫出一份沒有內容的規格：spec_patch 是選填欄位，分診沒寫時這裡會收到空值，
+// 寫進去的話下游會拿到一份標題有內容卻空白的「規格」，比沒有更糟。
+test('spec_patch 為空 → 不寫規格、不寫 log', async () => {
+  const { recordTweakSpec } = require('../pipeline/spec-version');
+  const task = await insertTask('respec_running', 'module: sale\n');
+  expect(await recordTweakSpec(task.id, '   ')).toBeNull();
+  expect(await recordTweakSpec(task.id, undefined)).toBeNull();
+  expect(await specs(task.id)).toEqual([]);
+  expect(await aiLogs(task.id)).toEqual([]);
+});
+
 // 鑑別力：respec 判「規格不需要調整」不走那條 UPDATE，也就不該憑空多一版。
 test('規格一字未動 → 不記新版', async () => {
   const task = await insertTask('respec_running', 'module: sale\nfeatures:\n  - 折扣欄位\n');

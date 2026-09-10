@@ -18,6 +18,7 @@ const { assembleTaskContext, taskAttachmentNote } = require('./sync');
 const yaml = require('js-yaml');
 const { determineNextStatus, REQUIRED_FIELDS, logAnalysisGate } = require('./analysis');
 const { getProjectNotes } = require('./project-notes');
+const { loadTweakSpecs } = require('./spec-version');
 const { loadConversation } = require('./clarify-chat');
 
 function buildCommitMessage(task) {
@@ -124,7 +125,7 @@ async function latestResolution(taskId) {
   return `（送出時間：${at}）\n${text}`;
 }
 
-function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, projectNotes, attachments) {
+function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, projectNotes, attachments, tweakSpecs) {
   const agent = loadAgent('coding-project');
   const repoList = (info.repos || []).map(r => `- ${r.subdir}/`).join('\n') || '（無 repo）';
   return {
@@ -137,6 +138,10 @@ function buildCodingPrompt(task, info, resolution, retryFeedback, baseBranch, pr
       repo_paths: buildRepoPaths(info, task.task_id),
       odoo_core_src: coreSourceGuidance(info.odoo_version, info.enterprise_src),
       analysis_yaml: task.analysis_yaml || '（無規格）',
+      // 人工審核退回時分診寫下的小修正規格（追加式，主規格不動）。每輪都帶全部、不只最新那一份：
+      // coding 是無狀態的（每輪 fresh 重送規格），只帶最新的話，第二次小修正會讓第一次的要求
+      // 從 prompt 裡消失，這一輪就把它改回去，而下游沒有任何一關看得出來。
+      tweak_specs: tweakSpecs || '（無）',
       commit_message: buildCommitMessage(task),
       repo_list: repoList,
       resolution: resolution || '（無）',
@@ -626,7 +631,7 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const baseBranch = AI_BRANCH;
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   ensureWorktreeSkills(cwd);
-  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes, await taskAttachmentNote(task.id));
+  const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes, await taskAttachmentNote(task.id), await loadTweakSpecs(task.id).catch(() => ''));
   return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
 }
 

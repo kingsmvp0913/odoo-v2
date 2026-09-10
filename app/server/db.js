@@ -1020,6 +1020,10 @@ async function migrate() {
     // 唯一寫 false 的是 /api/auth/register。故新增欄位即回填既有列 true，不需另做 backfill。
     { table: 'users', col: 'approved',       sql: 'ALTER TABLE users ADD COLUMN approved BOOLEAN NOT NULL DEFAULT true' },
     { table: 'task_rejections', col: 'source', sql: "ALTER TABLE task_rejections ADD COLUMN source TEXT NOT NULL DEFAULT 'human'" },
+    // 'main'＝主規格的一版（覆寫式，取代前一版）；'tweak'＝人工審核退回時分診寫下的小修正規格
+    //（追加式，主規格一個字不動）。兩者的 version 各自從 1 起算，混用一條序列的話畫面上會出現
+    // 「主規格第 1 版、第 3 版」這種跳號。DEFAULT 'main' 讓既有列自動歸位，不需 backfill。
+    { table: 'task_specs', col: 'kind', sql: "ALTER TABLE task_specs ADD COLUMN kind TEXT NOT NULL DEFAULT 'main'" },
     { table: 'wiki_drift', col: 'applied_at', sql: 'ALTER TABLE wiki_drift ADD COLUMN applied_at TIMESTAMPTZ' },
     // port 租約制：閒置判定用（由 cron 解析容器 log 更新）
     { table: 'odoo_envs', col: 'last_active_at', sql: 'ALTER TABLE odoo_envs ADD COLUMN last_active_at TIMESTAMPTZ' },
