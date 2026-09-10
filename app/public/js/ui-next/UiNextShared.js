@@ -47,8 +47,9 @@
       return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
     return `${seconds} 秒`;
   };
+  // 傳入的是「已用掉的百分比」：剩不到 25% 轉紅、剩不到 50% 轉橘。
   const usageLevel = (pct) =>
-    pct >= 90 ? "critical" : pct >= 70 ? "warning" : "healthy";
+    pct >= 75 ? "critical" : pct >= 50 ? "warning" : "healthy";
   // 額度視窗的重置／更新時刻。5 小時的窗常跨到隔天凌晨，只印時分會被讀成「早就過了」，
   // 所以不同天就把日期帶上。左下角與用量報表共用同一份，措辭不會各自漂移。
   const usageTime = (value) => {

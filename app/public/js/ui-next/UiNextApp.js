@@ -484,9 +484,9 @@
           ...row,
           remaining: Math.max(0, 100 - row.used),
             level:
-              row.used >= 90
+              row.used >= 75
                 ? "critical"
-                : row.used >= 70
+                : row.used >= 50
                   ? "warning"
                   : "healthy",
         }));
