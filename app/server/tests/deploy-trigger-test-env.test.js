@@ -44,6 +44,7 @@ beforeEach(async () => {
   notify.emitToUser.mockReset();
   await dbModule.query('DELETE FROM deploy_runs');
   await dbModule.query('DELETE FROM project_deploy_targets');
+  await dbModule.query('DELETE FROM task_logs');   // 先清：task_logs 的 FK 沒有 CASCADE
   await dbModule.query('DELETE FROM tasks');
   await dbModule.query('DELETE FROM project_repos');
   await dbModule.query('DELETE FROM projects');
@@ -75,6 +76,10 @@ async function setup({ targets = [] } = {}) {
 
 const said = () => notify.emitToUser.mock.calls
   .map(c => (c[2] && c[2].data) || '').filter(d => d.includes('[DEPLOY]')).join('');
+// 任務對話。said() 讀的 socket 訊息不落 DB，重整就沒了——使用者事後找得回來的只有這裡。
+const chat = async (id) => (await dbModule.query(
+  "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' ORDER BY id", [id]
+)).rows.map(r => r.content).join('\n');
 const statusOf = async (id) => (await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id])).rows[0].status;
 
 test('有啟用的測試區目標時觸發部署，且任務照常推進', async () => {
@@ -154,4 +159,62 @@ test('不同 addons 目錄的目標不合併，各跑各的', async () => {
   expect(runDeployGroup).toHaveBeenCalledTimes(2);
   expect(runDeployGroup.mock.calls[0][0]).toHaveLength(1);
   expect(runDeployGroup.mock.calls[1][0]).toHaveLength(1);
+});
+
+// ── 部署結果要進任務對話 ────────────────────────────────────────────
+// 意圖（Rule 9 / Rule 77）：時間軸的真相來源是 task_logs。部署結果只走 socket 的話，
+// 使用者重整畫面就什麼都看不到，而「有沒有部署到客戶測試區」正是他核准完最想知道的事。
+// 實測 task 262 就是這樣：自動部署死在 git fetch，畫面與資料庫都查不到任何痕跡。
+
+test('部署成功要在任務對話留下結果與模組', async () => {
+  const id = await setup({ targets: [{ env: 'test', enabled: true, db_name: 'odoo_tst' }] });
+  await pushAi.runPushAi(id, userId, null);
+  const c = await chat(id);
+  expect(c).toMatch(/客戶測試區部署/);
+  expect(c).toMatch(/odoo_tst/);
+  expect(c).toMatch(/idx_hj/);
+});
+
+test('部署失敗要在任務對話留下原因', async () => {
+  runDeployGroup.mockImplementation(async (ids) =>
+    ids.map((id) => ({ targetId: id, ok: false, status: 'rolled_back', modules: ['idx_hj'], error: '健康檢查未通過' })));
+  const id = await setup({ targets: [{ env: 'test', enabled: true }] });
+  await pushAi.runPushAi(id, userId, null);
+  expect(await chat(id)).toMatch(/健康檢查未通過/);
+});
+
+// 這一種最重要：例外＝連 deploy_runs 都沒寫進去，對話是唯一的痕跡。
+test('部署丟例外要在任務對話留下例外訊息', async () => {
+  runDeployGroup.mockRejectedValue(new Error('GitHub 認證失敗，請到設定填個人 GitHub PAT'));
+  const id = await setup({ targets: [{ env: 'test', enabled: true }] });
+  await pushAi.runPushAi(id, userId, null);
+  expect(await chat(id)).toMatch(/GitHub 認證失敗/);
+});
+
+test('開關開著卻沒有目標＝設定不全，要進對話', async () => {
+  const id = await setup({ targets: [{ env: 'test', enabled: false }] });
+  await pushAi.runPushAi(id, userId, null);
+  expect(await chat(id)).toMatch(/沒有啟用中的測試區部署目標/);
+});
+
+// 反面：沒開自動部署是多數專案的常態。每張任務都寫一行只是噪音，會把真正有事的那行淹掉。
+test('專案沒開自動部署時不寫對話', async () => {
+  const id = await setup({ targets: [{ env: 'test', enabled: true }] });
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = false');
+  await pushAi.runPushAi(id, userId, null);
+  expect(await chat(id)).toBe('');
+});
+
+// 一次部署在對話裡就是一則，不是每個資料庫散成一則
+test('同一次部署的多個資料庫合寫成一則對話', async () => {
+  const id = await setup({ targets: [
+    { env: 'test', enabled: true, db_name: 'db_a' },
+    { env: 'test', enabled: true, db_name: 'db_b' },
+  ] });
+  await pushAi.runPushAi(id, userId, null);
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai'", [id]);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].content).toMatch(/db_a/);
+  expect(rows[0].content).toMatch(/db_b/);
 });

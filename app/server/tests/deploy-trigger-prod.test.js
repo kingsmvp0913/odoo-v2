@@ -51,6 +51,7 @@ beforeEach(async () => {
     ids.map((id) => ({ targetId: id, ok: true, status: 'success', modules: ['idx_hj'] })));
   await dbModule.query('DELETE FROM project_deploy_targets');
   await dbModule.query('UPDATE projects SET auto_deploy_enabled = true');
+  await dbModule.query('DELETE FROM task_logs');   // 先清：task_logs 的 FK 沒有 CASCADE
   await dbModule.query('DELETE FROM tasks');
   // 一張待上正式的任務：已核准、尚未推 main
   await dbModule.query(
@@ -187,4 +188,47 @@ test('pending-release 帶出「這一按會不會動到正式區」', async () =
   const res = await request(app).get(`/api/projects/${projectId}/pending-release`)
     .set('Authorization', `Bearer ${token}`);
   expect(res.body.prodDeploy).toEqual({ autoDeploy: true, targets: 1, isAdmin: true });
+});
+
+// ── 上正式的結果要進任務對話 ────────────────────────────────────────
+// 意圖（Rule 9 / Rule 77）：/release 的回應只活在按下按鈕的那一瞬間，彈窗一關就查不到。
+// 「這張任務到底上正式了沒、客戶正式區更新了沒」事後只有 task_logs 找得回來。
+const chat = async () => (await dbModule.query(
+  "SELECT content FROM task_logs WHERE task_id = (SELECT id FROM tasks WHERE task_id='task_pa_1') AND role='ai' ORDER BY id"
+)).rows.map(r => r.content).join('\n');
+
+test('部署成功時，這次上正式的任務對話留下結果與資料庫名', async () => {
+  await addTarget('prod', true);
+  await release();
+  const c = await chat();
+  expect(c).toMatch(/上正式/);
+  expect(c).toMatch(/併入 main/);
+  expect(c).toMatch(/客戶正式區部署完成/);
+  expect(c).toMatch(/idx_hj/);
+});
+
+test('部署失敗時，任務對話留下失敗原因', async () => {
+  runDeployGroup.mockImplementation(async (ids) =>
+    ids.map((id) => ({ targetId: id, ok: false, status: 'rolled_back', error: '健康檢查未通過' })));
+  await addTarget('prod', true);
+  await release();
+  expect(await chat()).toMatch(/健康檢查未通過/);
+});
+
+// 與測試區那條刻意不同：這裡開關關著也要寫。使用者是主動按下去、等著看客戶機更新了沒，
+// 「什麼都沒寫」會被讀成「上正式了，客戶那邊也好了」。
+test('沒部署時，任務對話要講出為什麼沒部署', async () => {
+  await dbModule.query('UPDATE projects SET auto_deploy_enabled = false');
+  await addTarget('prod', true);
+  await release();
+  const c = await chat();
+  expect(c).toMatch(/客戶正式區未更新/);
+  expect(c).toMatch(/未啟用自動部署/);
+});
+
+test('沒有任何任務被推上 main 時不寫對話', async () => {
+  await dbModule.query('UPDATE tasks SET merged_to_main_at = NOW()');   // 這次沒有待上正式的任務
+  await addTarget('prod', true);
+  await release();
+  expect(await chat()).toBe('');
 });

@@ -969,7 +969,7 @@ function registerRoutes(app) {
         const { rows } = await query(
           `UPDATE tasks SET merged_to_main_at = NOW()
            WHERE project_id = $1 AND approved_at IS NOT NULL AND merged_to_main_at IS NULL
-           RETURNING task_id, title`,
+           RETURNING id, task_id, title`,
           [project.id]
         );
         tasks = rows;
@@ -1021,6 +1021,19 @@ function registerRoutes(app) {
             }
             return out;
           });
+        }
+        // 這次上正式的每一張任務都要在自己的對話裡看得到結果：這個回應只活在按下按鈕的
+        // 那一瞬間，彈窗一關就查不到了，而 task_logs 是使用者事後找得回來的唯一真相。
+        // 與測試區那條不同，開關關著也照寫——使用者是主動按下去、等著看客戶機更新了沒。
+        const { describeResults } = require('./lib/deploy-text');
+        const detail = deploySkipped
+          ? `客戶正式區未更新：${deploySkipReason}`
+          : describeResults(deploy, targets, '客戶正式區').join('\n') || '客戶正式區未更新。';
+        for (const t of tasks) {
+          await query(
+            "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+            [t.id, `[上正式] 程式已併入 main。\n${detail}`]
+          ).catch(() => {});
         }
       }
 

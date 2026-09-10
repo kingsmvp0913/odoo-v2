@@ -137,19 +137,26 @@ async function doPushAi(task, taskId, userId, signal) {
 // 每一種「沒做」都印一行：靜默跳過最難查，使用者會以為部署了，其實沒有。
 async function deployToTestEnv(task, taskId, userId) {
   const say = (msg) => notify.emitToUser(userId, 'terminal:output', { taskId, data: `[DEPLOY] ${msg}\n` });
+  // 每一行都同時進任務對話：socket 訊息不落 DB，重整就沒了——實測 task 262 的自動部署
+  // 死在 git fetch，畫面與資料庫都查不到任何痕跡，看起來就像「核准完什麼都沒發生」。
+  const lines = [];
+  const both = (msg) => { say(msg); lines.push(msg); };
   try {
     const { isAutoDeployEnabled } = require('../lib/auto-deploy-switch');
+    // 這一種刻意不進對話：沒開自動部署是多數專案的常態，每張任務都寫一行只是噪音。
+    // 上正式那條相反（開關關著也寫），因為那是使用者主動按下去、等著看客戶機有沒有更新。
     if (!await isAutoDeployEnabled(task.project_id)) return say('此專案未啟用自動部署，略過');
 
     const { rows: targets } = await query(
       "SELECT * FROM project_deploy_targets WHERE project_id = $1 AND env = 'test' AND enabled = true ORDER BY id",
       [task.project_id]
     );
-    if (!targets.length) return say('此專案沒有啟用的測試區部署目標，略過');
+    // 開關開著卻沒有目標＝設定不全，這個要讓人看到
+    if (!targets.length) { both('略過：此專案沒有啟用中的測試區部署目標。'); return await flush(); }
 
     const { runDeployGroup } = require('../lib/deploy-run');
     const { groupTargets } = require('../lib/deploy-cmd');
-    const byTarget = new Map(targets.map(t => [t.id, t]));
+    const { describeResults } = require('../lib/deploy-text');
     // 掛在同一個容器／服務上的多個資料庫合成一輪，客戶只被斷一次線
     for (const ids of groupTargets(targets)) {
       // userId 維持 null（這是系統觸發，不歸屬到人）；但 fetch 私有 repo 要憑證，
@@ -158,17 +165,22 @@ async function deployToTestEnv(task, taskId, userId) {
         trigger: 'auto_test', taskId: task.id, userId: null,
         gitUserId: task.approved_by || task.user_id,
       });
-      for (const r of results) {
-        const t = byTarget.get(r.targetId);
-        const who = t ? t.db_name : r.targetId;
-        const mods = (r.modules || []).join(', ') || '無模組變更';
-        say(r.ok ? `測試區部署完成（${who}）：${mods}`
-          : `測試區部署失敗（${who}／${mods}）：${r.error || '未知原因'}`);
-      }
+      for (const line of describeResults(results, targets, '客戶測試區')) both(line);
     }
   } catch (e) {
     // 部署出事不可以讓任務卡住。留聲，不靜默。
-    say(`自動部署發生例外：${e.message}`);
+    both(`自動部署發生例外：${e.message}`);
+  }
+  await flush();
+
+  // 一次部署在對話裡就是一則，不是散成五則，所以收尾才寫。
+  // 寫對話本身失敗不可以反過來卡住任務——碼已經在 ai-dev 上了。
+  async function flush() {
+    if (!lines.length) return;
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, `[客戶測試區部署]\n${lines.join('\n')}`]
+    ).catch(() => {});
   }
 }
 
