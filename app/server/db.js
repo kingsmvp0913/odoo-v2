@@ -966,6 +966,9 @@ async function migrate() {
     // 擋死刪任務。殘留的死 id 由列表 SQL 的 LEFT JOIN tasks 吸收（任務不在就回 null，徽章自動消失）。
     { table: 'project_chats', col: 'converted_task_id', sql: 'ALTER TABLE project_chats ADD COLUMN converted_task_id INTEGER' },
     { table: 'db_connections', col: 'ssh_key_enc', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_key_enc TEXT' },
+    // 遠端主機金鑰的 SHA256 指紋（TOFU）。第一次連上時寫入，之後每次比對；不符就拒連。
+    // 主機真的換了要重新信任＝重新儲存該筆連線設定（會清成 NULL）。
+    { table: 'db_connections', col: 'ssh_host_key', sql: 'ALTER TABLE db_connections ADD COLUMN ssh_host_key TEXT' },
     // direct 連線模式（DBeaver 直連 TCP）：不經 SSH，pg 直連
     { table: 'db_connections', col: 'db_host',         sql: 'ALTER TABLE db_connections ADD COLUMN db_host TEXT' },
     { table: 'db_connections', col: 'db_port',         sql: 'ALTER TABLE db_connections ADD COLUMN db_port INTEGER DEFAULT 5432' },

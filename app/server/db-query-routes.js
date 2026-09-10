@@ -136,6 +136,15 @@ function registerRoutes(app) {
       if (b.ssh_key_content) { set.push(`ssh_key_enc=$${idx++}`); params.push(encrypt(b.ssh_key_content)); }
       if (b.db_password) { set.push(`db_password_enc=$${idx++}`); params.push(encrypt(b.db_password)); }
       if (b.vpn_enabled !== undefined) { set.push(`vpn_enabled=$${idx++}`); params.push(!!b.vpn_enabled); }
+      // 送出了 SSH 身分那組欄位＝使用者是從連線編輯表單存的，此時清掉已記住的主機金鑰指紋，
+      // 下次連線重新信任（TOFU）。這是「主機重建導致指紋不符」唯一的解套路徑，
+      // ssh-exec 的錯誤訊息就是叫使用者來這裡重存一次。
+      // 只在這組欄位出現時才清，不是每次 PUT 都清：純改名／改 log 來源不該順手把驗證歸零。
+      // 已知取捨：能發 PUT 的人本來就握有這條連線的完整控制權，TOFU 防的是網路上的第三者，
+      // 不是已通過認證的使用者，所以由他明示重存來重新信任是合理的信任邊界。
+      if ([b.ssh_host, b.ssh_port, b.ssh_user, b.auth_type].some(v => v !== undefined)) {
+        set.push('ssh_host_key=NULL');
+      }
       if (!set.length) return res.status(400).json({ error: '無可更新欄位' });
       params.push(req.params.cid, req.params.id);
       let { rows } = await query(
@@ -245,6 +254,10 @@ function registerRoutes(app) {
           const sameDbHost = !!conn.db_host && conn.db_host === stored.db_host;
           if (!conn.ssh_password && sameSshHost) conn.ssh_password = stored.ssh_password;
           if (!conn.ssh_key && sameSshHost) conn.ssh_key = stored.ssh_key;
+          // 帶上 id 主機金鑰驗證才有比對的依據（指紋記在 db_connections.ssh_host_key）。
+          // 同樣只在「表單主機＝已存主機」時帶：表單把主機改掉了就是要連別台，
+          // 拿舊指紋去比對新機器只會得到誤導的「金鑰不符」，那不是攻擊。
+          if (sameSshHost) conn.id = stored.id;
           if (!conn.db_password && sameDbHost) conn.db_password = stored.db_password;
           // VPN 憑證(Gw)與轉發埠沒有表單欄位可填，一律沿用已存那筆——與上面密碼回填同一段、
           // 同一個 loadDecryptedConn 呼叫，不另開讀取路徑。

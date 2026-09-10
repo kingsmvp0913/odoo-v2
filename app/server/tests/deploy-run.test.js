@@ -266,3 +266,33 @@ test('組裡某個目標沒有模組變更時略過它，其餘照常部署', as
   expect(upg).not.toMatch(/-d odoo_dev /);
   await dbModule.query("UPDATE project_deploy_targets SET modules = ARRAY['idx_hj','idx_scan'] WHERE id = 2");
 });
+
+// 意圖（Rule 9）：換檔那段是 set -e，非 0 就代表模組可能已經被搬進備份卻沒補回。
+// 而下游的 odoo -u 對「找不到的模組」只印警告就 exit 0，健康檢查也照樣過——
+// 不在這裡擋住，結果會是「部署回報成功、模組從客戶正式機消失、last_deployed_sha 還被推進」，
+// 於是那個模組永遠不會再被送上去，而且沒有任何徵狀。
+test('換檔失敗就停住：不進行升級、走回滾、last_deployed_sha 不動', async () => {
+  await resetSha('oldsha');
+  const calls = [];
+  const d = {
+    git: {
+      headSha: async () => 'newsha',
+      changedPaths: async () => ['idx_hj/models/x.py'],
+      archive: async () => Buffer.from('tar-bytes'),
+    },
+    upload: async () => {},
+    exec: async (conn, cmd) => {
+      calls.push(cmd);
+      // 換檔是唯一會提到 .deploy-staging 的指令；回滾只碰 .deploy-bak-
+      if (cmd.includes('.deploy-staging')) return { stdout: '', stderr: 'tar: 寫入失敗：裝置空間不足', code: 2 };
+      return { stdout: '', stderr: '', code: 0 };
+    },
+  };
+  const r = await runDeploy(1, { trigger: 'manual_retry', userId: 1 }, d);
+  expect(r.ok).toBe(false);
+  expect(r.status).toBe('rolled_back');
+  // 最關鍵的一條：升級指令根本不該被送出去
+  expect(calls.some(c => c.includes('--stop-after-init'))).toBe(false);
+  const { rows } = await dbModule.query('SELECT last_deployed_sha FROM project_deploy_targets WHERE id = 1');
+  expect(rows[0].last_deployed_sha).toBe('oldsha');
+});

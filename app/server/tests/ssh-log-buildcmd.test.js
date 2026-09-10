@@ -66,15 +66,19 @@ test('容器名與 unit 名沿用既有連線欄位白名單', () => {
 
 test('sudo 需求沿用既有 ssh_password 慣例', () => {
   const cmd = buildLogCmd({ log_mode: 'docker', log_container: 'c', ssh_password: 'pw' }, FROM, TO);
-  expect(cmd).toContain('sudo -S');
+  expect(cmd).toContain('sudo -A');
 });
 
-// I1：docker 指令尾端帶 2>&1，sudo 的預設提示「[sudo] password for x: 」會被併入 stdout
-// 且不帶換行，黏在第一行 log 前面，splitEntries 會把它當孤兒續行丟棄——第一筆記錄因此消失
-// （已實測：2 筆記錄 + sudo 前綴，splitEntries 只切出 1 筆）。-p '' 把提示置空即可從源頭避免。
-test('sudo -S 帶 -p 空字串置空提示，避免吃掉第一筆 log', () => {
+// I1（原因已變，結論不變）：sudo 的預設提示「[sudo] password for x: 」會被 2>&1 併進 stdout
+// 且不帶換行，黏在第一行 log 前面，splitEntries 把它當孤兒續行丟棄——第一筆記錄因此消失
+// （已實測：2 筆記錄 + sudo 前綴，splitEntries 只切出 1 筆）。
+// 舊解法是 -p '' 把提示置空；現在走 -A（SUDO_ASKPASS）根本不印提示，同樣從源頭避免。
+// 附帶更重要的一件事：密碼不再出現在指令字串裡（/proc/<pid>/cmdline 全機可讀）。
+test('log 指令不印 sudo 提示，也不含密碼', () => {
   const cmd = buildLogCmd({ log_mode: 'docker', log_container: 'c', ssh_password: 'pw' }, FROM, TO);
-  expect(cmd).toContain("sudo -S -p ''");
+  expect(cmd).toContain('sudo -A');
+  expect(cmd).not.toContain('pw |');
+  expect(cmd).not.toContain("echo 'pw'");
 });
 
 // I7：Debian/Ubuntu 預設 awk 是 mawk，較舊版本不支援 POSIX interval expression（{4}），

@@ -6,12 +6,38 @@ window.ReleaseModal = {
   props: { projectId: { type: [Number, String], required: true } },
   emits: ['close'],
   data() {
-    return { pending: [], loading: true, working: false, repos: null, deploy: null, deploySkipped: false };
+    return {
+      pending: [], loading: true, working: false, repos: null, deploy: null,
+      deploySkipped: false, deploySkipReason: null,
+      // 後端說「這一按會不會動到客戶正式機」。預設當成不會，抓失敗時才不會憑空嚇人。
+      prodDeploy: { autoDeploy: false, targets: 0, isAdmin: false },
+      confirmDeploy: false,
+    };
+  },
+  computed: {
+    // 會真的部署到客戶正式區才需要那道確認。條件與後端的閘門一致，
+    // 否則畫面要人勾一個後端根本不看的框，或反過來沒勾就被擋（看起來像壞掉）。
+    willDeployProd() {
+      const p = this.prodDeploy || {};
+      return !!(p.autoDeploy && p.targets > 0 && p.isAdmin);
+    },
+    // 有目標可部署、但這個人沒權限：合併照做，正式區不會動。要先講，不要等按完才說。
+    prodNeedsAdmin() {
+      const p = this.prodDeploy || {};
+      return !!(p.autoDeploy && p.targets > 0 && !p.isAdmin);
+    },
+    // 沒勾確認時不把按鈕鎖住，改成讓標籤說實話：想只合併不部署是合理需求，
+    // 鎖住按鈕會讓那個人以為畫面壞了，而且沒有別的地方可以只合併。
+    actionLabel() {
+      if (!this.willDeployProd) return '確認合併';
+      return this.confirmDeploy ? '合併並部署正式區' : '只合併到 main（不部署）';
+    },
   },
   async created() {
     try {
       const data = await Api.get(`projects/${this.projectId}/pending-release`);
       this.pending = data.tasks || [];
+      if (data.prodDeploy) this.prodDeploy = data.prodDeploy;
     } catch (e) {
       showToast(e.message, 'error');
       this.$emit('close');
@@ -20,12 +46,14 @@ window.ReleaseModal = {
   methods: {
     async doRelease() {
       this.working = true;
-      this.repos = null; this.deploy = null; this.deploySkipped = false;
+      this.repos = null; this.deploy = null; this.deploySkipped = false; this.deploySkipReason = null;
       try {
-        const data = await Api.post(`projects/${this.projectId}/release`, {});
+        const data = await Api.post(`projects/${this.projectId}/release`,
+          { confirmDeploy: this.confirmDeploy === true });
         if (data.ok) {
           const n = (data.tasks || []).length;
           this.deploySkipped = !!data.deploySkipped;
+          this.deploySkipReason = data.deploySkipReason || null;
           const failed = (data.deploy || []).filter((d) => !d.ok);
           if (failed.length) {
             // 部署失敗留在彈窗裡攤開。碼已經上 main 了，這時候關掉視窗等於把失敗藏起來——
@@ -37,8 +65,13 @@ window.ReleaseModal = {
           this.$emit('close');
           // ok 只代表「沒有任何 repo 失敗」；ai-dev 不存在時也是 ok，但實際什麼都沒上
           const base = n ? `已上正式，${n} 張任務` : '沒有任何變更需要上正式';
-          const tail = this.deploySkipped ? '（自動部署已停用，客戶正式區未更新）'
-            : ((data.deploy || []).length ? '，正式區已部署' : '');
+          if (this.deploySkipReason) {
+            // 碼上了 main 但客戶正式區沒動，是兩件不同的事。這種半套結果要黏著不自動消失，
+            // 否則使用者只會記得「成功了」，然後以為客戶已經在用新版。
+            showToast(`${base}。${this.deploySkipReason}`, 'warn', 0);
+            return;
+          }
+          const tail = (data.deploy || []).length ? '，正式區已部署' : '';
           showToast(base + tail, n ? 'success' : 'info');
         } else {
           // 失敗細節留在彈窗裡攤開，不縮成一句 toast
@@ -72,6 +105,23 @@ window.ReleaseModal = {
               </div>
               <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-3)">
                 ⚠ 會把整條 ai-dev 一次合併到 main，無法只挑其中幾張。
+              </div>
+              <!-- 會不會動到客戶正在用的系統，必須在按下去之前講，而且要講不可逆的那一半。
+                   套 .error-msg 是為了拿它的 dark-mode 配色，不另外寫死顏色。 -->
+              <div v-if="willDeployProd" class="error-msg" style="margin-top:var(--space-3)">
+                <div><strong>這會直接部署到客戶的正式區</strong>（{{ prodDeploy.targets }} 個目標）。</div>
+                <div style="margin-top:4px">
+                  部署期間客戶會短暫斷線。升級失敗時程式檔案會自動還原，但<strong>資料庫的改動無法還原</strong>——平台不會備份客戶資料庫。
+                </div>
+                <label style="display:flex;align-items:flex-start;gap:6px;margin-top:8px;cursor:pointer">
+                  <input type="checkbox" v-model="confirmDeploy" style="margin-top:3px;flex-shrink:0">
+                  <span>我了解失敗時資料庫救不回來，確認一併部署到正式區</span>
+                </label>
+              </div>
+              <div v-else-if="prodNeedsAdmin"
+                style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-3)">
+                此專案有啟用中的正式區部署目標，但部署到客戶正式區需要管理員權限。
+                這次只會合併到 main，客戶正式區不會更新。
               </div>
             </template>
             <!-- 部署失敗細節：碼已經上 main 了，這裡不攤開就等於藏起來 -->
@@ -107,7 +157,7 @@ window.ReleaseModal = {
           <button class="btn btn-outline" @click="$emit('close')" :disabled="working">取消</button>
           <button class="btn btn-primary" @click="doRelease"
             :disabled="working || loading || pending.length === 0">
-            <span v-if="working" class="spinner"></span>{{ working ? '合併中…' : '確認合併' }}
+            <span v-if="working" class="spinner"></span>{{ working ? '合併中…' : actionLabel }}
           </button>
         </div>
       </div>

@@ -76,8 +76,13 @@ test('升級指令把 exit code 落檔，不經管線', () => {
   expect(cmd).not.toMatch(/--stop-after-init[^\n]*\|/);
 });
 
-test('有密碼時 sudo 走 -S 且提示置空；免密時是裸 sudo', () => {
-  expect(buildRestartCmd(HUNGJOU_TEST, PW)).toContain("sudo -S -p ''");
+// 意圖（Rule 9）：需要密碼的機器走 sudo -A（密碼由 stdin 進 askpass），免密機器維持裸 sudo。
+// 關鍵斷言是「指令字串裡沒有密碼」——遠端是 bash -c "整串指令"，argv 落在
+// /proc/<pid>/cmdline，Linux 上全機可讀，而那顆密碼就是 SSH 登入密碼。
+test('有密碼時走 sudo -A 且指令不含密碼；免密時是裸 sudo', () => {
+  const cmd = buildRestartCmd(HUNGJOU_TEST, PW);
+  expect(cmd).toContain('sudo -A');
+  expect(cmd).not.toContain(PW.ssh_password);
   expect(buildRestartCmd(CIYUN_TEST, NOPW)).toContain('sudo systemctl restart odoo-test');
 });
 
@@ -99,10 +104,41 @@ test('替換是整包 mv，先備份再換，且只碰指定模組', () => {
   expect(cmd).not.toContain('rsync');
 });
 
+// 意圖（Rule 9）：沒有 set -e 的話，tar 解檔失敗（磁碟滿、tgz 損毀）之後後面幾行照跑——
+// 舊模組已經被 mv 進備份、新的沒解出來，模組就整個從 addons 目錄消失了。
+// 而 Odoo 的 -u 對「找不到的模組」只印警告就 exit 0、健康檢查照樣過 ⇒ 部署回報成功、
+// last_deployed_sha 被推進，那個模組從此不會再被送上去。這一行是唯一擋住它的東西。
+test('換檔整段 set -e，且解出來了才准動現役目錄', () => {
+  const cmd = buildSwapCmd(HUNGJOU_TEST, ['idx_hj'], TS);
+  expect(cmd.split('\n')[0]).toBe('set -e');
+  // tar 解完要有一道「頂層目錄真的在」的斷言，才輪得到動 addons 底下的現役目錄
+  const lines = cmd.split('\n');
+  const assertIdx = lines.findIndex(l => l === '[ -d /home/arich/DockerData/odoo/Data/odoo-tst/addons/.deploy-staging/idx_hj ]');
+  const moveIdx = lines.findIndex(l => l.includes('mv /home/arich/DockerData/odoo/Data/odoo-tst/addons/idx_hj'));
+  expect(assertIdx).toBeGreaterThan(-1);
+  expect(moveIdx).toBeGreaterThan(assertIdx);
+  // 上一次失敗留下的 staging 殘骸會讓上面那道斷言假通過，所以解檔前要先清掉
+  expect(cmd).toContain('rm -rf /home/arich/DockerData/odoo/Data/odoo-tst/addons/.deploy-staging/idx_hj');
+});
+
 test('回滾把備份搬回原位', () => {
   const cmd = buildRollbackCmd(HUNGJOU_TEST, ['idx_hj'], TS);
   expect(cmd).toContain('.deploy-bak-20260908T153000/idx_hj');
   expect(cmd).toContain('/addons/idx_hj');
+});
+
+// 意圖（Rule 9）：回滾若先無條件 rm -rf 現役目錄再看有沒有備份，那麼「swap 在建立備份之前
+// 就失敗」的情況下，那一行會把客戶正在用的模組直接刪掉，而且沒有東西補得回去。
+// 刪除必須被「備份存在」這個條件包住，兩件事同進同出。
+test('回滾在沒有備份時不得刪掉現役模組', () => {
+  const cmd = buildRollbackCmd(HUNGJOU_TEST, ['idx_hj'], TS);
+  for (const line of cmd.split('\n')) {
+    if (!line.includes('rm -rf')) continue;
+    // 同一行內必須先出現備份存在的判斷，rm 才會被執行到
+    expect(line.indexOf('[ -d /home/arich/DockerData/odoo/Data/odoo-tst/addons/.deploy-bak-20260908T153000/idx_hj ]'))
+      .toBeGreaterThan(-1);
+    expect(line.indexOf('[ -d ')).toBeLessThan(line.indexOf('rm -rf'));
+  }
 });
 
 // 意圖：這是唯一擋在「使用者可編輯的欄位」與「遠端 shell」之間的東西。

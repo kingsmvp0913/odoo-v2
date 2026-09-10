@@ -63,8 +63,11 @@ const addTarget = (env, enabled) => dbModule.query(
   `INSERT INTO project_deploy_targets (project_id, env, runtime, addons_dir, db_name, branch, enabled)
    VALUES ($1,$2,'docker','/a/addons','db','main',$3)`, [projectId, env, enabled]
 );
-const release = () => request(app).post(`/api/projects/${projectId}/release`)
-  .set('Authorization', `Bearer ${token}`).send({});
+// 預設帶 confirmDeploy：這些既有案例驗的是「部署有沒有被觸發、失敗怎麼回報」，
+// 不是那道確認閘門本身（閘門另有下面三支專屬測試）。
+const release = (body = { confirmDeploy: true }, t = token) =>
+  request(app).post(`/api/projects/${projectId}/release`)
+    .set('Authorization', `Bearer ${t}`).send(body);
 
 test('有啟用的正式區目標時，上正式之後接著部署', async () => {
   await addTarget('prod', true);
@@ -85,11 +88,16 @@ test('專案開關關閉時回應帶 deploySkipped，且不部署', async () => 
   expect(runDeployGroup).not.toHaveBeenCalled();
 });
 
-test('沒有啟用的正式區目標時 deploy 是空陣列', async () => {
+// deploySkipped 的語意已擴大：從「開關關著」變成「這次沒有部署，原因在 deploySkipReason」。
+// 沒有啟用中的正式區目標同樣代表客戶正式區沒更新，那件事值得講——原本回 false
+// 會讓彈窗顯示成「正式區已部署」，而其實一個目標都沒動。
+test('沒有啟用的正式區目標時不部署，並說明原因', async () => {
   await addTarget('prod', false);
   const res = await release();
   expect(res.body.deploy).toEqual([]);
-  expect(res.body.deploySkipped).toBe(false);
+  expect(res.body.deploySkipped).toBe(true);
+  expect(res.body.deploySkipReason).toMatch(/沒有啟用中的正式區部署目標/);
+  expect(runDeployGroup).not.toHaveBeenCalled();
 });
 
 // 意圖：測試區目標由核准那關負責，「上正式」不該碰它。
@@ -126,4 +134,57 @@ test('部署失敗仍標記 merged_to_main_at', async () => {
   await release();
   const { rows } = await dbModule.query('SELECT merged_to_main_at FROM tasks WHERE task_id = $1', ['task_pa_1']);
   expect(rows[0].merged_to_main_at).not.toBeNull();
+});
+
+// ── 正式區部署的授權閘門 ─────────────────────────────────────────────
+// 意圖（Rule 9）：這條路徑會 SSH 進客戶的正式機下指令。專用的部署端點（deploy-routes.js）
+// 要求 admin ＋ 明確 confirm，但 /release 原本只驗登入、也不要求確認——等於整套授權
+// 設計可以從這裡繞過去，平台上任何一個非 admin 帳號都按得到客戶的正式機。
+// 合併到 main 那一半維持開放（本來就是），關起來的只有「動客戶正式機」這一半。
+
+test('非 admin 按上正式：照樣合併到 main，但不部署，且要講出原因', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('pass1234', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('regular', $1, '一般使用者', 'user') ON CONFLICT (username) DO NOTHING",
+    [hash]
+  );
+  const login = await request(app).post('/api/auth/login').send({ username: 'regular', password: 'pass1234' });
+  await addTarget('prod', true);
+
+  const res = await release({ confirmDeploy: true }, login.body.token);
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);          // 合併照做
+  expect(res.body.deploySkipped).toBe(true);
+  expect(res.body.deploySkipReason).toMatch(/管理員/);
+  expect(runDeployGroup).not.toHaveBeenCalled();   // 客戶正式機一根手指都沒碰到
+});
+
+// 意圖：勾選是「我知道失敗時資料庫救不回來」的那一下。沒勾就不准動客戶正式區，
+// 而且不可以靜默略過——使用者會以為已經上線。
+test('admin 但沒帶 confirmDeploy：不部署，且回得出原因', async () => {
+  await addTarget('prod', true);
+  const res = await release({});
+  expect(res.body.ok).toBe(true);
+  expect(res.body.deploySkipped).toBe(true);
+  expect(res.body.deploySkipReason).toMatch(/未確認/);
+  expect(runDeployGroup).not.toHaveBeenCalled();
+});
+
+test('admin 且明確確認：才真的部署', async () => {
+  await addTarget('prod', true);
+  const res = await release({ confirmDeploy: true });
+  expect(res.body.deploySkipped).toBe(false);
+  expect(runDeployGroup).toHaveBeenCalled();
+});
+
+// 意圖：彈窗要先知道「按下去會不會動到客戶正式機」，警告才寫得對。
+// 沒有這段的話警告只能寫成一句通用的話，於是每次都出現，於是沒有人會看。
+test('pending-release 帶出「這一按會不會動到正式區」', async () => {
+  await addTarget('prod', true);
+  await addTarget('prod', false);      // 停用的不算
+  await addTarget('test', true);       // 測試區不算
+  const res = await request(app).get(`/api/projects/${projectId}/pending-release`)
+    .set('Authorization', `Bearer ${token}`);
+  expect(res.body.prodDeploy).toEqual({ autoDeploy: true, targets: 1, isAdmin: true });
 });

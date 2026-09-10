@@ -191,11 +191,19 @@ function buildSwapCmd(target, modules, ts) {
   const dir = path_(target.addons_dir, 'addons_dir');
   const stamp = requireIdent(ts, 'ts');
   const bak = `${dir}/.deploy-bak-${stamp}`;
-  const lines = [`mkdir -p ${bak}`];
+  // set -e：少了它，tar 解檔失敗（磁碟滿、檔案損毀）之後後面幾行照跑——舊模組已經被搬進
+  // 備份、新的沒解出來，於是模組整個從 addons 目錄消失。而 Odoo 的 -u 對「找不到的模組」
+  // 只印警告、exit 0，健康檢查也會過 ⇒ 部署回報成功、last_deployed_sha 被推進，
+  // 那個模組從此不會再被送上去。呼叫端另外檢查本段的 exit code（deploy-run.js）。
+  const lines = ['set -e', `mkdir -p ${bak}`];
   for (const m of modules) {
     const mod = requireIdent(m, 'module');
+    // 先清 staging 的同名殘骸：上一次失敗留下的舊目錄會讓下面那道 [ -d ] 斷言假通過
+    lines.push(`rm -rf ${dir}/.deploy-staging/${mod}`);
     lines.push(`tar -xzf ${dir}/.deploy-staging/${mod}.tgz -C ${dir}/.deploy-staging`);
-    lines.push(`[ -d ${dir}/${mod} ] && mv ${dir}/${mod} ${bak}/${mod} || true`);
+    // 解出來了才准動現役目錄。tar 可能 exit 0 卻沒產出預期的頂層目錄（打包內容不對）
+    lines.push(`[ -d ${dir}/.deploy-staging/${mod} ]`);
+    lines.push(`if [ -d ${dir}/${mod} ]; then mv ${dir}/${mod} ${bak}/${mod}; fi`);
     lines.push(`mv ${dir}/.deploy-staging/${mod} ${dir}/${mod}`);
   }
   return lines.join('\n');
@@ -205,11 +213,13 @@ function buildRollbackCmd(target, modules, ts) {
   const dir = path_(target.addons_dir, 'addons_dir');
   const stamp = requireIdent(ts, 'ts');
   const bak = `${dir}/.deploy-bak-${stamp}`;
+  // 刻意不加 set -e：回滾是 best-effort，一個模組還不回去不該讓其餘模組也留在新版。
+  // 但「先 rm -rf 再看有沒有備份」絕對不行——備份不存在時（swap 在建立備份之前就失敗）
+  // 那一行會把客戶現役的模組直接刪掉，而且沒有東西補回去。條件包住整組，沒備份就不動。
   const lines = [];
   for (const m of modules) {
     const mod = requireIdent(m, 'module');
-    lines.push(`rm -rf ${dir}/${mod}`);
-    lines.push(`[ -d ${bak}/${mod} ] && mv ${bak}/${mod} ${dir}/${mod} || true`);
+    lines.push(`if [ -d ${bak}/${mod} ]; then rm -rf ${dir}/${mod}; mv ${bak}/${mod} ${dir}/${mod}; fi`);
   }
   return lines.join('\n');
 }

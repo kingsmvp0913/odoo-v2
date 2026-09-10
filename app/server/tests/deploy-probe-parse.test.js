@@ -104,7 +104,9 @@ test('慈雲的 conf 用 addons_path= 無空格、port 是 8070', () => {
 // 意圖：探測腳本裡如果有任何自由文字，白名單就白設了。
 test('探測腳本唯讀且不含破壞性指令', () => {
   const s = buildProbeScript({ ssh_password: "p'w" });
-  expect(s).toContain("sudo -S -p ''");
+  expect(s).toContain('sudo -A');
+  // 探測會連進客戶正式機。密碼走 stdin，不得出現在指令字串（/proc/<pid>/cmdline 全機可讀）
+  expect(s).not.toContain("p'w");
   expect(s).not.toMatch(/\brm\b|\bmv\b|systemctl (stop|restart|start)|docker (restart|stop|rm)/);
   expect(s).toContain('### odooversion');
 });

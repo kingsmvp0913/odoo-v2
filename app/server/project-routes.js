@@ -34,10 +34,14 @@ function validateFolderName(value, { required } = {}) {
   return null;
 }
 
+async function isAdminUser(userId) {
+  const { rows } = await query('SELECT role FROM users WHERE id = $1', [userId]);
+  return !!(rows.length && rows[0].role === 'admin');
+}
+
 async function requireAdmin(req, res, next) {
   try {
-    const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-    if (!rows.length || rows[0].role !== 'admin') {
+    if (!await isAdminUser(req.userId)) {
       return res.status(403).json({ error: 'Admin only' });
     }
     next();
@@ -900,7 +904,21 @@ function registerRoutes(app) {
   app.get('/api/projects/:id/pending-release', verifyToken, async (req, res) => {
     try {
       const { rows } = await query(PENDING_RELEASE_SQL, [req.params.id]);
-      res.json({ tasks: rows });
+      // 彈窗要先知道「按下去會不會動到客戶正式機」才有辦法把警告寫對。
+      // 沒有這段的話，警告只能寫死成一句通用的話，於是每次都出現，於是沒有人會看。
+      const { rows: [p] } = await query('SELECT auto_deploy_enabled FROM projects WHERE id = $1', [req.params.id]);
+      const { rows: [n] } = await query(
+        "SELECT COUNT(*)::int AS c FROM project_deploy_targets WHERE project_id = $1 AND env = 'prod' AND enabled = true",
+        [req.params.id]
+      );
+      res.json({
+        tasks: rows,
+        prodDeploy: {
+          autoDeploy: !!(p && p.auto_deploy_enabled),
+          targets: n.c,
+          isAdmin: await isAdminUser(req.userId),
+        },
+      });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -958,16 +976,31 @@ function registerRoutes(app) {
       }
       // 上正式之後接部署。刻意放在 merged_to_main_at 標記之後：碼已經 push 上 main
       // 是既成事實，部署失敗不可以讓 /release 回錯——回錯使用者會重按，變成重複 merge。
-      let deploy = [], deploySkipped = false;
+      // 授權：這條路徑會 SSH 進客戶的正式機下指令，門檻必須跟專用的部署端點一致
+      // （deploy-routes.js 是 admin ＋ 明確 confirm）。這裡原本只驗登入、也不要求確認，
+      // 等於整套授權設計可以繞過——平台現有的非 admin 帳號都按得到。
+      // 合併到 main 那一半維持原樣（本來就開放），只把「動客戶正式機」這一半關起來，
+      // 並且任何一種「沒部署」都要講出原因：靜默略過會讓人以為已經上線。
+      let deploy = [], deploySkipped = false, deploySkipReason = null;
       if (allOk && anyMerged) {
         const { isAutoDeployEnabled } = require('./lib/auto-deploy-switch');
+        const { rows: targets } = await query(
+          "SELECT * FROM project_deploy_targets WHERE project_id = $1 AND env = 'prod' AND enabled = true ORDER BY id",
+          [project.id]
+        );
         if (!await isAutoDeployEnabled(project.id)) {
           deploySkipped = true;
+          deploySkipReason = '此專案未啟用自動部署，客戶正式區未更新。';
+        } else if (!targets.length) {
+          deploySkipped = true;
+          deploySkipReason = '此專案沒有啟用中的正式區部署目標，客戶正式區未更新。';
+        } else if (!await isAdminUser(req.userId)) {
+          deploySkipped = true;
+          deploySkipReason = '部署到客戶正式區需要管理員權限。程式已上 main，請通知管理員執行部署。';
+        } else if (req.body.confirmDeploy !== true) {
+          deploySkipped = true;
+          deploySkipReason = '未確認正式區部署。程式已上 main，客戶正式區未更新。';
         } else {
-          const { rows: targets } = await query(
-            "SELECT * FROM project_deploy_targets WHERE project_id = $1 AND env = 'prod' AND enabled = true ORDER BY id",
-            [project.id]
-          );
           const { runDeployGroup } = require('./lib/deploy-run');
           const { groupTargets } = require('./lib/deploy-cmd');
           // 掛在同一個容器／服務上的多個資料庫合成一輪：停一次、逐個升、起一次。
@@ -991,7 +1024,7 @@ function registerRoutes(app) {
         }
       }
 
-      res.json({ ok: allOk, repos: results, tasks, deploy, deploySkipped });
+      res.json({ ok: allOk, repos: results, tasks, deploy, deploySkipped, deploySkipReason });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

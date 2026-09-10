@@ -5,7 +5,7 @@
 const path = require('path');
 const { query } = require('../db');
 const { maskSecrets } = require('./log-parse');
-const { sshExec } = require('./ssh-exec');
+const { sshExec, buildConnectConfig, explainSshError } = require('./ssh-exec');
 const {
   pickModules, buildUpgradeCmd, buildUpgradeCmdMulti, readExitCodesByDb,
   buildRestartCmd, buildHealthCmd, buildSwapCmd, buildRollbackCmd,
@@ -141,8 +141,12 @@ async function runDeployGroup(targetIds, { trigger, taskId = null, userId = null
     }
 
     // 2. 解檔 + 原子替換
+    // 這一段的 exit code 一定要看：它整段是 set -e，失敗代表模組可能已被搬進備份卻沒補回，
+    // 而下游的 odoo -u 對「找不到的模組」只印警告就 exit 0，健康檢查照樣過——
+    // 不擋在這裡，結果會是「部署回報成功、模組從客戶機消失、sha 還被推進」。
     const swap = await exec(target, buildSwapCmd(head, allModules, ts));
     say(swap.stdout); say(swap.stderr);
+    if (swap.code !== 0) throw new Error(`檔案替換失敗（EXITCODE=${swap.code === undefined ? '讀不到' : swap.code}），未進行升級`);
 
     // 3. 升級（含重啟）。多個 DB 時停一次、逐個升、起一次。
     if (active.length === 1) {
@@ -251,11 +255,10 @@ function defaultUpload(conn, buffer, remotePath) {
         };
         next(0);
       });
-    }).on('error', reject);
-    const cfg = { host: conn.ssh_host, port: conn.ssh_port || 22, username: conn.ssh_user, readyTimeout: 20000 };
-    if (conn.auth_type === 'key' && conn.ssh_key) cfg.privateKey = Buffer.from(conn.ssh_key, 'utf8');
-    else cfg.password = conn.ssh_password;
-    c.connect(cfg);
+    }).on('error', (e) => reject(explainSshError(e)));
+    // 與 sshExec 共用同一份連線設定，主機金鑰驗證才不會只保護「下指令」那一半。
+    // 上傳這條路徑送的是要被 Odoo 執行的程式碼，被冒充的後果比讀取更嚴重。
+    c.connect(buildConnectConfig(conn, 20000));
   });
 }
 
