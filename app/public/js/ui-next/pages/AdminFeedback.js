@@ -66,12 +66,32 @@
     },
     methods: {
       pillClass(status) { return STATUS_PILL[status] || 'pill-info'; },
+      /**
+       * 健檢自己開的單是拿同一段 diagnosis 同時當 content 與 triage_detail（見
+       * health-check-runner 的 openFeedbackForFinding 與 db.js 的補單 SQL），而 agent_label
+       * 又常常就是 diagnosis 的第一行。整段照印的話同一段話會在同一畫面上出現三次：
+       * 內容欄、展開區的標題、展開區的內文——使用者說的「點開來就是一大堆文字」有一半是這個。
+       * 一樣就不印；整塊都沒有新資訊時連標籤都不出現。
+       */
+      firstLine(t) { return String(t || '').split('\n').map(l => l.trim()).find(Boolean) || ''; },
+      showTriageTitle(r) { return !!r.triage_title && r.triage_title.trim() !== this.firstLine(r.content); },
+      showTriageDetail(r) { return !!r.triage_detail && r.triage_detail.trim() !== String(r.content || '').trim(); },
+      showTriageBlock(r) { return this.showTriageTitle(r) || this.showTriageDetail(r) || !!r.triage_layer; },
       fmtTime(ts) { return new Date(ts).toLocaleString('zh-TW'); },
       // 健檢自己開的單，content 是整段診斷（好幾百字）。攤開的話一列就吃掉整個畫面高度，
       // 「這頁有幾筆待審」完全看不出來。長的先切短、點那一列就展開。
       // ⚠ 判長短只能量 DOM 不能估字數：中英混排與換行讓同樣字數高度差很多（健檢頁那邊用字數
       // 估，實測有一半的按鈕按下去畫面完全不動）。6.4 要與 app.css 的 .hc-body-clamp 一致。
-      bodyClamped(r) { return this.bodyLong[r.id] === true && !this.bodyOpen[r.id]; },
+      /**
+       * 內容欄一律維持收合，**不因為展開而解除**。
+       *
+       * 原本展開時就地放全文，而那一欄只有 ~300px 寬：健檢開的單內文動輒一兩千字，於是變成
+       * 一條又窄又高的文字柱（使用者：「點開來看到的就是一大堆文字」）。改成欄位永遠只給
+       * 兩行預覽，全文改由展開區用整列寬度呈現——同一段話仍然只出現一次（見下面 showRaw）。
+       */
+      bodyClamped(r) { return this.bodyLong[r.id] === true; },
+      // 只有「欄位真的被切掉」時才在展開區補全文；短內容上面那格已經看得完，補了就是重複。
+      showRaw(r) { return this.bodyLong[r.id] === true; },
       // 整列可點：按鈕與附件縮圖各自 @click.stop，否則按「駁回」會順手把列也展開／收合。
       toggleRow(r) { this.bodyOpen = { ...this.bodyOpen, [r.id]: !this.bodyOpen[r.id] }; },
       // 狀態欄要說的是「這筆現在卡在哪」，而不只是人工裁決的那個欄位值：試過沒成、被機器踢
@@ -428,27 +448,59 @@
                       </div>
                     </td>
                   </tr>
-                  <!-- 展開區：原文全文與翻譯結果。翻譯結果從表格欄位移到這裡——它是長文，
-                       跟原文並排會把兩邊都壓扁，而日常只需要看狀態欄那顆標籤。 -->
+                  <!-- 展開區＝「這一列上面看不到的東西」。
+                       ⚠ 不再重印原文：上面那格的收合（.hc-body-clamp）在展開時就解除了（見
+                       bodyClamped），全文本來就在同一畫面上，再印一次等於同一段話出現兩次，
+                       把真正只有這裡才看得到的東西（駁回原因、上次為什麼沒過）擠到下面。 -->
                   <tr v-if="bodyOpen[r.id]" class="empty-row">
                     <td colspan="6" style="background:var(--bg);text-align:left;padding:var(--space-3) var(--space-4)">
-                      <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">原文</div>
-                      <div class="hc-body" style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">{{ r.content }}</div>
-                      <!-- triage_* 只有健檢自己開的單才有值（health-check-runner 開單時直接填好）。
-                           使用者親手打的意見沒有這些欄位——2026-09-09 之後不再有 agent 翻譯它，
-                           原文就是下游真正讀的東西，所以沒有值時整塊不顯示，不是「還沒翻」。 -->
-                      <template v-if="r.triage_title">
-                        <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:4px">健檢整理的描述</div>
-                        <div style="font-size:var(--fs-sm)"><strong>{{ r.triage_title }}</strong></div>
-                        <div v-if="r.triage_layer" style="font-size:var(--fs-sm);color:var(--text-muted)">{{ layerLabel[r.triage_layer] || r.triage_layer }}</div>
-                        <div v-if="r.triage_detail" class="hc-body" style="font-size:var(--fs-sm)">{{ r.triage_detail }}</div>
-                      </template>
-                      <!-- triage_note 是「為什麼被退回」的唯一說明。
-                           ⚠ 不可用 .pill：那是 inline-block 短標籤，
-                           欄位一窄就被壓成一個字一行的直條（實測「執行失敗：claude exited with
-                           code 1」變成 6 行寬 1 字，就是使用者說的跑版）。 -->
-                      <div v-if="r.triage_note" class="hc-body"
-                        style="margin-top:6px;padding-left:6px;border-left:2px solid var(--warning-strong);font-size:var(--fs-xs);color:var(--warning-strong)">{{ r.triage_note }}</div>
+                      <!-- 左標右值的兩欄清單（樣式見 07-admin.css 的 .afb-detail）。
+                           標籤一律短，長的補充說明放進值裡的 <small>，否則左欄被撐開、
+                           同一頁不同列的對齊線會各自不同。 -->
+                      <dl class="afb-detail">
+                        <!-- 全文。上面那格永遠只給兩行預覽（見 bodyClamped），所以這裡不是重複——
+                             它是同一段話唯一完整呈現的地方，而且用的是整列寬度，不是 300px 的窄欄。 -->
+                        <template v-if="showRaw(r)">
+                          <dt>原文</dt>
+                          <dd class="hc-body">{{ r.content }}</dd>
+                        </template>
+                        <!-- triage_* 有兩種來源，標籤要分清楚，否則使用者會以為自己的意見被健檢改寫過：
+                             ① 健檢自己開的單（user_id 為 NULL）——health-check-runner 開單時直接填好；
+                             ② 2026-09-09 之前使用者提的意見——當時還有一關 agent 把原文翻成規格，
+                                那一關已經拿掉（platform-fix 直接讀原文），新的意見不會再有值。 -->
+                        <template v-if="showTriageBlock(r)">
+                          <dt>{{ r.user_id ? 'AI 描述' : '健檢描述' }}</dt>
+                          <dd>
+                            <strong v-if="showTriageTitle(r)">{{ r.triage_title }}</strong>
+                            <div v-if="showTriageDetail(r)" class="hc-body" :style="showTriageTitle(r) ? 'margin-top:4px' : ''">{{ r.triage_detail }}</div>
+                            <small v-if="r.triage_layer">分類：{{ layerLabel[r.triage_layer] || r.triage_layer }}</small>
+                            <small v-if="r.user_id">舊資料——把原文翻成規格的那一關已於 2026-09-09 移除</small>
+                          </dd>
+                        </template>
+                        <!-- 人工裁決時打的字（駁回原因／標完成的說明）。它是這一頁唯一存得下「為什麼
+                             做這個決定」的地方，原本卻整個沒有畫出來——打了字、存進資料庫，
+                             然後在畫面上永遠找不到。 -->
+                        <template v-if="r.verdict_note">
+                          <dt>{{ r.status === 'rejected' ? '駁回原因' : '裁決說明' }}</dt>
+                          <dd class="hc-body">{{ r.verdict_note }}</dd>
+                        </template>
+                        <!-- 上次批次為什麼沒過／沒跑到。原本只掛在狀態標籤的 title（滑鼠停留才看得到），
+                             而那顆標籤上寫的正是「上次未完成」——問「為什麼」的人找不到答案。 -->
+                        <template v-if="r.last_attempt_note">
+                          <dt>上次改善</dt>
+                          <dd class="hc-body">{{ r.last_attempt_note }}</dd>
+                        </template>
+                        <!-- triage_note 是「為什麼被機器退回人工」的唯一說明。
+                             ⚠ 不可用 .pill：那是 inline-block 短標籤，欄位一窄就被壓成一個字一行的
+                             直條（實測「執行失敗：claude exited with code 1」變成 6 行寬 1 字）。 -->
+                        <template v-if="r.triage_note">
+                          <dt>退回人工</dt>
+                          <dd class="hc-body afb-warn">{{ r.triage_note }}</dd>
+                        </template>
+                      </dl>
+                      <!-- 四塊都空又不能刪（已完成）時整格會是空白，看起來像展開壞掉。 -->
+                      <div v-if="!showRaw(r) && !showTriageBlock(r) && !r.verdict_note && !r.last_attempt_note && !r.triage_note && r.status === 'done'"
+                        style="font-size:var(--fs-sm);color:var(--text-muted)">沒有其他資訊</div>
                       <!-- 刪除放這裡而不是操作欄：不可復原（連附件實體檔一起刪），要多一個
                            「點開這一列」的動作才碰得到。已完成的不給刪——碼已經合併進 master，
                            刪掉等於把「這件事為什麼做」的唯一紀錄清掉（後端也擋，見 feedback-routes.js）。 -->

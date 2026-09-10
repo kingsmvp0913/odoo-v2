@@ -482,3 +482,33 @@
    ⚠ 不要放寬成所有 .content——ui-next 各頁都有 sticky 補丁是繞著這個限制長出來的，一次全解會
    讓那些頁面的定位同時改變。 */
 .ui-next-main .content:has(> .aa-layout) { overflow: visible }
+
+/* 改善提案的展開區：原本是「小灰標題＋一段文字」重複四次，全部同字級、齊左、之間只有留白，
+   讀起來就是一整塊文字，分不出哪句話屬於哪一項（使用者回報：「點開來看到的就是一大堆文字」）。
+   改成左標右值的兩欄清單，項與項之間拉一條細線——掃一眼就數得出有幾項、各是什麼。
+   ⚠ 左欄寫死寬度而不是 auto：auto 會被最長的那個標籤撐開，而標籤長度隨資料而異，
+   同一頁不同列的對齊線會各自不同，看起來像跑版。標籤一律縮到 5 個字以內配合這個寬度。 */
+.ui-next-main .afb-detail { display:grid; grid-template-columns:96px 1fr; gap:0 var(--space-4); margin:0 }
+.ui-next-main .afb-detail > dt {
+  padding:var(--space-3) 0; border-top:1px solid var(--border);
+  color:var(--text-muted); font-size:var(--fs-xs); font-weight:var(--fw-semibold); white-space:nowrap;
+}
+.ui-next-main .afb-detail > dd {
+  margin:0; padding:var(--space-3) 0; border-top:1px solid var(--border);
+  min-width:0; font-size:var(--fs-sm); color:var(--text);
+}
+/* 第一項不畫上緣線，也不留上緣間距——否則展開區頂端會多一條貼著表格列的線，像多了一列空白 */
+.ui-next-main .afb-detail > dt:first-child,
+.ui-next-main .afb-detail > dt:first-child + dd { border-top:0; padding-top:0 }
+/* 機器退回的說明是警示，不是一般欄位值。只染文字色，不另外加邊框——加了框就破壞這個網格的對齊。 */
+.ui-next-main .afb-detail > dd.afb-warn { color:var(--warning-strong) }
+/* 補充說明（例如「舊資料，此關已移除」）：跟著值走，不佔標籤欄 */
+.ui-next-main .afb-detail > dd small { display:block; margin-top:2px; color:var(--text-muted); font-size:var(--fs-xs) }
+
+/* 窄螢幕改上下排：96px 的標籤欄留在手機上會把值擠成一字一行 */
+@media (max-width: 767px) {
+  .ui-next-main .afb-detail { grid-template-columns:1fr }
+  .ui-next-main .afb-detail > dt { padding-bottom:0; border-top:1px solid var(--border) }
+  .ui-next-main .afb-detail > dd { padding-top:4px; border-top:0 }
+  .ui-next-main .afb-detail > dt:first-child + dd { padding-top:4px }
+}
