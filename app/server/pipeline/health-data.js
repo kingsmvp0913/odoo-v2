@@ -414,9 +414,14 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
   }));
 
   // 窗內有動作的任務：帶關卡序列，讓 agent 一眼看得到震盪形狀（coding→qa→coding→qa）。
+  // 已完成的任務用 `done_at` 選窗，不用 updated_at——updated_at 會被「不代表任務有進度」的系統維護
+  // 動作刷新（cron 的自動封存曾如此，已移除，但被刷過的舊時間戳仍留在 DB），靠它選窗會把三十天前
+  // 就結案的任務算成「本輪發生的事」，下方 wall_clock 的 p90 因此誇大。與第 36-37 行 wall-clock
+  // 的「done_at 優先」算法對齊。進行中的任務（尚未 done 或 done_at 為 NULL）維持 updated_at，不變。
+  const WINDOW_AT = "(CASE WHEN status = 'done' AND done_at IS NOT NULL THEN done_at ELSE updated_at END)";
   const { rows: tasks } = await query(
     `SELECT id, task_id, title, status, reentry_count, blocker_content, created_at, updated_at, done_at
-       FROM tasks WHERE updated_at >= $1${upTo('updated_at')} ORDER BY id`, args
+       FROM tasks WHERE ${WINDOW_AT} >= $1${upTo(WINDOW_AT)} ORDER BY id`, args
   );
   const seqOf = new Map();
   for (const u of usage) {

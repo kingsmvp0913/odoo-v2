@@ -33,11 +33,14 @@ async function runForUser(userId, { skipPipeline = false } = {}) {
   }
 }
 
-// 完成滿 30 天的任務自動封存（is_hidden），移出主列表
+// 完成滿 30 天的任務自動封存（is_hidden），移出主列表。
+// **刻意不寫 updated_at**：封存是系統維護動作，不代表任務有進度。刷了 updated_at 會讓陳年舊任務
+// 混進健檢視窗（health-data 以完成／異動時間選窗）被算成「本輪發生的事」，wall-clock p90 誇大；
+// 也會讓下方 cleanupOldTaskEvents 的保留期（同樣看 updated_at）再往後延一個保留期。
 async function autoArchiveDone() {
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   return query(
-    "UPDATE tasks SET is_hidden = true, updated_at = NOW() WHERE status = 'done' AND is_hidden = false AND done_at IS NOT NULL AND done_at < $1",
+    "UPDATE tasks SET is_hidden = true WHERE status = 'done' AND is_hidden = false AND done_at IS NOT NULL AND done_at < $1",
     [cutoff]
   );
 }
