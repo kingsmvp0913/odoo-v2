@@ -3,6 +3,13 @@
   const STATUS_PILL = { new: 'pill-info', approved: 'pill-success', rejected: 'pill-danger', done: 'pill-warn' };
   const LAYER_LABEL = { code: '程式', prompt: '提示詞', observability: '可觀測性', env: '環境', unclear: '看不懂' };
 
+  // 一次載幾筆。整頁原本一口氣撈 200 筆，每筆的附件縮圖還要逐張 fetch（最壞 1000 張往返），
+  // 開頁面要等很久才看得到第一列。改成先載一頁、捲到接近底部才續載。
+  const PAGE_SIZE = 15;
+  // 距離底部多少 px 就開始載下一頁。抓一個視窗高度左右：等真的捲到底才發請求，
+  // 使用者會先看到一段空白再看到新列。
+  const NEAR_BOTTOM_PX = 600;
+
   window.UiNextAdminFeedbackView = Vue.defineComponent({
     name: "UiNextAdminFeedbackView",
     data() {
@@ -18,6 +25,10 @@
         bodyOpen: {},      // { [id]: true } 展開這一列的原文全文與翻譯結果
         bodyLong: {},      // { [id]: true } 這一列長到需要收合（量 DOM 得來，見 measureBodies）
         removing: {},      // { [id]: true } 刪除送出中
+        hasMore: true,     // 後端還有下一頁（用「這次拿滿了 limit」推斷，端點不回總筆數）
+        loadingMore: false,// 續載中（與初次 loading 分開：初次要蓋掉整張表，續載只在底部轉圈）
+        _scrollEl: null,   // 監聽捲動的元素（ui-next 真正在捲的是 .ui-next-main，不是 window）
+        _onScroll: null,
         startingBatch: false, // 手動觸發改善批次送出中（只是「送出這一下」，不是整個批次）
         batchRunning: false,  // 批次正在跑（輪詢 /api/maintenance 得知）
         _batchTimer: null,
@@ -35,9 +46,23 @@
       await this.pollBatch();
       this._batchTimer = setInterval(() => this.pollBatch(), 15000);
     },
+    mounted() {
+      // ⚠ 捲動的是 .ui-next-main，不是 window 也不是 .content（見 ui-next.css：
+      // .ui-next-shell 是 overflow:hidden 的固定高外殼，只有 .ui-next-main 有 overflow:auto）。
+      // 掛在 window 上的 scroll 監聽在這個外殼下永遠不會觸發。
+      // 舊外殼（?ui=legacy）沒有這個元素，那邊就退回「只顯示第一頁 + 底部按鈕」。
+      this._scrollEl = document.querySelector('.ui-next-main');
+      if (!this._scrollEl) return;
+      this._onScroll = () => {
+        const el = this._scrollEl;
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX) this.loadMore();
+      };
+      this._scrollEl.addEventListener('scroll', this._onScroll, { passive: true });
+    },
     beforeUnmount() {
       Object.values(this.attachUrls).forEach(url => URL.revokeObjectURL(url));
       if (this._batchTimer) clearInterval(this._batchTimer);
+      if (this._scrollEl && this._onScroll) this._scrollEl.removeEventListener('scroll', this._onScroll);
     },
     methods: {
       pillClass(status) { return STATUS_PILL[status] || 'pill-info'; },
@@ -62,6 +87,15 @@
         // 所以拿掉翻譯關之後這仍是機器退場的唯一出口。
         if (note.startsWith('自動退場：')) {
           return { label: '自動退場，待人工', pill: 'pill-warn', hint: note };
+        }
+        // 「今晚連跑都沒跑到」與「跑了沒成功」是兩件事，狀態欄不能混為一談：前者還在隊伍裡、
+        // 什麼都沒發生，後者已經燒過一輪 token 並失敗。後端寫進 last_attempt_note 的前綴是
+        // nightly-fix.js 四條「本批次不跑」出口共用的（來源常數 retire-prefix.js 的
+        // NIGHTLY_SKIP_PREFIX）。
+        // ⚠ 這條必須排在上面「自動退場」那條**之後**：frontend-nightly-retire-prefix.test.js
+        // 抓的是 stateOf 裡的**第一個** startsWith，插到前面會讓那支既有守衛改抓到這個前綴。
+        if (r.status === 'approved' && (r.last_attempt_note || '').startsWith('本批次未執行：')) {
+          return { label: '已核准，本批次未執行', pill: 'pill-info', hint: r.last_attempt_note };
         }
         // 已核准但夜間批次試過沒成：只印「已核准」的話，這一列跟「今晚還沒輪到它」長得一模一樣。
         // 原因以前只進 console.error（本平台的 pipeline console 不落檔＝等於沒寫），要累計三次
@@ -149,16 +183,53 @@
           this.healthFailed = (h && h.length && h[0].status === 'error') ? h[0] : null;
         } catch (e) { this.healthFailed = null; }
       },
+      // 端點不回總筆數，只能用「這次拿滿了 limit」推斷還有下一頁。
+      // 拿不滿＝到底了；剛好拿滿而其實沒有下一頁時，只會多發一次回空陣列的請求，然後收手。
+      query(limit, offset) {
+        const p = [`limit=${limit}`, `offset=${offset}`];
+        if (this.statusFilter) p.push(`status=${this.statusFilter}`);
+        return `admin/feedback?${p.join('&')}`;
+      },
+      /**
+       * 重抓第一頁。
+       *
+       * ⚠ limit 取「目前已載入的筆數」而不是固定 PAGE_SIZE：批次在跑的時候 pollBatch 每 15 秒
+       * 會呼叫一次 load()，用 PAGE_SIZE 重抓的話使用者往下捲了五頁、下一個 tick 整個縮回 15 筆，
+       * 捲動位置也跟著跳。換篩選才是真的要從頭來（走 resetAndLoad）。
+       */
       async load() {
         this.loading = true;
         try {
-          const q = this.statusFilter ? `?status=${this.statusFilter}` : '';
-          this.rows = await Api.get(`admin/feedback${q}`);
+          const limit = Math.min(Math.max(PAGE_SIZE, this.rows.length), 200);
+          const rows = await Api.get(this.query(limit, 0));
+          this.rows = rows;
+          this.hasMore = rows.length === limit;
           // 換了資料就要重量：哪幾列長到需要收合，只有渲染出來才知道
           this.measureBodies();
           await this.loadAttachmentThumbs();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.loading = false; }
+      },
+      // 換篩選：真的從第一頁重來（已載入的是別的條件的資料，留著沒有意義）
+      async resetAndLoad() {
+        this.rows = [];
+        this.hasMore = true;
+        await this.load();
+      },
+      async loadMore() {
+        if (this.loadingMore || this.loading || !this.hasMore) return;
+        this.loadingMore = true;
+        try {
+          const rows = await Api.get(this.query(PAGE_SIZE, this.rows.length));
+          // 併發保險：載入期間若有人按了核准（觸發 load() 重抓第一頁），這批的 offset 就過期了。
+          // 用 id 去重，寧可少一筆也不要同一列出現兩次（Vue 的 :key 撞號會渲染錯亂）。
+          const seen = new Set(this.rows.map(r => r.id));
+          this.rows = this.rows.concat(rows.filter(r => !seen.has(r.id)));
+          this.hasMore = rows.length === PAGE_SIZE;
+          this.measureBodies();
+          await this.loadAttachmentThumbs();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.loadingMore = false; }
       },
       // 附件端點要帶 Authorization header，<img src> 直連拿不到 token → 逐張 fetch 成 objectURL。
       // 列表 LIMIT 200 × 每筆最多 5 張＝最壞 1000 張縮圖。原本逐張 await 會序列跑完全部 1000 次
@@ -196,6 +267,27 @@
         try {
           await Api.patch(`admin/feedback/${row.id}`, { status: 'approved' });
           showToast('已核准', 'success');
+          await this.load();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.deciding = { ...this.deciding, [row.id]: false }; }
+      },
+      /**
+       * 人工標完成：「這條我自己動手修好了」。
+       *
+       * 留在 approved 的話夜間批次每晚會重撿一次（重付 triage、重跑兩次全套測試），改成駁回
+       * 又等於謊稱「決定不做」——2026-09-10 就是因為沒有這條路，只能繞過 API 直接改資料庫。
+       */
+      async markDone(row) {
+        const what = row.triage_title || (row.content || '').slice(0, 30);
+        if (!await confirmDialog({
+          title: '標記為已完成',
+          message: `確定把「${what}」標成已完成？夜間批次不會再撿它，之後也不能刪除。`,
+          confirmText: '標為完成'
+        })) return;
+        this.deciding = { ...this.deciding, [row.id]: true };
+        try {
+          await Api.patch(`admin/feedback/${row.id}`, { status: 'done', verdict_note: '人工處理完成' });
+          showToast('已標記完成', 'success');
           await this.load();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.deciding = { ...this.deciding, [row.id]: false }; }
@@ -242,10 +334,10 @@
              這一頁只保留跟「按鈕」有關的本地回饋：執行中時鈕變成「執行中…」並鎖住。 -->
         <div class="settings-section">
           <div class="arj-header-row">
-            <!-- 後端 GET /api/admin/feedback 有 LIMIT 200（feedback-routes.js），rows.length 在
-                 超過上限時恆為 200、不代表真實總筆數；改用「最多顯示 N 筆」避免這個數字說謊。 -->
-            <h2 class="section-title" style="margin:0">使用者意見（{{ rows.length >= 200 ? '最多顯示 200 筆' : ('共 ' + rows.length + ' 筆') }}）</h2>
-            <select v-model="statusFilter" class="form-control" style="width:auto" @change="load">
+            <!-- 端點不回總筆數（見 feedback-routes.js），所以這裡只講「已載入幾筆」——
+                 寫成「共 N 筆」在分頁之下必定說謊：捲一次數字就變一次。 -->
+            <h2 class="section-title" style="margin:0">使用者意見（已載入 {{ rows.length }} 筆{{ hasMore ? '，往下捲載入更多' : '' }}）</h2>
+            <select v-model="statusFilter" class="form-control" style="width:auto" @change="resetAndLoad">
               <option value="">全部狀態</option>
               <option value="new">待審核</option>
               <option value="approved">已核准</option>
@@ -316,19 +408,23 @@
                       </span>
                       <span v-else class="pill" :class="stateOf(r).pill" :title="stateOf(r).hint" style="white-space:nowrap">{{ stateOf(r).label }}</span>
                     </td>
+                    <!-- 操作欄一列最多兩顆鈕，而且只留「這個狀態下真的有意義」的那幾顆。
+                         原本每列固定三顆（核准／駁回／刪除），整張表就是一面按鈕牆，而其中
+                         有些在該狀態下按下去等於沒事發生（已核准再按核准＝把同一個狀態寫一次，
+                         畫面毫無變化，看起來像沒存到）。
+                         刪除搬進展開區：它是唯一不可復原的動作，不該跟日常裁決並排在同一排、
+                         被誤點的機率相同。點該列展開就看得到。
+                         各狀態的可用動作：
+                           待審核 new       → 核准 ／ 駁回
+                           已核准 approved  → 標為完成（自己動手修好了）／ 駁回（反悔擋掉，批次還沒跑）
+                           已駁回 rejected  → 核准（改變心意、重新開放）
+                           已完成 done      → 無。碼已經合併，再改任何狀態都會讓批次重跑做完的事。 -->
                     <td data-label="操作" @click.stop>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <!-- 核准鈕只在「還沒核准」時出現。已經是 approved 還留著它，按下去是把
-                             同一個狀態再寫一次——畫面沒有任何變化，看起來像沒反應／沒存到。
-                             done（已合併）更不能按：會把它塞回 approved，夜間批次重跑整條已經做完的鏈。
-                             rejected 仍可核准（人工改變心意、重新開放）。
-                             駁回鈕的條件不同：已核准但還沒跑的可以反悔擋掉，所以只擋 done。 -->
-                        <button v-if="r.status !== 'approved' && r.status !== 'done'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
-                        <button v-if="r.status !== 'done'" class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
-                        <!-- 刪除是唯一不可復原的動作（連附件實體檔一起刪），所以永遠可用但走
-                             確認對話框。駁回只是改狀態，兩者不可混為一談。 -->
-                        <button class="btn btn-ghost btn-sm" style="color:var(--danger)"
-                          :disabled="removing[r.id]" @click="remove(r)">刪除</button>
+                        <button v-if="r.status === 'new' || r.status === 'rejected'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="approve(r)">核准</button>
+                        <button v-if="r.status === 'approved'" class="btn btn-primary btn-sm" :disabled="deciding[r.id]" @click="markDone(r)">標為完成</button>
+                        <button v-if="r.status === 'new' || r.status === 'approved'" class="btn btn-outline btn-sm" style="color:var(--danger)" :disabled="deciding[r.id]" @click="openReject(r)">駁回</button>
+                        <span v-if="r.status === 'done'" style="color:var(--text-muted)">—</span>
                       </div>
                     </td>
                   </tr>
@@ -353,6 +449,13 @@
                            code 1」變成 6 行寬 1 字，就是使用者說的跑版）。 -->
                       <div v-if="r.triage_note" class="hc-body"
                         style="margin-top:6px;padding-left:6px;border-left:2px solid var(--warning-strong);font-size:var(--fs-xs);color:var(--warning-strong)">{{ r.triage_note }}</div>
+                      <!-- 刪除放這裡而不是操作欄：不可復原（連附件實體檔一起刪），要多一個
+                           「點開這一列」的動作才碰得到。已完成的不給刪——碼已經合併進 master，
+                           刪掉等於把「這件事為什麼做」的唯一紀錄清掉（後端也擋，見 feedback-routes.js）。 -->
+                      <div v-if="r.status !== 'done'" style="margin-top:var(--space-3);text-align:right">
+                        <button class="btn btn-ghost btn-sm" style="color:var(--danger)"
+                          :disabled="removing[r.id]" @click.stop="remove(r)">刪除這筆</button>
+                      </div>
                     </td>
                   </tr>
                   <tr v-if="rejecting[r.id]" class="empty-row">
@@ -367,6 +470,16 @@
                     </td>
                   </tr>
                 </template>
+                <!-- 續載中的提示。捲動監聽掛在 .ui-next-main（見 mounted），舊外殼沒有那個元素，
+                     所以還留一顆手動的鈕當退路——不然那邊永遠只看得到第一頁。 -->
+                <tr v-if="loadingMore" class="empty-row">
+                  <td colspan="6" style="text-align:center;color:var(--text-muted)"><span class="spinner"></span>載入中…</td>
+                </tr>
+                <tr v-else-if="hasMore && !loading && rows.length" class="empty-row">
+                  <td colspan="6" style="text-align:center">
+                    <button class="btn btn-outline btn-sm" @click="loadMore">載入更多</button>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>

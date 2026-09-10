@@ -1465,3 +1465,100 @@ test('這一條中途拋錯 → batch_stage 照樣收掉（不可以停在轉圈
   expect(after.batch_stage).toBeNull();
   expect(after.fix_attempts).toBe(1);   // 正向錨：這條真的跑過並失敗了，不是根本沒進迴圈
 });
+
+// --- 「這一批沒跑到它」要留痕（否則畫面持續承諾一件沒發生的事）---
+//
+// 意圖：四條「今晚不跑這一條」的出口原本只寫 console.log，而本平台的 pipeline console 不落檔
+// （見 memory: pipeline-errors-not-in-docker-log）。留下的 DB 狀態是 status='approved'、
+// fix_attempts=0、last_attempt_note=''——跟「從沒進過批次」逐欄相同，管理頁只好一直說
+// 「已核准（將自動執行）」。這幾支釘住「沒跑到」與「跑了沒過」在資料上必須分得出來。
+const SKIP_PREFIX = '本批次未執行：';
+const skipNotes = async () => (await dbModule.query(
+  `SELECT id, status, fix_attempts, last_attempt_note FROM health_check_findings
+    WHERE last_attempt_note LIKE '本批次%' ORDER BY id`)).rows;
+
+test('超出組數上限而排隊的組：寫得出「沒輪到」，但不得記失敗次數也不得改 status', async () => {
+  // NIGHTLY_FIX_MAX=5，放 6 條 ⇒ 第 6 條必定被 slice 截掉
+  const ids = [];
+  for (let i = 0; i < 6; i++) ids.push(await insertHealthProposal({ severity: 'high', label: `第${i + 1}條` }));
+  stubHappyPath();
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(result.skipped).toBe(1);
+
+  const rows = await skipNotes();
+  expect(rows).toHaveLength(1);
+  expect(rows[0].id).toBe(ids[5]);
+  expect(rows[0].last_attempt_note).toContain(SKIP_PREFIX);
+  // 記次會讓它被上限擠幾晚就達到「連續失敗」門檻而退回人工，理由與事實相反
+  expect(rows[0].fix_attempts).toBe(0);
+  expect(rows[0].status).toBe('approved');
+});
+
+test('批次中途保險絲跳掉：當下這組與它後面全部都要寫得出原因', async () => {
+  for (let i = 0; i < 3; i++) await insertHealthProposal({ severity: 'high', label: `第${i + 1}條` });
+  stubHappyPath();
+  // 第一條跑完就跨過截止時刻（同上面那支保險絲測試的手法）
+  runFix.mockImplementation(async (fixId) => {
+    advanceClock(25 * 60 * 60 * 1000);
+    await runFixReady(fixId);
+  });
+
+  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  expect(result.attempted).toBe(1);
+
+  const rows = await skipNotes();
+  expect(rows).toHaveLength(2);                    // 第 2、3 條
+  rows.forEach(r => {
+    expect(r.last_attempt_note).toContain(SKIP_PREFIX);
+    expect(r.fix_attempts).toBe(0);
+  });
+});
+
+test('開跑前保險絲已跳：整批候選都要寫得出原因（09-08 停擺就是這條，當時零紀錄）', async () => {
+  await insertFeedback();
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+  await dbModule.query(
+    `INSERT INTO token_usage (agent_type, input_tokens, output_tokens) VALUES ('platform_fix', 16000000, 0)`);
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(await skipNotes()).toHaveLength(1);
+  const { rows: fb } = await dbModule.query(
+    'SELECT status, fix_attempts, last_attempt_note FROM feedback');
+  expect(fb[0].last_attempt_note).toContain(SKIP_PREFIX);
+  expect(fb[0].status).toBe('approved');           // 還在隊伍裡，不是被退場
+  expect(fb[0].fix_attempts).toBe(0);
+});
+
+test('等在飛任務排空逾時：整批候選都要寫得出原因', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  getInflightInfo.mockImplementation(() => { advanceClock(40 * 60 * 1000); return [{ taskId: 1, userId }]; });
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  const rows = await skipNotes();
+  expect(rows).toHaveLength(1);
+  expect(rows[0].last_attempt_note).toContain(SKIP_PREFIX);
+});
+
+test('對照組：正常跑完的候選不得掛上「未執行」——否則這個狀態等於恆真、看不出差別', async () => {
+  await insertHealthProposal({ severity: 'high' });
+  stubHappyPath();
+
+  await nightlyFix.runNightlyFix({ startedBy: userId });
+
+  expect(await skipNotes()).toHaveLength(0);
+});
+
+test('前後端的「未執行」前綴逐字相同（兩份寫死的字面值，改一邊就靜默失效）', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const backend = fs.readFileSync(path.join(__dirname, '../pipeline/retire-prefix.js'), 'utf8');
+  const frontend = fs.readFileSync(
+    path.join(__dirname, '../../public/js/ui-next/pages/AdminFeedback.js'), 'utf8');
+  const m = backend.match(/const NIGHTLY_SKIP_PREFIX\s*=\s*'([^']*)'/);
+  expect(m && m[1]).toBeTruthy();
+  expect(frontend).toContain(`startsWith('${m[1]}')`);
+});

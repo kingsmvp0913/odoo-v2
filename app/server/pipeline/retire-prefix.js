@@ -15,4 +15,8 @@
 // 改成 SQL LIKE 查詢又踩一次。
 const MACHINE_RETIRE_PREFIX = '自動退場：';
 
-module.exports = { MACHINE_RETIRE_PREFIX };
+// 「今晚這條連跑都沒跑到」的標記前綴。與退場前綴分開，因為兩者對使用者的意思相反：
+// 退場是「不會再自動試了」，這個是「還在隊伍裡，只是這一批沒輪到」。同樣由前端 startsWith 判。
+const NIGHTLY_SKIP_PREFIX = '本批次未執行：';
+
+module.exports = { MACHINE_RETIRE_PREFIX, NIGHTLY_SKIP_PREFIX };

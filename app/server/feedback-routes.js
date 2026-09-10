@@ -16,7 +16,10 @@ const {
 
 // 人工可以設的狀態只有這三個。done 由夜間批次寫，不開放從 API 設——
 // 提早標 done 會讓那條意見從批次的候選裡消失，而畫面上看起來像已經處理完了。
-const HUMAN_STATUSES = ['approved', 'rejected', 'new'];
+// 人工可以指定的狀態。`done` 原本只有夜間批次寫得進去，於是「我自己動手修好了」在畫面上
+// 無路可走：留著 approved 會讓批次每晚重撿一次（重付 triage、重跑兩次全套測試），改 rejected
+// 又等於謊稱「決定不做」。所以人工也要能標完成——實際發生過，2026-09-10 只能直接寫 DB。
+const HUMAN_STATUSES = ['approved', 'rejected', 'new', 'done'];
 
 const parseId = (v) => { const n = Number(v); return Number.isInteger(n) ? n : null; };
 
@@ -61,9 +64,16 @@ function registerRoutes(app) {
 
   app.get('/api/admin/feedback', verifyToken, requireAdmin, async (req, res) => {
     try {
-      const cond = HUMAN_STATUSES.concat('done').includes(req.query.status)
-        ? 'WHERE f.status = $1' : '';
+      const cond = HUMAN_STATUSES.includes(req.query.status) ? 'WHERE f.status = $1' : '';
       const params = cond ? [req.query.status] : [];
+      // 分頁：前端先載一頁、往下捲才續載。上限仍鎖 200——limit 是外部輸入，沒有上限的話
+      // 一個 ?limit=999999 就把整張表連同附件 json_agg 一次撈出來。
+      //
+      // ⚠ LIMIT／OFFSET 直接內插進 SQL 而不是走 $n：pg-mem 解析不了帶參數的 LIMIT
+      // （`SELECT ... LIMIT $2` 直接拋 "Cannot read properties of null"，實測），整支測試會 500。
+      // 這兩個值都已經過 parseInt + 夾範圍，型別上必定是整數，不是能挾帶字串的路徑。
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 200);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
       const { rows } = await query(
         `SELECT f.*, COALESCE(u.display_name, u.username) AS user_name,
                 COALESCE(json_agg(json_build_object('id', a.id, 'filename', a.filename))
@@ -73,7 +83,7 @@ function registerRoutes(app) {
            LEFT JOIN feedback_attachments a ON a.feedback_id = f.id
            ${cond}
           GROUP BY f.id, u.display_name, u.username
-          ORDER BY f.created_at DESC LIMIT 200`, params);
+          ORDER BY f.created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -97,6 +107,15 @@ function registerRoutes(app) {
         `UPDATE feedback SET status=$2, verdict_note=$3, decided_by=$4, decided_at=NOW()
           WHERE id=$1`, [id, status, verdict_note || null, req.userId]);
       if (!rowCount) return res.status(404).json({ error: '找不到這筆意見' });
+      // 健檢開的單有兩列：health_check_findings 那筆提案，與這裡的 feedback。人工標完成時
+      // 只改一半的話，提案那列會一直停在 approved——健檢頁與提案統計都還當它沒處理完。
+      // 夜間批次走 markDone 時本來就是兩列一起改（nightly-fix.js），這條路徑要跟它一致。
+      if (status === 'done') {
+        await query(
+          `UPDATE health_check_findings
+              SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+            WHERE id = (SELECT finding_id FROM feedback WHERE id=$1) `, [id, req.userId]);
+      }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -129,6 +148,13 @@ function registerRoutes(app) {
     try {
       const id = parseId(req.params.id);
       if (id == null) return res.status(404).json({ error: '找不到這筆意見' });
+      // 已完成＝碼已經合併進 master（或人工修好了）。刪掉它就等於把「這件事做過了」的唯一
+      // 紀錄連同附件實體檔一起清掉，之後沒有任何地方查得到那份改動是為了什麼而做。
+      const { rows: [cur] } = await query('SELECT status FROM feedback WHERE id=$1', [id]);
+      if (!cur) return res.status(404).json({ error: '找不到這筆意見' });
+      if (cur.status === 'done') {
+        return res.status(400).json({ error: '已完成的意見不能刪除' });
+      }
       const { rowCount } = await query('DELETE FROM feedback WHERE id=$1', [id]);
       if (!rowCount) return res.status(404).json({ error: '找不到這筆意見' });
       deleteFeedbackDir(id);

@@ -1,6 +1,6 @@
 const { execFile } = require('child_process');
 const { query } = require('../db');
-const { MACHINE_RETIRE_PREFIX } = require('./retire-prefix');
+const { MACHINE_RETIRE_PREFIX, NIGHTLY_SKIP_PREFIX } = require('./retire-prefix');
 const { AUTO_LAYERS, HEALTH_SEVERITIES, inAutoFixScope, normalizeLayer } = require('./auto-fix-scope');
 const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
 const { mergeCandidates } = require('./feedback-merge');
@@ -512,6 +512,45 @@ function attemptNote(reason) {
  * 修正列留在 adopted：分支上的 commit 是好的，下一批開跑時 resumeAdoptedFixes 直接重試合併，
  * 不重跑 agent、不重跑測試。
  */
+/**
+ * 「這一批根本沒輪到它」——只寫 last_attempt_note，不動任何其他欄位。
+ *
+ * 批次有四條「今晚不跑這一條」的出口（超出組數上限、迴圈中保險絲跳、開跑前保險絲已跳、
+ * 等在飛任務排空逾時），原本全都只寫 console.log。本平台的 pipeline console 不落檔，等於沒寫：
+ * 來源列上 status='approved'、fix_attempts=0、last_attempt_note=''，跟「從沒進過批次」逐欄
+ * 一模一樣，管理頁只好一直顯示「已核准（將自動執行）」——承諾了一件當晚沒發生的事。
+ *
+ * ⚠ 刻意**不**加 fix_attempts、**不**改 status、**不**寫 batch_stage。三者任一動了都會把
+ * 「沒跑到」染成別的意思：記次會讓一條意見被上限擠幾晚就達到 NIGHTLY_FIX_MAX_ATTEMPTS 而
+ * 「連續失敗退回人工」，理由與事實正好相反。
+ */
+async function noteSkipped(members, reason) {
+  const note = attemptNote(`${NIGHTLY_SKIP_PREFIX}${reason}`);
+  for (const it of members) {
+    await query(
+      it.source === 'feedback'
+        ? 'UPDATE feedback SET last_attempt_note=$2 WHERE id=$1'
+        : 'UPDATE health_check_findings SET last_attempt_note=$2 WHERE id=$1',
+      [it.row.id, note]);
+  }
+}
+
+/**
+ * 出口 3、4（開跑前保險絲、排空逾時）發生在撈候選之前，手上沒有分好的組，所以自己撈一次。
+ *
+ * ⚠ 不重用 fetchHealthCandidates：它有副作用（把超出自動範圍的提案 retireToHuman），
+ * 在「這批不跑」的路徑上跑那段等於趁機改別的東西的狀態。這裡只要 id，純 SQL、不花 token。
+ */
+async function noteSkippedAllApproved(reason) {
+  const { rows: fb } = await query("SELECT id FROM feedback WHERE status = 'approved'");
+  const { rows: hc } = await query(
+    "SELECT id FROM health_check_findings WHERE status = 'approved' AND kind = 'proposal'");
+  await noteSkipped([
+    ...fb.map(row => ({ source: 'feedback', row })),
+    ...hc.map(row => ({ source: 'finding', row })),
+  ], reason);
+}
+
 async function noteDeferred(cand, reason) {
   const note = attemptNote(`已修好並通過審核，但這次合併不進去，下批會自動重試：${reason}`);
   for (const it of cand.members) {
@@ -721,6 +760,9 @@ async function runNightlyFix({ startedBy = null } = {}) {
 
     if (!await waitForDrain()) {
       console.log('[NIGHTLY-FIX] 等在飛任務排空逾時（%d 分鐘），放棄本批次', Math.round(NIGHTLY_FIX_DRAIN_MAX_MS / 60000));
+      await noteSkippedAllApproved(
+        `等在飛任務排空逾時（${Math.round(NIGHTLY_FIX_DRAIN_MAX_MS / 60000)} 分鐘），整批未啟動`)
+        .catch(e => console.error('[NIGHTLY-FIX] 記錄未執行原因失敗：', e.message));
       return { attempted: 0, applied: 0, skipped: 0, reason: 'drain-timeout' };
     }
 
@@ -746,6 +788,8 @@ async function runNightlyFix({ startedBy = null } = {}) {
     const preFuse = await fuseTripped(deadlineAt, batchStartedAt);
     if (preFuse) {
       console.log('[NIGHTLY-FIX] 開跑前保險絲已跳（%s），本批次不執行', preFuse);
+      await noteSkippedAllApproved(`開跑前保險絲已跳（${preFuse}），整批未執行`)
+        .catch(e => console.error('[NIGHTLY-FIX] 記錄未執行原因失敗：', e.message));
       return { attempted: 0, applied: 0, skipped: 0, reason: preFuse };
     }
 
@@ -799,6 +843,12 @@ async function runNightlyFix({ startedBy = null } = {}) {
     // ⚠ 上限套在**統整後**的條數：統整前就砍會把「其實是同一件事的 8 筆」誤當成 8 條工作。
     const capped = groups.slice(0, NIGHTLY_FIX_MAX);
     const skipped = groups.length - capped.length;
+    // 排在上限之後的組：留在隊伍裡等下一批，但畫面要說得出來它今晚沒輪到。
+    for (const [i, g] of groups.slice(NIGHTLY_FIX_MAX).entries()) {
+      await noteSkipped(g.members,
+        `本批次上限 ${NIGHTLY_FIX_MAX} 組，這一組排在第 ${NIGHTLY_FIX_MAX + i + 1} 位，等下一批`)
+        .catch(e => console.error('[NIGHTLY-FIX] 記錄未執行原因失敗：', e.message));
+    }
     console.log('[NIGHTLY-FIX] 候選 %d 筆 → %s %d 組 → 本批次執行 %d 組（截止 %s）',
       candidates.length, unmerged ? '未合併，逐條' : '統整', groups.length, capped.length,
       deadlineAt.toISOString());
@@ -812,10 +862,15 @@ async function runNightlyFix({ startedBy = null } = {}) {
     let attempted = 0;
     let applied = 0;
 
-    for (const group of capped) {
+    for (const [gi, group] of capped.entries()) {
       const fuse = await fuseTripped(deadlineAt, batchStartedAt);
       if (fuse) {
         console.log('[NIGHTLY-FIX] 保險絲跳了（%s），不再開新的一條（已跑 %d 條）', fuse, attempted);
+        // 這一組與它後面全部都沒跑到——只 break 的話它們跟「從沒進過批次」完全分不出來。
+        for (const g of capped.slice(gi)) {
+          await noteSkipped(g.members, `批次中途保險絲跳了（${fuse}），這一組未執行`)
+            .catch(e => console.error('[NIGHTLY-FIX] 記錄未執行原因失敗：', e.message));
+        }
         break;
       }
 
