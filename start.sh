@@ -38,6 +38,12 @@ export APP_SECRET
 
 _PORT="$(read_config PORT)"
 if [ -n "$_PORT" ]; then export PORT="$_PORT"; fi
+
+# 平台容器名（選用）：沒設時 finding-fix 靠「主機名」找自己是哪個容器。host 網路下同一台主機
+# 若再開第二套平台（例如 staging），兩個容器主機名相同 ⇒ 認不出自己，夜間改善合併後的重啟會失敗。
+# 放 config.json 而非 docker-compose.yml：upgrade.sh 只 docker restart、不重建容器，compose 的環境變數改了不會生效。
+_PC="$(read_config PLATFORM_CONTAINER)"
+if [ -n "$_PC" ]; then export PLATFORM_CONTAINER="$_PC"; fi
 export DATABASE_URL="$(read_config DATABASE_URL)"
 
 # 測試區埠範圍（選用）：宿主低位埠已被其他服務佔滿的機器可整段換到乾淨區段；
