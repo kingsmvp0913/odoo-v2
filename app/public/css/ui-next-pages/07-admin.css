@@ -512,3 +512,15 @@
   .ui-next-main .afb-detail > dd { padding-top:4px; border-top:0 }
   .ui-next-main .afb-detail > dt:first-child + dd { padding-top:4px }
 }
+
+/* 產品化規格頁：內容是一份自帶樣式與導覽的獨立 HTML，放在 sandbox iframe 裡（見 pages/SaasSpecs.js）。
+   iframe 裡的左側清單是 sticky＋100vh，高度必須由外面給定；讓內容撐高的話那條清單永遠黏不住。 */
+.ui-next-specs-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 170px);
+  min-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}

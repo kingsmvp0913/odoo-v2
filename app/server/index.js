@@ -25,6 +25,7 @@ const { registerRoutes: registerPortPoolRoutes } = require('./port-pool-routes')
 const { registerRoutes: registerEnterpriseRoutes } = require('./enterprise-routes');
 const { registerRoutes: registerSearchRoutes } = require('./search-routes');
 const { registerRoutes: registerDeployRoutes } = require('./deploy-routes');
+const { registerRoutes: registerDocsRoutes } = require('./docs-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -117,6 +118,7 @@ function createApp() {
   registerAdminRoutes(app);
   registerTeamsRoutes(app);
   registerTokenReportRoutes(app);
+  registerDocsRoutes(app);
   registerClaudeUsageRoutes(app);
   registerDbQueryRoutes(app);
   registerPortPoolRoutes(app);

@@ -76,6 +76,8 @@ const ROUTES = [
   { key: 'admin-port-pool', hash: '#/admin/port-pool', auth: 'admin', covered: true },
   { key: 'admin-enterprise', hash: '#/admin/enterprise', auth: 'admin', covered: true },
   { key: 'admin-feedback', hash: '#/admin/feedback', auth: 'admin', covered: true },
+  { key: 'saas-specs', hash: '#/saas-specs', auth: 'admin', covered: false,
+    why: '內容是 .gitignore 內的 docs/ 檔，別台機器與門禁環境沒有；iframe 內另從外部 CDN 載入函式庫與字型，截圖不穩定' },
   { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true, expect: '.sg-wrap' }
 ];
 

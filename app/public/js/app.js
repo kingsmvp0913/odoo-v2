@@ -215,6 +215,13 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 產品化規格頁：只有 ui-next 版本（理由同上）。內容是內部規劃文件，
+      // 入口按鈕、這條路由、後端 /api/docs/saas-specs 三處都限管理員（rules/frontend.md 38）。
+      path: "/saas-specs",
+      component: window.UiNextSaasSpecsView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: "/admin",
       component: window.UiNextEnabled
         ? window.UiNextAdminView
