@@ -452,6 +452,32 @@ function parseStatus(porcelain, col) {
 }
 
 /**
+ * 暫存區的「殘影」同步回 HEAD -> 回傳真的有人暫存的那些檔（空陣列＝全是殘影、已清掉）。
+ *
+ * 殘影＝index 跟 HEAD 不同，但工作區內容跟 HEAD 一模一樣。共用 checkout 上用私有 GIT_INDEX_FILE
+ * 提交（為了不夾帶別人暫存的檔）而漏了最後同步共用 index 那一步，就會留下這種東西：HEAD 已經往前走，
+ * index 還停在提交前那棵樹，git status 看起來像有人 add 了一排檔。2026-09-11 實際卡住兩條已過審的修正。
+ * 判準只看內容：HEAD 裡的 blob 與工作區檔案 hash-object 的結果相同（兩邊都沒有這個檔也算相同）。
+ *
+ * ⚠ 只要有一個是真的就**整個不動**：不往下合併就不該有副作用，暫存區是別人的現場，原樣留給人看。
+ * ⚠ reset 一定要限定路徑：光禿禿的 reset 會連別人暫存的東西一起抹掉（git 不留底，救不回來）。
+ */
+async function resyncGhostStaged(repoRoot, files) {
+  const blob = args => git(repoRoot, args).then(r => r.stdout.trim(), () => null);
+  const real = [];
+  for (const f of files) {
+    const head = await blob(['rev-parse', '-q', '--verify', `HEAD:${f}`]);
+    const work = await blob(['hash-object', '--', f]);
+    if (head !== work) real.push(f);
+  }
+  if (files.length && !real.length) {
+    await git(repoRoot, ['reset', '-q', '--', ...files]);
+    console.log('[FIX] 暫存區殘影（內容已等於 HEAD）已同步回 HEAD：%s', files.join(' '));
+  }
+  return real;
+}
+
+/**
  * 一鍵套用：合併進主分支 → 推 origin → 重啟平台。
  *
  * 重啟走 `docker restart`（交給 host 的 daemon）而不是自殺讓 policy 撿回來：容器內 kill node 會
@@ -477,8 +503,14 @@ async function applyFix(fixId, userId, inflight = []) {
     // 此 repo 常態是多股平行工作。**已暫存**（git add 過）的東西會被一起包進 merge commit，
     // 這種一定要擋；只改在工作區、還沒 add 的不會進 commit，擋它沒有道理——2026-09-08 就因為
     // 一個不相干的檔改了一行沒提交，當晚五組修正一組都沒併進去。
-    const { stdout: dirty } = await git(REPO_ROOT, ['status', '--porcelain', '-uno']);
-    const staged = parseStatus(dirty, 0);
+    // 暫存的也不一定是真的有人在改：內容其實已等於 HEAD 的殘影先清掉（見 resyncGhostStaged）。
+    let { stdout: dirty } = await git(REPO_ROOT, ['status', '--porcelain', '-uno']);
+    const stagedAll = parseStatus(dirty, 0);
+    const staged = stagedAll.length ? await resyncGhostStaged(REPO_ROOT, stagedAll) : [];
+    // 清過就重讀：清之前那幾個檔的工作區欄是 'M'，拿舊結果去比下面的「重疊」會把殘影誤擋下來
+    if (stagedAll.length && !staged.length) {
+      ({ stdout: dirty } = await git(REPO_ROOT, ['status', '--porcelain', '-uno']));
+    }
     if (staged.length) {
       throw new Error(`主 clone 有已暫存（git add）的變更，會被一起併進來，先處理再套用：\n${staged.join('\n')}`);
     }
@@ -566,7 +598,7 @@ async function applyFix(fixId, userId, inflight = []) {
 }
 
 module.exports = {
-  runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer,
+  runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer, resyncGhostStaged,
   selfContainerName, compareToBaseline, parseJestCounts, measureTests,
   // 複檢那一關（fix-verify.js）在同一個工作區裡改碼、重跑測試、重取 diff，要用同一套
   // 相依連結與 git 呼叫。不 export 的話它只能自己複製一份，兩份會各自漂移——而其中一份

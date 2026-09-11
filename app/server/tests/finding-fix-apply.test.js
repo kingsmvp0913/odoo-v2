@@ -15,11 +15,13 @@ jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messa
 const { applyFix, pickSelfContainer } = require('../pipeline/finding-fix');
 
 // execFile 的 promisify 版走 (cmd, args, opts, cb)；這裡照 cmd+args 決定回什麼
-let gitBranch, gitDirty, mergeFails, ffFails, pushFails, gitCounts, mergeFiles;
+let gitBranch, gitDirty, mergeFails, ffFails, pushFails, gitCounts, mergeFiles, headBlobs, workBlobs;
 const calls = () => mockExecFile.mock.calls.map(c => [c[0], ...c[1]].join(' '));
 
 beforeEach(() => {
   gitBranch = 'master'; gitDirty = ''; mergeFails = false; ffFails = false; pushFails = false;
+  // 暫存檔在 HEAD／工作區的 blob。預設兩邊不同＝真的有人改；要演殘影就把兩邊設成同一個值
+  headBlobs = {}; workBlobs = {};
   // behind \t ahead（origin/master...master 的左右計數）
   gitCounts = '0\t0';
   mergeFiles = 'app/server/pipeline/runner.js\n';
@@ -35,6 +37,16 @@ beforeEach(() => {
     if (line.startsWith('rev-parse --abbrev-ref')) return done(null, { stdout: gitBranch + '\n', stderr: '' });
     if (line === 'rev-parse HEAD') return done(null, { stdout: 'abc1234\n', stderr: '' });
     if (line.startsWith('status --porcelain')) return done(null, { stdout: gitDirty, stderr: '' });
+    if (line.startsWith('rev-parse -q --verify HEAD:')) {
+      const f = line.slice('rev-parse -q --verify HEAD:'.length);
+      return done(null, { stdout: (headBlobs[f] || `head-${f}`) + '\n', stderr: '' });
+    }
+    if (line.startsWith('hash-object -- ')) {
+      const f = line.slice('hash-object -- '.length);
+      return done(null, { stdout: (workBlobs[f] || `work-${f}`) + '\n', stderr: '' });
+    }
+    // 限定路徑的 reset＝把 index 同步回 HEAD；之後再問 status 就是乾淨的
+    if (line.startsWith('reset -q -- ')) { gitDirty = ''; return done(null, { stdout: '', stderr: '' }); }
     if (line.startsWith('rev-list --left-right')) return done(null, { stdout: gitCounts + '\n', stderr: '' });
     if (line.startsWith('diff --name-only')) return done(null, { stdout: mergeFiles, stderr: '' });
     if (line.startsWith('merge --ff-only') && ffFails) return done(new Error('Not possible to fast-forward'));
@@ -55,6 +67,34 @@ test('不在主分支就不合併：主 clone 停在別的分支時代為切換�
 test('staged 的變更就不合併：git add 過的東西會被一起包進 merge commit', async () => {
   gitDirty = 'M  app/server/other-work.js\n';   // 第一欄＝index
   await expect(applyFix(1, 2, [])).rejects.toThrow(/暫存/);
+  expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
+});
+
+// 2026-09-11：有人用私有 index 提交後漏了同步，共用 index 停在提交前的樹 ⇒ status 冒出一排「已暫存」，
+// 但工作區內容其實全等於 HEAD。舊版照樣拒絕合併，兩條已過審的修正卡了一整晚。
+// mergeFiles 刻意包含殘影檔：同步前的 status 那一欄是 'MM'，若沒有重新讀 status，下面「工作區改動與
+// 要合併的檔重疊」那道檢查會拿過期的結果把它誤擋下來。
+test('暫存區只剩殘影（內容＝HEAD）→ 限定路徑同步回 HEAD，再照常合併', async () => {
+  gitDirty = 'MM app/package.json\nD  app/jest.setup.js\n';
+  headBlobs = { 'app/package.json': 'b1', 'app/jest.setup.js': 'b2' };
+  workBlobs = { 'app/package.json': 'b1', 'app/jest.setup.js': 'b2' };
+  mergeFiles = 'app/package.json\n';
+  const r = await applyFix(1, 2, [{ taskId: 1, userId: 2, startedAt: Date.now() }]);
+  expect(r).toMatchObject({ merged: true });
+  const seq = calls();
+  const reset = seq.indexOf('git reset -q -- app/package.json app/jest.setup.js');
+  expect(reset).toBeGreaterThanOrEqual(0);
+  expect(reset).toBeLessThan(seq.findIndex(c => c.includes('merge --no-ff')));
+});
+
+test('殘影混著真的暫存 → 照樣擋下、只點名真的那個，暫存區一個都不動', async () => {
+  gitDirty = 'MM app/package.json\nM  app/server/other-work.js\n';
+  headBlobs = { 'app/package.json': 'b1' };
+  workBlobs = { 'app/package.json': 'b1' };
+  const err = await applyFix(1, 2, []).catch(e => e);
+  expect(err.message).toMatch(/other-work\.js/);
+  expect(err.message).not.toMatch(/package\.json/);
+  expect(calls().some(c => c.startsWith('git reset'))).toBe(false);
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
 });
 
