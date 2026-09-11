@@ -1,0 +1,43 @@
+/* 手機版（≤767px）專用。
+   ⚠ 整份只能有這一個 @media 區塊，區塊外不准寫任何規則：桌機（≥768px）一條都吃不到，
+   才能保證「調手機不會動到桌機」。排在最後一支，同權重時贏過前面各檔。
+   767 對齊 ui-next.css 側欄變抽屜的斷點，平板（768–1199）走的是窄側欄，不在這裡處理。 */
+@media (max-width: 767px) {
+  /* ── 外殼 ── */
+  /* 100vh 在手機瀏覽器是「網址列收起時」的高度；網址列一出現，底部就被裁掉一截，
+     而對話頁的輸入框正好在最底下——整個看不到。dvh 跟著網址列伸縮；先寫 vh 當舊瀏覽器退路。
+     min-height 也要壓掉，否則 ui-next.css 的 min-height:100vh 會把高度撐回去。 */
+  .ui-next-shell { flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; }
+  .ui-next-mobile-bar {
+    display: flex; flex: none; align-items: center; gap: 10px;
+    box-sizing: border-box; height: 52px; padding: 0 12px;
+    border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  /* 選單鈕從 position:fixed 改回頂欄裡的一般元素（ui-next.css 的手機區塊把它釘在左上角）。 */
+  .ui-next-mobile-bar .ui-next-mobile-menu { position: static; width: 38px; height: 38px; }
+  .ui-next-mobile-brand { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 15px; }
+  .ui-next-mobile-brand img { width: 20px; height: 20px; }
+  .ui-next-main { flex: 1; min-height: 0; }
+  /* 首頁原本讓出 64px 給浮動選單鈕；鈕進了頂欄就不必再讓。 */
+  .ui-next-question { padding-top: 22px; }
+
+  /* ── 頁籤列 ── */
+  /* 放不下時左右滑，不要把「設定」「連線設定」擠成一行兩個字的直排。 */
+  .ui-next-detail-tabs, .ui-next-task-tabs { overflow-x: auto; scrollbar-width: none; }
+  .ui-next-detail-tabs::-webkit-scrollbar, .ui-next-task-tabs::-webkit-scrollbar { display: none; }
+  .ui-next-detail-tabs button, .ui-next-task-tabs button { flex: none; white-space: nowrap; }
+
+  /* ── Admin 子頁（沿用 app.css 的設定表單與表格） ── */
+  /* 兩欄表單在 390px 每欄只剩 147px，網址欄位只看得到前半截。 */
+  .ui-next-main .conn-fields, .ui-next-main .conn-fields-wrap { grid-template-columns: 1fr; }
+  /* 警示說明＋按鈕並排時說明被擠成窄柱，改上下排。 */
+  .ui-next-main .setting-block-footer.warn { flex-direction: column; align-items: flex-start; }
+  .ui-next-main .arj-header-row { flex-wrap: wrap; gap: 4px 12px; }
+  /* .table-wrap 本來就能橫捲，但 table 是 width:100%，永遠被壓進容器寬，欄位擠成一字一行
+     （連線管理的名稱、分類樣本的錯誤文字）。給最小寬度它才真的會捲。
+     只給 4 欄以上的表：3 欄的小表（分類樣本的判定分佈）本來就放得下，硬撐寬反而要左右滑。
+     .table-cards-sm 在手機是卡片版（app.css），不能給。 */
+  .ui-next-main .table-wrap:not(.table-cards-sm) > .data-table:has(th:nth-child(4)) { min-width: 560px; }
+  /* Prompt 送出記錄：內文格被壓成窄柱時一列高到將近 600px，一屏看不到第二筆。 */
+  .ui-next-main .data-table td > pre { min-width: 260px; }
+}

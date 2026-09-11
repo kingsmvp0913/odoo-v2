@@ -1229,7 +1229,9 @@
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
       <div v-else class="ui-next-shell" :class="{ 'has-ribbon': maintenance }" data-ui="next">
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
-        <button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" :aria-expanded="mobileSidebarOpen ? 'true' : 'false'" @click="openMobileSidebar($event)"><ui-next-icon name="grid"/></button>
+        <!-- 手機頂欄（樣式在 10-mobile.css，桌機 display:none）。選單鈕原本 position:fixed 浮在左上角，
+             蓋住每一頁的標題；放進一條佔位的頂欄，內容才會從它下面開始。 -->
+        <header class="ui-next-mobile-bar"><button class="ui-next-mobile-menu" type="button" aria-label="開啟主選單" :aria-expanded="mobileSidebarOpen ? 'true' : 'false'" @click="openMobileSidebar($event)"><ui-next-icon name="grid"/></button><span class="ui-next-mobile-brand"><img src="favicon.svg" alt=""><b>Odoo AI</b></span></header>
         <div v-if="mobileSidebarOpen" class="ui-next-sidebar-backdrop" @click="closeMobileSidebar(); closePopovers()"></div>
         <!-- role/aria-modal 只在行動版抽屜開啟時掛上：桌機的同一個 aside 是永久導覽，
              無條件標成 dialog 會讓輔助技術把整個側欄誤報成對話框。 -->
