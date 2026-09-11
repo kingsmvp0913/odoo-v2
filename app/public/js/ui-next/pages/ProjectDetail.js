@@ -260,6 +260,7 @@
 <b>{{ chat.title || '新對話' }}</b>
 <span v-if="chat.unread" class="ui-next-chat-tab-unread">{{ chat.unread }}</span>
 <em v-if="chat.reply_pending">AI 回覆中</em>
+<em v-if="chat.converted_task_id" class="ui-next-chat-tab-task" :title="'已轉為任務 #'+chat.converted_task_id+'，點擊開啟'" @click.stop="$router.push('/task/'+chat.converted_task_id)">已轉任務</em>
 <small>{{ chatDate(chat.created_at) }}</small>
 </button>
 </li>

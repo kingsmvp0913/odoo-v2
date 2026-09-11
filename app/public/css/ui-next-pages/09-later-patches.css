@@ -183,14 +183,16 @@
 .ui-next-chat-tab-search:focus{outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:1px}
 .ui-next-chat-tab-empty{margin:16px 0 0;color:var(--text-muted);font-size:13px}
 .ui-next-chat-tab-list{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:4px}
-.ui-next-chat-tab-list button{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;width:100%;border:0;border-radius:10px;padding:10px 12px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background-color .125s ease}
+.ui-next-chat-tab-list button{display:grid;grid-template-columns:minmax(0,1fr);grid-auto-flow:column;grid-auto-columns:auto;align-items:center;gap:10px;width:100%;border:0;border-radius:10px;padding:10px 12px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background-color .125s ease}
 
 .ui-next-chat-tab-list button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 .ui-next-chat-tab-list b{min-width:0;overflow:hidden;font-size:14px;font-weight:500;white-space:nowrap;text-overflow:ellipsis}
 .ui-next-chat-tab-list small{color:var(--text-muted);font-size:12px;white-space:nowrap}
 .ui-next-chat-tab-list em{padding:2px 7px;border-radius:99px;background:color-mix(in srgb,var(--info) 16%,transparent);color:var(--info);font-size:11px;font-style:normal;white-space:nowrap}
 .ui-next-chat-tab-unread{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:99px;background:var(--primary);color:var(--surface);font-size:11px;font-weight:700}
-@media(max-width:700px){.ui-next-chat-tab-list button{grid-template-columns:1fr auto}.ui-next-chat-tab-list small{grid-column:1/-1}}
+/* 已轉任務用實心，跟同色系淡底的「AI 回覆中」分得開；--info 配 --surface 字兩者隨主題一起翻，深淺色都讀得到 */
+.ui-next-chat-tab-list .ui-next-chat-tab-task{background:var(--info);color:var(--surface);cursor:pointer}
+@media(max-width:700px){.ui-next-chat-tab-list button{grid-template-columns:1fr auto;grid-auto-flow:row}.ui-next-chat-tab-list small{grid-column:1/-1}}
 
 /* 內嵌的頁籤內容（連線設定／部署 SOP）本來是獨立頁面，各自帶著「返回專案」與大標題。
    嵌進專案頁後那些東西會和上面的頁首重複一次，所以在內嵌情境下收起來。 */
@@ -1896,6 +1898,27 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
    :not([class*="-inner"]) 排掉內層容器——父子都加就變成右邊空一大塊。 */
 .ui-next-shell.has-ribbon .ui-next-main [class*="page-head"]:not([class*="-inner"]),
 .ui-next-shell.has-ribbon .ui-next-main [class*="topbar"] { padding-right: 118px; }
+
+/* 對話已轉任務的斜標：外型借上面的「改善執行中」緞帶，但這是單場對話的狀態、要能點開任務，
+   所以斜帶本身吃點擊（容器仍 pointer-events:none，只有那一條會擋到底下）。
+   底色 --info 配 --surface 字：兩者隨主題一起翻，淺色藍底白字、深色淺藍底深字。 */
+.ui-next-chat-ribbon {
+  position: fixed; top: 0; right: 0; width: 132px; height: 132px;
+  overflow: hidden; pointer-events: none; z-index: 899;
+}
+.ui-next-chat-ribbon button {
+  position: absolute; right: -46px; top: 26px; width: 200px;
+  transform: rotate(45deg);
+  padding: 5px 0; border: 0; text-align: center;
+  font-family: inherit; font-size: 11px; font-weight: var(--fw-semibold); letter-spacing: .3px;
+  background: var(--info); color: var(--surface);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .28);
+  cursor: pointer; pointer-events: auto;
+}
+.ui-next-chat-ribbon button:focus-visible { outline: 2px solid var(--text); outline-offset: -4px; }
+/* 「改善執行中」同時出現時兩條會疊在同一角：這條往內退一個帶寬，排成平行的第二條。 */
+.ui-next-shell.has-ribbon .ui-next-chat-ribbon { width: 180px; height: 180px; }
+.ui-next-shell.has-ribbon .ui-next-chat-ribbon button { top: 66px; right: -58px; width: 240px; }
 
 /* 貼上截圖後只跳一行檔名（剪貼簿給的名字一律是 image.png）看起來像沒生效，所以是圖就顯示縮圖。
    首頁輸入框與建立任務視窗的附件列都是「一行一個檔名」的 chip，共用這顆；非圖片（pdf 等）

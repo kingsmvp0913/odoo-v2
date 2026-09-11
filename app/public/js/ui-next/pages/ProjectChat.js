@@ -432,6 +432,7 @@
       <section class="ui-next-chat-page">
         <div class="ui-next-thread">
 <template v-if="activeChat">
+<div v-if="activeChat.converted_task_id" class="ui-next-chat-ribbon"><button type="button" :title="'已轉為任務 #'+activeChat.converted_task_id+'，點擊開啟'" @click="$router.push('/task/'+activeChat.converted_task_id)">已轉任務</button></div>
 <div v-if="showNewChat" class="ui-next-new-chat ui-next-new-chat-popover">
 <input v-model="newTitle" placeholder="對話標題（選填）" @keyup.enter="createChat">
 <textarea v-model="newChatText" class="ui-next-new-chat-text" placeholder="第一句想問什麼…可貼上截圖或附檔案" @paste="onNewChatPaste"></textarea>
