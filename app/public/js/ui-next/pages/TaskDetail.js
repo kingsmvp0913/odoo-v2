@@ -264,6 +264,13 @@
         } catch (e) { this.error = e.message; }
         finally { this.loading = false; }
       },
+      // 送出類按鈕送完一律用這支，不要用 load()：load 會切 loading＝整個內容區換成「載入任務中…」再重建，
+      // 瀏覽器連帶把捲軸歸零——送出前在最底，送出後跳到最舊的留言（2026-09-11 真瀏覽器實測 scrollTop 變 0）。
+      // 同 submitAnswer：先釘住再靜默重抓，新訊息進來時 timeline.length 的 watch 會貼底。
+      refreshToLatest() {
+        this._convPinBottom = true;
+        return this.refresh();
+      },
       // 分頁撈完整對話 log（task_logs），避免 detail 端點只回末 5 筆而截斷對話時間軸。
       // 順序不重要——timeline() 會依 ts 重排；每頁 ≤100，撈到不足一頁為止（cap 防呆）。
       async fetchAllLogs() {
@@ -529,6 +536,9 @@
           // autoResize 寫的是 inline height：清空文字它不會自己縮，欄位會一直停在
           // 上一則留言撐開的高度。清掉 inline 值讓它退回 CSS 的 min-height。
           if (this.$refs.messageInput) this.$refs.messageInput.style.height = '';
+          // 自己剛送出的留言一定要看得到：輸入區 sticky 在底，捲在對話中段照樣打得了字，此時釘住旗標是
+          // false，loadTaskMessages 的貼底會整個跳過（實測停在中段不動）。同 submitAnswer 先補回釘住。
+          this._convPinBottom = true;
           await this.loadTaskMessages();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.sendingMessage = false; }
@@ -644,7 +654,7 @@
         try {
           await Api.post(`tasks/${this.task.id}/approve`, {});
           showToast('已審核通過，正在併入 ai-dev', 'success');
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.approving = false; }
       },
@@ -670,7 +680,7 @@
           this.rejectFiles = [];
           this.syncPreviews('rejectFiles');
           if (this.$refs.rejectFileInput) this.$refs.rejectFileInput.value = '';
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.rejecting = false; }
       },
@@ -685,7 +695,7 @@
         try {
           await Api.post(`tasks/${this.task.id}/spec-approve`, {});
           showToast('規格審核通過，開始實作', 'success');
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.specApproving = false; }
       },
@@ -697,7 +707,7 @@
           await Api.post(`tasks/${this.task.id}/spec-revise`, { feedback: this.specFeedback.trim() });
           showToast('已送出修改意見，AI 正在更新規格', 'success');
           this.specFeedback = '';
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.specRevising = false; }
       },
@@ -828,7 +838,7 @@
           const r = await Api.post(`tasks/${this.task.id}/resolve-conflicts`, { resolutions });
           if (r && r.done) showToast('衝突已依裁決套用，繼續部署', 'success');
           else showToast('已套用；仍有選「手解」的檔，請在 Repo 解完後按下方「已手動解決」收尾', 'warn', 9000);
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.submittingConflicts = false; }
       },
@@ -860,7 +870,7 @@
           const r = await Api.post(`tasks/${this.task.id}/mark-conflict-resolved`, {});
           showToast('衝突已標記為解決，可繼續更新正式', 'success');
           (r && r.warnings || []).forEach(w => showToast(w, 'warn', 9000));
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.conflictResolving = false; }
       },
@@ -869,7 +879,7 @@
         try {
           await Api.post(`tasks/${this.task.id}/cs-confirm`, {});
           showToast('回覆已確認送出，任務完成', 'success');
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.csConfirming = false; }
       },
@@ -884,7 +894,7 @@
           await Api.post(`tasks/${this.task.id}/cs-data-submit`, { answers });
           this.csAnswers = {};
           showToast('已補充資料，重新送入分析', 'success');
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.csRetrying = false; }
       },
@@ -897,7 +907,7 @@
           await Api.post(`tasks/${this.task.id}/cs-followup`, { note: this.csFollowup.trim() });
           showToast('已送出，客服正在重新處理', 'success');
           this.csFollowup = '';
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.csFollowingUp = false; }
       },
@@ -943,7 +953,7 @@
           await Api.post(`tasks/${this.task.id}/resolve-blocker`, { resolution: this.resolution });
           this.resolution = '';
           showToast('已送出，從中斷處重試', 'success');
-          await this.load();
+          await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.resolving = false; }
       },
