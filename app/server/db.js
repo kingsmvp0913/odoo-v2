@@ -1092,6 +1092,10 @@ async function migrate() {
     // 維護視窗：夜間批次期間暫停同步與派工。⚠ 用「到期時間」不是布林——布林卡在 true 會讓
     // 派工從此安靜地停擺，而安靜的失敗最難發現（此 repo 踩過：夜班空轉 98 輪無人察覺）。
     { table: 'teams_settings', col: 'maintenance_until', sql: 'ALTER TABLE teams_settings ADD COLUMN maintenance_until TIMESTAMPTZ' },
+    // 夜間批次「今天已經觸發過」的台北日期（見 cron.js 的 readNightlyFixDay）。⚠ 必須落 DB：
+    // 批次只要有合併就會 restartSelf()（docker restart 自己的容器），記憶體旗標隨之歸零，
+    // 同一晚會再開第二批、把剛失敗的候選重跑一遍（白花錢，且 fix_attempts 一晚加兩次）。
+    { table: 'teams_settings', col: 'nightly_fix_last_day', sql: 'ALTER TABLE teams_settings ADD COLUMN nightly_fix_last_day TEXT' },
     // 夜間批次的「連續失敗次數」（見 pipeline/nightly-fix.js）。⚠ 這兩欄是**飢餓防線**：
     // 「成功才標 done」意味著一條永遠合併不了的意見／提案會每晚重跑一次完整流程（重付 triage、
     // 重跑兩次全套測試），並永久佔掉 NIGHTLY_FIX_MAX 的一格，把後來的意見擠到永遠輪不到。
