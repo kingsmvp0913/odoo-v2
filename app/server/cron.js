@@ -101,7 +101,23 @@ let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預
 let _lastArchiveDay = null;  // 同一天只封存一次（同上，過了預定時刻才補跑）
 // 3-I2：夜間批次（意見回饋通道）自己的節流旗標，與健檢的 shouldRunHealthCheck 完全脫鉤——
 // HEALTH_CHECK_INTERVAL_MS=0（健檢停用）或健檢卡在 running 都不該連坐把這條通道一起停掉。
-let _lastNightlyFixDay = null;
+// ⚠ 這個「今天跑過了」只能落 DB，不能存記憶體：批次只要有合併就會 restartSelf()
+// （docker restart 自己的容器），新 process 的記憶體旗標是 null，同一晚 22:00 之後的下一個 tick
+// 立刻開第二批，把剛失敗、狀態仍是 approved 的候選整組重跑一遍——除了白花錢，noteFailedAttempt
+// 會在同一晚把 fix_attempts 加兩次，NIGHTLY_FIX_MAX_ATTEMPTS=3 的三振額度用一半的夜數就燒完，
+// 候選被提前退回人工。
+async function readNightlyFixDay() {
+  const { rows } = await query('SELECT nightly_fix_last_day FROM teams_settings WHERE id = 1');
+  return (rows[0] && rows[0].nightly_fix_last_day) || null;
+}
+
+async function markNightlyFixDay(dayKey) {
+  await query(
+    `INSERT INTO teams_settings (id, nightly_fix_last_day) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET nightly_fix_last_day = $1`,
+    [dayKey]);
+}
+
 let _lastIdleSweepAt = 0; // 閒置掃描節流：tick 每分鐘跑，掃描只需每 10 分鐘一次
 const IDLE_SWEEP_INTERVAL_MS = parseInt(process.env.ENV_IDLE_SWEEP_INTERVAL_MS || '600000', 10);
 
@@ -220,11 +236,11 @@ function minuteLabel(ms) {
 
 // 夜間改善批次的下次時刻。它跟健檢共用同一個 22:00 slot（健檢跑完由 .finally 接著觸發；
 // 健檢停用或未 due 時由批次自己的 due 判斷補跑），所以直接沿用健檢的目標時刻算法。
-// ⚠ 只能讀記憶體旗標 _lastNightlyFixDay，不能查 DB：批次在「沒有候選」時提早結束、
-// 根本不會建 health_check_runs 列，查 DB 會把「今天跑過但沒事做」誤判成「今天還沒跑」。
-// 代價是 server 重啟會讓旗標歸零、當天顯示成「還沒跑」——note 已寫明，不假裝精確。
-function nightlyFixNextRunAt(now) {
-  const alreadyRan = _lastNightlyFixDay === taipeiDayKey(now);
+// ⚠ 不能改成查 health_check_runs：批次在「沒有候選」時提早結束、根本不會建那一列，查它會把
+// 「今天跑過但沒事做」誤判成「今天還沒跑」。要看的是觸發當下就寫下的 teams_settings
+// .nightly_fix_last_day（readNightlyFixDay），它撐得過批次自己的 restartSelf()。
+function nightlyFixNextRunAt(now, lastRunDay) {
+  const alreadyRan = lastRunDay === taipeiDayKey(now);
   const { hour } = taipeiDateParts(now);
   return healthCheckTargetAt(now, (alreadyRan || hour >= HEALTH_CHECK_HOUR) ? 1 : 0).toISOString();
 }
@@ -235,6 +251,8 @@ async function getCronSchedules(now = new Date()) {
   const settings = await getGlobalSettings();
   const testMode = !!settings.test_mode;
   const health = await getHealthCheckSchedule(now);
+  // 查不到（DB 暫時性錯誤）就當成今天還沒跑：排程頁多顯示一次「今晚」好過假裝已經跑過。
+  const nightlyFixLastDay = await readNightlyFixDay().catch(() => null);
   const shutdownTime = process.env.ODOO_ENV_SHUTDOWN_TIME || '23:00';
   const shutdownTz = process.env.ODOO_ENV_SHUTDOWN_TZ || '伺服器本機時區';
   const hourlyAt = new Date(now);
@@ -250,7 +268,7 @@ async function getCronSchedules(now = new Date()) {
     // 這一支原本不在清單裡：它每晚自動改平台自己的碼、跑測試、審核、合併，是全平台唯一
     // 無人監督就會動 production 的排程，卻是唯一在排程頁看不到的——不列出來，「昨晚到底有沒有
     // 跑」在畫面上無處可查（它沒候選時連 health_check_runs 都不建）。
-    { id: 'nightly-fix', name: '夜間改善批次', timing: `每日 ${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00（臺灣時間）；健檢跑完接著執行`, enabled: true, nextRunAt: nightlyFixNextRunAt(now), note: '把已核准的意見回饋與健檢提案自動改碼、跑測試、審核後合併並重啟。沒有候選時仍會啟動但不做事，且不留執行紀錄；下次時刻在平台重啟後會重新起算。' },
+    { id: 'nightly-fix', name: '夜間改善批次', timing: `每日 ${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00（臺灣時間）；健檢跑完接著執行`, enabled: true, nextRunAt: nightlyFixNextRunAt(now, nightlyFixLastDay), note: '把已核准的意見回饋與健檢提案自動改碼、跑測試、審核後合併並重啟。沒有候選時仍會啟動但不做事，且不留執行紀錄；「今天已跑過」記在 DB，平台重啟（含批次自己的重啟）不會讓它同一晚再跑一次。' },
     { id: 'nightly-shutdown', name: '測試區夜間關機', timing: `每日 ${shutdownTime}（${shutdownTz}）`, enabled: true, nextRunAt: null, note: '每天只執行一次；若錯過整點，之後的 tick 會補跑。' },
     { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
     { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },
@@ -347,7 +365,10 @@ function startCron() {
           // 單輪 2.1~6.5 分鐘（token_usage 的 agent_type='workflow_health'）。留著那個數字會讓
           // 人把「健檢被打斷」的損失估成一整晚與一大筆錢，據此做出過度的修法。
           nightlyFixTriggered = true;
-          _lastNightlyFixDay = taipeiDayKey(_clockForTesting ? _clockForTesting() : new Date());
+          // 寫失敗只記 log，不讓它把已經 INSERT 的 health_check_runs 留在 running：
+          // 最壞情況是下一個 tick 重打一次 runNightlyFix，而它自己有併發守衛（回 already-running）。
+          await markNightlyFixDay(taipeiDayKey(_clockForTesting ? _clockForTesting() : new Date()))
+            .catch(err => console.error('[CRON] 記錄夜間批次執行日失敗：', err.message));
           runAudit(run.id, { sinceAt, cadence })
             .catch(err => console.error('[CRON] health check:', err.message))
             .finally(() => {
@@ -363,7 +384,7 @@ function startCron() {
       // 3-I2：夜間批次的觸發點不能只掛在健檢的 due 判斷底下——HEALTH_CHECK_INTERVAL_MS=0
       // （文件寫「0=停用」指的是健檢本身）會連帶把意見回饋通道整條關掉；健檢卡在 running
       // 也會讓兩者一起永久停擺。這裡是批次自己的 due 判斷：與健檢是否啟用／是否卡住無關，
-      // 只看「今天台北時間是否已過 HEALTH_CHECK_HOUR，且這個 process 今天還沒觸發過批次」。
+      // 只看「今天台北時間是否已過 HEALTH_CHECK_HOUR，且今天還沒觸發過批次（記在 DB，跨重啟有效）」。
       // runNightlyFix 內部本身已有完整保險絲（維護旗標／token 預算／跑道上限／drain timeout／
       // 併發守衛回 already-running），這裡不重複做那些判斷，只負責「要不要打這一通」。
       if (!nightlyFixTriggered) {
@@ -371,8 +392,10 @@ function startCron() {
           const nightlyFixNow = _clockForTesting ? _clockForTesting() : new Date();
           const parts = taipeiDateParts(nightlyFixNow);
           const dayKey = taipeiDayKey(nightlyFixNow);
-          if (parts.hour >= HEALTH_CHECK_HOUR && _lastNightlyFixDay !== dayKey) {
-            _lastNightlyFixDay = dayKey;
+          // 讀 DB 而非記憶體：批次合併完會 restartSelf()，記憶體旗標活不過那次重啟（見
+          // readNightlyFixDay 檔頭）。讀／寫失敗都落到下面的 catch，這個 tick 不觸發、下一分鐘重試。
+          if (parts.hour >= HEALTH_CHECK_HOUR && (await readNightlyFixDay()) !== dayKey) {
+            await markNightlyFixDay(dayKey);
             console.log('[CRON] 健檢未觸發夜間批次（停用或本輪未 due），改由批次自己的排程觸發');
             const { runNightlyFix } = require('./pipeline/nightly-fix');
             runNightlyFix({ startedBy: null })
@@ -476,7 +499,11 @@ function stopCron() {
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
 function _resetArchiveStateForTesting() { _lastArchiveDay = null; }
-function _resetNightlyFixStateForTesting() { _lastNightlyFixDay = null; }
+// 夜間批次的「今天跑過了」已改存 DB（見 readNightlyFixDay），重設要清那一欄；
+// 回傳 promise 供新測試 await（pg-mem 的 query 是同步執行、非同步 resolve，舊呼叫端不 await 也安全）。
+function _resetNightlyFixStateForTesting() {
+  return query('UPDATE teams_settings SET nightly_fix_last_day = NULL WHERE id = 1').catch(() => {});
+}
 function _setClockForTesting(clock) { _clockForTesting = clock; }
 
 module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _resetNightlyFixStateForTesting, _setClockForTesting };
