@@ -153,11 +153,20 @@ const STATUS_TEXT = { pending: '待處理', approved: '已核准（將自動執�
 // 上一輪留下的提案與人的裁決。餵回去有兩個作用：判「不須調整」的不會被重講第二次；判「處理完成」
 // 的要回頭查那個指標有沒有往預期方向走。這是把健檢從「每輪重寫一份報告」變成「有記憶的優化迴圈」
 // 的關鍵——尤其視窗改成增量之後，沒有它每輪都會從零開始。
+//
+// ⚠ 夜間批次自建的「施工紀錄」列（nightly-fix.js 的 materializeGroup，run 的 cadence 為
+// BATCH_CADENCE）不算提案，這裡一律排除：它們每晚都新增、且永遠是最新的 id，會把 LIMIT 的名額
+// 從真正的健檢提案手上搶走（實測 29 筆施工紀錄對 38 筆提案），跨輪記憶剩不到一半。排除它們不會
+// 讓資訊消失——施工紀錄的來源成員（真提案那幾列）合併成功時會被 markGroupDone 標成
+// done＋applied_at，沒合併成功時停在 approved，兩種狀態這個查詢都看得到。
 async function previousProposals(limit = 20) {
   const { rows } = await query(
-    `SELECT diagnosis, layer, status, verdict_note, target_metric, metric_baseline, applied_at, kind, decided_at
-       FROM health_check_findings
-      WHERE kind IN ('proposal','signal') ORDER BY id DESC LIMIT $1`, [limit]
+    `SELECT f.diagnosis, f.layer, f.status, f.verdict_note, f.target_metric, f.metric_baseline,
+            f.applied_at, f.kind, f.decided_at
+       FROM health_check_findings f
+       LEFT JOIN health_check_runs r ON r.id = f.run_id
+      WHERE f.kind IN ('proposal','signal') AND (r.cadence IS NULL OR r.cadence <> $2)
+      ORDER BY f.id DESC LIMIT $1`, [limit, BATCH_CADENCE]
   );
   if (!rows.length) return '（這是第一輪，沒有上一輪的提案）';
   return rows.reverse().map(r => {
@@ -173,7 +182,13 @@ async function previousProposals(limit = 20) {
           ? `\n  夜間批次自動退場：${r.verdict_note.slice(MACHINE_RETIRE_PREFIX.length)}`
           : `\n  你的裁決：${r.verdict_note}`)
       : '';
-    return `- [${r.kind === 'signal' ? '候選訊號' : '提案'}｜${r.layer || '未分類'}｜${STATUS_TEXT[r.status] || r.status}] ${head}\n` +
+    // status='done' 只代表「有人／有批次處置過這一條」，不代表碼真的合併了：唯一的憑據是
+    // applied_at（markGroupDone 與管理頁核准都會補上）。沒有 applied_at 的 done 不得印成
+    // 「處理完成」——auditor 讀到會就此停止追蹤一個其實還在的問題（finding 153 那一輪即是）。
+    const statusText = (r.status === 'done' && !r.applied_at)
+      ? '標為完成但查無套用紀錄（試過沒合併／被駁回，仍未解決）'
+      : (STATUS_TEXT[r.status] || r.status);
+    return `- [${r.kind === 'signal' ? '候選訊號' : '提案'}｜${r.layer || '未分類'}｜${statusText}] ${head}\n` +
            `  指標：${r.target_metric || '（未填）'}（當時 ${r.metric_baseline || '—'}）${applied}${verdict}`;
   }).join('\n');
 }
