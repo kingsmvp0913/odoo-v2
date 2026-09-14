@@ -203,7 +203,11 @@ function compareToBaseline(base, after) {
   // suite 整支載不起來時 `Tests:` 那行不含 "failed"，只比 failed 數會被騙成 pass——
   // 補兩道：passed 數掉了也算退步（少掉的測試不會出現在任何一邊的 failed 裡），
   // 以及 suite 級 failed（只在 `Test Suites:` 那行留痕，見 parseJestSuiteFailed 的註解）。
-  const suiteBroke = !unknown && Number(after.suiteFailed || 0) > Number(base.suiteFailed || 0);
+  // ⚠ base.suiteFailed 為 null／undefined＝**不知道基線是多少**，不是 0。當 0 的話，工作區只要
+  // 有任何一支 suite 載不起來就恆判退步（複檢關正是這樣整整擋掉每一份修正）。未知時略過這一道，
+  // 由 after.failed > base.failed 與 passedDropped 兩道把關——suite 載不起來會讓 passed 數掉下來。
+  const suiteBroke = !unknown && base.suiteFailed != null
+    && Number(after.suiteFailed || 0) > Number(base.suiteFailed);
   const passedDropped = !unknown && Number(after.passed) < Number(base.passed);
   const regressed = unknown || after.failed > base.failed || passedDropped || suiteBroke;
   const detail = `基線 ${base.failed == null ? '?' : base.failed} failed／${base.passed == null ? '?' : base.passed} passed`
@@ -280,8 +284,9 @@ async function runFix(fixId, { findingId, startedBy = null, members = null } = {
     // 基線落 DB：複檢那一關（fix-verify）改完碼要用同一個基線再比一次退步，而它拿不到這個
     // 區域變數。量不到（測試沒跑起來）時寫 null——compareToBaseline 看到 null 會判 unknown，
     // 而 unknown 一律當退步，方向是安全的。
-    await query('UPDATE finding_fixes SET baseline_failed=$2, baseline_passed=$3 WHERE id=$1',
-      [fixId, baseline.failed, baseline.passed]);
+    await query(
+      'UPDATE finding_fixes SET baseline_failed=$2, baseline_passed=$3, baseline_suite_failed=$4 WHERE id=$1',
+      [fixId, baseline.failed, baseline.passed, baseline.suiteFailed]);
 
     const agent = loadAgent('platform-fix');
     const prompt = agent.render({

@@ -1119,6 +1119,12 @@ async function migrate() {
     // 當退步 ⇒ 每一份修正都被擋下，且畫面上只看得到一句 unknown。
     { table: 'finding_fixes', col: 'baseline_failed', sql: 'ALTER TABLE finding_fixes ADD COLUMN baseline_failed INTEGER' },
     { table: 'finding_fixes', col: 'baseline_passed', sql: 'ALTER TABLE finding_fixes ADD COLUMN baseline_passed INTEGER' },
+    // suite 級紅燈數的基線。⚠ 少了這一欄，複檢（fix-verify）組不出 base.suiteFailed，而
+    // compareToBaseline 原本把「不知道」當 0 ⇒ 只要工作區有任何一支 suite 載不起來，
+    // 「改後 suite 紅燈 > 0」恆成立，每一份修正都被判退步。2026-09-13 實測：同一組數字
+    // （10 failed／4801 passed → 10 failed／4805 passed）開發關判 pass、複檢關判 fail。
+    // 舊列為 NULL＝未知，compareToBaseline 會略過 suite 這一道（不得當 0，見該函式）。
+    { table: 'finding_fixes', col: 'baseline_suite_failed', sql: 'ALTER TABLE finding_fixes ADD COLUMN baseline_suite_failed INTEGER' },
     // 複檢 agent（fix-verify）的推理過程，比照 review_notes：pass／fail 兩條路都寫。
     // 這一關是合併進 master 前的最後一道，且同樣無人監督——沒有這欄，事後只查得到「它擋了」
     // 或「它放行了」，查不到為什麼。

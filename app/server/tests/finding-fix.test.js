@@ -125,6 +125,26 @@ describe('測試判準：與基線比較，不是 exit code', () => {
   test('改後解析不出來 → 算失敗', () => {
     expect(compareToBaseline({ failed: 6, passed: 3654 }, { failed: null, passed: null }).regressed).toBe(true);
   });
+
+  // 複檢關（fix-verify）的基線是從 DB 讀的，而那張表一度沒有 suite 級紅燈數 ⇒ 這裡收到
+  // undefined。把未知當 0 的話，工作區只要有一支 suite 載不起來就恆判退步：2026-09-13
+  // 提案 #163 的「10 failed／4801 passed → 10 failed／4805 passed」綠燈還變多，仍被擋兩輪。
+  test('基線的 suite 紅燈數未知 → 略過 suite 這一道，不得判退步', () => {
+    const r = compareToBaseline({ failed: 10, passed: 4793 },
+      { failed: 10, passed: 4798, suiteFailed: 3 });
+    expect(r.regressed).toBe(false);
+  });
+
+  // 未知才略過；知道基線時這一道仍然要擋得住（唯一能觸發的就是 suite 數，failed 持平、passed 變多）
+  test('基線 suite 3 → 改後 4 算失敗', () => {
+    expect(compareToBaseline({ failed: 10, passed: 4793, suiteFailed: 3 },
+      { failed: 10, passed: 4798, suiteFailed: 4 }).regressed).toBe(true);
+  });
+
+  test('基線 suite 3 → 改後 3 算通過', () => {
+    expect(compareToBaseline({ failed: 10, passed: 4793, suiteFailed: 3 },
+      { failed: 10, passed: 4798, suiteFailed: 3 }).regressed).toBe(false);
+  });
 });
 
 describe('measureTests 解析 Tests: 那一行', () => {

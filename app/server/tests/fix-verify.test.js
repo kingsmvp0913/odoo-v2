@@ -162,6 +162,35 @@ describe('複檢改動要重新過同一套關卡', () => {
   });
 });
 
+// 這一關拿不到 runFix 的區域變數，基線只能從 finding_fixes 讀。漏讀 suite 那一欄的話
+// compareToBaseline 收到 undefined，而「未知」若被當成 0，工作區有任何一支 suite 載不起來就
+// 恆判退步——實測 2026-09-13（提案 #163）：綠燈 4801→4805、紅燈持平，仍被連擋兩輪。
+describe('基線的 suite 紅燈數要從 DB 帶進比對', () => {
+  test('基線 suite 3、改後 suite 3 且綠燈變多 → 放行', async () => {
+    mockFixRow({ baseline_failed: 10, baseline_passed: 4793, baseline_suite_failed: 3 });
+    agentSays({ verdict: 'pass', changed: true, reason: '修好了' });
+    mockGitWith({ diffs: [DIFF_BEFORE, DIFF_AFTER, DIFF_AFTER] });
+    mockMeasure.mockResolvedValue({ ok: false, failed: 10, passed: 4798, suiteFailed: 3 });
+
+    const r = await verifyFix(1, FINDING);
+
+    expect(r.pass).toBe(true);
+  });
+
+  // 漏撈那一欄時這一條會紅：base 變成未知 ⇒ suite 這道被略過 ⇒ 錯誤地放行。
+  test('基線 suite 3、改後 suite 4 → 擋下（這一道仍然有效）', async () => {
+    mockFixRow({ baseline_failed: 10, baseline_passed: 4793, baseline_suite_failed: 3 });
+    agentSays({ verdict: 'pass', changed: true, reason: '修好了' });
+    mockGitWith({ diffs: [DIFF_BEFORE, DIFF_AFTER, DIFF_AFTER] });
+    mockMeasure.mockResolvedValue({ ok: false, failed: 10, passed: 4798, suiteFailed: 4 });
+
+    const r = await verifyFix(1, FINDING);
+
+    expect(r.pass).toBe(false);
+    expect(r.reason).toContain('測試退步');
+  });
+});
+
 describe('檢查不了 ≠ 檢查過了', () => {
   test('agent 回不出可解析的 verdict → 擋下', async () => {
     mockFixRow();

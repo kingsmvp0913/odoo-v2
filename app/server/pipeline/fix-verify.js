@@ -48,7 +48,7 @@ async function stagedDiff(worktree) {
  */
 async function verifyFix(fixId, finding = {}) {
   const { rows: [fix] } = await query(
-    `SELECT diff, test_result, worktree, baseline_failed, baseline_passed
+    `SELECT diff, test_result, worktree, baseline_failed, baseline_passed, baseline_suite_failed
        FROM finding_fixes WHERE id=$1`, [fixId]);
   if (!fix) return { pass: false, changed: false, reason: '修正紀錄不存在', notes: '' };
   // 沒有工作區就複檢不了。這裡不放行——這一關是無人監督下進 master 前的最後一道，
@@ -126,8 +126,11 @@ async function verifyFix(fixId, finding = {}) {
   linkNodeModules(fix.worktree);
   const measured = await measureTests(fix.worktree);
   unlinkNodeModules(fix.worktree);
+  // ⚠ suiteFailed 一定要一起帶：漏了它，compareToBaseline 收到的是 undefined，而「未知」與「0」
+  //   在這一道上差別是整條通道能不能過（見該函式與 db.js 的 baseline_suite_failed）。
   const cmp = compareToBaseline(
-    { failed: fix.baseline_failed, passed: fix.baseline_passed }, measured);
+    { failed: fix.baseline_failed, passed: fix.baseline_passed, suiteFailed: fix.baseline_suite_failed },
+    measured);
   if (cmp.regressed) {
     return { pass: false, changed: true, notes, testResult: cmp.line,
       reason: `複檢改動後測試退步：${cmp.line}` };
