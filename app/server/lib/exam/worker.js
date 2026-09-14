@@ -66,6 +66,7 @@ async function processUpload(db, { upload, bank, onProgress }) {
   // 先建 item／attempt，並把只有官方確認答案的命中題短路掉。
   // 最後答案刻意留 NULL：輸入、官方／審查、投票、最後答案是四種不同事實。
   const toReview = [];
+  const pageItemIds = [];
   for (const [i, q] of qs.entries()) {
     let fp;
     try { fp = fingerprint(q.question); } catch { notes.push(`第 ${q.no} 題抄不出題幹，跳過`); continue; }
@@ -105,6 +106,7 @@ async function processUpload(db, { upload, bank, onProgress }) {
       [itemId, bank.id, upload.id, String(upload.page), q.no,
        aligned[i] && aligned[i].length ? aligned[i] : null, upload.responder || null]);
 
+    pageItemIds.push(itemId);
     if (!officialAnswer) {
       toReview.push({ itemId, q, theirAnswer: aligned[i] || [] });
     }
@@ -155,12 +157,29 @@ async function processUpload(db, { upload, bank, onProgress }) {
     }
   }
 
+  // 這一頁判完就算這一頁的信心度，不等整場收工。
+  //
+  // 原本只在 runQueue 最後統一重算一次：一場考試要傳十幾頁，前面判完的頁在整場
+  // 跑完之前信心度全是 null ⇒ 推薦分數算不出來、畫面只剩「—」。而「需確認」只比對
+  // 審查答案、不看信心度，於是它先冒出來，分數卻遲遲不來——考試當下最需要的正是分數。
+  //
+  // 只寫回**這一頁**的題：幾頁併行時各自重算，寫全部的話晚讀早寫的那個會把別頁
+  // 剛算好的值蓋回 null。收工那次全量重算照留，負責把整份的章節校準對齊。
+  //
+  // 算分失敗不能讓整頁失敗：失敗路徑會刪掉作答，等於把已經付過錢的審查結果丟掉。
+  try {
+    await recomputeConfidence(db, bank, { itemIds: pageItemIds });
+  } catch (e) {
+    notes.push(`信心度這頁沒算成，整場跑完會再算一次：${e.message}`);
+  }
+
   return { questions: qs.length, official: qs.length - toReview.length, reviewed: reviewed.length,
     note: notes.join('；') };
 }
 
 // 重算整份題庫的信心度＋章節校準。純計算，每次跑完都重來。
-async function recomputeConfidence(db, bank) {
+// itemIds 有給時照樣整份算（校準要整章一起縮放），但只寫回這幾題。
+async function recomputeConfidence(db, bank, { itemIds = null } = {}) {
   const items = (await db.query(`
     SELECT i.id, i.certain, i.answer_official, i.section_title
       FROM exam_items i WHERE i.odoo_version = $1`, [bank.odoo_version])).rows;
@@ -230,8 +249,10 @@ async function recomputeConfidence(db, bank) {
     const r = calibrateSection(list, { incorrect: incOfGroup.get(key) });
     if (r.note) notes.push(`[${key.split('|')[1]}] ${r.note}`);
   }
+  const only = itemIds ? new Set(itemIds) : null;
   for (const list of bySection.values()) {
     for (const e of list) {
+      if (only && !only.has(e.id)) continue;
       await db.query(
         `UPDATE exam_items SET confidence = $2, confidence_why = $3, calibrated = $4, updated_at = NOW()
           WHERE id = $1`, [e.id, e.confidence, e.why, !!e.calibrated]);

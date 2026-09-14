@@ -488,3 +488,51 @@ test('有工人在審時，空手的工人要留下來待命，接住晚到的�
   // 峰值 1 代表退化成序列：第二個工人在第二頁進來之前就走了
   expect(peak).toBe(2);
 });
+
+// 一場考試要傳十幾頁。信心度原本只在整場收工時統一算一次，前面判完的頁在那之前
+// 全是 null ⇒ 推薦分數算不出來，畫面上只有「需確認」（它不看信心度）先冒出來。
+// 考試當下要的是「這頁判完就有分數」，不是等最後一頁。
+test('一頁判完當下就有信心度，不等同一場其他頁跑完', async () => {
+  const b = await dbModule.query(
+    `INSERT INTO exam_banks (label, odoo_version) VALUES ('per-page','19') RETURNING id`);
+  const pageBank = b.rows[0].id;
+  const add = async (page) => {
+    const rel = path.join('exam_perpage', `${page}.jpg`);
+    fs.mkdirSync(path.join(uploadDir, 'exam_perpage'), { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, rel), Buffer.from([0xff, 0xd8, 0xff]));
+    await dbModule.query(
+      `INSERT INTO exam_uploads (bank_id, page, answer_raw, image_path) VALUES ($1,$2,'B',$3)`,
+      [pageBank, page, rel]);
+  };
+
+  // 第二頁卡在閘門，直到第一頁的檢查做完才放行 ⇒ 檢查時整場一定還沒收工
+  let open;
+  const gate = new Promise(r => { open = r; });
+  mockExtract.mockImplementation(async ({ imagePath }) => {
+    if (imagePath.endsWith('P2.jpg')) await gate;
+    const en = imagePath.endsWith('P2.jpg') ? 'per page second question' : 'per page first question';
+    return { page: pageOf([{ en }]), model: 'm' };
+  });
+  mockChallenge.mockImplementation(async ({ questions }) => ({
+    verdict: verdictOf([{ en: questions[0].question }]), model: 'm',
+  }));
+
+  await add('P1');
+  await add('P2');
+  let seen;
+  const run = runQueue(dbModule, {
+    bankId: pageBank,
+    onEvent: (ev) => {
+      if (ev.page !== 'P1' || ev.status !== 'done') return;
+      dbModule.query(`
+        SELECT i.confidence FROM exam_attempts a JOIN exam_items i ON i.id = a.item_id
+         WHERE a.bank_id = $1 AND a.page = 'P1'`, [pageBank])
+        .then(r => { seen = r.rows; })
+        .finally(open);
+    },
+  });
+  await run;
+
+  expect(seen).toHaveLength(1);
+  expect(seen[0].confidence).not.toBeNull();
+});
