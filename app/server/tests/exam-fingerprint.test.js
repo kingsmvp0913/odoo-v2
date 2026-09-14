@@ -33,6 +33,15 @@ test('normalizeQuestion 抹平標點但保留字詞邊界', () => {
   expect(normalizeQuestion('Multi-company: how?')).toBe('multi company how');
 });
 
+// 截圖邊緣被切掉的字，抄題時會用方括號補回（`fo[rm]`、`co[mputed]`）。括號若跟其他標點
+// 一樣換成空白，同一個字就被拆成兩個詞、指紋對不上完整的那份——實測 206/379、207/454
+// 各存成兩列，379 因此沒吃到 206 的官方答案，考試時被當成沒確認過的題重新審查。
+test('抄題補字的方括號不拆開單字', () => {
+  expect(fingerprint('will the cost in the product fo[rm] change'))
+    .toBe(fingerprint('will the cost in the product form change'));
+  expect(normalizeQuestion('co[mputed] on [...] lines')).toBe('computed on lines');
+});
+
 // 題幹可能夾中文（question_zh 不走這條，但英文題幹裡出現中文標記時不該被抹掉）
 test('中文字元保留', () => {
   expect(normalizeQuestion('設定 Reordering Rule')).toBe('設定 reordering rule');

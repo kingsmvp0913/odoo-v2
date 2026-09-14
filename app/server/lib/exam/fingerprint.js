@@ -8,9 +8,12 @@ const crypto = require('crypto');
 // 非英數一律換成空白（不是刪除）——直接刪的話 "multi-company" 會變成
 // "multicompany"，而截圖抄成 "multi company" 的那次就對不上了。
 // 中文字元保留：英文題幹裡偶爾夾中文標記，抹掉會讓兩題撞成同一個指紋。
+// 方括號例外、直接刪：抄題時截圖邊緣被切掉的字會補成 `fo[rm]`，換成空白就拆成兩個詞，
+// 跟完整的那份對不上（實測 206/379、207/454 各存成兩列）。
 function normalizeQuestion(text) {
   return String(text == null ? '' : text)
     .toLowerCase()
+    .replace(/[[\]]/g, '')
     .replace(/[^a-z0-9一-鿿]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ');
