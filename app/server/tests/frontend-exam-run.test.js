@@ -263,8 +263,9 @@ describe('串接說明跳窗', () => {
     expect(view).toContain('串接說明');
     expect(view).toContain('ui-next-task-modal-backdrop');
     // 沒有題庫時最需要看串接說明（那正是還沒開始傳的時候），
-    // 所以入口不能被 v-else-if="!banks.length" 之後那一段包住
-    expect(view.indexOf('串接說明')).toBeLessThan(view.indexOf('!banks.length'));
+    // 所以入口不能被 v-else-if="!bankId" 之後那一段包住（歸檔完也是這個空畫面）
+    expect(view.indexOf('v-else-if="!bankId"')).toBeGreaterThan(-1);
+    expect(view.indexOf('串接說明')).toBeLessThan(view.indexOf('v-else-if="!bankId"'));
   });
 
   test('產通行碼走 POST，並把效期一起顯示', () => {
@@ -278,4 +279,16 @@ describe('串接說明跳窗', () => {
   test('關閉鈕不用沒有樣式的 ui-next-modal-close', () => {
     expect(view).not.toContain('ui-next-modal-close');
   });
+});
+
+// 使用者：「確認歸檔後應該要自動清空」。但不能真的刪——跨場推導錯題（deduce.js）與
+// 章節校準都 JOIN 已歸檔場次的 exam_attempts，刪了就再也推不出「上一場錯的是哪題」。
+test('歸檔後作戰台只換成空畫面，不呼叫清空、不刪資料', () => {
+  const fn = view.slice(view.indexOf('async refresh('), view.indexOf('async openApi('));
+  expect(fn).toMatch(/status\s*!==\s*'archived'/);
+  const doArchive = view.slice(view.indexOf('async doArchive('), view.indexOf('voteLetters('));
+  expect(doArchive).not.toContain('attempts`');
+  expect(doArchive).not.toContain('clearAll');
+  // 畫面清空後，略過／矛盾的訊息仍要看得到
+  expect(view).toContain('上一場已歸檔');
 });

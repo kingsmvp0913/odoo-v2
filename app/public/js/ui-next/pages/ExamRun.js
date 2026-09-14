@@ -109,9 +109,16 @@ window.UiNextExamRunView = Vue.defineComponent({
         // 但 created 只算一次，頁面開著時新建的題庫就永遠不會出現。
         // 症狀長得像 socket 壞掉：事件有到、refresh 也有跑，只是一直查同一個舊題庫。
         this.banks = await Api.get('exam/banks');
-        const latest = this.banks.length ? this.banks[0].id : null;
+        // 只看還沒歸檔的。歸檔＝這場考完了，畫面要空出來等下一場；原本拿最新一場，
+        // 歸檔完那場還掛在畫面上，得手動按清空——而清空會刪作答紀錄，跨場推導錯題
+        // （deduce.js）與章節校準都靠已歸檔場次的作答，刪了就再也推不出來。
+        // 所以這裡只換畫面，資料一筆不動，題庫頁照樣看得到。
+        const open = this.banks.filter(b => b.status !== 'archived');
+        const latest = open.length ? open[0].id : null;
         if (latest !== this.bankId) {
           this.bankId = latest;
+          // 歸檔面板的頁與草稿屬於上一場，留著會拿去對新的一場
+          this.archiveOpen = false; this.archivePages = [];
           // 換場了，上一場的草稿留著會對到別場的 attempt id
           this.finalDraft = {}; this.savingFinal = {};
           this.uploads = []; this.attempts = [];
@@ -508,7 +515,15 @@ window.UiNextExamRunView = Vue.defineComponent({
       </section>
     </div>
       <div v-if="loading" class="ui-next-exam-empty">載入中…</div>
-      <div v-else-if="!banks.length" class="ui-next-exam-empty">還沒有題庫，外部 POST 前需先指定題庫。</div>
+      <div v-else-if="!bankId" class="ui-next-exam-empty">
+        目前沒有進行中的考試，外部 POST 第一頁就會自動開一場。
+        <!-- 歸檔完畫面就清空了，略過／矛盾的訊息不能跟著消失——那是「成績單哪一格抄錯」的唯一線索 -->
+        <div v-if="archiveResult" class="ui-next-exam-arch-result">
+          <div>上一場已歸檔：鎖定 {{ archiveResult.locked }} 題，寫入 {{ archiveResult.sections }} 個章節結果。</div>
+          <div v-for="s in archiveResult.skipped" :key="s" class="ui-next-exam-arch-skip">{{ s }}</div>
+          <div v-for="c in archiveResult.conflicts" :key="c" class="ui-next-exam-arch-conflict">{{ c }}</div>
+        </div>
+      </div>
       <template v-else>
         <!-- 篩選只有這一組。原本數字卡底下還有一排「全部／只看需確認」頁籤，
              兩者改的是同一個 filter，點哪個都一樣——同一個狀態不該有兩顆開關。
