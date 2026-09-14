@@ -39,3 +39,12 @@ test('規格頁走主要頁面的外殼，不是 Admin 子頁那一套', () => {
   expect(page).not.toContain('class="topbar');
   expect(page).not.toContain('class="content"');
 });
+
+test('規格頁內的選單連結要留在 iframe 裡，不能把 iframe 導到平台網址', () => {
+  // srcdoc iframe 的相對網址是用「平台頁面的網址」解析：規格頁選單是 <a href="#rollout">，
+  // 沒有 base 時會變成 https://平台/#rollout，iframe 整個載入平台首頁；
+  // 又因為沙箱不同源讀不到登入 token，畫面就是一片空白（09-14 使用者回報、playwright 重現）。
+  expect(page).toContain('<base href="about:srcdoc">');
+  const frame = page.match(/<iframe[^>]*>/);
+  expect(frame[0]).toContain(':srcdoc="frameHtml"');
+});
