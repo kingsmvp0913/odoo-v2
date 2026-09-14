@@ -115,6 +115,8 @@ window.UiNextExamRunView = Vue.defineComponent({
           // 換場了，上一場的草稿留著會對到別場的 attempt id
           this.finalDraft = {}; this.savingFinal = {};
           this.uploads = []; this.attempts = [];
+          // 清空會連場次一起刪，一場都不剩時下面直接 return，舊的 bank／job 會一直掛在畫面上
+          this.bank = null; this.job = null;
         }
       } catch (e) { this.err = e.message; }
       if (!this.bankId) return;

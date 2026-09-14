@@ -296,6 +296,48 @@ describe('批次上傳', () => {
       await dbModule.query(`UPDATE exam_banks SET status='ready' WHERE id=$1`, [bankId]);
       await dbModule.query(`DELETE FROM exam_banks WHERE id=$1`, [row.bank_id]);
     });
+
+    // 開場要排在檢查之後：傳失敗（缺圖、缺答案、整批壞掉）一次就多一場 0 題的考試，
+    // 而且它沒歸檔 ⇒ 被當成「進行中」，題庫列表上掛著一份空資料（使用者 09-14 回報）。
+    describe('上傳被退回時不開新的一場', () => {
+      const countBanks = async () =>
+        (await dbModule.query('SELECT COUNT(*)::int c FROM exam_banks')).rows[0].c;
+      beforeAll(() => dbModule.query(`UPDATE exam_banks SET status='archived' WHERE id=$1`, [bankId]));
+      afterAll(() => dbModule.query(`UPDATE exam_banks SET status='ready' WHERE id=$1`, [bankId]));
+
+      test('單筆缺截圖', async () => {
+        const before = await countBanks();
+        const res = await request(app).post('/api/exam/submit').field('page', '1').field('answer', 'A');
+        expect(res.status).toBe(400);
+        expect(await countBanks()).toBe(before);
+      });
+
+      test('單筆不是圖片', async () => {
+        const before = await countBanks();
+        const res = await request(app).post('/api/exam/submit')
+          .field('page', '1').field('answer', 'A')
+          .attach('screenshot', Buffer.from('not an image'), 'x.jpg');
+        expect(res.status).toBe(400);
+        expect(await countBanks()).toBe(before);
+      });
+
+      test('批次是空的', async () => {
+        const before = await countBanks();
+        expect((await request(app).post('/api/exam/batch').send({ items: [] })).status).toBe(400);
+        expect(await countBanks()).toBe(before);
+      });
+
+      // 一筆都沒收下＝這次上傳失敗。原本照樣回 200 還標 test-ok，呼叫端以為傳成功了。
+      test('批次每一筆都壞掉：回 400、具名回報、不開場', async () => {
+        const before = await countBanks();
+        const res = await request(app).post('/api/exam/batch').send({
+          items: [{ page: '1', answer: '', image: b64 }, { page: '2', answer: 'A', image: '壞圖' }],
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.rejected).toHaveLength(2);
+        expect(await countBanks()).toBe(before);
+      });
+    });
   });
 
   test('空 items 回 400', async () => {
@@ -562,6 +604,8 @@ describe('清空這一場的作答', () => {
     const b = await dbModule.query(
       `INSERT INTO exam_banks (label, odoo_version) VALUES ('清空用','19') RETURNING id`);
     clearBankId = b.rows[0].id;
+    fs.mkdirSync(path.join(uploadDir, `exam_${clearBankId}`), { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, `exam_${clearBankId}`, 'c.jpg'), jpg);
     const item = await dbModule.query(
       `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype)
        VALUES ('19','clear-fp','Clear me','[]'::jsonb,'single') RETURNING id`);
@@ -585,7 +629,7 @@ describe('清空這一場的作答', () => {
   // verdict 若跟著消失，等於每清一次就把累積的知識歸零。
   test('清掉 uploads 與 attempts，但題庫的題目與審查結果留著', async () => {
     const res = await auth(request(app).delete(`/api/exam/banks/${clearBankId}/attempts`)).expect(200);
-    expect(res.body).toMatchObject({ ok: true, attempts: 1, uploads: 1 });
+    expect(res.body).toMatchObject({ ok: true, attempts: 1, uploads: 1, bank_deleted: true });
 
     const left = await dbModule.query(
       `SELECT COUNT(*)::int c FROM exam_attempts WHERE bank_id = $1`, [clearBankId]);
@@ -601,13 +645,37 @@ describe('清空這一場的作答', () => {
     expect(verdict.rows[0].c).toBe(1);
   });
 
+  // 沒歸檔的場次清空後就是 0 題，留著會在題庫列表掛一份空資料，
+  // 而且下一場的圖會掉進這個舊日期的場次（使用者 09-14 回報的 2026-09-07 就是這樣來的）。
+  test('還沒歸檔的場次清空後，連場次與截圖目錄一起刪', async () => {
+    const bank = (await dbModule.query(`SELECT id FROM exam_banks WHERE id = $1`, [clearBankId])).rows[0];
+    expect(bank).toBeUndefined();
+    expect(fs.existsSync(path.join(uploadDir, `exam_${clearBankId}`))).toBe(false);
+  });
+
+  // 歸檔過的場次有官方章節結果，那是信心度校準的唯一硬事實，不能跟著作答一起消失。
+  test('已歸檔的場次清空後，場次本身留著', async () => {
+    const b = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version, status) VALUES ('已歸檔清空','19','archived') RETURNING id`);
+    const id = b.rows[0].id;
+    await dbModule.query(
+      `INSERT INTO exam_sections (bank_id,title,n,correct,incorrect) VALUES ($1,'S',1,1,0)`, [id]);
+    const res = await auth(request(app).delete(`/api/exam/banks/${id}/attempts`)).expect(200);
+    expect(res.body.bank_deleted).toBe(false);
+    expect((await dbModule.query(`SELECT id FROM exam_banks WHERE id = $1`, [id])).rows).toHaveLength(1);
+    expect((await dbModule.query(`SELECT id FROM exam_sections WHERE bank_id = $1`, [id])).rows).toHaveLength(1);
+  });
+
   // worker 正在對這些列寫入時抽掉它們，整批會撞 FK 變成 failed，而畫面上只看得到
   // 「失敗」查不出原因。擋在這裡才講得出理由。
   test('有工作在跑時拒絕清空', async () => {
+    const b = await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('跑著的','19') RETURNING id`);
+    const busyBankId = b.rows[0].id;
     await dbModule.query(
       `INSERT INTO exam_jobs (bank_id,status,phase,pages_done,pages_total)
-       VALUES ($1,'running','審查中',1,3)`, [clearBankId]);
-    const res = await auth(request(app).delete(`/api/exam/banks/${clearBankId}/attempts`));
+       VALUES ($1,'running','審查中',1,3)`, [busyBankId]);
+    const res = await auth(request(app).delete(`/api/exam/banks/${busyBankId}/attempts`));
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/工作在跑/);
   });

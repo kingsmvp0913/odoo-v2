@@ -233,8 +233,6 @@ function registerRoutes(app) {
   // 單筆上傳（multipart）。checkExamToken 在 shotUpload 之前——順序是安全的一部分。
   app.post('/api/exam/submit', checkExamToken, shotUpload.single('screenshot'), async (req, res) => {
     try {
-      const bank = await resolveBank(req.body.bank);
-      if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
       if (!req.file) return res.status(400).json({ error: '缺少 screenshot' });
 
       const page = String(req.body.page ?? '').trim();
@@ -247,6 +245,11 @@ function registerRoutes(app) {
       if (!ext) {
         return res.status(400).json({ error: '不是圖片檔（檔頭認不出已知的圖片格式）' });
       }
+
+      // 開場排在所有檢查之後：resolveBank 沒有進行中的場次會自動開一場，
+      // 排在前面的話傳失敗一次就多一場 0 題的考試掛在列表上。
+      const bank = await resolveBank(req.body.bank);
+      if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
 
       const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf: req.file.buffer, ext });
       const isTest = asTest(req.body.test);
@@ -268,9 +271,6 @@ function registerRoutes(app) {
   // 全域掛等於未認證就能塞 60MB 進記憶體（與 multer 同一個道理）。
   app.post('/api/exam/batch', checkExamToken, express.json({ limit: BATCH_BODY_LIMIT }), async (req, res) => {
     try {
-      const bank = await resolveBank(req.body.bank);
-      if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
-
       const items = Array.isArray(req.body.items) ? req.body.items : [];
       if (!items.length) return res.status(400).json({ error: 'items 是空的' });
       if (items.length > batchLimit()) {
@@ -279,13 +279,23 @@ function registerRoutes(app) {
 
       // 單筆壞掉不讓整批失敗：好的收下，壞的具名回報。同事一次丟 20 題，
       // 不該因為第 13 題漏填答案就得整批重送、重燒一次 token。
-      const accepted = [], rejected = [];
+      const checked = items.map((it, i) => validateItem(it, i));
+      const rejected = checked.filter(Boolean);
+      // 一筆都收不下＝這次上傳失敗。原本照樣回 200 標 test-ok，呼叫端以為傳成功；
+      // 而且開場排在這之後，否則會多一場 0 題的考試（見 submit）。
+      if (rejected.length === items.length) {
+        return res.status(400).json({ error: '每一筆都有問題，這批沒有收下任何一筆', rejected });
+      }
+
+      const bank = await resolveBank(req.body.bank);
+      if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
+
+      const accepted = [];
       let real = 0;   // 非測試的筆數——全是測試就不必推佇列
       const batchKey = String(req.body.batch || crypto.randomUUID());
       const batchLabel = String(req.body.label || '').trim() || null;
       for (const [i, it] of items.entries()) {
-        const bad = validateItem(it, i);
-        if (bad) { rejected.push(bad); continue; }
+        if (checked[i]) continue;
         const buf = decodeImage(it.image);
         const ext = sniffImage(buf);
         const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf, ext });
@@ -668,8 +678,21 @@ function registerRoutes(app) {
       // 的話 attempts 會變成孤兒留在畫面上，看起來像「清了但沒清乾淨」。
       const att = await query(`DELETE FROM exam_attempts WHERE bank_id = $1 RETURNING id`, [bankId]);
       const ups = await query(`DELETE FROM exam_uploads WHERE bank_id = $1 RETURNING id`, [bankId]);
+
+      // 還沒結束的場次（與 resolveBank 的「進行中」同一個定義）清空後就是 0 題：
+      // 留著會在列表掛一份空資料，下一場的圖還會掉進這個舊日期的場次。
+      // 已結束的留著——exam_sections 是信心度校準的唯一硬事實。
+      // exam_items／exam_verdicts 沒有 bank_id，不受影響。
+      const del = await query(
+        `DELETE FROM exam_banks
+          WHERE id = $1 AND status <> 'archived'
+            AND id NOT IN (SELECT bank_id FROM exam_sections WHERE bank_id IS NOT NULL)
+        RETURNING id`, [bankId]);
+      const bankDeleted = del.rows.length > 0;
+      if (bankDeleted) fs.rmSync(path.join(uploadRoot(), `exam_${bankId}`), { recursive: true, force: true });
+
       emitAll('exam-progress', { bankId, status: 'cleared' });
-      res.json({ ok: true, attempts: att.rows.length, uploads: ups.rows.length });
+      res.json({ ok: true, attempts: att.rows.length, uploads: ups.rows.length, bank_deleted: bankDeleted });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
