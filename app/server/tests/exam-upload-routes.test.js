@@ -507,6 +507,31 @@ describe('考試結果、投票與最後答案', () => {
     expect(row).not.toHaveProperty('confidence'); // 內部欄位不外洩
   });
 
+  // 信心度是「原答案對的機率」——審查推翻的是原答案，改勾別的不會重算信心度。
+  // 若拿現在勾的答案去掛信心度，照審查改勾 B 之後 B 反而從 67 掉到 30（實測 bank 23 P5-2）：
+  // 推薦指數是在估哪個選項才是正解，不該跟著人勾哪個跑。
+  test('推薦分數不因改勾正式答案而變動', async () => {
+    const item = await dbModule.query(
+      `INSERT INTO exam_items (odoo_version,fingerprint,question_en,options,qtype,confidence)
+       VALUES ('19','dashboard-switched','Switched answer question',$1,'single',30) RETURNING id`,
+      [JSON.stringify([{ letter: 'A', text: 'One' }, { letter: 'B', text: 'Two' }, { letter: 'C', text: 'Three' }])]);
+    const up = await dbModule.query(
+      `INSERT INTO exam_uploads (bank_id,batch_key,page,answer_raw,image_path,status)
+       VALUES ($1,'batch-switched','32','A','exam-test/y.jpg','done') RETURNING id`, [bankId]);
+    const attempt = await dbModule.query(
+      `INSERT INTO exam_attempts (item_id,bank_id,upload_id,page,no,answer_their,answer_final)
+       VALUES ($1,$2,$3,'32',1,$4,$5) RETURNING id`,
+      [item.rows[0].id, bankId, up.rows[0].id, ['A'], ['B']]);
+    await dbModule.query(
+      `INSERT INTO exam_verdicts (item_id,attempt_id,kind,refuted,correct_answer,confidence,model)
+       VALUES ($1,$2,'adversary',true,$3,92,'test')`,
+      [item.rows[0].id, attempt.rows[0].id, ['B']]);
+
+    const res = await auth(request(app).get(`/api/exam/dashboard?bank=${bankId}`)).expect(200);
+    const row = res.body.attempts.find(x => x.attempt_id === attempt.rows[0].id);
+    expect(row.option_scores).toEqual({ A: 30, B: 67, C: 3 });
+  });
+
   // 歷史答案＝同一題在**別場考試**裡我當時勾的最終答案。拿本場自己的答案當「歷史」
   // 等於自問自答，所以查詢一定要排除本 bank。
   describe('歷史答案', () => {

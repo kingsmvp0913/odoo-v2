@@ -474,10 +474,10 @@ function registerRoutes(app) {
 
       // 每個選項的推薦分數（一題加起來 100）。在後端算而不是前端：這是邏輯不是排版，
       // 而且這個公式最容易寫反——反了之後畫面照樣好好的，只是每題都推薦錯的那個。
-      // ⚠ 餵的是 answer_final（拍板的），沒拍板才退回 answer_their，與 confidence
-      // 的定義（「最終作答正確的機率」）對齊。
-      const mine = (Array.isArray(a.answer_final) && a.answer_final.length)
-        ? a.answer_final : a.answer_their;
+      // ⚠ 餵的是 answer_their（原答案），不是 answer_final：審查推翻的是原答案，
+      // confidence 就是「原答案對」的機率，改勾別的不會重算。拿現在勾的去掛 confidence，
+      // 照審查改勾之後推薦的那個反而變最低（實測 bank 23 P5-2：B 從 67 掉到 30）。
+      const mine = a.answer_their;
       a.option_scores = optionScores({
         letters: (a.options || []).map(o => o && o.letter).filter(Boolean),
         qtype: a.qtype,

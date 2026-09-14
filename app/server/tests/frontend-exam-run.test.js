@@ -127,8 +127,9 @@ test('推薦分數用後端算好的 option_scores，前端不自己算', () => 
   expect(view).not.toMatch(/EXAM_SCORE_FLOOR|normalize100/);
   expect(routes).toContain("require('./lib/exam/score')");
   expect(routes).toContain('a.option_scores = optionScores(');
-  // 餵給公式的是拍板的答案，沒拍板才退回輸入答案——要與 confidence 的定義對齊
-  expect(routes).toContain('? a.answer_final : a.answer_their');
+  // 餵給公式的是原答案——confidence 是「原答案對」的機率，改勾不會重算。
+  // 行為由 exam-upload-routes.test.js「推薦分數不因改勾正式答案而變動」守。
+  expect(routes).toContain('const mine = a.answer_their;');
 });
 
 test('選項上只留推薦分數與投票兩個標記', () => {
