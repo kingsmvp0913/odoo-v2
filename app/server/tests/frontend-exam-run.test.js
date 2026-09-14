@@ -31,6 +31,8 @@ test('讀成績單只預填欄位，不會直接歸檔', () => {
   const fn = view.slice(view.indexOf('async onScoreSheet('), view.indexOf('archiveFilled()'));
   expect(fn).not.toContain('doArchive');
   expect(fn).not.toContain("banks/${this.bankId}/archive`,");
+  // 表格上人打的章節名要一起送，否則上傳沒帶章節名的場次永遠對不上
+  expect(fn).toContain("fd.append('sections'");
   // 對不上的章節要講出來，不能靜靜少填
   expect(fn).toContain('unmatchedPages');
   expect(fn).toContain('unusedTitles');

@@ -58,6 +58,16 @@ async function processUpload(db, { upload, bank, onProgress }) {
   const count = checkCount(parsed, qs.length);
   const aligned = alignAnswers(parsed, qs.length);
 
+  // 章節名是歸檔時對成績單的唯一依據。上傳時沒帶就用截圖上的章節標題補——
+  // 實測 bank 20：11 頁全部沒帶，成績單一章都對不上，而每頁截圖上明明印著章節名。
+  // 上傳時帶了的以上傳為準，不拿模型讀的去蓋。
+  const section = (upload.section_title || '').trim() || page.section || null;
+  if (section && !(upload.section_title || '').trim()) {
+    await db.query(
+      `UPDATE exam_uploads SET section_title = $2, updated_at = NOW() WHERE id = $1`,
+      [upload.id, section]);
+  }
+
   const notes = [];
   if (!count.ok) notes.push(count.note);
   if (parsed.note) notes.push(parsed.note);
@@ -95,7 +105,7 @@ async function processUpload(db, { upload, bank, onProgress }) {
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
         [bank.odoo_version, fp, q.question, q.question_zh || null,
          JSON.stringify(q.options || []), q.type === 'multi' ? 'multi' : 'single',
-         upload.section_title || null]);
+         section]);
       itemId = ins.rows[0].id;
     }
 

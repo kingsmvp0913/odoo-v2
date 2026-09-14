@@ -166,6 +166,7 @@ function buildExtractPrompt({ imageName = 'shot.jpg' } = {}) {
 {
   "readable": true,
   "page": "3",
+  "section": "Sales",
   "note": "",
   "questions": [{
     "no": 1,
@@ -177,6 +178,9 @@ function buildExtractPrompt({ imageName = 'shot.jpg' } = {}) {
   }]
 }
 \`\`\`
+
+section 是題目上方那個章節大標題（例如 Sales、Website / eCommerce），照英文原文抄，
+不要翻譯；畫面上看不到章節標題就給空字串，不要猜。
 
 截圖被裁切、選項不全或讀不出任何題目時不要猜：整頁無法使用就把 readable 設為
 false；只有部分受損則保留可讀題目並在 note 具名說明。`;
@@ -339,6 +343,7 @@ function normalizeExtract(raw) {
   return {
     readable: src.readable !== false,
     page: String(src.page || ''),
+    section: String(src.section || '').trim(),
     note: src.note || '',
     questions: src.readable === false ? [] : questions,
   };

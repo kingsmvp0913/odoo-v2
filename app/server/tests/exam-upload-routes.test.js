@@ -6,6 +6,11 @@ const { newDb } = require('pg-mem');
 
 const mockRunQueue = jest.fn(async () => ({ jobId: null, total: 0, done: 0, failed: 0 }));
 jest.mock('../lib/exam/worker', () => ({ runQueue: (...args) => mockRunQueue(...args) }));
+const mockReadSections = jest.fn();
+jest.mock('../lib/exam/sections', () => ({
+  ...jest.requireActual('../lib/exam/sections'),
+  readSections: (...args) => mockReadSections(...args),
+}));
 
 process.env.JWT_SECRET = 'test-exam-upload';
 
@@ -729,5 +734,47 @@ describe('暫停判題', () => {
     expect(res.body.bank.paused).toBe(true);
     await request(app).post(`/api/exam/banks/${bankId}/pause`)
       .set('Authorization', `Bearer ${jwt}`).send({ paused: false });
+  });
+});
+
+// 實測 bank 20：11 頁上傳時全沒帶章節名，成績單一章都對不上。歸檔面板有「章節名稱」
+// 輸入框，但讀成績單只看 DB——人打了等於沒打，連補救管道都沒有。
+describe('讀成績單', () => {
+  let sheetBank;
+  beforeAll(async () => {
+    sheetBank = (await dbModule.query(
+      `INSERT INTO exam_banks (label, odoo_version) VALUES ('sheet','19') RETURNING id`)).rows[0].id;
+    for (const [page, fp] of [['1', 'sheet-fp-1'], ['2', 'sheet-fp-2']]) {
+      const item = (await dbModule.query(
+        `INSERT INTO exam_items (odoo_version, fingerprint, question_en, options, qtype)
+         VALUES ('19',$1,'Q','[]'::jsonb,'single') RETURNING id`, [fp])).rows[0].id;
+      await dbModule.query(
+        `INSERT INTO exam_attempts (item_id, bank_id, page, no, answer_their, answer_final)
+         VALUES ($1,$2,$3,1,$4,$4)`, [item, sheetBank, page, ['A']]);
+    }
+    mockReadSections.mockResolvedValue({ readable: true, skipped: [], sections: [
+      { title: 'CRM', correct: 100, partial: 0, incorrect: 0, unanswered: 0 },
+      { title: 'Sales', correct: 0, partial: 0, incorrect: 100, unanswered: 0 },
+    ] });
+  });
+
+  test('用表格上人打的章節名比對', async () => {
+    const res = await request(app).post(`/api/exam/banks/${sheetBank}/read-sections`)
+      .set('Authorization', `Bearer ${jwt}`)
+      .field('sections', JSON.stringify({ 1: 'CRM', 2: ' Sales ' }))
+      .attach('screenshot', jpg, 'sheet.jpg');
+    expect(res.status).toBe(200);
+    expect(res.body.filled).toEqual([
+      expect.objectContaining({ page: '1', section: 'CRM', wrong: 0 }),
+      expect.objectContaining({ page: '2', section: 'Sales', wrong: 1 }),
+    ]);
+  });
+
+  test('整場都沒章節名時，錯誤訊息要講出該去填章節名', async () => {
+    const res = await request(app).post(`/api/exam/banks/${sheetBank}/read-sections`)
+      .set('Authorization', `Bearer ${jwt}`)
+      .attach('screenshot', jpg, 'sheet.jpg');
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/沒有章節名稱.*章節名稱/);
   });
 });

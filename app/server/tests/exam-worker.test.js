@@ -536,3 +536,40 @@ test('一頁判完當下就有信心度，不等同一場其他頁跑完', async
   expect(seen).toHaveLength(1);
   expect(seen[0].confidence).not.toBeNull();
 });
+
+// 實測 bank 20：11 頁上傳時全沒帶章節名，歸檔讀成績單一章都對不上——
+// 而每頁截圖上明明印著章節標題。
+test('上傳沒帶章節名就用截圖上讀到的，帶了的不蓋掉', async () => {
+  const b = await dbModule.query(
+    `INSERT INTO exam_banks (label, odoo_version) VALUES ('section','19') RETURNING id`);
+  const secBank = b.rows[0].id;
+  const add = async (page, section) => {
+    const rel = path.join('exam_section', `${page}.jpg`);
+    fs.mkdirSync(path.join(uploadDir, 'exam_section'), { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, rel), Buffer.from([0xff, 0xd8, 0xff]));
+    await dbModule.query(
+      `INSERT INTO exam_uploads (bank_id, page, answer_raw, image_path, section_title)
+       VALUES ($1,$2,'B',$3,$4)`, [secBank, page, rel, section]);
+  };
+  mockExtract.mockImplementation(async ({ imagePath }) => {
+    const en = imagePath.endsWith('S1.jpg') ? 'section read from shot' : 'section given at upload';
+    return { page: { ...pageOf([{ en }]), section: 'Sales' }, model: 'm' };
+  });
+  mockChallenge.mockImplementation(async ({ questions }) => ({
+    verdict: verdictOf([{ en: questions[0].question }]), model: 'm',
+  }));
+
+  await add('S1', null);
+  await add('S2', 'CRM');
+  await runQueue(dbModule, { bankId: secBank });
+
+  const ups = (await dbModule.query(
+    `SELECT page, section_title FROM exam_uploads WHERE bank_id = $1 ORDER BY page`, [secBank])).rows;
+  expect(ups).toEqual([{ page: 'S1', section_title: 'Sales' }, { page: 'S2', section_title: 'CRM' }]);
+  const items = (await dbModule.query(
+    `SELECT question_en, section_title FROM exam_items WHERE question_en LIKE 'section %' ORDER BY question_en`)).rows;
+  expect(items).toEqual([
+    { question_en: 'section given at upload', section_title: 'CRM' },
+    { question_en: 'section read from shot', section_title: 'Sales' },
+  ]);
+});

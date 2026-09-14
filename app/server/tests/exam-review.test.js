@@ -165,6 +165,14 @@ describe('兩階段審題 prompt', () => {
     expect(p).toContain('"their_answer"');
   });
 
+  // 章節名是歸檔對成績單的依據，而截圖上本來就印著——上傳沒帶時靠這個補
+  test('抄題時一併讀出章節標題', () => {
+    expect(buildExtractPrompt({ imageName: 'shot.jpg' })).toContain('"section"');
+    expect(normalizeExtract({ section: ' Website / eCommerce ', questions: [] }).section)
+      .toBe('Website / eCommerce');
+    expect(normalizeExtract({ questions: [] }).section).toBe('');
+  });
+
   test('轉錄結果保留 has_image 且不產生答案欄位', () => {
     const page = normalizeExtract({ questions: [{ no: 1, question: 'Q', has_image: true }] });
     expect(page.questions[0]).toMatchObject({ no: 1, question: 'Q', has_image: true });

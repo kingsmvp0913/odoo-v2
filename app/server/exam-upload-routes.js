@@ -583,12 +583,25 @@ function registerRoutes(app) {
         if (!read.readable) {
           return res.status(422).json({ error: `讀不出成績單：${read.note || '未說明'}` });
         }
-        const pages = await listPages(require('./db'), bankId);
+        // 歸檔面板上人打的章節名優先。面板的輸入框顯示的就是這裡要比對的名字，
+        // 只讀 DB 的話人打了等於沒打——而上傳時沒帶章節名的場次，那是唯一的補救管道。
+        let typed = {};
+        try { typed = JSON.parse(req.body.sections || '{}') || {}; } catch { typed = {}; }
+        const pages = (await listPages(require('./db'), bankId)).map(p => {
+          const t = String(typed[p.page] ?? '').trim();
+          return t ? { ...p, section: t } : p;
+        });
         const m = matchToPages(read.sections, pages);
         // §13.4 的教訓：一個都對不上時要報錯，不能回一包空的讓畫面顯示「讀好了」
         if (!m.filled.length) {
+          const named = pages.map(p => p.section).filter(Boolean);
           return res.status(422).json({
-            error: '成績單上的章節與這場考試對不起來，沒有填進任何一章',
+            // 前端只顯示 error 這一句，所以原因要寫在這句裡：全都沒章節名和
+            // 名字拼法不同是兩件事，修法也不同。
+            error: named.length
+              ? `成績單上的章節（${read.sections.map(s => s.title).join('、') || '無'}）`
+                + `與這場考試的章節（${named.join('、')}）對不起來，沒有填進任何一章`
+              : '這場的每一頁都沒有章節名稱，無從比對。先在下面表格的「章節名稱」欄填好，再上傳成績單',
             read: read.sections.map(s => s.title),
             pages: pages.map(p => p.section).filter(Boolean),
           });

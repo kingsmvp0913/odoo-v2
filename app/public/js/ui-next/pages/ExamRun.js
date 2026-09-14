@@ -274,6 +274,9 @@ window.UiNextExamRunView = Vue.defineComponent({
       try {
         const fd = new FormData();
         fd.append('screenshot', file);
+        // 表格上人打的章節名一起送，否則上傳時沒帶章節名的場次永遠對不上
+        fd.append('sections', JSON.stringify(
+          Object.fromEntries(this.archivePages.map(p => [p.page, p.section || '']))));
         const r = await Api.postForm(`exam/banks/${this.bankId}/read-sections`, fd);
         const byPage = new Map(r.filled.map(f => [String(f.page), f.wrong]));
         this.archivePages = this.archivePages.map(p =>
