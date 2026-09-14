@@ -22,7 +22,7 @@ const { decodeImage, sniffImage, readUploadToken, peekUploadToken, issueUploadTo
 const { runQueue } = require('./lib/exam/worker');
 const { listPages, archiveBank } = require('./lib/exam/archive');
 const { optionScores } = require('./lib/exam/score');
-const { readSections, matchToPages } = require('./lib/exam/sections');
+const { readSections, matchToPages, assignByOrder } = require('./lib/exam/sections');
 const { emitAll } = require('./notify');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
@@ -587,10 +587,13 @@ function registerRoutes(app) {
         // 只讀 DB 的話人打了等於沒打——而上傳時沒帶章節名的場次，那是唯一的補救管道。
         let typed = {};
         try { typed = JSON.parse(req.body.sections || '{}') || {}; } catch { typed = {}; }
-        const pages = (await listPages(require('./db'), bankId)).map(p => {
+        let pages = (await listPages(require('./db'), bankId)).map(p => {
           const t = String(typed[p.page] ?? '').trim();
           return t ? { ...p, section: t } : p;
         });
+        // 整場都沒章節名就照成績單順序配。讀圖時略過了哪一章，順序就不可信，不配。
+        const byOrder = (read.skipped || []).length ? null : assignByOrder(read.sections, pages);
+        if (byOrder) pages = byOrder;
         const m = matchToPages(read.sections, pages);
         // §13.4 的教訓：一個都對不上時要報錯，不能回一包空的讓畫面顯示「讀好了」
         if (!m.filled.length) {
@@ -601,7 +604,9 @@ function registerRoutes(app) {
             error: named.length
               ? `成績單上的章節（${read.sections.map(s => s.title).join('、') || '無'}）`
                 + `與這場考試的章節（${named.join('、')}）對不起來，沒有填進任何一章`
-              : '這場的每一頁都沒有章節名稱，無從比對。先在下面表格的「章節名稱」欄填好，再上傳成績單',
+              : `這場有 ${pages.length} 頁、成績單讀出 ${read.sections.length} 章`
+                + ((read.skipped || []).length ? `（讀不出：${read.skipped.join('、')}）` : '')
+                + '，數量對不上，沒辦法照順序自動填章節名。請在下面表格的「章節名稱」欄填好再上傳',
             read: read.sections.map(s => s.title),
             pages: pages.map(p => p.section).filter(Boolean),
           });
@@ -611,7 +616,9 @@ function registerRoutes(app) {
         // 讀成功才記進 bank：讀失敗的圖留在磁碟上但不掛到題庫，
         // 免得畫面顯示一張根本沒被採用的圖。
         await query(`UPDATE exam_banks SET score_image = $2 WHERE id = $1`, [bankId, rel]);
-        res.json({ ...m, skipped: [...(read.skipped || []), ...(m.skipped || [])], image: rel });
+        res.json({ ...m, skipped: [...(read.skipped || []), ...(m.skipped || [])], image: rel,
+          // 前端要把章節名一起填回表格，並提醒人這是照順序配的、要對一眼
+          sections: byOrder ? Object.fromEntries(byOrder.map(p => [p.page, p.section])) : null });
       } catch (e) {
         res.status(500).json({ error: e.message });
       }

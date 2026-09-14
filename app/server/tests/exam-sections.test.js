@@ -1,4 +1,4 @@
-const { normalizeSections, matchToPages, toPct, SUM_TOLERANCE } = require('../lib/exam/sections');
+const { normalizeSections, matchToPages, assignByOrder, buildPrompt, toPct, SUM_TOLERANCE } = require('../lib/exam/sections');
 
 // 成績單是一張**只有百分比、沒有題數**的長條圖。題數要用我們自己 DB 裡的
 // （每章考幾題本來就是我們寫進去的），相乘才得到錯題數。
@@ -126,4 +126,27 @@ test('真實成績單的 19 章逐章算對，錯題合計 15', () => {
   expect(r.unmatchedPages).toEqual([]);
   for (const f of r.filled) expect(f.wrong).toBe(want[f.section] || 0);
   expect(r.filled.reduce((s, f) => s + f.wrong, 0)).toBe(15);
+});
+
+// 成績單 x 軸的順序就是考卷章節順序。整場沒章節名時照順序配，但只在確定不會錯位時
+describe('assignByOrder：沒章節名時照成績單順序配', () => {
+  const read = [{ title: 'Introduction' }, { title: 'CRM' }];
+  const blank = [{ page: '1', section: null }, { page: '2', section: '' }];
+
+  test('頁數等於章數就一頁配一章', () => {
+    expect(assignByOrder(read, blank).map(p => p.section)).toEqual(['Introduction', 'CRM']);
+  });
+
+  test('數量不相等不配（一章拆兩頁、少傳一頁都會整排錯位）', () => {
+    expect(assignByOrder(read, [...blank, { page: '3', section: null }])).toBeNull();
+    expect(assignByOrder(read.slice(0, 1), blank)).toBeNull();
+  });
+
+  test('有任何一頁已經有章節名就不配，照名字比對', () => {
+    expect(assignByOrder(read, [{ page: '1', section: 'CRM' }, { page: '2', section: null }])).toBeNull();
+  });
+
+  test('prompt 要求照 x 軸由左到右排', () => {
+    expect(buildPrompt()).toMatch(/由左到右/);
+  });
 });

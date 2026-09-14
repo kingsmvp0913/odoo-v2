@@ -770,11 +770,40 @@ describe('讀成績單', () => {
     ]);
   });
 
-  test('整場都沒章節名時，錯誤訊息要講出該去填章節名', async () => {
+  // 使用者：「沒填寫的話能幫我填嗎？成績單上有啊」——成績單的章節順序就是考卷順序
+  test('整場都沒章節名時，照成績單順序一頁配一章', async () => {
+    const res = await request(app).post(`/api/exam/banks/${sheetBank}/read-sections`)
+      .set('Authorization', `Bearer ${jwt}`)
+      .attach('screenshot', jpg, 'sheet.jpg');
+    expect(res.status).toBe(200);
+    expect(res.body.sections).toEqual({ 1: 'CRM', 2: 'Sales' });
+    expect(res.body.filled).toEqual([
+      expect.objectContaining({ page: '1', section: 'CRM', wrong: 0 }),
+      expect.objectContaining({ page: '2', section: 'Sales', wrong: 1 }),
+    ]);
+  });
+
+  // 數量不相等時照順序配會整排錯位，而錯位會把錯的題鎖成正解
+  test('頁數與章數對不上就不照順序配，錯誤訊息講出兩邊的數量', async () => {
+    mockReadSections.mockResolvedValueOnce({ readable: true, skipped: [], sections: [
+      { title: 'CRM', correct: 100, partial: 0, incorrect: 0, unanswered: 0 },
+    ] });
     const res = await request(app).post(`/api/exam/banks/${sheetBank}/read-sections`)
       .set('Authorization', `Bearer ${jwt}`)
       .attach('screenshot', jpg, 'sheet.jpg');
     expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/沒有章節名稱.*章節名稱/);
+    expect(res.body.error).toMatch(/2 頁.*1 章/);
+  });
+
+  test('讀圖時有章節讀不出來，順序不可信，不配', async () => {
+    mockReadSections.mockResolvedValueOnce({ readable: true, skipped: ['MRP（四類加起來 70%）'], sections: [
+      { title: 'CRM', correct: 100, partial: 0, incorrect: 0, unanswered: 0 },
+      { title: 'Sales', correct: 0, partial: 0, incorrect: 100, unanswered: 0 },
+    ] });
+    const res = await request(app).post(`/api/exam/banks/${sheetBank}/read-sections`)
+      .set('Authorization', `Bearer ${jwt}`)
+      .attach('screenshot', jpg, 'sheet.jpg');
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/讀不出：MRP/);
   });
 });

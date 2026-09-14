@@ -279,11 +279,16 @@ window.UiNextExamRunView = Vue.defineComponent({
           Object.fromEntries(this.archivePages.map(p => [p.page, p.section || '']))));
         const r = await Api.postForm(`exam/banks/${this.bankId}/read-sections`, fd);
         const byPage = new Map(r.filled.map(f => [String(f.page), f.wrong]));
-        this.archivePages = this.archivePages.map(p =>
-          byPage.has(String(p.page)) ? { ...p, wrong: String(byPage.get(String(p.page))) } : p);
+        // 沒填章節名的場次，後端照成績單順序配好了，一起填回表格
+        const named = r.sections || {};
+        this.archivePages = this.archivePages.map(p => {
+          const q = named[p.page] && !String(p.section || '').trim() ? { ...p, section: named[p.page] } : p;
+          return byPage.has(String(p.page)) ? { ...q, wrong: String(byPage.get(String(p.page))) } : q;
+        });
         // 對不上的一定要講。靜靜少填幾章的話，人會以為「這幾章成績單上沒有」，
         // 而真因通常是章節名沒填或拼法不同。
         const bits = [`已填 ${r.filled.length} 章`];
+        if (r.sections) bits.push('章節名是照成績單順序填的，請對一眼');
         if (r.unmatchedPages.length) bits.push(`對不上：${r.unmatchedPages.join('、')}`);
         if (r.unusedTitles.length) bits.push(`成績單上多出：${r.unusedTitles.join('、')}`);
         if (r.skipped && r.skipped.length) bits.push(`讀不出：${r.skipped.join('、')}`);

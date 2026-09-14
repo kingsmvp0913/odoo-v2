@@ -35,6 +35,7 @@ x 軸是章節名稱（Introduction、Sales、CRM…），y 軸是**百分比**�
 ]}
 
 規則：
+- sections 照 x 軸**由左到右**的順序排，不要重排。
 - title 照 x 軸上的英文原文抄，不要翻譯、不要改大小寫。
 - 四個數字都是**百分比**（0–100 的整數），不是題數。圖上沒有題數，不要編。
 - 讀不出精確值就照長條高度估到最接近的整數百分比——四個數字加起來應該接近 100。
@@ -83,6 +84,26 @@ function normalizeSections(raw) {
 async function readSections({ imagePath, onProgress, model = MODEL }) {
   const out = await runPrompt({ prompt: buildPrompt(), imagePath, onProgress, model });
   return normalizeSections(out.raw);
+}
+
+/**
+ * 整場都沒有章節名時，照成績單的章節順序一頁配一章。
+ *
+ * 成績單 x 軸的順序就是考卷的章節順序（考卷頂端的麵包屑 1. Introduction / 2. CRM …
+ * 與成績單由左到右完全一致，實測 bank 20 的 11 頁逐頁對過），而每頁就是一章。
+ * 使用者不該為了系統沒記下來的東西再抄一次。
+ *
+ * **數量不相等就不配**：一章拆成兩頁、少傳一頁、或成績單有一章沒讀出來，
+ * 順序就整個錯位，而錯位的後果是把錯的題鎖成正解（歸檔不可逆）。
+ * 有任何一頁已經有章節名也不配——那時候名字比位置可信，照名字比對就好。
+ *
+ * @returns {Array|null} 配好章節名的 pages；不能配回 null
+ */
+function assignByOrder(read, pages) {
+  const list = pages || [];
+  if (!list.length || list.some(p => String(p.section || '').trim())) return null;
+  if (!Array.isArray(read) || read.length !== list.length) return null;
+  return list.map((p, i) => ({ ...p, section: read[i].title }));
 }
 
 /**
@@ -144,4 +165,4 @@ function matchToPages(read, pages) {
   return { filled, unmatchedPages, unusedTitles, skipped };
 }
 
-module.exports = { readSections, normalizeSections, matchToPages, buildPrompt, toPct, SUM_TOLERANCE };
+module.exports = { readSections, normalizeSections, matchToPages, assignByOrder, buildPrompt, toPct, SUM_TOLERANCE };
