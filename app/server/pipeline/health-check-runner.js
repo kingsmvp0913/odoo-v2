@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { query } = require('../db');
 const { listAgents, loadAgent } = require('./agent-loader');
 const { runAgent } = require('./agent-runner');
@@ -193,6 +194,36 @@ async function previousProposals(limit = 20) {
   }).join('\n');
 }
 
+// 提案文字（標題＋細節＋建議做法）裡指名的 repo 檔案，若**全部**過不了 finding-fix.js 的逐檔
+// 檢查，回傳那份清單；認不出任何檔、或至少一支可以動，回 null（維持原本的判斷）。
+// - 判準直接呼叫 classifyChanges，不另抄一份 DENY：守門清單只能有一份，抄的那份遲早漂移。
+//   以 `??`（新檔）身分試，所以指名測試檔不會被當成「改既有測試」擋掉。
+// - 只認 git 追蹤中的檔；auditor 常只寫檔名（`finding-fix.js:49`），所以也比對結尾路徑。
+//   同名多支時，只要其中一支可以動就不算擋死。
+// - 延遲 require 且整段吞錯：判不出來就退回原行為，最後那道逐檔檢查仍在。
+function unfixableTargets(row) {
+  try {
+    const text = [row.diagnosis, row.rationale].filter(Boolean).join('\n');
+    const tokens = new Set(text.match(/[\w./-]*\w\.[A-Za-z]{1,5}\b/g) || []);
+    if (!tokens.size) return null;
+    const tracked = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+      .split('\n').filter(Boolean);
+    const { classifyChanges } = require('./finding-fix');
+    const blocked = [];
+    for (const token of tokens) {
+      const name = token.replace(/^\.\//, '');
+      const hits = tracked.filter(f => f === name || f.endsWith('/' + name));
+      if (!hits.length) continue;
+      if (hits.some(f => classifyChanges(`?? ${f}`).files.length)) return null;
+      blocked.push(...hits);
+    }
+    return blocked.length ? blocked : null;
+  } catch (err) {
+    console.error('[HEALTH-CHECK] 比對提案指名檔案失敗：', err.message);
+    return null;
+  }
+}
+
 async function insertFinding(runId, row) {
   // status 明確帶值、不依賴欄位 DEFAULT：DEFAULT 已改成 approved（Phase 7.1，讓 proposal 當晚
   // 自動實作），但 signal（證據還不夠）／summary（總結敘述）／note（零樣本、解析失敗）都不是
@@ -204,16 +235,28 @@ async function insertFinding(runId, row) {
   // 而 open_count（admin-routes.js）只算 status='pending'，這些提案又會從待處理清單裡消失，
   // 三邊互相矛盾。规格 §255／§257 明寫「low／ok 與超出自動範圍的都留在管理頁給人決定」——
   // 落 pending 才是誠實的初始狀態，人要核准仍可以核准（核准後才變 approved，屆時才真的會被撈）。
-  const auto = row.kind === 'proposal' && inAutoFixScope(row.layer || null, row.severity || null);
+  let auto = row.kind === 'proposal' && inAutoFixScope(row.layer || null, row.severity || null);
+  // 指名的檔案全都過不了 finding-fix.js 的逐檔檢查（DENY／超出可修改範圍）時，核准它只會讓
+  // platform-fix 跑完整輪、最後被整份作廢，下次健檢又提一次。改落 pending 並寫明原因——
+  // 帶 MACHINE_RETIRE_PREFIX 是因為這是機器判的不是人的裁決，previousProposals 餵回 auditor 時
+  // 據此標成機器退場，它才看得到「這條只能人工修」而不再重提。
+  let verdictNote = null;
+  const blocked = auto ? unfixableTargets(row) : null;
+  if (blocked) {
+    auto = false;
+    verdictNote = MACHINE_RETIRE_PREFIX +
+      `提案指名的檔案（${blocked.join('、')}）全在自動修正不准動的範圍內，自動修到最後一定整份作廢，只能人工修。`;
+    console.warn('[HEALTH-CHECK] 提案指名的檔案全在自動修正範圍外，改落 pending：', row.label || '(無標題)');
+  }
   const status = auto ? 'approved' : 'pending';
   const { rows: [f] } = await query(
     `INSERT INTO health_check_findings
        (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
-        kind, layer, evidence, target_metric, metric_baseline, risk_if_wrong, status)
-     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        kind, layer, evidence, target_metric, metric_baseline, risk_if_wrong, status, verdict_note)
+     VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
     [runId, AUDIT_AGENT, row.label || '系統健檢', row.diagnosis, row.severity, row.rationale || null,
      row.kind, row.layer || null, row.evidence || null, row.target_metric || null, row.metric_baseline || null,
-     row.risk_if_wrong || null, status]
+     row.risk_if_wrong || null, status, verdictNote]
   );
   if (auto) await openFeedbackForFinding(f.id, row);
 }
