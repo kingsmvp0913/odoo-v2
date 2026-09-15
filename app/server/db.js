@@ -1035,6 +1035,8 @@ async function migrate() {
     // 是「這專案第一次建環境」的時間。用它判壽命，會讓建立逾 8 小時的專案每次一開機就被下一輪
     // sweep 收掉（實測真人操作 3~7 分鐘即中斷），且只打真人——pipeline 有 deploy/E2E 任務擋著。
     { table: 'odoo_envs', col: 'started_at', sql: 'ALTER TABLE odoo_envs ADD COLUMN started_at TIMESTAMPTZ' },
+    // 2c：測試區自己的 PG 角色密碼（lib/crypto 加密）。角色名由專案 id 推得（testenv_p<id>），不另存。
+    { table: 'odoo_envs', col: 'db_password_enc', sql: 'ALTER TABLE odoo_envs ADD COLUMN db_password_enc TEXT' },
     // 測試區 port 池範圍（管理員介面可設；NULL＝退回 env／預設值，既有部署行為不變）
     { table: 'teams_settings', col: 'port_pool_min', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_min INTEGER' },
     { table: 'teams_settings', col: 'port_pool_max', sql: 'ALTER TABLE teams_settings ADD COLUMN port_pool_max INTEGER' },

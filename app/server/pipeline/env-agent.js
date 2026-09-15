@@ -11,6 +11,7 @@ const { leasePort, envBindHost, envPublicUrl } = require('../port-alloc');
 const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 const { syncNginxMapDebounced } = require('../lib/nginx-map');
 const { resolveEnterprisePath } = require('../lib/enterprise-sources');
+const { ensureTestEnvDbRole, loadTestEnvDbCreds, testEnvDbArgs, roleNameFor } = require('../lib/testenv-db-role');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
@@ -61,15 +62,27 @@ async function dockerCtxFor(projectId) {
     if (ent.ok) mounts.push({ host: ent.path, container: dockerEnv.ENTERPRISE_CONTAINER_DIR, enterprise: true });
     else enterpriseError = ent.error;
   }
+  // 2c：測試區只拿自己的 PG 角色。還沒建過（2c 之前的環境）就給空陣列——docker 邊界守衛會擋下並要求重建，
+  // 絕不退回平台 DATABASE_URL 的超級使用者（rules/pipeline 59）。
+  const dbCreds = await loadTestEnvDbCreds(projectId);
   return {
     project, dirName, major, enterpriseError, addonsError,
     dbName: `test_${dirName}`,
     image: dockerEnv.imageTagFor(major),
     container: dockerEnv.containerNameFor(dirName, project.id),
     mounts,
-    dbArgs: odooDbArgs(),
+    dbArgs: dbCreds ? testEnvDbArgs(dbCreds) : [],
     envDir: path.join(ENV_BASE, dirName),
   };
+}
+
+// 2c：容器的 DB 帳號在 docker run 那一刻定型。2c 之前建的容器仍以平台超級使用者連線，
+// 夜間關機會把它們收掉、下次開啟就換成角色；在那之前靠這裡問出來，deploy 擋下要求重建。
+async function dbUserDrift(projectId) {
+  const ctx = await dockerCtxFor(projectId);
+  if (!ctx || !(await dockerEnv.containerRunning(ctx.container))) return false;
+  const user = await dockerEnv.containerDbUser(ctx.container);
+  return user !== null && user !== roleNameFor(projectId);
 }
 
 // 執行中的容器與「專案現在該掛哪些 addons」對不對得起來。容器的掛載在 docker run 那一刻定型，
@@ -188,23 +201,6 @@ async function waitForModulesInstalled({ dbName, modules, timeoutMs = HEALTH_TIM
 // 測試注入用：讓全流程測試在不連真 DB 下確定性地控制就緒閘（比照 db.js 的 _setPoolForTesting）。
 let _moduleReadyCheck = null;
 function _setModuleReadyCheckForTesting(fn) { _moduleReadyCheck = fn; }
-
-// 從 app 的 DATABASE_URL 推導 Odoo DB 連線參數，讓測試機連到同一台 PostgreSQL（否則 Odoo 預設連 localhost:5432 無密碼會失敗）
-function odooDbArgs() {
-  const raw = process.env.DATABASE_URL;
-  if (!raw) return [];
-  try {
-    const u = new URL(raw);
-    const args = [];
-    if (u.hostname) args.push('--db_host', u.hostname);
-    if (u.port)     args.push('--db_port', u.port);
-    if (u.username) args.push('--db_user', decodeURIComponent(u.username));
-    if (u.password) args.push('--db_password', decodeURIComponent(u.password));
-    return args;
-  } catch {
-    return [];
-  }
-}
 
 // tour 的 browser_js 需 chrome 執行檔；Odoo 各平台認固定路徑（odoo/tests/common.py ChromeBrowser.executable）。
 // 找不到時 Odoo raise unittest.SkipTest → 測試靜默跳過但 exit 0 ＝假綠燈，故建環境時先擋。
@@ -970,6 +966,15 @@ async function _runEnvSetupDocker(projectId) {
     }
   }
 
+  // 2c：測試區用自己的 PG 角色（非超級使用者）。建角色／平台先建 DB 或把擁有權轉過去／撤 PUBLIC 連線。
+  // 必須排在上面的「DB 已存在但 filestore 空」檢查之後：這一步會在 DB 不存在時先建出空 DB。
+  // 失敗就停，絕不退回平台帳號。
+  try {
+    ctx.dbArgs = testEnvDbArgs(await ensureTestEnvDbRole({ projectId, dbName: ctx.dbName }));
+  } catch (e) {
+    return _failEnv(projectId, `測試區資料庫帳號設定失敗：${e.message}`, log + `[db-role] ${e.message}\n`);
+  }
+
   // 0) 確保 Docker daemon 在跑（Windows 自動啟動 Docker Desktop 並等待就緒）。
   // 沒這道 preflight，daemon 沒起時會直接落到 build 拿到一串 npipe 連線亂碼、誤報「image build 失敗」。
   try {
@@ -1151,4 +1156,4 @@ async function _seedOdooUsersDocker(ctx) {
   throw new Error(last);
 }
 
-module.exports = { runEnvSetup, moduleDependsFrom, scanProjectModules, missingModuleDepends, formatMissingDepends, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor, addonsMountDrift };
+module.exports = { runEnvSetup, dbUserDrift, moduleDependsFrom, scanProjectModules, missingModuleDepends, formatMissingDepends, upgradeModules, installModuleRequirements, getDeclaredPythonDeps, getAllDeclaredPythonDeps, installPythonPackage, pythonExternalDeps, runTourTests, uninstallModule, findChrome, stopEnv, nightlyShutdown, sweepIdleEnvs, envIsActive, envContainerAlive, assetSmokeCheck, cleanupProjectEnv, snapshotProjectPaths, waitForPort, waitForModulesInstalled, _setModuleReadyCheckForTesting, _ensureEnvCredentials, _envInt, restartEnv, enterpriseExpirationDate, ENV_BASE, dockerCtxFor, addonsMountDrift };

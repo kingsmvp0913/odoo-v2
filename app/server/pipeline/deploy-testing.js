@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { query } = require('../db');
 const notify = require('../notify');
-const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, addonsMountDrift, dockerCtxFor } = require('./env-agent');
+const { upgradeModules, installModuleRequirements, getDeclaredPythonDeps, installPythonPackage, restartEnv, assetSmokeCheck, addonsMountDrift, dbUserDrift, dockerCtxFor } = require('./env-agent');
 const dockerEnv = require('../lib/docker-env');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
@@ -279,6 +279,18 @@ async function doDeploy(task, taskId, userId, signal) {
     await query(
       "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
       [taskId, `測試環境建立之後才加入的 repo（${drift.join('、')}）尚未掛進容器，其程式碼不在測試區內。`
+        + '請到專案環境頁重建測試環境後再重試部署。']
+    );
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+    return;
+  }
+
+  // 2c：容器的 DB 帳號在 docker run 時定型，資料庫帳號隔離上線前建的容器仍以平台超級使用者連線。
+  // 擋下要求重建而不是自動重建——重建會中斷使用者正在用的測試區（同上）。
+  if (await dbUserDrift(task.project_id).catch(() => false)) {
+    await query(
+      "UPDATE tasks SET status='stopped', blocker_type='env', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+      [taskId, '測試環境仍以平台資料庫帳號連線（資料庫帳號隔離上線前建立的舊容器）。'
         + '請到專案環境頁重建測試環境後再重試部署。']
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });

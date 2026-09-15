@@ -53,6 +53,7 @@ jest.mock('../pipeline/env-agent', () => ({
   // 部署關會先問「容器掛載是否還等於專案當下的 repo 清單」；不 mock 會 TypeError，
   // 讓每個走到部署的情境全數 stopped。空陣列＝無漂移，流程照走。
   addonsMountDrift: jest.fn().mockResolvedValue([]),
+  dbUserDrift: jest.fn().mockResolvedValue(false),
   ENV_BASE: '/envs',
   runtimeLogPath: dir => dir + '/odoo.log'
 }));

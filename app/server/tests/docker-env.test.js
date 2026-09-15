@@ -215,7 +215,7 @@ describe('addonsMounts / containerAddonsPath', () => {
 describe('buildRunArgs', () => {
   const args = d.buildRunArgs({
     name: 'odoo-test-p1', image: 'odoo-idx:16', host: '127.0.0.5', port: 8070, dbName: 'test_p1',
-    dbArgs: ['--db_host', 'localhost', '--db_user', 'odoo'],
+    dbArgs: ['--db_host', 'localhost', '--db_user', 'testenv_p1'],
     mounts: d.addonsMounts(['/repos/p1/main']),
     serverArgs: ['--without-demo=all'],
   });
@@ -244,7 +244,7 @@ describe('buildRunArgs', () => {
     const image = 'odoo-idx:16';
     const preImage = args.slice(0, args.indexOf(image));
     expect(preImage).toContain('HOST=host.docker.internal');
-    expect(preImage).toContain('USER=odoo');
+    expect(preImage).toContain('USER=testenv_p1');
   });
   test('filestoreDir → 綁 /var/lib/odoo/filestore（持久化，避免重建容器遺失 attachment）', () => {
     const a = d.buildRunArgs({ name: 'c', image: 'odoo-idx:17', port: 8070, dbName: 'test_p1', filestoreDir: '/host/env/filestore' });
@@ -469,7 +469,7 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
   test('execOdoo：shell 子指令排在 odoo 之後、db 參數之前（否則 odoo 報 unrecognized shell）', async () => {
     const cap = {};
     await d.execOdoo(
-      { container: 'c1', dbName: 'test_p1', dbArgs: ['--db_host', 'localhost'], mounts: [], odooArgs: ['shell', '--no-http'], interactive: true },
+      { container: 'c1', dbName: 'test_p1', dbArgs: ['--db_host', 'localhost', '--db_user', 'testenv_p1', '--db_password', 'x'], mounts: [], odooArgs: ['shell', '--no-http'], interactive: true },
       { spawnFn: captureSpawn(cap), input: 'print(1)' }
     );
     const a = cap.args;
@@ -482,7 +482,7 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
   test('execOdoo：以 - 開頭的 odooArgs（如 -i）維持 server 指令，不誤判成子指令', async () => {
     const cap = {};
     await d.execOdoo(
-      { container: 'c1', dbName: 'test_p1', dbArgs: [], mounts: [], odooArgs: ['-i', 'sale', '--stop-after-init'] },
+      { container: 'c1', dbName: 'test_p1', dbArgs: ['--db_user', 'testenv_p1', '--db_password', 'x'], mounts: [], odooArgs: ['-i', 'sale', '--stop-after-init'] },
       { spawnFn: captureSpawn(cap) }
     );
     const a = cap.args;
@@ -597,5 +597,63 @@ describe('runDocker（IO 邊界，mock spawn）', () => {
     expect(await d.removeEnvDir('/envs/gone', {
       fs: { existsSync: () => false, readdirSync: () => { throw new Error('不該被呼叫'); } },
     })).toEqual({ removed: false, kept: [] });
+  });
+});
+
+// 2c：測試區容器只准拿自己的 PG 角色。沒帶帳號時官方 image 的 entrypoint 會退回 USER=odoo——正好是平台
+// 超級使用者的名字；帶平台帳號就回到原本的洞。守衛放在 IO 邊界（真的要跑 docker 之前），純參數組裝不動。
+describe('2c 測試區資料庫帳號', () => {
+  const { EventEmitter } = require('events');
+  function spawnReturning(script, onSpawn = () => {}) {
+    return () => {
+      onSpawn();
+      const ch = new EventEmitter();
+      ch.stdout = new EventEmitter();
+      ch.stderr = new EventEmitter();
+      ch.stdin = { write() {}, end() {} };
+      ch.kill = () => {};
+      setImmediate(() => {
+        if (script.stdout) ch.stdout.emit('data', script.stdout);
+        if (script.stderr) ch.stderr.emit('data', script.stderr);
+        ch.emit('close', script.code);
+      });
+      return ch;
+    };
+  }
+
+  test('assertTestEnvDbUser：testenv_p<id> 放行', () => {
+    expect(() => d.assertTestEnvDbUser(['--db_host', 'localhost', '--db_user', 'testenv_p18', '--db_password', 'x'])).not.toThrow();
+  });
+  test('assertTestEnvDbUser：沒帶帳號、平台帳號 odoo、或其他名字一律拒絕', () => {
+    for (const dbArgs of [[], ['--db_host', 'localhost'], ['--db_user', 'odoo', '--db_password', 'p'], ['--db_user', 'postgres'], ['--db_user', 'testenv_px']]) {
+      expect(() => d.assertTestEnvDbUser(dbArgs)).toThrow(/測試區資料庫帳號/);
+    }
+  });
+  test('runContainer：帳號不合格就不跑 docker，回 ok:false 帶原因', async () => {
+    let spawned = false;
+    const r = await d.runContainer(
+      { name: 'c', image: 'odoo-idx:17', port: 8070, dbName: 'test_p1', dbArgs: ['--db_user', 'odoo'] },
+      { spawnFn: spawnReturning({ code: 0 }, () => { spawned = true; }) }
+    );
+    expect(spawned).toBe(false);
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toMatch(/測試區資料庫帳號/);
+  });
+  test('execOdoo：帳號不合格就不跑 docker，回 code 1', async () => {
+    let spawned = false;
+    const r = await d.execOdoo(
+      { container: 'c1', dbName: 'test_p1', dbArgs: [], odooArgs: ['-u', 'sale', '--stop-after-init'] },
+      { spawnFn: spawnReturning({ code: 0 }, () => { spawned = true; }) }
+    );
+    expect(spawned).toBe(false);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/測試區資料庫帳號/);
+  });
+  test('containerDbUser：讀出 Config.Env 裡的 USER（找出還帶著平台帳號的舊容器）', async () => {
+    const r = await d.containerDbUser('odoo-test-x', { spawnFn: spawnReturning({ code: 0, stdout: 'PATH=/usr/bin\nHOST=host.docker.internal\nUSER=odoo\nPASSWORD=secret\n' }) });
+    expect(r).toBe('odoo');
+  });
+  test('containerDbUser：容器不存在回 null', async () => {
+    expect(await d.containerDbUser('nope', { spawnFn: spawnReturning({ code: 1, stderr: 'No such object' }) })).toBeNull();
   });
 });

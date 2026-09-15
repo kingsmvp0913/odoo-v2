@@ -18,11 +18,19 @@ jest.mock('../lib/docker-env', () => {
     containerExists: jest.fn().mockResolvedValue(true),
     containerLogs: jest.fn().mockResolvedValue('log'),
     containerMountSources: jest.fn().mockResolvedValue(null),
+    containerDbUser: jest.fn().mockResolvedValue(null),
     execOdoo: jest.fn().mockResolvedValue({ code: 0, stdout: 'ok', stderr: '' }),
     execPipInstall: jest.fn().mockResolvedValue({ code: 0, stdout: 'ok', stderr: '' }),
   };
 });
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
+
+// 2c：建置會先建測試區 PG 角色（真的連 PG）。這裡只驗建置流程，換成固定帳密。
+jest.mock('../lib/testenv-db-role', () => ({
+  ...jest.requireActual('../lib/testenv-db-role'),
+  ensureTestEnvDbRole: jest.fn().mockResolvedValue({ role: 'testenv_p1', password: 'test-role-pw' }),
+  loadTestEnvDbCreds: jest.fn().mockResolvedValue({ role: 'testenv_p1', password: 'test-role-pw' }),
+}));
 jest.mock('../pipeline/git', () => ({ ensureTestingBranch: jest.fn().mockResolvedValue(undefined) }));
 // runEnvSetup／stopEnv 會 start/stopProjectVpns；不 mock 會對本機 docker 發真指令（實測會停掉真容器）。
 jest.mock('../lib/project-vpn', () => ({
@@ -194,5 +202,58 @@ describe('addonsMountDrift', () => {
     dockerEnv.containerMountSources.mockResolvedValueOnce(null);
 
     expect(await envAgent.addonsMountDrift(PID)).toEqual([]);
+  });
+});
+
+// 2c：容器只拿測試區自己的角色；還沒建角色時 ctx 不得偷偷退回平台帳號。
+describe('2c 測試區資料庫角色', () => {
+  const roleLib = require('../lib/testenv-db-role');
+  let prevUrl;
+  beforeEach(() => { prevUrl = process.env.DATABASE_URL; process.env.DATABASE_URL = 'postgres://odoo:platform-pw@localhost:8772/aidev'; });
+  afterEach(() => { if (prevUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = prevUrl; });
+
+  test('dockerCtxFor：有存角色密碼 → dbArgs 是角色帳密，平台帳密不出現', async () => {
+    roleLib.loadTestEnvDbCreds.mockResolvedValueOnce({ role: `testenv_p${PID}`, password: 'role-pw' });
+    const ctx = await envAgent.dockerCtxFor(PID);
+    expect(ctx.dbArgs).toEqual(['--db_host', 'localhost', '--db_port', '8772', '--db_user', `testenv_p${PID}`, '--db_password', 'role-pw']);
+    expect(ctx.dbArgs.join(' ')).not.toContain('platform-pw');
+  });
+
+  test('dockerCtxFor：沒存過角色密碼 → dbArgs 為空（交給 docker 邊界守衛擋下），不退回平台帳號', async () => {
+    roleLib.loadTestEnvDbCreds.mockResolvedValueOnce(null);
+    const ctx = await envAgent.dockerCtxFor(PID);
+    expect(ctx.dbArgs).toEqual([]);
+  });
+
+  test('runEnvSetup：先建好角色，docker run 拿到的是角色帳密', async () => {
+    roleLib.ensureTestEnvDbRole.mockResolvedValueOnce({ role: `testenv_p${PID}`, password: 'fresh-pw' });
+    dockerEnv.runContainer.mockClear();
+    // run 回失敗讓建置就此收尾：只驗「交給 docker run 的帳密」，不等真的埠起來（假容器永遠不會 listen）
+    dockerEnv.runContainer.mockResolvedValueOnce({ ok: false, log: 'stop here', stderr: 'stop here' });
+    await envAgent.runEnvSetup(PID);
+    expect(roleLib.ensureTestEnvDbRole).toHaveBeenCalledWith(expect.objectContaining({ projectId: PID, dbName: 'test_shopx' }));
+    expect(dockerEnv.runContainer).toHaveBeenCalled();
+    const runOpts = dockerEnv.runContainer.mock.calls.at(-1)[0];
+    expect(runOpts.dbArgs).toEqual(expect.arrayContaining(['--db_user', `testenv_p${PID}`, '--db_password', 'fresh-pw']));
+  });
+
+  test('runEnvSetup：建角色失敗 → 環境落 error、不跑 docker run（絕不退回平台帳號）', async () => {
+    roleLib.ensureTestEnvDbRole.mockRejectedValueOnce(new Error('permission denied to create role'));
+    dockerEnv.runContainer.mockClear();
+    await envAgent.runEnvSetup(PID);
+    expect(dockerEnv.runContainer).not.toHaveBeenCalled();
+    const { rows: [env] } = await dbModule.query('SELECT status, error_msg FROM odoo_envs WHERE project_id=$1', [PID]);
+    expect(env.status).toBe('error');
+    expect(env.error_msg).toContain('測試區資料庫帳號設定失敗');
+  });
+
+  test('dbUserDrift：容器在跑且 USER 仍是平台帳號 → true；是自己的角色 → false；容器沒跑 → false', async () => {
+    dockerEnv.containerRunning.mockResolvedValue(true);
+    dockerEnv.containerDbUser.mockResolvedValueOnce('odoo');
+    expect(await envAgent.dbUserDrift(PID)).toBe(true);
+    dockerEnv.containerDbUser.mockResolvedValueOnce(`testenv_p${PID}`);
+    expect(await envAgent.dbUserDrift(PID)).toBe(false);
+    dockerEnv.containerRunning.mockResolvedValueOnce(false);
+    expect(await envAgent.dbUserDrift(PID)).toBe(false);
   });
 });

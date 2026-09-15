@@ -19,6 +19,13 @@ const path = require('path');
 const http = require('http');
 const { newDb } = require('pg-mem');
 
+// 2c：建置會先建測試區 PG 角色（真的連 PG）。這裡只驗建置流程，換成固定帳密。
+jest.mock('../lib/testenv-db-role', () => ({
+  ...jest.requireActual('../lib/testenv-db-role'),
+  ensureTestEnvDbRole: jest.fn().mockResolvedValue({ role: 'testenv_p1', password: 'test-role-pw' }),
+  loadTestEnvDbCreds: jest.fn().mockResolvedValue({ role: 'testenv_p1', password: 'test-role-pw' }),
+}));
+
 jest.mock('../lib/docker-env', () => {
   const actual = jest.requireActual('../lib/docker-env');
   return {

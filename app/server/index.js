@@ -259,6 +259,13 @@ if (require.main === module) {
   });
 
   migrate().then(async () => {
+    // 2c：每個 DB 撤掉 PUBLIC 的 CONNECT——測試區角色只連得進自己擁有的 DB（平台超級使用者不受影響）。
+    // 冪等，每次啟動跑一次；新建的測試 DB 另由 ensureTestEnvDbRole 各自撤。
+    try {
+      const { revokePublicConnectAll } = require('./lib/testenv-db-role');
+      const n = await revokePublicConnectAll();
+      console.log(`[STARTUP] 已撤銷 ${n} 個資料庫的 PUBLIC 連線權限`);
+    } catch (e) { console.error('[STARTUP] 撤銷資料庫 PUBLIC 連線權限失敗:', e.message); }
     // 建立到一半被重啟打斷的測試環境：收乾淨並回到可重建的 idle。舊版一律標 error，而 error 在
     // /env/sso 是死路（刻意不自動重試），使用者只能自己回專案頁重按；且舊版只改 status、不收容器
     // 與埠租約，會讓下一個借到同埠的專案莫名撞埠（見 pipeline/startup-recovery.js 的完整說明）。

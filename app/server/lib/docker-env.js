@@ -186,6 +186,18 @@ function odooDbAddonsArgs({ dbName, mounts = [], dbArgs = [] }) {
   return ['-d', dbName, '--addons-path', containerAddonsPath(mounts), ...remapDbHostForContainer(dbArgs)];
 }
 
+// 2c（產品化規格 1 §10）：測試區容器只准拿該測試區自己的 PG 角色 testenv_p<projectId>。
+// 沒帶帳號時官方 image 的 entrypoint 會退回 USER=odoo——正好是平台超級使用者的名字；
+// 帶到平台帳號，進測試區的人就能讀平台 DB、COPY TO PROGRAM。不合格一律拒絕，不退回任何預設值。
+const TEST_ENV_DB_USER_RE = /^testenv_p\d+$/;
+function assertTestEnvDbUser(dbArgs = []) {
+  const i = dbArgs.indexOf('--db_user');
+  const user = i >= 0 ? dbArgs[i + 1] : null;
+  if (!user || !TEST_ENV_DB_USER_RE.test(user)) {
+    throw new Error(`測試區資料庫帳號不合格（${user || '未提供'}），拒絕啟動：請重建測試環境以建立該測試區自己的資料庫帳號`);
+  }
+}
+
 // 把 odoo db CLI 參數（--db_host/port/user/password，localhost 已 remap）轉成官方 odoo image 的
 // entrypoint 認得的環境變數旗標（-e HOST=... 等）。docker run 專用：entrypoint 會依這組 env 在使用者
 // 參數「後面」補一組 --db_host/... ，若我們仍走 CLI 傳，會被那組覆蓋（Odoo 參數重複時後者勝，見
@@ -357,6 +369,15 @@ async function containerMountSources(name, deps = {}) {
   return String(stdout).split('\n').map(s => s.trim()).filter(Boolean);
 }
 
+// 容器建立時帶進去的 DB 帳號（官方 image 以 USER 環境變數給 entrypoint）。docker run 那一刻定型，
+// 事後換不掉——2c 之前建的容器仍是平台帳號，只能靠這裡問出來再要求重建。
+async function containerDbUser(name, deps = {}) {
+  const { code, stdout } = await runDocker(['inspect', '-f', '{{range .Config.Env}}{{println .}}{{end}}', name], deps);
+  if (code !== 0) return null;
+  const line = String(stdout).split('\n').find((l) => l.startsWith('USER='));
+  return line ? line.slice('USER='.length).trim() : null;
+}
+
 // 讀 image 上的相依 label。image 不存在或沒有 label 都回空字串（→ 視為需要 build）。
 async function imageDepsLabels(tag, deps = {}) {
   const fmt = `{{index .Config.Labels "${DEPS_LABEL}"}}|{{index .Config.Labels "${PIP_LABEL}"}}`;
@@ -411,6 +432,7 @@ async function ensureImage(major, contextDir, opts = {}, deps = {}) {
 
 // 起容器（-d）。呼叫端先確保同名容器已移除（見 removeContainer）。回傳 { ok, log, stderr }。
 async function runContainer(opts, deps = {}) {
+  try { assertTestEnvDbUser(opts.dbArgs); } catch (e) { return { ok: false, log: e.message, stderr: e.message }; }
   const { code, stdout, stderr } = await runDocker(buildRunArgs(opts), deps);
   return { ok: code === 0, log: (stdout || '') + (stderr || ''), stderr };
 }
@@ -419,6 +441,7 @@ async function runContainer(opts, deps = {}) {
 // 與常駐 server 併行、連同一宿主 DB。odooArgs 為 odoo 之後的參數；本函式補 odoo 與 db/addons 參數。
 // interactive+input 供 odoo shell 讀 stdin 腳本。回傳 { code, stdout, stderr }（原樣供呼叫端解析）。
 async function execOdoo({ container, dbName, dbArgs = [], mounts = [], odooArgs = [], interactive = false, env = {} }, io = {}) {
+  try { assertTestEnvDbUser(dbArgs); } catch (e) { return { code: 1, stdout: '', stderr: e.message }; }
   // odoo 子指令（如 shell）必須緊接在 odoo 之後、排在 db/addons 參數之前；否則 odoo 走預設 server 指令、
   // 把子指令當多餘位置參數而報 "unrecognized parameters: 'shell'"。開頭非 '-' 者即視為子指令，提到最前。
   const hasSubcmd = odooArgs.length > 0 && !String(odooArgs[0]).startsWith('-');
@@ -528,7 +551,7 @@ async function containerLogs(name, { tail = 2000 } = {}, deps = {}) {
 module.exports = {
   // 純函式（單測用）
   imageTagFor, depsFingerprint, majorDigits, containerNameFor, remapDbHostForContainer, addonsMounts, repoRootModuleName,
-  containerAddonsPath, remapContainerPathsInText, listContainerModules, odooDbAddonsArgs, dbEnvFlags, buildRunArgs, buildExecArgs, buildRootRmArgs,
+  containerAddonsPath, remapContainerPathsInText, listContainerModules, odooDbAddonsArgs, dbEnvFlags, assertTestEnvDbUser, containerDbUser, buildRunArgs, buildExecArgs, buildRootRmArgs,
   // 低階 IO
   runDocker, dockerAvailable, ensureDockerRunning,
   imageExists, containerExists, containerRunning, containerMountSources,

@@ -12,6 +12,7 @@ jest.mock('../pipeline/env-agent', () => ({
   restartEnv: jest.fn().mockResolvedValue({ ok: true }),
   assetSmokeCheck: jest.fn().mockResolvedValue({ ok: true }),
   addonsMountDrift: jest.fn().mockResolvedValue([]),
+  dbUserDrift: jest.fn().mockResolvedValue(false),
   // asset traceback 走 `docker logs`（容器 CMD 沒有 --logfile，宿主上不存在 odoo.log）
   dockerCtxFor: jest.fn().mockResolvedValue({ container: 'odoo_test_proj' })
 }));
@@ -159,6 +160,7 @@ beforeEach(async () => {
   envAgent.restartEnv.mockReset().mockResolvedValue({ ok: true });
   envAgent.assetSmokeCheck.mockReset().mockResolvedValue({ ok: true });
   envAgent.addonsMountDrift.mockReset().mockResolvedValue([]);
+  envAgent.dbUserDrift.mockReset().mockResolvedValue(false);
   require('../pipeline/claude-runner').runClaude.mockReset(); // 分類器 agent fallback，避免測試順序相依
   const git = require('../pipeline/git');
   git.discardPyc.mockReset().mockResolvedValue(undefined);
@@ -220,6 +222,23 @@ test('容器缺掛新加入的 repo → stopped(env)，不升級', async () => {
   expect(t.blocker_type).toBe('env');
   expect(t.blocker_content).toContain('純水');       // 要指名是哪個 repo，否則沒人知道該修什麼
   expect(t.blocker_content).toContain('重建測試環境'); // 以及該做什麼
+  expect(envAgent.upgradeModules).not.toHaveBeenCalled();
+});
+
+// 2c：資料庫帳號隔離上線前建的容器還帶著平台超級使用者帳密。對它部署等於照舊開著洞，
+// 而且重建是使用者看得到的中斷，所以擋下要求重建，不自動重建（比照 addons 漂移）。
+test('測試區容器仍以平台資料庫帳號連線 → stopped(env)，不升級', async () => {
+  await setEnvRunning();
+  envAgent.dbUserDrift.mockResolvedValue(true);
+  const id = await makeTask();
+
+  await runDeployTesting(id, userId);
+
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_type).toBe('env');
+  expect(t.blocker_content).toContain('平台資料庫帳號');
+  expect(t.blocker_content).toContain('重建測試環境');
   expect(envAgent.upgradeModules).not.toHaveBeenCalled();
 });
 
