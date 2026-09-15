@@ -6,6 +6,7 @@ const { syncUser } = require('./pipeline/sync');
 const { runPipeline } = require('./pipeline/runner');
 const { acquireDispatchLease } = require('./dispatch-lease');
 const notify = require('./notify');
+const platformBackup = require('./lib/platform-backup');
 
 const lastOdooSync = new Map();
 const lastServiceSync = new Map();
@@ -99,6 +100,7 @@ let _tickRunning = false;   // node-cron 不擋前一 tick 未結束就開下一
 let _clockForTesting = null;
 let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
 let _lastArchiveDay = null;  // 同一天只封存一次（同上，過了預定時刻才補跑）
+let _lastBackupDay = null;   // 平台 DB 備份同一天只試一次；重啟後歸零，但今天的檔已存在會直接跳過
 // 3-I2：夜間批次（意見回饋通道）自己的節流旗標，與健檢的 shouldRunHealthCheck 完全脫鉤——
 // HEALTH_CHECK_INTERVAL_MS=0（健檢停用）或健檢卡在 running 都不該連坐把這條通道一起停掉。
 // ⚠ 這個「今天跑過了」只能落 DB，不能存記憶體：批次只要有合併就會 restartSelf()
@@ -155,11 +157,11 @@ function taipeiDayKey(now) {
 // 等於一天 1440 次註定沒有結果的 UPDATE。改成臺灣時間每日一次。
 const AUTO_ARCHIVE_HOUR = parseInt(process.env.AUTO_ARCHIVE_HOUR || '1', 10);
 
-function autoArchiveNextRunAt(now) {
+function autoArchiveNextRunAt(now, runHour = AUTO_ARCHIVE_HOUR) {
   const { year, month, day, hour } = taipeiDateParts(now);
   // 今天的時刻已經過了就排明天：日期用 UTC 建再加天數，跨月與跨年由 Date 自己處理。
-  const target = new Date(Date.UTC(year, month - 1, day + (hour >= AUTO_ARCHIVE_HOUR ? 1 : 0)));
-  return new Date(`${target.toISOString().slice(0, 10)}T${String(AUTO_ARCHIVE_HOUR).padStart(2, '0')}:00:00+08:00`).toISOString();
+  const target = new Date(Date.UTC(year, month - 1, day + (hour >= runHour ? 1 : 0)));
+  return new Date(`${target.toISOString().slice(0, 10)}T${String(runHour).padStart(2, '0')}:00:00+08:00`).toISOString();
 }
 
 function healthCheckTargetAt(now, dayOffset = 0) {
@@ -274,6 +276,7 @@ async function getCronSchedules(now = new Date()) {
     { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },
     { id: 'classification', name: '退回與 wiki 漂移分類', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用分類。' : '每次僅處理小批待分類資料。' },
     { id: 'auto-archive', name: '完成任務自動封存', timing: `每日 ${String(AUTO_ARCHIVE_HOUR).padStart(2, '0')}:00（臺灣時間）`, enabled: true, nextRunAt: autoArchiveNextRunAt(now), note: '封存完成已滿 30 天的任務；錯過整點會由之後的 tick 補跑。' },
+    { id: 'platform-backup', name: '平台資料庫備份', timing: `每日 ${String(platformBackup.BACKUP_HOUR).padStart(2, '0')}:00（臺灣時間）`, enabled: true, nextRunAt: autoArchiveNextRunAt(now, platformBackup.BACKUP_HOUR), note: platformBackup.describeBackups({ todayParts: taipeiDateParts(now) }) },
     { id: 'embedding-sweep', name: '語意索引補算', timing: `每日 ${String(EMBEDDING_SWEEP_HOUR).padStart(2, '0')}:00（伺服器本機時區）`, enabled: !testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: !testMode && EMBEDDING_SWEEP_INTERVAL_MS > 0 ? '僅在向量模型可用時執行。' : '測試模式或設定已停用。' }
   ];
 }
@@ -446,6 +449,14 @@ function startCron() {
         await autoArchiveDone().catch(err => console.error('[CRON] auto-archive:', err.message));
       }
 
+      // 平台 DB 每日備份（lib/platform-backup.js）：同樣是「過了鐘點且今天還沒試過」，錯過那一分鐘會補跑。
+      // fire-and-forget：tick 不等外部行程（rules/pipeline 65），pg_dump 的逾時由 runBackup 自己砍。
+      if (archiveParts.hour >= platformBackup.BACKUP_HOUR && _lastBackupDay !== archiveDayKey) {
+        _lastBackupDay = archiveDayKey;
+        platformBackup.runDailyBackup({ parts: archiveParts })
+          .catch(err => console.error('[CRON] platform backup:', err.message));
+      }
+
       // 每小時第 0 分清一次過期 task_events／deploy-E2E log 檔／token_usage（冪等；重入鎖已保證單飛）
       if (new Date().getMinutes() === 0) {
         await cleanupOldTaskEvents().catch(err => console.error('[CRON] events-cleanup:', err.message));
@@ -499,6 +510,7 @@ function stopCron() {
 // 任何在 23:00 之後跑的 tick 都會把當天用掉——不重設的話，補跑那支測試在晚上執行會假紅。
 function _resetShutdownStateForTesting() { _lastShutdownDay = null; }
 function _resetArchiveStateForTesting() { _lastArchiveDay = null; }
+function _resetBackupStateForTesting() { _lastBackupDay = null; }
 // 夜間批次的「今天跑過了」已改存 DB（見 readNightlyFixDay），重設要清那一欄；
 // 回傳 promise 供新測試 await（pg-mem 的 query 是同步執行、非同步 resolve，舊呼叫端不 await 也安全）。
 function _resetNightlyFixStateForTesting() {
@@ -506,4 +518,4 @@ function _resetNightlyFixStateForTesting() {
 }
 function _setClockForTesting(clock) { _clockForTesting = clock; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _resetNightlyFixStateForTesting, _setClockForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _resetBackupStateForTesting, _resetNightlyFixStateForTesting, _setClockForTesting };

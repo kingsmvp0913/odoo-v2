@@ -42,6 +42,9 @@
         embedding: null,
         rebuildingEmbedding: false,
         embeddingTimer: null,
+        backups: null,
+        runningBackup: false,
+        downloadingBackup: null,
       };
     },
     async created() { await this.loadAll(); },
@@ -72,6 +75,39 @@
           this.rebuildingEmbedding = false;
         }
       },
+      async loadBackups() {
+        try { this.backups = await Api.get('admin/backups'); } catch (_) { this.backups = null; }
+      },
+      async runBackupNow() {
+        this.runningBackup = true;
+        try {
+          const r = await Api.post('admin/backups', {});
+          showToast(`備份完成：${r.file}（${this.formatBytes(r.bytes)}）`, 'success');
+          await this.loadBackups();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.runningBackup = false; }
+      },
+      // 下載要帶登入 token，所以走 getBlob 再轉成連結點下去；撤銷必須晚於 click（同 UiNextShared.js 的 downloadTaskCodeZip）。
+      async downloadBackup(name) {
+        this.downloadingBackup = name;
+        let url = null;
+        try {
+          const { blob } = await Api.getBlob(`admin/backups/${encodeURIComponent(name)}/download`);
+          url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally {
+          this.downloadingBackup = null;
+          if (url) setTimeout(() => URL.revokeObjectURL(url), 10000);
+        }
+      },
+      formatBytes(n) { return `${(n / 1048576).toFixed(1)} MB`; },
+      formatBackupTime(iso) { return new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); },
       async loadAll() {
         this.loading = true;
         try {
@@ -103,6 +139,7 @@
           try { this.context7Key = await Api.get('admin/context7-key'); } catch (_) { /* 顯示用 */ }
           try { this.users = await Api.get('admin/users'); } catch (_) { this.users = []; }
           await this.loadEmbedding();
+          await this.loadBackups();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.loading = false; }
       },
@@ -714,6 +751,42 @@
             <div class="setting-block-footer">
               <button class="btn btn-primary btn-sm" @click="rebuildEmbedding" :disabled="rebuildingEmbedding">
                 {{ rebuildingEmbedding ? '重建中...' : '重建索引' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 平台資料庫備份 -->
+          <div v-show="settingsTab==='adv'" class="setting-block">
+            <div class="setting-block-head">
+              <div class="setting-block-title">平台資料庫備份</div>
+              <div class="setting-block-desc">每天臺灣時間 {{ backups ? String(backups.hour).padStart(2, '0') : '04' }}:00 自動備份平台資料庫，留 {{ backups ? backups.keepDays : 14 }} 天，放在這台的 data/backups/。升級或大改之前可以先按「立即備份」。還原需要 data/config.json 的 APP_SECRET，請與備份檔分開保存。⚠ 備份檔含全部加密憑證與客戶資料，下載後請妥善保管；每次下載都會留下紀錄。</div>
+            </div>
+            <div class="setting-block-body">
+              <div v-if="backups" data-rwd-volatile style="font-size:var(--fs-sm)">
+                <div v-if="backups.lastFailure" style="color:var(--danger);margin-bottom:var(--space-2)">✕ 上次每日備份失敗（{{ formatBackupTime(backups.lastFailure.at) }}）：{{ backups.lastFailure.reason }}</div>
+                <div v-if="!backups.files.length" style="color:var(--warning)">⚠ 目前沒有任何備份</div>
+                <div v-else-if="backups.latestAgeDays > 1" style="color:var(--warning);margin-bottom:var(--space-2)">⚠ 已經 {{ backups.latestAgeDays }} 天沒有新的備份</div>
+                <div v-if="backups.files.length" class="table-wrap table-cards-sm">
+                  <table class="data-table">
+                    <thead><tr><th>建立時間</th><th>類型</th><th>大小</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="f in backups.files" :key="f.name">
+                        <td data-label="建立時間">{{ formatBackupTime(f.createdAt) }}</td>
+                        <td data-label="類型">{{ f.manual ? '手動' : '每日' }}</td>
+                        <td data-label="大小">{{ formatBytes(f.bytes) }}</td>
+                        <td data-label="操作">
+                          <button class="btn btn-ghost btn-sm" @click="downloadBackup(f.name)" :disabled="downloadingBackup === f.name">{{ downloadingBackup === f.name ? '下載中...' : '下載' }}</button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">狀態讀取失敗</div>
+            </div>
+            <div class="setting-block-footer">
+              <button class="btn btn-primary btn-sm" @click="runBackupNow" :disabled="runningBackup">
+                {{ runningBackup ? '備份中...' : '立即備份' }}
               </button>
             </div>
           </div>

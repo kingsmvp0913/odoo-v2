@@ -27,6 +27,12 @@ jest.mock('../pipeline/health-check-runner', () => ({
 jest.mock('../pipeline/nightly-fix', () => ({
   runNightlyFix: jest.fn().mockResolvedValue({ attempted: 0, applied: 0, skipped: 0 })
 }));
+// 平台 DB 備份：tick 過了臺灣 04:00 就會觸發。測試進程繼承容器環境（夜間改善在平台行程底下跑測試時
+// DATABASE_URL 是真的），不 mock 就會真的 pg_dump 正式 DB 寫進 data/backups/。只換掉會動外部的那一支。
+jest.mock('../lib/platform-backup', () => ({
+  ...jest.requireActual('../lib/platform-backup'),
+  runDailyBackup: jest.fn().mockResolvedValue({ skipped: true })
+}));
 
 // 臺灣時間 2026-08-25 23:00（已過 HEALTH_CHECK_HOUR=22）
 const NIGHT = '2026-08-25T15:00:00.000Z';

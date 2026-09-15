@@ -26,6 +26,12 @@ jest.mock('../pipeline/health-check-runner', () => ({
 jest.mock('../pipeline/nightly-fix', () => ({
   runNightlyFix: jest.fn().mockResolvedValue({ attempted: 0, applied: 0, skipped: 0 })
 }));
+// 平台 DB 備份：tick 過了臺灣 04:00 就會觸發。測試進程繼承容器環境（夜間改善在平台行程底下跑測試時
+// DATABASE_URL 是真的），不 mock 就會真的 pg_dump 正式 DB 寫進 data/backups/。只換掉會動外部的那一支。
+jest.mock('../lib/platform-backup', () => ({
+  ...jest.requireActual('../lib/platform-backup'),
+  runDailyBackup: jest.fn().mockResolvedValue({ skipped: true })
+}));
 
 let dbModule, cronModule, notifyModule;
 let userId;
@@ -679,4 +685,40 @@ test('維護中：tick 完全不消耗同步節流旗標，維護一結束下一
     cronModule.stopCron();
     await maintenance.leaveMaintenance();
   }
+});
+
+// 意圖：平台 DB 在這之前零備份。排程要「過了臺灣 04:00 且今天還沒試過」才跑（比照自動封存的補跑語意），
+// 而且同一天不重複打——tick 每分鐘一次，判斷寫錯就是一天上千次 pg_dump。
+test('平台 DB 備份：臺灣時間 04:00 之後的 tick 觸發一次，同一天第二個 tick 不再觸發', async () => {
+  const nodeCron = require('node-cron');
+  const { runDailyBackup } = require('../lib/platform-backup');
+  runDailyBackup.mockClear();
+  cronModule._resetBackupStateForTesting();
+  cronModule._setClockForTesting(() => new Date('2026-09-14T20:00:00.000Z')); // 臺灣 09-15 04:00
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+  expect(runDailyBackup).toHaveBeenCalledTimes(1);
+  expect(runDailyBackup.mock.calls[0][0].parts).toMatchObject({ year: 2026, month: 9, day: 15 });
+});
+
+test('平台 DB 備份：臺灣時間 04:00 之前不觸發', async () => {
+  const nodeCron = require('node-cron');
+  const { runDailyBackup } = require('../lib/platform-backup');
+  runDailyBackup.mockClear();
+  cronModule._resetBackupStateForTesting();
+  cronModule._setClockForTesting(() => new Date('2026-09-14T19:59:00.000Z')); // 臺灣 09-15 03:59
+  cronModule.startCron();
+  const tick = nodeCron.schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+  expect(runDailyBackup).not.toHaveBeenCalled();
+});
+
+// 意圖：這台沒設任何通知管道，排程頁是備份有沒有在跑唯一一定看得到的地方。
+test('排程頁列出平台 DB 備份（每日 04:00），下次時間與備份狀態都要有', async () => {
+  const rows = await cronModule.getCronSchedules(new Date('2026-09-15T00:00:00.000Z')); // 臺灣 08:00
+  const item = rows.find((r) => r.id === 'platform-backup');
+  expect(item.timing).toMatch(/每日 04:00/);
+  expect(item.nextRunAt).toBe('2026-09-15T20:00:00.000Z'); // 今天 04:00 已過 → 明天臺灣 04:00
+  expect(item.note).toMatch(/備份/);
 });

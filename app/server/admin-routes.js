@@ -17,6 +17,7 @@ const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
 const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
 const { getHealthCheckSchedule, getCronSchedules } = require('./cron');
+const platformBackup = require('./lib/platform-backup');
 
 function getSshPubKey() {
   const sshDir = path.join(os.homedir(), '.ssh');
@@ -689,6 +690,28 @@ function registerRoutes(app) {
   app.get('/api/admin/schedules', auth, async (_req, res) => {
     try { res.json(await getCronSchedules()); }
     catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // --- 平台資料庫備份（lib/platform-backup.js）---
+  app.get('/api/admin/backups', auth, (_req, res) => {
+    try { res.json(platformBackup.backupStatus()); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/backups', auth, async (_req, res) => {
+    try { res.json(await platformBackup.runManualBackup()); }
+    catch (err) { res.status(err.code === 'BUSY' ? 409 : 500).json({ error: err.message }); }
+  });
+
+  // 備份檔含全部加密憑證、密碼雜湊與客戶任務原文（09-15 使用者知情選擇開放下載）。
+  // 只認備份命名規則的檔名（擋 ../），每次下載都留 log，事後查得到是誰拿走的。
+  app.get('/api/admin/backups/:name/download', auth, (req, res) => {
+    const { name } = req.params;
+    if (!platformBackup.isBackupName(name)) return res.status(400).json({ error: '不是備份檔名' });
+    const file = path.join(platformBackup.backupDir(), name);
+    if (!fs.existsSync(file)) return res.status(404).json({ error: '找不到這份備份' });
+    console.log('[BACKUP] 管理員 user_id=%s 下載備份 %s', req.userId, name);
+    res.download(file, name);
   });
 
   app.get('/api/admin/health-check/:runId', auth, async (req, res) => {
