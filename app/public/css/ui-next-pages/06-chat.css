@@ -25,6 +25,26 @@
   background: var(--code-bg);
   color: var(--code-text);
 }
+/* AI 排障回覆常用 markdown 表格列原因鏈／時間軸。marked 吐的是裸 <table>，全域 reset
+   把 padding 清成 0、也沒有框線——欄與欄黏在一起、表頭置中，看起來像散掉的段落。 */
+.ui-next-message table {
+  width: 100%;
+  margin: 0 0 11px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ui-next-message th,
+.ui-next-message td {
+  border: 1px solid var(--border-strong);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.ui-next-message th {
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
 .ui-next-message-files {
   display: flex;
   flex-wrap: wrap;
