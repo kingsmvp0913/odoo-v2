@@ -262,6 +262,38 @@ async function attachmentNote(members) {
     + atts.map(a => `- ${a.filename}${a.mimetype ? `（${a.mimetype}）` : ''}：${path.resolve(uploadRoot(), a.file_path)}`).join('\n');
 }
 
+// 帶給重改輪的駁回理由上限。再舊的多半是當時平台檢查自己的 bug（例：09-13 的 NUL byte、
+// 複檢基線漏 suite 數），早已修掉，塞進來只會讓 agent 去處理一個不存在的問題。
+const PREV_REJECTIONS_MAX = 3;
+
+/**
+ * 同一個來源之前被駁回的理由 → 給 platform-fix 的一段文字。
+ *
+ * 沒有這段時，重改輪拿到的提示詞與第一輪逐字相同，再犯同一個錯是結構上必然：2026-09-14
+ * 意見 #34 同一晚兩次都因「analysis 降級沒有測試」被駁回；回溯 40 筆修正有 2 個來源同類再犯
+ * （健檢提案 147、169 兩度點名，但修法在 DENY 清單內只能人工修，所以一直沒人接）。
+ *
+ * 兩條斷線都要接：同一晚重改是同一個 finding_id；**隔晚重跑**時意見會被開成新的 finding 列，
+ * finding_id 對不上，只能靠 finding_fixes.members 認出同一個來源。
+ * members 在 JS 端過濾而不寫 JSONB 運算子：pg-mem 對 `@>` 支援不穩，且這張表一年不過數百列。
+ */
+async function previousRejections(fixId, findingId, members) {
+  const keys = new Set((members || []).map(m => `${m.source}:${m.row && m.row.id}`));
+  const { rows } = await query(
+    `SELECT id, finding_id, members, reject_reason FROM finding_fixes
+      WHERE status='rejected' AND reject_reason IS NOT NULL AND id <> $1
+      ORDER BY id DESC LIMIT 200`, [fixId]);
+  const hits = rows.filter(r => {
+    if (Number(r.finding_id) === Number(findingId)) return true;
+    let refs = r.members;
+    // 同 nightly-fix.js 的 membersFromRefs：pg-mem 有時把 JSONB 回成原始字串
+    if (typeof refs === 'string') { try { refs = JSON.parse(refs); } catch { refs = null; } }
+    return Array.isArray(refs) && refs.some(x => keys.has(`${x.source}:${x.id}`));
+  }).slice(0, PREV_REJECTIONS_MAX);
+  if (!hits.length) return '（無：這條是第一次施工）';
+  return hits.map(r => `- 修正 #${r.id}：${String(r.reject_reason).slice(0, 800)}`).join('\n');
+}
+
 async function runFix(fixId, { findingId, startedBy = null, members = null } = {}) {
   let worktree = null;
   try {
@@ -297,7 +329,8 @@ async function runFix(fixId, { findingId, startedBy = null, members = null } = {
       action: f.rationale || '（未提供）',
       target_metric: f.target_metric || '（未填）',
       metric_baseline: f.metric_baseline || '—',
-      attachments: await attachmentNote(members)
+      attachments: await attachmentNote(members),
+      previous_rejections: await previousRejections(fixId, findingId, members)
     });
 
     let text = '';
