@@ -116,6 +116,13 @@ function registerRoutes(app) {
               SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
             WHERE id = (SELECT finding_id FROM feedback WHERE id=$1) `, [id, req.userId]);
       }
+      // 核准也要兩列一起（09-15 R6：提案一律待人工核准）：單核准了、提案還掛 pending，健檢頁的待處理數就在說謊。
+      // 只翻還在 pending 的提案，已結案（no_change／done）的不能被這裡翻回 approved。
+      if (status === 'approved') {
+        await query(
+          `UPDATE health_check_findings SET status='approved', decided_by=$2, decided_at=NOW()
+            WHERE id = (SELECT finding_id FROM feedback WHERE id=$1) AND status='pending'`, [id, req.userId]);
+      }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

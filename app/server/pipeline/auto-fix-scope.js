@@ -4,9 +4,8 @@
  * 「一條健檢提案算不算在自動修正範圍內」這個判準被兩處各自需要：
  *   - nightly-fix.js 的 fetchHealthCandidates（撈候選時再篩一次，layer 要等 triage 跑完才知道
  *     意見回饋的值，健檢提案在撈的當下就已知，可以先篩）
- *   - health-check-runner.js 的 insertFinding（提案剛落地時就要決定 status 是 approved 還是
- *     pending——不符自動修範圍的不該預設 approved，否則畫面顯示「已核准（將自動執行）」但
- *     夜間批次永遠不會碰它，狀態說謊）
+ *   - health-check-runner.js 的 insertFinding（提案剛落地時決定要不要在意見回饋管理開單等人核准——
+ *     09-15 R6 起提案一律 pending，這個判準不再決定 approved；超出範圍的開了單核准也修不了）
  *
  * 抽成獨立葉節點而不是任一邊 require 另一邊：nightly-fix.js 與 health-check-runner.js 之間
  * 已經因為 MACHINE_RETIRE_PREFIX 撞過一次循環依賴（見 retire-prefix.js 的檔頭說明），

@@ -606,6 +606,14 @@ function registerRoutes(app) {
         [req.params.id, status, note, req.userId]
       );
       if (!rows.length) return res.status(404).json({ error: 'finding 不存在' });
+      // 09-15 R6：提案一律待人工核准。已在意見回饋管理開過單的提案，夜間批次只看那張單（nightly-fix.js 的
+      // fetchHealthCandidates 會排除已開單的提案）——這裡核准卻不帶上單，這條就永遠不會被修。
+      // 只翻還在 new 的單：已拒絕或已完成的不能被這裡翻回來。
+      if (status === 'approved') {
+        await query(
+          `UPDATE feedback SET status='approved', decided_by=$2, decided_at=NOW()
+            WHERE finding_id=$1 AND status='new'`, [req.params.id, req.userId]);
+      }
       res.json(rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

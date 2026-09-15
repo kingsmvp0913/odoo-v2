@@ -102,6 +102,21 @@ test('runTaskHealthCheck：layer=platform → 落 kind=proposal（「修這條�
   expect(f.suggested_prompt).toBeNull();
 });
 
+// 09-15 R6：單張任務健檢挖到的平台 bug 也是提案，比照全平台健檢一律等人核准——任務資料裡是客戶寫的文字，
+// 被注入的診斷若自動核准，就會經夜間批次變成自動合併的平台碼（產品化規格總覽 §6.3）。
+test('runTaskHealthCheck：layer=platform 的提案落 pending，等平台管理員核准', async () => {
+  mockRunClaude.mockResolvedValue({
+    text: '<diagnosis>處置：修平台程式。qa-agent.js 的 resume 沒比對規格。</diagnosis>'
+        + '<rationale>與任務內容無關</rationale><result>{"severity":"high","layer":"platform"}</result>',
+    usage: {}, durationMs: 5
+  });
+  const runId = await newTaskRun(1);
+  await runTaskHealthCheck(runId, { taskDbId: 1, startedBy: null });
+  const { rows: [f] } = await dbModule2.query('SELECT kind, status FROM health_check_findings WHERE run_id=$1', [runId]);
+  expect(f.kind).toBe('proposal');
+  expect(f.status).toBe('pending');
+});
+
 // 意圖：platform 是唯一被認的值。模型很容易順手填 'prompt'／'env'——那兩者在這一關都沒有出口
 // （提示詞不得由單張任務改；環境問題不是改碼能解），放進 proposal 會生出一顆按鈕去派 agent 改碼。
 test('runTaskHealthCheck：layer 填 platform 以外的值一律當沒填，維持 kind=agent', async () => {
@@ -194,9 +209,9 @@ const AUDIT_OK = {
   usage: { input_tokens: 1 }, durationMs: 10
 };
 
-// Phase 7.1：提案通道守門已補齊（DENY 四支＋基線比較＋fix-review），提案改成預設核准，
-// 當晚自動實作；候選訊號（kind=signal）證據不夠、本來就不進修正通道，不受這次改動影響。
-test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／證據／指標，狀態預設核准', async () => {
+// 09-15 R6：提案一律待人工核准（Phase 7.1 曾改成預設核准、當晚自動實作；客戶文字可能經健檢變成
+// 自動合併的平台碼，改回人擋入口）；候選訊號（kind=signal）證據不夠、本來就不進修正通道，不受這次改動影響。
+test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／證據／指標，狀態一律待人工核准', async () => {
   mockRunClaude.mockResolvedValue(AUDIT_OK);
   const runId = await newAuditRun();
   await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
@@ -211,7 +226,7 @@ test('runAudit：落「總結」與「提案」兩種列，提案帶根因層／
   expect(proposal.evidence).toContain('3 張不同任務');
   expect(proposal.target_metric).toBe('qa_rejections.impl_miss');
   expect(proposal.metric_baseline).toBe('15');
-  expect(proposal.status).toBe('approved');
+  expect(proposal.status).toBe('pending');
   // 候選訊號與提案分開存：證據不夠的不該長得像可以動手的，status 不能被欄位 DEFAULT
   // （已改成 approved）連坐——summary／signal 都不是「可核准」的條目。
   expect(rows[0].status).toBe('pending');   // summary
@@ -537,14 +552,15 @@ test('runAudit：layer=env 的提案落 pending，不是 approved（自動修範
   expect(proposal.status).toBe('pending');
 });
 
-test('runAudit：medium 以上且 layer 在自動修範圍（含 platform 別名 code）的提案仍落 approved', async () => {
+// 09-15 R6：以前這一種會自動核准。現在在範圍內也只代表「會開單等人核准」，不能自己變 approved。
+test('runAudit：medium 以上且 layer 在自動修範圍（含 platform 別名 code）的提案也落 pending，不自動核准', async () => {
   mockRunClaude.mockResolvedValue(AUDIT_OK);   // layer='platform', severity 繼承整輪 'medium'
   const runId = await newAuditRun();
   await runAudit(runId, { sinceAt: new Date(Date.now() - 86400000), startedBy: null });
 
   const { rows: [proposal] } = await dbModule2.query(
     "SELECT status FROM health_check_findings WHERE run_id=$1 AND kind='proposal'", [runId]);
-  expect(proposal.status).toBe('approved');
+  expect(proposal.status).toBe('pending');
 });
 
 // --- 失敗原因要留得下來 ---
@@ -582,7 +598,7 @@ test('已退役的逐關診斷歷史列 → 收成 error 並寫明退役，不�
 // 那一頁是唯一的待辦收斂處：使用者提的意見與健檢挖出來的問題最後都要有人決定做不做，
 // 分兩個畫面管等於要記得兩個地方都要看。
 
-test('中等以上的提案 → 意見回饋管理開一筆，預設已核准、提交者留空代表 AI 健檢', async () => {
+test('中等以上的提案 → 意見回饋管理開一筆「待核准」的單、提交者留空代表 AI 健檢', async () => {
   mockRunClaude.mockResolvedValue({
     text: '<result>' + JSON.stringify({ severity: 'medium', proposals: [
       { title: '某個要修的東西', detail: '細節', layer: 'code', action: '這樣改',
@@ -596,7 +612,7 @@ test('中等以上的提案 → 意見回饋管理開一筆，預設已核准、
 
   const { rows: [fb] } = await dbModule2.query(
     "SELECT user_id, status, triage_title, triage_layer, finding_id FROM feedback ORDER BY id DESC LIMIT 1");
-  expect(fb.status).toBe('approved');       // 預設就是核准，不必再按一次
+  expect(fb.status).toBe('new');            // 09-15 R6：等人核准，夜間批次才會撈
   expect(fb.user_id).toBeNull();            // 提交者＝AI 健檢
   expect(fb.triage_title).toBe('某個要修的東西');
   expect(fb.triage_layer).toBe('code');     // 健檢的產出直接當翻譯結果，不再燒一次 triage

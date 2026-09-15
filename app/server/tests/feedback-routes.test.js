@@ -284,3 +284,28 @@ test('未完成的意見照樣刪得掉（對照組，證明上一支是狀態�
 // 所以這個端點的查詢從來沒有在測試裡真的執行過。
 // ⚠ 不要為了讓它可測而改寫那段 SQL：正式環境（真 PG）是好的，改它等於拿正式行為去遷就
 // 測試框架的限制。分頁行為改用真伺服器 curl 驗（2026-09-10 驗過 limit/offset/上限三項）。
+
+// 09-15 R6：健檢提案一律待人工核准，而同一條提案在兩個畫面各有一列（健檢頁的提案＋意見回饋管理的單）。
+// 單核准了、提案還掛 pending，健檢頁的待處理數就在說謊；已經結案的提案不能被這裡翻回 approved。
+test('在意見回饋管理核准健檢開的單，提案那列也跟著核准；已結案的提案不被翻回來', async () => {
+  const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+  const mk = async (findingStatus) => {
+    const { rows: [f] } = await dbModule.query(
+      `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, kind, status)
+       VALUES ($1,'__audit__','標題','診斷','medium','proposal',$2) RETURNING id`, [run.id, findingStatus]);
+    const { rows: [fb] } = await dbModule.query(
+      "INSERT INTO feedback (user_id, content, status, finding_id) VALUES (NULL, '健檢開的單', 'new', $1) RETURNING id", [f.id]);
+    return { findingId: f.id, feedbackId: fb.id };
+  };
+  const pending = await mk('pending');
+  const closed = await mk('no_change');
+  for (const x of [pending, closed]) {
+    const res = await request(app).patch(`/api/admin/feedback/${x.feedbackId}`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ status: 'approved' });
+    expect(res.status).toBe(200);
+  }
+  const statusOf = async (id) => (await dbModule.query('SELECT status, decided_by FROM health_check_findings WHERE id=$1', [id])).rows[0];
+  expect(await statusOf(pending.findingId)).toMatchObject({ status: 'approved' });
+  expect((await statusOf(pending.findingId)).decided_by).not.toBeNull();
+  expect((await statusOf(closed.findingId)).status).toBe('no_change');
+});

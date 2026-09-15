@@ -138,6 +138,32 @@ test('PATCH finding：狀態改成 approved 成功（前端核准鈕依賴的白
   expect(res.body.status).toBe('approved');
 });
 
+// 09-15 R6：健檢提案一律待人工核准。已在意見回饋管理開過單的提案，夜間批次只看那張單
+// （nightly-fix.js 的 fetchHealthCandidates 會排除已開單的提案）——在健檢頁核准卻不帶上單，這條就永遠不會被修，
+// 而畫面寫著「已核准（將自動執行）」。已被拒絕或已完成的單不能被這裡翻回來。
+test('PATCH finding 核准：它在意見回饋管理開的單也跟著核准；已拒絕的單不被翻回來', async () => {
+  const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
+  const mk = async (feedbackStatus) => {
+    const { rows: [f] } = await dbModule.query(
+      `INSERT INTO health_check_findings (run_id, agent_name, diagnosis, severity, kind, status)
+       VALUES ($1,'__audit__','某條提案','medium','proposal','pending') RETURNING id`, [run.id]);
+    const { rows: [fb] } = await dbModule.query(
+      'INSERT INTO feedback (user_id, content, status, finding_id) VALUES (NULL, $1, $2, $3) RETURNING id', ['健檢開的單', feedbackStatus, f.id]);
+    return { findingId: f.id, feedbackId: fb.id };
+  };
+  const open = await mk('new');
+  const rejected = await mk('rejected');
+  for (const x of [open, rejected]) {
+    const res = await request(app).patch('/api/admin/health-check/findings/' + x.findingId)
+      .set('Authorization', `Bearer ${adminToken}`).send({ status: 'approved' });
+    expect(res.status).toBe(200);
+  }
+  const fbOf = async (id) => (await dbModule.query('SELECT status, decided_by FROM feedback WHERE id=$1', [id])).rows[0];
+  expect((await fbOf(open.feedbackId)).status).toBe('approved');
+  expect((await fbOf(open.feedbackId)).decided_by).not.toBeNull();
+  expect((await fbOf(rejected.feedbackId)).status).toBe('rejected');
+});
+
 test('PATCH finding：狀態不合法回 400 / 非 admin 403 / 不存在回 404', async () => {
   const { rows: [run] } = await dbModule.query("INSERT INTO health_check_runs (status) VALUES ('done') RETURNING id");
   const { rows: [f] } = await dbModule.query(

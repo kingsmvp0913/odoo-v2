@@ -1,7 +1,8 @@
 // 意圖：提案指名的檔案全在 finding-fix.js 的 DENY／可修改範圍外時，結構上不可能通過最後那道逐檔檢查。
 // 這種提案若照樣落 approved，platform-fix 會跑完整輪（平均 454 秒、約 $2）才被整份作廢，
 // 下次健檢又重提一次。入口就要攔下：落 pending、寫明「只能人工修」、不開意見回饋單。
-// 反過來，只要有一支可以動（或根本沒指名檔案），必須維持原本的自動核准——攔過頭等於把自動修關掉。
+// 反過來，只要有一支可以動（或根本沒指名檔案），必須照常開單等人核准——攔過頭等於連人工核准的入口都沒有。
+// （09-15 R6 起提案一律 pending，這裡分辨兩種 pending：有沒有寫「只能人工修」、有沒有開單。）
 const { newDb } = require('pg-mem');
 const mockRunClaude = jest.fn();
 jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
@@ -57,20 +58,21 @@ test('指名的檔案全在 DENY 內（只寫檔名＋行號也認得）→ 落 
   expect(f.feedbackCount).toBe(0);                                        // 不開單＝夜間批次撈不到
 });
 
-test('指名的檔案有一支可以動 → 維持 approved 並開單（入口判斷只在「全部擋死」時介入）', async () => {
+test('指名的檔案有一支可以動 → 照常開單等人核准（入口判斷只在「全部擋死」時介入）', async () => {
   const f = await auditWith({
     title: '入口沒檢查 DENY',
     detail: '`finding-fix.js:49` 的清單是對的，問題在 `health-check-runner.js:190` 沒比對。',
     action: '在 health-check-runner.js 的 insertFinding 比對。'
   });
-  expect(f.status).toBe('approved');
+  expect(f.status).toBe('pending');
   expect(f.verdict_note).toBeNull();
   expect(f.feedbackCount).toBe(1);
 });
 
-test('完全沒指名檔案 → 維持原本的 approved（認不出來不能當成擋死）', async () => {
+test('完全沒指名檔案 → 照常開單等人核准（認不出來不能當成擋死）', async () => {
   const f = await auditWith({ title: '退回顆粒度不足', detail: '退回沒有欄位可判斷是否精準', action: '加一個退回原因欄位' });
-  expect(f.status).toBe('approved');
+  expect(f.status).toBe('pending');
+  expect(f.verdict_note).toBeNull();
   expect(f.feedbackCount).toBe(1);
 });
 

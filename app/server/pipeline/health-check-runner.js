@@ -71,9 +71,9 @@ async function failRun(runId, reason) {
 // 這個取捨；而依判準，單張任務的證據本來就不得產生提示詞改動（一張任務走過七關會在七處各出現
 // 一次，用次數算會把一件事誤算成七個獨立證據），深診那半段在這裡沒有出口。
 async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
-  // status 依 kind 明確帶值、不吃欄位 DEFAULT：kind='agent'（一般診斷）維持 pending；
-  // kind='proposal'（挖到平台 bug，見下方 layer==='platform' 分支）比照 runAudit 走 approved，
-  // 兩者是同一個「提案通道」概念，不該因為來源是單張任務診斷就少了自動核准。
+  // status 明確帶值、不吃欄位 DEFAULT（DEFAULT 是 approved）。kind='agent'（一般診斷）與
+  // kind='proposal'（挖到平台 bug，見下方 layer==='platform' 分支）一律 pending：09-15 R6 起提案要
+  // 平台管理員核准才進夜間批次，比照 runAudit——任務資料裡是客戶寫的文字（產品化規格總覽 §6.3）。
   const insert =
     `INSERT INTO health_check_findings (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale, kind, layer, status)
      VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9)`;
@@ -130,7 +130,7 @@ async function runTaskHealthCheck(runId, { taskDbId, startedBy = null } = {}) {
     // 走獨立出口」。原本這裡一律落 kind='agent'，等於連那條出口一起堵死：任務健檢挖到平台 bug 也
     // 只能寫成一段字給人自己去改（task 184 的 QA 拿舊規格審查即是一例）。
     const kind = finding.layer === 'platform' ? 'proposal' : 'agent';
-    const status = kind === 'proposal' ? 'approved' : 'pending';
+    const status = 'pending';
     await query(insert, [runId, TASK_AGENT, TASK_LABEL, finding.diagnosis, finding.severity, finding.rationale, kind, finding.layer, status]);
     await query("UPDATE health_check_runs SET status='done', finished_at=NOW() WHERE id=$1", [runId]);
   } catch (err) {
@@ -235,6 +235,11 @@ async function insertFinding(runId, row) {
   // 而 open_count（admin-routes.js）只算 status='pending'，這些提案又會從待處理清單裡消失，
   // 三邊互相矛盾。规格 §255／§257 明寫「low／ok 與超出自動範圍的都留在管理頁給人決定」——
   // 落 pending 才是誠實的初始狀態，人要核准仍可以核准（核准後才變 approved，屆時才真的會被撈）。
+  //
+  // ⚠ 09-15 R6：提案一律落 pending，平台管理員核准才進夜間批次。客戶寫的文字能經健檢 AI 變成提案，
+  // 再經 platform-fix 變成自動合併、在容器外執行的平台碼（產品化規格總覽 §6.3）——人擋在入口，出口照舊自動合併。
+  // 上面兩段分岔因此不再決定 approved／pending，只決定「要不要在意見回饋管理開一張等人核准的單」：
+  // 超出自動修範圍、或指名的檔案全部擋死的，開了單核准也修不了，只留在健檢頁。
   let auto = row.kind === 'proposal' && inAutoFixScope(row.layer || null, row.severity || null);
   // 指名的檔案全都過不了 finding-fix.js 的逐檔檢查（DENY／超出可修改範圍）時，核准它只會讓
   // platform-fix 跑完整輪、最後被整份作廢，下次健檢又提一次。改落 pending 並寫明原因——
@@ -248,7 +253,7 @@ async function insertFinding(runId, row) {
       `提案指名的檔案（${blocked.join('、')}）全在自動修正不准動的範圍內，自動修到最後一定整份作廢，只能人工修。`;
     console.warn('[HEALTH-CHECK] 提案指名的檔案全在自動修正範圍外，改落 pending：', row.label || '(無標題)');
   }
-  const status = auto ? 'approved' : 'pending';
+  const status = 'pending';
   const { rows: [f] } = await query(
     `INSERT INTO health_check_findings
        (run_id, agent_name, agent_label, diagnosis, severity, suggested_prompt, rationale,
@@ -261,7 +266,7 @@ async function insertFinding(runId, row) {
   if (auto) await openFeedbackForFinding(f.id, row);
 }
 
-// 中等以上的提案同時在「意見回饋管理」開一筆，預設已核准。那一頁是唯一的待辦收斂處：使用者提的
+// 中等以上的提案同時在「意見回饋管理」開一筆，狀態 new＝等人核准（09-15 R6；以前預設已核准）。那一頁是唯一的待辦收斂處：使用者提的
 // 意見與健檢挖出來的問題最後都要有人決定做不做，分兩個畫面管等於要記得兩個地方都要看。
 //
 // user_id 留 NULL＝提交者是 AI 健檢（前端據此顯示，見 AdminFeedback.js）。
@@ -281,7 +286,7 @@ async function openFeedbackForFinding(findingId, row) {
     await query(
       `INSERT INTO feedback (user_id, content, status, triage_title, triage_detail, triage_layer,
                              triage_action, finding_id)
-       VALUES (NULL, $1, 'approved', $2, $3, $4, $5, $6)`,
+       VALUES (NULL, $1, 'new', $2, $3, $4, $5, $6)`,
       [row.diagnosis, row.label || '系統健檢', row.diagnosis, row.layer || null,
        row.rationale || null, findingId]
     );
