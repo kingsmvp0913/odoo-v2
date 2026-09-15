@@ -237,4 +237,4 @@ function isImageBuffer(buf) {
   return /^image\//.test(sniffFile(buf).mime);
 }
 
-module.exports = { uploadRoot, taskDir, saveAttachmentFile, saveChatAttachmentFile, deleteTaskDir, deleteChatDir, saveFeedbackAttachmentFile, deleteFeedbackDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles, uploadChatImages, uploadChatFiles, isImageBuffer, isTextBuffer, resolveChatFile, CHAT_TEXT_MIMES, CHAT_BINARY_EXTS, CHAT_ACCEPT_EXTS, CHAT_ACCEPT, CHAT_FILE_MAX };
+module.exports = { uploadRoot, safeSeg, taskDir, saveAttachmentFile, saveChatAttachmentFile, deleteTaskDir, deleteChatDir, saveFeedbackAttachmentFile, deleteFeedbackDir, deleteAttachmentFile, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles, uploadChatImages, uploadChatFiles, isImageBuffer, isTextBuffer, resolveChatFile, CHAT_TEXT_MIMES, CHAT_BINARY_EXTS, CHAT_ACCEPT_EXTS, CHAT_ACCEPT, CHAT_FILE_MAX };

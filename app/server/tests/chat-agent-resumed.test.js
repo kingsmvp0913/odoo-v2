@@ -12,6 +12,10 @@ jest.mock('../lib/odoo-core-src', () => ({
 }));
 const mockQuery = jest.fn();
 jest.mock('../db', () => ({ query: (...a) => mockQuery(...a) }));
+// chatReply 每輪會看一次出貨箱（uploadRoot/chat_<id>/ai）：導到暫存目錄，免得動到真的 app/uploads
+const tmpUploadRoot = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'aidev-chat-resumed-'));
+process.env.UPLOAD_DIR = tmpUploadRoot;
+afterAll(() => { delete process.env.UPLOAD_DIR; require('fs').rmSync(tmpUploadRoot, { recursive: true, force: true }); });
 
 const { logTokenUsage, logFailedUsage } = require('../pipeline/token-logger');
 const { chatReply } = require('../pipeline/chat-agent');

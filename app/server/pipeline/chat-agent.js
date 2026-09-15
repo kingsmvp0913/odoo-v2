@@ -8,6 +8,7 @@ const { query } = require('../db');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const path = require('path');
 const { uploadRoot } = require('../lib/attachments');
+const { chatAiOutbox, quarantineStaleOutbox, collectChatAiFiles } = require('../lib/chat-ai-files');
 
 // 對話回覆在產生途中中斷（claude-runner 出錯，或 server 進程崩潰/重啟）時，AI 方補寫的訊息。
 // role='ai' → 自動計入未讀徽章；讓懸著的提問至少有明確收尾與「請重試」的指引。
@@ -40,6 +41,20 @@ function chatAttachmentNote(attachments) {
     (hints.length
       ? '\n\n【這幾個檔 Read 開不了，照下面讀】\n' + hints.map(h => `- ${h.text}`).join('\n')
       : '');
+}
+
+// 把 AI 這輪放進出貨箱的檔掛到剛寫入的那則 AI 訊息，回傳要接在回覆尾端的提示（沒事則空字串）。
+// 永不往外拋：附件出事不能讓對話回覆本身失敗；但也不能安靜——沒附上的檔與整體失敗都寫進回覆。
+async function attachAiFiles(chatId, messageId) {
+  if (!messageId) return '';
+  try {
+    const { rejected } = await collectChatAiFiles(chatId, messageId);
+    if (!rejected.length) return '';
+    return '\n\n⚠ 以下檔案沒有附上：\n' + rejected.map(r => `- ${r.filename}：${r.reason}`).join('\n');
+  } catch (err) {
+    console.error(`[CHAT-AGENT] AI 檔案附加失敗 chat ${chatId}:`, err.message);
+    return `\n\n⚠ 檔案附加失敗：${err.message}`;
+  }
 }
 
 async function chatReply(projectId, chatId, userMessage, userId, attachments = [], signal = undefined) {
@@ -110,6 +125,8 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
       odoo_core_src: coreSourceGuidance(info && info.odoo_version, info && info.enterprise_src),
       // 空字串＝沒指定，那一行就整個不出現（placeholder 少傳會靜默渲染成空，這裡是刻意的空）
       data_source_hint: dataSourceHint ? '\n' + dataSourceHint : '',
+      // 同一場對話路徑固定，只放 fresh prompt 就夠：續接輪的 session 裡已經有這一行
+      chat_files_dir: chatAiOutbox(chatId),
       history: historyText ? '\n\n[對話歷史]\n' + historyText : '',
       user_message: promptMessage,
       project_notes: projectNotes || ''
@@ -128,6 +145,11 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
   // 標記「回覆進行中」：前端據此顯示持續動畫（離開對話再回來也還在，因為是 server 狀態而非本地 state）。
   // 清除一律走下方 finally，確保成功／失敗／任何 throw 都不會留下卡住的 pending。
   await query('UPDATE project_chats SET reply_pending = true WHERE id = $1', [chatId]);
+  // 出貨箱的殘留是上一輪行程在收貨前就死掉留下的，不隔離會被這輪回覆誤收成自己的附件。
+  try {
+    const n = quarantineStaleOutbox(chatId);
+    if (n) console.error(`[CHAT-AGENT] chat ${chatId} 出貨箱有 ${n} 個上一輪殘留，已隔離到 _stale_*`);
+  } catch (err) { console.error(`[CHAT-AGENT] chat ${chatId} 出貨箱殘留隔離失敗:`, err.message); }
 
   try {
     let chatResult;
@@ -165,10 +187,17 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
       await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
       // 中斷也要讓 AI 方留一則訊息（role='ai' 自動計入未讀）：否則使用者的提問就這樣懸著、
       // 既無回覆也無任何線索。process 直接崩潰的情形由啟動時 recoverInterruptedChats 兜底。
-      await query(
-        'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
-        [chatId, 'ai', signal && signal.aborted ? CHAT_STOPPED_MSG : CHAT_INTERRUPTED_MSG]
+      const stopMsg = signal && signal.aborted ? CHAT_STOPPED_MSG : CHAT_INTERRUPTED_MSG;
+      const { rows: [stopRow] } = await query(
+        'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3) RETURNING id',
+        [chatId, 'ai', stopMsg]
       );
+      // 被砍之前可能已經做好檔了：掛在收尾訊息上，別讓它們留到下一輪被當殘留隔離掉。
+      // 這裡的任何失敗都不得蓋掉原本要拋的 err。
+      try {
+        const note = await attachAiFiles(chatId, stopRow && stopRow.id);
+        if (note) await query('UPDATE project_chat_messages SET content = $2 WHERE id = $1', [stopRow.id, stopMsg + note]);
+      } catch (e) { console.error(`[CHAT-AGENT] 中斷收尾的檔案附加失敗 chat ${chatId}:`, e.message); }
       throw err;
     }
     await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs, 'completed', chatResult.resumed);
@@ -188,10 +217,16 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
       catch (err) { console.error(`[CHAT-AGENT] wiki-drift 入列失敗 chat ${chatId}:`, err.message); }
     }
 
-    await query(
-      'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3)',
+    const { rows: [aiRow] } = await query(
+      'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3) RETURNING id',
       [chatId, 'ai', reply]
     );
+    // 附件要掛 message_id，所以只能在訊息寫入之後收貨；有沒附上的檔時回頭補寫提示到同一則
+    const filesNote = await attachAiFiles(chatId, aiRow && aiRow.id);
+    if (filesNote) {
+      await query('UPDATE project_chat_messages SET content = $2 WHERE id = $1', [aiRow.id, reply + filesNote]);
+      return reply + filesNote;
+    }
 
     return reply;
   } finally {

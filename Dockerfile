@@ -15,7 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxml2-utils iproute2 \
         postgresql postgresql-contrib \
         openssh-client \
+        fonts-arphic-uming fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
+# 對話 AI 產出 PDF／圖表（chatFiles skill）的中文字型，兩套各管一種，實測過不能互換：
+#  - fonts-arphic-uming：給 reportlab 嵌進 PDF。reportlab 只能嵌 TrueType 輪廓，Noto CJK 是 CFF 嵌不進去；
+#    不嵌入的 PDF 在沒裝字型的閱讀器上中文整片空白。
+#  - fonts-noto-cjk：給 matplotlib 畫圖表。用 UMing 畫的圖標題與座標文字全部不見。
+# 原本容器裡的 ~/.local/share/fonts 是手動放的、不在 image 也不在 volume，重建就沒了。
 
 # Node.js 20 LTS（與 install.sh 同一來源）。
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -91,5 +97,9 @@ RUN python3 -m pip install --user --break-system-packages graphifyy
 # ⚠ 前兩個目前是 graphifyy 順帶拉進來的相依，靠那條線等於「哪天 graphifyy 換相依就靜默失效」——
 # 症狀會是 agent 說它讀不到那個 Excel，而平台完全沒有告警。所以在這裡明確再裝一次。
 RUN python3 -m pip install --user --break-system-packages openpyxl python-docx xlrd
+
+# 對話 AI 產出下載檔（chatFiles skill）：reportlab 做 PDF（中文用內建 CID 字型，不需字型檔）、
+# matplotlib 畫圖表。openpyxl／python-docx 上面那行已裝，產出 .xlsx／.docx 共用。
+RUN python3 -m pip install --user --break-system-packages reportlab matplotlib
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
