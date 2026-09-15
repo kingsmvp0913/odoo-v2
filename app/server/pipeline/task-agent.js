@@ -359,7 +359,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
         // 逾時不在同輪重跑：同一份輸入再跑一次極可能再逾時，只是讓使用者多等一輪（比照 qa-agent.js:120）
         if (err.claudeStatus === 'timeout') throw err;
         // 其餘：記帳後這輪改跑 fresh，使用者仍拿得到規格
-        await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
+        await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err, true);
         await query(
           "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
           [taskId, `[分析] 續接上一輪分析失敗（${String(err.message).slice(0, 120)}），改以完整規格重跑`]
@@ -380,7 +380,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
     // resume 輪回不出 sessionId 時退回舊值（CLI 偶爾不吐；此時對話仍延續在同一條 session 上），
     // 否則會把還活著的 session 清成 NULL、下一輪白白重讀整包 code。fresh 輪維持直接指派，理由見下方 UPDATE。
     analysisSessionId = analysisResult.sessionId || (resumed ? task.analysis_session_id : null);
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs);
+    // resumed 只在續接那次 runClaude 成功之後才設 true，降級 fresh 的這一列因此是 false。
+    // coding／respec-patch 刻意不傳：它們每輪都 fresh、沒有續接概念，照欄位定義留 NULL（見 token-logger.js）。
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', analysisResult.usage, analysisResult.durationMs, 'completed', resumed);
   } catch (err) {
     await logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, userId, 'analysis', err);
     if (err.aborted) return true; // 手動暫停：非失敗，狀態原地不動，不列入 blocker，解除暫停後從這一關重跑

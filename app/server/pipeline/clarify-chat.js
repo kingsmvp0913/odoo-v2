@@ -197,12 +197,12 @@ async function runClarifyChat(taskArg, userId, signal, mode) {
         new_message: lastU ? lastU.content : '（無新發言）',
         attachments
       }).trim(),
-      onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err),
+      onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err, true),
       model: agent.model,
       runOpts: { cwd: work ? work.cwd : undefined, taskId, userId, signal, agentType: 'respec' }
     });
     raw = result.raw ?? result.text;
-    await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
+    await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs, 'completed', result.resumed);
   } catch (err) {
     await logFailedUsage(ref, userId, 'respec', err);
     if (err.aborted) return; // 手動暫停：狀態原地不動

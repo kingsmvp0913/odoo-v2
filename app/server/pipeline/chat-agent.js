@@ -159,7 +159,7 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
         // signal 讓使用者按得動「停止回覆」：claude-runner 收到 abort 會直接砍掉行程，
         // 沒有它的話停止鈕只能關掉前端動畫、agent 照跑照燒 token。
         runOpts: { agentType: 'chat', provider: agent.provider, effort: agent.effort, signal },
-        onRetryFailed: (err) => logFailedUsage({ projectId, chatId }, userId, 'chat', err)
+        onRetryFailed: (err) => logFailedUsage({ projectId, chatId }, userId, 'chat', err, true)
       });
     } catch (err) {
       await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
@@ -171,7 +171,7 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
       );
       throw err;
     }
-    await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs);
+    await logTokenUsage({ projectId, chatId }, userId, 'chat', chatResult.usage, chatResult.durationMs, 'completed', chatResult.resumed);
 
     // 兩個選用側通道，剝掉再顯示、內容各自旁路處理，解析或寫入失敗都不得影響對話回覆本身（Rule 12）：
     //  <memory>    釐清出可留存的結論 → 寫回 wiki 疑難排解區

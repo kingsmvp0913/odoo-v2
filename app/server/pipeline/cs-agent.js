@@ -94,7 +94,7 @@ async function runCsAgent(taskId, userId, signal) {
   let rawText = '';
   let blockerMsg = 'CS agent 回應無法解析為有效 JSON';
   try {
-    const { raw, text, usage, durationMs } = await withResume({
+    const { raw, text, usage, durationMs, resumed } = await withResume({
       freshAgentName: 'cs',
       retryAgentName: 'cs-retry',
       getSession: async () => {
@@ -111,7 +111,7 @@ async function runCsAgent(taskId, userId, signal) {
       }).trim(),
       // retry 失敗會靜默降級跑 fresh，使用者照樣拿到回覆——但失敗那次的 token／時間必須記帳，
       // 否則「失敗重跑」這個最貴的情境在 token_usage 裡完全隱形（比照 spec-review.js）
-      onRetryFailed: err => logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err),
+      onRetryFailed: err => logFailedUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', err, true),
       extraVersion: ctxVersion,
       model: agent.model,
       runOpts: { signal, taskId, userId, agentType: 'cs' }
@@ -119,7 +119,7 @@ async function runCsAgent(taskId, userId, signal) {
     // cs 會實地查證、有時把 <result> 當中間步驟吐出後又補收尾散文／派子任務，末輪 ev.result（text）就不含契約標籤。
     // runner 的 raw 就是「整段 assistant transcript，空的才退回 text」，讓 extractResult 撈得回最後一組 <result>。
     rawText = (raw ?? text) || '';
-    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs);
+    await logTokenUsage({ taskId: task.task_id, projectId: task.project_id }, task.user_id, 'cs', usage, durationMs, 'completed', resumed);
     result = await parseAgentResult(rawText, { parse: JSON.parse, signal, ref: { taskId: task.task_id, projectId: task.project_id }, userId: task.user_id });
   } catch (err) {
     // CLI/API 執行失敗與「回應無法解析」是不同問題，分開歸因（健檢流程層 P3）

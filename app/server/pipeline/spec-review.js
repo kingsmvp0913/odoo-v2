@@ -114,12 +114,12 @@ async function runSpecReview(task, userId, signal) {
       }).trim(),
       // retry 失敗會靜默降級跑 fresh，使用者照樣拿到回覆——但失敗那次的 token／時間必須記帳，
       // 否則「失敗重跑」這個最貴的情境在 token_usage 裡完全隱形（健檢 U12；qa-agent.js:117-120 同款）
-      onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err),
+      onRetryFailed: err => logFailedUsage(ref, userId, 'respec', err, true),
       model: agent.model,
       runOpts: { cwd: work ? work.cwd : undefined, taskId, userId, signal, agentType: 'respec' }
     });
     raw = result.raw ?? result.text;
-    await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs);
+    await logTokenUsage(ref, userId, 'respec', result.usage, result.durationMs, 'completed', result.resumed);
   } catch (err) {
     await logFailedUsage(ref, userId, 'respec', err);
     if (err.aborted) return; // 手動暫停：狀態原地不動，解除後從 respec_running 重跑

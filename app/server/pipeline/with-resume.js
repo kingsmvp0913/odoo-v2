@@ -14,6 +14,9 @@ function combinedVersion(freshAgentName, retryAgentName) {
   return `${promptVersion(freshAgentName)}.${promptVersion(retryAgentName)}`;
 }
 
+// 回傳值＝runAgent 的結果多一個 resumed：這一輪的回覆來自續接（true）還是 fresh（false，含續接失敗後降級）。
+// 呼叫端照寫進 token_usage.resumed。降級那次的失敗列由呼叫端在 onRetryFailed 標 true——
+// 「失敗列 true＋緊接的成功列 false」這一對，就是帳面上唯一認得出「最貴的降級重讀」的形狀。
 // 三個 callback（setSession／clearSession／onRetryFailed）皆可回傳 promise 或純值——
 // 呼叫端測試常用 jest.fn() 回傳 undefined，直接 .catch 會因非 thenable 丟 TypeError，
 // 逃出這裡的 catch 區塊，毀掉「retry 失敗必定靜默降級」的保證。一律先 Promise.resolve() 包一層。
@@ -34,7 +37,7 @@ async function withResume(opts) {
     try {
       const result = await runAgent(renderRetry(), { ...runOpts, resumeSessionId: sess.sessionId, model });
       if (result.sessionId) await Promise.resolve(setSession({ sessionId: result.sessionId, promptVer: ver })).catch(() => {});
-      return result;
+      return { ...result, resumed: true };
     } catch (err) {
       // 手動暫停：狀態原地不動、session 留著供解除後續用（比照 qa-agent.js:110）
       if (err && err.aborted) throw err;
@@ -51,7 +54,7 @@ async function withResume(opts) {
   // renderFresh 可回 promise：呼叫端常把「只有 fresh 才需要」的查詢與 render 延後到這裡才做
   const result = await runAgent(await renderFresh(), { ...runOpts, model });
   if (result.sessionId) await Promise.resolve(setSession({ sessionId: result.sessionId, promptVer: ver })).catch(() => {});
-  return result;
+  return { ...result, resumed: false };
 }
 
 module.exports = { withResume };

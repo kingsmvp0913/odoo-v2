@@ -49,12 +49,13 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
 // 失敗路徑專用（best-effort）：runClaude 會在 err 標注 claudeStatus 與 durationMs。
 // err.message 一定要跟著落庫：這些呼叫點有一半傳 taskId=null（health-check-runner／fix-review／
 // fix-verify／chat 相關），連 task_events 都沒有對應紀錄，訊息丟掉就只剩 duration 可以反推成因。
-function logFailedUsage(ref, userId, agentType, err) {
+// resumed：只有「續接失敗、接著降級 fresh」那一列傳 true（見 with-resume.js）；其餘失敗路徑不傳，照舊 NULL。
+function logFailedUsage(ref, userId, agentType, err, resumed = null) {
   return logTokenUsage(
     ref, userId, agentType, null,
     err?.durationMs || null,
     err?.claudeStatus || 'error',
-    null,
+    resumed,
     err?.message || (err ? String(err) : null)
   );
 }
