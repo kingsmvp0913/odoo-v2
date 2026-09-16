@@ -67,6 +67,8 @@ function classifyFailure(text, opts = {}) {
   if (opts.claudeStatus === 'timeout') return 'unknown';
   // runner 已認定認證失效：權威訊號，不必再靠訊息字面（訊息可能已被改寫或截斷）
   if (opts.claudeStatus === 'auth') return 'transient';
+  // 容器超過記憶體上限被砍（子專案 0 §6）：要調上限，不是程式問題，也不該自動重試
+  if (opts.claudeStatus === 'oom') return 'env';
   // 先 transient（最該優先自動重試）、再 env（別怪 coding）、最後 code
   if (matchAny(TRANSIENT, s)) return 'transient';
   if (matchAny(ENV, s)) return 'env';
