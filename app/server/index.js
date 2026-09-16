@@ -329,6 +329,13 @@ if (require.main === module) {
         console.log(`[STARTUP] 中斷升級清理：重啟 ${s.restarted}／略過 ${s.skipped}／失敗 ${s.failed}／超預算 ${s.overBudget}`);
       }
     } catch (e) { console.error('[STARTUP] 中斷升級清理:', e.message); }
+    // 子專案 0：被重啟打斷的 AI 容器不會跟著死（不像子行程），不清的話會繼續燒錢、
+    // 與 cron 重派的同一關並寫同一個 worktree。必須在 startCron() 之前。
+    // 取不到實例 id 時一個都不刪（見 lib/agent-orphans.js）。
+    try {
+      const o = await require('./lib/agent-orphans').removeOrphanAgentContainers();
+      if (o.removed || o.skipped) console.log(`[STARTUP] AI 孤兒容器：清掉 ${o.removed}${o.skipped ? `（略過：${o.skipped}）` : ''}`);
+    } catch (e) { console.error('[STARTUP] AI 孤兒容器清理:', e.message); }
     // 維護旗標可能卡在上次沒收乾淨的狀態（批次拋錯／被 kill）。開機清一次是第三道保險。
     try { await require('./pipeline/maintenance').leaveMaintenance(); }
     catch (e) { console.error('[STARTUP] 清維護旗標:', e.message); }
