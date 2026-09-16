@@ -55,3 +55,42 @@ test('none scope（分類器類）查不到 → 403', async () => {
   const res = await request(app).get('/ai/glossary?version=19&q=order').set(AI_TOKEN_HEADER, tok('none'));
   expect(res.status).toBe(403);
 });
+
+describe('/ai/platform/query', () => {
+  const routes = require('../ai-platform-routes');
+  let lastSql;
+  beforeAll(() => {
+    routes._setReadonlyRunnerForTesting(async (sql) => {
+      lastSql = sql;
+      if (/password_hash/.test(sql)) throw new Error('permission denied for table users');
+      return { columns: ['n'], rows: [{ n: 3 }], row_count: 1, truncated: false };
+    });
+  });
+  afterAll(() => routes._setReadonlyRunnerForTesting(null));
+
+  test('internal-audit 可查', async () => {
+    const res = await request(app).post('/ai/platform/query').set(AI_TOKEN_HEADER, tok('internal-audit')).send({ sql: 'SELECT COUNT(*) n FROM tasks' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, columns: ['n'], rows: [{ n: 3 }], row_count: 1, truncated: false });
+    expect(lastSql).toBe('SELECT COUNT(*) n FROM tasks');
+  });
+
+  test.each([['project-3', 3], ['internal-fix', null], ['none', null]])('%s → 403（R6-A）', async (scope, pid) => {
+    lastSql = undefined;
+    const res = await request(app).post('/ai/platform/query').set(AI_TOKEN_HEADER, tok(scope, pid)).send({ sql: 'SELECT 1' });
+    expect(res.status).toBe(403);
+    expect(lastSql).toBeUndefined();
+  });
+
+  test('非唯讀語句 → 400，不送進 DB', async () => {
+    lastSql = undefined;
+    const res = await request(app).post('/ai/platform/query').set(AI_TOKEN_HEADER, tok('internal-audit')).send({ sql: 'UPDATE users SET role=1' });
+    expect(res.status).toBe(400);
+    expect(lastSql).toBeUndefined();
+  });
+
+  test('權限不足的錯誤原樣回給 agent（它才知道那欄不能讀）', async () => {
+    const res = await request(app).post('/ai/platform/query').set(AI_TOKEN_HEADER, tok('internal-audit')).send({ sql: 'SELECT password_hash FROM users' });
+    expect(res.body).toEqual({ ok: false, error: expect.stringMatching(/permission denied/) });
+  });
+});

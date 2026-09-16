@@ -346,6 +346,12 @@ if (require.main === module) {
       await startAiSocketServer(aiSocketPath());
       console.log(`[AI-SOCKET] listening ${aiSocketPath()}`);
     } catch (e) { console.error('[AI-SOCKET] 啟動失敗：', e.message); }
+    // /ai/platform/query 的唯讀帳號：每次啟動依現有欄位重新授權（新欄位自動套遮蔽規則）。
+    // 失敗只記 log：端點會在查詢時回連線／權限錯誤，健檢 agent 看得到；不因此擋住整個平台啟動。
+    try {
+      const r = await require('./lib/platform-readonly').ensureReadonlyRole();
+      console.log(`[AI-READONLY] 已授權 ${r.tables} 張表，遮蔽 ${r.denied.length} 個欄位：${r.denied.join(', ')}`);
+    } catch (e) { console.error('[AI-READONLY] 建立唯讀角色失敗：', e.message); }
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
     require('./notify-webhook').registerWebhookChannel();
     // 綁埠失敗必須讓行程結束，且 cron 只在綁到埠之後才起。
