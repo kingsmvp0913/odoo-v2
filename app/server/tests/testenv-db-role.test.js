@@ -112,6 +112,18 @@ describe('ensureTestEnvDbRole（假 PG client 記錄 SQL；odoo_envs 用 pg-mem�
     expect(s.some((x) => /\bSUPERUSER\b/.test(x.replace(/NOSUPERUSER/g, '')))).toBe(false);
   });
 
+  // 意圖：Odoo 非連維護庫 postgres 不可——映像 entrypoint 的 wait-for-psql.py 先連它（連不到直接 exit 1，
+  // 容器只吐一行 Database connection failure 就死），之後 bus 的 imbus LISTEN 與 ir_cron 喚醒 worker
+  // 也都走 db_connect('postgres')。2026-09-16 實測：只撤 PUBLIC 而沒補這道 GRANT，測試區永遠建不起來。
+  // 只補 postgres 一個庫——aidev 與別家 test_* 仍然連不進去，隔離不因此打折。
+  test('補 postgres 維護庫的 CONNECT：撤掉 PUBLIC 之後角色仍連得進 postgres，且只有 postgres', async () => {
+    const pg = fakePg();
+    await role.ensureTestEnvDbRole({ projectId: PID, dbName: 'test_liSheng', createClient: pg.createClient });
+    expect(pg.sqls().filter((x) => /^GRANT CONNECT/.test(x))).toEqual([
+      'GRANT CONNECT ON DATABASE "postgres" TO "testenv_p18"',
+    ]);
+  });
+
   test('既有 DB 擁有者還是平台帳號：ALTER DATABASE OWNER，不重建 DB', async () => {
     const pg = fakePg({ roleExists: false, dbOwner: 'odoo' });
     await role.ensureTestEnvDbRole({ projectId: PID, dbName: 'test_liSheng', createClient: pg.createClient });

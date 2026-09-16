@@ -110,6 +110,11 @@ async function ensureTestEnvDbRole({ projectId, dbName, createClient = defaultCr
       await admin.query(`ALTER DATABASE ${quoteIdent(dbName)} OWNER TO ${quoteIdent(role)}`);
     }
     await admin.query(`REVOKE CONNECT ON DATABASE ${quoteIdent(dbName)} FROM PUBLIC`);
+    // Odoo 非連維護庫 postgres 不可：映像 entrypoint 的 wait-for-psql.py 先連它（連不到就 exit 1，
+    // 容器只吐一行 Database connection failure 就死），之後 bus 的 imbus LISTEN 與 ir_cron 喚醒 worker
+    // 也都走 db_connect('postgres')。只給這個角色、不放回 PUBLIC——postgres 庫裡沒有業務資料，
+    // 看得到的只有共用目錄（DB 名單、角色名）；aidev 與別家 test_* 仍然連不進去。
+    await admin.query(`GRANT CONNECT ON DATABASE "postgres" TO ${quoteIdent(role)}`);
   } finally {
     await admin.end().catch(() => {});
   }
