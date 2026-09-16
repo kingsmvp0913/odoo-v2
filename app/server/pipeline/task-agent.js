@@ -344,7 +344,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
       try {
         analysisResult = await runClaude(retryPrompt, {
           cwd: wtParent, taskId, userId, signal,
-          resumeSessionId: task.analysis_session_id, model: retryAgent.model, agentType: 'analysis'
+          resumeSessionId: task.analysis_session_id, model: retryAgent.model, agentType: 'analysis', logSessionMissing: false
         });
         resumed = true;
         await query('UPDATE tasks SET analysis_resume_count = COALESCE(analysis_resume_count,0) + 1 WHERE id=$1', [taskId]).catch(() => {});
@@ -583,7 +583,9 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   // 裡連一列都沒有，報表上等於沒發生過（比照 analysis／cs 的 logFailedUsage 慣例）。
   const runOpts = {
     cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour',
-    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: { ...gitEnv }
+    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: { ...gitEnv },
+    // analysis／spec_tour 的續接失敗自己會寫 task_logs（計畫 X4），不要讓 runner 再寫一行
+    logSessionMissing: false
   };
   let res;
   try {

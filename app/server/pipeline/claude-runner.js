@@ -5,6 +5,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { looksLikeAuthFailure } = require('./auth-signature');
+const { missingSessionReason } = require('./session-signature');
 const { getClaudeAuthEnv } = require('../lib/claude-auth');
 const { getContext7ApiKey } = require('../lib/context7-auth');
 const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
@@ -222,6 +223,8 @@ function runClaude(prompt, opts = {}) {
     // 「exited with code 1」——實測 2026-09-04 feedback_triage 連 5 次全掛（每次 1.5 秒），
     // 真因至今查不出來，因為那幾行早就沒了（該關 taskId=null，連 task_events 都沒落地）。
     let errorResult = null;
+    // 非 JSON 的 stdout 行（CLI 自己印的訊息）：辨識 session 遺失要用，最多留 4000 字
+    let plainOut = '';
     let settled = false;
     let timer = null;
     const startedAt = Date.now();
@@ -299,6 +302,7 @@ function runClaude(prompt, opts = {}) {
             }
           }
         } catch {
+          if (plainOut.length < 4000) plainOut += `${line}\n`;
           if (!authReason && looksLikeAuthFailure(line)) authReason = line.slice(0, 200);
           emit(line + '\n');
         }
@@ -334,7 +338,17 @@ function runClaude(prompt, opts = {}) {
           // 認證失效優先歸因：否則只剩泛用「exited with code 1」，blocker 看不出真因、
           // 分類器也判不出（→ 停等人工）。標 claudeStatus='auth' 供分類器歸 transient 自癒。
           const auth = authReason || (looksLikeAuthFailure(raw) ? raw.slice(0, 200) : null);
+          const missing = resumeSessionId ? missingSessionReason(`${stderr}\n${errorResult || ''}\n${plainOut}`) : null;
           if (auth) reject(fail(new Error(`Claude CLI 未登入或認證失效：${auth}`), 'auth'));
+          else if (missing) {
+            // 續接的 session 不在（換到容器後 HOME 不同、或 CLI 清掉舊檔）。呼叫端本來就會降級 fresh；
+            // 這裡只負責把原因標清楚，並在時間軸留一行（analysis／spec_tour 自己寫，帶 logSessionMissing:false）
+            if (taskId && opts.logSessionMissing !== false) {
+              query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+                [taskId, '[續接] 上一輪對話的 session 已不存在（多半是 AI 改在容器內執行、家目錄換了），本輪改以完整脈絡重跑']).catch(() => {});
+            }
+            reject(fail(new Error(`找不到要續接的 session（${resumeSessionId}）：${missing}`), 'session_missing'));
+          }
           else {
             // code null＝被外部信號終止（伺服器重開／OOM kill 等），非執行失敗——標 interrupted，
             // 與手動暫停 aborted 同類（用量報表把兩者都排除在呼叫數／失敗數之外）。routing 不受影響：
