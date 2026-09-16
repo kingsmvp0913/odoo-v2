@@ -224,6 +224,8 @@ if (require.main === module) {
   };
   process.on('uncaughtException', err => recordFatal('uncaughtException', err));
   process.on('unhandledRejection', err => recordFatal('unhandledRejection', err));
+  // 子專案 0 §4.2：容器可寫主 clone 的 .git，平台在主機跑的每一個 git 都不得執行 hook／fsmonitor。
+  Object.assign(process.env, require('./lib/git-hardening').hardenGitEnv(process.env));
 
   const { migrate, query } = require('./db');
   const { setIo } = require('./notify');

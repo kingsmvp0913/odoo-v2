@@ -16,6 +16,8 @@ function askpassShimPath() {
 }
 
 // 解出某 user 的 git 注入 env。無 PAT → throw NoGitCredentialError。
+const { hardenGitEnv } = require('./git-hardening');
+
 async function buildGitEnv(userId) {
   const { rows } = await query(
     'SELECT github_pat_enc, github_login, git_name, git_email FROM users WHERE id = $1', [userId]
@@ -25,7 +27,7 @@ async function buildGitEnv(userId) {
   const pat = decrypt(u.github_pat_enc);
   const name = u.git_name || u.github_login || 'user';
   const email = u.git_email || `${u.github_login || 'user'}@users.noreply.github.com`;
-  return {
+  return hardenGitEnv({
     GIT_ASKPASS: askpassShimPath(),
     GIT_ASKPASS_NODE: process.execPath,
     GIT_PAT: pat,
@@ -38,7 +40,7 @@ async function buildGitEnv(userId) {
     GIT_CONFIG_KEY_0: 'credential.helper',
     GIT_CONFIG_VALUE_0: '',
     GIT_TERMINAL_PROMPT: '0',
-  };
+  });
 }
 
 module.exports = { buildGitEnv, askpassAnswer, NoGitCredentialError, askpassShimPath };
