@@ -28,9 +28,13 @@ jest.mock('../pipeline/nightly-fix', () => ({
 }));
 // 平台 DB 備份：tick 過了臺灣 04:00 就會觸發。測試進程繼承容器環境（夜間改善在平台行程底下跑測試時
 // DATABASE_URL 是真的），不 mock 就會真的 pg_dump 正式 DB 寫進 data/backups/。只換掉會動外部的那一支。
+// describeBackups 讀的是真實的 data/backups/，所以它的回傳會隨這台機器有沒有備份檔而變（2026-09-16 實測：
+// 04:00 產生第一份備份之後，原本比對字串的斷言就翻紅）。說明字串本身已由 platform-backup.test.js 以注入的
+// dir 完整驗過，這裡要守的是「排程頁真的把它帶出來」，所以固定成哨兵值，不讓測試相依機器狀態。
 jest.mock('../lib/platform-backup', () => ({
   ...jest.requireActual('../lib/platform-backup'),
-  runDailyBackup: jest.fn().mockResolvedValue({ skipped: true })
+  runDailyBackup: jest.fn().mockResolvedValue({ skipped: true }),
+  describeBackups: jest.fn(() => '備份狀態說明（測試哨兵值）')
 }));
 
 let dbModule, cronModule, notifyModule;
@@ -720,5 +724,5 @@ test('排程頁列出平台 DB 備份（每日 04:00），下次時間與備份�
   const item = rows.find((r) => r.id === 'platform-backup');
   expect(item.timing).toMatch(/每日 04:00/);
   expect(item.nextRunAt).toBe('2026-09-15T20:00:00.000Z'); // 今天 04:00 已過 → 明天臺灣 04:00
-  expect(item.note).toMatch(/備份/);
+  expect(item.note).toBe('備份狀態說明（測試哨兵值）');   // 排程頁確實把 describeBackups 的結果帶出來
 });
