@@ -55,3 +55,20 @@ test('buildGitEnv：有 PAT → 回注入 env（token 解密、身分帶入）',
   expect(env.GIT_CONFIG_VALUE_1).toBe('/dev/null');
   expect(env.GIT_TERMINAL_PROMPT).toBe('0');
 });
+
+// 子專案 0：AI 只 commit 不 push（coding-project.md:48），給它身分就夠了；PAT 與 askpass 留在平台自己的 git。
+test('pickGitIdentity 只留作者／提交者身分', () => {
+  const picked = gitId.pickGitIdentity({
+    GIT_ASKPASS: '/x/git-askpass.sh', GIT_PAT: 'ghp_secret', GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'credential.helper',
+    GIT_AUTHOR_NAME: 'Bob', GIT_AUTHOR_EMAIL: 'b@c', GIT_COMMITTER_NAME: 'Bob', GIT_COMMITTER_EMAIL: 'b@c', GIT_TERMINAL_PROMPT: '0',
+  });
+  expect(picked).toEqual({ GIT_AUTHOR_NAME: 'Bob', GIT_AUTHOR_EMAIL: 'b@c', GIT_COMMITTER_NAME: 'Bob', GIT_COMMITTER_EMAIL: 'b@c' });
+  expect(gitId.pickGitIdentity({})).toEqual({});
+  expect(gitId.pickGitIdentity(null)).toEqual({});
+});
+
+test('task-agent 不再把整包 gitEnv 交給 AI', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'pipeline', 'task-agent.js'), 'utf8');
+  expect(src).not.toMatch(/env:\s*\{\s*\.\.\.gitEnv\s*\}/);
+  expect((src.match(/env: pickGitIdentity\(gitEnv\)/g) || []).length).toBe(2);
+});

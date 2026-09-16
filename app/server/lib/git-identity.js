@@ -43,4 +43,12 @@ async function buildGitEnv(userId) {
   });
 }
 
-module.exports = { buildGitEnv, askpassAnswer, NoGitCredentialError, askpassShimPath };
+// 交給 AI 子行程（含容器）的 git env：只有身分。AI 只 commit 不 push，PAT／askpass 不出平台（子專案 0 §4.2）
+const IDENTITY_KEYS = ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'];
+function pickGitIdentity(gitEnv) {
+  const out = {};
+  for (const k of IDENTITY_KEYS) if (gitEnv && gitEnv[k]) out[k] = gitEnv[k];
+  return out;
+}
+
+module.exports = { buildGitEnv, askpassAnswer, NoGitCredentialError, askpassShimPath, pickGitIdentity };

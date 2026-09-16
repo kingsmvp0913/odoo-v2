@@ -9,7 +9,7 @@ const { ensureWorktreeSkills } = require('./worktree-skills');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { primaryModule } = require('./spec-modules');
-const { buildGitEnv } = require('../lib/git-identity');
+const { buildGitEnv, pickGitIdentity } = require('../lib/git-identity');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
@@ -583,7 +583,7 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   // 裡連一列都沒有，報表上等於沒發生過（比照 analysis／cs 的 logFailedUsage 慣例）。
   const runOpts = {
     cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour',
-    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: { ...gitEnv },
+    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: pickGitIdentity(gitEnv),
     // analysis／spec_tour 的續接失敗自己會寫 task_logs（計畫 X4），不要讓 runner 再寫一行
     logSessionMissing: false
   };
@@ -636,7 +636,7 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   ensureWorktreeSkills(cwd);
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes, await taskAttachmentNote(task.id), await loadTweakSpecs(task.id).catch(() => ''));
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: pickGitIdentity(gitEnv) });
 }
 
 // 本任務各 repo worktree 的 HEAD 快照：比對 coding 前後即知這輪有沒有真的 commit 東西。
