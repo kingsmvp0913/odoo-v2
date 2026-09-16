@@ -26,6 +26,7 @@ const { registerRoutes: registerEnterpriseRoutes } = require('./enterprise-route
 const { registerRoutes: registerSearchRoutes } = require('./search-routes');
 const { registerRoutes: registerDeployRoutes } = require('./deploy-routes');
 const { registerRoutes: registerDocsRoutes } = require('./docs-routes');
+const { registerRoutes: registerAiPlatformRoutes } = require('./ai-platform-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -125,6 +126,7 @@ function createApp() {
   registerEnterpriseRoutes(app);
   registerSearchRoutes(app);
   registerDeployRoutes(app);
+  registerAiPlatformRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');

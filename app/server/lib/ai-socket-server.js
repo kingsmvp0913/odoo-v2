@@ -27,6 +27,7 @@ function createAiSocketApp() {
   require('../db-query-routes').registerRoutes(app);
   require('../wiki-routes').registerRoutes(app);
   require('../ai-task-routes').registerRoutes(app);
+  require('../ai-platform-routes').registerRoutes(app);
   app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
   return app;
 }
