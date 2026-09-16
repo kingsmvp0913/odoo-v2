@@ -6,6 +6,11 @@ const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { looksLikeAuthFailure } = require('./auth-signature');
 const { missingSessionReason } = require('./session-signature');
+const { getSandboxMode, getSandboxLimits } = require('../lib/agent-sandbox-flag');
+
+// 容器路徑下被 SIGKILL 的 exit code（M9 實測）。docker 以 --rm 執行，結束後查不到 OOMKilled，只能看這個碼；
+// 平台自己 docker kill（停止／逾時）也是同一個碼，所以訊息寫「最可能」而不是「確定」。
+const OOM_EXIT_CODE = 137;
 const { getClaudeAuthEnv } = require('../lib/claude-auth');
 const { getContext7ApiKey } = require('../lib/context7-auth');
 const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
@@ -176,7 +181,14 @@ function runClaude(prompt, opts = {}) {
     // env：敏感憑證（如 E2E 密碼）以環境變數傳入子行程，不進 prompt/串流/腳本（健檢 E-1）。
     // 認證憑證在此集中注入（19 個呼叫端零改動）：管理員設定優先於繼承的環境變數，
     // 未設定時回空物件、完全不碰該 key；呼叫端自帶的 env 排最後，語意不受影響。
-    const child = spawn('claude', args, {
+    let child = null;          // 目前的子行程：claude（舊路徑）或 docker CLI（容器路徑）
+    let sandboxRun = null;     // 容器路徑的控制把手（見 sandbox-run.js）
+    let sandboxReleased = false;
+    const releaseSandbox = () => {
+      if (sandboxRun && !sandboxReleased) { sandboxReleased = true; Promise.resolve(sandboxRun.release()).catch(() => {}); }
+    };
+    // 舊路徑的 spawn 選項——內容與原本逐字相同，只是延後到「確定不走容器」時才真的 spawn
+    const legacyOpts = {
       stdio: ['pipe', 'pipe', 'pipe'], cwd,
       // aiTokenEnv：/ai/* 端點的通行碼。agent 用 curl 打那些端點時要帶進 header——
       // 沒有它，agent 查不到客戶 DB／wiki，而症狀（403）完全不像認證問題（見 lib/ai-token.js）。
@@ -196,13 +208,14 @@ function runClaude(prompt, opts = {}) {
       // ⚠ 這條與 lib/token-cost.js 的 cache_create 係數 1.25 綁死：拿掉這個釘子＝實際回到 1h＝2×，
       // 而成本模型不會跟著變，整份帳會靜默低估兩成（且沒有任何測試會紅）。
       env: { ...process.env, SECURITY_GUIDANCE_DISABLE: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
-    });
-    // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
-    // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。
-    child.stdin.on?.('error', () => {});
+    };
 
-    // SIGTERM 後寬限期未退出就升級 SIGKILL：claude 掛死不理 SIGTERM 時避免殭屍行程佔資源
-    const killChild = () => killChildGracefully(child, KILL_GRACE_MS);
+    // SIGTERM 後寬限期未退出就升級 SIGKILL：claude 掛死不理 SIGTERM 時避免殭屍行程佔資源。
+    // 容器路徑另外要 docker kill：SIGKILL 送到 docker CLI 不會轉給容器，容器會繼續跑、繼續燒錢（規格 §6）
+    const killChild = () => {
+      if (sandboxRun) sandboxRun.kill();
+      if (child) killChildGracefully(child, KILL_GRACE_MS);
+    };
 
     let resultText = '';
     // 整段 assistant 文字（非只末輪 ev.result）：agent 把 <result> 當中間步驟吐出後，若還繼續講話
@@ -241,7 +254,7 @@ function runClaude(prompt, opts = {}) {
       ).catch(() => {});
     };
     // settle 前先 flush 殘餘事件，確保尾段落地且排在下一關 marker 之前
-    const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); Promise.resolve(flushEvents()).finally(fn); } };
+    const finish = fn => { if (!settled) { settled = true; if (timer) clearTimeout(timer); Promise.resolve(flushEvents()).finally(() => { releaseSandbox(); fn(); }); } };
     // 失敗也要能記帳與鑑識：標注失敗類別與實際耗時（健檢 U12）。
     // sessionId 一併帶出（init 事件早在第一則就到手，失敗時必定已有值）：逾時的那一輪已經把整包 code
     // 讀進 session，呼叫端存下來就能 --resume 續跑；不帶的話重跑從零讀起、極可能再逾時一次
@@ -261,6 +274,29 @@ function runClaude(prompt, opts = {}) {
       if (eventBuf.length >= EVENT_FLUSH_MAX) flushEvents();
       else if (!flushTimer) flushTimer = setTimeout(flushEvents, EVENT_FLUSH_MS);
     };
+
+    // 落地本次送出的完整 prompt 供管理員稽核（best-effort，失敗不影響 claude 執行）；只保留最近 100 筆。
+    // 搬到 spawn 之前：容器準備要花時間，這段期間按停止也要能結算。
+    query(
+      'INSERT INTO prompt_logs (agent_type, model, task_id, prompt, char_len) VALUES ($1, $2, $3, $4, $5)',
+      [agentType || null, model || null, taskId != null ? String(taskId) : null, prompt, (prompt || '').length]
+    ).then(() => query(
+      'DELETE FROM prompt_logs WHERE id NOT IN (SELECT id FROM prompt_logs ORDER BY id DESC LIMIT 100)'
+    )).catch(() => {});
+
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        killChild();
+        finish(() => reject(fail(abortError(), 'aborted')));
+      }, { once: true });
+    }
+
+    // 兩條路徑（claude 與 docker CLI）共用同一份 stream-json 解析與事件處理
+    const attachChild = (spawned) => {
+      child = spawned;
+      // 子行程提早死掉（bad flag／立即崩潰）時，對已關閉的 stdin 寫入會在 stdin 串流發 EPIPE error；
+      // 無 handler 會變 uncaughtException 拖垮整個 server。錯誤本身由 close/error 事件歸因，這裡吞掉即可。
+      child.stdin.on?.('error', () => {});
 
     child.stdout.on('data', d => {
       lineBuffer += d.toString();
@@ -310,22 +346,6 @@ function runClaude(prompt, opts = {}) {
     });
 
     child.stderr.on('data', d => { stderr += d.toString(); });
-    // 落地本次送出的完整 prompt 供管理員稽核（best-effort，失敗不影響 claude 執行）；只保留最近 100 筆
-    query(
-      'INSERT INTO prompt_logs (agent_type, model, task_id, prompt, char_len) VALUES ($1, $2, $3, $4, $5)',
-      [agentType || null, model || null, taskId != null ? String(taskId) : null, prompt, (prompt || '').length]
-    ).then(() => query(
-      'DELETE FROM prompt_logs WHERE id NOT IN (SELECT id FROM prompt_logs ORDER BY id DESC LIMIT 100)'
-    )).catch(() => {});
-    child.stdin.write(prompt);
-    child.stdin.end();
-
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        killChild();
-        finish(() => reject(fail(abortError(), 'aborted')));
-      }, { once: true });
-    }
 
     child.on('close', (code, sig) => {
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
@@ -348,6 +368,10 @@ function runClaude(prompt, opts = {}) {
                 [taskId, '[續接] 上一輪對話的 session 已不存在（多半是 AI 改在容器內執行、家目錄換了），本輪改以完整脈絡重跑']).catch(() => {});
             }
             reject(fail(new Error(`找不到要續接的 session（${resumeSessionId}）：${missing}`), 'session_missing'));
+          }
+          else if (sandboxRun && code === OOM_EXIT_CODE) {
+            const mem = getSandboxLimits().memory || '（未設定）';
+            reject(fail(new Error(`AI 容器被強制終止（exit ${code}），最可能是超過記憶體上限 ${mem}；已分類為環境問題、不自動重試`), 'oom'));
           }
           else {
             // code null＝被外部信號終止（伺服器重開／OOM kill 等），非執行失敗——標 interrupted，
@@ -374,12 +398,37 @@ function runClaude(prompt, opts = {}) {
       // cwd（多為任務 worktree）不存在最常見於「停在早期階段的任務被 resume」時 worktree 尚未建立——
       // 別再誤報成找不到 claude，據 cwd 是否存在給正確歸因。
       if (err.code === 'ENOENT') {
-        err.message = (cwd && !fs.existsSync(cwd))
-          ? `工作目錄不存在（worktree 可能尚未建立或已清除）：${cwd}`
-          : '找不到 claude 執行檔（PATH 未含 claude 安裝目錄），請確認 claude CLI 可用';
+        err.message = sandboxRun
+          ? '找不到 docker 執行檔（容器模式需要平台容器內的 docker CLI）'
+          : (cwd && !fs.existsSync(cwd))
+            ? `工作目錄不存在（worktree 可能尚未建立或已清除）：${cwd}`
+            : '找不到 claude 執行檔（PATH 未含 claude 安裝目錄），請確認 claude CLI 可用';
       }
       finish(() => reject(fail(err, 'error')));
     });
+
+      child.stdin.write(prompt);
+      child.stdin.end();
+    };
+
+    // 舊路徑：spawn 選項與原本逐字相同（見上方 legacyOpts）
+    const startLegacy = () => attachChild(spawn('claude', args, legacyOpts));
+    // 開關 off 必須「同步」spawn（rules/testing 26）：呼叫端與既有測試都依賴「runClaude 回傳時子行程已起」
+    if (getSandboxMode() === 'off') { startLegacy(); return; }
+    // 容器路徑（子專案 0）：開關有涵蓋就只能走容器。準備失敗一律 reject，
+    // **禁止**退回 spawn('claude')——那等於靜默取消隔離（規格 §6、rules/pipeline 59）
+    const sr = require('./sandbox-run');
+    sr.resolveSandboxPlan(agentType, opts)
+      .then(async plan => {
+        if (settled) return;
+        if (!plan) { startLegacy(); return; }
+        const run = await sr.prepareSandboxRun({ claudeArgs: args, opts, profile: plan.profile, projectId: plan.projectId });
+        sandboxRun = run;
+        // 準備期間就被按停止：不要再 spawn，直接把通行證與 worktree 收掉
+        if (settled) { releaseSandbox(); return; }
+        attachChild(spawn('docker', run.argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv }));
+      })
+      .catch(err => finish(() => reject(fail(err, 'error'))));
   });
 }
 
@@ -393,4 +442,4 @@ function stopReason(prefix, err) {
   return err && err.aborted ? '手動暫停' : `${prefix}：${err.message}`;
 }
 
-module.exports = { runClaude, abortError, stopReason, mcpConfigPath, MCP_PROFILES, NO_MCP_STAGES };
+module.exports = { runClaude, abortError, stopReason, mcpConfigPath, MCP_PROFILES, NO_MCP_STAGES, OOM_EXIT_CODE };
