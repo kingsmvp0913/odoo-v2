@@ -75,6 +75,8 @@ Thumbs.db
 app/server/pipeline/mcp/context7.local.json
 # 執行期生成的掃碟守衛 settings（claude-runner 依本機 hook 腳本路徑產生）
 app/server/pipeline/hooks/scan-guard.settings.json
+# 容器版 MCP 設定（sandbox-run 生成，內含 Context7 key）
+app/server/pipeline/mcp/context7.sandbox.local.json
 /data/odoo-core/
 # 認證考試題庫：截圖是二進位大檔，answer-key.json 含官方答案。
 # 答案檔進版控等於讓 agent 讀得到，那正是原專案花大力氣在防的事。
