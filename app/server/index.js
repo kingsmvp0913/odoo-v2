@@ -335,6 +335,15 @@ if (require.main === module) {
     await require('./lib/codex-auth').loadCodexToken();
     // context7 API key 同理：組 MCP 設定檔時同步取用（未設定則走匿名額度）
     await require('./lib/context7-auth').loadContext7Key();
+    // 子專案 0：AI 容器隔離開關（同步快取，runClaude 讀）。讀不到 DB 時模組內部落到 all（最嚴格）。
+    await require('./lib/agent-sandbox-flag').loadAgentSandboxFlag();
+    // /ai 的 unix socket 入口：只有出口閘道容器掛得到。起不來只記 log——開關 off 時沒有人用它；
+    // 開關開著時，容器內每一次 /ai 查詢都會失敗並在 agent 輸出看到，不會靜默。
+    try {
+      const { startAiSocketServer, aiSocketPath } = require('./lib/ai-socket-server');
+      await startAiSocketServer(aiSocketPath());
+      console.log(`[AI-SOCKET] listening ${aiSocketPath()}`);
+    } catch (e) { console.error('[AI-SOCKET] 啟動失敗：', e.message); }
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
     require('./notify-webhook').registerWebhookChannel();
     // 綁埠失敗必須讓行程結束，且 cron 只在綁到埠之後才起。

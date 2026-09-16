@@ -81,6 +81,9 @@ app/server/pipeline/hooks/scan-guard.settings.json
 /data/exam/
 # 平台 DB 每日備份：含加密的客戶憑證，repo 是公開的，絕不能進版控
 /data/backups/
+# 子專案 0：/ai 的 unix socket 與各 scope 的 AI 家目錄，都是執行期產物
+/data/run/
+/data/agent-home/
 
 # graphify 手動工具（scripts/graphify_index.py）的產物：自動索引已移除，圖只在跑的當下正確、
 # 無任何程式或 AI 指示在讀它。留在版控只是讓每次 clone 多拉十幾 MB 的化石。
