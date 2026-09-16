@@ -3,6 +3,7 @@ const { verifyToken } = require('./auth');
 const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
 const { aiEndpointGuard } = require('./lib/ai-token');
 const { resolveProjectId } = require('./lib/project-ref');
+const { requireAiEndpoint, projectForbidden, forbidProject } = require('./lib/ai-scope');
 const { enqueue: enqueueEmbedding, invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 
 // 語意腿的相似度下限。低於它的結果一律不算命中——不設下限的話 searchProject 只做排序取前 30，
@@ -141,9 +142,10 @@ function registerRoutes(app) {
 
   // description 一併回傳：只給 title 的話，agent 只能靠標題猜哪一頁相關，wiki 一多就必漏——
   // 而且漏掉沒有任何訊號（端點回 200＋清單，agent 當成「沒有相關記載」就不查了）。
-  app.get('/ai/wiki/pages', aiEndpointGuard, async (req, res) => {
+  app.get('/ai/wiki/pages', aiEndpointGuard, requireAiEndpoint('wiki'), async (req, res) => {
     try {
       const pid = await resolveProjectId(req.query.project);
+      if (pid != null && projectForbidden(req, pid)) return forbidProject(res);
       if (!pid) return res.json({ ok: true, pages: [] });
       const { rows } = await query(
         `SELECT slug, title, node_type, description FROM wiki_pages
@@ -157,11 +159,12 @@ function registerRoutes(app) {
   // 全文搜尋：補掉「只能按標題挑頁」的缺口。回 slug/title/description（不回 content 全文，
   // 否則一次搜尋就把整個 wiki 灌進 agent 的 context——分兩階段才是省 token 的關鍵）。
   // 大小寫不敏感用 LOWER+LIKE（pg-mem 相容，ILIKE 在測試環境不保證可用）。
-  app.get('/ai/wiki/search', aiEndpointGuard, async (req, res) => {
+  app.get('/ai/wiki/search', aiEndpointGuard, requireAiEndpoint('wiki'), async (req, res) => {
     try {
       const q = String(req.query.q || '').trim();
       if (!q) return res.json({ ok: false, error: '缺 q 參數（要搜尋的關鍵字）' });
       const pid = await resolveProjectId(req.query.project);
+      if (pid != null && projectForbidden(req, pid)) return forbidProject(res);
       if (!pid) return res.json({ ok: true, hits: [] });
       // 逸脫 LIKE 萬用字元：agent 常直接把錯誤訊息或路徑丟進來搜，裡面的 _ 與 % 會被當成萬用字元
       //（`_` 比對任一字元、`%` 比對任意長度），搜出一堆不相干的頁，或反過來把該中的搜不到。
@@ -264,9 +267,10 @@ function registerRoutes(app) {
   // 靠關鍵字撞不出來。只回摘要不回對方全文：要不要真的去讀，由讀的人決定。
   // 用動態 IN 而非 `slug = ANY($2::text[])`：pg-mem 對「有索引的欄位」跑 ANY(陣列) 會靜默回 0 列
   //（wiki_pages 的 (project_id, slug) 正好有 unique index），測試會全綠但功能是死的。
-  app.get('/ai/wiki/page', aiEndpointGuard, async (req, res) => {
+  app.get('/ai/wiki/page', aiEndpointGuard, requireAiEndpoint('wiki'), async (req, res) => {
     try {
       const pid = await resolveProjectId(req.query.project);
+      if (pid != null && projectForbidden(req, pid)) return forbidProject(res);
       if (!pid) return res.json({ ok: false, error: '找不到該 wiki 頁' });
       const { rows: [page] } = await query(
         'SELECT slug, title, content FROM wiki_pages WHERE project_id=$1 AND slug=$2',
