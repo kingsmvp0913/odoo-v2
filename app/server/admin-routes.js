@@ -665,6 +665,11 @@ function registerRoutes(app) {
       // 都沒有時是 NULL）。用排名而不是直接 MAX(severity) 是因為字串序會把 'ok' 排到 'medium' 後面。
       // open_count 刻意只算 medium 以上的待處理提案：low 是「放著不管也不會怎樣」，把它算進待辦
       // 會讓整份清單長年掛著紅字，真正該處理的那幾條反而淹沒其中。low 在明細裡照樣列得出來。
+      // watch_count 是 open_count 裡屬於 signal（證據還不夠的候選訊號）的那部分。它不會在改善
+      // 提案頁開單（health-check-runner.js 的 openFeedbackForFinding 只收 kind='proposal'），
+      // 夜間批次也只撿 proposal（nightly-fix.js 的 fetchHealthCandidates），所以把它跟提案一起
+      // 算成「待處理」等於叫人去一個沒有東西可按的地方。它的真實處境是「下一輪健檢還會拿它
+      // 比對」（previousProposals 會餵回去），前端據此顯示成「觀察中」。
       const { rows } = await query(
         `SELECT r.id, r.status, r.window_days, r.started_by, r.created_at, r.finished_at,
                 r.task_db_id, r.cadence, r.error, t.task_id, t.title,
@@ -675,7 +680,9 @@ function registerRoutes(app) {
                 SUM(CASE WHEN f.severity='error' THEN 1 ELSE 0 END)::int AS error_count,
                 SUM(CASE WHEN f.kind IN ('proposal','signal') THEN 1 ELSE 0 END)::int AS proposal_count,
                 SUM(CASE WHEN f.kind IN ('proposal','signal') AND f.status='pending'
-                          AND f.severity IN ('medium','high') THEN 1 ELSE 0 END)::int AS open_count
+                          AND f.severity IN ('medium','high') THEN 1 ELSE 0 END)::int AS open_count,
+                SUM(CASE WHEN f.kind='signal' AND f.status='pending'
+                          AND f.severity IN ('medium','high') THEN 1 ELSE 0 END)::int AS watch_count
            FROM health_check_runs r
            LEFT JOIN health_check_findings f ON f.run_id = r.id
            LEFT JOIN tasks t ON t.id = r.task_db_id

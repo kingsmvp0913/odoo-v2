@@ -129,11 +129,26 @@
       },
       // 處理狀態只看 medium 以上的待處理提案（後端的 open_count 已濾過）：輕微的放著不管是允許的，
       // 把它算進待辦會讓每一輪都掛著紅字，真正該處理的反而看不見。
+      //
+      // 「待處理」再扣掉 watch_count（候選訊號）：signal 是 auditor 覺得「像個問題但證據還不夠」
+      // 的條目，它不會在改善提案頁開單、夜間批次也撿不到它，所以標成待處理是在叫人去一個沒有
+      // 東西可按的地方（2026-09-14／09-15 兩輪只出 signal，這一欄卻寫「待處理 1」）。它真正的
+      // 處境是下一輪健檢會拿它回頭比對、證據夠了才升級成提案——那叫觀察中，不叫待辦。
       histTodo(h) {
         if (!h.proposal_count) return null;
-        return h.open_count > 0
-          ? { label: '待處理 ' + h.open_count, color: 'var(--warning-strong)' }
-          : { label: '已處理完', color: 'var(--text-muted)' };
+        const watch = h.watch_count || 0;
+        const open = (h.open_count || 0) - watch;
+        if (open > 0) return { label: '待處理 ' + open, color: 'var(--warning-strong)' };
+        if (watch > 0) return { label: '觀察中 ' + watch, color: 'var(--info)' };
+        return { label: '已處理完', color: 'var(--text-muted)' };
+      },
+      // 展開後每一條也要分得出來：提案是「該決定做不做」，候選訊號是「還在看」。兩者現在只差
+      // 在 kind 欄，畫面上長得一模一樣——點進去看到一條 medium 卻不知道該不該動手。
+      kindLabel(f) {
+        const k = this.kindOf(f);
+        if (k === 'proposal') return { label: '提案', color: 'var(--warning-strong)' };
+        if (k === 'signal') return { label: '觀察中', color: 'var(--info)' };
+        return null;
       },
       // 夜間改善批次自建的列也落在同一張表（cadence='nightly-fix'，見 nightly-fix.js 的
       // BATCH_CADENCE）。不特別標的話它長得像一輪什麼都沒查到的健檢：等級「—」、提案數 0，
@@ -203,6 +218,9 @@
                         <div v-for="f in shownFindings(h.id)" :key="f.id" style="margin-bottom:var(--space-3)">
                           <div class="hc-finding-title-row">
                             <span style="font-weight:var(--fw-semibold);font-size:var(--fs-sm)">{{ f.agent_label || '本輪總結' }}</span>
+                            <span v-if="kindLabel(f)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:kindLabel(f).color}">
+                              {{ kindLabel(f).label }}
+                            </span>
                             <span v-if="layer(f.layer)" :style="{fontSize:'var(--fs-xs)',padding:'1px var(--space-2)',borderRadius:'4px',color:'#fff',background:layer(f.layer).color}">
                               {{ layer(f.layer).label }}
                             </span>

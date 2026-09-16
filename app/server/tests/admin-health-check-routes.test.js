@@ -229,6 +229,26 @@ describe('GET list 的嚴重度與處理狀態聚合', () => {
     expect(row.open_count).toBe(0);
   });
 
+  // 為什麼要分：signal（候選訊號）不會在改善提案頁開單、夜間批次也只撿 kind='proposal'，
+  // 所以它被算進「待處理」時，畫面在叫人去一個沒有東西可按的地方——2026-09-14／09-15 兩輪
+  // 就是只出 signal 而那一欄寫著「待處理 1」，使用者因此以為提案不見了。
+  test('候選訊號另外算成 watch_count，讓前端分得出「還在看」與「該決定」', async () => {
+    const row = await runWith([
+      ['high', 'proposal', 'pending'],   // 真的要人決定
+      ['medium', 'signal', 'pending'],   // 證據還不夠，只是在看
+      ['low', 'signal', 'pending'],      // low 一律不進待辦，watch 也不算
+      ['high', 'signal', 'done'],        // 已結案的不算
+    ]);
+    expect(row.open_count).toBe(2);      // 提案 1 ＋ 觀察 1（沿用原語意，不動舊消費端）
+    expect(row.watch_count).toBe(1);     // 其中屬於「還在看」的只有那條 medium signal
+  });
+
+  test('一條提案都沒有、只有候選訊號 → 待辦全數落在 watch_count', async () => {
+    const row = await runWith([['medium', 'signal', 'pending'], ['ok', 'summary', 'pending']]);
+    expect(row.open_count).toBe(1);
+    expect(row.watch_count).toBe(1);     // open - watch = 0 → 前端顯示「觀察中」而不是「待處理」
+  });
+
   test('一則 finding 都沒有 → 嚴重度為 NULL，前端才顯示得出「—」而不是誤報正常', async () => {
     const row = await runWith([]);
     expect(row.severity_rank).toBeNull();
