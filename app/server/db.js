@@ -1098,6 +1098,17 @@ async function migrate() {
     // 批次只要有合併就會 restartSelf()（docker restart 自己的容器），記憶體旗標隨之歸零，
     // 同一晚會再開第二批、把剛失敗的候選重跑一遍（白花錢，且 fix_attempts 一晚加兩次）。
     { table: 'teams_settings', col: 'nightly_fix_last_day', sql: 'ALTER TABLE teams_settings ADD COLUMN nightly_fix_last_day TEXT' },
+    // 子專案 0：AI 容器隔離的開關與資源上限。mode 預設 off——合併進 master 不改變任何行為。
+    // 上限三個（agent 與閘道各一組）沒設就不准跑容器（總覽 D6），值由量測後管理員寫入，不在這裡猜。
+    { table: 'teams_settings', col: 'agent_sandbox_mode', sql: "ALTER TABLE teams_settings ADD COLUMN agent_sandbox_mode TEXT DEFAULT 'off'" },
+    { table: 'teams_settings', col: 'agent_sandbox_project_ids', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_project_ids TEXT' },
+    { table: 'teams_settings', col: 'agent_sandbox_memory', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_memory TEXT' },
+    { table: 'teams_settings', col: 'agent_sandbox_cpus', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_cpus TEXT' },
+    { table: 'teams_settings', col: 'agent_sandbox_pids', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_pids INTEGER' },
+    { table: 'teams_settings', col: 'agent_gateway_memory', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_gateway_memory TEXT' },
+    { table: 'teams_settings', col: 'agent_gateway_cpus', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_gateway_cpus TEXT' },
+    { table: 'teams_settings', col: 'agent_gateway_pids', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_gateway_pids INTEGER' },
+    { table: 'teams_settings', col: 'agent_sandbox_changed_at', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_changed_at TIMESTAMPTZ' },
     // 夜間批次的「連續失敗次數」（見 pipeline/nightly-fix.js）。⚠ 這兩欄是**飢餓防線**：
     // 「成功才標 done」意味著一條永遠合併不了的意見／提案會每晚重跑一次完整流程（重付 triage、
     // 重跑兩次全套測試），並永久佔掉 NIGHTLY_FIX_MAX 的一格，把後來的意見擠到永遠輪不到。
