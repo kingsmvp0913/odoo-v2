@@ -1,0 +1,75 @@
+// app/server/lib/agent-run-token.js
+/**
+ * agent-run-token.js — 容器內 AI 打 /ai 用的「每次執行通行證」（子專案 0 §4.4）
+ *
+ * 格式：v1.<runId>.<scope>.<projectId|0>.<exp>.<hmac>
+ * 金鑰：HMAC(APP_SECRET, RUN_TOKEN_LABEL)——比照 ai-token.js 不直接拿 APP_SECRET 簽，外洩賠不到它。
+ * 執行中清單在記憶體：執行結束立刻作廢；平台重啟＝全部失效（容器也會在啟動時被清掉，見 agent-orphans）。
+ */
+const crypto = require('crypto');
+const { endpointsFor, scopeKind } = require('./agent-profiles');
+
+const RUN_TOKEN_LABEL = 'aidev:agent-run:v1';
+const _runs = new Map(); // runId → { scope, projectId, exp }
+
+function runKey() {
+  const secret = process.env.APP_SECRET;
+  if (!secret) throw new Error('APP_SECRET 未設定，無法簽發 AI 執行通行證');
+  return crypto.createHmac('sha256', secret).update(RUN_TOKEN_LABEL).digest();
+}
+
+function sign(payload) {
+  return crypto.createHmac('sha256', runKey()).update(payload).digest('hex');
+}
+
+function checkScopeProject(scope, projectId) {
+  const kind = scopeKind(scope);
+  if (kind === 'project') {
+    if (Number(projectId) !== Number(scope.slice('project-'.length))) throw new Error(`scope ${scope} 與 projectId ${projectId} 不一致`);
+  } else if (projectId != null) {
+    throw new Error(`scope ${scope} 不可帶 projectId`);
+  }
+}
+
+function issueRunToken({ scope, projectId, ttlMs, now = Date.now() }) {
+  checkScopeProject(scope, projectId);
+  const runId = crypto.randomBytes(8).toString('hex');
+  const exp = now + ttlMs;
+  const payload = `v1.${runId}.${scope}.${projectId == null ? 0 : Number(projectId)}.${exp}`;
+  const token = `${payload}.${sign(payload)}`;
+  _runs.set(runId, { scope, projectId: projectId == null ? null : Number(projectId), exp });
+  return { runId, token, exp };
+}
+
+function timingSafeEqualHex(a, b) {
+  const ba = Buffer.from(String(a), 'utf8');
+  const bb = Buffer.from(String(b), 'utf8');
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+function verifyRunToken(token, now = Date.now()) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 6 || parts[0] !== 'v1') return { ok: false, reason: '通行證格式不正確' };
+  const [, runId, scope, pid, expStr, mac] = parts;
+  let expected;
+  try { expected = sign(parts.slice(0, 5).join('.')); } catch (e) { return { ok: false, reason: e.message }; }
+  if (!timingSafeEqualHex(mac, expected)) return { ok: false, reason: '通行證簽章不符' };
+  const run = _runs.get(runId);
+  if (!run) return { ok: false, reason: '通行證已作廢或不在執行中（執行結束／平台重啟）' };
+  const projectId = Number(pid) === 0 ? null : Number(pid);
+  if (run.scope !== scope || run.projectId !== projectId || String(run.exp) !== expStr) {
+    return { ok: false, reason: '通行證內容與執行中紀錄不符' };
+  }
+  if (now > run.exp) return { ok: false, reason: '通行證已過期' };
+  return { ok: true, run: { runId, scope, projectId, endpoints: endpointsFor(scope) } };
+}
+
+function revokeRun(runId) { _runs.delete(runId); }
+function activeRunCount() { return _runs.size; }
+
+// 檢查點（§4.4）：子專案 1 接「發起者所屬公司啟用中且在期間內」，子專案 2 接「公司已設 key、未超花費上限」
+async function canRun(_scope, _actorUserId) { return true; }
+
+function _resetRunsForTesting() { _runs.clear(); }
+
+module.exports = { RUN_TOKEN_LABEL, issueRunToken, verifyRunToken, revokeRun, activeRunCount, canRun, _resetRunsForTesting };
