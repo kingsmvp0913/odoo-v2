@@ -100,7 +100,7 @@ function registerRoutes(app) {
     // 驗證必須用「候選 token」而非快取裡的舊值，否則換帳號等於沒驗——env 在 runner 內排最後，會覆蓋快取值。
     let warning = null;
     try {
-      await runClaude('回覆 ok', { env: { CLAUDE_CODE_OAUTH_TOKEN: token }, timeoutMs: 60000 });
+      await runClaude('回覆 ok', { env: { CLAUDE_CODE_OAUTH_TOKEN: token }, timeoutMs: 60000, agentType: 'auth_probe' });
     } catch (err) {
       if (err.claudeStatus === 'auth' || looksLikeAuthFailure(err.message)) {
         return res.status(400).json({ error: 'token 無效或已過期，未儲存' });
