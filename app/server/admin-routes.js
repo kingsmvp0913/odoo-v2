@@ -324,6 +324,23 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 登入鎖定（見 lib/login-guard.js）：列出目前還鎖著或已封鎖的 (帳號, 來源)，以及手動解除。
+  // 封鎖也要解得掉，否則誤鎖的人救不回來。
+  app.get('/api/admin/login-locks', auth, async (_req, res) => {
+    try { res.json(await require('./lib/login-guard').listLocks()); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/admin/login-locks', auth, async (req, res) => {
+    try {
+      const { username, source } = req.query;
+      if (!username || !source) return res.status(400).json({ error: '需要 username 與 source' });
+      await require('./lib/login-guard').clearLock(String(username), String(source));
+      console.log(`[LOGIN-GUARD] 管理員 ${req.userId} 解除 ${username}@${source} 的登入鎖定`);
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.post('/api/admin/users', auth, async (req, res) => {
     try {
       const { username, password, display_name, role } = req.body;

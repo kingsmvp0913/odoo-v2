@@ -4,6 +4,7 @@
     data() {
       return {
         users: [],
+        locks: [],
         loading: true,
         newUser: { username: '', password: '', display_name: '', role: 'user' },
         savingUser: false,
@@ -18,15 +19,50 @@
         return this.users.filter(u =>
           u.username.toLowerCase().includes(q) || u.display_name.toLowerCase().includes(q)
         );
+      },
+      // 每個帳號目前有幾個來源被鎖／被封鎖。後端 listLocks 已經濾掉自然過期的，這裡不用再判時間。
+      lockMap() {
+        const m = {};
+        for (const l of this.locks) {
+          if (!m[l.username]) m[l.username] = { locked: 0, blocked: 0, sources: [] };
+          if (l.blocked) m[l.username].blocked += 1; else m[l.username].locked += 1;
+          m[l.username].sources.push(l);
+        }
+        return m;
       }
     },
-    async created() { await this.loadUsers(); },
+    async created() { await Promise.all([this.loadUsers(), this.loadLocks()]); },
     methods: {
       async loadUsers() {
         this.loading = true;
         try { this.users = await Api.get('admin/users'); }
         catch (e) { showToast(e.message, 'error'); }
         finally { this.loading = false; }
+      },
+      // 登入鎖定：鎖的是 (帳號, 來源) 這一對，所以同一個帳號可能同時有好幾個來源被鎖
+      async loadLocks() {
+        try { this.locks = await Api.get('admin/login-locks'); }
+        catch (e) { showToast(e.message, 'error'); }
+      },
+      async unlock(user) {
+        const info = this.lockMap[user.username];
+        if (!info) return;
+        const list = info.sources
+          .map(s => `${s.source}（${s.blocked ? '已封鎖' : '鎖定中'}，錯 ${s.fail_count} 次）`)
+          .join('\n');
+        if (!await confirmDialog({
+          title: '解除登入鎖定',
+          message: `確定解除「${user.display_name || user.username}」的登入鎖定？\n\n${list}`,
+          confirmText: '解除'
+        })) return;
+        try {
+          for (const s of info.sources) {
+            const qs = `username=${encodeURIComponent(user.username)}&source=${encodeURIComponent(s.source)}`;
+            await Api.delete(`admin/login-locks?${qs}`);
+          }
+          await this.loadLocks();
+          showToast('已解除登入鎖定', 'success');
+        } catch (e) { showToast(e.message, 'error'); }
       },
       async addUser() {
         if (!this.newUser.username || !this.newUser.password) return showToast('請填寫帳號和密碼', 'error');
@@ -126,6 +162,9 @@
                         {{ u.role === 'admin' ? '管理員' : '一般' }}
                       </span>
                       <span v-if="u.approved === false" class="pill pill-warn" style="margin-left:6px">待審核</span>
+                      <!-- 登入鎖定：鎖的是 (帳號, 來源) 這一對，所以顯示的是「幾個來源」而非布林 -->
+                      <span v-if="lockMap[u.username] && lockMap[u.username].locked" class="pill pill-warn" style="margin-left:6px">鎖定 {{ lockMap[u.username].locked }}</span>
+                      <span v-if="lockMap[u.username] && lockMap[u.username].blocked" class="pill pill-danger" style="margin-left:6px">封鎖 {{ lockMap[u.username].blocked }}</span>
                     </td>
                     <td data-label="建立時間" style="font-size:var(--fs-sm);color:var(--text-muted)">
                       {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
@@ -136,6 +175,7 @@
                         <button class="btn btn-outline btn-sm" @click="toggleRole(u)">
                           {{ u.role === 'admin' ? '降為一般' : '升為管理員' }}
                         </button>
+                        <button v-if="lockMap[u.username]" class="btn btn-outline btn-sm" @click="unlock(u)">解除鎖定</button>
                         <button class="btn btn-outline btn-sm" style="color:var(--error)" @click="deleteUser(u)">刪除</button>
                       </div>
                     </td>
