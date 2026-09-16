@@ -12,6 +12,15 @@ const { gitDirMounts } = require('./agent-sandbox');
 const MAX_LOG_FILES = 50;
 const LOG_RE = /^(deploy|e2e)-task(\d+)-/;
 
+// 依 scope 掛進容器家目錄的 skill（計畫 X9）。白名單是刻意的：平台自己的 skill 教的是平台內部操作，
+// 交給客戶 agent 等於把不該有的能力交出去（同 pipeline/worktree-skills.js 的理由）。
+const SKILLS_BY_SCOPE = Object.freeze({
+  project: Object.freeze(['getSQL', 'getLog', 'wikiQuery', 'odooGlossary', 'odooDev']),
+  'internal-audit': Object.freeze(['healthCheck', 'platformDB', 'wikiQuery', 'odooGlossary']),
+  'internal-fix': Object.freeze(['platformDev', 'healthCheck', 'odooGlossary']),
+  none: Object.freeze([]),
+});
+
 function platformPaths(appDir) {
   return {
     skills: path.join(appDir, '.agents', 'skills'),
@@ -30,6 +39,7 @@ function defaults(appDir) {
     worktreeParent: (...a) => require('../pipeline/task-agent').worktreeParent(...a),
     majorOf: (...a) => require('./odoo-core-src').majorOf(...a),
     existsSync: fs.existsSync, readdirSync: fs.readdirSync, statSync: fs.statSync,
+    mkdirSync: fs.mkdirSync,
     coreSrcRoot: require('./odoo-core-src').CORE_SRC_ROOT,
     uploadRoot: require('./attachments').uploadRoot(),
     envBase: process.env.ODOO_ENV_BASE || path.resolve(appDir, 'odoo-envs'),
@@ -54,6 +64,14 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   const { profile } = ctx;
   let kind = profile.mount;
   if (profile.scope === 'project' && ctx.projectId == null) kind = 'none';
+  const skillScope = kind === 'none' && profile.scope === 'project' ? 'none' : profile.scope;
+  for (const name of SKILLS_BY_SCOPE[skillScope] || []) {
+    const src = path.join(pp.skills, name);
+    if (!d.existsSync(src)) continue;
+    const target = path.join(ctx.home, '.claude', 'skills', name);
+    d.mkdirSync(target, { recursive: true });
+    mounts.push({ source: src, target, readonly: true });
+  }
   let workdir = ctx.home;
 
   const attach = () => {
@@ -143,4 +161,4 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   throw new Error(`未知的掛載種類：${kind}`);
 }
 
-module.exports = { resolveSandboxMounts, platformPaths, MAX_LOG_FILES };
+module.exports = { resolveSandboxMounts, platformPaths, MAX_LOG_FILES, SKILLS_BY_SCOPE };

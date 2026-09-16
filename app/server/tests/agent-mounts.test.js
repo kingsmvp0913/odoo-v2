@@ -160,3 +160,37 @@ test('platform-fix：工作區可寫、node_modules 唯讀、平台 .git 唯讀�
 test('platform-fix 的 cwd 不在修正工作區根目錄底下 → 丟例外', async () => {
   await expect(resolveSandboxMounts(base({ profile: profileFor('fix_verify'), projectId: null, taskDbId: null, cwd: appDir }), deps)).rejects.toThrow();
 });
+
+// 進容器後 workdir 換掉，原本從平台根目錄載得到的 skill 會整批消失；補掛時只掛該 scope 該有的那幾支
+describe('白名單 skill 掛進家目錄（計畫 X9）', () => {
+  const { SKILLS_BY_SCOPE } = require('../lib/agent-mounts');
+  beforeAll(() => {
+    for (const n of ['getSQL', 'getLog', 'wikiQuery', 'odooGlossary', 'odooDev', 'healthCheck', 'platformDB', 'platformDev', 'pushRepo']) {
+      fs.mkdirSync(path.join(appDir, '.agents', 'skills', n), { recursive: true });
+    }
+  });
+  const skillTargets = (m, home) => m.mounts.filter(x => (x.target || '').startsWith(path.join(home, '.claude', 'skills'))).map(x => path.basename(x.target)).sort();
+
+  test('客戶 agent：只有查客戶資料用的 skill，沒有 platformDB／pushRepo', async () => {
+    const ctx = base({ profile: profileFor('chat'), taskDbId: null, chatId: 5 });
+    const m = await resolveSandboxMounts(ctx, deps);
+    expect(skillTargets(m, ctx.home)).toEqual([...SKILLS_BY_SCOPE.project].sort());
+    expect(m.mounts.filter(x => x.target && x.target.startsWith(ctx.home)).every(x => x.readonly)).toBe(true);
+    // 掛載點由平台先建（避免 dockerd 建成 root 擁有、容器內寫不進 .claude）
+    expect(fs.existsSync(path.join(ctx.home, '.claude', 'skills', 'getSQL'))).toBe(true);
+  });
+
+  test('修正級內部 AI 拿不到 platformDB（R6-A）', async () => {
+    const wt = path.join(appDir, '.claude', 'worktrees', 'fix-12');
+    const ctx = base({ profile: profileFor('platform_fix'), projectId: null, taskDbId: null, cwd: wt, home: path.join(appDir, 'data', 'agent-home', 'internal-fix') });
+    const m = await resolveSandboxMounts(ctx, deps);
+    expect(skillTargets(m, ctx.home)).not.toContain('platformDB');
+    expect(skillTargets(m, ctx.home)).toEqual([...SKILLS_BY_SCOPE['internal-fix']].sort());
+  });
+
+  test('none：不掛任何 skill', async () => {
+    const ctx = base({ profile: profileFor('deploy_fix'), projectId: null, taskDbId: null, home: path.join(appDir, 'data', 'agent-home', 'none') });
+    const m = await resolveSandboxMounts(ctx, deps);
+    expect(skillTargets(m, ctx.home)).toEqual([]);
+  });
+});
