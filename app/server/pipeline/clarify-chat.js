@@ -17,6 +17,15 @@ const yaml = require('js-yaml');
 // 推進與否由 mode 在結構上限定——不靠 prompt 自律，「提問」入口就算 agent 硬回 proceed 也推不動。
 const Q_SEP = '---QUESTIONS---';
 
+// 題目稿的形狀把關：yaml.load 成功不代表題目還在。task 272 的 `questions:` 多縮兩格，整段落進
+// `intro: |` 的字面區塊——YAML 完全合法、卻一題都沒有，畫面因此換成自由留言框、使用者送不出確認。
+// questions 必須是頂格的清單（空清單合法：對話談出「都不用問了」）。回傳錯誤訊息，沒問題回 null。
+function questionsShapeError(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return 'QUESTIONS 非有效 YAML 物件';
+  if (!Array.isArray(v.questions)) return 'QUESTIONS 缺頂格的 questions 清單（可能被縮排進 intro）';
+  return null;
+}
+
 // 把 agent 重產的題目併回 analysis_yaml 的 clarification_channel，其餘欄位原封不動。
 // 解析不出來就回 null 讓呼叫端放棄更新——AI 產出的 YAML 壞掉時絕不可覆蓋既有 spec（會整包掉規格）。
 function mergeClarification(analysisYaml, questionsYaml) {
@@ -24,7 +33,7 @@ function mergeClarification(analysisYaml, questionsYaml) {
     const spec = yaml.load(analysisYaml || '', { schema: yaml.CORE_SCHEMA }) || {};
     if (typeof spec !== 'object' || Array.isArray(spec)) return null;
     const draft = yaml.load(questionsYaml, { schema: yaml.CORE_SCHEMA });
-    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return null;
+    if (questionsShapeError(draft)) return null;
     spec.clarification_channel = draft;
     return yaml.dump(spec, { lineWidth: -1 });
   } catch { return null; }
@@ -51,7 +60,8 @@ function parseClarifyChat(s, { lenient = false } = {}) {
       if (sepIdx === -1) throw new Error('revise 缺 ---QUESTIONS---');
       const yamlStr = rest.slice(sepIdx + Q_SEP.length).trim();
       const v = yaml.load(yamlStr, { schema: yaml.CORE_SCHEMA });
-      if (!v || typeof v !== 'object') throw new Error('QUESTIONS 非有效 YAML 物件');
+      const shapeErr = questionsShapeError(v);
+      if (shapeErr) throw new Error(shapeErr);
       questions_yaml = yamlStr;
     } catch (e) {
       if (!lenient) throw e;
