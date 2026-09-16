@@ -10,6 +10,7 @@
 //   2. prompt 明確限定只查 src/ ——但那是 soft instruction，不可靠
 //   3. **Node 端硬驗每一筆 ref 是否落在 src/ 底下**，不是就丟棄。這一關才是硬的。
 const { spawn } = require('child_process');
+const { pickLegacyEnv } = require('../agent-env');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -365,7 +366,7 @@ function runEvidence({ prompt, odooVersion, onProgress, model = MODEL }) {
       '--model', model,
     ];
 
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd, env: pickLegacyEnv(process.env) });
     child.stdin.on('error', () => {});
 
     let assistantText = '', lineBuffer = '', stderr = '', usage = null, settled = false;

@@ -11,6 +11,7 @@
 // 實測：--allowed-tools 是「這些不用問就放行」的白名單，不是「只准用這些」；
 // 給了 'Read' 它照樣跑 Bash。--disallowed-tools 才真的擋得住（實測回 BOTH_BLOCKED）。
 const { spawn } = require('child_process');
+const { pickLegacyEnv } = require('../agent-env');
 const path = require('path');
 const fs = require('fs');
 const { ensureEvidenceCwd, sourceDirs, normalizeEvidence, MCP_CONFIG } = require('./evidence');
@@ -188,7 +189,7 @@ function challengePage({ questions, theirAnswers, glossary, odooVersion,
       '--model', model,
     ];
 
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd, env: pickLegacyEnv(process.env) });
     child.stdin.on('error', () => {});
 
     let assistantText = '', lineBuffer = '', stderr = '', usage = null, settled = false;
