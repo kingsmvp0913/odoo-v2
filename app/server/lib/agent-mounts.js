@@ -1,0 +1,146 @@
+// app/server/lib/agent-mounts.js
+/**
+ * agent-mounts.js — 依 agent profile 解出容器掛載清單（子專案 0 §4.2、§4.5；計畫 X7）
+ *
+ * 全部同構路徑（容器內外相同），來源一律由既有變數推導，不寫死。
+ * 不變量：不掛 APP_DIR 本體、APP_DIR/data（config.json、ai.sock）、別專案路徑、odoo-envs 的 odoo.conf（含 DB 密碼）。
+ */
+const fs = require('fs');
+const path = require('path');
+const { gitDirMounts } = require('./agent-sandbox');
+
+const MAX_LOG_FILES = 50;
+const LOG_RE = /^(deploy|e2e)-task(\d+)-/;
+
+function platformPaths(appDir) {
+  return {
+    skills: path.join(appDir, '.agents', 'skills'),
+    hooks: path.join(appDir, 'app', 'server', 'pipeline', 'hooks'),
+    mcp: path.join(appDir, 'app', 'server', 'pipeline', 'mcp'),
+    gitDir: path.join(appDir, '.git'),
+    nodeModules: path.join(appDir, 'app', 'node_modules'),
+    fixWorktreeRoot: process.env.FIX_WORKTREE_DIR || path.join(appDir, '.claude', 'worktrees'),
+  };
+}
+
+function defaults(appDir) {
+  return {
+    query: (...a) => require('../db').query(...a),
+    getProjectInfo: (...a) => require('../pipeline/task-agent').getProjectInfo(...a),
+    worktreeParent: (...a) => require('../pipeline/task-agent').worktreeParent(...a),
+    majorOf: (...a) => require('./odoo-core-src').majorOf(...a),
+    existsSync: fs.existsSync, readdirSync: fs.readdirSync, statSync: fs.statSync,
+    coreSrcRoot: require('./odoo-core-src').CORE_SRC_ROOT,
+    uploadRoot: require('./attachments').uploadRoot(),
+    envBase: process.env.ODOO_ENV_BASE || path.resolve(appDir, 'odoo-envs'),
+    logDir: process.env.DEPLOY_LOG_DIR || path.join(appDir, 'data', 'logs'),
+    fixWorktreeRoot: platformPaths(appDir).fixWorktreeRoot,
+  };
+}
+
+function isInside(child, parent) {
+  const rel = path.relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+async function resolveSandboxMounts(ctx, deps = {}) {
+  const d = { ...defaults(ctx.appDir), ...deps };
+  const pp = platformPaths(ctx.appDir);
+  const mounts = [];
+  const ro = src => { if (d.existsSync(src)) mounts.push({ source: src, readonly: true }); };
+
+  ro(pp.skills); ro(pp.hooks); ro(pp.mcp);
+
+  const { profile } = ctx;
+  let kind = profile.mount;
+  if (profile.scope === 'project' && ctx.projectId == null) kind = 'none';
+  let workdir = ctx.home;
+
+  const attach = () => {
+    if (profile.attachments === 'task' && ctx.taskDbId != null) ro(path.join(d.uploadRoot, `task_${ctx.taskDbId}`));
+    if (profile.attachments === 'chat' && ctx.chatId != null) ro(path.join(d.uploadRoot, `chat_${ctx.chatId}`));
+    if (profile.attachments === 'feedback') for (const id of ctx.feedbackIds || []) ro(path.join(d.uploadRoot, `feedback_${id}`));
+  };
+
+  if (kind === 'platform-clean') {
+    const wt = ctx.platformWorktree;
+    if (!wt || !isInside(wt, d.fixWorktreeRoot) || !path.basename(wt).startsWith('ro-') || !d.existsSync(wt)) {
+      throw new Error(`內部 AI 的乾淨 worktree 不存在或不在 ${d.fixWorktreeRoot}/ro-*：${wt}`);
+    }
+    mounts.push({ source: wt, readonly: true }, { source: pp.gitDir, readonly: true });
+    return { mounts, workdir: wt };
+  }
+
+  if (kind === 'platform-fix') {
+    const wt = ctx.cwd;
+    if (!wt || !isInside(wt, d.fixWorktreeRoot) || !path.basename(wt).startsWith('fix-') || !d.existsSync(wt)) {
+      throw new Error(`修正工作區 cwd 不在 ${d.fixWorktreeRoot}/fix-*：${wt}`);
+    }
+    const admin = path.join(pp.gitDir, 'worktrees', path.basename(wt));
+    if (!d.existsSync(admin)) throw new Error(`找不到修正工作區的 git admin 目錄：${admin}`);
+    mounts.push({ source: wt, readonly: false }, { source: pp.gitDir, readonly: true }, { source: admin, readonly: false });
+    ro(pp.nodeModules);
+    attach();
+    return { mounts, workdir: wt };
+  }
+
+  if (kind === 'none') { attach(); return { mounts, workdir }; }
+
+  const info = await d.getProjectInfo(ctx.projectId);
+  if (!info) throw new Error(`專案 ${ctx.projectId} 沒有 clone 完成的 repo，無法組容器掛載`);
+
+  const projectData = () => {
+    const major = d.majorOf(info.odoo_version);
+    if (major) ro(path.join(d.coreSrcRoot, major));
+    if (info.enterprise_src) ro(info.enterprise_src);
+  };
+
+  let wt = null;
+  if (ctx.taskDbId != null && (kind === 'task-worktree' || kind === 'task-worktree-or-none' || kind === 'task-worktree-or-clone')) {
+    const { rows: [t] } = await d.query('SELECT task_id, project_id FROM tasks WHERE id=$1', [ctx.taskDbId]);
+    if (!t || Number(t.project_id) !== Number(ctx.projectId)) throw new Error(`任務 ${ctx.taskDbId} 不屬於專案 ${ctx.projectId}`);
+    wt = d.worktreeParent(info.root, t.task_id);
+  }
+
+  const useWorktree = () => {
+    if (!wt || !d.existsSync(wt)) throw new Error(`任務 worktree 不存在：${wt}`);
+    if (ctx.cwd !== undefined && ctx.cwd !== wt) throw new Error(`呼叫端 cwd（${ctx.cwd}）與任務 worktree（${wt}）不符`);
+    mounts.push({ source: wt, readonly: false });
+    for (const r of info.repos) mounts.push(...gitDirMounts(r.local_path, 'rw'));
+    projectData(); attach();
+    return { mounts, workdir: wt };
+  };
+
+  const useClone = async () => {
+    mounts.push({ source: info.root, readonly: true });
+    projectData(); attach();
+    if (profile.logs) {
+      ro(path.join(d.envBase, info.folder_name || info.name, 'odoo.log'));
+      const { rows } = await d.query('SELECT id FROM tasks WHERE project_id=$1', [ctx.projectId]);
+      const ids = new Set(rows.map(r => String(r.id)));
+      let files = [];
+      try { files = d.readdirSync(d.logDir); } catch { files = []; }
+      files
+        .filter(f => { const mm = LOG_RE.exec(f); return mm && ids.has(mm[2]); })
+        .map(f => path.join(d.logDir, f))
+        .sort((a, b) => d.statSync(b).mtimeMs - d.statSync(a).mtimeMs)
+        .slice(0, MAX_LOG_FILES)
+        .forEach(ro);
+    }
+    return { mounts, workdir: info.root };
+  };
+
+  if (kind === 'task-worktree') return useWorktree();
+  if (kind === 'task-worktree-or-none') {
+    if (ctx.cwd === undefined) { attach(); return { mounts, workdir }; }
+    return useWorktree();
+  }
+  if (kind === 'task-worktree-or-clone') {
+    if (ctx.cwd === info.root) return useClone();
+    return useWorktree();
+  }
+  if (kind === 'project-clone') return useClone();
+  throw new Error(`未知的掛載種類：${kind}`);
+}
+
+module.exports = { resolveSandboxMounts, platformPaths, MAX_LOG_FILES };
