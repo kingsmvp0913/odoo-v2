@@ -5,7 +5,7 @@ description: Use when reading Odoo application logs from a customer's production
 
 # 客戶正式區 Log 讀取 Skill（v2）
 
-透過 v2 工作平台讀客戶正式區 Odoo log（唯讀，不寫入、不即時串流）。v2 需運行於 `http://localhost:3939`。
+透過 v2 工作平台讀客戶正式區 Odoo log（唯讀，不寫入、不即時串流）。v2 需運行於 `$AIDEV_AI_BASE`。
 
 ## 前置：必須先問出事發時間點
 
@@ -16,6 +16,7 @@ description: Use when reading Odoo application logs from a customer's production
 >
 > ```bash
 > export AIDEV_AI_TOKEN=$(node -e "process.env.APP_SECRET=require('./data/config.json').APP_SECRET;console.log(require('./app/server/lib/ai-token').aiToken())")
+> export AIDEV_AI_BASE=$(node -e "console.log('http://localhost:'+(require('./data/config.json').PORT||3939))")
 > ```
 
 ## 流程
@@ -25,7 +26,7 @@ description: Use when reading Odoo application logs from a customer's production
 依當前處理中的專案推斷 v2 專案名稱（folder_name 或 name），比照 getSQL：
 
 ```bash
-curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/db/connections?project=<專案名>"
+curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/db/connections?project=<專案名>"
 ```
 
 回傳範例：
@@ -46,7 +47,7 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "http://localhost:3939/ai/db/connect
 ### 第二步：查詢 log
 
 ```bash
-curl -X POST http://localhost:3939/ai/db/log \
+curl -X POST $AIDEV_AI_BASE/ai/db/log \
   -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"connection_id": 1, "at": "2026-08-10T14:30:00+08:00", "window": 10, "level": "ERROR", "keyword": ""}'
