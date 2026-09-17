@@ -16,8 +16,8 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
-const execFileAsync = require('util').promisify(execFile);
+// 呼叫時才取 execFile：部分測試整包 mock child_process（沒有 execFile），載入時 promisify 會直接炸
+const execFileAsync = (...a) => require('util').promisify(require('child_process').execFile)(...a);
 
 function fail(code, msg) {
   return Object.assign(new Error(`任務 worktree 的 git 中繼資料不合法（可能被竄改），需由管理員重建：${msg}`), { code });
