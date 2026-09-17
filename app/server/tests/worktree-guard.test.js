@@ -135,6 +135,20 @@ test('先等該任務的容器結束才動手；等不到就丟例外、什麼�
   expect(fs.readFileSync(path.join(admin, 'HEAD'), 'utf8')).toBe('ref: refs/heads/testing\n');
 });
 
+// 意圖（D2）：宿主在 worktree 跑 git 前，容器寫在任務物件庫的物件要先驗證搬進共用庫；搬不進來（被竄改）就停下，不寫回任何指標
+test('等完容器後、寫回指標前先搬任務物件；搬移失敗 → 丟例外且不動 admin 目錄', async () => {
+  const order = [];
+  await reset({}, {
+    waitForWorktreeIdle: async () => { order.push('wait'); },
+    importTaskObjects: async (o) => { order.push(['import', o]); },
+  });
+  expect(order).toEqual(['wait', ['import', { repoPath: repo, branch: 'task/T1' }]]);
+  fs.writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/testing\n');
+  await expect(reset({}, { importTaskObjects: async () => { throw Object.assign(new Error('壞物件'), { code: 'OBJECTS_TAMPERED' }); } }))
+    .rejects.toMatchObject({ code: 'OBJECTS_TAMPERED' });
+  expect(fs.readFileSync(path.join(admin, 'HEAD'), 'utf8')).toBe('ref: refs/heads/testing\n');
+});
+
 test('分支名不合法 → 丟例外', async () => {
   await expect(reset({ branch: '../../HEAD' })).rejects.toThrow(/分支/);
   await expect(reset({ branch: 'a\nb' })).rejects.toThrow(/分支/);

@@ -103,6 +103,8 @@ async function runQaAgent(taskId, userId, signal) {
     const bad = [];
     for (const repo of info.repos || []) {
       try {
+        // D2：任務分支的物件可能還在任務物件庫（容器寫的），先驗證搬進共用庫
+        await require('../lib/agent-objects').importTaskObjects({ repoPath: repo.local_path, branch: task.git_branch });
         const files = await symlinkChanges(repo.local_path, baseForSymlinkCheck, task.git_branch);
         if (files.length) bad.push(`${repo.label || repo.subdir}: ${files.join(', ')}`);
       } catch { /* 讀不到就交下游 merge 關兜底，這裡不阻擋 */ }

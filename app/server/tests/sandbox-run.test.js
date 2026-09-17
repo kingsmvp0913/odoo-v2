@@ -161,6 +161,32 @@ describe('waitForWorktreeIdle：任務 worktree 的獨占', () => {
     expect(log.every(c => c.opts && c.opts.timeout === SHORT.dockerMs)).toBe(true);
   });
 
+  // 意圖（D2）：容器寫的物件要等容器確定停了才搬進共用庫（還在跑就搬，搬完它還能再寫），而且要在放掉 worktree 之前——
+  // 放掉之後宿主就可能對這個 worktree 跑 git，那時物件必須已經在共用庫。物件庫的 env 由掛載結果給，呼叫端蓋不掉。
+  test('D2：掛載給的物件庫 env 進容器；release 在容器確認停止後、放 worktree 前搬物件（clear）；搬移失敗只記錄仍放行', async () => {
+    const order = [];
+    const taskObjects = { repoPaths: ['/r/main'], branch: 'task/task_7' };
+    const env = { GIT_OBJECT_DIRECTORY: '/r/.agent-objects/task_7', GIT_ALTERNATE_OBJECT_DIRECTORIES: '/r/main/.git/objects' };
+    const { d } = wtDeps({
+      releaseBounds: SHORT,
+      resolveSandboxMounts: async () => ({ mounts: [{ source: wt, readonly: false }], workdir: wt, env, taskObjects }),
+      execFile: fakeDocker({ inspect: cb => { order.push('inspect'); cb(null, 'false\n', ''); } }),
+      importTaskObjects: async (o) => { order.push(['import', o, await busy()]); throw new Error('壞物件'); },
+    });
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'coding', taskId: 70, env: { GIT_OBJECT_DIRECTORY: '/evil' } }, profile: profileFor('coding'), projectId: 7 }, d);
+      expect(run.argv).toContain(`GIT_OBJECT_DIRECTORY=${env.GIT_OBJECT_DIRECTORY}`);
+      expect(run.argv).toContain(`GIT_ALTERNATE_OBJECT_DIRECTORIES=${env.GIT_ALTERNATE_OBJECT_DIRECTORIES}`);
+      expect(run.argv.join(' ')).not.toContain('/evil');
+      const cli = fakeCli(); run.attach(cli); cli.emit('exit', 0);
+      await run.release();
+      expect(order).toEqual(['inspect', ['import', { ...taskObjects, clear: true }, true]]);
+      expect(await busy()).toBe(false);
+      expect(errSpy.mock.calls.some(a => /任務物件搬移失敗/.test(a[0]))).toBe(true);
+    } finally { errSpy.mockRestore(); }
+  });
+
   test('D1b：容器還沒建好（docker 全回 No such container）但 CLI 還活著 → 不放；CLI 退出後才放', async () => {
     const { d } = wtDeps({ releaseBounds: { ...SHORT, cliExitMs: 5000 }, execFile: fakeDocker({ kill: noSuch, inspect: noSuch, wait: noSuch }) });
     const run = await start(d);

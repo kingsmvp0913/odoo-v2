@@ -108,6 +108,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     getClaudeAuthEnv: (...a) => require('../lib/claude-auth').getClaudeAuthEnv(...a),
     getSandboxLimits: (...a) => require('../lib/agent-sandbox-flag').getSandboxLimits(...a),
     resolveSandboxMounts: (...a) => require('../lib/agent-mounts').resolveSandboxMounts(...a),
+    importTaskObjects: (...a) => require('../lib/agent-objects').importTaskObjects(...a),
     createPlatformCleanWorktree: (...a) => require('../lib/platform-worktree').createPlatformCleanWorktree(...a),
     removePlatformCleanWorktree: (...a) => require('../lib/platform-worktree').removePlatformCleanWorktree(...a),
     sandboxMcpConfigPath,
@@ -138,7 +139,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
   let heldWorktree = null;
   try {
     if (profile.mount === 'platform-clean') platformWorktree = await d.createPlatformCleanWorktree(runId);
-    const { mounts, workdir } = await d.resolveSandboxMounts({
+    const { mounts, workdir, env: mountEnv = {}, taskObjects = null } = await d.resolveSandboxMounts({
       profile, projectId: scopeProjectId, taskDbId: opts.taskId ?? null, cwd: opts.cwd, chatId: opts.chatId ?? null,
       feedbackIds: opts.feedbackIds || [], home, platformWorktree, appDir: APP_DIR,
     });
@@ -152,7 +153,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
       DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       AIDEV_AI_BASE: `http://${gw}:8080`, AIDEV_AI_TOKEN: token,
       HTTPS_PROXY: `http://${gw}:3128`, https_proxy: `http://${gw}:3128`, NO_PROXY: gw, no_proxy: gw,
-      ...callerEnv, ...auth,
+      ...callerEnv, ...mountEnv, ...auth,
     };
     const { buildAgentRunArgs } = require('../lib/agent-sandbox');
     const built = buildAgentRunArgs({
@@ -194,6 +195,12 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
       if (!w.err || NO_SUCH_CONTAINER.test(w.err.message)) return null;
       return `docker wait 失敗：${w.err.message.trim()}`;
     };
+    // D2：容器確定停了才把它寫進任務物件庫的東西驗證後搬進共用庫；失敗只記錄，合併前等關卡會再搬一次並擋下
+    const importObjects = async () => {
+      if (!taskObjects) return;
+      await d.importTaskObjects({ ...taskObjects, clear: true })
+        .catch(e => console.error(`[SANDBOX] 任務物件搬移失敗（${taskObjects.branch}）：${e.message}`));
+    };
     const retryInBackground = i => {
       if (i >= bounds.retryDelaysMs.length) {
         console.error(`[SANDBOX] 重試用完仍無法確認容器 ${name} 已停止，worktree 維持使用中（宿主 git 會被擋住），需人工確認容器後重啟平台：${heldWorktree}`);
@@ -202,6 +209,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
       unrefTimer(setTimeout(async () => {
         const why = await confirmStopped();
         if (why === null) {
+          await importObjects();
           dropWorktree(heldWorktree);
           console.error(`[SANDBOX] 重試確認容器 ${name} 已停止，worktree 放行：${heldWorktree}`);
         } else {
@@ -232,7 +240,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
         // 容器確認不會再跑才放掉 worktree（逾時／停止時 release 會比容器先到，docker kill 是非同步）
         if (heldWorktree) {
           const why = await confirmStopped();
-          if (why === null) dropWorktree(heldWorktree);
+          if (why === null) { await importObjects(); dropWorktree(heldWorktree); }
           else {
             console.error(`[SANDBOX] 無法確認容器 ${name} 已停止（${why}），worktree 維持使用中並在背景重試：${heldWorktree}`);
             retryInBackground(0);

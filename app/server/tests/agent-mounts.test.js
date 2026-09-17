@@ -1,6 +1,7 @@
 // 意圖：掛載清單就是 AI 在容器裡看得到的整個世界。這裡用真的暫存目錄樹驗：
 //  - 客戶 agent 只看得到自己的專案（別專案 repo、平台 repo 本體、data/config.json 一律不在清單）
-//  - 任務 worktree 可寫；主 clone 的 .git 唯讀，只開 objects、本 worktree 的 admin 目錄、refs/heads/task 可寫
+//  - 任務 worktree 可寫；主 clone 的 .git 唯讀（共用 objects 也唯讀，D2），只開本 worktree 的 admin 目錄、refs/heads/task 可寫；
+//    commit 寫進任務自己的物件庫 repos/<專案>/.agent-objects/<task_id>
 //    （09-17 裁決 R8：testing／main 指標從掛載層就改不動，不靠事後還原）
 //  - 內部 AI 只掛乾淨 worktree，絕不掛正在運作的平台資料夾（總覽 D7）
 //  - agent 合法要讀的附件與 log 有掛、而且只掛本任務／本專案的（X7）
@@ -81,13 +82,17 @@ test('task-worktree：worktree 可寫、.git 可寫但 config／hooks 唯讀、�
   const G = path.join(R, 'repos', 'p7', 'main', '.git');
   expect(m.mounts.filter(x => x.source.startsWith(G))).toEqual([
     { source: G, readonly: true },
-    { source: path.join(G, 'objects'), readonly: false },
     { source: path.join(G, 'worktrees', 'main1'), readonly: false },
     { source: path.join(G, 'refs', 'heads', 'task'), readonly: false },
     { source: path.join(G, 'logs', 'refs', 'heads', 'task'), readonly: false },
     { source: path.join(G, 'config'), readonly: true },
     { source: path.join(G, 'hooks'), readonly: true },
   ]);
+  const objDir = path.join(R, 'repos', 'p7', '.agent-objects', 'task_7');
+  expect(find(m, objDir).readonly).toBe(false);
+  expect(fs.statSync(objDir).isDirectory()).toBe(true);
+  expect(m.env).toEqual({ GIT_OBJECT_DIRECTORY: objDir, GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(G, 'objects') });
+  expect(m.taskObjects).toEqual({ repoPaths: [path.join(R, 'repos', 'p7', 'main')], branch: 'task/task_7' });
   // bind mount 的來源必須存在：分支可能全被 pack 掉，refs/heads/task 目錄不一定在
   expect(fs.statSync(path.join(G, 'refs', 'heads', 'task')).isDirectory()).toBe(true);
   expect(fs.statSync(path.join(G, 'logs', 'refs', 'heads', 'task')).isDirectory()).toBe(true);

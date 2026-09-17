@@ -66,6 +66,8 @@ async function doPushAi(task, taskId, userId, signal) {
     try {
       // 09-17 R13：併入 ai-dev 前先擋符號連結（同一把尺，見 merge-agent.js）。不帶 conflictFiles
       // 就會落到下面「真失敗」分支，直接 stop 任務，不會被誤導進裁決閘門。
+      // D2：任務分支的物件可能還在任務物件庫（容器寫的），先驗證搬進共用庫
+      await require('../lib/agent-objects').importTaskObjects({ repoPath: repo.local_path, branch: task.git_branch });
       const symlinks = await symlinkChanges(repo.local_path, AI_BRANCH, task.git_branch);
       if (symlinks.length) throw new Error(`任務分支含符號連結（不允許）：${symlinks.join(', ')}`);
       await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
@@ -123,6 +125,7 @@ async function doPushAi(task, taskId, userId, signal) {
     await removeWorktree(repo.local_path, path.join(wtParent, path.basename(repo.local_path))).catch(() => {});
     await deleteBranchLocal(repo.local_path, task.git_branch).catch(() => {});
   }
+  await require('../lib/agent-objects').removeTaskObjectDir({ repoPath: repos[0].local_path, branch: task.git_branch }).catch(() => {});
 
   await deployToTestEnv(task, taskId, userId);
 

@@ -384,6 +384,8 @@ async function doMerge(task, taskId, userId, signal) {
     try {
       // 09-17 R13：合併前先擋符號連結，避免它被 checkout 出來後被本檔／pipeline-routes.js 的衝突
       // 收尾讀到宿主檔案。放在 mergeInto 之前——沒過這關就不建立任何 merge 狀態，乾淨地停下。
+      // D2：任務分支的物件可能還在任務物件庫（容器寫的），先驗證搬進共用庫
+      await require('../lib/agent-objects').importTaskObjects({ repoPath: repo.local_path, branch: branch });
       const symlinks = await symlinkChanges(repo.local_path, 'testing', branch);
       if (symlinks.length) throw new Error(`任務分支含符號連結（不允許）：${symlinks.join(', ')}`);
       mergeResult = await mergeInto(repo.local_path, 'testing', branch, gitEnv);

@@ -136,6 +136,9 @@ async function resetTaskWorktreePointers({ repoPath, worktreePath, branch }, dep
   }
   assertTaskBranchRef(repoPath, branch);
   if (adminErr) throw adminErr;
+  // D2：宿主要在這個 worktree 跑 git，任務分支的物件必須先驗證後搬進共用庫（沒跑過容器就是 no-op）
+  const importObjects = deps.importTaskObjects || (o => require('./agent-objects').importTaskObjects(o));
+  await importObjects({ repoPath, branch });
   const s = lstat(admin);
   if (!s || !s.isDirectory()) throw fail('WORKTREE_TAMPERED', `admin 目錄不是一般目錄：${admin}`);
   const put = (p, content) => { fs.rmSync(p, { recursive: true, force: true }); fs.writeFileSync(p, content, { flag: 'wx' }); };

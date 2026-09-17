@@ -103,11 +103,10 @@ describe('掛載', () => {
     expect(argv).not.toContain('-v');
   });
   // 09-17 裁決 R8：.git 唯讀，只開 commit 必要的四處；testing／main／packed-refs／HEAD 從掛載層就改不動
-  test('gitDirMounts rw：.git 唯讀，只開 objects、本 worktree admin、task 分支 refs 與其 reflog；config／hooks 唯讀', () => {
+  test('gitDirMounts rw：.git 唯讀（含共用 objects，D2），只開本 worktree admin、task 分支 refs 與其 reflog；config／hooks 唯讀', () => {
     const m = s.gitDirMounts('/srv/repos/p7/main', 'rw', '/srv/repos/p7/main/.git/worktrees/main1');
     expect(m).toEqual([
       { source: '/srv/repos/p7/main/.git', readonly: true },
-      { source: '/srv/repos/p7/main/.git/objects', readonly: false },
       { source: '/srv/repos/p7/main/.git/worktrees/main1', readonly: false },
       { source: '/srv/repos/p7/main/.git/refs/heads/task', readonly: false },
       { source: '/srv/repos/p7/main/.git/logs/refs/heads/task', readonly: false },
@@ -130,11 +129,12 @@ describe('掛載', () => {
     const specs = argv.filter(a => a.startsWith('type=bind,'));
     const idxGit = specs.findIndex(x => x.includes('target=/srv/r/.git,') || x.endsWith('target=/srv/r/.git'));
     const idxCfg = specs.findIndex(x => x.includes('target=/srv/r/.git/config'));
-    const idxObj = specs.findIndex(x => x.includes('target=/srv/r/.git/objects'));
+    const idxAdmin = specs.findIndex(x => x.includes('target=/srv/r/.git/worktrees/w'));
     expect(idxGit).toBeLessThan(idxCfg);
-    expect(idxGit).toBeLessThan(idxObj);
+    expect(idxGit).toBeLessThan(idxAdmin);
     expect(specs[idxCfg]).toMatch(/,readonly$/);
-    expect(specs[idxObj]).not.toMatch(/,readonly$/);
+    expect(specs[idxAdmin]).not.toMatch(/,readonly$/);
+    expect(specs.some(x => x.includes('target=/srv/r/.git/objects'))).toBe(false);
   });
   test('相對路徑或含逗號的路徑 → 丟例外（--mount 以逗號分欄）', () => {
     expect(() => s.buildAgentRunArgs(baseRun({ mounts: [{ source: 'rel/path', readonly: true }] }))).toThrow();

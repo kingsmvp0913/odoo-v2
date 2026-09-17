@@ -54,7 +54,10 @@ H="X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN"
 if [ "$MODE" = project ]; then
   expect_fail write_git_config touch "$OWN_GIT/config"
   expect_fail write_git_hooks touch "$OWN_GIT/hooks/aidev-probe"; rm -f "$OWN_GIT/hooks/aidev-probe" 2>/dev/null
-  expect_ok write_git_objects sh -c "touch '$OWN_GIT/objects/aidev-probe' && rm -f '$OWN_GIT/objects/aidev-probe'"
+  # D2：共用物件庫唯讀；commit 寫進任務自己的物件庫（GIT_OBJECT_DIRECTORY）
+  expect_fail write_git_objects touch "$OWN_GIT/objects/aidev-probe"
+  rm -f "$OWN_GIT/objects/aidev-probe" 2>/dev/null
+  expect_ok write_task_objects sh -c "touch \"\$GIT_OBJECT_DIRECTORY/aidev-probe\" && rm -f \"\$GIT_OBJECT_DIRECTORY/aidev-probe\""
   # refs 鎖（09-17 R8）：只有 refs/heads/task 可寫；.lock 檔名 git 不會當成 ref 讀
   expect_fail write_git_release_refs touch "$OWN_GIT/refs/heads/aidev-probe.lock"; rm -f "$OWN_GIT/refs/heads/aidev-probe.lock" 2>/dev/null
   expect_fail write_git_packed_refs touch "$OWN_GIT/packed-refs"

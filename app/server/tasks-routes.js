@@ -45,6 +45,8 @@ async function cleanupTaskGit(task) {
     // 而非異常，且殘留 ref 不佔磁碟——為它噴警告只會把下方真正的磁碟警告淹掉。
     if (task.git_branch) await deleteBranchLocal(repo.local_path, task.git_branch, true).catch(() => {});
   }
+  // D2：任務物件庫（repos/<專案>/.agent-objects/<task_id>）跟著收掉；分支名不合法就是從沒建過，略過
+  await require('./lib/agent-objects').removeTaskObjectDir({ repoPath: repos[0].local_path, branch: `task/${task.task_id}` }).catch(() => {});
   // 外層 .worktrees/<task_id>/ 從來沒人刪（只刪內層 <label>），空目錄就這樣一直累積。
   // 只在「確認已空」時用非遞迴 rmdir 收掉；還有殘留就保留現場並浮上來，絕不遞迴刪掉
   // 可能屬於別的 repo／別人的內容。這也是移除失敗唯一的對外訊號（原本被 .catch(() => {}) 吞掉）。

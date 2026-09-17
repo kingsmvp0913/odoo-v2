@@ -13,9 +13,10 @@ const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 // root 無視檔案權限，chmod 模擬不出唯讀；這支只能以一般使用者跑
 const maybe = isRoot ? test.skip : test;
 
-let R, repo, wt;
+let R, repo, wt, objEnv = {};
+// 容器內的 git 帶任務物件庫 env（D2，見 agent-mounts）；宿主端（repo 當 cwd 的查詢）不帶
 const git = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'gc.auto=0', ...a],
-  { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...(cwd === wt ? objEnv : {}) } }).trim();
 const chmodTree = (p, add) => {
   const st = fs.lstatSync(p);
   if (st.isSymbolicLink()) return;
@@ -35,7 +36,10 @@ beforeEach(() => {
   // 比照 agent-mounts：先在宿主建出 bind mount 來源
   for (const d of [['refs', 'heads', 'task'], ['logs', 'refs', 'heads', 'task']]) fs.mkdirSync(path.join(repo, '.git', ...d), { recursive: true });
   const admin = path.resolve(wt, fs.readFileSync(path.join(wt, '.git'), 'utf8').replace(/^gitdir:\s*/, '').trim());
-  const mounts = gitDirMounts(repo, 'rw', admin);
+  const objDir = path.join(R, '.agent-objects', 'T1');
+  fs.mkdirSync(objDir, { recursive: true });
+  objEnv = { GIT_OBJECT_DIRECTORY: objDir, GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(repo, '.git', 'objects') };
+  const mounts = [...gitDirMounts(repo, 'rw', admin), { source: objDir, readonly: false }];
   chmodTree(path.join(repo, '.git'), false);
   for (const m of mounts) if (!m.readonly) chmodTree(m.source, true);
 });
@@ -44,13 +48,19 @@ afterEach(() => { chmodTree(R, true); fs.rmSync(R, { recursive: true, force: tru
 maybe('任務分支可以 commit（即使原本被 pack）', () => {
   fs.writeFileSync(path.join(wt, 'a'), '2');
   git(wt, 'commit', '-q', '-am', 'work');
-  expect(git(repo, 'log', '-1', '--format=%s', 'task/T1')).toBe('work');
+  expect(git(wt, 'log', '-1', '--format=%s', 'task/T1')).toBe('work');
+  // 共用物件庫沒被寫：commit 只在任務物件庫（宿主端查不到，要等 agent-objects 搬進來）
+  expect(() => git(repo, 'cat-file', '-e', git(wt, 'rev-parse', 'task/T1'))).toThrow();
   expect(git(repo, 'log', '-1', '--format=%s', 'testing')).toBe('base');
+});
+
+maybe('共用物件庫寫不進去（D2）', () => {
+  expect(() => execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: wt, input: 'x', stdio: ['pipe', 'pipe', 'pipe'] })).toThrow(/permission/i);
 });
 
 maybe('改 testing 指標、另開分支、改 main 都失敗', () => {
   const head = git(repo, 'rev-parse', 'HEAD');
-  const evil = git(wt, 'commit-tree', '-m', 'evil', `${head}^{tree}`); // 寫 objects 本來就允許
+  const evil = git(wt, 'commit-tree', '-m', 'evil', `${head}^{tree}`); // 寫進任務物件庫本來就允許
   expect(() => git(wt, 'update-ref', 'refs/heads/testing', evil)).toThrow(/Permission denied|unable to/i);
   expect(() => git(wt, 'branch', 'evil')).toThrow(/Permission denied|unable to|cannot/i);
   expect(() => git(wt, 'update-ref', 'refs/heads/main', evil)).toThrow(/Permission denied|unable to/i);

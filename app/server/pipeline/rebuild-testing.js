@@ -70,6 +70,8 @@ async function doRebuild(projectId, userId, signal) {
       try {
         // 09-17 R13：比照 merge-agent.js，重併回 testing 前也要擋符號連結（同一條任務分支可能是
         // 在此守線上線前就已建立、從未經過 doMerge 的那一關）。
+        // D2：任務分支的物件可能還在任務物件庫（容器寫的），先驗證搬進共用庫
+        await require('../lib/agent-objects').importTaskObjects({ repoPath: repo.local_path, branch: task.git_branch });
         const symlinks = await git.symlinkChanges(repo.local_path, 'testing', task.git_branch);
         if (symlinks.length) throw new Error(`任務分支含符號連結（不允許）：${symlinks.join(', ')}`);
         mergeResult = await git.mergeInto(repo.local_path, 'testing', task.git_branch);

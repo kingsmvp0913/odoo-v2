@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { gitDirMounts } = require('./agent-sandbox');
 const { findAdminDir } = require('./worktree-guard');
+const { objectDirFor } = require('./agent-objects');
 
 const MAX_LOG_FILES = 50;
 const LOG_RE = /^(deploy|e2e)-task(\d+)-/;
@@ -115,16 +116,28 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   };
 
   let wt = null;
+  let taskTaskId = null;
   if (ctx.taskDbId != null && (kind === 'task-worktree' || kind === 'task-worktree-or-none' || kind === 'task-worktree-or-clone')) {
     const { rows: [t] } = await d.query('SELECT task_id, project_id FROM tasks WHERE id=$1', [ctx.taskDbId]);
     if (!t || Number(t.project_id) !== Number(ctx.projectId)) throw new Error(`任務 ${ctx.taskDbId} 不屬於專案 ${ctx.projectId}`);
     wt = d.worktreeParent(info.root, t.task_id);
+    taskTaskId = t.task_id;
   }
 
   const useWorktree = () => {
     if (!wt || !d.existsSync(wt)) throw new Error(`任務 worktree 不存在：${wt}`);
     if (ctx.cwd !== undefined && ctx.cwd !== wt) throw new Error(`呼叫端 cwd（${ctx.cwd}）與任務 worktree（${wt}）不符`);
     mounts.push({ source: wt, readonly: false });
+    // D2：共用物件庫唯讀，commit 寫進這張任務自己的物件庫（同專案 repo 共用一個，見 lib/agent-objects.js）
+    const branch = `task/${taskTaskId}`;
+    const objDir = objectDirFor(info.repos[0].local_path, branch);
+    d.mkdirSync(objDir, { recursive: true, mode: 0o700 });
+    mounts.push({ source: objDir, readonly: false });
+    const env = {
+      GIT_OBJECT_DIRECTORY: objDir,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: info.repos.map(r => path.join(r.local_path, '.git', 'objects')).join(':'),
+    };
+    const taskObjects = { repoPaths: info.repos.map(r => r.local_path), branch };
     for (const r of info.repos) {
       const repoWt = path.join(wt, r.subdir || path.basename(r.local_path));
       // 任務開跑後才加進專案的 repo 沒有 worktree（見 merge-agent.js）：沒東西可 commit，.git 全唯讀
@@ -139,7 +152,7 @@ async function resolveSandboxMounts(ctx, deps = {}) {
       }
     }
     projectData(); attach();
-    return { mounts, workdir: wt };
+    return { mounts, workdir: wt, env, taskObjects };
   };
 
   const useClone = async () => {
