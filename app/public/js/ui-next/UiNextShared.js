@@ -227,9 +227,13 @@
       const entries = readList("X-Zip-Entries");
       const deleted = readList("X-Zip-Deleted");
       const stale = readList("X-Zip-Stale");
+      // skipped＝worktree 內偵測到符號連結等不安全路徑，伺服器端已擋下不打包（見 pipeline-routes.js
+      // 的 X-Zip-Skipped）。這裡不提示的話，使用者只會拿到一個檔案數量對不上、卻毫無警示的 zip。
+      const skipped = readList("X-Zip-Skipped");
       showToast(`已下載 ${entries.length} 個改動檔`, "success");
       if (stale.length) showToast(`⚠️ 這 ${stale.length} 個檔在本任務之後也被改過，覆蓋會蓋掉對方的改動：${stale.join("、")}`, "error");
       if (deleted.length) showToast(`⚠️ 本任務刪除了這些檔，請自行到正式區移除：${deleted.join("、")}`, "error");
+      if (skipped.length) showToast(`⚠️ 有 ${skipped.length} 個檔案因安全原因未打包：${skipped.map((s) => `${s.path}（${s.reason}）`).join("、")}`, "error");
     } catch (e) {
       showToast(e.message, "error");
     } finally {

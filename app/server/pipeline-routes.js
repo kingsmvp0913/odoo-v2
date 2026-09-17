@@ -6,7 +6,7 @@ const { verifyToken } = require('./auth');
 const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 const { loadTaskForActor } = require('./lib/task-access');
-const { isSafeRegularFileInside } = require('./lib/safe-worktree-read');
+const { isSafeRegularFileInside, unsafeReason } = require('./lib/safe-worktree-read');
 const { saveAttachmentFile, uploadAttachmentFiles } = require('./lib/attachments');
 const { machineLogHeader } = require('../public/js/machine-logs.js');
 
@@ -257,7 +257,10 @@ function registerRoutes(app) {
           readSrc = (rel) => {
             const f = path.join(wtRepo, rel);
             try { fs.lstatSync(f); } catch { return null; }
-            if (!isSafeRegularFileInside(f, wtRepo)) return { skip: true };
+            // reason 貼實際判定分支（符號連結／不是一般檔案／路徑逃出 worktree），不要一律寫死同一句——
+            // 使用者看到的原因要對得上真的發生了什麼。
+            const reason = unsafeReason(f, wtRepo);
+            if (reason) return { skip: reason };
             return { srcFile: f, root: wtRepo };
           };
         } else {
@@ -279,7 +282,7 @@ function registerRoutes(app) {
           if (!src) { deleted.push(rel); continue; }
           const zipPath = `${repoDir}/${rel}`;
           if (src.skip) {
-            if (!skipped.some(s => s.path === zipPath)) skipped.push({ path: zipPath, reason: '符號連結，不打包' });
+            if (!skipped.some(s => s.path === zipPath)) skipped.push({ path: zipPath, reason: `${src.skip}，不打包` });
             continue;
           }
           if (entries.some(e => e.zipPath === zipPath)) continue;

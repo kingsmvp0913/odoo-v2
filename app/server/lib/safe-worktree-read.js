@@ -13,19 +13,26 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 
-// file 是否為「一般檔案」且 realpath 落在 root（含子目錄）內。不 follow file 本身或其上層路徑
-// 元件的 symlink：檢查一律以 lstat／realpath 做，從不對 file 直接 stat。
-function isSafeRegularFileInside(file, root) {
+// file 為什麼不安全，供呼叫端組出貼近實際原因的訊息（如 X-Zip-Skipped 的 reason）；安全則回 null。
+// 一律以 lstat／realpath 判斷，從不對 file 直接 stat（不 follow file 本身或其上層路徑元件的 symlink）。
+function unsafeReason(file, root) {
   let st;
-  try { st = fs.lstatSync(file); } catch { return false; }
-  if (!st.isFile()) return false; // 排除 symlink／目錄／裝置檔等
+  try { st = fs.lstatSync(file); } catch { return '檔案不存在'; }
+  if (st.isSymbolicLink()) return '符號連結';
+  if (!st.isFile()) return '不是一般檔案'; // 目錄／裝置檔等
   let realFile, realRoot;
   try {
     realFile = fs.realpathSync(file);
     realRoot = fs.realpathSync(root);
-  } catch { return false; }
+  } catch { return '路徑無法解析'; }
   const rel = path.relative(realRoot, realFile);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return '路徑逃出 worktree';
+  return null;
+}
+
+// file 是否為「一般檔案」且 realpath 落在 root（含子目錄）內。
+function isSafeRegularFileInside(file, root) {
+  return unsafeReason(file, root) === null;
 }
 
 // 依 root 讀取 rel：先驗證（禁止 symlink／`..` 逃逸／非一般檔案），驗不過丟例外。
@@ -39,4 +46,4 @@ async function readFileInside(root, rel, encoding) {
   return fsp.readFile(file, encoding);
 }
 
-module.exports = { isSafeRegularFileInside, readFileInside };
+module.exports = { isSafeRegularFileInside, unsafeReason, readFileInside };

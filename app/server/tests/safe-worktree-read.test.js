@@ -5,7 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { isSafeRegularFileInside, readFileInside } = require('../lib/safe-worktree-read');
+const { isSafeRegularFileInside, unsafeReason, readFileInside } = require('../lib/safe-worktree-read');
 
 let root, outside;
 beforeEach(() => {
@@ -51,6 +51,38 @@ test('目錄 → 拒絕', () => {
 
 test('不存在的檔案 → 拒絕（不丟例外）', () => {
   expect(isSafeRegularFileInside(path.join(root, 'nope.py'), root)).toBe(false);
+});
+
+// 意圖（fix round 1，IMPORTANT-1／MINOR-3）：X-Zip-Skipped 現在要顯示「實際擋下的原因」而非一律
+// 寫死「符號連結」，reason 要真的隨判定分支變化——用 unsafeReason 直接驗證各分支各自的文字。
+describe('unsafeReason', () => {
+  test('一般檔案 → null（安全）', () => {
+    fs.writeFileSync(path.join(root, 'a.py'), 'x');
+    expect(unsafeReason(path.join(root, 'a.py'), root)).toBeNull();
+  });
+
+  test('symlink（不論指向 root 內外）→ 符號連結', () => {
+    const secret = path.join(outside, 'config.json');
+    fs.writeFileSync(secret, 'x');
+    fs.symlinkSync(secret, path.join(root, 'leak.json'));
+    expect(unsafeReason(path.join(root, 'leak.json'), root)).toBe('符號連結');
+  });
+
+  test('目錄 → 不是一般檔案', () => {
+    const dir = path.join(root, 'sub');
+    fs.mkdirSync(dir);
+    expect(unsafeReason(dir, root)).toBe('不是一般檔案');
+  });
+
+  test('不存在 → 檔案不存在', () => {
+    expect(unsafeReason(path.join(root, 'nope.py'), root)).toBe('檔案不存在');
+  });
+
+  test('一般檔案但路徑用 `..` 逃出 root → 路徑逃出 worktree', () => {
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
+    const escaped = path.join(root, '..', path.basename(outside), 'secret.txt');
+    expect(unsafeReason(escaped, root)).toBe('路徑逃出 worktree');
+  });
 });
 
 describe('readFileInside', () => {
