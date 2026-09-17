@@ -46,6 +46,8 @@ test('字面在 stderr → session_missing，且寫一列 task_logs', async () =
   await flush();
   const { rows } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '[續接]%'", [taskDbId]);
   expect(rows.length).toBe(1);
+  // 開關 off（沒走容器）時不能把原因說成「改在容器內執行」——那是誤導（最終審查 MINOR-1）
+  expect(rows[0].content).not.toMatch(/容器/);
 });
 
 test('字面在 stdout 的 result 事件 → 同樣認得', async () => {

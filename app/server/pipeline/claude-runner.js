@@ -365,7 +365,9 @@ function runClaude(prompt, opts = {}) {
             // 這裡只負責把原因標清楚，並在時間軸留一行（analysis／spec_tour 自己寫，帶 logSessionMissing:false）
             if (taskId && opts.logSessionMissing !== false) {
               query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-                [taskId, '[續接] 上一輪對話的 session 已不存在（多半是 AI 改在容器內執行、家目錄換了），本輪改以完整脈絡重跑']).catch(() => {});
+                [taskId, sandboxRun
+                  ? '[續接] 上一輪對話的 session 已不存在（多半是 AI 改在容器內執行、家目錄換了），本輪改以完整脈絡重跑'
+                  : '[續接] 上一輪對話的 session 已不存在（可能已被清除），本輪改以完整脈絡重跑']).catch(() => {});
             }
             reject(fail(new Error(`找不到要續接的 session（${resumeSessionId}）：${missing}`), 'session_missing'));
           }
