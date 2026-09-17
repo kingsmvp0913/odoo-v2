@@ -90,7 +90,7 @@ async function runOnce(mode, ctx, d) {
       ctx.ownSlug, ctx.otherSlug, ctx.hosts.join(' '), gw || '-',
     ];
     await new Promise((resolve, reject) => {
-      const child = d.spawn('docker', argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv });
+      const child = run.attach(d.spawn('docker', argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv }));
       const timer = setTimeout(() => { run.kill(); reject(new Error('自我檢測逾時（5 分鐘）')); }, 300000);
       child.stdout.on('data', b => { stdout += b; });
       child.stderr.on('data', () => {});

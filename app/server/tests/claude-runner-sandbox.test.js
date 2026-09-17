@@ -22,7 +22,7 @@ function child() {
 }
 function fakeRun() {
   return { argv: ['run', '-i', '--rm', 'aidev-agent:x', 'claude', '-p'], childEnv: { PATH: '/bin', AIDEV_AI_TOKEN: 't' },
-    containerName: 'odoo-v2-run-ab', runId: 'ab', kill: jest.fn(), release: jest.fn().mockResolvedValue() };
+    containerName: 'odoo-v2-run-ab', runId: 'ab', kill: jest.fn(), attach: jest.fn(c => c), release: jest.fn().mockResolvedValue() };
 }
 const tick = () => new Promise(r => setImmediate(r));
 const resultLine = JSON.stringify({ type: 'result', subtype: 'success', result: 'done', usage: { input_tokens: 1, output_tokens: 1 } });
@@ -61,6 +61,8 @@ test('容器路徑：spawn docker、不帶 cwd、解析照舊、結束時 releas
   await tick(); await tick();
   expect(spawn).toHaveBeenCalledWith('docker', run.argv, expect.objectContaining({ env: run.childEnv }));
   expect(spawn.mock.calls[0][2].cwd).toBeUndefined();
+  // release 要靠 attach 得知 docker run CLI 何時退出，才判斷得了容器是否真的不會再跑（D1）
+  expect(run.attach).toHaveBeenCalledWith(c);
   expect(c.stdin.write).toHaveBeenCalledWith('prompt-body');
   c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
   await expect(p).resolves.toMatchObject({ text: 'done' });

@@ -44,6 +44,31 @@ async function waitForWorktreeIdle(worktreePath, { timeoutMs = WORKTREE_WAIT_MS,
   }
 }
 
+// release 的時限（D1）：每個 docker 指令最多 60 秒（daemon 卡住時不能讓 worktree 永遠被當成使用中）；
+// docker run CLI 在 release 時 60 秒內還沒退出，就由這裡 SIGKILL 它（停止路徑已先送過 SIGTERM／SIGKILL，
+// 正常情況下早就退了）。確認不了容器已停 → worktree 維持使用中（寧可擋住宿主 git，也不讓宿主與還在跑
+// 的容器同時改同一份檔案），背景依序隔 30 秒／1／2／3／4 分鐘重試（約 10 分鐘），確認停了就放。
+const RELEASE_BOUNDS = { dockerMs: 60000, cliExitMs: 60000, retryDelaysMs: [30000, 60000, 120000, 180000, 240000] };
+const NO_SUCH_CONTAINER = /No such (object|container)/i;
+const unrefTimer = t => { if (t && t.unref) t.unref(); return t; };
+
+// 跑一個 docker 子指令，一定會在時限內回來：{ err, out }。execFile 的 timeout 會殺掉卡住的 CLI；
+// 外層計時器是保險——CLI 連回呼都沒有時也不會永遠等下去。
+function dockerCall(execFileFn, args, ms) {
+  return new Promise(resolve => {
+    let done = false;
+    let t = null;
+    const end = (err, out) => { if (done) return; done = true; clearTimeout(t); resolve({ err, out: String(out || '') }); };
+    t = unrefTimer(setTimeout(() => end(Object.assign(new Error(`docker ${args[0]} 超過 ${ms} ms 沒回應`), { killed: true })), ms + 1000));
+    try {
+      execFileFn('docker', args, { timeout: ms }, (err, stdout, stderr) => {
+        if (err) err.message = `${err.message}\n${String(stderr || '')}`;
+        end(err, stdout);
+      });
+    } catch (e) { end(e); }
+  });
+}
+
 function replaceArg(args, flag, value) {
   const i = args.indexOf(flag);
   if (i === -1 || i === args.length - 1) throw new Error(`參數裡找不到 ${flag}`);
@@ -135,19 +160,83 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
       user: `${d.getuid()}:${d.getgid()}`, mounts, workdir, home, env, limits: d.getSandboxLimits(),
       command: ['claude', ...replaceArg(claudeArgs, '--mcp-config', d.sandboxMcpConfigPath(opts.agentType))],
     });
+    const bounds = { ...RELEASE_BOUNDS, ...(d.releaseBounds || {}) };
+    const name = built.containerName;
     let released = false;
+    let cliChild = null;
+    let cliExited = null;
+    // docker run CLI 是否已退出（在時限內）。沒 attach 過＝從沒 spawn，自然沒有 CLI 會去建立／啟動容器。
+    const waitCliExit = () => {
+      if (!cliExited) return Promise.resolve(true);
+      return new Promise(resolve => {
+        const t = unrefTimer(setTimeout(() => {
+          try { cliChild.kill('SIGKILL'); } catch { /* 已經不在了 */ }
+          resolve(false);
+        }, bounds.cliExitMs));
+        cliExited.then(() => { clearTimeout(t); resolve(true); });
+      });
+    };
+    // 回 null＝確認容器不會再跑；否則回「為什麼確認不了」。
+    // 為什麼 CLI 退出後 inspect 說「不存在／沒在跑」就安全：docker run 是前景附著模式，建立與啟動容器都是
+    // 這個 CLI 送給 daemon 的呼叫。CLI 一旦死掉就再也送不出 start，所以此刻不存在或沒在跑的容器，之後永遠
+    // 不會開始跑（被建立但沒啟動的容器沒有任何行程）。反過來，CLI 還活著時 docker 回「No such container」
+    // 可能只是容器還沒建好（D1b：剛 spawn 就按停止），不能當成結束。
+    const confirmStopped = async () => {
+      if (!(await waitCliExit())) return `docker run CLI 在 ${bounds.cliExitMs} ms 內沒有退出（已送 SIGKILL）`;
+      // 不存在／已停止都會回錯，一律忽略：結果以下面的 inspect 為準
+      await dockerCall(d.execFile, ['kill', name], bounds.dockerMs);
+      const ins = await dockerCall(d.execFile, ['inspect', '-f', '{{.State.Running}}', name], bounds.dockerMs);
+      if (ins.err) return NO_SUCH_CONTAINER.test(ins.err.message) ? null : `docker inspect 失敗：${ins.err.message.trim()}`;
+      const running = ins.out.trim();
+      if (running === 'false') return null;
+      if (running !== 'true') return `docker inspect 回傳無法判讀：${running}`;
+      const w = await dockerCall(d.execFile, ['wait', name], bounds.dockerMs);
+      if (!w.err || NO_SUCH_CONTAINER.test(w.err.message)) return null;
+      return `docker wait 失敗：${w.err.message.trim()}`;
+    };
+    const retryInBackground = i => {
+      if (i >= bounds.retryDelaysMs.length) {
+        console.error(`[SANDBOX] 重試用完仍無法確認容器 ${name} 已停止，worktree 維持使用中（宿主 git 會被擋住），需人工確認容器後重啟平台：${heldWorktree}`);
+        return;
+      }
+      unrefTimer(setTimeout(async () => {
+        const why = await confirmStopped();
+        if (why === null) {
+          dropWorktree(heldWorktree);
+          console.error(`[SANDBOX] 重試確認容器 ${name} 已停止，worktree 放行：${heldWorktree}`);
+        } else {
+          console.error(`[SANDBOX] 第 ${i + 1} 次重試仍無法確認容器 ${name} 已停止（${why}）`);
+          retryInBackground(i + 1);
+        }
+      }, bounds.retryDelaysMs[i]));
+    };
     return {
       ...built, runId,
-      kill: () => d.execFile('docker', ['kill', built.containerName], () => {}),
+      kill: () => d.execFile('docker', ['kill', name], { timeout: bounds.dockerMs }, () => {}),
+      // spawn 出 docker run CLI 後必須立刻呼叫：release 靠它知道 CLI 何時退出（見 confirmStopped）
+      attach: child => {
+        if (released) throw new Error(`容器 ${name} 已 release，不得再啟動`);
+        cliChild = child;
+        cliExited = new Promise(resolve => {
+          if (child.exitCode != null || child.signalCode != null) resolve();
+          child.once('exit', () => resolve());
+          // spawn 本身失敗（沒有 pid）＝CLI 從沒跑起來
+          child.once('error', () => { if (child.pid == null) resolve(); });
+        });
+        return child;
+      },
       release: async () => {
         if (released) return;
         released = true;
         d.revokeRun(runId);
-        // 容器真的結束才放掉 worktree：逾時／停止時 release 會比容器先到（docker kill 是非同步）。
-        // docker wait 對已移除的容器會立刻回錯，一樣算結束。
+        // 容器確認不會再跑才放掉 worktree（逾時／停止時 release 會比容器先到，docker kill 是非同步）
         if (heldWorktree) {
-          await new Promise(r => d.execFile('docker', ['wait', built.containerName], () => r()));
-          dropWorktree(heldWorktree);
+          const why = await confirmStopped();
+          if (why === null) dropWorktree(heldWorktree);
+          else {
+            console.error(`[SANDBOX] 無法確認容器 ${name} 已停止（${why}），worktree 維持使用中並在背景重試：${heldWorktree}`);
+            retryInBackground(0);
+          }
         }
         if (platformWorktree) await d.removePlatformCleanWorktree(platformWorktree).catch(e => console.error('[SANDBOX] 移除乾淨 worktree 失敗：', e.message));
       },

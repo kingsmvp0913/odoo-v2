@@ -428,7 +428,8 @@ function runClaude(prompt, opts = {}) {
         sandboxRun = run;
         // 準備期間就被按停止：不要再 spawn，直接把通行證與 worktree 收掉
         if (settled) { releaseSandbox(); return; }
-        attachChild(spawn('docker', run.argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv }));
+        // run.attach：release 要等這個 docker run CLI 退出，才判斷得了容器是否真的不會再跑（sandbox-run.js）
+        attachChild(run.attach(spawn('docker', run.argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv })));
       })
       .catch(err => finish(() => reject(fail(err, 'error'))));
   });

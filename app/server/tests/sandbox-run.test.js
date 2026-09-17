@@ -20,7 +20,8 @@ function deps(over = {}) {
       getSandboxLimits: () => ({ memory: '4g', cpus: '2', pids: 512 }),
       resolveSandboxMounts: async (ctx) => ({ mounts: [], workdir: ctx.platformWorktree || ctx.home }),
       mkdirSync: () => {},
-      execFile: (cmd, args, cb) => { calls.kill.push([cmd, ...args]); cb && cb(null); },
+      // 容器已不存在時 inspect 回 false（release 的正常收尾）
+      execFile: (cmd, args, ...rest) => { calls.kill.push([cmd, ...args]); const cb = rest.pop(); if (typeof cb === 'function') cb(null, args[0] === 'inspect' ? 'false\n' : ''); },
       createPlatformCleanWorktree: async (runId) => path.join(APP, '.claude', 'worktrees', `ro-${runId}`),
       removePlatformCleanWorktree: async (wt) => { calls.wtRemoved.push(wt); },
       sandboxMcpConfigPath: () => path.join(APP, 'app', 'server', 'pipeline', 'mcp', 'none.json'),
@@ -127,24 +128,117 @@ describe('waitForWorktreeIdle：任務 worktree 的獨占', () => {
   const wtDeps = (over = {}) => deps({ resolveSandboxMounts: async () => ({ mounts: [{ source: wt, readonly: false }], workdir: wt }), ...over });
   const start = (d, agentType = 'coding') => sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType, taskId: 70 }, profile: profileFor(agentType), projectId: 7 }, d);
 
-  test('容器掛著時等待；release（docker wait 回來）之後才放行', async () => {
-    const waits = [];
-    const { d } = wtDeps({ execFile: (cmd, args, cb) => { if (args[0] === 'wait') waits.push(cb); else if (cb) cb(null); } });
+  // 意圖（D1）：release 要等到「docker run CLI 已退出」且「容器確認沒在跑」才放 worktree。
+  //  - CLI 還活著時容器可能還沒建好：此刻 docker 回「No such container」不代表結束（D1b 競態）
+  //  - CLI 死了就再也送不出 start：此時容器不存在／沒在跑＝永遠不會再跑
+  //  - docker 卡住時寧可維持使用中（fail closed），但要記錄並在背景重試，不能等平台重啟
+  const SHORT = { dockerMs: 20, cliExitMs: 40, retryDelaysMs: [30, 30] };
+  const EventEmitter = require('events');
+  const fakeCli = () => Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null, kill: jest.fn() });
+  const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
+  // docker 假實作：handlers[子指令](cb, args) 決定怎麼回；沒列到的回成功
+  const fakeDocker = (handlers, log = []) => (cmd, args, opts, cb) => {
+    log.push({ args, opts });
+    const h = handlers[args[0]];
+    if (h) h(cb, args); else cb(null, '', '');
+  };
+  const noSuch = cb => cb(Object.assign(new Error('Command failed\nError: No such container: x'), { code: 1 }), '', 'Error: No such container: x');
+  const busy = async () => { try { await sr.waitForWorktreeIdle(wt, { timeoutMs: 0 }); return false; } catch (e) { return e.code === 'WORKTREE_BUSY'; } };
+
+  test('CLI 還沒退出 → 不放；退出後 inspect=false 才放，每個 docker 指令都帶時限', async () => {
+    const log = [];
+    const { d } = wtDeps({ releaseBounds: SHORT, execFile: fakeDocker({ inspect: cb => cb(null, 'false\n', '') }, log) });
     const run = await start(d);
-    let idle = false;
-    const p = sr.waitForWorktreeIdle(path.join(wt, 'main'), { timeoutMs: 5000, pollMs: 5 }).then(() => { idle = true; });
-    await new Promise(r => setTimeout(r, 30));
-    expect(idle).toBe(false);
+    const cli = fakeCli(); run.attach(cli);
     const rel = run.release();
-    await new Promise(r => setTimeout(r, 30));
-    expect(idle).toBe(false);             // 容器還沒真的結束（docker wait 未回）
+    await tick(10);
+    expect(await busy()).toBe(true);
+    expect(log.length).toBe(0);                     // CLI 活著時不去問 docker
+    cli.emit('exit', 0);
+    await rel;
+    expect(await busy()).toBe(false);
+    expect(log.map(c => c.args[0])).toEqual(['kill', 'inspect']);
+    expect(log.every(c => c.opts && c.opts.timeout === SHORT.dockerMs)).toBe(true);
+  });
+
+  test('D1b：容器還沒建好（docker 全回 No such container）但 CLI 還活著 → 不放；CLI 退出後才放', async () => {
+    const { d } = wtDeps({ releaseBounds: { ...SHORT, cliExitMs: 5000 }, execFile: fakeDocker({ kill: noSuch, inspect: noSuch, wait: noSuch }) });
+    const run = await start(d);
+    const cli = fakeCli(); run.attach(cli);
+    const rel = run.release();
+    await tick(60);
+    expect(await busy()).toBe(true);
+    cli.emit('exit', 125);
+    await rel;
+    expect(await busy()).toBe(false);
+  });
+
+  test('inspect=true → docker wait 回來才放', async () => {
+    const waits = [];
+    const { d } = wtDeps({ releaseBounds: { ...SHORT, dockerMs: 5000 }, execFile: fakeDocker({ inspect: cb => cb(null, 'true\n', ''), wait: cb => waits.push(cb) }) });
+    const run = await start(d);
+    const cli = fakeCli(); run.attach(cli); cli.emit('exit', 137);
+    const rel = run.release();
+    await tick();
     expect(waits.length).toBe(1);
-    waits[0](null); await rel; await p;
-    expect(idle).toBe(true);
+    expect(await busy()).toBe(true);
+    waits[0](null, '137\n', '');
+    await rel;
+    expect(await busy()).toBe(false);
+  });
+
+  test('docker 卡住（不回呼／逾時錯誤）→ 不放、記錄容器名；背景重試等 inspect 回 false 才放', async () => {
+    let stuck = true;
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { d } = wtDeps({ releaseBounds: SHORT, execFile: fakeDocker({
+      kill: cb => cb(Object.assign(new Error('timeout'), { killed: true, signal: 'SIGTERM' }), '', ''),
+      inspect: cb => { if (!stuck) cb(null, 'false\n', ''); },       // 卡住＝永遠不回呼
+    }) });
+    const run = await start(d);
+    const cli = fakeCli(); run.attach(cli); cli.emit('exit', 0);
+    await run.release();                              // 本身不能跟著卡死
+    expect(await busy()).toBe(true);
+    expect(errSpy.mock.calls.some(a => /\[SANDBOX\]/.test(a[0]) && a[0].includes(run.containerName))).toBe(true);
+    stuck = false;
+    await tick(150);
+    expect(await busy()).toBe(false);
+    errSpy.mockRestore();
+  });
+
+  test('CLI 逾時不退出 → release 送 SIGKILL，不放；之後退出由背景重試放掉', async () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { d } = wtDeps({ releaseBounds: SHORT });
+    const run = await start(d);
+    const cli = fakeCli(); run.attach(cli);
+    await run.release();
+    expect(cli.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(await busy()).toBe(true);
+    cli.emit('exit', null, 'SIGKILL');
+    await tick(150);
+    expect(await busy()).toBe(false);
+    errSpy.mockRestore();
+  });
+
+  test('從未 attach（準備完就被停止、沒 spawn）→ 確認容器不在就放；release 之後不得再 attach', async () => {
+    const { d } = wtDeps({ releaseBounds: SHORT, execFile: fakeDocker({ inspect: noSuch }) });
+    const run = await start(d);
+    await run.release();
+    expect(await busy()).toBe(false);
+    expect(() => run.attach(fakeCli())).toThrow();
+  });
+
+  test('release 重複呼叫只放一次（不會把另一個持有者的登記也扣掉）', async () => {
+    const { d } = wtDeps({ releaseBounds: SHORT });
+    const a = await start(d); const b = await start(d);
+    await Promise.all([a.release(), a.release()]);
+    await a.release();
+    expect(await busy()).toBe(true);                 // b 還掛著
+    await b.release();
+    expect(await busy()).toBe(false);
   });
 
   test('等不到 → 丟例外（訊息寫明容器仍在執行）；timeoutMs=0 是不阻塞檢查，立刻丟 WORKTREE_BUSY', async () => {
-    const { d } = wtDeps({ execFile: () => {} });
+    const { d } = wtDeps({ execFile: () => {}, releaseBounds: { dockerMs: 5, cliExitMs: 5, retryDelaysMs: [] } });
     const run = await start(d);
     await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 30, pollMs: 5 })).rejects.toThrow(/容器仍在/);
     const t0 = Date.now();

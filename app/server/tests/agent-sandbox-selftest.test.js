@@ -31,7 +31,7 @@ function deps(over = {}) {
       query: async () => ({ rows: [{ task_id: 'task_1', project_id: 7 }] }),
       prepareSandboxRun: async ({ profile }) => ({
         argv: ['run', '-i', '--rm', 'aidev-agent:x', 'claude', '-p'], childEnv: {}, containerName: `c-${profile.scope}`, runId: 'r',
-        kill: () => {}, release: async () => { order.push('release'); },
+        kill: () => {}, attach: c => { order.push('attach'); return c; }, release: async () => { order.push('release'); },
       }),
       ensureAgentInfra: async () => ({ image: 'aidev-agent:x', gatewayHost: 'odoo-v2-gw', network: 'odoo-v2-agent-net', instanceId: 'odoo-v2' }),
       hostTargets: async () => ['127.0.0.1', '10.0.0.1'],
@@ -55,6 +55,8 @@ test('全部通過 → ok，而且 401 檢查在 release 之後', async () => {
   expect(r.ok).toBe(true);
   expect(r.checks.filter(c => c.name === 'token_revoked_401').length).toBe(2);
   expect(order.indexOf('release')).toBeLessThan(order.indexOf('check401'));
+  // spawn 出的 docker run CLI 要交給 run.attach，release 才等得到它退出（D1）
+  expect(order.slice(0, 3)).toEqual(['spawn', 'attach', 'release']);
 });
 
 test('探針少回報一項 → 該項算 FAIL', async () => {
@@ -136,7 +138,7 @@ test('docker run 參數裡找不到映像檔 → release 仍會呼叫、拋出�
   const { d } = deps({
     prepareSandboxRun: async ({ profile }) => ({
       argv: ['run', '-i', '--rm', 'claude', '-p'], childEnv: {}, containerName: `c-${profile.scope}`, runId: 'r',
-      kill: () => {}, release: async () => { released.push(true); },
+      kill: () => {}, attach: c => c, release: async () => { released.push(true); },
     }),
   });
   await expect(st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d)).rejects.toThrow(/映像檔/);
