@@ -26,6 +26,7 @@ const { registerRoutes: registerEnterpriseRoutes } = require('./enterprise-route
 const { registerRoutes: registerSearchRoutes } = require('./search-routes');
 const { registerRoutes: registerDeployRoutes } = require('./deploy-routes');
 const { registerRoutes: registerDocsRoutes } = require('./docs-routes');
+const { registerRoutes: registerAiPlatformRoutes } = require('./ai-platform-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -125,6 +126,7 @@ function createApp() {
   registerEnterpriseRoutes(app);
   registerSearchRoutes(app);
   registerDeployRoutes(app);
+  registerAiPlatformRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');
@@ -222,6 +224,8 @@ if (require.main === module) {
   };
   process.on('uncaughtException', err => recordFatal('uncaughtException', err));
   process.on('unhandledRejection', err => recordFatal('unhandledRejection', err));
+  // 子專案 0 §4.2：容器可寫主 clone 的 .git，平台在主機跑的每一個 git 都不得執行 hook／fsmonitor。
+  Object.assign(process.env, require('./lib/git-hardening').hardenGitEnv(process.env));
 
   const { migrate, query } = require('./db');
   const { setIo } = require('./notify');
@@ -325,6 +329,18 @@ if (require.main === module) {
         console.log(`[STARTUP] 中斷升級清理：重啟 ${s.restarted}／略過 ${s.skipped}／失敗 ${s.failed}／超預算 ${s.overBudget}`);
       }
     } catch (e) { console.error('[STARTUP] 中斷升級清理:', e.message); }
+    // 子專案 0：被重啟打斷的 AI 容器不會跟著死（不像子行程），不清的話會繼續燒錢、
+    // 與 cron 重派的同一關並寫同一個 worktree。必須在 startCron() 之前。
+    // 取不到實例 id 時一個都不刪（見 lib/agent-orphans.js）。
+    try {
+      const o = await require('./lib/agent-orphans').removeOrphanAgentContainers();
+      if (o.removed || o.skipped) console.log(`[STARTUP] AI 孤兒容器：清掉 ${o.removed}${o.skipped ? `（略過：${o.skipped}）` : ''}`);
+    } catch (e) { console.error('[STARTUP] AI 孤兒容器清理:', e.message); }
+    // 內部 AI 的乾淨 worktree：平台被重啟打斷時沒收掉的 ro-*（容器已被上一步清掉，這些不會再有人用）
+    try {
+      const n = await require('./lib/platform-worktree').removeStalePlatformWorktrees();
+      if (n) console.log(`[STARTUP] 清掉 ${n} 個殘留的內部 AI worktree`);
+    } catch (e) { console.error('[STARTUP] 清內部 AI worktree:', e.message); }
     // 維護旗標可能卡在上次沒收乾淨的狀態（批次拋錯／被 kill）。開機清一次是第三道保險。
     try { await require('./pipeline/maintenance').leaveMaintenance(); }
     catch (e) { console.error('[STARTUP] 清維護旗標:', e.message); }
@@ -335,6 +351,21 @@ if (require.main === module) {
     await require('./lib/codex-auth').loadCodexToken();
     // context7 API key 同理：組 MCP 設定檔時同步取用（未設定則走匿名額度）
     await require('./lib/context7-auth').loadContext7Key();
+    // 子專案 0：AI 容器隔離開關（同步快取，runClaude 讀）。讀不到 DB 時模組內部落到 all（最嚴格）。
+    await require('./lib/agent-sandbox-flag').loadAgentSandboxFlag();
+    // /ai 的 unix socket 入口：只有出口閘道容器掛得到。起不來只記 log——開關 off 時沒有人用它；
+    // 開關開著時，容器內每一次 /ai 查詢都會失敗並在 agent 輸出看到，不會靜默。
+    try {
+      const { startAiSocketServer, aiSocketPath } = require('./lib/ai-socket-server');
+      await startAiSocketServer(aiSocketPath());
+      console.log(`[AI-SOCKET] listening ${aiSocketPath()}`);
+    } catch (e) { console.error('[AI-SOCKET] 啟動失敗：', e.message); }
+    // /ai/platform/query 的唯讀帳號：每次啟動依現有欄位重新授權（新欄位自動套遮蔽規則）。
+    // 失敗只記 log：端點會在查詢時回連線／權限錯誤，健檢 agent 看得到；不因此擋住整個平台啟動。
+    try {
+      const r = await require('./lib/platform-readonly').ensureReadonlyRole();
+      console.log(`[AI-READONLY] 已授權 ${r.tables} 張表，遮蔽 ${r.denied.length} 個欄位：${r.denied.join(', ')}`);
+    } catch (e) { console.error('[AI-READONLY] 建立唯讀角色失敗：', e.message); }
     // 離線通知：需人工動作的狀態變更 POST 到 admin 設定的 notify_webhook_url（未設定則靜默不動作）
     require('./notify-webhook').registerWebhookChannel();
     // 綁埠失敗必須讓行程結束，且 cron 只在綁到埠之後才起。

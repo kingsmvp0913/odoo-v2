@@ -44,7 +44,9 @@ jest.mock('../pipeline/git', () => ({
   ensureTestingBranch: jest.fn().mockResolvedValue(undefined),
   // 併版／approve 逐 repo 前會確認「這個 repo 有沒有本張任務的分支」（中途加入的 repo 沒有 →
   // 跳過）。這裡的情境都是任務一開始就有 repo，一律回 true。
-  refExists: jest.fn().mockResolvedValue(true)
+  refExists: jest.fn().mockResolvedValue(true),
+  // 09-17 R13：QA／merge／push-ai 三關合併前都會先查符號連結，這裡的情境都不含符號連結。
+  symlinkChanges: jest.fn().mockResolvedValue([])
 }));
 jest.mock('../pipeline/env-agent', () => ({
   upgradeModules: jest.fn().mockResolvedValue({ ok: true, log: '' }),

@@ -294,6 +294,24 @@ async function previousRejections(fixId, findingId, members) {
   return hits.map(r => `- 修正 #${r.id}：${String(r.reject_reason).slice(0, 800)}`).join('\n');
 }
 
+/**
+ * 容器模式下 platform_fix 只掛這一組修正用得到的意見附件目錄（lib/agent-mounts.js 依此組
+ * feedback_<id>/）。
+ *
+ * members 有兩種形狀：runFix 收到的是記憶體物件 `{ source, row: { id, ... } }`（見上面
+ * attachmentNote／previousRejections 的 `m.row.id`）；一旦落過 finding_fixes.members 這個
+ * JSONB 欄位再讀回來，會被 memberRefs 壓成 `{ source, id }`（見 nightly-fix.js）。兩種都要吃。
+ */
+function feedbackIdsOf(members) {
+  const ids = new Set();
+  for (const m of members || []) {
+    if (!m || m.source !== 'feedback') continue;
+    const rawId = (m.row && m.row.id != null) ? m.row.id : m.id;
+    if (/^[1-9]\d*$/.test(String(rawId))) ids.add(Number(rawId));
+  }
+  return [...ids];
+}
+
 async function runFix(fixId, { findingId, startedBy = null, members = null } = {}) {
   let worktree = null;
   try {
@@ -336,7 +354,8 @@ async function runFix(fixId, { findingId, startedBy = null, members = null } = {
     let text = '';
     try {
       const r = await runClaude(prompt, {
-        model: agent.model, agentType: 'platform_fix', cwd: worktree, timeoutMs: FIX_TIMEOUT_MS
+        model: agent.model, agentType: 'platform_fix', cwd: worktree, timeoutMs: FIX_TIMEOUT_MS,
+        feedbackIds: feedbackIdsOf(members),
       });
       text = r.raw ?? r.text;
       await logTokenUsage({ taskId: null, projectId: null }, startedBy, 'platform_fix', r.usage, r.durationMs);
@@ -636,7 +655,7 @@ async function applyFix(fixId, userId, inflight = []) {
 }
 
 module.exports = {
-  runFix, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer, resyncGhostStaged,
+  runFix, feedbackIdsOf, adoptFix, pushFix, discardFix, applyFix, classifyChanges, pickSelfContainer, resyncGhostStaged,
   selfContainerName, compareToBaseline, parseJestCounts, measureTests,
   // 複檢那一關（fix-verify.js）在同一個工作區裡改碼、重跑測試、重取 diff，要用同一套
   // 相依連結與 git 呼叫。不 export 的話它只能自己複製一份，兩份會各自漂移——而其中一份

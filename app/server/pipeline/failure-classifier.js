@@ -67,6 +67,8 @@ function classifyFailure(text, opts = {}) {
   if (opts.claudeStatus === 'timeout') return 'unknown';
   // runner 已認定認證失效：權威訊號，不必再靠訊息字面（訊息可能已被改寫或截斷）
   if (opts.claudeStatus === 'auth') return 'transient';
+  // 容器超過記憶體上限被砍（子專案 0 §6）：要調上限，不是程式問題，也不該自動重試
+  if (opts.claudeStatus === 'oom') return 'env';
   // 先 transient（最該優先自動重試）、再 env（別怪 coding）、最後 code
   if (matchAny(TRANSIENT, s)) return 'transient';
   if (matchAny(ENV, s)) return 'env';
@@ -90,7 +92,7 @@ async function classifyFailureWithAgent(text, opts = {}) {
   let verdict = 'env', agentOk = false;
   try {
     const agent = loadAgent('deploy-fix');
-    const { text: out, usage, durationMs } = await runAgent(agent.render({ error_text: errText }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'deploy_fix' });
+    const { text: out, usage, durationMs } = await runAgent(agent.render({ error_text: errText }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'deploy_fix', projectId: opts.projectId });
     // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
     if (opts.taskId || opts.projectId) {
       await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);

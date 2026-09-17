@@ -48,7 +48,7 @@ async function doPushAi(task, taskId, userId, signal) {
   }
 
   const path = require('path');
-  const { mergeToAiBranch, concludeAiMerge, deleteBranchLocal, removeWorktree, refExists } = require('./git');
+  const { mergeToAiBranch, concludeAiMerge, deleteBranchLocal, removeWorktree, refExists, symlinkChanges, AI_BRANCH } = require('./git');
   const { resolveConflicts } = require('./merge-agent');
   const conflictByRepo = [];
 
@@ -64,6 +64,10 @@ async function doPushAi(task, taskId, userId, signal) {
     notify.emitToUser(userId, 'terminal:output', { taskId, data: `[PUSH-AI] ${repo.label}：併入 ai-dev...\n` });
     let conflictFiles;
     try {
+      // 09-17 R13：併入 ai-dev 前先擋符號連結（同一把尺，見 merge-agent.js）。不帶 conflictFiles
+      // 就會落到下面「真失敗」分支，直接 stop 任務，不會被誤導進裁決閘門。
+      const symlinks = await symlinkChanges(repo.local_path, AI_BRANCH, task.git_branch);
+      if (symlinks.length) throw new Error(`任務分支含符號連結（不允許）：${symlinks.join(', ')}`);
       await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
       continue;
     } catch (err) {

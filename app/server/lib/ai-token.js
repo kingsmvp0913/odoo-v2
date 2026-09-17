@@ -65,8 +65,20 @@ function timingSafeEqualStr(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-// /ai/* 的完整守衛：本機來源 **且** 帶對通行碼。
+// /ai/* 的完整守衛。
+// socket 來的（只有出口閘道掛得到那個檔，見 lib/ai-socket-server.js）：只認每次執行通行證，全域通行碼無效。
+// TCP 來的：本機來源 **且** 帶對全域通行碼（互動式 session 用，行為不變）。
 function aiEndpointGuard(req, res, next) {
+  if (req.aidevVia === 'socket') {
+    // lazy require：agent-run-token 會 require agent-profiles，而 ai-token.js 被很多 route 檔頂層 require，
+    // 保持載入面最小。
+    const { verifyRunToken } = require('./agent-run-token');
+    const v = verifyRunToken((req.headers && req.headers[AI_TOKEN_HEADER]) || '');
+    if (!v.ok) return res.status(401).json({ ok: false, error: `AI 執行通行證無效：${v.reason}` });
+    req.aiRun = v.run;
+    return next();
+  }
+  req.aiRun = null;
   const ip = (req.socket && req.socket.remoteAddress) || '';
   if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
     return res.status(403).json({ ok: false, error: 'AI endpoint 僅限本機' });

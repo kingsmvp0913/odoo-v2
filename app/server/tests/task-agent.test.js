@@ -54,6 +54,8 @@ jest.mock('../pipeline/git', () => {
     revParse: jest.fn(() => Promise.resolve(`sha-${++sha}`))
   };
 });
+// worktree 是假路徑：git 已 mock，寫回指標也放行（真實行為見 worktree-guard.test.js）；個別測試可改成丟例外
+jest.mock('../lib/worktree-guard', () => ({ resetTaskWorktreePointers: jest.fn().mockResolvedValue('/admin') }));
 jest.mock('../pipeline/merge-agent', () => ({
   resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} }),
   SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
@@ -323,6 +325,21 @@ test('B-5 帶失敗回饋卻無新 commit → stopped，不放行進 QA', async 
   expect(t.status).toBe('stopped');
   expect(t.retry_feedback).toContain('bundle 500');            // 不消費，續跑仍讀得到
   expect(t.blocker_content).toContain('未產生任何程式變更');
+});
+
+// 意圖（09-17 R10）：worktree 的 git 中繼資料被竄改時，宿主不得再對它跑 git，也不得開 AI 這一輪。
+// 讀 HEAD 快照平常「讀不到就當沒證據」，但竄改不是讀不到——必須往外丟，不能被吞成 null 繼續跑。
+test('coding 前 worktree 被竄改 → 不跑 AI、不讀 HEAD，錯誤往外丟', async () => {
+  const guard = require('../lib/worktree-guard');
+  const { spawn } = require('child_process');
+  spawn.mockClear(); git.revParse.mockClear();
+  guard.resetTaskWorktreePointers.mockImplementationOnce(async () => {
+    throw Object.assign(new Error('任務 worktree 的 git 中繼資料不合法（可能被竄改），需由管理員重建：HEAD 不是 refs/heads/task/x'), { code: 'WORKTREE_TAMPERED' });
+  });
+  const id = await insertCodingTask('tampered1');
+  await expect(runTaskCoding(id, userId)).rejects.toThrow(/竄改/);
+  expect(spawn).not.toHaveBeenCalled();
+  expect(git.revParse).not.toHaveBeenCalled();
 });
 
 // 意圖：守衛擋下來時，使用者看到的必須是 agent 對「為什麼沒改」的真實判斷，不是每張任務都長一樣
@@ -847,6 +864,36 @@ test('G-6 setupErr（sync 之外的例外，如建 worktree 失敗）→ stopped
   const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('stopped');
   expect(after.blocker_content).toContain('boom worktree');
+});
+
+// 意圖（09-17 R14 L1）：等容器結束要在拿專案鎖之前；鎖內 ensureWorktreeAtMain 才發現又忙 → 本輪不動作（不 stopped）。
+test('G-7b analysis：等容器時不持鎖；鎖內 WORKTREE_BUSY → 原地不動、下一輪再試；鎖外等到逾時 → stopped', async () => {
+  const sr = require('../pipeline/sandbox-run');
+  const { tryProjectLock } = require('../pipeline/project-lock');
+  const seen = [];
+  const spy = jest.spyOn(sr, 'waitForWorktreeIdle').mockImplementation(async (p) => {
+    seen.push([p, (await tryProjectLock(projectId, async () => 1)).locked]);
+  });
+  try {
+    git.ensureWorktreeAtMain.mockReset().mockRejectedValueOnce(Object.assign(new Error('容器仍在執行（已等 0 秒）'), { code: 'WORKTREE_BUSY' }));
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_busy','odoo','T','需求','analysis_running',$2) RETURNING id",
+      [userId, projectId]
+    );
+    expect(await runTaskAnalysis(t.id, userId)).toBe(true);
+    expect(seen[0][0]).toContain(path.join('.worktrees', 'ta_busy'));
+    expect(seen[0][1]).toBe(true); // 等的當下專案鎖是空的
+    const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+    expect(after).toEqual({ status: 'analysis_running', blocker_content: null });
+
+    git.ensureWorktreeAtMain.mockReset().mockResolvedValue(undefined);
+    spy.mockRejectedValueOnce(Object.assign(new Error('AI 容器仍在執行（已等 3000 秒）'), { code: 'WORKTREE_BUSY' }));
+    expect(await runTaskAnalysis(t.id, userId)).toBe(true);
+    expect(git.ensureWorktreeAtMain).not.toHaveBeenCalled();
+    const { rows: [after2] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+    expect(after2.status).toBe('stopped');
+    expect(after2.blocker_content).toContain('已等 3000 秒');
+  } finally { spy.mockRestore(); }
 });
 
 // 意圖：主 clone 殘留 MERGE_HEAD 時的進場守衛（比照 merge-agent.js doMerge 的同名守衛語意）；

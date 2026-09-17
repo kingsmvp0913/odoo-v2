@@ -140,3 +140,9 @@ describe('Claude CLI 認證失效屬 transient', () => {
     expect(classifyFailure('PermissionError: [Errno 13] Permission denied')).toBe('env');
   });
 });
+
+// 子專案 0 §6：容器被記憶體上限砍掉＝環境問題（上限要調），退回 coding 重寫只會再被砍一次（rules/pipeline 54、93）
+test('claudeStatus oom → env（即使訊息裡有看起來像程式錯誤的字）', () => {
+  const { classifyFailure } = require('../pipeline/failure-classifier');
+  expect(classifyFailure('AI 容器被強制終止（exit 137）SyntaxError', { claudeStatus: 'oom' })).toBe('env');
+});

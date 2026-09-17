@@ -227,3 +227,38 @@ test('有效 token 仍正常放行（撤銷檢查不得誤殺在職帳號）', a
   expect(res.status).toBe(200);
   expect(res.body.username).toBe('admin');
 });
+
+// 意圖（最終審查 IMPORTANT-2）：登入失敗計數要記在真實使用者的位址上，不是 nginx 的位址上——
+// 否則網路上任何人都能把管理員對所有人封鎖。只有對方是信任的 proxy 時才採用 X-Real-IP。
+test('POST /api/auth/login 失敗：信任的 proxy 轉來的記在 X-Real-IP；不信任時 header 不理', async () => {
+  const old = process.env.TRUSTED_PROXY_IPS;
+  try {
+    process.env.TRUSTED_PROXY_IPS = '127.0.0.1';
+    await request(app).post('/api/auth/login').set('X-Real-IP', '203.0.113.50').send({ username: 'proxied', password: 'x' });
+    delete process.env.TRUSTED_PROXY_IPS;
+    await request(app).post('/api/auth/login').set('X-Real-IP', '203.0.113.51').send({ username: 'proxied', password: 'x' });
+    const { rows } = await dbModule.query("SELECT source FROM login_attempts WHERE username = 'proxied' ORDER BY source");
+    const sources = rows.map(r => r.source);
+    expect(sources).toContain('203.0.113.50');
+    expect(sources).not.toContain('203.0.113.51');
+    expect(sources).toHaveLength(2); // 第二筆記在直連的對方位址（supertest 的本機位址）
+  } finally { if (old === undefined) delete process.env.TRUSTED_PROXY_IPS; else process.env.TRUSTED_PROXY_IPS = old; }
+});
+
+// 意圖（裁決 R17）：登入成功要把該 (帳號, 來源) 的打錯次數歸零——否則同一個人長期零星打錯，
+// 累積到 10 次就被永久封鎖。但已封鎖的那一對即使密碼對也照樣擋（先查封鎖、再驗密碼、成功才歸零）。
+test('POST /api/auth/login：錯 4 次、對 1 次、再錯 4 次 → 沒被鎖；已封鎖的一對密碼對也照樣擋', async () => {
+  const login = password => request(app).post('/api/auth/login').send({ username: 'bf', password });
+  for (let i = 0; i < 4; i++) expect((await login('wrong')).status).toBe(401);
+  expect((await login('backfillpass')).status).toBe(200);
+  for (let i = 0; i < 4; i++) expect((await login('wrong')).status).toBe(401);
+  expect((await login('backfillpass')).status).toBe(200); // 沒有累積到 5 次鎖定
+  await dbModule.query("DELETE FROM login_attempts WHERE username = 'bf'");
+  for (let i = 0; i < 10; i++) await login('wrong'); // 第 6 次起被鎖（429）；直接把這一對設成封鎖
+  await dbModule.query("UPDATE login_attempts SET blocked = true WHERE username = 'bf'");
+  const r = await login('backfillpass');
+  expect(r.status).toBe(429);
+  expect(r.body.reason).toBe('blocked');
+  const { rows } = await dbModule.query("SELECT blocked FROM login_attempts WHERE username = 'bf'");
+  expect(rows).toEqual([{ blocked: true }]);
+});

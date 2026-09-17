@@ -143,6 +143,38 @@ test('只把「本次 diff 內的 HttpCase class」交給 runTourTests（不含�
   expect(envAgent.runTourTests.mock.calls[0][3]).toEqual(['TestNewTour']);
 });
 
+// 意圖（子專案 0 Task 3.14）：容器在任務 worktree 有完整寫入權，能放一個指向宿主機密
+// （如 data/config.json）的符號連結。推導 tour class 時若照單全收 diff 內的路徑去讀檔，就會把
+// 宿主檔案內容讀進來解析——這裡用「symlink target 也放一個合法 HttpCase class」來證明：連結沒被
+// follow，其 class 完全不會混進交給 runTourTests 的清單。
+test('diff 內含指向 worktree 外的符號連結 → 不 follow，其內容不進 class 清單', async () => {
+  const fs = require('fs'); const path = require('path'); const os = require('os');
+  const wt = makeWorktree(true);
+  writeTestFiles(wt, {
+    'idx_x/tests/test_new_tour.py':
+      'from odoo.tests.common import HttpCase\n\nclass TestNewTour(HttpCase):\n    pass\n',
+  });
+  // 模擬宿主機密：擺在 worktree 之外，容器本來就摸不到，只有平台自己讀得到。
+  // 裡面放一個合法 HttpCase class：若 symlink 被 follow，這個 class 名就會混進結果，抓得到差異。
+  const hostSecretDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-hostsecret-'));
+  const hostSecretFile = path.join(hostSecretDir, 'config.json');
+  fs.writeFileSync(hostSecretFile,
+    'from odoo.tests.common import HttpCase\n\nclass LeakedFromHostSecret(HttpCase):\n    pass\n');
+  fs.symlinkSync(hostSecretFile, path.join(wt, 'main', 'idx_x', 'tests', 'test_evil_link.py'));
+
+  mockWorktreeParent.mockReturnValue(wt);
+  require('../pipeline/git').diffNameOnly.mockResolvedValue([
+    'idx_x/tests/test_new_tour.py', 'idx_x/tests/test_evil_link.py',
+  ]);
+  envAgent.runTourTests.mockResolvedValue({ ok: true, log: PASS_LOG });
+
+  const id = await makeTask();
+  await runTourStage(id, userId);
+
+  expect(envAgent.runTourTests.mock.calls[0][3]).toEqual(['TestNewTour']);
+  fs.rmSync(hostSecretDir, { recursive: true, force: true });
+});
+
 test('規格 tour 模式＋worktree 內確有 tour → 不重產，直接執行', async () => {
   await dbModule.query('UPDATE projects SET spec_tour_enabled=true WHERE id=$1', [projectId]);
   mockWorktreeParent.mockReturnValue(makeWorktree(true));

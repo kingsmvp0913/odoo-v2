@@ -15,6 +15,16 @@ Odoo 自己的 `zh_TW.po` 翻譯檔抽出來的 en→繁中對照，存在平台
 
 ## 怎麼查
 
+**有 `$AIDEV_AI_BASE` 時（AI 執行環境）走端點**，不需要資料庫連線：
+
+```bash
+curl -s -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/glossary?version=19&term=Delivery%20Orders"   # 英文精確
+curl -s -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/glossary?version=19&q=order"                  # 英文片段
+curl -s -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/glossary?version=19&zh=%E4%BA%A4%E8%B2%A8"    # 中文片段（URL 編碼）
+```
+
+回傳依 `hit_count` 由高到低、最多 50 筆。互動式 session 沒有 `$AIDEV_AI_BASE` 時照下面借 platformDB 查。
+
 借 platformDB 的唯讀查詢工具（`psql` 不在 PATH）：
 
 ```bash

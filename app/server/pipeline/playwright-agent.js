@@ -11,6 +11,7 @@ const { extractOdooError, looksLikeInfraDeath, toHostPaths } = require('./deploy
 const { primaryModule } = require('./spec-modules');
 const { withProjectLock } = require('./project-lock');
 const { diffNameOnly, AI_BRANCH } = require('./git');
+const { readFileInside } = require('../lib/safe-worktree-read');
 
 const PW_LIMIT = 3;
 // 失敗診斷完整落地（比照 deploy-testing.js 的 saveDeployLog）：blocker/feedback 只留摘要，
@@ -252,16 +253,17 @@ async function runTourStage(taskId, userId, signal) {
 // 只取 diff 內的檔案（不是掃整個 tests/ 目錄）：模組裡可能躺著前一張任務留下的 tour，
 // 那些不是本次的考題，跑它們＝拿別人的錯誤退本次任務。
 async function tourTestClasses(info, cwd, moduleName, baseBranch, taskBranch) {
-  const fsp = require('fs').promises;
   const classes = new Set();
   for (const repo of (info.repos || [])) {
     const wt = path.join(cwd, repo.subdir);
     let changed = [];
-    try { changed = await diffNameOnly(wt, baseBranch, taskBranch); } catch { continue; }
+    // diff 在主 clone 跑（兩個 ref 是共用的，結果相同）：不以任務 worktree 為 cwd，
+    // 就不必信任容器寫得到的 worktree git 指標（09-17 R12）。
+    try { changed = await diffNameOnly(repo.local_path, baseBranch, taskBranch); } catch { continue; }
     const testFiles = changed.filter(f => new RegExp(`(^|/)${moduleName}/tests/[^/]+\\.py$`).test(f));
     for (const rel of testFiles) {
-      // 檔案讀不到（本次是刪除）→ 跳過，不讓單一檔案的意外吃掉整份清單
-      const src = await fsp.readFile(path.join(wt, rel), 'utf8').catch(() => null);
+      // 檔案讀不到（本次是刪除，或容器放的符號連結被擋下）→ 跳過，不讓單一檔案的意外吃掉整份清單
+      const src = await readFileInside(wt, rel, 'utf8').catch(() => null);
       if (!src) continue;
       // 只收 HttpCase 子類：同一次 diff 常一併改到純 ORM 的 TransactionCase，那些不是考題
       for (const m of src.matchAll(/^class\s+(\w+)\s*\([^)]*HttpCase[^)]*\)\s*:/gm)) classes.add(m[1]);

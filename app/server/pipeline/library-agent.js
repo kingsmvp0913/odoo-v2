@@ -198,7 +198,7 @@ ${src || '（無原始碼）'}`;
   let title = node.title, content = node.content, description = null;
   try {
     const agent = loadAgent('library');
-    const r = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const r = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki', projectId });
     const { usage, durationMs } = r;
     const text = r.raw ?? r.text;
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);
@@ -301,7 +301,7 @@ ${ovRow?.content || '（尚未建立）'}
 
 若這次功能讓「模組頁」或「總覽」變得有誤或不完整，於 parents 附上修正後內容（只附需要動的頁、保留既有正確內容）；不需要則不附 parents。`;
 
-    const r = await runAgent(agent.render({ context }), { signal, taskId, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const r = await runAgent(agent.render({ context }), { signal, taskId, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki', projectId: task.project_id });
     const { usage, durationMs } = r;
     const text = r.raw ?? r.text;
     await logTokenUsage({ taskId: task.task_id }, userId, 'wiki', usage, durationMs);
@@ -420,7 +420,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
   let overviewContent = `# ${project.name}\n\n（概論生成失敗，可按「⟳ 更新」重試）`;
   let overviewDesc = null;
   try {
-    const r = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki' });
+    const r = await runAgent(agent.render({ context }), { signal, userId, model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki', projectId });
     const { usage, durationMs } = r;
     const text = r.raw ?? r.text;
     await logTokenUsage({ projectId }, userId, 'wiki', usage, durationMs);

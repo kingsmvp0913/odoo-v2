@@ -49,3 +49,25 @@ test('runCodex：turn.failed 無 usage 不會被當成成功', async () => {
   expect(err.claudeStatus).toBe('auth');
   expect(err.message).toContain('401 Unauthorized');
 });
+
+// 子專案 0 §4.6：Codex 不進容器，但子行程 env 至少不含三把總鑰匙
+test('runCodex：子行程 env 不含 APP_SECRET／JWT_SECRET／DATABASE_URL', async () => {
+  const saved = { a: process.env.APP_SECRET, j: process.env.JWT_SECRET, d: process.env.DATABASE_URL };
+  process.env.APP_SECRET = 'leak-a'; process.env.JWT_SECRET = 'leak-j'; process.env.DATABASE_URL = 'postgres://leak';
+  try {
+    const { spawn } = require('child_process');
+    const c = child();
+    spawn.mockReturnValueOnce(c);
+    const { runCodex } = require('../pipeline/codex-runner');
+    const p = runCodex('x', { agentType: 'workflow_health' });
+    c.emit('close', 0);
+    await p.catch(() => {});
+    const env = spawn.mock.calls[spawn.mock.calls.length - 1][2].env;
+    expect(env.APP_SECRET).toBeUndefined();
+    expect(env.JWT_SECRET).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.PATH).toBeTruthy();
+  } finally {
+    for (const [k, v] of [['APP_SECRET', saved.a], ['JWT_SECRET', saved.j], ['DATABASE_URL', saved.d]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});

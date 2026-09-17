@@ -13,7 +13,7 @@ jest.mock('../pipeline/task-agent', () => {
 });
 // 死結熔斷（P6）用 revParse 取任務分支 HEAD；AI_BRANCH 是 attempt() 取 diff 基底用的常數
 // （getMainBranch 留著只為證明它已不再被 QA 呼叫）。
-jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main'), revParse: jest.fn(), AI_BRANCH: 'ai-dev' }));
+jest.mock('../pipeline/git', () => ({ getMainBranch: jest.fn().mockResolvedValue('main'), revParse: jest.fn(), AI_BRANCH: 'ai-dev', symlinkChanges: jest.fn().mockResolvedValue([]) }));
 
 let dbModule, runQaAgent, taskAgent, runClaude;
 let userId, projectId;
@@ -63,6 +63,7 @@ beforeEach(() => {
   const git = require('../pipeline/git');
   git.getMainBranch.mockReset().mockResolvedValue('main');
   git.revParse.mockReset(); // 預設回 undefined → headSha null → 不觸發死結（既有測試不受影響）
+  git.symlinkChanges.mockReset().mockResolvedValue([]);
 });
 
 // resume 的續用版本＝qa prompt 版本 ＋ 規格指紋（見 qa-agent 的 specVersion）。兩截都要對得上才能
@@ -166,6 +167,36 @@ test('P6 首輪 qa_retry_count=0 → 不熔斷、照常審查', async () => {
   const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('coding_running');
   expect(runClaude).toHaveBeenCalled();
+});
+
+// 意圖（09-17 R13）：QA 不是最終擋關（merge_running 那關才是），這裡只是省一次要付費的 QA AI
+// 呼叫、並給更好懂的訊息。偵測到符號連結 → 直接 stopped，不呼叫 runClaude（省下那次付費呼叫）。
+test('R13 任務分支含符號連結 → 不跑 QA AI、直接 stopped 並列出路徑', async () => {
+  const git = require('../pipeline/git');
+  git.symlinkChanges.mockResolvedValueOnce(['data/evil_link']);
+  const id = await makeTask(0);
+
+  await runQaAgent(id, userId);
+
+  expect(runClaude).not.toHaveBeenCalled();
+  const { rows: [t] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('stopped');
+  expect(t.blocker_content).toMatch(/符號連結/);
+  expect(t.blocker_content).toMatch(/evil_link/);
+});
+
+// 意圖：symlinkChanges 查不到（分支未建等異常）不得自行判定失敗——交下游 merge 關兜底，這裡照常審查。
+test('R13 symlinkChanges 查詢異常 → 不阻擋，照常跑 QA', async () => {
+  const git = require('../pipeline/git');
+  git.symlinkChanges.mockRejectedValueOnce(new Error('branch not found'));
+  claudeReturns({ verdict: 'pass' });
+  const id = await makeTask(0);
+
+  await runQaAgent(id, userId);
+
+  expect(runClaude).toHaveBeenCalled();
+  const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+  expect(t.status).toBe('merge_running');
 });
 
 // 觸頂那一擊最容易把資訊弄丟：bumpReentryOrStop 一標 stopped 就提早 return。

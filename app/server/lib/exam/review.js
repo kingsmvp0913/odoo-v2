@@ -8,6 +8,7 @@
 // 但那個 30/30 有事後諸葛成分：下面 TRAPS 的三條是從那批題的官方錯題反推寫出來的。
 // **不可移除**——移掉就不是跑出 30/30 的那支 prompt 了。
 const { spawn } = require('child_process');
+const { pickLegacyEnv } = require('../agent-env');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -398,7 +399,7 @@ function runPrompt({ prompt, imagePath = null, onProgress, model = MODEL }) {
       '--model', model,
     ];
 
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: runCwd });
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: runCwd, env: pickLegacyEnv(process.env) });
     // 子行程提早死掉時對已關閉的 stdin 寫入會發 EPIPE；無 handler 會變 uncaughtException。
     child.stdin.on('error', () => {});
 

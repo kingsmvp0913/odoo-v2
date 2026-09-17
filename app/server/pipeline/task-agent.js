@@ -6,10 +6,11 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
 const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge, revParse } = require('./git');
 const { ensureWorktreeSkills } = require('./worktree-skills');
+const { resetTaskWorktreePointers } = require('../lib/worktree-guard');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { primaryModule } = require('./spec-modules');
-const { buildGitEnv } = require('../lib/git-identity');
+const { buildGitEnv, pickGitIdentity } = require('../lib/git-identity');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 const { runClaude, abortError, stopReason } = require('./claude-runner');
@@ -219,7 +220,13 @@ async function runTaskAnalysis(taskId, userId, signal) {
   let syncBlockedBy = null;
   // 取不到鎖就早退（不排隊）：本段的 resolveConflicts 每個 hunk 一次 runClaude，可持鎖數分鐘，
   // 排隊者會白佔一個派工槽。sync 本身冪等，下一 tick 再試零成本。
-  const { locked } = await tryProjectLock(task.project_id, async () => {
+  // 等掛著本任務 worktree 的容器結束——在拿鎖之前等（09-17 R14）；鎖內 ensureWorktreeAtMain 只做不阻塞檢查。
+  // 等不到（逾時）→ 落到下面 setupErr 的 stopped 處理。
+  let waitErr = null;
+  try {
+    for (const repo of info.repos) await require('./sandbox-run').waitForWorktreeIdle(path.join(wtParent, repo.subdir));
+  } catch (e) { waitErr = e; }
+  const { locked } = waitErr ? { locked: true } : await tryProjectLock(task.project_id, async () => {
     // 主 clone 殘留 in-progress merge（MERGE_HEAD）防護（比照 merge-agent.js doMerge 同名守衛）：
     // - 同專案另有任務停在 merge_conflict＝人工正在該 clone 上解衝突（裁決端點的 concludeMerge 才會了結），
     //   此時進場同步必撞牆被誤標 stopped → 本輪不動作，留在 analysis_running 等下一 tick 再試。
@@ -270,6 +277,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
     }
   });
   if (!locked) return true; // 同專案另有工作持鎖：本輪完全不動作，下一 tick 再試（sync 冪等）
+  // 鎖內才發現容器又掛上 worktree（WORKTREE_BUSY）：同上，本輪不動作、下一 tick 再試
+  if (setupErr && setupErr.code === 'WORKTREE_BUSY') return true;
+  if (waitErr) setupErr = waitErr;
   if (syncBlockedBy) {
     // 原地不動（狀態不改），但卡住原因要落地：socket 事件是瞬時的，沒開著終端面板就永遠看不到，
     // 任務在列表上只是「分析中」卻可能掛好幾天。寫進 blocker_content 讓它重整後仍看得見。
@@ -344,7 +354,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
       try {
         analysisResult = await runClaude(retryPrompt, {
           cwd: wtParent, taskId, userId, signal,
-          resumeSessionId: task.analysis_session_id, model: retryAgent.model, agentType: 'analysis'
+          resumeSessionId: task.analysis_session_id, model: retryAgent.model, agentType: 'analysis', logSessionMissing: false
         });
         resumed = true;
         await query('UPDATE tasks SET analysis_resume_count = COALESCE(analysis_resume_count,0) + 1 WHERE id=$1', [taskId]).catch(() => {});
@@ -583,7 +593,9 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
   // 裡連一列都沒有，報表上等於沒發生過（比照 analysis／cs 的 logFailedUsage 慣例）。
   const runOpts = {
     cwd, taskId, userId, signal, model: agent.model, agentType: 'spec_tour',
-    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: { ...gitEnv }
+    timeoutMs: SPEC_TOUR_TIMEOUT_MS, env: pickGitIdentity(gitEnv),
+    // analysis／spec_tour 的續接失敗自己會寫 task_logs（計畫 X4），不要讓 runner 再寫一行
+    logSessionMissing: false
   };
   let res;
   try {
@@ -634,22 +646,37 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
   const projectNotes = await getProjectNotes(task.project_id).catch(() => null);
   ensureWorktreeSkills(cwd);
   const built = buildCodingPrompt(task, info, resolution, task.retry_feedback || '', baseBranch, projectNotes, await taskAttachmentNote(task.id), await loadTweakSpecs(task.id).catch(() => ''));
-  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: { ...gitEnv } });
+  return runClaude(built.prompt, { cwd, taskId: task.id, userId, signal, model: built.model, agentType: 'coding', timeoutMs: CODING_TIMEOUT_MS, env: pickGitIdentity(gitEnv) });
 }
 
 // 本任務各 repo worktree 的 HEAD 快照：比對 coding 前後即知這輪有沒有真的 commit 東西。
 // 讀不到（worktree 尚未建立／unborn HEAD）該 repo 記 null，整段失敗則回空物件——兩者都代表
 // 「無法確認」，由呼叫端當作沒有證據、不得據以阻擋（見下方 unchanged 的判定）。
-// 本函式永不拋出：HEAD 快照只是防呆的輔助資訊，不該有能力弄掛整個 coding 關。
+// 本函式不因「讀不到」拋出：HEAD 快照只是防呆的輔助資訊，不該有能力弄掛整個 coding 關。
+// 例外是「宿主跑 git 前的等容器＋寫回指標」失敗（09-17 R12）：worktree／admin 不在照舊記 null，
+// 其餘（被竄改、容器等不到）不是讀不到，是不能再在宿主碰它，必須往外丟。
 async function readHeads(info, taskId) {
+  const blocked = [];
+  let heads;
   try {
     const wt = worktreeParent(info.root, taskId);
-    const heads = {};
+    heads = {};
     for (const r of info.repos || []) {
-      heads[r.subdir] = await revParse(path.join(wt, r.subdir), 'HEAD').catch(() => null);
+      const repoWt = path.join(wt, r.subdir);
+      try {
+        // 不在專案鎖內：直接阻塞等容器結束，再做（不阻塞的）寫回
+        await require('./sandbox-run').waitForWorktreeIdle(repoWt);
+        await resetTaskWorktreePointers({ repoPath: r.local_path, worktreePath: repoWt, branch: `task/${taskId}` });
+      } catch (e) {
+        if (e.code !== 'WORKTREE_MISSING' && e.code !== 'WORKTREE_ADMIN_MISSING') blocked.push(e);
+        heads[r.subdir] = null;
+        continue;
+      }
+      heads[r.subdir] = await revParse(repoWt, 'HEAD').catch(() => null);
     }
-    return heads;
-  } catch { return {}; }
+  } catch { heads = {}; }
+  if (blocked.length) throw blocked[0];
+  return heads;
 }
 
 // 「這張單繞了幾輪」的總計數上限。既有的 reentry／deploy_retry 都會被歸零——分診 advance 主動歸零

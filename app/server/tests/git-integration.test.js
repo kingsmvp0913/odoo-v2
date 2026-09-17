@@ -183,6 +183,72 @@ test('ensureWorktreeAtMain：主 clone 重建後的死工作樹殘骸 → 清掉
   expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
 }, 30000);
 
+// 意圖（09-17 裁決 R12）：worktree 的 admin HEAD／commondir 容器寫得到。改成 testing 後，宿主的 reset／merge
+// 會替 AI 移動 testing，繞過掛載層的 refs 鎖——宿主跑任何 git 之前都先把指標寫回，testing 不得被動到。
+test('ensureWorktreeAtMain／syncBranchWithAi（沿用路徑）：admin HEAD 被改成 testing → 寫回後照常做，testing 不動、實作保留', async () => {
+  const repo = await makeRepo();
+  await sh(repo, 'branch', 'testing');
+  await sh(repo, 'branch', 'ai-dev');
+  const wt = path.join(base, 'wt-tamper', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t20', 'main', true);
+  await write(wt, 'b.py', 'y = 2\n'); await sh(wt, 'add', '-A'); await sh(wt, 'commit', '-m', 'ai work');
+  const testingBefore = (await sh(repo, 'rev-parse', 'testing')).stdout.trim();
+  const head = path.join(repo, '.git', 'worktrees', 'repo', 'HEAD');
+  for (const reset of [true, false]) {
+    fs.writeFileSync(head, 'ref: refs/heads/testing\n');
+    await git.ensureWorktreeAtMain(repo, wt, 'task/t20', 'main', reset);
+    expect((await sh(wt, 'symbolic-ref', 'HEAD')).stdout.trim()).toBe('refs/heads/task/t20');
+  }
+  fs.writeFileSync(head, 'ref: refs/heads/testing\n');
+  await expect(git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t20' })).resolves.toMatchObject({ synced: true });
+  expect((await sh(repo, 'rev-parse', 'testing')).stdout.trim()).toBe(testingBefore);
+  expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8').trim()).toBe('y = 2');
+}, 30000);
+
+test('ensureWorktreeAtMain（沿用路徑）：commondir 指到假 repo（config 帶 smudge filter）→ 寫回後 reset --hard 不會執行 filter', async () => {
+  const repo = await makeRepo();
+  const wt = path.join(base, 'wt-fake', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t21', 'main', true);
+  const fake = path.join(base, 'fake');
+  await run('git', ['init', '-q', fake]);
+  const pwned = path.join(base, 'pwned');
+  const script = path.join(base, 'smudge.sh');
+  fs.writeFileSync(script, `#!/bin/sh\ntouch '${pwned}'\ncat\n`, { mode: 0o755 });
+  fs.appendFileSync(path.join(fake, '.git', 'config'), `[filter "x"]\n\tsmudge = ${script}\n\tclean = cat\n`);
+  fs.writeFileSync(path.join(repo, '.git', 'worktrees', 'repo', 'commondir'), `${path.join(fake, '.git')}\n`);
+  await write(wt, '.gitattributes', 'a.py filter=x\n');
+  fs.rmSync(path.join(wt, 'a.py'));
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t21', 'main', true);
+  expect(fs.existsSync(pwned)).toBe(false);
+  expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
+}, 30000);
+
+// 意圖（09-17 R14）：refs/heads/task/ 容器可寫。任務分支 ref 被寫成指向 testing 的 symref，宿主的
+// merge／reset，甚至「admin 不見了→重建」路徑的 worktree add -B，都會經由它移動 testing。一律先驗、丟例外。
+test('ensureWorktreeAtMain／syncBranchWithAi：任務分支 ref 是指向 testing 的 symref → 丟例外，testing 不動（含偽造 admin 不見的重建路徑）', async () => {
+  const repo = await makeRepo();
+  await sh(repo, 'branch', 'testing');
+  await sh(repo, 'branch', 'ai-dev');
+  const wt = path.join(base, 'wt-symref', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t22', 'main', true);
+  await write(wt, 'b.py', 'y = 2\n'); await sh(wt, 'add', '-A'); await sh(wt, 'commit', '-m', 'ai work');
+  const testingBefore = (await sh(repo, 'rev-parse', 'testing')).stdout.trim();
+  fs.writeFileSync(path.join(repo, '.git', 'refs', 'heads', 'task', 't22'), 'ref: refs/heads/testing\n');
+  for (const reset of [true, false]) {
+    await expect(git.ensureWorktreeAtMain(repo, wt, 'task/t22', 'main', reset)).rejects.toThrow(/任務分支.*竄改/);
+  }
+  await expect(git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t22' })).rejects.toThrow(/任務分支.*竄改/);
+  // 偽造「admin 不見了」：改 admin 的 gitdir，讓主 clone 認不出這個 worktree → 走重建（worktree add -B）
+  fs.writeFileSync(path.join(repo, '.git', 'worktrees', 'repo', 'gitdir'), `${path.join(base, 'elsewhere', '.git')}\n`);
+  await expect(git.ensureWorktreeAtMain(repo, wt, 'task/t22', 'main', true)).rejects.toThrow(/任務分支.*竄改/);
+  expect((await sh(repo, 'rev-parse', 'testing')).stdout.trim()).toBe(testingBefore);
+  expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8')).toBe('y = 2\n'); // 驗在刪 worktree 之前
+}, 30000);
+
+test('syncBranchWithAi：沒帶 repoPath／branch → 丟例外（不准略過驗證）', async () => {
+  await expect(git.syncBranchWithAi('/nope')).rejects.toThrow(/repoPath/);
+});
+
 test('syncWithMain：與 main 衝突 → hasConflicts＋檔名（不假成功）', async () => {
   const repo = await makeRepo();
   await sh(repo, 'checkout', '-b', 'task/t4');
@@ -216,7 +282,7 @@ test('syncBranchWithAi：任務分支尚無自己的 commit → fast-forward 拿
   await sh(repo, 'commit', '-m', 'ai-dev moved on');
   expect(fs.existsSync(path.join(wt, 'b.py'))).toBe(false); // 同步前看不到＝觀察到的處境
 
-  const r = await git.syncBranchWithAi(wt);
+  const r = await git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t9' });
   expect(r.synced).toBe(true);
   // trim：Windows autocrlf 會把 git checkout 出來的檔轉成 CRLF，逐字比對會假紅
   expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8').trim()).toBe('y = 2');
@@ -239,7 +305,7 @@ test('syncBranchWithAi：分支已有 commit → 三方合併，AI 的改動與 
   await sh(repo, 'add', '-A');
   await sh(repo, 'commit', '-m', 'ai-dev moved on');
 
-  const r = await git.syncBranchWithAi(wt);
+  const r = await git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t10' });
   expect(r.synced).toBe(true);
   expect(fs.readFileSync(path.join(wt, 'task_file.py'), 'utf8').trim()).toBe('ai = 1');
   expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8').trim()).toBe('y = 2');
@@ -259,7 +325,7 @@ test('syncBranchWithAi：衝突 → synced=false＋檔名，且 worktree 不留 
   await write(repo, 'a.py', 'x = 6\n');
   await sh(repo, 'commit', '-am', 'ai-dev edit');
 
-  const r = await git.syncBranchWithAi(wt);
+  const r = await git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t11' });
   expect(r.synced).toBe(false);
   expect(r.conflictFiles).toContain('a.py');
   await expect(sh(wt, 'rev-parse', '--verify', 'MERGE_HEAD')).rejects.toThrow();
@@ -972,4 +1038,50 @@ describe('ai-dev 基底', () => {
     // 沒有這個值，「新增 repo 時預選主分支」就永遠預選不到（--heads 會把 HEAD 濾掉，故不能加）
     expect(r.defaultBranch).toBe('kangyue');
   }, 30000);
+});
+
+// 09-17 R13：symlinkChanges 是合併前擋符號連結的唯一判準來源，四種情境都要用真 git 驗證
+// （raw diff 的 mode 欄位解析錯一個字元就整支守衛失效，mock 測不出來）。
+describe('symlinkChanges：任務分支相對某基準有無新增／改成符號連結', () => {
+  test('一般檔案內容變更 → 不列入', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'task/t1');
+    await write(repo, 'a.py', 'x = 2\n');
+    await sh(repo, 'commit', '-am', 'change a.py');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t1')).toEqual([]);
+  });
+
+  test('新增符號連結 → 列出路徑', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'task/t2');
+    fs.symlinkSync('/etc/passwd', path.join(repo, 'evil_link'));
+    await sh(repo, 'add', 'evil_link');
+    await sh(repo, 'commit', '-m', 'add symlink');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t2')).toEqual(['evil_link']);
+  });
+
+  test('一般檔改型成符號連結（type change）→ 列出路徑', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'task/t3');
+    fs.unlinkSync(path.join(repo, 'a.py'));
+    fs.symlinkSync('../../../data/config.json', path.join(repo, 'a.py'));
+    await sh(repo, 'add', 'a.py');
+    await sh(repo, 'commit', '-m', 'a.py 改型成符號連結');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t3')).toEqual(['a.py']);
+  });
+
+  test('刪除符號連結 → 不列入（刪除不會被任何人讀到）', async () => {
+    const repo = await makeRepo();
+    fs.symlinkSync('/etc/passwd', path.join(repo, 'old_link'));
+    await sh(repo, 'add', 'old_link');
+    await sh(repo, 'commit', '-m', 'main 上先有一個符號連結');
+    await sh(repo, 'checkout', '-b', 'task/t4');
+    await sh(repo, 'rm', 'old_link');
+    await sh(repo, 'commit', '-m', 'task 分支刪掉它');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t4')).toEqual([]);
+  });
 });

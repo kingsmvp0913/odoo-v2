@@ -18,6 +18,7 @@ node .claude/skills/platformDB/query.js --json "SELECT ..."      # JSON 輸出
 node .claude/skills/platformDB/query.js --file q.sql             # 從檔讀 SQL
 ```
 工具預設**唯讀護欄**（只准 SELECT/WITH/EXPLAIN/SHOW）；這是正式資料，勿寫入。
+- **在 AI 容器裡**（沒有 `DATABASE_URL`、有 `$AIDEV_AI_BASE`／`$AIDEV_AI_TOKEN`）：同一支 `query.js` 會自動改走 `/ai/platform/query`，由平台以唯讀帳號代查。密碼雜湊、`*_enc` 密文、session token 等欄位**讀不到**（回 `permission denied`），這是刻意的，換個欄位查即可。只有健檢 AI 有這個權限；其他 AI 會拿到 403。
 
 ## 關鍵表（能回答什麼）
 | 表 | 用途 / 關鍵欄位 |

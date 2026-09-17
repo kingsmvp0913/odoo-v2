@@ -95,6 +95,28 @@ async function runQaAgent(taskId, userId, signal) {
     return true;
   }
 
+  // 09-17 R13：符號連結守衛提早問一次——merge_running 那關（merge-agent.js）才是真正的擋關，
+  // 這裡只是省一次要付費的 QA AI 呼叫，並給比「併入 testing 失敗」更好懂的訊息。查不到（分支未建等）
+  // 一律放行，交下游的擋關兜底，不在此處自行判定失敗。
+  if (task.git_branch) {
+    const { symlinkChanges, AI_BRANCH: baseForSymlinkCheck } = require('./git');
+    const bad = [];
+    for (const repo of info.repos || []) {
+      try {
+        const files = await symlinkChanges(repo.local_path, baseForSymlinkCheck, task.git_branch);
+        if (files.length) bad.push(`${repo.label || repo.subdir}: ${files.join(', ')}`);
+      } catch { /* 讀不到就交下游 merge 關兜底，這裡不阻擋 */ }
+    }
+    if (bad.length) {
+      await query(
+        "UPDATE tasks SET status='stopped', blocker_type='code', blocker_content=$2, updated_at=NOW() WHERE id=$1",
+        [taskId, `任務分支含符號連結（不允許）：${bad.join('；')}`]
+      );
+      notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
+      return true;
+    }
+  }
+
   // 人工審核退回時分診寫下的小修正規格（追加式，主規格不動）。**resume 與 fresh 兩條路都要帶**：
   // qa-retry 的 prompt 刻意一個字規格都不帶（那是它 19 秒跑完的前提），規格換掉時靠下面的
   // specVersion 指紋讓 resume 失效來兜底——但小修正規格不動 analysis_yaml，指紋不變、resume 照樣續接，

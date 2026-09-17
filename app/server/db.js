@@ -775,6 +775,22 @@ async function migrate() {
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (attempt_id, voter_key)
     )`,
+
+    // 登入失敗計數（見 lib/login-guard.js）。2026-09-16 M6 實測：AI 容器連得到平台 8771，
+    // 而登入端點原本完全沒有次數限制 ⇒ 可無限猜密碼，猜中任一管理員就拿回全平台。
+    //
+    // 主鍵是 (帳號, 來源) 而不是帳號：只鎖帳號的話，被注入的 AI 可以對 9 個管理員帳號各打錯 10 次，
+    // 把所有人永久封鎖且沒有人解得開——把機密性問題換成整個平台停擺。真人經 nginx 進來、
+    // 容器直連 8771，兩者 remoteAddress 不同，所以鎖了容器不會波及真人。
+    `CREATE TABLE IF NOT EXISTS login_attempts (
+      username       TEXT NOT NULL,
+      source         TEXT NOT NULL,
+      fail_count     INTEGER NOT NULL DEFAULT 0,
+      locked_until   TIMESTAMPTZ,
+      blocked        BOOLEAN NOT NULL DEFAULT false,
+      last_failed_at TIMESTAMPTZ,
+      PRIMARY KEY (username, source)
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -1098,6 +1114,17 @@ async function migrate() {
     // 批次只要有合併就會 restartSelf()（docker restart 自己的容器），記憶體旗標隨之歸零，
     // 同一晚會再開第二批、把剛失敗的候選重跑一遍（白花錢，且 fix_attempts 一晚加兩次）。
     { table: 'teams_settings', col: 'nightly_fix_last_day', sql: 'ALTER TABLE teams_settings ADD COLUMN nightly_fix_last_day TEXT' },
+    // 子專案 0：AI 容器隔離的開關與資源上限。mode 預設 off——合併進 master 不改變任何行為。
+    // 上限三個（agent 與閘道各一組）沒設就不准跑容器（總覽 D6），值由量測後管理員寫入，不在這裡猜。
+    { table: 'teams_settings', col: 'agent_sandbox_mode', sql: "ALTER TABLE teams_settings ADD COLUMN agent_sandbox_mode TEXT DEFAULT 'off'" },
+    { table: 'teams_settings', col: 'agent_sandbox_project_ids', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_project_ids TEXT' },
+    { table: 'teams_settings', col: 'agent_sandbox_memory', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_memory TEXT' },
+    { table: 'teams_settings', col: 'agent_sandbox_cpus', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_cpus TEXT' },
+    { table: 'teams_settings', col: 'agent_sandbox_pids', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_pids INTEGER' },
+    { table: 'teams_settings', col: 'agent_gateway_memory', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_gateway_memory TEXT' },
+    { table: 'teams_settings', col: 'agent_gateway_cpus', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_gateway_cpus TEXT' },
+    { table: 'teams_settings', col: 'agent_gateway_pids', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_gateway_pids INTEGER' },
+    { table: 'teams_settings', col: 'agent_sandbox_changed_at', sql: 'ALTER TABLE teams_settings ADD COLUMN agent_sandbox_changed_at TIMESTAMPTZ' },
     // 夜間批次的「連續失敗次數」（見 pipeline/nightly-fix.js）。⚠ 這兩欄是**飢餓防線**：
     // 「成功才標 done」意味著一條永遠合併不了的意見／提案會每晚重跑一次完整流程（重付 triage、
     // 重跑兩次全套測試），並永久佔掉 NIGHTLY_FIX_MAX 的一格，把後來的意見擠到永遠輪不到。

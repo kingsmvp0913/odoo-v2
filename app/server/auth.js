@@ -122,6 +122,22 @@ function registerRoutes(app) {
   app.post('/api/auth/login', async (req, res) => {
     try {
       const { username, password } = req.body;
+      // 失敗次數限制（見 lib/login-guard.js）。鎖的是 (帳號, 來源) 這一對：只鎖帳號會讓人能故意
+      // 把所有管理員封鎖掉。失敗不論帳號存不存在都記——否則「有沒有被鎖」就成了帳號列舉的管道。
+      const guard = require('./lib/login-guard');
+      const source = guard.clientSource(req);
+      if (username) {
+        const gate = await guard.checkLogin({ username, source });
+        if (!gate.allowed) {
+          return res.status(429).json({
+            error: gate.reason === 'blocked'
+              ? '這個帳號從這個位置已被封鎖，請聯絡平台管理員解除'
+              : '密碼錯誤太多次，請稍後再試',
+            reason: gate.reason,
+            until: gate.until || null,
+          });
+        }
+      }
       const { rows } = await query(
         'SELECT * FROM users WHERE username = $1',
         [username]
@@ -129,8 +145,12 @@ function registerRoutes(app) {
       const user = rows[0];
 
       if (!user || !(await checkPassword(password, user.password_hash))) {
+        if (username) await guard.recordFailure({ username, source });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+      // 密碼對了 → 這一對的打錯次數歸零（裁決 R17），否則長期零星打錯會累積到永久封鎖。
+      // 已封鎖的一對在上面就被擋掉，走不到這裡，所以不會順手解掉封鎖。
+      await guard.recordSuccess({ username, source });
       // 待審核帳號密碼對也不放行（管理員核准前）
       if (user.approved === false) {
         return res.status(403).json({ error: '帳號審核中，管理員核准後即可登入', pendingApproval: true });

@@ -4,6 +4,7 @@ const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
 const { runLogTail, probeLogSource, validateLogPath } = require('./lib/ssh-log');
 const { aiEndpointGuard } = require('./lib/ai-token');
+const { requireAiEndpoint, projectForbidden, forbidProject } = require('./lib/ai-scope');
 const { allocateForwardPort, targetHostPort, stopGateway, removeGateway, projectContainerName } = require('./lib/vpn-gateway');
 const { loadDecryptedConn, loadProjectVpn } = require('./lib/db-connections');
 
@@ -284,14 +285,26 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/ai/db/connections', aiEndpointGuard, async (req, res) => {
+  app.get('/ai/db/connections', aiEndpointGuard, requireAiEndpoint('db'), async (req, res) => {
     try {
       const project = req.query.project;
       let rows;
       if (project) {
+        const { resolveProjectId } = require('./lib/project-ref');
+        const pid = await resolveProjectId(project);
+        if (pid != null && projectForbidden(req, pid)) return forbidProject(res);
         ({ rows } = await query(
           `SELECT c.id, c.name, c.db_engine, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id
            WHERE p.folder_name=$1 OR p.name=$1 ORDER BY c.name`, [project]));
+        if (req.aiRun && String(req.aiRun.scope).startsWith('project-')) {
+          ({ rows } = await query(
+            `SELECT c.id, c.name, c.db_engine, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id
+             WHERE p.id=$1 ORDER BY c.name`, [req.aiRun.projectId]));
+        }
+      } else if (req.aiRun && String(req.aiRun.scope).startsWith('project-')) {
+        ({ rows } = await query(
+          `SELECT c.id, c.name, c.db_engine, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id
+           WHERE p.id=$1 ORDER BY c.name`, [req.aiRun.projectId]));
       } else {
         ({ rows } = await query(
           `SELECT c.id, c.name, c.db_engine, p.name AS project FROM db_connections c JOIN projects p ON p.id=c.project_id ORDER BY p.name, c.name`));
@@ -300,21 +313,23 @@ function registerRoutes(app) {
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 
-  app.post('/ai/db/query', aiEndpointGuard, async (req, res) => {
+  app.post('/ai/db/query', aiEndpointGuard, requireAiEndpoint('db'), async (req, res) => {
     try {
       const { connection_id, sql } = req.body || {};
       const { rows: [c] } = await query('SELECT project_id FROM db_connections WHERE id=$1', [connection_id]);
       if (!c) return res.json({ ok: false, error: '找不到連線' });
+      if (projectForbidden(req, c.project_id)) return forbidProject(res);
       const conn = await loadDecryptedConn(connection_id, c.project_id);
       res.json(await runSelect(conn, sql || ''));
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 
-  app.post('/ai/db/log', aiEndpointGuard, async (req, res) => {
+  app.post('/ai/db/log', aiEndpointGuard, requireAiEndpoint('db'), async (req, res) => {
     try {
       const { connection_id, at, window, level, keyword } = req.body || {};
       const { rows: [c] } = await query('SELECT project_id FROM db_connections WHERE id=$1', [connection_id]);
       if (!c) return res.json({ ok: false, error: '找不到連線' });
+      if (projectForbidden(req, c.project_id)) return forbidProject(res);
       const conn = await loadDecryptedConn(connection_id, c.project_id);
       res.json(await runLogTail(conn, { at, window, level, keyword }));
     } catch (err) { res.json({ ok: false, error: err.message }); }

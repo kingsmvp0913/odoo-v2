@@ -3,6 +3,7 @@ const { query } = require('../db');
 const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
+const { pickLegacyEnv } = require('../lib/agent-env');
 const { looksLikeAuthFailure } = require('./auth-signature');
 const { sandboxFailureReason } = require('./sandbox-signature');
 
@@ -45,7 +46,7 @@ function runCodex(prompt, opts = {}) {
     let lineBuffer = '';
     // 訂閱模式使用 `codex app-server` 所保存、會自動刷新的 ChatGPT 登入；絕不把
     // OPENAI_API_KEY 繼承進子行程，避免同一台正式機意外退回 API 按量計費。
-    const childEnv = { ...process.env, ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) };
+    const childEnv = { ...pickLegacyEnv(process.env), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) };
     delete childEnv.OPENAI_API_KEY;
     delete childEnv.CODEX_API_KEY;
     delete childEnv.CODEX_ACCESS_TOKEN;

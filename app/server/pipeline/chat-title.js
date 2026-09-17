@@ -47,13 +47,13 @@ function sanitize(raw) {
 async function maybeGenerateTitle(chatId, userMessage, aiReply, userId) {
   try {
     const { rows: [chat] } = await query(
-      'SELECT title FROM project_chats WHERE id = $1', [chatId]
+      'SELECT title, project_id FROM project_chats WHERE id = $1', [chatId]
     );
     if (!chat || chat.title !== DEFAULT_TITLE) return null;
     if (!String(aiReply || '').trim()) return null;
 
     const result = await runClaude(buildPrompt(userMessage, aiReply), {
-      userId, agentType: 'chat-title', timeoutMs: TIMEOUT_MS,
+      userId, agentType: 'chat-title', timeoutMs: TIMEOUT_MS, projectId: chat.project_id,
     });
     await logTokenUsage(null, userId, 'chat-title', result.usage, result.durationMs).catch(() => {});
 

@@ -44,6 +44,11 @@ if [ -n "$_PORT" ]; then export PORT="$_PORT"; fi
 # 放 config.json 而非 docker-compose.yml：upgrade.sh 只 docker restart、不重建容器，compose 的環境變數改了不會生效。
 _PC="$(read_config PLATFORM_CONTAINER)"
 if [ -n "$_PC" ]; then export PLATFORM_CONTAINER="$_PC"; fi
+
+# 信任的反向代理（選用，逗號分隔的完整 IP）：登入失敗鎖定只在直連對方是這些位址時才採用 X-Real-IP 當來源
+# （lib/login-guard.js clientSource）。沒設就一律用直連位址——經 nginx 的使用者會共用同一個來源。
+_TP="$(read_config TRUSTED_PROXY_IPS)"
+if [ -n "$_TP" ]; then export TRUSTED_PROXY_IPS="$_TP"; fi
 export DATABASE_URL="$(read_config DATABASE_URL)"
 
 # 測試區埠範圍（選用）：宿主低位埠已被其他服務佔滿的機器可整段換到乾淨區段；

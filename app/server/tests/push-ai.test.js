@@ -10,6 +10,7 @@ jest.mock('../pipeline/git', () => ({
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   refExists: jest.fn().mockResolvedValue(true),
+  symlinkChanges: jest.fn().mockResolvedValue([]),
   AiPushConflictError: class AiPushConflictError extends Error {
     constructor(files) { super('push conflict'); this.name = 'AiPushConflictError'; this.conflictFiles = files; }
   },
@@ -50,6 +51,7 @@ beforeEach(async () => {
   gitMock.deleteBranchLocal.mockReset().mockResolvedValue(undefined);
   gitMock.removeWorktree.mockReset().mockResolvedValue(undefined);
   gitMock.refExists.mockReset().mockResolvedValue(true);
+  gitMock.symlinkChanges.mockReset().mockResolvedValue([]);
   mergeMock.resolveConflicts.mockReset();
   identMock.buildGitEnv.mockReset().mockResolvedValue({ GIT_PAT: 'pat' });
   require('../notify').emitToUser.mockReset();
@@ -186,6 +188,21 @@ test('非衝突的 git 失敗 → stopped 並留下原因', async () => {
   expect(await statusOf(taskId)).toBe('stopped');
   const { rows: [t] } = await dbModule.query('SELECT blocker_content FROM tasks WHERE id=$1', [taskId]);
   expect(t.blocker_content).toMatch(/Permission denied/);
+});
+
+// 意圖（09-17 R13）：任務分支含符號連結 → 不呼叫 mergeToAiBranch，直接 stopped 並列出路徑；
+// 不得誤導進裁決閘門（沒有 conflictFiles，走真失敗那條路，見 doPushAi 的 catch）。
+test('任務分支含符號連結 → 不併入 ai-dev、直接 stopped 並列出路徑', async () => {
+  const taskId = await setupTask();
+  gitMock.symlinkChanges.mockResolvedValueOnce(['data/evil_link']);
+
+  await pushAi.runPushAi(taskId, userId, undefined);
+
+  expect(gitMock.mergeToAiBranch).not.toHaveBeenCalled();
+  expect(await statusOf(taskId)).toBe('stopped');
+  const { rows: [t] } = await dbModule.query('SELECT blocker_content FROM tasks WHERE id=$1', [taskId]);
+  expect(t.blocker_content).toMatch(/符號連結/);
+  expect(t.blocker_content).toMatch(/evil_link/);
 });
 
 // 意圖：push 要歸屬到「按下審核通過的人」而非任務發起人——approved_by 是那個人的紀錄。

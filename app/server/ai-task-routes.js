@@ -9,6 +9,7 @@ const yaml = require('js-yaml');
 const { query } = require('./db');
 const { aiEndpointGuard } = require('./lib/ai-token');
 const { resolveProjectId } = require('./lib/project-ref');
+const { requireAiEndpoint, projectForbidden, forbidProject } = require('./lib/ai-scope');
 
 const SUMMARY_MAX = 200;
 
@@ -29,11 +30,12 @@ function specSummary(analysisYaml) {
 function registerRoutes(app) {
   // 相似的歷史任務。索引沒就緒時回空清單＋ready:false——不能假裝「沒有相似任務」，
   // 那會讓 agent 得出「這是全新需求」的錯誤結論（跟 /ai/wiki/search 回空陣列一樣的坑）。
-  app.get('/ai/tasks/similar', aiEndpointGuard, async (req, res) => {
+  app.get('/ai/tasks/similar', aiEndpointGuard, requireAiEndpoint('tasks'), async (req, res) => {
     try {
       const q = String(req.query.q || '').trim();
       if (!q) return res.json({ ok: false, error: '缺 q 參數（要比對的需求描述）' });
       const pid = await resolveProjectId(req.query.project);
+      if (pid != null && projectForbidden(req, pid)) return forbidProject(res);
       if (!pid) return res.json({ ok: true, tasks: [] });
 
       const emb = require('./lib/embedding');
@@ -67,9 +69,10 @@ function registerRoutes(app) {
 
   // 取單張規格全文。一律帶 project 並以 project_id 過濾：agent 拿到的 id 來自上一個端點，
   // 但端點本身不能假設呼叫端沒換過 id——跨專案讀規格會直接打破資料邊界。
-  app.get('/ai/tasks/spec', aiEndpointGuard, async (req, res) => {
+  app.get('/ai/tasks/spec', aiEndpointGuard, requireAiEndpoint('tasks'), async (req, res) => {
     try {
       const pid = await resolveProjectId(req.query.project);
+      if (pid != null && projectForbidden(req, pid)) return forbidProject(res);
       if (!pid) return res.json({ ok: false, error: '找不到該任務' });
       const { rows: [task] } = await query(
         'SELECT id, task_id, title, analysis_yaml FROM tasks WHERE project_id=$1 AND id=$2',

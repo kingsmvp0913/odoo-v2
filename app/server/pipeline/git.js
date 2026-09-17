@@ -1,6 +1,7 @@
 const { execFile, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { resetTaskWorktreePointers, assertTaskBranchRef } = require('../lib/worktree-guard');
 
 // 讓 git 忽略 __pycache__/*.pyc（Odoo/py_compile 產物）。寫進主 clone 的 .git/info/exclude，
 // linked worktree 共用 common git dir 一併生效。效果：git add -A 不會 commit pyc；merge 時
@@ -116,6 +117,28 @@ async function diffBranch(repoPath, baseBranch, branch) {
     { cwd: repoPath, maxBuffer: 16 * 1024 * 1024 }
   );
   return stdout;
+}
+
+// 分支相對某基準是否新增／改成符號連結（git mode 120000）。09-17 R13：AI（可能被注入）commit 一個
+// 指向宿主檔案（如 data/config.json，平台主鑰）的符號連結進任務分支，合併進主 clone 後被 checkout
+// 出來——merge-agent.js 的 resolveConflict／pipeline-routes.js 的衝突收尾等處以 fs.readFileSync
+// 讀衝突檔內容時會跟著讀到宿主檔案。Odoo addons 從不需要符號連結，故直接擋，不嘗試分辨「安全」的連結。
+// --raw --no-renames：raw 格式每行帶新舊 mode，不必自己 stat 工作樹（工作樹可能還沒 checkout 出這個分支）；
+// --no-renames 避免改名把一行拆成兩個路徑、解析變複雜。三點語法（同 diffNameOnly）＝只看 branchRef
+// 自己的變更，baseRef 之後才發生的事不算在內。新 mode＝120000 涵蓋「新增符號連結」與「一般檔改型成
+// 符號連結」兩種情況；刪除符號連結（新 mode 不是 120000）不算——刪除不會讓任何人讀到它。
+async function symlinkChanges(repoPath, baseRef, branchRef) {
+  const { stdout } = await execFileAsync(
+    'git', ['diff', '--raw', '--no-renames', `${baseRef}...${branchRef}`],
+    { cwd: repoPath, maxBuffer: 16 * 1024 * 1024 }
+  );
+  const paths = [];
+  for (const line of stdout.split('\n')) {
+    // :<old-mode> <new-mode> <old-sha> <new-sha> <status>\t<path>
+    const m = line.match(/^:\S+\s+(\S+)\s+\S+\s+\S+\s+\S+\t(.+)$/);
+    if (m && m[1] === '120000') paths.push(m[2]);
+  }
+  return paths;
 }
 
 // 分支相對主分支改動的檔案清單（相對 repo 根的路徑陣列，空白行剔除）。
@@ -468,7 +491,11 @@ async function syncMainIntoAi(repoPath, gitEnv) {
 // 允許 fast-forward：分支尚無自己的 commit（首次進 coding）時等同 reset，不生多餘的 merge commit。
 // 衝突／任何失敗一律 abort 回乾淨狀態再回報，不 throw——同步失敗不該擋住任務（穩定 > 準確），
 // 但半套 merge 留在 worktree 會讓 coding agent 把衝突標記當程式碼改。
-async function syncBranchWithAi(worktreePath, gitEnv) {
+// guard＝{ repoPath, branch }：宿主以 worktree 為 cwd 跑 git 前，必先等容器結束並把 git 指標寫回
+// （09-17 R12，見 lib/worktree-guard.js）。這一步失敗直接丟例外（不屬於上面「同步失敗不擋任務」的範圍）。
+async function syncBranchWithAi(worktreePath, gitEnv, guard = {}) {
+  if (!guard.repoPath || !guard.branch) throw new Error('syncBranchWithAi 需要 { repoPath, branch } 才能先寫回 worktree 的 git 指標');
+  await resetTaskWorktreePointers({ repoPath: guard.repoPath, worktreePath, branch: guard.branch });
   try {
     await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-edit', AI_BRANCH], gitOpts(worktreePath, gitEnv));
     return { synced: true, conflictFiles: [], error: null };
@@ -516,8 +543,12 @@ async function syncWithMain(repoPath, gitEnv) {
   throw lastErr || new Error('syncWithMain：merge 失敗且無可歸因錯誤');
 }
 
+// merge --abort 需要 MERGE_HEAD；它不在（例如 worktree-guard 清空 admin 目錄後）就退而 reset --merge，
+// 否則未解衝突與衝突標記會永遠留在工作樹
 async function abortMerge(repoPath) {
-  await execFileAsync('git', ['merge', '--abort'], { cwd: repoPath }).catch(() => {});
+  await execFileAsync('git', ['merge', '--abort'], { cwd: repoPath })
+    .catch(() => execFileAsync('git', ['reset', '-q', '--merge'], { cwd: repoPath }))
+    .catch(() => {});
 }
 
 async function commitAll(repoPath, message, gitEnv) {
@@ -833,8 +864,21 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
   // clone）後，`.git/worktrees/<name>` 這個 admin 目錄跟著消失，但 sibling 的 `.worktrees/` 底下
   // 仍留著工作樹目錄與指向它的 `.git` 檔。舊判準會當它可用而往下跑，於是每一道 git 指令都是
   // 「fatal: not a git repository」，任務永遠停在「分析前同步失敗」（實測 task_service_3900）。
-  const isWorktree = fs.existsSync(path.join(worktreePath, '.git')) &&
-    await execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: worktreePath }).then(() => true, () => false);
+  // 沿用既有 worktree 前，先等容器結束並把 git 指標寫回正確值（09-17 R12）：.git 檔／admin HEAD／commondir
+  // 容器寫得到，不處理就在這裡跑 merge／reset --hard，等於讓 AI 借宿主之手移動 testing 或執行任意指令。
+  // 只有「主 clone 找不到 admin 目錄」（上述死工作樹）照舊走重建；其餘一律丟例外，不自動刪。
+  // 任務分支 ref 先驗（R14）：下面的重建路徑會 `worktree add -B`，ref 若是指向 testing 的 symref 就會重設 testing；
+  // 偽造「admin 不見了」也會走到那裡，所以必須在刪 worktree、重建之前就驗。
+  assertTaskBranchRef(mainRepoPath, branch);
+  let isWorktree = false;
+  if (fs.lstatSync(worktreePath, { throwIfNoEntry: false })) {
+    let restored = false;
+    try { await resetTaskWorktreePointers({ repoPath: mainRepoPath, worktreePath, branch }); restored = true; } catch (e) {
+      if (e.code !== 'WORKTREE_ADMIN_MISSING') throw e;
+    }
+    isWorktree = restored &&
+      await execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: worktreePath }).then(() => true, () => false);
+  }
   if (!isWorktree) {
     await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: mainRepoPath }).catch(() => {});
     // 殘骸目錄留著會讓下面的 add 直接 fatal: '<path>' already exists，而 remove／prune 對「已與
@@ -910,4 +954,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
 }
 
 module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
-  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, branchMergedInto, findAiMergeCommit, showBlob };
+  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, branchMergedInto, findAiMergeCommit, showBlob, symlinkChanges };

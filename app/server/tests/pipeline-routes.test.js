@@ -711,6 +711,48 @@ test('code-zip → 只打包改動檔，同模組未改動的檔不得混進來'
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
 });
 
+// 意圖（子專案 0 Task 3.14）：容器在任務 worktree 有完整寫入權，能放一個指向宿主機密
+// （如 data/config.json，含 APP_SECRET／JWT_SECRET／DATABASE_URL）的符號連結。打包 zip 若照單全收
+// worktree 內的路徑，archiver 的 file() 會 follow symlink，等於把宿主總鑰匙的內容包進 zip 回傳給
+// 下載的管理員。必須確認：symlink target 的內容完全不出現在 zip body 裡，且該檔改列進不打包清單。
+test('code-zip → worktree 內的符號連結不打包，target 內容不外洩', async () => {
+  const { diffNameOnly, refExists } = require('../pipeline/git');
+  refExists.mockResolvedValue(true);
+  const taskKey = 'task_cto_symlink';
+  diffNameOnly.mockImplementation(async (_p, base) =>
+    base === 'ai-dev' ? ['idx_demo/models/sale_order.py', 'idx_demo/models/evil.py'] : []);
+
+  const { tmp, localPath, wtRepo } = makeZipFixture('ctosym-', taskKey, {
+    'idx_demo/models/sale_order.py': '# hi',
+  });
+  // 模擬宿主機密：擺在 worktree 之外，容器本來就摸不到，只有平台自己讀得到。
+  const hostSecretDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctosym-hostsecret-'));
+  const hostSecretFile = path.join(hostSecretDir, 'config.json');
+  fs.writeFileSync(hostSecretFile, JSON.stringify({ APP_SECRET: 'top-secret-host-value' }));
+  fs.symlinkSync(hostSecretFile, path.join(wtRepo, 'idx_demo', 'models', 'evil.py'));
+
+  const id = await insertZipTask('CTOSYM', taskKey, localPath);
+
+  const res = await zipReq(id);
+  expect(res.status).toBe(200);
+  // entries 只有一般檔案，symlink 不列入
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-entries']))).toEqual([
+    'odoo17_hungjou/idx_demo/models/sale_order.py'
+  ]);
+  // 改列進 skipped header，讓使用者知道有一個檔沒被打包，而不是被靜默漏掉
+  expect(JSON.parse(decodeURIComponent(res.headers['x-zip-skipped']))).toEqual([
+    { path: 'odoo17_hungjou/idx_demo/models/evil.py', reason: '符號連結，不打包' }
+  ]);
+  // 最重要的斷言：宿主機密的內容完全沒有出現在 zip body 裡
+  const asText = res.body.toString('latin1');
+  expect(asText).not.toContain('top-secret-host-value');
+  expect(asText).not.toContain('evil.py');
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(hostSecretDir, { recursive: true, force: true });
+  await dbModule.query('DELETE FROM tasks WHERE id = $1', [id]);
+});
+
 // 意圖：git 的改動清單含被刪除的檔，它們在 worktree 不存在。逐檔打包時若不先濾掉會直接讓
 // 打包炸掉；而「靜默略過」等於使用者永遠不知道要去正式區手動刪那個檔（zip 表達不了刪除）。
 test('code-zip → 本任務刪除的檔列進 deleted header，不列入 entries 也不讓打包失敗', async () => {
