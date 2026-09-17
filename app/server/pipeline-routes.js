@@ -6,6 +6,7 @@ const { verifyToken } = require('./auth');
 const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 const { loadTaskForActor } = require('./lib/task-access');
+const { isSafeRegularFileInside } = require('./lib/safe-worktree-read');
 const { saveAttachmentFile, uploadAttachmentFiles } = require('./lib/attachments');
 const { machineLogHeader } = require('../public/js/machine-logs.js');
 
@@ -232,9 +233,12 @@ function registerRoutes(app) {
 
       // 先把全部來源檔算完再開始輸出：header 一旦送出就改不回 JSON 錯誤，
       // 中途才失敗只會得到一個半截、解不開的 zip，且瀏覽器照樣顯示下載成功。
-      const entries = []; // { zipPath, srcFile } 或 { zipPath, buf }
+      const entries = []; // { zipPath, srcFile, root } 或 { zipPath, buf }
       const deleted = []; // 本任務刪除的檔（zip 表達不了刪除，只能請使用者手動移除）
       const stale = [];   // 切點之後 ai-dev 上也被改過的檔＝覆蓋上去會蓋掉別人的改動
+      // 容器在任務 worktree 有完整寫入權，能放符號連結指向宿主機密（如 data/config.json）；
+      // 這類檔案不打包，但要讓使用者知道漏了什麼，不能靜默消失。
+      const skipped = [];
       for (const repo of repos) {
         const repoDir = repoDirName(repo); // 依 repo（git URL 末段）分層：<repoDir>/<repo 內原路徑>
         let changed, aiSide, readSrc;
@@ -247,8 +251,15 @@ function registerRoutes(app) {
           aiSide = await diffNameOnly(repo.local_path, task.git_branch, AI_BRANCH);
           // 只打包本任務真的改過的檔：整包模組目錄會把 worktree 裡「切點當下的舊版」一起送出，
           // 而 worktree 自 analysis 起就凍結，解壓覆蓋等於把期間的人工修正整批退版。
-          // worktree 內不存在＝本任務刪除的檔。
-          readSrc = (rel) => { const f = path.join(wtRepo, rel); return fs.existsSync(f) ? { srcFile: f } : null; };
+          // worktree 內不存在＝本任務刪除的檔。用 lstat 而非 existsSync 判斷存在與否：
+          // existsSync 對 symlink 會 follow，斷鏈的 symlink 會被誤判成「刪除」而非「該擋下的連結」。
+          // 一般檔案才給 srcFile；符號連結／目錄／逃出 worktree 一律標 skip，不 follow 也不打包。
+          readSrc = (rel) => {
+            const f = path.join(wtRepo, rel);
+            try { fs.lstatSync(f); } catch { return null; }
+            if (!isSafeRegularFileInside(f, wtRepo)) return { skip: true };
+            return { srcFile: f, root: wtRepo };
+          };
         } else {
           // 審核通過後任務分支與 worktree 已清：改從併入 ai-dev 的 merge commit 還原本任務改動，
           // 讓管理員在審核後仍能下 zip 自行佈署（原設計意圖，見上方 258 行註解）。
@@ -267,6 +278,10 @@ function registerRoutes(app) {
           const src = await readSrc(rel);
           if (!src) { deleted.push(rel); continue; }
           const zipPath = `${repoDir}/${rel}`;
+          if (src.skip) {
+            if (!skipped.some(s => s.path === zipPath)) skipped.push({ path: zipPath, reason: '符號連結，不打包' });
+            continue;
+          }
           if (entries.some(e => e.zipPath === zipPath)) continue;
           entries.push({ zipPath, ...src });
           if (aiSide.includes(rel)) stale.push(zipPath);
@@ -279,7 +294,8 @@ function registerRoutes(app) {
       res.setHeader('X-Zip-Entries', encodeURIComponent(JSON.stringify(entries.map(e => e.zipPath))));
       res.setHeader('X-Zip-Deleted', encodeURIComponent(JSON.stringify(deleted)));
       res.setHeader('X-Zip-Stale', encodeURIComponent(JSON.stringify(stale)));
-      res.setHeader('Access-Control-Expose-Headers', 'X-Zip-Entries, X-Zip-Deleted, X-Zip-Stale');
+      res.setHeader('X-Zip-Skipped', encodeURIComponent(JSON.stringify(skipped)));
+      res.setHeader('Access-Control-Expose-Headers', 'X-Zip-Entries, X-Zip-Deleted, X-Zip-Stale, X-Zip-Skipped');
       res.setHeader('Content-Type', 'application/zip');
       // 檔名只留安全字元：task_id 目前恆為英數與底線，但它源自外部系統，不該由它決定 header 內容。
       res.setHeader('Content-Disposition', `attachment; filename="${String(task.task_id).replace(/[^\w.-]/g, '_')}.zip"`);
@@ -293,9 +309,12 @@ function registerRoutes(app) {
       });
       archive.pipe(res);
       // buf＝審核後從 merge commit 讀出的位元組（記憶體）；srcFile＝未審核時 worktree 內的檔案路徑。
+      // srcFile 在讀取前（archive.file() 會實際開檔）就地重驗一次：縮小「先驗證、後讀取」之間的
+      // 競態窗口——headers 已送出、無法改回錯誤，驗不過就直接不打包該檔（略過，不中止整包）。
       for (const e of entries) {
         if (e.buf) archive.append(e.buf, { name: e.zipPath });
-        else archive.file(e.srcFile, { name: e.zipPath });
+        else if (isSafeRegularFileInside(e.srcFile, e.root)) archive.file(e.srcFile, { name: e.zipPath });
+        else console.error('[CODE-ZIP] 略過重驗失敗的檔案（讀取前偵測到變化）：', e.zipPath);
       }
       await archive.finalize();
     } catch (err) {

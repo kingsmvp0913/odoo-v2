@@ -11,6 +11,7 @@ const { extractOdooError, looksLikeInfraDeath, toHostPaths } = require('./deploy
 const { primaryModule } = require('./spec-modules');
 const { withProjectLock } = require('./project-lock');
 const { diffNameOnly, AI_BRANCH } = require('./git');
+const { readFileInside } = require('../lib/safe-worktree-read');
 
 const PW_LIMIT = 3;
 // 失敗診斷完整落地（比照 deploy-testing.js 的 saveDeployLog）：blocker/feedback 只留摘要，
@@ -262,8 +263,8 @@ async function tourTestClasses(info, cwd, moduleName, baseBranch, taskBranch) {
     try { changed = await diffNameOnly(repo.local_path, baseBranch, taskBranch); } catch { continue; }
     const testFiles = changed.filter(f => new RegExp(`(^|/)${moduleName}/tests/[^/]+\\.py$`).test(f));
     for (const rel of testFiles) {
-      // 檔案讀不到（本次是刪除）→ 跳過，不讓單一檔案的意外吃掉整份清單
-      const src = await fsp.readFile(path.join(wt, rel), 'utf8').catch(() => null);
+      // 檔案讀不到（本次是刪除，或容器放的符號連結被擋下）→ 跳過，不讓單一檔案的意外吃掉整份清單
+      const src = await readFileInside(wt, rel, 'utf8').catch(() => null);
       if (!src) continue;
       // 只收 HttpCase 子類：同一次 diff 常一併改到純 ORM 的 TransactionCase，那些不是考題
       for (const m of src.matchAll(/^class\s+(\w+)\s*\([^)]*HttpCase[^)]*\)\s*:/gm)) classes.add(m[1]);
