@@ -59,9 +59,11 @@ function defaultGatewayLogsSince(gateway, sinceIso) {
     (err, out, errOut) => resolve(`${out || ''}${errOut || ''}`)));
 }
 
+const DOTTED_IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
 function defaultAgentNetworkGateway(network) {
-  return new Promise(resolve => execFile('docker', ['network', 'inspect', network, '--format', '{{range .IPAM.Config}}{{.Gateway}}{{end}}'],
-    (err, out) => resolve(err ? null : String(out).trim())));
+  return new Promise(resolve => execFile('docker', ['network', 'inspect', network, '--format', '{{range .IPAM.Config}}{{.Gateway}}{{"\\n"}}{{end}}'],
+    (err, out) => resolve(err ? null : (String(out).split('\n').map(s => s.trim()).find(s => DOTTED_IPV4_RE.test(s)) || null))));
 }
 
 async function runOnce(mode, ctx, d) {
@@ -77,7 +79,10 @@ async function runOnce(mode, ctx, d) {
     const infra = await d.ensureAgentInfra();
     const i = run.argv.lastIndexOf(infra.image);
     if (i < 0) throw new Error(`docker run 參數裡找不到映像檔 ${infra.image}，探針無法掛入（argv：${run.argv.join(' ')}）`);
-    const gw = await d.agentNetworkGateway(infra.network);
+    const rawGw = await d.agentNetworkGateway(infra.network);
+    // 只收單一純 IPv4：IPAM 開了 IPv6 時多筆 gateway 串接會變成 "10.0.28.1fd00::1" 這種垃圾值，
+    // /dev/tcp 對它會是「解析不出主機名」而不是「連不到」，讓 tcp_blocked_agentgw_* 全部假 PASS。
+    const gw = DOTTED_IPV4_RE.test(String(rawGw || '')) ? rawGw : null;
     const argv = [
       ...run.argv.slice(0, i),
       '--mount', `type=bind,source=${d.probePath},target=${d.probePath},readonly`,

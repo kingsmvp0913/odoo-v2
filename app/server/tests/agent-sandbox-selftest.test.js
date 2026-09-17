@@ -90,11 +90,33 @@ test('同一個專案當「別的專案」→ 丟例外（驗不出跨專案）'
 });
 
 // X20／R6：host-port 檢查要打真正碰得到的位址（agent 網路自己的橋接 gateway），不是 127.0.0.1 那幾個構造上就不可達的假目標。
-test('agent 網路 gateway 查不到 → agent_net_gateway_known FAIL，整體 ok=false', async () => {
-  const { d } = deps({ agentNetworkGateway: async () => null, spawn: () => fakeChild(['CHECK agent_net_gateway_known FAIL', 'TOKEN tok']) });
+test('agent 網路 gateway 查不到 → agent_net_gateway_known FAIL，整體 ok=false，探針第 8 個位置參數是 -', async () => {
+  const seen = [];
+  const { d } = deps({
+    agentNetworkGateway: async () => null,
+    spawn: (cmd, argv) => { seen.push(argv); return fakeChild(['CHECK agent_net_gateway_known FAIL', 'TOKEN tok']); },
+  });
   const r = await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);
   expect(r.ok).toBe(false);
   expect(r.checks).toContainEqual(expect.objectContaining({ name: 'agent_net_gateway_known', pass: false }));
+  const argv = seen[0];
+  const i = argv.indexOf('aidev-agent:x');
+  expect(argv[i + 10]).toBe('-');
+});
+
+// IPAM 開了 IPv6 時 `docker network inspect` 的 gateway 清單會串成一行，注入的 dep 若直接把它原樣傳回
+// （非本檔預設實作的問題，是「不論誰提供這個值」都要擋），/dev/tcp 對它是「解析不出主機名」而非「連不到」，
+// tcp_blocked_agentgw_* 會全部假 PASS。runSelftest 必須自己驗證格式，不能只信任 dep 回傳值。
+test('agentNetworkGateway 回傳非純 IPv4（IPv6 串接的垃圾值）→ 視為未知，探針第 8 個位置參數是 -', async () => {
+  const seen = [];
+  const { d } = deps({
+    agentNetworkGateway: async () => '10.0.28.1fd00::1',
+    spawn: (cmd, argv) => { seen.push(argv); return fakeChild(['CHECK agent_net_gateway_known FAIL', 'TOKEN tok']); },
+  });
+  await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);
+  const argv = seen[0];
+  const i = argv.indexOf('aidev-agent:x');
+  expect(argv[i + 10]).toBe('-');
 });
 
 test('tcp_accepted_agentgw（8771／22，使用者已接受的暴露）回報 PASS 不影響整體 ok', async () => {
