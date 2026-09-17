@@ -102,22 +102,39 @@ describe('掛載', () => {
     expect(argv).toContain('type=bind,source=/srv/repos/p7/.worktrees/t1,target=/srv/repos/p7/.worktrees/t1');
     expect(argv).not.toContain('-v');
   });
-  test('gitDirMounts rw：.git 可寫，config 與 hooks 疊唯讀', () => {
-    const m = s.gitDirMounts('/srv/repos/p7/main', 'rw');
+  // 09-17 裁決 R8：.git 唯讀，只開 commit 必要的四處；testing／main／packed-refs／HEAD 從掛載層就改不動
+  test('gitDirMounts rw：.git 唯讀，只開 objects、本 worktree admin、task 分支 refs 與其 reflog；config／hooks 唯讀', () => {
+    const m = s.gitDirMounts('/srv/repos/p7/main', 'rw', '/srv/repos/p7/main/.git/worktrees/main1');
     expect(m).toEqual([
-      { source: '/srv/repos/p7/main/.git', readonly: false },
+      { source: '/srv/repos/p7/main/.git', readonly: true },
+      { source: '/srv/repos/p7/main/.git/objects', readonly: false },
+      { source: '/srv/repos/p7/main/.git/worktrees/main1', readonly: false },
+      { source: '/srv/repos/p7/main/.git/refs/heads/task', readonly: false },
+      { source: '/srv/repos/p7/main/.git/logs/refs/heads/task', readonly: false },
       { source: '/srv/repos/p7/main/.git/config', readonly: true },
       { source: '/srv/repos/p7/main/.git/hooks', readonly: true },
     ]);
   });
+  test('gitDirMounts rw：admin 目錄不是 <repo>/.git/worktrees/<name> → 丟例外', () => {
+    for (const bad of [undefined, '/srv/repos/p7/main/.git', '/srv/repos/p7/main/.git/worktrees',
+      '/srv/repos/p7/main/.git/worktrees/a/b', '/srv/repos/p8/main/.git/worktrees/a', '/srv/repos/p7/main/.git/worktrees/..']) {
+      expect(() => s.gitDirMounts('/srv/repos/p7/main', 'rw', bad)).toThrow(/worktree/);
+    }
+  });
+  test('gitDirMounts ro：只有唯讀 .git', () => {
+    expect(s.gitDirMounts('/srv/r', 'ro')).toEqual([{ source: '/srv/r/.git', readonly: true }]);
+  });
   test('唯讀覆蓋層排在父目錄之後（docker 依序疊，順序錯會被父層蓋掉）', () => {
-    const mounts = [...s.gitDirMounts('/srv/r/.', 'rw')].reverse();
+    const mounts = [...s.gitDirMounts('/srv/r', 'rw', '/srv/r/.git/worktrees/w')].reverse();
     const { argv } = s.buildAgentRunArgs(baseRun({ mounts }));
     const specs = argv.filter(a => a.startsWith('type=bind,'));
     const idxGit = specs.findIndex(x => x.includes('target=/srv/r/.git,') || x.endsWith('target=/srv/r/.git'));
     const idxCfg = specs.findIndex(x => x.includes('target=/srv/r/.git/config'));
+    const idxObj = specs.findIndex(x => x.includes('target=/srv/r/.git/objects'));
     expect(idxGit).toBeLessThan(idxCfg);
+    expect(idxGit).toBeLessThan(idxObj);
     expect(specs[idxCfg]).toMatch(/,readonly$/);
+    expect(specs[idxObj]).not.toMatch(/,readonly$/);
   });
   test('相對路徑或含逗號的路徑 → 丟例外（--mount 以逗號分欄）', () => {
     expect(() => s.buildAgentRunArgs(baseRun({ mounts: [{ source: 'rel/path', readonly: true }] }))).toThrow();

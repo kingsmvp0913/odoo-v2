@@ -45,6 +45,10 @@ function deps(over = {}) {
   };
 }
 
+test('project 探針必須回報 refs 鎖三項（漏報＝FAIL）', () => {
+  expect(st.EXPECTED_CHECKS.project).toEqual(expect.arrayContaining(['write_git_release_refs', 'write_git_packed_refs', 'write_git_task_refs']));
+});
+
 test('全部通過 → ok，而且 401 檢查在 release 之後', async () => {
   const { d, order } = deps();
   const r = await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);

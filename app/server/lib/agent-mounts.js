@@ -39,7 +39,7 @@ function defaults(appDir) {
     worktreeParent: (...a) => require('../pipeline/task-agent').worktreeParent(...a),
     majorOf: (...a) => require('./odoo-core-src').majorOf(...a),
     existsSync: fs.existsSync, readdirSync: fs.readdirSync, statSync: fs.statSync,
-    mkdirSync: fs.mkdirSync,
+    mkdirSync: fs.mkdirSync, readFileSync: fs.readFileSync,
     coreSrcRoot: require('./odoo-core-src').CORE_SRC_ROOT,
     uploadRoot: require('./attachments').uploadRoot(),
     envBase: process.env.ODOO_ENV_BASE || path.resolve(appDir, 'odoo-envs'),
@@ -51,6 +51,22 @@ function defaults(appDir) {
 function isInside(child, parent) {
   const rel = path.relative(parent, child);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// 從 worktree 的 .git 檔（`gitdir: <path>`）讀出它在主 clone 的 admin 目錄；讀不到、格式不對、
+// 或不在 <repo>/.git/worktrees/<name> 一律丟例外——這個目錄會被開成可寫，不能被竄改的 .git 檔引到別處
+function worktreeAdminDir(d, repoPath, repoWt) {
+  let content;
+  try { content = String(d.readFileSync(path.join(repoWt, '.git'), 'utf8')); } catch (e) {
+    throw new Error(`讀不到任務 worktree 的 .git 檔（${repoWt}）：${e.message}`);
+  }
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(content);
+  if (!m) throw new Error(`任務 worktree 的 .git 檔格式不對：${repoWt}`);
+  const admin = path.resolve(repoWt, m[1]);
+  if (path.dirname(admin) !== path.join(repoPath, '.git', 'worktrees')) {
+    throw new Error(`任務 worktree 的 gitdir 不在 ${path.join(repoPath, '.git', 'worktrees')}/ 底下：${admin}`);
+  }
+  return admin;
 }
 
 async function resolveSandboxMounts(ctx, deps = {}) {
@@ -124,7 +140,16 @@ async function resolveSandboxMounts(ctx, deps = {}) {
     if (!wt || !d.existsSync(wt)) throw new Error(`任務 worktree 不存在：${wt}`);
     if (ctx.cwd !== undefined && ctx.cwd !== wt) throw new Error(`呼叫端 cwd（${ctx.cwd}）與任務 worktree（${wt}）不符`);
     mounts.push({ source: wt, readonly: false });
-    for (const r of info.repos) mounts.push(...gitDirMounts(r.local_path, 'rw'));
+    for (const r of info.repos) {
+      const repoWt = path.join(wt, r.subdir || path.basename(r.local_path));
+      // 任務開跑後才加進專案的 repo 沒有 worktree（見 merge-agent.js）：沒東西可 commit，.git 全唯讀
+      if (!d.existsSync(repoWt)) { mounts.push(...gitDirMounts(r.local_path, 'ro')); continue; }
+      mounts.push(...gitDirMounts(r.local_path, 'rw', worktreeAdminDir(d, r.local_path, repoWt)));
+      // bind mount 來源必須存在；分支全被 pack 掉時這兩個目錄不一定在
+      for (const sub of [['refs', 'heads', 'task'], ['logs', 'refs', 'heads', 'task']]) {
+        d.mkdirSync(path.join(r.local_path, '.git', ...sub), { recursive: true });
+      }
+    }
     projectData(); attach();
     return { mounts, workdir: wt };
   };

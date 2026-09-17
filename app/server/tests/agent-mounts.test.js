@@ -1,6 +1,7 @@
 // 意圖：掛載清單就是 AI 在容器裡看得到的整個世界。這裡用真的暫存目錄樹驗：
 //  - 客戶 agent 只看得到自己的專案（別專案 repo、平台 repo 本體、data/config.json 一律不在清單）
-//  - 任務 worktree 可寫，但主 clone 的 .git/config 與 hooks 唯讀（總覽 D5）
+//  - 任務 worktree 可寫；主 clone 的 .git 唯讀，只開 objects、本 worktree 的 admin 目錄、refs/heads/task 可寫
+//    （09-17 裁決 R8：testing／main 指標從掛載層就改不動，不靠事後還原）
 //  - 內部 AI 只掛乾淨 worktree，絕不掛正在運作的平台資料夾（總覽 D7）
 //  - agent 合法要讀的附件與 log 有掛、而且只掛本任務／本專案的（X7）
 const fs = require('fs');
@@ -21,6 +22,9 @@ beforeAll(() => {
   mk('app-root', 'app', 'node_modules');
   mk('repos', 'p7', 'main', '.git', 'hooks'); touch('repos', 'p7', 'main', '.git', 'config');
   mk('repos', 'p7', '.worktrees', 'task_7', 'main');
+  mk('repos', 'p7', 'main', '.git', 'objects'); mk('repos', 'p7', 'main', '.git', 'worktrees', 'main1');
+  fs.writeFileSync(path.join(R, 'repos', 'p7', '.worktrees', 'task_7', 'main', '.git'),
+    `gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1')}\n`);
   mk('repos', 'p8', 'main', '.git');
   mk('core', '17');
   mk('uploads', 'task_70'); mk('uploads', 'task_71'); mk('uploads', 'chat_5'); mk('uploads', 'feedback_3');
@@ -69,14 +73,39 @@ test('task-worktree：worktree 可寫、.git 可寫但 config／hooks 唯讀、�
   const m = await resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), deps);
   expect(m.workdir).toBe(wt);
   expect(find(m, wt).readonly).toBe(false);
-  expect(find(m, path.join(R, 'repos', 'p7', 'main', '.git')).readonly).toBe(false);
-  expect(find(m, path.join(R, 'repos', 'p7', 'main', '.git', 'config')).readonly).toBe(true);
-  expect(find(m, path.join(R, 'repos', 'p7', 'main', '.git', 'hooks')).readonly).toBe(true);
+  const G = path.join(R, 'repos', 'p7', 'main', '.git');
+  expect(m.mounts.filter(x => x.source.startsWith(G))).toEqual([
+    { source: G, readonly: true },
+    { source: path.join(G, 'objects'), readonly: false },
+    { source: path.join(G, 'worktrees', 'main1'), readonly: false },
+    { source: path.join(G, 'refs', 'heads', 'task'), readonly: false },
+    { source: path.join(G, 'logs', 'refs', 'heads', 'task'), readonly: false },
+    { source: path.join(G, 'config'), readonly: true },
+    { source: path.join(G, 'hooks'), readonly: true },
+  ]);
+  // bind mount 的來源必須存在：分支可能全被 pack 掉，refs/heads/task 目錄不一定在
+  expect(fs.statSync(path.join(G, 'refs', 'heads', 'task')).isDirectory()).toBe(true);
+  expect(fs.statSync(path.join(G, 'logs', 'refs', 'heads', 'task')).isDirectory()).toBe(true);
   expect(find(m, path.join(R, 'core', '17')).readonly).toBe(true);
   expect(find(m, path.join(R, 'uploads', 'task_70')).readonly).toBe(true);
   expect(sources(m)).not.toContain(path.join(R, 'uploads', 'task_71'));
   expect(find(m, path.join(appDir, '.agents', 'skills')).readonly).toBe(true);
   expectNoPlatformSecrets(m);
+});
+
+test('worktree 的 .git 檔指到 <repo>/.git/worktrees/ 以外 → 丟例外（不能被騙去開放別的目錄可寫）', async () => {
+  const wt = path.join(R, 'repos', 'p7', '.worktrees', 'task_7');
+  for (const content of [`gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git')}\n`,
+    `gitdir: ${path.join(R, 'repos', 'p8', 'main', '.git', 'worktrees', 'x')}\n`,
+    `gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', '..', '..', 'refs')}\n`,
+    'garbage']) {
+    await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), {
+      ...deps, readFileSync: () => content,
+    })).rejects.toThrow(/worktree/);
+  }
+  await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), {
+    ...deps, readFileSync: () => { throw new Error('EACCES'); },
+  })).rejects.toThrow(/EACCES|worktree/);
 });
 
 test('呼叫端給的 cwd 與任務 worktree 不符 → 丟例外（表對不上就停，不猜）', async () => {

@@ -25,11 +25,26 @@ function assertAbs(p, what) {
   }
 }
 
-function gitDirMounts(repoPath, mode) {
+// 任務主 clone 的 .git 掛法（09-17 裁決 R8）。rw＝「任務 worktree 要能 commit」，但 .git 本體仍唯讀，
+// 只開 commit 必要的四處：objects、本 worktree 的 admin 目錄（HEAD／index／自己的 reflog）、
+// refs/heads/task 與其 reflog（本平台任務分支一律 task/<task_id>，見 runner.js）。
+// testing／main／packed-refs 從掛載層就改不動——被注入的 AI 無法把 testing 指到自己的 commit 繞過審核。
+// 事後比對還原的做法已放棄：同專案並行任務的正常合併與開分支會被一起還原掉。
+// worktreeAdmin 必須是 <repo>/.git/worktrees/<name>（呼叫端從 worktree 的 .git 檔讀出，不得猜）。
+function gitDirMounts(repoPath, mode, worktreeAdmin) {
   const gitDir = path.join(repoPath, '.git');
   if (mode !== 'rw') return [{ source: gitDir, readonly: true }];
+  const adminRoot = path.join(gitDir, 'worktrees');
+  if (typeof worktreeAdmin !== 'string' || !path.isAbsolute(worktreeAdmin)
+    || path.dirname(path.normalize(worktreeAdmin)) !== adminRoot || ['.', '..'].includes(path.basename(worktreeAdmin))) {
+    throw new Error(`worktree admin 目錄必須是 ${adminRoot}/<name>：${worktreeAdmin}`);
+  }
   return [
-    { source: gitDir, readonly: false },
+    { source: gitDir, readonly: true },
+    { source: path.join(gitDir, 'objects'), readonly: false },
+    { source: path.normalize(worktreeAdmin), readonly: false },
+    { source: path.join(gitDir, 'refs', 'heads', 'task'), readonly: false },
+    { source: path.join(gitDir, 'logs', 'refs', 'heads', 'task'), readonly: false },
     { source: path.join(gitDir, 'config'), readonly: true },
     { source: path.join(gitDir, 'hooks'), readonly: true },
   ];

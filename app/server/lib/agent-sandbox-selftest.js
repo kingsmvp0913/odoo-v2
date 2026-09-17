@@ -23,7 +23,7 @@ const COMMON = ['env_no_APP_SECRET', 'env_no_JWT_SECRET', 'env_no_DATABASE_URL',
   ...AGENT_GW_BLOCKED_PORTS.map(p => `tcp_blocked_agentgw_${p}`), ...AGENT_GW_ACCEPTED_PORTS.map(p => `tcp_accepted_agentgw_${p}`),
   'proxy_anthropic', 'proxy_example_blocked', 'claude_run', 'claude_resume'];
 const EXPECTED_CHECKS = {
-  project: [...COMMON, 'write_git_config', 'write_git_hooks', 'write_git_objects', 'ai_own_project', 'ai_other_project_403', 'ai_other_db_403', 'ai_platform_query_403'],
+  project: [...COMMON, 'write_git_config', 'write_git_hooks', 'write_git_objects', 'write_git_release_refs', 'write_git_packed_refs', 'write_git_task_refs', 'ai_own_project', 'ai_other_project_403', 'ai_other_db_403', 'ai_platform_query_403'],
   audit: [...COMMON, 'write_platform_worktree', 'platform_query_ok', 'platform_query_sensitive_denied', 'ai_internal_db_403'],
 };
 

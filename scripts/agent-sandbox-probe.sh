@@ -55,6 +55,10 @@ if [ "$MODE" = project ]; then
   expect_fail write_git_config touch "$OWN_GIT/config"
   expect_fail write_git_hooks touch "$OWN_GIT/hooks/aidev-probe"; rm -f "$OWN_GIT/hooks/aidev-probe" 2>/dev/null
   expect_ok write_git_objects sh -c "touch '$OWN_GIT/objects/aidev-probe' && rm -f '$OWN_GIT/objects/aidev-probe'"
+  # refs 鎖（09-17 R8）：只有 refs/heads/task 可寫；.lock 檔名 git 不會當成 ref 讀
+  expect_fail write_git_release_refs touch "$OWN_GIT/refs/heads/aidev-probe.lock"; rm -f "$OWN_GIT/refs/heads/aidev-probe.lock" 2>/dev/null
+  expect_fail write_git_packed_refs touch "$OWN_GIT/packed-refs"
+  expect_ok write_git_task_refs sh -c "touch '$OWN_GIT/refs/heads/task/aidev-probe.lock' && rm -f '$OWN_GIT/refs/heads/task/aidev-probe.lock'"
   c=$(code -H "$H" "$AIDEV_AI_BASE/ai/wiki/pages?project=$OWN_SLUG"); [ "$c" = 200 ] && ok ai_own_project "$c" || bad ai_own_project "$c"
   c=$(code -H "$H" "$AIDEV_AI_BASE/ai/wiki/pages?project=$OTHER_SLUG"); [ "$c" = 403 ] && ok ai_other_project_403 "$c" || bad ai_other_project_403 "$c"
   c=$(code -H "$H" "$AIDEV_AI_BASE/ai/db/connections?project=$OTHER_SLUG"); [ "$c" = 403 ] && ok ai_other_db_403 "$c" || bad ai_other_db_403 "$c"
