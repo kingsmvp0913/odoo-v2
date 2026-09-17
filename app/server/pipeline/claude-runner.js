@@ -184,8 +184,20 @@ function runClaude(prompt, opts = {}) {
     let child = null;          // 目前的子行程：claude（舊路徑）或 docker CLI（容器路徑）
     let sandboxRun = null;     // 容器路徑的控制把手（見 sandbox-run.js）
     let sandboxReleased = false;
+    // refs 比對（09-15 Q4，見 sandbox-run.js verifyRefs）：容器一結束就做，不分成功失敗，整輪只做一次。
+    // 結果包成 { msg } 或 { err }，不會 reject。refsDone 在容器起來時建立、close 比對完才 resolve：
+    // 逾時／停止會先 settle，但那時容器還沒真的停、refs 還可能被動——release 一律等到比對做完才收。
+    let refCheck = null;
+    let refsDone = null;
+    let refsDoneResolve = null;
+    const checkRefs = () => (refCheck = refCheck || Promise.resolve()
+      .then(() => sandboxRun.verifyRefs())
+      .then(msg => ({ msg }), err => ({ err })));
     const releaseSandbox = () => {
-      if (sandboxRun && !sandboxReleased) { sandboxReleased = true; Promise.resolve(sandboxRun.release()).catch(() => {}); }
+      if (sandboxRun && !sandboxReleased) {
+        sandboxReleased = true;
+        Promise.resolve(child && refsDone).then(() => sandboxRun.release()).catch(() => {});
+      }
     };
     // 舊路徑的 spawn 選項——內容與原本逐字相同，只是延後到「確定不走容器」時才真的 spawn
     const legacyOpts = {
@@ -349,6 +361,26 @@ function runClaude(prompt, opts = {}) {
 
     child.on('close', (code, sig) => {
       if (taskId && userId) notify.emitToUser(userId, 'terminal:done', { taskId, exitCode: code });
+      if (!refsDone) return settleClose(code, sig);
+      checkRefs().then(({ msg, err }) => {
+        refsDoneResolve();
+        const problem = err ? `refs 比對失敗（可能有未還原的 ref，請人工檢查主 clone）：${err.message}` : msg;
+        // 成功且尚未 settle：違規或比對失敗都判這輪失敗（fail closed）
+        if (code === 0 && !settled) {
+          if (problem) return finish(() => reject(fail(err || new Error(msg), 'error')));
+          return settleClose(code, sig);
+        }
+        // 已 settle（逾時／停止）或本來就失敗：保留原本的失敗原因，但違規一定要講出來
+        if (problem) {
+          console.error(`[SANDBOX] ${problem}`);
+          if (taskId) {
+            query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)", [taskId, `[隔離] ${problem}`]).catch(() => {});
+          }
+        }
+        settleClose(code, sig);
+      });
+    });
+    const settleClose = (code, sig) => {
       finish(() => {
         // code null＝被 signal 終止：自家的 timeout/abort kill 已先 settle（此處為 no-op），
         // 走到這裡代表外部殺掉（OOM killer 等）→ 視為失敗，不能拿空結果當成功回傳
@@ -392,7 +424,7 @@ function runClaude(prompt, opts = {}) {
           resolve({ text: resultText.trim(), assistantText: assistantText.trim(), raw: assistantText.trim() || resultText.trim(), usage, durationMs, sessionId, model: finalModel });
         }
       });
-    });
+    };
     child.on('error', err => {
       // spawn 的 ENOENT 有兩種來源、無法從 err 本身區分：cwd 目錄不存在，或 PATH 找不到 claude。
       // cwd（多為任務 worktree）不存在最常見於「停在早期階段的任務被 resume」時 worktree 尚未建立——
@@ -426,6 +458,7 @@ function runClaude(prompt, opts = {}) {
         sandboxRun = run;
         // 準備期間就被按停止：不要再 spawn，直接把通行證與 worktree 收掉
         if (settled) { releaseSandbox(); return; }
+        if (run.verifyRefs) refsDone = new Promise(r => { refsDoneResolve = r; });
         attachChild(spawn('docker', run.argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv }));
       })
       .catch(err => finish(() => reject(fail(err, 'error'))));

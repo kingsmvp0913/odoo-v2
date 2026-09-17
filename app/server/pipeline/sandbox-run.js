@@ -2,7 +2,7 @@
 /**
  * sandbox-run.js — 一次 AI 執行的容器準備（子專案 0 §5）
  *   1. resolveSandboxPlan：開關有沒有涵蓋這個 agent（沒有＝null，呼叫端走原本的 spawn('claude')）
- *   2. prepareSandboxRun：canRun → infra → 通行證 → （內部健檢類）乾淨 worktree → 掛載 → docker 參數
+ *   2. prepareSandboxRun：canRun → infra → 通行證 → （內部健檢類）乾淨 worktree → 掛載 → （任務 worktree 類）refs 快照 → docker 參數
  * 任何一步失敗都往外丟：呼叫端不得退回無容器執行（規格 §6、rules/pipeline 59）。
  */
 const fs = require('fs');
@@ -59,6 +59,9 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     canRun: tok.canRun, issueRunToken: tok.issueRunToken, revokeRun: tok.revokeRun,
     mkdirSync: fs.mkdirSync, execFile,
     getuid: () => process.getuid(), getgid: () => process.getgid(),
+    query: (...a) => require('../db').query(...a),
+    getProjectInfo: (...a) => require('./task-agent').getProjectInfo(...a),
+    refGuard: null, // 預設 ../lib/ref-guard（延後 require）
     ...deps,
   };
   const scope = runScope(profile, projectId);
@@ -86,6 +89,29 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
       profile, projectId: scopeProjectId, taskDbId: opts.taskId ?? null, cwd: opts.cwd, chatId: opts.chatId ?? null,
       feedbackIds: opts.feedbackIds || [], home, platformWorktree, appDir: APP_DIR,
     });
+    // refs 快照守衛（09-15 Q4）：task-worktree 類會把主 clone 的 .git 以讀寫掛進容器，AI 因此改得到
+    // testing／main 指標。開容器前先拍快照（拍不到就不准跑，走下面的 catch 作廢通行證）；
+    // verifyRefs 由 runner 在容器結束時呼叫，只跑一次，重複呼叫拿同一個結果。
+    // 本任務分支：tasks.git_branch 要到 spec_tour 之後才寫入（runner.js），之前以慣例 task/<task_id> 為準。
+    let verifyRefs = async () => null;
+    if (/^task-worktree/.test(profile.mount) && opts.taskId != null && scopeProjectId != null) {
+      const guard = d.refGuard || require('../lib/ref-guard');
+      const { rows: [t] } = await d.query('SELECT task_id, git_branch FROM tasks WHERE id=$1', [opts.taskId]);
+      if (!t) throw new Error(`找不到任務 ${opts.taskId}，無法拍 refs 快照`);
+      const allowed = new Set([`refs/heads/${t.git_branch || `task/${t.task_id}`}`]);
+      const info = await d.getProjectInfo(scopeProjectId);
+      const repos = (info && info.repos) || [];
+      const before = await Promise.all(repos.map(r => guard.snapshotRefs(r.local_path)));
+      let checked = null;
+      verifyRefs = () => (checked = checked || (async () => {
+        const msgs = [];
+        for (let i = 0; i < repos.length; i++) {
+          const v = guard.diffRefs(before[i], await guard.snapshotRefs(repos[i].local_path), allowed);
+          if (v.length) { await guard.restoreRefs(repos[i].local_path, v); msgs.push(`${repos[i].label}: ${v.map(x => x.ref).join(', ')}`); }
+        }
+        return msgs.length ? `AI 改動了本任務分支以外的 git ref，已還原：${msgs.join('；')}` : null;
+      })());
+    }
     const gw = infra.gatewayHost;
     const env = {
       CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', SECURITY_GUIDANCE_DISABLE: '1',
@@ -102,7 +128,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     });
     let released = false;
     return {
-      ...built, runId,
+      ...built, runId, verifyRefs,
       kill: () => d.execFile('docker', ['kill', built.containerName], () => {}),
       release: async () => {
         if (released) return;

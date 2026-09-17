@@ -137,3 +137,78 @@ test('容器 exit 137 → oom，訊息寫明記憶體上限', async () => {
   c.emit('close', 137);
   await expect(p).rejects.toMatchObject({ claudeStatus: 'oom', message: expect.stringMatching(/記憶體上限.*4g/) });
 });
+
+// 意圖（09-15 Q4）：容器結束時一定要比對任務主 clone 的 refs——不管成功、失敗、逾時或被停止。
+// 成功那輪有違規就判失敗；失敗那輪照樣還原、保留原本的失敗原因、但違規要講出來（不可默默吞掉）。
+// release（收回通行證）要等比對做完。
+describe('refs 守衛', () => {
+  const { query } = require('../db');
+  function guardedRun(verify) {
+    const order = [];
+    const run = fakeRun();
+    run.verifyRefs = jest.fn(async () => { order.push('verify'); return verify(); });
+    run.release = jest.fn(async () => { order.push('release'); });
+    return { run, order };
+  }
+  async function start(run, opts = {}) {
+    flag._setFlagStateForTesting({ mode: 'all' });
+    sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: {}, projectId: 7 });
+    sr.prepareSandboxRun.mockResolvedValueOnce(run);
+    const c = child(); spawn.mockReturnValueOnce(c);
+    const p = runClaude('x', { agentType: 'coding', ...opts });
+    await tick(); await tick();
+    return { c, p };
+  }
+  let errSpy;
+  beforeEach(() => { query.mockClear(); errSpy = jest.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => errSpy.mockRestore());
+
+  test('exit 0 但動了別的 ref → reject（error），訊息是違規說明；release 在比對之後', async () => {
+    const { run, order } = guardedRun(() => 'AI 改動了本任務分支以外的 git ref，已還原：main: refs/heads/testing');
+    const { c, p } = await start(run);
+    c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
+    await expect(p).rejects.toMatchObject({ claudeStatus: 'error', message: expect.stringMatching(/refs\/heads\/testing/) });
+    await tick();
+    expect(order).toEqual(['verify', 'release']);
+  });
+
+  test('exit 0 且 refs 乾淨 → 照常 resolve', async () => {
+    const { run } = guardedRun(() => null);
+    const { c, p } = await start(run);
+    c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
+    await expect(p).resolves.toMatchObject({ text: 'done' });
+    expect(run.verifyRefs).toHaveBeenCalledTimes(1);
+  });
+
+  test('exit 0 但比對本身失敗 → reject（fail closed）', async () => {
+    const { run } = guardedRun(() => { throw new Error('git for-each-ref 失敗'); });
+    const { c, p } = await start(run);
+    c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
+    await expect(p).rejects.toMatchObject({ claudeStatus: 'error', message: expect.stringMatching(/for-each-ref/) });
+  });
+
+  test('非零退出也要比對還原；保留原本錯誤，違規寫進 console 與時間軸', async () => {
+    const { run } = guardedRun(() => 'AI 改動了本任務分支以外的 git ref，已還原：main: refs/heads/testing');
+    const { c, p } = await start(run, { taskId: 70 });
+    c.stderr.emit('data', 'boom from cli'); c.emit('close', 1);
+    await expect(p).rejects.toMatchObject({ claudeStatus: 'error', message: 'boom from cli' });
+    expect(run.verifyRefs).toHaveBeenCalledTimes(1);
+    expect(errSpy.mock.calls.some(a => /\[SANDBOX\].*refs\/heads\/testing/.test(a.join(' ')))).toBe(true);
+    expect(query.mock.calls.some(([sql, params]) => /INSERT INTO task_logs/.test(sql) && params[0] === 70 && /refs\/heads\/testing/.test(params[1]))).toBe(true);
+  });
+
+  test('按停止後容器才結束 → 仍比對一次；維持 aborted；release 等比對完才做', async () => {
+    const { run, order } = guardedRun(() => 'AI 改動了本任務分支以外的 git ref，已還原：main: refs/heads/main');
+    const ctrl = new AbortController();
+    const { c, p } = await start(run, { signal: ctrl.signal });
+    ctrl.abort();
+    await expect(p).rejects.toMatchObject({ claudeStatus: 'aborted' });
+    await tick();
+    expect(run.release).not.toHaveBeenCalled(); // 容器還沒真的停，refs 還可能被動
+    c.emit('close', null, 'SIGKILL');
+    await tick(); await tick();
+    expect(run.verifyRefs).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['verify', 'release']);
+    expect(errSpy.mock.calls.some(a => /\[SANDBOX\].*refs\/heads\/main/.test(a.join(' ')))).toBe(true);
+  });
+});
