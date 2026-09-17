@@ -45,6 +45,9 @@
         backups: null,
         runningBackup: false,
         downloadingBackup: null,
+        agentSandbox: null,
+        agentSandboxProjects: [],
+        savingAgentSandbox: false,
       };
     },
     async created() { await this.loadAll(); },
@@ -75,6 +78,32 @@
           this.rebuildingEmbedding = false;
         }
       },
+      async loadAgentSandbox() {
+        try {
+          const s = await Api.get('admin/agent-sandbox');
+          this.agentSandbox = { ...s, project_ids: [...(s.project_ids || [])] };
+        } catch (_) { this.agentSandbox = null; }
+        try { this.agentSandboxProjects = await Api.get('projects'); } catch (_) { this.agentSandboxProjects = []; }
+      },
+      // PUT 是整組覆寫：上限一定要把讀回來的值原樣帶上，漏帶會被清成空、AI 下一次執行就失敗
+      async saveAgentSandbox() {
+        const s = this.agentSandbox;
+        if (!s) return;
+        if (s.mode === 'all' && !await confirmDialog({
+          title: '全部 AI 進容器', message: '所有 AI（含客戶任務與對話）都會改在隔離容器裡執行。確定要切換？', confirmText: '切換',
+        })) return;
+        this.savingAgentSandbox = true;
+        try {
+          const r = await Api.put('admin/agent-sandbox', {
+            mode: s.mode, project_ids: s.mode === 'projects' ? s.project_ids : [],
+            memory: s.limits.memory, cpus: s.limits.cpus, pids: s.limits.pids,
+            gateway_memory: s.gateway_limits.memory, gateway_cpus: s.gateway_limits.cpus, gateway_pids: s.gateway_limits.pids,
+          });
+          this.agentSandbox = { ...r, project_ids: [...(r.project_ids || [])] };
+          showToast('已儲存，下一次 AI 執行就會套用', 'success');
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.savingAgentSandbox = false; }
+      },
       async loadBackups() {
         try { this.backups = await Api.get('admin/backups'); } catch (_) { this.backups = null; }
       },
@@ -84,6 +113,7 @@
           const r = await Api.post('admin/backups', {});
           showToast(`備份完成：${r.file}（${this.formatBytes(r.bytes)}）`, 'success');
           await this.loadBackups();
+          await this.loadAgentSandbox();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.runningBackup = false; }
       },
@@ -751,6 +781,33 @@
             <div class="setting-block-footer">
               <button class="btn btn-primary btn-sm" @click="rebuildEmbedding" :disabled="rebuildingEmbedding">
                 {{ rebuildingEmbedding ? '重建中...' : '重建索引' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- AI 容器隔離（子專案 0）-->
+          <div v-show="settingsTab==='adv'" class="setting-block">
+            <div class="setting-block-head">
+              <div class="setting-block-title">AI 容器隔離</div>
+              <div class="setting-block-desc">決定哪些 AI 要關進隔離容器執行（看不到平台總鑰匙與別家專案）。建議依序：只有內部 → 只有勾選的專案 → 全部。切換立即生效，不必重啟；目前正在跑的 AI 不受影響。</div>
+            </div>
+            <div class="setting-block-body">
+              <div v-if="agentSandbox" data-rwd-volatile style="font-size:var(--fs-sm);display:flex;flex-direction:column;gap:var(--space-2)">
+                <label><input type="radio" v-model="agentSandbox.mode" value="off"> 關閉（全部照舊，不進容器）</label>
+                <label><input type="radio" v-model="agentSandbox.mode" value="internal"> 只有內部 AI（健檢、夜間改善）</label>
+                <label><input type="radio" v-model="agentSandbox.mode" value="projects"> 內部 AI＋勾選的專案</label>
+                <div v-if="agentSandbox.mode==='projects'" style="padding-left:var(--space-4);display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-4)">
+                  <label v-for="p in agentSandboxProjects" :key="p.id"><input type="checkbox" :value="p.id" v-model="agentSandbox.project_ids"> {{ p.name }}</label>
+                </div>
+                <label><input type="radio" v-model="agentSandbox.mode" value="all"> 全部 AI</label>
+                <div style="color:var(--text-muted)">資源上限：AI 容器 記憶體 {{ agentSandbox.limits.memory || '未設定' }}／CPU {{ agentSandbox.limits.cpus || '未設定' }}／程式數 {{ agentSandbox.limits.pids || '未設定' }}</div>
+                <div v-if="!agentSandbox.limits.memory || !agentSandbox.limits.cpus || !agentSandbox.limits.pids" style="color:var(--danger)">✕ 資源上限未設定：開啟後 AI 會全部執行失敗，請先請管理員設定上限</div>
+              </div>
+              <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">狀態讀取失敗</div>
+            </div>
+            <div class="setting-block-footer">
+              <button class="btn btn-primary btn-sm" @click="saveAgentSandbox" :disabled="!agentSandbox || savingAgentSandbox">
+                {{ savingAgentSandbox ? '儲存中...' : '儲存' }}
               </button>
             </div>
           </div>
