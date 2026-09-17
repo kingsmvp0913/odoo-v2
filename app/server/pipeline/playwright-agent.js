@@ -253,7 +253,6 @@ async function runTourStage(taskId, userId, signal) {
 // 只取 diff 內的檔案（不是掃整個 tests/ 目錄）：模組裡可能躺著前一張任務留下的 tour，
 // 那些不是本次的考題，跑它們＝拿別人的錯誤退本次任務。
 async function tourTestClasses(info, cwd, moduleName, baseBranch, taskBranch) {
-  const fsp = require('fs').promises;
   const classes = new Set();
   for (const repo of (info.repos || [])) {
     const wt = path.join(cwd, repo.subdir);
