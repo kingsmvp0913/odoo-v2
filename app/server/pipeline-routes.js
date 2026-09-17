@@ -326,6 +326,19 @@ function registerRoutes(app) {
     }
   });
 
+  // 客服關兩個輸入口共用：附件綁在這次發言那則 log 上，前端才會把它掛在時間軸同一位置
+  async function saveLogAttachments(taskId, logId, files) {
+    for (const file of files || []) {
+      const relPath = saveAttachmentFile(taskId, file.originalname, file.buffer);
+      await query(
+        `INSERT INTO task_attachments (task_id, log_id, filename, mimetype, file_path, origin)
+         VALUES ($1, $2, $3, $4, $5, 'manual')`,
+        [taskId, logId, file.originalname, file.mimetype, relPath]
+      );
+    }
+    if ((files || []).length) await query('UPDATE tasks SET has_attachment = true WHERE id = $1', [taskId]);
+  }
+
   app.post('/api/tasks/:id/cs-confirm', verifyToken, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id, status');
@@ -344,7 +357,8 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/tasks/:id/cs-data-submit', verifyToken, async (req, res) => {
+  // 掛 uploadAttachmentFiles：停在這關時補資料面板是唯一輸入口，客戶截圖只能從這裡進來（純 JSON 呼叫仍相容）
+  app.post('/api/tasks/:id/cs-data-submit', verifyToken, uploadAttachmentFiles, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id, status, user_id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -357,7 +371,12 @@ function registerRoutes(app) {
         [req.params.id]
       );
       if (!rowCount) return res.json({ ok: true });
-      const { answers, note } = req.body;
+      const { note } = req.body;
+      let { answers } = req.body;
+      // multipart 送出時 answers 是 JSON 字串，不還原就會落到 note 分支、逐題格式消失
+      if (typeof answers === 'string') {
+        try { answers = JSON.parse(answers); } catch { answers = null; }
+      }
       let logContent = '';
       if (answers && typeof answers === 'object') {
         // Structured QA answers: { "問題文字": "回答文字" }
@@ -367,12 +386,15 @@ function registerRoutes(app) {
       } else if (note?.trim()) {
         logContent = note.trim();
       }
+      let dataLog = null;
       if (logContent) {
-        await query(
-          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+        ({ rows: [dataLog] } = await query(
+          "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
           [req.params.id, logContent]
-        );
+        ));
       }
+      // 附件早於 runPipeline 落地（cs-agent 起跑時才查 task_attachments），並綁在這則 log 上（同 /answer）
+      await saveLogAttachments(task.id, dataLog ? dataLog.id : null, req.files);
       // 補資料後推 task:updated：讓開著該任務頁的瀏覽器即時重抓、看到剛補的答案（否則要手動 F5 才更新）
       require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
       runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
@@ -384,7 +406,8 @@ function registerRoutes(app) {
 
   // 客服回覆這關追問／補充：把追問寫進 task_logs（role='user'）＝釐清對話真相來源，轉 cs_running 重跑 cs agent，
   // 由 cs 依「原問題＋前一版草稿＋這次追問」重新三分類——修出新草稿留在原地、或釐清後判定需補資料/改程式自然分流。
-  app.post('/api/tasks/:id/cs-followup', verifyToken, async (req, res) => {
+  // 掛 uploadAttachmentFiles：同 cs-data-submit，追問面板是這關唯一輸入口
+  app.post('/api/tasks/:id/cs-followup', verifyToken, uploadAttachmentFiles, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id, status, user_id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -399,10 +422,11 @@ function registerRoutes(app) {
         [req.params.id]
       );
       if (!rowCount) return res.json({ ok: true });
-      await query(
-        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2)",
+      const { rows: [noteLog] } = await query(
+        "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
         [req.params.id, note]
       );
+      await saveLogAttachments(task.id, noteLog.id, req.files);
       require('./notify').emitToUser(task.user_id, 'task:updated', { taskId: Number(req.params.id), status: 'cs_running' });
       runPipeline(task.user_id).catch(err => console.error('[PIPELINE] pipeline error:', err.message));
       res.json({ ok: true });

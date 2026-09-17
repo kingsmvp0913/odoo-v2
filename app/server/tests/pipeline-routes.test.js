@@ -1018,3 +1018,88 @@ test('POST /api/tasks/:id/cs-followup → 空 note → 400', async () => {
   expect(res.status).toBe(400);
   await dbModule.query('DELETE FROM tasks WHERE id = $1', [t.id]);
 });
+
+// 意圖：客服關停下來等人時，畫面上的留言框被「追問／確認結案」或「補資料」面板取代——這兩個面板
+// 是使用者唯一的輸入口。後端只收 JSON 的話，客戶截圖完全傳不進來（2026-09-17 實際回報）。
+// 附件要綁在這次發言那則 log 上（否則前端會把它排到時間軸最前面），並早於 runPipeline 落地
+// （cs-agent 起跑時 assembleTaskContext 才查 task_attachments）。
+describe('客服關兩個輸入口可夾帶附件', () => {
+  let prevUploadDir;
+  beforeAll(() => {
+    prevUploadDir = process.env.UPLOAD_DIR;
+    process.env.UPLOAD_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-att-'));
+  });
+  afterAll(() => {
+    if (prevUploadDir === undefined) delete process.env.UPLOAD_DIR;
+    else process.env.UPLOAD_DIR = prevUploadDir;
+  });
+
+  async function attachmentsOf(taskId) {
+    const { rows: atts } = await dbModule.query('SELECT filename, origin, log_id FROM task_attachments WHERE task_id=$1', [taskId]);
+    const { rows: [userLog] } = await dbModule.query("SELECT id, content FROM task_logs WHERE task_id=$1 AND role='user' ORDER BY id DESC LIMIT 1", [taskId]);
+    const { rows: [row] } = await dbModule.query('SELECT status, has_attachment FROM tasks WHERE id=$1', [taskId]);
+    return { atts, userLog, row };
+  }
+  async function cleanup(taskId) {
+    await dbModule.query('DELETE FROM task_attachments WHERE task_id=$1', [taskId]);
+    await dbModule.query('DELETE FROM task_logs WHERE task_id=$1', [taskId]);
+    await dbModule.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+  }
+
+  test('cs-followup → multipart 帶圖：附件綁在追問那則 log、標 has_attachment', async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cs_fu_att','service','T','cs_reply_pending') RETURNING id",
+      [userId]
+    );
+    const res = await request(app).post(`/api/tasks/${t.id}/cs-followup`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('note', '客戶畫面如附圖')
+      .attach('files', Buffer.from('PNGDATA'), '客戶截圖.png');
+    expect(res.status).toBe(200);
+    const { atts, userLog, row } = await attachmentsOf(t.id);
+    expect(userLog.content).toBe('客戶畫面如附圖');
+    expect(atts).toHaveLength(1);
+    expect(atts[0].filename).toBe('客戶截圖.png');
+    expect(atts[0].origin).toBe('manual');
+    expect(atts[0].log_id).toBe(userLog.id);
+    expect(row.status).toBe('cs_running');
+    expect(row.has_attachment).toBe(true);
+    await cleanup(t.id);
+  });
+
+  // multipart 下 answers 是字串，不還原就會落到 note 分支、逐題 Q/A 格式整個消失
+  test('cs-data-submit → multipart 帶圖：answers 字串仍走逐題分支、附件綁在那則 log', async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cs_data_att','service','T','cs_data_needed') RETURNING id",
+      [userId]
+    );
+    const res = await request(app).post(`/api/tasks/${t.id}/cs-data-submit`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('answers', JSON.stringify({ '錯誤畫面長怎樣？': '見附圖' }))
+      .attach('files', Buffer.from('PNGDATA'), 'error.png');
+    expect(res.status).toBe(200);
+    const { atts, userLog, row } = await attachmentsOf(t.id);
+    expect(userLog.content).toBe('Q：錯誤畫面長怎樣？\nA：見附圖');
+    expect(atts).toHaveLength(1);
+    expect(atts[0].log_id).toBe(userLog.id);
+    expect(row.status).toBe('cs_running');
+    expect(row.has_attachment).toBe(true);
+    await cleanup(t.id);
+  });
+
+  // 輸掉雙擊競態的請求不該再落一份附件
+  test('cs-followup → 狀態已不是 cs_reply_pending 時帶圖 → 不落附件', async () => {
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'task_cs_fu_att_bad','service','T','cs_running') RETURNING id",
+      [userId]
+    );
+    const res = await request(app).post(`/api/tasks/${t.id}/cs-followup`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('note', 'x')
+      .attach('files', Buffer.from('PNGDATA'), 'x.png');
+    expect(res.status).toBe(400);
+    const { atts } = await attachmentsOf(t.id);
+    expect(atts).toHaveLength(0);
+    await cleanup(t.id);
+  });
+});
