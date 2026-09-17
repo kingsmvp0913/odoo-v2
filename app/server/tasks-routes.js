@@ -409,7 +409,7 @@ function registerRoutes(app) {
   // 審核用 diff：任務分支相對主分支的程式變更（逐 repo）。分支已清（已核准）的 repo 標 missing。
   app.get('/api/tasks/:id/diff', verifyToken, async (req, res) => {
     try {
-      const task = await loadTaskForActor(req.params.id, req, 'id, project_id, git_branch');
+      const task = await loadTaskForActor(req.params.id, req, 'id, project_id, git_branch, task_id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
       if (!task.project_id || !task.git_branch) return res.status(400).json({ error: '此任務沒有專案分支，無可檢視的程式變更' });
 
@@ -420,10 +420,25 @@ function registerRoutes(app) {
 
       // 超大 diff 截斷保護：審核介面看重點即可，完整內容仍在 git
       const MAX_CHARS = 300000;
+      // D2：AI 在容器裡的 commit 先落在任務物件庫，搬進共用庫之前宿主讀不到（會被當成分支不存在）。
+      // 容器還在跑就不搬（搬完它還能再寫）、直接說在跑；已停就先驗證搬進來；搬不進來＝被竄改，要講出來
+      let pending = null;
+      const agentObjects = require('./lib/agent-objects');
+      let hasObjectDir = false;
+      try { hasObjectDir = fs.existsSync(agentObjects.objectDirFor(info.repos[0].local_path, task.git_branch)); } catch { hasObjectDir = false; }
+      if (hasObjectDir) {
+        try {
+          await require('./pipeline/sandbox-run').waitForWorktreeIdle(require('./pipeline/task-agent').worktreeParent(info.root, task.task_id), { timeoutMs: 0 });
+          await agentObjects.importTaskObjects({ repoPaths: info.repos.map(r => r.local_path), branch: task.git_branch });
+        } catch (e) {
+          pending = e.code === 'WORKTREE_BUSY' ? 'running' : 'error';
+          if (pending === 'error') console.error(`[DIFF] 任務 ${task.id} 物件搬移失敗：${e.message}`);
+        }
+      }
       const repos = [];
       for (const repo of info.repos) {
         if (!(await refExists(repo.local_path, `refs/heads/${task.git_branch}`))) {
-          repos.push({ label: repo.label, missing: true, diff: '' });
+          repos.push(pending ? { label: repo.label, pending, diff: '' } : { label: repo.label, missing: true, diff: '' });
           continue;
         }
         // diff 基底＝任務切點 ai-dev：用 main 會讓審核者看到其他已核准任務夾雜其中的改動

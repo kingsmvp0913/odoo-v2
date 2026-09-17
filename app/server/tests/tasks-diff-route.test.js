@@ -16,10 +16,26 @@ jest.mock('../pipeline/git', () => {
   };
 });
 
+// D2：任務物件庫與容器獨占。預設「沒有物件庫」＝跟開關 off 時一樣，完全不動
+jest.mock('../lib/agent-objects', () => ({
+  objectDirFor: jest.fn(() => '/nonexistent/.agent-objects/x'),
+  importTaskObjects: jest.fn(),
+  removeTaskObjectDir: jest.fn(async () => {}),
+}));
+jest.mock('../pipeline/sandbox-run', () => {
+  const actual = jest.requireActual('../pipeline/sandbox-run');
+  return { ...actual, waitForWorktreeIdle: jest.fn() };
+});
+
 process.env.JWT_SECRET = 'test-diff-secret';
 
 const taskAgent = require('../pipeline/task-agent');
 const gitMock = require('../pipeline/git');
+const objects = require('../lib/agent-objects');
+const sandboxRun = require('../pipeline/sandbox-run');
+const fsReal = require('fs');
+const osReal = require('os');
+const pathReal = require('path');
 
 let app, dbModule, token, userId;
 
@@ -46,6 +62,9 @@ beforeEach(() => {
   taskAgent.getProjectInfo.mockReset();
   gitMock.refExists.mockReset();
   gitMock.diffBranch.mockReset();
+  objects.objectDirFor.mockReset().mockReturnValue('/nonexistent/.agent-objects/x');
+  objects.importTaskObjects.mockReset();
+  sandboxRun.waitForWorktreeIdle.mockReset();
 });
 
 async function makeTask({ withProject = false, branch = null } = {}) {
@@ -103,4 +122,63 @@ test('無專案分支的任務 → 400', async () => {
 test('未登入 → 401', async () => {
   const res = await request(app).get('/api/tasks/1/diff');
   expect(res.status).toBe(401);
+});
+
+// 意圖（D2）：AI 在容器裡 commit 的物件要等搬進共用庫，宿主才讀得到任務分支。審核頁不能因此把
+// 「AI 還在改」誤報成「分支已清理」——容器還在跑就說在跑；容器已停就先搬再讀；搬不進來（被竄改）要講出來。
+describe('D2：任務物件庫', () => {
+  let objDir;
+  beforeEach(() => {
+    objDir = fsReal.mkdtempSync(pathReal.join(osReal.tmpdir(), 'diff-objs-'));
+    objects.objectDirFor.mockReturnValue(objDir);
+  });
+  afterEach(() => fsReal.rmSync(objDir, { recursive: true, force: true }));
+  const info = { root: '/repos/p', repos: [{ label: 'main', local_path: '/repos/p/main' }] };
+
+  test('容器還在跑 → 不搬、標 pending=running（不是 missing）', async () => {
+    const id = await makeTask({ withProject: true, branch: 'task/x' });
+    taskAgent.getProjectInfo.mockResolvedValue(info);
+    sandboxRun.waitForWorktreeIdle.mockRejectedValue(Object.assign(new Error('busy'), { code: 'WORKTREE_BUSY' }));
+    gitMock.refExists.mockResolvedValue(false);
+    const res = await request(app).get(`/api/tasks/${id}/diff`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.repos).toEqual([{ label: 'main', pending: 'running', diff: '' }]);
+    expect(objects.importTaskObjects).not.toHaveBeenCalled();
+    expect(sandboxRun.waitForWorktreeIdle.mock.calls[0][1]).toEqual({ timeoutMs: 0 });
+  });
+
+  test('容器已停 → 先搬（全部 repo）再照常讀 diff', async () => {
+    const id = await makeTask({ withProject: true, branch: 'task/x' });
+    taskAgent.getProjectInfo.mockResolvedValue(info);
+    sandboxRun.waitForWorktreeIdle.mockResolvedValue();
+    const order = [];
+    objects.importTaskObjects.mockImplementation(async () => { order.push('import'); });
+    gitMock.refExists.mockImplementation(async () => { order.push('ref'); return true; });
+    gitMock.diffBranch.mockResolvedValue('+y');
+    const res = await request(app).get(`/api/tasks/${id}/diff`).set('Authorization', `Bearer ${token}`);
+    expect(res.body.repos).toEqual([{ label: 'main', diff: '+y', truncated: false }]);
+    expect(order).toEqual(['import', 'ref']);
+    expect(objects.importTaskObjects).toHaveBeenCalledWith({ repoPaths: ['/repos/p/main'], branch: 'task/x' });
+  });
+
+  test('搬移失敗（被竄改）→ 標 pending=error，不讀 diff', async () => {
+    const id = await makeTask({ withProject: true, branch: 'task/x' });
+    taskAgent.getProjectInfo.mockResolvedValue(info);
+    sandboxRun.waitForWorktreeIdle.mockResolvedValue();
+    objects.importTaskObjects.mockRejectedValue(Object.assign(new Error('壞物件'), { code: 'OBJECTS_TAMPERED' }));
+    gitMock.refExists.mockResolvedValue(false);
+    const res = await request(app).get(`/api/tasks/${id}/diff`).set('Authorization', `Bearer ${token}`);
+    expect(res.body.repos).toEqual([{ label: 'main', pending: 'error', diff: '' }]);
+    expect(gitMock.diffBranch).not.toHaveBeenCalled();
+  });
+
+  test('分支名不是 task/<id>（舊任務）→ 當作沒有物件庫，照舊', async () => {
+    const id = await makeTask({ withProject: true, branch: 'feature/old' });
+    taskAgent.getProjectInfo.mockResolvedValue(info);
+    objects.objectDirFor.mockImplementation(() => { throw new Error('任務分支名不合法'); });
+    gitMock.refExists.mockResolvedValue(false);
+    const res = await request(app).get(`/api/tasks/${id}/diff`).set('Authorization', `Bearer ${token}`);
+    expect(res.body.repos[0].missing).toBe(true);
+    expect(sandboxRun.waitForWorktreeIdle).not.toHaveBeenCalled();
+  });
 });

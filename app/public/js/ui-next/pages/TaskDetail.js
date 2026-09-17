@@ -1102,7 +1102,9 @@
 <div v-if="diffOpen&&diffData">
 <div v-for="repo in diffData.repos" :key="repo.label" class="ui-next-diff-repo">
 <b>{{ repo.label }}</b>
-<span v-if="repo.missing">分支已清理，無法取得 diff</span>
+<span v-if="repo.pending==='running'">AI 還在修改中，完成後才看得到這一輪的程式變更</span>
+<span v-else-if="repo.pending==='error'">這一輪的程式變更無法讀取（檢查未通過），請通知管理員</span>
+<span v-else-if="repo.missing">分支已清理，無法取得 diff</span>
 <span v-else-if="!repo.diff">此 repo 無變更</span>
 <div v-else class="diff-view"><div v-for="(line,index) in diffLines(repo.diff)" :key="index" :class="['diff-line',line.cls]">{{ line.text }}</div></div>
 <span v-if="repo.truncated">（diff 過大已截斷，完整內容請至 repo 檢視）</span>
