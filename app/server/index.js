@@ -336,6 +336,11 @@ if (require.main === module) {
       const o = await require('./lib/agent-orphans').removeOrphanAgentContainers();
       if (o.removed || o.skipped) console.log(`[STARTUP] AI 孤兒容器：清掉 ${o.removed}${o.skipped ? `（略過：${o.skipped}）` : ''}`);
     } catch (e) { console.error('[STARTUP] AI 孤兒容器清理:', e.message); }
+    // 內部 AI 的乾淨 worktree：平台被重啟打斷時沒收掉的 ro-*（容器已被上一步清掉，這些不會再有人用）
+    try {
+      const n = await require('./lib/platform-worktree').removeStalePlatformWorktrees();
+      if (n) console.log(`[STARTUP] 清掉 ${n} 個殘留的內部 AI worktree`);
+    } catch (e) { console.error('[STARTUP] 清內部 AI worktree:', e.message); }
     // 維護旗標可能卡在上次沒收乾淨的狀態（批次拋錯／被 kill）。開機清一次是第三道保險。
     try { await require('./pipeline/maintenance').leaveMaintenance(); }
     catch (e) { console.error('[STARTUP] 清維護旗標:', e.message); }
