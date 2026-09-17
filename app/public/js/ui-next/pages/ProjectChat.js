@@ -293,9 +293,11 @@
       },
       // 伺服器還沒把剛送出的那則寫進 DB 之前，先用首頁交接過來的文字畫一則上去。
       // 伺服器版本一到（內容相同）就把暫時這則丟掉，不會留下兩份。
+      // ⚠ 比對前先統一換行：帶附件走 multipart，瀏覽器會把 \n 改成 \r\n，DB 存的就跟暫存的差一個字元。
       applyOptimisticPending() {
         if (!this.optimisticText) return;
-        if (this.messages.some((message) => message.role === "user" && message.content === this.optimisticText)) { this.optimisticText = ""; return; }
+        const sameText = (text) => String(text || "").replace(/\r\n/g, "\n") === this.optimisticText.replace(/\r\n/g, "\n");
+        if (this.messages.some((message) => message.role === "user" && sameText(message.content))) { this.optimisticText = ""; return; }
         this.messages = [...this.messages, { id: `optimistic-${this.activeChat.id}`, role: "user", content: this.optimisticText, created_at: new Date().toISOString() }];
       },
       // 停止回覆、或伺服器重啟，那一輪都沒有回覆——AI 方會補一則中斷訊息（chat-agent）。
