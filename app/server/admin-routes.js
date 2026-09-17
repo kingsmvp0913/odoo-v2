@@ -70,6 +70,16 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 子專案 0 規格 §8.3：在正式平台上以真容器跑攻擊實測。約 1–3 分鐘；只對測試專案跑（開發順序 §2.1）。
+  app.post('/api/admin/agent-sandbox/selftest', auth, async (req, res) => {
+    const b = req.body || {};
+    try {
+      const r = await require('./lib/agent-sandbox-selftest').runSelftest({ projectId: b.project_id, taskDbId: b.task_id, otherProjectId: b.other_project_id });
+      console.log(`[AGENT-SANDBOX] 自我檢測（管理員 ${req.userId}）：${r.ok ? '全部通過' : `未通過 ${r.checks.filter(c => !c.pass).map(c => c.name).join(', ')}`}`);
+      res.json(r);
+    } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+  });
+
   // --- Claude 長效憑證（全平台一把）---
   // 由 claude setup-token 產生，取代共用的互動式憑證檔（併發 spawn 撞刷新會印 Not logged in）。
   // 走專屬端點而非 teams-settings 的全量 upsert：那支 PUT 漏帶欄位就清空，且沒有自然的驗證時機。
