@@ -103,3 +103,45 @@ describe('給管理員看與解鎖', () => {
     expect(s.alice).toBeUndefined();
   });
 });
+
+// 意圖（最終審查 IMPORTANT-2，裁決 R16）：網頁使用者全經 nginx 進來，remoteAddress 都是 nginx 那一個位址——
+// 用它當來源，網路上任何人打錯管理員密碼 10 次就能讓所有人都登不進去。只有「直接連線的對方是設定裡信任的
+// proxy」時才採用 X-Real-IP；其他人（例如直連 8771 的 AI 容器）自己帶的 X-Real-IP 一律不理。
+describe('clientSource：認出真實來源', () => {
+  const req = (peer, realIp) => ({ socket: { remoteAddress: peer }, headers: realIp === undefined ? {} : { 'x-real-ip': realIp } });
+  const PROXY = '10.0.10.6';
+
+  test('信任的 proxy 帶 X-Real-IP → 用 header 的位址', () => {
+    expect(g.clientSource(req(PROXY, '203.0.113.7'), PROXY)).toBe('203.0.113.7');
+    expect(g.clientSource(req(PROXY, '2001:db8::1'), `127.0.0.1, ${PROXY}`)).toBe('2001:db8::1');
+  });
+
+  test('不在信任清單的對方自己帶 X-Real-IP → 不理，用對方位址（AI 容器偽造無效）', () => {
+    expect(g.clientSource(req('10.0.28.3', '10.0.10.99'), PROXY)).toBe('10.0.28.3');
+  });
+
+  test('信任的 proxy 但 header 缺或不是合法 IP → 用 proxy 位址', () => {
+    expect(g.clientSource(req(PROXY), PROXY)).toBe(PROXY);
+    expect(g.clientSource(req(PROXY, 'evil; drop'), PROXY)).toBe(PROXY);
+    expect(g.clientSource(req(PROXY, '1.2.3.4, 5.6.7.8'), PROXY)).toBe(PROXY);
+  });
+
+  test('IPv4-mapped IPv6 的對方位址會正規化後再比對信任清單', () => {
+    expect(g.clientSource(req(`::ffff:${PROXY}`, '203.0.113.7'), PROXY)).toBe('203.0.113.7');
+    expect(g.clientSource(req('::ffff:10.0.28.3', '203.0.113.7'), PROXY)).toBe('10.0.28.3');
+  });
+
+  test('沒設信任清單 → 跟以前一模一樣：用 remoteAddress 原值，header 不理', () => {
+    expect(g.clientSource(req(PROXY, '203.0.113.7'), undefined)).toBe(PROXY);
+    expect(g.clientSource(req('::ffff:10.0.28.3', '203.0.113.7'), '')).toBe('::ffff:10.0.28.3');
+    expect(g.clientSource({ headers: {} }, undefined)).toBe('unknown');
+  });
+
+  test('預設讀 process.env.TRUSTED_PROXY_IPS', () => {
+    const old = process.env.TRUSTED_PROXY_IPS;
+    try {
+      process.env.TRUSTED_PROXY_IPS = PROXY;
+      expect(g.clientSource(req(PROXY, '203.0.113.7'))).toBe('203.0.113.7');
+    } finally { if (old === undefined) delete process.env.TRUSTED_PROXY_IPS; else process.env.TRUSTED_PROXY_IPS = old; }
+  });
+});

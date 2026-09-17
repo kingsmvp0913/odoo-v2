@@ -12,6 +12,7 @@
  *
  * 計數落 DB 不放記憶體：放記憶體的話，攻擊者只要等一次平台重啟就歸零。
  */
+const net = require('net');
 const { query } = require('../db');
 
 const LOCK_THRESHOLD = 5;      // 錯這麼多次 → 鎖一段時間
@@ -94,7 +95,23 @@ async function clearLock(username, source) {
   await query('DELETE FROM login_attempts WHERE username = $1 AND source = $2', [username, source]);
 }
 
+// 認出真實來源（最終審查 IMPORTANT-2，裁決 R16）：網頁使用者全經 nginx 進來，remoteAddress 都是 nginx 同一個位址，
+// 拿它當來源等於「網路上任何人打錯 10 次，管理員對所有人封鎖」。只有直連的對方在 TRUSTED_PROXY_IPS
+// （data/config.json，逗號分隔的完整 IP，start.sh 匯出）裡，才採用它轉來的 X-Real-IP；
+// 其他人（例如直連 8771 的 AI 容器）自己帶的 header 不理。不用 Express 的 trust proxy：會改到全站的 req.ip。
+// 沒設 TRUSTED_PROXY_IPS → 與原本完全相同（remoteAddress 原值）。
+const unmap = ip => (/^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(ip) ? ip.slice(7) : ip);
+function clientSource(req, trusted = process.env.TRUSTED_PROXY_IPS) {
+  const peer = (req.socket && req.socket.remoteAddress) || 'unknown';
+  const list = String(trusted || '').split(',').map(x => unmap(x.trim())).filter(Boolean);
+  if (!list.length) return peer;
+  const p = unmap(peer);
+  if (!list.includes(p)) return p;
+  const real = String((req.headers && req.headers['x-real-ip']) || '').trim();
+  return net.isIP(real) ? unmap(real) : p;
+}
+
 module.exports = {
-  LOCK_THRESHOLD, LOCK_MINUTES, BLOCK_THRESHOLD,
+  LOCK_THRESHOLD, LOCK_MINUTES, BLOCK_THRESHOLD, clientSource,
   checkLogin, recordFailure, recordSuccess, listLocks, lockSummary, clearLock,
 };

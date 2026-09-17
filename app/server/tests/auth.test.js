@@ -227,3 +227,20 @@ test('有效 token 仍正常放行（撤銷檢查不得誤殺在職帳號）', a
   expect(res.status).toBe(200);
   expect(res.body.username).toBe('admin');
 });
+
+// 意圖（最終審查 IMPORTANT-2）：登入失敗計數要記在真實使用者的位址上，不是 nginx 的位址上——
+// 否則網路上任何人都能把管理員對所有人封鎖。只有對方是信任的 proxy 時才採用 X-Real-IP。
+test('POST /api/auth/login 失敗：信任的 proxy 轉來的記在 X-Real-IP；不信任時 header 不理', async () => {
+  const old = process.env.TRUSTED_PROXY_IPS;
+  try {
+    process.env.TRUSTED_PROXY_IPS = '127.0.0.1';
+    await request(app).post('/api/auth/login').set('X-Real-IP', '203.0.113.50').send({ username: 'proxied', password: 'x' });
+    delete process.env.TRUSTED_PROXY_IPS;
+    await request(app).post('/api/auth/login').set('X-Real-IP', '203.0.113.51').send({ username: 'proxied', password: 'x' });
+    const { rows } = await dbModule.query("SELECT source FROM login_attempts WHERE username = 'proxied' ORDER BY source");
+    const sources = rows.map(r => r.source);
+    expect(sources).toContain('203.0.113.50');
+    expect(sources).not.toContain('203.0.113.51');
+    expect(sources).toHaveLength(2); // 第二筆記在直連的對方位址（supertest 的本機位址）
+  } finally { if (old === undefined) delete process.env.TRUSTED_PROXY_IPS; else process.env.TRUSTED_PROXY_IPS = old; }
+});

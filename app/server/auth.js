@@ -125,7 +125,7 @@ function registerRoutes(app) {
       // 失敗次數限制（見 lib/login-guard.js）。鎖的是 (帳號, 來源) 這一對：只鎖帳號會讓人能故意
       // 把所有管理員封鎖掉。失敗不論帳號存不存在都記——否則「有沒有被鎖」就成了帳號列舉的管道。
       const guard = require('./lib/login-guard');
-      const source = (req.socket && req.socket.remoteAddress) || 'unknown';
+      const source = guard.clientSource(req);
       if (username) {
         const gate = await guard.checkLogin({ username, source });
         if (!gate.allowed) {
