@@ -14,6 +14,35 @@ const APP_DIR = path.resolve(__dirname, '..', '..', '..');
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.CLAUDE_AGENT_TIMEOUT_MS || '2400000', 10);
 const TOKEN_GRACE_MS = 10 * 60 * 1000;
 
+// 可寫掛著任務 worktree 的「活著的容器」：realpath → 持有者數。宿主在該 worktree 跑 git 或寫回指標前
+// 必須等它歸零（lib/worktree-guard.js），否則容器能在宿主處理完之後再改一次。
+// 只放記憶體就夠：平台重啟時殘留容器會在啟動時被清掉（lib/agent-orphans.js，index.js 啟動流程）。
+const busyWorktrees = new Map();
+const WORKTREE_WAIT_MS = DEFAULT_TIMEOUT_MS + TOKEN_GRACE_MS;
+const realOrResolve = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+function holdWorktree(p) { busyWorktrees.set(p, (busyWorktrees.get(p) || 0) + 1); }
+function dropWorktree(p) {
+  const n = (busyWorktrees.get(p) || 0) - 1;
+  if (n > 0) busyWorktrees.set(p, n); else busyWorktrees.delete(p);
+}
+function worktreeBusy(target) {
+  for (const p of busyWorktrees.keys()) {
+    const rel = path.relative(p, target);
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return true;
+  }
+  return false;
+}
+async function waitForWorktreeIdle(worktreePath, { timeoutMs = WORKTREE_WAIT_MS, pollMs = 1000 } = {}) {
+  const target = realOrResolve(worktreePath);
+  const deadline = Date.now() + timeoutMs;
+  while (worktreeBusy(target)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`掛著任務 worktree 的 AI 容器仍在執行（已等 ${Math.round(timeoutMs / 1000)} 秒），暫不對它執行 git：${worktreePath}`);
+    }
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+}
+
 function replaceArg(args, flag, value) {
   const i = args.indexOf(flag);
   if (i === -1 || i === args.length - 1) throw new Error(`參數裡找不到 ${flag}`);
@@ -80,12 +109,17 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
   });
 
   let platformWorktree = null;
+  let heldWorktree = null;
   try {
     if (profile.mount === 'platform-clean') platformWorktree = await d.createPlatformCleanWorktree(runId);
     const { mounts, workdir } = await d.resolveSandboxMounts({
       profile, projectId: scopeProjectId, taskDbId: opts.taskId ?? null, cwd: opts.cwd, chatId: opts.chatId ?? null,
       feedbackIds: opts.feedbackIds || [], home, platformWorktree, appDir: APP_DIR,
     });
+    if (/^task-worktree/.test(profile.mount) && mounts.some(m => !m.readonly && m.source === workdir)) {
+      heldWorktree = realOrResolve(workdir);
+      holdWorktree(heldWorktree);
+    }
     const gw = infra.gatewayHost;
     const env = {
       CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', SECURITY_GUIDANCE_DISABLE: '1',
@@ -108,14 +142,21 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
         if (released) return;
         released = true;
         d.revokeRun(runId);
+        // 容器真的結束才放掉 worktree：逾時／停止時 release 會比容器先到（docker kill 是非同步）。
+        // docker wait 對已移除的容器會立刻回錯，一樣算結束。
+        if (heldWorktree) {
+          await new Promise(r => d.execFile('docker', ['wait', built.containerName], () => r()));
+          dropWorktree(heldWorktree);
+        }
         if (platformWorktree) await d.removePlatformCleanWorktree(platformWorktree).catch(e => console.error('[SANDBOX] 移除乾淨 worktree 失敗：', e.message));
       },
     };
   } catch (err) {
     d.revokeRun(runId);
+    if (heldWorktree) dropWorktree(heldWorktree);
     if (platformWorktree) await d.removePlatformCleanWorktree(platformWorktree).catch(() => {});
     throw err;
   }
 }
 
-module.exports = { resolveSandboxPlan, prepareSandboxRun, sandboxMcpConfigPath, replaceArg };
+module.exports = { resolveSandboxPlan, prepareSandboxRun, sandboxMcpConfigPath, replaceArg, waitForWorktreeIdle };

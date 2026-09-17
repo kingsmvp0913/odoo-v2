@@ -54,8 +54,8 @@ jest.mock('../pipeline/git', () => {
     revParse: jest.fn(() => Promise.resolve(`sha-${++sha}`))
   };
 });
-// worktree 是假路徑：git 已 mock，驗證也放行（真實驗證見 worktree-guard.test.js）；個別測試可改成丟例外
-jest.mock('../lib/worktree-guard', () => ({ assertTaskWorktreeIntact: jest.fn() }));
+// worktree 是假路徑：git 已 mock，寫回指標也放行（真實行為見 worktree-guard.test.js）；個別測試可改成丟例外
+jest.mock('../lib/worktree-guard', () => ({ resetTaskWorktreePointers: jest.fn().mockResolvedValue('/admin') }));
 jest.mock('../pipeline/merge-agent', () => ({
   resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} }),
   SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
@@ -333,7 +333,7 @@ test('coding 前 worktree 被竄改 → 不跑 AI、不讀 HEAD，錯誤往外�
   const guard = require('../lib/worktree-guard');
   const { spawn } = require('child_process');
   spawn.mockClear(); git.revParse.mockClear();
-  guard.assertTaskWorktreeIntact.mockImplementationOnce(() => {
+  guard.resetTaskWorktreePointers.mockImplementationOnce(async () => {
     throw Object.assign(new Error('任務 worktree 的 git 中繼資料不合法（可能被竄改），需由管理員重建：HEAD 不是 refs/heads/task/x'), { code: 'WORKTREE_TAMPERED' });
   });
   const id = await insertCodingTask('tampered1');

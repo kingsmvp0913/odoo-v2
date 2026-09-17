@@ -257,7 +257,9 @@ async function tourTestClasses(info, cwd, moduleName, baseBranch, taskBranch) {
   for (const repo of (info.repos || [])) {
     const wt = path.join(cwd, repo.subdir);
     let changed = [];
-    try { changed = await diffNameOnly(wt, baseBranch, taskBranch); } catch { continue; }
+    // diff 在主 clone 跑（兩個 ref 是共用的，結果相同）：不以任務 worktree 為 cwd，
+    // 就不必信任容器寫得到的 worktree git 指標（09-17 R12）。
+    try { changed = await diffNameOnly(repo.local_path, baseBranch, taskBranch); } catch { continue; }
     const testFiles = changed.filter(f => new RegExp(`(^|/)${moduleName}/tests/[^/]+\\.py$`).test(f));
     for (const rel of testFiles) {
       // 檔案讀不到（本次是刪除）→ 跳過，不讓單一檔案的意外吃掉整份清單

@@ -25,7 +25,7 @@ beforeAll(() => {
   mk('repos', 'p7', 'main', '.git', 'objects'); mk('repos', 'p7', 'main', '.git', 'worktrees', 'main1');
   fs.writeFileSync(path.join(R, 'repos', 'p7', '.worktrees', 'task_7', 'main', '.git'),
     `gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1')}\n`);
-  // admin 目錄比照 git worktree add 的產物（lib/worktree-guard.js 逐項驗）
+  // admin 目錄比照 git worktree add 的產物（lib/worktree-guard.js 以 gitdir 找出認領者）
   fs.writeFileSync(path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'commondir'), '../..\n');
   fs.writeFileSync(path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'gitdir'),
     `${path.join(R, 'repos', 'p7', '.worktrees', 'task_7', 'main', '.git')}\n`);
@@ -98,28 +98,28 @@ test('task-worktree：worktree 可寫、.git 可寫但 config／hooks 唯讀、�
   expectNoPlatformSecrets(m);
 });
 
-test('worktree 的 .git 檔指到 <repo>/.git/worktrees/ 以外 → 丟例外（不能被騙去開放別的目錄可寫）', async () => {
+// admin 目錄會被開成可寫：一定要由主 clone 自己的 .git/worktrees 找，不能照 worktree 的 .git 檔（容器寫得到）
+test('worktree 的 .git 檔被改成指向別處 → 仍掛主 clone 認領它的那個 admin 目錄', async () => {
   const wt = path.join(R, 'repos', 'p7', '.worktrees', 'task_7');
-  for (const content of [`gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git')}\n`,
-    `gitdir: ${path.join(R, 'repos', 'p8', 'main', '.git', 'worktrees', 'x')}\n`,
-    `gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', '..', '..', 'refs')}\n`,
-    'garbage']) {
-    await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), {
-      ...deps, readFileSync: () => content,
-    })).rejects.toThrow(/worktree/);
-  }
-  await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), {
-    ...deps, readFileSync: () => { throw new Error('EACCES'); },
-  })).rejects.toThrow(/EACCES|worktree/);
+  const gitFile = path.join(wt, 'main', '.git');
+  const orig = fs.readFileSync(gitFile, 'utf8');
+  fs.writeFileSync(gitFile, `gitdir: ${path.join(R, 'repos', 'p8', 'main', '.git')}\n`);
+  try {
+    const m = await resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), deps);
+    const rw = m.mounts.filter(x => !x.readonly).map(x => x.source);
+    expect(rw).toContain(path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1'));
+    expect(rw.some(x => x.startsWith(path.join(R, 'repos', 'p8')))).toBe(false);
+  } finally { fs.writeFileSync(gitFile, orig); }
 });
 
-test('admin HEAD 不是本任務分支（被改成 testing）→ 丟例外，不開可寫掛載', async () => {
+test('主 clone 沒有 admin 目錄認領這個 worktree → 丟例外，不開可寫掛載', async () => {
   const wt = path.join(R, 'repos', 'p7', '.worktrees', 'task_7');
-  const head = path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'HEAD');
-  fs.writeFileSync(head, 'ref: refs/heads/testing\n');
+  const adminGitdir = path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'gitdir');
+  const orig = fs.readFileSync(adminGitdir, 'utf8');
+  fs.writeFileSync(adminGitdir, `${path.join(R, 'elsewhere', '.git')}\n`);
   try {
-    await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), deps)).rejects.toThrow(/HEAD/);
-  } finally { fs.writeFileSync(head, 'ref: refs/heads/task/task_7\n'); }
+    await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), deps)).rejects.toThrow(/worktree/);
+  } finally { fs.writeFileSync(adminGitdir, orig); }
 });
 
 test('呼叫端給的 cwd 與任務 worktree 不符 → 丟例外（表對不上就停，不猜）', async () => {

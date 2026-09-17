@@ -6,7 +6,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
 const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge, revParse } = require('./git');
 const { ensureWorktreeSkills } = require('./worktree-skills');
-const { assertTaskWorktreeIntact } = require('../lib/worktree-guard');
+const { resetTaskWorktreePointers } = require('../lib/worktree-guard');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { primaryModule } = require('./spec-modules');
@@ -644,9 +644,10 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
 // 讀不到（worktree 尚未建立／unborn HEAD）該 repo 記 null，整段失敗則回空物件——兩者都代表
 // 「無法確認」，由呼叫端當作沒有證據、不得據以阻擋（見下方 unchanged 的判定）。
 // 本函式不因「讀不到」拋出：HEAD 快照只是防呆的輔助資訊，不該有能力弄掛整個 coding 關。
-// 唯一例外是 worktree 的 git 中繼資料被竄改（09-17 R10）：那不是讀不到，是不能再在宿主碰它，必須往外丟。
+// 例外是「宿主跑 git 前的等容器＋寫回指標」失敗（09-17 R12）：worktree／admin 不在照舊記 null，
+// 其餘（被竄改、容器等不到）不是讀不到，是不能再在宿主碰它，必須往外丟。
 async function readHeads(info, taskId) {
-  const tampered = [];
+  const blocked = [];
   let heads;
   try {
     const wt = worktreeParent(info.root, taskId);
@@ -654,16 +655,16 @@ async function readHeads(info, taskId) {
     for (const r of info.repos || []) {
       const repoWt = path.join(wt, r.subdir);
       try {
-        assertTaskWorktreeIntact({ repoPath: r.local_path, worktreePath: repoWt, branch: `task/${taskId}` });
+        await resetTaskWorktreePointers({ repoPath: r.local_path, worktreePath: repoWt, branch: `task/${taskId}` });
       } catch (e) {
-        if (e.code === 'WORKTREE_TAMPERED') tampered.push(e);
+        if (e.code !== 'WORKTREE_MISSING' && e.code !== 'WORKTREE_ADMIN_MISSING') blocked.push(e);
         heads[r.subdir] = null;
         continue;
       }
       heads[r.subdir] = await revParse(repoWt, 'HEAD').catch(() => null);
     }
   } catch { heads = {}; }
-  if (tampered.length) throw tampered[0];
+  if (blocked.length) throw blocked[0];
   return heads;
 }
 

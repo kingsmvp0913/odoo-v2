@@ -183,35 +183,44 @@ test('ensureWorktreeAtMain：主 clone 重建後的死工作樹殘骸 → 清掉
   expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
 }, 30000);
 
-// 意圖（09-17 裁決 R10）：worktree 的 admin HEAD 容器寫得到。改成 testing 後，宿主的 reset／merge
-// 會替 AI 移動 testing，繞過掛載層的 refs 鎖——宿主跑任何 git 之前都要先驗，驗不過就停。
-test('ensureWorktreeAtMain（沿用路徑）：admin HEAD 被改成 testing → 丟例外，testing 不動、worktree 不被刪', async () => {
+// 意圖（09-17 裁決 R12）：worktree 的 admin HEAD／commondir 容器寫得到。改成 testing 後，宿主的 reset／merge
+// 會替 AI 移動 testing，繞過掛載層的 refs 鎖——宿主跑任何 git 之前都先把指標寫回，testing 不得被動到。
+test('ensureWorktreeAtMain／syncBranchWithAi（沿用路徑）：admin HEAD 被改成 testing → 寫回後照常做，testing 不動、實作保留', async () => {
   const repo = await makeRepo();
   await sh(repo, 'branch', 'testing');
+  await sh(repo, 'branch', 'ai-dev');
   const wt = path.join(base, 'wt-tamper', 'repo');
   await git.ensureWorktreeAtMain(repo, wt, 'task/t20', 'main', true);
-  await write(wt, 'a.py', 'x = 2\n'); await sh(wt, 'commit', '-am', 'ai work');
+  await write(wt, 'b.py', 'y = 2\n'); await sh(wt, 'add', '-A'); await sh(wt, 'commit', '-m', 'ai work');
   const testingBefore = (await sh(repo, 'rev-parse', 'testing')).stdout.trim();
-  fs.writeFileSync(path.join(repo, '.git', 'worktrees', 'repo', 'HEAD'), 'ref: refs/heads/testing\n');
+  const head = path.join(repo, '.git', 'worktrees', 'repo', 'HEAD');
   for (const reset of [true, false]) {
-    await expect(git.ensureWorktreeAtMain(repo, wt, 'task/t20', 'main', reset)).rejects.toThrow(/竄改|不合法/);
+    fs.writeFileSync(head, 'ref: refs/heads/testing\n');
+    await git.ensureWorktreeAtMain(repo, wt, 'task/t20', 'main', reset);
+    expect((await sh(wt, 'symbolic-ref', 'HEAD')).stdout.trim()).toBe('refs/heads/task/t20');
   }
-  await expect(git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t20' })).rejects.toThrow(/竄改|不合法/);
+  fs.writeFileSync(head, 'ref: refs/heads/testing\n');
+  await expect(git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t20' })).resolves.toMatchObject({ synced: true });
   expect((await sh(repo, 'rev-parse', 'testing')).stdout.trim()).toBe(testingBefore);
-  expect(fs.existsSync(path.join(wt, 'a.py'))).toBe(true);
+  expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8').trim()).toBe('y = 2');
 }, 30000);
 
-test('ensureWorktreeAtMain（沿用路徑）：commondir 指到假 repo（config 帶 smudge filter）→ 丟例外，不會執行 filter', async () => {
+test('ensureWorktreeAtMain（沿用路徑）：commondir 指到假 repo（config 帶 smudge filter）→ 寫回後 reset --hard 不會執行 filter', async () => {
   const repo = await makeRepo();
   const wt = path.join(base, 'wt-fake', 'repo');
   await git.ensureWorktreeAtMain(repo, wt, 'task/t21', 'main', true);
   const fake = path.join(base, 'fake');
   await run('git', ['init', '-q', fake]);
   const pwned = path.join(base, 'pwned');
-  fs.appendFileSync(path.join(fake, '.git', 'config'), `[filter "x"]\n\tsmudge = touch ${pwned}\n`);
+  const script = path.join(base, 'smudge.sh');
+  fs.writeFileSync(script, `#!/bin/sh\ntouch '${pwned}'\ncat\n`, { mode: 0o755 });
+  fs.appendFileSync(path.join(fake, '.git', 'config'), `[filter "x"]\n\tsmudge = ${script}\n\tclean = cat\n`);
   fs.writeFileSync(path.join(repo, '.git', 'worktrees', 'repo', 'commondir'), `${path.join(fake, '.git')}\n`);
-  await expect(git.ensureWorktreeAtMain(repo, wt, 'task/t21', 'main', true)).rejects.toThrow(/竄改|不合法/);
+  await write(wt, '.gitattributes', 'a.py filter=x\n');
+  fs.rmSync(path.join(wt, 'a.py'));
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t21', 'main', true);
   expect(fs.existsSync(pwned)).toBe(false);
+  expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
 }, 30000);
 
 test('syncBranchWithAi：沒帶 repoPath／branch → 丟例外（不准略過驗證）', async () => {

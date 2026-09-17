@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { gitDirMounts } = require('./agent-sandbox');
-const { assertTaskWorktreeIntact } = require('./worktree-guard');
+const { findAdminDir } = require('./worktree-guard');
 
 const MAX_LOG_FILES = 50;
 const LOG_RE = /^(deploy|e2e)-task(\d+)-/;
@@ -40,7 +40,7 @@ function defaults(appDir) {
     worktreeParent: (...a) => require('../pipeline/task-agent').worktreeParent(...a),
     majorOf: (...a) => require('./odoo-core-src').majorOf(...a),
     existsSync: fs.existsSync, readdirSync: fs.readdirSync, statSync: fs.statSync,
-    mkdirSync: fs.mkdirSync, readFileSync: fs.readFileSync, lstatSync: fs.lstatSync, realpathSync: fs.realpathSync,
+    mkdirSync: fs.mkdirSync,
     coreSrcRoot: require('./odoo-core-src').CORE_SRC_ROOT,
     uploadRoot: require('./attachments').uploadRoot(),
     envBase: process.env.ODOO_ENV_BASE || path.resolve(appDir, 'odoo-envs'),
@@ -115,12 +115,10 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   };
 
   let wt = null;
-  let taskId = null;
   if (ctx.taskDbId != null && (kind === 'task-worktree' || kind === 'task-worktree-or-none' || kind === 'task-worktree-or-clone')) {
     const { rows: [t] } = await d.query('SELECT task_id, project_id FROM tasks WHERE id=$1', [ctx.taskDbId]);
     if (!t || Number(t.project_id) !== Number(ctx.projectId)) throw new Error(`任務 ${ctx.taskDbId} 不屬於專案 ${ctx.projectId}`);
     wt = d.worktreeParent(info.root, t.task_id);
-    taskId = t.task_id;
   }
 
   const useWorktree = () => {
@@ -131,9 +129,8 @@ async function resolveSandboxMounts(ctx, deps = {}) {
       const repoWt = path.join(wt, r.subdir || path.basename(r.local_path));
       // 任務開跑後才加進專案的 repo 沒有 worktree（見 merge-agent.js）：沒東西可 commit，.git 全唯讀
       if (!d.existsSync(repoWt)) { mounts.push(...gitDirMounts(r.local_path, 'ro')); continue; }
-      // 與宿主跑 git 前同一套驗證（lib/worktree-guard.js）：admin 目錄會被開成可寫，不能被竄改的 .git 檔引到別處
-      const admin = assertTaskWorktreeIntact({ repoPath: r.local_path, worktreePath: repoWt, branch: `task/${taskId}` },
-        { readFileSync: d.readFileSync, lstatSync: d.lstatSync, realpathSync: d.realpathSync });
+      // admin 目錄會被開成可寫：由主 clone 自己的 .git/worktrees 找（lib/worktree-guard.js），不信 worktree 的 .git 檔
+      const admin = findAdminDir(r.local_path, repoWt);
       // gitDirMounts 比對的是字面路徑；admin 是 realpath（local_path 經過 symlink 時兩者字面不同、指的是同一處）
       mounts.push(...gitDirMounts(r.local_path, 'rw', path.join(r.local_path, '.git', 'worktrees', path.basename(admin))));
       // bind mount 來源必須存在；分支全被 pack 掉時這兩個目錄不一定在

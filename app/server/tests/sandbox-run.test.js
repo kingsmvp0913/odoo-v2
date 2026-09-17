@@ -112,6 +112,58 @@ describe('prepareSandboxRun', () => {
   });
 });
 
+// 意圖（09-17 R12）：宿主在任務 worktree 跑 git／寫回指標之前，必須等掛著它（可寫）的容器真的結束，
+// 否則容器可以在宿主驗完、寫完之後再改一次（TOCTOU）。
+describe('waitForWorktreeIdle：任務 worktree 的獨占', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { profileFor } = require('../lib/agent-profiles');
+  let wtRoot, wt;
+  beforeEach(() => {
+    wtRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-idle-')));
+    wt = path.join(wtRoot, 'task_7'); fs.mkdirSync(path.join(wt, 'main'), { recursive: true });
+  });
+  afterEach(() => fs.rmSync(wtRoot, { recursive: true, force: true }));
+  const wtDeps = (over = {}) => deps({ resolveSandboxMounts: async () => ({ mounts: [{ source: wt, readonly: false }], workdir: wt }), ...over });
+  const start = (d, agentType = 'coding') => sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType, taskId: 70 }, profile: profileFor(agentType), projectId: 7 }, d);
+
+  test('容器掛著時等待；release（docker wait 回來）之後才放行', async () => {
+    const waits = [];
+    const { d } = wtDeps({ execFile: (cmd, args, cb) => { if (args[0] === 'wait') waits.push(cb); else if (cb) cb(null); } });
+    const run = await start(d);
+    let idle = false;
+    const p = sr.waitForWorktreeIdle(path.join(wt, 'main'), { timeoutMs: 5000, pollMs: 5 }).then(() => { idle = true; });
+    await new Promise(r => setTimeout(r, 30));
+    expect(idle).toBe(false);
+    const rel = run.release();
+    await new Promise(r => setTimeout(r, 30));
+    expect(idle).toBe(false);             // 容器還沒真的結束（docker wait 未回）
+    expect(waits.length).toBe(1);
+    waits[0](null); await rel; await p;
+    expect(idle).toBe(true);
+  });
+
+  test('等不到 → 丟例外（訊息寫明容器仍在執行）', async () => {
+    const { d } = wtDeps({ execFile: () => {} });
+    const run = await start(d);
+    await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 30, pollMs: 5 })).rejects.toThrow(/容器仍在/);
+    run.release();
+  });
+
+  test('沒有容器掛著 → 立即放行；準備失敗時不留登記', async () => {
+    await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 10 })).resolves.toBeUndefined();
+    const { d } = wtDeps({ getSandboxLimits: () => { throw new Error('limits boom'); } });
+    await expect(start(d)).rejects.toThrow('limits boom');
+    await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 10 })).resolves.toBeUndefined();
+  });
+
+  test('非任務 worktree 類（chat 掛唯讀專案根）不登記', async () => {
+    const { d } = deps({ resolveSandboxMounts: async () => ({ mounts: [{ source: wt, readonly: true }], workdir: wt }), execFile: () => {} });
+    await start(d, 'chat');
+    await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 10 })).resolves.toBeUndefined();
+  });
+});
+
 test('replaceArg 只換旗標後面那個值', () => {
   expect(sr.replaceArg(['-a', '1', '--mcp-config', 'old', '-b'], '--mcp-config', 'new')).toEqual(['-a', '1', '--mcp-config', 'new', '-b']);
   expect(() => sr.replaceArg(['-a'], '--mcp-config', 'x')).toThrow();

@@ -1,7 +1,7 @@
 const { execFile, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { assertTaskWorktreeIntact } = require('../lib/worktree-guard');
+const { resetTaskWorktreePointers } = require('../lib/worktree-guard');
 
 // 讓 git 忽略 __pycache__/*.pyc（Odoo/py_compile 產物）。寫進主 clone 的 .git/info/exclude，
 // linked worktree 共用 common git dir 一併生效。效果：git add -A 不會 commit pyc；merge 時
@@ -469,11 +469,11 @@ async function syncMainIntoAi(repoPath, gitEnv) {
 // 允許 fast-forward：分支尚無自己的 commit（首次進 coding）時等同 reset，不生多餘的 merge commit。
 // 衝突／任何失敗一律 abort 回乾淨狀態再回報，不 throw——同步失敗不該擋住任務（穩定 > 準確），
 // 但半套 merge 留在 worktree 會讓 coding agent 把衝突標記當程式碼改。
-// guard＝{ repoPath, branch }：宿主以 worktree 為 cwd 跑 git 前必驗（09-17 R10，見 lib/worktree-guard.js）。
-// 驗不過直接丟例外（不屬於上面「同步失敗不擋任務」的範圍——那是被竄改，不是同步失敗）。
+// guard＝{ repoPath, branch }：宿主以 worktree 為 cwd 跑 git 前，必先等容器結束並把 git 指標寫回
+// （09-17 R12，見 lib/worktree-guard.js）。這一步失敗直接丟例外（不屬於上面「同步失敗不擋任務」的範圍）。
 async function syncBranchWithAi(worktreePath, gitEnv, guard = {}) {
-  if (!guard.repoPath || !guard.branch) throw new Error('syncBranchWithAi 需要 { repoPath, branch } 才能先驗證 worktree');
-  assertTaskWorktreeIntact({ repoPath: guard.repoPath, worktreePath, branch: guard.branch });
+  if (!guard.repoPath || !guard.branch) throw new Error('syncBranchWithAi 需要 { repoPath, branch } 才能先寫回 worktree 的 git 指標');
+  await resetTaskWorktreePointers({ repoPath: guard.repoPath, worktreePath, branch: guard.branch });
   try {
     await execFileAsync('git', [...identArgs(gitEnv), 'merge', '--no-edit', AI_BRANCH], gitOpts(worktreePath, gitEnv));
     return { synced: true, conflictFiles: [], error: null };
@@ -838,16 +838,16 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
   // clone）後，`.git/worktrees/<name>` 這個 admin 目錄跟著消失，但 sibling 的 `.worktrees/` 底下
   // 仍留著工作樹目錄與指向它的 `.git` 檔。舊判準會當它可用而往下跑，於是每一道 git 指令都是
   // 「fatal: not a git repository」，任務永遠停在「分析前同步失敗」（實測 task_service_3900）。
-  // 沿用既有 worktree 前先驗 git 中繼資料（09-17 R10）：.git 檔／admin HEAD／commondir 容器寫得到，
-  // 不驗就在這裡跑 merge／reset --hard，等於讓 AI 借宿主之手移動 testing 或執行任意指令。
-  // 只有「admin 目錄不在」（上述死工作樹）照舊走重建；其餘不合法一律丟例外，不自動修、不自動刪。
+  // 沿用既有 worktree 前，先等容器結束並把 git 指標寫回正確值（09-17 R12）：.git 檔／admin HEAD／commondir
+  // 容器寫得到，不處理就在這裡跑 merge／reset --hard，等於讓 AI 借宿主之手移動 testing 或執行任意指令。
+  // 只有「主 clone 找不到 admin 目錄」（上述死工作樹）照舊走重建；其餘一律丟例外，不自動刪。
   let isWorktree = false;
-  if (fs.lstatSync(path.join(worktreePath, '.git'), { throwIfNoEntry: false })) {
-    let intact = false;
-    try { assertTaskWorktreeIntact({ repoPath: mainRepoPath, worktreePath, branch }); intact = true; } catch (e) {
+  if (fs.lstatSync(worktreePath, { throwIfNoEntry: false })) {
+    let restored = false;
+    try { await resetTaskWorktreePointers({ repoPath: mainRepoPath, worktreePath, branch }); restored = true; } catch (e) {
       if (e.code !== 'WORKTREE_ADMIN_MISSING') throw e;
     }
-    isWorktree = intact &&
+    isWorktree = restored &&
       await execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: worktreePath }).then(() => true, () => false);
   }
   if (!isWorktree) {
