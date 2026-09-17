@@ -244,3 +244,21 @@ test('POST /api/auth/login 失敗：信任的 proxy 轉來的記在 X-Real-IP；
     expect(sources).toHaveLength(2); // 第二筆記在直連的對方位址（supertest 的本機位址）
   } finally { if (old === undefined) delete process.env.TRUSTED_PROXY_IPS; else process.env.TRUSTED_PROXY_IPS = old; }
 });
+
+// 意圖（裁決 R17）：登入成功要把該 (帳號, 來源) 的打錯次數歸零——否則同一個人長期零星打錯，
+// 累積到 10 次就被永久封鎖。但已封鎖的那一對即使密碼對也照樣擋（先查封鎖、再驗密碼、成功才歸零）。
+test('POST /api/auth/login：錯 4 次、對 1 次、再錯 4 次 → 沒被鎖；已封鎖的一對密碼對也照樣擋', async () => {
+  const login = password => request(app).post('/api/auth/login').send({ username: 'bf', password });
+  for (let i = 0; i < 4; i++) expect((await login('wrong')).status).toBe(401);
+  expect((await login('backfillpass')).status).toBe(200);
+  for (let i = 0; i < 4; i++) expect((await login('wrong')).status).toBe(401);
+  expect((await login('backfillpass')).status).toBe(200); // 沒有累積到 5 次鎖定
+  await dbModule.query("DELETE FROM login_attempts WHERE username = 'bf'");
+  for (let i = 0; i < 10; i++) await login('wrong'); // 第 6 次起被鎖（429）；直接把這一對設成封鎖
+  await dbModule.query("UPDATE login_attempts SET blocked = true WHERE username = 'bf'");
+  const r = await login('backfillpass');
+  expect(r.status).toBe(429);
+  expect(r.body.reason).toBe('blocked');
+  const { rows } = await dbModule.query("SELECT blocked FROM login_attempts WHERE username = 'bf'");
+  expect(rows).toEqual([{ blocked: true }]);
+});

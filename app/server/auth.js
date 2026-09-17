@@ -148,6 +148,9 @@ function registerRoutes(app) {
         if (username) await guard.recordFailure({ username, source });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+      // 密碼對了 → 這一對的打錯次數歸零（裁決 R17），否則長期零星打錯會累積到永久封鎖。
+      // 已封鎖的一對在上面就被擋掉，走不到這裡，所以不會順手解掉封鎖。
+      await guard.recordSuccess({ username, source });
       // 待審核帳號密碼對也不放行（管理員核准前）
       if (user.approved === false) {
         return res.status(403).json({ error: '帳號審核中，管理員核准後即可登入', pendingApproval: true });
