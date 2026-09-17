@@ -543,8 +543,12 @@ async function syncWithMain(repoPath, gitEnv) {
   throw lastErr || new Error('syncWithMain：merge 失敗且無可歸因錯誤');
 }
 
+// merge --abort 需要 MERGE_HEAD；它不在（例如 worktree-guard 清空 admin 目錄後）就退而 reset --merge，
+// 否則未解衝突與衝突標記會永遠留在工作樹
 async function abortMerge(repoPath) {
-  await execFileAsync('git', ['merge', '--abort'], { cwd: repoPath }).catch(() => {});
+  await execFileAsync('git', ['merge', '--abort'], { cwd: repoPath })
+    .catch(() => execFileAsync('git', ['reset', '-q', '--merge'], { cwd: repoPath }))
+    .catch(() => {});
 }
 
 async function commitAll(repoPath, message, gitEnv) {

@@ -230,6 +230,60 @@ test('預設的等待是「不阻塞」：容器還掛著就立刻丟 WORKTREE_B
   } finally { spy.mockRestore(); }
 });
 
+// ===== 最終審查 IMPORTANT-1：清空 admin 會刪掉 MERGE_HEAD／rebase-merge，但 index 與工作樹還停在半套狀態 =====
+// 沒收尾的話 merge --abort 因為沒有 MERGE_HEAD 失敗（錯誤被吞），worktree 永遠卡著衝突標記，下一次同步也跑不動。
+const conflictSetup = () => {
+  fs.writeFileSync(path.join(wt, 'a'), 'task\n'); git(wt, 'commit', '-q', '-am', 'task');
+  git(repo, 'checkout', '-q', 'ai-dev'); fs.writeFileSync(path.join(repo, 'a'), 'ai\n'); git(repo, 'commit', '-q', '-am', 'ai'); git(repo, 'checkout', '-q', 'main');
+};
+const hasMarkers = () => fs.readFileSync(path.join(wt, 'a'), 'utf8').includes('<<<<<<<');
+
+test('中斷在衝突中的 merge（未竄改）→ 寫回後工作樹乾淨，同步路徑回報衝突後仍乾淨、下一次同步照常', async () => {
+  const { syncBranchWithAi } = require('../pipeline/git');
+  conflictSetup();
+  const tip = rev('task/T1');
+  expect(() => git(wt, 'merge', '--no-edit', 'ai-dev')).toThrow(); // 模擬崩潰：衝突留在 worktree
+  expect(hasMarkers()).toBe(true);
+  await reset();
+  expect(git(wt, 'ls-files', '-u')).toBe('');
+  expect(git(wt, 'status', '--porcelain')).toBe('');
+  expect(hasMarkers()).toBe(false);
+  const guard = { repoPath: repo, branch: 'task/T1' };
+  const r1 = await syncBranchWithAi(wt, undefined, guard);
+  expect(r1).toMatchObject({ synced: false, conflictFiles: ['a'] });
+  expect(git(wt, 'status', '--porcelain')).toBe('');
+  expect(rev('task/T1')).toBe(tip);
+  // 衝突排掉後，下一次同步照常合進來
+  git(repo, 'checkout', '-q', 'ai-dev'); fs.writeFileSync(path.join(repo, 'a'), 'task\n'); git(repo, 'commit', '-q', '-am', 'fix'); git(repo, 'checkout', '-q', 'main');
+  const r2 = await syncBranchWithAi(wt, undefined, guard);
+  expect(r2).toMatchObject({ synced: true });
+  expect(git(wt, 'status', '--porcelain')).toBe('');
+});
+
+test('abortMerge：MERGE_HEAD 不見了（merge --abort 失敗）仍把衝突清乾淨', async () => {
+  const { abortMerge } = require('../pipeline/git');
+  conflictSetup();
+  expect(() => git(wt, 'merge', '--no-edit', 'ai-dev')).toThrow();
+  fs.rmSync(path.join(admin, 'MERGE_HEAD'));
+  await abortMerge(wt);
+  expect(git(wt, 'ls-files', '-u')).toBe('');
+  expect(hasMarkers()).toBe(false);
+});
+
+test('中斷在衝突中的 rebase → 寫回後沒有衝突標記、沒有半套的未提交變更，任務分支頂端不變', async () => {
+  conflictSetup();
+  commitInWt('b');
+  const tip = rev('task/T1');
+  expect(() => git(wt, 'rebase', 'ai-dev')).toThrow();
+  expect(fs.existsSync(path.join(admin, 'rebase-merge'))).toBe(true);
+  await reset();
+  expect(git(wt, 'symbolic-ref', 'HEAD')).toBe('refs/heads/task/T1');
+  expect(rev('task/T1')).toBe(tip);
+  expect(hasMarkers()).toBe(false);
+  expect(git(wt, 'status', '--porcelain')).toBe('');
+  expect(fs.readFileSync(path.join(wt, 'a'), 'utf8')).toBe('task\n');
+});
+
 // 靜態守衛：宿主以任務 worktree 為 cwd 跑 git 的每個函式，都要先寫回指標（呼叫點清單見 3.13 報告 Fix round 3）
 test('宿主在任務 worktree 跑 git 的函式，都先 await resetTaskWorktreePointers；tour 的 diff 改在主 clone 跑', () => {
   const src = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');

@@ -16,6 +16,8 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
+const execFileAsync = require('util').promisify(execFile);
 
 function fail(code, msg) {
   return Object.assign(new Error(`任務 worktree 的 git 中繼資料不合法（可能被竄改），需由管理員重建：${msg}`), { code });
@@ -137,11 +139,29 @@ async function resetTaskWorktreePointers({ repoPath, worktreePath, branch }, dep
   const s = lstat(admin);
   if (!s || !s.isDirectory()) throw fail('WORKTREE_TAMPERED', `admin 目錄不是一般目錄：${admin}`);
   const put = (p, content) => { fs.rmSync(p, { recursive: true, force: true }); fs.writeFileSync(p, content, { flag: 'wx' }); };
-  wipeAdminDir(admin);
-  put(path.join(admin, 'HEAD'), `ref: refs/heads/${branch}\n`);
-  put(path.join(admin, 'commondir'), '../..\n');
-  put(path.join(admin, 'gitdir'), `${path.join(fs.realpathSync(worktreePath), '.git')}\n`);
-  put(path.join(worktreePath, '.git'), `gitdir: ${admin}\n`);
+  // 清空前先記下是不是停在 rebase 中途（清空後就看不出來了）
+  const midRebase = ['rebase-merge', 'rebase-apply'].some(n => lstat(path.join(admin, n)));
+  const rewrite = () => {
+    wipeAdminDir(admin);
+    put(path.join(admin, 'HEAD'), `ref: refs/heads/${branch}\n`);
+    put(path.join(admin, 'commondir'), '../..\n');
+    put(path.join(admin, 'gitdir'), `${path.join(fs.realpathSync(worktreePath), '.git')}\n`);
+    put(path.join(worktreePath, '.git'), `gitdir: ${admin}\n`);
+  };
+  rewrite();
+  // 收掉半套狀態（最終審查 IMPORTANT-1）：清空 admin 刪掉了 MERGE_HEAD／rebase-merge，但 index 與工作樹還停在
+  // 中斷當下——留著的話 merge 報 unmerged files、merge --abort 因沒有 MERGE_HEAD 失敗，worktree 永遠卡著衝突標記。
+  //  - index 有未解衝突（中斷的 merge／rebase／cherry-pick）→ reset --merge（等同 merge --abort 的作法）
+  //  - 停在 rebase 中途 → 同樣 reset --merge：HEAD 已寫回任務分支頂端（rebase 中途分支 ref 還沒動），
+  //    index／工作樹裡「已套用一半的 rebase 結果」回到分支頂端＝放棄這次 rebase；未暫存的工作樹修改 reset --merge 會保留
+  //    （與 index 內容衝突時 git 拒絕並丟例外，交呼叫端處理，不硬蓋）
+  // 此時指標都已是宿主寫的值，才可以在 worktree 跑 git。
+  const cwd = { cwd: worktreePath };
+  const { stdout: unmerged } = await execFileAsync('git', ['ls-files', '-u'], cwd);
+  if (midRebase || unmerged.trim()) {
+    await execFileAsync('git', ['reset', '-q', '--merge'], cwd);
+    rewrite(); // reset 會留下 ORIG_HEAD／logs：再清一次，離開時 admin 目錄仍只有宿主寫的四個檔
+  }
   return admin;
 }
 
