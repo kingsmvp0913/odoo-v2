@@ -154,8 +154,10 @@ async function importTaskObjects({ repoPath, repoPaths, branch, clear = false })
   });
 }
 
-function removeTaskObjectDir({ repoPath, branch }) {
-  const dir = objectDirFor(repoPath, branch);
+// 一律回 Promise（不同步丟例外）：呼叫端用 .catch() 吞錯；分支名不合法＝這個物件庫從沒建過，直接略過
+async function removeTaskObjectDir({ repoPath, branch }) {
+  let dir;
+  try { dir = objectDirFor(repoPath, branch); } catch { return; }
   return serialize(dir, async () => { fs.rmSync(dir, { recursive: true, force: true }); });
 }
 

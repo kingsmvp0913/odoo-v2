@@ -141,6 +141,16 @@ d('agent-objects', () => {
     await expect(ao.importTaskObjects({ repoPath: repoA, branch: 'task/NOPE' })).resolves.toBeUndefined();
   });
 
+  test('刪任務時清物件庫：分支名不合法（task_id 含空白等）不丟例外也不刪東西；合法的整個移除', async () => {
+    const p = ao.removeTaskObjectDir({ repoPath: repoA, branch: 'task/has space' });
+    expect(p).toBeInstanceOf(Promise);
+    await expect(p).resolves.toBeUndefined();
+    commitInContainer('a', 'x.txt', 'hello\n');
+    const dir = ao.objectDirFor(repoA, BRANCH);
+    await ao.removeTaskObjectDir({ repoPath: repoA, branch: BRANCH });
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
   test('分支名稱不是 task/<id> → 丟例外（名字會進路徑與 git 參數）', async () => {
     await expect(ao.importTaskObjects({ repoPath: repoA, branch: '--upload-pack=x' })).rejects.toThrow();
   });
