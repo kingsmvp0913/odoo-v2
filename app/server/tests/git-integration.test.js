@@ -1039,3 +1039,49 @@ describe('ai-dev 基底', () => {
     expect(r.defaultBranch).toBe('kangyue');
   }, 30000);
 });
+
+// 09-17 R13：symlinkChanges 是合併前擋符號連結的唯一判準來源，四種情境都要用真 git 驗證
+// （raw diff 的 mode 欄位解析錯一個字元就整支守衛失效，mock 測不出來）。
+describe('symlinkChanges：任務分支相對某基準有無新增／改成符號連結', () => {
+  test('一般檔案內容變更 → 不列入', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'task/t1');
+    await write(repo, 'a.py', 'x = 2\n');
+    await sh(repo, 'commit', '-am', 'change a.py');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t1')).toEqual([]);
+  });
+
+  test('新增符號連結 → 列出路徑', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'task/t2');
+    fs.symlinkSync('/etc/passwd', path.join(repo, 'evil_link'));
+    await sh(repo, 'add', 'evil_link');
+    await sh(repo, 'commit', '-m', 'add symlink');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t2')).toEqual(['evil_link']);
+  });
+
+  test('一般檔改型成符號連結（type change）→ 列出路徑', async () => {
+    const repo = await makeRepo();
+    await sh(repo, 'checkout', '-b', 'task/t3');
+    fs.unlinkSync(path.join(repo, 'a.py'));
+    fs.symlinkSync('../../../data/config.json', path.join(repo, 'a.py'));
+    await sh(repo, 'add', 'a.py');
+    await sh(repo, 'commit', '-m', 'a.py 改型成符號連結');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t3')).toEqual(['a.py']);
+  });
+
+  test('刪除符號連結 → 不列入（刪除不會被任何人讀到）', async () => {
+    const repo = await makeRepo();
+    fs.symlinkSync('/etc/passwd', path.join(repo, 'old_link'));
+    await sh(repo, 'add', 'old_link');
+    await sh(repo, 'commit', '-m', 'main 上先有一個符號連結');
+    await sh(repo, 'checkout', '-b', 'task/t4');
+    await sh(repo, 'rm', 'old_link');
+    await sh(repo, 'commit', '-m', 'task 分支刪掉它');
+
+    expect(await git.symlinkChanges(repo, 'main', 'task/t4')).toEqual([]);
+  });
+});

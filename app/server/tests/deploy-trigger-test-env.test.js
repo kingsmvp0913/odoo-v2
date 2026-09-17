@@ -9,6 +9,7 @@ jest.mock('../pipeline/git', () => ({
   deleteBranchLocal: jest.fn().mockResolvedValue(undefined),
   removeWorktree: jest.fn().mockResolvedValue(undefined),
   refExists: jest.fn().mockResolvedValue(true),
+  symlinkChanges: jest.fn().mockResolvedValue([]),
 }));
 jest.mock('../pipeline/merge-agent', () => ({ resolveConflicts: jest.fn() }));
 jest.mock('../lib/git-identity', () => ({ buildGitEnv: jest.fn().mockResolvedValue({}) }));

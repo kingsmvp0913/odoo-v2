@@ -12,6 +12,7 @@ jest.mock('../pipeline/git', () => ({
   commitAll: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined),
   refExists: jest.fn().mockResolvedValue(true),
+  symlinkChanges: jest.fn().mockResolvedValue([]),
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 
@@ -34,7 +35,7 @@ beforeAll(async () => {
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
 beforeEach(async () => {
-  for (const k of ['revParse', 'resetTestingToAiBranch', 'resetTestingTo', 'mergeInto', 'commitAll', 'abortMerge', 'refExists']) {
+  for (const k of ['revParse', 'resetTestingToAiBranch', 'resetTestingTo', 'mergeInto', 'commitAll', 'abortMerge', 'refExists', 'symlinkChanges']) {
     gitMock[k].mockReset();
   }
   gitMock.refExists.mockResolvedValue(true);
@@ -43,6 +44,7 @@ beforeEach(async () => {
   gitMock.resetTestingTo.mockResolvedValue(undefined);
   gitMock.commitAll.mockResolvedValue(undefined);
   gitMock.abortMerge.mockResolvedValue(undefined);
+  gitMock.symlinkChanges.mockResolvedValue([]);
   require('../notify').emitToUser.mockReset();
   await dbModule.query('DELETE FROM tasks');
   await dbModule.query('DELETE FROM project_repos');
@@ -150,6 +152,24 @@ test('重建 → 衝突且無解法時該任務置 merge_conflict(rebuild=true,p
   expect(data.rebuild).toBe(true);
   expect(data.prior_status).toBe('review_pending');
   expect(data.repos[0].files).toContain('models/x.py');
+});
+
+// 意圖（09-17 R13）：重併回 testing 前也要擋符號連結——同一條任務分支可能是在這道守線上線前
+// 就已建立、從未經過 doMerge 那一關。偵測到就不呼叫 mergeInto、還原 testing 到重建前的備份 SHA，
+// 不留半套狀態；不動任何任務狀態（fail-open，比照既有 reset 失敗案例）。
+test('重建 → 任務分支含符號連結時不併入、還原 testing 備份 SHA、回警告', async () => {
+  gitMock.revParse.mockResolvedValue('backup456');
+  gitMock.symlinkChanges.mockResolvedValue(['data/evil_link']);
+  const projectId = await makeProject(['main']);
+  const taskId = await addTask(projectId, { status: 'review_pending', branch: 'task/sym', taskId: 'sym' });
+
+  const warning = await rebuildMod.rebuildTesting(projectId, userId, undefined);
+
+  expect(warning).toMatch(/符號連結/);
+  expect(gitMock.mergeInto).not.toHaveBeenCalled();
+  expect(gitMock.resetTestingTo).toHaveBeenCalledWith('/repos/mp/main', 'backup456');
+  const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('review_pending'); // 任務不受影響
 });
 
 // 意圖：非衝突類 git 錯（reset 失敗）→ 還原 testing 到備份 SHA、回警告，且不動任何任務（fail-open）

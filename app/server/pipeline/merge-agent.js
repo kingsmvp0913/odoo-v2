@@ -5,7 +5,7 @@ const { runClaude } = require('./claude-runner');
 const { loadAgent } = require('./agent-loader');
 const { stripFence, parseAgentResult } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
-const { AI_BRANCH, mergeInto, commitResolved, abortMerge, restoreConflictMarkers, refExists } = require('./git');
+const { AI_BRANCH, mergeInto, commitResolved, abortMerge, restoreConflictMarkers, refExists, symlinkChanges } = require('./git');
 const { buildGitEnv } = require('../lib/git-identity');
 const { query } = require('../db');
 const notify = require('../notify');
@@ -382,6 +382,10 @@ async function doMerge(task, taskId, userId, signal) {
 
     let mergeResult;
     try {
+      // 09-17 R13：合併前先擋符號連結，避免它被 checkout 出來後被本檔／pipeline-routes.js 的衝突
+      // 收尾讀到宿主檔案。放在 mergeInto 之前——沒過這關就不建立任何 merge 狀態，乾淨地停下。
+      const symlinks = await symlinkChanges(repo.local_path, 'testing', branch);
+      if (symlinks.length) throw new Error(`任務分支含符號連結（不允許）：${symlinks.join(', ')}`);
       mergeResult = await mergeInto(repo.local_path, 'testing', branch, gitEnv);
     } catch (err) {
       // 半套 merge（MERGE_HEAD）留在主 clone 會污染同專案後續任務，先清掉再停

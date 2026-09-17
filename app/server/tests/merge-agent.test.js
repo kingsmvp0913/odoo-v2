@@ -8,7 +8,8 @@ jest.mock('../pipeline/git', () => ({
   commitResolved: jest.fn().mockResolvedValue(undefined),
   abortMerge: jest.fn().mockResolvedValue(undefined),
   restoreConflictMarkers: jest.fn().mockResolvedValue(undefined),
-  refExists: jest.fn().mockResolvedValue(true)
+  refExists: jest.fn().mockResolvedValue(true),
+  symlinkChanges: jest.fn().mockResolvedValue([])
 }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 // 預設「未設 PAT」（buildGitEnv 拋 NoGitCredentialError），與多數既有案例的情境一致
@@ -39,6 +40,7 @@ beforeEach(async () => {
   gitMock.commitResolved.mockReset().mockResolvedValue(undefined);
   gitMock.abortMerge.mockReset().mockResolvedValue(undefined);
   gitMock.refExists.mockReset().mockResolvedValue(true);
+  gitMock.symlinkChanges.mockReset().mockResolvedValue([]);
   require('../notify').emitToUser.mockReset();
   identMock.buildGitEnv.mockReset().mockRejectedValue(new Error('未設 PAT'));
   await dbModule.query('DELETE FROM tasks');
@@ -152,6 +154,21 @@ test('mergeInto 拋錯 → 先 abortMerge 清理再 stopped', async () => {
   expect(gitMock.abortMerge).toHaveBeenCalledWith('/repos/mp/main');
   const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [taskId]);
   expect(rows[0].status).toBe('stopped');
+});
+
+// 意圖（09-17 R13）：任務分支若含符號連結（可能指向宿主的 data/config.json 之類主鑰檔），一律
+// 擋在併入 testing 之前——不呼叫 mergeInto、不留任何半殘 merge，任務直接 stopped 並列出路徑。
+test('任務分支含符號連結 → 不併入 testing、直接 stopped 並列出路徑', async () => {
+  gitMock.symlinkChanges.mockResolvedValue(['evil_link']);
+  const taskId = await setupProjectTask(['main']);
+
+  await mergeMod.runMergeAgent(taskId, userId, undefined);
+
+  expect(gitMock.mergeInto).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [taskId]);
+  expect(rows[0].status).toBe('stopped');
+  expect(rows[0].blocker_content).toMatch(/符號連結/);
+  expect(rows[0].blocker_content).toMatch(/evil_link/);
 });
 
 test('解衝突後 commitResolved 失敗 → abortMerge 清理再 stopped', async () => {

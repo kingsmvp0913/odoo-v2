@@ -119,6 +119,28 @@ async function diffBranch(repoPath, baseBranch, branch) {
   return stdout;
 }
 
+// 分支相對某基準是否新增／改成符號連結（git mode 120000）。09-17 R13：AI（可能被注入）commit 一個
+// 指向宿主檔案（如 data/config.json，平台主鑰）的符號連結進任務分支，合併進主 clone 後被 checkout
+// 出來——merge-agent.js 的 resolveConflict／pipeline-routes.js 的衝突收尾等處以 fs.readFileSync
+// 讀衝突檔內容時會跟著讀到宿主檔案。Odoo addons 從不需要符號連結，故直接擋，不嘗試分辨「安全」的連結。
+// --raw --no-renames：raw 格式每行帶新舊 mode，不必自己 stat 工作樹（工作樹可能還沒 checkout 出這個分支）；
+// --no-renames 避免改名把一行拆成兩個路徑、解析變複雜。三點語法（同 diffNameOnly）＝只看 branchRef
+// 自己的變更，baseRef 之後才發生的事不算在內。新 mode＝120000 涵蓋「新增符號連結」與「一般檔改型成
+// 符號連結」兩種情況；刪除符號連結（新 mode 不是 120000）不算——刪除不會讓任何人讀到它。
+async function symlinkChanges(repoPath, baseRef, branchRef) {
+  const { stdout } = await execFileAsync(
+    'git', ['diff', '--raw', '--no-renames', `${baseRef}...${branchRef}`],
+    { cwd: repoPath, maxBuffer: 16 * 1024 * 1024 }
+  );
+  const paths = [];
+  for (const line of stdout.split('\n')) {
+    // :<old-mode> <new-mode> <old-sha> <new-sha> <status>\t<path>
+    const m = line.match(/^:\S+\s+(\S+)\s+\S+\s+\S+\s+\S+\t(.+)$/);
+    if (m && m[1] === '120000') paths.push(m[2]);
+  }
+  return paths;
+}
+
 // 分支相對主分支改動的檔案清單（相對 repo 根的路徑陣列，空白行剔除）。
 async function diffNameOnly(repoPath, baseBranch, branch) {
   // core.quotePath=false：非 ASCII 檔名（中文 docx 範本、idx_ 模組）預設會被 git 用引號＋八進位
@@ -928,4 +950,4 @@ async function mergeInto(mainRepoPath, targetBranch, sourceBranch, gitEnv) {
 }
 
 module.exports = { createBranch, checkoutDefault, mergeBranch, runDeploy, getMainBranch, ensureMainBranch, listRemoteBranches, listRemoteBranchesByUrl, setRemoteHead, AI_BRANCH, ensureAiBranch, syncMainIntoAi,
-  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, branchMergedInto, findAiMergeCommit, showBlob };
+  aiBranchBase, aiBaseDrift, aiOwnCommits, rebuildAiBranch, remoteAiBranchName, remoteAiRef, syncBranchWithAi, syncWithMain, abortMerge, commitAll, commitResolved, concludeMerge, checkoutSide, restoreConflictMarkers, listUnmerged, applyConflictChoices, mergeToAiBranch, concludeAiMerge, AiPushConflictError, AiMergeConflictError, releaseAiToMain, deleteBranchLocal, ensureTestingBranch, revParse, resetTestingToAiBranch, resetTestingTo, pullBranch, addWorktree, removeWorktree, ensureWorktreeAtMain, mergeInto, discardPyc, untrackPyc, diffBranch, diffNameOnly, refExists, branchMergedInto, findAiMergeCommit, showBlob, symlinkChanges };
