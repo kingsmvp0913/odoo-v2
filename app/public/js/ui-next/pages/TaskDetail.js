@@ -1286,13 +1286,20 @@
      那是底下「留言」框在用的，於是這裡貼的圖被靜默丟掉——畫面沒有任何徵狀。 -->
 <textarea v-model="newMessageText" placeholder="回答 AI 的問題或補充說明…可直接貼上截圖" @keydown.enter.exact.prevent="submitAnswer" @input="autoResize" @paste="onPasteFiles($event,'answerFiles')">
 </textarea>
-<!-- 停在這個閘門時留言框與退回框都被本面板取代，這裡是唯一能補圖的地方 -->
-<p class="ui-next-field-note">可附圖說明（截圖上標註比打字快，AI 這一關讀得到）</p>
-<label class="ui-next-upload ui-next-upload-inline"><input ref="answerFileInput" type="file" multiple @change="onAnswerFilesSelected"><span class="ui-next-upload-drop"><ui-next-icon name="paperclip"/><b>附加截圖</b></span></label>
 <div v-if="answerFiles.length" class="ui-next-upload-list">
 <span v-for="(file,index) in answerFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="answerFilesPreviews[index]" class="ui-next-thumb" :src="answerFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:answerFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('answerFiles',index)"><ui-next-icon name="close"/></button></span>
 </div>
+<!-- 底排比照人工審核／留言：附件收成迴紋針圖示、送出靠右。原本是滿寬虛線放置區＋一行說明＋
+     佔滿一行的方按鈕，同一個面板在這個狀態長得跟其他關卡都不一樣。
+     停在這個閘門時留言框與退回框都被本面板取代，這顆迴紋針是唯一能補圖的地方，不能拿掉。 -->
+<div class="ui-next-action-foot">
+<div class="ui-next-action-tools">
+<label class="ui-next-icon-button" title="附加截圖（截圖上標註比打字快，AI 這一關讀得到）"><ui-next-icon name="paperclip"/><input ref="answerFileInput" type="file" multiple aria-label="附加截圖" @change="onAnswerFilesSelected"></label>
+</div>
+<div class="ui-next-inline-actions">
 <button class="ui-next-primary" @click="submitAnswer" :disabled="submitting||!newMessageText.trim()">{{ submitting?'送出中…':'送出回答' }}</button>
+</div>
+</div>
 </template>
 </template>
 <template v-else-if="timelineActionMode==='spec_review'">

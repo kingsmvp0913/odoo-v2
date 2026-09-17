@@ -483,3 +483,62 @@ test('連 YAML 補救都失敗 → 回覆仍送到、題目原封不動、明講
   expect(all).toContain('沒有更新');
   expect(all).not.toContain('AI 回覆失敗');
 });
+
+// ── 題目被縮排吞進 intro（task 272 回歸）─────────────────────────────────────
+// 實測：`questions:` 整段比 intro 多縮兩格，落進 `intro: |` 的字面區塊裡。這份 YAML 本身「合法」，
+// 舊的把關只看 yaml.load 成不成功就放行，結果規格裡一題都沒有：畫面從逐題問答換成自由留言框，
+// 使用者要確認的那題（已預填答案 B）根本看不到，也就送不出確認。
+const SWALLOWED_QUESTIONS = [
+  'DECISION: revise',
+  'REPLY:',
+  '確認過了，回填工具放在資料修正工具。',
+  '---QUESTIONS---',
+  'intro: |',
+  '  有幾件我自行決定的事。',
+  '  questions:',            // ← 應在第 0 欄，縮了 2 格就變成 intro 文字的一行
+  '    - id: q1',
+  '      text: 要不要一併回填？',
+  '      type: choice',
+  '      required: true',
+  '      answer: B',
+  '      options:',
+  '        - key: A',
+  '          label: 不回填',
+  '        - key: B',
+  '          label: 一併回填',
+  "user_answer: ''"
+].join('\n');
+
+test('parseClarifyChat：題目被縮排吞進 intro（YAML 仍合法）→ 當成壞掉，不可放行', () => {
+  expect(() => parseClarifyChat(SWALLOWED_QUESTIONS)).toThrow(/questions/);
+  const out = parseClarifyChat(SWALLOWED_QUESTIONS, { lenient: true });
+  expect(out.reply).toContain('資料修正工具');
+  expect(out.questions_yaml).toBeNull();
+  expect(out.broken_payload).toContain('id: q1');   // 帶出去給補救修
+});
+
+test('mergeClarification：沒有頂格 questions 清單的題目稿一律不併（補救修回來的也一樣把關）', () => {
+  const { mergeClarification } = require('../pipeline/clarify-chat');
+  expect(mergeClarification('summary: s', 'intro: |\n  說明\n  questions:\n    - id: q1\n')).toBeNull();
+  expect(mergeClarification('summary: s', 'intro: 說明')).toBeNull();
+  expect(mergeClarification('summary: s', 'intro: 說明\nquestions: []')).toContain('questions: []');
+});
+
+test('題目被吞進 intro → 送去補救，修好後題目真的出現在規格裡', async () => {
+  const task = await makeTask('clarify_chat_running');
+  await dbModule.query("UPDATE tasks SET clarify_mode='ask' WHERE id=$1", [task.id]);
+  runClaude.mockResolvedValueOnce({ text: `<result>\n${SWALLOWED_QUESTIONS}\n</result>`, usage: {}, durationMs: 1 });
+  runClaude.mockResolvedValueOnce({
+    text: '<result>\nintro: |\n  有幾件我自行決定的事。\nquestions:\n  - id: q1\n    text: 要不要一併回填？\n    type: text\nuser_answer: \'\'\n</result>',
+    usage: {}, durationMs: 1
+  });
+
+  await runClarifyChat({ id: task.id }, 1, null, null);
+
+  const { rows } = await dbModule.query('SELECT status, analysis_yaml FROM tasks WHERE id=$1', [task.id]);
+  expect(rows[0].status).toBe('confirm_pending');
+  const yaml = require('js-yaml');
+  const spec = yaml.load(rows[0].analysis_yaml);
+  expect(spec.clarification_channel.questions.map(q => q.id)).toEqual(['q1']);
+  expect(spec.clarification_channel.intro).not.toContain('questions:');
+});
