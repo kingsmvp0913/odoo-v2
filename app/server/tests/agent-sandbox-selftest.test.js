@@ -35,6 +35,7 @@ function deps(over = {}) {
       }),
       ensureAgentInfra: async () => ({ image: 'aidev-agent:x', gatewayHost: 'odoo-v2-gw', network: 'odoo-v2-agent-net', instanceId: 'odoo-v2' }),
       hostTargets: async () => ['127.0.0.1', '10.0.0.1'],
+      agentNetworkGateway: async () => '10.0.28.1',
       spawn: (cmd, argv) => { order.push('spawn'); return fakeChild([...allPass(argv.includes('audit') ? 'audit' : 'project'), 'TOKEN tok']); },
       checkTokenRevoked: async () => { order.push('check401'); return 401; },
       gatewayLogsSince: async () => '{"type":"deny","dest":"example.com:443"}',
@@ -71,17 +72,70 @@ test('閘道 log 沒有 example.com 的拒絕紀錄 → FAIL', async () => {
   expect(r.checks).toContainEqual(expect.objectContaining({ name: 'gateway_logged_deny', pass: false }));
 });
 
-test('探針命令替換 claude，並把探針腳本唯讀掛進去', async () => {
+test('探針命令替換 claude，並把探針腳本唯讀掛進去；agent 網路 gateway IP 帶成探針第 8 個位置參數', async () => {
   const seen = [];
   const { d } = deps({ spawn: (cmd, argv) => { seen.push(argv); return fakeChild(['TOKEN t']); } });
   await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);
   const argv = seen[0];
   const i = argv.indexOf('aidev-agent:x');
   expect(argv.slice(i + 1, i + 4)).toEqual(['bash', '/app/scripts/agent-sandbox-probe.sh', 'project']);
+  // 探針的 $1..$8：mode, appDir, otherRoot, ownGitDir, ownSlug, otherSlug, hosts, agentNetGateway
+  expect(argv[i + 10]).toBe('10.0.28.1');
   expect(argv).toContain('type=bind,source=/app/scripts/agent-sandbox-probe.sh,target=/app/scripts/agent-sandbox-probe.sh,readonly');
   expect(argv).not.toContain('claude');
 });
 
 test('同一個專案當「別的專案」→ 丟例外（驗不出跨專案）', async () => {
   await expect(st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 7 }, deps().d)).rejects.toThrow();
+});
+
+// X20／R6：host-port 檢查要打真正碰得到的位址（agent 網路自己的橋接 gateway），不是 127.0.0.1 那幾個構造上就不可達的假目標。
+test('agent 網路 gateway 查不到 → agent_net_gateway_known FAIL，整體 ok=false', async () => {
+  const { d } = deps({ agentNetworkGateway: async () => null, spawn: () => fakeChild(['CHECK agent_net_gateway_known FAIL', 'TOKEN tok']) });
+  const r = await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);
+  expect(r.ok).toBe(false);
+  expect(r.checks).toContainEqual(expect.objectContaining({ name: 'agent_net_gateway_known', pass: false }));
+});
+
+test('tcp_accepted_agentgw（8771／22，使用者已接受的暴露）回報 PASS 不影響整體 ok', async () => {
+  const { d } = deps();
+  const r = await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);
+  expect(r.ok).toBe(true);
+  expect(r.checks).toContainEqual(expect.objectContaining({ name: 'tcp_accepted_agentgw_8771', pass: true }));
+  expect(r.checks).toContainEqual(expect.objectContaining({ name: 'tcp_accepted_agentgw_22', pass: true }));
+});
+
+test('docker run 參數裡找不到映像檔 → release 仍會呼叫、拋出明確錯誤', async () => {
+  const released = [];
+  const { d } = deps({
+    prepareSandboxRun: async ({ profile }) => ({
+      argv: ['run', '-i', '--rm', 'claude', '-p'], childEnv: {}, containerName: `c-${profile.scope}`, runId: 'r',
+      kill: () => {}, release: async () => { released.push(true); },
+    }),
+  });
+  await expect(st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d)).rejects.toThrow(/映像檔/);
+  expect(released.length).toBeGreaterThan(0);
+});
+
+test('spawn 觸發 error 事件 → release 仍會呼叫、runSelftest 拋出', async () => {
+  const { d, order } = deps({
+    spawn: () => {
+      order.push('spawn');
+      const c = new EventEmitter();
+      c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+      c.stdin = { end: jest.fn(), on: jest.fn() };
+      setImmediate(() => c.emit('error', new Error('spawn ENOENT')));
+      return c;
+    },
+  });
+  await expect(st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d)).rejects.toThrow('spawn ENOENT');
+  expect(order).toContain('release');
+});
+
+test('探針輸出沒有 TOKEN 行 → token_revoked_401 FAIL，且不呼叫 checkTokenRevoked', async () => {
+  const calls = [];
+  const { d } = deps({ spawn: () => fakeChild(['CHECK claude_run PASS']), checkTokenRevoked: async t => { calls.push(t); return 401; } });
+  const r = await st.runSelftest({ projectId: 7, taskDbId: 70, otherProjectId: 8 }, d);
+  expect(calls).toEqual([]);
+  expect(r.checks).toContainEqual(expect.objectContaining({ name: 'token_revoked_401', pass: false }));
 });

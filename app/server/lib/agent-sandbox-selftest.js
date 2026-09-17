@@ -3,6 +3,10 @@
  * agent-sandbox-selftest.js — 子專案 0 規格 §8.3 攻擊實測，在平台行程內照正式路徑開真容器。
  * 兩輪：project（coding profile＋測試任務 worktree）與 audit（workflow_health profile＋乾淨 worktree）。
  * 判讀規則：探針「沒回報」的項目一律算失敗；通行證在 release 之後才驗 401；閘道必須記到 example.com 被擋。
+ * X20／R6（09-16 M6 實測）：`--internal` 網路唯一真正碰得到的宿主位址是 agent 網路自己的橋接 gateway IP，
+ * 不是 127.0.0.1／host.docker.internal／docker0／LAN IP；8772/21000/5416 必須擋，8771／22 是使用者已接受
+ * 的暴露（09-16 裁決：維持 --internal，靠登入鎖定緩解）只記錄不判失敗，另外用連得到閘道 proxy 的正控制組
+ * 排除「/dev/tcp 判讀法本身壞了」這種假 PASS。
  * 會花極少量 token（每輪一次 claude -p＋一次 --resume）。
  */
 const os = require('os');
@@ -12,8 +16,12 @@ const { execFile, spawn: realSpawn } = require('child_process');
 
 const APP_DIR = path.resolve(__dirname, '..', '..', '..');
 const PORTS = [8771, 8772, 22, 21000, 5416];
+const AGENT_GW_BLOCKED_PORTS = [8772, 21000, 5416];
+const AGENT_GW_ACCEPTED_PORTS = [8771, 22];
 const COMMON = ['env_no_APP_SECRET', 'env_no_JWT_SECRET', 'env_no_DATABASE_URL', 'read_platform_config', 'read_ai_socket_dir',
-  'read_other_project', 'tcp_blocked_direct_internet', 'proxy_anthropic', 'proxy_example_blocked', 'claude_run', 'claude_resume'];
+  'read_other_project', 'tcp_blocked_direct_internet', 'agent_net_gateway_known', 'tcp_positive_control',
+  ...AGENT_GW_BLOCKED_PORTS.map(p => `tcp_blocked_agentgw_${p}`), ...AGENT_GW_ACCEPTED_PORTS.map(p => `tcp_accepted_agentgw_${p}`),
+  'proxy_anthropic', 'proxy_example_blocked', 'claude_run', 'claude_resume'];
 const EXPECTED_CHECKS = {
   project: [...COMMON, 'write_git_config', 'write_git_hooks', 'write_git_objects', 'ai_own_project', 'ai_other_project_403', 'ai_other_db_403', 'ai_platform_query_403'],
   audit: [...COMMON, 'write_platform_worktree', 'platform_query_ok', 'platform_query_sensitive_denied', 'ai_internal_db_403'],
@@ -51,6 +59,11 @@ function defaultGatewayLogsSince(gateway, sinceIso) {
     (err, out, errOut) => resolve(`${out || ''}${errOut || ''}`)));
 }
 
+function defaultAgentNetworkGateway(network) {
+  return new Promise(resolve => execFile('docker', ['network', 'inspect', network, '--format', '{{range .IPAM.Config}}{{.Gateway}}{{end}}'],
+    (err, out) => resolve(err ? null : String(out).trim())));
+}
+
 async function runOnce(mode, ctx, d) {
   const { profileFor } = require('./agent-profiles');
   const profile = profileFor(mode === 'project' ? 'coding' : 'workflow_health');
@@ -59,16 +72,18 @@ async function runOnce(mode, ctx, d) {
     : { agentType: 'workflow_health', timeoutMs: 300000 };
   const claudeArgs = ['-p', '--strict-mcp-config', '--mcp-config', path.join(APP_DIR, 'app', 'server', 'pipeline', 'mcp', 'none.json')];
   const run = await d.prepareSandboxRun({ claudeArgs, opts, profile, projectId: mode === 'project' ? ctx.projectId : null });
-  const infra = await d.ensureAgentInfra();
-  const i = run.argv.lastIndexOf(infra.image);
-  const argv = [
-    ...run.argv.slice(0, i),
-    '--mount', `type=bind,source=${d.probePath},target=${d.probePath},readonly`,
-    infra.image, 'bash', d.probePath, mode, APP_DIR, ctx.otherRoot, mode === 'project' ? ctx.ownGitDir : '-',
-    ctx.ownSlug, ctx.otherSlug, ctx.hosts.join(' '),
-  ];
   let stdout = '';
   try {
+    const infra = await d.ensureAgentInfra();
+    const i = run.argv.lastIndexOf(infra.image);
+    if (i < 0) throw new Error(`docker run 參數裡找不到映像檔 ${infra.image}，探針無法掛入（argv：${run.argv.join(' ')}）`);
+    const gw = await d.agentNetworkGateway(infra.network);
+    const argv = [
+      ...run.argv.slice(0, i),
+      '--mount', `type=bind,source=${d.probePath},target=${d.probePath},readonly`,
+      infra.image, 'bash', d.probePath, mode, APP_DIR, ctx.otherRoot, mode === 'project' ? ctx.ownGitDir : '-',
+      ctx.ownSlug, ctx.otherSlug, ctx.hosts.join(' '), gw || '-',
+    ];
     await new Promise((resolve, reject) => {
       const child = d.spawn('docker', argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv });
       const timer = setTimeout(() => { run.kill(); reject(new Error('自我檢測逾時（5 分鐘）')); }, 300000);
@@ -100,6 +115,7 @@ async function runSelftest({ projectId, taskDbId, otherProjectId }, deps = {}) {
     ensureAgentInfra: (...a) => require('./agent-infra').ensureAgentInfra(...a),
     hostTargets: defaultHostTargets, spawn: realSpawn,
     checkTokenRevoked: defaultCheckTokenRevoked, gatewayLogsSince: defaultGatewayLogsSince,
+    agentNetworkGateway: defaultAgentNetworkGateway,
     probePath: path.join(APP_DIR, 'scripts', 'agent-sandbox-probe.sh'),
     ...deps,
   };
