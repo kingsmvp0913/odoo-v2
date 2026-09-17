@@ -293,9 +293,11 @@
       },
       // 伺服器還沒把剛送出的那則寫進 DB 之前，先用首頁交接過來的文字畫一則上去。
       // 伺服器版本一到（內容相同）就把暫時這則丟掉，不會留下兩份。
+      // ⚠ 比對前先統一換行：帶附件走 multipart，瀏覽器會把 \n 改成 \r\n，DB 存的就跟暫存的差一個字元。
       applyOptimisticPending() {
         if (!this.optimisticText) return;
-        if (this.messages.some((message) => message.role === "user" && message.content === this.optimisticText)) { this.optimisticText = ""; return; }
+        const sameText = (text) => String(text || "").replace(/\r\n/g, "\n") === this.optimisticText.replace(/\r\n/g, "\n");
+        if (this.messages.some((message) => message.role === "user" && sameText(message.content))) { this.optimisticText = ""; return; }
         this.messages = [...this.messages, { id: `optimistic-${this.activeChat.id}`, role: "user", content: this.optimisticText, created_at: new Date().toISOString() }];
       },
       // 停止回覆、或伺服器重啟，那一輪都沒有回覆——AI 方會補一則中斷訊息（chat-agent）。
@@ -465,7 +467,7 @@
 <span v-if="row.message.role!=='user'" class="ui-next-msg-avatar" aria-hidden="true"><img src="favicon.svg" alt=""></span>
 <div class="ui-next-message" v-html="renderMd(row.message.content)" v-show="row.message.content"></div>
 <div v-if="(row.message.attachments&&row.message.attachments.length)||(row.message.pending_previews&&row.message.pending_previews.length)" class="ui-next-message-files">
-<template v-for="attachment in (row.message.attachments||[])" :key="attachment.id"><img v-if="isImageAttachment(attachment)" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id,attachment.filename)"><button v-else type="button" class="ui-next-file-chip" :title="'下載 '+attachment.filename" @click="downloadAttachment(attachment.id,attachment.filename)"><ui-next-icon name="paperclip"/>{{ attachment.filename }}</button></template>
+<template v-for="attachment in (row.message.attachments||[])" :key="attachment.id"><img v-if="isImageAttachment(attachment)" v-show="attachUrls[attachment.id]" :src="attachUrls[attachment.id]" :alt="attachment.filename" @click="openImage(attachment.id,attachment.filename)"><button v-else type="button" class="ui-next-file-chip" :title="'下載 '+attachment.filename" @click="downloadAttachment(attachment.id,attachment.filename)"><ui-next-icon name="download"/>{{ attachment.filename }}</button></template>
 <img v-for="(url,index) in (row.message.pending_previews||[])" :key="'pending'+index" :src="url">
 </div>
 <small><ui-next-icon v-if="row.message.role!=='user'" name="chat"/>{{ row.message.role==='user' ? '你' : 'OAA' }} · {{ formatTime(row.message.created_at) }}<button v-if="canResend(row.message)" type="button" class="ui-next-message-retry" @click="resendLast" :disabled="resending||!lastUserMessage()"><ui-next-icon name="send"/> {{ resending?'重新發送中…':'重新發送' }}</button></small>
