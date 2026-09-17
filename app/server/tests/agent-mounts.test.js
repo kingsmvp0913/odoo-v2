@@ -25,6 +25,11 @@ beforeAll(() => {
   mk('repos', 'p7', 'main', '.git', 'objects'); mk('repos', 'p7', 'main', '.git', 'worktrees', 'main1');
   fs.writeFileSync(path.join(R, 'repos', 'p7', '.worktrees', 'task_7', 'main', '.git'),
     `gitdir: ${path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1')}\n`);
+  // admin 目錄比照 git worktree add 的產物（lib/worktree-guard.js 逐項驗）
+  fs.writeFileSync(path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'commondir'), '../..\n');
+  fs.writeFileSync(path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'gitdir'),
+    `${path.join(R, 'repos', 'p7', '.worktrees', 'task_7', 'main', '.git')}\n`);
+  fs.writeFileSync(path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'HEAD'), 'ref: refs/heads/task/task_7\n');
   mk('repos', 'p8', 'main', '.git');
   mk('core', '17');
   mk('uploads', 'task_70'); mk('uploads', 'task_71'); mk('uploads', 'chat_5'); mk('uploads', 'feedback_3');
@@ -106,6 +111,15 @@ test('worktree 的 .git 檔指到 <repo>/.git/worktrees/ 以外 → 丟例外（
   await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), {
     ...deps, readFileSync: () => { throw new Error('EACCES'); },
   })).rejects.toThrow(/EACCES|worktree/);
+});
+
+test('admin HEAD 不是本任務分支（被改成 testing）→ 丟例外，不開可寫掛載', async () => {
+  const wt = path.join(R, 'repos', 'p7', '.worktrees', 'task_7');
+  const head = path.join(R, 'repos', 'p7', 'main', '.git', 'worktrees', 'main1', 'HEAD');
+  fs.writeFileSync(head, 'ref: refs/heads/testing\n');
+  try {
+    await expect(resolveSandboxMounts(base({ profile: profileFor('coding'), cwd: wt }), deps)).rejects.toThrow(/HEAD/);
+  } finally { fs.writeFileSync(head, 'ref: refs/heads/task/task_7\n'); }
 });
 
 test('呼叫端給的 cwd 與任務 worktree 不符 → 丟例外（表對不上就停，不猜）', async () => {

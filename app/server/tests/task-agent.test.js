@@ -54,6 +54,8 @@ jest.mock('../pipeline/git', () => {
     revParse: jest.fn(() => Promise.resolve(`sha-${++sha}`))
   };
 });
+// worktree 是假路徑：git 已 mock，驗證也放行（真實驗證見 worktree-guard.test.js）；個別測試可改成丟例外
+jest.mock('../lib/worktree-guard', () => ({ assertTaskWorktreeIntact: jest.fn() }));
 jest.mock('../pipeline/merge-agent', () => ({
   resolveConflicts: jest.fn().mockResolvedValue({ failed: [], details: {} }),
   SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
@@ -323,6 +325,21 @@ test('B-5 帶失敗回饋卻無新 commit → stopped，不放行進 QA', async 
   expect(t.status).toBe('stopped');
   expect(t.retry_feedback).toContain('bundle 500');            // 不消費，續跑仍讀得到
   expect(t.blocker_content).toContain('未產生任何程式變更');
+});
+
+// 意圖（09-17 R10）：worktree 的 git 中繼資料被竄改時，宿主不得再對它跑 git，也不得開 AI 這一輪。
+// 讀 HEAD 快照平常「讀不到就當沒證據」，但竄改不是讀不到——必須往外丟，不能被吞成 null 繼續跑。
+test('coding 前 worktree 被竄改 → 不跑 AI、不讀 HEAD，錯誤往外丟', async () => {
+  const guard = require('../lib/worktree-guard');
+  const { spawn } = require('child_process');
+  spawn.mockClear(); git.revParse.mockClear();
+  guard.assertTaskWorktreeIntact.mockImplementationOnce(() => {
+    throw Object.assign(new Error('任務 worktree 的 git 中繼資料不合法（可能被竄改），需由管理員重建：HEAD 不是 refs/heads/task/x'), { code: 'WORKTREE_TAMPERED' });
+  });
+  const id = await insertCodingTask('tampered1');
+  await expect(runTaskCoding(id, userId)).rejects.toThrow(/竄改/);
+  expect(spawn).not.toHaveBeenCalled();
+  expect(git.revParse).not.toHaveBeenCalled();
 });
 
 // 意圖：守衛擋下來時，使用者看到的必須是 agent 對「為什麼沒改」的真實判斷，不是每張任務都長一樣

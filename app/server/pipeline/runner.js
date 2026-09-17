@@ -178,7 +178,7 @@ async function doBranch(task, settings, signal) {
             await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, AI_BRANCH, false, gitEnv);
             // worktree 是 analysis 當下建的，任務在規格審核閘門可能停留數天，期間 ai-dev 已被別的
             // 任務與實體 main 推進。不跟上就是在過期的碼上開發，且下載 zip 會蓋掉期間的人工修正。
-            const sync = await syncBranchWithAi(wtPath, gitEnv);
+            const sync = await syncBranchWithAi(wtPath, gitEnv, { repoPath: repo.local_path, branch: branchName });
             if (!sync.synced) unsynced.push({ label: repo.label, files: sync.conflictFiles, error: sync.error });
           }
           return null;

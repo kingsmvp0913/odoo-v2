@@ -6,6 +6,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { loadAgent, promptVersion } = require('./agent-loader');
 const { AI_BRANCH, ensureAiBranch, syncMainIntoAi, ensureWorktreeAtMain, commitResolved, abortMerge, revParse } = require('./git');
 const { ensureWorktreeSkills } = require('./worktree-skills');
+const { assertTaskWorktreeIntact } = require('../lib/worktree-guard');
 const { resolveConflicts, SYNC_LABELS } = require('./merge-agent');
 const { tryProjectLock } = require('./project-lock');
 const { primaryModule } = require('./spec-modules');
@@ -642,16 +643,28 @@ async function runCodingOnce(task, info, userId, signal, resolution, gitEnv) {
 // 本任務各 repo worktree 的 HEAD 快照：比對 coding 前後即知這輪有沒有真的 commit 東西。
 // 讀不到（worktree 尚未建立／unborn HEAD）該 repo 記 null，整段失敗則回空物件——兩者都代表
 // 「無法確認」，由呼叫端當作沒有證據、不得據以阻擋（見下方 unchanged 的判定）。
-// 本函式永不拋出：HEAD 快照只是防呆的輔助資訊，不該有能力弄掛整個 coding 關。
+// 本函式不因「讀不到」拋出：HEAD 快照只是防呆的輔助資訊，不該有能力弄掛整個 coding 關。
+// 唯一例外是 worktree 的 git 中繼資料被竄改（09-17 R10）：那不是讀不到，是不能再在宿主碰它，必須往外丟。
 async function readHeads(info, taskId) {
+  const tampered = [];
+  let heads;
   try {
     const wt = worktreeParent(info.root, taskId);
-    const heads = {};
+    heads = {};
     for (const r of info.repos || []) {
-      heads[r.subdir] = await revParse(path.join(wt, r.subdir), 'HEAD').catch(() => null);
+      const repoWt = path.join(wt, r.subdir);
+      try {
+        assertTaskWorktreeIntact({ repoPath: r.local_path, worktreePath: repoWt, branch: `task/${taskId}` });
+      } catch (e) {
+        if (e.code === 'WORKTREE_TAMPERED') tampered.push(e);
+        heads[r.subdir] = null;
+        continue;
+      }
+      heads[r.subdir] = await revParse(repoWt, 'HEAD').catch(() => null);
     }
-    return heads;
-  } catch { return {}; }
+  } catch { heads = {}; }
+  if (tampered.length) throw tampered[0];
+  return heads;
 }
 
 // 「這張單繞了幾輪」的總計數上限。既有的 reentry／deploy_retry 都會被歸零——分診 advance 主動歸零
