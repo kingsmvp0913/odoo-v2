@@ -7,7 +7,7 @@
     name: "UiNextTaskDetailView",
     components: { UiNextIcon: window.UiNextIcon },
     data() {
-      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], rejectFilesPreviews: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], newMessageFilesPreviews: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], answerFilesPreviews: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], askFilesPreviews: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], tweakSpecs: [], specFeedback: '', specApproving: false, specRevising: false };
+      return { task: null, logs: [], loading: true, resolution: '', csAnswers: {}, odooUrl: '', serviceUrl: '', submitting: false, approving: false, archiving: false, rejecting: false, rejectReason: '', rejectFiles: [], rejectFilesPreviews: [], conflictResolving: false, conflictChoices: {}, submittingConflicts: false, clarifying: {}, clarifyText: {}, csConfirming: false, csRetrying: false, csFollowup: '', csFollowingUp: false, csFollowupFiles: [], csFollowupFilesPreviews: [], csDataFiles: [], csDataFilesPreviews: [], resolving: false, error: '', serverConfirmedRunning: false, testMode: false, stepping: false, events: [], eventsOpen: false, eventsHasMore: true, eventsLoading: false, eventsError: '', expandedEvents: {}, editingContent: false, editText: '', savingContent: false, taskMessages: [], sendingMessage: false, newMessageText: '', writebackEnabled: false, messageWriteback: false, writebackOpen: false, ticketAttachments: [], newMessageFiles: [], newMessageFilesPreviews: [], diffOpen: false, diffLoading: false, diffError: '', diffData: null, clarification: { summary: '', questions: [] }, answerFields: {}, answerExtra: {}, answerFiles: [], answerFilesPreviews: [], clarTab: 'qa', clarIdx: 0, askText: '', askSubmitting: false, askFiles: [], askFilesPreviews: [], expandedLogs: {}, attachUrls: {}, taskActionCollapsed: false, downloadingZip: false, spec: null, specs: [], tweakSpecs: [], specFeedback: '', specApproving: false, specRevising: false };
     },
     computed: {
       isAgentRunning() { return !!this.task && !this.task.is_paused && (window.RUNNABLE_STATUSES || []).includes(this.task.status); },
@@ -551,6 +551,10 @@
         this.answerFiles = Array.from(e.target.files || []);
         this.syncPreviews('answerFiles');
       },
+      onCsFilesSelected(e, key) {
+        this[key] = Array.from(e.target.files || []);
+        this.syncPreviews(key);
+      },
       onAskFilesSelected(e) {
         this.askFiles = Array.from(e.target.files || []);
         this.syncPreviews('askFiles');
@@ -891,8 +895,19 @@
           // 直接整包送會夾帶上一輪已答過的舊題（值被 refresh 清成空）→ 時間軸出現整塊空 A。
           const answers = {};
           this.csQuestions.forEach(q => { answers[q] = this.csAnswers[q] || ''; });
-          await Api.post(`tasks/${this.task.id}/cs-data-submit`, { answers });
+          // 同 submitAnswer：有夾帶檔案才改走 multipart，沒附件時沿用既有 JSON 路徑
+          if (this.csDataFiles.length) {
+            const fd = new FormData();
+            fd.append('answers', JSON.stringify(answers));
+            this.csDataFiles.forEach(f => fd.append('files', f));
+            await Api.postForm(`tasks/${this.task.id}/cs-data-submit`, fd);
+          } else {
+            await Api.post(`tasks/${this.task.id}/cs-data-submit`, { answers });
+          }
           this.csAnswers = {};
+          this.csDataFiles = [];
+          this.syncPreviews('csDataFiles');
+          if (this.$refs.csDataFilesInput) this.$refs.csDataFilesInput.value = '';
           showToast('已補充資料，重新送入分析', 'success');
           await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
@@ -904,9 +919,20 @@
         if (!this.csFollowup.trim()) return;
         this.csFollowingUp = true;
         try {
-          await Api.post(`tasks/${this.task.id}/cs-followup`, { note: this.csFollowup.trim() });
+          const note = this.csFollowup.trim();
+          if (this.csFollowupFiles.length) {
+            const fd = new FormData();
+            fd.append('note', note);
+            this.csFollowupFiles.forEach(f => fd.append('files', f));
+            await Api.postForm(`tasks/${this.task.id}/cs-followup`, fd);
+          } else {
+            await Api.post(`tasks/${this.task.id}/cs-followup`, { note });
+          }
           showToast('已送出，客服正在重新處理', 'success');
           this.csFollowup = '';
+          this.csFollowupFiles = [];
+          this.syncPreviews('csFollowupFiles');
+          if (this.$refs.csFollowupFilesInput) this.$refs.csFollowupFilesInput.value = '';
           await this.refreshToLatest();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.csFollowingUp = false; }
@@ -1379,22 +1405,40 @@
 <template v-else-if="timelineActionMode==='cs_reply'">
 <!-- 回覆全文不在這裡重印：cs-agent 已把它寫進 task_logs（[客服回覆]），左側對話流看得到。
      面板只留「追問／確認結案」這兩個動作。 -->
-<textarea v-model="csFollowup" placeholder="確認回覆內容後按「確認結案」；要調整就在這裡追問（例：客戶用的是 17.0／回覆再客氣些）" @keydown.enter.exact.prevent="csFollowupSubmit">
+<textarea v-model="csFollowup" placeholder="確認回覆內容後按「確認結案」；要調整就在這裡追問（例：客戶用的是 17.0／回覆再客氣些），可直接貼上截圖" @keydown.enter.exact.prevent="csFollowupSubmit" @paste="onPasteFiles($event,'csFollowupFiles')">
 </textarea>
+<div v-if="csFollowupFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in csFollowupFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="csFollowupFilesPreviews[index]" class="ui-next-thumb" :src="csFollowupFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:csFollowupFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('csFollowupFiles',index)"><ui-next-icon name="close"/></button></span>
+</div>
+<div class="ui-next-action-foot">
+<div class="ui-next-action-tools">
+<label class="ui-next-icon-button" title="附加截圖（客服讀得到）"><ui-next-icon name="paperclip"/><input ref="csFollowupFilesInput" type="file" multiple aria-label="附加截圖" @change="onCsFilesSelected($event,'csFollowupFiles')"></label>
+</div>
 <div class="ui-next-inline-actions">
 <button @click="csFollowupSubmit" :disabled="csFollowingUp||!csFollowup.trim()">送出</button>
 <button class="ui-next-primary" @click="csConfirm" :disabled="csConfirming">確認結案</button>
+</div>
 </div>
 </template>
 <template v-else-if="timelineActionMode==='cs_data'">
 <div v-for="(question,index) in csQuestions" :key="index" class="ui-next-question">
 <b>{{ index+1 }}. {{ question }}</b>
 <!-- ref 與 handleCsEnter 成對：少了 ref，Enter 找不到下一題的元素就靜默什麼都不做 -->
-<textarea v-model="csAnswers[question]" :ref="'csInput_'+index" :placeholder="'請填寫第 '+(index+1)+' 題…（Enter 跳下題'+(index===csQuestions.length-1?'／送出':'')+'，Shift+Enter 換行）'" @keydown.enter.exact.prevent="handleCsEnter(index)">
+<textarea v-model="csAnswers[question]" :ref="'csInput_'+index" :placeholder="'請填寫第 '+(index+1)+' 題…（Enter 跳下題'+(index===csQuestions.length-1?'／送出':'')+'，Shift+Enter 換行）'" @keydown.enter.exact.prevent="handleCsEnter(index)" @paste="onPasteFiles($event,'csDataFiles')">
 </textarea>
 </div>
+<div v-if="csDataFiles.length" class="ui-next-upload-list">
+<span v-for="(file,index) in csDataFiles" :key="file.name+file.size+index" class="ui-next-file-preview"><img v-if="csDataFilesPreviews[index]" class="ui-next-thumb" :src="csDataFilesPreviews[index]" :alt="file.name" title="點擊放大" @click="previewImage({src:csDataFilesPreviews[index],alt:file.name})"><ui-next-icon v-else name="paperclip"/><em>{{ file.name }}</em><button type="button" :aria-label="'移除附件：'+file.name" @click="removeFileAt('csDataFiles',index)"><ui-next-icon name="close"/></button></span>
+</div>
 <p v-if="!csAllAnswered" class="ui-next-error-text">請填寫所有問題才能送出</p>
+<div class="ui-next-action-foot">
+<div class="ui-next-action-tools">
+<label class="ui-next-icon-button" title="附加截圖（客服讀得到）"><ui-next-icon name="paperclip"/><input ref="csDataFilesInput" type="file" multiple aria-label="附加截圖" @change="onCsFilesSelected($event,'csDataFiles')"></label>
+</div>
+<div class="ui-next-inline-actions">
 <button class="ui-next-primary" @click="csDataSubmit" :disabled="csRetrying||!csAllAnswered">{{ csRetrying?'處理中…':'送出補充資料，重新分析' }}</button>
+</div>
+</div>
 </template>
 <template v-else-if="timelineActionMode==='blocker'">
 <p v-if="!task.blocker_content" class="ui-next-error-text">任務分診失敗或執行中斷</p>

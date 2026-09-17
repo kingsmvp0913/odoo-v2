@@ -63,8 +63,8 @@ const SEND_BUTTONS = [
     (vm) => { vm.conflictAllChosen = true; vm.conflictItems = []; vm.conflictChoices = {}; }],
   ['markConflictResolved（已手動解決）', 'markConflictResolved', () => {}],
   ['csConfirm（客服回覆確認）', 'csConfirm', () => {}],
-  ['csDataSubmit（補充資料）', 'csDataSubmit', (vm) => { vm.csAllAnswered = true; vm.csQuestions = []; vm.csAnswers = {}; }],
-  ['csFollowupSubmit（客服追問）', 'csFollowupSubmit', (vm) => { vm.csFollowup = '再問一次'; }],
+  ['csDataSubmit（補充資料）', 'csDataSubmit', (vm) => { vm.csAllAnswered = true; vm.csQuestions = []; vm.csAnswers = {}; vm.csDataFiles = []; vm.csDataFilesPreviews = []; }],
+  ['csFollowupSubmit（客服追問）', 'csFollowupSubmit', (vm) => { vm.csFollowup = '再問一次'; vm.csFollowupFiles = []; vm.csFollowupFilesPreviews = []; }],
   ['resolveBlocker（中斷處理）', 'resolveBlocker', (vm) => { vm.resolution = '從中斷處重試'; }],
 ];
 
