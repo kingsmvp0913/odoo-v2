@@ -866,6 +866,36 @@ test('G-6 setupErr（sync 之外的例外，如建 worktree 失敗）→ stopped
   expect(after.blocker_content).toContain('boom worktree');
 });
 
+// 意圖（09-17 R14 L1）：等容器結束要在拿專案鎖之前；鎖內 ensureWorktreeAtMain 才發現又忙 → 本輪不動作（不 stopped）。
+test('G-7b analysis：等容器時不持鎖；鎖內 WORKTREE_BUSY → 原地不動、下一輪再試；鎖外等到逾時 → stopped', async () => {
+  const sr = require('../pipeline/sandbox-run');
+  const { tryProjectLock } = require('../pipeline/project-lock');
+  const seen = [];
+  const spy = jest.spyOn(sr, 'waitForWorktreeIdle').mockImplementation(async (p) => {
+    seen.push([p, (await tryProjectLock(projectId, async () => 1)).locked]);
+  });
+  try {
+    git.ensureWorktreeAtMain.mockReset().mockRejectedValueOnce(Object.assign(new Error('容器仍在執行（已等 0 秒）'), { code: 'WORKTREE_BUSY' }));
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1,'ta_busy','odoo','T','需求','analysis_running',$2) RETURNING id",
+      [userId, projectId]
+    );
+    expect(await runTaskAnalysis(t.id, userId)).toBe(true);
+    expect(seen[0][0]).toContain(path.join('.worktrees', 'ta_busy'));
+    expect(seen[0][1]).toBe(true); // 等的當下專案鎖是空的
+    const { rows: [after] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+    expect(after).toEqual({ status: 'analysis_running', blocker_content: null });
+
+    git.ensureWorktreeAtMain.mockReset().mockResolvedValue(undefined);
+    spy.mockRejectedValueOnce(Object.assign(new Error('AI 容器仍在執行（已等 3000 秒）'), { code: 'WORKTREE_BUSY' }));
+    expect(await runTaskAnalysis(t.id, userId)).toBe(true);
+    expect(git.ensureWorktreeAtMain).not.toHaveBeenCalled();
+    const { rows: [after2] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t.id]);
+    expect(after2.status).toBe('stopped');
+    expect(after2.blocker_content).toContain('已等 3000 秒');
+  } finally { spy.mockRestore(); }
+});
+
 // 意圖：主 clone 殘留 MERGE_HEAD 時的進場守衛（比照 merge-agent.js doMerge 的同名守衛語意）；
 // 用真的暫存目錄＋真的 .git/MERGE_HEAD 檔案，因為 task-agent.js 用真的 fs.existsSync 判斷（未 mock fs）。
 test('G-9 進場守衛：主 clone 殘留 MERGE_HEAD 且同專案另一任務卡 merge_conflict 待人工解 → 本輪不動作', async () => {

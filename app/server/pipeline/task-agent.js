@@ -220,7 +220,13 @@ async function runTaskAnalysis(taskId, userId, signal) {
   let syncBlockedBy = null;
   // 取不到鎖就早退（不排隊）：本段的 resolveConflicts 每個 hunk 一次 runClaude，可持鎖數分鐘，
   // 排隊者會白佔一個派工槽。sync 本身冪等，下一 tick 再試零成本。
-  const { locked } = await tryProjectLock(task.project_id, async () => {
+  // 等掛著本任務 worktree 的容器結束——在拿鎖之前等（09-17 R14）；鎖內 ensureWorktreeAtMain 只做不阻塞檢查。
+  // 等不到（逾時）→ 落到下面 setupErr 的 stopped 處理。
+  let waitErr = null;
+  try {
+    for (const repo of info.repos) await require('./sandbox-run').waitForWorktreeIdle(path.join(wtParent, repo.subdir));
+  } catch (e) { waitErr = e; }
+  const { locked } = waitErr ? { locked: true } : await tryProjectLock(task.project_id, async () => {
     // 主 clone 殘留 in-progress merge（MERGE_HEAD）防護（比照 merge-agent.js doMerge 同名守衛）：
     // - 同專案另有任務停在 merge_conflict＝人工正在該 clone 上解衝突（裁決端點的 concludeMerge 才會了結），
     //   此時進場同步必撞牆被誤標 stopped → 本輪不動作，留在 analysis_running 等下一 tick 再試。
@@ -271,6 +277,9 @@ async function runTaskAnalysis(taskId, userId, signal) {
     }
   });
   if (!locked) return true; // 同專案另有工作持鎖：本輪完全不動作，下一 tick 再試（sync 冪等）
+  // 鎖內才發現容器又掛上 worktree（WORKTREE_BUSY）：同上，本輪不動作、下一 tick 再試
+  if (setupErr && setupErr.code === 'WORKTREE_BUSY') return true;
+  if (waitErr) setupErr = waitErr;
   if (syncBlockedBy) {
     // 原地不動（狀態不改），但卡住原因要落地：socket 事件是瞬時的，沒開著終端面板就永遠看不到，
     // 任務在列表上只是「分析中」卻可能掛好幾天。寫進 blocker_content 讓它重整後仍看得見。
@@ -655,6 +664,8 @@ async function readHeads(info, taskId) {
     for (const r of info.repos || []) {
       const repoWt = path.join(wt, r.subdir);
       try {
+        // 不在專案鎖內：直接阻塞等容器結束，再做（不阻塞的）寫回
+        await require('./sandbox-run').waitForWorktreeIdle(repoWt);
         await resetTaskWorktreePointers({ repoPath: r.local_path, worktreePath: repoWt, branch: `task/${taskId}` });
       } catch (e) {
         if (e.code !== 'WORKTREE_MISSING' && e.code !== 'WORKTREE_ADMIN_MISSING') blocked.push(e);

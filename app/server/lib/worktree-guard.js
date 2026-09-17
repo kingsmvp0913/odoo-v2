@@ -11,6 +11,7 @@
  *  1. 先等掛著這個 worktree 的容器真的結束（sandbox-run.waitForWorktreeIdle），否則寫完還會被改
  *  2. admin 目錄由宿主從主 clone 的 .git/worktrees/*／gitdir 自己找，不信 worktree 的 .git 檔
  *  3. 指標檔一律「先刪再以 wx 建立」：不跟隨既有 symlink，也不會寫穿到別處
+ *  4. （R14）admin 目錄整個清空重建（只留一般檔 index）；任務分支 ref 只接受 commit id，否則停下
  * 容器掛載（agent-mounts.js）找 admin 目錄也用同一個 findAdminDir。
  */
 const fs = require('fs');
@@ -56,31 +57,92 @@ function findAdminDir(repoPath, worktreePath) {
   return hits[0];
 }
 
-async function resetTaskWorktreePointers({ repoPath, worktreePath, branch }, deps = {}) {
+// 任務分支 ref 的完整性（09-17 R14）：refs/heads/task/ 與 logs/refs/heads/task/ 容器可寫。
+// loose ref 被寫成 `ref: refs/heads/testing` 這種 symref，宿主的 commit／merge／reset，甚至重建路徑的
+// `worktree add -B`，都會經由它移動 testing。只接受「不存在（在唯讀的 packed-refs）」或「內容只有 commit id
+// 的一般檔」；其餘一律丟例外——不跟隨、不自動修（停下交人工）。
+// reflog 不是一般檔（symlink／目錄）就移除：宿主寫 reflog 是 append，會經由 symlink 寫到宿主別的檔。
+const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?\n?$/;
+function tamperedRef(msg) {
+  return Object.assign(new Error(`任務分支的 ref 疑似被竄改，已停止（不會自動修復，需由管理員確認）：${msg}`), { code: 'WORKTREE_TAMPERED' });
+}
+function assertBranchName(branch) {
   if (typeof branch !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(branch) || branch.split('/').some(x => !x || x === '.' || x === '..')) {
     throw new Error(`任務分支名不合法：${branch}`);
   }
-  const wait = deps.waitForWorktreeIdle || ((...a) => require('../pipeline/sandbox-run').waitForWorktreeIdle(...a));
+}
+function assertTaskBranchRef(repoPath, branch) {
+  assertBranchName(branch);
+  let commonGit;
+  try { commonGit = fs.realpathSync(path.join(repoPath, '.git')); } catch { throw tamperedRef(`讀不到主 clone 的 .git：${repoPath}`); }
+  const parts = branch.split('/');
+  // 中間層目錄（refs/heads/task、logs/refs/heads/task）：不存在可以（git 會自己建），存在就必須是真目錄
+  const checkDirs = base => {
+    let cur = base;
+    for (const seg of parts.slice(0, -1)) {
+      cur = path.join(cur, seg);
+      const s = lstat(cur);
+      if (!s) return false;
+      if (!s.isDirectory()) throw tamperedRef(`${path.relative(commonGit, cur)} 不是一般目錄`);
+    }
+    return true;
+  };
+  const refFile = path.join(commonGit, 'refs', 'heads', ...parts);
+  if (checkDirs(path.join(commonGit, 'refs', 'heads'))) {
+    const s = lstat(refFile);
+    if (s) {
+      if (!s.isFile()) throw tamperedRef(`refs/heads/${branch} 不是一般檔案`);
+      let content;
+      try { content = readNoFollow(refFile); } catch (e) { throw tamperedRef(`讀不到 refs/heads/${branch}：${e.message}`); }
+      if (!SHA_RE.test(content)) throw tamperedRef(`refs/heads/${branch} 的內容不是 commit id`);
+    }
+  }
+  const logFile = path.join(commonGit, 'logs', 'refs', 'heads', ...parts);
+  if (checkDirs(path.join(commonGit, 'logs', 'refs', 'heads'))) {
+    const s = lstat(logFile);
+    if (s && !s.isFile()) fs.rmSync(logFile, { recursive: true, force: true });
+  }
+}
+
+// 清空 admin 目錄（09-17 R14）：R12 只寫回四個指標，ORIG_HEAD／MERGE_MSG／AUTO_MERGE… 等其餘檔容器照樣寫得到，
+// 宿主的 merge／reset 會經由 symref 移動 testing、經由 symlink 覆寫宿主檔案。與其逐一列舉，不如整個清掉：
+// 只保留一般檔的 index（使用者／AI 已暫存的變更），其餘不論是檔、symlink 或目錄一律移除（不跟隨 symlink）。
+function wipeAdminDir(admin) {
+  for (const name of fs.readdirSync(admin)) {
+    const p = path.join(admin, name);
+    const s = lstat(p);
+    if (!s) continue;
+    if (name === 'index' && s.isFile()) continue;
+    if (s.isDirectory()) fs.rmSync(p, { recursive: true, force: true });
+    else fs.unlinkSync(p);
+  }
+}
+
+// 呼叫前提：呼叫端已在拿專案鎖「之前」await sandbox-run.waitForWorktreeIdle（會等到容器結束）。
+// 這裡預設只做不阻塞的檢查：容器仍掛著就丟 WORKTREE_BUSY，由呼叫端離開鎖、下一輪再試（09-17 R14，
+// 否則最長 50 分鐘的等待會卡在專案鎖裡，同專案 merge／deploy 全部排隊）。
+async function resetTaskWorktreePointers({ repoPath, worktreePath, branch }, deps = {}) {
+  assertBranchName(branch);
+  const wait = deps.waitForWorktreeIdle || (p => require('../pipeline/sandbox-run').waitForWorktreeIdle(p, { timeoutMs: 0 }));
   await wait(worktreePath);
-  const admin = findAdminDir(repoPath, worktreePath);
-  const commonGit = path.dirname(path.dirname(admin));
+  // worktree 不存在（MISSING）照舊優先回報；其餘 findAdminDir 的錯誤（含 ADMIN_MISSING）要等任務 ref 驗過才丟，
+  // 讓「偽造 admin 不見了」也先撞上 ref 檢查
+  let admin, adminErr = null;
+  try { admin = findAdminDir(repoPath, worktreePath); } catch (e) {
+    if (e.code === 'WORKTREE_MISSING') throw e;
+    adminErr = e;
+  }
+  assertTaskBranchRef(repoPath, branch);
+  if (adminErr) throw adminErr;
+  const s = lstat(admin);
+  if (!s || !s.isDirectory()) throw fail('WORKTREE_TAMPERED', `admin 目錄不是一般目錄：${admin}`);
   const put = (p, content) => { fs.rmSync(p, { recursive: true, force: true }); fs.writeFileSync(p, content, { flag: 'wx' }); };
-  put(path.join(worktreePath, '.git'), `gitdir: ${admin}\n`);
+  wipeAdminDir(admin);
   put(path.join(admin, 'HEAD'), `ref: refs/heads/${branch}\n`);
   put(path.join(admin, 'commondir'), '../..\n');
   put(path.join(admin, 'gitdir'), `${path.join(fs.realpathSync(worktreePath), '.git')}\n`);
-  // 平台用不到的 per-worktree 設定與 refs（bisect／rewritten…）、以及可被換成 symlink 讓宿主附加寫入的 reflog：一律移除
-  for (const x of ['config.worktree', 'refs', 'logs']) fs.rmSync(path.join(admin, x), { recursive: true, force: true });
-  // index／本任務分支的 ref 與 reflog（refs/heads/task 容器可寫）：不是一般檔案就移除，免得宿主經由 symlink 讀寫別處
-  for (const p of [
-    path.join(admin, 'index'),
-    path.join(commonGit, 'refs', 'heads', ...branch.split('/')),
-    path.join(commonGit, 'logs', 'refs', 'heads', ...branch.split('/')),
-  ]) {
-    const s = lstat(p);
-    if (s && !s.isFile()) fs.rmSync(p, { recursive: true, force: true });
-  }
+  put(path.join(worktreePath, '.git'), `gitdir: ${admin}\n`);
   return admin;
 }
 
-module.exports = { findAdminDir, resetTaskWorktreePointers };
+module.exports = { findAdminDir, resetTaskWorktreePointers, assertTaskBranchRef };

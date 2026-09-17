@@ -170,10 +170,18 @@ async function doBranch(task, settings, signal) {
       // worktree 動到共用主 clone → 持專案鎖，與 merge/deploy/analysis 序列化（健檢 U7）。
       // 冪等（reset=false）：analysis 通常已建好此 worktree，這裡沿用不重建、不動已有內容。
       const unsynced = []; // 未能跟上 ai-dev 的 worktree（不擋任務，但要讓使用者看得到）
-      const err = await withProjectLock(task.project_id, async () => {
+      const wtPaths = repos.map(repo => path.join(wtParent, path.basename(repo.local_path)));
+      // 等掛著這些 worktree 的容器（如 respec）結束——必須在拿專案鎖「之前」等（09-17 R14）：
+      // 最長可達逾時＋10 分鐘，在鎖裡等會讓同專案的 merge／deploy 全部排隊、派工槽也一起被佔住。
+      // 鎖內只做不阻塞的檢查（resetTaskWorktreePointers），等完到拿到鎖之間又有容器掛上就丟 WORKTREE_BUSY。
+      let waitErr = null;
+      for (const p of wtPaths) {
+        try { await require('./sandbox-run').waitForWorktreeIdle(p); } catch (e) { waitErr = e; break; }
+      }
+      const err = waitErr || await withProjectLock(task.project_id, async () => {
         try {
-          for (const repo of repos) {
-            const wtPath = path.join(wtParent, path.basename(repo.local_path));
+          for (const [i, repo] of repos.entries()) {
+            const wtPath = wtPaths[i];
             // 切點是 ai-dev（與 analysis 一致）：從 main 切會看不到已核准但尚未進 main 的成果
             await ensureWorktreeAtMain(repo.local_path, wtPath, branchName, AI_BRANCH, false, gitEnv);
             // worktree 是 analysis 當下建的，任務在規格審核閘門可能停留數天，期間 ai-dev 已被別的
@@ -186,6 +194,11 @@ async function doBranch(task, settings, signal) {
           return e;
         }
       });
+      if (err && err.code === 'WORKTREE_BUSY' && err !== waitErr) {
+        // 鎖內才發現容器又掛上：狀態不動、離開鎖，下一 tick 再試（比照 analysis 取不到鎖的處理；本段冪等）
+        notify.emitToUser(task.user_id, 'terminal:output', { taskId, data: `[BRANCH] ${err.message}；下一輪再試\n` });
+        return;
+      }
       if (err) {
         await query(
           "UPDATE tasks SET status='stopped', blocker_content=$2, updated_at=NOW() WHERE id=$1",

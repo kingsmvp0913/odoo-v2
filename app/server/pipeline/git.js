@@ -1,7 +1,7 @@
 const { execFile, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { resetTaskWorktreePointers } = require('../lib/worktree-guard');
+const { resetTaskWorktreePointers, assertTaskBranchRef } = require('../lib/worktree-guard');
 
 // 讓 git 忽略 __pycache__/*.pyc（Odoo/py_compile 產物）。寫進主 clone 的 .git/info/exclude，
 // linked worktree 共用 common git dir 一併生效。效果：git add -A 不會 commit pyc；merge 時
@@ -841,6 +841,9 @@ async function ensureWorktreeAtMain(mainRepoPath, worktreePath, branch, base, re
   // 沿用既有 worktree 前，先等容器結束並把 git 指標寫回正確值（09-17 R12）：.git 檔／admin HEAD／commondir
   // 容器寫得到，不處理就在這裡跑 merge／reset --hard，等於讓 AI 借宿主之手移動 testing 或執行任意指令。
   // 只有「主 clone 找不到 admin 目錄」（上述死工作樹）照舊走重建；其餘一律丟例外，不自動刪。
+  // 任務分支 ref 先驗（R14）：下面的重建路徑會 `worktree add -B`，ref 若是指向 testing 的 symref 就會重設 testing；
+  // 偽造「admin 不見了」也會走到那裡，所以必須在刪 worktree、重建之前就驗。
+  assertTaskBranchRef(mainRepoPath, branch);
   let isWorktree = false;
   if (fs.lstatSync(worktreePath, { throwIfNoEntry: false })) {
     let restored = false;

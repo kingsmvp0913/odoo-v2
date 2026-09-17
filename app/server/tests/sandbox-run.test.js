@@ -143,10 +143,13 @@ describe('waitForWorktreeIdle：任務 worktree 的獨占', () => {
     expect(idle).toBe(true);
   });
 
-  test('等不到 → 丟例外（訊息寫明容器仍在執行）', async () => {
+  test('等不到 → 丟例外（訊息寫明容器仍在執行）；timeoutMs=0 是不阻塞檢查，立刻丟 WORKTREE_BUSY', async () => {
     const { d } = wtDeps({ execFile: () => {} });
     const run = await start(d);
     await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 30, pollMs: 5 })).rejects.toThrow(/容器仍在/);
+    const t0 = Date.now();
+    await expect(sr.waitForWorktreeIdle(wt, { timeoutMs: 0, pollMs: 5000 })).rejects.toMatchObject({ code: 'WORKTREE_BUSY' });
+    expect(Date.now() - t0).toBeLessThan(1000);
     run.release();
   });
 

@@ -291,6 +291,63 @@ test('branch_pending：ai-dev 同步衝突 → 任務照常進 coding，但落�
   expect(logs.some(r => r.content.includes('idx_hj/models/a.py'))).toBe(true);
 });
 
+// 意圖（09-17 R14 L1）：等 respec 等容器結束最長近 50 分鐘。這段等待若在專案鎖裡，同專案的 merge／deploy／
+// rebuild 全部排隊、派工槽也被佔住——所以要在拿鎖之前等；鎖內才發現又忙（WORKTREE_BUSY）就離開鎖、原地下一輪再試。
+test('branch_pending：等容器結束時不持專案鎖；鎖內發現仍忙 → 狀態不動、不 stopped（下一輪再試）', async () => {
+  const sr = require('../pipeline/sandbox-run');
+  const { tryProjectLock } = require('../pipeline/project-lock');
+  const { ensureWorktreeAtMain } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P6','17.0','p6') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/p6/main',true,'done')", [proj.id]
+  );
+  const t = await insertTask('branch_pending', 'wt6', proj.id);
+  let release;
+  const spy = jest.spyOn(sr, 'waitForWorktreeIdle').mockImplementation(() => new Promise(r => { release = r; }));
+  try {
+    const p = runnerModule.runPipeline(userId);
+    for (let i = 0; i < 50 && !release; i++) await new Promise(r => setTimeout(r, 10));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining(path.join('.worktrees', 'task_odoo_wt6')));
+    const probe = await tryProjectLock(proj.id, async () => 'free');
+    expect(probe).toEqual({ locked: true, value: 'free' }); // 等待期間鎖是空的
+    expect(ensureWorktreeAtMain).not.toHaveBeenCalled();
+    release();
+    await p; await runnerModule.whenIdle();
+    const { rows } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t]);
+    expect(rows[0].status).toBe('coding_running');
+
+    spy.mockImplementation(async () => {});
+    const t2 = await insertTask('branch_pending', 'wt7', proj.id);
+    ensureWorktreeAtMain.mockRejectedValueOnce(Object.assign(new Error('掛著任務 worktree 的 AI 容器仍在執行（已等 0 秒）'), { code: 'WORKTREE_BUSY' }));
+    await run();
+    const { rows: r2 } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t2]);
+    expect(r2[0]).toEqual({ status: 'branch_pending', blocker_content: null });
+    expect(await tryProjectLock(proj.id, async () => 1)).toEqual({ locked: true, value: 1 }); // 鎖已放掉
+  } finally { spy.mockRestore(); }
+});
+
+test('branch_pending：鎖外等容器等到逾時 → stopped 附原因（不進鎖）', async () => {
+  const sr = require('../pipeline/sandbox-run');
+  const { ensureWorktreeAtMain } = require('../pipeline/git');
+  const { rows: [proj] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version, folder_name) VALUES ('P7','17.0','p7') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/p7/main',true,'done')", [proj.id]
+  );
+  const t = await insertTask('branch_pending', 'wt8', proj.id);
+  const spy = jest.spyOn(sr, 'waitForWorktreeIdle').mockRejectedValue(Object.assign(new Error('AI 容器仍在執行（已等 3000 秒）'), { code: 'WORKTREE_BUSY' }));
+  try {
+    await run();
+  } finally { spy.mockRestore(); }
+  expect(ensureWorktreeAtMain).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [t]);
+  expect(rows[0].status).toBe('stopped');
+  expect(rows[0].blocker_content).toContain('容器仍在執行');
+});
+
 test('branch_pending worktree 建立失敗 → 任務 stopped，原因寫進執行歷程', async () => {
   const { ensureWorktreeAtMain } = require('../pipeline/git');
   const { rows: [proj] } = await dbModule.query(

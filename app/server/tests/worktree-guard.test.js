@@ -140,6 +140,96 @@ test('分支名不合法 → 丟例外', async () => {
   await expect(reset({ branch: 'a\nb' })).rejects.toThrow(/分支/);
 });
 
+// ===== 09-17 R14：寫回幾個指標不夠——admin 目錄裡其他檔（ORIG_HEAD／MERGE_MSG…）與任務分支 ref 本身容器也寫得到 =====
+const taskRef = () => path.join(repo, '.git', 'refs', 'heads', 'task', 'T1');
+const commitInWt = (name) => { fs.writeFileSync(path.join(wt, name), name); git(wt, 'add', name); git(wt, 'commit', '-q', '-m', name); };
+const aiDevCommit = () => { git(repo, 'checkout', '-q', 'ai-dev'); fs.writeFileSync(path.join(repo, 'c'), '1'); git(repo, 'add', 'c'); git(repo, 'commit', '-q', '-m', 'ai'); git(repo, 'checkout', '-q', 'main'); };
+
+test('A1：任務分支 ref 被寫成 symref 指向 testing → 丟例外（不跟隨、不修），宿主不會替它移動 testing', async () => {
+  const testing = rev('testing');
+  fs.writeFileSync(taskRef(), 'ref: refs/heads/testing\n');
+  await expect(reset()).rejects.toMatchObject({ code: 'WORKTREE_TAMPERED', message: expect.stringMatching(/任務分支.*ref.*竄改/) });
+  expect(fs.readFileSync(taskRef(), 'utf8')).toBe('ref: refs/heads/testing\n'); // 不自動修
+  expect(rev('testing')).toBe(testing);
+});
+
+test('任務分支 ref 只接受 commit id（或不存在＝在 packed-refs）；目錄／symlink／垃圾內容一律丟例外', async () => {
+  await expect(reset()).resolves.toBe(admin); // loose sha
+  git(repo, 'pack-refs', '--all');
+  expect(fs.existsSync(taskRef())).toBe(false);
+  await expect(reset()).resolves.toBe(admin); // packed
+  const sha = rev('main');
+  for (const make of [
+    () => fs.writeFileSync(taskRef(), `${sha}\nref: refs/heads/testing\n`),
+    () => fs.writeFileSync(taskRef(), 'HEAD\n'),
+    () => fs.symlinkSync(path.join(repo, '.git', 'refs', 'heads', 'main'), taskRef()),
+    () => fs.mkdirSync(taskRef()),
+  ]) {
+    fs.rmSync(taskRef(), { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(taskRef()), { recursive: true }); // pack-refs 會把空的 task 目錄一起清掉
+    make();
+    await expect(reset()).rejects.toMatchObject({ code: 'WORKTREE_TAMPERED' });
+  }
+  fs.rmSync(taskRef(), { recursive: true, force: true });
+  const dir = path.join(repo, '.git', 'refs', 'heads', 'task');
+  fs.renameSync(dir, `${dir}-x`); fs.symlinkSync(`${dir}-x`, dir);
+  await expect(reset()).rejects.toMatchObject({ code: 'WORKTREE_TAMPERED' });
+});
+
+test('任務分支 reflog 目錄是 symlink → 丟例外；reflog 本身是目錄 → 移除', async () => {
+  const logs = path.join(repo, '.git', 'logs', 'refs', 'heads', 'task');
+  fs.rmSync(path.join(logs, 'T1')); fs.mkdirSync(path.join(logs, 'T1'));
+  await reset();
+  expect(fs.existsSync(path.join(logs, 'T1'))).toBe(false);
+  fs.renameSync(logs, `${logs}-x`); fs.symlinkSync(`${logs}-x`, logs);
+  await expect(reset()).rejects.toMatchObject({ code: 'WORKTREE_TAMPERED' });
+});
+
+test('A2：admin ORIG_HEAD 是指向 testing 的 symref → 清掉，宿主 merge／reset 不會把 testing 設成任務 HEAD', async () => {
+  commitInWt('b'); aiDevCommit();
+  const testing = rev('testing');
+  for (const op of [() => git(wt, 'merge', '--no-edit', 'ai-dev'), () => git(wt, 'reset', '-q', '--hard', 'main')]) {
+    fs.writeFileSync(path.join(admin, 'ORIG_HEAD'), 'ref: refs/heads/testing\n');
+    await reset();
+    op();
+    expect(rev('testing')).toBe(testing);
+  }
+});
+
+test('A3：admin MERGE_MSG 等被換成 symlink → 清掉，宿主非 ff merge 不會覆寫宿主上的檔', async () => {
+  commitInWt('b'); aiDevCommit();
+  const victim = path.join(R, 'victim-config'); fs.writeFileSync(victim, 'SECRET\n');
+  for (const n of ['MERGE_MSG', 'MERGE_HEAD', 'MERGE_MODE', 'COMMIT_EDITMSG', 'AUTO_MERGE', 'SQUASH_MSG']) { fs.rmSync(path.join(admin, n), { force: true }); fs.symlinkSync(victim, path.join(admin, n)); }
+  fs.mkdirSync(path.join(admin, 'rebase-merge'));
+  await reset();
+  expect(fs.readdirSync(admin).sort()).toEqual(['HEAD', 'commondir', 'gitdir', 'index']);
+  git(wt, 'merge', '--no-edit', 'ai-dev');
+  expect(fs.readFileSync(victim, 'utf8')).toBe('SECRET\n');
+  expect(git(wt, 'log', '-1', '--format=%s')).toMatch(/Merge branch 'ai-dev'/);
+});
+
+test('清空 admin 目錄時保留 index（一般檔）：已暫存的變更還在；index 是 symlink 就移除', async () => {
+  fs.writeFileSync(path.join(wt, 'staged'), 's'); git(wt, 'add', 'staged');
+  await reset();
+  expect(git(wt, 'diff', '--cached', '--name-only')).toBe('staged');
+  const victim = path.join(R, 'victim-index'); fs.writeFileSync(victim, 'keep');
+  fs.rmSync(path.join(admin, 'index')); fs.symlinkSync(victim, path.join(admin, 'index'));
+  await reset();
+  expect(fs.existsSync(path.join(admin, 'index'))).toBe(false);
+  expect(fs.readFileSync(victim, 'utf8')).toBe('keep');
+});
+
+test('預設的等待是「不阻塞」：容器還掛著就立刻丟 WORKTREE_BUSY（真正的等待由呼叫端在拿專案鎖之前做）', async () => {
+  const sr = require('../pipeline/sandbox-run');
+  const spy = jest.spyOn(sr, 'waitForWorktreeIdle').mockImplementation(async () => { throw Object.assign(new Error('忙'), { code: 'WORKTREE_BUSY' }); });
+  try {
+    fs.writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/testing\n');
+    await expect(resetTaskWorktreePointers({ repoPath: repo, worktreePath: wt, branch: 'task/T1' })).rejects.toMatchObject({ code: 'WORKTREE_BUSY' });
+    expect(spy).toHaveBeenCalledWith(wt, { timeoutMs: 0 });
+    expect(fs.readFileSync(path.join(admin, 'HEAD'), 'utf8')).toBe('ref: refs/heads/testing\n'); // 什麼都沒寫
+  } finally { spy.mockRestore(); }
+});
+
 // 靜態守衛：宿主以任務 worktree 為 cwd 跑 git 的每個函式，都要先寫回指標（呼叫點清單見 3.13 報告 Fix round 3）
 test('宿主在任務 worktree 跑 git 的函式，都先 await resetTaskWorktreePointers；tour 的 diff 改在主 clone 跑', () => {
   const src = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
@@ -162,6 +252,15 @@ test('宿主在任務 worktree 跑 git 的函式，都先 await resetTaskWorktre
     expect({ fn, guard: guard > -1, git: !!m }).toEqual({ fn, guard: true, git: true });
     expect(guard).toBeLessThan(m.index);
   }
+  // 重建路徑（ADMIN_MISSING／全新建立）的 worktree add -B 之前也要先驗任務分支 ref（R14）
+  const ens = body('pipeline/git.js', 'ensureWorktreeAtMain');
+  expect(ens.indexOf('assertTaskBranchRef(')).toBeGreaterThan(-1);
+  expect(ens.indexOf('assertTaskBranchRef(')).toBeLessThan(ens.indexOf("'worktree', 'remove'"));
+  expect(ens.indexOf('assertTaskBranchRef(')).toBeLessThan(ens.indexOf("'worktree', 'add'"));
+  // readHeads 不在專案鎖內：先阻塞等容器，再做不阻塞的寫回
+  const rh = body('pipeline/task-agent.js', 'readHeads');
+  expect(rh.indexOf('waitForWorktreeIdle(')).toBeGreaterThan(-1);
+  expect(rh.indexOf('waitForWorktreeIdle(')).toBeLessThan(rh.indexOf('resetTaskWorktreePointers('));
   const tour = body('pipeline/playwright-agent.js', 'tourTestClasses');
   expect(tour).toMatch(/diffNameOnly\(repo\.local_path,/);
   // 不再有「讀 .git 檔來驗」的舊做法殘留

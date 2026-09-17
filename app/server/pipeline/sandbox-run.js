@@ -32,12 +32,13 @@ function worktreeBusy(target) {
   }
   return false;
 }
+// timeoutMs=0＝不阻塞的檢查（專案鎖內用；忙就丟 WORKTREE_BUSY，由呼叫端離開鎖下一輪再試，09-17 R14）
 async function waitForWorktreeIdle(worktreePath, { timeoutMs = WORKTREE_WAIT_MS, pollMs = 1000 } = {}) {
   const target = realOrResolve(worktreePath);
   const deadline = Date.now() + timeoutMs;
   while (worktreeBusy(target)) {
     if (Date.now() >= deadline) {
-      throw new Error(`掛著任務 worktree 的 AI 容器仍在執行（已等 ${Math.round(timeoutMs / 1000)} 秒），暫不對它執行 git：${worktreePath}`);
+      throw Object.assign(new Error(`掛著任務 worktree 的 AI 容器仍在執行（已等 ${Math.round(timeoutMs / 1000)} 秒），暫不對它執行 git：${worktreePath}`), { code: 'WORKTREE_BUSY' });
     }
     await new Promise(r => setTimeout(r, pollMs));
   }

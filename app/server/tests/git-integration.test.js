@@ -223,6 +223,28 @@ test('ensureWorktreeAtMain（沿用路徑）：commondir 指到假 repo（config
   expect(fs.readFileSync(path.join(wt, 'a.py'), 'utf8')).toBe('x = 1\n');
 }, 30000);
 
+// 意圖（09-17 R14）：refs/heads/task/ 容器可寫。任務分支 ref 被寫成指向 testing 的 symref，宿主的
+// merge／reset，甚至「admin 不見了→重建」路徑的 worktree add -B，都會經由它移動 testing。一律先驗、丟例外。
+test('ensureWorktreeAtMain／syncBranchWithAi：任務分支 ref 是指向 testing 的 symref → 丟例外，testing 不動（含偽造 admin 不見的重建路徑）', async () => {
+  const repo = await makeRepo();
+  await sh(repo, 'branch', 'testing');
+  await sh(repo, 'branch', 'ai-dev');
+  const wt = path.join(base, 'wt-symref', 'repo');
+  await git.ensureWorktreeAtMain(repo, wt, 'task/t22', 'main', true);
+  await write(wt, 'b.py', 'y = 2\n'); await sh(wt, 'add', '-A'); await sh(wt, 'commit', '-m', 'ai work');
+  const testingBefore = (await sh(repo, 'rev-parse', 'testing')).stdout.trim();
+  fs.writeFileSync(path.join(repo, '.git', 'refs', 'heads', 'task', 't22'), 'ref: refs/heads/testing\n');
+  for (const reset of [true, false]) {
+    await expect(git.ensureWorktreeAtMain(repo, wt, 'task/t22', 'main', reset)).rejects.toThrow(/任務分支.*竄改/);
+  }
+  await expect(git.syncBranchWithAi(wt, undefined, { repoPath: repo, branch: 'task/t22' })).rejects.toThrow(/任務分支.*竄改/);
+  // 偽造「admin 不見了」：改 admin 的 gitdir，讓主 clone 認不出這個 worktree → 走重建（worktree add -B）
+  fs.writeFileSync(path.join(repo, '.git', 'worktrees', 'repo', 'gitdir'), `${path.join(base, 'elsewhere', '.git')}\n`);
+  await expect(git.ensureWorktreeAtMain(repo, wt, 'task/t22', 'main', true)).rejects.toThrow(/任務分支.*竄改/);
+  expect((await sh(repo, 'rev-parse', 'testing')).stdout.trim()).toBe(testingBefore);
+  expect(fs.readFileSync(path.join(wt, 'b.py'), 'utf8')).toBe('y = 2\n'); // 驗在刪 worktree 之前
+}, 30000);
+
 test('syncBranchWithAi：沒帶 repoPath／branch → 丟例外（不准略過驗證）', async () => {
   await expect(git.syncBranchWithAi('/nope')).rejects.toThrow(/repoPath/);
 });
