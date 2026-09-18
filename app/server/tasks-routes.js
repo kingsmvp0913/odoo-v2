@@ -13,6 +13,7 @@ const { invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles } = require('./lib/attachments');
 const { loadTaskForActor } = require('./lib/task-access');
+const { loadProjectForActor } = require('./lib/tenant-access');
 const { isMaintenance } = require('./pipeline/maintenance');
 
 // multer 設定已移到 lib/attachments 當單一來源：新增任務／留言／人工退回三個入口共用同一組限制，
@@ -260,6 +261,12 @@ function registerRoutes(app) {
       const { title, original_text, project_id, chat_id } = req.body || {};
       if (!title || !String(title).trim()) {
         return res.status(400).json({ error: '請填寫標題' });
+      }
+      // 帶別家專案 id 建出來的任務，本人之後也讀不到（loadTaskForActor 會因為公司對不上而擋），
+      // 變成一張誰都打不開、pipeline 卻照樣派 AI 去跑的殭屍任務。所以在建立當下就擋。
+      // project_id 可以不帶——非專案任務是合法的，只有帶了才驗。
+      if (project_id && !await loadProjectForActor(project_id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
       }
       const taskId = `manual_${Date.now()}`;
       const { rows } = await query(

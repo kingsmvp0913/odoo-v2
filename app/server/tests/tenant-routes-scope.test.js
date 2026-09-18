@@ -216,3 +216,43 @@ describe('資料庫查詢頁（規格 §2：對客戶完全關閉）', () => {
     expect((await request(app).get(`/api/projects/${pA}/db-connections`).set(as(adminToken))).status).toBe(200);
   });
 });
+
+describe('搜尋', () => {
+  test('專案搜尋只回自己公司綁的（打一個字就列出所有客戶的專案名是最廉價的外洩）', async () => {
+    const res = await request(app).get('/api/search?q=專案').set(as(aToken));
+    expect(res.status).toBe(200);
+    const names = (res.body.projects || []).map(p => p.name);
+    expect(names).toContain('甲的專案');
+    expect(names).not.toContain('乙的專案');
+  });
+
+  test('平台管理員搜得到全部', async () => {
+    const res = await request(app).get('/api/search?q=專案').set(as(adminToken));
+    const names = (res.body.projects || []).map(p => p.name);
+    expect(names).toEqual(expect.arrayContaining(['甲的專案', '乙的專案']));
+  });
+});
+
+describe('建立任務', () => {
+  test('把任務建在別家的專案底下 → 404（否則會產生一張誰都打不開、AI 卻照跑的殭屍任務）', async () => {
+    const res = await request(app).post('/api/tasks').set(as(aToken))
+      .send({ title: '偷建的', original_text: 'x', project_id: pB });
+    expect(res.status).toBe(404);
+  });
+
+  test('建在自己公司的專案底下照常成功，而且本人打得開', async () => {
+    // 建立成功的實際狀態碼是 201（既有行為，tasks-routes.js 該 handler 最後一行 res.status(201)），
+    // 不是 brief 原文的 200——修正 brief 本身的筆誤，與這支任務要驗的「範圍檢查」本身無關
+    // （同一份 brief 系列在「對話」describe 已有前例：task-3-report.md 的 concerns）。
+    const created = await request(app).post('/api/tasks').set(as(aToken))
+      .send({ title: '正常的', original_text: 'x', project_id: pA });
+    expect(created.status).toBe(201);
+    const opened = await request(app).get(`/api/tasks/${created.body.id}`).set(as(aToken));
+    expect(opened.status).toBe(200);
+  });
+
+  test('不帶 project_id 的任務照常可以建（非專案任務是合法的）', async () => {
+    const res = await request(app).post('/api/tasks').set(as(aToken)).send({ title: '沒有專案', original_text: 'x' });
+    expect(res.status).toBe(201);
+  });
+});

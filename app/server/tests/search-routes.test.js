@@ -59,6 +59,16 @@ beforeAll(async () => {
   );
   projectId = proj.id;
 
+  // 專案搜尋現在依 project_companies 綁定範圍（tenant-access.js canSeeProject 同一套邊界）：
+  // searcher 是一般使用者、沒有公司或專案沒綁公司都會查不到任何列，「搜得到名稱與說明」那支
+  // 就測不到它原本要驗的東西了。這裡補一家公司、把專案綁上去，再把 searcher 掛進同一家公司，
+  // 純粹是為了讓查詢過得了範圍檢查，不影響它要驗的比對邏輯。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active, is_internal) VALUES ('搜尋測試公司', true, false) RETURNING id"
+  );
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, co.id]);
+  await dbModule.query('UPDATE users SET company_id = $1 WHERE id = $2', [co.id, userId]);
+
   await makeTask(userId, 'T-1', '銷售訂單加折扣欄位', '希望在報價單上多一個折扣百分比');
   await makeTask(userId, 'T-2', '維修工單列印', '列印時要帶出保固到期日');
   await makeTask(otherUserId, 'T-9', '別人的折扣任務', '不該被看到');
