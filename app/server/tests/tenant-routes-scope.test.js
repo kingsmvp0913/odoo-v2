@@ -10,6 +10,16 @@ const request = require('supertest');
 const { newDb } = require('pg-mem');
 const bcrypt = require('bcryptjs');
 
+// 「建立任務」那組會真的打 POST /api/tasks，route 結尾有 runPipeline(req.userId).catch(...)
+// 這行刻意 fire-and-forget（不 await）。測試結束、pg-mem pool 被拆掉後這個背景派工才輪到執行，
+// 沒接真的 DATABASE_URL 會炸「no PostgreSQL user name specified」，雖被 .catch 吞掉不影響斷言，
+// 但未完成的 async 工作會讓 jest 行程 exit code 卡在 1（全綠仍非 0）。
+// 比照 tasks-routes.test.js 既有寫法：只 mock runPipeline，其餘 runner 匯出照實，讓派工不再真的起跑。
+jest.mock('../pipeline/runner', () => ({
+  ...jest.requireActual('../pipeline/runner'),
+  runPipeline: jest.fn().mockResolvedValue({ dispatched: 0 })
+}));
+
 process.env.JWT_SECRET = 'test-scope-jwt';
 process.env.APP_SECRET = 'test-scope-secret';
 
