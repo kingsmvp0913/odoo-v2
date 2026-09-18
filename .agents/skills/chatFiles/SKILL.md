@@ -82,18 +82,20 @@ doc.build([Paragraph('中文內容', style), Table([['欄1', '欄2']], style=[('
 ```python
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans TC', 'DejaVu Sans']  # 不要加 AR PL UMing：matplotlib 用它畫會整片沒字
+# 字型名要跟 matplotlib 實際註冊到的一字不差，對不上會靜默退回 DejaVu、中文全變空白（.ttc 只認得到第一個 face，
+# 所以 Noto CJK 在容器裡叫 JP 而不是 TC）。實測容器內這兩個名字都畫得出中文。
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'AR PL UMing CN', 'Noto Sans CJK TC', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 fig, ax = plt.subplots(figsize=(8, 4.5)); ax.bar(labels, values); ax.set_title('月營收')
 fig.tight_layout(); fig.savefig(f'{outbox}/月營收.png', dpi=150)
 ```
-中文若變方框，代表字型沒找到——照實告訴使用者，不要交一張看不懂的圖。
+中文若變方框或空白，代表字型名沒對上——用 `matplotlib.font_manager` 列出 `fontManager.ttflist` 的 `name` 看實際有哪些，別硬交一張看不懂的圖。
 
 ## 數字
 金額、數量要四捨五入時用 `Decimal` + `ROUND_HALF_UP`，**不要用 `round()`**（銀行家捨入，30.5 會變 30）。
 
 ## 改前幾輪做過的檔
-- 前幾輪的檔在 `<出貨箱>/msg_<數字>/` 裡（磁碟檔名前面多了序號），**只能讀、不能改**。
+- 前幾輪的檔在**出貨箱的上一層** `<出貨箱>/../msg_<數字>/` 裡（磁碟檔名前面多了序號）。那一層是唯讀的，寫不進去是正常的。
 - 讀進來修改後，**另存新檔到出貨箱這一層**，新按鈕會出現在這一輪的回覆；舊按鈕保持舊版，不會被蓋掉。
 
 ## 交出去之前

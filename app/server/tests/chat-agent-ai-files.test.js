@@ -39,7 +39,7 @@ const contentUpdates = () => calls.filter(c => /UPDATE project_chat_messages SET
 
 beforeEach(() => {
   chatId = String(++chatSeq);
-  outbox = path.join(tmpRoot, `chat_${chatId}`, 'ai');
+  outbox = path.join(tmpRoot, `chat_${chatId}`, 'ai', 'outbox');
   calls = [];
   mockRunClaude.mockReset();
   mockQuery.mockReset();
@@ -103,7 +103,7 @@ test('上一輪殘留在出貨箱 → 不會掛到這一輪', async () => {
   mockRunClaude.mockResolvedValueOnce({ text: '好', usage: {}, durationMs: 1 });
   await chatReply('1', chatId, '新問題', 99);
   expect(attachInserts()).toHaveLength(0);
-  expect(fs.readdirSync(outbox).some(n => n.startsWith('_stale_'))).toBe(true);
+  expect(fs.readdirSync(path.dirname(outbox)).some(n => n.startsWith('_stale_'))).toBe(true);
 });
 
 test('收貨整個炸掉 → 回覆照樣送出，並寫明檔案附加失敗', async () => {
