@@ -74,7 +74,7 @@ test('AI 這輪做的檔掛到這一輪的 AI 訊息，不是使用者訊息', a
     put('明細.csv', '品名,數量\n螺絲,3\n');
     return { text: '已做好明細表。', usage: {}, durationMs: 1 };
   });
-  const reply = await chatReply('1', chatId, '做個明細', 99);
+  const { reply } = await chatReply('1', chatId, '做個明細', 99);
 
   expect(reply).toBe('已做好明細表。');
   const [ins] = attachInserts();
@@ -89,7 +89,7 @@ test('有沒附上的檔 → DB 那則與回傳給前端的回覆都帶 ⚠ 與�
     put('報表.xlsx', '其實是文字');
     return { text: '附上報表。', usage: {}, durationMs: 1 };
   });
-  const reply = await chatReply('1', chatId, '做報表', 99);
+  const { reply } = await chatReply('1', chatId, '做報表', 99);
 
   expect(reply).toContain('附上報表。');
   expect(reply).toContain('⚠ 以下檔案沒有附上');
@@ -112,7 +112,7 @@ test('收貨整個炸掉 → 回覆照樣送出，並寫明檔案附加失敗', 
   fs.writeFileSync(outbox, 'not a dir');
   mockRunClaude.mockResolvedValueOnce({ text: '回覆本文', usage: {}, durationMs: 1 });
 
-  const reply = await chatReply('1', chatId, '問題', 99);
+  const { reply } = await chatReply('1', chatId, '問題', 99);
 
   expect(reply).toContain('回覆本文');
   expect(reply).toContain('檔案附加失敗');

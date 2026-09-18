@@ -4,6 +4,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
 const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
 const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
+const { extractTaskDraftBlock } = require('./chat-to-task');
 const { query } = require('../db');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const path = require('path');
@@ -205,9 +206,11 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
     // 兩個選用側通道，剝掉再顯示、內容各自旁路處理，解析或寫入失敗都不得影響對話回覆本身（Rule 12）：
     //  <memory>    釐清出可留存的結論 → 寫回 wiki 疑難排解區
     //  <wiki-drift> 讀碼發現某 wiki 頁與程式碼矛盾（頁錯、碼對）→ 入漂移佇列供健檢彙整（不自動改文件）
+    //  <open-task>  使用者要求開任務 → 草稿隨本輪回應交給前端，由它把建立任務視窗打開（不建任務）
     const mem = extractMemoryBlock(chatResult.text);
     const drift = extractDriftBlock(mem.cleaned);
-    const reply = drift.cleaned || '（無回覆）';
+    const task = extractTaskDraftBlock(drift.cleaned);
+    const reply = task.cleaned || '（無回覆）';
     if (mem.entry) {
       try { await recordTroubleshooting(projectId, mem.entry); }
       catch (err) { console.error(`[CHAT-AGENT] troubleshooting 寫回失敗 chat ${chatId}:`, err.message); }
@@ -225,10 +228,10 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
     const filesNote = await attachAiFiles(chatId, aiRow && aiRow.id);
     if (filesNote) {
       await query('UPDATE project_chat_messages SET content = $2 WHERE id = $1', [aiRow.id, reply + filesNote]);
-      return reply + filesNote;
+      return { reply: reply + filesNote, taskDraft: task.draft };
     }
 
-    return reply;
+    return { reply, taskDraft: task.draft };
   } finally {
     await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [chatId]);
   }
