@@ -791,6 +791,34 @@ async function migrate() {
       last_failed_at TIMESTAMPTZ,
       PRIMARY KEY (username, source)
     )`,
+
+    `CREATE TABLE IF NOT EXISTS companies (
+      id           SERIAL PRIMARY KEY,
+      name         TEXT UNIQUE NOT NULL,
+      -- 預設安全值：新公司一律停用，只有平台管理員的建立／啟用端點寫 true（rules/db-schema 43）
+      is_active    BOOLEAN NOT NULL DEFAULT false,
+      -- 內部公司記號，只管「AI 用平台的訂閱付錢」，不管看得到哪些專案。
+      -- 唯一寫 true 的路徑是 tools/migrate-tenants.js；任何 API 都不可設定——
+      -- 客戶公司被誤標成內部，就會用平台的訂閱跑客戶的 AI，違反 Anthropic 條款。
+      is_internal  BOOLEAN NOT NULL DEFAULT false,
+      active_from  TIMESTAMPTZ,
+      active_until TIMESTAMPTZ,
+      git_pat_enc  TEXT,
+      git_login    TEXT,
+      git_name     TEXT,
+      git_email    TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS project_companies (
+      -- CASCADE 是必要的：不帶會讓「刪專案」被外鍵擋死（記憶 spec-trio-executed）。
+      -- 公司那一側刻意不帶 CASCADE——公司不刪只停用，誤刪公司不該連帶清掉綁定。
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      company_id  INTEGER NOT NULL REFERENCES companies(id),
+      can_release BOOLEAN NOT NULL DEFAULT false,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (project_id, company_id)
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
@@ -1208,7 +1236,11 @@ async function migrate() {
     // 整包掛到需求那一則（ts 固定是 task.created_at），結果是「不管什麼時候上傳的圖都排在最前面」。
     // message_id 指向的是 task_messages（外部溝通紀錄），與 task_logs 是兩張表，不能共用。
     // 舊列為 NULL＝維持原本掛在需求那一則的行為，不回填（推不出當初對應哪一則）。
-    { table: 'task_attachments', col: 'log_id', sql: 'ALTER TABLE task_attachments ADD COLUMN log_id INTEGER REFERENCES task_logs(id)' }
+    { table: 'task_attachments', col: 'log_id', sql: 'ALTER TABLE task_attachments ADD COLUMN log_id INTEGER REFERENCES task_logs(id)' },
+    // 租戶隔離（規格 §4.2）：NULL 只允許平台管理員；company_admin／user 一律有值。
+    // 約束由 lib/tenant-access.js 的 validateRoleCompany 在寫入端把關，不放 CHECK——
+    // 遷移跑完之前既有 6 個 user 還是 NULL，DB 層 CHECK 會讓 migrate 直接失敗。
+    { table: 'users', col: 'company_id', sql: 'ALTER TABLE users ADD COLUMN company_id INTEGER REFERENCES companies(id)' },
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
@@ -1492,6 +1524,13 @@ async function migrate() {
                ON embedding_chunks (wiki_page_id, chunk_index) WHERE wiki_page_id IS NOT NULL`).catch(() => {});
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS embedding_chunks_task_uq
                ON embedding_chunks (task_id, chunk_index) WHERE task_id IS NOT NULL`).catch(() => {});
+
+  // 內部公司全平台只能有一筆：誤標第二筆＝客戶公司用平台訂閱跑 AI（違反 Anthropic 條款）
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS companies_internal_idx ON companies (is_internal) WHERE is_internal = true').catch(() => {});
+  // 「這家公司看得到哪些專案」與「這個專案給哪幾家看」兩個方向都會查
+  await query('CREATE INDEX IF NOT EXISTS idx_pc_company ON project_companies (company_id)').catch(() => {});
+  // verifyToken 每個請求都要 JOIN companies，users.company_id 一定要有索引
+  await query('CREATE INDEX IF NOT EXISTS idx_users_company ON users (company_id)').catch(() => {});
 
   // One-time data migration: copy URL+DB from first admin user's odoo_settings into teams_settings
   try {
