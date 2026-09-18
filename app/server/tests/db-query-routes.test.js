@@ -165,7 +165,7 @@ test('/test 端點：改了 db_host 但密碼留空 → 不沿用已存密碼（
   expect(mockRunSelect.mock.calls.at(-1)[0].db_password).toBe('');
 });
 
-test('/test 端點：一般使用者也能測（不再限管理員），但未登入仍 401', async () => {
+test('/test 端點：平台管理員可測，但未登入仍 401', async () => {
   const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`)
     .set({ Authorization: `Bearer ${token}` }).send({ connect_mode: 'direct', db_host: 'h', db_user: 'u', db_password: 'p', db_name: 'd' });
   expect(res.status).toBe(200);
@@ -273,9 +273,9 @@ describe('專案層 VPN 設定', () => {
     expect(res.body).toEqual({ has_config: true, vpn_username: 'new' });
   });
 
-  // 連線管理開放給所有登入者後，VPN 設定必須一起開：只開連線、不開 VPN，一般使用者建得了
-  // 需要 VPN 的連線卻設不了隧道憑證，等於留一個永遠連不上的半殘設定。
-  test('一般使用者可讀也可寫（未登入仍擋）', async () => {
+  // VPN 設定與連線管理是同一組平台管理員限定端點（規格 §2），這裡驗平台管理員可讀可寫，
+  // 未登入仍擋。一般使用者的 403 由 tenant-routes-scope.test.js 釘住。
+  test('平台管理員可讀也可寫（未登入仍擋）', async () => {
     const userAuth = { Authorization: `Bearer ${token}` };
     expect((await request(app).get(`/api/projects/${projectId}/vpn`).set(userAuth)).status).toBe(200);
     expect((await request(app).put(`/api/projects/${projectId}/vpn`).set(userAuth).send({ vpn_username: 'x' })).status).toBe(200);

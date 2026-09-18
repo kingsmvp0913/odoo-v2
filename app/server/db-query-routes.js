@@ -194,7 +194,9 @@ function registerRoutes(app) {
   });
 
   // 專案層 VPN 設定：一個專案（＝一個客戶站點）一組憑證，該專案所有連線共用一條隧道。
-  // GET 只回「有沒有設定」與帳號，不含設定檔與密碼，故比照連線列表開放給一般使用者。
+  // 這支只回「有沒有設定」與帳號、不含設定檔與密碼，看起來像可以放寬，但資料庫查詢頁
+  // 整組功能對客戶關閉（規格 §2／§5.3），「回傳內容夠不夠敏感」不是這裡的判準——
+  // 平台管理員限定，比照本檔其餘所有 /api/* 端點。
   app.get('/api/projects/:id/vpn', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [p] } = await query('SELECT vpn_config_enc, vpn_username FROM projects WHERE id=$1', [req.params.id]);
