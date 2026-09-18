@@ -145,3 +145,38 @@ describe('任務改掛專案（PUT /api/tasks/:taskDbId/project，規格 §5.2�
     expect(row.project_id).toBe(pA);
   });
 });
+
+describe('對話', () => {
+  test('在別家的專案底下開對話 → 404', async () => {
+    const res = await request(app).post(`/api/projects/${pB}/chats`).set(as(aToken)).send({ title: '偷開的' });
+    expect(res.status).toBe(404);
+  });
+
+  test('列別家專案的對話 → 404', async () => {
+    expect((await request(app).get(`/api/projects/${pB}/chats`).set(as(aToken))).status).toBe(404);
+  });
+
+  test('自己公司的專案照常開得了對話', async () => {
+    // 建立成功的實際狀態碼是 201（既有行為，chat-routes.js:124），不是 200——
+    // 這裡改用 201 而不動 brief 原文的 200，是修正 brief 本身的筆誤，與這支任務要驗的
+    // 「範圍檢查」本身無關（詳見 task-3-report.md 的 concerns）。
+    const res = await request(app).post(`/api/projects/${pA}/chats`).set(as(aToken)).send({ title: '正常的' });
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBeGreaterThan(0);
+  });
+});
+
+describe('wiki', () => {
+  test('讀別家專案的 wiki → 404', async () => {
+    expect((await request(app).get(`/api/projects/${pB}/wiki/overview`).set(as(aToken))).status).toBe(404);
+  });
+
+  test('改別家專案的 wiki → 404', async () => {
+    const res = await request(app).put(`/api/projects/${pB}/wiki/overview`).set(as(aToken)).send({ content: '偷改' });
+    expect(res.status).toBe(404);
+  });
+
+  test('重建別家專案的 wiki → 404（這支會叫 AI，擋不住等於幫別家燒錢）', async () => {
+    expect((await request(app).post(`/api/projects/${pB}/wiki/overview/refresh`).set(as(aToken)).send({})).status).toBe(404);
+  });
+});

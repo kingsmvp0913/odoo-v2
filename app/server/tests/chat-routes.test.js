@@ -29,8 +29,12 @@ beforeAll(async () => {
 
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass', 4);
+  // role='admin'：Task 3 在每支對話端點前面加了 loadProjectForActor 範圍檢查，一般使用者
+  // 必須綁公司、專案必須綁同一家公司才看得到（見 tenant-access.js canSeeProject）。這支測的是
+  // 「對話是不是本人的」（getOwnedChat），不是多租戶範圍，所以用平台管理員身分繞過範圍檢查——
+  // isPlatformAdmin 一律看得到，不影響下面每一支以 user_id 為準的歸屬斷言。
   const { rows: [user] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('chatuser', $1, 'Chat') RETURNING id",
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('chatuser', $1, 'Chat', 'admin') RETURNING id",
     [hash]
   );
   userId = user.id;
