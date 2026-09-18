@@ -15,9 +15,13 @@ description: Use when reading Odoo application logs from a customer's production
 > 在 repo 根目錄執行一次即可：
 >
 > ```bash
-> export AIDEV_AI_TOKEN=$(node -e "process.env.APP_SECRET=require('./data/config.json').APP_SECRET;console.log(require('./app/server/lib/ai-token').aiToken())")
-> export AIDEV_AI_BASE=$(node -e "console.log('http://localhost:'+(require('./data/config.json').PORT||3939))")
+> [ -n "$AIDEV_AI_TOKEN" ] || export AIDEV_AI_TOKEN=$(node -e "process.env.APP_SECRET=require('./data/config.json').APP_SECRET;console.log(require('./app/server/lib/ai-token').aiToken())")
+> [ -n "$AIDEV_AI_BASE" ] || export AIDEV_AI_BASE=$(node -e "console.log('http://localhost:'+(require('./data/config.json').PORT||3939))")
 > ```
+>
+> **兩個變數已經有值就原樣用，一個字都不要改。** 容器裡的 agent 由平台注入閘道位址與每次執行
+> 通行證；覆蓋成 `localhost:<PORT>` 在容器內沒有任何行程在聽，全域通行碼 socket 那側也一律不認。
+> 症狀是「平台服務沒起來」，但平台其實好好的——覆蓋掉的是唯一那條通得到的路。
 
 ## 流程
 
