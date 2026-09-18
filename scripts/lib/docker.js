@@ -1,8 +1,13 @@
 // scripts/lib/docker.js
 const { execFileSync: realExecFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
+// tag 規則跟執行期同一份：兩邊各寫一次，升版時對不上就是「映像不存在」，而那只會在下一次 AI 呼叫才爆
+const { agentImageTag } = require('../../app/server/lib/agent-infra');
 
 const IMAGE_NAME = 'odoo-v2-vpn-gateway:latest';
+const AGENT_DIR = path.resolve(__dirname, '..', '..', 'docker', 'agent');
+const CONTEXT7_PKG = path.resolve(__dirname, '..', '..', 'app', 'node_modules', '@upstash', 'context7-mcp', 'package.json');
 
 function verifyDocker(deps = {}) {
   const execFileSync = deps.execFileSync || realExecFileSync;
@@ -31,4 +36,27 @@ function ensureGatewayImage(deps = {}) {
   return { built: true };
 }
 
-module.exports = { verifyDocker, ensureGatewayImage };
+// AI 沙盒映像。tag 綁 claude 版本，而 claude 是 npm i -g 裝 latest（scripts/lib/claude-env.js）——
+// 升一次版舊 tag 就再也不會被用到，執行期只丟「映像不存在」然後每一次 AI 呼叫都失敗。
+// 所以安裝與每次重跑 setup 都要來這裡確認一次；已存在就跳過，不存在才建（第一次要抓數百 MB）。
+// 得排在 npm install 與 claude 安裝之後：兩個 build-arg 分別來自 node_modules 與 claude --version。
+function ensureAgentImage(deps = {}) {
+  const execFileSync = deps.execFileSync || realExecFileSync;
+  const readFileSync = deps.readFileSync || fs.readFileSync;
+  const dockerfileDir = deps.dockerfileDir || AGENT_DIR;
+  const versionOut = execFileSync('claude', ['--version'], { encoding: 'utf8' });
+  const claudeVersion = (String(versionOut).match(/\d+\.\d+\.\d+/) || [])[0];
+  if (!claudeVersion) throw new Error(`讀不到 claude 版本：${versionOut}`);
+  const image = agentImageTag(claudeVersion);
+  if (execFileSync('docker', ['images', '-q', image], { encoding: 'utf8' }).trim()) return { built: false, image };
+  const context7Version = JSON.parse(readFileSync(deps.context7Pkg || CONTEXT7_PKG, 'utf8')).version;
+  execFileSync('docker', [
+    'build', '-f', path.join(dockerfileDir, 'Dockerfile'),
+    '--build-arg', `CLAUDE_CODE_VERSION=${claudeVersion}`,
+    '--build-arg', `CONTEXT7_MCP_VERSION=${context7Version}`,
+    '-t', image, dockerfileDir,
+  ], { stdio: 'inherit' });
+  return { built: true, image };
+}
+
+module.exports = { verifyDocker, ensureGatewayImage, ensureAgentImage };

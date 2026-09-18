@@ -63,3 +63,32 @@ test('teams_settings 不再有 auto_deploy_enabled', async () => {
   );
   expect(rows).toHaveLength(0);
 });
+
+// 意圖（Rule 9）：systemd 目標的 odoo 執行檔路徑。NULL＝退回裸名 odoo-bin（既有行為不變），
+// 有值才走完整路徑。欄位不存在的話探測抓到了也存不下來，慈雲那台的部署會一直
+// `sudo: odoo-bin: command not found`。
+test('odoo_bin 欄位存在，預設 NULL', async () => {
+  // 上一支測試把 project 1 連同 target 一起刪了，這裡自己建一個專案
+  const { rows: [p] } = await dbModule.query(
+    "INSERT INTO projects (name, odoo_version) VALUES ('慈雲', '19.0') RETURNING id"
+  );
+  await dbModule.query(
+    `INSERT INTO project_deploy_targets
+       (project_id, env, runtime, service_name, addons_dir, conf_path, db_name, branch)
+     VALUES ($1, 'test', 'systemd', 'odoo-test', '/odoo/custom/addons_test',
+             '/etc/odoo-test.conf', 'production_test', 'ai-dev')`, [p.id]
+  );
+  const { rows } = await dbModule.query(
+    "SELECT odoo_bin FROM project_deploy_targets WHERE runtime = 'systemd'"
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0].odoo_bin).toBeNull();
+
+  await dbModule.query(
+    "UPDATE project_deploy_targets SET odoo_bin = '/odoo/odoo-server/odoo-bin' WHERE runtime = 'systemd'"
+  );
+  const { rows: after } = await dbModule.query(
+    "SELECT odoo_bin FROM project_deploy_targets WHERE runtime = 'systemd'"
+  );
+  expect(after[0].odoo_bin).toBe('/odoo/odoo-server/odoo-bin');
+});

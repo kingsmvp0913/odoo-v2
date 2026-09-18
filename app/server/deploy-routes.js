@@ -20,11 +20,12 @@ async function requireAdmin(req, res, next) {
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
 const { runProbe } = require('./lib/deploy-probe');
+const { validatePath } = require('./lib/ssh-exec');
 const { withProjectLock } = require('./pipeline/project-lock');
 
 const TARGET_COLS = `id, project_id, repo_id, env, conn_id, runtime, compose_dir, compose_service,
        service_name, container_name, addons_dir, conf_path, db_name, http_port,
-       modules, branch, sudo_mode, enabled, last_deployed_sha, last_probe_at`;
+       modules, branch, sudo_mode, enabled, last_deployed_sha, last_probe_at, odoo_bin`;
 
 // 外鍵歸屬檢查。此 repo 沒有 project_members 表、專案端點多半只驗 token，
 // 所以「這個 id 屬不屬於這個專案」一定要端點自己驗——漏掉就能幫 A 專案建一個指向
@@ -97,13 +98,19 @@ function registerRoutes(app) {
       // repo_id 是部署的碼從哪來。少了它 deploy-run 的 headSha 第一步就拋
       // 「這個部署目標沒有對應的 repo」——目標存得下去、按部署必定失敗。
       if (!b.repo_id) return res.status(400).json({ error: '缺少 repo_id（要從哪個 repo 拿碼部署）' });
+      // 這一欄會原封不動進客戶正式機的 shell，存進來之前就要擋掉——等到部署當下才由
+      // buildUpgradeCmd 拋，使用者看到的會是一次失敗的部署而不是一則存檔錯誤。
+      const odooBin = String(b.odoo_bin || '').trim();
+      if (odooBin && !validatePath(odooBin)) {
+        return res.status(400).json({ error: 'odoo 執行檔要填絕對路徑（例：/odoo/odoo-server/odoo-bin）' });
+      }
       const branch = await resolveBranch(b.repo_id, b.env);
       const { rows } = await query(
         `INSERT INTO project_deploy_targets
            (project_id, repo_id, env, conn_id, runtime, compose_dir, compose_service, service_name,
             container_name, addons_dir, conf_path, db_name, http_port, modules, branch, sudo_mode,
-            enabled, last_probe_at, probe_json)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18)
+            enabled, last_probe_at, probe_json, odoo_bin)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19)
          RETURNING id`,
         [req.params.id, b.repo_id || null, b.env, b.conn_id || null, b.runtime,
          b.compose_dir || null, b.compose_service || null, b.service_name || null,
@@ -111,7 +118,7 @@ function registerRoutes(app) {
          b.http_port || null, Array.isArray(b.modules) ? b.modules : [], branch,
          b.sudo_mode || 'none',
          // 新建一律不自動啟用，要人再按一次——這個功能會動客戶的機器
-         b.enabled === true, b.probe_json || null]
+         b.enabled === true, b.probe_json || null, odooBin || null]
       );
       res.json({ ok: true, id: rows[0].id, branch });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -161,11 +168,15 @@ function registerRoutes(app) {
         conf_path: 'conf_path' in b ? (String(b.conf_path || '').trim() || null) : cur.conf_path,
         db_name: 'db_name' in b ? String(b.db_name || '').trim() : cur.db_name,
         http_port: 'http_port' in b ? (b.http_port || null) : cur.http_port,
+        odoo_bin: 'odoo_bin' in b ? (String(b.odoo_bin || '').trim() || null) : cur.odoo_bin,
         modules: Array.isArray(b.modules) ? b.modules : cur.modules,
         enabled: typeof b.enabled === 'boolean' ? b.enabled : cur.enabled,
       };
       if (!next.addons_dir || !next.db_name) return res.status(400).json({ error: '缺少必填欄位（addons_dir／db_name）' });
       if (!next.repo_id) return res.status(400).json({ error: '缺少 repo_id（要從哪個 repo 拿碼部署）' });
+      if (next.odoo_bin && !validatePath(next.odoo_bin)) {
+        return res.status(400).json({ error: 'odoo 執行檔要填絕對路徑（例：/odoo/odoo-server/odoo-bin）' });
+      }
 
       // 環境或 repo 換了，來源分支必須跟著重推——否則正式區會繼續吃測試分支的碼
       const branch = (next.env !== cur.env || next.repo_id !== cur.repo_id)
@@ -181,13 +192,14 @@ function registerRoutes(app) {
       const { rows } = await query(
         `UPDATE project_deploy_targets
            SET env=$1, repo_id=$2, conn_id=$3, addons_dir=$4, conf_path=$5, db_name=$6,
-               http_port=$7, modules=$8, enabled=$9, branch=$10,
+               http_port=$7, modules=$8, enabled=$9, branch=$10, odoo_bin=$14,
                last_deployed_sha = CASE WHEN $11 THEN NULL ELSE last_deployed_sha END,
                updated_at = NOW()
          WHERE id=$12 AND project_id=$13
          RETURNING ${TARGET_COLS}`,
         [next.env, next.repo_id, next.conn_id, next.addons_dir, next.conf_path, next.db_name,
-         next.http_port, next.modules, next.enabled, branch, moved, req.params.tid, req.params.id]
+         next.http_port, next.modules, next.enabled, branch, moved, req.params.tid, req.params.id,
+         next.odoo_bin]
       );
       res.json({ ok: true, target: rows[0], branch, resetSha: moved });
     } catch (err) { res.status(500).json({ error: err.message }); }

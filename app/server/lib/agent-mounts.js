@@ -10,6 +10,7 @@ const path = require('path');
 const { gitDirMounts } = require('./agent-sandbox');
 const { findAdminDir } = require('./worktree-guard');
 const { objectDirFor } = require('./agent-objects');
+const { chatAiOutbox } = require('./chat-ai-files');
 
 const MAX_LOG_FILES = 50;
 const LOG_RE = /^(deploy|e2e)-task(\d+)-/;
@@ -67,18 +68,28 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   let kind = profile.mount;
   if (profile.scope === 'project' && ctx.projectId == null) kind = 'none';
   const skillScope = kind === 'none' && profile.scope === 'project' ? 'none' : profile.scope;
-  for (const name of SKILLS_BY_SCOPE[skillScope] || []) {
+  const mountSkill = (name) => {
     const src = path.join(pp.skills, name);
-    if (!d.existsSync(src)) continue;
+    if (!d.existsSync(src)) return;
     const target = path.join(ctx.home, '.claude', 'skills', name);
     d.mkdirSync(target, { recursive: true });
     mounts.push({ source: src, target, readonly: true });
-  }
+  };
+  for (const name of SKILLS_BY_SCOPE[skillScope] || []) mountSkill(name);
   let workdir = ctx.home;
 
   const attach = () => {
     if (profile.attachments === 'task' && ctx.taskDbId != null) ro(path.join(d.uploadRoot, `task_${ctx.taskDbId}`));
     if (profile.attachments === 'chat' && ctx.chatId != null) ro(path.join(d.uploadRoot, `chat_${ctx.chatId}`));
+    if (profile.outbox && ctx.chatId != null) {
+      // 對話 AI 交檔案給使用者的出貨箱：唯讀的附件目錄底下開一個可寫的子掛載（父先子後已排序）。
+      // 來源目錄必須先在宿主建好——交給 docker 自動建會是 root 擁有，容器以宿主 uid 跑就寫不進去。
+      // chatFiles skill 只在這裡掛：它教的是往出貨箱寫檔，沒有出貨箱的 agent 拿到只會是誤導。
+      const outbox = chatAiOutbox(ctx.chatId, d.uploadRoot);
+      d.mkdirSync(outbox, { recursive: true });
+      mounts.push({ source: outbox, readonly: false });
+      mountSkill('chatFiles');
+    }
     if (profile.attachments === 'feedback') for (const id of ctx.feedbackIds || []) ro(path.join(d.uploadRoot, `feedback_${id}`));
   };
 

@@ -15,6 +15,14 @@ function modsArg(modules) {
   if (!Array.isArray(modules) || !modules.length) throw new Error('模組清單不可為空');
   return modules.map(m => requireIdent(m, 'module')).join(',');
 }
+// systemd 目標的 odoo 執行檔。裸名 `odoo-bin` 只在它落在 PATH 上時成立，而慈雲那台不是
+// （實測 `which odoo-bin` 找不到，真正的位置是 /odoo/odoo-server/odoo-bin，systemd 自己也是
+// 用完整路徑起的）。沒填時仍退回裸名——既有能跑的機器行為不能因為這個欄位而改變。
+// 填了就必須是合法絕對路徑：這一欄會進客戶正式機的 shell，不合法寧可整串不產出。
+function odooBin(target) {
+  const v = String((target && target.odoo_bin) || '').trim();
+  return v ? path_(v, 'odoo_bin') : 'odoo-bin';
+}
 function port_(v) {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`http_port 不合法：${v}`);
@@ -89,7 +97,7 @@ function buildUpgradeCmd(target, conn, modules) {
   // 用別的帳號跑會產生 root 擁有的檔案，之後 Odoo 自己寫不進去。
   return [
     `${S}systemctl stop ${svc}`,
-    `${S}-u odoo odoo-bin -c ${conf} -d ${db} -u ${mods} --stop-after-init > ${LOG} 2>&1`,
+    `${S}-u odoo ${odooBin(target)} -c ${conf} -d ${db} -u ${mods} --stop-after-init > ${LOG} 2>&1`,
     `echo "EXITCODE=$?" >> ${LOG}`,
     `${S}systemctl start ${svc}`,
     `cat ${LOG}`,
@@ -111,7 +119,9 @@ function buildUpgradeCmdMulti(items, conn) {
     const db = requireIdent(target.db_name, 'db_name');
     const conf = path_(target.conf_path, 'conf_path');
     const mods = modsArg(modules);
-    return { db, conf, mods };
+    // 執行檔逐個目標取（不是取 head）：同一個服務底下的目標理應同一支，但這一欄是人可以改的，
+    // 取 head 等於讓第一個目標的值悄悄套用到其餘目標身上。
+    return { db, conf, mods, bin: odooBin(target) };
   });
 
   if (head.runtime === 'docker' && head.compose_dir && head.compose_service) {
@@ -145,7 +155,7 @@ function buildUpgradeCmdMulti(items, conn) {
   for (const r of runs) {
     lines.push(`echo "### DB ${r.db}" >> ${LOG}`);
     // 以 odoo 帳號執行，理由同 buildUpgradeCmd
-    lines.push(`${S}-u odoo odoo-bin -c ${r.conf} -d ${r.db} -u ${r.mods} --stop-after-init >> ${LOG} 2>&1`);
+    lines.push(`${S}-u odoo ${r.bin} -c ${r.conf} -d ${r.db} -u ${r.mods} --stop-after-init >> ${LOG} 2>&1`);
     lines.push(`echo "EXITCODE=$?" >> ${LOG}`);
   }
   lines.push(`${S}systemctl start ${svc}`, `cat ${LOG}`);

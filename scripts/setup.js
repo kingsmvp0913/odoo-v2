@@ -10,7 +10,7 @@ const { ensurePostgres } = require('./lib/postgres');
 const { ensureClaudeEnv } = require('./lib/claude-env');
 const { ensureCodexCli } = require('./lib/codex-env');
 const { verifyRuntimeDeps } = require('./lib/checks');
-const { verifyDocker, ensureGatewayImage } = require('./lib/docker');
+const { verifyDocker, ensureGatewayImage, ensureAgentImage } = require('./lib/docker');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(ROOT, 'data', 'config.json');
@@ -65,6 +65,22 @@ async function main() {
 
   ensureCodexCli();
   console.log('[OK] Codex CLI 已就緒');
+
+  // 排在這裡是因為兩個 build-arg 分別要等 npm install（context7-mcp 版本）與 claude 安裝（claude --version）。
+  // 建置失敗不中斷安裝——比照 Chrome：平台本身仍可用，缺的是容器隔離模式。但要大聲講，
+  // 因為沙盒開關不是 off 時，映像缺了會讓「每一次」AI 呼叫失敗，而錯誤只出現在執行期。
+  if (dockerCheck.ok && !process.argv.includes('--skip-agent-image')) {
+    try {
+      console.log('檢查 AI 沙盒映像（第一次建置要下載數百 MB，可能要很久；加 --skip-agent-image 可跳過）...');
+      const r = ensureAgentImage();
+      console.log(`[OK] AI 沙盒映像 ${r.image} ${r.built ? '已建置' : '已存在'}`);
+    } catch (err) {
+      console.error(`[WARN] AI 沙盒映像建置失敗：${err.message}`);
+      console.error('       沙盒模式不是 off 時，AI 會全部因映像不存在而失敗。修好網路後重跑 node scripts/setup.js --skip-start 即可補建。');
+    }
+  } else if (dockerCheck.ok) {
+    console.log('[SKIP] 未建 AI 沙盒映像（--skip-agent-image）。沙盒模式不是 off 時，AI 會全部失敗，記得補跑。');
+  }
 
   if (skipStart) {
     console.log('已略過啟動（--skip-start）。可自行執行 node app/server/index.js 或 ./start.ps1 / ./start.sh。');

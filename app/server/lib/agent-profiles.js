@@ -8,6 +8,9 @@
  *   internal-audit 健檢；看得到全平台任務／wiki、可唯讀查平台 DB，查不到客戶正式 DB
  *   internal-fix   改碼／審碼（R6-A 09-15）；只給公開術語表——它們只該讀到人核准過、放進 prompt 的文字
  *
+ * outbox：唯一會把檔案交給使用者的 agent 才設（chat）。它換來一個可寫的掛載點與 chatFiles skill，
+ * 只讀對話附件的 chat-to-task 不該有。
+ *
  * 新增 agentType 一定要在這裡登記；沒登記的在容器模式下直接丟例外（rules/pipeline 59）。
  */
 const AGENT_PROFILES = Object.freeze({
@@ -18,7 +21,7 @@ const AGENT_PROFILES = Object.freeze({
   respec:              Object.freeze({ scope: 'project', mount: 'task-worktree-or-none', attachments: 'task' }),
   reject_triage:       Object.freeze({ scope: 'project', mount: 'task-worktree-or-clone', attachments: 'task' }),
   cs:                  Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'task', logs: true }),
-  chat:                Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'chat', logs: true }),
+  chat:                Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'chat', outbox: true, logs: true }),
   merge:               Object.freeze({ scope: 'project', mount: 'project-clone' }),
   'merge-explain':     Object.freeze({ scope: 'project', mount: 'project-clone' }),
   'merge-clarify':     Object.freeze({ scope: 'project', mount: 'project-clone' }),

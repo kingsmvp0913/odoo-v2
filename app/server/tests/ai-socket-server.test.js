@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const { spawn } = require('child_process');
 const { newDb } = require('pg-mem');
 const { AI_TOKEN_HEADER, aiToken } = require('../lib/ai-token');
 const rt = require('../lib/agent-run-token');
@@ -60,15 +61,38 @@ test('帶全域通行碼 → 401', async () => {
   expect(res.status).toBe(401);
 });
 
-test('重啟時殘留的 socket 檔會被清掉重建', async () => {
+test('殘留的死 socket 檔（前一個佔用者被 kill）會被清掉重建', async () => {
   const { startAiSocketServer } = require('../lib/ai-socket-server');
   await new Promise(r => server.close(r));
-  // close 會移除 socket；手動放一個殘留 socket 模擬被 kill 的情形
-  const stale = http.createServer();
-  await new Promise(r => stale.listen(sock, r));
-  stale.unref();
+  // 真的造一個「檔在、沒人聽」的殘留：子行程 bind 之後被 SIGKILL。
+  // 原本這裡是在同一個行程裡開一個「活的」listener，那根本不是被 kill 的形狀——
+  // 行程正常結束時 Node 會把 socket 檔刪掉，留得下檔案的只有被 SIGKILL 這一種。
+  // 造錯形狀的後果很實際：它讓「搶佔正在服務中的 socket」看起來是正常行為（2026-09-18 正式環境事故）。
+  const oneLiner = 'require("net").createServer().listen(process.argv[1], () => console.log("bound"))';
+  const child = spawn(process.execPath, ['-e', oneLiner, sock]);
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', d => { if (String(d).includes('bound')) resolve(); });
+    child.once('error', reject);
+    setTimeout(() => reject(new Error('子行程沒有在時限內 bind')), 10000);
+  });
+  child.kill('SIGKILL');
+  await new Promise(r => child.once('exit', r));
+  expect(fs.lstatSync(sock).isSocket()).toBe(true);   // 檔還在，但沒人聽
+
   server = await startAiSocketServer(sock);
   expect(fs.statSync(sock).isSocket()).toBe(true);
+});
+
+test('已經有人在聽同一個 socket → 大聲失敗，絕不搶佔', async () => {
+  const { startAiSocketServer } = require('../lib/ai-socket-server');
+  // 這一支守的是 2026-09-18 的正式環境事故：容器模式下，任何第二份平台程式只要跑一秒，
+  // 就會把正在服務的 /ai socket 砍掉換成自己的；它結束後正式的那支還在聽已被 unlink 的 inode，
+  // 路徑上卻是一個沒人聽的死檔 ⇒ 之後每一次 /ai 查詢都 ECONNREFUSED，而且平台完全不知道。
+  // 此時 server 正在聽 sock（上一支測試重建的）。
+  await expect(startAiSocketServer(sock)).rejects.toThrow(/已經有行程在聽/);
+  // 搶佔失敗不能反而把服務中的 socket 弄壞
+  const res = await get('/api/anything');
+  expect(res.status).toBe(404);
 });
 
 test('同路徑是一般檔案 → 丟例外（不亂刪不是 socket 的東西）', async () => {

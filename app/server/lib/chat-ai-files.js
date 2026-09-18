@@ -1,4 +1,4 @@
-// 對話 AI 產出的檔案（chatFiles skill）：AI 把檔放進出貨箱 chat_<id>/ai/，回覆寫進 DB 之後由這支收貨——
+// 對話 AI 產出的檔案（chatFiles skill）：AI 把檔放進出貨箱 chat_<id>/ai/outbox/，回覆寫進 DB 之後由這支收貨——
 // 驗過的搬進 ai/msg_<訊息id>/ 並掛到那則回覆上，前端既有的附件按鈕就會自己畫出來。
 // 搬走而不是原地掛：出貨箱若一路累積，AI 之後用同檔名覆蓋時，舊回覆的按鈕會靜默變成下載新檔。
 const fs = require('fs');
@@ -21,16 +21,21 @@ const AI_TEXT_MIMES = {
   '.log': 'text/plain'
 };
 
-function chatAiOutbox(chatId) {
-  return path.join(uploadRoot(), `chat_${safeSeg(chatId)}`, 'ai');
+// 已收貨的 msg_*、已隔離的 _stale_* 都放這裡；容器裡這一層是唯讀的。
+// root 可傳入：組容器掛載那端（lib/agent-mounts.js）的 uploadRoot 是可注入的，讓它沿用同一套路徑規則。
+function chatAiDir(chatId, root = uploadRoot()) {
+  return path.join(root, `chat_${safeSeg(chatId)}`, 'ai');
 }
 
-// 出貨箱這一層裡「不是本輪產出」的東西：已收貨的 msg_*、已隔離的 _stale_*
-const isArchiveDir = (d) => d.isDirectory() && /^(msg_|_stale_)/.test(d.name);
+// 出貨箱自成一層：容器只把這一層掛成可寫（lib/agent-mounts.js），AI 碰不到上一層已交付的 msg_*，
+// 舊回覆的下載按鈕不可能被它改掉或刪掉。
+function chatAiOutbox(chatId, root = uploadRoot()) {
+  return path.join(chatAiDir(chatId, root), 'outbox');
+}
 
 function pendingEntries(outbox) {
   if (!fs.existsSync(outbox)) return [];
-  return fs.readdirSync(outbox, { withFileTypes: true }).filter(d => !isArchiveDir(d));
+  return fs.readdirSync(outbox, { withFileTypes: true });
 }
 
 // 本輪開始前呼叫：出貨箱有殘留＝上一輪行程在收貨前就死了。那些檔不屬於這一輪，
@@ -39,7 +44,7 @@ function quarantineStaleOutbox(chatId) {
   const outbox = chatAiOutbox(chatId);
   const entries = pendingEntries(outbox);
   if (!entries.length) return 0;
-  const dest = path.join(outbox, `_stale_${Date.now()}`);
+  const dest = path.join(chatAiDir(chatId), `_stale_${Date.now()}`);
   fs.mkdirSync(dest, { recursive: true });
   for (const d of entries) fs.renameSync(path.join(outbox, d.name), path.join(dest, d.name));
   return entries.length;
@@ -82,7 +87,7 @@ async function collectChatAiFiles(chatId, messageId) {
       const mime = resolveAiFileMime(fs.readFileSync(src), ext);
       if (!mime) { reject('內容與副檔名不符，或不是支援的格式'); continue; }
 
-      const destDir = path.join(outbox, `msg_${safeSeg(messageId)}`);
+      const destDir = path.join(chatAiDir(chatId), `msg_${safeSeg(messageId)}`);
       fs.mkdirSync(destDir, { recursive: true });
       // 磁碟檔名只求唯一與安全：safeSeg 會把中文換成底線，「報表.csv」「銷售.csv」會撞成同名，故加序號。
       // 序號每個嘗試都遞增（不是用 attached.length）：INSERT 失敗的那個檔已經搬過去了，重用序號會蓋掉它。
@@ -101,4 +106,4 @@ async function collectChatAiFiles(chatId, messageId) {
   return { attached, rejected };
 }
 
-module.exports = { chatAiOutbox, quarantineStaleOutbox, collectChatAiFiles, AI_FILE_MAX_COUNT, AI_BINARY_EXTS, AI_TEXT_MIMES };
+module.exports = { chatAiDir, chatAiOutbox, quarantineStaleOutbox, collectChatAiFiles, AI_FILE_MAX_COUNT, AI_BINARY_EXTS, AI_TEXT_MIMES };

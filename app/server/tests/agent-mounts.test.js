@@ -146,8 +146,31 @@ test('project-clone（chat）：專案根唯讀、只掛本專案任務的 log �
   expect(sources(m)).toContain(path.join(R, 'logs', 'e2e-task70-1712.log'));
   expect(sources(m)).not.toContain(path.join(R, 'logs', 'deploy-task99-1.log'));
   expect(find(m, path.join(R, 'uploads', 'chat_5')).readonly).toBe(true);
-  expect(m.mounts.every(x => x.readonly)).toBe(true);
+  // 唯一可寫的是出貨箱：AI 交檔案給使用者只能往這裡寫，連同一層的已交付附件都動不到
+  const outbox = path.join(R, 'uploads', 'chat_5', 'ai', 'outbox');
+  expect(find(m, outbox).readonly).toBe(false);
+  expect(m.mounts.filter(x => x.source !== outbox).every(x => x.readonly)).toBe(true);
   expectNoPlatformSecrets(m);
+});
+
+// chatFiles 的出貨箱：唯讀附件目錄底下的可寫子掛載。漏了任何一半，AI 都只會回「寫不進去」。
+test('對話出貨箱：宿主先建好目錄、掛成可寫，已交付的 msg_* 留在唯讀的上一層', async () => {
+  const m = await resolveSandboxMounts(base({ profile: profileFor('chat'), taskDbId: null, chatId: 5 }), deps);
+  const outbox = path.join(R, 'uploads', 'chat_5', 'ai', 'outbox');
+  // 來源先建：交給 dockerd 自動建會是 root 擁有，容器以宿主 uid 跑就寫不進去
+  expect(fs.existsSync(outbox)).toBe(true);
+  expect(find(m, outbox)).toEqual({ source: outbox, readonly: false });
+  // 父先子後，否則唯讀的父層會蓋掉可寫的出貨箱（buildAgentRunArgs 依 target 深度排序）
+  expect(sources(m)).toContain(path.join(R, 'uploads', 'chat_5'));
+  // 已交付的檔在 ai/ 這一層，沒有被掛成可寫 → AI 改不掉舊回覆的下載檔
+  expect(sources(m)).not.toContain(path.join(R, 'uploads', 'chat_5', 'ai'));
+});
+
+test('只讀對話附件、不交檔案的 agent（chat-to-task）拿不到可寫的出貨箱', async () => {
+  const m = await resolveSandboxMounts(base({ profile: profileFor('chat-to-task'), taskDbId: null, chatId: 5 }), deps);
+  expect(find(m, path.join(R, 'uploads', 'chat_5')).readonly).toBe(true);
+  expect(sources(m).some(x => x.includes(`${path.sep}ai${path.sep}outbox`))).toBe(false);
+  expect(m.mounts.every(x => x.readonly)).toBe(true);
 });
 
 test('task-worktree-or-clone（reject_triage）：cwd 是專案根時退成唯讀主 clone', async () => {
@@ -213,7 +236,7 @@ test('platform-fix 的 cwd 不在修正工作區根目錄底下 → 丟例外', 
 describe('白名單 skill 掛進家目錄（計畫 X9）', () => {
   const { SKILLS_BY_SCOPE } = require('../lib/agent-mounts');
   beforeAll(() => {
-    for (const n of ['getSQL', 'getLog', 'wikiQuery', 'odooGlossary', 'odooDev', 'healthCheck', 'platformDB', 'platformDev', 'pushRepo']) {
+    for (const n of ['getSQL', 'getLog', 'wikiQuery', 'odooGlossary', 'odooDev', 'healthCheck', 'platformDB', 'platformDev', 'pushRepo', 'chatFiles']) {
       fs.mkdirSync(path.join(appDir, '.agents', 'skills', n), { recursive: true });
     }
   });
@@ -222,7 +245,8 @@ describe('白名單 skill 掛進家目錄（計畫 X9）', () => {
   test('客戶 agent：只有查客戶資料用的 skill，沒有 platformDB／pushRepo', async () => {
     const ctx = base({ profile: profileFor('chat'), taskDbId: null, chatId: 5 });
     const m = await resolveSandboxMounts(ctx, deps);
-    expect(skillTargets(m, ctx.home)).toEqual([...SKILLS_BY_SCOPE.project].sort());
+    // chat 多一支 chatFiles：它教的是往出貨箱寫檔，只掛給真的有出貨箱的 agent
+    expect(skillTargets(m, ctx.home)).toEqual([...SKILLS_BY_SCOPE.project, 'chatFiles'].sort());
     expect(m.mounts.filter(x => x.target && x.target.startsWith(ctx.home)).every(x => x.readonly)).toBe(true);
     // 掛載點由平台先建（避免 dockerd 建成 root 擁有、容器內寫不進 .claude）
     expect(fs.existsSync(path.join(ctx.home, '.claude', 'skills', 'getSQL'))).toBe(true);
@@ -234,6 +258,13 @@ describe('白名單 skill 掛進家目錄（計畫 X9）', () => {
     const m = await resolveSandboxMounts(ctx, deps);
     expect(skillTargets(m, ctx.home)).not.toContain('platformDB');
     expect(skillTargets(m, ctx.home)).toEqual([...SKILLS_BY_SCOPE['internal-fix']].sort());
+  });
+
+  test('沒有出貨箱的客戶 agent（coding）拿不到 chatFiles', async () => {
+    const ctx = base({ profile: profileFor('coding') });
+    // 同理 chat-to-task：它有對話附件但沒有 outbox（見 agent-profiles.js）
+    const m = await resolveSandboxMounts(ctx, deps);
+    expect(skillTargets(m, ctx.home)).toEqual([...SKILLS_BY_SCOPE.project].sort());
   });
 
   test('none：不掛任何 skill', async () => {

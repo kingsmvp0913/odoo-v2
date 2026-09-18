@@ -14,7 +14,7 @@ process.env.UPLOAD_DIR = tmpRoot;
 const mockQuery = jest.fn();
 jest.mock('../db', () => ({ query: (...a) => mockQuery(...a) }));
 
-const { chatAiOutbox, collectChatAiFiles, quarantineStaleOutbox } = require('../lib/chat-ai-files');
+const { chatAiDir, chatAiOutbox, collectChatAiFiles, quarantineStaleOutbox } = require('../lib/chat-ai-files');
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // sniffFile 認 xlsx 只看 zip 檔頭＋前段含 xl/（測的是收貨行為，不是解碼器）
@@ -38,8 +38,8 @@ afterAll(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-test('出貨箱在 uploadRoot 底下的 chat_<id>/ai（刪對話的 deleteChatDir 才收得掉）', () => {
-  expect(outbox).toBe(path.join(tmpRoot, `chat_${chatId}`, 'ai'));
+test('出貨箱在 uploadRoot 底下的 chat_<id>/ai/outbox（刪對話的 deleteChatDir 才收得掉）', () => {
+  expect(outbox).toBe(path.join(tmpRoot, `chat_${chatId}`, 'ai', 'outbox'));
 });
 
 test('出貨箱不存在（AI 這輪沒做檔）→ 什麼都不做', async () => {
@@ -67,8 +67,17 @@ test('合格的 xlsx／csv／png 搬進 msg_<訊息id>/ 並掛到那則回覆', 
   // 顯示用檔名保留 AI 取的原名（中文），mime 以內容為準
   expect(rows.map(r => r[2]).sort()).toEqual(['圖表.png', '明細.csv', '銷售報表.xlsx'].sort());
   expect(rows.find(r => r[2] === '圖表.png')[3]).toBe('image/png');
-  // 出貨箱這一層清空了，下一輪不會重複收
-  expect(fs.readdirSync(outbox).filter(n => !n.startsWith('msg_'))).toEqual([]);
+  // 出貨箱清空了，下一輪不會重複收
+  expect(fs.readdirSync(outbox)).toEqual([]);
+});
+
+// 容器只把出貨箱掛成可寫（lib/agent-mounts.js）。已交付的檔若留在出貨箱裡，AI 就能改掉或刪掉
+// 舊回覆的下載檔——那是靜默的，使用者點下去才發現內容變了。
+test('已收貨的 msg_* 落在出貨箱的上一層，不在出貨箱裡', async () => {
+  put('報表.csv', Buffer.from('a\n'));
+  await collectChatAiFiles(chatId, 42);
+  expect(fs.existsSync(path.join(chatAiDir(chatId), 'msg_42'))).toBe(true);
+  expect(fs.existsSync(path.join(outbox, 'msg_42'))).toBe(false);
 });
 
 test('兩個中文檔名不會在磁碟上撞成同一個檔（safeSeg 會把中文換成底線）', async () => {
@@ -156,12 +165,13 @@ test('INSERT 失敗 → 以原因回報，不往外拋（對話回覆不能因�
   expect(rejected).toEqual([{ filename: 'a.csv', reason: expect.stringContaining('db down') }]);
 });
 
-test('上一輪殘留 → 整批隔離到 _stale_*，之後收貨收不到它們', async () => {
+test('上一輪殘留 → 整批隔離到上一層的 _stale_*，之後收貨收不到它們', async () => {
   put('殘留.csv', Buffer.from('x\n'));
   expect(quarantineStaleOutbox(chatId)).toBe(1);
-  const stale = fs.readdirSync(outbox).find(n => n.startsWith('_stale_'));
+  const stale = fs.readdirSync(chatAiDir(chatId)).find(n => n.startsWith('_stale_'));
   expect(stale).toBeTruthy();
-  expect(fs.existsSync(path.join(outbox, stale, '殘留.csv'))).toBe(true);
+  expect(fs.existsSync(path.join(chatAiDir(chatId), stale, '殘留.csv'))).toBe(true);
+  expect(fs.readdirSync(outbox)).toEqual([]);
   expect(await collectChatAiFiles(chatId, 8)).toEqual({ attached: [], rejected: [] });
 });
 

@@ -47,7 +47,8 @@ async function ensureAgentInfra(deps = {}) {
   const image = agentImageTag(version);
   try { await run(execFile, 'docker', ['image', 'inspect', image]); }
   catch {
-    throw new Error(`AI 映像檔 ${image} 不存在。請在主機執行：docker build -f docker/agent/Dockerfile `
+    throw new Error(`AI 映像檔 ${image} 不存在（claude 升版後 tag 會跟著變，舊映像不會被用到）。`
+      + `請在主機執行 node scripts/setup.js --skip-start 自動補建，或手動：docker build -f docker/agent/Dockerfile `
       + `--build-arg CLAUDE_CODE_VERSION=${version} --build-arg CONTEXT7_MCP_VERSION=<app/node_modules/@upstash/context7-mcp 的版本> -t ${image} docker/agent`);
   }
 

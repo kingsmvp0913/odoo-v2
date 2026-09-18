@@ -1,5 +1,5 @@
 const { parseProbe, parseConf, parseComposeLabels, buildProbeScript,
-  parseConfPath, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs } = require('../lib/deploy-probe');
+  parseConfPath, parseOdooBin, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs } = require('../lib/deploy-probe');
 
 // 以下 fixture 是 2026-09-08 對兩台真實客戶機的探測輸出，逐字照抄。
 // 意圖（Rule 9）：解析器唯一的價值就是「看得懂真機吐出來的東西」，自己編的樣本
@@ -190,4 +190,23 @@ test('repo 模組清單以 __manifest__.py 為準，不看名字', () => {
 test('repo 路徑讀不到時回空陣列，不拋', () => {
   const fs = { readdirSync: () => { throw new Error('ENOENT'); }, existsSync: () => false };
   expect(listRepoModules('/nope', { fs })).toEqual([]);
+});
+
+// 意圖（Rule 9）：慈雲那台的 odoo-bin 不在 PATH 上，部署因此 `command not found` 整批回滾。
+// 完整路徑一直都寫在 systemd 的 ExecStart 裡，只是以前沒人去讀。
+test('odoo 執行檔：從 systemd 的 ExecStart 讀出完整路徑', () => {
+  expect(parseOdooBin('{ path=/odoo/odoo-server/odoo-bin ; argv[]=/odoo/odoo-server/odoo-bin -c /etc/odoo-test.conf ; ignore_errors=no }'))
+    .toBe('/odoo/odoo-server/odoo-bin');
+  expect(parseOdooBin('{ path=/usr/bin/odoo ; argv[]=/usr/bin/odoo -c /etc/odoo15.conf ; }'))
+    .toBe('/usr/bin/odoo');
+});
+
+// 慈雲的正式區走舊式 init 腳本（實查：path=/etc/init.d/odoo-server）。那不是 odoo 執行檔，
+// 拿去 `sudo -u odoo <它> -c ... -u ...` 會用完全不同的參數語意跑起來。
+// 認不出就回 null＝退回裸名，與這個欄位存在之前的行為相同。
+test('odoo 執行檔：不是 odoo 執行檔就回 null，不亂猜', () => {
+  expect(parseOdooBin('{ path=/etc/init.d/odoo-server ; argv[]=/etc/init.d/odoo-server start ; }')).toBeNull();
+  expect(parseOdooBin('{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /opt/odoo-bin ; }')).toBeNull();
+  expect(parseOdooBin('')).toBeNull();
+  expect(parseOdooBin('odoo-bin -c /etc/odoo.conf')).toBeNull();   // 沒有 path=
 });

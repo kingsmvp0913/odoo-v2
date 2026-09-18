@@ -742,6 +742,9 @@ function registerRoutes(app) {
   });
 
   app.patch('/api/exam/attempts/:id/final', verifyToken, express.json(), async (req, res) => {
+    // 正式答案是歸檔時對成績單、鎖成官方答案的那一份，歸檔不可逆——只給管理員改，
+    // 其他人表達意見走投票。前端藏勾勾擋不住直接打 API。
+    if (!req.isAdmin) return res.status(403).json({ error: '只有管理員能改正式答案，其他人請用投票' });
     try {
       const attemptId = parseInt(req.params.id, 10);
       if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });

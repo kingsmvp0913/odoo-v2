@@ -79,12 +79,51 @@ test('最高票平手時每一票都要標出來', () => {
   expect(vm.topVotes({ ...q, vote_total: 0, vote_options: {} })).toEqual([]);
 });
 
-// 輸入答案刻意不另外標：worker 寫入時 answer_final 預設就等於作答答案，
-// 勾選狀態本身就是它。多一個綠標只是重複同一件事。
-test('輸入答案不另外標，改過之後靠 title 查得回原本輸入什麼', () => {
-  expect(view).not.toContain('ui-next-exam-run-input-mark');
-  expect(view).not.toContain('>輸入答案<');
-  expect(view).toContain('這是原本輸入的答案');
+// 沒改過時不標：answer_final 預設就等於作答答案，勾選狀態本身就是它。
+// 改選別的之後原答案的勾就消失了，只靠 title 找不回來——要在畫面上標出來（2026-09-14 使用者要求）。
+test('改選別的答案後，原答案要標出來；沒改過不標', () => {
+  const src = view.slice(view.indexOf('sameAnswer(a, b) {'), view.indexOf('async clearAll()'));
+  const vm = new Function(`return { ${src} }`)();
+  const q = { answer_their: ['A'], answer_final: ['A'] };
+  expect(vm.showOriginal(q, 'A')).toBe(false);
+  expect(vm.showOriginal({ ...q, answer_final: ['B'] }, 'A')).toBe(true);
+  expect(vm.showOriginal({ ...q, answer_final: ['B'] }, 'B')).toBe(false);
+  // 清成留白也算改過，不然原答案在畫面上就完全消失了
+  expect(vm.showOriginal({ ...q, answer_final: null }, 'A')).toBe(true);
+  expect(view).toContain('<span v-if="showOriginal(q,option.letter)" class="ui-next-exam-run-sig is-orig">原答案</span>');
+  expect(css).toContain('.ui-next-exam-run-sig.is-orig');
+});
+
+// 題號前面那一欄永遠是「現在勾的答案」（2026-09-14 使用者拍板）。
+// 第一版只在「改過」時才顯示勾的答案，沒改過顯示推薦——結果勾回原答案 A 時
+// 被判成沒改過，前面跑出推薦的 B（bank 22 P3-1 實況）。推薦分數改看選項上的數字。
+test('題號前面的字母永遠是勾選的答案，不是推薦', () => {
+  const src = view.slice(view.indexOf('sameAnswer(a, b) {'), view.indexOf('async clearAll()'));
+  const vm = new Function(`return { ${src} }`)();
+  // 勾的就是原答案：也要顯示 A
+  expect(vm.finalText({ answer_their: ['A'], answer_final: ['A'] })).toBe('A');
+  const q = { answer_their: ['A'], answer_final: ['C'] };
+  expect(vm.finalText(q)).toBe('C');
+  expect(vm.finalWhy(q)).toContain('原答案 A');
+  // 留白畫破折號，不退回顯示原答案或推薦
+  expect(vm.finalText({ ...q, answer_final: null })).toBe('—');
+  const head = view.slice(view.indexOf('<details v-else :open="needsCheck(q)"'), view.indexOf('ui-next-exam-run-options'));
+  expect(head).toContain('{{ finalText(q) }}');
+  expect(head).not.toContain('topText(q)');
+});
+
+// 原本照審查改完答案，這題就會從需確認消失。使用者要它留著：改過答案正是要回頭再看的題。
+test('改選別的答案後，仍留在需確認', () => {
+  const src = view.slice(view.indexOf('sameAnswer(a, b) {'), view.indexOf('async clearAll()'));
+  const vm = new Function(`return { ${src} }`)();
+  // 審查說 B、原本填 A、照審查改成 B
+  expect(vm.needsCheck({ review_source: 'review', review_answer: ['B'], answer_their: ['A'], answer_final: ['B'] })).toBe(true);
+  // 上次已知答錯的是 A、原本又填 A、這次改成 C
+  expect(vm.needsCheck({ answer_their: ['A'], answer_final: ['C'], history_wrong: true, history_answer: ['A'] })).toBe(true);
+  // 審查同意原答案、也沒改過 ⇒ 不用確認
+  expect(vm.needsCheck({ review_source: 'review', review_answer: ['A'], answer_their: ['A'], answer_final: ['A'] })).toBe(false);
+  // 審查同意原答案，卻改成別的 ⇒ 要確認（跟舊行為一樣）
+  expect(vm.needsCheck({ review_source: 'review', review_answer: ['A'], answer_their: ['A'], answer_final: ['C'] })).toBe(true);
 });
 
 // 「需確認」＝審查有意見，或又選了上次已知大概率錯的那個答案。
@@ -94,6 +133,27 @@ test('只有需確認的題目預設展開，投票後按鈕消失', () => {
   expect(view).toContain('isMismatch(q) || this.repeatsKnownWrong(q)');
   expect(view).toContain('v-if="!q.has_voted"');
   expect(view).toContain('q.has_voted = true');
+});
+
+// 官方確認的題在畫面上是鎖住、點不開的區塊，沒有東西可以確認。舊碼照樣拿官方答案
+// 去比這次填的，不一樣就算需確認——數字卡多出幾題，點開卻找不到是哪幾題。
+// 資料取自 bank 21 實況：P1-1 官方 B、這次填 A。
+test('官方確認的題不算需確認', () => {
+  const src = view.slice(view.indexOf('sameAnswer(a, b) {'), view.indexOf('async clearAll()'));
+  const vm = new Function(`return { ${src} }`)();
+  const official = { review_source: 'official', review_answer: ['B'], answer_final: ['A'], answer_their: ['A'] };
+  expect(vm.needsCheck(official)).toBe(false);
+  expect(vm.needsCheck({ ...official, history_wrong: true, history_answer: ['A'] })).toBe(false);
+  // 不能因此把審查有意見的一般題也一起放掉
+  expect(vm.needsCheck({ ...official, review_source: 'review' })).toBe(true);
+});
+
+// server 已經擋 403；前端再鎖是讓一般人一眼看出「這不是給我按的」，而不是按下去才跳錯。
+test('正式答案的勾只有管理員能按，其他人仍可投票', () => {
+  expect(view).toContain("isAdmin() { return window.UserStore.role === 'admin'; }");
+  expect(view).toMatch(/type="checkbox"[^>]*:disabled="!isAdmin \|\| savingFinal\[q\.attempt_id\]"/);
+  // 投票按鈕不能跟著被鎖
+  expect(view).toContain('<button v-if="!q.has_voted" class="ui-next-exam-run-vote"');
 });
 
 test('考試頁狀態不使用左側色條', () => {

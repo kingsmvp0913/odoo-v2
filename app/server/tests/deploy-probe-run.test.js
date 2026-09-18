@@ -359,6 +359,18 @@ test('systemd 專案：ExecStart 帶 -c 時就用它，不再試慣例路徑', a
   });
   const r = await runProbe(8, 2, exec, { loadRepos: async () => [], loadConns: async () => [] });
   expect(r.candidates[0].confPath).toBe('/opt/odoo/odoo.conf');
+  // 同一份 ExecStart 也是 odoo 執行檔位置的來源：慈雲那台的 odoo-bin 不在 PATH 上，
+  // 沒帶出這個值的話部署會 `sudo: odoo-bin: command not found` 整批回滾。
+  expect(r.candidates[0].odooBin).toBe('/opt/odoo/odoo-bin');
+});
+
+// ExecStart 讀不到（舊式 init 腳本、systemctl show 失敗）時回 null＝退回裸名，不亂猜一條路徑。
+test('systemd 專案：ExecStart 讀不到時 odooBin 為 null', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: 'h', ssh_user: 'u', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const r = await runProbe(8, 2, systemdExec(), { loadRepos: async () => [], loadConns: async () => [] });
+  expect(r.candidates[0].odooBin).toBeNull();
 });
 
 // 慈雲的連線沒填 log_unit／log_container（實查：兩條都是 null）。

@@ -119,6 +119,16 @@ function parseConfPath(text) {
   return m ? m[1] : null;
 }
 
+// systemd 的 ExecStart（`systemctl show -p ExecStart --value`）裡的 path= 就是實際被執行的檔案。
+// 只認 basename 是 odoo-bin／odoo 的：慈雲的正式區走舊式 init 腳本（path=/etc/init.d/odoo-server），
+// 那不是 odoo 執行檔，拿去 `sudo -u odoo <它> -c ... -u ...` 會用完全不同的參數語意跑起來。
+// 認不出就回 null——退回裸名 `odoo-bin`，與這個欄位存在之前的行為相同。
+function parseOdooBin(text) {
+  const m = /(?:^|[\s{;])path=(\/[^\s;]+)/.exec(String(text || ''));
+  if (!m || !validatePath(m[1])) return null;
+  return /^odoo(-bin)?$/.test(m[1].split('/').pop()) ? m[1] : null;
+}
+
 // docker inspect -f '{{json .Mounts}}' 的輸出。解不動就回空陣列——沒有掛載資訊時
 // 容器內路徑換不回宿主路徑，該候選的 addons 目錄就交給人手填。
 function parseMounts(stdout) {
@@ -218,7 +228,7 @@ function linkConns(candidate, conns) {
 // 每一步都獨立 try：任何一步失敗只讓那個欄位變 null，不可讓整個候選消失——
 // 候選不見了人就無從指認，比欄位空著糟得多。
 async function enrichCandidate(execFn, target, S, c, ourModules) {
-  const out = { confPath: null, addonsCandidates: [], confDbNames: [], httpPort: null };
+  const out = { confPath: null, addonsCandidates: [], confDbNames: [], httpPort: null, odooBin: null };
   const inContainer = c.runtime === 'docker';
   // 容器名／服務名都要進 shell 指令，一律過白名單。呼叫端已驗過一次，這裡再驗是因為
   // 這支函式的參數是「使用者可編輯的欄位」與客戶正式機的 shell 之間唯一的東西。
@@ -241,6 +251,7 @@ async function enrichCandidate(execFn, target, S, c, ourModules) {
     try {
       const es = await execFn(target, `systemctl show -p ExecStart --value ${name}`);
       out.confPath = parseConfPath(es.stdout);
+      out.odooBin = parseOdooBin(es.stdout);
     } catch { /* 同上 */ }
   }
 
@@ -365,4 +376,4 @@ async function runProbe(connId, projectId, execFn = sshExec, deps = {}) {
 }
 
 module.exports = { buildProbeScript, parseProbe, parseComposeLabels, parseConf, isDeployCandidate, runProbe,
-  parseConfPath, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs, linkConns };
+  parseConfPath, parseOdooBin, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs, linkConns };

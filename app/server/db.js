@@ -1246,6 +1246,12 @@ async function migrate() {
     // （PUT /api/admin/users/:id 把 body 的 role COALESCE 進 UPDATE，完全沒過它）——這條不變式
     // 今天並未在任何寫入路徑被實際檢查。把它接進去是 Part 2 的工作，接上之前不要假設它在把關。
     { table: 'users', col: 'company_id', sql: 'ALTER TABLE users ADD COLUMN company_id INTEGER REFERENCES companies(id)' },
+    // systemd 目標的 odoo 執行檔絕對路徑。NULL＝退回裸名 `odoo-bin`（PATH 上找得到的機器行為不變）。
+    // ⚠ 慈雲那台就是 PATH 上沒有：升級指令一送出去就 `sudo: odoo-bin: command not found`、exit 1、
+    // 整批回滾，而部署 log 只有那一行——看起來像客戶的模組壞了，實際上碼連被讀到都沒有。
+    // 探測本來就抓得到（systemd 的 ExecStart 寫的就是完整路徑），只是以前沒有欄位存。
+    // docker 目標不吃這一欄：容器內是官方 image 的 `odoo`，本來就在 PATH 上。
+    { table: 'project_deploy_targets', col: 'odoo_bin', sql: 'ALTER TABLE project_deploy_targets ADD COLUMN odoo_bin TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {
