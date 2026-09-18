@@ -35,6 +35,24 @@ async function belongsToProject(table, id, projectId) {
   return rows.length > 0;
 }
 
+// 同一個專案裡，測試區與正式區不可以指向同一個資料庫——那等於拿 ai 分支的碼去升級客戶
+// 正在用的資料。這不是假想：評估是「用哪條連線掃，掃到的每個 instance 就套那條連線的
+// db_name」，一條連線掃到兩個 instance 時兩個候選拿到同一個名字（慈雲 2026-09-18 兩個目標
+// 都被填成正式的 ciyun，而當時下拉只列得出那一個，人想改也改不了）。
+// 回傳撞到的那一區，沒撞到回 null。
+async function dbTakenByOtherEnv(projectId, env, dbName, excludeId) {
+  const { rows } = await query(
+    `SELECT env FROM project_deploy_targets
+      WHERE project_id = $1 AND env <> $2 AND db_name = $3 AND id <> $4`,
+    [projectId, env, dbName, excludeId || 0]
+  );
+  return rows.length ? rows[0].env : null;
+}
+
+const dbClashError = (otherEnv) =>
+  `這個資料庫已經是${otherEnv === 'prod' ? '正式' : '測試'}區目標在用的，`
+  + '測試區與正式區不能升級同一個資料庫。請先核對這個 instance 實際服務的是哪一個 DB。';
+
 // 來源分支不讓前端指定：填死的 ai-dev／main 對 base_branch 不是 main 的專案是錯的——
 // 遠端的 ai 分支可能叫 ai-dev-odoo15、主分支可能叫 develop，兩者都由 repo 自己算得出來。
 // 算不出來（尚未 clone、git 指令失敗）就退回舊的預設值，不擋住建立。
@@ -98,9 +116,14 @@ function registerRoutes(app) {
       // repo_id 是部署的碼從哪來。少了它 deploy-run 的 headSha 第一步就拋
       // 「這個部署目標沒有對應的 repo」——目標存得下去、按部署必定失敗。
       if (!b.repo_id) return res.status(400).json({ error: '缺少 repo_id（要從哪個 repo 拿碼部署）' });
+      const clash = await dbTakenByOtherEnv(req.params.id, b.env, String(b.db_name).trim(), 0);
+      if (clash) return res.status(400).json({ error: dbClashError(clash) });
       // 這一欄會原封不動進客戶正式機的 shell，存進來之前就要擋掉——等到部署當下才由
       // buildUpgradeCmd 拋，使用者看到的會是一次失敗的部署而不是一則存檔錯誤。
-      const odooBin = String(b.odoo_bin || '').trim();
+      // 沒帶就從同一份 payload 的探測結果補：使用者的分頁可能是平台更新前開的（載到舊畫面
+      // 程式，根本沒有這個欄位），而少了它 systemd 目標的部署必定 command not found。
+      const probeBin = b.probe_json && b.probe_json.candidate && b.probe_json.candidate.odooBin;
+      const odooBin = String(b.odoo_bin || probeBin || '').trim();
       if (odooBin && !validatePath(odooBin)) {
         return res.status(400).json({ error: 'odoo 執行檔要填絕對路徑（例：/odoo/odoo-server/odoo-bin）' });
       }
@@ -135,6 +158,12 @@ function registerRoutes(app) {
 
       // 只切開關（既有前端與測試走這條）
       if (typeof b.enabled === 'boolean' && Object.keys(b).length === 1) {
+        // 啟用是「開始真的動客戶機」的那一刻，撞庫的目標要在這裡擋下來。存檔時擋過一次仍
+        // 不夠：舊的目標是在這道檢查之前存的，它們只會在這裡露出來。
+        if (b.enabled) {
+          const c = await dbTakenByOtherEnv(req.params.id, cur.env, cur.db_name, cur.id);
+          if (c) return res.status(400).json({ error: dbClashError(c) });
+        }
         const { rows } = await query(
           `UPDATE project_deploy_targets SET enabled = $1, updated_at = NOW()
            WHERE id = $2 AND project_id = $3 RETURNING id, enabled`,
@@ -176,6 +205,11 @@ function registerRoutes(app) {
       if (!next.repo_id) return res.status(400).json({ error: '缺少 repo_id（要從哪個 repo 拿碼部署）' });
       if (next.odoo_bin && !validatePath(next.odoo_bin)) {
         return res.status(400).json({ error: 'odoo 執行檔要填絕對路徑（例：/odoo/odoo-server/odoo-bin）' });
+      }
+      // 改到資料庫或環境，以及啟用，都要重驗一次撞庫
+      if (next.db_name !== cur.db_name || next.env !== cur.env || (next.enabled && !cur.enabled)) {
+        const c = await dbTakenByOtherEnv(req.params.id, next.env, next.db_name, cur.id);
+        if (c) return res.status(400).json({ error: dbClashError(c) });
       }
 
       // 環境或 repo 換了，來源分支必須跟著重推——否則正式區會繼續吃測試分支的碼

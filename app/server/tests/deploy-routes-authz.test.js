@@ -47,10 +47,15 @@ beforeAll(async () => {
 
 afterAll(() => { dbModule._setPoolForTesting(null); });
 
-const body = (extra) => ({
-  env: 'prod', runtime: 'docker', addons_dir: '/odoo/custom/addons',
-  db_name: 'ciyun', branch: 'main', ...extra
-});
+// db_name 跟著 env 走：route 會擋「測試區與正式區指向同一個資料庫」，而 pg-mem 的表在
+// 案例之間不清空（rules/testing #17），固定送同一個名字會讓後面每個建立案例都撞到前面留下的目標。
+const body = (extra) => {
+  const env = (extra && extra.env) || 'prod';
+  return {
+    env, runtime: 'docker', addons_dir: '/odoo/custom/addons',
+    db_name: env === 'prod' ? 'ciyun' : 'ciyun_test', branch: 'main', ...extra
+  };
+};
 
 // 意圖（Rule 9）：此 repo 沒有 project_members 表，專案端點多半只驗 token，
 // 所以「這個 id 屬不屬於這個專案」一定要端點自己驗。漏掉的後果不是資料外洩而已——
@@ -194,8 +199,11 @@ test('改到資料庫或目錄時清掉 last_deployed_sha，只改模組則保�
 test('改 env 時來源分支跟著重推', async () => {
   const { rows: [c] } = await dbModule.query('SELECT id FROM db_connections WHERE project_id = 1');
   const { rows: [r] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  // 用一個沒有別的目標在用的資料庫：這裡驗的是「改 env 會重推分支」，
+  // 不該順便撞上「兩區不得共用資料庫」那道檢查。
   const created = await request(app).post('/api/projects/1/deploy-targets')
-    .set('Authorization', `Bearer ${token}`).send(body({ env: 'prod', conn_id: c.id, repo_id: r.id }));
+    .set('Authorization', `Bearer ${token}`)
+    .send(body({ env: 'prod', conn_id: c.id, repo_id: r.id, db_name: 'ciyun_branch' }));
   expect(created.body.branch).toBe('main');
   const res = await request(app).patch(`/api/projects/1/deploy-targets/${created.body.id}`)
     .set('Authorization', `Bearer ${token}`).send({ env: 'test' });

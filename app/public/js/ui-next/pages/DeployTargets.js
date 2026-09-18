@@ -156,14 +156,25 @@
           this.probeError = e.message || "評估失敗";
         } finally { this.probing = false; }
       },
-      // 資料庫選項＝連線設定的值＋conf 讀到的。conf 只有一個且與連線不符時（dbMismatch）
-      // 也必須列出來，否則畫面警告「這台管的不是這個 db」卻沒有地方讓人改。
+      // 資料庫選項＝這個專案所有連線登記的＋conf 讀到的。conf 只有一個且與連線不符時
+      // （dbMismatch）也必須列出來，否則畫面警告「這台管的不是這個 db」卻沒有地方讓人改。
+      //
+      // ⚠ 只列「掃描用的那條連線」是不夠的：一條連線掃到兩個 instance 時，兩個候選都會
+      // 拿到那條連線的 db_name（慈雲實際踩過——測試區被填成正式的 ciyun，而下拉就只有
+      // 那一個選項，人想改也改不了）。專案的其他連線登記的 db 才是正確答案的來源。
       dbChoices(c) {
-        return [...new Set([
+        const names = [
           c.dbName,
           ...(c.linkedConns || []).map((x) => x.dbName),
+          ...this.conns.map((x) => x.db_name),
           ...(c.confDbNames || []),
-        ].filter(Boolean))];
+        ];
+        return [...new Set(names.filter(Boolean))].map((d) => ({ value: d, label: d + this.connsFor(d) }));
+      },
+      // 哪幾條連線登記了這個資料庫。人是靠連線名（「正式」／「測試」）分辨的，光看 db 名分不出。
+      connsFor(db) {
+        const names = this.conns.filter((x) => x.db_name === db).map((x) => x.name);
+        return names.length ? `（連線：${names.join("、")}）` : "";
       },
       matchedCount(c, dir) {
         const a = (c.addonsCandidates || []).find((x) => x.dir === dir);
@@ -289,6 +300,12 @@
                 <div class="field-item field-item-narrow">
                   <label class="field-label">資料庫</label>
                   <input v-model="editForm.db_name" class="field-input" />
+                  <span class="ui-next-deploy-hint" style="margin:0">
+                    <template v-if="conns.length">這個專案的連線登記了：
+                      <template v-for="c in conns" :key="c.id"><code>{{ c.db_name }}</code>（{{ c.name }}）ㆍ</template>
+                    </template>
+                    測試區與正式區不能填同一個。
+                  </span>
                 </div>
                 <div class="field-item">
                   <label class="field-label">addons 目錄（客戶機宿主上的絕對路徑）</label>
@@ -417,10 +434,14 @@
               </select>
             </div>
             <div class="field-item field-item-narrow" v-if="dbChoices(c).length > 1">
-              <label class="field-label">要升級哪一個資料庫</label>
+              <label class="field-label">要升級哪一個資料庫 <span style="color:var(--danger)">*</span></label>
               <select v-model="assign[i].db_name" class="field-input">
-                <option v-for="d in dbChoices(c)" :key="d" :value="d">{{ d }}</option>
+                <option v-for="d in dbChoices(c)" :key="d.value" :value="d.value">{{ d.label }}</option>
               </select>
+              <span class="ui-next-deploy-hint" style="margin:0">
+                預設帶的是「掃描用的那條連線」登記的資料庫。這台機器上有兩個 instance 時兩個
+                都會拿到同一個名字，<strong>務必自己核對</strong>——測試區指到正式資料庫，按下去就是升級客戶正在用的資料。
+              </span>
             </div>
             <div class="field-item">
               <label class="field-label">addons 目錄</label>
