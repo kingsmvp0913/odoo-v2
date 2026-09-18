@@ -10,7 +10,22 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const express = require('express');
+
+// 試連一次，判斷這個 socket 檔背後「有沒有行程在聽」。
+// 連得上＝有人在服務；ECONNREFUSED／ENOENT＝前一個佔用者被 SIGKILL 留下的死檔，可以安全清掉。
+// 其餘錯誤（EACCES、逾時等）一律當成「有人在聽」——寧可大聲失敗，也不要把別人正在服務的 socket 搶走。
+function isSocketAlive(sockPath, timeoutMs = 1000) {
+  return new Promise(resolve => {
+    const probe = net.connect(sockPath);
+    let settled = false;
+    const done = alive => { if (settled) return; settled = true; probe.destroy(); resolve(alive); };
+    probe.setTimeout(timeoutMs, () => done(true));
+    probe.once('connect', () => done(true));
+    probe.once('error', err => done(!(err.code === 'ECONNREFUSED' || err.code === 'ENOENT')));
+  });
+}
 
 function aiSocketPath() {
   return process.env.AIDEV_AI_SOCKET || path.join(__dirname, '..', '..', '..', 'data', 'run', 'ai.sock');
@@ -41,6 +56,14 @@ async function startAiSocketServer(sockPath) {
   try { st = fs.lstatSync(sockPath); } catch { st = null; }
   if (st) {
     if (!st.isSocket()) throw new Error(`${sockPath} 已存在且不是 socket，拒絕覆蓋`);
+    // 砍之前必須先確認沒有人在聽。只看「檔案存在且是 socket」就 unlink 的話，容器模式下
+    // 任何第二份平台程式（跑測試、手動起一次 server）都會把正在服務的 socket 靜默搶走：
+    // 它結束之後，正式那支還在聽已經被 unlink 的 inode，路徑上卻是一個沒人聽的死檔
+    // ⇒ 之後每一次 /ai 查詢都 ECONNREFUSED，而且平台一行 log 都不會寫。
+    // 2026-09-18 正式環境實際發生過：對話 AI 查不到客戶資料庫，症狀只出現在 AI 那一側。
+    if (await isSocketAlive(sockPath)) {
+      throw new Error(`${sockPath} 已經有行程在聽，拒絕搶佔——請先停掉那個平台實例再啟動`);
+    }
     fs.unlinkSync(sockPath);
   }
   const server = http.createServer(createAiSocketApp());
