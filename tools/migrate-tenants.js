@@ -52,14 +52,21 @@ async function applyTenantMigration(query, plan) {
     companyCreated = true;
   }
 
-  // 不再加 `AND company_id IS NULL`：pg-mem 對「SET 的欄位同時出現在 WHERE ... IS NULL」
-  // 這個寫法會靜默不更新任何列（已用最小重現腳本排除欄位順序、外鍵值等其他變因）。
-  // 這裡不需要這道保險——要更新的名單來自剛剛的 planTenantMigration，本來就已經是
-  // 「company_id 還是 NULL」的那批帳號。
+  // `company_id IS NULL` 這道保險不能拿掉：它護的是「plan 查完到 apply 寫入」這段窗口——
+  // 這中間若有別的路徑先幫這個帳號掛了公司，這裡不該覆蓋掉。
+  // 寫成 coalesce(company_id::text, '') = '' 而不是直接 `company_id IS NULL`，是刻意繞開
+  // pg-mem 的限制：同一句 UPDATE 只要把「SET 的那個欄位」直接寫進 WHERE ... IS NULL，
+  // pg-mem 就會靜默影響 0 列（已用最小重現腳本排除欄位順序、外鍵值、改用子查詢等其他寫法，
+  // 只有這個 coalesce 寫法在 pg-mem 下能正確比對且維持等價語意）。
+  // usersUpdated 算的是「真的被寫入」的列數（rowCount），不是名單長度——plan/apply 之間
+  // 如果真的有人搶先掛了公司，這裡的數字要跟 plan.usersToAssign.length 對不上，不能悄悄蓋過去。
   let usersUpdated = 0;
   for (const u of plan.usersToAssign) {
-    await query('UPDATE users SET company_id = $1 WHERE id = $2', [companyId, u.id]);
-    usersUpdated++;
+    const res = await query(
+      "UPDATE users SET company_id = $1 WHERE id = $2 AND coalesce(company_id::text, '') = ''",
+      [companyId, u.id]
+    );
+    usersUpdated += res.rowCount;
   }
 
   let projectsBound = 0;
