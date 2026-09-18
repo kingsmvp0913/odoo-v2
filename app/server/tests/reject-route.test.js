@@ -35,10 +35,14 @@ beforeAll(async () => {
   dbModule = require('../db');
   dbModule._setPoolForTesting(new Pool());
   await dbModule.migrate();
-  const { rows: [u] } = await dbModule.query("INSERT INTO users (username,password_hash,display_name) VALUES ('rv','h','R') RETURNING id");
+  // loadTaskForActor 現在還會查「任務所屬專案是否綁了 owner 的公司」，沒公司的舊式 fixture
+  // 一律 404，測試根本進不到 reject 的邏輯——補一家公司並綁上這個專案，讓 setup 貼近遷移後的真實形狀。
+  const { rows: [company] } = await dbModule.query("INSERT INTO companies (name,is_active) VALUES ('R公司',true) RETURNING id");
+  const { rows: [u] } = await dbModule.query("INSERT INTO users (username,password_hash,display_name,company_id) VALUES ('rv','h','R',$1) RETURNING id", [company.id]);
   userId = u.id;
   token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
   const { rows: [p] } = await dbModule.query("INSERT INTO projects (name,odoo_version) VALUES ('P','17.0') RETURNING id");
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1, $2)', [p.id, company.id]);
   const { rows: [t] } = await dbModule.query(
     "INSERT INTO tasks (user_id, task_id, source, title, status, project_id, reentry_count) VALUES ($1,'task_odoo_1','odoo','T','review_pending',$2,0) RETURNING id",
     [userId, p.id]

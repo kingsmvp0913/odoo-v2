@@ -175,13 +175,23 @@ test('POST /api/tasks/:id/mark-conflict-resolved → push_ai 變體解完 → �
 // 憑證要在路由這關就驗：等進了 push_ai_running 才發現沒 PAT，使用者看到的是一張跑到一半失敗的
 // 任務，而不是「請先填 PAT」——按鈕當下就該擋下來。
 test('POST /api/tasks/:id/approve → 核准者無 PAT → 400，任務留在 review_pending', async () => {
+  // loadTaskForActor 現在還會查「任務所屬專案是否綁了 owner 的公司」，沒公司的舊式 fixture
+  // 一律 404，測試根本進不到「無 PAT」的檢查——補一家公司並綁上這個專案，讓 setup 貼近遷移後的真實形狀。
+  const { rows: [company] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('NoPatCo', true) RETURNING id"
+  );
   const { rows: [nopatUser] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('nopat', 'x', 'NoPAT') RETURNING id"
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('nopat', 'x', 'NoPAT', $1) RETURNING id",
+    [company.id]
   );
   const nopatToken = jwt.sign({ userId: nopatUser.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('NoPatProj','17.0') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO project_companies (project_id, company_id) VALUES ($1, $2)",
+    [proj.id, company.id]
   );
   await dbModule.query(
     "INSERT INTO project_repos (project_id, label, repo_url, local_path, is_primary, clone_status) VALUES ($1,'main','u','/repos/nopat/main',true,'done')",
