@@ -262,3 +262,16 @@ test('POST /api/auth/login：錯 4 次、對 1 次、再錯 4 次 → 沒被鎖�
   const { rows } = await dbModule.query("SELECT blocked FROM login_attempts WHERE username = 'bf'");
   expect(rows).toEqual([{ blocked: true }]);
 });
+
+// 租戶隔離：自助註冊一律 role='user'，不能沒有公司（否則遷移跑完後 company_id 永遠 NULL，
+// 核准之後 canSeeProject 仍恆為 false）。放在檔案最後，插入內部公司不汙染前面的既有測試。
+test('POST /api/auth/register → 有內部公司時，新帳號預設掛內部公司', async () => {
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
+  );
+  const res = await request(app).post('/api/auth/register')
+    .send({ username: 'tenant-reg1', password: 'password123', display_name: 'Reg1' });
+  expect(res.status).toBe(201);
+  const { rows: [u] } = await dbModule.query('SELECT company_id FROM users WHERE username = $1', ['tenant-reg1']);
+  expect(u.company_id).toBe(co.id);
+});

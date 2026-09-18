@@ -10,7 +10,10 @@
 const INTERNAL_COMPANY_NAME = '內部';
 
 async function planTenantMigration(query) {
-  const { rows: coRows } = await query('SELECT id, is_active FROM companies WHERE name = $1', [INTERNAL_COMPANY_NAME]);
+  // 用 is_internal 找、不用名字找：Part 2 開放公司管理員改公司名稱之後，名字比對要嘛因為
+  // 「內部」已被改名而撞唯一索引再建一家內部公司，要嘛更糟——找到別家剛好被改名叫「內部」的
+  // 客戶公司，把全部專案綁給不相干的對象。is_internal 是唯一索引保證只有一筆 true 的真旗標。
+  const { rows: coRows } = await query('SELECT id, is_active FROM companies WHERE is_internal = true');
   const internalCompany = coRows[0]
     ? { exists: true, id: coRows[0].id, isActive: coRows[0].is_active }
     : { exists: false, id: null, isActive: false };

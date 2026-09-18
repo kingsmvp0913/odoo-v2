@@ -1,9 +1,10 @@
 const { query } = require('../db');
 
 // 租戶範圍判斷的唯一真相（規格 §5.2）。
-// 為什麼公司管理員不重用 role='admin'：全平台至少 6 處散落的 role === 'admin' 檢查
-//（auth.js、index.js×2、project-routes.js、token-report-routes.js、pipeline-routes.js），
-// 漏改一處，客戶的公司管理員就在那裡變成平台管理員。用新值的話，
+// 為什麼公司管理員不重用 role='admin'：全平台散落至少 21 處判斷 role 是否為 'admin' 的檢查、
+// 橫跨 13 個檔案（auth.js、index.js、admin-routes.js、project-routes.js、token-report-routes.js、
+// pipeline-routes.js…，非窮舉，之後還會再長），漏改一處，客戶的公司管理員就在那裡變成平台
+// 管理員。用新值的話，
 // 既有檢查天生把公司管理員擋在外面——漏改的結果是「少一個功能」而不是「客戶拿到平台權限」。
 const ROLES = { PLATFORM_ADMIN: 'admin', COMPANY_ADMIN: 'company_admin', USER: 'user' };
 

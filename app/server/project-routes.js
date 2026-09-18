@@ -400,14 +400,32 @@ function registerRoutes(app) {
       if (folderErr) return res.status(400).json({ error: folderErr });
       // 測試埠不在此配發：已改為租約制，由 env-agent 於「啟動測試區」時向池借、停止時歸還
       // （見 port-alloc.js leasePort）。建立時就佔埠會讓沒開過測試區的專案白白吃掉併發槽。
-      const { rows } = await query(
-        // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
-        // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
-        `INSERT INTO projects (name, odoo_version, description, folder_name, e2e_disabled, edition)
-         VALUES ($1, $2, $3, $4, true, $5) RETURNING ${PROJECT_PUBLIC_COLS}`,
-        [name, odoo_version, description || null, folder_name || null, edition || 'community']
-      );
-      return res.status(201).json(rows[0]);
+      const project = await withTransaction(async (client) => {
+        const { rows } = await client.query(
+          // 新建專案預設關閉 E2E（e2e_disabled=true）；明確寫死於 INSERT 而非靠欄位 DEFAULT，
+          // 因現有 DB 的欄位 DEFAULT 早已凍結成 false，改 schema 對現有機器無效。
+          `INSERT INTO projects (name, odoo_version, description, folder_name, e2e_disabled, edition)
+           VALUES ($1, $2, $3, $4, true, $5) RETURNING ${PROJECT_PUBLIC_COLS}`,
+          [name, odoo_version, description || null, folder_name || null, edition || 'community']
+        );
+        const proj = rows[0];
+        // 租戶隔離規格 §4.3：新建專案同一交易內自動綁內部公司（can_release=false），
+        // 否則遷移跑完後新專案綁定數是 0，canSeeProject 對所有非平台管理員回 false，
+        // GET /api/tasks 仍 200（列表不過濾）但每一張任務一開就 404，且完全無錯誤訊號。
+        // 用 is_internal 找、不用名字找：名字未來可被公司管理員改（見 tools/migrate-tenants.js 同理由）。
+        // 遷移還沒跑之前沒有內部公司，此時就是 no-op，讓建立專案在那個窗口照常可用。
+        const { rows: internalRows } = await client.query(
+          'SELECT id FROM companies WHERE is_internal = true LIMIT 1'
+        );
+        if (internalRows[0]) {
+          await client.query(
+            'INSERT INTO project_companies (project_id, company_id, can_release) VALUES ($1, $2, false)',
+            [proj.id, internalRows[0].id]
+          );
+        }
+        return proj;
+      });
+      return res.status(201).json(project);
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'project name already exists' });
       res.status(500).json({ error: err.message });

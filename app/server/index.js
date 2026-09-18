@@ -114,12 +114,18 @@ function createApp() {
   {
     const jwt = require('jsonwebtoken');
     const { query } = require('./db');
+    // 密鑰解法要跟 auth.js 的 verifyToken 同一個來源：這裡若自己重讀 process.env.JWT_SECRET，
+    // 一旦環境變數在執行期間變動或缺值，這關 catch 到驗簽失敗就 next()（fail-open，這關本來
+    // 就只是附加防線），但 verifyToken 用的是模組載入當下就固定住的常數，兩邊對不上時
+    // 這關會悄悄放行本該擋下的請求。正式環境不會缺 JWT_SECRET（啟動腳本擋著不給開機），
+    // 但兩處各自求值本身就是地雷，靠共用同一個常數消掉。
+    const { JWT_SECRET } = require('./auth');
     app.use('/api', async (req, res, next) => {
       if (req.method === 'GET' && req.path === '/auth/me') return next();
       const header = req.headers.authorization;
       if (!header?.startsWith('Bearer ')) return next();
       let userId;
-      try { userId = jwt.verify(header.slice(7), process.env.JWT_SECRET).userId; } catch { return next(); }
+      try { userId = jwt.verify(header.slice(7), JWT_SECRET).userId; } catch { return next(); }
       try {
         const { rows } = await query(
           `SELECT c.is_active, c.active_from, c.active_until

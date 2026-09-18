@@ -1258,3 +1258,52 @@ describe('PUT /api/projects/:id 的 description 清空語意', () => {
     expect(row.description).toBe('要保留的備註');
   });
 });
+
+// 租戶隔離規格 §4.3：新建專案同一交易內自動綁內部公司（can_release=false）。
+// 放在檔案最後——一旦插入內部公司，之後所有 POST /api/projects 都會自動多一筆 project_companies
+// 綁定，不該汙染前面那些完全不知道租戶概念的既有測試。
+describe('POST /api/projects → 自動綁內部公司（租戶隔離 §4.3）', () => {
+  test('遷移還沒跑、還沒有內部公司時 → 建立專案是 no-op，不擋、不報錯', async () => {
+    const res = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+      .send({ name: '無內部公司測試', folder_name: 'noco', odoo_version: '17.0' });
+    expect(res.status).toBe(201);
+    const { rows } = await dbModule.query('SELECT COUNT(*)::int n FROM project_companies WHERE project_id = $1', [res.body.id]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  test('有內部公司時 → 同一交易內自動綁定 can_release=false，該公司的一般使用者能經 loadTaskForActor 拿到任務', async () => {
+    const { loadTaskForActor } = require('../lib/task-access');
+    const { rows: [co] } = await dbModule.query(
+      "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
+    );
+    const res = await request(app).post('/api/projects').set('Authorization', `Bearer ${token}`)
+      .send({ name: '有內部公司測試', folder_name: 'withco', odoo_version: '17.0' });
+    expect(res.status).toBe(201);
+    const pid = res.body.id;
+
+    const { rows: [bind] } = await dbModule.query(
+      'SELECT can_release FROM project_companies WHERE project_id = $1 AND company_id = $2', [pid, co.id]
+    );
+    expect(bind).toBeTruthy();
+    expect(bind.can_release).toBe(false);
+
+    // 內部公司的一般使用者：本人是任務 owner，靠專案綁定（不是平台管理員）通過 loadTaskForActor
+    // 的租戶檢查那一段——這正是項目 1 要修的斷點：沒綁公司的話這裡會回 null。
+    const { rows: [member] } = await dbModule.query(
+      "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('內部一般員','x','內部一般員','user',$1) RETURNING id",
+      [co.id]
+    );
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'tenant-bind-t1','manual','標題','new',$2) RETURNING id",
+      [member.id, pid]
+    );
+    const memberReq = {
+      userId: member.id, isAdmin: false,
+      actor: {
+        userId: member.id, role: 'user', companyId: co.id,
+        isPlatformAdmin: false, isCompanyAdmin: false, isInternal: true, companyUsable: true,
+      },
+    };
+    expect(await loadTaskForActor(t.id, memberReq, 'id, user_id, project_id')).not.toBeNull();
+  });
+});

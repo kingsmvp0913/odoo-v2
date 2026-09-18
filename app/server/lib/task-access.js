@@ -19,7 +19,16 @@ async function loadTaskForActor(taskId, req, columns = '*') {
   );
   const row = rows[0];
   if (!row) return null;
-  if (row.project_id && !await canSeeProject(req.actor, row.project_id)) return null;
+  // row 真的帶 project_id 屬性才能信任它的值：呼叫端的欄位清單可能把 project_id 取了別名
+  // （例如 'id, project_id as pid'），上面的 regex 會誤判「已包含」而不補欄位，實際回傳的
+  // row 只有 pid、沒有 project_id，此時 row.project_id 是 undefined——不能因此當作「這任務
+  // 沒有 project_id」而放行（fail-open 是租戶檢查最不該有的方向），要另外查一次真正的值。
+  let projectId = row.project_id;
+  if (!('project_id' in row)) {
+    const { rows: pidRows } = await query('SELECT project_id FROM tasks WHERE id = $1', [taskId]);
+    projectId = pidRows[0] ? pidRows[0].project_id : null;
+  }
+  if (projectId && !await canSeeProject(req.actor, projectId)) return null;
   return row;
 }
 

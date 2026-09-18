@@ -145,9 +145,15 @@ function registerRoutes(app) {
       if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
 
       const password_hash = await hashPassword(password);
+      // 租戶隔離：自助註冊一律 role='user'（非平台管理員），預設掛內部公司——否則遷移跑完後
+      // company_id 永遠 NULL，canSeeProject 恆為 false，核准之後照樣什麼都看不到。
+      // 此為暫時預設值，子專案 2（Part 2）會在管理員介面改成明確選公司，屆時這裡要拿掉。
+      // 遷移還沒跑之前沒有內部公司，此時就是 no-op（維持 NULL），不因此擋掉註冊。
+      const { rows: internalRows } = await query('SELECT id FROM companies WHERE is_internal = true LIMIT 1');
+      const companyId = internalRows[0] ? internalRows[0].id : null;
       const { rows: inserted } = await query(
-        'INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ($1, $2, $3, $4, false) RETURNING id',
-        [username, password_hash, display_name, 'user']
+        'INSERT INTO users (username, password_hash, display_name, role, approved, company_id) VALUES ($1, $2, $3, $4, false, $5) RETURNING id',
+        [username, password_hash, display_name, 'user', companyId]
       );
       res.status(201).json({ token: signToken(inserted[0].id) });
     } catch (err) {
@@ -253,4 +259,4 @@ function registerRoutes(app) {
   });
 }
 
-module.exports = { verifyToken, registerRoutes, buildActor };
+module.exports = { verifyToken, registerRoutes, buildActor, JWT_SECRET };

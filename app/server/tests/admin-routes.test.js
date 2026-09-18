@@ -355,3 +355,35 @@ test('GET /api/admin/providers → codex 的 efforts 逐模型不同，且不含
   // codex-auto-review 是 visibility: hide（codex review 專用），不得出現在使用者可選清單
   expect(Object.keys(byId)).not.toContain('codex-auto-review');
 });
+
+// 租戶隔離：新帳號不能沒有公司（否則遷移跑完後 company_id 永遠 NULL，canSeeProject 恆 false）。
+// 放在檔案最後——插入內部公司後，之後每一支再呼叫 POST /api/admin/users 都會被自動掛上，
+// 不該汙染前面完全不知道租戶概念的既有測試。
+describe('POST /api/admin/users → 預設掛內部公司（租戶隔離）', () => {
+  let internalCoId;
+
+  test('建內部公司（比照 tools/migrate-tenants.js 的產物）', async () => {
+    const { rows: [co] } = await dbModule.query(
+      "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
+    );
+    internalCoId = co.id;
+  });
+
+  test('新建一般使用者 → 預設掛內部公司', async () => {
+    const res = await request(app).post('/api/admin/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'tenant-user1', password: 'pass12345', display_name: '一般員', role: 'user' });
+    expect(res.status).toBe(201);
+    const { rows: [u] } = await dbModule.query('SELECT company_id FROM users WHERE username = $1', ['tenant-user1']);
+    expect(u.company_id).toBe(internalCoId);
+  });
+
+  test('新建平台管理員 → company_id 維持 NULL，不得被預設值綁公司', async () => {
+    const res = await request(app).post('/api/admin/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'tenant-admin1', password: 'pass12345', display_name: '新管理員', role: 'admin' });
+    expect(res.status).toBe(201);
+    const { rows: [u] } = await dbModule.query('SELECT company_id FROM users WHERE username = $1', ['tenant-admin1']);
+    expect(u.company_id).toBeNull();
+  });
+});

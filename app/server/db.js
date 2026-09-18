@@ -795,7 +795,10 @@ async function migrate() {
     `CREATE TABLE IF NOT EXISTS companies (
       id           SERIAL PRIMARY KEY,
       name         TEXT UNIQUE NOT NULL,
-      -- 預設安全值：新公司一律停用，只有平台管理員的建立／啟用端點寫 true（rules/db-schema 43）
+      -- 預設安全值：新公司一律停用（rules/db-schema 43）。現況：唯一會寫 true 的路徑是
+      -- tools/migrate-tenants.js（建立內部公司時一併設 true）——平台管理員「建立／啟用客戶
+      -- 公司」的管理端點屬於 Part 2，本分支（Part 1）並未實作，讀到這裡不要誤以為已經有
+      -- 端點在把關；管理端點補上之後，這裡才會有第二條寫 true 的路徑。
       is_active    BOOLEAN NOT NULL DEFAULT false,
       -- 內部公司記號，只管「AI 用平台的訂閱付錢」，不管看得到哪些專案。
       -- 唯一寫 true 的路徑是 tools/migrate-tenants.js；任何 API 都不可設定——
@@ -1238,8 +1241,10 @@ async function migrate() {
     // 舊列為 NULL＝維持原本掛在需求那一則的行為，不回填（推不出當初對應哪一則）。
     { table: 'task_attachments', col: 'log_id', sql: 'ALTER TABLE task_attachments ADD COLUMN log_id INTEGER REFERENCES task_logs(id)' },
     // 租戶隔離（規格 §4.2）：NULL 只允許平台管理員；company_admin／user 一律有值。
-    // 約束由 lib/tenant-access.js 的 validateRoleCompany 在寫入端把關，不放 CHECK——
-    // 遷移跑完之前既有 6 個 user 還是 NULL，DB 層 CHECK 會讓 migrate 直接失敗。
+    // 不放 CHECK——遷移跑完之前既有 6 個 user 還是 NULL，DB 層 CHECK 會讓 migrate 直接失敗。
+    // 現況：lib/tenant-access.js 的 validateRoleCompany 只是一個現成的純函式，目前零呼叫端
+    // （PUT /api/admin/users/:id 把 body 的 role COALESCE 進 UPDATE，完全沒過它）——這條不變式
+    // 今天並未在任何寫入路徑被實際檢查。把它接進去是 Part 2 的工作，接上之前不要假設它在把關。
     { table: 'users', col: 'company_id', sql: 'ALTER TABLE users ADD COLUMN company_id INTEGER REFERENCES companies(id)' },
   ];
   const tableColsCache = {};

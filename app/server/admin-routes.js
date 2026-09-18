@@ -361,10 +361,21 @@ function registerRoutes(app) {
       // 而存，E2E 改全域測試帳號後已退場——auth.js 的 setup／改密碼／登入都不再寫，db.js 每次
       // 啟動還會把既有值清成 NULL。這裡是最後一條殘留的寫入路徑（寫了下次重啟就沒了，只剩外洩面）。
       // 欄位本身依 db.js 無 drop column 機制的慣例保留。
+      const finalRole = role || 'user';
+      // 租戶隔離：非平台管理員的新帳號預設掛內部公司，否則遷移跑完後 company_id 永遠 NULL，
+      // canSeeProject 對這個人恆為 false，畫面表現跟項目 1 同一種「列表看得到、開就 404」。
+      // 平台管理員一律留 NULL——這是全平台角色模型的地基，不能因為給了預設值就被誤綁公司。
+      // 此為暫時預設值，子專案 2（Part 2）會在管理員介面改成明確選公司，屆時這裡要拿掉。
+      // 遷移還沒跑之前沒有內部公司，此時就是 no-op（維持 NULL），不因此擋掉建帳號。
+      let companyId = null;
+      if (finalRole !== 'admin') {
+        const { rows: internalRows } = await query('SELECT id FROM companies WHERE is_internal = true LIMIT 1');
+        companyId = internalRows[0] ? internalRows[0].id : null;
+      }
       const { rows } = await query(
-        `INSERT INTO users (username, password_hash, display_name, role)
-         VALUES ($1, $2, $3, $4) RETURNING id, username, display_name, role`,
-        [username, password_hash, display_name || username, role || 'user']
+        `INSERT INTO users (username, password_hash, display_name, role, company_id)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, username, display_name, role`,
+        [username, password_hash, display_name || username, finalRole, companyId]
       );
       res.status(201).json(rows[0]);
     } catch (err) {
