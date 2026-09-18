@@ -146,4 +146,43 @@ describe('公司不可用時的全域閘門（規格 §7）', () => {
     const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
   });
+
+  // 白名單只留 GET /auth/me；PUT /auth/me 會改 display_name／密碼，是狀態變更端點，
+  // 曾經因為沿用舊閘門的 /auth/ 整段前綴白名單而被漏放，複審後收窄。
+  // body 選了「純改 display_name」——若白名單又被放寬，這支會拿到 200/{ok:true} 而不是 403。
+  test('PUT /api/auth/me（狀態變更）一樣 403，GET /api/auth/me 仍然放行', async () => {
+    const putRes = await request(app).put('/api/auth/me')
+      .set('Authorization', `Bearer ${offToken}`)
+      .send({ display_name: '應該被擋下來的改名' });
+    expect(putRes.status).toBe(403);
+    expect(putRes.body.companyUnusable).toBe(true);
+
+    const getRes = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${offToken}`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.company_usable).toBe(false);
+  });
+
+  // 規格風險最高點：閘門查詢 DB 失敗時必須放行，不能讓資料庫抖一下就把全平台擋在外面。
+  // 只 mock 這一支查詢——用 SELECT 欄位清單辨認（`c.is_active, c.active_from, c.active_until`
+  // 只有本閘門的 SQL 這樣選），不能只認「JOIN companies」：verifyToken 自己的
+  // LEFT JOIN companies 查詢也含這個子字串，會被一起打斷，誤判成本閘門擋人。
+  // 其他查詢一律照走真實 pg-mem，避免整個 db module 被 mock 掉、拖垮這支檔案其他測試
+  //（rules/testing 26 的教訓）。
+  test('閘門查詢 DB 失敗時放行，不阻斷整個平台', async () => {
+    const pool = dbModule.getPool();
+    const originalQuery = pool.query.bind(pool);
+    const spy = jest.spyOn(pool, 'query').mockImplementation((text, params) => {
+      if (typeof text === 'string' && text.includes('c.is_active, c.active_from, c.active_until')) {
+        return Promise.reject(new Error('模擬 DB 查詢失敗'));
+      }
+      return originalQuery(text, params);
+    });
+    try {
+      const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${offToken}`);
+      // 閘門本身查不動，交給下游決定；offToken 對應的帳號其餘條件都合法，最終仍會 200
+      expect(res.status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

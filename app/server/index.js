@@ -105,14 +105,17 @@ function createApp() {
 
   // 公司不可用閘門（規格 §7）：公司停用或不在使用期間 ⇒ 所有工作台 API 403。
   // 為什麼全域擋而不是逐支路由擋：逐支一定會漏，而漏掉的那一支就是客戶停繳之後還能用的那一支。
-  // 只放行 GET /api/auth/me——前端要靠它顯示「為什麼不能用」，擋掉會變成一片空白而不是一句說明。
+  // 白名單只有一條：GET /auth/me——前端要靠它顯示「為什麼不能用」，擋掉會變成一片空白而不是一句說明。
+  // 不放行整個 /auth/*：PUT /api/auth/me 會改 display_name 和密碼，是狀態變更端點，
+  // 這道閘門存在的目的就是擋住這種人，不能因為同路徑前綴就一起放行。
+  // 真正未帶 token 的呼叫（login、setup 狀態查詢、首次設定）不受影響——它們沒有 Authorization
+  // header，下面 `if (!header?.startsWith('Bearer '))` 那行本來就會放行。
   // 形狀照抄上面的未核准閘門（自己 jwt.verify 再查 DB）：這一段跑在 verifyToken 之前，拿不到 req.actor。
   {
     const jwt = require('jsonwebtoken');
     const { query } = require('./db');
     app.use('/api', async (req, res, next) => {
       if (req.method === 'GET' && req.path === '/auth/me') return next();
-      if (req.path.startsWith('/auth/') || req.path.startsWith('/setup/')) return next();
       const header = req.headers.authorization;
       if (!header?.startsWith('Bearer ')) return next();
       let userId;
