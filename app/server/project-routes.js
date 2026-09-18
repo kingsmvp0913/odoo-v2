@@ -542,7 +542,10 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
+  // 租戶靜態守衛（規格 §5.4）認得到的名字只有 loadProjectForActor／loadTaskForActor／
+  // requirePlatformAdmin——這裡原本的 requireAdmin 是同義的舊查詢（見 P43 定義），並排掛上
+  // requirePlatformAdmin 讓這支端點在守衛眼中也是「有人把關」，不改動既有的拒絕訊息與行為。
+  app.patch('/api/projects/:id', verifyToken, requireAdmin, requirePlatformAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name, e2e_disabled } = req.body;
       // 防重：來源對應名稱不可同時綁到多個專案
@@ -594,7 +597,8 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
+  // 同上：並排掛 requirePlatformAdmin 供靜態守衛辨識，requireAdmin 仍是實際先擋的那一道。
+  app.delete('/api/projects/:id', verifyToken, requireAdmin, requirePlatformAdmin, async (req, res) => {
     try {
       // 順序是關鍵：可回滾的 DB 刪除先做完並 COMMIT，不可逆的實體刪除（測試環境、repo clone、
       // uploads 目錄）才動。反過來的話 DB 一失敗就留下「專案還在，但環境與 clone 已經消失」的

@@ -10,6 +10,7 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { requireAutoDeploy } = require('./lib/auto-deploy-switch');
+const { requirePlatformAdmin } = require('./lib/tenant-access');
 
 // 比照 admin-routes／feedback-routes 的既有寫法（該檔未匯出，兩處已各自定義一份）
 async function requireAdmin(req, res, next) {
@@ -69,8 +70,12 @@ async function resolveBranch(repoId, env) {
 
 function registerRoutes(app) {
   const guard = [verifyToken, requireAdmin, requireAutoDeploy];
+  // requirePlatformAdmin 額外掛在每支路由自己的註冊上（而非塞進上面的 guard 陣列）：
+  // 判的是同一件事（role==='admin'），guard 裡的 requireAdmin 仍是實際先擋、決定回應
+  // 訊息的那一道（deploy-routes-authz.test.js 斷言 'Admin only'）；這支只是讓租戶靜態
+  // 守衛（規格 §5.4，逐支路由掃描）認得到「有人把關」。
 
-  app.get('/api/projects/:id/deploy-targets', guard, async (req, res) => {
+  app.get('/api/projects/:id/deploy-targets', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows } = await query(
         `SELECT ${TARGET_COLS} FROM project_deploy_targets WHERE project_id = $1 ORDER BY env, id`,
@@ -88,7 +93,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/deploy-probe', guard, async (req, res) => {
+  app.post('/api/projects/:id/deploy-probe', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const connId = Number(req.body && req.body.conn_id);
       if (!connId) return res.status(400).json({ error: '缺少 conn_id' });
@@ -100,7 +105,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/deploy-targets', guard, async (req, res) => {
+  app.post('/api/projects/:id/deploy-targets', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const b = req.body || {};
       if (!['test', 'prod'].includes(b.env)) return res.status(400).json({ error: 'env 只能是 test 或 prod' });
@@ -147,7 +152,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.patch('/api/projects/:id/deploy-targets/:tid', guard, async (req, res) => {
+  app.patch('/api/projects/:id/deploy-targets/:tid', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const b = req.body || {};
       const { rows: [cur] } = await query(
@@ -239,7 +244,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/projects/:id/deploy-targets/:tid', guard, async (req, res) => {
+  app.delete('/api/projects/:id/deploy-targets/:tid', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [t] } = await query(
         'SELECT id, enabled FROM project_deploy_targets WHERE id = $1 AND project_id = $2',
@@ -257,7 +262,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/deploy-targets/:tid/deploy', guard, async (req, res) => {
+  app.post('/api/projects/:id/deploy-targets/:tid/deploy', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [t] } = await query(
         'SELECT id, env FROM project_deploy_targets WHERE id = $1 AND project_id = $2',
@@ -279,7 +284,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/projects/:id/deploy-runs', guard, async (req, res) => {
+  app.get('/api/projects/:id/deploy-runs', guard, requirePlatformAdmin, async (req, res) => {
     try {
       const params = [req.params.id];
       let where = 'WHERE t.project_id = $1';

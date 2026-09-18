@@ -13,7 +13,7 @@ const { invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles } = require('./lib/attachments');
 const { loadTaskForActor } = require('./lib/task-access');
-const { loadProjectForActor } = require('./lib/tenant-access');
+const { loadProjectForActor, requirePlatformAdmin } = require('./lib/tenant-access');
 const { isMaintenance } = require('./pipeline/maintenance');
 
 // multer 設定已移到 lib/attachments 當單一來源：新增任務／留言／人工退回三個入口共用同一組限制，
@@ -350,6 +350,9 @@ function registerRoutes(app) {
   // Task detail + last 5 logs + 工單主附件
   app.get('/api/tasks/:id', verifyToken, async (req, res) => {
     try {
+      // 租戶邊界（規格 §5.2）：下面那條 SQL 只查 owner／admin，專案綁定被解除後 owner
+      // 仍看得到自己那張——loadTaskForActor 多一層 canSeeProject 才會把它擋下。
+      if (!await loadTaskForActor(req.params.id, req, 'id')) return res.status(404).json({ error: 'Task not found' });
       const { rows: tasks } = await query(
         `SELECT t.*, e.status AS env_status
            FROM tasks t
@@ -559,6 +562,9 @@ function registerRoutes(app) {
   // 附件下載：驗證附件屬於該任務且該任務屬於目前使用者，再串流本機檔案回傳
   app.get('/api/tasks/:id/attachments/:attId/download', verifyToken, async (req, res) => {
     try {
+      // 租戶邊界（規格 §5.2）：下面那條 SQL 只查 owner／admin，專案綁定被解除後 owner
+      // 仍看得到自己那張——loadTaskForActor 多一層 canSeeProject 才會把它擋下。
+      if (!await loadTaskForActor(req.params.id, req, 'id')) return res.status(404).json({ error: 'Attachment not found' });
       const { rows } = await query(
         `SELECT a.filename, a.mimetype, a.file_path
          FROM task_attachments a
@@ -687,10 +693,9 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/tasks/:id/archive', verifyToken, async (req, res) => {
+  // admin only：改走共用的 requirePlatformAdmin（req.actor 已由 verifyToken 備好，免再查一次 DB）
+  app.post('/api/tasks/:id/archive', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
       const { rows } = await query('SELECT id, project_id, git_branch FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       abortTask(req.params.id); // 封存執行中任務：中止在飛 agent，否則子行程續跑到逾時（健檢項11）
@@ -704,10 +709,8 @@ function registerRoutes(app) {
   });
 
   // Unarchive task (admin only — restores to active list)
-  app.post('/api/tasks/:id/unarchive', verifyToken, async (req, res) => {
+  app.post('/api/tasks/:id/unarchive', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可解除封存' });
       const { rows } = await query('SELECT id FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       await query(
@@ -719,10 +722,8 @@ function registerRoutes(app) {
   });
 
   // Delete task permanently (admin only — removes from DB; re-sync will re-import)
-  app.delete('/api/tasks/:id', verifyToken, async (req, res) => {
+  app.delete('/api/tasks/:id', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可刪除任務' });
       const { rows } = await query('SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       if (rows[0].approved_at) return res.status(403).json({ error: '已人工審核通過的任務不可刪除' });
