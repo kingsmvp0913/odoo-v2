@@ -162,10 +162,9 @@ test('已完成（done）的意見不能再被核准', async () => {
 // 3-I1：requireAdmin 內的 SELECT role 若拋錯，沒有 try/catch 就不會呼叫 next()、也不會
 // 回應——請求會被吞掉、掛在原地（管理員開頁面轉圈）。這裡逼 DB 層在 requireAdmin 那一次
 // 查詢拋錯，斷言回應就是 500 + 該錯誤訊息本身，而不是流到下一層才報出無關的錯誤。
-// ⚠ 同一個 request 在打到 requireAdmin 之前，auth.js 的 verifyToken 也查了一次一模一樣
-// 字面的「SELECT role FROM users WHERE id = $1」（它自己的 try/catch 會把失敗吞成 401，
-// 測不到 requireAdmin 本身）。用 mockRejectedValueOnce 攔第一次會誤中 verifyToken；
-// 這裡改成攔「第二次遇到這句字面完全相同的 SQL」，精準命中 requireAdmin 那一次。
+// ⚠ 租戶隔離（Task 4）之後，auth.js 的 verifyToken 改成 LEFT JOIN companies 撈 actor，
+// 不再發出這句字面「SELECT role FROM users WHERE id = $1」——所以現在攔到的第一次、
+// 也是唯一一次，就精準是 requireAdmin 自己那次查詢。
 test('requireAdmin 查詢失敗要在攔截點本身回 500（不能被吞掉、流到下一層才報錯）', async () => {
   const { body } = await request(app).post('/api/feedback')
     .set('Authorization', `Bearer ${userToken}`).field('content', '測 requireAdmin 出錯');
@@ -176,7 +175,7 @@ test('requireAdmin 查詢失敗要在攔截點本身回 500（不能被吞掉、
   const spy = jest.spyOn(pool, 'query').mockImplementation((text, params) => {
     if (text === TARGET_SQL) {
       seen += 1;
-      if (seen === 2) return Promise.reject(new Error('boom')); // 第 1 次是 verifyToken，第 2 次才是 requireAdmin
+      if (seen === 1) return Promise.reject(new Error('boom')); // requireAdmin 自己那次
     }
     return orig(text, params);
   });
