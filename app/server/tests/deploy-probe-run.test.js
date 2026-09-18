@@ -302,10 +302,15 @@ http_port = 8069`;
 // 意圖（Rule 9）：conf 路徑寫死 /etc/odoo/odoo.conf 的話，systemd 安裝的專案（慈雲那台
 // 是 /etc/odoo.conf）會全部抓不到 conf，於是 addons 目錄與模組三個欄位一起退回手填——
 // 而且畫面上看不出是「路徑猜錯」還是「真的沒有 conf」。
-function systemdExec({ confAt = '/etc/odoo.conf', execStart = null } = {}) {
+function systemdExec({ confAt = '/etc/odoo.conf', execStart = null, initScript = null } = {}) {
   return async (conn, cmd) => {
     if (cmd.includes('### whoami')) return { stdout: SYSTEMD_FULL, stderr: '', code: 0 };
     if (cmd.includes('systemctl show')) return { stdout: execStart || '', stderr: '', code: 0 };
+    if (cmd.includes('/etc/init.d/')) {
+      return initScript
+        ? { stdout: initScript, stderr: '', code: 0 }
+        : { stdout: 'cat: 沒有此檔案', stderr: '', code: 1 };
+    }
     if (cmd.includes('cat ')) {
       return cmd.includes(confAt)
         ? { stdout: CIYUN_CONF, stderr: '', code: 0 }
@@ -437,4 +442,32 @@ test('連線指名優先於「有沒有我們的模組」', async () => {
     loadConns: async () => [{ id: 9, name: 'X', db_name: 'd', log_container: 'odoo-prd-web' }],
   });
   expect(r.candidates[0].containerName).toBe('odoo-prd-web');
+});
+
+// ── 被 systemd 包起來的舊式 init 腳本（慈雲正式區實測形狀）
+//
+// 意圖（Rule 9）：這型服務的 ExecStart 指到 /etc/init.d/xxx，odooBin 因此是空的，
+// 而空的 odooBin 會讓部署叫裸名 odoo-bin → `command not found` → 整批回滾，log 只有那一行。
+// 解析器分開測過了，這裡守的是「探測真的會多讀那一層」——少接這一步，兩支純函式全綠也沒用。
+const INIT_EXECSTART = '{ path=/etc/init.d/odoo-server ; argv[]=/etc/init.d/odoo-server start ; }';
+const INIT_SCRIPT = 'NAME=odoo-server\nDAEMON=/odoo/odoo-server/odoo-bin\nCONFIGFILE="/etc/odoo.conf"\n';
+
+test('systemd 專案：ExecStart 是 init 腳本時，再讀一層拿到 odoo 執行檔', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: 'h', ssh_user: 'u', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const exec = systemdExec({ execStart: INIT_EXECSTART, initScript: INIT_SCRIPT });
+  const r = await runProbe(8, 2, exec, { loadRepos: async () => [], loadConns: async () => [] });
+  expect(r.candidates[0].odooBin).toBe('/odoo/odoo-server/odoo-bin');
+});
+
+// 腳本讀不到（權限、路徑不同）不可以讓整個候選消失或報錯——候選不見了人就無從指認。
+test('systemd 專案：init 腳本讀不到時 odooBin 為 null，候選照樣列出來', async () => {
+  loadDecryptedConn.mockResolvedValue({
+    id: 8, ssh_host: 'h', ssh_user: 'u', vpn_enabled: false, db_name: 'ciyun',
+  });
+  const exec = systemdExec({ execStart: INIT_EXECSTART });
+  const r = await runProbe(8, 2, exec, { loadRepos: async () => [], loadConns: async () => [] });
+  expect(r.candidates).toHaveLength(1);
+  expect(r.candidates[0].odooBin).toBeNull();
 });

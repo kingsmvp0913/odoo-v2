@@ -1,5 +1,6 @@
 const { parseProbe, parseConf, parseComposeLabels, buildProbeScript,
-  parseConfPath, parseOdooBin, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs } = require('../lib/deploy-probe');
+  parseConfPath, parseOdooBin, parseInitScriptPath, parseDaemonPath,
+  parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs } = require('../lib/deploy-probe');
 
 // 以下 fixture 是 2026-09-08 對兩台真實客戶機的探測輸出，逐字照抄。
 // 意圖（Rule 9）：解析器唯一的價值就是「看得懂真機吐出來的東西」，自己編的樣本
@@ -209,4 +210,51 @@ test('odoo 執行檔：不是 odoo 執行檔就回 null，不亂猜', () => {
   expect(parseOdooBin('{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /opt/odoo-bin ; }')).toBeNull();
   expect(parseOdooBin('')).toBeNull();
   expect(parseOdooBin('odoo-bin -c /etc/odoo.conf')).toBeNull();   // 沒有 path=
+});
+
+// ── 被 systemd 包起來的舊式 init 腳本（慈雲正式區）
+//
+// 意圖（Rule 9）：`odoo-server.service` 的說明是 `LSB: Enterprise Business Applications`，
+// systemctl show 回的是 path=/etc/init.d/odoo-server。上面那條測試守住「不把它當 odoo 執行檔」，
+// 這一組守住「多讀一層腳本就拿得到真的路徑」——少了它，這型服務的部署每次都 command not found，
+// 而且掃描完全看不出哪裡不對（欄位就是空的）。
+//
+// 下面兩段是 2026-09-18 對慈雲那台實際讀到的輸出，逐字照抄。
+const CIYUN_INIT_EXECSTART =
+  '{ path=/etc/init.d/odoo-server ; argv[]=/etc/init.d/odoo-server start ; ignore_errors=no ; start_time=[n/a] ; pid=0 ; status=0/0 }';
+
+const CIYUN_INIT_SCRIPT = `### BEGIN INIT INFO
+# Provides:             odoo-server
+# Short-Description:    Enterprise Business Applications
+### END INIT INFO
+PATH=/bin:/sbin:/usr/bin
+DAEMON=/odoo/odoo-server/odoo-bin
+NAME=odoo-server
+CONFIGFILE="/etc/odoo-server.conf"
+# 傳給 Odoo daemon 的額外參數。
+DAEMON_OPTS="-c $CONFIGFILE"
+[ -x $DAEMON ] || exit 0`;
+
+test('init 腳本：從 ExecStart 挑出腳本位置', () => {
+  expect(parseInitScriptPath(CIYUN_INIT_EXECSTART)).toBe('/etc/init.d/odoo-server');
+  // 正常的 systemd unit 沒有腳本可讀，不該回東西（否則會多打一次無謂的 SSH）
+  expect(parseInitScriptPath('{ path=/odoo/odoo-server/odoo-bin ; argv[]=/odoo/odoo-server/odoo-bin -c /x.conf ; }')).toBeNull();
+  // /etc/init.d/ 以外的包裝腳本形狀各異，猜不得
+  expect(parseInitScriptPath('{ path=/usr/local/bin/start-odoo.sh ; }')).toBeNull();
+  expect(parseInitScriptPath('')).toBeNull();
+});
+
+test('init 腳本：從 DAEMON= 讀出 odoo 執行檔', () => {
+  expect(parseDaemonPath(CIYUN_INIT_SCRIPT)).toBe('/odoo/odoo-server/odoo-bin');
+  expect(parseDaemonPath('DAEMON="/usr/bin/odoo"')).toBe('/usr/bin/odoo');
+});
+
+// 與 parseOdooBin 同一條規矩：認不出寧可回 null 退回裸名，也不要把包裝程式當成 odoo
+// 丟進 `sudo -u odoo <它> -d <正式DB> -u <模組>`——那是對客戶資料下的指令。
+test('init 腳本：DAEMON 不是 odoo 執行檔就回 null', () => {
+  expect(parseDaemonPath('DAEMON=/sbin/start-stop-daemon')).toBeNull();
+  expect(parseDaemonPath('DAEMON=odoo-bin')).toBeNull();          // 不是絕對路徑
+  expect(parseDaemonPath('DAEMON=/odoo/../etc/odoo-bin')).toBeNull();  // 含 ..
+  expect(parseDaemonPath('# DAEMON=/odoo/odoo-server/odoo-bin')).toBeNull();  // 註解掉的那行
+  expect(parseDaemonPath('')).toBeNull();
 });

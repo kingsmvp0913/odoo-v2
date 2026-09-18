@@ -129,6 +129,24 @@ function parseOdooBin(text) {
   return /^odoo(-bin)?$/.test(m[1].split('/').pop()) ? m[1] : null;
 }
 
+// 舊式 init 腳本被 systemd 包起來時（慈雲正式區：`LSB: Enterprise Business Applications`），
+// ExecStart 指到 /etc/init.d/xxx，parseOdooBin 認不出來（那本來就不是 odoo 執行檔）。
+// 真正的路徑寫在腳本裡，所以這裡把腳本位置挑出來讓呼叫端多讀一次。
+// 只認 /etc/init.d/ 底下的：其他位置的包裝腳本形狀各異，猜不得。
+function parseInitScriptPath(text) {
+  const m = /(?:^|[\s{;])path=(\/etc\/init\.d\/[^\s;]+)/.exec(String(text || ''));
+  return m && validatePath(m[1]) ? m[1] : null;
+}
+
+// init 腳本裡的 `DAEMON=/odoo/odoo-server/odoo-bin`（Debian 慣例，慈雲那台實測就是這一行）。
+// 與 parseOdooBin 同樣只收 basename 是 odoo／odoo-bin 的絕對路徑——認不出寧可回 null
+// 退回裸名，也不要把 start-stop-daemon 之類的東西當成 odoo 丟進部署指令。
+function parseDaemonPath(script) {
+  const m = /^\s*DAEMON=["']?(\/[^"'\s]+)/m.exec(String(script || ''));
+  if (!m || !validatePath(m[1])) return null;
+  return /^odoo(-bin)?$/.test(m[1].split('/').pop()) ? m[1] : null;
+}
+
 // docker inspect -f '{{json .Mounts}}' 的輸出。解不動就回空陣列——沒有掛載資訊時
 // 容器內路徑換不回宿主路徑，該候選的 addons 目錄就交給人手填。
 function parseMounts(stdout) {
@@ -252,6 +270,13 @@ async function enrichCandidate(execFn, target, S, c, ourModules) {
       const es = await execFn(target, `systemctl show -p ExecStart --value ${name}`);
       out.confPath = parseConfPath(es.stdout);
       out.odooBin = parseOdooBin(es.stdout);
+      // 包了 init 腳本的服務要再讀一層才拿得到執行檔。讀不到就維持 null＝退回裸名，
+      // 與這一段不存在時的行為相同（慈雲正式區就是這一型，少了它必定 command not found）。
+      const init = out.odooBin ? null : parseInitScriptPath(es.stdout);
+      if (init) {
+        const sh = await execFn(target, `${prefix}cat ${init}`);
+        out.odooBin = parseDaemonPath(sh.stdout);
+      }
     } catch { /* 同上 */ }
   }
 
@@ -376,4 +401,5 @@ async function runProbe(connId, projectId, execFn = sshExec, deps = {}) {
 }
 
 module.exports = { buildProbeScript, parseProbe, parseComposeLabels, parseConf, isDeployCandidate, runProbe,
-  parseConfPath, parseOdooBin, parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs, linkConns };
+  parseConfPath, parseOdooBin, parseInitScriptPath, parseDaemonPath,
+  parseMounts, mapToHostPath, listRepoModules, rankAddonsDirs, linkConns };
