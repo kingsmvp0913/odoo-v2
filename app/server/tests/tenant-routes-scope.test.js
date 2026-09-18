@@ -180,3 +180,39 @@ describe('wiki', () => {
     expect((await request(app).post(`/api/projects/${pB}/wiki/overview/refresh`).set(as(aToken)).send({})).status).toBe(404);
   });
 });
+
+describe('測試環境', () => {
+  test('用別家的專案 id 進測試區 SSO → 404（測試區帳號是 admin，這支漏掉等於沒做隔離）', async () => {
+    expect((await request(app).get(`/api/projects/${pB}/env/sso`).set(as(aToken))).status).toBe(404);
+  });
+
+  test('看別家的測試區狀態、log → 404', async () => {
+    expect((await request(app).get(`/api/projects/${pB}/env`).set(as(aToken))).status).toBe(404);
+    expect((await request(app).get(`/api/projects/${pB}/env/log`).set(as(aToken))).status).toBe(404);
+  });
+
+  test('建立／停止／刪除測試區改成平台管理員限定（自己公司的也不行）', async () => {
+    expect((await request(app).post(`/api/projects/${pA}/env/setup`).set(as(aToken)).send({})).status).toBe(403);
+    expect((await request(app).post(`/api/projects/${pA}/env/stop`).set(as(aToken)).send({})).status).toBe(403);
+    expect((await request(app).delete(`/api/projects/${pA}/env`).set(as(aToken))).status).toBe(403);
+  });
+
+  test('測試區總覽只列自己公司的專案', async () => {
+    const res = await request(app).get('/api/projects/env-summaries').set(as(aToken));
+    expect(res.status).toBe(200);
+    const ids = (Array.isArray(res.body) ? res.body : res.body.items || []).map(r => r.project_id ?? r.projectId);
+    expect(ids).not.toContain(pB);
+  });
+});
+
+describe('資料庫查詢頁（規格 §2：對客戶完全關閉）', () => {
+  test('一般使用者一律 403，連自己公司的專案也是', async () => {
+    expect((await request(app).get(`/api/projects/${pA}/db-connections`).set(as(aToken))).status).toBe(403);
+    expect((await request(app).get(`/api/projects/${pA}/vpn`).set(as(aToken))).status).toBe(403);
+    expect((await request(app).post(`/api/projects/${pA}/db-connections/test`).set(as(aToken)).send({})).status).toBe(403);
+  });
+
+  test('平台管理員照常可用', async () => {
+    expect((await request(app).get(`/api/projects/${pA}/db-connections`).set(as(adminToken))).status).toBe(200);
+  });
+});

@@ -1,5 +1,6 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { requirePlatformAdmin } = require('./lib/tenant-access');
 const { encrypt } = require('./lib/crypto');
 const { runSelect } = require('./lib/ssh-sql');
 const { runLogTail, probeLogSource, validateLogPath } = require('./lib/ssh-log');
@@ -35,12 +36,12 @@ function validateLogFields(b) {
   }
 }
 
-// DB 連線管理與對正式庫查詢開放給所有登入者（原本限管理員）。
-// 理由是這組連線的主要受益者是一般使用者：Chat 與客服分診的 agent 要靠它查正式區資料，
-// 連線沒設，最先撞牆的是不能設定的那群人。與本 repo 其餘 project 端點的授權層級一致
-// （皆只有 verifyToken，專案共享是既有設計）。查詢端本身仍只放行 SELECT。
+// 產品化後資料庫查詢頁對客戶完全關閉（規格 §2／§5.3）：這裡管的是正式區的連線憑證與
+// 直連 SQL，不是「自己公司的專案」就能放寬的資源，全部 /api/* 端點改回平台管理員限定。
+// 查詢端本身仍只放行 SELECT。
 
 // /ai/* 的守衛在 lib/ai-token.js：來源 IP ＋ 通行碼兩道（見該檔說明為何不能只靠前者）。
+// 身分由每次執行通行證決定，不是 req.actor，故 /ai/* 不受本次改動影響。
 
 // 轉發埠以「專案 × 目標」為單位：同專案已有連線指向同一台機器就沿用它的埠，
 // 這樣新增連線多半不必重建容器（容器的 -p 在建立時就固定，重建＝斷線重撥）。
@@ -59,14 +60,14 @@ async function assignForwardPort(projectId, conn) {
 }
 
 function registerRoutes(app) {
-  app.get('/api/projects/:id/db-connections', verifyToken, async (req, res) => {
+  app.get('/api/projects/:id/db-connections', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows } = await query(`SELECT ${PUBLIC_COLS} FROM db_connections WHERE project_id=$1 ORDER BY name`, [req.params.id]);
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/db-connections', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/db-connections', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const b = req.body || {};
       const mode = b.connect_mode || 'docker';
@@ -107,7 +108,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.put('/api/projects/:id/db-connections/:cid', verifyToken, async (req, res) => {
+  app.put('/api/projects/:id/db-connections/:cid', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const b = req.body || {};
       validateIdentifiers(b);
@@ -181,7 +182,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.delete('/api/projects/:id/db-connections/:cid', verifyToken, async (req, res) => {
+  app.delete('/api/projects/:id/db-connections/:cid', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [existing] } = await query('SELECT id FROM db_connections WHERE id=$1 AND project_id=$2', [req.params.cid, req.params.id]);
       if (!existing) return res.status(404).json({ error: 'Not found' });
@@ -194,7 +195,7 @@ function registerRoutes(app) {
 
   // 專案層 VPN 設定：一個專案（＝一個客戶站點）一組憑證，該專案所有連線共用一條隧道。
   // GET 只回「有沒有設定」與帳號，不含設定檔與密碼，故比照連線列表開放給一般使用者。
-  app.get('/api/projects/:id/vpn', verifyToken, async (req, res) => {
+  app.get('/api/projects/:id/vpn', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [p] } = await query('SELECT vpn_config_enc, vpn_username FROM projects WHERE id=$1', [req.params.id]);
       if (!p) return res.status(404).json({ error: 'Not found' });
@@ -203,7 +204,7 @@ function registerRoutes(app) {
   });
 
   // 留空＝不變（比照連線表單既有慣例）：使用者只改帳號時不該把 .ovpn 或密碼清掉。
-  app.put('/api/projects/:id/vpn', verifyToken, async (req, res) => {
+  app.put('/api/projects/:id/vpn', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const b = req.body || {};
       const set = [];
@@ -235,7 +236,7 @@ function registerRoutes(app) {
 
   // 連線測試：以表單值直接試連（跑 SELECT 1），與正式查詢走同一條 runSelect 路徑。
   // 密碼欄留空且帶 id → 回填該連線已存密碼（比照「留空＝不變」）。
-  app.post('/api/projects/:id/db-connections/test', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/db-connections/test', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const b = req.body || {};
       const conn = {
@@ -276,7 +277,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/db-connections/:cid/query', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/db-connections/:cid/query', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const conn = await loadDecryptedConn(req.params.cid, req.params.id);
       if (!conn) return res.status(404).json({ error: 'Not found' });
@@ -335,7 +336,7 @@ function registerRoutes(app) {
     } catch (err) { res.json({ ok: false, error: err.message }); }
   });
 
-  app.post('/api/projects/:id/db-connections/:cid/probe-log', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/db-connections/:cid/probe-log', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const conn = await loadDecryptedConn(req.params.cid, req.params.id);
       if (!conn) return res.status(404).json({ error: 'Not found' });

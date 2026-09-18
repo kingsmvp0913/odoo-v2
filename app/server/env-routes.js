@@ -2,11 +2,19 @@ const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { mintSsoToken } = require('./sso');
+const { loadProjectForActor, requirePlatformAdmin } = require('./lib/tenant-access');
 
 function registerRoutes(app) {
-  app.get('/api/projects/env-summaries', verifyToken, async (_req, res) => {
+  app.get('/api/projects/env-summaries', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query('SELECT project_id, status FROM odoo_envs');
+      // 不過濾的話，這一支會把平台上全部客戶的專案名字列給任何登入者看
+      const { rows } = req.actor.isPlatformAdmin
+        ? await query('SELECT project_id, status FROM odoo_envs')
+        : await query(
+            `SELECT e.project_id, e.status FROM odoo_envs e
+               JOIN project_companies pc ON pc.project_id = e.project_id AND pc.company_id = $1`,
+            [req.actor.companyId]
+          );
       const summaries = rows.map((env) => ({
         project_id: env.project_id,
         status: env.status,
@@ -22,6 +30,11 @@ function registerRoutes(app) {
   // 這支端點刻意不共用完整 /env payload；status 來自同一筆真實 odoo_envs 記錄，資料庫狀態只反映測試環境是否可連。
   app.get('/api/projects/:id/env/summary', verifyToken, async (req, res) => {
     try {
+      // 測試區裡的帳號是 admin，能跑伺服器動作、看得到那個專案的全部資料。
+      // 這一支原本只驗登入（規格 §3.2 實查），任何人帶任一專案 id 就進得去。
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [env] } = await query(
         'SELECT status FROM odoo_envs WHERE project_id = $1', [req.params.id]
       );
@@ -43,6 +56,11 @@ function registerRoutes(app) {
 
   app.get('/api/projects/:id/env', verifyToken, async (req, res) => {
     try {
+      // 測試區裡的帳號是 admin，能跑伺服器動作、看得到那個專案的全部資料。
+      // 這一支原本只驗登入（規格 §3.2 實查），任何人帶任一專案 id 就進得去。
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows } = await query(
         // external_slot：前端據此才知道「現在有沒有借著對外名額」，決定要不要給歸還按鈕
         'SELECT id, status, pid, port, url, external_slot, error_msg, setup_log, updated_at FROM odoo_envs WHERE project_id = $1',
@@ -101,6 +119,11 @@ function registerRoutes(app) {
   // 這個端點就是「有真人要看」的唯一訊號。
   app.get('/api/projects/:id/env/sso', verifyToken, async (req, res) => {
     try {
+      // 測試區裡的帳號是 admin，能跑伺服器動作、看得到那個專案的全部資料。
+      // 這一支原本只驗登入（規格 §3.2 實查），任何人帶任一專案 id 就進得去。
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [env] } = await query(
         'SELECT status, url, sso_secret, error_msg FROM odoo_envs WHERE project_id=$1', [req.params.id]
       );
@@ -153,7 +176,7 @@ function registerRoutes(app) {
 
   // 明確歸還對外名額。真人「關掉分頁」偵測不到，故歸還只有兩條路：這個端點與閒置逾時。
   // 只收名額、不停環境——pipeline 可能還要用這個環境。
-  app.post('/api/projects/:id/env/external/release', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/env/external/release', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { releaseExternalSlot } = require('./lib/external-slot');
       const { syncNginxMapDebounced } = require('./lib/nginx-map');
@@ -163,7 +186,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/env/setup', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/env/setup', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { runEnvSetup } = require('./pipeline/env-agent');
       const { withProjectLock } = require('./pipeline/project-lock');
@@ -180,6 +203,11 @@ function registerRoutes(app) {
   // 讀取常駐 Odoo server 的 runtime log（尾端），供前端「查看 log」除錯（asset 503／崩潰 traceback 等）。
   app.get('/api/projects/:id/env/log', verifyToken, async (req, res) => {
     try {
+      // 測試區裡的帳號是 admin，能跑伺服器動作、看得到那個專案的全部資料。
+      // 這一支原本只驗登入（規格 §3.2 實查），任何人帶任一專案 id 就進得去。
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { dockerCtxFor } = require('./pipeline/env-agent');
       const { rows: [project] } = await query('SELECT name, folder_name FROM projects WHERE id=$1', [req.params.id]);
       if (!project) return res.status(404).json({ error: 'project not found' });
@@ -192,7 +220,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/env/stop', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/env/stop', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { stopEnv } = require('./pipeline/env-agent');
       await stopEnv(req.params.id);
@@ -200,7 +228,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/projects/:id/env', verifyToken, async (req, res) => {
+  app.delete('/api/projects/:id/env', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       // 測試區只有 docker 一種模式，Odoo 跑在容器裡而不是宿主 process——odoo_envs.pid 恆為 NULL
       //（見 env-agent 的 UPDATE ... pid=NULL），原本的 process.kill(pid) 打不到任何東西：目錄砍了、
