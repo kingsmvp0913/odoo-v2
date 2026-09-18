@@ -927,7 +927,9 @@ function registerRoutes(app) {
       const { rows: [project] } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
       if (!project) return res.status(404).json({ error: 'Not found' });
 
-      // 推 main 用操作者本人的 PAT，歸屬才正確；沒設 PAT 就直接擋，不退機器憑證。
+      // GIT 憑證退回規則（09-11／09-14 裁決，規格 §6）：個人 → 公司 → 擋下。
+      // 原本刻意「只用本人 PAT、不退機器憑證」是為了歸屬，但客戶不會每個人都有 PAT；
+      // 改由 buildGitEnv 回傳的 source 記錄是用誰的身分推的，歸屬仍然看得出來。
       let gitEnv;
       try {
         gitEnv = await buildGitEnv(req.userId);
