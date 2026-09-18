@@ -1565,6 +1565,11 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
   font-style: normal; font-size: var(--fs-xs); font-weight: var(--fw-semibold);
 }
 .ui-next-exam-run-sig.is-vote { color: var(--info); }
+/* 原答案：只在改選別的之後出現（2026-09-14 使用者要求），提醒原本填的是哪個 */
+.ui-next-exam-run-sig.is-orig {
+  padding: 0 5px; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  color: var(--text-muted); font-size: var(--fs-xs);
+}
 
 /* 推薦分數。2026-09-07 起改排在選項文字**之後**、投票標記之前（使用者要求）：
    擺前面時每一行的文字都被往右推一格，四個選項讀起來像有縮排。代價是不再對齊
@@ -1714,7 +1719,7 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-exam-run-mark { width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
 .ui-next-exam-run-mark.is-lock { color: var(--success); }
 
-/* 題號前那一欄：最高分的字母（＋分數）。固定寬度，整份清單的字母才對得齊——
+/* 題號前那一欄：勾選的答案（2026-09-14 前是最高分的字母＋分數）。固定寬度，整份清單的字母才對得齊——
    不展開就要能一路掃下來看「這題選哪個」，那正是這一頁存在的理由。
    算不出分數的畫「—」而不是留白：空著會讓題號往左跑，看起來像另一個層級。 */
 .ui-next-exam-run-sug {
@@ -1724,8 +1729,7 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 }
 .ui-next-exam-run-sug.is-sure { color: var(--success); }
 .ui-next-exam-run-sug.is-rec  { color: var(--text); }
-.ui-next-exam-run-sug.is-none { color: var(--text-muted); }
-.ui-next-exam-run-sug em {
+.ui-next-exam-run-sug.is-none { color: var(--text-muted); }.ui-next-exam-run-sug em {
   font-style: normal; font-size: var(--fs-xs); font-weight: var(--fw-normal);
   color: var(--text-muted);
 }

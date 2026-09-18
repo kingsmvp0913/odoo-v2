@@ -40,6 +40,8 @@ window.UiNextExamRunView = Vue.defineComponent({
     if (this._offSocket) this._offSocket();
   },
   computed: {
+    // 正式答案的勾只給管理員（server 端 PATCH /final 另外擋 403），其他人只能投票
+    isAdmin() { return window.UserStore.role === 'admin'; },
     uploadGroups() {
       const questions = new Map();
       for (const a of this.attempts) {
@@ -222,16 +224,39 @@ window.UiNextExamRunView = Vue.defineComponent({
     current(q) {
       return (Array.isArray(q.answer_final) && q.answer_final.length) ? q.answer_final : q.answer_their;
     },
-    // 審查有意見：它給的答案跟現在檯面上的不一樣。
-    // 比對 answer_final 而不是 answer_their——照審查改完之後這題就該退出清單，
-    // 不然清單永遠不會變短，等於沒有「處理完」這件事。
-    isMismatch(q) { return !!q.review_source && !this.sameAnswer(this.current(q), q.review_answer); },
-    // 又踩到同一個坑：上次考試選這個、而且已經標成大概率錯，現在又選它。
+    // 改過答案沒有：正式答案（含清成留白）跟原本輸入的不一樣。
+    changedFromInput(q) {
+      return Array.isArray(q.answer_their) && q.answer_their.length > 0
+        && !this.sameAnswer(q.answer_final, q.answer_their);
+    },
+    // 改選別的之後原答案的勾就消失了，要在畫面上標回來（2026-09-14 使用者要求）
+    showOriginal(q, letter) { return this.changedFromInput(q) && q.answer_their.includes(letter); },
+    // 題號前那一欄＝現在勾的答案，不管改過沒有。留白就畫破折號，不退回推薦或原答案。
+    finalText(q) {
+      return Array.isArray(q.answer_final) && q.answer_final.length ? q.answer_final.join('') : '—';
+    },
+    finalWhy(q) {
+      const text = this.finalText(q) === '—' ? '正式答案留白' : `正式答案 ${this.finalText(q)}`;
+      return this.changedFromInput(q) ? `${text}（原答案 ${q.answer_their.join('')}）` : text;
+    },
+    // 審查有意見：它給的答案跟原本輸入的、或現在檯面上的不一樣。
+    // 兩個都比：原本只比現在的，照審查改完這題就退出清單——但改過答案正是要回頭
+    // 再看的題，使用者要它留在需確認（2026-09-14）。
+    isMismatch(q) {
+      return !!q.review_source && (!this.sameAnswer(q.answer_their, q.review_answer)
+        || !this.sameAnswer(this.current(q), q.review_answer));
+    },
+    // 又踩到同一個坑：上次考試選這個、而且已經標成大概率錯，原本或現在又選它。
     // 這種題審查可能毫無異議（它跟上次一樣被騙），所以光看不一致抓不到。
     repeatsKnownWrong(q) {
-      return !!q.history_wrong && this.sameAnswer(this.current(q), q.history_answer);
+      return !!q.history_wrong && (this.sameAnswer(q.answer_their, q.history_answer)
+        || this.sameAnswer(this.current(q), q.history_answer));
     },
-    needsCheck(q) { return this.isMismatch(q) || this.repeatsKnownWrong(q); },
+    // 官方確認的題不列入：它是鎖住、點不開的區塊，正解已經印在鎖頭旁邊，沒有東西
+    // 可以確認。算進去的話數字卡多出幾題，點開卻找不到是哪幾題。
+    needsCheck(q) {
+      return q.review_source !== 'official' && (this.isMismatch(q) || this.repeatsKnownWrong(q));
+    },
     groupNeedsCheck(g) { return g.questions.some(q => this.needsCheck(q)); },
     visibleQuestions(g) {
       return this.filter === 'check' ? g.questions.filter(q => this.needsCheck(q)) : g.questions;
@@ -611,12 +636,11 @@ window.UiNextExamRunView = Vue.defineComponent({
             </button>
           </summary>
           <template v-for="q in g.questions" :key="q.attempt_id">
-            <!-- 建議的字母放在題號**前面**、固定寬度一欄：不展開就要看得出「這題選哪個」，
-                 而且整份清單的字母要對得齊才能一路掃下來。沒建議的畫破折號，
-                 空著會讓那一行的題號往左跑，看起來像另一個層級。 -->
-            <!-- 最高分的字母放在題號**前面**、固定寬度一欄：不展開就要看得出「這題選哪個」，
-                 而且整份清單的字母要對得齊才能一路掃下來。算不出分數的畫破折號，
-                 空著會讓那一行的題號往左跑，看起來像另一個層級。 -->
+            <!-- 勾選的答案放在題號**前面**、固定寬度一欄：不展開就要看得出「這題選哪個」，
+                 而且整份清單的字母要對得齊才能一路掃下來。留白的畫破折號，
+                 空著會讓那一行的題號往左跑，看起來像另一個層級。
+                 原本放推薦分數最高的字母，改成勾選的答案（2026-09-14 使用者拍板）：
+                 勾了 A 前面卻寫 B，看起來像沒勾到。推薦改看選項上的分數與 title。 -->
             <div v-if="q.review_source==='official'" class="ui-next-exam-run-question ui-next-exam-run-official">
               <h3>
                 <span class="ui-next-exam-run-sug is-sure" title="官方確認">
@@ -629,10 +653,8 @@ window.UiNextExamRunView = Vue.defineComponent({
             <details v-else :open="needsCheck(q)" :class="['ui-next-exam-run-question',needsCheck(q) && 'is-mismatch']">
               <summary>
                 <h3>
-                  <span :class="['ui-next-exam-run-sug', topScore(q) ? 'is-rec' : 'is-none']"
-                        :title="topScore(q) ? ('推薦 ' + topScore(q).score + ' 分') : noScoreWhy(q)">
-                    {{ topText(q) }}<em v-if="topScore(q)">{{ topScore(q).score }}</em>
-                  </span>
+                  <span :class="['ui-next-exam-run-sug', finalText(q) === '—' ? 'is-none' : 'is-rec']"
+                        :title="finalWhy(q) + (topScore(q) ? '・推薦 ' + topScore(q).letter + '（' + topScore(q).score + ' 分）' : '')">{{ finalText(q) }}</span>
                   <span class="ui-next-exam-run-no">{{ q.no }}.</span> {{ q.question_zh || q.question_en }}
                 </h3>
                 <div v-if="q.question_zh" class="ui-next-exam-run-en">{{ q.question_en }}</div>
@@ -645,9 +667,9 @@ window.UiNextExamRunView = Vue.defineComponent({
                      isFinalSelected(q,option.letter) && 'is-selected',
                      scoreOf(q,option.letter) === topScore(q)?.score && 'is-suggested']">
                   <label>
-                    <!-- 輸入答案不另外標：worker 寫入時 answer_final 預設就等於作答答案，
-                         勾選狀態本身就是它。改過之後才靠 title 查得回原本輸入什麼。 -->
-                    <input type="checkbox" :title="hasAnswer(q.answer_their,option.letter) ? '正式答案（這是原本輸入的答案）' : '正式答案'" :checked="isFinalSelected(q,option.letter)" :disabled="savingFinal[q.attempt_id]" @change="toggleFinal(q,option.letter,$event.target.checked)" />
+                    <!-- 沒改過時勾選狀態本身就是原答案（answer_final 預設等於作答答案）；
+                         改過之後選項文字後面會掛「原答案」標記。 -->
+                    <input type="checkbox" :title="(isAdmin ? '' : '只有管理員能改，請用投票・') + (hasAnswer(q.answer_their,option.letter) ? '正式答案（這是原本輸入的答案）' : '正式答案')" :checked="isFinalSelected(q,option.letter)" :disabled="!isAdmin || savingFinal[q.attempt_id]" @change="toggleFinal(q,option.letter,$event.target.checked)" />
                     <b>{{ option.letter }}</b>
                     <span class="ui-next-exam-run-opt-text">
                       <!-- 只有兩個標記：推薦分數與投票。
@@ -656,6 +678,8 @@ window.UiNextExamRunView = Vue.defineComponent({
                            那個會被歸零。它們的原始資訊改掛 title，滑過去看得到，
                            不佔版面。 -->
                       {{ option.text_zh || option.text }}
+                      <!-- 沒改過不標（勾選狀態本身就是原答案）；改選別的或清成留白之後才標 -->
+                      <span v-if="showOriginal(q,option.letter)" class="ui-next-exam-run-sig is-orig">原答案</span>
                       <!-- 分數排在選項文字**後面**、投票前面（2026-09-07 使用者要求）。
                            擺前面時它會把每一行的文字往右推一格，四個選項讀起來像有縮排；
                            而分數與投票是同一類東西（都是「哪個選項比較可能」的訊號），

@@ -616,6 +616,29 @@ describe('考試結果、投票與最後答案', () => {
     expect(row.rows[0].answer_final).toBeNull();
   });
 
+  // 正式答案是歸檔時拿去對成績單、鎖成官方答案的那一份——歸檔不可逆，誰都能改
+  // 等於誰都能把錯的答案永久寫進題庫。一般人要表達意見走投票。
+  // 前端藏勾勾擋不住直接打 API，所以守在 server。
+  test('正式答案只有管理員能改，一般人只能投票', async () => {
+    const bcrypt = require('bcryptjs');
+    await dbModule.query(
+      `INSERT INTO users (username, password_hash, display_name, role) VALUES ('voter', $1, 'Voter', 'user')`,
+      [await bcrypt.hash('pass1234', 4)]);
+    const login = await request(app).post('/api/auth/login').send({ username: 'voter', password: 'pass1234' });
+    const asUser = r => r.set('Authorization', `Bearer ${login.body.token}`);
+
+    await auth(request(app).patch(`/api/exam/attempts/${openAttemptId}/final`))
+      .send({ answer: 'C' }).expect(200);
+    await asUser(request(app).patch(`/api/exam/attempts/${openAttemptId}/final`))
+      .send({ answer: 'D' }).expect(403);
+    const row = await dbModule.query(
+      `SELECT answer_final FROM exam_attempts WHERE id=$1`, [openAttemptId]);
+    expect(row.rows[0].answer_final).toEqual(['C']);
+
+    await asUser(request(app).post(`/api/exam/attempts/${openAttemptId}/vote`))
+      .send({ answer: 'D' }).expect(200);
+  });
+
   test('官方確認題的投票與正式答案都由 server 鎖定', async () => {
     await auth(request(app).post(`/api/exam/attempts/${attemptId}/vote`))
       .send({ answer: 'A' }).expect(409);
