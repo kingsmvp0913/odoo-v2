@@ -30,9 +30,14 @@ beforeAll(async () => {
 
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass', 4);
+  // 租戶隔離改動後，/env/sso 前面加了視覺化檢查——使用者要看得到專案才能過。給他一家公司、
+  // 把專案綁上去，讓這裡測的是「看得到之後、狀態機邏輯本身」，不是被視覺化檢查擋在門外。
+  const { rows: [company] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('SsoCo', true) RETURNING id"
+  );
   const { rows: [user] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('ssouser', $1, 'SSO User') RETURNING id",
-    [hash]
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('ssouser', $1, 'SSO User', $2) RETURNING id",
+    [hash, company.id]
   );
   userId = user.id;
   token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -41,6 +46,7 @@ beforeAll(async () => {
     "INSERT INTO projects (name, odoo_version) VALUES ('SsoProj', '17.0') RETURNING id"
   );
   projectId = proj.id;
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, company.id]);
 
   const expressApp = express();
   expressApp.use(express.json());
@@ -91,4 +97,12 @@ test('GET env/sso → 200 回免密登入 URL 並帶 token', async () => {
 test('401 without token', async () => {
   const res = await request(app).get(`/api/projects/${projectId}/env/sso`);
   expect(res.status).toBe(401);
+});
+
+// 規格 §2／§5.3：測試環境管理對客戶關閉——這個使用者看得到 projectId（前面的 200/409 測試已
+// 證明看得到），管理端點仍不能碰。403 而非 404，因為擋他的理由是「不是平台管理員」，
+// 不是「看不到這個專案」。
+test('一般使用者看得到專案，仍不能呼叫管理端點（DELETE env）→ 403', async () => {
+  const res = await request(app).delete(`/api/projects/${projectId}/env`).set(auth());
+  expect(res.status).toBe(403);
 });

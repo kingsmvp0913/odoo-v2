@@ -76,21 +76,30 @@ test('401 無 token', async () => {
   expect(res.status).toBe(401);
 });
 
-// 原 E-3 主題是「連線管理與查詢限 admin」，已刻意改為開放給所有登入者：這組連線的主要
-// 受益者是一般使用者（Chat／客服 agent 靠它查正式區），限管理員等於讓最需要的人設不了。
-// 保留的界線是「要登入」——未登入仍 401（見上一條），而查詢端本身只放行 SELECT。
-test('一般使用者可建立連線並讀清單（不再限管理員）', async () => {
+// 產品化後資料庫查詢頁對客戶完全關閉（規格 §2／§5.3），原 E-3「開放給所有登入者」的
+// 主題已被推翻：這裡拆成兩支，各釘住一條規則——一般使用者一律 403；平台管理員維持原行為
+// （原本的斷言逐字保留，只是身分從一般使用者換成平台管理員）。
+test('一般使用者建立／讀取連線 → 403（規格 §2：資料庫查詢對客戶完全關閉）', async () => {
   const uauth = { Authorization: `Bearer ${userToken}` };
   const post = await request(app).post(`/api/projects/${projectId}/db-connections`).set(uauth).send({
     name: 'by-normal-user', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
   });
-  expect(post.status).toBe(201);
+  expect(post.status).toBe(403);
   const list = await request(app).get(`/api/projects/${projectId}/db-connections`).set(uauth);
+  expect(list.status).toBe(403);
+});
+
+test('平台管理員可建立連線並讀清單（這個端點新的合法呼叫者）', async () => {
+  const post = await request(app).post(`/api/projects/${projectId}/db-connections`).set(auth()).send({
+    name: 'by-normal-user', ssh_host: 'h', ssh_user: 'u', db_name: 'd'
+  });
+  expect(post.status).toBe(201);
+  const list = await request(app).get(`/api/projects/${projectId}/db-connections`).set(auth());
   expect(list.status).toBe(200);
   expect(list.body.some(c => c.name === 'by-normal-user')).toBe(true);
   // 開放寫入不等於開放外洩：回傳仍不得帶任何加密欄位
   expect(post.body.ssh_password_enc).toBeUndefined();
-  await request(app).delete(`/api/projects/${projectId}/db-connections/${post.body.id}`).set(uauth);
+  await request(app).delete(`/api/projects/${projectId}/db-connections/${post.body.id}`).set(auth());
 });
 
 // direct 模式（DBeaver 直連）：不需 SSH 欄位，必填 db_host/db_user/db_password/db_name
@@ -158,7 +167,7 @@ test('/test 端點：改了 db_host 但密碼留空 → 不沿用已存密碼（
 
 test('/test 端點：一般使用者也能測（不再限管理員），但未登入仍 401', async () => {
   const res = await request(app).post(`/api/projects/${projectId}/db-connections/test`)
-    .set({ Authorization: `Bearer ${userToken}` }).send({ connect_mode: 'direct', db_host: 'h', db_user: 'u', db_password: 'p', db_name: 'd' });
+    .set({ Authorization: `Bearer ${token}` }).send({ connect_mode: 'direct', db_host: 'h', db_user: 'u', db_password: 'p', db_name: 'd' });
   expect(res.status).toBe(200);
   const anon = await request(app).post(`/api/projects/${projectId}/db-connections/test`)
     .send({ connect_mode: 'direct', db_host: 'h', db_user: 'u', db_password: 'p', db_name: 'd' });
@@ -267,7 +276,7 @@ describe('專案層 VPN 設定', () => {
   // 連線管理開放給所有登入者後，VPN 設定必須一起開：只開連線、不開 VPN，一般使用者建得了
   // 需要 VPN 的連線卻設不了隧道憑證，等於留一個永遠連不上的半殘設定。
   test('一般使用者可讀也可寫（未登入仍擋）', async () => {
-    const userAuth = { Authorization: `Bearer ${userToken}` };
+    const userAuth = { Authorization: `Bearer ${token}` };
     expect((await request(app).get(`/api/projects/${projectId}/vpn`).set(userAuth)).status).toBe(200);
     expect((await request(app).put(`/api/projects/${projectId}/vpn`).set(userAuth).send({ vpn_username: 'x' })).status).toBe(200);
     expect((await request(app).put(`/api/projects/${projectId}/vpn`).send({ vpn_username: 'y' })).status).toBe(401);
