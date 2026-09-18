@@ -107,3 +107,43 @@ test('使用期間兩端都是 NULL＝不限，算可用', async () => {
   const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
   expect(res.body.company_usable).toBe(true);
 });
+
+describe('公司不可用時的全域閘門（規格 §7）', () => {
+  let offToken;
+
+  beforeAll(async () => {
+    const cid = await makeCompany('已停用客戶', { isActive: false });
+    offToken = await makeUser('blocked1', 'user', cid);
+  });
+
+  test('工作台 API 一律 403，並說明原因', async () => {
+    const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${offToken}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('停用');
+    expect(res.body.companyUnusable).toBe(true);
+  });
+
+  test('GET /api/auth/me 仍然通（前端要顯示原因，不能變成白畫面）', async () => {
+    const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${offToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.company_usable).toBe(false);
+  });
+
+  test('公司正常的人不受影響', async () => {
+    const cid = await makeCompany('正常客戶');
+    const okToken = await makeUser('normal1', 'user', cid);
+    const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${okToken}`);
+    expect(res.status).toBe(200);
+  });
+
+  test('還沒掛公司的舊帳號不受影響（遷移跑之前）', async () => {
+    const token = await makeUser('legacy2', 'user', null);
+    const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+  });
+
+  test('平台管理員不受影響', async () => {
+    const res = await request(app).get('/api/tasks').set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+  });
+});

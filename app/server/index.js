@@ -103,6 +103,45 @@ function createApp() {
     });
   }
 
+  // 公司不可用閘門（規格 §7）：公司停用或不在使用期間 ⇒ 所有工作台 API 403。
+  // 為什麼全域擋而不是逐支路由擋：逐支一定會漏，而漏掉的那一支就是客戶停繳之後還能用的那一支。
+  // 只放行 GET /api/auth/me——前端要靠它顯示「為什麼不能用」，擋掉會變成一片空白而不是一句說明。
+  // 形狀照抄上面的未核准閘門（自己 jwt.verify 再查 DB）：這一段跑在 verifyToken 之前，拿不到 req.actor。
+  {
+    const jwt = require('jsonwebtoken');
+    const { query } = require('./db');
+    app.use('/api', async (req, res, next) => {
+      if (req.method === 'GET' && req.path === '/auth/me') return next();
+      if (req.path.startsWith('/auth/') || req.path.startsWith('/setup/')) return next();
+      const header = req.headers.authorization;
+      if (!header?.startsWith('Bearer ')) return next();
+      let userId;
+      try { userId = jwt.verify(header.slice(7), process.env.JWT_SECRET).userId; } catch { return next(); }
+      try {
+        const { rows } = await query(
+          `SELECT c.is_active, c.active_from, c.active_until
+             FROM users u JOIN companies c ON c.id = u.company_id
+            WHERE u.id = $1`,
+          [userId]
+        );
+        // JOIN 沒撈到 ⇒ 這個人沒有公司（平台管理員，或遷移還沒跑的舊帳號）⇒ 放行
+        if (!rows[0]) return next();
+        const r = rows[0];
+        const now = new Date();
+        const usable = r.is_active === true
+          && (!r.active_from || now >= new Date(r.active_from))
+          && (!r.active_until || now <= new Date(r.active_until));
+        if (!usable) {
+          return res.status(403).json({ error: '公司帳號已停用或不在使用期間', companyUnusable: true });
+        }
+      } catch {
+        // 查不動 DB 時放行，交給後面的 verifyToken 決定——這一關是附加防線，
+        // 不該因為 DB 抖一下就把全部人擋在外面
+      }
+      next();
+    });
+  }
+
   registerAuthRoutes(app);
   registerSettingsRoutes(app);
   registerTasksRoutes(app);
