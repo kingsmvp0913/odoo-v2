@@ -982,7 +982,12 @@ function registerRoutes(app) {
 
   app.post('/api/projects/:id/release', verifyToken, async (req, res) => {
     try {
-      const { rows: [project] } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
+      // 看不到就當它不存在（規格 §5.2），且務必排在 canReleaseProject 之前：
+      // canReleaseProject 只分「看得到但不能按」（403）與「不能按」，不負責分辨
+      // 「看不到」與「真的不存在」——先過 loadProjectForActor 的範圍檢查再讓它接手，
+      // 才不會讓別家公司的管理員用「打得到 403 還是 404」當 oracle 探出 id 存在。
+      // ⚠ 別把這一步搬到 canReleaseProject 之後、也別改回裸的 SELECT，那正是本輪要補的洞。
+      const project = await loadProjectForActor(req.params.id, req, 'id');
       if (!project) return res.status(404).json({ error: 'Not found' });
 
       // 上正式是專案層批次，會把同事已核准的任務一起帶上去，所以必須有人負責（規格 §4.3）：
@@ -1115,6 +1120,14 @@ function registerRoutes(app) {
   app.put('/api/tasks/:taskDbId/project', verifyToken, async (req, res) => {
     try {
       const { project_id } = req.body;
+      // 目標專案 id 是從 body 進來的，不是路徑參數——之後補的靜態守衛只比對路徑上的
+      // :id，攔不到這裡，範圍檢查只能手動補在這一步。看不到的專案當它不存在（規格
+      // §5.2）：否則使用者能把自己的任務改掛到別家公司的專案上，而任務的 project_id
+      // 決定 pipeline 用誰的 repo 跑 AI。project_id 為空（含 0／''／undefined）維持
+      // 原本「拔掉專案綁定」的語意，不用經過這道檢查。
+      if (project_id && !await loadProjectForActor(project_id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows } = await query(
         'UPDATE tasks SET project_id = $2 WHERE id = $1 AND user_id = $3 RETURNING id, project_id',
         [req.params.taskDbId, project_id || null, req.userId]

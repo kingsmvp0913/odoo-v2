@@ -104,8 +104,44 @@ describe('上正式（規格 §4.3 can_release）', () => {
     expect(res.status).toBe(403);
   });
 
-  test('別家公司的人連專案都看不到，更不可能按', async () => {
+  test('別家公司的人連專案都看不到，更不可能按 → 404（不是 403，403 會洩漏 id 存在）', async () => {
     const res = await request(app).post(`/api/projects/${pB}/release`).set(as(aToken)).send({});
-    expect([403, 404]).toContain(res.status);
+    expect(res.status).toBe(404);
+  });
+
+  // 跟上一支分開驗證：「看不到」與「看得到但不能按」是兩種不同的拒絕，前者 404、後者 403，
+  // 不能因為補了 404 就把後者也一併吃掉。用 bToken/pB 這組全新配對（bToken 屬於 coB，
+  // pB 綁 coB，彼此看得到），角色不是公司管理員一樣被擋，但擋的理由必須是 403。
+  test('自己公司的專案看得到但角色不夠 → 403，不是 404', async () => {
+    const res = await request(app).post(`/api/projects/${pB}/release`).set(as(bToken)).send({});
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('任務改掛專案（PUT /api/tasks/:taskDbId/project，規格 §5.2）', () => {
+  let taskDbId;
+
+  beforeAll(async () => {
+    const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username = 'userA'");
+    // project_id 不帶＝NULL，比照「還沒掛專案」的任務去測改掛
+    const { rows: [t] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'reassign-t1','manual','標題','new') RETURNING id",
+      [u.id]
+    );
+    taskDbId = t.id;
+  });
+
+  test('改掛到別家公司的專案（body 帶 project_id）→ 404，DB 裡的 project_id 不變', async () => {
+    const res = await request(app).put(`/api/tasks/${taskDbId}/project`).set(as(aToken)).send({ project_id: pB });
+    expect(res.status).toBe(404);
+    const { rows: [row] } = await dbModule.query('SELECT project_id FROM tasks WHERE id = $1', [taskDbId]);
+    expect(row.project_id).toBeNull();
+  });
+
+  test('改掛到自己看得到的專案 → 照常成功', async () => {
+    const res = await request(app).put(`/api/tasks/${taskDbId}/project`).set(as(aToken)).send({ project_id: pA });
+    expect(res.status).toBe(200);
+    const { rows: [row] } = await dbModule.query('SELECT project_id FROM tasks WHERE id = $1', [taskDbId]);
+    expect(row.project_id).toBe(pA);
   });
 });

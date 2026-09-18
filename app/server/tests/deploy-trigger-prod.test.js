@@ -150,9 +150,19 @@ test('部署失敗仍標記 merged_to_main_at', async () => {
 test('非 admin 按上正式：403 擋在門口，main 沒被動、正式機也沒被動', async () => {
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass1234', 4);
+  // 這支測的是「上正式權限」本身，所以這位使用者要先能「看得到」這個專案——
+  // 沒有公司、或公司沒綁這個專案的話，呼叫會在 loadProjectForActor 那一層就先被
+  // 擋成 404（規格 §5.2：看不到一律先當它不存在），根本走不到 canReleaseProject
+  // 的角色檢查，這支測試就名不符實、變成在測可見度而不是測上正式權限。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('一般公司', true) RETURNING id"
+  );
   await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('regular', $1, '一般使用者', 'user') ON CONFLICT (username) DO NOTHING",
-    [hash]
+    'INSERT INTO project_companies (project_id, company_id) VALUES ($1, $2)', [projectId, co.id]
+  );
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('regular', $1, '一般使用者', 'user', $2) ON CONFLICT (username) DO NOTHING",
+    [hash, co.id]
   );
   const login = await request(app).post('/api/auth/login').send({ username: 'regular', password: 'pass1234' });
   await addTarget('prod', true);
