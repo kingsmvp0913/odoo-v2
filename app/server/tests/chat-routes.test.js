@@ -29,13 +29,17 @@ beforeAll(async () => {
 
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass', 4);
-  // role='admin'：Task 3 在每支對話端點前面加了 loadProjectForActor 範圍檢查，一般使用者
-  // 必須綁公司、專案必須綁同一家公司才看得到（見 tenant-access.js canSeeProject）。這支測的是
-  // 「對話是不是本人的」（getOwnedChat），不是多租戶範圍，所以用平台管理員身分繞過範圍檢查——
-  // isPlatformAdmin 一律看得到，不影響下面每一支以 user_id 為準的歸屬斷言。
+  // Task 3 在每支對話端點前面加了 loadProjectForActor 範圍檢查：一般使用者必須綁公司、
+  // 專案必須綁同一家公司才看得到（見 tenant-access.js canSeeProject）。這支測的是
+  // 「對話是不是本人的」（getOwnedChat），不是多租戶範圍，所以造一家公司、把測試用的專案
+  // 綁給它、再把使用者的 company_id 指過去，讓新查核照它原本的判斷邏輯放行——
+  // 使用者仍是一般 user，範圍檢查真的有跑；改成平台管理員只會讓檢查被短路，等於沒測到。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active, is_internal) VALUES ('ChatCo', true, false) RETURNING id"
+  );
   const { rows: [user] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('chatuser', $1, 'Chat', 'admin') RETURNING id",
-    [hash]
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('chatuser', $1, 'Chat', $2) RETURNING id",
+    [hash, co.id]
   );
   userId = user.id;
   token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -44,6 +48,7 @@ beforeAll(async () => {
     "INSERT INTO projects (name, odoo_version) VALUES ('ChatProj', '17.0') RETURNING id"
   );
   projectId = proj.id;
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, co.id]);
 
   const expressApp = express();
   expressApp.use(express.json());
