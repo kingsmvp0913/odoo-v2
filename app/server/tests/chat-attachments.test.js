@@ -239,8 +239,12 @@ test('下載：別人的對話一律 404', async () => {
   const { rows: [att] } = await dbModule.query(
     'SELECT id FROM project_chat_attachments WHERE chat_id = $1 ORDER BY id DESC', [chat.id]
   );
+  // stranger 也要綁進同一家公司：沒公司的話下面這支 404 會在 loadProjectForActor
+  // 那層（看不到專案）就先擋下來，永遠到不了 getOwnedChat（這支真正要驗的「不是這場對話
+  // 的人下載不到」）。綁了同一家公司後，範圍檢查放行、後面的 404 才是歸屬檢查真的擋下的。
   const { rows: [stranger] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('stranger', 'x', 'Stranger') RETURNING id"
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('stranger', 'x', 'Stranger', $1) RETURNING id",
+    [coId]
   );
   const strangerToken = jwt.sign({ userId: stranger.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
   const res = await request(app)
