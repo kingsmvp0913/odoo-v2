@@ -58,6 +58,7 @@
         this.editForm = {
           env: t.env, repo_id: t.repo_id || "", conn_id: t.conn_id || "",
           addons_dir: t.addons_dir || "", conf_path: t.conf_path || "",
+          odoo_bin: t.odoo_bin || "",
           db_name: t.db_name || "", http_port: t.http_port || "",
           modules: (t.modules || []).join(", "),
         };
@@ -73,6 +74,7 @@
             conn_id: Number(f.conn_id) || null,
             addons_dir: f.addons_dir,
             conf_path: f.conf_path,
+            odoo_bin: f.odoo_bin,
             db_name: f.db_name,
             http_port: Number(f.http_port) || null,
             modules: f.modules.split(",").map((m) => m.trim()).filter(Boolean),
@@ -145,6 +147,7 @@
               addons_dir: best ? best.dir : "",
               addonsManual: !best,
               conf_path: c.confPath || "",
+              odoo_bin: c.odooBin || "",
               modules: this.modulesOf(repoId).join(", "),
               db_name: c.dbName || "",
             };
@@ -193,6 +196,7 @@
             container_name: c.containerName,
             addons_dir: a.addons_dir.trim(),
             conf_path: a.conf_path.trim() || null,
+            odoo_bin: (a.odoo_bin || "").trim() || null,
             db_name: a.db_name,
             http_port: this.portOf(c),
             modules: a.modules.split(",").map((m) => m.trim()).filter(Boolean),
@@ -293,6 +297,11 @@
                 <div class="field-item">
                   <label class="field-label">conf 路徑</label>
                   <input v-model="editForm.conf_path" class="field-input" />
+                </div>
+                <div v-if="t.runtime === 'systemd'" class="field-item">
+                  <label class="field-label">odoo 執行檔（絕對路徑）</label>
+                  <input v-model="editForm.odoo_bin" class="field-input" placeholder="/odoo/odoo-server/odoo-bin" />
+                  <span class="ui-next-deploy-hint" style="margin:0">留空＝直接叫 odoo-bin，只有它在 PATH 上才行得通</span>
                 </div>
                 <div class="field-item">
                   <label class="field-label">我們管的模組（逗號分隔）</label>
@@ -431,6 +440,14 @@
             <div class="field-item">
               <label class="field-label">conf 路徑</label>
               <input v-model="assign[i].conf_path" class="field-input" placeholder="/etc/odoo/odoo.conf" />
+            </div>
+            <div v-if="c.runtime === 'systemd'" class="field-item">
+              <label class="field-label">odoo 執行檔（絕對路徑）</label>
+              <input v-model="assign[i].odoo_bin" class="field-input" placeholder="/odoo/odoo-server/odoo-bin" />
+              <span class="ui-next-deploy-hint" style="margin:0">
+                <template v-if="c.odooBin">從服務的啟動指令讀出來的</template>
+                <template v-else>啟動指令讀不到，請自己填——留空會直接叫 odoo-bin，那台機器上不一定找得到</template>
+              </span>
             </div>
             <div class="field-item">
               <label class="field-label">我們管的模組（逗號分隔）</label>

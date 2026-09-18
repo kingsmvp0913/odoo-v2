@@ -126,3 +126,42 @@ test('deploy-runs 只回本專案的紀錄', async () => {
   expect(res.status).toBe(200);
   expect(res.body.runs.map(r => r.target_id)).toEqual([1]);
 });
+
+// ── odoo 執行檔路徑（systemd 目標）
+//
+// 意圖（Rule 9）：這一欄會原封不動進客戶正式機的 shell。存進來之前就要擋掉不合法的值——
+// 等到部署當下才由 buildUpgradeCmd 拋，使用者看到的會是一次失敗的部署（客戶服務已經停過一次）
+// 而不是一則存檔錯誤。
+test('odoo_bin 存得進去也讀得回來，不合法的路徑存不進去', async () => {
+  await on();
+  await dbModule.query(
+    "INSERT INTO project_repos (project_id, label, repo_url) VALUES (1, 'main', 'https://example.com/r.git')"
+  );
+  const { rows: [repo] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+
+  const bad = await auth(request(app).patch('/api/projects/1/deploy-targets/1'))
+    .send({ repo_id: repo.id, addons_dir: '/a/addons', db_name: 'db1', odoo_bin: 'odoo-bin; rm -rf /' });
+  expect(bad.status).toBe(400);
+
+  const ok = await auth(request(app).patch('/api/projects/1/deploy-targets/1'))
+    .send({ repo_id: repo.id, addons_dir: '/a/addons', db_name: 'db1', odoo_bin: '/odoo/odoo-server/odoo-bin' });
+  expect(ok.status).toBe(200);
+  expect(ok.body.target.odoo_bin).toBe('/odoo/odoo-server/odoo-bin');
+
+  // 清空＝回到裸名 odoo-bin（PATH 上有的機器仍然可用）
+  const cleared = await auth(request(app).patch('/api/projects/1/deploy-targets/1'))
+    .send({ repo_id: repo.id, addons_dir: '/a/addons', db_name: 'db1', odoo_bin: '' });
+  expect(cleared.body.target.odoo_bin).toBeNull();
+});
+
+// 沒帶 odoo_bin 的 PATCH 不可以把既有的值洗掉——前端只送有改到的欄位，
+// 洗掉的話使用者按一次「儲存」就會讓部署回到 command not found。
+test('PATCH 沒帶 odoo_bin 時保留既有值', async () => {
+  await on();
+  const { rows: [repo] } = await dbModule.query('SELECT id FROM project_repos WHERE project_id = 1');
+  await dbModule.query("UPDATE project_deploy_targets SET odoo_bin = '/odoo/odoo-server/odoo-bin' WHERE id = 1");
+  const res = await auth(request(app).patch('/api/projects/1/deploy-targets/1'))
+    .send({ repo_id: repo.id, addons_dir: '/a/addons', db_name: 'db1' });
+  expect(res.status).toBe(200);
+  expect(res.body.target.odoo_bin).toBe('/odoo/odoo-server/odoo-bin');
+});

@@ -1208,7 +1208,13 @@ async function migrate() {
     // 整包掛到需求那一則（ts 固定是 task.created_at），結果是「不管什麼時候上傳的圖都排在最前面」。
     // message_id 指向的是 task_messages（外部溝通紀錄），與 task_logs 是兩張表，不能共用。
     // 舊列為 NULL＝維持原本掛在需求那一則的行為，不回填（推不出當初對應哪一則）。
-    { table: 'task_attachments', col: 'log_id', sql: 'ALTER TABLE task_attachments ADD COLUMN log_id INTEGER REFERENCES task_logs(id)' }
+    { table: 'task_attachments', col: 'log_id', sql: 'ALTER TABLE task_attachments ADD COLUMN log_id INTEGER REFERENCES task_logs(id)' },
+    // systemd 目標的 odoo 執行檔絕對路徑。NULL＝退回裸名 `odoo-bin`（PATH 上找得到的機器行為不變）。
+    // ⚠ 慈雲那台就是 PATH 上沒有：升級指令一送出去就 `sudo: odoo-bin: command not found`、exit 1、
+    // 整批回滾，而部署 log 只有那一行——看起來像客戶的模組壞了，實際上碼連被讀到都沒有。
+    // 探測本來就抓得到（systemd 的 ExecStart 寫的就是完整路徑），只是以前沒有欄位存。
+    // docker 目標不吃這一欄：容器內是官方 image 的 `odoo`，本來就在 PATH 上。
+    { table: 'project_deploy_targets', col: 'odoo_bin', sql: 'ALTER TABLE project_deploy_targets ADD COLUMN odoo_bin TEXT' }
   ];
   const tableColsCache = {};
   for (const { table, col, sql } of colMigrations) {

@@ -259,3 +259,50 @@ test('null 與 undefined 的欄位視為相同，不會被拆成兩組', () => {
     G({ id: 2, service_name: undefined }),
   ])).toEqual([[1, 2]]);
 });
+
+// ── odoo 執行檔路徑
+//
+// 意圖（Rule 9）：裸名 `odoo-bin` 只在它落在 PATH 上時成立。慈雲那台不是——實測
+// `which odoo-bin` 找不到，真正的位置是 /odoo/odoo-server/odoo-bin。少了這一欄，
+// 升級指令一送出去就 `sudo: odoo-bin: command not found`、exit 1、整批回滾，
+// 而部署 log 只有那一行，看起來像客戶的模組壞了，實際上碼連被讀到都沒有。
+test('systemd：填了 odoo_bin 就用完整路徑，不再叫裸名', () => {
+  const cmd = buildUpgradeCmd({ ...CIYUN_TEST, odoo_bin: '/odoo/odoo-server/odoo-bin' }, NOPW, ['idx_ciyun']);
+  expect(cmd).toContain('sudo -u odoo /odoo/odoo-server/odoo-bin -c /etc/odoo-test.conf');
+  expect(cmd).not.toMatch(/sudo -u odoo odoo-bin/);
+});
+
+// 沒填的機器行為不能因為新增這個欄位而改變——PATH 上有 odoo-bin 的機器本來就是好的。
+test('systemd：沒填 odoo_bin 時維持原本的裸名', () => {
+  expect(buildUpgradeCmd(CIYUN_TEST, NOPW, ['idx_ciyun'])).toContain('sudo -u odoo odoo-bin');
+  expect(buildUpgradeCmd({ ...CIYUN_TEST, odoo_bin: '   ' }, NOPW, ['idx_ciyun']))
+    .toContain('sudo -u odoo odoo-bin');
+});
+
+// 這一欄是使用者可編輯的，會原封不動進客戶正式機的 shell。不合法就整串不產出，
+// 不可以「濾掉壞字元後照送」——半套的指令比不送更危險。
+test('odoo_bin 不是合法絕對路徑就整串不產出', () => {
+  expect(() => buildUpgradeCmd({ ...CIYUN_TEST, odoo_bin: 'odoo-bin; rm -rf /' }, NOPW, ['idx_ciyun']))
+    .toThrow(/odoo_bin/);
+  expect(() => buildUpgradeCmd({ ...CIYUN_TEST, odoo_bin: '/odoo/../etc/x' }, NOPW, ['idx_ciyun']))
+    .toThrow(/odoo_bin/);
+});
+
+// docker 目標不吃這一欄：容器內是官方 image 的 `odoo`，本來就在 PATH 上。
+// 鴻久走的正是這條路（已實際部署成功多次），不可因為本次改動而改變。
+test('docker 目標不受 odoo_bin 影響', () => {
+  const cmd = buildUpgradeCmd({ ...HUNGJOU_TEST, odoo_bin: '/odoo/odoo-server/odoo-bin' }, PW, ['idx_hj']);
+  expect(cmd).toContain('docker compose run --rm odoo-tst odoo -c /etc/odoo/odoo.conf');
+  expect(cmd).not.toContain('/odoo/odoo-server/odoo-bin');
+});
+
+// 多 DB 共用一次停機時，執行檔逐個目標取。取 head 的話第一個目標的值會悄悄
+// 套用到其餘目標身上，而這一欄是人可以改的。
+test('多 DB（systemd）每個目標各用自己的 odoo_bin', () => {
+  const cmd = buildUpgradeCmdMulti([
+    { target: { ...T_SYSTEMD, db_name: 'ciyun', odoo_bin: '/odoo/odoo-server/odoo-bin' }, modules: ['idx_hj'] },
+    { target: { ...T_SYSTEMD, db_name: 'production_test' }, modules: ['idx_hj'] },
+  ], {});
+  expect(cmd).toContain('/odoo/odoo-server/odoo-bin -c /etc/odoo.conf -d ciyun');
+  expect(cmd).toMatch(/sudo -u odoo odoo-bin -c \/etc\/odoo\.conf -d production_test/);
+});
