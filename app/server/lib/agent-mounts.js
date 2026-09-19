@@ -51,6 +51,13 @@ function defaults(appDir) {
   };
 }
 
+// agent 還沒起跑就確定組不出掛載的設定錯誤——與「跑到一半被中斷」不同，重跑同一份輸入永遠是同一個
+// 結果。標記讓呼叫端認得出來（chat-agent.js 據此改寫使用者看到的收尾訊息，不再叫人重新發送）。
+// userAction＝使用者自己做得到的下一步，只有丟錯的這裡知道是什麼。
+function setupError(message, userAction) {
+  return Object.assign(new Error(message), { agentSetupError: true, userAction });
+}
+
 function isInside(child, parent) {
   const rel = path.relative(parent, child);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
@@ -118,7 +125,7 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   if (kind === 'none') { attach(); return { mounts, workdir }; }
 
   const info = await d.getProjectInfo(ctx.projectId);
-  if (!info) throw new Error(`專案 ${ctx.projectId} 沒有 clone 完成的 repo，無法組容器掛載`);
+  if (!info) throw setupError(`專案 ${ctx.projectId} 沒有 clone 完成的 repo，無法組容器掛載`, '請到專案頁的「Git Repositories」確認 repo 已 clone 完成（還在 clone 就等它跑完；顯示失敗的話按 ↺ 重新 clone），完成後再發一次。');
 
   const projectData = () => {
     const major = d.majorOf(info.odoo_version);
