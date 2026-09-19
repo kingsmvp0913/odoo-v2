@@ -7,6 +7,7 @@ const { runPipeline } = require('./pipeline/runner');
 const { acquireDispatchLease } = require('./dispatch-lease');
 const notify = require('./notify');
 const platformBackup = require('./lib/platform-backup');
+const staleRunning = require('./pipeline/stale-running');
 
 const lastOdooSync = new Map();
 const lastServiceSync = new Map();
@@ -273,7 +274,7 @@ async function getCronSchedules(now = new Date()) {
     { id: 'nightly-fix', name: '夜間改善批次', timing: `每日 ${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00（臺灣時間）；健檢跑完接著執行`, enabled: true, nextRunAt: nightlyFixNextRunAt(now, nightlyFixLastDay), note: '把已核准的意見回饋與健檢提案自動改碼、跑測試、審核後合併並重啟。沒有候選時仍會啟動但不做事，且不留執行紀錄；「今天已跑過」記在 DB，平台重啟（含批次自己的重啟）不會讓它同一晚再跑一次。' },
     { id: 'nightly-shutdown', name: '測試區夜間關機', timing: `每日 ${shutdownTime}（${shutdownTz}）`, enabled: true, nextRunAt: null, note: '每天只執行一次；若錯過整點，之後的 tick 會補跑。' },
     { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
-    { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: '清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移。' },
+    { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: `清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移，並把停在執行中超過 ${Math.round(staleRunning.STALE_RUNNING_HOURS / 24)} 天的殘留任務標為失敗待確認。` },
     { id: 'classification', name: '退回與 wiki 漂移分類', timing: '每分鐘', enabled: !testMode, nextRunAt: !testMode ? nextMinuteAt(now) : null, note: testMode ? '測試模式已停用分類。' : '每次僅處理小批待分類資料。' },
     { id: 'auto-archive', name: '完成任務自動封存', timing: `每日 ${String(AUTO_ARCHIVE_HOUR).padStart(2, '0')}:00（臺灣時間）`, enabled: true, nextRunAt: autoArchiveNextRunAt(now), note: '封存完成已滿 30 天的任務；錯過整點會由之後的 tick 補跑。' },
     { id: 'platform-backup', name: '平台資料庫備份', timing: `每日 ${String(platformBackup.BACKUP_HOUR).padStart(2, '0')}:00（臺灣時間）`, enabled: true, nextRunAt: autoArchiveNextRunAt(now, platformBackup.BACKUP_HOUR), note: platformBackup.describeBackups({ todayParts: taipeiDateParts(now) }) },
@@ -467,6 +468,11 @@ function startCron() {
         if (!testMode) {
           const { applyPendingWikiDrift } = require('./pipeline/wiki-drift-runner');
           await applyPendingWikiDrift().catch(err => console.error('[CRON] wiki-drift-apply:', err.message));
+          // 卡在 *_running 太久的殘留任務（使用者回報有兩張停了 30 天與 42 天，畫面一直顯示執行中）。
+          // 測試模式不跑：那時自動派工本來就關著，任務停在執行中是正常的，掃它等於把全部在途任務標失敗。
+          await staleRunning.reclaimStaleRunningTasks()
+            .then(r => { if (r.reclaimed) console.log(`[CRON] 殘留任務回收：${r.reclaimed} 張標記為失敗待確認`); })
+            .catch(err => console.error('[CRON] stale-running:', err.message));
         }
       }
 
