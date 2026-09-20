@@ -17,6 +17,60 @@ const typesFor = (stage) => STAGE_AGENT_TYPES[stage] || [stage];
 // 不標註的話健檢會把它讀成空轉。
 const MULTI_GATE_STAGES = new Set(['respec']);
 
+// 警語只留一份：per-agent 深診的 repeat_calls 與起手包的 per_stage 讀的是同一件事（次數），
+// 原本只有深診掛了這句。健檢每輪真正先讀的是起手包，於是程式碼裡明文警告過的誤讀照樣重現
+// （respec 的 repeat_avg 8.5 被讀成整關空轉）。兩條路徑共用同一段文字，不得各寫各的。
+function multiGateNote(stage) {
+  if (!MULTI_GATE_STAGES.has(stage)) return null;
+  return `此 stage 涵蓋多個不同閘門的 agent（${typesFor(stage).join('／')} 之外還有同 stage 的兄弟關卡），次數含跨閘門呼叫，不等於本關重跑`;
+}
+
+// 卡住的任務：停在「該由系統／AI 推進」的狀態卻很久沒動靜。起手包原本完全沒有這個區塊，健檢只能
+// 自己拼 SQL，上一輪寫成 `status LIKE '%_running' AND updated_at > 24h`——漏了 is_hidden 與
+// is_paused，把兩張使用者手動封存的任務（封存按鈕會設 is_hidden=true，見 tasks-routes.js）報成
+// 「靜默消失 30 天與 42 天」。runner.js 的派工查詢本來就帶 `is_paused = false AND is_hidden = false`，
+// 不派它們是正確行為，不是故障。
+const STUCK_HOURS = 24;
+const STUCK_LIMIT = 10;
+
+// 狀態白名單直接取 runner 派工用的同一份 RUNNABLE_STATUSES，不自己抄一份：抄本不會跟著新增的關卡
+// 更新，而漏掉一關的症狀就是「那一關卡住的任務永遠不出現在起手包裡」，靜默且沒有任何測試會紅。
+async function buildStuckTasks(nowMs) {
+  const { RUNNABLE_STATUSES } = require('../../public/js/status-labels.js');
+  const ph = RUNNABLE_STATUSES.map((_, i) => `$${i + 1}`).join(',');
+  const { rows } = await query(
+    `SELECT id, task_id, title, status, is_hidden, is_paused, updated_at
+       FROM tasks WHERE status IN (${ph}) ORDER BY id`, RUNNABLE_STATUSES);
+  // 年齡與 is_hidden／is_paused 一律在 JS 濾，不寫進 SQL：pg-mem（測試用）對有索引欄位的
+  // 「等值＋比較」組合會靜默回空集合（rules/testing #15），而這個區塊靜默變空，跟「真的沒有卡住
+  // 的任務」在輸出上長得一模一樣——正是這次要修掉的那種假陰性。
+  const stalled = rows.filter(r => nowMs - new Date(r.updated_at).getTime() >= STUCK_HOURS * 3600000);
+  const active = stalled.filter(r => !r.is_hidden && !r.is_paused);
+  const out = {
+    threshold_hours: STUCK_HOURS,
+    // 篩選條件寫進輸出：健檢看得到口徑才不會覺得需要自己再下一次 SQL
+    filter: '與 runner.js 的派工查詢同源：status ∈ RUNNABLE_STATUSES 且 is_hidden = false 且 is_paused = false',
+    count: active.length,
+    // 被排除的張數照報，不靜默吃掉：它們確實停在執行中狀態很久，只是「不派工」是正確行為
+    excluded: {
+      hidden: stalled.filter(r => r.is_hidden).length,
+      paused: stalled.filter(r => !r.is_hidden && r.is_paused).length
+    },
+    rows: active
+      .map(r => ({
+        id: r.id, task_id: r.task_id, title: r.title, status: r.status,
+        stalled_hours: Math.round(((nowMs - new Date(r.updated_at).getTime()) / 3600000) * 10) / 10
+      }))
+      .sort((a, b) => b.stalled_hours - a.stalled_hours)
+      .slice(0, STUCK_LIMIT)
+  };
+  if (out.excluded.hidden || out.excluded.paused) {
+    out.excluded_note = '這些是使用者手動封存（is_hidden）或暫停（is_paused）的任務，派工查詢本來就排除它們，'
+      + '不派是正確行為——不得報成「任務靜默消失」或「卡住」。';
+  }
+  return out;
+}
+
 // 百分位在 JS 端算，不用 SQL 的 percentile_cont：測試跑 pg-mem，聚合函式支援度不齊，
 // 而本檔既有的 avg／max 也都是撈原始列在 JS 聚合，維持一致。
 // nearest-rank（ceil(p×n)-1），不用 floor((n-1)×p)：後者在小樣本下會把尾巴切掉——
@@ -193,9 +247,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
     avg: ns.length ? Math.round((ns.reduce((a, b) => a + b, 0) / ns.length) * 100) / 100 : 0,
     tasks_over_2: ns.filter(n => n > 2).length,
     // 同一個 stage 底下有多個不同閘門的 agent 時，次數不等於「這一關重跑」，要講明白
-    ...(MULTI_GATE_STAGES.has(stage)
-      ? { note: `此 stage 涵蓋多個不同閘門的 agent（${types.join('／')} 之外還有同 stage 的兄弟關卡），次數含跨閘門呼叫，不等於本關重跑` }
-      : {})
+    ...(multiGateNote(stage) ? { note: multiGateNote(stage) } : {})
   };
 
   const { rows: taskRows } = await query(
@@ -446,6 +498,11 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
     };
     // 分母來自對話而非任務時明講，免得「tasks:0 卻有 repeat_avg」自己又變成另一種誤導
     if (!tasks && chats) entry.chats = chats;
+    // per_stage 的 key 就是 token_usage.agent_type，多閘門的 stage（respec 的 clarify-chat／
+    // spec-review／respec-patch 都記成 respec）在這裡的 repeat_avg 含跨閘門呼叫，不是本關重跑。
+    // 深診路徑早就標了這句，起手包沒標＝健檢先讀到的那份反而沒有警語。
+    const mgNote = multiGateNote(k);
+    if (mgNote) entry.note = mgNote;
     return [k, entry];
   }));
 
@@ -512,6 +569,9 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
       tasks_no_completion_ts: noCompletionTs
     },
     per_stage,
+    // 現況快照，不隨視窗上下界移動（「現在有沒有卡住」問的就是現在；趨勢比對只取 volume／per_stage，
+    // 不會把這塊當成上一期的數字用）
+    stuck_tasks: await buildStuckTasks(Date.now()),
     chat_quality,
     tasks: task_rows,
     rejections: rej.map(r => ({ task_id: r.task_id, source: r.source, category: r.category, description: r.description }))
