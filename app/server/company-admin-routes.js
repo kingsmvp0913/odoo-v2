@@ -93,6 +93,61 @@ function registerRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  app.get('/api/admin/companies/:id/projects', auth, async (req, res) => {
+    try {
+      // task_count 不用相關子查詢（`t.project_id = pc.project_id`）——pg-mem 不支援，
+      // 已在檔案開頭 user_count/project_count 用過同一招：先聚合成獨立子查詢再 LEFT JOIN。
+      const { rows } = await query(
+        `SELECT pc.project_id, p.name, pc.can_release,
+                COALESCE(tc.cnt, 0)::int AS task_count
+           FROM project_companies pc
+           JOIN projects p ON p.id = pc.project_id
+           LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM tasks GROUP BY project_id) tc
+             ON tc.project_id = pc.project_id
+          WHERE pc.company_id = $1 ORDER BY p.name`,
+        [req.params.id]
+      );
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.put('/api/admin/companies/:id/projects/:projectId', auth, async (req, res) => {
+    try {
+      const wantRelease = req.body && req.body.can_release === true;
+      const { rows: co } = await query('SELECT is_internal FROM companies WHERE id = $1', [req.params.id]);
+      if (!co.length) return res.status(404).json({ error: '找不到這家公司' });
+      const { rows: pj } = await query('SELECT 1 FROM projects WHERE id = $1', [req.params.projectId]);
+      if (!pj.length) return res.status(404).json({ error: '找不到這個專案' });
+      // 規格 §4.3：內部公司綁了全部專案，給它 can_release 等於每個內部成員都能按上正式。
+      if (co[0].is_internal === true && wantRelease) {
+        return res.status(400).json({ error: '內部公司的綁定不能勾「可上正式」' });
+      }
+      await query(
+        `INSERT INTO project_companies (project_id, company_id, can_release) VALUES ($1,$2,$3)
+         ON CONFLICT (project_id, company_id) DO UPDATE SET can_release = EXCLUDED.can_release`,
+        [req.params.projectId, req.params.id, wantRelease]
+      );
+      // 不信任 ON CONFLICT ... RETURNING（pg-mem 在這個組合上回過錯的值），改重讀一次。
+      const { rows } = await query(
+        'SELECT project_id, company_id, can_release FROM project_companies WHERE project_id=$1 AND company_id=$2',
+        [req.params.projectId, req.params.id]
+      );
+      res.json(rows[0]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/admin/companies/:id/projects/:projectId', auth, async (req, res) => {
+    try {
+      const { rows } = await query(
+        'DELETE FROM project_companies WHERE project_id=$1 AND company_id=$2 RETURNING project_id',
+        [req.params.projectId, req.params.id]
+      );
+      // 沒綁過卻回 204，操作的人會以為自己解除了某個東西。
+      if (!rows.length) return res.status(404).json({ error: '這家公司沒有綁這個專案' });
+      res.status(204).end();
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 }
 
 module.exports = { registerRoutes };
