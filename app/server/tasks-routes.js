@@ -608,7 +608,11 @@ function registerRoutes(app) {
   });
 
   // 執行歷程：該任務所有事件（依序回放，供 Terminal 頁載入歷史）
-  app.get('/api/tasks/:id/events', verifyToken, async (req, res) => {
+  // 2026-09-21 使用者裁決 D2「兩個都收」：終端機頁面本身已在 app.js 收斂為
+  // requiresAdmin，但這支後端端點本來就對所有登入者開放（規格 §5.5 沒列到，逐項
+  // 核實才發現）。403 而非 404：這個人看得到任務本人（是他自己的），只是不能看
+  // 執行歷程——屬於「看得到但不能做這個動作」。
+  app.get('/api/tasks/:id/events', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
