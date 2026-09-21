@@ -212,7 +212,12 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
   test('登出時把殼層自算的 isAdmin 也清掉', () => {
     const at = SHELL.indexOf('\n      logout() {');
     expect(at).toBeGreaterThan(-1);
-    const logout = SHELL.slice(at, SHELL.indexOf('\n      },', at));
+    // 起點有釘、終點沒釘的話，method 的收尾縮排一改，indexOf 就回 -1，
+    // slice(at, -1) 會一路切到檔尾而不是切出空字串——守衛會悄悄放大成「整個檔案裡
+    // 有沒有 isAdmin = false」，那幾乎必然是綠的。兩端都要釘。
+    const end = SHELL.indexOf('\n      },', at);
+    expect(`logout 收尾錨點: ${end > at}`).toBe('logout 收尾錨點: true');
+    const logout = SHELL.slice(at, end);
     expect(logout).toMatch(/this\.isAdmin\s*=\s*false/);
   });
 });
