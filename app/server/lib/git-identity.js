@@ -20,6 +20,7 @@ function askpassShimPath() {
 // 會讓 commit 掛上錯誤的身分，所以 09-14 裁決是擋下、要他自己填個人 PAT。
 // 回傳值多一個 source，讓呼叫端寫得出「這次是用誰的身分推的」。
 const { hardenGitEnv } = require('./git-hardening');
+const { isUserCompanyUsable } = require('./tenant-access');
 
 async function buildGitEnv(userId) {
   const { rows } = await query(
@@ -34,11 +35,15 @@ async function buildGitEnv(userId) {
   const u = rows[0];
   if (!u) throw new NoGitCredentialError();
 
+  // 停用或到期的公司，它的憑證不可以再被拿來推 code（規格 §7）。
+  // HTTP 那一側第 1 部的全域閘門已經擋掉了，但 cron／部署／夜間批次不經過 HTTP。
+  const companyUsable = u.co_pat_enc ? await isUserCompanyUsable(userId) : true;
+
   let source, patEnc, login, name, email;
   if (u.github_pat_enc) {
     source = 'personal';
     patEnc = u.github_pat_enc; login = u.github_login; name = u.git_name; email = u.git_email;
-  } else if (u.co_pat_enc) {
+  } else if (u.co_pat_enc && companyUsable) {
     source = 'company';
     patEnc = u.co_pat_enc; login = u.co_login; name = u.co_name; email = u.co_email;
   } else {

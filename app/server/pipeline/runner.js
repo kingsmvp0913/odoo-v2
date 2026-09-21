@@ -611,6 +611,11 @@ async function runPipeline(userId, { auto = false } = {}) {
       if (_inFlight.size >= MAX_GLOBAL) break;   // 全機滿載，本輪停止派工（即時，跨 user 併發共用）
       if (_inFlight.has(task.id)) continue;      // 已在飛，不重複派
       if (await mergeGateBlocked(task)) continue; // (B) 同專案尾巴已被佔／有更早進場者 → 留待下一輪
+      // 公司停用或到期之後，cron 不該繼續替那家客戶推進任務（規格 §7）。
+      // 依「建任務的人」所屬公司判斷，與「誰付錢」同一個人——一個專案可以掛多家公司，
+      // 所以不能用專案判斷。
+      const { isUserCompanyUsable } = require('../lib/tenant-access');
+      if (!await isUserCompanyUsable(task.user_id)) continue;
       if (dispatchTask(task, settings)) dispatched++;
     }
     return { dispatched };

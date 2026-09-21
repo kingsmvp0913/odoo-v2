@@ -94,7 +94,39 @@ function requirePlatformAdmin(req, res, next) {
   next();
 }
 
+// 不經過 HTTP 的路徑（AI 執行、cron、系統觸發的 git）要能自己問「這個人的公司現在能用嗎」。
+// 判斷邏輯與 auth.js 的 buildActor 一致：沒有公司一律算可用——平台管理員沒有公司，
+// 而遷移之前一般帳號也還沒有。寫反的話會把平台管理員自己鎖死。
+// 查不到這個 user 也算可用：不認識的人不歸這支管，交給上游的授權擋。
+async function isUserCompanyUsable(userId, now = new Date()) {
+  if (!userId) return true;
+  const { rows } = await query(
+    `SELECT c.is_active, c.active_from, c.active_until
+       FROM users u JOIN companies c ON c.id = u.company_id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  if (!rows[0]) return true;
+  const r = rows[0];
+  return r.is_active === true
+    && (!r.active_from || now >= new Date(r.active_from))
+    && (!r.active_until || now <= new Date(r.active_until));
+}
+
+// 「這個人算不算內部人員」。平台管理員沒有公司，他們本來就是內部人員 ⇒ true。
+// 用途：Codex 沒有容器保護，只給內部人員（規格 §7）。
+async function isUserCompanyInternal(userId) {
+  if (!userId) return true;
+  const { rows } = await query(
+    'SELECT c.is_internal FROM users u LEFT JOIN companies c ON c.id = u.company_id WHERE u.id = $1',
+    [userId]
+  );
+  if (!rows[0]) return true;
+  return rows[0].is_internal !== false;
+}
+
 module.exports = {
   ROLES, validateRoleCompany, hasCompany,
   canSeeProject, loadProjectForActor, canReleaseProject, canManageCompanyUsers, requirePlatformAdmin,
+  isUserCompanyUsable, isUserCompanyInternal,
 };

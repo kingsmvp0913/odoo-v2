@@ -67,8 +67,13 @@ function verifyRunToken(token, now = Date.now()) {
 function revokeRun(runId) { _runs.delete(runId); }
 function activeRunCount() { return _runs.size; }
 
-// 檢查點（§4.4）：子專案 1 接「發起者所屬公司啟用中且在期間內」，子專案 2 接「公司已設 key、未超花費上限」
-async function canRun(_scope, _actorUserId) { return true; }
+// 檢查點（§4.4）：公司停用或不在使用期間就不發通行證、不開容器。
+// 子專案 2 之後會在同一個地方再接「公司已設 key、未超花費上限」。
+// 內部工作（健檢、夜間改善）沒有發起人，actorUserId 是 null ⇒ 照跑。
+// ⚠ require 寫在函式內是刻意的——tenant-access 會 require('../db')，模組層互相引用容易在測試環境形成載入順序問題。
+async function canRun(_scope, actorUserId) {
+  return require('./tenant-access').isUserCompanyUsable(actorUserId);
+}
 
 function _resetRunsForTesting() { _runs.clear(); }
 
