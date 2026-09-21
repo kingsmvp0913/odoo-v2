@@ -39,6 +39,9 @@ const pub = path.join(__dirname, '..', '..', 'public');
 const APP_JS = fs.readFileSync(path.join(pub, 'js', 'app.js'), 'utf8');
 const SHELL = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'UiNextApp.js'), 'utf8');
 const ADMIN_USERS = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'AdminUsers.js'), 'utf8');
+const PROJECT_LIST = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'ProjectList.js'), 'utf8');
+const PROJECT_DETAIL = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'ProjectDetail.js'), 'utf8');
+const LOGIN = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'Login.js'), 'utf8');
 
 // routes 陣列裡每個物件以 path: "…" 開頭，切到下一個 path: 為止（同 frontend-admin-route-guard）。
 const routeBlocks = (() => {
@@ -257,5 +260,140 @@ describe('使用者管理頁：建帳號與改角色都帶著公司', () => {
     expect(code).not.toMatch(/待審核/);
     expect(code).not.toMatch(/核准/);
     expect(code).toMatch(/已停用/);
+  });
+});
+
+// ── Task 12：三個「後端本來就會拒、前端還看得見」的入口 ─────────────────────
+// 規則來源 .claude/rules/frontend.md 38：受限入口要 nav 的 v-if ＋ router guard ＋ 後端 403 三層，
+// 缺一都是破口。這三處的第 3 層本來就有（requirePlatformAdmin／固定 403），缺的是第 1 層。
+// 三處的條件刻意都沿用各頁既有的 isAdmin()（window.UserStore.role === "admin"），
+// 與外殼側欄的 v-if="isAdmin" 同一套判準——這個子專案的全支審查點名過「同一件事有兩種寫法」。
+// 盲區同本檔開頭：驗的是原始碼字面，不是瀏覽器真的藏了。
+
+describe('專案清單：建專案入口是平台管理員限定', () => {
+  // 掃描清單一律先釘筆數（本檔開頭的規矩）。主色按鈕多一顆就是多一個主要動作，
+  // 必須有人親手決定它該給誰看。數字對不上時不要直接改數字——先回答新的那一顆會不會被後端 403。
+  const primaryButtons = PROJECT_LIST.match(/<button[^>]*class="ui-next-primary"[^>]*>/g) || [];
+
+  test('主色按鈕剛好兩顆（右上「新增專案」＋表單裡「建立專案」）', () => {
+    expect(primaryButtons).toHaveLength(2);
+  });
+
+  // POST /api/projects 掛 requirePlatformAdmin（project-routes.js）。Task 12 之前這顆是裸的：
+  // 一般使用者看得到主色按鈕、把整張表單填完，按下去才 403。
+  test('「新增專案」帶著 isAdmin() 條件', () => {
+    const button = buttonWith(PROJECT_LIST, '@click="openAddForm"');
+    expect(`新增專案: ${button !== null}`).toBe('新增專案: true');
+    expect(`新增專案: ${button.includes('v-if="isAdmin() && !showAddForm"')}`).toBe('新增專案: true');
+  });
+
+  // 條件的來源壞掉本檔看不出來（開頭盲區 B2），但「換了一個自己發明的來源」看得出來。
+  test('isAdmin() 問的是 UserStore.role', () => {
+    expect(`ProjectList.isAdmin: ${/isAdmin\(\)\s*\{\s*return window\.UserStore\.role === "admin";\s*\}/.test(PROJECT_LIST)}`)
+      .toBe('ProjectList.isAdmin: true');
+  });
+});
+
+describe('專案頁「設定」分頁：整頁藏起來，不是只藏按鈕', () => {
+  // 決定（Task 12）：整頁藏。設定分頁裡只有兩個區塊，兩個都是平台管理員限定的寫入端點
+  //（基本資料 → PUT /api/projects/:id、同步來源對應 → PATCH /api/projects/:id/mapping），
+  // 只藏按鈕會留下一張填得動、存不了的空殼表單——那比藏起來更像壞掉。
+  // 專案名稱與備註本來就印在本頁標題上，藏掉這一頁不會少掉一般使用者看得到的資訊。
+  const settings = (() => {
+    const start = PROJECT_DETAIL.indexOf(`<section v-if="detailTab==='settings'`);
+    const end = PROJECT_DETAIL.indexOf('<ReleaseModal', start);
+    return start < 0 || end < 0 ? '' : PROJECT_DETAIL.slice(start, end);
+  })();
+
+  // 這條同時是筆數釘子與「整頁藏」這個決定的守衛：日後有人想改成「只藏按鈕」，
+  // 會先在這裡看見兩顆儲存鈕都在同一個 section 裡；多出第三顆動作也會紅。
+  test('設定區塊切得到，裡面剛好兩顆按鈕且都是儲存', () => {
+    expect(`設定區塊: ${settings.length > 800}`).toBe('設定區塊: true');
+    expect(settings.match(/<button[^>]*>/g) || []).toHaveLength(2);
+    for (const call of ['@click="saveBasics"', '@click="saveProjectMapping"']) {
+      expect(`${call}: ${settings.includes(call)}`).toBe(`${call}: true`);
+    }
+  });
+
+  // 縱深防禦，比照同檔 embeddedTab 的做法：分頁列藏起來只是其中一條路徑。
+  test('設定區塊本身也帶著 isAdmin()', () => {
+    expect(`設定區塊: ${settings.startsWith(`<section v-if="detailTab==='settings' && isAdmin()"`)}`)
+      .toBe('設定區塊: true');
+  });
+
+  // 字面陣列刻意維持完整、用 filter 拿掉不該顯示的（tour-isolation 從這裡數分頁 key），
+  // 所以「總共幾個分頁」與「哪幾個是管理員限定」是兩個各自要守的事實。
+  const tabKeys = (() => {
+    const m = PROJECT_DETAIL.match(/const all = (\[\[[\s\S]*?\]\]);/);
+    return m ? [...m[1].matchAll(/\["([a-z]+)"/g)].map((x) => x[1]) : [];
+  })();
+
+  test('分頁字面清單撈得到，七個一個不少', () => {
+    expect(tabKeys).toEqual(['chat', 'settings', 'repos', 'db', 'env', 'wiki', 'deploy']);
+  });
+
+  test('settings 與 repos／db 同列，過濾條件問的是 isAdmin()', () => {
+    const line = PROJECT_DETAIL.match(/if \(key === "repos".*$/m);
+    expect(`過濾條件: ${line !== null}`).toBe('過濾條件: true');
+    for (const key of ['repos', 'db', 'settings']) {
+      expect(`${key}: ${line[0].includes(`key === "${key}"`)}`).toBe(`${key}: true`);
+    }
+    expect(`過濾條件: ${line[0].includes('this.isAdmin()')}`).toBe('過濾條件: true');
+  });
+
+  // data() 的初始猜值跑在 created() 之前。漏掉這裡，一般使用者用 ?tab=settings 的深連結進來
+  // 會先看見一拍設定內容才被 selectTab() 打回 chat。
+  test('data() 的初始猜值：管理員有 settings，一般使用者沒有', () => {
+    const guess = PROJECT_DETAIL.match(/detailTab:\s*\(window\.UserStore\.role === "admin" \? (\[[^\]]*\]) : (\[[^\]]*\])\)/);
+    expect(`初始猜值: ${guess !== null}`).toBe('初始猜值: true');
+    expect(`管理員: ${guess[1].includes('"settings"')}`).toBe('管理員: true');
+    expect(`一般使用者: ${guess[2].includes('"settings"')}`).toBe('一般使用者: false');
+  });
+
+  // 藏起來之後這條路徑照理走不到，但「條件寫錯了」與「沒有 catch」是兩件事：
+  // 沒有 catch 時後端一拒絕就是沒人接的 promise rejection——畫面完全沒反應，
+  // 使用者只會再按一次、再一次，然後認定平台壞了。形狀與同檔 saveBasics 一致。
+  test('saveProjectMapping 有 catch，形狀與 saveBasics 一致', () => {
+    const fn = PROJECT_DETAIL.slice(
+      PROJECT_DETAIL.indexOf('async saveProjectMapping()'),
+      PROJECT_DETAIL.indexOf('async saveE2eSetting()'),
+    );
+    expect(`saveProjectMapping: ${fn.length > 200}`).toBe('saveProjectMapping: true');
+    expect(`saveProjectMapping: ${/catch \(error\) \{ showToast\(error\.message \|\| "儲存失敗", "error"\); \}/.test(fn)}`)
+      .toBe('saveProjectMapping: true');
+  });
+});
+
+describe('登入頁：自助註冊入口已移除（精靈程式碼刻意保留）', () => {
+  // 註解要先剝掉：Task 12 在原處留下的註解本身就在講「入口已移除」並點名 startRegister，
+  // 字面掃描會被它誤判成入口還在。
+  const template = (() => {
+    const start = LOGIN.indexOf('template: `');
+    return start < 0 ? '' : LOGIN.slice(start).replace(/<!--[\s\S]*?-->/g, '');
+  })();
+
+  test('template 切得到（切不到的話下面幾條全是假綠）', () => {
+    expect(`Login template: ${template.length > 2000}`).toBe('Login template: true');
+    expect(`Login template: ${template.includes(`v-if="mode !== 'register'"`)}`).toBe('Login template: true');
+  });
+
+  // 筆數釘子：登入頁的文字連結就是這一頁的次要入口。多一顆＝多一條路，
+  // 數字對不上時先回答新的那一顆會不會被後端拒絕，不要直接改數字。
+  test('文字連結剛好兩顆（略過設定精靈、返回登入）', () => {
+    expect(template.match(/<button[^>]*class="ui-next-login-link"[^>]*>/g) || []).toHaveLength(2);
+  });
+
+  // POST /api/auth/register 自 Task 8 起一律回固定 403（server/auth.js）。
+  test('登入頁不得再有「註冊新帳號」入口', () => {
+    expect(`註冊新帳號: ${template.includes('註冊新帳號')}`).toBe('註冊新帳號: false');
+    expect(`startRegister callsite: ${template.includes('@click="startRegister"')}`).toBe('startRegister callsite: false');
+  });
+
+  // 3b 計畫「刻意不做」第 41 行：只隱藏入口。有人順手把五步精靈清掉的話這裡會紅——
+  // 刪流程是另一個決定（要不要永久關掉自助註冊），要重開一次，不該夾在隱藏入口裡順手做掉。
+  test('五步註冊精靈的程式碼仍在（只藏入口，沒刪流程）', () => {
+    for (const marker of ['startRegister()', 'async registerAccount()', 'auth/register']) {
+      expect(`${marker}: ${LOGIN.includes(marker)}`).toBe(`${marker}: true`);
+    }
   });
 });

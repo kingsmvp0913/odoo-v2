@@ -44,7 +44,11 @@
 <h1>專案</h1>
 <p>管理程式庫、測試環境、對話與交付流程。</p>
 </div>
-<button v-if="!showAddForm" class="ui-next-primary" data-tour="proj-add" @click="openAddForm">新增專案</button>
+<!-- 建專案是平台管理員限定：POST /api/projects 掛 requirePlatformAdmin，一般使用者必定 403。
+     藏整顆而不是 disabled——灰掉的按鈕仍在宣告一個這個人永遠拿不到的能力；
+     在此之前他會把專案名稱、Odoo 版本、英文資料夾名整張填完，按下去才被退回。
+     條件沿用本檔既有的 isAdmin()（window.UserStore.role === "admin"），與側欄 nav 同一套判準。 -->
+<button v-if="isAdmin() && !showAddForm" class="ui-next-primary" data-tour="proj-add" @click="openAddForm">新增專案</button>
 </header>
 <div v-if="showAddForm" class="ui-next-task-modal-backdrop" @mousedown.self="closeAddForm" @keydown="onAddFormKeydown">
 <section ref="projectCreateModal" class="ui-next-task-modal ui-next-form-modal" data-tour="proj-form" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
