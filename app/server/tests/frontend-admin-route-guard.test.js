@@ -56,6 +56,9 @@ describe('非 /admin 前綴的 admin-only 頁面', () => {
   const ADMIN_ONLY_OUTSIDE = [
     '/token-report',  // 用量報表含全平台成本，僅管理員可見
     '/companies',     // 公司管理（3b Task 8）：建立／停用客戶公司、設定 GIT 憑證，僅平台管理員可見
+    '/architecture',  // 架構圖（3b Task 1）：平台內部實作細節
+    '/pipeline-flow', // 流程圖（3b Task 1）：同上
+    '/task/:id/terminal', // 終端機（3b Task 1）：能直接對任務所在容器下指令
   ];
 
   test.each(ADMIN_ONLY_OUTSIDE)('%s 仍是 admin only', (p) => {
@@ -80,6 +83,10 @@ describe('沒有全域 admin gate（NEXT-P0-001 不得復辟）', () => {
     expect(m[0]).not.toMatch(/\brole\b/);
   });
 
+  // ⚠ 這個標題比它實際驗到的東西大：下面的正則從 requiresAdmin 抓到該區塊自己的收尾大括號為止，
+  // 驗的是「requiresAdmin 分支裡有 role」，不是「別的分支裡沒有 role」。
+  // 後加的 requiresInternal 分支（不得出現 role）由 frontend-tenant-guard.test.js 驗，
+  // 它把整段 beforeEach 切乾淨再逐分支比對。
   test('role 檢查只出現在 requiresAdmin 分支內', () => {
     const m = guard.match(/if\s*\([^)]*requiresAdmin[^)]*\)\s*\{[\s\S]*?\n\s{2}\}/);
     expect(m).not.toBeNull();
