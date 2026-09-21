@@ -399,6 +399,10 @@ window.TOUR_COURSES = [
     id: 'track',
     name: '進度與通知',
     desc: '不在電腦前的那段時間，發生過什麼',
+    // 兩步的路由「/admin/pipelines」「/pipeline-flow」都已是 requiresAdmin（後者是
+    // 2026-09-21 多租戶案 Task 3 新收斂的，前者更早就是）——這門課對非管理員整課走不通，
+    // 不是漏了某一步，比照下面 admin 課程的做法整課標記 adminOnly，不新發明跳過機制。
+    adminOnly: true,
     steps: [
       {
         route: '/admin/pipelines',
