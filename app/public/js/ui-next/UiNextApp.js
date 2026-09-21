@@ -1102,18 +1102,11 @@
         this.closeSidebarMenus();
         this.go(tab ? `/projects/${id}?tab=${tab}` : `/projects/${id}`);
       },
-      // 沿用專案頁那支：先開空白分頁再輪詢 SSO URL。不先開分頁的話，
-      // 等 await 回來才 window.open 會被瀏覽器當成非使用者手勢而擋掉。
-      async openEnv(id) {
+      // 實作在 env-sso.js 的 openEnvTab（popup 時機、等待提示、失敗收尾都在那裡統一）。
+      // 這裡必須維持同步呼叫：中間插一個 await，openEnvTab 的 window.open 就不再算使用者手勢。
+      openEnv(id) {
         this.closeSidebarMenus();
-        const popup = window.open("about:blank", "_blank");
-        try {
-          const url = await window.pollEnvSso(id);
-          if (popup) popup.location = url; else window.location.href = url;
-        } catch (error) {
-          if (popup) popup.close();
-          showToast(error.message || "無法開啟測試區", "error", 0);
-        }
+        return window.openEnvTab(id);
       },
       openRelease(id) {
         this.closeSidebarMenus();
