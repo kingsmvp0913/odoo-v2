@@ -9,6 +9,7 @@
 const express = require('express');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { requireFeature } = require('./lib/company-features');
 
 // 題目在列表上不需要選項全文，只要題幹與信心度。選項與理由留給單題詳情。
 const LIST_COLS = `
@@ -22,7 +23,7 @@ function registerRoutes(app) {
   // 題數用 LEFT JOIN + GROUP BY 而不是相關子查詢（`(SELECT COUNT(*) … WHERE a.bank_id = b.id)`）：
   // 那種寫法在正式 Postgres 完全合法，但 **pg-mem 不支援子查詢引用外層欄位**，
   // 會回 `column "b.id" does not exist`。測試環境炸、正式環境好，是最難查的那種落差。
-  app.get('/api/exam/banks', verifyToken, async (req, res) => {
+  app.get('/api/exam/banks', verifyToken, requireFeature('exam'), async (req, res) => {
     const { rows } = await query(`
       SELECT b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image,
              COUNT(a.id)::int AS item_count
@@ -40,7 +41,7 @@ function registerRoutes(app) {
   // 於是「考完一場 → 開下一場」這條路整個不存在，累積機制等於只能用一次。
   //
   // 建出來就是 ready：空的題庫本來就可以直接接收上傳，沒有要等什麼。
-  app.post('/api/exam/banks', verifyToken, express.json(), async (req, res) => {
+  app.post('/api/exam/banks', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     try {
       const label = String(req.body.label ?? '').trim();
       const version = String(req.body.odoo_version ?? '').trim();
@@ -63,7 +64,7 @@ function registerRoutes(app) {
   });
 
   // 有哪些 Odoo 版本的題（版本切換用）。
-  app.get('/api/exam/versions', verifyToken, async (req, res) => {
+  app.get('/api/exam/versions', verifyToken, requireFeature('exam'), async (req, res) => {
     const { rows } = await query(`
       SELECT odoo_version, COUNT(*)::int AS n
         FROM exam_items GROUP BY odoo_version ORDER BY odoo_version DESC`);
@@ -74,7 +75,7 @@ function registerRoutes(app) {
   //
   // 不用頁碼當骨架而用章節：官方成績本來就按章節給，直接攤在標題上；而且跨考次
   // 合併後同一章不會固定在同一頁，用頁碼遲早對不上。
-  app.get('/api/exam/sections', verifyToken, async (req, res) => {
+  app.get('/api/exam/sections', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
 
@@ -123,7 +124,7 @@ function registerRoutes(app) {
   });
 
   // 單題詳情：選項中英對照、歷來審查、證據、各次考試的作答。
-  app.get('/api/exam/items/:id', verifyToken, async (req, res) => {
+  app.get('/api/exam/items/:id', verifyToken, requireFeature('exam'), async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
 
@@ -170,7 +171,7 @@ function registerRoutes(app) {
   // 讓 /solve 看到一個不確定的舊答案，就是拿它去錨定新的推理——那正是這套系統
   // 花大力氣在防的事。這條規則寫在 server 才擋得住；回全部讓 client 自己判斷
   // 等於沒有規則。
-  app.get('/api/exam/lookup', verifyToken, async (req, res) => {
+  app.get('/api/exam/lookup', verifyToken, requireFeature('exam'), async (req, res) => {
     const q = String(req.query.q || '').trim();
     const version = String(req.query.version || '19').trim();
     if (!q) return res.status(400).json({ error: '缺少 q' });
