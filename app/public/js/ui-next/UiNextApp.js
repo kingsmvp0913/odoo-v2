@@ -1183,6 +1183,8 @@
         window.UserStore.companyId = null;
         window.UserStore.companyName = '';
         window.UserStore.features = {};
+        // 理由同上：不清的話，下一個人在 auth/me 回來之前會先看到上一個帳號的「公司帳號已停用」全屏說明。
+        window.UserStore.companyUsable = true;
         // 殼層自己算的 isAdmin（data，非 UserStore）先前漏清——上面五個都清了唯獨它沒清，
         // 下一個人登入前如果畫面來不及重新整理，會短暫沿用上一個使用者的管理員身分。
         this.isAdmin = false;
@@ -1244,6 +1246,21 @@
     },
     template: `
       <template v-if="!isLoggedIn || $route.path === '/login'"><router-view /></template>
+      <!-- 公司停用／過期：後端對每一支 /api 回 403（index.js 的公司不可用閘門），唯一放行的
+           GET /auth/me 就是留給這裡講原因用的。不講的話畫面會變成空側欄＋使用者名稱停在「使用者」
+           ＋每頁各自一句不相干的錯誤，看起來像平台壞了，而不是「你們公司的帳號停用了」。
+           整頁蓋掉而不是掛一條橫幅：底下每個入口按下去都必定 403，留著只會讓人一路撞牆。
+           版面沿用登入頁的 .ui-next-login／.ui-next-login-card（同一種「只有一張卡的全屏畫面」），
+           不另外寫 CSS，配色全部來自變數所以深色模式跟著走。
+           「登出」必須留著：這一層蓋掉整個外殼（含側欄的帳號選單），沒有它就是把人鎖在走不出去的死畫面。 -->
+      <div v-else-if="userStore.companyUsable === false" class="ui-next-login" role="alert">
+        <section class="ui-next-login-card">
+          <h1>公司帳號已停用</h1>
+          <p class="ui-next-login-error">{{ userStore.companyName || '你所屬的公司' }} 的帳號已停用或不在使用期間，平台功能目前無法使用。</p>
+          <p>這不是故障，也不是你的帳號有問題。請聯絡貴公司的管理員確認合約狀態；若需要恢復使用，請與我們聯繫。</p>
+          <div class="ui-next-login-actions"><button class="ui-next-primary" @click="logout">登出</button></div>
+        </section>
+      </div>
       <div v-else class="ui-next-shell" :class="{ 'has-ribbon': maintenance }" data-ui="next">
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
         <!-- 手機頂欄（樣式在 10-mobile.css，桌機 display:none）。選單鈕原本 position:fixed 浮在左上角，
