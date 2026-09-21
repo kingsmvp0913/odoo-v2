@@ -9,14 +9,19 @@ let _toastSeq = 0;
 function dismissToast(id) {
   toasts.value = toasts.value.filter((t) => t.id !== id);
 }
-// duration <= 0 代表「不自動關閉」，由使用者自己關。
+// duration <= 0 代表「這則要留久一點」——用在錯誤訊息上。
 // 原本無條件 setTimeout(…, duration)，於是 showToast(msg, "error", 0) 會在 0ms 後立刻移除
-// ——訊息等於沒出現過。ui-next 有 30 幾處錯誤路徑是這樣寫的（意圖正是「錯誤不要自己消失」，
+// ——訊息等於沒出現過。ui-next 有 30 幾處錯誤路徑是這樣寫的（意圖正是「錯誤不要一閃即逝」，
 // 見規格 §4.6），全部靜默失效：使用者只看到操作沒反應，看不到原因。
+//
+// 但「永遠不關」也不對：沒人按 × 的話錯誤訊息會一路疊在右下角擋住畫面，換頁也不會消。
+// 改成 30 秒後自動收（足夠讀完並複製內容），期間照樣畫 × 讓使用者提早關掉。
+const STICKY_TOAST_MS = 30000;
 function showToast(message, level = "info", duration = 4000) {
   const id = ++_toastSeq;
-  toasts.value.push({ id, message, level, sticky: !(duration > 0) });
-  if (duration > 0) setTimeout(() => dismissToast(id), duration);
+  const sticky = !(duration > 0);
+  toasts.value.push({ id, message, level, sticky });
+  setTimeout(() => dismissToast(id), sticky ? STICKY_TOAST_MS : duration);
   return id;
 }
 window.showToast = showToast;
