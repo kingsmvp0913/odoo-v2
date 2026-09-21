@@ -353,10 +353,15 @@ function registerRoutes(app) {
       // JOIN 之後裸列會 ambiguous column——只在這個呼叫點補上 p. 別名，常數本身不動
       // （其餘呼叫點沒有 JOIN，加別名反而會查不到欄位）。
       const scopedCols = PROJECT_PUBLIC_COLS.replace('created_at', 'p.created_at');
+      // can_release（側欄「上正式」按鈕要靠它算 v-if，見 UiNextApp.js）：JOIN 本來就在，
+      // 順手多帶 pc.can_release 出來，不要逐筆 await canReleaseProject——17 個專案就是 17 次
+      // 額外查詢。判準要跟 canReleaseProject（lib/tenant-access.js）完全一致：平台管理員必過；
+      // 其餘要「是公司管理員」且「這個專案對這家公司的綁定勾了 can_release」才算，兩者缺一都是
+      // false。平台管理員這條路沒有 JOIN，pc.can_release 撈不到，在下面組回應時另外補 true。
       const { rows: projects } = req.actor.isPlatformAdmin
         ? await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects ORDER BY name ASC`)
         : await query(
-            `SELECT ${scopedCols} FROM projects p
+            `SELECT ${scopedCols}, pc.can_release FROM projects p
                JOIN project_companies pc ON pc.project_id = p.id AND pc.company_id = $1
               ORDER BY p.name ASC`,
             [req.actor.companyId]
@@ -384,6 +389,9 @@ function registerRoutes(app) {
       const favSet = new Set(favRows.map(f => f.project_id));
       res.json(projects.map(p => ({
         ...p,
+        // 平台管理員一律 true（見上方註解）；否則沿用 pc.can_release，但一般使用者即使綁定
+        // 有勾也不算——那顆勾是公司管理員的權限，不是全公司的（規格 §4.3）。
+        can_release: req.actor.isPlatformAdmin || (req.actor.isCompanyAdmin && p.can_release === true),
         repo_count: countMap[String(p.id)] || 0,
         unread_count: unreadMap[String(p.id)] || 0,
         has_wiki: (wikiMap[String(p.id)] || 0) > 0,
@@ -484,7 +492,10 @@ function registerRoutes(app) {
       const { rows: [wikiRow] } = await query(
         'SELECT COUNT(*) AS cnt FROM wiki_pages WHERE project_id = $1', [req.params.id]
       );
-      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0), has_wiki: Number(wikiRow ? wikiRow.cnt : 0) > 0 });
+      // can_release：單一專案這裡是一筆資料，沒有 N+1 疑慮，直接呼叫既有判準
+      // （lib/tenant-access.js），不要在路由裡重寫一份判斷邏輯。
+      const can_release = await canReleaseProject(req.actor, req.params.id);
+      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0), has_wiki: Number(wikiRow ? wikiRow.cnt : 0) > 0, can_release });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
