@@ -1253,14 +1253,18 @@
            版面沿用登入頁的 .ui-next-login／.ui-next-login-card（同一種「只有一張卡的全屏畫面」），
            不另外寫 CSS，配色全部來自變數所以深色模式跟著走。
            「登出」必須留著：這一層蓋掉整個外殼（含側欄的帳號選單），沒有它就是把人鎖在走不出去的死畫面。 -->
-      <div v-else-if="userStore.companyUsable === false" class="ui-next-login" role="alert">
+      <!-- data-ui="next" 不是裝飾：ui-next.css 有一條 [data-ui="next"].ui-next-login 的覆寫，
+           box-sizing:border-box 與 min-height:100dvh 都在那條裡。少了這個屬性，base 規則的
+           padding:24px 會加在 100vh 之外而多出一條捲軸，手機上還會被網址列吃掉一截。
+           抄登入頁的版面就要連這個屬性一起抄（見 pages/Login.js 的根元素）。 -->
+      <main v-else-if="userStore.companyUsable === false" class="ui-next-login" data-ui="next" role="alert">
         <section class="ui-next-login-card">
           <h1>公司帳號已停用</h1>
           <p class="ui-next-login-error">{{ userStore.companyName || '你所屬的公司' }} 的帳號已停用或不在使用期間，平台功能目前無法使用。</p>
           <p>這不是故障，也不是你的帳號有問題。請聯絡貴公司的管理員確認合約狀態；若需要恢復使用，請與我們聯繫。</p>
           <div class="ui-next-login-actions"><button class="ui-next-primary" @click="logout">登出</button></div>
         </section>
-      </div>
+      </main>
       <div v-else class="ui-next-shell" :class="{ 'has-ribbon': maintenance }" data-ui="next">
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
         <!-- 手機頂欄（樣式在 10-mobile.css，桌機 display:none）。選單鈕原本 position:fixed 浮在左上角，

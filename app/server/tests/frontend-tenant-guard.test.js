@@ -483,7 +483,9 @@ describe('公司停用／過期：外殼講出原因，而不是變成壞掉的�
   // Bearer，不受閘門管），然後外殼的 Promise.all 被 projects 的 403 打斷、整包被 catch 吃掉，
   // 結果是空側欄＋使用者名稱停在「使用者」＋每頁各自一句不相干的錯誤。
   const blocked = (() => {
-    const start = SHELL.indexOf('<div v-else-if="userStore.companyUsable === false"');
+    // 錨點是 <main>：這一層沿用登入頁的版面，而登入頁的根元素就是 <main class="ui-next-login"
+    // data-ui="next">。整頁阻斷時它是畫面上唯一的內容，用 div 會讓這一頁沒有任何 landmark。
+    const start = SHELL.indexOf('<main v-else-if="userStore.companyUsable === false"');
     const end = SHELL.indexOf('<div v-else class="ui-next-shell"', start);
     return start < 0 || end < 0 ? '' : SHELL.slice(start, end);
   })();
@@ -501,8 +503,20 @@ describe('公司停用／過期：外殼講出原因，而不是變成壞掉的�
   // 這一層蓋掉整個外殼（含側欄的帳號選單，登出平常掛在那裡），沒有登出就是把人鎖在
   // 一個走不出去的死畫面。筆數釘子：多一顆按鈕＝多一個入口，而這頁能用的動作只有登出一個。
   test('畫面上剛好一顆按鈕，而且是登出', () => {
-    expect(blocked.match(/<button[^>]*>/g) || []).toHaveLength(1);
-    expect(`登出: ${blocked.includes('@click="logout"')}`).toBe('登出: true');
+    const buttons = blocked.match(/<button[^>]*>/g) || [];
+    expect(buttons).toHaveLength(1);
+    // 斷言掛在「那一顆」按鈕的標籤上，不是「這段裡某處有 @click="logout"」——
+    // 後者在 handler 被搬到 <a> 而按鈕換成別的東西時照樣綠。
+    expect(`登出: ${buttons[0].includes('@click="logout"')}`).toBe('登出: true');
+  });
+
+  // ui-next.css 有一條 [data-ui="next"].ui-next-login 的覆寫，box-sizing:border-box 與
+  // min-height:100dvh 都在那條裡。只抄 class 不抄屬性，base 規則的 padding:24px 會加在
+  // 100vh 之外而多出一條捲軸，手機上還會被網址列吃掉一截——看起來像版面壞了。
+  test('沿用登入頁版面就要連 data-ui="next" 一起沿用', () => {
+    const tag = blocked.match(/<main[^>]*>/);
+    expect(`阻斷層標籤: ${tag !== null}`).toBe('阻斷層標籤: true');
+    expect(tag[0]).toContain('data-ui="next"');
   });
 
   // 條件的「值」本檔驗不到（開頭盲區 B2），但「來源被換掉」驗得到。
