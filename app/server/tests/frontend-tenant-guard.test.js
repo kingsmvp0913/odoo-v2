@@ -42,6 +42,8 @@ const ADMIN_USERS = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'Ad
 const PROJECT_LIST = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'ProjectList.js'), 'utf8');
 const PROJECT_DETAIL = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'ProjectDetail.js'), 'utf8');
 const LOGIN = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'Login.js'), 'utf8');
+const SETTINGS = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'Settings.js'), 'utf8');
+const STORE = fs.readFileSync(path.join(pub, 'js', 'store.js'), 'utf8');
 
 // routes 陣列裡每個物件以 path: "…" 開頭，切到下一個 path: 為止（同 frontend-admin-route-guard）。
 const routeBlocks = (() => {
@@ -395,5 +397,185 @@ describe('登入頁：自助註冊入口已移除（精靈程式碼刻意保留�
     for (const marker of ['startRegister()', 'async registerAccount()', 'auth/register']) {
       expect(`${marker}: ${LOGIN.includes(marker)}`).toBe(`${marker}: true`);
     }
+  });
+});
+
+// ── Task 13：三處「後端做完了、前端沒接」的破口 ─────────────────────────────
+// 共通形狀：後端早就擋了／早就回了，但前端沒有任何一行讀它。這種洞不會以紅燈出現，
+// 只會以「畫面說謊」出現——所以更需要釘住。盲區同本檔開頭（驗字面，不驗值）。
+
+describe('身分旗標：每次導覽都重寫（表單登入不重新整理也要正確）', () => {
+  const afterEachBlock = (() => {
+    const start = APP_JS.indexOf('router.afterEach');
+    const end = APP_JS.indexOf('\n});', start);
+    return start < 0 || end < 0 ? '' : APP_JS.slice(start, end + 4);
+  })();
+
+  // 切片失敗時下面每一條都會變成「什麼都沒比對到」的假綠。
+  test('afterEach 整段切得到', () => {
+    expect(afterEachBlock.length).toBeGreaterThan(600);
+    expect(afterEachBlock.trimEnd().endsWith('});')).toBe(true);
+    expect(`auth/me: ${afterEachBlock.includes('Api.get("auth/me")')}`).toBe('auth/me: true');
+  });
+
+  // I5：ui-next 外殼的 mounted() 是根元件、整場只掛載一次。這六個旗標若只有它在寫，
+  // 表單登入（登出後或 token 過期後重登）不重新整理就會整場 session 停在預設值——
+  // features 停在 {} ⇒ 內部同事的「ODOO認證輔助」入口被藏死，而且畫面上毫無徵狀。
+  // role 當年就是為了同一個坑搬來 afterEach 的（app.js isAdmin 的註解寫著「免重新整理」）。
+  // 有人把哪一條搬回 mounted 獨占時，這裡要紅。
+  const STORE_WRITES = [
+    ['role', 'me.role || ""'],
+    ['isInternal', 'me.is_internal === true'],
+    ['companyId', 'me.company_id ?? null'],
+    ['companyName', 'me.company_name || ""'],
+    ['features', 'me.features || {}'],
+    ['companyUsable', 'me.company_usable !== false'],
+  ];
+
+  test.each(STORE_WRITES)('afterEach 從 auth/me 寫入 UserStore.%s', (field, expr) => {
+    expect(`${field}: ${afterEachBlock.includes(`window.UserStore.${field} = ${expr}`)}`).toBe(`${field}: true`);
+  });
+
+  // 寫入與清除要成對：少清一個，token 過期被踢回登入頁的人畫面上還留著上一個帳號的公司與開關。
+  const loginReset = (() => {
+    const at = afterEachBlock.indexOf('if (to.path === "/login")');
+    return at < 0 ? '' : afterEachBlock.slice(at);
+  })();
+
+  test('/login 分支切得到，六個旗標全部清回預設值', () => {
+    expect(`/login 分支: ${loginReset.length > 200}`).toBe('/login 分支: true');
+    const DEFAULTS = [['role', '""'], ['isInternal', 'false'], ['companyId', 'null'], ['companyName', '""'], ['features', '{}'], ['companyUsable', 'true']];
+    expect(DEFAULTS).toHaveLength(STORE_WRITES.length);
+    for (const [field, value] of DEFAULTS) {
+      expect(`${field}: ${loginReset.includes(`window.UserStore.${field} = ${value}`)}`).toBe(`${field}: true`);
+    }
+  });
+
+  // store.js 的註解：「新加的旗標一律只在這裡有一份」。欄位沒宣告在這裡＝下一個人找不到它。
+  const userStoreBlock = (() => {
+    const start = STORE.indexOf('window.UserStore = Vue.reactive({');
+    const end = STORE.indexOf('});', start);
+    return start < 0 || end < 0 ? '' : STORE.slice(start, end);
+  })();
+
+  test('store.js 宣告了這六個欄位', () => {
+    expect(`UserStore 宣告: ${userStoreBlock.length > 100}`).toBe('UserStore 宣告: true');
+    for (const [field] of STORE_WRITES) {
+      expect(`${field}: ${new RegExp(`^\\s*${field}:`, 'm').test(userStoreBlock)}`).toBe(`${field}: true`);
+    }
+  });
+
+  // 登出也是寫入點之一（外殼的 logout()），同樣要成對清乾淨。
+  test('外殼 logout() 把六個旗標一起清掉', () => {
+    const at = SHELL.indexOf('\n      logout() {');
+    expect(`logout(): ${at > -1}`).toBe('logout(): true');
+    const logout = SHELL.slice(at, SHELL.indexOf('\n      },', at));
+    for (const [field] of STORE_WRITES) {
+      expect(`${field}: ${logout.includes(`window.UserStore.${field} =`)}`).toBe(`${field}: true`);
+    }
+  });
+});
+
+describe('公司停用／過期：外殼講出原因，而不是變成壞掉的工作區', () => {
+  // I4：後端 index.js 的公司不可用閘門對每一支 /api 回 403，白名單只有 GET /auth/me，
+  // 註解寫明「前端要靠它顯示為什麼不能用，擋掉會變成一片空白而不是一句說明」。
+  // Task 13 之前沒有任何一行讀 company_usable／companyUnusable：客戶登入得進來（login 不帶
+  // Bearer，不受閘門管），然後外殼的 Promise.all 被 projects 的 403 打斷、整包被 catch 吃掉，
+  // 結果是空側欄＋使用者名稱停在「使用者」＋每頁各自一句不相干的錯誤。
+  const blocked = (() => {
+    const start = SHELL.indexOf('<div v-else-if="userStore.companyUsable === false"');
+    const end = SHELL.indexOf('<div v-else class="ui-next-shell"', start);
+    return start < 0 || end < 0 ? '' : SHELL.slice(start, end);
+  })();
+
+  test('阻斷畫面切得到（切不到的話下面幾條全是假綠）', () => {
+    expect(`阻斷畫面: ${blocked.length > 300}`).toBe('阻斷畫面: true');
+  });
+
+  test('說得出原因，不是一句通用錯誤', () => {
+    for (const marker of ['公司帳號已停用', 'userStore.companyName', 'role="alert"']) {
+      expect(`${marker}: ${blocked.includes(marker)}`).toBe(`${marker}: true`);
+    }
+  });
+
+  // 這一層蓋掉整個外殼（含側欄的帳號選單，登出平常掛在那裡），沒有登出就是把人鎖在
+  // 一個走不出去的死畫面。筆數釘子：多一顆按鈕＝多一個入口，而這頁能用的動作只有登出一個。
+  test('畫面上剛好一顆按鈕，而且是登出', () => {
+    expect(blocked.match(/<button[^>]*>/g) || []).toHaveLength(1);
+    expect(`登出: ${blocked.includes('@click="logout"')}`).toBe('登出: true');
+  });
+
+  // 條件的「值」本檔驗不到（開頭盲區 B2），但「來源被換掉」驗得到。
+  test('旗標來源是 auth/me 的 company_usable，不是前端自己猜的', () => {
+    expect(`company_usable: ${APP_JS.includes('me.company_usable !== false')}`).toBe('company_usable: true');
+  });
+
+  // 配色硬規則（platformDev skill）：這一層只能吃 CSS 變數，寫死淺色底在深色模式會變隱形字。
+  // 版面刻意沿用登入頁那組 class，所以這裡不該出現任何自備色碼。
+  test('沒有寫死色碼，版面沿用登入頁既有 class', () => {
+    expect(`色碼: ${/#[0-9a-fA-F]{3,8}\b/.test(blocked)}`).toBe('色碼: false');
+    expect(`ui-next-login-card: ${blocked.includes('ui-next-login-card')}`).toBe('ui-next-login-card: true');
+  });
+});
+
+describe('個人設定「連線設定」：Odoo／eService 憑證區走 odoo_sync 功能開關', () => {
+  const template = (() => {
+    const start = SETTINGS.indexOf('template: `');
+    return start < 0 ? '' : SETTINGS.slice(start);
+  })();
+
+  // 掃描清單先釘筆數（本檔開頭的規矩）。區塊多一塊＝連線設定分頁多一組欄位，
+  // 必須有人親手決定它要給誰看。數字對不上時不要直接改數字。
+  const sections = template.match(/<section v-(?:if|show)="[^"]*"[^>]*>/g) || [];
+
+  test('template 切得到，條件區塊剛好六塊', () => {
+    expect(`Settings template: ${template.length > 3000}`).toBe('Settings template: true');
+    expect(sections).toHaveLength(6);
+  });
+
+  const sectionTagOf = (heading) => {
+    const at = template.indexOf(heading);
+    if (at < 0) return null;
+    const open = template.lastIndexOf('<section', at);
+    const close = template.indexOf('>', open);
+    return open < 0 || close < 0 ? null : template.slice(open, close + 1);
+  };
+
+  // I3（規格 §8 P2）：後端三道都擋了——GET 濾掉憑證欄（settings.js:60-71）、
+  // PUT 只收 theme／saved_views／teams_user_id 白名單（:17、:79-108）、
+  // 兩支驗證端點掛 requireFeature('odoo_sync')（:182、:213）直接回 404。
+  // 前端不擋的話，客戶看到的是一份填得動、按「驗證」跳「找不到這個功能」、
+  // 按「儲存」卻回報「設定已儲存」的表單——畫面確認了一件沒發生的事。
+  test('外部系統連線區塊帶著 odoo_sync 條件', () => {
+    const tag = sectionTagOf('<h2>外部系統連線</h2>');
+    expect(`外部系統連線: ${tag !== null}`).toBe('外部系統連線: true');
+    expect(`外部系統連線: ${tag}`)
+      .toBe(`外部系統連線: <section v-if="tab==='connection' && userStore.features.odoo_sync" class="ui-next-panel ui-next-settings-wide">`);
+  });
+
+  // GitHub PAT 是個人 GIT 憑證，與 odoo_sync 無關，每個角色都要用（沒設定任務會被擋下）。
+  // 一起藏掉＝把客戶鎖在「任務永遠推不上去、又找不到能設定的地方」。反向釘死。
+  test('GitHub PAT 與 Teams 兩塊不得被一起藏掉', () => {
+    for (const heading of ['<h2>GitHub 認證</h2>', '<h2>Teams 通知</h2>']) {
+      const tag = sectionTagOf(heading);
+      expect(`${heading}: ${tag !== null}`).toBe(`${heading}: true`);
+      expect(`${heading}: ${tag.includes('odoo_sync')}`).toBe(`${heading}: false`);
+      expect(`${heading}: ${tag.includes(`v-show="tab==='connection'"`)}`).toBe(`${heading}: true`);
+    }
+  });
+
+  // 藏起來還不夠：Teams 那塊共用同一個 save()，不排除 creds 的話照樣會送出一份
+  // 後端註定丟掉的內容，然後回報「設定已儲存」。
+  test('save() 在沒有 odoo_sync 時不送憑證鍵', () => {
+    const save = SETTINGS.slice(SETTINGS.indexOf('async save()'), SETTINGS.indexOf('async savePw()'));
+    expect(`save(): ${save.length > 200}`).toBe('save(): true');
+    expect(`save(): ${save.includes('...(this.userStore.features.odoo_sync ? this.creds : {})')}`).toBe('save(): true');
+  });
+
+  // 旗標來源與外殼的 features.exam 同一套（window.UserStore）。這頁自己在 load() 裡打過
+  // auth/me，從那份回應另存一份 features 也會動——但那就是同一件事的第二個來源。
+  test('旗標來源是 UserStore，沒有自己另存一份', () => {
+    expect(`Settings.userStore: ${/userStore\(\)\s*\{\s*return window\.UserStore;\s*\}/.test(SETTINGS)}`)
+      .toBe('Settings.userStore: true');
   });
 });
