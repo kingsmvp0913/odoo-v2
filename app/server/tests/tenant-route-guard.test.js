@@ -17,6 +17,15 @@
  *   loadProjectForActor，不是安全缺口，純屬守衛視野死角）。
  * - router 掛在動態 prefix 下、或透過 wrapper function 間接呼叫 loadProjectForActor 等，
  *   本掃描同樣看不到。
+ * - touchesScoped 只認路徑上的 `/api/projects/:` 與 `/api/tasks/:` 兩種字面樣式——一個專案
+ *   範圍的資源若是用自己的 id 定址（路徑既不是 projects 也不是 tasks），或範圍其實是從
+ *   request body 的 project_id 帶進來（路徑上完全看不出跟專案有關），一律不會進入 offenders
+ *   的掃描對象，等於整支端點連「有沒有守衛」都沒被問過。這不是假設性風險：
+ *   PUT /api/tasks/:taskDbId/project（project-routes.js:1129）真正需要的範圍檢查，查的是
+ *   body 帶進來的目標 project_id，跟路徑上的 :taskDbId 完全無關——這支端點純屬路徑字面剛好
+ *   撞上 `/api/tasks/:` 才被掃到，當初是靠人工讀 code 才抓到「換專案要重新驗權限」這個漏洞，
+ *   不是這支守衛揪出來的。換一支路徑不巧沒撞上這兩種樣式、但範圍一樣藏在 body 裡的端點，
+ *   本守衛會直接漏看，靜默通過。
  */
 const fs = require('fs');
 const path = require('path');
@@ -53,6 +62,7 @@ test('掃到的 route 檔數量合理（走訪壞掉時這一支會先紅，而�
 
 test('每一支碰得到專案或任務的端點都有租戶守衛', () => {
   const offenders = [];
+  let scopedCount = 0; // 掃到幾支「沾到專案／任務」的端點——見下方獨立斷言的說明
   for (const file of files) {
     const src = fs.readFileSync(file, 'utf8');
     // wiki-routes 之類用 `${base}` 組路徑的，把 base 展開後再比對
@@ -64,10 +74,17 @@ test('每一支碰得到專案或任務的端點都有租戶守衛', () => {
       if (EXEMPT_PREFIXES.some(p => effective.startsWith(p))) continue;
       const touchesScoped = /\/api\/projects\/:/.test(effective) || /\/api\/tasks\/:/.test(effective);
       if (!touchesScoped) continue;
+      scopedCount++;
       if (!GUARDS.some(g => r.body.includes(g))) {
         offenders.push(`${path.relative(serverDir, file)} ${r.method.toUpperCase()} ${effective}`);
       }
     }
   }
+  // offenders 是空陣列這件事，在「collectRoutes 的 regex 壞掉、什麼端點都掃不到」時一樣成立
+  // （沒東西可掃＝沒有違規）——上面「掃到的 route 檔數量合理」那支測試用的是另一份獨立 regex，
+  // 救不了這裡。直接釘住「掃到幾支沾到專案／任務的端點」這個數字：collectRoutes 的 regex 壞掉、
+  // touchesScoped 的判斷式壞掉，都會讓這個數字塌陷，這條才會先紅。獨立量測全庫實際數字是 82
+  // （母體 84，兩支 wiki bare-variable 路由是本檔已知盲區，見檔頭註解），地板抓略低於實測值。
+  expect(scopedCount).toBeGreaterThanOrEqual(75);
   expect(offenders).toEqual([]);
 });

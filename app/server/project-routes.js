@@ -19,6 +19,11 @@ const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '
 // （VPN 憑證密文），這些路由給一般已登入使用者，密文外流一樣是機密外洩。VPN 狀態改走專屬的
 // GET /api/projects/:id/vpn（只回 has_config/vpn_username），這裡完全不帶三個 vpn_* 欄位。
 const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, service_contact_name, e2e_disabled, edition, auto_deploy_enabled';
+// ⚠ GET /api/projects 用 `PROJECT_PUBLIC_COLS.replace('created_at', 'p.created_at')` 把裸欄位
+// 改成帶別名——這是「第一個出現的字串」取代，現在正確只因為 project_companies 剛好只跟 projects
+// 撞名 created_at 這一個欄位。以後在這裡加欄位，若新欄位跟 project_companies（或其他被 JOIN 進來
+// 的表）同名，這個 .replace() 只會換掉「第一個出現的那個」，另一個同名欄位會漏改、留下裸欄位造成
+// ambiguous column 或改錯目標——加欄位時務必回頭檢查那個呼叫點。
 
 // folder_name 同時決定三個外部識別：測試容器名 odoo-test-<folder>、環境目錄 odoo-envs/<folder>、
 // 測試資料庫 test_<folder>。容器名只吃 [a-zA-Z0-9_.-]，過去這裡不驗格式，填中文會被靜默清成一串

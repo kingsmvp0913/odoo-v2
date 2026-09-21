@@ -126,6 +126,25 @@ describe('上正式（規格 §4.3 can_release）', () => {
     const res = await request(app).post(`/api/projects/${pB}/release`).set(as(bToken)).send({});
     expect(res.status).toBe(403);
   });
+
+  // 正面對照：上面兩支只釘住兩種拒絕（404／403），沒有任何一支證明「條件對了真的放得過」。
+  // 第 3 部對這一行（project-routes.js:1007）有硬性的接續依賴，值得單獨釘住。不求整條 release
+  // 真的跑完（要真的 clone／PAT／repo 齊全，超出本測試範圍）——只要求過了 403 這一關，
+  // 往下走到下一個步驟（沒填個人 PAT）的 400，代表 canReleaseProject 真的放行了。
+  test('公司管理員＋該公司綁定勾了 can_release → 過 403 這關（規格 §4.3 正向路徑）', async () => {
+    const hash = await bcrypt.hash('password123', 10);
+    await dbModule.query(
+      "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('userA_admin',$1,'userA_admin','company_admin',$2)",
+      [hash, coA]
+    );
+    const adminAToken = (await request(app).post('/api/auth/login')
+      .send({ username: 'userA_admin', password: 'password123' })).body.token;
+    const res = await request(app).post(`/api/projects/${pA}/release`).set(as(adminAToken)).send({});
+    // 測試環境沒有個人 PAT，下一步 buildGitEnv 會擋在 400——這正是本測試要的證據：
+    // 403（canReleaseProject）與 404（loadProjectForActor）都沒攔下它，代表真的放行過關了。
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('請先到設定填個人 GitHub PAT');
+  });
 });
 
 describe('任務改掛專案（PUT /api/tasks/:taskDbId/project，規格 §5.2）', () => {

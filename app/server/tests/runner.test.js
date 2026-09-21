@@ -845,3 +845,51 @@ test('clarify 回程是認不得的狀態 → 仍收斂到 coding_running（不�
   const { rows: [after] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [t.id]);
   expect(after.status).toBe('coding_running');
 });
+
+// ===== §7 公司停用檢查點（cron 自動推進不該替停繳客戶燒 AI）=====
+// runner.js:618 的 isUserCompanyUsable 檢查點本身在 tenant-company-usable.test.js 有單元測試，
+// 但那支測試繞過 runPipeline 直接呼叫函式——把這兩行 continue 拿掉，那支測試依然全綠。
+// 這裡要驗的是「檢查點真的接在 dispatch 迴圈裡」：公司停用的使用者，任務進 runPipeline 就是不派工。
+describe('§7 cron 派工前的公司可用性檢查點', () => {
+  async function mkCompanyUser(name, isActive) {
+    const { rows: [co] } = await dbModule.query(
+      'INSERT INTO companies (name, is_active) VALUES ($1, $2) RETURNING id',
+      [name, isActive]
+    );
+    const bcrypt = require('bcryptjs');
+    const hash = await bcrypt.hash('pass', 4);
+    const { rows: [u] } = await dbModule.query(
+      "INSERT INTO users (username, password_hash, display_name, role, company_id, odoo_settings) VALUES ($1,$2,$1,'user',$3,$4) RETURNING id",
+      [name, hash, co.id, JSON.stringify({ git_repo_path: '/repo', deploy_cmd: '' })]
+    );
+    return u.id;
+  }
+
+  test('公司停用 → 使用者的可跑任務不被派工', async () => {
+    const uid = await mkCompanyUser('cron_co_off', false);
+    await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+       VALUES ($1, 'task_odoo_cronoff', 'odoo', 'Test', 'content', 'new')`,
+      [uid]
+    );
+    const r = await runnerModule.runPipeline(uid);
+    await runnerModule.whenIdle();
+    expect(r.dispatched).toBe(0);
+    expect(runnerModule.getInflightTaskIds()).toEqual([]);
+  });
+
+  // 正向對照：同一條檢查點不能把「公司正常」的任務也一起擋住，否則「沒派工」證明不了是這行擋的。
+  test('公司正常 → 使用者的可跑任務照常被派工', async () => {
+    const uid = await mkCompanyUser('cron_co_on', true);
+    const { rows: [t] } = await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, original_text, status)
+       VALUES ($1, 'task_odoo_cronon', 'odoo', 'Test', 'content', 'new') RETURNING id`,
+      [uid]
+    );
+    const { runCsAgent } = require('../pipeline/cs-agent');
+    const r = await runnerModule.runPipeline(uid);
+    await runnerModule.whenIdle();
+    expect(r.dispatched).toBe(1);
+    expect(runCsAgent).toHaveBeenCalledWith(t.id, uid, expect.anything());
+  });
+});

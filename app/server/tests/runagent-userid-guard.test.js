@@ -145,6 +145,21 @@ test('掃到的檔案數量合理（走訪壞掉時這一支會先紅，而不�
   expect(files.length).toBeGreaterThanOrEqual(20);
 });
 
+// 上面「檔案數量合理」防的是走訪壞掉；這一支防的是「檔案走訪都還在，但 findCalls 的 regex
+// 壞掉」——那種壞法 offenders 陣列一樣會是空的（regex 配不到任何呼叫＝沒有東西可以違規），
+// 底下兩支測試照樣全綠，守衛在不出聲的狀況下完全失能。獨立量測全庫（含 allow-list／
+// PASSTHROUGH_FILES 排除掉的 3 個檔案）實際呼叫點：19 個 runClaude ＋ 13 個 runAgent ＝ 32
+// （量法：與本檔同一套 findCalls，但不排除 agent-runner.js／merge-agent.js／with-resume.js，
+// 見 finalfix-2 報告）。地板抓在略低於實測值，容許之後正常增修新呼叫點。
+test('掃到的 runAgent／runClaude 呼叫點總數合理（regex 壞掉時這一支會先紅）', () => {
+  let total = 0;
+  for (const file of files) {
+    const src = fs.readFileSync(file, 'utf8');
+    total += findCalls(src, 'runAgent').length + findCalls(src, 'runClaude').length;
+  }
+  expect(total).toBeGreaterThanOrEqual(28);
+});
+
 test('每一支直接呼叫 runAgent／runClaude 的地方都帶了 userId（allow-list 之外）', () => {
   const offenders = [];
   for (const file of files) {

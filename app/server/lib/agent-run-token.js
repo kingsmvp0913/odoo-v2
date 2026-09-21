@@ -71,6 +71,17 @@ function activeRunCount() { return _runs.size; }
 // 子專案 2 之後會在同一個地方再接「公司已設 key、未超花費上限」。
 // 內部工作（健檢、夜間改善）沒有發起人，actorUserId 是 null ⇒ 照跑。
 // ⚠ require 寫在函式內是刻意的——tenant-access 會 require('../db')，模組層互相引用容易在測試環境形成載入順序問題。
+// ⚠ 已知耦合（暫不修，記錄留待未來）：canRun 只有一個呼叫端——sandbox-run.js:122 的
+// prepareSandboxRun。凡是 prepareSandboxRun 沒被呼叫到的路徑，這道公司可用性檢查就完全不會跑：
+//   - agent_sandbox_mode='off' 時 claude-runner.js:419 直接 startLegacy()（同步 spawn），
+//     連 resolveSandboxPlan 都不會被呼叫；
+//   - mode='projects' 但該專案不在白名單，或 mode='internal' 但是客戶範疇的 profile，
+//     resolveSandboxPlan（sandbox-run.js:101）會回傳 null，claude-runner.js:426 一樣直接
+//     startLegacy()，prepareSandboxRun／canRun 整段被跳過（判斷邏輯見 agent-sandbox-flag.js
+//     的 sandboxAppliesTo，52-59 行）。
+// 正式環境目前開的是 mode='all'，這道檢查點才真的每次都會擋到；但這是「現在剛好開對開關」，
+// 不是結構上的保證。真正的修法是把這道檢查搬到 startLegacy／容器兩條路徑都會經過的那個交會點，
+// 而不是掛在容器路徑專屬的 prepareSandboxRun 裡——這裡先記錄下來，不在本輪動它。
 async function canRun(_scope, actorUserId) {
   return require('./tenant-access').isUserCompanyUsable(actorUserId);
 }
