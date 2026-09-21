@@ -5,6 +5,11 @@ const { verifyToken } = require('./auth');
 const { fetchGitHubIdentity } = require('./lib/github-api');
 const { encrypt } = require('./lib/crypto');
 const { encryptSettings, decryptSettings, redactSettings, preserveSecrets } = require('./lib/user-settings');
+const { requireFeature, companyHasFeature } = require('./lib/company-features');
+
+// 客戶端 PUT /api/settings 忽略、GET 隱藏的鍵——Odoo／eService 是「我們連客戶系統用的憑證」，
+// 客戶自己不該看到也不該能改（規格 §8 P2）。theme／saved_views 是純 UI 偏好，不在此列。
+const SYNC_ONLY_KEYS = ['odoo_username', 'odoo_password', 'odoo_user_id', 'service_username', 'service_password', 'service_user_id'];
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -46,7 +51,17 @@ function registerRoutes(app) {
       );
       if (!rows.length) return res.status(404).json({ error: 'User not found' });
       // 密碼不回前端，只回 *_set 旗標（見 lib/user-settings 的 redactSettings）
-      res.json({ ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) });
+      const result = { ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) };
+      const canSync = await companyHasFeature(req.actor && req.actor.companyId, 'odoo_sync');
+      if (!canSync) {
+        // 客戶看不到 Odoo／eService 相關鍵（規格 §8 P2）：那是我們連客戶系統用的憑證，不是他的東西。
+        // theme／saved_views 等純 UI 偏好維持照舊。odoo_settings 可能是 null（從未存過設定）。
+        if (result.odoo_settings && typeof result.odoo_settings === 'object') {
+          for (const key of SYNC_ONLY_KEYS) delete result.odoo_settings[key];
+        }
+        delete result.sync_interval;
+      }
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -55,22 +70,34 @@ function registerRoutes(app) {
   app.put('/api/settings', verifyToken, async (req, res) => {
     try {
       const { odoo_settings, sync_interval } = req.body;
-      if (sync_interval !== undefined && sync_interval < 5) {
+      const canSync = await companyHasFeature(req.actor && req.actor.companyId, 'odoo_sync');
+      // 客戶按的是同一顆儲存鈕：不可回 403，只能忽略 Odoo／eService 欄位、其餘照常寫入
+      // （規格 §8 P2）。回 403 會讓客戶連改顯示名稱、改主題都做不到。
+      let cleanOdooSettings = odoo_settings;
+      let cleanSyncInterval = sync_interval;
+      if (!canSync) {
+        if (odoo_settings) {
+          cleanOdooSettings = { ...odoo_settings };
+          for (const key of SYNC_ONLY_KEYS) delete cleanOdooSettings[key];
+        }
+        cleanSyncInterval = undefined;
+      }
+      if (cleanSyncInterval !== undefined && cleanSyncInterval < 5) {
         return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
       }
       // 這支仍是整包覆寫（theme／saved_views 靠前端鋪回，見下方兩支端點的註解），唯獨密碼欄位
       // 例外：GET 已不再回密碼，前端鋪不回來，故未提供者一律沿用 DB 現值（preserveSecrets）。
       let toStore = null;
-      if (odoo_settings) {
+      if (cleanOdooSettings) {
         const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
-        toStore = JSON.stringify(encryptSettings(preserveSecrets(odoo_settings, rows[0]?.odoo_settings)));
+        toStore = JSON.stringify(encryptSettings(preserveSecrets(cleanOdooSettings, rows[0]?.odoo_settings)));
       }
       await query(
         `UPDATE users SET
            odoo_settings = COALESCE($2, odoo_settings),
            sync_interval = COALESCE($3, sync_interval)
          WHERE id = $1`,
-        [req.userId, toStore, sync_interval ?? null]
+        [req.userId, toStore, cleanSyncInterval ?? null]
       );
       res.json({ ok: true });
     } catch (err) {
@@ -128,7 +155,7 @@ function registerRoutes(app) {
   });
 
   // Auto-fetch Odoo user_id — reads system URL+DB from teams_settings
-  app.post('/api/settings/verify-odoo', verifyToken, async (req, res) => {
+  app.post('/api/settings/verify-odoo', verifyToken, requireFeature('odoo_sync'), async (req, res) => {
     const { odoo_username } = req.body;
     // 密碼留空＝沿用已存的（GET 不再回密碼，使用者沒改密碼時輸入框本來就是空的，
     // 不補這條的話「只改帳號按驗證」會逼人把密碼重打一次）。
@@ -159,7 +186,7 @@ function registerRoutes(app) {
   });
 
   // Auto-fetch eService user_id — reads system URL+DB from teams_settings
-  app.post('/api/settings/verify-service', verifyToken, async (req, res) => {
+  app.post('/api/settings/verify-service', verifyToken, requireFeature('odoo_sync'), async (req, res) => {
     const { service_username } = req.body;
     let { service_password } = req.body;   // 留空＝沿用已存的，同 verify-odoo
     if (!service_password) {
