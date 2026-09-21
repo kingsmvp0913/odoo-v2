@@ -68,8 +68,11 @@ test('project scope 的 projectId 必須與 scope 一致，否則拒絕簽發', 
   expect(() => t.issueRunToken({ scope: 'internal-fix', projectId: 3, ttlMs: 1000 })).toThrow();
 });
 
-test('canRun 本期恆為 true（檢查點先留著）', async () => {
-  await expect(t.canRun('project-1', 5)).resolves.toBe(true);
+// 內部工作（健檢、夜間改善）沒有發起人，actorUserId 是 null ⇒ 一律放行，不碰資料庫。
+// 公司狀態的各種情境（正常／停用／過期／沒有公司／查無此人）已由
+// tenant-company-usable.test.js 用 pg-mem fixture 完整涵蓋。
+test('canRun：內部工作沒有發起人 ⇒ 照跑', async () => {
+  await expect(t.canRun('project-1', null)).resolves.toBe(true);
 });
 
 test('activeRunCount 反映簽發與作廢', () => {
