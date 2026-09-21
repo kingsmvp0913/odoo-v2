@@ -89,9 +89,14 @@ beforeAll(async () => {
   );
 
   // 第二個使用者（非 admin），及其一筆任務——用來測 admin 接管與非 admin 隔離
+  // 租戶隔離（Task 7）：POST /api/admin/users 建一般使用者現在強制要帶 company_id，
+  // 先建一家公司給這個 fixture 帳號掛。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('測試公司', true) RETURNING id"
+  );
   await request(app).post('/api/admin/users')
     .set('Authorization', `Bearer ${adminToken}`)
-    .send({ username: 'bob', password: 'password123', display_name: 'Bob', role: 'user' });
+    .send({ username: 'bob', password: 'password123', display_name: 'Bob', role: 'user', company_id: co.id });
   const bobLogin = await request(app).post('/api/auth/login').send({ username: 'bob', password: 'password123' });
   bobToken = bobLogin.body.token;
   const bobMe = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${bobToken}`);

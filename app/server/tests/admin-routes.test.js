@@ -15,7 +15,7 @@ jest.mock('../pipeline/git', () => ({
 process.env.JWT_SECRET = 'test-admin';
 process.env.APP_SECRET = 'test-app-secret';
 
-let app, dbModule, adminToken, userToken;
+let app, dbModule, adminToken, userToken, internalCoId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -32,6 +32,14 @@ beforeAll(async () => {
     username: 'admin', password: 'admin1234', display_name: 'Admin'
   });
   adminToken = adminRes.body.token;
+
+  // 租戶隔離：POST /api/admin/users 建一般使用者現在強制要帶 company_id（Task 7），
+  // 且 /api/auth/register 的自助註冊仍會找內部公司當預設（Task 8 才會改）——
+  // 兩邊 fixture 都要有一家真的公司可以掛，故提早在這裡建好，供全檔各處引用。
+  const { rows: [internalCo] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
+  );
+  internalCoId = internalCo.id;
 
   // Insert a non-admin user
   const bcrypt = require('bcryptjs');
@@ -59,7 +67,7 @@ let createdMapId;
 test('POST /api/admin/users → 不寫 password_enc（系統不持有可還原的登入密碼）', async () => {
   const res = await request(app).post('/api/admin/users')
     .set('Authorization', `Bearer ${adminToken}`)
-    .send({ username: 'e2euser', password: 'e2epass123', display_name: 'E2E', role: 'user' });
+    .send({ username: 'e2euser', password: 'e2epass123', display_name: 'E2E', role: 'user', company_id: internalCoId });
   expect(res.status).toBe(201);
   const { rows: [u] } = await dbModule.query("SELECT password_enc, password_hash FROM users WHERE username='e2euser'");
   expect(u.password_enc).toBeNull();
@@ -356,26 +364,32 @@ test('GET /api/admin/providers → codex 的 efforts 逐模型不同，且不含
   expect(Object.keys(byId)).not.toContain('codex-auto-review');
 });
 
-// 租戶隔離：新帳號不能沒有公司（否則遷移跑完後 company_id 永遠 NULL，canSeeProject 恆 false）。
-// 放在檔案最後——插入內部公司後，之後每一支再呼叫 POST /api/admin/users 都會被自動掛上，
-// 不該汙染前面完全不知道租戶概念的既有測試。
-describe('POST /api/admin/users → 預設掛內部公司（租戶隔離）', () => {
-  let internalCoId;
+// 租戶隔離：新帳號要由平台管理員明確選公司。
+// 這個 describe 原本測的是第 1 部留下的暫時措施——「不帶 company_id 就自動掛內部公司」；
+// Task 7 把那個暫時措施拿掉，這裡翻面成測新契約（沒帶 company_id 現在要擋 400），
+// 刻意留著這個 describe／保留「這行為曾經是反過來的」這段歷史，不直接刪掉。
+describe('POST /api/admin/users → 明確選公司（租戶隔離）', () => {
+  let coId;
 
-  test('建內部公司（比照 tools/migrate-tenants.js 的產物）', async () => {
+  test('建一家公司（供本區塊測試「明確帶 company_id 會照掛」）', async () => {
     const { rows: [co] } = await dbModule.query(
-      "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
+      "INSERT INTO companies (name, is_active) VALUES ('甲客戶', true) RETURNING id"
     );
-    internalCoId = co.id;
+    coId = co.id;
   });
 
-  test('新建一般使用者 → 預設掛內部公司', async () => {
-    const res = await request(app).post('/api/admin/users')
+  test('新建一般使用者，沒帶 company_id → 400（不再靜默掛內部公司）；帶明確的 company_id → 照掛', async () => {
+    const noCompany = await request(app).post('/api/admin/users')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ username: 'tenant-user1', password: 'pass12345', display_name: '一般員', role: 'user' });
-    expect(res.status).toBe(201);
-    const { rows: [u] } = await dbModule.query('SELECT company_id FROM users WHERE username = $1', ['tenant-user1']);
-    expect(u.company_id).toBe(internalCoId);
+    expect(noCompany.status).toBe(400);
+
+    const withCompany = await request(app).post('/api/admin/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'tenant-user2', password: 'pass12345', display_name: '一般員2', role: 'user', company_id: coId });
+    expect(withCompany.status).toBe(201);
+    const { rows: [u] } = await dbModule.query('SELECT company_id FROM users WHERE username = $1', ['tenant-user2']);
+    expect(u.company_id).toBe(coId);
   });
 
   test('新建平台管理員 → company_id 維持 NULL，不得被預設值綁公司', async () => {
