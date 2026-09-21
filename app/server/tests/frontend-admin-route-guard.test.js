@@ -84,7 +84,9 @@ describe('沒有全域 admin gate（NEXT-P0-001 不得復辟）', () => {
   test('guard 整段切得到（切不到就不是綠燈，是守衛失效）', () => {
     expect(guard.length).toBeGreaterThan(400);
     expect(guard.trimEnd().endsWith('});')).toBe(true);
-    // 寫死長度的年代，這一段是掉在視野外的；釘住它確保切片涵蓋到最後一個分支。
+    // 釘住它是為了抓「結尾錨點配得太早」——切片若在中途收尾，這個字串就不在裡面。
+    // （更正：/company-users 這個字面在舊的 1200 視窗內就看得到，位於切片 offset 887；
+    //  掉在視野外的是它 catch 區塊的尾巴那 45 個字。）
     expect(`/company-users 在切片內: ${guard.includes('/company-users')}`)
       .toBe('/company-users 在切片內: true');
   });

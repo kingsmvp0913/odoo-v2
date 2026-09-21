@@ -89,13 +89,13 @@ describe('isCompanyUsable（純函式，全平台唯一那一份判斷）', () =
     expect(isCompanyUsable(true, new Date(future), null, now)).toBe(false);
   });
 
-  // 這條歧異是本次統一的起點：原本 buildActor 先轉 Date 再比 null（空字串 ⇒ Invalid Date
-  // ⇒ 所有比較 false ⇒ 不可用），另外三份直接看 falsy（空字串 ⇒ 不限期間 ⇒ 可用），
-  // 同一家公司會因為請求走到哪條路而得到相反答案。統一取後者。
+  // ⚠ 這不是「當初四份不一致的地方」——收斂時逐一比對過，四份對空字串的判定是一樣的
+  // （buildActor 的三元運算子是先判 falsy 才轉 Date，所以空字串走的是 null 那條）。
+  // 開單的人一度誤判成不一致，這裡把話講正。
   // 這個情境在正式環境到不了：active_from／active_until 是 TIMESTAMPTZ（db.js），
   // Postgres 存不進空字串。釘它是為了讓「哪一種讀法」這個決定留在測試裡，
   // 而不是下次有人看到 `!activeFrom` 覺得不夠嚴謹就順手改掉。
-  test('空字串＝沒填＝不限期間（四份抄寫當初唯一不一致的地方）', () => {
+  test('空字串＝沒填＝不限期間（釘住選定的讀法，不是釘一個曾經的 bug）', () => {
     expect(isCompanyUsable(true, '', '', now)).toBe(true);
   });
 });

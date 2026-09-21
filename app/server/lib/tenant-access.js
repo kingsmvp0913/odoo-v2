@@ -96,15 +96,21 @@ function requirePlatformAdmin(req, res, next) {
 
 // 「這家公司現在能不能用」的唯一真相（規格 §5.1、§7）。
 // 這條規則原本在 auth.js 的 buildActor、index.js 的全域閘門、company-admin-routes.js 的
-// 「改完要不要中止 AI」以及本檔的 isUserCompanyUsable 各抄一份，而且四份並不一致：
-// buildActor 先把值轉成 Date 再跟 null 比，另外三份直接看原值的 falsy。欄位是空字串時，
-// 前者算「不可用」（new Date('') 是 Invalid Date，跟它比大小一律 false），
-// 後者算「沒填＝不限期間＝可用」——同一家公司會因為請求剛好走到哪條路而得到相反的答案。
+// 「改完要不要中止 AI」以及本檔的 isUserCompanyUsable 各抄一份。
 //
-// 這裡取 falsy 那一邊。理由不是「比較安全」而是「比較好讀」：companies.active_from／
-// active_until 在 db.js 宣告成 TIMESTAMPTZ，Postgres 存不進空字串（''::timestamptz 直接報錯），
-// 所以那個分歧根本到不了，兩種寫法的安全性沒有差別。既然如此就取「沒填＝不限期間」這個
-// 跟欄位可為 NULL 的語意直接對應的讀法。
+// ⚠ 收斂它的動機**不是**四份行為不一致——收斂當下逐一比對過（含 null／undefined／空字串／
+// 合法 ISO 字串／Date 物件／'not-a-date' 等各種輸入），四份的判定完全相同。buildActor 看起來
+// 像先轉 Date 再跟 null 比，其實三元運算子是先判 falsy 才轉（`x ? new Date(x) : null`），
+// 所以空字串走的是 null 那條，跟另外三份一樣。**這裡刻意寫清楚，是因為第一次讀這段碼的人
+// （含當初開這張單的人）確實誤判成「四份不一致」，把不存在的 bug 寫進了註解。**
+//
+// 真正的動機是「四份就是四個會各自漂移的地方」：這條規則決定的是付錢的客戶會不會被鎖在
+// 門外，而它的四個呼叫端分散在認證、HTTP 閘門、公司管理與非 HTTP 路徑（AI／cron／git），
+// 沒有任何一個測試會在它們開始分歧的那一刻變紅。
+//
+// 取 falsy 這個讀法：companies.active_from／active_until 在 db.js 宣告成 TIMESTAMPTZ，
+// Postgres 存不進空字串（''::timestamptz 直接報錯），所以空字串到不了這裡，兩種寫法的
+// 安全性沒有差別。既然如此就取「沒填＝不限期間」這個跟欄位可為 NULL 的語意直接對應的讀法。
 //
 // 刻意保持純同步：四個呼叫端手上都已經有那一列了，為了問這句話再查一次 DB 是白花的；
 // 尤其 buildActor 每一個通過認證的請求都會跑到它。
