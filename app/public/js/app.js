@@ -234,6 +234,15 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
+      // 公司管理員的「公司帳號」頁。只有 ui-next 版本——legacy 不需要維護新頁面。
+      // 這頁公司管理員與平台管理員都能進，所以不掛 requiresAdmin（會擋掉公司管理員），
+      // 也不另外發明 requiresCompanyAdmin 這個 meta 旗標——只有這一個頁面用得到，
+      // 不值得加一個新概念（YAGNI）。guard 用明確的 path 判斷＋角色條件（見下方 beforeEach）。
+      path: "/company-users",
+      component: window.UiNextCompanyUsersView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/admin",
       component: window.UiNextEnabled
         ? window.UiNextAdminView
@@ -329,6 +338,16 @@ router.beforeEach(async (to) => {
       // 平台管理員沒有公司，後端一律視為內部人員；這裡照樣只看 is_internal，
       // 不要再補 role === 'admin' 的特判——特判會讓兩邊的定義慢慢分岔。
       if (me.is_internal !== true) return "/forbidden";
+    } catch {
+      return { path: "/login", query: { redirect: to.fullPath } };
+    }
+  }
+  // 公司帳號頁專屬條件（見上方 /company-users route 的註解，理由同 Task 3 的
+  // requiresInternal：只有一頁用得到的角色組合，不值得發明新 meta 旗標）。
+  if (to.path === "/company-users") {
+    try {
+      const me = await Api.get("auth/me");
+      if (me.role !== "company_admin" && me.role !== "admin") return "/forbidden";
     } catch {
       return { path: "/login", query: { redirect: to.fullPath } };
     }
