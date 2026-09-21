@@ -22,6 +22,26 @@ function askpassShimPath() {
 const { hardenGitEnv } = require('./git-hardening');
 const { isUserCompanyUsable } = require('./tenant-access');
 
+// 從一把明文 PAT 組出 git 子行程用的環境。抽出來是為了讓「存公司 PAT 之前先驗證」
+// 能用同一套組法——驗證用的憑證跟實際推送用的必須完全一樣，否則驗過了也不代表推得動。
+// 祕密只走 env、不進 argv：同 uid 的人讀得到 /proc/<pid>/cmdline。
+function buildGitEnvFromPat(pat, { login, name, email } = {}) {
+  const out = hardenGitEnv({
+    GIT_ASKPASS: askpassShimPath(),
+    GIT_ASKPASS_NODE: process.execPath,
+    GIT_PAT: pat,
+    GIT_AUTHOR_NAME: name || login || 'aidev',
+    GIT_AUTHOR_EMAIL: email || 'aidev@local',
+    GIT_COMMITTER_NAME: name || login || 'aidev',
+    GIT_COMMITTER_EMAIL: email || 'aidev@local',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'credential.helper',
+    GIT_CONFIG_VALUE_0: '',
+    GIT_TERMINAL_PROMPT: '0',
+  });
+  return out;
+}
+
 async function buildGitEnv(userId) {
   const { rows } = await query(
     `SELECT u.github_pat_enc, u.github_login, u.git_name, u.git_email,
@@ -53,20 +73,7 @@ async function buildGitEnv(userId) {
   const pat = decrypt(patEnc);
   const gitName = name || login || 'user';
   const gitEmail = email || `${login || 'user'}@users.noreply.github.com`;
-  const out = hardenGitEnv({
-      GIT_ASKPASS: askpassShimPath(),
-      GIT_ASKPASS_NODE: process.execPath,
-      GIT_PAT: pat,
-      GIT_AUTHOR_NAME: gitName, GIT_AUTHOR_EMAIL: gitEmail,
-      GIT_COMMITTER_NAME: gitName, GIT_COMMITTER_EMAIL: gitEmail,
-      // 機器上設定的 credential.helper（如 Windows Credential Manager）會搶在 GIT_ASKPASS 前被 git 嘗試，
-      // 導致仍以機器帳號認證、PAT 被靜默繞過。清空 helper 清單（GIT_CONFIG_* 等效 -c credential.helper=）
-      // 讓 askpass 成為唯一來源；GIT_TERMINAL_PROMPT=0 讓壞/空 PAT 直接失敗，不會 headless 卡死等互動輸入。
-      GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: 'credential.helper',
-      GIT_CONFIG_VALUE_0: '',
-      GIT_TERMINAL_PROMPT: '0',
-  });
+  const out = buildGitEnvFromPat(pat, { login, name: gitName, email: gitEmail });
   // source 刻意設成「不可列舉」：gitEnv 在 7 個地方被 { ...process.env, ...gitEnv } 整包
   // 展開丟進子行程（lib/deploy-run.js:218、lib/enterprise-sources.js:124、
   // pipeline/finding-fix.js:445/459/575、project-routes.js:148、pipeline/git.js:54）。
@@ -84,4 +91,4 @@ function pickGitIdentity(gitEnv) {
   return out;
 }
 
-module.exports = { buildGitEnv, askpassAnswer, NoGitCredentialError, askpassShimPath, pickGitIdentity };
+module.exports = { buildGitEnv, buildGitEnvFromPat, askpassAnswer, NoGitCredentialError, askpassShimPath, pickGitIdentity };

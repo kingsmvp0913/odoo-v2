@@ -11,6 +11,9 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { requirePlatformAdmin } = require('./lib/tenant-access');
 const { FEATURES, normalizeFeatures } = require('./lib/company-features');
+const { encrypt } = require('./lib/crypto');
+const { buildGitEnvFromPat } = require('./lib/git-identity');
+const { listRemoteBranchesByUrl } = require('./pipeline/git');
 
 const auth = [verifyToken, requirePlatformAdmin];
 
@@ -145,6 +148,56 @@ function registerRoutes(app) {
       );
       // 沒綁過卻回 204，操作的人會以為自己解除了某個東西。
       if (!rows.length) return res.status(404).json({ error: '這家公司沒有綁這個專案' });
+      res.status(204).end();
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.put('/api/admin/companies/:id/git', auth, async (req, res) => {
+    try {
+      const { pat, login, name, email } = req.body || {};
+      if (!pat) return res.status(400).json({ error: '缺 PAT' });
+      const { rows: co } = await query('SELECT id FROM companies WHERE id = $1', [req.params.id]);
+      if (!co.length) return res.status(404).json({ error: '找不到這家公司' });
+
+      // 規格 §6：存之前對這家公司綁到的每個 repo 跑一次 git ls-remote。
+      // 一個失敗就整批不存——存一把沒權限的 PAT，症狀要到很久以後某次推送才出現。
+      const { rows: repos } = await query(
+        `SELECT DISTINCT r.repo_url FROM project_repos r
+           JOIN project_companies pc ON pc.project_id = r.project_id
+          WHERE pc.company_id = $1`,
+        [req.params.id]
+      );
+      const gitEnv = buildGitEnvFromPat(pat, { login, name, email });
+      const checked = [];
+      for (const r of repos) {
+        try {
+          await listRemoteBranchesByUrl(r.repo_url, gitEnv);
+          checked.push({ repo_url: r.repo_url, ok: true });
+        } catch (err) {
+          return res.status(400).json({
+            error: `這把 PAT 連不上 ${r.repo_url}：${err.message}`,
+            checked: [...checked, { repo_url: r.repo_url, ok: false }],
+          });
+        }
+      }
+
+      await query(
+        `UPDATE companies SET git_pat_enc=$2, git_login=$3, git_name=$4, git_email=$5, updated_at=NOW()
+          WHERE id=$1`,
+        [req.params.id, encrypt(pat), login || null, name || null, email || null]
+      );
+      res.json({ ok: true, checked });   // 刻意不回 pat，也不回密文
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/admin/companies/:id/git', auth, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `UPDATE companies SET git_pat_enc=NULL, git_login=NULL, git_name=NULL, git_email=NULL, updated_at=NOW()
+          WHERE id=$1 RETURNING id`,
+        [req.params.id]
+      );
+      if (!rows.length) return res.status(404).json({ error: '找不到這家公司' });
       res.status(204).end();
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
