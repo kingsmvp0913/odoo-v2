@@ -182,9 +182,12 @@ function registerRoutes(app) {
       // 密碼對了 → 這一對的打錯次數歸零（裁決 R17），否則長期零星打錯會累積到永久封鎖。
       // 已封鎖的一對在上面就被擋掉，走不到這裡，所以不會順手解掉封鎖。
       await guard.recordSuccess({ username, source });
-      // 待審核帳號密碼對也不放行（管理員核准前）
+      // 2026-09-21（Task 8c fix round 1）：自助註冊已關閉，approved=false 現在只剩「被公司
+      // 管理員停用」一種意思（理由同 index.js 未核准閘門），這裡不能再講「審核中」——被停用的人
+      // 登出重登入或 token 過期時撞到的就是這一句，訊息要跟 index.js:106 講同一件事，不能取決
+      // 於他先撞到哪個端點。旗標名稱 pendingApproval 刻意不改，理由同上。
       if (user.approved === false) {
-        return res.status(403).json({ error: '帳號審核中，管理員核准後即可登入', pendingApproval: true });
+        return res.status(403).json({ error: '此帳號已停用，請聯絡貴公司的管理員', pendingApproval: true });
       }
 
       const { password_hash, password_enc, ...safeUser } = user;
