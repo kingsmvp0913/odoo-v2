@@ -133,6 +133,24 @@ describe('列出公司', () => {
     expect(row.git_pat_enc).toBeUndefined();
     expect(JSON.stringify(row)).not.toContain('fake-cipher');
   });
+
+  test('人數與專案數各自算各自的——寫錯會變成兩者相乘，而且只檢查「有回數字」的測試抓不到', async () => {
+    const id = (await request(app).post('/api/admin/companies').set(as(adminToken)).send({ name: '壬客戶' })).body.id;
+    await dbModule.query(
+      'INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ($1,$2,$1,$3,$4)',
+      ['cnt-u1', 'x', 'user', id]);
+    await dbModule.query(
+      'INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ($1,$2,$1,$3,$4)',
+      ['cnt-u2', 'x', 'user', id]);
+    const p1 = (await one("INSERT INTO projects (name, odoo_version) VALUES ($1,'17') RETURNING id", ['計數專案一'])).id;
+    const p2 = (await one("INSERT INTO projects (name, odoo_version) VALUES ($1,'17') RETURNING id", ['計數專案二'])).id;
+    await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [p1, id]);
+    await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [p2, id]);
+
+    const row = (await request(app).get('/api/admin/companies').set(as(adminToken))).body.find(c => c.id === id);
+    expect(row.user_count).toBe(2);
+    expect(row.project_count).toBe(2);
+  });
 });
 
 describe('功能清單', () => {
