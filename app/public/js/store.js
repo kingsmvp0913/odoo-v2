@@ -7,4 +7,7 @@ window.UserStore = Vue.reactive({
   companyId: null,
   companyName: '',
   features: {},
+  // 公司停用／過期（後端 index.js 的公司不可用閘門）。預設 true：載入中或 auth/me 還沒回來時
+  // 一律當可用，免得每個人進站都先閃一下「公司帳號已停用」的全屏說明。
+  companyUsable: true,
 });

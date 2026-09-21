@@ -367,6 +367,18 @@ router.afterEach((to) => {
     Api.get("auth/me")
       .then((me) => {
         window.UserStore.role = me.role || "";
+        // 另外幾個身分旗標原本只有 ui-next 外殼的 mounted() 在寫，而外殼是根元件、整場只掛載一次：
+        // 表單登入（登出後或 token 過期後重登）不重新整理的話，features 會整場 session 停在 {}，
+        // 內部同事就看不到 features.exam 那個入口，而且畫面上沒有任何徵狀可察覺。
+        // 這與 role 當初被搬來 afterEach 的是同一個坑（理由見下方 isAdmin 的註解），
+        // 所以照同一個做法修、不另外發明機制——auth/me 本來就回這幾個欄位，不多打一次 API。
+        window.UserStore.isInternal = me.is_internal === true;
+        window.UserStore.companyId = me.company_id ?? null;
+        window.UserStore.companyName = me.company_name || "";
+        window.UserStore.features = me.features || {};
+        // 公司停用／過期時後端擋掉除 GET /auth/me 以外的每一支 /api（index.js 的公司不可用閘門），
+        // 外殼要靠這個旗標講出「為什麼不能用」。缺值一律當可用：載入中先閃一下停用畫面比沒講原因更糟。
+        window.UserStore.companyUsable = me.company_usable !== false;
         // 深色偏好也在此同步：表單登入只走 afterEach（不經 mounted 的已登入分支），
         // 漏了會讓無痕登入永遠停在預設淺色（localStorage 空、又沒讀 DB 偏好）。
         ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
@@ -381,6 +393,13 @@ router.afterEach((to) => {
   if (to.path === "/login") {
     SocketManager.disconnectSocket();
     window.UserStore.role = "";
+    // 比照 UiNextApp 的 logout()：既然上面一併寫入，這裡就要一併清掉。
+    // 少清一個，token 過期被踢回登入頁的人下一秒看到的就是上一個帳號的公司名與功能開關。
+    window.UserStore.isInternal = false;
+    window.UserStore.companyId = null;
+    window.UserStore.companyName = "";
+    window.UserStore.features = {};
+    window.UserStore.companyUsable = true;
   }
 });
 
