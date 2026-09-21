@@ -207,6 +207,65 @@ test('規格 module 列多個模組 → 一次全部升級', async () => {
   expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, ['idx_project', 'idx_purchase'], undefined);
 });
 
+// 2026-09-21 task 282：全庫第一張「不動任何 addon」的任務（改的是 repo 根目錄的主機端備份腳本與
+// markdown）。規格寫 module: none，本關就沒有升級對象——不可落到 mods 為空的既有降級路徑，那條會
+// 跑 -u all 把測試區所有模組重升一輪（鴻久實測數十分鐘），而這張任務一個 addon 檔都沒動。
+// 補裝相依／重啟容器／asset 冒煙檢查同樣沒有意義：三者測的都是升級後的新 registry。
+describe('規格宣告 module: none（不動任何模組）', () => {
+  test('整段跳過升級與其周邊，但照常往下一關推進', async () => {
+    await setEnvRunning();
+    const id = await makeTask(0, 'module: none');
+    await runDeployTesting(id, userId);
+
+    expect(envAgent.upgradeModules).not.toHaveBeenCalled();
+    expect(envAgent.installModuleRequirements).not.toHaveBeenCalled();
+    expect(envAgent.restartEnv).not.toHaveBeenCalled();
+    expect(envAgent.assetSmokeCheck).not.toHaveBeenCalled();
+
+    const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+    expect(t.status).toBe('playwright_running');   // 跳過的是升級，不是這張任務
+  });
+
+  test('跳過時要留一行痕跡：沒有它，審核者看到的是一關什麼都沒做', async () => {
+    await setEnvRunning();
+    const id = await makeTask(0, 'module: none');
+    await runDeployTesting(id, userId);
+    const { rows } = await dbModule.query('SELECT content FROM task_logs WHERE task_id=$1', [id]);
+    expect(rows.some(r => /沒有動到任何模組/.test(r.content))).toBe(true);
+  });
+
+  test('前輪累計的 deploy_retry_count 照樣歸零（收尾與升級成功那條路必須一致）', async () => {
+    await setEnvRunning();
+    const id = await makeTask(2, 'module: none');
+    await runDeployTesting(id, userId);
+    const { rows: [t] } = await dbModule.query('SELECT deploy_retry_count FROM tasks WHERE id=$1', [id]);
+    expect(t.deploy_retry_count).toBe(0);
+  });
+
+  test('專案停用 E2E 時走 review_pending，與升級成功那條路同樣的判斷', async () => {
+    await dbModule.query('UPDATE projects SET e2e_disabled=true WHERE id=$1', [projectId]);
+    try {
+      await setEnvRunning();
+      const id = await makeTask(0, 'module: none');
+      await runDeployTesting(id, userId);
+      const { rows: [t] } = await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id]);
+      expect(t.status).toBe('review_pending');
+    } finally {
+      await dbModule.query('UPDATE projects SET e2e_disabled=false WHERE id=$1', [projectId]);
+    }
+  });
+
+  // 鑑別力：module 留空是「忘了填」，不是「沒有模組」。兩者若共用同一條路，分析關漏填時會靜默
+  // 跳過整個部署驗證關——那是本平台唯一的安裝驗證權威關，跳過等於語法錯一路綠燈到人工審核。
+  test('module 留空 ≠ none：仍走既有降級路徑去升級（-u all），不得被當成跳過', async () => {
+    await setEnvRunning();
+    envAgent.upgradeModules.mockResolvedValue({ ok: true, log: 'ok' });
+    const id = await makeTask(0, 'summary: 忘了填 module');
+    await runDeployTesting(id, userId);
+    expect(envAgent.upgradeModules).toHaveBeenCalledWith(projectId, [], undefined);
+  });
+});
+
 // 意圖：容器掛載在 docker run 那一刻定型，環境建好之後才加進專案的 repo 補掛不進去，其模組在測試區
 // 根本不存在。放行只會對著殘缺的環境升級並判綠燈（實測萊峰19：容器只掛 main，純水的碼從不在測試區），
 // 錯誤訊息也完全指不到成因。擋在升級之前，且不得自動重建——那會中斷使用者正在用的測試區。

@@ -7,7 +7,7 @@ const dockerEnv = require('../lib/docker-env');
 const { ensureEnvRunning } = require('./ensure-env');
 const { classifyFailureWithAgent } = require('./failure-classifier');
 const { withProjectLock } = require('./project-lock');
-const { specModules } = require('./spec-modules');
+const { specModules, isNoModule } = require('./spec-modules');
 
 const DEPLOY_LIMIT = 3;
 // asset 失敗時要附多少 log 給 coding 看（QWeb 的 xpath 錯誤 traceback 通常十幾行）
@@ -247,6 +247,30 @@ async function stopEnvDeath(taskId, userId, err) {
   notify.emitToUser(userId, 'task:updated', { taskId, status: 'stopped' });
 }
 
+/**
+ * 部署關的收尾：歸零 deploy_retry_count 並派往下一關（E2E 或最終人工審核）。
+ *
+ * 抽成函式是因為有兩條路走到這裡：升級成功走完整流程，以及規格宣告 module: none 時整段跳過升級。
+ * 兩條路的收尾必須逐字相同——少歸零 deploy_retry_count 或少發 task:updated 都不會有任何徵狀，
+ * 只是任務停在畫面上不動，或前輪累計的失敗次數把下一個 bug 的重試額度推爆（健檢 F9 的形狀）。
+ */
+async function finishDeploy(task, taskId, userId) {
+  // 部署成功：歸零 deploy_retry_count（健檢 F9：舊版成功不歸零，新 bug 首次部署失敗即被前輪累計推爆、
+  // 一次自動重試額度都沒有）。
+  // 專案停用 E2E（如串接外部系統無法在測試區實測）：純程式跳過 tour，直接進最終人工審核。
+  // 留一行痕跡，審核者才知是刻意跳過而非流程壞掉。
+  const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
+  if (proj && proj.e2e_disabled) {
+    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E 已依專案設定停用，跳過')", [taskId]);
+    await query("UPDATE tasks SET status='review_pending', deploy_retry_count=0, updated_at=NOW() WHERE id=$1", [taskId]);
+    notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
+    return;
+  }
+
+  await query("UPDATE tasks SET status='playwright_running', deploy_retry_count=0, updated_at=NOW() WHERE id=$1", [taskId]);
+  notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
+}
+
 // 部署測試區（純程式）：確保 env 運行 → odoo-bin -u 升級。
 // 升級成功→playwright_running；升級失敗（程式錯）→退 coding 計數（滿 DEPLOY_LIMIT→stopped）；env 起不來→stopped（infra）。
 async function runDeployTesting(taskId, userId, signal) {
@@ -325,6 +349,20 @@ async function doDeploy(task, taskId, userId, signal) {
   const mods = specModules(task.analysis_yaml);
   const moduleName = mods.join(',');
   const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
+
+  // 規格明確宣告不動任何模組（module: none）：本關唯一的工作——安裝／升級模組——沒有對象。
+  // 不可落到下面的降級路徑：mods 為空時 upgradeModules 會跑 -u all，把測試區所有模組重升一輪
+  // （鴻久實測數十分鐘），而這種任務連一個 addon 檔都沒動。補裝 Python 相依、重啟容器、asset 冒煙
+  // 檢查同理——三者測的都是升級後的新 registry，沒有新碼進 registry 就沒有東西可測。
+  // 判「有沒有宣告」只能用 isNoModule，不可拿 mods.length===0 推斷：解析失敗與欄位留空也是空陣列，
+  // 那兩種是「不知道」，既有降級行為（-u all）要留著。
+  if (isNoModule(task.analysis_yaml)) {
+    notify.emitToUser(userId, 'terminal:output', { taskId, data: '[DEPLOY] 規格宣告不動任何模組（module: none），跳過升級\n' });
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, '這張任務沒有動到任何模組，測試區不需要升級，已跳過部署']);
+    return finishDeploy(task, taskId, userId);
+  }
 
   // 升級前自動補裝各自訂模組宣告的 Python 相依（env 建置只裝 Odoo 核心 requirements，模組自帶的漏裝）。
   // best-effort：裝不動不硬擋，真正缺的相依會讓下方升級以清楚錯誤停下。
@@ -540,20 +578,7 @@ async function doDeploy(task, taskId, userId, signal) {
     return;
   }
 
-  // 部署成功：歸零 deploy_retry_count（健檢 F9：舊版成功不歸零，新 bug 首次部署失敗即被前輪累計推爆、
-  // 一次自動重試額度都沒有）。
-  // 專案停用 E2E（如串接外部系統無法在測試區實測）：純程式跳過 tour，直接進最終人工審核。
-  // 留一行痕跡，審核者才知是刻意跳過而非流程壞掉。
-  const { rows: [proj] } = await query('SELECT e2e_disabled FROM projects WHERE id=$1', [task.project_id]);
-  if (proj && proj.e2e_disabled) {
-    await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', 'E2E 已依專案設定停用，跳過')", [taskId]);
-    await query("UPDATE tasks SET status='review_pending', deploy_retry_count=0, updated_at=NOW() WHERE id=$1", [taskId]);
-    notify.emitToUser(userId, 'task:updated', { taskId, status: 'review_pending' });
-    return;
-  }
-
-  await query("UPDATE tasks SET status='playwright_running', deploy_retry_count=0, updated_at=NOW() WHERE id=$1", [taskId]);
-  notify.emitToUser(userId, 'task:updated', { taskId, status: 'playwright_running' });
+  return finishDeploy(task, taskId, userId);
 }
 
 module.exports = { runDeployTesting, extractOdooError, looksLikeInfraDeath, toHostPaths };
