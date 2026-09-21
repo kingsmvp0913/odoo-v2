@@ -10,15 +10,25 @@
     computed: {
       // tabs 是 computed 不是靜態陣列：這個專案的自動部署開關關閉時，分頁必須整個不存在。
       // 這只是畫面——後端每一支部署端點自己也擋（requireAdmin + requireAutoDeploy）。
+      // Repo／連線設定／自動部署三個分頁的寫入端點全是平台管理員限定，連線設定連 GET 也是——
+      // 一般使用者切進去要嘛看得到按不動、要嘛連清單都讀不到，藏整頁比留著顯示更清楚。
+      // 陣列字面量刻意維持完整、用 filter 拿掉不該顯示的分頁（而非用 push 動態組出來）：
+      // tour-isolation.test.js 用文字掃描從這裡數 tab key，拆成條件式 push 會讓它只掃到一半。
       tabs() {
-        const base = [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"]];
-        if (this.project && this.project.auto_deploy_enabled) base.push(["deploy","自動部署"]);
-        return base;
+        const all = [["chat","Chat"],["settings","設定"],["repos","Repo"],["db","連線設定"],["env","測試環境"],["wiki","Wiki"],["deploy","自動部署"]];
+        return all.filter(([key]) => {
+          if (key === "repos" || key === "db") return this.isAdmin();
+          if (key === "deploy") return this.isAdmin() && this.project && this.project.auto_deploy_enabled;
+          return true;
+        });
       },
       embeddedTab() { return { db: window.UiNextDbView, wiki: window.UiNextWikiView, deploy: window.UiNextDeployTargetsView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
     watch: {
+      // 改用 this.tabs（依角色與 auto_deploy_enabled 過濾過）而不是寫死的分頁鍵清單：
+      // 否則一般使用者若靠網址把 tab 切成 repos/db/deploy，這裡會照樣接受，
+      // 畫面卻是「分頁按鈕不見了、內容還在」的半調子狀態。
       "$route.query.tab"(tab) {
-        const next = ["repos","env","settings","chat","db","wiki","deploy"].includes(tab) ? tab : "chat";
+        const next = this.tabs.some((t) => t[0] === tab) ? tab : "chat";
         if (next === this.detailTab) return;
         this.detailTab = next;
         if (next === "chat") this.loadChats();
@@ -212,12 +222,14 @@
 <p v-if="env&&env.error_msg" class="ui-next-error-text">{{ env.error_msg }}</p>
 <p v-if="env&&env.addons_drift&&env.addons_drift.length" class="ui-next-warning-text">新增的 Repo 尚未掛進既有環境：{{ env.addons_drift.join('、') }}。停止後重新啟動即可重建掛載。</p>
 <div class="ui-next-env-actions">
-<button v-if="!env||env.status==='idle'||env.status==='error'" class="ui-next-primary" @click="setupEnv" :disabled="envWorking">{{ envWorking?'處理中…':(env&&env.built?'重新啟動':'建立環境') }}</button>
+<!-- 這四顆對應 env-routes.js 的四支平台管理員限定端點（建立/停止/刪除/歸還對外名額）；
+     開啟測試區、查看 log、重新整理走的是開放給所有人的 GET，維持不擋。 -->
+<button v-if="isAdmin()&&(!env||env.status==='idle'||env.status==='error')" class="ui-next-primary" @click="setupEnv" :disabled="envWorking">{{ envWorking?'處理中…':(env&&env.built?'重新啟動':'建立環境') }}</button>
 <button v-if="env&&env.status==='running'" class="ui-next-primary" @click="openEnv">開啟測試區</button>
-<button v-if="env&&env.status==='running'&&env.external_slot!=null" @click="releaseExternal" :disabled="envWorking">關閉對外</button>
-<button v-if="env&&env.status==='running'" @click="stopEnv" :disabled="envWorking">停止</button>
+<button v-if="isAdmin()&&env&&env.status==='running'&&env.external_slot!=null" @click="releaseExternal" :disabled="envWorking">關閉對外</button>
+<button v-if="isAdmin()&&env&&env.status==='running'" @click="stopEnv" :disabled="envWorking">停止</button>
 <button v-if="env&&(env.built||env.status!=='idle')" @click="viewLog" :disabled="logLoading">{{ logLoading?'讀取中…':'查看 log' }}</button>
-<button v-if="env&&(env.status!=='idle'||env.built)" class="danger" @click="deleteEnv" :disabled="envWorking">刪除環境</button>
+<button v-if="isAdmin()&&env&&(env.status!=='idle'||env.built)" class="danger" @click="deleteEnv" :disabled="envWorking">刪除環境</button>
 <button @click="loadEnv" :disabled="envWorking">重新整理</button>
 </div>
 <details v-if="env&&env.setup_log">
