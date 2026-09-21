@@ -121,6 +121,18 @@ describe('修改公司', () => {
     expect(row.features).toEqual({ exam: true });
     expect(row.name).toBe('庚客戶');
   });
+
+  // 意圖（全跑修法波第 5 項）：features 是整包取代、不是逐鍵合併，這是刻意的契約。
+  // 這支釘住它，逼前端表單必須每次送出全部開關的現況——否則正在蓋的前端表單只送
+  // 「這次改動的那一個」，會在正式環境才發現偷偷關掉了別的功能，且沒有任何錯誤訊息。
+  test('PUT features 是整包取代：帶 {odoo_sync:true} 會把沒一起帶的 exam 關掉', async () => {
+    const id = (await request(app).post('/api/admin/companies').set(as(adminToken))
+      .send({ name: '癸客戶', features: { exam: true } })).body.id;
+    const res = await request(app).put(`/api/admin/companies/${id}`).set(as(adminToken))
+      .send({ features: { odoo_sync: true } });
+    expect(res.status).toBe(200);
+    expect(res.body.features).toEqual({ odoo_sync: true });   // exam 不見了，不是 {exam:true, odoo_sync:true}
+  });
 });
 
 describe('列出公司', () => {

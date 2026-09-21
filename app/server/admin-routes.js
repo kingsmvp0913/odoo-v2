@@ -395,6 +395,12 @@ function registerRoutes(app) {
       const nextCompanyId = hasCompanyId ? req.body.company_id : currentRows[0].company_id;
       const roleCheck = validateRoleCompany(nextRole, nextCompanyId);
       if (!roleCheck.ok) return res.status(400).json({ error: roleCheck.error });
+      // 比照 POST /api/admin/users（上面 :370-372）：帶了一個不存在的 company_id，
+      // 不擋在這裡就會撞 FK 變成一個看不出原因的 500，而不是講得清楚的 400。
+      if (nextCompanyId !== null) {
+        const { rows: coRows } = await query('SELECT 1 FROM companies WHERE id = $1', [nextCompanyId]);
+        if (!coRows.length) return res.status(400).json({ error: '公司不存在' });
+      }
       const { rows } = await query(
         `UPDATE users SET
            role = COALESCE($2, role),

@@ -795,10 +795,9 @@ async function migrate() {
     `CREATE TABLE IF NOT EXISTS companies (
       id           SERIAL PRIMARY KEY,
       name         TEXT UNIQUE NOT NULL,
-      -- 預設安全值：新公司一律停用（rules/db-schema 43）。現況：唯一會寫 true 的路徑是
-      -- tools/migrate-tenants.js（建立內部公司時一併設 true）——平台管理員「建立／啟用客戶
-      -- 公司」的管理端點屬於 Part 2，本分支（Part 1）並未實作，讀到這裡不要誤以為已經有
-      -- 端點在把關；管理端點補上之後，這裡才會有第二條寫 true 的路徑。
+      -- 預設安全值：新公司一律停用（rules/db-schema 43）。寫 true 的路徑現在有兩條：
+      -- tools/migrate-tenants.js（建立內部公司時一併設 true），以及平台管理員的公司管理端點
+      -- （company-admin-routes.js：POST /api/admin/companies、PUT /api/admin/companies/:id）。
       is_active    BOOLEAN NOT NULL DEFAULT false,
       -- 內部公司記號，只管「AI 用平台的訂閱付錢」，不管看得到哪些專案。
       -- 唯一寫 true 的路徑是 tools/migrate-tenants.js；任何 API 都不可設定——

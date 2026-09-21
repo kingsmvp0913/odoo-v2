@@ -96,6 +96,19 @@ describe('存公司 GIT', () => {
   });
 });
 
+// 意圖（全跑修法波第 9 項）：這兩條不變式原本只靠讀程式碼相信，沒有測試釘住。
+describe('GIT 憑證安全不變式', () => {
+  test('回應不含存進 DB 的密文（不只是不含明碼——密文外流一樣是機密外洩）', async () => {
+    listRemoteBranchesByUrl.mockResolvedValue({ branches: ['main'], defaultBranch: 'main' });
+    const res = await request(app).put(`/api/admin/companies/${coId}/git`).set(as(adminToken))
+      .send({ pat: 'ghp_cipher_check', login: 'co-bot' });
+    expect(res.status).toBe(200);
+    const row = await one('SELECT git_pat_enc FROM companies WHERE id=$1', [coId]);
+    expect(row.git_pat_enc).toBeTruthy();
+    expect(JSON.stringify(res.body)).not.toContain(row.git_pat_enc);
+  });
+});
+
 describe('清除公司 GIT', () => {
   test('清掉四個欄位', async () => {
     const res = await request(app).delete(`/api/admin/companies/${coId}/git`).set(as(adminToken));

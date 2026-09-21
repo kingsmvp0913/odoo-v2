@@ -70,6 +70,15 @@ test('不存在的公司 → 400', async () => {
   expect(res.status).toBe(400);
 });
 
+// 意圖（全跑修法波第 7 項）：PUT 這條 POST 已經做的檢查漏做了，帶不存在的 company_id
+// 會撞 FK 變成一個看不出原因的 500，而不是講得清楚的 400。
+test('PUT 帶不存在的公司 → 400，不是外鍵 500', async () => {
+  const id = (await one('SELECT id FROM users WHERE username=$1', ['u2'])).id;
+  const res = await request(app).put(`/api/admin/users/${id}`).set(as(adminToken))
+    .send({ company_id: 999999 });
+  expect(res.status).toBe(400);
+});
+
 test('改角色時公司要一起合法：把一般使用者升成 admin 但還掛著公司 → 400', async () => {
   const id = (await one('SELECT id FROM users WHERE username=$1', ['u2'])).id;
   const res = await request(app).put(`/api/admin/users/${id}`).set(as(adminToken)).send({ role: 'admin' });

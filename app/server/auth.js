@@ -8,7 +8,8 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('./db');
 const { hashPassword, checkPassword } = require('./password');
-const { redactSettings } = require('./lib/user-settings');
+const { redactSettings, CUSTOMER_SETTINGS_WHITELIST } = require('./lib/user-settings');
+const { companyHasFeature } = require('./lib/company-features');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
@@ -76,7 +77,11 @@ async function verifyToken(req, res, next) {
     // 若這裡不擋，對方手上還沒過期的 token（最長 7 天）照樣能打通所有 API——停用等於做半套。
     // 判斷式必須是 `=== false`：這欄多數既有帳號是 NULL（含平台管理員），`!r.approved` 會把
     // 從沒被寫過這欄的人全部鎖在外面，寫法照抄下面 auth.js 登入檢查的既有寫法。
-    if (r.approved === false) return res.status(403).json({ error: '帳號已停用' });
+    // 平台管理員豁免（照抄 index.js:105 的既有寫法，兩處必須一致）：公司管理員能改的
+    // PUT /api/admin/users/:id 若誤把平台管理員設成 approved=false，唯一的復原端點
+    // （PUT /api/company/users/:id/active）比對 company_id，平台管理員永遠沒有公司，
+    // 不豁免就是把他鎖死在自己的平台外面、連 /api/auth/me 都進不去。
+    if (r.role !== 'admin' && r.approved === false) return res.status(403).json({ error: '帳號已停用' });
     req.role = r.role;
     // 語意不變：全平台至少 6 處自己查 role === 'admin'，這裡改了就會全面走樣
     req.isAdmin = r.role === 'admin';
@@ -203,9 +208,22 @@ function registerRoutes(app) {
       if (!rows[0]) return res.status(404).json({ error: 'User not found' });
       // 密碼不回前端，只回 *_set 旗標（見 lib/user-settings 的 redactSettings）
       // 前端要靠這三個欄位決定顯示什麼（規格 §5.5），以及公司停用時顯示原因
+      const result = { ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) };
+      // §8 P2 的另一個出口：settings.js 的 GET /api/settings 已經對客戶濾掉 Odoo／eService 鍵，
+      // 這支同樣整包吐 odoo_settings／sync_interval，漏擋就是同一個洞的另一扇門，套同一份白名單。
+      const canSync = await companyHasFeature(req.actor.companyId, 'odoo_sync');
+      if (!canSync) {
+        if (result.odoo_settings && typeof result.odoo_settings === 'object') {
+          const filtered = {};
+          for (const key of CUSTOMER_SETTINGS_WHITELIST) {
+            if (key in result.odoo_settings) filtered[key] = result.odoo_settings[key];
+          }
+          result.odoo_settings = filtered;
+        }
+        delete result.sync_interval;
+      }
       res.json({
-        ...rows[0],
-        odoo_settings: redactSettings(rows[0].odoo_settings),
+        ...result,
         company_id: req.actor.companyId,
         company_name: req.actor.companyName,
         company_usable: req.actor.companyUsable,

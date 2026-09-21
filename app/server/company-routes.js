@@ -87,7 +87,12 @@ function registerRoutes(app) {
   app.put('/api/company/users/:id/active', verifyToken, async (req, res) => {
     const companyId = myCompany(req, res); if (!companyId) return;
     try {
-      const active = req.body && req.body.active === true;
+      // active 必須明確帶布林值——沒帶或型別不對，原本會被當成 false（停用）。
+      // 一個「漏帶欄位」的請求就把人停用掉是危險的預設值，得擋在 400，不能靜默照做。
+      if (typeof (req.body && req.body.active) !== 'boolean') {
+        return res.status(400).json({ error: '請明確指定 active（布林值）' });
+      }
+      const active = req.body.active;
       // 規格 §8 P6：只能停用不能刪除——刪掉帳號，他建的任務與留過的話就失去歸屬。
       const { rows } = await query(
         `UPDATE users SET approved = $3 WHERE id = $1 AND company_id = $2

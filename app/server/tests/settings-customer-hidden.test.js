@@ -129,3 +129,28 @@ test('合併寫入：客戶存檔（只送白名單內的 theme）不會清掉�
   expect(s.odoo_username).toBe('should-survive');   // 客戶看不到的鍵，存檔後仍要原封不動
   expect(s.theme).toBe('dark');                       // 白名單內的欄位正常更新
 });
+
+// §8 P2 有兩個出口整包回 odoo_settings／sync_interval：settings.js（上面）與 auth.js 的
+// GET /api/auth/me（每次導覽都打，見 settings.js:45-46 的註解）。這支漏掉的話上面全綠也擋不住外洩。
+// 放在檔案最後：這裡直接寫 DB 塞 odoo_username 進 cust 的 odoo_settings，若擺在前面會污染
+// 上面那些依序累積、比對 DB 現值的測試（曾實測讓「客戶寫 Odoo 設定」那支變成假紅）。
+test('客戶讀 /api/auth/me：回應裡同樣沒有 Odoo／eService 相關欄位，也沒有 sync_interval', async () => {
+  await dbModule.query('UPDATE users SET odoo_settings = $2, sync_interval = 30 WHERE username = $1',
+    ['cust', JSON.stringify({ theme: 'light', odoo_username: 'leak-me', service_username: 'leak-me-too' })]);
+  const res = await request(app).get('/api/auth/me').set(as(custToken));
+  expect(res.status).toBe(200);
+  const body = JSON.stringify(res.body);
+  expect(body).not.toContain('odoo_username');
+  expect(body).not.toContain('service_username');
+  expect(res.body.sync_interval).toBeUndefined();
+  expect(res.body.odoo_settings.theme).toBe('light');   // 白名單內的鍵照樣要回，不能連 UI 偏好一起誤殺
+});
+
+test('內部公司的人 /api/auth/me 完全不受影響——這一關對現在平台上的人必須零改變', async () => {
+  await dbModule.query('UPDATE users SET odoo_settings = $2, sync_interval = 30 WHERE username = $1',
+    ['inside', JSON.stringify({ theme: 'light', odoo_username: 'kept' })]);
+  const res = await request(app).get('/api/auth/me').set(as(internalToken));
+  expect(res.status).toBe(200);
+  expect(res.body.odoo_settings.odoo_username).toBe('kept');
+  expect(res.body.sync_interval).toBe(30);
+});

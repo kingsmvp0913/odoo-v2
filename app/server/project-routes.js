@@ -970,6 +970,13 @@ function registerRoutes(app) {
       if (!await loadProjectForActor(req.params.id, req, 'id')) {
         return res.status(404).json({ error: '找不到專案' });
       }
+      // 這支餵的是「上正式」彈窗，PENDING_RELEASE_SQL 沒有 user 條件——會把全公司每個人已核准
+      // 任務的標題都吐給打這支 API 的人。看得到專案不等於看得到別人任務的標題，門檻要跟真正
+      // 按得下「上正式」的人一致：平台管理員，或該公司綁定勾了 can_release 的公司管理員（規格
+      // §8 P1、§4.3）。看得到專案但按不了 → 403，不是 404（看得到本身沒有洩漏，403 才是正確語意）。
+      if (!await canReleaseProject(req.actor, req.params.id)) {
+        return res.status(403).json({ error: '只有平台管理員或公司管理員能查看待上正式清單' });
+      }
       const { rows } = await query(PENDING_RELEASE_SQL, [req.params.id]);
       // 彈窗要先知道「按下去會不會動到客戶正式機」才有辦法把警告寫對。
       // 沒有這段的話，警告只能寫死成一句通用的話，於是每次都出現，於是沒有人會看。
@@ -1112,10 +1119,14 @@ function registerRoutes(app) {
         const detail = deploySkipped
           ? `客戶正式區未更新：${deploySkipReason}`
           : describeResults(deploy, targets, '客戶正式區').join('\n') || '客戶正式區未更新。';
+        // 規格 §6／09-11 裁決：GIT 憑證退回個人 → 公司後，拿掉了「只用本人 PAT」那道歸屬煞車，
+        // 改由 buildGitEnv 回傳的 source 補償——但 source 不落地就等於沒補償（全跑修法波第 3 項）。
+        // 這裡是這條退回鏈唯一真正「代表某張任務推 code」的落點：task_logs 是使用者事後唯一找得回來的地方。
+        const sourceLabel = gitEnv.source === 'company' ? '公司 GitHub 憑證' : '個人 GitHub 憑證';
         for (const t of tasks) {
           await query(
             "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-            [t.id, `[上正式] 程式已併入 main。\n${detail}`]
+            [t.id, `[上正式] 程式已併入 main（使用${sourceLabel}推送）。\n${detail}`]
           ).catch(() => {});
         }
       }

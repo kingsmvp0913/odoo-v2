@@ -180,4 +180,38 @@ describe('改角色與停用', () => {
     const id = (await one('SELECT id FROM users WHERE username=$1', ['new-a'])).id;
     expect((await request(app).delete(`/api/company/users/${id}`).set(as(caToken))).status).toBe(404);
   });
+
+  // 意圖（全跑修法波第 8 項）：active 沒帶或不是布林值一律當「停用」處理是危險的預設值——
+  // 前端漏帶欄位、或送錯型別，帳號會被靜默停用而完全沒有錯誤訊息可循。
+  test('active 沒帶 → 400，不可以被當成 false 靜默停用', async () => {
+    const id = (await one('SELECT id FROM users WHERE username=$1', ['new-a'])).id;
+    const before = await one('SELECT approved FROM users WHERE id=$1', [id]);
+    const res = await request(app).put(`/api/company/users/${id}/active`).set(as(caToken)).send({});
+    expect(res.status).toBe(400);
+    expect((await one('SELECT approved FROM users WHERE id=$1', [id])).approved).toBe(before.approved);
+  });
+
+  test('active 給非布林值 → 400', async () => {
+    const id = (await one('SELECT id FROM users WHERE username=$1', ['new-a'])).id;
+    const res = await request(app).put(`/api/company/users/${id}/active`).set(as(caToken)).send({ active: 'yes' });
+    expect(res.status).toBe(400);
+  });
+});
+
+// 意圖（全跑修法波第 6 項）：auth.js 的 approved 閘門原本沒有平台管理員豁免，而
+// index.js:105 的既有未核准閘門有；PUT /api/admin/users/:id 把某個平台管理員的 approved
+// 設成 false 之後，唯一的復原端點（PUT /api/company/users/:id/active）比對 company_id，
+// 平台管理員永遠沒有公司，會被鎖死到沒有任何路可以自己救回來。
+describe('平台管理員的 approved 豁免（規格 §8 P6 補充，防鎖死）', () => {
+  test('平台管理員 approved=false 仍能打 /api/auth/me（不能被鎖死在自己的平台外面）', async () => {
+    const { rows: [admin] } = await dbModule.query("SELECT id FROM users WHERE username = 'admin'");
+    await dbModule.query('UPDATE users SET approved = false WHERE id = $1', [admin.id]);
+    try {
+      const res = await request(app).get('/api/auth/me').set(as(adminToken));
+      expect(res.status).toBe(200);
+    } finally {
+      // 還原：這個 token 是全檔共用的 fixture，別讓這支測試波及後面的案例。
+      await dbModule.query('UPDATE users SET approved = true WHERE id = $1', [admin.id]);
+    }
+  });
 });

@@ -4,7 +4,9 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { fetchGitHubIdentity } = require('./lib/github-api');
 const { encrypt } = require('./lib/crypto');
-const { encryptSettings, decryptSettings, redactSettings, preserveSecrets } = require('./lib/user-settings');
+const {
+  encryptSettings, decryptSettings, redactSettings, preserveSecrets, CUSTOMER_SETTINGS_WHITELIST,
+} = require('./lib/user-settings');
 const { requireFeature, companyHasFeature } = require('./lib/company-features');
 
 // 客戶端 GET /api/settings 的 odoo_settings 只回這些鍵、PUT /api/settings 也只讓客戶寫這些鍵
@@ -12,9 +14,8 @@ const { requireFeature, companyHasFeature } = require('./lib/company-features');
 // 往 odoo_settings 加新欄位，預設就外洩給客戶」——加欄位的人在改別的功能，根本不會想到這裡有
 // 一道過濾，而且外洩沒有任何徵狀，客戶看到不該看的東西，我們永遠不會知道。白名單則相反：漏列
 // 的新欄位客戶看不到，這種疏漏當天就會有人來抱怨「我的欄位不見了」——同一個疏忽，白名單壞的
-// 方向是安全的方向。teams_user_id 是 MS Teams 提及通知用的 id（非 Odoo／eService 憑證），規格
-// 要藏的只有 Odoo／eService 帳密，這個沒有藏的理由，故列入。
-const CUSTOMER_SETTINGS_WHITELIST = ['theme', 'saved_views', 'teams_user_id'];
+// 方向是安全的方向。§8 P2 的另一個出口 GET /api/auth/me（auth.js）套用同一份常數
+// （lib/user-settings.js 的 CUSTOMER_SETTINGS_WHITELIST），避免兩處各自維護會漂移。
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {

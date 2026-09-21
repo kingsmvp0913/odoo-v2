@@ -147,6 +147,29 @@ describe('上正式（規格 §4.3 can_release）', () => {
   });
 });
 
+// PENDING_RELEASE_SQL 沒有 user 條件——看得到專案不等於能看見全公司同事已核准任務的標題，
+// 門檻必須跟按不按得下「上正式」一致（全跑修法波第 1 項）。
+describe('待上正式清單（GET pending-release，規格 §8 P1）', () => {
+  test('自己公司的一般使用者看得到專案，但沒有上正式的權限 → 403（不是 200，否則洩漏全公司任務標題）', async () => {
+    const res = await request(app).get(`/api/projects/${pA}/pending-release`).set(as(aToken));
+    expect(res.status).toBe(403);
+  });
+
+  test('平台管理員 → 200', async () => {
+    const res = await request(app).get(`/api/projects/${pA}/pending-release`).set(as(adminToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.tasks)).toBe(true);
+  });
+
+  test('公司管理員且該公司綁定勾了 can_release → 200（沿用上一個 describe 建的 userA_admin，pA/coA 的綁定已勾 can_release）', async () => {
+    const adminAToken = (await request(app).post('/api/auth/login')
+      .send({ username: 'userA_admin', password: 'password123' })).body.token;
+    const res = await request(app).get(`/api/projects/${pA}/pending-release`).set(as(adminAToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.tasks)).toBe(true);
+  });
+});
+
 describe('任務改掛專案（PUT /api/tasks/:taskDbId/project，規格 §5.2）', () => {
   let taskDbId;
 

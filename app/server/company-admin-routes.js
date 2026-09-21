@@ -74,6 +74,9 @@ function registerRoutes(app) {
     try {
       const { name, is_active, active_from, active_until, features } = req.body || {};
       // COALESCE 讓「沒帶的欄位不動」；features 要能被改成 {}，所以用「有沒有這個 key」判斷而不是 truthy。
+      // ⚠ features 是整包取代，不是逐鍵合併：帶 {odoo_sync:true} 會把沒一起帶的 exam 關掉
+      // （normalizeFeatures 只留 input 裡出現過的 key）。這是刻意的契約，不是漏合併——
+      // 前端表單必須每次送出全部開關的現況，不能只送「這次改動的那一個」。
       const featuresArg = ('features' in (req.body || {})) ? JSON.stringify(normalizeFeatures(features)) : null;
       const { rows } = await query(
         `UPDATE companies SET
