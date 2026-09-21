@@ -82,14 +82,10 @@ function createApp() {
   // 未核准閘門：擋「approved=false」的帳號碰工作台 API。
   // 2026-09-21（規格 §8 P3，Task 8）：自助註冊已關閉，approved=false 現在只剩一種意思——
   // 被公司管理員收回存取權，不會再有「剛註冊、待審核」的帳號。下面白名單原本是為了讓
-  // 自助註冊拿到的 register token 能先跑 /auth、/settings 完成設定精靈，這個情境已經不存在。
-  // 但這道白名單本身**不是死碼**：它對 auth/setup/settings/system config 這幾個前綴一律放行，
-  // 讓這類路徑改由各自掛的 verifyToken（若有）在更深層處理 approved=false；非白名單路徑則仍
-  // 由這裡直接擋。全站路由掛 verifyToken 的比例不一致（實測部分路由檔如
-  // ai-task-routes.js／teams-routes.js／port-pool-routes.js／enterprise-routes.js／
-  // deploy-routes.js／ai-platform-routes.js／company-admin-routes.js 在路由這一行看不到
-  // verifyToken），無法證明拿掉這道閘門不會漏掉某些路由的 approved=false 檢查，故機制保留，
-  // 只更正這段說明——不要再誤以為它是在服務「待審帳號先設定憑證」這件事。
+  // 自助註冊拿到的 register token 能先跑 /auth、/settings 完成設定精靈，這個情境已經不存在，
+  // 但這個區塊本身**不是死碼、不能刪**：它註冊在所有 registerXRoutes(app) 之前，Express
+  // 依註冊順序執行，對非白名單路徑（如 /tasks）它是唯一先於各路由自己 verifyToken 檢查、
+  // 會直接 403 短路的機制——拿掉就等於拿掉那些路徑前面唯一的守衛。
   // 無 token／壞 token 不在此擋（交各路由 verifyToken 回 401），只認得出、且未核准的才 403。
   {
     const jwt = require('jsonwebtoken');
