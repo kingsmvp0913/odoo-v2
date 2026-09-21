@@ -612,6 +612,13 @@ function registerRoutes(app) {
   // requiresAdmin，但這支後端端點本來就對所有登入者開放（規格 §5.5 沒列到，逐項
   // 核實才發現）。403 而非 404：這個人看得到任務本人（是他自己的），只是不能看
   // 執行歷程——屬於「看得到但不能做這個動作」。
+  //
+  // 已知且接受的退化（裁決 P3B-5，不修）：舊版前端 views/TaskDetail.js 有一個
+  // 一律顯示、不分角色的「即時歷程記錄」面板會打這支端點，它的錯誤處理是
+  // `catch { /* best-effort */ }`——403 會被靜靜吞掉，畫面退化成「尚無執行紀錄」，
+  // 跟這張任務真的沒有紀錄長得一模一樣。舊版只走 `?ui=legacy`、本計畫明講不維護，
+  // 所以不修；但如果哪天舊版又要維護，那個面板需要比照新版加上角色判斷。
+  // （views/Terminal.js 同樣打這支端點，但它的路由早已是管理員限定，不受影響。）
   app.get('/api/tasks/:id/events', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id');
