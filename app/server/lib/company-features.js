@@ -12,13 +12,13 @@ const FEATURES = {
   exam: { key: 'exam', label: '考試系統', defaultForCustomer: false },
 };
 
-// 只留認得的 key、值強制成布林。寫進 DB 之前一定要過這一關——
-// JSONB 沒有型別保護，不過濾的話前端傳什麼就存什麼，下次讀出來判斷會歪掉。
+// 只留認得的 key；只有布林 true 或字串 'true' 算開啟，其餘一律關閉。
+// 對一道閘門來說，形狀不對時必須落在「關」——落在「開」的失敗沒有任何徵狀。
 function normalizeFeatures(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
   const out = {};
   for (const key of Object.keys(FEATURES)) {
-    if (key in input) out[key] = Boolean(input[key]);
+    if (key in input) out[key] = input[key] === true || input[key] === 'true';
   }
   return out;
 }

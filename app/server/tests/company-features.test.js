@@ -74,8 +74,16 @@ describe('companyHasFeature', () => {
 describe('normalizeFeatures', () => {
   const { normalizeFeatures } = require('../lib/company-features');
 
-  test('只留認得的 key，值強制成布林', () => {
-    expect(normalizeFeatures({ exam: 'yes', bogus: true })).toEqual({ exam: true });
+  test('只留認得的 key（打錯字的欄位不該被存下來）', () => {
+    expect(normalizeFeatures({ exam: true, bogus: true })).toEqual({ exam: true });
+  });
+  test('字串 true 算開啟（表單與 query string 會把布林印成字串）', () => {
+    expect(normalizeFeatures({ exam: 'true' })).toEqual({ exam: true });
+  });
+  test('其餘一律關閉——字串 false 如果被當成 truthy，功能會被悄悄打開而且沒有任何徵狀', () => {
+    expect(normalizeFeatures({ exam: 'false' })).toEqual({ exam: false });
+    expect(normalizeFeatures({ exam: 'yes' })).toEqual({ exam: false });
+    expect(normalizeFeatures({ exam: 1 })).toEqual({ exam: false });
   });
   test('null／非物件 → 空物件', () => {
     expect(normalizeFeatures(null)).toEqual({});
