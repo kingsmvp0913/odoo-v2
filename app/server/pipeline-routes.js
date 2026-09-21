@@ -348,7 +348,7 @@ function registerRoutes(app) {
       }
       // 條件更新防雙擊：檢查到更新之間狀態被改（另一請求已完成）就不動作
       await query(
-        "UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = $1 AND status = 'cs_reply_pending'",
+        "UPDATE tasks SET status = 'done', done_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'cs_reply_pending'",
         [req.params.id]
       );
       res.json({ ok: true });

@@ -17,6 +17,60 @@ const typesFor = (stage) => STAGE_AGENT_TYPES[stage] || [stage];
 // 不標註的話健檢會把它讀成空轉。
 const MULTI_GATE_STAGES = new Set(['respec']);
 
+// 警語只留一份：per-agent 深診的 repeat_calls 與起手包的 per_stage 讀的是同一件事（次數），
+// 原本只有深診掛了這句。健檢每輪真正先讀的是起手包，於是程式碼裡明文警告過的誤讀照樣重現
+// （respec 的 repeat_avg 8.5 被讀成整關空轉）。兩條路徑共用同一段文字，不得各寫各的。
+function multiGateNote(stage) {
+  if (!MULTI_GATE_STAGES.has(stage)) return null;
+  return `此 stage 涵蓋多個不同閘門的 agent（${typesFor(stage).join('／')} 之外還有同 stage 的兄弟關卡），次數含跨閘門呼叫，不等於本關重跑`;
+}
+
+// 卡住的任務：停在「該由系統／AI 推進」的狀態卻很久沒動靜。起手包原本完全沒有這個區塊，健檢只能
+// 自己拼 SQL，上一輪寫成 `status LIKE '%_running' AND updated_at > 24h`——漏了 is_hidden 與
+// is_paused，把兩張使用者手動封存的任務（封存按鈕會設 is_hidden=true，見 tasks-routes.js）報成
+// 「靜默消失 30 天與 42 天」。runner.js 的派工查詢本來就帶 `is_paused = false AND is_hidden = false`，
+// 不派它們是正確行為，不是故障。
+const STUCK_HOURS = 24;
+const STUCK_LIMIT = 10;
+
+// 狀態白名單直接取 runner 派工用的同一份 RUNNABLE_STATUSES，不自己抄一份：抄本不會跟著新增的關卡
+// 更新，而漏掉一關的症狀就是「那一關卡住的任務永遠不出現在起手包裡」，靜默且沒有任何測試會紅。
+async function buildStuckTasks(nowMs) {
+  const { RUNNABLE_STATUSES } = require('../../public/js/status-labels.js');
+  const ph = RUNNABLE_STATUSES.map((_, i) => `$${i + 1}`).join(',');
+  const { rows } = await query(
+    `SELECT id, task_id, title, status, is_hidden, is_paused, updated_at
+       FROM tasks WHERE status IN (${ph}) ORDER BY id`, RUNNABLE_STATUSES);
+  // 年齡與 is_hidden／is_paused 一律在 JS 濾，不寫進 SQL：pg-mem（測試用）對有索引欄位的
+  // 「等值＋比較」組合會靜默回空集合（rules/testing #15），而這個區塊靜默變空，跟「真的沒有卡住
+  // 的任務」在輸出上長得一模一樣——正是這次要修掉的那種假陰性。
+  const stalled = rows.filter(r => nowMs - new Date(r.updated_at).getTime() >= STUCK_HOURS * 3600000);
+  const active = stalled.filter(r => !r.is_hidden && !r.is_paused);
+  const out = {
+    threshold_hours: STUCK_HOURS,
+    // 篩選條件寫進輸出：健檢看得到口徑才不會覺得需要自己再下一次 SQL
+    filter: '與 runner.js 的派工查詢同源：status ∈ RUNNABLE_STATUSES 且 is_hidden = false 且 is_paused = false',
+    count: active.length,
+    // 被排除的張數照報，不靜默吃掉：它們確實停在執行中狀態很久，只是「不派工」是正確行為
+    excluded: {
+      hidden: stalled.filter(r => r.is_hidden).length,
+      paused: stalled.filter(r => !r.is_hidden && r.is_paused).length
+    },
+    rows: active
+      .map(r => ({
+        id: r.id, task_id: r.task_id, title: r.title, status: r.status,
+        stalled_hours: Math.round(((nowMs - new Date(r.updated_at).getTime()) / 3600000) * 10) / 10
+      }))
+      .sort((a, b) => b.stalled_hours - a.stalled_hours)
+      .slice(0, STUCK_LIMIT)
+  };
+  if (out.excluded.hidden || out.excluded.paused) {
+    out.excluded_note = '這些是使用者手動封存（is_hidden）或暫停（is_paused）的任務，派工查詢本來就排除它們，'
+      + '不派是正確行為——不得報成「任務靜默消失」或「卡住」。';
+  }
+  return out;
+}
+
 // 百分位在 JS 端算，不用 SQL 的 percentile_cont：測試跑 pg-mem，聚合函式支援度不齊，
 // 而本檔既有的 avg／max 也都是撈原始列在 JS 聚合，維持一致。
 // nearest-rank（ceil(p×n)-1），不用 floor((n-1)×p)：後者在小樣本下會把尾巴切掉——
@@ -27,18 +81,49 @@ function pct(sorted, p) {
   return sorted[i];
 }
 
-// 任務 wall-clock：完成時刻優先取 `done_at`（token-report 也以它為準），缺才退回 updated_at
-// ——後者隨任何一次狀態變更就跳，對本欄上線前的舊列是唯一可用的近似值。**只算 done**：
-// 進行中的任務 updated_at 是「最後一次動」不是完成，混進來數字就沒有意義。
+// 任務 wall-clock：完成時刻取 `done_at`（token-report 也以它為準），缺則退回 `lastCallAt`
+// ——該任務最後一次 agent 呼叫的時間（見 lastCallMap）。**不得退回 updated_at**：它的語意是
+// 「最後一次被改」，任何外部批次（eService 同步、封存 cron）碰一下就會把它刷成現在，於是一張
+// 窗前早就完成的舊任務會被當成「建立 → 被 touch」的超長耗時，p90 整個誇大（實測 51.1 小時）。
+// 兩者皆無的任務沒有可信的完成時刻，直接排除，不猜——`done_tasks` 回的就是排除後真正進樣本的
+// 張數，樣本掉到剩一兩張時讀 p90 要自己打折。
+// **只算 done**：進行中的任務沒有完成時刻，混進來數字就沒有意義。
 // 用 p50/p90 不用 avg：一兩張卡三天的任務會把平均整個洗掉，而那正是最該被看見的分佈尾巴。
-function wallClock(rows) {
-  const hrs = rows
-    .filter(r => r.status === 'done' && r.created_at && (r.done_at || r.updated_at))
-    .map(r => (new Date(r.done_at || r.updated_at) - new Date(r.created_at)) / 3600000)
-    .filter(h => h >= 0)
-    .sort((a, b) => a - b);
+function wallClock(rows, lastCallAt = null) {
+  const hrs = [];
+  for (const r of rows) {
+    if (r.status !== 'done' || !r.created_at) continue;
+    const at = completionAt(r, lastCallAt);
+    if (!at) continue;
+    const h = (new Date(at) - new Date(r.created_at)) / 3600000;
+    if (h >= 0) hrs.push(h);
+  }
+  hrs.sort((a, b) => a - b);
   const r1 = (n) => Math.round(n * 10) / 10;
   return { done_tasks: hrs.length, p50_hours: r1(pct(hrs, 0.5)), p90_hours: r1(pct(hrs, 0.9)) };
+}
+
+// 一張任務的完成時刻，查不到就回 null（不猜）。選窗與算耗時共用同一個定義，免得兩邊各走各的。
+function completionAt(row, lastCallAt) {
+  if (row.done_at) return row.done_at;
+  return (lastCallAt && row.task_id) ? (lastCallAt.get(row.task_id) || null) : null;
+}
+
+// 完成時刻的第二來源：每張任務最後一次 agent 呼叫的時間。
+// token_usage 是 append-only 的計費列（保留 180 天，遠長於健檢視窗），外部批次碰不到它，
+// 所以它不會像 updated_at 那樣被刷新。會比真正的完成時刻早一些（merge／deploy／E2E 那幾關
+// 沒有 agent 呼叫），也就是只會低估、不會把耗時誇大——這正是本指標需要的方向。
+async function lastCallMap(taskIds) {
+  if (!taskIds.length) return new Map();
+  const ph = taskIds.map((_, i) => `$${i + 1}`).join(',');
+  const { rows } = await query(
+    `SELECT task_id, recorded_at FROM token_usage WHERE task_id IN (${ph})`, taskIds);
+  const m = new Map();
+  for (const r of rows) {
+    const cur = m.get(r.task_id);
+    if (!cur || new Date(r.recorded_at) > new Date(cur)) m.set(r.task_id, r.recorded_at);
+  }
+  return m;
 }
 
 // 狀態轉移序列。資料源刻意用 token_usage 而非 task_events：後者是整段終端串流（一輪 coding
@@ -162,13 +247,11 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
     avg: ns.length ? Math.round((ns.reduce((a, b) => a + b, 0) / ns.length) * 100) / 100 : 0,
     tasks_over_2: ns.filter(n => n > 2).length,
     // 同一個 stage 底下有多個不同閘門的 agent 時，次數不等於「這一關重跑」，要講明白
-    ...(MULTI_GATE_STAGES.has(stage)
-      ? { note: `此 stage 涵蓋多個不同閘門的 agent（${types.join('／')} 之外還有同 stage 的兄弟關卡），次數含跨閘門呼叫，不等於本關重跑` }
-      : {})
+    ...(multiGateNote(stage) ? { note: multiGateNote(stage) } : {})
   };
 
   const { rows: taskRows } = await query(
-    `SELECT DISTINCT t.id, t.status, t.reentry_count, t.blocker_content, t.created_at, t.updated_at, t.done_at
+    `SELECT DISTINCT t.id, t.task_id, t.status, t.reentry_count, t.blocker_content, t.created_at, t.updated_at, t.done_at
        FROM tasks t
       WHERE t.task_id IN (
         SELECT DISTINCT task_id FROM token_usage
@@ -178,6 +261,11 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
   const total = taskRows.length;
   const stopped = taskRows.filter(r => r.status === 'stopped').length;
   const re = taskRows.map(r => r.reentry_count || 0);
+  // 只對「已完成卻沒有 done_at」的那幾張補查第二來源（客服結案這條路徑在 finding 176 之前
+  // 一律不寫 done_at，既有列也沒回填）；有 done_at 的不必查。
+  const lastAt = await lastCallMap([...new Set(
+    taskRows.filter(r => r.status === 'done' && !r.done_at && r.task_id).map(r => r.task_id)
+  )]);
   const tasks = {
     total,
     stopped_rate: total ? Math.round((stopped / total) * 100) / 100 : 0,
@@ -187,7 +275,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
       avg: re.length ? Math.round((re.reduce((a, b) => a + b, 0) / re.length) * 100) / 100 : 0
     },
     blocker_samples: taskRows.map(r => r.blocker_content).filter(Boolean).slice(0, SAMPLE).map(s => String(s).slice(0, 500)),
-    wall_clock: wallClock(taskRows)
+    wall_clock: wallClock(taskRows, lastAt)
   };
 
   // 抽樣本挑「在這關被呼叫最多次」的幾張：序列是要拿來看震盪的，一次就過的任務序列沒有資訊量。
@@ -410,19 +498,44 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
     };
     // 分母來自對話而非任務時明講，免得「tasks:0 卻有 repeat_avg」自己又變成另一種誤導
     if (!tasks && chats) entry.chats = chats;
+    // per_stage 的 key 就是 token_usage.agent_type，多閘門的 stage（respec 的 clarify-chat／
+    // spec-review／respec-patch 都記成 respec）在這裡的 repeat_avg 含跨閘門呼叫，不是本關重跑。
+    // 深診路徑早就標了這句，起手包沒標＝健檢先讀到的那份反而沒有警語。
+    const mgNote = multiGateNote(k);
+    if (mgNote) entry.note = mgNote;
     return [k, entry];
   }));
 
   // 窗內有動作的任務：帶關卡序列，讓 agent 一眼看得到震盪形狀（coding→qa→coding→qa）。
   // 已完成的任務用 `done_at` 選窗，不用 updated_at——updated_at 會被「不代表任務有進度」的系統維護
-  // 動作刷新（cron 的自動封存曾如此，已移除，但被刷過的舊時間戳仍留在 DB），靠它選窗會把三十天前
-  // 就結案的任務算成「本輪發生的事」，下方 wall_clock 的 p90 因此誇大。與第 36-37 行 wall-clock
-  // 的「done_at 優先」算法對齊。進行中的任務（尚未 done 或 done_at 為 NULL）維持 updated_at，不變。
+  // 動作刷新（cron 的自動封存曾如此，已移除；eService 同步等外部批次仍會碰，被刷過的舊時間戳也還
+  // 留在 DB），靠它選窗會把三十天前就結案的任務算成「本輪發生的事」，下方 wall_clock 的 p90 因此誇大。
+  // ⚠ 這個 CASE 只是**候選篩**，不是最終判定：done 卻沒有 done_at 的任務（客服結案這條路徑在
+  // finding 176 之前一律不寫 done_at，既有列也沒回填）會掉進 ELSE 分支，又拿 updated_at 當完成
+  // 時刻——原本要擋的東西整批從這個缺口回來。這些列在下面用 completionAt 重新判一次，SQL 這邊
+  // 留寬是因為 pg-mem 不支援相關子查詢（rules/testing #14），查不了「最後一次 agent 呼叫」。
+  // 進行中的任務（尚未 done 或 done_at 為 NULL）維持 updated_at，不變。
   const WINDOW_AT = "(CASE WHEN status = 'done' AND done_at IS NOT NULL THEN done_at ELSE updated_at END)";
-  const { rows: tasks } = await query(
+  const { rows: candidates } = await query(
     `SELECT id, task_id, title, status, reentry_count, blocker_content, created_at, updated_at, done_at
        FROM tasks WHERE ${WINDOW_AT} >= $1${upTo(WINDOW_AT)} ORDER BY id`, args
   );
+  // done 卻沒有 done_at 的候選：改用 token_usage 的最後一次 agent 呼叫當完成時刻重判進出窗。
+  // 落在窗外的（被外部批次 touch 才混進來的窗前舊任務）剔除；連一次呼叫都查不到的也剔除——
+  // 沒有可信完成時刻就不該算成「本輪完成」，但要記數回報，不能靜默消失。
+  const lastAt = await lastCallMap([...new Set(
+    candidates.filter(t => t.status === 'done' && !t.done_at && t.task_id).map(t => t.task_id)
+  )]);
+  const sinceMs = new Date(since).getTime();
+  const untilMs = until ? new Date(until).getTime() : Infinity;
+  let noCompletionTs = 0;
+  const tasks = candidates.filter(t => {
+    if (t.status !== 'done' || t.done_at) return true;      // SQL 已用 done_at／updated_at 判過
+    const at = completionAt(t, lastAt);
+    if (!at) { noCompletionTs += 1; return false; }
+    const ms = new Date(at).getTime();
+    return ms >= sinceMs && ms < untilMs;
+  });
   const seqOf = new Map();
   for (const u of usage) {
     if (!u.task_id) continue;
@@ -450,9 +563,15 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
       agent_calls: usage.length,
       tasks_touched: tasks.length,
       cost_usd: Math.round((Number(cost.cost_usd) || 0) * 100) / 100,
-      wall_clock: wallClock(tasks)
+      wall_clock: wallClock(tasks, lastAt),
+      // done 卻查不到任何可信完成時刻、因此不計入本輪的張數。不回報的話這些張會靜默從視窗消失，
+      // 而「樣本變少」跟「本來就少」在數字上長得一模一樣。
+      tasks_no_completion_ts: noCompletionTs
     },
     per_stage,
+    // 現況快照，不隨視窗上下界移動（「現在有沒有卡住」問的就是現在；趨勢比對只取 volume／per_stage，
+    // 不會把這塊當成上一期的數字用）
+    stuck_tasks: await buildStuckTasks(Date.now()),
     chat_quality,
     tasks: task_rows,
     rejections: rej.map(r => ({ task_id: r.task_id, source: r.source, category: r.category, description: r.description }))

@@ -4,6 +4,7 @@ const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
 const { recordTroubleshooting, extractMemoryBlock } = require('./troubleshooting');
 const { extractDriftBlock, enqueueWikiDrift } = require('./wiki-drift');
+const { extractTaskDraftBlock } = require('./chat-to-task');
 const { query } = require('../db');
 const { coreSourceGuidance } = require('../lib/odoo-core-src');
 const path = require('path');
@@ -17,6 +18,14 @@ const CHAT_INTERRUPTED_MSG = '⚠️ 這則回覆在產生途中中斷了（可�
 // 使用者自己按下停止時補的訊息。和上面那則分開：措辭指向「伺服器異常」會讓人以為系統壞了，
 // 而這裡是他自己取消的。
 const CHAT_STOPPED_MSG = '⏸ 你取消了這則回覆。訊息已保留，重新發送即可再跑一次。';
+
+// agent 根本還沒起跑就丟出的確定性設定錯誤（`agentSetupError`，例：專案的 repo 還沒 clone 完成，
+// 見 lib/agent-mounts.js 的 setupError）。這類錯誤重送一百次都是同一個結果，套 CHAT_INTERRUPTED_MSG
+// 會一次做錯三件事：誤指成伺服器重啟、蓋掉真因、再給一個保證無效的「請重新發送」。
+function chatSetupErrorMsg(err) {
+  return `⚠️ 這則回覆還沒開始跑就停住了：${err.message}\n\n` +
+    `這是設定還沒就緒，不是連線異常——重新發送會得到同樣的結果。${err.userAction || '請先排除上述狀況再發送一次。'}`;
+}
 
 // Office 二進位檔的開啟方式。Read 工具開 .xlsx／.doc 這類檔一律失敗，而失敗之後 agent 照樣會生出
 // 一段話——使用者完全看不出它其實沒讀到內容，所以必須明講怎麼開。.doc 那條刻意寫成「不要猜」：
@@ -187,7 +196,9 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
       await logFailedUsage({ projectId, chatId }, userId, 'chat', err);
       // 中斷也要讓 AI 方留一則訊息（role='ai' 自動計入未讀）：否則使用者的提問就這樣懸著、
       // 既無回覆也無任何線索。process 直接崩潰的情形由啟動時 recoverInterruptedChats 兜底。
-      const stopMsg = signal && signal.aborted ? CHAT_STOPPED_MSG : CHAT_INTERRUPTED_MSG;
+      const stopMsg = signal && signal.aborted ? CHAT_STOPPED_MSG
+        : (err && err.agentSetupError) ? chatSetupErrorMsg(err)
+          : CHAT_INTERRUPTED_MSG;
       const { rows: [stopRow] } = await query(
         'INSERT INTO project_chat_messages (chat_id, role, content) VALUES ($1, $2, $3) RETURNING id',
         [chatId, 'ai', stopMsg]
@@ -205,9 +216,11 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
     // 兩個選用側通道，剝掉再顯示、內容各自旁路處理，解析或寫入失敗都不得影響對話回覆本身（Rule 12）：
     //  <memory>    釐清出可留存的結論 → 寫回 wiki 疑難排解區
     //  <wiki-drift> 讀碼發現某 wiki 頁與程式碼矛盾（頁錯、碼對）→ 入漂移佇列供健檢彙整（不自動改文件）
+    //  <open-task>  使用者要求開任務 → 草稿隨本輪回應交給前端，由它把建立任務視窗打開（不建任務）
     const mem = extractMemoryBlock(chatResult.text);
     const drift = extractDriftBlock(mem.cleaned);
-    const reply = drift.cleaned || '（無回覆）';
+    const task = extractTaskDraftBlock(drift.cleaned);
+    const reply = task.cleaned || '（無回覆）';
     if (mem.entry) {
       try { await recordTroubleshooting(projectId, mem.entry); }
       catch (err) { console.error(`[CHAT-AGENT] troubleshooting 寫回失敗 chat ${chatId}:`, err.message); }
@@ -225,10 +238,10 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
     const filesNote = await attachAiFiles(chatId, aiRow && aiRow.id);
     if (filesNote) {
       await query('UPDATE project_chat_messages SET content = $2 WHERE id = $1', [aiRow.id, reply + filesNote]);
-      return reply + filesNote;
+      return { reply: reply + filesNote, taskDraft: task.draft };
     }
 
-    return reply;
+    return { reply, taskDraft: task.draft };
   } finally {
     await query('UPDATE project_chats SET reply_pending = false WHERE id = $1', [chatId]);
   }

@@ -110,7 +110,11 @@
         // 取捨）。改字（含把全形冒號打成半形）會讓這個狀態靜默消失，那支測試會紅。
         // 「改碼那關讀完程式碼判定不該做」也走這條（no_change → retireToHuman），
         // 所以拿掉翻譯關之後這仍是機器退場的唯一出口。
-        if (note.startsWith('自動退場：')) {
+        // ⚠ 條件要連 status 一起看：retireToHuman 只把 status 寫回 'new'（nightly-fix.js:469），
+        // 人後來核准／駁回／標完成時**不會清掉 triage_note**（feedback-routes.js 的 PATCH 只寫
+        // status／verdict_note）。少了這個條件，已經修完合併的那幾筆會永遠掛著「待人工」——
+        // 2026-09-21 實際踩到：#37／#38 早已 done，列表仍顯示自動退場待人工，看起來像沒人處理。
+        if (r.status === 'new' && note.startsWith('自動退場：')) {
           return { label: '自動退場，待人工', pill: 'pill-warn', hint: note };
         }
         // 「今晚連跑都沒跑到」與「跑了沒成功」是兩件事，狀態欄不能混為一談：前者還在隊伍裡、

@@ -95,7 +95,7 @@ test('回覆含 <memory> → 結論寫回 wiki 疑難排解、且存檔的回覆
     return Promise.resolve({ rows: [] });
   });
 
-  const reply = await chatReply('1', '2', '金額為何算錯', 99);
+  const { reply } = await chatReply('1', '2', '金額為何算錯', 99);
 
   // 寫回：ts- 前綴、掛容器、upsert
   const upsert = mockQuery.mock.calls.find(c => /INSERT INTO wiki_pages[\s\S]*DO UPDATE/.test(c[0]));
@@ -123,7 +123,7 @@ test('回覆含 <wiki-drift> → 入漂移佇列、回覆剝除側通道（不�
     return Promise.resolve({ rows: [] });
   });
 
-  const reply = await chatReply('1', '2', '這功能頁對嗎', 99);
+  const { reply } = await chatReply('1', '2', '這功能頁對嗎', 99);
 
   const enqueue = mockQuery.mock.calls.find(c => /INSERT INTO wiki_drift/.test(c[0]));
   expect(enqueue).toBeTruthy();
@@ -433,4 +433,70 @@ test('附圖 → message_id 回填到剛插入的那則使用者訊息（不回�
   await chatReply('1', '2', 'x', 99, IMG);
 
   expect(binds).toEqual([[5, 77]]);
+});
+
+// 意圖（Rule 9）：使用者在對話裡說「這個開一張任務」時，AI 只會用文字回「請你自己去按建立任務」——
+// 它在容器裡碰不到瀏覽器。這個側通道就是它唯一能把「請幫我把視窗打開」講給前端聽的路。
+// 三個不變量比照既有兩個側通道（<memory>／<wiki-drift>）：選用、壞掉靜默略過、不進使用者看到的正文。
+// 最後一項尤其要釘死——那段 JSON 漏進正文，使用者看到的是一坨機器格式，而且沒有任何東西會報錯。
+test('回覆含 <open-task> → 回傳任務草稿、正文剝除側通道', async () => {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '好，這個要改程式。\n<open-task>{"title":"修正備份保留天數","content":"程式碼寫 3 天，正式機實際是 14 天。"}</open-task>',
+    usage: {}, durationMs: 1
+  });
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+
+  const out = await chatReply('1', '2', '這個開一張任務', 99);
+
+  expect(out.taskDraft).toEqual({ title: '修正備份保留天數', content: '程式碼寫 3 天，正式機實際是 14 天。' });
+  expect(out.reply).toBe('好，這個要改程式。');
+  expect(out.reply).not.toContain('<open-task>');
+  // 存進 DB 的那則同樣不能帶側通道（重讀對話時才不會冒出機器格式）
+  const replyInsert = mockQuery.mock.calls.find(c => /INSERT INTO project_chat_messages/.test(c[0]) && c[1] && c[1][1] === 'ai');
+  expect(replyInsert[1][2]).toBe('好，這個要改程式。');
+});
+
+test('<open-task> 內容壞掉 → 不給草稿，回覆本身照常送出', async () => {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '這個要改程式。\n<open-task>{"title":沒收尾的爛 JSON</open-task>',
+    usage: {}, durationMs: 1
+  });
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+
+  const out = await chatReply('1', '2', '這個開一張任務', 99);
+
+  expect(out.taskDraft).toBeNull();
+  expect(out.reply).toBe('這個要改程式。');
+  expect(out.reply).not.toContain('open-task');
+});
+
+test('標題或內容缺一 → 視同沒有草稿（半套視窗比不開更糟）', async () => {
+  mockRunClaude.mockResolvedValueOnce({
+    text: '好的。\n<open-task>{"title":"只有標題"}</open-task>',
+    usage: {}, durationMs: 1
+  });
+  mockQuery.mockImplementation((sql) => {
+    if (/project_repos/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM wiki_pages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM project_chat_messages/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM projects/.test(sql)) return Promise.resolve({ rows: [{ name: '鴻久' }] });
+    return Promise.resolve({ rows: [] });
+  });
+
+  const out = await chatReply('1', '2', '開任務', 99);
+
+  expect(out.taskDraft).toBeNull();
+  expect(out.reply).toBe('好的。');
 });

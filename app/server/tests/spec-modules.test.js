@@ -46,3 +46,44 @@ describe('primaryModule', () => {
     expect(primaryModule('module: [unclosed')).toBe('');
   });
 });
+
+// 「不動任何模組」是 2026-09-21 才有出口的第三種情形（task 282：改的是 repo 根目錄的主機端備份
+// 腳本與 markdown，全庫第一張不含任何 addon 的任務）。它與「忘了填」在資料上長得一樣，所以只認
+// 明確寫出的保留字 none；留空與解析失敗仍歸「不知道」，部署維持既有的 -u all 降級行為。
+describe('isNoModule：明確宣告「不動任何模組」', () => {
+  const { isNoModule, NO_MODULE } = require('../pipeline/spec-modules');
+
+  test('寫 none → true', () => {
+    expect(isNoModule('module: none')).toBe(true);
+    expect(isNoModule('module: "none"')).toBe(true);
+  });
+
+  test('大小寫與前後空白不影響判定（模型輸出的大小寫本來就不穩定）', () => {
+    expect(isNoModule('module: "  None  "')).toBe(true);
+    expect(isNoModule('module: NONE')).toBe(true);
+  });
+
+  test('留空 → false：骨架本來就長 module: ""，跟「忘了填」分不開，不能當成宣告', () => {
+    expect(isNoModule('module: ""')).toBe(false);
+    expect(isNoModule('summary: 沒寫模組')).toBe(false);
+  });
+
+  test('YAML 壞掉 → false，不可拋例外（那是「不知道」，不是「沒有」）', () => {
+    expect(isNoModule('module: [unclosed')).toBe(false);
+    expect(isNoModule(null)).toBe(false);
+  });
+
+  test('真的有模組 → false', () => {
+    expect(isNoModule('module: idx_project')).toBe(false);
+    expect(isNoModule('module: none_of_your_business')).toBe(false);  // 前綴相同但不是保留字
+  });
+
+  test('none 不得被當成模組名送去升級（-u none 會讓 Odoo 報找不到模組）', () => {
+    expect(specModules('module: none')).toEqual([]);
+    expect(primaryModule('module: none')).toBe('');
+  });
+
+  test('保留字本體對外公開，呼叫端與 prompt 不各寫一份字面值', () => {
+    expect(NO_MODULE).toBe('none');
+  });
+});

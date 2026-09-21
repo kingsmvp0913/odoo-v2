@@ -285,6 +285,19 @@
         let request;
         if (files.length) { const form = new FormData(); form.append("content", content); files.forEach((file) => form.append("files", file)); request = Api.postForm(`projects/${this.$route.params.id}/chats/${chatId}/messages`, form); }
         else request = Api.post(`projects/${this.$route.params.id}/chats/${chatId}/messages`, { content });
+        // AI 這輪吐了 <open-task> 就把建立任務視窗打開，草稿用它自己寫的那份，不再呼叫 draft-task 重寫一次：
+        // 使用者剛在回覆裡讀到「標題叫 X」，視窗跳出來卻是另一份文字會被當成系統出錯。代價是這條路沒有圖片
+        // （挑圖只有 draft-task 會做），要帶圖仍走 ＋ 按鈕。第二個參數吃掉 rejection：錯誤由下面那條既有的
+        // catch 負責，這條鏈沒人接的話會變成 unhandled rejection。
+        request.then((res) => {
+          if (!res || !res.taskDraft) return;
+          if (!this.activeChat || this.activeChat.id !== chatId) return;
+          this.taskModalTrigger = null;
+          this.taskDraft = { title: res.taskDraft.title || "", original_text: res.taskDraft.content || "", attachments: [] };
+          this.taskError = "";
+          this.showTaskModal = true;
+          this.$nextTick(() => this.showTaskModal && this.$refs.chatTaskTitle?.focus());
+        }, () => {});
         request.catch((error) => {
           if (!this.activeChat || this.activeChat.id !== chatId) return;
           this.newInput = content; this.pendingHint = false; this.replyPending = false; this.stopReplyPolling();

@@ -70,7 +70,7 @@ curl -H "X-AIDEV-AI-TOKEN: $AIDEV_AI_TOKEN" "$AIDEV_AI_BASE/ai/tasks/spec?projec
 
 【analysis.yaml 格式】
 case_id: "{{task_id}}"
-module: ""         # 這張任務會動到的**所有**模組，跨模組用逗號分隔（見下方【module 撰寫規則】）
+module: ""         # 這張任務會動到的**所有**模組，跨模組用逗號分隔；完全不動模組填 none（見下方【module 撰寫規則】）
 odoo_version: "{{odoo_version}}"
 project_name: "{{project_name}}"
 execution_mode: "MODE_A"
@@ -95,6 +95,10 @@ clarification_channel:
 - 漏列的模組不會被升級：它的 view 改動與 migration 完全不會執行，而部署照樣顯示成功。
   真出錯時訊息還會指向「有被升級的那個模組」，完全看不出真因（task 195 因此連兩輪部署失敗）。
 - 只動一個模組就照常填一個，不要為了保險多列無關模組（每個都會被 -i/-u，拖長升級時間）。
+- **完全不動任何模組時填 `none`，不准留空。** 這張任務只改 repo 根目錄的主機端腳本、shell script、
+  markdown 文件這類不屬於任何 addon 的檔案時，就是這種情形。留空與「忘了填」在資料上一模一樣，
+  平台一律當成你忘了填而中止整關（實測 task 282 因此卡住三天）；填了 `none` 部署關會跳過升級。
+  只要有任何一個 addon 目錄下的檔案被改到，就不算 `none`——照常列出那些模組。
 
 【summary 撰寫規則】
 - 讀者是**不懂程式的操作者**。他讀完要能判斷「這張任務有沒有照我要的做」，不需要知道你怎麼做到。

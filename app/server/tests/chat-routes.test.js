@@ -131,7 +131,7 @@ test('GET messages → empty for new chat', async () => {
 });
 
 test('POST messages → calls chatReply and returns reply', async () => {
-  mockChatReply.mockResolvedValueOnce('AI 的回覆');
+  mockChatReply.mockResolvedValueOnce({ reply: 'AI 的回覆', taskDraft: null });
   const { rows: [chat] } = await dbModule.query(
     "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '問答', $2) RETURNING id",
     [projectId, userId]
@@ -146,8 +146,36 @@ test('POST messages → calls chatReply and returns reply', async () => {
   expect(mockChatReply).toHaveBeenCalledWith(String(projectId), String(chat.id), '你好', userId, [], expect.any(AbortSignal));
 });
 
+// 意圖：AI 這輪要求開「建立任務」視窗時，草稿必須跟著這一輪的回應回到前端——它是前端唯一的訊號。
+// 掉了的話畫面上什麼也不會發生，而且前後端都不會報錯（回應仍是 200、回覆照樣顯示）。
+test('POST messages → chatReply 給了 taskDraft 就原樣回給前端', async () => {
+  mockChatReply.mockResolvedValueOnce({ reply: '好，開一張。', taskDraft: { title: '改保留天數', content: '3 改 14' } });
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '開任務', $2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
+    .set(auth()).send({ content: '這個開一張任務' });
+  expect(res.status).toBe(200);
+  expect(res.body.taskDraft).toEqual({ title: '改保留天數', content: '3 改 14' });
+});
+
+test('POST messages → 沒有 taskDraft 時回應不帶這個欄位', async () => {
+  mockChatReply.mockResolvedValueOnce({ reply: '一般回覆', taskDraft: null });
+  const { rows: [chat] } = await dbModule.query(
+    "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '一般', $2) RETURNING id",
+    [projectId, userId]
+  );
+  const res = await request(app)
+    .post(`/api/projects/${projectId}/chats/${chat.id}/messages`)
+    .set(auth()).send({ content: '隨便問' });
+  expect(res.status).toBe(200);
+  expect(res.body).not.toHaveProperty('taskDraft');
+});
+
 test('POST messages → emits chat:reply socket event to owner', async () => {
-  mockChatReply.mockResolvedValueOnce('reply');
+  mockChatReply.mockResolvedValueOnce({ reply: 'reply', taskDraft: null });
   const { rows: [chat] } = await dbModule.query(
     "INSERT INTO project_chats (project_id, title, user_id) VALUES ($1, '通知測試', $2) RETURNING id",
     [projectId, userId]

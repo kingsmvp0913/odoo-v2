@@ -1,11 +1,34 @@
 const { runAgent } = require('./agent-runner');
 const { loadAgent } = require('./agent-loader');
-const { parseAgentResult } = require('./agent-result');
+const { parseAgentResult, extractTaggedBlock } = require('./agent-result');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 const { getProjectNotes } = require('./project-notes');
 const { query } = require('../db');
 const path = require('path');
 const { uploadRoot } = require('../lib/attachments');
+
+// 從對話回覆取出選用的 <open-task> 側通道。回 { draft, cleaned }：draft 為 { title, content } 或 null；
+// cleaned 為移除該區塊後的文字。缺／解析失敗／少一半欄位＝沒有草稿，靜默略過（比照 <memory>／<wiki-drift>）。
+//
+// 為什麼要有這條路：agent 在容器裡，只吐得出文字，碰不到瀏覽器。使用者在對話裡說「這個開一張任務」時，
+// 它原本只能回「請你自己去按那顆按鈕」。這個標籤讓它把「開窗，草稿長這樣」講給前端聽。
+// 草稿文字取自 agent 這一輪自己寫的內容，而不是回頭再叫一次 draftTaskFromChat：使用者剛在回覆裡讀到
+// 「標題叫 X、內容是 Y」，視窗跳出來卻是另一份重寫的文字，會被當成系統出錯。代價是這條路不挑對話裡的
+// 圖片（挑圖仍只有 draftTaskFromChat 會做），要帶圖進任務就走 ＋ 按鈕那條原路。
+// title 與 content 缺一即作廢：只填一半的視窗使用者還是得自己補，比不開更讓人困惑。
+function extractTaskDraftBlock(text) {
+  const { inner, cleaned } = extractTaggedBlock(text, 'open-task');
+  let draft = null;
+  if (inner != null) {
+    try {
+      const o = JSON.parse(inner);
+      const title = String((o && o.title) || '').trim();
+      const content = String((o && o.content) || '').trim();
+      if (title && content) draft = { title, content };
+    } catch { /* 側通道壞掉不影響主回覆 */ }
+  }
+  return { draft, cleaned };
+}
 
 // 排障對話 → 任務草稿。摘要整串對話成 {title, original_text}，只回草稿、不建任務——
 // 前端拿去讓使用者編輯確認後才走既有 POST /api/tasks（human-in-the-loop）。
@@ -85,4 +108,4 @@ async function draftTaskFromChat(projectId, chatId, userId) {
   };
 }
 
-module.exports = { draftTaskFromChat };
+module.exports = { draftTaskFromChat, extractTaskDraftBlock };
