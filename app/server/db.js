@@ -1246,6 +1246,10 @@ async function migrate() {
     // （PUT /api/admin/users/:id 把 body 的 role COALESCE 進 UPDATE，完全沒過它）——這條不變式
     // 今天並未在任何寫入路徑被實際檢查。把它接進去是 Part 2 的工作，接上之前不要假設它在把關。
     { table: 'users', col: 'company_id', sql: 'ALTER TABLE users ADD COLUMN company_id INTEGER REFERENCES companies(id)' },
+    // 公司功能開關（規格 §5.3 考試那一列，2026-09-21 使用者裁決）：哪家公司能用哪些功能。
+    // 用 JSONB 一欄而不是一欄一個布林——功能會一直加，每加一個就改一次 schema 划不來。
+    // 預設 NULL＝什麼功能都沒開（客戶安全值）；「沒有公司」的人（平台管理員）由程式判斷為全開，不靠這個欄位。
+    { table: 'companies', col: 'features', sql: 'ALTER TABLE companies ADD COLUMN features JSONB' },
     // systemd 目標的 odoo 執行檔絕對路徑。NULL＝退回裸名 `odoo-bin`（PATH 上找得到的機器行為不變）。
     // ⚠ 慈雲那台就是 PATH 上沒有：升級指令一送出去就 `sudo: odoo-bin: command not found`、exit 1、
     // 整批回滾，而部署 log 只有那一行——看起來像客戶的模組壞了，實際上碼連被讀到都沒有。
