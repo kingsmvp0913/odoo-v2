@@ -1107,7 +1107,7 @@
 <button v-if="testMode" class="ui-next-icon-button" @click="stepPipeline" :disabled="stepping" :title="stepping?'執行中…':'推進 Pipeline'" :aria-label="stepping?'執行中':'推進 Pipeline'"><ui-next-icon name="flow"/></button>
 <button v-if="task.status!=='stopped'&&task.status!=='done'" class="ui-next-icon-button" @click="togglePause" :title="task.is_paused?'恢復任務':'暫停任務'" :aria-label="task.is_paused?'恢復任務':'暫停任務'"><ui-next-icon :name="task.is_paused?'play':'pause'"/></button>
 <button v-if="task.env_status" class="ui-next-icon-button" @click="openEnv" title="測試機" aria-label="開啟測試機"><ui-next-icon name="grid"/></button>
-<button data-tour="td-events-open" class="ui-next-icon-button" @click="openEvents" title="執行歷程" aria-label="執行歷程"><ui-next-icon name="terminal"/></button>
+<button v-if="isAdmin" data-tour="td-events-open" class="ui-next-icon-button" @click="openEvents" title="執行歷程" aria-label="執行歷程"><ui-next-icon name="terminal"/></button>
 <button v-if="isAdmin&&task.git_branch" class="ui-next-icon-button" @click="downloadCodeZip" :disabled="downloadingZip" :title="downloadingZip?'打包中…':'下載程式碼'" :aria-label="downloadingZip?'打包中':'下載程式碼'"><ui-next-icon name="download"/></button>
 <button v-if="isAdmin&&task.status==='done'&&!task.is_hidden" class="ui-next-icon-button" @click="archive" :disabled="archiving" :title="archiving?'封存中…':'封存'" :aria-label="archiving?'封存中':'封存'"><ui-next-icon name="archive"/></button>
 </div>

@@ -176,6 +176,20 @@ test('POST /api/auth/login → 未核准帳號 403 pendingApproval', async () =>
   expect(res.body.pendingApproval).toBe(true);
 });
 
+// 意圖（Task 8c fix round 1）：這一關的產出物就是這句訊息文字本身——approved=false 在這條分支
+// 上只剩「被公司管理員停用」一種意思，不能再讓使用者看到暗示「審核中、等一下就會過」的舊字。
+// 釘住文字，不然下次手滑改回舊文案，行為測試（403／pendingApproval）全綠也看不出來。
+test('POST /api/auth/login → 未核准帳號的訊息講「已停用」，不再講「審核中」', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('newbie3', $1, '新人3', 'user', false)",
+    [hash]
+  );
+  const res = await request(app).post('/api/auth/login').send({ username: 'newbie3', password: 'password123' });
+  expect(res.body.error).toBe('此帳號已停用，請聯絡貴公司的管理員');
+});
+
 // 意圖：這支原本斷言「pending token 能放行走 settings」——那是舊行為，前提是「待審核」與
 // 「已停用」是兩個要分開處理的狀態。P3-13 裁決：這個前提不再成立（正式環境零筆待審／NULL，
 // 而且全庫唯一寫入 approved=false 的路徑 auth.js:155 在同一份計畫的 Task 8 會被關掉），
@@ -205,6 +219,24 @@ test('收回存取權（approved=false）：所有路徑一律 403，包含舊�
   // 跑得更早，同一個 token 打 settings 一樣要被擋下來。
   const passed = await request(app).post('/api/settings/verify-odoo').set('Authorization', `Bearer ${pendToken}`).send({});
   expect(passed.status).toBe(403);
+});
+
+// 意圖（Task 8c fix round 1）：這一關的產出物就是這句訊息文字本身——被停用的人下一次打
+// 工作台 API（index.js 那道全域閘門）看到的字，要跟登入端點講同一件事，不能是舊的「審核中」。
+// 釘住文字，不然下次手滑改回舊文案，行為測試（403／pendingApproval）全綠也看不出來。
+test('未核准閘門：被停用帳號打工作台 API，訊息講「已停用」，不再講「審核中」', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('pend3', $1, 'P3', 'user', true)",
+    [hash]
+  );
+  const loginRes = await request(app).post('/api/auth/login').send({ username: 'pend3', password: 'password123' });
+  const pendToken = loginRes.body.token;
+  await dbModule.query("UPDATE users SET approved = false WHERE username = 'pend3'");
+
+  const blocked = await request(app).get('/api/tasks').set('Authorization', `Bearer ${pendToken}`);
+  expect(blocked.body.error).toBe('此帳號已停用，請聯絡貴公司的管理員');
 });
 
 // 意圖：已核准（admin）token 不被閘門擋。

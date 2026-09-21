@@ -44,7 +44,11 @@
 <h1>專案</h1>
 <p>管理程式庫、測試環境、對話與交付流程。</p>
 </div>
-<button v-if="!showAddForm" class="ui-next-primary" data-tour="proj-add" @click="openAddForm">新增專案</button>
+<!-- 建專案是平台管理員限定：POST /api/projects 掛 requirePlatformAdmin，一般使用者必定 403。
+     藏整顆而不是 disabled——灰掉的按鈕仍在宣告一個這個人永遠拿不到的能力；
+     在此之前他會把專案名稱、Odoo 版本、英文資料夾名整張填完，按下去才被退回。
+     條件沿用本檔既有的 isAdmin()（window.UserStore.role === "admin"），與側欄 nav 同一套判準。 -->
+<button v-if="isAdmin() && !showAddForm" class="ui-next-primary" data-tour="proj-add" @click="openAddForm">新增專案</button>
 </header>
 <div v-if="showAddForm" class="ui-next-task-modal-backdrop" @mousedown.self="closeAddForm" @keydown="onAddFormKeydown">
 <section ref="projectCreateModal" class="ui-next-task-modal ui-next-form-modal" data-tour="proj-form" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
@@ -98,7 +102,10 @@
 <article v-for="project in filteredProjects" :key="project.id" class="ui-next-project-card-clickable" role="link" tabindex="0" :aria-label="project.name" @click="go(project.id)" @keydown.enter="go(project.id)" @contextmenu.prevent="moreProjectId=project.id">
 <header class="ui-next-project-card-title">
 <button class="ui-next-project-title-open" @click="go(project.id)"><h2>{{ project.name }} <small>Odoo {{ project.odoo_version }} · {{ project.edition==='enterprise'?'企業版':'社群版' }}</small></h2></button>
-<div class="ui-next-project-more" @click.stop><button type="button" :aria-expanded="moreProjectId===project.id" :aria-label="'專案「'+project.name+'」更多操作'" @click="moreProjectId=moreProjectId===project.id?null:project.id" data-tour="proj-card-menu"><ui-next-icon name="dots"/></button><div v-if="moreProjectId===project.id" class="ui-next-project-more-menu"><button type="button" @click="openEnv(project.id);moreProjectId=null">測試區</button><button type="button" data-tour="proj-release" @click="releaseId=project.id;moreProjectId=null" :disabled="!project.repo_count">上正式</button><button type="button" @click="goTab(project.id,'repos')">REPO</button><button type="button" @click="goTab(project.id,'db')">連線設定</button><button type="button" @click="go(project.id);moreProjectId=null">專案設定</button><button type="button" @click="goTab(project.id,'chat')">問答</button><button type="button" @click="goTab(project.id,'wiki')">Wiki</button><button v-if="!project.has_wiki" type="button" @click="initWiki(project.id);moreProjectId=null">初始化 Wiki</button><button v-if="isAdmin()" type="button" class="danger" @click="remove(project);moreProjectId=null">刪除專案</button></div></div>
+<div class="ui-next-project-more" @click.stop><button type="button" :aria-expanded="moreProjectId===project.id" :aria-label="'專案「'+project.name+'」更多操作'" @click="moreProjectId=moreProjectId===project.id?null:project.id" data-tour="proj-card-menu"><ui-next-icon name="dots"/></button><div v-if="moreProjectId===project.id" class="ui-next-project-more-menu"><button type="button" @click="openEnv(project.id);moreProjectId=null">測試區</button><!-- 條件用後端算好的 project.can_release（GET /api/projects 已補，見 project-routes.js），
+                 不能用 isAdmin：判準是 canReleaseProject（平台管理員 or 該專案綁定勾了可上正式的公司管理員），
+                 光看 role 算不出來，掛 isAdmin 會把有權限的公司管理員也擋掉。 -->
+<button v-if="project.can_release" type="button" data-tour="proj-release" @click="releaseId=project.id;moreProjectId=null" :disabled="!project.repo_count">上正式</button><button type="button" @click="goTab(project.id,'repos')">REPO</button><button type="button" @click="goTab(project.id,'db')">連線設定</button><button type="button" @click="go(project.id);moreProjectId=null">專案設定</button><button type="button" @click="goTab(project.id,'chat')">問答</button><button type="button" @click="goTab(project.id,'wiki')">Wiki</button><button v-if="!project.has_wiki" type="button" @click="initWiki(project.id);moreProjectId=null">初始化 Wiki</button><button v-if="isAdmin()" type="button" class="danger" @click="remove(project);moreProjectId=null">刪除專案</button></div></div>
 <button v-if="project.id!=='demo'" @click.stop="toggleFavorite(project)" :class="{active:project.is_favorite}" :aria-label="project.is_favorite?'取消我的最愛':'加入我的最愛'"><ui-next-icon :name="project.is_favorite?'star-filled':'star'"/></button>
 </header>
 <div class="ui-next-project-facts">

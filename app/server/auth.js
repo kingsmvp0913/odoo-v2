@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const { query } = require('./db');
 const { hashPassword, checkPassword } = require('./password');
 const { redactSettings, CUSTOMER_SETTINGS_WHITELIST } = require('./lib/user-settings');
-const { companyHasFeature } = require('./lib/company-features');
+const { FEATURES, companyHasFeature } = require('./lib/company-features');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
@@ -186,9 +186,12 @@ function registerRoutes(app) {
       // 密碼對了 → 這一對的打錯次數歸零（裁決 R17），否則長期零星打錯會累積到永久封鎖。
       // 已封鎖的一對在上面就被擋掉，走不到這裡，所以不會順手解掉封鎖。
       await guard.recordSuccess({ username, source });
-      // 待審核帳號密碼對也不放行（管理員核准前）
+      // 2026-09-21（Task 8c fix round 1）：自助註冊已關閉，approved=false 現在只剩「被公司
+      // 管理員停用」一種意思（理由同 index.js 未核准閘門），這裡不能再講「審核中」——被停用的人
+      // 登出重登入或 token 過期時撞到的就是這一句，訊息要跟 index.js:106 講同一件事，不能取決
+      // 於他先撞到哪個端點。旗標名稱 pendingApproval 刻意不改，理由同上。
       if (user.approved === false) {
-        return res.status(403).json({ error: '帳號審核中，管理員核准後即可登入', pendingApproval: true });
+        return res.status(403).json({ error: '此帳號已停用，請聯絡貴公司的管理員', pendingApproval: true });
       }
 
       const { password_hash, password_enc, ...safeUser } = user;
@@ -206,6 +209,17 @@ function registerRoutes(app) {
         [req.userId]
       );
       if (!rows[0]) return res.status(404).json({ error: 'User not found' });
+      // 3b 需要：前端沒有別的管道知道「我是不是內部人員」「我能不能用哪些功能」。
+      // features 必須算「有效值」而不是直接吐 companies.features——內部公司與平台管理員
+      // 在 companyHasFeature 裡是一律全開的，但他們的欄位是 NULL，直接吐原始值
+      // 會讓前端把他們的入口藏起來（正是 2026-09-21 裁決要避免的結果）。
+      // ⚠ 這裡是每次前端換頁都會打的端點（app.js:300-312 的 router guard，無快取），
+      // 逐項查詢在功能數量是個位數時可接受；功能變多時會變成每次換頁 N 次查詢，
+      // 屆時才需要考慮快取（YAGNI，暫不處理）。
+      const features = {};
+      for (const key of Object.keys(FEATURES)) {
+        features[key] = await companyHasFeature(req.actor.companyId, key);
+      }
       // 密碼不回前端，只回 *_set 旗標（見 lib/user-settings 的 redactSettings）
       // 前端要靠這三個欄位決定顯示什麼（規格 §5.5），以及公司停用時顯示原因
       const result = { ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) };
@@ -227,6 +241,12 @@ function registerRoutes(app) {
         company_id: req.actor.companyId,
         company_name: req.actor.companyName,
         company_usable: req.actor.companyUsable,
+        // buildActor 的 isInternal 只看「所屬公司是不是內部公司」；平台管理員沒有公司，
+        // row.is_internal 從 LEFT JOIN 撈出來是 NULL，字面比對會算成 false——但平台管理員
+        // 本來就是內部人員。比照 company-features.js 的既有原則（沒有公司 ⇒ 視為內部／全開），
+        // 這裡補上 companyId === null 的情況，不去動 buildActor 本身。
+        is_internal: req.actor.isInternal || req.actor.companyId === null,
+        features,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });

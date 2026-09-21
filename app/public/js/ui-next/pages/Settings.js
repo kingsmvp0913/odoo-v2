@@ -10,7 +10,9 @@
     name: "UiNextSettingsView",
     components: { UiNextIcon: window.UiNextIcon },
     data() { return { tab: "account", me: { username: "", display_name: "" }, teamsUserId: "", savedSettings: {}, creds: { odoo_username: "", odoo_password: "", odoo_user_id: "", service_username: "", service_password: "", service_user_id: "" }, pwSet: { odoo: false, service: false }, pw: { current: "", next: "", confirm: "" }, pwError: "", loading: true, loadError: "", saving: false, savingPw: false, verifyingOdoo: false, verifyingService: false, isDark: window.ThemeManager?.current() === "dark", notifyOn: window.NotifyManager?.isOn(), githubPat: { input: "", configured: false, login: "", saving: false } }; },
-    computed: { tabs() { return SETTINGS_TABS; }, patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
+    // 功能開關一律讀 UserStore，與外殼的 features.exam 同一套寫法（UiNextApp 的 userStore computed），
+    // 不在這頁自己從 auth/me 的回應另存一份——同一件事兩個來源遲早會各自演化。
+    computed: { userStore() { return window.UserStore; }, tabs() { return SETTINGS_TABS; }, patLink() { return "https://github.com/settings/tokens/new?scopes=repo&description=aidev-platform"; }, pwValidation() { if (!this.pw.current) return "請輸入目前密碼"; if (this.pw.next.length < 8) return "新密碼至少 8 個字元"; return this.pw.next === this.pw.confirm ? "" : "兩次輸入的新密碼不一致"; } },
     async created() { await this.load(); },
     mounted() { this._onThemeChange = (event) => { this.isDark = event.detail === "dark"; }; window.addEventListener("themechange", this._onThemeChange); },
     unmounted() { window.removeEventListener("themechange", this._onThemeChange); },
@@ -18,7 +20,10 @@
       toggleTheme() { window.ThemeManager?.toggle(); },
       async toggleNotify(event) { if (event.target.checked) { const result = await window.NotifyManager?.enable(); this.notifyOn = !!result?.ok; if (!this.notifyOn) showToast(result?.reason === "denied" ? "瀏覽器已封鎖通知權限" : "此瀏覽器不支援通知", "error", 0); } else { window.NotifyManager?.disable(); this.notifyOn = false; } },
       async load() { this.loading = true; this.loadError = ""; try { const [me, settings, pat] = await Promise.all([Api.get("auth/me"), Api.get("settings"), Api.get("settings/github-pat")]); this.me = { username: me.username || "", display_name: me.display_name || "" }; const saved = settings.odoo_settings || {}; this.savedSettings = saved; this.teamsUserId = saved.teams_user_id || ""; Object.assign(this.creds, { odoo_username: saved.odoo_username || "", odoo_user_id: saved.odoo_user_id || "", odoo_password: "", service_username: saved.service_username || "", service_user_id: saved.service_user_id || "", service_password: "" }); this.pwSet = { odoo: !!saved.odoo_password_set, service: !!saved.service_password_set }; this.githubPat.configured = !!pat.configured; this.githubPat.login = pat.login || ""; } catch (error) { this.loadError = error.message || "無法載入設定"; showToast(this.loadError, "error", 0); } finally { this.loading = false; } },
-      async save() { this.saving = true; try { const odoo_settings = { ...this.savedSettings, teams_user_id: this.teamsUserId, ...this.creds, theme: window.ThemeManager?.current() }; await Promise.all([Api.put("auth/me", { display_name: this.me.display_name }), Api.put("settings", { odoo_settings })]); showToast("設定已儲存", "success"); } catch (error) { showToast(error.message || "儲存設定失敗", "error", 0); } finally { this.saving = false; } },
+      // 沒有 odoo_sync 的公司（客戶），後端 PUT /api/settings 只收 theme／saved_views／teams_user_id
+      // 白名單，其餘鍵一律靜默丟掉（server/settings.js）。憑證區塊已經藏起來了，這裡再把 creds
+      // 整包排除掉，是為了不要送出一份後端註定不收的內容、卻回報一句「設定已儲存」。
+      async save() { this.saving = true; try { const odoo_settings = { ...this.savedSettings, teams_user_id: this.teamsUserId, ...(this.userStore.features.odoo_sync ? this.creds : {}), theme: window.ThemeManager?.current() }; await Promise.all([Api.put("auth/me", { display_name: this.me.display_name }), Api.put("settings", { odoo_settings })]); showToast("設定已儲存", "success"); } catch (error) { showToast(error.message || "儲存設定失敗", "error", 0); } finally { this.saving = false; } },
       async savePw() { this.pwError = this.pwValidation; if (this.pwError) return; this.savingPw = true; try { await Api.put("auth/me", { current_password: this.pw.current, new_password: this.pw.next }); this.pw = { current: "", next: "", confirm: "" }; showToast("密碼已更新", "success"); } catch (error) { showToast(error.message || "密碼更新失敗", "error", 0); } finally { this.savingPw = false; } },
       async verifyOdoo() { if (!this.creds.odoo_username || (!this.creds.odoo_password && !this.pwSet.odoo)) return showToast("請先填寫 Odoo 帳號和密碼", "error"); this.verifyingOdoo = true; try { const { uid } = await Api.post("settings/verify-odoo", { odoo_username: this.creds.odoo_username, odoo_password: this.creds.odoo_password }); this.creds.odoo_user_id = String(uid); showToast(`驗證成功，使用者 ID：${uid}`, "success"); } catch (error) { showToast(error.message || "驗證失敗", "error", 0); } finally { this.verifyingOdoo = false; } },
       async verifyService() { if (!this.creds.service_username || (!this.creds.service_password && !this.pwSet.service)) return showToast("請先填寫 eService 帳號和密碼", "error"); this.verifyingService = true; try { const { uid } = await Api.post("settings/verify-service", { service_username: this.creds.service_username, service_password: this.creds.service_password }); this.creds.service_user_id = String(uid); showToast(`驗證成功，使用者 ID：${uid}`, "success"); } catch (error) { showToast(error.message || "驗證失敗", "error", 0); } finally { this.verifyingService = false; } },
@@ -74,7 +79,15 @@
 <p v-if="pwError" class="ui-next-error-text">{{ pwError }}</p>
 <div class="ui-next-panel-actions"><button class="ui-next-primary" @click="savePw" :disabled="savingPw">{{ savingPw?'更新中…':'更新密碼' }}</button></div>
 </section>
-<section v-show="tab==='connection'" class="ui-next-panel ui-next-settings-wide">
+<!-- 規格 §8 P2：沒有 odoo_sync 的公司（客戶）不該看到這一區。後端已經三道都擋了——GET 濾掉憑證、
+     PUT 只收白名單、兩支驗證端點 requireFeature('odoo_sync') 直接 404——前端不擋的話客戶看到的是
+     一份填得動、按「驗證」必定跳「找不到這個功能」、按「儲存」卻回報「設定已儲存」的表單。
+     用 v-if 不是 v-show：v-show 只是 display:none，憑證輸入框照樣存在於 DOM 裡。
+     旗標未知（features 還是 {}）時條件為 false ⇒ 藏起來。這個方向是刻意的：最壞情況是有權限的人
+     慢一拍才看到區塊，反方向的最壞情況是無權限的人把密碼打進一張死表單。
+     ⚠ 下面的 GitHub PAT 是另一個 section，刻意不在這個條件內：那是個人 GIT 憑證、與 odoo_sync
+     無關，每個角色都要用（沒設定任務會被擋下），一起藏掉等於把客戶鎖死。 -->
+<section v-if="tab==='connection' && userStore.features.odoo_sync" class="ui-next-panel ui-next-settings-wide">
 <h2>外部系統連線</h2>
 <div class="ui-next-settings-connection">
 <div data-tour="set-odoo">

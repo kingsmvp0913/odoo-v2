@@ -103,7 +103,11 @@ function createApp() {
       try {
         const { rows } = await query('SELECT role, approved FROM users WHERE id=$1', [userId]);
         if (rows[0] && rows[0].role !== 'admin' && rows[0].approved === false) {
-          return res.status(403).json({ error: '帳號審核中，管理員核准後即可使用', pendingApproval: true });
+          // 2026-09-21（Task 8c）：自助註冊已關閉，approved=false 現在只剩「被公司管理員停用」
+          // 一種意思，不會再有「剛註冊、待審核」的帳號——訊息要講真話，不能暗示這是暫時的、
+          // 等一下就會自己過。旗標名稱 pendingApproval 刻意不改：改名會波及既有斷言它的測試，
+          // 對使用者又沒有任何好處，保留只是為了不動那些斷言。
+          return res.status(403).json({ error: '此帳號已停用，請聯絡貴公司的管理員', pendingApproval: true });
         }
       } catch { /* 查詢失敗不阻斷：交下游處理 */ }
       next();

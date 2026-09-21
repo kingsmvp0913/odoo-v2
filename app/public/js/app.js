@@ -129,9 +129,11 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 終端機頁面能直接下指令操作任務所在容器，2026-09-21 使用者裁決 D2「兩個都收」
+      // 收斂為平台管理員限定。
       path: "/task/:id/terminal",
       component: window.UiNextEnabled ? window.UiNextTerminalView : window.TerminalView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/projects",
@@ -191,34 +193,60 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 架構圖是平台內部實作細節，2026-09-21 起收斂為平台管理員限定（規格 §5.5）。
       path: "/architecture",
       component: window.UiNextEnabled ? window.UiNextArchitectureView : window.ArchitectureView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
+      // 流程圖同上，收斂為平台管理員限定（規格 §5.5）。
       path: "/pipeline-flow",
       component: window.UiNextEnabled ? window.UiNextPipelineFlowView : window.PipelineFlowView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       // 認證題庫只有 ui-next 版本，沒有 legacy 對應（舊版不再新增頁面）。
       // legacy 模式下 index.html 不載入 ExamBank.js，這裡會是 undefined；
       // 但入口只掛在 ui-next 的「更多工具」選單裡，legacy 使用者走不到這條路由。
+      //
+      // 用 requiresInternal 而非 requiresAdmin：規格 §5.5 原文把考試列為平台管理員限定，
+      // 但 2026-09-21 的裁決推翻了這一列——考試改由公司功能開關（features.exam）決定，
+      // 鎖成管理員限定會把考試從 7 個內部同事手上收走。這裡是近似（內部人員＝有考試功能），
+      // 真正精確的判斷在後端 requireFeature('exam')（3a Task 2 已上線）與 nav（Task 4 用
+      // features.exam）。這個近似在「客戶公司被開了考試功能」時會過嚴：router 擋、後端放行。
+      // 這是刻意的保守——router 擋錯的後果是客戶看不到一個他該看到的入口（會有人來說），
+      // 放行錯的後果是客戶進到內部題庫（不會有人說）。不要把這裡改回 requiresAdmin。
       path: "/exam-bank",
       component: window.UiNextExamBankView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresInternal: true },
     },
     {
-      // 考試作戰台（考試當天用）。同樣只有 ui-next 版本，理由同上。
+      // 考試作戰台（考試當天用）。同樣只有 ui-next 版本、同樣用 requiresInternal，理由同上。
       path: "/exam-run",
       component: window.UiNextExamRunView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresInternal: true },
     },
     {
       // 產品化規格頁：只有 ui-next 版本（理由同上）。內容是內部規劃文件，
       // 入口按鈕、這條路由、後端 /api/docs/saas-specs 三處都限管理員（rules/frontend.md 38）。
       path: "/saas-specs",
       component: window.UiNextSaasSpecsView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      // 公司管理員的「公司帳號」頁。只有 ui-next 版本——legacy 不需要維護新頁面。
+      // 這頁公司管理員與平台管理員都能進，所以不掛 requiresAdmin（會擋掉公司管理員），
+      // 也不另外發明 requiresCompanyAdmin 這個 meta 旗標——只有這一個頁面用得到，
+      // 不值得加一個新概念（YAGNI）。guard 用明確的 path 判斷＋角色條件（見下方 beforeEach）。
+      path: "/company-users",
+      component: window.UiNextCompanyUsersView,
+      meta: { requiresAuth: true },
+    },
+    {
+      // 平台管理員的公司管理頁（3b Task 8）。只有 ui-next 版本，legacy 不需要維護新頁面。
+      // 用既有的 requiresAdmin（role==='admin'）就夠——不必為單一頁面另外發明旗標。
+      path: "/companies",
+      component: window.UiNextCompanyAdminView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
@@ -309,6 +337,28 @@ router.beforeEach(async (to) => {
       return { path: "/login", query: { redirect: to.fullPath } };
     }
   }
+  // requiresAdmin 與 requiresInternal 各自打一次 auth/me，沒有合併——合併是對的方向，
+  // 但那是既有 guard 的重構，超出本次任務範圍。
+  if (to.meta.requiresInternal) {
+    try {
+      const me = await Api.get("auth/me");
+      // 平台管理員沒有公司，後端一律視為內部人員；這裡照樣只看 is_internal，
+      // 不要再補 role === 'admin' 的特判——特判會讓兩邊的定義慢慢分岔。
+      if (me.is_internal !== true) return "/forbidden";
+    } catch {
+      return { path: "/login", query: { redirect: to.fullPath } };
+    }
+  }
+  // 公司帳號頁專屬條件（見上方 /company-users route 的註解，理由同 Task 3 的
+  // requiresInternal：只有一頁用得到的角色組合，不值得發明新 meta 旗標）。
+  if (to.path === "/company-users") {
+    try {
+      const me = await Api.get("auth/me");
+      if (me.role !== "company_admin" && me.role !== "admin") return "/forbidden";
+    } catch {
+      return { path: "/login", query: { redirect: to.fullPath } };
+    }
+  }
 });
 
 router.afterEach((to) => {
@@ -317,6 +367,18 @@ router.afterEach((to) => {
     Api.get("auth/me")
       .then((me) => {
         window.UserStore.role = me.role || "";
+        // 另外幾個身分旗標原本只有 ui-next 外殼的 mounted() 在寫，而外殼是根元件、整場只掛載一次：
+        // 表單登入（登出後或 token 過期後重登）不重新整理的話，features 會整場 session 停在 {}，
+        // 內部同事就看不到 features.exam 那個入口，而且畫面上沒有任何徵狀可察覺。
+        // 這與 role 當初被搬來 afterEach 的是同一個坑（理由見下方 isAdmin 的註解），
+        // 所以照同一個做法修、不另外發明機制——auth/me 本來就回這幾個欄位，不多打一次 API。
+        window.UserStore.isInternal = me.is_internal === true;
+        window.UserStore.companyId = me.company_id ?? null;
+        window.UserStore.companyName = me.company_name || "";
+        window.UserStore.features = me.features || {};
+        // 公司停用／過期時後端擋掉除 GET /auth/me 以外的每一支 /api（index.js 的公司不可用閘門），
+        // 外殼要靠這個旗標講出「為什麼不能用」。缺值一律當可用：載入中先閃一下停用畫面比沒講原因更糟。
+        window.UserStore.companyUsable = me.company_usable !== false;
         // 深色偏好也在此同步：表單登入只走 afterEach（不經 mounted 的已登入分支），
         // 漏了會讓無痕登入永遠停在預設淺色（localStorage 空、又沒讀 DB 偏好）。
         ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
@@ -331,6 +393,13 @@ router.afterEach((to) => {
   if (to.path === "/login") {
     SocketManager.disconnectSocket();
     window.UserStore.role = "";
+    // 比照 UiNextApp 的 logout()：既然上面一併寫入，這裡就要一併清掉。
+    // 少清一個，token 過期被踢回登入頁的人下一秒看到的就是上一個帳號的公司名與功能開關。
+    window.UserStore.isInternal = false;
+    window.UserStore.companyId = null;
+    window.UserStore.companyName = "";
+    window.UserStore.features = {};
+    window.UserStore.companyUsable = true;
   }
 });
 
