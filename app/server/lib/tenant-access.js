@@ -115,14 +115,19 @@ async function isUserCompanyUsable(userId, now = new Date()) {
 
 // 「這個人算不算內部人員」。平台管理員沒有公司，他們本來就是內部人員 ⇒ true。
 // 用途：Codex 沒有容器保護，只給內部人員（規格 §7）。
+// 刻意跟 isUserCompanyUsable 用同一種 JOIN（INNER）：兩支都是「查不到 ⇒ 回 true」同一套機制。
+// 這裡不能改用 LEFT JOIN——沒有公司的使用者會多出一列 is_internal 為 NULL 的資料，
+// 若改用 isUserCompanyUsable 那種 `=== true` 就會回 false，把平台管理員鎖死（R20 裁決）。
+// companies.is_internal 建表時即 NOT NULL DEFAULT false（db.js），值不會是 NULL，
+// 所以查得到列時用 `=== true` 判斷即可，不需要容忍 NULL。
 async function isUserCompanyInternal(userId) {
   if (!userId) return true;
   const { rows } = await query(
-    'SELECT c.is_internal FROM users u LEFT JOIN companies c ON c.id = u.company_id WHERE u.id = $1',
+    'SELECT c.is_internal FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = $1',
     [userId]
   );
   if (!rows[0]) return true;
-  return rows[0].is_internal !== false;
+  return rows[0].is_internal === true;
 }
 
 module.exports = {

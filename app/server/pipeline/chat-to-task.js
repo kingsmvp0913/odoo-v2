@@ -58,7 +58,7 @@ async function draftTaskFromChat(projectId, chatId, userId) {
   const ref = { projectId, chatId };
   let result;
   try {
-    result = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'chat-to-task', projectId, chatId });
+    result = await runAgent(prompt, { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'chat-to-task', projectId, chatId, userId });
   } catch (err) {
     await logFailedUsage(ref, userId, 'chat-to-task', err);
     throw err;

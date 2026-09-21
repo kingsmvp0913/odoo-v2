@@ -180,7 +180,7 @@ async function chatReply(projectId, chatId, userMessage, userId, attachments = [
         // 少了 provider 時 agent-runner 預設走 Claude，會拿 Codex 的 model 名稱呼叫 Claude CLI。
         // signal 讓使用者按得動「停止回覆」：claude-runner 收到 abort 會直接砍掉行程，
         // 沒有它的話停止鈕只能關掉前端動畫、agent 照跑照燒 token。
-        runOpts: { agentType: 'chat', provider: agent.provider, effort: agent.effort, signal, projectId, chatId },
+        runOpts: { agentType: 'chat', provider: agent.provider, effort: agent.effort, signal, projectId, chatId, userId },
         onRetryFailed: (err) => logFailedUsage({ projectId, chatId }, userId, 'chat', err, true)
       });
     } catch (err) {

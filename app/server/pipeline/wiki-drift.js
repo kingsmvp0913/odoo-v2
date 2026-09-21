@@ -55,7 +55,7 @@ async function classifyOne(d) {
   try {
     const r = await runAgent(
       agent.render({ slug: d.slug || '（未指定）', reason: d.reason }),
-      { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki_drift_classify', projectId: d.project_id }
+      { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki_drift_classify', projectId: d.project_id, userId: d.user_id }
     );
     const { usage, durationMs } = r;
     const text = r.raw ?? r.text;
