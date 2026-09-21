@@ -7,17 +7,14 @@ const { encrypt } = require('./lib/crypto');
 const { encryptSettings, decryptSettings, redactSettings, preserveSecrets } = require('./lib/user-settings');
 const { requireFeature, companyHasFeature } = require('./lib/company-features');
 
-// 客戶端 PUT /api/settings 忽略寫入的鍵——Odoo／eService 是「我們連客戶系統用的憑證」，
-// 客戶自己不該能改（規格 §8 P2）。PUT 是同一顆儲存鈕整包送出，只能忽略這些鍵、不能拒絕整包，
-// 所以維持黑名單：只擋已知會寫壞的欄位，其餘（含未來新欄位）照常讓客戶自己的東西寫進去。
-const SYNC_ONLY_KEYS = ['odoo_username', 'odoo_password', 'odoo_user_id', 'service_username', 'service_password', 'service_user_id'];
-
-// 客戶端 GET /api/settings 的 odoo_settings 只回這些鍵——白名單，不是黑名單（P3-4：閘門遇到
-// 模稜兩可一律落在「關」）。黑名單的失敗模式是「以後誰往 odoo_settings 加新欄位，預設就外洩
-// 給客戶」——加欄位的人在改別的功能，根本不會想到這裡有一道過濾，而且外洩沒有任何徵狀，客戶
-// 看到不該看的東西，我們永遠不會知道。白名單則相反：漏列的新欄位客戶看不到，這種疏漏當天就
-// 會有人來抱怨「我的欄位不見了」——同一個疏忽，白名單壞的方向是安全的方向。
-const CUSTOMER_SETTINGS_WHITELIST = ['theme', 'saved_views'];
+// 客戶端 GET /api/settings 的 odoo_settings 只回這些鍵、PUT /api/settings 也只讓客戶寫這些鍵
+// ——白名單，不是黑名單（P3-4：閘門遇到模稜兩可一律落在「關」）。黑名單的失敗模式是「以後誰
+// 往 odoo_settings 加新欄位，預設就外洩給客戶」——加欄位的人在改別的功能，根本不會想到這裡有
+// 一道過濾，而且外洩沒有任何徵狀，客戶看到不該看的東西，我們永遠不會知道。白名單則相反：漏列
+// 的新欄位客戶看不到，這種疏漏當天就會有人來抱怨「我的欄位不見了」——同一個疏忽，白名單壞的
+// 方向是安全的方向。teams_user_id 是 MS Teams 提及通知用的 id（非 Odoo／eService 憑證），規格
+// 要藏的只有 Odoo／eService 帳密，這個沒有藏的理由，故列入。
+const CUSTOMER_SETTINGS_WHITELIST = ['theme', 'saved_views', 'teams_user_id'];
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -83,27 +80,42 @@ function registerRoutes(app) {
     try {
       const { odoo_settings, sync_interval } = req.body;
       const canSync = await companyHasFeature(req.actor && req.actor.companyId, 'odoo_sync');
-      // 客戶按的是同一顆儲存鈕：不可回 403，只能忽略 Odoo／eService 欄位、其餘照常寫入
-      // （規格 §8 P2）。回 403 會讓客戶連改顯示名稱、改主題都做不到。
-      let cleanOdooSettings = odoo_settings;
-      let cleanSyncInterval = sync_interval;
-      if (!canSync) {
-        if (odoo_settings) {
-          cleanOdooSettings = { ...odoo_settings };
-          for (const key of SYNC_ONLY_KEYS) delete cleanOdooSettings[key];
-        }
-        cleanSyncInterval = undefined;
-      }
-      if (cleanSyncInterval !== undefined && cleanSyncInterval < 5) {
-        return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
-      }
-      // 這支仍是整包覆寫（theme／saved_views 靠前端鋪回，見下方兩支端點的註解），唯獨密碼欄位
-      // 例外：GET 已不再回密碼，前端鋪不回來，故未提供者一律沿用 DB 現值（preserveSecrets）。
       let toStore = null;
-      if (cleanOdooSettings) {
-        const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
-        toStore = JSON.stringify(encryptSettings(preserveSecrets(cleanOdooSettings, rows[0]?.odoo_settings)));
+      let cleanSyncInterval = sync_interval;
+
+      if (!canSync) {
+        // 客戶按的是同一顆儲存鈕：不可回 403，只能忽略 Odoo／eService 欄位、其餘照常寫入
+        // （規格 §8 P2）。sync_interval 對客戶整條不存在，一律丟棄、不驗證、不寫入。
+        cleanSyncInterval = undefined;
+        if (odoo_settings) {
+          // P3-11(b)：客戶這條路不可以整包覆寫。前端是整包來回的契約（load() 從 GET 拿、
+          // save() 整包送回，frontend-settings-theme.test.js 記錄了這個契約），而 GET 對客戶
+          // 用白名單濾掉的鍵（例如未被列入白名單的 Odoo 帳密），如果 PUT 仍整包覆寫，客戶下次
+          // 存檔時就會被前端鋪回來的空值蓋掉——客戶只是換個主題，看不到的資料就悄悄不見了，
+          // 而且沒有任何錯誤訊息。修法：從 DB 現有值出發合併，只套用白名單允許客戶寫的鍵，
+          // 其餘鍵原封不動保留。
+          const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+          const current = (rows[0] && rows[0].odoo_settings && typeof rows[0].odoo_settings === 'object')
+            ? rows[0].odoo_settings : {};
+          const merged = { ...current };
+          for (const key of CUSTOMER_SETTINGS_WHITELIST) {
+            if (key in odoo_settings) merged[key] = odoo_settings[key];
+          }
+          toStore = JSON.stringify(encryptSettings(preserveSecrets(merged, current)));
+        }
+      } else {
+        if (sync_interval !== undefined && sync_interval < 5) {
+          return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
+        }
+        // 這支仍是整包覆寫（theme／saved_views 靠前端鋪回，見下方兩支端點的註解），唯獨密碼欄位
+        // 例外：GET 已不再回密碼，前端鋪不回來，故未提供者一律沿用 DB 現值（preserveSecrets）。
+        // 內部公司與平台管理員的語意不動——「對現在平台上的人零改變」。
+        if (odoo_settings) {
+          const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+          toStore = JSON.stringify(encryptSettings(preserveSecrets(odoo_settings, rows[0]?.odoo_settings)));
+        }
       }
+
       await query(
         `UPDATE users SET
            odoo_settings = COALESCE($2, odoo_settings),

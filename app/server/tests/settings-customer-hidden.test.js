@@ -108,3 +108,24 @@ test('白名單方向：odoo_settings 裡「未來才會出現」的陌生鍵，
   expect(res.body.odoo_settings.a_field_nobody_whitelisted_yet).toBeUndefined();
   expect(res.body.odoo_settings.theme).toBe('light');   // 白名單內的鍵照樣要回，不能連 UI 偏好一起誤殺
 });
+
+test('客戶用 PUT /api/settings 寫入白名單內的欄位（theme）：200 且真的寫進 DB，不是回 200 卻沒寫（P3-12：要打在真正被守的那條路上，不能只測 github-pat／theme 這兩支不經過這道檢查的端點）', async () => {
+  const res = await request(app).put('/api/settings').set(as(custToken)).send({ odoo_settings: { theme: 'dark' } });
+  expect(res.status).toBe(200);
+  const row = await one('SELECT odoo_settings FROM users WHERE username=$1', ['cust']);
+  const s = typeof row.odoo_settings === 'string' ? JSON.parse(row.odoo_settings || '{}') : (row.odoo_settings || {});
+  expect(s.theme).toBe('dark');
+});
+
+test('合併寫入：客戶存檔（只送白名單內的 theme）不會清掉他看不到的欄位——防的是 P3-11(b) 那種「客戶換個主題，Odoo 帳密就被整包覆寫悄悄清空」', async () => {
+  // 模擬這位客戶帳號本來就有 Odoo 帳密資料（不論哪來的：舊資料、內部代填皆有可能）
+  await dbModule.query('UPDATE users SET odoo_settings = $2 WHERE username = $1',
+    ['cust', JSON.stringify({ theme: 'light', odoo_username: 'should-survive' })]);
+  const res = await request(app).put('/api/settings').set(as(custToken))
+    .send({ odoo_settings: { theme: 'dark' } });
+  expect(res.status).toBe(200);
+  const row = await one('SELECT odoo_settings FROM users WHERE username=$1', ['cust']);
+  const s = typeof row.odoo_settings === 'string' ? JSON.parse(row.odoo_settings || '{}') : (row.odoo_settings || {});
+  expect(s.odoo_username).toBe('should-survive');   // 客戶看不到的鍵，存檔後仍要原封不動
+  expect(s.theme).toBe('dark');                       // 白名單內的欄位正常更新
+});
