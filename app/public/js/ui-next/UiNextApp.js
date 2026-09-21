@@ -567,6 +567,10 @@
         this.isAdmin = me.role === "admin";
         this.userName = me.display_name || me.username || "使用者";
         window.UserStore.role = me.role || "";
+        window.UserStore.isInternal = me.is_internal === true;
+        window.UserStore.companyId = me.company_id ?? null;
+        window.UserStore.companyName = me.company_name || '';
+        window.UserStore.features = me.features || {};
         this.projects = projects || [];
         this.sidebarChatProjects = sidebarChatProjects || [];
         // 直接開 Chat 深連結時 watch 不會觸發（路由沒變過），所以載完專案要自己補一次。
@@ -1169,6 +1173,11 @@
         this.closePopovers();
         Api.clearToken();
         window.UserStore.role = "";
+        // 新加的四個身分旗標比照 role 一起清回預設值，避免登出後畫面殘留上一個使用者的權限資訊。
+        window.UserStore.isInternal = false;
+        window.UserStore.companyId = null;
+        window.UserStore.companyName = '';
+        window.UserStore.features = {};
         SocketManager.disconnectSocket();
         this.$router.push("/login");
       },
