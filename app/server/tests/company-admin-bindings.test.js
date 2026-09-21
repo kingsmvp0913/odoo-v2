@@ -93,6 +93,28 @@ describe('列出與解除', () => {
     expect(typeof row.task_count).toBe('number');
   });
 
+  test('任務數各算各的——一個專案 3 張、另一個 0 張，數字不可以串到隔壁列', async () => {
+    // 刻意選兩個不同的數字（3 與 0）：兩個都設一樣的話，task_count 串到隔壁列這種錯測不出來。
+    const co = (await request(app).post('/api/admin/companies').set(as(adminToken)).send({ name: '任務數測試公司' })).body.id;
+    const projA = (await one("INSERT INTO projects (name, odoo_version) VALUES ($1,'17') RETURNING id", ['任務數測試專案A'])).id;
+    const projB = (await one("INSERT INTO projects (name, odoo_version) VALUES ($1,'17') RETURNING id", ['任務數測試專案B'])).id;
+    await request(app).put(`/api/admin/companies/${co}/projects/${projA}`).set(as(adminToken)).send({});
+    await request(app).put(`/api/admin/companies/${co}/projects/${projB}`).set(as(adminToken)).send({});
+
+    const adminUser = await one('SELECT id FROM users WHERE username=$1', ['admin']);
+    for (let i = 0; i < 3; i++) {
+      await dbModule.query(
+        "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,$2,'odoo','T','new',$3)",
+        [adminUser.id, `task_count_A_${i}`, projA]
+      );
+    }
+
+    const res = await request(app).get(`/api/admin/companies/${co}/projects`).set(as(adminToken));
+    expect(res.status).toBe(200);
+    expect(res.body.find(r => r.project_id === projA).task_count).toBe(3);
+    expect(res.body.find(r => r.project_id === projB).task_count).toBe(0);
+  });
+
   test('解除綁定 → 204，DB 真的沒了', async () => {
     const res = await request(app).delete(`/api/admin/companies/${coCustomer}/projects/${projectId}`).set(as(adminToken));
     expect(res.status).toBe(204);
