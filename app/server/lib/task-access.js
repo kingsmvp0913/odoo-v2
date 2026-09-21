@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { canSeeProject } = require('./tenant-access');
+const { canSeeProject, hasCompany } = require('./tenant-access');
 
 // 回傳指定任務列，僅當請求者是該任務 owner 或 admin，且（若任務屬於某專案）看得到那個專案。
 // columns 預設 '*'；呼叫端若指定欄位清單，務必包含 user_id（觸發 pipeline 用）。
@@ -17,7 +17,20 @@ async function loadTaskForActor(taskId, req, columns = '*') {
     `SELECT ${cols} FROM tasks WHERE id = $1 AND (user_id = $2 OR $3 = true)`,
     [taskId, req.userId, !!req.isAdmin]
   );
-  const row = rows[0];
+  let row = rows[0];
+  // 公司管理員看得到自家公司同事的任務（規格 §8 P1 第二句）——歸屬看「這張任務是誰建的」，
+  // 不是看專案：專案可能同時綁多家公司，另一家公司在同一個共用專案下的任務仍要保持不可見。
+  // 用獨立的第二段查詢而非把條件塞進上面那句 SQL：company_id 比對要 JOIN users，
+  // 而 users.id 需要對照 tasks.user_id 這個「外層」欄位——pg-mem 不支援相關子查詢
+  // （子查詢內參照外層別名），改成 `user_id IN (SELECT id FROM users WHERE company_id = $2)`
+  // 這種非相關子查詢就繞開了那個限制，也不用動到上面那句既有 SQL。
+  if (!row && req.actor?.isCompanyAdmin && hasCompany(req.actor.companyId)) {
+    const { rows: caRows } = await query(
+      `SELECT ${cols} FROM tasks WHERE id = $1 AND user_id IN (SELECT id FROM users WHERE company_id = $2)`,
+      [taskId, req.actor.companyId]
+    );
+    row = caRows[0];
+  }
   if (!row) return null;
   // row 真的帶 project_id 屬性才能信任它的值：呼叫端的欄位清單可能把 project_id 取了別名
   // （例如 'id, project_id as pid'），上面的 regex 會誤判「已包含」而不補欄位，實際回傳的

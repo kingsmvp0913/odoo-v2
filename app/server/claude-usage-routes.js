@@ -1,13 +1,14 @@
 const { verifyToken } = require('./auth');
-const { query } = require('./db');
+const { requirePlatformAdmin } = require('./lib/tenant-access');
 const { getUsage } = require('./lib/claude-usage');
 
 function registerRoutes(app) {
-  app.get('/api/claude-usage', verifyToken, async (req, res) => {
+  // 平台管理員限定（規格外「今日裁決」：內部營運資訊收成平台管理員限定）。
+  // 改用共用的 requirePlatformAdmin（比照本分支其他新掛守衛的既有寫法），不再各自查一次 role——
+  // 舊寫法（各自 SELECT role FROM users）本來就已把 role !== 'admin' 擋在 403，行為不變，
+  // 純粹是把三處重複的 ad-hoc 查詢換成 verifyToken 已經算好的 req.actor，少一次 DB 往返。
+  app.get('/api/claude-usage', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      // 用量僅管理員可見（一般使用者看不到用量報表／側欄用量小工具）
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
       res.json(await getUsage());
     } catch (err) {
       res.json({ available: false, error: err.message });
@@ -15,10 +16,8 @@ function registerRoutes(app) {
   });
 
   // Codex app-server 的訂閱登入可正式讀取 ChatGPT rate limits；這不是平台自行估算的 token。
-  app.get('/api/codex-usage', verifyToken, async (req, res) => {
+  app.get('/api/codex-usage', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
       const { rateLimits } = await require('./lib/codex-app-server').rateLimits();
       const mapWindow = window => window && window.usedPercent != null ? {
         used_percent: window.usedPercent,
@@ -33,10 +32,8 @@ function registerRoutes(app) {
   });
 
   // 閘門狀態（admin-only）：供設定頁顯示「正常／已暫停」與觸發視窗、現值、門檻、重置時間
-  app.get('/api/usage-gate/status', verifyToken, async (req, res) => {
+  app.get('/api/usage-gate/status', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
       const { getGateState } = require('./pipeline/usage-gate');
       res.json(await getGateState());
     } catch (err) {

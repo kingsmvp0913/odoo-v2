@@ -19,7 +19,7 @@ jest.mock('../lib/codex-app-server', () => ({
 
 process.env.JWT_SECRET = 'test-token-report';
 
-let app, dbModule, adminToken, userToken, adminUserId, regularUserId;
+let app, dbModule, adminToken, userToken, companyAdminToken, adminUserId, regularUserId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -51,6 +51,18 @@ beforeAll(async () => {
     username: 'regular_tr', password: 'pass1234'
   });
   userToken = userRes.body.token;
+
+  // 公司管理員（租戶端的管理角色，不是平台管理員）——今日裁決把用量／閘門端點收成平台管理員限定，
+  // 這個角色是本分支才新增的，舊測試只覆蓋 role='user'，補一組 fixture 確認公司管理員也擋在外。
+  const { rows: [coScope] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('用量測試公司', true) RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('ca_tr', $1, 'CA TR', 'company_admin', $2)",
+    [hash, coScope.id]
+  );
+  companyAdminToken = (await request(app).post('/api/auth/login')
+    .send({ username: 'ca_tr', password: 'pass1234' })).body.token;
 
   // Insert token_usage records
   // Record for admin
@@ -88,6 +100,16 @@ test('GET /api/codex-usage → 回官方訂閱剩餘額度，非 admin 不可讀
   const ok = await request(app).get('/api/codex-usage').set('Authorization', `Bearer ${adminToken}`);
   expect(ok.status).toBe(200);
   expect(ok.body).toMatchObject({ available: true, primary: { remaining_percent: 60, window_minutes: 300 }, secondary: { remaining_percent: 75, window_minutes: 10080 } });
+});
+
+// 意圖：內部營運資訊（Claude／Codex 用量）收成平台管理員限定（今日裁決）——公司管理員雖然
+// 是租戶端的管理角色，仍然只是「客戶」，不得看到平台自己的用量／閘門狀態。403 是正確的拒絕
+// （這支是平台管理員限定工具，屬於合法 403 的兩種情形之一）。
+test('GET /api/claude-usage、/api/codex-usage → 公司管理員（租戶端管理角色，非平台管理員）一律 403', async () => {
+  const cu = await request(app).get('/api/claude-usage').set('Authorization', `Bearer ${companyAdminToken}`);
+  expect(cu.status).toBe(403);
+  const cx = await request(app).get('/api/codex-usage').set('Authorization', `Bearer ${companyAdminToken}`);
+  expect(cx.status).toBe(403);
 });
 
 // 意圖：用量報表僅管理員可見——一般使用者一律 403（不再回傳自己的用量）。

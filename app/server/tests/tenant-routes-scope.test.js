@@ -308,3 +308,75 @@ describe('建立任務', () => {
     expect(res.status).toBe(201);
   });
 });
+
+// 全跑修法波第 2 項：公司管理員看得到自家公司的任務（規格 §8 P1 第二句）。
+// 歸屬看「任務是誰建的」，不是看專案——同一個共用專案下，另一家公司同事的任務仍要維持不可見，
+// 否則「公司管理員能按上正式，卻打不開任何一張要上正式的任務」這個自相矛盾的洞還在。
+describe('公司管理員看自家公司的任務（規格 §8 P1 第二句）', () => {
+  let caToken, colleagueTaskId, otherCoTaskId, sharedProjectId;
+
+  beforeAll(async () => {
+    const hash = await bcrypt.hash('password123', 10);
+    await dbModule.query(
+      "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('caScope',$1,'甲管理員','company_admin',$2)",
+      [hash, coA]
+    );
+    caToken = (await request(app).post('/api/auth/login')
+      .send({ username: 'caScope', password: 'password123' })).body.token;
+
+    const { rows: [colleague] } = await dbModule.query(
+      "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('colleagueScope',$1,'甲同事','user',$2) RETURNING id",
+      [hash, coA]
+    );
+
+    // 共用專案：同時綁甲、乙兩家公司——用來證明「歸屬看建立者」而非「歸屬看專案」。
+    const { rows: [sp] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ('共享專案','17') RETURNING id"
+    );
+    sharedProjectId = sp.id;
+    await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2), ($1,$3)', [sharedProjectId, coA, coB]);
+
+    const { rows: [userBRow] } = await dbModule.query("SELECT id FROM users WHERE username = 'userB'");
+
+    const { rows: [t1] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'scope-colleague','manual','同事的任務','new',$2) RETURNING id",
+      [colleague.id, sharedProjectId]
+    );
+    colleagueTaskId = t1.id;
+
+    const { rows: [t2] } = await dbModule.query(
+      "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'scope-other-co','manual','乙公司的任務','new',$2) RETURNING id",
+      [userBRow.id, sharedProjectId]
+    );
+    otherCoTaskId = t2.id;
+  });
+
+  test('公司管理員打開同公司同事的任務 → 200', async () => {
+    const res = await request(app).get(`/api/tasks/${colleagueTaskId}`).set(as(caToken));
+    expect(res.status).toBe(200);
+  });
+
+  test('公司管理員打開共用專案下、另一家公司同事的任務 → 404（不是 403，403 等於承認它存在）', async () => {
+    const res = await request(app).get(`/api/tasks/${otherCoTaskId}`).set(as(caToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('一般使用者打開同公司同事的任務仍是 404（第一句規則不變，回歸守衛）', async () => {
+    const res = await request(app).get(`/api/tasks/${colleagueTaskId}`).set(as(aToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('GET /api/tasks?all=true 公司管理員 → 列出本公司任務（含同事的），不含別家公司', async () => {
+    const res = await request(app).get('/api/tasks?all=true').set(as(caToken));
+    expect(res.status).toBe(200);
+    const ids = res.body.map(t => t.id);
+    expect(ids).toContain(colleagueTaskId);
+    expect(ids).not.toContain(otherCoTaskId);
+  });
+
+  test('GET /api/tasks?all=true 一般使用者 → 參數被忽略，看不到公司同事的任務', async () => {
+    const res = await request(app).get('/api/tasks?all=true').set(as(aToken));
+    expect(res.status).toBe(200);
+    expect(res.body.map(t => t.id)).not.toContain(colleagueTaskId);
+  });
+});

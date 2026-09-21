@@ -13,7 +13,7 @@ const { invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles } = require('./lib/attachments');
 const { loadTaskForActor } = require('./lib/task-access');
-const { loadProjectForActor, requirePlatformAdmin } = require('./lib/tenant-access');
+const { loadProjectForActor, requirePlatformAdmin, hasCompany } = require('./lib/tenant-access');
 const { isMaintenance } = require('./pipeline/maintenance');
 
 // multer 設定已移到 lib/attachments 當單一來源：新增任務／留言／人工退回三個入口共用同一組限制，
@@ -219,9 +219,19 @@ function registerRoutes(app) {
     try {
       const { needs_action, source, status, archived } = req.query;
       const showAll = req.query.all === 'true' && req.isAdmin;
+      // 公司管理員看得到自家公司的任務（規格 §8 P1 第二句）——歸屬看任務是誰建的，不是專案，
+      // 所以不能比照 showAll 整段拿掉條件（那樣會連別家公司的任務都一起吐出去），
+      // 改成把 user_id 條件換成「屬於同一家公司的使用者」。
+      const showCompany = !showAll && req.query.all === 'true'
+        && req.actor?.isCompanyAdmin && hasCompany(req.actor.companyId);
       const conditions = [];
       const params = [];
-      if (!showAll) { conditions.push(`user_id = $${params.length + 1}`); params.push(req.userId); }
+      if (showCompany) {
+        conditions.push(`user_id IN (SELECT id FROM users WHERE company_id = $${params.length + 1})`);
+        params.push(req.actor.companyId);
+      } else if (!showAll) {
+        conditions.push(`user_id = $${params.length + 1}`); params.push(req.userId);
+      }
       conditions.push(archived === 'true' ? 'is_hidden = true' : 'is_hidden = false');
 
       if (needs_action === 'true') {
@@ -353,13 +363,20 @@ function registerRoutes(app) {
       // 租戶邊界（規格 §5.2）：下面那條 SQL 只查 owner／admin，專案綁定被解除後 owner
       // 仍看得到自己那張——loadTaskForActor 多一層 canSeeProject 才會把它擋下。
       if (!await loadTaskForActor(req.params.id, req, 'id')) return res.status(404).json({ error: 'Task not found' });
+      // 這條 SQL 沒有經過 loadTaskForActor（它只回一欄當守衛，這裡要撈全部欄位），
+      // 條件是各自獨立複製的一份——公司管理員的第三個分支（規格 §8 P1 第二句）要跟著補在這，
+      // 否則上面剛放行的守衛在這裡又被舊條件擋回 404。子查詢沒有參照外層 t，不是相關子查詢，
+      // pg-mem 撐得住（相關子查詢那條限制參見 lib/task-access.js 的另一種寫法）。
+      const isCompanyAdmin = !!req.actor?.isCompanyAdmin && hasCompany(req.actor.companyId);
       const { rows: tasks } = await query(
         `SELECT t.*, e.status AS env_status
            FROM tasks t
            -- 不限 running：理由同列表 route（環境被回收後入口不得消失）
            LEFT JOIN odoo_envs e ON e.project_id = t.project_id
-          WHERE t.id = $1 AND (t.user_id = $2 OR $3 = true) AND t.is_hidden = false`,
-        [req.params.id, req.userId, !!req.isAdmin]
+          WHERE t.id = $1 AND (t.user_id = $2 OR $3 = true
+                OR ($4 = true AND t.user_id IN (SELECT id FROM users WHERE company_id = $5)))
+                AND t.is_hidden = false`,
+        [req.params.id, req.userId, !!req.isAdmin, isCompanyAdmin, req.actor?.companyId ?? null]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
 
