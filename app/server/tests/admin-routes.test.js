@@ -33,9 +33,9 @@ beforeAll(async () => {
   });
   adminToken = adminRes.body.token;
 
-  // 租戶隔離：POST /api/admin/users 建一般使用者現在強制要帶 company_id（Task 7），
-  // 且 /api/auth/register 的自助註冊仍會找內部公司當預設（Task 8 才會改）——
-  // 兩邊 fixture 都要有一家真的公司可以掛，故提早在這裡建好，供全檔各處引用。
+  // 租戶隔離：POST /api/admin/users 建一般使用者現在強制要帶 company_id（Task 7）——
+  // fixture 要有一家真的公司可以掛，故提早在這裡建好，供全檔各處引用。
+  // （/api/auth/register 的自助註冊已於 Task 8 關閉，不再需要靠它找內部公司當預設。）
   const { rows: [internalCo] } = await dbModule.query(
     "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
   );
@@ -77,9 +77,18 @@ test('POST /api/admin/users → 不寫 password_enc（系統不持有可還原�
   expect(login.status).toBe(200);
 });
 
-// 意圖：管理員核准 pending 帳號後即可登入（自助註冊審核閘門的收尾）。
+// 意圖：管理員核准 pending 帳號後即可登入（原是自助註冊審核閘門的收尾；register 已關閉
+// 〔Task 8〕後，這支測的是「管理員核准」本身的行為，不是在測 register，改用手動 INSERT
+// 重現 pending 帳號，形狀比照 tenant-routes-scope.test.js 的 mkUser，斷言本身沒有動）。
 test('PUT /api/admin/users/:id approved=true → pending 帳號可登入', async () => {
-  await request(app).post('/api/auth/register').send({ username: 'wait1', password: 'password123', display_name: 'W1' });
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  // role='user' 依 Task 7 規則必須帶 company_id（見 PUT 端點的 validateRoleCompany），
+  // 否則後面 approved=true 那次 PUT 會被擋 400，不是這支測試要驗的東西。
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved, company_id) VALUES ('wait1', $1, 'W1', 'user', false, $2)",
+    [hash, internalCoId]
+  );
   const before = await request(app).post('/api/auth/login').send({ username: 'wait1', password: 'password123' });
   expect(before.status).toBe(403);
 
