@@ -6,7 +6,11 @@
       ReleaseModal: window.ReleaseModal,
       UiNextIcon: window.UiNextIcon,
     },
-    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, editAutoDeploy: false, savingAutoDeploy: false, detailTab: ["repos","env","settings","chat","db","wiki","deploy"].includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
+    // detailTab 的初始猜值也要看角色（回合 1 審查發現）：這裡跑在 created() 之前，project
+    // 還沒載入，因此 deploy 這個要看 auto_deploy_enabled 的分頁一律先排除；repos／db 只看
+    // 角色（window.UserStore 是同步可用的全域，不必等 Vue 初始化）。created() 裡的
+    // selectTab() 會在資料到齊後用完整的分頁清單再核一次，兩層都守住才不會有一拍露出。
+    data() { return { editServiceContactName: "", editName: "", editDescription: "", savingBasics: false, project: null, repos: [], branchInfo: {}, loading: true, loadError: "", newRepo: { label: "", repo_url: "", is_primary: false, base_branch: "" }, remoteBranches: [], probingBranches: false, branchProbeError: "", branchPickerOpen: false, branchQuery: "", lastProbedUrl: null, savingRepo: false, env: null, envWorking: false, editOdooProjectName: "", editServiceRespondentName: "", editE2eEnabled: true, savingE2e: false, editEdition: "community", savingEdition: false, runtimeLog: null, logLoading: false, showReleaseModal: false, editAutoDeploy: false, savingAutoDeploy: false, detailTab: (window.UserStore.role === "admin" ? ["repos","env","settings","chat","db","wiki"] : ["env","settings","chat","wiki"]).includes(this.$route.query.tab) ? this.$route.query.tab : "chat", chats: [], chatsLoading: false, chatsError: "", chatSearch: "", creatingChat: false, showNewChat: false, newChatTitle: "", newChatText: "", newChatFiles: [], newChatPreviews: [], _pollTimer: null, _reposPollTimer: null }; },
     computed: {
       // tabs 是 computed 不是靜態陣列：這個專案的自動部署開關關閉時，分頁必須整個不存在。
       // 這只是畫面——後端每一支部署端點自己也擋（requireAdmin + requireAutoDeploy）。
@@ -22,7 +26,10 @@
           return true;
         });
       },
-      embeddedTab() { return { db: window.UiNextDbView, wiki: window.UiNextWikiView, deploy: window.UiNextDeployTargetsView }[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
+      // 縱深防禦（回合 1 審查發現）：db／deploy 是管理員限定分頁，這裡不能只看 detailTab 就掛元件——
+      // deploy 掛上去會直接打管理員限定的部署端點。萬一 detailTab 因為某個沒顧到的路徑（如
+      // data() 初始猜值、或未來新增的入口）落到這兩個值，元件本身也要有第二層擋，不能只靠分頁列藏起來。
+      embeddedTab() { const map = { wiki: window.UiNextWikiView }; if (this.isAdmin()) { map.db = window.UiNextDbView; map.deploy = window.UiNextDeployTargetsView; } return map[this.detailTab] || null; }, filteredChats() { const q = this.chatSearch.trim().toLowerCase(); return q ? this.chats.filter((c) => (c.title || "新對話").toLowerCase().includes(q)) : this.chats; }, hasCloning() { return this.repos.some((repo) => repo.clone_status === "cloning"); }, envActive() { return !!(this.env && (this.env.status === "setting_up" || this.env.status === "running" || this.env.built)); }, filteredBranches() { const q = this.branchQuery.trim().toLowerCase(); return q ? this.remoteBranches.filter((branch) => branch.toLowerCase().includes(q)) : this.remoteBranches; } },
     watch: {
       // 改用 this.tabs（依角色與 auto_deploy_enabled 過濾過）而不是寫死的分頁鍵清單：
       // 否則一般使用者若靠網址把 tab 切成 repos/db/deploy，這裡會照樣接受，
@@ -153,7 +160,10 @@
 </div>
 <div class="ui-next-detail-actions">
 <button @click="openEnv" :disabled="!envActive">測試區</button>
-<button @click="showReleaseModal=true" :disabled="!repos.some(r=>r.clone_status==='done')">上正式</button>
+<!-- 條件用後端算好的 project.can_release（GET /api/projects/:id 已補，見 project-routes.js），
+     不能用 isAdmin：判準是 canReleaseProject（平台管理員 or 該專案綁定勾了可上正式的公司管理員），
+     光看 role 算不出來，掛 isAdmin 會把有權限的公司管理員也擋掉。 -->
+<button v-if="project.can_release" @click="showReleaseModal=true" :disabled="!repos.some(r=>r.clone_status==='done')">上正式</button>
 <button class="ui-next-back" @click="$router.push('/projects')"><ui-next-icon name="arrow-left"/> 所有專案</button>
 </div>
 </header>
@@ -166,7 +176,10 @@
         <nav data-tour="pd-tools" class="ui-next-detail-tabs">
 <button :data-tour="'pd-tab-' + tab[0]" v-for="tab in tabs" :key="tab[0]" :class="{active:detailTab===tab[0]}" @click="selectTab(tab[0])">{{ tab[1] }}<span v-if="tab[0]==='chat'&&unreadCount()">{{ unreadCount() }}</span></button>
 </nav>
-        <div v-if="detailTab==='repos'" class="ui-next-project-detail-grid">
+        <!-- isAdmin() 是縱深防禦（回合 1 審查發現）：分頁列藏了 repos 不代表這裡也擋了，
+             detailTab 只要用任何路徑（含深連結一拍未修正前）落到 'repos'，這個含新增/移除/
+             重新同步的整塊就會照畫。 -->
+        <div v-if="detailTab==='repos'&&isAdmin()" class="ui-next-project-detail-grid">
 <section data-tour="pd-repos" class="ui-next-panel ui-next-repos">
 <div class="ui-next-card-title">
 <div>
