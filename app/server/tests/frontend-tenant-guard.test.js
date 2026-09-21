@@ -38,6 +38,7 @@ const path = require('path');
 const pub = path.join(__dirname, '..', '..', 'public');
 const APP_JS = fs.readFileSync(path.join(pub, 'js', 'app.js'), 'utf8');
 const SHELL = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'UiNextApp.js'), 'utf8');
+const ADMIN_USERS = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'AdminUsers.js'), 'utf8');
 
 // routes 陣列裡每個物件以 path: "…" 開頭，切到下一個 path: 為止（同 frontend-admin-route-guard）。
 const routeBlocks = (() => {
@@ -208,5 +209,53 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
     expect(at).toBeGreaterThan(-1);
     const logout = SHELL.slice(at, SHELL.indexOf('\n      },', at));
     expect(logout).toMatch(/this\.isAdmin\s*=\s*false/);
+  });
+});
+
+// ── 使用者管理頁：角色 ↔ 公司（Task 11）──────────────────────────────────
+// 唯一權威是後端 lib/tenant-access.js 的 validateRoleCompany：
+//   admin 必須「沒有公司」，user／company_admin 必須「有公司」。
+// 前端只要漏送 company_id，平台管理員建一般使用者就是每按必 400——那正是 Task 11 之前的狀態，
+// 而且它是一個「本來會動的畫面壞掉了」，不是少一個欄位。沒有 DOM 測試接得住，只能釘字面。
+// 盲區同本檔開頭：這裡驗的是原始碼長什麼樣，不是瀏覽器真的送了什麼。
+describe('使用者管理頁：建帳號與改角色都帶著公司', () => {
+  // 掃描產生的清單一律自己先斷言筆數（本檔開頭的規矩）：切不到就不是綠燈，是守衛失效。
+  const roleSelects = ADMIN_USERS.match(/<select v-model="[^"]*\.role"[\s\S]*?<\/select>/g) || [];
+
+  test('兩個角色下拉都切得到（新增表單一個、變更角色視窗一個）', () => {
+    expect(roleSelects).toHaveLength(2);
+  });
+
+  // 三個角色少列一個，客戶的第一位公司管理員就只能靠手寫 SQL 建出來。
+  test.each([0, 1])('第 %i 個角色下拉剛好三個角色，且 company_admin 的字面與 CompanyUsers 一致', (i) => {
+    expect(roleSelects[i].match(/<option value="(?:user|company_admin|admin)">/g) || []).toHaveLength(3);
+    expect(roleSelects[i]).toContain('<option value="company_admin">公司管理員</option>');
+  });
+
+  test('建帳號：非平台管理員帶 company_id，平台管理員連這個鍵都不帶', () => {
+    const addUser = ADMIN_USERS.slice(ADMIN_USERS.indexOf('async addUser()'), ADMIN_USERS.indexOf('openRoleEdit(user)'));
+    expect(addUser.length).toBeGreaterThan(200);
+    expect(addUser).toMatch(/role !== 'admin'/);
+    expect(addUser).toMatch(/payload\.company_id\s*=\s*company_id/);
+  });
+
+  test('改角色：company_id 這個鍵一定送出，改成平台管理員時送 null', () => {
+    const submit = ADMIN_USERS.slice(ADMIN_USERS.indexOf('async submitRoleEdit()'), ADMIN_USERS.indexOf('async toggleActive(user)'));
+    expect(submit.length).toBeGreaterThan(200);
+    expect(submit).toMatch(/company_id:\s*role === 'admin' \? null :/);
+  });
+
+  test('公司清單沿用公司管理頁的端點，沒有自己發明一個', () => {
+    expect(ADMIN_USERS).toMatch(/Api\.get\('admin\/companies'\)/);
+  });
+
+  // I7：自助註冊已關閉，approved=false 只剩「被公司管理員停用」一個意思。
+  // 註解要先剝掉——檔裡的註解本身就在講「不要再說待審核」，字面掃描會被它誤判。
+  test('畫面上不得再出現「待審核」，也不得把重新啟用說成「核准」', () => {
+    const code = ADMIN_USERS.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\/.*$/gm, '');
+    expect(code.length).toBeGreaterThan(4000);
+    expect(code).not.toMatch(/待審核/);
+    expect(code).not.toMatch(/核准/);
+    expect(code).toMatch(/已停用/);
   });
 });
