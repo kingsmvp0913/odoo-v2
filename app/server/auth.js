@@ -139,32 +139,13 @@ function registerRoutes(app) {
     }
   });
 
-  // POST /api/auth/register — 自助註冊（建 pending 帳號，回 token 供本次引導精靈設定憑證）。
-  // 與 setup 不同：users 非空也可註冊；一律 role='user'、approved=false（唯一寫 false 的路徑）。
-  app.post('/api/auth/register', async (req, res) => {
-    try {
-      const { username, password, display_name } = req.body;
-      if (!username || !password || !display_name) {
-        return res.status(400).json({ error: 'username, password, display_name required' });
-      }
-      if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
-
-      const password_hash = await hashPassword(password);
-      // 租戶隔離：自助註冊一律 role='user'（非平台管理員），預設掛內部公司——否則遷移跑完後
-      // company_id 永遠 NULL，canSeeProject 恆為 false，核准之後照樣什麼都看不到。
-      // 此為暫時預設值，子專案 2（Part 2）會在管理員介面改成明確選公司，屆時這裡要拿掉。
-      // 遷移還沒跑之前沒有內部公司，此時就是 no-op（維持 NULL），不因此擋掉註冊。
-      const { rows: internalRows } = await query('SELECT id FROM companies WHERE is_internal = true LIMIT 1');
-      const companyId = internalRows[0] ? internalRows[0].id : null;
-      const { rows: inserted } = await query(
-        'INSERT INTO users (username, password_hash, display_name, role, approved, company_id) VALUES ($1, $2, $3, $4, false, $5) RETURNING id',
-        [username, password_hash, display_name, 'user', companyId]
-      );
-      res.status(201).json({ token: signToken(inserted[0].id) });
-    } catch (err) {
-      if (err.code === '23505') return res.status(409).json({ error: '帳號已存在' });
-      res.status(500).json({ error: err.message });
-    }
+  // 規格 §8 P3：多租戶之後帳號一律由平台管理員或公司管理員建立，自助註冊關閉。
+  // 保留這支路由只為了回一個講得清楚的訊息——整支移除的話舊前端會拿到 404，
+  // 看起來像壞掉而不是像被關閉。
+  // ⚠ 不要因為這支關了就順手動 POST /api/auth/setup：那是全新安裝建第一個管理員的唯一入口，
+  //    它自己的守衛是「users 表不是空的就 403」，與本規則無關。
+  app.post('/api/auth/register', (req, res) => {
+    res.status(403).json({ error: '本平台不開放自助註冊，請聯絡貴公司的管理員開通帳號' });
   });
 
   // POST /api/auth/login — authenticate and return token + user (no password_hash)
