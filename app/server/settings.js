@@ -7,9 +7,17 @@ const { encrypt } = require('./lib/crypto');
 const { encryptSettings, decryptSettings, redactSettings, preserveSecrets } = require('./lib/user-settings');
 const { requireFeature, companyHasFeature } = require('./lib/company-features');
 
-// 客戶端 PUT /api/settings 忽略、GET 隱藏的鍵——Odoo／eService 是「我們連客戶系統用的憑證」，
-// 客戶自己不該看到也不該能改（規格 §8 P2）。theme／saved_views 是純 UI 偏好，不在此列。
+// 客戶端 PUT /api/settings 忽略寫入的鍵——Odoo／eService 是「我們連客戶系統用的憑證」，
+// 客戶自己不該能改（規格 §8 P2）。PUT 是同一顆儲存鈕整包送出，只能忽略這些鍵、不能拒絕整包，
+// 所以維持黑名單：只擋已知會寫壞的欄位，其餘（含未來新欄位）照常讓客戶自己的東西寫進去。
 const SYNC_ONLY_KEYS = ['odoo_username', 'odoo_password', 'odoo_user_id', 'service_username', 'service_password', 'service_user_id'];
+
+// 客戶端 GET /api/settings 的 odoo_settings 只回這些鍵——白名單，不是黑名單（P3-4：閘門遇到
+// 模稜兩可一律落在「關」）。黑名單的失敗模式是「以後誰往 odoo_settings 加新欄位，預設就外洩
+// 給客戶」——加欄位的人在改別的功能，根本不會想到這裡有一道過濾，而且外洩沒有任何徵狀，客戶
+// 看到不該看的東西，我們永遠不會知道。白名單則相反：漏列的新欄位客戶看不到，這種疏漏當天就
+// 會有人來抱怨「我的欄位不見了」——同一個疏忽，白名單壞的方向是安全的方向。
+const CUSTOMER_SETTINGS_WHITELIST = ['theme', 'saved_views'];
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -55,9 +63,13 @@ function registerRoutes(app) {
       const canSync = await companyHasFeature(req.actor && req.actor.companyId, 'odoo_sync');
       if (!canSync) {
         // 客戶看不到 Odoo／eService 相關鍵（規格 §8 P2）：那是我們連客戶系統用的憑證，不是他的東西。
-        // theme／saved_views 等純 UI 偏好維持照舊。odoo_settings 可能是 null（從未存過設定）。
+        // 白名單過濾，見 CUSTOMER_SETTINGS_WHITELIST 的註解。odoo_settings 可能是 null（從未存過設定）。
         if (result.odoo_settings && typeof result.odoo_settings === 'object') {
-          for (const key of SYNC_ONLY_KEYS) delete result.odoo_settings[key];
+          const filtered = {};
+          for (const key of CUSTOMER_SETTINGS_WHITELIST) {
+            if (key in result.odoo_settings) filtered[key] = result.odoo_settings[key];
+          }
+          result.odoo_settings = filtered;
         }
         delete result.sync_interval;
       }

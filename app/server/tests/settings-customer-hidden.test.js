@@ -97,3 +97,14 @@ test('平台管理員（沒有公司）不受影響', async () => {
   expect((await request(app).get('/api/settings').set(as(adminToken))).status).toBe(200);
   expect((await request(app).post('/api/settings/verify-odoo').set(as(adminToken)).send({})).status).not.toBe(404);
 });
+
+test('白名單方向：odoo_settings 裡「未來才會出現」的陌生鍵，客戶預設看不到——防的是有人加新欄位卻忘了回頭補這道過濾', async () => {
+  // 直接寫 DB 模擬「以後某功能往 odoo_settings 加了一個新欄位」，而完全沒人碰過 settings.js 的過濾清單。
+  await dbModule.query('UPDATE users SET odoo_settings = $2 WHERE username = $1',
+    ['cust', JSON.stringify({ theme: 'light', a_field_nobody_whitelisted_yet: 'leak-me' })]);
+  const res = await request(app).get('/api/settings').set(as(custToken));
+  expect(res.status).toBe(200);
+  // 白名單的話，沒被明確列進 CUSTOMER_SETTINGS_WHITELIST 的鍵一律不回——即使它跟 Odoo/eService 毫無關係。
+  expect(res.body.odoo_settings.a_field_nobody_whitelisted_yet).toBeUndefined();
+  expect(res.body.odoo_settings.theme).toBe('light');   // 白名單內的鍵照樣要回，不能連 UI 偏好一起誤殺
+});
