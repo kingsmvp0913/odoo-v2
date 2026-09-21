@@ -10,6 +10,9 @@ const { query } = require('../db');
 // defaultForCustomer 目前一律 false：新客戶預設什麼加值功能都沒開，要平台管理員明確開。
 const FEATURES = {
   exam: { key: 'exam', label: '考試系統', defaultForCustomer: false },
+  // Odoo 帳密與 eService 同步設定（規格 §8 P2）。那是「我們用來連客戶系統的憑證」，
+  // 客戶自己不需要這個介面。內部公司自動全開，不必回頭設定。
+  odoo_sync: { key: 'odoo_sync', label: 'Odoo 連線與同步設定', defaultForCustomer: false },
 };
 
 // 只留認得的 key；只有布林 true 或字串 'true' 算開啟，其餘一律關閉。
