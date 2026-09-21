@@ -129,9 +129,11 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 終端機頁面能直接下指令操作任務所在容器，2026-09-21 使用者裁決 D2「兩個都收」
+      // 收斂為平台管理員限定。
       path: "/task/:id/terminal",
       component: window.UiNextEnabled ? window.UiNextTerminalView : window.TerminalView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/projects",
@@ -191,28 +193,38 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 架構圖是平台內部實作細節，2026-09-21 起收斂為平台管理員限定（規格 §5.5）。
       path: "/architecture",
       component: window.UiNextEnabled ? window.UiNextArchitectureView : window.ArchitectureView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
+      // 流程圖同上，收斂為平台管理員限定（規格 §5.5）。
       path: "/pipeline-flow",
       component: window.UiNextEnabled ? window.UiNextPipelineFlowView : window.PipelineFlowView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       // 認證題庫只有 ui-next 版本，沒有 legacy 對應（舊版不再新增頁面）。
       // legacy 模式下 index.html 不載入 ExamBank.js，這裡會是 undefined；
       // 但入口只掛在 ui-next 的「更多工具」選單裡，legacy 使用者走不到這條路由。
+      //
+      // 用 requiresInternal 而非 requiresAdmin：規格 §5.5 原文把考試列為平台管理員限定，
+      // 但 2026-09-21 的裁決推翻了這一列——考試改由公司功能開關（features.exam）決定，
+      // 鎖成管理員限定會把考試從 7 個內部同事手上收走。這裡是近似（內部人員＝有考試功能），
+      // 真正精確的判斷在後端 requireFeature('exam')（3a Task 2 已上線）與 nav（Task 4 用
+      // features.exam）。這個近似在「客戶公司被開了考試功能」時會過嚴：router 擋、後端放行。
+      // 這是刻意的保守——router 擋錯的後果是客戶看不到一個他該看到的入口（會有人來說），
+      // 放行錯的後果是客戶進到內部題庫（不會有人說）。不要把這裡改回 requiresAdmin。
       path: "/exam-bank",
       component: window.UiNextExamBankView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresInternal: true },
     },
     {
-      // 考試作戰台（考試當天用）。同樣只有 ui-next 版本，理由同上。
+      // 考試作戰台（考試當天用）。同樣只有 ui-next 版本、同樣用 requiresInternal，理由同上。
       path: "/exam-run",
       component: window.UiNextExamRunView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresInternal: true },
     },
     {
       // 產品化規格頁：只有 ui-next 版本（理由同上）。內容是內部規劃文件，
@@ -305,6 +317,18 @@ router.beforeEach(async (to) => {
     try {
       const me = await Api.get("auth/me");
       if (me.role !== "admin") return "/forbidden";
+    } catch {
+      return { path: "/login", query: { redirect: to.fullPath } };
+    }
+  }
+  // requiresAdmin 與 requiresInternal 各自打一次 auth/me，沒有合併——合併是對的方向，
+  // 但那是既有 guard 的重構，超出本次任務範圍。
+  if (to.meta.requiresInternal) {
+    try {
+      const me = await Api.get("auth/me");
+      // 平台管理員沒有公司，後端一律視為內部人員；這裡照樣只看 is_internal，
+      // 不要再補 role === 'admin' 的特判——特判會讓兩邊的定義慢慢分岔。
+      if (me.is_internal !== true) return "/forbidden";
     } catch {
       return { path: "/login", query: { redirect: to.fullPath } };
     }
