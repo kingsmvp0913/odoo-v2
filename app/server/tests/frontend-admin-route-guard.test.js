@@ -69,12 +69,25 @@ describe('非 /admin 前綴的 admin-only 頁面', () => {
 });
 
 describe('沒有全域 admin gate（NEXT-P0-001 不得復辟）', () => {
-  // guard 本體：從 router.beforeEach 到函式結尾。
+  // guard 本體：從 router.beforeEach 切到它自己的收尾 `\n});`。
+  // 原本這裡寫死 `start + 1200`，而區塊當下實際是 1245 字元——最後 45 字元
+  // （/company-users 分支的結尾）根本不在下面任何一條斷言的視野內。
+  // 那不是「總有一天會截到」，是當下就已經截掉了。
+  // 改用 frontend-tenant-guard.test.js 切同一個區塊的作法（收尾錨點），不另創第三種寫法。
   const guard = (() => {
     const start = APP_JS.indexOf('router.beforeEach');
-    expect(start).toBeGreaterThan(-1);
-    return APP_JS.slice(start, start + 1200);
+    const end = APP_JS.indexOf('\n});', start);
+    return start < 0 || end < 0 ? '' : APP_JS.slice(start, end + 4);
   })();
+
+  // 切片失敗時整個 describe 會退化成「什麼都沒比對到」的假綠，所以先釘住切片本身。
+  test('guard 整段切得到（切不到就不是綠燈，是守衛失效）', () => {
+    expect(guard.length).toBeGreaterThan(400);
+    expect(guard.trimEnd().endsWith('});')).toBe(true);
+    // 寫死長度的年代，這一段是掉在視野外的；釘住它確保切片涵蓋到最後一個分支。
+    expect(`/company-users 在切片內: ${guard.includes('/company-users')}`)
+      .toBe('/company-users 在切片內: true');
+  });
 
   test('requiresAuth 的分支只驗登入，不碰 role', () => {
     // 抓 requiresAuth 那一段（到下一個 if 為止），裡面不該出現 role。

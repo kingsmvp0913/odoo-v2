@@ -93,9 +93,9 @@ describe('route 表：3b 收斂掉的路由旗標', () => {
   });
 });
 
-// frontend-admin-route-guard 只驗到 requiresAdmin 那一段（它的切片長度是寫死的 1200 字元，
-// requiresInternal 這個後加的分支剛好還在裡面，但再多幾行註解就會掉出去）。
-// 這裡自己把 beforeEach 整段切乾淨再驗。
+// frontend-admin-route-guard 只驗到 requiresAdmin 那一段（它原本的切片長度是寫死的 1200 字元，
+// 而區塊實際有 1245 字元，最後一個分支的結尾根本不在它視野內；現已改成跟這裡同一個收尾錨點）。
+// 這裡自己把 beforeEach 整段切乾淨，逐分支比對。
 describe('router guard：requiresInternal 分支', () => {
   const guard = (() => {
     const start = APP_JS.indexOf('router.beforeEach');
