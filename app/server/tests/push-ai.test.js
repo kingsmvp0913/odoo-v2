@@ -217,3 +217,51 @@ test('gitEnv 取的是核准者（approved_by），不是任務發起人', async
 
   expect(identMock.buildGitEnv).toHaveBeenCalledWith(approver.id);
 });
+
+// 意圖（第 3a 部再審）：GIT 憑證退回個人 → 公司後拿掉了「只用本人 PAT」那道歸屬煞車，
+// /release（project-routes.js）已補記 source 到 task_logs 當補償，但這條 push-ai 路徑當時漏補——
+// 「歸屬仍然看得出來」對這條路徑是假的。這裡釘住：真的退到公司憑證時，task_logs 要留得下痕跡，
+// 且措辭要講明是 ai-dev（不是 /release 那條的 main），時間軸上兩者才分得開。
+test('用公司 GitHub 憑證推送 → task_logs 記下憑證種類與目標分支（ai-dev）', async () => {
+  const taskId = await setupTask();
+  identMock.buildGitEnv.mockResolvedValue({ GIT_PAT: 'co-pat', source: 'company' });
+
+  await pushAi.runPushAi(taskId, userId, undefined);
+
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%併入 ai-dev%'", [taskId]
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0].content).toMatch(/公司 GitHub 憑證/);
+  expect(rows[0].content).toMatch(/ai-dev/);
+});
+
+// 意圖：個人 PAT 是預設路徑，措辭要對應寫「個人」而非「公司」——兩種來源不能共用同一句話,
+// 否則使用者事後查 task_logs 分辨不出這次推送用的到底是誰的憑證。
+test('用個人 GitHub 憑證推送 → task_logs 記「個人」而非「公司」', async () => {
+  const taskId = await setupTask();
+  identMock.buildGitEnv.mockResolvedValue({ GIT_PAT: 'personal-pat', source: 'personal' });
+
+  await pushAi.runPushAi(taskId, userId, undefined);
+
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%併入 ai-dev%'", [taskId]
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0].content).toMatch(/個人 GitHub 憑證/);
+});
+
+// 意圖：repo 清單裡的 repo 全部因為沒有任務分支被跳過時，沒有任何 push 真的發生——
+// 這時寫「已併入 ai-dev（使用…推送）」是假紀錄，比不寫更糟，必須確認完全不寫這則 log。
+test('所有 repo 都無任務分支被跳過 → 沒有實際 push，不寫入憑證種類 log', async () => {
+  const taskId = await setupTask(['late']);
+  gitMock.refExists.mockResolvedValue(false);
+
+  await pushAi.runPushAi(taskId, userId, undefined);
+
+  expect(gitMock.mergeToAiBranch).not.toHaveBeenCalled();
+  const { rows } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '%併入 ai-dev%'", [taskId]
+  );
+  expect(rows).toHaveLength(0);
+});

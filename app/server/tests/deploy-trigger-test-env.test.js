@@ -78,8 +78,15 @@ async function setup({ targets = [] } = {}) {
 const said = () => notify.emitToUser.mock.calls
   .map(c => (c[2] && c[2].data) || '').filter(d => d.includes('[DEPLOY]')).join('');
 // 任務對話。said() 讀的 socket 訊息不落 DB，重整就沒了——使用者事後找得回來的只有這裡。
+// 只挑部署那一則：push-ai 完成推送後另外會補一則「憑證種類」log（見 push-ai.test.js），
+// 與本檔要驗的部署內容是兩件事，混在一起算會讓「沒事不寫」「一次合寫一則」這類斷言誤判。
+// 用 substring 前綴比對而非 LIKE：pg-mem 的 LIKE 轉 regex 沒有 dotAll，內容一旦帶換行
+// （部署訊息固定是「[客戶測試區部署]\n...」）'%關鍵字%' 與前綴 '關鍵字%' 都會恆回 0 筆，
+// 即使關鍵字本身出現在換行之前也一樣（實測）。9 是「[客戶測試區部署]」的字元數，寫死長度。
+const DEPLOY_LOG_PREFIX = '[客戶測試區部署]';
 const chat = async (id) => (await dbModule.query(
-  "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' ORDER BY id", [id]
+  "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' AND substring(content, 1, 9) = $2 ORDER BY id",
+  [id, DEPLOY_LOG_PREFIX]
 )).rows.map(r => r.content).join('\n');
 const statusOf = async (id) => (await dbModule.query('SELECT status FROM tasks WHERE id=$1', [id])).rows[0].status;
 
@@ -213,8 +220,10 @@ test('同一次部署的多個資料庫合寫成一則對話', async () => {
     { env: 'test', enabled: true, db_name: 'db_b' },
   ] });
   await pushAi.runPushAi(id, userId, null);
+  // 同上：push-ai 完成推送後另外會補一則憑證種類 log，這裡只算部署那一則（見 chat() 的說明）。
   const { rows } = await dbModule.query(
-    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai'", [id]);
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' AND substring(content, 1, 9) = $2",
+    [id, DEPLOY_LOG_PREFIX]);
   expect(rows).toHaveLength(1);
   expect(rows[0].content).toMatch(/db_a/);
   expect(rows[0].content).toMatch(/db_b/);

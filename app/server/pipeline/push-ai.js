@@ -51,6 +51,9 @@ async function doPushAi(task, taskId, userId, signal) {
   const { mergeToAiBranch, concludeAiMerge, deleteBranchLocal, removeWorktree, refExists, symlinkChanges, AI_BRANCH } = require('./git');
   const { resolveConflicts } = require('./merge-agent');
   const conflictByRepo = [];
+  // 記錄「這次是不是真的推了 code」——repo 清單裡可能每個都因為沒有任務分支而被跳過（見下方
+  // refExists 分支），此時沒有任何 push 發生，補記憶檔的憑證種類反而是誤導。
+  let anyPushed = false;
 
   for (const repo of repos) {
     // repo 清單是「此刻」查的，任務開跑後才加進專案的 repo 也在裡面，但它沒有 worktree 也沒有任務
@@ -71,6 +74,7 @@ async function doPushAi(task, taskId, userId, signal) {
       const symlinks = await symlinkChanges(repo.local_path, AI_BRANCH, task.git_branch);
       if (symlinks.length) throw new Error(`任務分支含符號連結（不允許）：${symlinks.join(', ')}`);
       await mergeToAiBranch(repo.local_path, task.git_branch, gitEnv);
+      anyPushed = true;
       continue;
     } catch (err) {
       // 帶 conflictFiles ＝可解可裁決（本機併分支或 push 撞遠端皆然）；其餘（權限／網路／分支不見）
@@ -94,6 +98,7 @@ async function doPushAi(task, taskId, userId, signal) {
     }
     try {
       await concludeAiMerge(repo.local_path, conflictFiles, `[merge] ${task.git_branch} → ai-dev (resolve conflicts)`, gitEnv);
+      anyPushed = true;
       notify.emitToUser(userId, 'terminal:output', { taskId, data: `[PUSH-AI] ${repo.label}：衝突已自動解決\n` });
     } catch (err) {
       // 了結／續推階段又撞遠端競態（另一實例剛推進）→ 交人工，MERGE_HEAD 留原地
@@ -117,6 +122,20 @@ async function doPushAi(task, taskId, userId, signal) {
     );
     notify.emitToUser(userId, 'task:updated', { taskId, status: 'merge_conflict' });
     return;
+  }
+
+  // GIT 憑證退回規則（09-11／09-14 裁決，規格 §6）：個人 → 公司 → 擋下。這條 push 路徑
+  // 與 /release（project-routes.js）用的是同一套退回鏈與同一份補償承諾——「歸屬仍然看得出來」
+  // 靠 buildGitEnv 回傳的 source 落地成 task_logs，這裡此前完全沒有記錄，是本輪要補的那一角。
+  // 寫在確定至少有一個 repo 真的推了 ai-dev 之後（anyPushed），而不是取到 gitEnv 就寫——
+  // 全部 repo 都因為沒有任務分支被跳過時，沒有任何 push 發生，寫下去反而是假紀錄。
+  // 目標分支寫明「ai-dev」：這裡與上正式推的 main 是不同分支，時間軸上要分得出來。
+  if (anyPushed) {
+    const sourceLabel = gitEnv.source === 'company' ? '公司 GitHub 憑證' : '個人 GitHub 憑證';
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [taskId, `[併入 ai-dev] 程式已併入 ai-dev 分支並推送（使用${sourceLabel}推送）。`]
+    ).catch(() => {});
   }
 
   // 併完才清理：worktree 與任務分支消失後就回不去了，衝突未決時不能動（best-effort，不阻斷）
