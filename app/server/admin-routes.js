@@ -16,6 +16,7 @@ const { listAgents, loadAgent, updateAgent, getLabels, refreshCodexModels } = re
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
 const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
+const { validateRoleCompany } = require('./lib/tenant-access');
 const { getHealthCheckSchedule, getCronSchedules } = require('./cron');
 const platformBackup = require('./lib/platform-backup');
 
@@ -353,7 +354,7 @@ function registerRoutes(app) {
 
   app.post('/api/admin/users', auth, async (req, res) => {
     try {
-      const { username, password, display_name, role } = req.body;
+      const { username, password, display_name, role, company_id } = req.body;
       if (!username || !password) return res.status(400).json({ error: 'username and password required' });
       if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
       const password_hash = await hashPassword(password);
@@ -362,15 +363,13 @@ function registerRoutes(app) {
       // 啟動還會把既有值清成 NULL。這裡是最後一條殘留的寫入路徑（寫了下次重啟就沒了，只剩外洩面）。
       // 欄位本身依 db.js 無 drop column 機制的慣例保留。
       const finalRole = role || 'user';
-      // 租戶隔離：非平台管理員的新帳號預設掛內部公司，否則遷移跑完後 company_id 永遠 NULL，
-      // canSeeProject 對這個人恆為 false，畫面表現跟項目 1 同一種「列表看得到、開就 404」。
-      // 平台管理員一律留 NULL——這是全平台角色模型的地基，不能因為給了預設值就被誤綁公司。
-      // 此為暫時預設值，子專案 2（Part 2）會在管理員介面改成明確選公司，屆時這裡要拿掉。
-      // 遷移還沒跑之前沒有內部公司，此時就是 no-op（維持 NULL），不因此擋掉建帳號。
-      let companyId = null;
-      if (finalRole !== 'admin') {
-        const { rows: internalRows } = await query('SELECT id FROM companies WHERE is_internal = true LIMIT 1');
-        companyId = internalRows[0] ? internalRows[0].id : null;
+      // 租戶隔離：公司要由平台管理員在建帳號當下明確選，不再暗中掛內部公司（子專案 2）。
+      const companyId = company_id === undefined || company_id === '' || company_id === null ? null : company_id;
+      const roleCheck = validateRoleCompany(finalRole, companyId);
+      if (!roleCheck.ok) return res.status(400).json({ error: roleCheck.error });
+      if (companyId !== null) {
+        const { rows: coRows } = await query('SELECT 1 FROM companies WHERE id = $1', [companyId]);
+        if (!coRows.length) return res.status(400).json({ error: '公司不存在' });
       }
       const { rows } = await query(
         `INSERT INTO users (username, password_hash, display_name, role, company_id)
@@ -387,13 +386,23 @@ function registerRoutes(app) {
   app.put('/api/admin/users/:id', auth, async (req, res) => {
     try {
       const { role, display_name, approved } = req.body;
+      // company_id 要能被明確設成 null（把人升成平台管理員時要清掉公司），所以看 body 裡
+      // 有沒有這個 key，不是看它是不是 truthy——truthy 判斷會讓 null 被當成「沒帶」而維持舊值。
+      const hasCompanyId = Object.prototype.hasOwnProperty.call(req.body, 'company_id');
+      const { rows: currentRows } = await query('SELECT role, company_id FROM users WHERE id = $1', [req.params.id]);
+      if (!currentRows.length) return res.status(404).json({ error: 'Not found' });
+      const nextRole = role || currentRows[0].role;
+      const nextCompanyId = hasCompanyId ? req.body.company_id : currentRows[0].company_id;
+      const roleCheck = validateRoleCompany(nextRole, nextCompanyId);
+      if (!roleCheck.ok) return res.status(400).json({ error: roleCheck.error });
       const { rows } = await query(
         `UPDATE users SET
            role = COALESCE($2, role),
            display_name = COALESCE($3, display_name),
-           approved = COALESCE($4, approved)
-         WHERE id = $1 RETURNING id, username, display_name, role, approved`,
-        [req.params.id, role || null, display_name || null, typeof approved === 'boolean' ? approved : null]
+           approved = COALESCE($4, approved),
+           company_id = $5
+         WHERE id = $1 RETURNING id, username, display_name, role, approved, company_id`,
+        [req.params.id, role || null, display_name || null, typeof approved === 'boolean' ? approved : null, nextCompanyId]
       );
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(rows[0]);
