@@ -168,8 +168,13 @@ test('POST /api/auth/login → 未核准帳號 403 pendingApproval', async () =>
   expect(res.body.pendingApproval).toBe(true);
 });
 
-// 意圖：未核准閘門——pending token 只准碰 auth/settings，碰工作台 API 一律 403 pendingApproval。
-test('未核准閘門：pending token 打工作台 API → 403；打 settings → 放行（非閘門 403）', async () => {
+// 意圖：這支原本斷言「pending token 能放行走 settings」——那是舊行為，前提是「待審核」與
+// 「已停用」是兩個要分開處理的狀態。P3-13 裁決：這個前提不再成立（正式環境零筆待審／NULL，
+// 而且全庫唯一寫入 approved=false 的路徑 auth.js:155 在同一份計畫的 Task 8 會被關掉），
+// 之後 approved=false 只剩一種意思：被公司管理員收回存取權。所以本關在 verifyToken 補上
+// 「approved===false 一律 403」之後，這支測試斷言的行為就是刻意被推翻的舊行為，不是新缺陷
+// ——翻面保留（不刪），紀錄「這裡曾經是反過來的、後來被刻意改掉」。
+test('收回存取權（approved=false）：所有路徑一律 403，包含舊閘門原本放行的 settings', async () => {
   // 拿 pending 帳號的 register token
   const reg = await request(app).post('/api/auth/register').send({
     username: 'pend2', password: 'password123', display_name: 'P2'
@@ -180,9 +185,10 @@ test('未核准閘門：pending token 打工作台 API → 403；打 settings �
   expect(blocked.status).toBe(403);
   expect(blocked.body.pendingApproval).toBe(true);
 
-  // settings 白名單：閘門放行（route 自身因缺 body 回 400，證明不是被閘門 403 擋）
+  // index.js 舊閘門的 settings 白名單現在攔不到這裡——verifyToken 自己的 approved 檢查
+  // 跑得更早，同一個 token 打 settings 一樣要被擋下來。
   const passed = await request(app).post('/api/settings/verify-odoo').set('Authorization', `Bearer ${pendToken}`).send({});
-  expect(passed.status).not.toBe(403);
+  expect(passed.status).toBe(403);
 });
 
 // 意圖：已核准（admin）token 不被閘門擋。

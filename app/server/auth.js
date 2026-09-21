@@ -63,7 +63,7 @@ async function verifyToken(req, res, next) {
     // 租戶隔離（規格 §5.1）：一次把身分與公司狀態撈齊，後面的路由不必各自再查一次。
     // LEFT JOIN 而不是 JOIN——平台管理員沒有公司，遷移跑完之前一般使用者也還沒有。
     const { rows } = await query(
-      `SELECT u.role, u.company_id, c.name AS company_name, c.is_active, c.is_internal,
+      `SELECT u.role, u.company_id, u.approved, c.name AS company_name, c.is_active, c.is_internal,
               c.active_from, c.active_until
          FROM users u
          LEFT JOIN companies c ON c.id = u.company_id
@@ -72,6 +72,11 @@ async function verifyToken(req, res, next) {
     );
     if (!rows.length) return res.status(401).json({ error: 'Invalid token' });
     const r = rows[0];
+    // 停用（規格 §8 P6 補充，2026-09-21 盤查）：公司管理員按下停用只把 approved 設 false，
+    // 若這裡不擋，對方手上還沒過期的 token（最長 7 天）照樣能打通所有 API——停用等於做半套。
+    // 判斷式必須是 `=== false`：這欄多數既有帳號是 NULL（含平台管理員），`!r.approved` 會把
+    // 從沒被寫過這欄的人全部鎖在外面，寫法照抄下面 auth.js 登入檢查的既有寫法。
+    if (r.approved === false) return res.status(403).json({ error: '帳號已停用' });
     req.role = r.role;
     // 語意不變：全平台至少 6 處自己查 role === 'admin'，這裡改了就會全面走樣
     req.isAdmin = r.role === 'admin';
