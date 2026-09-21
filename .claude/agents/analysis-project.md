@@ -145,6 +145,9 @@ clarification_channel:
 - 例：「報價單客戶欄之後看得到『備註T』欄位」「輸入內容存檔重載後值仍在」「列印 PDF 內含該備註內容」。
 - 若需求無可觀察行為（純內部重構等），acceptance 可留空 []。
 
+【本專案的自動化測試設定】
+{{e2e_note}}
+
 【permissions 撰寫規則】
 - 這一欄是寫給使用者看的，用畫面上的名詞（群組的中文 name、選單路徑、欄位的 string），不要只寫 Model 技術名。
 - 依 CLAUDE.md 的權限守則 P0~P6 推導；推得出來的寫這裡給使用者過目，推不出來的（P4 那三種）寫進 clarification_channel.questions，不要在這裡自己決定。
