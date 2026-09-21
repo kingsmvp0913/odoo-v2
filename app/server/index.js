@@ -131,6 +131,10 @@ function createApp() {
     // 這關會悄悄放行本該擋下的請求。正式環境不會缺 JWT_SECRET（啟動腳本擋著不給開機），
     // 但兩處各自求值本身就是地雷，靠共用同一個常數消掉。
     const { JWT_SECRET } = require('./auth');
+    // 判斷本體在 lib/tenant-access.js 的 isCompanyUsable：這一關與 buildActor 必須同一套
+    // 答案，各寫一份就會出現「閘門放行、buildActor 卻標成不可用」這種自相矛盾的狀態。
+    // 跟上面幾個 require 一樣提到 app.use 外面——這支 handler 每個 /api 請求都會跑。
+    const { isCompanyUsable } = require('./lib/tenant-access');
     app.use('/api', async (req, res, next) => {
       if (req.method === 'GET' && req.path === '/auth/me') return next();
       const header = req.headers.authorization;
@@ -147,11 +151,7 @@ function createApp() {
         // JOIN 沒撈到 ⇒ 這個人沒有公司（平台管理員，或遷移還沒跑的舊帳號）⇒ 放行
         if (!rows[0]) return next();
         const r = rows[0];
-        const now = new Date();
-        const usable = r.is_active === true
-          && (!r.active_from || now >= new Date(r.active_from))
-          && (!r.active_until || now <= new Date(r.active_until));
-        if (!usable) {
+        if (!isCompanyUsable(r.is_active, r.active_from, r.active_until, new Date())) {
           return res.status(403).json({ error: '公司帳號已停用或不在使用期間', companyUnusable: true });
         }
       } catch {

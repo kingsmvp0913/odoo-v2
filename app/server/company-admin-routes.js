@@ -9,7 +9,7 @@
  */
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
-const { requirePlatformAdmin } = require('./lib/tenant-access');
+const { requirePlatformAdmin, isCompanyUsable } = require('./lib/tenant-access');
 const { FEATURES, normalizeFeatures } = require('./lib/company-features');
 const { encrypt } = require('./lib/crypto');
 const { buildGitEnvFromPat } = require('./lib/git-identity');
@@ -96,12 +96,11 @@ function registerRoutes(app) {
       const { rows: out } = await query(`${listSql} WHERE c.id = $1`, [req.params.id]);
       // 規格 §7 第五列：這次修改讓公司變成不可用時，立刻中止它正在跑的 AI。
       // 用改完的值判斷，不是用 req.body——只帶 active_until 也可能讓公司變成過期。
+      // 判斷本體在 lib/tenant-access.js 的 isCompanyUsable，與全域閘門同一套答案。
       const after = out[0];
-      const now = new Date();
-      const usable = after.is_active === true
-        && (!after.active_from || now >= new Date(after.active_from))
-        && (!after.active_until || now <= new Date(after.active_until));
-      if (!usable) await abortCompanyTasks(req.params.id);
+      if (!isCompanyUsable(after.is_active, after.active_from, after.active_until, new Date())) {
+        await abortCompanyTasks(req.params.id);
+      }
       res.json(shape(out[0]));
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: '公司名稱已存在' });

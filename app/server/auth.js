@@ -10,6 +10,7 @@ const { query } = require('./db');
 const { hashPassword, checkPassword } = require('./password');
 const { redactSettings, CUSTOMER_SETTINGS_WHITELIST } = require('./lib/user-settings');
 const { FEATURES, companyHasFeature } = require('./lib/company-features');
+const { isCompanyUsable } = require('./lib/tenant-access');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
@@ -27,11 +28,8 @@ function buildActor(userId, row, now = new Date()) {
   const companyId = row.company_id ?? null;
   let companyUsable = true;
   if (companyId !== null) {
-    const from = row.active_from ? new Date(row.active_from) : null;
-    const until = row.active_until ? new Date(row.active_until) : null;
-    companyUsable = row.is_active === true
-      && (from === null || now >= from)
-      && (until === null || now <= until);
+    // 判斷本體在 lib/tenant-access.js 的 isCompanyUsable——全平台同一條規則只能有一份。
+    companyUsable = isCompanyUsable(row.is_active, row.active_from, row.active_until, now);
   }
   return {
     userId,

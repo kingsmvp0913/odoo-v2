@@ -94,6 +94,26 @@ function requirePlatformAdmin(req, res, next) {
   next();
 }
 
+// 「這家公司現在能不能用」的唯一真相（規格 §5.1、§7）。
+// 這條規則原本在 auth.js 的 buildActor、index.js 的全域閘門、company-admin-routes.js 的
+// 「改完要不要中止 AI」以及本檔的 isUserCompanyUsable 各抄一份，而且四份並不一致：
+// buildActor 先把值轉成 Date 再跟 null 比，另外三份直接看原值的 falsy。欄位是空字串時，
+// 前者算「不可用」（new Date('') 是 Invalid Date，跟它比大小一律 false），
+// 後者算「沒填＝不限期間＝可用」——同一家公司會因為請求剛好走到哪條路而得到相反的答案。
+//
+// 這裡取 falsy 那一邊。理由不是「比較安全」而是「比較好讀」：companies.active_from／
+// active_until 在 db.js 宣告成 TIMESTAMPTZ，Postgres 存不進空字串（''::timestamptz 直接報錯），
+// 所以那個分歧根本到不了，兩種寫法的安全性沒有差別。既然如此就取「沒填＝不限期間」這個
+// 跟欄位可為 NULL 的語意直接對應的讀法。
+//
+// 刻意保持純同步：四個呼叫端手上都已經有那一列了，為了問這句話再查一次 DB 是白花的；
+// 尤其 buildActor 每一個通過認證的請求都會跑到它。
+function isCompanyUsable(isActive, activeFrom, activeUntil, now = new Date()) {
+  return isActive === true
+    && (!activeFrom || now >= new Date(activeFrom))
+    && (!activeUntil || now <= new Date(activeUntil));
+}
+
 // 不經過 HTTP 的路徑（AI 執行、cron、系統觸發的 git）要能自己問「這個人的公司現在能用嗎」。
 // 判斷邏輯與 auth.js 的 buildActor 一致：沒有公司一律算可用——平台管理員沒有公司，
 // 而遷移之前一般帳號也還沒有。寫反的話會把平台管理員自己鎖死。
@@ -108,9 +128,7 @@ async function isUserCompanyUsable(userId, now = new Date()) {
   );
   if (!rows[0]) return true;
   const r = rows[0];
-  return r.is_active === true
-    && (!r.active_from || now >= new Date(r.active_from))
-    && (!r.active_until || now <= new Date(r.active_until));
+  return isCompanyUsable(r.is_active, r.active_from, r.active_until, now);
 }
 
 // 「這個人算不算內部人員」。平台管理員沒有公司，他們本來就是內部人員 ⇒ true。
@@ -133,5 +151,5 @@ async function isUserCompanyInternal(userId) {
 module.exports = {
   ROLES, validateRoleCompany, hasCompany,
   canSeeProject, loadProjectForActor, canReleaseProject, canManageCompanyUsers, requirePlatformAdmin,
-  isUserCompanyUsable, isUserCompanyInternal,
+  isCompanyUsable, isUserCompanyUsable, isUserCompanyInternal,
 };

@@ -52,6 +52,78 @@ beforeAll(async () => {
 
 afterAll(() => dbModule._setPoolForTesting(null));
 
+// 「公司現在能不能用」的判斷本體。純函式，不碰 DB，所以放在所有 pg-mem 測試之前。
+describe('isCompanyUsable（純函式，全平台唯一那一份判斷）', () => {
+  const { isCompanyUsable } = require('../lib/tenant-access');
+  const now = new Date('2026-06-15T00:00:00Z');
+  const past = '2020-01-01T00:00:00Z';
+  const future = '2999-01-01T00:00:00Z';
+
+  test('啟用且兩端都不限 → 可用', () => {
+    expect(isCompanyUsable(true, null, null, now)).toBe(true);
+  });
+  test('is_active 為 false → 不可用（在期間內也一樣）', () => {
+    expect(isCompanyUsable(false, past, future, now)).toBe(false);
+  });
+  test('is_active 不是布林 true 就一律不可用（NULL／undefined 不得被當成開啟）', () => {
+    for (const v of [null, undefined, 1, 'true']) {
+      expect(`is_active=${String(v)}: ${isCompanyUsable(v, null, null, now)}`).toBe(`is_active=${String(v)}: false`);
+    }
+  });
+  test('使用期間還沒開始 → 不可用', () => {
+    expect(isCompanyUsable(true, future, null, now)).toBe(false);
+  });
+  test('使用期間已過 → 不可用', () => {
+    expect(isCompanyUsable(true, null, past, now)).toBe(false);
+  });
+  test('在期間內 → 可用', () => {
+    expect(isCompanyUsable(true, past, future, now)).toBe(true);
+  });
+  test('邊界當天算在期間內（>= 與 <=，不是 > 與 <）', () => {
+    const t = '2026-06-15T00:00:00Z';
+    expect(isCompanyUsable(true, t, null, now)).toBe(true);
+    expect(isCompanyUsable(true, null, t, now)).toBe(true);
+  });
+  test('收 Date 物件與收字串的答案一致（pg 退 Date、pg-mem 常退字串）', () => {
+    expect(isCompanyUsable(true, new Date(past), new Date(future), now)).toBe(true);
+    expect(isCompanyUsable(true, new Date(future), null, now)).toBe(false);
+  });
+
+  // 這條歧異是本次統一的起點：原本 buildActor 先轉 Date 再比 null（空字串 ⇒ Invalid Date
+  // ⇒ 所有比較 false ⇒ 不可用），另外三份直接看 falsy（空字串 ⇒ 不限期間 ⇒ 可用），
+  // 同一家公司會因為請求走到哪條路而得到相反答案。統一取後者。
+  // 這個情境在正式環境到不了：active_from／active_until 是 TIMESTAMPTZ（db.js），
+  // Postgres 存不進空字串。釘它是為了讓「哪一種讀法」這個決定留在測試裡，
+  // 而不是下次有人看到 `!activeFrom` 覺得不夠嚴謹就順手改掉。
+  test('空字串＝沒填＝不限期間（四份抄寫當初唯一不一致的地方）', () => {
+    expect(isCompanyUsable(true, '', '', now)).toBe(true);
+  });
+});
+
+// 統一之後，四個呼叫端都不該再自己長出一份判斷。
+// 掃描型守衛：先斷言四個檔案都真的讀到了，再斷言裡面沒有那個形狀——
+// 檔名寫錯讓 readFileSync 回空字串的話，「沒有符合」會永遠是綠的。
+describe('沒有人再自己抄一份判斷', () => {
+  const fs = require('fs');
+  const path = require('path');
+  // 原本四份共通的形狀：`is_active === true` 之後換行接 `&&`。
+  // 不能只認 `is_active === true`——company-admin-routes.js 另有一處是把 request body
+  // 正規化成布林（`is_active === true,` 後面接逗號），那不是這條規則。
+  const INLINE_COPY = /is_active\s*===\s*true\s*\n\s*&&/;
+  const CALLERS = ['auth.js', 'index.js', 'company-admin-routes.js', 'lib/tenant-access.js'];
+
+  test.each(CALLERS)('%s 讀得到且夠長（讀不到就不是綠燈，是守衛失效）', (f) => {
+    const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    expect(`${f}: ${src.length > 500}`).toBe(`${f}: true`);
+  });
+
+  test.each(CALLERS)('%s 改呼叫 isCompanyUsable，沒有自己那一份', (f) => {
+    const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    expect(`${f} 有內嵌抄寫: ${INLINE_COPY.test(src)}`).toBe(`${f} 有內嵌抄寫: false`);
+    expect(`${f} 有呼叫: ${src.includes('isCompanyUsable(')}`).toBe(`${f} 有呼叫: true`);
+  });
+});
+
 describe('isUserCompanyUsable', () => {
   const { isUserCompanyUsable } = require('../lib/tenant-access');
 
