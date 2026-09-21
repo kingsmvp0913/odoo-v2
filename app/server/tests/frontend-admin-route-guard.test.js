@@ -53,7 +53,10 @@ describe('admin 專屬路由都掛了 requiresAdmin', () => {
 // 不是 /admin 開頭、但只給管理員的頁面。放白名單管理而不是自動推導：
 // 這種頁面每多一個都該有人明確想過「為什麼它是 admin only」。
 describe('非 /admin 前綴的 admin-only 頁面', () => {
-  const ADMIN_ONLY_OUTSIDE = ['/token-report'];  // 用量報表含全平台成本，僅管理員可見
+  const ADMIN_ONLY_OUTSIDE = [
+    '/token-report',  // 用量報表含全平台成本，僅管理員可見
+    '/companies',     // 公司管理（3b Task 8）：建立／停用客戶公司、設定 GIT 憑證，僅平台管理員可見
+  ];
 
   test.each(ADMIN_ONLY_OUTSIDE)('%s 仍是 admin only', (p) => {
     const block = routeBlocks.find((r) => r.path === p);
