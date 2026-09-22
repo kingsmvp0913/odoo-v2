@@ -1,3 +1,11 @@
+  // 維護時段的星期鈕。原本在已刪除的「平台更版」頁，隨時段設定一起搬過來——
+  // 時段是「多久做一次、幾點做」這一類的設定，本來就該跟其他系統設定放在一起，
+  // 不值得為它單開一頁（使用者裁決 2026-09-22）。
+  const RELEASE_WEEKDAYS = [
+    { v: 1, label: '一' }, { v: 2, label: '二' }, { v: 3, label: '三' }, { v: 4, label: '四' },
+    { v: 5, label: '五' }, { v: 6, label: '六' }, { v: 0, label: '日' },
+  ];
+
   window.UiNextAdminSettingsView = Vue.defineComponent({
     name: "UiNextAdminSettingsView",
     data() {
@@ -48,9 +56,23 @@
         agentSandbox: null,
         agentSandboxProjects: [],
         savingAgentSandbox: false,
+        // 維護時段（平台自己什麼時候可以重啟讓已合併的修正生效）。
+        // releaseWindow 是後端回的「引擎實際讀到的設定」，releaseForm 才是表單暫存值：
+        // 兩者分開是因為「存進去了」與「引擎認得」是兩件事（見 saveReleaseWindow）。
+        releaseWindow: null,
+        releaseForm: { weekdays: [], startHour: 2, durationHours: 2 },
+        savingReleaseWindow: false,
       };
     },
     async created() { await this.loadAll(); },
+    computed: {
+      releaseWeekdays() { return RELEASE_WEEKDAYS; },
+      // 下一次時段的實際時間。只講「週六 02:00」的話，剛把星期改掉的人算不出那是哪一天。
+      releaseNextText() {
+        const at = this.releaseWindow && this.releaseWindow.nextWindowAt;
+        return at ? new Date(at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }) : '未設定';
+      },
+    },
     // 離開頁面要停掉輪詢，否則 timer 會一直打 status 端點。
     unmounted() { if (this.embeddingTimer) clearTimeout(this.embeddingTimer); if (this.codexLoginTimer) clearTimeout(this.codexLoginTimer); },
     methods: {
@@ -106,6 +128,54 @@
       },
       async loadBackups() {
         try { this.backups = await Api.get('admin/backups'); } catch (_) { this.backups = null; }
+      },
+      // 時段設定讀的是更版狀態端點（同一支 GET /api/admin/release）——後端沒有為了這次搬家改過，
+      // 只是呼叫的人換了。讀不到就不顯示這一塊，不讓它把整頁的設定卡成錯誤畫面。
+      async loadReleaseWindow() {
+        try {
+          const r = await Api.get('admin/release');
+          this.releaseWindow = r.window;
+          this.releaseForm = {
+            weekdays: [...r.window.weekdays],
+            startHour: r.window.startHour,
+            durationHours: r.window.durationHours,
+          };
+        } catch (_) { this.releaseWindow = null; }
+      },
+      toggleReleaseDay(v) {
+        const i = this.releaseForm.weekdays.indexOf(v);
+        if (i >= 0) this.releaseForm.weekdays.splice(i, 1); else this.releaseForm.weekdays.push(v);
+      },
+      async saveReleaseWindow() {
+        this.savingReleaseWindow = true;
+        try {
+          const r = await Api.put('admin/release/window', {
+            weekdays: [...this.releaseForm.weekdays].sort(),
+            startHour: Number(this.releaseForm.startHour),
+            durationHours: Number(this.releaseForm.durationHours),
+          });
+          // 後端回的是「引擎實際讀到的設定」。它是 null 代表存進去了但機制其實是關的——
+          // 那種情況必須當成錯誤講出來，不能顯示「已儲存」。
+          if (!r.window) showToast('設定存進去了，但更版引擎讀不到它——機制目前是關的，請回報', 'error');
+          else showToast('已儲存：' + r.label, 'success');
+          await this.loadReleaseWindow();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.savingReleaseWindow = false; }
+      },
+      async clearReleaseWindow() {
+        if (!await confirmDialog({
+          title: '取消自動更版',
+          message: '取消之後平台不會再自己重啟。已合併的碼會一直停在待更版，'
+            + '直到有人到「改善提案」按「立刻更版」為止——而沒有任何東西會提醒你。',
+          danger: true, confirmText: '取消自動更版',
+        })) return;
+        this.savingReleaseWindow = true;
+        try {
+          await Api.delete('admin/release/window');
+          showToast('已取消自動更版', 'success');
+          await this.loadReleaseWindow();
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.savingReleaseWindow = false; }
       },
       async runBackupNow() {
         this.runningBackup = true;
@@ -170,6 +240,7 @@
           try { this.users = await Api.get('admin/users'); } catch (_) { this.users = []; }
           await this.loadEmbedding();
           await this.loadBackups();
+          await this.loadReleaseWindow();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.loading = false; }
       },
@@ -809,6 +880,51 @@
               <button class="btn btn-primary btn-sm" @click="saveAgentSandbox" :disabled="!agentSandbox || savingAgentSandbox">
                 {{ savingAgentSandbox ? '儲存中...' : '儲存' }}
               </button>
+            </div>
+          </div>
+
+          <!-- 維護時段（自動更版）。原本在獨立的「平台更版」頁，2026-09-22 使用者裁決搬來這裡：
+               它就是一個「幾點、星期幾」的系統設定，跟備份時間同一類；更版這件事本身屬於
+               改善提案的最後一步，留在那一頁。 -->
+          <div v-show="settingsTab==='adv'" class="setting-block">
+            <div class="setting-block-head">
+              <div class="setting-block-title">維護時段（自動更版）</div>
+              <div class="setting-block-desc">
+                平台只會在這個時段內自己重啟，讓已合併的修正生效。時間是平台所在機器的本地時間（台北）。
+                只有在有待更版的修正時才會重啟；重啟前對 master 跑一次全套測試，紅了就不重啟、碼留到下一個時段。
+                時段不能跨過午夜——跨午夜的設定會被判為無效，整條機制會<strong>靜默關閉</strong>。
+                現在等著上去的是哪幾筆、要不要立刻更版，在「改善提案」頁。
+              </div>
+            </div>
+            <div class="setting-block-body">
+              <div v-if="!releaseWindow" style="font-size:var(--fs-sm);color:var(--text-muted)">狀態讀取失敗</div>
+              <template v-else>
+                <div style="font-size:var(--fs-sm);margin-bottom:var(--space-3)">
+                  <span v-if="releaseWindow.configured" style="color:var(--text)">目前：{{ releaseWindow.label }}・下一次 {{ releaseNextText }}</span>
+                  <span v-else style="color:var(--warning-strong)">⚠ 目前沒有設定時段，平台不會自動更版——已合併的碼會一直停在待更版。</span>
+                </div>
+                <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3)">
+                  <button v-for="d in releaseWeekdays" :key="d.v" type="button"
+                    :class="['btn', 'btn-sm', releaseForm.weekdays.includes(d.v) ? 'btn-primary' : 'btn-outline']"
+                    @click="toggleReleaseDay(d.v)">{{ d.label }}</button>
+                </div>
+                <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap">
+                  <label style="font-size:var(--fs-sm);color:var(--text)">
+                    開始
+                    <input class="form-control" type="number" min="0" max="23" v-model.number="releaseForm.startHour"
+                      style="width:5em;display:inline-block;margin-left:4px"> 點
+                  </label>
+                  <label style="font-size:var(--fs-sm);color:var(--text)">
+                    長度
+                    <input class="form-control" type="number" min="1" max="24" v-model.number="releaseForm.durationHours"
+                      style="width:5em;display:inline-block;margin-left:4px"> 小時
+                  </label>
+                </div>
+              </template>
+            </div>
+            <div class="setting-block-footer">
+              <button class="btn btn-primary btn-sm" :disabled="!releaseWindow || savingReleaseWindow" @click="saveReleaseWindow">儲存時段</button>
+              <button class="btn btn-outline btn-sm" :disabled="!releaseWindow || savingReleaseWindow || !releaseWindow.configured" @click="clearReleaseWindow">取消自動更版</button>
             </div>
           </div>
 

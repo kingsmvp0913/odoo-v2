@@ -84,9 +84,9 @@ const ROUTES = [
   // admin fixture 直接放行，不像上面 company-users 那樣卡在「沒有公司」的 400。
   // key 維持 companies（截圖 baseline 以 key 命名，改名等於整組基準失效）；2026-09-22 只有網址搬家。
   { key: 'companies', hash: '#/admin/companies', auth: 'admin', covered: true },
-  // 平台更版（階段 5 Task 6）。單純 requiresAdmin，admin fixture 直接放行；
-  // 頁面在沒有待更版資料時也完整渲染（空狀態本身就是要驗的畫面之一），截圖穩定。
-  { key: 'admin-release', hash: '#/admin/release', auth: 'admin', covered: true },
+  // 「平台更版」（#/admin/release）2026-09-22 隨那一頁一起刪除：待更版清單與「立刻更版」
+  // 併入 #/admin/feedback、維護時段併入 #/admin/settings、失敗通知併入 #/admin，
+  // 三者本來就都在門禁清單內，沒有畫面因此離開截圖範圍。
   { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true, expect: '.sg-wrap' }
 ];
 

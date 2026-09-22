@@ -8,6 +8,15 @@
   const STATUS_PILL = { new: 'pill-info', approved: 'pill-warn', rejected: 'pill-danger', done: 'pill-success' };
   const LAYER_LABEL = { code: '程式', prompt: '提示詞', observability: '可觀測性', env: '環境', unclear: '看不懂' };
 
+  // 修正列的狀態字面，沿用健檢頁那份的子集（只會走到稽核軌跡裡的幾種）。
+  // 2026-09-22 隨「待更版」清單從已刪除的更版頁搬進來：更版是這一頁的流程的最後一步
+  // （提案 → 核准 → 夜間批次改碼 → 合併 → 生效），把最後一步切成另一頁等於把流程砍一半。
+  const FIX_STATUS = {
+    running: '改碼中', ready: '待審', adopted: '已採用', pushed: '已推上 GitHub',
+    merged: '已合併，待更版', released: '已更版', rejected: '被退回', failed: '失敗',
+    no_change: '判定不用改',
+  };
+
   // 一次載幾筆。整頁原本一口氣撈 200 筆，每筆的附件縮圖還要逐張 fetch（最壞 1000 張往返），
   // 開頁面要等很久才看得到第一列。改成先載一頁、捲到接近底部才續載。
   const PAGE_SIZE = 15;
@@ -37,15 +46,33 @@
         startingBatch: false, // 手動觸發改善批次送出中（只是「送出這一下」，不是整個批次）
         batchRunning: false,  // 批次正在跑（輪詢 /api/maintenance 得知）
         _batchTimer: null,
+        // 更版（流程最後一步）。整包來自 GET /api/admin/release，後端未因這次搬家改動。
+        release: null,
+        releasing: false,
+        // 立刻更版的兩個旋鈕。預設都關：兩個都是「明知會付出代價還是要做」的選項。
+        abortInflight: false,
+        skipTests: false,
+        trailOpen: {},    // { [fixId]: true } 展開這一筆的稽核軌跡
+        trail: {},        // { [findingId]: [...] } 抓過就留著
+        trailLoading: {},
+        diffOpen: {},     // { [historyRowId]: true }
       };
     },
     computed: {
+      // 待更版＝已合併但還沒生效的修正。沒有它，核准完的提案在畫面上看起來就是「做完了」，
+      // 但平台其實還跑著舊碼。
+      releasePending() { return (this.release && this.release.pending) || []; },
+      releaseInflight() { return (this.release && this.release.inflight) || []; },
+      releaseNextText() {
+        const at = this.release && this.release.window && this.release.window.nextWindowAt;
+        return at ? new Date(at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }) : '未設定';
+      },
       // statusLabel 不再是 computed：狀態欄改由 stateOf 產生（要把翻譯失敗併進來一起顯示），
       // 那裡直接讀 STATUS_LABEL 常數，留著 computed 就是沒人讀的死碼。
       layerLabel() { return LAYER_LABEL; },
     },
     async created() {
-      await this.load(); await this.loadHealth();
+      await this.load(); await this.loadHealth(); await this.loadRelease();
       // 批次可能是別人按的、或是每晚 22:00 排程跑的——不能只在「自己按下去」之後才輪詢，
       // 否則同一件事在不同人的畫面上有不同的樣子。一進頁面就開始盯。
       await this.pollBatch();
@@ -164,6 +191,62 @@
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.startingBatch = false; }
       },
+      // 更版狀態。讀不到就不畫那一區（多半是沒有平台管理員權限），不讓它把整頁變成錯誤畫面。
+      async loadRelease() {
+        try {
+          const r = await Api.get('admin/release');
+          this.release = r;
+          this.releasing = !!r.running;
+        } catch (_) { this.release = null; }
+      },
+      /**
+       * 立刻更版：把已合併的修正真的放上去。放在「立即執行改善」旁邊是因為兩者是同一條流程的
+       * 相鄰兩步（改善批次把碼合進 master，更版才讓它生效），而且都是「會重啟平台」的那種按鈕。
+       */
+      async releaseNow() {
+        const parts = [`會把 ${this.releasePending.length} 筆已合併的修正真的放上去，平台重啟約 30 秒。`];
+        if (this.releaseInflight.length) {
+          parts.push(this.abortInflight
+            ? `⚠ ${this.releaseInflight.length} 條在飛任務會被當場中止（改到一半的碼留在任務分支，重啟後自動從同一關重跑）。`
+            : `⚠ 現在有 ${this.releaseInflight.length} 條任務在飛，沒有勾「一併中止」的話按下去會被擋下來。`);
+        }
+        parts.push(this.skipTests
+          ? '⚠ 你選了跳過重啟前全跑——這一次更版不會留下任何測試證據。'
+          : '重啟前會先對 master 跑一次全套測試，約 2 分鐘；紅了就不重啟，碼留到下一次。');
+        if (!await confirmDialog({ title: '立刻更版', message: parts.join('\n'), confirmText: '立刻更版' })) return;
+        this.releasing = true;
+        try {
+          await Api.post('admin/release/now', { abortInflight: this.abortInflight, skipTests: this.skipTests });
+          showToast(this.skipTests ? '更版已開始' : '更版已開始，先跑全套測試（約 2 分鐘）', 'success');
+          await this.loadRelease();
+        } catch (e) {
+          this.releasing = false;
+          showToast(e.message, 'error');
+        }
+      },
+      /**
+       * 稽核軌跡：這段碼是依據哪段文字改的、誰審過、複檢動了什麼。
+       * 用既有的 GET admin/health-check/findings/:id/fix——它已經回整段歷史（新到舊），
+       * 所以「被退回過一輪、重修才通過」也看得到，不只是最後那一筆。
+       * 沒有人在合併前讀過這些碼，這是唯一的人工稽核材料。
+       */
+      async toggleTrail(row) {
+        const open = !this.trailOpen[row.id];
+        this.trailOpen = { ...this.trailOpen, [row.id]: open };
+        if (!open || this.trail[row.finding_id]) return;
+        this.trailLoading = { ...this.trailLoading, [row.id]: true };
+        try {
+          const rows = await Api.get('admin/health-check/findings/' + row.finding_id + '/fix');
+          this.trail = { ...this.trail, [row.finding_id]: rows || [] };
+        } catch (e) { showToast(e.message, 'error'); }
+        finally { this.trailLoading = { ...this.trailLoading, [row.id]: false }; }
+      },
+      trailOf(row) { return this.trail[row.finding_id] || []; },
+      // 模板裡不寫 function 字面值：那種寫法在既有頁面只出現在 methods 裡。
+      inflightIds() { return this.releaseInflight.map(t => t.taskId).join('、#'); },
+      fixStatus(s) { return FIX_STATUS[s] || s; },
+      fmt(ts) { return ts ? new Date(ts).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }) : ''; },
+      shortSha(s) { return s ? String(s).slice(0, 8) : ''; },
       // 批次在跑的期間會掛上維護旗標（nightly-fix 開頭 enterMaintenance），這是唯一能從外面
       // 看出「正在跑」的訊號——批次前段（等在飛任務排空、triage）還沒建 health_check_runs 列，
       // 只看那張表會有一段長達十幾分鐘的空窗，畫面上完全沒有動靜。
@@ -178,6 +261,9 @@
         // 跑完那一刻要把清單重抓：提案狀態會變成「已完成」，不重抓就停在舊的
         if (was && !running) { showToast('改善批次已結束', 'success'); await this.load(); }
         else if (running) { await this.load(); }
+        // 更版狀態跟著同一個 15 秒節奏刷新：批次合併完會多出待更版的筆數，而更版跑起來之後
+        // 這個行程隨時可能被自己的重啟帶走，畫面不會收到任何事件——輪詢是唯一看得到結果的方式。
+        await this.loadRelease();
       },
       async remove(r) {
         const what = r.triage_title || (r.content || '').slice(0, 30);
@@ -361,6 +447,104 @@
         <!-- 這裡不再自己掛橫幅：「批次在跑」已經由全站右上角的緞帶負責（見 UiNextApp.js
              的 .ui-next-ribbon）。同一件事在兩處各講一次，兩邊文案遲早會漂掉。
              這一頁只保留跟「按鈕」有關的本地回饋：執行中時鈕變成「執行中…」並鎖住。 -->
+        <!-- 流程的最後一步：已合併但還沒生效的修正。2026-09-22 使用者裁決把獨立的「平台更版」頁
+             收進這一頁——提案 → 核准 → 夜間批次改碼 → 合併 → 生效是同一條流程，最後一步切成
+             另一頁的話，核准完的人只會看到「已完成」，不知道平台其實還跑著舊碼。
+             時段設定（星期幾、幾點）不在這裡，它是系統設定的一種，在「系統設定 → 進階」。 -->
+        <div v-if="release" class="settings-section">
+          <div class="arj-header-row">
+            <h2 class="section-title" style="margin:0">待更版 {{ releasePending.length }} 筆・下一次維護時段 {{ releaseNextText }}</h2>
+            <!-- 立刻更版擺在「立即執行改善」正上方：兩者是相鄰的兩步，也都是會重啟平台的按鈕。
+                 沒有待更版的碼時不必重啟，所以那時鈕是停用的。 -->
+            <button class="btn btn-outline btn-sm" :disabled="releasing || !releasePending.length" @click="releaseNow"
+              title="把已合併的修正真的放上去（平台會重啟，約 30 秒）">
+              <span v-if="releasing" class="spinner"></span>{{ releasing ? '更版中…' : '立刻更版' }}
+            </button>
+          </div>
+          <div v-if="!release.window.configured" style="font-size:var(--fs-sm);color:var(--warning-strong);margin-bottom:var(--space-2)">
+            ⚠ 沒有設定維護時段，平台不會自動更版——這些碼會一直停在這裡。時段在「系統設定 → 進階」設定。
+          </div>
+          <div v-else style="font-size:var(--fs-sm);color:var(--text-muted);margin-bottom:var(--space-2)">
+            時段：{{ release.window.label }}<span v-if="release.window.inWindow">（<strong style="color:var(--warning-strong)">現在就在時段內</strong>）</span>。
+            重啟前對 master 跑一次全套測試，紅了就不重啟、碼留到下一個時段；時段內若還有任務在飛，
+            離時段結束剩 {{ release.abortMinutes }} 分鐘時會<strong>強制中止</strong>它們並照常重啟（那些任務重啟後自動從同一關重跑）。
+          </div>
+          <div v-if="release.maintenance" style="font-size:var(--fs-sm);color:var(--warning-strong);margin-bottom:var(--space-2)">
+            目前正在維護中（多半是改善批次還沒收工）。等它結束再按「立刻更版」——中途重啟會讓它的 git push 停在半途。
+          </div>
+          <div v-if="releaseInflight.length" style="font-size:var(--fs-sm);color:var(--warning-strong);margin-bottom:var(--space-2)">
+            現在有 {{ releaseInflight.length }} 條任務在飛：#{{ inflightIds() }}
+          </div>
+          <div v-if="releasePending.length" style="display:flex;flex-direction:column;gap:4px;margin-bottom:var(--space-2)">
+            <label style="display:flex;align-items:center;gap:var(--space-2);font-size:var(--fs-sm);color:var(--text)">
+              <input type="checkbox" v-model="abortInflight">
+              一併中止在飛任務（它們會在平台重啟後自動從同一關重跑）
+            </label>
+            <label style="display:flex;align-items:center;gap:var(--space-2);font-size:var(--fs-sm);color:var(--text)">
+              <input type="checkbox" v-model="skipTests">
+              跳過重啟前全跑（只省約 2 分鐘，<strong style="color:var(--danger)">這一次更版不會留下任何測試證據</strong>）
+            </label>
+          </div>
+          <div v-if="!releasePending.length" class="empty-state" style="padding:var(--space-4)">
+            沒有待更版的修正。這種時候時段到了也不會重啟——不打擾客戶是刻意的。
+          </div>
+          <div v-for="row in releasePending" :key="row.id"
+            style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-2);background:var(--surface)">
+            <div class="hc-finding-title-row">
+              <span style="color:var(--text)">{{ row.diagnosis || ('提案 #' + row.finding_id) }}</span>
+              <span class="pill pill-warn">待更版</span>
+              <span v-if="row.severity" class="pill pill-info">{{ row.severity }}</span>
+            </div>
+            <div style="font-size:var(--fs-xs);color:var(--text-muted);font-family:monospace">
+              {{ row.branch }}<span v-if="row.commit_sha"> · {{ shortSha(row.commit_sha) }}</span> · 合併於 {{ fmt(row.created_at) }}
+            </div>
+            <div v-if="row.feedback_ids && row.feedback_ids.length"
+              style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:2px">
+              來源：使用者意見回饋 #{{ row.feedback_ids.join('、#') }}
+            </div>
+            <button class="btn btn-ghost btn-sm" style="margin-top:var(--space-2)" @click="toggleTrail(row)">
+              {{ trailOpen[row.id] ? '▾ 收合稽核軌跡' : '▸ 這段碼是誰寫的、誰審的' }}
+            </button>
+            <div v-if="trailOpen[row.id]" style="margin-top:var(--space-2)">
+              <div v-if="trailLoading[row.id]" class="loading">載入中...</div>
+              <div v-else-if="!trailOf(row).length" class="empty-state" style="padding:var(--space-3)">
+                查不到這條提案的修正歷史。
+              </div>
+              <!-- 整段歷史（新到舊）：被退回過一輪、重修才通過的那種，退回理由與上一輪的 diff
+                   都在這裡。沒有人在合併前讀過這些碼，這就是唯一的人工稽核材料。 -->
+              <div v-for="h in trailOf(row)" :key="h.id"
+                style="border-left:2px solid var(--border);padding-left:var(--space-3);margin-bottom:var(--space-3)">
+                <div style="font-size:var(--fs-xs);color:var(--text-muted)">
+                  #{{ h.id }} · {{ fixStatus(h.status) }} · {{ fmt(h.created_at) }}
+                  <span v-if="h.commit_sha"> · {{ shortSha(h.commit_sha) }}</span>
+                  <span v-if="h.test_result"> · 測試：{{ h.test_result }}</span>
+                </div>
+                <div v-if="h.reject_reason" class="error-msg" style="white-space:pre-wrap;margin:4px 0">
+                  退回理由：{{ h.reject_reason }}
+                </div>
+                <div v-if="h.notes" style="font-size:var(--fs-sm);color:var(--text);white-space:pre-wrap;margin-top:4px">
+                  改了什麼：{{ h.notes }}
+                </div>
+                <div v-if="h.review_notes" style="font-size:var(--fs-sm);color:var(--text-secondary);white-space:pre-wrap;margin-top:4px">
+                  審查意見：{{ h.review_notes }}
+                </div>
+                <div v-if="h.verify_notes" style="font-size:var(--fs-sm);color:var(--text-secondary);white-space:pre-wrap;margin-top:4px">
+                  合併前複檢：{{ h.verify_notes }}
+                </div>
+                <div v-if="h.diff" style="margin-top:4px">
+                  <button class="btn btn-ghost btn-sm" @click="diffOpen = { ...diffOpen, [h.id]: !diffOpen[h.id] }">
+                    {{ diffOpen[h.id] ? '▾ 收合改動' : '▸ 看改了什麼' }}
+                  </button>
+                  <pre v-if="diffOpen[h.id]"
+                    style="max-height:360px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--space-2);font-size:var(--fs-xs)">{{ h.diff }}</pre>
+                  <div v-if="diffOpen[h.id] && h.diff_truncated" style="font-size:var(--fs-xs);color:var(--text-muted)">
+                    （diff 太長已截斷，全文用 git show {{ shortSha(h.commit_sha) }}）
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="settings-section">
           <div class="arj-header-row">
             <!-- 端點不回總筆數（見 feedback-routes.js），所以這裡只講「已載入幾筆」——

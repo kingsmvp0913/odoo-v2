@@ -30,9 +30,11 @@ test('解析得到路由（route 寫法改變時不得靜默略過）', () => {
   expect(routeBlocks.some((r) => r.path === '/admin')).toBe(true);
   // 下面那個 describe 是「/admin 前綴自動推導」，所以新加的頁**不必**進白名單——
   // 但也因為是推導的，路徑一改名（或整條路由被刪掉）就會靜默退出母體而不是變紅。
-  // 更版頁是這個子專案唯一有人看得到的入口，釘住它自己這一條。
-  expect(`/admin/release 在母體內: ${routeBlocks.some((r) => r.path === '/admin/release')}`)
-    .toBe('/admin/release 在母體內: true');
+  // 2026-09-22 原本釘的是 /admin/release，那一頁已刪除（使用者裁決：更版是改善流程的
+  // 最後一步，不該自成一頁）。改釘 /admin/feedback——「立刻更版」與待更版清單搬去那裡，
+  // 那顆按鈕會重啟整個平台，它的路由靜默消失（或忘了掛 requiresAdmin）是這裡要擋的事。
+  expect(`/admin/feedback 在母體內: ${routeBlocks.some((r) => r.path === '/admin/feedback')}`)
+    .toBe('/admin/feedback 在母體內: true');
 });
 
 describe('admin 專屬路由都掛了 requiresAdmin', () => {

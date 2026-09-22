@@ -305,14 +305,10 @@ const router = createRouter({
       component: window.UiNextAdminFeedbackView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
-    {
-      // 平台更版（階段 5）。
-      // ⚠ 三層防線的中間那層：nav 的 v-if 在 UiNextApp.js「更多工具」，後端 403 在
-      // release-routes.js 的 requirePlatformAdmin。少一層就是洞。
-      path: "/admin/release",
-      component: window.UiNextReleaseView,
-      meta: { requiresAuth: true, requiresAdmin: true },
-    },
+    // 「平台更版」曾經是一條獨立路由（/admin/release）。2026-09-22 使用者裁決取消：
+    // 更版是改善流程的最後一步，待更版清單與「立刻更版」併入 /admin/feedback、
+    // 維護時段併入 /admin/settings、「上一次沒有成功」掛在 /admin 首頁。
+    // 後端端點（/api/admin/release*）原封不動，只是呼叫的人換了。
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });
