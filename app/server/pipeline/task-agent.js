@@ -41,7 +41,7 @@ function buildCommitMessage(task) {
 // root = repos/<專案>/（所有 repo 主 clone 的父目錄）；供 analysis 讀全 repo、coding 衍生 worktree 父目錄。
 async function getProjectInfo(projectId) {
   const { rows } = await query(
-    `SELECT p.name, p.folder_name, p.odoo_version, p.edition, pr.local_path, pr.label
+    `SELECT p.name, p.folder_name, p.odoo_version, p.edition, p.e2e_disabled, pr.local_path, pr.label
      FROM projects p
      JOIN project_repos pr ON pr.project_id = p.id
      WHERE p.id = $1 AND pr.clone_status = 'done' AND pr.local_path IS NOT NULL
@@ -66,6 +66,7 @@ async function getProjectInfo(projectId) {
     folder_name: rows[0].folder_name,
     odoo_version: rows[0].odoo_version,
     edition: rows[0].edition,
+    e2e_disabled: rows[0].e2e_disabled,
     enterprise_src: enterpriseSrc,
     root: path.dirname(repos[0].local_path),
     repos
@@ -83,6 +84,17 @@ function buildRepoPaths(info, taskId) {
   const wt = worktreeParent(info.root, taskId);
   return (info.repos || []).map(r => `- ${path.join(wt, r.subdir)}`).join('\n') || '（無 repo）';
 }
+
+// E2E 關閉的專案，整條 pipeline 沒有任何一關會執行 Odoo 測試檔：deploy 跑的是
+// `odoo-bin -i/-u --stop-after-init`（不帶 --test-enable），`--test-enable` 只出現在 E2E 那條路徑上，
+// 而 E2E 與「出考題」是同一個 e2e_disabled 開關的兩半（見 writeSpecTour）。此時規格若照樣要求
+// 新增 tests/test_*.py 或 tour，產出的是沒人跑的死碼，寫錯了也只能靠 QA 逐行讀 diff 攔
+// （已造成多筆 source='qa'、category='impl_miss' 的退回）。故依開關二選一餵進分析關。
+const E2E_NOTE_DISABLED = `**本專案不執行任何自動化測試。** 部署只做模組安裝／升級（不帶 \`--test-enable\`），E2E tour 也已關閉，
+沒有任何一關會執行測試檔。因此 requirements **不得**要求新增或修改任何測試檔——Python 單元測試
+（\`<module>/tests/test_*.py\`）與 tour（\`static/tests/tours/*.js\`）皆然；寫進規格只會產出沒人跑的死碼。
+驗收一律寫進 acceptance，用「人工在畫面上怎麼驗」的可觀察結果描述即可。`;
+const E2E_NOTE_ENABLED = `本專案會執行自動化測試：acceptance 會由後續關卡寫成 Odoo tour 並實際執行。照上述規則撰寫即可，本段不另設限制。`;
 
 function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, projectNotes) {
   const agent = loadAgent('analysis-project');
@@ -105,6 +117,7 @@ function buildAnalysisPrompt(task, info, clarification, workDir, baseBranch, pro
       task_id: task.task_id,
       clarification: clarification || '（無）',
       cs_findings: task.cs_findings ? task.cs_findings.trim() : '（無）',
+      e2e_note: info.e2e_disabled ? E2E_NOTE_DISABLED : E2E_NOTE_ENABLED,
       project_notes: projectNotes || ''
     }).trim(),
     model: agent.model

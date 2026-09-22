@@ -60,9 +60,16 @@ afterEach(() => { jest.restoreAllMocks(); });
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
-test('GET env/sso → 409 當測試區尚未就緒（無 url/sso_secret）', async () => {
+// 意圖：從沒建過的專案（無 odoo_envs 列／無 sso_secret）按「測試區」不得是死路。
+// 舊版回 409「尚未就緒」，而唯一能補救的「建立環境」按鈕只在專案詳情頁——側欄與專案卡的
+// 「測試區」按下去等於什麼都不會發生。改成與「被閒置回收」同樣處理：幫他起、回 202。
+test('GET env/sso → 從沒建過時觸發建立並回 202，不再回 409 死路', async () => {
+  const envAgent = require('../pipeline/env-agent');
+  const spy = jest.spyOn(envAgent, 'runEnvSetup').mockResolvedValue(undefined);
   const res = await request(app).get(`/api/projects/${projectId}/env/sso`).set(auth());
-  expect(res.status).toBe(409);
+  expect(res.status).toBe(202);
+  expect(res.body.starting).toBe(true);
+  expect(spy).toHaveBeenCalledWith(String(projectId));
 });
 
 test('GET env/sso → 200 回免密登入 URL 並帶 token', async () => {

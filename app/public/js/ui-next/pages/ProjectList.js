@@ -35,7 +35,7 @@
       unread(id) { return window.UnreadStore.byProject[String(id)] || 0; }, go(id) { this.$router.push(`/projects/${id}`); }, goTab(id, tab) { this.moreProjectId = null; this.$router.push(`/projects/${id}?tab=${tab}`); },
       isAdmin() { return window.UserStore.role === "admin"; },
       async initWiki(id) { try { await Api.post(`projects/${id}/wiki/init`, {}); await this.load(); showToast("Wiki 初始化完成", "success"); } catch (error) { showToast(error.message || "Wiki 初始化失敗", "error", 6000); } },
-      async openEnv(id) { const popup = window.open("about:blank", "_blank"); try { const url = await pollEnvSso(id); if (popup) popup.location = url; else window.location.href = url; } catch (error) { if (popup) popup.close(); showToast(error.message || "無法開啟測試區", "error", 0); } },
+      openEnv(id) { return openEnvTab(id); },
     },
     template: `
       <section class="ui-next-page ui-next-project-page">

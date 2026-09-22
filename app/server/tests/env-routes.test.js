@@ -268,13 +268,16 @@ describe('/env/sso 借對外名額', () => {
     expect(env.external_slot).toBeNull();
   });
 
-  // 缺 sso_secret 代表環境從沒建成功過，Task 9 之後這才是真正的 409（重起也沒用）；
-  // 若已有 sso_secret 只是 status 不是 running，改走 202 自動起（見下方新測試）。
-  test('環境未就緒（無 sso_secret）→ 409，且不借名額', async () => {
+  // 缺 sso_secret 代表環境從沒建成功過（sso_secret 只在 runEnvSetup 裡產生）。這曾是 409
+  // 死路，但能補救的「建立環境」按鈕只在專案詳情頁——側欄與專案卡的「測試區」按下去毫無
+  // 作用。改成與 idle 同樣走自動起。名額那半的意圖不變：還沒有環境可看就不准借對外名額。
+  test('環境未就緒（無 sso_secret）→ 202 自動起，且不借名額', async () => {
     process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
+    mockRunEnvSetup.mockResolvedValueOnce(undefined);
     const pid = await mkEnv('c', { status: 'idle' });
     const res = await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(202);
+    expect(mockRunEnvSetup).toHaveBeenCalledWith(String(pid));
     const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
     expect(env.external_slot).toBeNull();
   });
@@ -395,6 +398,20 @@ describe('/env/sso 借對外名額', () => {
     expect(res.body.starting).toBe(true);
     expect(res.body.url).toBeUndefined();
     expect(mockRunEnvSetup).toHaveBeenCalledWith(String(pid));
+  });
+
+  // 意圖：「從來沒建過」與「建過但被回收」在使用者眼中是同一件事——按下測試區、等它好。舊版
+  // 前者回 409「尚未就緒」，而能補救的「建立環境」按鈕只在專案詳情頁：側欄與專案卡的「測試區」
+  // 按下去毫無作用。這兩條分開走就是兩種行為，必須同樣走自動起。
+  test('專案沒有 odoo_envs 列 → 一樣觸發建立並回 202，不回 409', async () => {
+    const { rows: [p] } = await dbModule.query(
+      "INSERT INTO projects (name, odoo_version) VALUES ('never-built-sso','17.0') RETURNING id"
+    );
+    mockRunEnvSetup.mockResolvedValueOnce(undefined);
+    const res = await request(app).get(`/api/projects/${p.id}/env/sso`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(202);
+    expect(res.body.starting).toBe(true);
+    expect(mockRunEnvSetup).toHaveBeenCalledWith(String(p.id));
   });
 
   // 意圖：連按兩次不得起兩個環境。runEnvSetup 內建 in-flight 去重，但這裡要確認我們有走到它，

@@ -227,25 +227,9 @@
       openEvents() { this.eventsOpen = true; this.loadEvents(); },
       // 收合時整條標題列都能展開；已展開時不做事，否則點標題旁的來源連結會誤收
       expandActionIfCollapsed() { if (this.taskActionCollapsed) this.taskActionCollapsed = false; },
-      async openEnv() {
-        // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
-        // popup-blocker：window.open 必須在 click handler 內同步開，不能等 await 後才開。
-        const w = window.open('about:blank', '_blank');
-        // 環境可能已被閒置回收，後端會自動起並回 starting；首建可達數分鐘，
-        // 空白分頁乾等會被當成當掉，故先在分頁裡寫一句話再輪詢。
-        if (w) {
-          try {
-            w.document.write('<p style="font-family:sans-serif;padding:2rem">測試區建立中，請稍候…</p>');
-          } catch (e) { console.debug('about:blank document.write 被瀏覽器擋下，不影響後續導向:', e && e.message); }
-        }
-        try {
-          const url = await pollEnvSso(this.task.project_id);
-          if (w) w.location = url; else window.location = url;
-        } catch (e) {
-          if (w) w.close();
-          showToast(e.message || '無法開啟測試區', 'error');
-        }
-      },
+      // JWT 走 Authorization header，瀏覽器導航不會帶上 → 先 fetch SSO 端點拿免密登入 URL 再開。
+      // 實作在 env-sso.js 的 openEnvTab，與側欄／專案卡／專案頁共用同一份。
+      openEnv() { return openEnvTab(this.task.project_id); },
       // 打開任務頁＝這件事已經看到了，不該還掛在收件匣等你回去點。後端的自動消解只涵蓋
       // kind='action' 且任務已離開等人狀態的那部分，退回事件（bounce）完全不在其中——不從這裡
       // 清，沒經收件匣進來的人就永遠清不掉。清完要順手校正 badge，否則數字要等下次換頁才更新。

@@ -29,17 +29,32 @@ function loadToast() {
   return { showToast, toasts, timers, dismissToast };
 }
 
-// duration 傳 0 的意圖是「這則不要自己消失」（規格 §4.6：錯誤訊息預設不可自動消失）。
+// duration 傳 0 的意圖是「這則不要一閃即逝」（規格 §4.6：錯誤訊息不可用一般秒數）。
 // 原本的 showToast 無條件 setTimeout(…, duration)，於是 0 變成「0ms 後移除」——
 // 訊息等於沒出現過。ui-next 有 30 幾處錯誤路徑是 showToast(msg, "error", 0)，全部靜默失效，
 // 使用者只看到操作沒反應、看不到原因。這是「參數值剛好把行為反轉」的那種 bug，
 // 靜態檢查與截圖都看不到。
-test('duration 傳 0 代表不自動關閉，不得排定移除', () => {
+//
+// 但另一個極端同樣是缺陷：完全不排定移除的話，沒人按 × 的錯誤訊息會一路疊在右下角擋畫面、
+// 換頁也不會消。所以要同時成立兩件事——有排定移除（不會永久黏著）、而且那個秒數遠大於
+// 一般 toast 的 4 秒（使用者來得及讀完、複製錯誤內容）。
+test('duration 傳 0 ＝ 久一點才關，但仍必須排定移除（不可永久黏著）', () => {
   const { showToast, toasts, timers } = loadToast();
   showToast('這是錯誤訊息', 'error', 0);
   expect(toasts.value).toHaveLength(1);
-  expect(timers).toHaveLength(0);   // 沒有任何排定的移除
+  expect(timers).toHaveLength(1);              // 有排定移除
   expect(toasts.value[0].sticky).toBe(true);   // 由它決定要不要畫關閉鈕
+  timers[0]();
+  expect(toasts.value).toHaveLength(0);
+});
+
+// 上面那支只證明「有排定」，不會在有人把秒數改回 4 秒時紅。秒數本身才是意圖：
+// 錯誤訊息要留得比一般訊息久得多。
+test('錯誤 toast 的存活秒數遠長於一般 toast（不可被改回 4 秒）', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  const m = src.match(/const STICKY_TOAST_MS = (\d+);/);
+  expect(m).not.toBeNull();
+  expect(Number(m[1])).toBeGreaterThanOrEqual(15000);
 });
 
 test('一般 toast 仍然會自動關閉（不可為了修上面那條就全部改成不消失）', () => {
