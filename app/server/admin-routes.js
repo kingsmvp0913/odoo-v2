@@ -386,6 +386,18 @@ function registerRoutes(app) {
   app.put('/api/admin/users/:id', auth, async (req, res) => {
     try {
       const { role, display_name, approved } = req.body;
+      // 比照 DELETE（下面那條）的自我保護：這兩個動作對自己做下去就把自己鎖在門外了。
+      // 升回 admin 只能靠這條 admin-only 的 PUT，最後一位平台管理員把自己降級或停用之後，
+      // 畫面上沒有任何人救得回來，只剩對正式資料庫手寫 SQL 一途。
+      // 停用同樣算在內：auth.js 看到 approved=false 就擋登入，結果與降級一模一樣。
+      // 刻意不改成「只有最後一位管理員才擋」——那要在同一句 UPDATE 裡數管理員才不會有
+      // 兩人同時互降的競態，而且「誰算管理員」本身還得先分清停用中的 admin 算不算。
+      // 絕對禁止比較簡單，而且永遠安全：要降自己的權限，請另一位平台管理員代為操作。
+      const targetId = parseInt(req.params.id);
+      if (targetId === req.userId) {
+        if (role && role !== 'admin') return res.status(400).json({ error: '不能變更自己的角色' });
+        if (approved === false) return res.status(400).json({ error: '不能停用自己的帳號' });
+      }
       // company_id 要能被明確設成 null（把人升成平台管理員時要清掉公司），所以看 body 裡
       // 有沒有這個 key，不是看它是不是 truthy——truthy 判斷會讓 null 被當成「沒帶」而維持舊值。
       const hasCompanyId = Object.prototype.hasOwnProperty.call(req.body, 'company_id');
